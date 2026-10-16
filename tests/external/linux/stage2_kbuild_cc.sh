@@ -145,7 +145,65 @@ if [[ "$source_file" == *.c ]]; then
   done
 
   [[ -z "$trace" ]] || printf 'preprocess source=%q output=%q\n' "$source_file" "$preprocessed" >>"$trace"
+  # Keep the historical GNU-E route unchanged unless the exact native
+  # dynamic-header gate is enabled. This is a four-owner, opt-in promotion,
+  # not a global Kbuild compiler-selector replacement.
   "$real_cc" "${pp_args[@]}" -E -P -MT "$output_file" "$source_file" -o "$preprocessed"
+  if [[ -n "${MINIC_KBUILD_MINIPP:-}" ]]; then
+    : "${MINIPP_LINUX_SRC:?native PP needs the original Linux source tree}"
+    [[ -x "$MINIC_KBUILD_MINIPP" ]] || {
+      echo "MINIPP_DYNAMIC_HEADER_PP=FAIL missing_minipp:$MINIC_KBUILD_MINIPP" >&2; exit 9;
+    }
+    root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)
+    native_pp_args=()
+    pp_context=()
+    for ((i=0; i<${#args[@]}; ++i)); do
+      arg=${args[i]}
+      case "$arg" in
+        -D|-U|-I|-isystem|-include)
+          ((i+1<${#args[@]})) || { echo "MINIPP_DYNAMIC_HEADER_PP=FAIL truncated:$arg" >&2; exit 9; }
+          native_pp_args+=("$arg" "${args[i+1]}")
+          ((i+=1))
+          ;;
+        -D*|-U*|-I*|-nostdinc|-isystem*|-include*)
+          native_pp_args+=("$arg") ;;
+        -march=*|-mabi=*|-std=*|-fshort-wchar|-funsigned-char|-fsigned-char|-fno-PIE|-fPIE|-fno-pie|-fpie|-fPIC|-fpic|-fno-PIC|-fno-pic|-mcmodel=*)
+          pp_context+=("$arg") ;;
+        -imacros|-iquote|-idirafter|-isysroot|-iprefix|-iwithprefix|-iwithprefixbefore)
+          echo "MINIPP_DYNAMIC_HEADER_PP=FAIL unsupported_kbuild_pp_option:$arg" >&2; exit 9 ;;
+      esac
+    done
+    native_macro="${base}.native-pp-predefines.h"
+    native_reference="${base}.native-pp-reference.i"
+    native_candidate="${base}.native-pp-candidate.i"
+    MINIPP_LINUX_SRC="$MINIPP_LINUX_SRC" MINIPP_PREDEFINES_OUT="$native_macro" REAL_CC="$real_cc" \
+      bash "$root/tests/preprocessor/build_reference_predefines.sh" "${pp_context[@]}" \
+      >"${base}.native-pp-predefines.log"
+    common_pp=(-E -P -undef -x c -include "$native_macro" "${native_pp_args[@]}" "$source_file")
+    "$real_cc" "${common_pp[@]}" -o "$native_reference"
+    "$MINIC_KBUILD_MINIPP" "${common_pp[@]}" -o "$native_candidate"
+    if ! cmp -s "$native_reference" "$native_candidate"; then
+      diff -u "$native_reference" "$native_candidate" >"${base}.native-pp.diff" || true
+      echo "MINIPP_DYNAMIC_HEADER_PP=FAIL native_vs_reference source=$source_file output=$output_file" >&2
+      exit 9
+    fi
+    # The exact legacy GNU-E output is also authoritative. Prevent a
+    # false pass when normalized GNU and MiniPP agree but their flags omit
+    # a source-dependent Kbuild preprocessor effect.
+    if ! cmp -s "$preprocessed" "$native_candidate"; then
+      diff -u "$preprocessed" "$native_candidate" >"${base}.native-pp-legacy.diff" || true
+      echo "MINIPP_DYNAMIC_HEADER_PP=FAIL native_vs_legacy_gnu source=$source_file output=$output_file" >&2
+      exit 9
+    fi
+    cp -a "$native_candidate" "$preprocessed"
+    printf 'MINIPP_DYNAMIC_HEADER_PP=PASS source=%s output=%s mini_sha=%s legacy_gnu_equal=true\n' \
+      "$source_file" "$output_file" "$(sha256sum "$preprocessed" | cut -d' ' -f1)"
+    # Preserve the actual MiniPP-produced intermediate when capture is enabled.
+    if [[ "$keep" != 1 ]]; then
+      rm -f "$native_macro" "$native_macro.attribute.names" "$native_macro.builtin.names" \
+        "$native_reference" "$native_candidate" "${base}.native-pp-predefines.log"
+    fi
+  fi
 else
   preprocessed=$source_file
 fi
