@@ -18,6 +18,17 @@ tmp="$output.tmp"
 rm -f "$tmp"
 
 predef_args=("$@")
+# Strict target-aware MiniPP macro producer: derive C PIC/PIE/optimizer
+# definitions from the canonical RV64 ABI profile. Existing GNU oracle
+# remains separate. Fail closed for any architecture/flag combination that
+# has not been classified and tested.
+if [[ "${MINIPP_PREDEFINES_NATIVE_RULES:-0}" == 1 ]]; then
+  rm -f "$tmp"
+  root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
+  python3 "$root/tools/ci/minipp-linux-native-macro-rules-v1.py" \
+    --language "$language" --output "$output" -- "${predef_args[@]}"
+  exit $?
+fi
 # Strict opt-in for source-pinned exact RV64 Linux builtin profiles. No GNU
 # process executes on this path, and unsupported option sets fail closed.
 # The GNU path below remains the independent byte-identity reference oracle.
