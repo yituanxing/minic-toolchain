@@ -206,6 +206,18 @@ def replay_affected(out: Path, golden_out: Path, selected: Path,
         "MINIC_KBUILD_SUCCESS_TRACE": str(success.resolve()),
         "MINIC_KBUILD_OBJECT_HASH_TRACE": str(hashes.resolve()),
     })
+    # Only the opt-in dynamic-header gate changes preprocessing. The
+    # historical GNU-E -> MiniC -> GNU-AS path remains the default.
+    native_pp = os.environ.get("COHORT_MINIPP_DYNAMIC_HEADERS") == "1"
+    if native_pp:
+        binary = Path(os.environ.get("COHORT_MINIPP_HEADER_CPP", "/nonexistent-minipp"))
+        linux_src = Path(os.environ.get("COHORT_MINIPP_LINUX_SRC", "/nonexistent-linux"))
+        if not binary.is_file() or not os.access(binary, os.X_OK) or not linux_src.is_dir():
+            raise GuardError("native dynamic MiniPP binary or Linux source missing")
+        if os.environ.get("COHORT_MINIAS_DYNAMIC_HEADERS") != "1":
+            raise GuardError("native dynamic MiniPP requires native MiniAS reconciliation")
+        env["MINIC_KBUILD_MINIPP"] = str(binary.resolve())
+        env["MINIPP_LINUX_SRC"] = str(linux_src.resolve())
     for name in names:
         args = pinned_kbuild_cc_args(golden_out, name)
         path = out / name
@@ -219,6 +231,12 @@ def replay_affected(out: Path, golden_out: Path, selected: Path,
         elapsed = (time.monotonic_ns() - started) // 1_000_000
         print(f"COHORT_HEADER_DIRECT_REPLAY target={name} rc={cp.returncode} "
               f"elapsed_ms={elapsed}", flush=True)
+        if native_pp:
+            native_markers = [line for line in cp.stdout.splitlines()
+                              if line.startswith("MINIPP_DYNAMIC_HEADER_PP=PASS ")]
+            if len(native_markers) != 1 or f"output={name} " not in native_markers[0]:
+                raise GuardError(f"native MiniPP production provenance missing: {name}")
+            print(native_markers[0], flush=True)
         if os.environ.get("COHORT_FRAME_CAPTURE_ONLY") == "1":
             for line in cp.stdout.splitlines():
                 if line.startswith("CORE_FRAME"):
