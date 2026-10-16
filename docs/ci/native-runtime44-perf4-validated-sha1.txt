@@ -1,11 +1,14 @@
 # Native C SHA1s from 9bee70c50123 + runtime44 + integrated_perf4;
 # GCC-style default .text and explicit -ffunction-sections are now selectable
 # per invocation; historical Runtime44 semantics are preserved by default.
+# The original product behavior is unchanged by the 2026-10-16
+# pure zero-only-bool lowering helper extraction. Final Linux/QEMU
+# runtime requalification remains required after this layout change.
 # Update only following equivalent real-input validation.
 1424ae500d9662068612b63091691ce8f322b371 src/compiler/compiler.c
-434da35dcba2d2fdd7f8c7bc5a74f8355612e21f src/core/core_lower.c
+ce262d93f8c77348019a4f6fd94a0a8ccdc22d7d src/core/core_lower.c
 a8418e45608310687e3d6a1e96da79ca49135870 src/core/core_lower_asm.c
-668f08f9f2de8e4fa207000cf2504017c3ab9b57 src/core/core_lower_internal.h
+7997978a9b10a6d01e33dbc00dd11cb3f668f69f src/core/core_lower_internal.h
 bfca6a1861104f768b3b0ae93a72fa28bf0eded0 src/frontend/ast.h
 3abecc04f9cec7523963b5368667ceb8ccb9f905 src/target/riscv64/core_codegen.c
 d55e435041f4e34432a7870b6a2886e9bce70156 src/target/riscv64/function_symbol.h
