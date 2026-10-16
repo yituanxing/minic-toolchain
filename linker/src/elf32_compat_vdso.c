@@ -268,8 +268,8 @@ int minild_link_elf32_compat_vdso(const char *output,
                                   size_t count,
                                   const MiniLdSharedOptions *opts,
                                   FILE *diag) {
-    Input in[IN_COUNT]={{0}};
-    Section sec[NSEC]={{0}};
+    Input in[IN_COUNT]={0};
+    Section sec[NSEC]={0};
     Elf32_Ehdr hdr;
     Elf32_Phdr phdr[4];
     uint32_t exports[EXPORTS],export_sizes[EXPORTS];
