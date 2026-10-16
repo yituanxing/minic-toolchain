@@ -151,5 +151,15 @@ grep -q 'DYNAMIC' "$ev/native-elf.txt" || {
 grep -q 'NOTE' "$ev/native-elf.txt" || {
   echo 'MINILD_VDSO32=FAIL missing_linux_note_segment' >&2; exit 26;
 }
+grep -q 'GNU_HASH' "$ev/native-elf.txt" || {
+  echo 'MINILD_VDSO32=FAIL missing_GNU_HASH_dynamic_tag' >&2; exit 28;
+}
+grep -q 'SONAME.*linux-compat_vdso.so.1' "$ev/native-elf.txt" || {
+  echo 'MINILD_VDSO32=FAIL bad_vdso_soname' >&2; exit 29;
+}
+riscv64-linux-gnu-readelf -nW "$native" >"$ev/native-notes.txt"
+grep -q 'Build ID:' "$ev/native-notes.txt" || {
+  echo 'MINILD_VDSO32=FAIL missing_native_build_id' >&2; exit 30;
+}
 echo 'MINILD_VDSO32=PASS exact_Linux_ELF32_link=true native_output=true no_GNU_fallback=true cached_C=true'
 echo 'MINILD_VDSO32=NEEDS_FULL_RUNTIME_CERTIFICATION QEMU_P1_not_run_in_this_gate=true'
