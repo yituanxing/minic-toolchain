@@ -231,6 +231,9 @@ def replay_affected(out: Path, golden_out: Path, selected: Path,
         elapsed = (time.monotonic_ns() - started) // 1_000_000
         print(f"COHORT_HEADER_DIRECT_REPLAY target={name} rc={cp.returncode} "
               f"elapsed_ms={elapsed}", flush=True)
+        if cp.returncode != 0:
+            print(cp.stdout[-12000:], file=sys.stderr)
+            raise GuardError(f"dynamic header native producer failed: {name}, rc={cp.returncode}")
         if native_pp:
             native_markers = [line for line in cp.stdout.splitlines()
                               if line.startswith("MINIPP_DYNAMIC_HEADER_PP=PASS ")]
@@ -241,9 +244,6 @@ def replay_affected(out: Path, golden_out: Path, selected: Path,
             for line in cp.stdout.splitlines():
                 if line.startswith("CORE_FRAME"):
                     print(line, flush=True)
-        if cp.returncode != 0:
-            print(cp.stdout[-12000:], file=sys.stderr)
-            raise GuardError(f"direct GNU-E MiniC-S GNU-AS replay failed: {name}")
         if not path.is_file() or path.stat().st_size == 0:
             raise GuardError(f"direct MiniC replay produced no object: {name}")
 
