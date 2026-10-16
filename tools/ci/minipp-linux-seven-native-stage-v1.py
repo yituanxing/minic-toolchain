@@ -198,6 +198,10 @@ def main() -> int:
         "status": "PASS" if passed == len(rows) else "FAIL",
         "qemu_claim": False, "full_2064_pp_claim": False,
         "full_shard": args.sample_per_shard == 0,
+        "builtin_profile": ("pinned" if args.profile_snapshot is not None
+                            else "gcc_reference"),
+        "builtin_profile_sha": (sha(args.profile_snapshot.resolve())
+                                if args.profile_snapshot is not None else None),
         "manifest_sha": sha(stage / "native-manifest.sha256"),
     }, indent=2, sort_keys=True) + "\n")
     print(f"MINIPP_SEVEN_NATIVE_RESULT={'PASS' if passed == len(rows) else 'FAIL'} "
