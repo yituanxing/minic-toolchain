@@ -2382,9 +2382,15 @@ jobs:
             # No shard recompile: the cached 2064 C objects stay byte-for-byte
             # identical until Kbuild's separately attested generated-header
             # reconciliation, usually four exact C owners.
-            test "$(wc -l < "$ev/minic-manifest.sha256")" -eq 2064
-            (cd "$ev" && sha256sum --quiet -c minic-manifest.sha256)
-            echo "NATIVE_UNION_CACHE=VERIFIED owners=2064 compile_C=0 reuse_GCC_gold=true"
+            if [[ "${{ contains(github.event.head_commit.message, '[linux-minipp-native-reuse]') && '1' || '0' }}" == 1 ]]; then
+              test "$(wc -l < build/minipp-seven-merge/native-full-manifest.sha256)" -eq 2064
+              (cd "$COHORT_P1_EXPERIMENTAL_POOL" && sha256sum --quiet -c ../native-full-manifest.sha256)
+              echo "NATIVE_UNION_INPUT=VERIFIED owners=2064 no_C_recompile=true GNU_golden=unchanged frozen_native_shards=true"
+            else
+              test "$(wc -l < "$ev/minic-manifest.sha256")" -eq 2064
+              (cd "$ev" && sha256sum --quiet -c minic-manifest.sha256)
+              echo "NATIVE_UNION_CACHE=VERIFIED owners=2064 compile_C=0 reuse_GCC_gold=true"
+            fi
           fi
           if [[ "${{ contains(github.event.head_commit.message, '[linux-runtime-full-crossblock]') && '1' || '0' }}" == 1 ]]; then
             export MINIC_LINUX_FULL_CROSSBLOCK=1 MINIC_OPT_PURE_DISCARDED_ADDRESS_EQ=1
