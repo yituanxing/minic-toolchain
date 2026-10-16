@@ -1706,7 +1706,7 @@ jobs:
       # and compares stack prologues with the certified pure-GNU .o pool.
       - name: Restore immutable 2064-object MiniC cache for P1 diagnosis
         id: p1_minic_frozen_cache
-        if: contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]') || contains(github.event.head_commit.message, '[linux-runtime-stack-owners]') || contains(github.event.head_commit.message, '[linux-native-union-cached]')
+        if: (contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]') || contains(github.event.head_commit.message, '[linux-runtime-stack-owners]') || contains(github.event.head_commit.message, '[linux-native-union-cached]')) && !contains(github.event.head_commit.message, '[linux-minipp-native-reuse]')
         uses: actions/cache/restore@v4
         with:
           path: |
@@ -1722,7 +1722,7 @@ jobs:
           fail-on-cache-miss: true
 
       - name: Attest exact cached full MiniC object pool before native tool replacements
-        if: contains(github.event.head_commit.message, '[linux-native-union-cached]')
+        if: contains(github.event.head_commit.message, '[linux-native-union-cached]') && !contains(github.event.head_commit.message, '[linux-minipp-native-reuse]')
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -1848,7 +1848,9 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          test "${{ steps.p1_minic_frozen_cache.outputs.cache-hit }}" = true
+          if [[ "${{ contains(github.event.head_commit.message, '[linux-minipp-native-reuse]') && '1' || '0' }}" != 1 ]]; then
+            test "${{ steps.p1_minic_frozen_cache.outputs.cache-hit }}" = true
+          fi
           work="$GITHUB_WORKSPACE/build/linux-runtime-gcc"
           src="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0/linux-6.6.143"
           ev="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1"
@@ -1858,7 +1860,7 @@ jobs:
           MINIC_LINUX_FULL_CROSSBLOCK=1 MINIC_OPT_PURE_DISCARDED_ADDRESS_EQ=1 \
             bash tools/ci/linux-runtime-build-minic-profile-v1.sh \
               "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain" "$ev/compiler"
-          echo "NATIVE_UNION_COMPILER=READY recompiled_C=0 restored_objects=2064"
+          echo "NATIVE_UNION_COMPILER=READY recompiled_C=0 sources=canonical_main native_shard_reuse=${{ contains(github.event.head_commit.message, '[linux-minipp-native-reuse]') && 'true' || 'false' }}"
 
       - name: Retain fully verified MiniC objects before link or runtime
         if: "!contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]') && !contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]') && !contains(github.event.head_commit.message, '[linux-runtime-stack-owners]') && !contains(github.event.head_commit.message, '[linux-native-union-cached]') && !contains(github.event.head_commit.message, '[linux-minild-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-reloc-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-purgatory-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-vdso64-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minias-earlycon-frozen]')"
