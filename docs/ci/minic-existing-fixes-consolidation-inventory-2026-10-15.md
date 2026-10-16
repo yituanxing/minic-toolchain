@@ -137,3 +137,33 @@
 代码证明：`src/core/core_lower.c`、`src/core/core_lower_asm.c`、`src/target/riscv64/core_codegen.c`、`src/frontend/parser_core.c`、`src/frontend/parser_typedef.c` 的 Git Blob SHA 在 `b46822f` 与 `main` 完全相同；`compiler.c` 仅增加编译选项参数与保留原 API wrapper 的布局传递，并未重写 inline-specialization 主算法。这证明**已经验收的源码级优化没有被合并操作删除**，但不能替代严格 A/B。
 
 后续严格 A/B：同机、同一 GNU 预处理后 .i 输入集、固定编译器版本与参数、交替 ABBA 顺序、至少重复 3 轮；只计 MiniC 自身 CPU 与 wall，不包含预处理、汇编、缓存复制、链接；逐 TU 匹配且报告中位数 / P95 / 总 CPU 时间。同时要求目标代码/ABI、Linux 全量链接与 P1 不退化。历史 perf-only scoped Boolean Domain 先走单独的受控候选试验，不直接并进生产分支。
+
+## 同机交错 A/B 及最新 Native 联合运行验收（2026-10-16）
+
+**“交错”仅指性能测试的执行顺序，不是交错合并代码，更不是同时运行两个编译器。**
+在同一个 Runner 上对同一个已经 SHA 固定的预处理 .i，交替运行旧版 A 与当前 B（前后顺序轮换），尽量抵消时间漂移、CPU 状态和顺序效应。A 是 `b46822f` 的已验证 Runtime44+Perf4 编译器，B 是合并后的 main 参数化编译器，非相同可执行文件自比。
+
+真实 Linux 2064 TU、7 路配对输入的 A/B：Actions [#38822075982](https://github.com/yituanxing/minic-toolchain/actions/runs/38822075982)，**七个 producer 均 PASS**，各路日志中的 `MINIC_FULL_PERF_AB` 汇总如下。时间是各 TU 测量值的分片求和，**不是七路同时运行时的全局 wall 时间**。
+
+| 分片 | 对象 | A 合计 ms | B 合计 ms | B 相对 A 的变化 |
+|---|---:|---:|---:|---:|
+| 0 | 295 | 3,176,075 | 3,219,345 | 慢 1.36% |
+| 1 | 295 | 2,036,529 | 2,038,189 | 慢 0.08% |
+| 2 | 295 | 2,039,799 | 2,027,497 | 快 0.60% |
+| 3 | 295 | 1,882,774 | 1,924,264 | 慢 2.20% |
+| 4 | 295 | 2,014,950 | 1,934,132 | 快 4.01% |
+| 5 | 295 | 2,013,256 | 1,972,083 | 快 2.05% |
+| 6 | 294 | 2,118,375 | 2,101,433 | 快 0.80% |
+| **合计** | **2064** | **15,281,758** | **15,216,942** | **B 快约 0.42%** |
+
+结论：测量结果互有快慢，**没有发现系统级、跨分片的一致显著性能回归**；0.42% 差异非常小，不应称为 0.42% 的确定优化，也不能宣称统计意义上的无回归。当前已有一轮真实交错 A/B，但还没有完成至少三轮独立重复以及 CPU/P95 分析。旧源码优化保留还有源代码 SHA / 差异审计的独立证据。
+
+**2026-10-16 最新整套链路复用验收**：main `de77a6c2`，Actions [#38828569569](https://github.com/yituanxing/minic-toolchain/actions/runs/38828569569) **SUCCESS**。日志包括：
+
+- `COHORT_NATIVE_SAME_RUN=VERIFIED objects=2064 producers=7 PP=MiniPP CC=MiniC AS=MiniAS`（来自已验 SHA 的七路缓存，不是本次现场重编译）。
+- `MINIAS_NATIVE_S_RUNTIME=PASS native_asm=34`：另有 34 个实际 Kbuild 汇编目标使用原生 MiniAS。
+- `MINILD_PURGATORY_R=PASS`、`MINILD_PURGATORY_STATIC=PASS`、`MINILD_NATIVE_R=PASS`、`MINILD_VDSO64=PASS`，`MiniObjcopy_calls=4`；最终链接仍按 **受验证的混合工具边界** 执行，不得误称所有环节完全无 GNU。
+- `MINIPP_SEVEN_QEMU=PASS ... QEMU_P1=12/12 generated_header_pp_pending=true` 和 `COHORT_P1=PASS ... syscalls=12`；**生成头文件中的 PP 覆盖尚有明确缺口**。
+- `NATIVE_UNION_RESULT=PASS`，MiniAR Kbuild `ar_native_calls=643`、`ar_gnu_calls=0`；此外存在认证的 GNU-derived/未选 owner，不能把此项解释为整个 Linux 所有非 C 辅助构建环节已经完全替换。
+
+**主线状态**：正式源码在 `main`，旧分支提交已作为多父合并历史保存；GitHub 仍存在四条旧分支引用，需具备删分支权限的操作才能让远程只剩 `main`。后续针对真正仍未原生覆盖的环节单独补齐，禁止再次将「复用成功」说成「全量本轮从零编译成功」。
