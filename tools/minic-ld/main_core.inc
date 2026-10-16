@@ -1,4 +1,5 @@
 #include "minild.h"
+#include "minild_elf32_vdso.h"
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -119,6 +120,7 @@ int main(int argc, char **argv) {
     bool eh_frame_hdr = false;
     bool whole_archive = false;
     bool group_mode = false;
+    bool elf32_emulation = false;
     int i;
 
     if (argc == 2 &&
@@ -315,7 +317,14 @@ int main(int argc, char **argv) {
                 }
                 emulation = argv[i];
             }
-            if (strcmp(emulation, "elf64lriscv") != 0) {
+            if (strcmp(emulation, "elf32lriscv") == 0) {
+                elf32_emulation = true;
+            } else if (strcmp(emulation, "elf64lriscv") == 0) {
+                if (elf32_emulation) {
+                    fprintf(stderr, "minic-ld: conflicting-emulations\n");
+                    return 2;
+                }
+            } else {
                 fprintf(stderr, "minic-ld: unsupported-emulation:%s\n", emulation);
                 return 2;
             }
@@ -429,6 +438,10 @@ int main(int argc, char **argv) {
         return 2;
     }
 
+    if (elf32_emulation && !shared_link) {
+        fprintf(stderr, "minic-ld: elf32-only-shared-compat-vdso\n");
+        return 2;
+    }
     if (relocatable) {
         return minild_link_relocatable_elf64_riscv_inputs(output,
                                                            inputs,
@@ -449,6 +462,14 @@ int main(int argc, char **argv) {
         options.hash_style_both = hash_style_both;
         options.eh_frame_hdr = eh_frame_hdr;
         options.pie = pie_link;
+        if (elf32_emulation) {
+            if (!shared_link) {
+                fprintf(stderr, "minic-ld: elf32-only-shared-compat-vdso\n");
+                return 2;
+            }
+            return minild_link_elf32_compat_vdso(output, inputs, input_count,
+                                                 &options, stderr);
+        }
         return minild_link_shared_elf64_riscv_inputs_options(output,
                                                               inputs,
                                                               input_count,
