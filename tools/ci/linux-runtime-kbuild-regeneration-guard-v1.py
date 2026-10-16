@@ -232,7 +232,12 @@ def replay_affected(out: Path, golden_out: Path, selected: Path,
         print(f"COHORT_HEADER_DIRECT_REPLAY target={name} rc={cp.returncode} "
               f"elapsed_ms={elapsed}", flush=True)
         if cp.returncode != 0:
-            print(cp.stdout[-12000:], file=sys.stderr)
+            # Huge one-line Linux macro expansions drown out the first delta.
+            # Keep the beginning (first failing preprocessor hunk) and tail.
+            print(cp.stdout[:7000], file=sys.stderr)
+            if len(cp.stdout) > 7000:
+                print("COHORT_DYNAMIC_LOG_TRUNCATED first_bytes=7000", file=sys.stderr)
+                print(cp.stdout[-2000:], file=sys.stderr)
             raise GuardError(f"dynamic header native producer failed: {name}, rc={cp.returncode}")
         if native_pp:
             native_markers = [line for line in cp.stdout.splitlines()
