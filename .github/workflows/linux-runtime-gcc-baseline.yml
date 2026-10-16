@@ -1848,9 +1848,7 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          if [[ "${{ contains(github.event.head_commit.message, '[linux-minipp-native-reuse]') && '1' || '0' }}" != 1 ]]; then
-            test "${{ steps.p1_minic_frozen_cache.outputs.cache-hit }}" = true
-          fi
+          test "${{ steps.p1_minic_frozen_cache.outputs.cache-hit }}" = true
           work="$GITHUB_WORKSPACE/build/linux-runtime-gcc"
           src="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0/linux-6.6.143"
           ev="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1"
@@ -1860,7 +1858,7 @@ jobs:
           MINIC_LINUX_FULL_CROSSBLOCK=1 MINIC_OPT_PURE_DISCARDED_ADDRESS_EQ=1 \
             bash tools/ci/linux-runtime-build-minic-profile-v1.sh \
               "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain" "$ev/compiler"
-          echo "NATIVE_UNION_COMPILER=READY recompiled_C=0 sources=canonical_main native_shard_reuse=${{ contains(github.event.head_commit.message, '[linux-minipp-native-reuse]') && 'true' || 'false' }}"
+          echo "NATIVE_UNION_COMPILER=READY recompiled_C=0 restored_objects=2064"
 
       - name: Retain fully verified MiniC objects before link or runtime
         if: "!contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]') && !contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]') && !contains(github.event.head_commit.message, '[linux-runtime-stack-owners]') && !contains(github.event.head_commit.message, '[linux-native-union-cached]') && !contains(github.event.head_commit.message, '[linux-minild-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-reloc-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-purgatory-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-vdso64-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minias-earlycon-frozen]')"
@@ -2091,9 +2089,9 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           repository: ${{ github.repository }}
-          run-id: 38824106769
+          run-id: 38550003154
           github-token: ${{ github.token }}
-          pattern: minipp-native-shard-*-ee1677256074ddf3bbd9145553178471c3d42e06
+          pattern: minipp-native-shard-*-041ae51e1ff2f3f1b9e30b489957e53cfc43dfa1
           path: build/minipp-seven-merge/incoming
           merge-multiple: false
 
@@ -2103,29 +2101,10 @@ jobs:
         run: |
           set -Eeuo pipefail
           ev="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1"
-          if [[ "${{ contains(github.event.head_commit.message, '[linux-minipp-native-reuse]') && '1' || '0' }}" == 1 ]]; then
-            # Only reuse the seven fully produced .o shards after proving no
-            # source, GNU fixture or producer script changed since their build.
-            producer=ee1677256074ddf3bbd9145553178471c3d42e06
-            git fetch --quiet --no-tags --depth=1 origin "$producer"
-            git diff --quiet "$producer" "$GITHUB_SHA" -- \
-              Makefile src include preprocessor assembler archiver linker elf \
-              tools/minic tools/minic-cc \
-              tools/ci/linux-runtime-build-minic-profile-v1.sh \
-              tools/ci/minipp-linux-seven-native-stage-v1.py \
-              tools/ci/minipp-linux-seven-merge-v1.py \
-              tools/ci/linux-runtime-gcc-cohort-objects-v1.txt || {
-              echo 'MINIPP_REUSE=FAIL validated_producer_source_changed' >&2; exit 13;
-            }
-            echo "MINIPP_REUSE=SOURCE_IDENTICAL producer=$producer current=$GITHUB_SHA frozen_C=2064"
-          else
-            test "${{ steps.p1_minic_frozen_cache.outputs.cache-hit }}" = true
-            (cd "$ev"; sha256sum --quiet -c minic-manifest.sha256)
-          fi
+          test "${{ steps.p1_minic_frozen_cache.outputs.cache-hit }}" = true
+          (cd "$ev"; sha256sum --quiet -c minic-manifest.sha256)
           shard_commit="$GITHUB_SHA"
-          if [[ "${{ contains(github.event.head_commit.message, '[linux-minipp-native-reuse]') && '1' || '0' }}" == 1 ]]; then
-            shard_commit=ee1677256074ddf3bbd9145553178471c3d42e06
-          elif [[ "${{ contains(github.event.head_commit.message, '[linux-minipp-seven-replay]') && '1' || '0' }}" == 1 ]]; then
+          if [[ "${{ contains(github.event.head_commit.message, '[linux-minipp-seven-replay]') && '1' || '0' }}" == 1 ]]; then
             shard_commit=041ae51e1ff2f3f1b9e30b489957e53cfc43dfa1
           fi
           python3 tools/ci/minipp-linux-seven-merge-v1.py \
@@ -2284,19 +2263,13 @@ jobs:
             export COHORT_GNU_PREFLIGHT_ALLOW_SEVEN_RECEIVER_VOLATILE=1
           fi
           if [[ "${{ contains(github.event.head_commit.message, '[linux-native-union-cached]') && '1' || '0' }}" == 1 ]]; then
-            if [[ "${{ contains(github.event.head_commit.message, '[linux-minipp-native-reuse]') && '1' || '0' }}" != 1 ]]; then
-              test "${{ steps.p1_minic_frozen_cache.outputs.cache-hit }}" = true
-            fi
+            test "${{ steps.p1_minic_frozen_cache.outputs.cache-hit }}" = true
             native="$ev/native-union"
             toolchain="$GITHUB_WORKSPACE/build/linux-runtime-native-union-v1-tools"
             export MINIAR="$toolchain/bin/minic-ar"
             export MINILD="$toolchain/bin/minic-ld"
             if [[ "${{ contains(github.event.head_commit.message, '[linux-minipp-seven-integration]') && '1' || '0' }}" == 1 ]]; then
               export COHORT_P1_EXPERIMENTAL_POOL="$GITHUB_WORKSPACE/build/minipp-seven-merge/native-objects"
-              if [[ "${{ contains(github.event.head_commit.message, '[linux-minipp-native-reuse]') && '1' || '0' }}" == 1 ]]; then
-                export COHORT_NATIVE_SAME_RUN_POOL="$COHORT_P1_EXPERIMENTAL_POOL"
-                echo 'NATIVE_UNION=REUSE_VERIFIED_CURRENT_NATIVE_SHARDS legacy_full_cache=not_required'
-              fi
               if [[ "${{ contains(github.event.head_commit.message, '[linux-minipp-seven-replay]') && '1' || '0' }}" == 1 ]]; then
                 # Only this immutable cache-replay may tolerate timestamp-derived
                 # GNU Kbuild version.o / vmlinux.o preflight regeneration.
@@ -2382,15 +2355,9 @@ jobs:
             # No shard recompile: the cached 2064 C objects stay byte-for-byte
             # identical until Kbuild's separately attested generated-header
             # reconciliation, usually four exact C owners.
-            if [[ "${{ contains(github.event.head_commit.message, '[linux-minipp-native-reuse]') && '1' || '0' }}" == 1 ]]; then
-              test "$(wc -l < build/minipp-seven-merge/native-full-manifest.sha256)" -eq 2064
-              (cd "$COHORT_P1_EXPERIMENTAL_POOL" && sha256sum --quiet -c ../native-full-manifest.sha256)
-              echo "NATIVE_UNION_INPUT=VERIFIED owners=2064 no_C_recompile=true GNU_golden=unchanged frozen_native_shards=true"
-            else
-              test "$(wc -l < "$ev/minic-manifest.sha256")" -eq 2064
-              (cd "$ev" && sha256sum --quiet -c minic-manifest.sha256)
-              echo "NATIVE_UNION_CACHE=VERIFIED owners=2064 compile_C=0 reuse_GCC_gold=true"
-            fi
+            test "$(wc -l < "$ev/minic-manifest.sha256")" -eq 2064
+            (cd "$ev" && sha256sum --quiet -c minic-manifest.sha256)
+            echo "NATIVE_UNION_CACHE=VERIFIED owners=2064 compile_C=0 reuse_GCC_gold=true"
           fi
           if [[ "${{ contains(github.event.head_commit.message, '[linux-runtime-full-crossblock]') && '1' || '0' }}" == 1 ]]; then
             export MINIC_LINUX_FULL_CROSSBLOCK=1 MINIC_OPT_PURE_DISCARDED_ADDRESS_EQ=1
@@ -2439,15 +2406,9 @@ jobs:
             "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain/bin/minic" \
             "$work/provenance" "$ev/full-objects.txt" "$ev"
           if [[ "${{ contains(github.event.head_commit.message, '[linux-native-union-cached]') && '1' || '0' }}" == 1 ]]; then
-            if [[ "${{ contains(github.event.head_commit.message, '[linux-minipp-native-reuse]') && '1' || '0' }}" == 1 ]]; then
-              grep -Fq 'COHORT_NATIVE_SAME_RUN=VERIFIED objects=2064' "$ev/cohort.log" || {
-                echo 'NATIVE_UNION=FAIL current_shards_not_consumed' >&2; exit 20;
-              }
-            else
-              grep -Fq 'COHORT_CANDIDATE_CACHE=HIT objects=2064' "$ev/cohort.log" || {
-                echo 'NATIVE_UNION_CACHE=FAIL fallback_recompiled_full_C_pool' >&2; exit 20;
-              }
-            fi
+            grep -Fq 'COHORT_CANDIDATE_CACHE=HIT objects=2064' "$ev/cohort.log" || {
+              echo 'NATIVE_UNION_CACHE=FAIL fallback_recompiled_full_C_pool' >&2; exit 20;
+            }
             grep -Fq 'COHORT_RESULT=PASS candidate_objects=2064 scope=FULL_C_UNIVERSE' "$ev/cohort.log" || {
               echo 'NATIVE_UNION_RESULT=FAIL missing_exact_2064_P1_pass' >&2; exit 21;
             }
