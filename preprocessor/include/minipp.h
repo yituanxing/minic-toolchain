@@ -9,6 +9,8 @@ typedef struct MiniPpConfig {
     bool suppress_line_markers;
     bool inhibit_predefined_macros;
     bool no_standard_includes;
+    /* Optional GCC -fmacro-prefix-map=OLD=NEW for __FILE__. Borrowed argv. */
+    const char *macro_prefix_map;
     const char **defines;
     size_t define_count;
     const char **undefines;
