@@ -33,9 +33,13 @@ for capability in attribute builtin; do
 
   while IFS= read -r name; do
     [[ -n "$name" ]] || continue
+    # GNU assembler-with-cpp deliberately does not parse __has_attribute()
+    # inside #if (it reports "missing binary operator"). The *macro dump*
+    # must use assembler dialect for __ASSEMBLER__, but feature queries
+    # use the corresponding target C dialect with identical -march/-mabi.
     value=$(
       printf '#if __has_%s(%s)\n1\n#else\n0\n#endif\n'         "$capability" "$name" |
-        "$real_cc" "${predef_args[@]}" -E -P -x "$language" - |
+        "$real_cc" "${predef_args[@]}" -E -P -x c - |
         tail -n 1
     )
     upper=${capability^^}
