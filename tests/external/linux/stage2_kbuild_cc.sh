@@ -252,35 +252,10 @@ if [[ -n "${MINIC_BOOLEAN_DOMAIN_COUNTS_LOG:-}" ]]; then
   } 9>>"$MINIC_BOOLEAN_DOMAIN_COUNTS_LOG"
 fi
 
-# Record INTEGER transitive FunctionBody owner-filter decisions for the
-# same authentic owner, on the same successful MiniC execution as Boolean.
-# Keep this independently opt-in; no extra compilation or new runner.
+# Count integer-owner filtering during each existing real MiniC Kbuild compile.
+# Opt-in only; no separate compilation or new runner.
 if [[ -n "${MINIC_INTEGER_OWNER_COUNTS_LOG:-}" ]]; then
-  metric=$(grep -E '^MINIC_INTEGER_OWNER_FILTER ready=[01] candidates=[0-9]+ skipped_other_owner=[0-9]+ fallback=[01]
-  case "$arg" in
-    -march=*|-mabi=*|-mcmodel=*|-mstrict-align|-mno-strict-align|-mno-save-restore|-mno-relax|-Wa,*)
-      asm_args+=("$arg")
-      ;;
-  esac
-done
-
-[[ -z "$trace" ]] || printf 'assemble input=%q output=%q\n' "$assembly" "$output_file" >>"$trace"
-"$real_cc" "${asm_args[@]}" -x assembler -c "$assembly" -o "$output_file"
-
-
-# A route record alone cannot prove that the final object was not replaced
-# after compilation. Record the EXACT object bytes produced through MiniC
-# and GNU as, before emitting the legacy success marker. Both writes are
-# single-line O_APPEND operations, safe for different concurrently built TUs.
-if [[ -n "${MINIC_KBUILD_OBJECT_HASH_TRACE:-}" ]]; then
-  object_hash=$(sha256sum -- "$output_file" | cut -d' ' -f1)
-  printf '%s  %s\n' "$object_hash" "$output_file" >>"$MINIC_KBUILD_OBJECT_HASH_TRACE"
-fi
-if [[ -n "${MINIC_KBUILD_SUCCESS_TRACE:-}" ]]; then
-  printf '%s\n' "$output_file" >>"$MINIC_KBUILD_SUCCESS_TRACE"
-fi
-[[ -z "$trace" ]] || printf 'pass source=%q output=%q\n' "$source_file" "$output_file" >>"$trace"
- "$minic_stderr" | tail -n 1 || true)
+  metric=$(grep -E '^MINIC_INTEGER_OWNER_FILTER ready=[01] candidates=[0-9]+ skipped_other_owner=[0-9]+ fallback=[01]$' "$minic_stderr" | tail -n 1 || true)
   if [[ -z "$metric" ]]; then
     echo "MINIC_INTEGER_OWNER_METRICS=FAIL missing_compiler_counter owner=$output_file" >&2
     exit 11
