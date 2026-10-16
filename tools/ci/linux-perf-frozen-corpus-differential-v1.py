@@ -64,17 +64,21 @@ def compile_one(exe, source, target):
             "bytes": target.stat().st_size, "wall_ms": elapsed}
 
 
-def one_pair(entry, old, new):
+def one_pair(entry, old, new, balanced_order=False):
     index, obj, rel_i, source = entry
+    order = ("baseline", "candidate") if not balanced_order or index % 2 == 0 else ("candidate", "baseline")
     with tempfile.TemporaryDirectory(prefix="minic-pair-") as directory:
         folder = Path(directory)
-        baseline = compile_one(old, source, folder / "old.s")
-        candidate = compile_one(new, source, folder / "new.s")
+        calls = {"baseline": (old, folder / "old.s"),
+                 "candidate": (new, folder / "new.s")}
+        results = {arm: compile_one(*calls[arm][0:1], source, calls[arm][1])
+                   for arm in order}
+    baseline, candidate = results["baseline"], results["candidate"]
     equivalent = (baseline["status"] == "PASS" and
                   candidate["status"] == "PASS" and
                   baseline["sha256"] == candidate["sha256"])
     return {"index": index, "object": obj, "input": rel_i,
-            "baseline": baseline, "candidate": candidate,
+            "first": order[0], "baseline": baseline, "candidate": candidate,
             "assembly_identical": equivalent}
 
 
@@ -83,6 +87,8 @@ def main():
     for name in ("corpus", "baseline_driver", "candidate_driver", "out"):
         cli.add_argument("--" + name.replace("_", "-"), type=Path, required=True)
     cli.add_argument("--jobs", type=int, choices=(1, 2, 4), default=4)
+    cli.add_argument("--balanced-order", action="store_true",
+                     help="alternate which compiler runs first by pinned TU index")
     args = cli.parse_args()
     corpus, out = args.corpus.resolve(), args.out.resolve()
     old, new = args.baseline_driver.resolve(), args.candidate_driver.resolve()
@@ -96,7 +102,7 @@ def main():
     out.mkdir(parents=True, exist_ok=True)
     all_rows = []
     with ThreadPoolExecutor(max_workers=args.jobs) as pool:
-        work = [pool.submit(one_pair, row, old, new) for row in records]
+        work = [pool.submit(one_pair, row, old, new, args.balanced_order) for row in records]
         for index, future in enumerate(as_completed(work), 1):
             row = future.result()
             all_rows.append(row)
@@ -112,13 +118,23 @@ def main():
                "candidate_cc_sha256": new_sha,
                "identical": len(all_rows) - len(mismatches),
                "mismatch_count": len(mismatches),
+               "balanced_order": args.balanced_order,
                "results": all_rows}
     (out / "differential.json").write_text(
         json.dumps(results, indent=2, ensure_ascii=False) + "\n")
     if mismatches:
         raise SystemExit(f"MINIC_FROZEN_DIFF=FAIL mismatches={len(mismatches)}")
+    before_ms = sum(row["baseline"]["wall_ms"] for row in all_rows)
+    after_ms = sum(row["candidate"]["wall_ms"] for row in all_rows)
+    regressions = sum(row["candidate"]["wall_ms"] > row["baseline"]["wall_ms"]
+                      for row in all_rows)
     print("MINIC_FROZEN_DIFF=PASS selected=500 identical=500 "
           "runtime_p1_not_proven=true")
+    print("MINIC_FROZEN_PAIRED=PASS owners=500 balanced_order=%s "
+          "baseline_total_ms=%.3f candidate_total_ms=%.3f "
+          "candidate_speedup=%.5f regressions=%d" %
+          (str(args.balanced_order).lower(), before_ms, after_ms,
+           before_ms / after_ms, regressions))
 
 
 if __name__ == "__main__":
