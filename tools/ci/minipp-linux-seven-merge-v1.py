@@ -2,6 +2,7 @@
 """Strict complete merge of seven real MiniPP->MiniC->MiniAS shard products."""
 import argparse,hashlib,json,re,shutil,struct
 from pathlib import Path
+from linux_minipp_seven_balanced_plan_v1 import balanced_members
 def sha(p):
     h=hashlib.sha256()
     with p.open('rb') as f:
@@ -11,6 +12,7 @@ p=argparse.ArgumentParser()
 for name in ['artifacts','owners','golden-out','dest','commit']:p.add_argument('--'+name,required=True)
 p.add_argument('--pinned-profile',type=Path)
 p.add_argument('--native-macro-rules',action='store_true')
+p.add_argument('--balanced-plan',type=Path)
 a=p.parse_args()
 pinned_sha=sha(a.pinned_profile) if a.pinned_profile else None
 if a.native_macro_rules and not pinned_sha:
@@ -19,6 +21,8 @@ if a.native_macro_rules and not pinned_sha:
 root,ownerfile,gold,dest=map(Path,[a.artifacts,a.owners,a.golden_out,a.dest])
 owners=[x.strip() for x in ownerfile.read_text().splitlines() if x.strip() and not x.startswith('#')]
 if len(owners)!=2064 or len(set(owners))!=2064:raise SystemExit('MINIPP_MERGE=FAIL owners')
+balanced=(balanced_members(owners,a.balanced_plan) if a.balanced_plan else None)
+balanced_sha=(sha(a.balanced_plan) if a.balanced_plan else None)
 if not re.fullmatch('[0-9a-f]{40}',a.commit):raise SystemExit('MINIPP_MERGE=FAIL commit')
 dest.mkdir(parents=True,exist_ok=True)
 records={}; failures=0
@@ -34,7 +38,9 @@ for n in range(7):
     if pinned_sha and (summary.get('builtin_profile') != expected_profile or
                        summary.get('builtin_profile_sha') != pinned_sha):
         raise SystemExit(f'MINIPP_MERGE=FAIL wrong_macro_producer_worker={n}')
-    selected=owners[n::7]
+    selected=(balanced[n] if balanced is not None else owners[n::7])
+    if summary.get('balanced_plan_sha256') != balanced_sha:
+        raise SystemExit(f'MINIPP_MERGE=FAIL balanced_plan_identity_shard={n}')
     if (summary['shard']!=n or summary['shards']!=7 or not summary['full_shard'] or
         summary['status']!='PASS' or summary['full_universe']!=2064 or
         summary['selected']!=len(selected) or summary['passed']!=len(selected) or
@@ -80,6 +86,8 @@ complete=[row for row in performance_rows
           and all(isinstance(row.get('peak_rss_kb',{}).get(stage),int)
                   for stage in ('minipp','minic','minias'))]
 performance={'schema':'minipp-linux-performance-v1','owners':len(records),
+             'balanced_plan_sha256':balanced_sha,
+             'assignment_mode':'balanced_sha_bound' if balanced is not None else 'legacy_stride',
              'measured_owners':len(complete),'source_commit':a.commit,
              'measurement_scope':'sum of individual subprocess times; NOT concurrent wall-clock',
              'peak_rss_scope':'maximum individual Linux wait4 ru_maxrss; NOT job/cgroup RAM'}
@@ -122,7 +130,8 @@ if complete:
 print(f"MINIPP_SEVEN_PERFORMANCE_MERGE={('PASS' if len(complete)==2064 else 'PARTIAL')} "
       f"measured={len(complete)}/2064 owner_scoped=true "
       "rss=max_individual_process no_concurrent_job_wall_claim=true",flush=True)
-print('MINIPP_SEVEN_MERGE=PASS owners=2064 shards=7 GNU_PP_consumed_by_MiniC=false QEMU_pending=true',flush=True)
+print('MINIPP_SEVEN_MERGE=PASS owners=2064 shards=7 GNU_PP_consumed_by_MiniC=false QEMU_pending=true '
+      + ('assignment=balanced_sha_bound' if balanced is not None else 'assignment=legacy_stride'),flush=True)
 if a.native_macro_rules:
     assert pinned_sha and len(records) == 2064
     print('MINIPP_NATIVE_MACRO_MERGE=PASS owners=2064 shards=7 '
