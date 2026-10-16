@@ -73,13 +73,33 @@ def compute_interstage_gaps(events):
 SPEC_STAGES=("spec-integer","spec-symbolic","spec-boolean","spec-finalize")
 SYMBOLIC_SUBSTAGES=("spec-symbolic-direct","spec-symbolic-transitive")
 INTEGER_SUBSTAGES=("spec-integer-direct","spec-integer-transitive")
+BOOLEAN_SUBSTAGES=("spec-boolean-direct","spec-boolean-transitive")
+BOOLEAN_COUNTER_RE=re.compile(r"MINIC_BOOLEAN_SCAN_PROFILE\\s+(.+)")
+BOOLEAN_COUNTER_FIELDS=("local_queries","local_arena_scan_potential",
+                        "callers","range_callers","expression_visits",
+                        "call_expression_visits","variant_lookups","variant_probes",
+                        "direct_clones","transitive_clones")
+
+def read_boolean_counts(events):
+    found=[]
+    for _when,line in events:
+        match=BOOLEAN_COUNTER_RE.search(line)
+        if not match: continue
+        fields=dict((k,int(v)) for k,v in
+                    (word.split("=",1) for word in match.group(1).split()))
+        if set(fields)!=set(BOOLEAN_COUNTER_FIELDS):
+            raise RuntimeError("unexpected Boolean scan counters: "+repr(sorted(fields)))
+        found.append(fields)
+    if len(found)>1: raise RuntimeError("duplicate Boolean scan profile rows")
+    return found[0] if found else None
+
 
 def summarize_specialization_trace(events):
     """Read existing opt-in specialization begin/end markers without touching IR."""
     started, total, calls = {}, {}, {}
     for when, line in events:
         match = PAT.search(line)
-        if not match or match.group(1) not in SPEC_STAGES+SYMBOLIC_SUBSTAGES+INTEGER_SUBSTAGES:
+        if not match or match.group(1) not in SPEC_STAGES+SYMBOLIC_SUBSTAGES+INTEGER_SUBSTAGES+BOOLEAN_SUBSTAGES:
             continue
         stage, action, _ = match.groups()
         if action == "begin":
@@ -101,7 +121,7 @@ def summarize_specialization_trace(events):
 
 
 def sample(executable,source,output,limit):
-    env=dict(os.environ,MINIC_BOOTSTRAP_TRACE="1")
+    env=dict(os.environ,MINIC_BOOTSTRAP_TRACE="1",MINIC_BOOLEAN_SCAN_PROFILE="1")
     begun=time.perf_counter_ns()
     with subprocess.Popen([str(executable),"-S",str(source),"-o",str(output)],
                           env=env,stdout=subprocess.DEVNULL,
@@ -118,7 +138,8 @@ def sample(executable,source,output,limit):
     stages,functions=attribute(events)
     gaps=compute_interstage_gaps(events)
     spec=summarize_specialization_trace(events)
-    return {"wall_ms":round((time.perf_counter_ns()-begun)/1000000,3),
+    bool_counts=read_boolean_counts(events)
+    return {"boolean_counts":bool_counts, "wall_ms":round((time.perf_counter_ns()-begun)/1000000,3),
             "stage_ms":stages,"interstage_gap_ms":gaps,
             "specialization_ms":spec,"function_counts":functions, "assembly_sha":digest(output)}
 
@@ -128,6 +149,7 @@ def main():
     cli.add_argument("--expect-specialization",action="store_true")
     cli.add_argument("--expect-symbolic-loops",action="store_true")
     cli.add_argument("--expect-integer-loops",action="store_true")
+    cli.add_argument("--expect-boolean-loops",action="store_true")
     cli.add_argument("--input",type=Path)
     cli.add_argument("--baseline",type=Path)
     cli.add_argument("--candidate",type=Path)
@@ -155,7 +177,9 @@ def main():
                        (800000,"MINIC_BOOTSTRAP_TRACE stage=spec-integer-transitive state=begin functions=5"),
                        (2000000,"MINIC_BOOTSTRAP_TRACE stage=spec-integer-transitive state=end-success functions=5")]
         assert summarize_specialization_trace(integer_probe)["spec-integer-transitive"]["ms"]==1.2
-        print("MINIC_PHASE_TRACE_SELFTEST=PASS six_stages=1 five_interstage_gaps=1 spec_timer=1")
+        example=[(0,"MINIC_BOOLEAN_SCAN_PROFILE local_queries=3 local_arena_scan_potential=200 callers=4 range_callers=2 expression_visits=1000 call_expression_visits=9 variant_lookups=3 variant_probes=14 direct_clones=1 transitive_clones=1")]
+        assert read_boolean_counts(example)["expression_visits"]==1000
+        print("MINIC_PHASE_TRACE_SELFTEST=PASS six_stages=1 five_interstage_gaps=1 spec_timer=1 boolean_count_parser=1")
         return
     if not all((ns.input,ns.baseline,ns.candidate,ns.out)):
         cli.error("all inputs required")
@@ -171,6 +195,8 @@ def main():
         raise RuntimeError("symbolic loops require outer specialization tracing")
     if ns.expect_integer_loops and not ns.expect_specialization:
         raise RuntimeError("integer loops require outer specialization tracing")
+    if ns.expect_boolean_loops and not ns.expect_specialization:
+        raise RuntimeError("boolean loops require outer specialization tracing")
     if ns.expect_specialization and not set(SPEC_STAGES).issubset(results["after"]["specialization_ms"]):
         raise RuntimeError("diagnostic compiler did not emit all four specialization markers")
     data={"schema":"minic-existing-stage-trace-v1",
@@ -209,6 +235,26 @@ def main():
                 item=spec[name]
                 print(f"MINIC_INTEGER_SUBPHASE mode={mode} name={name} ms={item['ms']:.2f} calls={item['calls']}")
             print(f"MINIC_INTEGER_SUBPHASE_GROUP=PASS mode={mode} measured_ms={total:.2f} outer_ms={outer:.2f}")
+    if ns.expect_boolean_loops:
+        spec=results["after"]["specialization_ms"]
+        if not all(s in spec and spec[s]["calls"]==1 for s in BOOLEAN_SUBSTAGES):
+            raise RuntimeError("Boolean scan direct/transitive timers missing")
+        sub=sum(spec[s]["ms"] for s in BOOLEAN_SUBSTAGES)
+        outer=spec["spec-boolean"]["ms"]
+        if sub>outer+5:
+            raise RuntimeError("Boolean inner times exceed outer total")
+        counts=results["after"]["boolean_counts"]
+        if counts is None:
+            raise RuntimeError("Boolean scan profile counters missing")
+        if counts["call_expression_visits"]>counts["expression_visits"]:
+            raise RuntimeError("Boolean CALL visits exceed scanned expressions")
+        if counts["range_callers"]>counts["callers"]:
+            raise RuntimeError("Boolean range callers exceed all cloned callers")
+        for name in BOOLEAN_SUBSTAGES:
+            print("MINIC_BOOLEAN_SUBPHASE name=%s ms=%.3f calls=%d" %
+                  (name,spec[name]["ms"],spec[name]["calls"]))
+        print("MINIC_BOOLEAN_SCAN=PASS "+ " ".join(
+              f"{field}={counts[field]}" for field in BOOLEAN_COUNTER_FIELDS))
     if ns.expect_symbolic_loops:
         spec=results["after"]["specialization_ms"]
         if not all(n in spec and spec[n]["calls"]==1 for n in SYMBOLIC_SUBSTAGES):
