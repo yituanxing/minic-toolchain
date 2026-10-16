@@ -69,7 +69,10 @@ def main() -> int:
     p.add_argument("--shard", type=int, required=True)
     p.add_argument("--shards", type=int, required=True)
     p.add_argument("--sample-per-shard", type=int, default=2)
+    p.add_argument("--profile-snapshot", type=Path)
     args = p.parse_args()
+    if args.profile_snapshot is not None and not args.profile_snapshot.is_file():
+        raise SystemExit("MINIPP_SEVEN=FAIL native_macro_snapshot_missing")
     if args.shards != 7 or not 0 <= args.shard < 7:
         raise SystemExit("MINIPP_SEVEN=FAIL invalid-seven-runner-partition")
     if not 0 <= args.sample_per_shard <= 512:
@@ -94,6 +97,9 @@ def main() -> int:
     print(f"MINIPP_SEVEN_PARTITION=PASS worker={args.shard}/7 "
           f"frozen_owners={len(owner_names)} selected={len(selected)} "
           "compiler_input=MiniPP.i GNU_reference_only=true", flush=True)
+    if args.profile_snapshot is not None:
+        print(f"MINIPP_SEVEN_PINNED_PROFILE=ENABLED worker={args.shard}/7 "
+              "GCC_predefine_processes=0 frozen_target_profiles=true", flush=True)
     rows = []
     predefs: dict[tuple[str, ...], Path] = {}
     for object_name in selected:
@@ -114,6 +120,9 @@ def main() -> int:
                 env.update(REAL_CC="riscv64-linux-gnu-gcc",
                            MINIPP_LINUX_SRC=str(src),
                            MINIPP_PREDEFINES_OUT=str(macro_path))
+                if args.profile_snapshot is not None:
+                    env["MINIPP_PREDEFINES_SNAPSHOT"] = str(
+                        args.profile_snapshot.resolve())
                 proc = subprocess.run(
                     ["bash", "tests/preprocessor/build_reference_predefines.sh",
                      *context], cwd=Path(__file__).resolve().parents[2],
@@ -194,6 +203,10 @@ def main() -> int:
     print(f"MINIPP_SEVEN_NATIVE_RESULT={'PASS' if passed == len(rows) else 'FAIL'} "
           f"worker={args.shard}/7 passed={passed}/{len(rows)} "
           "full_Kbuild_claim=false QEMU_claim=false", flush=True)
+    if args.profile_snapshot is not None and passed == len(rows):
+        print(f"MINIPP_SEVEN_PINNED_PROFILE=PASS worker={args.shard}/7 "
+              f"native_C={passed} no_GCC_target_macro_generation=true "
+              "GNU_reference_only=true", flush=True)
     return 0 if passed == len(rows) else 1
 
 
