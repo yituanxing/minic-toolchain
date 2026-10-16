@@ -2481,9 +2481,19 @@ PY_EARLY_SYMBOLS
           echo "COHORT_P1=PASS name=$name syscalls=12 python_era_oracle=PASS"
           if [[ "${COHORT_MINIPP_DYNAMIC_HEADERS:-0}" == 1 && "$name" == full_all_verified ]]; then
             grep -Fq 'MINIAS_DYNAMIC_HEADER_OBJECTS=PASS trial=full_all_verified native_header_objects=4 total_native_C_objects=2064' "$ev/cohort.log" || exit 43
+            # The dependency header changes only on the first link; its four
+            # source-owner replays are logged in trials/full_all/rebuild.log.
+            # The second (full_all_verified) boot reuses SHA-attested .o and
+            # correctly does not recreate a second rebuild.log.
+            local replay_log="$ev/trials/full_all/rebuild.log"
+            test -s "$replay_log" || { echo 'MINIPP_DYNAMIC_HEADER_RUNTIME=FAIL missing_first_link_replay_log'; exit 42; }
+            test "$(grep -c '^MINIPP_DYNAMIC_HEADER_PP=PASS ' "$replay_log")" -eq 4 || {
+              echo 'MINIPP_DYNAMIC_HEADER_RUNTIME=FAIL expected_four_native_PP_owner_markers'; exit 42;
+            }
             for target in arch/riscv/kernel/alternative.o arch/riscv/kernel/signal.o arch/riscv/kernel/compat_signal.o arch/riscv/kernel/vdso.o; do
-              grep -Fq "MINIPP_DYNAMIC_HEADER_PP=PASS " "$d/rebuild.log" || exit 42
-              grep -Fq "output=$target " "$d/rebuild.log" || exit 42
+              grep -F " output=$target mini_sha=" "$replay_log" | grep -Fq " legacy_gnu_equal=true" || {
+                echo "MINIPP_DYNAMIC_HEADER_RUNTIME=FAIL missing_native_PP_owner:$target"; exit 42;
+              }
             done
             echo 'MINIPP_DYNAMIC_HEADER_RUNTIME=PASS native_PP=4 native_CC=4 native_AS=4 stable_native_C=2060 QEMU_P1=12/12 GCC_predefines_reference_only=true'
           fi
