@@ -2025,6 +2025,8 @@ static bool minic_inline_integer_source_has_residual_reference(
 }
 
 static bool minic_finalize_inline_integer_specialization_references(MinicC0Program *program) {
+    unsigned char *source_residual_cache = NULL;
+    bool cache_allocation_failed = false;
     size_t function_index;
 
     if (program == NULL) {
@@ -2044,17 +2046,41 @@ static bool minic_finalize_inline_integer_specialization_references(MinicC0Progr
             function->is_referenced = program->functions[source_id].is_referenced;
         }
     }
+    /* Calls and function-address references are no longer rewritten after
+     * specialization. All clones of one source therefore ask the same question.
+     * Cache only within this finalization pass, after validating source IDs;
+     * on allocation failure, retain the original source-wide scan. */
     for (function_index = 0U; function_index < program->function_count; ++function_index) {
         MinicFunction *function = &program->functions[function_index];
         if (function->is_integer_specialization) {
             MinicFunctionId source_id = function->specialization_source;
             MinicFunction *source = &program->functions[source_id];
-            if (source->is_internal && source->is_inline && source->is_referenced &&
-                !minic_inline_integer_source_has_residual_reference(program, source_id)) {
-                source->is_referenced = false;
+            if (source->is_internal && source->is_inline && source->is_referenced) {
+                bool has_residual_reference;
+                if (source_residual_cache == NULL && !cache_allocation_failed) {
+                    source_residual_cache = (unsigned char *)calloc(
+                        program->function_count == 0U ? 1U : program->function_count,
+                        sizeof(*source_residual_cache));
+                    cache_allocation_failed = source_residual_cache == NULL;
+                }
+                if (source_residual_cache != NULL &&
+                    source_residual_cache[source_id] != 0U) {
+                    has_residual_reference = source_residual_cache[source_id] == 1U;
+                } else {
+                    has_residual_reference =
+                        minic_inline_integer_source_has_residual_reference(program, source_id);
+                    if (source_residual_cache != NULL) {
+                        source_residual_cache[source_id] =
+                            has_residual_reference ? 1U : 2U;
+                    }
+                }
+                if (!has_residual_reference) {
+                    source->is_referenced = false;
+                }
             }
         }
     }
+    free(source_residual_cache);
     return true;
 }
 
