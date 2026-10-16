@@ -2293,6 +2293,10 @@ jobs:
             export MINILD="$toolchain/bin/minic-ld"
             if [[ "${{ contains(github.event.head_commit.message, '[linux-minipp-seven-integration]') && '1' || '0' }}" == 1 ]]; then
               export COHORT_P1_EXPERIMENTAL_POOL="$GITHUB_WORKSPACE/build/minipp-seven-merge/native-objects"
+              if [[ "${{ contains(github.event.head_commit.message, '[linux-minipp-native-reuse]') && '1' || '0' }}" == 1 ]]; then
+                export COHORT_NATIVE_SAME_RUN_POOL="$COHORT_P1_EXPERIMENTAL_POOL"
+                echo 'NATIVE_UNION=REUSE_VERIFIED_CURRENT_NATIVE_SHARDS legacy_full_cache=not_required'
+              fi
               if [[ "${{ contains(github.event.head_commit.message, '[linux-minipp-seven-replay]') && '1' || '0' }}" == 1 ]]; then
                 # Only this immutable cache-replay may tolerate timestamp-derived
                 # GNU Kbuild version.o / vmlinux.o preflight regeneration.
