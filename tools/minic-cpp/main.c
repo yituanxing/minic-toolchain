@@ -57,6 +57,19 @@ int main(int argc, char **argv) {
             config.inhibit_predefined_macros = true;
             continue;
         }
+        if (strncmp(argument, "-fmacro-prefix-map=", 19U) == 0) {
+            const char *map = argument + 19;
+            const char *separator = strchr(map, '=');
+
+            if (separator == NULL || separator == map ||
+                config.macro_prefix_map != NULL) {
+                fprintf(stderr, "minic-cpp: invalid-or-multiple-macro-prefix-map\n");
+                status = 2;
+                goto done;
+            }
+            config.macro_prefix_map = map;
+            continue;
+        }
         if (strcmp(argument, "-nostdinc") == 0) {
             config.no_standard_includes = true;
             continue;
