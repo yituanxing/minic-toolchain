@@ -1,4 +1,5 @@
 #include "minipp.h"
+#include "riscv_linux_predefines.h"
 
 #include <stdbool.h>
 #include <stdio.h>
@@ -27,6 +28,13 @@ int main(int argc, char **argv) {
     size_t forced_include_count = 0U;
     int index;
     int status;
+
+    /* This is the same native MiniPP executable, not a separate Python
+     * companion. The generated predefines are consumed through -include
+     * by ordinary MiniPP preprocessing in the accepted Linux path. */
+    if (argc > 1 && strcmp(argv[1], "--dump-target-predefines") == 0) {
+        return minipp_target_predefines_cli(argc - 1, argv + 1);
+    }
 
     memset(&config, 0, sizeof(config));
     defines = calloc((size_t)argc, sizeof(*defines));
