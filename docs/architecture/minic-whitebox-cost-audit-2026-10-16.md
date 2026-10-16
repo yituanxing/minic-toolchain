@@ -118,3 +118,19 @@ src/compiler/compiler.c
 若优先考虑 **改动最小 + 正确性最易证明 + 避免重复造框架**：**先评估 5.1 的 Core 非 Core 根位图**，再看 5.2 的 specialization 源引用重复扫描；之后才安排 1）Integer/Boolean 的 source-owner/CALL 候选、2）Core statement workspace、3）Core reentry 多次全 TU 扫描、4）Verifier 每块清零等。这个是**代码可维护性优先的行动排序**，不是未经采样确认的 CPU 耗时排名。当前仍没有修改生产代码，项目主目标仍是先轻量收敛、再自举。
 
 **反例提醒**：只有确定了 root facts 的创建时机，才能一次构建；不同 pass 会修改 `is_referenced` / 生成 clone / 改写 Call，不能把跨阶段缓存当作自动永远有效。这也是我们暂时拒绝先引入全局 PassManager/事实缓存框架的原因。
+
+
+## 6. 第一次生产优化落地：Core pruning 非 Core 根位图
+
+**生产源码提交**：`9e53327489695add451941d5b392c6432f499118`。只改 `src/compiler/compiler.c`，将 `minic_prune_inline_specializations_from_core` 的重复 `noncore root` 判断变为 **pass-local** 只读索引：
+
+- `minic_build_noncore_root_index`：一次线性遍历 `functions[]` 收集 entry、`force_emit`、`alias_target`，一次遍历 `global_objects[*].relocations` 收集函数重定位目标，构建长度为函数数的布尔位图。
+- 两次 root classification 读取这份位图；仅 `is_referenced` 在本 Pass 中改动，位图所依赖的字段没有在当前 Pass 内改动。
+- **分配失败**时 `noncore_roots == NULL`，保留完全原来的 `minic_inline_source_has_noncore_root` 逐项扫描，绝不因内存不足而漏保留函数。
+- 不改变 FunctionBody、Core IR、Symbol lookup、完整 ELF/ABI 处理；没有新增框架、入口、配置项或 CI 工作流。
+
+**静态复杂度**：原先最坏 `O(F_int·(F+R))` 级重复根判定，现在一轮收集 `O(F+R)`，每个函数查询 `O(1)`；新增 `O(F)` 位图空间。实际完整 MiniC wall/RSS 收益 **尚无同输入 A/B**，所以不得宣称已经加速整份 Linux。
+
+**已经执行的门禁**：[Toolchain Focused Regression #38884992042](https://github.com/yituanxing/minic-toolchain/actions/runs/38884992042) 在上述生产 SHA 上 **SUCCESS**，单次共享工具链构建、8/8 独立 focused checks，通过 `TOOLCHAIN_FOCUSED_T1=PASS mode=all independent_test_checks=8 shared_builds=1`。Linux Runtime GCC Baseline 同 SHA 对应 run #38884992134 是 **SKIPPED**，不是通过或失败；最近已通过的 2064/QEMU 是旧源码 `24b02474`，**不能冒充本次提交的全量验收**。
+
+**下一门槛**：在真实冻结 `.i`（包含少/多 alias、全局重定位、函数克隆与静态 inline 的小例 + 一份大型 Linux TU）验证新旧 `.s` 相同且取得 wall/RSS；有明显收益再晋级到现有 Linux 2064/QEMU 认证。不要为了这一项独立添加一套性能脚本或新的 workflow。
