@@ -359,7 +359,7 @@ jobs:
             # the immutable MiniC object cache identity.
             profile="${profile}-blake2s-cfg-linear-$(sha256sum tools/ci/apply-riscv64-p1-defined-before-use-crossblock-v1.py | cut -c1-16)"
           fi
-          if [[ "${{ contains(github.event.head_commit.message, '[linux-perf-boolean-single]') || contains(github.event.head_commit.message, '[linux-perf-hotowners]') }}" == true ]]; then
+          if [[ "${{ (contains(github.event.head_commit.message, '[linux-perf-boolean-single]') || contains(github.event.head_commit.message, '[linux-perf-hotowners]')) && !contains(github.event.head_commit.message, '[minic-source-paired-ab]') }}" == true ]]; then
             [[ "${{ contains(github.event.head_commit.message, '[linux-runtime-blake2s-only]') || contains(github.event.head_commit.message, '[linux-perf-hotowners]') }}" == true ]] || { echo 'BOOLEAN_CACHE_SINGLE=FAIL missing_owner'; exit 8; }
             profile="${profile}-bool-index-$(sha256sum tools/ci/apply-inline-specialization-local-boolean-domain-scoped-v1.py tools/ci/apply-inline-specialization-local-boolean-domain-index-v0.py | sha256sum | cut -c1-16)"
             echo 'BOOLEAN_CACHE_SINGLE=IDENTITY patch_sha_bound=true'
@@ -405,7 +405,7 @@ jobs:
           fi
           bash tools/ci/linux-runtime-build-minic-profile-v1.sh \
             "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain" "$ev/compiler"
-          if [[ "${{ contains(github.event.head_commit.message, '[linux-perf-boolean-single]') || contains(github.event.head_commit.message, '[linux-perf-hotowners]') }}" == true ]]; then
+          if [[ "${{ (contains(github.event.head_commit.message, '[linux-perf-boolean-single]') || contains(github.event.head_commit.message, '[linux-perf-hotowners]')) && !contains(github.event.head_commit.message, '[minic-source-paired-ab]') }}" == true ]]; then
             tool="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain"
             # minic is only the driver. minic-cc contains compiler.c and
             # MUST change when Boolean Domain optimization is actually built.
@@ -531,8 +531,81 @@ jobs:
           key: linux-6.6.143-first500-rv64-v1-${{ hashFiles('tests/external/linux/batch_probe.sh', 'tests/external/linux/probe.sh', 'tests/external/linux/replay-indices.txt') }}
           fail-on-cache-miss: true
 
+      # Explicit one-runner, two-compiler experiment. Historical #38870185276
+      # and current #38887211130 both passed full Linux P1. Unlike cross-run
+      # timings, these arms run on the same VM over identical SHA-pinned .i.
+      # The [minic-source-paired-ab] marker excludes the legacy Boolean patch
+      # so exactly the two production compiler.c reachability changes differ.
+      - name: Old versus current native MiniC paired A/B on real frozen Linux inputs
+        if: contains(github.event.head_commit.message, '[minic-source-paired-ab]') && contains(github.event.head_commit.message, '[linux-perf-hotowners]') && steps.candidate_ready.outputs.ready == 'true'
+        timeout-minutes: 38
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          historical=24b0247401d1f973c4aa4f3495d7298cc7dd4cc1
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1"
+          work="$ev/boolean-hot/current-oldnew"
+          current="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain/bin"
+          mkdir -p "$work"
+          # No changed frontend/IR/Codegen or build flags may contaminate
+          # the comparison. The diff must be exclusively compiler.c.
+          git fetch --quiet --no-tags --depth=1 origin "$historical"
+          changed=$(git diff --name-only "$historical" "$GITHUB_SHA" -- src include/minic)
+          test "$changed" = src/compiler/compiler.c || {
+            echo "MINIC_OLDNEW_AB=FAIL production_diff_not_isolated changed=$changed" >&2
+            exit 9
+          }
+          git -c advice.detachedHead=false worktree add --quiet --detach "$work/old-source" "$historical"
+          # Build both compiler identities using the SAME pinned runtime
+          # crossblock and pure-discarded-equality profile. Historical source
+          # includes its own exact native SHA manifest guard.
+          (
+            cd "$work/old-source"
+            MINIC_LINUX_FULL_CROSSBLOCK=1 MINIC_OPT_PURE_DISCARDED_ADDRESS_EQ=1 \
+              bash tools/ci/linux-runtime-build-minic-profile-v1.sh \
+              "$work/old-toolchain" "$work/old-build-evidence"
+          )
+          old="$work/old-toolchain/bin"
+          test -x "$old/minic" && test -x "$old/minic-cc"
+          test -x "$current/minic" && test -x "$current/minic-cc"
+          old_sha=$(sha256sum "$old/minic-cc" | cut -d' ' -f1)
+          new_sha=$(sha256sum "$current/minic-cc" | cut -d' ' -f1)
+          test "$old_sha" != "$new_sha" || { echo 'MINIC_OLDNEW_AB=FAIL identical_compiler_identity'; exit 9; }
+          echo "MINIC_OLDNEW_AB=IDENTITIES old_commit=$historical current_commit=$GITHUB_SHA old_cc=$old_sha new_cc=$new_sha"
+          test -s "$ev/boolean-hot/frozen.sha256"
+          (cd "$ev/boolean-hot"; sha256sum --quiet -c frozen.sha256)
+          # Rotate old/new first execution order on the very same runner;
+          # verify exact assembly SHA in every warmup and measured repetition.
+          for owner in net/core/dev.o net/ipv4/tcp_input.o lib/crc32.o; do
+            key="${owner//\//_}"
+            frozen="$ev/boolean-hot/$key.frozen.i"
+            test -s "$frozen"
+            python3 tools/ci/linux-perf-pinned-single-paired-ab-v1.py \
+              --input "$frozen" \
+              --baseline-driver "$old/minic" \
+              --candidate-driver "$current/minic" \
+              --repeats 4 --out "$work/results/$key" \
+              | tee "$work/$key-verdict.txt"
+            grep -Fq 'MINIC_ONE_OWNER_AB=PASS' "$work/$key-verdict.txt"
+          done
+          python3 - "$work/results" <<'PY'
+          from pathlib import Path
+          import json,sys
+          results=sorted(Path(sys.argv[1]).glob("*/paired-result.json"))
+          assert len(results)==3, f"expected exactly three real owners, got {len(results)}"
+          ratios=[]
+          for p in results:
+              d=json.loads(p.read_text())
+              assert d["assembly_identical"] and d["repeat_per_arm"]==4
+              ratios.append(d["candidate_speedup"])
+              print("MINIC_OLDNEW_OWNER=PASS owner=%s old_p50_ms=%s new_p50_ms=%s speedup=%.4f same_runner=true input_sha=%s" %
+                    (p.parent.name,d["baseline_median_ms"],d["candidate_median_ms"],d["candidate_speedup"],d["input_sha256"]))
+          print("MINIC_OLDNEW_AB=PASS owners=3 warmups_per_arm=1 repeats_per_arm=4 assembly=byte_identical speedups=%s" %
+                ",".join("%.4f"%v for v in ratios))
+          PY
+
       - name: Analyze three frozen hot owners by paired timing or opt-in phase traces
-        if: contains(github.event.head_commit.message, '[linux-perf-hotowners]') && !contains(github.event.head_commit.message, '[linux-perf-ast-footprint]') && !contains(github.event.head_commit.message, '[linux-perf-ast-growth]') && steps.candidate_ready.outputs.ready == 'true'
+        if: contains(github.event.head_commit.message, '[linux-perf-hotowners]') && !contains(github.event.head_commit.message, '[minic-source-paired-ab]') && !contains(github.event.head_commit.message, '[linux-perf-ast-footprint]') && !contains(github.event.head_commit.message, '[linux-perf-ast-growth]') && steps.candidate_ready.outputs.ready == 'true'
         shell: bash
         timeout-minutes: 24
         run: |
@@ -975,6 +1048,9 @@ jobs:
             build/linux-runtime-gcc-cohort-v1/boolean-hot/optimized-phase/*-verdict.txt
             build/linux-runtime-gcc-cohort-v1/boolean-hot/spec-phase/results/**/phases.json
             build/linux-runtime-gcc-cohort-v1/boolean-hot/spec-phase/*-verdict.txt
+            build/linux-runtime-gcc-cohort-v1/boolean-hot/current-oldnew/results/**/paired-result.json
+            build/linux-runtime-gcc-cohort-v1/boolean-hot/current-oldnew/*-verdict.txt
+            build/linux-runtime-gcc-cohort-v1/boolean-hot/current-oldnew/old-build-evidence/minic.sha256
             build/linux-runtime-gcc-cohort-v1/boolean-hot/codegen-use/results/**/paired-result.json
             build/linux-runtime-gcc-cohort-v1/boolean-hot/codegen-use/*-screen.txt
             build/linux-runtime-gcc-cohort-v1/boolean-hot/core-workspace/results/**/paired-result.json
