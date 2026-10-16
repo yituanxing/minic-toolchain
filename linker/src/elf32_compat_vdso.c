@@ -467,14 +467,16 @@ int minild_link_elf32_compat_vdso(const char *output,
         for(i=0U;i<6U;++i)wr32(sec[HASH].bytes+20U+i*4U,chains[i]);
         wr32(sec[GNUHASH].bytes,1U);wr32(sec[GNUHASH].bytes+4U,2U);
         wr32(sec[GNUHASH].bytes+8U,1U);wr32(sec[GNUHASH].bytes+12U,5U);
-        wr32(sec[GNUHASH].bytes+24U,2U);
+        /* GNU hash layout: header[16], bloom[4], bucket[4],
+         * four 32-bit chains[16]. The prior +28 wrote past 40 bytes. */
+        wr32(sec[GNUHASH].bytes+20U,2U);
         for(i=2U;i<6U;++i) {
             uint32_t hash=gnu_hash(named[i]);
             uint32_t bloom=rd32(sec[GNUHASH].bytes+16U);
             bloom|=(UINT32_C(1)<<(hash%32U))|
                     (UINT32_C(1)<<((hash>>5U)%32U));
             wr32(sec[GNUHASH].bytes+16U,bloom);
-            wr32(sec[GNUHASH].bytes+28U+(i-2U)*4U,
+            wr32(sec[GNUHASH].bytes+24U+(i-2U)*4U,
                  (hash&~UINT32_C(1))|(i==5U?1U:0U));
         }
     }
