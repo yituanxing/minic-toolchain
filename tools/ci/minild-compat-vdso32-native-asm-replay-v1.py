@@ -49,6 +49,20 @@ def main() -> int:
     ev = a.evidence.resolve()
     ev.mkdir(parents=True, exist_ok=True)
     native = ev  # existing artifact uploads *.o and *.txt at this level
+    # The golden .cmd is immutable, but its original absolute source prefix
+    # belongs to the old Kbuild build directory, which is not restored in
+    # a cached-link-only receiver. Resolve the separately SHA-pinned Linux
+    # source fixture already restored by the existing workflow.
+    source_root = (out.parent.parent / "linux-expanded-kbuild-v0" /
+                   "linux-6.6.143").resolve()
+    original_source_root = out.parent / "linux-6.6.143"
+    if not (source_root / REL / "rt_sigreturn.S").is_file():
+        raise ValueError("immutable Linux 6.6.143 source fixture not restored: "
+                         + str(source_root))
+    (ev / "native-S-source-fixture.txt").write_text(
+        f"golden_out={out}\nrestored_source={source_root}\n"
+        f"original_kbuild_source={original_source_root}\n"
+        "C_recompiled=0 source_snapshot=pinned_existing_workflow_cache\n")
     results = []
     native_objs = []
     for name in NAMES:
@@ -63,6 +77,12 @@ def main() -> int:
         if len(commands) != 1:
             raise ValueError(f"unsafe .S command cardinality for {name}: {len(commands)}")
         argv = shlex.split(commands[0])
+        # Only replace a nonexistent original Linux source-root prefix, not
+        # generated-header locations inside the still-pinned golden /out.
+        source_before = str(original_source_root)
+        source_after = str(source_root)
+        argv = [arg.replace(source_before, source_after)
+                if source_before in arg else arg for arg in argv]
         if Path(argv[0]).name != "riscv64-linux-gnu-gcc":
             raise ValueError(f"unexpected producer for {rel}: {argv[0]}")
         if argv.count("-c") != 1:
