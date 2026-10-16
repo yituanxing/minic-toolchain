@@ -3,6 +3,11 @@
 # This is an isolated cached replay, NOT a full Linux/QEMU acceptance.
 # No C compilation, Kbuild rebuild, GNU output substitution, or new CI job.
 set -Eeuo pipefail
+# Fail before restoring the large fixture if profiling prerequisites are absent.
+[[ -x /usr/bin/time ]] || {
+  echo 'MINILD_VDSO32=INCONCLUSIVE missing_GNU_time' >&2
+  exit 8
+}
 if (( $# != 3 )); then
   echo "usage: $0 <frozen-Kbuild-out> <MiniLD-build-dir> <evidence-dir>" >&2
   exit 64
