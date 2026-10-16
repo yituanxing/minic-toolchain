@@ -671,3 +671,46 @@ COHORT_RESULT=PASS candidate_objects=2064 scope=FULL_C_UNIVERSE same_config=true
 **可靠性证据：** [A/B CI #38925489139](https://github.com/yituanxing/minic-toolchain/actions/runs/38925489139) **SUCCESS**，`MINIC_SINGLE_FACTOR_AB=PASS trial=integer-owner owners=2 assembly_identical=2/2`，`MINIC_INTEGER_OWNER_FILTER ready=1 fallback=0`，独立统计 run 的 `.s` SHA 再次与两臂完全相同。[Focused T1 #38925489418](https://github.com/yituanxing/minic-toolchain/actions/runs/38925489418) **SUCCESS**。原先 [#38671761601](https://github.com/yituanxing/minic-toolchain/actions/runs/38671761601) 在不同的早期工具配置上已为三个其他 owner 取得局部收益，[#38672453023](https://github.com/yituanxing/minic-toolchain/actions/runs/38672453023) 曾为组合四索引完成 500/500 字节一致，但它们**不代替此新正式源码身份**的资格测试。
 
 **阶段状态：`verified-local`**。这轮测试不能推出 Linux 全量 1.3187×；也还未给提交 `381bfd4b` 完成 2064/2064、GNU link 和 QEMU P1 认证。下一步仅复用**现有 perf500 job** 的 first500 SHA-frozen paired driver，确保 500/500 字节一致与全体时间分布；有全体正收益再用既有七路 `gcc-shards`、receiver QEMU 做正式认证。坚决不重复跑耗时的 Callgrind，也不新建 workflow/job。
+
+## 41. PERF-036：Integer owner 当前正式代码的七路 Linux / QEMU P1 完整资格（2026-10-16）
+
+补上 PERF-035 的完整资格：生产 `src/compiler/compiler.c` 的 `integer_expression_owners` 索引，以及此前 Parser 三处整体拷贝优化，已在 [CI #38927659471](https://github.com/yituanxing/minic-toolchain/actions/runs/38927659471) 取得 **七片 7/7 SUCCESS、Linux 2064/2064 C、GNU 链接、QEMU P1 12 个 syscall 全 PASS**。Run 的正式 MiniC 完整配置是 GNU 预处理、MiniC 编译、GNU 汇编和 GNU 链接，**不能借它声称全 Mini 工具链同时替换**。
+
+- `GNU_MINIC_SHARD_MERGE=PASS objects=2064 shards=7`；
+- receiver 从七片 SHA 锁定的 `.o` 直接恢复，`COHORT_COMPILE=SKIPPED reason=exact-object-cache-hit objects=2064`；
+- `COHORT_TRIAL name=full_all_verified count=2064 verdict=PASS image=a2f88ce35f5abb15066dc5a73b05cee3de5725ce857b93283ba18286014ac6c4`；
+- `COHORT_P1=PASS name=full_all_verified syscalls=12 python_era_oracle=PASS`；
+- `COHORT_RESULT=PASS candidate_objects=2064 scope=FULL_C_UNIVERSE same_config=true`。
+
+七片 `MINIC_INTEGER_OWNER_COUNTS=PASS` 合计记录 **933,704,798** 次 transitive CALL 候选迭代，其中 **906,240,903（97.06%）** 属于可明确归为其他源函数的表达式，已由安全过滤器跳过；剩余 **27,463,895** 次仍继续执行后续判断。零 owner-index fallback。此计数是循环迭代次数，不是 CPU 耗时或节省的 DRAM 字节。正确性已完成，完整 Linux 的同比较环境墙钟**仍未**做一轮同 Runner baseline/candidate，因此 500 文件的 1.49261× **不能冒充**七路 Linux 端到端加速。
+
+第一次七路 [#38926982886](https://github.com/yituanxing/minic-toolchain/actions/runs/38926982886) 是新统计 Kbuild Wrapper 的字符串插桩把 `asm_args` 之后 shell 代码截断，`bash -n` 在所有 shard 报意外 EOF；无对象编译结果。重新从已知正确版本构建 Wrapper，并保留 mode 100755，修正后没有追加新 Workflow，仍复用七路现有 Runner 和 receiver。
+
+## 42. PERF-037：新瓶颈已由实测转移至 Core Lowering，而非继续整数特化（2026-10-16）
+
+**先测后改，未盲选：** 优化后 MiniC 的现有阶段 trace（没有 Callgrind）在七份冻结 GNU Kbuild `.i` 上 [CI #38929306497](https://github.com/yituanxing/minic-toolchain/actions/runs/38929306497) **SUCCESS**；测试范围为 `fs/ext4/fsync.o`、`kernel/bpf/btf.o`、`kernel/events/core.o`、`mm/memcontrol.o`、`mm/hugetlb.o`、`mm/vmscan.o` 和 `fs/ext4/super.o`。每个文件的阶段边界由 `MINIC_BOOTSTRAP_TRACE` 与原有 `tools/ci/linux-perf-phase-trace-v1.py` 获取，完整汇编严格相等。下面是更细一级的低成本 C 白盒计数 [CI #38930177529](https://github.com/yituanxing/minic-toolchain/actions/runs/38930177529) **SUCCESS** 产生的同批七文件阶段耗时之和（独立重复诊断，会有正常计时波动）：
+
+| 阶段 | 七个样本合计实测 | 是否属于当前应优先追踪的时间 |
+|---|---:|---|
+| **Core Function Set（含每函数 Lowering 与 Lower 后验证）** | **4,925.616 ms** | **第一优先级** |
+| Parser | 1,876.555 ms | 第二梯队，Parser 复制已单独局部优化 |
+| Symbolic Specialization | 1,029.222 ms | 第二梯队 |
+| Boolean-range Specialization | 756.552 ms | 第二梯队 |
+| Integer Specialization（已优化） | 352.351 ms | 暂不继续打磨 |
+| Core-validate 独立阶段 | **52.528 ms** | **当前不值得优先微调** |
+| Codegen | 377.597 ms | 后续观察 |
+
+`core-set` 不是整个编译器耗时，也不能把此 4.93s 说成某一个内部函数独占耗时。为了进一步判别实际高频扫描，新增**只在临时 CI checkout 生效**的 `tools/ci/apply-perf-core-lower-hotspot-census-v1.py`，记录了这些循环的调用次数和理论最大遍历量，并在每个真实 TU 上额外编译一次证明 `.s` SHA 与阶段基准**完全相同（7/7）**，没有改生产 C：
+
+| 白盒行为 | 七 TU 累计值 | 正确解释 |
+|---|---:|---|
+| `minic_core_lower_function` 局部语句映射初始化 | **5,854 次** | 实际调用计数 |
+| 每次按整个 Program 分配并赋 INVALID 的 `statement_blocks` | **294,098,527 表项** | 实际初始化次数，按 4B 表项约 **1.18GB 的累计写入量** |
+| `core_block_contains_reentry_label` | **2,942 次** | 其理论最多遍历 **152,476,168 statement + 532,282,297 expression** |
+| `core_unreachable_statement_has_external_reentry` | **524 次** | 理论最多 **26,728,581 statement** |
+| `core_unreferenced_internal_loop_label` | **690 次** | 理论最多 **35,485,296 statement + 123,340,986 expression** |
+| `core_switch_label_has_function_reentry` | 0 次 | 本批七样本未触发，不应先优化 |
+
+这里所谓 8.70 亿次 reentry 候选扫描，是源码枚举上下界的**潜在访问数**，含早退出及条件过滤；既不是实测 retired instructions，也不是实际 DRAM 流量。真正的相对节时只认等输入、同 Runner 的 A/B。
+
+**下一单项候选：优先 `core_block_contains_reentry_label` 与规范化 loop-label 的程序级不可变 `goto/asm-goto/&&label` 源引用索引。** 目前每次条件分支重入证明都在不同 FunctionBody clone 上重新读整 TU 的 statement/expression，索引必须保持「外部进入」语义（root 子树内部 goto 不能误算外部引用）、switch case/default、computed goto、asm-goto label、任意不明确目标全部按保守路径回退，不得删除运行时安全检查。先计索引构建时间与命中次数，再在已冻结这七个 owner 的典型 2～3 文件上执行原算法 vs 单因素 A/B，要求字节一致，再决定扩大至 first500 及七路 P1。**备选**是一个安全的、按需清理的 per-function statement-block map，来消除 `F_L×S` 初始化；不能简单删除 `MINIC_CORE_BLOCK_INVALID` 初始化，否则会把未初始化块当已绑定 goto 目标。旧 Parser hash、整数 CALL/source-owner、Boolean Domain cache 和 Codegen 既有 slot reuse 都已在正式代码，**不要重新造这些优化**。
