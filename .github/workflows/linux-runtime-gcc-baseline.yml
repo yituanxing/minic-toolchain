@@ -1742,7 +1742,7 @@ jobs:
       # and compares stack prologues with the certified pure-GNU .o pool.
       - name: Restore immutable 2064-object MiniC cache for P1 diagnosis
         id: p1_minic_frozen_cache
-        if: (contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]') || contains(github.event.head_commit.message, '[linux-runtime-stack-owners]') || contains(github.event.head_commit.message, '[linux-native-union-cached]')) && !contains(github.event.head_commit.message, '[linux-minipp-native-reuse]')
+        if: (contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]') || contains(github.event.head_commit.message, '[linux-runtime-stack-owners]') || contains(github.event.head_commit.message, '[linux-native-union-cached]')) && !contains(github.event.head_commit.message, '[linux-minipp-native-reuse]') && !contains(github.event.head_commit.message, '[linux-minipp-seven-full]')
         uses: actions/cache/restore@v4
         with:
           path: |
@@ -1758,7 +1758,7 @@ jobs:
           fail-on-cache-miss: true
 
       - name: Attest exact cached full MiniC object pool before native tool replacements
-        if: contains(github.event.head_commit.message, '[linux-native-union-cached]') && !contains(github.event.head_commit.message, '[linux-minipp-native-reuse]')
+        if: contains(github.event.head_commit.message, '[linux-native-union-cached]') && !contains(github.event.head_commit.message, '[linux-minipp-native-reuse]') && !contains(github.event.head_commit.message, '[linux-minipp-seven-full]')
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -1884,7 +1884,7 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          if [[ "${{ contains(github.event.head_commit.message, '[linux-minipp-native-reuse]') && '1' || '0' }}" != 1 ]]; then
+          if [[ "${{ contains(github.event.head_commit.message, '[linux-minipp-native-reuse]') && '1' || '0' }}" != 1 && "${{ contains(github.event.head_commit.message, '[linux-minipp-seven-full]') && '1' || '0' }}" != 1 ]]; then
             test "${{ steps.p1_minic_frozen_cache.outputs.cache-hit }}" = true
           fi
           work="$GITHUB_WORKSPACE/build/linux-runtime-gcc"
@@ -2251,7 +2251,7 @@ jobs:
           work="$GITHUB_WORKSPACE/build/linux-runtime-gcc"
           original_pool="$ev/minic"
           original_manifest="$ev/minic-manifest.sha256"
-          if [[ "${{ contains(github.event.head_commit.message, '[linux-minipp-native-reuse]') && '1' || '0' }}" == 1 ]]; then
+          if [[ "${{ contains(github.event.head_commit.message, '[linux-minipp-native-reuse]') && '1' || '0' }}" == 1 || "${{ contains(github.event.head_commit.message, '[linux-minipp-seven-full]') && '1' || '0' }}" == 1 ]]; then
             original_pool="$GITHUB_WORKSPACE/build/minipp-seven-merge/native-objects"
             original_manifest="$GITHUB_WORKSPACE/build/minipp-seven-merge/native-full-manifest.sha256"
             (cd "$original_pool" && sha256sum --quiet -c "$original_manifest")
