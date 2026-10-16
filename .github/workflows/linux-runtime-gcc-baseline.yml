@@ -2619,32 +2619,8 @@ jobs:
               echo 'MINIPP_SEVEN_QEMU=PASS pp_input=MiniPP native_C=2064 QEMU_P1=12/12 dynamic_header_provenance=cohort'
             fi
             if [[ "${{ contains(github.event.head_commit.message, '[linux-native-vdso32]') && '1' || '0' }}" == 1 ]]; then
-              native_vdso32_calls=$(grep -c '^minild-vdso32 ' "$NATIVE_TRACE_DIR/minild.trace" || true)
-              gnu_vdso32_calls=$(grep -Ec '^gnu-ld .*arch/riscv/kernel/compat_vdso/compat_vdso[.]so[.]dbg' "$NATIVE_TRACE_DIR/minild.trace" || true)
-              [[ "$native_vdso32_calls" -ge 1 && "$gnu_vdso32_calls" -eq 0 ]] || {
-                echo "MINILD_VDSO32=FAIL expected_real_Kbuild_link native=$native_vdso32_calls gnu_fallback=$gnu_vdso32_calls" >&2
-                exit 42
-              }
-              compat="$work/out/arch/riscv/kernel/compat_vdso/compat_vdso.so.dbg"
-              test -s "$compat" || {
-                echo 'MINILD_VDSO32=FAIL missing_final_compat_vdso.so.dbg' >&2
-                exit 43
-              }
-              test -s "$work/out/arch/riscv/kernel/compat_vdso/compat_vdso.so" || {
-                echo 'MINILD_VDSO32=FAIL missing_compat_vdso_objcopy_output' >&2
-                exit 44
-              }
-              riscv64-linux-gnu-readelf -Wh -lW --dyn-syms --version-info "$compat" >"$NATIVE_TRACE_DIR/native-vdso32-final-elf.txt"
-              grep -q 'ELF32' "$NATIVE_TRACE_DIR/native-vdso32-final-elf.txt"
-              grep -q 'RISC-V' "$NATIVE_TRACE_DIR/native-vdso32-final-elf.txt"
-              for sym in __vdso_rt_sigreturn __vdso_getcpu __vdso_flush_icache; do
-                grep -Fq "${sym}@@LINUX_4.15" "$NATIVE_TRACE_DIR/native-vdso32-final-elf.txt" || {
-                  echo "MINILD_VDSO32=FAIL missing_real_Kbuild_versioned_export:$sym" >&2
-                  exit 45
-                }
-              done
-              grep -Fq 'COHORT_P1=PASS name=full_all_verified syscalls=12 python_era_oracle=PASS' "$ev/cohort.log" || exit 46
-              echo "MINILD_VDSO32_KBUILD=PASS native_calls=$native_vdso32_calls gnu_product_calls=0 real_Kbuild_link=true ELF32_RISCV_ET_DYN=true versioned_exports=3 existing_cached_MiniC=2064 QEMU_P1=12/12"
+              bash tools/ci/qualify-minild-vdso32-real-kbuild-v1.sh \
+                "$NATIVE_TRACE_DIR" "$work/out" "$ev/cohort.log"
             fi
             if [[ "${{ contains(github.event.head_commit.message, '[linux-native-vdso64]') && '1' || '0' }}" == 1 ]]; then
               native_vdso64_calls=$(grep -c '^minild-vdso64 ' "$NATIVE_TRACE_DIR/minild.trace" || true)
