@@ -20,7 +20,7 @@ import tempfile
 
 root = Path(sys.argv[1])
 mini_cpp = sys.argv[2]
-oracle = runpy.run_path(str(root / "preprocessor/target/riscv_linux_predefines.py"))
+oracle = runpy.run_path(str(root / "tests/preprocessor/oracle_riscv_linux_predefines.py"))
 snapshot = oracle["load_snapshot"](
     root / "tests/preprocessor/profiles/rv64-linux-6.6.143-gcc13.json.gz.b64"
 )
