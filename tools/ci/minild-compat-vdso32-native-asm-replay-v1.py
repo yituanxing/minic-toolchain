@@ -165,6 +165,50 @@ def main() -> int:
     if outcome != 0:
         print((ev / "native-S-link.txt").read_text()[-5000:])
         return 2
+    generated = ev / "native-S-compat-vdso.so"
+    report = subprocess.run(
+        ["riscv64-linux-gnu-readelf", "-Wh", "-SW", "-lW", "-dW",
+         "--dyn-syms", "--version-info", str(generated)],
+        cwd=out, capture_output=True, text=True, timeout=30)
+    (ev / "native-S-native-elf.txt").write_text(
+        report.stdout + report.stderr)
+    if report.returncode != 0:
+        raise RuntimeError("MiniLD ELF32 output cannot be read by binutils")
+    for key in ("ELF32", "DYN (Shared object file)", "GNU_EH_FRAME",
+                "LINUX_4.15", "linux-compat_vdso.so.1",
+                "__vdso_rt_sigreturn", "__vdso_getcpu",
+                "__vdso_flush_icache"):
+        if key not in report.stdout:
+            raise RuntimeError("native ELF32 missing ABI contract " + key)
+    import struct
+    def text_bytes(elf: Path) -> bytes:
+        data = elf.read_bytes()
+        if data[:6] != b"\\x7fELF\\x01\\x01":
+            raise RuntimeError("not ELF32 little-endian " + str(elf))
+        shoff = struct.unpack_from("<I", data, 32)[0]
+        entsize, count, stridx = struct.unpack_from("<HHH", data, 46)
+        if entsize != 40 or not 0 < stridx < count:
+            raise RuntimeError("bad ELF32 section header table")
+        name_hdr = shoff + stridx * entsize
+        name_off, name_len = struct.unpack_from("<II", data, name_hdr + 16)
+        names = data[name_off:name_off + name_len]
+        for i in range(count):
+            p = shoff + i*entsize
+            index = struct.unpack_from("<I", data, p)[0]
+            e = names.find(b"\\x00", index)
+            if e >= 0 and names[index:e] == b".text":
+                offset, size = struct.unpack_from("<II", data, p+16)
+                if offset + size > len(data):
+                    raise RuntimeError(".text is out of ELF32 bounds")
+                return data[offset:offset+size]
+        raise RuntimeError("ELF32 .text missing")
+    if text_bytes(generated) != text_bytes(gnu_output):
+        raise RuntimeError("MiniLD/GNU real four MiniAS object .text differs")
+    print("MINILD_VDSO32_NATIVE_S_REPLAY=PASS "
+          "gnu_same_MiniAS_inputs_text_equal=true "
+          "unwind=absent_not_fabricated "
+          "ELF32_ET_DYN=true no_GNU_output_substitution=true "
+          "C_recompiled=0")
     return 0
 
 if __name__ == "__main__":
