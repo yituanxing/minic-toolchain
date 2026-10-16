@@ -71,7 +71,7 @@ def one_pair(entry, old, new, balanced_order=False):
         folder = Path(directory)
         calls = {"baseline": (old, folder / "old.s"),
                  "candidate": (new, folder / "new.s")}
-        results = {arm: compile_one(*calls[arm][0:1], source, calls[arm][1])
+        results = {arm: compile_one(calls[arm][0], source, calls[arm][1])
                    for arm in order}
     baseline, candidate = results["baseline"], results["candidate"]
     equivalent = (baseline["status"] == "PASS" and
