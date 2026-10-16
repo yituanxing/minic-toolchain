@@ -4,8 +4,12 @@
 # The original product behavior is unchanged by the 2026-10-16
 # pure zero-only-bool lowering helper extraction. Final Linux/QEMU
 # runtime requalification remains required after this layout change.
-# Update only following equivalent real-input validation.
-1424ae500d9662068612b63091691ce8f322b371 src/compiler/compiler.c
+# 2026-10-16 compiler.c source refreshed for two audited refactor-only, pass-local
+# reachability caches; T1 focused/QEMU (8/8, three live variants) passed.
+# Full 2064 Linux/QEMU requalification is PENDING; this records the exact
+# candidate source identity to admit the existing real-input certification,
+# not a claim that it has already passed.
+26e8a2ba9fd70c4ed44c5e2b97a974fe6e4bf921 src/compiler/compiler.c
 ce262d93f8c77348019a4f6fd94a0a8ccdc22d7d src/core/core_lower.c
 a8418e45608310687e3d6a1e96da79ca49135870 src/core/core_lower_asm.c
 7997978a9b10a6d01e33dbc00dd11cb3f668f69f src/core/core_lower_internal.h
