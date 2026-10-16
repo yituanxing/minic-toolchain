@@ -74,7 +74,7 @@ SPEC_STAGES=("spec-integer","spec-symbolic","spec-boolean","spec-finalize")
 SYMBOLIC_SUBSTAGES=("spec-symbolic-direct","spec-symbolic-transitive")
 INTEGER_SUBSTAGES=("spec-integer-direct","spec-integer-transitive")
 BOOLEAN_SUBSTAGES=("spec-boolean-direct","spec-boolean-transitive")
-BOOLEAN_COUNTER_RE=re.compile(r"MINIC_BOOLEAN_SCAN_PROFILE\\s+(.+)")
+BOOLEAN_COUNTER_RE=re.compile(r"MINIC_BOOLEAN_SCAN_PROFILE\s+(.+)")
 BOOLEAN_COUNTER_FIELDS=("local_queries","local_arena_scan_potential",
                         "callers","range_callers","expression_visits",
                         "call_expression_visits","variant_lookups","variant_probes",
