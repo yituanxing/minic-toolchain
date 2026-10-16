@@ -134,6 +134,8 @@ def native_asm_overlay(a):
                        MINIPP_PREDEFINES_LANG='assembler-with-cpp')
             if pinned_snapshot is not None:
                 env['MINIPP_PREDEFINES_SNAPSHOT'] = str(pinned_snapshot)
+            if a.native_asm_macro_rules:
+                env['MINIPP_PREDEFINES_NATIVE_RULES'] = '1'
             proc = subprocess.run(['bash', 'tests/preprocessor/build_reference_predefines.sh',
                                    *context], cwd=repo_root, env=env,
                                   capture_output=True, text=True, timeout=180)
@@ -449,6 +451,7 @@ def main():
     p.add_argument('--gcc-manifest')
     p.add_argument('--native-asm-minipp')
     p.add_argument('--native-asm-profile-snapshot')
+    p.add_argument('--native-asm-macro-rules',action='store_true')
     p.add_argument('--linux-src')
     a=p.parse_args()
     if a.native_asm_only:
