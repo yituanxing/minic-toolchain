@@ -385,7 +385,7 @@ int minild_link_elf32_compat_vdso(const char *output,
     setup(&sec[EH],SHT_PROGBITS,SHF_ALLOC,4U,0U,eh_len);
     setup(&sec[TEXT],SHT_PROGBITS,SHF_ALLOC|SHF_EXECINSTR,4U,0U,text_len);
     setup(&sec[DATA],SHT_PROGBITS,SHF_ALLOC|SHF_WRITE,4U,4U,4U);
-    setup(&sec[SYMTAB],SHT_SYMTAB,0U,4U,16U,6U*16U);
+    setup(&sec[SYMTAB],SHT_SYMTAB,0U,4U,16U,5U*16U);
     setup(&sec[STRTAB],SHT_STRTAB,0U,1U,0U,str_end);
     setup(&sec[SHSTRTAB],SHT_STRTAB,0U,1U,0U,name_len);
     for(i=1U;i<NSEC;++i)if(!sec[i].bytes)goto done;
