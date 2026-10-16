@@ -1,51 +1,71 @@
-# MiniPP RISC-V target predefines
+# MiniPP native RISC-V target predefines
 
-`riscv_linux_predefines.py` is the canonical source-owned target builtin macro
-producer for the certified **Linux 6.6.143 / RISC-V GCC 13.3.0** compilation
-profile. It is not a CI patch, is not a GCC subprocess wrapper, and is never
-allowed to guess an unsupported target-flag combination.
+The **production** target builtin macro engine is now C code:
+`riscv_linux_predefines.c`, compiled directly into the canonical
+`minic-cpp` executable; the three independently verified ABI baselines
+are stored in `riscv_linux_profiles.inc`. This code implements the exact
+certified Linux 6.6.143 / GCC 13.3.0 option contexts. It does **not**
+call Python, GNU GCC, gzip or any other subprocess to produce the macros.
 
-## Architecture and ABI
+The old rule implementation is preserved only at
+`tests/preprocessor/oracle_riscv_linux_predefines.py` as a **read-only
+historical test oracle**, not product source. A focused regression checks
+that every one of the nine certified macro contexts is **byte-identical**
+between native C and the historical algorithm, and that unsupported
+options fail closed.
 
-The current supported profiles are:
-- RV64 LP64 C: GNU11, Linux `rv64imac_zicsr_zifencei_zihintpause`,
-  `-mcmodel=medany`, with explicit tested `-O2` and PIC/PIE variations.
-- RV64 LP64 assembler-with-cpp:
-  `rv64imafdcv_zicsr_zifencei_zihintpause`.
+## Scope
+
+- RV64 LP64 C: GNU11 Linux `rv64imac_zicsr_zifencei_zihintpause`,
+  `-mcmodel=medany`, plus verified `-O2`, `-fPIC`, `-fpic`,
+  `-fpie`, `-fno-builtin-wcslen` variations.
+- RV64 LP64 assembler-with-cpp: `rv64imafdcv_zicsr_zifencei_zihintpause`.
 - RV32 ILP32 compat assembler-with-cpp: `rv32g`.
+- Arbitrary architectures, flag combinations and general GCC-target builtin
+  synthesis are not certified. Neither is RV32 ELF32 **linking**.
 
-Production uses a fixed GCC-13-compatible ABI macro baseline and derives
-flag-dependent macros without invoking GCC. The immutable capture at
-`tests/preprocessor/profiles/rv64-linux-6.6.143-gcc13.json.gz.b64` serves
-as a pinned compatibility dataset and independent per-context oracle. The
-target rules are not yet a general-purpose builtin generator for arbitrary
-architectures or GCC versions, nor are they embedded in the C MiniPP binary.
+The frozen reference dataset in
+`tests/preprocessor/profiles/rv64-linux-6.6.143-gcc13.json.gz.b64`
+is the independent compatibility oracle. This immutable historical data
+does **not** mean that GCC generates macros at runtime.
 
-## Usage and acceptance
+## Commands
+
+Build once:
 
 ```sh
-python3 preprocessor/target/riscv_linux_predefines.py --self-check
-
-MINIPP_PREDEFINES_NATIVE_RULES=1 \
-MINIPP_PREDEFINES_LANG=c \
-MINIPP_LINUX_SRC=/path/to/linux-6.6.143 \
-MINIPP_PREDEFINES_OUT=/tmp/riscv-target.h \
-  bash tests/preprocessor/build_reference_predefines.sh \
-    -std=gnu11 -fshort-wchar -funsigned-char -fno-PIE \
-    -mabi=lp64 -march=rv64imac_zicsr_zifencei_zihintpause \
-    -mcmodel=medany
+make -j4 MODE=release CFLAGS=-Werror build/release/bin/minic-cpp
+bash tests/preprocessor/run-target-predefines-native.sh \
+  build/release/bin/minic-cpp
 ```
 
-The generated header is fed to the actual `minic-cpp` executable through
-`-include`. For Linux integration, each authentic GNU `-E` result is
-checked **byte-for-byte** against native MiniPP output, but GNU reference
-output is never passed to MiniC or MiniAS as the accepted product input.
+The same native `minic-cpp` can produce its own target predefines:
 
-The acceptance gate is seven fresh C shards (2064 objects), 34 real
-`.S` owners, four regenerated-header C owners, the certified MiniAR/MiniLD/
-MiniObjcopy boundaries, and final QEMU P1 12/12, with immutable source and
-artifact hashes. A byte-identity or standalone macro self-check is not, by
-itself, runtime certification.
+```sh
+build/release/bin/minic-cpp --dump-target-predefines \
+  --language c --output /tmp/riscv-target.h -- \
+  -std=gnu11 -fshort-wchar -funsigned-char -fno-PIE \
+  -mabi=lp64 -march=rv64imac_zicsr_zifencei_zihintpause \
+  -mcmodel=medany
+```
 
-RV32 compat-vDSO ELF32 linking by MiniLD remains a separately scoped
-deferred capability; this macro work does not claim that link edge is native.
+In Linux integration, the existing
+`tests/preprocessor/build_reference_predefines.sh` dispatches to
+native C under `MINIPP_PREDEFINES_NATIVE_RULES=1` and passes the
+generated target-macro header to native MiniPP via `-include`.
+`MINIPP_NATIVE_CPP` can point at an already-built product binary.
+The ordinary GNU reference route remains a separate differential oracle.
+
+## Acceptance
+
+Focused C-vs-Python byte identity is a **necessary but insufficient**
+qualification. The previously accepted full Linux 2064 C + 34 S + four
+generated-header runtime with QEMU P1 was certified with the Python
+product generator before the C port. The native C path must independently
+prove the exact seven-shard Linux producer, complete union, and QEMU
+P1 12/12 on a known source SHA before that runtime status is transferred
+to the C implementation. A previous successful run is not evidence that a
+new binary was used.
+
+RV32 compat-vDSO ELF32 output by MiniLD is independent and has its own
+cached four-object differential gate and runtime integration acceptance.
