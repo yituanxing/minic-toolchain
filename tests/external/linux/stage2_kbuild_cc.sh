@@ -193,6 +193,7 @@ if [[ "$source_file" == *.c ]]; then
     if ! cmp -s "$preprocessed" "$native_candidate"; then
       diff -u "$preprocessed" "$native_candidate" >"${base}.native-pp-legacy.diff" || true
       echo "MINIPP_DYNAMIC_HEADER_PP=FAIL native_vs_legacy_gnu source=$source_file output=$output_file" >&2
+      sed -n '1,100p' "${base}.native-pp-legacy.diff" >&2
       exit 9
     fi
     cp -a "$native_candidate" "$preprocessed"
