@@ -113,13 +113,14 @@ MINIAS_SOURCES := \
 MINIAS_OBJECTS := $(MINIELF_REL_OBJECTS) $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(MINIAS_SOURCES))
 MINIAS_BINARY := $(BUILD_DIR)/bin/minic-as
 
-MINIPP_INCLUDES := -Ipreprocessor/include -Ipreprocessor/src
+MINIPP_INCLUDES := -Ipreprocessor/include -Ipreprocessor/src -Ipreprocessor/target
 MINIPP_SOURCES := \
 	preprocessor/src/file_buffer.c \
 	preprocessor/src/expression.c \
 	preprocessor/src/include.c \
 	preprocessor/src/token.c \
 	preprocessor/src/preprocessor.c \
+	preprocessor/target/riscv_linux_predefines.c \
 	tools/minic-cpp/main.c
 MINIPP_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(MINIPP_SOURCES))
 MINIPP_BINARY := $(BUILD_DIR)/bin/minic-cpp
