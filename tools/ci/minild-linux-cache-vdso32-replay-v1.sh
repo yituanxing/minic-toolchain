@@ -123,15 +123,27 @@ if ! grep -q 'Class:[[:space:]]*ELF32' "$ev/native-elf.txt" || \
 fi
 # Check actual ABI/loader-visible contracts, not raw byte equality (different
 # linkers may choose different valid layout offsets or build IDs).
-for symbol in __compat_vdso_rt_sigreturn __compat_vdso_getcpu __compat_vdso_flush_icache; do
+for symbol in __vdso_rt_sigreturn __vdso_getcpu __vdso_flush_icache; do
   grep -q "$symbol" "$ev/native-symbols.txt" || {
     echo "MINILD_VDSO32=FAIL missing_symbol=$symbol" >&2; exit 21;
   }
 done
-for section in '.dynsym' '.dynstr' '.dynamic' '.hash' '.gnu.hash'; do
+for section in '.dynsym' '.dynstr' '.dynamic' '.hash' '.gnu.hash' '.gnu.version' '.gnu.version_d' '.eh_frame' '.eh_frame_hdr'; do
   grep -Fq "$section" "$ev/native-elf.txt" || {
     echo "MINILD_VDSO32=FAIL missing_section=$section" >&2; exit 22;
   }
 done
+grep -q 'LINUX_4.15' "$ev/native-elf.txt" || {
+  echo 'MINILD_VDSO32=FAIL missing_LINUX_4.15_version' >&2; exit 23;
+}
+grep -q 'GNU_EH_FRAME' "$ev/native-elf.txt" || {
+  echo 'MINILD_VDSO32=FAIL missing_unwind_header_segment' >&2; exit 24;
+}
+grep -q 'DYNAMIC' "$ev/native-elf.txt" || {
+  echo 'MINILD_VDSO32=FAIL missing_dynamic_segment' >&2; exit 25;
+}
+grep -q 'NOTE' "$ev/native-elf.txt" || {
+  echo 'MINILD_VDSO32=FAIL missing_linux_note_segment' >&2; exit 26;
+}
 echo 'MINILD_VDSO32=PASS exact_Linux_ELF32_link=true native_output=true no_GNU_fallback=true cached_C=true'
 echo 'MINILD_VDSO32=NEEDS_FULL_RUNTIME_CERTIFICATION QEMU_P1_not_run_in_this_gate=true'
