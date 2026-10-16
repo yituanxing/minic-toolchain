@@ -2319,27 +2319,9 @@ jobs:
               echo "MINIPP_FULL_C_UNION=ENABLED PP=MiniPP CC=MiniC AS=MiniAS C=2064 shards=7"
             fi
 
-            # Narrow optional promotion: regenerate only the exact four
-            # vDSO-offset-header dependents with MiniPP -> MiniC -> MiniAS.
-            # All other 2060 native C objects are SHA-locked shard artifacts.
-            # GCC is retained solely as a byte-exact preprocessing oracle and
-            # source of the currently certified target predefined-macro header.
+            # Use the existing cohort driver for exact four-header native PP promotion.
             if [[ "${{ contains(github.event.head_commit.message, '[linux-minipp-dynamic-headers]') && '1' || '0' }}" == 1 ]]; then
-              test -n "${COHORT_NATIVE_SAME_RUN_POOL:-}" || {
-                echo 'MINIPP_DYNAMIC_HEADER=FAIL missing_authenticated_2064_native_pool' >&2; exit 41;
-              }
-              pp_tools="$GITHUB_WORKSPACE/build/minipp-dynamic-header-tools"
-              as_tools="$GITHUB_WORKSPACE/build/minias-linux-corpus-v1-tools"
-              make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$pp_tools" "$pp_tools/bin/minic-cpp"
-              make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$as_tools" "$as_tools/bin/minic-as"
               export COHORT_MINIPP_DYNAMIC_HEADERS=1
-              export COHORT_MINIPP_HEADER_CPP="$pp_tools/bin/minic-cpp"
-              export COHORT_MINIPP_LINUX_SRC="$work/linux-6.6.143"
-              export COHORT_MINIAS_DYNAMIC_HEADERS=1
-              export COHORT_MINIAS_HEADER_AS="$as_tools/bin/minic-as"
-              export COHORT_MINIAS_EXPECTED_NATIVE=2060
-              test -x "$COHORT_MINIPP_HEADER_CPP" && test -x "$COHORT_MINIAS_HEADER_AS"
-              echo 'MINIPP_DYNAMIC_HEADER=ENABLED affected_only=4 others_native_sha_frozen=2060 GNU_reference_only=true'
             fi
             export MINIOBJCOPY="$toolchain/bin/minic-objcopy"
             export NATIVE_TRACE_DIR="$native"
@@ -2519,12 +2501,7 @@ jobs:
                 "$GITHUB_WORKSPACE/build/minipp-seven-merge/native-summary.json"
               grep -Fq 'COHORT_P1=PASS name=full_all_verified syscalls=12 python_era_oracle=PASS' "$ev/cohort.log" || exit 40
               if [[ "${{ contains(github.event.head_commit.message, '[linux-minipp-dynamic-headers]') && '1' || '0' }}" == 1 ]]; then
-                for object in arch/riscv/kernel/alternative.o arch/riscv/kernel/signal.o arch/riscv/kernel/compat_signal.o arch/riscv/kernel/vdso.o; do
-                  grep -Fq "MINIPP_DYNAMIC_HEADER_PP=PASS " "$ev/cohort.log" || exit 42
-                  grep -Fq "output=$object " "$ev/cohort.log" || exit 42
-                done
-                grep -Fq 'MINIAS_DYNAMIC_HEADER_OBJECTS=PASS trial=full_all_verified native_header_objects=4 total_native_C_objects=2064' "$ev/cohort.log" || exit 43
-                echo 'MINIPP_DYNAMIC_HEADER_RUNTIME=PASS native_PP=4 native_CC=4 native_AS=4 others_unchanged=2060 QEMU_P1=12/12 GNU_macro_reference_only=true'
+                grep -Fq 'MINIPP_DYNAMIC_HEADER_RUNTIME=PASS native_PP=4 native_CC=4 native_AS=4 stable_native_C=2060 QEMU_P1=12/12' "$ev/cohort.log" || exit 43
                 echo 'MINIPP_SEVEN_QEMU=PASS pp_input=MiniPP 2064_native_C_owners=true QEMU_P1=12/12 generated_header_pp_pending=false GCC_target_macro_reference_pending=true'
               else
                 echo 'MINIPP_SEVEN_QEMU=PASS pp_input=MiniPP 2064_native_C_owners=true QEMU_P1=12/12 generated_header_pp_pending=true'
