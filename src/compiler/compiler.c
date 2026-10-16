@@ -1,4 +1,3 @@
-#define _POSIX_C_SOURCE 200809L
 #include "minic/compiler.h"
 
 #include "core/core_ir.h"
@@ -20,8 +19,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/resource.h>
-#include <time.h>
 
 typedef struct MinicSourceBuffer {
     char *data;
@@ -33,80 +30,6 @@ typedef struct MinicCoreFunctionSet {
     MinicCoreLowerStatus *statuses;
     size_t function_count;
 } MinicCoreFunctionSet;
-
-/* Opt-in, read-only profiling of actual compiler phase boundaries.
- * A high-water RSS value is process-wide (not the heap allocated within
- * a phase). No semantic or performance change occurs when disabled. */
-typedef struct MinicPhaseProfile {
-    bool enabled;
-    struct timespec initial;
-    struct timespec previous;
-    const char *input_path;
-} MinicPhaseProfile;
-
-static uint64_t minic_profile_delta_ms(const struct timespec *before,
-                                        const struct timespec *after) {
-    int64_t ns = (int64_t)(after->tv_sec - before->tv_sec) *
-                 INT64_C(1000000000) +
-                 (int64_t)(after->tv_nsec - before->tv_nsec);
-    return ns > 0 ? (uint64_t)ns / UINT64_C(1000000) : 0U;
-}
-
-static void minic_profile_initialize(MinicPhaseProfile *profile,
-                                      const char *input_path) {
-    const char *enabled = getenv("MINIC_PROFILE_PHASES");
-    memset(profile, 0, sizeof(*profile));
-    profile->input_path = input_path;
-    profile->enabled = enabled != NULL && enabled[0] != '\0' &&
-                       strcmp(enabled, "0") != 0 &&
-                       clock_gettime(CLOCK_MONOTONIC, &profile->initial) == 0;
-    profile->previous = profile->initial;
-}
-
-static void minic_profile_checkpoint(MinicPhaseProfile *profile,
-                                      const char *stage,
-                                      bool success,
-                                      size_t functions) {
-    struct timespec now;
-    struct rusage usage;
-    long peak_rss_kb;
-
-    if (!profile->enabled ||
-        clock_gettime(CLOCK_MONOTONIC, &now) != 0) {
-        return;
-    }
-    peak_rss_kb = getrusage(RUSAGE_SELF, &usage) == 0 ?
-                  usage.ru_maxrss : -1L;
-    (void)fprintf(stderr,
-                  "MINIC_PHASE stage=%s elapsed_ms=%llu "
-                  "process_highwater_rss_kb=%ld functions=%zu "
-                  "status=%s input=%s\n",
-                  stage,
-                  (unsigned long long)minic_profile_delta_ms(
-                      &profile->previous, &now),
-                  peak_rss_kb, functions, success ? "PASS" : "FAIL",
-                  profile->input_path != NULL ? profile->input_path : "?");
-    profile->previous = now;
-}
-
-static void minic_profile_total(const MinicPhaseProfile *profile,
-                                 bool success,
-                                 size_t functions) {
-    struct timespec now;
-    struct rusage usage;
-    if (!profile->enabled ||
-        clock_gettime(CLOCK_MONOTONIC, &now) != 0) return;
-    (void)fprintf(stderr,
-                  "MINIC_PROFILE_TOTAL elapsed_ms=%llu "
-                  "process_highwater_rss_kb=%ld functions=%zu "
-                  "status=%s input=%s\n",
-                  (unsigned long long)minic_profile_delta_ms(
-                      &profile->initial, &now),
-                  getrusage(RUSAGE_SELF, &usage) == 0 ? usage.ru_maxrss : -1L,
-                  functions, success ? "PASS" : "FAIL",
-                  profile->input_path != NULL ? profile->input_path : "?");
-}
-
 
 /* Bootstrap diagnostics are deliberately opt-in.  They let a target-built
    compiler expose the exact phase/function where self-host replay stops
@@ -2682,9 +2605,7 @@ int minic_compile_preprocessed_file_with_options(const char *input_path,
     MinicCoreFunctionSet core_set;
     const MinicTargetInfo *target_info;
     MinicC0AstVerifyFailure verify_failure;
-    MinicPhaseProfile profile;
     bool success;
-    bool stage_started;
 
     if (input_path == NULL || output_path == NULL) {
         minic_set_diagnostic(diagnostic, input_path, 1U, 1U, "input and output paths are required");
@@ -2696,15 +2617,11 @@ int minic_compile_preprocessed_file_with_options(const char *input_path,
         diagnostic->column = 1U;
         diagnostic->message[0] = '\0';
     }
-    minic_profile_initialize(&profile, input_path);
     buffer.data = NULL;
     buffer.size = 0U;
     if (!minic_read_file(input_path, &buffer, diagnostic)) {
-        minic_profile_checkpoint(&profile, "read_input", false, 0U);
-        minic_profile_total(&profile, false, 0U);
         return 1;
     }
-    minic_profile_checkpoint(&profile, "read_input", true, 0U);
 
     minic_c0_program_initialize(&program);
     minic_core_function_set_initialize(&core_set);
@@ -2723,8 +2640,6 @@ int minic_compile_preprocessed_file_with_options(const char *input_path,
             diagnostic, input_path, 1U, 1U, "parsed FunctionBody ownership is invalid");
         success = false;
     }
-    minic_profile_checkpoint(&profile, "parse_validate", success, program.function_count);
-    stage_started = success;
     if (success) {
         minic_bootstrap_trace_stage(input_path, "normalize", "begin", program.function_count);
     }
@@ -2776,10 +2691,6 @@ int minic_compile_preprocessed_file_with_options(const char *input_path,
                              "cannot finalize inline specialization reachability");
         success = false;
     }
-    if (stage_started) {
-        minic_profile_checkpoint(&profile, "normalize_specialize", success, program.function_count);
-    }
-    stage_started = success;
     if (success) {
         minic_bootstrap_trace_stage(input_path, "core-set", "begin", program.function_count);
     }
@@ -2802,9 +2713,6 @@ int minic_compile_preprocessed_file_with_options(const char *input_path,
                              "cannot prune inline specialization Core reachability");
         success = false;
     }
-    if (stage_started) {
-        minic_profile_checkpoint(&profile, "core_lower_prune", success, program.function_count);
-    }
     if (success) {
         minic_bootstrap_trace_stage(input_path, "core-validate", "begin", program.function_count);
         success =
@@ -2813,7 +2721,6 @@ int minic_compile_preprocessed_file_with_options(const char *input_path,
                                     "core-validate",
                                     success ? "end-ok" : "end-fail",
                                     program.function_count);
-        minic_profile_checkpoint(&profile, "core_validate", success, program.function_count);
     }
     if (success) {
         minic_bootstrap_trace_stage(input_path, "layout", "begin", program.function_count);
@@ -2822,7 +2729,6 @@ int minic_compile_preprocessed_file_with_options(const char *input_path,
                                     "layout",
                                     success ? "end-ok" : "end-fail",
                                     program.function_count);
-        minic_profile_checkpoint(&profile, "layout", success, program.function_count);
     }
     if (success) {
         minic_bootstrap_trace_stage(input_path, "codegen", "begin", program.function_count);
@@ -2837,18 +2743,11 @@ int minic_compile_preprocessed_file_with_options(const char *input_path,
                                     "codegen",
                                     success ? "end-ok" : "end-fail",
                                     program.function_count);
-        minic_profile_checkpoint(&profile, "codegen", success, program.function_count);
     }
 
-    /* Count functions before destroying the parser-owned AST. */
-    {
-        size_t function_count = program.function_count;
-        minic_core_function_set_destroy(&core_set);
-        minic_c0_program_destroy(&program);
-        free(buffer.data);
-        minic_profile_checkpoint(&profile, "cleanup", success, function_count);
-        minic_profile_total(&profile, success, function_count);
-    }
+    minic_core_function_set_destroy(&core_set);
+    minic_c0_program_destroy(&program);
+    free(buffer.data);
     return success ? 0 : 1;
 }
 
