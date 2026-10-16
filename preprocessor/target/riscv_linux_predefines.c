@@ -47,6 +47,25 @@ static bool output_literal(FILE *output, const char *data) {
     return fputs(data, output) >= 0;
 }
 
+#define PROFILE_PARTS(profile) (sizeof(profile) / sizeof((profile)[0]))
+
+static bool output_profile(FILE *output,
+                           const char *const *parts,
+                           size_t count) {
+    size_t i;
+    for (i = 0U; i < count; ++i) {
+        if (!output_literal(output, parts[i])) return false;
+    }
+    return true;
+}
+
+static size_t profile_bytes(const char *const *parts, size_t count) {
+    size_t i;
+    size_t total = 0U;
+    for (i = 0U; i < count; ++i) total += strlen(parts[i]);
+    return total;
+}
+
 static bool write_target_profile(FILE *output,
                                  const char *language,
                                  char *const *flags,
@@ -59,13 +78,13 @@ static bool write_target_profile(FILE *output,
         }
         if (count == 3U) {
             *profile_name = "rv64-lp64-assembler-ABI";
-            return output_literal(output, minipp_rv64_asm_base);
+            return output_profile(output, minipp_rv64_asm_base, PROFILE_PARTS(minipp_rv64_asm_base));
         }
         if (count == 5U &&
             strcmp(flags[3], rv32_asm_suffix[0]) == 0 &&
             strcmp(flags[4], rv32_asm_suffix[1]) == 0) {
             *profile_name = "rv32-ilp32-assembler-ABI";
-            return output_literal(output, minipp_rv32_asm_base);
+            return output_profile(output, minipp_rv32_asm_base, PROFILE_PARTS(minipp_rv32_asm_base));
         }
         return false;
     }
@@ -94,7 +113,7 @@ static bool write_target_profile(FILE *output,
             }
         }
         *profile_name = "rv64-lp64-c-common+explicit-flag-rules";
-        if (!output_literal(output, minipp_rv64_c_base)) {
+        if (!output_profile(output, minipp_rv64_c_base, PROFILE_PARTS(minipp_rv64_c_base))) {
             return false;
         }
         if (optimize &&
@@ -154,11 +173,12 @@ int minipp_target_predefines_cli(int argc, char **argv) {
     if (self_check && language == NULL && output_path == NULL) {
         /* The full nine-context oracle comparison is the separate
          * permanent tests/preprocessor/run-target-predefines-native.sh. */
-        ok = sizeof(minipp_rv64_c_base) == 14668U &&
-             sizeof(minipp_rv64_asm_base) == 15433U &&
-             sizeof(minipp_rv32_asm_base) == 14751U &&
-             strstr(minipp_rv64_c_base, "#define __riscv") != NULL &&
-             strstr(minipp_rv32_asm_base, "#define __riscv") != NULL;
+        ok = profile_bytes(minipp_rv64_c_base,
+                           PROFILE_PARTS(minipp_rv64_c_base)) == 14667U &&
+             profile_bytes(minipp_rv64_asm_base,
+                           PROFILE_PARTS(minipp_rv64_asm_base)) == 15432U &&
+             profile_bytes(minipp_rv32_asm_base,
+                           PROFILE_PARTS(minipp_rv32_asm_base)) == 14750U;
         printf("MINIPP_NATIVE_MACRO_INTERNAL=%s baselines=3 gcc_processes=0 python_processes=0\n",
                ok ? "PASS" : "FAIL");
         return ok ? 0 : 2;
