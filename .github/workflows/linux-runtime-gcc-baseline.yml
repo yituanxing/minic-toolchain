@@ -1706,7 +1706,7 @@ jobs:
       # and compares stack prologues with the certified pure-GNU .o pool.
       - name: Restore immutable 2064-object MiniC cache for P1 diagnosis
         id: p1_minic_frozen_cache
-        if: (contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]') || contains(github.event.head_commit.message, '[linux-runtime-stack-owners]') || contains(github.event.head_commit.message, '[linux-native-union-cached]')) && !contains(github.event.head_commit.message, '[linux-minipp-native-reuse]')
+        if: ${{ (contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]') || contains(github.event.head_commit.message, '[linux-runtime-stack-owners]') || contains(github.event.head_commit.message, '[linux-native-union-cached]')) && !contains(github.event.head_commit.message, '[linux-minipp-native-reuse]') }}
         uses: actions/cache/restore@v4
         with:
           path: |
@@ -1722,7 +1722,7 @@ jobs:
           fail-on-cache-miss: true
 
       - name: Attest exact cached full MiniC object pool before native tool replacements
-        if: contains(github.event.head_commit.message, '[linux-native-union-cached]') && !contains(github.event.head_commit.message, '[linux-minipp-native-reuse]')
+        if: ${{ contains(github.event.head_commit.message, '[linux-native-union-cached]') && !contains(github.event.head_commit.message, '[linux-minipp-native-reuse]') }}
         shell: bash
         run: |
           set -Eeuo pipefail
