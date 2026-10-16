@@ -134,7 +134,10 @@ def native_asm_overlay(a):
                 proc.stdout + '\n' + proc.stderr)
             if proc.returncode or not profile.is_file():
                 raise ValueError('GNU assembler-with-cpp predefine oracle unavailable: '
-                                 +name+' context='+repr(context))
+                                 +name+' context='+repr(context)+
+                                 ' exit='+str(proc.returncode)+
+                                 ' stderr='+repr(proc.stderr[-3500:])+
+                                 ' stdout='+repr(proc.stdout[-500:]))
             native_profiles[context] = profile
 
     def native_source_args(arguments):
@@ -209,7 +212,7 @@ def native_asm_overlay(a):
         if native_pp is not None:
             context = tuple(x for x in args if x.startswith(context_prefixes)
                             or x in exact_opt)
-            input_source = next((x for x in args if x.endswith(('.S', '.s'))
+            input_source = next((x for x in reversed(args) if x.endswith(('.S', '.s'))
                                  and not x.startswith('-')), None)
             if input_source is None:
                 raise ValueError('missing real Kbuild .S source: '+name)
