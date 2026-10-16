@@ -228,6 +228,46 @@ list_sig=$(sha256sum "$objects_file" | cut -d' ' -f1)
 cache_contract=$(printf '%s\n' "$actual_cfg" "$gnu_image_sha" \
   "$compiler_sig" "$assembler_sig" "$gold_sig" "$list_sig" \
   | sha256sum | cut -d' ' -f1)
+# Recover the exact current native 2064-C candidate from seven SHA/ABI-
+# certified MiniPP -> MiniC -> MiniAS shards. This is not a GNU-PP MiniC cache
+# hit; the old cache's compiler identity can legitimately differ.
+if [[ -n "\${COHORT_NATIVE_SAME_RUN_POOL:-}" ]]; then
+  [[ "\${COHORT_ACTION:-all}" == verify &&
+     "\${COHORT_NATIVE_UNION:-0}" == 1 &&
+     "$cohort_scope" == FULL_C_UNIVERSE && "$n" == 2064 ]] || {
+    echo "COHORT_NATIVE_SAME_RUN=ERROR invalid_scope" >&2; exit 7;
+  }
+  native_src="$COHORT_NATIVE_SAME_RUN_POOL"
+  native_manifest="$repo/build/minipp-seven-merge/native-full-manifest.sha256"
+  test -d "$native_src" && test -s "$native_manifest" || {
+    echo "COHORT_NATIVE_SAME_RUN=ERROR missing_verified_native_pool" >&2; exit 7;
+  }
+  test ! -e "$ev/minic-manifest.sha256" && test ! -e "$ev/minic-identity.txt" || {
+    echo "COHORT_NATIVE_SAME_RUN=ERROR unexpected_prior_candidate" >&2; exit 7;
+  }
+  # The existing seven-merge script already verifies each object's GNU-PP
+  # equivalence, ELF ABI and SHA. Recheck every byte at this consumer boundary.
+  python3 - "$objects_file" "$native_manifest" <<'PY_NATIVE_CONSUMER'
+from pathlib import Path
+import re,sys
+owners = [x for x in Path(sys.argv[1]).read_text().splitlines()
+          if x and not x.startswith("#")]
+rows = [x.split("  ",1) for x in Path(sys.argv[2]).read_text().splitlines()]
+if len(owners)!=2064 or len(rows)!=2064 or [p for h,p in rows]!=owners or any(
+    not re.fullmatch("[0-9a-f]{64}",h) for h,p in rows):
+    raise SystemExit("COHORT_NATIVE_SAME_RUN=ERROR owner_or_manifest_mismatch")
+PY_NATIVE_CONSUMER
+  (cd "$native_src" && sha256sum --quiet -c "$native_manifest") || {
+    echo "COHORT_NATIVE_SAME_RUN=ERROR producer_object_hash_mismatch" >&2; exit 7;
+  }
+  cp -a --reflink=auto "$native_src/." "$ev/minic/"
+  sed 's|  |  minic/|' "$native_manifest" >"$ev/minic-manifest.sha256"
+  printf '%s\n' "$cache_contract" >"$ev/minic-identity.txt"
+  (cd "$ev" && sha256sum --quiet -c minic-manifest.sha256) || {
+    echo "COHORT_NATIVE_SAME_RUN=ERROR candidate_copy_hash_mismatch" >&2; exit 7;
+  }
+  echo "COHORT_NATIVE_SAME_RUN=VERIFIED objects=2064 producers=7 PP=MiniPP CC=MiniC AS=MiniAS source=reused_certified_shards legacy_GNU_PP_cache=NOT_USED"
+fi
 cached=0
 if [[ -e "$ev/minic-manifest.sha256" || -e "$ev/minic-identity.txt" ]]; then
   test -s "$ev/minic-manifest.sha256" && test -s "$ev/minic-identity.txt" || {
