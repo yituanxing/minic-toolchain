@@ -14,7 +14,11 @@
  * three real RISC-V RELA types. It is not an ELF64 reinterpretation and
  * does not use the GNU reference as a production template. Reject changes
  * to this contract until the general ELF32 linker supports them. */
-enum { IN_COUNT=4, EXPORTS=3, OUT_COUNT=15, LIMIT=65536 };
+enum { IN_COUNT=4, EXPORTS=3, LIMIT=65536 };
+_Static_assert(sizeof(Elf32_Ehdr)==52U, "ELF32 header ABI");
+_Static_assert(sizeof(Elf32_Phdr)==32U, "ELF32 program header ABI");
+_Static_assert(sizeof(Elf32_Shdr)==40U, "ELF32 section header ABI");
+_Static_assert(sizeof(Elf32_Sym)==16U, "ELF32 symbol ABI");
 enum { HASH=1, GNUHASH=2, DYNSYM=3, DYNSTR=4, VERSYM=5,
        VERDEF=6, NOTE=7, DYNAMIC=8, EH_HDR=9, EH=10,
        TEXT=11, DATA=12, SYMTAB=13, STRTAB=14, SHSTRTAB=15 };
