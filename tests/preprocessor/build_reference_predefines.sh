@@ -25,7 +25,7 @@ predef_args=("$@")
 if [[ "${MINIPP_PREDEFINES_NATIVE_RULES:-0}" == 1 ]]; then
   rm -f "$tmp"
   root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
-  python3 "$root/tools/ci/minipp-linux-native-macro-rules-v1.py" \
+  python3 "$root/preprocessor/target/riscv_linux_predefines.py" \
     --language "$language" --output "$output" -- "${predef_args[@]}"
   exit $?
 fi
