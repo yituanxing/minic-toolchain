@@ -289,6 +289,10 @@ jobs:
       DEBIAN_FRONTEND: noninteractive
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Parent source is needed for one-factor Parser A/B without downloading
+          # another corpus or creating another job.
+          fetch-depth: 3
 
       # Opt-in current-source profile; no 500-owner paired retest.
       - name: Build current Linux MiniC and diagnostics-only -O2 traced copy
@@ -418,7 +422,8 @@ jobs:
           sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
             gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
             libc6-dev-riscv64-cross python3 make >/dev/null
-          parent=$(git rev-parse HEAD^)
+          parent=98ff01edb0e6a9df0ef74537a9ef45df7f6f1e79
+          git cat-file -e "$parent^{commit}"
           test "$(git show "$parent:src/frontend/parser_type.c" | sha256sum | cut -d' ' -f1)" != \
             "$(sha256sum src/frontend/parser_type.c | cut -d' ' -f1)"
           # Source changes in this disposable Actions checkout only.
