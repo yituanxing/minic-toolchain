@@ -183,7 +183,7 @@ def main() -> int:
     import struct
     def text_bytes(elf: Path) -> bytes:
         data = elf.read_bytes()
-        if data[:6] != b"\\x7fELF\\x01\\x01":
+        if data[:6] != b"\x7fELF\x01\x01":
             raise RuntimeError("not ELF32 little-endian " + str(elf))
         shoff = struct.unpack_from("<I", data, 32)[0]
         entsize, count, stridx = struct.unpack_from("<HHH", data, 46)
@@ -195,7 +195,7 @@ def main() -> int:
         for i in range(count):
             p = shoff + i*entsize
             index = struct.unpack_from("<I", data, p)[0]
-            e = names.find(b"\\x00", index)
+            e = names.find(b"\x00", index)
             if e >= 0 and names[index:e] == b".text":
                 offset, size = struct.unpack_from("<II", data, p+16)
                 if offset + size > len(data):
