@@ -315,6 +315,11 @@ jobs:
               tools/ci/linux-perf-phase-trace-v1.py \
               tools/ci/linux-perf-current-phase20-v1.py
           fi
+          if [[ "${{ contains(github.event.head_commit.message, '[minic-cpu-profile-only]') && '1' || '0' }}" == 1 ]]; then
+            # Callsite counters affect only the diagnostics compiler compiled
+            # below, NEVER the already built source-identical release reference.
+            python3 tools/ci/linux-perf-host-hotspot-profiler-v1.py --instrument-parser-probes
+          fi
           git diff --check
           make -j4 MODE=release CFLAGS="-Werror -g -fno-omit-frame-pointer" \
             BUILD_DIR="$root/phase20-traced" \
@@ -611,6 +616,13 @@ jobs:
           print("MINIC_CPU_HOTSPOT_PROFILER_PROVEN=PASS owner="+owner+" compiler=minic-cc")
           PY
           done < "$root/evidence/phase20-cpu-inputs.tsv"
+          if [[ "${{ contains(github.event.head_commit.message, '[minic-cpu-profile-only]') && '1' || '0' }}" == 1 ]]; then
+            for owner in fs_ext4_fsync kernel_bpf_btf; do
+              test -s "$root/current-phase20/cpu/$owner/parser-copy-census.json" || {
+                echo "MINIC_PARSER_COPY=FAIL missing census owner=$owner" >&2; exit 8;
+              }
+            done
+          fi
 
       - name: Paired current MiniC versus original scoped Boolean Domain cache
         if: contains(github.event.head_commit.message, '[minic-boolean-domain-ab20]')
