@@ -653,3 +653,21 @@ COHORT_RESULT=PASS candidate_objects=2064 scope=FULL_C_UNIVERSE same_config=true
 [CI #38672453023](https://github.com/yituanxing/minic-toolchain/actions/runs/38672453023) `gcc-single SUCCESS`，已完成固定 GNU Kbuild Linux 6.6.143 RISC-V `selected-tus.txt` 的 500 份输入 SHA 验证，并在 **同一候选** 同时启用 **symbolic FunctionBody owner、integer CALL index、Parser earliest-first function hash、integer FunctionBody owner** 四项索引。固定 Boolean Runtime 编译器作基准，严格要求两臂编译成功和 `.s` 逐字节 SHA 相同，实际日志进度 50→500 后显示 `MINIC_FROZEN_DIFF=PASS selected=500 identical=500 runtime_p1_not_proven=true` 及 `PERF_FIRST500=PASS selected=500 combined=true integer_owner=true`。因此第四项已经从 3 owner A/B 晋级为**四索引共同 first500/500 字节一致**，不能再把这次记录成“待验证”。
 
 **认证边界：** [完整 Linux 7-shard / 2064/2064 C / GNU linker / QEMU 12 syscall P1 #38675862094](https://github.com/yituanxing/minic-toolchain/actions/runs/38675862094) 已通过的仍是**前三项**（symbolic owner、integer CALL、Parser hash），**不是本条的四项**。若要为 integer-owner 新增正式 Runtime 身份，须在已有的 7-shard cached 2064 owner 统一配置里追加第四项并重新签发 GNU link/QEMU P1；不能将三项的完整认证自动授予四项。
+
+## 40. PERF-035：Boolean 已集成后的 Integer Transitive 归属过滤（2026-10-16）
+
+**现象（当前源码与剖析）：** 当前正式 Runtime44+Boolean MiniC 的 Callgrind CPU profile [#38920186536](https://github.com/yituanxing/minic-toolchain/actions/runs/38920186536) 记录 `minic_specialize_inline_integer_calls` 在 `fs/ext4/fsync.o` 和 `kernel/bpf/btf.o` 分别占据 **10.98% / 13.55% 的独占指令**（不是 wall time）。其中 `minic_inline_specialization_argument_value` 在同一 Integer 阶段分别被调用 221,400 / 659,316 次。生产源码已有 CALL-only 索引（只遍历 CALL），但每个 clone 仍会扫描所有函数所属的 CALL，导致 `K * C` 工作量；不是 Boolean Domain Cache 已解决的查询。
+
+**源码与假设：** 复用此前 `tools/ci/apply-perf-integer-function-body-owner-filter-v1.py` 的**已试验语义**，直接落在 `src/compiler/compiler.c`：使用现有 `minic_perf_program_build_expression_source_owners`，仅跳过能确证唯一归属**其他原始源函数**的 CALL；对于没有 owner、共享/歧义节点，以及分配或所有权验证失败，保留旧完整路径。CALL ID 的原始次序、克隆预算、first-match 变体匹配及失败处理语义不改变。只在此 integer transitive pass 生效，且新建所有权表只在本阶段使用；修复克隆限额/添加失败时释放本阶段临时表的出口。增加 opt-in `MINIC_INTEGER_OWNER_PERF`，记录候选扫描与已过滤 CALL 数。
+
+**实测同一 Runner A/B：** 源码提交 [`381bfd4b`](https://github.com/yituanxing/minic-toolchain/commit/381bfd4b3209004168fea224a9675055ad6141f6)；固定 GNU Kbuild `.i` 输入，旧版为 `9bbe1b37` 的全部相同源代码及工具配置（仅 `compiler.c` 为旧算法），每臂 warm-up 1 次 + **4 次交错实测**；新旧 `minic-cc` SHA 分别为 `79357ad1e4f4...`、`5011f702eed1...`，输出 `.s` 的 SHA 全部一致：
+
+| 冻结真实 Linux owner | 旧版 P50 | 新版 P50 | A/B 速度比 | 剔除其他 FunctionBody 的候选 CALL |
+| --- | ---: | ---: | ---: | ---: |
+| `fs/ext4/fsync.o` | 662.614ms | 487.929ms | **1.3580×** | 635,887 / 648,948 |
+| `kernel/bpf/btf.o` | 2,529.899ms | 1,933.050ms | **1.3088×** | 2,075,478 / 2,133,091 |
+| **两 TU P50 之和** | **3,192.512ms** | **2,420.980ms** | **1.3187×** | **2,711,365 / 2,782,039** |
+
+**可靠性证据：** [A/B CI #38925489139](https://github.com/yituanxing/minic-toolchain/actions/runs/38925489139) **SUCCESS**，`MINIC_SINGLE_FACTOR_AB=PASS trial=integer-owner owners=2 assembly_identical=2/2`，`MINIC_INTEGER_OWNER_FILTER ready=1 fallback=0`，独立统计 run 的 `.s` SHA 再次与两臂完全相同。[Focused T1 #38925489418](https://github.com/yituanxing/minic-toolchain/actions/runs/38925489418) **SUCCESS**。原先 [#38671761601](https://github.com/yituanxing/minic-toolchain/actions/runs/38671761601) 在不同的早期工具配置上已为三个其他 owner 取得局部收益，[#38672453023](https://github.com/yituanxing/minic-toolchain/actions/runs/38672453023) 曾为组合四索引完成 500/500 字节一致，但它们**不代替此新正式源码身份**的资格测试。
+
+**阶段状态：`verified-local`**。这轮测试不能推出 Linux 全量 1.3187×；也还未给提交 `381bfd4b` 完成 2064/2064、GNU link 和 QEMU P1 认证。下一步仅复用**现有 perf500 job** 的 first500 SHA-frozen paired driver，确保 500/500 字节一致与全体时间分布；有全体正收益再用既有七路 `gcc-shards`、receiver QEMU 做正式认证。坚决不重复跑耗时的 Callgrind，也不新建 workflow/job。
