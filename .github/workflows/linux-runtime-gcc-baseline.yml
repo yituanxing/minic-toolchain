@@ -2090,7 +2090,7 @@ jobs:
           merge-multiple: false
 
       # Native candidate reuses the seven immutable full-shard artifacts from
-      # successful 2064/2064 run 38824106769, after exact producer-tree
+      # successful 2064/2064 run 38833727157, after exact producer-tree
       # comparison and SHA/ELF/owner verification. No redundant 2064-C build.
       # Cache-only replay of the original 2064/2064 certified native C shards.
       - name: Restore certified MiniPP native C objects for cache-only P1 replay
@@ -2098,9 +2098,9 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           repository: ${{ github.repository }}
-          run-id: ${{ contains(github.event.head_commit.message, '[linux-minipp-native-reuse]') && '38824106769' || '38550003154' }}
+          run-id: ${{ contains(github.event.head_commit.message, '[linux-minipp-native-reuse]') && '38833727157' || '38550003154' }}
           github-token: ${{ github.token }}
-          pattern: ${{ contains(github.event.head_commit.message, '[linux-minipp-native-reuse]') && 'minipp-native-shard-*-ee1677256074ddf3bbd9145553178471c3d42e06' || 'minipp-native-shard-*-041ae51e1ff2f3f1b9e30b489957e53cfc43dfa1' }}
+          pattern: ${{ contains(github.event.head_commit.message, '[linux-minipp-native-reuse]') && 'minipp-native-shard-*-7c36ffbf7319624227d90aa97db6e2976a56f316' || 'minipp-native-shard-*-041ae51e1ff2f3f1b9e30b489957e53cfc43dfa1' }}
           path: build/minipp-seven-merge/incoming
           merge-multiple: false
 
@@ -2113,7 +2113,7 @@ jobs:
           if [[ "${{ contains(github.event.head_commit.message, '[linux-minipp-native-reuse]') && '1' || '0' }}" == 1 ]]; then
             # Only reuse the seven fully produced .o shards after proving no
             # source, GNU fixture or producer script changed since their build.
-            producer=ee1677256074ddf3bbd9145553178471c3d42e06
+            producer=7c36ffbf7319624227d90aa97db6e2976a56f316
             git fetch --quiet --no-tags --depth=1 origin "$producer"
             git diff --quiet "$producer" "$GITHUB_SHA" -- \
               Makefile src include preprocessor assembler archiver linker elf \
@@ -2135,7 +2135,7 @@ jobs:
           fi
           shard_commit="$GITHUB_SHA"
           if [[ "${{ contains(github.event.head_commit.message, '[linux-minipp-native-reuse]') && '1' || '0' }}" == 1 ]]; then
-            shard_commit=ee1677256074ddf3bbd9145553178471c3d42e06
+            shard_commit=7c36ffbf7319624227d90aa97db6e2976a56f316
           elif [[ "${{ contains(github.event.head_commit.message, '[linux-minipp-seven-replay]') && '1' || '0' }}" == 1 ]]; then
             shard_commit=041ae51e1ff2f3f1b9e30b489957e53cfc43dfa1
           fi
