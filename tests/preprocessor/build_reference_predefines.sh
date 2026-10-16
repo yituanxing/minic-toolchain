@@ -25,7 +25,19 @@ predef_args=("$@")
 if [[ "${MINIPP_PREDEFINES_NATIVE_RULES:-0}" == 1 ]]; then
   rm -f "$tmp"
   root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
-  python3 "$root/preprocessor/target/riscv_linux_predefines.py" \
+  # Use the SAME native C MiniPP executable for target macro production.
+  # Python remains in tests only as the frozen independent differential oracle.
+  native_cpp=${MINIPP_NATIVE_CPP:-"$root/build/release/bin/minic-cpp"}
+  if [[ ! -x "$native_cpp" ]]; then
+    if [[ -n "${MINIPP_NATIVE_CPP:-}" ]]; then
+      echo "MINIPP_NATIVE_MACRO_RULES=FAIL missing_native_cpp:$native_cpp" >&2
+      exit 2
+    fi
+    # Build once per worker; subsequent 2064 owner invocations only run C.
+    make -s -C "$root" -j4 MODE=release CFLAGS=-Werror \
+      build/release/bin/minic-cpp
+  fi
+  "$native_cpp" --dump-target-predefines \
     --language "$language" --output "$output" -- "${predef_args[@]}"
   exit $?
 fi
