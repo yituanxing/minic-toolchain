@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Component-level refactor check: build ELF32 writer from its own .o via
+# MINILD_SOURCES, never by including a second .c in tools/minic-ld/main.c.
+# Reuse four frozen Linux compat-vDSO .o; do not build 2064 C owners here.
 # Exact four-object Linux 6.6.143 RISC-V compat-vDSO ELF32 linker frontier.
 # This is an isolated cached replay, NOT a full Linux/QEMU acceptance.
 # No C compilation, Kbuild rebuild, GNU output substitution, or new CI job.
