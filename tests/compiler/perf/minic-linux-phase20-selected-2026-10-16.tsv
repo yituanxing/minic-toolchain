@@ -1,0 +1,26 @@
+# Current MiniC performance-stage sample, 2026-10-16.
+# Exactly 20 of 500 frozen Linux 6.6.143 RV64 translation units.
+# Selection from certified same-runner #38892740386 candidate total: hottest10,
+# middle5 near median, light5 around 0.1s; recorded ms are historical
+# candidate timings for stratification ONLY, not current profiling results.
+# group\tobject\tprevious_candidate_wall_ms
+hot	kernel/bpf/verifier.o	22109.924
+hot	kernel/events/core.o	21083.525
+hot	kernel/bpf/syscall.o	20537.996
+hot	kernel/bpf/btf.o	20526.626
+hot	mm/memcontrol.o	18912.690
+hot	kernel/cgroup/cgroup.o	14212.165
+hot	kernel/bpf/hashtab.o	13747.057
+hot	kernel/bpf/helpers.o	13594.318
+hot	kernel/bpf/cpumap.o	13543.329
+hot	kernel/sysctl.o	13504.441
+middle	mm/folio-compat.o	1985.713
+middle	fs/notify/group.o	1981.297
+middle	kernel/time/timekeeping_debug.o	1978.028
+middle	fs/ext4/fsync.o	1970.643
+middle	arch/riscv/kvm/vcpu_fp.o	1966.268
+light	kernel/printk/sysctl.o	133.580
+light	init/calibrate.o	128.215
+light	kernel/bpf/bpf_lru_list.o	114.994
+light	kernel/bpf/percpu_freelist.o	108.715
+light	arch/riscv/kernel/reset.o	102.859
