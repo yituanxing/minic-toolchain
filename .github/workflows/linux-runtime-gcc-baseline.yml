@@ -2228,6 +2228,18 @@ jobs:
           tools="$GITHUB_WORKSPACE/build/minias-linux-corpus-v1-tools"
           make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$tools" "$tools/bin/minic-as"
           test -x "$tools/bin/minic-as"
+          native_S_pp_args=()
+          if [[ "${{ contains(github.event.head_commit.message, '[linux-minipp-native-S]') && '1' || '0' }}" == 1 ]]; then
+            # Real Kbuild .S inputs, using the SAME authenticated 2064
+            # MiniPP/MiniC/MiniAS C pool and original 34 Kbuild .S owners.
+            # Fail closed if any MiniPP output differs from the exact GNU-E
+            # oracle before the expensive link/QEMU gate.
+            minipp="$GITHUB_WORKSPACE/build/minipp-seven-tools/bin/minic-cpp"
+            make -j4 MODE=release CFLAGS=-Werror \
+              BUILD_DIR="$GITHUB_WORKSPACE/build/minipp-seven-tools" "$minipp"
+            native_S_pp_args=(--native-asm-minipp "$minipp" \
+                              --linux-src "$work/linux-6.6.143")
+          fi
           python3 tools/ci/minias-linux-corpus-runtime-overlay-v1.py \
             --original-pool "$original_pool" --manifest "$original_manifest" \
             --scan-root "$GITHUB_WORKSPACE/build/minias-linux-corpus-v1" \
@@ -2237,7 +2249,8 @@ jobs:
             --golden-out "$work/out" \
             --minias "$GITHUB_WORKSPACE/build/minias-linux-corpus-v1-tools/bin/minic-as" \
             --native-asm-only --c-universe "$ev/full-objects.txt" \
-            --gcc-manifest "$work/provenance/gcc-objects.sha256"
+            --gcc-manifest "$work/provenance/gcc-objects.sha256" \
+            "${native_S_pp_args[@]}"
           if [[ "${{ contains(github.event.head_commit.message, '[linux-minias-strcmp-diff]') && '1' || '0' }}" == 1 ]]; then
             cmpout="$ev/minias-native-S-evidence/strcmp"
             mkdir -p "$cmpout"
