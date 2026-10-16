@@ -191,4 +191,22 @@ print('MINILD_VDSO32_TEXT=PASS GNU_same_inputs_text_bytes_equal=true',
       'gnu_fallback=false')
 PY_ELF32_TEXT
 echo 'MINILD_VDSO32=PASS exact_Linux_ELF32_link=true native_output=true no_GNU_fallback=true cached_C=true'
+# Real Kbuild overlays all 34 .S via MiniAS. Four are RV32 compat-vDSO.
+# Do NOT equate GNU-assembled four .o above with actual MiniAS inputs.
+# Replay four MiniAS objects from their EXACT frozen Kbuild .o.cmd, using
+# GCC -E -P only as the independently established .S text oracle.
+# This is seconds-scale source diagnosis, not 2064-C compilation.
+make -C "$repo" -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$tools" \
+  "$tools/bin/minic-as"
+python3 "$repo/tools/ci/minild-compat-vdso32-native-asm-replay-v1.py" \
+  --out "$out" --minias "$tools/bin/minic-as" \
+  --minild "$minild" --evidence "$ev" \
+  >"$ev/native-S-replay.txt" 2>"$ev/native-S-replay.stderr" || {
+    echo 'MINILD_VDSO32_NATIVE_S=FAIL first_real_MiniAS_object_gap=true no_C_rebuild=true' >&2
+    cat "$ev/native-S-replay.stderr" >&2
+    tail -n 60 "$ev/native-S-replay.txt" >&2
+    exit 31
+  }
+cat "$ev/native-S-replay.txt"
+
 echo 'MINILD_VDSO32=NEEDS_FULL_RUNTIME_CERTIFICATION QEMU_P1_not_run_in_this_gate=true'
