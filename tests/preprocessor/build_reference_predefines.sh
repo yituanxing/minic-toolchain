@@ -4,6 +4,13 @@ set -Eeuo pipefail
 real_cc=${REAL_CC:-riscv64-linux-gnu-gcc}
 linux_src=${MINIPP_LINUX_SRC:?MINIPP_LINUX_SRC is not set}
 output=${MINIPP_PREDEFINES_OUT:?MINIPP_PREDEFINES_OUT is not set}
+# GCC has a distinct builtin-macro environment for .S (assembler-with-cpp).
+# The original C pipeline remains the default; do not silently reuse its
+# macro profile when validating native preprocessing of real Kbuild .S.
+language=${MINIPP_PREDEFINES_LANG:-c}
+[[ "$language" == c || "$language" == assembler-with-cpp ]] || {
+  echo "MINIPP_REFERENCE_PREDEFINES=FAIL unsupported_language:$language" >&2; exit 2;
+}
 shift_count=0
 
 mkdir -p "$(dirname "$output")"
@@ -11,7 +18,7 @@ tmp="$output.tmp"
 rm -f "$tmp"
 
 predef_args=("$@")
-"$real_cc" "${predef_args[@]}" -dM -E -x c /dev/null >"$tmp"
+"$real_cc" "${predef_args[@]}" -dM -E -x "$language" /dev/null >"$tmp"
 
 cat >>"$tmp" <<'EOF'
 #define __MINIPP_PP_CAT2(a, b) a##b
@@ -28,7 +35,7 @@ for capability in attribute builtin; do
     [[ -n "$name" ]] || continue
     value=$(
       printf '#if __has_%s(%s)\n1\n#else\n0\n#endif\n'         "$capability" "$name" |
-        "$real_cc" "${predef_args[@]}" -E -P -x c - |
+        "$real_cc" "${predef_args[@]}" -E -P -x "$language" - |
         tail -n 1
     )
     upper=${capability^^}
