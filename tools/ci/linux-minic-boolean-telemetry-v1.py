@@ -32,18 +32,30 @@ def main():
             raise SystemExit("MINIC_BOOLEAN_COUNTS=FAIL bad_owner="+owner)
     measured = {}
     repeat = Counter()
+    ancillary = {}
+    ancillary_repeat = Counter()
     for lineno, line in enumerate(args.metrics.read_text().splitlines(), 1):
         m = RECORD.fullmatch(line)
         if m is None:
             raise SystemExit(f"MINIC_BOOLEAN_COUNTS=FAIL bad_line={lineno}")
         owner = m[1]
-        if owner not in expected:
-            raise SystemExit("MINIC_BOOLEAN_COUNTS=FAIL unknown_owner="+owner)
+        pos = PurePosixPath(owner)
+        if pos.is_absolute() or ".." in pos.parts or len(pos.parts) < 2 or not owner.endswith(".o"):
+            raise SystemExit("MINIC_BOOLEAN_COUNTS=FAIL bad_measured_owner="+owner)
         queries, builds, fallbacks = map(int, m.groups()[1:])
         if fallbacks > queries or builds > queries:
             raise SystemExit("MINIC_BOOLEAN_COUNTS=FAIL invalid_counters="+owner)
-        measured[owner] = dict(queries=queries, builds=builds, fallbacks=fallbacks)
-        repeat[owner] += 1
+        row = dict(queries=queries, builds=builds, fallbacks=fallbacks)
+        if owner in expected:
+            measured[owner] = row
+            repeat[owner] += 1
+        else:
+            # Kbuild may regenerate auxiliary native C objects (for example
+            # vDSO) while producing the explicitly requested shard. The
+            # existing MiniC route audit authenticates those extra outputs;
+            # never misattribute their counters to this shard's owner set.
+            ancillary[owner] = row
+            ancillary_repeat[owner] += 1
     missing = sorted(expected - measured.keys())
     if missing:
         raise SystemExit("MINIC_BOOLEAN_COUNTS=FAIL missing="+",".join(missing[:12]))
@@ -54,6 +66,9 @@ def main():
         "owners":len(owners),
         "invocations":sum(repeat.values()),
         "repeated_owner_count":sum(v>1 for v in repeat.values()),
+        "ancillary_owners":len(ancillary),
+        "ancillary_invocations":sum(ancillary_repeat.values()),
+        "ancillary_per_owner":ancillary,
         "totals":totals,
         "top_queries":[{"owner":o,**v} for o,v in sorted(
             measured.items(),key=lambda item:item[1]["queries"],reverse=True)[:20]],
@@ -64,8 +79,9 @@ def main():
     }
     args.output.parent.mkdir(parents=True,exist_ok=True)
     args.output.write_text(json.dumps(report,indent=2,sort_keys=True)+"\n")
-    print("MINIC_BOOLEAN_COUNTS=PASS owners=%d invocations=%d recompiled_owners=%d queries=%d builds=%d fallbacks=%d" %
+    print("MINIC_BOOLEAN_COUNTS=PASS owners=%d invocations=%d recompiled_owners=%d ancillary_owners=%d ancillary_invocations=%d queries=%d builds=%d fallbacks=%d" %
           (len(owners),report["invocations"],report["repeated_owner_count"],
+           report["ancillary_owners"],report["ancillary_invocations"],
            totals["queries"],totals["builds"],totals["fallbacks"]),flush=True)
     for entry in report["top_queries"][:5]:
         print("MINIC_BOOLEAN_COUNTS_HOT owner=%s queries=%d builds=%d fallbacks=%d" %
