@@ -282,13 +282,40 @@ jobs:
 
 
   perf500:
-    if: (github.event_name == 'workflow_dispatch' && (inputs.mode == 'first500' || inputs.mode == 'all')) || (github.event_name == 'push' && (contains(github.event.head_commit.message, '[linux-perf500]') || contains(github.event.head_commit.message, '[minic-source-broad-ab]')))
+    if: (github.event_name == 'workflow_dispatch' && (inputs.mode == 'first500' || inputs.mode == 'all')) || (github.event_name == 'push' && (contains(github.event.head_commit.message, '[linux-perf500]') || contains(github.event.head_commit.message, '[minic-source-broad-ab]') || contains(github.event.head_commit.message, '[minic-current-phase20]')))
     runs-on: ubuntu-24.04
     timeout-minutes: 65
     env:
       DEBIAN_FRONTEND: noninteractive
     steps:
       - uses: actions/checkout@v4
+
+      # Opt-in current-source profile; no 500-owner paired retest.
+      - name: Build current Linux MiniC and diagnostics-only -O2 traced copy
+        if: contains(github.event.head_commit.message, '[minic-current-phase20]')
+        timeout-minutes: 12
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          root="$GITHUB_WORKSPACE/build/linux-perf-audit-v1"
+          mkdir -p "$root/evidence"
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
+            libc6-dev-riscv64-cross make python3 >/dev/null
+          MINIC_LINUX_FULL_CROSSBLOCK=1 MINIC_OPT_PURE_DISCARDED_ADDRESS_EQ=1 \
+            bash tools/ci/linux-runtime-build-minic-profile-v1.sh \
+              "$root/toolchain" "$root/evidence/phase20-source-profile"
+          python3 tools/ci/apply-perf-specialization-phase-trace-v0.py
+          git diff --check
+          make -j4 MODE=release CFLAGS="-Werror -g -fno-omit-frame-pointer" \
+            BUILD_DIR="$root/phase20-traced" \
+            "$root/phase20-traced/bin/minic" \
+            "$root/phase20-traced/bin/minic-cc" >/dev/null
+          test -x "$root/toolchain/bin/minic" && test -x "$root/phase20-traced/bin/minic"
+          sha256sum "$root/toolchain/bin/minic-cc" "$root/phase20-traced/bin/minic-cc" \
+            | tee "$root/evidence/phase20-compiler-identities.sha256"
+          python3 tools/ci/linux-perf-phase-trace-v1.py --self-test
+          echo 'MINIC_PHASE20_PROFILE_BUILD=PASS current_native=true instrumentation_only=true'
 
       - name: Build old and current native MiniC from certified source revisions
         if: contains(github.event.head_commit.message, '[minic-source-broad-ab]')
@@ -331,7 +358,7 @@ jobs:
           echo "MINIC_BROAD_AB=BUILT old_sha=$old_sha current_sha=$new_sha historical=$historical" | tee "$root/evidence/oldnew-identities.txt"
 
       - name: Build baseline and integrated optimization from clean sources
-        if: "!contains(github.event.head_commit.message, '[minic-source-broad-ab]')"
+        if: "!contains(github.event.head_commit.message, '[minic-source-broad-ab]') && !contains(github.event.head_commit.message, '[minic-current-phase20]')"
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -449,8 +476,60 @@ jobs:
           path: build/linux-perf-corpus
           key: linux-6.6.143-first500-rv64-v1-${{ hashFiles('tests/external/linux/batch_probe.sh', 'tests/external/linux/probe.sh', 'tests/external/linux/replay-indices.txt') }}
 
+      - name: Diagnose 20 stratified frozen Linux MiniC translation units
+        if: contains(github.event.head_commit.message, '[minic-current-phase20]')
+        timeout-minutes: 34
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          root="$GITHUB_WORKSPACE/build/linux-perf-audit-v1"
+          corpus="$GITHUB_WORKSPACE/build/linux-perf-corpus"
+          test "$(wc -l < "$corpus/inputs.sha256")" -eq 500
+          sha256sum --status -c "$corpus/inputs.sha256"
+          python3 tools/ci/linux-perf-current-phase20-v1.py \
+            --corpus "$corpus" \
+            --selection tests/compiler/perf/minic-linux-phase20-selected-2026-10-16.tsv \
+            --baseline "$root/toolchain/bin/minic" \
+            --traced "$root/phase20-traced/bin/minic" \
+            --out "$root/current-phase20" \
+            | tee "$root/evidence/phase20-verdict.txt"
+          grep -Fq 'MINIC_PHASE20=PASS files=20 assemblies_identical=20/20' \
+            "$root/evidence/phase20-verdict.txt"
+
+      - name: Attribute CPU hotspot of representative middle Linux file
+        if: contains(github.event.head_commit.message, '[minic-current-phase20]')
+        timeout-minutes: 18
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          root="$GITHUB_WORKSPACE/build/linux-perf-audit-v1"
+          corpus="$GITHUB_WORKSPACE/build/linux-perf-corpus"
+          test -s "$root/current-phase20/phase20.json"
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            valgrind >/dev/null
+          python3 - "$root/current-phase20/phase20.json" "$corpus" "$root" <<'PY'
+          import json,sys
+          from pathlib import Path
+          rows=json.loads(Path(sys.argv[1]).read_text())["owners"]
+          group=[x for x in rows if x["group"]=="middle"]
+          assert len(group)==5
+          one=max(group,key=lambda x:x["traced_wall_ms"])
+          frozen=(Path(sys.argv[2])/"kbuild"/one["input"]).resolve()
+          assert frozen.is_file() and frozen.stat().st_size>0
+          (Path(sys.argv[3])/"evidence"/"phase20-cpu-owner.txt").write_text(str(frozen)+"\n")
+          print("MINIC_CPU_PROFILE_OWNER="+one["object"])
+          PY
+          frozen=$(cat "$root/evidence/phase20-cpu-owner.txt")
+          python3 tools/ci/linux-perf-host-hotspot-profiler-v1.py \
+            --input "$frozen" \
+            --debug-compiler "$root/phase20-traced/bin/minic" \
+            --release-compiler "$root/toolchain/bin/minic" \
+            --out "$root/current-phase20/cpu" --timeout 720 \
+            | tee "$root/evidence/phase20-cpu-verdict.txt"
+          grep -Fq 'MINIC_HOTSPOT_PROFILE=PASS' "$root/evidence/phase20-cpu-verdict.txt"
+
       - name: Parser index fallback, scope, and zero-expression smokes
-        if: "!contains(github.event.head_commit.message, '[minic-source-broad-ab]')"
+        if: "!contains(github.event.head_commit.message, '[minic-source-broad-ab]') && !contains(github.event.head_commit.message, '[minic-current-phase20]')"
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -483,7 +562,7 @@ jobs:
           done
 
       - name: Release direct minic smoke on previously crashing TU
-        if: "!contains(github.event.head_commit.message, '[minic-source-broad-ab]')"
+        if: "!contains(github.event.head_commit.message, '[minic-source-broad-ab]') && !contains(github.event.head_commit.message, '[minic-current-phase20]')"
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -496,7 +575,7 @@ jobs:
           echo "TYPEDEF_RELEASE_SMOKE=PASS"
 
       - name: Diagnose typedef candidate with ASan on known-failing TU
-        if: "!contains(github.event.head_commit.message, '[minic-source-broad-ab]')"
+        if: "!contains(github.event.head_commit.message, '[minic-source-broad-ab]') && !contains(github.event.head_commit.message, '[minic-current-phase20]')"
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -512,7 +591,7 @@ jobs:
           echo "TYPEDEF_ASAN_SMOKE=PASS"
 
       - name: Paired integrated optimization A/B with exactly four workers
-        if: "!contains(github.event.head_commit.message, '[minic-source-broad-ab]')"
+        if: "!contains(github.event.head_commit.message, '[minic-source-broad-ab]') && !contains(github.event.head_commit.message, '[minic-current-phase20]')"
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -527,7 +606,7 @@ jobs:
           cp "$work/paired/output-fingerprints.tsv" "$work/evidence/"
 
       - name: Analyze A/B time distribution
-        if: "!contains(github.event.head_commit.message, '[minic-source-broad-ab]')"
+        if: "!contains(github.event.head_commit.message, '[minic-source-broad-ab]') && !contains(github.event.head_commit.message, '[minic-current-phase20]')"
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -637,6 +716,12 @@ jobs:
           name: linux-current-profile-first500-perf-v1
           path: |
             build/linux-perf-audit-v1/evidence
+            build/linux-perf-audit-v1/current-phase20/phase20.json
+            build/linux-perf-audit-v1/current-phase20/phase20.csv
+            build/linux-perf-audit-v1/current-phase20/*/phases.json
+            build/linux-perf-audit-v1/current-phase20/*/trace.log
+            build/linux-perf-audit-v1/current-phase20/cpu/*.txt
+            build/linux-perf-audit-v1/current-phase20/cpu/*.json
             build/linux-perf-audit-v1/oldnew500/differential.json
             build/linux-perf-materialize/batch-summary.txt
           retention-days: 7
