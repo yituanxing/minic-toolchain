@@ -1221,6 +1221,12 @@ jobs:
           tools="$GITHUB_WORKSPACE/build/minipp-seven-tools"
           make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$tools" \
             "$tools/bin/minic-cpp" "$tools/bin/minic-as"
+          pinned_macro_args=()
+          if [[ "${{ contains(github.event.head_commit.message, '[linux-minipp-pinned-full]') && '1' || '0' }}" == 1 ]]; then
+            profile="$GITHUB_WORKSPACE/tests/preprocessor/profiles/rv64-linux-6.6.143-gcc13.json.gz.b64"
+            test -s "$profile"
+            pinned_macro_args=(--profile-snapshot "$profile")
+          fi
           python3 tools/ci/minipp-linux-seven-native-stage-v1.py \
             --out "$GITHUB_WORKSPACE/build/linux-runtime-gcc/out" \
             --src "$src" --owner-list "$ev/all-objects.txt" \
@@ -1229,7 +1235,8 @@ jobs:
             --minic-cc "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain/bin/minic-cc" \
             --minias "$tools/bin/minic-as" \
             --shard ${{ matrix.shard }} --shards 7 \
-            --sample-per-shard ${{ contains(github.event.head_commit.message, '[linux-minipp-seven-full]') && '0' || '32' }}
+            --sample-per-shard ${{ contains(github.event.head_commit.message, '[linux-minipp-seven-full]') && '0' || '32' }} \
+            "${pinned_macro_args[@]}"
 
       - name: Preserve seven-way actual MiniPP to MiniC native evidence
         if: always() && contains(github.event.head_commit.message, '[linux-minipp-seven-integration]')
@@ -2164,12 +2171,16 @@ jobs:
           elif [[ "${{ contains(github.event.head_commit.message, '[linux-minipp-seven-replay]') && '1' || '0' }}" == 1 ]]; then
             shard_commit=041ae51e1ff2f3f1b9e30b489957e53cfc43dfa1
           fi
+          pinned_merge_args=()
+          if [[ "${{ contains(github.event.head_commit.message, '[linux-minipp-pinned-full]') && '1' || '0' }}" == 1 ]]; then
+            pinned_merge_args=(--pinned-profile "$GITHUB_WORKSPACE/tests/preprocessor/profiles/rv64-linux-6.6.143-gcc13.json.gz.b64")
+          fi
           python3 tools/ci/minipp-linux-seven-merge-v1.py \
             --artifacts "$GITHUB_WORKSPACE/build/minipp-seven-merge/incoming" \
             --owners "$ev/full-objects.txt" \
             --golden-out "$GITHUB_WORKSPACE/build/linux-runtime-gcc/out" \
             --dest "$GITHUB_WORKSPACE/build/minipp-seven-merge/native-objects" \
-            --commit "$shard_commit"
+            --commit "$shard_commit" "${pinned_merge_args[@]}"
           (cd build/minipp-seven-merge/native-objects; sha256sum --quiet -c ../native-full-manifest.sha256)
 
       # Exactly the 2064 fresh MiniC .s inputs verified by the existing
