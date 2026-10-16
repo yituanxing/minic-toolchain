@@ -161,5 +161,34 @@ riscv64-linux-gnu-readelf -nW "$native" >"$ev/native-notes.txt"
 grep -q 'Build ID:' "$ev/native-notes.txt" || {
   echo 'MINILD_VDSO32=FAIL missing_native_build_id' >&2; exit 30;
 }
+# Compare executable RISC-V instructions from the exact same objects,
+# rather than equating different but ABI-valid ELF metadata layouts.
+python3 - "$gnu" "$native" <<'PY_ELF32_TEXT'
+import struct
+import sys
+from pathlib import Path
+def text_bytes(path):
+    b = Path(path).read_bytes()
+    assert b[:6] == b'\x7fELF\x01\x01'
+    shoff = struct.unpack_from('<I', b, 32)[0]
+    shentsize, nsec, shnames = struct.unpack_from('<HHH', b, 46)
+    assert shentsize == 40 and nsec > 0 and shnames < nsec
+    str_header = shoff + shnames*shentsize
+    stroff, strsize = struct.unpack_from('<II', b, str_header+16)
+    strings = b[stroff:stroff+strsize]
+    for i in range(nsec):
+        hdr = shoff+i*shentsize
+        name, = struct.unpack_from('<I', b, hdr)
+        end = strings.find(b'\x00',name)
+        if end>=0 and strings[name:end] == b'.text':
+            off, size = struct.unpack_from('<II', b, hdr+16)
+            assert off+size <= len(b)
+            return b[off:off+size]
+    raise AssertionError('ELF32 missing .text')
+assert text_bytes(sys.argv[1]) == text_bytes(sys.argv[2]), \
+       'native ELF32 executable .text differs from GNU on same four objects'
+print('MINILD_VDSO32_TEXT=PASS GNU_same_inputs_text_bytes_equal=true',
+      'gnu_fallback=false')
+PY_ELF32_TEXT
 echo 'MINILD_VDSO32=PASS exact_Linux_ELF32_link=true native_output=true no_GNU_fallback=true cached_C=true'
 echo 'MINILD_VDSO32=NEEDS_FULL_RUNTIME_CERTIFICATION QEMU_P1_not_run_in_this_gate=true'
