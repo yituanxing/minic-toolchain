@@ -1434,10 +1434,15 @@ jobs:
             # preprocessing and GNU AS, measuring only the actual MiniC compiler.
             export MINIC_BOOLEAN_DOMAIN_PERF=1
             export MINIC_BOOLEAN_DOMAIN_COUNTS_LOG="$ev/boolean-domain-counts.tsv"
+            export MINIC_INTEGER_OWNER_PERF=1
+            export MINIC_INTEGER_OWNER_COUNTS_LOG="$ev/integer-owner-counts.tsv"
             export COHORT_GNU_PREFLIGHT_ALLOW_SEVEN_SHARD_VOLATILE=1
             export COHORT_PROFILE_STAGES=1
+            bash -n tests/external/linux/stage2_kbuild_cc.sh
+            python3 -m py_compile tools/ci/linux-minic-boolean-telemetry-v1.py
             : >"$MINIC_BOOLEAN_DOMAIN_COUNTS_LOG"
-            echo "MINIC_BOOLEAN_NATIVE_2064=START shard=${{ matrix.shard }}/7 GNU_PP=true native_minic=true GNU_AS=true counters=true"
+            : >"$MINIC_INTEGER_OWNER_COUNTS_LOG"
+            echo "MINIC_BOOLEAN_NATIVE_2064=START shard=${{ matrix.shard }}/7 GNU_PP=true native_minic=true GNU_AS=true boolean_and_integer_owner_counters=true"
           fi
           if [[ "${{ contains(github.event.head_commit.message, '[linux-perf-2064-ab]') }}" == true ]]; then
             export COHORT_PERF_2064_AB=1
@@ -1468,6 +1473,7 @@ jobs:
             python3 tools/ci/linux-minic-boolean-telemetry-v1.py \
               --owners "$ev/full-objects.txt" \
               --metrics "$ev/boolean-domain-counts.tsv" \
+              --integer-metrics "$ev/integer-owner-counts.tsv" \
               --output "$ev/boolean-domain-summary.json"
             echo "MINIC_BOOLEAN_NATIVE_2064=SHARD_PASS shard=${{ matrix.shard }}/7 objects=$n"
           fi
@@ -1495,6 +1501,7 @@ jobs:
             build/linux-runtime-gcc-shards-v1/shard-${{ matrix.shard }}/full-objects.txt
             build/linux-runtime-gcc-shards-v1/shard-${{ matrix.shard }}/cohort.log
             build/linux-runtime-gcc-shards-v1/shard-${{ matrix.shard }}/boolean-domain-counts.tsv
+            build/linux-runtime-gcc-shards-v1/shard-${{ matrix.shard }}/integer-owner-counts.tsv
             build/linux-runtime-gcc-shards-v1/shard-${{ matrix.shard }}/boolean-domain-summary.json
             build/linux-runtime-gcc-shards-v1/shard-${{ matrix.shard }}/stage-probe/stages.tsv
           if-no-files-found: error
