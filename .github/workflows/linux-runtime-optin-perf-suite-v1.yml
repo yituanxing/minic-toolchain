@@ -282,7 +282,7 @@ jobs:
 
 
   perf500:
-    if: (github.event_name == 'workflow_dispatch' && (inputs.mode == 'first500' || inputs.mode == 'all')) || (github.event_name == 'push' && (contains(github.event.head_commit.message, '[linux-perf500]') || contains(github.event.head_commit.message, '[minic-source-broad-ab]') || contains(github.event.head_commit.message, '[minic-current-phase20]') || contains(github.event.head_commit.message, '[minic-cpu-profile-only]') || contains(github.event.head_commit.message, '[minic-boolean-domain-ab20]')))
+    if: (github.event_name == 'workflow_dispatch' && (inputs.mode == 'first500' || inputs.mode == 'all')) || (github.event_name == 'push' && (contains(github.event.head_commit.message, '[linux-perf500]') || contains(github.event.head_commit.message, '[minic-source-broad-ab]') || contains(github.event.head_commit.message, '[minic-current-phase20]') || contains(github.event.head_commit.message, '[minic-cpu-profile-only]') || contains(github.event.head_commit.message, '[minic-boolean-domain-ab20]') || contains(github.event.head_commit.message, '[minic-boolean-domain-ab500]')))
     runs-on: ubuntu-24.04
     timeout-minutes: 65
     env:
@@ -333,7 +333,7 @@ jobs:
       # but requalify it against the CURRENT full-native MiniC source and
       # strictly SHA-pinned Kbuild .i in this single runner. No new job.
       - name: Build exact current and indexed Boolean Domain MiniC pair
-        if: contains(github.event.head_commit.message, '[minic-boolean-domain-ab20]')
+        if: contains(github.event.head_commit.message, '[minic-boolean-domain-ab20]') || contains(github.event.head_commit.message, '[minic-boolean-domain-ab500]')
         shell: bash
         timeout-minutes: 14
         run: |
@@ -400,7 +400,7 @@ jobs:
           echo "MINIC_BROAD_AB=BUILT old_sha=$old_sha current_sha=$new_sha historical=$historical" | tee "$root/evidence/oldnew-identities.txt"
 
       - name: Build baseline and integrated optimization from clean sources
-        if: "!contains(github.event.head_commit.message, '[minic-source-broad-ab]') && !contains(github.event.head_commit.message, '[minic-current-phase20]') && !contains(github.event.head_commit.message, '[minic-cpu-profile-only]') && !contains(github.event.head_commit.message, '[minic-boolean-domain-ab20]')"
+        if: "!contains(github.event.head_commit.message, '[minic-source-broad-ab]') && !contains(github.event.head_commit.message, '[minic-current-phase20]') && !contains(github.event.head_commit.message, '[minic-cpu-profile-only]') && !contains(github.event.head_commit.message, '[minic-boolean-domain-ab20]') && !contains(github.event.head_commit.message, '[minic-boolean-domain-ab500]')"
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -632,8 +632,52 @@ jobs:
           grep -Fq 'MINIC_BOOLEAN_DOMAIN_AB20=PASS owners=20 assembly_identical=20/20' \
             "$root/evidence/boolean-domain-ab20-verdict.txt"
 
+      # Widen the already-proven 20-TU Boolean Domain candidate to the exact
+      # frozen 500-TU corpus without adding a workflow or mutating production
+      # sources. The same-runner paired script enforces per-TU assembly hashes.
+      - name: Frozen Linux first500 current versus indexed Boolean Domain A/B
+        if: contains(github.event.head_commit.message, '[minic-boolean-domain-ab500]')
+        shell: bash
+        timeout-minutes: 48
+        run: |
+          set -Eeuo pipefail
+          root="$GITHUB_WORKSPACE/build/linux-perf-audit-v1"
+          corpus="$GITHUB_WORKSPACE/build/linux-perf-corpus"
+          test "$(wc -l < "$corpus/inputs.sha256")" -eq 500
+          sha256sum --status --check "$corpus/inputs.sha256"
+          test -x "$root/baseline-toolchain/bin/minic"
+          test -x "$root/boolean-indexed-toolchain/bin/minic"
+          python3 tools/ci/linux-perf-frozen-corpus-differential-v1.py \
+            --corpus "$corpus" \
+            --baseline-driver "$root/baseline-toolchain/bin/minic" \
+            --candidate-driver "$root/boolean-indexed-toolchain/bin/minic" \
+            --jobs 4 --balanced-order --out "$root/boolean-domain-ab500" \
+            | tee "$root/evidence/boolean-domain-ab500-verdict.txt"
+          grep -Fq 'MINIC_FROZEN_DIFF=PASS selected=500 identical=500' \
+            "$root/evidence/boolean-domain-ab500-verdict.txt"
+          grep -Fq 'MINIC_FROZEN_PAIRED=PASS owners=500 balanced_order=true' \
+            "$root/evidence/boolean-domain-ab500-verdict.txt"
+          python3 - "$root/boolean-domain-ab500/differential.json" <<'PY' \
+            | tee "$root/evidence/boolean-domain-ab500-summary.txt"
+          import json, statistics, sys
+          from pathlib import Path
+          d=json.loads(Path(sys.argv[1]).read_text())
+          rows=d["results"]
+          assert len(rows)==500 and d["identical"]==500 and d["mismatch_count"]==0
+          assert d["balanced_order"] and d["baseline_cc_sha256"]!=d["candidate_cc_sha256"]
+          old=sum(r["baseline"]["wall_ms"] for r in rows)
+          new=sum(r["candidate"]["wall_ms"] for r in rows)
+          assert old>0 and new>0
+          print("MINIC_BOOLEAN_DOMAIN_AB500=PASS owners=500 assembly_identical=500/500 "
+                "baseline_total_ms=%.3f candidate_total_ms=%.3f speedup=%.5fx "
+                "scope=frozen_first500_not_QEMU" % (old,new,old/new))
+          print("MINIC_BOOLEAN_DOMAIN_AB500=DETAILS regressions=%d median_owner_speedup=%.4fx" %
+                (sum(r["candidate"]["wall_ms"]>r["baseline"]["wall_ms"] for r in rows),
+                 statistics.median(r["baseline"]["wall_ms"]/r["candidate"]["wall_ms"] for r in rows)))
+          PY
+
       - name: Parser index fallback, scope, and zero-expression smokes
-        if: "!contains(github.event.head_commit.message, '[minic-source-broad-ab]') && !contains(github.event.head_commit.message, '[minic-current-phase20]') && !contains(github.event.head_commit.message, '[minic-cpu-profile-only]') && !contains(github.event.head_commit.message, '[minic-boolean-domain-ab20]')"
+        if: "!contains(github.event.head_commit.message, '[minic-source-broad-ab]') && !contains(github.event.head_commit.message, '[minic-current-phase20]') && !contains(github.event.head_commit.message, '[minic-cpu-profile-only]') && !contains(github.event.head_commit.message, '[minic-boolean-domain-ab20]') && !contains(github.event.head_commit.message, '[minic-boolean-domain-ab500]')"
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -666,7 +710,7 @@ jobs:
           done
 
       - name: Release direct minic smoke on previously crashing TU
-        if: "!contains(github.event.head_commit.message, '[minic-source-broad-ab]') && !contains(github.event.head_commit.message, '[minic-current-phase20]') && !contains(github.event.head_commit.message, '[minic-cpu-profile-only]') && !contains(github.event.head_commit.message, '[minic-boolean-domain-ab20]')"
+        if: "!contains(github.event.head_commit.message, '[minic-source-broad-ab]') && !contains(github.event.head_commit.message, '[minic-current-phase20]') && !contains(github.event.head_commit.message, '[minic-cpu-profile-only]') && !contains(github.event.head_commit.message, '[minic-boolean-domain-ab20]') && !contains(github.event.head_commit.message, '[minic-boolean-domain-ab500]')"
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -679,7 +723,7 @@ jobs:
           echo "TYPEDEF_RELEASE_SMOKE=PASS"
 
       - name: Diagnose typedef candidate with ASan on known-failing TU
-        if: "!contains(github.event.head_commit.message, '[minic-source-broad-ab]') && !contains(github.event.head_commit.message, '[minic-current-phase20]') && !contains(github.event.head_commit.message, '[minic-cpu-profile-only]') && !contains(github.event.head_commit.message, '[minic-boolean-domain-ab20]')"
+        if: "!contains(github.event.head_commit.message, '[minic-source-broad-ab]') && !contains(github.event.head_commit.message, '[minic-current-phase20]') && !contains(github.event.head_commit.message, '[minic-cpu-profile-only]') && !contains(github.event.head_commit.message, '[minic-boolean-domain-ab20]') && !contains(github.event.head_commit.message, '[minic-boolean-domain-ab500]')"
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -695,7 +739,7 @@ jobs:
           echo "TYPEDEF_ASAN_SMOKE=PASS"
 
       - name: Paired integrated optimization A/B with exactly four workers
-        if: "!contains(github.event.head_commit.message, '[minic-source-broad-ab]') && !contains(github.event.head_commit.message, '[minic-current-phase20]') && !contains(github.event.head_commit.message, '[minic-cpu-profile-only]') && !contains(github.event.head_commit.message, '[minic-boolean-domain-ab20]')"
+        if: "!contains(github.event.head_commit.message, '[minic-source-broad-ab]') && !contains(github.event.head_commit.message, '[minic-current-phase20]') && !contains(github.event.head_commit.message, '[minic-cpu-profile-only]') && !contains(github.event.head_commit.message, '[minic-boolean-domain-ab20]') && !contains(github.event.head_commit.message, '[minic-boolean-domain-ab500]')"
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -710,7 +754,7 @@ jobs:
           cp "$work/paired/output-fingerprints.tsv" "$work/evidence/"
 
       - name: Analyze A/B time distribution
-        if: "!contains(github.event.head_commit.message, '[minic-source-broad-ab]') && !contains(github.event.head_commit.message, '[minic-current-phase20]') && !contains(github.event.head_commit.message, '[minic-cpu-profile-only]') && !contains(github.event.head_commit.message, '[minic-boolean-domain-ab20]')"
+        if: "!contains(github.event.head_commit.message, '[minic-source-broad-ab]') && !contains(github.event.head_commit.message, '[minic-current-phase20]') && !contains(github.event.head_commit.message, '[minic-cpu-profile-only]') && !contains(github.event.head_commit.message, '[minic-boolean-domain-ab20]') && !contains(github.event.head_commit.message, '[minic-boolean-domain-ab500]')"
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -820,6 +864,7 @@ jobs:
           name: linux-current-profile-first500-perf-v1
           path: |
             build/linux-perf-audit-v1/evidence
+            build/linux-perf-audit-v1/boolean-domain-ab500/differential.json
             build/linux-perf-audit-v1/boolean-domain-ab20/boolean-domain-paired20.json
             build/linux-perf-audit-v1/boolean-domain-ab20/*/paired-result.json
             build/linux-perf-audit-v1/current-phase20/phase20.json
