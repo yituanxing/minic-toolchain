@@ -282,7 +282,7 @@ jobs:
 
 
   perf500:
-    if: (github.event_name == 'workflow_dispatch' && (inputs.mode == 'first500' || inputs.mode == 'all')) || (github.event_name == 'push' && (contains(github.event.head_commit.message, '[linux-perf500]') || contains(github.event.head_commit.message, '[minic-source-broad-ab]') || contains(github.event.head_commit.message, '[minic-current-phase20]')))
+    if: (github.event_name == 'workflow_dispatch' && (inputs.mode == 'first500' || inputs.mode == 'all')) || (github.event_name == 'push' && (contains(github.event.head_commit.message, '[linux-perf500]') || contains(github.event.head_commit.message, '[minic-source-broad-ab]') || contains(github.event.head_commit.message, '[minic-current-phase20]') || contains(github.event.head_commit.message, '[minic-cpu-profile-only]')))
     runs-on: ubuntu-24.04
     timeout-minutes: 65
     env:
@@ -292,7 +292,7 @@ jobs:
 
       # Opt-in current-source profile; no 500-owner paired retest.
       - name: Build current Linux MiniC and diagnostics-only -O2 traced copy
-        if: contains(github.event.head_commit.message, '[minic-current-phase20]')
+        if: contains(github.event.head_commit.message, '[minic-current-phase20]') || contains(github.event.head_commit.message, '[minic-cpu-profile-only]')
         timeout-minutes: 12
         shell: bash
         run: |
@@ -305,7 +305,11 @@ jobs:
           MINIC_LINUX_FULL_CROSSBLOCK=1 MINIC_OPT_PURE_DISCARDED_ADDRESS_EQ=1 \
             bash tools/ci/linux-runtime-build-minic-profile-v1.sh \
               "$root/toolchain" "$root/evidence/phase20-source-profile"
-          python3 tools/ci/apply-perf-specialization-phase-trace-v0.py
+          # CPU-only mode profiles the exact same algorithms with debug
+          # symbols but without per-stage instrumentation.
+          if [[ "${{ contains(github.event.head_commit.message, '[minic-current-phase20]') && '1' || '0' }}" == 1 ]]; then
+            python3 tools/ci/apply-perf-specialization-phase-trace-v0.py
+          fi
           git diff --check
           make -j4 MODE=release CFLAGS="-Werror -g -fno-omit-frame-pointer" \
             BUILD_DIR="$root/phase20-traced" \
@@ -358,7 +362,7 @@ jobs:
           echo "MINIC_BROAD_AB=BUILT old_sha=$old_sha current_sha=$new_sha historical=$historical" | tee "$root/evidence/oldnew-identities.txt"
 
       - name: Build baseline and integrated optimization from clean sources
-        if: "!contains(github.event.head_commit.message, '[minic-source-broad-ab]') && !contains(github.event.head_commit.message, '[minic-current-phase20]')"
+        if: "!contains(github.event.head_commit.message, '[minic-source-broad-ab]') && !contains(github.event.head_commit.message, '[minic-current-phase20]') && !contains(github.event.head_commit.message, '[minic-cpu-profile-only]')"
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -497,17 +501,41 @@ jobs:
             "$root/evidence/phase20-verdict.txt"
 
       - name: Attribute CPU hotspot of representative middle Linux file
-        if: contains(github.event.head_commit.message, '[minic-current-phase20]')
-        timeout-minutes: 18
+        if: contains(github.event.head_commit.message, '[minic-current-phase20]') || contains(github.event.head_commit.message, '[minic-cpu-profile-only]')
+        timeout-minutes: 35
         shell: bash
         run: |
           set -Eeuo pipefail
           root="$GITHUB_WORKSPACE/build/linux-perf-audit-v1"
           corpus="$GITHUB_WORKSPACE/build/linux-perf-corpus"
-          test -s "$root/current-phase20/phase20.json"
           sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
             valgrind >/dev/null
-          python3 - "$root/current-phase20/phase20.json" "$corpus" "$root" <<'PY'
+          mkdir -p "$root/current-phase20/cpu"
+          if [[ "${{ contains(github.event.head_commit.message, '[minic-cpu-profile-only]') && '1' || '0' }}" == 1 ]]; then
+            # CPU-only retest: a 0.7s medium file and a known Boolean-heavy
+            # 5.8s TU. Both are members of the already SHA-verified 500.
+            python3 - "$corpus" "$root" <<'PY'
+          from pathlib import Path
+          import sys
+          corpus,root=Path(sys.argv[1]),Path(sys.argv[2])
+          entries={}
+          for line in (corpus/"selected-tus.txt").read_text().splitlines():
+              col=line.split("\t",3)
+              if len(col)!=4: raise SystemExit("bad frozen corpus row")
+              entries[col[1]]=col[2]
+          if len(entries)!=500: raise SystemExit("not an exact frozen 500")
+          targets=("fs/ext4/fsync.o","kernel/bpf/btf.o")
+          with (root/"evidence"/"phase20-cpu-inputs.tsv").open("w") as fd:
+              for owner in targets:
+                  if owner not in entries: raise SystemExit("absent frozen owner "+owner)
+                  path=(corpus/"kbuild"/entries[owner]).resolve()
+                  if not path.is_relative_to((corpus/"kbuild").resolve()) or not path.is_file():
+                      raise SystemExit("missing authentic input "+str(path))
+                  print(owner+"\t"+str(path),file=fd)
+          PY
+          else
+            test -s "$root/current-phase20/phase20.json"
+            python3 - "$root/current-phase20/phase20.json" "$corpus" "$root" <<'PY'
           import json,sys
           from pathlib import Path
           rows=json.loads(Path(sys.argv[1]).read_text())["owners"]
@@ -516,33 +544,36 @@ jobs:
           one=max(group,key=lambda x:x["traced_wall_ms"])
           frozen=(Path(sys.argv[2])/"kbuild"/one["input"]).resolve()
           assert frozen.is_file() and frozen.stat().st_size>0
-          (Path(sys.argv[3])/"evidence"/"phase20-cpu-owner.txt").write_text(str(frozen)+"\n")
-          print("MINIC_CPU_PROFILE_OWNER="+one["object"])
+          (Path(sys.argv[3])/"evidence"/"phase20-cpu-inputs.tsv").write_text(
+              one["object"]+"\t"+str(frozen)+"\n")
           PY
-          frozen=$(cat "$root/evidence/phase20-cpu-owner.txt")
-          python3 tools/ci/linux-perf-host-hotspot-profiler-v1.py \
-            --input "$frozen" \
-            --debug-compiler "$root/phase20-traced/bin/minic-cc" \
-            --release-compiler "$root/toolchain/bin/minic-cc" \
-            --out "$root/current-phase20/cpu" --timeout 720 \
-            | tee "$root/evidence/phase20-cpu-verdict.txt"
-          grep -Fq 'MINIC_HOTSPOT_PROFILE=PASS' "$root/evidence/phase20-cpu-verdict.txt"
-          # Fail closed if profiling only saw the driver/ELF loader.
-          # Only minic-cc actually processes the preprocessed Linux TU.
-          python3 - "$root/current-phase20/cpu" <<'PY'
-          import json, sys
+          fi
+          while IFS="$(printf '\t')" read -r owner frozen; do
+            safe=${owner//\//_}
+            safe=${safe%.o}
+            python3 tools/ci/linux-perf-host-hotspot-profiler-v1.py \
+              --input "$frozen" \
+              --debug-compiler "$root/phase20-traced/bin/minic-cc" \
+              --release-compiler "$root/toolchain/bin/minic-cc" \
+              --out "$root/current-phase20/cpu/$safe" --timeout 720 \
+              | tee "$root/evidence/phase20-cpu-$safe.txt"
+            grep -Fq 'MINIC_HOTSPOT_PROFILE=PASS' "$root/evidence/phase20-cpu-$safe.txt"
+            # Fail closed if Callgrind recorded only ld-linux or the driver.
+            python3 - "$root/current-phase20/cpu/$safe" "$owner" <<'PY'
+          import json,sys
           from pathlib import Path
-          d=Path(sys.argv[1])
+          d=Path(sys.argv[1]); owner=sys.argv[2]
           summary=json.loads((d/"summary.json").read_text())
           assert summary["assembly_equal"] and summary["debug_cc_sha256"]!=summary["release_cc_sha256"]
           if summary["method"]=="callgrind-instructions-calls":
               annotated=(d/"callgrind-inclusive.txt").read_text(errors="replace")
               assert "src/compiler/compiler.c" in annotated or "minic_compile_preprocessed_file" in annotated, "CPU profiler captured only loader/driver, not minic-cc"
-          print("MINIC_CPU_HOTSPOT_PROFILER_PROVEN=PASS compiler=minic-cc driver_only=false")
+          print("MINIC_CPU_HOTSPOT_PROFILER_PROVEN=PASS owner="+owner+" compiler=minic-cc")
           PY
+          done < "$root/evidence/phase20-cpu-inputs.tsv"
 
       - name: Parser index fallback, scope, and zero-expression smokes
-        if: "!contains(github.event.head_commit.message, '[minic-source-broad-ab]') && !contains(github.event.head_commit.message, '[minic-current-phase20]')"
+        if: "!contains(github.event.head_commit.message, '[minic-source-broad-ab]') && !contains(github.event.head_commit.message, '[minic-current-phase20]') && !contains(github.event.head_commit.message, '[minic-cpu-profile-only]')"
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -575,7 +606,7 @@ jobs:
           done
 
       - name: Release direct minic smoke on previously crashing TU
-        if: "!contains(github.event.head_commit.message, '[minic-source-broad-ab]') && !contains(github.event.head_commit.message, '[minic-current-phase20]')"
+        if: "!contains(github.event.head_commit.message, '[minic-source-broad-ab]') && !contains(github.event.head_commit.message, '[minic-current-phase20]') && !contains(github.event.head_commit.message, '[minic-cpu-profile-only]')"
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -588,7 +619,7 @@ jobs:
           echo "TYPEDEF_RELEASE_SMOKE=PASS"
 
       - name: Diagnose typedef candidate with ASan on known-failing TU
-        if: "!contains(github.event.head_commit.message, '[minic-source-broad-ab]') && !contains(github.event.head_commit.message, '[minic-current-phase20]')"
+        if: "!contains(github.event.head_commit.message, '[minic-source-broad-ab]') && !contains(github.event.head_commit.message, '[minic-current-phase20]') && !contains(github.event.head_commit.message, '[minic-cpu-profile-only]')"
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -604,7 +635,7 @@ jobs:
           echo "TYPEDEF_ASAN_SMOKE=PASS"
 
       - name: Paired integrated optimization A/B with exactly four workers
-        if: "!contains(github.event.head_commit.message, '[minic-source-broad-ab]') && !contains(github.event.head_commit.message, '[minic-current-phase20]')"
+        if: "!contains(github.event.head_commit.message, '[minic-source-broad-ab]') && !contains(github.event.head_commit.message, '[minic-current-phase20]') && !contains(github.event.head_commit.message, '[minic-cpu-profile-only]')"
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -619,7 +650,7 @@ jobs:
           cp "$work/paired/output-fingerprints.tsv" "$work/evidence/"
 
       - name: Analyze A/B time distribution
-        if: "!contains(github.event.head_commit.message, '[minic-source-broad-ab]') && !contains(github.event.head_commit.message, '[minic-current-phase20]')"
+        if: "!contains(github.event.head_commit.message, '[minic-source-broad-ab]') && !contains(github.event.head_commit.message, '[minic-current-phase20]') && !contains(github.event.head_commit.message, '[minic-cpu-profile-only]')"
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -735,6 +766,8 @@ jobs:
             build/linux-perf-audit-v1/current-phase20/*/trace.log
             build/linux-perf-audit-v1/current-phase20/cpu/*.txt
             build/linux-perf-audit-v1/current-phase20/cpu/*.json
+            build/linux-perf-audit-v1/current-phase20/cpu/*/*.txt
+            build/linux-perf-audit-v1/current-phase20/cpu/*/*.json
             build/linux-perf-audit-v1/oldnew500/differential.json
             build/linux-perf-materialize/batch-summary.txt
           retention-days: 7
