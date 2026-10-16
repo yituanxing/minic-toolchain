@@ -1623,6 +1623,8 @@ jobs:
             build/minild-cached-vdso32-v1/*.stderr
             build/minild-cached-vdso32-v1/*.stdout
             build/minild-cached-vdso32-v1/*.sha256
+            build/minild-cached-vdso32-v1/*.o
+            build/minild-cached-vdso32-v1/*.so
           if-no-files-found: warn
           retention-days: 7
 
