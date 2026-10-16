@@ -1705,6 +1705,22 @@ jobs:
           assembler=$(sha256sum "$(command -v riscv64-linux-gnu-as)" | cut -d' ' -f1)
           echo "FULL_MINIC_KEY=gnu-minic-objects-v1-eeb04f304ebfb97a1079c187dc0c2ea3cc61fc50a55aa3cc776237c16ab19bbe-$profile-$objects-$gcc-$assembler" >>"$GITHUB_ENV"
 
+      # One-time, opt-in inventory for a pinned GCC-free RV64 predefine profile.
+      # It reads the immutable GNU .cmd / Linux fixture, never recompiles C.
+      # Existing QEMU validation remains unchanged outside this diagnostic gate.
+      - name: Capture real Linux target macro profiles for native MiniPP
+        if: contains(github.event.head_commit.message, '[linux-minipp-predefine-capture]')
+        shell: bash
+        timeout-minutes: 12
+        run: |
+          set -Eeuo pipefail
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1"
+          python3 tools/ci/minipp-linux-target-predefines-snapshot-v1.py \
+            --golden "$GITHUB_WORKSPACE/build/linux-runtime-gcc/out" \
+            --linux-src "$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0/linux-6.6.143" \
+            --owners "$ev/full-objects.txt" \
+            --output "$ev/minipp-target-predefines-snapshot.json"
+
       # The exact 2064 MiniC .o cache was already SHA/ABI-certified in
       # full CI #38204602644. This lane only resolves P1 crash symbol owners
       # and compares stack prologues with the certified pure-GNU .o pool.
