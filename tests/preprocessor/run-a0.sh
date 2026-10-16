@@ -916,7 +916,18 @@ SG_MOD("x %u", SG_VALUE - 1)
 EOF
 run_exact source-generated-head-through-gnu-chain
 
+# Real Kbuild maps an absolute source prefix out of __FILE__ bug-table
+# literals. This must change macro expansion, not include resolution.
+cat >"$work/macro-prefix-map.h" <<'EOF'
+const char *mapped_header_path = __FILE__;
+EOF
+cat >"$work/macro-prefix-map.c" <<'EOF'
+const char *mapped_source_path = __FILE__;
+#include "macro-prefix-map.h"
+EOF
+run_exact macro-prefix-map "-fmacro-prefix-map=$work/="
+
 MINIPP="$MINIPP" BUILD_DIR="$BUILD_DIR" HOST_CPP="$REFERENCE_CPP" \
   sh tests/preprocessor/run-include-next.sh
 
-printf 'MINIPP_A0_EXACT=PASS cases=95 mode=byte-identical include_next=PASS\n'
+printf 'MINIPP_A0_EXACT=PASS cases=96 mode=byte-identical include_next=PASS\n'
