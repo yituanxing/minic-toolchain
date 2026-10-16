@@ -17,6 +17,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import tempfile
 import sys
 import time
 
@@ -47,19 +48,35 @@ def pp_args(args: list[str]) -> list[str]:
     return out
 
 
-def run(cmd: list[str], cwd: Path, output: Path) -> int:
-    """Return measured wall milliseconds for this actual subprocess only."""
+def run(cmd: list[str], cwd: Path, output: Path) -> tuple[int, int]:
+    """Actual child wall time and per-process peak RSS from Linux wait4.
+
+    Avoid a second /usr/bin/time wrapper process, false peak-RSS estimates,
+    and reading potentially large stderr/stdout into process RAM.
+    """
     started_ns = time.monotonic_ns()
-    p = subprocess.run(cmd, cwd=cwd, text=True, stdout=subprocess.PIPE,
-                       stderr=subprocess.PIPE, errors="replace")
-    elapsed_ms = (time.monotonic_ns() - started_ns) // 1_000_000
-    output.write_text("COMMAND " + json.dumps(cmd) + "\n"
-                      + f"returncode={p.returncode}\nelapsed_ms={elapsed_ms}\n"
-                      + f"stdout:\n{p.stdout[-4000:]}"
-                      + f"\nstderr:\n{p.stderr[-11000:]}\n")
+    with tempfile.TemporaryFile(mode="w+b") as stdout, \
+         tempfile.TemporaryFile(mode="w+b") as stderr:
+        p = subprocess.Popen(cmd, cwd=cwd, stdout=stdout, stderr=stderr)
+        pid, status, usage = os.wait4(p.pid, 0)
+        assert pid == p.pid
+        p.returncode = os.waitstatus_to_exitcode(status)
+        elapsed_ms = (time.monotonic_ns() - started_ns) // 1_000_000
+        maxrss_kb = usage.ru_maxrss
+        def last_text(stream, bound: int) -> str:
+            stream.seek(0, 2)
+            stream.seek(max(0, stream.tell() - bound))
+            return stream.read().decode(errors="replace")
+        output.write_text("COMMAND " + json.dumps(cmd) + "\n"
+                          + f"returncode={p.returncode}\nelapsed_ms={elapsed_ms}\n"
+                          + f"maxrss_kb={maxrss_kb}\n"
+                          + f"user_cpu_ms={round(usage.ru_utime * 1000)}\n"
+                          + f"system_cpu_ms={round(usage.ru_stime * 1000)}\n"
+                          + f"stdout:\n{last_text(stdout, 4000)}"
+                          + f"\nstderr:\n{last_text(stderr, 11000)}\n")
     if p.returncode:
         raise RuntimeError(f"returncode={p.returncode}: {cmd[0]}")
-    return elapsed_ms
+    return elapsed_ms, maxrss_kb
 
 
 def main() -> int:
@@ -115,7 +132,8 @@ def main() -> int:
         item.mkdir(exist_ok=True)
         old_sha = sha(out / object_name)
         result = dict(object=object_name, source=row["source"], status="FAIL",
-                      frozen_original_sha=old_sha, timings_ms={})
+                      frozen_original_sha=old_sha, timings_ms={},
+                      peak_rss_kb={})
         rows.append(result)
         try:
             context = predef_args(row["args"])
@@ -149,10 +167,10 @@ def main() -> int:
                       *pp_args(row["args"]), row["source"]]
             reference = item / "gnu.i"
             mini = item / "mini.i"
-            result["timings_ms"]["gnu_pp_oracle"] = run(
+            result["timings_ms"]["gnu_pp_oracle"], result["peak_rss_kb"]["gnu_pp_oracle"] = run(
                 ["riscv64-linux-gnu-gcc", *common, "-o", str(reference)],
                 out, item / "reference.log")
-            result["timings_ms"]["minipp"] = run(
+            result["timings_ms"]["minipp"], result["peak_rss_kb"]["minipp"] = run(
                 [str(args.minipp.resolve()), *common, "-o", str(mini)],
                 out, item / "minipp.log")
             result["gnu_pp_sha"] = sha(reference)
@@ -168,14 +186,14 @@ def main() -> int:
                 raise RuntimeError("MiniPP-and-GNU-preprocessed-bytes-differ")
             asm = item / "minic.s"
             obj = item / "minias.o"
-            result["timings_ms"]["minic"] = run(
+            result["timings_ms"]["minic"], result["peak_rss_kb"]["minic"] = run(
                 [str(args.minic_cc.resolve()), "-S", str(mini), "-o", str(asm)],
                 out, item / "minic.log")
             march = next((x for x in row["args"] if x.startswith("-march=")),
                          "-march=rv64imac")
             abi = next((x for x in row["args"] if x.startswith("-mabi=")),
                        "-mabi=lp64")
-            result["timings_ms"]["minias"] = run(
+            result["timings_ms"]["minias"], result["peak_rss_kb"]["minias"] = run(
                 [str(args.minias.resolve()), march, abi, "-o", str(obj), str(asm)],
                 out, item / "minias.log")
             elf = obj.read_bytes()
@@ -205,17 +223,24 @@ def main() -> int:
             print(f"MINIPP_SEVEN_NATIVE_OBJECT=FAIL worker={args.shard}/7 "
                   f"object={object_name} reason={exc}", flush=True)
     # Stage-by-stage wall time and produced bytes are additive across owners;
-    # per-tool MaxRSS is intentionally NOT guessed from process wall time.
-    # An isolated /usr/bin/time gate measures peak RSS at the linker boundary.
+    # exact per-child peak RSS is measured using Linux wait4 and aggregated as
+    # maximum, not an invalid sum of per-process memory peaks. This is NOT
+    # the concurrent job/cgroup memory peak.
     profile_stages = ("macro_predefines", "gnu_pp_oracle",
                       "minipp", "minic", "minias")
     stage_totals_ms = {
         name: sum(row.get("timings_ms", {}).get(name, 0) for row in rows)
         for name in profile_stages
     }
+    stage_peak_rss_kb = {
+        name: max((row.get("peak_rss_kb", {}).get(name, 0) for row in rows),
+                  default=0)
+        for name in ("gnu_pp_oracle", "minipp", "minic", "minias")
+    }
     (stage / "performance-summary.json").write_text(json.dumps({
         "worker": args.shard, "selected": len(rows),
         "stage_wall_ms_sum": stage_totals_ms,
+        "stage_max_child_rss_kb": stage_peak_rss_kb,
         "minipp_output_bytes_sum": sum(row.get("minipp_input_bytes", 0)
                                        for row in rows),
         "minic_assembly_bytes_sum": sum(row.get("minic_assembly_bytes", 0)
@@ -223,7 +248,7 @@ def main() -> int:
         "native_object_bytes_sum": sum(row.get("native_object_bytes", 0)
                                        for row in rows),
         "measurement_scope": "actual per-command wall times, not full runner time",
-        "maxrss_kb": None,
+        "memory_scope": "max individual process RSS, not concurrent cgroup peak",
     }, indent=2, sort_keys=True) + "\n")
     slowest = sorted((row for row in rows if row["status"] == "PASS"),
                      key=lambda row: row["timings_ms"].get("minic", 0),
@@ -234,8 +259,10 @@ def main() -> int:
               f"object={row['object']}", flush=True)
     print(f"MINIPP_SEVEN_PERFORMANCE worker={args.shard}/7 "
           + " ".join(f"{stage}_ms={total}" for stage, total in stage_totals_ms.items())
-          + " memory_peak=not_measured"
-          + " source=per_subprocess_monotonic_wall", flush=True)
+          + " " + " ".join(f"{stage}_maxrss_kb={rss}"
+                          for stage, rss in stage_peak_rss_kb.items())
+          + " memory_scope=max_individual_child"
+          + " source=monotonic_wall_and_linux_wait4", flush=True)
     (stage / "results.json").write_text(json.dumps(rows, indent=2, sort_keys=True) + "\n")
     (stage / "native-manifest.sha256").write_text("".join(
         f'{row["native_object_sha"]}  native-objects/{row["object"]}\n'
