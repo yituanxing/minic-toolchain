@@ -1249,6 +1249,7 @@ jobs:
           name: minipp-native-shard-${{ matrix.shard }}-${{ github.sha }}
           path: |
             build/minipp-seven-native/shard-${{ matrix.shard }}/summary.json
+            build/minipp-seven-native/shard-${{ matrix.shard }}/performance-summary.json
             build/minipp-seven-native/shard-${{ matrix.shard }}/results.json
             build/minipp-seven-native/shard-${{ matrix.shard }}/native-manifest.sha256
             build/minipp-seven-native/shard-${{ matrix.shard }}/native-objects/**/*.o
