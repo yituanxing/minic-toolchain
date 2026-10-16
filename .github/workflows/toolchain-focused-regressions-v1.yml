@@ -89,6 +89,9 @@ jobs:
               --snapshot tests/preprocessor/profiles/rv64-linux-6.6.143-gcc13.json.gz.b64 \
               --report "$work/minipp-profile-diff.json"
           fi
+          if [[ "${{ contains(github.event.head_commit.message, '[linux-minipp-native-macro-rules]') && '1' || '0' }}" == 1 ]]; then
+            python3 tools/ci/minipp-linux-native-macro-rules-v1.py --self-check
+          fi
 
           MINIC="$minic" \
           BUILD_DIR="$work" \
