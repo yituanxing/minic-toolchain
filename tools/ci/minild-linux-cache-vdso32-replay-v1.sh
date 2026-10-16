@@ -23,11 +23,14 @@ inputs=(
   "$rel/note.o"
 )
 # Keep per-input ELF metadata to detect mistaken ABI/cache selection.
+# Include linker inputs' actual relocations/symbol tables: these describe
+# the genuine ELF32 semantic frontier rather than a guessed ABI subset.
 for object in "${inputs[@]}"; do
-  riscv64-linux-gnu-readelf -Wh "$out/$object" | \
-    grep -E 'Class:|Type:|Machine:|Flags:' \
-    >>"$ev/input-elf-summary.txt" || true
+  printf '\n===== %s =====\n' "$object" >>"$ev/input-elf-summary.txt"
+  riscv64-linux-gnu-readelf -Wh -SW -Wr -Ws "$out/$object" \
+    >>"$ev/input-elf-summary.txt"
 done
+cp "$out/$rel/compat_vdso.lds" "$ev/compat-vdso-actual-linker-script.txt"
 for f in "${inputs[@]}" "$rel/compat_vdso.lds"; do
   if [[ ! -s "$out/$f" ]]; then
     printf 'MINILD_VDSO32=INCONCLUSIVE missing_frozen_input=%s\n' "$f" >&2
