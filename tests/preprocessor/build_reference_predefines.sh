@@ -18,6 +18,17 @@ tmp="$output.tmp"
 rm -f "$tmp"
 
 predef_args=("$@")
+# Strict opt-in for source-pinned exact RV64 Linux builtin profiles. No GNU
+# process executes on this path, and unsupported option sets fail closed.
+# The GNU path below remains the independent byte-identity reference oracle.
+if [[ -n "${MINIPP_PREDEFINES_SNAPSHOT:-}" ]]; then
+  rm -f "$tmp"
+  root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
+  python3 "$root/tools/ci/minipp-linux-pinned-profile-v1.py" \
+    --snapshot "$MINIPP_PREDEFINES_SNAPSHOT" \
+    --language "$language" --output "$output" -- "${predef_args[@]}"
+  exit $?
+fi
 "$real_cc" "${predef_args[@]}" -dM -E -x "$language" /dev/null >"$tmp"
 
 cat >>"$tmp" <<'EOF'
