@@ -92,7 +92,7 @@ jobs:
           # The target builtin macro rules are product code, not a disposable
           # CI patch. Every focused regression exercises their exact known
           # GCC13/RV64 Linux compatibility contexts without a GNU subprocess.
-          python3 preprocessor/target/riscv_linux_predefines.py --self-check
+          python3 tests/preprocessor/oracle_riscv_linux_predefines.py --self-check
           # Python is now only the nine-context read-only oracle. The actual
           # target macro producer is compiled into the native minic-cpp.
           bash tests/preprocessor/run-target-predefines-native.sh \
