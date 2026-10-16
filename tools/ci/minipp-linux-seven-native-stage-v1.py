@@ -102,6 +102,15 @@ def main() -> int:
         raise SystemExit("MINIPP_SEVEN=FAIL invalid-sample-limit")
     out, src, stage = args.out.resolve(), args.src.resolve(), args.stage.resolve()
     stage.mkdir(parents=True, exist_ok=True)
+    tool_sha256 = {
+        "minipp": sha(args.minipp.resolve()),
+        "minic_cc": sha(args.minic_cc.resolve()),
+        "minias": sha(args.minias.resolve()),
+    }
+    print("MINIPP_SEVEN_TOOL_IDENTITY "
+          + " ".join(f"{name}_sha256={digest}"
+                     for name, digest in tool_sha256.items()),
+          flush=True)
     owner_names = [s.strip() for s in args.owner_list.read_text().splitlines()
                    if s.strip() and not s.lstrip().startswith("#")]
     if not 1900 <= len(owner_names) <= 3000 or len(set(owner_names)) != len(owner_names):
@@ -294,6 +303,7 @@ def main() -> int:
         "builtin_profile_sha": (sha(args.profile_snapshot.resolve())
                                 if args.profile_snapshot is not None else None),
         "manifest_sha": sha(stage / "native-manifest.sha256"),
+        "tool_sha256": tool_sha256,
     }, indent=2, sort_keys=True) + "\n")
     print(f"MINIPP_SEVEN_NATIVE_RESULT={'PASS' if passed == len(rows) else 'FAIL'} "
           f"worker={args.shard}/7 passed={passed}/{len(rows)} "
