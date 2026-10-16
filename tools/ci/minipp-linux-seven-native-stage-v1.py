@@ -304,6 +304,10 @@ def main() -> int:
               f"peak_rss_kb={row['peak_rss_kb'].get('minic', 0)} "
               f"input_i_bytes={row.get('minipp_input_bytes', 0)} "
               f"object={row['object']}", flush=True)
+    coverage = sum("compiler_profile_total_ms" in row for row in rows)
+    print(f"MINIPP_SEVEN_COMPILER_PHASE_COVERAGE worker={args.shard}/7 "
+          f"measured={coverage}/{len(rows)} "
+          "missing_is_explicit=true no_extra_compilation=true", flush=True)
     print("MINIPP_SEVEN_COMPILER_PHASES worker=" + str(args.shard) +
           "/7 " + " ".join(f"{phase}_ms={elapsed}"
                            for phase, elapsed in sorted(compiler_phase_ms_sum.items()))
