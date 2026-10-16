@@ -28,8 +28,8 @@ def main() -> None:
     p.add_argument("flags", nargs=argparse.REMAINDER)
     a = p.parse_args()
     flags = a.flags[1:] if a.flags and a.flags[0] == "--" else a.flags
-    raw = gzip.decompress(base64.b64decode(a.snapshot.read_text().strip(),
-                                           validate=True))
+    raw = gzip.decompress(base64.b64decode(
+        "".join(a.snapshot.read_text().split()), validate=True))
     data = json.loads(raw)
     if data.get("schema") != "minipp-rv64-linux-gcc13-profile-v1":
         raise ValueError("pinned macro snapshot schema mismatch")
