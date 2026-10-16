@@ -241,32 +241,7 @@ fi
 # Opt-in per-TU Boolean proof counters: capture before Kbuild cleanup,
 # without retaining multi-gigabyte .i/.s intermediates on the runner.
 if [[ -n "${MINIC_BOOLEAN_DOMAIN_COUNTS_LOG:-}" ]]; then
-  metric=$(grep -E '^MINIC_BOOLEAN_DOMAIN queries=[0-9]+ builds=[0-9]+ fallbacks=[0-9]+
-for arg in "${args[@]}"; do
-  case "$arg" in
-    -march=*|-mabi=*|-mcmodel=*|-mstrict-align|-mno-strict-align|-mno-save-restore|-mno-relax|-Wa,*)
-      asm_args+=("$arg")
-      ;;
-  esac
-done
-
-[[ -z "$trace" ]] || printf 'assemble input=%q output=%q\n' "$assembly" "$output_file" >>"$trace"
-"$real_cc" "${asm_args[@]}" -x assembler -c "$assembly" -o "$output_file"
-
-
-# A route record alone cannot prove that the final object was not replaced
-# after compilation. Record the EXACT object bytes produced through MiniC
-# and GNU as, before emitting the legacy success marker. Both writes are
-# single-line O_APPEND operations, safe for different concurrently built TUs.
-if [[ -n "${MINIC_KBUILD_OBJECT_HASH_TRACE:-}" ]]; then
-  object_hash=$(sha256sum -- "$output_file" | cut -d' ' -f1)
-  printf '%s  %s\n' "$object_hash" "$output_file" >>"$MINIC_KBUILD_OBJECT_HASH_TRACE"
-fi
-if [[ -n "${MINIC_KBUILD_SUCCESS_TRACE:-}" ]]; then
-  printf '%s\n' "$output_file" >>"$MINIC_KBUILD_SUCCESS_TRACE"
-fi
-[[ -z "$trace" ]] || printf 'pass source=%q output=%q\n' "$source_file" "$output_file" >>"$trace"
- "$minic_stderr" | tail -n 1 || true)
+  metric=$(grep -E '^MINIC_BOOLEAN_DOMAIN queries=[0-9]+ builds=[0-9]+ fallbacks=[0-9]+$' "$minic_stderr" | tail -n 1 || true)
   if [[ -z "$metric" ]]; then
     echo "MINIC_BOOLEAN_METRICS=FAIL missing_compiler_counter owner=$output_file" >&2
     exit 11
