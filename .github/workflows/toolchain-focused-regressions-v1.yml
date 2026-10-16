@@ -82,6 +82,14 @@ jobs:
           minias="$GITHUB_WORKSPACE/build/toolchain-focused-t1-v2/bin/minic-as"
           work="$GITHUB_WORKSPACE/build/rv64-focused-v1"
 
+          # Opt-in SHA-checked macro variation audit: one pinned snapshot,
+          # nine actual Kbuild contexts, no Linux rebuild or GNU macro query.
+          if [[ "${{ contains(github.event.head_commit.message, '[linux-minipp-profile-diff]') && '1' || '0' }}" == 1 ]]; then
+            python3 tools/ci/minipp-linux-profile-diff-audit-v1.py \
+              --snapshot tests/preprocessor/profiles/rv64-linux-6.6.143-gcc13.json.gz.b64 \
+              --report "$work/minipp-profile-diff.json"
+          fi
+
           MINIC="$minic" \
           BUILD_DIR="$work" \
           RISCV_CC=riscv64-linux-gnu-gcc \
