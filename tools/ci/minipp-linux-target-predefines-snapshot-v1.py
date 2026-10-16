@@ -51,10 +51,10 @@ def as_owners(golden: Path, c_owners: set[str]):
         if name in c_owners or not name.endswith(".o"):
             continue
         data = cmd.read_text(errors="replace")
-        if not re.search(r"(?m)^source_[^\\n]*\\s*:=\\s*\\S+\\.(?:S|s)\\s*$", data):
+        if not re.search(r"(?m)^source_[^\n]*\s*:=\s*\S+\.(?:S|s)\s*$", data):
             continue
         lines = [x.split(":=", 1)[1].strip() for x in data.splitlines()
-                 if re.match(r"^(?:savedcmd|cmd)_[^\\n]+\\s*:=", x)]
+                 if re.match(r"^(?:savedcmd|cmd)_[^\n]+\s*:=", x)]
         if len(lines) != 1:
             continue
         try:
@@ -132,7 +132,7 @@ def main() -> None:
                   " flags="+repr(context)+" owners="+str(len(owners))+
                   " sha="+digest(body.encode())[:16], flush=True)
 
-    raw = (json.dumps(output, sort_keys=True, separators=(",", ":"))+"\\n").encode()
+    raw = (json.dumps(output, sort_keys=True, separators=(",", ":"))+"\n").encode()
     a.output.parent.mkdir(parents=True, exist_ok=True)
     a.output.write_bytes(raw)
     packed = base64.b64encode(gzip.compress(raw, mtime=0)).decode("ascii")
