@@ -47,14 +47,19 @@ def pp_args(args: list[str]) -> list[str]:
     return out
 
 
-def run(cmd: list[str], cwd: Path, output: Path) -> None:
+def run(cmd: list[str], cwd: Path, output: Path) -> int:
+    """Return measured wall milliseconds for this actual subprocess only."""
+    started_ns = time.monotonic_ns()
     p = subprocess.run(cmd, cwd=cwd, text=True, stdout=subprocess.PIPE,
                        stderr=subprocess.PIPE, errors="replace")
+    elapsed_ms = (time.monotonic_ns() - started_ns) // 1_000_000
     output.write_text("COMMAND " + json.dumps(cmd) + "\n"
-                      + f"returncode={p.returncode}\nstdout:\n{p.stdout[-4000:]}"
+                      + f"returncode={p.returncode}\nelapsed_ms={elapsed_ms}\n"
+                      + f"stdout:\n{p.stdout[-4000:]}"
                       + f"\nstderr:\n{p.stderr[-11000:]}\n")
     if p.returncode:
         raise RuntimeError(f"returncode={p.returncode}: {cmd[0]}")
+    return elapsed_ms
 
 
 def main() -> int:
@@ -110,7 +115,7 @@ def main() -> int:
         item.mkdir(exist_ok=True)
         old_sha = sha(out / object_name)
         result = dict(object=object_name, source=row["source"], status="FAIL",
-                      frozen_original_sha=old_sha)
+                      frozen_original_sha=old_sha, timings_ms={})
         rows.append(result)
         try:
             context = predef_args(row["args"])
@@ -126,10 +131,13 @@ def main() -> int:
                         args.profile_snapshot.resolve())
                 if args.native_macro_rules:
                     env["MINIPP_PREDEFINES_NATIVE_RULES"] = "1"
+                started_ns = time.monotonic_ns()
                 proc = subprocess.run(
                     ["bash", "tests/preprocessor/build_reference_predefines.sh",
                      *context], cwd=Path(__file__).resolve().parents[2],
                     env=env, capture_output=True, text=True)
+                result["timings_ms"]["macro_predefines"] = (
+                    time.monotonic_ns() - started_ns) // 1_000_000
                 (item / "predefines.log").write_text(proc.stdout + "\n" + proc.stderr)
                 if proc.returncode or not macro_path.is_file():
                     raise RuntimeError("reference-GCC-macro-context-unavailable")
@@ -141,9 +149,11 @@ def main() -> int:
                       *pp_args(row["args"]), row["source"]]
             reference = item / "gnu.i"
             mini = item / "mini.i"
-            run(["riscv64-linux-gnu-gcc", *common, "-o", str(reference)],
+            result["timings_ms"]["gnu_pp_oracle"] = run(
+                ["riscv64-linux-gnu-gcc", *common, "-o", str(reference)],
                 out, item / "reference.log")
-            run([str(args.minipp.resolve()), *common, "-o", str(mini)],
+            result["timings_ms"]["minipp"] = run(
+                [str(args.minipp.resolve()), *common, "-o", str(mini)],
                 out, item / "minipp.log")
             result["gnu_pp_sha"] = sha(reference)
             result["mini_pp_sha"] = sha(mini)
@@ -158,13 +168,15 @@ def main() -> int:
                 raise RuntimeError("MiniPP-and-GNU-preprocessed-bytes-differ")
             asm = item / "minic.s"
             obj = item / "minias.o"
-            run([str(args.minic_cc.resolve()), "-S", str(mini), "-o", str(asm)],
+            result["timings_ms"]["minic"] = run(
+                [str(args.minic_cc.resolve()), "-S", str(mini), "-o", str(asm)],
                 out, item / "minic.log")
             march = next((x for x in row["args"] if x.startswith("-march=")),
                          "-march=rv64imac")
             abi = next((x for x in row["args"] if x.startswith("-mabi=")),
                        "-mabi=lp64")
-            run([str(args.minias.resolve()), march, abi, "-o", str(obj), str(asm)],
+            result["timings_ms"]["minias"] = run(
+                [str(args.minias.resolve()), march, abi, "-o", str(obj), str(asm)],
                 out, item / "minias.log")
             elf = obj.read_bytes()
             golden = (out / object_name).read_bytes()
@@ -182,7 +194,9 @@ def main() -> int:
             artifact_object.parent.mkdir(parents=True, exist_ok=True)
             os.link(obj, artifact_object)
             result.update(status="PASS", native_object_sha=sha(obj),
-                          native_object_bytes=obj.stat().st_size)
+                          native_object_bytes=obj.stat().st_size,
+                          minipp_input_bytes=mini.stat().st_size,
+                          minic_assembly_bytes=asm.stat().st_size)
             print(f"MINIPP_SEVEN_NATIVE_OBJECT=PASS worker={args.shard}/7 "
                   f"object={object_name} pp=MiniPP cc=MiniC as=MiniAS "
                   "GNU_pp_consumed_by_MiniC=false", flush=True)
@@ -190,6 +204,38 @@ def main() -> int:
             result["error"] = str(exc)
             print(f"MINIPP_SEVEN_NATIVE_OBJECT=FAIL worker={args.shard}/7 "
                   f"object={object_name} reason={exc}", flush=True)
+    # Stage-by-stage wall time and produced bytes are additive across owners;
+    # per-tool MaxRSS is intentionally NOT guessed from process wall time.
+    # An isolated /usr/bin/time gate measures peak RSS at the linker boundary.
+    profile_stages = ("macro_predefines", "gnu_pp_oracle",
+                      "minipp", "minic", "minias")
+    stage_totals_ms = {
+        name: sum(row.get("timings_ms", {}).get(name, 0) for row in rows)
+        for name in profile_stages
+    }
+    (stage / "performance-summary.json").write_text(json.dumps({
+        "worker": args.shard, "selected": len(rows),
+        "stage_wall_ms_sum": stage_totals_ms,
+        "minipp_output_bytes_sum": sum(row.get("minipp_input_bytes", 0)
+                                       for row in rows),
+        "minic_assembly_bytes_sum": sum(row.get("minic_assembly_bytes", 0)
+                                        for row in rows),
+        "native_object_bytes_sum": sum(row.get("native_object_bytes", 0)
+                                       for row in rows),
+        "measurement_scope": "actual per-command wall times, not full runner time",
+        "maxrss_kb": None,
+    }, indent=2, sort_keys=True) + "\n")
+    slowest = sorted((row for row in rows if row["status"] == "PASS"),
+                     key=lambda row: row["timings_ms"].get("minic", 0),
+                     reverse=True)[:5]
+    for row in slowest:
+        print(f"MINIPP_SEVEN_SLOWEST_MINIC worker={args.shard}/7 "
+              f"elapsed_ms={row['timings_ms'].get('minic', 0)} "
+              f"object={row['object']}", flush=True)
+    print(f"MINIPP_SEVEN_PERFORMANCE worker={args.shard}/7 "
+          + " ".join(f"{stage}_ms={total}" for stage, total in stage_totals_ms.items())
+          + " memory_peak=not_measured"
+          + " source=per_subprocess_monotonic_wall", flush=True)
     (stage / "results.json").write_text(json.dumps(rows, indent=2, sort_keys=True) + "\n")
     (stage / "native-manifest.sha256").write_text("".join(
         f'{row["native_object_sha"]}  native-objects/{row["object"]}\n'
