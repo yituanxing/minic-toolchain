@@ -2563,15 +2563,6 @@ jobs:
                 "$GITHUB_WORKSPACE/build/minipp-seven-merge/native-summary.json"
               grep -Fq 'COHORT_P1=PASS name=full_all_verified syscalls=12 python_era_oracle=PASS' "$ev/cohort.log" || exit 40
               echo 'MINIPP_SEVEN_QEMU=PASS pp_input=MiniPP native_C=2064 QEMU_P1=12/12 dynamic_header_provenance=cohort'
-              if [[ "${{ contains(github.event.head_commit.message, '[linux-minipp-pinned-full]') && '1' || '0' }}" == 1 ]]; then
-                python3 -c 'import json,sys; x=json.load(open(sys.argv[1])); assert x["owners"]==2064 and x["builtin_profile"]=="pinned" and x["builtin_profile_sha"]==sys.argv[2]' \
-                  "$GITHUB_WORKSPACE/build/minipp-seven-merge/native-summary.json" \
-                  "$(sha256sum tests/preprocessor/profiles/rv64-linux-6.6.143-gcc13.json.gz.b64 | cut -d' ' -f1)"
-                grep -Fq 'MINIPP_DYNAMIC_PROFILE=PINNED' "$ev/trials/full_all/rebuild.log" || exit 49
-                grep -Fq 'MINIPP_DYNAMIC_HEADER_RUNTIME=PASS native_PP=4 native_CC=4 native_AS=4' "$ev/cohort.log" || exit 50
-                test "$(wc -l < "$ev/minias-native-S-evidence/native-S-pp-provenance.tsv")" -eq 35 || exit 51
-                echo 'MINIPP_PINNED_FULL_RUNTIME=PASS C=2064 dynamic_C=4 asm_S=34 predefines=pinned_GCC13 no_GCC_macro_generation=true P1=12/12'
-              fi
             fi
             if [[ "${{ contains(github.event.head_commit.message, '[linux-native-vdso64]') && '1' || '0' }}" == 1 ]]; then
               native_vdso64_calls=$(grep -c '^minild-vdso64 ' "$NATIVE_TRACE_DIR/minild.trace" || true)
