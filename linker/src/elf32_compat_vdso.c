@@ -336,13 +336,29 @@ int minild_link_elf32_compat_vdso(const char *output,
         if (i<EXPORTS) {
             unsigned part;
             if (!find_section(&in[i].elf,".text",&section,&id) ||
-                section.size==0U || section.size>32U ||
-                !find_section(&in[i].elf,".eh_frame",&section,&id) ||
-                section.size!=40U) goto done;
+                section.size!=((i==0U)?8U:12U)) {
+                fprintf(diag,"minic-ld: elf32-incompatible-vdso-text:%s\n",
+                        inputs[i].path);
+                goto done;
+            }
             in[i].text_offset=text_len;
             in[i].eh_offset=eh_len;
-            text_len+=(unsigned)((i==0U)?8U:12U);
-            eh_len+=40U;
+            text_len+=(unsigned)section.size;
+            /*
+             * GNU GAS emits .eh_frame (40 bytes) for these three .S,
+             * but verified MiniAS emits the same executable .text with
+             * NO .eh_frame or CFI relocation. Real Kbuild uses MiniAS.
+             * GNU LD on these exact MiniAS objects leaves an empty
+             * PT_GNU_EH_FRAME. Never invent unwind/FDE data.
+             */
+            if (find_section(&in[i].elf,".eh_frame",&section,&id)) {
+                if (section.size!=40U) {
+                    fprintf(diag,"minic-ld: elf32-unsupported-unwind-size:%s\n",
+                            inputs[i].path);
+                    goto done;
+                }
+                eh_len+=40U;
+            }
             if (!find_export(&in[i],export_names[i],&exports[i],
                              &export_sizes[i]))goto done;
             exports[i]+=(uint32_t)in[i].text_offset;
@@ -352,7 +368,13 @@ int minild_link_elf32_compat_vdso(const char *output,
                                 sizeof(note),&note_len) || note_len!=24U)
             goto done;
     }
-    if(text_len!=32U || eh_len!=120U)goto done;
+    /* The two independently verified source families are homogeneous:
+     * GNU .S (3 x 40B unwind), or MiniAS .S (zero unwind).
+     * Reject mixed/unknown CFI instead of making malformed FDE offsets. */
+    if(text_len!=32U || (eh_len!=0U && eh_len!=120U)) {
+        fprintf(diag,"minic-ld: elf32-unverified-unwind-cohort eh_bytes=%u\n",eh_len);
+        goto done;
+    }
     for(i=0U;i<NSEC;++i)
         name_len+=(unsigned)strlen(section_names[i])+1U;
     shstrings=calloc(name_len,1U);
@@ -381,7 +403,8 @@ int minild_link_elf32_compat_vdso(const char *output,
     setup(&sec[VERDEF],SHT_GNU_verdef,SHF_ALLOC,4U,0U,56U);
     setup(&sec[NOTE],SHT_NOTE,SHF_ALLOC,4U,0U,60U);
     setup(&sec[DYNAMIC],SHT_DYNAMIC,SHF_ALLOC|SHF_WRITE,4U,8U,14U*8U);
-    setup(&sec[EH_HDR],SHT_PROGBITS,SHF_ALLOC,4U,0U,36U);
+    setup(&sec[EH_HDR],SHT_PROGBITS,SHF_ALLOC,4U,0U,
+          eh_len==0U?0U:36U);
     setup(&sec[EH],SHT_PROGBITS,SHF_ALLOC,4U,0U,eh_len);
     setup(&sec[TEXT],SHT_PROGBITS,SHF_ALLOC|SHF_EXECINSTR,4U,0U,text_len);
     setup(&sec[DATA],SHT_PROGBITS,SHF_ALLOC|SHF_WRITE,4U,4U,4U);
@@ -414,13 +437,14 @@ int minild_link_elf32_compat_vdso(const char *output,
                          sec[TEXT].bytes+in[i].text_offset,
                          text_len-in[i].text_offset,&copied) ||
            copied!=((i==0U)?8U:12U) ||
-           !section_copy(&in[i],".eh_frame",
-                         sec[EH].bytes+in[i].eh_offset,
-                         eh_len-in[i].eh_offset,&copied) ||
-           copied!=40U ||
-           !relocs(&in[i],sec[EH].bytes+in[i].eh_offset,
-                   sec[EH].sh.sh_addr+in[i].eh_offset,
-                   sec[TEXT].sh.sh_addr+in[i].text_offset,40U,diag))
+           (eh_len!=0U &&
+            (!section_copy(&in[i],".eh_frame",
+                           sec[EH].bytes+in[i].eh_offset,
+                           eh_len-in[i].eh_offset,&copied) ||
+             copied!=40U ||
+             !relocs(&in[i],sec[EH].bytes+in[i].eh_offset,
+                     sec[EH].sh.sh_addr+in[i].eh_offset,
+                     sec[TEXT].sh.sh_addr+in[i].text_offset,40U,diag))))
             goto done;
     }
 
@@ -525,17 +549,19 @@ int minild_link_elf32_compat_vdso(const char *output,
 
     /* .eh_frame_hdr: one PC-relative pointer to real .eh_frame and
        sorted (text address, FDE address) data-relative table records. */
-    sec[EH_HDR].bytes[0]=1U;sec[EH_HDR].bytes[1]=0x1bU;
-    sec[EH_HDR].bytes[2]=0x03U;sec[EH_HDR].bytes[3]=0x3bU;
-    wr32(sec[EH_HDR].bytes+4U,
-         sec[EH].sh.sh_addr-(sec[EH_HDR].sh.sh_addr+4U));
-    wr32(sec[EH_HDR].bytes+8U,3U);
-    for(i=0U;i<EXPORTS;++i) {
-        wr32(sec[EH_HDR].bytes+12U+i*8U,
-             sec[TEXT].sh.sh_addr+exports[i]-sec[EH_HDR].sh.sh_addr);
-        wr32(sec[EH_HDR].bytes+16U+i*8U,
-             sec[EH].sh.sh_addr+in[i].eh_offset+20U-
-             sec[EH_HDR].sh.sh_addr);
+    if (eh_len!=0U) {
+        sec[EH_HDR].bytes[0]=1U;sec[EH_HDR].bytes[1]=0x1bU;
+        sec[EH_HDR].bytes[2]=0x03U;sec[EH_HDR].bytes[3]=0x3bU;
+        wr32(sec[EH_HDR].bytes+4U,
+             sec[EH].sh.sh_addr-(sec[EH_HDR].sh.sh_addr+4U));
+        wr32(sec[EH_HDR].bytes+8U,3U);
+        for(i=0U;i<EXPORTS;++i) {
+            wr32(sec[EH_HDR].bytes+12U+i*8U,
+                 sec[TEXT].sh.sh_addr+exports[i]-sec[EH_HDR].sh.sh_addr);
+            wr32(sec[EH_HDR].bytes+16U+i*8U,
+                 sec[EH].sh.sh_addr+in[i].eh_offset+20U-
+                 sec[EH_HDR].sh.sh_addr);
+        }
     }
 
     image=calloc(image_len,1U);
@@ -573,9 +599,10 @@ int minild_link_elf32_compat_vdso(const char *output,
     phdr[2].p_filesz=sec[NOTE].sh.sh_size;
     phdr[2].p_memsz=phdr[2].p_filesz;
     phdr[2].p_align=4U;
-    phdr[3].p_type=PT_GNU_EH_FRAME;phdr[3].p_flags=PF_R;
-    phdr[3].p_offset=sec[EH_HDR].sh.sh_offset;
-    phdr[3].p_vaddr=sec[EH_HDR].sh.sh_addr;
+    phdr[3].p_type=PT_GNU_EH_FRAME;
+    phdr[3].p_flags=eh_len==0U?0U:PF_R;
+    phdr[3].p_offset=eh_len==0U?0U:sec[EH_HDR].sh.sh_offset;
+    phdr[3].p_vaddr=eh_len==0U?0U:sec[EH_HDR].sh.sh_addr;
     phdr[3].p_paddr=phdr[3].p_vaddr;
     phdr[3].p_filesz=sec[EH_HDR].sh.sh_size;
     phdr[3].p_memsz=phdr[3].p_filesz;
@@ -596,7 +623,8 @@ int minild_link_elf32_compat_vdso(const char *output,
     fprintf(diag,"MINILD_ELF32_VDSO=PASS native=true objects=4 "
                  "ELF32_ET_DYN=true versioned_exports=3 "
                  "R_RISCV_32_PCREL_ADD32_SUB32=true "
-                 "gnu_fallback=0 size=%u\n",image_len);
+                 "gnu_fallback=0 size=%u unwind_bytes=%u unwind_source=%s\n",
+                 image_len,eh_len,eh_len==0U?"MiniAS_no_CFI":"GNU_CFI");
 done:
     if(f)fclose(f);
     if(!success)fprintf(diag,"minic-ld: elf32-native-link-failed\n");
