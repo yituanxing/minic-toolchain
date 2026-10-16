@@ -46,6 +46,10 @@ for symbol in __vdso_rt_sigreturn __vdso_getcpu __vdso_flush_icache; do
     exit 48
   }
 done
+grep -Fq 'COHORT_CANDIDATE_CACHE=HIT objects=2064' "$cohort" || {
+  echo 'MINILD_VDSO32=FAIL no_attested_2064_cached_compiler_input' >&2
+  exit 49
+}
 grep -Fq 'COHORT_P1=PASS name=full_all_verified syscalls=12 python_era_oracle=PASS' "$cohort" || {
   echo 'MINILD_VDSO32=FAIL no_QEMU_P1_12of12' >&2
   exit 46
