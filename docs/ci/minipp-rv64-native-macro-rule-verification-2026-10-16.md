@@ -84,7 +84,15 @@ arbitrary architecture flags, or full replacement of RV32 compat-vDSO linking.
   `preprocessor/target/riscv_linux_predefines.py` and deleting the duplicate
   `tools/ci` generator, the product self-test still matches all nine
   reference macro dictionaries, and all eight focused compiler/archiver/linker
-  checks pass. The move did not modify the native rule semantics.
+  checks pass. Direct comparison with the fully accepted
+  `5382dd8a` implementation shows **all executable Python content after
+  the module docstring is byte-identical**:
+  old `tools/ci/minipp-linux-native-macro-rules-v1.py`
+  blob `e676ab7b3833` vs new
+  `preprocessor/target/riscv_linux_predefines.py`
+  blob `98bc7215d7a8`. The only source-content difference is the top-level
+  descriptive module docstring. This preserves the proven rule semantics
+  without spending another 2064-object rebuild solely to validate a move.
 
 **Scope boundary:** source-owned target rule generation is a Python companion
 to the native C MiniPP executable, not an embedded C target builtin
