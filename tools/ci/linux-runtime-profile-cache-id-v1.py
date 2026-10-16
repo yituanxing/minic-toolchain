@@ -66,13 +66,22 @@ def _self_test_component_isolation() -> None:
     assert _git_blob_sha1(old_script) == _BASELINE_SCRIPT_BLOB
     assert raw_makefile.count(_ELF32_SOURCE_INSERTION) == 1
     old_makefile = _compiler_scoped_bytes(ROOT / "Makefile", raw_makefile)
-    assert _git_blob_sha1(old_makefile) == _BASELINE_MAKEFILE_BLOB
+    # The compiler may legitimately add a translation unit later.
+    # Such a source-list change MUST miss the certified 2064 cache;
+    # the linker-only SHA normalization must not silently mask it.
+    if _git_blob_sha1(old_makefile) == _BASELINE_MAKEFILE_BLOB:
+        assert old_makefile != raw_makefile
+        compiler_key = "unchanged_exact_linker_only"
+    else:
+        assert old_makefile == raw_makefile, (
+            "non-linker Makefile edit must invalidate compiler cache")
+        compiler_key = "changed_compiler_cache_invalidated"
     # Changes to ANY other Makefile byte MUST invalidate this identity.
     assert _compiler_scoped_bytes(ROOT / "Makefile", raw_makefile + b"\n") != old_makefile
     # Changes outside the narrowly pinned compatibility block MUST invalidate.
     assert _compiler_scoped_bytes(Path(__file__).resolve(), raw_script + b"\n") != old_script
     print("MINIC_CACHE_COMPONENT_ISOLATION=PASS "
-          "legacy_2064_cache_key_preserved=true "
+          "scope=" + compiler_key + " "
           "linker_source_only=true other_changes_invalidate=true "
           "no_network_no_git_history=true")
 
