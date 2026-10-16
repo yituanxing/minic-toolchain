@@ -1396,6 +1396,7 @@ int minipp_preprocess_file(const char *input_path,
 
     memset(&state, 0, sizeof(state));
     state.active = true;
+    state.macro_prefix_map = config->macro_prefix_map;
     state.include_paths = config->include_paths;
     state.include_path_count = config->include_path_count;
     state.current_include_path_index = SIZE_MAX;
