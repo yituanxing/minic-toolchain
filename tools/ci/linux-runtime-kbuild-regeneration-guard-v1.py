@@ -218,6 +218,14 @@ def replay_affected(out: Path, golden_out: Path, selected: Path,
             raise GuardError("native dynamic MiniPP requires native MiniAS reconciliation")
         env["MINIC_KBUILD_MINIPP"] = str(binary.resolve())
         env["MINIPP_LINUX_SRC"] = str(linux_src.resolve())
+        snapshot = os.environ.get("COHORT_MINIPP_PROFILE_SNAPSHOT")
+        if snapshot:
+            pinned = Path(snapshot).resolve()
+            if not pinned.is_file():
+                raise GuardError("pinned native MiniPP macro profile not found")
+            env["MINIPP_PREDEFINES_SNAPSHOT"] = str(pinned)
+            print("MINIPP_DYNAMIC_PROFILE=PINNED source="+str(pinned)
+                  +" no_GCC_macro_generation=true", flush=True)
     for name in names:
         args = pinned_kbuild_cc_args(golden_out, name)
         path = out / name
