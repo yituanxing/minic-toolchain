@@ -131,3 +131,15 @@
 - **已完成**：第一轮目录/构建边界、独立 compiler 主路径、典型重复校验、boolean 证明、AST 空间、历史自举清单和已有性能证据复核；形成具体待办。
 - **尚未完成**：全量函数级死代码可达性证明、所有脚本调用者分类、任何新性能 A/B、当前源码自举复测。
 - **本提交影响**：仅新增本文档，无任何编译器、工具链、Makefile、CI 或测试代码修改。
+
+
+## 7. 审计后的实际修正记录（2026-10-16）
+
+本节记录审计后**已经实际提交**的最小修复，不修改上文记录的原始发现：
+
+- `73e26a99` — `tests/compiler/bootstrap/b0-sources.txt`：补入 `src/core/core_lower_bool.c`，改用 `tools/minic-cc/main.c`。使用当前 `Makefile` 的 `MINIC_SOURCES` 做集合与顺序比较，**47/47 完全一致**；不再将 Driver 误认作独立编译器入口。
+- `596e27e4` — `.github/workflows-disabled/compiler-bootstrap-b1-sharded.yml`：将 Stage0 执行程序从 `bin/minic` 改为直接运行 `bin/minic-cc`，Stage2 固定点文件计数由硬编码 46 改为按当前自举清单核对；保留完整 16 分片 Stage1→Stage2 逻辑。**这仍是停用工作流**，不代表已经运行自举，也没有新增或启用 CI 工作流。
+- 当前静态复核：清单包含新 Core Bool 模块、末尾入口 `minic-cc/main.c`、历史 B1 不再存在 `test "$selected" -eq 46`。变更限定在测试清单和停用历史自举配方，**未修改任何生产 C、Makefile、活跃 workflow**。
+- 提交 `73e26a99` 的现有 Toolchain Focused Regression Suite [#38881960970](https://github.com/yituanxing/minic-toolchain/actions/runs/38881960970) 为 SUCCESS；它**不是** Stage0→Stage1→Stage2 验收。新停用配方 `596e27e4` 也尚未在交叉编译器/QEMU 环境跑过。
+
+**待解决**：当前 `make bootstrap` 仍只是提示信息，旧 B1 文件仍在 `.github/workflows-disabled/`。后续准备自举时优先复用这一已修正的配方提炼可执行的验证途径（尽可能复用现有命令/缓存与测试），再执行真正的当前 SHA Stage0→Stage1→Stage2；不要仅靠源文件计数一致便报告自举 PASS。
