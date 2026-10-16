@@ -2264,6 +2264,12 @@ jobs:
               BUILD_DIR="$GITHUB_WORKSPACE/build/minipp-seven-tools" "$minipp"
             native_S_pp_args=(--native-asm-minipp "$minipp" \
                               --linux-src "$work/linux-6.6.143")
+            if [[ "${{ contains(github.event.head_commit.message, '[linux-minipp-pinned-predefines]') && '1' || '0' }}" == 1 ]]; then
+              profile="$GITHUB_WORKSPACE/tests/preprocessor/profiles/rv64-linux-6.6.143-gcc13.json.gz.b64"
+              test -s "$profile"
+              native_S_pp_args+=(--native-asm-profile-snapshot "$profile")
+              echo 'MINIPP_NATIVE_S_PROFILE=ENABLED pinned_GCC13_target_abi=true no_GCC_macro_generation=true'
+            fi
           fi
           python3 tools/ci/minias-linux-corpus-runtime-overlay-v1.py \
             --original-pool "$original_pool" --manifest "$original_manifest" \
