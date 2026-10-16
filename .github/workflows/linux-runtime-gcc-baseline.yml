@@ -2205,14 +2205,23 @@ jobs:
           set -Eeuo pipefail
           ev="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1"
           work="$GITHUB_WORKSPACE/build/linux-runtime-gcc"
-          (cd "$ev" && sha256sum --quiet -c minic-manifest.sha256)
+          original_pool="$ev/minic"
+          original_manifest="$ev/minic-manifest.sha256"
+          if [[ "${{ contains(github.event.head_commit.message, '[linux-minipp-native-reuse]') && '1' || '0' }}" == 1 ]]; then
+            original_pool="$GITHUB_WORKSPACE/build/minipp-seven-merge/native-objects"
+            original_manifest="$GITHUB_WORKSPACE/build/minipp-seven-merge/native-full-manifest.sha256"
+            (cd "$original_pool" && sha256sum --quiet -c "$original_manifest")
+            echo 'MINIAS_NATIVE_S=REUSING_VERIFIED_NATIVE_SHARDS count=2064 source=MiniPP_MiniC_MiniAS'
+          else
+            (cd "$ev" && sha256sum --quiet -c minic-manifest.sha256)
+          fi
           # The native-S lane always needs a real MiniAS binary; strcmp-diff
           # only guards extra diagnostics, never assembler preparation.
           tools="$GITHUB_WORKSPACE/build/minias-linux-corpus-v1-tools"
           make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$tools" "$tools/bin/minic-as"
           test -x "$tools/bin/minic-as"
           python3 tools/ci/minias-linux-corpus-runtime-overlay-v1.py \
-            --original-pool "$ev/minic" --manifest "$ev/minic-manifest.sha256" \
+            --original-pool "$original_pool" --manifest "$original_manifest" \
             --scan-root "$GITHUB_WORKSPACE/build/minias-linux-corpus-v1" \
             --cache-identity "$FULL_MINIC_KEY" \
             --destination "$ev/minias-native-S-pool" \
