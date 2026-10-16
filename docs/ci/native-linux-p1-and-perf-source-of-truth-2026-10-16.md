@@ -87,13 +87,77 @@ Focused syntax checks precede expensive Linux runs. All data reuse the
 existing seven jobs; no new workflow, extra compiler invocation, or
 GCC oracle output replacement is necessary.
 
+## 2026-10-16: RV32 ELF32 native compat-vDSO link qualification
+
+**Certified isolated four-object Linux link**:
+[CI #38856103863](https://github.com/yituanxing/minic-toolchain/actions/runs/38856103863);
+native writer at `linker/src/elf32_compat_vdso.c`, CLI dispatch for
+`-melf32lriscv -shared` at `tools/minic-ld/main_core.inc`.
+
+- Actual frozen Linux 6.6.143 four ELF32 ET_REL objects and the generated
+  Kbuild linker script used directly. Native MiniLD emitted a **real
+  ELF32 ET_DYN**, **3048 bytes**, vs diagnostic-only GNU LD reference
+  **3600 bytes**. No GNU fallback or GNU output repackaging.
+- Same four object inputs produce **32 identical `.text` bytes**,
+  all three `__vdso_*@@LINUX_4.15` dynamic exports, real
+  `PT_LOAD`, `PT_DYNAMIC`, `PT_NOTE`, `PT_GNU_EH_FRAME`,
+  SYSV and GNU hash tables, real unwind records, Linux note,
+  and a native SHA1 GNU build-id. Different valid ELF layouts and
+  unwind CIE folding do **not** imply identical output bytes.
+- Actual CI #38856103863 reported `MINILD_VDSO32=PASS`
+  `exact_Linux_ELF32_link=true`, with GNU diagnostic wall
+  `0.00s`/RSS `4624 KiB`, native `0.00s`/RSS `1988 KiB`
+  (centisecond timing resolution is **insufficient to infer speedup**).
+  No Linux C object recompilation was involved.
+- An early bug in native GNU-hash chain offsets caused an actual CI
+  process crash (rc 139); fixed in the C writer and revalidated
+  with the real frozen objects. An ELF32 `SHT_SYMTAB` extraneous
+  local entry was subsequently removed.
+- Scope deliberately **limited to this real Linux four-object ABI**.
+  Full RV32 compiler/backend/assembler and general-purpose ELF32
+  linker are explicitly out of scope. Kbuild and P1 integration
+  are *not* proven by a cached, independent four-object link.
+
+**Full integration gate**:
+[CI #38857454218](https://github.com/yituanxing/minic-toolchain/actions/runs/38857454218),
+SHA `bcb8a46a4249ce7e571e074079a31c7ec1695ead`.
+This run is the sole current-source seven-way full producer with the
+native-ELF32 opt-in on the already existing Linux receiver.
+**Record as pending until the exact real Kbuild native link, GNU
+fallback count zero, generated compat-vDSO outputs, and QEMU P1 12/12
+are observed.** Prior successful RV64 P1 cannot substitute for
+this new linker SHA.
+
+Cache lesson: the historical full MiniC Actions cache is keyed to
+an **earlier compiler source profile**, so a cache-only
+`[linux-native-union-cached]` attempt reported
+`Failed to restore cache entry` correctly. Do **not**
+bypass the SHA key just because existing 2064 objects passed earlier.
+The original `Makefile` was restored byte-for-byte to avoid
+unnecessarily invalidating the compiler key when merely adding a
+new MiniLD file; the writer is currently included through
+`tools/minic-ld/main.c` into the existing MiniLD TU pending
+separation of per-tool build identities.
+
+GitHub rejected additions to the huge original Linux workflow YAML
+before jobs could start, even minimal inline opt-in conditionals.
+The **accepted original workflow YAML has been restored**.
+The RV32 opt-in is now deliberately read from the explicit commit
+marker inside `tools/ci/linux-runtime-gcc-cohort-bisect-v1.sh`,
+while native link dispatch is in
+`tools/ci/linux-runtime-native-union-v1.sh`.
+The dedicated real-runtime ABI verdict is in
+`tools/ci/qualify-minild-vdso32-real-kbuild-v1.sh`.
+This reuses the existing seven producer jobs and existing QEMU receiver
+without new workflows.
+
 ## Remaining scope, without false completion
 
-1. **Actual ELF32 compat-vDSO linking** in MiniLD is a separate
-   implementation gate. Four genuine ELF32 ET_REL objects, their
-   relocations, linker script, and a GNU diagnostic-only ET_DYN reference
-   are captured by the existing cached replay. Do not accept an ELF64
-   output labeled ELF32, nor feed GNU's output into the native pipeline.
+1. **RV32 compat-vDSO ELF32 native input-to-output linking** has now
+   passed the four genuine Linux object isolation gate; **real Kbuild,
+   full QEMU P1 and zero GNU product fallback require the separate
+   same-source full integration gate**. Do not treat isolated linkage as
+   Linux runtime acceptance until that exact CI succeeds.
 2. The existing link-feature probes may remain GNU without preventing
    an otherwise native product (they are not product links).
 3. C-level phase instrumentation was deliberately **not** promoted over
