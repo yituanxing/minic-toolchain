@@ -62,10 +62,3 @@ int main(int argc, char **argv) {
     return result;
 }
 
-/* Keep MiniC's SHA-pinned Linux C-object cache independent of unrelated
- * MiniLD source additions. This linker's existing CLI implementation is
- * already assembled from source-owned .inc/.c fragments. Once the cache-key
- * dependency graph is split by component, this module can be compiled as
- * a separate object without changing the ELF32 implementation. */
-#include "../../linker/src/elf32_compat_vdso.c"
-
