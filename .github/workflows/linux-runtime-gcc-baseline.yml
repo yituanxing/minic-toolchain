@@ -1250,6 +1250,7 @@ jobs:
           path: |
             build/minipp-seven-native/shard-${{ matrix.shard }}/summary.json
             build/minipp-seven-native/shard-${{ matrix.shard }}/performance-summary.json
+            build/minipp-seven-native/shard-${{ matrix.shard }}/first-failure.json
             build/minipp-seven-native/shard-${{ matrix.shard }}/results.json
             build/minipp-seven-native/shard-${{ matrix.shard }}/native-manifest.sha256
             build/minipp-seven-native/shard-${{ matrix.shard }}/native-objects/**/*.o
