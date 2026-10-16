@@ -78,7 +78,11 @@ def main() -> None:
     c_owners = {line.strip() for line in a.owners.read_text().splitlines()
                 if line.strip()}
     if len(c_owners) != 2064 or not golden.is_dir() or not src.is_dir():
-        raise SystemExit("MINIPP_PROFILE_CAPTURE=FAIL invalid certified Linux fixtures")
+        raise SystemExit("MINIPP_PROFILE_CAPTURE=FAIL invalid certified Linux fixtures"
+                         +" c_owners="+str(len(c_owners))
+                         +" golden_exists="+str(golden.is_dir())
+                         +" src_exists="+str(src.is_dir())
+                         +" golden="+str(golden)+" src="+str(src))
     entries = {x["object"]: x for x in extract(golden, src)}
     if not c_owners <= entries.keys():
         raise SystemExit("MINIPP_PROFILE_CAPTURE=FAIL incomplete 2064 Kbuild C universe")
