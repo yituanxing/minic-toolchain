@@ -615,9 +615,11 @@ jobs:
               if len(parts)!=4: raise SystemExit("malformed selected TUs")
               selected[parts[1]]=parts[2]
           if len(selected)!=500: raise SystemExit("frozen corpus not 500")
+          # Seven exact entries preverified in the frozen first500 manifest;
+          # other real 2064 objects (e.g. net/core/dev.o) are NOT in this cache.
           targets=("fs/ext4/fsync.o","kernel/bpf/btf.o","kernel/events/core.o",
-                   "mm/memcontrol.o","net/core/dev.o","lib/crc32.o",
-                   "net/core/filter.o")
+                   "mm/memcontrol.o","mm/hugetlb.o","mm/vmscan.o",
+                   "fs/ext4/super.o")
           with (root/"evidence"/"next-phase-inputs.tsv").open("w") as out:
               for owner in targets:
                   if owner not in selected: raise SystemExit("missing "+owner)
