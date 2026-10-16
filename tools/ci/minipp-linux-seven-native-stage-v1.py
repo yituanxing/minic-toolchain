@@ -48,7 +48,8 @@ def pp_args(args: list[str]) -> list[str]:
     return out
 
 
-def run(cmd: list[str], cwd: Path, output: Path) -> tuple[int, int]:
+def run(cmd: list[str], cwd: Path, output: Path,
+        env: dict[str, str] | None = None) -> tuple[int, int]:
     """Actual child wall time and per-process peak RSS from Linux wait4.
 
     Avoid a second /usr/bin/time wrapper process, false peak-RSS estimates,
@@ -57,7 +58,7 @@ def run(cmd: list[str], cwd: Path, output: Path) -> tuple[int, int]:
     started_ns = time.monotonic_ns()
     with tempfile.TemporaryFile(mode="w+b") as stdout, \
          tempfile.TemporaryFile(mode="w+b") as stderr:
-        p = subprocess.Popen(cmd, cwd=cwd, stdout=stdout, stderr=stderr)
+        p = subprocess.Popen(cmd, cwd=cwd, stdout=stdout, stderr=stderr, env=env)
         pid, status, usage = os.wait4(p.pid, 0)
         assert pid == p.pid
         p.returncode = os.waitstatus_to_exitcode(status)
@@ -186,9 +187,26 @@ def main() -> int:
                 raise RuntimeError("MiniPP-and-GNU-preprocessed-bytes-differ")
             asm = item / "minic.s"
             obj = item / "minias.o"
+            # Profile coarse native phases without recompiling any translation
+            # unit twice. The ordinary compiler output path is unchanged.
+            native_env = dict(os.environ)
+            native_env["MINIC_PROFILE_PHASES"] = "1"
             result["timings_ms"]["minic"], result["peak_rss_kb"]["minic"] = run(
                 [str(args.minic_cc.resolve()), "-S", str(mini), "-o", str(asm)],
-                out, item / "minic.log")
+                out, item / "minic.log", env=native_env)
+            result["compiler_phase_ms"] = {}
+            result["compiler_phase_highwater_rss_kb"] = {}
+            for line in (item / "minic.log").read_text(errors="replace").splitlines():
+                match = re.search(
+                    r"MINIC_PHASE stage=(\S+) elapsed_ms=(\d+) "
+                    r"process_highwater_rss_kb=(-?\d+)", line)
+                if match:
+                    phase, millis, rss = match.groups()
+                    result["compiler_phase_ms"][phase] = int(millis)
+                    result["compiler_phase_highwater_rss_kb"][phase] = int(rss)
+                total = re.search(r"MINIC_PROFILE_TOTAL elapsed_ms=(\d+)", line)
+                if total:
+                    result["compiler_profile_total_ms"] = int(total.group(1))
             march = next((x for x in row["args"] if x.startswith("-march=")),
                          "-march=rv64imac")
             abi = next((x for x in row["args"] if x.startswith("-mabi=")),
@@ -244,6 +262,17 @@ def main() -> int:
         name: sum(row.get("timings_ms", {}).get(name, 0) for row in rows)
         for name in profile_stages
     }
+    compiler_phase_counts = {}
+    compiler_phase_ms_sum = {}
+    compiler_phase_process_highwater_rss_kb = {}
+    for row in rows:
+        for phase, elapsed in row.get("compiler_phase_ms", {}).items():
+            compiler_phase_counts[phase] = compiler_phase_counts.get(phase, 0) + 1
+            compiler_phase_ms_sum[phase] = (
+                compiler_phase_ms_sum.get(phase, 0) + elapsed)
+            rss = row.get("compiler_phase_highwater_rss_kb", {}).get(phase, 0)
+            compiler_phase_process_highwater_rss_kb[phase] = max(
+                compiler_phase_process_highwater_rss_kb.get(phase, 0), rss)
     stage_peak_rss_kb = {
         name: max((row.get("peak_rss_kb", {}).get(name, 0) for row in rows),
                   default=0)
@@ -252,6 +281,10 @@ def main() -> int:
     (stage / "performance-summary.json").write_text(json.dumps({
         "worker": args.shard, "selected": len(rows),
         "stage_wall_ms_sum": stage_totals_ms,
+        "compiler_phase_counts": compiler_phase_counts,
+        "compiler_phase_ms_sum": compiler_phase_ms_sum,
+        "compiler_phase_process_highwater_rss_kb":
+            compiler_phase_process_highwater_rss_kb,
         "stage_max_child_rss_kb": stage_peak_rss_kb,
         "minipp_output_bytes_sum": sum(row.get("minipp_input_bytes", 0)
                                        for row in rows),
@@ -271,6 +304,10 @@ def main() -> int:
               f"peak_rss_kb={row['peak_rss_kb'].get('minic', 0)} "
               f"input_i_bytes={row.get('minipp_input_bytes', 0)} "
               f"object={row['object']}", flush=True)
+    print("MINIPP_SEVEN_COMPILER_PHASES worker=" + str(args.shard) +
+          "/7 " + " ".join(f"{phase}_ms={elapsed}"
+                           for phase, elapsed in sorted(compiler_phase_ms_sum.items()))
+          + " memory=per_stage_process_highwater_not_allocated_bytes", flush=True)
     print(f"MINIPP_SEVEN_PERFORMANCE worker={args.shard}/7 "
           + " ".join(f"{stage}_ms={total}" for stage, total in stage_totals_ms.items())
           + " " + " ".join(f"{stage}_maxrss_kb={rss}"
