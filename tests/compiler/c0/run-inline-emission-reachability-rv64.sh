@@ -35,9 +35,6 @@ static inline int live_parent(int x) {
     return live_leaf(x) + 1;
 }
 
-/* Three constant call sites can create variants of the same inline source.
- * The nonconstant call still requires the original definition and must not
- * disappear when the compiler finalizes per-source residual references. */
 static inline int multi_variant(int x) {
     return x + 1;
 }
