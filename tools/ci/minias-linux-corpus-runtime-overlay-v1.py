@@ -91,6 +91,77 @@ def native_asm_overlay(a):
         work.append((owner,cmd,args))
     if not 30<=len(work)<=500:
         raise ValueError('native .S owner count outside reasonable Linux envelope: '+str(len(work)))
+    # Strictly opt-in: replace the real Linux .S *preprocessor* producer, not
+    # just the downstream assembler. Keep the accepted GNU-PP/MiniAS path
+    # unchanged until all 34 source-to-assembly byte oracles are green.
+    native_pp = pathlib.Path(a.native_asm_minipp).resolve() if a.native_asm_minipp else None
+    native_profiles = {}
+    native_pp_dir = evidence / 'native-S-minipp'
+    if native_pp is not None:
+        if not native_pp.is_file() or not a.linux_src:
+            raise ValueError('native .S MiniPP or Linux source is missing')
+        linux_src = pathlib.Path(a.linux_src).resolve()
+        if not linux_src.is_dir():
+            raise ValueError('native .S Linux source directory is invalid')
+        native_pp_dir.mkdir(parents=True, exist_ok=True)
+        # The GCC assembler-with-cpp macro universe is NOT the same as C.
+        # Only preprocessor-relevant target context can enter -dM; all real
+        # Kbuild -D/-U/-I/-include flags stay on the actual source command.
+        context_prefixes = ('-march=', '-mabi=', '-mcmodel=', '-std=',
+                            '-fno-PIE', '-fPIE', '-fno-pie', '-fpie',
+                            '-fPIC', '-fpic', '-fno-PIC', '-fno-pic',
+                            '-ffreestanding', '-fhosted', '-fno-builtin',
+                            '-fbuiltin', '-fshort-wchar', '-funsigned-char',
+                            '-fsigned-char')
+        exact_opt = {'-O0', '-O1', '-O2', '-O3', '-Og', '-Os', '-Oz', '-Ofast'}
+        repo_root = pathlib.Path(__file__).resolve().parents[2]
+        for name, _, arguments in work:
+            context = tuple(x for x in arguments if x.startswith(context_prefixes)
+                            or x in exact_opt)
+            if context in native_profiles:
+                continue
+            profile = native_pp_dir / ('predefines-' +
+                hashlib.sha256(repr(context).encode()).hexdigest()[:16] + '.h')
+            env = dict(__import__('os').environ,
+                       REAL_CC='/usr/bin/riscv64-linux-gnu-gcc',
+                       MINIPP_LINUX_SRC=str(linux_src),
+                       MINIPP_PREDEFINES_OUT=str(profile),
+                       MINIPP_PREDEFINES_LANG='assembler-with-cpp')
+            proc = subprocess.run(['bash', 'tests/preprocessor/build_reference_predefines.sh',
+                                   *context], cwd=repo_root, env=env,
+                                  capture_output=True, text=True, timeout=180)
+            (native_pp_dir / (profile.stem + '.log')).write_text(
+                proc.stdout + '\n' + proc.stderr)
+            if proc.returncode or not profile.is_file():
+                raise ValueError('GNU assembler-with-cpp predefine oracle unavailable: '
+                                 +name+' context='+repr(context))
+            native_profiles[context] = profile
+
+    def native_source_args(arguments):
+        # Extract exactly the options which change real preprocessing.
+        # No implicit fallback to an unimplemented MiniPP CLI flag.
+        result = []
+        two_args = {'-D', '-U', '-I', '-isystem', '-include'}
+        unsupported = {'-imacros', '-iquote', '-idirafter'}
+        i = 0
+        while i < len(arguments):
+            arg = arguments[i]
+            if arg in unsupported or arg.startswith(('-imacros=', '-iquote')):
+                raise ValueError('unsupported native .S Kbuild CPP argument: '+arg)
+            if arg in two_args:
+                if i+1 >= len(arguments):
+                    raise ValueError('truncated native .S CPP option: '+arg)
+                result.extend((arg, arguments[i+1]))
+                i += 2
+                continue
+            if arg in ('-x', '-o'):
+                i += 2
+                continue
+            if arg.startswith(('-D', '-U', '-I', '-isystem', '-include',
+                               '-fmacro-prefix-map=')) or arg == '-nostdinc':
+                result.append(arg)
+            i += 1
+        return result
     (evidence/'classified-native-S.tsv').write_text(
         'owner\tsource\tpinned_cmd_sha256\n'+''.join(
             f'{name}\t{next(x for x in args if x.endswith((".S",".s")))}\t{sha(cmd)}\n'
@@ -135,6 +206,59 @@ def native_asm_overlay(a):
         if pp.returncode or not temp.is_file():
             (logs/(name.replace('/','_')+'.gcc.log')).write_text((pp.stderr or '')[-8000:])
             raise ValueError('GNU -E .S failed '+name+' rc='+str(pp.returncode))
+        if native_pp is not None:
+            context = tuple(x for x in args if x.startswith(context_prefixes)
+                            or x in exact_opt)
+            input_source = next((x for x in args if x.endswith(('.S', '.s'))
+                                 and not x.startswith('-')), None)
+            if input_source is None:
+                raise ValueError('missing real Kbuild .S source: '+name)
+            normalized = ['-E', '-P', '-undef', '-nostdinc', '-x', 'c',
+                          '-include', str(native_profiles[context]),
+                          *native_source_args(args[1:]), input_source]
+            stem = name.replace('/', '__')
+            normalized_gnu = native_pp_dir / (stem + '.reference.s')
+            native_s = native_pp_dir / (stem + '.minipp.s')
+            oracle = subprocess.run(['/usr/bin/riscv64-linux-gnu-gcc',
+                                     *normalized, '-o', str(normalized_gnu)],
+                                    cwd=golden, capture_output=True, text=True,
+                                    timeout=180)
+            if oracle.returncode:
+                (logs/(stem+'.gnu-normalized.log')).write_text(oracle.stderr[-8000:])
+                raise ValueError('normalized GNU assembler CPP failed: '+name)
+            result = subprocess.run([str(native_pp), *normalized,
+                                     '-o', str(native_s)], cwd=golden,
+                                    capture_output=True, text=True, timeout=180)
+            if result.returncode:
+                (logs/(stem+'.minipp.log')).write_text(result.stderr[-8000:])
+                raise ValueError('MiniPP assembler CPP failed: '+name)
+            # Prove BOTH normalized-GNU == MiniPP and MiniPP == the original
+            # GCC -E -P assembler-with-cpp output. Otherwise even two agreeing
+            # normalized preprocessors could have lost a real Kbuild flag.
+            original_bytes = temp.read_bytes()
+            native_bytes = native_s.read_bytes()
+            normalized_bytes = normalized_gnu.read_bytes()
+            if native_bytes != normalized_bytes or native_bytes != original_bytes:
+                import difflib
+                expected = original_bytes if native_bytes != original_bytes else normalized_bytes
+                diff = list(difflib.unified_diff(
+                    expected.decode(errors='replace').splitlines(),
+                    native_bytes.decode(errors='replace').splitlines(),
+                    fromfile='real_GNU_S' if native_bytes != original_bytes
+                             else 'normalized_GNU_S',
+                    tofile='MiniPP_S', n=2))
+                (native_pp_dir / (stem+'.diff')).write_text(
+                    '\n'.join(diff[:100])+'\n')
+                print('MINIPP_NATIVE_S=FAIL owner='+name+
+                      ' native_vs_real_GNU='+str(native_bytes == original_bytes)+
+                      ' native_vs_normalized_GNU='+str(native_bytes == normalized_bytes),
+                      flush=True)
+                raise ValueError('native .S preprocessed bytes differ: '+name)
+            # Actual MiniAS input comes from native MiniPP, not from either
+            # reference producer. Golden GNU artifacts remain immutable.
+            temp.write_bytes(native_bytes)
+            (native_pp_dir / (stem+'.sha256')).write_text(
+                hashlib.sha256(native_bytes).hexdigest()+'  '+name+'\n')
         asm=subprocess.run([str(mini),'-march='+arch,'-mabi='+abi,'-o',str(dest),str(temp)],
                            cwd=golden,capture_output=True,text=True,timeout=90)
         if asm.returncode or not dest.is_file():
@@ -142,6 +266,9 @@ def native_asm_overlay(a):
             raise ValueError('MiniAS .S failed '+name+' rc='+str(asm.returncode))
         if asm_elf_info(dest)!=(klass,h) or exports(dest)!=exports(before):
             raise ValueError('MiniAS .S ABI/symbol mismatch '+name)
+        if native_pp is not None:
+            print(f'MINIPP_NATIVE_S_OBJECT=PASS owner={name} pp=MiniPP as=MiniAS '
+                  'native_equals_original_GNU=true', flush=True)
         return name,sha(dest),sha(temp),sha(cmd)
     def outputs_index(exe):
         positions=[i+1 for i,x in enumerate(exe[:-1]) if x=='-o']
@@ -165,6 +292,17 @@ def native_asm_overlay(a):
         'owner\tobject_sha256\tpreprocessed_s_sha256\tkbuild_cmd_sha256\n'+''.join(
             '\t'.join(row)+'\n' for row in sorted(rows)))
     print(f'MINIAS_NATIVE_S=PASS native_asm_objects={len(rows)} C_recompiled=0 golden_unchanged=true',flush=True)
+    if native_pp is not None:
+        signed = sorted(native_pp_dir.glob('*.sha256'))
+        if len(signed) != len(rows):
+            raise ValueError('native .S MiniPP proof coverage mismatch')
+        (evidence/'native-S-pp-provenance.tsv').write_text(
+            'owner\tmini_pp_sha256\tGNU_original_equal\n'+''.join(
+                line.split('  ', 1)[1].strip()+'\t'+line.split('  ', 1)[0]+'\ttrue\n'
+                for line in (path.read_text().strip() for path in signed)))
+        print(f'MINIPP_NATIVE_S_INPUTS=PASS owners={len(rows)} '
+              'GNU_original_byte_identical=true MiniAS_consumed_MiniPP=true '
+              'C_recompiled=0 no_GNU_PP_production=true', flush=True)
 
 def seven_shard_overlay(a, frozen, manifest, orig, output, evidence):
     """Upgrade the accepted 64-object overlay to 2060 native C objects.
@@ -299,6 +437,8 @@ def main():
     p.add_argument('--native-asm-only', action='store_true')
     p.add_argument('--c-universe')
     p.add_argument('--gcc-manifest')
+    p.add_argument('--native-asm-minipp')
+    p.add_argument('--linux-src')
     a=p.parse_args()
     if a.native_asm_only:
         native_asm_overlay(a)
