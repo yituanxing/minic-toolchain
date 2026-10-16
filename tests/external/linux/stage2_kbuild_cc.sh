@@ -165,7 +165,8 @@ if [[ "$source_file" == *.c ]]; then
           native_pp_args+=("$arg" "${args[i+1]}")
           ((i+=1))
           ;;
-        -D*|-U*|-I*|-nostdinc|-isystem*|-include*)
+        -D*|-U*|-I*|-nostdinc|-isystem*|-include*|-fmacro-prefix-map=*)
+          # Preserve Kbuild's real __FILE__ mapping, not absolute host paths.
           native_pp_args+=("$arg") ;;
         -march=*|-mabi=*|-std=*|-O0|-O1|-O2|-O3|-Og|-Os|-Oz|-Ofast|-ffreestanding|-fhosted|-fno-builtin|-fbuiltin|-fshort-wchar|-funsigned-char|-fsigned-char|-fno-PIE|-fPIE|-fno-pie|-fpie|-fPIC|-fpic|-fno-PIC|-fno-pic|-mcmodel=*)
           # Optimization and hostedness control GCC built-in macros such as
