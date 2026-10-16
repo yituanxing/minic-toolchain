@@ -48,10 +48,8 @@ def main() -> int:
     out = a.out.resolve()
     ev = a.evidence.resolve()
     ev.mkdir(parents=True, exist_ok=True)
-    native = ev / "native-S-inputs"
-    native.mkdir(exist_ok=True)
+    native = ev  # existing artifact uploads *.o and *.txt at this level
     results = []
-    original = []
     native_objs = []
     for name in NAMES:
         rel = REL / (name + ".o")
@@ -78,8 +76,8 @@ def main() -> int:
         abi = [x for x in argv if x.startswith("-mabi=")]
         if not march or not abi:
             raise ValueError("missing recorded RISC-V target ABI")
-        assembly = native / (name + ".s")
-        object_path = native / (name + ".o")
+        assembly = native / ("native-S-" + name + ".s")
+        object_path = native / ("native-S-" + name + ".o")
         pp_argv = ["/usr/bin/riscv64-linux-gnu-gcc", "-P", *argv[1:]]
         pp_argv[pp_argv.index("-c")] = "-E"
         pp_argv[output_indices[0]+2] = str(assembly)
@@ -102,7 +100,6 @@ def main() -> int:
             "preprocessed_sha256": digest(assembly), "march": march[-1],
             "mabi": abi[-1],
         })
-        original.append(ref)
         native_objs.append(object_path)
     (ev / "native-S-objects.json").write_text(json.dumps(results, indent=2) + "\n")
     linker_args = [
