@@ -2157,12 +2157,24 @@ def derivation(name):
         # object with Kbuild's full GNU-ld -> MiniObjcopy -> GNU-AS trail.
         dbg="arch/riscv/kernel/compat_vdso/compat_vdso.so.dbg"
         so="arch/riscv/kernel/compat_vdso/compat_vdso.so"
+        # Kbuild can use the exact GNU-ld trail or the now-certified
+        # native ELF32 MiniLD boundary. A native case needs a SUCCESS
+        # acceptance marker *and* its exact real .dbg.tmp linker trace;
+        # do not silently accept an arbitrary changed compat-vDSO object.
+        gnu_linked = re.search(
+            r"(?m)^gnu-ld .* -o "+re.escape(dbg)+r"\.tmp$",native_linker_trace)
+        native_linked = (
+            re.search(r"(?m)^minild-vdso32 .* -melf32lriscv .* -o "
+                      +re.escape(dbg)+r"\.tmp$",native_linker_trace) and
+            "MINILD_VDSO32_KBUILD=PASS native_ELF32=true" in linked and
+            "no_GNU_fallback=true" in linked)
         if (emitted("VDSOLD", dbg) and emitted("OBJCOPY",so) and
-            emitted("AS",name) and
-            re.search(r"(?m)^gnu-ld .* -o "+re.escape(dbg)+r"\.tmp$",native_linker_trace) and
+            emitted("AS",name) and (gnu_linked or native_linked) and
             re.search(r"(?m)^miniobjcopy .* "+re.escape(dbg)+r"\.tmp "+re.escape(dbg)+r"$",native_objcopy_trace) and
             re.search(r"(?m)^miniobjcopy -S "+re.escape(dbg)+r" "+re.escape(so)+r"$",native_objcopy_trace)):
-            return "native-compat-vdso:GNU-LD_MiniObjcopy_GNU-AS"
+            return ("native-compat-vdso:MiniLD32_MiniObjcopy_GNU-AS"
+                    if native_linked else
+                    "native-compat-vdso:GNU-LD_MiniObjcopy_GNU-AS")
     if name=="arch/riscv/kernel/vdso/vdso.o":
         owners={"arch/riscv/kernel/vdso/hwprobe.o",
                 "arch/riscv/kernel/vdso/vgettimeofday.o"}
