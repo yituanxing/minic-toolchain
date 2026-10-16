@@ -600,6 +600,7 @@ jobs:
           # Temporary checkout only: existing proven begin/end probes.
           python3 tools/ci/apply-perf-specialization-phase-trace-v0.py
           python3 tools/ci/apply-perf-integer-loop-trace-v0.py
+          python3 tools/ci/apply-perf-core-lower-hotspot-census-v1.py
           git diff --check
           make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$root/next-phase-traced" \
             "$root/next-phase-traced/bin/minic" \
@@ -639,6 +640,21 @@ jobs:
               --out "$root/next-phase/$safe" \
               | tee "$root/evidence/next-phase-$safe.txt"
             grep -Fq 'MINIC_SPEC_PHASE_GROUP=PASS' "$root/evidence/next-phase-$safe.txt"
+            MINIC_CORE_LOWER_CENSUS=1 "$root/next-phase-traced/bin/minic" \
+              -S "$frozen" -o "$root/next-phase/$safe/census.s" \
+              >"$root/evidence/next-core-$safe.stdout" \
+              2>"$root/evidence/next-core-$safe.log"
+            grep -Eq '^MINIC_CORE_LOWER_CENSUS map_calls=[0-9]+ ' \
+              "$root/evidence/next-core-$safe.log"
+            python3 - "$root/next-phase/$safe" <<'PYCORE'
+          import hashlib,json,sys
+          from pathlib import Path
+          folder=Path(sys.argv[1])
+          x=json.loads((folder/"phases.json").read_text())
+          actual=hashlib.sha256((folder/"census.s").read_bytes()).hexdigest()
+          assert actual==x["results"]["after"]["assembly_sha"]
+          print("MINIC_CORE_CENSUS_ASM=PASS owner="+folder.name+" sha256="+actual)
+          PYCORE
           done < "$root/evidence/next-phase-inputs.tsv"
           python3 - "$root/next-phase" <<'PY' | tee "$root/evidence/next-phase-summary.txt"
           import json,sys
@@ -659,7 +675,23 @@ jobs:
                    "spec_boolean_ms":spec["spec-boolean"]["ms"],
                    "spec_finalize_ms":spec["spec-finalize"]["ms"],
                    "normalize_core_gap_ms":x["interstage_gap_ms"]["normalize-to-core-set"]}
+              import re
+              core_log=(base.parent/"evidence"/("next-core-"+row["owner"]+".log")).read_text()
+              matches=re.findall(r"^MINIC_CORE_LOWER_CENSUS (.+)$",core_log,re.MULTILINE)
+              assert len(matches)==1
+              core_data=dict((k,int(v)) for k,v in (
+                  entry.split("=",1) for entry in matches[0].split()))
+              expected=("map_calls","map_slots","if_calls","if_scan_statements",
+                        "if_scan_expressions","switch_calls",
+                        "switch_scan_statements","switch_scan_expressions",
+                        "unreachable_calls","unreachable_scan_statements",
+                        "loop_label_calls","loop_label_scan_statements",
+                        "loop_label_scan_expressions")
+              assert set(core_data)==set(expected)
+              row["core_census"]=core_data
               rows.append(row)
+              print("MINIC_CORE_CENSUS_OWNER owner="+row["owner"]+" "+
+                    " ".join("%s=%d"%(k,v) for k,v in core_data.items()))
               print("MINIC_NEXT_HOTSPOT_OWNER "+" ".join("%s=%s"%(k,v) for k,v in row.items()))
           assert len(rows)==7
           (base/"ranked-summary.json").write_text(json.dumps({
@@ -670,7 +702,7 @@ jobs:
                       "codegen_ms","spec_integer_ms","spec_symbolic_ms",
                       "spec_boolean_ms","spec_finalize_ms"):
               print("MINIC_NEXT_HOTSPOT_SUM %s=%.3f"%(key,sum(x[key] for x in rows)))
-          print("MINIC_NEXT_HOTSPOT_AUDIT=PASS owners=7 measured_current=true")
+          print("MINIC_NEXT_HOTSPOT_AUDIT=PASS owners=7 measured_current=true core_counters=true")
           PY
 
       - name: Same-runner frozen Linux single-factor MiniC paired A/B
