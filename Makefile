@@ -138,7 +138,6 @@ MINILD_SOURCES := \
 	linker/src/linker_script_expr.c \
 	linker/src/linker_script_parse.c \
 	linker/src/linker_script_match.c \
-	linker/src/elf32_compat_vdso.c \
 	linker/src/linker.c \
 	tools/minic-ld/main.c
 MINILD_OBJECTS := $(MINIELF_REL_OBJECTS) $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(MINILD_SOURCES))
