@@ -2660,21 +2660,45 @@ static const MiniPpMacro *minipp_find_trailing_function_macro(
 static bool minipp_append_file_builtin(MiniPpState *state,
                                        MiniPpString *out) {
     const char *path = state->current_file == NULL ? "" : state->current_file;
-    const unsigned char *cursor = (const unsigned char *)path;
+    const char *segments[2] = {path, NULL};
+    const char *map = state->macro_prefix_map;
+    size_t index;
 
+    /* Kbuild's -fmacro-prefix-map=SRC/= changes the string literal that
+     * __FILE__ expands into, not the filesystem path used for #include.
+     * Apply the mapping only at builtin expansion, with source-path prefix
+     * semantics. The caller validates the exact resulting GCC -E bytes. */
+    if (map != NULL) {
+        const char *separator = strchr(map, '=');
+        size_t old_length;
+
+        if (separator == NULL) {
+            return false;
+        }
+        old_length = (size_t)(separator - map);
+        if (strncmp(path, map, old_length) == 0) {
+            segments[0] = separator + 1;
+            segments[1] = path + old_length;
+        }
+    }
     if (!minipp_string_append_char(out, '"')) {
         return false;
     }
-    while (*cursor != '\0') {
-        if (*cursor == '\\' || *cursor == '"') {
-            if (!minipp_string_append_char(out, '\\')) {
+    for (index = 0U; index < 2U && segments[index] != NULL; ++index) {
+        const unsigned char *cursor =
+            (const unsigned char *)segments[index];
+
+        while (*cursor != '\0') {
+            if (*cursor == '\\' || *cursor == '"') {
+                if (!minipp_string_append_char(out, '\\')) {
+                    return false;
+                }
+            }
+            if (!minipp_string_append_char(out, (char)*cursor)) {
                 return false;
             }
+            ++cursor;
         }
-        if (!minipp_string_append_char(out, (char)*cursor)) {
-            return false;
-        }
-        ++cursor;
     }
     return minipp_string_append_char(out, '"');
 }
