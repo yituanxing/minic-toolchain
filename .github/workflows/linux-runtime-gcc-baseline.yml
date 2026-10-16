@@ -2686,6 +2686,8 @@ jobs:
           path: |
             build/linux-runtime-gcc-cohort-v1/full-objects.txt
             build/linux-runtime-gcc-cohort-v1/cohort.log
+            build/minipp-seven-merge/native-summary.json
+            build/minipp-seven-merge/native-performance.json
             build/linux-runtime-gcc-cohort-v1/identity.txt
             build/linux-runtime-gcc-cohort-v1/minic-identity.txt
             build/linux-runtime-gcc-cohort-v1/minic-manifest.sha256
