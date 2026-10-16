@@ -130,6 +130,28 @@ def main() -> int:
         *(str(p) for p in native_objs),
         "-o", str(ev / "native-S-compat-vdso.so")
     ]
+    # GNU is diagnostic-only on the EXACT SAME four MiniAS outputs.
+    # This establishes whether the no-.eh_frame ABI omits PT_GNU_EH_FRAME
+    # entirely; the reference file is NEVER substituted for MiniLD.
+    gnu_args = list(linker_args)
+    gnu_output = ev / "native-S-gnu-compat-vdso.so"
+    gnu_args[-1] = str(gnu_output)
+    gnu_rc = run(["/usr/bin/riscv64-linux-gnu-ld", *gnu_args],
+                 out, ev / "native-S-gnu-link.txt")
+    if gnu_rc != 0:
+        raise RuntimeError("GNU same-MiniAS-object reference failed rc="
+                           + str(gnu_rc))
+    gnu_readelf = subprocess.run(
+        ["riscv64-linux-gnu-readelf", "-Wh", "-SW", "-lW", "-dW",
+         "--dyn-syms", "--version-info", str(gnu_output)],
+        cwd=out, capture_output=True, text=True, timeout=30)
+    (ev / "native-S-gnu-elf.txt").write_text(
+        gnu_readelf.stdout + gnu_readelf.stderr)
+    if gnu_readelf.returncode != 0:
+        raise RuntimeError("readelf cannot inspect GNU same-input RV32 output")
+    print("MINILD_VDSO32_NATIVE_S_GNU_REFERENCE=PASS "
+          "GNU_diagnostic_only=true input_objects=MiniAS "
+          "gnu_output_bytes=" + str(gnu_output.stat().st_size))
     outcome = run([str(a.minild.resolve()), *linker_args], out,
                   ev / "native-S-link.txt")
     sys.stdout.write("MINILD_VDSO32_NATIVE_S_REPLAY="
