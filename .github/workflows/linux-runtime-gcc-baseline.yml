@@ -1258,7 +1258,7 @@ jobs:
           if-no-files-found: warn
 
       - name: Identify immutable MiniC shard artifact
-        if: "!contains(github.event.head_commit.message, '[linux-minias-seven-shards]') && !contains(github.event.head_commit.message, '[linux-minipp-seven-integration]')"
+        if: "!contains(github.event.head_commit.message, '[linux-minias-seven-shards]') && !contains(github.event.head_commit.message, '[linux-minipp-seven-integration]') && !contains(github.event.head_commit.message, '[linux-minipp-native-rules-C]')"
         id: candidate
         shell: bash
         run: |
@@ -1282,7 +1282,7 @@ jobs:
           echo "key=gnu-minic-shard-v1-eeb04f304ebfb97a1079c187dc0c2ea3cc61fc50a55aa3cc776237c16ab19bbe-$profile-$subset-$gcc-$assembler" >>"$GITHUB_OUTPUT"
 
       - name: Restore this shard's immutable candidate objects
-        if: "!contains(github.event.head_commit.message, '[linux-minias-seven-shards]') && !contains(github.event.head_commit.message, '[linux-minipp-seven-integration]') && !contains(github.event.head_commit.message, '[linux-perf-2064-ab]')"
+        if: "!contains(github.event.head_commit.message, '[linux-minias-seven-shards]') && !contains(github.event.head_commit.message, '[linux-minipp-seven-integration]') && !contains(github.event.head_commit.message, '[linux-minipp-native-rules-C]') && !contains(github.event.head_commit.message, '[linux-perf-2064-ab]')"
         id: shard_cache
         uses: actions/cache/restore@v4
         with:
@@ -1293,7 +1293,7 @@ jobs:
           key: ${{ steps.candidate.outputs.key }}
 
       - name: Build MiniC and prove this exact shard
-        if: "!contains(github.event.head_commit.message, '[linux-minias-seven-shards]') && !contains(github.event.head_commit.message, '[linux-minipp-seven-integration]')"
+        if: "!contains(github.event.head_commit.message, '[linux-minias-seven-shards]') && !contains(github.event.head_commit.message, '[linux-minipp-seven-integration]') && !contains(github.event.head_commit.message, '[linux-minipp-native-rules-C]')"
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -1353,7 +1353,7 @@ jobs:
             "$work/provenance" "$ev/full-objects.txt" "$ev"
 
       - name: Authenticate shard before cache or export
-        if: "!contains(github.event.head_commit.message, '[linux-minias-seven-shards]') && !contains(github.event.head_commit.message, '[linux-minipp-seven-integration]')"
+        if: "!contains(github.event.head_commit.message, '[linux-minias-seven-shards]') && !contains(github.event.head_commit.message, '[linux-minipp-seven-integration]') && !contains(github.event.head_commit.message, '[linux-minipp-native-rules-C]')"
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -1367,7 +1367,7 @@ jobs:
           echo "GNU_MINIC_SHARD_READY=PASS shard=${{ matrix.shard }} objects=$n"
 
       - name: Cache completed shard independently of later link failures
-        if: "!contains(github.event.head_commit.message, '[linux-minias-seven-shards]') && !contains(github.event.head_commit.message, '[linux-minipp-seven-integration]') && !contains(github.event.head_commit.message, '[linux-perf-2064-ab]') && steps.shard_cache.outputs['cache-hit'] != 'true'"
+        if: "!contains(github.event.head_commit.message, '[linux-minias-seven-shards]') && !contains(github.event.head_commit.message, '[linux-minipp-seven-integration]') && !contains(github.event.head_commit.message, '[linux-minipp-native-rules-C]') && !contains(github.event.head_commit.message, '[linux-perf-2064-ab]') && steps.shard_cache.outputs['cache-hit'] != 'true'"
         uses: actions/cache/save@v4
         with:
           path: |
@@ -1377,7 +1377,7 @@ jobs:
           key: ${{ steps.candidate.outputs.key }}
 
       - name: Transfer only candidate objects and attestations
-        if: "!contains(github.event.head_commit.message, '[linux-minias-seven-shards]') && !contains(github.event.head_commit.message, '[linux-minipp-seven-integration]') && !contains(github.event.head_commit.message, '[linux-perf-2064-ab]')"
+        if: "!contains(github.event.head_commit.message, '[linux-minias-seven-shards]') && !contains(github.event.head_commit.message, '[linux-minipp-seven-integration]') && !contains(github.event.head_commit.message, '[linux-minipp-native-rules-C]') && !contains(github.event.head_commit.message, '[linux-perf-2064-ab]')"
         uses: actions/upload-artifact@v4
         with:
           name: shard-${{ matrix.shard }}
@@ -1402,7 +1402,7 @@ jobs:
           retention-days: 7
 
       - name: Keep bounded failed-TU evidence
-        if: failure() && !contains(github.event.head_commit.message, '[linux-minias-seven-shards]') && !contains(github.event.head_commit.message, '[linux-minipp-seven-integration]')
+        if: failure() && !contains(github.event.head_commit.message, '[linux-minias-seven-shards]') && !contains(github.event.head_commit.message, '[linux-minipp-seven-integration]') && !contains(github.event.head_commit.message, '[linux-minipp-native-rules-C]')
         uses: actions/upload-artifact@v4
         with:
           name: debug-shard-${{ matrix.shard }}
