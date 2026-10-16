@@ -522,11 +522,24 @@ jobs:
           frozen=$(cat "$root/evidence/phase20-cpu-owner.txt")
           python3 tools/ci/linux-perf-host-hotspot-profiler-v1.py \
             --input "$frozen" \
-            --debug-compiler "$root/phase20-traced/bin/minic" \
-            --release-compiler "$root/toolchain/bin/minic" \
+            --debug-compiler "$root/phase20-traced/bin/minic-cc" \
+            --release-compiler "$root/toolchain/bin/minic-cc" \
             --out "$root/current-phase20/cpu" --timeout 720 \
             | tee "$root/evidence/phase20-cpu-verdict.txt"
           grep -Fq 'MINIC_HOTSPOT_PROFILE=PASS' "$root/evidence/phase20-cpu-verdict.txt"
+          # Fail closed if profiling only saw the driver/ELF loader.
+          # Only minic-cc actually processes the preprocessed Linux TU.
+          python3 - "$root/current-phase20/cpu" <<'PY'
+          import json, sys
+          from pathlib import Path
+          d=Path(sys.argv[1])
+          summary=json.loads((d/"summary.json").read_text())
+          assert summary["assembly_equal"] and summary["debug_cc_sha256"]!=summary["release_cc_sha256"]
+          if summary["method"]=="callgrind-instructions-calls":
+              annotated=(d/"callgrind-inclusive.txt").read_text(errors="replace")
+              assert "src/compiler/compiler.c" in annotated or "minic_compile_preprocessed_file" in annotated, "CPU profiler captured only loader/driver, not minic-cc"
+          print("MINIC_CPU_HOTSPOT_PROFILER_PROVEN=PASS compiler=minic-cc driver_only=false")
+          PY
 
       - name: Parser index fallback, scope, and zero-expression smokes
         if: "!contains(github.event.head_commit.message, '[minic-source-broad-ab]') && !contains(github.event.head_commit.message, '[minic-current-phase20]')"
