@@ -7,10 +7,12 @@
 # 2026-10-16 compiler.c source refreshed for two audited refactor-only, pass-local
 # reachability caches; T1 focused/QEMU (8/8, three live variants) passed.
 # Scoped Boolean Domain cache integrated in compiler.c; full 2064 Linux/QEMU
-# requalification is PENDING; this records the exact
-# candidate source identity to admit the existing real-input certification,
-# not a claim that it has already passed.
-e47e8a3dfd34a85a7156499e911d334b4a86a3a2 src/compiler/compiler.c
+# verified in run #38916913804 (commit ab483a82).  The current compiler.c
+# has additionally integrated the previously tested integer transitive
+# FunctionBody owner filter, so this SHA is an UNQUALIFIED CANDIDATE pending
+# the dedicated frozen A/B and subsequent full Linux/QEMU requalification.
+# The manifest only authenticates source identity; it is not a test result.
+8d0a6d46a037c7b655b73a22dccd1393b67bd1ec src/compiler/compiler.c
 ce262d93f8c77348019a4f6fd94a0a8ccdc22d7d src/core/core_lower.c
 a8418e45608310687e3d6a1e96da79ca49135870 src/core/core_lower_asm.c
 7997978a9b10a6d01e33dbc00dd11cb3f668f69f src/core/core_lower_internal.h
