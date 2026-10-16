@@ -89,9 +89,10 @@ jobs:
               --snapshot tests/preprocessor/profiles/rv64-linux-6.6.143-gcc13.json.gz.b64 \
               --report "$work/minipp-profile-diff.json"
           fi
-          if [[ "${{ contains(github.event.head_commit.message, '[linux-minipp-native-macro-rules]') && '1' || '0' }}" == 1 ]]; then
-            python3 preprocessor/target/riscv_linux_predefines.py --self-check
-          fi
+          # The target builtin macro rules are product code, not a disposable
+          # CI patch. Every focused regression exercises their exact known
+          # GCC13/RV64 Linux compatibility contexts without a GNU subprocess.
+          python3 preprocessor/target/riscv_linux_predefines.py --self-check
 
           MINIC="$minic" \
           BUILD_DIR="$work" \
