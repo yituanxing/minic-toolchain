@@ -10,8 +10,11 @@ def sha(p):
 p=argparse.ArgumentParser()
 for name in ['artifacts','owners','golden-out','dest','commit']:p.add_argument('--'+name,required=True)
 p.add_argument('--pinned-profile',type=Path)
+p.add_argument('--native-macro-rules',action='store_true')
 a=p.parse_args()
 pinned_sha=sha(a.pinned_profile) if a.pinned_profile else None
+if a.native_macro_rules and not pinned_sha:
+    raise SystemExit('MINIPP_MERGE=FAIL native-macro-rules-missing-pinned-base-sha')
 
 root,ownerfile,gold,dest=map(Path,[a.artifacts,a.owners,a.golden_out,a.dest])
 owners=[x.strip() for x in ownerfile.read_text().splitlines() if x.strip() and not x.startswith('#')]
@@ -24,9 +27,10 @@ for n in range(7):
     if not directory.is_dir():raise SystemExit(f'MINIPP_MERGE=FAIL missing_shard={n}')
     summary=json.loads((directory/'summary.json').read_text())
     rows=json.loads((directory/'results.json').read_text())
-    if pinned_sha and (summary.get('builtin_profile') != 'pinned' or
+    expected_profile=('native_rules' if a.native_macro_rules else 'pinned')
+    if pinned_sha and (summary.get('builtin_profile') != expected_profile or
                        summary.get('builtin_profile_sha') != pinned_sha):
-        raise SystemExit(f'MINIPP_MERGE=FAIL nonpinned_predefines_worker={n}')
+        raise SystemExit(f'MINIPP_MERGE=FAIL wrong_macro_producer_worker={n}')
     selected=owners[n::7]
     if (summary['shard']!=n or summary['shards']!=7 or not summary['full_shard'] or
         summary['status']!='PASS' or summary['full_universe']!=2064 or
@@ -60,7 +64,7 @@ if set(records)!=set(owners):raise SystemExit('MINIPP_MERGE=FAIL incomplete_2064
 (dest.parent/'native-full-manifest.sha256').write_text(''.join(f'{records[o]}  {o}\n' for o in owners))
 (dest.parent/'native-summary.json').write_text(json.dumps(dict(owners=2064,shards=7,failed=0,pp='MiniPP',
                     cc='MiniC',assembler='MiniAS',qemu_certified=False,
-                    builtin_profile='pinned' if pinned_sha else 'reference',
+                    builtin_profile='native_rules' if a.native_macro_rules else 'pinned' if pinned_sha else 'reference',
                     builtin_profile_sha=pinned_sha,
                     generated_header_replay_requires_MiniPP=True),indent=2)+'\n')
 print('MINIPP_SEVEN_MERGE=PASS owners=2064 shards=7 GNU_PP_consumed_by_MiniC=false QEMU_pending=true',flush=True)
