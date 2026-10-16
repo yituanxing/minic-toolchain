@@ -2494,6 +2494,9 @@ jobs:
               export MINILD_ENABLE_VMLINUX_R=1
               echo "MINILD_NATIVE_R=ENABLED boundary=vmlinux.o only gnu_linkers=other_unproven"
             fi
+            if [[ "${{ contains(github.event.head_commit.message, '[linux-native-vdso32]') && '1' || '0' }}" == 1 ]]; then
+              export MINILD_ENABLE_VDSO32=1 COHORT_MINILD_FORCE_VDSO32=1
+            fi
             if [[ "${{ contains(github.event.head_commit.message, '[linux-native-vdso64]') && '1' || '0' }}" == 1 ]]; then
               export MINILD_ENABLE_VDSO64=1 COHORT_MINILD_FORCE_VDSO64=1
               echo "MINILD_VDSO64=ENABLED Kbuild_64bit_vDSO_native_only=true cached_GNU_vdso_relink=true MiniC_cache=2064"
