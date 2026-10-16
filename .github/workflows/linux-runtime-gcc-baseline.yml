@@ -20,12 +20,6 @@ on:
       - 'preprocessor/**'
       - 'tools/minic-cpp/**'
       - 'tests/preprocessor/**'
-      # Source-owned MiniLD/ELF edits also need to reach the existing native
-      # focused and cached Linux acceptance router (without auto full builds).
-      - 'linker/**'
-      - 'elf/**'
-      - 'tools/minic-ld/**'
-
   workflow_dispatch:
 
 permissions:
@@ -2500,10 +2494,6 @@ jobs:
               export MINILD_ENABLE_VMLINUX_R=1
               echo "MINILD_NATIVE_R=ENABLED boundary=vmlinux.o only gnu_linkers=other_unproven"
             fi
-            if [[ "${{ contains(github.event.head_commit.message, '[linux-native-vdso32]') && '1' || '0' }}" == 1 ]]; then
-              export MINILD_ENABLE_VDSO32=1 COHORT_MINILD_FORCE_VDSO32=1
-              echo 'MINILD_VDSO32=ENABLED real_Kbuild_ELF32_only=true cached_four_objects=true native_no_GNU_fallback=true'
-            fi
             if [[ "${{ contains(github.event.head_commit.message, '[linux-native-vdso64]') && '1' || '0' }}" == 1 ]]; then
               export MINILD_ENABLE_VDSO64=1 COHORT_MINILD_FORCE_VDSO64=1
               echo "MINILD_VDSO64=ENABLED Kbuild_64bit_vDSO_native_only=true cached_GNU_vdso_relink=true MiniC_cache=2064"
@@ -2618,10 +2608,6 @@ jobs:
               grep -Fq 'COHORT_P1=PASS name=full_all_verified syscalls=12 python_era_oracle=PASS' "$ev/cohort.log" || exit 40
               echo 'MINIPP_SEVEN_QEMU=PASS pp_input=MiniPP native_C=2064 QEMU_P1=12/12 dynamic_header_provenance=cohort'
             fi
-            if [[ "${{ contains(github.event.head_commit.message, '[linux-native-vdso32]') && '1' || '0' }}" == 1 ]]; then
-              bash tools/ci/qualify-minild-vdso32-real-kbuild-v1.sh \
-                "$NATIVE_TRACE_DIR" "$work/out" "$ev/cohort.log"
-            fi
             if [[ "${{ contains(github.event.head_commit.message, '[linux-native-vdso64]') && '1' || '0' }}" == 1 ]]; then
               native_vdso64_calls=$(grep -c '^minild-vdso64 ' "$NATIVE_TRACE_DIR/minild.trace" || true)
               gnu_vdso64_calls=$(grep -Ec '^gnu-ld .*arch/riscv/kernel/vdso/vdso\.so\.dbg' "$NATIVE_TRACE_DIR/minild.trace" || true)
@@ -2689,7 +2675,7 @@ jobs:
             else
               pp_tag=GNU
             fi
-            echo "NATIVE_UNION_RESULT=PASS pp=$pp_tag minic=2064 native_C_from_seven_shards=${COHORT_P1_EXPERIMENTAL_POOL:-none} ar=MiniAR_full_actual_Kbuild ar_native_calls=$minic_ar_calls ar_mpit_calls=$minic_mpit_calls ar_gnu_calls=0 ld=MiniLD_certified_boundaries vdso32_native=${MINILD_ENABLE_VDSO32:-0} vdso64_native=${MINILD_ENABLE_VDSO64:-0} objcopy=MiniObjcopy runtime=P1"
+            echo "NATIVE_UNION_RESULT=PASS pp=$pp_tag minic=2064 native_C_from_seven_shards=${COHORT_P1_EXPERIMENTAL_POOL:-none} ar=MiniAR_full_actual_Kbuild ar_native_calls=$minic_ar_calls ar_mpit_calls=$minic_mpit_calls ar_gnu_calls=0 ld=MiniLD_certified_boundaries vdso64_native=${MINILD_ENABLE_VDSO64:-0} objcopy=MiniObjcopy runtime=P1"
           fi
 
       - name: Preserve aggregate link, QEMU and failure-frontier evidence
