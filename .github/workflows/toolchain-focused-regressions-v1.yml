@@ -90,7 +90,7 @@ jobs:
               --report "$work/minipp-profile-diff.json"
           fi
           if [[ "${{ contains(github.event.head_commit.message, '[linux-minipp-native-macro-rules]') && '1' || '0' }}" == 1 ]]; then
-            python3 tools/ci/minipp-linux-native-macro-rules-v1.py --self-check
+            python3 preprocessor/target/riscv_linux_predefines.py --self-check
           fi
 
           MINIC="$minic" \
