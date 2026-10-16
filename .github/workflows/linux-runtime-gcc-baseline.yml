@@ -2281,6 +2281,10 @@ jobs:
               native_S_pp_args+=(--native-asm-profile-snapshot "$profile")
               echo 'MINIPP_NATIVE_S_PROFILE=ENABLED pinned_GCC13_target_abi=true no_GCC_macro_generation=true'
             fi
+            if [[ "${{ contains(github.event.head_commit.message, '[linux-minipp-native-rules-p1]') && '1' || '0' }}" == 1 ]]; then
+              native_S_pp_args+=(--native-asm-macro-rules)
+              echo 'MINIPP_NATIVE_S_PROFILE=RULE_GENERATED GCC_processes=0 ABI=classified'
+            fi
           fi
           python3 tools/ci/minias-linux-corpus-runtime-overlay-v1.py \
             --original-pool "$original_pool" --manifest "$original_manifest" \
@@ -2353,6 +2357,7 @@ jobs:
         env:
           COHORT_MINIPP_DYNAMIC_HEADERS: ${{ contains(github.event.head_commit.message, '[linux-minipp-dynamic-headers]') && '1' || '0' }}
           COHORT_MINIPP_PROFILE_SNAPSHOT: ${{ contains(github.event.head_commit.message, '[linux-minipp-pinned-predefines]') && 'tests/preprocessor/profiles/rv64-linux-6.6.143-gcc13.json.gz.b64' || '' }}
+          COHORT_MINIPP_NATIVE_MACRO_RULES: ${{ contains(github.event.head_commit.message, '[linux-minipp-native-rules-p1]') && '1' || '0' }}
         run: |
           set -Eeuo pipefail
           work="$GITHUB_WORKSPACE/build/linux-runtime-gcc"
