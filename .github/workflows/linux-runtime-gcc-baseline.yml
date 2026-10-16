@@ -2179,6 +2179,9 @@ jobs:
           if [[ "${{ contains(github.event.head_commit.message, '[linux-minipp-pinned-full]') && '1' || '0' }}" == 1 ]]; then
             pinned_merge_args=(--pinned-profile "$GITHUB_WORKSPACE/tests/preprocessor/profiles/rv64-linux-6.6.143-gcc13.json.gz.b64")
           fi
+          if [[ "${{ contains(github.event.head_commit.message, '[linux-minipp-native-rules-C]') && '1' || '0' }}" == 1 ]]; then
+            pinned_merge_args=(--pinned-profile "$GITHUB_WORKSPACE/tests/preprocessor/profiles/rv64-linux-6.6.143-gcc13.json.gz.b64" --native-macro-rules)
+          fi
           python3 tools/ci/minipp-linux-seven-merge-v1.py \
             --artifacts "$GITHUB_WORKSPACE/build/minipp-seven-merge/incoming" \
             --owners "$ev/full-objects.txt" \
