@@ -1649,6 +1649,21 @@ trial() {
                   "$out/arch/riscv/kernel/vdso/vdso.so"
       echo "MINILD_VDSO64=FORCED_REAL_KBUILD_LINK cached_GNU_vdso_removed=true full_C_rebuild=false trial=$name"
     fi
+    if [[ "${COHORT_MINILD_FORCE_VDSO32:-0}" == 1 ]]; then
+      [[ "${COHORT_NATIVE_UNION:-0}" == 1 &&
+         "${MINILD_ENABLE_VDSO32:-0}" == 1 ]] || {
+        echo 'MINILD_VDSO32=FAIL force_relink_without_native_wrapper' >&2
+        exit 8
+      }
+      # Force only the product linker edge from the SHA-authenticated Kbuild
+      # golden tree. Keep all 2064 C .o and four RV32 ET_REL inputs intact.
+      # The kernel may legitimately rebuild the derived compat_vdso.o
+      # and its dependent C owner after generating new ELF32 metadata.
+      rm -f -- "$out/arch/riscv/kernel/compat_vdso/compat_vdso.so.dbg" \
+                  "$out/arch/riscv/kernel/compat_vdso/compat_vdso.so.dbg.tmp" \
+                  "$out/arch/riscv/kernel/compat_vdso/compat_vdso.so"
+      echo "MINILD_VDSO32=FORCED_REAL_KBUILD_LINK cached_GNU_compat_vdso_removed=true full_C_rebuild=false trial=$name"
+    fi
     : >"$d/selected-objects.txt"
     for ((i=0;i<n;i++)); do
       selected=0
