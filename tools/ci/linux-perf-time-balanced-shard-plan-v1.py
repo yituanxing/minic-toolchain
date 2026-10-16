@@ -6,8 +6,10 @@ or cache identity; integration into production requires a separately certified
 producer + merger contract and fresh native-object identities.
 """
 import argparse
+import base64
 import hashlib
 import json
+import struct
 from pathlib import Path, PurePosixPath
 
 def plan(data, n=7):
@@ -25,6 +27,46 @@ def plan(data, n=7):
     if sum(len(b["members"]) for b in bins) != len(data):
         raise ValueError("incomplete result")
     return bins
+
+def balanced_members(owner_names, costs_path):
+    """Return seven exact, capped LPT owner lists and the pinned input SHA.
+
+    Reuse plan() unchanged. Cost weights are the successful seven-shard
+    Linux #38870185276 subprocess timings, NOT per-runner wall clock.
+    A stale or corrupted owner manifest fails closed.
+    """
+    raw = Path(costs_path).read_bytes()
+    evidence = json.loads(raw)
+    names = sorted(owner_names)
+    if (len(names) != 2064 or len(set(names)) != 2064 or
+        evidence.get("schema") != "linux-minipp-seven-balanced-owner-costs-v1" or
+        evidence.get("owner_count") != 2064 or
+        evidence.get("source_run") != 38870185276 or
+        evidence.get("source_commit") != "24b0247401d1f973c4aa4f3495d7298cc7dd4cc1" or
+        evidence.get("packed_type") !=
+            "base64 little-endian uint16 milliseconds ordered by sorted(owner paths)"):
+        raise ValueError("balanced shard: wrong historical measurement identity")
+    names_sha = hashlib.sha256(("\n".join(names) + "\n").encode()).hexdigest()
+    if names_sha != evidence.get("sorted_owner_sha256"):
+        raise ValueError("balanced shard: owner universe differs from measured 2064")
+    try:
+        packed = base64.b64decode(evidence["weights_le16_base64"], validate=True)
+    except (ValueError, KeyError) as exc:
+        raise ValueError("balanced shard: invalid pinned weights") from exc
+    if len(packed) != len(names)*2:
+        raise ValueError("balanced shard: wrong packed duration count")
+    costs = struct.unpack(f"<{len(names)}H", packed)
+    if min(costs) <= 0 or sum(costs) != evidence.get("total_cost_ms"):
+        raise ValueError("balanced shard: corrupt or missing per-owner time")
+    bins = plan([(owner, weight, idx%7)
+                 for idx, (owner, weight) in enumerate(zip(names, costs))])
+    selected = [b["members"] for b in bins]
+    if (len(selected) != 7 or
+        sorted(name for group in selected for name in group) != names or
+        sorted(len(group) for group in selected) != [294]+[295]*6):
+        raise ValueError("balanced shard: lost, duplicate, or over-capacity owner")
+    return selected, hashlib.sha256(raw).hexdigest(), [b["weight_ms"] for b in bins]
+
 
 def parse(rows, mode):
     required = ("minic_wall_ms",) if mode == "minic" else (
@@ -74,6 +116,12 @@ def self_test():
     assert set(x for p in a for x in p["members"]) == set(x[0] for x in example)
     assert max(len(x["members"]) for x in a) == 294
     assert sum(compare(example, a)["predicted_ms"]) == sum(x[1] for x in example)
+    historical = Path(__file__).with_name("linux-minipp-seven-balanced-costs-24b02474-v1.json")
+    if historical.is_file():
+        evidence = json.loads(historical.read_text())
+        packed = base64.b64decode(evidence["weights_le16_base64"], validate=True)
+        assert len(packed) == 2064*2
+        assert sum(struct.unpack("<2064H", packed)) == 5175053
     print("PERF_SHARD_PLAN_SELFTEST=PASS no_compile=1")
 
 def main():
