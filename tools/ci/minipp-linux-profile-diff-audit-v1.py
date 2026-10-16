@@ -28,7 +28,7 @@ def definitions(text: str) -> dict[str, str]:
     for line in text.splitlines():
         if not line.startswith("#define "):
             continue
-        match = re.match(r"#define\\s+([A-Za-z_][A-Za-z0-9_]*)(\\([^)]*\\))?(?:\\s+(.*))?$", line)
+        match = re.match(r"#define\s+([A-Za-z_][A-Za-z0-9_]*)(\([^)]*\))?(?:\s+(.*))?$", line)
         if match is None:
             raise ValueError("unparsed predefine: " + line[:180])
         key = match.group(1) + (match.group(2) or "")
@@ -113,7 +113,7 @@ def main() -> None:
                 print("MINIPP_PROFILE_MACRO_DELTA_TRUNCATED count="+str(len(changes)-45))
     if args.report:
         args.report.parent.mkdir(parents=True, exist_ok=True)
-        args.report.write_text(json.dumps(report, indent=2, sort_keys=True)+"\\n")
+        args.report.write_text(json.dumps(report, indent=2, sort_keys=True)+"\n")
     print("MINIPP_PROFILE_AUDIT=PASS contexts=9 unique_macro_profiles="+
           str(len(content_groups))+" C_owners=2064 dynamic_C=4 S_owners=34 "+
           "variable_macro_names="+str(len(variable))+" gcc_invoked=false",
