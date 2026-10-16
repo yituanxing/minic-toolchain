@@ -2125,6 +2125,10 @@ jobs:
               echo 'MINIPP_REUSE=FAIL validated_producer_source_changed' >&2; exit 13;
             }
             echo "MINIPP_REUSE=SOURCE_IDENTICAL producer=$producer current=$GITHUB_SHA frozen_C=2064"
+          elif [[ "${{ contains(github.event.head_commit.message, '[linux-minipp-seven-full]') && '1' || '0' }}" == 1 ]]; then
+            # Fresh 2064 current-source shards are authenticated by the merge
+            # manifest below, not by an obsolete GNU-PP MiniC object cache.
+            echo 'MINIPP_FULL_CURRENT=SOURCE_CURRENT verified_by=seven_sha_attested_shards'
           else
             test "${{ steps.p1_minic_frozen_cache.outputs.cache-hit }}" = true
             (cd "$ev"; sha256sum --quiet -c minic-manifest.sha256)
@@ -2302,7 +2306,7 @@ jobs:
             export COHORT_GNU_PREFLIGHT_ALLOW_SEVEN_RECEIVER_VOLATILE=1
           fi
           if [[ "${{ contains(github.event.head_commit.message, '[linux-native-union-cached]') && '1' || '0' }}" == 1 ]]; then
-            if [[ "${{ contains(github.event.head_commit.message, '[linux-minipp-native-reuse]') && '1' || '0' }}" != 1 ]]; then
+            if [[ "${{ contains(github.event.head_commit.message, '[linux-minipp-native-reuse]') && '1' || '0' }}" != 1 && "${{ contains(github.event.head_commit.message, '[linux-minipp-seven-full]') && '1' || '0' }}" != 1 ]]; then
               test "${{ steps.p1_minic_frozen_cache.outputs.cache-hit }}" = true
             fi
             native="$ev/native-union"
@@ -2311,9 +2315,9 @@ jobs:
             export MINILD="$toolchain/bin/minic-ld"
             if [[ "${{ contains(github.event.head_commit.message, '[linux-minipp-seven-integration]') && '1' || '0' }}" == 1 ]]; then
               export COHORT_P1_EXPERIMENTAL_POOL="$GITHUB_WORKSPACE/build/minipp-seven-merge/native-objects"
-              if [[ "${{ contains(github.event.head_commit.message, '[linux-minipp-native-reuse]') && '1' || '0' }}" == 1 ]]; then
+              if [[ "${{ contains(github.event.head_commit.message, '[linux-minipp-native-reuse]') && '1' || '0' }}" == 1 || "${{ contains(github.event.head_commit.message, '[linux-minipp-seven-full]') && '1' || '0' }}" == 1 ]]; then
                 export COHORT_NATIVE_SAME_RUN_POOL="$COHORT_P1_EXPERIMENTAL_POOL"
-                echo 'NATIVE_UNION=REUSE_VERIFIED_CURRENT_NATIVE_SHARDS legacy_full_cache=not_required'
+                echo 'NATIVE_UNION=SOURCE_AUTHENTICATED_NATIVE_SHARDS legacy_full_cache=not_required'
               fi
               if [[ "${{ contains(github.event.head_commit.message, '[linux-minipp-seven-replay]') && '1' || '0' }}" == 1 ]]; then
                 # Only this immutable cache-replay may tolerate timestamp-derived
