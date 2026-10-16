@@ -90,3 +90,31 @@ src/compiler/compiler.c
 | 可删除代码 | 真实调用点、预编译条件、历史修复来源和诊断用途 | 只有证据覆盖所有生产路径才删；不要通过文件大小推断 |
 
 **建议的近期顺序**：读完 specialization 的 FunctionBody/所有权约束、Core reentry 的可达性约束后，选 **一个既容易做正确性证明、又有理论数量级改进** 的具体方案；才用已经保存的 2～3 个真实慢 `.i` 测同条件时间/RSS和 `.s`，绝不连试大量未经白盒排除的方案。当前先不做新前端、新后端、SSA/MIR/Pass 框架或大规模 C 文件拆迁。
+
+
+## 5. 第三层白盒追踪：更直接的 O(F²) 热点（重要补充）
+
+继续沿 `minic_prune_inline_specializations_from_core` 和整数特化的清理路径往内追后，又发现上面 `Q·F` 名字查找以外的重复扫描。**此发现提升了后续优先级，但仍未测 CPU 时间。**
+
+### 5.1 `minic_inline_source_has_noncore_root`：同一个根事实逐函数重复证明
+
+- `compiler.c:2299-2328`：对 `source_id` 依次判断 entry/force_emit，扫描 **所有 `program->functions`** 找是否有 `alias_target == source_id`，再遍历 **所有 `global_objects[*].relocations`** 找对该函数的非 Core 引用。
+- `compiler.c:2330-2347`：`minic_inline_source_is_core_reachable_only` 对 **已定义且内部**的函数触发这一 whole-program 根判断。
+- `compiler.c:2379-2394` 和 `2415-2422`：`minic_prune_inline_specializations_from_core` 中有 **两趟**遍历 `program->function_count`，可能分别对每个适格内部函数重新调用以上根判断。
+- 记 `F_{int}` 为适格内部定义数，`R` 为全局对象 relocation 总数：最坏可达 **`O(F_int·(F+R))`**，最多触发两轮。它不依赖是否存在大量特殊化 clone；没有任何 Core CALL 时也可能触发。
+- **很直接的候选**：进入本次 Core pruning 后，一次顺序遍历全部函数 alias、entry/force_emit 与全局 relocation，构建 `noncore_root[FunctionId]` 位图；两趟查询均 O(1)。构建近似 `O(F+R)`。原检查涉及的安全根类型完全保留，内存分配失败可明确选择原始扫描回退。**注意** `function_body.c:773-884` 在较早的“词法/语义引用再计算”阶段就已对 alias/relocation 等进行一次遍历，但它没有保留给后面的 Core pruning 的 root bitmap；可复用其**语义规则**，不能错误复用已被 specialization 改动的 `is_referenced` 或假定两阶段事实相同。
+- 这是目前**最适合先做单一小范围、可解释性高的生产重构候选**：职责单一、无新增框架，理论上从二重反复扫描变成一次预计算。须先比对 precompute 与旧单项查询完全一致，连同 alias、global relocation、entry 和 forced emit 用例。
+
+### 5.2 `minic_finalize_inline_integer_specialization_references`：按 clone 重新找剩余源引用
+
+- `compiler.c:1985-2025` 的 `minic_inline_integer_source_has_residual_reference` 对一个源函数扫描函数 alias、全部 relocation 和**整个 `expression_count`**，包含 CALL/函数地址两种情况。
+- `compiler.c:2047-2056` 对每个 integer-specialization clone（在 source internal/inline/仍 referenced 的情况下）重新调用该函数。
+- 如果一个源函数有多个 clone 且其原始引用仍存在，它可能**重复全 TU 扫描**；理论 `O(K_{active}·(F+R+E))`。若第一次查完后 source 被标记 unreferenced，后续该源函数跳过，因此实际放大由仍有残留引用的源函数和 clone 数决定。
+- 此分析也提醒我们：当前工程里**不只 transitive 特化**会出现 Clone×E。整理时应画出整个 specialization lifecycle：建立变体 → 改写调用 → finalize 原源函数引用 → Core prune。不能只在单个整数函数里做优化就宣称解决全部扩增。
+- 候选是本轮 finalize 局部重用一份准确的 `source_has_residual_reference[FunctionId]` 结果，或从已改写完成的 Program 一次性扫描建立指向各 FunctionId 的引用位图。需要特别保留函数名 alias/全局 relocation 与两个直接表达式 kind 的约束；不能误将不可达源码的表达式当作已消除，原实现是保守的**语法引用检查**。
+
+### 5.3 重新调整具体行动排序
+
+若优先考虑 **改动最小 + 正确性最易证明 + 避免重复造框架**：**先评估 5.1 的 Core 非 Core 根位图**，再看 5.2 的 specialization 源引用重复扫描；之后才安排 1）Integer/Boolean 的 source-owner/CALL 候选、2）Core statement workspace、3）Core reentry 多次全 TU 扫描、4）Verifier 每块清零等。这个是**代码可维护性优先的行动排序**，不是未经采样确认的 CPU 耗时排名。当前仍没有修改生产代码，项目主目标仍是先轻量收敛、再自举。
+
+**反例提醒**：只有确定了 root facts 的创建时机，才能一次构建；不同 pass 会修改 `is_referenced` / 生成 clone / 改写 Call，不能把跨阶段缓存当作自动永远有效。这也是我们暂时拒绝先引入全局 PassManager/事实缓存框架的原因。
