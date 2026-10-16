@@ -133,6 +133,12 @@ for section in '.dynsym' '.dynstr' '.dynamic' '.hash' '.gnu.hash' '.gnu.version'
     echo "MINILD_VDSO32=FAIL missing_section=$section" >&2; exit 22;
   }
 done
+for symbol in __vdso_rt_sigreturn __vdso_getcpu __vdso_flush_icache; do
+  grep -Eq "${symbol}@@LINUX_4[.]15" "$ev/native-symbols.txt" || {
+    echo "MINILD_VDSO32=FAIL missing_versioned_export=$symbol" >&2
+    exit 27
+  }
+done
 grep -q 'LINUX_4.15' "$ev/native-elf.txt" || {
   echo 'MINILD_VDSO32=FAIL missing_LINUX_4.15_version' >&2; exit 23;
 }
