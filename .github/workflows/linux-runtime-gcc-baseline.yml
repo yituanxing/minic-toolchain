@@ -2676,28 +2676,6 @@ jobs:
               pp_tag=GNU
             fi
             echo "NATIVE_UNION_RESULT=PASS pp=$pp_tag minic=2064 native_C_from_seven_shards=${COHORT_P1_EXPERIMENTAL_POOL:-none} ar=MiniAR_full_actual_Kbuild ar_native_calls=$minic_ar_calls ar_mpit_calls=$minic_mpit_calls ar_gnu_calls=0 ld=MiniLD_certified_boundaries vdso64_native=${MINILD_ENABLE_VDSO64:-0} objcopy=MiniObjcopy runtime=P1"
-            # Single compact inventory of the REAL GNU residual surface,
-            # excluding MiniLD's diagnostic GNU-oracle outputs (not consumed
-            # by Kbuild). Distinguish link probes from actual GNU products.
-            gnu_ld_total=$(grep -c '^gnu-ld ' "$NATIVE_TRACE_DIR/minild.trace" || true)
-            gnu_compat32=$(grep -c '^gnu-ld .*arch/riscv/kernel/compat_vdso/compat_vdso.so.dbg' "$NATIVE_TRACE_DIR/minild.trace" || true)
-            native_ld_total=$(grep -Ec '^minild([ -]|-r|-vdso64|-purgatory)' "$NATIVE_TRACE_DIR/minild.trace" || true)
-            gnu_ld_probes=$((gnu_ld_total - gnu_compat32))
-            (( gnu_ld_probes >= 0 )) || exit 41
-            {
-              printf 'tool\tboundary\tcalls\tclassification\n'
-              printf 'GNU_LD\tcompat_vdso32\t%s\tactual_fallback\n' "$gnu_compat32"
-              printf 'GNU_LD\tlinker_feature_probes\t%s\tnonproduction_probe\n' "$gnu_ld_probes"
-              printf 'MiniLD\tactual_native_calls\t%s\tnative_link\n' "$native_ld_total"
-              awk -F '\t' 'NF >= 3 && $3 == 0 {
-                 count[$1]++; wall[$1]+=$2
-              } END {
-                 for (name in count)
-                    printf "MiniLD\t%s\t%d\tmeasured_wall_ms_sum=%d\n", name, count[name], wall[name]
-              }' "$NATIVE_TRACE_DIR/minild-times.tsv"
-            } >"$NATIVE_TRACE_DIR/native-tool-coverage.tsv"
-            echo "NATIVE_UNION_REMAINING_GNU=MEASURED actual_compat_vdso32=$gnu_compat32 nonproduct_link_probes=$gnu_ld_probes native_ld_calls=$native_ld_total scope=real_Kbuild_trace"
-            cat "$NATIVE_TRACE_DIR/native-tool-coverage.tsv"
           fi
 
       - name: Preserve aggregate link, QEMU and failure-frontier evidence
