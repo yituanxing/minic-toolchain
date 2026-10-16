@@ -97,6 +97,11 @@ def native_asm_overlay(a):
     native_pp = pathlib.Path(a.native_asm_minipp).resolve() if a.native_asm_minipp else None
     native_profiles = {}
     native_pp_dir = evidence / 'native-S-minipp'
+    pinned_snapshot = (pathlib.Path(a.native_asm_profile_snapshot).resolve()
+                       if a.native_asm_profile_snapshot else None)
+    if pinned_snapshot is not None and (native_pp is None or
+                                        not pinned_snapshot.is_file()):
+        raise ValueError('native .S requires valid pinned profile and MiniPP')
     if native_pp is not None:
         if not native_pp.is_file() or not a.linux_src:
             raise ValueError('native .S MiniPP or Linux source is missing')
@@ -127,6 +132,8 @@ def native_asm_overlay(a):
                        MINIPP_LINUX_SRC=str(linux_src),
                        MINIPP_PREDEFINES_OUT=str(profile),
                        MINIPP_PREDEFINES_LANG='assembler-with-cpp')
+            if pinned_snapshot is not None:
+                env['MINIPP_PREDEFINES_SNAPSHOT'] = str(pinned_snapshot)
             proc = subprocess.run(['bash', 'tests/preprocessor/build_reference_predefines.sh',
                                    *context], cwd=repo_root, env=env,
                                   capture_output=True, text=True, timeout=180)
@@ -441,6 +448,7 @@ def main():
     p.add_argument('--c-universe')
     p.add_argument('--gcc-manifest')
     p.add_argument('--native-asm-minipp')
+    p.add_argument('--native-asm-profile-snapshot')
     p.add_argument('--linux-src')
     a=p.parse_args()
     if a.native_asm_only:
