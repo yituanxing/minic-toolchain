@@ -30,10 +30,20 @@ riscv64-linux-gnu-readelf -Wh -lW --dyn-syms --version-info "$native" >"$trace_d
 grep -q 'ELF32' "$trace_dir/native-vdso32-final-elf.txt"
 grep -q 'RISC-V' "$trace_dir/native-vdso32-final-elf.txt"
 grep -q 'DYN (Shared object file)' "$trace_dir/native-vdso32-final-elf.txt"
+riscv64-linux-gnu-nm "$native" >"$trace_dir/native-vdso32-final-nm.txt"
+riscv64-linux-gnu-readelf -nW "$native" >"$trace_dir/native-vdso32-final-notes.txt"
+grep -q 'Build ID:' "$trace_dir/native-vdso32-final-notes.txt" || {
+  echo 'MINILD_VDSO32=FAIL native_build_id_not_present' >&2
+  exit 47
+}
 for symbol in __vdso_rt_sigreturn __vdso_getcpu __vdso_flush_icache; do
   grep -Fq "${symbol}@@LINUX_4.15" "$trace_dir/native-vdso32-final-elf.txt" || {
     echo "MINILD_VDSO32=FAIL missing_versioned_export:$symbol" >&2
     exit 45
+  }
+  grep -Eq "[[:xdigit:]]+ [TtWw] ${symbol}$" "$trace_dir/native-vdso32-final-nm.txt" || {
+    echo "MINILD_VDSO32=FAIL missing_kernel_regular_nm:$symbol" >&2
+    exit 48
   }
 done
 grep -Fq 'COHORT_P1=PASS name=full_all_verified syscalls=12 python_era_oracle=PASS' "$cohort" || {
