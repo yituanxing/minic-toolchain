@@ -105,3 +105,43 @@ CI 七路日志可交叉核对：`MINIC_NATIVE_PROFILE=PASS runtime44=checked_in
 - 上一次 **完整** Linux Kbuild + QEMU P1 12/12 认证仍是重构前的 [#38862398059](https://github.com/yituanxing/minic-toolchain/actions/runs/38862398059)。本次独立组件纯重构后，已证明静态/动态链接和真实四对象差分等价，**没有重新运行完整 2064 Linux QEMU**；不把短测重新标成完整 P1。
 
 **后续退出条件：** 当前把旧脚本和 Makefile 的确切 Blob 固定为单次兼容窗口；将来若正式把 C 编译器与链接器的构建图分成稳定的组件 Makefile/缓存身份，必须先实证新身份命中规则和旧证书映射后再删除兼容层；任何变更不得使旧 Linux 对象在编译器源变更后静默命中。
+
+
+## 7. Core Lowering zero-only boolean proof extraction（第二项纯整理）
+
+**不改变算法和选择条件。** 原 `src/core/core_lower.c` 顶部从
+`CORE_ZERO_ONLY_BOOL_CFG_V1` 开始的完整连续约 188 行搬入
+`src/core/core_lower_bool.c`。仅 `core_zero_bool_cfg_condition`
+由 `static` 改为供内部编译单元调用的函数，内部
+`core_zero_bool_literal / is_local / has_entry_initializer / is_immutable`
+仍为 `static`。函数体与原源码逐字核对，无表达式语义修改。
+
+- `src/core/core_lower_internal.h` 声明唯一内部入口，`lower_if`
+  仍用原函数原参数调用；外部 `src/core/core_lower.h` API 不变。
+- `Makefile` 原 `MINIC_SOURCES` 增加
+  `src/core/core_lower_bool.c`，使用已有 C 编译规则。
+- 正式源码 manifest 更新的 **仅两处**：
+  `src/core/core_lower.c = ce262d93f8c77348019a4f6fd94a0a8ccdc22d7d`；
+  `src/core/core_lower_internal.h = 7997978a9b10a6d01e33dbc00dd11cb3f668f69f`。
+  其余原生 Runtime 7 个校验项没有变。
+- 当前 `linux-runtime-profile-cache-id-v1.py` 的兼容层仅豁免
+  **旧的一行 MiniLD 构建调整**，发现 `MINIC_SOURCES` 实际变化时
+  **严格错过旧的 2064 MiniC 缓存**，不能沿用旧 Image 作新代码
+  的运行时证书。聚焦 CI 初次失败来自此前缓存自检误假定永远是
+  MiniLD-only 修改；已修复该自检，将来源区分成
+  `unchanged_exact_linker_only` 与
+  `changed_compiler_cache_invalidated`，不需要修改编译器代码。
+- 现有 [focused T1 #38869982837](https://github.com/yituanxing/minic-toolchain/actions/runs/38869982837)
+  实际结果 **SUCCESS**，`TOOLCHAIN_FOCUSED_T1=PASS`，
+  `MINIC_CACHE_COMPONENT_ISOLATION=PASS scope=changed_compiler_cache_invalidated`。
+  RV64/驱动常量 if、MiniAR、MiniLD 8 独立检查仍被复用。
+- **待证**：这个 C 文件迁移改变了 MiniC 二进制及构建缓存身份，
+  必须用新的七路 2064/2064 MiniPP→MiniC→MiniAS 生产对象，
+  运行实际 Linux MiniAR/MiniLD/MiniObjcopy/QEMU P1 12/12。
+  T1 PASS 不是完整 Linux P1 认证。
+
+**保留的算法疑点**：`core_zero_bool_is_immutable` 为每次候选
+检查遍历 TU 的 statement/expression 数组。是否在大 .i 中重复付出
+显著 CPU 成本，需要真实 phase/profile 数据；本次只是让这类
+全程序级语义证明拥有明确边界，并没有引入缓存或改变 fail-closed
+路径。
