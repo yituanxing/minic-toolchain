@@ -9,6 +9,17 @@ fi
 src=$(realpath "$1"); out=$(realpath "$2"); minic=$(realpath "$3")
 prov=$(realpath "$4"); objects_file=$(realpath "$5"); ev=$(realpath -m "$6")
 repo=$(cd "$(dirname "$0")/../.." && pwd)
+# GitHub's huge historic workflow has an immutable accepted YAML layout.
+# Read this one explicit experiment marker from the checked-out Git commit
+# inside the already cached native-union execution rather than proliferating
+# YAML expressions and accidentally starting seven new compiler shards.
+if [[ "${COHORT_NATIVE_UNION:-0}" == 1 &&
+      "${COHORT_ACTION:-all}" == verify ]] &&
+   git -C "$repo" log -1 --format=%B "${GITHUB_SHA:-HEAD}" |
+     grep -Fq '[linux-native-vdso32]'; then
+  export MINILD_ENABLE_VDSO32=1 COHORT_MINILD_FORCE_VDSO32=1
+  echo "MINILD_VDSO32=OPT_IN exact_existing_native_union=true frozen_C_reused=true"
+fi
 mkdir -p "$ev/gcc" "$ev/minic" "$ev/trials"
 exec > >(tee "$ev/cohort.log") 2>&1
 trap 'rc=$?; echo "COHORT_UNHANDLED=FAIL rc=$rc line=$LINENO cmd=$BASH_COMMAND" >&2' ERR
@@ -3216,6 +3227,10 @@ case "$TRIAL_VERDICT" in
     case "$TRIAL_VERDICT" in
       PASS)
         echo "COHORT_RESULT=PASS candidate_objects=$n scope=$cohort_scope same_config=true"
+        if [[ "${MINILD_ENABLE_VDSO32:-0}" == 1 ]]; then
+          bash "$repo/tools/ci/qualify-minild-vdso32-real-kbuild-v1.sh" \
+            "${NATIVE_TRACE_DIR:?}" "$out" "$ev/cohort.log"
+        fi
         exit 0 ;;
       FAIL|LINK_FAIL)
         echo "COHORT_RESULT=FAIL stage=full_or_p1 no_monotone_prefix_claim"
