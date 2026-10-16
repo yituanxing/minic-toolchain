@@ -39,7 +39,7 @@ arbitrary architecture flags, or full replacement of RV32 compat-vDSO linking.
 
 ## Actual native macro production
 
-- `tools/ci/minipp-linux-native-macro-rules-v1.py` uses **one immutable
+- `preprocessor/target/riscv_linux_predefines.py` is the **single canonical product-owned implementation**; the duplicate CI-only generator has been deleted. It uses **one immutable
   RV64/LP64 C ABI macro baseline**, independently derives optimization and
   PIC/PIE macros from the exact current option context, and fails closed on
   unsupported architectures.
@@ -52,6 +52,22 @@ arbitrary architecture flags, or full replacement of RV32 compat-vDSO linking.
   generation separately and dispatches to native rules only by explicit opt-in.
 - No source rewrites or GNU target fallback are introduced by this gate.
   The pinned input and per-shard macro producer identity are SHA verified.
+
+## Current full-build gate
+
+- [#38847872062](https://github.com/yituanxing/minic-toolchain/actions/runs/38847872062):
+  seven freshly compiled SHA-attested shards reached **7/7, 2064/2064**
+  with the native macro rule generator and exact GNU byte comparator; the
+  joined Linux/QEMU result is tracked in that same run and must be checked
+  before declaring runtime acceptance.
+- [#38848622838](https://github.com/yituanxing/minic-toolchain/actions/runs/38848622838):
+  following source convergence into `preprocessor/target`, the permanent
+  focused product self-test and eight existing toolchain regression checks
+  all passed on `main`.
+- Product baseline macros are still derived from a pinned GCC13/RISC-V ABI
+  reference dataset. This is **GCC-process-free macro production for the
+  certified RV64 Linux configuration**, not an architecture-independent
+  target-macro implementation embedded directly in the C MiniPP binary.
 
 ## Immediate next acceptance
 
