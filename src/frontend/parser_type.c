@@ -20,18 +20,22 @@ static bool minic_parser_token_is_gnu_typeof(const MinicParser *parser, MinicTok
            minic_parser_token_text_equals(parser, token, "__typeof__");
 }
 
-static bool minic_parser_gnu_int128_name(const MinicParser *parser, bool *is_unsigned_name) {
+/* The type-name probe only needs a token and the immutable source buffer.
+ * Copying the whole 133-KiB parser to replace 'current' is unnecessary. */
+static bool minic_parser_gnu_int128_name(const MinicParser *parser,
+                                         MinicToken token,
+                                         bool *is_unsigned_name) {
     const char *name;
     size_t length;
 
     if (is_unsigned_name != NULL) {
         *is_unsigned_name = false;
     }
-    if (parser == NULL || parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
+    if (parser == NULL || token.kind != MINIC_TOKEN_IDENTIFIER) {
         return false;
     }
-    name = parser->source + parser->current.span.begin.offset;
-    length = minic_parser_span_length(parser->current.span);
+    name = parser->source + token.span.begin.offset;
+    length = minic_parser_span_length(token.span);
     if ((length == 8U && memcmp(name, "__int128", 8U) == 0) ||
         (length == 10U && memcmp(name, "__int128_t", 10U) == 0)) {
         return true;
@@ -48,7 +52,6 @@ static bool minic_parser_gnu_int128_name(const MinicParser *parser, bool *is_uns
 
 bool minic_parser_token_starts_type_name(const MinicParser *parser, MinicToken token) {
     bool int128_unsigned;
-    MinicParser probe;
     MinicParserOrdinaryBinding nearest_binding;
 
     switch (token.kind) {
@@ -75,10 +78,8 @@ bool minic_parser_token_starts_type_name(const MinicParser *parser, MinicToken t
         if (minic_parser_token_is_gnu_typeof(parser, token)) {
             return true;
         }
-        probe = *parser;
-        probe.current = token;
         int128_unsigned = false;
-        if (minic_parser_gnu_int128_name(&probe, &int128_unsigned)) {
+        if (minic_parser_gnu_int128_name(parser, token, &int128_unsigned)) {
             return true;
         }
         if (minic_parser_find_nearest_ordinary_binding(
@@ -92,7 +93,8 @@ bool minic_parser_token_starts_type_name(const MinicParser *parser, MinicToken t
 }
 
 static bool minic_parser_try_gnu_int128(MinicParser *parser, MinicType *type, bool *matched) {
-    MinicParser probe;
+    MinicLexer probe_lexer;
+    MinicToken probe_token;
     bool direct_unsigned;
     bool explicit_signed;
     bool explicit_unsigned;
@@ -109,13 +111,17 @@ static bool minic_parser_try_gnu_int128(MinicParser *parser, MinicType *type, bo
         parser->current.kind == MINIC_TOKEN_KW_UNSIGNED) {
         explicit_signed = parser->current.kind == MINIC_TOKEN_KW_SIGNED;
         explicit_unsigned = parser->current.kind == MINIC_TOKEN_KW_UNSIGNED;
-        probe = *parser;
-        if (!minic_parser_advance(&probe) ||
-            !minic_parser_gnu_int128_name(&probe, &direct_unsigned)) {
+        /* Only the lexer and current token advance during lookahead.  Copy
+         * those small values, preserving the original failure/commit behavior
+         * of the previous whole-parser snapshot. */
+        probe_lexer = parser->lexer;
+        if (!minic_lexer_next(&probe_lexer, &probe_token, parser->diagnostic) ||
+            !minic_parser_gnu_int128_name(parser, probe_token, &direct_unsigned)) {
             return true;
         }
-        *parser = probe;
-    } else if (!minic_parser_gnu_int128_name(parser, &direct_unsigned)) {
+        parser->lexer = probe_lexer;
+        parser->current = probe_token;
+    } else if (!minic_parser_gnu_int128_name(parser, parser->current, &direct_unsigned)) {
         return true;
     }
 
@@ -453,27 +459,39 @@ bool minic_parser_parse_type_specifiers(MinicParser *parser, MinicType *type) {
         }
     } else if (parser->current.kind == MINIC_TOKEN_KW_STRUCT ||
                parser->current.kind == MINIC_TOKEN_KW_UNION) {
-        MinicParser probe;
+        MinicLexer saved_lexer;
+        MinicToken saved_token;
         MinicParsedAttributeList probe_attributes;
         MinicRecordId record_id;
         MinicTokenKind record_keyword;
         bool is_definition;
         bool is_union;
+        bool lookahead_ok;
 
         record_keyword = parser->current.kind;
         is_union = record_keyword == MINIC_TOKEN_KW_UNION;
-        probe = *parser;
+        /* GNU attribute collection advances only the lexer/current token
+         * and may report diagnostics.  Snapshot just those two fields and
+         * restore on both success and failure.  No 133-KiB Parser copy. */
+        saved_lexer = parser->lexer;
+        saved_token = parser->current;
         (void)memset(&probe_attributes, 0, sizeof(probe_attributes));
-        if (!minic_parser_advance(&probe) ||
-            !minic_parser_collect_gnu_attribute_lists(&probe, &probe_attributes)) {
-            return false;
-        }
-        is_definition = probe.current.kind == MINIC_TOKEN_LBRACE;
-        if (!is_definition && probe.current.kind == MINIC_TOKEN_IDENTIFIER) {
-            if (!minic_parser_advance(&probe)) {
-                return false;
+        lookahead_ok = minic_parser_advance(parser) &&
+                       minic_parser_collect_gnu_attribute_lists(parser, &probe_attributes);
+        is_definition = false;
+        if (lookahead_ok) {
+            is_definition = parser->current.kind == MINIC_TOKEN_LBRACE;
+            if (!is_definition && parser->current.kind == MINIC_TOKEN_IDENTIFIER) {
+                lookahead_ok = minic_parser_advance(parser);
+                if (lookahead_ok) {
+                    is_definition = parser->current.kind == MINIC_TOKEN_LBRACE;
+                }
             }
-            is_definition = probe.current.kind == MINIC_TOKEN_LBRACE;
+        }
+        parser->lexer = saved_lexer;
+        parser->current = saved_token;
+        if (!lookahead_ok) {
+            return false;
         }
 
         if (is_definition) {
