@@ -2,7 +2,9 @@
  * fail-closed checks on address escape, mutation and entry dominance.
  * A source-level refactor only: this file MUST NOT change the proof rules.
  * The current per-query program-wide scans are a separate measured
- * performance question; do not add unsound caching during extraction. */
+ * performance question; do not add unsound caching during extraction.
+ * Focused T1 compilation/link tests passed; full Linux runtime must use
+ * a newly compiled compiler identity, never old cached C-owner outputs. */
 #include "core/core_lower_internal.h"
 
 #include "frontend/const_eval.h"
