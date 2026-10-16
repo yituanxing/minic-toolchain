@@ -231,11 +231,11 @@ cache_contract=$(printf '%s\n' "$actual_cfg" "$gnu_image_sha" \
 # Recover the exact current native 2064-C candidate from seven SHA/ABI-
 # certified MiniPP -> MiniC -> MiniAS shards. This is not a GNU-PP MiniC cache
 # hit; the old cache's compiler identity can legitimately differ.
-if [[ -n "\${COHORT_NATIVE_SAME_RUN_POOL:-}" ]]; then
-  [[ "\${COHORT_ACTION:-all}" == verify &&
-     "\${COHORT_NATIVE_UNION:-0}" == 1 &&
+if [[ -n "${COHORT_NATIVE_SAME_RUN_POOL:-}" ]]; then
+  [[ "${COHORT_ACTION:-all}" == verify &&
+     "${COHORT_NATIVE_UNION:-0}" == 1 &&
      "$cohort_scope" == FULL_C_UNIVERSE && "$n" == 2064 ]] || {
-    echo "COHORT_NATIVE_SAME_RUN=ERROR invalid_scope" >&2; exit 7;
+    echo "COHORT_NATIVE_SAME_RUN=ERROR invalid_scope action=${COHORT_ACTION:-unset} native_union=${COHORT_NATIVE_UNION:-unset} scope=$cohort_scope objects=$n" >&2; exit 7;
   }
   native_src="$COHORT_NATIVE_SAME_RUN_POOL"
   native_manifest="$repo/build/minipp-seven-merge/native-full-manifest.sha256"
