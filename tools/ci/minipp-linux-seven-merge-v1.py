@@ -22,6 +22,9 @@ if len(owners)!=2064 or len(set(owners))!=2064:raise SystemExit('MINIPP_MERGE=FA
 if not re.fullmatch('[0-9a-f]{40}',a.commit):raise SystemExit('MINIPP_MERGE=FAIL commit')
 dest.mkdir(parents=True,exist_ok=True)
 records={}; failures=0
+# Performance is diagnostic only; never weaken SHA/ABI/ownership acceptance.
+# No wall time can be inferred by summing seven concurrently running jobs.
+performance_rows=[]
 for n in range(7):
     directory=root/f'minipp-native-shard-{n}-{a.commit}'
     if not directory.is_dir():raise SystemExit(f'MINIPP_MERGE=FAIL missing_shard={n}')
@@ -59,6 +62,7 @@ for n in range(7):
         target.parent.mkdir(parents=True,exist_ok=True)
         shutil.copy2(obj,target)
         records[owner]=hashval
+        performance_rows.append(row)
     print(f'MINIPP_SEVEN_MERGE_SHARD=PASS shard={n}/7 objects={len(selected)}',flush=True)
 if set(records)!=set(owners):raise SystemExit('MINIPP_MERGE=FAIL incomplete_2064')
 (dest.parent/'native-full-manifest.sha256').write_text(''.join(f'{records[o]}  {o}\n' for o in owners))
@@ -67,6 +71,57 @@ if set(records)!=set(owners):raise SystemExit('MINIPP_MERGE=FAIL incomplete_2064
                     builtin_profile='native_rules' if a.native_macro_rules else 'pinned' if pinned_sha else 'reference',
                     builtin_profile_sha=pinned_sha,
                     generated_header_replay_requires_MiniPP=True),indent=2)+'\n')
+# Build one global performance report from the exact 2064 already-authenticated
+# owner rows. This is an optional telemetry layer, NEVER a pass bypass.
+stages=('macro_predefines','gnu_pp_oracle','minipp','minic','minias')
+complete=[row for row in performance_rows
+          if all(isinstance(row.get('timings_ms',{}).get(stage),int)
+                 for stage in ('minipp','minic','minias'))
+          and all(isinstance(row.get('peak_rss_kb',{}).get(stage),int)
+                  for stage in ('minipp','minic','minias'))]
+performance={'schema':'minipp-linux-performance-v1','owners':len(records),
+             'measured_owners':len(complete),'source_commit':a.commit,
+             'measurement_scope':'sum of individual subprocess times; NOT concurrent wall-clock',
+             'peak_rss_scope':'maximum individual Linux wait4 ru_maxrss; NOT job/cgroup RAM'}
+if complete:
+    def pct(sorted_values,p):
+        # Nearest-rank percentile, stable with any cohort size.
+        import math
+        return sorted_values[max(0,math.ceil(len(sorted_values)*p/100)-1)]
+    performance['stages']={}
+    for stage in stages:
+        times=sorted(row.get('timings_ms',{}).get(stage)
+                     for row in complete if stage in row.get('timings_ms',{}))
+        if not times:
+            continue
+        rss=[row['peak_rss_kb'][stage] for row in complete
+             if stage in row.get('peak_rss_kb',{})]
+        performance['stages'][stage]={
+            'measured_count':len(times),'total_process_ms':sum(times),
+            'p50_process_ms':pct(times,50),'p95_process_ms':pct(times,95),
+            'max_process_ms':max(times),
+            'max_individual_process_rss_kb':max(rss) if rss else None}
+    performance['slowest_minic_objects']=[
+       {'object':row['object'],
+        'minic_ms':row['timings_ms']['minic'],
+        'minic_peak_rss_kb':row['peak_rss_kb']['minic'],
+        'preprocessed_bytes':row.get('minipp_input_bytes'),
+        'assembly_bytes':row.get('minic_assembly_bytes')}
+       for row in sorted(complete,key=lambda r:r['timings_ms']['minic'],
+                         reverse=True)[:20]]
+    performance['largest_minic_memory_objects']=[
+       {'object':row['object'],
+        'minic_peak_rss_kb':row['peak_rss_kb']['minic'],
+        'minic_ms':row['timings_ms']['minic']}
+       for row in sorted(complete,key=lambda r:r['peak_rss_kb']['minic'],
+                         reverse=True)[:20]]
+    performance['native_output_object_bytes']=sum(
+        row.get('native_object_bytes',0) for row in complete)
+(dest.parent/'native-performance.json').write_text(
+    json.dumps(performance,indent=2,sort_keys=True)+'\n')
+print(f"MINIPP_SEVEN_PERFORMANCE_MERGE={('PASS' if len(complete)==2064 else 'PARTIAL')} "
+      f"measured={len(complete)}/2064 owner_scoped=true "
+      "rss=max_individual_process no_concurrent_job_wall_claim=true",flush=True)
 print('MINIPP_SEVEN_MERGE=PASS owners=2064 shards=7 GNU_PP_consumed_by_MiniC=false QEMU_pending=true',flush=True)
 if a.native_macro_rules:
     assert pinned_sha and len(records) == 2064
