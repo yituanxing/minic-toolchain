@@ -66,8 +66,10 @@ measure_link() {
   ) || status=$?
   local elapsed=NA user=NA sys=NA maxrss=NA size=0
   if [[ -s "$measurement" ]]; then
-    # GNU time prints a diagnostic line before metrics on nonzero exit.
-    IFS=
+    # A failed /usr/bin/time command can prepend a diagnostic line.
+    last_time_line=$(tail -n 1 "$measurement")
+    read -r elapsed user sys maxrss <<<"$last_time_line" || true
+  fi
   [[ -f "$target" ]] && size=$(stat -c %s "$target")
   printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
     "$producer" "$status" "$elapsed" "$user" "$sys" "$maxrss" "$size" \
