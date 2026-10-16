@@ -96,6 +96,9 @@ jobs:
           # several minutes or gigabytes running full Linux shards.
           python3 -m py_compile tools/ci/minipp-linux-seven-native-stage-v1.py
           python3 -m py_compile tools/ci/minipp-linux-seven-merge-v1.py
+          # SHA-attested linker-only build refactor must reuse the exact
+          # 2064 MiniC compiler cache identity; unrelated edits must miss.
+          python3 tools/ci/linux-runtime-profile-cache-id-v1.py --self-test
           bash -n tools/ci/minild-linux-cache-vdso32-replay-v1.sh
           bash -n tools/ci/linux-runtime-native-union-v1.sh
           bash -n tools/ci/linux-runtime-gcc-cohort-bisect-v1.sh
