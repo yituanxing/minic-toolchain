@@ -222,6 +222,18 @@ def main() -> int:
             result["error"] = str(exc)
             print(f"MINIPP_SEVEN_NATIVE_OBJECT=FAIL worker={args.shard}/7 "
                   f"object={object_name} reason={exc}", flush=True)
+            if args.sample_per_shard == 0:
+                # Full qualification is all-or-nothing. Do not spend minutes
+                # processing the other ~294 objects on a worker after its
+                # first reproducible failed owner. Preserve this owner's
+                # logs/identities and surface the earliest failure immediately.
+                (stage / "first-failure.json").write_text(
+                    json.dumps(result, indent=2, sort_keys=True) + "\n")
+                print(f"MINIPP_SEVEN_FAIL_FAST=TRIGGERED "
+                      f"worker={args.shard}/7 object={object_name} "
+                      "full_mode=true retained_first_failure=true",
+                      flush=True)
+                break
     # Stage-by-stage wall time and produced bytes are additive across owners;
     # exact per-child peak RSS is measured using Linux wait4 and aggregated as
     # maximum, not an invalid sum of per-process memory peaks. This is NOT
