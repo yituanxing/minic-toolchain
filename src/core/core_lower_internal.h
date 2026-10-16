@@ -30,6 +30,11 @@ typedef struct MinicCoreLowerContext {
 } MinicCoreLowerContext;
 
 bool core_capture_enum_metadata(MinicCoreLowerContext *context);
+/* Source-wide fail-closed _Bool==0 fact used only by Core CFG lowering. */
+bool core_zero_bool_cfg_condition(const MinicCoreLowerContext *context,
+                                  MinicExpressionId id,
+                                  unsigned int depth,
+                                  bool *is_zero);
 const MinicDataLayout *core_data_layout(const MinicCoreLowerContext *context);
 bool core_unsigned_bit_field_semantic_type(const MinicCoreLowerContext *context, MinicType type);
 bool core_bit_field_storage_type(const MinicCoreLowerContext *context,
