@@ -226,6 +226,11 @@ def replay_affected(out: Path, golden_out: Path, selected: Path,
             env["MINIPP_PREDEFINES_SNAPSHOT"] = str(pinned)
             print("MINIPP_DYNAMIC_PROFILE=PINNED source="+str(pinned)
                   +" no_GCC_macro_generation=true", flush=True)
+        if os.environ.get("COHORT_MINIPP_NATIVE_MACRO_RULES") == "1":
+            env["MINIPP_PREDEFINES_NATIVE_RULES"] = "1"
+            print("MINIPP_DYNAMIC_PROFILE=NATIVE_RULES ABI=RV64_LP64 "
+                  "optimization=classified PIC_PIE=classified gcc_processes=0",
+                  flush=True)
     for name in names:
         args = pinned_kbuild_cc_args(golden_out, name)
         path = out / name
