@@ -47,6 +47,7 @@ typedef struct MiniPpState {
     bool in_block_comment;
     bool expansion_incomplete;
     const char *current_file;
+    const char *macro_prefix_map;
     size_t current_line;
     size_t counter_value;
     const char **include_paths;
