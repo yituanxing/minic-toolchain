@@ -167,7 +167,11 @@ if [[ "$source_file" == *.c ]]; then
           ;;
         -D*|-U*|-I*|-nostdinc|-isystem*|-include*)
           native_pp_args+=("$arg") ;;
-        -march=*|-mabi=*|-std=*|-fshort-wchar|-funsigned-char|-fsigned-char|-fno-PIE|-fPIE|-fno-pie|-fpie|-fPIC|-fpic|-fno-PIC|-fno-pic|-mcmodel=*)
+        -march=*|-mabi=*|-std=*|-O0|-O1|-O2|-O3|-Og|-Os|-Oz|-Ofast|-ffreestanding|-fhosted|-fno-builtin|-fbuiltin|-fshort-wchar|-funsigned-char|-fsigned-char|-fno-PIE|-fPIE|-fno-pie|-fpie|-fPIC|-fpic|-fno-PIC|-fno-pic|-mcmodel=*)
+          # Optimization and hostedness control GCC built-in macros such as
+          # __OPTIMIZE__ / __STDC_HOSTED__, hence Linux BUILD_BUG_ON bodies.
+          # Omitting them made MiniPP and normalized GNU agree while both
+          # differed semantically from Kbuild's authoritative GNU -E.
           pp_context+=("$arg") ;;
         -imacros|-iquote|-idirafter|-isysroot|-iprefix|-iwithprefix|-iwithprefixbefore)
           echo "MINIPP_DYNAMIC_HEADER_PP=FAIL unsupported_kbuild_pp_option:$arg" >&2; exit 9 ;;
