@@ -282,7 +282,7 @@ jobs:
 
 
   perf500:
-    if: (github.event_name == 'workflow_dispatch' && (inputs.mode == 'first500' || inputs.mode == 'all')) || (github.event_name == 'push' && (contains(github.event.head_commit.message, '[linux-perf500]') || contains(github.event.head_commit.message, '[minic-source-broad-ab]') || contains(github.event.head_commit.message, '[minic-current-phase20]') || contains(github.event.head_commit.message, '[minic-cpu-profile-only]') || contains(github.event.head_commit.message, '[minic-boolean-domain-ab20]') || contains(github.event.head_commit.message, '[minic-boolean-domain-ab500]') || contains(github.event.head_commit.message, '[minic-parser-copy-ab]') || contains(github.event.head_commit.message, '[minic-integer-owner-ab]') || contains(github.event.head_commit.message, '[minic-integer-owner-ab500]')))
+    if: (github.event_name == 'workflow_dispatch' && (inputs.mode == 'first500' || inputs.mode == 'all')) || (github.event_name == 'push' && (contains(github.event.head_commit.message, '[linux-perf500]') || contains(github.event.head_commit.message, '[minic-source-broad-ab]') || contains(github.event.head_commit.message, '[minic-current-phase20]') || contains(github.event.head_commit.message, '[minic-cpu-profile-only]') || contains(github.event.head_commit.message, '[minic-boolean-domain-ab20]') || contains(github.event.head_commit.message, '[minic-boolean-domain-ab500]') || contains(github.event.head_commit.message, '[minic-parser-copy-ab]') || contains(github.event.head_commit.message, '[minic-integer-owner-ab]') || contains(github.event.head_commit.message, '[minic-integer-owner-ab500]') || contains(github.event.head_commit.message, '[minic-next-stage-audit]')))
     runs-on: ubuntu-24.04
     timeout-minutes: 65
     env:
@@ -460,7 +460,7 @@ jobs:
             | tee "$root/evidence/$trial-binaries.txt"
 
       - name: Build baseline and integrated optimization from clean sources
-        if: "!contains(github.event.head_commit.message, '[minic-source-broad-ab]') && !contains(github.event.head_commit.message, '[minic-current-phase20]') && !contains(github.event.head_commit.message, '[minic-cpu-profile-only]') && !contains(github.event.head_commit.message, '[minic-boolean-domain-ab20]') && !contains(github.event.head_commit.message, '[minic-boolean-domain-ab500]') && !contains(github.event.head_commit.message, '[minic-parser-copy-ab]') && !contains(github.event.head_commit.message, '[minic-integer-owner-ab]') && !contains(github.event.head_commit.message, '[minic-integer-owner-ab500]')"
+        if: "!contains(github.event.head_commit.message, '[minic-source-broad-ab]') && !contains(github.event.head_commit.message, '[minic-current-phase20]') && !contains(github.event.head_commit.message, '[minic-cpu-profile-only]') && !contains(github.event.head_commit.message, '[minic-boolean-domain-ab20]') && !contains(github.event.head_commit.message, '[minic-boolean-domain-ab500]') && !contains(github.event.head_commit.message, '[minic-parser-copy-ab]') && !contains(github.event.head_commit.message, '[minic-integer-owner-ab]') && !contains(github.event.head_commit.message, '[minic-integer-owner-ab500]') && !contains(github.event.head_commit.message, '[minic-next-stage-audit]')"
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -577,6 +577,99 @@ jobs:
         with:
           path: build/linux-perf-corpus
           key: linux-6.6.143-first500-rv64-v1-${{ hashFiles('tests/external/linux/batch_probe.sh', 'tests/external/linux/probe.sh', 'tests/external/linux/replay-indices.txt') }}
+
+      # Lightweight after-Integer-owner attribution, using the same first500
+      # frozen Linux cache and existing compiler stage timers. No Callgrind.
+      - name: Attribute current MiniC post-Integer-owner stage hotspots
+        if: contains(github.event.head_commit.message, '[minic-next-stage-audit]')
+        timeout-minutes: 17
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          root="$GITHUB_WORKSPACE/build/linux-perf-audit-v1"
+          corpus="$GITHUB_WORKSPACE/build/linux-perf-corpus"
+          mkdir -p "$root/evidence"
+          sha256sum --status --check "$corpus/inputs.sha256"
+          test "$(wc -l < "$corpus/inputs.sha256")" -eq 500
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
+            libc6-dev-riscv64-cross python3 make >/dev/null
+          MINIC_LINUX_FULL_CROSSBLOCK=1 MINIC_OPT_PURE_DISCARDED_ADDRESS_EQ=1 \
+            bash tools/ci/linux-runtime-build-minic-profile-v1.sh \
+              "$root/next-phase-native" "$root/evidence/next-phase-build"
+          # Temporary checkout only: existing proven begin/end probes.
+          python3 tools/ci/apply-perf-specialization-phase-trace-v0.py
+          python3 tools/ci/apply-perf-integer-loop-trace-v0.py
+          git diff --check
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$root/next-phase-traced" \
+            "$root/next-phase-traced/bin/minic" \
+            "$root/next-phase-traced/bin/minic-cc" >/dev/null
+          python3 tools/ci/linux-perf-phase-trace-v1.py --self-test
+          python3 - "$corpus" "$root" <<'PY'
+          from pathlib import Path
+          import sys
+          corpus,root=map(Path,sys.argv[1:])
+          selected={}
+          for line in (corpus/"selected-tus.txt").read_text().splitlines():
+              parts=line.split("\t",3)
+              if len(parts)!=4: raise SystemExit("malformed selected TUs")
+              selected[parts[1]]=parts[2]
+          if len(selected)!=500: raise SystemExit("frozen corpus not 500")
+          targets=("fs/ext4/fsync.o","kernel/bpf/btf.o","kernel/events/core.o",
+                   "mm/memcontrol.o","net/core/dev.o","lib/crc32.o",
+                   "net/core/filter.o")
+          with (root/"evidence"/"next-phase-inputs.tsv").open("w") as out:
+              for owner in targets:
+                  if owner not in selected: raise SystemExit("missing "+owner)
+                  p=(corpus/"kbuild"/selected[owner]).resolve()
+                  if not p.is_relative_to((corpus/"kbuild").resolve()) or not p.is_file():
+                      raise SystemExit("bad frozen input "+owner)
+                  print(owner+"\t"+str(p),file=out)
+          PY
+          while IFS="$(printf '\t')" read -r owner frozen; do
+            safe=${owner//\//_}
+            safe=${safe%.o}
+            python3 tools/ci/linux-perf-phase-trace-v1.py \
+              --input "$frozen" \
+              --baseline "$root/next-phase-traced/bin/minic" \
+              --candidate "$root/next-phase-traced/bin/minic" \
+              --expect-specialization --expect-integer-loops \
+              --out "$root/next-phase/$safe" \
+              | tee "$root/evidence/next-phase-$safe.txt"
+            grep -Fq 'MINIC_SPEC_PHASE_GROUP=PASS' "$root/evidence/next-phase-$safe.txt"
+          done < "$root/evidence/next-phase-inputs.tsv"
+          python3 - "$root/next-phase" <<'PY' | tee "$root/evidence/next-phase-summary.txt"
+          import json,sys
+          from pathlib import Path
+          base=Path(sys.argv[1])
+          rows=[]
+          for f in sorted(base.glob("*/phases.json")):
+              x=json.loads(f.read_text())["results"]["after"]
+              spec=x["specialization_ms"]
+              row={"owner":f.parent.name,"wall_ms":x["wall_ms"],
+                   "parse_ms":x["stage_ms"]["parse"],
+                   "core_set_ms":x["stage_ms"]["core-set"],
+                   "core_validate_ms":x["stage_ms"]["core-validate"],
+                   "codegen_ms":x["stage_ms"]["codegen"],
+                   "spec_integer_ms":spec["spec-integer"]["ms"],
+                   "spec_integer_transitive_ms":spec["spec-integer-transitive"]["ms"],
+                   "spec_symbolic_ms":spec["spec-symbolic"]["ms"],
+                   "spec_boolean_ms":spec["spec-boolean"]["ms"],
+                   "spec_finalize_ms":spec["spec-finalize"]["ms"],
+                   "normalize_core_gap_ms":x["interstage_gap_ms"]["normalize-to-core-set"]}
+              rows.append(row)
+              print("MINIC_NEXT_HOTSPOT_OWNER "+" ".join("%s=%s"%(k,v) for k,v in row.items()))
+          assert len(rows)==7
+          (base/"ranked-summary.json").write_text(json.dumps({
+              "schema":"minic-post-integer-owner-seven-TU-phase-attribution-v1",
+              "scope":"diagnostic-only, not paired performance or QEMU",
+              "owners":rows},indent=2)+"\n")
+          for key in ("parse_ms","core_set_ms","core_validate_ms",
+                      "codegen_ms","spec_integer_ms","spec_symbolic_ms",
+                      "spec_boolean_ms","spec_finalize_ms"):
+              print("MINIC_NEXT_HOTSPOT_SUM %s=%.3f"%(key,sum(x[key] for x in rows)))
+          print("MINIC_NEXT_HOTSPOT_AUDIT=PASS owners=7 measured_current=true")
+          PY
 
       - name: Same-runner frozen Linux single-factor MiniC paired A/B
         if: contains(github.event.head_commit.message, '[minic-parser-copy-ab]') || contains(github.event.head_commit.message, '[minic-integer-owner-ab]')
@@ -865,7 +958,7 @@ jobs:
           PY
 
       - name: Parser index fallback, scope, and zero-expression smokes
-        if: "!contains(github.event.head_commit.message, '[minic-source-broad-ab]') && !contains(github.event.head_commit.message, '[minic-current-phase20]') && !contains(github.event.head_commit.message, '[minic-cpu-profile-only]') && !contains(github.event.head_commit.message, '[minic-boolean-domain-ab20]') && !contains(github.event.head_commit.message, '[minic-boolean-domain-ab500]') && !contains(github.event.head_commit.message, '[minic-parser-copy-ab]') && !contains(github.event.head_commit.message, '[minic-integer-owner-ab]') && !contains(github.event.head_commit.message, '[minic-integer-owner-ab500]')"
+        if: "!contains(github.event.head_commit.message, '[minic-source-broad-ab]') && !contains(github.event.head_commit.message, '[minic-current-phase20]') && !contains(github.event.head_commit.message, '[minic-cpu-profile-only]') && !contains(github.event.head_commit.message, '[minic-boolean-domain-ab20]') && !contains(github.event.head_commit.message, '[minic-boolean-domain-ab500]') && !contains(github.event.head_commit.message, '[minic-parser-copy-ab]') && !contains(github.event.head_commit.message, '[minic-integer-owner-ab]') && !contains(github.event.head_commit.message, '[minic-integer-owner-ab500]') && !contains(github.event.head_commit.message, '[minic-next-stage-audit]')"
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -898,7 +991,7 @@ jobs:
           done
 
       - name: Release direct minic smoke on previously crashing TU
-        if: "!contains(github.event.head_commit.message, '[minic-source-broad-ab]') && !contains(github.event.head_commit.message, '[minic-current-phase20]') && !contains(github.event.head_commit.message, '[minic-cpu-profile-only]') && !contains(github.event.head_commit.message, '[minic-boolean-domain-ab20]') && !contains(github.event.head_commit.message, '[minic-boolean-domain-ab500]') && !contains(github.event.head_commit.message, '[minic-parser-copy-ab]') && !contains(github.event.head_commit.message, '[minic-integer-owner-ab]') && !contains(github.event.head_commit.message, '[minic-integer-owner-ab500]')"
+        if: "!contains(github.event.head_commit.message, '[minic-source-broad-ab]') && !contains(github.event.head_commit.message, '[minic-current-phase20]') && !contains(github.event.head_commit.message, '[minic-cpu-profile-only]') && !contains(github.event.head_commit.message, '[minic-boolean-domain-ab20]') && !contains(github.event.head_commit.message, '[minic-boolean-domain-ab500]') && !contains(github.event.head_commit.message, '[minic-parser-copy-ab]') && !contains(github.event.head_commit.message, '[minic-integer-owner-ab]') && !contains(github.event.head_commit.message, '[minic-integer-owner-ab500]') && !contains(github.event.head_commit.message, '[minic-next-stage-audit]')"
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -911,7 +1004,7 @@ jobs:
           echo "TYPEDEF_RELEASE_SMOKE=PASS"
 
       - name: Diagnose typedef candidate with ASan on known-failing TU
-        if: "!contains(github.event.head_commit.message, '[minic-source-broad-ab]') && !contains(github.event.head_commit.message, '[minic-current-phase20]') && !contains(github.event.head_commit.message, '[minic-cpu-profile-only]') && !contains(github.event.head_commit.message, '[minic-boolean-domain-ab20]') && !contains(github.event.head_commit.message, '[minic-boolean-domain-ab500]') && !contains(github.event.head_commit.message, '[minic-parser-copy-ab]') && !contains(github.event.head_commit.message, '[minic-integer-owner-ab]') && !contains(github.event.head_commit.message, '[minic-integer-owner-ab500]')"
+        if: "!contains(github.event.head_commit.message, '[minic-source-broad-ab]') && !contains(github.event.head_commit.message, '[minic-current-phase20]') && !contains(github.event.head_commit.message, '[minic-cpu-profile-only]') && !contains(github.event.head_commit.message, '[minic-boolean-domain-ab20]') && !contains(github.event.head_commit.message, '[minic-boolean-domain-ab500]') && !contains(github.event.head_commit.message, '[minic-parser-copy-ab]') && !contains(github.event.head_commit.message, '[minic-integer-owner-ab]') && !contains(github.event.head_commit.message, '[minic-integer-owner-ab500]') && !contains(github.event.head_commit.message, '[minic-next-stage-audit]')"
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -927,7 +1020,7 @@ jobs:
           echo "TYPEDEF_ASAN_SMOKE=PASS"
 
       - name: Paired integrated optimization A/B with exactly four workers
-        if: "!contains(github.event.head_commit.message, '[minic-source-broad-ab]') && !contains(github.event.head_commit.message, '[minic-current-phase20]') && !contains(github.event.head_commit.message, '[minic-cpu-profile-only]') && !contains(github.event.head_commit.message, '[minic-boolean-domain-ab20]') && !contains(github.event.head_commit.message, '[minic-boolean-domain-ab500]') && !contains(github.event.head_commit.message, '[minic-parser-copy-ab]') && !contains(github.event.head_commit.message, '[minic-integer-owner-ab]') && !contains(github.event.head_commit.message, '[minic-integer-owner-ab500]')"
+        if: "!contains(github.event.head_commit.message, '[minic-source-broad-ab]') && !contains(github.event.head_commit.message, '[minic-current-phase20]') && !contains(github.event.head_commit.message, '[minic-cpu-profile-only]') && !contains(github.event.head_commit.message, '[minic-boolean-domain-ab20]') && !contains(github.event.head_commit.message, '[minic-boolean-domain-ab500]') && !contains(github.event.head_commit.message, '[minic-parser-copy-ab]') && !contains(github.event.head_commit.message, '[minic-integer-owner-ab]') && !contains(github.event.head_commit.message, '[minic-integer-owner-ab500]') && !contains(github.event.head_commit.message, '[minic-next-stage-audit]')"
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -942,7 +1035,7 @@ jobs:
           cp "$work/paired/output-fingerprints.tsv" "$work/evidence/"
 
       - name: Analyze A/B time distribution
-        if: "!contains(github.event.head_commit.message, '[minic-source-broad-ab]') && !contains(github.event.head_commit.message, '[minic-current-phase20]') && !contains(github.event.head_commit.message, '[minic-cpu-profile-only]') && !contains(github.event.head_commit.message, '[minic-boolean-domain-ab20]') && !contains(github.event.head_commit.message, '[minic-boolean-domain-ab500]') && !contains(github.event.head_commit.message, '[minic-parser-copy-ab]') && !contains(github.event.head_commit.message, '[minic-integer-owner-ab]') && !contains(github.event.head_commit.message, '[minic-integer-owner-ab500]')"
+        if: "!contains(github.event.head_commit.message, '[minic-source-broad-ab]') && !contains(github.event.head_commit.message, '[minic-current-phase20]') && !contains(github.event.head_commit.message, '[minic-cpu-profile-only]') && !contains(github.event.head_commit.message, '[minic-boolean-domain-ab20]') && !contains(github.event.head_commit.message, '[minic-boolean-domain-ab500]') && !contains(github.event.head_commit.message, '[minic-parser-copy-ab]') && !contains(github.event.head_commit.message, '[minic-integer-owner-ab]') && !contains(github.event.head_commit.message, '[minic-integer-owner-ab500]') && !contains(github.event.head_commit.message, '[minic-next-stage-audit]')"
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -1066,6 +1159,8 @@ jobs:
             build/linux-perf-audit-v1/parser-copy-ab/*/paired-result.json
             build/linux-perf-audit-v1/integer-owner-ab/*/paired-result.json
             build/linux-perf-audit-v1/integer-owner-ab500/differential.json
+            build/linux-perf-audit-v1/next-phase/*/phases.json
+            build/linux-perf-audit-v1/next-phase/ranked-summary.json
             build/linux-perf-audit-v1/oldnew500/differential.json
             build/linux-perf-materialize/batch-summary.txt
           retention-days: 7
