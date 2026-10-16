@@ -23,7 +23,9 @@ predef_args=("$@")
 # remains separate. Fail closed for any architecture/flag combination that
 # has not been classified and tested.
 if [[ "${MINIPP_PREDEFINES_NATIVE_RULES:-0}" == 1 ]]; then
-  rm -f "$tmp"
+  # Fail closed: an unsuccessful native generation must not leave a previous
+  # invocation's successful header at the target path.
+  rm -f "$tmp" "$output"
   root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
   # Use the SAME native C MiniPP executable for target macro production.
   # Python remains in tests only as the frozen independent differential oracle.
