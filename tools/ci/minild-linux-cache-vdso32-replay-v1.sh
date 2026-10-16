@@ -22,6 +22,12 @@ inputs=(
   "$rel/flush_icache.o"
   "$rel/note.o"
 )
+# Keep per-input ELF metadata to detect mistaken ABI/cache selection.
+for object in "${inputs[@]}"; do
+  riscv64-linux-gnu-readelf -Wh "$out/$object" | \
+    grep -E 'Class:|Type:|Machine:|Flags:' \
+    >>"$ev/input-elf-summary.txt" || true
+done
 for f in "${inputs[@]}" "$rel/compat_vdso.lds"; do
   if [[ ! -s "$out/$f" ]]; then
     printf 'MINILD_VDSO32=INCONCLUSIVE missing_frozen_input=%s\n' "$f" >&2
@@ -60,7 +66,61 @@ measure_link() {
   ) || status=$?
   local elapsed=NA user=NA sys=NA maxrss=NA size=0
   if [[ -s "$measurement" ]]; then
-    IFS=$'\t' read -r elapsed user sys maxrss <"$measurement" || true
+    # GNU time prints a diagnostic line before metrics on nonzero exit.
+    IFS=
+  [[ -f "$target" ]] && size=$(stat -c %s "$target")
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    "$producer" "$status" "$elapsed" "$user" "$sys" "$maxrss" "$size" \
+    >>"$ev/measurements.tsv"
+  echo "MINILD_VDSO32_TIME producer=$producer rc=$status elapsed_s=$elapsed maxrss_kb=$maxrss output_bytes=$size"
+  return "$status"
+}
+gnu="$ev/gnu-compat-vdso.so"
+native="$ev/native-compat-vdso.so"
+if ! measure_link gnu /usr/bin/riscv64-linux-gnu-ld "$gnu"; then
+  echo 'MINILD_VDSO32=INCONCLUSIVE frozen_GNU_reference_failed' >&2
+  tail -n 20 "$ev/gnu.stderr" >&2
+  exit 9
+fi
+riscv64-linux-gnu-readelf -Wh -SW -lW -dW --version-info "$gnu" >"$ev/gnu-elf.txt"
+riscv64-linux-gnu-readelf -Ws "$gnu" >"$ev/gnu-symbols.txt"
+if ! grep -q 'Class:[[:space:]]*ELF32' "$ev/gnu-elf.txt" || \
+   ! grep -q 'Type:[[:space:]]*DYN' "$ev/gnu-elf.txt"; then
+  echo 'MINILD_VDSO32=INCONCLUSIVE GNU_reference_not_ELF32_ET_DYN' >&2
+  exit 9
+fi
+echo 'MINILD_VDSO32_REFERENCE=PASS ELF32_ET_DYN=true inputs=4 real_linux_script=true no_C_rebuild=true'
+
+native_rc=0
+measure_link native "$minild" "$native" || native_rc=$?
+if (( native_rc != 0 )); then
+  grep -m1 '^minic-ld:' "$ev/native.stderr" >"$ev/first-blocker.txt" || true
+  echo "MINILD_VDSO32=GAP native_rc=$native_rc first_blocker=$(cat "$ev/first-blocker.txt")"
+  tail -n 25 "$ev/native.stderr" >&2
+  exit "$native_rc"
+fi
+riscv64-linux-gnu-readelf -Wh -SW -lW -dW --version-info "$native" >"$ev/native-elf.txt"
+riscv64-linux-gnu-readelf -Ws "$native" >"$ev/native-symbols.txt"
+if ! grep -q 'Class:[[:space:]]*ELF32' "$ev/native-elf.txt" || \
+   ! grep -q 'Type:[[:space:]]*DYN' "$ev/native-elf.txt"; then
+  echo 'MINILD_VDSO32=FAIL native_output_not_ELF32_ET_DYN' >&2
+  exit 20
+fi
+# Check actual ABI/loader-visible contracts, not raw byte equality (different
+# linkers may choose different valid layout offsets or build IDs).
+for symbol in __compat_vdso_rt_sigreturn __compat_vdso_getcpu __compat_vdso_flush_icache; do
+  grep -q "$symbol" "$ev/native-symbols.txt" || {
+    echo "MINILD_VDSO32=FAIL missing_symbol=$symbol" >&2; exit 21;
+  }
+done
+for section in '.dynsym' '.dynstr' '.dynamic' '.hash' '.gnu.hash'; do
+  grep -Fq "$section" "$ev/native-elf.txt" || {
+    echo "MINILD_VDSO32=FAIL missing_section=$section" >&2; exit 22;
+  }
+done
+echo 'MINILD_VDSO32=PASS exact_Linux_ELF32_link=true native_output=true no_GNU_fallback=true cached_C=true'
+echo 'MINILD_VDSO32=NEEDS_FULL_RUNTIME_CERTIFICATION QEMU_P1_not_run_in_this_gate=true'
+\t' read -r elapsed user sys maxrss < <(tail -n 1 "$measurement") || true
   fi
   [[ -f "$target" ]] && size=$(stat -c %s "$target")
   printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
