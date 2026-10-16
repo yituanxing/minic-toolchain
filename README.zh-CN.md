@@ -6,21 +6,21 @@ MiniC 是一套由真实软件驱动、使用 ISO C11 重写的编译器工具�
 
 英文介绍：[`README.md`](README.md)
 
-## 当前编译边界
+## 当前编译边界与已验收集成
 
-Compiler V1 仍冻结在当前 Linux runtime 收敛所使用的 C 编译边界：
+编译器的独立接口仍是 `minic-cc: 预处理 C（.i）→ RV64 汇编（.s）`；固定 GNU 预处理/汇编/链接的隔离验证保留为差分与故障定位手段，并非 2026-10-16 全量 Linux 验收的唯一生产路径。
+
+当前已经通过的完整 Linux 6.6.143 原生链路（提交 `24b02474`，[CI #38870185276](https://github.com/yituanxing/minic-toolchain/actions/runs/38870185276)）包括：
 
 ```text
-C 源码
-  -> 外部 RISC-V GCC 预处理
-  -> MiniC 编译器：预处理 C（.i）生成 RV64 汇编（.s）
-  -> 外部 GNU 汇编和链接
-  -> QEMU RISC-V 执行
+C (.c) -> MiniPP (.i) -> MiniC (.s) -> MiniAS (.o)
+                                    -> MiniAR / MiniLD / MiniObjcopy
+                                    -> Linux Image -> QEMU P1 12/12
 ```
 
-在这条主线上，外部 GCC/GNU 工具仍是明确记录的差分与集成辅助工具，但不得替 MiniC 编译任何 C 函数。
+本轮 **2064/2064** 个真实 C 对象和七个分片均通过；RV32 compat-vDSO 的原生 ELF32 链接也在该完整运行时链路中接受验证。GNU 工具仍可用于明确记录的构建探测、固定宏参考和差分 oracle；不要把该验收解释成「整个工程完全不需要 GNU」，也不能用这次结果证明未来未测试的源码修改。
 
-仓库目前已经同时包含可独立执行的 MiniPP、MiniAS、MiniAR、MiniLD、ELF/对象工具以及分阶段 `minic` driver，并分别具有自己的验证门禁。它们已经存在并不意味着 full-Linux 路径会自动切换工具边界；预处理、汇编、归档/链接、driver 和对象工具都应在独立认证后再成为对应边界的 canonical 实现。
+MiniPP、MiniAS、MiniAR、MiniLD、ELF/对象工具及分阶段 `minic` driver 均保留独立执行入口，接口和验收范围仍分别维护。当前方向是**自举前的轻量收敛**，而非立即实现新前端、RV32 C 后端或复杂的 LLVM 风格框架；见 [轻量编译器架构与自举前收敛计划](docs/architecture/lean-compiler-and-prebootstrap-convergence-2026-10-16.md)。
 
 ## 当前实现
 
