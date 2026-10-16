@@ -85,6 +85,65 @@ for ((i=0; i<${#args[@]}; ++i)); do
     break
   fi
 done
+# Opt-in exact RV32 compat-vDSO product link, after independent cached
+# four-object ELF32 writer acceptance. Version/PHDR/NM oracles are checked
+# in this same Kbuild execution. Any missing opt-in or differing command
+# stays on the pre-existing GNU route, never disguised as native.
+if [[ "${MINILD_ENABLE_VDSO32:-0}" == 1 &&
+      "$output" == *arch/riscv/kernel/compat_vdso/compat_vdso.so.dbg* ]]; then
+  if [[ "$output" != arch/riscv/kernel/compat_vdso/compat_vdso.so.dbg &&
+        "$output" != arch/riscv/kernel/compat_vdso/compat_vdso.so.dbg.tmp ]]; then
+    echo "MINILD_VDSO32=FAIL unexpected_target_path:$output" >&2
+    exit 86
+  fi
+  has_arch=0
+  has_shared=0
+  has_script=0
+  count_o=0
+  for ((j=0; j<${#args[@]}; ++j)); do
+    case "${args[j]}" in
+      -melf32lriscv) has_arch=1 ;;
+      -shared) has_shared=1 ;;
+      -T)
+        if ((j+1<${#args[@]})) &&
+           [[ "${args[j+1]}" == *arch/riscv/kernel/compat_vdso/compat_vdso.lds ]]; then
+          has_script=1
+        fi ;;
+      -T*compat_vdso.lds) has_script=1 ;;
+      arch/riscv/kernel/compat_vdso/*.o) ((count_o+=1)) ;;
+    esac
+  done
+  if (( !has_arch || !has_shared || !has_script || count_o!=4 )); then
+    echo "MINILD_VDSO32=FAIL unexpected_real_kbuild_flags arch=$has_arch shared=$has_shared script=$has_script objects=$count_o output=$output" >&2
+    exit 86
+  fi
+  { flock 9; printf 'minild-vdso32'; printf ' %q' "$@"; printf '\n'; } 9>>"$NATIVE_TRACE_DIR/minild.trace" >&9
+  started_ms=$(date +%s%3N)
+  status=0
+  "$MINILD" "$@" || status=$?
+  elapsed_ms=$(($(date +%s%3N)-started_ms))
+  { flock 9; printf 'minild-vdso32\t%s\t%s\t%s\n' "$elapsed_ms" "$status" "$output"; } 9>>"$NATIVE_TRACE_DIR/minild-times.tsv" >&9
+  if ((status!=0)); then
+    echo "MINILD_VDSO32=FAIL real_Kbuild_native_link_rc=$status no_GNU_fallback=true" >&2
+    exit "$status"
+  fi
+  riscv64-linux-gnu-readelf -Wh -lW --dyn-syms --version-info "$output" >"$NATIVE_TRACE_DIR/native-vdso32-elf.txt"
+  riscv64-linux-gnu-nm "$output" >"$NATIVE_TRACE_DIR/native-vdso32-regular-nm.txt"
+  grep -Eq 'Class:[[:space:]]*ELF32' "$NATIVE_TRACE_DIR/native-vdso32-elf.txt"
+  grep -Eq 'Type:[[:space:]]*DYN' "$NATIVE_TRACE_DIR/native-vdso32-elf.txt"
+  grep -q 'RISC-V' "$NATIVE_TRACE_DIR/native-vdso32-elf.txt"
+  grep -q 'GNU_EH_FRAME' "$NATIVE_TRACE_DIR/native-vdso32-elf.txt"
+  for sym in __vdso_rt_sigreturn __vdso_getcpu __vdso_flush_icache; do
+    grep -Fq "${sym}@@LINUX_4.15" "$NATIVE_TRACE_DIR/native-vdso32-elf.txt" || {
+      echo "MINILD_VDSO32=FAIL missing_LINUX_4.15_export:$sym" >&2; exit 88;
+    }
+    grep -Eq "[[:xdigit:]]+ [TtWw] ${sym}$" "$NATIVE_TRACE_DIR/native-vdso32-regular-nm.txt" || {
+      echo "MINILD_VDSO32=FAIL missing_regular_nm_export:$sym" >&2; exit 89;
+    }
+  done
+  echo "MINILD_VDSO32_KBUILD=PASS native_ELF32=true versioned_exports=3 regular_nm=true no_GNU_fallback=true elapsed_ms=$elapsed_ms output=$output"
+  exit 0
+fi
 # The exact ELF64 RISC-V Linux vDSO command independently passed GNU-vs-
 # MiniLD ELF ABI, section, PHDR and symbol-version oracles (#38535551347).
 # Promote only the Kbuild 64-bit vdso.so.dbg link under explicit opt-in.
