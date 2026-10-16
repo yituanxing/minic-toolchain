@@ -16,6 +16,10 @@ on:
       - 'include/minic/**'
       - 'tools/minic/**'
       - 'tools/minic-cc/**'
+      # Native MiniPP source and its existing oracle must also reach Linux P1.
+      - 'preprocessor/**'
+      - 'tools/minic-cpp/**'
+      - 'tests/preprocessor/**'
   workflow_dispatch:
 
 permissions:
