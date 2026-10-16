@@ -256,6 +256,8 @@ def main() -> int:
     for row in slowest:
         print(f"MINIPP_SEVEN_SLOWEST_MINIC worker={args.shard}/7 "
               f"elapsed_ms={row['timings_ms'].get('minic', 0)} "
+              f"peak_rss_kb={row['peak_rss_kb'].get('minic', 0)} "
+              f"input_i_bytes={row.get('minipp_input_bytes', 0)} "
               f"object={row['object']}", flush=True)
     print(f"MINIPP_SEVEN_PERFORMANCE worker={args.shard}/7 "
           + " ".join(f"{stage}_ms={total}" for stage, total in stage_totals_ms.items())
