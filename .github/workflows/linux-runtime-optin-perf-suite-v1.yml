@@ -323,7 +323,10 @@ jobs:
           test -x "$root/toolchain/bin/minic" && test -x "$root/phase20-traced/bin/minic"
           sha256sum "$root/toolchain/bin/minic-cc" "$root/phase20-traced/bin/minic-cc" \
             | tee "$root/evidence/phase20-compiler-identities.sha256"
-          python3 tools/ci/linux-perf-phase-trace-v1.py --self-test
+          python3 tools/ci/linux-perf-phase-trace-v1.py --self-test \
+            | tee "$root/evidence/phase20-trace-parser-selftest.txt"
+          grep -Fq 'boolean_count_parser=1' \
+            "$root/evidence/phase20-trace-parser-selftest.txt"
           echo 'MINIC_PHASE20_PROFILE_BUILD=PASS current_native=true instrumentation_only=true'
 
       - name: Build old and current native MiniC from certified source revisions
