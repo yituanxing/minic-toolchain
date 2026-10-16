@@ -68,3 +68,9 @@ if set(records)!=set(owners):raise SystemExit('MINIPP_MERGE=FAIL incomplete_2064
                     builtin_profile_sha=pinned_sha,
                     generated_header_replay_requires_MiniPP=True),indent=2)+'\n')
 print('MINIPP_SEVEN_MERGE=PASS owners=2064 shards=7 GNU_PP_consumed_by_MiniC=false QEMU_pending=true',flush=True)
+if a.native_macro_rules:
+    assert pinned_sha and len(records) == 2064
+    print('MINIPP_NATIVE_MACRO_MERGE=PASS owners=2064 shards=7 '
+          'macro_producer=native_abi_rules '
+          'snapshot_SHA_attested=true GCC_macro_generation=none '
+          'QEMU_pending=true',flush=True)
