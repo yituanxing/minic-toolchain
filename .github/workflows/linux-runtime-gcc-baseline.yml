@@ -2091,9 +2091,9 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           repository: ${{ github.repository }}
-          run-id: 38550003154
+          run-id: ${{ contains(github.event.head_commit.message, '[linux-minipp-native-reuse]') && '38824106769' || '38550003154' }}
           github-token: ${{ github.token }}
-          pattern: minipp-native-shard-*-041ae51e1ff2f3f1b9e30b489957e53cfc43dfa1
+          pattern: ${{ contains(github.event.head_commit.message, '[linux-minipp-native-reuse]') && 'minipp-native-shard-*-ee1677256074ddf3bbd9145553178471c3d42e06' || 'minipp-native-shard-*-041ae51e1ff2f3f1b9e30b489957e53cfc43dfa1' }}
           path: build/minipp-seven-merge/incoming
           merge-multiple: false
 
@@ -2103,10 +2103,29 @@ jobs:
         run: |
           set -Eeuo pipefail
           ev="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1"
-          test "${{ steps.p1_minic_frozen_cache.outputs.cache-hit }}" = true
-          (cd "$ev"; sha256sum --quiet -c minic-manifest.sha256)
+          if [[ "${{ contains(github.event.head_commit.message, '[linux-minipp-native-reuse]') && '1' || '0' }}" == 1 ]]; then
+            # Only reuse the seven fully produced .o shards after proving no
+            # source, GNU fixture or producer script changed since their build.
+            producer=ee1677256074ddf3bbd9145553178471c3d42e06
+            git fetch --quiet --no-tags --depth=1 origin "$producer"
+            git diff --quiet "$producer" "$GITHUB_SHA" -- \
+              Makefile src include preprocessor assembler archiver linker elf \
+              tools/minic tools/minic-cc \
+              tools/ci/linux-runtime-build-minic-profile-v1.sh \
+              tools/ci/minipp-linux-seven-native-stage-v1.py \
+              tools/ci/minipp-linux-seven-merge-v1.py \
+              tools/ci/linux-runtime-gcc-cohort-objects-v1.txt || {
+              echo 'MINIPP_REUSE=FAIL validated_producer_source_changed' >&2; exit 13;
+            }
+            echo "MINIPP_REUSE=SOURCE_IDENTICAL producer=$producer current=$GITHUB_SHA frozen_C=2064"
+          else
+            test "${{ steps.p1_minic_frozen_cache.outputs.cache-hit }}" = true
+            (cd "$ev"; sha256sum --quiet -c minic-manifest.sha256)
+          fi
           shard_commit="$GITHUB_SHA"
-          if [[ "${{ contains(github.event.head_commit.message, '[linux-minipp-seven-replay]') && '1' || '0' }}" == 1 ]]; then
+          if [[ "${{ contains(github.event.head_commit.message, '[linux-minipp-native-reuse]') && '1' || '0' }}" == 1 ]]; then
+            shard_commit=ee1677256074ddf3bbd9145553178471c3d42e06
+          elif [[ "${{ contains(github.event.head_commit.message, '[linux-minipp-seven-replay]') && '1' || '0' }}" == 1 ]]; then
             shard_commit=041ae51e1ff2f3f1b9e30b489957e53cfc43dfa1
           fi
           python3 tools/ci/minipp-linux-seven-merge-v1.py \
