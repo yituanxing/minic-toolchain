@@ -2355,7 +2355,8 @@ static bool minic_inline_source_has_noncore_root(
 
 /* Core pruning asks the same non-Core-root question for many functions.
  * Collect the immutable entry/force-emit/alias/relocation facts once for this
- * pass. Allocation failure retains the previous per-function scan. */
+ * pass. Core pruning only changes is_referenced, not these root inputs.
+ * Allocation failure retains the previous per-function scan. */
 static bool *minic_build_noncore_root_index(const MinicC0Program *program) {
     bool *roots;
     size_t function_index;
