@@ -1,3 +1,8 @@
+/* One unit owns the whole-source zero-only-boolean CFG proof. Preserve the
+ * fail-closed checks on address escape, mutation and entry dominance.
+ * A source-level refactor only: this file MUST NOT change the proof rules.
+ * The current per-query program-wide scans are a separate measured
+ * performance question; do not add unsound caching during extraction. */
 #include "core/core_lower_internal.h"
 
 #include "frontend/const_eval.h"
