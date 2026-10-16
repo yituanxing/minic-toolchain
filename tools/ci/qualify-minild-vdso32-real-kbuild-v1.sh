@@ -36,6 +36,10 @@ grep -q 'Build ID:' "$trace_dir/native-vdso32-final-notes.txt" || {
   echo 'MINILD_VDSO32=FAIL native_build_id_not_present' >&2
   exit 47
 }
+grep -q 'Linux' "$trace_dir/native-vdso32-final-notes.txt" || {
+  echo 'MINILD_VDSO32=FAIL native_compat_linux_note_not_present' >&2
+  exit 50
+}
 for symbol in __vdso_rt_sigreturn __vdso_getcpu __vdso_flush_icache; do
   grep -Fq "${symbol}@@LINUX_4.15" "$trace_dir/native-vdso32-final-elf.txt" || {
     echo "MINILD_VDSO32=FAIL missing_versioned_export:$symbol" >&2
@@ -54,4 +58,15 @@ grep -Fq 'COHORT_P1=PASS name=full_all_verified syscalls=12 python_era_oracle=PA
   echo 'MINILD_VDSO32=FAIL no_QEMU_P1_12of12' >&2
   exit 46
 }
+# Linker-only wall time is measured from the existing Kbuild trace,
+# never confused with parallel C compilation or overall QEMU time.
+if [[ -s "$trace_dir/minild-times.tsv" ]]; then
+  awk -F '\t' '$1=="minild-vdso32" {
+    count++; wall_ms += $2
+    if ($3 != 0) failed++
+  } END {
+    printf "MINILD_VDSO32_PERF calls=%d wall_ms_sum=%d failed=%d scope=real_Kbuild_link_only\n", count, wall_ms, failed
+    if (count<1 || failed>0) exit 2
+  }' "$trace_dir/minild-times.tsv"
+fi
 echo "MINILD_VDSO32_KBUILD=PASS native_calls=$native_calls gnu_product_calls=0 ELF32_RISCV_ET_DYN=true versioned_exports=3 cached_MiniC_owners=2064 QEMU_P1=12/12"
