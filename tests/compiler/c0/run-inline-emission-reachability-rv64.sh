@@ -35,6 +35,13 @@ static inline int live_parent(int x) {
     return live_leaf(x) + 1;
 }
 
+/* Three constant call sites can create variants of the same inline source.
+ * The nonconstant call still requires the original definition and must not
+ * disappear when the compiler finalizes per-source residual references. */
+static inline int multi_variant(int x) {
+    return x + 1;
+}
+
 static int live_static_noninline(int x) {
     return live_parent(x);
 }
@@ -50,7 +57,9 @@ static __attribute__((used)) int kept_used(int x) {
 int (*address_root_ptr)(int) = address_root;
 
 int live_entry(int x) {
-    return live_static_noninline(x);
+    return live_static_noninline(x) +
+           multi_variant(1) + multi_variant(2) + multi_variant(3) +
+           multi_variant(x) - x - 10;
 }
 C
 
@@ -64,7 +73,7 @@ if grep -F 'minic_dead_missing_symbol' "$work/reach.undefined" >/dev/null; then
     cat "$work/reach.undefined" >&2
     exit 1
 fi
-for symbol in live_leaf live_parent live_static_noninline live_entry address_root address_root_ptr kept_used; do
+for symbol in live_leaf live_parent live_static_noninline live_entry multi_variant address_root address_root_ptr kept_used; do
     if ! awk -v s="$symbol" '$3==s { found=1 } END { exit found ? 0 : 1 }' "$work/reach.nm"; then
         echo "INLINE_EMISSION_REACHABILITY_FAIL missing-live-symbol=$symbol" >&2
         cat "$work/reach.nm" >&2
@@ -97,7 +106,7 @@ rc=$?
 set -e
 test "$rc" -eq 0
 
-echo "INLINE_EMISSION_REACHABILITY_RV64=PASS dead_inline=discarded dead_static=discarded transitive=retained global_address=retained used=retained qemu_rc=$rc"
+echo "INLINE_EMISSION_REACHABILITY_RV64=PASS dead_inline=discarded dead_static=discarded transitive=retained residual_inline=retained global_address=retained used=retained qemu_rc=$rc"
 
 # Existing focused RV64 runner also proves earlycon-style mutable bool,
 # second-pass goto and finite loop termination. This is a small test, not
