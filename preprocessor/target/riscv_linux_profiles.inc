@@ -6,7 +6,7 @@
  * Change only by re-verifying the pinned reference macro dictionaries.
  */
 /* SHA-256 of frozen reference profile: 2d94641a8165b5cb506262a53025d8e47525222a9f71c236a9c02fd313828dfb */
-static const char minipp_rv64_c_base[] =
+static const char *const minipp_rv64_c_base[] = {
     "#define __riscv 1\n#define __DBL_MIN_EXP__ (-1021)\n#define __riscv_atomic 1\n#define __UINT_LEAST16_MAX__ 0xffff\n#"
     "define __FLT16_HAS_QUIET_NAN__ 1\n#define __ATOMIC_ACQUIRE 2\n#define __FLT128_MAX_10_EXP__ 4932\n#define __FLT_MIN"
     "__ 1.17549435082228750796873653722224568e-38F\n#define __GCC_IEC_559_COMPLEX 0\n#define __UINT_LEAST8_TYPE__ unsig"
@@ -30,7 +30,7 @@ static const char minipp_rv64_c_base[] =
     "R_MIN__ 0\n#define __INT64_C(c) c ## L\n#define __SSP_STRONG__ 3\n#define __GCC_ATOMIC_POINTER_LOCK_FREE 2\n#define "
     "__ATOMIC_SEQ_CST 5\n#define __unix 1\n#define __SIZEOF_INT__ 4\n#define __FLT32X_MANT_DIG__ 53\n#define __FLT64X_EPS"
     "ILON__ 1.92592994438723585305597794258492732e-34F64x\n#define __STDC_HOSTED__ 1\n#define __DBL_DIG__ 15\n#define __"
-    "FLT_EPSILON__ 1.19209289550781250000000000000000000e-7F\n#define __SHRT_WIDTH__ 16\n#define __FLT32_IS_IEC_60559__"
+    "FLT_EPSILON__ 1.19209289550781250000000000000000000e-7F\n#define __SHRT_WIDTH__ 16\n#define __FLT32_IS_IEC_60559__",
     " 1\n#define __LDBL_MIN__ 3.36210314311209350626267781732175260e-4932L\n#define __STDC_UTF_16__ 1\n#define __DBL_IS_"
     "IEC_60559__ 1\n#define __FLT64X_DENORM_MIN__ 6.47517511943802511092443895822764655e-4966F64x\n#define __FLT32X_HAS"
     "_INFINITY__ 1\n#define __FLT16_DIG__ 3\n#define __unix__ 1\n#define __INT_WIDTH__ 32\n#define __STDC_ISO_10646__ 201"
@@ -54,7 +54,7 @@ static const char minipp_rv64_c_base[] =
     "t\n#define __LP64__ 1\n#define __DBL_HAS_QUIET_NAN__ 1\n#define __FLT32X_EPSILON__ 2.220446049250313080847263336181"
     "64062e-16F32x\n#define __FLT64_MIN_EXP__ (-1021)\n#define __FLT64_MIN_10_EXP__ (-307)\n#define __riscv_mul 1\n#defin"
     "e __FLT16_MIN_10_EXP__ (-4)\n#define __FLT64X_DECIMAL_DIG__ 36\n#define __REGISTER_PREFIX__ \n#define __UINT16_MAX_"
-    "_ 0xffff\n#define __DBL_HAS_DENORM__ 1\n#define __LDBL_HAS_INFINITY__ 1\n#define __FLT32_MIN__ 1.175494350822287507"
+    "_ 0xffff\n#define __DBL_HAS_DENORM__ 1\n#define __LDBL_HAS_INFINITY__ 1\n#define __FLT32_MIN__ 1.175494350822287507",
     "96873653722224568e-38F32\n#define __UINT8_TYPE__ unsigned char\n#define __FLT_DIG__ 6\n#define __NO_INLINE__ 1\n#def"
     "ine __DEC_EVAL_METHOD__ 2\n#define __FLT_MANT_DIG__ 24\n#define __LDBL_DECIMAL_DIG__ 36\n#define __VERSION__ \"13.3."
     "0\"\n#define __UINT64_C(c) c ## UL\n#define _STDC_PREDEF_H 1\n#define __INT_LEAST32_MAX__ 0x7fffffff\n#define __GCC_A"
@@ -78,7 +78,7 @@ static const char minipp_rv64_c_base[] =
     "WIDTH__ 64\n#define __INT_LEAST16_MAX__ 0x7fff\n#define __FLT16_NORM_MAX__ 6.55040000000000000000000000000000000e+"
     "4F16\n#define __FLT32_DENORM_MIN__ 1.40129846432481707092372958328991613e-45F32\n#define __SIG_ATOMIC_WIDTH__ 32\n#"
     "define __INT_LEAST64_TYPE__ long int\n#define __INT16_TYPE__ short int\n#define __INT_LEAST8_TYPE__ signed char\n#d"
-    "efine __FLT16_MAX__ 6.55040000000000000000000000000000000e+4F16\n#define __FLT128_MIN__ 3.36210314311209350626267"
+    "efine __FLT16_MAX__ 6.55040000000000000000000000000000000e+4F16\n#define __FLT128_MIN__ 3.36210314311209350626267",
     "781732175260e-4932F128\n#define __STDC_VERSION__ 201112L\n#define __INT_FAST8_MAX__ 0x7f\n#define __FLT128_MAX__ 1."
     "18973149535723176508575932662800702e+4932F128\n#define __INTPTR_MAX__ 0x7fffffffffffffffL\n#define linux 1\n#define"
     " __FLT64_HAS_QUIET_NAN__ 1\n#define __FLT32_MIN_10_EXP__ (-37)\n#define __FLT32X_DIG__ 15\n#define __UINT16_C(c) c\n"
@@ -102,7 +102,7 @@ static const char minipp_rv64_c_base[] =
     "PE__ int\n#define _LP64 1\n#define __UINT8_C(c) c\n#define __FLT64_MAX_EXP__ 1024\n#define __SIZEOF_WCHAR_T__ 2\n#def"
     "ine __UINT64_TYPE__ long unsigned int\n#define __FLT64_NORM_MAX__ 1.79769313486231570814527423731704357e+308F64\n#"
     "define __FLT128_HAS_QUIET_NAN__ 1\n#define __INTMAX_MAX__ 0x7fffffffffffffffL\n#define __INT_FAST8_TYPE__ signed c"
-    "har\n#define __FLT64X_MIN__ 3.36210314311209350626267781732175260e-4932F64x\n#define __GNUC_STDC_INLINE__ 1\n#defin"
+    "har\n#define __FLT64X_MIN__ 3.36210314311209350626267781732175260e-4932F64x\n#define __GNUC_STDC_INLINE__ 1\n#defin",
     "e __FLT64_HAS_DENORM__ 1\n#define __FLT32_EPSILON__ 1.19209289550781250000000000000000000e-7F32\n#define __FLT16_H"
     "AS_DENORM__ 1\n#define __DBL_DECIMAL_DIG__ 17\n#define __STDC_UTF_32__ 1\n#define __INT_FAST8_WIDTH__ 8\n#define __F"
     "LT32X_MAX__ 1.79769313486231570814527423731704357e+308F32x\n#define __DBL_NORM_MAX__ ((double)1.79769313486231570"
@@ -126,7 +126,7 @@ static const char minipp_rv64_c_base[] =
     "fffffffUL\n#define __UINT_FAST8_TYPE__ unsigned char\n#define __ATOMIC_ACQ_REL 4\n#define __ATOMIC_RELEASE 3\n#defin"
     "e __MINIPP_PP_CAT2(a, b) a##b\n#define __MINIPP_PP_CAT(a, b) __MINIPP_PP_CAT2(a, b)\n#define __MINIPP_HAS_ATTRIBUT"
     "E___copy__ 1\n#define __MINIPP_HAS_ATTRIBUTE___designated_init__ 1\n#define __MINIPP_HAS_ATTRIBUTE___diagnose_as_b"
-    "uiltin__ 0\n#define __MINIPP_HAS_ATTRIBUTE___error__ 1\n#define __MINIPP_HAS_ATTRIBUTE___externally_visible__ 1\n#d"
+    "uiltin__ 0\n#define __MINIPP_HAS_ATTRIBUTE___error__ 1\n#define __MINIPP_HAS_ATTRIBUTE___externally_visible__ 1\n#d",
     "efine __MINIPP_HAS_ATTRIBUTE___fallthrough__ 1\n#define __MINIPP_HAS_ATTRIBUTE___no_caller_saved_registers__ 0\n#d"
     "efine __MINIPP_HAS_ATTRIBUTE___no_profile_instrument_function__ 1\n#define __MINIPP_HAS_ATTRIBUTE___no_sanitize_c"
     "overage__ 1\n#define __MINIPP_HAS_ATTRIBUTE___no_stack_protector__ 1\n#define __MINIPP_HAS_ATTRIBUTE___noclone__ 1"
@@ -137,11 +137,11 @@ static const char minipp_rv64_c_base[] =
     "nitizer_instrumentation 0\n#define __MINIPP_HAS_ATTRIBUTE_noipa 1\n#define __MINIPP_HAS_ATTRIBUTE_x 0\n#define __ha"
     "s_attribute(x) __MINIPP_PP_CAT(__MINIPP_HAS_ATTRIBUTE_, x)\n#define __MINIPP_HAS_BUILTIN___builtin_alloca_uniniti"
     "alized 0\n#define __MINIPP_HAS_BUILTIN___builtin_dynamic_object_size 1\n#define __MINIPP_HAS_BUILTIN___builtin_isd"
-    "igit 1\n#define __MINIPP_HAS_BUILTIN_x 0\n#define __has_builtin(x) __MINIPP_PP_CAT(__MINIPP_HAS_BUILTIN_, x)\n"
-    ;
+    "igit 1\n#define __MINIPP_HAS_BUILTIN_x 0\n#define __has_builtin(x) __MINIPP_PP_CAT(__MINIPP_HAS_BUILTIN_, x)\n",
+};
 
 /* SHA-256 of frozen reference profile: 785c89edbc4e5c5a746b429a584c59a0824c05bf91c7beecd494402e1da02a5b */
-static const char minipp_rv64_asm_base[] =
+static const char *const minipp_rv64_asm_base[] = {
     "#define __riscv 1\n#define __DBL_MIN_EXP__ (-1021)\n#define __riscv_atomic 1\n#define __UINT_LEAST16_MAX__ 0xffff\n#"
     "define __FLT16_HAS_QUIET_NAN__ 1\n#define __ATOMIC_ACQUIRE 2\n#define __FLT128_MAX_10_EXP__ 4932\n#define __FLT_MIN"
     "__ 1.17549435082228750796873653722224568e-38F\n#define __GCC_IEC_559_COMPLEX 2\n#define __UINT_LEAST8_TYPE__ unsig"
@@ -165,7 +165,7 @@ static const char minipp_rv64_asm_base[] =
     "28_MANT_DIG__ 113\n#define __WCHAR_MIN__ (-__WCHAR_MAX__ - 1)\n#define __INT64_C(c) c ## L\n#define __SSP_STRONG__ "
     "3\n#define __GCC_ATOMIC_POINTER_LOCK_FREE 2\n#define __ATOMIC_SEQ_CST 5\n#define __riscv_cmodel_medlow 1\n#define __"
     "unix 1\n#define __SIZEOF_INT__ 4\n#define __FLT32X_MANT_DIG__ 53\n#define __FLT64X_EPSILON__ 1.92592994438723585305"
-    "597794258492732e-34F64x\n#define __STDC_HOSTED__ 1\n#define __DBL_DIG__ 15\n#define __FLT_EPSILON__ 1.1920928955078"
+    "597794258492732e-34F64x\n#define __STDC_HOSTED__ 1\n#define __DBL_DIG__ 15\n#define __FLT_EPSILON__ 1.1920928955078",
     "1250000000000000000000e-7F\n#define __SHRT_WIDTH__ 16\n#define __FLT32_IS_IEC_60559__ 1\n#define __LDBL_MIN__ 3.362"
     "10314311209350626267781732175260e-4932L\n#define __DBL_IS_IEC_60559__ 1\n#define __FLT64X_DENORM_MIN__ 6.475175119"
     "43802511092443895822764655e-4966F64x\n#define __FP_FAST_FMA 1\n#define __FLT32X_HAS_INFINITY__ 1\n#define __FLT16_D"
@@ -189,7 +189,7 @@ static const char minipp_rv64_asm_base[] =
     "128\n#define __FLT64_DENORM_MIN__ 4.94065645841246544176568792868221372e-324F64\n#define __FLT16_DENORM_MIN__ 5.96"
     "046447753906250000000000000000000e-8F16\n#define __FLT64X_NORM_MAX__ 1.18973149535723176508575932662800702e+4932F"
     "64x\n#define __SIZEOF_POINTER__ 8\n#define __SIZE_TYPE__ long unsigned int\n#define __LP64__ 1\n#define __DBL_HAS_QU"
-    "IET_NAN__ 1\n#define __FLT32X_EPSILON__ 2.22044604925031308084726333618164062e-16F32x\n#define __FLT64_MIN_EXP__ ("
+    "IET_NAN__ 1\n#define __FLT32X_EPSILON__ 2.22044604925031308084726333618164062e-16F32x\n#define __FLT64_MIN_EXP__ (",
     "-1021)\n#define __FLT64_MIN_10_EXP__ (-307)\n#define __riscv_mul 1\n#define __FLT16_MIN_10_EXP__ (-4)\n#define __FLT"
     "64X_DECIMAL_DIG__ 36\n#define __REGISTER_PREFIX__ \n#define __UINT16_MAX__ 0xffff\n#define __DBL_HAS_DENORM__ 1\n#de"
     "fine __LDBL_HAS_INFINITY__ 1\n#define __FLT32_MIN__ 1.17549435082228750796873653722224568e-38F32\n#define __UINT8_"
@@ -213,7 +213,7 @@ static const char minipp_rv64_asm_base[] =
     "nsigned int\n#define __FLT16_EPSILON__ 9.76562500000000000000000000000000000e-4F16\n#define __FLT_HAS_QUIET_NAN__ "
     "1\n#define __FLT_MAX_10_EXP__ 38\n#define __LONG_MAX__ 0x7fffffffffffffffL\n#define __FLT64X_HAS_DENORM__ 1\n#define"
     " __FLT_HAS_INFINITY__ 1\n#define __GNUC_EXECUTION_CHARSET_NAME \"UTF-8\"\n#define __CHAR_UNSIGNED__ 1\n#define __risc"
-    "v_v_min_vlen 128\n#define __UINT_FAST16_TYPE__ long unsigned int\n#define __INT_FAST32_WIDTH__ 64\n#define __CHAR16"
+    "v_v_min_vlen 128\n#define __UINT_FAST16_TYPE__ long unsigned int\n#define __INT_FAST32_WIDTH__ 64\n#define __CHAR16",
     "_TYPE__ short unsigned int\n#define __PRAGMA_REDEFINE_EXTNAME 1\n#define __SIZE_WIDTH__ 64\n#define __INT_LEAST16_M"
     "AX__ 0x7fff\n#define __FLT16_NORM_MAX__ 6.55040000000000000000000000000000000e+4F16\n#define __FLT32_DENORM_MIN__ "
     "1.40129846432481707092372958328991613e-45F32\n#define __SIG_ATOMIC_WIDTH__ 32\n#define __INT_LEAST64_TYPE__ long i"
@@ -237,7 +237,7 @@ static const char minipp_rv64_asm_base[] =
     "EOF_SHORT__ 2\n#define __FLT32_NORM_MAX__ 3.40282346638528859811704183484516925e+38F32\n#define __LDBL_MIN_EXP__ ("
     "-16381)\n#define __riscv_compressed 1\n#define __FLT64_MAX__ 1.79769313486231570814527423731704357e+308F64\n#define"
     " __riscv_vector 1\n#define __WINT_WIDTH__ 32\n#define __FP_FAST_FMAF64 1\n#define __INT_LEAST8_MAX__ 0x7f\n#define _"
-    "_INT_LEAST64_WIDTH__ 64\n#define __FLT32X_MAX_10_EXP__ 308\n#define __SIZEOF_INT128__ 16\n#define __FLT16_MIN__ 6.1"
+    "_INT_LEAST64_WIDTH__ 64\n#define __FLT32X_MAX_10_EXP__ 308\n#define __SIZEOF_INT128__ 16\n#define __FLT16_MIN__ 6.1",
     "0351562500000000000000000000000000e-5F16\n#define __FLT64X_IS_IEC_60559__ 1\n#define __LDBL_MAX_10_EXP__ 4932\n#def"
     "ine __ATOMIC_RELAXED 0\n#define __DBL_EPSILON__ ((double)2.22044604925031308084726333618164062e-16L)\n#define __IN"
     "T_LEAST32_TYPE__ int\n#define _LP64 1\n#define __UINT8_C(c) c\n#define __FLT64_MAX_EXP__ 1024\n#define __SIZEOF_WCHA"
@@ -261,7 +261,7 @@ static const char minipp_rv64_asm_base[] =
     "7511943802511092443895822764655e-4966L\n#define __INT16_C(c) c\n#define __STDC__ 1\n#define __PTRDIFF_TYPE__ long i"
     "nt\n#define __riscv_div 1\n#define __ASSEMBLER__ 1\n#define __riscv_zifencei 2000000\n#define __UINT32_TYPE__ unsign"
     "ed int\n#define __FLT32X_MIN_10_EXP__ (-307)\n#define __UINTPTR_TYPE__ long unsigned int\n#define __linux__ 1\n#defi"
-    "ne __LDBL_MIN_10_EXP__ (-4931)\n#define __FLT128_EPSILON__ 1.92592994438723585305597794258492732e-34F128\n#define "
+    "ne __LDBL_MIN_10_EXP__ (-4931)\n#define __FLT128_EPSILON__ 1.92592994438723585305597794258492732e-34F128\n#define ",
     "__SIZEOF_LONG_LONG__ 8\n#define __FLT128_DECIMAL_DIG__ 36\n#define __GCC_ATOMIC_LLONG_LOCK_FREE 2\n#define __FLT_DE"
     "CIMAL_DIG__ 9\n#define __UINT_FAST16_MAX__ 0xffffffffffffffffUL\n#define __LDBL_NORM_MAX__ 1.189731495357231765085"
     "75932662800702e+4932L\n#define __GCC_ATOMIC_SHORT_LOCK_FREE 2\n#define __SIZE_MAX__ 0xffffffffffffffffUL\n#define _"
@@ -279,11 +279,11 @@ static const char minipp_rv64_asm_base[] =
     "tion 0\n#define __MINIPP_HAS_ATTRIBUTE_noipa 1\n#define __MINIPP_HAS_ATTRIBUTE_x 0\n#define __has_attribute(x) __MI"
     "NIPP_PP_CAT(__MINIPP_HAS_ATTRIBUTE_, x)\n#define __MINIPP_HAS_BUILTIN___builtin_alloca_uninitialized 0\n#define __"
     "MINIPP_HAS_BUILTIN___builtin_dynamic_object_size 1\n#define __MINIPP_HAS_BUILTIN___builtin_isdigit 1\n#define __MI"
-    "NIPP_HAS_BUILTIN_x 0\n#define __has_builtin(x) __MINIPP_PP_CAT(__MINIPP_HAS_BUILTIN_, x)\n"
-    ;
+    "NIPP_HAS_BUILTIN_x 0\n#define __has_builtin(x) __MINIPP_PP_CAT(__MINIPP_HAS_BUILTIN_, x)\n",
+};
 
 /* SHA-256 of frozen reference profile: 2afa921afc169280fb3c011cf3e41b30b4558f1d569d1c8e0f212576a61ebf31 */
-static const char minipp_rv32_asm_base[] =
+static const char *const minipp_rv32_asm_base[] = {
     "#define __riscv 1\n#define __DBL_MIN_EXP__ (-1021)\n#define __riscv_atomic 1\n#define __UINT_LEAST16_MAX__ 0xffff\n#"
     "define __FLT16_HAS_QUIET_NAN__ 1\n#define __ATOMIC_ACQUIRE 2\n#define __FLT128_MAX_10_EXP__ 4932\n#define __FLT_MIN"
     "__ 1.17549435082228750796873653722224568e-38F\n#define __GCC_IEC_559_COMPLEX 2\n#define __UINT_LEAST8_TYPE__ unsig"
@@ -307,7 +307,7 @@ static const char minipp_rv32_asm_base[] =
     "NT64_C(c) c ## LL\n#define __GCC_ATOMIC_POINTER_LOCK_FREE 2\n#define __ATOMIC_SEQ_CST 5\n#define __riscv_cmodel_med"
     "low 1\n#define __unix 1\n#define __SIZEOF_INT__ 4\n#define __FLT32X_MANT_DIG__ 53\n#define __FLT64X_EPSILON__ 1.9259"
     "2994438723585305597794258492732e-34F64x\n#define __STDC_HOSTED__ 1\n#define __DBL_DIG__ 15\n#define __FLT_EPSILON__"
-    " 1.19209289550781250000000000000000000e-7F\n#define __SHRT_WIDTH__ 16\n#define __FLT32_IS_IEC_60559__ 1\n#define __"
+    " 1.19209289550781250000000000000000000e-7F\n#define __SHRT_WIDTH__ 16\n#define __FLT32_IS_IEC_60559__ 1\n#define __",
     "LDBL_MIN__ 3.36210314311209350626267781732175260e-4932L\n#define __DBL_IS_IEC_60559__ 1\n#define __FLT64X_DENORM_M"
     "IN__ 6.47517511943802511092443895822764655e-4966F64x\n#define __FP_FAST_FMA 1\n#define __FLT32X_HAS_INFINITY__ 1\n#"
     "define __FLT16_DIG__ 3\n#define __unix__ 1\n#define __INT_WIDTH__ 32\n#define __STDC_IEC_559__ 1\n#define __STDC_ISO"
@@ -331,7 +331,7 @@ static const char minipp_rv32_asm_base[] =
     "ZEOF_POINTER__ 4\n#define __SIZE_TYPE__ unsigned int\n#define __DBL_HAS_QUIET_NAN__ 1\n#define __FLT32X_EPSILON__ 2"
     ".22044604925031308084726333618164062e-16F32x\n#define __FLT64_MIN_EXP__ (-1021)\n#define __FLT64_MIN_10_EXP__ (-30"
     "7)\n#define __riscv_mul 1\n#define __FLT16_MIN_10_EXP__ (-4)\n#define __FLT64X_DECIMAL_DIG__ 36\n#define __REGISTER_"
-    "PREFIX__ \n#define __UINT16_MAX__ 0xffff\n#define __DBL_HAS_DENORM__ 1\n#define __LDBL_HAS_INFINITY__ 1\n#define __F"
+    "PREFIX__ \n#define __UINT16_MAX__ 0xffff\n#define __DBL_HAS_DENORM__ 1\n#define __LDBL_HAS_INFINITY__ 1\n#define __F",
     "LT32_MIN__ 1.17549435082228750796873653722224568e-38F32\n#define __UINT8_TYPE__ unsigned char\n#define __FLT_DIG__"
     " 6\n#define __NO_INLINE__ 1\n#define __DEC_EVAL_METHOD__ 2\n#define __FLT_MANT_DIG__ 24\n#define __LDBL_DECIMAL_DIG_"
     "_ 36\n#define __VERSION__ \"13.3.0\"\n#define __UINT64_C(c) c ## ULL\n#define _STDC_PREDEF_H 1\n#define __INT_LEAST32_"
@@ -355,7 +355,7 @@ static const char minipp_rv32_asm_base[] =
     "6_TYPE__ short unsigned int\n#define __PRAGMA_REDEFINE_EXTNAME 1\n#define __SIZE_WIDTH__ 32\n#define __INT_LEAST16_"
     "MAX__ 0x7fff\n#define __FLT16_NORM_MAX__ 6.55040000000000000000000000000000000e+4F16\n#define __FLT32_DENORM_MIN__"
     " 1.40129846432481707092372958328991613e-45F32\n#define __SIG_ATOMIC_WIDTH__ 32\n#define __INT_LEAST64_TYPE__ long "
-    "long int\n#define __INT16_TYPE__ short int\n#define __INT_LEAST8_TYPE__ signed char\n#define __FLT16_MAX__ 6.550400"
+    "long int\n#define __INT16_TYPE__ short int\n#define __INT_LEAST8_TYPE__ signed char\n#define __FLT16_MAX__ 6.550400",
     "00000000000000000000000000000e+4F16\n#define __FLT128_MIN__ 3.36210314311209350626267781732175260e-4932F128\n#defi"
     "ne __INT_FAST8_MAX__ 0x7f\n#define __FLT128_MAX__ 1.18973149535723176508575932662800702e+4932F128\n#define __INTPT"
     "R_MAX__ 0x7fffffff\n#define linux 1\n#define __FLT64_HAS_QUIET_NAN__ 1\n#define __FLT32_MIN_10_EXP__ (-37)\n#define "
@@ -379,7 +379,7 @@ static const char minipp_rv32_asm_base[] =
     "64062e-16L)\n#define __INT_LEAST32_TYPE__ int\n#define __UINT8_C(c) c\n#define __FLT64_MAX_EXP__ 1024\n#define __SIZ"
     "EOF_WCHAR_T__ 4\n#define __UINT64_TYPE__ long long unsigned int\n#define __FLT64_NORM_MAX__ 1.79769313486231570814"
     "527423731704357e+308F64\n#define __FLT128_HAS_QUIET_NAN__ 1\n#define __INTMAX_MAX__ 0x7fffffffffffffffLL\n#define _"
-    "_INT_FAST8_TYPE__ signed char\n#define __FLT64X_MIN__ 3.36210314311209350626267781732175260e-4932F64x\n#define __G"
+    "_INT_FAST8_TYPE__ signed char\n#define __FLT64X_MIN__ 3.36210314311209350626267781732175260e-4932F64x\n#define __G",
     "NUC_STDC_INLINE__ 1\n#define __FLT64_HAS_DENORM__ 1\n#define __FLT32_EPSILON__ 1.192092895507812500000000000000000"
     "00e-7F32\n#define __FP_FAST_FMAF32x 1\n#define __FLT16_HAS_DENORM__ 1\n#define __DBL_DECIMAL_DIG__ 17\n#define __INT"
     "_FAST8_WIDTH__ 8\n#define __FLT32X_MAX__ 1.79769313486231570814527423731704357e+308F32x\n#define __DBL_NORM_MAX__ "
@@ -403,7 +403,7 @@ static const char minipp_rv32_asm_base[] =
     "5932662800702e+4932L\n#define __GCC_ATOMIC_SHORT_LOCK_FREE 2\n#define __SIZE_MAX__ 0xffffffffU\n#define __UINT_FAST"
     "8_TYPE__ unsigned char\n#define __ATOMIC_ACQ_REL 4\n#define __ATOMIC_RELEASE 3\n#define __MINIPP_PP_CAT2(a, b) a##b"
     "\n#define __MINIPP_PP_CAT(a, b) __MINIPP_PP_CAT2(a, b)\n#define __MINIPP_HAS_ATTRIBUTE___copy__ 1\n#define __MINIPP"
-    "_HAS_ATTRIBUTE___designated_init__ 1\n#define __MINIPP_HAS_ATTRIBUTE___diagnose_as_builtin__ 0\n#define __MINIPP_H"
+    "_HAS_ATTRIBUTE___designated_init__ 1\n#define __MINIPP_HAS_ATTRIBUTE___diagnose_as_builtin__ 0\n#define __MINIPP_H",
     "AS_ATTRIBUTE___error__ 1\n#define __MINIPP_HAS_ATTRIBUTE___externally_visible__ 1\n#define __MINIPP_HAS_ATTRIBUTE_"
     "__fallthrough__ 1\n#define __MINIPP_HAS_ATTRIBUTE___no_caller_saved_registers__ 0\n#define __MINIPP_HAS_ATTRIBUTE_"
     "__no_profile_instrument_function__ 1\n#define __MINIPP_HAS_ATTRIBUTE___no_sanitize_coverage__ 1\n#define __MINIPP_"
@@ -415,6 +415,6 @@ static const char minipp_rv32_asm_base[] =
     "fine __MINIPP_HAS_ATTRIBUTE_noipa 1\n#define __MINIPP_HAS_ATTRIBUTE_x 0\n#define __has_attribute(x) __MINIPP_PP_CA"
     "T(__MINIPP_HAS_ATTRIBUTE_, x)\n#define __MINIPP_HAS_BUILTIN___builtin_alloca_uninitialized 0\n#define __MINIPP_HAS"
     "_BUILTIN___builtin_dynamic_object_size 1\n#define __MINIPP_HAS_BUILTIN___builtin_isdigit 1\n#define __MINIPP_HAS_B"
-    "UILTIN_x 0\n#define __has_builtin(x) __MINIPP_PP_CAT(__MINIPP_HAS_BUILTIN_, x)\n"
-    ;
+    "UILTIN_x 0\n#define __has_builtin(x) __MINIPP_PP_CAT(__MINIPP_HAS_BUILTIN_, x)\n",
+};
 
