@@ -261,7 +261,7 @@ def rounds(binaries, sources, all_sources, hdr, libraries, out, workers, probe=F
             # A native binary must genuinely start under QEMU.
             execute(command({"run": elf}, "run", "--help"),
                     work / "logs" / (tool + ".help.log"), timeout=60, env=env,
-                    expected=None)
+                    expected=0)
             next_binaries[tool] = elf
             print("FULL_NATIVE_LINK=PASS round=%s tool=%s elf_sha256=%s" %
                   (name, tool, sha(elf)), flush=True)
