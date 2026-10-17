@@ -128,8 +128,8 @@ def main():
     parser.add_argument("--workers",default="4,7")
     args=parser.parse_args()
     workers=[int(k.strip()) for k in args.workers.split(",")]
-    if workers!=[4,7]:
-        raise ValueError("this qualification fixes four,then seven worker arms")
+    if sorted(workers)!=[4,7]:
+        raise ValueError("this qualification compares four and seven worker arms exactly once each")
     corpus=args.corpus.resolve()
     driver=args.driver.resolve()
     if not driver.is_file() or not (driver.parent/"minic-cc").is_file():
@@ -176,7 +176,8 @@ def main():
                str(observation["observed_peak_cgroup_bytes"]//1024)
                  if observation["observed_peak_cgroup_bytes"] is not None else "unavailable",
                str(observation["cgroup_anon_peak_above_start_kib"])),flush=True)
-    left,right=groups
+    by_workers={group["workers"]:group for group in groups}
+    left,right=by_workers[4],by_workers[7]
     matches=sum(a["assembly_sha256"]==b["assembly_sha256"]
                 for a,b in zip(left["rows"],right["rows"]))
     if matches!=500:
@@ -185,7 +186,8 @@ def main():
         "source":"latest production only, SHA-pinned first500 Linux .i -> MiniC -S",
         "fixed_software_sha256":mod.digest(driver.parent/"minic-cc"),
         "fixed_corpus_sha256":mod.digest(corpus/"inputs.sha256"),
-        "run_order":"4_then_7; sequential, not interleaved; scheduling/caches can influence timing",
+        "run_order":("%d_then_%d; sequential, not interleaved; scheduling/caches can influence timing"%
+                     (workers[0],workers[1])),
         "same_assembly":matches,
         "elapsed_4_ms":left["elapsed_wall_ms"],
         "elapsed_7_ms":right["elapsed_wall_ms"],
