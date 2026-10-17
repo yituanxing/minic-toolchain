@@ -36,6 +36,16 @@
 
 **历史初筛判断（已被五文件扩样取代）：** 该方案与此前已集成的 Enum 哈希查找不是重复实现：仅将其应用于此前仍 O(N) 的新增枚举常量重名检查。它不是阈值明显满足的 >10% 大热点收益，故不直接跑完整 500/2064。先在另一组独立 Linux 真实对象评估边际成本并确认收益分布；若依然不足，记录为 `not-promoted` 并转移目标。此次 QEMU/全量未执行，不能声称原生生产源码已优化 5.88%。
 
+## 新候选：AST Verifier 不完整数组语义所有者 O(A×E) 扫描（2026-10-17）
+
+**与旧优化不重叠**：`src/frontend/ast_verifier.c` 的 `incomplete_array_has_semantic_owner`，每遇一个不完整数组类型，都按完整 `Program.expression_count` 从头寻找是否有引用者，找不到还依次扫描别名、全局、局部、Record Field、函数签名等。**两个 verify 阶段 PARSED 与 NORMALIZED 都执行这项正确性检查**。这是校验算法成本，不是此前被拒绝的 Parser 大结构复制、Parser Hash、Core Workspace/Reachability Index 或 Symbolic CALL-only 索引。
+
+现有 **当前生产版原始 Callgrind** [#38997549409](https://github.com/yituanxing/minic-toolchain/actions/runs/38997549409)：`kernel/bpf/btf.o` 的 `incomplete_array_has_semantic_owner` 表达式主循环自身约 **159,012,258 Ir（1.55% 总指令）**；`fs/ext4/fsync.o` 对应 **72,402,178 Ir（1.93%）**。另外 `type_owns_array_descriptor` 条件判断 BTF **80,368,488 Ir（0.79%）**、fsync **36,794,920 Ir（0.98%）**。这些指令已经在两阶段实际执行，不可以和 caller inclusive 重复累加，也不直接等价于 wall-time 百分比。
+
+**不同复杂度候选**：用仅在**单次 AST verifier invocation 内有效**的 bitmap，在进入 ARRAY_TYPE 验证前从现存 expressions/type aliases/global/locals/records/functions 一次性标记拥有者；`array_type_id` 的查询 O(1)，不再为每个数组类型扫描所有表达式。严格遵守 expression/typedef 非 pointer 引用与其它类别只认 pointer 的原规则，以及 extern global array 的特殊例外。bitmap OOM 时保留原线性回退；正常和失败路径释放；不删除 PARSED 或 NORMALIZED 的独立完整校验。候选只用 `tools/ci/apply-perf-ast-array-owner-pass-v1.py` 在临时 CI checkout 修改 `ast_verifier.c`，正式源码仍保持 2064/P1 已认证版本。
+
+**状态：`five-owner A/B pending`**；[本次既有 perf500 Job #38999873072](https://github.com/yituanxing/minic-toolchain/actions/runs/38999873072) 复用 5 个 SHA-locked Linux 真实 `.i`，每臂 4 次配对交错，要求 5/5 汇编字节一致。按结果决定是否值得 first500 扩组；不能在成功前写“已优化”。
+
 ## 1. 已拒绝或因边际收益不足而停止：默认不重开
 
 | ID / 别名及相同成本模型 | 决策和确切证据 | 重新打开的硬条件 |
