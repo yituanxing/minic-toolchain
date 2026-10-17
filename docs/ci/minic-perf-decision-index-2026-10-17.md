@@ -35,6 +35,16 @@
 
 备选路径：Variant lookup 共有 **15,921,203** 次线性 candidate probes（1,288 次 lookup，平均约 12,361 probes），具备按 source_id 筛除无关变体的潜力，但目前缺少同阶段中这部分的**独占 CPU 成本**，不可直接认定它比 603.76M expression 迭代更值得优先修改。第三个观察是 Parser 仍在这一组样本中耗时更高，Symbolic 若独立 A/B 无足够边际收益应立即转回 Parser/Core，而非无限细抠本阶段。
 
+### 第七轮 Source-grouped CALL 正式源码晋级及运行时验证（2026-10-17）
+
+**测试前置完整：** 单因素冻结 first500 [#39022225132](https://github.com/yituanxing/minic-toolchain/actions/runs/39022225132) 的 500/500 `.s` 一致、累计 **1.07605×**（254748.100→236743.979ms）；从 57 个初次单轮回退选最差 8 个+3 对照，[#39022601919](https://github.com/yituanxing/minic-toolchain/actions/runs/39022601919) **11/11 同 Runner CPU/wall P50/MAD，无确认持续回退**。只证明采样范围，绝不宣称全部初次回退已逐个复核。
+
+**正式安全门禁：** [现有 perf500 #39023367899](https://github.com/yituanxing/minic-toolchain/actions/runs/39023367899) **SUCCESS**。9,000 个确定性 reference-model 测试覆盖唯一 Owner、共享/不明 Owner、升序双桶归并和 Late Expression 动态追加；4 个 SHA-frozen Linux `.i` + 4 个 positive/negative fixture，**8/8 × 5 编译臂（基线、候选、强制 Bucket OOM 等价回退、强制 Owner Index OOM 等价回退、ASan/UBSan）全部按预期接受或拒绝；接受的产物严格字节相同**。在候选和 sanitize profile 上 `check-ast-contract check-type` PASS。首次 #39023196328 因负例在 Parser 阶段先拒绝而无法达到 Symbolic 测试钩子，诊断脚本的“必须命中钩子”断言错位；实际全部 Linux/正例通过，修正断言后重跑 #39023367899 通过。这是**测试辅助错误**而非编译器失败。ASan/UBSan 仅证明本次覆盖路径，非全路径形式证明。
+
+**唯一生产更改：** [compiler.c 提交 7ed87186](https://github.com/yituanxing/minic-toolchain/commit/7ed87186187162e15efb274a8e24be57b5a65599) 从**完全同一份成功 A/B 的四处唯一锚点**提升 Symbolic Source-grouped CALL Index，不包含任何 fault-injection 测试钩子，保留旧扫描 OOM fallback；C Blob SHA `3b6df766a05bcaab365289b39e414fc9be8c2ba3`。紧接着 [Manifest 提交 8e6542e8](https://github.com/yituanxing/minic-toolchain/commit/8e6542e8237546c36c9070ebc71fb7d0b1b0b382) 将该 SHA 作为正式 Runtime 源码闸门。
+
+**执行中的完整门禁：** [#39023546906](https://github.com/yituanxing/minic-toolchain/actions/runs/39023546906) 使用原七路 shard + GNU 链接/QEMU P1；截至文档写入时七个产物 shard **7/7 SUCCESS**，统一 Receiver 正在 GNU Link/QEMU 阶段，**尚不宣称 QEMU P1 通过**。原 Focused T1 [#39023526235](https://github.com/yituanxing/minic-toolchain/actions/runs/39023526235) **SUCCESS**。如果 Receiver 通过，再将本行状态升为 `integrated/runtime-certified/keep`，否则保留问题并按真实日志修正。
+
 ### 第七轮 source-grouped Symbolic CALL 索引：500 汇编等价、回退复核完成（2026-10-17）
 
 **与旧 PERF-023 的区别：** 旧版仅建立全局升序 CALL-ID 列表，依然要让每个 Clone 扫描所有 CALL；本版是 **Source Function 分桶 CALL + 共享/未知 Owner 保守兜底桶**，两个桶按 ExpressionId 稳定有序合并，新的 Expression 按原逻辑处理，任何分配失败都回退旧完整遍历。候选 `tools/ci/apply-perf-symbolic-source-bucket-calls-v1.py` 只用于 CI 临时 checkout，不修改正式生产 `src/compiler/compiler.c`。
