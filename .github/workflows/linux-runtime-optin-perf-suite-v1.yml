@@ -16,6 +16,8 @@ on:
           - all
   # Reuse the existing perf500 job for explicit, scoped production-source
   # comparisons. No other job is eligible for this one push marker.
+  # Current phase20 opt-in also reads preexisting Integer-owner / Parser-lookup
+  # diagnostics; no new job or production compiler changes (2026-10-17).
   push:
     branches: [main]
     paths:
