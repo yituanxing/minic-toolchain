@@ -25,6 +25,26 @@
 
 **裁决：先不实现新的 Integer source-grouped CALL 索引，更不扩大 500/2064。** Owner 过滤率高确实说明能避免大量访问，但**整个 Integer 阶段在这 20 个样本中只占诊断总 wall 4.25%**；把这 97.548% 直接转成编译速度改善是错误的，分桶建表本身也付出成本。该 4.25% 只是本轮特定带诊断环境中整个阶段的一个**宽松上界**，不是未经插桩生产版的严格 CPU 上界。只有新版本更广泛样本的 CPU/profile 再次证明此阶段上升为高收益瓶颈，才重新开卡。Parser local/typedef 实际平均扫描 2.567/1.364 步，不支持立刻加新 Hash；尤其旧 Core Name / Parser Global Index 已被否决，禁止新命名重做。优先关注 **Parser 真正高 CPU 子路径**（不是简单局部名称查找）、Core-set 的剩余 18.32%，以及已完成两个全量 run 交叉验证但尚无真构建 A/B 的 LPT 分片调度。此诊断数据不能声称 2064 文件整体加速，也没有 QEMU 验收，因为生产源码未修改。
 
+## Parser/Core 最新白盒与 Core 重入工作量复核（2026-10-17）
+
+**已经完成、非算法 A/B：** 复核原有七 TU 真正 `minic-cc` Callgrind artifact（[成功 run #39027912246](https://github.com/yituanxing/minic-toolchain/actions/runs/39027912246)，从 GitHub 下载、解包并逐函数聚合 `callgrind-self.txt`），7/7 汇编字节相同，**29,177,233,393 Ir**；再复用已有 `perf500` Job + 固定 20 个 10-hot/5-middle/5-light 的 `.i`，直接打开正式 C 原本就有的 `MINIC_CORE_REENTRY_INDEX_PERF`，并保留此前 Integer/Parser 只读计数。[成功 run #39036729030](https://github.com/yituanxing/minic-toolchain/actions/runs/39036729030)（提交 `2fea5562421b`）**20/20 `.s` byte-identical，生产 `src/` 未改、无新增 workflow/job、无 2064 重编/QEMU**。独立 opt-in CLI 隔离了旧通用 A/B tracer；不能把新诊断时间与 #39035607415 不同 Runner 的读数当成新优化/回退。
+
+| 从七 TU 原始 Callgrind 聚合的独占 Ir（是指令事件，**不是 CPU seconds**） | 绝对 Ir / 总 Ir 比例 | 旧候选状态 |
+| --- | ---: | --- |
+| Parser bind enum constant | **1,725,268,018 / 5.91%** | 顶层 bind 复用全局 enum hash 已试（扩样增益低，STOP），不要重新提出 |
+| Parser span_equals | **1,105,079,979 / 3.79%** | 局部查找只有约 2.57 steps/call，不能直接从 span_equals 热点推出需再建普通名字 Hash |
+| Core lower_direct_call | **1,427,685,459 / 4.89%** | no-facts / variant-source bucket 各跑完 first500 <1.04x、STOP |
+| Core named queue | **1,330,823,041 / 4.56%** | Core reachability name-index first500 <1.01x，STOP |
+| **Core unreachable external reentry** | **723,598,087 / 2.48%** | 旧 eager incoming-edge index 仅覆盖部分热路径 |
+| **Core discarded-block reentry test** | **691,883,274 / 2.37%** | 带现有 index 仍为每次查询整 Program 的 statement membership 分配/扫描 |
+| libc memset | **1,887,284,458 / 6.47%** | 不可把此自耗全部归罪于 Core；包括所有 `calloc`、临时缓冲等调用者 |
+
+20 TU 当次只读额外统计：正式 Core Incoming Index **20/20 ready**；`incoming=1225`，`indexed_if_queries=3794`，`indexed_loop_queries=213`；分别乘每 TU `statement_count` 得到 **212,443,963 / 11,370,003** 个 **完整扫描理论上界**，不是精确执行迭代数、CPU 周期或 DRAM 字节。整批诊断 `core-set=1952.237ms/10215.425ms=19.11%`，`parse=3693.665ms=36.16%`，属选定文件诊断 Wall；同测试 20/20 原有 Integer / Parser 计数正常。
+
+**新的候选与旧方案的明确区别：** 已集成的 eager Reentry Incoming Index 优化的是 goto/asm-goto 的入边查找，**但 `src/core/core_lower.c:core_block_contains_reentry_label` 仍然针对每个查询 `calloc` 两张按整 Program `block_count` / `statement_count` 大小的位图，在有 index 时仍遍历全 `statement_count` 以找被设置的 membership 位**。同文件 `core_unreachable_statement_has_external_reentry` 亦有按整 Program 的定位/无关 Statement 扫描和临时 bitmap；读源码确认，不能说所有这类扫描已经被 eager index 解决。一个可能的**不同成本模型**是只遍历递归子树实际触及的 statement IDs（保留 case/default、address-taken、外部 goto/asm-goto、共享/非法 AST fail-closed），将 `O(Q * S)` 访问改为 `O(S + Q * S_{subtree} + incoming)`，如有收益再评估按生命周期复用 workspace。**不能**换个名字重做 PERF-011 的 `statement_blocks` 整 TU 初始化 workspace，也不能重试已拒绝的 reentry-index lazy 版本。
+
+**裁决：目前仅成立值得单因素初筛的白盒假说，未宣称已加速。** 首个下一步应在临时 CI checkout 针对 Core discarded-block reentry 的一次查询统计「实际 membership 命中数 / 总线性检查数 / 分配字节和调用次数」，仅当这个特定成本在最新真实文件里仍大，再做严格保序/保守 OOM 的**单变量**原版 vs 子树稀疏迭代 A/B，先 3–7 TU `.s` byte-compare、同 Runner Wall/CPU/RSS，门槛未达立即停止，不盲目全500/2064。Parser 枚举绑定和旧 Core selector 看着很热，但此前完整 A/B 已经否决同算法，禁止重新优化。完整 Linux 94.325s 基线在本轮没有改变。
+
 ## 第七轮后当前生产版：2064 Linux 全量**重新编译**速度与内存验收（2026-10-17）
 
 **完整新鲜运行**：[GitHub Actions #39033023656](https://github.com/yituanxing/minic-toolchain/actions/runs/39033023656) **SUCCESS**；对应 CI 触发 commit `f4fa32b72b92e1c7d9428885950d134c3aa17b1f`。不是把旧 2064 编译缓存回放冒充新速度：新增仅 opt-in `[minic-fresh-full2064-metrics]`，**明确跳过七个 shard 的历史对象 cache restore 和 cache save**，保持生产 `src/...` 完全不变、保留 pinned source-SHA 验证。每个 shard 现有同一 GitHub Runner Kbuild `-j6`；整体并行是 7 个独立 GitHub Runner。现有 `COHORT_STAGE_TIME` + opt-in `/usr/bin/time %M/%U/%S` 按每次 MiniC 子进程记录真实 RSS 与 CPU。另重新合并所有 2064 MiniC 对象、GNU LD 链接、**QEMU P1 12/12 + Python-era oracle PASS**：
