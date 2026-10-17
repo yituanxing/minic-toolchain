@@ -252,7 +252,9 @@ def native_link_probe(binaries, source_lists, all_sources, seed_libraries, link_
     print("FULL_NATIVE_LINK_PROBE=PASS tool=minic-cpp no_GNU_fallback=true",flush=True)
 
 
-def rounds(binaries, sources, all_sources, hdr, libraries, out, workers, probe=False, resume=None):
+def rounds(binaries, sources, all_sources, hdr, libraries, out, workers, probe=False, resume=None, link_libraries=None):
+    if link_libraries is None:
+        link_libraries = libraries
     env = dict(os.environ, **CFLAGS)
     for stage in (3, 4):
         name = "stage" + str(stage)
@@ -350,6 +352,7 @@ def rounds(binaries, sources, all_sources, hdr, libraries, out, workers, probe=F
                    "source_count": len(all_sources), "passed": len(completed),
                    "failed": failures, "rows": sorted(completed, key=lambda r: r["source"]),
                    "runtime_seed": {k: sha(v) for k,v in libraries.items()},
+                   "link_runtime_seed": {k: sha(v) for k,v in link_libraries.items()},
                    "reused": sum(bool(r.get("cached")) for r in completed)}
         (work / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
         if failures:
@@ -374,10 +377,10 @@ def rounds(binaries, sources, all_sources, hdr, libraries, out, workers, probe=F
             objs = [work / "o" / (source_key(s) + ".o") for s in units]
             link_args = command(prev, "minic-ld", "-melf64lriscv", "-static",
                                 "-e", "_start", "-o", elf,
-                                libraries["crt1.o"], libraries["crti.o"], *objs,
-                                "--start-group", libraries["libc.a"],
-                                libraries["libgcc.a"], "--end-group",
-                                libraries["crtn.o"])
+                                link_libraries["crt1.o"], link_libraries["crti.o"], *objs,
+                                "--start-group", link_libraries["libc.a"],
+                                link_libraries["libgcc.a"], "--end-group",
+                                link_libraries["crtn.o"])
             execute(link_args, work / "logs" / (tool + ".ld.log"),
                     timeout=480, env=env)
             if not elf.is_file() or elf.stat().st_size < 1024:
@@ -447,8 +450,9 @@ def main():
             raise RuntimeError("invalid real production probe source selection")
         rounds(seed, sources, selected, hdr, libraries, out, args.workers, probe=True)
     else:
+        link_libs = musl_runtime(args.musl_build, libraries) if args.musl_build else libraries
         rounds(seed, sources, all_sources, hdr, libraries, out, args.workers,
-               resume=args.resume_stage3)
+               resume=args.resume_stage3, link_libraries=link_libs)
 
 
 if __name__ == "__main__":
