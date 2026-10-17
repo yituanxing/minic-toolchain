@@ -960,7 +960,11 @@ jobs:
           "$root/$trial-ab/size-before" | tee "$root/evidence/$trial-before-sizes.txt"
           python3 tools/ci/apply-perf-ast-call-inline8-overflow-v1.py
           git diff --check
-          test "$(git diff --name-only -- src include | wc -l)" -eq 8
+          test "$(git diff --name-only -- src include | wc -l)" -eq 9
+          if grep -R -n -F 'value.call.arguments[' src --include='*.c'; then
+            echo "MINIC_AST_CALL_INLINE8=FAIL unconverted AST CALL array consumers"
+            exit 72
+          fi
           cc -Isrc -Iinclude -o "$root/$trial-ab/size-after" "$root/$trial-ab/sizeof.c"
           "$root/$trial-ab/size-after" | tee "$root/evidence/$trial-after-sizes.txt"
           make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$root/$trial-after" \
