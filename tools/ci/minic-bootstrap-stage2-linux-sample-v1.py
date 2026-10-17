@@ -71,10 +71,16 @@ def main():
        or len(set(x[1] for x in manifest)) != 500:
         raise RuntimeError("noncanonical first500 frozen corpus manifest")
     expected_hashes = {}
+    input_root=(corpus/"kbuild").resolve()
     for line in (corpus/"inputs.sha256").read_text().splitlines():
         digest,path = line.split(maxsplit=1)
-        path = path.lstrip("*")
-        expected_hashes[str(Path(path))] = digest
+        # SHA utility records normalized filesystem paths, but genuine Kbuild
+        # object names may include relative ../../../virt/kvm/... lexical
+        # components. Both forms resolve to the exact same frozen file.
+        candidate=Path(path.lstrip("*")).resolve()
+        if not candidate.is_relative_to(input_root) or candidate in expected_hashes:
+            raise RuntimeError("noncanonical or duplicate frozen input SHA path "+path)
+        expected_hashes[candidate] = digest
     if len(expected_hashes)!=500:
         raise RuntimeError("bad corpus SHA manifest count")
     byowner = {x[1]:x for x in manifest}
@@ -95,10 +101,10 @@ def main():
     # SHA check the selected twenty AND the entire frozen corpus's 500 .i
     # before computing any compiler outputs.
     for i,owner,rel,source in manifest:
-        name=corpus/"kbuild"/rel
-        path=str(name)
-        expected=expected_hashes.get(path) or expected_hashes.get(
-            str(Path("build/linux-perf-corpus")/"kbuild"/rel))
+        name=(input_root/rel).resolve()
+        if not name.is_relative_to(input_root):
+            raise RuntimeError("frozen Kbuild .i escaped corpus "+owner)
+        expected=expected_hashes.get(name)
         if not expected or not name.is_file() or sha(name)!=expected:
             raise RuntimeError("source .i SHA mismatch "+owner+" "+str(name))
     print("BOOTSTRAP_STAGE2_LINUX_INPUT=PASS corpus=500 sha=500/500 "
