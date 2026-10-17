@@ -30,6 +30,7 @@ permissions:
   actions: read  # Same-repository exact historical Image artifact download
 
 # P1 calibration rerun after loopback bring-up.
+# SHA-certified Stage2 Linux 2064 opt-in after Stage2 500/500 identity pass.
 
 jobs:
   gcc-runtime:
