@@ -3064,8 +3064,10 @@ jobs:
           # The legacy Boolean inner timer is intentionally unavailable in
           # this Symbolic-only run (the original Boolean patch is source-stale).
 
-      # Fresh post-Parser cold-switch CPU attribution, retry after profiler
-      # accepts the current ~1KiB Parser instead of obsolete 131KiB floor.
+      # Fresh post-round-seven source-grouped Symbolic CPU attribution
+      # after successful 2064/2064 + GNU link/QEMU P1 #39023546906.
+      # No new algorithm patch: re-use current pinned fsync/BTF Callgrind.
+      # The current Parser is ~1KiB, not the obsolete 131KiB version.
       # intentionally no next algorithm patch, only source-current callgrind
       # on the pinned BTF and fsync Linux inputs. This opt-in marker does not
       # change production C, and this run cannot substitute for Linux QEMU.
