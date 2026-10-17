@@ -65,10 +65,23 @@ def main():
         elf=artifact/"bin"/tool
         if not elf.is_file() or hashfile(elf)!=report["binaries"][tool]["sha256"]:
             raise RuntimeError("missing/changed Stage2-built native executable "+tool)
+        # Actions download-artifact can drop executable modes while preserving
+        # CONTENT hashes. qemu-riscv64 requires the guest ELF to be executable
+        # (and otherwise may silently return 1 for every native tool).
+        original_mode=elf.stat().st_mode & 0o777
+        elf.chmod(original_mode | 0o111)
+        print("BOOTSTRAP_NATIVE_ELF_MODE tool=%s before=%o after=%o"%
+              (tool,original_mode,elf.stat().st_mode & 0o777),flush=True)
         shim=wrapper/tool
         shim.write_text("#!/bin/sh\nexec qemu-riscv64 "+str(elf)+" \"$@\"\n")
         shim.chmod(0o755)
     env=os.environ.copy()
+    # Validate that restored tool binaries ACTUALLY execute, not merely hash
+    # as identical. This distinguishes an upload permissions problem from an
+    # incorrectly compiled MiniPP parser.
+    call([wrapper/"minic-cpp","--help"],env,out/"logs/native-pp-help.log",
+         timeout=30)
+    print("BOOTSTRAP_NATIVE_ELF_EXEC=PASS mini_pp_qemu_help_exit0=true",flush=True)
     env.update(BUILD_DIR=str(out/"fixtures"),
                MINIPP=str(wrapper/"minic-cpp"),
                MINIAS=str(wrapper/"minic-as"),
