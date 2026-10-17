@@ -56,7 +56,10 @@ SH
 chmod 755 "$bin/minic" "$bin/minic-cc"
 test -x "$bin/minic.stage0" && test -x "$bin/minic-cc.stage0"
 test "$(sha256sum "$bin/minic-cc.stage2.rv64" | cut -d' ' -f1)" = "$sha2"
-work=$(mktemp -d)
+# The certified B1 Stage2 uses repo-local build/ paths for .i/.s, not
+# host /tmp paths. Make the control input filesystem identical.
+mkdir -p build
+work=$(mktemp -d "$PWD/build/minic-stage2-driver-smoke.XXXXXXXX")
 trap 'rm -rf "$work"' EXIT
 # Reuse the exact Stage2 B1 smoke source that already passed on the
 # certified guest, rather than inventing an unvetted one-line probe.
@@ -66,6 +69,9 @@ riscv64-linux-gnu-gcc -E -P -x c "$work/in.c" -o "$work/in.i"
 # If the driver fails, show independent wrapper/QEMU/driver exit status and
 # argument dispatch before making any full Linux test attempt.
 set +e
+qemu-riscv64 "$bin/minic-cc.stage2.rv64" --help >"$work/help.stdout" 2>"$work/help.stderr"
+help_rc=$?
+echo "BOOTSTRAP_STAGE2_GUEST_HELP=rc=$help_rc stdout_bytes=$(wc -c < "$work/help.stdout") stderr_bytes=$(wc -c < "$work/help.stderr")"
 MINIC_LINUX_FULL_CROSSBLOCK=1 MINIC_OPT_PURE_DISCARDED_ADDRESS_EQ=1 \
   qemu-riscv64 "$bin/minic-cc.stage2.rv64" -S "$work/in.i" -o "$work/direct.s" \
     >"$work/direct.stdout" 2>"$work/direct.stderr"
@@ -80,7 +86,9 @@ MINIC_LINUX_FULL_CROSSBLOCK=1 MINIC_OPT_PURE_DISCARDED_ADDRESS_EQ=1 \
 driver_rc=$?
 set -e
 echo "BOOTSTRAP_STAGE2_DRIVER_DIAG direct_rc=$direct_rc wrapper_rc=$wrapped_rc driver_rc=$driver_rc direct_s=$(test -s "$work/direct.s" && echo yes || echo no) wrapper_s=$(test -s "$work/wrapped.s" && echo yes || echo no) driver_s=$(test -s "$work/out.s" && echo yes || echo no)"
-if [[ "$direct_rc" != 0 || "$wrapped_rc" != 0 || "$driver_rc" != 0 ]]; then
+if [[ "$help_rc" != 0 || "$direct_rc" != 0 || "$wrapped_rc" != 0 || "$driver_rc" != 0 ]]; then
+  echo "BOOTSTRAP_STAGE2_GUEST_HELP_STDOUT=$(head -n 2 "$work/help.stdout")" >&2
+  echo "BOOTSTRAP_STAGE2_GUEST_HELP_STDERR=$(head -n 3 "$work/help.stderr")" >&2
   for mode in direct wrapped driver; do
     echo "BOOTSTRAP_STAGE2_DIAG_STDERR mode=$mode" >&2
     sed -n '1,80p' "$work/$mode.stderr" >&2
