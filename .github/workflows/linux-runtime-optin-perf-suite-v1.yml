@@ -958,7 +958,7 @@ jobs:
           CSIZES
           cc -Isrc -Iinclude -o "$root/$trial-ab/size-before" "$root/$trial-ab/sizeof.c"
           "$root/$trial-ab/size-before" | tee "$root/evidence/$trial-before-sizes.txt"
-          python3 tools/ci/apply-perf-ast-call-inline8-allocation-v1.py
+          python3 tools/ci/apply-perf-ast-call-inline8-overflow-v1.py
           git diff --check
           test "$(git diff --name-only -- src include | wc -l)" -eq 2
           cc -Isrc -Iinclude -o "$root/$trial-ab/size-after" "$root/$trial-ab/sizeof.c"
