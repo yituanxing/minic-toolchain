@@ -9,6 +9,8 @@ actual object SHA. This audit prevents silent Stage0/GCC fallback.
 import argparse
 from collections import Counter
 from pathlib import Path, PurePosixPath
+from tempfile import TemporaryDirectory
+import subprocess
 import sys
 
 
@@ -24,15 +26,66 @@ def read_owners(path):
     return members
 
 
+def self_test():
+    """Synthetic SHA-pinned 295-owner Kbuild traces: no real kernel rebuild."""
+    owners=[f"kernel/owner{i:03d}.o" for i in range(295)]
+    anc=["drivers/aux0.o", "drivers/aux1.o"]
+    def dispatch(o):
+        name=o[:-2]+".minic-stage2.s"
+        return "/tmp/from-preprocessor.i\t/tmp/stage4-work/"+name
+    stage4_sha="50b3f7763bde2505e17bb545513cb00664286d4e762b3395aea3f29ce724ef31"
+    stage2_sha="17e76f14befdd46b18d62b4ab90cbf15cd724e281b216039a252528208b6f94d"
+    with TemporaryDirectory(prefix="bootstrap-guest-audit-") as tmp:
+        root=Path(tmp)
+        own=root/"owners"
+        suc=root/"success"
+        trace=root/"trace"
+        own.write_text("\n".join(owners)+"\n")
+        base=[sys.executable,str(Path(__file__).resolve()),"--owners",str(own),
+              "--success",str(suc),"--trace",str(trace)]
+        def run(stage, sha, succeeded, dispatched, must_pass, why):
+            suc.write_text("\n".join(succeeded)+"\n")
+            trace.write_text("\n".join(map(dispatch,dispatched))+"\n")
+            proc=subprocess.run([*base,"--candidate-stage",stage,"--stage2-sha",sha],
+                                capture_output=True,text=True,timeout=15,check=False)
+            if (proc.returncode == 0)!=must_pass:
+                raise AssertionError("audit self-test "+why+
+                                     " unexpected rc="+str(proc.returncode)+
+                                     " stdout="+proc.stdout+" stderr="+proc.stderr)
+            if must_pass and "KBUILD_AUDIT=PASS owners=295/295" not in proc.stdout:
+                raise AssertionError("missing successful audit "+why)
+        run("stage2",stage2_sha,owners,owners,True,"legacy exact owner set")
+        run("stage2",stage2_sha,owners+anc,owners+anc,False,"legacy rejects ancillary")
+        run("stage4",stage4_sha,owners+anc+owners[:5],owners+anc,
+            True,"real Kbuild ancillary + repeat retries")
+        run("stage4",stage4_sha,owners[1:]+anc,owners[1:]+anc,
+            False,"missing real owner")
+        run("stage4",stage4_sha,owners+anc,owners,
+            False,"untraced ancillary Stage4 fallback")
+        run("stage4",stage4_sha,owners+anc+[f"drivers/extra{i}.o" for i in range(15)],
+            owners+anc+[f"drivers/extra{i}.o" for i in range(15)],
+            False,"unbounded ancillary workaround")
+        run("stage4",stage2_sha,owners,owners,False,"wrong compiler SHA")
+    print("BOOTSTRAP_GUEST_KBUILD_AUDIT_SELFTEST=PASS cases=7 "
+          "stage2_contract_unchanged=true missing_targets_fail=true "
+          "traceless_auxiliary_fails=true bounded_auxiliary_verified=true",flush=True)
+
+
 def main():
     cli=argparse.ArgumentParser()
-    cli.add_argument("--owners",type=Path,required=True)
-    cli.add_argument("--success",type=Path,required=True)
-    cli.add_argument("--trace",type=Path,required=True)
-    cli.add_argument("--stage2-sha",type=str,required=True,
+    cli.add_argument("--owners",type=Path)
+    cli.add_argument("--success",type=Path)
+    cli.add_argument("--trace",type=Path)
+    cli.add_argument("--stage2-sha",type=str,
                      help="SHA of selected self-host compiler (legacy option name)")
     cli.add_argument("--candidate-stage",choices=("stage2","stage4"),default="stage2")
+    cli.add_argument("--self-test",action="store_true")
     a=cli.parse_args()
+    if a.self_test:
+        self_test()
+        return
+    if not all((a.owners,a.success,a.trace,a.stage2_sha)):
+        cli.error("--owners, --success, --trace, --stage2-sha are required")
     expected_sha={
         "stage2":"17e76f14befdd46b18d62b4ab90cbf15cd724e281b216039a252528208b6f94d",
         "stage4":"50b3f7763bde2505e17bb545513cb00664286d4e762b3395aea3f29ce724ef31",
