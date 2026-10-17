@@ -73,7 +73,6 @@ def source_plan(requested):
     order=[]
     for tool in requested:
         variable,elf,include=PROFILES[tool]
-        sources=(source_group(mf,variable) if variable else [])+elf
         # Makefile explicitly places ELF .o BEFORE the target-specific units.
         sources=elf+(source_group(mf,variable) if variable else ["tools/minic/main.c"])
         if len(sources)!=len(set(sources)):
