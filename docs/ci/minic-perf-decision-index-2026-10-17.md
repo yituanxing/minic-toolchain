@@ -54,6 +54,19 @@
 
 本轮还对正式 `src/frontend/ast_verifier.c` 执行了真正的 `make check-ast-contract`，日志 `MINIC_AST_ARRAY_CONTRACT=PASS`；诊断重建生产源前的原版 AST blob **`f3e023c6...`** 与 first500 old/new 二进制 SHA 双重锁定，`MINIC_AST_RECHECK_EXACT_BINARIES=PASS`。综合结论：**正式保留这个新算法；500 全体 A/B 获得约 4.05% 总编译耗时下降、2064/2064 GNU 链接及 QEMU P1 通过，回退风险最大的真实 Linux outlier 经 CPU clocks 复查未重现。** 不为证明每一个 CI 单轮扰动再强制重编 2064。
 
+## AST Owner 正式入库后重新做 CPU 归因（2026-10-17）
+
+**新版本真实 Callgrind 已 PASS**：[CI #39001011273](https://github.com/yituanxing/minic-toolchain/actions/runs/39001011273)；在原有 perf500 的 CPU profile-only 工作路径复用原 `fs/ext4/fsync.o` 与 `kernel/bpf/btf.o` 两份相同 SHA-锁定输入，`bin/minic-cc` Debug 代码加入只读 Parser-copy census，**2/2 `.s` 与新 Release 原样逐字节相同**，没有改变生产源码或运行时行为，工具仍用 Valgrind Callgrind（**Ir 是模拟指令量，不是墙钟时间**）。与原旧版本 [#38997549409](https://github.com/yituanxing/minic-toolchain/actions/runs/38997549409) 同输入的指令自耗比较：
+
+| Owner | 原总 Ir | 新总 Ir | 减少 | AST verifier 函数 self Ir（原→新） |
+| --- | ---: | ---: | ---: | ---: |
+| `kernel/bpf/btf.o` | 10,233,638,583 | 9,995,059,298 | **2.331%** | **271,512,020→33,430,614** |
+| `fs/ext4/fsync.o` | 3,750,494,966 | 3,641,445,729 | **2.908%** | **128,933,064→20,189,344** |
+
+以上是**同一工具可复算的指令事件**，不是严格的两版本 wall-time A/B（500 实测耗时减少 4.05%，另有各自测量噪声）。两个 input 下，`__memcpy_avx_unaligned_erms` 的自耗和 `minic_specialize_inline_symbolic_calls` 的绝对 Ir 都基本不变；它们占**剩余**指令比例看起来上升，原因包含 AST 校验指令减少带来的总分母缩小，**不是新版本出现这些函数退化**。BTF 当前 self Ir 约：memcpy 29.11%、Symbolic 10.23%、Enum bind 6.57%；fsync 当前 self Ir 约：memcpy 45.87%、Symbolic 7.32%。旧 Parser 复制点/Enum 重名 Hash/CORE 名称查找已经在本账本中独立试过，被限制或否决，**不得单凭现有 self 占比又重复启动它们**。
+
+**下一轮诊断优先队列（不直接改算法）**：现阶段剩余耗时一部分来自 `MinicExpression` 内嵌 64×8-byte CALL 参数数组的整体存储放大，历史白盒 audit [whole-path cost audit](minic-i-to-s-whole-path-complexity-audit-2026-10-15.md) 说明静态每个 Expression 的 union 至少 512B，但是**尚缺 Linux 当前真实输入的 Expression/Function 大小、各类 kind 分布、真实 RSS、内存分配/扩容耗时**。这是不同于已经被拒绝的 Parser `memcpy` 复制问题：实际拥有 O(expression_count) 的 AST 大结构，而 Parser 是少量大结构快照。**先用低开销 census 和带 SHA 的同输入统计数验证潜在绝对收益，再决定是否触碰高风险 AST Representation**。其它次选 `src/target/data_layout.c` record/layout 重算，已有旧白盒审计指出 Codegen 的双遍扫描，应先量局部布局调用次数和当前阶段 CPU，而非重新跑 P14/P15。
+
 ## 1. 已拒绝或因边际收益不足而停止：默认不重开
 
 | ID / 别名及相同成本模型 | 决策和确切证据 | 重新打开的硬条件 |
