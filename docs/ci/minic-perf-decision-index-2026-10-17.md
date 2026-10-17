@@ -4,6 +4,14 @@
 > 本表是候选的**状态索引**，不是覆盖旧的原始数据；旧实验报告、补丁、CI artifacts 均保留。每次新优化先记录「相同结构以前试过没有、当时基线是什么、为何现在仍值得做」。
 > 基线：主线 `6612e2c1a3`（文档头），最新已认证的 Boolean/Core/Integer 联合源码经 [2064 + GNU link + QEMU P1 #38995964988](https://github.com/yituanxing/minic-toolchain/actions/runs/38995964988) PASS。这个 PASS 是 GNU PP → MiniC → GNU AS/LD，不能声称全 Mini 工具链共同通过。下列不同实验的加速比不能相乘，也不能伪称当前 2064 的同比速度。
 
+## 第七轮诊断开卡：Symbolic 剩余成本分解（2026-10-17）
+
+- **状态：诊断进行中，尚无新 A/B 性能结论。** 基准为第六轮 Linux 2064/QEMU P1 已认证生产 C（`e8fef972` 的正式 C 与 `cbbd5654` 一致），不修改生产 `src/`，不建新 workflow/job，不重编 2064，仅复用 first500 缓存中的既有 20 个 stratified SHA-frozen Linux `.i`，使用已有 `perf500` job 和原始 phase-trace 工具。
+- 对 `minic_specialize_inline_symbolic_calls` 只读插桩：direct/transitive 的 expression visits、CALL hits、source-owner skips、pointer argument evaluations、variant lookups/probes、clone 总数；直接使用已有 `apply-perf-symbolic-loop-trace-v0.py` 的两个分段计时。计数不是 CPU 周期，插桩 wall 不是正常速度，不据此宣称加速。
+- **历史防重复门槛：** Symbolic Source Owner 索引已合入，`PERF-023` 普通 CALL-only 索引在 #38665476648 局部约 -5.15%，但未晋级；本轮不会再次直接尝试这个旧结构。若 owner skips/variant probes 当前真实工作量不足，不做新的 Symbolic 索引，转看 Parser/Lexer/Core 最新热点。
+- 首次诊断 [#39020963620](https://github.com/yituanxing/minic-toolchain/actions/runs/39020963620) 在**旧版 Boolean census 的过期源码匹配锚点**失败，未进入 20 TU；第二次 [#39021055244](https://github.com/yituanxing/minic-toolchain/actions/runs/39021055244) 已成功构建 opt-in Symbolic 仪表，但仅因 phase-trace Python self-test 正则转义笔误失败，未进入 20 TU。这两个均不是 MiniC 正式源码编译/QEMU 回归；现已纠正且保持旧 Boolean instrumentation 不参与本次 Symbolic 测量。
+- 晋级条件：20/20 原始 vs 计数插桩汇编字节一致、计数满足关系不变量、分段时间有来源，且出现**历史未覆盖**的显著真实成本，才建立具体的单因素 A/B。只有通过同 Runner wall/user/sys/RSS、回退复核，才考虑扩大到 500 和 2064/QEMU。
+
 ## 第六轮完成后最新 CPU 归因：Parser hot-copy 病因解除，下一张卡需重选（2026-10-17）
 
 **全量来源准确性：** 第六轮正式源码 [cbbd5654](https://github.com/yituanxing/minic-toolchain/commit/cbbd5654cc8f7fa508e798bc0262f49e4c32d3ee)，配对测试 500/500 byte-identical、**1.08697×（累积 wall 180349.471→165919.403ms, -8.00%）**、Sanitizer + 9 例 parser edge + 10-owner 8x 回退复核已通过。**完整 Runtime [#39016455728](https://github.com/yituanxing/minic-toolchain/actions/runs/39016455728) SUCCESS**：7/7 构建分片、`GNU_MINIC_SHARD_MERGE=PASS objects=2064 shards=7`、GNU Link `COHORT_LINK=REUSED name=full_all_verified selection=prefix:2064`、QEMU `COHORT_P1=PASS syscalls=12 python_era_oracle=PASS`、`COHORT_RESULT=PASS candidate_objects=2064 scope=FULL_C_UNIVERSE same_config=true`。Focused T1 [#39016455740](https://github.com/yituanxing/minic-toolchain/actions/runs/39016455740) SUCCESS。本轮最终标签：`parser-cold-switch-heap-owned-v1 = integrated / runtime-certified / keep / do-not-repeat`。
