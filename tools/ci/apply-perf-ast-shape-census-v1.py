@@ -19,6 +19,9 @@ static void minic_ast_shape_census(const MinicC0Program *program, const char *st
     size_t i, calls = 0U, arguments = 0U, zero = 0U, one = 0U, two = 0U;
     size_t three_four = 0U, five_eight = 0U, nine_plus = 0U;
     size_t function_params = 0U;
+    size_t function_0 = 0U, function_1 = 0U, function_2 = 0U;
+    size_t function_3to4 = 0U, function_5to8 = 0U, function_9plus = 0U;
+    size_t function_specialized = 0U, function_symbolic_used = 0U, function_boolean_used = 0U;
     if (getenv("MINIC_AST_SHAPE_CENSUS") == NULL || program == NULL) return;
     for (i=0U; i<program->expression_count; ++i) {
         const MinicExpression *e = &program->expressions[i];
@@ -32,19 +35,34 @@ static void minic_ast_shape_census(const MinicC0Program *program, const char *st
         else ++nine_plus;
     }
     for (i=0U; i<program->function_count; ++i) {
-        function_params += program->functions[i].parameter_count;
+        const MinicFunction *function = &program->functions[i];
+        size_t n=function->parameter_count, p;
+        function_params += n;
+        if (n==0U) ++function_0; else if (n==1U) ++function_1;
+        else if (n==2U) ++function_2; else if (n<=4U) ++function_3to4;
+        else if (n<=8U) ++function_5to8; else ++function_9plus;
+        if (function->is_integer_specialization) ++function_specialized;
+        for (p=0U; p<n && p<MINIC_MAX_FUNCTION_PARAMETERS; ++p) {
+            if (function->specialization_symbolic_known[p]) ++function_symbolic_used;
+            if (function->specialization_boolean_range_known[p]) ++function_boolean_used;
+        }
     }
     (void)fprintf(stderr,
         "MINIC_AST_SHAPE stage=%s expression_size=%zu expression_count=%zu expression_capacity=%zu "
         "call_count=%zu call_arguments_total=%zu call_0=%zu call_1=%zu call_2=%zu "
         "call_3to4=%zu call_5to8=%zu call_9plus=%zu "
         "function_size=%zu function_count=%zu function_capacity=%zu function_params=%zu "
+        "function_0=%zu function_1=%zu function_2=%zu function_3to4=%zu function_5to8=%zu "
+        "function_9plus=%zu function_specialized=%zu function_symbolic_used=%zu "
+        "function_boolean_used=%zu "
         "function_type_size=%zu function_type_count=%zu "
         "record_count=%zu local_count=%zu statement_count=%zu\n",
         stage, sizeof(MinicExpression),program->expression_count,program->expression_capacity,
         calls,arguments,zero,one,two,three_four,five_eight,nine_plus,
         sizeof(MinicFunction),program->function_count,program->function_capacity,
-        function_params,sizeof(MinicFunctionType),program->function_type_count,
+        function_params,function_0,function_1,function_2,function_3to4,
+        function_5to8,function_9plus,function_specialized,function_symbolic_used,
+        function_boolean_used,sizeof(MinicFunctionType),program->function_type_count,
         program->record_count,program->local_count,program->statement_count);
 }
 '''
