@@ -88,6 +88,8 @@ def main():
                MINIAR=str(wrapper/"minic-ar"),
                MINILD=str(wrapper/"minic-ld"),
                MINIOBJCOPY=str(wrapper/"minic-objcopy"),
+               MININM=str(wrapper/"minic-nm"),
+               MINISTRIP=str(wrapper/"minic-strip"),
                MINIC_LINUX_FULL_CROSSBLOCK="1",
                MINIC_OPT_PURE_DISCARDED_ADDRESS_EQ="1")
     suites=[
@@ -97,7 +99,12 @@ def main():
       # This exercises two Stage2-built executables together: Stage2 MiniAS
       # produces the input object and Stage2 MiniLD performs -r link.
       ("minild-a0","tests/linker/run-a0.sh",{"RISCV_AS":str(wrapper/"minic-as")}),
-      ("miniobjcopy-a0","tests/objcopy/run-a0.sh",{})
+      ("miniobjcopy-a0","tests/objcopy/run-a0.sh",{}),
+      # These two Stage2-built native tools were previously only shown to
+      # link and start. Test exact GNU symbol/ELF contracts, including ELF32.
+      ("mininm-a0","tests/nm/run-a0.sh",{}),
+      ("mininm-a1","tests/nm/run-a1.sh",{}),
+      ("ministrip-a0","tests/strip/run-a0.sh",{}),
     ]
     # Distinguish MiniPP simple CLI and '-x c' handling, plus short/long
     # source paths. Do not let a failed gate conceal every other native tool.
@@ -233,11 +240,12 @@ def main():
         "bootstrapped_no_GNU_preprocessor_scope":"all-mini-42 only; toolchain ELF build retains GNU",
         "native_main_program_without_GNU_AS_or_LD":True,
         "all_mini_fresh_program_pp_cc_as_ld":True,
+        "stage2_built_nm_and_strip_functional_suites":True,
         "full_Linux_compiled_by_Stage2":False,
     },indent=2)+"\n")
     if failures:
         raise RuntimeError("native suites failed: "+",".join(failures)+" (other suites and chain still executed)")
-    print("BOOTSTRAP_STAGE2_NATIVE_RUNTIME=PASS tools=8 suites=%d runtime_chain=42 all_mini_pp_cc_as_ld=true evidence_sha=true"%len(suites),flush=True)
+    print("BOOTSTRAP_STAGE2_NATIVE_RUNTIME=PASS tools=8 suites=%d runtime_chain=42 all_mini_pp_cc_as_ld=true nm_strip_oracles=true evidence_sha=true"%len(suites),flush=True)
 
 if __name__=="__main__":
     try:main()
