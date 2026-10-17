@@ -98,6 +98,7 @@ void minic_c0_program_destroy(MinicC0Program *program) {
         free(program->functions[index].name);
         free(program->functions[index].assembler_name);
         free(program->functions[index].section_name);
+        free(program->functions[index].parameter_types);
     }
     for (index = 0U; index < program->record_count; ++index) {
         MinicRecord *record;
@@ -822,18 +823,11 @@ bool minic_c0_block_add_statement(MinicC0Program *program,
 }
 
 static void minic_c0_function_initialize_defaults(MinicFunction *function) {
-    size_t parameter_index;
-
     if (function == NULL) {
         return;
     }
     (void)memset(function, 0, sizeof(*function));
     function->return_type = minic_type_int();
-    for (parameter_index = 0U;
-         parameter_index < sizeof(function->parameter_types) / sizeof(function->parameter_types[0]);
-         ++parameter_index) {
-        function->parameter_types[parameter_index] = minic_type_int();
-    }
     function->alias_target = MINIC_FUNCTION_INVALID;
 }
 
@@ -895,6 +889,7 @@ bool minic_c0_program_set_function_signature(MinicC0Program *program,
                                              size_t parameter_count) {
     MinicFunction *function;
     MinicType normalized_parameter_types[MINIC_MAX_FUNCTION_PARAMETERS];
+    MinicType *private_parameter_types = NULL;
     size_t parameter_index;
 
     if (program == NULL || function_id >= program->function_count ||
@@ -915,16 +910,23 @@ bool minic_c0_program_set_function_signature(MinicC0Program *program,
                                  parameter_count > program->local_count - function->local_begin)) {
         return false;
     }
+    /* Deep-copy first, so aliasing the previous signature is safe and
+       allocation failures leave the Program Function unchanged. */
+    if (parameter_count != 0U) {
+        if (parameter_count > SIZE_MAX / sizeof(*private_parameter_types)) {
+            return false;
+        }
+        private_parameter_types = malloc(parameter_count * sizeof(*private_parameter_types));
+        if (private_parameter_types == NULL) {
+            return false;
+        }
+        (void)memcpy(private_parameter_types, normalized_parameter_types,
+                     parameter_count * sizeof(*private_parameter_types));
+    }
+    free(function->parameter_types);
+    function->parameter_types = private_parameter_types;
     function->return_type = return_type;
     function->parameter_count = parameter_count;
-    for (parameter_index = 0U; parameter_index < MINIC_MAX_FUNCTION_PARAMETERS; ++parameter_index) {
-        if (parameter_index < parameter_count) {
-            function->parameter_types[parameter_index] =
-                normalized_parameter_types[parameter_index];
-        } else {
-            function->parameter_types[parameter_index] = minic_type_void();
-        }
-    }
     return true;
 }
 

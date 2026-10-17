@@ -353,7 +353,9 @@ typedef struct MinicFunction {
     size_t section_name_length;
     MinicSymbolVisibility visibility;
     MinicType return_type;
-    MinicType parameter_types[MINIC_MAX_FUNCTION_PARAMETERS];
+    /* Owned exact-length parameter array. Stack/specialization snapshots
+       only borrow this stable storage; the Program releases it. */
+    MinicType *parameter_types;
     size_t parameter_count;
     size_t local_begin;
     size_t local_count;
