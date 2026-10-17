@@ -1126,11 +1126,11 @@ jobs:
           set -Eeuo pipefail
           sudo apt-get -o Acquire::Retries=2 install -y --no-install-recommends \
             gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
-            libc6-dev-riscv64-cross python3 make cpio gzip || {
+            libc6-dev-riscv64-cross python3 make cpio gzip time || {
               sudo apt-get -o Acquire::Retries=3 update
               sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
                 gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
-                libc6-dev-riscv64-cross python3 make cpio gzip
+                libc6-dev-riscv64-cross python3 make cpio gzip time
             }
 
       - name: Identify certified exact-config GNU golden pool
@@ -1375,7 +1375,7 @@ jobs:
           echo "key=gnu-minic-shard-v1-eeb04f304ebfb97a1079c187dc0c2ea3cc61fc50a55aa3cc776237c16ab19bbe-$profile-$subset-$gcc-$assembler" >>"$GITHUB_OUTPUT"
 
       - name: Restore this shard's immutable candidate objects
-        if: "!contains(github.event.head_commit.message, '[linux-minias-seven-shards]') && !contains(github.event.head_commit.message, '[linux-minipp-seven-integration]') && !contains(github.event.head_commit.message, '[linux-minipp-native-rules-C]') && !contains(github.event.head_commit.message, '[linux-perf-2064-ab]')"
+        if: "!contains(github.event.head_commit.message, '[linux-minias-seven-shards]') && !contains(github.event.head_commit.message, '[linux-minipp-seven-integration]') && !contains(github.event.head_commit.message, '[linux-minipp-native-rules-C]') && !contains(github.event.head_commit.message, '[linux-perf-2064-ab]') && !contains(github.event.head_commit.message, '[minic-fresh-full2064-metrics]')"
         id: shard_cache
         uses: actions/cache/restore@v4
         with:
@@ -1431,6 +1431,14 @@ jobs:
               "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain" "$ev/compiler"
             echo "LINUX_PERF_3_SHARD=READY shard=${{ matrix.shard }}/7"
           fi
+          # Explicit full-throughput measurement: do not replay old object cache.
+          # All seven independently partitioned shards recompile fresh on this
+          # commit; the existing stage-probe counts every real gcc-E / MiniC /
+          # GNU-as invocation and additionally measures wait4 child maxRSS.
+          if [[ "${{ contains(github.event.head_commit.message, '[minic-fresh-full2064-metrics]') }}" == true ]]; then
+            export COHORT_FULL_SPEED_RSS=1 COHORT_PROFILE_STAGES=1
+            echo "MINIC_FRESH_FULL2064=ENABLED seven_runner_compilers=true candidate_cache=DISABLED cpu_rss=ENABLED"
+          fi
           export COHORT_ACTION=compile COHORT_ALLOW_SHARD=1
           if [[ "${{ contains(github.event.head_commit.message, '[linux-boolean-native-full]') }}" == true ]]; then
             # Keep the established seven-way stride schedule; reuse GNU Kbuild
@@ -1483,7 +1491,7 @@ jobs:
           echo "GNU_MINIC_SHARD_READY=PASS shard=${{ matrix.shard }} objects=$n"
 
       - name: Cache completed shard independently of later link failures
-        if: "!contains(github.event.head_commit.message, '[linux-minias-seven-shards]') && !contains(github.event.head_commit.message, '[linux-minipp-seven-integration]') && !contains(github.event.head_commit.message, '[linux-minipp-native-rules-C]') && !contains(github.event.head_commit.message, '[linux-perf-2064-ab]') && steps.shard_cache.outputs['cache-hit'] != 'true'"
+        if: "!contains(github.event.head_commit.message, '[linux-minias-seven-shards]') && !contains(github.event.head_commit.message, '[linux-minipp-seven-integration]') && !contains(github.event.head_commit.message, '[linux-minipp-native-rules-C]') && !contains(github.event.head_commit.message, '[linux-perf-2064-ab]') && !contains(github.event.head_commit.message, '[minic-fresh-full2064-metrics]') && steps.shard_cache.outputs['cache-hit'] != 'true'"
         uses: actions/cache/save@v4
         with:
           path: |
@@ -1507,6 +1515,8 @@ jobs:
             build/linux-runtime-gcc-shards-v1/shard-${{ matrix.shard }}/integer-owner-counts.tsv
             build/linux-runtime-gcc-shards-v1/shard-${{ matrix.shard }}/boolean-domain-summary.json
             build/linux-runtime-gcc-shards-v1/shard-${{ matrix.shard }}/stage-probe/stages.tsv
+            build/linux-runtime-gcc-shards-v1/shard-${{ matrix.shard }}/stage-probe/minic-rss.tsv
+            build/linux-runtime-gcc-shards-v1/shard-${{ matrix.shard }}/stage-probe/minic-resource-summary.json
           if-no-files-found: error
           retention-days: 3
 
