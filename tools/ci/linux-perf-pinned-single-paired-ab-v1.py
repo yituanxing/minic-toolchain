@@ -9,6 +9,7 @@ import hashlib
 import json
 from pathlib import Path
 import statistics
+import resource
 import subprocess
 import time
 
@@ -20,15 +21,23 @@ def sha(path):
     return h.hexdigest()
 
 def one(driver, source, asm):
+    # Serial A/B: RUSAGE_CHILDREN also accounts for minic's minic-cc child.
+    # Wall regressions without corresponding user/system CPU regressions
+    # can be machine scheduling/cache noise rather than extra compiler work.
+    usage_before = resource.getrusage(resource.RUSAGE_CHILDREN)
     start = time.perf_counter_ns()
     p = subprocess.run([str(driver), "-S", str(source), "-o", str(asm)],
                        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                        timeout=120, text=True, errors="replace", check=False)
     ms = (time.perf_counter_ns()-start) / 1e6
+    usage_after = resource.getrusage(resource.RUSAGE_CHILDREN)
+    user_ms = 1000. * (usage_after.ru_utime - usage_before.ru_utime)
+    sys_ms = 1000. * (usage_after.ru_stime - usage_before.ru_stime)
     if p.returncode or not asm.is_file() or asm.stat().st_size == 0:
         raise RuntimeError("MiniC compile failed: driver=" + str(driver) +
                            " rc=" + str(p.returncode) + " stderr=" + p.stderr[-900:])
-    return {"wall_ms":round(ms, 3), "sha256":sha(asm),
+    return {"wall_ms":round(ms, 3), "user_ms":round(user_ms, 3),
+            "sys_ms":round(sys_ms, 3), "sha256":sha(asm),
             "assembly_bytes":asm.stat().st_size}
 
 def main():
