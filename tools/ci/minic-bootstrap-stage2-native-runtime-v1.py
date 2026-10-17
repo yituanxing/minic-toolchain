@@ -75,6 +75,11 @@ def main():
         shim=wrapper/tool
         shim.write_text("#!/bin/sh\nexec qemu-riscv64 "+str(elf)+" \"$@\"\n")
         shim.chmod(0o755)
+    # The Stage2-built native driver searches for sibling minic-cc; install
+    # a strict wrapper around the certified fixed-point Stage2 ELF, not host GCC.
+    cc_shim=wrapper/"minic-cc"
+    cc_shim.write_text("#!/bin/sh\nexec qemu-riscv64 "+str(stage2)+" \"$@\"\n")
+    cc_shim.chmod(0o755)
     env=os.environ.copy()
     # Validate that restored tool binaries ACTUALLY execute, not merely hash
     # as identical. This distinguishes an upload permissions problem from an
@@ -231,6 +236,29 @@ def main():
         "gnu_assembler_for_case":False,
         "gnu_linker_for_case":False,
         "qemu_exit_status":42}
+    # Now exercise the Stage2-BUILT native driver, which dispatches
+    # sibling Stage2 MiniPP + certified fixed-point Stage2 CC + Stage2 MiniAS.
+    # MiniLD consumes its genuine object and native start.o. No GNU used.
+    driver_dir=out/"driver";driver_dir.mkdir(parents=True,exist_ok=True)
+    driver_src=driver_dir/"main.c"
+    driver_obj=driver_dir/"main.o"
+    driver_elf=driver_dir/"native-driver-42.elf"
+    driver_src.write_text("int main(void) { return 42; }\n")
+    call([wrapper/"minic","-c","-ffreestanding","-nostdinc",
+          "-o",driver_obj,driver_src],
+         env,out/"logs/native-driver-compile.log",timeout=300)
+    if not driver_obj.is_file() or driver_obj.stat().st_size < 64:
+        raise RuntimeError("Stage2-native driver failed to create a real RV64 object")
+    call([wrapper/"minic-ld","-melf64lriscv","-static","-e","_start",
+          "-o",driver_elf,crt_obj,driver_obj],
+         env,out/"logs/native-driver-link.log",timeout=160)
+    call(["qemu-riscv64",driver_elf],env,
+         out/"logs/native-driver-qemu42.log",timeout=50,expected=42)
+    results["native-driver-42"]={
+        "status":"PASS","elf_sha256":hashfile(driver_elf),
+        "object_sha256":hashfile(driver_obj),"qemu_exit_status":42,
+        "gnu_compiler_preprocessor_assembler_linker":False}
+    print("BOOTSTRAP_NATIVE_DRIVER_CHAIN=PASS Stage2_built_Driver=true Stage2_MiniPP=true fixedpoint_Stage2_MiniC=true Stage2_MiniAS=true Stage2_MiniLD=true GNU_PP_AS_LD=false qemu_return=42",flush=True)
     (out/"summary.json").write_text(json.dumps({
         "certified_compiler_sha256":hashfile(stage2),
         "certified_stage2_built_toolchain_sha256":{name:report["binaries"][name]["sha256"] for name in TOOLS},
@@ -241,12 +269,13 @@ def main():
         "native_main_program_without_GNU_AS_or_LD":True,
         "all_mini_fresh_program_pp_cc_as_ld":True,
         "all_mini_fresh_program_no_GNU_preprocessor":True,
+        "native_stage2_built_driver_pp_cc_as_ld":True,
         "stage2_built_nm_and_strip_functional_suites":True,
         "full_Linux_compiled_by_Stage2":False,
     },indent=2)+"\n")
     if failures:
         raise RuntimeError("native suites failed: "+",".join(failures)+" (other suites and chain still executed)")
-    print("BOOTSTRAP_STAGE2_NATIVE_RUNTIME=PASS tools=8 suites=%d runtime_chain=42 all_mini_pp_cc_as_ld=true nm_strip_oracles=true evidence_sha=true"%len(suites),flush=True)
+    print("BOOTSTRAP_STAGE2_NATIVE_RUNTIME=PASS tools=8 suites=%d runtime_chain=42 all_mini_pp_cc_as_ld=true nm_strip_oracles=true driver_chain=42 evidence_sha=true"%len(suites),flush=True)
 
 if __name__=="__main__":
     try:main()
