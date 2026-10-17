@@ -21,7 +21,11 @@
 
 一次运行的真实峰值 RSS KiB：fsync 189368→180524，super 227764→217408，btf 321656→306184，core 297984→287124，memcontrol 292856→281156。每个例子都下降，不能把一组单独 sample 当作 RSS 置信区间，也不能将整个 Linux 内存下降 4%。
 
-**晋级 first500 筛选**：[CI #39005940554](https://github.com/yituanxing/minic-toolchain/actions/runs/39005940554)：复用已经存在的 first500 balanced-order 四工作进程 differential，必须检验 500/500 `.s` 一致，并以相同源 SHA 下真实累计编译时间决定是否值得修改正式源码；first500 以及七路 2064+QEMU **尚未由局部五文件实验证明**。后续根据实际验证结果标记 `integrated`、`stop` 或 `needs-regression-triage`，严禁预称已经成功推广。
+**完整 first500 晋级 A/B [#39005940554](https://github.com/yituanxing/minic-toolchain/actions/runs/39005940554) SUCCESS**：500/500 `.s` byte-identical，同一 runner、4 workers、250/250 balanced order，当前生产 packed CALL IDs baseline 累计 **348126.483ms**，Type 72-byte candidate **341344.660ms**，**1.01987× 加速，累计时间 -1.948%（节省 6.781823 秒）**。单 TU 倍率中位数 **1.02211×**。单次 500 中 **107/500** owner wall 看似回退，因此没有把局部 5/5 结果直接当成生产胜利，单独进行了重复复核。
+
+**10-owner CPU/user/wall 回退排查 [#39006242085](https://github.com/yituanxing/minic-toolchain/actions/runs/39006242085) SUCCESS**：从 first500 选取 8 个最大单次时间回退 owner + BTF/fsync 两个收益对照；沿用现有 `linux-perf-packed-call-regression-review-v1.py` 的 paired 4×2 批量机制（只是新增可复用 `--owner`/`--label`），每个 owner 8 old/8 candidate，wall/user/sys/MAD 都留原始 JSON。**10/10 汇编完全一致，10/10 重测 wall P50 不慢于原版，0 个重复确认的 wall+CPU 回退嫌疑**。例如 `fs/nfs/client.o` first500 单次 814.762→1116.782ms 看似恶化 +302.0ms，重测 P50 **801.930→789.090ms**、user CPU **737.616→721.362ms**；`fs/nfs/blocklayout/extent_tree.o` 重测 **752.963→746.643ms**；`mm/compaction.o` **652.976→652.418ms**，收益较小。因 total -1.95% 略低于默认 2% 候选阈值，但该方案是 1-header 无语义改变的布局调整，且 5 个文件实际 RSS **全部下降**、10 个单次回退重复复核通过，所以作为谨慎例外晋级实际完整运行时验证；不能把 107/500 的单轮回退自动解释为负优化，也不能宣称 107 个都已复测。
+
+**已写入正式类型头文件，完整 Runtime 尚待判决**：[Production commit a6186876](https://github.com/yituanxing/minic-toolchain/commit/a6186876c684b0cbe945b77dc5c96ebce6f6d6fb)，单文件 `src/frontend/type.h` 按实验一致字段排列，`sizeof(MinicType)` 实测 **80→72B**，`sizeof(MinicFunction)` **6536→6016B**（单 Function -520B），`sizeof(MinicFunctionType)` **5216→4696B**，`sizeof(MinicExpression)` **424→416B**；无额外 malloc、无 ID 类型或语义改动。已触发 [Focused T1 #39006469220](https://github.com/yituanxing/minic-toolchain/actions/runs/39006469220) 和 [Linux 7-shard + GNU/QEMU #39006469186](https://github.com/yituanxing/minic-toolchain/actions/runs/39006469186)。**正式资格以实际 full 2064 + GNU link + QEMU P1 job 输出为准；当前绝不能提前声称 runtime-certified。**
 
 ## 空间方向第一轮：固定 64 CALL 参数槽使用 32-bit ExpressionID（2026-10-17）
 
