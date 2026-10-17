@@ -749,3 +749,9 @@ COHORT_RESULT=PASS candidate_objects=2064 scope=FULL_C_UNIVERSE same_config=true
 **推广 first500：** [CI #38995564349](https://github.com/yituanxing/minic-toolchain/actions/runs/38995564349) SUCCESS，冻结 500 输入全部汇编字节相同，balanced_order=true，baseline 382579.154ms，candidate 372710.334ms，节省 9868.820ms，速度 1.02648x，耗时 -2.58%。单轮 500 逐文件有 108 个对象测得变慢（fs/nfs/client、mm/slub、mm/hugetlb 等），需要通过重复配对 wall/user/sys 判别固定成本与噪声，不能把单次观测说成持久退化。
 
 **目前状态：** verified-frozen500，不是 Runtime-certified。Focused T1 #38995262829 SUCCESS。正式源码 commit 88029a72。下一步现有 7 Runner 做 2064 MiniC GNU link QEMU P1，并单独复核大回退样本；没有充分收益后不继续在 Boolean 上微调。
+
+**已完成最终 Runtime 资格：** [CI #38995964988](https://github.com/yituanxing/minic-toolchain/actions/runs/38995964988) SUCCESS。7/7 shard 全绿，COHORT_RESULT=PASS candidate_objects=2064 scope=FULL_C_UNIVERSE same_config=true，GNU-only link + QEMU P1 COHORT_P1=PASS syscalls=12 python_era_oracle=PASS。此版本正式升级为 verified-runtime（GNU PP → MiniC → GNU AS/LD，并非全部工具链同时替换）。
+
+**12 代表性回退复核完成：** [CI #38996062353](https://github.com/yituanxing/minic-toolchain/actions/runs/38996062353) SUCCESS。每文件在相同 pinned .i 上进行 old/new 各 8 次交错计时（另排除 warm-up），测量 wall/user/sys CPU，并在诊断模式校对汇编 SHA 和 Boolean owner 计数。12 个中 11 个“单轮回退”未复现、复测反而提速；仅 1 个微型输入 arch/riscv/purgatory/ctype.o 存在 +0.038ms 墙钟差（2.058→2.096ms），但 user CPU -0.075ms，分类 mixed_or_noisy；**零个达到 wall 与 CPU 同时超过门槛的持久回退**。例如 fs/nfs/client.o 原单次由 971.295→1209.206ms，现在中位由 834.837→798.057ms（少 36.780ms），mm/slub.o 938.031→897.351ms，mm/hugetlb.o 1039.699→1021.580ms。证据支持把这些 outliers 归因于测量噪声的可能性，但仍不声称已证明每个扰动的物理来源。
+
+**决策：** 保留 Boolean source-owner 过滤在主线。单轮 500 总体收益 +2.648% 速度，真实 2064/QEMU 通过；原 108 个回退样本并不意味着已有 108 个稳定算法回退。低效小样本不再反复拉长 CI，下一轮依据原有阶段数据独立选择全局剩余热点。

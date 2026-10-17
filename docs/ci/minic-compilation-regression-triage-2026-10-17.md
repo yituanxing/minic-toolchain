@@ -64,3 +64,11 @@
 - 扩大 first500 [CI #38994826749](https://github.com/yituanxing/minic-toolchain/actions/runs/38994826749) SUCCESS：**500/500 汇编 SHA 一致**，同批冻结输入、balanced-order、eager 累计 **439568.899ms**，lazy **443102.585ms**，**0.99203×**（耗时增加约 **0.804%**），单轮有 **295/500** 输入相对变慢。单轮 500 输入上的强烈细节波动仍不能归咎于某个因果机制；但两个规模的测试都没有证据支持 lazy 大幅胜出。
 - **决策：verified-negative / not-promoted。** 撤回 lazy 生产源码，恢复此前 **2064/2064 + GNU Link + QEMU P1 已认证**的 eager Core index 原实现（源码 blob 1ab6f1d2...）。保留负面实验与证据；不为了补一个漂亮数字继续在这条无收益路径上打磨。
 - 下一候选：针对独立的 **Boolean Range Transitive** 重复 CALL 扫描与 FunctionBody 归属过滤，复用已验证的源码语义算法，按固定 eager 基线单因素 A/B 测量；不能把 lazy 回退与下一轮优化混成一次差分。
+
+## 2026-10-17：Boolean Transitive 索引的真实回退复核闭环
+
+- frozen500 #38995564349：500/500 字节级汇编一致，382579.154→372710.334ms，1.02648x，108 个单轮输入的 candidate wall 比 baseline 高。负向样本并不等于确定性的算法回退。
+- 复核 #38996062353 成功。相同 Linux .i 输入 SHA、相同两个编译器二进制，每臂 8 个有效交错样本（不计预热）；记录 Linux RUSAGE_CHILDREN user/sys、wall、中位数和 MAD，opt-in MINIC_BOOLEAN_TRANSITIVE_PERF 输出调用与过滤数，12/12 复核汇编也一致。
+- 六个主要原单轮回退 fs/nfs/client.o、mm/slub.o、mm/hugetlb.o、fs/nfs/blocklayout/extent_tree.o、fs/notify/inotify/inotify_user.o、arch/riscv/kernel/patch.o，复核全部更快：分别 -36.780/-40.680/-18.119/-36.541/-14.790/-8.591ms，CPU user 方向也支持正收益；原因很可能是 500 竞争 runner 的逐文件计时噪声或热/冷/CPU 竞争，不断言物理原因已经锁定。
+- 12 个样本分类：11 not_reproduced，1 mixed_or_noisy，0 reproduced_wall_and_cpu_slowdown_suspect。唯一混合样本 arch/riscv/purgatory/ctype.o 是 2ms 量级 tiny TU，wall +0.038ms、CPU user -0.075ms，不构成证据充分的持续性能回退。
+- 生产资格：七路 2064/2064 + GNU Link + QEMU P1 #38995964988 完整通过，运行时可保留；不在这一 2.58% 全体增益的优化上无止境打磨。

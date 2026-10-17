@@ -20,7 +20,7 @@
 # Boolean Transitive CALL-only source-owner filter candidate: frozen first500
 # CI #38995564349 PASS 500/500 byte-identical .s; 382579.154ms -> 372710.334ms
 # (speedup 1.02648x, total compile time lower by 2.58%).
-# 2064/2064 GNU Link/QEMU P1 correctness qualification is PENDING.
+# 2064/2064 GNU Link/QEMU P1 #38995964988 SUCCESS, 7/7 shard PASS, COHORT_P1=PASS syscalls=12.
 # The manifest only authenticates source identity; it is not a test result.
 d1b8a54a26e933b9f40438d23bb9001bc632408e src/compiler/compiler.c
 1ab6f1d2d587e6008d7224b10b1638c9887bac18 src/core/core_lower.c
