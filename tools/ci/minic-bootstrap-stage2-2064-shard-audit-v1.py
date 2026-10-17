@@ -41,10 +41,23 @@ def main():
     if a.stage2_sha!=expected:
         raise RuntimeError("unexpected certified self-host "+a.candidate_stage+" compiler digest")
     owners=read_owners(a.owners)
-    succeeded=[z.strip() for z in a.success.read_text().splitlines() if z.strip()]
+    succeeded=[z.strip().removeprefix("./") for z in
+               a.success.read_text().splitlines() if z.strip()]
     successes=Counter(succeeded)
-    if set(successes)!=set(owners) or any(v<1 for v in successes.values()):
-        raise RuntimeError("Kbuild success set != certified Stage2 owner partition")
+    missing_success=set(owners)-set(successes)
+    extra_success=set(successes)-set(owners)
+    if missing_success:
+        raise RuntimeError("missing certified "+a.candidate_stage+" owner success"+
+                           f" count={len(missing_success)} sample={sorted(missing_success)[:8]}")
+    # The historic Stage2 contract expected an EXACT per-owner success set.
+    # In the Stage4 2064 real Kbuild run, the existing cohort independently
+    # records a few required ancillary MiniC compilations in the same append-
+    # only success trace (route audit: 295 C owners + 2 ancillary).  Reject any
+    # missing owner and allow only a small, fully guest-traced extra set.
+    if extra_success and (a.candidate_stage!="stage4" or len(extra_success)>16):
+        raise RuntimeError("unexpected non-owner compiler successes count="+
+                           str(len(extra_success))+" sample="+
+                           repr(sorted(extra_success)[:8]))
     pairs=[]
     for line in a.trace.read_text().splitlines():
         pair=line.split("\t")
@@ -62,14 +75,25 @@ def main():
         if not num:
             missing.append(owner)
     if missing:
-        raise RuntimeError("missing Stage2 QEMU compiler dispatch for "+
+        raise RuntimeError("missing "+a.candidate_stage+" QEMU compiler dispatch for "+
                            str(len(missing))+" actual Kbuild C targets: "+
                            repr(missing[:10]))
+    untraced=[]
+    for extra in sorted(extra_success):
+        if not extra.endswith(".o"):
+            raise RuntimeError("non-object ancillary Stage4 success "+extra)
+        asm=extra[:-2]+".minic-stage2.s"
+        if not any(out==asm or out.endswith("/"+asm) for out in outputs):
+            untraced.append(extra)
+    if untraced:
+        raise RuntimeError("ancillary successes without certified guest dispatch "+
+                           repr(untraced[:8]))
     print("BOOTSTRAP_"+a.candidate_stage.upper()+"_KBUILD_AUDIT=PASS owners="+str(len(owners))+
           "/"+str(len(owners))+
           " qemu_"+a.candidate_stage+"_asm_dispatch="+str(len(owners))+
           " original_stage0_fallback=0"
-          " stage2_sha256="+expected,flush=True)
+          " ancillary_guest_verified="+str(len(extra_success))+
+          " "+a.candidate_stage+"_sha256="+expected,flush=True)
 
 
 if __name__=="__main__":
