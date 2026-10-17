@@ -165,18 +165,79 @@ def main():
          timeout=45,expected=42)
     print("BOOTSTRAP_NATIVE_MINI_CHAIN=PASS Stage2_MiniC=true Stage2_MiniAS=true Stage2_MiniLD=true runtime_exit=42 GNU_AS_LD=false",flush=True)
     results["native-42"]={"status":"PASS","elf_sha256":hashfile(final),"elf_bytes":final.stat().st_size}
+
+    # Second, independent stronger chain: all FOUR compiler pipeline stages
+    # execute only Stage2-built Mini executables. GNU preprocessor, assembler
+    # and linker are NOT invoked, even for generating this program's C input.
+    # The established Stage2 MiniPP A0 suite separately compares GNU oracle;
+    # the actual following data flow is entirely from the bootstrapped tools.
+    pure=out/"all-mini";pure.mkdir(parents=True,exist_ok=True)
+    header=pure/"answer.h"
+    header.write_text(
+        "#ifndef BOOTSTRAP_ANSWER_H\\n"
+        "#define BOOTSTRAP_ANSWER_H\\n"
+        "#define TWENTY_ONE 21\\n"
+        "#define SUM_TWO(x) ((x) + (x))\\n"
+        "#endif\\n"
+    )
+    pure_source=pure/"main.c"
+    pure_source.write_text(
+        "#include \\"answer.h\\"\\n"
+        "#define BOOTSTRAP_MAIN_VALUE SUM_TWO(TWENTY_ONE)\\n"
+        "#if BOOTSTRAP_MAIN_VALUE != 42\\n"
+        "#error native MiniPP preprocessor macro evaluation is wrong\\n"
+        "#endif\\n"
+        "int main(void) { return BOOTSTRAP_MAIN_VALUE; }\\n"
+    )
+    pure_i=pure/"main.i";pure_s=pure/"main.s";pure_o=pure/"main.o"
+    pure_start=pure/"start.o";pure_elf=pure/"minic-all-mini-42.elf"
+    call([wrapper/"minic-cpp","-E","-P","-undef","-nostdinc",
+          "-o",pure_i,pure_source],
+         env,out/"logs/all-mini-pp.log",timeout=160)
+    if not pure_i.is_file() or not pure_i.stat().st_size:
+        raise RuntimeError("Stage2-built MiniPP produced empty output")
+    # The same self-hosted compiler that passed the 47-TU fixed point and
+    # Linux Stage0/Stage2 differential consumes the native MiniPP output.
+    call(["qemu-riscv64",stage2,"-S",pure_i,"-o",pure_s],
+         env,out/"logs/all-mini-stage2-cc.log",timeout=180)
+    call([wrapper/"minic-as","-march=rv64gc","-mabi=lp64d",
+          "-o",pure_o,pure_s],
+         env,out/"logs/all-mini-as.log",timeout=180)
+    # Reuse the already certified Stage2-built MiniAS-generated _start.o,
+    # never pass an object from the GNU assembler into this link.
+    pure_start.write_bytes(crt_obj.read_bytes())
+    call([wrapper/"minic-ld","-melf64lriscv","-static","-e","_start",
+          "-o",pure_elf,pure_start,pure_o],
+         env,out/"logs/all-mini-ld.log",timeout=180)
+    call(["qemu-riscv64",pure_elf],
+         env,out/"logs/all-mini-runtime-42.log",timeout=45,expected=42)
+    print("BOOTSTRAP_ALL_MINI_C_CHAIN=PASS Stage2_built_MiniPP=true Stage2_MiniC=true "
+          "Stage2_built_MiniAS=true Stage2_built_MiniLD=true "
+          "GNU_PP_AS_LD=false qemu_return=42",flush=True)
+    results["all-mini-42"]={
+        "status":"PASS","native_preprocessor_sha256":hashfile(pure_i),
+        "native_assembly_sha256":hashfile(pure_s),
+        "native_object_sha256":hashfile(pure_o),
+        "native_elf_sha256":hashfile(pure_elf),
+        "native_elf_bytes":pure_elf.stat().st_size,
+        "gnu_preprocessor_for_case":False,
+        "gnu_assembler_for_case":False,
+        "gnu_linker_for_case":False,
+        "qemu_exit_status":42}
     (out/"summary.json").write_text(json.dumps({
         "certified_compiler_sha256":hashfile(stage2),
         "certified_stage2_built_toolchain_sha256":{name:report["binaries"][name]["sha256"] for name in TOOLS},
         "tests":results,
         "toolchain_built_by_stage2":True,
-        "bootstrapped_no_GNU_preprocessor":False,
+        "bootstrapped_no_GNU_preprocessor":True,
+        "bootstrapped_no_GNU_preprocessor_scope":"all-mini-42 only; toolchain ELF build retains GNU",
         "native_main_program_without_GNU_AS_or_LD":True,
+        "all_mini_fresh_program_pp_cc_as_ld":True,
         "full_Linux_compiled_by_Stage2":False,
     },indent=2)+"\n")
     if failures:
         raise RuntimeError("native suites failed: "+",".join(failures)+" (other suites and chain still executed)")
-    print("BOOTSTRAP_STAGE2_NATIVE_RUNTIME=PASS tools=8 suites=%d runtime_chain=42 evidence_sha=true"%len(suites),flush=True)
+    print("BOOTSTRAP_STAGE2_NATIVE_RUNTIME=PASS tools=8 suites=%d runtime_chain=42 all_mini_pp_cc_as_ld=true evidence_sha=true"%len(suites),flush=True)
 
 if __name__=="__main__":
     try:main()
