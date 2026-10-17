@@ -31,7 +31,7 @@ replace("                &probe, probe_token.span, probe_token.kind, &decoded_le
         "                parser, probe_token.span, probe_token.kind, &decoded_length)")
 replace("        if (!minic_parser_advance(&probe)) {",
         "        if (!minic_lexer_next(&probe_lexer, &probe_token, parser->diagnostic)) {")
-if "probe." in body or "&probe" in body:
+if "probe." in body or "&probe," in body:
     raise SystemExit("STRING_LEXER_AB=FAIL unexplained Parser-probe field left")
 out=a+begin+body+end+c
 assert out!=source
