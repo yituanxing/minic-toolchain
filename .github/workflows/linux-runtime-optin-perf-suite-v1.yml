@@ -435,6 +435,10 @@ jobs:
           # #39041095371: 1 of 79 asserts GCC's separate __FUNCTION__ vs
           # __func__ storage while MiniC deliberately uses one stable object.
           # It stopped at predefined_func_name (GNU exit 6, MiniC exit 0).
+          # Full-manifest first attempt #39041448311 also exposed a separate
+          # GNU -O0 C11 inline link error in post_type_declaration_specifiers.
+          # Distinguish oracle-unavailable vs real MiniC regression; rerun all
+          # entries, never alter/skip the existing fixture.
           # Now cover the ENTIRE unchanged 79-source manifest, strict Stage0
           # vs Stage2 assembly parity and *separately disclose* every real GCC
           # exit/stdout/stderr mismatch. Do not modify or suppress the fixture.
