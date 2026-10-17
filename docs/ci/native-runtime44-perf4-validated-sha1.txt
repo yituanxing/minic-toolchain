@@ -11,7 +11,9 @@
 # includes the validated Integer FunctionBody owner filter (full Linux
 # 2064/QEMU P1 #38927659471). The refreshed compiler/core_lower identities
 # below also contain the NEW Core reentry incoming-edge index: this is an
-# UNQUALIFIED CANDIDATE pending frozen A/B and full runtime verification.
+# measured in frozen first500 A/B #38992360179: 500/500 byte-identical,
+# 384418.072ms -> 348183.509ms, speedup 1.10407x; focused T1 PASS.
+# The seven-shard 2064/2064 Linux/QEMU P1 requalification is PENDING.
 # The manifest only authenticates source identity; it is not a test result.
 9151eb7782b6a3b690ba435fbef6ed8ac1751063 src/compiler/compiler.c
 1ab6f1d2d587e6008d7224b10b1638c9887bac18 src/core/core_lower.c

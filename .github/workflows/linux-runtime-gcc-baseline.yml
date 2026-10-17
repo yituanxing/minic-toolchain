@@ -10,6 +10,9 @@ on:
       - '.github/workflows/linux-runtime-gcc-baseline.yml'
       - 'tests/external/linux/**'
       - 'tools/ci/**'
+      # Native source identity is part of the Kbuild compiler acceptance gate;
+      # changing its exact SHA contract must allow the existing gated CI run.
+      - 'docs/ci/native-runtime44-perf4-validated-sha1.txt'
       # Single canonical product line: source ownership must trigger its
       # existing Linux oracle, not require pushing onto obsolete agent refs.
       - 'src/**'

@@ -714,3 +714,26 @@ COHORT_RESULT=PASS candidate_objects=2064 scope=FULL_C_UNIVERSE same_config=true
 这里所谓 8.70 亿次 reentry 候选扫描，是源码枚举上下界的**潜在访问数**，含早退出及条件过滤；既不是实测 retired instructions，也不是实际 DRAM 流量。真正的相对节时只认等输入、同 Runner 的 A/B。
 
 **下一单项候选：优先 `core_block_contains_reentry_label` 与规范化 loop-label 的程序级不可变 `goto/asm-goto/&&label` 源引用索引。** 目前每次条件分支重入证明都在不同 FunctionBody clone 上重新读整 TU 的 statement/expression，索引必须保持「外部进入」语义（root 子树内部 goto 不能误算外部引用）、switch case/default、computed goto、asm-goto label、任意不明确目标全部按保守路径回退，不得删除运行时安全检查。先计索引构建时间与命中次数，再在已冻结这七个 owner 的典型 2～3 文件上执行原算法 vs 单因素 A/B，要求字节一致，再决定扩大至 first500 及七路 P1。**备选**是一个安全的、按需清理的 per-function statement-block map，来消除 `F_L×S` 初始化；不能简单删除 `MINIC_CORE_BLOCK_INVALID` 初始化，否则会把未初始化块当已绑定 goto 目标。旧 Parser hash、整数 CALL/source-owner、Boolean Domain cache 和 Codegen 既有 slot reuse 都已在正式代码，**不要重新造这些优化**。
+
+## 43. PERF-038：Core Lowering 只读目标反向索引（2026-10-17）
+
+**选择依据：** 7 份真实 Linux .i 的轻量阶段归因 [#38930177529](https://github.com/yituanxing/minic-toolchain/actions/runs/38930177529)：Core Function Set 合计 4,925.616ms；core_block_contains_reentry_label 调用 2,942 次，理论全 TU 重复扫描上界 152,476,168 Statement + 532,282,297 Expression；循环标签重入 690 次、潜在上界 35,485,296 Statement + 123,340,986 Expression。这里的遍历上界不是实测 CPU 指令、耗时或 DRAM 流量。
+
+**生产代码：** [32663329](https://github.com/yituanxing/minic-toolchain/commit/32663329d6035dbb6fc9b4f5ab3d6aeffd10e793)；仅改 core_lower.c/h、compiler.c 和 native SHA 身份。minic_prepare_core_function_set() 生命周期内显式 begin/end，一次读 Statement 收集 goto、asm goto 的 target→incoming source 链，一次读 Expression 收集 label-address 标记，校验及分配全部成功后才发布索引。失败、OOM 或单独调用 Core Lower 保留旧完整扫描。case/default、成员子树内部 goto、外部重入、计算 goto 地址标签、规范化 WHILE 源位置唯一性均保持旧保守语义。pass 后释放索引，不引入跨 TU 缓存或新编译器框架。可选 MINIC_CORE_REENTRY_INDEX_PERF 提供 indexed_if/loop 次数。
+
+**五 Linux TU 同 Runner A/B**：[CI #38992107850](https://github.com/yituanxing/minic-toolchain/actions/runs/38992107850) SUCCESS；旧源码基准 3bcb2594，新源码 32663329；每编译器先预热一次，再交错进行 4 次真实 .i→.s；五份都字节级 SHA256 完全一致，候选额外诊断编译的 .s SHA 再次一致：
+
+| Linux TU | 旧版 P50 | 新版 P50 | 加速比 |
+| --- | ---: | ---: | ---: |
+| fs/ext4/fsync.o | 508.006ms | 506.824ms | 1.0023× |
+| kernel/bpf/btf.o | 1939.764ms | 1464.877ms | 1.3242× |
+| kernel/events/core.o | 2834.657ms | 1860.925ms | 1.5233× |
+| mm/memcontrol.o | 2434.701ms | 1741.226ms | 1.3983× |
+| fs/ext4/super.o | 1389.997ms | 1122.534ms | 1.2383× |
+| **五文件 P50 之和** | **9107.124ms** | **6696.386ms** | **1.3600×** |
+
+[Focused T1 #38992107892](https://github.com/yituanxing/minic-toolchain/actions/runs/38992107892) SUCCESS，原有 8/8 检查。
+
+**500 文件同一索引候选：** [CI #38992360179](https://github.com/yituanxing/minic-toolchain/actions/runs/38992360179) SUCCESS；复用原 perf500/first500 缓存和既有配对差分脚本，没有新 workflow/job。500/500 .s 完全一致，balanced-order=true；旧版累计 384418.072ms，索引版 348183.509ms，**1.10407×、节省 36234.563ms、耗时下降约 9.43%**。单轮配对有 97/500 个对象相对退化，应记录为单次噪声及可能的索引固定开销，不能假定所有文件都加速。热点大收益包括 kernel/events/core.o、kernel/bpf/verifier.o、mm/memcontrol.o。五热点合计 1.36× 不可当作全体 500 的收益。
+
+**完整验收边界：** 当前为 verified-frozen500，尚未对此正式代码身份完成 2064/2064 + GNU Link + QEMU P1。本次仅沿现有七 Runner Linux CI 升级资格，不把上一轮 Integer source-owner 的完整内核认证误当成这轮认证。完整验收编译链仍是 GNU PP → MiniC → GNU AS/LD，不能说全 Mini 工具链已共同通过。
