@@ -886,7 +886,7 @@ jobs:
           test "$rc" -eq 0
           if [[ "${{ contains(github.event.head_commit.message, '[minic-bootstrap-native-link-only]') }}" == true ]]; then
             grep -Fq 'FULL_NATIVE_LINK_PROBE=PASS tool=minic-cpp' "$work/verdict.log"
-          elif (( ${#probe_args[@]} )); then
+          elif [[ "${{ contains(github.event.head_commit.message, '[minic-bootstrap-full-native-probe]') }}" == true ]]; then
             grep -Fq 'FULL_NATIVE_PROBE=PASS source_tus=4' "$work/verdict.log"
           else
             grep -Fq 'FULL_NATIVE_TOOLCHAIN=PASS tools=9' "$work/verdict.log"
