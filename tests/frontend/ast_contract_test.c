@@ -360,6 +360,111 @@ static int test_normalization_transaction(void) {
     return 0;
 }
 
+/* Function parameter types are a private, realloc-stable allocation.
+ * Snapshots borrow the source; cloning a Function copies parameters through
+ * the public setter, and repeated signature updates cannot alias freed data.
+ */
+static int test_function_signature_storage_ownership(void) {
+    MinicC0Program program;
+    MinicFunctionId source_id, clone_id, unused_id;
+    MinicFunction source_snapshot;
+    MinicType parameters[3], changed[2], max_parameters[MINIC_MAX_FUNCTION_PARAMETERS];
+    MinicType invalid = minic_type_void();
+    const MinicType *original_storage;
+    size_t i;
+    int failed = 0;
+
+    minic_c0_program_initialize(&program);
+    parameters[0] = minic_type_int();
+    parameters[1] = minic_type_long();
+    parameters[2] = minic_type_unsigned_int();
+    changed[0] = minic_type_short();
+    changed[1] = minic_type_long_long();
+
+    if (!minic_c0_program_add_function(&program, "original", 8U, 0U, 0U,
+                                       MINIC_BLOCK_INVALID, &source_id) ||
+        !minic_c0_program_set_function_signature(&program, source_id, minic_type_int(),
+                                                 parameters, 3U)) {
+        failed = 70;
+        goto finish;
+    }
+
+    original_storage = program.functions[source_id].parameter_types;
+    source_snapshot = program.functions[source_id]; /* borrowed pointer */
+    if (original_storage == NULL || original_storage == parameters) {
+        failed = 71;
+        goto finish;
+    }
+
+    /* Reallocate the Function header array repeatedly. Private heap arrays
+       must remain stable even when an old Function snapshot is retained. */
+    for (i = 0U; i < 100U; ++i) {
+        if (!minic_c0_program_add_function(&program, "padding", 7U, 0U, 0U,
+                                           MINIC_BLOCK_INVALID, &unused_id)) {
+            failed = 72;
+            goto finish;
+        }
+    }
+    if (program.functions[source_id].parameter_types != original_storage ||
+        source_snapshot.parameter_types != original_storage ||
+        !minic_type_equal(source_snapshot.parameter_types[2], parameters[2])) {
+        failed = 73;
+        goto finish;
+    }
+    if (!minic_c0_program_add_function(&program, "clone", 5U, 0U, 0U,
+                                       MINIC_BLOCK_INVALID, &clone_id) ||
+        !minic_c0_program_set_function_signature(&program, clone_id,
+                                                 source_snapshot.return_type,
+                                                 source_snapshot.parameter_types,
+                                                 source_snapshot.parameter_count)) {
+        failed = 74;
+        goto finish;
+    }
+    if (program.functions[clone_id].parameter_types == original_storage ||
+        !minic_type_equal(program.functions[clone_id].parameter_types[2], parameters[2])) {
+        failed = 75;
+        goto finish;
+    }
+    if (!minic_c0_program_set_function_signature(&program, source_id,
+                                                  minic_type_int(), changed, 2U) ||
+        !minic_type_equal(program.functions[clone_id].parameter_types[2], parameters[2]) ||
+        !minic_type_equal(program.functions[source_id].parameter_types[0], changed[0])) {
+        failed = 76;
+        goto finish;
+    }
+    /* In-place caller passes the owned storage back to the setter. */
+    if (!minic_c0_program_set_function_signature(&program, clone_id,
+                                                  program.functions[clone_id].return_type,
+                                                  program.functions[clone_id].parameter_types,
+                                                  program.functions[clone_id].parameter_count) ||
+        minic_c0_program_set_function_signature(&program, clone_id,
+                                                 minic_type_int(), &invalid, 1U) ||
+        program.functions[clone_id].parameter_count != 3U ||
+        !minic_type_equal(program.functions[clone_id].parameter_types[2], parameters[2])) {
+        failed = 77;
+        goto finish;
+    }
+
+    for (i = 0U; i < MINIC_MAX_FUNCTION_PARAMETERS; ++i) {
+        max_parameters[i] = minic_type_int();
+    }
+    if (!minic_c0_program_set_function_signature(&program, clone_id,
+                                                  minic_type_long(), max_parameters,
+                                                  MINIC_MAX_FUNCTION_PARAMETERS) ||
+        program.functions[clone_id].parameter_count != MINIC_MAX_FUNCTION_PARAMETERS ||
+        !minic_type_equal(program.functions[clone_id].parameter_types[63],
+                          minic_type_int()) ||
+        !minic_c0_program_set_function_signature(&program, clone_id,
+                                                  minic_type_int(), NULL, 0U) ||
+        program.functions[clone_id].parameter_types != NULL ||
+        program.functions[clone_id].parameter_count != 0U) {
+        failed = 78;
+    }
+finish:
+    minic_c0_program_destroy(&program);
+    return failed;
+}
+
 int main(void) {
     int status;
 
@@ -380,6 +485,10 @@ int main(void) {
         return status;
     }
     status = test_semantic_entity_defaults();
+    if (status != 0) {
+        return status;
+    }
+    status = test_function_signature_storage_ownership();
     if (status != 0) {
         return status;
     }
