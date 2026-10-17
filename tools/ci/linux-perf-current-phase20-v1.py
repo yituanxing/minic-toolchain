@@ -116,8 +116,9 @@ def main() -> None:
                     raise RuntimeError(f"Boolean subphase missing: {owner}, {name}")
         integer_owner = new.get("integer_owner")
         parser_lookups = new.get("parser_lookups")
-        if integer_owner is None or parser_lookups is None:
-            raise RuntimeError(f"missing native Integer/Parser counters for {owner}")
+        core_reentry = new.get("core_reentry")
+        if integer_owner is None or parser_lookups is None or core_reentry is None:
+            raise RuntimeError(f"missing native Integer/Parser/Core counters for {owner}")
         symbolic_counts = new.get("symbolic_counts")
         # The old Symbolic scan tracer is stale after grouped-CALL integration.
         # Keep the outer specialization timer, not obsolete scan counters.
@@ -162,7 +163,8 @@ def main() -> None:
             "boolean_counters": boolean_counts,
             "symbolic_counters": symbolic_counts,
             "integer_owner_counters": integer_owner,
-            "parser_lookup_counters": parser_lookups})
+            "parser_lookup_counters": parser_lookups,
+            "core_reentry_counters": core_reentry})
         print(f"MINIC_PHASE20_PROGRESS checked={len(rows)}/20 owner={owner} "
               f"group={group} traced_ms={new['wall_ms']:.3f} "
               f"spec_integer_ms={spec['spec-integer']['ms']:.3f} "
@@ -174,7 +176,9 @@ def main() -> None:
               f"symbolic_variant_probes={symbolic_counts['transitive_variant_probes'] if symbolic_counts else 'NA'} "
           f"integer_candidates={integer_owner['candidates']} "
           f"integer_owner_skips={integer_owner['skipped_other_owner']} "
-          f"parser_local_steps={parser_lookups['lookups']['local']['steps']}", flush=True)
+          f"parser_local_steps={parser_lookups['lookups']['local']['steps']} "
+          f"core_indexed_if={core_reentry['indexed_if_queries']} "
+          f"core_if_fullscan_upper_bound={core_reentry['indexed_if_upper_bound_steps']}", flush=True)
 
     totals = {key: round(sum(row["phase_ms_exclusive"][key] for row in rows), 3)
               for key in rows[0]["phase_ms_exclusive"]}
@@ -195,6 +199,12 @@ def main() -> None:
     integer_totals["surviving_visits"] = integer_totals["candidate_visits"] - integer_totals["owner_skips"]
     integer_totals["skipped_percent"] = round(100.0 * integer_totals["owner_skips"] /
         integer_totals["candidate_visits"], 3) if integer_totals["candidate_visits"] else 0.0
+    core_totals = {key: sum(row["core_reentry_counters"][key] for row in rows)
+                   for key in ("incoming", "indexed_if_queries", "indexed_loop_queries",
+                               "indexed_if_upper_bound_steps",
+                               "indexed_loop_upper_bound_steps")}
+    core_totals["index_ready_owners"] = sum(
+        row["core_reentry_counters"]["ready"] for row in rows)
     parser_totals = {}
     for kind in rows[0]["parser_lookup_counters"]["lookups"]:
         calls = sum(row["parser_lookup_counters"]["lookups"][kind]["calls"] for row in rows)
@@ -216,6 +226,7 @@ def main() -> None:
         "symbolic_work_totals": symbolic_totals,
         "integer_owner_work_totals": integer_totals,
         "parser_lookup_work_totals": parser_totals,
+        "core_reentry_work_totals": core_totals,
         "owners": rows,
         "warning": "diagnostic times are NOT uninstrumented throughput or CPU-time; profiling further required"
     }
@@ -248,6 +259,9 @@ def main() -> None:
           f"{kind}_calls={counts['calls']} {kind}_steps={counts['steps']} "
           f"{kind}_avg={counts['steps_per_call']}"
           for kind, counts in parser_totals.items()))
+    print("MINIC_CORE_REENTRY20=PASS " + " ".join(
+          f"{key}={value}" for key, value in core_totals.items())
+          + " NOTE=fullscan_upper_bound_not_actual_iterations")
     print("MINIC_PHASE20_SCOPE=DIAGNOSTIC_ONLY selected20_not_full2064 "
           "old_and_diagnostic_compiler_same_C source_output_sha_equal "
           "integer_owner_skips_are_iteration_counts_not_cpu_savings")
