@@ -873,10 +873,11 @@ jobs:
           strace -f -qq -e trace=execve -o "$work/execve.log" \
             python3 tools/ci/minic-bootstrap-full-native-v1.py \
               --stage2 "$stage2" --toolchain "$artifact" --out "$work" --workers 4 --resume-stage3 "$GITHUB_WORKSPACE/build/bootstrap-stage2-native/previous/full-native" "${probe_args[@]}" \
-            >"$work/verdict.log" 2>&1
-          rc=$?
+            2>&1 | tee "$work/verdict.log"
+          rc=${PIPESTATUS[0]}
           set -e
-          tail -n 70 "$work/verdict.log"
+          # Tee makes every Stage3/Stage4 TU and link result observable live
+          # in the SAME job, with the original subprocess RC retained.
           # Fail closed even if a native binary unexpectedly dispatches GNU.
           if grep -Eq 'execve\("([^"]*/)?(gcc|g\+\+|cc|as|ld|objcopy|riscv64-linux-gnu-(gcc|g\+\+|as|ld|objcopy))"' "$work/execve.log"; then
             echo 'FULL_NATIVE_GNU_PROCESS=FAIL forbidden tool executed'
