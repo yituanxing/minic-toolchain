@@ -89,7 +89,10 @@ def main():
     results={}
     for key,test,extra in suites:
         print("BOOTSTRAP_NATIVE_SUITE=START case="+key,flush=True)
-        sec=call(["sh",test],{**env,**extra},out/"logs"/(key+".log"),timeout=900)
+        # Trace shell assertions so an existing silent set -e failure has a
+        # precise command/line in the retained artifact, not a guessed bug.
+        shell_args=["sh","-x",test] if key=="minipp-a0" else ["sh",test]
+        sec=call(shell_args,{**env,**extra},out/"logs"/(key+".log"),timeout=900)
         results[key]={"seconds":sec,"status":"PASS"}
         print("BOOTSTRAP_NATIVE_SUITE=PASS case=%s seconds=%.3f"%(key,sec),flush=True)
 
