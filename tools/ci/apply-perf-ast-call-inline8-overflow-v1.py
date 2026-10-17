@@ -192,7 +192,8 @@ modify("src/frontend/parser_postfix.c",[
 # Replace strictly reads of CALL IDs. Zero occurrence for parser writers
 # (already centralized in minic_c0_call_set_argument).
 for path in ("src/frontend/ast_traversal.c",
-             "src/frontend/ast_verifier.c","src/compiler/compiler.c"):
+             "src/frontend/ast_verifier.c","src/compiler/compiler.c",
+             "src/core/core_lower.c"):
     p=Path(path);s=p.read_text()
     pattern=r'\b([A-Za-z_][A-Za-z_0-9]*)->value\.call\.arguments\[([^\]]+)\]'
     s,count=re.subn(pattern,r'minic_c0_call_argument(\1, \2)',s)
