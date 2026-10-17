@@ -72,7 +72,14 @@ def split(args: argparse.Namespace) -> None:
     names = objects(args.full)
     if not 1200 <= len(names) <= 3000:
         raise ValueError(f"not a plausible certified full C universe: {len(names)}")
-    shard_objects = members(names, args.shard, args.count)
+    if args.balanced_plan is not None:
+        from linux_gnu_balanced_plan_v1 import balanced_members
+        all_members=balanced_members(names,args.balanced_plan)
+        shard_objects=all_members[args.shard]
+        print("GNU_MINIC_SHARD_SCHEDULER=SHA_BOUND_LPT source=fresh2064 shard=%d/7 objects=%d"
+              %(args.shard,len(shard_objects)))
+    else:
+        shard_objects=members(names,args.shard,args.count)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text("# MiniC GNU-golden shard; not standalone runtime evidence\n"
                            + "\n".join(shard_objects) + "\n")
@@ -98,10 +105,16 @@ def merge(args: argparse.Namespace) -> None:
     assembler = sha(args.assembler)
     gnu_image = sha(args.out / "arch/riscv/boot/Image")
     gold_manifest = sha(args.provenance / "gcc-objects.sha256")
+    if args.balanced_plan is not None:
+        from linux_gnu_balanced_plan_v1 import balanced_members
+        partitions=balanced_members(names,args.balanced_plan)
+        print("GNU_MINIC_SHARD_SCHEDULER=SHA_BOUND_LPT consumer=true 2064_verified=true")
+    else:
+        partitions=[members(names,index,7) for index in range(7)]
     collected: dict[str, Path] = {}
     for index in range(7):
         shard_dir = args.shards / f"shard-{index}"
-        subset = members(names, index, 7)
+        subset = partitions[index]
         subset_file = shard_dir / "full-objects.txt"
         if objects(subset_file) != subset:
             raise ValueError(f"shard {index} has noncanonical target membership")
@@ -269,7 +282,9 @@ def main() -> int:
     split_p.add_argument("--shard", type=int, required=True)
     split_p.add_argument("--count", type=int, default=7)
     split_p.add_argument("--output", type=Path, required=True)
+    split_p.add_argument("--balanced-plan", type=Path, default=None)
     merge_p = sub.add_parser("merge")
+    merge_p.add_argument("--balanced-plan", type=Path, default=None)
     for name in ("full", "shards", "evidence", "provenance", "out", "minic", "assembler"):
         merge_p.add_argument("--" + name, type=Path, required=True)
     sub.add_parser("self-test")
