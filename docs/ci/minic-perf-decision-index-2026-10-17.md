@@ -4,6 +4,12 @@
 > 本表是候选的**状态索引**，不是覆盖旧的原始数据；旧实验报告、补丁、CI artifacts 均保留。每次新优化先记录「相同结构以前试过没有、当时基线是什么、为何现在仍值得做」。
 > 基线：主线 `6612e2c1a3`（文档头），最新已认证的 Boolean/Core/Integer 联合源码经 [2064 + GNU link + QEMU P1 #38995964988](https://github.com/yituanxing/minic-toolchain/actions/runs/38995964988) PASS。这个 PASS 是 GNU PP → MiniC → GNU AS/LD，不能声称全 Mini 工具链共同通过。下列不同实验的加速比不能相乘，也不能伪称当前 2064 的同比速度。
 
+## 最新实测 AST 存储决策（同一已认证 MiniC，2026-10-17）
+
+**实测输入，不是猜测：** [AST 结构与 RSS 七文件 census #39001510651](https://github.com/yituanxing/minic-toolchain/actions/runs/39001510651) **SUCCESS**，`.s` 7/7 一致，原版/只读探针实际 GNU frozen Kbuild 文件。当前 `sizeof(MinicExpression)=680`、`sizeof(MinicFunction)=6536`、`sizeof(MinicFunctionType)=5216`；7 个 Linux 编译的 **1,158,376** 条表达式中，只有 **73,572 CALL（6.35%）**，超过 8 个参数的 CALL 总共只有 **26** 条；所有表达式静态预留 **64×8=512 字节** 的 CALL 参数槽。BTF 的 Expression 容量名义 **170 MiB**、Function 容量名义 **102.12 MiB**，实际原编译器 peak RSS **418.4 MiB**；其它文件见 [完整独立审计](minic-ast-memory-shape-census-2026-10-17.md)。旧版 `apply-perf-ast-footprint-trace-v1.py` / `linux-perf-ast-footprint-v1.sh` **已存在**；本次新记录是在最新 AST 优化后的 7-TU、两阶段、CALL histogram 和 OS RSS 扩充，不能把已有 footprint profiler 重新发明成一项新优化。
+
+**下一阶段归档：** `ast-expression-compact-call-payload` 状态 **needs-safe-design**。这次量到真实数据，确立了“固定 64 slot 可能支配 AST footprint”的**新**成本模型，但还没有证明减少 struct 实际编译加速多少；不得拿此结论直接在生产源码中裸替换 args 数组为 malloc 指针，必须先审查结构值复制、编译器 specializations、AST traversal、克隆/所有权与 OOM，bench-only 原型与明确回退。`ast-function-cold-parameter-facts` 次选；`layout-repeated-record-work` 先需新的 CPU 归因。**不要重复 PERF-033** 的 array capacity 2×→1.5× 历史拒绝方案。
+
 ## 0. 开卡检查（防止重复劳动）
 
 1. 先按模块、代码位置、**消除的重复工作/成本模型**匹配表中候选；名称不同（例如 `statement_blocks` generation stamp 与 per-TU workspace）不等于新问题。
