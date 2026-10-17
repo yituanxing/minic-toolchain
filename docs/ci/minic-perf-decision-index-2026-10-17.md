@@ -4,6 +4,24 @@
 > 本表是候选的**状态索引**，不是覆盖旧的原始数据；旧实验报告、补丁、CI artifacts 均保留。每次新优化先记录「相同结构以前试过没有、当时基线是什么、为何现在仍值得做」。
 > 基线：主线 `6612e2c1a3`（文档头），最新已认证的 Boolean/Core/Integer 联合源码经 [2064 + GNU link + QEMU P1 #38995964988](https://github.com/yituanxing/minic-toolchain/actions/runs/38995964988) PASS。这个 PASS 是 GNU PP → MiniC → GNU AS/LD，不能声称全 Mini 工具链共同通过。下列不同实验的加速比不能相乘，也不能伪称当前 2064 的同比速度。
 
+## 空间方向第一轮：固定 64 CALL 参数槽使用 32-bit ExpressionID（2026-10-17）
+
+**先做一张低风险单因素卡，不直接搬数据到 heap。** 当前 `MinicExpressionId` 是 `size_t`，但单 TU AST ID 实测最多 22 万级，< 2^32；`MinicExpression` 内嵌 64×8 字节参数槽，甚至 93.65% 非-CALL 都承担这些联合体字节。之前的 `PERF-033` 是尝试 2×→1.5× **数组扩容因子**，本次**不碰扩容**、也不改变参数个数/顺序，不增加 malloc/arena 对象：仅把 CALL 内嵌 64 个 AST ID 压成 `uint32_t[64]`，setter 对溢出显式检查、AST 添加新表达式超过 UINT32_MAX 时 fail，遍历 remap 保持 `size_t` 局部临时及回写检查。这个候选仍有 ID 上限合同变化和语义边界，因此只在 disposable CI checkout 生效、生产源码未改。
+
+**局部真实 A/B #39002084966 [SUCCESS](https://github.com/yituanxing/minic-toolchain/actions/runs/39002084966)**：原 Runtime-certified MiniC 编译为 baseline，在临时 CI 工作树应用 `tools/ci/apply-perf-ast-packed-call-ids-v1.py` 生成 candidate，`make check-ast-contract` PASS，原有 frozen Linux 6.6.143 `.i` **4/4 完全相同汇编**，同 Runner 各四次 old/new 交错。
+  
+| owner | old P50 ms | candidate P50 ms | 加速 |
+| --- | ---: | ---: | ---: |
+| arch/riscv/purgatory/ctype.o | 3.352 | 3.230 | 1.038×（3ms tiny TU，结果不能过度解读） |
+| fs/ext4/fsync.o | 451.610 | 426.582 | **1.059×** |
+| kernel/bpf/btf.o | 1295.356 | 1252.876 | **1.034×** |
+| mm/memcontrol.o | 1521.468 | 1456.711 | **1.044×** |
+| **合计** | **3271.785** | **3139.399** | **1.04217×** |
+
+单独的一次 OS RSS 进程观测：fsync 248,580→192,580 KiB（-22.5%）、btf 425,996→316,004 KiB（-25.8%）、memcontrol 397,328→292,636 KiB（-26.3%）；这是 peak RSS **一次运行**，尚不是系统内存压力或全量 RSS 的有统计把握的推断。没有实测 `sizeof(MinicExpression)` 新值时，不将“理论减少 256 bytes”伪装成 sizeof/RSS 认证。
+
+**正在进行 first500 扩组 #39002211001**：[Actions](https://github.com/yituanxing/minic-toolchain/actions/runs/39002211001)，复用原本 4-worker balanced-order、500 个 SHA-frozen Kbuild 输入、全部 500 `.s` 字节一致门，**只有满足实际收益/安全证据才考虑晋级正式源码以及 2064+GNU link+QEMU P1**。在此之前绝不称为已部署空间优化。特别提醒：如出现 >UINT32_MAX expression ID，packed 方案必然拒绝，需给定限制/兼容策略而不是悄悄发生截断。
+
 ## 最新实测 AST 存储决策（同一已认证 MiniC，2026-10-17）
 
 **实测输入，不是猜测：** [AST 结构与 RSS 七文件 census #39001510651](https://github.com/yituanxing/minic-toolchain/actions/runs/39001510651) **SUCCESS**，`.s` 7/7 一致，原版/只读探针实际 GNU frozen Kbuild 文件。当前 `sizeof(MinicExpression)=680`、`sizeof(MinicFunction)=6536`、`sizeof(MinicFunctionType)=5216`；7 个 Linux 编译的 **1,158,376** 条表达式中，只有 **73,572 CALL（6.35%）**，超过 8 个参数的 CALL 总共只有 **26** 条；所有表达式静态预留 **64×8=512 字节** 的 CALL 参数槽。BTF 的 Expression 容量名义 **170 MiB**、Function 容量名义 **102.12 MiB**，实际原编译器 peak RSS **418.4 MiB**；其它文件见 [完整独立审计](minic-ast-memory-shape-census-2026-10-17.md)。旧版 `apply-perf-ast-footprint-trace-v1.py` / `linux-perf-ast-footprint-v1.sh` **已存在**；本次新记录是在最新 AST 优化后的 7-TU、两阶段、CALL histogram 和 OS RSS 扩充，不能把已有 footprint profiler 重新发明成一项新优化。
