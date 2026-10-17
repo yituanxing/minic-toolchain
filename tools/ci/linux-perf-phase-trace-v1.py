@@ -121,6 +121,55 @@ def read_symbolic_counts(events):
     return found[0] if found else None
 
 
+
+# Read counters already present in the certified production compiler.
+# This is solely opt-in diagnostic parsing, not a production C modification.
+INTEGER_OWNER_RE = re.compile(
+    r"MINIC_INTEGER_OWNER_FILTER ready=([01]) candidates=(\d+) "
+    r"skipped_other_owner=(\d+) fallback=([01])"
+)
+PARSER_LOOKUP_RE = re.compile(r"MINIC_PARSER_LOOKUPS\s+(.+)")
+PARSER_LOOKUP_KINDS = ("local", "function", "global", "typedef", "enum",
+                       "fixed", "builtin_mem")
+
+
+def read_integer_owner_counts(events):
+    found = []
+    for _when, line in events:
+        m = INTEGER_OWNER_RE.search(line)
+        if not m:
+            continue
+        ready, candidates, skipped, fallback = map(int, m.groups())
+        if ready + fallback != 1 or skipped > candidates:
+            raise RuntimeError("invalid integer owner filter counters")
+        found.append({"ready": ready, "candidates": candidates,
+                      "skipped_other_owner": skipped, "fallback": fallback})
+    if len(found) != 1:
+        raise RuntimeError("expected exactly one integer owner report; got " + str(len(found)))
+    return found[0]
+
+
+def read_parser_lookup_counts(events):
+    found = []
+    for _when, line in events:
+        m = PARSER_LOOKUP_RE.search(line)
+        if not m:
+            continue
+        pairs = re.findall(r"(\w+)=(\d+)/(\d+)", m.group(1))
+        counts = {name: {"calls": int(calls), "steps": int(steps)}
+                  for name, calls, steps in pairs}
+        entities = {name: int(value) for name, value in
+                    re.findall(r"(\w+)=(\d+)(?!/)", m.group(1))
+                    if name in ("functions", "globals", "aliases", "expressions")}
+        if (set(counts) != set(PARSER_LOOKUP_KINDS) or len(pairs) != len(counts) or
+                set(entities) != {"functions", "globals", "aliases", "expressions"}):
+            raise RuntimeError("malformed canonical parser lookup census")
+        found.append({"lookups": counts, "entities": entities})
+    if len(found) != 1:
+        raise RuntimeError("expected exactly one parser lookup report; got " + str(len(found)))
+    return found[0]
+
+
 def summarize_specialization_trace(events):
     """Read existing opt-in specialization begin/end markers without touching IR."""
     started, total, calls = {}, {}, {}
@@ -148,7 +197,9 @@ def summarize_specialization_trace(events):
 
 
 def sample(executable,source,output,limit):
-    env=dict(os.environ,MINIC_BOOTSTRAP_TRACE="1",MINIC_BOOLEAN_SCAN_PROFILE="1",MINIC_SYMBOLIC_SCAN_PROFILE="1")
+    env=dict(os.environ, MINIC_BOOTSTRAP_TRACE="1", MINIC_BOOLEAN_SCAN_PROFILE="1",
+             MINIC_SYMBOLIC_SCAN_PROFILE="1", MINIC_INTEGER_OWNER_PERF="1",
+             MINIC_PARSER_PERF_TRACE="1")
     begun=time.perf_counter_ns()
     with subprocess.Popen([str(executable),"-S",str(source),"-o",str(output)],
                           env=env,stdout=subprocess.DEVNULL,
@@ -167,7 +218,10 @@ def sample(executable,source,output,limit):
     spec=summarize_specialization_trace(events)
     bool_counts=read_boolean_counts(events)
     symbolic_counts=read_symbolic_counts(events)
-    return {"boolean_counts":bool_counts, "symbolic_counts":symbolic_counts, "wall_ms":round((time.perf_counter_ns()-begun)/1000000,3),
+    integer_owner=read_integer_owner_counts(events)
+    parser_lookups=read_parser_lookup_counts(events)
+    return {"integer_owner":integer_owner, "parser_lookups":parser_lookups,
+            "boolean_counts":bool_counts, "symbolic_counts":symbolic_counts, "wall_ms":round((time.perf_counter_ns()-begun)/1000000,3),
             "stage_ms":stages,"interstage_gap_ms":gaps,
             "specialization_ms":spec,"function_counts":functions, "assembly_sha":digest(output)}
 
@@ -206,6 +260,10 @@ def main():
                        (800000,"MINIC_BOOTSTRAP_TRACE stage=spec-integer-transitive state=begin functions=5"),
                        (2000000,"MINIC_BOOTSTRAP_TRACE stage=spec-integer-transitive state=end-success functions=5")]
         assert summarize_specialization_trace(integer_probe)["spec-integer-transitive"]["ms"]==1.2
+        integer_example=[(0,"MINIC_INTEGER_OWNER_FILTER ready=1 candidates=100 skipped_other_owner=98 fallback=0")]
+        assert read_integer_owner_counts(integer_example)["skipped_other_owner"]==98
+        parser_example=[(0,"MINIC_PARSER_LOOKUPS local=4/35 function=3/9 global=2/15 typedef=8/40 enum=1/3 fixed=2/5 builtin_mem=4/7 functions=100 globals=80 aliases=50 expressions=2000")]
+        assert read_parser_lookup_counts(parser_example)["lookups"]["local"]=={"calls":4,"steps":35}
         example=[(0,"MINIC_BOOLEAN_SCAN_PROFILE local_queries=3 local_arena_scan_potential=200 callers=4 range_callers=2 expression_visits=1000 call_expression_visits=9 variant_lookups=3 variant_probes=14 direct_clones=1 transitive_clones=1")]
         assert read_boolean_counts(example)["expression_visits"]==1000
         symbolic_example=[(0,"MINIC_SYMBOLIC_SCAN_PROFILE direct_expression_visits=10 direct_call_visits=3 direct_variant_lookups=1 direct_variant_probes=5 transitive_callers=2 transitive_expression_visits=100 transitive_owner_skips=88 transitive_call_visits=7 transitive_pointer_argument_evals=4 transitive_variant_lookups=1 transitive_variant_probes=2 owner_index_ready=1 direct_clones=1 transitive_clones=1")]
