@@ -44,7 +44,9 @@
 
 **不同复杂度候选**：用仅在**单次 AST verifier invocation 内有效**的 bitmap，在进入 ARRAY_TYPE 验证前从现存 expressions/type aliases/global/locals/records/functions 一次性标记拥有者；`array_type_id` 的查询 O(1)，不再为每个数组类型扫描所有表达式。严格遵守 expression/typedef 非 pointer 引用与其它类别只认 pointer 的原规则，以及 extern global array 的特殊例外。bitmap OOM 时保留原线性回退；正常和失败路径释放；不删除 PARSED 或 NORMALIZED 的独立完整校验。候选只用 `tools/ci/apply-perf-ast-array-owner-pass-v1.py` 在临时 CI checkout 修改 `ast_verifier.c`，正式源码仍保持 2064/P1 已认证版本。
 
-**状态：`five-owner A/B pending`**；[本次既有 perf500 Job #38999873072](https://github.com/yituanxing/minic-toolchain/actions/runs/38999873072) 复用 5 个 SHA-locked Linux 真实 `.i`，每臂 4 次配对交错，要求 5/5 汇编字节一致。按结果决定是否值得 first500 扩组；不能在成功前写“已优化”。
+**五文件局部 A/B 已完成**：[CI #38999873072](https://github.com/yituanxing/minic-toolchain/actions/runs/38999873072) **SUCCESS**；全部 GNU Kbuild 输入 SHA 固定，old/new 各四次交错，**5/5 汇编完全一致**：btf **1134.128→1094.960ms（1.0358×）**、fsync **402.568→384.805ms（1.0462×）**、events-core **1499.724→1464.439ms（1.0241×）**、memcontrol **1340.017→1297.097ms（1.0331×）**、ext4-super **905.766→871.492ms（1.0393×）**，合计 **5282.203→5112.793ms（1.0331×；减时 3.21%）**。这是真实但**经过热点选择**的局部增益，不能泛化为 Linux 500/2064 平均增益。
+
+**500 个独立数据点的晋级门已经触发**：[CI #38999997399](https://github.com/yituanxing/minic-toolchain/actions/runs/38999997399)。仅复用已有 `perf500` job / SHA-locked corpus / balanced-order 4 worker old-vs-new 测量及 500/500 `.s` 哈希门；不引入 workflow/job，不复测同样的局部 4x，结果未返回前仍保持**生产源码不变**、不声称全量加速。
 
 ## 1. 已拒绝或因边际收益不足而停止：默认不重开
 
