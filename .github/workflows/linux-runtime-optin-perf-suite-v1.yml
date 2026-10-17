@@ -19,6 +19,8 @@ on:
   # Current phase20 opt-in also reads preexisting Integer-owner / Parser-lookup
   # diagnostics; no new job or production compiler changes (2026-10-17).
   # Metrics are explicitly opted in; generic historical stage A/B stays compatible.
+  # Current Core reentry index counters are now included in the same opt-in
+  # phase20 census, using preexisting C telemetry [minic-current-phase20].
   push:
     branches: [main]
     paths:
