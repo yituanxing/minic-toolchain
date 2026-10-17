@@ -755,6 +755,24 @@ jobs:
           path: build/linux-perf-corpus
           key: linux-6.6.143-first500-rv64-v1-${{ hashFiles('tests/external/linux/batch_probe.sh', 'tests/external/linux/probe.sh', 'tests/external/linux/replay-indices.txt') }}
 
+      # One-factor source-scoped Symbolic CALL buckets, not the already
+      # rejected PERF-023 global CALL-only index. Uses the existing job/corpus.
+      - name: Five-owner source-scoped Symbolic CALL buckets A/B
+        if: contains(github.event.head_commit.message, '[minic-symbolic-source-call-ab]')
+        timeout-minutes: 30
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          root="$GITHUB_WORKSPACE/build/linux-perf-audit-v1"
+          corpus="$GITHUB_WORKSPACE/build/linux-perf-corpus"
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
+            libc6-dev-riscv64-cross python3 make time >/dev/null
+          bash tools/ci/linux-perf-symbolic-source-bucket-screen-v1.sh \
+            "$root" "$corpus" | tee "$root/evidence/symbolic-source-call-screen.log"
+          grep -Fq 'MINIC_SYMBOLIC_SOURCE_BUCKET_AB=PASS' \
+            "$root/evidence/symbolic-source-call-screen.log"
+
       # Ownership safety gate before any production change: the only
       # original switch storage owner is the top-level Parser; speculative
       # lexer snapshots must not change cases. Negative syntax paths must
@@ -3274,6 +3292,8 @@ jobs:
           name: linux-current-profile-first500-perf-v1
           path: |
             build/linux-perf-audit-v1/evidence
+            build/linux-perf-audit-v1/symbolic-source-call-ab/*/paired-result.json
+            build/linux-perf-audit-v1/symbolic-source-call-ab/*/*-rss.txt
             build/linux-perf-audit-v1/boolean-domain-ab500/differential.json
             build/linux-perf-audit-v1/boolean-domain-ab20/boolean-domain-paired20.json
             build/linux-perf-audit-v1/boolean-domain-ab20/*/paired-result.json
