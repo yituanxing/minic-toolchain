@@ -103,5 +103,18 @@
 
 **已可直接从原始 Callgrind 调用树复用的计数（不重新跑 profiler）：** BTF 的 `minic_enqueue_core_named_function` **1,643 calls**，inclusive **430,399,433 Ir（4.21%）**，self **281,724,220 Ir（2.75%）**；fsync 仅 **36 calls**，inclusive **6,437,463 Ir（0.17%）**。这个大小对照支持“多次名称解析在大型 TU 上构成真实成本”的假设，但不能直接判定循环平均扫描数（编译器会内联 helper）或者 wall time。BTF 作为候选热点、fsync 作为自然小样本对照，比重复优化已被淘汰的 Parser Global Hash 更有针对性。
 
+**真实局部 A/B 初筛（2026-10-17）**：[CI #38998913682](https://github.com/yituanxing/minic-toolchain/actions/runs/38998913682) **SUCCESS**。当前已验证生产版本为 baseline，候选只在 CI 临时 checkout 执行 `tools/ci/apply-perf-core-reachability-name-index-v1.py`；索引构建一次，保证相同 assembler symbol 取最早函数 ID，分配失败回退原线性搜索，作用域仅 Core reachability final pruning。5 个 frozen first500 Linux `.i` old/new 各四次交错配对，**5/5 输出汇编严格字节相同**。
+
+| Linux owner | old P50 ms | new P50 ms | speedup |
+| --- | ---: | ---: | ---: |
+| kernel/bpf/btf.o | 1405.635 | 1318.361 | **1.0662×** |
+| kernel/events/core.o | 1875.233 | 1751.404 | **1.0707×** |
+| mm/memcontrol.o | 1646.789 | 1581.615 | 1.0412× |
+| fs/ext4/fsync.o | 488.609 | 495.128 | 0.9868×（单组轻微回退） |
+| fs/ext4/super.o | 1099.972 | 1036.078 | 1.0617× |
+| **五个样本中位数之和** | **6516.238** | **6182.586** | **1.0540×** |
+
+此结果说明 Core 名称扫描确实值得独立研究，但不是整个 Linux 的 5.4% 提速：小输入中的索引建表额外成本可抵消收益，五文件样本被刻意挑选为热点、不能代表全部 500/2064。**候选状态 `verified-local-screen / 500 pending`**，不进入生产主线；已启动原已有 perf500 Job 的 first500 完整 SHA-frozen single-run paired A/B [#38999084169](https://github.com/yituanxing/minic-toolchain/actions/runs/38999084169)，复用原 `linux-perf-frozen-corpus-differential-v1.py` 与 4-worker、balanced old/new，初筛五文件不再在该 run 中重复做 4x；其结果和可能的单文件回退仍需严格审计。**没有执行 2064 Linux+QEMU，禁止称之为已晋级或最终性能提升。**
+
 **待验证卡 `core-reachability-name-lookup`**：先只在当前 frozen BTF / events-core 上计 `minic_core_named_function_id` 的调用量、总比较次数、失败比率及入口实际 CPU 成本，证明成本模型后才考虑 **per-Core reachability** 的只读 `symbol name → earliest function ID` 索引，严格保留 assembler_name 优先、大小写/长度、first-match、未知/OOM 原线性路径以及索引生命周期；不得创建跨 TU/全局静态未受限缓存。没有新证据之前不为新 Hash 直接触发 500/2064。
 
