@@ -35,6 +35,20 @@
 
 备选路径：Variant lookup 共有 **15,921,203** 次线性 candidate probes（1,288 次 lookup，平均约 12,361 probes），具备按 source_id 筛除无关变体的潜力，但目前缺少同阶段中这部分的**独占 CPU 成本**，不可直接认定它比 603.76M expression 迭代更值得优先修改。第三个观察是 Parser 仍在这一组样本中耗时更高，Symbolic 若独立 A/B 无足够边际收益应立即转回 Parser/Core，而非无限细抠本阶段。
 
+### 第七轮 source-grouped Symbolic CALL 索引：500 汇编等价、回退复核完成（2026-10-17）
+
+**与旧 PERF-023 的区别：** 旧版仅建立全局升序 CALL-ID 列表，依然要让每个 Clone 扫描所有 CALL；本版是 **Source Function 分桶 CALL + 共享/未知 Owner 保守兜底桶**，两个桶按 ExpressionId 稳定有序合并，新的 Expression 按原逻辑处理，任何分配失败都回退旧完整遍历。候选 `tools/ci/apply-perf-symbolic-source-bucket-calls-v1.py` 只用于 CI 临时 checkout，不修改正式生产 `src/compiler/compiler.c`。
+
+**五个真实 owner 初筛：** [CI #39022058658](https://github.com/yituanxing/minic-toolchain/actions/runs/39022058658) 里候选 `MINIC_SYMBOLIC_SOURCE_BUCKET_AB=PASS`，5/5 `.s` byte-identical，累计 P50 **3789.997→3332.833ms / 1.13717×**；但 Job 最终 FAIL 是同 Job 中旧 Parser smoke 误依赖未构建的 `baseline-toolchain/bin/minic`，不是候选编译不通过。后续 [#39022225132](https://github.com/yituanxing/minic-toolchain/actions/runs/39022225132) 五文件重测 **3855.602→3398.774ms / 1.13441×**，4/5 快，1 个微型 owner（kernel/printk/sysctl）几乎持平。这两个数字来自不同 runner，不能叠加。
+
+**真正 first500：** [CI #39022225132](https://github.com/yituanxing/minic-toolchain/actions/runs/39022225132) 原来 SHA-frozen Linux 6.6.143 GNU Kbuild `.i`，相同 Runner、四 worker、balanced-order；**500/500 `.s` 全部字节一致**。基线累计 TU wall **254748.100ms**、候选 **236743.979ms**，累计节约 **18004.121ms（约 7.07%）**，**1.07605×**。单轮有 **57/500** 个候选 wall 比基线慢，不能简单忽略。这是累计单 TU wall，不是 7 路 Kbuild critical-path wall，不是 2064/QEMU。该 Job 最终 FAIL 是 unrelated legacy `Paired integrated optimization A/B` 访问未构建 baseline 路径；候选自己的五文件与 500 文件两步 **SUCCESS** 且保留 artifact。后续单独隔离了旧 Job 的不适用步骤。
+
+**11 文件回退复核：** [现有 perf500 CI #39022601919](https://github.com/yituanxing/minic-toolchain/actions/runs/39022601919) **整体 SUCCESS**。独立重建相同生产 C+临时候选编译器，重用既有 `linux-perf-pinned-single-paired-ab-v1.py`，原 first500 中最坏的 8 个单轮负收益文件，外加 3 个正对照，每 arm 预热 + 4 次交错，输出再次严格 byte-identical；wall/user/sys P50+MAD 判别。**11/11 成功，0/11 复现有意义的 CPU+wall 同时回退**。例如原 500 单轮表现最差的 `fs/nfs/client.o` 复核 **1.11606×**，`fs/nfs/blocklayout/extent_tree.o` **1.12133×**，正对照 `kernel/events/core.o` **1.17672×**，`mm/memcontrol.o` **1.17026×**。其余 49 个单轮负收益尚未逐个复核，不能写成全部消失。
+
+**RSS 没有统一下降：** 5-owner 独立单进程 /usr/bin/time 峰值 KiB：fsync 88984→89080、BTF 157024→154436、events/core 183020→182148、memcontrol 149064→150372、printk/sysctl 24788→25896。候选增加索引内存，不能宣称是统一节省空间的优化。
+
+**当前裁决：** `symbolic-source-grouped-calls-v1 = candidate / first500-byte-identical / 11-owner-regression-triage-pass / production-not-modified / 2064-QEMU-pending`。可进入专门的 OOM/共享表达式/late-appended-expression 和边界负例审计与 ASan/UBSan，再考虑提交生产源码及 **GNU PP→MiniC→GNU AS/LD 的 2064/GNU link/QEMU P1** 运行时门禁。在安全验证、整内核运行时成功之前，绝不记为 `integrated` 或 `runtime-certified`。
+
 ## 第六轮完成后最新 CPU 归因：Parser hot-copy 病因解除，下一张卡需重选（2026-10-17）
 
 **全量来源准确性：** 第六轮正式源码 [cbbd5654](https://github.com/yituanxing/minic-toolchain/commit/cbbd5654cc8f7fa508e798bc0262f49e4c32d3ee)，配对测试 500/500 byte-identical、**1.08697×（累积 wall 180349.471→165919.403ms, -8.00%）**、Sanitizer + 9 例 parser edge + 10-owner 8x 回退复核已通过。**完整 Runtime [#39016455728](https://github.com/yituanxing/minic-toolchain/actions/runs/39016455728) SUCCESS**：7/7 构建分片、`GNU_MINIC_SHARD_MERGE=PASS objects=2064 shards=7`、GNU Link `COHORT_LINK=REUSED name=full_all_verified selection=prefix:2064`、QEMU `COHORT_P1=PASS syscalls=12 python_era_oracle=PASS`、`COHORT_RESULT=PASS candidate_objects=2064 scope=FULL_C_UNIVERSE same_config=true`。Focused T1 [#39016455740](https://github.com/yituanxing/minic-toolchain/actions/runs/39016455740) SUCCESS。本轮最终标签：`parser-cold-switch-heap-owned-v1 = integrated / runtime-certified / keep / do-not-repeat`。
