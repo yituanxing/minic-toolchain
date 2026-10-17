@@ -4,6 +4,27 @@
 > 本表是候选的**状态索引**，不是覆盖旧的原始数据；旧实验报告、补丁、CI artifacts 均保留。每次新优化先记录「相同结构以前试过没有、当时基线是什么、为何现在仍值得做」。
 > 基线：主线 `6612e2c1a3`（文档头），最新已认证的 Boolean/Core/Integer 联合源码经 [2064 + GNU link + QEMU P1 #38995964988](https://github.com/yituanxing/minic-toolchain/actions/runs/38995964988) PASS。这个 PASS 是 GNU PP → MiniC → GNU AS/LD，不能声称全 Mini 工具链共同通过。下列不同实验的加速比不能相乘，也不能伪称当前 2064 的同比速度。
 
+## 当前源 Integer Source Owner / Parser Lookup 结构开卡复核（2026-10-17，已闭环）
+
+**正式诊断验收**：[复用原 perf500 Job，20 TU #39035607415](https://github.com/yituanxing/minic-toolchain/actions/runs/39035607415) **SUCCESS**；触发提交 `141c9d2c7dd642fe74b4ce9fdf68dd2cc8e98105`。**零生产 `src/` 修改、零 2064 重编、零新 workflow/job**。仅用已认证编译器内置的 `MINIC_INTEGER_OWNER_PERF`、`MINIC_PARSER_PERF_TRACE` + 现有 frozen first500 的 10 hot / 5 middle / 5 light 代表样本，测试数据仍保持原 `.i` SHA；基准/诊断版本 **20/20 `.s` 严格字节一致**。旧 `apply-perf-symbolic-scan-census-v1.py` 与主线已经集成的 Source-grouped Symbolic CALL 结构不兼容，首次 #39035468802 在过期 source anchor 上失败、未测 20 TU；随后在这一**特定诊断**绕开过期 Symbolic 内层探针，仅保留准确的外层阶段计时。旧 Symbolic 内层指标明确 `SKIPPED`，不可谎报为零成本。
+
+| 对现有算法的直接只读计数（20 个有意分层的样本，并非 2064 全体） | 测值 |
+| --- | ---: |
+| Integer transitive CALL 候选循环访问 | **22,115,982** |
+| 经现有 Source Owner 判断跳过 | **21,573,776 / 97.548%** |
+| Owner 判定后剩余候选访问 | **542,206** |
+| Integer owner index 已就绪 / 回退文件数 | **20 / 0** |
+| Parser local 名称查找 calls / 扫描步数 / steps per call | **229,914 / 590,291 / 2.567** |
+| Parser function 查找 calls / 扫描步数 / steps per call | **577,416 / 979,005 / 1.695** |
+| Parser typedef 查找 calls / 扫描步数 / steps per call | **433,146 / 591,017 / 1.364** |
+| Parser global 查找 calls / 扫描步数 / steps per call | **166,651 / 277,139 / 1.663** |
+| 当前 20 TU 诊断时间总和 | **6,513.707 ms** |
+| Parser 阶段诊断 wall | **2,099.785 ms / 32.24%** |
+| Core-set 阶段诊断 wall | **1,193.381 ms / 18.32%** |
+| 整个 Integer Specialization 阶段诊断 wall | **276.671 ms / 4.25%** |
+
+**裁决：先不实现新的 Integer source-grouped CALL 索引，更不扩大 500/2064。** Owner 过滤率高确实说明能避免大量访问，但**整个 Integer 阶段在这 20 个样本中只占诊断总 wall 4.25%**；把这 97.548% 直接转成编译速度改善是错误的，分桶建表本身也付出成本。该 4.25% 只是本轮特定带诊断环境中整个阶段的一个**宽松上界**，不是未经插桩生产版的严格 CPU 上界。只有新版本更广泛样本的 CPU/profile 再次证明此阶段上升为高收益瓶颈，才重新开卡。Parser local/typedef 实际平均扫描 2.567/1.364 步，不支持立刻加新 Hash；尤其旧 Core Name / Parser Global Index 已被否决，禁止新命名重做。优先关注 **Parser 真正高 CPU 子路径**（不是简单局部名称查找）、Core-set 的剩余 18.32%，以及已完成两个全量 run 交叉验证但尚无真构建 A/B 的 LPT 分片调度。此诊断数据不能声称 2064 文件整体加速，也没有 QEMU 验收，因为生产源码未修改。
+
 ## 第七轮后当前生产版：2064 Linux 全量**重新编译**速度与内存验收（2026-10-17）
 
 **完整新鲜运行**：[GitHub Actions #39033023656](https://github.com/yituanxing/minic-toolchain/actions/runs/39033023656) **SUCCESS**；对应 CI 触发 commit `f4fa32b72b92e1c7d9428885950d134c3aa17b1f`。不是把旧 2064 编译缓存回放冒充新速度：新增仅 opt-in `[minic-fresh-full2064-metrics]`，**明确跳过七个 shard 的历史对象 cache restore 和 cache save**，保持生产 `src/...` 完全不变、保留 pinned source-SHA 验证。每个 shard 现有同一 GitHub Runner Kbuild `-j6`；整体并行是 7 个独立 GitHub Runner。现有 `COHORT_STAGE_TIME` + opt-in `/usr/bin/time %M/%U/%S` 按每次 MiniC 子进程记录真实 RSS 与 CPU。另重新合并所有 2064 MiniC 对象、GNU LD 链接、**QEMU P1 12/12 + Python-era oracle PASS**：
