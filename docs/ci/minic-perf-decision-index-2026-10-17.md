@@ -20,7 +20,9 @@
 
 单独的一次 OS RSS 进程观测：fsync 248,580→192,580 KiB（-22.5%）、btf 425,996→316,004 KiB（-25.8%）、memcontrol 397,328→292,636 KiB（-26.3%）；这是 peak RSS **一次运行**，尚不是系统内存压力或全量 RSS 的有统计把握的推断。没有实测 `sizeof(MinicExpression)` 新值时，不将“理论减少 256 bytes”伪装成 sizeof/RSS 认证。
 
-**正在进行 first500 扩组 #39002211001**：[Actions](https://github.com/yituanxing/minic-toolchain/actions/runs/39002211001)，复用原本 4-worker balanced-order、500 个 SHA-frozen Kbuild 输入、全部 500 `.s` 字节一致门，**只有满足实际收益/安全证据才考虑晋级正式源码以及 2064+GNU link+QEMU P1**。在此之前绝不称为已部署空间优化。特别提醒：如出现 >UINT32_MAX expression ID，packed 方案必然拒绝，需给定限制/兼容策略而不是悄悄发生截断。
+**冻结 first500 晋级门已经 SUCCESS**：[CI #39002211001](https://github.com/yituanxing/minic-toolchain/actions/runs/39002211001)。使用旧版与 candidate **完全相同**的两个编译器构建配置，同一 Runner、4 worker、250/250 balanced execution order，全部 **500/500 Linux Kbuild .i 输入输出 `.s` SHA 完全相同**：旧版累计 **289603.901ms**、packed-ID 版 **269198.125ms**，**加速 1.07580×、累计耗时降低 7.045%、节省约 20.406 秒**；单 TU 倍率中位数 **1.08192×**。这不能直接当作 7-worker Kbuild 总 Wall 时间提速。同一 500 文件里 candidate **7/500** 单轮 wall 比旧版慢，Top3：`fs/nfs/client.o` +131.536ms、`fs/nfs/blocklayout/extent_tree.o` +65.376ms、`init/version.o` +65.055ms；之前类似单次 Runner 回退大量由后续 CPU/user 多轮复核逆转，应保持原始清单，不直接定性为算法回归。
+
+**晋级决策：`strong-500 / edge-and-T1-required / pre-QEMU`**。总耗时减少约 7.0%，同时 4 文件独立 RSS 下降 22–26%，超过此前被拒绝的大部分局部方案。但 packed 32-bit 参数存在 **ID 范围显式收窄**，需要先补极值参数数/解析合约与 AST 对外复制/访问语义、确认 0..64 上限，避免本来在 64-bit ABI 上允许的 `size_t` ID 被悄悄截断，之后才把 opt-in 改入生产源并做真正 7 路 2064+GNU 链接+QEMU。**当前生产源码未变，不能把成功的 500 样本冒充 runtime-certified。** Synthetic CI #39002385573 的首轮 FAIL **不是生产编译器差异**：fixture 在已经预处理的 `.i` 开头误写了 C 注释，原版/候选同在 line1:1 `expected type name`，已经删除该注释并以同样 opt-in lane [#39002452132](https://github.com/yituanxing/minic-toolchain/actions/runs/39002452132) 复核。
 
 ## 最新实测 AST 存储决策（同一已认证 MiniC，2026-10-17）
 
