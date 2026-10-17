@@ -734,6 +734,8 @@ jobs:
           python3 tools/ci/minic-bootstrap-stage2-native-runtime-v1.py \
             --toolchain "$artifact" --stage2 "$stage2" --out "$work" \
             | tee "$GITHUB_WORKSPACE/build/bootstrap-stage2-native/verdict.log"
+          grep -Fq 'BOOTSTRAP_ALL_MINI_C_CHAIN=PASS Stage2_built_MiniPP=true' \
+            "$GITHUB_WORKSPACE/build/bootstrap-stage2-native/verdict.log"
           grep -Fq 'BOOTSTRAP_STAGE2_NATIVE_RUNTIME=PASS' \
             "$GITHUB_WORKSPACE/build/bootstrap-stage2-native/verdict.log"
 
