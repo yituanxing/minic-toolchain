@@ -114,6 +114,10 @@ def main() -> None:
             for name in ("spec-boolean-direct","spec-boolean-transitive"):
                 if name not in spec or spec[name]["calls"] != 1:
                     raise RuntimeError(f"Boolean subphase missing: {owner}, {name}")
+        integer_owner = new.get("integer_owner")
+        parser_lookups = new.get("parser_lookups")
+        if integer_owner is None or parser_lookups is None:
+            raise RuntimeError(f"missing native Integer/Parser counters for {owner}")
         symbolic_counts = new.get("symbolic_counts")
         if symbolic_counts is None:
             raise RuntimeError(f"Symbolic scan counters missing for {owner}")
@@ -156,7 +160,9 @@ def main() -> None:
             "specialization_calls": {k: spec[k]["calls"] for k in SPECIALIZATION},
             "stage_function_counts": new["function_counts"],
             "boolean_counters": boolean_counts,
-            "symbolic_counters": symbolic_counts})
+            "symbolic_counters": symbolic_counts,
+            "integer_owner_counters": integer_owner,
+            "parser_lookup_counters": parser_lookups})
         print(f"MINIC_PHASE20_PROGRESS checked={len(rows)}/20 owner={owner} "
               f"group={group} traced_ms={new['wall_ms']:.3f} "
               f"spec_integer_ms={spec['spec-integer']['ms']:.3f} "
@@ -165,7 +171,10 @@ def main() -> None:
               f"expr_visits={boolean_counts['expression_visits'] if boolean_counts else 'NA'} "
               f"domain_queries={boolean_counts['local_queries'] if boolean_counts else 'NA'} "
               f"symbolic_owner_skips={symbolic_counts['transitive_owner_skips']} "
-              f"symbolic_variant_probes={symbolic_counts['transitive_variant_probes']}", flush=True)
+              f"symbolic_variant_probes={symbolic_counts['transitive_variant_probes']} "
+          f"integer_candidates={integer_owner['candidates']} "
+          f"integer_owner_skips={integer_owner['skipped_other_owner']} "
+          f"parser_local_steps={parser_lookups['lookups']['local']['steps']}", flush=True)
 
     totals = {key: round(sum(row["phase_ms_exclusive"][key] for row in rows), 3)
               for key in rows[0]["phase_ms_exclusive"]}
@@ -176,6 +185,20 @@ def main() -> None:
         if all(row["boolean_counters"] is not None for row in rows) else {})
     symbolic_totals = {field: sum(row["symbolic_counters"][field] for row in rows)
                        for field in rows[0]["symbolic_counters"]}
+    integer_totals = {
+        "candidate_visits": sum(row["integer_owner_counters"]["candidates"] for row in rows),
+        "owner_skips": sum(row["integer_owner_counters"]["skipped_other_owner"] for row in rows),
+        "indexed_owners": sum(row["integer_owner_counters"]["ready"] for row in rows),
+        "fallback_owners": sum(row["integer_owner_counters"]["fallback"] for row in rows)}
+    integer_totals["surviving_visits"] = integer_totals["candidate_visits"] - integer_totals["owner_skips"]
+    integer_totals["skipped_percent"] = round(100.0 * integer_totals["owner_skips"] /
+        integer_totals["candidate_visits"], 3) if integer_totals["candidate_visits"] else 0.0
+    parser_totals = {}
+    for kind in rows[0]["parser_lookup_counters"]["lookups"]:
+        calls = sum(row["parser_lookup_counters"]["lookups"][kind]["calls"] for row in rows)
+        steps = sum(row["parser_lookup_counters"]["lookups"][kind]["steps"] for row in rows)
+        parser_totals[kind] = {"calls": calls, "steps": steps,
+                               "steps_per_call": round(steps/calls, 3) if calls else 0.0}
     summary = {
         "schema": "minic-current-linux-phase20-v1",
         "scope": "20 stratified frozen Linux .i, diagnostic wall time only",
@@ -189,6 +212,8 @@ def main() -> None:
         "phase_totals_ms_nonoverlap": totals,
         "boolean_work_totals": boolean_totals,
         "symbolic_work_totals": symbolic_totals,
+        "integer_owner_work_totals": integer_totals,
+        "parser_lookup_work_totals": parser_totals,
         "owners": rows,
         "warning": "diagnostic times are NOT uninstrumented throughput or CPU-time; profiling further required"
     }
@@ -212,7 +237,15 @@ def main() -> None:
         print("MINIC_BOOLEAN20=SKIPPED outdated_census_instrumentation=true")
     print("MINIC_SYMBOLIC20=PASS " + " ".join(
           f"{field}={value}" for field,value in symbolic_totals.items()))
-    print("MINIC_PHASE20_SCOPE=DIAGNOSTIC_ONLY not_normal_speed not_QEMU_P1")
+    print("MINIC_INTEGER20=PASS " + " ".join(
+          f"{field}={value}" for field,value in integer_totals.items()))
+    print("MINIC_PARSER20=PASS " + " ".join(
+          f"{kind}_calls={counts['calls']} {kind}_steps={counts['steps']} "
+          f"{kind}_avg={counts['steps_per_call']}"
+          for kind, counts in parser_totals.items()))
+    print("MINIC_PHASE20_SCOPE=DIAGNOSTIC_ONLY selected20_not_full2064 "
+          "old_and_diagnostic_compiler_same_C source_output_sha_equal "
+          "integer_owner_skips_are_iteration_counts_not_cpu_savings")
 
 
 if __name__ == "__main__":
