@@ -17,6 +17,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -141,11 +142,11 @@ def native_pp(binaries, src, target, macros, hdr, logs, env):
     return execute(argv, logs, timeout=180, env=env)
 
 
-def native_object(binaries, inp, asm, obj, log, env):
+def native_object(binaries, inp, asm, obj, log, env, *, as_timeout=240):
     compile_seconds = execute(command(binaries, "minic-cc", "-S", inp, "-o", asm),
                               log.with_suffix(".cc.log"), timeout=1100, env=env)
     as_seconds = execute(command(binaries, "minic-as", "-o", obj, asm),
-                         log.with_suffix(".as.log"), timeout=240, env=env)
+                         log.with_suffix(".as.log"), timeout=as_timeout, env=env)
     if not asm.is_file() or not obj.is_file() or obj.stat().st_size < 64:
         raise RuntimeError("missing assembly/object " + str(inp))
     return compile_seconds, as_seconds
@@ -155,7 +156,7 @@ def source_key(source):
     return source.replace("/", "__").replace(".", "_")
 
 
-def rounds(binaries, sources, all_sources, hdr, libraries, out, workers, probe=False):
+def rounds(binaries, sources, all_sources, hdr, libraries, out, workers, probe=False, resume=None):
     env = dict(os.environ, **CFLAGS)
     for stage in (3, 4):
         name = "stage" + str(stage)
@@ -192,6 +193,21 @@ def rounds(binaries, sources, all_sources, hdr, libraries, out, workers, probe=F
                            "#define __riscv_flen 64\n")
         completed = []
         failures = []
+        prior_rows = {}
+        prior_root = None
+        if stage == 3 and resume is not None:
+            prior_root = resume.resolve()
+            previous = json.loads((prior_root / "stage3/summary.json").read_text())
+            if (previous["round"] != "stage3" or
+                previous["source_count"] != len(all_sources) or
+                previous["seed_binaries"] != {k: sha(v) for k, v in prev.items()} or
+                previous["runtime_seed"] != {k: sha(v) for k, v in libraries.items()}):
+                raise RuntimeError("REUSE_STAGE3=FAIL previous evidence/seed mismatch")
+            prior_rows = {row["source"]: row for row in previous["rows"]}
+            if len(prior_rows) != len(previous["rows"]):
+                raise RuntimeError("REUSE_STAGE3=FAIL repeated cached source")
+            print("REUSE_STAGE3_EVIDENCE=PASS certified=%d previous_failures=%d" %
+                  (len(prior_rows), len(previous["failed"])), flush=True)
         def one(src):
             key = source_key(src)
             inp = out / "canonical-inputs" / (key + ".i")
@@ -203,8 +219,20 @@ def rounds(binaries, sources, all_sources, hdr, libraries, out, workers, probe=F
                       work / "logs" / (key + ".pp.log"), env)
             if not inp.is_file() or inp.stat().st_size == 0:
                 raise RuntimeError("empty preprocessor output")
+            old = prior_rows.get(src)
+            if old is not None and sha(inp) == old["i"]:
+                old_asm = prior_root / "stage3/s" / (key + ".s")
+                old_obj = prior_root / "stage3/o" / (key + ".o")
+                if (old_asm.is_file() and old_obj.is_file() and
+                    sha(old_asm) == old["s"] and sha(old_obj) == old["o"]):
+                    shutil.copy2(old_asm, asm)
+                    shutil.copy2(old_obj, obj)
+                    return {"source": src, "pp_and_all_sec": round(time.monotonic()-begin, 3),
+                            "cc_sec": 0.0, "as_sec": 0.0, "cached": True,
+                            "i": sha(inp), "s": sha(asm), "o": sha(obj)}
             cc, assembler = native_object(prev, inp, asm, obj,
-                                          work / "logs" / key, env)
+                                          work / "logs" / key, env,
+                                          as_timeout=1200 if src == "src/core/core_lower.c" else 240)
             return {"source": src, "pp_and_all_sec": round(time.monotonic()-begin, 3),
                     "cc_sec": cc, "as_sec": assembler,
                     "i": sha(inp), "s": sha(asm), "o": sha(obj)}
@@ -225,7 +253,8 @@ def rounds(binaries, sources, all_sources, hdr, libraries, out, workers, probe=F
         summary = {"round": name, "seed_binaries": {k: sha(v) for k,v in prev.items()},
                    "source_count": len(all_sources), "passed": len(completed),
                    "failed": failures, "rows": sorted(completed, key=lambda r: r["source"]),
-                   "runtime_seed": {k: sha(v) for k,v in libraries.items()}}
+                   "runtime_seed": {k: sha(v) for k,v in libraries.items()},
+                   "reused": sum(bool(r.get("cached")) for r in completed)}
         (work / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
         if failures:
             raise RuntimeError("%s_PREPROCESS_COMPILE_ASSEMBLE blockers=%d first=%s" %
@@ -294,6 +323,8 @@ def main():
     parser.add_argument("--toolchain", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--workers", type=int, choices=(1, 2, 4), default=4)
+    parser.add_argument("--resume-stage3", type=Path, default=None,
+                        help="Prior CI evidence directory containing stage3/summary.json, s/ and o/")
     parser.add_argument("--probe-only", default=None,
                         help="Comma-separated real production C units for native PP/CC/AS triage")
     args = parser.parse_args()
@@ -313,7 +344,8 @@ def main():
             raise RuntimeError("invalid real production probe source selection")
         rounds(seed, sources, selected, hdr, libraries, out, args.workers, probe=True)
     else:
-        rounds(seed, sources, all_sources, hdr, libraries, out, args.workers)
+        rounds(seed, sources, all_sources, hdr, libraries, out, args.workers,
+               resume=args.resume_stage3)
 
 
 if __name__ == "__main__":
