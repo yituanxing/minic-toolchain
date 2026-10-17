@@ -38,6 +38,27 @@
 
 **裁决：先不实现新的 Integer source-grouped CALL 索引，更不扩大 500/2064。** Owner 过滤率高确实说明能避免大量访问，但**整个 Integer 阶段在这 20 个样本中只占诊断总 wall 4.25%**；把这 97.548% 直接转成编译速度改善是错误的，分桶建表本身也付出成本。该 4.25% 只是本轮特定带诊断环境中整个阶段的一个**宽松上界**，不是未经插桩生产版的严格 CPU 上界。只有新版本更广泛样本的 CPU/profile 再次证明此阶段上升为高收益瓶颈，才重新开卡。Parser local/typedef 实际平均扫描 2.567/1.364 步，不支持立刻加新 Hash；尤其旧 Core Name / Parser Global Index 已被否决，禁止新命名重做。优先关注 **Parser 真正高 CPU 子路径**（不是简单局部名称查找）、Core-set 的剩余 18.32%，以及已完成两个全量 run 交叉验证但尚无真构建 A/B 的 LPT 分片调度。此诊断数据不能声称 2064 文件整体加速，也没有 QEMU 验收，因为生产源码未修改。
 
+## Core discarded-IF Reentry 稀疏语句列表：七个真 Linux 文件 A/B，停止（2026-10-17）
+
+**已完成可复核正式 A/B**：[现有 perf500 CI #39037656624](https://github.com/yituanxing/minic-toolchain/actions/runs/39037656624) **SUCCESS**；没有新 job、没有改生产 `src/`、没有额外完整 2064/QEMU。7 个已 SHA 固定 GNU Kbuild `.i`，同一 Runner，baseline 和临时 checkout 只改 `src/core/core_lower.c` 的实验版本各预热一次、各 4 次交错配对；**7/7 `.s` 完全逐字节一致**，`check-type check-ast-contract` PASS。额外各臂一次 RSS 实测输出也相同，保留审计 artifact `linux-current-profile-first500-perf-v1` 下 `evidence/core-discarded-if-sparse-summary.json` 和各文件的 `paired-result.json`。
+
+**候选机制：** 仅在已有 eager incoming-edge index 命中的 `core_block_contains_reentry_label` 路径维护一个 64 项栈内小向量，按子树遍历次序收集唯一 Statement ID，而不是每次从 0 到 `program->statement_count` 整表扫一遍。旧 membership bitmap、case/default、外部 goto/asm-goto、地址引用检查和没有索引的路径均保留；容量扩大可分配，内存失败则回退原 dense 遍历。单因素脚本 `tools/ci/apply-perf-core-discarded-if-sparse-v1.py` 只在 CI 临时源码应用。不能将这项优化与已集成的 incoming-edge index、已经停掉的 Core statement_blocks workspace 混淆。
+
+| Linux owner | baseline P50 wall ms | sparse P50 wall ms | 速度变化 |
+| --- | ---: | ---: | ---: |
+| fs/ext4/fsync.o | 297.423 | 290.019 | 1.0255× |
+| kernel/bpf/btf.o | 967.762 | 956.613 | 1.0117× |
+| kernel/events/core.o | 1272.433 | 1269.387 | 1.0024× |
+| mm/memcontrol.o | 1122.144 | 1106.874 | 1.0138× |
+| fs/ext4/super.o | 747.271 | 744.007 | 1.0044× |
+| mm/hugetlb.o | 729.974 | 735.036 | **0.9931×（慢）** |
+| kernel/printk/sysctl.o | 58.648 | 58.946 | **0.9949×（慢）** |
+| **七文件 P50 总和** | **5195.653** | **5160.880** | **1.00674×（仅 0.669% 减时）** |
+
+**CPU user+sys 方向一致**：fsync 297.032→289.671 ms；BTF 967.292→956.084 ms；memcontrol 1121.501→1106.460 ms；hugetlb 729.575→734.561 ms。**没有可推广的内存改善**：BTF 单次 maxRSS 155192→157368 KiB，memcontrol 149076→152152 KiB，fsync 89172→88972 KiB（只是一次/臂峰值，非统计显著结论）。首次 CI #39037468046 被与本实验无关的旧版无条件 integrated-build 挡住，第二次 #39037555081 被实验 patch 自检 no-op 重复 anchor 阻挡，均在进入 A/B 前失败；修复隔离与脚本后 #39037656624 完整成功，以上速度数据仅来自最终正式运行。
+
+**晋级裁决：`NOT_PROMOTED_STOP`。** 5/7 局部加速，但 **1.00674×** 明显未达到事先约定的全样本至少 **1.04×** 门槛；之前 2.12 亿理论 statement full-scan 上界不是实际 CPU 访问次数，更不是可等量节省的编译时间。停止围绕这一候选继续调小向量/分配器、**不扩 first500、2064 或 QEMU**，不合入生产 `src/`；保留 opt-in 脚本/原始正负证据。下一张卡应重新筛选其他真实 CPU 热点，不能再挑同一 Core Reentry 工作域做微调。
+
 ## Parser/Core 最新白盒与 Core 重入工作量复核（2026-10-17）
 
 **已经完成、非算法 A/B：** 复核原有七 TU 真正 `minic-cc` Callgrind artifact（[成功 run #39027912246](https://github.com/yituanxing/minic-toolchain/actions/runs/39027912246)，从 GitHub 下载、解包并逐函数聚合 `callgrind-self.txt`），7/7 汇编字节相同，**29,177,233,393 Ir**；再复用已有 `perf500` Job + 固定 20 个 10-hot/5-middle/5-light 的 `.i`，直接打开正式 C 原本就有的 `MINIC_CORE_REENTRY_INDEX_PERF`，并保留此前 Integer/Parser 只读计数。[成功 run #39036729030](https://github.com/yituanxing/minic-toolchain/actions/runs/39036729030)（提交 `2fea5562421b`）**20/20 `.s` byte-identical，生产 `src/` 未改、无新增 workflow/job、无 2064 重编/QEMU**。独立 opt-in CLI 隔离了旧通用 A/B tracer；不能把新诊断时间与 #39035607415 不同 Runner 的读数当成新优化/回退。
