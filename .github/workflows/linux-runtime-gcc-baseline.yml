@@ -2065,6 +2065,9 @@ jobs:
           fi
           bash tools/ci/linux-runtime-build-minic-profile-v1.sh \
             "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain" "$ev/compiler"
+          if git log -1 --format=%B | grep -Fq '[minic-bootstrap-stage2-linux2064]'; then
+            source tools/ci/minic-bootstrap-stage2-2064-prepare-v1.sh receiver "$ev"
+          fi
           if [[ "${{ contains(github.event.head_commit.message, '[linux-perf-integrated-full]') }}" == true ]]; then
             bash tools/ci/linux-perf-integrated-full-profile-v1.sh \
               "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain" "$ev/compiler"
