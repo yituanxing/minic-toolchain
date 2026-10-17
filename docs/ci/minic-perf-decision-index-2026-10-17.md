@@ -4,6 +4,51 @@
 > 本表是候选的**状态索引**，不是覆盖旧的原始数据；旧实验报告、补丁、CI artifacts 均保留。每次新优化先记录「相同结构以前试过没有、当时基线是什么、为何现在仍值得做」。
 > 基线：主线 `6612e2c1a3`（文档头），最新已认证的 Boolean/Core/Integer 联合源码经 [2064 + GNU link + QEMU P1 #38995964988](https://github.com/yituanxing/minic-toolchain/actions/runs/38995964988) PASS。这个 PASS 是 GNU PP → MiniC → GNU AS/LD，不能声称全 Mini 工具链共同通过。下列不同实验的加速比不能相乘，也不能伪称当前 2064 的同比速度。
 
+## 第七轮后当前生产版：2064 Linux 全量**重新编译**速度与内存验收（2026-10-17）
+
+**完整新鲜运行**：[GitHub Actions #39033023656](https://github.com/yituanxing/minic-toolchain/actions/runs/39033023656) **SUCCESS**；对应 CI 触发 commit `f4fa32b72b92e1c7d9428885950d134c3aa17b1f`。不是把旧 2064 编译缓存回放冒充新速度：新增仅 opt-in `[minic-fresh-full2064-metrics]`，**明确跳过七个 shard 的历史对象 cache restore 和 cache save**，保持生产 `src/...` 完全不变、保留 pinned source-SHA 验证。每个 shard 现有同一 GitHub Runner Kbuild `-j6`；整体并行是 7 个独立 GitHub Runner。现有 `COHORT_STAGE_TIME` + opt-in `/usr/bin/time %M/%U/%S` 按每次 MiniC 子进程记录真实 RSS 与 CPU。另重新合并所有 2064 MiniC 对象、GNU LD 链接、**QEMU P1 12/12 + Python-era oracle PASS**：
+- `GNU_MINIC_SHARD_MERGE=PASS objects=2064 shards=7`
+- `COHORT_LINK=REUSED name=full_all_verified selection=prefix:2064`（复用本次刚重编译的认证对象，不是历史编译缓存）
+- `COHORT_P1=PASS name=full_all_verified syscalls=12 python_era_oracle=PASS`
+- `COHORT_RESULT=PASS candidate_objects=2064 scope=FULL_C_UNIVERSE same_config=true`
+
+**所有精确实测**（Linux 6.6.143; GNU GCC -E → 当前 MiniC -S → GNU AS; Linux full source GNU golden config，严格不是原生 MiniPP/MiniAS/MiniLD 联合速度）：
+
+| 全量指标 | 本次真实测量 |
+| --- | ---: |
+| 七路目标正式 C 对象 | **2064/2064** |
+| 七个 shard 的目标编译 Kbuild 自身 wall（各约 294/295 objects） | **45.796、71.886、71.637、58.669、46.619、55.490、74.640s**（分别 shard 6、0、1、2、3、4、5；非 shard ID 顺序） |
+| 最慢 shard Kbuild wall | **74.640s** |
+| 从最早 shard 开始实际编译到最晚 shard 编译完成的跨 Runner 实际时区间 | **94.325s**（包含约 19.6s 各 Runner 启动错开与慢片效应，不等于 74.640s） |
+| 全 GitHub Workflow（启动/安装/缓存验证/编译/合并/链接/QEMU） | **6分38秒**（GitHub run created_at 12:33:54Z → updated_at 12:40:32Z；包含非编译开销） |
+| 真实 MiniC 子进程调用 | **2087 次**（含 Kbuild helper/重复生成，**不是** 2087 个唯一 C 对象） |
+| 2087 次 MiniC 子进程 wall 合计 | **1175.746s**（不可当作并行 wall） |
+| GNU -E 子进程调用及累计 wall | **2129次 / 650.206s** |
+| GNU AS 子进程调用及累计 wall | **2185次 / 152.619s** |
+| 所有 MiniC 子进程 user + sys CPU 合计 | **773.910 CPU秒** |
+| 单进程最大 RSS 中位数 | **80484 KiB = 78.60 MiB** |
+| 单进程最大 RSS P95 | **134216 KiB = 131.07 MiB** |
+| 最大单 MiniC 子进程 RSS | **262632 KiB = 256.48 MiB**，对应 `net/core/filter.o` |
+
+**真实 7 shard 编译 wall**（未包括初始化等，按 Linux shard 编号排序）：
+
+| Shard | 对象数 | Kbuild 编译段 wall | MiniC 子进程 wall 合计 | MiniC 子进程最大 RSS |
+| --- | ---: | ---: | ---: | ---: |
+| 0 | 295 | 71.886s | 202.549s | 166004KiB |
+| 1 | 295 | 71.637s | 195.788s | **262632KiB** |
+| 2 | 295 | 58.669s | 159.567s | 181812KiB |
+| 3 | 295 | 46.619s | 129.648s | 156420KiB |
+| 4 | 295 | 55.490s | 152.264s | 170136KiB |
+| 5 | 295 | **74.640s** | 208.097s | 177200KiB |
+| 6 | 294 | **45.796s** | 127.833s | 186892KiB |
+| 合计 | **2064** | **不能求和作为墙钟** | **1175.746s** | **最大262632KiB** |
+
+**全局 RSS 数据来源与界限：** 七个新鲜 shard artifact 各保留 `stage-probe/minic-rss.tsv` 和 `stage-probe/minic-resource-summary.json`，含全部 **2087 个真实 MiniC 子进程**的 user/sys 和 `%M`；上述 **中位/P95 是合并 7×全部原始子进程数据后真正重算的 2087 记录统计，不是七个 shard 中位数的平均数**。最大五个单进程：`net/core/filter.o` 256.48 MiB、`kernel/bpf/verifier.o` 214.21 MiB、`net/core/dev.o` 213.13 MiB、`net/ipv4/tcp_input.o` 182.51 MiB、`kernel/events/core.o` 177.55 MiB。`%M` 是进程峰值，不是 7 Runner 总 RSS，不是 cgroup RAM，也不能乘以每个 Runner 6 jobs 自称真实同时 RAM 峰值。
+
+**和之前同生产代码 2064 全量 #39023546906 的旁证：** 之前 7 shard MiniC stage wall 求和 **1199.104s**、最慢 shard Kbuild **74.512s**；此次分别 **1175.746s** 和 **74.640s**。属于*跨 GitHub Runner、不同采样包装、不同宿主争用条件*，不能把累计约 -1.95% 的差异称为又一轮编译器性能优化，也不能使用跨测试加速比证明新的 C 代码变化（这次生产源码没变）。本次真正有意义的是：**完成最新当前生产 2064 新鲜编译下 wall+CPU+RSS 和完整链接/QEMU 的可复现基线**；后续如需声称加速，必须同一 Runner 下旧版/新版严格 A/B。
+
+**结论：** 当前生产 MiniC 已能以原有 7 个独立 Runner 全量刷新真实 2064 Linux C 对象，在这次 GitHub 资源状况下，目标编译段实际跨 Runner 约 **94.3秒**，最慢一片约 **74.6秒**，完整 GitHub CI 约 **398秒**；完整 QEMU P1 PASS。任何进一步调整 shard 分配、并发度、内存分配器必须新 A/B，不把「多轮历史优化结果」机械相乘。
+ 
 ## 第九轮结构算法候选：Core 三 Selector 按 specialization_source 索引（2026-10-17）
 
 **这不是此前已否决的 Core no-facts early-exit，也不是 Core reentry/name queue 的旧索引。** 本候选直指真实源码 `src/core/core_lower.c` 的 3 个 selector：transitive integer / symbolic / Boolean-range。每次 direct CALL 各自扫 `program->function_count`，先以 `candidate->specialization_source == source_id` 过滤。将所有专门化变体在单次 Core Function Set 内按 owner FunctionId 组织为**原始候选 ID 升序单向桶**，从每个调用的全程序循环中跳过其他 owner，从 `O(C×F)` 候选迭代降到 `O(F+C×V_{owner})`（建立索引与使用索引都计入性能）。索引只对同 `program`+相同 `function_count` 可用，内存分配失败/未知上下文退回完全相同的原始全扫描；独立暂存 patch `tools/ci/apply-perf-core-variant-source-buckets-v1.py`，正式生产 `src/` 未改。4 个成功 Linux TU 亦使用 `MINIC_TEST_FORCE_CORE_VARIANT_INDEX_FALLBACK=1` 强制原逻辑比较 `.s`，释放/lifetime 随既有 Core Reentry begin/end 工作域处理；`check-type check-ast-contract` PASS。
