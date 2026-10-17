@@ -4,6 +4,27 @@
 > 本表是候选的**状态索引**，不是覆盖旧的原始数据；旧实验报告、补丁、CI artifacts 均保留。每次新优化先记录「相同结构以前试过没有、当时基线是什么、为何现在仍值得做」。
 > 基线：主线 `6612e2c1a3`（文档头），最新已认证的 Boolean/Core/Integer 联合源码经 [2064 + GNU link + QEMU P1 #38995964988](https://github.com/yituanxing/minic-toolchain/actions/runs/38995964988) PASS。这个 PASS 是 GNU PP → MiniC → GNU AS/LD，不能声称全 Mini 工具链共同通过。下列不同实验的加速比不能相乘，也不能伪称当前 2064 的同比速度。
 
+## 当前 MiniC 同 Runner 四/七 worker 真实并发内存与速度（2026-10-17）
+
+**目的：** 区分「单 TU 最大 RSS 约 213MiB」与「真实同时运行四/七个编译进程时的峰值」，不动生产源码、不建新 Runner、不重新生成 SHA-frozen first500。两次现行生产 Release `minic-cc` **SHA256=f04794d3132631059c028e0a889bf8cf06f15e8f24afcc70d24697edce4925fd**，相同缓存清单 SHA256=b0387511b0733422b537b02d0f463065f20632483568a2a1dd0423ff95aa6cf4；两项正式 Linux Runtime 配置 `MINIC_LINUX_FULL_CROSSBLOCK=1 MINIC_OPT_PURE_DISCARDED_ADDRESS_EQ=1` 已统一固定。分别对 first500 编译各两臂，500/500 接受且**同 CI 同编译器四 worker vs 七 worker 的产物 500/500 `.s` SHA 一致**，不涉及 GNU AS/LD 或 QEMU。
+
+| 同 Runner 实测 | 4 worker | 7 worker | 7-vs-4 变化 |
+| --- | ---: | ---: | ---: |
+| [#39030948820](https://github.com/yituanxing/minic-toolchain/actions/runs/39030948820) **SUCCESS**；执行顺序 4→7 | **37.385 s** | **39.122 s** | **更慢 4.65%** |
+| 上述同次 User+Sys CPU 之和 | **138.390 CPU s** | **146.340 CPU s** | **增加 5.74%** |
+| 上述按 80ms 采样的同时存活编译进程 RSS 合计最大值 | **490,736 KiB（479.2 MiB）** | **695,100 KiB（678.8 MiB）** | **增加 41.6%** |
+| [#39031183836](https://github.com/yituanxing/minic-toolchain/actions/runs/39031183836) **编译双臂完成、结尾摘要错误，Workflow FAILURE**；执行顺序 7→4 | **61.744 s** | **62.590 s** | **更慢 1.37%** |
+| 反序同次 User+Sys CPU 之和 | **230.250 CPU s** | **235.010 CPU s** | **增加 2.07%** |
+| 反序同时进程 RSS 采样最大值 | **478,456 KiB（467.2 MiB）** | **664,652 KiB（649.1 MiB）** | **增加 38.9%** |
+
+第二次 runner 真实 7/7、4/4 编译均 500/500 成功，代码与汇编一致；最终 summary 代码误用 `for workers in workers:` 的循环变量覆盖了 list，写 `run_order` 时 `workers[0]` 触发 `TypeError: 'int' object is not subscriptable`，所以必须**保留 GitHub workflow FAILURE，不谎称整轮绿色**；两个完整 `workers7.json`、`workers4.json` 和原始证据均随 artifact 12100800557 上传成功。错误在 `0faaf2c6` 修复为先固定 `worker_order=tuple(workers)`，同时避免在第二臂 cgroup baseline 高于观测 peak 时记录负数所谓内存节约。无需再次重复 1000 个真实编译才能读取本次原始 JSON。首轮 SUCCESS artifact 12099944336 包含独立两臂汇编 hash 和逐 TU wall/user/sys/RSS；复核原始两臂数据：**第二轮亦 500/500 identical**。
+
+**内存统计方法与局限：** `/proc/PID/statm` 对当前 `minic`+真正 AST 主体 `minic-cc` 的精确 executable path 进行 80ms 轮询，4-worker 同时最多观测到 **4 个 minic-cc**、7-worker 最多 **7 个 minic-cc**。上表是**采样时刻进程 RSS 合计**，包含多进程重复计入的共享库/代码页，也可能遗漏两个采样之间的短峰值；**不是 cgroup 的严格绝对 peak，也不能把各 TU 的单进程 max RSS 求和代替**。GitHub Runner 未提供可直接读取的 `/sys/fs/cgroup/memory.current`，有 `memory.stat:anon`，仅辅助比较其 observed absolute peak：首轮四 worker **约 764.6MiB**、七 worker **约 974.3MiB**；反序四 worker **约 770.4MiB**、七 worker **约 940.5MiB**。Anon 包括该 Runner 其它任务，且两臂顺序对缓存和基线有影响，绝不可转写为「MiniC 专属 PSS」或「七路 Runner 总 RAM」。
+
+**决策：** 在**同一 GitHub-hosted Runner 内增加编译进程从 4→7，本次两个相反顺序的实测均没有加速，反而更多并发 RSS/anon 占用**；不要仅按内存尚有空余就把每 Runner 的 MiniC 并发设成 7。这里的「七个进程在一台 Runner」与一直沿用的「七个独立 GitHub Runner shard 并行构建 2064 Linux」是**两种不同并行配置**，本结论**不构成关掉/减少七路 Runner**的理由。
+
+**跨 Runner 速度差异：** 当前同一个 `minic-cc` SHA、相同 500 .i 和相同两项 Runtime flag 的 4-worker 总耗时，先前单侧读数 #39029550475 为 **60.042s**，本次反序 **61.744s**，但首次正序仅 **37.385s**；且首次正序四 worker User+Sys **138.39 CPU s** 对反序 **230.25 CPU s**，两者在输出 SHA 上 500/500 相等。不同 GitHub Runner CPU/频率、宿主争用或运行状态会造成明显跨 run 性能漂移，**不能将一次 37s 与以前 60s 误认算法又快了 38%**。后续任何 CPU 性能归因都必须固定同 Runner 同次 old/new，必要时进行冷热反序 ABBA。
+
 ## 现行生产 MiniC 性能 + 峰值内存实测：500 Linux TU（2026-10-17）
 
 **完整新测**：[现有 perf500 #39029550475](https://github.com/yituanxing/minic-toolchain/actions/runs/39029550475) **SUCCESS**。对本来缓存的 Linux 6.6.143 first500 SHA-frozen GNU Kbuild `.i`，使用当前生产代码编译出的 Release `minic` 和固定的 **4 个进程**，**逐文件真实调用 `/usr/bin/time`**，保留 500/500 的 `.s` SHA、TU wall、user、sys、peak single-process RSS 及源输入字节等细节。并未改变生产源码、没有新 Workflow/Job，也没有重复 2064 Linux 全链验收。单 TU 采样包含 Driver 启动/进程调度；`elapsed_parallel_wall_ms` 是此次 500 文件工作的四 worker 实际区间，**不是**包含 GNU preprocessing/AS/LD 的 Linux Kernel 完整构建时间。
