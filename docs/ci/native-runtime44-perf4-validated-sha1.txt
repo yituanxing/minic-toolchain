@@ -51,7 +51,10 @@
 # 2026-10-17: AST CALL inline8 + owned overflow new header 97acd676dbaf717710b02632f89451cd97a33e07.
 # Original same-runner frozen500 #39012224627 PASS 500/500 and 1.11368x.
 # 6-owner 8-pair + ASan/UBSan #39012537673 PASS. Source change
-# requires separate incoming 2064+GNU link+QEMU P1 certification.
+# Full runtime source SHA refresh 618566bf passed #39012897095: 7/7 shards,
+# 2064/2064 C, GNU link and QEMU P1 syscalls=12 python_era_oracle=PASS.
+# Initial attempt #39012800524 failed the intentional source SHA pin gate.
+# The exact validated source identities appear below.
 # Exact runtime source manifest also updated all 3 affected native
 # C/H blobs; the first full-run attempt #39012800524 failed at intentional
 # pinned SHA gate for compiler.c, not in C compilation or QEMU.
