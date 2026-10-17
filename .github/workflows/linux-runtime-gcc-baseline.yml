@@ -1483,21 +1483,6 @@ jobs:
           if [[ "${{ contains(github.event.head_commit.message, '[linux-perf-integrated-full]') }}" == true ]]; then
             export COHORT_GNU_PREFLIGHT_ALLOW_SEVEN_SHARD_VOLATILE=1
           fi
-          if [[ "${{ contains(github.event.head_commit.message, '[minic-bootstrap-stage2-linux2064]') }}" == true ]]; then
-            sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends qemu-user >/dev/null
-            seed=3b6c1e335342b042f5f3c0b922f31843e6824bc9
-            if ! git cat-file -e "$seed^{commit}" 2>/dev/null; then
-              git fetch --quiet --no-tags --depth=1 origin "$seed"
-            fi
-            git diff --exit-code "$seed" "$GITHUB_SHA" -- src/ include/ tools/minic-cc/ tests/compiler/bootstrap/b0-sources.txt
-            guest="$GITHUB_WORKSPACE/build/bootstrap-stage2-linux2064/artifact/build/bootstrap-current-b1/stage2/minic-stage2-rv64"
-            bash tools/ci/minic-bootstrap-stage2-install-kbuild-v1.sh \
-              "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain/bin" "$guest"
-            : >"$ev/stage2-invocations.tsv"
-            export COHORT_STAGE2_INVOKE_TRACE="$ev/stage2-invocations.tsv"
-            export COHORT_GNU_PREFLIGHT_ALLOW_SEVEN_SHARD_VOLATILE=1
-            echo "BOOTSTRAP_STAGE2_2064=START sha_authenticated=true shard=${{ matrix.shard }}"
-          fi
           bash tools/ci/linux-runtime-gcc-cohort-bisect-v1.sh \
             "$work/linux-6.6.143" "$work/out" \
             "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain/bin/minic" \
@@ -2076,13 +2061,6 @@ jobs:
           fi
           bash tools/ci/linux-runtime-build-minic-profile-v1.sh \
             "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain" "$ev/compiler"
-          if [[ "${{ contains(github.event.head_commit.message, '[minic-bootstrap-stage2-linux2064]') }}" == true ]]; then
-            sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends qemu-user >/dev/null
-            guest="$GITHUB_WORKSPACE/build/bootstrap-stage2-linux2064/artifact/build/bootstrap-current-b1/stage2/minic-stage2-rv64"
-            bash tools/ci/minic-bootstrap-stage2-install-kbuild-v1.sh \
-              "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain/bin" "$guest"
-            echo "BOOTSTRAP_STAGE2_2064_RECEIVER=READY immutable_sha_bound=true"
-          fi
           if [[ "${{ contains(github.event.head_commit.message, '[linux-perf-integrated-full]') }}" == true ]]; then
             bash tools/ci/linux-perf-integrated-full-profile-v1.sh \
               "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain" "$ev/compiler"
@@ -2599,7 +2577,7 @@ jobs:
           work="$GITHUB_WORKSPACE/build/linux-runtime-gcc"
           ev="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1"
           export COHORT_ACTION=verify
-          if [[ "${{ contains(github.event.head_commit.message, '[linux-perf-integrated-full]') || contains(github.event.head_commit.message, '[minic-bootstrap-stage2-linux2064]') }}" == true ]]; then
+          if [[ "${{ contains(github.event.head_commit.message, '[linux-perf-integrated-full]') }}" == true ]]; then
             export COHORT_GNU_PREFLIGHT_ALLOW_SEVEN_RECEIVER_VOLATILE=1
           fi
           if [[ "${{ contains(github.event.head_commit.message, '[linux-native-union-cached]') && '1' || '0' }}" == 1 ]]; then
