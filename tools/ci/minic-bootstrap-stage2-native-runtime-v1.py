@@ -91,7 +91,7 @@ def main():
     diag=out/"diagnostics"
     diag.mkdir(parents=True,exist_ok=True)
     source=diag/"input.c"
-    source.write_text("int plain = 7;\\n".replace("\\\\n","\\n"))
+    source.write_text("int plain = 7;\\n")
     runs=[]
     for key,args_ in (
         ("basic",["-E","-P","-undef","-nostdinc"]),
@@ -159,6 +159,8 @@ def main():
         "native_main_program_without_GNU_AS_or_LD":True,
         "full_Linux_compiled_by_Stage2":False,
     },indent=2)+"\n")
+    if failures:
+        raise RuntimeError("native suites failed: "+",".join(failures)+" (other suites and chain still executed)")
     print("BOOTSTRAP_STAGE2_NATIVE_RUNTIME=PASS tools=8 suites=%d runtime_chain=42 evidence_sha=true"%len(suites),flush=True)
 
 if __name__=="__main__":
