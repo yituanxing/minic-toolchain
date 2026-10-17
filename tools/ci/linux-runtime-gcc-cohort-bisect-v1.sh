@@ -340,6 +340,10 @@ else
     probe_dir="$ev/stage-probe"
     mkdir -p "$probe_dir"
     : >"$probe_dir/stages.tsv"
+    if [[ "${COHORT_FULL_SPEED_RSS:-0}" == 1 ]]; then
+      : >"$probe_dir/minic-rss.tsv"
+      test -x /usr/bin/time || { echo 'COHORT_FULL_SPEED_RSS=FAIL missing time'; exit 12; }
+    fi
     cat >"$probe_dir/measure" <<'SH_STAGE_MEASURE'
 #!/usr/bin/env bash
 set -uo pipefail
@@ -367,8 +371,21 @@ done
 bytes=0
 [[ "$input" == "-" ]] || bytes=$(stat -c '%s' -- "$input" 2>/dev/null || printf 0)
 started=$(date +%s%N)
-"$executable" "$@"
-rc=$?
+if [[ "$kind" == minic && "${COHORT_FULL_SPEED_RSS:-0}" == 1 ]]; then
+  # Real wait4 peak child RSS, opt-in full 2064 only.
+  rss_tmp=$(mktemp "${PERF_RSS_DIR:?}/minic-time.XXXXXXXX")
+  /usr/bin/time -f '%M %U %S' -o "$rss_tmp" "$executable" "$@"
+  rc=$?
+  read -r child_rss_kib child_user_s child_sys_s <"$rss_tmp" || true
+  rm -f -- "$rss_tmp"
+  {
+    flock 8
+    printf '%s\t%s\t%s\t%s\t%s\n' "$output" "${child_rss_kib:-0}" "${child_user_s:-0}" "${child_sys_s:-0}" "$input" >&8
+  } 8>>"${PERF_RSS_LOG:?}"
+else
+  "$executable" "$@"
+  rc=$?
+fi
 ended=$(date +%s%N)
 {
   flock 9
@@ -390,6 +407,8 @@ SH_STAGE_MEASURE
 export PERF_KIND=$(printf '%q' "$label")
 export PERF_REAL=$(printf '%q' "$real_tool")
 export PERF_LOG=$(printf '%q' "$probe_dir/stages.tsv")
+export PERF_RSS_LOG=$(printf '%q' "$probe_dir/minic-rss.tsv")
+export PERF_RSS_DIR=$(printf '%q' "$probe_dir")
 exec $(printf '%q' "$probe_dir/measure") "\$@"
 SH_STAGE_LAUNCHER
       chmod +x "$probe_dir/$label"
@@ -482,6 +501,37 @@ for stage, samples in sorted(rows.items()):
           f"max_ms={slowest[0]} failed={sum(x[1]!=0 for x in samples)} "
           f"max_input_bytes={slowest[2]} slowest_input={slowest[3]}")
 PY_STAGE_TOTALS
+  fi
+  if [[ "${COHORT_FULL_SPEED_RSS:-0}" == 1 ]]; then
+    test -s "$ev/stage-probe/minic-rss.tsv"
+    python3 - "$ev/stage-probe/minic-rss.tsv" "$ev/stage-probe/minic-resource-summary.json" <<'PY_MINIC_RSS'
+import json,statistics,sys
+from pathlib import Path
+source,out=map(Path,sys.argv[1:])
+rows=[]
+for line in source.read_text().splitlines():
+    parts=line.split("\t",4)
+    if len(parts)!=5:raise SystemExit("COHORT_FULL_SPEED_RSS=FAIL malformed record")
+    output,rss,user,system,input_path=parts
+    if not rss.isdecimal() or int(rss)<=0:
+        raise SystemExit("COHORT_FULL_SPEED_RSS=FAIL missing child peak")
+    rows.append({"assembly":output,"rss_kib":int(rss),
+                 "user_s":float(user),"sys_s":float(system),"input":input_path})
+if not rows:raise SystemExit("COHORT_FULL_SPEED_RSS=FAIL empty")
+ordered=sorted(r["rss_kib"] for r in rows)
+p95=ordered[(95*len(ordered)+99)//100-1]
+data={"count":len(rows),"median_peak_rss_kib":statistics.median(ordered),
+      "p95_peak_rss_kib":p95,"max_peak_rss_kib":max(ordered),
+      "sum_user_sys_s":round(sum(r["user_s"]+r["sys_s"] for r in rows),3),
+      "top_memory":sorted(rows,key=lambda r:r["rss_kib"],reverse=True)[:10],
+      "rss_scope":"wait4 peak RSS per MiniC subprocess, not seven-runner RAM",
+      "rows":rows}
+out.write_text(json.dumps(data,indent=2)+"\n")
+print("COHORT_FULL_SPEED_RSS=PASS processes=%d median_peak_kib=%.0f "
+      "p95_peak_kib=%d max_peak_kib=%d total_cpu_s=%.3f"%
+      (len(rows),data["median_peak_rss_kib"],p95,max(ordered),
+       data["sum_user_sys_s"]))
+PY_MINIC_RSS
   fi
   : >"$ev/compile-blockers.txt"
   compiled=0
