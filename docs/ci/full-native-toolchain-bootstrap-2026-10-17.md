@@ -1,6 +1,6 @@
 # 现役 9 工具原生全链自举：Stage2 → Stage3 → Stage4
 
-状态：**尚未取得全链 PASS；实际执行和失败记录保留，不得把之前的 GCC 辅助 Stage2 固定点冒称原生全链自举。**
+状态：**已有九工具 Stage3→Stage4 的逐字节固定点证据（77/77、9/9，未调用 GCC/AS/LD）；正在进一步验证匹配 musl 头文件、真实工具链运行时及绿色 CI。不能把之前的 GNU 辅助 Stage2 固定点冒称原生全链自举，也不能把 GNU 预生成运行库称为已原生构建。**
 
 ## 输入与历史事实
 
@@ -46,7 +46,9 @@ Runner 通过 `strace -f -e execve` 对完整脚本记录执行族，禁止任�
 | #39055271159 | **Stage3 77/77 原生 MiniPP→Stage2 MiniC→Stage2-built MiniAS 已全部成功！** 76 个 .o 经 SHA 缓存复用，唯一大文件 `src/core/core_lower.c` 原生 MiniAS 在 187.237 秒完成。Stage3 链接随后阻塞于 `minic-ld: missing-symtab:/usr/riscv64-linux-gnu/lib/crti.o`，与 MiniC/MiniAS 无关。未回退 GNU LD。 |
 | #39056854507 | 从已证实的 77/77 原生 .o 直接进行 MiniLD 链接探测，不重复编译：移除 glibc `crti.o/crtn.o` 后揭示下一处真正阻塞 `unsupported-section-type:iofclose.o:index=1:type=17`（glibc `libc.a` 的 `SHT_GROUP`）。这是 MiniLD 当前已知的实现范围问题，不能视作编译器失败。 |
 | #39057022666 | 用仓库现有的 MiniLD+musl 静态链接经验，单独生成经过 tarball SHA 验证的 **musl 1.2.5 外部二进制运行库种子**。MiniLD 用同一组 77 个 Mini 原生 .o 中的 MiniPP 对象链接 **成功**，且生成的 RV64 MiniPP 经 QEMU `--help` 运行成功。链接测试 `strace` 证实 GNU GCC/AS/LD 调用为 **0**。musl 最初由 GNU 编译器生成，明确记录其种子来源，**不称作 libc 原生自举**。 |
-| #39057243168 | 恢复上一轮固定 SHA 的完整 77 个 .o 和 musl 运行库种子 Artifact，本次无需重建 musl，也不在严格自举执行链调用 GCC。继续真正的 **Stage3 全九工具原生链接、Stage4 再构建与可加载镜像固定点**；在结果返回前不得宣布九工具全链通过。 |
+| #39057243168 | **重大技术突破：真实 Stage3/Stage4 全工具固定点已实际通过**。Stage3: 77/77 MiniPP+MiniC+MiniAS / 9/9 ELF；Stage4 再处理 77/77 / 9/9 ELF；逐 TU `.i/.s/.o` SHA 一致；九工具的**原始 ELF SHA256 全部一致**，MiniObjcopy 抽取的加载映像全部一致；`strace` 中 GCC/GNU AS/GNU LD 为 0。原始日志打印 `FULL_NATIVE_TOOLCHAIN=PASS`。**CI Job 被错误判为失败**，原因是 workflow 使用 `probe_args` 非空判断“四文件 probe”，而 `--musl-build` 本身就产生两个参数，导致随后的 `grep FULL_NATIVE_PROBE=PASS` 查找失败。这是门禁表达式误判，非九工具构建失败。已在 `f92d6724` 修改为明确依据 `[minic-bootstrap-full-native-probe]` marker。 |
+| #39057831387 | 使用相同已固定 musl 1.2.5 tarball 及 configure 的 source producer，通过 `make install-headers` 生成**与 libc.a、CRT 匹配的标准头文件**，编制每个 header SHA 清单并入 Artifact；runtime 链接探测继续通过。原先使用 **glibc 头文件 + musl 运行库**，虽然达到自举固定位点，仍存在 `struct stat` 等 C ABI 布局不匹配风险；不能据此声称通用运行时正确性。 |
+| #39057960530 | 按上轮成功的 libc/CRT/header 双重 SHA 重新搭建 Stage3 原生构建输入，先用四个真实生产 TU 核对 MiniPP→MiniC→MiniAS；禁止静默重用 glibc 头文件展开的旧 Stage3 对象。本轮 probe 结果以 CI Artifact 为准。另增加最终 Stage4 自己执行的真实 MiniPP→MiniC→MiniAS→MiniLD→QEMU exit42，以及 Stage4 Driver 同链运行时验收（`85551375`）；仅 `--help` 与 ELF 同一性不足以称为功能正确。 |
 
 每次实验按 `stderr→源 .i→标准/ABI 前提→最小有界回放→全量` 调试，不能重复修改已经证实正确的 47 个编译器生产 C 源。
 
@@ -60,7 +62,9 @@ Runner 通过 `strace -f -e execve` 对完整脚本记录执行族，禁止任�
 
 ### 常用链接（准确记录）
 
-- 最新全九工具 musl 静态全链自举：`https://github.com/yituanxing/minic-toolchain/actions/runs/39057243168`
+- Stage3/Stage4 实际 77/77 九工具固定点（原 CI gate 误报红）：`https://github.com/yituanxing/minic-toolchain/actions/runs/39057243168`
+- 采用匹配 musl 头文件的四 TU ABI 预检：`https://github.com/yituanxing/minic-toolchain/actions/runs/39057960530`
+- 匹配 musl 1.2.5 runtime/header 种子产物：`https://github.com/yituanxing/minic-toolchain/actions/runs/39057831387`
 - 已验证 musl MiniLD 原生链接/运行：`https://github.com/yituanxing/minic-toolchain/actions/runs/39057022666`
 - Stage3 77/77 原生 C→目标文件：`https://github.com/yituanxing/minic-toolchain/actions/runs/39055271159`
 - 首次 77 TU 76 成功的完整日志：`https://github.com/yituanxing/minic-toolchain/actions/runs/39054222221`
