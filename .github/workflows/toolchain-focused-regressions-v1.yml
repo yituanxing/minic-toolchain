@@ -53,6 +53,14 @@ jobs:
         with:
           ref: ${{ github.sha }}
 
+      # The bootstrap Linux opt-in workflow has several nested matrix
+      # conditions. Parse its real YAML BEFORE another costly seven-way run.
+      - name: Parse existing Linux runtime workflow YAML
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ruby -e 'require "yaml"; YAML.parse_file(".github/workflows/linux-runtime-gcc-baseline.yml"); puts "LINUX_RUNTIME_YAML_PARSE=PASS"'
+
       - name: Install union of RV64, archive, static and dynamic linker oracle prerequisites
         run: |
           set -Eeuo pipefail
