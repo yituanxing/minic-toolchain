@@ -693,16 +693,21 @@ check-runtime: check-c0-runtime check-programs-c0
 sanitize:
 	@$(MAKE) MODE=sanitize check
 
-bootstrap: $(MINIC_BINARY)
-	@printf '%s\n' \
-		"bootstrap: self-hosting is certified by .github/workflows/compiler-bootstrap-b1-sharded.yml" \
-		"bootstrap: Stage0 -> Stage1 -> sharded Stage2 fixed-point; see docs/milestones/compiler-v1-frozen.md" \
-		"bootstrap: this local target is informational until the CI bootstrap pipeline is extracted into a reusable local script"
+# Current 47-TU compiler self-host B1: genuinely executable local gate.
+# Both scripts are identical to the current CI opt-in Stage0/1/2 contract.
+# These scripts build a *release* Stage0 compiler (irrespective of MODE), then
+# run Stage1/Stage2 under qemu-riscv64 with GNU preprocess/asm/link oracles.
+# This does not establish Stage2 compilation of Linux or remove GNU tools.
+bootstrap:
+	python3 tools/ci/minic-bootstrap-current-b1-seed-v1.py \
+		--work "$(abspath $(BUILD_DIR))/bootstrap-current-b1"
+	python3 tools/ci/minic-bootstrap-current-b1-stage2-v1.py \
+		--work "$(abspath $(BUILD_DIR))/bootstrap-current-b1" --workers 4
 
 bootstrap-compare: bootstrap
 	@printf '%s\n' \
-		"bootstrap-compare: canonical B1 requires Stage1/Stage2 loadable-image fixed point plus Stage2 runtime gates" \
-		"bootstrap-compare: run the B1 workflow or extract its pipeline before treating this target as an executable bootstrap gate"
+		"bootstrap-compare: Stage0/1/2 exact source-assembly and loadable-image fixed point PASS" \
+		"bootstrap-compare: Stage2 real-program/Linux gates remain independent"
 
 format:
 	CLANG_FORMAT="$${CLANG_FORMAT:-clang-format-18}" \
