@@ -19,7 +19,8 @@ def values(n):
     return ", ".join(str(i + 1) + "L" for i in range(n))
 
 def make_cases():
-    lines=["/* No headers, simple fixed-size compiler ABI boundary fixture. */"]
+    # Inputs are already .i: do not add C comments before MiniC lexical scan.
+    lines=[]
     for n in (0,1,2,8,9,63,64):
         lines.append("long f%d(%s);"%(n,parameters(n)))
     lines.append("long variadic(long first, ...);")
