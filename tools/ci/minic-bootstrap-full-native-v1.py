@@ -360,7 +360,8 @@ def rounds(binaries, sources, all_sources, hdr, libraries, out, workers, probe=F
             if (previous["round"] != "stage3" or
                 previous["source_count"] != len(all_sources) or
                 previous["seed_binaries"] != {k: sha(v) for k, v in prev.items()} or
-                previous["runtime_seed"] != {k: sha(v) for k, v in libraries.items()}):
+                previous["runtime_seed"] != {k: sha(v) for k, v in libraries.items()} or
+                previous.get("link_runtime_seed") != {k: sha(v) for k, v in link_libraries.items()}):
                 raise RuntimeError("REUSE_STAGE3=FAIL previous evidence/seed mismatch")
             prior_rows = {row["source"]: row for row in previous["rows"]}
             if len(prior_rows) != len(previous["rows"]):
@@ -528,13 +529,12 @@ def main():
         rounds(seed, sources, selected, hdr, libraries, out, args.workers, probe=True)
     else:
         link_libs = musl_runtime(args.musl_build, libraries) if args.musl_build else libraries
-        # A glibc-preprocessed Stage3 object is not a musl-header ABI proof.
-        # Do not reuse the old glibc objects even when source names match.
-        resume = None if args.musl_headers is not None else args.resume_stage3
-        if args.musl_headers is not None:
-            print("FULL_NATIVE_CACHE_REUSE=DISABLED why=glibc_to_musl_header_ABI_change",flush=True)
+        # Reuse is allowed ONLY when the prior compiler/runtime seed identities
+        # match, and a FRESH MiniPP output for each C source has the SAME SHA
+        # as the prior input.  Changing the source or glibc -> musl headers
+        # invalidates that TU automatically.  Do not trust filenames.
         rounds(seed, sources, all_sources, hdr, libraries, out, args.workers,
-               resume=resume, link_libraries=link_libs)
+               resume=args.resume_stage3, link_libraries=link_libs)
 
 
 if __name__ == "__main__":
