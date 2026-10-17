@@ -55,6 +55,8 @@ jobs:
       LABEL: ${{ matrix.label }}
     steps:
       - uses: actions/checkout@v4
+      # Canonical Linux configs.o .incbin sidecar was absent from historical
+      # frozen .i cache; we use historic B4 empty stub for parity only.
       # Reuse existing seven shard runners for the *same* frozen first500 .i.
       # All 500 verified per runner; Stage0 vs QEMU Stage2 .s/.o SHA.
       # First real full 7-runner Stage2 bootstrap qualification, reusing the
@@ -94,6 +96,7 @@ jobs:
           path: |
             build/bootstrap-stage2-linux500/${{ matrix.label }}/verdict.log
             build/bootstrap-stage2-linux500/${{ matrix.label }}/stage0-build.log
+            build/bootstrap-stage2-linux500/${{ matrix.label }}/auxiliary.txt
             build/bootstrap-stage2-linux500/${{ matrix.label }}/differential/verdict.json
             build/bootstrap-stage2-linux500/${{ matrix.label }}/differential/stage0/batch-results.json
             build/bootstrap-stage2-linux500/${{ matrix.label }}/differential/stage2/batch-results.json
