@@ -766,7 +766,7 @@ jobs:
         with:
           name: minic-current-bootstrap-stage2-native-runtime-v1
           repository: yituanxing/minic-toolchain
-          run-id: 39054222221
+          run-id: 39055271159
           github-token: ${{ github.token }}
           path: build/bootstrap-stage2-native/previous
 
@@ -783,7 +783,9 @@ jobs:
           mkdir -p "$work"
           python3 -m py_compile tools/ci/minic-bootstrap-full-native-v1.py
           probe_args=()
-          if [[ "${{ contains(github.event.head_commit.message, '[minic-bootstrap-full-native-probe]') }}" == true ]]; then
+          if [[ "${{ contains(github.event.head_commit.message, '[minic-bootstrap-native-link-only]') }}" == true ]]; then
+            probe_args=(--link-only)
+          elif [[ "${{ contains(github.event.head_commit.message, '[minic-bootstrap-full-native-probe]') }}" == true ]]; then
             probe_args=(--probe-only src/core/core_ir.c,preprocessor/src/preprocessor.c,tools/minic-cpp/main.c,linker/src/linker.c)
           fi
           set +e
@@ -801,7 +803,9 @@ jobs:
           fi
           echo 'FULL_NATIVE_GNU_PROCESS=PASS observed_execve_no_GNU_compiler_assembler_linker'
           test "$rc" -eq 0
-          if (( ${#probe_args[@]} )); then
+          if [[ "${{ contains(github.event.head_commit.message, '[minic-bootstrap-native-link-only]') }}" == true ]]; then
+            grep -Fq 'FULL_NATIVE_LINK_PROBE=PASS tool=minic-cpp' "$work/verdict.log"
+          elif (( ${#probe_args[@]} )); then
             grep -Fq 'FULL_NATIVE_PROBE=PASS source_tus=4' "$work/verdict.log"
           else
             grep -Fq 'FULL_NATIVE_TOOLCHAIN=PASS tools=9' "$work/verdict.log"
