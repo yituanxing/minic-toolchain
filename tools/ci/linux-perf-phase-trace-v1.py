@@ -170,6 +170,32 @@ def read_parser_lookup_counts(events):
     return found[0]
 
 
+
+CORE_REENTRY_RE = re.compile(
+    r"MINIC_CORE_REENTRY_INDEX ready=1 incoming=(\d+) "
+    r"indexed_if=(\d+) indexed_loop=(\d+) statements=(\d+) expressions=(\d+)"
+)
+
+
+def read_core_reentry_counts(events):
+    found = []
+    for _when, line in events:
+        m = CORE_REENTRY_RE.search(line)
+        if m:
+            incoming, if_queries, loop_queries, stmts, exprs = map(int, m.groups())
+            if stmts == 0:
+                raise RuntimeError("indexed core reentry has zero statements")
+            found.append({
+                "ready": 1, "incoming": incoming, "indexed_if_queries": if_queries,
+                "indexed_loop_queries": loop_queries, "statements": stmts,
+                "expressions": exprs,
+                "indexed_if_upper_bound_steps": if_queries * stmts,
+                "indexed_loop_upper_bound_steps": loop_queries * stmts})
+    if len(found) != 1:
+        raise RuntimeError("expected exactly one current core reentry index report; got "+str(len(found)))
+    return found[0]
+
+
 def summarize_specialization_trace(events):
     """Read existing opt-in specialization begin/end markers without touching IR."""
     started, total, calls = {}, {}, {}
@@ -202,7 +228,8 @@ def sample(executable,source,output,limit,collect_current_lookup_metrics=False):
     env=dict(os.environ, MINIC_BOOTSTRAP_TRACE="1", MINIC_BOOLEAN_SCAN_PROFILE="1",
              MINIC_SYMBOLIC_SCAN_PROFILE="1")
     if collect_current_lookup_metrics:
-        env.update(MINIC_INTEGER_OWNER_PERF="1", MINIC_PARSER_PERF_TRACE="1")
+        env.update(MINIC_INTEGER_OWNER_PERF="1", MINIC_PARSER_PERF_TRACE="1",
+                   MINIC_CORE_REENTRY_INDEX_PERF="1")
     begun=time.perf_counter_ns()
     with subprocess.Popen([str(executable),"-S",str(source),"-o",str(output)],
                           env=env,stdout=subprocess.DEVNULL,
@@ -225,7 +252,10 @@ def sample(executable,source,output,limit,collect_current_lookup_metrics=False):
                    if collect_current_lookup_metrics else None)
     parser_lookups=(read_parser_lookup_counts(events)
                     if collect_current_lookup_metrics else None)
+    core_reentry=(read_core_reentry_counts(events)
+                  if collect_current_lookup_metrics else None)
     return {"integer_owner":integer_owner, "parser_lookups":parser_lookups,
+            "core_reentry":core_reentry,
             "boolean_counts":bool_counts, "symbolic_counts":symbolic_counts, "wall_ms":round((time.perf_counter_ns()-begun)/1000000,3),
             "stage_ms":stages,"interstage_gap_ms":gaps,
             "specialization_ms":spec,"function_counts":functions, "assembly_sha":digest(output)}
@@ -266,6 +296,8 @@ def main():
                        (800000,"MINIC_BOOTSTRAP_TRACE stage=spec-integer-transitive state=begin functions=5"),
                        (2000000,"MINIC_BOOTSTRAP_TRACE stage=spec-integer-transitive state=end-success functions=5")]
         assert summarize_specialization_trace(integer_probe)["spec-integer-transitive"]["ms"]==1.2
+        core_example=[(0, "MINIC_CORE_REENTRY_INDEX ready=1 incoming=5 indexed_if=12 indexed_loop=7 statements=100 expressions=200")]
+        assert read_core_reentry_counts(core_example)["indexed_if_upper_bound_steps"] == 1200
         integer_example=[(0,"MINIC_INTEGER_OWNER_FILTER ready=1 candidates=100 skipped_other_owner=98 fallback=0")]
         assert read_integer_owner_counts(integer_example)["skipped_other_owner"]==98
         parser_example=[(0,"MINIC_PARSER_LOOKUPS local=4/35 function=3/9 global=2/15 typedef=8/40 enum=1/3 fixed=2/5 builtin_mem=4/7 functions=100 globals=80 aliases=50 expressions=2000")]
