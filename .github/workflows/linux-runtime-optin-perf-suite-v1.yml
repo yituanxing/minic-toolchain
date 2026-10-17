@@ -107,6 +107,9 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
+      # Seven Stage4 first500 producer artifacts from #39062218853 are all green;
+      # the isolated evidence-only aggregate recomputes 500 unique .s/.o
+      # identities with the repaired candidate_* manifest schema, NO rebuild.
       # Reuse the SAME seven runners, immutable first500 Kbuild .i and
       # original Stage0 oracle. Candidate is the REAL Stage4 RV64 compiler,
       # certified by matched-musl nine-tool fixedpoint #39058935623.
