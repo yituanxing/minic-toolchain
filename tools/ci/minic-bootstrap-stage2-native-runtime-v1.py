@@ -174,20 +174,20 @@ def main():
     pure=out/"all-mini";pure.mkdir(parents=True,exist_ok=True)
     header=pure/"answer.h"
     header.write_text(
-        "#ifndef BOOTSTRAP_ANSWER_H\\n"
-        "#define BOOTSTRAP_ANSWER_H\\n"
-        "#define TWENTY_ONE 21\\n"
-        "#define SUM_TWO(x) ((x) + (x))\\n"
-        "#endif\\n"
+        "#ifndef BOOTSTRAP_ANSWER_H\n"
+        "#define BOOTSTRAP_ANSWER_H\n"
+        "#define TWENTY_ONE 21\n"
+        "#define SUM_TWO(x) ((x) + (x))\n"
+        "#endif\n"
     )
     pure_source=pure/"main.c"
     pure_source.write_text(
-        "#include \\"answer.h\\"\\n"
-        "#define BOOTSTRAP_MAIN_VALUE SUM_TWO(TWENTY_ONE)\\n"
-        "#if BOOTSTRAP_MAIN_VALUE != 42\\n"
-        "#error native MiniPP preprocessor macro evaluation is wrong\\n"
-        "#endif\\n"
-        "int main(void) { return BOOTSTRAP_MAIN_VALUE; }\\n"
+        "#include \"answer.h\"\n"
+        "#define BOOTSTRAP_MAIN_VALUE SUM_TWO(TWENTY_ONE)\n"
+        "#if BOOTSTRAP_MAIN_VALUE != 42\n"
+        "#error native MiniPP preprocessor macro evaluation is wrong\n"
+        "#endif\n"
+        "int main(void) { return BOOTSTRAP_MAIN_VALUE; }\n"
     )
     pure_i=pure/"main.i";pure_s=pure/"main.s";pure_o=pure/"main.o"
     pure_start=pure/"start.o";pure_elf=pure/"minic-all-mini-42.elf"
