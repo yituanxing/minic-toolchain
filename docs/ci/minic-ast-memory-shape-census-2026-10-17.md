@@ -1,0 +1,46 @@
+# MiniC AST Memory Shape Census (2026-10-17)
+
+## Scope / reproducibility
+
+- Source baseline: runtime-certified AST array-owner one-pass, `src/frontend/ast_verifier.c` committed in `f2bc0fcd`; 2064 Linux C + GNU link + QEMU P1 certified in [#39000339623](https://github.com/yituanxing/minic-toolchain/actions/runs/39000339623).
+- Independent new *read-only*, temporary compiler-source probe: `tools/ci/apply-perf-ast-shape-census-v1.py`, invoked in the existing **perf500** workflow job by the opt-in tag `[minic-ast-shape-census]`. Original compiler and instrumented release compiler receive the **same frozen GNU Linux 6.6.143 .i**, **7/7 `.s` files byte-identical**, CI [#39001510651](https://github.com/yituanxing/minic-toolchain/actions/runs/39001510651) SUCCESS. No production source algorithm or AST object format changed.
+- An earlier `tools/ci/apply-perf-ast-footprint-trace-v1.py` and `linux-perf-ast-footprint-v1.sh` **already existed** for different older cohorts. This census **extends** historical shape profiling with post-2026-10-17 source identity, *seven new same-cohort frozen owners*, parsed/final counters, CALL-argument histogram, and separately measured original-versus-probe peak RSS. Do not confuse this instrumentation with an optimization candidate, do not reintroduce a new standalone workflow.
+- Measurements are *per compiler process*. Nominal capacity × sizeof is not true DRAM bandwidth; allocator virtual reserves are not all pages necessarily resident; `/usr/bin/time %M` is OS peak RSS and not an incremental memory saving measurement. Sum across TUs describes a study cohort, **not** concurrent CI-runner peak RSS.
+
+## Current actual AST layout
+
+At this host ABI: `sizeof(MinicExpression)=680` bytes, `sizeof(MinicFunction)=6536` bytes, `sizeof(MinicFunctionType)=5216` bytes. The Expression CALL union reserves **64 × 8 = 512 bytes of parameter IDs** even for non-CALL expressions. Functions embed **64 parameter types** plus specialization fact arrays. This is why the initial/structural hypothesis from [whole-path audit](minic-i-to-s-whole-path-complexity-audit-2026-10-15.md) deserves careful follow-up.
+
+| Frozen real Linux owner | final Expression count / capacity | CALLs (% all expressions) | CALLs >8 args | expression nominal capacity | function nominal capacity | original compiler max RSS |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| fs/ext4/fsync.o | 116,462 / 131,072 | 7,914 (6.80%) | 0 | 85 MiB | 102.12 MiB | 242.9 MiB |
+| kernel/bpf/btf.o | 219,953 / 262,144 | 12,773 (5.81%) | 14 | 170 MiB | 102.12 MiB | 418.4 MiB |
+| kernel/events/core.o | 208,812 / 262,144 | 12,148 (5.82%) | 3 | 170 MiB | 102.12 MiB | 395.2 MiB |
+| mm/memcontrol.o | 202,455 / 262,144 | 12,108 (5.98%) | 6 | 170 MiB | 102.12 MiB | 386.6 MiB |
+| fs/ext4/super.o | 144,179 / 262,144 | 10,073 (6.99%) | 1 | 170 MiB | 102.12 MiB | 294.1 MiB |
+| mm/hugetlb.o | 132,943 / 262,144 | 9,439 (7.10%) | 2 | 170 MiB | 102.12 MiB | 260.7 MiB |
+| mm/vmscan.o | 133,572 / 262,144 | 9,117 (6.83%) | 0 | 170 MiB | 102.12 MiB | 271.0 MiB |
+
+Seven-input cohort: 1,158,376 expression records, **73,572 CALL records (6.35%)**, **26 CALLs with more than eight arguments**, median per-input CALL ratio **6.795%**, and 1,703,936 nominal Expression slots across separate invocations. All seven P1-certified production compiler .s matched the instrumented copy.
+
+**Interpretation:** It is technically warranted to investigate a smaller Expression payload, because **93.65%** of stored expressions are *not CALL*, while each nominal Expression slot reserves space for 64 arguments; the actual copy/memory costs need A/B proof before claiming any speed gain. The per-TU 102 MiB Function-capacity array independently motivates auditing function-side specialization facts, but **do not** redesign both giant structs at once.
+
+## Candidate ordering / do-not-repeat rules
+
+**Card: `ast-expression-compact-call-payload` — `needs-design-and-safe-prototype`, not yet implemented.**
+- Goal: preserve all 64 arguments and evaluation order; avoid embedding a 64-ID table in every Expression. Potential design: immutable or exclusively-owned per-CALL argument payload allocated in a per-Program arena, with stable indexing and safe cloning. Need to examine all production use sites of `value.call.arguments` (parser, AST traversal/normalization, verifier, specialization, compiler), all struct-by-value copies, mutation, cloning, ownership, growth and destruction. Do not replace the fixed array with a bare malloc pointer; that would introduce aliasing, dangling-pointer, and double-free risks.
+- Prototype only a **single** representation change behind a bench-only patch in a disposable checkout, not a simultaneous rewiring of Function representation. Confirm tests for 0, 1, 2, 8, 9, 63, and 64 arguments, parser failure cleanup, indirect/variadic calls, GNU cleanup, specialization clones and in-place arg rewrite, and 64-limit rejection.
+- First validate exact AST contract and basic compilation/cross tool ABI. Require RSS change, user CPU time, compile wall on at least two large and two tiny frozen `.i`, then **byte-for-byte `.s`**. Stop if it regresses CPU wall or worsens memory allocation frequency without corresponding benefit. Only then rotated independent owners → first500 old/new → 7×2064+GNU link+QEMU P1. The 7-owner current census **does not authorize** a production representation edit yet.
+- This is fundamentally distinct from **PERF-033 rejected change** (2×→1.5× array capacity growth), Parser switch snapshot, Parser function/global hashes, and AST array semantic-owner index. Changing only growth factor is prohibited without a new cost model; in particular **do not retry PERF-033** under the "compact AST" label.
+  
+**Card: `ast-function-cold-parameter-facts` — `queued-after-expression`.**
+- `MinicFunction` is 6536 bytes and up to 16,384 slots per large input, nominal ~102 MiB even when the real function count and average argument count are much smaller. Potentially separate *optional specialization facts* and/or parameter lists for functions using them; first audit clone ownership and referential semantics, not just memory sizing. An independent alternative if Expression refactor is too invasive.
+  
+**Card: `layout-repeated-record-work` — `needs current CPU evidence`.**
+- `src/target/data_layout.c` contains nested record traversals; prior audit notes RV64 Codegen repeats some per-object type-layout work. Need actual layout calls/CPU cost under latest AST+other optimized source before creating yet another memoization table. Do not retry previously rejected P14/P15 by renaming them.
+
+## How many iterations remain?
+
+No defensible exact count of successful optimizations. The next **5–8 disciplined candidate/screening rounds** are plausible from the currently *unresolved* structures: Expression footprint, Function cold arrays, layout, new phase attribution after memory changes, and remaining non-repeated Symbolic/Parser/Codegen algorithms. That number is an **exploration budget, not a guarantee of 5–8 accepted patches or of cumulative speedup**. Expect most micro-candidates to fail promotion gates as before.
+
+**Stop/rotation rule:** Any proposal with real 500-TU gain <~1–2% or unstable CPU/RSS trade-offs is not promoted by default; promote modest wins only with unusually strong multi-scale evidence and runtime safety. If 3 consecutive well-attributed distinct candidates fail expected impact, re-profile the full current source instead of blindly drafting more hashes/indices. Archive negative results and never reopen without an updated baseline plus changed cost model.
