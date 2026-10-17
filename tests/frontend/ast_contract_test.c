@@ -364,6 +364,97 @@ static int test_normalization_transaction(void) {
  * Snapshots borrow the source; cloning a Function copies parameters through
  * the public setter, and repeated signature updates cannot alias freed data.
  */
+/* Always available on the legacy inline64 layout as well as the
+ * experimental inline8+private overflow layout. The latter must clone
+ * overflow during AST normalization instead of aliasing freed old storage. */
+static int test_call_argument_overflow_normalization(void) {
+    MinicC0Program program;
+    MinicExpression call;
+    MinicExpressionId argument, call_id;
+    const MinicExpression *stored;
+    size_t i;
+    int failure = 0;
+#ifdef MINIC_CALL_INLINE_ARGUMENTS
+    uint32_t scratch[MINIC_MAX_FUNCTION_PARAMETERS-MINIC_CALL_INLINE_ARGUMENTS];
+#endif
+
+    minic_c0_program_initialize(&program);
+    (void)memset(&call, 0, sizeof(call));
+    call.kind = MINIC_EXPRESSION_CALL;
+    call.type = minic_type_int();
+    call.value_category = MINIC_VALUE_RVALUE;
+    call.value.call.function_id = 0U; /* direct, not indirect */
+    call.value.call.callee = MINIC_EXPRESSION_INVALID;
+    call.value.call.argument_count = MINIC_MAX_FUNCTION_PARAMETERS;
+#ifdef MINIC_CALL_INLINE_ARGUMENTS
+    call.value.call.overflow_arguments = scratch; /* stack-borrowed during build */
+#endif
+    for (i=0U; i<MINIC_MAX_FUNCTION_PARAMETERS; ++i) {
+        if (!add_integer(&program, (int)i, &argument) ||
+            !minic_c0_call_set_argument(&call, i, argument)) {
+            failure = 80;
+            goto finish;
+        }
+    }
+    if (minic_c0_call_set_argument(&call, MINIC_MAX_FUNCTION_PARAMETERS, argument) ||
+        !minic_c0_program_add_expression(&program, &call, &call_id)) {
+        failure = 81;
+        goto finish;
+    }
+    stored = minic_c0_program_expression(&program, call_id);
+    if (stored == NULL || stored->value.call.argument_count != MINIC_MAX_FUNCTION_PARAMETERS) {
+        failure = 82;
+        goto finish;
+    }
+#ifdef MINIC_CALL_INLINE_ARGUMENTS
+    if (stored->value.call.overflow_arguments == scratch ||
+        stored->value.call.overflow_arguments == NULL) {
+        failure = 83;
+        goto finish;
+    }
+#endif
+    for (i=0U; i<MINIC_MAX_FUNCTION_PARAMETERS; ++i) {
+#ifdef MINIC_CALL_INLINE_ARGUMENTS
+        argument = minic_c0_call_argument(stored, i);
+#else
+        argument = stored->value.call.arguments[i];
+#endif
+        if (argument != (MinicExpressionId)i) {
+            failure = 84;
+            goto finish;
+        }
+    }
+    if (!minic_c0_program_normalize_casts(&program)) {
+        failure = 85;
+        goto finish;
+    }
+    stored = minic_c0_program_expression(&program, call_id);
+    if (stored == NULL || stored->kind != MINIC_EXPRESSION_CALL) {
+        failure = 86;
+        goto finish;
+    }
+    for (i=0U; i<MINIC_MAX_FUNCTION_PARAMETERS; ++i) {
+#ifdef MINIC_CALL_INLINE_ARGUMENTS
+        argument = minic_c0_call_argument(stored, i);
+#else
+        argument = stored->value.call.arguments[i];
+#endif
+        if (argument != (MinicExpressionId)i) {
+            failure = 87;
+            goto finish;
+        }
+    }
+#ifdef MINIC_CALL_INLINE_ARGUMENTS
+    if (stored->value.call.overflow_arguments == scratch ||
+        stored->value.call.overflow_arguments == NULL) {
+        failure = 88;
+    }
+#endif
+finish:
+    minic_c0_program_destroy(&program);
+    return failure;
+}
+
 static int test_function_signature_storage_ownership(void) {
     MinicC0Program program;
     MinicFunctionId source_id, clone_id, unused_id;
@@ -489,6 +580,10 @@ int main(void) {
         return status;
     }
     status = test_function_signature_storage_ownership();
+    if (status != 0) {
+        return status;
+    }
+    status = test_call_argument_overflow_normalization();
     if (status != 0) {
         return status;
     }
