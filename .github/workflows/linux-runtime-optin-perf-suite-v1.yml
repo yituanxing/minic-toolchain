@@ -807,6 +807,29 @@ jobs:
           done | tee "$root/runtime-sha256.txt"
           echo "MUSL_SEED=PASS external_GNU_producer_disclosed=true native_link_invokes_GNU=false"
 
+      # Restore SHA-validated musl 1.2.5 binary-seed Artifact instead of
+      # invoking GNU to rebuild musl in Stage3/4. Historic producer is disclosed.
+      - name: Restore SHA-certified musl static seed without GCC execution
+        if: contains(github.event.head_commit.message, '[minic-bootstrap-native-musl-selfhost]')
+        uses: actions/download-artifact@v4
+        with:
+          name: minic-current-bootstrap-stage2-native-runtime-v1
+          repository: yituanxing/minic-toolchain
+          run-id: 39057022666
+          github-token: ${{ github.token }}
+          path: build/bootstrap-stage2-native/musl-restore
+
+      - name: Audit restored musl binary-seed identity
+        if: contains(github.event.head_commit.message, '[minic-bootstrap-native-musl-selfhost]')
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          root="$GITHUB_WORKSPACE/build/bootstrap-stage2-native/musl-restore/musl-seed"
+          test -s "$root/runtime-sha256.txt"
+          cd "$root/musl-build"
+          sha256sum -c "$root/runtime-sha256.txt"
+          echo 'MUSL_SEED_RESTORED=PASS GCC_invocations=0 musl_source_sha_pinned=true'
+
       - name: Full native Stage3 to Stage4 self-rebuild of all nine tools
         if: contains(github.event.head_commit.message, '[minic-bootstrap-full-native]') && contains(github.event.head_commit.message, '[minic-bootstrap-stage2-native-runtime]')
         shell: bash
@@ -827,6 +850,9 @@ jobs:
             fi
           elif [[ "${{ contains(github.event.head_commit.message, '[minic-bootstrap-full-native-probe]') }}" == true ]]; then
             probe_args=(--probe-only src/core/core_ir.c,preprocessor/src/preprocessor.c,tools/minic-cpp/main.c,linker/src/linker.c)
+          fi
+          if [[ "${{ contains(github.event.head_commit.message, '[minic-bootstrap-native-musl-selfhost]') }}" == true ]]; then
+            probe_args+=(--musl-build "$GITHUB_WORKSPACE/build/bootstrap-stage2-native/musl-restore/musl-seed/musl-build")
           fi
           set +e
           strace -f -qq -e trace=execve -o "$work/execve.log" \
