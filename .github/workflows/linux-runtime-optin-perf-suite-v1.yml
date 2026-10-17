@@ -282,7 +282,7 @@ jobs:
           retention-days: 14
   aggregate:
     needs: shard
-    if: always() && ((github.event_name == 'workflow_dispatch' && (inputs.mode == 'all3352' || inputs.mode == 'all')) || (github.event_name == 'push' && (contains(github.event.head_commit.message, '[linux-perf3352]') || contains(github.event.head_commit.message, '[minic-bootstrap-stage2-linux500]') || contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux500]') || contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux500-aggregate-only]') || contains(github.event.head_commit.message, '[minic-bootstrap-stage4-dispatch-audit-selftest]'))))
+    if: always() && ((github.event_name == 'workflow_dispatch' && (inputs.mode == 'all3352' || inputs.mode == 'all')) || (github.event_name == 'push' && (contains(github.event.head_commit.message, '[linux-perf3352]') || contains(github.event.head_commit.message, '[minic-bootstrap-stage2-linux500]') || contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux500]') || contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux500-aggregate-only]') || contains(github.event.head_commit.message, '[minic-bootstrap-stage4-dispatch-audit-selftest]') || contains(github.event.head_commit.message, '[minic-bootstrap-native-asm-census]'))))
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -294,6 +294,42 @@ jobs:
           set -Eeuo pipefail
           python3 -m py_compile tools/ci/minic-bootstrap-stage2-2064-shard-audit-v1.py
           python3 tools/ci/minic-bootstrap-stage2-2064-shard-audit-v1.py --self-test
+      # Reuse the existing aggregate runner as a pure read-only source of
+      # generated-code evidence. Never rebuild the 77 sources or 2064 Linux C
+      # objects here, and never alter the fixedpoint/production compiler.
+      - uses: actions/checkout@v4
+        if: contains(github.event.head_commit.message, '[minic-bootstrap-native-asm-census]')
+      - name: Restore immutable green native Stage4 compiler and all 77 assembly inputs
+        if: contains(github.event.head_commit.message, '[minic-bootstrap-native-asm-census]')
+        uses: actions/download-artifact@v4
+        with:
+          repository: yituanxing/minic-toolchain
+          run-id: 39058935623
+          name: minic-current-bootstrap-stage2-native-runtime-v1
+          github-token: ${{ github.token }}
+          path: build/bootstrap-stage2-native/asm-census-seed
+      - name: Quantify Stage4 generated instruction and register-spill overhead
+        if: contains(github.event.head_commit.message, '[minic-bootstrap-native-asm-census]')
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 -m py_compile tools/ci/minic-native-asm-instruction-census-v1.py
+          python3 tools/ci/minic-native-asm-instruction-census-v1.py \
+            --artifact-dir build/bootstrap-stage2-native/asm-census-seed \
+            --output build/bootstrap-stage2-native/asm-census-results.json \
+            | tee build/bootstrap-stage2-native/asm-census-verdict.txt
+          grep -Fq 'MINIC_NATIVE_ASM_CENSUS=PASS sources=77' build/bootstrap-stage2-native/asm-census-verdict.txt
+      - name: Preserve exact certified Stage4 assembly efficiency census
+        if: always() && contains(github.event.head_commit.message, '[minic-bootstrap-native-asm-census]')
+        uses: actions/upload-artifact@v4
+        with:
+          name: minic-bootstrap-stage4-asm-instruction-census
+          path: |
+            build/bootstrap-stage2-native/asm-census-results.json
+            build/bootstrap-stage2-native/asm-census-verdict.txt
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Retrieve seven Stage2 first500 Linux object manifests
         if: contains(github.event.head_commit.message, '[minic-bootstrap-stage2-linux500]')
         uses: actions/download-artifact@v4
