@@ -57,6 +57,9 @@ jobs:
       - uses: actions/checkout@v4
       # Reuse existing seven shard runners for the *same* frozen first500 .i.
       # All 500 verified per runner; Stage0 vs QEMU Stage2 .s/.o SHA.
+      # First real full 7-runner Stage2 bootstrap qualification, reusing the
+      # fixed-point ELF (39040013459), the certified cache and immutable
+      # Stage0 source fingerprint. Separate this gate from full 2064 P1.
       - name: Restore SHA-certified frozen first500 source corpus
         if: contains(github.event.head_commit.message, '[minic-bootstrap-stage2-linux500]')
         uses: actions/cache/restore@v4
