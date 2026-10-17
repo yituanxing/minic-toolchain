@@ -33,7 +33,7 @@ permissions:
 jobs:
 
   shard:
-    if: (github.event_name == 'workflow_dispatch' && (inputs.mode == 'all3352' || inputs.mode == 'all')) || (github.event_name == 'push' && contains(github.event.head_commit.message, '[linux-perf3352]')) || (github.event_name == 'push' && contains(github.event.head_commit.message, '[minic-bootstrap-stage2-linux500]'))
+    if: (github.event_name == 'workflow_dispatch' && (inputs.mode == 'all3352' || inputs.mode == 'all')) || (github.event_name == 'push' && contains(github.event.head_commit.message, '[linux-perf3352]')) || (github.event_name == 'push' && contains(github.event.head_commit.message, '[minic-bootstrap-stage2-linux500]')) || (github.event_name == 'push' && contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux500]'))
     runs-on: ubuntu-24.04
     timeout-minutes: 110
     strategy:
@@ -104,6 +104,56 @@ jobs:
             build/bootstrap-stage2-linux500/${{ matrix.label }}/differential/stage2/assemble-results.json
             build/bootstrap-stage2-linux500/${{ matrix.label }}/differential/stage2/failure-contexts.txt
             build/bootstrap-stage2-linux500/${{ matrix.label }}/differential/stage2/minic-stderr
+          if-no-files-found: warn
+          retention-days: 7
+
+      # Reuse the SAME seven runners, immutable first500 Kbuild .i and
+      # original Stage0 oracle. Candidate is the REAL Stage4 RV64 compiler,
+      # certified by matched-musl nine-tool fixedpoint #39058935623.
+      # This gate uses GNU AS as an external object oracle only. It does NOT
+      # pretend to prove native MiniAS/LD for a full Linux Image.
+      - name: Restore frozen Linux first500 for Stage4 native compiler differential
+        if: contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux500]')
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-perf-corpus
+          key: linux-6.6.143-first500-rv64-v1-${{ hashFiles('tests/external/linux/batch_probe.sh', 'tests/external/linux/probe.sh', 'tests/external/linux/replay-indices.txt') }}
+          fail-on-cache-miss: true
+
+      - name: Restore SHA-certified nine-tool Stage4 build evidence
+        if: contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux500]')
+        uses: actions/download-artifact@v4
+        with:
+          name: minic-current-bootstrap-stage2-native-runtime-v1
+          repository: yituanxing/minic-toolchain
+          run-id: 39058935623
+          github-token: ${{ github.token }}
+          path: build/bootstrap-stage4-linux500/artifact
+
+      - name: Stage4 native MiniC versus Stage0 Linux first500 exact object parity
+        if: contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux500]')
+        timeout-minutes: 95
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          bash tools/ci/minic-bootstrap-stage4-linux500-shard-v1.sh "$LABEL"
+
+      - name: Preserve Stage4 frozen Linux first500 parity evidence
+        if: always() && contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux500]')
+        uses: actions/upload-artifact@v4
+        with:
+          name: minic-bootstrap-stage4-linux500-${{ matrix.label }}
+          path: |
+            build/bootstrap-stage4-linux500/${{ matrix.label }}/verdict.log
+            build/bootstrap-stage4-linux500/${{ matrix.label }}/stage0-build.log
+            build/bootstrap-stage4-linux500/${{ matrix.label }}/stage4-help.log
+            build/bootstrap-stage4-linux500/${{ matrix.label }}/auxiliary.txt
+            build/bootstrap-stage4-linux500/${{ matrix.label }}/differential/verdict.json
+            build/bootstrap-stage4-linux500/${{ matrix.label }}/differential/stage0/batch-results.json
+            build/bootstrap-stage4-linux500/${{ matrix.label }}/differential/stage4/batch-results.json
+            build/bootstrap-stage4-linux500/${{ matrix.label }}/differential/stage0/assemble-results.json
+            build/bootstrap-stage4-linux500/${{ matrix.label }}/differential/stage4/assemble-results.json
+            build/bootstrap-stage4-linux500/${{ matrix.label }}/differential/stage4/minic-stderr
           if-no-files-found: warn
           retention-days: 7
 
