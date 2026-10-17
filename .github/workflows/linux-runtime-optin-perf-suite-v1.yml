@@ -301,6 +301,9 @@ jobs:
           # another corpus or creating another job.
           fetch-depth: 8
 
+      # 2026-10-17: post 208B Expression CALL inline8 integrated, use the
+      # same profiler lanes on frozen fsync and BTF to identify NEW hotspots.
+      # Instrumented debug binary is diagnostics-only; release is untouched.
       # Opt-in current-source profile; no 500-owner paired retest.
       - name: Build current Linux MiniC and diagnostics-only -O2 traced copy
         if: contains(github.event.head_commit.message, '[minic-current-phase20]') || contains(github.event.head_commit.message, '[minic-cpu-profile-only]')
