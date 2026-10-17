@@ -97,6 +97,14 @@
 
 **决定**：不要实现 Workspace v2、Generation Stamp 或继续 Boolean/Core Reentry 的微调。下一步用已存在、会追踪真正 `bin/minic-cc` 的 `[minic-cpu-profile-only]` 对两个冻结输入做 CPU 函数归因，尤其确认 Parser 占用是不是未优化的新问题。该 CPU 指令剖析不等于 wall time，也不能自动推广至 2064 TU。基于它再开**新的不同成本模型**候选，而不是预设增设索引/哈希。已触发同一 perf500 Job 的 run [#38997549409](https://github.com/yituanxing/minic-toolchain/actions/runs/38997549409)；本行仅记录开始，**最终状态须按对应日志判定**。
 
+## Parser string Lexer-only lookahead：不同于已拒绝的顶层 Probe（2026-10-17）
+
+[原始 CPU census #38997549409](https://github.com/yituanxing/minic-toolchain/actions/runs/38997549409)：当前正式 MiniC 的 Parser sizeof=133,664 bytes；`parser_string.c:689` `parse_string_text` 的 Parser 复制 fsync **5128** 次、BTF **6257** 次，逻辑累计分别约 685MB/836MB（**不是实测 DRAM 流量**）。已拒绝的 `parser_function.c` 顶层 enum/record probe（[#38998023186](https://github.com/yituanxing/minic-toolchain/actions/runs/38998023186)）命中量、实现位置均不同，不能作为这个热调用点的否决证据。
+
+仅在 CI disposable checkout 应用 `tools/ci/apply-perf-parser-string-lexer-lookahead-v1.py`；把 `minic_parser_parse_string_text` 的**完整 Parser 副本**换成只保存 `MinicLexer + MinicToken`，保留源文本解析及原 Parser 上的诊断，生产源码不变。第一轮 [CI #38999333053](https://github.com/yituanxing/minic-toolchain/actions/runs/38999333053) **SUCCESS**，原 GNU-Kbuild SHA-frozen 两文件各臂 4 次配对，`.s` 2/2 逐字节一致：fsync **479.884→454.228ms（1.0565×）**、BTF **1407.220→1376.280ms（1.0225×）**，合计 P50 **1887.104→1830.508ms（1.0309×）**。不能称全 Linux 快 3%。
+
+**阶段状态 `verified-local / independent-five pending`**：第二次只扩到先前未测过的 events-core/memcontrol/ext4-super/hugetlb/vmscan 五份冻结 Kbuild 输入，仍复用原 perf500 Job/AB 计时，不重新测量 fsync/BTF。运行 [#38999421635](https://github.com/yituanxing/minic-toolchain/actions/runs/38999421635) 已启动、需以最终日志认证。若扩样贡献低就立即停止，不无故做 500/2064 或合入生产。
+
 ## 接下来值得验证的不同瓶颈（先调查，不抢先实现）
 
 已复核 `src/compiler/compiler.c`，存在 `minic_core_named_function_id()`：Core Reachability 遍历 `CALL` / `FUNCTION_ADDRESS` 时，针对每个目标名重新按 `program->function_count` 线性扫描所有源函数，比较 assembler symbol/length 并取**第一**个匹配。当前仓库未发现这条 Core 名称解析路径已有同等索引；它不同于已集成的 **Parser 函数名哈希**（Parser 作用域/名称表）和 **Core Reentry Incoming 索引**（goto/asm-goto 源流向）。来自真正 `minic-cc` 的 [#38997549409](https://github.com/yituanxing/minic-toolchain/actions/runs/38997549409) BTF Callgrind：`minic_enqueue_core_named_function` 自身约 **281.7M retired-simulated instructions / 2.75% Ir**，但这不是准确 wall-time 或已证明线性解析占比。
