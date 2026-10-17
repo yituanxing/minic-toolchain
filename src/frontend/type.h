@@ -50,11 +50,9 @@ typedef enum MinicTypeQualifier {
 } MinicTypeQualifier;
 
 typedef struct MinicType {
+    /* Identity, qualifiers and pointer metadata first to avoid the
+       ABI alignment hole before the size_t IDs. No field changes type. */
     MinicTypeBaseKind base_kind;
-    MinicRecordId record_id;
-    MinicArrayTypeId array_type_id;
-    MinicFunctionTypeId function_type_id;
-    MinicEnumId enum_id;
     MinicIntegerSign integer_sign;
     MinicIntegerRank integer_rank;
     bool is_plain_char;
@@ -62,6 +60,10 @@ typedef struct MinicType {
     unsigned int pointer_qualifiers;
     unsigned int pointer_volatile_qualifiers;
     unsigned int pointer_depth;
+    MinicRecordId record_id;
+    MinicArrayTypeId array_type_id;
+    MinicFunctionTypeId function_type_id;
+    MinicEnumId enum_id;
     size_t explicit_alignment;
 } MinicType;
 
