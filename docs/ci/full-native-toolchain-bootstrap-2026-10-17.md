@@ -48,9 +48,11 @@ Runner 通过 `strace -f -e execve` 对完整脚本记录执行族，禁止任�
 | #39057022666 | 用仓库现有的 MiniLD+musl 静态链接经验，单独生成经过 tarball SHA 验证的 **musl 1.2.5 外部二进制运行库种子**。MiniLD 用同一组 77 个 Mini 原生 .o 中的 MiniPP 对象链接 **成功**，且生成的 RV64 MiniPP 经 QEMU `--help` 运行成功。链接测试 `strace` 证实 GNU GCC/AS/LD 调用为 **0**。musl 最初由 GNU 编译器生成，明确记录其种子来源，**不称作 libc 原生自举**。 |
 | #39057243168 | **重大技术突破：真实 Stage3/Stage4 全工具固定点已实际通过**。Stage3: 77/77 MiniPP+MiniC+MiniAS / 9/9 ELF；Stage4 再处理 77/77 / 9/9 ELF；逐 TU `.i/.s/.o` SHA 一致；九工具的**原始 ELF SHA256 全部一致**，MiniObjcopy 抽取的加载映像全部一致；`strace` 中 GCC/GNU AS/GNU LD 为 0。原始日志打印 `FULL_NATIVE_TOOLCHAIN=PASS`。**CI Job 被错误判为失败**，原因是 workflow 使用 `probe_args` 非空判断“四文件 probe”，而 `--musl-build` 本身就产生两个参数，导致随后的 `grep FULL_NATIVE_PROBE=PASS` 查找失败。这是门禁表达式误判，非九工具构建失败。已在 `f92d6724` 修改为明确依据 `[minic-bootstrap-full-native-probe]` marker。 |
 | #39057831387 | 使用相同已固定 musl 1.2.5 tarball 及 configure 的 source producer，通过 `make install-headers` 生成**与 libc.a、CRT 匹配的标准头文件**，编制每个 header SHA 清单并入 Artifact；runtime 链接探测继续通过。原先使用 **glibc 头文件 + musl 运行库**，虽然达到自举固定位点，仍存在 `struct stat` 等 C ABI 布局不匹配风险；不能据此声称通用运行时正确性。 |
-| #39057960530 | 按上轮成功的 libc/CRT/header 双重 SHA 重新搭建 Stage3 原生构建输入，先用四个真实生产 TU 核对 MiniPP→MiniC→MiniAS；禁止静默重用 glibc 头文件展开的旧 Stage3 对象。本轮 probe 结果以 CI Artifact 为准。另增加最终 Stage4 自己执行的真实 MiniPP→MiniC→MiniAS→MiniLD→QEMU exit42，以及 Stage4 Driver 同链运行时验收（`85551375`）；仅 `--help` 与 ELF 同一性不足以称为功能正确。 |
+| #39057960530 | **Matching musl ABI preflight SUCCESS**：从同一 SHA-pinned musl 1.2.5 source 得到 headers 和 libc/CRT；真实 4/4 生产 C 文件用 Stage2-built MiniPP→Stage2 MiniC→Stage2-built MiniAS 均 PASS；strace 零 GCC/GNU AS/GNU LD。下一步在全部 77 个生产 TU 上重复、重新构建九工具并检查 Stage3/Stage4 固定点；不能重用旧 glibc ABI 对象。另加入新的 Stage4 C→ELF→QEMU exit42 和完整 Driver 联合运行时验收（`85551375`）。 |
 
 每次实验按 `stderr→源 .i→标准/ABI 前提→最小有界回放→全量` 调试，不能重复修改已经证实正确的 47 个编译器生产 C 源。
+
+| #musl-abi-full | **已提交完整 77 TU matched-musl ABI 原生全链复验**，要求 Stage3/Stage4 九工具编译、MiniLD 链接、逐字节固定点，以及新增 QEMU 42/Driver 运行时；禁用 GCC/AS/LD 进程，外部 musl seed 单独披露。|
 
 ## 接下来严格验收
 
