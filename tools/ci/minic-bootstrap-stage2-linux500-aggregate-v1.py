@@ -44,9 +44,13 @@ def main():
                                    " expected "+str(value)+" found "+str(d.get(key)))
         if len(d["rows"])!=n or d["groups"]!={"range":n}:
             raise RuntimeError("invalid shard row/group length "+label)
+        # Stage2 legacy JSON uses stage2_*_sha; Stage4 frozen replay uses
+        # candidate_*_sha to make it impossible to mistake the new guest
+        # compiler for the original Stage2 ELF.
+        sha_key="stage2" if candidate=="stage2" else "candidate"
         if any(not x["assembly_same"] or not x["object_same"] or
-               x["stage0_assembly_sha"] != x[candidate+"_assembly_sha"] or
-               x["stage0_object_sha"] != x[candidate+"_object_sha"]
+               x["stage0_assembly_sha"] != x[sha_key+"_assembly_sha"] or
+               x["stage0_object_sha"] != x[sha_key+"_object_sha"]
                for x in d["rows"]):
             raise RuntimeError("Stage0/"+candidate+" object or assembly mismatch "+label)
         if candidate=="stage4" and (d.get("candidate_label")!="stage4" or
