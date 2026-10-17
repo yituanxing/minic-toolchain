@@ -1,29 +1,5 @@
 #include "minias.h"
 
-/*
- * RISC-V ELF e_flags values are processor-specific ABI constants.  GNU
- * libc's <elf.h> exports them, but musl's generic <elf.h> does not.
- * Keep the native MiniAS CLI portable across both hosted C runtimes.
- * These are the ELF psABI-defined bit values, not compiler-specific knobs.
- */
-#ifndef MINIAS_EF_RISCV_FLOAT_ABI
-#define MINIAS_EF_RISCV_FLOAT_ABI 0x0006
-#endif
-#ifndef MINIAS_EF_RISCV_FLOAT_ABI_SOFT
-#define MINIAS_EF_RISCV_FLOAT_ABI_SOFT 0x0000
-#endif
-#ifndef MINIAS_EF_RISCV_FLOAT_ABI_SINGLE
-#define MINIAS_EF_RISCV_FLOAT_ABI_SINGLE 0x0002
-#endif
-#ifndef MINIAS_EF_RISCV_FLOAT_ABI_DOUBLE
-#define MINIAS_EF_RISCV_FLOAT_ABI_DOUBLE 0x0004
-#endif
-#ifndef MINIAS_EF_RISCV_FLOAT_ABI_QUAD
-#define MINIAS_EF_RISCV_FLOAT_ABI_QUAD 0x0006
-#endif
-#ifndef MINIAS_EF_RISCV_RVE
-#define MINIAS_EF_RISCV_RVE 0x0008
-#endif
 #include <stdio.h>
 #include <string.h>
 
