@@ -13,7 +13,7 @@
 | 代表性真实 TU | Post-round-6 total Ir | Current post-round-7 total Ir | Symbolic self Ir / share（旧→新） | 本轮 self Ir 其他明显热点 |
 | --- | ---: | ---: | --- | --- |
 | fs/ext4/fsync.o | 1,806,899,557 | **1,575,034,285** | 约 248M/13.73% → **16,053,178/1.02%** | Lexer next 120,381,826/7.64%；Parser current_identifier_is 67,157,574/4.26%；Data Layout type depth 合计较高；FunctionBody validate 56,428,869/3.58%；Enum bind 53,642,844/3.41% |
-| kernel/bpf/btf.o | 6,760,025,836 | **约 5.831B** | 约 979M/14.48% → **50,548,257/0.87%** | Enum bind 656,816,747/11.26%；Parser span_equals 420,351,741/7.21%；libc memset 296,295,829/5.08%；Core named queue 281,724,220/4.83%；Lexer next 201,850,277/3.46% |
+| kernel/bpf/btf.o | 6,760,025,836 | **5,832,340,530** | 约 979M/14.48% → **50,548,257/0.87%** | Enum bind 656,816,747/11.26%；Parser span_equals 420,351,741/7.21%；libc memset 296,295,829/5.08%；Core named queue 281,724,220/4.83%；Lexer next 201,850,277/3.46% |
 
 注意同比来源于两次 Callgrind、同 SHA-frozen 输入和同一类构建配置，仍不等价于**证明**内存、CPU 周期或单 TU wall 等比例变化；Symbolic 的绝对 self Ir 大幅下降与第七轮真实 A/B wall 的方向一致，不能直接将自耗差额换算编译速度。
 
