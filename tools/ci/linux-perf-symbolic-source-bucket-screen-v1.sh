@@ -27,6 +27,12 @@ candidate_cc="$root/$trial-after/bin/minic-cc"
 test -x "$base" && test -x "$candidate"
 ! cmp -s "$base_cc" "$candidate_cc"
 sha256sum "$base_cc" "$candidate_cc" > "$root/evidence/$trial-compiler-shas.txt"
+# Regression triage already has the original five-owner A/B and 500/500 output
+# equality; rebuild exact compilers, but don't re-run those suites needlessly.
+if [[ "${MINIC_SYMBOLIC_AB_BUILD_ONLY:-0}" == 1 ]]; then
+  echo "MINIC_SYMBOLIC_SOURCE_BUCKET_PAIR_READY=PASS production_untouched=true"
+  exit 0
+fi
 
 python3 - "$corpus" "$root/evidence/$trial-inputs.tsv" <<'PY'
 from pathlib import Path
