@@ -12,6 +12,29 @@
 - 首次诊断 [#39020963620](https://github.com/yituanxing/minic-toolchain/actions/runs/39020963620) 在**旧版 Boolean census 的过期源码匹配锚点**失败，未进入 20 TU；第二次 [#39021055244](https://github.com/yituanxing/minic-toolchain/actions/runs/39021055244) 已成功构建 opt-in Symbolic 仪表，但仅因 phase-trace Python self-test 正则转义笔误失败，未进入 20 TU。这两个均不是 MiniC 正式源码编译/QEMU 回归；现已纠正且保持旧 Boolean instrumentation 不参与本次 Symbolic 测量。
 - 晋级条件：20/20 原始 vs 计数插桩汇编字节一致、计数满足关系不变量、分段时间有来源，且出现**历史未覆盖**的显著真实成本，才建立具体的单因素 A/B。只有通过同 Runner wall/user/sys/RSS、回退复核，才考虑扩大到 500 和 2064/QEMU。
 
+### 第七轮诊断结果（当前生产 C，2026-10-17）
+
+**正式有效验证**：[现有 perf500 CI #39021486485](https://github.com/yituanxing/minic-toolchain/actions/runs/39021486485) **SUCCESS**；复用原 500 SHA-frozen GNU Kbuild 缓存的固定 20 TU（hot10/middle5/light5），**20/20 原始/诊断 `.s` 字节严格一致**，没有优化候选和生产 `src` 修改。Direct/Transitive 计数沿用原 `apply-perf-symbolic-loop-trace-v0.py`，新计数只统计循环工作；独立 `minic-cc` CPU Callgrind fsync 已通过 `MINIC_HOTSPOT_PROFILE=PASS`、汇编一致。旧 Boolean census patch 已不兼容现版 Boolean local-domain helper，本次明确 SKIPPED；其原始 `spec-boolean` 外层计时仍有效，不能伪称 Boolean direct/transitive 已重新测出。
+
+| 已验证 20 TU Symbolic 计数 | 累计值 |
+| --- | ---: |
+| Transitive specialized callers（进入循环的 clone） | **3,283** |
+| Transitive Expression 内循环迭代 | **603,761,021** |
+| 经 Owner Index 明确排除其他 Source 的访问 | **472,979,276（78.34%）** |
+| 未被 Owner 过滤的 Expression 访问 | **130,781,745** |
+| 留在循环内的 CALL visits | **885,165（未排除访问中的 0.677%）** |
+| Transitive pointer argument evaluation attempts | **281,367** |
+| Transitive variant lookup / linear candidate probes | **390 / 4,871,138** |
+| Direct variant lookup / linear candidate probes | **898 / 11,050,065** |
+| Owner Index ready / fallback（按 TU 计） | **20 / 0** |
+| 新增 Direct / Transitive clones | **898 / 390** |
+
+同 Runner 20 TU 本次**插桩**阶段计时：Symbolic Direct **76.501ms**、Symbolic Transitive **1460.341ms**，Parser **3729.559ms**，Core-set **1954.011ms**，全部诊断编译累计 **11303.688ms**。这些是 **选中的 20 个 TU** 的 opt-in tracer wall，不是 2064 全量统计，也不是未插桩 A/B；前一轮仅 workflow 过期 assertion 失败但 20/20 内部通过的运行 #39021371976 给出 Symbolic Transitive **1450.590ms**，全诊断 wall **8015.250ms**，说明 Runner 环境和插桩其他阶段变化较大，不能从比例推断 CPU 周期或性能收益。
+
+**新候选初判：** 核心可避免工作是 Transitive 的 `clone × 全 TU expressions` 扫描。已集成 Owner Index 仍在 603.76M 次循环里做事后过滤；只留下 0.885M CALL visits。下一张卡如果进入 A/B，应与已拒绝的 `PERF-023` **全局 CALL-only** 不同：考虑**source-grouped CALL visit buckets + ambiguous/shared fallback**，同时消除非 CALL 和其他 source 的 CALL 遍历。必须保留原 `ExpressionId` 升序、共享/不明 owner 扫描、新增 Expression 处理、在 OOM 下退回原逻辑、clone 及 Variant first-match 顺序；构建索引的 CPU/RSS 也必须计入 A/B。先采用 3～7 个正负热样本验证，不直接 500/2064。
+
+备选路径：Variant lookup 共有 **15,921,203** 次线性 candidate probes（1,288 次 lookup，平均约 12,361 probes），具备按 source_id 筛除无关变体的潜力，但目前缺少同阶段中这部分的**独占 CPU 成本**，不可直接认定它比 603.76M expression 迭代更值得优先修改。第三个观察是 Parser 仍在这一组样本中耗时更高，Symbolic 若独立 A/B 无足够边际收益应立即转回 Parser/Core，而非无限细抠本阶段。
+
 ## 第六轮完成后最新 CPU 归因：Parser hot-copy 病因解除，下一张卡需重选（2026-10-17）
 
 **全量来源准确性：** 第六轮正式源码 [cbbd5654](https://github.com/yituanxing/minic-toolchain/commit/cbbd5654cc8f7fa508e798bc0262f49e4c32d3ee)，配对测试 500/500 byte-identical、**1.08697×（累积 wall 180349.471→165919.403ms, -8.00%）**、Sanitizer + 9 例 parser edge + 10-owner 8x 回退复核已通过。**完整 Runtime [#39016455728](https://github.com/yituanxing/minic-toolchain/actions/runs/39016455728) SUCCESS**：7/7 构建分片、`GNU_MINIC_SHARD_MERGE=PASS objects=2064 shards=7`、GNU Link `COHORT_LINK=REUSED name=full_all_verified selection=prefix:2064`、QEMU `COHORT_P1=PASS syscalls=12 python_era_oracle=PASS`、`COHORT_RESULT=PASS candidate_objects=2064 scope=FULL_C_UNIVERSE same_config=true`。Focused T1 [#39016455740](https://github.com/yituanxing/minic-toolchain/actions/runs/39016455740) SUCCESS。本轮最终标签：`parser-cold-switch-heap-owned-v1 = integrated / runtime-certified / keep / do-not-repeat`。
