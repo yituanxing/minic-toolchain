@@ -83,6 +83,31 @@ jobs:
           test -x build/toolchain-focused-t1-v2/bin/minic-ar
           test -x build/toolchain-focused-t1-v2/bin/minic-ld
 
+      # Verify the exact certified self-hosted RV64 Stage2 driver hookup on
+      # one runner BEFORE burning seven full Linux runners again.
+      - name: Fetch certified Stage2 for single-runner Kbuild driver preflight
+        if: contains(github.event.head_commit.message, '[minic-stage2-driver-smoke]')
+        uses: actions/download-artifact@v4
+        with:
+          repository: yituanxing/minic-toolchain
+          run-id: 39040013459
+          name: minic-current-bootstrap-b1-stage2-v1
+          github-token: ${{ github.token }}
+          path: build/bootstrap-stage2-driver-smoke/artifact
+
+      - name: Validate host driver finds real self-hosted Stage2 QEMU compiler
+        if: contains(github.event.head_commit.message, '[minic-stage2-driver-smoke]')
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          root="$GITHUB_WORKSPACE/build/bootstrap-stage2-driver-smoke"
+          cp -a build/toolchain-focused-t1-v2/bin "$root/bin"
+          export COHORT_STAGE2_INVOKE_TRACE="$root/stage2-invocations.tsv"
+          : > "$COHORT_STAGE2_INVOKE_TRACE"
+          bash tools/ci/minic-bootstrap-stage2-install-kbuild-v1.sh \
+            "$root/bin" "$root/artifact/build/bootstrap-current-b1/stage2/minic-stage2-rv64"
+          test -s "$COHORT_STAGE2_INVOKE_TRACE"
+          echo "BOOTSTRAP_STAGE2_DRIVER_PREFLIGHT=PASS qemu_stage2_dispatch=$(wc -l < "$COHORT_STAGE2_INVOKE_TRACE")"
       - name: Run focused current-product regressions
         id: rv64
         if: (github.event_name == 'push' || inputs.mode == 'all' || inputs.mode == 'rv64') && steps.build.outcome == 'success'
