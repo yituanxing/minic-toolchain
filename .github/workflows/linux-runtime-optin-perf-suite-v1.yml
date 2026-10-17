@@ -1538,7 +1538,8 @@ jobs:
               entries[parts[1]]=parts[2]
           if len(entries)!=500: raise SystemExit("not 500 immutable Linux inputs")
           if trial=="parser-string-lexer":
-              targets=("fs/ext4/fsync.o","kernel/bpf/btf.o")
+              targets=("kernel/events/core.o","mm/memcontrol.o","fs/ext4/super.o",
+                       "mm/hugetlb.o","mm/vmscan.o")
           elif trial=="core-name-index":
               targets=("kernel/bpf/btf.o","kernel/events/core.o","mm/memcontrol.o",
                        "fs/ext4/fsync.o","fs/ext4/super.o")
@@ -1588,7 +1589,8 @@ jobs:
           from pathlib import Path
           root=Path(sys.argv[1]); trial=sys.argv[2]
           if trial=="parser-string-lexer":
-              owners=("fs_ext4_fsync","kernel_bpf_btf")
+              owners=("kernel_events_core","mm_memcontrol","fs_ext4_super",
+                      "mm_hugetlb","mm_vmscan")
           elif trial=="core-name-index":
               owners=("kernel_bpf_btf","kernel_events_core","mm_memcontrol",
                       "fs_ext4_fsync","fs_ext4_super")
