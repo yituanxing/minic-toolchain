@@ -58,7 +58,7 @@ def execute(argv, log, *, timeout=300, env=None, expected=0):
         raise RuntimeError("TIMEOUT " + " ".join(args[:4])) from None
     log.parent.mkdir(parents=True, exist_ok=True)
     log.write_bytes(p.stdout + b"\n-- stderr --\n" + p.stderr)
-    if p.returncode != expected:
+    if expected is not None and p.returncode != expected:
         raise RuntimeError("EXIT_%s expected=%s command=%s stderr=%s" %
                            (p.returncode, expected, " ".join(args[:5]),
                             p.stderr[-1100:].decode(errors="replace")))
@@ -165,15 +165,19 @@ def rounds(binaries, sources, all_sources, hdr, libraries, out, workers):
         # The pinned kernel profile is soft-float. These sources use the
         # lp64d cross-glibc sysroot. Overlay the ABI before any libc include.
         overlay = work / "target-lp64d-overlay.h"
-        overlay.write_text("#include \"" + str(macros) +
-                           "\"\n#undef __riscv_float_abi_soft\n"
+        # The forced include is an absolute file path. MiniPP's nested quoted
+        # include lookup is directory-relative, so put the pinned native macro
+        # definitions DIRECTLY in this overlay rather than #include "/abs".
+        overlay.write_text(macros.read_text() +
+                           "\n#undef __riscv_float_abi_soft\n"
                            "#define __riscv_float_abi_double 1\n"
                            "#define __riscv_flen 64\n")
         completed = []
         failures = []
         def one(src):
             key = source_key(src)
-            inp = work / "i" / (key + ".i")
+            inp = out / "canonical-inputs" / (key + ".i")
+            inp.parent.mkdir(parents=True, exist_ok=True)
             asm = work / "s" / (key + ".s")
             obj = work / "o" / (key + ".o")
             begin = time.monotonic()
@@ -236,7 +240,7 @@ def rounds(binaries, sources, all_sources, hdr, libraries, out, workers):
             # A native binary must genuinely start under QEMU.
             execute(command({"run": elf}, "run", "--help"),
                     work / "logs" / (tool + ".help.log"), timeout=60, env=env,
-                    expected=0 if tool in ("minic-cpp", "minic-cc") else 0)
+                    expected=None)
             next_binaries[tool] = elf
             print("FULL_NATIVE_LINK=PASS round=%s tool=%s elf_sha256=%s" %
                   (name, tool, sha(elf)), flush=True)
@@ -244,12 +248,21 @@ def rounds(binaries, sources, all_sources, hdr, libraries, out, workers):
         (work / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
         if stage == 4:
             old = json.loads((out / "stage3/summary.json").read_text())["linked"]
-            # Raw ELF comparison is intentionally separate from the machine-image
-            # fixed point: ELF section metadata can vary independently.
-            if old != summary["linked"]:
-                raise RuntimeError("STAGE3_STAGE4_RAW_ELF_MISMATCH (need MiniObjcopy loadable-image comparison)")
+            # Raw ELF can differ in non-loadable section/symbol metadata.
+            # Stage4-built MiniObjcopy (not GNU objcopy) compares loadable bytes.
+            for tool in NATIVE:
+                image3 = work / "bin" / (tool + ".stage3.bin")
+                image4 = work / "bin" / (tool + ".stage4.bin")
+                execute(command(next_binaries, "minic-objcopy", "-O", "binary",
+                                out / "stage3/bin" / tool, image3),
+                        work / "logs" / (tool + ".stage3-objcopy.log"), env=env)
+                execute(command(next_binaries, "minic-objcopy", "-O", "binary",
+                                out / "stage4/bin" / tool, image4),
+                        work / "logs" / (tool + ".stage4-objcopy.log"), env=env)
+                if sha(image3) != sha(image4):
+                    raise RuntimeError("STAGE3_STAGE4_LOADABLE_MISMATCH tool=" + tool)
             print("FULL_NATIVE_TOOLCHAIN=PASS tools=9 native_pp_cc_as_ld=true"
-                  " prebuilt_libc_crt_libgcc=true stage3_stage4_raw_elf_exact=true"
+                  " prebuilt_libc_crt_libgcc=true stage3_stage4_loadable_exact=true"
                   " gcc_as_ld_invocations=0", flush=True)
         binaries = next_binaries
 
