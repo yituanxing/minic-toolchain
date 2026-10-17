@@ -87,6 +87,7 @@ def main() -> None:
              "--baseline", str(args.baseline),
              "--candidate", str(args.traced),
              "--expect-specialization", "--expect-boolean-loops",
+             "--expect-symbolic-loops", "--expect-symbolic-census",
              "--out", str(folder)],
             capture_output=True, text=True, errors="replace", timeout=390)
         (folder / "trace.log").write_text(proc.stdout + "\n" + proc.stderr)
@@ -113,13 +114,25 @@ def main() -> None:
             if name not in spec or spec[name]["calls"] != 1:
                 raise RuntimeError(f"Boolean subphase missing: {owner}, {name}")
         boolean_counts = new.get("boolean_counts")
+        symbolic_counts = new.get("symbolic_counts")
+        if symbolic_counts is None:
+            raise RuntimeError(f"Symbolic scan counters missing for {owner}")
         if boolean_counts is None:
             raise RuntimeError(f"Boolean scan counters missing for {owner}")
         bool_direct = spec["spec-boolean-direct"]["ms"]
         bool_transitive = spec["spec-boolean-transitive"]["ms"]
         if bool_direct + bool_transitive > phases["spec-boolean"] + 5.0:
             raise RuntimeError("Boolean subphases exceed outer stage")
-        # Replace outer time by its three exclusive components.
+        symbolic_direct = spec["spec-symbolic-direct"]["ms"]
+        symbolic_transitive = spec["spec-symbolic-transitive"]["ms"]
+        if symbolic_direct + symbolic_transitive > phases["spec-symbolic"] + 5.0:
+            raise RuntimeError("Symbolic subphases exceed outer stage")
+        phases.pop("spec-symbolic")
+        phases["spec-symbolic-direct"] = symbolic_direct
+        phases["spec-symbolic-transitive"] = symbolic_transitive
+        phases["spec-symbolic-unattributed"] = max(
+            0.0, spec["spec-symbolic"]["ms"]-symbolic_direct-symbolic_transitive)
+        # Replace Boolean outer time by its three exclusive components.
         phases.pop("spec-boolean")
         phases["spec-boolean-direct"] = bool_direct
         phases["spec-boolean-transitive"] = bool_transitive
@@ -140,20 +153,25 @@ def main() -> None:
             "phase_ms_exclusive": phases,
             "specialization_calls": {k: spec[k]["calls"] for k in SPECIALIZATION},
             "stage_function_counts": new["function_counts"],
-            "boolean_counters": boolean_counts})
+            "boolean_counters": boolean_counts,
+            "symbolic_counters": symbolic_counts})
         print(f"MINIC_PHASE20_PROGRESS checked={len(rows)}/20 owner={owner} "
               f"group={group} traced_ms={new['wall_ms']:.3f} "
               f"spec_integer_ms={spec['spec-integer']['ms']:.3f} "
               f"spec_symbolic_ms={spec['spec-symbolic']['ms']:.3f} "
               f"bool_transitive_ms={bool_transitive:.3f} "
               f"expr_visits={boolean_counts['expression_visits']} "
-              f"domain_queries={boolean_counts['local_queries']}", flush=True)
+              f"domain_queries={boolean_counts['local_queries']} "
+              f"symbolic_owner_skips={symbolic_counts['transitive_owner_skips']} "
+              f"symbolic_variant_probes={symbolic_counts['transitive_variant_probes']}", flush=True)
 
     totals = {key: round(sum(row["phase_ms_exclusive"][key] for row in rows), 3)
               for key in rows[0]["phase_ms_exclusive"]}
     traced_total = sum(row["traced_wall_ms"] for row in rows)
     boolean_totals = {field: sum(row["boolean_counters"][field] for row in rows)
                       for field in rows[0]["boolean_counters"]}
+    symbolic_totals = {field: sum(row["symbolic_counters"][field] for row in rows)
+                       for field in rows[0]["symbolic_counters"]}
     summary = {
         "schema": "minic-current-linux-phase20-v1",
         "scope": "20 stratified frozen Linux .i, diagnostic wall time only",
@@ -166,6 +184,7 @@ def main() -> None:
         "traced_total_ms": round(traced_total, 3),
         "phase_totals_ms_nonoverlap": totals,
         "boolean_work_totals": boolean_totals,
+        "symbolic_work_totals": symbolic_totals,
         "owners": rows,
         "warning": "diagnostic times are NOT uninstrumented throughput or CPU-time; profiling further required"
     }
@@ -184,6 +203,8 @@ def main() -> None:
               f"share_percent={100.0*duration/traced_total:.2f}")
     print("MINIC_BOOLEAN20=PASS " + " ".join(
           f"{field}={value}" for field,value in boolean_totals.items()))
+    print("MINIC_SYMBOLIC20=PASS " + " ".join(
+          f"{field}={value}" for field,value in symbolic_totals.items()))
     print("MINIC_PHASE20_SCOPE=DIAGNOSTIC_ONLY not_normal_speed not_QEMU_P1")
 
 
