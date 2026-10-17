@@ -4,6 +4,33 @@
 > 本表是候选的**状态索引**，不是覆盖旧的原始数据；旧实验报告、补丁、CI artifacts 均保留。每次新优化先记录「相同结构以前试过没有、当时基线是什么、为何现在仍值得做」。
 > 基线：主线 `6612e2c1a3`（文档头），最新已认证的 Boolean/Core/Integer 联合源码经 [2064 + GNU link + QEMU P1 #38995964988](https://github.com/yituanxing/minic-toolchain/actions/runs/38995964988) PASS。这个 PASS 是 GNU PP → MiniC → GNU AS/LD，不能声称全 Mini 工具链共同通过。下列不同实验的加速比不能相乘，也不能伪称当前 2064 的同比速度。
 
+## 广谱 CPU 排序与 Core direct-call 零事实快路初筛（2026-10-17）
+
+**同当前生产版七份独立热/冷 Linux 输入的正式 Callgrind 证据：** [#39027912246](https://github.com/yituanxing/minic-toolchain/actions/runs/39027912246) **SUCCESS**；exact `minic-cc`、SHA-frozen GNU-Kbuild `.i`、**7/7 `.s` byte-identical**，release 与 -g 诊断版分别编译；7 TU 的 total Ir **29,177,233,393** 指令事件。Callgrind 指令总数是归因，不是实际 wall-time 或七路编译速度。加权自耗（同 Callgrind 直接逐项求和）：
+| 函数组 | 7 TU self Ir | 占七 TU 全 Ir |
+| --- | ---: | ---: |
+| Parser Enum bind | 1,617,668,781 | 5.54% |
+| Core lower_direct_call | **1,423,192,860** | **4.88%** |
+| Core named queue | 1,326,467,169 | 4.55% |
+| Lexer next | 992,562,998 | 3.40% |
+| Parser span_equals | 953,560,764 | 3.27% |
+| Core unreachable reentry | 723,598,087 | 2.48% |
+| Core reentry label | 523,055,552 | 1.79% |
+| AST name conflicts | 466,702,090 | 1.60% |
+
+**新发现的真正结构性候选，而非重复旧 Core reentry/name-index：** `src/core/core_lower.c:lower_direct_call` 在真正处理每个 CALL 之前依次执行 integer、symbolic、Boolean-range 三个 selector；三者即使一个可用事实都没有，仍完整线性扫描 `program->function_count` 寻找可能选中的变体。对每个 selector 的旧规则均是 `candidate_fact_count > best_fact_count` 的严格比较：没有任何可用实际事实时，所有兼容 candidate 的匹配事实数只能为 0，故**严格不可能更优**；直接返回原 callee 不会影响 first-match、clone/ownership 和选择结果。用已有 `tools/ci/apply-perf-core-specialization-no-facts-fastpath-v1.py` 仅在暂存 CI checkout 的三种 selector 上增加这个数学可证明的 no-fact 早退，不改生产 C。
+
+**四份固定 Linux A/B 初筛：** [#39028396559](https://github.com/yituanxing/minic-toolchain/actions/runs/39028396559) **SUCCESS**，同 Runner 预热+4 次交错/臂，**4/4 `.s` 字节相同**，编译器构建 `check-type check-ast-contract` PASS，并记录 CPU/RSS：
+| TU | 基线 P50 wall | 零事实早退 P50 wall | 加速 |
+| --- | ---: | ---: | ---: |
+| fs/ext4/fsync.o | 232.974ms | 232.977ms | 1.0000× |
+| kernel/bpf/btf.o | 816.433ms | 776.347ms | 1.0516× |
+| kernel/events/core.o | 1060.536ms | 953.159ms | 1.1127× |
+| mm/memcontrol.o | 911.087ms | 811.806ms | 1.1223× |
+| **合计** | **3021.030ms** | **2774.289ms** | **1.08894×（约 8.17% 耗时下降）** |
+
+**初判：PROMISING_FOR_500，不宣称已晋级。** 七 TU 的 Core direct-call 自耗高于此前两份样本显示的部分小优化，而且 4 TU A/B 有三份明显改善，故进行一次真正的 500 SHA-frozen GNU Kbuild `.i` 扩组，而不是再次改旧 Core reentry 索引或重跑旧 enum bind hash。正在执行 [#39028562773](https://github.com/yituanxing/minic-toolchain/actions/runs/39028562773)；该 500 报告必须给出完整 `.s` 一致和单 TU 回退清单。在完整 500、边界负例/ASan/UBSan 以及 2064/GNU/QEMU P1 前，**生产 `src/core/core_lower.c` 未改，绝不能把 4 TU 1.089× 误称全 500 优化率。**
+
 ## 新选卡的只读结构成本诊断：Lexer 真实重复分词（2026-10-17）
 
 **首次全函数分词重做次数确认：** [真实五 TU perf500 #39027759692](https://github.com/yituanxing/minic-toolchain/actions/runs/39027759692) **SUCCESS**。恢复并 SHA-校验旧 first500，**无修改生产 `src/frontend/lexer.c`**，仅在一次性 CI checkout 对 Lexer 加诊断 wrapper；真实原版和插桩版的 5/5 GNU-PP Kbuild `.i` 编译输出 `.s` 完全字节一致。临时字节表按 `(same source pointer,length,lexer cursor at entry)` 统计，再由原始原封不动的 `minic_lexer_next` 解析，记录本次 consumed cursor bytes；未归属的输入直接失败。
