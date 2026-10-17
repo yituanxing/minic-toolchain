@@ -60,6 +60,9 @@ jobs:
         run: |
           set -Eeuo pipefail
           ruby -e 'require "yaml"; YAML.parse_file(".github/workflows/linux-runtime-gcc-baseline.yml"); puts "LINUX_RUNTIME_YAML_PARSE=PASS"'
+          # Catch GitHub Actions expression and schema errors (which
+          # Ruby's plain YAML syntax check intentionally cannot catch).
+          go run github.com/rhysd/actionlint/cmd/actionlint@latest -shellcheck= -pyflakes= .github/workflows/linux-runtime-gcc-baseline.yml
 
       - name: Install union of RV64, archive, static and dynamic linker oracle prerequisites
         run: |
