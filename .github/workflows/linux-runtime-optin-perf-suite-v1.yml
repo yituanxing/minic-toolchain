@@ -282,11 +282,18 @@ jobs:
           retention-days: 14
   aggregate:
     needs: shard
-    if: always() && ((github.event_name == 'workflow_dispatch' && (inputs.mode == 'all3352' || inputs.mode == 'all')) || (github.event_name == 'push' && (contains(github.event.head_commit.message, '[linux-perf3352]') || contains(github.event.head_commit.message, '[minic-bootstrap-stage2-linux500]') || contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux500]') || contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux500-aggregate-only]'))))
+    if: always() && ((github.event_name == 'workflow_dispatch' && (inputs.mode == 'all3352' || inputs.mode == 'all')) || (github.event_name == 'push' && (contains(github.event.head_commit.message, '[linux-perf3352]') || contains(github.event.head_commit.message, '[minic-bootstrap-stage2-linux500]') || contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux500]') || contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux500-aggregate-only]') || contains(github.event.head_commit.message, '[minic-bootstrap-stage4-dispatch-audit-selftest]'))))
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-        if: contains(github.event.head_commit.message, '[minic-bootstrap-stage2-linux500]')
+        if: contains(github.event.head_commit.message, '[minic-bootstrap-stage2-linux500]') || contains(github.event.head_commit.message, '[minic-bootstrap-stage4-dispatch-audit-selftest]')
+      - name: Validate Stage2/Stage4 Linux Kbuild dispatch audit without real compiler rebuild
+        if: contains(github.event.head_commit.message, '[minic-bootstrap-stage4-dispatch-audit-selftest]')
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 -m py_compile tools/ci/minic-bootstrap-stage2-2064-shard-audit-v1.py
+          python3 tools/ci/minic-bootstrap-stage2-2064-shard-audit-v1.py --self-test
       - name: Retrieve seven Stage2 first500 Linux object manifests
         if: contains(github.event.head_commit.message, '[minic-bootstrap-stage2-linux500]')
         uses: actions/download-artifact@v4
@@ -359,12 +366,12 @@ jobs:
           retention-days: 14
 
       - uses: actions/download-artifact@v4
-        if: "!contains(github.event.head_commit.message, '[minic-bootstrap-stage2-linux500]') && !contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux500]') && !contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux500-aggregate-only]')"
+        if: "!contains(github.event.head_commit.message, '[minic-bootstrap-stage2-linux500]') && !contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux500]') && !contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux500-aggregate-only]') && !contains(github.event.head_commit.message, '[minic-bootstrap-stage4-dispatch-audit-selftest]')"
         with:
           pattern: all3352-constant-p-shard-*
           path: evidence
       - name: Aggregate 3352 unique TU results
-        if: "!contains(github.event.head_commit.message, '[minic-bootstrap-stage2-linux500]') && !contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux500]') && !contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux500-aggregate-only]')"
+        if: "!contains(github.event.head_commit.message, '[minic-bootstrap-stage2-linux500]') && !contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux500]') && !contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux500-aggregate-only]') && !contains(github.event.head_commit.message, '[minic-bootstrap-stage4-dispatch-audit-selftest]')"
         run: |
           set -Eeuo pipefail
           python3 - <<'PY' | tee all3352-final.txt
@@ -390,7 +397,7 @@ jobs:
               raise SystemExit("ALL3352_COMPILE_FAILURES")
           print("ALL3352_COMPILE_STATUS=PASS")
           PY
-      - if: always() && !contains(github.event.head_commit.message, '[minic-bootstrap-stage2-linux500]') && !contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux500]') && !contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux500-aggregate-only]')
+      - if: always() && !contains(github.event.head_commit.message, '[minic-bootstrap-stage2-linux500]') && !contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux500]') && !contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux500-aggregate-only]') && !contains(github.event.head_commit.message, '[minic-bootstrap-stage4-dispatch-audit-selftest]')
         uses: actions/upload-artifact@v4
         with:
           name: all3352-constant-p-final-report
