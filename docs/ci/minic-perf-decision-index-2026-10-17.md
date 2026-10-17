@@ -4,6 +4,26 @@
 > 本表是候选的**状态索引**，不是覆盖旧的原始数据；旧实验报告、补丁、CI artifacts 均保留。每次新优化先记录「相同结构以前试过没有、当时基线是什么、为何现在仍值得做」。
 > 基线：主线 `6612e2c1a3`（文档头），最新已认证的 Boolean/Core/Integer 联合源码经 [2064 + GNU link + QEMU P1 #38995964988](https://github.com/yituanxing/minic-toolchain/actions/runs/38995964988) PASS。这个 PASS 是 GNU PP → MiniC → GNU AS/LD，不能声称全 Mini 工具链共同通过。下列不同实验的加速比不能相乘，也不能伪称当前 2064 的同比速度。
 
+## 现行生产 MiniC 性能 + 峰值内存实测：500 Linux TU（2026-10-17）
+
+**完整新测**：[现有 perf500 #39029550475](https://github.com/yituanxing/minic-toolchain/actions/runs/39029550475) **SUCCESS**。对本来缓存的 Linux 6.6.143 first500 SHA-frozen GNU Kbuild `.i`，使用当前生产代码编译出的 Release `minic` 和固定的 **4 个进程**，**逐文件真实调用 `/usr/bin/time`**，保留 500/500 的 `.s` SHA、TU wall、user、sys、peak single-process RSS 及源输入字节等细节。并未改变生产源码、没有新 Workflow/Job，也没有重复 2064 Linux 全链验收。单 TU 采样包含 Driver 启动/进程调度；`elapsed_parallel_wall_ms` 是此次 500 文件工作的四 worker 实际区间，**不是**包含 GNU preprocessing/AS/LD 的 Linux Kernel 完整构建时间。
+
+| 新测指标 | 500 TU 真实值 |
+| --- | ---: |
+| 最新 Release 编译器 `minic-cc` SHA256 | `f04794d3132631059c028e0a889bf8cf06f15e8f24afcc70d24697edce4925fd` |
+| 编译成功 | **500/500** |
+| 四 worker 实际测量区间 | **60,041.915ms / 60.042秒** |
+| 逐 TU wall 合计（不可作为并行 wall） | **238,057.826ms / 238.058秒** |
+| 逐 TU User+Sys CPU 合计 | **230,090.000ms / 230.090 CPU秒** |
+| 单 TU wall 中位数 / P95 | **421.413ms / 934.970ms** |
+| 单进程 peak RSS 中位数 | **83,038KiB / 81.09MiB** |
+| 单进程 peak RSS P95 | **123,716KiB / 120.82MiB** |
+| 单进程最大 peak RSS | **217,748KiB / 212.64MiB**，`kernel/bpf/verifier.o` |
+
+最重的五个峰值 RSS 分别为：verifier 217,748KiB，events/core 183,516KiB，BTF 157,364KiB，memcontrol 150,600KiB，kernel/sysctl 143,432KiB。独立单进程峰值**不可求和为同时运行的 Runner 峰值**，未来要量四 worker 真并发内存峰值必须另作按进程组或 cgroup 采样。500 `.s` 的 SHA 在 JSON 中保留；本单边读数不是 old/new 因果性能对比。
+
+**重要的可复现配置差异——已用独立快速实验排除编译器随机输出疑虑：** 对照 [Core no-facts 500 实验 #39028562773](https://github.com/yituanxing/minic-toolchain/actions/runs/39028562773) 的**原版**编译器，`minic-cc` SHA256 **相同**、first500 cache key **相同**，但其 500 目标中有 164 份 `.s` 与上述单边资源调查的 `.s` SHA 不同。原因是旧 Core500 单独的差异验证步骤在 Bash 子进程返回后**没有继承** `MINIC_LINUX_FULL_CROSSBLOCK=1` 与 `MINIC_OPT_PURE_DISCARDED_ADDRESS_EQ=1`；此次资源调查的 shell 则明确 export 了这两个 Linux Runtime 选项。已在独立 [repro #39030124205](https://github.com/yituanxing/minic-toolchain/actions/runs/39030124205) **SUCCESS** 核实：`init/main.o`、`kernel/sched/core.o`、`kernel/events/core.o` 在**plain** 模式精确命中 Core500 的旧 `.s` SHA，在**both flags** 模式精确命中新资源测试的 `.s` SHA；`fs/ext4/fsync.o` 两种模式本来 SHA 相同；4/4 在同一模式下跨两种不同临时输出路径的 SHA 一致。**差异是可复现的运行配置差别，不是此证据中的随机编译器语义漂移。** 下次任何 A/B、累计速度变化和内存对比必须在同 Runner 固定并记录同一运行时环境变量；原版 Core500 的 232.811 秒不能与此次 flags-on 238.058 秒相除声称一次回退或改进，况且工具包装、测量时钟亦不同。标签：`current-resource500 = read-only complete / reproducible profile-both-flags / not a production code change`。
+
 ## 广谱 CPU 排序与 Core direct-call 零事实快路初筛（2026-10-17）
 
 **同当前生产版七份独立热/冷 Linux 输入的正式 Callgrind 证据：** [#39027912246](https://github.com/yituanxing/minic-toolchain/actions/runs/39027912246) **SUCCESS**；exact `minic-cc`、SHA-frozen GNU-Kbuild `.i`、**7/7 `.s` byte-identical**，release 与 -g 诊断版分别编译；7 TU 的 total Ir **29,177,233,393** 指令事件。Callgrind 指令总数是归因，不是实际 wall-time 或七路编译速度。加权自耗（同 Callgrind 直接逐项求和）：
