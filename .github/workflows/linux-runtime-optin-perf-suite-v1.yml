@@ -825,7 +825,7 @@ jobs:
         with:
           name: minic-current-bootstrap-stage2-native-runtime-v1
           repository: yituanxing/minic-toolchain
-          run-id: 39057022666
+          run-id: 39057831387
           github-token: ${{ github.token }}
           path: build/bootstrap-stage2-native/musl-restore
 
@@ -838,7 +838,9 @@ jobs:
           test -s "$root/runtime-sha256.txt"
           cd "$root/musl-build"
           sha256sum -c "$root/runtime-sha256.txt"
-          echo 'MUSL_SEED_RESTORED=PASS GCC_invocations=0 musl_source_sha_pinned=true'
+          test -s "$root/headers.sha256"
+          (cd "$root/sysroot/usr/include" && sha256sum -c "$root/headers.sha256" >/dev/null)
+          echo 'MUSL_SEED_RESTORED=PASS GCC_invocations=0 musl_source_sha_pinned=true libc_headers_same_source=true'
 
       - name: Full native Stage3 to Stage4 self-rebuild of all nine tools
         if: contains(github.event.head_commit.message, '[minic-bootstrap-full-native]') && contains(github.event.head_commit.message, '[minic-bootstrap-stage2-native-runtime]')
@@ -863,6 +865,9 @@ jobs:
           fi
           if [[ "${{ contains(github.event.head_commit.message, '[minic-bootstrap-native-musl-selfhost]') }}" == true ]]; then
             probe_args+=(--musl-build "$GITHUB_WORKSPACE/build/bootstrap-stage2-native/musl-restore/musl-seed/musl-build")
+          fi
+          if [[ "${{ contains(github.event.head_commit.message, '[minic-bootstrap-native-musl-headers]') }}" == true ]]; then
+            probe_args+=(--musl-headers "$GITHUB_WORKSPACE/build/bootstrap-stage2-native/musl-restore/musl-seed/sysroot/usr/include")
           fi
           set +e
           strace -f -qq -e trace=execve -o "$work/execve.log" \
