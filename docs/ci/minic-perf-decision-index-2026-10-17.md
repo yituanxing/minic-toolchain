@@ -4,6 +4,16 @@
 > 本表是候选的**状态索引**，不是覆盖旧的原始数据；旧实验报告、补丁、CI artifacts 均保留。每次新优化先记录「相同结构以前试过没有、当时基线是什么、为何现在仍值得做」。
 > 基线：主线 `6612e2c1a3`（文档头），最新已认证的 Boolean/Core/Integer 联合源码经 [2064 + GNU link + QEMU P1 #38995964988](https://github.com/yituanxing/minic-toolchain/actions/runs/38995964988) PASS。这个 PASS 是 GNU PP → MiniC → GNU AS/LD，不能声称全 Mini 工具链共同通过。下列不同实验的加速比不能相乘，也不能伪称当前 2064 的同比速度。
 
+## 第九轮结构算法候选：Core 三 Selector 按 specialization_source 索引（2026-10-17）
+
+**这不是此前已否决的 Core no-facts early-exit，也不是 Core reentry/name queue 的旧索引。** 本候选直指真实源码 `src/core/core_lower.c` 的 3 个 selector：transitive integer / symbolic / Boolean-range。每次 direct CALL 各自扫 `program->function_count`，先以 `candidate->specialization_source == source_id` 过滤。将所有专门化变体在单次 Core Function Set 内按 owner FunctionId 组织为**原始候选 ID 升序单向桶**，从每个调用的全程序循环中跳过其他 owner，从 `O(C×F)` 候选迭代降到 `O(F+C×V_{owner})`（建立索引与使用索引都计入性能）。索引只对同 `program`+相同 `function_count` 可用，内存分配失败/未知上下文退回完全相同的原始全扫描；独立暂存 patch `tools/ci/apply-perf-core-variant-source-buckets-v1.py`，正式生产 `src/` 未改。4 个成功 Linux TU 亦使用 `MINIC_TEST_FORCE_CORE_VARIANT_INDEX_FALLBACK=1` 强制原逻辑比较 `.s`，释放/lifetime 随既有 Core Reentry begin/end 工作域处理；`check-type check-ast-contract` PASS。
+
+**四大样本初筛 [#39032216885](https://github.com/yituanxing/minic-toolchain/actions/runs/39032216885) SUCCESS**，real frozen GNU Kbuild `.i`、同 Runner 各 4 次/臂、中位数 Wall/CPU/RSS，**4/4 `.s` byte-identical，forced fallback 4/4 byte-identical**；fsync **234.525→234.811ms（0.9988×）**、BTF **762.207→727.978ms（1.0470×）**、events/core **979.282→871.314ms（1.1239×）**、memcontrol **838.100→777.465ms（1.0780×）**。四文件合计 2814.113→2611.569ms，**1.07756×，约 7.20% 耗时减少**，3/4 file wins；按初筛准入扩大到 first500。
+
+**完整 500 实测 [#39032363764](https://github.com/yituanxing/minic-toolchain/actions/runs/39032363764) SUCCESS，但候选 STOP**：SHA-frozen corpus、同一 Runner、四 Worker、交错 250 baseline-first/250 candidate-first，**500/500 `.s` byte identical**，old 190301.929ms→new 183932.965ms（总节约 **6368.964ms**，**1.03463× / 3.35% wall reduction**），单次 176/500 file 看起来变慢。该结果按**事前 >=1.04×** 门槛记录为 `NOT_PROMOTED_STOP`；未进行所有 176 个回退的 repeated CPU triage，不可宣称它们持续退化。CPU 分析的理想复杂度改变在全样本中没有转化为足够大的实际编译耗时收益，故**不扩展 2064/QEMU、不修改生产源码，也不拆出这个候选继续追少量指令**。先前 4 大 TU 的高收益不能外推为全体 500 的收益；本轮 first500 相同运行时选项已在 A/B 两臂显式固定。
+
+**去重与轮换门禁：** 第八轮 RV64 layout single-walk 1.01998× 低收益、Lexer bulk 0.99733× 回退、第九轮 Core source-bucket 1.03463× 低于预定 1.04×，加上此前 Core no-facts 1.03544× 均**未晋级**。按优化方法论停止从同一 Core direct-call selector 再抽微调卡。下次更新全局 CPU/内存归因：必须从具有明显可避免访问规模/分配规模的**新**业务算法入手，不得机械将旧 Core name-index、enum hash、Lexer Token cache 或第七轮 Symbolic 重开。
+
 ## 当前 MiniC 同 Runner 四/七 worker 真实并发内存与速度（2026-10-17）
 
 **目的：** 区分「单 TU 最大 RSS 约 213MiB」与「真实同时运行四/七个编译进程时的峰值」，不动生产源码、不建新 Runner、不重新生成 SHA-frozen first500。两次现行生产 Release `minic-cc` **SHA256=f04794d3132631059c028e0a889bf8cf06f15e8f24afcc70d24697edce4925fd**，相同缓存清单 SHA256=b0387511b0733422b537b02d0f463065f20632483568a2a1dd0423ff95aa6cf4；两项正式 Linux Runtime 配置 `MINIC_LINUX_FULL_CROSSBLOCK=1 MINIC_OPT_PURE_DISCARDED_ADDRESS_EQ=1` 已统一固定。分别对 first500 编译各两臂，500/500 接受且**同 CI 同编译器四 worker vs 七 worker 的产物 500/500 `.s` SHA 一致**，不涉及 GNU AS/LD 或 QEMU。
