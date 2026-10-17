@@ -27,7 +27,8 @@
 # old 379184.989ms -> new 363844.060ms (1.04216x, -4.05% compile time).
 # Target source is deliberately absent from SHA pin list; cache-key generator
 # includes every src/ file and invalidates all compiler artifact shard caches.
-# This is a candidate, NOT runtime-certified until this 7-shard QEMU run succeeds.
+# FULL 2064/2064 + GNU Link + QEMU P1 #39000339623 SUCCESS (7/7 shards, 12/12 syscall oracle).
+# The manifest authenticates its pinned sources, not this AST file; cache key includes all src/ and was invalidated.
 d1b8a54a26e933b9f40438d23bb9001bc632408e src/compiler/compiler.c
 1ab6f1d2d587e6008d7224b10b1638c9887bac18 src/core/core_lower.c
 a8418e45608310687e3d6a1e96da79ca49135870 src/core/core_lower_asm.c
