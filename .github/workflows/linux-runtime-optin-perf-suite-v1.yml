@@ -2924,7 +2924,8 @@ jobs:
           grep -Fq 'MINIC_BOOLEAN20=PASS' "$root/evidence/phase20-verdict.txt"
           grep -Fq 'spec-boolean-transitive' "$root/evidence/phase20-verdict.txt"
 
-      # Fresh post-Parser cold-switch runtime-candidate CPU attribution:
+      # Fresh post-Parser cold-switch CPU attribution, retry after profiler
+      # accepts the current ~1KiB Parser instead of obsolete 131KiB floor.
       # intentionally no next algorithm patch, only source-current callgrind
       # on the pinned BTF and fsync Linux inputs. This opt-in marker does not
       # change production C, and this run cannot substitute for Linux QEMU.
