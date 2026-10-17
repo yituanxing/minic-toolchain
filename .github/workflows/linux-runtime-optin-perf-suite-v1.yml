@@ -749,8 +749,10 @@ jobs:
           grep -Fq 'BOOTSTRAP_STAGE2_NATIVE_RUNTIME=PASS tools=8 suites=8 runtime_chain=42 all_mini_pp_cc_as_ld=true nm_strip_oracles=true driver_chain=42' \
             "$GITHUB_WORKSPACE/build/bootstrap-stage2-native/verdict.log"
 
-      # Round4: isolate the hosted-C11 ABI macro frontier with four real TUs.
-      # Round3: seed target builtin headers explicitly; no GCC process allowed.\n      # Round2: native macro definitions are inlined (MiniPP quoted include path).
+      # Four-TU representative ABI/source gate #39053974234 succeeded.
+      # Run the entire 77-TU nine-tool self-rebuild and fixed-point now.
+      # C11 hosted-ABI macros and explicit external runtime headers are pinned.
+      # Mini stage builds run with GCC/AS/LD execve forbidden.
       # Stage2-built MiniPP/AS/LD and fixed-point MiniC rebuild all NINE
       # current tool executables from C source, twice. A separate milestone:
       # original Stage2-built ELF creation used GNU; these two rebuilds do not.
