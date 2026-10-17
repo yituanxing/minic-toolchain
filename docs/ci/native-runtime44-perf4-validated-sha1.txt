@@ -14,11 +14,14 @@
 # frozen first500 A/B #38992360179: 500/500 byte-identical,
 # 384418.072ms -> 348183.509ms, speedup 1.10407x; focused T1 PASS;
 # full 2064/2064 + GNU Link + QEMU P1 PASS #38992779314.
-# The NEW lazy-construction policy in core_lower.c has not yet passed
-# local A/B or complete Linux/QEMU: this SHA is a CANDIDATE, not certified.
+# Full 2064/QEMU P1 eager index certification #38992779314. A separately
+# tested lazy policy was REJECTED after frozen500 eager/lazy paired CI
+# #38994826749: 439568.899ms -> 443102.585ms, 0.99203x.
+# The new Boolean transitive CALL-owner/call-only compiler.c implementation
+# is a candidate pending byte-identical real Linux A/B and QEMU acceptance.
 # The manifest only authenticates source identity; it is not a test result.
-9151eb7782b6a3b690ba435fbef6ed8ac1751063 src/compiler/compiler.c
-abdbe4f2b4844126c5b0ae0443d9f07392e24ce7 src/core/core_lower.c
+d1b8a54a26e933b9f40438d23bb9001bc632408e src/compiler/compiler.c
+1ab6f1d2d587e6008d7224b10b1638c9887bac18 src/core/core_lower.c
 a8418e45608310687e3d6a1e96da79ca49135870 src/core/core_lower_asm.c
 7997978a9b10a6d01e33dbc00dd11cb3f668f69f src/core/core_lower_internal.h
 bfca6a1861104f768b3b0ae93a72fa28bf0eded0 src/frontend/ast.h

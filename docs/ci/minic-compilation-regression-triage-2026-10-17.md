@@ -56,3 +56,11 @@
 - 一个已验证的**可消除的固定开销**：Core eager index 即使没有查询也会完整遍历 Statement + Expression 并分配索引。例如 mm/shmem_quota.o 查询 0 次、35149 statements/109567 expressions，8 次复核中位新比旧慢 5.124ms (+2.02%)，但 wall MAD 为旧 5.155ms/新 5.280ms，故仅可确认“索引无用的前置工作”，不能声称该 5ms 已有统计显著性。fs/ext4/xattr_security.o 查询 0 次、35946/115695；arch/riscv/purgatory/ctype.o 查询 0 次、45/409。对这些 TU，按需构建不会影响必要查询的行为。
 - 因此下一小步是**懒构建 lazy index**：Core Set begin 只设置作用域，首次 relevant query 才以原来的全部验证规则构建；失败只尝试一次并完全走旧 legacy 路径；Core Set end 完全释放并撤销作用域。生产代码候选须先做 eager-vs-lazy 8 TU 的真实 SHA+时间 A/B；不得根据三份样本推断全体收益。
 - 本轮还已完成 eager index 正式源码的七路 2064/2064 GNU Link 与 QEMU P1：[CI #38992779314](https://github.com/yituanxing/minic-toolchain/actions/runs/38992779314) SUCCESS，COHORT_RESULT=PASS candidate_objects=2064、COHORT_P1=PASS syscalls=12。懒构建候选**尚未**得到这项正式资格，不得套用旧结果。
+
+## 2026-10-17：懒建索引的负面结果与撤回
+
+- 修复对象：eager 的 Core reentry map 即使完全没有相关查询仍在 Core Set 入口构建；lazy 候选仅在首次相关查询时构建，构建验证失败后保守地回退旧算法。修复的是确实存在的**无用工作**，但无用工作不一定足以构成真正的全局性能热点。
+- 局部 [CI #38994021397](https://github.com/yituanxing/minic-toolchain/actions/runs/38994021397) SUCCESS：同机 8 个真实 Linux .i、每臂 4 轮、8/8 生成相同 .s；eager 合计 7603.989ms，lazy 7613.707ms，**0.99872×**，整体基本持平。3 个无查询输入确实没有构建索引（诊断 ready=0），但局部节省并不稳定。
+- 扩大 first500 [CI #38994826749](https://github.com/yituanxing/minic-toolchain/actions/runs/38994826749) SUCCESS：**500/500 汇编 SHA 一致**，同批冻结输入、balanced-order、eager 累计 **439568.899ms**，lazy **443102.585ms**，**0.99203×**（耗时增加约 **0.804%**），单轮有 **295/500** 输入相对变慢。单轮 500 输入上的强烈细节波动仍不能归咎于某个因果机制；但两个规模的测试都没有证据支持 lazy 大幅胜出。
+- **决策：verified-negative / not-promoted。** 撤回 lazy 生产源码，恢复此前 **2064/2064 + GNU Link + QEMU P1 已认证**的 eager Core index 原实现（源码 blob 1ab6f1d2...）。保留负面实验与证据；不为了补一个漂亮数字继续在这条无收益路径上打磨。
+- 下一候选：针对独立的 **Boolean Range Transitive** 重复 CALL 扫描与 FunctionBody 归属过滤，复用已验证的源码语义算法，按固定 eager 基线单因素 A/B 测量；不能把 lazy 回退与下一轮优化混成一次差分。

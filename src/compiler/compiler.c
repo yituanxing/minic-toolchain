@@ -2095,6 +2095,22 @@ static bool minic_specialize_inline_boolean_range_calls(
        variant using the actual caller specialization. */
     {
         size_t caller_index;
+        /* All clones in this pass reuse canonical source FunctionBodies.
+         * Build the original-expression ownership oracle and CALL-only
+         * iteration list lazily: most TUs have no Boolean-range callers.
+         * On OOM or invalid ownership, the original full walk is preserved.
+         * Calls remain sorted by expression ID, maintaining clone order. */
+        const size_t boolean_expression_limit = program->expression_count;
+        const size_t boolean_function_limit = program->function_count;
+        MinicFunctionId *boolean_owners = NULL;
+        size_t *boolean_calls = NULL;
+        size_t boolean_call_count = 0U;
+        size_t boolean_index_builds = 0U;
+        size_t boolean_caller_scans = 0U;
+        size_t boolean_call_candidates = 0U;
+        size_t boolean_skipped_other_owner = 0U;
+        bool boolean_owner_ready = false;
+        bool boolean_index_attempted = false;
         for (caller_index = 0U; caller_index < program->function_count;
              ++caller_index) {
             const MinicFunction caller = program->functions[caller_index];
@@ -2113,11 +2129,53 @@ static bool minic_specialize_inline_boolean_range_calls(
             if (!caller_has_range) {
                 continue;
             }
-            for (nested_expression_index = 0U;
-                 nested_expression_index < program->expression_count;
-                 ++nested_expression_index) {
-                const MinicExpression *nested =
-                    &program->expressions[nested_expression_index];
+            boolean_caller_scans += 1U;
+            if (!boolean_index_attempted) {
+                boolean_index_attempted = true;
+                boolean_index_builds += 1U;
+                if (boolean_expression_limit != 0U &&
+                    boolean_expression_limit <= SIZE_MAX / sizeof(*boolean_calls)) {
+                    size_t call_id;
+                    boolean_calls = (size_t *)malloc(
+                        boolean_expression_limit * sizeof(*boolean_calls));
+                    if (boolean_calls != NULL) {
+                        for (call_id = 0U; call_id < boolean_expression_limit;
+                             ++call_id) {
+                            if (program->expressions[call_id].kind ==
+                                MINIC_EXPRESSION_CALL) {
+                                boolean_calls[boolean_call_count++] = call_id;
+                            }
+                        }
+                    }
+                }
+                if (boolean_expression_limit != 0U &&
+                    boolean_expression_limit <= SIZE_MAX / sizeof(*boolean_owners)) {
+                    boolean_owners = (MinicFunctionId *)malloc(
+                        boolean_expression_limit * sizeof(*boolean_owners));
+                    if (boolean_owners != NULL) {
+                        boolean_owner_ready =
+                            minic_perf_program_build_expression_source_owners(
+                                program, boolean_function_limit,
+                                boolean_owners, boolean_expression_limit);
+                        if (!boolean_owner_ready) {
+                            free(boolean_owners);
+                            boolean_owners = NULL;
+                        }
+                    }
+                }
+            }
+            {
+                const bool call_index_ready =
+                    boolean_calls != NULL &&
+                    program->expression_count == boolean_expression_limit;
+                const size_t scan_limit = call_index_ready
+                    ? boolean_call_count : program->expression_count;
+                size_t scan_position;
+                for (scan_position = 0U; scan_position < scan_limit; ++scan_position) {
+                    const MinicExpression *nested;
+                    nested_expression_index = call_index_ready
+                        ? boolean_calls[scan_position] : scan_position;
+                    nested = &program->expressions[nested_expression_index];
                 MinicFunctionId current_id;
                 MinicFunctionId source_id;
                 MinicFunctionId variant_id = MINIC_FUNCTION_INVALID;
@@ -2136,6 +2194,18 @@ static bool minic_specialize_inline_boolean_range_calls(
                 if (nested->kind != MINIC_EXPRESSION_CALL ||
                     nested->value.call.function_id == MINIC_FUNCTION_INVALID) {
                     continue;
+                }
+                boolean_call_candidates += 1U;
+                if (boolean_owner_ready &&
+                    nested_expression_index < boolean_expression_limit) {
+                    const MinicFunctionId owner =
+                        boolean_owners[nested_expression_index];
+                    if (owner != MINIC_FUNCTION_INVALID &&
+                        owner < boolean_function_limit &&
+                        owner != caller.specialization_source) {
+                        boolean_skipped_other_owner += 1U;
+                        continue;
+                    }
                 }
                 current_id = nested->value.call.function_id;
                 if (current_id >= program->function_count) {
@@ -2213,12 +2283,29 @@ static bool minic_specialize_inline_boolean_range_calls(
                             symbolic_expression,
                             boolean_range_known,
                             &variant_id)) {
+                        free(boolean_calls);
+                        free(boolean_owners);
                         return false;
                     }
                     transitive_clone_count += 1U;
                 }
+                }
             }
         }
+        if (getenv("MINIC_BOOLEAN_TRANSITIVE_PERF") != NULL) {
+            (void)fprintf(stderr,
+                          "MINIC_BOOLEAN_TRANSITIVE_INDEX callers=%zu "
+                          "index_builds=%zu call_entries=%zu candidates=%zu "
+                          "skipped_other_owner=%zu calls_ready=%u "
+                          "owners_ready=%u\n",
+                          boolean_caller_scans, boolean_index_builds,
+                          boolean_call_count, boolean_call_candidates,
+                          boolean_skipped_other_owner,
+                          (unsigned int)(boolean_calls != NULL),
+                          (unsigned int)boolean_owner_ready);
+        }
+        free(boolean_calls);
+        free(boolean_owners);
     }
 
     if (direct_clone_count != 0U || transitive_clone_count != 0U) {
