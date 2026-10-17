@@ -13,7 +13,7 @@ p=Path("src/frontend/lexer.c")
 src=p.read_text()
 old='#include <string.h>'
 if src.count(old)!=1:raise SystemExit("MINIC_LEXER_RESCAN_CENSUS=FAIL include anchor")
-src=src.replace(old,old+"\n#include <stdlib.h>",1)
+src=src.replace(old,old+"\n#include <stdlib.h>\n#include <stdint.h>",1)
 old="bool minic_lexer_next(MinicLexer *lexer, MinicToken *token, MinicDiagnostic *diagnostic) {"
 if src.count(old)!=1:raise SystemExit("MINIC_LEXER_RESCAN_CENSUS=FAIL function anchor")
 src=src.replace(old,"static bool minic_lexer_next_census_implementation(MinicLexer *lexer, MinicToken *token, MinicDiagnostic *diagnostic) {",1)
