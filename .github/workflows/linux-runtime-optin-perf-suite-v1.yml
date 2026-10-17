@@ -281,6 +281,9 @@ jobs:
           retention-days: 7
 
 
+  # Before perf500 experiments, consult docs/ci/minic-perf-decision-index-2026-10-17.md.
+  # A previously rejected/paused cost model requires fresh current-source evidence;
+  # this comment changes no job body, owner routing, or compiler algorithm.
   perf500:
     if: (github.event_name == 'workflow_dispatch' && (inputs.mode == 'first500' || inputs.mode == 'all')) || (github.event_name == 'push' && (contains(github.event.head_commit.message, '[linux-perf500]') || contains(github.event.head_commit.message, '[minic-source-broad-ab]') || contains(github.event.head_commit.message, '[minic-current-phase20]') || contains(github.event.head_commit.message, '[minic-cpu-profile-only]') || contains(github.event.head_commit.message, '[minic-boolean-domain-ab20]') || contains(github.event.head_commit.message, '[minic-boolean-domain-ab500]') || contains(github.event.head_commit.message, '[minic-parser-copy-ab]') || contains(github.event.head_commit.message, '[minic-integer-owner-ab]') || contains(github.event.head_commit.message, '[minic-integer-owner-ab500]') || contains(github.event.head_commit.message, '[minic-next-stage-audit]') || contains(github.event.head_commit.message, '[minic-core-reentry-ab]') || contains(github.event.head_commit.message, '[minic-core-reentry-ab500]') || contains(github.event.head_commit.message, '[minic-core-regression-triage]') || contains(github.event.head_commit.message, '[minic-core-lazy-ab]') || contains(github.event.head_commit.message, '[minic-core-lazy-ab500]') || contains(github.event.head_commit.message, '[minic-boolean-owner-ab]') || contains(github.event.head_commit.message, '[minic-boolean-owner-ab500]') || contains(github.event.head_commit.message, '[minic-boolean-regression-triage]')))
     runs-on: ubuntu-24.04
