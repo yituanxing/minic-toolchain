@@ -739,7 +739,7 @@ jobs:
           fi
 
       - name: Install Linux prerequisites only on cache miss
-        if: !contains(github.event.head_commit.message, '[minic-bootstrap-seed-preflight]') && (steps.corpus-verify.outputs.valid != 'true')
+        if: "!contains(github.event.head_commit.message, '[minic-bootstrap-seed-preflight]') && (steps.corpus-verify.outputs.valid != 'true')"
         run: |
           set -Eeuo pipefail
           sudo apt-get -o Acquire::Retries=3 update
@@ -747,7 +747,7 @@ jobs:
           riscv64-linux-gnu-gcc --version | head -n1
 
       - name: Materialize exact historical first500 inputs
-        if: !contains(github.event.head_commit.message, '[minic-bootstrap-seed-preflight]') && (steps.corpus-verify.outputs.valid != 'true')
+        if: "!contains(github.event.head_commit.message, '[minic-bootstrap-seed-preflight]') && (steps.corpus-verify.outputs.valid != 'true')"
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -792,7 +792,7 @@ jobs:
           test "$(wc -l < build/linux-perf-corpus/inputs.sha256)" -eq 500
 
       - name: Save verified first500 corpus
-        if: !contains(github.event.head_commit.message, '[minic-bootstrap-seed-preflight]') && (steps.corpus-verify.outputs.valid != 'true')
+        if: "!contains(github.event.head_commit.message, '[minic-bootstrap-seed-preflight]') && (steps.corpus-verify.outputs.valid != 'true')"
         uses: actions/cache/save@v4
         with:
           path: build/linux-perf-corpus
