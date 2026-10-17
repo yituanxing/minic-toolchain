@@ -4,6 +4,28 @@
 > 本表是候选的**状态索引**，不是覆盖旧的原始数据；旧实验报告、补丁、CI artifacts 均保留。每次新优化先记录「相同结构以前试过没有、当时基线是什么、为何现在仍值得做」。
 > 基线：主线 `6612e2c1a3`（文档头），最新已认证的 Boolean/Core/Integer 联合源码经 [2064 + GNU link + QEMU P1 #38995964988](https://github.com/yituanxing/minic-toolchain/actions/runs/38995964988) PASS。这个 PASS 是 GNU PP → MiniC → GNU AS/LD，不能声称全 Mini 工具链共同通过。下列不同实验的加速比不能相乘，也不能伪称当前 2064 的同比速度。
 
+## 第六轮候选：Parser 冷 switch 容器外置，消除每个 lookahead 的 131KiB 冗余复制（2026-10-17）
+
+**新 CPU 基线已经真正完成：** [Callgrind + Parser-copy census #39014430010](https://github.com/yituanxing/minic-toolchain/actions/runs/39014430010) SUCCESS，最新 `MinicExpression=208B`、已 2064/QEMU 认证的 MiniC release 与 debug/probe 编译器，复用原 SHA-frozen Linux `fs/ext4/fsync.o` 和 `kernel/bpf/btf.o`，**2/2 真实 `.s` 字节一致**。模拟的 Callgrind **Ir（指令数，不是 wall）**：fsync **3,471,772,669**，libc memcpy self **1,668,957,947（48.07%）**；BTF **9,632,237,372**，libc memcpy self **2,907,738,149（30.19%）**。Symbolic specialize self 分别 7.15% / 10.16%。Parser 快照精确 site 插桩：`sizeof(MinicParser)=133536B`，fsync **12,430 次 / 1.546 GiB 名义结构体复制**，BTF **21,446 次 / 2.667 GiB**；这些是 C 源值复制操作的总名义字节，**不是**实测 DRAM 流量，不可直接拿 memcpy 指令占比全部归因于 Parser。
+
+**白盒发现的具体冗余与新成本模型：** `src/frontend/parser_internal.h` 的 `MinicParser` 里固定 `MinicParserSwitchContext switch_contexts[16]`，每个 context 存 512 个 `uint64_t` case lower 和 512 upper，再加 selector 元数据；这 16×8280=**132480B** 几乎支配全部 **133536B** Parser。即使只是 `probe=*parser` 来检查下一个 token，完整 cold switch 缓冲区都会跟着复制；`parser_string.c:689` 与 `parser_statement.c:2781` 是真实高频 site。此成本模型与以前已拒的 **仅替换 parser_string 两处 lookahead** 完全不同：本次单次移动 cold 数组使 `sizeof(MinicParser)=133536→1064B`，理论上所有现存 Parser 快照均受益，而不是逐个特殊重写调用点。仍然存在别的 source memcpy 消耗，应只用 A/B 实测判定收益。
+
+**只在 opt-in disposable checkout 尝试**：`tools/ci/apply-perf-parser-cold-switch-context-v1.py` 只修改 `parser_internal.h`、`parser_statement.c`、`parser_function.c` 的 cold ctx 表示，在**第一次真正 switch**解析时分配唯一 16-slot case context 表，parser 主进程结束时释放；其它字段、case 64-bit 边界和 16 层嵌套仍保留，重新利用原 case 计数/OOM error 约束。不改变生产 `src`。**明确生命周期边界**：speculative Parser 值副本现在会借用 cold switch 指针，常见 Lexer-only probe 不写该表；若极端 GNU attribute/statement expression 探针可能写同一表，需在晋级生产前查证/添加测试或 COW 路径，不能仅以成功编译 500 正常 TU 宣称所有分支完全等价。
+
+**5-owner 本地资格 [#39014923355](https://github.com/yituanxing/minic-toolchain/actions/runs/39014923355) SUCCESS**：`check-ast-contract check-type` PASS，嵌套 switch 和负数/64bit case 的合成样本 `.s` 逐字节相同，5/5 完全一样的 Linux `.s`，每臂四次交错：
+| owner | old P50 ms | candidate P50 ms | 加速 |
+| --- | ---: | ---: | ---: |
+| fs/ext4/fsync.o | 272.966 | 222.228 | 1.22831× |
+| kernel/bpf/btf.o | 863.910 | 771.683 | 1.11951× |
+| kernel/events/core.o | 1161.705 | 1091.889 | 1.06394× |
+| mm/memcontrol.o | 1013.198 | 944.735 | 1.07247× |
+| arch/riscv/purgatory/ctype.o | 2.474 | 1.878 | 1.31736×（微小 TU、不可过度解读） |
+| **五 owner P50 之和** | **3314.251** | **3032.413** | **1.09294×** |
+
+本轮 RSS 单进程下降很少（BTF **155616→154444 KiB**），符合减少**反复 memcpy 流量**而不是长期保留 AST 容量的成本模型；不得宣传成整机 RSS 大幅下降。第一轮实验 [#39014850929](https://github.com/yituanxing/minic-toolchain/actions/runs/39014850929) FAILED 是误将依赖 frozen500 corpus 的实验 step 放在 cache restore 之前，未执行候选编译，与功能/性能无关；已移动该 step、在 #39014923355 实测通过。
+
+**扩组 frozen first500 进行中：** [#39015035562](https://github.com/yituanxing/minic-toolchain/actions/runs/39015035562)，reuse 原 4-worker, 250/250 balanced differential，要求 500/500 `.s` exact，记录 wall/CPU 回退后再决策。候选仍 **`screen-5-pass / first500-pending / production-not-modified`**；尚未做完整 2064/QEMU。任何合入必须排除冷指针被值复制 probe 非法共享写入与释放的风险。
+
 ## 第六轮候选前置：第五轮之后重新做 CPU 归因（2026-10-17）
 
 **先重新测而非直接改**：截至 `main@fb4ca421d`，上一轮已经将 `MinicExpression=416→208B`，first500 累计编译用时下降 **10.21%**，完整 2064/Linux/QEMU P1 PASS（#39012897095）。此前的 Callgrind 29–46% libc memcpy 指令比例是结构压缩**前**的热点，不能凭过期归因继续搬同一数据。尤其历史 `PERF-033` 改扩容因子否决、`functiontype-exact` <1% 停止、`call-inline8` 已合入，不应被重复抽卡。
