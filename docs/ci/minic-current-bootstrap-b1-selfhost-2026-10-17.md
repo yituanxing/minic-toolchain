@@ -135,3 +135,31 @@ CI 初次回放 #39043130457 等失败经进一步证实是**Actions 下载 Arti
 
 **下一阶段是自举完整 Linux 路径与剩余工具验证，不是重开无意义性能优化。** 先让当前 Stage2 对真实 Linux GNU-Kbuild `.i` 的汇编和目标对象与 Stage0 匹配，然后用已有七路分片推进 Stage2 2064 + Linux 链接与 QEMU P1；再逐段把 GNU PP、AS、LD 等替换为已经通过单工具及小型联合门禁的 Stage2-built Mini 工具，收敛整条原生 Linux 构建链，而不是一次性宣称所有界面都消除了 GNU 依赖。
 
+
+## 6. Stage2 构建工具链真正接管完整小型 C 程序的 PP→CC→AS→LD（2026-10-17）
+
+**真实 CI [#39044664602](https://github.com/yituanxing/minic-toolchain/actions/runs/39044664602) SUCCESS**，在前述完整 Stage2-built 8 工具 ELF Artifact、47-TU fixed-point Stage2 编译器 SHA 不变的前提下，保留既有 MiniPP/MiniAS/MiniAR/MiniLD/MiniObjcopy **5/5** 原套件 PASS，且增加第二条真正独立的原生数据流：
+
+```text
+C 源 main.c + 本地 answer.h
+  (#include; 宏 SUM_TWO(TWENTY_ONE); #if 必须算出 42)
+         │
+         ▼
+QEMU / Stage2-built MiniPP (-E -P -undef -nostdinc) → main.i
+         │
+         ▼
+QEMU / Stage2 minic-cc → main.s
+         │
+         ▼
+QEMU / Stage2-built MiniAS → main.o
+         │                 (另有前述 Stage2-built MiniAS 的 _start.o)
+         ▼
+QEMU / Stage2-built MiniLD (-static -e _start) → ELF64 ET_EXEC
+         │
+         ▼
+qemu-riscv64 ELF：真实退出码 **42** ✅
+```
+
+日志原文：`BOOTSTRAP_ALL_MINI_C_CHAIN=PASS Stage2_built_MiniPP=true Stage2_MiniC=true Stage2_built_MiniAS=true Stage2_built_MiniLD=true GNU_PP_AS_LD=false qemu_return=42`，以及 `BOOTSTRAP_STAGE2_NATIVE_RUNTIME=PASS tools=8 suites=5 runtime_chain=42 all_mini_pp_cc_as_ld=true evidence_sha=true`。程序编译、汇编和链接全过程**未调用 GNU 预处理/汇编/链接**，不再只是用 GNU PP 的 `.i` 冒称完整 Mini 流程。程序的预处理输出、汇编、对象和 ELF SHA 连同功能日志保留在 [#39044664602 的 artifact](https://github.com/yituanxing/minic-toolchain/actions/runs/39044664602) 内。
+
+**范围边界：** 构建这些 8 个工具的 **ELF 自身**在 30 TU 阶段仍然使用 GNU GCC -E、GNU AS 和 GNU 静态链接/CRT/libc；所以此次成功是**自举工具运行构成的一条无 GNU PP/AS/LD 的 C 消费程序管线**，**不是**「全部工具源码完成无 GNU 自重建」，也不是 Linux 内核全链 Stage2 运行成功。CLI Driver / MiniNM / MiniStrip / MiniObjcopy 的后续联合测试以及自举 2064 Linux GNU PP→Stage2 CC→GNU AS/LD→QEMU P1，仍是独立验收里程碑。为了避免过度声明，后续测试摘要的 `bootstrapped_no_GNU_preprocessor` 指**完整工具自身构建**，保持 false；新增加 `all_mini_fresh_program_no_GNU_preprocessor=true` 专指上述小型程序。
