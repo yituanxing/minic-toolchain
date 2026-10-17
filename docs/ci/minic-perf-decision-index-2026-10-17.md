@@ -4,6 +4,21 @@
 > 本表是候选的**状态索引**，不是覆盖旧的原始数据；旧实验报告、补丁、CI artifacts 均保留。每次新优化先记录「相同结构以前试过没有、当时基线是什么、为何现在仍值得做」。
 > 基线：主线 `6612e2c1a3`（文档头），最新已认证的 Boolean/Core/Integer 联合源码经 [2064 + GNU link + QEMU P1 #38995964988](https://github.com/yituanxing/minic-toolchain/actions/runs/38995964988) PASS。这个 PASS 是 GNU PP → MiniC → GNU AS/LD，不能声称全 Mini 工具链共同通过。下列不同实验的加速比不能相乘，也不能伪称当前 2064 的同比速度。
 
+## 第六轮完成后最新 CPU 归因：Parser hot-copy 病因解除，下一张卡需重选（2026-10-17）
+
+**全量来源准确性：** 第六轮正式源码 [cbbd5654](https://github.com/yituanxing/minic-toolchain/commit/cbbd5654cc8f7fa508e798bc0262f49e4c32d3ee)，配对测试 500/500 byte-identical、**1.08697×（累积 wall 180349.471→165919.403ms, -8.00%）**、Sanitizer + 9 例 parser edge + 10-owner 8x 回退复核已通过。**完整 Runtime [#39016455728](https://github.com/yituanxing/minic-toolchain/actions/runs/39016455728) SUCCESS**：7/7 构建分片、`GNU_MINIC_SHARD_MERGE=PASS objects=2064 shards=7`、GNU Link `COHORT_LINK=REUSED name=full_all_verified selection=prefix:2064`、QEMU `COHORT_P1=PASS syscalls=12 python_era_oracle=PASS`、`COHORT_RESULT=PASS candidate_objects=2064 scope=FULL_C_UNIVERSE same_config=true`。Focused T1 [#39016455740](https://github.com/yituanxing/minic-toolchain/actions/runs/39016455740) SUCCESS。本轮最终标签：`parser-cold-switch-heap-owned-v1 = integrated / runtime-certified / keep / do-not-repeat`。
+
+**新的真实诊断 [#39016792065](https://github.com/yituanxing/minic-toolchain/actions/runs/39016792065) SUCCESS**：对同一 SHA-frozen Linux `.i`，保留未修改生产 C 的 copy probe 和 debug Callgrind，2/2 `.s` byte-identical。第一次 #39016651501 profiler FAIL 是旧脚本误把 `sizeof(Parser)>=131072` 当不变量，在当前 1064B Parser 上报 `inconsistent parser copy census`，仅测试仪表过期，非 MiniC 本身的编译失败；修复后同一现行源码复测通过。
+
+| Linux owner | 上一版（第六轮之前）的 Callgrind total Ir | 第六轮后 Callgrind total Ir | libc `memcpy` self Ir 占比前→后 | Parser 按值复制名义总量前→后 |
+| --- | ---: | ---: | ---: | ---: |
+| fs/ext4/fsync.o | 3,471,772,669 | **1,806,899,557** | **48.07%→0.50%** | **1.546 GiB→0.012 GiB** |
+| kernel/bpf/btf.o | 9,632,237,372 | **6,760,025,836** | **30.19%→0.65%** | **2.667 GiB→0.021 GiB** |
+
+注意 Callgrind 的 **Ir 是虚拟机指令计数，不是 wall-time、CPU 周期、DRAM 字节或真实 malloc 流量**。Parser copy 总名义值由固定 `sizeof(Parser) * calls` 算出，新/旧操作次数相同（fsync 12,430、BTF 21,446），缩小对象才是收益来源；避免把 48%→0.5% 当成整个程序性能提高 47.5%。同时 500 实测仅 -8% 累计 wall，更可信的产品表现数据仍来自 A/B。
+
+**下一轮先选卡、不重复旧优化：** 现在的 fsync self CPU 热点为 `minic_specialize_inline_symbolic_calls` **13.73%**、`minic_lexer_next` **6.66%**，BTF 为 Symbolic specialize **14.48%**、`minic_parser_bind_enum_constant` **9.72%**、`minic_parser_span_equals` **6.22%**、Core named queue **4.17%**。原来对 memcpy 高占比的任何推断均已过期；下一阶段必须先查对应源代码的真实次数、算法上界和已知 rejected 方案，再选择单因素小范围试验。**历史 Parser 枚举 hash、Lexer 局部 lookahead 和 Core name-index 的低收益/拒绝案例不得无证复刻**。任何候选禁止在没有可复核 `.s` / wall / user CPU / RSS 之前进入生产源。
+
 ## 第六轮候选：Parser 冷 switch 容器外置，消除每个 lookahead 的 131KiB 冗余复制（2026-10-17）
 
 **新 CPU 基线已经真正完成：** [Callgrind + Parser-copy census #39014430010](https://github.com/yituanxing/minic-toolchain/actions/runs/39014430010) SUCCESS，最新 `MinicExpression=208B`、已 2064/QEMU 认证的 MiniC release 与 debug/probe 编译器，复用原 SHA-frozen Linux `fs/ext4/fsync.o` 和 `kernel/bpf/btf.o`，**2/2 真实 `.s` 字节一致**。模拟的 Callgrind **Ir（指令数，不是 wall）**：fsync **3,471,772,669**，libc memcpy self **1,668,957,947（48.07%）**；BTF **9,632,237,372**，libc memcpy self **2,907,738,149（30.19%）**。Symbolic specialize self 分别 7.15% / 10.16%。Parser 快照精确 site 插桩：`sizeof(MinicParser)=133536B`，fsync **12,430 次 / 1.546 GiB 名义结构体复制**，BTF **21,446 次 / 2.667 GiB**；这些是 C 源值复制操作的总名义字节，**不是**实测 DRAM 流量，不可直接拿 memcpy 指令占比全部归因于 Parser。
