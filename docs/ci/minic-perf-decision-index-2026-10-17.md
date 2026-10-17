@@ -116,5 +116,9 @@
 
 此结果说明 Core 名称扫描确实值得独立研究，但不是整个 Linux 的 5.4% 提速：小输入中的索引建表额外成本可抵消收益，五文件样本被刻意挑选为热点、不能代表全部 500/2064。**候选状态 `verified-local-screen / 500 pending`**，不进入生产主线；已启动原已有 perf500 Job 的 first500 完整 SHA-frozen single-run paired A/B [#38999084169](https://github.com/yituanxing/minic-toolchain/actions/runs/38999084169)，复用原 `linux-perf-frozen-corpus-differential-v1.py` 与 4-worker、balanced old/new，初筛五文件不再在该 run 中重复做 4x；其结果和可能的单文件回退仍需严格审计。**没有执行 2064 Linux+QEMU，禁止称之为已晋级或最终性能提升。**
 
+**first500 全量性能门（已关闭本候选）：** [CI #38999084169](https://github.com/yituanxing/minic-toolchain/actions/runs/38999084169) **SUCCESS**；原有 4-worker balanced-order frozen500 配对与 SHA 校验，**500/500 完全相同 .s**，原版 `384357.214ms`，候选 `380694.509ms`，仅 **1.00962×**（单文件耗时累计下降 **0.953%**，节约约 3.66 秒）。单轮有 **206/500** 个文件 wall 较慢；中位单文件倍率仅 **1.00499×**。最大单轮绝对回退例 `fs/nfs/blocklayout/extent_tree.o` +419.117ms、`fs/nfs/client.o` +344.831ms，可能含明显调度噪声，**不能声称这两个是确定的编译器回归**。但当前候选的全量净收益 <1%，相对五个大 TU 初筛的 5.4% 明显稀释；既没有依据把 206 个单轮回退解释成全部真实，也没有必要在未晋级的低收益方案上花费 2064 全量+QEMU Runner。
+
+**裁决：`verified-correctness-500 / low-gain-not-promoted / stop`。** 保留 `tools/ci/apply-perf-core-reachability-name-index-v1.py`、5-owner 和 500 的二进制/输入身份及原始 A/B，但**不修改生产 Core Reachability 源码、不晋级正式优化、不继续反复增加别名哈希/微调/全量验证**。此负结果不能否定另一种截然不同的、经新 CPU 数据证实的热路径改进。
+
 **待验证卡 `core-reachability-name-lookup`**：先只在当前 frozen BTF / events-core 上计 `minic_core_named_function_id` 的调用量、总比较次数、失败比率及入口实际 CPU 成本，证明成本模型后才考虑 **per-Core reachability** 的只读 `symbol name → earliest function ID` 索引，严格保留 assembler_name 优先、大小写/长度、first-match、未知/OOM 原线性路径以及索引生命周期；不得创建跨 TU/全局静态未受限缓存。没有新证据之前不为新 Hash 直接触发 500/2064。
 
