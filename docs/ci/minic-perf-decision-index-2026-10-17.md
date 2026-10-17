@@ -96,3 +96,10 @@
 同一 run 的 `map_calls=5,854` / `map_slots=294,098,527` 仍显示每函数全 TU `statement_blocks` 初始化真实存在，**但这已经是 PERF-011 试过的算法假设**。此前数字约 1.18GB 是累计逻辑写入，不能当作 DRAM traffic 或节省时间。现在即使所有 Core-set 工作都被消除（显然不可能），七样本上界也只是这个阶段的 1.058s；这不足以让旧 Workspace 自动跃居第一。
 
 **决定**：不要实现 Workspace v2、Generation Stamp 或继续 Boolean/Core Reentry 的微调。下一步用已存在、会追踪真正 `bin/minic-cc` 的 `[minic-cpu-profile-only]` 对两个冻结输入做 CPU 函数归因，尤其确认 Parser 占用是不是未优化的新问题。该 CPU 指令剖析不等于 wall time，也不能自动推广至 2064 TU。基于它再开**新的不同成本模型**候选，而不是预设增设索引/哈希。已触发同一 perf500 Job 的 run [#38997549409](https://github.com/yituanxing/minic-toolchain/actions/runs/38997549409)；本行仅记录开始，**最终状态须按对应日志判定**。
+
+## 接下来值得验证的不同瓶颈（先调查，不抢先实现）
+
+已复核 `src/compiler/compiler.c`，存在 `minic_core_named_function_id()`：Core Reachability 遍历 `CALL` / `FUNCTION_ADDRESS` 时，针对每个目标名重新按 `program->function_count` 线性扫描所有源函数，比较 assembler symbol/length 并取**第一**个匹配。当前仓库未发现这条 Core 名称解析路径已有同等索引；它不同于已集成的 **Parser 函数名哈希**（Parser 作用域/名称表）和 **Core Reentry Incoming 索引**（goto/asm-goto 源流向）。来自真正 `minic-cc` 的 [#38997549409](https://github.com/yituanxing/minic-toolchain/actions/runs/38997549409) BTF Callgrind：`minic_enqueue_core_named_function` 自身约 **281.7M retired-simulated instructions / 2.75% Ir**，但这不是准确 wall-time 或已证明线性解析占比。
+
+**待验证卡 `core-reachability-name-lookup`**：先只在当前 frozen BTF / events-core 上计 `minic_core_named_function_id` 的调用量、总比较次数、失败比率及入口实际 CPU 成本，证明成本模型后才考虑 **per-Core reachability** 的只读 `symbol name → earliest function ID` 索引，严格保留 assembler_name 优先、大小写/长度、first-match、未知/OOM 原线性路径以及索引生命周期；不得创建跨 TU/全局静态未受限缓存。没有新证据之前不为新 Hash 直接触发 500/2064。
+
