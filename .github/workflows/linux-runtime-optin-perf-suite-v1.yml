@@ -33,7 +33,7 @@ permissions:
 jobs:
 
   shard:
-    if: (github.event_name == 'workflow_dispatch' && (inputs.mode == 'all3352' || inputs.mode == 'all')) || (github.event_name == 'push' && contains(github.event.head_commit.message, '[linux-perf3352]'))
+    if: (github.event_name == 'workflow_dispatch' && (inputs.mode == 'all3352' || inputs.mode == 'all')) || (github.event_name == 'push' && contains(github.event.head_commit.message, '[linux-perf3352]')) || (github.event_name == 'push' && contains(github.event.head_commit.message, '[minic-bootstrap-stage2-linux500]'))
     runs-on: ubuntu-24.04
     timeout-minutes: 110
     strategy:
@@ -55,7 +55,54 @@ jobs:
       LABEL: ${{ matrix.label }}
     steps:
       - uses: actions/checkout@v4
+      # Reuse existing seven shard runners for the *same* frozen first500 .i.
+      # All 500 verified per runner; Stage0 vs QEMU Stage2 .s/.o SHA.
+      - name: Restore SHA-certified frozen first500 source corpus
+        if: contains(github.event.head_commit.message, '[minic-bootstrap-stage2-linux500]')
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-perf-corpus
+          key: linux-6.6.143-first500-rv64-v1-${{ hashFiles('tests/external/linux/batch_probe.sh', 'tests/external/linux/probe.sh', 'tests/external/linux/replay-indices.txt') }}
+          fail-on-cache-miss: true
+
+      - name: Download 47-TU fixed-point Stage2 compiler
+        if: contains(github.event.head_commit.message, '[minic-bootstrap-stage2-linux500]')
+        uses: actions/download-artifact@v4
+        with:
+          name: minic-current-bootstrap-b1-stage2-v1
+          repository: yituanxing/minic-toolchain
+          run-id: 39040013459
+          github-token: ${{ github.token }}
+          path: build/bootstrap-stage2-linux500/artifact
+
+      - name: Linux first500 real Stage2 CI-shard differential
+        if: contains(github.event.head_commit.message, '[minic-bootstrap-stage2-linux500]')
+        timeout-minutes: 95
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          bash tools/ci/minic-bootstrap-stage2-linux500-shard-v1.sh "$LABEL"
+
+      - name: Save Stage2 Linux500 per-object evidence
+        if: always() && contains(github.event.head_commit.message, '[minic-bootstrap-stage2-linux500]')
+        uses: actions/upload-artifact@v4
+        with:
+          name: minic-bootstrap-stage2-linux500-${{ matrix.label }}
+          path: |
+            build/bootstrap-stage2-linux500/${{ matrix.label }}/verdict.log
+            build/bootstrap-stage2-linux500/${{ matrix.label }}/stage0-build.log
+            build/bootstrap-stage2-linux500/${{ matrix.label }}/differential/verdict.json
+            build/bootstrap-stage2-linux500/${{ matrix.label }}/differential/stage0/batch-results.json
+            build/bootstrap-stage2-linux500/${{ matrix.label }}/differential/stage2/batch-results.json
+            build/bootstrap-stage2-linux500/${{ matrix.label }}/differential/stage0/assemble-results.json
+            build/bootstrap-stage2-linux500/${{ matrix.label }}/differential/stage2/assemble-results.json
+            build/bootstrap-stage2-linux500/${{ matrix.label }}/differential/stage2/failure-contexts.txt
+            build/bootstrap-stage2-linux500/${{ matrix.label }}/differential/stage2/minic-stderr
+          if-no-files-found: warn
+          retention-days: 7
+
       - name: Install RISC-V prerequisites
+        if: "!contains(github.event.head_commit.message, '[minic-bootstrap-stage2-linux500]')"
         run: |
           set -Eeuo pipefail
           sudo apt-get -o Acquire::Retries=3 update -qq
@@ -65,6 +112,7 @@ jobs:
           riscv64-linux-gnu-gcc --version | head -n1
           df -h "$GITHUB_WORKSPACE"
       - name: Build latest Canonical MiniC
+        if: "!contains(github.event.head_commit.message, '[minic-bootstrap-stage2-linux500]')"
         run: |
           set -Eeuo pipefail
           root="$GITHUB_WORKSPACE/build/all3352-wall"
@@ -75,6 +123,7 @@ jobs:
           grep -qx 'apply-correctness-constant-p-ice-v1.py' "$root/evidence/profile/minic-profile.txt"
           sha256sum "$root/toolchain/bin/minic" | tee "$root/evidence/minic.sha256"
       - name: Materialize this Kbuild C TU range (not part of MiniC time)
+        if: "!contains(github.event.head_commit.message, '[minic-bootstrap-stage2-linux500]')"
         run: |
           set -Eeuo pipefail
           root="$GITHUB_WORKSPACE/build/all3352-wall"
@@ -101,7 +150,7 @@ jobs:
           PY
           df -h "$GITHUB_WORKSPACE"
       - name: Verify both historically damaged preprocessed inputs with GCC
-        if: matrix.label == 'f'
+        if: matrix.label == 'f' && !contains(github.event.head_commit.message, '[minic-bootstrap-stage2-linux500]')
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -118,6 +167,7 @@ jobs:
             fi
           done
       - name: Measure MiniC -S only, using four parallel workers
+        if: "!contains(github.event.head_commit.message, '[minic-bootstrap-stage2-linux500]')"
         run: |
           set -Eeuo pipefail
           root="$GITHUB_WORKSPACE/build/all3352-wall"
@@ -135,7 +185,7 @@ jobs:
           cp "$root/replay/batch-summary.txt" "$root/evidence/"
           test "$rc" -eq 0 # Never treat failed compiler subprocesses as a green shard
       - name: Export exact per-TU timing, slowest objects and status
-        if: always()
+        if: always() && !contains(github.event.head_commit.message, '[minic-bootstrap-stage2-linux500]')
         run: |
           set -Eeuo pipefail
           ROOT="$GITHUB_WORKSPACE/build/all3352-wall/evidence" python3 - <<'PY'
@@ -165,7 +215,7 @@ jobs:
               print(f"ALL3352_SLOW index={row['index']} input={row['input']} seconds={row['seconds']:.3f} status={row['status']}")
           PY
       - name: Upload shard evidence only
-        if: always()
+        if: always() && !contains(github.event.head_commit.message, '[minic-bootstrap-stage2-linux500]')
         uses: actions/upload-artifact@v4
         with:
           name: all3352-constant-p-shard-${{ matrix.label }}
@@ -173,14 +223,45 @@ jobs:
           retention-days: 14
   aggregate:
     needs: shard
-    if: always() && ((github.event_name == 'workflow_dispatch' && (inputs.mode == 'all3352' || inputs.mode == 'all')) || (github.event_name == 'push' && contains(github.event.head_commit.message, '[linux-perf3352]')))
+    if: always() && ((github.event_name == 'workflow_dispatch' && (inputs.mode == 'all3352' || inputs.mode == 'all')) || (github.event_name == 'push' && (contains(github.event.head_commit.message, '[linux-perf3352]') || contains(github.event.head_commit.message, '[minic-bootstrap-stage2-linux500]')))
     runs-on: ubuntu-24.04
     steps:
+      - name: Retrieve seven Stage2 first500 Linux object manifests
+        if: contains(github.event.head_commit.message, '[minic-bootstrap-stage2-linux500]')
+        uses: actions/download-artifact@v4
+        with:
+          pattern: minic-bootstrap-stage2-linux500-*
+          path: stage2-first500-shards
+
+      - name: Certify unique 500/500 Stage2 Linux .s and .o across seven runners
+        if: contains(github.event.head_commit.message, '[minic-bootstrap-stage2-linux500]')
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "${{ needs.shard.result }}" = success
+          python3 tools/ci/minic-bootstrap-stage2-linux500-aggregate-v1.py \
+            stage2-first500-shards bootstrap-stage2-linux500-final.json \
+            | tee bootstrap-stage2-linux500-final.txt
+          grep -Fq 'BOOTSTRAP_STAGE2_LINUX500=PASS owners=500/500' bootstrap-stage2-linux500-final.txt
+
+      - name: Preserve full 500-object Stage2 Linux aggregate
+        if: always() && contains(github.event.head_commit.message, '[minic-bootstrap-stage2-linux500]')
+        uses: actions/upload-artifact@v4
+        with:
+          name: minic-bootstrap-stage2-linux500-final
+          path: |
+            bootstrap-stage2-linux500-final.json
+            bootstrap-stage2-linux500-final.txt
+          if-no-files-found: warn
+          retention-days: 14
+
       - uses: actions/download-artifact@v4
+        if: "!contains(github.event.head_commit.message, '[minic-bootstrap-stage2-linux500]')"
         with:
           pattern: all3352-constant-p-shard-*
           path: evidence
       - name: Aggregate 3352 unique TU results
+        if: "!contains(github.event.head_commit.message, '[minic-bootstrap-stage2-linux500]')"
         run: |
           set -Eeuo pipefail
           python3 - <<'PY' | tee all3352-final.txt
@@ -206,7 +287,7 @@ jobs:
               raise SystemExit("ALL3352_COMPILE_FAILURES")
           print("ALL3352_COMPILE_STATUS=PASS")
           PY
-      - if: always()
+      - if: always() && !contains(github.event.head_commit.message, '[minic-bootstrap-stage2-linux500]')
         uses: actions/upload-artifact@v4
         with:
           name: all3352-constant-p-final-report
