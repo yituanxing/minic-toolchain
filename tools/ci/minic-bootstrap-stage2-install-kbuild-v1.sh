@@ -60,12 +60,40 @@ work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 printf 'int value(void){return 42;}\n' > "$work/in.c"
 riscv64-linux-gnu-gcc -E -P "$work/in.c" -o "$work/in.i"
-if ! "$bin/minic" -S "$work/in.i" -o "$work/out.s" \
-       >"$work/driver.stdout" 2>"$work/driver.stderr"; then
+# The direct Stage2 output is the control arm for the native driver shim.
+# If the driver fails, show independent wrapper/QEMU/driver exit status and
+# argument dispatch before making any full Linux test attempt.
+set +e
+MINIC_LINUX_FULL_CROSSBLOCK=1 MINIC_OPT_PURE_DISCARDED_ADDRESS_EQ=1 \
+  qemu-riscv64 "$bin/minic-cc.stage2.rv64" -S "$work/in.i" -o "$work/direct.s" \
+    >"$work/direct.stdout" 2>"$work/direct.stderr"
+direct_rc=$?
+MINIC_LINUX_FULL_CROSSBLOCK=1 MINIC_OPT_PURE_DISCARDED_ADDRESS_EQ=1 \
+  "$bin/minic-cc" -S "$work/in.i" -o "$work/wrapped.s" \
+    >"$work/wrapped.stdout" 2>"$work/wrapped.stderr"
+wrapped_rc=$?
+MINIC_LINUX_FULL_CROSSBLOCK=1 MINIC_OPT_PURE_DISCARDED_ADDRESS_EQ=1 \
+  "$bin/minic" -S "$work/in.i" -o "$work/out.s" \
+    >"$work/driver.stdout" 2>"$work/driver.stderr"
+driver_rc=$?
+set -e
+echo "BOOTSTRAP_STAGE2_DRIVER_DIAG direct_rc=$direct_rc wrapper_rc=$wrapped_rc driver_rc=$driver_rc direct_s=$(test -s "$work/direct.s" && echo yes || echo no) wrapper_s=$(test -s "$work/wrapped.s" && echo yes || echo no) driver_s=$(test -s "$work/out.s" && echo yes || echo no)"
+if [[ "$direct_rc" != 0 || "$wrapped_rc" != 0 || "$driver_rc" != 0 ]]; then
+  for mode in direct wrapped driver; do
+    echo "BOOTSTRAP_STAGE2_DIAG_STDERR mode=$mode" >&2
+    sed -n '1,80p' "$work/$mode.stderr" >&2
+    echo "BOOTSTRAP_STAGE2_DIAG_STDOUT mode=$mode" >&2
+    sed -n '1,50p' "$work/$mode.stdout" >&2
+  done
+  if [[ -n "${COHORT_STAGE2_INVOKE_TRACE:-}" ]]; then
+    echo "BOOTSTRAP_STAGE2_DIAG_TRACE_BEGIN" >&2
+    tail -n 20 "$COHORT_STAGE2_INVOKE_TRACE" >&2
+  fi
   echo "BOOTSTRAP_STAGE2_INSTALL=FAIL driver_to_guest_stage2_smoke" >&2
-  cat "$work/driver.stderr" >&2
   exit 7
 fi
+cmp "$work/direct.s" "$work/wrapped.s"
+cmp "$work/direct.s" "$work/out.s"
 test -s "$work/out.s"
 # Prove the driver really dispatched to Stage2, not the saved host binary.
 if [[ -n "${COHORT_STAGE2_INVOKE_TRACE:-}" ]]; then
