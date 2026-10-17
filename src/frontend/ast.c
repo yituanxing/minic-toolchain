@@ -393,6 +393,10 @@ bool minic_c0_type_initializer_slot_count(const MinicC0Program *program,
 bool minic_c0_program_add_expression(MinicC0Program *program,
                                      const MinicExpression *expression,
                                      MinicExpressionId *expression_id) {
+    /* Prevent truncating references stored by CALL expressions. */
+    if (program->expression_count >= (size_t)UINT32_MAX) {
+        return false;
+    }
     if (!minic_grow_array((void **)&program->expressions,
                           &program->expression_capacity,
                           program->expression_count,

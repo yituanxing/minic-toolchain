@@ -980,11 +980,10 @@ static bool parse_call_argument(MinicParser *parser,
     MinicExpressionId argument_id;
 
     if (argument_index >= MINIC_MAX_FUNCTION_PARAMETERS ||
-        !minic_parser_parse_expression(
-            parser, &call_expression->value.call.arguments[argument_index], 0U)) {
+        !minic_parser_parse_expression(parser, &argument_id, 0U) ||
+        !minic_c0_call_set_argument(call_expression, argument_index, argument_id)) {
         return false;
     }
-    argument_id = call_expression->value.call.arguments[argument_index];
     argument = minic_c0_program_expression(parser->program, argument_id);
     if (argument == NULL) {
         minic_parser_error(parser, "invalid call argument");
@@ -995,7 +994,9 @@ static bool parse_call_argument(MinicParser *parser,
                 parser, callee->parameter_types[argument_index], &argument_id)) {
             return false;
         }
-        call_expression->value.call.arguments[argument_index] = argument_id;
+        if (!minic_c0_call_set_argument(call_expression, argument_index, argument_id)) {
+            return false;
+        }
         argument = minic_c0_program_expression(parser->program, argument_id);
         if (argument == NULL) {
             minic_parser_error(parser, "invalid converted call argument");
@@ -1010,7 +1011,9 @@ static bool parse_call_argument(MinicParser *parser,
         if (!minic_parser_apply_default_argument_promotion(parser, &argument_id)) {
             return false;
         }
-        call_expression->value.call.arguments[argument_index] = argument_id;
+        if (!minic_c0_call_set_argument(call_expression, argument_index, argument_id)) {
+            return false;
+        }
         argument = minic_c0_program_expression(parser->program, argument_id);
         if (argument == NULL || !variadic_argument_type_supported(argument->type)) {
             minic_parser_error(parser, "unsupported variadic argument type");

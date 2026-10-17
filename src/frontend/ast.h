@@ -160,7 +160,7 @@ typedef struct MinicExpression {
             MinicFunctionId function_id;
             MinicExpressionId callee;
             size_t argument_count;
-            MinicExpressionId arguments[MINIC_MAX_FUNCTION_PARAMETERS];
+            uint32_t arguments[MINIC_MAX_FUNCTION_PARAMETERS];
         } call;
         struct {
             MinicUnaryOperator operator_kind;
@@ -206,6 +206,19 @@ typedef struct MinicExpression {
         } overflow;
     } value;
 } MinicExpression;
+
+/* Inline 32-bit argument IDs preserve value-copy ownership of AST nodes.
+ * Program::add_expression rejects IDs that cannot fit in these slots. */
+static inline bool minic_c0_call_set_argument(MinicExpression *expression,
+                                              size_t index,
+                                              MinicExpressionId id) {
+    if (expression == NULL || index >= MINIC_MAX_FUNCTION_PARAMETERS ||
+        id > UINT32_MAX) {
+        return false;
+    }
+    expression->value.call.arguments[index] = (uint32_t)id;
+    return true;
+}
 
 /* Transitional read model: callers must preserve legacy object semantics until
  * producers are migrated to one materialized ArrayType representation. */

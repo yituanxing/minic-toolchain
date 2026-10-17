@@ -78,8 +78,10 @@ bool minic_c0_expression_visit_child_id_refs(MinicExpression *expression,
         }
         for (argument_index = 0U; argument_index < expression->value.call.argument_count;
              ++argument_index) {
-            if (!visit_expression_id(
-                    &expression->value.call.arguments[argument_index], visitor, context)) {
+            MinicExpressionId argument_id =
+                expression->value.call.arguments[argument_index];
+            if (!visit_expression_id(&argument_id, visitor, context) ||
+                !minic_c0_call_set_argument(expression, argument_index, argument_id)) {
                 return false;
             }
         }

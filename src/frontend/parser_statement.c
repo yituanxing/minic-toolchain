@@ -1962,7 +1962,10 @@ static bool finalize_local_cleanup(MinicParser *parser,
     call.value.call.function_id = attributes->cleanup_function;
     call.value.call.callee = MINIC_EXPRESSION_INVALID;
     call.value.call.argument_count = 1U;
-    call.value.call.arguments[0] = address_id;
+    if (!minic_c0_call_set_argument(&call, 0U, address_id)) {
+        minic_parser_error(parser, "cannot represent GNU cleanup call argument");
+        return false;
+    }
     if (!minic_parser_add_expression(parser, &call, &call_id) ||
         !minic_c0_program_add_cleanup_context(
             parser->program, parser->cleanup_context, call_id, &cleanup_context_id)) {

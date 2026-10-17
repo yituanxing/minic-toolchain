@@ -210,7 +210,7 @@ static bool parse_indirect_arguments(MinicParser *parser,
             minic_parser_error(parser, "indirect call argument type does not match declaration");
             return false;
         }
-        call->value.call.arguments[argument_index] = argument_id;
+        if (!minic_c0_call_set_argument(call, argument_index, argument_id)) return false;
         if (argument_index + 1U < function_type->parameter_count) {
             if (parser->current.kind != MINIC_TOKEN_COMMA || !minic_parser_advance(parser)) {
                 indirect_argument_count_error(parser);
@@ -248,7 +248,8 @@ static bool parse_indirect_arguments(MinicParser *parser,
                 minic_parser_error(parser, "unsupported variadic call argument type");
                 return false;
             }
-            call->value.call.arguments[argument_index++] = argument_id;
+            if (!minic_c0_call_set_argument(call, argument_index, argument_id)) return false;
+            ++argument_index;
         } while (parser->current.kind == MINIC_TOKEN_COMMA);
     }
     if (parser->current.kind != MINIC_TOKEN_RPAREN) {
