@@ -128,6 +128,20 @@ def prebuilt_runtime():
     return (builtin, hdr), required
 
 
+def musl_runtime(build, original):
+    """Audited binary producer; this seed must have disclosed provenance."""
+    b = Path(build).resolve()
+    p = {"crt1.o": b / "obj/crt/crt1.o",
+         "crti.o": b / "obj/crt/crti.o",
+         "crtn.o": b / "obj/crt/crtn.o",
+         "libc.a": b / "lib/libc.a",
+         "libgcc.a": original["libgcc.a"]}
+    for name, path in p.items():
+        if not path.is_file() or path.stat().st_size == 0:
+            raise RuntimeError("MISSING_MUSL_BINARY_SEED " + name)
+    return p
+
+
 def command(binaries, tool, *args):
     return ["qemu-riscv64", binaries[tool], *args]
 
@@ -156,7 +170,7 @@ def source_key(source):
     return source.replace("/", "__").replace(".", "_")
 
 
-def native_link_probe(binaries, source_lists, all_sources, libraries, previous, out):
+def native_link_probe(binaries, source_lists, all_sources, seed_libraries, link_libraries, previous, out):
     """Isolate a deterministic native linker block from 77 certified objects.
 
     Diagnostic only. Never upgrades Stage3/4 self-host status on link probe.
@@ -169,7 +183,7 @@ def native_link_probe(binaries, source_lists, all_sources, libraries, previous, 
         evidence.get("failed") or
         evidence.get("source_count") != len(all_sources) or
         evidence.get("seed_binaries") != {k: sha(v) for k,v in binaries.items()} or
-        evidence.get("runtime_seed") != {k: sha(v) for k,v in libraries.items()}):
+        evidence.get("runtime_seed") != {k: sha(v) for k,v in seed_libraries.items()}):
         raise RuntimeError("FULL_NATIVE_LINK_PROBE=FAIL prior object cohort or seed differs")
     rows = {r["source"]: r for r in evidence["rows"]}
     if set(rows) != set(all_sources):
@@ -191,17 +205,18 @@ def native_link_probe(binaries, source_lists, all_sources, libraries, previous, 
             for s in source_lists[tool]]
     argv_prefix = ["-melf64lriscv", "-static", "-e", "_start"]
     candidates = {
-        "original": [libraries["crt1.o"], libraries["crti.o"], *objs,
-                     "--start-group", libraries["libc.a"], libraries["libgcc.a"],
-                     "--end-group", libraries["crtn.o"]],
-        "no_init_fini": [libraries["crt1.o"], *objs,
-                         "--start-group", libraries["libc.a"], libraries["libgcc.a"],
+        "original": [link_libraries["crt1.o"], link_libraries["crti.o"], *objs,
+                     "--start-group", link_libraries["libc.a"], link_libraries["libgcc.a"],
+                     "--end-group", link_libraries["crtn.o"]],
+        "no_init_fini": [link_libraries["crt1.o"], *objs,
+                         "--start-group", link_libraries["libc.a"], link_libraries["libgcc.a"],
                          "--end-group"],
-        "crt_and_plain_libc": [libraries["crt1.o"], *objs,
-                                libraries["libc.a"], libraries["libgcc.a"]],
+        "crt_and_plain_libc": [link_libraries["crt1.o"], *objs,
+                                link_libraries["libc.a"], link_libraries["libgcc.a"]],
     }
     report = {"seed_sha": {k:sha(v) for k,v in binaries.items()},
-              "runtime_sha":{k:sha(v) for k,v in libraries.items()},
+              "original_runtime_sha":{k:sha(v) for k,v in seed_libraries.items()},
+              "link_runtime_sha":{k:sha(v) for k,v in link_libraries.items()},
               "object_count":len(rows), "object_sha":src_hashes,"variants":[]}
     passed = False
     for variant, link_inputs in candidates.items():
@@ -407,6 +422,7 @@ def main():
     parser.add_argument("--resume-stage3", type=Path, default=None,
                         help="Prior CI evidence directory containing stage3/summary.json, s/ and o/")
     parser.add_argument("--link-only", action="store_true", help="Link certified Stage3 77-object cohort only")
+    parser.add_argument("--musl-build", type=Path, default=None, help="Previously built pinned RV64 static musl seed")
     parser.add_argument("--probe-only", default=None,
                         help="Comma-separated real production C units for native PP/CC/AS triage")
     args = parser.parse_args()
@@ -423,7 +439,8 @@ def main():
     if args.link_only:
         if args.resume_stage3 is None:
             raise RuntimeError("link-only requires --resume-stage3")
-        native_link_probe(seed, sources, all_sources, libraries, args.resume_stage3, out)
+        link_libs = musl_runtime(args.musl_build, libraries) if args.musl_build else libraries
+        native_link_probe(seed, sources, all_sources, libraries, link_libs, args.resume_stage3, out)
     elif args.probe_only is not None:
         selected = args.probe_only.split(",")
         if not selected or len(set(selected)) != len(selected) or any(x not in all_sources for x in selected):
