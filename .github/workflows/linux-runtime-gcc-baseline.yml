@@ -1111,7 +1111,7 @@ jobs:
   # Explicit, optional 7-runner producer for the same pure-GCC C universe.
   # Do not use this lane for everyday single-TU debugging.
   gcc-shards:
-    if: github.event_name == 'push' && (contains(github.event.head_commit.message, '[linux-perf-2064-ab]') || contains(github.event.head_commit.message, '[linux-runtime-gcc-sharded]') || contains(github.event.head_commit.message, '[linux-minias-seven-shards]') || (contains(github.event.head_commit.message, '[linux-minipp-seven-integration]') && !contains(github.event.head_commit.message, '[linux-minipp-seven-replay]')) || contains(github.event.head_commit.message, '[linux-minipp-native-rules-C]') || contains(github.event.head_commit.message, '[minic-bootstrap-stage2-linux2064]'))
+    if: github.event_name == 'push' && (contains(github.event.head_commit.message, '[linux-perf-2064-ab]') || contains(github.event.head_commit.message, '[linux-runtime-gcc-sharded]') || contains(github.event.head_commit.message, '[linux-minias-seven-shards]') || (contains(github.event.head_commit.message, '[linux-minipp-seven-integration]') && !contains(github.event.head_commit.message, '[linux-minipp-seven-replay]')) || contains(github.event.head_commit.message, '[linux-minipp-native-rules-C]') || contains(github.event.head_commit.message, '[minic-bootstrap-stage2-linux2064]') || contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux2064]'))
     runs-on: ubuntu-24.04
     timeout-minutes: 75
     strategy:
@@ -1387,7 +1387,7 @@ jobs:
           echo "key=gnu-minic-shard-v1-eeb04f304ebfb97a1079c187dc0c2ea3cc61fc50a55aa3cc776237c16ab19bbe-$profile-$subset-$gcc-$assembler" >>"$GITHUB_OUTPUT"
 
       - name: Restore this shard's immutable candidate objects
-        if: "!contains(github.event.head_commit.message, '[linux-minias-seven-shards]') && !contains(github.event.head_commit.message, '[linux-minipp-seven-integration]') && !contains(github.event.head_commit.message, '[linux-minipp-native-rules-C]') && !contains(github.event.head_commit.message, '[linux-perf-2064-ab]') && !contains(github.event.head_commit.message, '[minic-fresh-full2064-metrics]') && !contains(github.event.head_commit.message, '[minic-bootstrap-stage2-linux2064]')"
+        if: "!contains(github.event.head_commit.message, '[linux-minias-seven-shards]') && !contains(github.event.head_commit.message, '[linux-minipp-seven-integration]') && !contains(github.event.head_commit.message, '[linux-minipp-native-rules-C]') && !contains(github.event.head_commit.message, '[linux-perf-2064-ab]') && !contains(github.event.head_commit.message, '[minic-fresh-full2064-metrics]') && !contains(github.event.head_commit.message, '[minic-bootstrap-stage2-linux2064]') && !contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux2064]')"
         id: shard_cache
         uses: actions/cache/restore@v4
         with:
@@ -1406,6 +1406,16 @@ jobs:
           name: minic-current-bootstrap-b1-stage2-v1
           github-token: ${{ github.token }}
           path: build/bootstrap-stage2-linux2064/artifact
+
+      - name: Download fixed-point nine-tool Stage4 RV64 compiler
+        if: contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux2064]')
+        uses: actions/download-artifact@v4
+        with:
+          repository: yituanxing/minic-toolchain
+          run-id: 39058935623
+          name: minic-current-bootstrap-stage2-native-runtime-v1
+          github-token: ${{ github.token }}
+          path: build/bootstrap-stage4-linux2064/artifact
 
       - name: Build MiniC and prove this exact shard
         if: "!contains(github.event.head_commit.message, '[linux-minias-seven-shards]') && !contains(github.event.head_commit.message, '[linux-minipp-seven-integration]') && !contains(github.event.head_commit.message, '[linux-minipp-native-rules-C]')"
@@ -1489,6 +1499,9 @@ jobs:
           if git log -1 --format=%B | grep -Fq '[minic-bootstrap-stage2-linux2064]'; then
             source tools/ci/minic-bootstrap-stage2-2064-prepare-v1.sh producer "$ev"
           fi
+          if git log -1 --format=%B | grep -Fq '[minic-bootstrap-stage4-linux2064]'; then
+            source tools/ci/minic-bootstrap-stage4-2064-prepare-v1.sh producer "$ev"
+          fi
           bash tools/ci/linux-runtime-gcc-cohort-bisect-v1.sh \
             "$work/linux-6.6.143" "$work/out" \
             "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain/bin/minic" \
@@ -1516,8 +1529,22 @@ jobs:
           fi
           echo "GNU_MINIC_SHARD_READY=PASS shard=${{ matrix.shard }} objects=$n"
 
+      - name: Verify every Stage4 Kbuild C owner was dispatched to certified guest
+        if: contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux2064]')
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-gcc-shards-v1/shard-${{ matrix.shard }}"
+          python3 tools/ci/minic-bootstrap-stage2-2064-shard-audit-v1.py \
+            --candidate-stage stage4 \
+            --stage2-sha 50b3f7763bde2505e17bb545513cb00664286d4e762b3395aea3f29ce724ef31 \
+            --owners "$ev/full-objects.txt" \
+            --success "$ev/mini-success-objects.txt" \
+            --trace "$ev/stage4-invocations.tsv"
+          echo "BOOTSTRAP_STAGE4_SHARD=PASS index=${{ matrix.shard }} ownership=qemu_stage4_C_only"
+
       - name: Cache completed shard independently of later link failures
-        if: "!contains(github.event.head_commit.message, '[linux-minias-seven-shards]') && !contains(github.event.head_commit.message, '[linux-minipp-seven-integration]') && !contains(github.event.head_commit.message, '[linux-minipp-native-rules-C]') && !contains(github.event.head_commit.message, '[linux-perf-2064-ab]') && !contains(github.event.head_commit.message, '[minic-fresh-full2064-metrics]') && steps.shard_cache.outputs['cache-hit'] != 'true' && !contains(github.event.head_commit.message, '[minic-bootstrap-stage2-linux2064]')"
+        if: "!contains(github.event.head_commit.message, '[linux-minias-seven-shards]') && !contains(github.event.head_commit.message, '[linux-minipp-seven-integration]') && !contains(github.event.head_commit.message, '[linux-minipp-native-rules-C]') && !contains(github.event.head_commit.message, '[linux-perf-2064-ab]') && !contains(github.event.head_commit.message, '[minic-fresh-full2064-metrics]') && steps.shard_cache.outputs['cache-hit'] != 'true' && !contains(github.event.head_commit.message, '[minic-bootstrap-stage2-linux2064]') && !contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux2064]')"
         uses: actions/cache/save@v4
         with:
           path: |
@@ -1537,6 +1564,7 @@ jobs:
             build/linux-runtime-gcc-shards-v1/shard-${{ matrix.shard }}/minic-identity.txt
             build/linux-runtime-gcc-shards-v1/shard-${{ matrix.shard }}/full-objects.txt
             build/linux-runtime-gcc-shards-v1/shard-${{ matrix.shard }}/cohort.log
+            build/linux-runtime-gcc-shards-v1/shard-${{ matrix.shard }}/stage4-invocations.tsv
             build/linux-runtime-gcc-shards-v1/shard-${{ matrix.shard }}/boolean-domain-counts.tsv
             build/linux-runtime-gcc-shards-v1/shard-${{ matrix.shard }}/integer-owner-counts.tsv
             build/linux-runtime-gcc-shards-v1/shard-${{ matrix.shard }}/boolean-domain-summary.json
@@ -1576,7 +1604,7 @@ jobs:
     # Use the SAME receiver job for exact immutable Image reboots. When the
     # seven producer jobs are skipped, always() prevents needs' implicit skip;
     # the ordinary full-shard path still requires a successful producer.
-    if: always() && github.event_name == 'push' && ((contains(github.event.head_commit.message, '[linux-runtime-gcc-sharded]') && needs.gcc-shards.result == 'success') || (contains(github.event.head_commit.message, '[linux-minipp-seven-integration]') && needs.gcc-shards.result == 'success') || (contains(github.event.head_commit.message, '[linux-minipp-seven-replay]') && needs.gcc-shards.result == 'skipped') || contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]') || contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]') || contains(github.event.head_commit.message, '[linux-runtime-stack-owners]') || contains(github.event.head_commit.message, '[linux-native-union-cached]') || contains(github.event.head_commit.message, '[linux-minild-cached-replay]') || contains(github.event.head_commit.message, '[linux-minild-reloc-cached-replay]') || contains(github.event.head_commit.message, '[linux-minild-purgatory-cached-replay]') || contains(github.event.head_commit.message, '[linux-minild-vdso64-cached-replay]') || contains(github.event.head_commit.message, '[linux-minild-vdso32-cached-replay]') || contains(github.event.head_commit.message, '[linux-minias-earlycon-frozen]') || (contains(github.event.head_commit.message, '[minic-bootstrap-stage2-linux2064]') && needs.gcc-shards.result == 'success'))
+    if: always() && github.event_name == 'push' && ((contains(github.event.head_commit.message, '[linux-runtime-gcc-sharded]') && needs.gcc-shards.result == 'success') || (contains(github.event.head_commit.message, '[linux-minipp-seven-integration]') && needs.gcc-shards.result == 'success') || (contains(github.event.head_commit.message, '[linux-minipp-seven-replay]') && needs.gcc-shards.result == 'skipped') || contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]') || contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]') || contains(github.event.head_commit.message, '[linux-runtime-stack-owners]') || contains(github.event.head_commit.message, '[linux-native-union-cached]') || contains(github.event.head_commit.message, '[linux-minild-cached-replay]') || contains(github.event.head_commit.message, '[linux-minild-reloc-cached-replay]') || contains(github.event.head_commit.message, '[linux-minild-purgatory-cached-replay]') || contains(github.event.head_commit.message, '[linux-minild-vdso64-cached-replay]') || contains(github.event.head_commit.message, '[linux-minild-vdso32-cached-replay]') || contains(github.event.head_commit.message, '[linux-minias-earlycon-frozen]') || (contains(github.event.head_commit.message, '[minic-bootstrap-stage2-linux2064]') || (contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux2064]') && needs.gcc-shards.result == 'success') && needs.gcc-shards.result == 'success'))
     runs-on: ubuntu-24.04
     timeout-minutes: 95
     steps:
@@ -2051,6 +2079,16 @@ jobs:
           github-token: ${{ github.token }}
           path: build/bootstrap-stage2-linux2064/artifact
 
+      - name: Download fixed-point nine-tool Stage4 RV64 compiler
+        if: contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux2064]')
+        uses: actions/download-artifact@v4
+        with:
+          repository: yituanxing/minic-toolchain
+          run-id: 39058935623
+          name: minic-current-bootstrap-stage2-native-runtime-v1
+          github-token: ${{ github.token }}
+          path: build/bootstrap-stage4-linux2064/artifact
+
       - name: Build identical MiniC profile and verify exact shard union
         if: "!contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]') && !contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]') && !contains(github.event.head_commit.message, '[linux-runtime-stack-owners]') && !contains(github.event.head_commit.message, '[linux-native-union-cached]') && !contains(github.event.head_commit.message, '[linux-minild-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-reloc-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-purgatory-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-vdso64-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-vdso32-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minias-earlycon-frozen]')"
         shell: bash
@@ -2069,6 +2107,9 @@ jobs:
             "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain" "$ev/compiler"
           if git log -1 --format=%B | grep -Fq '[minic-bootstrap-stage2-linux2064]'; then
             source tools/ci/minic-bootstrap-stage2-2064-prepare-v1.sh receiver "$ev"
+          fi
+          if git log -1 --format=%B | grep -Fq '[minic-bootstrap-stage4-linux2064]'; then
+            source tools/ci/minic-bootstrap-stage4-2064-prepare-v1.sh receiver "$ev"
           fi
           if [[ "${{ contains(github.event.head_commit.message, '[linux-perf-integrated-full]') }}" == true ]]; then
             bash tools/ci/linux-perf-integrated-full-profile-v1.sh \
@@ -2109,7 +2150,7 @@ jobs:
           echo "NATIVE_UNION_COMPILER=READY recompiled_C=0 sources=canonical_main native_shard_reuse=${{ contains(github.event.head_commit.message, '[linux-minipp-native-reuse]') && 'true' || 'false' }}"
 
       - name: Retain fully verified MiniC objects before link or runtime
-        if: "!contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]') && !contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]') && !contains(github.event.head_commit.message, '[linux-runtime-stack-owners]') && !contains(github.event.head_commit.message, '[linux-native-union-cached]') && !contains(github.event.head_commit.message, '[linux-minild-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-reloc-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-purgatory-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-vdso64-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-vdso32-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minias-earlycon-frozen]') && !contains(github.event.head_commit.message, '[minic-bootstrap-stage2-linux2064]')"
+        if: "!contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]') && !contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]') && !contains(github.event.head_commit.message, '[linux-runtime-stack-owners]') && !contains(github.event.head_commit.message, '[linux-native-union-cached]') && !contains(github.event.head_commit.message, '[linux-minild-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-reloc-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-purgatory-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-vdso64-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-vdso32-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minias-earlycon-frozen]') && !contains(github.event.head_commit.message, '[minic-bootstrap-stage2-linux2064]') && !contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux2064]')"
         uses: actions/cache/save@v4
         with:
           path: |
@@ -2861,6 +2902,18 @@ jobs:
             fi
             echo "NATIVE_UNION_RESULT=PASS pp=$pp_tag minic=2064 native_C_from_seven_shards=${COHORT_P1_EXPERIMENTAL_POOL:-none} ar=MiniAR_full_actual_Kbuild ar_native_calls=$minic_ar_calls ar_mpit_calls=$minic_mpit_calls ar_gnu_calls=0 ld=MiniLD_certified_boundaries vdso64_native=${MINILD_ENABLE_VDSO64:-0} objcopy=MiniObjcopy runtime=P1"
           fi
+
+      - name: Authenticate Stage4 2064-object Linux QEMU P1 runtime
+        if: contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux2064]')
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ev="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1"
+          test "$(wc -l < "$ev/full-objects.txt")" -eq 2064
+          test "$(wc -l < "$ev/minic-manifest.sha256")" -eq 2064
+          grep -Fq 'COHORT_RESULT=PASS candidate_objects=2064 scope=FULL_C_UNIVERSE' "$ev/cohort.log"
+          grep -Fq 'COHORT_P1=PASS name=full_all_verified syscalls=12 python_era_oracle=PASS' "$ev/cohort.log"
+          echo "BOOTSTRAP_STAGE4_LINUX2064=PASS compiler=Stage4 all_C_objects=2064/2064 original_GNU_link=true QEMU_P1=12/12"
 
       - name: Preserve aggregate link, QEMU and failure-frontier evidence
         if: always() && !contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]') && !contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]') && !contains(github.event.head_commit.message, '[linux-minild-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-reloc-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-purgatory-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-vdso64-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-vdso32-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minias-earlycon-frozen]') && (!contains(github.event.head_commit.message, '[linux-minias-corpus-scan]') || contains(github.event.head_commit.message, '[linux-minias-corpus-runtime]'))
