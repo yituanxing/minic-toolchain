@@ -13,9 +13,16 @@ def edit(path, changes):
     s=p.read_text()
     for old,new in changes:
         n=s.count(old)
-        if n!=1:
-            raise SystemExit("PACKED_AST_AB_ANCHOR_MISMATCH %s occurrences=%d %r"%
-                             (path,n,old[:110]))
+        expected = 1
+        if path == "src/frontend/parser_expression.c" and (
+                old.startswith("        call_expression->value.call.arguments[argument_index] = argument_id;")):
+            # First identical conversion branch occurs twice; the second
+            # patch pass sees one remaining branch.
+            expected = 2 if s.count(
+                "if (!minic_c0_call_set_argument(call_expression, argument_index, argument_id))") == 0 else 1
+        if n != expected:
+            raise SystemExit("PACKED_AST_AB_ANCHOR_MISMATCH %s occurrences=%d expected=%d %r"%
+                             (path,n,expected,old[:110]))
         s=s.replace(old,new,1)
     p.write_text(s)
 
