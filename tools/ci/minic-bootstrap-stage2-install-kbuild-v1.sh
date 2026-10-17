@@ -58,8 +58,10 @@ test -x "$bin/minic.stage0" && test -x "$bin/minic-cc.stage0"
 test "$(sha256sum "$bin/minic-cc.stage2.rv64" | cut -d' ' -f1)" = "$sha2"
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
-printf 'int value(void){return 42;}\n' > "$work/in.c"
-riscv64-linux-gnu-gcc -E -P "$work/in.c" -o "$work/in.i"
+# Reuse the exact Stage2 B1 smoke source that already passed on the
+# certified guest, rather than inventing an unvetted one-line probe.
+cp tests/compiler/c0/return_42.c "$work/in.c"
+riscv64-linux-gnu-gcc -E -P -x c "$work/in.c" -o "$work/in.i"
 # The direct Stage2 output is the control arm for the native driver shim.
 # If the driver fails, show independent wrapper/QEMU/driver exit status and
 # argument dispatch before making any full Linux test attempt.
