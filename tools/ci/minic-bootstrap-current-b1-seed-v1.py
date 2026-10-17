@@ -41,7 +41,7 @@ def command(args, *, output=None, env=None, timeout=240, stdout=None, stderr=Non
         raise RuntimeError(
             "command rc=" + str(p.returncode) +
             " args=" + " ".join(map(str, args[:5])) +
-            (" stderr=" + str(stderr.name) if stderr else ""))
+            (" stderr=" + str(getattr(stderr, "name", stderr)) if stderr is not None else ""))
     return time.monotonic() - start
 
 
