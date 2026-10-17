@@ -1060,6 +1060,8 @@ jobs:
           path: build/linux-perf-corpus
           key: linux-6.6.143-first500-rv64-v1-${{ hashFiles('tests/external/linux/batch_probe.sh', 'tests/external/linux/probe.sh', 'tests/external/linux/replay-indices.txt') }}
 
+      # Kbuild corpus paths can contain ../../../ (same real frozen .i);
+      # rerun after canonical-path SHA lookup fix, not a source-code change.
       # Stage2 -> Linux, after self-host and C0/tinyAES/cJSON. 500 corpus
       # is historical GNU Kbuild Linux 6.6.143, not current 2064 config.
       - name: Compare certified Stage2 with Stage0 on 20 frozen Linux objects
