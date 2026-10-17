@@ -699,6 +699,8 @@ jobs:
       # Stage2 compilation of the toolchain C source.
       # Also test Stage2-built MiniNM against GNU ELF32/ELF64 and thin
       # archive symbol oracles, and MiniStrip against GNU ELF32/64 rules.
+      # Additionally prove real Stage2-built minic Driver -c dispatch,
+      # not merely direct tool invocation; no GCC PP/AS/LD in the program.
       # Keep all-Mini PP/CC/AS/LD exit42 as a separate required gate.
       - name: Restore eight Stage2-built native toolchain executables
         if: contains(github.event.head_commit.message, '[minic-bootstrap-stage2-native-runtime]')
@@ -739,7 +741,9 @@ jobs:
             | tee "$GITHUB_WORKSPACE/build/bootstrap-stage2-native/verdict.log"
           grep -Fq 'BOOTSTRAP_ALL_MINI_C_CHAIN=PASS Stage2_built_MiniPP=true' \
             "$GITHUB_WORKSPACE/build/bootstrap-stage2-native/verdict.log"
-          grep -Fq 'BOOTSTRAP_STAGE2_NATIVE_RUNTIME=PASS tools=8 suites=8 runtime_chain=42 all_mini_pp_cc_as_ld=true nm_strip_oracles=true' \
+          grep -Fq 'BOOTSTRAP_NATIVE_DRIVER_CHAIN=PASS Stage2_built_Driver=true' \
+            "$GITHUB_WORKSPACE/build/bootstrap-stage2-native/verdict.log"
+          grep -Fq 'BOOTSTRAP_STAGE2_NATIVE_RUNTIME=PASS tools=8 suites=8 runtime_chain=42 all_mini_pp_cc_as_ld=true nm_strip_oracles=true driver_chain=42' \
             "$GITHUB_WORKSPACE/build/bootstrap-stage2-native/verdict.log"
 
       - name: Preserve Stage2-built native CLI runtime and differential evidence
