@@ -160,7 +160,10 @@ typedef struct MinicExpression {
             MinicFunctionId function_id;
             MinicExpressionId callee;
             size_t argument_count;
-            uint32_t arguments[MINIC_MAX_FUNCTION_PARAMETERS];
+            uint32_t arguments[8];
+            /* Program-owned private array of at most 56 overflow IDs;
+               temporary parser builders borrow stack scratch instead. */
+            uint32_t *overflow_arguments;
         } call;
         struct {
             MinicUnaryOperator operator_kind;
@@ -207,8 +210,24 @@ typedef struct MinicExpression {
     } value;
 } MinicExpression;
 
-/* Inline 32-bit argument IDs preserve value-copy ownership of AST nodes.
- * Program::add_expression rejects IDs that cannot fit in these slots. */
+/* Experimental compact CALL values retain all 64 ID slots, but only the
+ * first eight are inside the Expr union. Setter never allocates: producers
+ * of >8-arg CALLs must provide scratch for overflow until Program insertion.
+ * Program_add_expression deep-copies overflow into private owned storage. */
+#define MINIC_CALL_INLINE_ARGUMENTS 8U
+static inline MinicExpressionId minic_c0_call_argument(
+    const MinicExpression *expression, size_t index) {
+    if (expression == NULL || index >= MINIC_MAX_FUNCTION_PARAMETERS) {
+        return MINIC_EXPRESSION_INVALID;
+    }
+    if (index < MINIC_CALL_INLINE_ARGUMENTS) {
+        return expression->value.call.arguments[index];
+    }
+    if (expression->value.call.overflow_arguments == NULL) {
+        return MINIC_EXPRESSION_INVALID;
+    }
+    return expression->value.call.overflow_arguments[index-MINIC_CALL_INLINE_ARGUMENTS];
+}
 static inline bool minic_c0_call_set_argument(MinicExpression *expression,
                                               size_t index,
                                               MinicExpressionId id) {
@@ -216,7 +235,15 @@ static inline bool minic_c0_call_set_argument(MinicExpression *expression,
         id > UINT32_MAX) {
         return false;
     }
-    expression->value.call.arguments[index] = (uint32_t)id;
+    if (index < MINIC_CALL_INLINE_ARGUMENTS) {
+        expression->value.call.arguments[index] = (uint32_t)id;
+        return true;
+    }
+    if (expression->value.call.overflow_arguments == NULL) {
+        return false;
+    }
+    expression->value.call.overflow_arguments[index-MINIC_CALL_INLINE_ARGUMENTS] =
+        (uint32_t)id;
     return true;
 }
 

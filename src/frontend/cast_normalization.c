@@ -228,8 +228,26 @@ bool minic_c0_program_normalize_casts(MinicC0Program *program) {
                       append_normalized_cast(&rewritten, old_expression, mapped_operand, &new_id);
         } else {
             MinicExpression copied_expression;
+            uint32_t private_overflow[MINIC_MAX_FUNCTION_PARAMETERS -
+                                      MINIC_CALL_INLINE_ARGUMENTS];
 
             copied_expression = *old_expression;
+            /* Normalization remaps IDs in-place. Never modify the old
+               Program's owned overflow through a by-value pointer copy. */
+            if (copied_expression.kind == MINIC_EXPRESSION_CALL &&
+                copied_expression.value.call.argument_count > MINIC_CALL_INLINE_ARGUMENTS) {
+                size_t extra = copied_expression.value.call.argument_count -
+                               MINIC_CALL_INLINE_ARGUMENTS;
+                if (extra > MINIC_MAX_FUNCTION_PARAMETERS-MINIC_CALL_INLINE_ARGUMENTS ||
+                    copied_expression.value.call.overflow_arguments == NULL) {
+                    success = false;
+                    break;
+                }
+                (void)memcpy(private_overflow,
+                             copied_expression.value.call.overflow_arguments,
+                             extra * sizeof(*private_overflow));
+                copied_expression.value.call.overflow_arguments = private_overflow;
+            }
             success = remap_non_cast_expression(
                           &copied_expression, mapping, old_expression_count, expression_index) &&
                       minic_c0_program_add_expression(&rewritten, &copied_expression, &new_id);
@@ -245,6 +263,14 @@ bool minic_c0_program_normalize_casts(MinicC0Program *program) {
     }
 
     if (success) {
+        /* On commit, release old Program overflow AFTER the complete cloned
+           destination has been built. On failure, preserve original owner. */
+        for (expression_index = 0U; expression_index < old_expression_count;
+             ++expression_index) {
+            if (program->expressions[expression_index].kind == MINIC_EXPRESSION_CALL) {
+                free(program->expressions[expression_index].value.call.overflow_arguments);
+            }
+        }
         free(program->expressions);
         program->expressions = rewritten.expressions;
         program->expression_count = rewritten.expression_count;
@@ -254,6 +280,14 @@ bool minic_c0_program_normalize_casts(MinicC0Program *program) {
         rewritten.expression_capacity = 0U;
     }
 
+    /* Only uncommitted rewritten Expressions remain owned by rewritten.
+       On successful transfer the buffer and count were reset to NULL/zero. */
+    for (expression_index = 0U; expression_index < rewritten.expression_count;
+         ++expression_index) {
+        if (rewritten.expressions[expression_index].kind == MINIC_EXPRESSION_CALL) {
+            free(rewritten.expressions[expression_index].value.call.overflow_arguments);
+        }
+    }
     free(rewritten.expressions);
     free(mapping);
     return success;

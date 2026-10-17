@@ -3122,6 +3122,8 @@ static bool parse_primary(MinicParser *parser, MinicExpressionId *expression_id,
             function_id != MINIC_FUNCTION_INVALID) {
             MinicSourcePosition call_end;
             const MinicFunction *callee;
+            uint32_t call_overflow_scratch[MINIC_MAX_FUNCTION_PARAMETERS -
+                                           MINIC_CALL_INLINE_ARGUMENTS];
 
             callee = minic_c0_program_function(parser->program, function_id);
             if (callee == NULL || callee->parameter_count > MINIC_MAX_FUNCTION_PARAMETERS ||
@@ -3137,6 +3139,7 @@ static bool parse_primary(MinicParser *parser, MinicExpressionId *expression_id,
             expression.type = callee->return_type;
             expression.value_category = MINIC_VALUE_RVALUE;
             expression.value.call.function_id = function_id;
+            expression.value.call.overflow_arguments = call_overflow_scratch;
             if (!parse_call_arguments(parser, &expression, callee)) {
                 return false;
             }

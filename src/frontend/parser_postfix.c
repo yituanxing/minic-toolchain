@@ -267,6 +267,8 @@ static bool parse_one_indirect_call(MinicParser *parser,
     const MinicFunctionType *function_type;
     MinicFunctionType function_type_snapshot;
     MinicExpression call;
+    uint32_t call_overflow_scratch[MINIC_MAX_FUNCTION_PARAMETERS -
+                                   MINIC_CALL_INLINE_ARGUMENTS];
     MinicSourcePosition call_end;
 
     callee = minic_c0_program_expression(parser->program, callee_id);
@@ -284,6 +286,7 @@ static bool parse_one_indirect_call(MinicParser *parser,
     call.value_category = MINIC_VALUE_RVALUE;
     call.value.call.function_id = MINIC_FUNCTION_INVALID;
     call.value.call.callee = callee_id;
+    call.value.call.overflow_arguments = call_overflow_scratch;
     if (!parse_indirect_arguments(parser, &call, &function_type_snapshot)) {
         return false;
     }

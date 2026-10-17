@@ -94,6 +94,11 @@ void minic_c0_program_destroy(MinicC0Program *program) {
         free(program->inline_asms[index].labels);
         free(program->inline_asms[index].register_clobbers);
     }
+    for (index = 0U; index < program->expression_count; ++index) {
+        if (program->expressions[index].kind == MINIC_EXPRESSION_CALL) {
+            free(program->expressions[index].value.call.overflow_arguments);
+        }
+    }
     for (index = 0U; index < program->function_count; ++index) {
         free(program->functions[index].name);
         free(program->functions[index].assembler_name);
@@ -394,19 +399,47 @@ bool minic_c0_type_initializer_slot_count(const MinicC0Program *program,
 bool minic_c0_program_add_expression(MinicC0Program *program,
                                      const MinicExpression *expression,
                                      MinicExpressionId *expression_id) {
-    /* Prevent truncating references stored by CALL expressions. */
-    if (program->expression_count >= (size_t)UINT32_MAX) {
+    uint32_t *owned_overflow = NULL;
+    size_t extra_count = 0U;
+    /* The argument scratch is borrowed from a parser stack or source AST.
+       Deep-copy here BEFORE grow/realloc; never alias or transfer ownership.
+       Thus rewrites and cloned nodes cannot free each other's IDs. */
+    if (program == NULL || expression == NULL || expression_id == NULL ||
+        program->expression_count >= (size_t)UINT32_MAX) {
         return false;
+    }
+    if (expression->kind == MINIC_EXPRESSION_CALL) {
+        if (expression->value.call.argument_count > MINIC_MAX_FUNCTION_PARAMETERS) {
+            return false;
+        }
+        if (expression->value.call.argument_count > MINIC_CALL_INLINE_ARGUMENTS) {
+            extra_count = expression->value.call.argument_count - MINIC_CALL_INLINE_ARGUMENTS;
+            if (expression->value.call.overflow_arguments == NULL ||
+                extra_count > SIZE_MAX / sizeof(*owned_overflow)) {
+                return false;
+            }
+            owned_overflow = (uint32_t *)malloc(extra_count * sizeof(*owned_overflow));
+            if (owned_overflow == NULL) {
+                return false;
+            }
+            (void)memcpy(owned_overflow, expression->value.call.overflow_arguments,
+                         extra_count * sizeof(*owned_overflow));
+        }
     }
     if (!minic_grow_array((void **)&program->expressions,
                           &program->expression_capacity,
                           program->expression_count,
                           sizeof(*program->expressions))) {
+        free(owned_overflow);
         return false;
     }
 
     *expression_id = program->expression_count;
     program->expressions[program->expression_count] = *expression;
+    if (expression->kind == MINIC_EXPRESSION_CALL) {
+        program->expressions[program->expression_count].value.call.overflow_arguments =
+            owned_overflow;
+    }
     program->expression_count += 1U;
     return true;
 }

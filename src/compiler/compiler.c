@@ -376,7 +376,7 @@ static bool minic_specialize_inline_integer_calls(MinicC0Program *program,
             MinicConstValue converted_value;
             if (!minic_type_is_integer(source.parameter_types[i]) ||
                 !minic_const_eval_integer(program, target,
-                                          expression->value.call.arguments[i],
+                                          minic_c0_call_argument(expression, i),
                                           &argument_value) ||
                 !minic_const_value_convert_integer(program, target, &argument_value,
                                                    source.parameter_types[i],
@@ -548,7 +548,7 @@ static bool minic_specialize_inline_integer_calls(MinicC0Program *program,
                             program,
                             target,
                             &caller,
-                            nested->value.call.arguments[parameter_index],
+                            minic_c0_call_argument(nested, parameter_index),
                             nested_source.parameter_types[parameter_index],
                             &argument_value,
                             &argument_used_caller_fact)) {
@@ -1198,7 +1198,7 @@ static bool minic_specialize_inline_symbolic_calls(
             continue;
         }
         for (i = 0U; i < source.parameter_count; ++i) {
-            MinicExpressionId argument_id = call->value.call.arguments[i];
+            MinicExpressionId argument_id = minic_c0_call_argument(call, i);
             if (!minic_type_is_pointer(source.parameter_types[i]) ||
                 !minic_inline_symbolic_static_expression(
                     program, target, argument_id)) {
@@ -1358,7 +1358,7 @@ static bool minic_specialize_inline_symbolic_calls(
                             program,
                             target,
                             &caller,
-                            nested->value.call.arguments[i],
+                            minic_c0_call_argument(nested, i),
                             &resolved_expression,
                             &argument_used_caller_fact,
                             0U)) {
@@ -2039,12 +2039,12 @@ static bool minic_specialize_inline_boolean_range_calls(
                 continue;
             }
             argument = minic_c0_program_expression(
-                program, call->value.call.arguments[i]);
+                program, minic_c0_call_argument(call, i));
             if (argument == NULL ||
                 !minic_inline_boolean_range_argument(
                     program,
                     NULL,
-                    call->value.call.arguments[i],
+                    minic_c0_call_argument(call, i),
                     &used_caller_fact,
                     0U)) {
                 continue;
@@ -2241,7 +2241,7 @@ static bool minic_specialize_inline_boolean_range_calls(
                         !minic_inline_boolean_range_argument(
                             program,
                             &caller,
-                            nested->value.call.arguments[parameter_index],
+                            minic_c0_call_argument(nested, parameter_index),
                             &argument_used_caller_fact,
                             0U)) {
                         continue;

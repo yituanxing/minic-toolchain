@@ -333,7 +333,7 @@ static bool verify_call_arguments(const MinicC0Program *program,
         const MinicExpression *argument;
 
         argument = expression_before(
-            program, expression->value.call.arguments[argument_index], expression_index);
+            program, minic_c0_call_argument(expression, argument_index), expression_index);
         if (argument == NULL) {
             return false;
         }
@@ -341,7 +341,7 @@ static bool verify_call_arguments(const MinicC0Program *program,
             if (!minic_c0_fixed_call_argument_compatible(
                     program,
                     parameter_types[argument_index],
-                    expression->value.call.arguments[argument_index])) {
+                    minic_c0_call_argument(expression, argument_index))) {
                 return false;
             }
         } else if (!minic_type_is_integer(argument->type) &&

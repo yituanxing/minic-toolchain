@@ -275,7 +275,7 @@ static bool core_cfg_eval_callee_return_expression(
         if (!minic_type_is_integer(callee->parameter_types[parameter_index]) ||
             !core_const_eval_integer_with_locals(
                 caller_context,
-                call_expression->value.call.arguments[parameter_index],
+                minic_c0_call_argument(call_expression, parameter_index),
                 &argument)) {
             continue;
         }
@@ -1651,7 +1651,7 @@ static bool core_cfg_constant_inline_call(const MinicCoreLowerContext *context,
     for (argument_index = 0U; argument_index < expression->value.call.argument_count;
          ++argument_index) {
         if (!core_cfg_pure_call_argument(
-                context, expression->value.call.arguments[argument_index], 0U)) {
+                context, minic_c0_call_argument(expression, argument_index), 0U)) {
             return false;
         }
     }
@@ -5440,7 +5440,7 @@ static const MinicFunction *core_select_transitive_integer_specialization(
         if (!minic_type_is_integer(source->parameter_types[parameter_index]) ||
             !core_const_eval_integer_with_locals(
                 context,
-                expression->value.call.arguments[parameter_index],
+                minic_c0_call_argument(expression, parameter_index),
                 &argument_value) ||
             !minic_const_value_convert_integer(
                 program,
@@ -5606,7 +5606,7 @@ static const MinicFunction *core_select_transitive_symbolic_specialization(
         }
         actual_known[i] = core_inline_symbolic_argument_expression(
             context,
-            expression->value.call.arguments[i],
+            minic_c0_call_argument(expression, i),
             &actual_symbol[i],
             0U);
     }
@@ -5741,7 +5741,7 @@ static const MinicFunction *core_select_boolean_range_specialization(
     for (i = 0U; i < source->parameter_count; ++i) {
         actual_range[i] = minic_type_is_integer(source->parameter_types[i]) &&
             core_boolean_range_expression(
-                context, expression->value.call.arguments[i], 0U);
+                context, minic_c0_call_argument(expression, i), 0U);
     }
     best = current_callee;
     if (current_callee->is_integer_specialization) {
@@ -5858,7 +5858,7 @@ static MinicCoreLowerStatus lower_direct_call(MinicCoreLowerContext *context,
         if (empty_effect) {
             for (argument_index = 0U; argument_index < argument_count; ++argument_index) {
                 if (!core_cfg_pure_call_argument(
-                        context, expression->value.call.arguments[argument_index], 0U)) {
+                        context, minic_c0_call_argument(expression, argument_index), 0U)) {
                     arguments_pure = false;
                     break;
                 }
@@ -5878,7 +5878,7 @@ static MinicCoreLowerStatus lower_direct_call(MinicCoreLowerContext *context,
             }
         } else {
             const MinicExpression *argument_expression = minic_c0_program_expression(
-                context->body->program, expression->value.call.arguments[argument_index]);
+                context->body->program, minic_c0_call_argument(expression, argument_index));
             if (argument_expression == NULL) {
                 return MINIC_CORE_LOWER_UNSUPPORTED;
             }
@@ -5907,7 +5907,7 @@ static MinicCoreLowerStatus lower_direct_call(MinicCoreLowerContext *context,
 
             status = lower_record_call_argument_object(
                 context,
-                expression->value.call.arguments[argument_index],
+                minic_c0_call_argument(expression, argument_index),
                 argument_types[argument_index],
                 &object_id);
             if (status != MINIC_CORE_LOWER_OK) {
@@ -5923,11 +5923,11 @@ static MinicCoreLowerStatus lower_direct_call(MinicCoreLowerContext *context,
             status = lower_scalar_assignment_value(
                 context,
                 argument_types[argument_index],
-                expression->value.call.arguments[argument_index],
+                minic_c0_call_argument(expression, argument_index),
                 &arguments[argument_index].value.value_id);
         } else {
             status = lower_expression(context,
-                                      expression->value.call.arguments[argument_index],
+                                      minic_c0_call_argument(expression, argument_index),
                                       &arguments[argument_index].value.value_id);
         }
         if (status != MINIC_CORE_LOWER_OK) {
@@ -6067,7 +6067,7 @@ static MinicCoreLowerStatus lower_direct_record_call_object(
 
             status = lower_record_call_argument_object(
                 context,
-                expression->value.call.arguments[argument_index],
+                minic_c0_call_argument(expression, argument_index),
                 callee->parameter_types[argument_index],
                 &object_id);
             if (status != MINIC_CORE_LOWER_OK) {
@@ -6082,7 +6082,7 @@ static MinicCoreLowerStatus lower_direct_record_call_object(
         status = lower_scalar_assignment_value(
             context,
             callee->parameter_types[argument_index],
-            expression->value.call.arguments[argument_index],
+            minic_c0_call_argument(expression, argument_index),
             &arguments[argument_index].value.value_id);
         if (status != MINIC_CORE_LOWER_OK) {
             free(arguments);
@@ -6240,7 +6240,7 @@ static MinicCoreLowerStatus lower_indirect_call(MinicCoreLowerContext *context,
 
                 status = lower_record_call_argument_object(
                     context,
-                    expression->value.call.arguments[argument_index],
+                    minic_c0_call_argument(expression, argument_index),
                     argument_types[argument_index],
                     &object_id);
                 if (status != MINIC_CORE_LOWER_OK) {
@@ -6259,11 +6259,11 @@ static MinicCoreLowerStatus lower_indirect_call(MinicCoreLowerContext *context,
             status = lower_scalar_assignment_value(
                 context,
                 argument_types[argument_index],
-                expression->value.call.arguments[argument_index],
+                minic_c0_call_argument(expression, argument_index),
                 &arguments[argument_index].value.value_id);
         } else {
             const MinicExpression *argument_expression = minic_c0_program_expression(
-                context->body->program, expression->value.call.arguments[argument_index]);
+                context->body->program, minic_c0_call_argument(expression, argument_index));
 
             if (argument_expression == NULL ||
                 !core_scalar_expression_value_type(
@@ -6274,7 +6274,7 @@ static MinicCoreLowerStatus lower_indirect_call(MinicCoreLowerContext *context,
             }
             arguments[argument_index].kind = MINIC_CORE_CALL_ARGUMENT_VALUE;
             status = lower_expression(context,
-                                      expression->value.call.arguments[argument_index],
+                                      minic_c0_call_argument(expression, argument_index),
                                       &arguments[argument_index].value.value_id);
         }
         if (status != MINIC_CORE_LOWER_OK) {
@@ -13011,7 +13011,7 @@ static bool core_runtime_if_guard_preserves_locals_depth(
         }
         for (i = 0U; i < expression->value.call.argument_count; ++i) {
             if (!core_runtime_if_guard_preserves_locals_depth(
-                    context, expression->value.call.arguments[i], depth + 1U)) {
+                    context, minic_c0_call_argument(expression, i), depth + 1U)) {
                 return false;
             }
         }
@@ -15845,7 +15845,7 @@ static bool core_expression_may_modify_local(const MinicCoreLowerContext *contex
              ++argument_index) {
             if (core_expression_may_modify_local(
                     context,
-                    expression->value.call.arguments[argument_index],
+                    minic_c0_call_argument(expression, argument_index),
                     local_id,
                     depth + 1U)) {
                 return true;
