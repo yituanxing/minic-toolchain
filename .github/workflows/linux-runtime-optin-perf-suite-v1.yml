@@ -805,7 +805,17 @@ jobs:
             test -s "$f"
             sha256sum "$f"
           done | tee "$root/runtime-sha256.txt"
-          echo "MUSL_SEED=PASS external_GNU_producer_disclosed=true native_link_invokes_GNU=false"
+          # The same musl producer must supply BOTH headers and runtime:
+          # glibc struct stat/FILE layouts may not match musl despite linking.
+          make DESTDIR="$root/sysroot" install-headers >"$root/headers-install.log" 2>&1
+          test -s "$root/sysroot/usr/include/stdio.h"
+          test -s "$root/sysroot/usr/include/sys/stat.h"
+          (
+            cd "$root/sysroot/usr/include"
+            find . -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum
+          ) > "$root/headers.sha256"
+          test "$(wc -l < "$root/headers.sha256")" -gt 100
+          echo "MUSL_SEED=PASS external_GNU_producer_disclosed=true native_link_invokes_GNU=false headers_and_libc_same_musl_source=true"
 
       # Restore SHA-validated musl 1.2.5 binary-seed Artifact instead of
       # invoking GNU to rebuild musl in Stage3/4. Historic producer is disclosed.
@@ -889,6 +899,9 @@ jobs:
             build/bootstrap-stage2-native/qualification/chain
             build/bootstrap-stage2-native/full-native
             build/bootstrap-stage2-native/musl-seed/runtime-sha256.txt
+            build/bootstrap-stage2-native/musl-seed/headers.sha256
+            build/bootstrap-stage2-native/musl-seed/headers-install.log
+            build/bootstrap-stage2-native/musl-seed/sysroot/usr/include
             build/bootstrap-stage2-native/musl-seed/configure.log
             build/bootstrap-stage2-native/musl-seed/make.log
             build/bootstrap-stage2-native/musl-seed/musl-build/lib/libc.a
