@@ -14,6 +14,12 @@
 6. **速度统计需要区分**单 TU 累计 `.i→.s`、真实 Runner 关键路径和 QEMU 验收耗时。缓存复用正确性不等于新版本性能实测。任何失败、负实验及复测都追加回账本。
 7. 禁止为“顺带统计”无理由重编 2064：先复用已冻结输入与现有 perf500 job；下一次**本来就需要**的 2064 构建才考虑顺带做全量低开销阶段 census，参见 [census gate](minic-2064-phase-census-plan-2026-10-16.md)。
 
+## 新的 CPU 归因与历史差异复查（2026-10-17）
+
+- [CPU Profiler #38997549409](https://github.com/yituanxing/minic-toolchain/actions/runs/38997549409) **SUCCESS**，真实 `minic-cc` Callgrind，自我指令数 Ir：`fs/ext4/fsync.o` 中 libc memcpy 44.53%、Symbolic specialization 7.10%；`kernel/bpf/btf.o` 中 memcpy 28.43%、Symbolic 9.99%、`minic_parser_bind_enum_constant` **6.42%**、`minic_parser_span_equals` 4.11%。这是指令占比，**不是独立 wall-time**。输入 .s 与 release 逐字节相同，工具 SHA 已固定。
+- 原来已优化 `parser_type.c` 的三个 Parser 复制点，不等于所有位置。余下 top-level enum/record probe 的名义拷贝约 133,664B/次，BTF 约 3707 次；[2-TU 单因素 #38998023186](https://github.com/yituanxing/minic-toolchain/actions/runs/38998023186) **SUCCESS**，保持当前生产 C 不变，仅 CI 临时应用 `tools/ci/apply-perf-parser-top-level-lexer-lookahead-v1.py`。fsync **476.937→473.769ms（1.0067×）**、BTF **1356.999→1332.823ms（1.0181×）**，两者 P50 合计 **1833.936→1806.592ms（1.0151×）**，4 次/臂交错及 2/2 汇编字节一致。**决策：not-promoted / stop**；这两处局部只是约 1.49% 减时，禁止为其跑 500/2064，也不要把 133KiB×次数直接当作真实 DRAM 流量。保留历史修复脚本和验证产物作为负例。
+- 下一条**不同成本模型**的待验证猜想：`minic_parser_bind_enum_constant` 在顶层全局作用域仍对每个新增枚举常量以逆序线性检查是否重名；全局查找 `minic_parser_find_enum_constant` 的有序 hash **早已存在**，所以只测试是否可在 `scope_count == 0` 的 bind 检查中**复用该索引**，而不是再造一个 enum hash。非全局作用域保留现有线性语义；同步/OOM 使用已有线性 fallback。此项尚无真实 A/B 倍率，需单因素、相同文件/工具配对及 .s 严格相同。
+ 
 ## 1. 已拒绝或因边际收益不足而停止：默认不重开
 
 | ID / 别名及相同成本模型 | 决策和确切证据 | 重新打开的硬条件 |
