@@ -4,6 +4,25 @@
 > 本表是候选的**状态索引**，不是覆盖旧的原始数据；旧实验报告、补丁、CI artifacts 均保留。每次新优化先记录「相同结构以前试过没有、当时基线是什么、为何现在仍值得做」。
 > 基线：主线 `6612e2c1a3`（文档头），最新已认证的 Boolean/Core/Integer 联合源码经 [2064 + GNU link + QEMU P1 #38995964988](https://github.com/yituanxing/minic-toolchain/actions/runs/38995964988) PASS。这个 PASS 是 GNU PP → MiniC → GNU AS/LD，不能声称全 Mini 工具链共同通过。下列不同实验的加速比不能相乘，也不能伪称当前 2064 的同比速度。
 
+## 空间方向第二轮：MinicType 字段排布，消除 ABI 对齐空洞（2026-10-17）
+
+**单因素白盒发现：** `src/frontend/type.h` 的 `MinicType` 在 64-bit 平台占 **80 bytes**，原顺序 `base_kind` 后紧跟四个 `size_t` ID 导致对齐空洞；将小型 Enum/qualifier/pointer 元数据字段放在前面，四个 ID 和 `explicit_alignment` 放在尾部，**不改变任何成员 C 类型、名称、数量、ID 上限、所有权、算法和数组扩容行为**，单是布局可降至 **72 bytes**，同时间接减小 `MinicFunction` 里的 64 个参数类型（约少 512B/Function）以及 `MinicFunctionType`、Expression 类型字段。与上一轮 `uint32_t CALL ID` **完全不同的新成本模型**，不同于已被否决的 `PERF-033` 扩容倍率方案。实验只在临时 CI checkout 应用 `tools/ci/apply-perf-type-field-layout-v1.py`，生产源暂未改。
+
+**局部真实 Linux A/B [#39005831148](https://github.com/yituanxing/minic-toolchain/actions/runs/39005831148) SUCCESS**，在最新 packed-CALL 生产源上，5 个真实冻结 Kbuild `.i`，同 Runner 4 对交错 old/new，**5/5 `.s` byte-identical**，`make check-ast-contract` PASS，`sizeof(MinicType)` 80→72 已经通过真实 host `cc` 输出实测：
+
+| owner | old median ms | new median ms | speedup |
+| --- | ---: | ---: | ---: |
+| fs/ext4/fsync.o | 275.055 | 266.980 | 1.03025× |
+| fs/ext4/super.o | 604.674 | 596.248 | 1.01413× |
+| kernel/bpf/btf.o | 784.442 | 750.421 | 1.04534× |
+| kernel/events/core.o | 1053.955 | 1039.189 | 1.01421× |
+| mm/memcontrol.o | 931.432 | 902.807 | 1.03171× |
+| **sum of owner medians (not parallel wall)** | **3649.556** | **3555.644** | **1.02641×** |
+
+一次运行的真实峰值 RSS KiB：fsync 189368→180524，super 227764→217408，btf 321656→306184，core 297984→287124，memcontrol 292856→281156。每个例子都下降，不能把一组单独 sample 当作 RSS 置信区间，也不能将整个 Linux 内存下降 4%。
+
+**晋级 first500 筛选**：[CI #39005940554](https://github.com/yituanxing/minic-toolchain/actions/runs/39005940554)：复用已经存在的 first500 balanced-order 四工作进程 differential，必须检验 500/500 `.s` 一致，并以相同源 SHA 下真实累计编译时间决定是否值得修改正式源码；first500 以及七路 2064+QEMU **尚未由局部五文件实验证明**。后续根据实际验证结果标记 `integrated`、`stop` 或 `needs-regression-triage`，严禁预称已经成功推广。
+
 ## 空间方向第一轮：固定 64 CALL 参数槽使用 32-bit ExpressionID（2026-10-17）
 
 **先做一张低风险单因素卡，不直接搬数据到 heap。** 当前 `MinicExpressionId` 是 `size_t`，但单 TU AST ID 实测最多 22 万级，< 2^32；`MinicExpression` 内嵌 64×8 字节参数槽，甚至 93.65% 非-CALL 都承担这些联合体字节。之前的 `PERF-033` 是尝试 2×→1.5× **数组扩容因子**，本次**不碰扩容**、也不改变参数个数/顺序，不增加 malloc/arena 对象：仅把 CALL 内嵌 64 个 AST ID 压成 `uint32_t[64]`，setter 对溢出显式检查、AST 添加新表达式超过 UINT32_MAX 时 fail，遍历 remap 保持 `size_t` 局部临时及回写检查。注意 32-bit ID 表示对理论上超过 UINT32_MAX 的单 TU Expression ID 引入了明确的拒绝条件；**初筛只在一次性 CI checkout 生效，待 500、极值参数和 runtime 验证都通过后已作为独立生产优化合入**，详见本节最终验收。
