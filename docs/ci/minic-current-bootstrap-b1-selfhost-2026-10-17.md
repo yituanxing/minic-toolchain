@@ -71,6 +71,28 @@ python3 tools/ci/minic-bootstrap-current-b1-stage2-v1.py \
 
 CI 保留两个**实际实验 Artifact**：`minic-current-bootstrap-b1-seed-v1`（Stage1 ELF、真实输入 manifest、源 `.i`、日志、hash）与 `minic-current-bootstrap-b1-stage2-v1`（Stage2 ELF、重编译逐 TU 诊断、Stage2 fixed point 证明）。7 天保留策略内可直接复用，不应为了复查 Stage2 输出重新预处理内核 2064 文件。
 
+## 4. 自举 Stage2 真实程序后续验证（已完成，2026-10-17）
+
+继当前 47/47 自举固定点之后，这次**直接下载、SHA 确认并使用 #39040013459 的 Stage2 RV64 ELF**（sha256 `17e76f14befdd46b18d62b4ab90cbf15cd724e281b216039a252528208b6f94d`），在 `qemu-riscv64` 中运行，绝不把 x86 Stage0/GCC 的运行结果冒称为自举 Stage2。GitHub `git diff` 检查 `src/`、`include/`、`tools/minic-cc/`、`b0-sources.txt` 在 certified self-host source revision `3b6c1e33` 之后未变，确保 Artifact 源码的有效性。不改编译器生产源码，不新增 workflow/job；仍复用唯一 opt-in `perf500` 工作流。
+
+**[Stage2 C0 + 全套程序差分 #39041763260](https://github.com/yituanxing/minic-toolchain/actions/runs/39041763260) SUCCESS**：
+
+- 原有 `tests/compiler/c0/run-runtime.sh`：**全项 PASS**，包括最后的 RV64D double 返回 ABI；打印 `BOOTSTRAP_STAGE2_C0_RUNTIME=PASS`。测试中的真正编译器为 Stage2 的 `qemu-riscv64` wrapper，并非 GCC Host。
+- `tests/programs/c0/manifest.txt`：**79/79** 各自的 GCC PP `.i` 用相同 Release `Stage0` 和自举 `Stage2` 两者分别生成汇编，**79/79 .s SHA 全同**；**79/79 自举 Stage2 产出的 ELF 能执行**。
+- GNU 程序比较：**77/79 退出码、stdout、stderr 完全一致**；一项 **真实差异**：`predefined_func_name` 自举 MiniC 返回 0，GNU GCC 返回 6。它检查非标准 `__FUNCTION__` 和 C99 `__func__` 的对象指针同一性：MiniC 在相同函数中使用一个唯一静态对象（其 C0 正向/负向 contract 已单独验证），GNU 的这两个数组不是同一地址。并不能掩盖为 79/79 GNU 等价，也不能因为二者语义不同就说 Stage2 自举失败，原始差分仍保留。
+- 一项 GNU oracle **无法构建/无运行结果**：`post_type_declaration_specifiers.c` 的 `Word inline helper` 读取 static 变量，在 `riscv64-linux-gnu-gcc -std=c11 -O0 -static` 下链接出现 undefined reference to `helper`；Stage0、Stage2 `.s` 仍相同，Stage2 产物 ELF 可执行并返回 0。列为 `GNU LINK_FAILED`，**不是** GNU/Stage2 runtime match，更不是 Stage2 的故障。原测试与 manifest 没修改。
+- 一次首次跑 #39041095371 失败于原 GCC 比较脚本的 `predefined_func_name` 真差异；再次 #39041448311 证明了 `inline` GNU oracle 编译失败。后续只对 CI 诊断脚本增加**原始失败的清晰分类**，保留每一项测量和 GNU 原测试不变。相应 json artifact `minic-current-bootstrap-stage2-realprograms-v1` 中 `parity/program-parity.json` 保存 79 条逐项日志与 SHA。
+
+**[Stage2 真实开源库 #39042040646](https://github.com/yituanxing/minic-toolchain/actions/runs/39042040646) SUCCESS**：
+
+| 现有正式入口，真实 Stage2 QEMU Wrapper | 结果 |
+| --- | --- |
+| `tests/external/tiny-aes-c/probe.sh`，AES-128 ECB 真实向量 | **PASS**；退出 0，输出 0，运行二进制 71,776B |
+| `tests/external/cjson/probe.sh`，固定 cJSON 1.7.19，parse-object-array-print-roundtrip | **PASS**；退出 0，二进制 774,776B |
+| `tests/external/cjson/final_differential.sh`，上游 cJSON `test.c` 完整差分 | **PASS**；GNU vs Stage2 编译 cJSON 的程序退出均 0、stdout/stderr **逐字节相同**；stdout 873B |
+
+真实项目使用的 C 编译器确实是 Stage2，并在 QEMU 中运行，但预处理和汇编/链接、CRT/libc 仍由 GNU 提供。**还没有让自举 Stage2 编译 Linux 内核对象，更没有使用 Stage2 构建 Linux 并 QEMU P1**；这应是后续下一道独立验收，不得把既有的宿主 Stage0 Linux 2064 PASS 计作 Stage2 Linux PASS。
+
 ## 4. 这次不再继续投入没有效果的常规性能优化
 
 同日已有七 TU 严格 A/B 确认 Core Reentry 稀疏语句遍历只有 **1.00674×**，已按 1.04× 门槛 STOP；新一轮 CPU 证据没有给出比自举更有价值、尚未尝试的确定性大收益算法。性能迭代先冻结，切换到当前代码的自举验证是合理的；不是宣称编译器已经达到理论最优。
