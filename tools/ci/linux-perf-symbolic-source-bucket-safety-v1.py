@@ -116,7 +116,9 @@ def main():
             yes=data[label]["rc"]==0 and data[label]["sha"] is not None
             if yes != accept:
                 raise RuntimeError("unexpected compile acceptance "+name+" "+label+" "+repr(data[label]))
-            if label in ("bucket_oom_fallback","owner_oom_fallback"):
+            # Parse-time rejection can occur before Symbolic specialization
+            # runs, so fault-hook execution is required only for accepted C.
+            if accept and label in ("bucket_oom_fallback","owner_oom_fallback"):
                 expected=("MINIC_TEST_FORCE_SYMBOLIC_BUCKET_FALLBACK" if label=="bucket_oom_fallback"
                           else "MINIC_TEST_FORCE_SYMBOLIC_OWNER_FALLBACK")
                 if expected not in data[label]["stderr"]:
