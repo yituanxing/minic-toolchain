@@ -1495,7 +1495,11 @@ jobs:
           if [[ "${{ contains(github.event.head_commit.message, '[linux-perf-integrated-full]') }}" == true ]]; then
             export COHORT_GNU_PREFLIGHT_ALLOW_SEVEN_SHARD_VOLATILE=1
           fi
-          # The existing compile script remains unchanged for ordinary runs.
+          # Stage4 2064 retains full raw owner-success and actual guest-dispatch
+      # trace on any audit failure; success may include a small explicit set
+      # of ancillary Kbuild objects beyond the canonical 295 owners.
+      # Missing canonical objects or guest dispatch still fail closed.
+      # The existing compile script remains unchanged for ordinary runs.
           if git log -1 --format=%B | grep -Fq '[minic-bootstrap-stage2-linux2064]'; then
             source tools/ci/minic-bootstrap-stage2-2064-prepare-v1.sh producer "$ev"
           fi
@@ -1592,6 +1596,9 @@ jobs:
           name: debug-shard-${{ matrix.shard }}
           path: |
             build/linux-runtime-gcc-shards-v1/shard-${{ matrix.shard }}/compile.log
+            build/linux-runtime-gcc-shards-v1/shard-${{ matrix.shard }}/mini-success-objects.txt
+            build/linux-runtime-gcc-shards-v1/shard-${{ matrix.shard }}/stage4-invocations.tsv
+            build/linux-runtime-gcc-shards-v1/shard-${{ matrix.shard }}/mini-object-hashes.sha256
             build/linux-runtime-gcc-shards-v1/shard-${{ matrix.shard }}/compile-blockers.txt
             build/linux-runtime-gcc-shards-v1/shard-${{ matrix.shard }}/failure-pool-index.tsv
             build/linux-runtime-gcc/out/**/*.minic-stage2.failed.i
