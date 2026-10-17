@@ -163,3 +163,15 @@ qemu-riscv64 ELF：真实退出码 **42** ✅
 日志原文：`BOOTSTRAP_ALL_MINI_C_CHAIN=PASS Stage2_built_MiniPP=true Stage2_MiniC=true Stage2_built_MiniAS=true Stage2_built_MiniLD=true GNU_PP_AS_LD=false qemu_return=42`，以及 `BOOTSTRAP_STAGE2_NATIVE_RUNTIME=PASS tools=8 suites=5 runtime_chain=42 all_mini_pp_cc_as_ld=true evidence_sha=true`。程序编译、汇编和链接全过程**未调用 GNU 预处理/汇编/链接**，不再只是用 GNU PP 的 `.i` 冒称完整 Mini 流程。程序的预处理输出、汇编、对象和 ELF SHA 连同功能日志保留在 [#39044664602 的 artifact](https://github.com/yituanxing/minic-toolchain/actions/runs/39044664602) 内。
 
 **范围边界：** 构建这些 8 个工具的 **ELF 自身**在 30 TU 阶段仍然使用 GNU GCC -E、GNU AS 和 GNU 静态链接/CRT/libc；所以此次成功是**自举工具运行构成的一条无 GNU PP/AS/LD 的 C 消费程序管线**，**不是**「全部工具源码完成无 GNU 自重建」，也不是 Linux 内核全链 Stage2 运行成功。CLI Driver / MiniNM / MiniStrip / MiniObjcopy 的后续联合测试以及自举 2064 Linux GNU PP→Stage2 CC→GNU AS/LD→QEMU P1，仍是独立验收里程碑。为了避免过度声明，后续测试摘要的 `bootstrapped_no_GNU_preprocessor` 指**完整工具自身构建**，保持 false；新增加 `all_mini_fresh_program_no_GNU_preprocessor=true` 专指上述小型程序。
+
+## 7. Stage2-built MiniNM/MiniStrip 与原生 Driver 独立门禁（2026-10-17）
+
+**最新 [CI #39045009260](https://github.com/yituanxing/minic-toolchain/actions/runs/39045009260) SUCCESS**：同样只消费已经由 Stage2 编译出的 8 个 SHA-certified RV64 工具 ELF，**8/8 独立套件通过**（原 MiniPP/MiniAS/MiniAR/MiniLD/MiniObjcopy 五套，加 MiniNM ELF32/ELF64 与薄归档功能两套，以及 MiniStrip GNU 对照一套）。这些不是“8 个工具各自所有功能均已证明”，而是共 8 套真功能测试。
+
+在前一节的手动编排 MiniPP→MiniC→MiniAS→MiniLD 完全原生 `return 42` 基础上，还通过了**真正的 Stage2-built 入口 Driver**：
+- 使用 Stage2 编译出来的原生 `minic` Driver RV64 ELF，程序真实运行在 `qemu-riscv64`；不使用 host GCC 的 Driver 冒充。
+- Driver 接到 `-c -ffreestanding -nostdinc -o ... main.c` 之后，按其源码真的分叉、调用旁边的 MiniPP、fixed-point Stage2 MiniC 与 MiniAS，产生实际 RV64 ET_REL；由同一 Stage2-built MiniLD 完成最终 static ELF 链接，QEMU 执行 **return 42**。
+- 标记：`BOOTSTRAP_NATIVE_DRIVER_CHAIN=PASS Stage2_built_Driver=true Stage2_MiniPP=true fixedpoint_Stage2_MiniC=true Stage2_MiniAS=true Stage2_MiniLD=true GNU_PP_AS_LD=false qemu_return=42`；`BOOTSTRAP_STAGE2_NATIVE_RUNTIME=PASS tools=8 suites=8 runtime_chain=42 all_mini_pp_cc_as_ld=true nm_strip_oracles=true driver_chain=42 evidence_sha=true`。
+- 注意一个真实环境陷阱：`qemu-riscv64 <guest_ELF>` 内 Driver 的 `argv[0]` 是 **Guest ELF 路径**，不是外部宿主 wrapper 路径；第一个尝试 [#39044889121](https://github.com/yituanxing/minic-toolchain/actions/runs/39044889121) 的 Driver 尝试直接 `execve` 同目录外国 RV64 ELF，宿主 shell 把 ELF 误作脚本而失败。这不是代码编译器错误。最新方案为 Stage2 Driver 建立隔离客体 ELF 目录，同目录放入四个 `#!/bin/sh exec qemu-riscv64 ...` 真实工具 wrapper，**不修改认证 ELF 字节**，通过上面的实际运行门禁。
+
+这补齐了 **Stage2 编译器 + Stage2-built 八个工具的单独功能验证、Stage2-built Driver 调度 PP/CC/AS/LD 的小程序端到端证据**。但它仍然不是 Linux 2064/P1 的 Stage2 全量成功，也没有证明八个工具的 C 源经**自身原生 MiniPP/MiniAS/MiniLD 自己重建得到 fixed point**。工具 ELF 生成时使用 GNU PP/AS/LD/CRT 的依赖边界仍应完整保留。
