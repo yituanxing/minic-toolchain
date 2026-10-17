@@ -770,6 +770,43 @@ jobs:
           github-token: ${{ github.token }}
           path: build/bootstrap-stage2-native/previous
 
+      # Isolate the external runtime seed problem WITHOUT modifying MiniLD:
+      # cross-glibc libc.a contains SHT_GROUP (type 17), which our certified
+      # MiniLD explicitly rejects. Pinned musl 1.2.5 static was validated by
+      # existing MiniLD integration tests. This is an externally generated
+      # bootstrap seed; its GNU producer is NOT hidden or counted as selfhost.
+      - name: Prepare SHA-pinned musl 1.2.5 external runtime seed
+        if: contains(github.event.head_commit.message, '[minic-bootstrap-native-musl-probe]')
+        shell: bash
+        timeout-minutes: 25
+        run: |
+          set -Eeuo pipefail
+          root="$GITHUB_WORKSPACE/build/bootstrap-stage2-native/musl-seed"
+          mkdir -p "$root"
+          curl -fsSL --retry 4 --retry-all-errors --retry-delay 2 \
+            https://musl.libc.org/releases/musl-1.2.5.tar.gz -o "$root/musl-1.2.5.tar.gz"
+          printf '%s  %s\n' \
+            a9a118bbe84d8764da0ea0d28b3ab3fae8477fc7e4085d90102b8596fc7c75e4 \
+            "$root/musl-1.2.5.tar.gz" | sha256sum -c -
+          tar -xzf "$root/musl-1.2.5.tar.gz" -C "$root"
+          src="$root/musl-1.2.5"
+          out="$root/musl-build"
+          mkdir -p "$out"
+          cd "$out"
+          CFLAGS="-O2 -fno-pic -fno-pie" \
+          CC=riscv64-linux-gnu-gcc \
+          AR=riscv64-linux-gnu-ar \
+          RANLIB=riscv64-linux-gnu-ranlib \
+            "$src/configure" --target=riscv64-linux-gnu --disable-shared --prefix=/usr \
+            >"$root/configure.log" 2>&1
+          make -j4 lib/libc.a obj/crt/crt1.o obj/crt/crti.o obj/crt/crtn.o \
+            >"$root/make.log" 2>&1 || { tail -n 70 "$root/make.log"; exit 1; }
+          for f in lib/libc.a obj/crt/crt1.o obj/crt/crti.o obj/crt/crtn.o; do
+            test -s "$f"
+            sha256sum "$f"
+          done | tee "$root/runtime-sha256.txt"
+          echo "MUSL_SEED=PASS external_GNU_producer_disclosed=true native_link_invokes_GNU=false"
+
       - name: Full native Stage3 to Stage4 self-rebuild of all nine tools
         if: contains(github.event.head_commit.message, '[minic-bootstrap-full-native]') && contains(github.event.head_commit.message, '[minic-bootstrap-stage2-native-runtime]')
         shell: bash
@@ -785,6 +822,9 @@ jobs:
           probe_args=()
           if [[ "${{ contains(github.event.head_commit.message, '[minic-bootstrap-native-link-only]') }}" == true ]]; then
             probe_args=(--link-only)
+            if [[ "${{ contains(github.event.head_commit.message, '[minic-bootstrap-native-musl-probe]') }}" == true ]]; then
+              probe_args+=(--musl-build "$GITHUB_WORKSPACE/build/bootstrap-stage2-native/musl-seed/musl-build")
+            fi
           elif [[ "${{ contains(github.event.head_commit.message, '[minic-bootstrap-full-native-probe]') }}" == true ]]; then
             probe_args=(--probe-only src/core/core_ir.c,preprocessor/src/preprocessor.c,tools/minic-cpp/main.c,linker/src/linker.c)
           fi
@@ -822,6 +862,11 @@ jobs:
             build/bootstrap-stage2-native/qualification/logs
             build/bootstrap-stage2-native/qualification/chain
             build/bootstrap-stage2-native/full-native
+            build/bootstrap-stage2-native/musl-seed/runtime-sha256.txt
+            build/bootstrap-stage2-native/musl-seed/configure.log
+            build/bootstrap-stage2-native/musl-seed/make.log
+            build/bootstrap-stage2-native/musl-seed/musl-build/lib/libc.a
+            build/bootstrap-stage2-native/musl-seed/musl-build/obj/crt/*.o
           if-no-files-found: warn
           retention-days: 7
 
