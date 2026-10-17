@@ -42,8 +42,12 @@
 # exact-length allocation, ast.h 88875de9638d93fcd0fed37f9853085a82943ba5. Frozen first500
 # #39008901495 PASS 500/500 .s identical, 1.06216x; 10 repeated owner
 # rechecks #39009160280 SUCCESS; 5-owner RSS/CPU #39008785116 PASS.
-# Full 2064/QEMU certification is a separate incoming run and must
-# report independently; the hash here is only a source identity gate.
+# Full 2064 GNU/QEMU P1 #39009342014 SUCCESS: 7/7 Linux shards,
+# COHORT_RESULT=PASS candidate_objects=2064 scope=FULL_C_UNIVERSE,
+# COHORT_LINK=REUSED prefix:2064, COHORT_P1=PASS syscalls=12,
+# python_era_oracle=PASS. Focused T1 #39009342065 SUCCESS.
+# Source SHA is a gate for matching that specific tested source, not itself
+# a substitute for the linked QEMU run evidence.
 d1b8a54a26e933b9f40438d23bb9001bc632408e src/compiler/compiler.c
 1ab6f1d2d587e6008d7224b10b1638c9887bac18 src/core/core_lower.c
 a8418e45608310687e3d6a1e96da79ca49135870 src/core/core_lower_asm.c
