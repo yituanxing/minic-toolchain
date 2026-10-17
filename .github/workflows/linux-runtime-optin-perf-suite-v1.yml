@@ -324,8 +324,14 @@ jobs:
           if [[ "${{ contains(github.event.head_commit.message, '[minic-current-phase20]') && '1' || '0' }}" == 1 ]]; then
             python3 tools/ci/apply-perf-specialization-phase-trace-v0.py
             python3 tools/ci/apply-perf-boolean-scan-census-v1.py
+            # Reuse the existing Symbolic direct/transitive timer; census is
+            # diagnostic only, without changing the production compiler C.
+            python3 tools/ci/apply-perf-symbolic-loop-trace-v0.py
+            python3 tools/ci/apply-perf-symbolic-scan-census-v1.py
             python3 -m py_compile \
               tools/ci/apply-perf-boolean-scan-census-v1.py \
+              tools/ci/apply-perf-symbolic-loop-trace-v0.py \
+              tools/ci/apply-perf-symbolic-scan-census-v1.py \
               tools/ci/linux-perf-phase-trace-v1.py \
               tools/ci/linux-perf-current-phase20-v1.py
           fi
@@ -345,6 +351,8 @@ jobs:
           python3 tools/ci/linux-perf-phase-trace-v1.py --self-test \
             | tee "$root/evidence/phase20-trace-parser-selftest.txt"
           grep -Fq 'boolean_count_parser=1' \
+            "$root/evidence/phase20-trace-parser-selftest.txt"
+          grep -Fq 'symbolic_count_parser=1' \
             "$root/evidence/phase20-trace-parser-selftest.txt"
           echo 'MINIC_PHASE20_PROFILE_BUILD=PASS current_native=true instrumentation_only=true'
 
@@ -2922,6 +2930,8 @@ jobs:
           grep -Fq 'MINIC_PHASE20=PASS files=20 assemblies_identical=20/20' \
             "$root/evidence/phase20-verdict.txt"
           grep -Fq 'MINIC_BOOLEAN20=PASS' "$root/evidence/phase20-verdict.txt"
+          grep -Fq 'MINIC_SYMBOLIC20=PASS' "$root/evidence/phase20-verdict.txt"
+          grep -Fq 'spec-symbolic-transitive' "$root/evidence/phase20-verdict.txt"
           grep -Fq 'spec-boolean-transitive' "$root/evidence/phase20-verdict.txt"
 
       # Fresh post-Parser cold-switch CPU attribution, retry after profiler
