@@ -72,3 +72,13 @@
 - 六个主要原单轮回退 fs/nfs/client.o、mm/slub.o、mm/hugetlb.o、fs/nfs/blocklayout/extent_tree.o、fs/notify/inotify/inotify_user.o、arch/riscv/kernel/patch.o，复核全部更快：分别 -36.780/-40.680/-18.119/-36.541/-14.790/-8.591ms，CPU user 方向也支持正收益；原因很可能是 500 竞争 runner 的逐文件计时噪声或热/冷/CPU 竞争，不断言物理原因已经锁定。
 - 12 个样本分类：11 not_reproduced，1 mixed_or_noisy，0 reproduced_wall_and_cpu_slowdown_suspect。唯一混合样本 arch/riscv/purgatory/ctype.o 是 2ms 量级 tiny TU，wall +0.038ms、CPU user -0.075ms，不构成证据充分的持续性能回退。
 - 生产资格：七路 2064/2064 + GNU Link + QEMU P1 #38995964988 完整通过，运行时可保留；不在这一 2.58% 全体增益的优化上无止境打磨。
+
+## 2026-10-17：AST verifier 单次索引、500 文件和 CPU 回退复核
+
+- 与旧 Core/Boolean 索引完全不同的独立成本模型：`src/frontend/ast_verifier.c` 的 incomplete-array descriptor 所有者查找，原算法每个不完整数组扫描所有 Expression 与多个 Program 存储表，PARSED/NORMALIZED 两次全量运行。新算法每次 verifier invocation 预建 bitmap，将检查降为 O(1)，OOM 回退原完整扫描，不取消任何 AST 校验。
+- 预筛 [#38999873072](https://github.com/yituanxing/minic-toolchain/actions/runs/38999873072) SUCCESS：5 个真实 pinned GNU Linux .i，每臂 4 轮交错，5/5 .s 一致，合计 P50 5282.203→5112.793ms，约 1.0331×。
+- 完整 first500 [#38999997399](https://github.com/yituanxing/minic-toolchain/actions/runs/38999997399) SUCCESS：**500/500 .s 字节一致**，四工作进程、250/250 先执行轮换；单次 old 379184.989ms，candidate 363844.060ms，提速 **1.04216×**，减少总编译耗时 **4.05% / 15.340929s**。其中 52 个文件单次 wall 观测比旧版慢，但不可直接定义 52 个回归。
+- 正式源代码 [f2bc0fcd](https://github.com/yituanxing/minic-toolchain/commit/f2bc0fcd6bd9d0c83bb1fa0dbe71d7fe5ecc127d) 与当初 opt-in 脚本实现一致；[完整 Linux 运行时 #39000339623](https://github.com/yituanxing/minic-toolchain/actions/runs/39000339623) SUCCESS：**7/7 shard、2064/2064 C 对象、固定 GNU 链接、QEMU P1 12/12 系统调用 + Python-era oracle PASS**。
+- CPU/wall 复核 [#39000717601](https://github.com/yituanxing/minic-toolchain/actions/runs/39000717601) SUCCESS：复用同 500 frozen .i，锁定 **原版和新版完全相同的两份 `minic-cc` 二进制 SHA**，选 8 个最大单轮回退和 3 个获益控制，`make check-ast-contract` PASS，两个 4-round 交错批次共 **old/new 各 8 次 + 排除预热**；记录 wall/user/sys CPU 和 MAD；11/11 .s 一致。
+- **回退分类：0 `reproduced_wall_and_cpu_slowdown_suspect`、0 `mixed_or_noisy`、11 `not_reproduced`**。11 个 wall 中位均快于旧版，user CPU 中位全部下降。原单轮回退第一的 `fs/nfs/client.o` 首次 old 894.984→candidate 1020.799ms，而 8× 复核中位变为 895.928→858.225ms，user CPU 813.101→784.541ms；`kernel/events/core.o` 首次 2896.412→2942.118ms，8×复核 1753.345→1708.789ms，user CPU 1633.684→1595.091ms。两次 run 绝对 P50 的差异也表明资源竞争/动态系统时钟可能显著影响 4-worker 单次测量。**不能据此声称所有其余未复核的 41 个 file 都不会回退，也不能把单次 500 的 per-file 耗时作可靠百分位分布。**
+- **裁决：`runtime-certified / keep`。** 现在 AST 校验算法实质减掉 Program-level O(A×E) 扫描；不是在被否决的 Hash/Parser Probe 方案上死磕。依据有多规模真实性能 A/B、汇编内容、专用 AST 合约单测和完整 QEMU P1，多批证据独立闭环。继续依据**新的阶段+CPU 归因**转向其他成本模型。
