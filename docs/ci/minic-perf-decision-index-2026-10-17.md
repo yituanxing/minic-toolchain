@@ -48,7 +48,9 @@
 
 **500 文件硬验证成功，值得晋级完整 Runtime 测试。** [CI #38999997399](https://github.com/yituanxing/minic-toolchain/actions/runs/38999997399) **SUCCESS**，500/500 frozen Linux .i 编译通过且 **500/500 `.s` SHA 完全相同**，复用现有 4-worker balanced-order A/B；old **379184.989ms**，candidate **363844.060ms**，单次累计编译耗时节约 **15.340929 秒**，加速 **1.04216×（耗时约减少 4.05%）**。250/250 轮换先跑顺序，单文件倍率中位数 **1.04199×**。500 单轮有 **52 文件**候选 wall 较慢（与之前 Core Name Hash 的 206/500 对比）；最大的 `fs/nfs/client.o` 894.984→1020.799ms、`kernel/events/core.o` 2896.412→2942.118ms、`kernel/cgroup/legacy_freezer.o` 630.951→672.051ms，必须保留回归名单，后续通过重复 wall + CPU clocks 复核，不按单次噪声推断算法必然回退。
 
-**裁决：`promote-candidate / full 2064+GNU Link+QEMU P1 pending`**。本方案在 5 个老样本、完整 500 样本均确认正收益，且 500/500 生成汇编一致；4.05% 耗时减少显著强于刚被放弃的 Core 函数符号 Hash（0.95%）。现在可以只将有收益的 AST verifier 扫描减少逻辑写入正式源码，并且复用已有完整 Linux correctness 流水线；**未通过 2064/QEMU 前绝不声称最终 runtime-certified**。
+**最终生产资格：`runtime-certified / integrated`**。已把上述完全相同的索引逻辑落实到正式 `src/frontend/ast_verifier.c`（[生产代码提交 f2bc0fcd](https://github.com/yituanxing/minic-toolchain/commit/f2bc0fcd6bd9d0c83bb1fa0dbe71d7fe5ecc127d)，新 blob `24c639a7...`）。[Seven-shard Linux/QEMU CI #39000339623](https://github.com/yituanxing/minic-toolchain/actions/runs/39000339623) **SUCCESS**：7/7 实际 shard SUCCESS，`COHORT_RESULT=PASS candidate_objects=2064 scope=FULL_C_UNIVERSE same_config=true`，`COHORT_LINK=REUSED name=full_all_verified selection=prefix:2064`（证明复用了当前 run 汇聚的 2064 个对象，而非重新运行昂贵前端），`COHORT_P1=PASS name=full_all_verified syscalls=12 python_era_oracle=PASS`；仍然是 **GNU 预处理 → MiniC 编译 → GNU 汇编/链接 → Linux QEMU P1** 的单工具替换边界，不能写成全 Mini 原生工具。 [Focused T1 #39000287494](https://github.com/yituanxing/minic-toolchain/actions/runs/39000287494) **SUCCESS**：8 项独立测试共用一次编译。**现阶段有冻结 first500 4.216% 总体加速、500/500 .s 一致、正式 2064/QEMU 运行时资格；尚没有严格全 2064 的 old/new 全部 Wall-Time 配对速度数字。**
+
+首个 500 同机单轮慢于旧版的 **52 文件**不是 52 个已经确认的回归。Top8 原始 outlier + 3 个收益控制的 8+8 wall/user/sys CPU+MAD 复核已在既有 perf500 job [#39000717601](https://github.com/yituanxing/minic-toolchain/actions/runs/39000717601) 启动，最终分类需依日志填报，不得单轮定性。
 
 ## 1. 已拒绝或因边际收益不足而停止：默认不重开
 
