@@ -39,6 +39,25 @@ Seven-input cohort: 1,158,376 expression records, **73,572 CALL records (6.35%)*
 **Card: `layout-repeated-record-work` — `needs current CPU evidence`.**
 - `src/target/data_layout.c` contains nested record traversals; prior audit notes RV64 Codegen repeats some per-object type-layout work. Need actual layout calls/CPU cost under latest AST+other optimized source before creating yet another memoization table. Do not retry previously rejected P14/P15 by renaming them.
 
+## Result after candidate promotion (2026-10-17)
+
+The first compact-Expression experiment is now **integrated and runtime-certified**. It **keeps the 64 inline CALL argument slots and full value-copy semantics**, but stores 32-bit IDs instead of size_t IDs, with explicit no-truncation guards. Thus the slot table alone declines from 512 to 256 bytes. No new per-CALL mallocs, no changes to the historically rejected 2x→1.5x array growth experiment.
+
+| Check | Evidence |
+| --- | --- |
+| Four Linux TU paired | [CI #39002084966](https://github.com/yituanxing/minic-toolchain/actions/runs/39002084966), 4/4 exact .s, 1.04217x compile speedup, one-sample peak RSS reduction ~22.5%–26.4% on fsync/BTF/memcontrol |
+| first500 gate | [CI #39002211001](https://github.com/yituanxing/minic-toolchain/actions/runs/39002211001), 500/500 byte-identical .s, 289603.901→269198.125ms, **1.07580x** total speedup, 250/250 balanced first-order |
+| CALL arg boundary & AST contract | [CI #39002498179](https://github.com/yituanxing/minic-toolchain/actions/runs/39002498179) SUCCESS; 0/1/2/8/9/63/64, variadic and GNU cleanup agree; 65 arguments rejected; contract PASS |
+| Production source | [Commit 5cb252e9](https://github.com/yituanxing/minic-toolchain/commit/5cb252e918112337d4e281267a0349ad490a4b55), six frontend source files |
+| Focused T1 | [CI #39002613399](https://github.com/yituanxing/minic-toolchain/actions/runs/39002613399) SUCCESS, 8 independent checks |
+| Runtime | [CI #39002638516](https://github.com/yituanxing/minic-toolchain/actions/runs/39002638516) SUCCESS, 7/7 shard, 2064/2064 C, GNU link, QEMU P1 12/12 |
+
+The initial full-run attempt #39002613400 failed on the **deliberate source-SHA identity gate** due to the previous ast.h pin, not due to a Linux compiler failure. It was corrected in the manifest, and the actual rerun passed.
+
+Regression triage [CI #39002748529](https://github.com/yituanxing/minic-toolchain/actions/runs/39002748529) collected 9 real owners (7 initially slower + 2 positive controls), 8 old/8 new runs each, 9/9 matching .s, **0 reproduced wall-and-CPU regressions** and **all 9 median wall-time improvements**. Nine JSON reports are preserved in artifact 12089693082. The workflow still shows FAILURE because the final evidence directory had not been created before tee wrote its summary; this workflow-only mistake is fixed in commit 6665be9f; the prior data was not silently relabeled as an overall CI success or needlessly rerun.
+
+**Close the candidate: packed inline CALL ID is integrated / runtime-certified / do-not-repeat.** Preserve the UINT32_MAX upper bound and require a new performance/cost model before attempting more external CALL-argument allocations. Future independent candidates include the 6536-byte Function cold parameter/fact representation and layout rescanning, each subject to new CPU and RSS evidence.
+
 ## How many iterations remain?
 
 No defensible exact count of successful optimizations. The next **5–8 disciplined candidate/screening rounds** are plausible from the currently *unresolved* structures: Expression footprint, Function cold arrays, layout, new phase attribution after memory changes, and remaining non-repeated Symbolic/Parser/Codegen algorithms. That number is an **exploration budget, not a guarantee of 5–8 accepted patches or of cumulative speedup**. Expect most micro-candidates to fail promotion gates as before.
