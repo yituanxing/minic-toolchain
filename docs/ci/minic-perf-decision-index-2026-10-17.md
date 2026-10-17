@@ -78,6 +78,24 @@
 
 **最终状态更新：** 本节原始 500/500 与 11 文件诊断先于合入，现在 9,000 个索引次序模型测试、8×5 臂安全验证（#39023367899）、正式源码 7ed87186、2064 GNU 链接/QEMU P1 (#39023546906) 均已通过；`symbolic-source-grouped-calls-v1 = integrated / runtime-certified / keep / do-not-repeat`。后续不得以该相同索引重新抽卡。
 
+### 第七轮完成后 CPU 重归因：Symbolic 热点已显著下降，转向 DataLayout（2026-10-17）
+
+来源：[现有 perf500 #39024742344](https://github.com/yituanxing/minic-toolchain/actions/runs/39024742344) **SUCCESS**；当前正式 Symbolic Grouped-Call production SHA `3b6df766a05bcaab365289b39e414fc9be8c2ba3`，同一份 SHA-frozen GNU-Kbuild `.i` 的 release vs diagnostics+debug `.s` **2/2 byte-identical**，Linux `fs/ext4/fsync.o` 和 `kernel/bpf/btf.o` 真正直接运行 `bin/minic-cc`，Callgrind 模拟 CPU executed instructions（不是 wall/IPC 周期）。与上一轮 #39016792065 同一 frozen 输入对照：
+
+| 指标 | fs/ext4/fsync.o | kernel/bpf/btf.o |
+| --- | ---: | ---: |
+| 第六轮 Callgrind 总 Ir | 1,806,899,557 | 6,760,025,836 |
+| 第七轮 Callgrind 总 Ir | **1,575,034,285** | **5,832,340,530** |
+| 总 Ir 变化 | **-12.83%** | **-13.72%** |
+| Symbolic specialize self Ir 占比，第六轮→第七轮 | **13.73%→1.02%** | **14.48%→0.87%** |
+| Parser copy 现状 | 12,430次 / 0.012GiB 名义 | 21,446次 / 0.021GiB 名义 |
+
+**注意：** 这并不是“总体真实 wall 加速 13%”；可信首 500 real-wall A/B 仍是 254748.100→236743.979ms，**1.07605×**。Callgrind 尾数可能受诊断版本、构建与 C optimizer 差异影响，只能用于阶段/函数 CPU 工作归因。当前源码的最大热点已经转移；不再继续微调 Symbolic 的 Variant/Source Index。
+
+**新 self Ir 热点（占整次宿主 MiniC Ir）：** fsync Lexer `minic_lexer_next` **7.64%**、`current_identifier_is` **4.26%**、DataLayout type depth/record depth **3.77%/3.02%**；BTF enum bind **11.26%**、span compare **7.21%**、Core named enqueue **4.83%**、Lexer **3.46%**、DataLayout type/record depth 约 **4.28%**（两重函数自耗之和，不含调用子树）。已检索历史：Enum bind 已有 [#38998220260](https://github.com/yituanxing/minic-toolchain/actions/runs/38998220260) 全局索引候选，七样本约 **2.46%** 算术节约后判 `not-promoted/stop`；旧 Core name-index、Lexer lookahead 不得无新机制重复。
+
+**新开、旧实验未覆盖的假设（opt-in，生产 C 不变）：** `src/target/riscv64/layout.c:minic_riscv64_layout_records` 先对每个完整 record 调用 `minic_data_layout_type`，内部 `minic_data_layout_record_depth` 已全字段递归验证；随后 **再逐个字段调用 `minic_data_layout_record_field_layout`，每次又遍历整条 record**，且 offset/bit_offset 完全未使用。此验证重复形成每条记录近似 `O(F²)`，而不是查询方一时的缓存遗漏。候选仅删去无效的二次全字段遍历，保留 `DataLayout` owner、ABI 与所有 field 本身验证；参见 `tools/ci/apply-perf-rv64-record-layout-single-walk-v1.py`，四个真实 owner 初筛 [#39025175461](https://github.com/yituanxing/minic-toolchain/actions/runs/39025175461) 进行中，仅通过 A/B 数据才决定是否扩到 500/2064。这个方案与历史 `PERF-011` Core workspace、Parser Enum Hash、P14/P15 均不同。
+
 ## 第六轮完成后最新 CPU 归因：Parser hot-copy 病因解除，下一张卡需重选（2026-10-17）
 
 **全量来源准确性：** 第六轮正式源码 [cbbd5654](https://github.com/yituanxing/minic-toolchain/commit/cbbd5654cc8f7fa508e798bc0262f49e4c32d3ee)，配对测试 500/500 byte-identical、**1.08697×（累积 wall 180349.471→165919.403ms, -8.00%）**、Sanitizer + 9 例 parser edge + 10-owner 8x 回退复核已通过。**完整 Runtime [#39016455728](https://github.com/yituanxing/minic-toolchain/actions/runs/39016455728) SUCCESS**：7/7 构建分片、`GNU_MINIC_SHARD_MERGE=PASS objects=2064 shards=7`、GNU Link `COHORT_LINK=REUSED name=full_all_verified selection=prefix:2064`、QEMU `COHORT_P1=PASS syscalls=12 python_era_oracle=PASS`、`COHORT_RESULT=PASS candidate_objects=2064 scope=FULL_C_UNIVERSE same_config=true`。Focused T1 [#39016455740](https://github.com/yituanxing/minic-toolchain/actions/runs/39016455740) SUCCESS。本轮最终标签：`parser-cold-switch-heap-owned-v1 = integrated / runtime-certified / keep / do-not-repeat`。
