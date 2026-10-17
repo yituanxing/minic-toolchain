@@ -394,9 +394,16 @@ jobs:
         run: |
           set -Eeuo pipefail
           echo "BOOTSTRAP_STAGE2_RUNTIME_SOURCE=run39040013459 seed=3b6c1e335342b042f5f3c0b922f31843e6824bc9"
+          # Checkout is shallow; the certified original source commit is
+          # older than 8 commits. Fetch the exact historical SHA, without
+          # disabling provenance or fetching all repository history.
+          seed_commit=3b6c1e335342b042f5f3c0b922f31843e6824bc9
+          if ! git cat-file -e "$seed_commit^{commit}" 2>/dev/null; then
+            git fetch --no-tags --depth=1 origin "$seed_commit"
+          fi
           # Only source-relevant paths; recent Makefile changes only added
           # an executable bootstrap target and did not modify MINIC_SOURCES.
-          git diff --exit-code 3b6c1e335342b042f5f3c0b922f31843e6824bc9 \
+          git diff --exit-code "$seed_commit" \
             "$GITHUB_SHA" -- src/ include/ tools/minic-cc/ \
               tests/compiler/bootstrap/b0-sources.txt
           echo BOOTSTRAP_STAGE2_SOURCE_MATCH=PASS
