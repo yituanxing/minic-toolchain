@@ -86,7 +86,7 @@ def main() -> None:
              "--input", str(path),
              "--baseline", str(args.baseline),
              "--candidate", str(args.traced),
-             "--expect-specialization",
+             "--expect-specialization", "--expect-current-lookup-telemetry",
              "--out", str(folder)],
             capture_output=True, text=True, errors="replace", timeout=390)
         (folder / "trace.log").write_text(proc.stdout + "\n" + proc.stderr)
