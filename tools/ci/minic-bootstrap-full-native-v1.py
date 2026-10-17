@@ -18,6 +18,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import shlex
 import subprocess
 import sys
 import time
@@ -252,6 +253,66 @@ def native_link_probe(binaries, source_lists, all_sources, seed_libraries, link_
     print("FULL_NATIVE_LINK_PROBE=PASS tool=minic-cpp no_GNU_fallback=true",flush=True)
 
 
+def native_stage4_runtime_smoke(binaries, root, env):
+    """Functional PP/CC/AS/LD and driver proof, in addition to a fixed point.
+
+    A --help result and identical loadable bytes are insufficient to prove that
+    the freshly rebuilt tools genuinely compile, link and execute programs.
+    This gate runs only self-built executables; no GCC/AS/LD subprocess.
+    """
+    work = root / "stage4" / "runtime-smoke"
+    (work / "logs").mkdir(parents=True, exist_ok=True)
+    header = work / "answer.h"
+    c = work / "answer.c"
+    pre = work / "answer.i"
+    asm = work / "answer.s"
+    obj = work / "answer.o"
+    start_asm = work / "start.s"
+    start_obj = work / "start.o"
+    elf = work / "native42.elf"
+    header.write_text("#define N 21\n#define DOUBLE(x) ((x)+(x))\n")
+    c.write_text("#include \"answer.h\"\n#if DOUBLE(N) != 42\n#error native-preprocessor-wrong\n#endif\nint main(void) { return DOUBLE(N); }\n")
+    start_asm.write_text(".text\n.globl _start\n.type _start, @function\n_start:\n  call main\n  li a7, 93\n  ecall\n.size _start, .-_start\n")
+    steps = [
+      ("pp", command(binaries, "minic-cpp", "-E", "-P", "-undef", "-nostdinc", "-o", pre, c), 90),
+      ("cc", command(binaries, "minic-cc", "-S", pre, "-o", asm), 180),
+      ("as", command(binaries, "minic-as", "-o", obj, asm), 120),
+      ("start-as", command(binaries, "minic-as", "-o", start_obj, start_asm), 60),
+      ("ld", command(binaries, "minic-ld", "-melf64lriscv", "-static", "-e", "_start", "-o", elf, start_obj, obj), 120),
+      ("runtime", ["qemu-riscv64", elf], 45)
+    ]
+    for name, argv, timeout in steps:
+        execute(argv, work / "logs" / (name + ".log"), timeout=timeout, env=env,
+                expected=42 if name == "runtime" else 0)
+    print("FULL_NATIVE_STAGE4_RUNTIME=PASS fresh_C_PP_CC_AS_LD_QEMU_exit42=true GNU_PP_AS_LD=false",flush=True)
+
+    # Driver smoke: preserve exact new driver bytes but place host QEMU shims
+    # beside it so guest subprocesses correctly invoke the new RV64 tools.
+    driver_bin = work / "driver-bin"
+    driver_bin.mkdir(exist_ok=True)
+    guest_driver = driver_bin / "minic"
+    shutil.copy2(binaries["minic"], guest_driver)
+    guest_driver.chmod(0o755)
+    if sha(guest_driver) != sha(binaries["minic"]):
+        raise RuntimeError("stage4 driver copy SHA differs")
+    for name in ("minic-cpp", "minic-cc", "minic-as", "minic-ld"):
+        wrapper = driver_bin / name
+        wrapper.write_text("#!/bin/sh\nexec qemu-riscv64 " +
+                           shlex.quote(str(binaries[name])) + " \"$@\"\n")
+        wrapper.chmod(0o755)
+    driver_obj = work / "driver.o"
+    driver_elf = work / "driver42.elf"
+    execute(["qemu-riscv64", guest_driver, "-c", "-ffreestanding", "-nostdinc",
+             "-o", driver_obj, c],
+            work / "logs" / "driver-cc.log",timeout=300,env=env)
+    execute(command(binaries,"minic-ld", "-melf64lriscv", "-static", "-e", "_start",
+                    "-o", driver_elf, start_obj, driver_obj),
+            work / "logs" / "driver-ld.log",timeout=120,env=env)
+    execute(["qemu-riscv64", driver_elf],
+            work / "logs" / "driver-runtime.log",timeout=45,env=env,expected=42)
+    print("FULL_NATIVE_STAGE4_DRIVER=PASS fresh_C_PP_CC_AS_LD_QEMU_exit42=true GNU_fallback=false",flush=True)
+
+
 def rounds(binaries, sources, all_sources, hdr, libraries, out, workers, probe=False, resume=None, link_libraries=None):
     if link_libraries is None:
         link_libraries = libraries
@@ -410,6 +471,7 @@ def rounds(binaries, sources, all_sources, hdr, libraries, out, workers, probe=F
                         work / "logs" / (tool + ".stage4-objcopy.log"), env=env)
                 if sha(image3) != sha(image4):
                     raise RuntimeError("STAGE3_STAGE4_LOADABLE_MISMATCH tool=" + tool)
+            native_stage4_runtime_smoke(next_binaries, out, env)
             print("FULL_NATIVE_TOOLCHAIN=PASS tools=9 native_pp_cc_as_ld=true"
                   " prebuilt_libc_crt_libgcc=true stage3_stage4_loadable_exact=true"
                   " gcc_as_ld_invocations=0", flush=True)
