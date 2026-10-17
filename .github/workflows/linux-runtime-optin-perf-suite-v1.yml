@@ -843,6 +843,7 @@ jobs:
                 " median_call_ratio="+str(result["median_call_ratio"]))
           PYSUM
 
+      # 2026-10-17: sanitized .i fixture: no C comments in preprocessed input.
       # New cost model: 64 inline Call arguments are 32-bit packed IDs, no
       # pointers/heaps/AST allocator growth changes. Single factor only.
       # C correctly rejects all expression IDs above UINT32_MAX.
