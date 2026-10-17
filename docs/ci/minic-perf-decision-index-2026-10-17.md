@@ -4,6 +4,14 @@
 > 本表是候选的**状态索引**，不是覆盖旧的原始数据；旧实验报告、补丁、CI artifacts 均保留。每次新优化先记录「相同结构以前试过没有、当时基线是什么、为何现在仍值得做」。
 > 基线：主线 `6612e2c1a3`（文档头），最新已认证的 Boolean/Core/Integer 联合源码经 [2064 + GNU link + QEMU P1 #38995964988](https://github.com/yituanxing/minic-toolchain/actions/runs/38995964988) PASS。这个 PASS 是 GNU PP → MiniC → GNU AS/LD，不能声称全 Mini 工具链共同通过。下列不同实验的加速比不能相乘，也不能伪称当前 2064 的同比速度。
 
+## 第六轮候选前置：第五轮之后重新做 CPU 归因（2026-10-17）
+
+**先重新测而非直接改**：截至 `main@fb4ca421d`，上一轮已经将 `MinicExpression=416→208B`，first500 累计编译用时下降 **10.21%**，完整 2064/Linux/QEMU P1 PASS（#39012897095）。此前的 Callgrind 29–46% libc memcpy 指令比例是结构压缩**前**的热点，不能凭过期归因继续搬同一数据。尤其历史 `PERF-033` 改扩容因子否决、`functiontype-exact` <1% 停止、`call-inline8` 已合入，不应被重复抽卡。
+
+**本阶段启动只读 / opt-in CPU profile [minic-cpu-profile-only]**：复用现有 GitHub Actions perf500 job 和 SHA-frozen Kbuild `fs/ext4/fsync.o`、`kernel/bpf/btf.o`，固定相同 runtime-certified GNU preprocessed input；release MiniC 保持未改，独立 `-g -fno-omit-frame-pointer` 诊断工具编译，并运行已存在的 `linux-perf-host-hotspot-profiler-v1.py` 获取真实 Callgrind 函数/指令归因、parser copy census，输出 `.s` identity 门禁，避免只从 208B struct 推测速度。该实验不写生产 C、不替换/回归上一轮的 `src`。
+
+**待真实结果后选卡**：记录当前 memcpy/calloc/realloc、AST normalization、Verifier、Core lowering 与 Specialization 占比；判断下一项能否减少真正热点 `O(N)` 复制/重复扫描，而不是仅因某个结构仍很大就再换指针。历史 Callgrind 和多 TU wall 结果不可相乘或等价比较。
+
 ## 空间方向第五轮：CALL 溢出按需存储，消除每个 Expression 的联合体空耗（2026-10-17）
 
 **出发点：** 当前三轮生产优化之后，Expression capacity 仍然占据 [#39011170730](https://github.com/yituanxing/minic-toolchain/actions/runs/39011170730) 七个独立大 TU 共 676 MiB；CALL 参数固定内联 64×32-bit＝256B，即使只有约 6%～7% 的 Expression 是 CALL 也付出该联合体空间成本。已记录历史 `PERF-033` 的数组扩容倍率调整（否决）和 `minic-ast-packed-inline-call-id-v1` 32-bit ID 压缩（**已合入**）均不能重提；本候选是在这个最新 baseline **保留 32-bit ID、不动扩容**、把 CALL inline payload 由 64 slot 缩到 **8 slot**，仅 9～64 参数的稀少 CALL 添加 Program 独占 heap overflow，parser 使用栈 scratch、`program_add_expression` 深拷贝、AST cast normalization 用私有 scratch 进行 remap 后再深拷贝，Program destroy、normalization 成功/回滚分支分别释放正确的 owner。注意这比前几轮更复杂，绝不能仅因省字节提前合入。
