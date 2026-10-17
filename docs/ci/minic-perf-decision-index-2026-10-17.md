@@ -46,7 +46,9 @@
 
 **五文件局部 A/B 已完成**：[CI #38999873072](https://github.com/yituanxing/minic-toolchain/actions/runs/38999873072) **SUCCESS**；全部 GNU Kbuild 输入 SHA 固定，old/new 各四次交错，**5/5 汇编完全一致**：btf **1134.128→1094.960ms（1.0358×）**、fsync **402.568→384.805ms（1.0462×）**、events-core **1499.724→1464.439ms（1.0241×）**、memcontrol **1340.017→1297.097ms（1.0331×）**、ext4-super **905.766→871.492ms（1.0393×）**，合计 **5282.203→5112.793ms（1.0331×；减时 3.21%）**。这是真实但**经过热点选择**的局部增益，不能泛化为 Linux 500/2064 平均增益。
 
-**500 个独立数据点的晋级门已经触发**：[CI #38999997399](https://github.com/yituanxing/minic-toolchain/actions/runs/38999997399)。仅复用已有 `perf500` job / SHA-locked corpus / balanced-order 4 worker old-vs-new 测量及 500/500 `.s` 哈希门；不引入 workflow/job，不复测同样的局部 4x，结果未返回前仍保持**生产源码不变**、不声称全量加速。
+**500 文件硬验证成功，值得晋级完整 Runtime 测试。** [CI #38999997399](https://github.com/yituanxing/minic-toolchain/actions/runs/38999997399) **SUCCESS**，500/500 frozen Linux .i 编译通过且 **500/500 `.s` SHA 完全相同**，复用现有 4-worker balanced-order A/B；old **379184.989ms**，candidate **363844.060ms**，单次累计编译耗时节约 **15.340929 秒**，加速 **1.04216×（耗时约减少 4.05%）**。250/250 轮换先跑顺序，单文件倍率中位数 **1.04199×**。500 单轮有 **52 文件**候选 wall 较慢（与之前 Core Name Hash 的 206/500 对比）；最大的 `fs/nfs/client.o` 894.984→1020.799ms、`kernel/events/core.o` 2896.412→2942.118ms、`kernel/cgroup/legacy_freezer.o` 630.951→672.051ms，必须保留回归名单，后续通过重复 wall + CPU clocks 复核，不按单次噪声推断算法必然回退。
+
+**裁决：`promote-candidate / full 2064+GNU Link+QEMU P1 pending`**。本方案在 5 个老样本、完整 500 样本均确认正收益，且 500/500 生成汇编一致；4.05% 耗时减少显著强于刚被放弃的 Core 函数符号 Hash（0.95%）。现在可以只将有收益的 AST verifier 扫描减少逻辑写入正式源码，并且复用已有完整 Linux correctness 流水线；**未通过 2064/QEMU 前绝不声称最终 runtime-certified**。
 
 ## 1. 已拒绝或因边际收益不足而停止：默认不重开
 
