@@ -22,6 +22,8 @@ static void minic_ast_shape_census(const MinicC0Program *program, const char *st
     size_t function_0 = 0U, function_1 = 0U, function_2 = 0U;
     size_t function_3to4 = 0U, function_5to8 = 0U, function_9plus = 0U;
     size_t function_specialized = 0U, function_symbolic_used = 0U, function_boolean_used = 0U;
+    size_t function_type_params = 0U, function_type_0to2 = 0U, function_type_3to8 = 0U;
+    size_t function_type_9plus = 0U;
     if (getenv("MINIC_AST_SHAPE_CENSUS") == NULL || program == NULL) return;
     for (i=0U; i<program->expression_count; ++i) {
         const MinicExpression *e = &program->expressions[i];
@@ -47,6 +49,13 @@ static void minic_ast_shape_census(const MinicC0Program *program, const char *st
             if (function->specialization_boolean_range_known[p]) ++function_boolean_used;
         }
     }
+    for (i=0U; i<program->function_type_count; ++i) {
+        size_t n = program->function_types[i].parameter_count;
+        function_type_params += n;
+        if (n <= 2U) ++function_type_0to2;
+        else if (n <= 8U) ++function_type_3to8;
+        else ++function_type_9plus;
+    }
     (void)fprintf(stderr,
         "MINIC_AST_SHAPE stage=%s expression_size=%zu expression_count=%zu expression_capacity=%zu "
         "call_count=%zu call_arguments_total=%zu call_0=%zu call_1=%zu call_2=%zu "
@@ -55,7 +64,10 @@ static void minic_ast_shape_census(const MinicC0Program *program, const char *st
         "function_0=%zu function_1=%zu function_2=%zu function_3to4=%zu function_5to8=%zu "
         "function_9plus=%zu function_specialized=%zu function_symbolic_used=%zu "
         "function_boolean_used=%zu "
-        "function_type_size=%zu function_type_count=%zu "
+        "function_type_size=%zu function_type_count=%zu function_type_capacity=%zu "
+        "function_type_params=%zu function_type_0to2=%zu function_type_3to8=%zu function_type_9plus=%zu "
+        "record_size=%zu record_capacity=%zu local_size=%zu local_capacity=%zu "
+        "statement_size=%zu statement_capacity=%zu "
         "record_count=%zu local_count=%zu statement_count=%zu\n",
         stage, sizeof(MinicExpression),program->expression_count,program->expression_capacity,
         calls,arguments,zero,one,two,three_four,five_eight,nine_plus,
@@ -63,6 +75,11 @@ static void minic_ast_shape_census(const MinicC0Program *program, const char *st
         function_params,function_0,function_1,function_2,function_3to4,
         function_5to8,function_9plus,function_specialized,function_symbolic_used,
         function_boolean_used,sizeof(MinicFunctionType),program->function_type_count,
+        program->function_type_capacity, function_type_params, function_type_0to2,
+        function_type_3to8, function_type_9plus,
+        sizeof(MinicRecord),program->record_capacity,
+        sizeof(MinicLocal),program->local_capacity,
+        sizeof(MinicStatement),program->statement_capacity,
         program->record_count,program->local_count,program->statement_count);
 }
 '''
