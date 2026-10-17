@@ -157,7 +157,9 @@ def main():
     for name,source_file,target_file in (("main",asm,main_obj),("start",crt_asm,crt_obj)):
         call([wrapper/"minic-as","-march=rv64gc","-mabi=lp64d",
               "-o",target_file,source_file],env,out/"logs"/("native-"+name+"-as.log"),timeout=180)
-    call([wrapper/"minic-ld","-melf64lriscv","-Ttext=0x10000","-e","_start",
+    # Match the already certified MiniLD A2 static-link CLI; -Ttext= is a
+    # GNU-only short flag and is intentionally unsupported by this MiniLD.
+    call([wrapper/"minic-ld","-melf64lriscv","-static","-e","_start",
           "-o",final,crt_obj,main_obj],env,out/"logs/native-minild-final.log",timeout=180)
     call(["qemu-riscv64",final],env,out/"logs/native-runtime-42.log",
          timeout=45,expected=42)
