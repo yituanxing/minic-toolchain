@@ -1269,20 +1269,117 @@ static bool minic_specialize_inline_symbolic_calls(
             free(symbolic_expression_owners);
             symbolic_expression_owners = NULL;
         }
+        /* Indexed CALLs are grouped by their *canonical* source owner.
+         * Shared, ambiguous and orphan CALLs are retained in the common bucket.
+         * Retain ascending ExpressionId order using a two-way merge.
+         * All storage is optional; any OOM falls back to the original scan.
+         * Late appends are scanned separately using the live expression_count. */
+        size_t *symbolic_source_bucket_offsets = NULL;
+        size_t *symbolic_source_bucket_calls = NULL;
+        size_t *symbolic_source_bucket_writes = NULL;
+        bool symbolic_source_buckets_ready = false;
+        if (symbolic_owner_index_ready &&
+            symbolic_owned_expression_count != 0U &&
+            original_function_count <= SIZE_MAX / sizeof(size_t) - 2U &&
+            symbolic_owned_expression_count <= SIZE_MAX / sizeof(size_t)) {
+            size_t n = original_function_count;
+            size_t idx;
+            symbolic_source_bucket_offsets = (size_t *)calloc(
+                n + 2U, sizeof(*symbolic_source_bucket_offsets));
+            symbolic_source_bucket_calls = (size_t *)malloc(
+                symbolic_owned_expression_count * sizeof(*symbolic_source_bucket_calls));
+            symbolic_source_bucket_writes = (size_t *)malloc(
+                (n + 1U) * sizeof(*symbolic_source_bucket_writes));
+            if (symbolic_source_bucket_offsets != NULL &&
+                symbolic_source_bucket_calls != NULL &&
+                symbolic_source_bucket_writes != NULL) {
+                for (idx = 0U; idx < symbolic_owned_expression_count; ++idx) {
+                    if (program->expressions[idx].kind == MINIC_EXPRESSION_CALL) {
+                        MinicFunctionId owner = symbolic_expression_owners[idx];
+                        size_t bucket = (owner != MINIC_FUNCTION_INVALID && owner < n)
+                                            ? (size_t)owner : n;
+                        ++symbolic_source_bucket_offsets[bucket + 1U];
+                    }
+                }
+                for (idx = 0U; idx < n + 1U; ++idx) {
+                    symbolic_source_bucket_offsets[idx + 1U] +=
+                        symbolic_source_bucket_offsets[idx];
+                }
+                (void)memcpy(symbolic_source_bucket_writes,
+                             symbolic_source_bucket_offsets,
+                             (n + 1U) * sizeof(*symbolic_source_bucket_writes));
+                for (idx = 0U; idx < symbolic_owned_expression_count; ++idx) {
+                    if (program->expressions[idx].kind == MINIC_EXPRESSION_CALL) {
+                        MinicFunctionId owner = symbolic_expression_owners[idx];
+                        size_t bucket = (owner != MINIC_FUNCTION_INVALID && owner < n)
+                                            ? (size_t)owner : n;
+                        symbolic_source_bucket_calls[
+                            symbolic_source_bucket_writes[bucket]++] = idx;
+                    }
+                }
+                symbolic_source_buckets_ready = true;
+            }
+        }
+        free(symbolic_source_bucket_writes);
+        if (!symbolic_source_buckets_ready) {
+            free(symbolic_source_bucket_offsets);
+            free(symbolic_source_bucket_calls);
+            symbolic_source_bucket_offsets = NULL;
+            symbolic_source_bucket_calls = NULL;
+        }
         (void)original_function_count;
         for (caller_index = 0U;
              caller_index < program->function_count;
              ++caller_index) {
             const MinicFunction caller = program->functions[caller_index];
-            size_t nested_expression_index;
+            size_t symbolic_full_cursor = 0U;
+            size_t symbolic_own_cursor = 0U;
+            size_t symbolic_own_end = 0U;
+            size_t symbolic_common_cursor = 0U;
+            size_t symbolic_common_end = 0U;
+            size_t symbolic_late_cursor = symbolic_owned_expression_count;
 
             if (!caller.is_integer_specialization ||
                 caller.specialization_source >= program->function_count) {
                 continue;
             }
-            for (nested_expression_index = 0U;
-                 nested_expression_index < program->expression_count;
-                 ++nested_expression_index) {
+            if (symbolic_source_buckets_ready) {
+                size_t n = original_function_count;
+                if (caller.specialization_source < n) {
+                    symbolic_own_cursor =
+                        symbolic_source_bucket_offsets[caller.specialization_source];
+                    symbolic_own_end =
+                        symbolic_source_bucket_offsets[caller.specialization_source + 1U];
+                }
+                symbolic_common_cursor = symbolic_source_bucket_offsets[n];
+                symbolic_common_end = symbolic_source_bucket_offsets[n + 1U];
+            }
+            for (;;) {
+                size_t nested_expression_index;
+                if (!symbolic_source_buckets_ready) {
+                    if (symbolic_full_cursor >= program->expression_count) {
+                        break;
+                    }
+                    nested_expression_index = symbolic_full_cursor++;
+                } else if (symbolic_own_cursor < symbolic_own_end ||
+                           symbolic_common_cursor < symbolic_common_end) {
+                    if (symbolic_common_cursor == symbolic_common_end ||
+                        (symbolic_own_cursor < symbolic_own_end &&
+                         symbolic_source_bucket_calls[symbolic_own_cursor] <
+                             symbolic_source_bucket_calls[symbolic_common_cursor])) {
+                        nested_expression_index =
+                            symbolic_source_bucket_calls[symbolic_own_cursor++];
+                    } else {
+                        nested_expression_index =
+                            symbolic_source_bucket_calls[symbolic_common_cursor++];
+                    }
+                } else if (symbolic_late_cursor < program->expression_count) {
+                    /* The old loop observes append-only expressions, including
+                     * ones created while processing this same caller. */
+                    nested_expression_index = symbolic_late_cursor++;
+                } else {
+                    break;
+                }
                 const MinicExpression *nested =
                     &program->expressions[nested_expression_index];
                 MinicFunctionId current_id;
@@ -1400,6 +1497,8 @@ static bool minic_specialize_inline_symbolic_calls(
                             symbolic_known,
                             symbolic_expression,
                             &variant_id)) {
+                        free(symbolic_source_bucket_offsets);
+                        free(symbolic_source_bucket_calls);
                         free(symbolic_expression_owners);
                         return false;
                     }
@@ -1412,6 +1511,8 @@ static bool minic_specialize_inline_symbolic_calls(
                 program->expressions[nested_expression_index].value.call.function_id = variant_id;
             }
         }
+        free(symbolic_source_bucket_offsets);
+        free(symbolic_source_bucket_calls);
         free(symbolic_expression_owners);
     }
 
