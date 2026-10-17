@@ -18,6 +18,11 @@ command -v qemu-riscv64 >/dev/null
 mv "$bin/minic" "$bin/minic.stage0"
 mv "$bin/minic-cc" "$bin/minic-cc.stage0"
 cp "$guest" "$bin/minic-cc.stage2.rv64"
+# actions/upload-artifact -> download-artifact strips executable bits.
+# qemu-riscv64 requires executable permission on the guest ELF (otherwise
+# exits 1 without diagnostic even for --help).
+chmod 755 "$bin/minic-cc.stage2.rv64"
+test -x "$bin/minic-cc.stage2.rv64"
 printf '%s  %s\n' "$sha2" "$bin/minic-cc.stage2.rv64" | sha256sum -c -
 cat > "$bin/minic-cc" <<'SH'
 #!/bin/sh
