@@ -118,7 +118,8 @@ class Sampler:
                 if self.cgroup_baseline is not None and self.peak_cgroup else None),
             "cgroup_anon_peak_above_start_kib":(
                 (self.peak_cgroup_anon-self.anon_baseline)//1024
-                if self.anon_baseline is not None and self.peak_cgroup_anon else None)
+                if (self.anon_baseline is not None and
+                    self.peak_cgroup_anon >= self.anon_baseline) else None)
         }
 
 def main():
@@ -130,6 +131,7 @@ def main():
     workers=[int(k.strip()) for k in args.workers.split(",")]
     if sorted(workers)!=[4,7]:
         raise ValueError("this qualification compares four and seven worker arms exactly once each")
+    worker_order=tuple(workers)  # Keep exact arm order: loop variable below shadows workers.
     corpus=args.corpus.resolve()
     driver=args.driver.resolve()
     if not driver.is_file() or not (driver.parent/"minic-cc").is_file():
@@ -187,7 +189,7 @@ def main():
         "fixed_software_sha256":mod.digest(driver.parent/"minic-cc"),
         "fixed_corpus_sha256":mod.digest(corpus/"inputs.sha256"),
         "run_order":("%d_then_%d; sequential, not interleaved; scheduling/caches can influence timing"%
-                     (workers[0],workers[1])),
+                     worker_order),
         "same_assembly":matches,
         "elapsed_4_ms":left["elapsed_wall_ms"],
         "elapsed_7_ms":right["elapsed_wall_ms"],
