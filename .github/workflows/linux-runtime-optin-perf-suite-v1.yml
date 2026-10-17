@@ -697,6 +697,9 @@ jobs:
       # Consume independently certified 30/30 Stage2-built tool suite.
       # Prove runtime behavior and actual MiniAS/MiniLD output, not just
       # Stage2 compilation of the toolchain C source.
+      # Also test Stage2-built MiniNM against GNU ELF32/ELF64 and thin
+      # archive symbol oracles, and MiniStrip against GNU ELF32/64 rules.
+      # Keep all-Mini PP/CC/AS/LD exit42 as a separate required gate.
       - name: Restore eight Stage2-built native toolchain executables
         if: contains(github.event.head_commit.message, '[minic-bootstrap-stage2-native-runtime]')
         uses: actions/download-artifact@v4
@@ -736,7 +739,7 @@ jobs:
             | tee "$GITHUB_WORKSPACE/build/bootstrap-stage2-native/verdict.log"
           grep -Fq 'BOOTSTRAP_ALL_MINI_C_CHAIN=PASS Stage2_built_MiniPP=true' \
             "$GITHUB_WORKSPACE/build/bootstrap-stage2-native/verdict.log"
-          grep -Fq 'BOOTSTRAP_STAGE2_NATIVE_RUNTIME=PASS' \
+          grep -Fq 'BOOTSTRAP_STAGE2_NATIVE_RUNTIME=PASS tools=8 suites=8 runtime_chain=42 all_mini_pp_cc_as_ld=true nm_strip_oracles=true' \
             "$GITHUB_WORKSPACE/build/bootstrap-stage2-native/verdict.log"
 
       - name: Preserve Stage2-built native CLI runtime and differential evidence
