@@ -33,8 +33,11 @@
 # Exact frozen first500 #39002211001 PASS (500/500 .s, 1.07580x,
 # 289603.901ms->269198.125ms), four-TU paired+RSS #39002084966 PASS,
 # synthetic 0/1/2/8/9/63/64 and 65-reject #39002498179 PASS.
-# New ast.h SHA below is SOURCE ID only. Full 2064 GNU/QEMU P1 not yet
-# certified for this newest candidate: rerun on all seven immutable shards.
+# New ast.h SHA below authenticates current source. FULL 2064 GNU/QEMU P1
+# #39002638516 SUCCESS: 7/7 Linux shards, GNU Link, QEMU P1 12/12
+# (COHORT_RESULT=PASS scope=FULL_C_UNIVERSE); fixed SHA mismatch from
+# obsolete first attempt #39002613400. Source identity != test execution:
+# evidence is the actual run, not the SHA manifest.
 d1b8a54a26e933b9f40438d23bb9001bc632408e src/compiler/compiler.c
 1ab6f1d2d587e6008d7224b10b1638c9887bac18 src/core/core_lower.c
 a8418e45608310687e3d6a1e96da79ca49135870 src/core/core_lower_asm.c
