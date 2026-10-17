@@ -488,6 +488,8 @@ def main():
                         help="Prior CI evidence directory containing stage3/summary.json, s/ and o/")
     parser.add_argument("--link-only", action="store_true", help="Link certified Stage3 77-object cohort only")
     parser.add_argument("--musl-build", type=Path, default=None, help="Previously built pinned RV64 static musl seed")
+    parser.add_argument("--musl-headers", type=Path, default=None,
+                        help="Headers from exactly the same pinned musl producer as --musl-build")
     parser.add_argument("--probe-only", default=None,
                         help="Comma-separated real production C units for native PP/CC/AS triage")
     args = parser.parse_args()
@@ -498,6 +500,19 @@ def main():
     artifact = args.toolchain.resolve()
     seed = verify_seed(stage2, artifact)
     hdr, libraries = prebuilt_runtime()
+    if args.musl_headers is not None:
+        if args.musl_build is None:
+            raise RuntimeError("musl headers require the matching musl runtime seed")
+        include = args.musl_headers.resolve()
+        for required in ("stdio.h", "sys/stat.h", "errno.h", "ctype.h"):
+            if not (include / required).is_file():
+                raise RuntimeError("MUSL_HEADERS_INCOMPLETE " + required)
+        if include.parent.parent.parent != args.musl_build.resolve().parent:
+            # Path join: musl-seed/sysroot/usr/include -> musl-seed/musl-build
+            raise RuntimeError("MUSL_HEADERS_RUNTIME_DIFFERENT_SEEDS")
+        hdr = (hdr[0], include)
+        print("FULL_NATIVE_HEADERS=musl matching_musl_runtime=true external_GCC_builtin_headers=true",
+              flush=True)
     print("FULL_NATIVE_SEED=PASS tools=9 source_tus=%d stage2_sha=%s"
           " external_runtime=prebuilt_cross_libc_crt_libgcc_gcc_builtin_headers" %
           (len(all_sources), sha(stage2)), flush=True)
@@ -513,8 +528,13 @@ def main():
         rounds(seed, sources, selected, hdr, libraries, out, args.workers, probe=True)
     else:
         link_libs = musl_runtime(args.musl_build, libraries) if args.musl_build else libraries
+        # A glibc-preprocessed Stage3 object is not a musl-header ABI proof.
+        # Do not reuse the old glibc objects even when source names match.
+        resume = None if args.musl_headers is not None else args.resume_stage3
+        if args.musl_headers is not None:
+            print("FULL_NATIVE_CACHE_REUSE=DISABLED why=glibc_to_musl_header_ABI_change",flush=True)
         rounds(seed, sources, all_sources, hdr, libraries, out, args.workers,
-               resume=args.resume_stage3, link_libraries=link_libs)
+               resume=resume, link_libraries=link_libs)
 
 
 if __name__ == "__main__":
