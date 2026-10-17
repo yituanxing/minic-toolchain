@@ -16,7 +16,9 @@
 - ctype 2.670→2.521ms，短命毫秒级噪声意义低。
 **五 owner 中位编译时间相加 3885.191→3472.217ms，1.11894×（累计用时减少10.63%）**。这些是特定 hot owner，不是任意 500 TU 或七路 Kbuild speedup；一次进程 RSS 不能直接称全 Linux 内存下降。
 
-**扩大 frozen first500 [#39008901495](https://github.com/yituanxing/minic-toolchain/actions/runs/39008901495)**：使用现有同-runner 4-worker balanced differential，500/500 `.s` 必须 byte-identical，真实累计耗时/回退与 8×复测以后，才讨论正式合入；本阶段无新生成 production `src` 代码，无 2064 Linux+GNU Link+QEMU P1 新认证。若首次 sample 正面且有显著收益，将进一步判定是不是值得承担 per-Function malloc 与签名 setter 语义变化；若回退则审查 malloc 热点，考虑稳定 arena/合适 hybrid，不无故升级到 full run。
+**扩大 frozen first500 [#39008901495](https://github.com/yituanxing/minic-toolchain/actions/runs/39008901495) SUCCESS**：沿用 existing CI same-runner 4-worker、250/250 balanced order，SHA 冻结 500 个 GNU Kbuild `.i`，**500/500 byte-identical `.s`**；baseline **336058.147ms**、candidate **316391.869ms**、**1.06216× 提速，相同 500 编译工作累计用时减少 5.852%（19.666 秒）**；单 TU 倍率中位数 **1.06065×**，仅 **20/500** 单次 wall 回退；这是本轮不同时间段的新基线，不能与其它优化的加速比直接相乘。近 10000 Function/TU 额外 malloc 后依然取得 500 编译总用时改进，证明“所有额外 malloc 必然导致慢”并不符合这些输入的实际观测，但尚需 full kernel link+QEMU 安全认证。
+
+**回退细查而非自动认定噪声：** first500 worst 8：`fs/nfs/client.o` +137.496ms、`kernel/cgroup/legacy_freezer.o` +59.402ms、`kernel/events/callchain.o` +58.773ms、`fs/nfs/blocklayout/extent_tree.o` +37.484ms、`init/do_mounts_initrd.o` +26.707ms、`kernel/bpf/bpf_task_storage.o` +25.130ms、`fs/nfs_common/common.o` +16.960ms、`kernel/time/vsyscall.o` +11.513ms。对这 8 个单次回退 + BTF/fsync 正对照各进行 old/new **8×** 交错重新统计 `wall/user/sys/MAD` 的独立 [CI lane #390090?](https://github.com/yituanxing/minic-toolchain/actions/workflows/linux-runtime-optin-perf-suite-v1.yml) 已设置；只有同样配置 CPU 和 Wall Time 都稳定回退，才定义成有疑点的真实负优化。生产 `src` 仍未合入该候选，需以 CI 实际状态为准。
 
 ## 空间方向第二轮：MinicType 字段排布，消除 ABI 对齐空洞（2026-10-17）
 
