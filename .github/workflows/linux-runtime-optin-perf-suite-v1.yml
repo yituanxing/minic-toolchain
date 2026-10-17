@@ -741,6 +741,8 @@ jobs:
           path: build/linux-perf-corpus
           key: linux-6.6.143-first500-rv64-v1-${{ hashFiles('tests/external/linux/batch_probe.sh', 'tests/external/linux/probe.sh', 'tests/external/linux/replay-indices.txt') }}
 
+      # Post packed-CALL + 72-byte MinicType current Function arity census;
+      # existing seven-owner SHA-frozen inputs, no new compiler algorithm.
       # Read-only current-source AST shape census: no source algorithm
       # changes, exact same SHA-pinned first500 .i and .s identity gate.
       - name: Measure current AST payload sizes, call ratio, and actual peak RSS
