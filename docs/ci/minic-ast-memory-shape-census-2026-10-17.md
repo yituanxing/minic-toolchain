@@ -63,3 +63,22 @@ Regression triage [CI #39002748529](https://github.com/yituanxing/minic-toolchai
 No defensible exact count of successful optimizations. The next **5–8 disciplined candidate/screening rounds** are plausible from the currently *unresolved* structures: Expression footprint, Function cold arrays, layout, new phase attribution after memory changes, and remaining non-repeated Symbolic/Parser/Codegen algorithms. That number is an **exploration budget, not a guarantee of 5–8 accepted patches or of cumulative speedup**. Expect most micro-candidates to fail promotion gates as before.
 
 **Stop/rotation rule:** Any proposal with real 500-TU gain <~1–2% or unstable CPU/RSS trade-offs is not promoted by default; promote modest wins only with unusually strong multi-scale evidence and runtime safety. If 3 consecutive well-attributed distinct candidates fail expected impact, re-profile the full current source instead of blindly drafting more hashes/indices. Archive negative results and never reopen without an updated baseline plus changed cost model.
+
+## Second space optimization: MinicType layout (2026-10-17)
+
+This is a **distinct candidate** from packed CALL IDs. Keeping `MinicType` member types and all four 64-bit ID fields unchanged, reordering 1/4-byte flags and enums ahead of the 64-bit fields eliminates member alignment holes. The single production change is `src/frontend/type.h` [a6186876](https://github.com/yituanxing/minic-toolchain/commit/a6186876c684b0cbe945b77dc5c96ebce6f6d6fb).
+
+Real host ABI `sizeof` measured on same runner in original and candidate arms:
+- `MinicType`: 80 → **72 bytes**
+- `MinicFunction`: 6536 → **6016 bytes** (520 bytes per value/allocated capacity slot)
+- `MinicFunctionType`: 5216 → **4696 bytes**
+- `MinicExpression` after previously packed CALL IDs: 424 → **416 bytes**
+
+Five first-stage Linux Kbuild owner A/B [#39005831148](https://github.com/yituanxing/minic-toolchain/actions/runs/39005831148) SUCCESS, `.s` 5/5 identical, `make check-ast-contract` PASS. Sum of five independent per-owner wall medians 3649.556→3555.644 ms (1.02641x); peak RSS declined in all five once-run samples, e.g. BTF 321656→306184 KiB, FSYNC 189368→180524 KiB.
+
+500-owner same-runner paired test [#39005940554](https://github.com/yituanxing/minic-toolchain/actions/runs/39005940554) SUCCESS, all 500 `.s` exactly identical; balanced 4-worker old total **348126.483ms**, candidate total **341344.660ms**, **1.01987x speedup / 1.948% cumulative time reduction**. Single-pass 107 of 500 candidate owner wall times looked worse. This is a *one-iteration* regression count, not per-owner CPU certainty. Ten owners selected from eight worst single-shot regressions plus two positive controls were each retested eight times per arm using the same paired CPU/user/sys/MAD tool [#39006242085](https://github.com/yituanxing/minic-toolchain/actions/runs/39006242085) SUCCESS, all 10 owner median wall times improved, **0/10 reproduced dual wall+CPU slowdowns**. The other 99 single-pass outliers were not individually retested; preserve them in first500 differential artifact.
+
+Full production certification [#39006469186](https://github.com/yituanxing/minic-toolchain/actions/runs/39006469186) **SUCCESS**, seven shards 2064/2064 C, GNU link, QEMU P1 12 syscall Python-era oracle PASS; focused suite [#39006469220](https://github.com/yituanxing/minic-toolchain/actions/runs/39006469220) SUCCESS with 8 independent checks.
+
+**Decision: `minic-type-field-layout-72-v1 = integrated / runtime-certified / do-not-repeat`.** This is accepted near the usual minimum gain threshold because it preserves all field types/semantics, structurally saves 8 bytes per MinicType across the full compiler, yields observable RSS gains, and survives 500 files + 10-owner regression rechecks + 2064/QEMU. Next candidates should be chosen from a *new current-baseline CPU/RSS profile* rather than attempting another reorder of the same fields; notably Function parameter/fact storage remains large even after this change.
+
