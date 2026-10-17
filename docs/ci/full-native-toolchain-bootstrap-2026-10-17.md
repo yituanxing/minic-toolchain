@@ -1,6 +1,6 @@
 # 现役 9 工具原生全链自举：Stage2 → Stage3 → Stage4
 
-状态：**已有九工具 Stage3→Stage4 的逐字节固定点证据（77/77、9/9，未调用 GCC/AS/LD）；正在进一步验证匹配 musl 头文件、真实工具链运行时及绿色 CI。不能把之前的 GNU 辅助 Stage2 固定点冒称原生全链自举，也不能把 GNU 预生成运行库称为已原生构建。**
+状态：**Stage3→Stage4 九工具在匹配 musl 1.2.5 标准头文件与 CRT/libc 的环境下全链通过（CI #39058935623 SUCCESS）**：77/77 真实生产 C TU 预处理、编译、汇编，两阶段各 9/9 原生静态 ELF；`.i/.s/.o` 固定点 77/77，九工具 Stage3/4 ELF SHA256 一致，可加载映像一致；Stage4 自制工具经 QEMU exit42、Stage4 Driver 真实全链 exit42。`strace` 确认 Stage3/4 的 GCC/GNU AS/GNU LD/objcopy 执行数 0。**这仍是基于 GNU 历史生产的 musl/CRT/libgcc 与 GCC 内建头文件二进制/头文件种子，不是运行库从源码完全原生自举。**
 
 ## 输入与历史事实
 
@@ -32,7 +32,7 @@
 **失败关闭规则**：脚本自身仅执行 `qemu-riscv64` 对原生工具的调用；
 Runner 通过 `strace -f -e execve` 对完整脚本记录执行族，禁止任何 GCC/GNU AS/GNU LD/GNU objcopy 回退。记录 `full-native/execve.log`、`full-native/verdict.log`、逐 TU 源和产物 SHA、stderr 和首失败。
 
-注意：**Stage3/4 目前仍复用外部预构建的 GNU 目标头文件、glibc、CRT 与 libgcc 静态归档作为二进制种子。** 这意味着若门禁通过，只能宣称“Stage3/4 自身构建没有调用 GCC、GNU AS/LD”，并不能宣称“从源码独立构建了 libc/CRT/libgcc”或“所有输入不含 GNU 来源”。真实的完全脱离 GCC 需要后续用 Mini 全链重建这一层运行库（可考虑仓库现有 musl 静态集成用例），并用自己的 freestanding 标准头替代 GCC 内建头。
+注意：**已通过的 Stage3/4 使用匹配 musl 1.2.5 的标准头文件 + 历史外部构建的 musl libc.a/CRT；另依赖外部 libgcc.a 与 GCC 目标内建头文件。glibc 的静态链接实验因 SHT_GROUP 被放弃，不属于最终成功链路。** 这意味着若门禁通过，只能宣称“Stage3/4 自身构建没有调用 GCC、GNU AS/LD”，并不能宣称“从源码独立构建了 libc/CRT/libgcc”或“所有输入不含 GNU 来源”。真实的完全脱离 GCC 需要后续用 Mini 全链重建这一层运行库（可考虑仓库现有 musl 静态集成用例），并用自己的 freestanding 标准头替代 GCC 内建头。
 
 ## 实验过程与禁止回退
 
@@ -52,11 +52,9 @@ Runner 通过 `strace -f -e execve` 对完整脚本记录执行族，禁止任�
 
 | #39058200575 | **正确 musl 头文件 + musl CRT/libc 的全量 Stage3 重编译 76/77 PASS**。唯一剩余的生产源码 `tools/minic-as/main.c` 在 MiniC -S 报错，根因是该源依赖 GNU/glibc `<elf.h>` 导出的 RISC-V `EF_RISCV_FLOAT_ABI_*`，musl 标准头没有这些 GNU 扩展；不是 76 个工具源的独立故障。保留本轮 76 个 .i/.s/.o SHA 产物供有证据恢复。 |
 | #39058752686 + #39058810567 | **MiniAS 跨 libc ELF ABI 修正已验证**：项目自己使用由 RISC-V ELF psABI 定义的常量值，不依赖 libc `<elf.h>` 的扩展；修复并发修改所致枚举与宏定义重复后，已有生产源码 `tools/minic-as/main.c` 在匹配 musl 头文件下 **原生 PP→CC→AS 单文件 PASS**、聚焦回归 PASS，未调用 GNU 编译/汇编/链接。 |
-| #39058935623 | **继续真实九工具全链**：已启动复用前次 `76/77` 匹配 musl 头文件的 Stage3 SHA 证明对象，仅重新编译变更的 MiniAS 生产 TU，然后九工具 Stage3 原生链接、Stage4 全 77 TU 编译与九工具链接、固定点和 Stage4 新制 PP/CC/AS/LD/Driver → QEMU exit42。未出最终结果前不得标记全链 musl ABI PASS。 |
+| #39058935623 | **SUCCESS，匹配 musl ABI 的九工具 Stage3/Stage4 原生全链正式通过**：`REUSE_STAGE3_EVIDENCE=PASS certified=76`，逐 TU 重新由 MiniPP 计算 `.i` 与既有 SHA 对比，剩余 MiniAS 修复源重新编译；Stage3 **77/77 TU + 9/9 原生 ELF**；Stage4 **77/77 TU + 9/9 原生 ELF**；`FULL_NATIVE_FIXEDPOINT_TUS=PASS count=77`、九个 ELF SHA 完全一致、MiniObjcopy 可加载映像一致；`FULL_NATIVE_STAGE4_RUNTIME=PASS`、`FULL_NATIVE_STAGE4_DRIVER=PASS`（两者都经 QEMU exit42）；`FULL_NATIVE_TOOLCHAIN=PASS` 且 `FULL_NATIVE_GNU_PROCESS=PASS`，无 GCC/GNU AS/GNU LD 进程执行。**该结果不涵盖 musl/libgcc/CRT 从 C 源码的原生重建。** |
 
 每次实验按 `stderr→源 .i→标准/ABI 前提→最小有界回放→全量` 调试，不能重复修改已经证实正确的 47 个编译器生产 C 源。
-
-| #musl-abi-full | **已提交完整 77 TU matched-musl ABI 原生全链复验**，要求 Stage3/Stage4 九工具编译、MiniLD 链接、逐字节固定点，以及新增 QEMU 42/Driver 运行时；禁用 GCC/AS/LD 进程，外部 musl seed 单独披露。|
 
 ## 接下来严格验收
 
@@ -68,7 +66,7 @@ Runner 通过 `strace -f -e execve` 对完整脚本记录执行族，禁止任�
 
 ### 常用链接（准确记录）
 
-- 当前匹配 musl 头文件的九工具完整重试：`https://github.com/yituanxing/minic-toolchain/actions/runs/39058935623`
+- **匹配 musl 头文件 + 九工具 Stage3/Stage4 完整全链 GREEN**：`https://github.com/yituanxing/minic-toolchain/actions/runs/39058935623`
 - MiniAS musl 头文件源码层单 TU PASS：`https://github.com/yituanxing/minic-toolchain/actions/runs/39058810567`
 - Stage3/Stage4 实际 77/77 九工具固定点（原 CI gate 误报红）：`https://github.com/yituanxing/minic-toolchain/actions/runs/39057243168`
 - 采用匹配 musl 头文件的四 TU ABI 预检：`https://github.com/yituanxing/minic-toolchain/actions/runs/39057960530`
