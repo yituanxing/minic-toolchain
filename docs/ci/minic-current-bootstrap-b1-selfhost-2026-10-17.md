@@ -98,3 +98,40 @@ CI 保留两个**实际实验 Artifact**：`minic-current-bootstrap-b1-seed-v1`�
 同日已有七 TU 严格 A/B 确认 Core Reentry 稀疏语句遍历只有 **1.00674×**，已按 1.04× 门槛 STOP；新一轮 CPU 证据没有给出比自举更有价值、尚未尝试的确定性大收益算法。性能迭代先冻结，切换到当前代码的自举验证是合理的；不是宣称编译器已经达到理论最优。
 
 下一实际验收重点：**使用本轮 Stage2** 运行历史 `tests/compiler/c0/run-runtime.sh` 与 `tests/programs/c0/run.sh`，再推进 Lua/cJSON 等真实程序。随后单独考虑 Stage2 作为 Linux 编译器的可信正确性门槛，不因已通过 Stage0 MiniC 编译 Linux 就宣布 Stage2 已经能编译和运行完整 Linux。正式 GNU PP/AS 的完整 Linux 2064 + QEMU P1 已在 `#39036801157` 等运行中通过，但其编译器不是本轮 Stage2 产物，因此两份证据必须分开。
+
+## 5. 当前 Stage2 自举扩展到八个原生工具——首次真正联合运行（2026-10-17）
+
+**编译阶段 [#39042731803](https://github.com/yituanxing/minic-toolchain/actions/runs/39042731803) SUCCESS**：直接复用 #39040013459 已通过 47-TU 固定点的真实 RV64 Stage2 `minic-cc`（SHA256 `17e76f14befdd46b18d62b4ab90cbf15cd724e281b216039a252528208b6f94d`），**不是**重建另一台 host 编译器冒充 Stage2。通过 `Makefile` 的现有 `*_SOURCES` 成员以及真实 MiniELF 依赖组织并去重，共 **30 个不重复的真实 C 翻译单元**，全部由 GNU RISCV GCC **只做预处理**产生同一份 `.i`，再分别由 host Stage0 和 QEMU 中的 Stage2 生成 `.s`：**30/30 汇编 SHA 完全一致**。Stage2 产出的 30 TU 经 GNU AS/静态 GNU 链接成功生成 **8 个真正的 RV64 ELF**，逐一保存 SHA256：
+- `minic-cpp`（MiniPP）
+- `minic-as`（MiniAS）
+- `minic-ar`（MiniAR）
+- `minic-ld`（MiniLD）
+- `minic-objcopy`
+- `minic-nm`
+- `minic-strip`
+- `minic`（前端 Driver）
+
+本次 **不改变生产 C 实现**，也不激活历史已归档 workflow；全部通过现有 `perf500` 工作流的单一 Job，并复用原来的 Stage2 Artifact。
+
+**实际运行 [#39043906455](https://github.com/yituanxing/minic-toolchain/actions/runs/39043906455) SUCCESS**：再次下载上述 Stage2 编译出的原生工具 ELF（严格对照 artifact `summary.json` 中的 8 个 SHA），每个工具以 `qemu-riscv64` 执行。五套未改动的**现有正式功能测试**全部真实通过：`tests/preprocessor/run-a0.sh`（MiniPP→GNU -E 差分），`tests/assembler/run-a0.sh`（MiniAS 汇编/重定位），`tests/archiver/run-a0.sh`（MiniAR GNU byte-exact archive），`tests/linker/run-a0.sh`（Stage2-built MiniAS 对象→Stage2-built MiniLD `-r` 链接），`tests/objcopy/run-a0.sh`（MiniObjcopy→GNU objcopy binary 差分）。
+
+独立**端到端无 GNU AS/LD 的最小程序**证明：
+```
+GCC -E -P               （仅预处理固定 C 输入）
+     ↓
+QEMU / Stage2 MiniC      生成 main() { return 42; } 的 RV64 .s
+     ↓
+QEMU / Stage2 MiniAS     将 main.s + _start.s 汇编成 RV64 ELF .o
+     ↓
+QEMU / Stage2 MiniLD     -static -e _start 生成最终 RV64 ELF ET_EXEC
+     ↓
+qemu-riscv64             Linux exit syscall 93，实测退出码 42 ✅
+```
+CI 原样输出：`BOOTSTRAP_NATIVE_MINI_CHAIN=PASS Stage2_MiniC=true Stage2_MiniAS=true Stage2_MiniLD=true runtime_exit=42 GNU_AS_LD=false` 和 `BOOTSTRAP_STAGE2_NATIVE_RUNTIME=PASS tools=8 suites=5 runtime_chain=42 evidence_sha=true`。
+
+**解释边界不能混淆：** 「Stage2 编译了其余八个原生工具的实现源码」≠「这八个工具的自身 ELF 最初不使用 GNU AS/LD/CRT」；本阶段 *构建工具自身* 仍用 GNU PP、GNU AS、GNU 静态链接/libc，避免同时切换太多变量。上述 `return 42` **消费程序**已真正做到 MiniAS+MiniLD 而非 GNU AS/LD，但源程序预处理仍是 GNU GCC。MiniNM、MiniStrip、Driver 本轮已由 Stage2 编译、链接、QEMU 启动，但**未通过独立完整功能门禁**；不能将 5 套完整功能测试虚报为 8/8 套。也尚未声称 Stage2 编译 2064 Linux、用 Stage2-built 整套工具编译 Linux、完全 GNU-free 或工具链第三级固定点。
+
+CI 初次回放 #39043130457 等失败经进一步证实是**Actions 下载 Artifact 将 ELF 执行权限从 `0755` 丢为 `0644`**，并非 Stage2 错编译或 MiniPP 逻辑故障：各工具 SHA 相同，下载后恢复 `+x` 即所有现有功能套件全部通过。端到端第一次还误传 MiniLD 不支持的 GNU `-Ttext`，后改为历史 A2 已验证的 MiniLD `-static -e _start`，无生产源码修改。保留上述失败记录，防止下次复刻环境/CLI 错误。
+
+**下一阶段是自举完整 Linux 路径与剩余工具验证，不是重开无意义性能优化。** 先让当前 Stage2 对真实 Linux GNU-Kbuild `.i` 的汇编和目标对象与 Stage0 匹配，然后用已有七路分片推进 Stage2 2064 + Linux 链接与 QEMU P1；再逐段把 GNU PP、AS、LD 等替换为已经通过单工具及小型联合门禁的 Stage2-built Mini 工具，收敛整条原生 Linux 构建链，而不是一次性宣称所有界面都消除了 GNU 依赖。
+
