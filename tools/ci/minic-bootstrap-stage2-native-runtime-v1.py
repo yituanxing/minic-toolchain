@@ -244,7 +244,25 @@ def main():
     driver_obj=driver_dir/"main.o"
     driver_elf=driver_dir/"native-driver-42.elf"
     driver_src.write_text("int main(void) { return 42; }\n")
-    call([wrapper/"minic","-c","-ffreestanding","-nostdinc",
+    # QEMU user mode passes the real guest ELF pathname as argv[0].
+    # Launching the host shell wrapper would make the guest driver resolve
+    # its siblings beside *artifact/output/bin/minic*, i.e. as foreign RV64
+    # ELFs that host execve cannot execute. Stage2 itself was not wrong.
+    # Provide an isolated guest-ELF directory with correctly dispatched
+    # host shebang sibling shims; no GNU compiler path is introduced.
+    driver_home=out/"native-driver-bin"
+    driver_home.mkdir(parents=True,exist_ok=True)
+    driver_guest_elf=driver_home/"minic"
+    driver_guest_elf.write_bytes((artifact/"bin"/"minic").read_bytes())
+    driver_guest_elf.chmod(0o755)
+    if hashfile(driver_guest_elf)!=report["binaries"]["minic"]["sha256"]:
+        raise RuntimeError("Stage2-built driver relocation changed ELF bytes")
+    for sibling in ("minic-cpp","minic-cc","minic-as","minic-ld"):
+        shim_source=wrapper/sibling
+        shim_target=driver_home/sibling
+        shim_target.write_bytes(shim_source.read_bytes())
+        shim_target.chmod(0o755)
+    call(["qemu-riscv64",driver_guest_elf,"-c","-ffreestanding","-nostdinc",
           "-o",driver_obj,driver_src],
          env,out/"logs/native-driver-compile.log",timeout=300)
     if not driver_obj.is_file() or driver_obj.stat().st_size < 64:
