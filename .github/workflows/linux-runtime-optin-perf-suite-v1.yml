@@ -863,6 +863,8 @@ jobs:
             if [[ "${{ contains(github.event.head_commit.message, '[minic-bootstrap-native-musl-probe]') }}" == true ]]; then
               probe_args+=(--musl-build "$GITHUB_WORKSPACE/build/bootstrap-stage2-native/musl-seed/musl-build")
             fi
+          elif [[ "${{ contains(github.event.head_commit.message, '[minic-bootstrap-musl-as-portability]') }}" == true ]]; then
+            probe_args=(--probe-only tools/minic-as/main.c)
           elif [[ "${{ contains(github.event.head_commit.message, '[minic-bootstrap-full-native-probe]') }}" == true ]]; then
             probe_args=(--probe-only src/core/core_ir.c,preprocessor/src/preprocessor.c,tools/minic-cpp/main.c,linker/src/linker.c)
           fi
@@ -890,6 +892,8 @@ jobs:
           test "$rc" -eq 0
           if [[ "${{ contains(github.event.head_commit.message, '[minic-bootstrap-native-link-only]') }}" == true ]]; then
             grep -Fq 'FULL_NATIVE_LINK_PROBE=PASS tool=minic-cpp' "$work/verdict.log"
+          elif [[ "${{ contains(github.event.head_commit.message, '[minic-bootstrap-musl-as-portability]') }}" == true ]]; then
+            grep -Fq 'FULL_NATIVE_PROBE=PASS source_tus=1' "$work/verdict.log"
           elif [[ "${{ contains(github.event.head_commit.message, '[minic-bootstrap-full-native-probe]') }}" == true ]]; then
             grep -Fq 'FULL_NATIVE_PROBE=PASS source_tus=4' "$work/verdict.log"
           else
