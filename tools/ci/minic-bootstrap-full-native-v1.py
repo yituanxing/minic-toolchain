@@ -59,9 +59,10 @@ def execute(argv, log, *, timeout=300, env=None, expected=0):
     log.parent.mkdir(parents=True, exist_ok=True)
     log.write_bytes(p.stdout + b"\n-- stderr --\n" + p.stderr)
     if expected is not None and p.returncode != expected:
-        raise RuntimeError("EXIT_%s expected=%s command=%s stderr=%s" %
-                           (p.returncode, expected, " ".join(args[:5]),
-                            p.stderr[-1100:].decode(errors="replace")))
+        raise RuntimeError("EXIT_%s expected=%s stderr=%s command=%s" %
+                           (p.returncode, expected,
+                            p.stderr[-1100:].decode(errors="replace"),
+                            " ".join(args[:5])))
     return round(time.monotonic() - start, 3)
 
 
@@ -154,7 +155,7 @@ def source_key(source):
     return source.replace("/", "__").replace(".", "_")
 
 
-def rounds(binaries, sources, all_sources, hdr, libraries, out, workers):
+def rounds(binaries, sources, all_sources, hdr, libraries, out, workers, probe=False):
     env = dict(os.environ, **CFLAGS)
     for stage in (3, 4):
         name = "stage" + str(stage)
@@ -176,7 +177,17 @@ def rounds(binaries, sources, all_sources, hdr, libraries, out, workers):
         # include lookup is directory-relative, so put the pinned native macro
         # definitions DIRECTLY in this overlay rather than #include "/abs".
         overlay.write_text(macros.read_text() +
-                           "\n#undef __riscv_float_abi_soft\n"
+                           "\n#define __STRICT_ANSI__ 1\n"
+                           "#undef __CHAR_UNSIGNED__\n"
+                           "#undef __WCHAR_TYPE__\n"
+                           "#define __WCHAR_TYPE__ int\n"
+                           "#undef __SIZEOF_WCHAR_T__\n"
+                           "#define __SIZEOF_WCHAR_T__ 4\n"
+                           "#undef __WCHAR_MAX__\n"
+                           "#define __WCHAR_MAX__ 2147483647\n"
+                           "#undef __WCHAR_MIN__\n"
+                           "#define __WCHAR_MIN__ (-2147483647-1)\n"
+                           "#undef __riscv_float_abi_soft\n"
                            "#define __riscv_float_abi_double 1\n"
                            "#define __riscv_flen 64\n")
         completed = []
@@ -219,6 +230,9 @@ def rounds(binaries, sources, all_sources, hdr, libraries, out, workers):
         if failures:
             raise RuntimeError("%s_PREPROCESS_COMPILE_ASSEMBLE blockers=%d first=%s" %
                                (name, len(failures), failures[0]))
+        if probe:
+            print("FULL_NATIVE_PROBE=PASS source_tus=%d stage3_mini_pp_cc_as=true" % len(completed), flush=True)
+            return
         if stage == 4:
             earlier = json.loads((out / "stage3/summary.json").read_text())
             byname = {row["source"]: row for row in earlier["rows"]}
@@ -280,6 +294,8 @@ def main():
     parser.add_argument("--toolchain", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--workers", type=int, choices=(1, 2, 4), default=4)
+    parser.add_argument("--probe-only", default=None,
+                        help="Comma-separated real production C units for native PP/CC/AS triage")
     args = parser.parse_args()
     out = args.out.resolve()
     out.mkdir(parents=True, exist_ok=True)
@@ -291,7 +307,13 @@ def main():
     print("FULL_NATIVE_SEED=PASS tools=9 source_tus=%d stage2_sha=%s"
           " external_runtime=prebuilt_cross_libc_crt_libgcc_gcc_builtin_headers" %
           (len(all_sources), sha(stage2)), flush=True)
-    rounds(seed, sources, all_sources, hdr, libraries, out, args.workers)
+    if args.probe_only is not None:
+        selected = args.probe_only.split(",")
+        if not selected or len(set(selected)) != len(selected) or any(x not in all_sources for x in selected):
+            raise RuntimeError("invalid real production probe source selection")
+        rounds(seed, sources, selected, hdr, libraries, out, args.workers, probe=True)
+    else:
+        rounds(seed, sources, all_sources, hdr, libraries, out, args.workers)
 
 
 if __name__ == "__main__":
