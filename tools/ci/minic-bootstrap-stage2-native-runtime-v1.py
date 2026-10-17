@@ -86,15 +86,42 @@ def main():
       ("minild-a0","tests/linker/run-a0.sh",{"RISCV_AS":str(wrapper/"minic-as")}),
       ("miniobjcopy-a0","tests/objcopy/run-a0.sh",{})
     ]
-    results={}
+    # Distinguish MiniPP simple CLI and '-x c' handling, plus short/long
+    # source paths. Do not let a failed gate conceal every other native tool.
+    diag=out/"diagnostics"
+    diag.mkdir(parents=True,exist_ok=True)
+    source=diag/"input.c"
+    source.write_text("int plain = 7;\\n".replace("\\\\n","\\n"))
+    runs=[]
+    for key,args_ in (
+        ("basic",["-E","-P","-undef","-nostdinc"]),
+        ("x_c",["-E","-P","-undef","-nostdinc","-x","c"]),
+    ):
+        output=diag/(key+".i")
+        argv=[wrapper/"minic-cpp",*args_,"-o",output,source]
+        try:
+            sec=call(argv,env,out/"logs"/("minipp-"+key+".log"),timeout=90)
+            status="PASS"
+        except RuntimeError as exc:
+            sec=None
+            status="FAIL:"+str(exc)[-400:]
+        runs.append({"case":key,"status":status,"seconds":sec})
+        print("BOOTSTRAP_NATIVE_MINIPP_DIAG case=%s status=%s"%(key,status),flush=True)
+    results={"minipp-argv-diagnostic":{"cases":runs}}
+    failures=[]
     for key,test,extra in suites:
         print("BOOTSTRAP_NATIVE_SUITE=START case="+key,flush=True)
         # Trace shell assertions so an existing silent set -e failure has a
         # precise command/line in the retained artifact, not a guessed bug.
         shell_args=["sh","-x",test] if key=="minipp-a0" else ["sh",test]
-        sec=call(shell_args,{**env,**extra},out/"logs"/(key+".log"),timeout=900)
-        results[key]={"seconds":sec,"status":"PASS"}
-        print("BOOTSTRAP_NATIVE_SUITE=PASS case=%s seconds=%.3f"%(key,sec),flush=True)
+        try:
+            sec=call(shell_args,{**env,**extra},out/"logs"/(key+".log"),timeout=900)
+            results[key]={"seconds":sec,"status":"PASS"}
+            print("BOOTSTRAP_NATIVE_SUITE=PASS case=%s seconds=%.3f"%(key,sec),flush=True)
+        except RuntimeError as exc:
+            results[key]={"status":"FAIL","reason":str(exc)[-800:]}
+            failures.append(key)
+            print("BOOTSTRAP_NATIVE_SUITE=FAIL case=%s reason=%s"%(key,exc),flush=True)
 
     # Direct real path, no GNU assembler or GNU linker:
     # Stage2 MiniC (compiler ELF from fixed-point) compiles C -S.
