@@ -117,7 +117,13 @@ def prebuilt_runtime():
     if not hdr.is_dir() or not gcc_roots or not all(p.is_file() for p in required.values()):
         raise RuntimeError("MISSING_PREBUILT_RUNTIME headers/crt/libc/libgcc")
     required["libgcc.a"] = gcc_roots[-1]
-    return hdr, required
+    # GCC builtin headers are currently an external seed input, not executables.
+    # Keep this provenance visible; replacing them with native freestanding
+    # headers is a separate condition for fully GCC-independent bootstrap.
+    builtin = gcc_roots[-1].parent / "include"
+    if not builtin.is_dir():
+        raise RuntimeError("MISSING_TARGET_BUILTIN_HEADERS")
+    return (builtin, hdr), required
 
 
 def command(binaries, tool, *args):
@@ -129,7 +135,8 @@ def native_pp(binaries, src, target, macros, hdr, logs, env):
                    "-DNDEBUG", "-D__riscv_float_abi_double=1",
                    "-D__riscv_flen=64",
                    *["-I" + str(ROOT / x) for x in INCLUDES],
-                   "-I" + str(hdr), "-include", macros, "-o", target, ROOT / src)
+                   *["-I" + str(p) for p in hdr],
+                   "-include", macros, "-o", target, ROOT / src)
     return execute(argv, logs, timeout=180, env=env)
 
 
@@ -282,7 +289,7 @@ def main():
     seed = verify_seed(stage2, artifact)
     hdr, libraries = prebuilt_runtime()
     print("FULL_NATIVE_SEED=PASS tools=9 source_tus=%d stage2_sha=%s"
-          " external_runtime=prebuilt_cross_libc_crt_libgcc" %
+          " external_runtime=prebuilt_cross_libc_crt_libgcc_gcc_builtin_headers" %
           (len(all_sources), sha(stage2)), flush=True)
     rounds(seed, sources, all_sources, hdr, libraries, out, args.workers)
 
