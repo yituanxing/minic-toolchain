@@ -83,6 +83,7 @@ jobs:
           test -x build/toolchain-focused-t1-v2/bin/minic-ar
           test -x build/toolchain-focused-t1-v2/bin/minic-ld
 
+      # Direct guest --help and repo-local B1 file system isolation.
       # Certified fixture return_42.c for strict direct/driver parity.
       # Verify the exact certified self-hosted RV64 Stage2 driver hookup on
       # one runner BEFORE burning seven full Linux runners again.
