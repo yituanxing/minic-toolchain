@@ -279,7 +279,7 @@ jobs:
           retention-days: 14
   aggregate:
     needs: shard
-    if: always() && ((github.event_name == 'workflow_dispatch' && (inputs.mode == 'all3352' || inputs.mode == 'all')) || (github.event_name == 'push' && (contains(github.event.head_commit.message, '[linux-perf3352]') || contains(github.event.head_commit.message, '[minic-bootstrap-stage2-linux500]') || contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux500]'))))
+    if: always() && ((github.event_name == 'workflow_dispatch' && (inputs.mode == 'all3352' || inputs.mode == 'all')) || (github.event_name == 'push' && (contains(github.event.head_commit.message, '[linux-perf3352]') || contains(github.event.head_commit.message, '[minic-bootstrap-stage2-linux500]') || contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux500]') || contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux500-aggregate-only]'))))
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -314,25 +314,38 @@ jobs:
           retention-days: 14
 
       - uses: actions/checkout@v4
-        if: contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux500]')
+        if: contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux500]') || contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux500-aggregate-only]')
       - name: Restore seven Stage4 Linux500 verified object manifests
-        if: contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux500]')
+        if: contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux500]') && !contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux500-aggregate-only]')
         uses: actions/download-artifact@v4
         with:
           pattern: minic-bootstrap-stage4-linux500-*
           path: stage4-first500-shards
+      - name: Restore immutable seven Stage4 shard artifacts without recompilation
+        if: contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux500-aggregate-only]')
+        uses: actions/download-artifact@v4
+        with:
+          repository: yituanxing/minic-toolchain
+          run-id: 39062218853
+          github-token: ${{ github.token }}
+          pattern: minic-bootstrap-stage4-linux500-*
+          path: stage4-first500-shards
       - name: Independently aggregate 500 unique Stage4 vs Stage0 Linux objects
-        if: contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux500]')
+        if: contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux500]') || contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux500-aggregate-only]')
         shell: bash
         run: |
           set -Eeuo pipefail
-          test "${{ needs.shard.result }}" = success
+          if [[ "${{ contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux500-aggregate-only]') }}" == true ]]; then
+            test "${{ needs.shard.result }}" = skipped
+          else
+            test "${{ needs.shard.result }}" = success
+          fi
           python3 tools/ci/minic-bootstrap-stage2-linux500-aggregate-v1.py \
             stage4-first500-shards bootstrap-stage4-linux500-final.json --stage4 \
             | tee bootstrap-stage4-linux500-final.txt
           grep -Fq 'BOOTSTRAP_STAGE4_LINUX500=PASS owners=500/500' bootstrap-stage4-linux500-final.txt
       - name: Preserve independent Stage4 Linux500 aggregate
-        if: always() && contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux500]')
+        if: always() && (contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux500]') || contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux500-aggregate-only]'))
         uses: actions/upload-artifact@v4
         with:
           name: minic-bootstrap-stage4-linux500-final
