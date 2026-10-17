@@ -29,11 +29,17 @@ def main():
     cli.add_argument("--owners",type=Path,required=True)
     cli.add_argument("--success",type=Path,required=True)
     cli.add_argument("--trace",type=Path,required=True)
-    cli.add_argument("--stage2-sha",type=str,required=True)
+    cli.add_argument("--stage2-sha",type=str,required=True,
+                     help="SHA of selected self-host compiler (legacy option name)")
+    cli.add_argument("--candidate-stage",choices=("stage2","stage4"),default="stage2")
     a=cli.parse_args()
-    expected="17e76f14befdd46b18d62b4ab90cbf15cd724e281b216039a252528208b6f94d"
+    expected_sha={
+        "stage2":"17e76f14befdd46b18d62b4ab90cbf15cd724e281b216039a252528208b6f94d",
+        "stage4":"50b3f7763bde2505e17bb545513cb00664286d4e762b3395aea3f29ce724ef31",
+    }
+    expected=expected_sha[a.candidate_stage]
     if a.stage2_sha!=expected:
-        raise RuntimeError("unexpected self-host Stage2 compiler digest")
+        raise RuntimeError("unexpected certified self-host "+a.candidate_stage+" compiler digest")
     owners=read_owners(a.owners)
     succeeded=[z.strip() for z in a.success.read_text().splitlines() if z.strip()]
     successes=Counter(succeeded)
@@ -59,9 +65,9 @@ def main():
         raise RuntimeError("missing Stage2 QEMU compiler dispatch for "+
                            str(len(missing))+" actual Kbuild C targets: "+
                            repr(missing[:10]))
-    print("BOOTSTRAP_STAGE2_KBUILD_AUDIT=PASS owners="+str(len(owners))+
+    print("BOOTSTRAP_"+a.candidate_stage.upper()+"_KBUILD_AUDIT=PASS owners="+str(len(owners))+
           "/"+str(len(owners))+
-          " qemu_stage2_asm_dispatch="+str(len(owners))+
+          " qemu_"+a.candidate_stage+"_asm_dispatch="+str(len(owners))+
           " original_stage0_fallback=0"
           " stage2_sha256="+expected,flush=True)
 
@@ -70,6 +76,6 @@ if __name__=="__main__":
     try:
         main()
     except (OSError, ValueError, RuntimeError) as exc:
-        print("BOOTSTRAP_STAGE2_KBUILD_AUDIT=FAIL "+str(exc),
+        print("BOOTSTRAP_SELFHOST_KBUILD_AUDIT=FAIL "+str(exc),
               file=sys.stderr,flush=True)
         sys.exit(1)
