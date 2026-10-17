@@ -749,7 +749,10 @@ jobs:
           grep -Fq 'BOOTSTRAP_STAGE2_NATIVE_RUNTIME=PASS tools=8 suites=8 runtime_chain=42 all_mini_pp_cc_as_ld=true nm_strip_oracles=true driver_chain=42' \
             "$GITHUB_WORKSPACE/build/bootstrap-stage2-native/verdict.log"
 
-      # Four-TU matched musl header/source ABI gate #39057960530 succeeded.
+      # Stage3 76/77 matched musl ABI objects from #39058200575 are SHA-pinned;
+      # only MiniAS CLI failed on RISC-V ELF psABI macros absent from musl elf.h.
+      # Production MiniAS has portable constant fallbacks now; reuse those 76
+      # only with exact seed/runtime SHA and fresh identical MiniPP input bytes.
       # Run the entire 77-TU nine-tool self-rebuild and fixed-point now.
       # C11 hosted-ABI macros and explicit external runtime headers are pinned.
       # Mini stage builds run with GCC/AS/LD execve forbidden.
@@ -766,7 +769,7 @@ jobs:
         with:
           name: minic-current-bootstrap-stage2-native-runtime-v1
           repository: yituanxing/minic-toolchain
-          run-id: 39055271159
+          run-id: 39058200575
           github-token: ${{ github.token }}
           path: build/bootstrap-stage2-native/previous
 
