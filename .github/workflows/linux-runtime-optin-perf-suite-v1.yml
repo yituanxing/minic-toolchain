@@ -863,7 +863,8 @@ jobs:
             if [[ "${{ contains(github.event.head_commit.message, '[minic-bootstrap-native-musl-probe]') }}" == true ]]; then
               probe_args+=(--musl-build "$GITHUB_WORKSPACE/build/bootstrap-stage2-native/musl-seed/musl-build")
             fi
-          # One production MiniAS C TU isolates the musl ELF e_flags issue.
+          # RISC-V e_flags now use libc-independent psABI values (stage3/4 again).
+      # One production MiniAS C TU isolates the musl ELF e_flags issue.
           elif [[ "${{ contains(github.event.head_commit.message, '[minic-bootstrap-musl-as-portability]') }}" == true ]]; then
             probe_args=(--probe-only tools/minic-as/main.c)
           elif [[ "${{ contains(github.event.head_commit.message, '[minic-bootstrap-full-native-probe]') }}" == true ]]; then
