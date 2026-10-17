@@ -196,10 +196,13 @@ def summarize_specialization_trace(events):
             for k in sorted(total)}
 
 
-def sample(executable,source,output,limit):
+def sample(executable,source,output,limit,collect_current_lookup_metrics=False):
+    # Generic stage A/B retains its historical environment: older baseline
+    # compilers may not support the newer production-only telemetry.
     env=dict(os.environ, MINIC_BOOTSTRAP_TRACE="1", MINIC_BOOLEAN_SCAN_PROFILE="1",
-             MINIC_SYMBOLIC_SCAN_PROFILE="1", MINIC_INTEGER_OWNER_PERF="1",
-             MINIC_PARSER_PERF_TRACE="1")
+             MINIC_SYMBOLIC_SCAN_PROFILE="1")
+    if collect_current_lookup_metrics:
+        env.update(MINIC_INTEGER_OWNER_PERF="1", MINIC_PARSER_PERF_TRACE="1")
     begun=time.perf_counter_ns()
     with subprocess.Popen([str(executable),"-S",str(source),"-o",str(output)],
                           env=env,stdout=subprocess.DEVNULL,
@@ -218,8 +221,10 @@ def sample(executable,source,output,limit):
     spec=summarize_specialization_trace(events)
     bool_counts=read_boolean_counts(events)
     symbolic_counts=read_symbolic_counts(events)
-    integer_owner=read_integer_owner_counts(events)
-    parser_lookups=read_parser_lookup_counts(events)
+    integer_owner=(read_integer_owner_counts(events)
+                   if collect_current_lookup_metrics else None)
+    parser_lookups=(read_parser_lookup_counts(events)
+                    if collect_current_lookup_metrics else None)
     return {"integer_owner":integer_owner, "parser_lookups":parser_lookups,
             "boolean_counts":bool_counts, "symbolic_counts":symbolic_counts, "wall_ms":round((time.perf_counter_ns()-begun)/1000000,3),
             "stage_ms":stages,"interstage_gap_ms":gaps,
@@ -229,6 +234,7 @@ def main():
     cli=argparse.ArgumentParser()
     cli.add_argument("--self-test",action="store_true")
     cli.add_argument("--expect-specialization",action="store_true")
+    cli.add_argument("--expect-current-lookup-telemetry",action="store_true")
     cli.add_argument("--expect-symbolic-loops",action="store_true")
     cli.add_argument("--expect-symbolic-census",action="store_true")
     cli.add_argument("--expect-integer-loops",action="store_true")
@@ -277,7 +283,8 @@ def main():
     ns.out.mkdir(parents=True,exist_ok=True)
     results={}
     for mode,executable in (("before",ns.baseline),("after",ns.candidate)):
-        results[mode]=sample(executable.resolve(),ns.input.resolve(),ns.out/(mode+".s"),180)
+        results[mode]=sample(executable.resolve(),ns.input.resolve(),ns.out/(mode+".s"),
+                             180,ns.expect_current_lookup_telemetry)
     if results["before"]["assembly_sha"]!=results["after"]["assembly_sha"]:
         raise RuntimeError("different assembly bytes; cannot attribute performance")
     if ns.expect_symbolic_census and not ns.expect_symbolic_loops:
