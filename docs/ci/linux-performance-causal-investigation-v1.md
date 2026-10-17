@@ -737,3 +737,15 @@ COHORT_RESULT=PASS candidate_objects=2064 scope=FULL_C_UNIVERSE same_config=true
 **500 文件同一索引候选：** [CI #38992360179](https://github.com/yituanxing/minic-toolchain/actions/runs/38992360179) SUCCESS；复用原 perf500/first500 缓存和既有配对差分脚本，没有新 workflow/job。500/500 .s 完全一致，balanced-order=true；旧版累计 384418.072ms，索引版 348183.509ms，**1.10407×、节省 36234.563ms、耗时下降约 9.43%**。单轮配对有 97/500 个对象相对退化，应记录为单次噪声及可能的索引固定开销，不能假定所有文件都加速。热点大收益包括 kernel/events/core.o、kernel/bpf/verifier.o、mm/memcontrol.o。五热点合计 1.36× 不可当作全体 500 的收益。
 
 **完整验收边界：** 当前为 verified-frozen500，尚未对此正式代码身份完成 2064/2064 + GNU Link + QEMU P1。本次仅沿现有七 Runner Linux CI 升级资格，不把上一轮 Integer source-owner 的完整内核认证误当成这轮认证。完整验收编译链仍是 GNU PP → MiniC → GNU AS/LD，不能说全 Mini 工具链已共同通过。
+
+## 44. PERF-039：Boolean Transitive CALL-only + source owner（2026-10-17）
+
+**根因：** Integer/Symbolic 已使用 CALL-only 和 FunctionBody 来源索引，但 Boolean Transitive 仍对每个带布尔 range 事实的 caller clone 扫描整个 TU 的 expression_count。现在复用已认证的 minic_perf_program_build_expression_source_owners，只有确证唯一且属于其他 canonical source FunctionBody 的 CALL 才跳过；未知 owner、共享 owner 和分配/验证失败走旧路径。CALL-only 索引保持原 ExpressionId 升序，首次真正出现有范围事实的 caller 才构建索引，异常或表达式增长保留旧完整扫描。变体匹配与克隆预算完全不变。支持 MINIC_BOOLEAN_TRANSITIVE_PERF 选通诊断。
+
+**上一负面候选撤回：** Core reentry lazy #38994826749，500/500 汇编一致，旧版 439568.899ms、lazy 443102.585ms，速度 0.99203x，耗时 +0.80%。恢复经过 #38992779314 完整 2064/QEMU 验收的 eager Core Lowering，保证新的 Boolean 优化对比是一因子变更。
+
+**五个真实 Linux 样本：** [CI #38995338704](https://github.com/yituanxing/minic-toolchain/actions/runs/38995338704) SUCCESS，基准 eager Core commit b45298017，对每输入 old/new 各排除 warmup 后交错计时四次，5/5 汇编 SHA256 相同，诊断 .s 再次核对。五对象 P50 合计 6960.675→6582.533ms，加速 1.05745x；fsync 1.0602x、ext4 super 1.0300x、bpf verifier 1.0600x、events core 1.0506x、memcontrol 1.0802x。诊断在五个文件合计访问 CALL 候选 1,026,411 次，排除另一个 FunctionBody 的 1,002,807 次（约 97.70%）；这是逻辑候选数，不是 retired instruction。
+
+**推广 first500：** [CI #38995564349](https://github.com/yituanxing/minic-toolchain/actions/runs/38995564349) SUCCESS，冻结 500 输入全部汇编字节相同，balanced_order=true，baseline 382579.154ms，candidate 372710.334ms，节省 9868.820ms，速度 1.02648x，耗时 -2.58%。单轮 500 逐文件有 108 个对象测得变慢（fs/nfs/client、mm/slub、mm/hugetlb 等），需要通过重复配对 wall/user/sys 判别固定成本与噪声，不能把单次观测说成持久退化。
+
+**目前状态：** verified-frozen500，不是 Runtime-certified。Focused T1 #38995262829 SUCCESS。正式源码 commit 88029a72。下一步现有 7 Runner 做 2064 MiniC GNU link QEMU P1，并单独复核大回退样本；没有充分收益后不继续在 Boolean 上微调。
