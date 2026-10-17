@@ -164,13 +164,16 @@ def main():
              "candidate_assembly_sha":sha(second) if second.is_file() else None,
              "stage0_object_sha":sha(first_o) if first_o.is_file() else None,
              "candidate_object_sha":sha(second_o) if second_o.is_file() else None}
+        if candidate_label=="stage2":
+            row["stage2_assembly_sha"]=row["candidate_assembly_sha"]
+            row["stage2_object_sha"]=row["candidate_object_sha"]
         records.append(row)
-        print(f"BOOTSTRAP_STAGE2_LINUX_TU owner={owner} group={group}"
+        print(f"BOOTSTRAP_{candidate_label.upper()}_LINUX_TU owner={owner} group={group}"
               f" asm={'MATCH' if matching_asm else 'DIFF'}"
               f" object={'MATCH' if matching_obj else 'DIFF'}",flush=True)
-    report={"schema":"minic-selfhost-linux-frozen-v2",
+    report={"schema":"minic-stage2-linux-20-exact-v1" if candidate_label=="stage2" else "minic-selfhost-linux-frozen-v2",
             "candidate_label":candidate_label,
-            "candidate_sha":sha(stage2),
+            "candidate_wrapper_sha":sha(stage2),
             "corpus_size":500, "selected":len(members), "groups":groups,
             "input_sha_verified":500,
             "stage0_sha":sha(stage0),
@@ -180,6 +183,8 @@ def main():
             "link_qemu_p1":"NOT_RUN",
             "rows":records}
     (out/"verdict.json").write_text(json.dumps(report,indent=2)+"\n")
+    if candidate_label=="stage2":
+        report["stage2_scope"]="qemu-riscv64-rv64-self-host-compiler"
     report["scope"] = ("manifest_range" if args.range_offset is not None
                        else "stratified20")
     report["range_offset"]=args.range_offset
