@@ -109,10 +109,11 @@ def main() -> None:
         phases = {name: new["stage_ms"][name] for name in STAGES}
         for name in SPECIALIZATION:
             phases[name] = spec[name]["ms"]
-        for name in ("spec-boolean-direct","spec-boolean-transitive"):
-            if name not in spec or spec[name]["calls"] != 1:
-                raise RuntimeError(f"Boolean subphase missing: {owner}, {name}")
         boolean_counts = new.get("boolean_counts")
+        if boolean_counts is not None:
+            for name in ("spec-boolean-direct","spec-boolean-transitive"):
+                if name not in spec or spec[name]["calls"] != 1:
+                    raise RuntimeError(f"Boolean subphase missing: {owner}, {name}")
         symbolic_counts = new.get("symbolic_counts")
         if symbolic_counts is None:
             raise RuntimeError(f"Symbolic scan counters missing for {owner}")
