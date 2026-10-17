@@ -4,6 +4,23 @@
 > 本表是候选的**状态索引**，不是覆盖旧的原始数据；旧实验报告、补丁、CI artifacts 均保留。每次新优化先记录「相同结构以前试过没有、当时基线是什么、为何现在仍值得做」。
 > 基线：主线 `6612e2c1a3`（文档头），最新已认证的 Boolean/Core/Integer 联合源码经 [2064 + GNU link + QEMU P1 #38995964988](https://github.com/yituanxing/minic-toolchain/actions/runs/38995964988) PASS。这个 PASS 是 GNU PP → MiniC → GNU AS/LD，不能声称全 Mini 工具链共同通过。下列不同实验的加速比不能相乘，也不能伪称当前 2064 的同比速度。
 
+## 空间方向第四轮选卡：先复测最新源码存储构成，再独立筛选 FunctionType（2026-10-17）
+
+**最新已认证主线白盒重新测量（不是沿用第三轮之前的旧数据）：** [read-only 7 Linux TU CI #39011170730](https://github.com/yituanxing/minic-toolchain/actions/runs/39011170730) **SUCCESS**，`MINIC_AST_SHAPE_CENSUS=PASS`，7/7 `.s` byte-identical。对七次**独立** TU 编译各自数据结构 array **capacity×sizeof（名义存储容量，不等于真实峰值 RSS，也不能当作七路并行累计峰值）**合计为：
+
+| 数据容器 | 七个独立 TU capacity 之和 |
+| --- | ---: |
+| MinicExpression | **676.00 MiB** |
+| MinicFunction（已独立动态参数化后的 header）| **154.84 MiB** |
+| MinicStatement | 52.50 MiB |
+| MinicFunctionType | 25.23 MiB |
+| MinicLocal | 20.00 MiB |
+| MinicRecord | 1.23 MiB |
+
+典型大 TU 单次：`btf.o` Expression **104.00 MiB**、Function **22.12 MiB**、FunctionType **4.59 MiB**、Statement **7.50 MiB**、Local **5.00 MiB**。七个 TU 的 FunctionType 平均 signature 参数约 2.28–2.60，但每个 FunctionType 仍预留 64×72B，因此可独立筛选；**Expression 明显仍是剩余空间主导项（676 MiB vs 25 MiB），不能一味追着上轮 Function 改进做微优化**。
+
+**第四轮小筛选而非预设晋级：** `functiontype-exact-parameter-store-v1` [CI #39011342180](https://github.com/yituanxing/minic-toolchain/actions/runs/39011342180) 在 disposable checkout，仅将 `MinicFunctionType.parameter_types[64]` 变成类型级别 **每个 descriptor 自有的 exact-length 存储**，retain direct-index semantics、full width ids、destroy 清理、去重缓存逻辑不改，benchmark 5 个真实冻结 Linux hot TU、每臂四轮 paired old/new、5/5 assembly identical、`check-ast-contract` 与 `check-type`。这是**第四轮唯一改动**，不能把第三轮 Function 参数动态化重复计算进收益。仅当真实时间收益与 RSS 同时正面且足够强，才考虑放大 first500；若接近噪声/不值得，则记录 `screened-stop`，**直接转回显著更大的 Expression payload 热点并更新 CPU 归因**。未经过 500 和 2064/QEMU，正式 `src` 保持不变。
+
 ## 空间方向第三轮：按实际数量单独分配 Function 参数类型（2026-10-17）
 
 **单因素新模型，先只改临时 CI 工作树，正式生产 C 尚未改。** 继前两轮 `MinicType` 72B 和 CALL 参数 ID 32-bit 后，七文件原样追踪 [#39007018275](https://github.com/yituanxing/minic-toolchain/actions/runs/39007018275) 显示 85,327 个 Function 中 77.76% 参数数≤2、均值1.770，然而每个 `MinicFunction` 依然 `MinicType parameter_types[64]`，单靠该数组固定占 4608B、整个 Function 6016B、16,384 容量的重型 TU Function 数组 **94 MiB**。虽原讨论首先考虑“小内联4 + 超额另存”，但存在 **by-value Function snapshots + Function 数组 realloc 后内联指针悬空**，因此先用**更保守的私有 exact-length heap 参数数组**验证真实收益上界（而非冒险直接上 hybrid）；`MinicFunction` 保持原字段直接下标访问的语法，单个 Function 通过 `set_function_signature` 只分配实际参数数 `n*72B`，返回前 deep copy，析构各自 free，源 Function 被克隆到 specialized 时也通过现有 setter deep-copy，常见按值快照仅借用不可释放的参数数组。0 参数不分配，但非零参数每个 Function 添加 malloc，这项**新分配成本必须在真实 CPU/Wall 测试中检验**，不允许将减少 struct 字节当作真实收益。
