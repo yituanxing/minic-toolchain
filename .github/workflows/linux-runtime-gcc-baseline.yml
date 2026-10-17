@@ -1266,6 +1266,9 @@ jobs:
             --excluded "$ev/non-c-objects.tsv" \
             --min-c-objects 1200
           balanced_args=()
+          # Recheck the complete SHA-authenticated LPT union after fixing
+          # failed-attempt RSS accounting; immutable MiniC C sources remain
+          # exactly as certified in the latest full 2064 QEMU P1 gate.
           if [[ "${{ contains(github.event.head_commit.message, '[minic-gnu-balanced-full2064]') }}" == true ]]; then
             plan="$GITHUB_WORKSPACE/tools/ci/linux-gnu-balanced-plan-2026-10-17.json"
             python3 tools/ci/linux_gnu_balanced_plan_v1.py --owners "$ev/all-objects.txt" --plan "$plan"
