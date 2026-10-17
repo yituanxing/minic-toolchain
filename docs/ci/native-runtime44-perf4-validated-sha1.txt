@@ -52,8 +52,11 @@
 # Original same-runner frozen500 #39012224627 PASS 500/500 and 1.11368x.
 # 6-owner 8-pair + ASan/UBSan #39012537673 PASS. Source change
 # requires separate incoming 2064+GNU link+QEMU P1 certification.
-d1b8a54a26e933b9f40438d23bb9001bc632408e src/compiler/compiler.c
-1ab6f1d2d587e6008d7224b10b1638c9887bac18 src/core/core_lower.c
+# Exact runtime source manifest also updated all 3 affected native
+# C/H blobs; the first full-run attempt #39012800524 failed at intentional
+# pinned SHA gate for compiler.c, not in C compilation or QEMU.
+b8f4764806b1a036ee9c9a567bbb370fcbd95cf0 src/compiler/compiler.c
+40001b124db8d623c0c75eac6b316c44cd97a83b src/core/core_lower.c
 a8418e45608310687e3d6a1e96da79ca49135870 src/core/core_lower_asm.c
 7997978a9b10a6d01e33dbc00dd11cb3f668f69f src/core/core_lower_internal.h
 97acd676dbaf717710b02632f89451cd97a33e07 src/frontend/ast.h
