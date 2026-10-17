@@ -24,7 +24,7 @@
 
 本轮 RSS 单进程下降很少（BTF **155616→154444 KiB**），符合减少**反复 memcpy 流量**而不是长期保留 AST 容量的成本模型；不得宣传成整机 RSS 大幅下降。第一轮实验 [#39014850929](https://github.com/yituanxing/minic-toolchain/actions/runs/39014850929) FAILED 是误将依赖 frozen500 corpus 的实验 step 放在 cache restore 之前，未执行候选编译，与功能/性能无关；已移动该 step、在 #39014923355 实测通过。
 
-**扩组 frozen first500 进行中：** [#39015035562](https://github.com/yituanxing/minic-toolchain/actions/runs/39015035562)，reuse 原 4-worker, 250/250 balanced differential，要求 500/500 `.s` exact，记录 wall/CPU 回退后再决策。候选仍 **`screen-5-pass / first500-pending / production-not-modified`**；尚未做完整 2064/QEMU。任何合入必须排除冷指针被值复制 probe 非法共享写入与释放的风险。
+**扩组 frozen first500 已 SUCCESS：** [#39015035562](https://github.com/yituanxing/minic-toolchain/actions/runs/39015035562)，原有同 Runner 四工作进程、250/250 balanced-order、SHA-frozen 500 个 Linux `.i`，**500/500 输出 `.s` byte-identical**。原版累计 TU wall **180349.471ms**，cold-switch 候选 **165919.403ms**，**1.08697× 加速，累计编译耗时下降约 8.00%，节省 14.430 秒**；单 TU 加速比中位数 **1.09069×**。**19/500 单轮较慢**，最差绝对回退记录包括 `kernel/time/vsyscall.o` 159.143→216.325ms、`fs/nfs/client.o` 499.570→554.227ms、`arch/riscv/kvm/vcpu_timer.o` 305.121→352.402ms、`arch/riscv/kvm/vcpu_pmu.o` 330.350→368.616ms、`kernel/bpf/cgroup_iter.o` 331.774→363.229ms。暂不能确定它们是并行调度噪声还是实际 CPU 退化，要重复 old/new 的 user/sys/wall/MAD，不能直接忽略。**候选状态 `first500-pass / regression-and-snapshot-safety-pending / production-not-modified`**，**不声称通过 2064/QEMU**；由于 `MinicParser` 值复制可能共享冷指针，正式合入前必须审计 speculative probe 是否会写 switch 表，明确生命周期和失败路径，必要时加 ASan/UBSan/异常路径定向测试。这里 8.00% 是 500 个 TU wall 耗时之和的下降，不能当作七路 Kbuild 总时间下降。
 
 ## 第六轮候选前置：第五轮之后重新做 CPU 归因（2026-10-17）
 
