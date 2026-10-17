@@ -53,6 +53,7 @@ jobs:
         with:
           ref: ${{ github.sha }}
 
+      # Stage2 2064 preflight checks current source workflow.
       # The bootstrap Linux opt-in workflow has several nested matrix
       # conditions. Parse its real YAML BEFORE another costly seven-way run.
       - name: Parse existing Linux runtime workflow YAML
