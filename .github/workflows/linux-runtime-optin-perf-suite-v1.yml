@@ -1003,9 +1003,18 @@ jobs:
               alloc_mib=data["expression_capacity"]*data["expression_size"]/1048576
               live_mib=data["expression_count"]*data["expression_size"]/1048576
               function_alloc_mib=data["function_capacity"]*data["function_size"]/1048576
+              function_type_alloc_mib=data["function_type_capacity"]*data["function_type_size"]/1048576
+              local_alloc_mib=data["local_capacity"]*data["local_size"]/1048576
+              statement_alloc_mib=data["statement_capacity"]*data["statement_size"]/1048576
+              record_alloc_mib=data["record_capacity"]*data["record_size"]/1048576
               row=dict(owner=owner,input_sha=None,parsed=initial,final=data,
                        expr_alloc_mib=round(alloc_mib,2),expr_live_mib=round(live_mib,2),
                        function_alloc_mib=round(function_alloc_mib,2),
+                       function_type_alloc_mib=round(function_type_alloc_mib,2),
+                       local_alloc_mib=round(local_alloc_mib,2),
+                       statement_alloc_mib=round(statement_alloc_mib,2),
+                       record_alloc_mib=round(record_alloc_mib,2),
+                       function_type_param_mean=round(data["function_type_params"]/max(data["function_type_count"],1),4),
                        call_ratio=round(data["call_count"]/max(1,data["expression_count"]),5),
                        original_maxrss_kib=int((out/(safe+".original-rss-kib")).read_text()),
                        census_maxrss_kib=int((out/(safe+".census-rss-kib")).read_text()))
@@ -1020,6 +1029,16 @@ jobs:
           print("MINIC_AST_SHAPE_CENSUS=PASS owners=7 assembly_equal=7/7 "+
                 "expr_alloc_mib="+str(result["total_expr_alloc_mib"])+
                 " median_call_ratio="+str(result["median_call_ratio"]))
+          for metric in ("expr_alloc_mib","function_alloc_mib","function_type_alloc_mib",
+                         "local_alloc_mib","statement_alloc_mib","record_alloc_mib"):
+              print("MINIC_CURRENT_STORAGE_TOTAL="+metric+" mib="+
+                    str(round(sum(row[metric] for row in rows),3)))
+          for row in rows:
+              print("MINIC_CURRENT_STORAGE_OWNER="+json.dumps(
+                  {k:row[k] for k in ("owner","expr_alloc_mib","function_alloc_mib",
+                  "function_type_alloc_mib","local_alloc_mib","statement_alloc_mib",
+                  "record_alloc_mib","function_type_param_mean","original_maxrss_kib")},
+                  separators=(",",":")))
           PYSUM
 
       # 2026-10-17: sanitized .i fixture: no C comments in preprocessed input.
