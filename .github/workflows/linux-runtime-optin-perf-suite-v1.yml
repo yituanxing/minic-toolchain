@@ -329,10 +329,10 @@ jobs:
             # Legacy Boolean local-domain census has a stale source anchor on
             # current production compiler.c; omit it for the Symbolic-only
             # diagnosis instead of altering the already certified algorithm.
-            # Reuse the existing Symbolic direct/transitive timer; census is
-            # diagnostic only, without changing the production compiler C.
-            python3 tools/ci/apply-perf-symbolic-loop-trace-v0.py
-            python3 tools/ci/apply-perf-symbolic-scan-census-v1.py
+            # The source-grouped Symbolic algorithm invalidated the historical
+            # owner-scan patch: it cannot be used as a fresh counter baseline.
+            # Capture current Integer-owner / Parser counters from production
+            # opt-in stderr, plus existing phase timing, without Symbolic patches.
             python3 -m py_compile \
               tools/ci/apply-perf-boolean-scan-census-v1.py \
               tools/ci/apply-perf-symbolic-loop-trace-v0.py \
@@ -3293,8 +3293,9 @@ jobs:
           grep -Fq 'MINIC_PHASE20=PASS files=20 assemblies_identical=20/20' \
             "$root/evidence/phase20-verdict.txt"
           grep -Fq 'MINIC_BOOLEAN20=SKIPPED' "$root/evidence/phase20-verdict.txt"
-          grep -Fq 'MINIC_SYMBOLIC20=PASS' "$root/evidence/phase20-verdict.txt"
-          grep -Fq 'spec-symbolic-transitive' "$root/evidence/phase20-verdict.txt"
+          grep -Fq 'MINIC_SYMBOLIC20=SKIPPED' "$root/evidence/phase20-verdict.txt"
+          grep -Fq 'MINIC_INTEGER20=PASS' "$root/evidence/phase20-verdict.txt"
+          grep -Fq 'MINIC_PARSER20=PASS' "$root/evidence/phase20-verdict.txt"
           # The legacy Boolean inner timer is intentionally unavailable in
           # this Symbolic-only run (the original Boolean patch is source-stale).
 
