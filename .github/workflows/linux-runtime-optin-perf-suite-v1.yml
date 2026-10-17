@@ -1091,6 +1091,7 @@ jobs:
       # Current production C is unchanged. Reuse first500 SHA-pinned input
       # cache and exact same perf500 job: baseline -> temporary patched C.
       # Sparse discarded-IF reentry is DIFFERENT from old incoming-edge index.
+      # Rerun after removing obsolete duplicate early-guard patch anchor.
       - name: Screen sparse discarded-IF Core Reentry on seven real Linux files
         if: contains(github.event.head_commit.message, '[minic-core-discarded-sparse-ab]')
         shell: bash
