@@ -236,10 +236,11 @@ def main():
         "certified_stage2_built_toolchain_sha256":{name:report["binaries"][name]["sha256"] for name in TOOLS},
         "tests":results,
         "toolchain_built_by_stage2":True,
-        "bootstrapped_no_GNU_preprocessor":True,
-        "bootstrapped_no_GNU_preprocessor_scope":"all-mini-42 only; toolchain ELF build retains GNU",
+        "bootstrapped_no_GNU_preprocessor":False,
+        "bootstrapped_no_GNU_preprocessor_scope":"toolchain ELF build still uses GNU PP/AS/LD/CRT",
         "native_main_program_without_GNU_AS_or_LD":True,
         "all_mini_fresh_program_pp_cc_as_ld":True,
+        "all_mini_fresh_program_no_GNU_preprocessor":True,
         "stage2_built_nm_and_strip_functional_suites":True,
         "full_Linux_compiled_by_Stage2":False,
     },indent=2)+"\n")
