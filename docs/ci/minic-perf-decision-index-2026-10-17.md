@@ -103,7 +103,7 @@
 
 仅在 CI disposable checkout 应用 `tools/ci/apply-perf-parser-string-lexer-lookahead-v1.py`；把 `minic_parser_parse_string_text` 的**完整 Parser 副本**换成只保存 `MinicLexer + MinicToken`，保留源文本解析及原 Parser 上的诊断，生产源码不变。第一轮 [CI #38999333053](https://github.com/yituanxing/minic-toolchain/actions/runs/38999333053) **SUCCESS**，原 GNU-Kbuild SHA-frozen 两文件各臂 4 次配对，`.s` 2/2 逐字节一致：fsync **479.884→454.228ms（1.0565×）**、BTF **1407.220→1376.280ms（1.0225×）**，合计 P50 **1887.104→1830.508ms（1.0309×）**。不能称全 Linux 快 3%。
 
-**阶段状态 `verified-local / independent-five pending`**：第二次只扩到先前未测过的 events-core/memcontrol/ext4-super/hugetlb/vmscan 五份冻结 Kbuild 输入，仍复用原 perf500 Job/AB 计时，不重新测量 fsync/BTF。运行 [#38999421635](https://github.com/yituanxing/minic-toolchain/actions/runs/38999421635) 已启动、需以最终日志认证。若扩样贡献低就立即停止，不无故做 500/2064 或合入生产。
+**扩组结论：`verified-local-seven / not-promoted / stop`**。第二批 [CI #38999421635](https://github.com/yituanxing/minic-toolchain/actions/runs/38999421635) **SUCCESS**：events-core/memcontrol/ext4-super/hugetlb/vmscan 各自 4/4 交错测量、**5/5 相同汇编**，分别约 **1.0049×、1.0136×、1.0116×、1.0207×、1.0264×**，合计 **6392.999→6305.993ms（1.0138×）**。两批七个不重复的 owner P50 之和约 **8280.103→8136.501ms（1.0176×）**；因为来自两轮独立 CI，只能作为不同样本的算术合计而非一次严格七 TU A/B。五文件扩样没有强收益，符合先前“低于显著阈值即轮换”的决策，因此不合入主线、不跑完整 500/2064、不继续逐一针对原 `parser_string.c` 复制做微调。保留独立脚本和正反证据。
 
 ## 接下来值得验证的不同瓶颈（先调查，不抢先实现）
 
