@@ -43,12 +43,15 @@ SH
 # Cache identity hashes bin/minic, NOT only bin/minic-cc. An exact SHA-
 # marked deterministic wrapper guarantees Stage2 & Stage0 cannot share a key.
 cat > "$bin/minic" <<'SH'
-#!/bin/sh
+#!/usr/bin/env bash
 # Compiles with certified self-hosted Stage2 RV64 SHA256:
 # 17e76f14befdd46b18d62b4ab90cbf15cd724e281b216039a252528208b6f94d
-set -eu
+set -Eeuo pipefail
 dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-exec "$dir/minic.stage0" "$@"
+# minic.stage0 selects sibling minic-cc from argv[0], not /proc/self/exe.
+# Preserve argv[0] as $bin/minic while executing the *native* driver binary.
+# Otherwise it tries nonexistent minic.stage0-cc or bypasses our Stage2 shim.
+exec -a "$dir/minic" "$dir/minic.stage0" "$@"
 SH
 chmod 755 "$bin/minic" "$bin/minic-cc"
 test -x "$bin/minic.stage0" && test -x "$bin/minic-cc.stage0"
@@ -57,6 +60,18 @@ work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 printf 'int value(void){return 42;}\n' > "$work/in.c"
 riscv64-linux-gnu-gcc -E -P "$work/in.c" -o "$work/in.i"
-"$bin/minic" -S "$work/in.i" -o "$work/out.s"
+if ! "$bin/minic" -S "$work/in.i" -o "$work/out.s" \
+       >"$work/driver.stdout" 2>"$work/driver.stderr"; then
+  echo "BOOTSTRAP_STAGE2_INSTALL=FAIL driver_to_guest_stage2_smoke" >&2
+  cat "$work/driver.stderr" >&2
+  exit 7
+fi
 test -s "$work/out.s"
+# Prove the driver really dispatched to Stage2, not the saved host binary.
+if [[ -n "${COHORT_STAGE2_INVOKE_TRACE:-}" ]]; then
+  grep -Fq "$work/out.s" "$COHORT_STAGE2_INVOKE_TRACE" || {
+    echo "BOOTSTRAP_STAGE2_INSTALL=FAIL missing_stage2_smoke_trace" >&2
+    exit 7
+  }
+fi
 echo "BOOTSTRAP_STAGE2_INSTALL=PASS stage0_cc=$sha0 stage2_guest=$sha2 driver_sha=$(sha256sum "$bin/minic" | cut -d' ' -f1) no_host_compiler_fallback=true smoke_driver_to_qemu=true"
