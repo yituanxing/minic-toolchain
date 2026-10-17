@@ -52,6 +52,10 @@ def main():
                    help="stage2 qemu-riscv64 wrapper executable")
     p.add_argument("--out", type=Path, required=True)
     p.add_argument("--jobs", type=int, choices=(1,2,3,4), default=3)
+    p.add_argument("--range-offset", type=int, default=None,
+                   help="zero-based manifest POSITION (not global object index)")
+    p.add_argument("--range-count", type=int, default=None,
+                   help="number of contiguous frozen corpus rows; requires offset")
     args = p.parse_args()
     corpus, stage0, stage2, out = (
         args.corpus.resolve(), args.stage0.resolve(),
@@ -98,7 +102,17 @@ def main():
         members.append((group,*byowner[owner]))
     if len(members)!=20 or groups!={"hot":10,"middle":5,"light":5}:
         raise RuntimeError("not full canonical hot/middle/light20 selection")
-    # SHA check the selected twenty AND the entire frozen corpus's 500 .i
+    if (args.range_offset is None) != (args.range_count is None):
+        raise RuntimeError("--range-offset and --range-count must be set together")
+    if args.range_offset is not None:
+        if (args.range_offset < 0 or args.range_count <= 0 or
+                args.range_offset + args.range_count > PERF_CORPUS_SIZE):
+            raise RuntimeError("invalid bounded frozen first500 slice")
+        groups={"range":args.range_count}
+        members=[("range", *x) for x in
+                 manifest[args.range_offset:args.range_offset+args.range_count]]
+    expected_count=len(members)
+    # SHA check selected rows AND entire frozen corpus's 500 .i
     # before computing any compiler outputs.
     for i,owner,rel,source in manifest:
         name=(input_root/rel).resolve()
@@ -119,17 +133,17 @@ def main():
                  "--jobs",args.jobs,"--indices",indices],env=env,
                 label=name+"_LINUX_REPLAY",timeout=1700)
         results=json.loads((work/"batch-results.json").read_text())
-        if (len(results)!=20 or any(x["status"]!="PASS" for x in results) or
+        if (len(results)!=expected_count or any(x["status"]!="PASS" for x in results) or
                 {int(x["index"]) for x in results}!={m[1] for m in members}):
             raise RuntimeError(name+" 20/20 C compilation was not PASS")
         command([sys.executable, "tests/external/linux/assemble_replay.py",
                  "--work",work,"--jobs",args.jobs],env=env,
                 label=name+"_LINUX_ASSEMBLE",timeout=500)
         obj=json.loads((work/"assemble-results.json").read_text())
-        if len(obj)!=20 or any(x["status"]!="PASS" for x in obj):
+        if len(obj)!=expected_count or any(x["status"]!="PASS" for x in obj):
             raise RuntimeError(name+" 20/20 real RV64 object assembling did not PASS")
         print("BOOTSTRAP_STAGE2_LINUX_"+name.upper()+"=PASS"
-              " objects=20 assembled=20",flush=True)
+              f" objects={expected_count} assembled={expected_count}",flush=True)
     records=[]
     for group,index,owner,rel,source in members:
         first=out/"stage0"/"minic-out"/(rel+".s")
@@ -161,11 +175,18 @@ def main():
             "link_qemu_p1":"NOT_RUN",
             "rows":records}
     (out/"verdict.json").write_text(json.dumps(report,indent=2)+"\n")
-    if report["assembly_equal"]!=20 or report["object_equal"]!=20:
+    report["scope"] = ("manifest_range" if args.range_offset is not None
+                       else "stratified20")
+    report["range_offset"]=args.range_offset
+    report["range_count"]=args.range_count
+    (out/"verdict.json").write_text(json.dumps(report,indent=2)+"\n")
+    if (report["assembly_equal"]!=expected_count or
+            report["object_equal"]!=expected_count):
         raise RuntimeError("Stage2 differs from Stage0 on Linux .s/.o")
-    print("BOOTSTRAP_STAGE2_LINUX20=PASS owners=20/20"
-          " stage0_stage2_asm=20/20"
-          " rv64_objects=20/20"
+    print(f"BOOTSTRAP_STAGE2_LINUX{'RANGE' if args.range_offset is not None else '20'}=PASS"
+          f" owners={expected_count}/{expected_count}"
+          f" stage0_stage2_asm={expected_count}/{expected_count}"
+          f" rv64_objects={expected_count}/{expected_count}"
           " complete_linux_image=NOT_RUN qemu_kernel_p1=NOT_RUN",flush=True)
 
 
