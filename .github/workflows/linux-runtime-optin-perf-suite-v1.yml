@@ -425,7 +425,9 @@ jobs:
           if [[ "${{ contains(github.event.head_commit.message, '[minic-boolean-owner-ab]') && '1' || '0' }}" == 1 ]]; then
             trial=boolean-owner
             source_file=src/compiler/compiler.c
-            parent=b6199d8081a76879e4dd42414d126b7c12814772
+            # Comparing against the exact 2064/QEMU-certified eager Core
+            # baseline, not against the rejected lazy Core revision.
+            parent=b45298017b90569385b24a7e7636be666cef8cd2
           elif [[ "${{ contains(github.event.head_commit.message, '[minic-core-lazy-ab]') && '1' || '0' }}" == 1 ||
                 "${{ contains(github.event.head_commit.message, '[minic-core-lazy-ab500]') && '1' || '0' }}" == 1 ]]; then
             trial=core-lazy
