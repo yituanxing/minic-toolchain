@@ -107,7 +107,9 @@ typedef struct MinicParser {
     MinicSymbolVisibility default_visibility;
     MinicSymbolVisibility visibility_stack[MINIC_PARSER_MAX_VISIBILITY_DEPTH];
     size_t visibility_depth;
-    MinicParserSwitchContext switch_contexts[MINIC_PARSER_MAX_SWITCH_DEPTH];
+    /* Allocated on the first actual switch. Lexer-only speculative Parser
+       snapshots borrow the table; only the top-level Parser owns it. */
+    MinicParserSwitchContext *switch_contexts;
 
     bool label_context_initialized;
     MinicFunctionId label_context_function;

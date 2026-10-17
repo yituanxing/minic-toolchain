@@ -4101,6 +4101,16 @@ static bool parse_switch_branch(MinicParser *parser,
         minic_parser_error(parser, "switch nesting exceeds implementation limit");
         return false;
     }
+    /* This is cold state: keep it out of by-value Lexer lookahead copies.
+       The owning top-level Parser releases it even on parse failure. */
+    if (parser->switch_contexts == NULL) {
+        parser->switch_contexts = (MinicParserSwitchContext *)calloc(
+            MINIC_PARSER_MAX_SWITCH_DEPTH, sizeof(*parser->switch_contexts));
+        if (parser->switch_contexts == NULL) {
+            minic_parser_error(parser, "out of memory allocating switch case contexts");
+            return false;
+        }
+    }
     context = &parser->switch_contexts[parser->switch_depth];
     (void)memset(context, 0, sizeof(*context));
     context->selector_type = selector_type;

@@ -3790,5 +3790,7 @@ bool minic_parse_c0_program(const char *path,
     parser.perf_enum_name_indexed_count = 0U;
     minic_parser_destroy_scopes(&parser);
     minic_parser_destroy_enum_constants(&parser);
+    free(parser.switch_contexts);
+    parser.switch_contexts = NULL;
     return success;
 }
