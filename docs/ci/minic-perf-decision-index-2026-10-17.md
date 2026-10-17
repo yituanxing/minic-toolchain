@@ -43,7 +43,7 @@
 
 **唯一生产更改：** [compiler.c 提交 7ed87186](https://github.com/yituanxing/minic-toolchain/commit/7ed87186187162e15efb274a8e24be57b5a65599) 从**完全同一份成功 A/B 的四处唯一锚点**提升 Symbolic Source-grouped CALL Index，不包含任何 fault-injection 测试钩子，保留旧扫描 OOM fallback；C Blob SHA `3b6df766a05bcaab365289b39e414fc9be8c2ba3`。紧接着 [Manifest 提交 8e6542e8](https://github.com/yituanxing/minic-toolchain/commit/8e6542e8237546c36c9070ebc71fb7d0b1b0b382) 将该 SHA 作为正式 Runtime 源码闸门。
 
-**执行中的完整门禁：** [#39023546906](https://github.com/yituanxing/minic-toolchain/actions/runs/39023546906) 使用原七路 shard + GNU 链接/QEMU P1；截至文档写入时七个产物 shard **7/7 SUCCESS**，统一 Receiver 正在 GNU Link/QEMU 阶段，**尚不宣称 QEMU P1 通过**。原 Focused T1 [#39023526235](https://github.com/yituanxing/minic-toolchain/actions/runs/39023526235) **SUCCESS**。如果 Receiver 通过，再将本行状态升为 `integrated/runtime-certified/keep`，否则保留问题并按真实日志修正。
+**完整运行时最终正式验证：** [#39023546906](https://github.com/yituanxing/minic-toolchain/actions/runs/39023546906) **SUCCESS**：7/7 GNU PP→MiniC→GNU AS shard PASS，Receiver 精确合并并复用 2064 对象，GNU Link `COHORT_LINK=REUSED name=full_all_verified selection=prefix:2064`；Linux 6.6.143 Image 经 QEMU P1 **`COHORT_P1=PASS name=full_all_verified syscalls=12 python_era_oracle=PASS`**；`COHORT_RESULT=PASS candidate_objects=2064 scope=FULL_C_UNIVERSE same_config=true`。Focused T1 [#39023526235](https://github.com/yituanxing/minic-toolchain/actions/runs/39023526235) **SUCCESS**。**最终裁决：`symbolic-source-grouped-calls-v1 = integrated / runtime-certified / keep / do-not-repeat`。** 运行时门禁是 GNU PP→MiniC→GNU AS/LD，不代表这一轮所有 Mini 原生工具组合。
 
 ### 第七轮 source-grouped Symbolic CALL 索引：500 汇编等价、回退复核完成（2026-10-17）
 
@@ -57,7 +57,7 @@
 
 **RSS 没有统一下降：** 5-owner 独立单进程 /usr/bin/time 峰值 KiB：fsync 88984→89080、BTF 157024→154436、events/core 183020→182148、memcontrol 149064→150372、printk/sysctl 24788→25896。候选增加索引内存，不能宣称是统一节省空间的优化。
 
-**当前裁决：** `symbolic-source-grouped-calls-v1 = candidate / first500-byte-identical / 11-owner-regression-triage-pass / production-not-modified / 2064-QEMU-pending`。可进入专门的 OOM/共享表达式/late-appended-expression 和边界负例审计与 ASan/UBSan，再考虑提交生产源码及 **GNU PP→MiniC→GNU AS/LD 的 2064/GNU link/QEMU P1** 运行时门禁。在安全验证、整内核运行时成功之前，绝不记为 `integrated` 或 `runtime-certified`。
+**最终状态更新：** 本节原始 500/500 与 11 文件诊断先于合入，现在 9,000 个索引次序模型测试、8×5 臂安全验证（#39023367899）、正式源码 7ed87186、2064 GNU 链接/QEMU P1 (#39023546906) 均已通过；`symbolic-source-grouped-calls-v1 = integrated / runtime-certified / keep / do-not-repeat`。后续不得以该相同索引重新抽卡。
 
 ## 第六轮完成后最新 CPU 归因：Parser hot-copy 病因解除，下一张卡需重选（2026-10-17）
 
