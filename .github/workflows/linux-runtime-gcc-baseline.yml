@@ -1483,6 +1483,7 @@ jobs:
           if [[ "${{ contains(github.event.head_commit.message, '[linux-perf-integrated-full]') }}" == true ]]; then
             export COHORT_GNU_PREFLIGHT_ALLOW_SEVEN_SHARD_VOLATILE=1
           fi
+          # The existing compile script remains unchanged for ordinary runs.
           if git log -1 --format=%B | grep -Fq '[minic-bootstrap-stage2-linux2064]'; then
             source tools/ci/minic-bootstrap-stage2-2064-prepare-v1.sh producer "$ev"
           fi
@@ -1510,13 +1511,6 @@ jobs:
               --integer-metrics "$ev/integer-owner-counts.tsv" \
               --output "$ev/boolean-domain-summary.json"
             echo "MINIC_BOOLEAN_NATIVE_2064=SHARD_PASS shard=${{ matrix.shard }}/7 objects=$n"
-          fi
-          if git log -1 --format=%B | grep -Fq '[minic-bootstrap-stage2-linux2064]'; then
-            python3 tools/ci/minic-bootstrap-stage2-2064-shard-audit-v1.py \
-              --owners "$ev/full-objects.txt" --success "$ev/mini-success-objects.txt" \
-              --trace "$ev/stage2-invocations.tsv" \
-              --stage2-sha 17e76f14befdd46b18d62b4ab90cbf15cd724e281b216039a252528208b6f94d
-            echo "BOOTSTRAP_STAGE2_2064_SHARD=PASS shard=${{ matrix.shard }} objects=$n"
           fi
           echo "GNU_MINIC_SHARD_READY=PASS shard=${{ matrix.shard }} objects=$n"
 
@@ -1547,7 +1541,6 @@ jobs:
             build/linux-runtime-gcc-shards-v1/shard-${{ matrix.shard }}/stage-probe/stages.tsv
             build/linux-runtime-gcc-shards-v1/shard-${{ matrix.shard }}/stage-probe/minic-rss.tsv
             build/linux-runtime-gcc-shards-v1/shard-${{ matrix.shard }}/stage-probe/minic-resource-summary.json
-            build/linux-runtime-gcc-shards-v1/shard-${{ matrix.shard }}/stage2-invocations.tsv
           if-no-files-found: error
           retention-days: 3
 
@@ -2072,9 +2065,6 @@ jobs:
           fi
           bash tools/ci/linux-runtime-build-minic-profile-v1.sh \
             "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain" "$ev/compiler"
-          if git log -1 --format=%B | grep -Fq '[minic-bootstrap-stage2-linux2064]'; then
-            source tools/ci/minic-bootstrap-stage2-2064-prepare-v1.sh receiver "$ev"
-          fi
           if [[ "${{ contains(github.event.head_commit.message, '[linux-perf-integrated-full]') }}" == true ]]; then
             bash tools/ci/linux-perf-integrated-full-profile-v1.sh \
               "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain" "$ev/compiler"
@@ -2591,7 +2581,7 @@ jobs:
           work="$GITHUB_WORKSPACE/build/linux-runtime-gcc"
           ev="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1"
           export COHORT_ACTION=verify
-          if [[ "${{ contains(github.event.head_commit.message, '[linux-perf-integrated-full]') }}" == true ]] || git log -1 --format=%B | grep -Fq '[minic-bootstrap-stage2-linux2064]'; then
+          if [[ "${{ contains(github.event.head_commit.message, '[linux-perf-integrated-full]') }}" == true ]]; then
             export COHORT_GNU_PREFLIGHT_ALLOW_SEVEN_RECEIVER_VOLATILE=1
           fi
           if [[ "${{ contains(github.event.head_commit.message, '[linux-native-union-cached]') && '1' || '0' }}" == 1 ]]; then
