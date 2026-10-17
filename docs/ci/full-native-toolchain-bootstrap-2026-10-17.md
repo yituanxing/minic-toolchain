@@ -50,6 +50,10 @@ Runner 通过 `strace -f -e execve` 对完整脚本记录执行族，禁止任�
 | #39057831387 | 使用相同已固定 musl 1.2.5 tarball 及 configure 的 source producer，通过 `make install-headers` 生成**与 libc.a、CRT 匹配的标准头文件**，编制每个 header SHA 清单并入 Artifact；runtime 链接探测继续通过。原先使用 **glibc 头文件 + musl 运行库**，虽然达到自举固定位点，仍存在 `struct stat` 等 C ABI 布局不匹配风险；不能据此声称通用运行时正确性。 |
 | #39057960530 | **Matching musl ABI preflight SUCCESS**：从同一 SHA-pinned musl 1.2.5 source 得到 headers 和 libc/CRT；真实 4/4 生产 C 文件用 Stage2-built MiniPP→Stage2 MiniC→Stage2-built MiniAS 均 PASS；strace 零 GCC/GNU AS/GNU LD。下一步在全部 77 个生产 TU 上重复、重新构建九工具并检查 Stage3/Stage4 固定点；不能重用旧 glibc ABI 对象。另加入新的 Stage4 C→ELF→QEMU exit42 和完整 Driver 联合运行时验收（`85551375`）。 |
 
+| #39058200575 | **正确 musl 头文件 + musl CRT/libc 的全量 Stage3 重编译 76/77 PASS**。唯一剩余的生产源码 `tools/minic-as/main.c` 在 MiniC -S 报错，根因是该源依赖 GNU/glibc `<elf.h>` 导出的 RISC-V `EF_RISCV_FLOAT_ABI_*`，musl 标准头没有这些 GNU 扩展；不是 76 个工具源的独立故障。保留本轮 76 个 .i/.s/.o SHA 产物供有证据恢复。 |
+| #39058752686 + #39058810567 | **MiniAS 跨 libc ELF ABI 修正已验证**：项目自己使用由 RISC-V ELF psABI 定义的常量值，不依赖 libc `<elf.h>` 的扩展；修复并发修改所致枚举与宏定义重复后，已有生产源码 `tools/minic-as/main.c` 在匹配 musl 头文件下 **原生 PP→CC→AS 单文件 PASS**、聚焦回归 PASS，未调用 GNU 编译/汇编/链接。 |
+| #39058935623 | **继续真实九工具全链**：已启动复用前次 `76/77` 匹配 musl 头文件的 Stage3 SHA 证明对象，仅重新编译变更的 MiniAS 生产 TU，然后九工具 Stage3 原生链接、Stage4 全 77 TU 编译与九工具链接、固定点和 Stage4 新制 PP/CC/AS/LD/Driver → QEMU exit42。未出最终结果前不得标记全链 musl ABI PASS。 |
+
 每次实验按 `stderr→源 .i→标准/ABI 前提→最小有界回放→全量` 调试，不能重复修改已经证实正确的 47 个编译器生产 C 源。
 
 | #musl-abi-full | **已提交完整 77 TU matched-musl ABI 原生全链复验**，要求 Stage3/Stage4 九工具编译、MiniLD 链接、逐字节固定点，以及新增 QEMU 42/Driver 运行时；禁用 GCC/AS/LD 进程，外部 musl seed 单独披露。|
@@ -64,6 +68,8 @@ Runner 通过 `strace -f -e execve` 对完整脚本记录执行族，禁止任�
 
 ### 常用链接（准确记录）
 
+- 当前匹配 musl 头文件的九工具完整重试：`https://github.com/yituanxing/minic-toolchain/actions/runs/39058935623`
+- MiniAS musl 头文件源码层单 TU PASS：`https://github.com/yituanxing/minic-toolchain/actions/runs/39058810567`
 - Stage3/Stage4 实际 77/77 九工具固定点（原 CI gate 误报红）：`https://github.com/yituanxing/minic-toolchain/actions/runs/39057243168`
 - 采用匹配 musl 头文件的四 TU ABI 预检：`https://github.com/yituanxing/minic-toolchain/actions/runs/39057960530`
 - 匹配 musl 1.2.5 runtime/header 种子产物：`https://github.com/yituanxing/minic-toolchain/actions/runs/39057831387`
