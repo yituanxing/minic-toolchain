@@ -4,6 +4,23 @@
 > 本表是候选的**状态索引**，不是覆盖旧的原始数据；旧实验报告、补丁、CI artifacts 均保留。每次新优化先记录「相同结构以前试过没有、当时基线是什么、为何现在仍值得做」。
 > 基线：主线 `6612e2c1a3`（文档头），最新已认证的 Boolean/Core/Integer 联合源码经 [2064 + GNU link + QEMU P1 #38995964988](https://github.com/yituanxing/minic-toolchain/actions/runs/38995964988) PASS。这个 PASS 是 GNU PP → MiniC → GNU AS/LD，不能声称全 Mini 工具链共同通过。下列不同实验的加速比不能相乘，也不能伪称当前 2064 的同比速度。
 
+## 新选卡的只读结构成本诊断：Lexer 真实重复分词（2026-10-17）
+
+**首次全函数分词重做次数确认：** [真实五 TU perf500 #39027759692](https://github.com/yituanxing/minic-toolchain/actions/runs/39027759692) **SUCCESS**。恢复并 SHA-校验旧 first500，**无修改生产 `src/frontend/lexer.c`**，仅在一次性 CI checkout 对 Lexer 加诊断 wrapper；真实原版和插桩版的 5/5 GNU-PP Kbuild `.i` 编译输出 `.s` 完全字节一致。临时字节表按 `(same source pointer,length,lexer cursor at entry)` 统计，再由原始原封不动的 `minic_lexer_next` 解析，记录本次 consumed cursor bytes；未归属的输入直接失败。
+
+| 本轮原始冻版 Linux `.i` | 实际 Lexer calls | 同起点重访次数 | 重访扫描字节比例 | 单起点最多访问 |
+| --- | ---: | ---: | ---: | ---: |
+| fs/ext4/fsync.o | 730,328 | 105,465 | 14.02% | 3 |
+| kernel/bpf/btf.o | 1,230,731 | 188,703 | 15.29% | 4 |
+| kernel/events/core.o | 1,145,413 | 174,432 | 15.38% | 4 |
+| mm/memcontrol.o | 1,136,514 | 174,373 | 15.26% | 3 |
+| kernel/printk/sysctl.o | 186,819 | 22,471 | 8.56% | 3 |
+| **合计** | **4,429,805** | **665,444（15.02%）** | **14.77%** | **4** |
+
+**裁决：只读成本确定，不开启每字节 Token cache 优化。** 至少可确认每个进程约 **85% 起点为单次扫描**，即使缓存完全消除 14.77% 的重复扫描，Lexer 当前 3.46%～7.64% 的独占 Ir 仅容许粗略的 `<~1.2%` 总程序 Ir 上限（忽略缓存本身的构建、查询、内存和错误路径成本；且重复字节与 CPU Ir 不能等同）。因此把共享可变 Token cache 放入 Parser/Lexer 增加分配、失效和竞态风险，很可能仍低于收益门槛。**这不等于证明 Parser 所有 lookahead 是零成本，也不等于 CPU wall 实测**；此账目仅对确定 source/cursor 起点的实际 Lexer tokenization 重访负责，与已拒绝的 Parser local probe 微调不同，不重复抽卡。
+
+**接档：** 增加真实 TU CPU profile 代表性（同生产版本、同 Callgrind、同冻版输入而非重新抓网页）以确定其它可能有较高绝对效益的新热点；[已触发 #39027912246](https://github.com/yituanxing/minic-toolchain/actions/runs/39027912246)，待该 run 的最终日志和真实 Callgrind top-function 输出决定，不对未完成测试断言收益。诊断使用原有 perf500 Job/构建器，绝不重新跑第七轮全 2064。
+
 ## 第八轮独立候选初筛裁决（2026-10-17）
 
 **第一张 DataLayout RV64 single-walk 卡停止：** 当前生产 `src/target/riscv64/layout.c` 会先经 `minic_data_layout_type` 全字段校验，再在每个字段上重新调用 `minic_data_layout_record_field_layout` 全记录遍历，取得的 field_offset/bit_offset 从未消费。这个 O(F²) 重复检查确实存在，但是独立一因子 opt-in 的四个 SHA-frozen Linux TU [CI #39025175461](https://github.com/yituanxing/minic-toolchain/actions/runs/39025175461) **SUCCESS**：4/4 `.s` byte-identical，四次/臂 paired P50：fsync **272.258→259.741ms**（1.0482×）；BTF **917.505→901.002ms**（1.0183×）；events/core **1180.071→1163.194ms**（1.0145×）；memcontrol **1025.703→1005.077ms**（1.0205×）。合计 **3395.537→3329.013ms，仅 1.01998× / 约 1.96% 时间下降**。裁决 `rv64-record-layout-single-walk-v1 = verified-local / not-promoted / stop`，不重复全500/2064；生产源未修改。不能仅凭 O(F²) 算法复杂度忽略实际小样本较低的绝对 wall 收益。
