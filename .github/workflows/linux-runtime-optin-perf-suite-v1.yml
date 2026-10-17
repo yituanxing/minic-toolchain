@@ -749,6 +749,7 @@ jobs:
           grep -Fq 'BOOTSTRAP_STAGE2_NATIVE_RUNTIME=PASS tools=8 suites=8 runtime_chain=42 all_mini_pp_cc_as_ld=true nm_strip_oracles=true driver_chain=42' \
             "$GITHUB_WORKSPACE/build/bootstrap-stage2-native/verdict.log"
 
+      # Round2: native macro definitions are inlined (MiniPP quoted include path).
       # Stage2-built MiniPP/AS/LD and fixed-point MiniC rebuild all NINE
       # current tool executables from C source, twice. A separate milestone:
       # original Stage2-built ELF creation used GNU; these two rebuilds do not.
