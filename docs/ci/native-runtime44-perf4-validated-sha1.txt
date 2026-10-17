@@ -29,10 +29,16 @@
 # includes every src/ file and invalidates all compiler artifact shard caches.
 # FULL 2064/2064 + GNU Link + QEMU P1 #39000339623 SUCCESS (7/7 shards, 12/12 syscall oracle).
 # The manifest authenticates its pinned sources, not this AST file; cache key includes all src/ and was invalidated.
+# 2026-10-17: AST CALL 64 inline argument IDs packed as uint32_t in ast.h.
+# Exact frozen first500 #39002211001 PASS (500/500 .s, 1.07580x,
+# 289603.901ms->269198.125ms), four-TU paired+RSS #39002084966 PASS,
+# synthetic 0/1/2/8/9/63/64 and 65-reject #39002498179 PASS.
+# New ast.h SHA below is SOURCE ID only. Full 2064 GNU/QEMU P1 not yet
+# certified for this newest candidate: rerun on all seven immutable shards.
 d1b8a54a26e933b9f40438d23bb9001bc632408e src/compiler/compiler.c
 1ab6f1d2d587e6008d7224b10b1638c9887bac18 src/core/core_lower.c
 a8418e45608310687e3d6a1e96da79ca49135870 src/core/core_lower_asm.c
 7997978a9b10a6d01e33dbc00dd11cb3f668f69f src/core/core_lower_internal.h
-bfca6a1861104f768b3b0ae93a72fa28bf0eded0 src/frontend/ast.h
+5b6eb641d73e67d7b271c54aca180e4e587deac3 src/frontend/ast.h
 3abecc04f9cec7523963b5368667ceb8ccb9f905 src/target/riscv64/core_codegen.c
 d55e435041f4e34432a7870b6a2886e9bce70156 src/target/riscv64/function_symbol.h
