@@ -9,7 +9,7 @@
   `17e76f14befdd46b18d62b4ab90cbf15cd724e281b216039a252528208b6f94d`。
 - 使用 Stage2 编译另外 8 个原生工具：`#39042731803`，实际 30/30 TU；此 ARTIFACT 自身最初经 GNU PP/AS/LD 链接，仍只是可信种子。
 - Stage2-built 8 套原生工具门禁及由 Driver 调用 PP/CC/AS/LD 构建小程序 QEMU return42：`#39045009260`，SUCCESS。
-- Stage2 Linux 500/500 各个汇编和对象身份一致：`#39044397806`，SUCCESS；另外的 Stage2 Linux 2064 + QEMU `#39049610848` 独立执行，**不要混入本门禁**。
+- Stage2 Linux 500/500 各个汇编和对象身份一致：`#39044397806`，SUCCESS；另外的 Stage2 Linux 2064 + QEMU `#39049610848` **已单独成功：7/7 分片、2064/2064 Stage2 C 对象、GNU 最终链接、QEMU P1=PASS（12 syscalls）**。这只证明 Stage2 MiniC 全量 Linux 运行时正确性，不能混同于九工具原生自举。
 
 ## 真正的全链路验收
 
@@ -42,7 +42,8 @@ Runner 通过 `strace -f -e execve` 对完整脚本记录执行族，禁止任�
 | #39053483280 | 77/77 缺 `stddef.h` 或 `stdbool.h` 等 GCC 内建目标头文件；将其定位为外部只读头文件种子，显式记入依赖清单，禁止启动 GCC。 |
 | #39053593540 | MiniPP 完成预处理，31/77 编译/汇编 PASS；46/77 在 Stage2 语义分析阶段被 `use of undeclared local` 拦截。比较同源码的 GNU C11 固定输入，发现误用了 Linux `-std=gnu11 -fshort-wchar -funsigned-char` 目标预定义，使 glibc 打开额外 GNU 扩展（例如 `__bswap_16` 中内建），且 `wchar_t` 类型不同。不能把它归咎于 46 个独立编译器 bug。 |
 | #39053974234 | 已按 C11 hosted ABI overlay 改为 `__STRICT_ANSI__`、原生 `wchar_t`、signed char 和 lp64d，真实源码四个独立样本 **4/4 MiniPP→MiniC→MiniAS PASS**（core_ir、preprocessor、minic-cpp、MiniLD linker）；strace **GNU 编译/汇编/链接进程为 0**。 |
-| #39054222221 | **完整 77 TU、9 工具、Stage3/4 门禁已启动**，此处不预记成功；以独立完整 CI 和 Artifact 为准。 |
+| #39054222221 | 全部 77 TU 源码真实进入 MiniPP/MiniC/MiniAS；其中 **76/77 全程 PASS**。唯一失败 `src/core/core_lower.c`：Stage2 MiniC 已成功生成 **14,848,436 字节、888,244 行汇编**，Stage2-built MiniAS 在原有 **240 秒**超时。其余 76 个 ELF .o 均有逐文件 SHA 记录，脚本 strace 查明无 GNU PP/AS/LD 执行。尚未开始九工具最终链接。 |
+| #39055271159 | 将超大汇编原生 MiniAS 超时限制定向放宽至 1200 秒；直接从上一轮 Artifact 恢复 **76 个已验证 Stage3 对象**，但必须重新用 MiniPP 从现役 C 原文生成相同 `.i`，并核对种子工具 SHA、运行库 SHA、`.i/.s/.o` SHA 后才可复用；这轮继续 Stage3 九工具链接、Stage4 重建和固定点门禁。没有修改生产编译器或汇编器源码。 |
 
 每次实验按 `stderr→源 .i→标准/ABI 前提→最小有界回放→全量` 调试，不能重复修改已经证实正确的 47 个编译器生产 C 源。
 
@@ -56,6 +57,8 @@ Runner 通过 `strace -f -e execve` 对完整脚本记录执行族，禁止任�
 
 ### 常用链接（准确记录）
 
-- 全链原生复现/审计：`https://github.com/yituanxing/minic-toolchain/actions/runs/39054222221`
+- 当前全链原生恢复重试：`https://github.com/yituanxing/minic-toolchain/actions/runs/39055271159`
+- 首次 77 TU 76 成功的完整日志：`https://github.com/yituanxing/minic-toolchain/actions/runs/39054222221`
+- Stage2 Linux 2064 + QEMU P1: `https://github.com/yituanxing/minic-toolchain/actions/runs/39049610848`
 - 4 TU 已验证前导：`https://github.com/yituanxing/minic-toolchain/actions/runs/39053974234`
 - 最初二进制与 Stage2 固定点：`https://github.com/yituanxing/minic-toolchain/actions/runs/39040013459`
