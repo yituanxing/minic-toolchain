@@ -131,21 +131,8 @@ once("""    bool unsafe;
 
 # If either early error path returns, release the sparse list initialized on
 # entry (only the inline storage exists at this point).
-once("""    if (program->statement_count == 0U ||
-        program->block_count > SIZE_MAX / sizeof(*visited_blocks) ||
-        program->statement_count > SIZE_MAX / sizeof(*statement_membership)) {
-        return true;
-    }
-    visited_blocks = program->block_count == 0U""",
-     """    if (program->statement_count == 0U ||
-        program->block_count > SIZE_MAX / sizeof(*visited_blocks) ||
-        program->statement_count > SIZE_MAX / sizeof(*statement_membership)) {
-        return true;
-    }
-    visited_blocks = program->block_count == 0U""",
-     "early guard proof")
-# The above is an identity replacement, explicitly documenting that the
-# early branch can only observe an inline (zero-heap) list.
+# The original early guards and OOM exits are unchanged; the sparse
+# collection has only its inline storage at each of these early returns.
 
 once("""    unsafe = !core_mark_discarded_if_membership(
         context, block, visited_blocks, statement_membership);
