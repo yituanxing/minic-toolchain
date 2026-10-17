@@ -17,6 +17,11 @@ EXPECTED = {"a": (0,72), "b": (72,72), "c": (144,72),
 def main():
     folder=Path(sys.argv[1])
     output=Path(sys.argv[2])
+    candidate="stage2"
+    if len(sys.argv)==4 and sys.argv[3]=="--stage4":
+        candidate="stage4"
+    elif len(sys.argv)!=3:
+        raise RuntimeError("usage: aggregate SHARD_ROOT OUTPUT [--stage4]")
     docs=list(folder.rglob("verdict.json"))
     if len(docs)!=7:
         raise RuntimeError("seven shard verdicts required; found "+str(len(docs)))
@@ -24,7 +29,7 @@ def main():
     shard_summary=[]
     for label,(off,n) in EXPECTED.items():
         matches=[p for p in docs if
-                 ("minic-bootstrap-stage2-linux500-"+label) in p.parts]
+                 ("minic-bootstrap-"+candidate+"-linux500-"+label) in p.parts]
         if len(matches)!=1:
             raise RuntimeError("missing/duplicate shard "+label+" count="+str(len(matches)))
         d=json.loads(matches[0].read_text())
@@ -40,31 +45,37 @@ def main():
         if len(d["rows"])!=n or d["groups"]!={"range":n}:
             raise RuntimeError("invalid shard row/group length "+label)
         if any(not x["assembly_same"] or not x["object_same"] or
-               x["stage0_assembly_sha"] != x["stage2_assembly_sha"] or
-               x["stage0_object_sha"] != x["stage2_object_sha"]
+               x["stage0_assembly_sha"] != x[candidate+"_assembly_sha"] or
+               x["stage0_object_sha"] != x[candidate+"_object_sha"]
                for x in d["rows"]):
-            raise RuntimeError("Stage0/Stage2 object or assembly mismatch "+label)
+            raise RuntimeError("Stage0/"+candidate+" object or assembly mismatch "+label)
+        if candidate=="stage4" and (d.get("candidate_label")!="stage4" or
+                                   d.get("candidate_scope")!="qemu-riscv64-rv64-self-host-compiler"):
+            raise RuntimeError("wrong candidate compiler identity "+label)
         if len({x["index"] for x in d["rows"]})!=n or len({x["object"] for x in d["rows"]})!=n:
             raise RuntimeError("duplicate index or object inside "+label)
         rows.extend(d["rows"])
         shard_summary.append({"label":label,"offset":off,"count":n,
                               "index_min":min(x["index"] for x in d["rows"]),
                               "index_max":max(x["index"] for x in d["rows"])})
-        print("BOOTSTRAP_STAGE2_LINUX500_SHARD=PASS label="+label+
+        print("BOOTSTRAP_"+candidate.upper()+"_LINUX500_SHARD=PASS label="+label+
               " count="+str(n), flush=True)
     if len(rows)!=500 or len({x["index"] for x in rows})!=500 \
        or len({x["object"] for x in rows})!=500 or \
        len({x["input"] for x in rows})!=500:
         raise RuntimeError("shards do not cover 500 UNIQUE object/index/.i")
-    verdict={"status":"PASS", "corpus":"frozen first500 Linux 6.6.143",
+    verdict={"status":"PASS", "candidate_stage":candidate,
+             "corpus":"frozen first500 Linux 6.6.143",
              "count":500,"asm_equal":500,"obj_equal":500,"shards":shard_summary,
              "qemu_kernel_p1":"NOT_RUN","linux_image_link":"NOT_RUN",
-             "stage2_compiler_sha256":
-              "17e76f14befdd46b18d62b4ab90cbf15cd724e281b216039a252528208b6f94d",
+             "candidate_compiler_sha256":
+              ("50b3f7763bde2505e17bb545513cb00664286d4e762b3395aea3f29ce724ef31"
+               if candidate=="stage4" else
+               "17e76f14befdd46b18d62b4ab90cbf15cd724e281b216039a252528208b6f94d"),
              "rows":sorted(rows,key=lambda r:r["index"])}
     output.write_text(json.dumps(verdict, indent=2)+"\n")
-    print("BOOTSTRAP_STAGE2_LINUX500=PASS owners=500/500"
-          " stage0_stage2_asm=500/500 rv64_objects=500/500"
+    print("BOOTSTRAP_"+candidate.upper()+"_LINUX500=PASS owners=500/500"
+          " stage0_"+candidate+"_asm=500/500 rv64_objects=500/500"
           " complete_linux_image=NOT_RUN qemu_kernel_p1=NOT_RUN",flush=True)
 
 
@@ -72,5 +83,5 @@ if __name__=="__main__":
     try:
         main()
     except (OSError,ValueError,KeyError,RuntimeError,IndexError) as err:
-        print("BOOTSTRAP_STAGE2_LINUX500=FAIL "+str(err),file=sys.stderr)
+        print("BOOTSTRAP_SELFHOST_LINUX500=FAIL "+str(err),file=sys.stderr)
         sys.exit(1)
