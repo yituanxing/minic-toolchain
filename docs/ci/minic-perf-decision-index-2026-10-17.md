@@ -29,7 +29,7 @@
 | mm/memcontrol.o | 911.087ms | 811.806ms | 1.1223× |
 | **合计** | **3021.030ms** | **2774.289ms** | **1.08894×（约 8.17% 耗时下降）** |
 
-**初判：PROMISING_FOR_500，不宣称已晋级。** 七 TU 的 Core direct-call 自耗高于此前两份样本显示的部分小优化，而且 4 TU A/B 有三份明显改善，故进行一次真正的 500 SHA-frozen GNU Kbuild `.i` 扩组，而不是再次改旧 Core reentry 索引或重跑旧 enum bind hash。正在执行 [#39028562773](https://github.com/yituanxing/minic-toolchain/actions/runs/39028562773)；该 500 报告必须给出完整 `.s` 一致和单 TU 回退清单。在完整 500、边界负例/ASan/UBSan 以及 2064/GNU/QEMU P1 前，**生产 `src/core/core_lower.c` 未改，绝不能把 4 TU 1.089× 误称全 500 优化率。**
+**正式 first500 结果：STOP / 不提升生产源码。** [#39028562773](https://github.com/yituanxing/minic-toolchain/actions/runs/39028562773) **SUCCESS**，一因子、同 Runner、4-worker balanced-order、 SHA-frozen Linux `.i` **500/500 `.s` 字节一致**。500 份 TU wall 累计 **232810.654ms→224841.659ms**，差 **7968.995ms（约 3.42% 耗时下降），speedup=1.03544×**，其中 **86/500** 文件在单次 A/B 中变慢；此处是逐 TU wall 的累计，绝非 7 路 Kbuild critical-path wall，也非多轮 P50。该收益**未达到预先设置的 `>=1.04×` 初级准入阈值**，CI 中独立决策为 `NOT_PROMOTED_STOP`，所以不继续 2064/QEMU，也不把补丁合入生产 `src/core/core_lower.c`。测试脚本和真实证据保留；4 TU 小样本 **1.08894×** 是乐观局部样本，不能推广为完整 first500。86 个单次倒退亦不可直接说是可信持续 CPU 退化，若将来出现不同的新理由需要恢复研究，应先针对回退做 paired CPU/MAD，而非悄悄重新晋级旧候选。决策索引：`core-direct-call-no-facts-v1 = A/B500 byte-identical / 1.03544x / stop / no-production-change`。
 
 ## 新选卡的只读结构成本诊断：Lexer 真实重复分词（2026-10-17）
 
