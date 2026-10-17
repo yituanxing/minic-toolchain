@@ -4,6 +4,14 @@
 > 本表是候选的**状态索引**，不是覆盖旧的原始数据；旧实验报告、补丁、CI artifacts 均保留。每次新优化先记录「相同结构以前试过没有、当时基线是什么、为何现在仍值得做」。
 > 基线：主线 `6612e2c1a3`（文档头），最新已认证的 Boolean/Core/Integer 联合源码经 [2064 + GNU link + QEMU P1 #38995964988](https://github.com/yituanxing/minic-toolchain/actions/runs/38995964988) PASS。这个 PASS 是 GNU PP → MiniC → GNU AS/LD，不能声称全 Mini 工具链共同通过。下列不同实验的加速比不能相乘，也不能伪称当前 2064 的同比速度。
 
+## 第八轮独立候选初筛裁决（2026-10-17）
+
+**第一张 DataLayout RV64 single-walk 卡停止：** 当前生产 `src/target/riscv64/layout.c` 会先经 `minic_data_layout_type` 全字段校验，再在每个字段上重新调用 `minic_data_layout_record_field_layout` 全记录遍历，取得的 field_offset/bit_offset 从未消费。这个 O(F²) 重复检查确实存在，但是独立一因子 opt-in 的四个 SHA-frozen Linux TU [CI #39025175461](https://github.com/yituanxing/minic-toolchain/actions/runs/39025175461) **SUCCESS**：4/4 `.s` byte-identical，四次/臂 paired P50：fsync **272.258→259.741ms**（1.0482×）；BTF **917.505→901.002ms**（1.0183×）；events/core **1180.071→1163.194ms**（1.0145×）；memcontrol **1025.703→1005.077ms**（1.0205×）。合计 **3395.537→3329.013ms，仅 1.01998× / 约 1.96% 时间下降**。裁决 `rv64-record-layout-single-walk-v1 = verified-local / not-promoted / stop`，不重复全500/2064；生产源未修改。不能仅凭 O(F²) 算法复杂度忽略实际小样本较低的绝对 wall 收益。
+
+**第二张 Lexer ASCII identifier bulk-advance 卡停止：** 与早期已否决的 Parser probe-copy/lookahead 优化不是同一种：只在 Lexer `minic_lexer_next` 的 ASCII Identifier 连续字节扫描中，一次性推进 cursor 与 column，避开每个 ASCII 字符的旧 `minic_lexer_advance` 换行/边界判断。只读单因子补丁 `tools/ci/apply-perf-lexer-identifier-bulk-advance-v1.py`，对原固定四个 Kbuild `.i` 使用现有 Runner + 四次/臂 paired Wall/CPU + RSS。真实 [CI #39025519138](https://github.com/yituanxing/minic-toolchain/actions/runs/39025519138) **SUCCESS**：4/4 `.s` 字节完全一致；fsync **290.835→286.619ms** (1.0147×)、BTF **925.627→929.633ms** (0.9957×)、events/core **1223.873→1219.412ms** (1.0037×)、memcontrol **1070.496→1084.572ms** (0.9870×)。合计 **3510.831→3520.235ms，speedup=0.99733×，仅 2/4 文件快**。裁决 `lexer-identifier-bulk-advance-v1 = verified-correct / not-promoted / stop`。立即停止，不扩大 first500、不修改生产源码，也不对它继续微调。
+
+**因此下一张卡不能继续从同一小热循环抽取微调。** 当前 Callgrind fsync `minic_lexer_next` 7.64% 并不意味着 ASCII identifier scan 本身占据高比例。需要区分预处理行标记、空白/数字/标点、以及 speculative Lexer probe 的真实次数再选算法。BTF 的枚举 global hash、Core name-index、Lexer lookahead/旧重复结构均有历史否决或已集成，不应复刻。优先考虑有大幅改变**真实访问规模**的结构优化，并用全流程阶段归因和计数决定是否实验。
+
 ## 第八轮选卡前的当前生产 CPU 重新归因（2026-10-17）
 
 **第七轮现在已真正收官，不可重复抽卡：** `symbolic-source-grouped-calls-v1 = integrated / runtime-certified / keep / do-not-repeat`；正式 Full Linux [#39023546906](https://github.com/yituanxing/minic-toolchain/actions/runs/39023546906) **SUCCESS**，Seven shards 7/7、Merge 2064、GNU Link、QEMU P1 syscalls 12/12 + Python oracle 都通过；Focused T1 #39023526235 SUCCESS。此前 500/500 字节一致、paired 累积 TU-wall **1.07605×** 仍是实际性能证据。**千万不要把 first500 累积 TU wall 1.076× 当 7 路 Kbuild critical-path speedup。**
