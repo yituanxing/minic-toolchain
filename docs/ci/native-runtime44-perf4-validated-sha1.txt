@@ -54,11 +54,18 @@
 # Full runtime source SHA refresh 618566bf passed #39012897095: 7/7 shards,
 # 2064/2064 C, GNU link and QEMU P1 syscalls=12 python_era_oracle=PASS.
 # Initial attempt #39012800524 failed the intentional source SHA pin gate.
+# 2026-10-17: Symbolic transitive grouped-CALL source bucket v1 landed in
+# production compiler.c (commit 7ed87186). Frozen 500 old/candidate actual
+# Kbuild .s byte-identical (#39022225132), 1.07605x cumulative TU wall,
+# 11-owner CPU/wall regression triage #39022601919 PASS, 8-case five-arm
+# ASan/UBSan + bucket/owner fallback + 9000 model case safety
+# #39023367899 SUCCESS. The updated blob SHA below authenticates this current
+# code only; does NOT imply 2064 Linux/QEMU P1 passed until that run finishes.
 # The exact validated source identities appear below.
 # Exact runtime source manifest also updated all 3 affected native
 # C/H blobs; the first full-run attempt #39012800524 failed at intentional
 # pinned SHA gate for compiler.c, not in C compilation or QEMU.
-b8f4764806b1a036ee9c9a567bbb370fcbd95cf0 src/compiler/compiler.c
+3b6df766a05bcaab365289b39e414fc9be8c2ba3 src/compiler/compiler.c
 40001b124db8d623c0c75eac6b316c44cd97a83b src/core/core_lower.c
 a8418e45608310687e3d6a1e96da79ca49135870 src/core/core_lower_asm.c
 7997978a9b10a6d01e33dbc00dd11cb3f668f69f src/core/core_lower_internal.h
