@@ -35,7 +35,14 @@ def main():
     p.add_argument("--baseline-driver",type=Path,required=True)
     p.add_argument("--candidate-driver",type=Path,required=True)
     p.add_argument("--out",type=Path,required=True)
+    p.add_argument("--owner",dest="owners",action="append",default=None,
+                   help="Optional owner list; default preserves original packed-call 9-owner trial")
+    p.add_argument("--label",default="MINIC_PACKED_REGRESSION")
     a=p.parse_args()
+    if not a.label.replace("_", "").isalnum() or a.label != a.label.upper():
+        raise SystemExit("invalid report label")
+    owners=tuple(a.owners) if a.owners else OWNERS
+    if len(set(owners))!=len(owners): raise SystemExit("duplicate owners")
     a.out.mkdir(parents=True,exist_ok=True)
     selected={}
     for line in (a.corpus/"selected-tus.txt").read_text().splitlines():
@@ -44,7 +51,7 @@ def main():
         selected[cols[1]]=cols[2]
     if len(selected)!=500: raise SystemExit("first500 corpus identity mismatch")
     rows=[]
-    for owner in OWNERS:
+    for owner in owners:
         if owner not in selected: raise SystemExit("owner missing from frozen500 "+owner)
         source=(a.corpus/"kbuild"/selected[owner]).resolve()
         if not source.is_file() or not source.is_relative_to((a.corpus/"kbuild").resolve()):
@@ -86,15 +93,15 @@ def main():
                   old_cpu_mad_ms=round(old_cpu_mad,3),
                   new_cpu_mad_ms=round(new_cpu_mad,3),
                   classification=cls,assembly_sha256=samples[0]["assembly_sha256"])
-        print("MINIC_PACKED_REGRESSION_OWNER="+json.dumps(item,separators=(',',':')),flush=True)
+        print(a.label+"_OWNER="+json.dumps(item,separators=(',',':')),flush=True)
         (work/"regression.json").write_text(json.dumps(item,indent=2)+"\n")
         rows.append(item)
-    if len(rows)!=len(OWNERS): raise SystemExit("incomplete owner coverage")
+    if len(rows)!=len(owners): raise SystemExit("incomplete owner coverage")
     counts={kind:sum(row["classification"]==kind for row in rows)
             for kind in ("not_reproduced","mixed_or_noisy",
                          "reproduced_wall_and_cpu_slowdown_suspect")}
     (a.out/"summary.json").write_text(json.dumps(dict(owners=rows,counts=counts),indent=2)+"\n")
-    print("MINIC_PACKED_REGRESSION=PASS owners=%d old_new_pairs=8_each counts=%s"%
+    print(a.label+"=PASS owners=%d old_new_pairs=8_each counts=%s"%
           (len(rows),json.dumps(counts,sort_keys=True)),flush=True)
 
 if __name__=="__main__":
