@@ -40,6 +40,16 @@ MINIC_LINUX_FULL_CROSSBLOCK=1 MINIC_OPT_PURE_DISCARDED_ADDRESS_EQ=1 \
  tail -n 100 "$work/stage0-build.log" >&2; exit 1;
 }
 printf '%s  %s\n' f04794d3132631059c028e0a889bf8cf06f15e8f24afcc70d24697edce4925fd "$stage0" | sha256sum -c -
+# kernel/configs.o has a GNU .incbin auxiliary file *outside* its frozen
+# .i; historic certified B4 replay likewise injected an EMPTY stub only to
+# test assembler parity. Never claim this object is a bootable production .o.
+if [[ "$label" == d ]]; then
+  test ! -e kernel/config_data.gz
+  mkdir -p kernel
+  : > kernel/config_data.gz
+  trap 'rm -f kernel/config_data.gz; rmdir kernel 2>/dev/null || true' EXIT
+  echo "BOOTSTRAP_STAGE2_LINUX500_AUX=kernel/config_data.gz empty_standin=true production_link_oracle=false" | tee "$work/auxiliary.txt"
+fi
 python3 -m py_compile tools/ci/minic-bootstrap-stage2-linux-sample-v1.py
 python3 tools/ci/minic-bootstrap-stage2-linux-sample-v1.py \
  --corpus "$PWD/build/linux-perf-corpus" --stage0 "$stage0" --stage2 "$wrapper" \
