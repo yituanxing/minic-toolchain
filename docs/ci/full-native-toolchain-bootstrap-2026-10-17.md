@@ -43,7 +43,10 @@ Runner 通过 `strace -f -e execve` 对完整脚本记录执行族，禁止任�
 | #39053593540 | MiniPP 完成预处理，31/77 编译/汇编 PASS；46/77 在 Stage2 语义分析阶段被 `use of undeclared local` 拦截。比较同源码的 GNU C11 固定输入，发现误用了 Linux `-std=gnu11 -fshort-wchar -funsigned-char` 目标预定义，使 glibc 打开额外 GNU 扩展（例如 `__bswap_16` 中内建），且 `wchar_t` 类型不同。不能把它归咎于 46 个独立编译器 bug。 |
 | #39053974234 | 已按 C11 hosted ABI overlay 改为 `__STRICT_ANSI__`、原生 `wchar_t`、signed char 和 lp64d，真实源码四个独立样本 **4/4 MiniPP→MiniC→MiniAS PASS**（core_ir、preprocessor、minic-cpp、MiniLD linker）；strace **GNU 编译/汇编/链接进程为 0**。 |
 | #39054222221 | 全部 77 TU 源码真实进入 MiniPP/MiniC/MiniAS；其中 **76/77 全程 PASS**。唯一失败 `src/core/core_lower.c`：Stage2 MiniC 已成功生成 **14,848,436 字节、888,244 行汇编**，Stage2-built MiniAS 在原有 **240 秒**超时。其余 76 个 ELF .o 均有逐文件 SHA 记录，脚本 strace 查明无 GNU PP/AS/LD 执行。尚未开始九工具最终链接。 |
-| #39055271159 | 将超大汇编原生 MiniAS 超时限制定向放宽至 1200 秒；直接从上一轮 Artifact 恢复 **76 个已验证 Stage3 对象**，但必须重新用 MiniPP 从现役 C 原文生成相同 `.i`，并核对种子工具 SHA、运行库 SHA、`.i/.s/.o` SHA 后才可复用；这轮继续 Stage3 九工具链接、Stage4 重建和固定点门禁。没有修改生产编译器或汇编器源码。 |
+| #39055271159 | **Stage3 77/77 原生 MiniPP→Stage2 MiniC→Stage2-built MiniAS 已全部成功！** 76 个 .o 经 SHA 缓存复用，唯一大文件 `src/core/core_lower.c` 原生 MiniAS 在 187.237 秒完成。Stage3 链接随后阻塞于 `minic-ld: missing-symtab:/usr/riscv64-linux-gnu/lib/crti.o`，与 MiniC/MiniAS 无关。未回退 GNU LD。 |
+| #39056854507 | 从已证实的 77/77 原生 .o 直接进行 MiniLD 链接探测，不重复编译：移除 glibc `crti.o/crtn.o` 后揭示下一处真正阻塞 `unsupported-section-type:iofclose.o:index=1:type=17`（glibc `libc.a` 的 `SHT_GROUP`）。这是 MiniLD 当前已知的实现范围问题，不能视作编译器失败。 |
+| #39057022666 | 用仓库现有的 MiniLD+musl 静态链接经验，单独生成经过 tarball SHA 验证的 **musl 1.2.5 外部二进制运行库种子**。MiniLD 用同一组 77 个 Mini 原生 .o 中的 MiniPP 对象链接 **成功**，且生成的 RV64 MiniPP 经 QEMU `--help` 运行成功。链接测试 `strace` 证实 GNU GCC/AS/LD 调用为 **0**。musl 最初由 GNU 编译器生成，明确记录其种子来源，**不称作 libc 原生自举**。 |
+| #39057243168 | 恢复上一轮固定 SHA 的完整 77 个 .o 和 musl 运行库种子 Artifact，本次无需重建 musl，也不在严格自举执行链调用 GCC。继续真正的 **Stage3 全九工具原生链接、Stage4 再构建与可加载镜像固定点**；在结果返回前不得宣布九工具全链通过。 |
 
 每次实验按 `stderr→源 .i→标准/ABI 前提→最小有界回放→全量` 调试，不能重复修改已经证实正确的 47 个编译器生产 C 源。
 
@@ -57,7 +60,9 @@ Runner 通过 `strace -f -e execve` 对完整脚本记录执行族，禁止任�
 
 ### 常用链接（准确记录）
 
-- 当前全链原生恢复重试：`https://github.com/yituanxing/minic-toolchain/actions/runs/39055271159`
+- 最新全九工具 musl 静态全链自举：`https://github.com/yituanxing/minic-toolchain/actions/runs/39057243168`
+- 已验证 musl MiniLD 原生链接/运行：`https://github.com/yituanxing/minic-toolchain/actions/runs/39057022666`
+- Stage3 77/77 原生 C→目标文件：`https://github.com/yituanxing/minic-toolchain/actions/runs/39055271159`
 - 首次 77 TU 76 成功的完整日志：`https://github.com/yituanxing/minic-toolchain/actions/runs/39054222221`
 - Stage2 Linux 2064 + QEMU P1: `https://github.com/yituanxing/minic-toolchain/actions/runs/39049610848`
 - 4 TU 已验证前导：`https://github.com/yituanxing/minic-toolchain/actions/runs/39053974234`
