@@ -11,6 +11,11 @@ typedef enum MinicCoreLowerStatus {
     MINIC_CORE_LOWER_ERROR
 } MinicCoreLowerStatus;
 
+/* Optional scoped read-only reentry index for one compilation's Core Set.
+ * begin() falls back to existing per-query scans on validation/OOM failure. */
+void minic_core_lower_reentry_index_begin(const MinicC0Program *program);
+void minic_core_lower_reentry_index_end(void);
+
 MinicCoreLowerStatus minic_core_lower_function(const MinicFunctionBodyView *body,
                                                const MinicTargetInfo *target,
                                                MinicCoreFunction *output);

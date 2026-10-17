@@ -126,6 +126,9 @@ static bool minic_prepare_core_function_set(const MinicC0Program *program,
         minic_core_function_initialize(&set.functions[function_index]);
         set.statuses[function_index] = MINIC_CORE_LOWER_UNSUPPORTED;
     }
+    /* The AST statement/expression graph is immutable during Core Lowering.
+     * Reuse one validated incoming-edge map for all ordinary and clone bodies. */
+    minic_core_lower_reentry_index_begin(program);
     for (function_index = 0U; function_index < set.function_count; ++function_index) {
         const MinicFunction *function;
         MinicFunctionBodyView body;
@@ -167,6 +170,7 @@ static bool minic_prepare_core_function_set(const MinicC0Program *program,
             (void)fflush(stderr);
         }
     }
+    minic_core_lower_reentry_index_end();
     minic_core_function_set_destroy(output);
     *output = set;
     return true;

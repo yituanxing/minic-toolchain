@@ -8,12 +8,13 @@
 # reachability caches; T1 focused/QEMU (8/8, three live variants) passed.
 # Scoped Boolean Domain cache integrated in compiler.c; full 2064 Linux/QEMU
 # verified in run #38916913804 (commit ab483a82).  The current compiler.c
-# has additionally integrated the previously tested integer transitive
-# FunctionBody owner filter, so this SHA is an UNQUALIFIED CANDIDATE pending
-# the dedicated frozen A/B and subsequent full Linux/QEMU requalification.
+# includes the validated Integer FunctionBody owner filter (full Linux
+# 2064/QEMU P1 #38927659471). The refreshed compiler/core_lower identities
+# below also contain the NEW Core reentry incoming-edge index: this is an
+# UNQUALIFIED CANDIDATE pending frozen A/B and full runtime verification.
 # The manifest only authenticates source identity; it is not a test result.
-8d0a6d46a037c7b655b73a22dccd1393b67bd1ec src/compiler/compiler.c
-ce262d93f8c77348019a4f6fd94a0a8ccdc22d7d src/core/core_lower.c
+9151eb7782b6a3b690ba435fbef6ed8ac1751063 src/compiler/compiler.c
+1ab6f1d2d587e6008d7224b10b1638c9887bac18 src/core/core_lower.c
 a8418e45608310687e3d6a1e96da79ca49135870 src/core/core_lower_asm.c
 7997978a9b10a6d01e33dbc00dd11cb3f668f69f src/core/core_lower_internal.h
 bfca6a1861104f768b3b0ae93a72fa28bf0eded0 src/frontend/ast.h
