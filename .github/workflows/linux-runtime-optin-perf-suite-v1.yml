@@ -2935,7 +2935,8 @@ jobs:
           grep -Fq 'MINIC_BOOLEAN20=SKIPPED' "$root/evidence/phase20-verdict.txt"
           grep -Fq 'MINIC_SYMBOLIC20=PASS' "$root/evidence/phase20-verdict.txt"
           grep -Fq 'spec-symbolic-transitive' "$root/evidence/phase20-verdict.txt"
-          grep -Fq 'spec-boolean-transitive' "$root/evidence/phase20-verdict.txt"
+          # The legacy Boolean inner timer is intentionally unavailable in
+          # this Symbolic-only run (the original Boolean patch is source-stale).
 
       # Fresh post-Parser cold-switch CPU attribution, retry after profiler
       # accepts the current ~1KiB Parser instead of obsolete 131KiB floor.
