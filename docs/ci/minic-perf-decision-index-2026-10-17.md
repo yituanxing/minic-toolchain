@@ -4,6 +4,20 @@
 > 本表是候选的**状态索引**，不是覆盖旧的原始数据；旧实验报告、补丁、CI artifacts 均保留。每次新优化先记录「相同结构以前试过没有、当时基线是什么、为何现在仍值得做」。
 > 基线：主线 `6612e2c1a3`（文档头），最新已认证的 Boolean/Core/Integer 联合源码经 [2064 + GNU link + QEMU P1 #38995964988](https://github.com/yituanxing/minic-toolchain/actions/runs/38995964988) PASS。这个 PASS 是 GNU PP → MiniC → GNU AS/LD，不能声称全 Mini 工具链共同通过。下列不同实验的加速比不能相乘，也不能伪称当前 2064 的同比速度。
 
+## 空间方向第三轮：按实际数量单独分配 Function 参数类型（2026-10-17）
+
+**单因素新模型，先只改临时 CI 工作树，正式生产 C 尚未改。** 继前两轮 `MinicType` 72B 和 CALL 参数 ID 32-bit 后，七文件原样追踪 [#39007018275](https://github.com/yituanxing/minic-toolchain/actions/runs/39007018275) 显示 85,327 个 Function 中 77.76% 参数数≤2、均值1.770，然而每个 `MinicFunction` 依然 `MinicType parameter_types[64]`，单靠该数组固定占 4608B、整个 Function 6016B、16,384 容量的重型 TU Function 数组 **94 MiB**。虽原讨论首先考虑“小内联4 + 超额另存”，但存在 **by-value Function snapshots + Function 数组 realloc 后内联指针悬空**，因此先用**更保守的私有 exact-length heap 参数数组**验证真实收益上界（而非冒险直接上 hybrid）；`MinicFunction` 保持原字段直接下标访问的语法，单个 Function 通过 `set_function_signature` 只分配实际参数数 `n*72B`，返回前 deep copy，析构各自 free，源 Function 被克隆到 specialized 时也通过现有 setter deep-copy，常见按值快照仅借用不可释放的参数数组。0 参数不分配，但非零参数每个 Function 添加 malloc，这项**新分配成本必须在真实 CPU/Wall 测试中检验**，不允许将减少 struct 字节当作真实收益。
+
+**五个 SHA 固定 Linux owner A/B [#39008785116](https://github.com/yituanxing/minic-toolchain/actions/runs/39008785116) SUCCESS**：同 runner，每臂 4 次交错，`make check-ast-contract` PASS；旧/新实际 `sizeof(MinicFunction)=6016→1416B`，字段宽度 `sizeof(MinicType)=72B` 不变，函数类型描述符未改，Specialization fixed fact arrays 未动；Linux 输出 `.s` **5/5 byte-identical**。代表性每 owner 的 old P50 → new P50：
+- fsync **338.417→305.659ms (1.10717×)**；峰值 RSS 单进程 **182372→137688 KiB**；
+- BTF **992.052→903.015ms (1.09860×)**；RSS **306592→243728 KiB**；
+- events/core **1359.769→1200.996ms (1.13220×)**；RSS **289216→231772 KiB**；
+- memcontrol **1192.284→1060.027ms (1.12477×)**；RSS **285756→227712 KiB**；
+- ctype 2.670→2.521ms，短命毫秒级噪声意义低。
+**五 owner 中位编译时间相加 3885.191→3472.217ms，1.11894×（累计用时减少10.63%）**。这些是特定 hot owner，不是任意 500 TU 或七路 Kbuild speedup；一次进程 RSS 不能直接称全 Linux 内存下降。
+
+**扩大 frozen first500 [#39008901495](https://github.com/yituanxing/minic-toolchain/actions/runs/39008901495)**：使用现有同-runner 4-worker balanced differential，500/500 `.s` 必须 byte-identical，真实累计耗时/回退与 8×复测以后，才讨论正式合入；本阶段无新生成 production `src` 代码，无 2064 Linux+GNU Link+QEMU P1 新认证。若首次 sample 正面且有显著收益，将进一步判定是不是值得承担 per-Function malloc 与签名 setter 语义变化；若回退则审查 malloc 热点，考虑稳定 arena/合适 hybrid，不无故升级到 full run。
+
 ## 空间方向第二轮：MinicType 字段排布，消除 ABI 对齐空洞（2026-10-17）
 
 **单因素白盒发现：** `src/frontend/type.h` 的 `MinicType` 在 64-bit 平台占 **80 bytes**，原顺序 `base_kind` 后紧跟四个 `size_t` ID 导致对齐空洞；将小型 Enum/qualifier/pointer 元数据字段放在前面，四个 ID 和 `explicit_alignment` 放在尾部，**不改变任何成员 C 类型、名称、数量、ID 上限、所有权、算法和数组扩容行为**，单是布局可降至 **72 bytes**，同时间接减小 `MinicFunction` 里的 64 个参数类型（约少 512B/Function）以及 `MinicFunctionType`、Expression 类型字段。与上一轮 `uint32_t CALL ID` **完全不同的新成本模型**，不同于已被否决的 `PERF-033` 扩容倍率方案。实验只在临时 CI checkout 应用 `tools/ci/apply-perf-type-field-layout-v1.py`，生产源暂未改。
