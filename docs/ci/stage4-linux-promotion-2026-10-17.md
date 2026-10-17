@@ -77,3 +77,12 @@
 
 These checks deliberately reuse historical CI and test scripts rather than
 inventing a second kernel build graph or silently changing compiler options.
+
+## Execution log (run IDs are evidence, not promises)
+
+- `#39059924681`: all seven actual frozen 500 Stage4 differential shard commands printed `BOOTSTRAP_STAGE4_LINUX500_SHARD=PASS`: 72+72+72+71+71+71+71; `.s` and GNU-AS `.o` identity each 500/500. The enclosing CI was **red for unrelated "Build latest Canonical MiniC" and metrics-export steps after all seven parity checks**, so report the exact per-shard evidence rather than labeling that workflow itself green. No Linux Image was linked.
+- `#39062218853`: separate seven-shard rerun, isolated from unrelated perf3352 jobs; aggregate must only report PASS if all seven jobs and sha-verified parity reports pass. At latest inspection some shards still running, not yet a green aggregate.
+- `#39060225407`: first full Stage4 Linux 2064 producer shard 0 compiled **295/295 real C objects** in 2,024.970 seconds with `COHORT_ABI=PASS`, and Stage4 guest/host-driver SHA-smoke PASS. A **new owner-success audit** stopped it because the existing Kbuild append-only success trace included **two ancillary MiniC compilations beyond canonical 295 owner objects**. This is an audit logic mismatch, not an observed compiler failure; the other six shards and receiver remained unverified.
+- `833d2c3b`: owner-audit change to require *all* canonical targets, reject missing guest traces and allow only a bounded, individually guest-traced ancillary set. This is stricter than silently skipping the check. Stage2 legacy exact-owners mode remains unchanged.
+- `#39063243332`: attempt to restart full 2064 failed at YAML validation before jobs because a CI-only comment was under-indented inside a `run: |` block. No compiler build ran; repaired by `dc8aefdd`.
+- `#39063287653`: restored valid workflow trigger for all seven real Stage4 2064 producer jobs and existing QEMU P1 receiver. Do not claim Linux 2064 or P1 pass until the new jobs attest them.
