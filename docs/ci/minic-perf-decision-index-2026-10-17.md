@@ -4,6 +4,25 @@
 > 本表是候选的**状态索引**，不是覆盖旧的原始数据；旧实验报告、补丁、CI artifacts 均保留。每次新优化先记录「相同结构以前试过没有、当时基线是什么、为何现在仍值得做」。
 > 基线：主线 `6612e2c1a3`（文档头），最新已认证的 Boolean/Core/Integer 联合源码经 [2064 + GNU link + QEMU P1 #38995964988](https://github.com/yituanxing/minic-toolchain/actions/runs/38995964988) PASS。这个 PASS 是 GNU PP → MiniC → GNU AS/LD，不能声称全 Mini 工具链共同通过。下列不同实验的加速比不能相乘，也不能伪称当前 2064 的同比速度。
 
+## 第八轮选卡前的当前生产 CPU 重新归因（2026-10-17）
+
+**第七轮现在已真正收官，不可重复抽卡：** `symbolic-source-grouped-calls-v1 = integrated / runtime-certified / keep / do-not-repeat`；正式 Full Linux [#39023546906](https://github.com/yituanxing/minic-toolchain/actions/runs/39023546906) **SUCCESS**，Seven shards 7/7、Merge 2064、GNU Link、QEMU P1 syscalls 12/12 + Python oracle 都通过；Focused T1 #39023526235 SUCCESS。此前 500/500 字节一致、paired 累积 TU-wall **1.07605×** 仍是实际性能证据。**千万不要把 first500 累积 TU wall 1.076× 当 7 路 Kbuild critical-path speedup。**
+
+**刚完成重新 CPU profiling：** [现有 perf500 #39024742344](https://github.com/yituanxing/minic-toolchain/actions/runs/39024742344) **SUCCESS**，生产源码 `src/compiler/compiler.c` 是第七轮合入版，只额外编译一个 diagnostic copy，用现有 SHA-frozen `fs/ext4/fsync.o` / `kernel/bpf/btf.o` 运行 Callgrind，**2/2 .s byte-identical**，解析器复制计数 fsync **12,430 次 / 0.012 GiB**、BTF **21,446 次 / 0.021 GiB**（名义复制字节而非 DRAM 实测）。真实 GNU-PP/MiniC 单链路编译，非全部 Mini 工具联合。Callgrind Ir 为**指令事件**，不是 CPU 时间、加速比或 RAM。
+
+| 代表性真实 TU | Post-round-6 total Ir | Current post-round-7 total Ir | Symbolic self Ir / share（旧→新） | 本轮 self Ir 其他明显热点 |
+| --- | ---: | ---: | --- | --- |
+| fs/ext4/fsync.o | 1,806,899,557 | **1,575,034,285** | 约 248M/13.73% → **16,053,178/1.02%** | Lexer next 120,381,826/7.64%；Parser current_identifier_is 67,157,574/4.26%；Data Layout type depth 合计较高；FunctionBody validate 56,428,869/3.58%；Enum bind 53,642,844/3.41% |
+| kernel/bpf/btf.o | 6,760,025,836 | **约 5.831B** | 约 979M/14.48% → **50,548,257/0.87%** | Enum bind 656,816,747/11.26%；Parser span_equals 420,351,741/7.21%；libc memset 296,295,829/5.08%；Core named queue 281,724,220/4.83%；Lexer next 201,850,277/3.46% |
+
+注意同比来源于两次 Callgrind、同 SHA-frozen 输入和同一类构建配置，仍不等价于**证明**内存、CPU 周期或单 TU wall 等比例变化；Symbolic 的绝对 self Ir 大幅下降与第七轮真实 A/B wall 的方向一致，不能直接将自耗差额换算编译速度。
+
+**候选历史去重：** BTF self 第一名 `minic_parser_bind_enum_constant` 及关联 span comparison 看似很大，但历史 [enum-bind existing-global-hash #38998220260 / #38998362636](https://github.com/yituanxing/minic-toolchain/actions/runs/38998362636) 早已 tested：BTF 单样本 **1.0714×**，独立五 TU 合计仅约 **1.0147×**，**明确 rejected / stop**；这一轮**不再提出同一个全局枚举 hash**。同理 Core named queue 已验证旧名索引负例，不会因新的 percent 分母上升而重复。第七轮 Symbolic 索引也已正式收掉。
+
+**新的具体可检验方向优先级：** 第一优先复查 `src/target/data_layout.c` 的 `minic_data_layout_type_depth` / `minic_data_layout_record_depth` 在同一结构类型上重复遍历完整 RecordField 以及递归 Array 元素布局的问题。这与旧 Enum Hash、Core name-index、Parser cold buffer、Symbolic buckets 都**不同**。Callgrind 可定位已有调用者，但尚无「相同记录 ID 重复布局查询量、按 record completeness 区分、重复 field scan work / sizeof 频率」计数，**先做明确只读 census，再选择只在 record 已完成且不可变的阶段建立局部缓存，避免 Parser 正在补全 Record/Array 时读到过期布局**。任何候选都需要旧/新同 Runner paired wall/user/sys/RSS、.s 字节等价、negative fixture、sanitizer、full Linux 2064/P1 方可晋级。
+
+**第二优先**调查 `src/frontend/ast_global.c:name_conflicts` 全局 Object/Function 名字判冲突的 O(G) 逐项扫描，其代码在每次声明绑定时跨固定寄存器/全局对象/函数扫描，fsync self 3.09%、BTF self 2.33%；目前没有足够宽样本证明 hash-index 会盈利，避免直接修改三个容器生命周期。词法器 `minic_lexer_next` 在 fsync 占 7.64%，先区分高频 lexer 迭代（原始输入扫描 + Parser lookahead 重扫）再考虑较复杂改动。**不得只因为 Callgrind 排名就声称收益。**
+
 ## 第七轮诊断开卡：Symbolic 剩余成本分解（2026-10-17）
 
 - **状态：诊断进行中，尚无新 A/B 性能结论。** 基准为第六轮 Linux 2064/QEMU P1 已认证生产 C（`e8fef972` 的正式 C 与 `cbbd5654` 一致），不修改生产 `src/`，不建新 workflow/job，不重编 2064，仅复用 first500 缓存中的既有 20 个 stratified SHA-frozen Linux `.i`，使用已有 `perf500` job 和原始 phase-trace 工具。
