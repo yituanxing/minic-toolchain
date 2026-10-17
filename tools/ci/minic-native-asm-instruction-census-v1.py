@@ -57,26 +57,38 @@ def census(name: str, source: bytes) -> dict:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--artifact-zip", type=Path, required=True)
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument("--artifact-zip", type=Path)
+    source.add_argument("--artifact-dir", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--min-sources", type=int, default=77)
     args = parser.parse_args()
     rows = []
     root = "full-native/stage4/s/"
     elf = "full-native/stage4/bin/minic-cc"
-    with zipfile.ZipFile(args.artifact_zip) as archive:
-        members = archive.namelist()
+    archive = zipfile.ZipFile(args.artifact_zip) if args.artifact_zip else None
+    try:
+        if archive is not None:
+            members = archive.namelist()
+            read = archive.read
+        else:
+            base = args.artifact_dir.resolve()
+            members = [str(p.relative_to(base).as_posix()) for p in base.rglob("*") if p.is_file()]
+            read = lambda member: (base / member).read_bytes()
         assembly = sorted(x for x in members if x.startswith(root) and x.endswith(".s"))
         if len(assembly) != args.min_sources:
             raise SystemExit(f"incorrect production source count: {len(assembly)} != {args.min_sources}")
-        binary_sha = hashlib.sha256(archive.read(elf)).hexdigest()
+        binary_sha = hashlib.sha256(read(elf)).hexdigest()
         if binary_sha != ELF_SHA:
             raise SystemExit("uncertified native Stage4 compiler SHA256: " + binary_sha)
         for member in assembly:
-            row = census(member[len(root):], archive.read(member))
+            row = census(member[len(root):], read(member))
             if row["mnemonics"] == 0:
                 raise SystemExit("zero machine instruction mnemonics for " + member)
             rows.append(row)
+    finally:
+        if archive is not None:
+            archive.close()
     total = sum(row["mnemonics"] for row in rows)
     memory = sum(row["load_store_mnemonics"] for row in rows)
     candidates = sum(row["adjacent_same_register_stack_store_reload"] for row in rows)
