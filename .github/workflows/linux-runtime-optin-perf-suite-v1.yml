@@ -1486,7 +1486,11 @@ jobs:
               if len(parts)!=4: raise SystemExit("malformed frozen corpus row")
               entries[parts[1]]=parts[2]
           if len(entries)!=500: raise SystemExit("not 500 immutable Linux inputs")
-          targets=("kernel/events/core.o","mm/memcontrol.o","fs/ext4/super.o","mm/hugetlb.o","mm/vmscan.o")
+          if trial=="parser-enum-bind":
+              targets=("kernel/events/core.o","mm/memcontrol.o","fs/ext4/super.o",
+                       "mm/hugetlb.o","mm/vmscan.o")
+          else:
+              targets=("fs/ext4/fsync.o","kernel/bpf/btf.o")
           with (root/"evidence"/(trial+"-ab-inputs.tsv")).open("w") as out:
               for owner in targets:
                   if owner not in entries: raise SystemExit("missing selected owner "+owner)
@@ -1527,15 +1531,19 @@ jobs:
           import json,sys
           from pathlib import Path
           root=Path(sys.argv[1]); trial=sys.argv[2]
-          owners=("kernel_events_core","mm_memcontrol","fs_ext4_super","mm_hugetlb","mm_vmscan")
+          if trial=="parser-enum-bind":
+              owners=("kernel_events_core","mm_memcontrol","fs_ext4_super",
+                      "mm_hugetlb","mm_vmscan")
+          else:
+              owners=("fs_ext4_fsync","kernel_bpf_btf")
           rows=[json.loads((root/o/"paired-result.json").read_text()) for o in owners]
-          assert len(rows)==5 and all(r["assembly_identical"] for r in rows)
+          assert len(rows)==len(owners) and all(r["assembly_identical"] for r in rows)
           old=sum(r["baseline_median_ms"] for r in rows)
           new=sum(r["candidate_median_ms"] for r in rows)
           assert old>0 and new>0
-          print("MINIC_SINGLE_FACTOR_AB=PASS trial=%s owners=5 assembly_identical=5/5 "
+          print("MINIC_SINGLE_FACTOR_AB=PASS trial=%s owners=%d assembly_identical=%d/%d "
                 "before_p50_sum_ms=%.3f after_p50_sum_ms=%.3f speedup=%.4f" %
-                (trial,old,new,old/new))
+                (trial,len(owners),len(rows),len(owners),old,new,old/new))
           PY
 
       # Extended evidence after the certified two-TU result. Same A/B
