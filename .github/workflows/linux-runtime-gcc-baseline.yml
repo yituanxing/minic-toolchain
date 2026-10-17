@@ -1496,10 +1496,10 @@ jobs:
             export COHORT_GNU_PREFLIGHT_ALLOW_SEVEN_SHARD_VOLATILE=1
           fi
           # Stage4 2064 retains full raw owner-success and actual guest-dispatch
-      # trace on any audit failure; success may include a small explicit set
-      # of ancillary Kbuild objects beyond the canonical 295 owners.
-      # Missing canonical objects or guest dispatch still fail closed.
-      # The existing compile script remains unchanged for ordinary runs.
+          # trace on any audit failure; success may include a small explicit set
+          # of ancillary Kbuild objects beyond the canonical 295 owners.
+          # Missing canonical objects or guest dispatch still fail closed.
+          # The existing compile script remains unchanged for ordinary runs.
           if git log -1 --format=%B | grep -Fq '[minic-bootstrap-stage2-linux2064]'; then
             source tools/ci/minic-bootstrap-stage2-2064-prepare-v1.sh producer "$ev"
           fi
