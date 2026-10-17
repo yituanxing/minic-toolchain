@@ -582,7 +582,7 @@ jobs:
             }
           printf '%s  %s\n' f04794d3132631059c028e0a889bf8cf06f15e8f24afcc70d24697edce4925fd "$stage0" \
             | sha256sum -c -
-          echo "BOOTSTRAP_STAGE2_TOOLCHAIN_RETRY=canonical_Makefile_source_ownership verified_stage0_sha=PASS"
+          echo "BOOTSTRAP_STAGE2_TOOLCHAIN_PROFILE=CLI_driver_one_main no_ELF_dep Stage2_cpp_as_ld_ar_objcopy_nm_strip"
           python3 -m py_compile tools/ci/minic-bootstrap-stage2-toolchain-v1.py
           python3 tools/ci/minic-bootstrap-stage2-toolchain-v1.py \
             --stage0 "$stage0" --stage2 "$stage2" \
