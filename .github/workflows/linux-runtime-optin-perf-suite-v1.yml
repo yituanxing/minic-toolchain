@@ -701,6 +701,9 @@ jobs:
       # archive symbol oracles, and MiniStrip against GNU ELF32/64 rules.
       # Additionally prove real Stage2-built minic Driver -c dispatch,
       # not merely direct tool invocation; no GCC PP/AS/LD in the program.
+      # QEMU-user guest argv0 points at the underlying RV64 ELF, so a
+      # relocated immutable driver ELF with sibling host qemu-shims avoids
+      # accidentally execve'ing untranslated guest binaries.
       # Keep all-Mini PP/CC/AS/LD exit42 as a separate required gate.
       - name: Restore eight Stage2-built native toolchain executables
         if: contains(github.event.head_commit.message, '[minic-bootstrap-stage2-native-runtime]')
