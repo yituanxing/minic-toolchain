@@ -74,8 +74,8 @@ SPEC_STAGES=("spec-integer","spec-symbolic","spec-boolean","spec-finalize")
 SYMBOLIC_SUBSTAGES=("spec-symbolic-direct","spec-symbolic-transitive")
 INTEGER_SUBSTAGES=("spec-integer-direct","spec-integer-transitive")
 BOOLEAN_SUBSTAGES=("spec-boolean-direct","spec-boolean-transitive")
-BOOLEAN_COUNTER_RE=re.compile(r"MINIC_BOOLEAN_SCAN_PROFILE\\s+(.+)")
-SYMBOLIC_COUNTER_RE=re.compile(r"MINIC_SYMBOLIC_SCAN_PROFILE\\s+(.+)")
+BOOLEAN_COUNTER_RE=re.compile(r"MINIC_BOOLEAN_SCAN_PROFILE\s+(.+)")
+SYMBOLIC_COUNTER_RE=re.compile(r"MINIC_SYMBOLIC_SCAN_PROFILE\s+(.+)")
 SYMBOLIC_COUNTER_FIELDS=(
     "direct_expression_visits", "direct_call_visits",
     "direct_variant_lookups", "direct_variant_probes", "transitive_callers",
