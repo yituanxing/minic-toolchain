@@ -861,7 +861,9 @@ jobs:
 
       # Symbolic owner/call buckets are already 500/500 identical. Before
       # promotion, verify original/full-scan fallbacks and sanitizer behavior
-      # using existing runner/corpus. Not a new job and no 2064 rebuild.
+      # using existing runner/corpus. Parse-rejected fixtures do not reach the
+      # opt-in specialization fault hook; check it on accepted cases only.
+      # Not a new job and no 2064 rebuild.
       - name: ASan UBSan and fault-fallback Symbolic source bucket safety
         if: contains(github.event.head_commit.message, '[minic-symbolic-source-call-safety]')
         shell: bash
