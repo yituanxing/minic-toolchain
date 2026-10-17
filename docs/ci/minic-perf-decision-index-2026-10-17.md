@@ -20,6 +20,18 @@
 - 原来已优化 `parser_type.c` 的三个 Parser 复制点，不等于所有位置。余下 top-level enum/record probe 的名义拷贝约 133,664B/次，BTF 约 3707 次；[2-TU 单因素 #38998023186](https://github.com/yituanxing/minic-toolchain/actions/runs/38998023186) **SUCCESS**，保持当前生产 C 不变，仅 CI 临时应用 `tools/ci/apply-perf-parser-top-level-lexer-lookahead-v1.py`。fsync **476.937→473.769ms（1.0067×）**、BTF **1356.999→1332.823ms（1.0181×）**，两者 P50 合计 **1833.936→1806.592ms（1.0151×）**，4 次/臂交错及 2/2 汇编字节一致。**决策：not-promoted / stop**；这两处局部只是约 1.49% 减时，禁止为其跑 500/2064，也不要把 133KiB×次数直接当作真实 DRAM 流量。保留历史修复脚本和验证产物作为负例。
 - 下一条**不同成本模型**的待验证猜想：`minic_parser_bind_enum_constant` 在顶层全局作用域仍对每个新增枚举常量以逆序线性检查是否重名；全局查找 `minic_parser_find_enum_constant` 的有序 hash **早已存在**，所以只测试是否可在 `scope_count == 0` 的 bind 检查中**复用该索引**，而不是再造一个 enum hash。非全局作用域保留现有线性语义；同步/OOM 使用已有线性 fallback。此项尚无真实 A/B 倍率，需单因素、相同文件/工具配对及 .s 严格相同。
  
+## 最新单因素筛选：复用已有 Enum Hash（2026-10-17）
+
+[CI #38998220260](https://github.com/yituanxing/minic-toolchain/actions/runs/38998220260) **SUCCESS**，测试代码仅在 CI 临时 checkout 应用 `tools/ci/apply-perf-parser-enum-binding-global-index-v1.py`；未修改生产 `parser_enum.c`。重用正式源码已有的 `minic_parser_find_enum_constant` 全局索引；只改变 `scope_count == 0` 的 enum binding 重名检测，原局部作用域线性检查、查找失败 fallback、AST 语义保留。对两个 GNU-Kbuild SHA 固定真实 Linux .i，old/new 每臂 4 次交错、2/2 `.s` 严格字节相同：
+
+| owner | 原版 P50 | 重用 Hash P50 | 提速 |
+| --- | ---: | ---: | ---: |
+| fs/ext4/fsync.o | 483.577ms | 471.457ms | 1.0257× |
+| kernel/bpf/btf.o | 1334.350ms | 1245.474ms | **1.0714×** |
+| 两文件合计 | 1817.927ms | 1716.931ms | **1.0588×（累计减时5.56%）** |
+
+**状态 `verified-local-4rep / needs-independent-cohort`，不晋级主线。** 该方案与此前已集成的 Enum 哈希查找不是重复实现：仅将其应用于此前仍 O(N) 的新增枚举常量重名检查。它不是阈值明显满足的 >10% 大热点收益，故不直接跑完整 500/2064。先在另一组独立 Linux 真实对象评估边际成本并确认收益分布；若依然不足，记录为 `not-promoted` 并转移目标。此次 QEMU/全量未执行，不能声称原生生产源码已优化 5.88%。
+
 ## 1. 已拒绝或因边际收益不足而停止：默认不重开
 
 | ID / 别名及相同成本模型 | 决策和确切证据 | 重新打开的硬条件 |
