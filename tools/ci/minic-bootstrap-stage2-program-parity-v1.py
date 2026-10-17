@@ -95,7 +95,7 @@ def main():
         newasm = outdir / (name + ".stage2.s")
         stage2elf = outdir / (name + ".stage2.elf")
         gnuelf = outdir / (name + ".gnu.elf")
-        require(["riscv64-linux-gnu-gcc", "-std=c11", "-E", "-P", "-x", "c",
+        require(["riscv64-linux-gnu-gcc", "-E", "-P", "-x", "c",
                  source, "-o", pre], env=env, label="preprocess " + name)
         if not pre.is_file() or pre.stat().st_size == 0:
             raise RuntimeError("empty GNU preprocessing " + name)
