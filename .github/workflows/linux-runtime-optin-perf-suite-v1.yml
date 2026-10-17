@@ -2924,6 +2924,10 @@ jobs:
           grep -Fq 'MINIC_BOOLEAN20=PASS' "$root/evidence/phase20-verdict.txt"
           grep -Fq 'spec-boolean-transitive' "$root/evidence/phase20-verdict.txt"
 
+      # Fresh post-Parser cold-switch runtime-candidate CPU attribution:
+      # intentionally no next algorithm patch, only source-current callgrind
+      # on the pinned BTF and fsync Linux inputs. This opt-in marker does not
+      # change production C, and this run cannot substitute for Linux QEMU.
       - name: Attribute CPU hotspot of representative middle Linux file
         if: contains(github.event.head_commit.message, '[minic-current-phase20]') || contains(github.event.head_commit.message, '[minic-cpu-profile-only]')
         timeout-minutes: 35
