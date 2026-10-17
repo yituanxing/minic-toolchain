@@ -27,6 +27,10 @@ next="$root/$trial-after/bin/minic"
 ! cmp -s "$root/$trial-before/bin/minic-cc" "$root/$trial-after/bin/minic-cc"
 sha256sum "$root/$trial-before/bin/minic-cc" "$root/$trial-after/bin/minic-cc" \
   >"$root/evidence/$trial-compiler-shas.txt"
+if [[ "${MINIC_CORE_NO_FACTS_BUILD_ONLY:-0}" == 1 ]]; then
+  echo "MINIC_CORE_NO_FACTS_PAIR_READY=PASS release_original_not_modified=true"
+  exit 0
+fi
 python3 - "$corpus" "$root/evidence/$trial-inputs.tsv" <<'PY'
 from pathlib import Path
 import sys
