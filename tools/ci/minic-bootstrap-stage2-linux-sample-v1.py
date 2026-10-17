@@ -48,8 +48,10 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument("--corpus", type=Path, required=True)
     p.add_argument("--stage0", type=Path, required=True)
-    p.add_argument("--stage2", type=Path, required=True,
-                   help="stage2 qemu-riscv64 wrapper executable")
+    p.add_argument("--stage2", "--candidate", dest="stage2", type=Path,
+                   required=True, help="qemu-riscv64 wrapper for selfhost compiler")
+    p.add_argument("--candidate-label", choices=("stage2", "stage4"),
+                   default="stage2", help="identity of the selfhost candidate")
     p.add_argument("--out", type=Path, required=True)
     p.add_argument("--jobs", type=int, choices=(1,2,3,4), default=3)
     p.add_argument("--range-offset", type=int, default=None,
@@ -126,7 +128,8 @@ def main():
     indices=",".join(str(m[1]) for m in members)
     env=dict(os.environ, MINIC_LINUX_FULL_CROSSBLOCK="1",
              MINIC_OPT_PURE_DISCARDED_ADDRESS_EQ="1")
-    for name,binary in (("stage0",stage0),("stage2",stage2)):
+    candidate_label=args.candidate_label
+    for name,binary in (("stage0",stage0),(candidate_label,stage2)):
         work=out/name
         command([sys.executable, "tests/external/linux/corpus_replay.py",
                  "--minic",binary,"--corpus",corpus,"--work",work,
@@ -147,10 +150,10 @@ def main():
     records=[]
     for group,index,owner,rel,source in members:
         first=out/"stage0"/"minic-out"/(rel+".s")
-        second=out/"stage2"/"minic-out"/(rel+".s")
+        second=out/candidate_label/"minic-out"/(rel+".s")
         # the existing assembler replay naming is numbered four digit index
         first_o=out/"stage0"/"object-out"/f"{index:04d}.o"
-        second_o=out/"stage2"/"object-out"/f"{index:04d}.o"
+        second_o=out/candidate_label/"object-out"/f"{index:04d}.o"
         matching_asm=first.is_file() and second.is_file() and sha(first)==sha(second)
         matching_obj=first_o.is_file() and second_o.is_file() and sha(first_o)==sha(second_o)
         row={"group":group,"index":index,"object":owner,"input":rel,
@@ -158,20 +161,22 @@ def main():
              "assembly_same":matching_asm,
              "object_same":matching_obj,
              "stage0_assembly_sha":sha(first) if first.is_file() else None,
-             "stage2_assembly_sha":sha(second) if second.is_file() else None,
+             "candidate_assembly_sha":sha(second) if second.is_file() else None,
              "stage0_object_sha":sha(first_o) if first_o.is_file() else None,
-             "stage2_object_sha":sha(second_o) if second_o.is_file() else None}
+             "candidate_object_sha":sha(second_o) if second_o.is_file() else None}
         records.append(row)
         print(f"BOOTSTRAP_STAGE2_LINUX_TU owner={owner} group={group}"
               f" asm={'MATCH' if matching_asm else 'DIFF'}"
               f" object={'MATCH' if matching_obj else 'DIFF'}",flush=True)
-    report={"schema":"minic-stage2-linux-20-exact-v1",
+    report={"schema":"minic-selfhost-linux-frozen-v2",
+            "candidate_label":candidate_label,
+            "candidate_sha":sha(stage2),
             "corpus_size":500, "selected":len(members), "groups":groups,
             "input_sha_verified":500,
             "stage0_sha":sha(stage0),
             "assembly_equal":sum(x["assembly_same"] for x in records),
             "object_equal":sum(x["object_same"] for x in records),
-            "stage2_scope":"qemu-riscv64-rv64-self-host-compiler",
+            "candidate_scope":"qemu-riscv64-rv64-self-host-compiler",
             "link_qemu_p1":"NOT_RUN",
             "rows":records}
     (out/"verdict.json").write_text(json.dumps(report,indent=2)+"\n")
@@ -182,10 +187,10 @@ def main():
     (out/"verdict.json").write_text(json.dumps(report,indent=2)+"\n")
     if (report["assembly_equal"]!=expected_count or
             report["object_equal"]!=expected_count):
-        raise RuntimeError("Stage2 differs from Stage0 on Linux .s/.o")
-    print(f"BOOTSTRAP_STAGE2_LINUX{'RANGE' if args.range_offset is not None else '20'}=PASS"
+        raise RuntimeError(candidate_label+" differs from Stage0 on Linux .s/.o")
+    print(f"BOOTSTRAP_{candidate_label.upper()}_LINUX{'RANGE' if args.range_offset is not None else '20'}=PASS"
           f" owners={expected_count}/{expected_count}"
-          f" stage0_stage2_asm={expected_count}/{expected_count}"
+          f" stage0_{candidate_label}_asm={expected_count}/{expected_count}"
           f" rv64_objects={expected_count}/{expected_count}"
           " complete_linux_image=NOT_RUN qemu_kernel_p1=NOT_RUN",flush=True)
 
