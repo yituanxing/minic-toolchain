@@ -223,9 +223,11 @@ jobs:
           retention-days: 14
   aggregate:
     needs: shard
-    if: always() && ((github.event_name == 'workflow_dispatch' && (inputs.mode == 'all3352' || inputs.mode == 'all')) || (github.event_name == 'push' && (contains(github.event.head_commit.message, '[linux-perf3352]') || contains(github.event.head_commit.message, '[minic-bootstrap-stage2-linux500]')))
+    if: always() && ((github.event_name == 'workflow_dispatch' && (inputs.mode == 'all3352' || inputs.mode == 'all')) || (github.event_name == 'push' && (contains(github.event.head_commit.message, '[linux-perf3352]') || contains(github.event.head_commit.message, '[minic-bootstrap-stage2-linux500]'))))
     runs-on: ubuntu-24.04
     steps:
+      - uses: actions/checkout@v4
+        if: contains(github.event.head_commit.message, '[minic-bootstrap-stage2-linux500]')
       - name: Retrieve seven Stage2 first500 Linux object manifests
         if: contains(github.event.head_commit.message, '[minic-bootstrap-stage2-linux500]')
         uses: actions/download-artifact@v4
