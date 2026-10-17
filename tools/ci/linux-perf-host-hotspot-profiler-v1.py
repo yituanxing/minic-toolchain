@@ -149,7 +149,10 @@ def parse_parser_copy_census(out):
              for file, line, count, size, nbytes in rows]
     if (len(items) != nsites or sum(x["calls"] for x in items) != calls or
             sum(x["nominal_bytes"] for x in items) != nominal_bytes or
-            nominal_bytes != calls * parser_bytes or parser_bytes < 131072):
+            nominal_bytes != calls * parser_bytes or not (256 <= parser_bytes <= 262144)):
+        # Parser's former >=128KiB inline switch array was intentionally
+        # relocated to cold backing storage. Current Parser can be ~1KiB;
+        # census checks accounting identity, not a historical size floor.
         raise RuntimeError("inconsistent parser copy census")
     items.sort(key=lambda x: (-x["nominal_bytes"], x["file"], x["line"]))
     return dict(schema="minic-parser-copy-census-v1", parser_bytes=parser_bytes,
