@@ -46,3 +46,13 @@
 - Clang compile trace: https://clang.llvm.org/docs/ClangCommandLineReference.html
 - LLVM test-suite and CTMark: https://llvm.org/docs/TestSuiteGuide.html
 - LLVM benchmarking: https://llvm.org/docs/Benchmarking.html
+
+## 2026-10-17 原因复核：16 个代表性真实 Linux TU
+
+- [Recheck CI #38993540106](https://github.com/yituanxing/minic-toolchain/actions/runs/38993540106) SUCCESS，实际 old/new 二进制 SHA 沿用冻结 500 基线，无新编译器源码优化，16 个 owner、old/new 各排除 warm-up 后各 8 次交错运行；.s SHA 完全相同。
+- 12 个来自原始 500 单轮回退记录，另有 3 个大幅改善对象、1 个平稳对象。16 个中没有任何一个达到 wall 和 user CPU 同时显著且超 MAD 噪声门槛的持续回退；其中 10 个现在不比旧版慢，另外 6 个属于 mixed_or_noisy，实际中位差仅 +0.17% 至 +2.02%，未达到预设持续回退标准。
+- 典型翻转：fs/nfs/client.o 原记录 +14.82%，8 次复核中位反为 -7.61%；kernel/time/sched_clock.o 从 +16.49% 变为 -0.30%。这证明单轮竞争型 500 CI 的一些大幅负面观测可能是采样/资源竞争，而非编译器算法确定性退化；不声称已解释其全部物理来源。
+- CPU 确认大输入的收益：kernel/events/core.o -39.19% wall/user CPU -746ms，kernel/bpf/verifier.o -44.83% user CPU -898ms，mm/memcontrol.o -35.01% user CPU -559ms。收益不是纯计时噪声。
+- 一个已验证的**可消除的固定开销**：Core eager index 即使没有查询也会完整遍历 Statement + Expression 并分配索引。例如 mm/shmem_quota.o 查询 0 次、35149 statements/109567 expressions，8 次复核中位新比旧慢 5.124ms (+2.02%)，但 wall MAD 为旧 5.155ms/新 5.280ms，故仅可确认“索引无用的前置工作”，不能声称该 5ms 已有统计显著性。fs/ext4/xattr_security.o 查询 0 次、35946/115695；arch/riscv/purgatory/ctype.o 查询 0 次、45/409。对这些 TU，按需构建不会影响必要查询的行为。
+- 因此下一小步是**懒构建 lazy index**：Core Set begin 只设置作用域，首次 relevant query 才以原来的全部验证规则构建；失败只尝试一次并完全走旧 legacy 路径；Core Set end 完全释放并撤销作用域。生产代码候选须先做 eager-vs-lazy 8 TU 的真实 SHA+时间 A/B；不得根据三份样本推断全体收益。
+- 本轮还已完成 eager index 正式源码的七路 2064/2064 GNU Link 与 QEMU P1：[CI #38992779314](https://github.com/yituanxing/minic-toolchain/actions/runs/38992779314) SUCCESS，COHORT_RESULT=PASS candidate_objects=2064、COHORT_P1=PASS syscalls=12。懒构建候选**尚未**得到这项正式资格，不得套用旧结果。

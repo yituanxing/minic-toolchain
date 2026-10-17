@@ -28,8 +28,22 @@ typedef struct MinicCoreReentryIndex {
 } MinicCoreReentryIndex;
 
 static MinicCoreReentryIndex minic_core_reentry_index;
+/* A function-set lifetime may contain no reentry queries at all.  Avoid
+ * paying O(program statements + expressions) before proving the index useful.
+ * The first relevant query builds it once; failures retain legacy scanning. */
+static const MinicC0Program *minic_core_reentry_planned_program;
+static bool minic_core_reentry_build_attempted;
 
 void minic_core_lower_reentry_index_end(void) {
+    if (getenv("MINIC_CORE_REENTRY_INDEX_PERF") != NULL &&
+        minic_core_reentry_planned_program != NULL &&
+        minic_core_reentry_index.program == NULL) {
+        (void)fprintf(stderr,
+                      "MINIC_CORE_REENTRY_INDEX ready=0 incoming=0 "
+                      "indexed_if=0 indexed_loop=0 statements=%zu expressions=%zu\n",
+                      minic_core_reentry_planned_program->statement_count,
+                      minic_core_reentry_planned_program->expression_count);
+    }
     if (getenv("MINIC_CORE_REENTRY_INDEX_PERF") != NULL &&
         minic_core_reentry_index.program != NULL) {
         (void)fprintf(stderr,
@@ -45,16 +59,19 @@ void minic_core_lower_reentry_index_end(void) {
     free(minic_core_reentry_index.incoming);
     free(minic_core_reentry_index.addressed);
     (void)memset(&minic_core_reentry_index, 0, sizeof(minic_core_reentry_index));
+    minic_core_reentry_planned_program = NULL;
+    minic_core_reentry_build_attempted = false;
 }
 
-void minic_core_lower_reentry_index_begin(const MinicC0Program *program) {
+static void minic_core_lower_reentry_index_build(const MinicC0Program *program) {
     size_t statement_count;
     size_t incoming_count;
     size_t i;
     size_t next_incoming;
     MinicCoreReentryIndex *index = &minic_core_reentry_index;
 
-    minic_core_lower_reentry_index_end();
+    /* begin() has already cleared all state; build is called at most once
+     * after a real Core CFG query asks for reentry information. */
     if (program == NULL || program->statement_count == 0U ||
         program->statement_count > SIZE_MAX / sizeof(*index->heads) ||
         program->statement_count > SIZE_MAX / sizeof(*index->addressed)) {
@@ -141,7 +158,36 @@ void minic_core_lower_reentry_index_begin(const MinicC0Program *program) {
     return;
 
 fallback:
+    free(index->heads);
+    free(index->incoming);
+    free(index->addressed);
+    (void)memset(index, 0, sizeof(*index));
+}
+
+
+
+/* No allocation or AST scan at the Core Set entry.  Because the source AST
+ * is immutable during Core Lowering, this is the exact same index as eager
+ * construction but built only if a query actually needs it.  Standalone
+ * minic_core_lower_function() callers never opt in, preserving old behavior. */
+void minic_core_lower_reentry_index_begin(const MinicC0Program *program) {
     minic_core_lower_reentry_index_end();
+    minic_core_reentry_planned_program = program;
+}
+
+static bool minic_core_reentry_index_ready(const MinicC0Program *program) {
+    if (program == NULL || minic_core_reentry_planned_program != program) {
+        return false;
+    }
+    if (minic_core_reentry_index.program == program) {
+        return true;
+    }
+    if (minic_core_reentry_build_attempted) {
+        return false;
+    }
+    minic_core_reentry_build_attempted = true;
+    minic_core_lower_reentry_index_build(program);
+    return minic_core_reentry_index.program == program;
 }
 
 
@@ -12698,7 +12744,7 @@ static bool core_block_contains_reentry_label(const MinicCoreLowerContext *conte
     unsafe = !core_mark_discarded_if_membership(
         context, block, visited_blocks, statement_membership);
 
-    if (minic_core_reentry_index.program == program) {
+    if (minic_core_reentry_index_ready(program)) {
         /* Query only targets inside this discarded subtree.  Incoming edges
          * carry their source statement, so an internal goto disappears with
          * its subtree while any external goto/asm-goto still prevents pruning.
@@ -15560,7 +15606,7 @@ static bool core_unreferenced_internal_loop_label(
         return false;
     }
 
-    if (minic_core_reentry_index.program == program) {
+    if (minic_core_reentry_index_ready(program)) {
         /* An indexed direct or address-taken label is never metadata-only.
          * Preserve the precise existing WHILE source-position uniqueness rule. */
         if (minic_core_reentry_index.heads[label_id] != SIZE_MAX ||
