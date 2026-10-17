@@ -34,7 +34,7 @@ PROFILES={
     "minic-objcopy":("MINIOBJCOPY_SOURCES",[ELF_READER,ELF_BIN,ELF_RW],["elf/include"]),
     "minic-nm":("MININM_SOURCES",[ELF_READER,ARCHIVE],["archiver/include","elf/include"]),
     "minic-strip":("MINISTRIP_SOURCES",[ELF_READER,ELF_RW],["elf/include"]),
-    "minic":(None,["tools/minic/main.c"],["include","src"]),
+    "minic":(None,[],["include","src"]),
 }
 CANONICAL=("minic-cpp","minic-as","minic-ar","minic-ld","minic-objcopy","minic-nm","minic-strip","minic")
 
