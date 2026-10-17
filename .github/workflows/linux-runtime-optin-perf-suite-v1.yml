@@ -639,7 +639,7 @@ jobs:
             libc6-dev-riscv64-cross qemu-user python3 make >/dev/null
           artifact="$GITHUB_WORKSPACE/build/bootstrap-stage2-native/artifact/output"
           test -s "$artifact/summary.json"
-          echo "BOOTSTRAP_STAGE2_NATIVE_EXEC_PERMISSION=QUALIFY artifact_restore_mode qemu_cpp_help_before_suites"
+          echo "BOOTSTRAP_STAGE2_NATIVE_STATIC_LINK=certified_minild_A2_CLI no_unsupported_GNU_Ttext"
           python3 -m py_compile tools/ci/minic-bootstrap-stage2-native-runtime-v1.py
           work="$GITHUB_WORKSPACE/build/bootstrap-stage2-native/qualification"
           python3 tools/ci/minic-bootstrap-stage2-native-runtime-v1.py \
