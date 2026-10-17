@@ -380,7 +380,10 @@ if [[ "$kind" == minic && "${COHORT_FULL_SPEED_RSS:-0}" == 1 ]]; then
   rm -f -- "$rss_tmp"
   {
     flock 8
-    printf '%s\t%s\t%s\t%s\t%s\n' "$output" "${child_rss_kib:-0}" "${child_user_s:-0}" "${child_sys_s:-0}" "$input" >&8
+    # Preserve rc: a failed speculative/repeated Kbuild attempt may have
+    # missing/zero time counters, while its serial retry later succeeds.
+    # A successful missing RSS remains a hard failure in aggregation.
+    printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$output" "${child_rss_kib:-0}" "${child_user_s:-0}" "${child_sys_s:-0}" "$input" "$rc" >&8
   } 8>>"${PERF_RSS_LOG:?}"
 else
   "$executable" "$@"
@@ -504,32 +507,47 @@ PY_STAGE_TOTALS
   fi
   if [[ "${COHORT_FULL_SPEED_RSS:-0}" == 1 ]]; then
     test -s "$ev/stage-probe/minic-rss.tsv"
-    python3 - "$ev/stage-probe/minic-rss.tsv" "$ev/stage-probe/minic-resource-summary.json" <<'PY_MINIC_RSS'
+    python3 - "$ev/stage-probe/minic-rss.tsv" "$ev/stage-probe/minic-resource-summary.json" "$n" <<'PY_MINIC_RSS'
 import json,statistics,sys
 from pathlib import Path
-source,out=map(Path,sys.argv[1:])
+source,out=map(Path,sys.argv[1:3])
+required=int(sys.argv[3])
 rows=[]
+failed_attempts=[]
 for line in source.read_text().splitlines():
-    parts=line.split("\t",4)
-    if len(parts)!=5:raise SystemExit("COHORT_FULL_SPEED_RSS=FAIL malformed record")
-    output,rss,user,system,input_path=parts
+    parts=line.split("\t")
+    if len(parts)==5:
+        output,rss,user,system,input_path=parts
+        rc="0"  # historical record with no explicit status
+    elif len(parts)==6:
+        output,rss,user,system,input_path,rc=parts
+    else:
+        raise SystemExit("COHORT_FULL_SPEED_RSS=FAIL malformed record")
+    if not rc.lstrip("-").isdecimal():
+        raise SystemExit("COHORT_FULL_SPEED_RSS=FAIL invalid child status")
+    if int(rc)!=0:
+        failed_attempts.append({"assembly":output,"exit_status":int(rc),"input":input_path})
+        continue
     if not rss.isdecimal() or int(rss)<=0:
-        raise SystemExit("COHORT_FULL_SPEED_RSS=FAIL missing child peak")
+        raise SystemExit("COHORT_FULL_SPEED_RSS=FAIL successful MiniC missing child peak")
     rows.append({"assembly":output,"rss_kib":int(rss),
                  "user_s":float(user),"sys_s":float(system),"input":input_path})
-if not rows:raise SystemExit("COHORT_FULL_SPEED_RSS=FAIL empty")
+if len(rows)<required:
+    raise SystemExit("COHORT_FULL_SPEED_RSS=FAIL insufficient successful measured child processes")
 ordered=sorted(r["rss_kib"] for r in rows)
 p95=ordered[(95*len(ordered)+99)//100-1]
-data={"count":len(rows),"median_peak_rss_kib":statistics.median(ordered),
+data={"count":len(rows),"failed_attempt_count":len(failed_attempts),
+      "failed_attempts":failed_attempts[:32],
+      "median_peak_rss_kib":statistics.median(ordered),
       "p95_peak_rss_kib":p95,"max_peak_rss_kib":max(ordered),
       "sum_user_sys_s":round(sum(r["user_s"]+r["sys_s"] for r in rows),3),
       "top_memory":sorted(rows,key=lambda r:r["rss_kib"],reverse=True)[:10],
       "rss_scope":"wait4 peak RSS per MiniC subprocess, not seven-runner RAM",
       "rows":rows}
 out.write_text(json.dumps(data,indent=2)+"\n")
-print("COHORT_FULL_SPEED_RSS=PASS processes=%d median_peak_kib=%.0f "
+print("COHORT_FULL_SPEED_RSS=PASS processes=%d failed_attempts=%d median_peak_kib=%.0f "
       "p95_peak_kib=%d max_peak_kib=%d total_cpu_s=%.3f"%
-      (len(rows),data["median_peak_rss_kib"],p95,max(ordered),
+      (len(rows),len(failed_attempts),data["median_peak_rss_kib"],p95,max(ordered),
        data["sum_user_sys_s"]))
 PY_MINIC_RSS
   fi
