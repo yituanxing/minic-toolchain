@@ -74,7 +74,15 @@ SPEC_STAGES=("spec-integer","spec-symbolic","spec-boolean","spec-finalize")
 SYMBOLIC_SUBSTAGES=("spec-symbolic-direct","spec-symbolic-transitive")
 INTEGER_SUBSTAGES=("spec-integer-direct","spec-integer-transitive")
 BOOLEAN_SUBSTAGES=("spec-boolean-direct","spec-boolean-transitive")
-BOOLEAN_COUNTER_RE=re.compile(r"MINIC_BOOLEAN_SCAN_PROFILE\s+(.+)")
+BOOLEAN_COUNTER_RE=re.compile(r"MINIC_BOOLEAN_SCAN_PROFILE\\s+(.+)")
+SYMBOLIC_COUNTER_RE=re.compile(r"MINIC_SYMBOLIC_SCAN_PROFILE\\s+(.+)")
+SYMBOLIC_COUNTER_FIELDS=(
+    "direct_expression_visits", "direct_call_visits",
+    "direct_variant_lookups", "direct_variant_probes", "transitive_callers",
+    "transitive_expression_visits", "transitive_owner_skips",
+    "transitive_call_visits", "transitive_pointer_argument_evals",
+    "transitive_variant_lookups", "transitive_variant_probes",
+    "owner_index_ready", "direct_clones", "transitive_clones")
 BOOLEAN_COUNTER_FIELDS=("local_queries","local_arena_scan_potential",
                         "callers","range_callers","expression_visits",
                         "call_expression_visits","variant_lookups","variant_probes",
@@ -91,6 +99,25 @@ def read_boolean_counts(events):
             raise RuntimeError("unexpected Boolean scan counters: "+repr(sorted(fields)))
         found.append(fields)
     if len(found)>1: raise RuntimeError("duplicate Boolean scan profile rows")
+    return found[0] if found else None
+
+
+def read_symbolic_counts(events):
+    found=[]
+    for _when,line in events:
+        match=SYMBOLIC_COUNTER_RE.search(line)
+        if not match: continue
+        fields=dict((k,int(v)) for k,v in
+                    (word.split("=",1) for word in match.group(1).split()))
+        if set(fields)!=set(SYMBOLIC_COUNTER_FIELDS):
+            raise RuntimeError("unexpected Symbolic scan counters: "+repr(sorted(fields)))
+        if (fields["direct_call_visits"]>fields["direct_expression_visits"] or
+            fields["transitive_owner_skips"]>fields["transitive_expression_visits"] or
+            fields["transitive_call_visits"]>fields["transitive_expression_visits"]-fields["transitive_owner_skips"] or
+            fields["owner_index_ready"] not in (0,1)):
+            raise RuntimeError("invalid Symbolic scan census relationships")
+        found.append(fields)
+    if len(found)>1: raise RuntimeError("duplicate Symbolic scan census rows")
     return found[0] if found else None
 
 
@@ -121,7 +148,7 @@ def summarize_specialization_trace(events):
 
 
 def sample(executable,source,output,limit):
-    env=dict(os.environ,MINIC_BOOTSTRAP_TRACE="1",MINIC_BOOLEAN_SCAN_PROFILE="1")
+    env=dict(os.environ,MINIC_BOOTSTRAP_TRACE="1",MINIC_BOOLEAN_SCAN_PROFILE="1",MINIC_SYMBOLIC_SCAN_PROFILE="1")
     begun=time.perf_counter_ns()
     with subprocess.Popen([str(executable),"-S",str(source),"-o",str(output)],
                           env=env,stdout=subprocess.DEVNULL,
@@ -139,7 +166,8 @@ def sample(executable,source,output,limit):
     gaps=compute_interstage_gaps(events)
     spec=summarize_specialization_trace(events)
     bool_counts=read_boolean_counts(events)
-    return {"boolean_counts":bool_counts, "wall_ms":round((time.perf_counter_ns()-begun)/1000000,3),
+    symbolic_counts=read_symbolic_counts(events)
+    return {"boolean_counts":bool_counts, "symbolic_counts":symbolic_counts, "wall_ms":round((time.perf_counter_ns()-begun)/1000000,3),
             "stage_ms":stages,"interstage_gap_ms":gaps,
             "specialization_ms":spec,"function_counts":functions, "assembly_sha":digest(output)}
 
@@ -148,6 +176,7 @@ def main():
     cli.add_argument("--self-test",action="store_true")
     cli.add_argument("--expect-specialization",action="store_true")
     cli.add_argument("--expect-symbolic-loops",action="store_true")
+    cli.add_argument("--expect-symbolic-census",action="store_true")
     cli.add_argument("--expect-integer-loops",action="store_true")
     cli.add_argument("--expect-boolean-loops",action="store_true")
     cli.add_argument("--input",type=Path)
@@ -179,7 +208,9 @@ def main():
         assert summarize_specialization_trace(integer_probe)["spec-integer-transitive"]["ms"]==1.2
         example=[(0,"MINIC_BOOLEAN_SCAN_PROFILE local_queries=3 local_arena_scan_potential=200 callers=4 range_callers=2 expression_visits=1000 call_expression_visits=9 variant_lookups=3 variant_probes=14 direct_clones=1 transitive_clones=1")]
         assert read_boolean_counts(example)["expression_visits"]==1000
-        print("MINIC_PHASE_TRACE_SELFTEST=PASS six_stages=1 five_interstage_gaps=1 spec_timer=1 boolean_count_parser=1")
+        symbolic_example=[(0,"MINIC_SYMBOLIC_SCAN_PROFILE direct_expression_visits=10 direct_call_visits=3 direct_variant_lookups=1 direct_variant_probes=5 transitive_callers=2 transitive_expression_visits=100 transitive_owner_skips=88 transitive_call_visits=7 transitive_pointer_argument_evals=4 transitive_variant_lookups=1 transitive_variant_probes=2 owner_index_ready=1 direct_clones=1 transitive_clones=1")]
+        assert read_symbolic_counts(symbolic_example)["transitive_owner_skips"]==88
+        print("MINIC_PHASE_TRACE_SELFTEST=PASS six_stages=1 five_interstage_gaps=1 spec_timer=1 boolean_count_parser=1 symbolic_count_parser=1")
         return
     if not all((ns.input,ns.baseline,ns.candidate,ns.out)):
         cli.error("all inputs required")
@@ -191,6 +222,8 @@ def main():
         results[mode]=sample(executable.resolve(),ns.input.resolve(),ns.out/(mode+".s"),180)
     if results["before"]["assembly_sha"]!=results["after"]["assembly_sha"]:
         raise RuntimeError("different assembly bytes; cannot attribute performance")
+    if ns.expect_symbolic_census and not ns.expect_symbolic_loops:
+        raise RuntimeError("symbolic census requires symbolic direct/transitive timers")
     if ns.expect_symbolic_loops and not ns.expect_specialization:
         raise RuntimeError("symbolic loops require outer specialization tracing")
     if ns.expect_integer_loops and not ns.expect_specialization:
@@ -266,6 +299,11 @@ def main():
         for name in SYMBOLIC_SUBSTAGES:
             print(f"MINIC_SYMBOLIC_SUBPHASE name={name} ms={spec[name]['ms']:.2f} calls={spec[name]['calls']}")
         print(f"MINIC_SYMBOLIC_SUBPHASE_GROUP=PASS inner_ms={inner:.2f} outer_ms={outer:.2f}")
+    if ns.expect_symbolic_census:
+        counts=results["after"]["symbolic_counts"]
+        if counts is None: raise RuntimeError("missing opt-in Symbolic census")
+        print("MINIC_SYMBOLIC_SCAN=PASS " + " ".join(
+              f"{name}={counts[name]}" for name in SYMBOLIC_COUNTER_FIELDS))
     if ns.expect_specialization:
         for stage in SPEC_STAGES:
             trace=results["after"]["specialization_ms"][stage]
