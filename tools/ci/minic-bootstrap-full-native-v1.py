@@ -156,6 +156,87 @@ def source_key(source):
     return source.replace("/", "__").replace(".", "_")
 
 
+def native_link_probe(binaries, source_lists, all_sources, libraries, previous, out):
+    """Isolate a deterministic native linker block from 77 certified objects.
+
+    Diagnostic only. Never upgrades Stage3/4 self-host status on link probe.
+    Externally provided libc/CRT inputs are still binary bootstrap seeds.
+    """
+    previous = previous.resolve()
+    evidence = json.loads((previous / "stage3/summary.json").read_text())
+    if (evidence.get("round") != "stage3" or
+        evidence.get("passed") != len(all_sources) or
+        evidence.get("failed") or
+        evidence.get("source_count") != len(all_sources) or
+        evidence.get("seed_binaries") != {k: sha(v) for k,v in binaries.items()} or
+        evidence.get("runtime_seed") != {k: sha(v) for k,v in libraries.items()}):
+        raise RuntimeError("FULL_NATIVE_LINK_PROBE=FAIL prior object cohort or seed differs")
+    rows = {r["source"]: r for r in evidence["rows"]}
+    if set(rows) != set(all_sources):
+        raise RuntimeError("FULL_NATIVE_LINK_PROBE=FAIL source inventory changed")
+    src_hashes = {}
+    for source in all_sources:
+        key = source_key(source)
+        asm = previous / "stage3/s" / (key + ".s")
+        obj = previous / "stage3/o" / (key + ".o")
+        if not asm.is_file() or not obj.is_file() or sha(asm) != rows[source]["s"] or sha(obj) != rows[source]["o"]:
+            raise RuntimeError("FULL_NATIVE_LINK_PROBE=FAIL object SHA " + source)
+        src_hashes[source] = sha(obj)
+    print("FULL_NATIVE_LINK_PROBE_EVIDENCE=PASS source_objects=%d" % len(rows),flush=True)
+    work = out / "link-probe"
+    work.mkdir(parents=True,exist_ok=True)
+    env = dict(os.environ, **CFLAGS)
+    tool = "minic-cpp"   # low-TU, representative hosted target linking first
+    objs = [previous / "stage3/o" / (source_key(s) + ".o")
+            for s in source_lists[tool]]
+    argv_prefix = ["-melf64lriscv", "-static", "-e", "_start"]
+    candidates = {
+        "original": [libraries["crt1.o"], libraries["crti.o"], *objs,
+                     "--start-group", libraries["libc.a"], libraries["libgcc.a"],
+                     "--end-group", libraries["crtn.o"]],
+        "no_init_fini": [libraries["crt1.o"], *objs,
+                         "--start-group", libraries["libc.a"], libraries["libgcc.a"],
+                         "--end-group"],
+        "crt_and_plain_libc": [libraries["crt1.o"], *objs,
+                                libraries["libc.a"], libraries["libgcc.a"]],
+    }
+    report = {"seed_sha": {k:sha(v) for k,v in binaries.items()},
+              "runtime_sha":{k:sha(v) for k,v in libraries.items()},
+              "object_count":len(rows), "object_sha":src_hashes,"variants":[]}
+    passed = False
+    for variant, link_inputs in candidates.items():
+        elf = work / (tool + "-" + variant)
+        argv = command(binaries, "minic-ld", *argv_prefix, "-o", elf, *link_inputs)
+        log = work / (variant + ".log")
+        begin = time.monotonic()
+        try:
+            p = subprocess.run(list(map(str,argv)),cwd=ROOT,env=env,
+                               stdout=subprocess.PIPE,stderr=subprocess.PIPE,
+                               timeout=180,check=False)
+            rc = p.returncode
+            stderr = p.stderr.decode(errors="replace")
+        except subprocess.TimeoutExpired:
+            rc = 124
+            stderr = "TIMEOUT"
+        log.write_text(stderr)
+        row = {"variant":variant, "rc":rc, "seconds":round(time.monotonic()-begin,3),
+               "stderr_tail":stderr[-2000:],
+               "elf_sha":sha(elf) if elf.is_file() else None}
+        report["variants"].append(row)
+        print("FULL_NATIVE_LINK_PROBE variant=%s rc=%d seconds=%.2f err=%s" %
+              (variant,rc,row["seconds"],stderr[-500:].replace("\n"," | ")),flush=True)
+        if rc==0 and elf.is_file():
+            elf.chmod(0o755)
+            execute(command({"probe":elf},"probe","--help"),work/(variant+".help.log"),
+                    timeout=30,env=env,expected=0)
+            passed=True
+            break
+    (work/"summary.json").write_text(json.dumps(report,indent=2)+"\n")
+    if not passed:
+        raise RuntimeError("FULL_NATIVE_LINK_PROBE=BLOCKED all variants failed; see stderr in artifact")
+    print("FULL_NATIVE_LINK_PROBE=PASS tool=minic-cpp no_GNU_fallback=true",flush=True)
+
+
 def rounds(binaries, sources, all_sources, hdr, libraries, out, workers, probe=False, resume=None):
     env = dict(os.environ, **CFLAGS)
     for stage in (3, 4):
@@ -325,6 +406,7 @@ def main():
     parser.add_argument("--workers", type=int, choices=(1, 2, 4), default=4)
     parser.add_argument("--resume-stage3", type=Path, default=None,
                         help="Prior CI evidence directory containing stage3/summary.json, s/ and o/")
+    parser.add_argument("--link-only", action="store_true", help="Link certified Stage3 77-object cohort only")
     parser.add_argument("--probe-only", default=None,
                         help="Comma-separated real production C units for native PP/CC/AS triage")
     args = parser.parse_args()
@@ -338,7 +420,11 @@ def main():
     print("FULL_NATIVE_SEED=PASS tools=9 source_tus=%d stage2_sha=%s"
           " external_runtime=prebuilt_cross_libc_crt_libgcc_gcc_builtin_headers" %
           (len(all_sources), sha(stage2)), flush=True)
-    if args.probe_only is not None:
+    if args.link_only:
+        if args.resume_stage3 is None:
+            raise RuntimeError("link-only requires --resume-stage3")
+        native_link_probe(seed, sources, all_sources, libraries, args.resume_stage3, out)
+    elif args.probe_only is not None:
         selected = args.probe_only.split(",")
         if not selected or len(set(selected)) != len(selected) or any(x not in all_sources for x in selected):
             raise RuntimeError("invalid real production probe source selection")
