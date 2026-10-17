@@ -282,7 +282,7 @@ jobs:
 
 
   perf500:
-    if: (github.event_name == 'workflow_dispatch' && (inputs.mode == 'first500' || inputs.mode == 'all')) || (github.event_name == 'push' && (contains(github.event.head_commit.message, '[linux-perf500]') || contains(github.event.head_commit.message, '[minic-source-broad-ab]') || contains(github.event.head_commit.message, '[minic-current-phase20]') || contains(github.event.head_commit.message, '[minic-cpu-profile-only]') || contains(github.event.head_commit.message, '[minic-boolean-domain-ab20]') || contains(github.event.head_commit.message, '[minic-boolean-domain-ab500]') || contains(github.event.head_commit.message, '[minic-parser-copy-ab]') || contains(github.event.head_commit.message, '[minic-integer-owner-ab]') || contains(github.event.head_commit.message, '[minic-integer-owner-ab500]') || contains(github.event.head_commit.message, '[minic-next-stage-audit]') || contains(github.event.head_commit.message, '[minic-core-reentry-ab]') || contains(github.event.head_commit.message, '[minic-core-reentry-ab500]') || contains(github.event.head_commit.message, '[minic-core-regression-triage]') || contains(github.event.head_commit.message, '[minic-core-lazy-ab]') || contains(github.event.head_commit.message, '[minic-core-lazy-ab500]') || contains(github.event.head_commit.message, '[minic-boolean-owner-ab]') || contains(github.event.head_commit.message, '[minic-boolean-owner-ab500]')))
+    if: (github.event_name == 'workflow_dispatch' && (inputs.mode == 'first500' || inputs.mode == 'all')) || (github.event_name == 'push' && (contains(github.event.head_commit.message, '[linux-perf500]') || contains(github.event.head_commit.message, '[minic-source-broad-ab]') || contains(github.event.head_commit.message, '[minic-current-phase20]') || contains(github.event.head_commit.message, '[minic-cpu-profile-only]') || contains(github.event.head_commit.message, '[minic-boolean-domain-ab20]') || contains(github.event.head_commit.message, '[minic-boolean-domain-ab500]') || contains(github.event.head_commit.message, '[minic-parser-copy-ab]') || contains(github.event.head_commit.message, '[minic-integer-owner-ab]') || contains(github.event.head_commit.message, '[minic-integer-owner-ab500]') || contains(github.event.head_commit.message, '[minic-next-stage-audit]') || contains(github.event.head_commit.message, '[minic-core-reentry-ab]') || contains(github.event.head_commit.message, '[minic-core-reentry-ab500]') || contains(github.event.head_commit.message, '[minic-core-regression-triage]') || contains(github.event.head_commit.message, '[minic-core-lazy-ab]') || contains(github.event.head_commit.message, '[minic-core-lazy-ab500]') || contains(github.event.head_commit.message, '[minic-boolean-owner-ab]') || contains(github.event.head_commit.message, '[minic-boolean-owner-ab500]') || contains(github.event.head_commit.message, '[minic-boolean-regression-triage]')))
     runs-on: ubuntu-24.04
     timeout-minutes: 65
     env:
@@ -412,7 +412,7 @@ jobs:
       # parser_type.c. Reuse the same already-certified runtime toolchain
       # builder and frozen first500 .i inputs; NEVER launch a 2064-owner build.
       - name: Build parent/current MiniC from one source change under identical profile
-        if: contains(github.event.head_commit.message, '[minic-parser-copy-ab]') || contains(github.event.head_commit.message, '[minic-integer-owner-ab]') || contains(github.event.head_commit.message, '[minic-integer-owner-ab500]') || contains(github.event.head_commit.message, '[minic-core-reentry-ab]') || contains(github.event.head_commit.message, '[minic-core-reentry-ab500]') || contains(github.event.head_commit.message, '[minic-core-regression-triage]') || contains(github.event.head_commit.message, '[minic-core-lazy-ab]') || contains(github.event.head_commit.message, '[minic-core-lazy-ab500]') || contains(github.event.head_commit.message, '[minic-boolean-owner-ab]') || contains(github.event.head_commit.message, '[minic-boolean-owner-ab500]')
+        if: contains(github.event.head_commit.message, '[minic-parser-copy-ab]') || contains(github.event.head_commit.message, '[minic-integer-owner-ab]') || contains(github.event.head_commit.message, '[minic-integer-owner-ab500]') || contains(github.event.head_commit.message, '[minic-core-reentry-ab]') || contains(github.event.head_commit.message, '[minic-core-reentry-ab500]') || contains(github.event.head_commit.message, '[minic-core-regression-triage]') || contains(github.event.head_commit.message, '[minic-core-lazy-ab]') || contains(github.event.head_commit.message, '[minic-core-lazy-ab500]') || contains(github.event.head_commit.message, '[minic-boolean-owner-ab]') || contains(github.event.head_commit.message, '[minic-boolean-owner-ab500]') || contains(github.event.head_commit.message, '[minic-boolean-regression-triage]')
         shell: bash
         timeout-minutes: 14
         run: |
@@ -423,7 +423,8 @@ jobs:
             gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
             libc6-dev-riscv64-cross python3 make >/dev/null
           if [[ "${{ contains(github.event.head_commit.message, '[minic-boolean-owner-ab]') && '1' || '0' }}" == 1 ||
-                "${{ contains(github.event.head_commit.message, '[minic-boolean-owner-ab500]') && '1' || '0' }}" == 1 ]]; then
+                "${{ contains(github.event.head_commit.message, '[minic-boolean-owner-ab500]') && '1' || '0' }}" == 1 ||
+                "${{ contains(github.event.head_commit.message, '[minic-boolean-regression-triage]') && '1' || '0' }}" == 1 ]]; then
             trial=boolean-owner
             source_file=src/compiler/compiler.c
             # Comparing against the exact 2064/QEMU-certified eager Core
@@ -495,7 +496,7 @@ jobs:
             | tee "$root/evidence/$trial-binaries.txt"
 
       - name: Build baseline and integrated optimization from clean sources
-        if: "!contains(github.event.head_commit.message, '[minic-source-broad-ab]') && !contains(github.event.head_commit.message, '[minic-current-phase20]') && !contains(github.event.head_commit.message, '[minic-cpu-profile-only]') && !contains(github.event.head_commit.message, '[minic-boolean-domain-ab20]') && !contains(github.event.head_commit.message, '[minic-boolean-domain-ab500]') && !contains(github.event.head_commit.message, '[minic-parser-copy-ab]') && !contains(github.event.head_commit.message, '[minic-integer-owner-ab]') && !contains(github.event.head_commit.message, '[minic-integer-owner-ab500]') && !contains(github.event.head_commit.message, '[minic-next-stage-audit]') && !contains(github.event.head_commit.message, '[minic-core-reentry-ab]') && !contains(github.event.head_commit.message, '[minic-core-reentry-ab500]') && !contains(github.event.head_commit.message, '[minic-core-regression-triage]') && !contains(github.event.head_commit.message, '[minic-core-lazy-ab]') && !contains(github.event.head_commit.message, '[minic-core-lazy-ab500]') && !contains(github.event.head_commit.message, '[minic-boolean-owner-ab]') && !contains(github.event.head_commit.message, '[minic-boolean-owner-ab500]')"
+        if: "!contains(github.event.head_commit.message, '[minic-source-broad-ab]') && !contains(github.event.head_commit.message, '[minic-current-phase20]') && !contains(github.event.head_commit.message, '[minic-cpu-profile-only]') && !contains(github.event.head_commit.message, '[minic-boolean-domain-ab20]') && !contains(github.event.head_commit.message, '[minic-boolean-domain-ab500]') && !contains(github.event.head_commit.message, '[minic-parser-copy-ab]') && !contains(github.event.head_commit.message, '[minic-integer-owner-ab]') && !contains(github.event.head_commit.message, '[minic-integer-owner-ab500]') && !contains(github.event.head_commit.message, '[minic-next-stage-audit]') && !contains(github.event.head_commit.message, '[minic-core-reentry-ab]') && !contains(github.event.head_commit.message, '[minic-core-reentry-ab500]') && !contains(github.event.head_commit.message, '[minic-core-regression-triage]') && !contains(github.event.head_commit.message, '[minic-core-lazy-ab]') && !contains(github.event.head_commit.message, '[minic-core-lazy-ab500]') && !contains(github.event.head_commit.message, '[minic-boolean-owner-ab]') && !contains(github.event.head_commit.message, '[minic-boolean-owner-ab500]') && !contains(github.event.head_commit.message, '[minic-boolean-regression-triage]')"
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -1287,6 +1288,131 @@ jobs:
                     (x["object"],x["baseline"]["wall_ms"],x["candidate"]["wall_ms"]))
           PY
 
+      # Repeat only the suspicious per-TU regressions. CPU+wall clocks,
+      # actual Boolean CALL count and SHA identity separate cost from noise.
+      - name: Repeat 12 Boolean regression sentinel A-B with user CPU clock
+        if: contains(github.event.head_commit.message, '[minic-boolean-regression-triage]')
+        timeout-minutes: 36
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          root="$GITHUB_WORKSPACE/build/linux-perf-audit-v1"
+          corpus="$GITHUB_WORKSPACE/build/linux-perf-corpus"
+          sha256sum --status --check "$corpus/inputs.sha256"
+          python3 -m py_compile tools/ci/linux-perf-pinned-single-paired-ab-v1.py
+          python3 - "$corpus" "$root" <<'PY'
+          from pathlib import Path
+          import sys
+          corpus,root=map(Path,sys.argv[1:])
+          inputs={}
+          for line in (corpus/"selected-tus.txt").read_text().splitlines():
+              p=line.split("\t",3)
+              if len(p)!=4:raise SystemExit("malformed frozen TU")
+              inputs[p[1]]=p[2]
+          assert len(inputs)==500
+          owners=("fs/nfs/client.o","mm/slub.o","mm/hugetlb.o",
+                  "fs/nfs/blocklayout/extent_tree.o",
+                  "fs/notify/inotify/inotify_user.o",
+                  "arch/riscv/kernel/patch.o",
+                  "kernel/events/core.o","kernel/bpf/verifier.o",
+                  "mm/memcontrol.o","fs/ext4/fsync.o",
+                  "arch/riscv/purgatory/ctype.o","mm/shmem_quota.o")
+          with (root/"evidence"/"boolean-regress-inputs.tsv").open("w") as out:
+              for owner in owners:
+                  if owner not in inputs:raise SystemExit("missing "+owner)
+                  f=(corpus/"kbuild"/inputs[owner]).resolve()
+                  assert f.is_relative_to((corpus/"kbuild").resolve()) and f.is_file()
+                  print(owner+"\t"+str(f),file=out)
+          PY
+          while IFS="$(printf '\t')" read -r owner frozen; do
+            safe=${owner//\//_}
+            safe=${safe%.o}
+            for batch in a b; do
+              python3 tools/ci/linux-perf-pinned-single-paired-ab-v1.py \
+                --input "$frozen" \
+                --baseline-driver "$root/boolean-owner-before/bin/minic" \
+                --candidate-driver "$root/boolean-owner-after/bin/minic" \
+                --out "$root/boolean-regression/$safe/$batch" --repeats 4 \
+                | tee "$root/evidence/boolean-regress-$safe-$batch.txt"
+              grep -Fq 'MINIC_ONE_OWNER_AB=PASS' \
+                "$root/evidence/boolean-regress-$safe-$batch.txt"
+            done
+            MINIC_BOOLEAN_TRANSITIVE_PERF=1 "$root/boolean-owner-after/bin/minic" \
+              -S "$frozen" -o "$root/boolean-regression/$safe/census.s" \
+              >"$root/evidence/boolean-regress-$safe.stdout" \
+              2>"$root/evidence/boolean-regress-$safe.log"
+            python3 - "$root/boolean-regression/$safe" \
+              "$root/evidence/boolean-regress-$safe.log" "$owner" <<'PYAUDIT'
+          import hashlib,json,re,statistics,sys
+          from pathlib import Path
+          base,log,owner=Path(sys.argv[1]),Path(sys.argv[2]),sys.argv[3]
+          pair=[json.loads((base/b/"paired-result.json").read_text())
+                for b in ("a","b")]
+          assert all(x["assembly_identical"] and x["repeat_per_arm"]==4 for x in pair)
+          digest=pair[0]["assembly_sha256"]
+          assert pair[1]["assembly_sha256"]==digest
+          assert hashlib.sha256((base/"census.s").read_bytes()).hexdigest()==digest
+          records={}
+          for mode in ("before","after"):
+              values=[z for p in pair for z in p["records"] if z["mode"]==mode]
+              assert len(values)==8
+              records[mode]={"samples":values}
+              for clock in ("wall_ms","user_ms","sys_ms"):
+                  x=[float(z[clock]) for z in values]
+                  med=statistics.median(x)
+                  records[mode][clock]={"median":round(med,3),
+                      "mad":round(statistics.median(abs(y-med) for y in x),3)}
+          baseline,candidate=records["before"],records["after"]
+          old,new=(records[z]["wall_ms"]["median"] for z in ("before","after"))
+          cpu0,cpu1=(records[z]["user_ms"]["median"] for z in ("before","after"))
+          mad=(baseline["wall_ms"]["mad"]+candidate["wall_ms"]["mad"])
+          slow_wall=(new-old)>max(5.,old*.03,2.5*mad)
+          slow_cpu=(cpu1-cpu0)>max(5.,cpu0*.03)
+          classification=("reproduced_wall_and_cpu_slowdown_suspect"
+                          if slow_wall and slow_cpu else
+                          "mixed_or_noisy" if new>old else "not_reproduced")
+          matches=re.findall(
+              r"^MINIC_BOOLEAN_TRANSITIVE_INDEX callers=(\d+) "
+              r"index_builds=(\d+) call_entries=(\d+) candidates=(\d+) "
+              r"skipped_other_owner=(\d+) calls_ready=([01]) "
+              r"owners_ready=([01])$",log.read_text(),re.MULTILINE)
+          assert len(matches)==1
+          fields=("callers","index_builds","call_entries","candidates",
+                  "skipped_other_owner","calls_ready","owners_ready")
+          counters=dict(zip(fields,map(int,matches[0])))
+          assert counters["skipped_other_owner"]<=counters["candidates"]
+          report={"schema":"minic-boolean-regression-12-owner-v1",
+                  "owner":owner,"clock":records,"index":counters,
+                  "classification":classification,"delta_wall_ms":round(new-old,3),
+                  "delta_cpu_user_ms":round(cpu1-cpu0,3),
+                  "delta_pct":round((new-old)/old*100,3)}
+          (base/"triage.json").write_text(json.dumps(report,indent=2)+"\n")
+          print("MINIC_BOOLEAN_REGRESSION=PASS owner=%s class=%s "
+                "old_wall=%.3f new_wall=%.3f delta_wall=%.3f "
+                "delta_cpu=%.3f callers=%d skipped=%d"%
+                (owner,classification,old,new,new-old,cpu1-cpu0,
+                 counters["callers"],counters["skipped_other_owner"]))
+          PYAUDIT
+          done < "$root/evidence/boolean-regress-inputs.tsv"
+          python3 - "$root/boolean-regression" <<'PY' \
+            | tee "$root/evidence/boolean-regression-summary.txt"
+          import json,sys
+          from pathlib import Path
+          root=Path(sys.argv[1])
+          rows=[json.loads(p.read_text()) for p in sorted(root.glob("*/triage.json"))]
+          assert len(rows)==12
+          counts={}
+          for row in rows:
+              cls=row["classification"]
+              counts[cls]=counts.get(cls,0)+1
+          (root/"triage-summary.json").write_text(json.dumps({
+              "schema":"minic-boolean-regression-summary-v1",
+              "count":len(rows),"classes":counts,"owners":rows},indent=2)+"\n")
+          for key in sorted(counts):
+              print("MINIC_BOOLEAN_REGRESSION_CLASS class=%s count=%d"%(key,counts[key]))
+          print("MINIC_BOOLEAN_REGRESSION_TRIAGE=PASS owners=12 repeats=8_each")
+          PY
+
       - name: Same-runner frozen Linux single-factor MiniC paired A/B
         if: contains(github.event.head_commit.message, '[minic-parser-copy-ab]') || contains(github.event.head_commit.message, '[minic-integer-owner-ab]')
         timeout-minutes: 15
@@ -1574,7 +1700,7 @@ jobs:
           PY
 
       - name: Parser index fallback, scope, and zero-expression smokes
-        if: "!contains(github.event.head_commit.message, '[minic-source-broad-ab]') && !contains(github.event.head_commit.message, '[minic-current-phase20]') && !contains(github.event.head_commit.message, '[minic-cpu-profile-only]') && !contains(github.event.head_commit.message, '[minic-boolean-domain-ab20]') && !contains(github.event.head_commit.message, '[minic-boolean-domain-ab500]') && !contains(github.event.head_commit.message, '[minic-parser-copy-ab]') && !contains(github.event.head_commit.message, '[minic-integer-owner-ab]') && !contains(github.event.head_commit.message, '[minic-integer-owner-ab500]') && !contains(github.event.head_commit.message, '[minic-next-stage-audit]') && !contains(github.event.head_commit.message, '[minic-core-reentry-ab]') && !contains(github.event.head_commit.message, '[minic-core-reentry-ab500]') && !contains(github.event.head_commit.message, '[minic-core-regression-triage]') && !contains(github.event.head_commit.message, '[minic-core-lazy-ab]') && !contains(github.event.head_commit.message, '[minic-core-lazy-ab500]') && !contains(github.event.head_commit.message, '[minic-boolean-owner-ab]') && !contains(github.event.head_commit.message, '[minic-boolean-owner-ab500]')"
+        if: "!contains(github.event.head_commit.message, '[minic-source-broad-ab]') && !contains(github.event.head_commit.message, '[minic-current-phase20]') && !contains(github.event.head_commit.message, '[minic-cpu-profile-only]') && !contains(github.event.head_commit.message, '[minic-boolean-domain-ab20]') && !contains(github.event.head_commit.message, '[minic-boolean-domain-ab500]') && !contains(github.event.head_commit.message, '[minic-parser-copy-ab]') && !contains(github.event.head_commit.message, '[minic-integer-owner-ab]') && !contains(github.event.head_commit.message, '[minic-integer-owner-ab500]') && !contains(github.event.head_commit.message, '[minic-next-stage-audit]') && !contains(github.event.head_commit.message, '[minic-core-reentry-ab]') && !contains(github.event.head_commit.message, '[minic-core-reentry-ab500]') && !contains(github.event.head_commit.message, '[minic-core-regression-triage]') && !contains(github.event.head_commit.message, '[minic-core-lazy-ab]') && !contains(github.event.head_commit.message, '[minic-core-lazy-ab500]') && !contains(github.event.head_commit.message, '[minic-boolean-owner-ab]') && !contains(github.event.head_commit.message, '[minic-boolean-owner-ab500]') && !contains(github.event.head_commit.message, '[minic-boolean-regression-triage]')"
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -1607,7 +1733,7 @@ jobs:
           done
 
       - name: Release direct minic smoke on previously crashing TU
-        if: "!contains(github.event.head_commit.message, '[minic-source-broad-ab]') && !contains(github.event.head_commit.message, '[minic-current-phase20]') && !contains(github.event.head_commit.message, '[minic-cpu-profile-only]') && !contains(github.event.head_commit.message, '[minic-boolean-domain-ab20]') && !contains(github.event.head_commit.message, '[minic-boolean-domain-ab500]') && !contains(github.event.head_commit.message, '[minic-parser-copy-ab]') && !contains(github.event.head_commit.message, '[minic-integer-owner-ab]') && !contains(github.event.head_commit.message, '[minic-integer-owner-ab500]') && !contains(github.event.head_commit.message, '[minic-next-stage-audit]') && !contains(github.event.head_commit.message, '[minic-core-reentry-ab]') && !contains(github.event.head_commit.message, '[minic-core-reentry-ab500]') && !contains(github.event.head_commit.message, '[minic-core-regression-triage]') && !contains(github.event.head_commit.message, '[minic-core-lazy-ab]') && !contains(github.event.head_commit.message, '[minic-core-lazy-ab500]') && !contains(github.event.head_commit.message, '[minic-boolean-owner-ab]') && !contains(github.event.head_commit.message, '[minic-boolean-owner-ab500]')"
+        if: "!contains(github.event.head_commit.message, '[minic-source-broad-ab]') && !contains(github.event.head_commit.message, '[minic-current-phase20]') && !contains(github.event.head_commit.message, '[minic-cpu-profile-only]') && !contains(github.event.head_commit.message, '[minic-boolean-domain-ab20]') && !contains(github.event.head_commit.message, '[minic-boolean-domain-ab500]') && !contains(github.event.head_commit.message, '[minic-parser-copy-ab]') && !contains(github.event.head_commit.message, '[minic-integer-owner-ab]') && !contains(github.event.head_commit.message, '[minic-integer-owner-ab500]') && !contains(github.event.head_commit.message, '[minic-next-stage-audit]') && !contains(github.event.head_commit.message, '[minic-core-reentry-ab]') && !contains(github.event.head_commit.message, '[minic-core-reentry-ab500]') && !contains(github.event.head_commit.message, '[minic-core-regression-triage]') && !contains(github.event.head_commit.message, '[minic-core-lazy-ab]') && !contains(github.event.head_commit.message, '[minic-core-lazy-ab500]') && !contains(github.event.head_commit.message, '[minic-boolean-owner-ab]') && !contains(github.event.head_commit.message, '[minic-boolean-owner-ab500]') && !contains(github.event.head_commit.message, '[minic-boolean-regression-triage]')"
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -1620,7 +1746,7 @@ jobs:
           echo "TYPEDEF_RELEASE_SMOKE=PASS"
 
       - name: Diagnose typedef candidate with ASan on known-failing TU
-        if: "!contains(github.event.head_commit.message, '[minic-source-broad-ab]') && !contains(github.event.head_commit.message, '[minic-current-phase20]') && !contains(github.event.head_commit.message, '[minic-cpu-profile-only]') && !contains(github.event.head_commit.message, '[minic-boolean-domain-ab20]') && !contains(github.event.head_commit.message, '[minic-boolean-domain-ab500]') && !contains(github.event.head_commit.message, '[minic-parser-copy-ab]') && !contains(github.event.head_commit.message, '[minic-integer-owner-ab]') && !contains(github.event.head_commit.message, '[minic-integer-owner-ab500]') && !contains(github.event.head_commit.message, '[minic-next-stage-audit]') && !contains(github.event.head_commit.message, '[minic-core-reentry-ab]') && !contains(github.event.head_commit.message, '[minic-core-reentry-ab500]') && !contains(github.event.head_commit.message, '[minic-core-regression-triage]') && !contains(github.event.head_commit.message, '[minic-core-lazy-ab]') && !contains(github.event.head_commit.message, '[minic-core-lazy-ab500]') && !contains(github.event.head_commit.message, '[minic-boolean-owner-ab]') && !contains(github.event.head_commit.message, '[minic-boolean-owner-ab500]')"
+        if: "!contains(github.event.head_commit.message, '[minic-source-broad-ab]') && !contains(github.event.head_commit.message, '[minic-current-phase20]') && !contains(github.event.head_commit.message, '[minic-cpu-profile-only]') && !contains(github.event.head_commit.message, '[minic-boolean-domain-ab20]') && !contains(github.event.head_commit.message, '[minic-boolean-domain-ab500]') && !contains(github.event.head_commit.message, '[minic-parser-copy-ab]') && !contains(github.event.head_commit.message, '[minic-integer-owner-ab]') && !contains(github.event.head_commit.message, '[minic-integer-owner-ab500]') && !contains(github.event.head_commit.message, '[minic-next-stage-audit]') && !contains(github.event.head_commit.message, '[minic-core-reentry-ab]') && !contains(github.event.head_commit.message, '[minic-core-reentry-ab500]') && !contains(github.event.head_commit.message, '[minic-core-regression-triage]') && !contains(github.event.head_commit.message, '[minic-core-lazy-ab]') && !contains(github.event.head_commit.message, '[minic-core-lazy-ab500]') && !contains(github.event.head_commit.message, '[minic-boolean-owner-ab]') && !contains(github.event.head_commit.message, '[minic-boolean-owner-ab500]') && !contains(github.event.head_commit.message, '[minic-boolean-regression-triage]')"
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -1636,7 +1762,7 @@ jobs:
           echo "TYPEDEF_ASAN_SMOKE=PASS"
 
       - name: Paired integrated optimization A/B with exactly four workers
-        if: "!contains(github.event.head_commit.message, '[minic-source-broad-ab]') && !contains(github.event.head_commit.message, '[minic-current-phase20]') && !contains(github.event.head_commit.message, '[minic-cpu-profile-only]') && !contains(github.event.head_commit.message, '[minic-boolean-domain-ab20]') && !contains(github.event.head_commit.message, '[minic-boolean-domain-ab500]') && !contains(github.event.head_commit.message, '[minic-parser-copy-ab]') && !contains(github.event.head_commit.message, '[minic-integer-owner-ab]') && !contains(github.event.head_commit.message, '[minic-integer-owner-ab500]') && !contains(github.event.head_commit.message, '[minic-next-stage-audit]') && !contains(github.event.head_commit.message, '[minic-core-reentry-ab]') && !contains(github.event.head_commit.message, '[minic-core-reentry-ab500]') && !contains(github.event.head_commit.message, '[minic-core-regression-triage]') && !contains(github.event.head_commit.message, '[minic-core-lazy-ab]') && !contains(github.event.head_commit.message, '[minic-core-lazy-ab500]') && !contains(github.event.head_commit.message, '[minic-boolean-owner-ab]') && !contains(github.event.head_commit.message, '[minic-boolean-owner-ab500]')"
+        if: "!contains(github.event.head_commit.message, '[minic-source-broad-ab]') && !contains(github.event.head_commit.message, '[minic-current-phase20]') && !contains(github.event.head_commit.message, '[minic-cpu-profile-only]') && !contains(github.event.head_commit.message, '[minic-boolean-domain-ab20]') && !contains(github.event.head_commit.message, '[minic-boolean-domain-ab500]') && !contains(github.event.head_commit.message, '[minic-parser-copy-ab]') && !contains(github.event.head_commit.message, '[minic-integer-owner-ab]') && !contains(github.event.head_commit.message, '[minic-integer-owner-ab500]') && !contains(github.event.head_commit.message, '[minic-next-stage-audit]') && !contains(github.event.head_commit.message, '[minic-core-reentry-ab]') && !contains(github.event.head_commit.message, '[minic-core-reentry-ab500]') && !contains(github.event.head_commit.message, '[minic-core-regression-triage]') && !contains(github.event.head_commit.message, '[minic-core-lazy-ab]') && !contains(github.event.head_commit.message, '[minic-core-lazy-ab500]') && !contains(github.event.head_commit.message, '[minic-boolean-owner-ab]') && !contains(github.event.head_commit.message, '[minic-boolean-owner-ab500]') && !contains(github.event.head_commit.message, '[minic-boolean-regression-triage]')"
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -1651,7 +1777,7 @@ jobs:
           cp "$work/paired/output-fingerprints.tsv" "$work/evidence/"
 
       - name: Analyze A/B time distribution
-        if: "!contains(github.event.head_commit.message, '[minic-source-broad-ab]') && !contains(github.event.head_commit.message, '[minic-current-phase20]') && !contains(github.event.head_commit.message, '[minic-cpu-profile-only]') && !contains(github.event.head_commit.message, '[minic-boolean-domain-ab20]') && !contains(github.event.head_commit.message, '[minic-boolean-domain-ab500]') && !contains(github.event.head_commit.message, '[minic-parser-copy-ab]') && !contains(github.event.head_commit.message, '[minic-integer-owner-ab]') && !contains(github.event.head_commit.message, '[minic-integer-owner-ab500]') && !contains(github.event.head_commit.message, '[minic-next-stage-audit]') && !contains(github.event.head_commit.message, '[minic-core-reentry-ab]') && !contains(github.event.head_commit.message, '[minic-core-reentry-ab500]') && !contains(github.event.head_commit.message, '[minic-core-regression-triage]') && !contains(github.event.head_commit.message, '[minic-core-lazy-ab]') && !contains(github.event.head_commit.message, '[minic-core-lazy-ab500]') && !contains(github.event.head_commit.message, '[minic-boolean-owner-ab]') && !contains(github.event.head_commit.message, '[minic-boolean-owner-ab500]')"
+        if: "!contains(github.event.head_commit.message, '[minic-source-broad-ab]') && !contains(github.event.head_commit.message, '[minic-current-phase20]') && !contains(github.event.head_commit.message, '[minic-cpu-profile-only]') && !contains(github.event.head_commit.message, '[minic-boolean-domain-ab20]') && !contains(github.event.head_commit.message, '[minic-boolean-domain-ab500]') && !contains(github.event.head_commit.message, '[minic-parser-copy-ab]') && !contains(github.event.head_commit.message, '[minic-integer-owner-ab]') && !contains(github.event.head_commit.message, '[minic-integer-owner-ab500]') && !contains(github.event.head_commit.message, '[minic-next-stage-audit]') && !contains(github.event.head_commit.message, '[minic-core-reentry-ab]') && !contains(github.event.head_commit.message, '[minic-core-reentry-ab500]') && !contains(github.event.head_commit.message, '[minic-core-regression-triage]') && !contains(github.event.head_commit.message, '[minic-core-lazy-ab]') && !contains(github.event.head_commit.message, '[minic-core-lazy-ab500]') && !contains(github.event.head_commit.message, '[minic-boolean-owner-ab]') && !contains(github.event.head_commit.message, '[minic-boolean-owner-ab500]') && !contains(github.event.head_commit.message, '[minic-boolean-regression-triage]')"
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -1783,6 +1909,8 @@ jobs:
             build/linux-perf-audit-v1/core-lazy-ab500/differential.json
             build/linux-perf-audit-v1/boolean-owner-ab/*/paired-result.json
             build/linux-perf-audit-v1/boolean-owner-ab500/differential.json
+            build/linux-perf-audit-v1/boolean-regression/*/triage.json
+            build/linux-perf-audit-v1/boolean-regression/triage-summary.json
             build/linux-perf-audit-v1/next-phase/*/phases.json
             build/linux-perf-audit-v1/next-phase/ranked-summary.json
             build/linux-perf-audit-v1/oldnew500/differential.json
