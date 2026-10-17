@@ -402,12 +402,12 @@ jobs:
           retention-days: 14
 
       - uses: actions/download-artifact@v4
-        if: "!contains(github.event.head_commit.message, '[minic-bootstrap-stage2-linux500]') && !contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux500]') && !contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux500-aggregate-only]') && !contains(github.event.head_commit.message, '[minic-bootstrap-stage4-dispatch-audit-selftest]')"
+        if: "!contains(github.event.head_commit.message, '[minic-bootstrap-stage2-linux500]') && !contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux500]') && !contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux500-aggregate-only]') && !contains(github.event.head_commit.message, '[minic-bootstrap-native-asm-census]') && !contains(github.event.head_commit.message, '[minic-bootstrap-stage4-dispatch-audit-selftest]')"
         with:
           pattern: all3352-constant-p-shard-*
           path: evidence
       - name: Aggregate 3352 unique TU results
-        if: "!contains(github.event.head_commit.message, '[minic-bootstrap-stage2-linux500]') && !contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux500]') && !contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux500-aggregate-only]') && !contains(github.event.head_commit.message, '[minic-bootstrap-stage4-dispatch-audit-selftest]')"
+        if: "!contains(github.event.head_commit.message, '[minic-bootstrap-stage2-linux500]') && !contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux500]') && !contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux500-aggregate-only]') && !contains(github.event.head_commit.message, '[minic-bootstrap-native-asm-census]') && !contains(github.event.head_commit.message, '[minic-bootstrap-stage4-dispatch-audit-selftest]')"
         run: |
           set -Eeuo pipefail
           python3 - <<'PY' | tee all3352-final.txt
@@ -433,7 +433,7 @@ jobs:
               raise SystemExit("ALL3352_COMPILE_FAILURES")
           print("ALL3352_COMPILE_STATUS=PASS")
           PY
-      - if: always() && !contains(github.event.head_commit.message, '[minic-bootstrap-stage2-linux500]') && !contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux500]') && !contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux500-aggregate-only]') && !contains(github.event.head_commit.message, '[minic-bootstrap-stage4-dispatch-audit-selftest]')
+      - if: always() && !contains(github.event.head_commit.message, '[minic-bootstrap-stage2-linux500]') && !contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux500]') && !contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux500-aggregate-only]') && !contains(github.event.head_commit.message, '[minic-bootstrap-native-asm-census]') && !contains(github.event.head_commit.message, '[minic-bootstrap-stage4-dispatch-audit-selftest]')
         uses: actions/upload-artifact@v4
         with:
           name: all3352-constant-p-final-report
