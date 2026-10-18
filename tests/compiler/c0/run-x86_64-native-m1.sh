@@ -78,6 +78,92 @@ set -e
 test "$native_result" -eq 42
 echo "PASS: GCC oracle sqlite_u128 exit=42"
 
+# The unsigned 128-bit SysV return convention is RDX:RAX, not
+# a hidden pointer. Check MiniC and GNU interoperability in both directions.
+cat > "$tempdir/sqlite_u128_abi_mini.i" <<'EOF'
+typedef unsigned __int128 U128;
+U128 minic_u128_return(void) {
+    return ((U128)0xfedcba9876543210ULL << 64) | (U128)0x123456789abcdef0ULL;
+}
+EOF
+cat > "$tempdir/sqlite_u128_abi_host.c" <<'EOF'
+typedef unsigned __int128 U128;
+extern U128 minic_u128_return(void);
+int main(void) {
+    U128 value = minic_u128_return();
+    return ((unsigned long long)(value >> 64) == 0xfedcba9876543210ULL &&
+            (unsigned long long)value == 0x123456789abcdef0ULL) ? 42 : 1;
+}
+EOF
+"$MINIC_CC" --target=x86_64-linux -S "$tempdir/sqlite_u128_abi_mini.i" \
+    -o "$tempdir/sqlite_u128_abi_mini.s"
+"$HOST_CC" -c -x assembler "$tempdir/sqlite_u128_abi_mini.s" \
+    -o "$tempdir/sqlite_u128_abi_mini.o"
+"$HOST_CC" -no-pie "$tempdir/sqlite_u128_abi_host.c" \
+    "$tempdir/sqlite_u128_abi_mini.o" -o "$tempdir/sqlite_u128_abi_mini.bin"
+set +e
+"$tempdir/sqlite_u128_abi_mini.bin"
+native_result=$?
+set -e
+test "$native_result" -eq 42
+echo "PASS: x86-64 __uint128_t GNU caller / MiniC callee return ABI"
+
+cat > "$tempdir/sqlite_u128_abi_gnu.i" <<'EOF'
+typedef unsigned __int128 U128;
+extern U128 gcc_u128_return(void);
+int main(void) {
+    U128 value = gcc_u128_return();
+    return ((unsigned long long)(value >> 64) == 0x123456789abcdef0ULL &&
+            (unsigned long long)value == 0xfedcba9876543210ULL) ? 42 : 1;
+}
+EOF
+cat > "$tempdir/sqlite_u128_abi_receiver.c" <<'EOF'
+typedef unsigned __int128 U128;
+U128 gcc_u128_return(void) {
+    return ((U128)0x123456789abcdef0ULL << 64) | (U128)0xfedcba9876543210ULL;
+}
+EOF
+"$MINIC_CC" --target=x86_64-linux -S "$tempdir/sqlite_u128_abi_gnu.i" \
+    -o "$tempdir/sqlite_u128_abi_gnu.s"
+"$HOST_CC" -c -x assembler "$tempdir/sqlite_u128_abi_gnu.s" \
+    -o "$tempdir/sqlite_u128_abi_gnu.o"
+"$HOST_CC" -no-pie "$tempdir/sqlite_u128_abi_receiver.c" \
+    "$tempdir/sqlite_u128_abi_gnu.o" -o "$tempdir/sqlite_u128_abi_gnu.bin"
+set +e
+"$tempdir/sqlite_u128_abi_gnu.bin"
+native_result=$?
+set -e
+test "$native_result" -eq 42
+echo "PASS: x86-64 __uint128_t MiniC caller / GNU callee return ABI"
+
+cat > "$tempdir/sqlite_u128_shift.i" <<'EOF'
+typedef unsigned __int128 U128;
+typedef __int128 I128;
+int main(void) {
+    U128 a = ((U128)0xabcULL << 64) | 0xdefULL;
+    I128 negative = (I128)(-4);
+    if ((unsigned long long)(a >> 64) != 0xabcULL) return 1;
+    if ((unsigned long long)(a >> 65) != (0xabcULL >> 1)) return 2;
+    if ((unsigned long long)(a >> 63) != 0x1578ULL) return 3;
+    if ((unsigned long long)(((U128)1 << 127) >> 64) !=
+        0x8000000000000000ULL) return 4;
+    if ((unsigned long long)((U128)negative >> 64) !=
+        0xffffffffffffffffULL) return 5;
+    if ((unsigned long long)(negative >> 65) !=
+        0xffffffffffffffffULL) return 6;
+    return 42;
+}
+EOF
+check_exit sqlite_u128_shift 42
+"$HOST_CC" -std=gnu11 -no-pie -x c "$tempdir/sqlite_u128_shift.i" \
+    -o "$tempdir/sqlite_u128_shift.gnu"
+set +e
+"$tempdir/sqlite_u128_shift.gnu"
+native_result=$?
+set -e
+test "$native_result" -eq 42
+echo "PASS: GCC oracle sqlite_u128_shift exit=42"
+
 # SQLite sqlite3AddInt64 uses checked builtin overflow with a typed
 # output pointer. Verify stored wrapped bits and overflow flag independently.
 cat > "$tempdir/sqlite_overflow.i" <<'EOF'
