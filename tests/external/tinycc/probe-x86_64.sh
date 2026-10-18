@@ -138,3 +138,58 @@ if ! cmp -s "$work/version.out" "$work/minic.version.out" ||
   exit 1
 fi
 echo "TINYCC_X86_64_RUNTIME=PASS executable=tcc version_oracle=GCC"
+
+# Functional round-trip: the MiniC-produced TinyCC must compile ORIGINAL
+# new C input into a real x86_64 ELF relocatable object. The host GNU
+# compiler only supplies the CRT/linker and independent reference build;
+# it must never substitute for a TinyCC-generated consumer object.
+cat > "$work/consumer.c" <<'EOF'
+int minic_tinycc_compute(void) {
+    int i, total = 0;
+    for (i = 0; i < 16; ++i)
+        total += (i & 1) ? 3 : 2;
+    return total + 2;
+}
+EOF
+cat > "$work/consumer_main.c" <<'EOF'
+extern int minic_tinycc_compute(void);
+int main(void) { return minic_tinycc_compute(); }
+EOF
+if ! "$work/tcc-minic" -c "$work/consumer.c" -o "$work/consumer.minic-tcc.o" \
+      >"$work/consumer.out" 2>"$work/consumer.err"; then
+  echo "TINYCC_X86_64_BLOCKER=COMPILED_TCC stage=compile-consumer" >&2
+  tail -n 35 "$work/consumer.out" "$work/consumer.err" >&2 || true
+  echo "TINYCC_X86_64_FRONTIER=BLOCKED stage=compile-new-C"
+  if test "${TINYCC_X86_64_DISCOVERY:-0}" = 1; then exit 0; fi
+  exit 1
+fi
+if ! "$src/tcc" -c "$work/consumer.c" -o "$work/consumer.gcc-tcc.o" \
+      >"$work/gcc-tcc-consumer.out" 2>"$work/gcc-tcc-consumer.err" ||
+   ! "$HOST_CC" -c "$work/consumer.c" -o "$work/consumer.gnu.o" ||
+   ! "$HOST_CC" -c "$work/consumer_main.c" -o "$work/consumer_main.o"; then
+  echo "TINYCC_X86_64_BASELINE=FAIL stage=consumer-oracles" >&2
+  tail -n 30 "$work/gcc-tcc-consumer.err" >&2 || true
+  exit 1
+fi
+for candidate in minic-tcc gcc-tcc gnu; do
+  if ! "$HOST_CC" -no-pie "$work/consumer_main.o" \
+       "$work/consumer.$candidate.o" -o "$work/consumer.$candidate.bin" \
+       >"$work/link.$candidate.out" 2>"$work/link.$candidate.err"; then
+    echo "TINYCC_X86_64_BLOCKER=CONSUMER_LINK backend=$candidate" >&2
+    tail -n 35 "$work/link.$candidate.err" >&2 || true
+    if test "${TINYCC_X86_64_DISCOVERY:-0}" = 1; then exit 0; fi
+    exit 1
+  fi
+  set +e
+  "$work/consumer.$candidate.bin"
+  rc=$?
+  set -e
+  if test "$rc" -ne 42; then
+    echo "TINYCC_X86_64_BLOCKER=CONSUMER_RUNTIME backend=$candidate result=$rc expected=42" >&2
+    if test "${TINYCC_X86_64_DISCOVERY:-0}" = 1; then exit 0; fi
+    exit 1
+  fi
+  echo "TINYCC_X86_64_CONSUMER=PASS backend=$candidate exit=42"
+done
+echo "TINYCC_X86_64_FUNCTIONAL=PASS original_tcc=MiniC consumer_c=TinyCC consumer_o=MiniC-built-TinyCC linker=GNU_CC"
+
