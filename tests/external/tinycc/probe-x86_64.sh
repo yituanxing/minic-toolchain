@@ -225,7 +225,11 @@ echo "TINYCC_X86_64_FUNCTIONAL=PASS original_tcc=MiniC consumer_c=TinyCC consume
 # must compile new C files to .o, linked by GNU, and byte-exactly agree
 # with an independent GCC-built TinyCC executable.
 for case_name in 00_assignment 03_struct 04_for 05_array 07_function \
-                 10_pointer 15_recursion 22_floating_point 25_quicksort 30_hanoi; do
+                 10_pointer 15_recursion 22_floating_point 25_quicksort 30_hanoi \
+                 08_while 09_do_while 11_precedence 13_integer_literals \
+                 14_if 16_nesting 17_enum 19_pointer_arithmetic \
+                 20_pointer_comparison 23_type_coercion 27_sizeof \
+                 28_strings 33_ternary_op 39_typedef; do
     input="$src/tests/tests2/$case_name.c"
     if ! "$src/tcc" -B"$src" -I"$src/include" -I"$src" -c "$input" -o "$work/tests2.$case_name.ref.o" \
          >"$work/tests2.$case_name.ref.log" 2>&1 ||
@@ -275,4 +279,4 @@ for case_name in 00_assignment 03_struct 04_for 05_array 07_function \
     fi
     echo "TINYCC_X86_64_TESTS2=PASS case=$case_name exit=$mini_rc oracle=GCC-built-TinyCC byte-exact"
 done
-echo "TINYCC_X86_64_TESTS2_SUITE=PASS cases=10 original_upstream=1"
+echo "TINYCC_X86_64_TESTS2_SUITE=PASS cases=24 original_upstream=1"
