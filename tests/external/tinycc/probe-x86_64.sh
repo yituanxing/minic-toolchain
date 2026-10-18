@@ -33,9 +33,22 @@ if ! "$src/tcc" -v >"$work/version.out" 2>"$work/version.err"; then
   exit 1
 fi
 echo "TINYCC_X86_64_BASELINE=PASS compiler=GCC stage=configure,build,run"
+# The original upstream Makefile passes configured CONFIG_TRIPLET into
+# EVERY C translation unit. A former ad hoc MiniC preprocessor command
+# omitted it, thereby losing /usr/include/<triplet> in the compiled
+# TinyCC system search path. Preserve the configure-generated setting,
+# not a forced include path or a patch to libtcc.c.
+triplet=$(sed -n 's/^CONFIG_TRIPLET[[:space:]]*=[[:space:]]*//p' "$src/config.mak" | head -n 1)
+if test -z "$triplet" || ! test -d "/usr/include/$triplet"; then
+  echo "TINYCC_X86_64_CONFIG=FAIL missing-upstream-triplet triplet=$triplet" >&2
+  exit 1
+fi
+config_triplet_flag="-DCONFIG_TRIPLET=\"$triplet\""
+echo "TINYCC_X86_64_CONFIG=PASS source=upstream-config.mak triplet=$triplet"
+
 # Unmodified tcc.c includes tcctools.c. ONE_SOURCE=0 is the upstream
 # multi-TU build, using the configure-generated config.h.
-if ! "$HOST_CC" -E -P -std=gnu11 -DTCC_TARGET_X86_64 -DONE_SOURCE=0 -I"$src" "$src/tcc.c" -o "$work/tcc.i" >"$work/cpp.out" 2>"$work/cpp.err"; then
+if ! "$HOST_CC" -E -P -std=gnu11 -DTCC_TARGET_X86_64 -DONE_SOURCE=0 "$config_triplet_flag" -I"$src" "$src/tcc.c" -o "$work/tcc.i" >"$work/cpp.out" 2>"$work/cpp.err"; then
   echo "TINYCC_X86_64_INPUT=FAIL stage=preprocess" >&2
   tail -n 35 "$work/cpp.err" >&2
   exit 1
@@ -69,7 +82,7 @@ for file in libtcc.c tccpp.c tccgen.c tccelf.c tccasm.c tccrun.c \
             x86_64-gen.c x86_64-link.c i386-asm.c; do
   stem=$(basename "$file" .c)
   if ! "$HOST_CC" -E -P -std=gnu11 -DTCC_TARGET_X86_64 -DONE_SOURCE=0 \
-             -I"$src" "$src/$file" -o "$work/$stem.i" \
+             "$config_triplet_flag" -I"$src" "$src/$file" -o "$work/$stem.i" \
              >"$work/$stem.cpp.out" 2>"$work/$stem.cpp.err"; then
     echo "TINYCC_X86_64_BLOCKER=HOST_CPP source=$file" >&2
     sed -n '1,25p' "$work/$stem.cpp.err" >&2

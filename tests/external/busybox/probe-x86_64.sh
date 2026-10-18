@@ -16,6 +16,8 @@ src="$work/src"
 test "$(git hash-object "$src/Makefile")" = fa8cb761443388730372eaf260e7ca1a0235bc43
 test "$(git hash-object "$src/coreutils/cat.c")" = 4b3414941e87a47bd639bc481ab9f3fa0045ea80
 test "$(git hash-object "$src/coreutils/echo.c")" = 44b2eb5d05fac12374b5f8692990014087cfda01
+test "$(git hash-object "$src/coreutils/head.c")" = c7537a20e4e01483f3a6ffaf89eb2da25d7acf5f
+test "$(git hash-object "$src/coreutils/wc.c")" = d5238d3fcfba2f62f6bb292a3af55c5107c3ec93
 echo "BUSYBOX_X86_64_SOURCE=PASS version=1.36.1 commit=$commit original=unchanged"
 
 # Use upstream Kconfig and Kbuild; alter .config only, never application C.
@@ -29,7 +31,7 @@ python3 - "$src/.config" <<'PY'
 import sys
 p = sys.argv[1]
 s = open(p,encoding="utf-8").read()
-for key in ["CAT","ECHO"]:
+for key in ["CAT","ECHO","HEAD","WC"]:
     old = "# CONFIG_" + key + " is not set"
     new = "CONFIG_" + key + "=y"
     if old in s:
@@ -54,23 +56,29 @@ fi
 # dispatcher feature and may be compiled out. Verify Kconfig and invoke
 # the enabled real applets instead of relying on the optional --list.
 if ! grep -qx 'CONFIG_CAT=y' "$src/.config" ||
-   ! grep -qx 'CONFIG_ECHO=y' "$src/.config"; then
+   ! grep -qx 'CONFIG_ECHO=y' "$src/.config" ||
+   ! grep -qx 'CONFIG_HEAD=y' "$src/.config" ||
+   ! grep -qx 'CONFIG_WC=y' "$src/.config"; then
   echo "BUSYBOX_X86_64_BASELINE=FAIL stage=applet-config" >&2
-  grep -E '^CONFIG_(CAT|ECHO)=' "$src/.config" >&2 || true
+  grep -E '^CONFIG_(CAT|ECHO|HEAD|WC)=' "$src/.config" >&2 || true
   exit 1
 fi
 printf 'one\nsecond\n' >"$work/fixture.txt"
 if ! "$src/busybox" cat "$work/fixture.txt" >"$work/cat.out" ||
    ! cmp -s "$work/fixture.txt" "$work/cat.out" ||
    ! "$src/busybox" echo busybox-real-project >"$work/echo.out" ||
-   ! grep -qx busybox-real-project "$work/echo.out"; then
+   ! grep -qx busybox-real-project "$work/echo.out" ||
+   ! "$src/busybox" head -n 1 "$work/fixture.txt" >"$work/head.out" ||
+   ! grep -qx one "$work/head.out" ||
+   ! "$src/busybox" wc -l "$work/fixture.txt" >"$work/wc.out" ||
+   ! grep -q '2 ' "$work/wc.out"; then
   echo "BUSYBOX_X86_64_BASELINE=FAIL stage=applet-runtime" >&2
   exit 1
 fi
-echo "BUSYBOX_X86_64_BASELINE=PASS GCC_build=busybox applets=cat,echo runtime=byte-exact"
+echo "BUSYBOX_X86_64_BASELINE=PASS GCC_build=busybox applets=cat,echo,head,wc runtime=byte-exact"
 passed=0
 blocked=0
-for file in coreutils/cat.c coreutils/echo.c; do
+for file in coreutils/cat.c coreutils/echo.c coreutils/head.c coreutils/wc.c; do
     stem=$(basename "$file" .c)
     if ! "$HOST_CC" -E -P -std=gnu11 -D_GNU_SOURCE \
        -I"$src/include" -I"$src" -include "$src/include/autoconf.h" \
@@ -100,7 +108,7 @@ for file in coreutils/cat.c coreutils/echo.c; do
     passed=$((passed + 1))
     echo "BUSYBOX_X86_64_TU=PASS source=$file object=MiniC"
 done
-echo "BUSYBOX_X86_64_FRONTIER=SCOPED_TU objects=$passed total=2 blocked=$blocked full_MiniC_busybox=NOT_TESTED"
+echo "BUSYBOX_X86_64_FRONTIER=SCOPED_TU objects=$passed total=4 blocked=$blocked full_MiniC_busybox=NOT_TESTED"
 if test "$blocked" -ne 0 && test "$(printenv BUSYBOX_X86_64_DISCOVERY || true)" != 1; then exit 1; fi
 
 
@@ -109,8 +117,8 @@ if test "$blocked" -ne 0 && test "$(printenv BUSYBOX_X86_64_DISCOVERY || true)" 
 # applet objects. All other BusyBox objects remain the original GCC build.
 # Rebuild parent composite objects and executable; do not silently
 # reuse the already-GCC-linked baseline busybox.
-if test "$passed" -eq 2 && test "$blocked" -eq 0; then
-    for stem in cat echo; do
+if test "$passed" -eq 4 && test "$blocked" -eq 0; then
+    for stem in cat echo head wc; do
         if ! test -f "$src/coreutils/$stem.o"; then
             echo "BUSYBOX_X86_64_MIXED=BLOCKED stage=baseline-object-missing applet=$stem" >&2
             if test "$(printenv BUSYBOX_X86_64_DISCOVERY || true)" = 1; then exit 0; fi
@@ -131,10 +139,14 @@ if test "$passed" -eq 2 && test "$blocked" -eq 0; then
     if ! "$src/busybox" cat "$work/fixture.txt" >"$work/cat.mixed" ||
        ! cmp -s "$work/cat.out" "$work/cat.mixed" ||
        ! "$src/busybox" echo busybox-real-project >"$work/echo.mixed" ||
-       ! cmp -s "$work/echo.out" "$work/echo.mixed"; then
+       ! cmp -s "$work/echo.out" "$work/echo.mixed" ||
+       ! "$src/busybox" head -n 1 "$work/fixture.txt" >"$work/head.mixed" ||
+       ! cmp -s "$work/head.out" "$work/head.mixed" ||
+       ! "$src/busybox" wc -l "$work/fixture.txt" >"$work/wc.mixed" ||
+       ! cmp -s "$work/wc.out" "$work/wc.mixed"; then
         echo "BUSYBOX_X86_64_MIXED=BLOCKED stage=applet-runtime" >&2
         if test "$(printenv BUSYBOX_X86_64_DISCOVERY || true)" = 1; then exit 0; fi
         exit 1
     fi
-    echo "BUSYBOX_X86_64_MIXED=PASS applets=cat,echo objects=MiniC x86 remainder=GCC GNU_Kbuild=1 runtime=byte-exact"
+    echo "BUSYBOX_X86_64_MIXED=PASS applets=cat,echo,head,wc objects=MiniC x86 remainder=GCC GNU_Kbuild=1 runtime=byte-exact"
 fi
