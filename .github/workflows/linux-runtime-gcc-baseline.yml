@@ -2917,7 +2917,7 @@ jobs:
           set -Eeuo pipefail
           ev="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1"
           # The saved full object owner inventory has one descriptive header.
-          test "$(grep -cE '^[^#[:space:]]+\\.o$' "$ev/full-objects.txt")" -eq 2064
+          test "$(grep -cvE '^(#|[[:space:]]*$)' "$ev/full-objects.txt")" -eq 2064
           test "$(wc -l < "$ev/minic-manifest.sha256")" -eq 2064
           grep -Fq 'COHORT_RESULT=PASS candidate_objects=2064 scope=FULL_C_UNIVERSE' "$ev/cohort.log"
           grep -Fq 'COHORT_P1=PASS name=full_all_verified syscalls=12 python_era_oracle=PASS' "$ev/cohort.log"
