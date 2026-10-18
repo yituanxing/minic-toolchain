@@ -39,6 +39,75 @@ int main(void) { return sum(17, 25); }
 EOF
 check_exit params_call 42
 
+# SQLite's sqlite3Parser(void*, int, Token) ABI: Token is an
+# INTEGER/INTEGER two-eightbyte record in RDX/RCX after two scalar GPR args.
+cat > "$tempdir/sqlite_token_by_value.i" <<'EOF'
+typedef struct { const char *z; unsigned int n; } Token;
+static int consume(void *opaque, int id, Token t) {
+    int *out = (int *)opaque;
+    *out = id + (int)t.n + (int)t.z[0];
+    return *out;
+}
+int main(void) {
+    int out = 0;
+    Token t = {"x", 2};
+    return consume(&out, 10, t) == 132 && out == 132 ? 42 : 1;
+}
+EOF
+check_exit sqlite_token_by_value 42
+
+# Cross-compiler oracle 1: GNU caller -> MiniC callee (incoming record).
+cat > "$tempdir/sqlite_token_receive.i" <<'EOF'
+typedef struct { const char *z; unsigned int n; } Token;
+int minic_receiver(void *context, int id, Token t) {
+    *(int *)context = id + t.n + t.z[0];
+    return 42;
+}
+EOF
+cat > "$tempdir/sqlite_token_host.c" <<'EOF'
+typedef struct { const char *z; unsigned int n; } Token;
+extern int minic_receiver(void *, int, Token);
+int main(void) {
+    int state = 0;
+    Token token = {"x", 2};
+    int code = minic_receiver(&state, 10, token);
+    return code == 42 && state == 132 ? 42 : 1;
+}
+EOF
+"$MINIC_CC" --target=x86_64-linux -S "$tempdir/sqlite_token_receive.i" \
+    -o "$tempdir/sqlite_token_receive.s"
+"$HOST_CC" -c -x assembler "$tempdir/sqlite_token_receive.s" -o "$tempdir/sqlite_token_receive.o"
+"$HOST_CC" -no-pie "$tempdir/sqlite_token_host.c" "$tempdir/sqlite_token_receive.o" \
+    -o "$tempdir/sqlite_token_receive.bin"
+"$tempdir/sqlite_token_receive.bin"
+echo "PASS: x86-64 Token ABI GNU caller / MiniC callee"
+
+# Cross-compiler oracle 2: MiniC caller -> GNU callee (outgoing record).
+cat > "$tempdir/sqlite_token_send.i" <<'EOF'
+typedef struct { const char *z; unsigned int n; } Token;
+extern int gcc_receiver(void *, int, Token);
+int main(void) {
+    Token token = {"x", 2};
+    int state = 0;
+    int code = gcc_receiver(&state, 10, token);
+    return code == 42 && state == 132 ? 42 : 1;
+}
+EOF
+cat > "$tempdir/sqlite_token_receiver.c" <<'EOF'
+typedef struct { const char *z; unsigned int n; } Token;
+int gcc_receiver(void *context, int id, Token t) {
+    *(int *)context = id + t.n + t.z[0];
+    return 42;
+}
+EOF
+"$MINIC_CC" --target=x86_64-linux -S "$tempdir/sqlite_token_send.i" \
+    -o "$tempdir/sqlite_token_send.s"
+"$HOST_CC" -c -x assembler "$tempdir/sqlite_token_send.s" -o "$tempdir/sqlite_token_send.o"
+"$HOST_CC" -no-pie "$tempdir/sqlite_token_receiver.c" "$tempdir/sqlite_token_send.o" \
+    -o "$tempdir/sqlite_token_send.bin"
+"$tempdir/sqlite_token_send.bin"
+echo "PASS: x86-64 Token ABI MiniC caller / GNU callee"
+
 cat > "$tempdir/branch.i" <<'EOF'
 int main(void) {
     int a = 43;

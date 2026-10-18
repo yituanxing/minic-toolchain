@@ -83,6 +83,70 @@ static bool x86_storage_width(const MinicC0Program *program,
     return x86_scalar_width(program, target, type, bytes, sign);
 }
 
+/* SQLite's Token is a two-eightbyte INTEGER-class SysV aggregate:
+ * one pointer at byte 0, one 32-bit integer at byte 8, size 16.
+ * Deliberately do not claim general record ABI classification here.
+ * Reject packed/misaligned, floating and nested records until proved. */
+static bool x86_two_gp_record(const MinicC0Program *program,
+                              const MinicTargetInfo *target, MinicType type) {
+    const MinicRecord *rec;
+    const MinicRecordField *a, *b;
+    size_t bytes, align, a_offset, b_offset, a_bytes, b_bytes, ignored;
+    if (program == NULL || target == NULL || !minic_type_is_record(type))
+        return false;
+    rec = minic_c0_program_record(program, type.record_id);
+    if (rec == NULL || !rec->is_complete || rec->is_union ||
+        rec->is_packed || rec->field_count != 2U)
+        return false;
+    a = minic_c0_record_field(rec, 0U);
+    b = minic_c0_record_field(rec, 1U);
+    if (a == NULL || b == NULL || a->is_packed || b->is_packed ||
+        a->is_bit_field || b->is_bit_field ||
+        a->element_count != 1U || b->element_count != 1U ||
+        a->is_array || b->is_array ||
+        !minic_type_is_pointer(a->type) || !minic_type_is_integer(b->type))
+        return false;
+    return minic_data_layout_type(target->data_layout, program, type, &bytes, &align) &&
+           minic_data_layout_type(target->data_layout, program, a->type, &a_bytes, &ignored) &&
+           minic_data_layout_type(target->data_layout, program, b->type, &b_bytes, &ignored) &&
+           minic_data_layout_record_field_offset(target->data_layout, program, rec, 0U, &a_offset) &&
+           minic_data_layout_record_field_offset(target->data_layout, program, rec, 1U, &b_offset) &&
+           bytes == 16U && align == 8U &&
+           a_offset == 0U && b_offset == 8U &&
+           a_bytes == 8U && b_bytes == 4U;
+}
+
+/* Shared SysV register-bank/stack cursor for incoming parameters.
+ * A two-GP record is indivisible for register allocation: if fewer than
+ * two registers remain, both eightbytes go on the argument stack. */
+static bool x86_incoming_cursor(const MinicC0Program *program,
+                                const MinicTargetInfo *target,
+                                const MinicCoreFunction *fn, size_t position,
+                                size_t *gpr, size_t *fp, size_t *stack) {
+    size_t i, width;
+    bool signedness;
+    if (fn == NULL || position >= fn->parameter_count ||
+        gpr == NULL || fp == NULL || stack == NULL) return false;
+    *gpr = *fp = *stack = 0U;
+    for (i = 0U; i < position; ++i) {
+        MinicType t = fn->parameter_types[i];
+        if (minic_type_is_float(t) || minic_type_is_double(t)) {
+            if (*fp < 8U) ++*fp;
+            else ++*stack;
+        } else if (minic_type_is_record(t)) {
+            if (!x86_two_gp_record(program, target, t)) return false;
+            if (*gpr <= 4U) *gpr += 2U;
+            else *stack += 2U;
+        } else {
+            if (!x86_scalar_width(program, target, t, &width, &signedness))
+                return false;
+            if (*gpr < 6U) ++*gpr;
+            else ++*stack;
+        }
+    }
+    return true;
+}
+
 static bool x86_normalize(FILE *out, const MinicC0Program *program,
                           const MinicTargetInfo *target, MinicType type) {
     size_t bytes;
@@ -108,6 +172,15 @@ static bool x86_value_load(FILE *out, const MinicX86Frame *frame, MinicCoreValue
 static bool x86_value_store(FILE *out, const MinicX86Frame *frame, MinicCoreValueId id) {
     if (frame == NULL || id >= frame->value_count) return false;
     return fprintf(out, "  movq %%rax, -%zu(%%rbp)\n", 8U * ((size_t)id + 1U)) >= 0;
+}
+
+static bool x86_object_address(FILE *out, const MinicX86Frame *frame,
+                               MinicCoreObjectId id, const char *reg) {
+    if (out == NULL || frame == NULL || id >= frame->object_count || reg == NULL)
+        return false;
+    return frame->objects_from_aligned_rsp
+        ? fprintf(out, "  leaq %zu(%%rsp), %s\n", frame->object_offsets[id], reg) >= 0
+        : fprintf(out, "  leaq -%zu(%%rbp), %s\n", frame->object_offsets[id], reg) >= 0;
 }
 
 static bool x86_frame_init(const MinicC0Program *program, const MinicTargetInfo *target,
@@ -854,6 +927,15 @@ static bool x86_emit_call_arguments(FILE *out, const MinicC0Program *program,
     for (i = 0U; i < count; ++i) {
         const MinicCoreCallArgument *arg = &fn->call_arguments[begin + i];
         MinicType type;
+        if (arg->kind == MINIC_CORE_CALL_ARGUMENT_OBJECT) {
+            if (i >= fixed_count || arg->value.object_id >= fn->object_count ||
+                !minic_type_equal(fn->objects[arg->value.object_id].type, fixed_types[i]) ||
+                !x86_two_gp_record(program, target, fixed_types[i]))
+                return false;
+            if (integer_index <= 4U) integer_index += 2U;
+            else stack_slots += 2U;
+            continue;
+        }
         if (arg->kind != MINIC_CORE_CALL_ARGUMENT_VALUE ||
             arg->value.value_id >= fn->value_count) return false;
         type = i < fixed_count ? fixed_types[i] : fn->values[arg->value.value_id].type;
@@ -878,8 +960,35 @@ static bool x86_emit_call_arguments(FILE *out, const MinicC0Program *program,
     stack_slots = 0U;
     for (i = 0U; i < count; ++i) {
         const MinicCoreCallArgument *arg = &fn->call_arguments[begin + i];
-        MinicType type = i < fixed_count ? fixed_types[i] :
-                         fn->values[arg->value.value_id].type;
+        MinicType type;
+        if (arg->kind == MINIC_CORE_CALL_ARGUMENT_OBJECT) {
+            MinicCoreObjectId object = arg->value.object_id;
+            if (i >= fixed_count ||
+                !x86_two_gp_record(program, target, fixed_types[i]) ||
+                !x86_object_address(out, frame, object, "%r11"))
+                return false;
+            if (integer_index <= 4U) {
+                if (fprintf(out,
+                    "  movq 0(%%r11), %s\n"
+                    "  movq 8(%%r11), %s\n",
+                    integer_regs[integer_index], integer_regs[integer_index + 1U]) < 0)
+                    return false;
+                integer_index += 2U;
+            } else {
+                if (fprintf(out,
+                    "  movq 0(%%r11), %%rax\n"
+                    "  movq %%rax, %zu(%%rsp)\n"
+                    "  movq 8(%%r11), %%rax\n"
+                    "  movq %%rax, %zu(%%rsp)\n",
+                    stack_slots * 8U, (stack_slots + 1U) * 8U) < 0)
+                    return false;
+                stack_slots += 2U;
+            }
+            continue;
+        }
+        if (arg->kind != MINIC_CORE_CALL_ARGUMENT_VALUE ||
+            arg->value.value_id >= fn->value_count) return false;
+        type = i < fixed_count ? fixed_types[i] : fn->values[arg->value.value_id].type;
         if (!x86_value_load(out, frame, arg->value.value_id, "%rax")) return false;
         if (minic_type_is_double(type) || minic_type_is_float(type)) {
             if (float_index < 8U) {
@@ -1096,19 +1205,11 @@ static bool x86_emit_instruction(FILE *out, const MinicC0Program *program,
                x86_value_store(out, frame, ins->result);
     case MINIC_CORE_INSTRUCTION_PARAMETER: {
         static const char *const regs[] = {"%rdi", "%rsi", "%rdx", "%rcx", "%r8", "%r9"};
-        size_t i, gpr = 0U, xmm = 0U, stack_index = 0U;
+        size_t gpr, xmm, stack_index;
         const size_t position = ins->value.parameter_index;
-        if (position >= fn->parameter_count) return false;
-        for (i = 0U; i < position; ++i) {
-            if (minic_type_is_float(fn->parameter_types[i]) ||
-                minic_type_is_double(fn->parameter_types[i])) {
-                if (xmm < 8U) ++xmm;
-                else ++stack_index;
-            } else {
-                if (gpr < 6U) ++gpr;
-                else ++stack_index;
-            }
-        }
+        if (!x86_incoming_cursor(program, target, fn, position,
+                                 &gpr, &xmm, &stack_index))
+            return false;
         if (minic_type_is_double(ins->type) || minic_type_is_float(ins->type)) {
             if (xmm < 8U) {
                 if (fprintf(out, minic_type_is_double(ins->type)
@@ -1126,6 +1227,30 @@ static bool x86_emit_instruction(FILE *out, const MinicC0Program *program,
             if (!x86_normalize(out, program, target, ins->type)) return false;
         }
         return x86_value_store(out, frame, ins->result);
+    }
+    case MINIC_CORE_INSTRUCTION_PARAMETER_OBJECT: {
+        static const char *const regs[] = {"%rdi","%rsi","%rdx","%rcx","%r8","%r9"};
+        size_t gpr, xmm, stack_index;
+        size_t position = ins->value.parameter_object.parameter_index;
+        MinicCoreObjectId object = ins->value.parameter_object.object_id;
+        if (!x86_incoming_cursor(program, target, fn, position,
+                                 &gpr, &xmm, &stack_index) ||
+            !x86_two_gp_record(program, target, fn->parameter_types[position]) ||
+            object >= fn->object_count ||
+            !minic_type_equal(fn->objects[object].type, fn->parameter_types[position]) ||
+            !x86_object_address(out, frame, object, "%r10"))
+            return false;
+        (void)xmm;
+        if (gpr <= 4U)
+            return fprintf(out,
+                "  movq %s, 0(%%r10)\n"
+                "  movq %s, 8(%%r10)\n", regs[gpr], regs[gpr + 1U]) >= 0;
+        return fprintf(out,
+            "  movq %zu(%%rbp), %%rax\n"
+            "  movq %%rax, 0(%%r10)\n"
+            "  movq %zu(%%rbp), %%rax\n"
+            "  movq %%rax, 8(%%r10)\n",
+            16U + stack_index * 8U, 24U + stack_index * 8U) >= 0;
     }
     case MINIC_CORE_INSTRUCTION_GLOBAL_ADDRESS:
         if (ins->value.global_id >= fn->global_count ||
