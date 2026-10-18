@@ -941,3 +941,65 @@ The temporary dedicated branch execution modifications to
 to the **original main blob** `cd9a880a5a707f28b5ea63c364c1844ab35e1c56`
 after collecting actual CI evidence. Existing unrelated
 `linux-runtime-gcc-baseline.yml` failures remain separate.
+
+## TinyCC 24-program upstream suite + BusyBox four-applet native runtime — 2026-10-19
+
+[Focused CI #39175525331](https://github.com/yituanxing/minic-toolchain/actions/runs/39175525331)
+completed **success** with unchanged SQLite 3.54.1 byte-exact GCC
+SQL oracle and eight independent RV64/MiniAR/MiniLD regression owners
+(`TOOLCHAIN_FOCUSED_T1=PASS`).
+
+**TinyCC 0.9.27, frozen pristine original source:** the original
+10 TinyCC TUs remain MiniC x86-64 compiled, GNU assembled/linked,
+and the resulting native `tcc` executes and compiles new C programs.
+The next stage now passes **24/24 hand-selected, original unmodified
+`tests/tests2/*.c` C programs**, with actual relocatable objects
+compiled separately by MiniC-built TinyCC and GCC-built TinyCC, linked
+using the same GNU host compiler and `-lm`, and execution exit codes,
+stdout and stderr byte-for-byte equal. The suite includes records, arrays,
+pointers, recursion, floating point, quicksort, Hanoi, integer literals,
+type coercion, enum and typedef parsing. Exact CI marker:
+`TINYCC_X86_64_TESTS2_SUITE=PASS cases=24 original_upstream=1`.
+This is a **selected subset**, not the full upstream TinyCC test suite.
+
+**Root cause of the prior TinyCC header lookup discrepancy:** the
+initial MiniC driver probe preprocessed the 10 original TUs with
+`-DTCC_TARGET_X86_64 -DONE_SOURCE=0`, but omitted the native
+`CONFIG_TRIPLET` definition supplied by upstream
+`./configure` through `config.mak`'s `NATIVE_DEFINES+=-DCONFIG_TRIPLET=`
+line. Without that compile-time setting, default `tcc.h` system
+include path construction omits
+`/usr/include/x86_64-linux-gnu` and cannot resolve
+`bits/libc-header-start.h`. The fixed probe extracts
+`x86_64-linux-gnu` from the **original generated config.mak**,
+passes it as the genuine preprocessor macro to all MiniC-built
+TinyCC TUs, and does **not** patch upstream C or force an artificial
+runtime `-I/usr/include/... ` fallback. The discrepancy was a
+build configuration gap, **not a confirmed MiniC codegen bug**.
+The GNU `sin` linker failure in `22_floating_point` was likewise
+the independent baseline missing its required `-lm`; both oracles
+now use the same `-lm`.
+
+**BusyBox 1.36.1, frozen original Makefile and source:** scoped
+original `cat.c`, `echo.c`, `head.c`, and `wc.c` are all
+MiniC x86-64 compiled into GNU-assembled objects and substituted into
+the source's genuine GCC-produced Kbuild graph. The four associated
+applets are all executed after rebuilding and GNU relinking, with
+byte-identical output against the GNU-only BusyBox. Specific CI marker:
+`BUSYBOX_X86_64_FRONTIER=SCOPED_TU objects=4 total=4 blocked=0`
+and `BUSYBOX_X86_64_MIXED=PASS applets=cat,echo,head,wc ...`.
+**Not** a full MiniC-built BusyBox. Other real applets (`grep`,
+`cut`, `sort`, etc.) are candidates for a separate incremental gate,
+but they were not yet tested by the completed focused CI.
+
+No existing compiler correctness implementation was changed during
+this substage; reusable test oracle and exact original upstream build
+flags were improved. Preserve 24-program TinyCC and four-applet
+BusyBox gates as the current qualified baseline; extend coverage by
+small independently diagnosable groups and fix only demonstrated C
+semantics or ABI discrepancies. Full latest RV64 Linux 2064/QEMU P1
+was not rerun. The branch-execution temporary
+`.github/workflows/toolchain-focused-regressions-v1.yml` is restored
+to the main blob `cd9a880a5a707f28b5ea63c364c1844ab35e1c56`.
+The unrelated inherited failing GCC baseline workflow is not counted
+as passing CI.
