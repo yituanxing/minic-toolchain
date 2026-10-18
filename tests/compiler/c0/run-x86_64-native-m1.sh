@@ -56,6 +56,20 @@ int main(void) {
 EOF
 check_exit sqlite_token_by_value 42
 
+# Six scalar GPRs leave no register pair for a following Token.
+# The whole aggregate must be stack-passed, not split with a spare GPR.
+cat > "$tempdir/sqlite_token_stack.i" <<'EOF'
+typedef struct { const char *z; unsigned int n; } Token;
+static int check(int a, int b, int c, int d, int e, int f, Token t) {
+    return a+b+c+d+e+f + t.n + t.z[0];
+}
+int main(void) {
+    Token token = {"x", 2};
+    return check(1,2,3,4,5,6,token) == 143 ? 42 : 1;
+}
+EOF
+check_exit sqlite_token_stack 42
+
 # Cross-compiler oracle 1: GNU caller -> MiniC callee (incoming record).
 cat > "$tempdir/sqlite_token_receive.i" <<'EOF'
 typedef struct { const char *z; unsigned int n; } Token;
@@ -79,8 +93,12 @@ EOF
 "$HOST_CC" -c -x assembler "$tempdir/sqlite_token_receive.s" -o "$tempdir/sqlite_token_receive.o"
 "$HOST_CC" -no-pie "$tempdir/sqlite_token_host.c" "$tempdir/sqlite_token_receive.o" \
     -o "$tempdir/sqlite_token_receive.bin"
+set +e
 "$tempdir/sqlite_token_receive.bin"
-echo "PASS: x86-64 Token ABI GNU caller / MiniC callee"
+result=$?
+set -e
+test "$result" -eq 42
+echo "PASS: x86-64 Token ABI GNU caller / MiniC callee exit=42"
 
 # Cross-compiler oracle 2: MiniC caller -> GNU callee (outgoing record).
 cat > "$tempdir/sqlite_token_send.i" <<'EOF'
@@ -105,8 +123,12 @@ EOF
 "$HOST_CC" -c -x assembler "$tempdir/sqlite_token_send.s" -o "$tempdir/sqlite_token_send.o"
 "$HOST_CC" -no-pie "$tempdir/sqlite_token_receiver.c" "$tempdir/sqlite_token_send.o" \
     -o "$tempdir/sqlite_token_send.bin"
+set +e
 "$tempdir/sqlite_token_send.bin"
-echo "PASS: x86-64 Token ABI MiniC caller / GNU callee"
+result=$?
+set -e
+test "$result" -eq 42
+echo "PASS: x86-64 Token ABI MiniC caller / GNU callee exit=42"
 
 cat > "$tempdir/branch.i" <<'EOF'
 int main(void) {
