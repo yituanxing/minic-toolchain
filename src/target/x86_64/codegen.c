@@ -9,7 +9,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* Per-Core-value 8-byte frame slots, or 16 bytes for int128.
+/* Per-Core-value 8-byte frame slots, or 16 bytes for int128/x87 long double.
  * The extra limb is x86 backend-owned; Core IR identities are unchanged. */
 typedef struct MinicX86Frame {
     size_t value_count;
@@ -133,6 +133,8 @@ static bool x86_incoming_cursor(const MinicC0Program *program,
         if (minic_type_is_float(t) || minic_type_is_double(t)) {
             if (*fp < 8U) ++*fp;
             else ++*stack;
+        } else if (minic_type_is_long_double(t)) {
+            *stack += 2U; /* SysV: x87 arguments use 16-byte stack slots. */
         } else if (minic_type_is_record(t)) {
             if (!x86_two_gp_record(program, target, t)) return false;
             if (*gpr <= 4U) *gpr += 2U;
@@ -177,6 +179,20 @@ static bool x86_value_store(FILE *out, const MinicX86Frame *frame, MinicCoreValu
 }
 
 /* Low limb at -offset(%rbp), high limb at -offset+8(%rbp). */
+/* An x86 SysV long double is a 10-byte x87 extended value in a
+ * 16-byte memory slot, NOT IEEE binary128/TFmode. */
+static bool x86_x87_load(FILE *out, const MinicX86Frame *frame, MinicCoreValueId id) {
+    if (out == NULL || frame == NULL || frame->value_offsets == NULL ||
+        id >= frame->value_count || frame->value_offsets[id] < 16U) return false;
+    return fprintf(out, "  fldt -%zu(%%rbp)\n", frame->value_offsets[id]) >= 0;
+}
+
+static bool x86_x87_store(FILE *out, const MinicX86Frame *frame, MinicCoreValueId id) {
+    if (out == NULL || frame == NULL || frame->value_offsets == NULL ||
+        id >= frame->value_count || frame->value_offsets[id] < 16U) return false;
+    return fprintf(out, "  fstpt -%zu(%%rbp)\n", frame->value_offsets[id]) >= 0;
+}
+
 static bool x86_i128_load(FILE *out, const MinicX86Frame *frame, MinicCoreValueId id,
                           const char *low, const char *high) {
     size_t offset;
@@ -225,7 +241,8 @@ static bool x86_frame_init(const MinicC0Program *program, const MinicTargetInfo 
         if (frame->value_offsets == NULL) return false;
     }
     for (i = 0U; i < fn->value_count; ++i) {
-        size_t slot = minic_type_is_int128_integer(fn->values[i].type) ? 16U : 8U;
+        size_t slot = (minic_type_is_int128_integer(fn->values[i].type) ||
+                       minic_type_is_long_double(fn->values[i].type)) ? 16U : 8U;
         if (value_bytes > (size_t)INT32_MAX - slot) return false;
         value_bytes += slot;
         frame->value_offsets[i] = value_bytes;
@@ -981,6 +998,8 @@ static bool x86_emit_call_arguments(FILE *out, const MinicC0Program *program,
         if (minic_type_is_double(type) || minic_type_is_float(type)) {
             if (float_index < 8U) ++float_index;
             else ++stack_slots;
+        } else if (minic_type_is_long_double(type)) {
+            stack_slots += 2U;
         } else {
             if (!x86_scalar_width(program, target, type, &ignored_bytes,
                                   &ignored_sign)) return false;
@@ -1028,6 +1047,21 @@ static bool x86_emit_call_arguments(FILE *out, const MinicC0Program *program,
         if (arg->kind != MINIC_CORE_CALL_ARGUMENT_VALUE ||
             arg->value.value_id >= fn->value_count) return false;
         type = i < fixed_count ? fixed_types[i] : fn->values[arg->value.value_id].type;
+        if (minic_type_is_long_double(type)) {
+            size_t off;
+            if (!minic_type_is_long_double(fn->values[arg->value.value_id].type) ||
+                frame->value_offsets == NULL) return false;
+            off = frame->value_offsets[arg->value.value_id];
+            if (off < 16U || fprintf(out,
+                "  movq -%zu(%%rbp), %%rax\n"
+                "  movq %%rax, %zu(%%rsp)\n"
+                "  movq -%zu(%%rbp), %%rax\n"
+                "  movq %%rax, %zu(%%rsp)\n",
+                off, stack_slots * 8U, off - 8U,
+                (stack_slots + 1U) * 8U) < 0) return false;
+            stack_slots += 2U;
+            continue;
+        }
         if (!x86_value_load(out, frame, arg->value.value_id, "%rax")) return false;
         if (minic_type_is_double(type) || minic_type_is_float(type)) {
             if (float_index < 8U) {
@@ -1064,6 +1098,8 @@ static bool x86_emit_call_result(FILE *out, const MinicC0Program *program,
         return minic_type_is_void(return_type);
     if (minic_type_is_int128_integer(return_type))
         return x86_i128_store(out, frame, result, "%rax", "%rdx");
+    if (minic_type_is_long_double(return_type))
+        return x86_x87_store(out, frame, result);
     if (minic_type_is_double(return_type)) {
         if (fprintf(out, "  movq %%xmm0, %%rax\n") < 0) return false;
     } else if (minic_type_is_float(return_type)) {
@@ -1072,6 +1108,105 @@ static bool x86_emit_call_result(FILE *out, const MinicC0Program *program,
         return false;
     }
     return x86_value_store(out, frame, result);
+}
+
+/* Core represents long-double operations as typed libcalls because RV64
+ * uses 128-bit TFmode. Intercept ONLY these exact Core-generated helper
+ * signatures for the x86-64 x87/80-bit target. Sending an x87 value to
+ * __addtf3/__extenddftf2 would silently use the wrong floating format. */
+static bool x86_emit_x87_core_helper(FILE *out, const MinicCoreFunction *fn,
+                                      const MinicX86Frame *frame,
+                                      const MinicCoreCallee *callee,
+                                      const MinicCoreInstruction *ins) {
+    const char *name = callee->name;
+    size_t begin = ins->value.call.argument_begin;
+    size_t count = ins->value.call.argument_count;
+    MinicCoreValueId a, b = MINIC_CORE_VALUE_INVALID;
+    bool result_ld, source_ld;
+    if (name == NULL || begin > fn->call_argument_count ||
+        count > fn->call_argument_count - begin ||
+        ins->result >= fn->value_count ||
+        (count != 1U && count != 2U)) return false;
+    if (fn->call_arguments[begin].kind != MINIC_CORE_CALL_ARGUMENT_VALUE)
+        return false;
+    a = fn->call_arguments[begin].value.value_id;
+    if (a >= fn->value_count) return false;
+    if (count == 2U) {
+        if (fn->call_arguments[begin + 1U].kind != MINIC_CORE_CALL_ARGUMENT_VALUE)
+            return false;
+        b = fn->call_arguments[begin + 1U].value.value_id;
+        if (b >= fn->value_count) return false;
+    }
+    result_ld = minic_type_is_long_double(callee->return_type);
+    source_ld = minic_type_is_long_double(fn->values[a].type);
+    if (!minic_type_equal(fn->values[ins->result].type, callee->return_type))
+        return false;
+    if (count == 1U) {
+        if (result_ld && !source_ld && minic_type_is_double(fn->values[a].type) &&
+            strcmp(name, "__extenddftf2") == 0)
+            return fprintf(out, "  fldl -%zu(%%rbp)\\n",
+                           frame->value_offsets[a]) >= 0 &&
+                   x86_x87_store(out, frame, ins->result);
+        if (result_ld && !source_ld && minic_type_is_float(fn->values[a].type) &&
+            strcmp(name, "__extendsftf2") == 0)
+            return fprintf(out, "  flds -%zu(%%rbp)\\n",
+                           frame->value_offsets[a]) >= 0 &&
+                   x86_x87_store(out, frame, ins->result);
+        if (source_ld && minic_type_is_double(callee->return_type) &&
+            strcmp(name, "__trunctfdf2") == 0)
+            return x86_x87_load(out, frame, a) &&
+                   fprintf(out, "  fstpl -%zu(%%rbp)\\n",
+                           frame->value_offsets[ins->result]) >= 0;
+        if (source_ld && minic_type_is_float(callee->return_type) &&
+            strcmp(name, "__trunctfsf2") == 0)
+            return x86_x87_load(out, frame, a) &&
+                   fprintf(out, "  fstps -%zu(%%rbp)\\n",
+                           frame->value_offsets[ins->result]) >= 0;
+        return false;
+    }
+    if (!source_ld || !minic_type_is_long_double(fn->values[b].type) ||
+        !x86_x87_load(out, frame, a) || !x86_x87_load(out, frame, b))
+        return false;
+    if (result_ld) {
+        const char *instruction =
+            strcmp(name, "__addtf3") == 0 ? "faddp" :
+            strcmp(name, "__subtf3") == 0 ? "fsubp" :
+            strcmp(name, "__multf3") == 0 ? "fmulp" :
+            strcmp(name, "__divtf3") == 0 ? "fdivp" : NULL;
+        if (instruction == NULL) return false;
+        return fprintf(out, "  %s %%st, %%st(1)\\n", instruction) >= 0 &&
+               x86_x87_store(out, frame, ins->result);
+    }
+    if (!minic_type_is_integer(callee->return_type) ||
+        (strcmp(name, "__eqtf2") != 0 &&
+         strcmp(name, "__lttf2") != 0 &&
+         strcmp(name, "__letf2") != 0)) return false;
+    /* After fldt(left), fldt(right), compare ST(1)=left to ST(0)=right;
+     * fxch ensures fucomip sees left as the first operand. Unordered
+     * comparisons return +1 (libgcc helper contract) except eq != 0. */
+    if (fprintf(out,
+          "  fxch %%st(1)\\n"
+          "  fucomip %%st(1), %%st\\n"
+          "  fstp %%st(0)\\n") < 0) return false;
+    if (strcmp(name, "__eqtf2") == 0) {
+        if (fprintf(out,
+              "  setne %%al\\n"
+              "  setp %%r10b\\n"
+              "  orb %%r10b, %%al\\n"
+              "  movzbl %%al, %%eax\\n") < 0) return false;
+    } else if (fprintf(out,
+                "  movl $1, %%eax\\n"
+                "  jp 1f\\n"
+                "  jb 2f\\n"
+                "  je 3f\\n"
+                "  jmp 1f\\n"
+                "2:\\n"
+                "  movl $-1, %%eax\\n"
+                "  jmp 1f\\n"
+                "3:\\n"
+                "  xorl %%eax, %%eax\\n"
+                "1:\\n") < 0) return false;
+    return x86_value_store(out, frame, ins->result);
 }
 
 static bool x86_emit_instruction(FILE *out, const MinicC0Program *program,
@@ -1260,6 +1395,12 @@ static bool x86_emit_instruction(FILE *out, const MinicC0Program *program,
         if (!x86_incoming_cursor(program, target, fn, position,
                                  &gpr, &xmm, &stack_index))
             return false;
+        if (minic_type_is_long_double(ins->type)) {
+            if (fprintf(out, "  fldt %zu(%%rbp)\n",
+                        16U + stack_index * 8U) < 0)
+                return false;
+            return x86_x87_store(out, frame, ins->result);
+        }
         if (minic_type_is_double(ins->type) || minic_type_is_float(ins->type)) {
             if (xmm < 8U) {
                 if (fprintf(out, minic_type_is_double(ins->type)
@@ -1491,6 +1632,10 @@ static bool x86_emit_instruction(FILE *out, const MinicC0Program *program,
                x86_value_store(out, frame, ins->result);
     }
     case MINIC_CORE_INSTRUCTION_LOAD:
+        if (minic_type_is_long_double(ins->type))
+            return x86_value_load(out, frame, ins->value.load.address, "%r10") &&
+                   fprintf(out, "  fldt (%%r10)\n") >= 0 &&
+                   x86_x87_store(out, frame, ins->result);
         if (minic_type_is_int128_integer(ins->type))
             return x86_value_load(out, frame, ins->value.load.address, "%r10") &&
                    fprintf(out, "  movq (%%r10), %%rax\n"
@@ -1534,6 +1679,10 @@ static bool x86_emit_instruction(FILE *out, const MinicC0Program *program,
     case MINIC_CORE_INSTRUCTION_STORE: {
         MinicCoreValueId src = ins->value.store.stored_value;
         if (src >= fn->value_count) return false;
+        if (minic_type_is_long_double(fn->values[src].type))
+            return x86_value_load(out, frame, ins->value.store.address, "%r10") &&
+                   x86_x87_load(out, frame, src) &&
+                   fprintf(out, "  fstpt (%%r10)\n") >= 0;
         if (minic_type_is_int128_integer(fn->values[src].type))
             return x86_value_load(out, frame, ins->value.store.address, "%r10") &&
                    x86_i128_load(out, frame, src, "%rax", "%rdx") &&
@@ -1859,6 +2008,14 @@ static bool x86_emit_instruction(FILE *out, const MinicC0Program *program,
                     ins->value.call.result_object, count, callee->parameter_count);
             return false;
         }
+        if (minic_type_is_long_double(callee->return_type) ||
+            (callee->parameter_count != 0U &&
+             minic_type_is_long_double(callee->parameter_types[0]))) {
+            if (strncmp(callee->name, "__", 2U) == 0 &&
+                (strstr(callee->name, "tf") != NULL ||
+                 strstr(callee->name, "TF") != NULL))
+                return x86_emit_x87_core_helper(out, fn, frame, callee, ins);
+        }
         if (!x86_emit_call_arguments(out, program, target, fn, frame,
                                      begin, count, callee->parameter_types,
                                      callee->parameter_count, callee->is_variadic,
@@ -1966,6 +2123,9 @@ static bool x86_emit_terminator(FILE *out, const MinicX86Frame *frame,
     case MINIC_CORE_TERMINATOR_RETURN:
         if (term->return_object != MINIC_CORE_OBJECT_INVALID) return false;
         if (term->return_value != MINIC_CORE_VALUE_INVALID) {
+            if (minic_type_is_long_double(fn->return_type))
+                return x86_x87_load(out, frame, term->return_value) &&
+                       fprintf(out, "  jmp .Lmini_x86_f%zu_ret\n", function_id) >= 0;
             if (minic_type_is_int128_integer(fn->return_type))
                 return x86_i128_load(out, frame, term->return_value,
                                      "%rax", "%rdx") &&

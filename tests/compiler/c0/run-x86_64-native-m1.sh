@@ -164,6 +164,44 @@ set -e
 test "$native_result" -eq 42
 echo "PASS: GCC oracle sqlite_u128_shift exit=42"
 
+# x86-64 uses the x87 80-bit ABI for real long double. A GNU-built
+# callee returning st(0) and a MiniC-built caller must agree, including
+# values between adjacent binary64 numbers.
+cat > "$tempdir/tinycc_x87_return.i" <<'EOF'
+extern long double gnu_x87_return(void);
+int main(void) {
+    long double value = gnu_x87_return();
+    double n = (double)value;
+    return n == 1.0 ? 42 : 1;
+}
+EOF
+cat > "$tempdir/tinycc_x87_return.c" <<'EOF'
+long double gnu_x87_return(void) { return 1.0L + 0x1p-60L; }
+EOF
+"$MINIC_CC" --target=x86_64-linux -S "$tempdir/tinycc_x87_return.i" -o "$tempdir/tinycc_x87_return.s"
+"$HOST_CC" -c -x assembler "$tempdir/tinycc_x87_return.s" -o "$tempdir/tinycc_x87_return.o"
+"$HOST_CC" -c "$tempdir/tinycc_x87_return.c" -o "$tempdir/tinycc_x87_return.gnu.o"
+"$HOST_CC" -no-pie "$tempdir/tinycc_x87_return.o" "$tempdir/tinycc_x87_return.gnu.o" -o "$tempdir/tinycc_x87_return.bin"
+set +e
+"$tempdir/tinycc_x87_return.bin"
+native_result=$?
+set -e
+test "$native_result" -eq 42
+echo "PASS: x86-64 x87 GNU callee / MiniC caller return ABI"
+
+# Explicit double -> long double -> double conversions must use
+# x87, not the binary128 software conversion symbols.
+cat > "$tempdir/tinycc_x87_convert.i" <<'EOF'
+int main(void) {
+    volatile double a = 4.75;
+    long double b = (long double)a;
+    volatile long double *p = &b;
+    double c = (double)*p;
+    return c == 4.75 ? 42 : 1;
+}
+EOF
+check_exit tinycc_x87_convert 42
+
 # TinyCC x86_64-gen.c needs dynamic Core stack allocation.
 # Check a nonconstant size, lifetime across an 8-argument SysV call,
 # and correct byte addressing without hardcoded final stack size.
