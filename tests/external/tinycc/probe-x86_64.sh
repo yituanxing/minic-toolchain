@@ -230,7 +230,7 @@ for case_name in 00_assignment 03_struct 04_for 05_array 07_function \
     if ! "$src/tcc" -B"$src" -I"$src/include" -I"$src" -c "$input" -o "$work/tests2.$case_name.ref.o" \
          >"$work/tests2.$case_name.ref.log" 2>&1 ||
        ! "$HOST_CC" -no-pie "$work/tests2.$case_name.ref.o" \
-         -o "$work/tests2.$case_name.ref.bin" \
+         -o "$work/tests2.$case_name.ref.bin" -lm \
          >>"$work/tests2.$case_name.ref.log" 2>&1; then
         echo "TINYCC_X86_64_TESTS2_BASELINE=FAIL case=$case_name" >&2
         tail -n 25 "$work/tests2.$case_name.ref.log" >&2
@@ -244,7 +244,7 @@ for case_name in 00_assignment 03_struct 04_for 05_array 07_function \
     if ! "$work/tcc-minic" -B"$src" -I"$src/include" -I"$src" -c "$input" -o "$work/tests2.$case_name.mini.o" \
          >"$work/tests2.$case_name.mini.log" 2>&1 ||
        ! "$HOST_CC" -no-pie "$work/tests2.$case_name.mini.o" \
-         -o "$work/tests2.$case_name.mini.bin" \
+         -o "$work/tests2.$case_name.mini.bin" -lm \
          >>"$work/tests2.$case_name.mini.log" 2>&1; then
         echo "TINYCC_X86_64_TESTS2=BLOCKED case=$case_name stage=compile-or-link" >&2
         tail -n 30 "$work/tests2.$case_name.mini.log" >&2
