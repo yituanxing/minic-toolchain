@@ -202,6 +202,22 @@ MinicType minic_type_float128(void) {
     return minic_type_scalar(MINIC_TYPE_BASE_FLOAT128);
 }
 
+MinicType minic_type_float32(void) {
+    return minic_type_scalar(MINIC_TYPE_BASE_FLOAT32);
+}
+
+MinicType minic_type_float64(void) {
+    return minic_type_scalar(MINIC_TYPE_BASE_FLOAT64);
+}
+
+MinicType minic_type_float32x(void) {
+    return minic_type_scalar(MINIC_TYPE_BASE_FLOAT32X);
+}
+
+MinicType minic_type_float64x(void) {
+    return minic_type_scalar(MINIC_TYPE_BASE_FLOAT64X);
+}
+
 /* A distinct, pointer-sized runtime proxy. It must never be mistaken for
  * the actual SysV array type in C type-layout queries. */
 MinicType minic_type_x86_va_list_cursor(void) {

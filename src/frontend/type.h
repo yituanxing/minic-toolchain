@@ -31,7 +31,14 @@ typedef enum MinicTypeBaseKind {
      * runtime uses a pointer to a 24-byte frame-owned tag, not that array
      * representation. Preserve this distinct identity so sizeof cannot
      * silently report sizeof(void*) for __builtin_va_list. */
-    MINIC_TYPE_BASE_X86_VA_LIST_CURSOR
+    MINIC_TYPE_BASE_X86_VA_LIST_CURSOR,
+    /* GNU/ISO TS 18661 extended FP types are distinct C identities even
+     * when they share x86 storage and argument representation with float,
+     * double or long double. Do not alias these to standard C types. */
+    MINIC_TYPE_BASE_FLOAT32,
+    MINIC_TYPE_BASE_FLOAT64,
+    MINIC_TYPE_BASE_FLOAT32X,
+    MINIC_TYPE_BASE_FLOAT64X
 } MinicTypeBaseKind;
 
 typedef enum MinicIntegerSign {
@@ -95,6 +102,10 @@ MinicType minic_type_float(void);
 MinicType minic_type_double(void);
 MinicType minic_type_long_double(void);
 MinicType minic_type_float128(void);
+MinicType minic_type_float32(void);
+MinicType minic_type_float64(void);
+MinicType minic_type_float32x(void);
+MinicType minic_type_float64x(void);
 MinicType minic_type_x86_va_list_cursor(void);
 bool minic_type_is_x86_va_list_cursor(MinicType type);
 MinicType minic_type_function(MinicFunctionTypeId function_type_id);

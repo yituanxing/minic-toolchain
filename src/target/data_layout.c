@@ -317,6 +317,33 @@ static bool minic_data_layout_type_depth(const MinicDataLayout *layout,
         *alignment = layout->float128_alignment;
         return minic_data_layout_apply_explicit_alignment(type, alignment);
     }
+    /* The x86 TS 18661 variants have their own C type identities but
+     * storage layout matching the standard binary32/binary64/x87 formats
+     * on this target. RV64 verifier rejects these target-only types. */
+    if (type.base_kind == MINIC_TYPE_BASE_FLOAT32 ||
+        type.base_kind == MINIC_TYPE_BASE_FLOAT64 ||
+        type.base_kind == MINIC_TYPE_BASE_FLOAT32X ||
+        type.base_kind == MINIC_TYPE_BASE_FLOAT64X) {
+        if (layout->float128_size == 0U) return false;
+        switch (type.base_kind) {
+        case MINIC_TYPE_BASE_FLOAT32:
+            *size = layout->float_size;
+            *alignment = layout->float_alignment;
+            break;
+        case MINIC_TYPE_BASE_FLOAT64:
+        case MINIC_TYPE_BASE_FLOAT32X:
+            *size = layout->double_size;
+            *alignment = layout->double_alignment;
+            break;
+        case MINIC_TYPE_BASE_FLOAT64X:
+            *size = layout->long_double_size;
+            *alignment = layout->long_double_alignment;
+            break;
+        default:
+            return false;
+        }
+        return minic_data_layout_apply_explicit_alignment(type, alignment);
+    }
     if (minic_type_is_array(type)) {
         const MinicArrayType *array_type;
         size_t element_size;

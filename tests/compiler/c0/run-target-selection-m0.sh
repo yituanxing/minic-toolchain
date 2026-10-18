@@ -55,6 +55,39 @@ if "$MINIC_CC" --target=riscv64-linux -S "$temporary_dir/float128-prototype.i" \
 fi
 test ! -e "$temporary_dir/float128-rv.s"
 
+# Real SQLite 3.54.1 glibc <stdlib.h> declares strtof32/strtof64.
+# GCC confirms distinct C identities despite identical object layout;
+# detect a wrong alias rather than quietly asserting ABI compatibility.
+cat > "$temporary_dir/extended-float-prototypes.i" <<'EOF'
+_Static_assert(sizeof(_Float32) == 4 && _Alignof(_Float32) == 4, "f32 layout");
+_Static_assert(sizeof(_Float64) == 8 && _Alignof(_Float64) == 8, "f64 layout");
+_Static_assert(sizeof(_Float32x) == 8 && _Alignof(_Float32x) == 8, "f32x layout");
+_Static_assert(sizeof(_Float64x) == 16 && _Alignof(_Float64x) == 16, "f64x layout");
+_Static_assert(!__builtin_types_compatible_p(_Float32, float), "f32 identity");
+_Static_assert(!__builtin_types_compatible_p(_Float64, double), "f64 identity");
+_Static_assert(!__builtin_types_compatible_p(_Float32x, double), "f32x identity");
+_Static_assert(!__builtin_types_compatible_p(_Float64x, long double), "f64x identity");
+extern _Float32 strtof32(const char *, char **);
+extern _Float64 strtof64(const char *, char **);
+extern _Float32x strtof32x(const char *, char **);
+extern _Float64x strtof64x(const char *, char **);
+int main(void) { return 42; }
+EOF
+"$HOST_CC" -std=gnu11 -c "$temporary_dir/extended-float-prototypes.i" \
+    -o "$temporary_dir/gcc-extended-float.o"
+"$MINIC_CC" --target=x86_64-linux -S \
+    "$temporary_dir/extended-float-prototypes.i" \
+    -o "$temporary_dir/x86-extended-float.s"
+grep -F 'main:' "$temporary_dir/x86-extended-float.s" >/dev/null
+if "$MINIC_CC" --target=riscv64-linux -S \
+    "$temporary_dir/extended-float-prototypes.i" \
+    -o "$temporary_dir/rv-extended-float.s" 2>"$temporary_dir/rv-extended-float.err"; then
+    echo "FAIL: RV64 must not silently accept x86 glibc extended floating types" >&2
+    exit 1
+fi
+test ! -e "$temporary_dir/rv-extended-float.s"
+echo "PASS: x86 extended _Float32/_Float64/_Float32x/_Float64x distinct ABI layouts"
+
 # C declaration-specifiers can interleave qualifiers and integer keywords.
 cat > "$temporary_dir/mixed-qualifiers.i" <<'EOF'
 int main(void) {

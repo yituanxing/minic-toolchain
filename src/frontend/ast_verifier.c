@@ -82,7 +82,15 @@ type_is_valid(const MinicC0Program *program, const MinicTargetInfo *target, Mini
     case MINIC_TYPE_BASE_DOUBLE:
     case MINIC_TYPE_BASE_LONG_DOUBLE:
     case MINIC_TYPE_BASE_FLOAT128:
-        if (type.base_kind == MINIC_TYPE_BASE_FLOAT128 &&
+    case MINIC_TYPE_BASE_FLOAT32:
+    case MINIC_TYPE_BASE_FLOAT64:
+    case MINIC_TYPE_BASE_FLOAT32X:
+    case MINIC_TYPE_BASE_FLOAT64X:
+        if ((type.base_kind == MINIC_TYPE_BASE_FLOAT128 ||
+             type.base_kind == MINIC_TYPE_BASE_FLOAT32 ||
+             type.base_kind == MINIC_TYPE_BASE_FLOAT64 ||
+             type.base_kind == MINIC_TYPE_BASE_FLOAT32X ||
+             type.base_kind == MINIC_TYPE_BASE_FLOAT64X) &&
             (target == NULL || target->architecture != MINIC_TARGET_ARCH_X86_64)) {
             return false;
         }

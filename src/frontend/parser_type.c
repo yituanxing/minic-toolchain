@@ -80,7 +80,11 @@ bool minic_parser_token_starts_type_name(const MinicParser *parser, MinicToken t
         }
         if (parser->target_info != NULL &&
             parser->target_info->architecture == MINIC_TARGET_ARCH_X86_64 &&
-            minic_parser_token_text_equals(parser, token, "_Float128")) {
+            (minic_parser_token_text_equals(parser, token, "_Float128") ||
+             minic_parser_token_text_equals(parser, token, "_Float32") ||
+             minic_parser_token_text_equals(parser, token, "_Float64") ||
+             minic_parser_token_text_equals(parser, token, "_Float32x") ||
+             minic_parser_token_text_equals(parser, token, "_Float64x"))) {
             return true;
         }
         int128_unsigned = false;
@@ -542,16 +546,32 @@ bool minic_parser_parse_type_specifiers(MinicParser *parser, MinicType *type) {
                 return false;
             }
         }
-    } else if (minic_parser_identifier_is(parser, "_Float128")) {
-        /* Lua 5.5.0 includes glibc math.h binary128 function prototypes.
-         * Retain genuine target type identity; do not alias to long double
-         * (x86 80-bit) or promise unimplemented binary128 instructions. */
+    } else if (minic_parser_identifier_is(parser, "_Float128") ||
+               minic_parser_identifier_is(parser, "_Float32") ||
+               minic_parser_identifier_is(parser, "_Float64") ||
+               minic_parser_identifier_is(parser, "_Float32x") ||
+               minic_parser_identifier_is(parser, "_Float64x")) {
+        /* Lua and SQLite pull genuine glibc extended-floating prototypes
+         * into the original preprocessed C. Keep ABI-visible C type
+         * identities distinct: GCC does NOT treat _Float32/float or
+         * _Float64/double as compatible C types. Only model declarations,
+         * sizeof, alignment and pointer identity here; actual extended-FP
+         * operations and calls remain backend fail-closed. */
         if (parser->target_info == NULL ||
             parser->target_info->architecture != MINIC_TARGET_ARCH_X86_64) {
-            minic_parser_error(parser, "_Float128 is not supported on this target");
+            minic_parser_error(parser, "extended float type is unsupported on this target");
             return false;
         }
-        parsed_type = minic_type_float128();
+        if (minic_parser_identifier_is(parser, "_Float32"))
+            parsed_type = minic_type_float32();
+        else if (minic_parser_identifier_is(parser, "_Float64"))
+            parsed_type = minic_type_float64();
+        else if (minic_parser_identifier_is(parser, "_Float32x"))
+            parsed_type = minic_type_float32x();
+        else if (minic_parser_identifier_is(parser, "_Float64x"))
+            parsed_type = minic_type_float64x();
+        else
+            parsed_type = minic_type_float128();
         if (!minic_parser_advance(parser)) return false;
     } else if (minic_parser_identifier_is(parser, "__builtin_va_list")) {
         /* RV64 keeps the validated sequential pointer model. On x86-64
