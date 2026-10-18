@@ -164,6 +164,21 @@ set -e
 test "$native_result" -eq 42
 echo "PASS: GCC oracle sqlite_u128_shift exit=42"
 
+# Preserve binary64-origin x87 literals without treating binary128 bits
+# as an 80-bit value. The zero constant is also required for unary negate.
+cat > "$tempdir/tinycc_x87_literals.i" <<'EOF'
+int main(void) {
+    volatile long double a = 1.25L;
+    volatile long double zero = 0.0L;
+    long double b = a + zero;
+    if ((double)b != 1.25) return 1;
+    if ((double)(-a) != -1.25) return 2;
+    if ((double)(-0.0L) != -0.0) return 3;
+    return 42;
+}
+EOF
+check_exit tinycc_x87_literals 42
+
 # TinyCC gen_cast uses unsigned 64-bit to x87 conversion even for
 # values above INT64_MAX. Check against exact arithmetic and GCC oracle.
 cat > "$tempdir/tinycc_x87_uint64.i" <<'EOF'
