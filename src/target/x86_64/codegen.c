@@ -745,7 +745,15 @@ static bool x86_emit_global(FILE *out, const MinicC0Program *program,
         if (!x86_emit_zero_relocation_global(
                 out, program, target, obj, storage_size)) return false;
     } else if (minic_type_is_record(obj->type)) {
-        if (obj->union_selection_count != 0U) {
+        const MinicRecord *record = minic_c0_program_record(
+            program, obj->type.record_id);
+        /* Use the already-shared flattened initializer slot representation
+         * for nested records/arrays, even without a selected union.
+         * Preserve the established flat-record emission for legacy
+         * RECORD_FIELD relocation locations. */
+        if (record == NULL) return false;
+        if (obj->union_selection_count != 0U ||
+            obj->initializer_count != record->field_count) {
             if (!x86_emit_recursive_record_global(
                     out, program, target, obj, storage_size)) return false;
         } else if (!x86_emit_record_global(

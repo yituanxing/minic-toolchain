@@ -629,18 +629,25 @@ check_exit float_to_double 42
 
 
 
-# Nested aggregate flattening still needs an explicit implementation.
-cat > "$tempdir/unsupported.i" <<'EOF'
+# Real-project-driven reuse of recursive top-level record initialization:
+# nested records and embedded arrays must retain target DataLayout padding.
+cat > "$tempdir/nested_record.i" <<'EOF'
 struct Pair { int a; int b; };
 struct Nested { struct Pair pair; int c; };
 static struct Nested value = {{20, 22}, 1};
-int main(void) { return value.pair.a; }
+int main(void) {
+    return value.pair.a + value.pair.b == 42 && value.c == 1 ? 42 : 1;
+}
 EOF
-if "$MINIC_CC" --target=x86_64-linux -S "$tempdir/unsupported.i" \
-    -o "$tempdir/unsupported.s" >"$tempdir/unsupported.stdout" 2>"$tempdir/unsupported.stderr"; then
-  echo "FAIL: unsupported x86 nested aggregate initializer incorrectly accepted" >&2
-  exit 1
-fi
-test ! -e "$tempdir/unsupported.s"
-grep -F 'x86-64 global initializer/relocation unsupported:' "$tempdir/unsupported.stderr" >/dev/null
-echo "PASS: x86-64 unsupported nested aggregate global fails closed"
+check_exit nested_record 42
+cat > "$tempdir/nested_record_arrays.i" <<'EOF'
+struct Pair { int a; int b; };
+struct Mixed { int prefix; char label[4]; struct Pair pair; int suffix[2]; };
+static struct Mixed value = {7, {'a', 'b', 0, 0}, {15, 20}, {3, 4}};
+int main(void) {
+    if (value.label[0] != 'a' || value.label[1] != 'b') return 1;
+    return value.prefix + value.pair.a + value.pair.b == 42 &&
+           value.suffix[0] == 3 && value.suffix[1] == 4 ? 42 : 2;
+}
+EOF
+check_exit nested_record_arrays 42
