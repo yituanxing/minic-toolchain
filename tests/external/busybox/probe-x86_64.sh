@@ -115,6 +115,20 @@ for file in coreutils/cat.c coreutils/echo.c coreutils/head.c coreutils/wc.c \
         echo "BUSYBOX_X86_64_BLOCKER=MiniC source=$file stage=compiler" >&2
         grep -E 'X86_CALL_GATE|X86_CALL_ARG|FRONTEND_LOOKUP_DETAIL' "$work/$stem.minic.err" >&2 || true
         sed -n '1,35p' "$work/$stem.minic.err" >&2
+        python3 - "$work/$stem.i" "$work/$stem.minic.err" <<'PY' >&2
+import re
+import sys
+diagnostic = open(sys.argv[2], encoding="utf-8", errors="replace").read()
+match = re.search(r"\.i:(\d+):(\d+): error:", diagnostic)
+if match is not None:
+    line = int(match.group(1))
+    col = int(match.group(2))
+    with open(sys.argv[1], encoding="utf-8", errors="replace") as stream:
+        for pos, source in enumerate(stream, 1):
+            if line - 2 <= pos <= line + 2:
+                print("BUSYBOX_X86_64_DIAGNOSTIC_CONTEXT line=%d col=%d text=%r" %
+                      (pos, col if pos == line else 0, source.rstrip("\n")))
+PY
         blocked=$((blocked + 1))
         continue
     fi
