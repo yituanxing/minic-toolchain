@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - "main"
+      - "feature/multitarget-m0-target-context"
       - "agent/linux-expanded-kbuild-v0"
       - "agent/linux-perf-boolean-domain-v1"
     paths:
@@ -53,10 +54,52 @@ jobs:
         with:
           ref: ${{ github.sha }}
 
+      - name: x86 SysV varargs glibc and pinned zlib native regression
+        if: github.ref == 'refs/heads/feature/multitarget-m0-target-context'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/varargs build/varargs/bin/minic-cc
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/varargs \
+            check-target-selection-m0 check-x86_64-m1 \
+            check-x86_64-tinyaes check-x86_64-cjson check-x86_64-abi-elf
+          set +e
+          MINIC_CC="$PWD/build/varargs/bin/minic-cc" HOST_CC=cc \
+            sh tests/external/zlib/probe-x86_64.sh >build/varargs/zlib.log 2>&1
+          code=$?
+          set -e
+          tail -n 28 build/varargs/zlib.log
+          echo "ZLIB_PROBE_EXIT=$code"
+          set +e
+          MINIC_CC="$PWD/build/varargs/bin/minic-cc" HOST_CC=cc \
+            LUA_X86_64_SCAN_ALL=1 sh tests/external/lua/probe-x86_64.sh >build/varargs/lua.log 2>&1
+          lua_code=$?
+          set -e
+          echo '--- Lua full-TU structured compiler/assembler blockers ---'
+          grep -E '^LUA_X86_64_(BLOCKER|FRONTIER)' build/varargs/lua.log || true
+          cat build/varargs/lua.log
+          echo "LUA_PROBE_EXIT=$lua_code"
+          test "$code" -eq 0
+          test "$lua_code" -eq 0
+          # Exploratory new *unmodified* SQLite 3.54.1 amalgamation.
+          # A BLOCKED frontier is reported, not counted as PASS.
+          set +e
+          MINIC_CC="$PWD/build/varargs/bin/minic-cc" HOST_CC=cc \
+            SQLITE_X86_64_DISCOVERY=1 sh tests/external/sqlite/probe-x86_64.sh \
+            >build/varargs/sqlite.log 2>&1
+          sqlite_code=$?
+          set -e
+          echo '--- SQLite unmodified amalgamation compiler frontier ---'
+          grep -E '^SQLITE_X86_64_(SOURCE|INPUT|BLOCKER|FRONTIER|COMPILER|OBJECT|RUNTIME)' \
+            build/varargs/sqlite.log || true
+          tail -n 55 build/varargs/sqlite.log
+          echo "SQLITE_DISCOVERY_EXIT=$sqlite_code"
+          test "$sqlite_code" -eq 0
       # Stage2 2064 preflight checks current source workflow.
       # The bootstrap Linux opt-in workflow has several nested matrix
       # conditions. Parse its real YAML BEFORE another costly seven-way run.
       - name: Parse existing Linux runtime workflow YAML
+        if: github.ref != 'refs/heads/feature/multitarget-m0-target-context'
         shell: bash
         run: |
           set -Eeuo pipefail
