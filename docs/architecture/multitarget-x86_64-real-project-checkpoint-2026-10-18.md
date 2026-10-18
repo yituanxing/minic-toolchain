@@ -840,3 +840,56 @@ The temporary focused workflow is restored byte-for-byte to main
 (`cd9a880a5a707f28b5ea63c364c1844ab35e1c56`), preserving no
 workflow changes in the draft PR. The legacy unrelated broken baseline
 workflow is not a source-code failure qualification.
+
+## TinyCC original compiler + functional execution checkpoint — 2026-10-19
+
+**Original TinyCC 0.9.27 x86-64 native path now qualifies for the
+specified 10-C-unit compile, GNU assembly/link, command-line version
+execution and one real consumer C program, with independent GCC oracles.**
+It does NOT qualify TinyCC full self-hosting or its complete upstream test
+suite. The frozen pristine input remains TinyCC commit
+`d348a9a51d32cece842b7885d27a411436d7887b` and the first-unit
+hashes are checked by the regression script.
+
+- [Focused CI #39147169195](https://github.com/yituanxing/minic-toolchain/actions/runs/39147169195):
+  `TINYCC_X86_64_OBJECTS=PASS count=10`,
+  `TINYCC_X86_64_LINK=PASS objects=10 GNU_CRT=1`,
+  `TINYCC_X86_64_RUNTIME=PASS executable=tcc version_oracle=GCC`.
+  No host-GCC-produced TinyCC objects were substituted for the 10
+  MiniC-produced compiler objects.
+- [Extended CI #39147448590](https://github.com/yituanxing/minic-toolchain/actions/runs/39147448590):
+  additionally proves `TINYCC_X86_64_CONSUMER=PASS backend=minic-tcc exit=42`,
+  with `backend=gcc-tcc exit=42` and `backend=gnu exit=42` controls.
+  The generated `tcc-minic` *actually compiled* a new unmodified C
+  consumer source to an ELF relocatable `.o`. GNU linked that object
+  to an independent host-compiled driver; the resulting executable
+  returned 42. Log contains `TINYCC_X86_64_FUNCTIONAL=PASS`.
+- Both CI jobs retain the full original SQLite 3.54.1 GCC byte-exact
+  database runtime oracle and `TOOLCHAIN_FOCUSED_T1=PASS` for eight
+  independently owned RV64, MiniAR and MiniLD focused regression checks.
+
+The genuinely project-driven shared and backend improvements include
+GNU `__PRETTY_FUNCTION__` in C, mixed tentative file-scope array/pointer
+declarations, `struct {...} *object` parsing, x86 dynamic alloca with
+SysV call alignment, and an x87 80-bit ABI (16-byte slots, st(0) return,
+stack-passed argument values, load/store, selected typed Core conversion
+helpers, signed/unsigned 64-bit boundary tests). The Core long-double
+literal path is **still initially parsed at host binary64 precision**
+and converted to a wider representation; despite the x87 machine format,
+this is NOT proof of all 80-bit-source-literal precision. Also not yet
+qualified: full long-double and complex libgcc semantics, all x86 SysV
+aggregate classes, complete TinyCC upstream tests or self-hosting, and
+a fresh 2064-file RV64 Linux/QEMU P1 at this HEAD. Keep these boundaries.
+
+The temporary focused workflow modification used only to run these
+checks is restored to the main workflow blob
+`cd9a880a5a707f28b5ea63c364c1844ab35e1c56` afterward. No
+new workflow was introduced. The separate legacy
+`linux-runtime-gcc-baseline.yml` CI failure remains unrelated and
+is not counted as a green check.
+
+**Next if extending this project:** first use the now-executable
+MiniC-produced TinyCC to run a broader deterministic subset of upstream
+compiler tests and compare against a GCC-produced TinyCC executable.
+Prioritize observed semantics or runtime divergence, not hypothetical
+cross-target abstractions.

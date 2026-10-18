@@ -1,5 +1,6 @@
 #!/bin/sh
-# Real TinyCC 0.9.27 first TU pressure; NOT a full TinyCC acceptance.
+# Pristine TinyCC 0.9.27: all 10 TUs plus native compiler/consumer C runtime.
+# This is a pinned scoped gate, not a claim of upstream full-suite or self-hosting.
 set -eu
 : "${MINIC_CC:?MINIC_CC must point to native minic-cc}"
 : "${HOST_CC:=cc}"
