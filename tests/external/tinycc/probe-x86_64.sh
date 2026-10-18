@@ -75,11 +75,24 @@ for file in libtcc.c tccpp.c tccgen.c tccelf.c tccasm.c tccrun.c \
     block_count=$((block_count + 1))
     continue
   fi
-  if ! "$MINIC_CC" --target=x86_64-linux -S \
+  if ! MINIC_X86_CALL_TRACE=1 CORE_FAST_TRACE=1 "$MINIC_CC" --target=x86_64-linux -S \
              "$work/$stem.i" -o "$work/$stem.s" \
              >"$work/$stem.minic.out" 2>"$work/$stem.minic.err"; then
     echo "TINYCC_X86_64_BLOCKER=MiniC source=$file stage=compiler" >&2
+    grep -E 'X86_CALL_GATE|X86_CALL_ARG|FRONTEND_LOOKUP_DETAIL' "$work/$stem.minic.err" >&2 || true
     sed -n '1,18p' "$work/$stem.minic.err" >&2
+    python3 - "$work/$stem.i" "$work/$stem.minic.err" <<'PY' >&2
+import re
+import sys
+text = open(sys.argv[2], encoding="utf-8", errors="replace").read()
+match = re.search(r"\.i:(\d+):(\d+): error:", text)
+if match:
+    line, col = int(match[1]), int(match[2])
+    with open(sys.argv[1], encoding="utf-8", errors="replace") as stream:
+        source = next((x for i, x in enumerate(stream, 1) if i == line), "")
+    print("TINYCC_X86_64_DIAGNOSTIC_CONTEXT line=%d col=%d fragment=%r" %
+          (line, col, source[max(0, col-151):col+149]))
+PY
     block_count=$((block_count + 1))
     continue
   fi
