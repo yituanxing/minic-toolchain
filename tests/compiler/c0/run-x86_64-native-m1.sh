@@ -136,7 +136,7 @@ cat > "$tempdir/lua_label_table.i" <<'EOF'
 int main(void) {
     static void *const dispatch[2] = {&&label42, &&other};
     if (dispatch[0] == 0 || dispatch[1] == 0) return 1;
-    goto label42;
+    goto *dispatch[0];
 other:
     return 0;
 label42:

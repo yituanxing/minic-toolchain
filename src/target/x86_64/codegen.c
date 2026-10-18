@@ -1256,6 +1256,11 @@ static bool x86_emit_terminator(FILE *out, const MinicX86Frame *frame,
             }
         }
         return fprintf(out, "  jmp .Lmini_x86_f%zu_ret\n", function_id) >= 0;
+    case MINIC_CORE_TERMINATOR_INDIRECT_BRANCH:
+        /* Lua lvm.c uses GNU computed-goto dispatch. Core supplies an SSA
+         * code pointer; only target instruction selection differs from RV64. */
+        return x86_value_load(out, frame, term->indirect_target, "%rax") &&
+               fprintf(out, "  jmp *%%rax\n") >= 0;
     case MINIC_CORE_TERMINATOR_BRANCH:
         return fprintf(out, "  jmp .Lmini_x86_f%zu_b%u\n",
                        function_id, (unsigned int)term->branch_target) >= 0;
