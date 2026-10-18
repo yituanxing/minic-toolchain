@@ -1245,6 +1245,20 @@ static bool x86_emit_instruction(FILE *out, const MinicC0Program *program,
         return x86_value_load(out, frame, ins->value.load.address, "%r10") &&
                x86_load_memory(out, bytes, sign) &&
                x86_value_store(out, frame, ins->result);
+    case MINIC_CORE_INSTRUCTION_ATOMIC_LOAD: {
+        const MinicCoreValueId addr = ins->value.atomic_load.address;
+        MinicType pointee;
+        if (ins->value.atomic_load.memory_order != 0U ||
+            addr >= fn->value_count ||
+            !minic_type_pointee(fn->values[addr].type, &pointee) ||
+            !minic_type_is_integer(pointee) ||
+            !x86_storage_width(program, target, pointee, &bytes, &sign))
+            return false;
+        /* Aligned scalar x86 MOV has atomicity at supported widths. */
+        return x86_value_load(out, frame, addr, "%r10") &&
+               x86_load_memory(out, bytes, sign) &&
+               x86_value_store(out, frame, ins->result);
+    }
     case MINIC_CORE_INSTRUCTION_ATOMIC_STORE: {
         const MinicCoreValueId src = ins->value.atomic_store.stored_value;
         const MinicCoreValueId addr = ins->value.atomic_store.address;

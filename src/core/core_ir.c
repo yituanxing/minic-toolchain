@@ -1215,6 +1215,16 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
         return minic_type_equal(value_type, instruction->type) &&
                instruction->value.load.is_volatile == minic_type_is_volatile(pointee);
     }
+    case MINIC_CORE_INSTRUCTION_ATOMIC_LOAD: {
+        MinicType pointee, value_type;
+        if (!instruction_result_is_valid(function, instruction) ||
+            instruction->value.atomic_load.memory_order != 0U ||
+            !available_pointer_pointee(
+                function, available_values, instruction->value.atomic_load.address, &pointee) ||
+            !minic_type_unqualified(pointee, &value_type) ||
+            !minic_type_is_integer(value_type)) return false;
+        return minic_type_equal(value_type, instruction->type);
+    }
     case MINIC_CORE_INSTRUCTION_ATOMIC_STORE: {
         MinicType pointee, stored_type;
         MinicCoreValueId value = instruction->value.atomic_store.stored_value;
@@ -2214,6 +2224,9 @@ static bool dump_instruction(FILE *output,
                        instruction->result,
                        instruction->value.load.is_volatile ? ".volatile" : "",
                        instruction->value.load.address) >= 0;
+    case MINIC_CORE_INSTRUCTION_ATOMIC_LOAD:
+        return fprintf(output, "  %%%" PRIu32 " = atomic.load.relaxed %%%" PRIu32 "\n",
+                       instruction->result, instruction->value.atomic_load.address) >= 0;
     case MINIC_CORE_INSTRUCTION_ATOMIC_STORE:
         return fprintf(output, "  atomic.store.relaxed %%%" PRIu32 ", %%%" PRIu32 "\n",
                        instruction->value.atomic_store.stored_value,

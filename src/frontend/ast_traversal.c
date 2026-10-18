@@ -97,6 +97,8 @@ bool minic_c0_expression_visit_child_id_refs(MinicExpression *expression,
     case MINIC_EXPRESSION_BUILTIN_UNARY:
         return visit_expression_id(&expression->value.builtin_unary.operand, visitor, context);
 
+    case MINIC_EXPRESSION_BUILTIN_ATOMIC_LOAD:
+        return visit_expression_id(&expression->value.atomic_load.address, visitor, context);
     case MINIC_EXPRESSION_BUILTIN_ATOMIC_STORE:
         return visit_expression_id(&expression->value.atomic_store.address, visitor, context) &&
                visit_expression_id(&expression->value.atomic_store.source, visitor, context);

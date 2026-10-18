@@ -6373,6 +6373,35 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
     if (expression == NULL) {
         return MINIC_CORE_LOWER_ERROR;
     }
+    /* SQLite relaxed atomic read is distinct from ordinary C lvalue load. */
+    if (expression->kind == MINIC_EXPRESSION_BUILTIN_ATOMIC_LOAD) {
+        const MinicExpression *address_expression;
+        MinicCoreValueId address;
+        MinicCoreInstruction atomic;
+        MinicType pointee, result_type;
+        MinicCoreLowerStatus status;
+        address_expression = minic_c0_program_expression(
+            context->body->program, expression->value.atomic_load.address);
+        if (address_expression == NULL ||
+            !minic_type_pointee(address_expression->type, &pointee) ||
+            !minic_type_is_integer(pointee) ||
+            expression->value.atomic_load.memory_order != 0U ||
+            !minic_type_unqualified(pointee, &result_type) ||
+            !minic_type_equal(result_type, expression->type))
+            return MINIC_CORE_LOWER_UNSUPPORTED;
+        status = lower_expression(context, expression->value.atomic_load.address, &address);
+        if (status != MINIC_CORE_LOWER_OK) return status;
+        (void)memset(&atomic, 0, sizeof(atomic));
+        atomic.kind = MINIC_CORE_INSTRUCTION_ATOMIC_LOAD;
+        atomic.span = expression->span;
+        atomic.type = result_type;
+        atomic.result = MINIC_CORE_VALUE_INVALID;
+        atomic.value.atomic_load.address = address;
+        atomic.value.atomic_load.memory_order = 0U;
+        return minic_core_function_append_value_instruction(
+                   context->function, context->block_id, &atomic, value_id)
+                   ? MINIC_CORE_LOWER_OK : MINIC_CORE_LOWER_ERROR;
+    }
     if (expression->kind == MINIC_EXPRESSION_COMPOUND_ASSIGNMENT) {
         const MinicExpression *fact_target;
 

@@ -102,6 +102,35 @@ fi
 test ! -e "$tempdir/sqlite_atomic_store_seqcst.s"
 grep -F 'only supports relaxed memory order' "$tempdir/sqlite_atomic_store_seqcst.stderr" >/dev/null
 echo "PASS: x86 relaxed atomic stores 2/4/8 byte; seq_cst fail-closed"
+# SQLite pairs its relaxed write with a relaxed read. Verify the exact
+# value, a volatile source and one-evaluation of the address expression.
+cat > "$tempdir/sqlite_atomic_load.i" <<'EOF'
+unsigned int state;
+volatile unsigned long long wide_state;
+int main(void) {
+    unsigned int *addresses[2] = {&state, &state};
+    int offset = 0;
+    __atomic_store_n(&state, 0x31415926u, 0);
+    if (__atomic_load_n(addresses[offset++], 0) != 0x31415926u || offset != 1) return 1;
+    __atomic_store_n(&wide_state, 0x0123456789abcdefULL, 0);
+    if (__atomic_load_n(&wide_state, 0) != 0x0123456789abcdefULL) return 2;
+    return 42;
+}
+EOF
+check_exit sqlite_atomic_load 42
+cat > "$tempdir/sqlite_atomic_load_seqcst.i" <<'EOF'
+unsigned int state;
+int main(void) { return __atomic_load_n(&state, 5); }
+EOF
+if "$MINIC_CC" --target=x86_64-linux -S "$tempdir/sqlite_atomic_load_seqcst.i" \
+    -o "$tempdir/sqlite_atomic_load_seqcst.s" \
+    >"$tempdir/sqlite_atomic_load_seqcst.out" 2>"$tempdir/sqlite_atomic_load_seqcst.err"; then
+    echo "FAIL: seq_cst read unexpectedly accepted as relaxed" >&2
+    exit 1
+fi
+test ! -e "$tempdir/sqlite_atomic_load_seqcst.s"
+grep -F 'only supports relaxed memory order' "$tempdir/sqlite_atomic_load_seqcst.err" >/dev/null
+echo "PASS: x86 relaxed atomic loads 4/8 byte; stronger order fail-closed"
 
 # Real Linux default PIE: dynamic libc function *and object* address
 # materialization must resolve via GOT, not the non-PIE PC32 LEA form.

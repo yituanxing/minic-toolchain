@@ -1502,6 +1502,58 @@ static bool parse_builtin_expect(MinicParser *parser, MinicExpressionId *express
 
 /* SQLite's first atomic store is relaxed and scalar. Do not silently
  * substitute ordinary assignment or accept stronger memory orders. */
+static bool parse_builtin_atomic_load(MinicParser *parser,
+                                      MinicExpressionId *expression_id) {
+    MinicExpression expression;
+    const MinicExpression *address;
+    MinicExpressionId address_id;
+    MinicType pointee, result;
+    MinicSourcePosition begin, end;
+    size_t bytes;
+    int64_t order;
+    if (parser == NULL || expression_id == NULL ||
+        !current_identifier_is(parser, "__atomic_load_n")) return false;
+    begin = parser->current.span.begin;
+    if (!minic_parser_advance(parser) ||
+        !minic_parser_expect(parser, MINIC_TOKEN_LPAREN,
+                             "expected '(' after __atomic_load_n") ||
+        !parse_expression_internal(parser, &address_id, 0U, true) ||
+        !minic_parser_expect(parser, MINIC_TOKEN_COMMA,
+                             "expected atomic address/order comma") ||
+        !minic_parser_parse_integer_constant_expression(parser, &order))
+        return false;
+    if (order != 0) {
+        minic_parser_error(parser, "__atomic_load_n only supports relaxed memory order (0)");
+        return false;
+    }
+    if (parser->current.kind != MINIC_TOKEN_RPAREN) {
+        minic_parser_error(parser, "expected ')' after __atomic_load_n");
+        return false;
+    }
+    end = parser->current.span.end;
+    address = minic_c0_program_expression(parser->program, address_id);
+    if (address == NULL || !minic_type_pointee(address->type, &pointee) ||
+        !minic_type_is_integer(pointee) ||
+        !minic_target_info_sizeof_type(parser->target_info, parser->program,
+                                       pointee, &bytes) ||
+        (bytes != 1U && bytes != 2U && bytes != 4U && bytes != 8U) ||
+        !minic_type_unqualified(pointee, &result)) {
+        minic_parser_error(parser,
+            "__atomic_load_n requires readable 1/2/4/8-byte integer pointer");
+        return false;
+    }
+    (void)memset(&expression, 0, sizeof(expression));
+    expression.kind = MINIC_EXPRESSION_BUILTIN_ATOMIC_LOAD;
+    expression.span.begin = begin;
+    expression.span.end = end;
+    expression.type = result;
+    expression.value_category = MINIC_VALUE_RVALUE;
+    expression.value.atomic_load.address = address_id;
+    expression.value.atomic_load.memory_order = 0U;
+    return minic_parser_advance(parser) &&
+           minic_parser_add_expression(parser, &expression, expression_id);
+}
+
 static bool parse_builtin_atomic_store(MinicParser *parser,
                                        MinicExpressionId *expression_id) {
     MinicExpression expression;
@@ -3127,6 +3179,12 @@ static bool parse_primary(MinicParser *parser, MinicExpressionId *expression_id,
             !minic_parser_parse_postfix(parser, primary_id, &primary_id)) {
             return false;
         }
+        return finish_value_expression(parser, primary_id, decay_array, expression_id);
+    }
+    if (current_identifier_is(parser, "__atomic_load_n")) {
+        if (!parse_builtin_atomic_load(parser, &primary_id) ||
+            !minic_parser_parse_postfix(parser, primary_id, &primary_id))
+            return false;
         return finish_value_expression(parser, primary_id, decay_array, expression_id);
     }
     if (current_identifier_is(parser, "__atomic_store_n")) {

@@ -844,6 +844,21 @@ static bool verify_expression(const MinicC0Program *program,
                    expression->value.builtin_unary.operator_kind == MINIC_BUILTIN_UNARY_BSWAP64
                        ? expected_operand_type : minic_type_int());
     }
+    case MINIC_EXPRESSION_BUILTIN_ATOMIC_LOAD: {
+        const MinicExpression *address =
+            expression_before(program, expression->value.atomic_load.address, expression_index);
+        MinicType pointee, value_type;
+        size_t bytes;
+        return address != NULL && target != NULL &&
+               expression->value_category == MINIC_VALUE_RVALUE &&
+               expression->value.atomic_load.memory_order == 0U &&
+               minic_type_pointee(address->type, &pointee) &&
+               minic_type_is_integer(pointee) &&
+               minic_type_unqualified(pointee, &value_type) &&
+               minic_type_equal(expression->type, value_type) &&
+               minic_target_info_sizeof_type(target, program, pointee, &bytes) &&
+               (bytes == 1U || bytes == 2U || bytes == 4U || bytes == 8U);
+    }
     case MINIC_EXPRESSION_BUILTIN_ATOMIC_STORE: {
         const MinicExpression *address =
             expression_before(program, expression->value.atomic_store.address, expression_index);
