@@ -132,6 +132,22 @@ test ! -e "$tempdir/sqlite_atomic_load_seqcst.s"
 grep -F 'only supports relaxed memory order' "$tempdir/sqlite_atomic_load_seqcst.err" >/dev/null
 echo "PASS: x86 relaxed atomic loads 4/8 byte; stronger order fail-closed"
 
+# SQLite nearlyFull uses short-circuit && as the source value.  It
+# must not leave atomic.store referring to SSA values from predecessor blocks.
+cat > "$tempdir/sqlite_atomic_short_circuit.i" <<'EOF'
+volatile unsigned int nearlyFull;
+int main(void) {
+    unsigned int n = 3, used = 4;
+    unsigned int offset = 0, cells[2] = {0, 0};
+    __atomic_store_n(&nearlyFull, (n > 0 && n <= used), 0);
+    if (__atomic_load_n(&nearlyFull, 0) != 1u) return 1;
+    __atomic_store_n(&cells[offset++], (n == 0 || used > 3), 0);
+    if (offset != 1 || cells[0] != 1u || cells[1] != 0u) return 2;
+    return 42;
+}
+EOF
+check_exit sqlite_atomic_short_circuit 42
+
 # SQLite sqlite3_config atomically publishes a callback and its context.
 # Exercise both object and function pointer relaxed operations.
 cat > "$tempdir/sqlite_atomic_pointer.i" <<'EOF'

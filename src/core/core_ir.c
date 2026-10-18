@@ -1763,7 +1763,7 @@ static bool verify_block(const MinicCoreFunction *function,
                 (void)fprintf(stderr,
                     "CORE_IR_VERIFY_FAIL reason=instruction function=%s "
                     "block=%" PRIu32 " id=%" PRIu32 " kind=%d "
-                    "result=%" PRIu32 " span=%zu:%zu\\n",
+                    "result=%" PRIu32 " span=%zu:%zu\n",
                     function->name, block_id, instruction_id,
                     (int)instruction->kind, instruction->result,
                     instruction->span.begin.line,

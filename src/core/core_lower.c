@@ -11935,6 +11935,7 @@ static MinicCoreLowerStatus lower_expression_statement(MinicCoreLowerContext *co
     if (expression->kind == MINIC_EXPRESSION_BUILTIN_ATOMIC_STORE) {
         const MinicExpression *address_expression;
         MinicCoreValueId address, value;
+        MinicCoreObjectId stored_object;
         MinicCoreInstruction atomic;
         MinicType pointee, target_type;
         MinicCoreLowerStatus status;
@@ -11946,10 +11947,22 @@ static MinicCoreLowerStatus lower_expression_statement(MinicCoreLowerContext *co
             expression->value.atomic_store.memory_order != 0U ||
             !minic_type_unqualified(pointee, &target_type))
             return MINIC_CORE_LOWER_UNSUPPORTED;
-        status = lower_expression(context, expression->value.atomic_store.address, &address);
-        if (status != MINIC_CORE_LOWER_OK) return status;
+        /* The value may contain short-circuit operators that split the CFG.
+         * Like ordinary scalar assignments, spill its final value before
+         * evaluating the address, then reload in the final basic block.
+         * GNU builtin arguments have no specified mutual evaluation order:
+         * choosing value first preserves single evaluation without referring
+         * to a Core SSA value from a predecessor block. */
         status = lower_scalar_assignment_value(
             context, target_type, expression->value.atomic_store.source, &value);
+        if (status != MINIC_CORE_LOWER_OK) return status;
+        status = spill_scalar_value(
+            context, expression->span, target_type, value, &stored_object);
+        if (status != MINIC_CORE_LOWER_OK) return status;
+        status = lower_expression(context, expression->value.atomic_store.address, &address);
+        if (status != MINIC_CORE_LOWER_OK) return status;
+        status = reload_scalar_value(
+            context, expression->span, target_type, stored_object, &value);
         if (status != MINIC_CORE_LOWER_OK) return status;
         (void)memset(&atomic, 0, sizeof(atomic));
         atomic.kind = MINIC_CORE_INSTRUCTION_ATOMIC_STORE;
