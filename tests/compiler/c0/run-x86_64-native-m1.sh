@@ -277,6 +277,26 @@ int main(void) {
 EOF
 check_exit pointer_array_reloc 42
 
+# SQLite ExprList_item zeroItem = {0}; requires bytewise zero for
+# a full record despite bit-fields and flattened logical initializer slots.
+cat > "$tempdir/zero_record_bitfields.i" <<'EOF'
+struct Nested { int items[3]; void *opaque; };
+struct Entry {
+    unsigned int flag:3;
+    unsigned int mode:5;
+    struct Nested nested;
+    int final;
+};
+static const struct Entry zeroItem = {0};
+int main(void) {
+    return zeroItem.flag == 0 && zeroItem.mode == 0 &&
+           zeroItem.nested.items[0] == 0 &&
+           zeroItem.nested.items[2] == 0 &&
+           zeroItem.nested.opaque == 0 && zeroItem.final == 0 ? 42 : 1;
+}
+EOF
+check_exit zero_record_bitfields 42
+
 # SQLite date.c's aXformType uses inline char[] fields inside an
 # array of records. Verify the same flattened slots and ABI data layout.
 cat > "$tempdir/record_array_embedded_chars.i" <<'EOF'

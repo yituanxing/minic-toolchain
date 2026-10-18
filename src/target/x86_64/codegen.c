@@ -680,7 +680,7 @@ static bool x86_emit_global(FILE *out, const MinicC0Program *program,
                             const MinicTargetInfo *target, const MinicGlobalObject *obj) {
     MinicType scalar;
     size_t storage_size, alignment, width, scalar_align, i;
-    bool array_of_records;
+    bool array_of_records, all_zero_aggregate = false;
     const char *directive;
     if (obj == NULL || obj->name == NULL || obj->name[0] == '\0' ||
         obj->alias_target != MINIC_GLOBAL_OBJECT_INVALID ||
@@ -711,6 +711,19 @@ static bool x86_emit_global(FILE *out, const MinicC0Program *program,
         (directive == NULL || width == 0U ||
          obj->initializer_count > storage_size / width)) return false;
     if (obj->initializer_count != 0U && obj->initializer_values == NULL) return false;
+    /* A fully zero aggregate is bytewise zero for this x86 target even
+     * when its type contains nested records, bit-fields and padding.
+     * Never take this shortcut for relocations or a nonzero slot. */
+    if (minic_type_is_record(obj->type) && obj->relocation_count == 0U &&
+        obj->initializer_count != 0U) {
+        all_zero_aggregate = true;
+        for (i = 0U; i < obj->initializer_count; ++i) {
+            if (obj->initializer_values[i] != 0U) {
+                all_zero_aggregate = false;
+                break;
+            }
+        }
+    }
     if (obj->section_name != NULL) {
         if (fprintf(out, ".section %s,\"%s\",@progbits\n",
                     obj->section_name, obj->is_read_only ? "a" : "aw") < 0) return false;
@@ -737,8 +750,9 @@ static bool x86_emit_global(FILE *out, const MinicC0Program *program,
     }
     if (fprintf(out, "  .balign %zu\n.type %s,@object\n%s:\n",
                 alignment, obj->name, obj->name) < 0) return false;
-    if ((obj->is_zero_initialized || obj->is_tentative) &&
-        obj->initializer_count == 0U && obj->relocation_count == 0U) {
+    if (all_zero_aggregate ||
+        ((obj->is_zero_initialized || obj->is_tentative) &&
+         obj->initializer_count == 0U && obj->relocation_count == 0U)) {
         if (fprintf(out, "  .zero %zu\n", storage_size) < 0) return false;
     } else if (obj->relocation_count != 0U && obj->is_zero_initialized &&
                obj->initializer_count == 0U) {
