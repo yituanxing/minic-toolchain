@@ -2916,8 +2916,10 @@ jobs:
         run: |
           set -Eeuo pipefail
           ev="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1"
-          # full-objects.txt has one descriptive # header plus 2064 real owners.
-          test "$(grep -cE '^[^#[:space:]]+\\.o          grep -Fq 'COHORT_RESULT=PASS candidate_objects=2064 scope=FULL_C_UNIVERSE' "$ev/cohort.log"
+          # The saved full object owner inventory has one descriptive header.
+          test "$(grep -cE '^[^#[:space:]]+\\.o$' "$ev/full-objects.txt")" -eq 2064
+          test "$(wc -l < "$ev/minic-manifest.sha256")" -eq 2064
+          grep -Fq 'COHORT_RESULT=PASS candidate_objects=2064 scope=FULL_C_UNIVERSE' "$ev/cohort.log"
           grep -Fq 'COHORT_P1=PASS name=full_all_verified syscalls=12 python_era_oracle=PASS' "$ev/cohort.log"
           echo "BOOTSTRAP_STAGE4_LINUX2064=PASS compiler=Stage4 all_C_objects=2064/2064 original_GNU_link=true QEMU_P1=12/12"
 
