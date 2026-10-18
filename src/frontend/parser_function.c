@@ -3641,27 +3641,53 @@ static bool record_keyword_starts_standalone_declaration(MinicParser *parser, bo
     if (!minic_parser_advance(&probe)) {
         return false;
     }
-    if (probe.current.kind == MINIC_TOKEN_LBRACE) {
+    if (probe.current.kind != MINIC_TOKEN_LBRACE) {
+        if (probe.current.kind != MINIC_TOKEN_IDENTIFIER) {
+            minic_parser_error(parser, "expected record tag or definition after record keyword");
+            return false;
+        }
+
+        token_length = minic_parser_span_length(probe.current.span);
+        if (token_length == 13U &&
+            memcmp(parser->source + probe.current.span.begin.offset, "__attribute__", 13U) == 0) {
+            *is_standalone = true;
+            return true;
+        }
+
+        if (!minic_parser_advance(&probe)) {
+            return false;
+        }
+    }
+    if (probe.current.kind == MINIC_TOKEN_SEMICOLON) {
         *is_standalone = true;
         return true;
     }
-    if (probe.current.kind != MINIC_TOKEN_IDENTIFIER) {
-        minic_parser_error(parser, "expected record tag or definition after record keyword");
-        return false;
-    }
-
-    token_length = minic_parser_span_length(probe.current.span);
-    if (token_length == 13U &&
-        memcmp(parser->source + probe.current.span.begin.offset, "__attribute__", 13U) == 0) {
-        *is_standalone = true;
+    if (probe.current.kind != MINIC_TOKEN_LBRACE) {
+        *is_standalone = false;
         return true;
     }
-
-    if (!minic_parser_advance(&probe)) {
-        return false;
+    /* A record definition can itself declare objects:
+     *     struct switch_t { ... } *cur_switch;
+     * Peek after the matching '}' without mutating the real parser,
+     * even when record fields contain nested anonymous records. */
+    {
+        size_t brace_depth = 0U;
+        do {
+            if (probe.current.kind == MINIC_TOKEN_EOF) {
+                minic_parser_error(parser, "unterminated record definition");
+                return false;
+            }
+            if (probe.current.kind == MINIC_TOKEN_LBRACE) {
+                ++brace_depth;
+            } else if (probe.current.kind == MINIC_TOKEN_RBRACE) {
+                --brace_depth;
+            }
+            if (!minic_parser_advance(&probe)) {
+                return false;
+            }
+        } while (brace_depth != 0U);
     }
-    *is_standalone =
-        probe.current.kind == MINIC_TOKEN_SEMICOLON || probe.current.kind == MINIC_TOKEN_LBRACE;
+    *is_standalone = probe.current.kind == MINIC_TOKEN_SEMICOLON;
     return true;
 }
 

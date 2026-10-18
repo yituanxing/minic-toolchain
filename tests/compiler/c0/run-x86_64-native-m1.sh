@@ -181,6 +181,28 @@ int main(void) { return check_dynamic(97); }
 EOF
 check_exit tinycc_dynamic_alloca 42
 
+# A file-scope record definition may include an object or pointer
+# declarator; skipping directly to ';' loses the declarator and
+# incorrectly rejects the valid syntax used by TinyCC tccgen.c.
+cat > "$tempdir/tinycc_record_declarator.i" <<'EOF'
+struct switch_t {
+    struct case_t { long long value; int sym; } **p;
+    int n;
+} *cur_switch;
+struct simple_t { int x; } global_simple;
+struct forward_t;
+struct forward_t { int y; };
+int main(void) {
+    static struct switch_t state;
+    if (cur_switch != 0 || global_simple.x != 0) return 1;
+    cur_switch = &state;
+    cur_switch->n = 40;
+    global_simple.x = 2;
+    return cur_switch->n + global_simple.x;
+}
+EOF
+check_exit tinycc_record_declarator 42
+
 # TinyCC tccgen.c declares an array and two pointers in the same
 # tentative file-scope definition. This is standard C, not a workaround.
 cat > "$tempdir/tinycc_mixed_tentative.i" <<'EOF'
