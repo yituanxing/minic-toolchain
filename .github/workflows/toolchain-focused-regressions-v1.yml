@@ -92,18 +92,28 @@ jobs:
           tail -n 42 build/varargs/sqlite.log
           echo "SQLITE_DISCOVERY_EXIT=$sqlite_code"
           test "$sqlite_code" -eq 0
+          # Run both discovery projects even if one baseline fails, to
+          # preserve their independent first-blocker evidence.
+          set +e
           MINIC_CC="$PWD/build/varargs/bin/minic-cc" HOST_CC=cc \
             TINYCC_X86_64_DISCOVERY=1 sh tests/external/tinycc/probe-x86_64.sh \
             >build/varargs/tinycc.log 2>&1
-          grep -E '^TINYCC_X86_64_(SOURCE|INPUT|BASELINE|BLOCKER|COMPILER|OBJECT|FRONTIER)' \
-            build/varargs/tinycc.log || true
-          tail -n 30 build/varargs/tinycc.log
+          tiny_rc=$?
           MINIC_CC="$PWD/build/varargs/bin/minic-cc" HOST_CC=cc \
             BUSYBOX_X86_64_DISCOVERY=1 sh tests/external/busybox/probe-x86_64.sh \
             >build/varargs/busybox.log 2>&1
+          busy_rc=$?
+          set -e
+          grep -E '^TINYCC_X86_64_(SOURCE|INPUT|BASELINE|BLOCKER|COMPILER|OBJECT|FRONTIER|TESTS2)' \
+            build/varargs/tinycc.log || true
+          tail -n 35 build/varargs/tinycc.log
+          echo "TINYCC_DISCOVERY_EXIT=$tiny_rc"
           grep -E '^BUSYBOX_X86_64_(SOURCE|BASELINE|INPUT|BLOCKER|TU|FRONTIER)' \
             build/varargs/busybox.log || true
-          tail -n 35 build/varargs/busybox.log
+          tail -n 40 build/varargs/busybox.log
+          echo "BUSYBOX_DISCOVERY_EXIT=$busy_rc"
+          test "$tiny_rc" -eq 0
+          test "$busy_rc" -eq 0
       # Stage2 2064 preflight checks current source workflow.
       # The bootstrap Linux opt-in workflow has several nested matrix
       # conditions. Parse its real YAML BEFORE another costly seven-way run.
