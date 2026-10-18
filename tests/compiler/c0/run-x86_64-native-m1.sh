@@ -164,6 +164,31 @@ set -e
 test "$native_result" -eq 42
 echo "PASS: GCC oracle sqlite_u128_shift exit=42"
 
+# TinyCC gen_cast uses unsigned 64-bit to x87 conversion even for
+# values above INT64_MAX. Check against exact arithmetic and GCC oracle.
+cat > "$tempdir/tinycc_x87_uint64.i" <<'EOF'
+int main(void) {
+    volatile unsigned long long hi = 0xffffffffffffffffULL;
+    volatile unsigned long long boundary = 0x8000000000000000ULL;
+    volatile unsigned long long lo = 42ULL;
+    long double a = (long double)hi;
+    long double b = (long double)boundary;
+    long double c = (long double)lo;
+    if ((double)a != 18446744073709551616.0) return 1;
+    if ((double)b != 9223372036854775808.0) return 2;
+    if ((double)c != 42.0) return 3;
+    return 42;
+}
+EOF
+check_exit tinycc_x87_uint64 42
+"$HOST_CC" -std=gnu11 -no-pie -x c "$tempdir/tinycc_x87_uint64.i" -o "$tempdir/tinycc_x87_uint64.gnu"
+set +e
+"$tempdir/tinycc_x87_uint64.gnu"
+oracle_code=$?
+set -e
+test "$oracle_code" -eq 42
+echo "PASS: GCC oracle x87 uint64->long double boundaries exit=42"
+
 # x86-64 uses the x87 80-bit ABI for real long double. A GNU-built
 # callee returning st(0) and a MiniC-built caller must agree, including
 # values between adjacent binary64 numbers.

@@ -1162,6 +1162,38 @@ static bool x86_emit_x87_core_helper(FILE *out, const MinicCoreFunction *fn,
             return x86_x87_load(out, frame, a) &&
                    fprintf(out, "  fstps -%zu(%%rbp)\n",
                            frame->value_offsets[ins->result]) >= 0;
+        if (result_ld && !source_ld && minic_type_is_integer(fn->values[a].type)) {
+            bool unsigned_value = minic_type_is_unsigned_integer(fn->values[a].type);
+            bool from_64 =
+                strcmp(name, unsigned_value ? "__floatunditf" : "__floatditf") == 0;
+            bool from_32 =
+                strcmp(name, unsigned_value ? "__floatunsitf" : "__floatsitf") == 0;
+            if (!from_64 && !from_32) return false;
+            /* fild accepts signed integers. For unsigned 64-bit values
+             * with bit 63 set, add precisely 2^64 as an x87 double-memory
+             * constant after the signed fild; 80-bit extended precision
+             * represents every uint64 exactly. Do not truncate to binary64. */
+            if (unsigned_value && from_64) {
+                if (!x86_value_load(out, frame, a, "%r10") ||
+                    fprintf(out,
+                        "  subq $16, %%rsp\n"
+                        "  movq %%r10, (%%rsp)\n"
+                        "  fildq (%%rsp)\n"
+                        "  testq %%r10, %%r10\n"
+                        "  jns 1f\n"
+                        "  movabsq $0x43f0000000000000, %%r10\n"
+                        "  movq %%r10, (%%rsp)\n"
+                        "  faddl (%%rsp)\n"
+                        "1:\n"
+                        "  addq $16, %%rsp\n") < 0) return false;
+                return x86_x87_store(out, frame, ins->result);
+            }
+            if (fprintf(out, from_32 && !unsigned_value
+                    ? "  fildl -%zu(%%rbp)\n"
+                    : "  fildq -%zu(%%rbp)\n",
+                    frame->value_offsets[a]) < 0) return false;
+            return x86_x87_store(out, frame, ins->result);
+        }
         return false;
     }
     if (!source_ld || !minic_type_is_long_double(fn->values[b].type) ||
