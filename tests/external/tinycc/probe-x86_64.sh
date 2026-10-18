@@ -194,3 +194,51 @@ for candidate in minic-tcc gcc-tcc gnu; do
 done
 echo "TINYCC_X86_64_FUNCTIONAL=PASS original_tcc=MiniC consumer_c=TinyCC consumer_o=MiniC-built-TinyCC linker=GNU_CC"
 
+
+
+# Extra unmodified upstream tests2 programs. The MiniC-built TinyCC
+# must compile new C files to .o, linked by GNU, and byte-exactly agree
+# with an independent GCC-built TinyCC executable.
+for case_name in 00_assignment 03_struct 04_for 05_array 07_function \
+                 10_pointer 15_recursion 22_floating_point 25_quicksort 30_hanoi; do
+    input="$src/tests/tests2/$case_name.c"
+    if ! "$src/tcc" -c "$input" -o "$work/tests2.$case_name.ref.o" \
+         >"$work/tests2.$case_name.ref.log" 2>&1 ||
+       ! "$HOST_CC" -no-pie "$work/tests2.$case_name.ref.o" \
+         -o "$work/tests2.$case_name.ref.bin" \
+         >>"$work/tests2.$case_name.ref.log" 2>&1; then
+        echo "TINYCC_X86_64_TESTS2_BASELINE=FAIL case=$case_name" >&2
+        tail -n 25 "$work/tests2.$case_name.ref.log" >&2
+        exit 1
+    fi
+    set +e
+    "$work/tests2.$case_name.ref.bin" >"$work/tests2.$case_name.ref.out" \
+        2>"$work/tests2.$case_name.ref.err"
+    ref_rc=$?
+    set -e
+    if ! "$work/tcc-minic" -c "$input" -o "$work/tests2.$case_name.mini.o" \
+         >"$work/tests2.$case_name.mini.log" 2>&1 ||
+       ! "$HOST_CC" -no-pie "$work/tests2.$case_name.mini.o" \
+         -o "$work/tests2.$case_name.mini.bin" \
+         >>"$work/tests2.$case_name.mini.log" 2>&1; then
+        echo "TINYCC_X86_64_TESTS2=BLOCKED case=$case_name stage=compile-or-link" >&2
+        tail -n 30 "$work/tests2.$case_name.mini.log" >&2
+        if test "$(printenv TINYCC_X86_64_DISCOVERY || true)" = 1; then exit 0; fi
+        exit 1
+    fi
+    set +e
+    "$work/tests2.$case_name.mini.bin" >"$work/tests2.$case_name.mini.out" \
+        2>"$work/tests2.$case_name.mini.err"
+    mini_rc=$?
+    set -e
+    if test "$ref_rc" -ne "$mini_rc" ||
+       ! cmp -s "$work/tests2.$case_name.ref.out" "$work/tests2.$case_name.mini.out" ||
+       ! cmp -s "$work/tests2.$case_name.ref.err" "$work/tests2.$case_name.mini.err"; then
+        echo "TINYCC_X86_64_TESTS2=BLOCKED case=$case_name stage=runtime ref_rc=$ref_rc mini_rc=$mini_rc" >&2
+        diff -u "$work/tests2.$case_name.ref.out" "$work/tests2.$case_name.mini.out" >&2 || true
+        if test "$(printenv TINYCC_X86_64_DISCOVERY || true)" = 1; then exit 0; fi
+        exit 1
+    fi
+    echo "TINYCC_X86_64_TESTS2=PASS case=$case_name exit=$mini_rc oracle=GCC-built-TinyCC byte-exact"
+done
+echo "TINYCC_X86_64_TESTS2_SUITE=PASS cases=10 original_upstream=1"
