@@ -401,3 +401,68 @@ Preserve the already-shared semantic symbol references and DataLayout,
 allow each backend to select correct target relocation expressions.
 The potential shared recursive aggregate initializer walker remains
 **only a candidate**, not yet implemented.
+
+
+## SysV x86 va_list C type identity safety and fresh RV64 certification (2026-10-18)
+
+**Exact original ABI observation:** local native GCC x86-64 reports
+`sizeof(__builtin_va_list) == 24`, `_Alignof(__builtin_va_list) == 8`,
+and `__builtin_types_compatible_p(__builtin_va_list,void*) == 0`.
+The compiler's earlier x86 lowering represented the builtin as `void*`,
+whose `sizeof` is 8, although native variadic argument forwarding worked
+using a privately allocated 24-byte SysV tag. That conflation could
+**silently return the wrong size** for both typedef-based type queries and
+local variable queries.
+
+**Implemented bounded correctness guard:**
+- Preserve the working x86 runtime one-pointer cursor transport and its
+  private 24-byte mutable tag; assign it a **distinct internal type identity**
+  `MINIC_TYPE_BASE_X86_VA_LIST_CURSOR` instead of `void*`.
+  Preserve any temporary Core address-of proxy pointer layers in the type
+  verifier; RV64 continues to use its validated legacy pointer model.
+- `minic_target_info_sizeof_type` rejects direct x86 cursor-type
+  `sizeof` rather than reporting 8. This covers
+  `sizeof(__builtin_va_list)`, `sizeof(va_list)`, and
+  `sizeof(local_va_list)`, even after a typedef; sizeof ordinary pointer
+  types remains unchanged.
+- A native x86 regression asserts the type is distinct from `void*`,
+  verifies the two unsupported sizeof paths **fail closed with no emitted
+  assembly**, and runs the compiled valid identity probe with exit 42.
+  Existing `va_start/va_arg/va_end`, glibc forwarding and intentionally
+  unsupported `va_copy` remain independently tested.
+- **Not the final array model:** the internal proxy still uses eight bytes
+  of compiler-managed cursor storage, while the genuine SysV type is a
+  one-element array of a 24-byte tag. This guard does not claim correct C
+  array-of-va_list layouts, copies, all initializer/assignment semantics,
+  or general `va_copy`. Those require a genuine array-of-record
+  storage and argument decay model, and must be driven by an actual
+  workload with new native GCC-differential tests before merging.
+
+**Proven current source:** [focused run #39126567409](https://github.com/yituanxing/minic-toolchain/actions/runs/39126567409)
+SUCCESS, including native x86 varargs forwarding, native Lua 33/33 original
+objects, both PIE/non-PIE interpreter and luac execution/GCC byte-for-byte
+differentials, zlib and independent focused RV64/AR/LD checks.
+[Fresh full 7-way RV64 Linux/QEMU run #39126712399](https://github.com/yituanxing/minic-toolchain/actions/runs/39126712399)
+SUCCESS on the new shared type/Parser/verifier/TargetInfo implementation
+(committed as `f4545f8dd6299d545b0e6c1355f8f45b92a6d530` with
+**temporary verification-only workflow configuration**). Actual logs:
+`GNU_MINIC_SHARD_MERGE=PASS objects=2064 shards=7`,
+`COHORT_SCOPE=FULL_C_UNIVERSE objects=2064`,
+`COHORT_ABI=PASS objects=2064`,
+`COHORT_LINK=REUSED name=full_all_verified selection=prefix:2064`,
+`COHORT_P1=PASS name=full_all_verified syscalls=12 python_era_oracle=PASS`,
+`COHORT_RESULT=PASS candidate_objects=2064 scope=FULL_C_UNIVERSE same_config=true`.
+
+All seven Kbuild shards were freshly compiled by the same current RV64
+compiler source, then their verified same-run objects were reused by GNU
+link and QEMU. This is not a previous Linux image, Stage4 self-hosting,
+or a native x86 assembler/linker qualification.
+
+**CI hygiene:** the original Linux and focused workflow files were
+restored to the exact same Git blobs as `main`, respectively
+`75744ca2ecc2c1b8b9bc745a82c28b339d5f4fbf` and
+`cd9a880a5a707f28b5ea63c364c1844ab35e1c56`; no workflow changes
+remain in the production PR. The earlier malformed main workflow
+can still produce zero-job status failures independently of compiler behavior.
+Keep PR #524 Draft until remaining source and supported ABI contract gates
+are consciously resolved.
