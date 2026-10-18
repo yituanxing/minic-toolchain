@@ -123,4 +123,93 @@ if test "$scan_all" -eq 1; then
     exit 1
   fi
   echo "LUA_X86_64_RUNTIME=PASS oracle=GCC byte-exact sample=table,closure,coroutine,math,string"
+  # Second upstream executable: Lua's real bytecode compiler (luac.c).
+  # Compile one more original TU with MiniC and link against precisely the
+  # 32 already compiled library objects, excluding lua.c's other main().
+  if ! "$HOST_CC" -E -P -std=c99 -DLUA_USE_LINUX -I"$src" \
+        "$src/luac.c" -o "$work/luac.i" >"$work/luac.cpp.stdout" 2>"$work/luac.cpp.stderr"; then
+    echo "LUA_X86_64_LUAC=FAIL stage=preprocess" >&2
+    sed -n '1,60p' "$work/luac.cpp.stderr" >&2
+    exit 1
+  fi
+  if ! "$MINIC_CC" --target=x86_64-linux -S "$work/luac.i" \
+        -o "$work/luac.s" >"$work/luac.stdout" 2>"$work/luac.stderr"; then
+    echo "LUA_X86_64_LUAC=FAIL stage=compile" >&2
+    sed -n '1,60p' "$work/luac.stderr" >&2
+    exit 1
+  fi
+  if ! "$HOST_CC" -c -x assembler "$work/luac.s" -o "$work/luac.o" \
+        >"$work/luac.as.stdout" 2>"$work/luac.as.stderr"; then
+    echo "LUA_X86_64_LUAC=FAIL stage=assemble" >&2
+    sed -n '1,60p' "$work/luac.as.stderr" >&2
+    exit 1
+  fi
+  set --
+  for source in $sources; do
+    if test "$source" = lua.c; then continue; fi
+    stem=${source%.c}
+    set -- "$@" "$work/$stem.o"
+  done
+  if ! "$HOST_CC" -no-pie "$@" "$work/luac.o" -lm -ldl -o "$work/luac-minic" \
+        >"$work/luac-link.stdout" 2>"$work/luac-link.stderr"; then
+    echo "LUA_X86_64_LUAC=FAIL stage=link" >&2
+    sed -n '1,80p' "$work/luac-link.stderr" >&2
+    exit 1
+  fi
+  if test -x "$src/luac"; then
+    gcc_luac="$src/luac"
+  else
+    gcc_luac="$vendor/luac"
+  fi
+  test -x "$gcc_luac"
+  cat > "$work/native-pressure.lua" <<'EOF'
+local record = setmetatable({x=13}, {__index=function(_,k)
+  if k=="y" then return 29 end
+end})
+local function f(x) return x + record.y end
+assert(f(record.x)==42)
+local t={10,3,2,6}
+table.sort(t)
+assert(table.concat(t,",")=="2,3,6,10")
+local b=string.pack("<I2",0x1234)
+assert(b:byte(1)==52 and b:byte(2)==18)
+local co=coroutine.create(function() coroutine.yield(21); return 42 end)
+local ok,v=coroutine.resume(co)
+assert(ok and v==21)
+ok,v=coroutine.resume(co)
+assert(ok and v==42)
+local good,msg=pcall(function() error("expected error") end)
+assert(not good and msg:find("expected error",1,true))
+collectgarbage("collect")
+print("LUAC_NATIVE",f(13),t[1])
+EOF
+  if ! "$gcc_luac" -o "$work/oracle.luac" "$work/native-pressure.lua" \
+        >"$work/luac-gcc.stdout" 2>"$work/luac-gcc.stderr"; then
+    echo "LUA_X86_64_LUAC=FAIL stage=GCC-bytecode" >&2
+    sed -n '1,75p' "$work/luac-gcc.stderr" >&2
+    exit 1
+  fi
+  if ! "$work/luac-minic" -o "$work/minic.luac" "$work/native-pressure.lua" \
+        >"$work/luac-minic.stdout" 2>"$work/luac-minic.stderr"; then
+    echo "LUA_X86_64_LUAC=FAIL stage=MiniC-bytecode" >&2
+    sed -n '1,75p' "$work/luac-minic.stderr" >&2
+    exit 1
+  fi
+  if ! cmp -s "$work/oracle.luac" "$work/minic.luac"; then
+    echo "LUA_X86_64_LUAC=FAIL stage=bytecode-differential" >&2
+    ls -l "$work/oracle.luac" "$work/minic.luac" >&2
+    exit 1
+  fi
+  if ! "$lua" "$work/oracle.luac" >"$work/oracle-bytecode.stdout" \
+        2>"$work/oracle-bytecode.stderr" ||
+     ! "$work/lua-minic" "$work/minic.luac" >"$work/minic-bytecode.stdout" \
+        2>"$work/minic-bytecode.stderr" ||
+     ! cmp -s "$work/oracle-bytecode.stdout" "$work/minic-bytecode.stdout" ||
+     ! cmp -s "$work/oracle-bytecode.stderr" "$work/minic-bytecode.stderr"; then
+    echo "LUA_X86_64_LUAC=FAIL stage=runtime-differential" >&2
+    diff -u "$work/oracle-bytecode.stdout" "$work/minic-bytecode.stdout" >&2 || true
+    sed -n '1,80p' "$work/minic-bytecode.stderr" >&2
+    exit 1
+  fi
+  echo "LUA_X86_64_LUAC=PASS original=luac.c compiler=MiniC source_bytecode_identical_to_GCC=true native_runtime=PASS"
 fi
