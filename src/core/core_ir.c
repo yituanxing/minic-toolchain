@@ -1757,6 +1757,18 @@ static bool verify_block(const MinicCoreFunction *function,
         }
         instruction = &function->instructions[instruction_id];
         if (!instruction_is_valid(function, instruction, available_values)) {
+            /* Opt-in verifier diagnostics are emitted only on a rejected
+             * instruction. Preserve the ordinary verifier's strict contract. */
+            if (getenv("MINIC_CORE_VERIFY_TRACE") != NULL) {
+                (void)fprintf(stderr,
+                    "CORE_IR_VERIFY_FAIL reason=instruction function=%s "
+                    "block=%" PRIu32 " id=%" PRIu32 " kind=%d "
+                    "result=%" PRIu32 " span=%zu:%zu\\n",
+                    function->name, block_id, instruction_id,
+                    (int)instruction->kind, instruction->result,
+                    instruction->span.begin.line,
+                    instruction->span.begin.column);
+            }
             return false;
         }
         if (instruction->result != MINIC_CORE_VALUE_INVALID) {

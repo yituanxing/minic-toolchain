@@ -83,7 +83,7 @@ jobs:
           test "$lua_code" -eq 0
           set +e
           MINIC_CC="$PWD/build/varargs/bin/minic-cc" HOST_CC=cc \
-            SQLITE_X86_64_DISCOVERY=1 sh tests/external/sqlite/probe-x86_64.sh \
+            MINIC_CORE_VERIFY_TRACE=1 SQLITE_X86_64_DISCOVERY=1 sh tests/external/sqlite/probe-x86_64.sh \
             >build/varargs/sqlite.log 2>&1
           sqlite_code=$?
           set -e
