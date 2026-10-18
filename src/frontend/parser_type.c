@@ -554,11 +554,17 @@ bool minic_parser_parse_type_specifiers(MinicParser *parser, MinicType *type) {
         parsed_type = minic_type_float128();
         if (!minic_parser_advance(parser)) return false;
     } else if (minic_parser_identifier_is(parser, "__builtin_va_list")) {
-        if (!minic_type_pointer_to(minic_type_void(), &parsed_type) ||
-            !minic_parser_advance(parser)) {
+        /* RV64 keeps the validated sequential pointer model. On x86-64
+         * the pointer-based internal cursor is not the actual SysV array
+         * type: retain a distinguishable identity for fail-closed queries. */
+        if (parser->target_info != NULL &&
+            parser->target_info->architecture == MINIC_TARGET_ARCH_X86_64) {
+            parsed_type = minic_type_x86_va_list_cursor();
+        } else if (!minic_type_pointer_to(minic_type_void(), &parsed_type)) {
             minic_parser_error(parser, "cannot build __builtin_va_list type");
             return false;
         }
+        if (!minic_parser_advance(parser)) return false;
     } else if (parser->current.kind == MINIC_TOKEN_IDENTIFIER) {
         MinicTypeAliasId alias_id;
         const MinicTypeAlias *alias;

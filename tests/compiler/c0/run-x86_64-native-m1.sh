@@ -345,6 +345,46 @@ int main(void) {
 EOF
 check_exit varargs_read 42
 
+# The x86 runtime's one-word va_list proxy is deliberately not yet
+# GCC's C array[1] type (sizeof=24). Reject size queries rather than
+# silently miscompile them as sizeof(void*)=8, through typedefs and locals.
+cat > "$tempdir/varargs_sizeof_type_unsupported.i" <<'EOF'
+typedef __builtin_va_list va_list;
+int main(void) { return (int)sizeof(va_list); }
+EOF
+if "$MINIC_CC" --target=x86_64-linux -S "$tempdir/varargs_sizeof_type_unsupported.i" \
+    -o "$tempdir/varargs_sizeof_type_unsupported.s" \
+    >"$tempdir/va_size_type.out" 2>"$tempdir/va_size_type.err"; then
+  echo "FAIL: x86 va_list sizeof(type) miscompiled as one pointer" >&2
+  exit 1
+fi
+test ! -e "$tempdir/varargs_sizeof_type_unsupported.s"
+grep -F 'sizeof requires a supported complete type' "$tempdir/va_size_type.err" >/dev/null
+
+cat > "$tempdir/varargs_sizeof_local_unsupported.i" <<'EOF'
+typedef __builtin_va_list va_list;
+int main(void) { va_list list; return (int)sizeof(list); }
+EOF
+if "$MINIC_CC" --target=x86_64-linux -S "$tempdir/varargs_sizeof_local_unsupported.i" \
+    -o "$tempdir/varargs_sizeof_local_unsupported.s" \
+    >"$tempdir/va_size_local.out" 2>"$tempdir/va_size_local.err"; then
+  echo "FAIL: x86 va_list sizeof(local) miscompiled as one pointer" >&2
+  exit 1
+fi
+test ! -e "$tempdir/varargs_sizeof_local_unsupported.s"
+grep -F 'sizeof requires a supported complete type' "$tempdir/va_size_local.err" >/dev/null
+
+cat > "$tempdir/varargs_type_identity.i" <<'EOF'
+typedef __builtin_va_list va_list;
+_Static_assert(!__builtin_types_compatible_p(va_list, void *),
+               "x86 SysV va_list has distinct type identity");
+int main(void) { return 42; }
+EOF
+check_exit varargs_type_identity 42
+"$HOST_CC" -x c -std=gnu11 -c -o "$tempdir/gcc-va-type.o" \
+    "$tempdir/varargs_type_identity.i"
+echo "PASS: x86 SysV va_list opaque cursor identity and fail-closed sizeof"
+
 # Until true destination-owned va_copy tagging is designed, do not silently
 # turn the SysV cursor copy into a pointer alias (RV64 semantics are unchanged).
 cat > "$tempdir/varargs_copy_unsupported.i" <<'EOF'

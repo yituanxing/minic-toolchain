@@ -257,6 +257,15 @@ bool minic_target_info_sizeof_type(const MinicTargetInfo *target,
     if (target == NULL || program == NULL || size == NULL) {
         return false;
     }
+    /* The x86 runtime cursor proxy occupies one machine pointer but
+     * __builtin_va_list is really struct __va_list_tag[1] (24 bytes).
+     * Until that array object/parameter ABI model exists, never return 8
+     * for sizeof(va_list) or sizeof(local_va_list). This catches typedefs
+     * and expressions, unlike spelling-based parser diagnostics. */
+    if (minic_type_is_x86_va_list_cursor(type) &&
+        target->architecture == MINIC_TARGET_ARCH_X86_64) {
+        return false;
+    }
     if (minic_type_is_void(type)) {
         if (!target->gnu_sizeof_void_is_one) {
             return false;
