@@ -202,7 +202,7 @@ echo "TINYCC_X86_64_FUNCTIONAL=PASS original_tcc=MiniC consumer_c=TinyCC consume
 for case_name in 00_assignment 03_struct 04_for 05_array 07_function \
                  10_pointer 15_recursion 22_floating_point 25_quicksort 30_hanoi; do
     input="$src/tests/tests2/$case_name.c"
-    if ! "$src/tcc" -c "$input" -o "$work/tests2.$case_name.ref.o" \
+    if ! "$src/tcc" -B"$src" -I"$src/include" -I"$src" -c "$input" -o "$work/tests2.$case_name.ref.o" \
          >"$work/tests2.$case_name.ref.log" 2>&1 ||
        ! "$HOST_CC" -no-pie "$work/tests2.$case_name.ref.o" \
          -o "$work/tests2.$case_name.ref.bin" \
@@ -216,7 +216,7 @@ for case_name in 00_assignment 03_struct 04_for 05_array 07_function \
         2>"$work/tests2.$case_name.ref.err"
     ref_rc=$?
     set -e
-    if ! "$work/tcc-minic" -c "$input" -o "$work/tests2.$case_name.mini.o" \
+    if ! "$work/tcc-minic" -B"$src" -I"$src/include" -I"$src" -c "$input" -o "$work/tests2.$case_name.mini.o" \
          >"$work/tests2.$case_name.mini.log" 2>&1 ||
        ! "$HOST_CC" -no-pie "$work/tests2.$case_name.mini.o" \
          -o "$work/tests2.$case_name.mini.bin" \

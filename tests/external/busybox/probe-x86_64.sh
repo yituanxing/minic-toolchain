@@ -50,10 +50,13 @@ if ! (cd "$src" && make -j2 CC="$HOST_CC" busybox \
   tail -n 55 "$work/build.err" "$work/build.out" >&2
   exit 1
 fi
-if ! "$src/busybox" --list >"$work/list" 2>"$work/list.err" ||
-   ! grep -qx cat "$work/list" || ! grep -qx echo "$work/list"; then
-  echo "BUSYBOX_X86_64_BASELINE=FAIL stage=missing-applets" >&2
-  tail -n 30 "$work/list" "$work/list.err" >&2
+# With an allnoconfig baseline, --list is an optional BusyBox
+# dispatcher feature and may be compiled out. Verify Kconfig and invoke
+# the enabled real applets instead of relying on the optional --list.
+if ! grep -qx 'CONFIG_CAT=y' "$src/.config" ||
+   ! grep -qx 'CONFIG_ECHO=y' "$src/.config"; then
+  echo "BUSYBOX_X86_64_BASELINE=FAIL stage=applet-config" >&2
+  grep -E '^CONFIG_(CAT|ECHO)=' "$src/.config" >&2 || true
   exit 1
 fi
 printf 'one\nsecond\n' >"$work/fixture.txt"
