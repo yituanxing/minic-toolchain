@@ -743,3 +743,54 @@ The temporary focused CI workflow is restored exactly to the main blob
 object nor database transactions/index/rollback/integrity tests have passed.
 This latest x86-only extension does not replace a newly qualified full
 RV64 Linux 2064/QEMU P1 run on the updated branch.
+
+
+## SQLite 3.54.1 full x86-64 native runtime gate (2026-10-18)
+
+The next real-project iteration implemented backend-local **typed Core value
+slots**, 8 bytes for ordinary scalars and **16 bytes only for int128**, with
+an offset lookup replacing the old fixed `value_id * 8` assumption.
+This avoids doubling all x86 scalar stack slots or changing the shared
+Core IR representation. 64/128 integer conversions, two-limb memory
+transport, add/subtract/multiply, bitwise operations, shifts across the
+64-bit boundary and two-register x86-64 SysV `RDX:RAX` return transport
+are handled in `src/target/x86_64/codegen.c`.
+
+- [#39140782241](https://github.com/yituanxing/minic-toolchain/actions/runs/39140782241)
+  is the **first true SQLite full success** after replacing the previous
+  `sqlite3Multiply128` 128-bit conversion blocker. It reports:
+  `SQLITE_X86_64_SOURCE=PASS`,
+  `INPUT=PASS version=3.54.1 preprocessed_lines=93168`,
+  `COMPILER=PASS`,
+  `OBJECT=PASS`,
+  and `RUNTIME=PASS` with GCC byte-exact SQL output covering
+  transactions, indexing, prepared statements, rollback, and
+  `integrity_check`.
+  The same scoped CI reports `TOOLCHAIN_FOCUSED_T1=PASS`,
+  eight independent owner checks (RV64, archive/linker etc.), and
+  Lua 33/33/luac plus original pinned zlib.
+- [#39141008797](https://github.com/yituanxing/minic-toolchain/actions/runs/39141008797)
+  reconfirms the full SQLite native object/runtime/oracle after expanded
+  tests. Native MiniC and GNU oracle both return expected 42 for two-limb
+  arithmetic and signed/unsigned shifts; GCC caller -> MiniC callee and
+  MiniC caller -> GCC callee both correctly transport a `__uint128_t`
+  return value with nonzero high and low 64-bit halves. All eight
+  independent scoped regression checks again pass.
+
+**Scope and exclusions:** this proves a SQLite-pinned x86-64 path, not
+arbitrary GNU C semantics or every SysV ABI classification. General
+128-bit *parameter* passing, 128-bit division/remainder, arbitrary
+aggregate register classes, 128-bit relational comparisons, and nontrivial
+aggregate returns remain unqualified and should continue to fail closed.
+The x86 backend has a deliberately restricted two-INTEGER eightbyte
+record-call subset for SQLite's Token; it does not implement general
+SysV structure classification. Linux 2064/QEMU P1 was not rerun on this
+new x86-only code branch: the previously verified full Linux result
+predates it, while focused RV64 checks have been revalidated.
+
+**Next project-driven step:** checkpoint the full SQLite runtime green
+status as a durable test oracle; select the next unchanged real project
+whose feature needs exercise a genuinely missing shared or backend seam.
+Do not refactor to a hypothetical generalized multi-backend pass before
+a concrete differential failure. Always reuse focused regressions and
+restore the temporary workflow to main after the measurement.
