@@ -164,6 +164,23 @@ set -e
 test "$native_result" -eq 42
 echo "PASS: GCC oracle sqlite_u128_shift exit=42"
 
+# TinyCC x86_64-gen.c needs dynamic Core stack allocation.
+# Check a nonconstant size, lifetime across an 8-argument SysV call,
+# and correct byte addressing without hardcoded final stack size.
+cat > "$tempdir/tinycc_dynamic_alloca.i" <<'EOF'
+static int sum8(int a, int b, int c, int d, int e, int f, int g, int h) {
+    return a+b+c+d+e+f+g+h;
+}
+static int check_dynamic(int n) {
+    unsigned char *p = (unsigned char *)__builtin_alloca((unsigned long)n);
+    p[0] = 3;
+    p[n-1] = 3;
+    return sum8(1,2,3,4,5,6,7,8) + p[0] + p[n-1];
+}
+int main(void) { return check_dynamic(97); }
+EOF
+check_exit tinycc_dynamic_alloca 42
+
 # TinyCC tccgen.c declares an array and two pointers in the same
 # tentative file-scope definition. This is standard C, not a workaround.
 cat > "$tempdir/tinycc_mixed_tentative.i" <<'EOF'

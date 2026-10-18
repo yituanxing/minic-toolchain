@@ -1926,6 +1926,31 @@ static bool x86_emit_instruction(FILE *out, const MinicC0Program *program,
         return x86_emit_call_result(out, program, target, frame,
                                     signature->return_type, ins->result);
     }
+    case MINIC_CORE_INSTRUCTION_DYNAMIC_STACK_ALLOC: {
+        MinicCoreValueId count = ins->value.operand;
+        /* The current dynamically aligned object frame is rsp-relative.
+         * Alloca changes rsp, so reject this unqualified combination
+         * rather than silently addressing the wrong local object. */
+        if (frame->objects_from_aligned_rsp ||
+            ins->result >= fn->value_count || count >= fn->value_count ||
+            !minic_type_is_pointer(ins->type) ||
+            !minic_type_equal(fn->values[ins->result].type, ins->type) ||
+            !minic_type_equal(fn->values[count].type, minic_type_unsigned_long()) ||
+            !x86_value_load(out, frame, count, "%r10") ||
+            fprintf(out,
+                    "  addq $15, %%r10\n"
+                    "  jnc 1f\n"
+                    "  ud2\n"
+                    "1:\n"
+                    "  andq $-16, %%r10\n"
+                    "  subq %%r10, %%rsp\n"
+                    "  movq %%rsp, %%rax\n") < 0)
+            return false;
+        /* New rsp stays 16-byte aligned, so subsequent SysV calls may
+         * reserve/reclaim outgoing argument space normally. Epilogue
+         * uses leave to reclaim every dynamic allocation at once. */
+        return x86_value_store(out, frame, ins->result);
+    }
     case MINIC_CORE_INSTRUCTION_COMPILER_BARRIER:
         return true;
     default:
