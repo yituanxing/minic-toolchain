@@ -9,11 +9,11 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* M1 intentionally uses one eight-byte frame slot per Core scalar value.
- * This is a correctness-first backend, not a register allocator or optimizer.
- * The Core value/object identities remain untouched. */
+/* Per-Core-value 8-byte frame slots, or 16 bytes for int128.
+ * The extra limb is x86 backend-owned; Core IR identities are unchanged. */
 typedef struct MinicX86Frame {
     size_t value_count;
+    size_t *value_offsets;
     size_t *object_offsets;
     size_t object_count;
     size_t frame_size;
@@ -165,13 +165,40 @@ static bool x86_normalize(FILE *out, const MinicC0Program *program,
 
 static bool x86_value_load(FILE *out, const MinicX86Frame *frame, MinicCoreValueId id,
                            const char *reg) {
-    if (frame == NULL || id >= frame->value_count) return false;
-    return fprintf(out, "  movq -%zu(%%rbp), %s\n", 8U * ((size_t)id + 1U), reg) >= 0;
+    if (frame == NULL || id >= frame->value_count ||
+        frame->value_offsets == NULL) return false;
+    return fprintf(out, "  movq -%zu(%%rbp), %s\n", frame->value_offsets[id], reg) >= 0;
 }
 
 static bool x86_value_store(FILE *out, const MinicX86Frame *frame, MinicCoreValueId id) {
-    if (frame == NULL || id >= frame->value_count) return false;
-    return fprintf(out, "  movq %%rax, -%zu(%%rbp)\n", 8U * ((size_t)id + 1U)) >= 0;
+    if (frame == NULL || id >= frame->value_count ||
+        frame->value_offsets == NULL) return false;
+    return fprintf(out, "  movq %%rax, -%zu(%%rbp)\n", frame->value_offsets[id]) >= 0;
+}
+
+/* Low limb at -offset(%rbp), high limb at -offset+8(%rbp). */
+static bool x86_i128_load(FILE *out, const MinicX86Frame *frame, MinicCoreValueId id,
+                          const char *low, const char *high) {
+    size_t offset;
+    if (frame == NULL || id >= frame->value_count ||
+        frame->value_offsets == NULL || low == NULL || high == NULL) return false;
+    offset = frame->value_offsets[id];
+    if (offset < 16U) return false;
+    return fprintf(out,
+        "  movq -%zu(%%rbp), %s\n"
+        "  movq -%zu(%%rbp), %s\n", offset, low, offset - 8U, high) >= 0;
+}
+
+static bool x86_i128_store(FILE *out, const MinicX86Frame *frame, MinicCoreValueId id,
+                           const char *low, const char *high) {
+    size_t offset;
+    if (frame == NULL || id >= frame->value_count ||
+        frame->value_offsets == NULL || low == NULL || high == NULL) return false;
+    offset = frame->value_offsets[id];
+    if (offset < 16U) return false;
+    return fprintf(out,
+        "  movq %s, -%zu(%%rbp)\n"
+        "  movq %s, -%zu(%%rbp)\n", low, offset, high, offset - 8U) >= 0;
 }
 
 static bool x86_object_address(FILE *out, const MinicX86Frame *frame,
@@ -191,7 +218,18 @@ static bool x86_frame_init(const MinicC0Program *program, const MinicTargetInfo 
     (void)memset(frame, 0, sizeof(*frame));
     frame->value_count = fn->value_count;
     frame->object_count = fn->object_count;
-    value_bytes = fn->value_count * 8U;
+    value_bytes = 0U;
+    if (fn->value_count != 0U) {
+        frame->value_offsets = (size_t *)calloc(fn->value_count,
+                                                 sizeof(*frame->value_offsets));
+        if (frame->value_offsets == NULL) return false;
+    }
+    for (i = 0U; i < fn->value_count; ++i) {
+        size_t slot = minic_type_is_int128_integer(fn->values[i].type) ? 16U : 8U;
+        if (value_bytes > (size_t)INT32_MAX - slot) return false;
+        value_bytes += slot;
+        frame->value_offsets[i] = value_bytes;
+    }
     /* Discover semantic va_start sites from Core. A VA cursor is not an RV64
      * sequential argument pointer under SysV x86-64. */
     for (i = 0U; i < fn->instruction_count; ++i) {
@@ -302,6 +340,7 @@ static bool x86_frame_init(const MinicC0Program *program, const MinicTargetInfo 
 
 static void x86_frame_destroy(MinicX86Frame *frame) {
     if (frame == NULL) return;
+    free(frame->value_offsets);
     free(frame->object_offsets);
     free(frame->varargs_results);
     (void)memset(frame, 0, sizeof(*frame));
@@ -1023,6 +1062,8 @@ static bool x86_emit_call_result(FILE *out, const MinicC0Program *program,
                                  MinicType return_type, MinicCoreValueId result) {
     if (result == MINIC_CORE_VALUE_INVALID)
         return minic_type_is_void(return_type);
+    if (minic_type_is_int128_integer(return_type))
+        return x86_i128_store(out, frame, result, "%rax", "%rdx");
     if (minic_type_is_double(return_type)) {
         if (fprintf(out, "  movq %%xmm0, %%rax\n") < 0) return false;
     } else if (minic_type_is_float(return_type)) {
@@ -1198,6 +1239,15 @@ static bool x86_emit_instruction(FILE *out, const MinicC0Program *program,
         return x86_value_store(out, frame, ins->result);
     }
     case MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT:
+        if (minic_type_is_int128_integer(ins->type)) {
+            if (fprintf(out, "  movabsq $%" PRId64 ", %%rax\n",
+                        ins->value.integer_value) < 0 ||
+                fprintf(out, minic_type_is_signed_integer(ins->type)
+                                    ? "  movq %%rax, %%rdx\n  sarq $63, %%rdx\n"
+                                    : "  xorq %%edx, %%edx\n") < 0)
+                return false;
+            return x86_i128_store(out, frame, ins->result, "%rax", "%rdx");
+        }
         if (!x86_scalar_width(program, target, ins->type, &bytes, &sign) ||
             fprintf(out, "  movabsq $%" PRId64 ", %%rax\n", ins->value.integer_value) < 0)
             return false;
@@ -1392,10 +1442,36 @@ static bool x86_emit_instruction(FILE *out, const MinicC0Program *program,
         }
         return true;
     }
-    case MINIC_CORE_INSTRUCTION_INTEGER_CONVERSION:
-        return x86_value_load(out, frame, ins->value.operand, "%rax") &&
+    case MINIC_CORE_INSTRUCTION_INTEGER_CONVERSION: {
+        MinicCoreValueId source = ins->value.operand;
+        MinicType source_type;
+        if (source >= fn->value_count) return false;
+        source_type = fn->values[source].type;
+        if (minic_type_is_int128_integer(ins->type)) {
+            if (minic_type_is_int128_integer(source_type)) {
+                if (!x86_i128_load(out, frame, source, "%rax", "%rdx"))
+                    return false;
+            } else {
+                size_t source_bytes;
+                bool signed_source;
+                if (!x86_scalar_width(program, target, source_type,
+                                      &source_bytes, &signed_source) ||
+                    !x86_value_load(out, frame, source, "%rax") ||
+                    fprintf(out, signed_source
+                                ? "  movq %%rax, %%rdx\n  sarq $63, %%rdx\n"
+                                : "  xorq %%edx, %%edx\n") < 0)
+                    return false;
+            }
+            return x86_i128_store(out, frame, ins->result, "%rax", "%rdx");
+        }
+        if (minic_type_is_int128_integer(source_type))
+            return x86_i128_load(out, frame, source, "%rax", "%rdx") &&
+                   x86_normalize(out, program, target, ins->type) &&
+                   x86_value_store(out, frame, ins->result);
+        return x86_value_load(out, frame, source, "%rax") &&
                x86_normalize(out, program, target, ins->type) &&
                x86_value_store(out, frame, ins->result);
+    }
     case MINIC_CORE_INSTRUCTION_SCALAR_BITCAST: {
         const MinicCoreValueId operand = ins->value.operand;
         size_t src_bytes;
@@ -1415,6 +1491,11 @@ static bool x86_emit_instruction(FILE *out, const MinicC0Program *program,
                x86_value_store(out, frame, ins->result);
     }
     case MINIC_CORE_INSTRUCTION_LOAD:
+        if (minic_type_is_int128_integer(ins->type))
+            return x86_value_load(out, frame, ins->value.load.address, "%r10") &&
+                   fprintf(out, "  movq (%%r10), %%rax\n"
+                                "  movq 8(%%r10), %%rdx\n") >= 0 &&
+                   x86_i128_store(out, frame, ins->result, "%rax", "%rdx");
         if (!x86_storage_width(program, target, ins->type, &bytes, &sign)) return false;
         return x86_value_load(out, frame, ins->value.load.address, "%r10") &&
                x86_load_memory(out, bytes, sign) &&
@@ -1452,6 +1533,12 @@ static bool x86_emit_instruction(FILE *out, const MinicC0Program *program,
     }
     case MINIC_CORE_INSTRUCTION_STORE: {
         MinicCoreValueId src = ins->value.store.stored_value;
+        if (src >= fn->value_count) return false;
+        if (minic_type_is_int128_integer(fn->values[src].type))
+            return x86_value_load(out, frame, ins->value.store.address, "%r10") &&
+                   x86_i128_load(out, frame, src, "%rax", "%rdx") &&
+                   fprintf(out, "  movq %%rax, (%%r10)\n"
+                                "  movq %%rdx, 8(%%r10)\n") >= 0;
         if (src >= fn->value_count ||
             !x86_storage_width(program, target, fn->values[src].type, &bytes, &sign))
             return false;
@@ -1737,6 +1824,10 @@ static bool x86_emit_terminator(FILE *out, const MinicX86Frame *frame,
     case MINIC_CORE_TERMINATOR_RETURN:
         if (term->return_object != MINIC_CORE_OBJECT_INVALID) return false;
         if (term->return_value != MINIC_CORE_VALUE_INVALID) {
+            if (minic_type_is_int128_integer(fn->return_type))
+                return x86_i128_load(out, frame, term->return_value,
+                                     "%rax", "%rdx") &&
+                       fprintf(out, "  jmp .Lmini_x86_f%zu_ret\n", function_id) >= 0;
             if (!x86_value_load(out, frame, term->return_value, "%rax"))
                 return false;
             if (minic_type_is_double(fn->return_type)) {
