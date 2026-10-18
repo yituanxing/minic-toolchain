@@ -1459,6 +1459,64 @@ static bool x86_emit_instruction(FILE *out, const MinicC0Program *program,
                x86_value_load(out, frame, src, "%rax") &&
                x86_store_memory(out, bytes);
     }
+    case MINIC_CORE_INSTRUCTION_INTEGER_OVERFLOW: {
+        MinicCoreValueId lhs = ins->value.integer_overflow.left;
+        MinicCoreValueId rhs = ins->value.integer_overflow.right;
+        MinicCoreValueId address = ins->value.integer_overflow.result_address;
+        MinicType result_type;
+        size_t width;
+        bool signed_result;
+        const char *opcode = NULL, *flag = NULL;
+        if (lhs >= fn->value_count || rhs >= fn->value_count ||
+            address >= fn->value_count ||
+            !minic_type_pointee(fn->values[address].type, &result_type) ||
+            !minic_type_is_integer(result_type) || minic_type_is_bool_integer(result_type) ||
+            minic_type_is_const(result_type) || minic_type_is_volatile(result_type) ||
+            !minic_type_equal(result_type, fn->values[lhs].type) ||
+            !minic_type_equal(result_type, fn->values[rhs].type) ||
+            !x86_scalar_width(program, target, result_type, &width, &signed_result) ||
+            (width != 4U && width != 8U))
+            return false;
+        switch (ins->value.integer_overflow.operator_kind) {
+        case MINIC_CORE_INTEGER_OVERFLOW_ADD:
+            opcode = width == 8U ? "addq" : "addl";
+            flag = signed_result ? "seto" : "setc";
+            break;
+        case MINIC_CORE_INTEGER_OVERFLOW_SUBTRACT:
+            opcode = width == 8U ? "subq" : "subl";
+            flag = signed_result ? "seto" : "setc";
+            break;
+        case MINIC_CORE_INTEGER_OVERFLOW_MULTIPLY:
+            if (signed_result) opcode = width == 8U ? "imulq" : "imull";
+            else opcode = width == 8U ? "mulq" : "mull";
+            flag = "seto"; /* MUL/IMUL set OF iff the truncated result loses bits. */
+            break;
+        default:
+            return false;
+        }
+        if (!x86_value_load(out, frame, lhs, "%rax") ||
+            !x86_value_load(out, frame, rhs, "%r10"))
+            return false;
+        if (ins->value.integer_overflow.operator_kind == MINIC_CORE_INTEGER_OVERFLOW_MULTIPLY &&
+            !signed_result) {
+            if (fprintf(out, width == 8U
+                            ? "  mulq %%r10\n" : "  mull %%r10d\n") < 0)
+                return false;
+        } else if (fprintf(out,
+                           width == 8U ? "  %s %%r10, %%rax\n"
+                                       : "  %s %%r10d, %%eax\n", opcode) < 0)
+            return false;
+        /* Snapshot the arithmetic flag before any later arithmetic.
+         * Two-address result memory is written before returning the bool. */
+        if (fprintf(out, "  %s %%r11b\n", flag) < 0 ||
+            !x86_value_load(out, frame, address, "%r10") ||
+            fprintf(out, width == 8U
+                           ? "  movq %%rax, (%%r10)\n"
+                           : "  movl %%eax, (%%r10)\n") < 0 ||
+            fprintf(out, "  movzbq %%r11b, %%rax\n") < 0)
+            return false;
+        return x86_value_store(out, frame, ins->result);
+    }
     case MINIC_CORE_INSTRUCTION_INTEGER_CLZ:
     case MINIC_CORE_INSTRUCTION_INTEGER_CTZ: {
         const MinicCoreValueId operand = ins->value.operand;

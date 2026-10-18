@@ -39,6 +39,32 @@ int main(void) { return sum(17, 25); }
 EOF
 check_exit params_call 42
 
+# SQLite sqlite3AddInt64 uses checked builtin overflow with a typed
+# output pointer. Verify stored wrapped bits and overflow flag independently.
+cat > "$tempdir/sqlite_overflow.i" <<'EOF'
+int main(void) {
+    long long s;
+    unsigned long long u;
+    unsigned int w;
+    if (!__builtin_add_overflow(9223372036854775807LL, 1LL, &s) ||
+        s != (-9223372036854775807LL - 1LL)) return 1;
+    if (!__builtin_sub_overflow((-9223372036854775807LL - 1LL), 1LL, &s) ||
+        s != 9223372036854775807LL) return 2;
+    if (!__builtin_mul_overflow(9223372036854775807LL, 2LL, &s) ||
+        s != -2LL) return 3;
+    if (__builtin_add_overflow(17LL, 25LL, &s) || s != 42LL) return 4;
+    if (!__builtin_add_overflow(18446744073709551615ULL, 1ULL, &u) || u != 0ULL)
+        return 5;
+    if (!__builtin_sub_overflow(0ULL, 1ULL, &u) ||
+        u != 18446744073709551615ULL) return 6;
+    if (!__builtin_mul_overflow(18446744073709551615ULL, 2ULL, &u) ||
+        u != 18446744073709551614ULL) return 7;
+    if (__builtin_mul_overflow(6u, 7u, &w) || w != 42u) return 8;
+    return 42;
+}
+EOF
+check_exit sqlite_overflow 42
+
 # SQLite sqlite3LogEst: x86 baseline BSR/BSF must preserve operand widths.
 # Test genuine GNU bit-count builtins instead of rewriting source code.
 cat > "$tempdir/sqlite_bit_count.i" <<'EOF'
