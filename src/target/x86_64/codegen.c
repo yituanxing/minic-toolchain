@@ -1436,16 +1436,44 @@ static bool x86_emit_instruction(FILE *out, const MinicC0Program *program,
         const size_t callee_id = ins->value.call.callee_id;
         const MinicCoreCallee *callee;
         size_t outgoing_bytes = 0U;
-        if (callee_id >= fn->callee_count ||
-            ins->value.call.result_object != MINIC_CORE_OBJECT_INVALID)
-            return false;
+        if (callee_id >= fn->callee_count) return false;
         callee = &fn->callees[callee_id];
-        if (callee->name == NULL ||
-            !x86_emit_call_arguments(out, program, target, fn, frame,
+        if (ins->value.call.result_object != MINIC_CORE_OBJECT_INVALID ||
+            callee->name == NULL) {
+            if (getenv("MINIC_X86_CALL_TRACE") != NULL)
+                (void)fprintf(stderr,
+                    "X86_CALL_GATE function=%s callee=%s stage=record-result "
+                    "result_object=%" PRIu32 " arg_count=%zu fixed=%zu\\n",
+                    fn->name, callee->name != NULL ? callee->name : "?",
+                    ins->value.call.result_object, count, callee->parameter_count);
+            return false;
+        }
+        if (!x86_emit_call_arguments(out, program, target, fn, frame,
                                      begin, count, callee->parameter_types,
                                      callee->parameter_count, callee->is_variadic,
-                                     &outgoing_bytes) ||
-            fprintf(out, "  call %s@PLT\n", callee->name) < 0 ||
+                                     &outgoing_bytes)) {
+            if (getenv("MINIC_X86_CALL_TRACE") != NULL) {
+                size_t j;
+                (void)fprintf(stderr,
+                    "X86_CALL_GATE function=%s callee=%s stage=arguments "
+                    "count=%zu fixed=%zu variadic=%d\\n",
+                    fn->name, callee->name, count, callee->parameter_count,
+                    callee->is_variadic ? 1 : 0);
+                for (j = 0U; j < count && begin + j < fn->call_argument_count; ++j) {
+                    const MinicCoreCallArgument *arg = &fn->call_arguments[begin + j];
+                    (void)fprintf(stderr,
+                        "X86_CALL_ARG callee=%s index=%zu kind=%d "
+                        "value=%" PRIu32 " param_record=%d\\n",
+                        callee->name, j, (int)arg->kind,
+                        arg->kind == MINIC_CORE_CALL_ARGUMENT_VALUE
+                            ? arg->value.value_id : arg->value.object_id,
+                        j < callee->parameter_count &&
+                        minic_type_is_record(callee->parameter_types[j]) ? 1 : 0);
+                }
+            }
+            return false;
+        }
+        if (fprintf(out, "  call %s@PLT\n", callee->name) < 0 ||
             (outgoing_bytes != 0U &&
              fprintf(out, "  addq $%zu, %%rsp\n", outgoing_bytes) < 0))
             return false;
