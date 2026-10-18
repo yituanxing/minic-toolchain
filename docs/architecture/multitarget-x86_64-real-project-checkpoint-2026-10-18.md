@@ -294,3 +294,55 @@ link, and 12/12 QEMU P1. This is not a new nine-tool self-hosting acceptance.
 Independent x86 Lua full 33/33 original-TU compilation, native linking,
 and runtime GCC differential continue to be recorded above. x86 SysV
 aggregate ABI, PIE and `va_list` type correctness remain separate gates.
+
+
+## Second real Lua executable: native luac bytecode compiler (2026-10-18)
+
+**Independent real-project receipt:** [focused #39124253419](https://github.com/yituanxing/minic-toolchain/actions/runs/39124253419),
+candidate source/temporary focused CI commit `6483c956e28a00f516ac010b28b5db7331b99607`.
+
+- The actual pristine upstream Lua 5.5.0 `luac.c` was preprocessed with
+  genuine GNU host system headers; compiled using MiniC
+  `--target=x86_64-linux`, assembled by GNU, and linked with the **32
+  MiniC-compiled original Lua library objects** (excluding `lua.c` to
+  avoid duplicate `main`) plus `luac.o`. No GCC C object substitution.
+- The resulting x86 native `luac-minic` processed a deterministic original
+  Lua source script using closures, tables, metatables, byte packing,
+  coroutines, protected errors and GC. Its **binary bytecode output was
+  identical byte-for-byte** to that from pristine GCC-built `luac` for
+  exactly the same input path. The resulting bytecode executed successfully
+  with the MiniC-built native Lua interpreter and the output/error streams
+  were identical to those of the GCC-built Lua runtime.
+- CI log:
+  `LUA_X86_64_LUAC=PASS original=luac.c compiler=MiniC source_bytecode_identical_to_GCC=true native_runtime=PASS`.
+  Original Lua interpreter 33/33 object build/link/runtime differential,
+  pinned native zlib, the x86 checks and focused RV64/AR/LD also remained
+  green; `LUA_PROBE_EXIT=0`,
+  `TOOLCHAIN_FOCUSED_T1=PASS mode=all independent_test_checks=8 shared_builds=1`.
+- This follow-on changed **only the Lua test driver**, not frontend, Core,
+  x86 or RV64 compiler source. Thus the independent fresh
+  [RV64 full Linux/QEMU P1 #39123610218](https://github.com/yituanxing/minic-toolchain/actions/runs/39123610218)
+  continues to cover the exact current compiler blobs.
+- Temporary feature-only focused workflow was restored byte-for-byte to
+  main's Git blob `cd9a880a5a707f28b5ea63c364c1844ab35e1c56`.
+  The production PR has no workflow diff.
+
+### Proven reuse and candidate next abstraction
+
+Real upstream tiny-AES, cJSON, zlib and now Lua/Luac have exercised the
+shared C frontend and verifier, target-dependent DataLayout, Core call
+signatures, Core source-label identity, indirect-branch semantics, flattened
+global initialization and union-member selection. Both RV64 and x86 emitters
+perform recursive aggregate layout traversal. **Potential future shared
+semantic walker**: map (type, initializer slot, selected union branch,
+target DataLayout) to abstract byte spans / padding / relocation slots.
+Architecture-specific output callbacks should continue to own actual
+assembler directives, relocation syntax, ISA and call ABI. Do not extract
+this until a real project reproduces meaningful duplicated behavior with
+both backends and has differential coverage, because RV64's production
+emitter also handles special bit-fields, flexible array members, and
+other cases currently absent from the bounded x86 emitter.
+
+**Not certified:** entire upstream Lua test-suite, general x86 PIE,
+true x86 `__builtin_va_list` type model, binary128 arithmetic/call ABI,
+full aggregate SysV ABI, or x86 MiniAS/MiniLD/self-hosting.
