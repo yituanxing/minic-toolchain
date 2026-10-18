@@ -188,3 +188,75 @@ and QEMU P1 on the final shared Parser/Core/RV64 source changes. It does
 **not** certify resumed Stage4 fixed-point self-hosting, x86-64 Linux
 kernel compile, nine-tool native union, complete x86 SysV aggregate ABI,
 Lua runtime, or x86 `va_copy` correctness. Those remain separate.
+
+
+## Lua 5.5.0 — complete native x86-64 toolchain milestone (2026-10-18)
+
+**Actual release / source**: unchanged official Lua 5.5.0 SHA-256-verified
+tarball and all 33 upstream C translation units. Genuine Ubuntu x86-64 system
+headers are preprocessed by GNU; MiniC's selected x86-64 frontend/Core/backend
+produces GNU x86 assembly; GNU assembles and links a **real Lua interpreter**.
+No synthetic Lua source, fake prototypes, host GCC object substitutes, x86
+MiniAS/MiniLD claim, or LLVM/GCC fallback compiler for a TU.
+
+**Full real-project evidence**:
+- [Focused run #39121428738](https://github.com/yituanxing/minic-toolchain/actions/runs/39121428738)
+  logged `LUA_X86_64_FRONTIER compiler=33 assembled=33 total=33 blocked=0 scan_all=1`.
+  Independent tiny-AES/cJSON/zlib 15/15 native regression and RV64 focused
+  toolchain tests passed on the same feature source. This verifies 33 original
+  Lua objects, **not** by itself interpreter linking/runtime.
+- [Focused run #39121674706](https://github.com/yituanxing/minic-toolchain/actions/runs/39121674706)
+  verified `LUA_X86_64_FRONTIER compiler=33 assembled=33 total=33 blocked=0 scan_all=1`,
+  `LUA_X86_64_LINK=PASS objects=33 driver=GNU`, and
+  `LUA_X86_64_RUNTIME=PASS oracle=GCC byte-exact sample=table,closure,coroutine,math,string`.
+  A native Lua interpreter linked from **all 33 MiniC objects**, executed a
+  deterministic Lua program and matched a separate pristine upstream GCC-built
+  Lua executable byte-for-byte in stdout/stderr; `LUA_PROBE_EXIT=0`.
+  This is a **real running Lua interpreter**, but not a full upstream Lua
+  test-suite certification or self-hosting. The existing x86 focused tests
+  also passed and `ZLIB_PROBE_EXIT=0`.
+
+**Original project failures and precisely scoped source changes**:
+1. Three original Lua zero-filled pointer globals with relocation-only
+   initializers (`HOOKKEY`, `CLIBS`, `progname`) exposed x86 static data
+   emission gap. `x86_emit_zero_relocation_global` reuses the **existing shared**
+   `minic_data_layout_global_relocation_offset` for validated storage offsets,
+   leaving symbol syntax in the x86 backend. Also tested standalone
+   `lua_pointer_globals` native exit 42.
+2. Six Lua TUs were blocked by *real glibc* `math.h` prototypes involving
+   IEEE `_Float128`. Shared frontend/type verification and target DataLayout
+   now carry **distinct** x86 `_Float128` identity/16-byte size and alignment,
+   without aliasing it to x86 80-bit `long double`; RV64 still rejects
+   this target-specific spelling. The actual project currently requires
+   prototype declarations, **not** general binary128 arithmetic or ABI calls.
+3. Lua `lvm.c` computed-goto tables reused Core's stable label statement
+   IDs for ELF relocation targets; x86 added only `.Luser_<id>` target-specific
+   emission and `jmp *%rax` selection for the **already-shared**
+   `MINIC_CORE_TERMINATOR_INDIRECT_BRANCH`. The pointer table and indirect
+   branch are exercised by a native compiled fixture.
+4. Remaining Lua record globals with selected nested unions required a
+   bounded recursive x86 aggregate initializer emitter. It uses shared
+   `MinicDataLayout`, Core flattened initializer slots and existing
+   union-selection metadata. This exposes a **future extraction candidate**
+   shared with RV64's mature recursive constant emission: the neutral walk
+   over aggregates/initializer slots may be shareable, whereas target
+   directives, relocations, ABI and special bit-field cases remain target
+   owned. Do **not** force a generic emitter on RV64 without separate
+   differential proof. Native `lua_recursive_record` test passed.
+
+**Validation and limitations**:
+- All new x86 acceptance tests and **focused RV64 + AR + LD** regressions have
+  passing immutable run IDs above. The Lua script's full mode explicitly
+  opts in with `LUA_X86_64_SCAN_ALL=1`; standard mode remains fail-fast.
+- Since shared `type.h/type.c`, `parser_type.c`, `ast_verifier.c`,
+  and `target/data_layout.[ch]` changed **after** RV64 seven-way P1 receipt
+  #39115412186, a **new full RV64 Linux 2064/2064 GNU link/QEMU P1**
+  requalification on the final source remains a merge gate. Do not misattribute
+  the earlier receipt to these new shared-source changes.
+- x86 dynamic PIE and SysV `va_list` type-representation limitations,
+  general binary128 arithmetic/call ABI, by-value aggregates, and x86
+  self-hosting are **not** implied by the Lua sample passing. Keep this PR draft.
+- The previously verified feature-only CI dispatch repairs were **temporary**.
+  Before finalizing this branch they were restored exactly to the frozen main
+  workflow blobs; the branch production diff must contain no workflow YAML
+  changes. Historical CI runs are immutable and independently inspectable.
