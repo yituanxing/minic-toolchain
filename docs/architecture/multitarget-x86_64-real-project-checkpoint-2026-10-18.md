@@ -466,3 +466,108 @@ remain in the production PR. The earlier malformed main workflow
 can still produce zero-job status failures independently of compiler behavior.
 Keep PR #524 Draft until remaining source and supported ABI contract gates
 are consciously resolved.
+
+
+## SQLite 3.54.1 — new native x86 real-project frontier (2026-10-18)
+
+**Project selection:** New, substantially larger and more demanding real C
+workload after original upstream tiny-AES/cJSON/zlib/Lua/Luac: the official
+[SQLite download](https://www.sqlite.org/download.html) version **3.54.1**
+(released 2026-10-16), with pristine amalgamation `sqlite3.c` and `sqlite3.h`.
+The exact downloaded ZIP is SHA3-256 authenticated against the **publisher's**
+hash `92281c86e2957f9b9305890f9ac04204caa7b677cc868dc326d942689df28e30`.
+No SQLite source rewrites, fake C declarations, locally invented source files
+substituted for the project, or GCC C object fallback.
+
+**Reusable project harness:** `tests/external/sqlite/probe-x86_64.sh`,
+`make check-x86_64-sqlite-frontier`. The harness uses unmodified SQLite
+with `SQLITE_THREADSAFE=0` and `SQLITE_OMIT_LOAD_EXTENSION` on a native
+x86-64 Ubuntu/glibc environment. It verifies the upstream SHA3, preprocesses
+with original system headers, then compiles the **same preprocessed C**
+through MiniC x86-64. Discovery mode is opt-in:
+```sh
+SQLITE_X86_64_DISCOVERY=1 make MODE=release CFLAGS=-Werror \
+    BUILD_DIR=build/multitarget check-x86_64-sqlite-frontier
+```
+**Important:** a compiler `SQLITE_X86_64_FRONTIER=BLOCKED` is an **expected
+and clearly labelled incomplete observation** in discovery mode; the script
+returns zero only so that unrelated legacy RV64/AR/LD verdicts still run. This
+is **not SQLite pass**. Ordinary (non-discovery) execution returns nonzero on
+the first failure. A valid `SQLITE_X86_64_RUNTIME=PASS` requires a full
+MiniC-compiled `sqlite3.o`, native GNU link, independent GCC build from
+the exact same preprocessed TU, and byte-exact SQL workload including
+transactions, prepared statements, B-tree index, rollback, and integrity check.
+
+**Actual original-source progression:**
+- [First CI #39128010038](https://github.com/yituanxing/minic-toolchain/actions/runs/39128010038):
+  upstream ZIP hash passed; genuine preprocessed SQLite **93,168 lines**,
+  **2,705,806 bytes**. First blocker `sqlite3.i:1370`: glibc
+  `extern _Float32 strtof32(...)`. SQLite source was unmodified.
+- [Follow-up focused #39128364679](https://github.com/yituanxing/minic-toolchain/actions/runs/39128364679):
+  new shared extended floating type identity model passed native GCC
+  differential semantic probes; frontier advanced to `sqlite3.i:1555`
+  `__builtin_bswap16` from glibc `__bswap_16`.
+- [Current focused #39128758993](https://github.com/yituanxing/minic-toolchain/actions/runs/39128758993):
+  parser/Core byte-swap support passed an x86 native test including
+  `__builtin_bswap16/32/64` mixed widths and **single evaluation** of
+  `a[i++]`. SQLite frontier advanced to `sqlite3.i:6640`:
+  `__atomic_store_n((&mem0.nearlyFull),(n>0 && n<=nUsed),0)`.
+  Real Lua 33/33 object and PIE/non-PIE interpreter/luac/GCC-bytecode
+  tests, pinned zlib and existing RV64/AR/LD focused suite also passed.
+  `SQLITE_X86_64_FRONTIER=BLOCKED at=MiniC (not a pass)`.
+  Because these errors occur early during parsing, the observed
+  `maxrss_kb=6172/6308/10984` and near-zero elapsed values **are not**
+  meaningful full SQLite compiler performance benchmarks.
+
+**Shared semantics exposed by this real project:**
+- Real glibc headers need **distinct** `_Float32`, `_Float64`,
+  `_Float32x` and `_Float64x` C type identities, including sizes
+  4/8/8/16 and alignments 4/8/8/16 for the selected x86 target;
+  GCC `__builtin_types_compatible_p` proves these are **not** the
+  same types as `float`, `double`, `double`, `long double`,
+  respectively. Shared `MinicType`, parser, AST verifier and
+  DataLayout now distinguish these. Actual extended-FP arithmetic
+  and call ABI remain unsupported; their declarations and type
+  queries do not imply runtime binary FP support. RV64 continues to
+  reject these x86-specific spellings rather than guessing its ABI.
+- Real glibc `__builtin_bswap16/32/64` demands correct width and
+  **exactly one operand evaluation**. Shared parser and Core Lowering
+  reuse existing Core shift/mask/OR operators, without target-specific
+  x86-only hacks or changing the mature RV64 emitter. Current lowering
+  prioritizes correctness; if a later SQLite runtime hotspot reveals
+  code-size or speed issues, add target-native `bswap` selection
+  **after** source-level profiling rather than speculative optimization.
+
+**RV64 full-source requalification:** The above shared changes modify
+`src/frontend/ast.h` and `src/core/core_lower.c` identities.
+The strict source SHA manifest `docs/ci/native-runtime44-perf4-validated-sha1.txt`
+was refreshed for those **two exact blobs only**. SHA identity alone
+is not evidence of correctness. Fresh
+[seven-shard Linux/QEMU CI #39129097859](https://github.com/yituanxing/minic-toolchain/actions/runs/39129097859)
+**SUCCESS** on the exact current compiler source:
+`GNU_MINIC_SHARD_MERGE=PASS objects=2064 shards=7`,
+`COHORT_SCOPE=FULL_C_UNIVERSE objects=2064`,
+`COHORT_ABI=PASS objects=2064`,
+`COHORT_LINK=REUSED name=full_all_verified selection=prefix:2064`,
+`COHORT_P1=PASS syscalls=12 python_era_oracle=PASS`,
+`COHORT_RESULT=PASS candidate_objects=2064 scope=FULL_C_UNIVERSE same_config=true`.
+The Linux receiver reuses **newly compiled, same-run** 2064 verified objects
+for GNU final link and QEMU P1, not an old image.
+No source files were changed after this full source-qualified run;
+the two temporary testing workflow edits were restored **exactly** to
+main's Git blobs `75744ca2` and `cd9a880a`. No workflow YAML is
+intended in the PR production diff. The malformed legacy main YAML still
+causes unrelated zero-job push checks.
+
+**Next gate:** `__atomic_store_n` is a genuine atomic-memory-operation
+feature, not a generic assignment. Model a target-neutral Core atomic
+store/load with explicit width, alignment, and requested memory order;
+then select target-correct atomic instructions/barriers for x86 and RV64,
+or fail closed on unsupported orders/types. The first observed SQLite
+store requests relaxed order (`0`), but the implementation must not
+silently generalize to all memory orders or assume thread-unsafe compile
+flags make atomic language semantics disappear. Use independent native
+GCC-differential atomic tests and the upstream SQLite frontier before
+adding it, and re-run appropriate RV64 gates on shared-source changes.
+**SQLite database runtime remains unverified until it actually links and
+executes its genuine SQL operations.**
