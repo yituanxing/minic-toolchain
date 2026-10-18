@@ -2395,31 +2395,39 @@ static bool parse_builtin_call_frame_address(MinicParser *parser,
            minic_parser_add_expression(parser, &expression, expression_id);
 }
 
-static bool parse_builtin_huge_val(MinicParser *parser, MinicExpressionId *expression_id) {
+static bool parse_builtin_positive_infinity(MinicParser *parser, MinicExpressionId *expression_id) {
     MinicExpression expression;
     MinicSourcePosition begin;
+    bool is_float;
 
+    /* SQLite 3.54.1 sqlite3Fp10Convert2() consumes __builtin_inff().
+     * The existing __builtin_huge_val() is binary64; the *f form must
+     * preserve binary32 storage and be promoted only by C conversions. */
     if (parser == NULL || expression_id == NULL ||
-        !generic_token_text_equals(parser, "__builtin_huge_val")) {
+        (!generic_token_text_equals(parser, "__builtin_huge_val") &&
+         !generic_token_text_equals(parser, "__builtin_inf") &&
+         !generic_token_text_equals(parser, "__builtin_inff"))) {
         return false;
     }
+    is_float = generic_token_text_equals(parser, "__builtin_inff");
     begin = parser->current.span.begin;
     if (!minic_parser_advance(parser) ||
         !minic_parser_expect(
-            parser, MINIC_TOKEN_LPAREN, "expected '(' after __builtin_huge_val")) {
+            parser, MINIC_TOKEN_LPAREN, "expected '(' after positive infinity builtin")) {
         return false;
     }
     if (parser->current.kind != MINIC_TOKEN_RPAREN) {
-        minic_parser_error(parser, "__builtin_huge_val takes no arguments");
+        minic_parser_error(parser, "positive infinity builtin takes no arguments");
         return false;
     }
     (void)memset(&expression, 0, sizeof(expression));
     expression.kind = MINIC_EXPRESSION_FLOATING;
     expression.span.begin = begin;
     expression.span.end = parser->current.span.end;
-    expression.type = minic_type_double();
+    expression.type = is_float ? minic_type_float() : minic_type_double();
     expression.value_category = MINIC_VALUE_RVALUE;
-    expression.value.floating_bits = UINT64_C(0x7ff0000000000000);
+    expression.value.floating_bits = is_float
+        ? UINT64_C(0x7f800000) : UINT64_C(0x7ff0000000000000);
     return minic_parser_advance(parser) &&
            minic_parser_add_expression(parser, &expression, expression_id);
 }
@@ -2971,8 +2979,10 @@ static bool parse_primary(MinicParser *parser, MinicExpressionId *expression_id,
         }
         return finish_value_expression(parser, primary_id, decay_array, expression_id);
     }
-    if (generic_token_text_equals(parser, "__builtin_huge_val")) {
-        if (!parse_builtin_huge_val(parser, &primary_id) ||
+    if (generic_token_text_equals(parser, "__builtin_huge_val") ||
+        generic_token_text_equals(parser, "__builtin_inf") ||
+        generic_token_text_equals(parser, "__builtin_inff")) {
+        if (!parse_builtin_positive_infinity(parser, &primary_id) ||
             !minic_parser_parse_postfix(parser, primary_id, &primary_id)) {
             return false;
         }

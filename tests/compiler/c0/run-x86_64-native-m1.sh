@@ -492,6 +492,31 @@ int main(void) {
 EOF
 check_exit sqlite_bswap 42
 
+# SQLite 3.54.1 sqlite3Fp10Convert2() real upstream pressure:
+# __builtin_inff must be a binary32 +infinity, not a double or finite max.
+# Also retain previously supported binary64 __builtin_huge_val().
+cat > "$tempdir/sqlite_infinity.i" <<'EOF'
+_Static_assert(__builtin_types_compatible_p(__typeof__(__builtin_inff()), float),
+               "builtin_inff returns float");
+_Static_assert(__builtin_types_compatible_p(__typeof__(__builtin_inf()), double),
+               "builtin_inf returns double");
+float f_inf(void) { return __builtin_inff(); }
+double d_inf(void) { return __builtin_inf(); }
+double d_huge(void) { return __builtin_huge_val(); }
+int main(void) {
+    volatile float f = f_inf();
+    volatile double d = d_inf();
+    if (!(f > 3.4028234e38f) || !(d > 1.7976931348623157e308)) return 1;
+    if (f != f || d != d) return 2;
+    if (!(d_huge() == d)) return 3;
+    if ((double)f != d) return 4;
+    return 42;
+}
+EOF
+check_exit sqlite_infinity 42
+"$HOST_CC" -std=gnu11 -x c -c "$tempdir/sqlite_infinity.i" -o "$tempdir/sqlite_infinity-gcc.o"
+echo "PASS: x86 SQLite builtin_inff/inf/huge_val type, infinity, and float ABI"
+
 # Floating values use raw bits in Core slots; comparisons must reject NaNs.
 cat > "$tempdir/double_core.i" <<'EOF'
 int main(void) {
