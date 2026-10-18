@@ -917,8 +917,9 @@ bool minic_parser_parse_parameter_list(MinicParser *parser,
     /* Parameter lists can be parsed with parameter_name_spans == NULL
      * (nested function-pointer and prototype declarators). Keep a local
      * name table so C99 outer array bounds still see earlier parameters. */
-    MinicSourceSpan prior_parameter_names[MINIC_MAX_FUNCTION_PARAMETERS] = {{0}};
+    MinicSourceSpan prior_parameter_names[MINIC_MAX_FUNCTION_PARAMETERS];
 
+    (void)memset(prior_parameter_names, 0, sizeof(prior_parameter_names));
     for (;;) {
         MinicSourceSpan declarator_name_span;
         MinicType parameter_type;
