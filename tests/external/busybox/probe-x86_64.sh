@@ -102,3 +102,39 @@ for file in coreutils/cat.c coreutils/echo.c; do
 done
 echo "BUSYBOX_X86_64_FRONTIER=SCOPED_TU objects=$passed total=2 blocked=$blocked full_MiniC_busybox=NOT_TESTED"
 if test "$blocked" -ne 0 && test "$(printenv BUSYBOX_X86_64_DISCOVERY || true)" != 1; then exit 1; fi
+
+
+# Escalate from isolated translation-unit acceptance to the real BusyBox
+# GNU Kbuild link, substituting ONLY the two proven MiniC-generated
+# applet objects. All other BusyBox objects remain the original GCC build.
+# Rebuild parent composite objects and executable; do not silently
+# reuse the already-GCC-linked baseline busybox.
+if test "$passed" -eq 2 && test "$blocked" -eq 0; then
+    for stem in cat echo; do
+        if ! test -f "$src/coreutils/$stem.o"; then
+            echo "BUSYBOX_X86_64_MIXED=BLOCKED stage=baseline-object-missing applet=$stem" >&2
+            if test "$(printenv BUSYBOX_X86_64_DISCOVERY || true)" = 1; then exit 0; fi
+            exit 1
+        fi
+        cp "$src/coreutils/$stem.o" "$work/$stem.gnu.o"
+        cp "$work/$stem.minic.o" "$src/coreutils/$stem.o"
+    done
+    rm -f "$src/coreutils/built-in.o" "$src/coreutils/lib.a" \
+          "$src/busybox_unstripped" "$src/busybox"
+    if ! (cd "$src" && make -j2 CC="$HOST_CC" busybox \
+          >"$work/mixed.out" 2>"$work/mixed.err"); then
+        echo "BUSYBOX_X86_64_MIXED=BLOCKED stage=Kbuild-link source=cat,echo" >&2
+        tail -n 65 "$work/mixed.err" "$work/mixed.out" >&2 || true
+        if test "$(printenv BUSYBOX_X86_64_DISCOVERY || true)" = 1; then exit 0; fi
+        exit 1
+    fi
+    if ! "$src/busybox" cat "$work/fixture.txt" >"$work/cat.mixed" ||
+       ! cmp -s "$work/cat.out" "$work/cat.mixed" ||
+       ! "$src/busybox" echo busybox-real-project >"$work/echo.mixed" ||
+       ! cmp -s "$work/echo.out" "$work/echo.mixed"; then
+        echo "BUSYBOX_X86_64_MIXED=BLOCKED stage=applet-runtime" >&2
+        if test "$(printenv BUSYBOX_X86_64_DISCOVERY || true)" = 1; then exit 0; fi
+        exit 1
+    fi
+    echo "BUSYBOX_X86_64_MIXED=PASS applets=cat,echo objects=MiniC x86 remainder=GCC GNU_Kbuild=1 runtime=byte-exact"
+fi

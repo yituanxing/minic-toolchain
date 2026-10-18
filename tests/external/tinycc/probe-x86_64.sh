@@ -223,6 +223,15 @@ for case_name in 00_assignment 03_struct 04_for 05_array 07_function \
          >>"$work/tests2.$case_name.mini.log" 2>&1; then
         echo "TINYCC_X86_64_TESTS2=BLOCKED case=$case_name stage=compile-or-link" >&2
         tail -n 30 "$work/tests2.$case_name.mini.log" >&2
+        # Compare the ORIGINAL compiler's effective system include paths
+        # with the MiniC-built compiler. Do not add a forced -I for
+        # /usr/include/x86_64-linux-gnu: it would mask the real difference.
+        "$src/tcc" -vv -B"$src" -I"$src/include" -I"$src"            -c "$input" -o "$work/diagnose.ref.o"            >"$work/tcc.vv.ref" 2>&1 || true
+        "$work/tcc-minic" -vv -B"$src" -I"$src/include" -I"$src"            -c "$input" -o "$work/diagnose.mini.o"            >"$work/tcc.vv.mini" 2>&1 || true
+        echo "TINYCC_X86_64_DIAG=original-GCC-compiler-search" >&2
+        tail -n 45 "$work/tcc.vv.ref" >&2
+        echo "TINYCC_X86_64_DIAG=MiniC-compiler-search" >&2
+        tail -n 45 "$work/tcc.vv.mini" >&2
         if test "$(printenv TINYCC_X86_64_DISCOVERY || true)" = 1; then exit 0; fi
         exit 1
     fi
