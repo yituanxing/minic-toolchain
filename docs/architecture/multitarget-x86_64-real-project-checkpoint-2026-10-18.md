@@ -260,3 +260,37 @@ MiniAS/MiniLD claim, or LLVM/GCC fallback compiler for a TU.
   Before finalizing this branch they were restored exactly to the frozen main
   workflow blobs; the branch production diff must contain no workflow YAML
   changes. Historical CI runs are immutable and independently inspectable.
+
+## New RV64 complete Linux acceptance after shared Lua-driven changes (2026-10-18)
+
+**Immutable full run:** [#39123610218](https://github.com/yituanxing/minic-toolchain/actions/runs/39123610218), candidate Git commit
+`6fe70245d241d4bb69db660f497529aa200552ce` (only the
+**temporarily parseable, previously accepted verification YAML** differs from
+the eventual production feature tree). Latest shared type, frontend parser,
+AST verification, DataLayout and all RV64 compiler sources are identical to
+the subsequently restored production tree.
+
+- All **seven** independent actual Linux 6.6.143 Kbuild C-object producer jobs
+  succeeded, each proving native compiler identity/ABI and fresh compilation
+  (six groups of 295, one of 294 = **2064/2064**).
+- Receiver successfully authenticated the same-run seven-shard union:
+  `GNU_MINIC_SHARD_MERGE=PASS objects=2064 shards=7`,
+  `COHORT_SCOPE=FULL_C_UNIVERSE objects=2064`,
+  `COHORT_ABI=PASS objects=2064`.
+- GNU final link uses newly produced same-run verified objects, not an older
+  binary: `COHORT_LINK=REUSED name=full_all_verified selection=prefix:2064`.
+- Original QEMU P1: `COHORT_P1=PASS name=full_all_verified syscalls=12 python_era_oracle=PASS`;
+  `COHORT_RESULT=PASS candidate_objects=2064 scope=FULL_C_UNIVERSE same_config=true`.
+- Exact native source SHA identity manifest was checked before the run: all
+  seven frozen manifest entries matched the current feature blob identities.
+  Changed shared `_Float128`/DataLayout/parser source files were recompiled
+  during fresh seven-shard compiler builds and thus covered by this execution.
+- After success, the temporary Linux workflow was restored to main's exact
+  Git blob `75744ca2ecc2c1b8b9bc745a82c28b339d5f4fbf`.
+  The production PR contains no workflow modification.
+
+**Scope:** Real RV64 MiniC compilation of 2064 Linux C files, GNU final
+link, and 12/12 QEMU P1. This is not a new nine-tool self-hosting acceptance.
+Independent x86 Lua full 33/33 original-TU compilation, native linking,
+and runtime GCC differential continue to be recorded above. x86 SysV
+aggregate ABI, PIE and `va_list` type correctness remain separate gates.
