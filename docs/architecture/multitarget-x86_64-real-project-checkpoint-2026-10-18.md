@@ -794,3 +794,49 @@ whose feature needs exercise a genuinely missing shared or backend seam.
 Do not refactor to a hypothetical generalized multi-backend pass before
 a concrete differential failure. Always reuse focused regressions and
 restore the temporary workflow to main after the measurement.
+
+## TinyCC 0.9.27 real-program pressure checkpoint
+
+The next frozen upstream project is **TinyCC 0.9.27**, pinned to
+`TinyCC/tinycc@d348a9a51d32cece842b7885d27a411436d7887b`.
+`tests/external/tinycc/probe-x86_64.sh` verifies original upstream file
+Git hashes, runs original `./configure` and a full GCC baseline `make tcc`,
+then preprocesses and compiles the original 10-TU x86_64 target with MiniC.
+No modified TinyCC source or GCC-substituted MiniC objects. **Discovery mode
+reports blockers rather than qualifying a full TinyCC build.**
+
+- [#39141675330](https://github.com/yituanxing/minic-toolchain/actions/runs/39141675330)
+  confirmed original `tcc.c` (5,746 preprocessed lines) compiled into a
+  MiniC-produced x86 object, with the pristine GCC-built TCC baseline.
+- [#39141937095](https://github.com/yituanxing/minic-toolchain/actions/runs/39141937095)
+  expanded discovery to all 10 TUs: **7/10 objects passed**, and distinct
+  real blockers were `tccpp.c` (call ABI), `tccgen.c` (mixed tentative
+  declarations), and `x86_64-gen.c` (GNU predefined function spelling,
+  followed by dynamic Core stack allocation).
+- [#39142580053](https://github.com/yituanxing/minic-toolchain/actions/runs/39142580053)
+  validated mixed global array/pointer declaration regression and
+  `__PRETTY_FUNCTION__` lexical-name support; source-driven TinyCC moved
+  into more specific errors.
+- [#39142873168](https://github.com/yituanxing/minic-toolchain/actions/runs/39142873168)
+  **SUCCESS for focused CI and independent regression owners**,
+  validates new x86 `DYNAMIC_STACK_ALLOC` native test exit=42 and moves
+  original TinyCC to **8/10 compiled + assembled objects**. The newly
+  passing original TU is `x86_64-gen.c`. The current precise blockers:
+  `tccpp.c::parse_number` direct call `__extenddftf2`, requiring a
+  correctly represented x86-64 long-double return ABI; and
+  `tccgen.c` at preprocessed line 5269,
+  `} *cur_switch;`, a record definition plus pointer declarator.
+  The x86 long-double ABI must **not** be silently treated as binary64.
+  The record-declarator parser issue should be solved using existing
+  general declaration handling, not a TinyCC-specific rewrite.
+
+The same #39142873168 job confirms unchanged original SQLite 3.54.1 full
+MiniC x86 object and GCC byte-exact SQL runtime, Lua, zlib and eight
+independent focused RV64/AR/LD checks. **TinyCC has NOT yet linked or
+executed a fully MiniC-built compiler**, and a fresh full RV64 Linux
+2064/QEMU P1 has not been re-run on this source.
+
+The temporary focused workflow is restored byte-for-byte to main
+(`cd9a880a5a707f28b5ea63c364c1844ab35e1c56`), preserving no
+workflow changes in the draft PR. The legacy unrelated broken baseline
+workflow is not a source-code failure qualification.
