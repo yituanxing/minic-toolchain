@@ -696,3 +696,50 @@ Neither fake SQLite modifications nor broad ABI assumptions are acceptable.
 For every shared Core source change, qualify RV64 with an appropriately scoped
 oracle; the most recent full Linux 2064/QEMU P1 result predates these changes.
 The temporary focused CI workflow was restored byte-for-byte to `main`.
+
+
+## SQLite x86 ABI, integer primitives and 128-bit gate (2026-10-18)
+
+All receipts below compile the **unchanged** official SQLite 3.54.1
+amalgamation (93,168 preprocessed lines, pinned SHA3-256 already above).
+Focused CI success is **not** SQLite full compile/object/runtime success.
+
+- [#39138001163](https://github.com/yituanxing/minic-toolchain/actions/runs/39138001163):
+  opt-in x86 call diagnostics exposed `sqlite3RunParser` -> `sqlite3Parser`
+  with two scalar VALUE arguments and a third record OBJECT parameter.
+  `Token` has a pointer at byte 0 and u32 at byte 8 (size 16).
+- [#39138493433](https://github.com/yituanxing/minic-toolchain/actions/runs/39138493433):
+  x86 SysV two-INTEGER-eightbyte record calling subset passed:
+  MiniC-to-MiniC, GNU caller -> MiniC callee, MiniC caller -> GNU callee,
+  and whole-object stack fallback after six GPR arguments. The exact
+  supported record shape is deliberately bounded; there is no claim of
+  arbitrary SysV aggregate classification. Real SQLite advanced to
+  `sqlite3LogEst`, Core kind 22, `INTEGER_CLZ`.
+- [#39138706284](https://github.com/yituanxing/minic-toolchain/actions/runs/39138706284):
+  x86 CLZ/CTZ for typed unsigned 8/16/32/64-bit Core values via baseline
+  BSR/BSF (no LZCNT/BMI requirement) passed native boundary tests. Real
+  SQLite advanced to `sqlite3AddInt64` and kind 15, INTEGER_OVERFLOW.
+- [#39138951771](https://github.com/yituanxing/minic-toolchain/actions/runs/39138951771):
+  checked add/subtract/multiply for matched 32/64-bit result types, signed
+  and unsigned, with stored result and overflow boolean from target flags,
+  passed the native overflow cases. Real SQLite advanced to
+  `sqlite3Multiply128`, Core kind 16, INTEGER_CONVERSION, requiring
+  `__uint128_t` semantics. Lua 33/33/luac, original zlib, and independent
+  RV64 scoped suites continue PASS in the same focused run.
+
+**Current new architecture boundary:** SQLite's `src/util.c` uses
+`__uint128_t` for `sqlite3Multiply128` and `sqlite3Multiply160`:
+unsigned 64->128 conversion, 128-bit multiplication, addition, shifts and
+truncation back to 64 bits. x86 M1 uses **one 8-byte frame slot for each
+Core scalar value**; an isolated acceptance of kind 16 would silently
+truncate the upper limb. Do not implement it that way. Next design typed
+two-limb value storage/reloads and the corresponding Core op lowering in
+x86, with GCC-differential tests for nonzero high halves and crossing
+64-bit boundaries before retrying original SQLite. Preserve target-neutral
+Core representation; keep RV64 logic and x86 ABI distinct.
+
+The temporary focused CI workflow is restored exactly to the main blob
+`cd9a880a5a707f28b5ea63c364c1844ab35e1c56`. Neither SQLite full
+object nor database transactions/index/rollback/integrity tests have passed.
+This latest x86-only extension does not replace a newly qualified full
+RV64 Linux 2064/QEMU P1 run on the updated branch.

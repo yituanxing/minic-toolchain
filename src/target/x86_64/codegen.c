@@ -1661,7 +1661,7 @@ static bool x86_emit_instruction(FILE *out, const MinicC0Program *program,
             if (getenv("MINIC_X86_CALL_TRACE") != NULL)
                 (void)fprintf(stderr,
                     "X86_CALL_GATE function=%s callee=%s stage=record-result "
-                    "result_object=%" PRIu32 " arg_count=%zu fixed=%zu\\n",
+                    "result_object=%" PRIu32 " arg_count=%zu fixed=%zu\n",
                     fn->name, callee->name != NULL ? callee->name : "?",
                     ins->value.call.result_object, count, callee->parameter_count);
             return false;
@@ -1674,14 +1674,14 @@ static bool x86_emit_instruction(FILE *out, const MinicC0Program *program,
                 size_t j;
                 (void)fprintf(stderr,
                     "X86_CALL_GATE function=%s callee=%s stage=arguments "
-                    "count=%zu fixed=%zu variadic=%d\\n",
+                    "count=%zu fixed=%zu variadic=%d\n",
                     fn->name, callee->name, count, callee->parameter_count,
                     callee->is_variadic ? 1 : 0);
                 for (j = 0U; j < count && begin + j < fn->call_argument_count; ++j) {
                     const MinicCoreCallArgument *arg = &fn->call_arguments[begin + j];
                     (void)fprintf(stderr,
                         "X86_CALL_ARG callee=%s index=%zu kind=%d "
-                        "value=%" PRIu32 " param_record=%d\\n",
+                        "value=%" PRIu32 " param_record=%d\n",
                         callee->name, j, (int)arg->kind,
                         arg->kind == MINIC_CORE_CALL_ARGUMENT_VALUE
                             ? arg->value.value_id : arg->value.object_id,
