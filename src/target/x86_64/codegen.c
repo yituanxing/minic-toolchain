@@ -2013,8 +2013,22 @@ static bool x86_emit_instruction(FILE *out, const MinicC0Program *program,
              minic_type_is_long_double(callee->parameter_types[0]))) {
             if (strncmp(callee->name, "__", 2U) == 0 &&
                 (strstr(callee->name, "tf") != NULL ||
-                 strstr(callee->name, "TF") != NULL))
-                return x86_emit_x87_core_helper(out, fn, frame, callee, ins);
+                 strstr(callee->name, "TF") != NULL)) {
+                bool handled = x86_emit_x87_core_helper(out, fn, frame, callee, ins);
+                if (!handled && getenv("MINIC_X86_CALL_TRACE") != NULL)
+                    (void)fprintf(stderr,
+                        "X86_CALL_GATE function=%s callee=%s stage=x87-helper "
+                        "return_ld=%d argc=%zu first_ld=%d\n",
+                        fn->name, callee->name,
+                        minic_type_is_long_double(callee->return_type) ? 1 : 0,
+                        count,
+                        count != 0U &&
+                        fn->call_arguments[begin].kind == MINIC_CORE_CALL_ARGUMENT_VALUE &&
+                        minic_type_is_long_double(
+                            fn->values[fn->call_arguments[begin].value.value_id].type)
+                            ? 1 : 0);
+                return handled;
+            }
         }
         if (!x86_emit_call_arguments(out, program, target, fn, frame,
                                      begin, count, callee->parameter_types,
