@@ -1244,7 +1244,7 @@ static bool x86_emit_instruction(FILE *out, const MinicC0Program *program,
                         ins->value.integer_value) < 0 ||
                 fprintf(out, minic_type_is_signed_integer(ins->type)
                                     ? "  movq %%rax, %%rdx\n  sarq $63, %%rdx\n"
-                                    : "  xorq %%edx, %%edx\n") < 0)
+                                    : "  xorq %%rdx, %%rdx\n") < 0)
                 return false;
             return x86_i128_store(out, frame, ins->result, "%rax", "%rdx");
         }
@@ -1459,7 +1459,7 @@ static bool x86_emit_instruction(FILE *out, const MinicC0Program *program,
                     !x86_value_load(out, frame, source, "%rax") ||
                     fprintf(out, signed_source
                                 ? "  movq %%rax, %%rdx\n  sarq $63, %%rdx\n"
-                                : "  xorq %%edx, %%edx\n") < 0)
+                                : "  xorq %%rdx, %%rdx\n") < 0)
                     return false;
             }
             return x86_i128_store(out, frame, ins->result, "%rax", "%rdx");
@@ -1717,7 +1717,7 @@ static bool x86_emit_instruction(FILE *out, const MinicC0Program *program,
                         "2:\n",
                         signed_value ? "sarq" : "shrq",
                         signed_value ? "sarq" : "shrq",
-                        signed_value ? "  sarq $63, %%rdx" : "  xorq %%edx, %%edx") < 0)
+                        signed_value ? "  sarq $63, %rdx" : "  xorq %rdx, %rdx") < 0)
                         return false;
                 } else if (fprintf(out,
                         "  cmpq $64, %%rcx\n"
@@ -1729,7 +1729,7 @@ static bool x86_emit_instruction(FILE *out, const MinicC0Program *program,
                         "  subq $64, %%rcx\n"
                         "  movq %%rax, %%rdx\n"
                         "  shlq %%cl, %%rdx\n"
-                        "  xorq %%eax, %%eax\n"
+                        "  xorq %%rax, %%rax\n"
                         "2:\n") < 0)
                     return false;
                 return x86_i128_store(out, frame, ins->result, "%rax", "%rdx");
