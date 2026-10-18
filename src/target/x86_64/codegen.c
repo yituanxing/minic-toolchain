@@ -1202,9 +1202,13 @@ static bool x86_emit_x87_core_helper(FILE *out, const MinicCoreFunction *fn,
     if (result_ld) {
         const char *instruction =
             strcmp(name, "__addtf3") == 0 ? "faddp" :
-            strcmp(name, "__subtf3") == 0 ? "fsubp" :
+            /* GAS AT&T st(0),st(1) spellings reverse the apparently
+             * intuitive subtraction/division order.  After fld(left),
+             * fld(right), fsubrp/fdivrp compute LEFT op RIGHT.
+             * The former fsubp/fdivp silently computed RIGHT op LEFT. */
+            strcmp(name, "__subtf3") == 0 ? "fsubrp" :
             strcmp(name, "__multf3") == 0 ? "fmulp" :
-            strcmp(name, "__divtf3") == 0 ? "fdivp" : NULL;
+            strcmp(name, "__divtf3") == 0 ? "fdivrp" : NULL;
         if (instruction == NULL) return false;
         return fprintf(out, "  %s %%st, %%st(1)\n", instruction) >= 0 &&
                x86_x87_store(out, frame, ins->result);

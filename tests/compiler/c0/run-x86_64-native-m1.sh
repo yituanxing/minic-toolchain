@@ -173,7 +173,11 @@ int main(void) {
     long double b = a + zero;
     if ((double)b != 1.25) return 1;
     if ((double)(-a) != -1.25) return 2;
-    if ((double)(-0.0L) != -0.0) return 3;
+    volatile long double nine = 9.0L;
+    volatile long double two = 2.0L;
+    if ((double)(nine / two) != 4.5) return 3;
+    if ((double)(two - nine) != -7.0) return 4;
+    if ((double)(-0.0L) != -0.0) return 5;
     return 42;
 }
 EOF
