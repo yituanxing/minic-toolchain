@@ -3745,6 +3745,18 @@ static bool record_keyword_starts_standalone_declaration(MinicParser *parser, bo
             }
         } while (brace_depth != 0U);
     }
+    /* GNU C allows type attributes after a complete record definition,
+     * e.g. struct grep_globals { ... } __attribute__((may_alias));
+     * Look through those attribute lists before distinguishing a standalone
+     * type declaration from a declaration with an object declarator.
+     * The actual parser will validate and apply all type attributes. */
+    {
+        MinicParsedAttributeList type_attributes;
+        (void)memset(&type_attributes, 0, sizeof(type_attributes));
+        if (!minic_parser_collect_gnu_attribute_lists(&probe, &type_attributes)) {
+            return false;
+        }
+    }
     *is_standalone = probe.current.kind == MINIC_TOKEN_SEMICOLON;
     return true;
 }

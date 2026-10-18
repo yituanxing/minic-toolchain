@@ -348,6 +348,22 @@ if "$MINIC_CC" --target=x86_64-linux -S     "$tempdir/busybox_regex_unknown_boun
 fi
 echo "PASS: reject unknown array-parameter bound"
 
+# BusyBox grep.c uses a complete GNU attributed record declaration
+# without a global object. Such declarations must not be routed to
+# the function/object declarator parser.
+cat > "$tempdir/busybox_grep_record_type_attribute.i" <<'EOF'
+struct grep_state { int a; unsigned char flag; } __attribute__((__may_alias__));
+struct packed_state { char ch; int number; } __attribute__((packed));
+struct extra { int value; } __attribute__((__may_alias__)) *extra_ptr;
+int main(void) {
+    struct grep_state state = {40, 2};
+    struct packed_state packed = {1, 4};
+    if (sizeof(packed) != 5 || extra_ptr != 0) return 1;
+    return state.a + state.flag;
+}
+EOF
+check_exit busybox_grep_record_type_attribute 42
+
 # TinyCC tccgen.c declares an array and two pointers in the same
 # tentative file-scope definition. This is standard C, not a workaround.
 cat > "$tempdir/tinycc_mixed_tentative.i" <<'EOF'
