@@ -481,6 +481,37 @@ static bool x86_emit_flat_record_array(FILE *out, const MinicC0Program *program,
            matched_union_selections == object->union_selection_count;
 }
 
+/* Lua's HOOKKEY/CLIBS/progname pointers are zero-filled objects whose
+ * initializer is represented by an ELF relocation, not by a scalar literal
+ * slot. The shared DataLayout validates each relocation byte offset. Keep
+ * symbol expression emission target-owned; do not invent a generic ABI. */
+static bool x86_emit_zero_relocation_global(FILE *out, const MinicC0Program *program,
+                                            const MinicTargetInfo *target,
+                                            const MinicGlobalObject *obj,
+                                            size_t storage_size) {
+    size_t cursor = 0U, i, width;
+    if (out == NULL || program == NULL || target == NULL || obj == NULL ||
+        !obj->is_zero_initialized || obj->initializer_count != 0U ||
+        obj->relocation_count == 0U ||
+        (!minic_type_is_pointer(obj->type) && !minic_type_is_array(obj->type)))
+        return false;
+    width = target->data_layout->pointer_size;
+    if (width != 8U) return false;
+    for (i = 0U; i < obj->relocation_count; ++i) {
+        const MinicGlobalRelocation *reloc = &obj->relocations[i];
+        size_t offset;
+        if (!minic_data_layout_global_relocation_offset(
+                target->data_layout, program, obj, reloc, &offset) ||
+            offset < cursor || offset > storage_size ||
+            width > storage_size - offset ||
+            fprintf(out, "  .zero %zu\n", offset - cursor) < 0 ||
+            !x86_emit_relocation(out, program, target, reloc, width))
+            return false;
+        cursor = offset + width;
+    }
+    return fprintf(out, "  .zero %zu\n", storage_size - cursor) >= 0;
+}
+
 /* First real-project pressure point: tiny-AES declares read-only byte tables.
  * Emit only plain scalar/array initializers; aggregate/relocation cases remain
  * explicit failures until a project requires them. */
@@ -547,6 +578,10 @@ static bool x86_emit_global(FILE *out, const MinicC0Program *program,
     if ((obj->is_zero_initialized || obj->is_tentative) &&
         obj->initializer_count == 0U && obj->relocation_count == 0U) {
         if (fprintf(out, "  .zero %zu\n", storage_size) < 0) return false;
+    } else if (obj->relocation_count != 0U && obj->is_zero_initialized &&
+               obj->initializer_count == 0U) {
+        if (!x86_emit_zero_relocation_global(
+                out, program, target, obj, storage_size)) return false;
     } else if (minic_type_is_record(obj->type)) {
         if (!x86_emit_record_global(out, program, target, obj, storage_size)) return false;
     } else if (array_of_records) {

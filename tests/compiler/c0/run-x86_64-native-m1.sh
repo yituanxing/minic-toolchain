@@ -75,6 +75,19 @@ int main(void) { return table[0] + table[1]; }
 EOF
 check_exit global 42
 
+# Lua 5.5.0 pressure point: string/global addresses may be encoded as
+# zero-filled pointer objects with one relocation and *no* literal slot.
+cat > "$tempdir/lua_pointer_globals.i" <<'EOF'
+static const char text[] = "Lua";
+static const char *progname = "lua";
+static const char *const hook_key = text;
+int main(void) {
+    return progname[0] == 'l' && progname[2] == 'a' &&
+           hook_key[0] == 'L' && hook_key[2] == 'a' ? 42 : 0;
+}
+EOF
+check_exit lua_pointer_globals 42
+
 # cJSON pressure point: record layout and function pointer relocations.
 cat > "$tempdir/record.i" <<'EOF'
 struct Pair { int a; int b; };
