@@ -644,3 +644,55 @@ memory-order guarantees, fabricate SQLite coverage, or change the original
 SQLite source. Both temporary focused and Linux workflow configurations
 were restored byte-for-byte to the original `main` versions after the
 immutable successful runs, leaving no workflow YAML diff in PR #524.
+
+
+## SQLite x86-64 real-source checkpoints after relaxed atomics (2026-10-18)
+
+Pristine upstream SQLite 3.54.1 remains verified by SHA3-256
+`92281c86e2957f9b9305890f9ac04204caa7b677cc868dc326d942689df28e30`;
+the immutable preprocessed TU is 93,168 lines. Discovery mode is explicitly
+**not** a compiler success, even when the CI owner job is green.
+
+- [#39135606151](https://github.com/yituanxing/minic-toolchain/actions/runs/39135606151):
+  GNU `__builtin_inff`, `__builtin_inf`, and `__builtin_huge_val` verified by
+  x86 native tests; SQLite advanced to line 86,538 at relaxed stores to function
+  and object pointers.
+- [#39136016221](https://github.com/yituanxing/minic-toolchain/actions/runs/39136016221):
+  frontend, AST verifier, Core lowering, Core IR verifier and x86 emission
+  accepted typed relaxed atomic loads/stores of pointer objects, including
+  callable function pointers. Real SQLite then exposed a Core verification failure
+  inside `sqlite3_soft_heap_limit64`.
+- [#39136352121](https://github.com/yituanxing/minic-toolchain/actions/runs/39136352121):
+  opt-in Core instruction verifier diagnostics identified an atomic store
+  at line 6,640 with a cross-basic-block operand availability violation.
+  The earlier frontend blocker had masked this independently existing issue.
+- [#39136726398](https://github.com/yituanxing/minic-toolchain/actions/runs/39136726398):
+  reuse the ordinary scalar assignment spill/reload seam for relaxed atomic
+  stores across short-circuit CFG. Native short-circuit and pointer tests passed.
+  Real SQLite proceeded to `sqlite3Config`, a nested initialized record global.
+- [#39137004013](https://github.com/yituanxing/minic-toolchain/actions/runs/39137004013):
+  reuse the existing x86 recursive global-initializer emitter for nested records;
+  `sqlite3Config` cleared. The next blocker, `aXformType`, was an array of
+  records with embedded character arrays.
+- [#39137193731](https://github.com/yituanxing/minic-toolchain/actions/runs/39137193731):
+  recurse through arrays of records with extra flattened initializer slots;
+  `aXformType` cleared. The next blocker was SQLite's `zeroItem`.
+- [#39137426742](https://github.com/yituanxing/minic-toolchain/actions/runs/39137426742):
+  relocation-free, all-zero record initializers now emit the exact DataLayout
+  storage size as zeros, with an independent bit-field/nested-field regression.
+  Real SQLite passed this global-emission gate and reached x86 instruction
+  selection: `x86-64 Core instruction unsupported: function sqlite3RunParser, kind 47`.
+  Focused x86, Lua 33/33 + native luac, zlib, and independent RV64 regressions
+  succeeded; SQLite **full object and SQL runtime remain BLOCKED**.
+
+`kind 47` is `MINIC_CORE_INSTRUCTION_CALL`, not an unknown Core opcode.
+The x86 backend already emits ordinary scalar calls. Its direct-call path
+currently rejects aggregate result objects, and its argument dispatcher rejects
+object-form arguments. Next investigate the **exact failing callee and argument
+or result class** in `sqlite3RunParser`, then implement only the required
+SysV x86-64 ABI classification/placement with native GCC-differential tests.
+Do not infer that record ABI is the exact cause without the targeted trace.
+Neither fake SQLite modifications nor broad ABI assumptions are acceptable.
+For every shared Core source change, qualify RV64 with an appropriately scoped
+oracle; the most recent full Linux 2064/QEMU P1 result predates these changes.
+The temporary focused CI workflow was restored byte-for-byte to `main`.
