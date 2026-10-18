@@ -62,7 +62,7 @@ static void append_rv64_linux_musl_predefines(char **arguments,
 
 static void usage(FILE *out, const char *argv0) {
     fprintf(out,
-            "usage: %s [-S|-c] [-ffreestanding|-fhosted] [-ffunction-sections|-fno-function-sections] [-static] "
+            "usage: %s [-S|-c] [--target=riscv64-linux|x86_64-linux] [-ffreestanding|-fhosted] [-ffunction-sections|-fno-function-sections] [-static] "
             "[-nostdlib] [-nostartfiles] [-nodefaultlibs] [-nostdinc] "
             "[--sysroot DIR] [-DNAME[=VALUE]] [-UNAME] [-IDIR] "
             "[-isystem DIR] [-include FILE] [-LDIR] [-lNAME] "
@@ -374,6 +374,8 @@ int main(int argc, char **argv) {
     bool no_defaultlibs = false;
     bool no_stdinc = false;
     bool function_sections = false;
+    const char *target_name = "riscv64-linux";
+    bool target_given = false;
     char *cpp = NULL;
     char *cc = NULL;
     char *as = NULL;
@@ -397,6 +399,20 @@ int main(int argc, char **argv) {
             mode = MINIC_DRIVER_ASSEMBLY;
         } else if (strcmp(argument, "-c") == 0) {
             mode = MINIC_DRIVER_COMPILE;
+        } else if (strcmp(argument, "--target") == 0) {
+            if (target_given || ++index >= argc) {
+                usage(stderr, argv[0]);
+                return 2;
+            }
+            target_name = argv[index];
+            target_given = true;
+        } else if (strncmp(argument, "--target=", 9U) == 0) {
+            if (target_given) {
+                usage(stderr, argv[0]);
+                return 2;
+            }
+            target_name = argument + 9U;
+            target_given = true;
         } else if (strcmp(argument, "-ffreestanding") == 0) {
             hosted = false;
         } else if (strcmp(argument, "-fhosted") == 0) {
@@ -505,6 +521,18 @@ int main(int argc, char **argv) {
         }
     }
 
+    /* The staged driver still owns RV64 preprocessing, assembly and linking.
+     * Never run its RV64 pipeline for x86-64 while the native x86 backend and
+     * target-specific surrounding tools are not yet wired. */
+    if (strcmp(target_name, "riscv64-linux") != 0) {
+        if (strcmp(target_name, "x86_64-linux") == 0) {
+            fprintf(stderr, "minic: x86_64-linux driver pipeline is not implemented; "
+                            "minic-cc recognizes the target for frontend/Core validation\n");
+        } else {
+            fprintf(stderr, "minic: unsupported-target:%s\n", target_name);
+        }
+        return 2;
+    }
     if (input_count == 0U || output == NULL) {
         usage(stderr, argv[0]);
         return 2;

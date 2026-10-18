@@ -340,8 +340,19 @@ bool minic_parser_parse_type_specifiers(MinicParser *parser, MinicType *type) {
         bool saw_signed = false;
         bool saw_unsigned = false;
 
-        while (minic_parser_is_integer_type_specifier(parser->current.kind)) {
+        /* C permits type-qualifiers interleaved with integer specifiers:
+         * 'unsigned const char', 'long volatile int', etc.  Do not mistake
+         * the following keyword for a declarator name. */
+        while (minic_parser_is_integer_type_specifier(parser->current.kind) ||
+               parser->current.kind == MINIC_TOKEN_KW_CONST ||
+               parser->current.kind == MINIC_TOKEN_KW_VOLATILE) {
             switch (parser->current.kind) {
+            case MINIC_TOKEN_KW_CONST:
+                is_const = true;
+                break;
+            case MINIC_TOKEN_KW_VOLATILE:
+                is_volatile = true;
+                break;
             case MINIC_TOKEN_KW_CHAR:
                 if (saw_char) {
                     minic_parser_error(parser, "duplicate char type specifier");

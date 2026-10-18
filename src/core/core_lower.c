@@ -8361,6 +8361,32 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
         if (status != MINIC_CORE_LOWER_OK) {
             return status;
         }
+        if (context->target != NULL &&
+            context->target->architecture == MINIC_TARGET_ARCH_X86_64) {
+            /* An x86 __va_list_tag tracks two register banks and overflow
+             * stack storage.  Core must not model it as RV64's linear
+             * 8-byte pointer increment. Emit one typed semantic read. */
+            (void)memset(&operation, 0, sizeof(operation));
+            operation.kind = MINIC_CORE_INSTRUCTION_LOAD;
+            operation.span = expression->span;
+            operation.type = cursor_type;
+            operation.result = MINIC_CORE_VALUE_INVALID;
+            operation.value.load.address = list_address;
+            operation.value.load.is_volatile = minic_type_is_volatile(target->type);
+            if (!minic_core_function_append_value_instruction(
+                    context->function, context->block_id, &operation,
+                    &cursor_value)) return MINIC_CORE_LOWER_ERROR;
+            (void)memset(&operation, 0, sizeof(operation));
+            operation.kind = MINIC_CORE_INSTRUCTION_VARIADIC_NEXT_SCALAR;
+            operation.span = expression->span;
+            operation.type = expression->type;
+            operation.result = MINIC_CORE_VALUE_INVALID;
+            operation.value.operand = cursor_value;
+            return minic_core_function_append_value_instruction(
+                       context->function, context->block_id, &operation,
+                       value_id)
+                       ? MINIC_CORE_LOWER_OK : MINIC_CORE_LOWER_ERROR;
+        }
         (void)memset(&operation, 0, sizeof(operation));
         operation.kind = MINIC_CORE_INSTRUCTION_LOAD;
         operation.span = expression->span;
@@ -11817,6 +11843,12 @@ static MinicCoreLowerStatus lower_expression_statement(MinicCoreLowerContext *co
                    : MINIC_CORE_LOWER_ERROR;
     }
     if (expression->kind == MINIC_EXPRESSION_BUILTIN_VA_COPY) {
+        /* Pointer assignment aliases x86 SysV's mutable 24-byte cursor
+         * instead of copying it. Reject until an independent tag-copy
+         * operation has been implemented; keep RV64 semantics unchanged. */
+        if (context->target != NULL &&
+            context->target->architecture == MINIC_TARGET_ARCH_X86_64)
+            return MINIC_CORE_LOWER_UNSUPPORTED;
         return lower_assignment_pair(context,
                                      expression->value.binary.left,
                                      expression->value.binary.right,

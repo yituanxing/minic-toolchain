@@ -1084,6 +1084,15 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
     case MINIC_CORE_INSTRUCTION_VARIADIC_ARGUMENT_ADDRESS:
         return instruction_result_is_valid(function, instruction) &&
                minic_type_is_pointer(instruction->type);
+    case MINIC_CORE_INSTRUCTION_VARIADIC_NEXT_SCALAR: {
+        const MinicCoreValueId list = instruction->value.operand;
+        return instruction_result_is_valid(function, instruction) &&
+               (minic_type_is_integer(instruction->type) ||
+                minic_type_is_pointer(instruction->type) ||
+                minic_type_is_double(instruction->type)) &&
+               list < function->value_count && available_values[list] &&
+               minic_type_is_pointer(function->values[list].type);
+    }
     case MINIC_CORE_INSTRUCTION_DYNAMIC_STACK_ALLOC: {
         MinicCoreValueId size_value = instruction->value.operand;
         return instruction_result_is_valid(function, instruction) &&
@@ -2122,6 +2131,9 @@ static bool dump_instruction(FILE *output,
         return fprintf(output,
                        "  %%%" PRIu32 " = variadic.argument.address\n",
                        instruction->result) >= 0;
+    case MINIC_CORE_INSTRUCTION_VARIADIC_NEXT_SCALAR:
+        return fprintf(output, "  %%%" PRIu32 " = variadic.next %%%" PRIu32 "\n",
+                       instruction->result, instruction->value.operand) >= 0;
     case MINIC_CORE_INSTRUCTION_DYNAMIC_STACK_ALLOC:
         return fprintf(output,
                        "  %%%" PRIu32 " = stack.alloc %%%" PRIu32 "\n",

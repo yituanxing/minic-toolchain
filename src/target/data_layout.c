@@ -17,8 +17,28 @@ static const MinicDataLayout minic_rv64_data_layout = {
     .long_double_alignment = 16U,
 };
 
+/* Keep the x86-64 layout separate: size equality does not imply identical
+ * scalar representation, record ABI classification, or long-double encoding.
+ * The backend remains responsible for those target-specific rules. */
+static const MinicDataLayout minic_x86_64_linux_data_layout_value = {
+    .pointer_size = 8U,
+    .pointer_alignment = 8U,
+    .integer_size = {0U, 1U, 1U, 2U, 4U, 8U, 8U, 16U},
+    .integer_alignment = {0U, 1U, 1U, 2U, 4U, 8U, 8U, 16U},
+    .float_size = 4U,
+    .float_alignment = 4U,
+    .double_size = 8U,
+    .double_alignment = 8U,
+    .long_double_size = 16U,
+    .long_double_alignment = 16U,
+};
+
 const MinicDataLayout *minic_default_data_layout(void) {
     return &minic_rv64_data_layout;
+}
+
+const MinicDataLayout *minic_x86_64_linux_data_layout(void) {
+    return &minic_x86_64_linux_data_layout_value;
 }
 
 static bool minic_data_layout_align_up(size_t value, size_t alignment, size_t *result) {

@@ -28,6 +28,17 @@ int minic_compile_preprocessed_file(const char *input_path,
 
 /* GNU-compatible layout selection: false (default) shares .text;
  * true (-ffunction-sections) gives each function an input section. */
+struct MinicTargetInfo;
+
+/* M0: selected target semantics are shared by Parser, Core and codegen.
+ * The x86-64 target is recognized but intentionally fails closed until its
+ * backend is available; it never silently emits RISC-V assembly. */
+int minic_compile_preprocessed_file_for_target(const char *input_path,
+                                               const char *output_path,
+                                               const struct MinicTargetInfo *target_info,
+                                               bool function_sections,
+                                               MinicDiagnostic *diagnostic);
+
 int minic_compile_preprocessed_file_with_options(const char *input_path,
                                                  const char *output_path,
                                                  bool function_sections,

@@ -130,7 +130,10 @@ typedef enum MinicCoreInstructionKind {
     MINIC_CORE_INSTRUCTION_FLOAT_DIVIDE,
     /* Runtime stack allocation. The byte-count operand is an unsigned integer;
        the result is a pointer with lifetime through the containing function. */
-    MINIC_CORE_INSTRUCTION_DYNAMIC_STACK_ALLOC
+    MINIC_CORE_INSTRUCTION_DYNAMIC_STACK_ALLOC,
+    /* SysV va_arg is a target-selected cursor read: Core retains the typed
+     * semantic operation, not RV64's eight-byte linear cursor arithmetic. */
+    MINIC_CORE_INSTRUCTION_VARIADIC_NEXT_SCALAR
 } MinicCoreInstructionKind;
 
 /* M91_BUILTIN_UNREACHABLE_TERMINATOR: unreachable is a CFG fact, not a

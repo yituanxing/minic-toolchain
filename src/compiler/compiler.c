@@ -9,6 +9,7 @@
 #include "frontend/function_body.h"
 #include "frontend/parser.h"
 #include "target/riscv64/codegen.h"
+#include "target/x86_64/codegen.h"
 #include "target/riscv64/layout.h"
 #include "target/target_info.h"
 
@@ -3112,14 +3113,14 @@ static void minic_set_ast_verify_diagnostic(const char *input_path,
     }
 }
 
-int minic_compile_preprocessed_file_with_options(const char *input_path,
-                                                 const char *output_path,
-                                                 bool function_sections,
-                                                 MinicDiagnostic *diagnostic) {
+int minic_compile_preprocessed_file_for_target(const char *input_path,
+                                               const char *output_path,
+                                               const MinicTargetInfo *target_info,
+                                               bool function_sections,
+                                               MinicDiagnostic *diagnostic) {
     MinicSourceBuffer buffer;
     MinicC0Program program;
     MinicCoreFunctionSet core_set;
-    const MinicTargetInfo *target_info;
     MinicC0AstVerifyFailure verify_failure;
     bool success;
 
@@ -3133,6 +3134,13 @@ int minic_compile_preprocessed_file_with_options(const char *input_path,
         diagnostic->column = 1U;
         diagnostic->message[0] = '\0';
     }
+    if (target_info == NULL ||
+        (target_info->architecture != MINIC_TARGET_ARCH_RISCV64 &&
+         target_info->architecture != MINIC_TARGET_ARCH_X86_64) ||
+        target_info->data_layout == NULL || target_info->integer_model == NULL) {
+        minic_set_diagnostic(diagnostic, input_path, 1U, 1U, "invalid target configuration");
+        return 1;
+    }
     /* A stack-reused Program pointer does not identify a new TU. */
     minic_inline_local_boolean_domain_cache_clear();
     buffer.data = NULL;
@@ -3143,9 +3151,9 @@ int minic_compile_preprocessed_file_with_options(const char *input_path,
 
     minic_c0_program_initialize(&program);
     minic_core_function_set_initialize(&core_set);
-    target_info = minic_default_target_info();
     minic_bootstrap_trace_stage(input_path, "parse", "begin", 0U);
-    success = minic_parse_c0_program(input_path, buffer.data, buffer.size, &program, diagnostic);
+    success = minic_parse_c0_program_for_target(
+        input_path, buffer.data, buffer.size, target_info, &program, diagnostic);
     minic_bootstrap_trace_stage(input_path, "parse", success ? "end-ok" : "end-fail",
                                 program.function_count);
     if (success && !minic_c0_program_verify_target_detailed(
@@ -3240,7 +3248,7 @@ int minic_compile_preprocessed_file_with_options(const char *input_path,
                                     success ? "end-ok" : "end-fail",
                                     program.function_count);
     }
-    if (success) {
+    if (success && target_info->architecture == MINIC_TARGET_ARCH_RISCV64) {
         minic_bootstrap_trace_stage(input_path, "layout", "begin", program.function_count);
         success = minic_riscv64_layout_program(input_path, &program, diagnostic);
         minic_bootstrap_trace_stage(input_path,
@@ -3250,13 +3258,22 @@ int minic_compile_preprocessed_file_with_options(const char *input_path,
     }
     if (success) {
         minic_bootstrap_trace_stage(input_path, "codegen", "begin", program.function_count);
-        success =
-            minic_riscv64_write_c0_program_with_core_functions(output_path,
-                                                               &program,
-                                                               core_set.functions,
-                                                               core_set.function_count,
-                                                               function_sections,
-                                                               diagnostic);
+        if (target_info->architecture == MINIC_TARGET_ARCH_RISCV64) {
+            success = minic_riscv64_write_c0_program_with_core_functions(output_path,
+                                                                         &program,
+                                                                         core_set.functions,
+                                                                         core_set.function_count,
+                                                                         function_sections,
+                                                                         diagnostic);
+        } else {
+            success = minic_x86_64_write_c0_program_with_core_functions(output_path,
+                                                                        &program,
+                                                                        target_info,
+                                                                        core_set.functions,
+                                                                        core_set.function_count,
+                                                                        function_sections,
+                                                                        diagnostic);
+        }
         minic_bootstrap_trace_stage(input_path,
                                     "codegen",
                                     success ? "end-ok" : "end-fail",
@@ -3277,7 +3294,15 @@ int minic_compile_preprocessed_file_with_options(const char *input_path,
     return success ? 0 : 1;
 }
 
-/* Preserve the pre-existing library API and GCC's default shared .text. */
+/* Preserve existing RV64 APIs and GCC's default shared .text. */
+int minic_compile_preprocessed_file_with_options(const char *input_path,
+                                                 const char *output_path,
+                                                 bool function_sections,
+                                                 MinicDiagnostic *diagnostic) {
+    return minic_compile_preprocessed_file_for_target(
+        input_path, output_path, minic_default_target_info(), function_sections, diagnostic);
+}
+
 int minic_compile_preprocessed_file(const char *input_path,
                                     const char *output_path,
                                     MinicDiagnostic *diagnostic) {

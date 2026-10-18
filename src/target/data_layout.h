@@ -20,6 +20,8 @@ typedef struct MinicDataLayout {
 } MinicDataLayout;
 
 const MinicDataLayout *minic_default_data_layout(void);
+/* x86-64 Linux SysV has a distinct target identity even when sizes coincide. */
+const MinicDataLayout *minic_x86_64_linux_data_layout(void);
 bool minic_data_layout_type(const MinicDataLayout *layout,
                             const MinicC0Program *program,
                             MinicType type,

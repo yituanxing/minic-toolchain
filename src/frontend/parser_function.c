@@ -3684,11 +3684,12 @@ static bool finalize_tentative_incomplete_arrays(MinicC0Program *program) {
     return true;
 }
 
-bool minic_parse_c0_program(const char *path,
-                            const char *source,
-                            size_t length,
-                            MinicC0Program *program,
-                            MinicDiagnostic *diagnostic) {
+bool minic_parse_c0_program_for_target(const char *path,
+                                       const char *source,
+                                       size_t length,
+                                       const MinicTargetInfo *target_info,
+                                       MinicC0Program *program,
+                                       MinicDiagnostic *diagnostic) {
     MinicParser parser;
     bool success;
 
@@ -3697,7 +3698,10 @@ bool minic_parse_c0_program(const char *path,
     parser.source = source;
     parser.diagnostic = diagnostic;
     parser.program = program;
-    parser.target_info = minic_default_target_info();
+    parser.target_info = target_info;
+    if (target_info == NULL) {
+        return false;
+    }
     parser.default_visibility = MINIC_SYMBOL_VISIBILITY_DEFAULT;
     parser.visibility_depth = 0U;
     parser.current_block = MINIC_BLOCK_INVALID;
@@ -3793,4 +3797,15 @@ bool minic_parse_c0_program(const char *path,
     free(parser.switch_contexts);
     parser.switch_contexts = NULL;
     return success;
+}
+
+/* Retain the historical parser API for RV64-focused tests and tools. */
+bool minic_parse_c0_program(const char *path,
+                            const char *source,
+                            size_t length,
+                            MinicC0Program *program,
+                            MinicDiagnostic *diagnostic) {
+    return minic_parse_c0_program_for_target(path, source, length,
+                                              minic_default_target_info(),
+                                              program, diagnostic);
 }
