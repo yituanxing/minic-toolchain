@@ -4,6 +4,7 @@
 set -eu
 
 : "${MINIC_CC:?set MINIC_CC to the native minic-cc binary}"
+: "${HOST_CC:=cc}"
 temporary_dir=$(mktemp -d)
 trap 'rm -rf "$temporary_dir"' EXIT HUP INT TERM
 
