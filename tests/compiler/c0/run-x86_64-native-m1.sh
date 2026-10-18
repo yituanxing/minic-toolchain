@@ -164,6 +164,34 @@ set -e
 test "$native_result" -eq 42
 echo "PASS: GCC oracle sqlite_u128_shift exit=42"
 
+# TinyCC tccgen.c declares an array and two pointers in the same
+# tentative file-scope definition. This is standard C, not a workaround.
+cat > "$tempdir/tinycc_mixed_tentative.i" <<'EOF'
+typedef struct SValue { long bits; unsigned int flags; } SValue;
+SValue __vstack[1+256], *vtop, *pvtop;
+int main(void) {
+    if (__vstack[0].bits != 0 || vtop != 0 || pvtop != 0) return 1;
+    vtop = __vstack + 1;
+    pvtop = __vstack + 2;
+    vtop->bits = 21;
+    pvtop->bits = 21;
+    return vtop->bits + pvtop->bits;
+}
+EOF
+check_exit tinycc_mixed_tentative 42
+
+# GCC assert() expands __PRETTY_FUNCTION__ inside C functions; in C
+# it denotes the lexical function name (unlike the C++ signature form).
+cat > "$tempdir/tinycc_pretty_function.i" <<'EOF'
+static int check_name(void) {
+    const char *name = __PRETTY_FUNCTION__;
+    return sizeof(__PRETTY_FUNCTION__) == 11u &&
+           name[0] == 'c' && name[9] == 'e';
+}
+int main(void) { return check_name() ? 42 : 1; }
+EOF
+check_exit tinycc_pretty_function 42
+
 # SQLite sqlite3AddInt64 uses checked builtin overflow with a typed
 # output pointer. Verify stored wrapped bits and overflow flag independently.
 cat > "$tempdir/sqlite_overflow.i" <<'EOF'

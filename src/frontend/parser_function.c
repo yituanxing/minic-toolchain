@@ -2012,6 +2012,16 @@ static bool parse_visible_external_array(MinicParser *parser,
                                                                             is_weak)) {
         return false;
     }
+    /* A declarator list can start with an array and continue with
+     * pointers or scalars: SValue stack[N], *top, *previous.
+     * Reuse the existing generic tentative declarator-list handler
+     * instead of misclassifying the comma as an initializer. */
+    if (parser->current.kind == MINIC_TOKEN_COMMA) {
+        return parse_external_tentative_declaration_list_after_head(
+            parser, element_type, array_type, name_span, section_name,
+            *section_name_length, *has_section, *explicit_alignment,
+            visibility, has_visibility);
+    }
     if (parser->current.kind == MINIC_TOKEN_SEMICOLON) {
         return parse_external_tentative_object(parser,
                                                array_type,

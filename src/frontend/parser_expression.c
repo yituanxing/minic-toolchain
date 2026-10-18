@@ -3249,8 +3249,12 @@ static bool parse_primary(MinicParser *parser, MinicExpressionId *expression_id,
         if (current_is_builtin_offsetof(parser)) {
             return parse_builtin_offsetof(parser, expression_id);
         }
+        /* GNU C spells the same lexical function name as
+         * __func__, __FUNCTION__ and __PRETTY_FUNCTION__.
+         * In C++ the last form has a richer signature; MiniC parses C. */
         if (current_identifier_is(parser, "__func__") ||
-            current_identifier_is(parser, "__FUNCTION__")) {
+            current_identifier_is(parser, "__FUNCTION__") ||
+            current_identifier_is(parser, "__PRETTY_FUNCTION__")) {
             name_span = parser->current.span;
             if (!minic_parser_get_predefined_function_name_object(parser, &global_object_id) ||
                 !minic_parser_advance(parser) ||
