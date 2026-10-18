@@ -1144,23 +1144,23 @@ static bool x86_emit_x87_core_helper(FILE *out, const MinicCoreFunction *fn,
     if (count == 1U) {
         if (result_ld && !source_ld && minic_type_is_double(fn->values[a].type) &&
             strcmp(name, "__extenddftf2") == 0)
-            return fprintf(out, "  fldl -%zu(%%rbp)\\n",
+            return fprintf(out, "  fldl -%zu(%%rbp)\n",
                            frame->value_offsets[a]) >= 0 &&
                    x86_x87_store(out, frame, ins->result);
         if (result_ld && !source_ld && minic_type_is_float(fn->values[a].type) &&
             strcmp(name, "__extendsftf2") == 0)
-            return fprintf(out, "  flds -%zu(%%rbp)\\n",
+            return fprintf(out, "  flds -%zu(%%rbp)\n",
                            frame->value_offsets[a]) >= 0 &&
                    x86_x87_store(out, frame, ins->result);
         if (source_ld && minic_type_is_double(callee->return_type) &&
             strcmp(name, "__trunctfdf2") == 0)
             return x86_x87_load(out, frame, a) &&
-                   fprintf(out, "  fstpl -%zu(%%rbp)\\n",
+                   fprintf(out, "  fstpl -%zu(%%rbp)\n",
                            frame->value_offsets[ins->result]) >= 0;
         if (source_ld && minic_type_is_float(callee->return_type) &&
             strcmp(name, "__trunctfsf2") == 0)
             return x86_x87_load(out, frame, a) &&
-                   fprintf(out, "  fstps -%zu(%%rbp)\\n",
+                   fprintf(out, "  fstps -%zu(%%rbp)\n",
                            frame->value_offsets[ins->result]) >= 0;
         return false;
     }
@@ -1174,7 +1174,7 @@ static bool x86_emit_x87_core_helper(FILE *out, const MinicCoreFunction *fn,
             strcmp(name, "__multf3") == 0 ? "fmulp" :
             strcmp(name, "__divtf3") == 0 ? "fdivp" : NULL;
         if (instruction == NULL) return false;
-        return fprintf(out, "  %s %%st, %%st(1)\\n", instruction) >= 0 &&
+        return fprintf(out, "  %s %%st, %%st(1)\n", instruction) >= 0 &&
                x86_x87_store(out, frame, ins->result);
     }
     if (!minic_type_is_integer(callee->return_type) ||
@@ -1185,27 +1185,27 @@ static bool x86_emit_x87_core_helper(FILE *out, const MinicCoreFunction *fn,
      * fxch ensures fucomip sees left as the first operand. Unordered
      * comparisons return +1 (libgcc helper contract) except eq != 0. */
     if (fprintf(out,
-          "  fxch %%st(1)\\n"
-          "  fucomip %%st(1), %%st\\n"
-          "  fstp %%st(0)\\n") < 0) return false;
+          "  fxch %%st(1)\n"
+          "  fucomip %%st(1), %%st\n"
+          "  fstp %%st(0)\n") < 0) return false;
     if (strcmp(name, "__eqtf2") == 0) {
         if (fprintf(out,
-              "  setne %%al\\n"
-              "  setp %%r10b\\n"
-              "  orb %%r10b, %%al\\n"
-              "  movzbl %%al, %%eax\\n") < 0) return false;
+              "  setne %%al\n"
+              "  setp %%r10b\n"
+              "  orb %%r10b, %%al\n"
+              "  movzbl %%al, %%eax\n") < 0) return false;
     } else if (fprintf(out,
-                "  movl $1, %%eax\\n"
-                "  jp 1f\\n"
-                "  jb 2f\\n"
-                "  je 3f\\n"
-                "  jmp 1f\\n"
-                "2:\\n"
-                "  movl $-1, %%eax\\n"
-                "  jmp 1f\\n"
-                "3:\\n"
-                "  xorl %%eax, %%eax\\n"
-                "1:\\n") < 0) return false;
+                "  movl $1, %%eax\n"
+                "  jp 1f\n"
+                "  jb 2f\n"
+                "  je 3f\n"
+                "  jmp 1f\n"
+                "2:\n"
+                "  movl $-1, %%eax\n"
+                "  jmp 1f\n"
+                "3:\n"
+                "  xorl %%eax, %%eax\n"
+                "1:\n") < 0) return false;
     return x86_value_store(out, frame, ins->result);
 }
 
