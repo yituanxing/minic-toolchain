@@ -853,7 +853,7 @@ static bool verify_expression(const MinicC0Program *program,
                expression->value_category == MINIC_VALUE_RVALUE &&
                expression->value.atomic_load.memory_order == 0U &&
                minic_type_pointee(address->type, &pointee) &&
-               minic_type_is_integer(pointee) &&
+               (minic_type_is_integer(pointee) || minic_type_is_pointer(pointee)) &&
                minic_type_unqualified(pointee, &value_type) &&
                minic_type_equal(expression->type, value_type) &&
                minic_target_info_sizeof_type(target, program, pointee, &bytes) &&
@@ -871,7 +871,7 @@ static bool verify_expression(const MinicC0Program *program,
                minic_type_is_void(expression->type) &&
                expression->value.atomic_store.memory_order == 0U &&
                minic_type_pointee(address->type, &pointee) &&
-               minic_type_is_integer(pointee) && !minic_type_is_const(pointee) &&
+               (minic_type_is_integer(pointee) || minic_type_is_pointer(pointee)) && !minic_type_is_const(pointee) &&
                minic_target_info_sizeof_type(target, program, pointee, &bytes) &&
                (bytes == 1U || bytes == 2U || bytes == 4U || bytes == 8U) &&
                minic_c0_assignment_compatible(program, pointee,

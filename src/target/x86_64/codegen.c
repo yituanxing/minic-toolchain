@@ -1251,7 +1251,7 @@ static bool x86_emit_instruction(FILE *out, const MinicC0Program *program,
         if (ins->value.atomic_load.memory_order != 0U ||
             addr >= fn->value_count ||
             !minic_type_pointee(fn->values[addr].type, &pointee) ||
-            !minic_type_is_integer(pointee) ||
+            !(minic_type_is_integer(pointee) || minic_type_is_pointer(pointee)) ||
             !x86_storage_width(program, target, pointee, &bytes, &sign))
             return false;
         /* Aligned scalar x86 MOV has atomicity at supported widths. */
@@ -1266,7 +1266,7 @@ static bool x86_emit_instruction(FILE *out, const MinicC0Program *program,
         if (ins->value.atomic_store.memory_order != 0U ||
             src >= fn->value_count || addr >= fn->value_count ||
             !minic_type_pointee(fn->values[addr].type, &pointee) ||
-            !minic_type_is_integer(pointee) ||
+            !(minic_type_is_integer(pointee) || minic_type_is_pointer(pointee)) ||
             !x86_storage_width(program, target, pointee, &bytes, &sign))
             return false;
         /* Naturally aligned 1/2/4/8-byte scalar MOV writes are atomic on

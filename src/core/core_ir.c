@@ -1222,7 +1222,7 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
             !available_pointer_pointee(
                 function, available_values, instruction->value.atomic_load.address, &pointee) ||
             !minic_type_unqualified(pointee, &value_type) ||
-            !minic_type_is_integer(value_type)) return false;
+            !(minic_type_is_integer(value_type) || minic_type_is_pointer(value_type))) return false;
         return minic_type_equal(value_type, instruction->type);
     }
     case MINIC_CORE_INSTRUCTION_ATOMIC_STORE: {
@@ -1235,7 +1235,7 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
             !available_pointer_pointee(
                 function, available_values, instruction->value.atomic_store.address, &pointee) ||
             !minic_type_unqualified(pointee, &stored_type) ||
-            !minic_type_is_integer(stored_type)) return false;
+            !(minic_type_is_integer(stored_type) || minic_type_is_pointer(stored_type))) return false;
         return minic_type_equal(stored_type, function->values[value].type);
     }
     case MINIC_CORE_INSTRUCTION_STORE: {

@@ -1533,13 +1533,13 @@ static bool parse_builtin_atomic_load(MinicParser *parser,
     end = parser->current.span.end;
     address = minic_c0_program_expression(parser->program, address_id);
     if (address == NULL || !minic_type_pointee(address->type, &pointee) ||
-        !minic_type_is_integer(pointee) ||
+        !(minic_type_is_integer(pointee) || minic_type_is_pointer(pointee)) ||
         !minic_target_info_sizeof_type(parser->target_info, parser->program,
                                        pointee, &bytes) ||
         (bytes != 1U && bytes != 2U && bytes != 4U && bytes != 8U) ||
         !minic_type_unqualified(pointee, &result)) {
         minic_parser_error(parser,
-            "__atomic_load_n requires readable 1/2/4/8-byte integer pointer");
+            "__atomic_load_n requires readable 1/2/4/8-byte integer or pointer object");
         return false;
     }
     (void)memset(&expression, 0, sizeof(expression));
@@ -1589,13 +1589,13 @@ static bool parse_builtin_atomic_store(MinicParser *parser,
     source = minic_c0_program_expression(parser->program, source_id);
     if (address == NULL || source == NULL ||
         !minic_type_pointee(address->type, &pointee) ||
-        !minic_type_is_integer(pointee) || minic_type_is_const(pointee) ||
+        !(minic_type_is_integer(pointee) || minic_type_is_pointer(pointee)) || minic_type_is_const(pointee) ||
         !minic_target_info_sizeof_type(parser->target_info, parser->program,
                                        pointee, &bytes) ||
         (bytes != 1U && bytes != 2U && bytes != 4U && bytes != 8U) ||
         !minic_c0_assignment_compatible(parser->program, pointee, source_id)) {
         minic_parser_error(parser,
-            "__atomic_store_n requires writable 1/2/4/8-byte integer pointer and convertible value");
+            "__atomic_store_n requires writable 1/2/4/8-byte integer or pointer object and convertible value");
         return false;
     }
     (void)memset(&expression, 0, sizeof(expression));

@@ -132,6 +132,34 @@ test ! -e "$tempdir/sqlite_atomic_load_seqcst.s"
 grep -F 'only supports relaxed memory order' "$tempdir/sqlite_atomic_load_seqcst.err" >/dev/null
 echo "PASS: x86 relaxed atomic loads 4/8 byte; stronger order fail-closed"
 
+# SQLite sqlite3_config atomically publishes a callback and its context.
+# Exercise both object and function pointer relaxed operations.
+cat > "$tempdir/sqlite_atomic_pointer.i" <<'EOF'
+typedef void (*LogFn)(void *, int, const char *);
+static void logger(void *context, int code, const char *message) {
+    if (message[0] == 'x') *(int *)context = code + 20;
+}
+LogFn xLog;
+void *pLogArg;
+void *volatile volatileContext;
+int main(void) {
+    int state = 0;
+    LogFn callback = logger;
+    void *context = &state;
+    LogFn loaded;
+    __atomic_store_n(&xLog, callback, 0);
+    __atomic_store_n(&pLogArg, context, 0);
+    __atomic_store_n(&volatileContext, context, 0);
+    if (__atomic_load_n(&xLog, 0) != callback) return 1;
+    if (__atomic_load_n(&pLogArg, 0) != context) return 2;
+    if (__atomic_load_n(&volatileContext, 0) != context) return 3;
+    loaded = __atomic_load_n(&xLog, 0);
+    loaded(__atomic_load_n(&pLogArg, 0), 22, "x");
+    return state;
+}
+EOF
+check_exit sqlite_atomic_pointer 42
+
 # Real Linux default PIE: dynamic libc function *and object* address
 # materialization must resolve via GOT, not the non-PIE PC32 LEA form.
 cat > "$tempdir/pie_external_symbols.i" <<'EOF'

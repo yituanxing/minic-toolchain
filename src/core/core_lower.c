@@ -6384,7 +6384,7 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
             context->body->program, expression->value.atomic_load.address);
         if (address_expression == NULL ||
             !minic_type_pointee(address_expression->type, &pointee) ||
-            !minic_type_is_integer(pointee) ||
+            !(minic_type_is_integer(pointee) || minic_type_is_pointer(pointee)) ||
             expression->value.atomic_load.memory_order != 0U ||
             !minic_type_unqualified(pointee, &result_type) ||
             !minic_type_equal(result_type, expression->type))
@@ -11942,7 +11942,7 @@ static MinicCoreLowerStatus lower_expression_statement(MinicCoreLowerContext *co
             context->body->program, expression->value.atomic_store.address);
         if (address_expression == NULL ||
             !minic_type_pointee(address_expression->type, &pointee) ||
-            !minic_type_is_integer(pointee) || minic_type_is_const(pointee) ||
+            !(minic_type_is_integer(pointee) || minic_type_is_pointer(pointee)) || minic_type_is_const(pointee) ||
             expression->value.atomic_store.memory_order != 0U ||
             !minic_type_unqualified(pointee, &target_type))
             return MINIC_CORE_LOWER_UNSUPPORTED;
