@@ -92,8 +92,16 @@ type_is_valid(const MinicC0Program *program, const MinicTargetInfo *target, Mini
                type.integer_sign == MINIC_INTEGER_SIGN_NONE &&
                type.integer_rank == MINIC_INTEGER_RANK_NONE && !type.is_plain_char;
     case MINIC_TYPE_BASE_X86_VA_LIST_CURSOR:
+        /* Builtin va_list is represented internally by a pointer-sized
+         * cursor proxy. Its address can also appear as T** in Core STORE,
+         * so validate each pointer depth, but reject a bare pseudo-scalar. */
         return target != NULL && target->architecture == MINIC_TARGET_ARCH_X86_64 &&
-               minic_type_is_x86_va_list_cursor(type);
+               type.pointer_depth >= 1U &&
+               type.record_id == MINIC_RECORD_INVALID &&
+               type.array_type_id == MINIC_ARRAY_TYPE_INVALID &&
+               type.function_type_id == MINIC_FUNCTION_TYPE_INVALID &&
+               type.integer_sign == MINIC_INTEGER_SIGN_NONE &&
+               type.integer_rank == MINIC_INTEGER_RANK_NONE && !type.is_plain_char;
     case MINIC_TYPE_BASE_FUNCTION:
         return type.record_id == MINIC_RECORD_INVALID &&
                type.array_type_id == MINIC_ARRAY_TYPE_INVALID &&
