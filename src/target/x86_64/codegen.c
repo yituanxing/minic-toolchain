@@ -299,6 +299,159 @@ static bool x86_emit_relocation(FILE *out, const MinicC0Program *program,
     return fprintf(out, "  %s %s%+" PRId64 "\n", directive, name, addend) >= 0;
 }
 
+/* Lua 5.5.0 has top-level records with selected nested union members.
+ * Reuse Core's flattened initializer slots and selected-member metadata,
+ * and the shared DataLayout for the exact target byte offsets. This is a
+ * bounded target-owned emitter: bit-fields/flexible fields fail closed. */
+static bool x86_emit_recursive_global_value(
+    FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicGlobalObject *object, MinicType type, size_t *initializer_index,
+    size_t *relocation_index, size_t *matched_union_selections,
+    size_t *emitted_size, unsigned int depth) {
+    size_t type_size, type_alignment;
+    if (out == NULL || program == NULL || target == NULL || object == NULL ||
+        initializer_index == NULL || relocation_index == NULL ||
+        matched_union_selections == NULL || emitted_size == NULL || depth > 32U ||
+        !minic_data_layout_type(target->data_layout, program, type,
+                                &type_size, &type_alignment))
+        return false;
+    (void)type_alignment;
+    if (minic_type_is_integer(type) || minic_type_is_pointer(type) ||
+        minic_type_is_float(type) || minic_type_is_double(type)) {
+        const MinicGlobalRelocation *reloc =
+            *relocation_index < object->relocation_count
+                ? &object->relocations[*relocation_index] : NULL;
+        if (*initializer_index >= object->initializer_count ||
+            x86_data_directive(type_size) == NULL)
+            return false;
+        if (reloc != NULL &&
+            reloc->location_kind == MINIC_GLOBAL_RELOCATION_LOCATION_AGGREGATE_SCALAR &&
+            reloc->location_index == *initializer_index) {
+            if (object->initializer_values[*initializer_index] != 0U ||
+                (!minic_type_is_integer(type) && !minic_type_is_pointer(type)) ||
+                !x86_emit_relocation(out, program, target, reloc, type_size))
+                return false;
+            ++*relocation_index;
+        } else if (!x86_emit_data_bits(
+                       out, type_size, object->initializer_values[*initializer_index]))
+            return false;
+        ++*initializer_index;
+        *emitted_size = type_size;
+        return true;
+    }
+    if (minic_type_is_array(type)) {
+        const MinicArrayType *arr =
+            minic_c0_program_array_type(program, type.array_type_id);
+        size_t cursor = 0U, i;
+        if (arr == NULL || arr->element_count == 0U) return false;
+        for (i = 0U; i < arr->element_count; ++i) {
+            size_t emitted;
+            if (!x86_emit_recursive_global_value(
+                    out, program, target, object, arr->element_type,
+                    initializer_index, relocation_index, matched_union_selections,
+                    &emitted, depth + 1U) ||
+                emitted > type_size - cursor)
+                return false;
+            cursor += emitted;
+        }
+        if (fprintf(out, "  .zero %zu\n", type_size - cursor) < 0)
+            return false;
+        *emitted_size = type_size;
+        return true;
+    }
+    if (minic_type_is_record(type)) {
+        const MinicRecord *record =
+            minic_c0_program_record(program, type.record_id);
+        size_t begin = 0U, end, start_slot = *initializer_index;
+        size_t union_span = 0U, cursor = 0U, i;
+        if (record == NULL || !record->is_complete || record->field_count == 0U)
+            return false;
+        end = record->field_count;
+        if (record->is_union) {
+            size_t selected = 0U;
+            if (minic_c0_global_object_union_member_selection(
+                    program, object, start_slot, type.record_id, &selected)) {
+                if (!minic_c0_global_object_union_member_initializer_span(
+                        program, object, start_slot, type.record_id, &union_span))
+                    return false;
+                ++*matched_union_selections;
+            }
+            if (selected >= record->field_count) return false;
+            begin = selected;
+            end = selected + 1U;
+        }
+        for (i = begin; i < end; ++i) {
+            const MinicRecordField *field = minic_c0_record_field(record, i);
+            size_t field_offset, element;
+            if (field == NULL || field->is_bit_field ||
+                field->is_flexible_array || field->element_count == 0U)
+                return false;
+            if (field->is_zero_length_array) continue;
+            if (record->is_union) {
+                field_offset = 0U;
+            } else if (!minic_data_layout_record_field_offset(
+                           target->data_layout, program, record, i,
+                           &field_offset)) {
+                return false;
+            }
+            if (field_offset < cursor || field_offset > type_size ||
+                fprintf(out, "  .zero %zu\n", field_offset - cursor) < 0)
+                return false;
+            cursor = field_offset;
+            for (element = 0U; element < field->element_count; ++element) {
+                size_t emitted;
+                if (!x86_emit_recursive_global_value(
+                        out, program, target, object, field->type,
+                        initializer_index, relocation_index, matched_union_selections,
+                        &emitted, depth + 1U) ||
+                    emitted > type_size - cursor)
+                    return false;
+                cursor += emitted;
+            }
+        }
+        if (cursor > type_size ||
+            fprintf(out, "  .zero %zu\n", type_size - cursor) < 0)
+            return false;
+        if (record->is_union && union_span != 0U) {
+            size_t end_slot, slot;
+            if (start_slot > SIZE_MAX - union_span ||
+                (end_slot = start_slot + union_span) > object->initializer_count ||
+                *initializer_index > end_slot) return false;
+            for (slot = *initializer_index; slot < end_slot; ++slot) {
+                const MinicGlobalRelocation *reloc =
+                    *relocation_index < object->relocation_count
+                        ? &object->relocations[*relocation_index] : NULL;
+                if (object->initializer_values[slot] != 0U ||
+                    (reloc != NULL &&
+                     reloc->location_kind == MINIC_GLOBAL_RELOCATION_LOCATION_AGGREGATE_SCALAR &&
+                     reloc->location_index < end_slot))
+                    return false;
+            }
+            *initializer_index = end_slot;
+        }
+        *emitted_size = type_size;
+        return true;
+    }
+    return false;
+}
+
+static bool x86_emit_recursive_record_global(
+    FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicGlobalObject *object, size_t storage_size) {
+    size_t initializer_index = 0U, relocation_index = 0U;
+    size_t matched_union_selections = 0U, emitted_size;
+    if (!minic_type_is_record(object->type) ||
+        !x86_emit_recursive_global_value(
+            out, program, target, object, object->type,
+            &initializer_index, &relocation_index, &matched_union_selections,
+            &emitted_size, 0U))
+        return false;
+    return emitted_size == storage_size &&
+           initializer_index == object->initializer_count &&
+           relocation_index == object->relocation_count &&
+           matched_union_selections == object->union_selection_count;
+}
+
 static bool x86_emit_record_global(FILE *out, const MinicC0Program *program,
                                    const MinicTargetInfo *target,
                                    const MinicGlobalObject *obj, size_t storage_size) {
@@ -540,7 +693,8 @@ static bool x86_emit_global(FILE *out, const MinicC0Program *program,
         scalar = arr->element_type;
     }
     array_of_records = minic_type_is_array(obj->type) && minic_type_is_record(scalar);
-    if (obj->union_selection_count != 0U && !array_of_records) return false;
+    if (obj->union_selection_count != 0U && !array_of_records &&
+        !minic_type_is_record(obj->type)) return false;
     if (minic_type_is_record(scalar)) {
         /* Record and flat record-array payloads are emitted separately. */
         width = 0U;
@@ -591,7 +745,11 @@ static bool x86_emit_global(FILE *out, const MinicC0Program *program,
         if (!x86_emit_zero_relocation_global(
                 out, program, target, obj, storage_size)) return false;
     } else if (minic_type_is_record(obj->type)) {
-        if (!x86_emit_record_global(out, program, target, obj, storage_size)) return false;
+        if (obj->union_selection_count != 0U) {
+            if (!x86_emit_recursive_record_global(
+                    out, program, target, obj, storage_size)) return false;
+        } else if (!x86_emit_record_global(
+                       out, program, target, obj, storage_size)) return false;
     } else if (array_of_records) {
         if (!x86_emit_flat_record_array(out, program, target, obj, storage_size))
             return false;

@@ -145,6 +145,20 @@ label42:
 EOF
 check_exit lua_label_table 42
 
+# Lua direct records with selected union members; unlike zlib's existing
+# array-of-records fixture, these objects themselves have record type.
+cat > "$tempdir/lua_recursive_record.i" <<'EOF'
+typedef union { unsigned short freq; unsigned short code; } U;
+typedef struct { int key; U one; U two; int value; } R;
+static const U nativeendian = { 42 };
+static const R table = { 20, {10}, {12}, 0 };
+int main(void) {
+    if (nativeendian.freq != 42) return 1;
+    return table.key + table.one.freq + table.two.code + table.value;
+}
+EOF
+check_exit lua_recursive_record 42
+
 # zlib trees.h static_ltree: array of records with nested selected unions.
 cat > "$tempdir/union_record_array.i" <<'EOF'
 typedef unsigned short ush;
