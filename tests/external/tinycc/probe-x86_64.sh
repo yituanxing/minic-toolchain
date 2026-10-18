@@ -56,4 +56,72 @@ if ! "$HOST_CC" -c -x assembler "$work/tcc.s" -o "$work/tcc.o" >"$work/as.out" 2
   exit 1
 fi
 echo "TINYCC_X86_64_OBJECT=PASS source=tcc.c"
-echo "TINYCC_X86_64_FRONTIER=FIRST_TU_ONLY full_tcc=NOT_TESTED"
+# The release's native x86-64 multi-TU build lists exactly nine
+# additional C source files in its Makefile. No GCC-built TCC objects
+# may be substituted into the MiniC output.
+mkdir -p "$work/objects"
+mv "$work/tcc.o" "$work/objects/tcc.o"
+set -- "$work/objects/tcc.o"
+done_count=1
+block_count=0
+for file in libtcc.c tccpp.c tccgen.c tccelf.c tccasm.c tccrun.c \
+            x86_64-gen.c x86_64-link.c i386-asm.c; do
+  stem=$(basename "$file" .c)
+  if ! "$HOST_CC" -E -P -std=gnu11 -DTCC_TARGET_X86_64 -DONE_SOURCE=0 \
+             -I"$src" "$src/$file" -o "$work/$stem.i" \
+             >"$work/$stem.cpp.out" 2>"$work/$stem.cpp.err"; then
+    echo "TINYCC_X86_64_BLOCKER=HOST_CPP source=$file" >&2
+    sed -n '1,25p' "$work/$stem.cpp.err" >&2
+    block_count=$((block_count + 1))
+    continue
+  fi
+  if ! "$MINIC_CC" --target=x86_64-linux -S \
+             "$work/$stem.i" -o "$work/$stem.s" \
+             >"$work/$stem.minic.out" 2>"$work/$stem.minic.err"; then
+    echo "TINYCC_X86_64_BLOCKER=MiniC source=$file stage=compiler" >&2
+    sed -n '1,18p' "$work/$stem.minic.err" >&2
+    block_count=$((block_count + 1))
+    continue
+  fi
+  if ! "$HOST_CC" -c -x assembler "$work/$stem.s" \
+             -o "$work/objects/$stem.o" \
+             >"$work/$stem.as.out" 2>"$work/$stem.as.err"; then
+    echo "TINYCC_X86_64_BLOCKER=GNU_AS source=$file stage=assembler" >&2
+    sed -n '1,18p' "$work/$stem.as.err" >&2
+    block_count=$((block_count + 1))
+    continue
+  fi
+  done_count=$((done_count + 1))
+  set -- "$@" "$work/objects/$stem.o"
+  echo "TINYCC_X86_64_TU=PASS source=$file completed=$done_count"
+done
+if test "$block_count" -ne 0; then
+  echo "TINYCC_X86_64_FRONTIER=BLOCKED objects=$done_count total=10 blocked=$block_count"
+  if test "${TINYCC_X86_64_DISCOVERY:-0}" = 1; then exit 0; fi
+  exit 1
+fi
+echo "TINYCC_X86_64_OBJECTS=PASS count=$done_count"
+if ! "$HOST_CC" -no-pie "$@" -ldl -lm -o "$work/tcc-minic" \
+       >"$work/link.out" 2>"$work/link.err"; then
+  echo "TINYCC_X86_64_BLOCKER=GNU_LINK objects=$done_count" >&2
+  sed -n '1,35p' "$work/link.err" >&2
+  echo "TINYCC_X86_64_FRONTIER=BLOCKED stage=link"
+  if test "${TINYCC_X86_64_DISCOVERY:-0}" = 1; then exit 0; fi
+  exit 1
+fi
+echo "TINYCC_X86_64_LINK=PASS objects=$done_count GNU_CRT=1"
+if ! "$work/tcc-minic" -v >"$work/minic.version.out" 2>"$work/minic.version.err"; then
+  echo "TINYCC_X86_64_FRONTIER=BLOCKED stage=native-version-run"
+  sed -n '1,30p' "$work/minic.version.err" >&2
+  if test "${TINYCC_X86_64_DISCOVERY:-0}" = 1; then exit 0; fi
+  exit 1
+fi
+if ! cmp -s "$work/version.out" "$work/minic.version.out" ||
+   ! cmp -s "$work/version.err" "$work/minic.version.err"; then
+  echo "TINYCC_X86_64_FRONTIER=BLOCKED stage=version-output-mismatch"
+  diff -u "$work/version.out" "$work/minic.version.out" >&2 || true
+  diff -u "$work/version.err" "$work/minic.version.err" >&2 || true
+  if test "${TINYCC_X86_64_DISCOVERY:-0}" = 1; then exit 0; fi
+  exit 1
+fi
+echo "TINYCC_X86_64_RUNTIME=PASS executable=tcc version_oracle=GCC"
