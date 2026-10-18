@@ -68,6 +68,45 @@ EOF
 check_exit mixed_qualifiers 42
 
 
+# Real Linux default PIE: dynamic libc function *and object* address
+# materialization must resolve via GOT, not the non-PIE PC32 LEA form.
+cat > "$tempdir/pie_external_symbols.i" <<'EOF'
+extern char *getenv(const char *);
+extern char **environ;
+char *(*lookup(void))(const char *) { return getenv; }
+char ***environment_location(void) { return &environ; }
+int main(void) {
+    char *(*fn)(const char *) = lookup();
+    char ***envp = environment_location();
+    return fn("PATH") != 0 && *envp != 0 ? 42 : 1;
+}
+EOF
+"$MINIC_CC" --target=x86_64-linux -S "$tempdir/pie_external_symbols.i" \
+    -o "$tempdir/pie_external_symbols.s"
+grep -F '@GOTPCREL(%rip)' "$tempdir/pie_external_symbols.s" >/dev/null
+"$HOST_CC" -pie -x assembler "$tempdir/pie_external_symbols.s" \
+    -o "$tempdir/pie_external_symbols.bin"
+set +e
+"$tempdir/pie_external_symbols.bin"
+pie_code=$?
+set -e
+if test "$pie_code" -ne 42; then
+  echo "FAIL: default PIE external function/global symbols exit=$pie_code expected=42" >&2
+  exit 1
+fi
+# Keep the previous non-PIE environment supported by the same machine code.
+"$HOST_CC" -no-pie -x assembler "$tempdir/pie_external_symbols.s" \
+    -o "$tempdir/nonpie_external_symbols.bin"
+set +e
+"$tempdir/nonpie_external_symbols.bin"
+nonpie_code=$?
+set -e
+if test "$nonpie_code" -ne 42; then
+  echo "FAIL: non-PIE external function/global symbols exit=$nonpie_code expected=42" >&2
+  exit 1
+fi
+echo "PASS: x86-64 GOT external function/object addresses PIE and non-PIE exit=42"
+
 # Real tiny-AES pressure point: read-only global byte tables.
 cat > "$tempdir/global.i" <<'EOF'
 static const unsigned char table[2] = {10, 32};

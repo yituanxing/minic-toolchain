@@ -123,6 +123,26 @@ if test "$scan_all" -eq 1; then
     exit 1
   fi
   echo "LUA_X86_64_RUNTIME=PASS oracle=GCC byte-exact sample=table,closure,coroutine,math,string"
+  # Default modern Linux PIE link using the exact same 33 native MiniC
+  # objects, not rebuilt GCC substitutions. Match the GCC executable's
+  # actual output on the same nontrivial Lua script.
+  if ! "$HOST_CC" -pie "$@" -lm -ldl -o "$work/lua-minic-pie" \
+        >"$work/lua-pie-link.stdout" 2>"$work/lua-pie-link.stderr"; then
+    echo "LUA_X86_64_PIE=FAIL stage=gnu-link objects=$assembled" >&2
+    sed -n '1,90p' "$work/lua-pie-link.stderr" >&2
+    exit 1
+  fi
+  if ! "$work/lua-minic-pie" -e "$script" \
+        >"$work/lua-pie-run.stdout" 2>"$work/lua-pie-run.stderr" ||
+     ! cmp -s "$work/gcc-run.stdout" "$work/lua-pie-run.stdout" ||
+     ! cmp -s "$work/gcc-run.stderr" "$work/lua-pie-run.stderr"; then
+    echo "LUA_X86_64_PIE=FAIL stage=runtime-differential" >&2
+    diff -u "$work/gcc-run.stdout" "$work/lua-pie-run.stdout" >&2 || true
+    sed -n '1,70p' "$work/lua-pie-run.stderr" >&2
+    exit 1
+  fi
+  echo "LUA_X86_64_PIE=PASS objects=33 oracle=GCC runtime=byte-exact"
+
   # Second upstream executable: Lua's real bytecode compiler (luac.c).
   # Compile one more original TU with MiniC and link against precisely the
   # 32 already compiled library objects, excluding lua.c's other main().
@@ -150,6 +170,12 @@ if test "$scan_all" -eq 1; then
     stem=${source%.c}
     set -- "$@" "$work/$stem.o"
   done
+  if ! "$HOST_CC" -pie "$@" "$work/luac.o" -lm -ldl -o "$work/luac-minic-pie" \
+        >"$work/luac-pie-link.stdout" 2>"$work/luac-pie-link.stderr"; then
+    echo "LUA_X86_64_LUAC_PIE=FAIL stage=gnu-link" >&2
+    sed -n '1,90p' "$work/luac-pie-link.stderr" >&2
+    exit 1
+  fi
   if ! "$HOST_CC" -no-pie "$@" "$work/luac.o" -lm -ldl -o "$work/luac-minic" \
         >"$work/luac-link.stdout" 2>"$work/luac-link.stderr"; then
     echo "LUA_X86_64_LUAC=FAIL stage=link" >&2
@@ -211,5 +237,18 @@ EOF
     sed -n '1,80p' "$work/minic-bytecode.stderr" >&2
     exit 1
   fi
+  if ! "$work/luac-minic-pie" -o "$work/minic-pie.luac" "$work/native-pressure.lua" \
+        >"$work/luac-pie-run.stdout" 2>"$work/luac-pie-run.stderr" ||
+     ! cmp -s "$work/oracle.luac" "$work/minic-pie.luac" ||
+     ! "$work/lua-minic-pie" "$work/minic-pie.luac" \
+        >"$work/pie-bytecode.stdout" 2>"$work/pie-bytecode.stderr" ||
+     ! cmp -s "$work/oracle-bytecode.stdout" "$work/pie-bytecode.stdout" ||
+     ! cmp -s "$work/oracle-bytecode.stderr" "$work/pie-bytecode.stderr"; then
+    echo "LUA_X86_64_LUAC_PIE=FAIL stage=bytecode-or-runtime" >&2
+    sed -n '1,70p' "$work/luac-pie-run.stderr" >&2
+    sed -n '1,70p' "$work/pie-bytecode.stderr" >&2
+    exit 1
+  fi
+  echo "LUA_X86_64_LUAC_PIE=PASS compiler=MiniC native_pie=true bytecode=GCC-identical"
   echo "LUA_X86_64_LUAC=PASS original=luac.c compiler=MiniC source_bytecode_identical_to_GCC=true native_runtime=PASS"
 fi
