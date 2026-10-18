@@ -759,7 +759,34 @@ static bool x86_emit_global(FILE *out, const MinicC0Program *program,
         } else if (!x86_emit_record_global(
                        out, program, target, obj, storage_size)) return false;
     } else if (array_of_records) {
-        if (!x86_emit_flat_record_array(out, program, target, obj, storage_size))
+        const MinicArrayType *array = minic_c0_program_array_type(
+            program, obj->type.array_type_id);
+        const MinicRecord *element_record = array != NULL
+            ? minic_c0_program_record(program, array->element_type.record_id)
+            : NULL;
+        if (array == NULL || element_record == NULL ||
+            array->element_count == 0U ||
+            element_record->field_count > SIZE_MAX / array->element_count)
+            return false;
+        if (element_record->field_count * array->element_count !=
+            obj->initializer_count) {
+            /* SQLite aXformType keeps an inline character array in each
+             * record. Its extra flattened slots are already represented in
+             * shared initializer metadata; use the existing recursive
+             * layout path instead of pretending each record is flat. */
+            size_t initializer_index = 0U, relocation_index = 0U;
+            size_t matched_union_selections = 0U, emitted_size = 0U;
+            if (!x86_emit_recursive_global_value(
+                    out, program, target, obj, obj->type, &initializer_index,
+                    &relocation_index, &matched_union_selections,
+                    &emitted_size, 0U) ||
+                emitted_size != storage_size ||
+                initializer_index != obj->initializer_count ||
+                relocation_index != obj->relocation_count ||
+                matched_union_selections != obj->union_selection_count)
+                return false;
+        } else if (!x86_emit_flat_record_array(
+                       out, program, target, obj, storage_size))
             return false;
     } else if (minic_type_is_array(obj->type) && obj->relocation_count != 0U) {
         if (!x86_emit_relocatable_scalar_array(out, program, target, obj,

@@ -277,6 +277,27 @@ int main(void) {
 EOF
 check_exit pointer_array_reloc 42
 
+# SQLite date.c's aXformType uses inline char[] fields inside an
+# array of records. Verify the same flattened slots and ABI data layout.
+cat > "$tempdir/record_array_embedded_chars.i" <<'EOF'
+typedef unsigned char u8;
+static const struct {
+    u8 kind, len;
+    char text[6];
+    double limit, factor;
+} transforms[] = {
+    {0, 6, {'s','e','c','o','n','d'}, 42.0, 1000.0},
+    {1, 6, {'m','i','n','u','t','e'}, 20.0, 22.0}
+};
+int main(void) {
+    if (transforms[0].text[0] != 's' || transforms[1].text[5] != 'e')
+        return 1;
+    return transforms[0].limit == 42.0 &&
+           transforms[1].limit + transforms[1].factor == 42.0 ? 42 : 2;
+}
+EOF
+check_exit record_array_embedded_chars 42
+
 # Lua lvm.c pressure: static dispatch tables initialized from GNU
 # function-local labels. Validate relocations against real emitted labels.
 cat > "$tempdir/lua_label_table.i" <<'EOF'
