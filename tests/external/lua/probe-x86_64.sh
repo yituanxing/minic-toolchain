@@ -88,14 +88,14 @@ echo "PASS Lua x86-64 Core all-TU compilation count=$passed"
 # The native survey is now able to assemble all 33 pristine Lua TUs.
 # The next real-project gate is one actual Lua interpreter produced from
 # exactly those MiniC-generated objects, linked against unmodified GNU
-# CRT/libc/math/dlopen/readline. Do not imply a native MiniLD x86 port.
+# CRT/libc/math/dlopen. The pristine Lua build does not request readline. Do not imply a native MiniLD x86 port.
 if test "$scan_all" -eq 1; then
   set --
   for source in $sources; do
     stem=${source%.c}
     set -- "$@" "$work/$stem.o"
   done
-  if ! "$HOST_CC" -no-pie "$@" -lm -ldl -lreadline -o "$work/lua-minic" \
+  if ! "$HOST_CC" -no-pie "$@" -lm -ldl -o "$work/lua-minic" \
         >"$work/lua-link.stdout" 2>"$work/lua-link.stderr"; then
     echo "LUA_X86_64_LINK=FAIL stage=gnu-link objects=$assembled" >&2
     sed -n '1,75p' "$work/lua-link.stderr" >&2
