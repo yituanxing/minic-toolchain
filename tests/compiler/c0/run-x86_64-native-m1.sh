@@ -68,6 +68,41 @@ EOF
 check_exit mixed_qualifiers 42
 
 
+# SQLite 3.54.1 first atomic builtin: real x86 naturally aligned
+# relaxed stores, including the single-evaluation expression case.
+cat > "$tempdir/sqlite_atomic_store.i" <<'EOF'
+unsigned int global_atomic;
+unsigned long long wide_atomic;
+volatile unsigned short volatile_atomic;
+int main(void) {
+    unsigned int *p = &global_atomic;
+    int side = 0;
+    __atomic_store_n(p, 0x12345678u, 0);
+    if (global_atomic != 0x12345678u) return 1;
+    __atomic_store_n(&wide_atomic, 0x123456789abcdef0ULL, 0);
+    if (wide_atomic != 0x123456789abcdef0ULL) return 2;
+    __atomic_store_n(&volatile_atomic, 0x3412u, 0);
+    if (volatile_atomic != 0x3412u) return 3;
+    __atomic_store_n(p, ++side, 0);
+    if (side != 1 || global_atomic != 1u) return 4;
+    return 42;
+}
+EOF
+check_exit sqlite_atomic_store 42
+cat > "$tempdir/sqlite_atomic_store_seqcst.i" <<'EOF'
+unsigned int state;
+int main(void) { __atomic_store_n(&state, 42u, 5); return 42; }
+EOF
+if "$MINIC_CC" --target=x86_64-linux -S "$tempdir/sqlite_atomic_store_seqcst.i" \
+    -o "$tempdir/sqlite_atomic_store_seqcst.s" \
+    >"$tempdir/sqlite_atomic_store_seqcst.stdout" 2>"$tempdir/sqlite_atomic_store_seqcst.stderr"; then
+    echo "FAIL: x86 atomic seq_cst incorrectly accepted as relaxed MOV" >&2
+    exit 1
+fi
+test ! -e "$tempdir/sqlite_atomic_store_seqcst.s"
+grep -F 'only supports relaxed memory order' "$tempdir/sqlite_atomic_store_seqcst.stderr" >/dev/null
+echo "PASS: x86 relaxed atomic stores 2/4/8 byte; seq_cst fail-closed"
+
 # Real Linux default PIE: dynamic libc function *and object* address
 # materialization must resolve via GOT, not the non-PIE PC32 LEA form.
 cat > "$tempdir/pie_external_symbols.i" <<'EOF'

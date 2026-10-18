@@ -844,6 +844,24 @@ static bool verify_expression(const MinicC0Program *program,
                    expression->value.builtin_unary.operator_kind == MINIC_BUILTIN_UNARY_BSWAP64
                        ? expected_operand_type : minic_type_int());
     }
+    case MINIC_EXPRESSION_BUILTIN_ATOMIC_STORE: {
+        const MinicExpression *address =
+            expression_before(program, expression->value.atomic_store.address, expression_index);
+        const MinicExpression *source =
+            expression_before(program, expression->value.atomic_store.source, expression_index);
+        MinicType pointee;
+        size_t bytes;
+        return address != NULL && source != NULL && target != NULL &&
+               expression->value_category == MINIC_VALUE_RVALUE &&
+               minic_type_is_void(expression->type) &&
+               expression->value.atomic_store.memory_order == 0U &&
+               minic_type_pointee(address->type, &pointee) &&
+               minic_type_is_integer(pointee) && !minic_type_is_const(pointee) &&
+               minic_target_info_sizeof_type(target, program, pointee, &bytes) &&
+               (bytes == 1U || bytes == 2U || bytes == 4U || bytes == 8U) &&
+               minic_c0_assignment_compatible(program, pointee,
+                                               expression->value.atomic_store.source);
+    }
     case MINIC_EXPRESSION_BUILTIN_OVERFLOW: {
         const MinicExpression *overflow_left;
         const MinicExpression *overflow_right;

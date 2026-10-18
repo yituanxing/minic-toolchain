@@ -11899,6 +11899,42 @@ static MinicCoreLowerStatus lower_expression_statement(MinicCoreLowerContext *co
        type-checked by frontend/Sema. Core owns their target-neutral execution
        semantics while the selected ABI/backend owns the register save area.
        The current frontend va_list model is a modifiable pointer lvalue. */
+    /* SQLite's GNU atomic store: a distinct Core memory effect, not an
+     * ordinary scalar assignment that later passes might erase or reorder.
+     * Evaluate address and value exactly once in source order. RV64 rejects
+     * this instruction until target-correct atomic lowering exists. */
+    if (expression->kind == MINIC_EXPRESSION_BUILTIN_ATOMIC_STORE) {
+        const MinicExpression *address_expression;
+        MinicCoreValueId address, value;
+        MinicCoreInstruction atomic;
+        MinicType pointee, target_type;
+        MinicCoreLowerStatus status;
+        address_expression = minic_c0_program_expression(
+            context->body->program, expression->value.atomic_store.address);
+        if (address_expression == NULL ||
+            !minic_type_pointee(address_expression->type, &pointee) ||
+            !minic_type_is_integer(pointee) || minic_type_is_const(pointee) ||
+            expression->value.atomic_store.memory_order != 0U ||
+            !minic_type_unqualified(pointee, &target_type))
+            return MINIC_CORE_LOWER_UNSUPPORTED;
+        status = lower_expression(context, expression->value.atomic_store.address, &address);
+        if (status != MINIC_CORE_LOWER_OK) return status;
+        status = lower_scalar_assignment_value(
+            context, target_type, expression->value.atomic_store.source, &value);
+        if (status != MINIC_CORE_LOWER_OK) return status;
+        (void)memset(&atomic, 0, sizeof(atomic));
+        atomic.kind = MINIC_CORE_INSTRUCTION_ATOMIC_STORE;
+        atomic.span = expression->span;
+        atomic.type = minic_type_void();
+        atomic.result = MINIC_CORE_VALUE_INVALID;
+        atomic.value.atomic_store.address = address;
+        atomic.value.atomic_store.stored_value = value;
+        atomic.value.atomic_store.memory_order = 0U;
+        *value_id = MINIC_CORE_VALUE_INVALID;
+        return minic_core_function_append_effect_instruction(
+                   context->function, context->block_id, &atomic)
+                   ? MINIC_CORE_LOWER_OK : MINIC_CORE_LOWER_ERROR;
+    }
     if (expression->kind == MINIC_EXPRESSION_BUILTIN_VA_START) {
         const MinicExpression *target;
         MinicCoreInstruction instruction;

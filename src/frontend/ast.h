@@ -70,7 +70,9 @@ typedef enum MinicExpressionKind {
     MINIC_EXPRESSION_BUILTIN_VA_END,
     MINIC_EXPRESSION_BUILTIN_VA_ARG,
     MINIC_EXPRESSION_BUILTIN_UNARY,
-    MINIC_EXPRESSION_BUILTIN_OVERFLOW
+    MINIC_EXPRESSION_BUILTIN_OVERFLOW,
+    /* GNU atomic integer store is a distinct side effect. */
+    MINIC_EXPRESSION_BUILTIN_ATOMIC_STORE
 } MinicExpressionKind;
 
 typedef enum MinicUnaryOperator {
@@ -211,6 +213,11 @@ typedef struct MinicExpression {
             MinicExpressionId right;
             MinicExpressionId result_pointer;
         } overflow;
+        struct {
+            MinicExpressionId address;
+            MinicExpressionId source;
+            unsigned int memory_order;
+        } atomic_store;
     } value;
 } MinicExpression;
 

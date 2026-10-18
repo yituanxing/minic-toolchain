@@ -133,7 +133,9 @@ typedef enum MinicCoreInstructionKind {
     MINIC_CORE_INSTRUCTION_DYNAMIC_STACK_ALLOC,
     /* SysV va_arg is a target-selected cursor read: Core retains the typed
      * semantic operation, not RV64's eight-byte linear cursor arithmetic. */
-    MINIC_CORE_INSTRUCTION_VARIADIC_NEXT_SCALAR
+    MINIC_CORE_INSTRUCTION_VARIADIC_NEXT_SCALAR,
+    /* Target-neutral atomic write; memory order remains explicit. */
+    MINIC_CORE_INSTRUCTION_ATOMIC_STORE
 } MinicCoreInstructionKind;
 
 /* M91_BUILTIN_UNREACHABLE_TERMINATOR: unreachable is a CFG fact, not a
@@ -350,6 +352,11 @@ typedef struct MinicCoreInstruction {
             MinicCoreValueId stored_value;
             bool is_volatile;
         } store;
+        struct {
+            MinicCoreValueId address;
+            MinicCoreValueId stored_value;
+            unsigned int memory_order;
+        } atomic_store;
         struct {
             MinicCoreValueId source_address;
             MinicCoreObjectId destination_object;
