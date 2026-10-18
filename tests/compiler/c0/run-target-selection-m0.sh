@@ -34,6 +34,27 @@ test ! -e "$temporary_dir/wrong.s"
 "$MINIC_CC" --target=x86_64-linux -S "$temporary_dir/signed-char.i" -o "$temporary_dir/x86-char.s"
 grep -F 'main:' "$temporary_dir/x86-char.s" >/dev/null
 
+# Actual Lua 5.5.0 math.h pressure: glibc declares genuine _Float128
+# functions. The target type is 16/16 IEEE binary128, not x86 long double.
+# Declaration and type queries are supported; backend FP128 calls remain
+# unsupported until actual use and an ABI-verified implementation.
+cat > "$temporary_dir/float128-prototype.i" <<'EOF'
+_Static_assert(sizeof(_Float128) == 16, "binary128 storage must be 16 bytes");
+_Static_assert(_Alignof(_Float128) == 16, "binary128 alignment must be 16");
+_Static_assert(!__builtin_types_compatible_p(_Float128, long double),
+               "binary128 must not alias 80-bit long double");
+extern int __fpclassifyf128(_Float128 x);
+int main(void) { return 42; }
+EOF
+"$MINIC_CC" --target=x86_64-linux -S "$temporary_dir/float128-prototype.i" -o "$temporary_dir/float128-x86.s"
+grep -F 'main:' "$temporary_dir/float128-x86.s" >/dev/null
+if "$MINIC_CC" --target=riscv64-linux -S "$temporary_dir/float128-prototype.i" \
+        -o "$temporary_dir/float128-rv.s" 2>"$temporary_dir/float128-rv.err"; then
+    echo "FAIL: RV64 must not silently accept x86 binary128 type" >&2
+    exit 1
+fi
+test ! -e "$temporary_dir/float128-rv.s"
+
 # C declaration-specifiers can interleave qualifiers and integer keywords.
 cat > "$temporary_dir/mixed-qualifiers.i" <<'EOF'
 int main(void) {

@@ -78,6 +78,11 @@ bool minic_parser_token_starts_type_name(const MinicParser *parser, MinicToken t
         if (minic_parser_token_is_gnu_typeof(parser, token)) {
             return true;
         }
+        if (parser->target_info != NULL &&
+            parser->target_info->architecture == MINIC_TARGET_ARCH_X86_64 &&
+            minic_parser_token_text_equals(parser, token, "_Float128")) {
+            return true;
+        }
         int128_unsigned = false;
         if (minic_parser_gnu_int128_name(parser, token, &int128_unsigned)) {
             return true;
@@ -537,6 +542,17 @@ bool minic_parser_parse_type_specifiers(MinicParser *parser, MinicType *type) {
                 return false;
             }
         }
+    } else if (minic_parser_identifier_is(parser, "_Float128")) {
+        /* Lua 5.5.0 includes glibc math.h binary128 function prototypes.
+         * Retain genuine target type identity; do not alias to long double
+         * (x86 80-bit) or promise unimplemented binary128 instructions. */
+        if (parser->target_info == NULL ||
+            parser->target_info->architecture != MINIC_TARGET_ARCH_X86_64) {
+            minic_parser_error(parser, "_Float128 is not supported on this target");
+            return false;
+        }
+        parsed_type = minic_type_float128();
+        if (!minic_parser_advance(parser)) return false;
     } else if (minic_parser_identifier_is(parser, "__builtin_va_list")) {
         if (!minic_type_pointer_to(minic_type_void(), &parsed_type) ||
             !minic_parser_advance(parser)) {

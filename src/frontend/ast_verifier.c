@@ -81,6 +81,11 @@ type_is_valid(const MinicC0Program *program, const MinicTargetInfo *target, Mini
     case MINIC_TYPE_BASE_FLOAT:
     case MINIC_TYPE_BASE_DOUBLE:
     case MINIC_TYPE_BASE_LONG_DOUBLE:
+    case MINIC_TYPE_BASE_FLOAT128:
+        if (type.base_kind == MINIC_TYPE_BASE_FLOAT128 &&
+            (target == NULL || target->architecture != MINIC_TARGET_ARCH_X86_64)) {
+            return false;
+        }
         return type.record_id == MINIC_RECORD_INVALID &&
                type.array_type_id == MINIC_ARRAY_TYPE_INVALID &&
                type.function_type_id == MINIC_FUNCTION_TYPE_INVALID &&

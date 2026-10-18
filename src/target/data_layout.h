@@ -17,6 +17,9 @@ typedef struct MinicDataLayout {
     size_t double_alignment;
     size_t long_double_size;
     size_t long_double_alignment;
+    /* Separate IEEE binary128 identity; 0 means unsupported target. */
+    size_t float128_size;
+    size_t float128_alignment;
 } MinicDataLayout;
 
 const MinicDataLayout *minic_default_data_layout(void);

@@ -31,6 +31,8 @@ static const MinicDataLayout minic_x86_64_linux_data_layout_value = {
     .double_alignment = 8U,
     .long_double_size = 16U,
     .long_double_alignment = 16U,
+    .float128_size = 16U,
+    .float128_alignment = 16U,
 };
 
 const MinicDataLayout *minic_default_data_layout(void) {
@@ -306,6 +308,13 @@ static bool minic_data_layout_type_depth(const MinicDataLayout *layout,
     if (minic_type_is_long_double(type)) {
         *size = layout->long_double_size;
         *alignment = layout->long_double_alignment;
+        return minic_data_layout_apply_explicit_alignment(type, alignment);
+    }
+    if (minic_type_is_float128(type)) {
+        if (layout->float128_size == 0U || layout->float128_alignment == 0U)
+            return false;
+        *size = layout->float128_size;
+        *alignment = layout->float128_alignment;
         return minic_data_layout_apply_explicit_alignment(type, alignment);
     }
     if (minic_type_is_array(type)) {
