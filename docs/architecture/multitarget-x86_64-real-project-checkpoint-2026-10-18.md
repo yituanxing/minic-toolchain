@@ -346,3 +346,58 @@ other cases currently absent from the bounded x86 emitter.
 **Not certified:** entire upstream Lua test-suite, general x86 PIE,
 true x86 `__builtin_va_list` type model, binary128 arithmetic/call ABI,
 full aggregate SysV ABI, or x86 MiniAS/MiniLD/self-hosting.
+
+
+## Real Lua ELF/PIE acceptance: target-owned GOT address materialization (2026-10-18)
+
+**Candidate source and full actual focused receipt:**
+[CI #39125162510](https://github.com/yituanxing/minic-toolchain/actions/runs/39125162510),
+source SHA `5b039f62181442e5d5b3df11d5d4ce206d2b6867`.
+
+**Original observed incompatibility:** x86 codegen `GLOBAL_ADDRESS` and
+`FUNCTION_ADDRESS` emitted `leaq symbol(%rip),%rax`, generating
+`R_X86_64_PC32`; this cannot address an interposable external libc symbol
+such as `puts` in a default Linux PIE. A local GNU binutils GCC
+reproduction confirmed the linker error for the PC32 form. In contrast
+`movq symbol@GOTPCREL(%rip),%rax` worked for both `-pie` and
+`-no-pie`, and local symbols are eligible for linker relaxation.
+
+**Minimal targeted change:** Select GOT-based symbol address materialization
+in `src/target/x86_64/codegen.c`; **no** shared parser, Core,
+DataLayout or RISC-V source changes. Added a native test taking real glibc
+`getenv` function and `environ` data-symbol addresses and running both
+PIE/non-PIE binaries with exit 42.
+
+**Real project not only synthetic smoke:**
+- Same original upstream Lua 5.5.0 **33/33** C translation units compiled
+  by MiniC and assembled by GNU.
+- Those *same 33 MiniC objects* linked as native default Linux
+  `-pie` interpreter and earlier `-no-pie` interpreter. Both executed
+  the same deterministic Lua script with stdout/stderr byte-exact to
+  the original GCC-built Lua interpreter.
+- Upstream `luac.c` compiled with MiniC, GNU linked with its 32
+  MiniC-built library TUs to separate `-pie` and `-no-pie` native
+  bytecode compiler executables. Both produced bytecode files identical
+  to upstream GCC `luac`; PIE Lua executed the PIE luac bytecode with
+  byte-exact original runtime output.
+- CI markers:
+  `PASS: x86-64 GOT external function/object addresses PIE and non-PIE exit=42`;
+  `LUA_X86_64_PIE=PASS objects=33 oracle=GCC runtime=byte-exact`;
+  `LUA_X86_64_LUAC_PIE=PASS compiler=MiniC native_pie=true bytecode=GCC-identical`;
+  `LUA_PROBE_EXIT=0`, `ZLIB_PROBE_EXIT=0`,
+  `TOOLCHAIN_FOCUSED_T1=PASS mode=all independent_test_checks=8 shared_builds=1`.
+- GNU CRT, assembler, linker, and libc remain intentional platform tools:
+  this does not certify an x86 native MiniAS/MiniLD, a shared-object
+  `-fPIC` toolchain, TLS, all ELF symbol preemption modes, or self-hosting.
+- The most recent **fresh RV64 Linux 2064/2064 and QEMU P1 12/12**
+  [#39123610218](https://github.com/yituanxing/minic-toolchain/actions/runs/39123610218)
+  remains source-identical for its compiler-side shared/target inputs:
+  the new functional source change affects **x86 codegen only**, and RV64
+  focused tests passed again in #39125162510.
+
+**Architecture decision:** GOT/PLT/symbol-preemption behavior is target ELF
+machine emission, not a reason to generalize Core or invent a common ABI.
+Preserve the already-shared semantic symbol references and DataLayout,
+allow each backend to select correct target relocation expressions.
+The potential shared recursive aggregate initializer walker remains
+**only a candidate**, not yet implemented.
