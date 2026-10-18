@@ -893,3 +893,51 @@ MiniC-produced TinyCC to run a broader deterministic subset of upstream
 compiler tests and compare against a GCC-produced TinyCC executable.
 Prioritize observed semantics or runtime divergence, not hypothetical
 cross-target abstractions.
+
+## Original TinyCC tests2 + BusyBox 1.36.1 pressure checkpoint — 2026-10-19
+
+**Scoped source and CI evidence, without modifying either upstream codebase.**
+
+- [Focused CI #39148953666](https://github.com/yituanxing/minic-toolchain/actions/runs/39148953666)
+  ended **success** with `TOOLCHAIN_FOCUSED_T1=PASS` and eight
+  independent RV64/MiniAR/MiniLD checks.
+- BusyBox pinned to the exact **1.36.1** release commit
+  `mirror/busybox@1a64f6a20aaf6ea4dbba68bbfa8cc1ab7e5c57c4`;
+  original Makefile, `coreutils/cat.c`, `coreutils/echo.c` Git blobs
+  are checked. The probe runs upstream `make allnoconfig`, enables only
+  `CAT` and `ECHO` in generated `.config`, then uses original
+  Kconfig/Kbuild to build and run the native GCC applet baseline. These
+  are configuration choices, **not source patches**.
+- Both untouched BusyBox TUs preprocess and compile with MiniC x86-64
+  (4,731 and 4,776 preprocessed lines respectively) and GNU assemble
+  into genuine MiniC objects: `BUSYBOX_X86_64_TU=PASS` twice,
+  `BUSYBOX_X86_64_FRONTIER=SCOPED_TU objects=2 total=2 blocked=0`.
+  The original Kbuild is relinked after replacing precisely those two
+  applet objects and rebuilding dependent composite objects; all other
+  objects remain GCC-produced. **Actual mixed BusyBox `cat` and `echo`
+  runtime outputs are byte-identical to the independent GCC baseline:**
+  `BUSYBOX_X86_64_MIXED=PASS applets=cat,echo objects=MiniC x86 remainder=GCC GNU_Kbuild=1 runtime=byte-exact`.
+  This does **not** claim a complete MiniC-built BusyBox.
+- Original TinyCC 0.9.27 still passes **10/10 MiniC-compiled C units**,
+  GNU link, executable version oracle and compilation of a separate new
+  C application that executes and returns 42. Its next actual feature
+  blocker is exposed by unmodified upstream `tests/tests2/00_assignment.c`:
+  the GCC-built TinyCC finds
+  `/usr/include/x86_64-linux-gnu/bits/wordsize.h` etc., while the
+  MiniC-built TinyCC fails resolving `bits/libc-header-start.h`
+  from `/usr/include/stdio.h`, even when invoked with the same
+  upstream-prescribed `-B<build> -I<upstream>/include -I<upstream>`
+  options. An optional `-vv` differential diagnostic now emits
+  both compiler search traces. **Do not hide this with a forced
+  system `-I` and claim an upstream test pass**. Next investigate
+  TinyCC `tcc_split_path` / `tcc_add_sysinclude_path` runtime behavior
+  and the backend's generated default include path representation.
+- Original SQLite 3.54.1 GCC byte-exact SQL runtime remains green in
+  the same focused CI. A complete new RV64 Linux 2064/QEMU P1 and
+  a complete MiniC-built BusyBox/TinyCC upstream suite were not run.
+
+The temporary dedicated branch execution modifications to
+`.github/workflows/toolchain-focused-regressions-v1.yml` are reverted
+to the **original main blob** `cd9a880a5a707f28b5ea63c364c1844ab35e1c56`
+after collecting actual CI evidence. Existing unrelated
+`linux-runtime-gcc-baseline.yml` failures remain separate.
