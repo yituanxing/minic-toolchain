@@ -87,3 +87,64 @@ inventing a second kernel build graph or silently changing compiler options.
 - `833d2c3b`: owner-audit change to require *all* canonical targets, reject missing guest traces and allow only a bounded, individually guest-traced ancillary set. This is stricter than silently skipping the check. Stage2 legacy exact-owners mode remains unchanged.
 - `#39063243332`: attempt to restart full 2064 failed at YAML validation before jobs because a CI-only comment was under-indented inside a `run: |` block. No compiler build ran; repaired by `dc8aefdd`.
 - `#39063287653`: restored valid workflow trigger for all seven real Stage4 2064 producer jobs and existing QEMU P1 receiver. Do not claim Linux 2064 or P1 pass until the new jobs attest them.
+
+## Final acceptance: native Stage4 compiler built and booted full Linux (verified 2026-10-18)
+
+**Real compilation and QEMU runtime were completed, not estimated:**
+
+- [CI #39063287653](https://github.com/yituanxing/minic-toolchain/actions/runs/39063287653):
+  all **7/7 producer jobs green**; the exact **2064/2064 C owners**
+  successfully compiled with the SHA-certified Stage4 RV64 `minic-cc` inside
+  QEMU, compiler-call trace owners all present, Stage0 compiler fallback=0,
+  all objects ABI-checked. The receiver printed
+  `GNU_MINIC_SHARD_MERGE=PASS objects=2064 shards=7`,
+  `COHORT_P1=PASS name=full_all_verified syscalls=12 python_era_oracle=PASS`,
+  `COHORT_RESULT=PASS candidate_objects=2064 scope=FULL_C_UNIVERSE`.
+  The Linux Image SHA256 was
+  `6e0d275025f71c9daf9084f87946e693a9f5da3d71db712a2b6c4348e308d667`.
+  The CI run was **red only because the new supplemental postcheck mistakenly
+  demanded 2064 physical lines in `full-objects.txt`, which contains one
+  descriptive comment plus 2064 actual owner lines (2065 physical lines)**.
+  The independently recorded actual Linux/QEMU P1 result was PASS.
+- [**Green independent full acceptance receipt #39098625070**](https://github.com/yituanxing/minic-toolchain/actions/runs/39098625070):
+  archived all seven real production shard object pools, checked every single
+  `minic/<owner>.o` against its producer SHA, checked union against receiver
+  `minic-manifest.sha256`, verified real Stage4 guest compiler dispatch traces
+  for every owner, checked certified Stage4 compiler ELF SHA and nine-tool
+  provenance, verified original Linux Image SHA and two actual P1 verdicts.
+  **`BOOTSTRAP_STAGE4_LINUX2064=PASS owners=2064/2064 shards=7/7
+  SHA_verified=true QEMU_P1=12/12 recompiles=0 replay_QEMU=false`**.
+  Artifact `minic-bootstrap-stage4-linux2064-certified-final` id
+  **12125503471**. This green receipt **does not replay** QEMU; it validates
+  SHA-pinned outputs from the exact earlier full Linux run. The original
+  compiler used historical GNU preprocessing, GNU assembler and GNU linker.
+  It is not a claim that these Linux build steps are now native.
+- The supplementary owner-count postcheck has been corrected to ignore the
+  comment line. Do **not** rerun all 2064 C objects merely to turn the previous
+  CI display green: the separately attested green acceptance is sufficient.
+
+### Performance diagnosis (not yet an optimization claim)
+
+- Exact seven Linux Kbuild Stage4 shard *compile* times: approximately
+  31.8, 34.2, 38.4, 44.7, and 69.6–70.0 minutes (shards of 294–295).
+  Those jobs execute the **RISC-V Stage4 ELF under qemu-riscv64** with
+  existing Kbuild, GNU preprocessing and GNU assembly; these are **not**
+  native-speed compiler benchmarks and cannot directly be compared with
+  optimized x86 host MiniC throughput.
+- [Census CI #39065880525](https://github.com/yituanxing/minic-toolchain/actions/runs/39065880525)
+  reports generated Stage4 assembly over the actual 77 toolchain C sources:
+  **4,522,728 assembly mnemonics**, **2,863,071 load/store mnemonics**
+  (63.3041%), **286,496 directly adjacent same-register stack
+  store→reload candidates** (6.3346 per 100 assembly mnemonics).
+  These are **static** counts, not dynamic executed instruction counts,
+  cycles or verified dead operations. In particular, the store→reload
+  pairs are candidates requiring dataflow/alias/liveness proof before removal.
+- Notable largest fixedpoint assembly files: `src/core/core_lower.c`
+  **865,587** mnemonics, `src/target/riscv64/core_codegen.c`
+  **278,781**, `src/frontend/parser_statement.c` **242,515**,
+  `linker/src/linker.c` **237,436**.
+- The evidence supports investigating **generated memory traffic,
+  register allocation and spills**, plus QEMU's cross-ISA emulation
+  overhead; it does **not** establish that the RV64 instruction set lacks
+  necessary instructions. Compare native host performance and dynamic
+  instruction profiles before ranking compiler backend improvements.
