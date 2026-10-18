@@ -318,6 +318,36 @@ int main(void) {
 EOF
 check_exit tinycc_record_declarator 42
 
+# BusyBox 1.36.1 pulls glibc's regexec prototype into findutils/grep.c:
+# regmatch_t matches[__restrict nmatch] is an adjusted pointer parameter.
+# It must retain preceding integer-parameter visibility in both prototypes
+# and a real function definition (and must not become an array ABI).
+cat > "$tempdir/busybox_regex_vla_parameter.i" <<'EOF'
+typedef unsigned long size_t;
+typedef struct { int so; int eo; } regmatch_t;
+extern int check(size_t nmatch, regmatch_t matches[__restrict nmatch]);
+int check(size_t nmatch, regmatch_t matches[__restrict nmatch]) {
+    return matches[0].so + (int)nmatch;
+}
+int main(void) {
+    regmatch_t matches[2] = {{40,0},{0,0}};
+    return check(2, matches);
+}
+EOF
+check_exit busybox_regex_vla_parameter 42
+
+# A spelling with no preceding parameter is not a valid bound. Do not
+# treat any identifier as an ignored array bound.
+cat > "$tempdir/busybox_regex_unknown_bound.i" <<'EOF'
+int bad(int values[undeclared_bound]);
+int main(void) { return 0; }
+EOF
+if "$MINIC_CC" --target=x86_64-linux -S     "$tempdir/busybox_regex_unknown_bound.i" -o "$tempdir/busybox_regex_unknown_bound.s"     >"$tempdir/busybox_regex_unknown_bound.out" 2>&1; then
+    echo "FAIL: unknown C99 array-parameter bound accepted" >&2
+    exit 1
+fi
+echo "PASS: reject unknown array-parameter bound"
+
 # TinyCC tccgen.c declares an array and two pointers in the same
 # tentative file-scope definition. This is standard C, not a workaround.
 cat > "$tempdir/tinycc_mixed_tentative.i" <<'EOF'

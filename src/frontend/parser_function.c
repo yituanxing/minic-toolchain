@@ -686,9 +686,49 @@ static bool parameter_array_modifier_is_restrict(const MinicParser *parser) {
            function_identifier_is(parser, "__restrict__");
 }
 
+/* Array-parameter outer bounds are discarded during array-to-pointer
+ * adjustment. A lone name of a preceding integer parameter is a valid
+ * C99 variably modified bound (e.g. regexec's [__restrict __nmatch]).
+ * Do not turn that name into a false local-expression lookup; equally,
+ * do not accept an undeclared or noninteger bound without validation. */
+static bool consume_prior_parameter_bound(MinicParser *parser,
+                                          const MinicSourceSpan *prior_names,
+                                          const MinicType *prior_types,
+                                          size_t prior_count,
+                                          bool *consumed) {
+    MinicParser probe;
+    size_t i;
+    size_t length;
+
+    if (parser == NULL || consumed == NULL) return false;
+    *consumed = false;
+    if (parser->current.kind != MINIC_TOKEN_IDENTIFIER) return true;
+    probe = *parser;
+    if (!minic_parser_advance(&probe)) return false;
+    if (probe.current.kind != MINIC_TOKEN_RBRACKET) return true;
+    length = minic_parser_span_length(parser->current.span);
+    for (i = 0U; i < prior_count; ++i) {
+        if (minic_type_is_integer(prior_types[i]) &&
+            minic_parser_span_length(prior_names[i]) == length &&
+            length != 0U &&
+            memcmp(parser->source + prior_names[i].begin.offset,
+                   parser->source + parser->current.span.begin.offset,
+                   length) == 0) {
+            *consumed = true;
+            return minic_parser_advance(parser) &&
+                   minic_parser_expect(parser, MINIC_TOKEN_RBRACKET, "expected ']'");
+        }
+    }
+    minic_parser_error(parser, "array parameter bound must name a preceding integer parameter");
+    return false;
+}
+
 static bool adjust_array_parameter_type(MinicParser *parser,
                                         MinicType *parameter_type,
-                                        size_t array_type_begin) {
+                                        size_t array_type_begin,
+                                        const MinicSourceSpan *prior_names,
+                                        const MinicType *prior_types,
+                                        size_t prior_count) {
     const MinicArrayType *outer_array;
     MinicType adjusted_type;
     MinicType declared_array_type;
@@ -701,10 +741,12 @@ static bool adjust_array_parameter_type(MinicParser *parser,
     if (parser->current.kind == MINIC_TOKEN_LBRACKET) {
         bool saw_static;
         bool has_outer_bound;
+        bool consumed_named_bound;
         size_t ignored_outer_bound;
 
         saw_static = false;
         has_outer_bound = false;
+        consumed_named_bound = false;
         if (!minic_parser_advance(parser)) {
             return false;
         }
@@ -728,7 +770,12 @@ static bool adjust_array_parameter_type(MinicParser *parser,
                 return false;
             }
         } else {
-            if (!minic_parser_parse_fixed_array_bound(parser, &ignored_outer_bound)) {
+            if (!consume_prior_parameter_bound(parser, prior_names, prior_types,
+                                               prior_count, &consumed_named_bound)) {
+                return false;
+            }
+            if (!consumed_named_bound &&
+                !minic_parser_parse_fixed_array_bound(parser, &ignored_outer_bound)) {
                 return false;
             }
             has_outer_bound = true;
@@ -867,6 +914,11 @@ bool minic_parser_parse_parameter_list(MinicParser *parser,
         return false;
     }
 
+    /* Parameter lists can be parsed with parameter_name_spans == NULL
+     * (nested function-pointer and prototype declarators). Keep a local
+     * name table so C99 outer array bounds still see earlier parameters. */
+    MinicSourceSpan prior_parameter_names[MINIC_MAX_FUNCTION_PARAMETERS] = {{0}};
+
     for (;;) {
         MinicSourceSpan declarator_name_span;
         MinicType parameter_type;
@@ -950,6 +1002,7 @@ bool minic_parser_parse_parameter_list(MinicParser *parser,
             MinicSourceSpan parameter_name_span;
 
             parameter_name_span = parser->current.span;
+            declarator_name_span = parameter_name_span;
             declarator_has_name = true;
             if (parameter_name_spans != NULL) {
                 parameter_name_spans[*parameter_count] = parameter_name_span;
@@ -997,7 +1050,8 @@ bool minic_parser_parse_parameter_list(MinicParser *parser,
 
         if (!is_function_pointer_parameter && !is_pointer_to_array_parameter &&
             !adjust_array_parameter_type(
-                parser, &parameter_type, parameter_array_type_begin)) {
+                parser, &parameter_type, parameter_array_type_begin,
+                prior_parameter_names, parameter_types, *parameter_count)) {
             return false;
         }
         if (!adjust_function_parameter_type(parser, &parameter_type)) {
@@ -1005,6 +1059,9 @@ bool minic_parser_parse_parameter_list(MinicParser *parser,
         }
 
         parameter_types[*parameter_count] = parameter_type;
+        if (declarator_has_name) {
+            prior_parameter_names[*parameter_count] = declarator_name_span;
+        }
         *parameter_count += 1U;
         if (parser->current.kind != MINIC_TOKEN_COMMA) {
             return true;
