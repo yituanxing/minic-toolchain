@@ -11930,7 +11930,6 @@ static MinicCoreLowerStatus lower_expression_statement(MinicCoreLowerContext *co
         atomic.value.atomic_store.address = address;
         atomic.value.atomic_store.stored_value = value;
         atomic.value.atomic_store.memory_order = 0U;
-        *value_id = MINIC_CORE_VALUE_INVALID;
         return minic_core_function_append_effect_instruction(
                    context->function, context->block_id, &atomic)
                    ? MINIC_CORE_LOWER_OK : MINIC_CORE_LOWER_ERROR;
