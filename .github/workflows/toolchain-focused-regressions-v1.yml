@@ -77,7 +77,7 @@ jobs:
           set -e
           echo '--- Lua full-TU structured compiler/assembler blockers ---'
           grep -E '^LUA_X86_64_(BLOCKER|FRONTIER)' build/varargs/lua.log || true
-          tail -n 38 build/varargs/lua.log
+          cat build/varargs/lua.log
           echo "LUA_PROBE_EXIT=$lua_code"
       # Stage2 2064 preflight checks current source workflow.
       # The bootstrap Linux opt-in workflow has several nested matrix
