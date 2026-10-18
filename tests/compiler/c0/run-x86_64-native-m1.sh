@@ -130,6 +130,21 @@ int main(void) {
 EOF
 check_exit pointer_array_reloc 42
 
+# Lua lvm.c pressure: static dispatch tables initialized from GNU
+# function-local labels. Validate relocations against real emitted labels.
+cat > "$tempdir/lua_label_table.i" <<'EOF'
+int main(void) {
+    static void *const dispatch[2] = {&&label42, &&other};
+    if (dispatch[0] == 0 || dispatch[1] == 0) return 1;
+    goto label42;
+other:
+    return 0;
+label42:
+    return 42;
+}
+EOF
+check_exit lua_label_table 42
+
 # zlib trees.h static_ltree: array of records with nested selected unions.
 cat > "$tempdir/union_record_array.i" <<'EOF'
 typedef unsigned short ush;

@@ -276,6 +276,14 @@ static bool x86_emit_relocation(FILE *out, const MinicC0Program *program,
     const char *directive = x86_data_directive(size);
     int64_t addend;
     if (reloc == NULL || directive == NULL || size != 8U) return false;
+    if (reloc->target_kind == MINIC_GLOBAL_RELOCATION_LABEL) {
+        /* Lua lvm.c's dispatch table has one relocation for each local
+         * GNU label. Core already records the statement ID and emits its
+         * .Luser_<id> alias at the owning basic block, just as RV64 does. */
+        const MinicStatement *label = minic_c0_program_statement(program, reloc->target_id);
+        return label != NULL && label->kind == MINIC_STATEMENT_LABEL &&
+               fprintf(out, "  %s .Luser_%zu\n", directive, reloc->target_id) >= 0;
+    }
     if (reloc->target_kind == MINIC_GLOBAL_RELOCATION_OBJECT) {
         const MinicGlobalObject *object = minic_c0_program_global_object(program, reloc->target_id);
         if (object != NULL) name = object->name;
