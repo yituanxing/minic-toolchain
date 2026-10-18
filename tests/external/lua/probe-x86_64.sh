@@ -84,3 +84,43 @@ if test "$blocked" -ne 0; then
   exit 1
 fi
 echo "PASS Lua x86-64 Core all-TU compilation count=$passed"
+
+# The native survey is now able to assemble all 33 pristine Lua TUs.
+# The next real-project gate is one actual Lua interpreter produced from
+# exactly those MiniC-generated objects, linked against unmodified GNU
+# CRT/libc/math/dlopen/readline. Do not imply a native MiniLD x86 port.
+if test "$scan_all" -eq 1; then
+  set --
+  for source in $sources; do
+    stem=${source%.c}
+    set -- "$@" "$work/$stem.o"
+  done
+  if ! "$HOST_CC" -no-pie "$@" -lm -ldl -lreadline -o "$work/lua-minic" \
+        >"$work/lua-link.stdout" 2>"$work/lua-link.stderr"; then
+    echo "LUA_X86_64_LINK=FAIL stage=gnu-link objects=$assembled" >&2
+    sed -n '1,75p' "$work/lua-link.stderr" >&2
+    exit 1
+  fi
+  echo "LUA_X86_64_LINK=PASS objects=$assembled driver=GNU"
+  # Deterministic original-Lua runtime differential: actual interpreter
+  # execution, closures, tables, strings, coroutine, numeric library.
+  script='local t={3,1,2}; table.sort(t); assert(table.concat(t,",")=="1,2,3"); local function f(n) return n*7 end; assert(f(6)==42); local co=coroutine.create(function() coroutine.yield(21); return 42 end); local ok,x=coroutine.resume(co); assert(ok and x==21); ok,x=coroutine.resume(co); assert(ok and x==42); assert(math.floor(42.9)==42); print("LUA_NATIVE",string.reverse("CiniM"),string.format("%d",f(6)))'
+  if ! "$lua" -e "$script" >"$work/gcc-run.stdout" 2>"$work/gcc-run.stderr"; then
+    echo "LUA_X86_64_RUNTIME=FAIL stage=GCC-oracle" >&2
+    sed -n '1,60p' "$work/gcc-run.stderr" >&2
+    exit 1
+  fi
+  if ! "$work/lua-minic" -e "$script" >"$work/minic-run.stdout" 2>"$work/minic-run.stderr"; then
+    echo "LUA_X86_64_RUNTIME=FAIL stage=MiniC" >&2
+    sed -n '1,75p' "$work/minic-run.stderr" >&2
+    exit 1
+  fi
+  if ! cmp -s "$work/gcc-run.stdout" "$work/minic-run.stdout" ||
+     ! cmp -s "$work/gcc-run.stderr" "$work/minic-run.stderr"; then
+    echo "LUA_X86_64_RUNTIME=FAIL stage=GCC-differential" >&2
+    diff -u "$work/gcc-run.stdout" "$work/minic-run.stdout" >&2 || true
+    diff -u "$work/gcc-run.stderr" "$work/minic-run.stderr" >&2 || true
+    exit 1
+  fi
+  echo "LUA_X86_64_RUNTIME=PASS oracle=GCC byte-exact sample=table,closure,coroutine,math,string"
+fi
