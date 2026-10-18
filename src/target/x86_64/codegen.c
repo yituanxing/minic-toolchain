@@ -1162,6 +1162,52 @@ static bool x86_emit_x87_core_helper(FILE *out, const MinicCoreFunction *fn,
             return x86_x87_load(out, frame, a) &&
                    fprintf(out, "  fstps -%zu(%%rbp)\n",
                            frame->value_offsets[ins->result]) >= 0;
+        if (source_ld && minic_type_is_integer(callee->return_type)) {
+            bool unsigned_value = minic_type_is_unsigned_integer(callee->return_type);
+            bool to_64 =
+                strcmp(name, unsigned_value ? "__fixunstfdi" : "__fixtfdi") == 0;
+            bool to_32 =
+                strcmp(name, unsigned_value ? "__fixunstfsi" : "__fixtfsi") == 0;
+            if (!to_64 && !to_32) return false;
+            if (!x86_x87_load(out, frame, a)) return false;
+            if (unsigned_value && to_64) {
+                /* SysV C truncates long double -> uint64 for values in
+                 * [0,2^64). Signed FISTTP alone fails at 2^63. Compare
+                 * against exact binary64 2^63, subtract it for the high
+                 * half, then set the integer high bit. */
+                if (fprintf(out,
+                        "  subq $16, %%rsp\n"
+                        "  movabsq $0x43e0000000000000, %%r10\n"
+                        "  movq %%r10, (%%rsp)\n"
+                        "  fldl (%%rsp)\n"
+                        "  fucomip %%st(1), %%st\n"
+                        "  jbe 1f\n"
+                        "  fisttpq 8(%%rsp)\n"
+                        "  movq 8(%%rsp), %%rax\n"
+                        "  jmp 2f\n"
+                        "1:\n"
+                        "  fldl (%%rsp)\n"
+                        "  fsubrp %%st, %%st(1)\n"
+                        "  fisttpq 8(%%rsp)\n"
+                        "  movq 8(%%rsp), %%rax\n"
+                        "  btsq $63, %%rax\n"
+                        "2:\n"
+                        "  addq $16, %%rsp\n") < 0) return false;
+                return x86_value_store(out, frame, ins->result);
+            }
+            /* All representable uint32 values fit signed 64-bit. Use the
+             * qword FISTTP destination even for 32-bit unsigned values. */
+            if (fprintf(out,
+                    "  subq $16, %%rsp\n"
+                    "  fisttpq 8(%%rsp)\n"
+                    "  movq 8(%%rsp), %%rax\n"
+                    "  addq $16, %%rsp\n") < 0) return false;
+            if (to_32 &&
+                fprintf(out, unsigned_value
+                          ? "  movl %%eax, %%eax\n"
+                          : "  movslq %%eax, %%rax\n") < 0) return false;
+            return x86_value_store(out, frame, ins->result);
+        }
         if (result_ld && !source_ld && minic_type_is_integer(fn->values[a].type)) {
             bool unsigned_value = minic_type_is_unsigned_integer(fn->values[a].type);
             bool from_64 =

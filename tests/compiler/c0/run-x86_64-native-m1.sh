@@ -208,6 +208,39 @@ set -e
 test "$oracle_code" -eq 42
 echo "PASS: GCC oracle x87 uint64->long double boundaries exit=42"
 
+# GNU x87 return -> MiniC full unsigned integer conversion ABI.
+# Test 2^63 and UINT64_MAX; FISTTP alone would sign-overflow.
+cat > "$tempdir/tinycc_x87_fixuns_mini.i" <<'EOF'
+extern long double gnu_x87_big(void);
+extern long double gnu_x87_mid(void);
+int main(void) {
+    volatile long double big = gnu_x87_big();
+    volatile long double mid = gnu_x87_mid();
+    if ((unsigned long long)big != 0xffffffffffffffffULL) return 1;
+    if ((unsigned long long)mid != 0x8000000000000000ULL) return 2;
+    if ((unsigned int)mid != 0U) return 3;
+    if ((long long)(long double)(-42LL) != -42LL) return 4;
+    return 42;
+}
+EOF
+cat > "$tempdir/tinycc_x87_fixuns_gnu.c" <<'EOF'
+long double gnu_x87_big(void) { return (long double)0xffffffffffffffffULL; }
+long double gnu_x87_mid(void) { return (long double)0x8000000000000000ULL; }
+EOF
+"$MINIC_CC" --target=x86_64-linux -S "$tempdir/tinycc_x87_fixuns_mini.i" -o "$tempdir/tinycc_x87_fixuns_mini.s"
+"$HOST_CC" -c -x assembler "$tempdir/tinycc_x87_fixuns_mini.s" -o "$tempdir/tinycc_x87_fixuns_mini.o"
+"$HOST_CC" -c "$tempdir/tinycc_x87_fixuns_gnu.c" -o "$tempdir/tinycc_x87_fixuns_gnu.o"
+"$HOST_CC" -no-pie "$tempdir/tinycc_x87_fixuns_mini.o" "$tempdir/tinycc_x87_fixuns_gnu.o" -o "$tempdir/tinycc_x87_fixuns.bin"
+set +e
+"$tempdir/tinycc_x87_fixuns.bin"
+rc=$?
+set -e
+if [ "$rc" -ne 42 ]; then
+  echo "FAIL: x87 GCC/MiniC unsigned-fix integer ABI actual=$rc expected=42" >&2
+  exit 1
+fi
+echo "PASS: x86-64 GCC x87 -> MiniC uint64/uint32 and signed integer conversions exit=42"
+
 # x86-64 uses the x87 80-bit ABI for real long double. A GNU-built
 # callee returning st(0) and a MiniC-built caller must agree, including
 # values between adjacent binary64 numbers.
