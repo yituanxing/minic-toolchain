@@ -571,3 +571,76 @@ GCC-differential atomic tests and the upstream SQLite frontier before
 adding it, and re-run appropriate RV64 gates on shared-source changes.
 **SQLite database runtime remains unverified until it actually links and
 executes its genuine SQL operations.**
+
+
+## SQLite atomic read/write semantic gate (2026-10-18)
+
+**New observed original-source need:** the pinned official pristine
+SQLite 3.54.1 `sqlite3.c` fails at `sqlite3.i:6640`,
+`__atomic_store_n((&mem0.nearlyFull),(n>0 && n<=nUsed),0)`.
+The immediately subsequent real read is `sqlite3.i:6681`,
+`__atomic_load_n((&mem0.nearlyFull),0)`. `0` means GNU relaxed
+memory order. Neither is equivalent in language semantics to a generic,
+possibly reordered or elided ordinary C assignment/load.
+
+**Actual implementation:**
+- `MINIC_EXPRESSION_BUILTIN_ATOMIC_STORE` and
+  `MINIC_EXPRESSION_BUILTIN_ATOMIC_LOAD` are distinct AST nodes with
+  operand references, type/width and explicit order; traversal and verifier
+  validate their shape. Address and value expressions are evaluated once.
+- `MINIC_CORE_INSTRUCTION_ATOMIC_STORE` is a memory effect and
+  `MINIC_CORE_INSTRUCTION_ATOMIC_LOAD` produces a typed SSA value.
+  Core verification checks address/pointee and integer type identity.
+  Keeping these separate from ordinary `LOAD`/`STORE` prevents their
+  accidental semantic downgrade by future optimizations.
+- For x86-64, naturally aligned **1,2,4,8-byte integer** relaxed
+  operations lower to single scalar MOV accesses. This is the supported
+  aligned x86-64 atomic subset; no misleading promise of arbitrary
+  unaligned atomicity. Other memory orders, including seq_cst (5),
+  fail closed at the frontend. Full acquire/release, fences, RMW and
+  compare-exchange remain unimplemented.
+- RV64 backend explicitly recognizes the new Core opcode identities and
+  traverses their SSA uses, but **rejects actual atomic emission** until
+  its correct RVWMO/A-extension behavior is implemented; no ordinary
+  RV64 loads/stores are substituted for atomic memory operations.
+- The existing x86 native test suite exercises actual valid relaxed
+  stores/loads with wide integers, volatile memory, operand
+  single-evaluation, non-PIE GNU linkage, and rejects stronger-order
+  tests without emitting assembly.
+
+**Immutable real project receipts:**
+- [Focused #39130830980](https://github.com/yituanxing/minic-toolchain/actions/runs/39130830980)
+  SUCCESS with atomic-store, Lua 33/33 interpreter and `luac`,
+  original zlib and RV64 owner tests. SQLite advanced to
+  `sqlite3.i:6681` where `__atomic_load_n` was not yet implemented.
+- [Focused #39131255903](https://github.com/yituanxing/minic-toolchain/actions/runs/39131255903)
+  SUCCESS with paired
+  `PASS: x86-64 sqlite_atomic_store exit=42` and
+  `PASS: x86-64 sqlite_atomic_load exit=42`, plus negative
+  unsupported memory-order checks, zlib/Lua and RV64 focused.
+  SQLite advanced to `sqlite3.i:10004` with the next concrete blocker
+  `return (double)(__builtin_inff());`. SQLite full translation
+  unit/runtime remains **BLOCKED**, not passed.
+- [Full Linux #39131498898](https://github.com/yituanxing/minic-toolchain/actions/runs/39131498898)
+  SUCCESS on exact new shared AST/Core/IR and RV64 fail-close code:
+  `GNU_MINIC_SHARD_MERGE=PASS objects=2064 shards=7`,
+  `COHORT_SCOPE=FULL_C_UNIVERSE objects=2064`,
+  `COHORT_ABI=PASS objects=2064`,
+  `COHORT_LINK=REUSED name=full_all_verified selection=prefix:2064`,
+  `COHORT_P1=PASS name=full_all_verified syscalls=12 python_era_oracle=PASS`,
+  `COHORT_RESULT=PASS candidate_objects=2064 scope=FULL_C_UNIVERSE same_config=true`.
+  The 2064 objects were produced on the **same current run's** seven
+  independent workers, GNU-linked and booted in QEMU; not old cached binaries.
+  The frozen SHA manifest was updated for exact changed
+  `src/frontend/ast.h`, `src/core/core_lower.c`, and
+  `src/target/riscv64/core_codegen.c`, then verified in that run.
+  Manifest SHA matches are not a substitute for runtime tests.
+
+**Scope/decision:** This gives shared atomic *semantic representation*
+between backends while explicitly avoiding an unqualified RV64 emission.
+Continue the real upstream SQLite source from its next `__builtin_inff`
+blocker. Do not rush generalized atomic architecture, silently broaden
+memory-order guarantees, fabricate SQLite coverage, or change the original
+SQLite source. Both temporary focused and Linux workflow configurations
+were restored byte-for-byte to the original `main` versions after the
+immutable successful runs, leaving no workflow YAML diff in PR #524.
