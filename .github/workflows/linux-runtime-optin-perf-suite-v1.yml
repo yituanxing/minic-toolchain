@@ -282,7 +282,7 @@ jobs:
           retention-days: 14
   aggregate:
     needs: shard
-    if: always() && ((github.event_name == 'workflow_dispatch' && (inputs.mode == 'all3352' || inputs.mode == 'all')) || (github.event_name == 'push' && (contains(github.event.head_commit.message, '[linux-perf3352]') || contains(github.event.head_commit.message, '[minic-bootstrap-stage2-linux500]') || contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux500]') || contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux500-aggregate-only]') || contains(github.event.head_commit.message, '[minic-bootstrap-stage4-dispatch-audit-selftest]') || contains(github.event.head_commit.message, '[minic-bootstrap-native-asm-census]'))))
+    if: always() && ((github.event_name == 'workflow_dispatch' && (inputs.mode == 'all3352' || inputs.mode == 'all')) || (github.event_name == 'push' && (contains(github.event.head_commit.message, '[linux-perf3352]') || contains(github.event.head_commit.message, '[minic-bootstrap-stage2-linux500]') || contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux500]') || contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux500-aggregate-only]') || contains(github.event.head_commit.message, '[minic-bootstrap-stage4-dispatch-audit-selftest]') || contains(github.event.head_commit.message, '[minic-bootstrap-native-asm-census]') || contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux2064-receipt]'))))
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -328,6 +328,64 @@ jobs:
             build/bootstrap-stage2-native/asm-census-results.json
             build/bootstrap-stage2-native/asm-census-verdict.txt
           if-no-files-found: error
+          retention-days: 14
+
+      # Re-certify the immutable Stage4 Linux 2064 + QEMU P1 run using the
+      # existing aggregate job: no Linux recompiles and no guest QEMU reboot.
+      # Seven producer artifacts, receiver Image and Stage4 binary are all
+      # checked against their prior SHA manifests; original CI #39063287653
+      # ran P1 successfully but its extra postcheck counted a # comment as TU.
+      - uses: actions/checkout@v4
+        if: contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux2064-receipt]')
+      - name: Restore seven prior native Stage4 Kbuild producer object pools
+        if: contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux2064-receipt]')
+        uses: actions/download-artifact@v4
+        with:
+          repository: yituanxing/minic-toolchain
+          run-id: 39063287653
+          github-token: ${{ github.token }}
+          pattern: shard-*
+          path: stage4-2064-evidence/producers
+      - name: Restore prior full Linux Image and QEMU P1 receiver evidence
+        if: contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux2064-receipt]')
+        uses: actions/download-artifact@v4
+        with:
+          repository: yituanxing/minic-toolchain
+          run-id: 39063287653
+          github-token: ${{ github.token }}
+          name: sharded-gnu-minic-QEMU-dc8aefdd6d058e4564e997bc749bdd8fc2f53aff
+          path: stage4-2064-evidence/receiver
+      - name: Restore nine-tool Stage4 native compiler SHA provenance
+        if: contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux2064-receipt]')
+        uses: actions/download-artifact@v4
+        with:
+          repository: yituanxing/minic-toolchain
+          run-id: 39058935623
+          github-token: ${{ github.token }}
+          name: minic-current-bootstrap-stage2-native-runtime-v1
+          path: stage4-2064-evidence/native
+      - name: Verify 2064 unique actual Stage4 objects, guest traces and QEMU P1
+        if: contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux2064-receipt]')
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 -m py_compile tools/ci/minic-bootstrap-stage4-2064-receipt-v1.py
+          python3 tools/ci/minic-bootstrap-stage4-2064-receipt-v1.py \
+            --receiver stage4-2064-evidence/receiver \
+            --producers stage4-2064-evidence/producers \
+            --native stage4-2064-evidence/native \
+            --output stage4-2064-evidence/receipt.json \
+            | tee stage4-2064-evidence/verdict.txt
+          grep -Fq 'BOOTSTRAP_STAGE4_LINUX2064=PASS' stage4-2064-evidence/verdict.txt
+      - name: Preserve verified Stage4 2064 full Linux QEMU acceptance receipt
+        if: always() && contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux2064-receipt]')
+        uses: actions/upload-artifact@v4
+        with:
+          name: minic-bootstrap-stage4-linux2064-certified-final
+          path: |
+            stage4-2064-evidence/receipt.json
+            stage4-2064-evidence/verdict.txt
+          if-no-files-found: warn
           retention-days: 14
 
       - name: Retrieve seven Stage2 first500 Linux object manifests
@@ -402,12 +460,12 @@ jobs:
           retention-days: 14
 
       - uses: actions/download-artifact@v4
-        if: "!contains(github.event.head_commit.message, '[minic-bootstrap-stage2-linux500]') && !contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux500]') && !contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux500-aggregate-only]') && !contains(github.event.head_commit.message, '[minic-bootstrap-native-asm-census]') && !contains(github.event.head_commit.message, '[minic-bootstrap-stage4-dispatch-audit-selftest]')"
+        if: "!contains(github.event.head_commit.message, '[minic-bootstrap-stage2-linux500]') && !contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux500]') && !contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux500-aggregate-only]') && !contains(github.event.head_commit.message, '[minic-bootstrap-native-asm-census]') && !contains(github.event.head_commit.message, '[minic-bootstrap-stage4-dispatch-audit-selftest]') && !contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux2064-receipt]')"
         with:
           pattern: all3352-constant-p-shard-*
           path: evidence
       - name: Aggregate 3352 unique TU results
-        if: "!contains(github.event.head_commit.message, '[minic-bootstrap-stage2-linux500]') && !contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux500]') && !contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux500-aggregate-only]') && !contains(github.event.head_commit.message, '[minic-bootstrap-native-asm-census]') && !contains(github.event.head_commit.message, '[minic-bootstrap-stage4-dispatch-audit-selftest]')"
+        if: "!contains(github.event.head_commit.message, '[minic-bootstrap-stage2-linux500]') && !contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux500]') && !contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux500-aggregate-only]') && !contains(github.event.head_commit.message, '[minic-bootstrap-native-asm-census]') && !contains(github.event.head_commit.message, '[minic-bootstrap-stage4-dispatch-audit-selftest]') && !contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux2064-receipt]')"
         run: |
           set -Eeuo pipefail
           python3 - <<'PY' | tee all3352-final.txt
@@ -433,7 +491,7 @@ jobs:
               raise SystemExit("ALL3352_COMPILE_FAILURES")
           print("ALL3352_COMPILE_STATUS=PASS")
           PY
-      - if: always() && !contains(github.event.head_commit.message, '[minic-bootstrap-stage2-linux500]') && !contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux500]') && !contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux500-aggregate-only]') && !contains(github.event.head_commit.message, '[minic-bootstrap-native-asm-census]') && !contains(github.event.head_commit.message, '[minic-bootstrap-stage4-dispatch-audit-selftest]')
+      - if: always() && !contains(github.event.head_commit.message, '[minic-bootstrap-stage2-linux500]') && !contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux500]') && !contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux500-aggregate-only]') && !contains(github.event.head_commit.message, '[minic-bootstrap-native-asm-census]') && !contains(github.event.head_commit.message, '[minic-bootstrap-stage4-dispatch-audit-selftest]') && !contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux2064-receipt]')
         uses: actions/upload-artifact@v4
         with:
           name: all3352-constant-p-final-report
