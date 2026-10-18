@@ -39,6 +39,25 @@ int main(void) { return sum(17, 25); }
 EOF
 check_exit params_call 42
 
+# SQLite sqlite3LogEst: x86 baseline BSR/BSF must preserve operand widths.
+# Test genuine GNU bit-count builtins instead of rewriting source code.
+cat > "$tempdir/sqlite_bit_count.i" <<'EOF'
+int main(void) {
+    unsigned int a = 1u;
+    unsigned long b = 1ul;
+    unsigned long long c = 1ULL << 63;
+    if (__builtin_clz(a) != 31) return 1;
+    if (__builtin_clzl(b) != 63) return 2;
+    if (__builtin_clzll(c) != 0) return 3;
+    if (__builtin_ctz(16u) != 4) return 4;
+    if (__builtin_ctzl(1ul << 40) != 40) return 5;
+    if (__builtin_ctzll(c) != 63) return 6;
+    if (__builtin_clz(1u << 31) != 0) return 7;
+    return 42;
+}
+EOF
+check_exit sqlite_bit_count 42
+
 # SQLite's sqlite3Parser(void*, int, Token) ABI: Token is an
 # INTEGER/INTEGER two-eightbyte record in RDX/RCX after two scalar GPR args.
 cat > "$tempdir/sqlite_token_by_value.i" <<'EOF'

@@ -1459,6 +1459,41 @@ static bool x86_emit_instruction(FILE *out, const MinicC0Program *program,
                x86_value_load(out, frame, src, "%rax") &&
                x86_store_memory(out, bytes);
     }
+    case MINIC_CORE_INSTRUCTION_INTEGER_CLZ:
+    case MINIC_CORE_INSTRUCTION_INTEGER_CTZ: {
+        const MinicCoreValueId operand = ins->value.operand;
+        unsigned int width;
+        /* Baseline x86-64 BSR/BSF avoid BMI1/LZCNT feature assumptions.
+         * The Core operand is the promoted unsigned integer type, not
+         * necessarily 64 bits: clz(unsigned int) must return 31 for 1. */
+        if (operand >= fn->value_count || !minic_type_is_integer(ins->type) ||
+            !minic_type_is_unsigned_integer(fn->values[operand].type) ||
+            !minic_target_info_integer_width(target, program,
+                                               fn->values[operand].type, &width) ||
+            (width != 8U && width != 16U && width != 32U && width != 64U) ||
+            !x86_value_load(out, frame, operand, "%rax"))
+            return false;
+        if (ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_CLZ) {
+            if (fprintf(out,
+                "  testq %%rax, %%rax\n"
+                "  jz 1f\n"
+                "  bsrq %%rax, %%r10\n"
+                "  movl $%u, %%eax\n"
+                "  subl %%r10d, %%eax\n"
+                "  jmp 2f\n"
+                "1:\n"
+                "  movl $%u, %%eax\n"
+                "2:\n", width - 1U, width) < 0) return false;
+        } else if (fprintf(out,
+                "  testq %%rax, %%rax\n"
+                "  jz 1f\n"
+                "  bsfq %%rax, %%rax\n"
+                "  jmp 2f\n"
+                "1:\n"
+                "  movl $%u, %%eax\n"
+                "2:\n", width) < 0) return false;
+        return x86_value_store(out, frame, ins->result);
+    }
     case MINIC_CORE_INSTRUCTION_INTEGER_NEGATE:
     case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_NOT:
     case MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO:
