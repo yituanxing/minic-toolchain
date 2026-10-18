@@ -1642,6 +1642,18 @@ static bool x86_emit_instruction(FILE *out, const MinicC0Program *program,
     case MINIC_CORE_INSTRUCTION_INTEGER_NEGATE:
     case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_NOT:
     case MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO:
+        if (ins->value.operand >= fn->value_count) return false;
+        if (minic_type_is_int128_integer(fn->values[ins->value.operand].type)) {
+            if (ins->kind == MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO) return false;
+            if (!x86_i128_load(out, frame, ins->value.operand, "%rax", "%rdx"))
+                return false;
+            if (ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_NEGATE) {
+                if (fprintf(out, "  negq %%rax\n  adcq $0, %%rdx\n  negq %%rdx\n") < 0)
+                    return false;
+            } else if (fprintf(out, "  notq %%rax\n  notq %%rdx\n") < 0)
+                return false;
+            return x86_i128_store(out, frame, ins->result, "%rax", "%rdx");
+        }
         if (!x86_value_load(out, frame, ins->value.operand, "%rax")) return false;
         if (ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_NEGATE) {
             if (fprintf(out, "  negq %%rax\n") < 0) return false;
@@ -1666,8 +1678,102 @@ static bool x86_emit_instruction(FILE *out, const MinicC0Program *program,
     case MINIC_CORE_INSTRUCTION_POINTER_LESS:
         left = ins->value.binary.left;
         right = ins->value.binary.right;
-        if (left >= fn->value_count || right >= fn->value_count ||
-            !x86_value_load(out, frame, left, "%rax") ||
+        if (left >= fn->value_count || right >= fn->value_count)
+            return false;
+        if (minic_type_is_int128_integer(fn->values[left].type)) {
+            /* 128-bit x86 registers are pairs of 64-bit machine registers.
+             * Only explicitly handled operations are admitted. */
+            if (ins->kind != MINIC_CORE_INSTRUCTION_INTEGER_ADD &&
+                ins->kind != MINIC_CORE_INSTRUCTION_INTEGER_SUBTRACT &&
+                ins->kind != MINIC_CORE_INSTRUCTION_INTEGER_MULTIPLY &&
+                ins->kind != MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND &&
+                ins->kind != MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_OR &&
+                ins->kind != MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_XOR &&
+                ins->kind != MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_LEFT &&
+                ins->kind != MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_RIGHT)
+                return false;
+            if (!x86_i128_load(out, frame, left, "%rax", "%rdx"))
+                return false;
+            if (ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_LEFT ||
+                ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_RIGHT) {
+                if (minic_type_is_int128_integer(fn->values[right].type) ||
+                    !x86_value_load(out, frame, right, "%rcx"))
+                    return false;
+                /* Shift by >=128 is undefined C behavior. The >=64 limb case
+                 * is needed by SQLite's high-64 and high-32 extraction. */
+                if (ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_RIGHT) {
+                    bool signed_value = minic_type_is_signed_integer(ins->type);
+                    if (fprintf(out,
+                        "  cmpq $64, %%rcx\n"
+                        "  jae 1f\n"
+                        "  shrdq %%cl, %%rdx, %%rax\n"
+                        "  %s %%cl, %%rdx\n"
+                        "  jmp 2f\n"
+                        "1:\n"
+                        "  subq $64, %%rcx\n"
+                        "  movq %%rdx, %%rax\n"
+                        "  %s %%cl, %%rax\n"
+                        "  %s\n"
+                        "2:\n",
+                        signed_value ? "sarq" : "shrq",
+                        signed_value ? "sarq" : "shrq",
+                        signed_value ? "  sarq $63, %%rdx" : "  xorq %%edx, %%edx") < 0)
+                        return false;
+                } else if (fprintf(out,
+                        "  cmpq $64, %%rcx\n"
+                        "  jae 1f\n"
+                        "  shldq %%cl, %%rax, %%rdx\n"
+                        "  shlq %%cl, %%rax\n"
+                        "  jmp 2f\n"
+                        "1:\n"
+                        "  subq $64, %%rcx\n"
+                        "  movq %%rax, %%rdx\n"
+                        "  shlq %%cl, %%rdx\n"
+                        "  xorq %%eax, %%eax\n"
+                        "2:\n") < 0)
+                    return false;
+                return x86_i128_store(out, frame, ins->result, "%rax", "%rdx");
+            }
+            if (!minic_type_is_int128_integer(fn->values[right].type) ||
+                !x86_i128_load(out, frame, right, "%r10", "%r11"))
+                return false;
+            switch (ins->kind) {
+            case MINIC_CORE_INSTRUCTION_INTEGER_ADD:
+                if (fprintf(out, "  addq %%r10, %%rax\n  adcq %%r11, %%rdx\n") < 0)
+                    return false;
+                break;
+            case MINIC_CORE_INSTRUCTION_INTEGER_SUBTRACT:
+                if (fprintf(out, "  subq %%r10, %%rax\n  sbbq %%r11, %%rdx\n") < 0)
+                    return false;
+                break;
+            case MINIC_CORE_INSTRUCTION_INTEGER_MULTIPLY:
+                if (fprintf(out,
+                    "  movq %%rdx, %%r8\n"
+                    "  imulq %%r10, %%r8\n"
+                    "  movq %%r11, %%r9\n"
+                    "  imulq %%rax, %%r9\n"
+                    "  mulq %%r10\n"
+                    "  addq %%r8, %%rdx\n"
+                    "  addq %%r9, %%rdx\n") < 0)
+                    return false;
+                break;
+            case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND:
+                if (fprintf(out, "  andq %%r10, %%rax\n  andq %%r11, %%rdx\n") < 0)
+                    return false;
+                break;
+            case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_OR:
+                if (fprintf(out, "  orq %%r10, %%rax\n  orq %%r11, %%rdx\n") < 0)
+                    return false;
+                break;
+            case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_XOR:
+                if (fprintf(out, "  xorq %%r10, %%rax\n  xorq %%r11, %%rdx\n") < 0)
+                    return false;
+                break;
+            default: return false;
+            }
+            return x86_i128_store(out, frame, ins->result, "%rax", "%rdx");
+        }
+        if (!x86_value_load(out, frame, left, "%rax") ||
             !x86_value_load(out, frame, right, "%r10")) return false;
         switch (ins->kind) {
         case MINIC_CORE_INSTRUCTION_INTEGER_ADD:

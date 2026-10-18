@@ -39,6 +39,45 @@ int main(void) { return sum(17, 25); }
 EOF
 check_exit params_call 42
 
+# SQLite's util.c uses genuine __uint128_t, including nonzero upper
+# halves. This is a native two-limb test, not a 64-bit fallback.
+cat > "$tempdir/sqlite_u128.i" <<'EOF'
+typedef unsigned __int128 U128;
+typedef __int128 I128;
+int main(void) {
+    U128 a = ((U128)1 << 64) + 7;
+    U128 b = (U128)0xffffffffffffffffULL * (U128)0xffffffffffffffffULL;
+    U128 c = ((U128)1 << 64) - 1;
+    U128 d = c + 2;
+    U128 e = (U128)0x8000000000000000ULL * (U128)3;
+    volatile U128 memory = d;
+    I128 negative = (I128)(-2LL);
+    if ((unsigned long long)(a >> 64) != 1ULL ||
+        (unsigned long long)a != 7ULL) return 1;
+    if ((unsigned long long)(b >> 64) != 0xfffffffffffffffeULL ||
+        (unsigned long long)b != 1ULL) return 2;
+    if ((unsigned long long)(memory >> 64) != 1ULL ||
+        (unsigned long long)memory != 1ULL) return 3;
+    if ((unsigned long long)(e >> 64) != 1ULL ||
+        (unsigned long long)e != 0x8000000000000000ULL) return 4;
+    if ((unsigned long long)((U128)negative >> 64) !=
+        0xffffffffffffffffULL) return 5;
+    if ((unsigned long long)((a - 7) >> 64) != 1ULL) return 6;
+    if ((unsigned long long)(((U128)1 << 100) >> 64) != (1ULL << 36)) return 7;
+    return 42;
+}
+EOF
+check_exit sqlite_u128 42
+
+# Check the same source against the host GNU compiler.
+"$HOST_CC" -std=gnu11 -no-pie -x c "$tempdir/sqlite_u128.i" -o "$tempdir/sqlite_u128.gnu"
+set +e
+"$tempdir/sqlite_u128.gnu"
+native_result=$?
+set -e
+test "$native_result" -eq 42
+echo "PASS: GCC oracle sqlite_u128 exit=42"
+
 # SQLite sqlite3AddInt64 uses checked builtin overflow with a typed
 # output pointer. Verify stored wrapped bits and overflow flag independently.
 cat > "$tempdir/sqlite_overflow.i" <<'EOF'
