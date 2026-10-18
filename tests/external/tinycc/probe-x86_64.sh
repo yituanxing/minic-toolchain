@@ -38,7 +38,19 @@ echo "TINYCC_X86_64_BASELINE=PASS compiler=GCC stage=configure,build,run"
 # omitted it, thereby losing /usr/include/<triplet> in the compiled
 # TinyCC system search path. Preserve the configure-generated setting,
 # not a forced include path or a patch to libtcc.c.
-triplet=$(sed -n 's/^CONFIG_TRIPLET[[:space:]]*=[[:space:]]*//p' "$src/config.mak" | head -n 1)
+# TinyCC 0.9.27's configure writes these via print_mak as
+# NATIVE_DEFINES+=-DCONFIG_TRIPLET="\\"x86_64-linux-gnu\\""
+# (not CONFIG_TRIPLET=...). Read its actual Makefile macro.
+triplet=$(python3 - "$src/config.mak" <<'PY'
+import re, sys
+for line in open(sys.argv[1], encoding="utf-8"):
+    if line.startswith("NATIVE_DEFINES") and "CONFIG_TRIPLET=" in line:
+        m = re.search(r"CONFIG_TRIPLET=.*?([A-Za-z0-9_]+(?:-[A-Za-z0-9_]+)+)", line)
+        if m:
+            print(m.group(1))
+            break
+PY
+)
 if test -z "$triplet" || ! test -d "/usr/include/$triplet"; then
   echo "TINYCC_X86_64_CONFIG=FAIL missing-upstream-triplet triplet=$triplet" >&2
   exit 1
