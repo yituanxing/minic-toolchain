@@ -1893,9 +1893,11 @@ static bool x86_emit_instruction(FILE *out, const MinicC0Program *program,
             if (getenv("MINIC_X86_CALL_TRACE") != NULL)
                 (void)fprintf(stderr,
                     "X86_CALL_GATE function=%s callee=%s stage=return "
-                    "return_kind=%d long_double=%d\\n",
-                    fn->name, callee->name, (int)callee->return_type.kind,
-                    minic_type_is_long_double(callee->return_type) ? 1 : 0);
+                    "long_double=%d double=%d record=%d\n",
+                    fn->name, callee->name,
+                    minic_type_is_long_double(callee->return_type) ? 1 : 0,
+                    minic_type_is_double(callee->return_type) ? 1 : 0,
+                    minic_type_is_record(callee->return_type) ? 1 : 0);
             return false;
         }
         return true;
