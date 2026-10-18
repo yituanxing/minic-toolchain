@@ -409,6 +409,25 @@ echo "PASS: SysV va_copy without independent cursor intentionally fails closed"
 
 
 
+# SQLite 3.54.1 glibc <byteswap.h> uses these GNU builtins.
+# Runtime fixture checks full width, zero, overflow and *single evaluation*.
+cat > "$tempdir/sqlite_bswap.i" <<'EOF'
+unsigned short a16(unsigned int x) { return __builtin_bswap16(x); }
+unsigned int a32(unsigned int x) { return __builtin_bswap32(x); }
+unsigned long long a64(unsigned long long x) { return __builtin_bswap64(x); }
+int main(void) {
+    unsigned int a[] = {0x12345678u,0xdeadbeefu};
+    int side = 0;
+    if (a16(0x1234u) != 0x3412u) return 1;
+    if (a32(0x12345678u) != 0x78563412u) return 2;
+    if (a64(0x0123456789abcdefULL) != 0xefcdab8967452301ULL) return 3;
+    if (a16(0xffffu) != 0xffffu || a32(0u) != 0u) return 4;
+    if (__builtin_bswap32(a[side++]) != 0x78563412u || side != 1) return 5;
+    return 42;
+}
+EOF
+check_exit sqlite_bswap 42
+
 # Floating values use raw bits in Core slots; comparisons must reject NaNs.
 cat > "$tempdir/double_core.i" <<'EOF'
 int main(void) {

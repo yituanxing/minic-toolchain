@@ -815,6 +815,15 @@ static bool verify_expression(const MinicC0Program *program,
         case MINIC_BUILTIN_UNARY_ISDIGIT:
             expected_operand_type = minic_type_int();
             break;
+        case MINIC_BUILTIN_UNARY_BSWAP16:
+            expected_operand_type = minic_type_unsigned_short();
+            break;
+        case MINIC_BUILTIN_UNARY_BSWAP32:
+            expected_operand_type = minic_type_unsigned_int();
+            break;
+        case MINIC_BUILTIN_UNARY_BSWAP64:
+            expected_operand_type = minic_type_unsigned_long_long();
+            break;
         case MINIC_BUILTIN_UNARY_CONSTANT_P:
             /* GCC permits __builtin_constant_p on non-integer expressions too.
              * The operand is unevaluated; its type does not constrain the int
@@ -829,7 +838,11 @@ static bool verify_expression(const MinicC0Program *program,
         return builtin_operand != NULL &&
                minic_type_equal(builtin_operand->type, expected_operand_type) &&
                expression->value_category == MINIC_VALUE_RVALUE &&
-               minic_type_equal(expression->type, minic_type_int());
+               minic_type_equal(expression->type,
+                   expression->value.builtin_unary.operator_kind == MINIC_BUILTIN_UNARY_BSWAP16 ||
+                   expression->value.builtin_unary.operator_kind == MINIC_BUILTIN_UNARY_BSWAP32 ||
+                   expression->value.builtin_unary.operator_kind == MINIC_BUILTIN_UNARY_BSWAP64
+                       ? expected_operand_type : minic_type_int());
     }
     case MINIC_EXPRESSION_BUILTIN_OVERFLOW: {
         const MinicExpression *overflow_left;

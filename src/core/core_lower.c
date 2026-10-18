@@ -7901,6 +7901,106 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
                    : MINIC_CORE_LOWER_ERROR;
     }
 
+    /* SQLite 3.54.1 glibc __bswap_{16,32,64} pressure: lower once to
+     * target-neutral integer Core operations. RV64 and x86 both reuse the
+     * existing shift/mask/OR semantics; ISA lowering stays target-owned.
+     * Do NOT inline the source operand N times: bswap(f(i++)) is evaluated
+     * exactly once. The intermediate type is 32 bits for bswap16 and the
+     * corresponding unsigned width for bswap32/64. */
+    if (expression->kind == MINIC_EXPRESSION_BUILTIN_UNARY &&
+        (expression->value.builtin_unary.operator_kind == MINIC_BUILTIN_UNARY_BSWAP16 ||
+         expression->value.builtin_unary.operator_kind == MINIC_BUILTIN_UNARY_BSWAP32 ||
+         expression->value.builtin_unary.operator_kind == MINIC_BUILTIN_UNARY_BSWAP64)) {
+        const MinicExpression *operand;
+        MinicBuiltinUnaryOperator opcode;
+        MinicType work_type, result_type;
+        MinicCoreValueId input, accumulator, term, mask, shift, next_value;
+        MinicCoreInstruction bit;
+        MinicCoreLowerStatus status;
+        size_t byte_count, i;
+
+        opcode = expression->value.builtin_unary.operator_kind;
+        result_type = opcode == MINIC_BUILTIN_UNARY_BSWAP16
+                          ? minic_type_unsigned_short()
+                          : opcode == MINIC_BUILTIN_UNARY_BSWAP32
+                                ? minic_type_unsigned_int()
+                                : minic_type_unsigned_long_long();
+        work_type = opcode == MINIC_BUILTIN_UNARY_BSWAP16
+                        ? minic_type_unsigned_int() : result_type;
+        byte_count = opcode == MINIC_BUILTIN_UNARY_BSWAP16 ? 2U
+                     : opcode == MINIC_BUILTIN_UNARY_BSWAP32 ? 4U : 8U;
+        operand = minic_c0_program_expression(
+            context->body->program, expression->value.builtin_unary.operand);
+        if (operand == NULL || !minic_type_equal(expression->type, result_type) ||
+            !minic_type_equal(operand->type, result_type))
+            return MINIC_CORE_LOWER_UNSUPPORTED;
+        status = lower_expression(context, expression->value.builtin_unary.operand, &input);
+        if (status != MINIC_CORE_LOWER_OK) return status;
+        if (byte_count == 2U) {
+            status = append_integer_conversion(
+                context, expression->span, work_type, input, &input);
+            if (status != MINIC_CORE_LOWER_OK) return status;
+        }
+        (void)memset(&bit, 0, sizeof(bit));
+        bit.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
+        bit.span = expression->span;
+        bit.type = work_type;
+        bit.result = MINIC_CORE_VALUE_INVALID;
+        bit.value.integer_value = 0;
+        if (!minic_core_function_append_value_instruction(
+                context->function, context->block_id, &bit, &accumulator))
+            return MINIC_CORE_LOWER_ERROR;
+        bit.value.integer_value = 255;
+        if (!minic_core_function_append_value_instruction(
+                context->function, context->block_id, &bit, &mask))
+            return MINIC_CORE_LOWER_ERROR;
+        for (i = 0U; i < byte_count; ++i) {
+            bit.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
+            bit.type = work_type;
+            bit.value.integer_value = (int64_t)(i * 8U);
+            if (!minic_core_function_append_value_instruction(
+                    context->function, context->block_id, &bit, &shift))
+                return MINIC_CORE_LOWER_ERROR;
+            bit.kind = MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_RIGHT;
+            bit.value.binary.left = input;
+            bit.value.binary.right = shift;
+            if (!minic_core_function_append_value_instruction(
+                    context->function, context->block_id, &bit, &term))
+                return MINIC_CORE_LOWER_ERROR;
+            bit.kind = MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND;
+            bit.value.binary.left = term;
+            bit.value.binary.right = mask;
+            if (!minic_core_function_append_value_instruction(
+                    context->function, context->block_id, &bit, &term))
+                return MINIC_CORE_LOWER_ERROR;
+            bit.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
+            bit.value.integer_value = (int64_t)((byte_count - 1U - i) * 8U);
+            if (!minic_core_function_append_value_instruction(
+                    context->function, context->block_id, &bit, &shift))
+                return MINIC_CORE_LOWER_ERROR;
+            bit.kind = MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_LEFT;
+            bit.value.binary.left = term;
+            bit.value.binary.right = shift;
+            if (!minic_core_function_append_value_instruction(
+                    context->function, context->block_id, &bit, &term))
+                return MINIC_CORE_LOWER_ERROR;
+            bit.kind = MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_OR;
+            bit.value.binary.left = accumulator;
+            bit.value.binary.right = term;
+            if (!minic_core_function_append_value_instruction(
+                    context->function, context->block_id, &bit, &next_value))
+                return MINIC_CORE_LOWER_ERROR;
+            accumulator = next_value;
+        }
+        if (byte_count == 2U) {
+            status = append_integer_conversion(
+                context, expression->span, result_type, accumulator, &accumulator);
+            if (status != MINIC_CORE_LOWER_OK) return status;
+        }
+        *value_id = accumulator;
+        return MINIC_CORE_LOWER_OK;
+    }
+
     if (expression->kind == MINIC_EXPRESSION_BUILTIN_UNARY &&
         (expression->value.builtin_unary.operator_kind == MINIC_BUILTIN_UNARY_CLZ ||
          expression->value.builtin_unary.operator_kind == MINIC_BUILTIN_UNARY_CLZL ||

@@ -2441,6 +2441,15 @@ static bool parse_builtin_unary(MinicParser *parser,
     case MINIC_BUILTIN_UNARY_ISDIGIT:
         argument_type = minic_type_int();
         break;
+    case MINIC_BUILTIN_UNARY_BSWAP16:
+        argument_type = minic_type_unsigned_short();
+        break;
+    case MINIC_BUILTIN_UNARY_BSWAP32:
+        argument_type = minic_type_unsigned_int();
+        break;
+    case MINIC_BUILTIN_UNARY_BSWAP64:
+        argument_type = minic_type_unsigned_long_long();
+        break;
     default:
         return false;
     }
@@ -2477,7 +2486,13 @@ static bool parse_builtin_unary(MinicParser *parser,
     expression.kind = MINIC_EXPRESSION_BUILTIN_UNARY;
     expression.span.begin = begin;
     expression.span.end = parser->current.span.end;
-    expression.type = minic_type_int();
+    /* GCC bswap builtins return uint16_t/uint32_t/uint64_t respectively;
+     * all existing bit-count/isdigit builtins return int. */
+    expression.type =
+        operator_kind == MINIC_BUILTIN_UNARY_BSWAP16 ||
+        operator_kind == MINIC_BUILTIN_UNARY_BSWAP32 ||
+        operator_kind == MINIC_BUILTIN_UNARY_BSWAP64
+            ? argument_type : minic_type_int();
     expression.value_category = MINIC_VALUE_RVALUE;
     expression.value.builtin_unary.operator_kind = operator_kind;
     expression.value.builtin_unary.operand = operand_id;
@@ -2880,6 +2895,24 @@ static bool parse_primary(MinicParser *parser, MinicExpressionId *expression_id,
             !minic_parser_parse_postfix(parser, primary_id, &primary_id)) {
             return false;
         }
+        return finish_value_expression(parser, primary_id, decay_array, expression_id);
+    }
+    if (generic_token_text_equals(parser, "__builtin_bswap16")) {
+        if (!parse_builtin_unary(
+                parser, MINIC_BUILTIN_UNARY_BSWAP16, "__builtin_bswap16", &primary_id) ||
+            !minic_parser_parse_postfix(parser, primary_id, &primary_id)) return false;
+        return finish_value_expression(parser, primary_id, decay_array, expression_id);
+    }
+    if (generic_token_text_equals(parser, "__builtin_bswap32")) {
+        if (!parse_builtin_unary(
+                parser, MINIC_BUILTIN_UNARY_BSWAP32, "__builtin_bswap32", &primary_id) ||
+            !minic_parser_parse_postfix(parser, primary_id, &primary_id)) return false;
+        return finish_value_expression(parser, primary_id, decay_array, expression_id);
+    }
+    if (generic_token_text_equals(parser, "__builtin_bswap64")) {
+        if (!parse_builtin_unary(
+                parser, MINIC_BUILTIN_UNARY_BSWAP64, "__builtin_bswap64", &primary_id) ||
+            !minic_parser_parse_postfix(parser, primary_id, &primary_id)) return false;
         return finish_value_expression(parser, primary_id, decay_array, expression_id);
     }
     if (generic_token_text_equals(parser, "__builtin_clz")) {
