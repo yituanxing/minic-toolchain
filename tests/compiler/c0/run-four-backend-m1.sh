@@ -9,7 +9,7 @@ QEMU_LOONGARCH64=qemu-loongarch64
 w=$(mktemp -d)
 trap 'rm -rf "$w"' EXIT HUP INT TERM
 m2_enabled=0
-if [ "${FOUR_BACKEND_M2:-0}" = "1" ] || [ "${FOUR_BACKEND_M2_STACK:-0}" = "1" ] || [ "${FOUR_BACKEND_M3_CALL:-0}" = "1" ] || [ "${FOUR_BACKEND_M4_GLOBAL:-0}" = "1" ] || [ "${FOUR_BACKEND_M5_POINTER:-0}" = "1" ] || [ "${FOUR_BACKEND_M6_ADDRESS:-0}" = "1" ] || [ "${FOUR_BACKEND_M7_FRAME:-0}" = "1" ] || [ "${FOUR_BACKEND_M8_NARROW:-0}" = "1" ] || [ "${FOUR_BACKEND_M9_UNSIGNED:-0}" = "1" ] || [ "${FOUR_BACKEND_M10_MOD:-0}" = "1" ] || [ "${FOUR_BACKEND_M11_INDEX:-0}" = "1" ] || [ "${FOUR_BACKEND_M12_BITWISE:-0}" = "1" ] || [ "${FOUR_BACKEND_M13_NARROW_ARITH:-0}" = "1" ] || [ "${FOUR_BACKEND_M14_SHIFT:-0}" = "1" ] || [ "${FOUR_BACKEND_M15_SCALAR_RETURN:-0}" = "1" ] || [ "${FOUR_BACKEND_M17_RECORD:-0}" = "1" ] || [ "${FOUR_BACKEND_M18_VARARGS:-0}" = "1" ] || [ "${FOUR_BACKEND_M19_PTR_COMPARE:-0}" = "1" ] || [ "${FOUR_BACKEND_M20_LP64_ABI:-0}" = "1" ] || [ "${FOUR_BACKEND_M21_LP64_ADD:-0}" = "1" ] || [ "${FOUR_BACKEND_M22_LP64_CONV:-0}" = "1" ] || [ "${FOUR_BACKEND_M23_LP64_COMPARE:-0}" = "1" ] || [ "${FOUR_BACKEND_M24_INDIRECT_CALL:-0}" = "1" ] || [ "${FOUR_BACKEND_M25_DOUBLE_TRANSPORT:-0}" = "1" ] || [ "${FOUR_BACKEND_M26_DOUBLE_DIV:-0}" = "1" ] || [ "${FOUR_BACKEND_M27_FP_PARAMETER:-0}" = "1" ] || [ "${FOUR_BACKEND_M28_INT_DOUBLE:-0}" = "1" ] || [ "${FOUR_BACKEND_M29_DOUBLE_CMP:-0}" = "1" ] || [ "${FOUR_BACKEND_M30_FP_CALL:-0}" = "1" ] || [ "${FOUR_BACKEND_M31_FLOAT_PROMOTE:-0}" = "1" ]; then
+if [ "${FOUR_BACKEND_M2:-0}" = "1" ] || [ "${FOUR_BACKEND_M2_STACK:-0}" = "1" ] || [ "${FOUR_BACKEND_M3_CALL:-0}" = "1" ] || [ "${FOUR_BACKEND_M4_GLOBAL:-0}" = "1" ] || [ "${FOUR_BACKEND_M5_POINTER:-0}" = "1" ] || [ "${FOUR_BACKEND_M6_ADDRESS:-0}" = "1" ] || [ "${FOUR_BACKEND_M7_FRAME:-0}" = "1" ] || [ "${FOUR_BACKEND_M8_NARROW:-0}" = "1" ] || [ "${FOUR_BACKEND_M9_UNSIGNED:-0}" = "1" ] || [ "${FOUR_BACKEND_M10_MOD:-0}" = "1" ] || [ "${FOUR_BACKEND_M11_INDEX:-0}" = "1" ] || [ "${FOUR_BACKEND_M12_BITWISE:-0}" = "1" ] || [ "${FOUR_BACKEND_M13_NARROW_ARITH:-0}" = "1" ] || [ "${FOUR_BACKEND_M14_SHIFT:-0}" = "1" ] || [ "${FOUR_BACKEND_M15_SCALAR_RETURN:-0}" = "1" ] || [ "${FOUR_BACKEND_M17_RECORD:-0}" = "1" ] || [ "${FOUR_BACKEND_M18_VARARGS:-0}" = "1" ] || [ "${FOUR_BACKEND_M19_PTR_COMPARE:-0}" = "1" ] || [ "${FOUR_BACKEND_M20_LP64_ABI:-0}" = "1" ] || [ "${FOUR_BACKEND_M21_LP64_ADD:-0}" = "1" ] || [ "${FOUR_BACKEND_M22_LP64_CONV:-0}" = "1" ] || [ "${FOUR_BACKEND_M23_LP64_COMPARE:-0}" = "1" ] || [ "${FOUR_BACKEND_M24_INDIRECT_CALL:-0}" = "1" ] || [ "${FOUR_BACKEND_M25_DOUBLE_TRANSPORT:-0}" = "1" ] || [ "${FOUR_BACKEND_M26_DOUBLE_DIV:-0}" = "1" ] || [ "${FOUR_BACKEND_M27_FP_PARAMETER:-0}" = "1" ] || [ "${FOUR_BACKEND_M28_INT_DOUBLE:-0}" = "1" ] || [ "${FOUR_BACKEND_M29_DOUBLE_CMP:-0}" = "1" ] || [ "${FOUR_BACKEND_M30_FP_CALL:-0}" = "1" ] || [ "${FOUR_BACKEND_M31_FLOAT_PROMOTE:-0}" = "1" ] || [ "${FOUR_BACKEND_M32_UNREACHABLE:-0}" = "1" ]; then
     m2_enabled=1
 fi
 cat > "$w/return.i" <<'EOF'
@@ -1064,6 +1064,17 @@ int main(void) {
     return 42;
 }
 EOF
+# M32: real Core unreachable terminator (trap, not fallthrough).
+cat > "$w/unreachable_term.i" <<'EOF'
+int mini_unreachable_term(int condition) {
+    if (condition) return 42;
+    __builtin_unreachable();
+}
+EOF
+cat > "$w/driver_unreachable_term.c" <<'EOF'
+extern int mini_unreachable_term(int);
+int main(void) { return mini_unreachable_term(1); }
+EOF
 check_qemu_exit() {
     emulator=$1
     binary=$2
@@ -1181,6 +1192,9 @@ for target in aarch64 loongarch64; do
     if [ "${FOUR_BACKEND_M31_FLOAT_PROMOTE:-0}" = "1" ]; then
         cases="$cases float_promote"
     fi
+    if [ "${FOUR_BACKEND_M32_UNREACHABLE:-0}" = "1" ]; then
+        cases="$cases unreachable_term"
+    fi
     if [ "$m2_enabled" = "1" ]; then
         # Independent originals for every new CFG/comparison fixture, not
         # merely an expected return code from a MiniC-owned executable.
@@ -1272,6 +1286,9 @@ for target in aarch64 loongarch64; do
         if [ "${FOUR_BACKEND_M31_FLOAT_PROMOTE:-0}" = "1" ]; then
             oracle_cases="$oracle_cases float_promote"
         fi
+        if [ "${FOUR_BACKEND_M32_UNREACHABLE:-0}" = "1" ]; then
+            oracle_cases="$oracle_cases unreachable_term"
+        fi
         for testcase in $oracle_cases; do
             "$gcc" -static -x c "$w/$testcase.i" "$w/driver_$testcase.c" \
                 -o "$w/$target.gnu-$testcase.elf"
@@ -1296,6 +1313,183 @@ for target in aarch64 loongarch64; do
                 grep -Fq 'add.d $t3, $sp, $t3' "$w/$target.$testcase.s"
             fi
             echo "FOUR_BACKEND_M7_FRAME_ENCODING=PASS target=$target register_SP_adjust=1 large_offset=1"
+        fi
+        if [ "$testcase" = "unreachable_term" ]; then
+            if [ "$target" = "aarch64" ]; then
+                grep -Fq 'brk #0' "$w/$target.$testcase.s"
+            else
+                grep -Eq '^[[:space:]]+break 0
+        case "$testcase" in
+            return) "$gcc" -static "$w/$target.return.o" -o "$w/$target.return.elf" ;;
+            add) "$gcc" -static "$w/$target.add.o" "$w/driver_add.c" -o "$w/$target.add.elf" ;;
+            calc) "$gcc" -static "$w/$target.calc.o" "$w/driver_calc.c" -o "$w/$target.calc.elf" ;;
+            branch) "$gcc" -static "$w/$target.branch.o" "$w/driver_branch.c" -o "$w/$target.branch.elf" ;;
+            loop) "$gcc" -static "$w/$target.loop.o" "$w/driver_loop.c" -o "$w/$target.loop.elf" ;;
+            compare) "$gcc" -static "$w/$target.compare.o" "$w/driver_compare.c" -o "$w/$target.compare.elf" ;;
+            stack9) "$gcc" -static "$w/$target.stack9.o" "$w/driver_stack9.c" -o "$w/$target.stack9.elf" ;;
+            stack10) "$gcc" -static "$w/$target.stack10.o" "$w/driver_stack10.c" -o "$w/$target.stack10.elf" ;;
+            bit_xor|bit_and|bit_or|bit_unsigned)
+                "$gcc" -static "$w/$target.$testcase.o" "$w/driver_$testcase.c" -o "$w/$target.$testcase.elf" ;;
+            u8_index|s8_index|u16_index|s16_index)
+                "$gcc" -static "$w/$target.$testcase.o" "$w/driver_$testcase.c" -o "$w/$target.$testcase.elf" ;;
+            size64_abi|size64_add|size64_conv|size64_compare|indirect_hooks|double_transport|double_div|fp_parameter|int_double|double_compare|fp_call|float_promote|unreachable_term|pointer_null|pointer_equality|function_address)
+                "$gcc" -static "$w/$target.$testcase.o" "$w/driver_$testcase.c" -o "$w/$target.$testcase.elf" ;;
+            vararg_int|vararg_pointer)
+                "$gcc" -static "$w/$target.$testcase.o" "$w/driver_$testcase.c" -o "$w/$target.$testcase.elf" ;;
+            record_zero|record_hooks|record_padding)
+                "$gcc" -static "$w/$target.$testcase.o" "$w/driver_$testcase.c" -o "$w/$target.$testcase.elf" ;;
+            u8_return|s8_return|u8_external|u8_internal)
+                "$gcc" -static "$w/$target.$testcase.o" "$w/driver_$testcase.c" -o "$w/$target.$testcase.elf" ;;
+            shift_left|shift_unsigned|shift_signed|shift_byte|shift_count)
+                "$gcc" -static "$w/$target.$testcase.o" "$w/driver_$testcase.c" -o "$w/$target.$testcase.elf" ;;
+            u8_wrap|u8_sub|u8_mul|u16_wrap|s8_add)
+                "$gcc" -static "$w/$target.$testcase.o" "$w/driver_$testcase.c" -o "$w/$target.$testcase.elf" ;;
+            umod|smod|udiv|sdiv)
+                "$gcc" -static "$w/$target.$testcase.o" "$w/driver_$testcase.c" -o "$w/$target.$testcase.elf" ;;
+            unsigned_less|unsigned_add|unsigned_index)
+                "$gcc" -static "$w/$target.$testcase.o" "$w/driver_$testcase.c" -o "$w/$target.$testcase.elf" ;;
+            ubyte_read|sbyte_read|byte_write|ushort_read|short_read|uchar_conv|ushort_conv)
+                "$gcc" -static "$w/$target.$testcase.o" "$w/driver_$testcase.c" -o "$w/$target.$testcase.elf" ;;
+            large_frame|local_array)
+                "$gcc" -static "$w/$target.$testcase.o" "$w/driver_$testcase.c" -o "$w/$target.$testcase.elf" ;;
+            field_read|field_write|pointer_index|pointer_negative|pointer_cast)
+                "$gcc" -static "$w/$target.$testcase.o" "$w/driver_$testcase.c" -o "$w/$target.$testcase.elf" ;;
+            pointer_read|pointer_void|pointer_return)
+                "$gcc" -static "$w/$target.$testcase.o" "$w/driver_$testcase.c" -o "$w/$target.$testcase.elf" ;;
+            global_int|global_array)
+                "$gcc" -static "$w/$target.$testcase.o" "$w/driver_$testcase.c" -o "$w/$target.$testcase.elf" ;;
+            call_external|call_internal|call_nested)
+                "$gcc" -static "$w/$target.$testcase.o" "$w/driver_$testcase.c" -o "$w/$target.$testcase.elf" ;;
+        esac
+        check_qemu_exit "$qemu" "$w/$target.$testcase.elf" 42
+        echo "FOUR_BACKEND_M1_CASE=PASS target=$target case=$testcase MiniC_object=1 GNU_AS_LD=1 QEMU_exit=42"
+    done
+    "$MINIC_CC" --target="$target-linux" -S "$w/wide.i" -o "$w/$target.wide.s"
+    "$gcc" -c "$w/$target.wide.s" -o "$w/$target.wide.o"
+    "$gcc" -static "$w/$target.wide.o" -o "$w/$target.wide.elf"
+    check_qemu_exit "$qemu" "$w/$target.wide.elf" 64
+    echo "FOUR_BACKEND_M1_CASE=PASS target=$target case=wide-immediate MiniC_object=1 GNU_AS_LD=1 QEMU_exit=64 GCC_oracle=64"
+    if "$MINIC_CC" --target="$target-linux" -S "$w/unsupported.i" \
+            -o "$w/$target.unsupported.s" 2>"$w/$target.unsupported.err"; then
+        echo "FOUR_BACKEND_M1=FAIL target=$target admitted unsupported global" >&2
+        exit 1
+    fi
+    test ! -e "$w/$target.unsupported.s"
+    if [ "${FOUR_BACKEND_M3_CALL:-0}" = "1" ]; then
+        if "$MINIC_CC" --target="$target-linux" -S "$w/call_unsupported.i" \
+                -o "$w/$target.call_unsupported.s" 2>"$w/$target.call_unsupported.err"; then
+            echo "FOUR_BACKEND_M3_CALL=FAIL target=$target accepted unsupported nine-argument caller" >&2
+            exit 1
+        fi
+        test ! -e "$w/$target.call_unsupported.s"
+        echo "FOUR_BACKEND_M3_CALL_TARGET=PASS target=$target MiniC_GNU_link_QEMU=10 direct_call_cases=3 GNU_oracles=3 unsupported_calls=fail-closed"
+    fi
+    if [ "$m2_enabled" = "1" ]; then
+        echo "FOUR_BACKEND_M2_TARGET=PASS target=$target MiniC_GNU_link_QEMU=7 CFG_branch=1 CFG_loop=1 signed_compare=1 unsupported=fail-closed"
+        if [ "${FOUR_BACKEND_M2_STACK:-0}" = "1" ]; then
+            echo "FOUR_BACKEND_M2_STACK_TARGET=PASS target=$target MiniC_GNU_link_QEMU=9 GNU_stack_argument_oracles=2"
+        fi
+    else
+        echo "FOUR_BACKEND_M1_TARGET=PASS target=$target GCC_oracle=2 MiniC_GNU_link_QEMU=4 unsupported=fail-closed"
+    fi
+done
+if [ "$m2_enabled" = "1" ]; then
+    echo "FOUR_BACKEND_M2=PASS architectures=2 executable_QEMU_cases=14 CFG_cases=4 comparison_cases=2 GCC_independent_oracles=10"
+    if [ "${FOUR_BACKEND_M2_STACK:-0}" = "1" ]; then
+        echo "FOUR_BACKEND_M2_STACK=PASS architectures=2 executable_QEMU_cases=18 ninth_tenth_arg_cases=4 GCC_independent_oracles=14"
+    fi
+    if [ "${FOUR_BACKEND_M3_CALL:-0}" = "1" ]; then
+        echo "FOUR_BACKEND_M3_CALL=PASS architectures=2 executable_QEMU_cases=20 direct_calls=6 GNU_independent_oracles=16"
+    fi
+    if [ "${FOUR_BACKEND_M4_GLOBAL:-0}" = "1" ]; then
+        echo "FOUR_BACKEND_M4_GLOBAL=PASS architectures=2 executable_QEMU_cases=18 global_cases=4 GNU_independent_oracles=14 unsupported_relocations=fail-closed"
+    fi
+    if [ "${FOUR_BACKEND_M5_POINTER:-0}" = "1" ]; then
+        echo "FOUR_BACKEND_M5_POINTER=PASS architectures=2 executable_QEMU_cases=20 pointer_void_cases=6 GNU_independent_oracles=16"
+    fi
+    if [ "${FOUR_BACKEND_M6_ADDRESS:-0}" = "1" ]; then
+        echo "FOUR_BACKEND_M6_ADDRESS=PASS architectures=2 executable_QEMU_cases=24 field_pointer_bitcast_cases=10 GNU_independent_oracles=20"
+    fi
+    if [ "${FOUR_BACKEND_M7_FRAME:-0}" = "1" ]; then
+        echo "FOUR_BACKEND_M7_FRAME=PASS architectures=2 executable_QEMU_cases=18 large_frame_and_local_array_cases=4 GNU_independent_oracles=14"
+    fi
+    if [ "${FOUR_BACKEND_M8_NARROW:-0}" = "1" ]; then
+        echo "FOUR_BACKEND_M8_NARROW=PASS architectures=2 executable_QEMU_cases=28 signed_unsigned_byte_short_cases=14 GNU_independent_oracles=24"
+    fi
+    if [ "${FOUR_BACKEND_M9_UNSIGNED:-0}" = "1" ]; then
+        echo "FOUR_BACKEND_M9_UNSIGNED=PASS architectures=2 executable_QEMU_cases=20 unsigned_compare_arithmetic_index_cases=6 GNU_independent_oracles=16"
+    fi
+    if [ "${FOUR_BACKEND_M10_MOD:-0}" = "1" ]; then
+        echo "FOUR_BACKEND_M10_MOD=PASS architectures=2 executable_QEMU_cases=22 signed_unsigned_div_mod_cases=8 GNU_independent_oracles=18"
+    fi
+    if [ "${FOUR_BACKEND_M11_INDEX:-0}" = "1" ]; then
+        echo "FOUR_BACKEND_M11_INDEX=PASS architectures=2 executable_QEMU_cases=22 signed_unsigned_byte_halfword_index_cases=8 GNU_independent_oracles=18"
+    fi
+    if [ "${FOUR_BACKEND_M12_BITWISE:-0}" = "1" ]; then
+        echo "FOUR_BACKEND_M12_BITWISE=PASS architectures=2 executable_QEMU_cases=22 signed_unsigned_bitwise_cases=8 GNU_independent_oracles=18"
+    fi
+    if [ "${FOUR_BACKEND_M13_NARROW_ARITH:-0}" = "1" ]; then
+        echo "FOUR_BACKEND_M13_NARROW_ARITH=PASS architectures=2 executable_QEMU_cases=24 narrow_wrap_arithmetic_cases=10 GNU_independent_oracles=16"
+    fi
+    if [ "${FOUR_BACKEND_M14_SHIFT:-0}" = "1" ]; then
+        echo "FOUR_BACKEND_M14_SHIFT=PASS architectures=2 executable_QEMU_cases=24 signed_unsigned_shift_cases=10 GNU_independent_oracles=16"
+    fi
+    if [ "${FOUR_BACKEND_M15_SCALAR_RETURN:-0}" = "1" ]; then
+        echo "FOUR_BACKEND_M15_SCALAR_RETURN=PASS architectures=2 executable_QEMU_cases=22 narrow_return_call_cases=8 GNU_independent_oracles=14"
+    fi
+    if [ "${FOUR_BACKEND_M17_RECORD:-0}" = "1" ]; then
+        echo "FOUR_BACKEND_M17_RECORD=PASS architectures=2 executable_QEMU_cases=20 record_aggregate_relocation_cases=6 GNU_independent_oracles=16"
+    fi
+    if [ "${FOUR_BACKEND_M18_VARARGS:-0}" = "1" ]; then
+        echo "FOUR_BACKEND_M18_VARARGS=PASS architectures=2 executable_QEMU_cases=18 integer_pointer_variadic_cases=4 GNU_independent_oracles=14"
+    fi
+    if [ "${FOUR_BACKEND_M19_PTR_COMPARE:-0}" = "1" ]; then
+        echo "FOUR_BACKEND_M19_PTR_COMPARE=PASS architectures=2 executable_QEMU_cases=20 pointer_null_equal_function_address_cases=6 GNU_independent_oracles=16"
+    fi
+    if [ "${FOUR_BACKEND_M20_LP64_ABI:-0}" = "1" ]; then
+        echo "FOUR_BACKEND_M20_LP64_ABI=PASS architectures=2 GNU_QEMU_diff=2 high_32_bits_preserved=true scalar_memory=true"
+    fi
+    if [ "${FOUR_BACKEND_M21_LP64_ADD:-0}" = "1" ]; then
+        echo "FOUR_BACKEND_M21_LP64_ADD=PASS architectures=2 GNU_QEMU_diff=2 high_32_bit_add_sub=true signed_long=true"
+    fi
+    if [ "${FOUR_BACKEND_M22_LP64_CONV:-0}" = "1" ]; then
+        echo "FOUR_BACKEND_M22_LP64_CONV=PASS architectures=2 GNU_QEMU_diff=2 signed_unsigned_extend=true truncate64=true"
+    fi
+    if [ "${FOUR_BACKEND_M23_LP64_COMPARE:-0}" = "1" ]; then
+        echo "FOUR_BACKEND_M23_LP64_COMPARE=PASS architectures=2 GNU_QEMU_diff=2 unsigned_signed_relations=true high_half_equality=true zero_predicate=true"
+    fi
+    if [ "${FOUR_BACKEND_M24_INDIRECT_CALL:-0}" = "1" ]; then
+        echo "FOUR_BACKEND_M24_INDIRECT_CALL=PASS architectures=2 GNU_QEMU_diff=2 function_pointer_ABI=true LP64_argument=true void_callback=true"
+    fi
+    if [ "${FOUR_BACKEND_M25_DOUBLE_TRANSPORT:-0}" = "1" ]; then
+        echo "FOUR_BACKEND_M25_DOUBLE_TRANSPORT=PASS architectures=2 GNU_QEMU_diff=2 ieee_binary64_payload=true FP_return_ABI=true"
+    fi
+    if [ "${FOUR_BACKEND_M26_DOUBLE_DIV:-0}" = "1" ]; then
+        echo "FOUR_BACKEND_M26_DOUBLE_DIV=PASS architectures=2 GNU_QEMU_diff=2 ieee_binary64_division=true runtime_nan=true"
+    fi
+    if [ "${FOUR_BACKEND_M27_FP_PARAMETER:-0}" = "1" ]; then
+        echo "FOUR_BACKEND_M27_FP_PARAMETER=PASS architectures=2 GNU_QEMU_diff=2 independent_GP_FP_cursors=true mixed_arguments=true"
+    fi
+    if [ "${FOUR_BACKEND_M28_INT_DOUBLE:-0}" = "1" ]; then
+        echo "FOUR_BACKEND_M28_INT_DOUBLE=PASS architectures=2 GNU_QEMU_diff=2 signed32_to_double=true truncate_toward_zero=true range_boundaries=true"
+    fi
+    if [ "${FOUR_BACKEND_M29_DOUBLE_CMP:-0}" = "1" ]; then
+        echo "FOUR_BACKEND_M29_DOUBLE_CMP=PASS architectures=2 GNU_QEMU_diff=2 ordered_IEEE_compare=true NaN_unordered=true"
+    fi
+    if [ "${FOUR_BACKEND_M30_FP_CALL:-0}" = "1" ]; then
+        echo "FOUR_BACKEND_M30_FP_CALL=PASS architectures=2 GNU_QEMU_diff=2 direct_indirect=true fixed_FP_args=true independent_GP_FP_cursors=true"
+    fi
+    if [ "${FOUR_BACKEND_M31_FLOAT_PROMOTE:-0}" = "1" ]; then
+        echo "FOUR_BACKEND_M31_FLOAT_PROMOTE=PASS architectures=2 GNU_QEMU_diff=2 binary32_copy=true numeric_float_to_double=true signed_zero_preserved=true"
+    fi
+    if [ "${FOUR_BACKEND_M32_UNREACHABLE:-0}" = "1" ]; then
+        echo "FOUR_BACKEND_M32_UNREACHABLE=PASS architectures=2 GNU_QEMU_diff=2 explicit_target_trap=true no_implicit_fallthrough=true"
+    fi
+else
+    echo "FOUR_BACKEND_M1=PASS architectures=2 executable_QEMU_cases=8 GCC_independent_oracles=4"
+fi
+ "$w/$target.$testcase.s"
+            fi
         fi
         "$gcc" -c "$w/$target.$testcase.s" -o "$w/$target.$testcase.o"
         case "$testcase" in
