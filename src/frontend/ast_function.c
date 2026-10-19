@@ -51,6 +51,21 @@ bool minic_c0_program_set_function_referenced(MinicC0Program *program,
     return true;
 }
 
+bool minic_c0_program_set_function_constructor(MinicC0Program *program,
+                                               MinicFunctionId function_id) {
+    MinicFunction *function;
+    if (program == NULL || function_id >= program->function_count) return false;
+    function = &program->functions[function_id];
+    if (!function->is_defined || !minic_type_is_void(function->return_type) ||
+        function->parameter_count != 0U || function->is_variadic ||
+        function->alias_target != MINIC_FUNCTION_INVALID) return false;
+    function->is_constructor = true;
+    /* Static constructors are linked through init_array, not source calls. */
+    function->is_referenced = true;
+    function->force_emit = true;
+    return true;
+}
+
 bool minic_c0_program_set_function_force_emit(MinicC0Program *program,
                                               MinicFunctionId function_id,
                                               bool force_emit) {
