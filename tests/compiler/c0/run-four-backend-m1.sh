@@ -9,7 +9,7 @@ QEMU_LOONGARCH64=qemu-loongarch64
 w=$(mktemp -d)
 trap 'rm -rf "$w"' EXIT HUP INT TERM
 m2_enabled=0
-if [ "${FOUR_BACKEND_M2:-0}" = "1" ] || [ "${FOUR_BACKEND_M2_STACK:-0}" = "1" ] || [ "${FOUR_BACKEND_M3_CALL:-0}" = "1" ] || [ "${FOUR_BACKEND_M4_GLOBAL:-0}" = "1" ] || [ "${FOUR_BACKEND_M5_POINTER:-0}" = "1" ] || [ "${FOUR_BACKEND_M6_ADDRESS:-0}" = "1" ] || [ "${FOUR_BACKEND_M7_FRAME:-0}" = "1" ] || [ "${FOUR_BACKEND_M8_NARROW:-0}" = "1" ] || [ "${FOUR_BACKEND_M9_UNSIGNED:-0}" = "1" ] || [ "${FOUR_BACKEND_M10_MOD:-0}" = "1" ] || [ "${FOUR_BACKEND_M11_INDEX:-0}" = "1" ] || [ "${FOUR_BACKEND_M12_BITWISE:-0}" = "1" ] || [ "${FOUR_BACKEND_M13_NARROW_ARITH:-0}" = "1" ] || [ "${FOUR_BACKEND_M14_SHIFT:-0}" = "1" ] || [ "${FOUR_BACKEND_M15_SCALAR_RETURN:-0}" = "1" ] || [ "${FOUR_BACKEND_M17_RECORD:-0}" = "1" ] || [ "${FOUR_BACKEND_M18_VARARGS:-0}" = "1" ] || [ "${FOUR_BACKEND_M19_PTR_COMPARE:-0}" = "1" ]; then
+if [ "${FOUR_BACKEND_M2:-0}" = "1" ] || [ "${FOUR_BACKEND_M2_STACK:-0}" = "1" ] || [ "${FOUR_BACKEND_M3_CALL:-0}" = "1" ] || [ "${FOUR_BACKEND_M4_GLOBAL:-0}" = "1" ] || [ "${FOUR_BACKEND_M5_POINTER:-0}" = "1" ] || [ "${FOUR_BACKEND_M6_ADDRESS:-0}" = "1" ] || [ "${FOUR_BACKEND_M7_FRAME:-0}" = "1" ] || [ "${FOUR_BACKEND_M8_NARROW:-0}" = "1" ] || [ "${FOUR_BACKEND_M9_UNSIGNED:-0}" = "1" ] || [ "${FOUR_BACKEND_M10_MOD:-0}" = "1" ] || [ "${FOUR_BACKEND_M11_INDEX:-0}" = "1" ] || [ "${FOUR_BACKEND_M12_BITWISE:-0}" = "1" ] || [ "${FOUR_BACKEND_M13_NARROW_ARITH:-0}" = "1" ] || [ "${FOUR_BACKEND_M14_SHIFT:-0}" = "1" ] || [ "${FOUR_BACKEND_M15_SCALAR_RETURN:-0}" = "1" ] || [ "${FOUR_BACKEND_M17_RECORD:-0}" = "1" ] || [ "${FOUR_BACKEND_M18_VARARGS:-0}" = "1" ] || [ "${FOUR_BACKEND_M19_PTR_COMPARE:-0}" = "1" ] || [ "${FOUR_BACKEND_M20_LP64_ABI:-0}" = "1" ]; then
     m2_enabled=1
 fi
 cat > "$w/return.i" <<'EOF'
@@ -682,6 +682,31 @@ extern int mini_callback_fn(int);
 extern int mini_function_address(int (*)(int));
 int main(void) { return mini_function_address(mini_callback_fn); }
 EOF
+# M20: original cJSON_ParseWithLength has a size_t (LP64 unsigned long)
+# argument. Prove no high-32-bit truncation in GNU->MiniC parameters,
+# MiniC->GNU calls, return registers, and actual scalar pointer memory.
+cat > "$w/size64_abi.i" <<'EOF'
+extern unsigned long gnu_size_identity(unsigned long);
+unsigned long mini_size_identity(unsigned long n) {
+    unsigned long local = n;
+    return gnu_size_identity(local);
+}
+void mini_size_store(unsigned long *out, unsigned long n) { *out = n; }
+unsigned long mini_size_load(const unsigned long *in) { return *in; }
+EOF
+cat > "$w/driver_size64_abi.c" <<'EOF'
+extern unsigned long mini_size_identity(unsigned long);
+extern void mini_size_store(unsigned long *, unsigned long);
+extern unsigned long mini_size_load(const unsigned long *);
+unsigned long gnu_size_identity(unsigned long n) { return n; }
+int main(void) {
+    unsigned long n = 0x1234567887654321UL, v = 0;
+    if (mini_size_identity(n) != n) return 1;
+    mini_size_store(&v, n);
+    if (mini_size_load(&v) != n) return 2;
+    return 42;
+}
+EOF
 check_qemu_exit() {
     emulator=$1
     binary=$2
@@ -763,6 +788,9 @@ for target in aarch64 loongarch64; do
     if [ "${FOUR_BACKEND_M19_PTR_COMPARE:-0}" = "1" ]; then
         cases="$cases pointer_null pointer_equality function_address"
     fi
+    if [ "${FOUR_BACKEND_M20_LP64_ABI:-0}" = "1" ]; then
+        cases="$cases size64_abi"
+    fi
     if [ "$m2_enabled" = "1" ]; then
         # Independent originals for every new CFG/comparison fixture, not
         # merely an expected return code from a MiniC-owned executable.
@@ -818,6 +846,9 @@ for target in aarch64 loongarch64; do
         if [ "${FOUR_BACKEND_M19_PTR_COMPARE:-0}" = "1" ]; then
             oracle_cases="$oracle_cases pointer_null pointer_equality function_address"
         fi
+        if [ "${FOUR_BACKEND_M20_LP64_ABI:-0}" = "1" ]; then
+            oracle_cases="$oracle_cases size64_abi"
+        fi
         for testcase in $oracle_cases; do
             "$gcc" -static -x c "$w/$testcase.i" "$w/driver_$testcase.c" \
                 -o "$w/$target.gnu-$testcase.elf"
@@ -857,7 +888,7 @@ for target in aarch64 loongarch64; do
                 "$gcc" -static "$w/$target.$testcase.o" "$w/driver_$testcase.c" -o "$w/$target.$testcase.elf" ;;
             u8_index|s8_index|u16_index|s16_index)
                 "$gcc" -static "$w/$target.$testcase.o" "$w/driver_$testcase.c" -o "$w/$target.$testcase.elf" ;;
-            pointer_null|pointer_equality|function_address)
+            size64_abi|pointer_null|pointer_equality|function_address)
                 "$gcc" -static "$w/$target.$testcase.o" "$w/driver_$testcase.c" -o "$w/$target.$testcase.elf" ;;
             vararg_int|vararg_pointer)
                 "$gcc" -static "$w/$target.$testcase.o" "$w/driver_$testcase.c" -o "$w/$target.$testcase.elf" ;;
@@ -970,6 +1001,9 @@ if [ "$m2_enabled" = "1" ]; then
     fi
     if [ "${FOUR_BACKEND_M19_PTR_COMPARE:-0}" = "1" ]; then
         echo "FOUR_BACKEND_M19_PTR_COMPARE=PASS architectures=2 executable_QEMU_cases=20 pointer_null_equal_function_address_cases=6 GNU_independent_oracles=16"
+    fi
+    if [ "${FOUR_BACKEND_M20_LP64_ABI:-0}" = "1" ]; then
+        echo "FOUR_BACKEND_M20_LP64_ABI=PASS architectures=2 GNU_QEMU_diff=2 high_32_bits_preserved=true scalar_memory=true"
     fi
 else
     echo "FOUR_BACKEND_M1=PASS architectures=2 executable_QEMU_cases=8 GCC_independent_oracles=4"
