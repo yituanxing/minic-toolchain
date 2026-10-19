@@ -417,8 +417,25 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
         fn->block_count == 0U || fn->block_count > 128U || fn->entry_block != 0U ||
         fn->inline_asm_count != 0U || fn->parameter_count > 10U ||
         fn->value_count > 1024U || fn->object_count > 1024U)
-        return machine_emit_reject(fn, "loongarch64", name, reject_stage,
-                                    reject_block, reject_ins, __LINE__);
+        {
+            if (getenv("MINIC_BACKEND_CENSUS") != NULL)
+                (void)fprintf(stderr,
+                              "MINIC_BACKEND_PREFLIGHT arch=loongarch64 function=%s "
+                              "blocks=%zu values=%zu objects=%zu params=%zu "
+                              "entry=%u inline=%zu return_valid=%d verified=%d "
+                              "constructor=%d weak=%d visibility=%d section=%d\n",
+                              name != NULL ? name : "<unnamed>",
+                              fn->block_count, fn->value_count, fn->object_count,
+                              fn->parameter_count, (unsigned int)fn->entry_block,
+                              fn->inline_asm_count,
+                              valid_return_type(program, target, fn->return_type) ? 1 : 0,
+                              minic_core_function_verify(fn) ? 1 : 0,
+                              decl->is_constructor ? 1 : 0, decl->is_weak ? 1 : 0,
+                              (int)decl->visibility,
+                              decl->section_name != NULL ? 1 : 0);
+            return machine_emit_reject(fn, "loongarch64", name, reject_stage,
+                                       reject_block, reject_ins, __LINE__);
+        }
     for (i = 0U; i < fn->parameter_count; ++i)
         if (!valid_parameter_type(program, target, fn->parameter_types[i])) return machine_emit_reject(fn, "loongarch64", name, reject_stage,
                                     reject_block, reject_ins, __LINE__);
@@ -855,9 +872,12 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                                     reject_block, reject_ins, __LINE__);
             } else {
                 if (ins->value.integer_value < INT32_MIN ||
-                    ins->value.integer_value > INT32_MAX ||
+                    (ins->value.integer_value > INT32_MAX &&
+                     (width != 4U || sign ||
+                      (uint64_t)ins->value.integer_value > UINT32_MAX)) ||
                     fprintf(out, "  li.w $t0, %" PRId64 "\n",
-                            ins->value.integer_value) < 0) return machine_emit_reject(fn, "loongarch64", name, reject_stage,
+                            (int64_t)(int32_t)(uint32_t)
+                                ins->value.integer_value) < 0) return machine_emit_reject(fn, "loongarch64", name, reject_stage,
                                     reject_block, reject_ins, __LINE__);
             }
             (void)sign;
@@ -901,15 +921,28 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
         }
 
         case MINIC_CORE_INSTRUCTION_FIELD_ADDRESS: {
+            /* The full Core DataLayout byte offset may exceed signed imm12.
+             * li.d + add.d preserves the computed record layout. */
             const MinicCoreValueId base = ins->value.field_address.base;
             const size_t bytes = ins->value.field_address.byte_offset;
             if (base >= fn->value_count ||
                 !minic_type_is_pointer(fn->values[base].type) ||
-                bytes > 2047U ||
-                !emit_sp_mem(out, "ld.d", "$t0", (size_t)base * 8U) ||
-                (bytes != 0U && fprintf(out, "  addi.d $t0, $t0, %zu\n", bytes) < 0))
+                !emit_sp_mem(out, "ld.d", "$t0", (size_t)base * 8U))
                 return machine_emit_reject(fn, "loongarch64", name, reject_stage,
-                                    reject_block, reject_ins, __LINE__);
+                                           reject_block, reject_ins, __LINE__);
+            if (bytes != 0U) {
+                if (bytes <= 2047U) {
+                    if (fprintf(out, "  addi.d $t0, $t0, %zu\n", bytes) < 0)
+                        return machine_emit_reject(fn, "loongarch64", name,
+                                                   reject_stage, reject_block,
+                                                   reject_ins, __LINE__);
+                } else if (fprintf(out,
+                            "  li.d $t1, %zu\n"
+                            "  add.d $t0, $t0, $t1\n", bytes) < 0)
+                    return machine_emit_reject(fn, "loongarch64", name,
+                                               reject_stage, reject_block,
+                                               reject_ins, __LINE__);
+            }
             break;
         }
         case MINIC_CORE_INSTRUCTION_POINTER_OFFSET: {

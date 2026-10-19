@@ -396,8 +396,25 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
         fn->block_count == 0U || fn->block_count > 128U || fn->entry_block != 0U ||
         fn->inline_asm_count != 0U || fn->parameter_count > 10U ||
         fn->value_count > 1024U || fn->object_count > 1024U)
-        return machine_emit_reject(fn, "aarch64", name, reject_stage,
-                                    reject_block, reject_ins, __LINE__);
+        {
+            if (getenv("MINIC_BACKEND_CENSUS") != NULL)
+                (void)fprintf(stderr,
+                              "MINIC_BACKEND_PREFLIGHT arch=aarch64 function=%s "
+                              "blocks=%zu values=%zu objects=%zu params=%zu "
+                              "entry=%u inline=%zu return_valid=%d verified=%d "
+                              "constructor=%d weak=%d visibility=%d section=%d\n",
+                              name != NULL ? name : "<unnamed>",
+                              fn->block_count, fn->value_count, fn->object_count,
+                              fn->parameter_count, (unsigned int)fn->entry_block,
+                              fn->inline_asm_count,
+                              valid_return_type(program, target, fn->return_type) ? 1 : 0,
+                              minic_core_function_verify(fn) ? 1 : 0,
+                              decl->is_constructor ? 1 : 0, decl->is_weak ? 1 : 0,
+                              (int)decl->visibility,
+                              decl->section_name != NULL ? 1 : 0);
+            return machine_emit_reject(fn, "aarch64", name, reject_stage,
+                                       reject_block, reject_ins, __LINE__);
+        }
     for (i = 0U; i < fn->parameter_count; ++i)
         if (!valid_parameter_type(program, target, fn->parameter_types[i])) return machine_emit_reject(fn, "aarch64", name, reject_stage,
                                     reject_block, reject_ins, __LINE__);
@@ -866,7 +883,9 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
             } else {
                 uint32_t bits;
                 if (ins->value.integer_value < INT32_MIN ||
-                    ins->value.integer_value > INT32_MAX) return machine_emit_reject(fn, "aarch64", name, reject_stage,
+                    (ins->value.integer_value > INT32_MAX &&
+                     (width != 4U || sign ||
+                      (uint64_t)ins->value.integer_value > UINT32_MAX))) return machine_emit_reject(fn, "aarch64", name, reject_stage,
                                     reject_block, reject_ins, __LINE__);
                 bits = (uint32_t)(int32_t)ins->value.integer_value;
                 if (fprintf(out, "  movz w9, #%" PRIu32 "\n",
@@ -926,18 +945,38 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
         }
 
         case MINIC_CORE_INSTRUCTION_FIELD_ADDRESS: {
-            /* The shared Core lowering has already computed byte_offset
-             * from the selected target's DataLayout. Only ELF instruction
-             * encoding belongs here; do not reconstruct record offsets. */
+            /* Core already computed the DataLayout record byte displacement.
+             * Large zlib structures exceed the ISA add-immediate range. */
             const MinicCoreValueId base = ins->value.field_address.base;
             const size_t bytes = ins->value.field_address.byte_offset;
             if (base >= fn->value_count ||
                 !minic_type_is_pointer(fn->values[base].type) ||
-                bytes > 4095U ||
-                fprintf(out, "  ldr x9, [sp, #%zu]\n", (size_t)base * 8U) < 0 ||
-                (bytes != 0U && fprintf(out, "  add x9, x9, #%zu\n", bytes) < 0))
+                fprintf(out, "  ldr x9, [sp, #%zu]\n",
+                        (size_t)base * 8U) < 0)
                 return machine_emit_reject(fn, "aarch64", name, reject_stage,
-                                    reject_block, reject_ins, __LINE__);
+                                           reject_block, reject_ins, __LINE__);
+            if (bytes != 0U && bytes <= 4095U) {
+                if (fprintf(out, "  add x9, x9, #%zu\n", bytes) < 0)
+                    return machine_emit_reject(fn, "aarch64", name, reject_stage,
+                                               reject_block, reject_ins, __LINE__);
+            } else if (bytes > 4095U) {
+                const uint64_t imm = (uint64_t)bytes;
+                unsigned int shift;
+                if (fprintf(out, "  movz x10, #%" PRIu64 "\n",
+                            imm & UINT64_C(0xffff)) < 0)
+                    return machine_emit_reject(fn, "aarch64", name, reject_stage,
+                                               reject_block, reject_ins, __LINE__);
+                for (shift = 16U; shift <= 48U; shift += 16U) {
+                    if (((imm >> shift) & UINT64_C(0xffff)) != 0U &&
+                        fprintf(out, "  movk x10, #%" PRIu64 ", lsl #%u\n",
+                                (imm >> shift) & UINT64_C(0xffff), shift) < 0)
+                        return machine_emit_reject(fn, "aarch64", name, reject_stage,
+                                                   reject_block, reject_ins, __LINE__);
+                }
+                if (fputs("  add x9, x9, x10\n", out) == EOF)
+                    return machine_emit_reject(fn, "aarch64", name, reject_stage,
+                                               reject_block, reject_ins, __LINE__);
+            }
             break;
         }
         case MINIC_CORE_INSTRUCTION_POINTER_OFFSET: {
