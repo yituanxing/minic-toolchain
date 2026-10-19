@@ -145,7 +145,29 @@ def controller(args):
         print("BUSYBOX_ALLYES_CONFIG=FAIL stage=original-allyesconfig")
         print((out / "config.err").read_text(errors="replace")[-2500:])
         return 1
-    config = (root / ".config").read_text(errors="replace")
+    config_path = root / ".config"
+    config = config_path.read_text(errors="replace")
+    if "CONFIG_WERROR=y" in config:
+        # WERROR is a host compiler warning policy, not a BusyBox applet.
+        # libselinux marks security_context_t deprecated on current Ubuntu.
+        # Keep all Kconfig applets/features requested by allyesconfig while
+        # allowing unchanged original BusyBox C to build on this host.
+        config_path.write_text(config.replace("CONFIG_WERROR=y",
+                                              "# CONFIG_WERROR is not set"),
+                               encoding="utf-8")
+        with (out / "oldconfig.out").open("wb") as stdout, (out / "oldconfig.err").open("wb") as stderr:
+            rc = subprocess.run(["make", "oldconfig", "CC=" + args.host_cc],
+                                cwd=root, env=make_env, input=b"\n" * 32,
+                                stdout=stdout, stderr=stderr, check=False).returncode
+        if rc:
+            print("BUSYBOX_ALLYES_CONFIG=FAIL stage=oldconfig-WERROR-policy")
+            return 1
+        config = config_path.read_text(errors="replace")
+        if "CONFIG_WERROR=y" in config:
+            print("BUSYBOX_ALLYES_CONFIG=FAIL stage=WERROR-was-not-disabled")
+            return 1
+        print("BUSYBOX_ALLYES_HOST_WARNING_POLICY=CONFIG_WERROR_n original_sources=unchanged",
+              flush=True)
     enabled = len(re.findall(r"^CONFIG_[A-Za-z0-9_]+=y$", config, flags=re.M))
     print("BUSYBOX_ALLYES_CONFIG=PASS mode=original-allyesconfig enabled_symbols=%d" %
           enabled, flush=True)
@@ -154,7 +176,7 @@ def controller(args):
     make_env["BUSYBOX_ALLYES_REPORT_ROOT"] = str(out)
     proxy = "python3 " + shlex.quote(str(Path(__file__).resolve())) + " --proxy-cc"
     with (out / "build.out").open("wb") as stdout, (out / "build.err").open("wb") as stderr:
-        rc = subprocess.run(["make", "-j4", "CC=" + proxy, "busybox"],
+        rc = subprocess.run(["make", "-k", "-j4", "CC=" + proxy, "busybox"],
                             cwd=root, env=make_env, stdout=stdout, stderr=stderr,
                             check=False).returncode
     print("BUSYBOX_ALLYES_GCC_KBUILD=%s original_Kconfig=1 original_sources=1" %
