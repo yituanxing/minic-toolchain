@@ -582,6 +582,29 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
             }
             continue;
         }
+        case MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_LEFT:
+        case MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_RIGHT: {
+            const MinicCoreValueId lhs = ins->value.binary.left;
+            const MinicCoreValueId rhs = ins->value.binary.right;
+            size_t lw, rw;
+            bool ls, rs;
+            if (lhs >= fn->value_count || rhs >= fn->value_count ||
+                !minic_type_equal(fn->values[lhs].type, ins->type) ||
+                !small_integer_width(program, target, fn->values[lhs].type,
+                                     &lw, &ls) ||
+                !small_integer_width(program, target, fn->values[rhs].type,
+                                     &rw, &rs) ||
+                minic_type_is_bool_integer(ins->type) ||
+                !emit_sp_mem(out, "ld.w", "$t0", (size_t)lhs * 8U) ||
+                !emit_sp_mem(out, "ld.w", "$t1", (size_t)rhs * 8U) ||
+                fputs(ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_LEFT
+                    ? "  sll.w $t0, $t0, $t1\n"
+                    : (ls ? "  sra.w $t0, $t0, $t1\n"
+                          : "  srl.w $t0, $t0, $t1\n"), out) == EOF ||
+                !emit_integer_normalize(out, lw, ls)) return false;
+            (void)rs;
+            break;
+        }
         case MINIC_CORE_INSTRUCTION_INTEGER_NEGATE: {
             const MinicCoreValueId operand = ins->value.operand;
             size_t width;
