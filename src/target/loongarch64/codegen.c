@@ -669,6 +669,28 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
             offset = (size_t)ins->result * 8U;
         }
         switch (ins->kind) {
+        /* LoongArch FCC ordered comparisons naturally reject unordered
+         * operands: fcmp.ceq/clt/cle is false if either operand is NaN. */
+        case MINIC_CORE_INSTRUCTION_DOUBLE_EQUAL:
+        case MINIC_CORE_INSTRUCTION_DOUBLE_LESS:
+        case MINIC_CORE_INSTRUCTION_DOUBLE_LESS_EQUAL: {
+            const MinicCoreValueId lhs = ins->value.binary.left;
+            const MinicCoreValueId rhs = ins->value.binary.right;
+            const char *op = ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_EQUAL
+                ? "fcmp.ceq.d" :
+                ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_LESS
+                    ? "fcmp.clt.d" : "fcmp.cle.d";
+            if (!minic_type_equal(ins->type, minic_type_int()) ||
+                lhs >= fn->value_count || rhs >= fn->value_count ||
+                !minic_type_is_double(fn->values[lhs].type) ||
+                !minic_type_is_double(fn->values[rhs].type) ||
+                !emit_sp_mem(out, "fld.d", "$ft0", (size_t)lhs * 8U) ||
+                !emit_sp_mem(out, "fld.d", "$ft1", (size_t)rhs * 8U) ||
+                fprintf(out, "  %s $fcc0, $ft0, $ft1\n"
+                             "  movcf2gr $t0, $fcc0\n", op) < 0)
+                return false;
+            break;
+        }
         case MINIC_CORE_INSTRUCTION_DOUBLE_DIVIDE: {
             const MinicCoreValueId lhs = ins->value.binary.left;
             const MinicCoreValueId rhs = ins->value.binary.right;
