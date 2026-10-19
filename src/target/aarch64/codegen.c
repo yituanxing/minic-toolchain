@@ -639,7 +639,8 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                         (ins->kind == MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT ||
                          ins->kind == MINIC_CORE_INSTRUCTION_LOAD ||
                          ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_DIVIDE ||
-                         ins->kind == MINIC_CORE_INSTRUCTION_PARAMETER))))
+                         ins->kind == MINIC_CORE_INSTRUCTION_PARAMETER ||
+                         ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_TO_DOUBLE))))
             {
                 if (getenv("MINIC_M1_TRACE") != NULL)
                     (void)fprintf(stderr,
@@ -1121,6 +1122,40 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                 return false;
             (void)sign;
             break;
+        }
+        /* M28: cJSON_CreateNumber converts INT_MIN to binary64, and after
+         * saturation converts an in-range double to signed int.
+         * Keep wider and unsigned cases fail-closed until ABI-tested. */
+        case MINIC_CORE_INSTRUCTION_INTEGER_TO_DOUBLE: {
+            const MinicCoreValueId src = ins->value.operand;
+            size_t width;
+            bool sign;
+            if (src >= fn->value_count || !minic_type_is_double(ins->type) ||
+                !scalar_integer_width(program, target, fn->values[src].type,
+                                      &width, &sign) ||
+                width != 4U || !sign ||
+                fprintf(out,
+                        "  ldr w9, [sp, #%zu]\n"
+                        "  scvtf d9, w9\n"
+                        "  str d9, [sp, #%zu]\n",
+                        (size_t)src * 8U, offset) < 0)
+                return false;
+            continue;
+        }
+        case MINIC_CORE_INSTRUCTION_DOUBLE_TO_INTEGER: {
+            const MinicCoreValueId src = ins->value.operand;
+            size_t width;
+            bool sign;
+            if (src >= fn->value_count ||
+                !minic_type_is_double(fn->values[src].type) ||
+                !scalar_integer_width(program, target, ins->type, &width, &sign) ||
+                width != 4U || !sign ||
+                fprintf(out,
+                        "  ldr d9, [sp, #%zu]\n"
+                        "  fcvtzs w9, d9\n",
+                        (size_t)src * 8U) < 0)
+                return false;
+            break; /* Normal 32-bit SSA store. */
         }
         case MINIC_CORE_INSTRUCTION_INTEGER_CONVERSION: {
             const MinicCoreValueId src = ins->value.operand;
