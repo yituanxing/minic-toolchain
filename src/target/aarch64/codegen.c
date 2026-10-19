@@ -699,6 +699,26 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                 return false;
             break;
         }
+        /* M37: cJSON compare_double's a-b and tolerance multiplication.
+         * Keep full IEEE-754 binary64 payloads in FP registers/SSA slots. */
+        case MINIC_CORE_INSTRUCTION_DOUBLE_SUBTRACT:
+        case MINIC_CORE_INSTRUCTION_DOUBLE_MULTIPLY: {
+            const MinicCoreValueId lhs = ins->value.binary.left;
+            const MinicCoreValueId rhs = ins->value.binary.right;
+            const char *op = ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_SUBTRACT
+                ? "  fsub d9, d9, d10\n" : "  fmul d9, d9, d10\n";
+            if (!minic_type_is_double(ins->type) ||
+                lhs >= fn->value_count || rhs >= fn->value_count ||
+                !minic_type_is_double(fn->values[lhs].type) ||
+                !minic_type_is_double(fn->values[rhs].type) ||
+                fprintf(out, "  ldr d9, [sp, #%zu]\n"
+                             "  ldr d10, [sp, #%zu]\n",
+                        (size_t)lhs * 8U, (size_t)rhs * 8U) < 0 ||
+                fputs(op, out) == EOF ||
+                fprintf(out, "  str d9, [sp, #%zu]\n", offset) < 0)
+                return false;
+            continue;
+        }
         case MINIC_CORE_INSTRUCTION_DOUBLE_DIVIDE: {
             const MinicCoreValueId lhs = ins->value.binary.left;
             const MinicCoreValueId rhs = ins->value.binary.right;

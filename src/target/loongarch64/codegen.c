@@ -712,6 +712,25 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                 return false;
             break;
         }
+        /* M37: source-observed cJSON binary64 subtract and multiply. */
+        case MINIC_CORE_INSTRUCTION_DOUBLE_SUBTRACT:
+        case MINIC_CORE_INSTRUCTION_DOUBLE_MULTIPLY: {
+            const MinicCoreValueId lhs = ins->value.binary.left;
+            const MinicCoreValueId rhs = ins->value.binary.right;
+            const char *op = ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_SUBTRACT
+                ? "  fsub.d $ft0, $ft0, $ft1\n"
+                : "  fmul.d $ft0, $ft0, $ft1\n";
+            if (!minic_type_is_double(ins->type) ||
+                lhs >= fn->value_count || rhs >= fn->value_count ||
+                !minic_type_is_double(fn->values[lhs].type) ||
+                !minic_type_is_double(fn->values[rhs].type) ||
+                !emit_sp_mem(out, "fld.d", "$ft0", (size_t)lhs * 8U) ||
+                !emit_sp_mem(out, "fld.d", "$ft1", (size_t)rhs * 8U) ||
+                fputs(op, out) == EOF ||
+                !emit_sp_mem(out, "fst.d", "$ft0", offset))
+                return false;
+            continue;
+        }
         case MINIC_CORE_INSTRUCTION_DOUBLE_DIVIDE: {
             const MinicCoreValueId lhs = ins->value.binary.left;
             const MinicCoreValueId rhs = ins->value.binary.right;
