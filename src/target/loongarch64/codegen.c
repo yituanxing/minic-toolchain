@@ -50,15 +50,36 @@ static bool small_integer_width(const MinicC0Program *program,
     return *width == 1U || *width == 2U || *width == 4U;
 }
 
-/* GNU AAPCS64/lp64d integer parameter slots are one register wide
- * for ordinary 1/2/4-byte integer types; reject wider widths rather
- * than silently truncate arguments in a 32-bit store. */
+/* M20 LP64 scalar-width gate: only ABI and memory operations accept 64 bits.
+ * Narrow arithmetic continues to reject 64-bit values until implemented. */
+static bool scalar_integer_width(const MinicC0Program *program,
+                                 const MinicTargetInfo *target, MinicType type,
+                                 size_t *width, bool *sign) {
+    unsigned int bits;
+    MinicType effective;
+    if (small_integer_width(program, target, type, width, sign)) return true;
+    if (width == NULL || sign == NULL || !minic_type_is_integer(type) ||
+        !minic_c0_type_effective_integer_type(program, type, &effective) ||
+        !minic_target_info_integer_width(target, program, type, &bits) ||
+        bits != 64U) return false;
+    *width = 8U;
+    *sign = minic_type_is_signed_integer(effective);
+    return true;
+}
+static bool register64_type(const MinicC0Program *program,
+                            const MinicTargetInfo *target, MinicType type) {
+    size_t width;
+    bool sign;
+    return minic_type_is_pointer(type) ||
+           (scalar_integer_width(program, target, type, &width, &sign) &&
+            width == 8U);
+}
 static bool valid_parameter_type(const MinicC0Program *program,
                                  const MinicTargetInfo *target, MinicType type) {
     size_t width;
     bool sign;
     return minic_type_is_pointer(type) ||
-           small_integer_width(program, target, type, &width, &sign);
+           scalar_integer_width(program, target, type, &width, &sign);
 }
 
 /* C scalar return ABI is independent from the initial signed-int smoke
@@ -76,13 +97,15 @@ static bool emit_integer_memory(FILE *out, bool store,
     if (store) {
         op = width == 1U ? "  st.b $t0, $t1, 0\n" :
              width == 2U ? "  st.h $t0, $t1, 0\n" :
-             width == 4U ? "  st.w $t0, $t1, 0\n" : NULL;
+             width == 4U ? "  st.w $t0, $t1, 0\n" :
+             width == 8U ? "  st.d $t0, $t1, 0\n" : NULL;
     } else {
         op = width == 1U ? (sign ? "  ld.b $t0, $t1, 0\n" :
                                      "  ld.bu $t0, $t1, 0\n") :
              width == 2U ? (sign ? "  ld.h $t0, $t1, 0\n" :
                                      "  ld.hu $t0, $t1, 0\n") :
-             width == 4U ? "  ld.w $t0, $t1, 0\n" : NULL;
+             width == 4U ? "  ld.w $t0, $t1, 0\n" :
+              width == 8U ? "  ld.d $t0, $t1, 0\n" : NULL;
     }
     return op != NULL && fputs(op, out) != EOF;
 }
@@ -516,10 +539,10 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                 !minic_type_is_pointer(fn->values[addr].type)) return false;
             pointer = minic_type_is_pointer(fn->values[value].type);
             if (!pointer &&
-                !small_integer_width(program, target, fn->values[value].type,
-                                     &width, &sign)) return false;
+                !scalar_integer_width(program, target, fn->values[value].type,
+                                      &width, &sign)) return false;
             if (!emit_sp_mem(out, "ld.d", "$t1", (size_t)addr * 8U) ||
-                !emit_sp_mem(out, pointer ? "ld.d" : "ld.w", "$t0",
+                !emit_sp_mem(out, (pointer || width == 8U) ? "ld.d" : "ld.w", "$t0",
                              (size_t)value * 8U) ||
                 (pointer ? fputs("  st.d $t0, $t1, 0\n", out) == EOF
                          : !emit_integer_memory(out, true, width, sign))) return false;
@@ -676,8 +699,8 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
             bool sign = false, pointer = minic_type_is_pointer(ins->type);
             if (addr >= fn->value_count ||
                 !minic_type_is_pointer(fn->values[addr].type) ||
-                (!pointer && !small_integer_width(program, target,
-                                                  ins->type, &width, &sign)) ||
+                (!pointer && !scalar_integer_width(program, target,
+                                                   ins->type, &width, &sign)) ||
                 !emit_sp_mem(out, "ld.d", "$t1", (size_t)addr * 8U) ||
                 (pointer ? fputs("  ld.d $t0, $t1, 0\n", out) == EOF
                          : !emit_integer_memory(out, false, width, sign)))
@@ -690,7 +713,7 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
             for (j = 0U; j < ins->value.call.argument_count; ++j) {
                 const MinicCoreCallArgument *arg =
                     &fn->call_arguments[ins->value.call.argument_begin + j];
-                if (!emit_sp_mem(out, minic_type_is_pointer(
+                if (!emit_sp_mem(out, register64_type(program, target,
                                         fn->values[arg->value.value_id].type)
                                         ? "ld.d" : "ld.w",
                              j == 0U ? "$a0" : j == 1U ? "$a1" :
@@ -708,9 +731,9 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
             if (minic_type_is_integer(ins->type)) {
                 size_t width;
                 bool sign;
-                if (!small_integer_width(program, target, ins->type,
-                                         &width, &sign) ||
-                    !emit_integer_normalize(out, width, sign)) return false;
+                if (!scalar_integer_width(program, target, ins->type,
+                                          &width, &sign) ||
+                    (width != 8U && !emit_integer_normalize(out, width, sign))) return false;
             }
             break;
         }
@@ -718,7 +741,7 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
             size_t index = (size_t)ins->value.parameter_index;
             if (index >= fn->parameter_count) return false;
             if (index < 8U) {
-                if (!emit_sp_mem(out, minic_type_is_pointer(ins->type) ? "st.d" : "st.w",
+                if (!emit_sp_mem(out, register64_type(program, target, ins->type) ? "st.d" : "st.w",
                              index == 0U ? "$a0" : index == 1U ? "$a1" :
                              index == 2U ? "$a2" : index == 3U ? "$a3" :
                              index == 4U ? "$a4" : index == 5U ? "$a5" :
@@ -731,9 +754,9 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                  * Stack slots are addressed after allocating our frame.
                  * The largest offset is 2016+8, within signed imm12. */
                 size_t incoming = frame + (index - 8U) * 8U;
-                if (!emit_sp_mem(out, minic_type_is_pointer(ins->type)
+                if (!emit_sp_mem(out, register64_type(program, target, ins->type)
                                         ? "ld.d" : "ld.w", "$t0", incoming) ||
-                    !emit_sp_mem(out, minic_type_is_pointer(ins->type)
+                    !emit_sp_mem(out, register64_type(program, target, ins->type)
                                         ? "st.d" : "st.w", "$t0", offset))
                     return false;
             }
@@ -909,13 +932,13 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                               name, block_id, (unsigned int)ins_id, (int)ins->kind);
             return false;
         }
-        if (!emit_sp_mem(out, minic_type_is_pointer(ins->type)
+        if (!emit_sp_mem(out, register64_type(program, target, ins->type)
                               ? "st.d" : "st.w", "$t0", offset)) return false;
     }
         switch (block->terminator.kind) {
         case MINIC_CORE_TERMINATOR_RETURN:
             if ((!minic_type_is_void(fn->return_type) &&
-                 !emit_sp_mem(out, minic_type_is_pointer(fn->return_type)
+                 !emit_sp_mem(out, register64_type(program, target, fn->return_type)
                                          ? "ld.d" : "ld.w",
                                    "$a0",
                                    (size_t)block->terminator.return_value * 8U)) ||
