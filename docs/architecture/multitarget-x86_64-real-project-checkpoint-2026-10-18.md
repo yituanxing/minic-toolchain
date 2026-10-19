@@ -1003,3 +1003,45 @@ was not rerun. The branch-execution temporary
 to the main blob `cd9a880a5a707f28b5ea63c364c1844ab35e1c56`.
 The unrelated inherited failing GCC baseline workflow is not counted
 as passing CI.
+
+## New original TinyCC 36-program and BusyBox 9-applet checkpoint — 2026-10-19
+
+The [focused regression run #39178856257](https://github.com/yituanxing/minic-toolchain/actions/runs/39178856257)
+completed with **success**, including SQLite 3.54.1 GCC byte-exact database
+runtime and `TOOLCHAIN_FOCUSED_T1=PASS mode=all independent_test_checks=8`.
+
+- **TinyCC** release 0.9.27 remains pristine: all ten C translation units
+  compile with MiniC x86-64 and GNU assemble/link into a real executable,
+  which then compiles a new C consumer whose linked executable returns 42.
+  The expanded test scans unmodified upstream `tests/tests2` programs:
+  **`TINYCC_X86_64_TESTS2_SUITE=PASS cases=36 original_upstream=1`**.
+  All 36 independent C test programs were compiled by the MiniC-built
+  TinyCC into object files and run with GNU linking. The independent
+  GCC-built TinyCC returned byte-identical stdout/stderr and exit
+  statuses for each selected test. This is **not** TinyCC's entire
+  upstream suite nor self-hosting. The prior multiarch-header difference
+  was an omitted original configure macro, not an established backend
+  bug; the probe now uses original generated build flags.
+- **BusyBox** release 1.36.1 remains pristine. Original
+  `cat.c`, `echo.c`, `head.c`, `wc.c`, `grep.c`,
+  `cut.c`, `sort.c`, `uniq.c`, and `tr.c` compile with
+  MiniC x86-64 and GNU assemble into genuine objects:
+  **`BUSYBOX_X86_64_FRONTIER=SCOPED_TU objects=9 total=9 blocked=0`**.
+  These exact nine objects replace their GCC equivalents, while all
+  other code stays GCC-built; genuine BusyBox Kbuild relinks the
+  program. Its nine applets run with byte-exact output against the
+  all-GCC reference:
+  **`BUSYBOX_X86_64_MIXED=PASS applets=cat,echo,head,wc,grep,cut,sort,uniq,tr`**.
+  This is **not** all-BusyBox MiniC compilation.
+- The remaining BusyBox GNU attributed record, C99 adjusted-array
+  parameter and namescope frontiers were addressed in general front-end
+  handlers in commits preceding this checkpoint; tests and the nine
+  original applets qualify only those exercised paths. Do not claim
+  general GCC/LLVM-equivalent C support or the latest full RV64 Linux
+  2064/QEMU P1 at this HEAD.
+
+Temporary branch-specific focused workflow edits are **restored
+byte-for-byte to main** at blob
+`cd9a880a5a707f28b5ea63c364c1844ab35e1c56`.
+The separate legacy `linux-runtime-gcc-baseline.yml` job still
+fails and is not included in the passing scoped CI claims.
