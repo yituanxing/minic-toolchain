@@ -57,6 +57,17 @@ static bool small_integer_width(const MinicC0Program *program,
     return *width == 1U || *width == 2U || *width == 4U;
 }
 
+/* GNU AAPCS64/lp64d integer parameter slots are one register wide
+ * for ordinary 1/2/4-byte integer types; reject wider widths rather
+ * than silently truncate arguments in a 32-bit store. */
+static bool valid_parameter_type(const MinicC0Program *program,
+                                 const MinicTargetInfo *target, MinicType type) {
+    size_t width;
+    bool sign;
+    return minic_type_is_pointer(type) ||
+           small_integer_width(program, target, type, &width, &sign);
+}
+
 static bool emit_integer_memory(FILE *out, bool store,
                                 size_t width, bool sign) {
     const char *op = NULL;
@@ -237,7 +248,7 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
         fn->value_count > 1024U || fn->object_count > 1024U)
         return false;
     for (i = 0U; i < fn->parameter_count; ++i)
-        if (!valid_int_or_pointer(fn->parameter_types[i])) return false;
+        if (!valid_parameter_type(program, target, fn->parameter_types[i])) return false;
     if (getenv("MINIC_M1_TRACE") != NULL &&
         name[0] == 'K' && name[1] == 'e')
         (void)fprintf(stderr, "MINIC_M9_GATE arch=loongarch64 fn=%s stage=parameters_valid\n", name);
@@ -315,10 +326,11 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
             return false;
         for (j = 0U; j < count; ++j) {
             const MinicCoreCallArgument *arg = &fn->call_arguments[begin + j];
-            if (!valid_int_or_pointer(callee->parameter_types[j]) ||
+            if (!valid_parameter_type(program, target, callee->parameter_types[j]) ||
                 arg->kind != MINIC_CORE_CALL_ARGUMENT_VALUE ||
                 arg->value.value_id >= fn->value_count ||
-                !valid_int_or_pointer(fn->values[arg->value.value_id].type) ||
+                !valid_parameter_type(program, target,
+                                      fn->values[arg->value.value_id].type) ||
                 !minic_type_equal(callee->parameter_types[j],
                                   fn->values[arg->value.value_id].type))
                 return false;
