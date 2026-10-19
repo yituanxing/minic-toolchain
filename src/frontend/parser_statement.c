@@ -1861,6 +1861,18 @@ static bool consume_local_object_attribute(MinicParser *parser,
         minic_parser_error(parser, "GNU attribute is not valid on a local object");
         return false;
     }
+    /* GNU may_alias on a local declarator prevents type-based alias
+     * assumptions for accesses through that pointer. Current MiniC Core
+     * has no type-based alias analysis or TBAA transforms, so ignoring
+     * precisely this no-argument optimization attribute is conservative.
+     * Any future TBAA pass must first preserve this source annotation. */
+    if (descriptor->kind == MINIC_ATTRIBUTE_MAY_ALIAS) {
+        if (attribute->has_arguments) {
+            minic_parser_error(parser, "GNU may_alias local attribute takes no arguments");
+            return false;
+        }
+        return true;
+    }
     if (descriptor->kind == MINIC_ATTRIBUTE_ALIGNED) {
         if (attributes == NULL) {
             minic_parser_error(parser, "invalid GNU aligned local object context");

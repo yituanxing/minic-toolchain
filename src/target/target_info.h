@@ -7,6 +7,11 @@
 #include <stddef.h>
 #include <stdint.h>
 
+typedef enum MinicTargetArchitecture {
+    MINIC_TARGET_ARCH_RISCV64 = 0,
+    MINIC_TARGET_ARCH_X86_64
+} MinicTargetArchitecture;
+
 typedef enum MinicIntegerLiteralBase {
     MINIC_INTEGER_LITERAL_BASE_BINARY = 2,
     MINIC_INTEGER_LITERAL_BASE_OCTAL = 8,
@@ -23,6 +28,7 @@ typedef struct MinicTargetIntegerModel {
 } MinicTargetIntegerModel;
 
 typedef struct MinicTargetInfo {
+    MinicTargetArchitecture architecture;
     const MinicDataLayout *data_layout;
     const MinicTargetIntegerModel *integer_model;
     MinicType wide_character_type;
@@ -36,6 +42,8 @@ typedef struct MinicTargetInfo {
 extern const char *const minic_riscv64_argument_registers[8];
 
 const MinicTargetInfo *minic_default_target_info(void);
+const MinicTargetInfo *minic_target_info_for_architecture(MinicTargetArchitecture architecture);
+const MinicTargetInfo *minic_target_info_from_name(const char *name);
 const MinicDataLayout *minic_target_info_data_layout(const MinicTargetInfo *target);
 const MinicTargetIntegerModel *minic_target_info_integer_model(const MinicTargetInfo *target);
 bool minic_target_info_plain_char_sign(const MinicTargetInfo *target, MinicIntegerSign *sign);

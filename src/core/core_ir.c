@@ -1084,6 +1084,15 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
     case MINIC_CORE_INSTRUCTION_VARIADIC_ARGUMENT_ADDRESS:
         return instruction_result_is_valid(function, instruction) &&
                minic_type_is_pointer(instruction->type);
+    case MINIC_CORE_INSTRUCTION_VARIADIC_NEXT_SCALAR: {
+        const MinicCoreValueId list = instruction->value.operand;
+        return instruction_result_is_valid(function, instruction) &&
+               (minic_type_is_integer(instruction->type) ||
+                minic_type_is_pointer(instruction->type) ||
+                minic_type_is_double(instruction->type)) &&
+               list < function->value_count && available_values[list] &&
+               minic_type_is_pointer(function->values[list].type);
+    }
     case MINIC_CORE_INSTRUCTION_DYNAMIC_STACK_ALLOC: {
         MinicCoreValueId size_value = instruction->value.operand;
         return instruction_result_is_valid(function, instruction) &&
@@ -1205,6 +1214,29 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
         }
         return minic_type_equal(value_type, instruction->type) &&
                instruction->value.load.is_volatile == minic_type_is_volatile(pointee);
+    }
+    case MINIC_CORE_INSTRUCTION_ATOMIC_LOAD: {
+        MinicType pointee, value_type;
+        if (!instruction_result_is_valid(function, instruction) ||
+            instruction->value.atomic_load.memory_order != 0U ||
+            !available_pointer_pointee(
+                function, available_values, instruction->value.atomic_load.address, &pointee) ||
+            !minic_type_unqualified(pointee, &value_type) ||
+            !(minic_type_is_integer(value_type) || minic_type_is_pointer(value_type))) return false;
+        return minic_type_equal(value_type, instruction->type);
+    }
+    case MINIC_CORE_INSTRUCTION_ATOMIC_STORE: {
+        MinicType pointee, stored_type;
+        MinicCoreValueId value = instruction->value.atomic_store.stored_value;
+        if (instruction->result != MINIC_CORE_VALUE_INVALID ||
+            !minic_type_is_void(instruction->type) ||
+            instruction->value.atomic_store.memory_order != 0U ||
+            value >= function->value_count || !available_values[value] ||
+            !available_pointer_pointee(
+                function, available_values, instruction->value.atomic_store.address, &pointee) ||
+            !minic_type_unqualified(pointee, &stored_type) ||
+            !(minic_type_is_integer(stored_type) || minic_type_is_pointer(stored_type))) return false;
+        return minic_type_equal(stored_type, function->values[value].type);
     }
     case MINIC_CORE_INSTRUCTION_STORE: {
         MinicType pointee;
@@ -1725,6 +1757,18 @@ static bool verify_block(const MinicCoreFunction *function,
         }
         instruction = &function->instructions[instruction_id];
         if (!instruction_is_valid(function, instruction, available_values)) {
+            /* Opt-in verifier diagnostics are emitted only on a rejected
+             * instruction. Preserve the ordinary verifier's strict contract. */
+            if (getenv("MINIC_CORE_VERIFY_TRACE") != NULL) {
+                (void)fprintf(stderr,
+                    "CORE_IR_VERIFY_FAIL reason=instruction function=%s "
+                    "block=%" PRIu32 " id=%" PRIu32 " kind=%d "
+                    "result=%" PRIu32 " span=%zu:%zu\n",
+                    function->name, block_id, instruction_id,
+                    (int)instruction->kind, instruction->result,
+                    instruction->span.begin.line,
+                    instruction->span.begin.column);
+            }
             return false;
         }
         if (instruction->result != MINIC_CORE_VALUE_INVALID) {
@@ -2122,6 +2166,9 @@ static bool dump_instruction(FILE *output,
         return fprintf(output,
                        "  %%%" PRIu32 " = variadic.argument.address\n",
                        instruction->result) >= 0;
+    case MINIC_CORE_INSTRUCTION_VARIADIC_NEXT_SCALAR:
+        return fprintf(output, "  %%%" PRIu32 " = variadic.next %%%" PRIu32 "\n",
+                       instruction->result, instruction->value.operand) >= 0;
     case MINIC_CORE_INSTRUCTION_DYNAMIC_STACK_ALLOC:
         return fprintf(output,
                        "  %%%" PRIu32 " = stack.alloc %%%" PRIu32 "\n",
@@ -2189,6 +2236,13 @@ static bool dump_instruction(FILE *output,
                        instruction->result,
                        instruction->value.load.is_volatile ? ".volatile" : "",
                        instruction->value.load.address) >= 0;
+    case MINIC_CORE_INSTRUCTION_ATOMIC_LOAD:
+        return fprintf(output, "  %%%" PRIu32 " = atomic.load.relaxed %%%" PRIu32 "\n",
+                       instruction->result, instruction->value.atomic_load.address) >= 0;
+    case MINIC_CORE_INSTRUCTION_ATOMIC_STORE:
+        return fprintf(output, "  atomic.store.relaxed %%%" PRIu32 ", %%%" PRIu32 "\n",
+                       instruction->value.atomic_store.stored_value,
+                       instruction->value.atomic_store.address) >= 0;
     case MINIC_CORE_INSTRUCTION_STORE:
         return fprintf(output,
                        "  store%s %%%" PRIu32 ", %%%" PRIu32 "\n",

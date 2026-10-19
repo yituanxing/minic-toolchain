@@ -282,6 +282,17 @@ static const MinicAttributeDescriptor minic_attribute_descriptors[] = {
                           MINIC_ATTRIBUTE_COLD,
                           MINIC_ATTRIBUTE_CLASS_OPTIMIZATION,
                           MINIC_ATTRIBUTE_TARGET_FUNCTION),
+    /* Constructor has startup side effects; never treat as informational. */
+    {
+        "constructor", sizeof("constructor") - 1U,
+        MINIC_ATTRIBUTE_CONSTRUCTOR, MINIC_ATTRIBUTE_CLASS_LANGUAGE_SEMANTIC,
+        MINIC_ATTRIBUTE_TARGET_FUNCTION, 0U, 0U, true,
+    },
+    {
+        "__constructor__", sizeof("__constructor__") - 1U,
+        MINIC_ATTRIBUTE_CONSTRUCTOR, MINIC_ATTRIBUTE_CLASS_LANGUAGE_SEMANTIC,
+        MINIC_ATTRIBUTE_TARGET_FUNCTION, 0U, 0U, true,
+    },
     MINIC_ATTRIBUTE_ENTRY("noreturn",
                           MINIC_ATTRIBUTE_NORETURN,
                           MINIC_ATTRIBUTE_CLASS_CONTROL_FLOW,
@@ -464,14 +475,17 @@ static const MinicAttributeDescriptor minic_attribute_descriptors[] = {
         1U,
         true,
     },
+    /* GNU permits may_alias on a local pointer declarator as well as on
+     * a typedef. It relaxes type-based alias assumptions, never alignment or
+     * the call ABI. Current MiniC Core does not perform TBAA optimization. */
     MINIC_ATTRIBUTE_ENTRY("may_alias",
                           MINIC_ATTRIBUTE_MAY_ALIAS,
                           MINIC_ATTRIBUTE_CLASS_OPTIMIZATION,
-                          MINIC_ATTRIBUTE_TARGET_TYPE),
+                          MINIC_ATTRIBUTE_TARGET_TYPE | MINIC_ATTRIBUTE_TARGET_OBJECT),
     MINIC_ATTRIBUTE_ENTRY("__may_alias__",
                           MINIC_ATTRIBUTE_MAY_ALIAS,
                           MINIC_ATTRIBUTE_CLASS_OPTIMIZATION,
-                          MINIC_ATTRIBUTE_TARGET_TYPE),
+                          MINIC_ATTRIBUTE_TARGET_TYPE | MINIC_ATTRIBUTE_TARGET_OBJECT),
     MINIC_ATTRIBUTE_ENTRY("packed",
                           MINIC_ATTRIBUTE_PACKED,
                           MINIC_ATTRIBUTE_CLASS_LAYOUT,

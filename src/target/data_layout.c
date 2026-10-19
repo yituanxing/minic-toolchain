@@ -17,8 +17,30 @@ static const MinicDataLayout minic_rv64_data_layout = {
     .long_double_alignment = 16U,
 };
 
+/* Keep the x86-64 layout separate: size equality does not imply identical
+ * scalar representation, record ABI classification, or long-double encoding.
+ * The backend remains responsible for those target-specific rules. */
+static const MinicDataLayout minic_x86_64_linux_data_layout_value = {
+    .pointer_size = 8U,
+    .pointer_alignment = 8U,
+    .integer_size = {0U, 1U, 1U, 2U, 4U, 8U, 8U, 16U},
+    .integer_alignment = {0U, 1U, 1U, 2U, 4U, 8U, 8U, 16U},
+    .float_size = 4U,
+    .float_alignment = 4U,
+    .double_size = 8U,
+    .double_alignment = 8U,
+    .long_double_size = 16U,
+    .long_double_alignment = 16U,
+    .float128_size = 16U,
+    .float128_alignment = 16U,
+};
+
 const MinicDataLayout *minic_default_data_layout(void) {
     return &minic_rv64_data_layout;
+}
+
+const MinicDataLayout *minic_x86_64_linux_data_layout(void) {
+    return &minic_x86_64_linux_data_layout_value;
 }
 
 static bool minic_data_layout_align_up(size_t value, size_t alignment, size_t *result) {
@@ -286,6 +308,40 @@ static bool minic_data_layout_type_depth(const MinicDataLayout *layout,
     if (minic_type_is_long_double(type)) {
         *size = layout->long_double_size;
         *alignment = layout->long_double_alignment;
+        return minic_data_layout_apply_explicit_alignment(type, alignment);
+    }
+    if (minic_type_is_float128(type)) {
+        if (layout->float128_size == 0U || layout->float128_alignment == 0U)
+            return false;
+        *size = layout->float128_size;
+        *alignment = layout->float128_alignment;
+        return minic_data_layout_apply_explicit_alignment(type, alignment);
+    }
+    /* The x86 TS 18661 variants have their own C type identities but
+     * storage layout matching the standard binary32/binary64/x87 formats
+     * on this target. RV64 verifier rejects these target-only types. */
+    if (type.base_kind == MINIC_TYPE_BASE_FLOAT32 ||
+        type.base_kind == MINIC_TYPE_BASE_FLOAT64 ||
+        type.base_kind == MINIC_TYPE_BASE_FLOAT32X ||
+        type.base_kind == MINIC_TYPE_BASE_FLOAT64X) {
+        if (layout->float128_size == 0U) return false;
+        switch (type.base_kind) {
+        case MINIC_TYPE_BASE_FLOAT32:
+            *size = layout->float_size;
+            *alignment = layout->float_alignment;
+            break;
+        case MINIC_TYPE_BASE_FLOAT64:
+        case MINIC_TYPE_BASE_FLOAT32X:
+            *size = layout->double_size;
+            *alignment = layout->double_alignment;
+            break;
+        case MINIC_TYPE_BASE_FLOAT64X:
+            *size = layout->long_double_size;
+            *alignment = layout->long_double_alignment;
+            break;
+        default:
+            return false;
+        }
         return minic_data_layout_apply_explicit_alignment(type, alignment);
     }
     if (minic_type_is_array(type)) {

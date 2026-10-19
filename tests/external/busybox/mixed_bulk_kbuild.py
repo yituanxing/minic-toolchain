@@ -1,0 +1,150 @@
+#!/usr/bin/env python3
+"""Full mixed-object pressure test, original BusyBox C/Kconfig/Kbuild unchanged.
+
+Uses independently generated MiniC ELF objects for EVERY successfully
+qualified TU of the pinned 957-symbol host-compatible Kconfig. Rebuilds
+every original object through the exact upstream Kbuild GCC invocation and
+substitutes only that owner's MiniC ELF relocatable object before archive.
+Never claims all-MiniC when any owner remains GCC. All outcomes are
+diagnostic + fail-closed, with all source files unchanged.
+"""
+import argparse
+import hashlib
+import json
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+
+from mixed_original_kbuild import run_cases, sha256
+
+
+def log(msg):
+    print(msg, flush=True)
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--source", required=True)
+    parser.add_argument("--report", required=True)
+    parser.add_argument("--proxy", required=True)
+    parser.add_argument("--host-cc", default="cc")
+    args = parser.parse_args()
+    root = Path(args.source).resolve()
+    report = Path(args.report).resolve()
+    original = report / "bulk-gcc-reference" / "busybox"
+    original.parent.mkdir(parents=True, exist_ok=True)
+    executable = root / "busybox"
+    if not executable.is_file():
+        log("BUSYBOX_MIXED_BULK=BLOCKED stage=original-busybox-not-found")
+        return 1
+    shutil.copy2(executable, original)
+    oracle = run_cases(original, report)
+    if len(oracle) != 11 or any(item[0] for item in oracle.values()):
+        log("BUSYBOX_MIXED_BULK=BLOCKED stage=original-GNU-runtime-oracle")
+        return 1
+    manifest = {}
+    skipped = []
+    for result in sorted((report / "per-tu").glob("*/result.json")):
+        row = json.loads(result.read_text(encoding="utf-8"))
+        obj_name = row.get("object")
+        if not obj_name:
+            continue
+        obj = (root / obj_name).resolve()
+        mini = result.parent / "mini.o"
+        if all(row.get(k) == 0 for k in ("gcc", "cpp", "minic", "assembler")) \
+                and obj.is_file() and mini.is_file() and obj != mini.resolve():
+            if str(obj) in manifest:
+                log("BUSYBOX_MIXED_BULK=FAIL stage=duplicate-Kbuild-owner object=%s" % obj)
+                return 1
+            manifest[str(obj)] = str(mini)
+        else:
+            skipped.append((obj_name, row.get("minic"), row.get("cpp")))
+    log("BUSYBOX_MIXED_BULK_SOURCE=DISCOVERY original_Kbuild_owners=%d "
+        "eligible_MiniC=%d GCC_fallback=%d" %
+        (len(manifest) + len(skipped), len(manifest), len(skipped)))
+    for name, minic, cpp in skipped:
+        log("BUSYBOX_MIXED_BULK_GCC_FALLBACK object=%s minic=%s cpp=%s" %
+            (name, minic, cpp))
+    if len(manifest) < 580 or len(skipped) > 14:
+        log("BUSYBOX_MIXED_BULK=BLOCKED stage=unexpected-discovery-coverage")
+        return 1
+
+    manifest_file = report / "bulk-kbuild-owner-manifest.json"
+    manifest_file.write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")
+    original_sha = sha256(original)
+    for path in manifest:
+        Path(path).unlink()
+    # Kbuild can keep old intermediate archive owners. Invalidate all
+    # containing directories and their ancestors, not just a single applet
+    # directory, to force a *new* real link with every MiniC object.
+    ancestors = set()
+    for name in manifest:
+        parent = Path(name).parent
+        while parent != root and root in parent.parents:
+            ancestors.add(parent)
+            parent = parent.parent
+    for parent in sorted(ancestors, key=lambda p: -len(p.parts)):
+        for file in ("built-in.o", "lib.a"):
+            aggregate = parent / file
+            if aggregate.exists():
+                aggregate.unlink()
+    for file in ("busybox", "busybox_unstripped"):
+        path = root / file
+        if path.exists():
+            path.unlink()
+
+    env = os.environ.copy()
+    for name in ("MAKEFLAGS", "MAKEOVERRIDES", "MFLAGS", "GNUMAKEFLAGS", "CFLAGS"):
+        env.pop(name, None)
+    env.update({"BUSYBOX_ALLYES_HOST_CC": args.host_cc,
+                "BUSYBOX_ALLYES_REPORT_ROOT": str(report),
+                "BUSYBOX_ALLYES_SKIP_SHADOW": "1",
+                "BUSYBOX_ALLYES_REPLACE_MAP": str(manifest_file)})
+    with (report / "bulk.make.out").open("wb") as stdout, \
+         (report / "bulk.make.err").open("wb") as stderr:
+        rc = subprocess.run(["make", "-j4", "CC=" + args.proxy, "busybox"],
+                            cwd=root, env=env, stdout=stdout, stderr=stderr,
+                            check=False).returncode
+    if rc or not executable.is_file():
+        logs = (report / "bulk.make.err").read_text(errors="replace")
+        log("BUSYBOX_MIXED_BULK=BLOCKED stage=original-Kbuild-link exit=%d "
+            "last_stderr=%r" % (rc, logs[-4000:]))
+        return 1
+    events = report / "combined-events"
+    verified = 0
+    for obj, mini in manifest.items():
+        key = hashlib.sha256(obj.encode("utf-8")).hexdigest()[:20]
+        event = events / (key + ".replace.txt")
+        if not event.is_file() or not Path(obj).is_file() or sha256(obj) != sha256(mini):
+            log("BUSYBOX_MIXED_BULK=BLOCKED stage=Kbuild-owner-not-MiniC "
+                "verified=%d expected=%d object=%s event=%s" %
+                (verified, len(manifest), obj, event.is_file()))
+            return 1
+        verified += 1
+    log("BUSYBOX_MIXED_BULK_REAL_OWNERS=PASS total=%d SHA256_verified=%d "
+        "original_Kbuild=1" % (len(manifest), verified))
+    new_sha = sha256(executable)
+    if new_sha == original_sha:
+        log("BUSYBOX_MIXED_BULK=BLOCKED stage=GNU-binary-unchanged")
+        return 1
+    mixed = run_cases(executable, report)
+    failures = [key for key, oracle_result in oracle.items() if mixed.get(key) != oracle_result]
+    for key in failures[:8]:
+        log("BUSYBOX_MIXED_BULK_RUNTIME_DIFF fixture=%s GCC=%r MiniC=%r" %
+            (key, oracle[key], mixed.get(key)))
+    log("BUSYBOX_MIXED_BULK_RUNTIME=DISCOVERY fixtures=%d matches=%d differences=%d" %
+        (len(oracle), len(oracle) - len(failures), len(failures)))
+    if failures:
+        log("BUSYBOX_MIXED_BULK=BLOCKED stage=runtime-differential")
+        return 1
+    log("BUSYBOX_MIXED_BULK=PASS MiniC_owners=%d GCC_fallback=%d "
+        "original_full_Kbuild=1 eleven_fixture_byte_exact=1 "
+        "MiniC_and_GNU_binary_differ=1 full_all_MiniC=NO" %
+        (verified, len(skipped)))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

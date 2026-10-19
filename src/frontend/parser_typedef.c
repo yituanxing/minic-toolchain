@@ -389,6 +389,12 @@ static bool consume_typedef_attribute(MinicParser *parser,
     if (descriptor->kind == MINIC_ATTRIBUTE_MAY_ALIAS) {
         return true;
     }
+    /* GNU deprecated on a typedef is diagnostic-only, not a new ABI/type
+     * representation. libselinux exposes security_context_t this way.
+     * Preserve the alias and do not rewrite the source or erase layout attrs. */
+    if (descriptor->kind == MINIC_ATTRIBUTE_DEPRECATED) {
+        return true;
+    }
     if (descriptor->kind == MINIC_ATTRIBUTE_ALIGNED) {
         size_t alignment;
 

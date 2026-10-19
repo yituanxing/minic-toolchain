@@ -14,6 +14,18 @@ static const MinicTargetIntegerModel minic_rv64_integer_model = {
                             [MINIC_INTEGER_RANK_INT128] = 128U},
 };
 
+/* LP64, signed plain char and signed 32-bit wchar_t on x86-64 Linux. */
+static const MinicTargetIntegerModel minic_x86_64_linux_integer_model = {
+    .plain_char_sign = MINIC_INTEGER_SIGN_SIGNED,
+    .semantic_width_bits = {[MINIC_INTEGER_RANK_BOOL] = 1U,
+                            [MINIC_INTEGER_RANK_CHAR] = 8U,
+                            [MINIC_INTEGER_RANK_SHORT] = 16U,
+                            [MINIC_INTEGER_RANK_INT] = 32U,
+                            [MINIC_INTEGER_RANK_LONG] = 64U,
+                            [MINIC_INTEGER_RANK_LONG_LONG] = 64U,
+                            [MINIC_INTEGER_RANK_INT128] = 128U},
+};
+
 const char *const minic_riscv64_argument_registers[8] = {
     "a0", "a1", "a2", "a3", "a4", "a5", "a6", "a7"};
 
@@ -134,20 +146,57 @@ integer_literal_fits(const MinicTargetIntegerModel *model, MinicType type, uint6
     return value <= (UINT64_C(1) << (bits - 1U)) - UINT64_C(1);
 }
 
-const MinicTargetInfo *minic_default_target_info(void) {
-    static MinicTargetInfo target;
+const MinicTargetInfo *minic_target_info_for_architecture(
+    MinicTargetArchitecture architecture) {
+    static MinicTargetInfo rv64_target;
+    static MinicTargetInfo x86_64_target;
 
-    if (target.data_layout == NULL) {
-        target.data_layout = minic_default_data_layout();
-        target.integer_model = &minic_rv64_integer_model;
-        target.wide_character_type = minic_type_unsigned_short();
-        target.word_integer_rank = MINIC_INTEGER_RANK_LONG;
-        target.gnu_sizeof_void_is_one = true;
-        target.gnu_sizeof_function_is_one = true;
-        target.call_frame_return_address_level0 = true;
-        target.call_frame_frame_address_level0 = true;
+    if (architecture == MINIC_TARGET_ARCH_RISCV64) {
+        if (rv64_target.data_layout == NULL) {
+            rv64_target.architecture = MINIC_TARGET_ARCH_RISCV64;
+            rv64_target.data_layout = minic_default_data_layout();
+            rv64_target.integer_model = &minic_rv64_integer_model;
+            rv64_target.wide_character_type = minic_type_unsigned_short();
+            rv64_target.word_integer_rank = MINIC_INTEGER_RANK_LONG;
+            rv64_target.gnu_sizeof_void_is_one = true;
+            rv64_target.gnu_sizeof_function_is_one = true;
+            rv64_target.call_frame_return_address_level0 = true;
+            rv64_target.call_frame_frame_address_level0 = true;
+        }
+        return &rv64_target;
     }
-    return &target;
+    if (architecture == MINIC_TARGET_ARCH_X86_64) {
+        if (x86_64_target.data_layout == NULL) {
+            x86_64_target.architecture = MINIC_TARGET_ARCH_X86_64;
+            x86_64_target.data_layout = minic_x86_64_linux_data_layout();
+            x86_64_target.integer_model = &minic_x86_64_linux_integer_model;
+            x86_64_target.wide_character_type = minic_type_int();
+            x86_64_target.word_integer_rank = MINIC_INTEGER_RANK_LONG;
+            x86_64_target.gnu_sizeof_void_is_one = true;
+            x86_64_target.gnu_sizeof_function_is_one = true;
+            /* Machine-level frame address and return address support awaits
+             * the x86-64 backend.  Do not accept these builtins prematurely. */
+        }
+        return &x86_64_target;
+    }
+    return NULL;
+}
+
+const MinicTargetInfo *minic_default_target_info(void) {
+    return minic_target_info_for_architecture(MINIC_TARGET_ARCH_RISCV64);
+}
+
+const MinicTargetInfo *minic_target_info_from_name(const char *name) {
+    if (name == NULL) {
+        return NULL;
+    }
+    if (strcmp(name, "riscv64-linux") == 0) {
+        return minic_target_info_for_architecture(MINIC_TARGET_ARCH_RISCV64);
+    }
+    if (strcmp(name, "x86_64-linux") == 0) {
+        return minic_target_info_for_architecture(MINIC_TARGET_ARCH_X86_64);
+    }
+    return NULL;
 }
 
 const MinicDataLayout *minic_target_info_data_layout(const MinicTargetInfo *target) {
@@ -206,6 +255,15 @@ bool minic_target_info_sizeof_type(const MinicTargetInfo *target,
     size_t alignment;
 
     if (target == NULL || program == NULL || size == NULL) {
+        return false;
+    }
+    /* The x86 runtime cursor proxy occupies one machine pointer but
+     * __builtin_va_list is really struct __va_list_tag[1] (24 bytes).
+     * Until that array object/parameter ABI model exists, never return 8
+     * for sizeof(va_list) or sizeof(local_va_list). This catches typedefs
+     * and expressions, unlike spelling-based parser diagnostics. */
+    if (minic_type_is_x86_va_list_cursor(type) &&
+        target->architecture == MINIC_TARGET_ARCH_X86_64) {
         return false;
     }
     if (minic_type_is_void(type)) {
@@ -421,7 +479,7 @@ bool minic_target_info_call_frame_address_supported(const MinicTargetInfo *targe
 bool minic_target_info_fixed_register_supported(const MinicTargetInfo *target,
                                                 const char *name,
                                                 size_t name_length) {
-    if (target == NULL || name == NULL) {
+    if (target == NULL || target->architecture != MINIC_TARGET_ARCH_RISCV64 || name == NULL) {
         return false;
     }
     /* The current RV64 backend uses most caller/scratch registers internally.
@@ -434,7 +492,7 @@ bool minic_target_info_fixed_register_supported(const MinicTargetInfo *target,
 bool minic_target_info_local_fixed_register_supported(const MinicTargetInfo *target,
                                                       const char *name,
                                                       size_t name_length) {
-    if (target == NULL || name == NULL) {
+    if (target == NULL || target->architecture != MINIC_TARGET_ARCH_RISCV64 || name == NULL) {
         return false;
     }
     return name_length == 2U && name[0] == 'a' && name[1] >= '0' && name[1] <= '7';
@@ -443,7 +501,7 @@ bool minic_target_info_local_fixed_register_supported(const MinicTargetInfo *tar
 bool minic_target_info_inline_asm_register_clobber_supported(const MinicTargetInfo *target,
                                                              const char *name,
                                                              size_t name_length) {
-    if (target == NULL || name == NULL) {
+    if (target == NULL || target->architecture != MINIC_TARGET_ARCH_RISCV64 || name == NULL) {
         return false;
     }
     /* TargetConstraint v1 keeps temporary registers available to the current
@@ -460,7 +518,7 @@ bool minic_target_info_inline_asm_immediate_constraint_supported(const MinicTarg
                                                                  const char *constraint,
                                                                  size_t constraint_length,
                                                                  int64_t value) {
-    if (target == NULL || constraint == NULL) {
+    if (target == NULL || target->architecture != MINIC_TARGET_ARCH_RISCV64 || constraint == NULL) {
         return false;
     }
     /* RISC-V GCC constraint I is a signed 12-bit integer immediate. */

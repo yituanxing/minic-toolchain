@@ -1245,6 +1245,15 @@ bool minic_riscv64_write_c0_program_with_core_functions(const char *path,
             symbol.function_sections = function_sections;
             success = success && minic_riscv64_emit_core_function_for_program_with_symbol(
                           file, program, core_function, &symbol);
+            /* GNU constructor is a real ELF init action on RV64 as well:
+             * retain its address as an init_array relocation, never discard. */
+            if (success && function->is_constructor) {
+                const char *init_symbol = minic_c0_function_symbol_name(function);
+                success = init_symbol != NULL && init_symbol[0] != '\0' &&
+                          fprintf(file, ".section .init_array,\"aw\",@init_array\n"
+                                        ".p2align 3\n  .dword %s\n.text\n",
+                                  init_symbol) >= 0;
+            }
         }
         if (getenv("MINIC_BOOTSTRAP_TRACE") != NULL && function->is_defined) {
             const char *trace_symbol = minic_c0_function_symbol_name(function);

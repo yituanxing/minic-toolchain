@@ -31,6 +31,7 @@ typedef struct MinicFunctionAttributeContext {
     bool *is_weak;
     bool *is_noreturn;
     bool *force_emit;
+    bool *is_constructor;
     MinicFunctionId *alias_target;
     const char *unsupported_message;
 } MinicFunctionAttributeContext;
@@ -223,6 +224,16 @@ static bool consume_function_attribute(MinicParser *parser,
         return true;
     }
 
+    if (descriptor->kind == MINIC_ATTRIBUTE_CONSTRUCTOR) {
+        /* Startup behavior is semantic, not a parse-only diagnostic. */
+        if (context->is_constructor == NULL || attribute->has_arguments) {
+            minic_parser_error(parser, "GNU constructor requires supported no-priority function");
+            return false;
+        }
+        *context->is_constructor = true;
+        return true;
+    }
+
     if (descriptor->kind == MINIC_ATTRIBUTE_GNU_INLINE) {
         if (!context->allow_gnu_inline) {
             minic_parser_error(parser, "%s", context->unsupported_message);
@@ -270,6 +281,7 @@ static bool parse_function_attribute_lists(MinicParser *parser,
     context.is_weak = is_weak;
     context.is_noreturn = NULL;
     context.force_emit = NULL;
+    context.is_constructor = NULL;
     context.alias_target = NULL;
     context.unsupported_message = unsupported_message;
     return minic_parser_parse_gnu_attribute_lists(parser, consume_function_attribute, &context);
@@ -287,6 +299,7 @@ static bool apply_function_attribute_list(MinicParser *parser,
                                           bool *has_section,
                                           bool *is_weak,
                                           bool *is_noreturn,
+                                          bool *is_constructor,
                                           MinicFunctionId *alias_target,
                                           const char *unsupported_message) {
     MinicFunctionAttributeContext context;
@@ -306,6 +319,7 @@ static bool apply_function_attribute_list(MinicParser *parser,
     context.is_weak = is_weak;
     context.is_noreturn = is_noreturn;
     context.force_emit = NULL;
+    context.is_constructor = is_constructor;
     context.alias_target = alias_target;
     context.unsupported_message = unsupported_message;
     for (index = 0U; index < attributes->count; ++index) {
@@ -448,6 +462,7 @@ static bool parse_persistent_function_attributes(MinicParser *parser,
                                                  bool *is_weak,
                                                  bool *is_noreturn,
                                                  bool *force_emit,
+                                                 bool *is_constructor,
                                                  MinicFunctionId *alias_target) {
     MinicFunctionAttributeContext context;
 
@@ -462,6 +477,7 @@ static bool parse_persistent_function_attributes(MinicParser *parser,
     context.is_weak = is_weak;
     context.is_noreturn = is_noreturn;
     context.force_emit = force_emit;
+    context.is_constructor = is_constructor;
     context.alias_target = alias_target;
     context.unsupported_message =
         "unsupported GNU function attribute; ABI/layout-affecting and unknown attributes must be "
@@ -686,9 +702,57 @@ static bool parameter_array_modifier_is_restrict(const MinicParser *parser) {
            function_identifier_is(parser, "__restrict__");
 }
 
+/* Array-parameter outer bounds are discarded during array-to-pointer
+ * adjustment. A lone name of a preceding integer parameter is a valid
+ * C99 variably modified bound (e.g. regexec's [__restrict __nmatch]).
+ * Do not turn that name into a false local-expression lookup; equally,
+ * do not accept an undeclared or noninteger bound without validation. */
+static bool consume_prior_parameter_bound(MinicParser *parser,
+                                          const MinicSourceSpan *prior_names,
+                                          const MinicType *prior_types,
+                                          size_t prior_count,
+                                          bool *consumed) {
+    MinicParser probe;
+    size_t i;
+    size_t length;
+
+    if (parser == NULL || consumed == NULL) return false;
+    *consumed = false;
+    if (parser->current.kind != MINIC_TOKEN_IDENTIFIER) return true;
+    probe = *parser;
+    if (!minic_parser_advance(&probe)) return false;
+    if (probe.current.kind != MINIC_TOKEN_RBRACKET) return true;
+    length = minic_parser_span_length(parser->current.span);
+    for (i = 0U; i < prior_count; ++i) {
+        if (minic_type_is_integer(prior_types[i]) &&
+            minic_parser_span_length(prior_names[i]) == length &&
+            length != 0U &&
+            memcmp(parser->source + prior_names[i].begin.offset,
+                   parser->source + parser->current.span.begin.offset,
+                   length) == 0) {
+            *consumed = true;
+            return minic_parser_advance(parser) &&
+                   minic_parser_expect(parser, MINIC_TOKEN_RBRACKET, "expected ']'");
+        }
+    }
+    /* A sole enum constant such as BusyBox's meminfo[MI_MAX] is a C ICE,
+     * not a prior-parameter VLA bound. Leave it for the existing fixed-bound
+     * parser, which verifies the enum value and outer array adjustment.
+     * Do not accept unknown identifiers or shadow the preceding parameter. */
+    if (minic_parser_find_enum_constant(parser, parser->current.span) !=
+        MINIC_ENUMERATOR_INVALID) {
+        return true;
+    }
+    minic_parser_error(parser, "array parameter bound must name a preceding integer parameter");
+    return false;
+}
+
 static bool adjust_array_parameter_type(MinicParser *parser,
                                         MinicType *parameter_type,
-                                        size_t array_type_begin) {
+                                        size_t array_type_begin,
+                                        const MinicSourceSpan *prior_names,
+                                        const MinicType *prior_types,
+                                        size_t prior_count) {
     const MinicArrayType *outer_array;
     MinicType adjusted_type;
     MinicType declared_array_type;
@@ -701,10 +765,12 @@ static bool adjust_array_parameter_type(MinicParser *parser,
     if (parser->current.kind == MINIC_TOKEN_LBRACKET) {
         bool saw_static;
         bool has_outer_bound;
+        bool consumed_named_bound;
         size_t ignored_outer_bound;
 
         saw_static = false;
         has_outer_bound = false;
+        consumed_named_bound = false;
         if (!minic_parser_advance(parser)) {
             return false;
         }
@@ -728,7 +794,12 @@ static bool adjust_array_parameter_type(MinicParser *parser,
                 return false;
             }
         } else {
-            if (!minic_parser_parse_fixed_array_bound(parser, &ignored_outer_bound)) {
+            if (!consume_prior_parameter_bound(parser, prior_names, prior_types,
+                                               prior_count, &consumed_named_bound)) {
+                return false;
+            }
+            if (!consumed_named_bound &&
+                !minic_parser_parse_fixed_array_bound(parser, &ignored_outer_bound)) {
                 return false;
             }
             has_outer_bound = true;
@@ -867,6 +938,12 @@ bool minic_parser_parse_parameter_list(MinicParser *parser,
         return false;
     }
 
+    /* Parameter lists can be parsed with parameter_name_spans == NULL
+     * (nested function-pointer and prototype declarators). Keep a local
+     * name table so C99 outer array bounds still see earlier parameters. */
+    MinicSourceSpan prior_parameter_names[MINIC_MAX_FUNCTION_PARAMETERS];
+
+    (void)memset(prior_parameter_names, 0, sizeof(prior_parameter_names));
     for (;;) {
         MinicSourceSpan declarator_name_span;
         MinicType parameter_type;
@@ -950,6 +1027,7 @@ bool minic_parser_parse_parameter_list(MinicParser *parser,
             MinicSourceSpan parameter_name_span;
 
             parameter_name_span = parser->current.span;
+            declarator_name_span = parameter_name_span;
             declarator_has_name = true;
             if (parameter_name_spans != NULL) {
                 parameter_name_spans[*parameter_count] = parameter_name_span;
@@ -997,7 +1075,8 @@ bool minic_parser_parse_parameter_list(MinicParser *parser,
 
         if (!is_function_pointer_parameter && !is_pointer_to_array_parameter &&
             !adjust_array_parameter_type(
-                parser, &parameter_type, parameter_array_type_begin)) {
+                parser, &parameter_type, parameter_array_type_begin,
+                prior_parameter_names, parameter_types, *parameter_count)) {
             return false;
         }
         if (!adjust_function_parameter_type(parser, &parameter_type)) {
@@ -1005,6 +1084,9 @@ bool minic_parser_parse_parameter_list(MinicParser *parser,
         }
 
         parameter_types[*parameter_count] = parameter_type;
+        if (declarator_has_name) {
+            prior_parameter_names[*parameter_count] = declarator_name_span;
+        }
         *parameter_count += 1U;
         if (parser->current.kind != MINIC_TOKEN_COMMA) {
             return true;
@@ -2012,6 +2094,16 @@ static bool parse_visible_external_array(MinicParser *parser,
                                                                             is_weak)) {
         return false;
     }
+    /* A declarator list can start with an array and continue with
+     * pointers or scalars: SValue stack[N], *top, *previous.
+     * Reuse the existing generic tentative declarator-list handler
+     * instead of misclassifying the comma as an initializer. */
+    if (parser->current.kind == MINIC_TOKEN_COMMA) {
+        return parse_external_tentative_declaration_list_after_head(
+            parser, element_type, array_type, name_span, section_name,
+            *section_name_length, *has_section, *explicit_alignment,
+            visibility, has_visibility);
+    }
     if (parser->current.kind == MINIC_TOKEN_SEMICOLON) {
         return parse_external_tentative_object(parser,
                                                array_type,
@@ -2384,6 +2476,7 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
     bool has_preparsed_function_parameters;
     bool is_inline;
     bool is_noreturn;
+    bool is_constructor;
     bool force_emit;
     bool is_register_declaration;
     bool is_static_declaration;
@@ -2409,6 +2502,7 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
     has_preparsed_function_parameters = false;
     is_inline = false;
     is_noreturn = false;
+    is_constructor = false;
     force_emit = false;
     is_register_declaration = false;
     is_static_declaration = false;
@@ -2645,6 +2739,7 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
                 &has_section,
                 &is_weak,
                 &is_noreturn,
+                NULL, /* function typed declarator is not startup hook */
                 NULL,
                 "unsupported GNU prefix function attribute; semantic and ABI-affecting attributes "
                 "must be implemented explicitly")) {
@@ -2683,6 +2778,7 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
                     &entity_is_weak,
                     &entity_is_noreturn,
                     &entity_force_emit,
+                    NULL,
                     NULL)) {
                 return false;
             }
@@ -2926,6 +3022,7 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
             &has_section,
             &is_weak,
             &is_noreturn,
+            &is_constructor,
             &alias_target,
             "unsupported GNU prefix function attribute; semantic and ABI-affecting attributes must "
             "be implemented explicitly")) {
@@ -2965,6 +3062,7 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
                                               &is_weak,
                                               &is_noreturn,
                                               &force_emit,
+                                              &is_constructor,
                                               &alias_target)) {
         return false;
     }
@@ -2981,6 +3079,12 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
         }
     }
 
+    if (is_constructor && (!minic_type_is_void(return_type) ||
+                           parameter_count != 0U || is_variadic ||
+                           parser->current.kind == MINIC_TOKEN_SEMICOLON)) {
+        minic_parser_error(parser, "GNU constructor requires a defined void(void) function");
+        return false;
+    }
     if (parser->current.kind == MINIC_TOKEN_SEMICOLON) {
         return finish_function_declaration_entity(parser,
                                                   name_span,
@@ -3126,6 +3230,11 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
     if (is_noreturn &&
         !minic_c0_program_set_function_noreturn(parser->program, function_id, true)) {
         minic_parser_error(parser, "cannot persist noreturn function metadata");
+        return false;
+    }
+    if (is_constructor &&
+        !minic_c0_program_set_function_constructor(parser->program, function_id)) {
+        minic_parser_error(parser, "cannot persist GNU constructor startup metadata");
         return false;
     }
     if (is_weak && !minic_c0_program_set_function_weak(parser->program, function_id, true)) {
@@ -3631,27 +3740,65 @@ static bool record_keyword_starts_standalone_declaration(MinicParser *parser, bo
     if (!minic_parser_advance(&probe)) {
         return false;
     }
-    if (probe.current.kind == MINIC_TOKEN_LBRACE) {
+    if (probe.current.kind != MINIC_TOKEN_LBRACE) {
+        if (probe.current.kind != MINIC_TOKEN_IDENTIFIER) {
+            minic_parser_error(parser, "expected record tag or definition after record keyword");
+            return false;
+        }
+
+        token_length = minic_parser_span_length(probe.current.span);
+        if (token_length == 13U &&
+            memcmp(parser->source + probe.current.span.begin.offset, "__attribute__", 13U) == 0) {
+            *is_standalone = true;
+            return true;
+        }
+
+        if (!minic_parser_advance(&probe)) {
+            return false;
+        }
+    }
+    if (probe.current.kind == MINIC_TOKEN_SEMICOLON) {
         *is_standalone = true;
         return true;
     }
-    if (probe.current.kind != MINIC_TOKEN_IDENTIFIER) {
-        minic_parser_error(parser, "expected record tag or definition after record keyword");
-        return false;
-    }
-
-    token_length = minic_parser_span_length(probe.current.span);
-    if (token_length == 13U &&
-        memcmp(parser->source + probe.current.span.begin.offset, "__attribute__", 13U) == 0) {
-        *is_standalone = true;
+    if (probe.current.kind != MINIC_TOKEN_LBRACE) {
+        *is_standalone = false;
         return true;
     }
-
-    if (!minic_parser_advance(&probe)) {
-        return false;
+    /* A record definition can itself declare objects:
+     *     struct switch_t { ... } *cur_switch;
+     * Peek after the matching '}' without mutating the real parser,
+     * even when record fields contain nested anonymous records. */
+    {
+        size_t brace_depth = 0U;
+        do {
+            if (probe.current.kind == MINIC_TOKEN_EOF) {
+                minic_parser_error(parser, "unterminated record definition");
+                return false;
+            }
+            if (probe.current.kind == MINIC_TOKEN_LBRACE) {
+                ++brace_depth;
+            } else if (probe.current.kind == MINIC_TOKEN_RBRACE) {
+                --brace_depth;
+            }
+            if (!minic_parser_advance(&probe)) {
+                return false;
+            }
+        } while (brace_depth != 0U);
     }
-    *is_standalone =
-        probe.current.kind == MINIC_TOKEN_SEMICOLON || probe.current.kind == MINIC_TOKEN_LBRACE;
+    /* GNU C allows type attributes after a complete record definition,
+     * e.g. struct grep_globals { ... } __attribute__((may_alias));
+     * Look through those attribute lists before distinguishing a standalone
+     * type declaration from a declaration with an object declarator.
+     * The actual parser will validate and apply all type attributes. */
+    {
+        MinicParsedAttributeList type_attributes;
+        (void)memset(&type_attributes, 0, sizeof(type_attributes));
+        if (!minic_parser_collect_gnu_attribute_lists(&probe, &type_attributes)) {
+            return false;
+        }
+    }
+    *is_standalone = probe.current.kind == MINIC_TOKEN_SEMICOLON;
     return true;
 }
 
@@ -3684,11 +3831,12 @@ static bool finalize_tentative_incomplete_arrays(MinicC0Program *program) {
     return true;
 }
 
-bool minic_parse_c0_program(const char *path,
-                            const char *source,
-                            size_t length,
-                            MinicC0Program *program,
-                            MinicDiagnostic *diagnostic) {
+bool minic_parse_c0_program_for_target(const char *path,
+                                       const char *source,
+                                       size_t length,
+                                       const MinicTargetInfo *target_info,
+                                       MinicC0Program *program,
+                                       MinicDiagnostic *diagnostic) {
     MinicParser parser;
     bool success;
 
@@ -3697,7 +3845,10 @@ bool minic_parse_c0_program(const char *path,
     parser.source = source;
     parser.diagnostic = diagnostic;
     parser.program = program;
-    parser.target_info = minic_default_target_info();
+    parser.target_info = target_info;
+    if (target_info == NULL) {
+        return false;
+    }
     parser.default_visibility = MINIC_SYMBOL_VISIBILITY_DEFAULT;
     parser.visibility_depth = 0U;
     parser.current_block = MINIC_BLOCK_INVALID;
@@ -3793,4 +3944,15 @@ bool minic_parse_c0_program(const char *path,
     free(parser.switch_contexts);
     parser.switch_contexts = NULL;
     return success;
+}
+
+/* Retain the historical parser API for RV64-focused tests and tools. */
+bool minic_parse_c0_program(const char *path,
+                            const char *source,
+                            size_t length,
+                            MinicC0Program *program,
+                            MinicDiagnostic *diagnostic) {
+    return minic_parse_c0_program_for_target(path, source, length,
+                                              minic_default_target_info(),
+                                              program, diagnostic);
 }

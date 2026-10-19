@@ -78,6 +78,15 @@ bool minic_parser_token_starts_type_name(const MinicParser *parser, MinicToken t
         if (minic_parser_token_is_gnu_typeof(parser, token)) {
             return true;
         }
+        if (parser->target_info != NULL &&
+            parser->target_info->architecture == MINIC_TARGET_ARCH_X86_64 &&
+            (minic_parser_token_text_equals(parser, token, "_Float128") ||
+             minic_parser_token_text_equals(parser, token, "_Float32") ||
+             minic_parser_token_text_equals(parser, token, "_Float64") ||
+             minic_parser_token_text_equals(parser, token, "_Float32x") ||
+             minic_parser_token_text_equals(parser, token, "_Float64x"))) {
+            return true;
+        }
         int128_unsigned = false;
         if (minic_parser_gnu_int128_name(parser, token, &int128_unsigned)) {
             return true;
@@ -340,8 +349,19 @@ bool minic_parser_parse_type_specifiers(MinicParser *parser, MinicType *type) {
         bool saw_signed = false;
         bool saw_unsigned = false;
 
-        while (minic_parser_is_integer_type_specifier(parser->current.kind)) {
+        /* C permits type-qualifiers interleaved with integer specifiers:
+         * 'unsigned const char', 'long volatile int', etc.  Do not mistake
+         * the following keyword for a declarator name. */
+        while (minic_parser_is_integer_type_specifier(parser->current.kind) ||
+               parser->current.kind == MINIC_TOKEN_KW_CONST ||
+               parser->current.kind == MINIC_TOKEN_KW_VOLATILE) {
             switch (parser->current.kind) {
+            case MINIC_TOKEN_KW_CONST:
+                is_const = true;
+                break;
+            case MINIC_TOKEN_KW_VOLATILE:
+                is_volatile = true;
+                break;
             case MINIC_TOKEN_KW_CHAR:
                 if (saw_char) {
                     minic_parser_error(parser, "duplicate char type specifier");
@@ -526,12 +546,45 @@ bool minic_parser_parse_type_specifiers(MinicParser *parser, MinicType *type) {
                 return false;
             }
         }
+    } else if (minic_parser_identifier_is(parser, "_Float128") ||
+               minic_parser_identifier_is(parser, "_Float32") ||
+               minic_parser_identifier_is(parser, "_Float64") ||
+               minic_parser_identifier_is(parser, "_Float32x") ||
+               minic_parser_identifier_is(parser, "_Float64x")) {
+        /* Lua and SQLite pull genuine glibc extended-floating prototypes
+         * into the original preprocessed C. Keep ABI-visible C type
+         * identities distinct: GCC does NOT treat _Float32/float or
+         * _Float64/double as compatible C types. Only model declarations,
+         * sizeof, alignment and pointer identity here; actual extended-FP
+         * operations and calls remain backend fail-closed. */
+        if (parser->target_info == NULL ||
+            parser->target_info->architecture != MINIC_TARGET_ARCH_X86_64) {
+            minic_parser_error(parser, "extended float type is unsupported on this target");
+            return false;
+        }
+        if (minic_parser_identifier_is(parser, "_Float32"))
+            parsed_type = minic_type_float32();
+        else if (minic_parser_identifier_is(parser, "_Float64"))
+            parsed_type = minic_type_float64();
+        else if (minic_parser_identifier_is(parser, "_Float32x"))
+            parsed_type = minic_type_float32x();
+        else if (minic_parser_identifier_is(parser, "_Float64x"))
+            parsed_type = minic_type_float64x();
+        else
+            parsed_type = minic_type_float128();
+        if (!minic_parser_advance(parser)) return false;
     } else if (minic_parser_identifier_is(parser, "__builtin_va_list")) {
-        if (!minic_type_pointer_to(minic_type_void(), &parsed_type) ||
-            !minic_parser_advance(parser)) {
+        /* RV64 keeps the validated sequential pointer model. On x86-64
+         * the pointer-based internal cursor is not the actual SysV array
+         * type: retain a distinguishable identity for fail-closed queries. */
+        if (parser->target_info != NULL &&
+            parser->target_info->architecture == MINIC_TARGET_ARCH_X86_64) {
+            parsed_type = minic_type_x86_va_list_cursor();
+        } else if (!minic_type_pointer_to(minic_type_void(), &parsed_type)) {
             minic_parser_error(parser, "cannot build __builtin_va_list type");
             return false;
         }
+        if (!minic_parser_advance(parser)) return false;
     } else if (parser->current.kind == MINIC_TOKEN_IDENTIFIER) {
         MinicTypeAliasId alias_id;
         const MinicTypeAlias *alias;

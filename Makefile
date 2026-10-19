@@ -88,6 +88,7 @@ MINIC_SOURCES := \
 	src/target/riscv64/codegen_support.c \
 	src/target/riscv64/core_codegen.c \
 	src/target/riscv64/codegen_function.c \
+	src/target/x86_64/codegen.c \
 	tools/minic-cc/main.c
 MINIC_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(MINIC_SOURCES))
 MINIC_CC_BINARY := $(BUILD_DIR)/bin/minic-cc
@@ -230,7 +231,7 @@ RV64_ABI_TEST_SOURCES := \
 RV64_ABI_TEST_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(RV64_ABI_TEST_SOURCES))
 RV64_ABI_TEST_BINARY  := $(BUILD_DIR)/tests/target/riscv64/abi-test
 
-.PHONY: all help prepare check check-fast check-minias-a0 check-minipp-a0 check-minielf-reader-a0 check-mininm-a0 check-mininm-a1 check-miniobjcopy-a0 check-miniobjcopy-a1 check-minicstrip-a0 check-miniar-a0 check-miniar-a1 check-minild-a0 check-minild-a1 check-minild-a2 check-minild-a3 check-minild-a4 check-minild-a5 check-minild-a6 check-minild-script-a0 check-minild-script-a1 check-token-model check-lexer \
+.PHONY: all help prepare check check-fast check-target-selection-m0 check-x86_64-busybox-all-eligible check-x86_64-busybox-complex-five check-x86_64-busybox-host-link check-elf-constructors check-x86_64-one-gp-sysv check-x86_64-busybox-allyes-discovery check-x86_64-busybox-12 check-x86_64-sqlite-frontier check-x86_64-m1 check-x86_64-tinyaes check-x86_64-cjson check-x86_64-abi-elf check-x86_64-lua-frontier check-x86_64-zlib-frontier check-minias-a0 check-minipp-a0 check-minielf-reader-a0 check-mininm-a0 check-mininm-a1 check-miniobjcopy-a0 check-miniobjcopy-a1 check-minicstrip-a0 check-miniar-a0 check-miniar-a1 check-minild-a0 check-minild-a1 check-minild-a2 check-minild-a3 check-minild-a4 check-minild-a5 check-minild-a6 check-minild-script-a0 check-minild-script-a1 check-token-model check-lexer \
 	check-type check-record check-type-alias check-ast-contract check-layout check-rv64-abi \
 	check-static-functions \
 	check-unsigned-declarations check-long-types check-for-loops check-unbounded-for-break \
@@ -663,7 +664,150 @@ check-compound-xor-assignment: $(MINIC_BINARY)
 	BUILD_DIR="$(abspath $(BUILD_DIR))" \
 	sh tests/compiler/c0/run-compound-xor-assignment.sh
 
-check-fast: check-token-model check-lexer check-type check-record check-type-alias check-ast-contract check-layout check-rv64-abi check-static-functions check-unsigned-declarations check-long-types check-for-loops check-unbounded-for-break check-prefix-decrement-update check-cast-expressions check-unsigned-char-layout check-pointer-subscripts check-pointer-arithmetic check-pointer-object-const check-const-locals check-global-objects check-bitwise-xor check-integer-bit-operations check-pointer-members check-expression-statements check-postfix-subscripts check-compound-xor-assignment $(MINIC_BINARY)
+check-target-selection-m0: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" \
+	sh tests/compiler/c0/run-target-selection-m0.sh
+
+# Target-owned SysV struct/in_addr and transparent sockaddr pointer-union
+# regression. Keep the existing M1 and cross-target checks separate.
+# GNU ELF startup correctness, not a compilation-only attribute test.
+check-elf-constructors: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" \
+	HOST_CC="$(CC)" sh tests/compiler/c0/run-elf-constructors.sh
+
+check-x86_64-one-gp-sysv: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" \
+	HOST_CC="$(CC)" \
+	sh tests/compiler/c0/run-x86_64-one-gp-sysv.sh
+
+check-x86_64-m1: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" \
+	HOST_CC="$(CC)" \
+	sh tests/compiler/c0/run-x86_64-native-m1.sh
+
+check-x86_64-tinyaes: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" \
+	HOST_CC="$(CC)" \
+	sh tests/external/tiny-aes-c/probe-x86_64.sh
+
+check-x86_64-cjson: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" \
+	HOST_CC="$(CC)" BUILD_DIR="$(abspath $(BUILD_DIR))" \
+	sh tests/external/cjson/probe-x86_64-differential.sh
+
+check-x86_64-abi-elf: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" \
+	HOST_CC="$(CC)" \
+	sh tests/compiler/c0/run-x86_64-abi-layout-elf.sh
+
+check-x86_64-lua-frontier: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" \
+	HOST_CC="$(CC)" \
+	sh tests/external/lua/probe-x86_64.sh
+
+check-x86_64-zlib-frontier: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" \
+	HOST_CC="$(CC)" \
+	sh tests/external/zlib/probe-x86_64.sh
+
+# New real-project pressure: official pristine SQLite amalgamation.
+# Set SQLITE_X86_64_DISCOVERY=1 to classify a blocker without claiming a pass.
+check-x86_64-sqlite-frontier: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" \
+	HOST_CC="$(CC)" \
+	sh tests/external/sqlite/probe-x86_64.sh
+
+# Durable 12-object original BusyBox Kbuild acceptance. The underlying probe
+# keeps extra cases as opt-in discovery; this target requires its precise final
+# byte-for-byte native execution marker, so a discovery-mode early exit is RED.
+# GNU remains the other-object producer, assembler, linker and independent oracle.
+# Clear outer MiniC warning flags and make command-line overrides before
+# invoking pristine upstream BusyBox Kbuild inside the reusable probe.
+check-x86_64-busybox-12: $(MINIC_CC_BINARY)
+	@set -eu; \
+	log=$$(mktemp); \
+	trap 'rm -f "$$log"' EXIT HUP INT TERM; \
+	if env -u MAKEFLAGS -u MAKEOVERRIDES -u MFLAGS -u GNUMAKEFLAGS -u CFLAGS \
+	   MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	   BUSYBOX_X86_64_EXTRA_DISCOVERY=1 \
+	   sh tests/external/busybox/probe-x86_64.sh >"$$log" 2>&1; then \
+	   cat "$$log"; \
+	else \
+	   cat "$$log"; exit 1; \
+	fi; \
+	grep -Fx 'BUSYBOX_X86_64_EXTRA_MIXED=PASS applets=basename,dirname,printf extra_objects=3 total_MiniC_objects=12 GCC_reference=byte-exact GNU_Kbuild=1' "$$log"
+
+# Discovery, not certification: original upstream allyesconfig + real Kbuild
+# CC interception. GNU still builds every Kbuild object. The MiniC shadow path
+# records all attempted original C owners, including hard failures.
+# Separate from the default 963-symbol discovery scan: keep all supported
+# software enabled, disable only six host-incompatible configuration switches
+# and require a real original-GNU BusyBox link + six actual applet executions.
+# MiniC shadows Kbuild C owners but does NOT claim to link them in this gate.
+# Real upstream 957-option GNU BusyBox baseline, then five independently
+# substituted original C object owners (sed, awk, find, grep, sort) and all
+# eleven differential runtime cases per cohort. Unlike compile-only scanning
+# the MiniC .o is incorporated in actual Kbuild linkage. Fail closed.
+# Original 957-symbol Kconfig/Kbuild. Replace EVERY independent verified
+# MiniC x86 target owner (currently 582/594), retain explicit GNU fallbacks.
+# Verify every original owner receipt+SHA and compare whole linked executable
+# against original GNU across 11 deterministic applet cases. Fail closed.
+check-x86_64-busybox-all-eligible: $(MINIC_CC_BINARY)
+	@set -eu; \
+	log=$$(mktemp); \
+	trap 'rm -f "$$log"' EXIT HUP INT TERM; \
+	if env -u MAKEFLAGS -u MAKEOVERRIDES -u MFLAGS -u GNUMAKEFLAGS -u CFLAGS \
+	   MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	   BUSYBOX_X86_64_ALLYES_DISCOVERY=1 BUSYBOX_ALLYES_LINK_COMPATIBLE=1 \
+	   BUSYBOX_ALLYES_MIXED_BULK=1 \
+	   BUSYBOX_ALLYES_REPORT_DIR="$(abspath $(BUILD_DIR))/busybox-bulk-mixed" \
+	   sh tests/external/busybox/probe-x86_64.sh >"$$log" 2>&1; then \
+	   cat "$$log"; \
+	else \
+	   cat "$$log"; exit 1; \
+	fi; \
+	grep -Eq '^BUSYBOX_MIXED_BULK=PASS MiniC_owners=[0-9]+ GCC_fallback=[0-9]+ original_full_Kbuild=1 eleven_fixture_byte_exact=1 MiniC_and_GNU_binary_differ=1 full_all_MiniC=NO$$' "$$log"
+
+check-x86_64-busybox-complex-five: $(MINIC_CC_BINARY)
+	@set -eu; \
+	log=$$(mktemp); \
+	trap 'rm -f "$$log"' EXIT HUP INT TERM; \
+	if env -u MAKEFLAGS -u MAKEOVERRIDES -u MFLAGS -u GNUMAKEFLAGS -u CFLAGS \
+	   MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	   BUSYBOX_X86_64_ALLYES_DISCOVERY=1 BUSYBOX_ALLYES_LINK_COMPATIBLE=1 \
+	   BUSYBOX_ALLYES_MIXED_COHORT=1 \
+	   BUSYBOX_ALLYES_REPORT_DIR="$(abspath $(BUILD_DIR))/busybox-complex-five" \
+	   sh tests/external/busybox/probe-x86_64.sh >"$$log" 2>&1; then \
+	   cat "$$log"; \
+	else \
+	   cat "$$log"; exit 1; \
+	fi; \
+	grep -Fx 'BUSYBOX_MIXED_COMPLEX=PASS all_five_independent=1 combined_five=1 GCC_original_oracle=1 real_Kbuild_link=1' "$$log"
+
+check-x86_64-busybox-host-link: $(MINIC_CC_BINARY)
+	@set -eu; \
+	log=$$(mktemp); \
+	trap 'rm -f "$$log"' EXIT HUP INT TERM; \
+	if env -u MAKEFLAGS -u MAKEOVERRIDES -u MFLAGS -u GNUMAKEFLAGS -u CFLAGS \
+	   MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	   BUSYBOX_X86_64_ALLYES_DISCOVERY=1 BUSYBOX_ALLYES_LINK_COMPATIBLE=1 \
+	   BUSYBOX_ALLYES_REPORT_DIR="$(abspath $(BUILD_DIR))/busybox-host-link" \
+	   sh tests/external/busybox/probe-x86_64.sh >"$$log" 2>&1; then \
+	   cat "$$log"; \
+	else \
+	   cat "$$log"; exit 1; \
+	fi; \
+	grep -Fx 'BUSYBOX_ALLYES_GCC_RUNTIME_ORACLE=PASS applets=6 original_full_Kbuild=1' "$$log"
+
+check-x86_64-busybox-allyes-discovery: $(MINIC_CC_BINARY)
+	@set -eu; \
+	env -u MAKEFLAGS -u MAKEOVERRIDES -u MFLAGS -u GNUMAKEFLAGS -u CFLAGS \
+	  MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	  BUSYBOX_X86_64_ALLYES_DISCOVERY=1 \
+	  BUSYBOX_ALLYES_REPORT_DIR="$(abspath $(BUILD_DIR))/busybox-allyes-sweep" \
+	  sh tests/external/busybox/probe-x86_64.sh
+
+check-fast: check-target-selection-m0 check-x86_64-m1 check-token-model check-lexer check-type check-record check-type-alias check-ast-contract check-layout check-rv64-abi check-static-functions check-unsigned-declarations check-long-types check-for-loops check-unbounded-for-break check-prefix-decrement-update check-cast-expressions check-unsigned-char-layout check-pointer-subscripts check-pointer-arithmetic check-pointer-object-const check-const-locals check-global-objects check-bitwise-xor check-integer-bit-operations check-pointer-members check-expression-statements check-postfix-subscripts check-compound-xor-assignment $(MINIC_BINARY)
 	MINIC="$(abspath $(MINIC_BINARY))" \
 	HOST_CC="$(CC)" \
 	BUILD_DIR="$(abspath $(BUILD_DIR))" \

@@ -1500,6 +1500,117 @@ static bool parse_builtin_expect(MinicParser *parser, MinicExpressionId *express
     return minic_parser_add_expression(parser, &conversion, expression_id);
 }
 
+/* SQLite's first atomic store is relaxed and scalar. Do not silently
+ * substitute ordinary assignment or accept stronger memory orders. */
+static bool parse_builtin_atomic_load(MinicParser *parser,
+                                      MinicExpressionId *expression_id) {
+    MinicExpression expression;
+    const MinicExpression *address;
+    MinicExpressionId address_id;
+    MinicType pointee, result;
+    MinicSourcePosition begin, end;
+    size_t bytes;
+    int64_t order;
+    if (parser == NULL || expression_id == NULL ||
+        !current_identifier_is(parser, "__atomic_load_n")) return false;
+    begin = parser->current.span.begin;
+    if (!minic_parser_advance(parser) ||
+        !minic_parser_expect(parser, MINIC_TOKEN_LPAREN,
+                             "expected '(' after __atomic_load_n") ||
+        !parse_expression_internal(parser, &address_id, 0U, true) ||
+        !minic_parser_expect(parser, MINIC_TOKEN_COMMA,
+                             "expected atomic address/order comma") ||
+        !minic_parser_parse_integer_constant_expression(parser, &order))
+        return false;
+    if (order != 0) {
+        minic_parser_error(parser, "__atomic_load_n only supports relaxed memory order (0)");
+        return false;
+    }
+    if (parser->current.kind != MINIC_TOKEN_RPAREN) {
+        minic_parser_error(parser, "expected ')' after __atomic_load_n");
+        return false;
+    }
+    end = parser->current.span.end;
+    address = minic_c0_program_expression(parser->program, address_id);
+    if (address == NULL || !minic_type_pointee(address->type, &pointee) ||
+        !(minic_type_is_integer(pointee) || minic_type_is_pointer(pointee)) ||
+        !minic_target_info_sizeof_type(parser->target_info, parser->program,
+                                       pointee, &bytes) ||
+        (bytes != 1U && bytes != 2U && bytes != 4U && bytes != 8U) ||
+        !minic_type_unqualified(pointee, &result)) {
+        minic_parser_error(parser,
+            "__atomic_load_n requires readable 1/2/4/8-byte integer or pointer object");
+        return false;
+    }
+    (void)memset(&expression, 0, sizeof(expression));
+    expression.kind = MINIC_EXPRESSION_BUILTIN_ATOMIC_LOAD;
+    expression.span.begin = begin;
+    expression.span.end = end;
+    expression.type = result;
+    expression.value_category = MINIC_VALUE_RVALUE;
+    expression.value.atomic_load.address = address_id;
+    expression.value.atomic_load.memory_order = 0U;
+    return minic_parser_advance(parser) &&
+           minic_parser_add_expression(parser, &expression, expression_id);
+}
+
+static bool parse_builtin_atomic_store(MinicParser *parser,
+                                       MinicExpressionId *expression_id) {
+    MinicExpression expression;
+    const MinicExpression *address, *source;
+    MinicExpressionId address_id, source_id;
+    MinicType pointee;
+    MinicSourcePosition begin, end;
+    int64_t order;
+    size_t bytes;
+    if (parser == NULL || expression_id == NULL ||
+        !current_identifier_is(parser, "__atomic_store_n")) return false;
+    begin = parser->current.span.begin;
+    if (!minic_parser_advance(parser) ||
+        !minic_parser_expect(parser, MINIC_TOKEN_LPAREN,
+                             "expected '(' after __atomic_store_n") ||
+        !parse_expression_internal(parser, &address_id, 0U, true) ||
+        !minic_parser_expect(parser, MINIC_TOKEN_COMMA,
+                             "expected atomic address/value comma") ||
+        !parse_expression_internal(parser, &source_id, 0U, true) ||
+        !minic_parser_expect(parser, MINIC_TOKEN_COMMA,
+                             "expected atomic value/order comma") ||
+        !minic_parser_parse_integer_constant_expression(parser, &order)) return false;
+    if (order != 0) {
+        minic_parser_error(parser, "__atomic_store_n only supports relaxed memory order (0)");
+        return false;
+    }
+    if (parser->current.kind != MINIC_TOKEN_RPAREN) {
+        minic_parser_error(parser, "expected ')' after __atomic_store_n");
+        return false;
+    }
+    end = parser->current.span.end;
+    address = minic_c0_program_expression(parser->program, address_id);
+    source = minic_c0_program_expression(parser->program, source_id);
+    if (address == NULL || source == NULL ||
+        !minic_type_pointee(address->type, &pointee) ||
+        !(minic_type_is_integer(pointee) || minic_type_is_pointer(pointee)) || minic_type_is_const(pointee) ||
+        !minic_target_info_sizeof_type(parser->target_info, parser->program,
+                                       pointee, &bytes) ||
+        (bytes != 1U && bytes != 2U && bytes != 4U && bytes != 8U) ||
+        !minic_c0_assignment_compatible(parser->program, pointee, source_id)) {
+        minic_parser_error(parser,
+            "__atomic_store_n requires writable 1/2/4/8-byte integer or pointer object and convertible value");
+        return false;
+    }
+    (void)memset(&expression, 0, sizeof(expression));
+    expression.kind = MINIC_EXPRESSION_BUILTIN_ATOMIC_STORE;
+    expression.span.begin = begin;
+    expression.span.end = end;
+    expression.type = minic_type_void();
+    expression.value_category = MINIC_VALUE_RVALUE;
+    expression.value.atomic_store.address = address_id;
+    expression.value.atomic_store.source = source_id;
+    expression.value.atomic_store.memory_order = 0U;
+    return minic_parser_advance(parser) &&
+           minic_parser_add_expression(parser, &expression, expression_id);
+}
+
 static bool parse_builtin_prefetch(MinicParser *parser, MinicExpressionId *expression_id) {
     MinicExpression discard_cast;
     MinicExpressionId address_id;
@@ -2284,31 +2395,39 @@ static bool parse_builtin_call_frame_address(MinicParser *parser,
            minic_parser_add_expression(parser, &expression, expression_id);
 }
 
-static bool parse_builtin_huge_val(MinicParser *parser, MinicExpressionId *expression_id) {
+static bool parse_builtin_positive_infinity(MinicParser *parser, MinicExpressionId *expression_id) {
     MinicExpression expression;
     MinicSourcePosition begin;
+    bool is_float;
 
+    /* SQLite 3.54.1 sqlite3Fp10Convert2() consumes __builtin_inff().
+     * The existing __builtin_huge_val() is binary64; the *f form must
+     * preserve binary32 storage and be promoted only by C conversions. */
     if (parser == NULL || expression_id == NULL ||
-        !generic_token_text_equals(parser, "__builtin_huge_val")) {
+        (!generic_token_text_equals(parser, "__builtin_huge_val") &&
+         !generic_token_text_equals(parser, "__builtin_inf") &&
+         !generic_token_text_equals(parser, "__builtin_inff"))) {
         return false;
     }
+    is_float = generic_token_text_equals(parser, "__builtin_inff");
     begin = parser->current.span.begin;
     if (!minic_parser_advance(parser) ||
         !minic_parser_expect(
-            parser, MINIC_TOKEN_LPAREN, "expected '(' after __builtin_huge_val")) {
+            parser, MINIC_TOKEN_LPAREN, "expected '(' after positive infinity builtin")) {
         return false;
     }
     if (parser->current.kind != MINIC_TOKEN_RPAREN) {
-        minic_parser_error(parser, "__builtin_huge_val takes no arguments");
+        minic_parser_error(parser, "positive infinity builtin takes no arguments");
         return false;
     }
     (void)memset(&expression, 0, sizeof(expression));
     expression.kind = MINIC_EXPRESSION_FLOATING;
     expression.span.begin = begin;
     expression.span.end = parser->current.span.end;
-    expression.type = minic_type_double();
+    expression.type = is_float ? minic_type_float() : minic_type_double();
     expression.value_category = MINIC_VALUE_RVALUE;
-    expression.value.floating_bits = UINT64_C(0x7ff0000000000000);
+    expression.value.floating_bits = is_float
+        ? UINT64_C(0x7f800000) : UINT64_C(0x7ff0000000000000);
     return minic_parser_advance(parser) &&
            minic_parser_add_expression(parser, &expression, expression_id);
 }
@@ -2441,6 +2560,15 @@ static bool parse_builtin_unary(MinicParser *parser,
     case MINIC_BUILTIN_UNARY_ISDIGIT:
         argument_type = minic_type_int();
         break;
+    case MINIC_BUILTIN_UNARY_BSWAP16:
+        argument_type = minic_type_unsigned_short();
+        break;
+    case MINIC_BUILTIN_UNARY_BSWAP32:
+        argument_type = minic_type_unsigned_int();
+        break;
+    case MINIC_BUILTIN_UNARY_BSWAP64:
+        argument_type = minic_type_unsigned_long_long();
+        break;
     default:
         return false;
     }
@@ -2477,7 +2605,13 @@ static bool parse_builtin_unary(MinicParser *parser,
     expression.kind = MINIC_EXPRESSION_BUILTIN_UNARY;
     expression.span.begin = begin;
     expression.span.end = parser->current.span.end;
-    expression.type = minic_type_int();
+    /* GCC bswap builtins return uint16_t/uint32_t/uint64_t respectively;
+     * all existing bit-count/isdigit builtins return int. */
+    expression.type =
+        operator_kind == MINIC_BUILTIN_UNARY_BSWAP16 ||
+        operator_kind == MINIC_BUILTIN_UNARY_BSWAP32 ||
+        operator_kind == MINIC_BUILTIN_UNARY_BSWAP64
+            ? argument_type : minic_type_int();
     expression.value_category = MINIC_VALUE_RVALUE;
     expression.value.builtin_unary.operator_kind = operator_kind;
     expression.value.builtin_unary.operand = operand_id;
@@ -2845,8 +2979,10 @@ static bool parse_primary(MinicParser *parser, MinicExpressionId *expression_id,
         }
         return finish_value_expression(parser, primary_id, decay_array, expression_id);
     }
-    if (generic_token_text_equals(parser, "__builtin_huge_val")) {
-        if (!parse_builtin_huge_val(parser, &primary_id) ||
+    if (generic_token_text_equals(parser, "__builtin_huge_val") ||
+        generic_token_text_equals(parser, "__builtin_inf") ||
+        generic_token_text_equals(parser, "__builtin_inff")) {
+        if (!parse_builtin_positive_infinity(parser, &primary_id) ||
             !minic_parser_parse_postfix(parser, primary_id, &primary_id)) {
             return false;
         }
@@ -2880,6 +3016,24 @@ static bool parse_primary(MinicParser *parser, MinicExpressionId *expression_id,
             !minic_parser_parse_postfix(parser, primary_id, &primary_id)) {
             return false;
         }
+        return finish_value_expression(parser, primary_id, decay_array, expression_id);
+    }
+    if (generic_token_text_equals(parser, "__builtin_bswap16")) {
+        if (!parse_builtin_unary(
+                parser, MINIC_BUILTIN_UNARY_BSWAP16, "__builtin_bswap16", &primary_id) ||
+            !minic_parser_parse_postfix(parser, primary_id, &primary_id)) return false;
+        return finish_value_expression(parser, primary_id, decay_array, expression_id);
+    }
+    if (generic_token_text_equals(parser, "__builtin_bswap32")) {
+        if (!parse_builtin_unary(
+                parser, MINIC_BUILTIN_UNARY_BSWAP32, "__builtin_bswap32", &primary_id) ||
+            !minic_parser_parse_postfix(parser, primary_id, &primary_id)) return false;
+        return finish_value_expression(parser, primary_id, decay_array, expression_id);
+    }
+    if (generic_token_text_equals(parser, "__builtin_bswap64")) {
+        if (!parse_builtin_unary(
+                parser, MINIC_BUILTIN_UNARY_BSWAP64, "__builtin_bswap64", &primary_id) ||
+            !minic_parser_parse_postfix(parser, primary_id, &primary_id)) return false;
         return finish_value_expression(parser, primary_id, decay_array, expression_id);
     }
     if (generic_token_text_equals(parser, "__builtin_clz")) {
@@ -3037,6 +3191,18 @@ static bool parse_primary(MinicParser *parser, MinicExpressionId *expression_id,
         }
         return finish_value_expression(parser, primary_id, decay_array, expression_id);
     }
+    if (current_identifier_is(parser, "__atomic_load_n")) {
+        if (!parse_builtin_atomic_load(parser, &primary_id) ||
+            !minic_parser_parse_postfix(parser, primary_id, &primary_id))
+            return false;
+        return finish_value_expression(parser, primary_id, decay_array, expression_id);
+    }
+    if (current_identifier_is(parser, "__atomic_store_n")) {
+        if (!parse_builtin_atomic_store(parser, &primary_id) ||
+            !minic_parser_parse_postfix(parser, primary_id, &primary_id))
+            return false;
+        return finish_value_expression(parser, primary_id, decay_array, expression_id);
+    }
     if (current_identifier_is(parser, "__builtin_memcpy")) {
         if (!parse_builtin_memcpy(parser, &primary_id) ||
             !minic_parser_parse_postfix(parser, primary_id, &primary_id)) {
@@ -3083,8 +3249,12 @@ static bool parse_primary(MinicParser *parser, MinicExpressionId *expression_id,
         if (current_is_builtin_offsetof(parser)) {
             return parse_builtin_offsetof(parser, expression_id);
         }
+        /* GNU C spells the same lexical function name as
+         * __func__, __FUNCTION__ and __PRETTY_FUNCTION__.
+         * In C++ the last form has a richer signature; MiniC parses C. */
         if (current_identifier_is(parser, "__func__") ||
-            current_identifier_is(parser, "__FUNCTION__")) {
+            current_identifier_is(parser, "__FUNCTION__") ||
+            current_identifier_is(parser, "__PRETTY_FUNCTION__")) {
             name_span = parser->current.span;
             if (!minic_parser_get_predefined_function_name_object(parser, &global_object_id) ||
                 !minic_parser_advance(parser) ||

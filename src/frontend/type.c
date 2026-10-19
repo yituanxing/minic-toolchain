@@ -198,6 +198,48 @@ MinicType minic_type_long_double(void) {
     return minic_type_scalar(MINIC_TYPE_BASE_LONG_DOUBLE);
 }
 
+MinicType minic_type_float128(void) {
+    return minic_type_scalar(MINIC_TYPE_BASE_FLOAT128);
+}
+
+MinicType minic_type_float32(void) {
+    return minic_type_scalar(MINIC_TYPE_BASE_FLOAT32);
+}
+
+MinicType minic_type_float64(void) {
+    return minic_type_scalar(MINIC_TYPE_BASE_FLOAT64);
+}
+
+MinicType minic_type_float32x(void) {
+    return minic_type_scalar(MINIC_TYPE_BASE_FLOAT32X);
+}
+
+MinicType minic_type_float64x(void) {
+    return minic_type_scalar(MINIC_TYPE_BASE_FLOAT64X);
+}
+
+/* A distinct, pointer-sized runtime proxy. It must never be mistaken for
+ * the actual SysV array type in C type-layout queries. */
+MinicType minic_type_x86_va_list_cursor(void) {
+    MinicType result;
+    if (!minic_type_pointer_to(
+            minic_type_scalar(MINIC_TYPE_BASE_X86_VA_LIST_CURSOR), &result))
+        return minic_type_void();
+    return result;
+}
+
+bool minic_type_is_x86_va_list_cursor(MinicType type) {
+    return type.base_kind == MINIC_TYPE_BASE_X86_VA_LIST_CURSOR &&
+           type.pointer_depth == 1U &&
+           type.record_id == MINIC_RECORD_INVALID &&
+           type.array_type_id == MINIC_ARRAY_TYPE_INVALID &&
+           type.function_type_id == MINIC_FUNCTION_TYPE_INVALID &&
+           type.enum_id == MINIC_ENUM_INVALID &&
+           type.integer_sign == MINIC_INTEGER_SIGN_NONE &&
+           type.integer_rank == MINIC_INTEGER_RANK_NONE &&
+           !type.is_plain_char;
+}
+
 MinicType minic_type_function(MinicFunctionTypeId function_type_id) {
     MinicType type;
 
@@ -553,6 +595,16 @@ bool minic_type_is_double(MinicType type) {
 
 bool minic_type_is_long_double(MinicType type) {
     return type.base_kind == MINIC_TYPE_BASE_LONG_DOUBLE &&
+           type.record_id == MINIC_RECORD_INVALID &&
+           type.array_type_id == MINIC_ARRAY_TYPE_INVALID &&
+           type.function_type_id == MINIC_FUNCTION_TYPE_INVALID &&
+           type.enum_id == MINIC_ENUM_INVALID && type.integer_sign == MINIC_INTEGER_SIGN_NONE &&
+           type.integer_rank == MINIC_INTEGER_RANK_NONE && !type.is_plain_char &&
+           type.pointer_qualifiers == MINIC_TYPE_QUALIFIER_NONE && type.pointer_depth == 0U;
+}
+
+bool minic_type_is_float128(MinicType type) {
+    return type.base_kind == MINIC_TYPE_BASE_FLOAT128 &&
            type.record_id == MINIC_RECORD_INVALID &&
            type.array_type_id == MINIC_ARRAY_TYPE_INVALID &&
            type.function_type_id == MINIC_FUNCTION_TYPE_INVALID &&

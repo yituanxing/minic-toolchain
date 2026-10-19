@@ -1,11 +1,12 @@
 #include "minic/compiler.h"
+#include "target/target_info.h"
 
 #include <stdbool.h>
 #include <stdio.h>
 #include <string.h>
 
 static void minic_print_usage(FILE *stream, const char *program) {
-    (void)fprintf(stream, "usage: %s -S <preprocessed-input.i> [-ffunction-sections|-fno-function-sections] -o <output.s>\n", program);
+    (void)fprintf(stream, "usage: %s -S <preprocessed-input.i> [--target=riscv64-linux|x86_64-linux] [-ffunction-sections|-fno-function-sections] -o <output.s>\n", program);
 }
 
 int main(int argc, char **argv) {
@@ -15,6 +16,9 @@ int main(int argc, char **argv) {
     int index;
     int result;
     bool function_sections = false;
+    const char *target_name = "riscv64-linux";
+    const MinicTargetInfo *target_info;
+    bool target_given = false;
 
     input_path = NULL;
     output_path = NULL;
@@ -32,6 +36,20 @@ int main(int argc, char **argv) {
                 return 2;
             }
             output_path = argv[++index];
+        } else if (strcmp(argv[index], "--target") == 0) {
+            if (target_given || index + 1 >= argc) {
+                minic_print_usage(stderr, argv[0]);
+                return 2;
+            }
+            target_name = argv[++index];
+            target_given = true;
+        } else if (strncmp(argv[index], "--target=", 9U) == 0) {
+            if (target_given) {
+                minic_print_usage(stderr, argv[0]);
+                return 2;
+            }
+            target_name = argv[index] + 9U;
+            target_given = true;
         } else if (strcmp(argv[index], "-ffunction-sections") == 0) {
             function_sections = true;
         } else if (strcmp(argv[index], "-fno-function-sections") == 0) {
@@ -51,8 +69,13 @@ int main(int argc, char **argv) {
         return 2;
     }
 
-    result = minic_compile_preprocessed_file_with_options(
-        input_path, output_path, function_sections, &diagnostic);
+    target_info = minic_target_info_from_name(target_name);
+    if (target_info == NULL) {
+        (void)fprintf(stderr, "%s: unsupported target: %s\n", argv[0], target_name);
+        return 2;
+    }
+    result = minic_compile_preprocessed_file_for_target(
+        input_path, output_path, target_info, function_sections, &diagnostic);
     if (result != 0) {
         (void)fprintf(stderr,
                       "%s:%zu:%zu: error: %s\n",

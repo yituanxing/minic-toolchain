@@ -21,6 +21,14 @@
 # CI #38995564349 PASS 500/500 byte-identical .s; 382579.154ms -> 372710.334ms
 # (speedup 1.02648x, total compile time lower by 2.58%).
 # 2064/2064 GNU Link/QEMU P1 #38995964988 SUCCESS, 7/7 shard PASS, COHORT_P1=PASS syscalls=12.
+# 2026-10-18 new unmodified SQLite 3.54.1 real-project pressure:
+# shared Core builtin bswap16/32/64 lowering and AST unary enum extended.
+# These exact blobs are NOT certified merely by updating SHA identities.
+# A fresh 2064 GNU link/QEMU P1 run is required to qualify runtime behavior.
+# 2026-10-18 SQLite __atomic_load_n/__atomic_store_n first native x86 subset:
+# shared Core/AST changed; RV64 backend enumerates and deliberately rejects
+# atomic instructions until qualified. These SHA identities are only a gate.
+# Require fresh 2064 Linux objects plus GNU link/QEMU P1 before declaring pass.
 # The manifest only authenticates source identity; it is not a test result.
 # AST verifier array-owner one-pass (newly integrated in src/frontend/ast_verifier.c):
 # exact frozen500 #38999997399 PASS 500/500 identical .s,
@@ -61,14 +69,26 @@
 # ASan/UBSan + bucket/owner fallback + 9000 model case safety
 # #39023367899 SUCCESS. The updated blob SHA below authenticates this current
 # code only; does NOT imply 2064 Linux/QEMU P1 passed until that run finishes.
+# 2026-10-18 multi-target M0/M1: compiler.c target-selection dispatch source
+# changed intentionally. The refreshed blob below is an identity gate ONLY,
+# not a Linux/QEMU certification. The seven-way full source regression must
+# run on this candidate before the draft PR can be merged.
+# 2026-10-18 x86 typed vararg Core: core_lower.c and RV64 opcode handler
+# identities refreshed for *this* implementation. This pin only authenticates
+# the source under test; full 2064/GNU-link/QEMU P1 is independently required.
 # The exact validated source identities appear below.
+# 2026-10-19 dual-backend closeout: refresh precisely two Git blob identities
+# against actual checked-in shared Core lowering and function/constructor AST.
+# Seven-shard attempt #39194393122 deliberately refused older digests before
+# compilation. These refreshed identities attest INPUTS ONLY, not a Linux PASS;
+# full 2064 compile + original GNU link + QEMU P1 must independently pass.
 # Exact runtime source manifest also updated all 3 affected native
 # C/H blobs; the first full-run attempt #39012800524 failed at intentional
 # pinned SHA gate for compiler.c, not in C compilation or QEMU.
-3b6df766a05bcaab365289b39e414fc9be8c2ba3 src/compiler/compiler.c
-40001b124db8d623c0c75eac6b316c44cd97a83b src/core/core_lower.c
+47b666aab4c53db7d00bd43d327bfa70cfa08ffa src/compiler/compiler.c
+c358b26689814fa38591bdb125e9d9cd0ac12fb1 src/core/core_lower.c
 a8418e45608310687e3d6a1e96da79ca49135870 src/core/core_lower_asm.c
 7997978a9b10a6d01e33dbc00dd11cb3f668f69f src/core/core_lower_internal.h
-97acd676dbaf717710b02632f89451cd97a33e07 src/frontend/ast.h
-3abecc04f9cec7523963b5368667ceb8ccb9f905 src/target/riscv64/core_codegen.c
+b169470ac0892ff171224fb701ec789c223ea2ef src/frontend/ast.h
+89ffef7bb87923ffd481b3b4b329a0190d94e3e3 src/target/riscv64/core_codegen.c
 d55e435041f4e34432a7870b6a2886e9bce70156 src/target/riscv64/function_symbol.h

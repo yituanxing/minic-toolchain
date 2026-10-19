@@ -6373,6 +6373,35 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
     if (expression == NULL) {
         return MINIC_CORE_LOWER_ERROR;
     }
+    /* SQLite relaxed atomic read is distinct from ordinary C lvalue load. */
+    if (expression->kind == MINIC_EXPRESSION_BUILTIN_ATOMIC_LOAD) {
+        const MinicExpression *address_expression;
+        MinicCoreValueId address;
+        MinicCoreInstruction atomic;
+        MinicType pointee, result_type;
+        MinicCoreLowerStatus status;
+        address_expression = minic_c0_program_expression(
+            context->body->program, expression->value.atomic_load.address);
+        if (address_expression == NULL ||
+            !minic_type_pointee(address_expression->type, &pointee) ||
+            !(minic_type_is_integer(pointee) || minic_type_is_pointer(pointee)) ||
+            expression->value.atomic_load.memory_order != 0U ||
+            !minic_type_unqualified(pointee, &result_type) ||
+            !minic_type_equal(result_type, expression->type))
+            return MINIC_CORE_LOWER_UNSUPPORTED;
+        status = lower_expression(context, expression->value.atomic_load.address, &address);
+        if (status != MINIC_CORE_LOWER_OK) return status;
+        (void)memset(&atomic, 0, sizeof(atomic));
+        atomic.kind = MINIC_CORE_INSTRUCTION_ATOMIC_LOAD;
+        atomic.span = expression->span;
+        atomic.type = result_type;
+        atomic.result = MINIC_CORE_VALUE_INVALID;
+        atomic.value.atomic_load.address = address;
+        atomic.value.atomic_load.memory_order = 0U;
+        return minic_core_function_append_value_instruction(
+                   context->function, context->block_id, &atomic, value_id)
+                   ? MINIC_CORE_LOWER_OK : MINIC_CORE_LOWER_ERROR;
+    }
     if (expression->kind == MINIC_EXPRESSION_COMPOUND_ASSIGNMENT) {
         const MinicExpression *fact_target;
 
@@ -7901,6 +7930,106 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
                    : MINIC_CORE_LOWER_ERROR;
     }
 
+    /* SQLite 3.54.1 glibc __bswap_{16,32,64} pressure: lower once to
+     * target-neutral integer Core operations. RV64 and x86 both reuse the
+     * existing shift/mask/OR semantics; ISA lowering stays target-owned.
+     * Do NOT inline the source operand N times: bswap(f(i++)) is evaluated
+     * exactly once. The intermediate type is 32 bits for bswap16 and the
+     * corresponding unsigned width for bswap32/64. */
+    if (expression->kind == MINIC_EXPRESSION_BUILTIN_UNARY &&
+        (expression->value.builtin_unary.operator_kind == MINIC_BUILTIN_UNARY_BSWAP16 ||
+         expression->value.builtin_unary.operator_kind == MINIC_BUILTIN_UNARY_BSWAP32 ||
+         expression->value.builtin_unary.operator_kind == MINIC_BUILTIN_UNARY_BSWAP64)) {
+        const MinicExpression *operand;
+        MinicBuiltinUnaryOperator opcode;
+        MinicType work_type, result_type;
+        MinicCoreValueId input, accumulator, term, mask, shift, next_value;
+        MinicCoreInstruction bit;
+        MinicCoreLowerStatus status;
+        size_t byte_count, i;
+
+        opcode = expression->value.builtin_unary.operator_kind;
+        result_type = opcode == MINIC_BUILTIN_UNARY_BSWAP16
+                          ? minic_type_unsigned_short()
+                          : opcode == MINIC_BUILTIN_UNARY_BSWAP32
+                                ? minic_type_unsigned_int()
+                                : minic_type_unsigned_long_long();
+        work_type = opcode == MINIC_BUILTIN_UNARY_BSWAP16
+                        ? minic_type_unsigned_int() : result_type;
+        byte_count = opcode == MINIC_BUILTIN_UNARY_BSWAP16 ? 2U
+                     : opcode == MINIC_BUILTIN_UNARY_BSWAP32 ? 4U : 8U;
+        operand = minic_c0_program_expression(
+            context->body->program, expression->value.builtin_unary.operand);
+        if (operand == NULL || !minic_type_equal(expression->type, result_type) ||
+            !minic_type_equal(operand->type, result_type))
+            return MINIC_CORE_LOWER_UNSUPPORTED;
+        status = lower_expression(context, expression->value.builtin_unary.operand, &input);
+        if (status != MINIC_CORE_LOWER_OK) return status;
+        if (byte_count == 2U) {
+            status = append_integer_conversion(
+                context, expression->span, work_type, input, &input);
+            if (status != MINIC_CORE_LOWER_OK) return status;
+        }
+        (void)memset(&bit, 0, sizeof(bit));
+        bit.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
+        bit.span = expression->span;
+        bit.type = work_type;
+        bit.result = MINIC_CORE_VALUE_INVALID;
+        bit.value.integer_value = 0;
+        if (!minic_core_function_append_value_instruction(
+                context->function, context->block_id, &bit, &accumulator))
+            return MINIC_CORE_LOWER_ERROR;
+        bit.value.integer_value = 255;
+        if (!minic_core_function_append_value_instruction(
+                context->function, context->block_id, &bit, &mask))
+            return MINIC_CORE_LOWER_ERROR;
+        for (i = 0U; i < byte_count; ++i) {
+            bit.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
+            bit.type = work_type;
+            bit.value.integer_value = (int64_t)(i * 8U);
+            if (!minic_core_function_append_value_instruction(
+                    context->function, context->block_id, &bit, &shift))
+                return MINIC_CORE_LOWER_ERROR;
+            bit.kind = MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_RIGHT;
+            bit.value.binary.left = input;
+            bit.value.binary.right = shift;
+            if (!minic_core_function_append_value_instruction(
+                    context->function, context->block_id, &bit, &term))
+                return MINIC_CORE_LOWER_ERROR;
+            bit.kind = MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND;
+            bit.value.binary.left = term;
+            bit.value.binary.right = mask;
+            if (!minic_core_function_append_value_instruction(
+                    context->function, context->block_id, &bit, &term))
+                return MINIC_CORE_LOWER_ERROR;
+            bit.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
+            bit.value.integer_value = (int64_t)((byte_count - 1U - i) * 8U);
+            if (!minic_core_function_append_value_instruction(
+                    context->function, context->block_id, &bit, &shift))
+                return MINIC_CORE_LOWER_ERROR;
+            bit.kind = MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_LEFT;
+            bit.value.binary.left = term;
+            bit.value.binary.right = shift;
+            if (!minic_core_function_append_value_instruction(
+                    context->function, context->block_id, &bit, &term))
+                return MINIC_CORE_LOWER_ERROR;
+            bit.kind = MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_OR;
+            bit.value.binary.left = accumulator;
+            bit.value.binary.right = term;
+            if (!minic_core_function_append_value_instruction(
+                    context->function, context->block_id, &bit, &next_value))
+                return MINIC_CORE_LOWER_ERROR;
+            accumulator = next_value;
+        }
+        if (byte_count == 2U) {
+            status = append_integer_conversion(
+                context, expression->span, result_type, accumulator, &accumulator);
+            if (status != MINIC_CORE_LOWER_OK) return status;
+        }
+        *value_id = accumulator;
+        return MINIC_CORE_LOWER_OK;
+    }
+
     if (expression->kind == MINIC_EXPRESSION_BUILTIN_UNARY &&
         (expression->value.builtin_unary.operator_kind == MINIC_BUILTIN_UNARY_CLZ ||
          expression->value.builtin_unary.operator_kind == MINIC_BUILTIN_UNARY_CLZL ||
@@ -8360,6 +8489,32 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
         status = lower_address(context, expression->value.unary.operand, &list_address);
         if (status != MINIC_CORE_LOWER_OK) {
             return status;
+        }
+        if (context->target != NULL &&
+            context->target->architecture == MINIC_TARGET_ARCH_X86_64) {
+            /* An x86 __va_list_tag tracks two register banks and overflow
+             * stack storage.  Core must not model it as RV64's linear
+             * 8-byte pointer increment. Emit one typed semantic read. */
+            (void)memset(&operation, 0, sizeof(operation));
+            operation.kind = MINIC_CORE_INSTRUCTION_LOAD;
+            operation.span = expression->span;
+            operation.type = cursor_type;
+            operation.result = MINIC_CORE_VALUE_INVALID;
+            operation.value.load.address = list_address;
+            operation.value.load.is_volatile = minic_type_is_volatile(target->type);
+            if (!minic_core_function_append_value_instruction(
+                    context->function, context->block_id, &operation,
+                    &cursor_value)) return MINIC_CORE_LOWER_ERROR;
+            (void)memset(&operation, 0, sizeof(operation));
+            operation.kind = MINIC_CORE_INSTRUCTION_VARIADIC_NEXT_SCALAR;
+            operation.span = expression->span;
+            operation.type = expression->type;
+            operation.result = MINIC_CORE_VALUE_INVALID;
+            operation.value.operand = cursor_value;
+            return minic_core_function_append_value_instruction(
+                       context->function, context->block_id, &operation,
+                       value_id)
+                       ? MINIC_CORE_LOWER_OK : MINIC_CORE_LOWER_ERROR;
         }
         (void)memset(&operation, 0, sizeof(operation));
         operation.kind = MINIC_CORE_INSTRUCTION_LOAD;
@@ -11773,6 +11928,54 @@ static MinicCoreLowerStatus lower_expression_statement(MinicCoreLowerContext *co
        type-checked by frontend/Sema. Core owns their target-neutral execution
        semantics while the selected ABI/backend owns the register save area.
        The current frontend va_list model is a modifiable pointer lvalue. */
+    /* SQLite's GNU atomic store: a distinct Core memory effect, not an
+     * ordinary scalar assignment that later passes might erase or reorder.
+     * Evaluate address and value exactly once in source order. RV64 rejects
+     * this instruction until target-correct atomic lowering exists. */
+    if (expression->kind == MINIC_EXPRESSION_BUILTIN_ATOMIC_STORE) {
+        const MinicExpression *address_expression;
+        MinicCoreValueId address, value;
+        MinicCoreObjectId stored_object;
+        MinicCoreInstruction atomic;
+        MinicType pointee, target_type;
+        MinicCoreLowerStatus status;
+        address_expression = minic_c0_program_expression(
+            context->body->program, expression->value.atomic_store.address);
+        if (address_expression == NULL ||
+            !minic_type_pointee(address_expression->type, &pointee) ||
+            !(minic_type_is_integer(pointee) || minic_type_is_pointer(pointee)) || minic_type_is_const(pointee) ||
+            expression->value.atomic_store.memory_order != 0U ||
+            !minic_type_unqualified(pointee, &target_type))
+            return MINIC_CORE_LOWER_UNSUPPORTED;
+        /* The value may contain short-circuit operators that split the CFG.
+         * Like ordinary scalar assignments, spill its final value before
+         * evaluating the address, then reload in the final basic block.
+         * GNU builtin arguments have no specified mutual evaluation order:
+         * choosing value first preserves single evaluation without referring
+         * to a Core SSA value from a predecessor block. */
+        status = lower_scalar_assignment_value(
+            context, target_type, expression->value.atomic_store.source, &value);
+        if (status != MINIC_CORE_LOWER_OK) return status;
+        status = spill_scalar_value(
+            context, expression->span, target_type, value, &stored_object);
+        if (status != MINIC_CORE_LOWER_OK) return status;
+        status = lower_expression(context, expression->value.atomic_store.address, &address);
+        if (status != MINIC_CORE_LOWER_OK) return status;
+        status = reload_scalar_value(
+            context, expression->span, target_type, stored_object, &value);
+        if (status != MINIC_CORE_LOWER_OK) return status;
+        (void)memset(&atomic, 0, sizeof(atomic));
+        atomic.kind = MINIC_CORE_INSTRUCTION_ATOMIC_STORE;
+        atomic.span = expression->span;
+        atomic.type = minic_type_void();
+        atomic.result = MINIC_CORE_VALUE_INVALID;
+        atomic.value.atomic_store.address = address;
+        atomic.value.atomic_store.stored_value = value;
+        atomic.value.atomic_store.memory_order = 0U;
+        return minic_core_function_append_effect_instruction(
+                   context->function, context->block_id, &atomic)
+                   ? MINIC_CORE_LOWER_OK : MINIC_CORE_LOWER_ERROR;
+    }
     if (expression->kind == MINIC_EXPRESSION_BUILTIN_VA_START) {
         const MinicExpression *target;
         MinicCoreInstruction instruction;
@@ -11817,6 +12020,12 @@ static MinicCoreLowerStatus lower_expression_statement(MinicCoreLowerContext *co
                    : MINIC_CORE_LOWER_ERROR;
     }
     if (expression->kind == MINIC_EXPRESSION_BUILTIN_VA_COPY) {
+        /* Pointer assignment aliases x86 SysV's mutable 24-byte cursor
+         * instead of copying it. Reject until an independent tag-copy
+         * operation has been implemented; keep RV64 semantics unchanged. */
+        if (context->target != NULL &&
+            context->target->architecture == MINIC_TARGET_ARCH_X86_64)
+            return MINIC_CORE_LOWER_UNSUPPORTED;
         return lower_assignment_pair(context,
                                      expression->value.binary.left,
                                      expression->value.binary.right,

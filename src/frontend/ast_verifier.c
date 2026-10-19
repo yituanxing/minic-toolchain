@@ -81,7 +81,31 @@ type_is_valid(const MinicC0Program *program, const MinicTargetInfo *target, Mini
     case MINIC_TYPE_BASE_FLOAT:
     case MINIC_TYPE_BASE_DOUBLE:
     case MINIC_TYPE_BASE_LONG_DOUBLE:
+    case MINIC_TYPE_BASE_FLOAT128:
+    case MINIC_TYPE_BASE_FLOAT32:
+    case MINIC_TYPE_BASE_FLOAT64:
+    case MINIC_TYPE_BASE_FLOAT32X:
+    case MINIC_TYPE_BASE_FLOAT64X:
+        if ((type.base_kind == MINIC_TYPE_BASE_FLOAT128 ||
+             type.base_kind == MINIC_TYPE_BASE_FLOAT32 ||
+             type.base_kind == MINIC_TYPE_BASE_FLOAT64 ||
+             type.base_kind == MINIC_TYPE_BASE_FLOAT32X ||
+             type.base_kind == MINIC_TYPE_BASE_FLOAT64X) &&
+            (target == NULL || target->architecture != MINIC_TARGET_ARCH_X86_64)) {
+            return false;
+        }
         return type.record_id == MINIC_RECORD_INVALID &&
+               type.array_type_id == MINIC_ARRAY_TYPE_INVALID &&
+               type.function_type_id == MINIC_FUNCTION_TYPE_INVALID &&
+               type.integer_sign == MINIC_INTEGER_SIGN_NONE &&
+               type.integer_rank == MINIC_INTEGER_RANK_NONE && !type.is_plain_char;
+    case MINIC_TYPE_BASE_X86_VA_LIST_CURSOR:
+        /* Builtin va_list is represented internally by a pointer-sized
+         * cursor proxy. Its address can also appear as T** in Core STORE,
+         * so validate each pointer depth, but reject a bare pseudo-scalar. */
+        return target != NULL && target->architecture == MINIC_TARGET_ARCH_X86_64 &&
+               type.pointer_depth >= 1U &&
+               type.record_id == MINIC_RECORD_INVALID &&
                type.array_type_id == MINIC_ARRAY_TYPE_INVALID &&
                type.function_type_id == MINIC_FUNCTION_TYPE_INVALID &&
                type.integer_sign == MINIC_INTEGER_SIGN_NONE &&
@@ -791,6 +815,15 @@ static bool verify_expression(const MinicC0Program *program,
         case MINIC_BUILTIN_UNARY_ISDIGIT:
             expected_operand_type = minic_type_int();
             break;
+        case MINIC_BUILTIN_UNARY_BSWAP16:
+            expected_operand_type = minic_type_unsigned_short();
+            break;
+        case MINIC_BUILTIN_UNARY_BSWAP32:
+            expected_operand_type = minic_type_unsigned_int();
+            break;
+        case MINIC_BUILTIN_UNARY_BSWAP64:
+            expected_operand_type = minic_type_unsigned_long_long();
+            break;
         case MINIC_BUILTIN_UNARY_CONSTANT_P:
             /* GCC permits __builtin_constant_p on non-integer expressions too.
              * The operand is unevaluated; its type does not constrain the int
@@ -805,7 +838,44 @@ static bool verify_expression(const MinicC0Program *program,
         return builtin_operand != NULL &&
                minic_type_equal(builtin_operand->type, expected_operand_type) &&
                expression->value_category == MINIC_VALUE_RVALUE &&
-               minic_type_equal(expression->type, minic_type_int());
+               minic_type_equal(expression->type,
+                   expression->value.builtin_unary.operator_kind == MINIC_BUILTIN_UNARY_BSWAP16 ||
+                   expression->value.builtin_unary.operator_kind == MINIC_BUILTIN_UNARY_BSWAP32 ||
+                   expression->value.builtin_unary.operator_kind == MINIC_BUILTIN_UNARY_BSWAP64
+                       ? expected_operand_type : minic_type_int());
+    }
+    case MINIC_EXPRESSION_BUILTIN_ATOMIC_LOAD: {
+        const MinicExpression *address =
+            expression_before(program, expression->value.atomic_load.address, expression_index);
+        MinicType pointee, value_type;
+        size_t bytes;
+        return address != NULL && target != NULL &&
+               expression->value_category == MINIC_VALUE_RVALUE &&
+               expression->value.atomic_load.memory_order == 0U &&
+               minic_type_pointee(address->type, &pointee) &&
+               (minic_type_is_integer(pointee) || minic_type_is_pointer(pointee)) &&
+               minic_type_unqualified(pointee, &value_type) &&
+               minic_type_equal(expression->type, value_type) &&
+               minic_target_info_sizeof_type(target, program, pointee, &bytes) &&
+               (bytes == 1U || bytes == 2U || bytes == 4U || bytes == 8U);
+    }
+    case MINIC_EXPRESSION_BUILTIN_ATOMIC_STORE: {
+        const MinicExpression *address =
+            expression_before(program, expression->value.atomic_store.address, expression_index);
+        const MinicExpression *source =
+            expression_before(program, expression->value.atomic_store.source, expression_index);
+        MinicType pointee;
+        size_t bytes;
+        return address != NULL && source != NULL && target != NULL &&
+               expression->value_category == MINIC_VALUE_RVALUE &&
+               minic_type_is_void(expression->type) &&
+               expression->value.atomic_store.memory_order == 0U &&
+               minic_type_pointee(address->type, &pointee) &&
+               (minic_type_is_integer(pointee) || minic_type_is_pointer(pointee)) && !minic_type_is_const(pointee) &&
+               minic_target_info_sizeof_type(target, program, pointee, &bytes) &&
+               (bytes == 1U || bytes == 2U || bytes == 4U || bytes == 8U) &&
+               minic_c0_assignment_compatible(program, pointee,
+                                               expression->value.atomic_store.source);
     }
     case MINIC_EXPRESSION_BUILTIN_OVERFLOW: {
         const MinicExpression *overflow_left;

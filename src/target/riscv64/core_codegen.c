@@ -464,6 +464,7 @@ static bool core_visit_instruction_value_uses(const MinicCoreFunction *function,
     case MINIC_CORE_INSTRUCTION_FLOAT_TO_DOUBLE:
     case MINIC_CORE_INSTRUCTION_DOUBLE_TO_FLOAT:
     case MINIC_CORE_INSTRUCTION_DYNAMIC_STACK_ALLOC:
+    case MINIC_CORE_INSTRUCTION_VARIADIC_NEXT_SCALAR:
         return core_visit_value_use(instruction->value.operand, visitor, context);
 
     case MINIC_CORE_INSTRUCTION_FIELD_ADDRESS:
@@ -473,6 +474,13 @@ static bool core_visit_instruction_value_uses(const MinicCoreFunction *function,
                core_visit_value_use(instruction->value.pointer_offset.index, visitor, context);
     case MINIC_CORE_INSTRUCTION_LOAD:
         return core_visit_value_use(instruction->value.load.address, visitor, context);
+    case MINIC_CORE_INSTRUCTION_ATOMIC_LOAD:
+        return core_visit_value_use(instruction->value.atomic_load.address, visitor, context);
+    case MINIC_CORE_INSTRUCTION_ATOMIC_STORE:
+        return core_visit_value_use(
+                   instruction->value.atomic_store.address, visitor, context) &&
+               core_visit_value_use(
+                   instruction->value.atomic_store.stored_value, visitor, context);
     case MINIC_CORE_INSTRUCTION_STORE:
         return core_visit_value_use(instruction->value.store.address, visitor, context) &&
                core_visit_value_use(instruction->value.store.stored_value, visitor, context);
@@ -3832,6 +3840,15 @@ static bool core_instruction_supported(const MinicC0Program *program,
                minic_type_equal(function->values[instruction->result].type, instruction->type) &&
                minic_type_equal(function->values[instruction->value.operand].type,
                                 minic_type_unsigned_long());
+    case MINIC_CORE_INSTRUCTION_ATOMIC_LOAD:
+    case MINIC_CORE_INSTRUCTION_ATOMIC_STORE:
+        /* RV64 atomic ISA/memory-order lowering is not qualified yet.
+         * Never map Core atomic.store to an ordinary unqualified store. */
+        return false;
+    case MINIC_CORE_INSTRUCTION_VARIADIC_NEXT_SCALAR:
+        /* This typed SysV variadic read must never silently reuse the
+         * existing RV64 8-byte linear va_arg lowering. */
+        return false;
     case MINIC_CORE_INSTRUCTION_VARIADIC_ARGUMENT_ADDRESS: {
         size_t fixed_stack_slots;
         size_t integer_parameter_count;
@@ -5503,6 +5520,10 @@ static bool emit_instruction(FILE *file,
         return false;
     }
     switch (instruction->kind) {
+    case MINIC_CORE_INSTRUCTION_VARIADIC_NEXT_SCALAR:
+    case MINIC_CORE_INSTRUCTION_ATOMIC_STORE:
+    case MINIC_CORE_INSTRUCTION_ATOMIC_LOAD:
+        return false;
     case MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT:
         if (fprintf(file, "  li t0, %" PRId64 "\n", instruction->value.integer_value) < 0 ||
             !minic_riscv64_emit_integer_conversion_for_program(

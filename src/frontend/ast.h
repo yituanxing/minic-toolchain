@@ -70,7 +70,10 @@ typedef enum MinicExpressionKind {
     MINIC_EXPRESSION_BUILTIN_VA_END,
     MINIC_EXPRESSION_BUILTIN_VA_ARG,
     MINIC_EXPRESSION_BUILTIN_UNARY,
-    MINIC_EXPRESSION_BUILTIN_OVERFLOW
+    MINIC_EXPRESSION_BUILTIN_OVERFLOW,
+    /* GNU atomic integer store is a distinct side effect. */
+    MINIC_EXPRESSION_BUILTIN_ATOMIC_STORE,
+    MINIC_EXPRESSION_BUILTIN_ATOMIC_LOAD
 } MinicExpressionKind;
 
 typedef enum MinicUnaryOperator {
@@ -116,7 +119,11 @@ typedef enum MinicBuiltinUnaryOperator {
     MINIC_BUILTIN_UNARY_CTZLL,
     MINIC_BUILTIN_UNARY_FFSLL,
     MINIC_BUILTIN_UNARY_ISDIGIT,
-    MINIC_BUILTIN_UNARY_CONSTANT_P
+    MINIC_BUILTIN_UNARY_CONSTANT_P,
+    /* SQLite/glibc <bits/byteswap.h>: pure, single-evaluation byte swaps. */
+    MINIC_BUILTIN_UNARY_BSWAP16,
+    MINIC_BUILTIN_UNARY_BSWAP32,
+    MINIC_BUILTIN_UNARY_BSWAP64
 } MinicBuiltinUnaryOperator;
 
 typedef enum MinicCallFrameAddressKind {
@@ -207,6 +214,15 @@ typedef struct MinicExpression {
             MinicExpressionId right;
             MinicExpressionId result_pointer;
         } overflow;
+        struct {
+            MinicExpressionId address;
+            MinicExpressionId source;
+            unsigned int memory_order;
+        } atomic_store;
+        struct {
+            MinicExpressionId address;
+            unsigned int memory_order;
+        } atomic_load;
     } value;
 } MinicExpression;
 
@@ -399,6 +415,7 @@ typedef struct MinicFunction {
     bool is_internal;
     bool is_inline;
     bool is_noreturn;
+    bool is_constructor; /* Emit ELF .init_array pointer at startup. */
     bool is_referenced;
     bool force_emit;
     bool is_variadic;
@@ -700,6 +717,8 @@ bool minic_c0_program_set_function_noreturn(MinicC0Program *program,
 bool minic_c0_program_set_function_referenced(MinicC0Program *program,
                                               MinicFunctionId function_id,
                                               bool is_referenced);
+bool minic_c0_program_set_function_constructor(MinicC0Program *program,
+                                               MinicFunctionId function_id);
 bool minic_c0_program_set_function_force_emit(MinicC0Program *program,
                                               MinicFunctionId function_id,
                                               bool force_emit);
