@@ -52,12 +52,12 @@ static bool emit_function(FILE *out, const MinicFunction *decl,
     frame = (fn->value_count * 8U + 15U) & ~(size_t)15U;
     if (frame > 2016U) return false;
     if (function_sections) {
-        if (fprintf(out, ".section .text.%s,\"ax\",%progbits\n", name) < 0)
+        if (fprintf(out, ".section .text.%s,\"ax\",%%progbits\n", name) < 0)
             return false;
     } else if (fprintf(out, ".text\n") < 0) return false;
     if (!decl->is_internal && fprintf(out, ".globl %s\n", name) < 0)
         return false;
-    if (fprintf(out, ".p2align 2\n.type %s,%function\n%s:\n", name, name) < 0)
+    if (fprintf(out, ".p2align 2\n.type %s,%%function\n%s:\n", name, name) < 0)
         return false;
     if (frame != 0U && fprintf(out, "  sub sp, sp, #%zu\n", frame) < 0) return false;
     for (i = 0U; i < block->instruction_count; ++i) {
@@ -143,7 +143,7 @@ bool minic_aarch64_write_c0_program_with_core_functions(
         if (decl->is_defined && (!decl->is_internal || decl->is_referenced))
             success = emit_function(out, decl, &core_functions[i], i, function_sections);
     }
-    if (success && fprintf(out, ".section .note.GNU-stack,\"\",%progbits\n") < 0)
+    if (success && fprintf(out, ".section .note.GNU-stack,\"\",%%progbits\n") < 0)
         success = false;
     if (fclose(out) != 0) success = false;
     if (!success) {
