@@ -25,6 +25,14 @@ static bool valid_int(MinicType type) {
 
 /* Comparisons are Core booleans, not 32-bit C int. Both still fit our
  * private 8-byte SSA slots, with canonical 0/1 in the low 32 bits. */
+static bool valid_int_or_pointer(MinicType type) {
+    return valid_int(type) || minic_type_is_pointer(type);
+}
+
+static bool valid_return_type(MinicType type) {
+    return valid_int_or_pointer(type) || minic_type_is_void(type);
+}
+
 static bool valid_int_or_bool(MinicType type) {
     return valid_int(type) || minic_type_equal(type, minic_type_bool());
 }
@@ -104,14 +112,14 @@ static bool emit_function(FILE *out, const MinicFunction *decl,
         decl->is_constructor || decl->is_weak ||
         decl->visibility != MINIC_SYMBOL_VISIBILITY_DEFAULT ||
         decl->section_name != NULL || decl->alias_target != MINIC_FUNCTION_INVALID ||
-        !valid_int(fn->return_type) ||
+        !valid_return_type(fn->return_type) ||
         fn->block_count == 0U || fn->block_count > 128U || fn->entry_block != 0U ||
         fn->inline_asm_count != 0U || fn->parameter_count > 10U ||
         fn->value_count > 240U || fn->object_count > 240U ||
         fn->value_count > 240U - fn->object_count)
         return false;
     for (i = 0U; i < fn->parameter_count; ++i)
-        if (!valid_int(fn->parameter_types[i])) return false;
+        if (!valid_int_or_pointer(fn->parameter_types[i])) return false;
     /* M2: verify every CFG successor and return before emitting anything.
      * A function's SSA values and local objects retain unique stack slots
      * across blocks, so no architecture-independent register allocator is
@@ -122,9 +130,12 @@ static bool emit_function(FILE *out, const MinicFunction *decl,
         switch (term->kind) {
         case MINIC_CORE_TERMINATOR_RETURN:
             if (term->return_object != MINIC_CORE_OBJECT_INVALID ||
-                term->return_value == MINIC_CORE_VALUE_INVALID ||
-                term->return_value >= fn->value_count ||
-                !valid_int(fn->values[term->return_value].type)) return false;
+                (minic_type_is_void(fn->return_type)
+                 ? term->return_value != MINIC_CORE_VALUE_INVALID
+                 : term->return_value == MINIC_CORE_VALUE_INVALID ||
+                   term->return_value >= fn->value_count ||
+                   !minic_type_equal(fn->values[term->return_value].type,
+                                     fn->return_type))) return false;
             break;
         case MINIC_CORE_TERMINATOR_BRANCH:
             if (term->branch_target >= fn->block_count) return false;
@@ -142,7 +153,7 @@ static bool emit_function(FILE *out, const MinicFunction *decl,
     }
     for (i = 0U; i < fn->object_count; ++i) {
         const MinicCoreObject *obj = &fn->objects[i];
-        if (!valid_int(obj->type) || obj->element_count != 1U ||
+        if (!valid_int_or_pointer(obj->type) || obj->element_count != 1U ||
             obj->explicit_alignment > 8U) return false;
     }
     /* Keep this first direct-call ABI step narrow: signed int values in
@@ -157,25 +168,30 @@ static bool emit_function(FILE *out, const MinicFunction *decl,
         has_direct_calls = true;
         if (ins->value.call.callee_id >= fn->callee_count ||
             ins->value.call.result_object != MINIC_CORE_OBJECT_INVALID ||
-            ins->result == MINIC_CORE_VALUE_INVALID ||
-            ins->result >= fn->value_count ||
-            !valid_int(ins->type) || !valid_int(fn->values[ins->result].type))
+            (minic_type_is_void(ins->type)
+             ? ins->result != MINIC_CORE_VALUE_INVALID
+             : ins->result == MINIC_CORE_VALUE_INVALID ||
+               ins->result >= fn->value_count ||
+               !minic_type_equal(fn->values[ins->result].type, ins->type)) ||
+            !valid_return_type(ins->type))
             return false;
         callee = &fn->callees[ins->value.call.callee_id];
         begin = ins->value.call.argument_begin;
         count = ins->value.call.argument_count;
         if (callee->name == NULL || callee->name[0] == '\0' ||
-            callee->is_variadic || !valid_int(callee->return_type) ||
+            callee->is_variadic || !valid_return_type(callee->return_type) ||
             count > 8U || callee->parameter_count != count ||
             begin > fn->call_argument_count ||
             count > fn->call_argument_count - begin)
             return false;
         for (j = 0U; j < count; ++j) {
             const MinicCoreCallArgument *arg = &fn->call_arguments[begin + j];
-            if (!valid_int(callee->parameter_types[j]) ||
+            if (!valid_int_or_pointer(callee->parameter_types[j]) ||
                 arg->kind != MINIC_CORE_CALL_ARGUMENT_VALUE ||
                 arg->value.value_id >= fn->value_count ||
-                !valid_int(fn->values[arg->value.value_id].type))
+                !valid_int_or_pointer(fn->values[arg->value.value_id].type) ||
+                !minic_type_equal(callee->parameter_types[j],
+                                  fn->values[arg->value.value_id].type))
                 return false;
         }
     }
@@ -211,20 +227,32 @@ static bool emit_function(FILE *out, const MinicFunction *decl,
             if (ins->result != MINIC_CORE_VALUE_INVALID ||
                 addr >= fn->value_count || value >= fn->value_count ||
                 !minic_type_is_pointer(fn->values[addr].type) ||
-                !valid_int(fn->values[value].type)) return false;
+                !valid_int_or_pointer(fn->values[value].type)) return false;
             if (fprintf(out, "  ldr x10, [sp, #%zu]\n", (size_t)addr * 8U) < 0 ||
-                fprintf(out, "  ldr w9, [sp, #%zu]\n", (size_t)value * 8U) < 0 ||
-                fputs("  str w9, [x10]\n", out) == EOF) return false;
+                fprintf(out, minic_type_is_pointer(fn->values[value].type)
+                             ? "  ldr x9, [sp, #%zu]\n"
+                             : "  ldr w9, [sp, #%zu]\n", (size_t)value * 8U) < 0 ||
+                fputs(minic_type_is_pointer(fn->values[value].type)
+                          ? "  str x9, [x10]\n"
+                          : "  str w9, [x10]\n", out) == EOF) return false;
             continue;
         }
-        if (ins->result == MINIC_CORE_VALUE_INVALID ||
-            ins->result >= fn->value_count ||
-            ((ins->kind == MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS ||
-               ins->kind == MINIC_CORE_INSTRUCTION_GLOBAL_ADDRESS)
-                ? !minic_type_is_pointer(ins->type)
-                : !valid_int_or_bool(ins->type)))
-            return false;
-        offset = (size_t)ins->result * 8U;
+        if (ins->kind == MINIC_CORE_INSTRUCTION_CALL &&
+            minic_type_is_void(ins->type)) {
+            /* Verified in the call preflight: an effect-only void call
+             * has no Core result slot. Fall through into the call case. */
+            offset = 0U;
+        } else {
+            if (ins->result == MINIC_CORE_VALUE_INVALID ||
+                ins->result >= fn->value_count ||
+                ((ins->kind == MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS ||
+                   ins->kind == MINIC_CORE_INSTRUCTION_GLOBAL_ADDRESS)
+                    ? !minic_type_is_pointer(ins->type)
+                    : !valid_int_or_bool(ins->type) &&
+                      !minic_type_is_pointer(ins->type)))
+                return false;
+            offset = (size_t)ins->result * 8U;
+        }
         switch (ins->kind) {
         case MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT: {
             /* AAPCS64: arbitrary 32-bit constants are NOT legal as a single
@@ -263,7 +291,9 @@ static bool emit_function(FILE *out, const MinicFunction *decl,
             if (addr >= fn->value_count ||
                 !minic_type_is_pointer(fn->values[addr].type) ||
                 fprintf(out, "  ldr x10, [sp, #%zu]\n", (size_t)addr * 8U) < 0 ||
-                fputs("  ldr w9, [x10]\n", out) == EOF)
+                fputs(minic_type_is_pointer(ins->type)
+                          ? "  ldr x9, [x10]\n"
+                          : "  ldr w9, [x10]\n", out) == EOF)
                 return false;
             break;
         }
@@ -273,12 +303,19 @@ static bool emit_function(FILE *out, const MinicFunction *decl,
             for (j = 0U; j < ins->value.call.argument_count; ++j) {
                 const MinicCoreCallArgument *arg =
                     &fn->call_arguments[ins->value.call.argument_begin + j];
-                if (fprintf(out, "  ldr w%zu, [sp, #%zu]\n",
+                if (fprintf(out,
+                            minic_type_is_pointer(callee->parameter_types[j])
+                                ? "  ldr x%zu, [sp, #%zu]\n"
+                                : "  ldr w%zu, [sp, #%zu]\n",
                             j, (size_t)arg->value.value_id * 8U) < 0)
                     return false;
             }
-            if (fprintf(out, "  bl %s\n", callee->name) < 0 ||
-                fputs("  mov w9, w0\n", out) == EOF)
+            if (fprintf(out, "  bl %s\n", callee->name) < 0)
+                return false;
+            if (minic_type_is_void(ins->type)) continue;
+            if (fputs(minic_type_is_pointer(ins->type)
+                          ? "  mov x9, x0\n"
+                          : "  mov w9, w0\n", out) == EOF)
                 return false;
             break;
         }
@@ -286,15 +323,20 @@ static bool emit_function(FILE *out, const MinicFunction *decl,
             size_t index = (size_t)ins->value.parameter_index;
             if (index >= fn->parameter_count) return false;
             if (index < 8U) {
-                if (fprintf(out, "  str w%zu, [sp, #%zu]\n", index, offset) < 0)
+                if (fprintf(out, minic_type_is_pointer(ins->type)
+                                 ? "  str x%zu, [sp, #%zu]\n"
+                                 : "  str w%zu, [sp, #%zu]\n",
+                            index, offset) < 0)
                     return false;
             } else {
                 /* AAPCS64: first eight integer arguments use w0-w7.
                  * Each subsequent int occupies an 8-byte caller stack
                  * argument slot, above our own 16-byte-aligned frame. */
                 size_t incoming = frame + (index - 8U) * 8U;
-                if (fprintf(out, "  ldr w9, [sp, #%zu]\n"
-                                 "  str w9, [sp, #%zu]\n", incoming, offset) < 0)
+                if (fprintf(out, minic_type_is_pointer(ins->type)
+                             ? "  ldr x9, [sp, #%zu]\n  str x9, [sp, #%zu]\n"
+                             : "  ldr w9, [sp, #%zu]\n  str w9, [sp, #%zu]\n",
+                             incoming, offset) < 0)
                     return false;
             }
             continue;
@@ -350,14 +392,19 @@ static bool emit_function(FILE *out, const MinicFunction *decl,
         default:
             return false;
         }
-        if (fprintf(out, "  str w9, [sp, #%zu]\n", offset) < 0) return false;
+        if (fprintf(out, minic_type_is_pointer(ins->type)
+                             ? "  str x9, [sp, #%zu]\n"
+                             : "  str w9, [sp, #%zu]\n", offset) < 0) return false;
     }
         /* Branches use the function's own local ELF labels; x9 is a
          * scratch register and w0 is only defined along return paths. */
         switch (block->terminator.kind) {
         case MINIC_CORE_TERMINATOR_RETURN:
-            if (fprintf(out, "  ldr w0, [sp, #%zu]\n",
-                        (size_t)block->terminator.return_value * 8U) < 0 ||
+            if ((!minic_type_is_void(fn->return_type) &&
+                 fprintf(out, minic_type_is_pointer(fn->return_type)
+                                  ? "  ldr x0, [sp, #%zu]\n"
+                                  : "  ldr w0, [sp, #%zu]\n",
+                         (size_t)block->terminator.return_value * 8U) < 0) ||
                 (has_direct_calls && fprintf(out, "  ldr x30, [sp, #%zu]\n",
                                              values_bytes + fn->object_count * 8U) < 0) ||
                 (frame != 0U && fprintf(out, "  add sp, sp, #%zu\n", frame) < 0) ||
