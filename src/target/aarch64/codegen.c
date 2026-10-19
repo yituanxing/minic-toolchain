@@ -619,6 +619,7 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
     for (size_t block_id = 0U; block_id < fn->block_count; ++block_id) {
         reject_block = block_id;
         reject_ins = SIZE_MAX;
+        reject_stage = "machine_emit";
         block = &fn->blocks[block_id];
         if (fprintf(out, ".Lmini_arm_f%zu_b%zu:\n", id, block_id) < 0)
             return machine_emit_reject(fn, "aarch64", name, reject_stage,
@@ -1150,20 +1151,37 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
             const MinicCoreValueId rhs = ins->value.binary.right;
             size_t lw, rw;
             bool ls, rs;
+            bool wide;
+            const char *op;
             if (lhs >= fn->value_count || rhs >= fn->value_count ||
                 !minic_type_equal(fn->values[lhs].type, ins->type) ||
-                !small_integer_width(program, target, fn->values[lhs].type,
-                                     &lw, &ls) ||
-                !small_integer_width(program, target, fn->values[rhs].type,
-                                     &rw, &rs) ||
-                minic_type_is_bool_integer(ins->type) ||
-                fprintf(out, "  ldr w9, [sp, #%zu]\n", (size_t)lhs * 8U) < 0 ||
-                fprintf(out, "  ldr w10, [sp, #%zu]\n", (size_t)rhs * 8U) < 0 ||
-                fputs(ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_LEFT
-                    ? "  lsl w9, w9, w10\n"
-                    : (ls ? "  asr w9, w9, w10\n" : "  lsr w9, w9, w10\n"), out) == EOF ||
-                !emit_integer_normalize(out, lw, ls)) return machine_emit_reject(fn, "aarch64", name, reject_stage,
-                                    reject_block, reject_ins, __LINE__);
+                !scalar_integer_width(program, target, fn->values[lhs].type,
+                                      &lw, &ls) ||
+                !scalar_integer_width(program, target, fn->values[rhs].type,
+                                      &rw, &rs) ||
+                (lw != 4U && lw != 8U) ||
+                (rw != 4U && rw != 8U) ||
+                minic_type_is_bool_integer(ins->type))
+                return machine_emit_reject(fn, "aarch64", name, reject_stage,
+                                           reject_block, reject_ins, __LINE__);
+            wide = lw == 8U;
+            op = ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_LEFT
+                     ? (wide ? "  lsl x9, x9, x10\n"
+                             : "  lsl w9, w9, w10\n")
+                     : (ls ? (wide ? "  asr x9, x9, x10\n"
+                                   : "  asr w9, w9, w10\n")
+                           : (wide ? "  lsr x9, x9, x10\n"
+                                   : "  lsr w9, w9, w10\n"));
+            if (fprintf(out, wide ? "  ldr x9, [sp, #%zu]\n"
+                                  : "  ldr w9, [sp, #%zu]\n",
+                        (size_t)lhs * 8U) < 0 ||
+                fprintf(out, rw == 8U ? "  ldr x10, [sp, #%zu]\n"
+                                     : "  ldr w10, [sp, #%zu]\n",
+                        (size_t)rhs * 8U) < 0 ||
+                fputs(op, out) == EOF ||
+                (!wide && !emit_integer_normalize(out, lw, ls)))
+                return machine_emit_reject(fn, "aarch64", name, reject_stage,
+                                           reject_block, reject_ins, __LINE__);
             (void)rs;
             break;
         }
@@ -1226,24 +1244,31 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
             const MinicCoreValueId rhs = ins->value.binary.right;
             size_t lw, rw;
             bool ls, rs;
+            bool wide;
             const char *opcode;
             if (lhs >= fn->value_count || rhs >= fn->value_count ||
-                !small_integer_width(program, target, fn->values[lhs].type,
-                                     &lw, &ls) ||
-                !small_integer_width(program, target, fn->values[rhs].type,
-                                     &rw, &rs) ||
-                lw != 4U || rw != 4U || ls != rs ||
-                fprintf(out, "  ldr w9, [sp, #%zu]\n", (size_t)lhs * 8U) < 0 ||
-                fprintf(out, "  ldr w10, [sp, #%zu]\n", (size_t)rhs * 8U) < 0)
+                !scalar_integer_width(program, target, fn->values[lhs].type,
+                                      &lw, &ls) ||
+                !scalar_integer_width(program, target, fn->values[rhs].type,
+                                      &rw, &rs) ||
+                lw != rw || (lw != 4U && lw != 8U) || ls != rs)
                 return machine_emit_reject(fn, "aarch64", name, reject_stage,
-                                    reject_block, reject_ins, __LINE__);
+                                           reject_block, reject_ins, __LINE__);
+            wide = lw == 8U;
             opcode = ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND
-                ? "  and w9, w9, w10\n"
+                ? (wide ? "  and x9, x9, x10\n" : "  and w9, w9, w10\n")
                 : ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_XOR
-                    ? "  eor w9, w9, w10\n"
-                    : "  orr w9, w9, w10\n";
-            if (fputs(opcode, out) == EOF) return machine_emit_reject(fn, "aarch64", name, reject_stage,
-                                    reject_block, reject_ins, __LINE__);
+                    ? (wide ? "  eor x9, x9, x10\n" : "  eor w9, w9, w10\n")
+                    : (wide ? "  orr x9, x9, x10\n" : "  orr w9, w9, w10\n");
+            if (fprintf(out, wide ? "  ldr x9, [sp, #%zu]\n"
+                                  : "  ldr w9, [sp, #%zu]\n",
+                        (size_t)lhs * 8U) < 0 ||
+                fprintf(out, wide ? "  ldr x10, [sp, #%zu]\n"
+                                  : "  ldr w10, [sp, #%zu]\n",
+                        (size_t)rhs * 8U) < 0 ||
+                fputs(opcode, out) == EOF)
+                return machine_emit_reject(fn, "aarch64", name, reject_stage,
+                                           reject_block, reject_ins, __LINE__);
             break;
         }
         case MINIC_CORE_INSTRUCTION_INTEGER_DIVIDE:
