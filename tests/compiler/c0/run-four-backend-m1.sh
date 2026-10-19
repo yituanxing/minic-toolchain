@@ -9,7 +9,7 @@ QEMU_LOONGARCH64=qemu-loongarch64
 w=$(mktemp -d)
 trap 'rm -rf "$w"' EXIT HUP INT TERM
 m2_enabled=0
-if [ "${FOUR_BACKEND_M2:-0}" = "1" ] || [ "${FOUR_BACKEND_M2_STACK:-0}" = "1" ]; then
+if [ "${FOUR_BACKEND_M2:-0}" = "1" ] || [ "${FOUR_BACKEND_M2_STACK:-0}" = "1" ] || [ "${FOUR_BACKEND_M3_CALL:-0}" = "1" ]; then
     m2_enabled=1
 fi
 cat > "$w/return.i" <<'EOF'
@@ -97,6 +97,41 @@ cat > "$w/driver_stack10.c" <<'EOF'
 extern int mini_stack10(int, int, int, int, int, int, int, int, int, int);
 int main(void) { return mini_stack10(1, 2, 3, 4, 5, 6, 7, 8, 9, -3); }
 EOF
+# Mirror the x86 introduction order: first prove a small direct-call
+# Core/ABI runtime seam, then pressure it with original tinyAES/cJSON.
+cat > "$w/call_external.i" <<'EOF'
+extern int gnu_twice(int);
+int mini_external(int x) { return gnu_twice(x) + gnu_twice(1); }
+EOF
+cat > "$w/driver_call_external.c" <<'EOF'
+extern int mini_external(int);
+int gnu_twice(int n) { return n * 2; }
+int main(void) { return mini_external(20); }
+EOF
+cat > "$w/call_internal.i" <<'EOF'
+static int mini_helper(int a, int b) { return a + b; }
+int mini_internal(int x) { return mini_helper(x, 2) + 1; }
+EOF
+cat > "$w/driver_call_internal.c" <<'EOF'
+extern int mini_internal(int);
+int main(void) { return mini_internal(39); }
+EOF
+cat > "$w/call_nested.i" <<'EOF'
+extern int gnu_twice(int);
+int mini_nested(int n) {
+    if (n == 0) return 2;
+    return gnu_twice(20) + mini_nested(n - 1);
+}
+EOF
+cat > "$w/driver_call_nested.c" <<'EOF'
+extern int mini_nested(int);
+int gnu_twice(int n) { return n * 2; }
+int main(void) { return mini_nested(1); }
+EOF
+cat > "$w/call_unsupported.i" <<'EOF'
+extern int gnu_nine(int,int,int,int,int,int,int,int,int);
+int mini_unsupported(void) { return gnu_nine(1,2,3,4,5,6,7,8,9); }
+EOF
 check_qemu_exit() {
     emulator=$1
     binary=$2
@@ -130,12 +165,18 @@ for target in aarch64 loongarch64; do
     if [ "${FOUR_BACKEND_M2_STACK:-0}" = "1" ]; then
         cases="$cases stack9 stack10"
     fi
+    if [ "${FOUR_BACKEND_M3_CALL:-0}" = "1" ]; then
+        cases="$cases call_external call_internal call_nested"
+    fi
     if [ "$m2_enabled" = "1" ]; then
         # Independent originals for every new CFG/comparison fixture, not
         # merely an expected return code from a MiniC-owned executable.
         oracle_cases="branch loop compare"
         if [ "${FOUR_BACKEND_M2_STACK:-0}" = "1" ]; then
             oracle_cases="$oracle_cases stack9 stack10"
+        fi
+        if [ "${FOUR_BACKEND_M3_CALL:-0}" = "1" ]; then
+            oracle_cases="$oracle_cases call_external call_internal call_nested"
         fi
         for testcase in $oracle_cases; do
             "$gcc" -static -x c "$w/$testcase.i" "$w/driver_$testcase.c" \
@@ -158,6 +199,8 @@ for target in aarch64 loongarch64; do
             compare) "$gcc" -static "$w/$target.compare.o" "$w/driver_compare.c" -o "$w/$target.compare.elf" ;;
             stack9) "$gcc" -static "$w/$target.stack9.o" "$w/driver_stack9.c" -o "$w/$target.stack9.elf" ;;
             stack10) "$gcc" -static "$w/$target.stack10.o" "$w/driver_stack10.c" -o "$w/$target.stack10.elf" ;;
+            call_external|call_internal|call_nested)
+                "$gcc" -static "$w/$target.$testcase.o" "$w/driver_$testcase.c" -o "$w/$target.$testcase.elf" ;;
         esac
         check_qemu_exit "$qemu" "$w/$target.$testcase.elf" 42
         echo "FOUR_BACKEND_M1_CASE=PASS target=$target case=$testcase MiniC_object=1 GNU_AS_LD=1 QEMU_exit=42"
@@ -173,6 +216,15 @@ for target in aarch64 loongarch64; do
         exit 1
     fi
     test ! -e "$w/$target.unsupported.s"
+    if [ "${FOUR_BACKEND_M3_CALL:-0}" = "1" ]; then
+        if "$MINIC_CC" --target="$target-linux" -S "$w/call_unsupported.i" \
+                -o "$w/$target.call_unsupported.s" 2>"$w/$target.call_unsupported.err"; then
+            echo "FOUR_BACKEND_M3_CALL=FAIL target=$target accepted unsupported nine-argument caller" >&2
+            exit 1
+        fi
+        test ! -e "$w/$target.call_unsupported.s"
+        echo "FOUR_BACKEND_M3_CALL_TARGET=PASS target=$target MiniC_GNU_link_QEMU=10 direct_call_cases=3 GNU_oracles=3 unsupported_calls=fail-closed"
+    fi
     if [ "$m2_enabled" = "1" ]; then
         echo "FOUR_BACKEND_M2_TARGET=PASS target=$target MiniC_GNU_link_QEMU=7 CFG_branch=1 CFG_loop=1 signed_compare=1 unsupported=fail-closed"
         if [ "${FOUR_BACKEND_M2_STACK:-0}" = "1" ]; then
@@ -186,6 +238,9 @@ if [ "$m2_enabled" = "1" ]; then
     echo "FOUR_BACKEND_M2=PASS architectures=2 executable_QEMU_cases=14 CFG_cases=4 comparison_cases=2 GCC_independent_oracles=10"
     if [ "${FOUR_BACKEND_M2_STACK:-0}" = "1" ]; then
         echo "FOUR_BACKEND_M2_STACK=PASS architectures=2 executable_QEMU_cases=18 ninth_tenth_arg_cases=4 GCC_independent_oracles=14"
+    fi
+    if [ "${FOUR_BACKEND_M3_CALL:-0}" = "1" ]; then
+        echo "FOUR_BACKEND_M3_CALL=PASS architectures=2 executable_QEMU_cases=20 direct_calls=6 GNU_independent_oracles=16"
     fi
 else
     echo "FOUR_BACKEND_M1=PASS architectures=2 executable_QEMU_cases=8 GCC_independent_oracles=4"
