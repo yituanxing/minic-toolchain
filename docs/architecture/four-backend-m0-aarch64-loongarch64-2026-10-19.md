@@ -850,3 +850,83 @@ AArch64/LoongArch64 emitters only accepted 32-bit index types.
   `cd9a880a5a707f28b5ea63c364c1844ab35e1c56`. New features
   touch only the two new target backends and target-only tests/
   documentation, not shared Core, x86-64, RV64, or original vendor C.
+
+
+## M13–M15 and first fully working original tinyAES target — 2026-10-19
+
+After the previous AddRoundKey Core rejection, both target-owned code
+emitters acquired 8/16-bit integer add/sub/multiply with width-aware
+normalization (M13), signed and unsigned variable shift instructions
+(M14), and 8/16-bit function results with width-checked ABI (M15).
+Separate GNU-linked original-C/QEMU oracle cases verify each addition.
+An independent original tinyAES ELF differential, not a copy of synthetic
+standalone tests, has now been executed on **both** targets.
+
+**Major project-level acceptance: original pinned tinyAES now passes
+on LoongArch64.** Evidence: [Actions #39230144120](https://github.com/yituanxing/minic-toolchain/actions/runs/39230144120)
+and [Actions #39230639393](https://github.com/yituanxing/minic-toolchain/actions/runs/39230639393)
+show:
+
+```text
+FOUR_BACKEND_TINYAES_GNU=PASS target=loongarch64 original_source=1 QEMU_exit=0
+FOUR_BACKEND_TINYAES_COMPILE=PASS target=loongarch64 original_source=1 assembly_bytes=465763
+FOUR_BACKEND_TINYAES_LINK=PASS target=loongarch64 MiniC_object=1 GNU_AS_LD=1
+FOUR_BACKEND_TINYAES=PASS target=loongarch64 original_source=1 GNU_AS_LD=1 QEMU_byte_exact=1
+FOUR_BACKEND_TINYAES_FRONTIER=COMPLETE architectures=2 verified_runtime=1 blocked=0
+```
+
+This covers the **entire unchanged** AES-128 ECB vector harness,
+including all round-key bytes, AddRoundKey/SubBytes/ShiftRows/
+MixColumns, AES_ECB_encrypt and AES_ECB_decrypt execution under
+LoongArch QEMU, checked against the genuine GNU cross-built program.
+The focused workflow as a whole is **red**, because AArch64 fails the
+original AES runtime gate; this is not four-architecture acceptance.
+
+**AArch64** independently compiles the same original upstream AES to
+321478 assembly bytes, cross-GNU assembles and static-links it, but
+the original QEMU harness returns exit=1. A derivative that returns
+the first incorrect round-key offset finds **byte 17 (one-based)**,
+corresponding to the first expanded word, not the original 16-byte key
+source. Source-derived, *non-acceptance* KeyExpansion runtime probes
+from [Actions #39230639393](https://github.com/yituanxing/minic-toolchain/actions/runs/39230639393)
+compare exact GNU vs MiniC values at `i == Nk`:
+
+| Probe | Cross-GNU | AArch64 MiniC |
+| --- | ---: | ---: |
+| `j=i*4` | 16 | 16 |
+| `k=(i-Nk)*4` | 0 | 0 |
+| `k=(i-1)*4` | 12 | 12 |
+| `Key[12]` | 9 | 254 |
+| `RoundKey[0]` | 43 | 99 |
+| `RoundKey[11]` | 136 | 43 |
+| `RoundKey[15]` | 60 | 118 |
+| `tempa[0]` before RotWord | 9 | 254 |
+| `tempa[0]` after RotWord | 207 | 215 |
+| `tempa[0]` after SubWord | 138 | 14 |
+| `tempa[0]` after Rcon XOR | 139 | 114 |
+| `RoundKey[16]` after XOR | 160 | 17 |
+
+This strongly confines the AArch64-only bug **upstream of RotWord/
+SubWord**, to the 16-byte Key/initial-round-key data/pointer/byte-load
+contract or corruption from the initial copy loop. The target-specific
+emitter's stack/local-object addressing and direct AAPCS64 ABI are
+prime inspection targets. Do **not** make speculative S-box or unsigned
+arithmetic patches: GNU and MiniC both calculate loop indices 12, 16,
+0, but then read different bytes. The same frontend/Core and original
+source are correct on the independent LoongArch target.
+
+The first experimental probe had a shell `if ! cmd1 && cmd2` binding
+mistake (linking skipped), corrected by grouping compile/link and
+asserting ELF existence before QEMU. A later combined diagnostic
+had a stray `fi`, also fixed. These **red diagnostic runs are not
+test passes**. Final provenance is the genuine
+`FOUR_BACKEND_TINYAES=PASS target=loongarch64` marker from the
+full unchanged original-source run, and a separate genuine red
+AArch64 outcome.
+
+The original focused workflow file was restored **byte-identically**
+to SHA `cd9a880a5a707f28b5ea63c364c1844ab35e1c56` after
+inspection; project PR #527 remains Draft. Next: small independent
+GNU/QEMU acceptance reproducer for AArch64 initial 16-byte copy plus
+pointer/stack alias, fix the exact target-only bug, repeat untouched
+AES on both ISAs, then proceed in x86 project order to cJSON.
