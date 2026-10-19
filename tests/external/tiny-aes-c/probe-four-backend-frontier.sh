@@ -209,7 +209,9 @@ for sym in ("sbox", "vector_key", "main"):
             if sym != "main" or ("got:" in line or ":got_lo12:" in line or i < ix+20):
                 print("ASM", i+1, line, flush=True)
 PY
-                    aarch64-linux-gnu-readelf -W -s "$work/$target.$probe.minic.elf" | grep -E ' (sbox|vector_key)
+                    aarch64-linux-gnu-readelf -W -s "$work/$target.$probe.minic.elf" | grep -E '(sbox|vector_key)' >&2 || true
+                    echo "FOUR_BACKEND_GLOBAL_ORACLE_SCAN_END target=$target" >&2
+                fi
                 set +e
                 timeout 15s "$qemu" "$work/$target.$probe.gnu.elf" >/dev/null 2>&1
                 reference_byte=$?
