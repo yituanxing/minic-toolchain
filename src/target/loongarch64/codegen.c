@@ -651,7 +651,8 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                       !minic_type_is_pointer(ins->type) &&
                       !(minic_type_is_double(ins->type) &&
                         (ins->kind == MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT ||
-                         ins->kind == MINIC_CORE_INSTRUCTION_LOAD))))
+                         ins->kind == MINIC_CORE_INSTRUCTION_LOAD ||
+                         ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_DIVIDE))))
             {
                 if (getenv("MINIC_M1_TRACE") != NULL)
                     (void)fprintf(stderr,
@@ -665,6 +666,20 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
             offset = (size_t)ins->result * 8U;
         }
         switch (ins->kind) {
+        case MINIC_CORE_INSTRUCTION_DOUBLE_DIVIDE: {
+            const MinicCoreValueId lhs = ins->value.binary.left;
+            const MinicCoreValueId rhs = ins->value.binary.right;
+            if (!minic_type_is_double(ins->type) ||
+                lhs >= fn->value_count || rhs >= fn->value_count ||
+                !minic_type_is_double(fn->values[lhs].type) ||
+                !minic_type_is_double(fn->values[rhs].type) ||
+                !emit_sp_mem(out, "fld.d", "$ft0", (size_t)lhs * 8U) ||
+                !emit_sp_mem(out, "fld.d", "$ft1", (size_t)rhs * 8U) ||
+                fputs("  fdiv.d $ft0, $ft0, $ft1\n", out) == EOF ||
+                !emit_sp_mem(out, "fst.d", "$ft0", offset))
+                return false;
+            continue;
+        }
         case MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT:
             if (!minic_type_is_double(ins->type) ||
                 fprintf(out, "  li.d $t0, 0x%016" PRIx64 "\n",
