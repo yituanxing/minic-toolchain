@@ -9,7 +9,9 @@
 
 typedef enum MinicTargetArchitecture {
     MINIC_TARGET_ARCH_RISCV64 = 0,
-    MINIC_TARGET_ARCH_X86_64
+    MINIC_TARGET_ARCH_X86_64,
+    MINIC_TARGET_ARCH_AARCH64,
+    MINIC_TARGET_ARCH_LOONGARCH64
 } MinicTargetArchitecture;
 
 typedef enum MinicIntegerLiteralBase {
