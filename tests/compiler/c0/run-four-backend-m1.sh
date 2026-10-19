@@ -29,6 +29,34 @@ cat > "$w/driver_calc.c" <<'EOF'
 extern int mini_calc(int, int);
 int main(void) { return mini_calc(6, 8); }
 EOF
+# M2 reuses the exact same cross GNU AS/LD/QEMU scaffold as M1.
+# First real Core CFG: both conditional successors + a backward loop.
+cat > "$w/branch.i" <<'EOF'
+int mini_branch(int take, int value) {
+    if (take) return value;
+    return 0;
+}
+EOF
+cat > "$w/driver_branch.c" <<'EOF'
+extern int mini_branch(int, int);
+int main(void) {
+    return mini_branch(1, 42) + mini_branch(0, 99);
+}
+EOF
+cat > "$w/loop.i" <<'EOF'
+int mini_loop(int n) {
+    int count = 0;
+    while (n) {
+        count = count + 1;
+        n = n - 1;
+    }
+    return count;
+}
+EOF
+cat > "$w/driver_loop.c" <<'EOF'
+extern int mini_loop(int);
+int main(void) { return mini_loop(7) * 6 + mini_loop(0); }
+EOF
 cat > "$w/unsupported.i" <<'EOF'
 static int global_state = 42;
 int main(void) { return global_state; }
@@ -59,8 +87,8 @@ for target in aarch64 loongarch64; do
     check_qemu_exit "$qemu" "$w/$target.gnu.elf" 42
     "$gcc" -static -x c "$w/wide.i" -o "$w/$target.gnu-wide.elf"
     check_qemu_exit "$qemu" "$w/$target.gnu-wide.elf" 64
-    for testcase in return add calc; do
-        "$MINIC_CC" --target="$target-linux" -S "$w/$testcase.i" \
+    for testcase in return add calc branch loop; do
+        MINIC_M1_TRACE=1 "$MINIC_CC" --target="$target-linux" -S "$w/$testcase.i" \
             -o "$w/$target.$testcase.s"
         test -s "$w/$target.$testcase.s"
         "$gcc" -c "$w/$target.$testcase.s" -o "$w/$target.$testcase.o"
@@ -68,6 +96,8 @@ for target in aarch64 loongarch64; do
             return) "$gcc" -static "$w/$target.return.o" -o "$w/$target.return.elf" ;;
             add) "$gcc" -static "$w/$target.add.o" "$w/driver_add.c" -o "$w/$target.add.elf" ;;
             calc) "$gcc" -static "$w/$target.calc.o" "$w/driver_calc.c" -o "$w/$target.calc.elf" ;;
+            branch) "$gcc" -static "$w/$target.branch.o" "$w/driver_branch.c" -o "$w/$target.branch.elf" ;;
+            loop) "$gcc" -static "$w/$target.loop.o" "$w/driver_loop.c" -o "$w/$target.loop.elf" ;;
         esac
         check_qemu_exit "$qemu" "$w/$target.$testcase.elf" 42
         echo "FOUR_BACKEND_M1_CASE=PASS target=$target case=$testcase MiniC_object=1 GNU_AS_LD=1 QEMU_exit=42"
@@ -83,6 +113,6 @@ for target in aarch64 loongarch64; do
         exit 1
     fi
     test ! -e "$w/$target.unsupported.s"
-    echo "FOUR_BACKEND_M1_TARGET=PASS target=$target GCC_oracle=2 MiniC_GNU_link_QEMU=4 unsupported=fail-closed"
+    echo "FOUR_BACKEND_M2_TARGET=PASS target=$target MiniC_GNU_link_QEMU=6 CFG_branch=1 CFG_loop=1 unsupported=fail-closed"
 done
-echo "FOUR_BACKEND_M1=PASS architectures=2 executable_QEMU_cases=8 GCC_independent_oracles=4"
+echo "FOUR_BACKEND_M2=PASS architectures=2 executable_QEMU_cases=12 CFG_cases=4 GCC_independent_oracles=4"
