@@ -11,6 +11,10 @@ trap 'rm -rf "$w"' EXIT HUP INT TERM
 cat > "$w/return.i" <<'EOF'
 int main(void) { return 42; }
 EOF
+# Requires two 16-bit chunks on AArch64 (cannot be a single mov).
+cat > "$w/wide.i" <<'EOF'
+int main(void) { return 1000000; }
+EOF
 cat > "$w/add.i" <<'EOF'
 int mini_add(int a, int b) { return a + b; }
 EOF
@@ -29,15 +33,16 @@ cat > "$w/unsupported.i" <<'EOF'
 static int global_state = 42;
 int main(void) { return global_state; }
 EOF
-check_qemu_42() {
+check_qemu_exit() {
     emulator=$1
     binary=$2
+    expected=$3
     set +e
     "$emulator" "$binary"
     result=$?
     set -e
-    if [ "$result" -ne 42 ]; then
-        echo "FOUR_BACKEND_M1=FAIL emulator=$emulator bin=$binary actual=$result expected=42" >&2
+    if [ "$result" -ne "$expected" ]; then
+        echo "FOUR_BACKEND_M1=FAIL emulator=$emulator bin=$binary actual=$result expected=$expected" >&2
         return 1
     fi
 }
@@ -51,7 +56,9 @@ for target in aarch64 loongarch64; do
     command -v "$qemu" >/dev/null
     echo "FOUR_BACKEND_M1_TOOLCHAIN target=$target compiler=$("$gcc" -dumpfullversion) qemu=$qemu"
     "$gcc" -static -x c "$w/return.i" -o "$w/$target.gnu.elf"
-    check_qemu_42 "$qemu" "$w/$target.gnu.elf"
+    check_qemu_exit "$qemu" "$w/$target.gnu.elf" 42
+    "$gcc" -static -x c "$w/wide.i" -o "$w/$target.gnu-wide.elf"
+    check_qemu_exit "$qemu" "$w/$target.gnu-wide.elf" 64
     for testcase in return add calc; do
         "$MINIC_CC" --target="$target-linux" -S "$w/$testcase.i" \
             -o "$w/$target.$testcase.s"
@@ -62,15 +69,20 @@ for target in aarch64 loongarch64; do
             add) "$gcc" -static "$w/$target.add.o" "$w/driver_add.c" -o "$w/$target.add.elf" ;;
             calc) "$gcc" -static "$w/$target.calc.o" "$w/driver_calc.c" -o "$w/$target.calc.elf" ;;
         esac
-        check_qemu_42 "$qemu" "$w/$target.$testcase.elf"
+        check_qemu_exit "$qemu" "$w/$target.$testcase.elf" 42
         echo "FOUR_BACKEND_M1_CASE=PASS target=$target case=$testcase MiniC_object=1 GNU_AS_LD=1 QEMU_exit=42"
     done
+    "$MINIC_CC" --target="$target-linux" -S "$w/wide.i" -o "$w/$target.wide.s"
+    "$gcc" -c "$w/$target.wide.s" -o "$w/$target.wide.o"
+    "$gcc" -static "$w/$target.wide.o" -o "$w/$target.wide.elf"
+    check_qemu_exit "$qemu" "$w/$target.wide.elf" 64
+    echo "FOUR_BACKEND_M1_CASE=PASS target=$target case=wide-immediate MiniC_object=1 GNU_AS_LD=1 QEMU_exit=64 GCC_oracle=64"
     if "$MINIC_CC" --target="$target-linux" -S "$w/unsupported.i" \
             -o "$w/$target.unsupported.s" 2>"$w/$target.unsupported.err"; then
         echo "FOUR_BACKEND_M1=FAIL target=$target admitted unsupported global" >&2
         exit 1
     fi
     test ! -e "$w/$target.unsupported.s"
-    echo "FOUR_BACKEND_M1_TARGET=PASS target=$target GCC_oracle=1 MiniC_GNU_link_QEMU=3 unsupported=fail-closed"
+    echo "FOUR_BACKEND_M1_TARGET=PASS target=$target GCC_oracle=2 MiniC_GNU_link_QEMU=4 unsupported=fail-closed"
 done
-echo "FOUR_BACKEND_M1=PASS architectures=2 executable_QEMU_cases=6 GCC_independent_oracles=2"
+echo "FOUR_BACKEND_M1=PASS architectures=2 executable_QEMU_cases=8 GCC_independent_oracles=4"
