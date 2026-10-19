@@ -25,6 +25,25 @@ def call_proxy(args):
     """Preserve GCC behavior; side-channel diagnostics cannot break GCC."""
     gcc_argv = compiler_argv()
     gcc = subprocess.run(gcc_argv + args, check=False)
+    # The only supported replacement path is explicit, exact owner routing
+    # from an isolated real Kbuild CC invocation. Kbuild may recompile .o on
+    # aggregation due to its .cmd metadata, so copying .o *before* make is
+    # not proof of MiniC ownership. Replace just after GCC creates the real
+    # target .o and before Kbuild archives/links that object.
+    wanted = os.environ.get("BUSYBOX_ALLYES_REPLACE_OWNER")
+    if wanted and gcc.returncode == 0 and "-c" in args:
+        output = next((args[i + 1] for i, val in enumerate(args[:-1])
+                       if val == "-o"), None)
+        if output is not None and Path(output).resolve() == Path(wanted).resolve():
+            mini_path = Path(os.environ["BUSYBOX_ALLYES_REPLACE_MINIC_OBJECT"])
+            if not mini_path.is_file():
+                raise SystemExit("original-Kbuild replacement MiniC object is missing")
+            import shutil
+            shutil.copy2(mini_path, output)
+            event = Path(os.environ["BUSYBOX_ALLYES_REPLACE_EVENT"])
+            event.write_text("KBUILD_REPLACE_OWNER=%s mini_sha256=%s\n" %
+                             (output, hashlib.sha256(mini_path.read_bytes()).hexdigest()),
+                             encoding="utf-8")
     # When Kbuild relinks a substituted MiniC object cohort, GNU remains
     # the original compiler; never generate a second shadow/report entry.
     if os.environ.get("BUSYBOX_ALLYES_SKIP_SHADOW") == "1":
