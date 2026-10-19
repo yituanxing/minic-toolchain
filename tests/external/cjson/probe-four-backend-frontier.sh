@@ -94,6 +94,10 @@ SH
         grep 'MINIC_CJSON_CFG' "$work/$target.probe.err" | tail -n 4 || true
         grep 'MINIC_CJSON_STAGE' "$work/$target.probe.err" | tail -n 8 || true
         grep 'MINIC_CJSON_STEP' "$work/$target.probe.err" | tail -n 6 || true
+        # Report the actual ensure emission frontier separately from other functions.
+        grep 'MINIC_CJSON_STAGE .*function=ensure' "$work/$target.probe.err" | tail -n 1 || true
+        grep 'MINIC_CJSON_STEP .*function=ensure' "$work/$target.probe.err" | tail -n 12 || true
+        grep 'MINIC_M8_OPCODE_REJECT .*function=ensure' "$work/$target.probe.err" | tail -n 1 || true
         echo "FOUR_BACKEND_CJSON_BOUNDED_STDERR target=$target begin"
         sed -n '1,16p' "$work/$target.probe.err"
         echo "FOUR_BACKEND_CJSON_BOUNDED_STDERR target=$target end"

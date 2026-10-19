@@ -345,7 +345,8 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                              name != NULL &&
                              (strcmp(name, "cJSON_ParseWithLengthOpts") == 0 ||
                                strcmp(name, "cJSON_Compare") == 0 ||
-                               strcmp(name, "parse_number") == 0);
+                               strcmp(name, "parse_number") == 0 ||
+                               strcmp(name, "ensure") == 0);
     if (trace_cjson)
         (void)fprintf(stderr,
             "MINIC_CJSON_STAGE arch=aarch64 function=%s stage=entry blocks=%zu values=%zu objects=%zu params=%zu calls=%zu\n",
