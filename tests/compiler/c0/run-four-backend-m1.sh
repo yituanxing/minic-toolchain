@@ -9,7 +9,7 @@ QEMU_LOONGARCH64=qemu-loongarch64
 w=$(mktemp -d)
 trap 'rm -rf "$w"' EXIT HUP INT TERM
 m2_enabled=0
-if [ "${FOUR_BACKEND_M2:-0}" = "1" ] || [ "${FOUR_BACKEND_M2_STACK:-0}" = "1" ] || [ "${FOUR_BACKEND_M3_CALL:-0}" = "1" ] || [ "${FOUR_BACKEND_M4_GLOBAL:-0}" = "1" ] || [ "${FOUR_BACKEND_M5_POINTER:-0}" = "1" ] || [ "${FOUR_BACKEND_M6_ADDRESS:-0}" = "1" ] || [ "${FOUR_BACKEND_M7_FRAME:-0}" = "1" ] || [ "${FOUR_BACKEND_M8_NARROW:-0}" = "1" ] || [ "${FOUR_BACKEND_M9_UNSIGNED:-0}" = "1" ] || [ "${FOUR_BACKEND_M10_MOD:-0}" = "1" ] || [ "${FOUR_BACKEND_M11_INDEX:-0}" = "1" ] || [ "${FOUR_BACKEND_M12_BITWISE:-0}" = "1" ] || [ "${FOUR_BACKEND_M13_NARROW_ARITH:-0}" = "1" ] || [ "${FOUR_BACKEND_M14_SHIFT:-0}" = "1" ] || [ "${FOUR_BACKEND_M15_SCALAR_RETURN:-0}" = "1" ] || [ "${FOUR_BACKEND_M17_RECORD:-0}" = "1" ] || [ "${FOUR_BACKEND_M18_VARARGS:-0}" = "1" ] || [ "${FOUR_BACKEND_M19_PTR_COMPARE:-0}" = "1" ] || [ "${FOUR_BACKEND_M20_LP64_ABI:-0}" = "1" ] || [ "${FOUR_BACKEND_M21_LP64_ADD:-0}" = "1" ] || [ "${FOUR_BACKEND_M22_LP64_CONV:-0}" = "1" ] || [ "${FOUR_BACKEND_M23_LP64_COMPARE:-0}" = "1" ] || [ "${FOUR_BACKEND_M24_INDIRECT_CALL:-0}" = "1" ] || [ "${FOUR_BACKEND_M25_DOUBLE_TRANSPORT:-0}" = "1" ] || [ "${FOUR_BACKEND_M26_DOUBLE_DIV:-0}" = "1" ] || [ "${FOUR_BACKEND_M27_FP_PARAMETER:-0}" = "1" ] || [ "${FOUR_BACKEND_M28_INT_DOUBLE:-0}" = "1" ] || [ "${FOUR_BACKEND_M29_DOUBLE_CMP:-0}" = "1" ] || [ "${FOUR_BACKEND_M30_FP_CALL:-0}" = "1" ]; then
+if [ "${FOUR_BACKEND_M2:-0}" = "1" ] || [ "${FOUR_BACKEND_M2_STACK:-0}" = "1" ] || [ "${FOUR_BACKEND_M3_CALL:-0}" = "1" ] || [ "${FOUR_BACKEND_M4_GLOBAL:-0}" = "1" ] || [ "${FOUR_BACKEND_M5_POINTER:-0}" = "1" ] || [ "${FOUR_BACKEND_M6_ADDRESS:-0}" = "1" ] || [ "${FOUR_BACKEND_M7_FRAME:-0}" = "1" ] || [ "${FOUR_BACKEND_M8_NARROW:-0}" = "1" ] || [ "${FOUR_BACKEND_M9_UNSIGNED:-0}" = "1" ] || [ "${FOUR_BACKEND_M10_MOD:-0}" = "1" ] || [ "${FOUR_BACKEND_M11_INDEX:-0}" = "1" ] || [ "${FOUR_BACKEND_M12_BITWISE:-0}" = "1" ] || [ "${FOUR_BACKEND_M13_NARROW_ARITH:-0}" = "1" ] || [ "${FOUR_BACKEND_M14_SHIFT:-0}" = "1" ] || [ "${FOUR_BACKEND_M15_SCALAR_RETURN:-0}" = "1" ] || [ "${FOUR_BACKEND_M17_RECORD:-0}" = "1" ] || [ "${FOUR_BACKEND_M18_VARARGS:-0}" = "1" ] || [ "${FOUR_BACKEND_M19_PTR_COMPARE:-0}" = "1" ] || [ "${FOUR_BACKEND_M20_LP64_ABI:-0}" = "1" ] || [ "${FOUR_BACKEND_M21_LP64_ADD:-0}" = "1" ] || [ "${FOUR_BACKEND_M22_LP64_CONV:-0}" = "1" ] || [ "${FOUR_BACKEND_M23_LP64_COMPARE:-0}" = "1" ] || [ "${FOUR_BACKEND_M24_INDIRECT_CALL:-0}" = "1" ] || [ "${FOUR_BACKEND_M25_DOUBLE_TRANSPORT:-0}" = "1" ] || [ "${FOUR_BACKEND_M26_DOUBLE_DIV:-0}" = "1" ] || [ "${FOUR_BACKEND_M27_FP_PARAMETER:-0}" = "1" ] || [ "${FOUR_BACKEND_M28_INT_DOUBLE:-0}" = "1" ] || [ "${FOUR_BACKEND_M29_DOUBLE_CMP:-0}" = "1" ] || [ "${FOUR_BACKEND_M30_FP_CALL:-0}" = "1" ] || [ "${FOUR_BACKEND_M31_FLOAT_PROMOTE:-0}" = "1" ]; then
     m2_enabled=1
 fi
 cat > "$w/return.i" <<'EOF'
@@ -1025,6 +1025,45 @@ int main(void) {
     return 42;
 }
 EOF
+# M31: GNU-built float array stores binary32; MiniC loads/copies
+# without corruption, then numerically promotes to IEEE-754 binary64.
+cat > "$w/float_promote.i" <<'EOF'
+double mini_float_to_double(const float *p) {
+    return (double)*p;
+}
+void mini_float_copy(float *out, const float *in) {
+    *out = *in;
+}
+EOF
+cat > "$w/driver_float_promote.c" <<'EOF'
+#include <stdint.h>
+#include <string.h>
+extern double mini_float_to_double(const float *);
+extern void mini_float_copy(float *, const float *);
+static uint64_t bits64(double x) {
+    uint64_t r;
+    memcpy(&r, &x, 8);
+    return r;
+}
+static uint32_t bits32(float x) {
+    uint32_t r;
+    memcpy(&r, &x, 4);
+    return r;
+}
+int main(void) {
+    const float samples[] = {0.0f, -0.0f, 3.125f, -19.25f, 123456.75f,
+                             1.0f / 1024.0f, -1.0f / 1024.0f};
+    unsigned i;
+    for (i = 0; i < sizeof(samples) / sizeof(samples[0]); ++i) {
+        float output = 71.0f;
+        if (bits64(mini_float_to_double(&samples[i])) !=
+            bits64((double)samples[i])) return 1;
+        mini_float_copy(&output, &samples[i]);
+        if (bits32(output) != bits32(samples[i])) return 2;
+    }
+    return 42;
+}
+EOF
 check_qemu_exit() {
     emulator=$1
     binary=$2
@@ -1139,6 +1178,9 @@ for target in aarch64 loongarch64; do
     if [ "${FOUR_BACKEND_M30_FP_CALL:-0}" = "1" ]; then
         cases="$cases fp_call"
     fi
+    if [ "${FOUR_BACKEND_M31_FLOAT_PROMOTE:-0}" = "1" ]; then
+        cases="$cases float_promote"
+    fi
     if [ "$m2_enabled" = "1" ]; then
         # Independent originals for every new CFG/comparison fixture, not
         # merely an expected return code from a MiniC-owned executable.
@@ -1227,6 +1269,9 @@ for target in aarch64 loongarch64; do
         if [ "${FOUR_BACKEND_M30_FP_CALL:-0}" = "1" ]; then
             oracle_cases="$oracle_cases fp_call"
         fi
+        if [ "${FOUR_BACKEND_M31_FLOAT_PROMOTE:-0}" = "1" ]; then
+            oracle_cases="$oracle_cases float_promote"
+        fi
         for testcase in $oracle_cases; do
             "$gcc" -static -x c "$w/$testcase.i" "$w/driver_$testcase.c" \
                 -o "$w/$target.gnu-$testcase.elf"
@@ -1266,7 +1311,7 @@ for target in aarch64 loongarch64; do
                 "$gcc" -static "$w/$target.$testcase.o" "$w/driver_$testcase.c" -o "$w/$target.$testcase.elf" ;;
             u8_index|s8_index|u16_index|s16_index)
                 "$gcc" -static "$w/$target.$testcase.o" "$w/driver_$testcase.c" -o "$w/$target.$testcase.elf" ;;
-            size64_abi|size64_add|size64_conv|size64_compare|indirect_hooks|double_transport|double_div|fp_parameter|int_double|double_compare|fp_call|pointer_null|pointer_equality|function_address)
+            size64_abi|size64_add|size64_conv|size64_compare|indirect_hooks|double_transport|double_div|fp_parameter|int_double|double_compare|fp_call|float_promote|pointer_null|pointer_equality|function_address)
                 "$gcc" -static "$w/$target.$testcase.o" "$w/driver_$testcase.c" -o "$w/$target.$testcase.elf" ;;
             vararg_int|vararg_pointer)
                 "$gcc" -static "$w/$target.$testcase.o" "$w/driver_$testcase.c" -o "$w/$target.$testcase.elf" ;;
@@ -1412,6 +1457,9 @@ if [ "$m2_enabled" = "1" ]; then
     fi
     if [ "${FOUR_BACKEND_M30_FP_CALL:-0}" = "1" ]; then
         echo "FOUR_BACKEND_M30_FP_CALL=PASS architectures=2 GNU_QEMU_diff=2 direct_indirect=true fixed_FP_args=true independent_GP_FP_cursors=true"
+    fi
+    if [ "${FOUR_BACKEND_M31_FLOAT_PROMOTE:-0}" = "1" ]; then
+        echo "FOUR_BACKEND_M31_FLOAT_PROMOTE=PASS architectures=2 GNU_QEMU_diff=2 binary32_copy=true numeric_float_to_double=true signed_zero_preserved=true"
     fi
 else
     echo "FOUR_BACKEND_M1=PASS architectures=2 executable_QEMU_cases=8 GCC_independent_oracles=4"
