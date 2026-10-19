@@ -1111,20 +1111,20 @@ discovery baseline remains available; the new Make target is the strong
 
 The user authorized enabling the entire original BusyBox program set, not
 only individually cherry-picked applets. The independent opt-in diagnostic
-\`make check-x86_64-busybox-allyes-discovery\` therefore runs pinned,
-unmodified BusyBox 1.36.1 with upstream **\`make allyesconfig\`** and
+`make check-x86_64-busybox-allyes-discovery` therefore runs pinned,
+unmodified BusyBox 1.36.1 with upstream **`make allyesconfig`** and
 enumerates **actual C compiler invocations from real Kbuild**. A transparent
 CC wrapper always calls the real GNU compiler with its original arguments,
 then separately calls GNU preprocessing, MiniC x86-64, and GNU assembly.
 No MiniC object is substituted into BusyBox in this discovery mode;
 the existing certified 12-object mixed Kbuild test is unchanged.
 
-**Exact all-config qualification boundary:** upstream \`allyesconfig\` enables
-964 Kconfig symbols on the Ubuntu x86 host. Only the **\`CONFIG_WERROR\` warning
-policy** is then disabled and passed through upstream \`oldconfig\` so newer
-libselinux's deprecated \`security_context_t\` declarations do not abort the
+**Exact all-config qualification boundary:** upstream `allyesconfig` enables
+964 Kconfig symbols on the Ubuntu x86 host. Only the **`CONFIG_WERROR` warning
+policy** is then disabled and passed through upstream `oldconfig` so newer
+libselinux's deprecated `security_context_t` declarations do not abort the
 original unmodified C build. The effective config has **963 symbols set to
-\`y\`**. This is not identical to an untouched 964-symbol allyesconfig.
+`y`**. This is not identical to an untouched 964-symbol allyesconfig.
 All software applets remain requested by the Kconfig generator subject to
 Kconfig dependencies; the 963 count is all kinds of options, **not** 963
 individual applets or 963 C files. Additional host optional headers
@@ -1136,28 +1136,28 @@ the temporary diagnostic CI environment, not vendored into MiniC.
   checked 594 actual BusyBox Kbuild C translation units but exposed a
   common glibc/libselinux typedef parsing deficit:
   only **6/594** generated MiniC x86 native objects, while 584 MiniC
-  failures shared the *same* \`unsupported GNU typedef attribute\` error.
-- The existing \`src/frontend/attribute.c\` already recognizes
-  \`deprecated\`/\`__deprecated__\` as a diagnostic-only GNU attribute valid
-  on types. The typedef consumer accidentally accepted \`mode\`,
-  \`may_alias\`, \`aligned\`, \`transparent_union\`, but unconditionally
-  rejected \`deprecated\`. In
-  \`src/frontend/parser_typedef.c::consume_typedef_attribute\`,
-  accepting **only \`MINIC_ATTRIBUTE_DEPRECATED\`** on the already-verified
+  failures shared the *same* `unsupported GNU typedef attribute` error.
+- The existing `src/frontend/attribute.c` already recognizes
+  `deprecated`/`__deprecated__` as a diagnostic-only GNU attribute valid
+  on types. The typedef consumer accidentally accepted `mode`,
+  `may_alias`, `aligned`, `transparent_union`, but unconditionally
+  rejected `deprecated`. In
+  `src/frontend/parser_typedef.c::consume_typedef_attribute`,
+  accepting **only `MINIC_ATTRIBUTE_DEPRECATED`** on the already-verified
   TYPE target preserves original C type/ABI meaning and does not discard
   layout-bearing attributes or rewrite upstream headers.
 - A new reusable fixture in
-  \`tests/compiler/c0/run-x86_64-native-m1.sh\` confirms GCC runtime 42,
+  `tests/compiler/c0/run-x86_64-native-m1.sh` confirms GCC runtime 42,
   MiniC x86 native runtime 42 and RV64 assembly emission for
-  the original \`deprecated\` and \`__deprecated__\` typedef spellings.
+  the original `deprecated` and `__deprecated__` typedef spellings.
 
 **Final scoped validation**
 [focused #39182849843](https://github.com/yituanxing/minic-toolchain/actions/runs/39182849843)
 **SUCCESS**, including the new native GNU typedef C regression and
-\`TOOLCHAIN_FOCUSED_T1=PASS mode=all independent_test_checks=8 shared_builds=1\`.
+`TOOLCHAIN_FOCUSED_T1=PASS mode=all independent_test_checks=8 shared_builds=1`.
 On the same 963-enabled-symbol original BusyBox configuration and real
 Kbuild invocation list:
-- \`BUSYBOX_ALLYES_FRONTIER=DISCOVERY enabled_symbols=963 attempted_C_TUs=594 mini_objects=542 cpp_fail=4 minic_fail=48 asm_fail=0 gcc_fail=5 gcc_full_build=FAIL full_MiniC_busybox=NOT_TESTED\`.
+- `BUSYBOX_ALLYES_FRONTIER=DISCOVERY enabled_symbols=963 attempted_C_TUs=594 mini_objects=542 cpp_fail=4 minic_fail=48 asm_fail=0 gcc_fail=5 gcc_full_build=FAIL full_MiniC_busybox=NOT_TESTED`.
 - **542/594** produced independent MiniC x86-64 assembly and GNU
   relocatable objects. This is approximately 91% of **attempted C
   translation units**, and NOT 91% of BusyBox programs fully built,
@@ -1167,7 +1167,7 @@ Kbuild invocation list:
   two aggregate global-initializer gaps, one inline-asm constraint
   case, and smaller semantic/other exceptions. Distinct host failures
   include four missing/unsupported C header preprocess paths
-  (PAM \`security/pam_appl.h\`, legacy \`rpc/rpc.h\`) and five GNU
+  (PAM `security/pam_appl.h`, legacy `rpc/rpc.h`) and five GNU
   original object-build failures; counts overlap the same TU owners
   and should not be added to the 48.
 - The **original whole-project GCC build is still RED** in this maximal
@@ -1179,13 +1179,13 @@ Kbuild invocation list:
 The reusable full-config frontier is diagnostic-only and **does not
 silently turn failure into a runtime pass**. Per-TU source/object,
 GCC/CPP/MiniC/assembler outcomes and stderr are retained in immutable
-[CI artifact \`busybox-allyes-x86-frontier-v1\` (artifact 12156902895)](https://github.com/yituanxing/minic-toolchain/actions/runs/39182849843).
+[CI artifact `busybox-allyes-x86-frontier-v1` (artifact 12156902895)](https://github.com/yituanxing/minic-toolchain/actions/runs/39182849843).
 Temporary changes to the pre-existing focused workflow were restored
 byte-for-byte to main's original blob
-\`cd9a880a5a707f28b5ea63c364c1844ab35e1c56\` after the result.
+`cd9a880a5a707f28b5ea63c364c1844ab35e1c56` after the result.
 The unrelated legacy malformed Linux workflow remains a separate issue.
 
-**Next concrete real-project seam:** inspect the 28 \`Core kind 47\` call
+**Next concrete real-project seam:** inspect the 28 `Core kind 47` call
 failures with the x86 CALL ABI trace on their exact preprocessed input;
 categorize by source-verified record/class/register/stack cases before
 changing any ABI code. Address missing GCC baseline dependencies
