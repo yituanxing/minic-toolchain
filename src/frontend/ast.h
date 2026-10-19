@@ -415,6 +415,7 @@ typedef struct MinicFunction {
     bool is_internal;
     bool is_inline;
     bool is_noreturn;
+    bool is_constructor; /* Emit ELF .init_array pointer at startup. */
     bool is_referenced;
     bool force_emit;
     bool is_variadic;
@@ -716,6 +717,8 @@ bool minic_c0_program_set_function_noreturn(MinicC0Program *program,
 bool minic_c0_program_set_function_referenced(MinicC0Program *program,
                                               MinicFunctionId function_id,
                                               bool is_referenced);
+bool minic_c0_program_set_function_constructor(MinicC0Program *program,
+                                               MinicFunctionId function_id);
 bool minic_c0_program_set_function_force_emit(MinicC0Program *program,
                                               MinicFunctionId function_id,
                                               bool force_emit);
