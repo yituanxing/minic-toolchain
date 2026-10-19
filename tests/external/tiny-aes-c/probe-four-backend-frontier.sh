@@ -217,9 +217,9 @@ for target in aarch64 loongarch64; do
             python3 - "$vendor/aes.c" "$work/aes.c" <<'PY'
 import pathlib, sys
 src = pathlib.Path(sys.argv[1]).read_text()
-def replace_one(old, new):
+def replace_one(old, new, occurrences=1):
     global src
-    if src.count(old) != 1:
+    if src.count(old) != occurrences:
         raise SystemExit("UNEXPECTED_AES_TRACE_SOURCE " + repr(old))
     src = src.replace(old, new, 1)
 replace_one("static void KeyExpansion(uint8_t* RoundKey, const uint8_t* Key)",
@@ -233,7 +233,7 @@ replace_one("      // SubWord() is a function",
             "      // SubWord() is a function")
 replace_one("      tempa[3] = getSBoxValue(tempa[3]);",
             "      tempa[3] = getSBoxValue(tempa[3]);\n"
-            "      if (i == Nk) minic_trace[2] = tempa[0];")
+            "      if (i == Nk) minic_trace[2] = tempa[0];", occurrences=2)
 replace_one("      tempa[0] = tempa[0] ^ Rcon[i/Nk];",
             "      tempa[0] = tempa[0] ^ Rcon[i/Nk];\n"
             "      if (i == Nk) minic_trace[3] = tempa[0];")
