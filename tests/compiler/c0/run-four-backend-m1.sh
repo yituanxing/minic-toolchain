@@ -78,7 +78,9 @@ check_qemu_exit() {
     binary=$2
     expected=$3
     set +e
-    "$emulator" "$binary"
+    # Defend the shared regression runner against accidentally nonterminating
+    # generated branch/loop code. QEMU exit code 124 is an explicit failure.
+    timeout 15s "$emulator" "$binary"
     result=$?
     set -e
     if [ "$result" -ne "$expected" ]; then
@@ -101,6 +103,16 @@ for target in aarch64 loongarch64; do
     check_qemu_exit "$qemu" "$w/$target.gnu-wide.elf" 64
     cases="return add calc"
     if [ "${FOUR_BACKEND_M2:-0}" = "1" ]; then cases="$cases branch loop compare"; fi
+    if [ "${FOUR_BACKEND_M2:-0}" = "1" ]; then
+        # Independent originals for every new CFG/comparison fixture, not
+        # merely an expected return code from a MiniC-owned executable.
+        for testcase in branch loop compare; do
+            "$gcc" -static -x c "$w/$testcase.i" "$w/driver_$testcase.c" \
+                -o "$w/$target.gnu-$testcase.elf"
+            check_qemu_exit "$qemu" "$w/$target.gnu-$testcase.elf" 42
+            echo "FOUR_BACKEND_M2_GNU_ORACLE=PASS target=$target case=$testcase GCC_executable=1 QEMU_exit=42"
+        done
+    fi
     for testcase in $cases; do
         MINIC_M1_TRACE=1 "$MINIC_CC" --target="$target-linux" -S "$w/$testcase.i" \
             -o "$w/$target.$testcase.s"
@@ -135,7 +147,7 @@ for target in aarch64 loongarch64; do
     fi
 done
 if [ "${FOUR_BACKEND_M2:-0}" = "1" ]; then
-    echo "FOUR_BACKEND_M2=PASS architectures=2 executable_QEMU_cases=14 CFG_cases=4 comparison_cases=2 GCC_independent_oracles=4"
+    echo "FOUR_BACKEND_M2=PASS architectures=2 executable_QEMU_cases=14 CFG_cases=4 comparison_cases=2 GCC_independent_oracles=10"
 else
     echo "FOUR_BACKEND_M1=PASS architectures=2 executable_QEMU_cases=8 GCC_independent_oracles=4"
 fi
