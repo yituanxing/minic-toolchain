@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-"""Read-only BusyBox 1.36.1 allyesconfig MiniC frontier via real Kbuild CC invocations.
+"""Pinned original BusyBox 1.36.1 upstream-Kbuild x86-64 MiniC frontier.
 
-Invoke as a controller from the existing pinned BusyBox probe, or as the
-CC proxy selected by make. The proxy ALWAYS calls the original GCC compiler
-with the original arguments; MiniC only observes an independent -E -P
-preprocessed snapshot and never supplies any object to the GNU build.
+Default discovery mode is read-only: the proxy executes GCC on every original
+C owner and independently snapshots the same CPP input for MiniC codegen.
+Only the explicit BUSYBOX_ALLYES_MIXED_COHORT=1 host-compatible mode can route
+precisely selected GNU-assembled MiniC objects into live Kbuild CC owners,
+then require real GNU linker + differential executable runtime verification.
+Neither mode edits the original BusyBox C files or changes GNU's command flags.
 """
 import argparse
 import hashlib
