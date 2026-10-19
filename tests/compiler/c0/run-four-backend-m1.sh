@@ -88,13 +88,22 @@ cat > "$w/driver_global_int.c" <<'EOF'
 extern int mini_global_int(void);
 int main(void) { return mini_global_int(); }
 EOF
+# GNU consumes the actual symbol and bytes emitted by MiniC; this
+# isolates ELF flat byte-array initialization from not-yet-supported
+# pointer arithmetic, byte-load Core instructions and int conversion.
 cat > "$w/global_array.i" <<'EOF'
-static const unsigned char table[4] = { 7, 8, 9, 10 };
-int mini_global_array(void) { return (int)sizeof(table) + 38; }
+const unsigned char mini_table[4] = { 7, 8, 9, 10 };
+int mini_global_array(void) { return 42; }
 EOF
 cat > "$w/driver_global_array.c" <<'EOF'
+extern const unsigned char mini_table[4];
 extern int mini_global_array(void);
-int main(void) { return mini_global_array(); }
+int main(void) {
+    if (mini_table[0] != 7 || mini_table[1] != 8 ||
+        mini_table[2] != 9 || mini_table[3] != 10)
+        return 1;
+    return mini_global_array();
+}
 EOF
 # M2-stack ABI extension: the ninth and tenth original C integer
 # parameters are supplied by GNU at incoming sp+0 and sp+8, not registers.
