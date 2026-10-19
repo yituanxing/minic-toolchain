@@ -728,7 +728,7 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
             }
             if (base >= fn->value_count || index >= fn->value_count ||
                 !minic_type_is_pointer(fn->values[base].type) ||
-                !small_integer_width(program, target, fn->values[index].type,
+                !scalar_integer_width(program, target, fn->values[index].type,
                                      &iw, &signed_index) ||
                 stride > 65535U ||
                 fprintf(out, "  ldr x9, [sp, #%zu]\n", (size_t)base * 8U) < 0 ||
@@ -739,6 +739,7 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                         : iw == 2U ? (signed_index
                                      ? "  ldrsh x10, [sp, #%zu]\n"
                                      : "  ldrh w10, [sp, #%zu]\n")
+                        : iw == 8U ? "  ldr x10, [sp, #%zu]\n"
                         : (signed_index
                                      ? "  ldrsw x10, [sp, #%zu]\n"
                                      : "  ldr w10, [sp, #%zu]\n"),
