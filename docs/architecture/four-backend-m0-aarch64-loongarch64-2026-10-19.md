@@ -298,3 +298,104 @@ two-parent merge `82ad2768cb3f837aeb027ab2cff7554aaa2c07cc`: upstream x86
 codegen and original BusyBox owner-gate tests have exact main file identities.
 `main` is now behind-by-0 relative to this Draft PR; the merge changed no
 AArch64/LoongArch64 source semantics.
+
+
+## M3 direct-call and original tinyAES sequence — 2026-10-19
+
+**Follow the original x86 rollout order; never promote a synthetic smoke test
+to real-project acceptance:**
+
+1. Real ELF/GNU/QEMU ABI smoke: small integer returns, calls, CFG, stack
+   argument entry and target-specific prologue/epilogue. Keep one shared
+   test harness and architecture-specific ABI ownership.
+2. Original frozen **tinyAES**, then unchanged pinned **cJSON**, with
+   independent cross-GNU executables, exact stdout/stderr/exit oracles,
+   per-target GNU assembly/link and QEMU.
+3. Only after those succeed: zlib, Lua, SQLite, TinyCC and finally
+   BusyBox, in roughly the same increasing-complexity order as x86.
+4. The Linux 2064-object/kernel/QEMU acceptance is an **RV64 baseline**,
+   not evidence that either new ISA can compile Linux. Do not claim
+   new-ISA Linux readiness from earlier RV64 runs.
+5. Source-driven expansion only: inspect the actual Core/frontier and
+   existing x86 code for the operation; implement target-owned pieces,
+   share only genuinely architecture-independent data/test mechanics;
+   rerun new ISA GNU/QEMU and unaffected original RV64/x86 gates.
+   No premature generic Machine IR or synthetic fallback C owners.
+
+### New scoped direct int call behavior
+
+Both AArch64 and LoongArch64 Core emitters now handle
+`MINIC_CORE_INSTRUCTION_CALL` for nonvariadic calls with 0–8 ordinary
+signed 32-bit integer arguments and signed `int` return. Arguments
+are loaded from Core SSA slots into the separate ISA's first eight
+integer argument registers; link register (`x30` or `$ra`) is saved
+in the own frame and restored before `ret`, allowing nested calls
+and recursion without corrupting the caller's return address.
+Unsupported indirect/variadic, non-int and >8 outgoing call shapes
+fail closed. Previously tested 9/10-parameter **incoming** ABI remains
+separate and does not imply 9/10 outgoing arguments.
+
+The preexisting `tests/compiler/c0/run-four-backend-m1.sh` now has
+`FOUR_BACKEND_M3_CALL=1`, invoked separately by
+`make check-four-backend-m3-call`. It checks GNU→MiniC caller,
+MiniC→GNU callee, an in-object static MiniC helper, and recursive
+MiniC nested calls as suitable, using three actually executing call
+cases per ISA with independent GNU-compiled reference executables.
+A ninth-argument *MiniC caller* is a deliberate fail-closed negative
+case. Existing M1, M2 and M2 stack targets are unchanged.
+
+**Actual [Actions #39204803677](https://github.com/yituanxing/minic-toolchain/actions/runs/39204803677) SUCCESS:**
+
+```text
+FOUR_BACKEND_M1=PASS architectures=2 executable_QEMU_cases=8 GCC_independent_oracles=4
+FOUR_BACKEND_M2=PASS architectures=2 executable_QEMU_cases=14 CFG_cases=4 comparison_cases=2 GCC_independent_oracles=10
+FOUR_BACKEND_M2_STACK=PASS architectures=2 executable_QEMU_cases=18 ninth_tenth_arg_cases=4 GCC_independent_oracles=14
+FOUR_BACKEND_M3_CALL_TARGET=PASS target=aarch64 MiniC_GNU_link_QEMU=10 direct_call_cases=3 GNU_oracles=3 unsupported_calls=fail-closed
+FOUR_BACKEND_M3_CALL_TARGET=PASS target=loongarch64 MiniC_GNU_link_QEMU=10 direct_call_cases=3 GNU_oracles=3 unsupported_calls=fail-closed
+FOUR_BACKEND_M3_CALL=PASS architectures=2 executable_QEMU_cases=20 direct_calls=6 GNU_independent_oracles=16
+TOOLCHAIN_FOCUSED_T1=PASS mode=all independent_test_checks=8 shared_builds=1
+```
+
+### Original tinyAES was actually attempted, not asserted passing
+
+Next used the **existing frozen upstream** `tests/vendor/tiny-aes-c/upstream`
+and `aes128_ecb_vectors.c` harness, original source hashes, original
+local header preprocessing and AES build flags from the already-tested
+x86 `probe-x86_64.sh`, with separate cross-GNU compiler/assembler/
+static linker/QEMU oracles. No upstream test or source modifications.
+
+**Actual [Actions #39205088076](https://github.com/yituanxing/minic-toolchain/actions/runs/39205088076) SUCCESS at frontier auditing, not at MiniC AES compilation:**
+
+```text
+FOUR_BACKEND_TINYAES_GNU=PASS target=aarch64 original_source=1 QEMU_exit=0
+FOUR_BACKEND_TINYAES=BLOCKED target=aarch64 stage=MiniC_line_or_Core input=original_AES128_ECB
+AArch64: global objects / file asm not yet supported
+FOUR_BACKEND_TINYAES_GNU=PASS target=loongarch64 original_source=1 QEMU_exit=0
+FOUR_BACKEND_TINYAES=BLOCKED target=loongarch64 stage=MiniC_line_or_Core input=original_AES128_ECB
+LoongArch64: global objects / file asm not yet supported
+FOUR_BACKEND_TINYAES_FRONTIER=COMPLETE architectures=2 verified_runtime=0 blocked=2
+TOOLCHAIN_FOCUSED_T1=PASS mode=all independent_test_checks=8 shared_builds=1
+```
+
+This is an **honest measured frontier**, not a real-project PASS.
+`make check-four-backend-tinyaes-frontier` reuses actual original
+source and verifies the GNU references, then reports the MiniC stage
+explicitly as BLOCKED with diagnostic provenance. For both ISAs the
+earliest fail-closed frontier is currently the global object/file
+assembly gate in target emission, before any target-level machine
+instructions for global reads and initialized data are admitted.
+
+**Next source-driven change:** inspect the pinned original AES global
+objects and the existing shared `MinicDataLayout` global relocation/
+initializer metadata plus proven x86 `x86_emit_global_*` routines;
+implement only observed integer/byte/array global ELF storage/access
+under AArch64/LoongArch's own relocation/addressing model, without
+copying x86 SysV ABI or claiming all globals are supported. Rerun the
+unchanged original AES source and record any *next* true blocker
+before implementing speculative new architecture layers. Promote to
+PASS only after an actual MiniC-owned static ELF executes with the
+original GNU oracle matched byte-for-byte on each ISA.
+
+Temporary focused CI edits for both M3 and tinyAES frontier runs were
+reverted byte-identically to original main workflow SHA
+`cd9a880a5a707f28b5ea63c364c1844ab35e1c56`.
