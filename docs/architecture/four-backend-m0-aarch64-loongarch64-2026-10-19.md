@@ -238,3 +238,60 @@ to the original focused workflow baseline blob
 stack-passed integer arguments and target-specific call instructions,
 then original tinyAES/cJSON C owners. Keep new target ABI logic
 independent and share only demonstrated test/controller duplication.
+
+
+## M2 stack-argument ABI: GNU caller to MiniC 9/10 int parameters — 2026-10-19
+
+This is a **narrow, verified extension** of the two original Core emitters,
+not full new-ISA call lowering or a claim to compile tinyAES/cJSON.
+AArch64 AAPCS64 and LoongArch64 lp64d each pass the first eight ordinary
+`int` arguments in their own integer registers. The ninth and tenth
+come from separate 8-byte-aligned slots on the **caller's** stack. Both
+machine emitters now access those original stack arguments after their
+own 16-byte-aligned local frame is allocated. No x86-64, RV64, shared
+Frontend or Core IR implementation was changed.
+
+- AArch64: load `w9` from `[sp, #frame + (index - 8) * 8]` and store the
+  low 32 bits in the existing private SSA value slot.
+- LoongArch64: load `$t0` from `$sp + frame + (index - 8) * 8` and store
+  into the existing private value slot; reject any non-encodable signed
+  12-bit memory offset. This deliberately supports at most 10 ordinary
+  `int` parameters for now, with no silent acceptance of wider ABIs.
+- Each new GNU C driver calls an independently compiled MiniC-owned
+  function in a distinct translation unit. The `stack9` and `stack10`
+  bodies exercise *all* arguments, including a negative tenth argument.
+  The identical original C bodies plus GNU caller also compile and
+  execute independently as reference executables for each ISA.
+- Reuses the original `run-four-backend-m1.sh` harness; separately gated
+  by `make check-four-backend-m2-stack`. Previous M1 and M2 make targets
+  still run without the new cases, preserving their precise acceptance
+  baselines. Unsupported globals remain an explicit fail-closed negative
+  test.
+
+**Executed CI:** [#39203749011](https://github.com/yituanxing/minic-toolchain/actions/runs/39203749011)
+returned SUCCESS with independent GNU assembler/static linker/QEMU
+runtime and the existing eight focused RV64/MiniAR/MiniLD checks:
+
+```text
+FOUR_BACKEND_M1=PASS architectures=2 executable_QEMU_cases=8 GCC_independent_oracles=4
+FOUR_BACKEND_M2=PASS architectures=2 executable_QEMU_cases=14 CFG_cases=4 comparison_cases=2 GCC_independent_oracles=10
+FOUR_BACKEND_M2_STACK_TARGET=PASS target=aarch64 MiniC_GNU_link_QEMU=9 GNU_stack_argument_oracles=2
+FOUR_BACKEND_M2_STACK_TARGET=PASS target=loongarch64 MiniC_GNU_link_QEMU=9 GNU_stack_argument_oracles=2
+FOUR_BACKEND_M2_STACK=PASS architectures=2 executable_QEMU_cases=18 ninth_tenth_arg_cases=4 GCC_independent_oracles=14
+TOOLCHAIN_FOCUSED_T1=PASS mode=all independent_test_checks=8 shared_builds=1
+```
+
+**Honest remaining boundary:** This verifies only GNU→MiniC *callee*
+entry with up to ten signed 32-bit integer arguments, not a MiniC
+caller, preservation of return-address registers during nested calls,
+global object relocation, pointers, floating-point, variadic or aggregate
+ABI, or any original full real project. The next real pressure points
+are target-owned direct calls and global-data ELF access, followed by
+unchanged tinyAES/cJSON source on each QEMU target. No speculative
+Machine IR or universal calling convention was added.
+
+The temporary CI branch allowlist and cross-tool installation step
+were restored byte-for-byte to original focused-workflow blob
+`cd9a880a5a707f28b5ea63c364c1844ab35e1c56` after the green run.
+The separate PR #526 x86 ABI fix in newer `main` still needs reconciliation
+before merging PR #527.
