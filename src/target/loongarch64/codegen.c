@@ -141,6 +141,27 @@ static bool frame_objects(const MinicC0Program *program,
     return true;
 }
 
+/* lp64d load/store immediates are signed 12-bit. Keep the original
+ * direct encoding for small frames; for real KeyExpansion-sized frames,
+ * materialize the full SP-relative address in reserved $t3.  No other
+ * emitter instruction may treat $t3 as a live Core value. */
+static bool emit_sp_mem(FILE *out, const char *op, const char *reg,
+                        size_t offset) {
+    if (offset <= 2047U)
+        return fprintf(out, "  %s %s, $sp, %zu\n", op, reg, offset) >= 0;
+    if (offset > 16384U) return false;
+    return fprintf(out, "  li.d $t3, %zu\n"
+                        "  add.d $t3, $sp, $t3\n"
+                        "  %s %s, $t3, 0\n", offset, op, reg) >= 0;
+}
+static bool emit_sp_adjust(FILE *out, size_t bytes, bool restore) {
+    if (bytes == 0U) return true;
+    if (bytes > 8192U) return false;
+    return fprintf(out, "  li.d $t3, %zu\n"
+                        "  %s $sp, $sp, $t3\n", bytes,
+                   restore ? "add.d" : "sub.d") >= 0;
+}
+
 static bool emit_function(FILE *out, const MinicC0Program *program,
                           const MinicTargetInfo *target,
                           const MinicFunction *decl,
@@ -251,10 +272,9 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
         return false;
     if (fprintf(out, ".p2align 2\n.type %s,@function\n%s:\n", name, name) < 0)
         return false;
-    if (frame != 0U && fprintf(out, "  addi.d $sp, $sp, -%zu\n", frame) < 0) return false;
+    if (!emit_sp_adjust(out, frame, false)) return false;
     if (has_direct_calls &&
-        fprintf(out, "  st.d $ra, $sp, %zu\n",
-                save_offset) < 0) return false;
+        !emit_sp_mem(out, "st.d", "$ra", save_offset)) return false;
     for (size_t block_id = 0U; block_id < fn->block_count; ++block_id) {
         block = &fn->blocks[block_id];
         if (fprintf(out, ".Lmini_loong_f%zu_b%zu:\n", id, block_id) < 0)
@@ -272,10 +292,10 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                 addr >= fn->value_count || value >= fn->value_count ||
                 !minic_type_is_pointer(fn->values[addr].type) ||
                 !valid_int_or_pointer(fn->values[value].type)) return false;
-            if (fprintf(out, "  ld.d $t1, $sp, %zu\n", (size_t)addr * 8U) < 0 ||
-                fprintf(out, minic_type_is_pointer(fn->values[value].type)
-                             ? "  ld.d $t0, $sp, %zu\n"
-                             : "  ld.w $t0, $sp, %zu\n", (size_t)value * 8U) < 0 ||
+            if (!emit_sp_mem(out, "ld.d", "$t1", (size_t)addr * 8U) ||
+                !emit_sp_mem(out, minic_type_is_pointer(fn->values[value].type)
+                                       ? "ld.d" : "ld.w", "$t0",
+                             (size_t)value * 8U) ||
                 fputs(minic_type_is_pointer(fn->values[value].type)
                           ? "  st.d $t0, $t1, 0\n"
                           : "  st.w $t0, $t1, 0\n", out) == EOF) return false;
@@ -306,9 +326,9 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
         case MINIC_CORE_INSTRUCTION_GLOBAL_ADDRESS:
             if (ins->value.global_id >= fn->global_count ||
                 fn->globals[ins->value.global_id].name == NULL ||
-                fprintf(out, "  la.global $t0, %s\n"
-                             "  st.d $t0, $sp, %zu\n",
-                        fn->globals[ins->value.global_id].name, offset) < 0)
+                fprintf(out, "  la.global $t0, %s\n",
+                        fn->globals[ins->value.global_id].name) < 0 ||
+                !emit_sp_mem(out, "st.d", "$t0", offset))
                 return false;
             continue;
         case MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS: {
@@ -318,9 +338,9 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                                (size_t)ins->value.object_id,
                                &object_offset, NULL) ||
                 fprintf(out, "  li.d $t0, %zu\n"
-                             "  add.d $t0, $sp, $t0\n"
-                             "  st.d $t0, $sp, %zu\n",
-                        object_offset, offset) < 0) return false;
+                             "  add.d $t0, $sp, $t0\n",
+                        object_offset) < 0 ||
+                !emit_sp_mem(out, "st.d", "$t0", offset)) return false;
             continue;
         }
 
@@ -330,7 +350,7 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
             if (base >= fn->value_count ||
                 !minic_type_is_pointer(fn->values[base].type) ||
                 bytes > 2047U ||
-                fprintf(out, "  ld.d $t0, $sp, %zu\n", (size_t)base * 8U) < 0 ||
+                !emit_sp_mem(out, "ld.d", "$t0", (size_t)base * 8U) ||
                 (bytes != 0U && fprintf(out, "  addi.d $t0, $t0, %zu\n", bytes) < 0))
                 return false;
             break;
@@ -342,8 +362,8 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
             if (base >= fn->value_count || index >= fn->value_count ||
                 !minic_type_is_pointer(fn->values[base].type) ||
                 !valid_int(fn->values[index].type) || stride > 2047U ||
-                fprintf(out, "  ld.d $t0, $sp, %zu\n", (size_t)base * 8U) < 0 ||
-                fprintf(out, "  ld.w $t1, $sp, %zu\n", (size_t)index * 8U) < 0)
+                !emit_sp_mem(out, "ld.d", "$t0", (size_t)base * 8U) ||
+                !emit_sp_mem(out, "ld.w", "$t1", (size_t)index * 8U))
                 return false;
             if (stride != 0U) {
                 if (fprintf(out, "  addi.d $t2, $zero, %zu\n"
@@ -364,14 +384,14 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                 !minic_type_is_pointer(fn->values[source].type) ||
                 !minic_core_scalar_bitcast_types_valid(
                     ins->type, fn->values[source].type) ||
-                fprintf(out, "  ld.d $t0, $sp, %zu\n", (size_t)source * 8U) < 0) return false;
+                !emit_sp_mem(out, "ld.d", "$t0", (size_t)source * 8U)) return false;
             break;
         }
         case MINIC_CORE_INSTRUCTION_LOAD: {
             const MinicCoreValueId addr = ins->value.load.address;
             if (addr >= fn->value_count ||
                 !minic_type_is_pointer(fn->values[addr].type) ||
-                fprintf(out, "  ld.d $t1, $sp, %zu\n", (size_t)addr * 8U) < 0 ||
+                !emit_sp_mem(out, "ld.d", "$t1", (size_t)addr * 8U) ||
                 fputs(minic_type_is_pointer(ins->type)
                           ? "  ld.d $t0, $t1, 0\n"
                           : "  ld.w $t0, $t1, 0\n", out) == EOF)
@@ -384,11 +404,13 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
             for (j = 0U; j < ins->value.call.argument_count; ++j) {
                 const MinicCoreCallArgument *arg =
                     &fn->call_arguments[ins->value.call.argument_begin + j];
-                if (fprintf(out,
-                            minic_type_is_pointer(callee->parameter_types[j])
-                                ? "  ld.d $a%zu, $sp, %zu\n"
-                                : "  ld.w $a%zu, $sp, %zu\n",
-                            j, (size_t)arg->value.value_id * 8U) < 0)
+                if (!emit_sp_mem(out, minic_type_is_pointer(callee->parameter_types[j])
+                                        ? "ld.d" : "ld.w",
+                             j == 0U ? "$a0" : j == 1U ? "$a1" :
+                             j == 2U ? "$a2" : j == 3U ? "$a3" :
+                             j == 4U ? "$a4" : j == 5U ? "$a5" :
+                             j == 6U ? "$a6" : "$a7",
+                             (size_t)arg->value.value_id * 8U))
                     return false;
             }
             if (fprintf(out, "  bl %s\n", callee->name) < 0)
@@ -402,10 +424,12 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
             size_t index = (size_t)ins->value.parameter_index;
             if (index >= fn->parameter_count) return false;
             if (index < 8U) {
-                if (fprintf(out, minic_type_is_pointer(ins->type)
-                                 ? "  st.d $a%zu, $sp, %zu\n"
-                                 : "  st.w $a%zu, $sp, %zu\n",
-                            index, offset) < 0)
+                if (!emit_sp_mem(out, minic_type_is_pointer(ins->type) ? "st.d" : "st.w",
+                             index == 0U ? "$a0" : index == 1U ? "$a1" :
+                             index == 2U ? "$a2" : index == 3U ? "$a3" :
+                             index == 4U ? "$a4" : index == 5U ? "$a5" :
+                             index == 6U ? "$a6" : "$a7",
+                             offset))
                     return false;
             } else {
                 /* LoongArch lp64d: eight integer argument registers; the
@@ -413,11 +437,10 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                  * Stack slots are addressed after allocating our frame.
                  * The largest offset is 2016+8, within signed imm12. */
                 size_t incoming = frame + (index - 8U) * 8U;
-                if (incoming > 2047U ||
-                    fprintf(out, minic_type_is_pointer(ins->type)
-                                 ? "  ld.d $t0, $sp, %zu\n  st.d $t0, $sp, %zu\n"
-                                 : "  ld.w $t0, $sp, %zu\n  st.w $t0, $sp, %zu\n",
-                            incoming, offset) < 0)
+                if (!emit_sp_mem(out, minic_type_is_pointer(ins->type)
+                                        ? "ld.d" : "ld.w", "$t0", incoming) ||
+                    !emit_sp_mem(out, minic_type_is_pointer(ins->type)
+                                        ? "st.d" : "st.w", "$t0", offset))
                     return false;
             }
             continue;
@@ -434,8 +457,8 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
             if (lhs >= fn->value_count || rhs >= fn->value_count ||
                 !valid_int(fn->values[lhs].type) ||
                 !valid_int(fn->values[rhs].type) ||
-                fprintf(out, "  ld.w $t0, $sp, %zu\n", (size_t)lhs * 8U) < 0 ||
-                fprintf(out, "  ld.w $t1, $sp, %zu\n", (size_t)rhs * 8U) < 0 ||
+                !emit_sp_mem(out, "ld.w", "$t0", (size_t)lhs * 8U) ||
+                !emit_sp_mem(out, "ld.w", "$t1", (size_t)rhs * 8U) ||
                 fputs(opcode, out) == EOF) return false;
             break;
         }
@@ -446,8 +469,8 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
             if (lhs >= fn->value_count || rhs >= fn->value_count ||
                 !valid_int(fn->values[lhs].type) ||
                 !valid_int(fn->values[rhs].type) ||
-                fprintf(out, "  ld.w $t0, $sp, %zu\n", (size_t)lhs * 8U) < 0 ||
-                fprintf(out, "  ld.w $t1, $sp, %zu\n", (size_t)rhs * 8U) < 0 ||
+                !emit_sp_mem(out, "ld.w", "$t0", (size_t)lhs * 8U) ||
+                !emit_sp_mem(out, "ld.w", "$t1", (size_t)rhs * 8U) ||
                 fputs(ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_LESS
                           ? "  slt $t0, $t0, $t1\n"
                           : "  xor $t0, $t0, $t1\n  sltui $t0, $t0, 1\n", out) == EOF)
@@ -458,7 +481,7 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
             const MinicCoreValueId v = ins->value.operand;
             if (v >= fn->value_count ||
                 !valid_int_or_bool(fn->values[v].type) ||
-                fprintf(out, "  ld.w $t0, $sp, %zu\n", (size_t)v * 8U) < 0 ||
+                !emit_sp_mem(out, "ld.w", "$t0", (size_t)v * 8U) ||
                 fputs("  sltui $t0, $t0, 1\n", out) == EOF)
                 return false;
             break;
@@ -466,27 +489,25 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
         case MINIC_CORE_INSTRUCTION_INTEGER_CONVERSION: {
             MinicCoreValueId src = ins->value.operand;
             if (src >= fn->value_count || !valid_int(fn->values[src].type) ||
-                fprintf(out, "  ld.w $t0, $sp, %zu\n", (size_t)src * 8U) < 0)
+                !emit_sp_mem(out, "ld.w", "$t0", (size_t)src * 8U))
                 return false;
             break;
         }
         default:
             return false;
         }
-        if (fprintf(out, minic_type_is_pointer(ins->type)
-                             ? "  st.d $t0, $sp, %zu\n"
-                             : "  st.w $t0, $sp, %zu\n", offset) < 0) return false;
+        if (!emit_sp_mem(out, minic_type_is_pointer(ins->type)
+                              ? "st.d" : "st.w", "$t0", offset)) return false;
     }
         switch (block->terminator.kind) {
         case MINIC_CORE_TERMINATOR_RETURN:
             if ((!minic_type_is_void(fn->return_type) &&
-                 fprintf(out, minic_type_is_pointer(fn->return_type)
-                                  ? "  ld.d $a0, $sp, %zu\n"
-                                  : "  ld.w $a0, $sp, %zu\n",
-                         (size_t)block->terminator.return_value * 8U) < 0) ||
-                (has_direct_calls && fprintf(out, "  ld.d $ra, $sp, %zu\n",
-                                             save_offset) < 0) ||
-                (frame != 0U && fprintf(out, "  addi.d $sp, $sp, %zu\n", frame) < 0) ||
+                 !emit_sp_mem(out, minic_type_is_pointer(fn->return_type)
+                                         ? "ld.d" : "ld.w",
+                                   "$a0",
+                                   (size_t)block->terminator.return_value * 8U)) ||
+                (has_direct_calls && !emit_sp_mem(out, "ld.d", "$ra", save_offset)) ||
+                (!emit_sp_adjust(out, frame, true)) ||
                 fputs("  ret\n", out) == EOF) return false;
             break;
         case MINIC_CORE_TERMINATOR_BRANCH:
@@ -495,11 +516,11 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                 return false;
             break;
         case MINIC_CORE_TERMINATOR_CONDITIONAL_BRANCH:
-            if (fprintf(out,
-                        "  ld.w $t0, $sp, %zu\n"
+            if (!emit_sp_mem(out, "ld.w", "$t0",
+                             (size_t)block->terminator.conditional.condition * 8U) ||
+                fprintf(out,
                         "  bnez $t0, .Lmini_loong_f%zu_b%u\n"
                         "  b .Lmini_loong_f%zu_b%u\n",
-                        (size_t)block->terminator.conditional.condition * 8U,
                         id, (unsigned int)block->terminator.conditional.when_true,
                         id, (unsigned int)block->terminator.conditional.when_false) < 0)
                 return false;
