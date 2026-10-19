@@ -1300,7 +1300,7 @@ int main(void) {
     if (mini_u64_shl(b, 13) != (b << 13)) return 6;
     if (mini_u64_varshift(a, 41UL) != (a >> 41UL)) return 7;
     if (mini_s64_shr(neg, 17) != (neg >> 17)) return 8;
-    if (mini_utf8_fragment(a, 0xc0) != ((a | 0xc0UL) & 0xffUL) | (a >> 6))
+    if (mini_utf8_fragment(a, 0xc0) != (((a | 0xc0UL) & 0xffUL) | (a >> 6)))
         return 9;
     return 42;
 }
