@@ -654,6 +654,30 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
             offset = (size_t)ins->result * 8U;
         }
         switch (ins->kind) {
+        /* Ordered IEEE comparisons: AArch64 FCMP sets C=1 on unordered.
+         * 'lt' (N!=V) is WRONG for NaN. Use unsigned lo/ls conditions:
+         * those are true only for ordered < or <= respectively. */
+        case MINIC_CORE_INSTRUCTION_DOUBLE_EQUAL:
+        case MINIC_CORE_INSTRUCTION_DOUBLE_LESS:
+        case MINIC_CORE_INSTRUCTION_DOUBLE_LESS_EQUAL: {
+            const MinicCoreValueId lhs = ins->value.binary.left;
+            const MinicCoreValueId rhs = ins->value.binary.right;
+            const char *condition = ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_EQUAL
+                ? "eq" : ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_LESS ? "lo" : "ls";
+            if (!minic_type_equal(ins->type, minic_type_int()) ||
+                lhs >= fn->value_count || rhs >= fn->value_count ||
+                !minic_type_is_double(fn->values[lhs].type) ||
+                !minic_type_is_double(fn->values[rhs].type) ||
+                fprintf(out,
+                        "  ldr d9, [sp, #%zu]\n"
+                        "  ldr d10, [sp, #%zu]\n"
+                        "  fcmp d9, d10\n"
+                        "  cset w9, %s\n",
+                        (size_t)lhs * 8U, (size_t)rhs * 8U,
+                        condition) < 0)
+                return false;
+            break;
+        }
         case MINIC_CORE_INSTRUCTION_DOUBLE_DIVIDE: {
             const MinicCoreValueId lhs = ins->value.binary.left;
             const MinicCoreValueId rhs = ins->value.binary.right;
