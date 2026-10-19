@@ -432,8 +432,13 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
         case MINIC_CORE_INSTRUCTION_GLOBAL_ADDRESS:
             if (ins->value.global_id >= fn->global_count ||
                 fn->globals[ins->value.global_id].name == NULL ||
-                fprintf(out, "  adrp x9, :got:%s\n"
-                             "  ldr x9, [x9, :got_lo12:%s]\n"
+                /* Static ELF GNU AS/LD backend: use the symbol's direct
+                 * PC-relative page+low12 address, not a GOT-indirected
+                 * local-object reference.  Preserve the full 64-bit
+                 * pointer; the original AES vector_key must not resolve
+                 * as the neighboring S-box object. */
+                fprintf(out, "  adrp x9, %s\n"
+                             "  add x9, x9, :lo12:%s\n"
                              "  str x9, [sp, #%zu]\n",
                         fn->globals[ins->value.global_id].name,
                         fn->globals[ins->value.global_id].name, offset) < 0)
