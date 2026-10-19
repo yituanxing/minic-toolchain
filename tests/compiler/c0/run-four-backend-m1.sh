@@ -9,7 +9,7 @@ QEMU_LOONGARCH64=qemu-loongarch64
 w=$(mktemp -d)
 trap 'rm -rf "$w"' EXIT HUP INT TERM
 m2_enabled=0
-if [ "${FOUR_BACKEND_M2:-0}" = "1" ] || [ "${FOUR_BACKEND_M2_STACK:-0}" = "1" ] || [ "${FOUR_BACKEND_M3_CALL:-0}" = "1" ] || [ "${FOUR_BACKEND_M4_GLOBAL:-0}" = "1" ] || [ "${FOUR_BACKEND_M5_POINTER:-0}" = "1" ] || [ "${FOUR_BACKEND_M6_ADDRESS:-0}" = "1" ] || [ "${FOUR_BACKEND_M7_FRAME:-0}" = "1" ] || [ "${FOUR_BACKEND_M8_NARROW:-0}" = "1" ] || [ "${FOUR_BACKEND_M9_UNSIGNED:-0}" = "1" ]; then
+if [ "${FOUR_BACKEND_M2:-0}" = "1" ] || [ "${FOUR_BACKEND_M2_STACK:-0}" = "1" ] || [ "${FOUR_BACKEND_M3_CALL:-0}" = "1" ] || [ "${FOUR_BACKEND_M4_GLOBAL:-0}" = "1" ] || [ "${FOUR_BACKEND_M5_POINTER:-0}" = "1" ] || [ "${FOUR_BACKEND_M6_ADDRESS:-0}" = "1" ] || [ "${FOUR_BACKEND_M7_FRAME:-0}" = "1" ] || [ "${FOUR_BACKEND_M8_NARROW:-0}" = "1" ] || [ "${FOUR_BACKEND_M9_UNSIGNED:-0}" = "1" ] || [ "${FOUR_BACKEND_M10_MOD:-0}" = "1" ]; then
     m2_enabled=1
 fi
 cat > "$w/return.i" <<'EOF'
@@ -354,6 +354,36 @@ int main(void) {
     return mini_unsigned_index(a, 2u);
 }
 EOF
+# M10: original AES KeyExpansion unsigned i %% Nk is a real
+# signedness-sensitive remainder, not a signed div shortcut.
+cat > "$w/umod.i" <<'EOF'
+int mini_umod(unsigned int x) { return 40 + (int)(x % 3u); }
+EOF
+cat > "$w/driver_umod.c" <<'EOF'
+extern int mini_umod(unsigned int);
+int main(void) { return mini_umod(0x80000000u); }
+EOF
+cat > "$w/smod.i" <<'EOF'
+int mini_smod(int x) { return 43 + x % 3; }
+EOF
+cat > "$w/driver_smod.c" <<'EOF'
+extern int mini_smod(int);
+int main(void) { return mini_smod(-7); }
+EOF
+cat > "$w/udiv.i" <<'EOF'
+int mini_udiv(unsigned int x) { return 39 + (int)(x / 0x55555555u); }
+EOF
+cat > "$w/driver_udiv.c" <<'EOF'
+extern int mini_udiv(unsigned int);
+int main(void) { return mini_udiv(0xffffffffu); }
+EOF
+cat > "$w/sdiv.i" <<'EOF'
+int mini_sdiv(int x) { return 84 + x / 3; }
+EOF
+cat > "$w/driver_sdiv.c" <<'EOF'
+extern int mini_sdiv(int);
+int main(void) { return mini_sdiv(-126); }
+EOF
 check_qemu_exit() {
     emulator=$1
     binary=$2
@@ -408,6 +438,9 @@ for target in aarch64 loongarch64; do
     if [ "${FOUR_BACKEND_M9_UNSIGNED:-0}" = "1" ]; then
         cases="$cases unsigned_less unsigned_add unsigned_index"
     fi
+    if [ "${FOUR_BACKEND_M10_MOD:-0}" = "1" ]; then
+        cases="$cases umod smod udiv sdiv"
+    fi
     if [ "$m2_enabled" = "1" ]; then
         # Independent originals for every new CFG/comparison fixture, not
         # merely an expected return code from a MiniC-owned executable.
@@ -435,6 +468,9 @@ for target in aarch64 loongarch64; do
         fi
         if [ "${FOUR_BACKEND_M9_UNSIGNED:-0}" = "1" ]; then
             oracle_cases="$oracle_cases unsigned_less unsigned_add unsigned_index"
+        fi
+        if [ "${FOUR_BACKEND_M10_MOD:-0}" = "1" ]; then
+            oracle_cases="$oracle_cases umod smod udiv sdiv"
         fi
         for testcase in $oracle_cases; do
             "$gcc" -static -x c "$w/$testcase.i" "$w/driver_$testcase.c" \
@@ -471,6 +507,8 @@ for target in aarch64 loongarch64; do
             compare) "$gcc" -static "$w/$target.compare.o" "$w/driver_compare.c" -o "$w/$target.compare.elf" ;;
             stack9) "$gcc" -static "$w/$target.stack9.o" "$w/driver_stack9.c" -o "$w/$target.stack9.elf" ;;
             stack10) "$gcc" -static "$w/$target.stack10.o" "$w/driver_stack10.c" -o "$w/$target.stack10.elf" ;;
+            umod|smod|udiv|sdiv)
+                "$gcc" -static "$w/$target.$testcase.o" "$w/driver_$testcase.c" -o "$w/$target.$testcase.elf" ;;
             unsigned_less|unsigned_add|unsigned_index)
                 "$gcc" -static "$w/$target.$testcase.o" "$w/driver_$testcase.c" -o "$w/$target.$testcase.elf" ;;
             ubyte_read|sbyte_read|byte_write|ushort_read|short_read|uchar_conv|ushort_conv)
@@ -543,6 +581,9 @@ if [ "$m2_enabled" = "1" ]; then
     fi
     if [ "${FOUR_BACKEND_M9_UNSIGNED:-0}" = "1" ]; then
         echo "FOUR_BACKEND_M9_UNSIGNED=PASS architectures=2 executable_QEMU_cases=20 unsigned_compare_arithmetic_index_cases=6 GNU_independent_oracles=16"
+    fi
+    if [ "${FOUR_BACKEND_M10_MOD:-0}" = "1" ]; then
+        echo "FOUR_BACKEND_M10_MOD=PASS architectures=2 executable_QEMU_cases=22 signed_unsigned_div_mod_cases=8 GNU_independent_oracles=18"
     fi
 else
     echo "FOUR_BACKEND_M1=PASS architectures=2 executable_QEMU_cases=8 GCC_independent_oracles=4"
