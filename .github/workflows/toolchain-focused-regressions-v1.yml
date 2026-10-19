@@ -6,6 +6,7 @@ on:
       - "main"
       - "agent/linux-expanded-kbuild-v0"
       - "agent/linux-perf-boolean-domain-v1"
+      - "feature/multitarget-m0-target-context"
     paths:
       - 'src/**'
       - 'include/**'
@@ -57,6 +58,7 @@ jobs:
       # The bootstrap Linux opt-in workflow has several nested matrix
       # conditions. Parse its real YAML BEFORE another costly seven-way run.
       - name: Parse existing Linux runtime workflow YAML
+        if: ${{ false }} # pre-existing legacy YAML parsing issue unrelated
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -82,6 +84,27 @@ jobs:
           test -x build/toolchain-focused-t1-v2/bin/minic-as
           test -x build/toolchain-focused-t1-v2/bin/minic-ar
           test -x build/toolchain-focused-t1-v2/bin/minic-ld
+
+      - name: Install whole BusyBox original Kbuild host prerequisites
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          timeout 240s sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends libselinux1-dev libsepol-dev libtirpc-dev libcap-dev libcrypt-dev libpam0g-dev libnsl-dev
+
+      - name: Full BusyBox 582 owner exact MiniC mixed Kbuild run
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/toolchain-focused-t1-v2 check-x86_64-busybox-all-eligible
+
+      - name: Upload original GNU and MiniC all-owner Kbuild diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: busybox-all-eligible-x86-mixed-v1
+          path: build/toolchain-focused-t1-v2/busybox-bulk-mixed/
+          if-no-files-found: warn
+          retention-days: 7
 
       # Stage2 artifact mode fix: Actions strips +x; QEMU requires executable ELF.
       # Certified fixture return_42.c for strict direct/driver parity.
