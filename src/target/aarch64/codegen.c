@@ -421,34 +421,66 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
         return false;
     }
     if (trace_cjson) (void)fprintf(stderr, "MINIC_CJSON_STAGE arch=aarch64 stage=frame_objects_ok end=%zu\n", object_end);
-    /* Keep this first direct-call ABI step narrow: signed int values in
-     * the first eight argument registers, no variadics or indirect calls.
-     * Returning through a nested call requires preserving the ISA link
-     * register in a dedicated frame slot. */
+    /* M24: direct and first-class indirect scalar calls share the same
+     * eight integer-register ABI. Aggregate, FP, overflow arguments and
+     * unsupported variadic tail types are still rejected before emission. */
     for (i = 0U; i < fn->instruction_count; ++i) {
         const MinicCoreInstruction *ins = &fn->instructions[i];
-        size_t j, begin, count;
-        const MinicCoreCallee *callee;
-        if (ins->kind != MINIC_CORE_INSTRUCTION_CALL) continue;
-        has_direct_calls = true;
-        if (ins->value.call.callee_id >= fn->callee_count ||
-            ins->value.call.result_object != MINIC_CORE_OBJECT_INVALID ||
-            (minic_type_is_void(ins->type)
+        const MinicType *parameter_types;
+        MinicType return_type;
+        size_t j, begin, count, parameter_count;
+        bool is_variadic;
+        if (ins->kind != MINIC_CORE_INSTRUCTION_CALL &&
+            ins->kind != MINIC_CORE_INSTRUCTION_INDIRECT_CALL) continue;
+        has_direct_calls = true; /* Also preserve the link register for blr/jirl. */
+        if ((minic_type_is_void(ins->type)
              ? ins->result != MINIC_CORE_VALUE_INVALID
              : ins->result == MINIC_CORE_VALUE_INVALID ||
                ins->result >= fn->value_count ||
                !minic_type_equal(fn->values[ins->result].type, ins->type)) ||
             !valid_return_type(program, target, ins->type))
             return false;
-        callee = &fn->callees[ins->value.call.callee_id];
-        begin = ins->value.call.argument_begin;
-        count = ins->value.call.argument_count;
-        if (callee->name == NULL || callee->name[0] == '\0' ||
-            !valid_return_type(program, target, callee->return_type) ||
-            count > 8U || callee->parameter_count > count ||
-            (!callee->is_variadic && callee->parameter_count != count) ||
+        if (ins->kind == MINIC_CORE_INSTRUCTION_CALL) {
+            const MinicCoreCallee *callee;
+            if (ins->value.call.callee_id >= fn->callee_count ||
+                ins->value.call.result_object != MINIC_CORE_OBJECT_INVALID)
+                return false;
+            callee = &fn->callees[ins->value.call.callee_id];
+            if (callee->name == NULL || callee->name[0] == '\0')
+                return false;
+            begin = ins->value.call.argument_begin;
+            count = ins->value.call.argument_count;
+            return_type = callee->return_type;
+            parameter_types = callee->parameter_types;
+            parameter_count = callee->parameter_count;
+            is_variadic = callee->is_variadic;
+        } else {
+            const MinicCoreCallSignature *sig;
+            MinicType pointee;
+            const MinicCoreValueId function_pointer =
+                ins->value.indirect_call.callee;
+            if (ins->value.indirect_call.signature_id >= fn->call_signature_count ||
+                function_pointer >= fn->value_count ||
+                !minic_type_pointee(fn->values[function_pointer].type, &pointee) ||
+                !minic_type_is_function(pointee))
+                return false;
+            sig = &fn->call_signatures[ins->value.indirect_call.signature_id];
+            if (pointee.function_type_id != sig->function_type_id)
+                return false;
+            begin = ins->value.indirect_call.argument_begin;
+            count = ins->value.indirect_call.argument_count;
+            return_type = sig->return_type;
+            parameter_types = sig->parameter_types;
+            parameter_count = sig->parameter_count;
+            is_variadic = sig->is_variadic;
+        }
+        if (!minic_type_equal(return_type, ins->type) ||
+            !valid_return_type(program, target, return_type) ||
+            count > 8U || parameter_count > count ||
+            (!is_variadic && parameter_count != count) ||
             begin > fn->call_argument_count ||
-            count > fn->call_argument_count - begin)
+            count > fn->call_argument_count - begin ||
+            (parameter_count != 0U && parameter_types == NULL))
             return false;
         for (j = 0U; j < count; ++j) {
             const MinicCoreCallArgument *arg = &fn->call_arguments[begin + j];
@@ -459,17 +491,13 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                 arg->value.value_id >= fn->value_count) return false;
             actual = fn->values[arg->value.value_id].type;
             if (!valid_parameter_type(program, target, actual)) return false;
-            if (j < callee->parameter_count) {
-                /* Required fixed parameters preserve their full Core type. */
-                if (!valid_parameter_type(program, target,
-                                          callee->parameter_types[j]) ||
-                    !minic_type_equal(callee->parameter_types[j], actual))
+            if (j < parameter_count) {
+                if (!valid_parameter_type(program, target, parameter_types[j]) ||
+                    !minic_type_equal(parameter_types[j], actual))
                     return false;
             } else {
-                /* On AAPCS64 / Loong lp64d the promoted integer and pointer
-                 * varargs use a0..a7 / x0..x7. No FP, long-long,
-                 * aggregates, or stack overflow are silently accepted. */
-                if (!callee->is_variadic ||
+                /* Only promoted 32-bit integer and pointer vararg tail. */
+                if (!is_variadic ||
                     (!minic_type_is_pointer(actual) &&
                      (!small_integer_width(program, target, actual,
                                            &actual_width, &actual_signed) ||
