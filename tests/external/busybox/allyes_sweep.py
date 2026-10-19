@@ -165,7 +165,8 @@ def controller(args):
     # obsolescence is excluded in this explicit mode (never patch applet C).
     link_compatible = os.environ.get("BUSYBOX_ALLYES_LINK_COMPATIBLE") == "1"
     disabled_host_options = ("WERROR", "TC", "FEATURE_INETD_RPC",
-                             "FEATURE_MOUNT_NFS") if link_compatible else ("WERROR",)
+                             "FEATURE_MOUNT_NFS", "STATIC",
+                             "DEBUG_SANITIZE") if link_compatible else ("WERROR",)
     changed = []
     for symbol in disabled_host_options:
         old_value = "CONFIG_" + symbol + "=y"
