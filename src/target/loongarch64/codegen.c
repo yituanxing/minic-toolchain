@@ -42,7 +42,7 @@ static bool emit_function(FILE *out, const MinicFunction *decl,
         decl->section_name != NULL || decl->alias_target != MINIC_FUNCTION_INVALID ||
         !valid_int(fn->return_type) ||
         fn->block_count == 0U || fn->block_count > 128U || fn->entry_block != 0U ||
-        fn->inline_asm_count != 0U || fn->parameter_count > 8U ||
+        fn->inline_asm_count != 0U || fn->parameter_count > 10U ||
         fn->value_count > 240U || fn->object_count > 240U ||
         fn->value_count > 240U - fn->object_count)
         return false;
@@ -144,11 +144,25 @@ static bool emit_function(FILE *out, const MinicFunction *decl,
                 return false;
             break;
         }
-        case MINIC_CORE_INSTRUCTION_PARAMETER:
-            if (ins->value.parameter_index >= fn->parameter_count ||
-                fprintf(out, "  st.w $a%zu, $sp, %zu\n",
-                        ins->value.parameter_index, offset) < 0) return false;
+        case MINIC_CORE_INSTRUCTION_PARAMETER: {
+            size_t index = (size_t)ins->value.parameter_index;
+            if (index >= fn->parameter_count) return false;
+            if (index < 8U) {
+                if (fprintf(out, "  st.w $a%zu, $sp, %zu\n", index, offset) < 0)
+                    return false;
+            } else {
+                /* LoongArch lp64d: eight integer argument registers; the
+                 * ninth and tenth int use 8-byte caller stack slots.
+                 * Stack slots are addressed after allocating our frame.
+                 * The largest offset is 2016+8, within signed imm12. */
+                size_t incoming = frame + (index - 8U) * 8U;
+                if (incoming > 2047U ||
+                    fprintf(out, "  ld.w $t0, $sp, %zu\n"
+                                 "  st.w $t0, $sp, %zu\n", incoming, offset) < 0)
+                    return false;
+            }
             continue;
+        }
         case MINIC_CORE_INSTRUCTION_INTEGER_ADD:
         case MINIC_CORE_INSTRUCTION_INTEGER_SUBTRACT:
         case MINIC_CORE_INSTRUCTION_INTEGER_MULTIPLY: {
