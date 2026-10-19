@@ -559,10 +559,12 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
         }
         switch (ins->kind) {
         case MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT: {
-            size_t width;
-            bool sign;
-            if (!scalar_integer_width(program, target, ins->type,
-                                      &width, &sign)) return false;
+            size_t width = 0U;
+            bool sign = false;
+            /* Preserve the prior 32-bit constant path for Core boolean
+             * literals; only the newly admitted LP64 scalars take 64 bits. */
+            (void)scalar_integer_width(program, target, ins->type,
+                                       &width, &sign);
             if (width == 8U) {
                 /* Full 64-bit constant: preserve high halves AND sign bits. */
                 const uint64_t bits = (uint64_t)ins->value.integer_value;
