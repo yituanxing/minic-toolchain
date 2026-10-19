@@ -42,7 +42,7 @@ static bool emit_function(FILE *out, const MinicFunction *decl,
         decl->section_name != NULL || decl->alias_target != MINIC_FUNCTION_INVALID ||
         !valid_int(fn->return_type) ||
         fn->block_count == 0U || fn->block_count > 128U || fn->entry_block != 0U ||
-        fn->inline_asm_count != 0U || fn->parameter_count > 8U ||
+        fn->inline_asm_count != 0U || fn->parameter_count > 10U ||
         fn->value_count > 240U || fn->object_count > 240U ||
         fn->value_count > 240U - fn->object_count)
         return false;
@@ -154,11 +154,23 @@ static bool emit_function(FILE *out, const MinicFunction *decl,
                 return false;
             break;
         }
-        case MINIC_CORE_INSTRUCTION_PARAMETER:
-            if (ins->value.parameter_index >= fn->parameter_count ||
-                fprintf(out, "  str w%zu, [sp, #%zu]\n",
-                        ins->value.parameter_index, offset) < 0) return false;
+        case MINIC_CORE_INSTRUCTION_PARAMETER: {
+            size_t index = (size_t)ins->value.parameter_index;
+            if (index >= fn->parameter_count) return false;
+            if (index < 8U) {
+                if (fprintf(out, "  str w%zu, [sp, #%zu]\n", index, offset) < 0)
+                    return false;
+            } else {
+                /* AAPCS64: first eight integer arguments use w0-w7.
+                 * Each subsequent int occupies an 8-byte caller stack
+                 * argument slot, above our own 16-byte-aligned frame. */
+                size_t incoming = frame + (index - 8U) * 8U;
+                if (fprintf(out, "  ldr w9, [sp, #%zu]\n"
+                                 "  str w9, [sp, #%zu]\n", incoming, offset) < 0)
+                    return false;
+            }
             continue;
+        }
         case MINIC_CORE_INSTRUCTION_INTEGER_ADD:
         case MINIC_CORE_INSTRUCTION_INTEGER_SUBTRACT:
         case MINIC_CORE_INSTRUCTION_INTEGER_MULTIPLY: {
