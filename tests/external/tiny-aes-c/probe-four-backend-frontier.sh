@@ -42,7 +42,12 @@ for target in aarch64 loongarch64; do
         grep -m 1 'MINIC_M[14]_.*FRONTIER' "$work/$target.compile.err" || true
         # Show the complete first (small) real Core function; captures the
         # operation after pointer parameter stores, not just its preamble.
-        sed -n '1,70p' "$work/$target.compile.err"
+        sed -n '1,9p' "$work/$target.compile.err"
+        # Core dump starts with hundreds of object declarations in AES
+        # KeyExpansion. Show the first 70 actual IR instructions, not
+        # object labels that conceal the real unsupported opcode.
+        awk '/^bb0:/{dump=1; print; next} dump {print; count++; if (count >= 70) exit}' \
+            "$work/$target.compile.err"
         blocked=$((blocked + 1))
         continue
     fi
