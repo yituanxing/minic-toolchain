@@ -754,35 +754,35 @@ check-x86_64-busybox-12: $(MINIC_CC_BINARY)
 # against original GNU across 11 deterministic applet cases. Fail closed.
 check-x86_64-busybox-all-eligible: $(MINIC_CC_BINARY)
 	@set -eu; \
-	log=$(mktemp); \
-	trap 'rm -f "$log"' EXIT HUP INT TERM; \
+	log=$$(mktemp); \
+	trap 'rm -f "$$log"' EXIT HUP INT TERM; \
 	if env -u MAKEFLAGS -u MAKEOVERRIDES -u MFLAGS -u GNUMAKEFLAGS -u CFLAGS \
 	   MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
 	   BUSYBOX_X86_64_ALLYES_DISCOVERY=1 BUSYBOX_ALLYES_LINK_COMPATIBLE=1 \
 	   BUSYBOX_ALLYES_MIXED_BULK=1 \
 	   BUSYBOX_ALLYES_REPORT_DIR="$(abspath $(BUILD_DIR))/busybox-bulk-mixed" \
-	   sh tests/external/busybox/probe-x86_64.sh >"$log" 2>&1; then \
-	   cat "$log"; \
+	   sh tests/external/busybox/probe-x86_64.sh >"$$log" 2>&1; then \
+	   cat "$$log"; \
 	else \
-	   cat "$log"; exit 1; \
+	   cat "$$log"; exit 1; \
 	fi; \
-	grep -Eq '^BUSYBOX_MIXED_BULK=PASS MiniC_owners=[0-9]+ GCC_fallback=[0-9]+ original_full_Kbuild=1 eleven_fixture_byte_exact=1 MiniC_and_GNU_binary_differ=1 full_all_MiniC=NO$' "$log"
+	grep -Eq '^BUSYBOX_MIXED_BULK=PASS MiniC_owners=[0-9]+ GCC_fallback=[0-9]+ original_full_Kbuild=1 eleven_fixture_byte_exact=1 MiniC_and_GNU_binary_differ=1 full_all_MiniC=NO$$' "$$log"
 
 check-x86_64-busybox-complex-five: $(MINIC_CC_BINARY)
 	@set -eu; \
-	log=$(mktemp); \
-	trap 'rm -f "$log"' EXIT HUP INT TERM; \
+	log=$$(mktemp); \
+	trap 'rm -f "$$log"' EXIT HUP INT TERM; \
 	if env -u MAKEFLAGS -u MAKEOVERRIDES -u MFLAGS -u GNUMAKEFLAGS -u CFLAGS \
 	   MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
 	   BUSYBOX_X86_64_ALLYES_DISCOVERY=1 BUSYBOX_ALLYES_LINK_COMPATIBLE=1 \
 	   BUSYBOX_ALLYES_MIXED_COHORT=1 \
 	   BUSYBOX_ALLYES_REPORT_DIR="$(abspath $(BUILD_DIR))/busybox-complex-five" \
-	   sh tests/external/busybox/probe-x86_64.sh >"$log" 2>&1; then \
-	   cat "$log"; \
+	   sh tests/external/busybox/probe-x86_64.sh >"$$log" 2>&1; then \
+	   cat "$$log"; \
 	else \
-	   cat "$log"; exit 1; \
+	   cat "$$log"; exit 1; \
 	fi; \
-	grep -Fx 'BUSYBOX_MIXED_COMPLEX=PASS all_five_independent=1 combined_five=1 GCC_original_oracle=1 real_Kbuild_link=1' "$log"
+	grep -Fx 'BUSYBOX_MIXED_COMPLEX=PASS all_five_independent=1 combined_five=1 GCC_original_oracle=1 real_Kbuild_link=1' "$$log"
 
 check-x86_64-busybox-host-link: $(MINIC_CC_BINARY)
 	@set -eu; \
