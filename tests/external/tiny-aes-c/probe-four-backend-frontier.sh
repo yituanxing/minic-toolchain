@@ -222,21 +222,21 @@ src = pathlib.Path(sys.argv[1]).read_text()
 directory = pathlib.Path(sys.argv[2])
 repls = [
     ("    if (i % Nk == 0)",
-     "    if (i == Nk) minic_trace = tempa[0];\\n    if (i % Nk == 0)"),
+     "    if (i == Nk) minic_trace = tempa[0];\n    if (i % Nk == 0)"),
     ("      // SubWord() is a function",
-     "      if (i == Nk) minic_trace = tempa[0];\\n      // SubWord() is a function"),
+     "      if (i == Nk) minic_trace = tempa[0];\n      // SubWord() is a function"),
     ("      tempa[3] = getSBoxValue(tempa[3]);",
-     "      tempa[3] = getSBoxValue(tempa[3]);\\n      if (i == Nk) minic_trace = tempa[0];"),
+     "      tempa[3] = getSBoxValue(tempa[3]);\n      if (i == Nk) minic_trace = tempa[0];"),
     ("      tempa[0] = tempa[0] ^ Rcon[i/Nk];",
-     "      tempa[0] = tempa[0] ^ Rcon[i/Nk];\\n      if (i == Nk) minic_trace = tempa[0];"),
+     "      tempa[0] = tempa[0] ^ Rcon[i/Nk];\n      if (i == Nk) minic_trace = tempa[0];"),
     ("    RoundKey[j + 0] = RoundKey[k + 0] ^ tempa[0];",
-     "    RoundKey[j + 0] = RoundKey[k + 0] ^ tempa[0];\\n    if (i == Nk) minic_trace = RoundKey[j + 0];"),
+     "    RoundKey[j + 0] = RoundKey[k + 0] ^ tempa[0];\n    if (i == Nk) minic_trace = RoundKey[j + 0];"),
     ("    j = i * 4; k=(i - Nk) * 4;",
-     "    j = i * 4; k=(i - Nk) * 4;\\n    if (i == Nk) minic_trace = j;"),
+     "    j = i * 4; k=(i - Nk) * 4;\n    if (i == Nk) minic_trace = j;"),
     ("    j = i * 4; k=(i - Nk) * 4;",
-     "    j = i * 4; k=(i - Nk) * 4;\\n    if (i == Nk) minic_trace = k;"),
+     "    j = i * 4; k=(i - Nk) * 4;\n    if (i == Nk) minic_trace = k;"),
 ]
-declaration = "static unsigned char minic_trace;\\n"
+declaration = "static unsigned char minic_trace;\n"
 keyexp = "static void KeyExpansion(uint8_t* RoundKey, const uint8_t* Key)"
 assert src.count(keyexp) == 1
 for stage, (needle, replacement) in enumerate(repls):
@@ -246,31 +246,31 @@ for stage, (needle, replacement) in enumerate(repls):
     (directory / f"aes_trace_{stage}.c").write_text(modified)
 PY
             for stage in 0 1 2 3 4 5 6; do
-                sed "s|#include \\"aes.c\\"|#include \\"aes_trace_$stage.c\\"|" "$fixture" |
+                sed "s|#include \"aes.c\"|#include \"aes_trace_$stage.c\"|" "$fixture" |
                     awk -v k="$stage" '
                         { print }
-                        /AES_init_ctx\\(context_pointer,/ {
+                        /AES_init_ctx\(context_pointer,/ {
                             print "    return (int)minic_trace;"
                         }
                     ' >"$work/$target.trace$stage.c"
-                "$gcc" -std=c11 -O0 -static -I"$vendor" \\
-                    -DECB=1 -DCBC=0 -DCTR=0 -DMULTIPLY_AS_A_FUNCTION=1 \\
+                "$gcc" -std=c11 -O0 -static -I"$vendor" \
+                    -DECB=1 -DCBC=0 -DCTR=0 -DMULTIPLY_AS_A_FUNCTION=1 \
                     "$work/$target.trace$stage.c" -o "$work/$target.trace$stage.gnu.elf"
-                "$gcc" -E -P -nostdinc -x c -I"$headers" -I"$vendor" \\
-                    -DECB=1 -DCBC=0 -DCTR=0 -DMULTIPLY_AS_A_FUNCTION=1 \\
+                "$gcc" -E -P -nostdinc -x c -I"$headers" -I"$vendor" \
+                    -DECB=1 -DCBC=0 -DCTR=0 -DMULTIPLY_AS_A_FUNCTION=1 \
                     "$work/$target.trace$stage.c" -o "$work/$target.trace$stage.i"
-                if ! MINIC_M1_TRACE=1 "$MINIC_CC" --target="$target-linux" -S \\
-                        "$work/$target.trace$stage.i" -o "$work/$target.trace$stage.s" \\
+                if ! MINIC_M1_TRACE=1 "$MINIC_CC" --target="$target-linux" -S \
+                        "$work/$target.trace$stage.i" -o "$work/$target.trace$stage.s" \
                         2>"$work/$target.trace$stage.compile.err"; then
                     echo "FOUR_BACKEND_AES_TRACE_BLOCKED target=$target stage=$stage point=MiniC_compile" >&2
-                    grep -m 1 'MINIC_M8_.*REJECT\\|MINIC_M8_FRAME_CAP\\|MINIC_M8_FRAME_REJECT' \\
+                    grep -m 1 'MINIC_M8_.*REJECT\|MINIC_M8_FRAME_CAP\|MINIC_M8_FRAME_REJECT' \
                          "$work/$target.trace$stage.compile.err" || true
                     tail -n 3 "$work/$target.trace$stage.compile.err" >&2
                     continue
                 fi
-                if ! { "$gcc" -c "$work/$target.trace$stage.s" \\
+                if ! { "$gcc" -c "$work/$target.trace$stage.s" \
                             -o "$work/$target.trace$stage.o" &&
-                       "$gcc" -static "$work/$target.trace$stage.o" \\
+                       "$gcc" -static "$work/$target.trace$stage.o" \
                             -o "$work/$target.trace$stage.minic.elf"; }; then
                     echo "FOUR_BACKEND_AES_TRACE_BLOCKED target=$target stage=$stage point=GNU_AS_LD" >&2
                     continue
