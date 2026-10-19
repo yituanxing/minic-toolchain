@@ -426,21 +426,37 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
         begin = ins->value.call.argument_begin;
         count = ins->value.call.argument_count;
         if (callee->name == NULL || callee->name[0] == '\0' ||
-            callee->is_variadic || !valid_return_type(program, target, callee->return_type) ||
-            count > 8U || callee->parameter_count != count ||
+            !valid_return_type(program, target, callee->return_type) ||
+            count > 8U || callee->parameter_count > count ||
+            (!callee->is_variadic && callee->parameter_count != count) ||
             begin > fn->call_argument_count ||
             count > fn->call_argument_count - begin)
             return false;
         for (j = 0U; j < count; ++j) {
             const MinicCoreCallArgument *arg = &fn->call_arguments[begin + j];
-            if (!valid_parameter_type(program, target, callee->parameter_types[j]) ||
-                arg->kind != MINIC_CORE_CALL_ARGUMENT_VALUE ||
-                arg->value.value_id >= fn->value_count ||
-                !valid_parameter_type(program, target,
-                                      fn->values[arg->value.value_id].type) ||
-                !minic_type_equal(callee->parameter_types[j],
-                                  fn->values[arg->value.value_id].type))
-                return false;
+            MinicType actual;
+            size_t actual_width;
+            bool actual_signed;
+            if (arg->kind != MINIC_CORE_CALL_ARGUMENT_VALUE ||
+                arg->value.value_id >= fn->value_count) return false;
+            actual = fn->values[arg->value.value_id].type;
+            if (!valid_parameter_type(program, target, actual)) return false;
+            if (j < callee->parameter_count) {
+                /* Required fixed parameters preserve their full Core type. */
+                if (!valid_parameter_type(program, target,
+                                          callee->parameter_types[j]) ||
+                    !minic_type_equal(callee->parameter_types[j], actual))
+                    return false;
+            } else {
+                /* On AAPCS64 / Loong lp64d the promoted integer and pointer
+                 * varargs use a0..a7 / x0..x7. No FP, long-long,
+                 * aggregates, or stack overflow are silently accepted. */
+                if (!callee->is_variadic ||
+                    (!minic_type_is_pointer(actual) &&
+                     (!small_integer_width(program, target, actual,
+                                           &actual_width, &actual_signed) ||
+                      actual_width != 4U))) return false;
+            }
         }
     }
     if (getenv("MINIC_M1_TRACE") != NULL &&
@@ -648,7 +664,8 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
             for (j = 0U; j < ins->value.call.argument_count; ++j) {
                 const MinicCoreCallArgument *arg =
                     &fn->call_arguments[ins->value.call.argument_begin + j];
-                if (!emit_sp_mem(out, minic_type_is_pointer(callee->parameter_types[j])
+                if (!emit_sp_mem(out, minic_type_is_pointer(
+                                        fn->values[arg->value.value_id].type)
                                         ? "ld.d" : "ld.w",
                              j == 0U ? "$a0" : j == 1U ? "$a1" :
                              j == 2U ? "$a2" : j == 3U ? "$a3" :
