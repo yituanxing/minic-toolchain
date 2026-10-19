@@ -232,6 +232,19 @@ int main(void) {
     return mini_pointer_negative(&values[2], -1);
 }
 EOF
+cat > "$w/pointer_cast.i" <<'EOF'
+int mini_pointer_cast(void *p) {
+    int *q = (int *)p;
+    return *q;
+}
+EOF
+cat > "$w/driver_pointer_cast.c" <<'EOF'
+extern int mini_pointer_cast(void *);
+int main(void) {
+    int value = 42;
+    return mini_pointer_cast((void *)&value);
+}
+EOF
 check_qemu_exit() {
     emulator=$1
     binary=$2
@@ -275,7 +288,7 @@ for target in aarch64 loongarch64; do
         cases="$cases pointer_read pointer_void pointer_return"
     fi
     if [ "${FOUR_BACKEND_M6_ADDRESS:-0}" = "1" ]; then
-        cases="$cases field_read field_write pointer_index pointer_negative"
+        cases="$cases field_read field_write pointer_index pointer_negative pointer_cast"
     fi
     if [ "$m2_enabled" = "1" ]; then
         # Independent originals for every new CFG/comparison fixture, not
@@ -294,7 +307,7 @@ for target in aarch64 loongarch64; do
             oracle_cases="$oracle_cases pointer_read pointer_void pointer_return"
         fi
         if [ "${FOUR_BACKEND_M6_ADDRESS:-0}" = "1" ]; then
-            oracle_cases="$oracle_cases field_read field_write pointer_index pointer_negative"
+            oracle_cases="$oracle_cases field_read field_write pointer_index pointer_negative pointer_cast"
         fi
         for testcase in $oracle_cases; do
             "$gcc" -static -x c "$w/$testcase.i" "$w/driver_$testcase.c" \
@@ -317,7 +330,7 @@ for target in aarch64 loongarch64; do
             compare) "$gcc" -static "$w/$target.compare.o" "$w/driver_compare.c" -o "$w/$target.compare.elf" ;;
             stack9) "$gcc" -static "$w/$target.stack9.o" "$w/driver_stack9.c" -o "$w/$target.stack9.elf" ;;
             stack10) "$gcc" -static "$w/$target.stack10.o" "$w/driver_stack10.c" -o "$w/$target.stack10.elf" ;;
-            field_read|field_write|pointer_index|pointer_negative)
+            field_read|field_write|pointer_index|pointer_negative|pointer_cast)
                 "$gcc" -static "$w/$target.$testcase.o" "$w/driver_$testcase.c" -o "$w/$target.$testcase.elf" ;;
             pointer_read|pointer_void|pointer_return)
                 "$gcc" -static "$w/$target.$testcase.o" "$w/driver_$testcase.c" -o "$w/$target.$testcase.elf" ;;
@@ -373,7 +386,7 @@ if [ "$m2_enabled" = "1" ]; then
         echo "FOUR_BACKEND_M5_POINTER=PASS architectures=2 executable_QEMU_cases=20 pointer_void_cases=6 GNU_independent_oracles=16"
     fi
     if [ "${FOUR_BACKEND_M6_ADDRESS:-0}" = "1" ]; then
-        echo "FOUR_BACKEND_M6_ADDRESS=PASS architectures=2 executable_QEMU_cases=22 field_pointer_cases=8 GNU_independent_oracles=18"
+        echo "FOUR_BACKEND_M6_ADDRESS=PASS architectures=2 executable_QEMU_cases=24 field_pointer_bitcast_cases=10 GNU_independent_oracles=20"
     fi
 else
     echo "FOUR_BACKEND_M1=PASS architectures=2 executable_QEMU_cases=8 GCC_independent_oracles=4"
