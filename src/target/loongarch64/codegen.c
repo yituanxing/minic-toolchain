@@ -364,7 +364,8 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
      * cJSON failure, never for normal builds or other projects. */
     const bool trace_cjson = getenv("MINIC_M1_TRACE") != NULL &&
                              name != NULL &&
-                             strcmp(name, "cJSON_ParseWithLengthOpts") == 0;
+                             (strcmp(name, "cJSON_ParseWithLengthOpts") == 0 ||
+                               strcmp(name, "cJSON_Compare") == 0);
     if (trace_cjson)
         (void)fprintf(stderr,
             "MINIC_CJSON_STAGE arch=loongarch64 function=%s stage=entry blocks=%zu values=%zu objects=%zu params=%zu calls=%zu\n",
