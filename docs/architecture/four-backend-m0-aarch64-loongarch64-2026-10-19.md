@@ -162,3 +162,79 @@ the main baseline blob `cd9a880a5a707f28b5ea63c364c1844ab35e1c56`.
 reuse original tinyAES/cJSON pinned project suites, record machine
 code runtime and compiler provenance at each promotion gate, then
 only extract demonstrated duplication.
+
+## M2: original Core multi-block CFG, signed compare, true QEMU execution — 2026-10-19
+
+This is the next measured increment from the previously proven M1, not
+a new front end, new Core IR or new generic Machine IR.
+
+**Source implementation:** the original AArch64 and LoongArch64 M1
+emitters now iterate verified Core basic blocks and lower their distinct
+local labels, `RETURN`, `BRANCH` and `CONDITIONAL_BRANCH`. Each Core
+SSA value and local object retains a private per-function stack slot
+across blocks. On branches, actual target code tests the saved condition
+value and jumps to the correct function-scoped successor. The old RV64
+and x86-64 emitters and all common C frontend/Core code remain unchanged.
+No register allocator or speculative architecture-level abstraction was
+introduced.
+
+Both new ISA emitters also lower just the observed minimal Core
+operations for signed 32-bit `INTEGER_LESS`, `SCALAR_EQUAL` and
+`SCALAR_IS_ZERO`. AArch64 uses `cmp` and `cset`; LoongArch64 uses
+`slt` and `xor` + `sltui`. Core bools and C ints remain distinct
+types, with canonical 0/1 compare results in existing private value
+slots. No unsigned pointer/floating/aggregate comparison support is
+claimed. Unsupported Core kinds, object types and globals still
+fail closed and delete any partial assembly file.
+
+**Shared test process:** the *same* existing GNU cross-compiler,
+GNU-AS/link, QEMU and deterministic C fixture harness now supports a
+separate opt-in `FOUR_BACKEND_M2=1` path. The older
+`make check-four-backend-m1` remains a separate independent gate.
+The new `make check-four-backend-m2` expands the same test fixtures
+with C source for both conditional `if` paths, a backward `while`
+loop with 7 and 0 iterations, and signed less-than/equality comparisons
+over negative/positive values and true/false outcomes. Cross-TU
+GNU-built callers invoke the actual MiniC-owned function object.
+The runner has a 15-second per-QEMU-case timeout, so an infinite-loop
+backend regression cannot hang a shared CI runner indefinitely.
+
+The new CFG/compare cases were *each* also compiled and executed
+independently from unchanged C source by cross GCC on QEMU: six GNU
+reference executables added, not just an invented expected exit code.
+The existing four GNU oracles continue to be run. The MiniC outputs
+were GNU-assembled, statically GNU-linked, and QEMU-executed.
+
+**Actual [CI #39202223555](https://github.com/yituanxing/minic-toolchain/actions/runs/39202223555) — SUCCESS:**
+
+```text
+FOUR_BACKEND_M1=PASS architectures=2 executable_QEMU_cases=8 GCC_independent_oracles=4
+FOUR_BACKEND_M2_GNU_ORACLE=PASS target=aarch64 case=branch GCC_executable=1 QEMU_exit=42
+FOUR_BACKEND_M2_GNU_ORACLE=PASS target=aarch64 case=loop GCC_executable=1 QEMU_exit=42
+FOUR_BACKEND_M2_GNU_ORACLE=PASS target=aarch64 case=compare GCC_executable=1 QEMU_exit=42
+FOUR_BACKEND_M2_GNU_ORACLE=PASS target=loongarch64 case=branch GCC_executable=1 QEMU_exit=42
+FOUR_BACKEND_M2_GNU_ORACLE=PASS target=loongarch64 case=loop GCC_executable=1 QEMU_exit=42
+FOUR_BACKEND_M2_GNU_ORACLE=PASS target=loongarch64 case=compare GCC_executable=1 QEMU_exit=42
+FOUR_BACKEND_M2_TARGET=PASS target=aarch64 MiniC_GNU_link_QEMU=7 CFG_branch=1 CFG_loop=1 signed_compare=1 unsupported=fail-closed
+FOUR_BACKEND_M2_TARGET=PASS target=loongarch64 MiniC_GNU_link_QEMU=7 CFG_branch=1 CFG_loop=1 signed_compare=1 unsupported=fail-closed
+FOUR_BACKEND_M2=PASS architectures=2 executable_QEMU_cases=14 CFG_cases=4 comparison_cases=2 GCC_independent_oracles=10
+TOOLCHAIN_FOCUSED_T1=PASS mode=all independent_test_checks=8 shared_builds=1
+```
+
+**Scope:** M2 is 14 *MiniC-backed execution cases* across two ISAs
+when run as a single expanded suite, plus 10 independently compiled
+GNU oracles; the distinct M1 gate is also executed in CI and the
+old RV64/AR/LD regression passes. These are deliberately small C
+functions; this is **not** complete control flow or all GNU ABI calls
+(>8 args, pointer/aggregate, floating, inter-function MiniC calls,
+global data, Linux kernel remain unqualified). The branch is still a
+Draft PR, and prior upstream PR #526's `main` change still requires
+integration before any final merge. The temporary CI workflow branch
+allowlist and cross-tool installs have been restored byte-for-byte
+to the original focused workflow baseline blob
+`cd9a880a5a707f28b5ea63c364c1844ab35e1c56`.
+
+**Next driver:** Use the same measured cross GNU/QEMU fixtures for
+stack-passed integer arguments and target-specific call instructions,
+then original tinyAES/cJSON C owners. Keep new target ABI logic
+independent and share only demonstrated test/controller duplication.
