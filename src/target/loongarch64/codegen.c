@@ -958,18 +958,26 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
             break;
         }
         case MINIC_CORE_INSTRUCTION_INTEGER_CONVERSION: {
-            MinicCoreValueId src = ins->value.operand;
+            const MinicCoreValueId src = ins->value.operand;
             size_t src_width, dst_width;
             bool src_sign, dst_sign;
             if (src >= fn->value_count ||
-                !small_integer_width(program, target,
-                                     fn->values[src].type, &src_width, &src_sign) ||
-                !small_integer_width(program, target, ins->type,
-                                     &dst_width, &dst_sign) ||
-                !emit_sp_mem(out, "ld.w", "$t0", (size_t)src * 8U) ||
-                !emit_integer_normalize(out, dst_width, dst_sign)) return false;
-            (void)src_width;
-            (void)src_sign;
+                !scalar_integer_width(program, target,
+                                      fn->values[src].type, &src_width, &src_sign) ||
+                !scalar_integer_width(program, target, ins->type,
+                                      &dst_width, &dst_sign) ||
+                !emit_sp_mem(out, src_width == 8U ? "ld.d" : "ld.w",
+                             "$t0", (size_t)src * 8U))
+                return false;
+            if (dst_width == 8U) {
+                if (src_width != 8U &&
+                    (!emit_integer_normalize(out, src_width, src_sign) ||
+                     (!src_sign &&
+                      fputs("  bstrpick.d $t0, $t0, 31, 0\n", out) == EOF)))
+                    return false;
+                /* LoongArch ld.w sign-extends: unsigned32 needs masking. */
+            } else if (!emit_integer_normalize(out, dst_width, dst_sign))
+                return false;
             break;
         }
         default:
