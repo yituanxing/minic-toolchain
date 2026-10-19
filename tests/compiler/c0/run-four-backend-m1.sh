@@ -9,7 +9,7 @@ QEMU_LOONGARCH64=qemu-loongarch64
 w=$(mktemp -d)
 trap 'rm -rf "$w"' EXIT HUP INT TERM
 m2_enabled=0
-if [ "${FOUR_BACKEND_M2:-0}" = "1" ] || [ "${FOUR_BACKEND_M2_STACK:-0}" = "1" ] || [ "${FOUR_BACKEND_M3_CALL:-0}" = "1" ] || [ "${FOUR_BACKEND_M4_GLOBAL:-0}" = "1" ] || [ "${FOUR_BACKEND_M5_POINTER:-0}" = "1" ] || [ "${FOUR_BACKEND_M6_ADDRESS:-0}" = "1" ] || [ "${FOUR_BACKEND_M7_FRAME:-0}" = "1" ] || [ "${FOUR_BACKEND_M8_NARROW:-0}" = "1" ]; then
+if [ "${FOUR_BACKEND_M2:-0}" = "1" ] || [ "${FOUR_BACKEND_M2_STACK:-0}" = "1" ] || [ "${FOUR_BACKEND_M3_CALL:-0}" = "1" ] || [ "${FOUR_BACKEND_M4_GLOBAL:-0}" = "1" ] || [ "${FOUR_BACKEND_M5_POINTER:-0}" = "1" ] || [ "${FOUR_BACKEND_M6_ADDRESS:-0}" = "1" ] || [ "${FOUR_BACKEND_M7_FRAME:-0}" = "1" ] || [ "${FOUR_BACKEND_M8_NARROW:-0}" = "1" ] || [ "${FOUR_BACKEND_M9_UNSIGNED:-0}" = "1" ]; then
     m2_enabled=1
 fi
 cat > "$w/return.i" <<'EOF'
@@ -326,6 +326,34 @@ cat > "$w/driver_ushort_conv.c" <<'EOF'
 extern int mini_ushort_conv(int);
 int main(void) { return mini_ushort_conv(65578); }
 EOF
+# M9: original KeyExpansion loop uses uint32_t counters and unsigned
+# comparisons; x86 semantics must be kept, target instruction differs.
+cat > "$w/unsigned_less.i" <<'EOF'
+int mini_unsigned_less(unsigned int x) { return x < 3u ? 1 : 42; }
+EOF
+cat > "$w/driver_unsigned_less.c" <<'EOF'
+extern int mini_unsigned_less(unsigned int);
+int main(void) { return mini_unsigned_less(0xffffffffu); }
+EOF
+cat > "$w/unsigned_add.i" <<'EOF'
+int mini_unsigned_add(unsigned int x) { return (int)(x + 43u); }
+EOF
+cat > "$w/driver_unsigned_add.c" <<'EOF'
+extern int mini_unsigned_add(unsigned int);
+int main(void) { return mini_unsigned_add(0xffffffffu); }
+EOF
+cat > "$w/unsigned_index.i" <<'EOF'
+int mini_unsigned_index(int *p, unsigned int index) {
+    return p[index];
+}
+EOF
+cat > "$w/driver_unsigned_index.c" <<'EOF'
+extern int mini_unsigned_index(int *, unsigned int);
+int main(void) {
+    int a[3] = { 10, 25, 42 };
+    return mini_unsigned_index(a, 2u);
+}
+EOF
 check_qemu_exit() {
     emulator=$1
     binary=$2
@@ -377,6 +405,9 @@ for target in aarch64 loongarch64; do
     if [ "${FOUR_BACKEND_M8_NARROW:-0}" = "1" ]; then
         cases="$cases ubyte_read sbyte_read byte_write ushort_read short_read uchar_conv ushort_conv"
     fi
+    if [ "${FOUR_BACKEND_M9_UNSIGNED:-0}" = "1" ]; then
+        cases="$cases unsigned_less unsigned_add unsigned_index"
+    fi
     if [ "$m2_enabled" = "1" ]; then
         # Independent originals for every new CFG/comparison fixture, not
         # merely an expected return code from a MiniC-owned executable.
@@ -401,6 +432,9 @@ for target in aarch64 loongarch64; do
         fi
         if [ "${FOUR_BACKEND_M8_NARROW:-0}" = "1" ]; then
             oracle_cases="$oracle_cases ubyte_read sbyte_read byte_write ushort_read short_read uchar_conv ushort_conv"
+        fi
+        if [ "${FOUR_BACKEND_M9_UNSIGNED:-0}" = "1" ]; then
+            oracle_cases="$oracle_cases unsigned_less unsigned_add unsigned_index"
         fi
         for testcase in $oracle_cases; do
             "$gcc" -static -x c "$w/$testcase.i" "$w/driver_$testcase.c" \
@@ -437,6 +471,8 @@ for target in aarch64 loongarch64; do
             compare) "$gcc" -static "$w/$target.compare.o" "$w/driver_compare.c" -o "$w/$target.compare.elf" ;;
             stack9) "$gcc" -static "$w/$target.stack9.o" "$w/driver_stack9.c" -o "$w/$target.stack9.elf" ;;
             stack10) "$gcc" -static "$w/$target.stack10.o" "$w/driver_stack10.c" -o "$w/$target.stack10.elf" ;;
+            unsigned_less|unsigned_add|unsigned_index)
+                "$gcc" -static "$w/$target.$testcase.o" "$w/driver_$testcase.c" -o "$w/$target.$testcase.elf" ;;
             ubyte_read|sbyte_read|byte_write|ushort_read|short_read|uchar_conv|ushort_conv)
                 "$gcc" -static "$w/$target.$testcase.o" "$w/driver_$testcase.c" -o "$w/$target.$testcase.elf" ;;
             large_frame|local_array)
@@ -504,6 +540,9 @@ if [ "$m2_enabled" = "1" ]; then
     fi
     if [ "${FOUR_BACKEND_M8_NARROW:-0}" = "1" ]; then
         echo "FOUR_BACKEND_M8_NARROW=PASS architectures=2 executable_QEMU_cases=28 signed_unsigned_byte_short_cases=14 GNU_independent_oracles=24"
+    fi
+    if [ "${FOUR_BACKEND_M9_UNSIGNED:-0}" = "1" ]; then
+        echo "FOUR_BACKEND_M9_UNSIGNED=PASS architectures=2 executable_QEMU_cases=20 unsigned_compare_arithmetic_index_cases=6 GNU_independent_oracles=16"
     fi
 else
     echo "FOUR_BACKEND_M1=PASS architectures=2 executable_QEMU_cases=8 GCC_independent_oracles=4"
