@@ -26,6 +26,31 @@ static const MinicTargetIntegerModel minic_x86_64_linux_integer_model = {
                             [MINIC_INTEGER_RANK_INT128] = 128U},
 };
 
+/* AAPCS64 (Linux LP64): plain char unsigned, 32-bit unsigned wchar_t.
+ * Do not conflate this language model with ARM's register-call ABI. */
+static const MinicTargetIntegerModel minic_aarch64_linux_integer_model = {
+    .plain_char_sign = MINIC_INTEGER_SIGN_UNSIGNED,
+    .semantic_width_bits = {[MINIC_INTEGER_RANK_BOOL] = 1U,
+                            [MINIC_INTEGER_RANK_CHAR] = 8U,
+                            [MINIC_INTEGER_RANK_SHORT] = 16U,
+                            [MINIC_INTEGER_RANK_INT] = 32U,
+                            [MINIC_INTEGER_RANK_LONG] = 64U,
+                            [MINIC_INTEGER_RANK_LONG_LONG] = 64U,
+                            [MINIC_INTEGER_RANK_INT128] = 128U},
+};
+
+/* LoongArch ELF lp64d has signed plain char (unlike AAPCS64). */
+static const MinicTargetIntegerModel minic_loongarch64_linux_integer_model = {
+    .plain_char_sign = MINIC_INTEGER_SIGN_SIGNED,
+    .semantic_width_bits = {[MINIC_INTEGER_RANK_BOOL] = 1U,
+                            [MINIC_INTEGER_RANK_CHAR] = 8U,
+                            [MINIC_INTEGER_RANK_SHORT] = 16U,
+                            [MINIC_INTEGER_RANK_INT] = 32U,
+                            [MINIC_INTEGER_RANK_LONG] = 64U,
+                            [MINIC_INTEGER_RANK_LONG_LONG] = 64U,
+                            [MINIC_INTEGER_RANK_INT128] = 128U},
+};
+
 const char *const minic_riscv64_argument_registers[8] = {
     "a0", "a1", "a2", "a3", "a4", "a5", "a6", "a7"};
 
@@ -150,6 +175,8 @@ const MinicTargetInfo *minic_target_info_for_architecture(
     MinicTargetArchitecture architecture) {
     static MinicTargetInfo rv64_target;
     static MinicTargetInfo x86_64_target;
+    static MinicTargetInfo aarch64_target;
+    static MinicTargetInfo loongarch64_target;
 
     if (architecture == MINIC_TARGET_ARCH_RISCV64) {
         if (rv64_target.data_layout == NULL) {
@@ -179,6 +206,30 @@ const MinicTargetInfo *minic_target_info_for_architecture(
         }
         return &x86_64_target;
     }
+    if (architecture == MINIC_TARGET_ARCH_AARCH64) {
+        if (aarch64_target.data_layout == NULL) {
+            aarch64_target.architecture = MINIC_TARGET_ARCH_AARCH64;
+            aarch64_target.data_layout = minic_aarch64_linux_data_layout();
+            aarch64_target.integer_model = &minic_aarch64_linux_integer_model;
+            aarch64_target.wide_character_type = minic_type_unsigned_int();
+            aarch64_target.word_integer_rank = MINIC_INTEGER_RANK_LONG;
+            aarch64_target.gnu_sizeof_void_is_one = true;
+            aarch64_target.gnu_sizeof_function_is_one = true;
+        }
+        return &aarch64_target;
+    }
+    if (architecture == MINIC_TARGET_ARCH_LOONGARCH64) {
+        if (loongarch64_target.data_layout == NULL) {
+            loongarch64_target.architecture = MINIC_TARGET_ARCH_LOONGARCH64;
+            loongarch64_target.data_layout = minic_loongarch64_linux_data_layout();
+            loongarch64_target.integer_model = &minic_loongarch64_linux_integer_model;
+            loongarch64_target.wide_character_type = minic_type_int();
+            loongarch64_target.word_integer_rank = MINIC_INTEGER_RANK_LONG;
+            loongarch64_target.gnu_sizeof_void_is_one = true;
+            loongarch64_target.gnu_sizeof_function_is_one = true;
+        }
+        return &loongarch64_target;
+    }
     return NULL;
 }
 
@@ -195,6 +246,12 @@ const MinicTargetInfo *minic_target_info_from_name(const char *name) {
     }
     if (strcmp(name, "x86_64-linux") == 0) {
         return minic_target_info_for_architecture(MINIC_TARGET_ARCH_X86_64);
+    }
+    if (strcmp(name, "aarch64-linux") == 0) {
+        return minic_target_info_for_architecture(MINIC_TARGET_ARCH_AARCH64);
+    }
+    if (strcmp(name, "loongarch64-linux") == 0) {
+        return minic_target_info_for_architecture(MINIC_TARGET_ARCH_LOONGARCH64);
     }
     return NULL;
 }
