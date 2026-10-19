@@ -9,7 +9,7 @@ QEMU_LOONGARCH64=qemu-loongarch64
 w=$(mktemp -d)
 trap 'rm -rf "$w"' EXIT HUP INT TERM
 m2_enabled=0
-if [ "${FOUR_BACKEND_M2:-0}" = "1" ] || [ "${FOUR_BACKEND_M2_STACK:-0}" = "1" ] || [ "${FOUR_BACKEND_M3_CALL:-0}" = "1" ] || [ "${FOUR_BACKEND_M4_GLOBAL:-0}" = "1" ]; then
+if [ "${FOUR_BACKEND_M2:-0}" = "1" ] || [ "${FOUR_BACKEND_M2_STACK:-0}" = "1" ] || [ "${FOUR_BACKEND_M3_CALL:-0}" = "1" ] || [ "${FOUR_BACKEND_M4_GLOBAL:-0}" = "1"  ] || [ "${FOUR_BACKEND_M5_POINTER:-0}" = "1" ]; then
     m2_enabled=1
 fi
 cat > "$w/return.i" <<'EOF'
@@ -160,6 +160,33 @@ cat > "$w/call_unsupported.i" <<'EOF'
 extern int gnu_nine(int,int,int,int,int,int,int,int,int);
 int mini_unsupported(void) { return gnu_nine(1,2,3,4,5,6,7,8,9); }
 EOF
+# Following the first genuine AES_init_ctx pointer/void ABI frontier.
+cat > "$w/pointer_read.i" <<'EOF'
+int mini_pointer_read(int *p) { return *p; }
+EOF
+cat > "$w/driver_pointer_read.c" <<'EOF'
+extern int mini_pointer_read(int *);
+int main(void) { int v = 42; return mini_pointer_read(&v); }
+EOF
+cat > "$w/pointer_void.i" <<'EOF'
+static void mini_write_pointer(int *p) { *p = 42; }
+int mini_pointer_void(int *p) { mini_write_pointer(p); return *p; }
+EOF
+cat > "$w/driver_pointer_void.c" <<'EOF'
+extern int mini_pointer_void(int *);
+int main(void) { int v = 0; return mini_pointer_void(&v); }
+EOF
+cat > "$w/pointer_return.i" <<'EOF'
+int *mini_pointer_return(int *p) { return p; }
+EOF
+cat > "$w/driver_pointer_return.c" <<'EOF'
+extern int *mini_pointer_return(int *);
+int main(void) {
+    int v = 42;
+    int *ptr = mini_pointer_return(&v);
+    return ptr == &v ? *ptr : 1;
+}
+EOF
 check_qemu_exit() {
     emulator=$1
     binary=$2
@@ -199,6 +226,9 @@ for target in aarch64 loongarch64; do
     if [ "${FOUR_BACKEND_M4_GLOBAL:-0}" = "1" ]; then
         cases="$cases global_int global_array"
     fi
+    if [ "${FOUR_BACKEND_M5_POINTER:-0}" = "1" ]; then
+        cases="$cases pointer_read pointer_void pointer_return"
+    fi
     if [ "$m2_enabled" = "1" ]; then
         # Independent originals for every new CFG/comparison fixture, not
         # merely an expected return code from a MiniC-owned executable.
@@ -211,6 +241,9 @@ for target in aarch64 loongarch64; do
         fi
         if [ "${FOUR_BACKEND_M4_GLOBAL:-0}" = "1" ]; then
             oracle_cases="$oracle_cases global_int global_array"
+        fi
+        if [ "${FOUR_BACKEND_M5_POINTER:-0}" = "1" ]; then
+            oracle_cases="$oracle_cases pointer_read pointer_void pointer_return"
         fi
         for testcase in $oracle_cases; do
             "$gcc" -static -x c "$w/$testcase.i" "$w/driver_$testcase.c" \
@@ -233,6 +266,8 @@ for target in aarch64 loongarch64; do
             compare) "$gcc" -static "$w/$target.compare.o" "$w/driver_compare.c" -o "$w/$target.compare.elf" ;;
             stack9) "$gcc" -static "$w/$target.stack9.o" "$w/driver_stack9.c" -o "$w/$target.stack9.elf" ;;
             stack10) "$gcc" -static "$w/$target.stack10.o" "$w/driver_stack10.c" -o "$w/$target.stack10.elf" ;;
+            pointer_read|pointer_void|pointer_return)
+                "$gcc" -static "$w/$target.$testcase.o" "$w/driver_$testcase.c" -o "$w/$target.$testcase.elf" ;;
             global_int|global_array)
                 "$gcc" -static "$w/$target.$testcase.o" "$w/driver_$testcase.c" -o "$w/$target.$testcase.elf" ;;
             call_external|call_internal|call_nested)
@@ -280,6 +315,9 @@ if [ "$m2_enabled" = "1" ]; then
     fi
     if [ "${FOUR_BACKEND_M4_GLOBAL:-0}" = "1" ]; then
         echo "FOUR_BACKEND_M4_GLOBAL=PASS architectures=2 executable_QEMU_cases=18 global_cases=4 GNU_independent_oracles=14 unsupported_relocations=fail-closed"
+    fi
+    if [ "${FOUR_BACKEND_M5_POINTER:-0}" = "1" ]; then
+        echo "FOUR_BACKEND_M5_POINTER=PASS architectures=2 executable_QEMU_cases=20 pointer_void_cases=6 GNU_independent_oracles=16"
     fi
 else
     echo "FOUR_BACKEND_M1=PASS architectures=2 executable_QEMU_cases=8 GCC_independent_oracles=4"
