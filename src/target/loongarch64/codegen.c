@@ -140,8 +140,21 @@ bool minic_loongarch64_write_c0_program_with_core_functions(
         return fail(diagnostic, path, "LoongArch64: cannot open GNU assembly output");
     for (i = 0U; i < program->function_count && success; ++i) {
         const MinicFunction *decl = &program->functions[i];
-        if (decl->is_defined && (!decl->is_internal || decl->is_referenced))
+        if (decl->is_defined && (!decl->is_internal || decl->is_referenced)) {
             success = emit_function(out, decl, &core_functions[i], i, function_sections);
+            if (!success && getenv("MINIC_M1_TRACE") != NULL) {
+                const MinicCoreFunction *fn = &core_functions[i];
+                (void)fprintf(stderr,
+                              "MINIC_M1_FRONTIER arch=loongarch64 function=%s "
+                              "core_blocks=%zu core_objects=%zu parameters=%zu "
+                              "values=%zu instructions=%zu\n",
+                              fn->name != NULL ? fn->name : "<unnamed>",
+                              fn->block_count, fn->object_count,
+                              fn->parameter_count, fn->value_count,
+                              fn->instruction_count);
+                (void)minic_core_function_dump(stderr, fn);
+            }
+        }
     }
     if (success && fprintf(out, ".section .note.GNU-stack,\"\",@progbits\n") < 0)
         success = false;
