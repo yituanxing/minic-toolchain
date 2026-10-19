@@ -1045,3 +1045,20 @@ byte-for-byte to main** at blob
 `cd9a880a5a707f28b5ea63c364c1844ab35e1c56`.
 The separate legacy `linux-runtime-gcc-baseline.yml` job still
 fails and is not included in the passing scoped CI claims.
+
+## Original BusyBox 12 MiniC object mixed-Kbuild checkpoint — 2026-10-19
+
+**Actual [focused CI #39180862693](https://github.com/yituanxing/minic-toolchain/actions/runs/39180862693) — SUCCESS**, code/test runner commit `76d1e6b19094b76991872d6fc1046e607421cc2b`.
+This check reuses the existing focused job with a temporary branch-scoped opt-in step, not a new workflow. `TOOLCHAIN_FOCUSED_T1=PASS mode=all independent_test_checks=8 shared_builds=1` confirms independently owned RV64, MiniAR and MiniLD checks stayed green.
+
+The existing certified **nine** applets still compile to real MiniC-produced x86-64 objects and pass a byte-exact GNU-only vs original-Kbuild mixed execution oracle. A second, separately reported opt-in cohort adds the **unchanged, Git-object-SHA-verified BusyBox 1.36.1** `coreutils/basename.c`, `dirname.c` and `printf.c`. Original `allnoconfig` + `oldconfig` explicitly enable those three *without editing upstream application C*; an all-GCC Kbuild binary executes first to freeze expected stdout. GNU preprocessing, native MiniC codegen, GNU assembly and real BusyBox Kbuild object replacement were then executed.
+
+Exact CI markers:
+- `BUSYBOX_X86_64_EXTRA_GCC_ORACLE=PASS applets=basename,dirname,printf`.
+- `BUSYBOX_X86_64_EXTRA_TU=PASS` for all three original C files (preprocessed 4,751 / 4,723 / 5,017 lines respectively).
+- `BUSYBOX_X86_64_EXTRA_FRONTIER=DISCOVERY compiled=3 total=3 blocked=0`.
+- `BUSYBOX_X86_64_EXTRA_MIXED=PASS applets=basename,dirname,printf extra_objects=3 total_MiniC_objects=12 GCC_reference=byte-exact GNU_Kbuild=1`.
+
+**Correct scope:** 12 MiniC-built applet objects, all other BusyBox objects still GCC-built. The three new applets are checked with one deterministic fixture each; their complete option matrix, the entire BusyBox build under MiniC, and an x86-native Mini preprocessor/assembler/linker are **not** certified. The extra cohort remains opt-in via `BUSYBOX_X86_64_EXTRA_DISCOVERY=1`; default earlier nine-applet qualification is unchanged. A generic CI green result alone must not be used as proof the opt-in cohort passed: verify the explicit `EXTRA_MIXED=PASS` marker. No compiler source implementation changed to obtain this result.
+
+**Next:** promote this newly proven 12-object combination to a durable regression check with an explicit hard-success marker before selecting further original applets, or use a new real workload that exercises unqualified SysV ABI features. Preserve the project-driven decision not to extract Machine IR or rewrite RV64 without evidence.
