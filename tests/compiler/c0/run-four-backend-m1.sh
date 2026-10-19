@@ -9,7 +9,7 @@ QEMU_LOONGARCH64=qemu-loongarch64
 w=$(mktemp -d)
 trap 'rm -rf "$w"' EXIT HUP INT TERM
 m2_enabled=0
-if [ "${FOUR_BACKEND_M2:-0}" = "1" ] || [ "${FOUR_BACKEND_M2_STACK:-0}" = "1" ] || [ "${FOUR_BACKEND_M3_CALL:-0}" = "1" ] || [ "${FOUR_BACKEND_M4_GLOBAL:-0}" = "1" ] || [ "${FOUR_BACKEND_M5_POINTER:-0}" = "1" ] || [ "${FOUR_BACKEND_M6_ADDRESS:-0}" = "1" ]; then
+if [ "${FOUR_BACKEND_M2:-0}" = "1" ] || [ "${FOUR_BACKEND_M2_STACK:-0}" = "1" ] || [ "${FOUR_BACKEND_M3_CALL:-0}" = "1" ] || [ "${FOUR_BACKEND_M4_GLOBAL:-0}" = "1" ] || [ "${FOUR_BACKEND_M5_POINTER:-0}" = "1" ] || [ "${FOUR_BACKEND_M6_ADDRESS:-0}" = "1" ] || [ "${FOUR_BACKEND_M7_FRAME:-0}" = "1" ]; then
     m2_enabled=1
 fi
 cat > "$w/return.i" <<'EOF'
@@ -245,6 +245,36 @@ int main(void) {
     return mini_pointer_cast((void *)&value);
 }
 EOF
+# M7: enforce real > 2KiB Core frames, rather than merely lifting
+# the old 240-value guard. The same C inputs are GNU-built as oracles.
+# Keep this within the deliberately bounded 8KiB frame for now.
+{
+    printf 'int mini_large_frame(int x) {\n  int v0 = x;\n'
+    j=1
+    while [ "$j" -le 72 ]; do
+        before=$((j - 1))
+        printf '  int v%s = v%s + 1;\n' "$j" "$before"
+        j=$((j + 1))
+    done
+    printf '  return v72 - 30;\n}\n'
+} > "$w/large_frame.i"
+cat > "$w/driver_large_frame.c" <<'EOF'
+extern int mini_large_frame(int);
+int main(void) { return mini_large_frame(0); }
+EOF
+cat > "$w/local_array.i" <<'EOF'
+int mini_local_array(void) {
+    int slots[3];
+    slots[0] = 7;
+    slots[1] = 42;
+    slots[2] = 11;
+    return slots[1];
+}
+EOF
+cat > "$w/driver_local_array.c" <<'EOF'
+extern int mini_local_array(void);
+int main(void) { return mini_local_array(); }
+EOF
 check_qemu_exit() {
     emulator=$1
     binary=$2
@@ -290,6 +320,9 @@ for target in aarch64 loongarch64; do
     if [ "${FOUR_BACKEND_M6_ADDRESS:-0}" = "1" ]; then
         cases="$cases field_read field_write pointer_index pointer_negative pointer_cast"
     fi
+    if [ "${FOUR_BACKEND_M7_FRAME:-0}" = "1" ]; then
+        cases="$cases large_frame local_array"
+    fi
     if [ "$m2_enabled" = "1" ]; then
         # Independent originals for every new CFG/comparison fixture, not
         # merely an expected return code from a MiniC-owned executable.
@@ -308,6 +341,9 @@ for target in aarch64 loongarch64; do
         fi
         if [ "${FOUR_BACKEND_M6_ADDRESS:-0}" = "1" ]; then
             oracle_cases="$oracle_cases field_read field_write pointer_index pointer_negative pointer_cast"
+        fi
+        if [ "${FOUR_BACKEND_M7_FRAME:-0}" = "1" ]; then
+            oracle_cases="$oracle_cases large_frame local_array"
         fi
         for testcase in $oracle_cases; do
             "$gcc" -static -x c "$w/$testcase.i" "$w/driver_$testcase.c" \
@@ -330,6 +366,8 @@ for target in aarch64 loongarch64; do
             compare) "$gcc" -static "$w/$target.compare.o" "$w/driver_compare.c" -o "$w/$target.compare.elf" ;;
             stack9) "$gcc" -static "$w/$target.stack9.o" "$w/driver_stack9.c" -o "$w/$target.stack9.elf" ;;
             stack10) "$gcc" -static "$w/$target.stack10.o" "$w/driver_stack10.c" -o "$w/$target.stack10.elf" ;;
+            large_frame|local_array)
+                "$gcc" -static "$w/$target.$testcase.o" "$w/driver_$testcase.c" -o "$w/$target.$testcase.elf" ;;
             field_read|field_write|pointer_index|pointer_negative|pointer_cast)
                 "$gcc" -static "$w/$target.$testcase.o" "$w/driver_$testcase.c" -o "$w/$target.$testcase.elf" ;;
             pointer_read|pointer_void|pointer_return)
@@ -387,6 +425,9 @@ if [ "$m2_enabled" = "1" ]; then
     fi
     if [ "${FOUR_BACKEND_M6_ADDRESS:-0}" = "1" ]; then
         echo "FOUR_BACKEND_M6_ADDRESS=PASS architectures=2 executable_QEMU_cases=24 field_pointer_bitcast_cases=10 GNU_independent_oracles=20"
+    fi
+    if [ "${FOUR_BACKEND_M7_FRAME:-0}" = "1" ]; then
+        echo "FOUR_BACKEND_M7_FRAME=PASS architectures=2 executable_QEMU_cases=18 large_frame_and_local_array_cases=4 GNU_independent_oracles=14"
     fi
 else
     echo "FOUR_BACKEND_M1=PASS architectures=2 executable_QEMU_cases=8 GCC_independent_oracles=4"
