@@ -25,10 +25,6 @@ static bool valid_int(MinicType type) {
 
 /* Comparisons are Core booleans, not 32-bit C int. Both still fit our
  * private 8-byte SSA slots, with canonical 0/1 in the low 32 bits. */
-static bool valid_int_or_pointer(MinicType type) {
-    return valid_int(type) || minic_type_is_pointer(type);
-}
-
 
 static bool valid_int_or_bool(MinicType type) {
     return valid_int(type) || minic_type_equal(type, minic_type_bool());
