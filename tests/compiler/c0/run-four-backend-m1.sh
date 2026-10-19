@@ -9,7 +9,7 @@ QEMU_LOONGARCH64=qemu-loongarch64
 w=$(mktemp -d)
 trap 'rm -rf "$w"' EXIT HUP INT TERM
 m2_enabled=0
-if [ "${FOUR_BACKEND_M2:-0}" = "1" ] || [ "${FOUR_BACKEND_M2_STACK:-0}" = "1" ] || [ "${FOUR_BACKEND_M3_CALL:-0}" = "1" ] || [ "${FOUR_BACKEND_M4_GLOBAL:-0}" = "1" ] || [ "${FOUR_BACKEND_M5_POINTER:-0}" = "1" ] || [ "${FOUR_BACKEND_M6_ADDRESS:-0}" = "1" ] || [ "${FOUR_BACKEND_M7_FRAME:-0}" = "1" ] || [ "${FOUR_BACKEND_M8_NARROW:-0}" = "1" ] || [ "${FOUR_BACKEND_M9_UNSIGNED:-0}" = "1" ] || [ "${FOUR_BACKEND_M10_MOD:-0}" = "1" ] || [ "${FOUR_BACKEND_M11_INDEX:-0}" = "1" ] || [ "${FOUR_BACKEND_M12_BITWISE:-0}" = "1" ] || [ "${FOUR_BACKEND_M13_NARROW_ARITH:-0}" = "1" ] || [ "${FOUR_BACKEND_M14_SHIFT:-0}" = "1" ] || [ "${FOUR_BACKEND_M15_SCALAR_RETURN:-0}" = "1" ] || [ "${FOUR_BACKEND_M17_RECORD:-0}" = "1" ] || [ "${FOUR_BACKEND_M18_VARARGS:-0}" = "1" ] || [ "${FOUR_BACKEND_M19_PTR_COMPARE:-0}" = "1" ] || [ "${FOUR_BACKEND_M20_LP64_ABI:-0}" = "1" ] || [ "${FOUR_BACKEND_M21_LP64_ADD:-0}" = "1" ] || [ "${FOUR_BACKEND_M22_LP64_CONV:-0}" = "1" ] || [ "${FOUR_BACKEND_M23_LP64_COMPARE:-0}" = "1" ] || [ "${FOUR_BACKEND_M24_INDIRECT_CALL:-0}" = "1" ] || [ "${FOUR_BACKEND_M25_DOUBLE_TRANSPORT:-0}" = "1" ] || [ "${FOUR_BACKEND_M26_DOUBLE_DIV:-0}" = "1" ] || [ "${FOUR_BACKEND_M27_FP_PARAMETER:-0}" = "1" ] || [ "${FOUR_BACKEND_M28_INT_DOUBLE:-0}" = "1" ] || [ "${FOUR_BACKEND_M29_DOUBLE_CMP:-0}" = "1" ] || [ "${FOUR_BACKEND_M30_FP_CALL:-0}" = "1" ] || [ "${FOUR_BACKEND_M31_FLOAT_PROMOTE:-0}" = "1" ] || [ "${FOUR_BACKEND_M32_UNREACHABLE:-0}" = "1" ] || [ "${FOUR_BACKEND_M33_POINTER_LESS:-0}" = "1" ] || [ "${FOUR_BACKEND_M34_FP_CALL_RESULT:-0}" = "1" ] || [ "${FOUR_BACKEND_M35_PTR_TO_LP64:-0}" = "1" ] || [ "${FOUR_BACKEND_M36_LP64_MUL:-0}" = "1" ] || [ "${FOUR_BACKEND_M37_FP_ARITH:-0}" = "1" ] || [ "${FOUR_BACKEND_M38_FP_VARARGS:-0}" = "1" ]; then
+if [ "${FOUR_BACKEND_M2:-0}" = "1" ] || [ "${FOUR_BACKEND_M2_STACK:-0}" = "1" ] || [ "${FOUR_BACKEND_M3_CALL:-0}" = "1" ] || [ "${FOUR_BACKEND_M4_GLOBAL:-0}" = "1" ] || [ "${FOUR_BACKEND_M5_POINTER:-0}" = "1" ] || [ "${FOUR_BACKEND_M6_ADDRESS:-0}" = "1" ] || [ "${FOUR_BACKEND_M7_FRAME:-0}" = "1" ] || [ "${FOUR_BACKEND_M8_NARROW:-0}" = "1" ] || [ "${FOUR_BACKEND_M9_UNSIGNED:-0}" = "1" ] || [ "${FOUR_BACKEND_M10_MOD:-0}" = "1" ] || [ "${FOUR_BACKEND_M11_INDEX:-0}" = "1" ] || [ "${FOUR_BACKEND_M12_BITWISE:-0}" = "1" ] || [ "${FOUR_BACKEND_M13_NARROW_ARITH:-0}" = "1" ] || [ "${FOUR_BACKEND_M14_SHIFT:-0}" = "1" ] || [ "${FOUR_BACKEND_M15_SCALAR_RETURN:-0}" = "1" ] || [ "${FOUR_BACKEND_M17_RECORD:-0}" = "1" ] || [ "${FOUR_BACKEND_M18_VARARGS:-0}" = "1" ] || [ "${FOUR_BACKEND_M19_PTR_COMPARE:-0}" = "1" ] || [ "${FOUR_BACKEND_M20_LP64_ABI:-0}" = "1" ] || [ "${FOUR_BACKEND_M21_LP64_ADD:-0}" = "1" ] || [ "${FOUR_BACKEND_M22_LP64_CONV:-0}" = "1" ] || [ "${FOUR_BACKEND_M23_LP64_COMPARE:-0}" = "1" ] || [ "${FOUR_BACKEND_M24_INDIRECT_CALL:-0}" = "1" ] || [ "${FOUR_BACKEND_M25_DOUBLE_TRANSPORT:-0}" = "1" ] || [ "${FOUR_BACKEND_M26_DOUBLE_DIV:-0}" = "1" ] || [ "${FOUR_BACKEND_M27_FP_PARAMETER:-0}" = "1" ] || [ "${FOUR_BACKEND_M28_INT_DOUBLE:-0}" = "1" ] || [ "${FOUR_BACKEND_M29_DOUBLE_CMP:-0}" = "1" ] || [ "${FOUR_BACKEND_M30_FP_CALL:-0}" = "1" ] || [ "${FOUR_BACKEND_M31_FLOAT_PROMOTE:-0}" = "1" ] || [ "${FOUR_BACKEND_M32_UNREACHABLE:-0}" = "1" ] || [ "${FOUR_BACKEND_M33_POINTER_LESS:-0}" = "1" ] || [ "${FOUR_BACKEND_M34_FP_CALL_RESULT:-0}" = "1" ] || [ "${FOUR_BACKEND_M35_PTR_TO_LP64:-0}" = "1" ] || [ "${FOUR_BACKEND_M36_LP64_MUL:-0}" = "1" ] || [ "${FOUR_BACKEND_M37_FP_ARITH:-0}" = "1" ] || [ "${FOUR_BACKEND_M38_FP_VARARGS:-0}" = "1" ] || [ "${FOUR_BACKEND_M39_LP64_BITOPS:-0}" = "1" ]; then
     m2_enabled=1
 fi
 cat > "$w/return.i" <<'EOF'
@@ -1263,6 +1263,48 @@ int main(void) {
     return 42;
 }
 EOF
+# M39: cJSON utf16_literal_to_utf8's 64-bit codepoint bitwise,
+# conversion and right shift. Reject a fake low-32-bit implementation.
+cat > "$w/lp64_bitops.i" <<'EOF'
+unsigned long mini_u64_or(unsigned long a, unsigned long b) { return a | b; }
+unsigned long mini_u64_and(unsigned long a, unsigned long b) { return a & b; }
+unsigned long mini_u64_xor(unsigned long a, unsigned long b) { return a ^ b; }
+long mini_s64_xor(long a, long b) { return a ^ b; }
+unsigned long mini_u64_shr(unsigned long a, unsigned int shift) { return a >> shift; }
+unsigned long mini_u64_shl(unsigned long a, unsigned int shift) { return a << shift; }
+unsigned long mini_u64_varshift(unsigned long a, unsigned long shift) { return a >> shift; }
+long mini_s64_shr(long a, int shift) { return a >> shift; }
+unsigned long mini_utf8_fragment(unsigned long codepoint, unsigned char mark) {
+    return ((codepoint | mark) & 0xffUL) | (codepoint >> 6);
+}
+EOF
+cat > "$w/driver_lp64_bitops.c" <<'EOF'
+extern unsigned long mini_u64_or(unsigned long, unsigned long);
+extern unsigned long mini_u64_and(unsigned long, unsigned long);
+extern unsigned long mini_u64_xor(unsigned long, unsigned long);
+extern long mini_s64_xor(long, long);
+extern unsigned long mini_u64_shr(unsigned long, unsigned int);
+extern unsigned long mini_u64_shl(unsigned long, unsigned int);
+extern unsigned long mini_u64_varshift(unsigned long, unsigned long);
+extern long mini_s64_shr(long, int);
+extern unsigned long mini_utf8_fragment(unsigned long, unsigned char);
+int main(void) {
+    volatile unsigned long a = 0xf123456789abcdefUL;
+    volatile unsigned long b = 0x0ff00000ff0000aaUL;
+    volatile long neg = -0x123456789abcdefL;
+    if (mini_u64_or(a, b) != (a | b)) return 1;
+    if (mini_u64_and(a, b) != (a & b)) return 2;
+    if (mini_u64_xor(a, b) != (a ^ b)) return 3;
+    if (mini_s64_xor(neg, -7L) != (neg ^ -7L)) return 4;
+    if (mini_u64_shr(a, 36) != (a >> 36)) return 5;
+    if (mini_u64_shl(b, 13) != (b << 13)) return 6;
+    if (mini_u64_varshift(a, 41UL) != (a >> 41UL)) return 7;
+    if (mini_s64_shr(neg, 17) != (neg >> 17)) return 8;
+    if (mini_utf8_fragment(a, 0xc0) != ((a | 0xc0UL) & 0xffUL) | (a >> 6))
+        return 9;
+    return 42;
+}
+EOF
 check_qemu_exit() {
     emulator=$1
     binary=$2
@@ -1401,6 +1443,9 @@ for target in aarch64 loongarch64; do
     if [ "${FOUR_BACKEND_M38_FP_VARARGS:-0}" = "1" ]; then
         cases="$cases fp_vararg"
     fi
+    if [ "${FOUR_BACKEND_M39_LP64_BITOPS:-0}" = "1" ]; then
+        cases="$cases lp64_bitops"
+    fi
     if [ "$m2_enabled" = "1" ]; then
         # Independent originals for every new CFG/comparison fixture, not
         # merely an expected return code from a MiniC-owned executable.
@@ -1513,6 +1558,9 @@ for target in aarch64 loongarch64; do
         if [ "${FOUR_BACKEND_M38_FP_VARARGS:-0}" = "1" ]; then
             oracle_cases="$oracle_cases fp_vararg"
         fi
+        if [ "${FOUR_BACKEND_M39_LP64_BITOPS:-0}" = "1" ]; then
+            oracle_cases="$oracle_cases lp64_bitops"
+        fi
         for testcase in $oracle_cases; do
             "$gcc" -static -x c "$w/$testcase.i" "$w/driver_$testcase.c" \
                 -o "$w/$target.gnu-$testcase.elf"
@@ -1559,7 +1607,7 @@ for target in aarch64 loongarch64; do
                 "$gcc" -static "$w/$target.$testcase.o" "$w/driver_$testcase.c" -o "$w/$target.$testcase.elf" ;;
             u8_index|s8_index|u16_index|s16_index)
                 "$gcc" -static "$w/$target.$testcase.o" "$w/driver_$testcase.c" -o "$w/$target.$testcase.elf" ;;
-            size64_abi|size64_add|size64_conv|size64_compare|indirect_hooks|double_transport|double_div|fp_parameter|int_double|double_compare|fp_call|float_promote|unreachable_term|pointer_less|fp_call_result|ptr_to_lp64|size64_mul|fp_sub_mul|fp_vararg|pointer_null|pointer_equality|function_address)
+            size64_abi|size64_add|size64_conv|size64_compare|indirect_hooks|double_transport|double_div|fp_parameter|int_double|double_compare|fp_call|float_promote|unreachable_term|pointer_less|fp_call_result|ptr_to_lp64|size64_mul|fp_sub_mul|fp_vararg|lp64_bitops|pointer_null|pointer_equality|function_address)
                 "$gcc" -static "$w/$target.$testcase.o" "$w/driver_$testcase.c" -o "$w/$target.$testcase.elf" ;;
             vararg_int|vararg_pointer)
                 "$gcc" -static "$w/$target.$testcase.o" "$w/driver_$testcase.c" -o "$w/$target.$testcase.elf" ;;
@@ -1729,6 +1777,9 @@ if [ "$m2_enabled" = "1" ]; then
     fi
     if [ "${FOUR_BACKEND_M38_FP_VARARGS:-0}" = "1" ]; then
         echo "FOUR_BACKEND_M38_FP_VARARGS=PASS architectures=2 GNU_QEMU_diff=2 sprintf_binary64=true mixed_fixed_unnamed_double=true"
+    fi
+    if [ "${FOUR_BACKEND_M39_LP64_BITOPS:-0}" = "1" ]; then
+        echo "FOUR_BACKEND_M39_LP64_BITOPS=PASS architectures=2 GNU_QEMU_diff=2 lp64_and_or_xor=true left_right_shift=true high32_preserved=true"
     fi
 else
     echo "FOUR_BACKEND_M1=PASS architectures=2 executable_QEMU_cases=8 GCC_independent_oracles=4"
