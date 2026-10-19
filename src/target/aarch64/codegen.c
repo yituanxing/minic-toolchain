@@ -1109,6 +1109,24 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                 return false;
             break;
         }
+        /* M33: cJSON_SetValuestring uses pointer ordering for overlap
+         * checks; the Core verifier has confirmed compatible pointer types.
+         * Compare the entire 64-bit address unsigned (not low 32 bits). */
+        case MINIC_CORE_INSTRUCTION_POINTER_LESS: {
+            const MinicCoreValueId lhs = ins->value.binary.left;
+            const MinicCoreValueId rhs = ins->value.binary.right;
+            if (!minic_type_equal(ins->type, minic_type_int()) ||
+                lhs >= fn->value_count || rhs >= fn->value_count ||
+                !minic_type_is_pointer(fn->values[lhs].type) ||
+                !minic_type_equal(fn->values[lhs].type, fn->values[rhs].type) ||
+                fprintf(out, "  ldr x9, [sp, #%zu]\n"
+                             "  ldr x10, [sp, #%zu]\n"
+                             "  cmp x9, x10\n"
+                             "  cset w9, lo\n",
+                        (size_t)lhs * 8U, (size_t)rhs * 8U) < 0)
+                return false;
+            break;
+        }
         case MINIC_CORE_INSTRUCTION_INTEGER_LESS:
         case MINIC_CORE_INSTRUCTION_SCALAR_EQUAL: {
             const MinicCoreValueId lhs = ins->value.binary.left;
