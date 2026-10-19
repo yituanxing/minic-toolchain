@@ -693,17 +693,20 @@ unsigned long mini_size_identity(unsigned long n) {
 }
 void mini_size_store(unsigned long *out, unsigned long n) { *out = n; }
 unsigned long mini_size_load(const unsigned long *in) { return *in; }
+unsigned long mini_size_literal(void) { return 0x1234567887654321UL; }
 EOF
 cat > "$w/driver_size64_abi.c" <<'EOF'
 extern unsigned long mini_size_identity(unsigned long);
 extern void mini_size_store(unsigned long *, unsigned long);
 extern unsigned long mini_size_load(const unsigned long *);
+extern unsigned long mini_size_literal(void);
 unsigned long gnu_size_identity(unsigned long n) { return n; }
 int main(void) {
     unsigned long n = 0x1234567887654321UL, v = 0;
     if (mini_size_identity(n) != n) return 1;
     mini_size_store(&v, n);
     if (mini_size_load(&v) != n) return 2;
+    if (mini_size_literal() != n) return 3;
     return 42;
 }
 EOF
