@@ -9,7 +9,7 @@ QEMU_LOONGARCH64=qemu-loongarch64
 w=$(mktemp -d)
 trap 'rm -rf "$w"' EXIT HUP INT TERM
 m2_enabled=0
-if [ "${FOUR_BACKEND_M2:-0}" = "1" ] || [ "${FOUR_BACKEND_M2_STACK:-0}" = "1" ] || [ "${FOUR_BACKEND_M3_CALL:-0}" = "1" ] || [ "${FOUR_BACKEND_M4_GLOBAL:-0}" = "1"  ] || [ "${FOUR_BACKEND_M5_POINTER:-0}" = "1" ]; then
+if [ "${FOUR_BACKEND_M2:-0}" = "1" ] || [ "${FOUR_BACKEND_M2_STACK:-0}" = "1" ] || [ "${FOUR_BACKEND_M3_CALL:-0}" = "1" ] || [ "${FOUR_BACKEND_M4_GLOBAL:-0}" = "1" ] || [ "${FOUR_BACKEND_M5_POINTER:-0}" = "1" ]; then
     m2_enabled=1
 fi
 cat > "$w/return.i" <<'EOF'
