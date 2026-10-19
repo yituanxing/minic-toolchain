@@ -9,7 +9,7 @@ QEMU_LOONGARCH64=qemu-loongarch64
 w=$(mktemp -d)
 trap 'rm -rf "$w"' EXIT HUP INT TERM
 m2_enabled=0
-if [ "${FOUR_BACKEND_M2:-0}" = "1" ] || [ "${FOUR_BACKEND_M2_STACK:-0}" = "1" ] || [ "${FOUR_BACKEND_M3_CALL:-0}" = "1" ] || [ "${FOUR_BACKEND_M4_GLOBAL:-0}" = "1" ] || [ "${FOUR_BACKEND_M5_POINTER:-0}" = "1" ] || [ "${FOUR_BACKEND_M6_ADDRESS:-0}" = "1" ] || [ "${FOUR_BACKEND_M7_FRAME:-0}" = "1" ] || [ "${FOUR_BACKEND_M8_NARROW:-0}" = "1" ] || [ "${FOUR_BACKEND_M9_UNSIGNED:-0}" = "1" ] || [ "${FOUR_BACKEND_M10_MOD:-0}" = "1" ] || [ "${FOUR_BACKEND_M11_INDEX:-0}" = "1" ] || [ "${FOUR_BACKEND_M12_BITWISE:-0}" = "1" ] || [ "${FOUR_BACKEND_M13_NARROW_ARITH:-0}" = "1" ] || [ "${FOUR_BACKEND_M14_SHIFT:-0}" = "1" ] || [ "${FOUR_BACKEND_M15_SCALAR_RETURN:-0}" = "1" ] || [ "${FOUR_BACKEND_M17_RECORD:-0}" = "1" ]; then
+if [ "${FOUR_BACKEND_M2:-0}" = "1" ] || [ "${FOUR_BACKEND_M2_STACK:-0}" = "1" ] || [ "${FOUR_BACKEND_M3_CALL:-0}" = "1" ] || [ "${FOUR_BACKEND_M4_GLOBAL:-0}" = "1" ] || [ "${FOUR_BACKEND_M5_POINTER:-0}" = "1" ] || [ "${FOUR_BACKEND_M6_ADDRESS:-0}" = "1" ] || [ "${FOUR_BACKEND_M7_FRAME:-0}" = "1" ] || [ "${FOUR_BACKEND_M8_NARROW:-0}" = "1" ] || [ "${FOUR_BACKEND_M9_UNSIGNED:-0}" = "1" ] || [ "${FOUR_BACKEND_M10_MOD:-0}" = "1" ] || [ "${FOUR_BACKEND_M11_INDEX:-0}" = "1" ] || [ "${FOUR_BACKEND_M12_BITWISE:-0}" = "1" ] || [ "${FOUR_BACKEND_M13_NARROW_ARITH:-0}" = "1" ] || [ "${FOUR_BACKEND_M14_SHIFT:-0}" = "1" ] || [ "${FOUR_BACKEND_M15_SCALAR_RETURN:-0}" = "1" ] || [ "${FOUR_BACKEND_M17_RECORD:-0}" = "1" ] || [ "${FOUR_BACKEND_M18_VARARGS:-0}" = "1" ]; then
     m2_enabled=1
 fi
 cat > "$w/return.i" <<'EOF'
@@ -617,6 +617,39 @@ int main(void) {
     return mini_record_padding();
 }
 EOF
+# M18: the original cJSON_Version uses sprintf(version, "%i.%i.%i",
+# 1,7,19). Only promoted 32-bit integer and pointer varargs in the first
+# eight argument registers are admitted; verify actual target C ABI.
+cat > "$w/vararg_int.i" <<'EOF'
+extern int sprintf(char *, const char *, ...);
+int mini_vararg_int(char *buffer) {
+    return sprintf(buffer, "%i.%i.%i", 1, 7, 19);
+}
+EOF
+cat > "$w/driver_vararg_int.c" <<'EOF'
+#include <string.h>
+extern int mini_vararg_int(char *);
+int main(void) {
+    char b[32] = {0};
+    return mini_vararg_int(b) == 6 &&
+           strcmp(b, "1.7.19") == 0 ? 42 : 1;
+}
+EOF
+cat > "$w/vararg_pointer.i" <<'EOF'
+extern int sprintf(char *, const char *, ...);
+int mini_vararg_pointer(char *buffer, const char *text) {
+    return sprintf(buffer, "%s:%d", text, 7);
+}
+EOF
+cat > "$w/driver_vararg_pointer.c" <<'EOF'
+#include <string.h>
+extern int mini_vararg_pointer(char *, const char *);
+int main(void) {
+    char b[32] = {0};
+    return mini_vararg_pointer(b, "abc") == 5 &&
+           strcmp(b, "abc:7") == 0 ? 42 : 1;
+}
+EOF
 check_qemu_exit() {
     emulator=$1
     binary=$2
@@ -692,6 +725,9 @@ for target in aarch64 loongarch64; do
     if [ "${FOUR_BACKEND_M17_RECORD:-0}" = "1" ]; then
         cases="$cases record_zero record_hooks record_padding"
     fi
+    if [ "${FOUR_BACKEND_M18_VARARGS:-0}" = "1" ]; then
+        cases="$cases vararg_int vararg_pointer"
+    fi
     if [ "$m2_enabled" = "1" ]; then
         # Independent originals for every new CFG/comparison fixture, not
         # merely an expected return code from a MiniC-owned executable.
@@ -741,6 +777,9 @@ for target in aarch64 loongarch64; do
         if [ "${FOUR_BACKEND_M17_RECORD:-0}" = "1" ]; then
             oracle_cases="$oracle_cases record_zero record_hooks record_padding"
         fi
+        if [ "${FOUR_BACKEND_M18_VARARGS:-0}" = "1" ]; then
+            oracle_cases="$oracle_cases vararg_int vararg_pointer"
+        fi
         for testcase in $oracle_cases; do
             "$gcc" -static -x c "$w/$testcase.i" "$w/driver_$testcase.c" \
                 -o "$w/$target.gnu-$testcase.elf"
@@ -779,6 +818,8 @@ for target in aarch64 loongarch64; do
             bit_xor|bit_and|bit_or|bit_unsigned)
                 "$gcc" -static "$w/$target.$testcase.o" "$w/driver_$testcase.c" -o "$w/$target.$testcase.elf" ;;
             u8_index|s8_index|u16_index|s16_index)
+                "$gcc" -static "$w/$target.$testcase.o" "$w/driver_$testcase.c" -o "$w/$target.$testcase.elf" ;;
+            vararg_int|vararg_pointer)
                 "$gcc" -static "$w/$target.$testcase.o" "$w/driver_$testcase.c" -o "$w/$target.$testcase.elf" ;;
             record_zero|record_hooks|record_padding)
                 "$gcc" -static "$w/$target.$testcase.o" "$w/driver_$testcase.c" -o "$w/$target.$testcase.elf" ;;
@@ -883,6 +924,9 @@ if [ "$m2_enabled" = "1" ]; then
     fi
     if [ "${FOUR_BACKEND_M17_RECORD:-0}" = "1" ]; then
         echo "FOUR_BACKEND_M17_RECORD=PASS architectures=2 executable_QEMU_cases=20 record_aggregate_relocation_cases=6 GNU_independent_oracles=16"
+    fi
+    if [ "${FOUR_BACKEND_M18_VARARGS:-0}" = "1" ]; then
+        echo "FOUR_BACKEND_M18_VARARGS=PASS architectures=2 executable_QEMU_cases=18 integer_pointer_variadic_cases=4 GNU_independent_oracles=14"
     fi
 else
     echo "FOUR_BACKEND_M1=PASS architectures=2 executable_QEMU_cases=8 GCC_independent_oracles=4"
