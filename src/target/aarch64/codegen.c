@@ -456,11 +456,18 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
             const MinicCoreValueId base = ins->value.pointer_offset.base;
             const MinicCoreValueId index = ins->value.pointer_offset.index;
             const size_t stride = ins->value.pointer_offset.element_size;
+            size_t iw;
+            bool signed_index;
             if (base >= fn->value_count || index >= fn->value_count ||
                 !minic_type_is_pointer(fn->values[base].type) ||
-                !valid_int(fn->values[index].type) || stride > 65535U ||
+                !small_integer_width(program, target, fn->values[index].type,
+                                     &iw, &signed_index) || iw != 4U ||
+                stride > 65535U ||
                 fprintf(out, "  ldr x9, [sp, #%zu]\n", (size_t)base * 8U) < 0 ||
-                fprintf(out, "  ldrsw x10, [sp, #%zu]\n", (size_t)index * 8U) < 0)
+                fprintf(out, signed_index
+                                 ? "  ldrsw x10, [sp, #%zu]\n"
+                                 : "  ldr w10, [sp, #%zu]\n",
+                        (size_t)index * 8U) < 0)
                 return false;
             if (stride != 0U) {
                 if (fprintf(out, "  movz x11, #%zu\n"
@@ -551,9 +558,12 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                 ? "  add w9, w9, w10\n" :
                 ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_SUBTRACT
                     ? "  sub w9, w9, w10\n" : "  mul w9, w9, w10\n";
+            size_t lw, rw;
+            bool ls, rs;
             if (lhs >= fn->value_count || rhs >= fn->value_count ||
-                !valid_int(fn->values[lhs].type) ||
-                !valid_int(fn->values[rhs].type) ||
+                !small_integer_width(program, target, fn->values[lhs].type, &lw, &ls) ||
+                !small_integer_width(program, target, fn->values[rhs].type, &rw, &rs) ||
+                lw != 4U || rw != 4U || ls != rs ||
                 fprintf(out, "  ldr w9, [sp, #%zu]\n", (size_t)lhs * 8U) < 0 ||
                 fprintf(out, "  ldr w10, [sp, #%zu]\n", (size_t)rhs * 8U) < 0 ||
                 fputs(opcode, out) == EOF) return false;
@@ -563,13 +573,17 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
         case MINIC_CORE_INSTRUCTION_SCALAR_EQUAL: {
             const MinicCoreValueId lhs = ins->value.binary.left;
             const MinicCoreValueId rhs = ins->value.binary.right;
+            size_t lw, rw;
+            bool ls, rs;
             if (lhs >= fn->value_count || rhs >= fn->value_count ||
-                !valid_int(fn->values[lhs].type) ||
-                !valid_int(fn->values[rhs].type) ||
+                !small_integer_width(program, target, fn->values[lhs].type, &lw, &ls) ||
+                !small_integer_width(program, target, fn->values[rhs].type, &rw, &rs) ||
+                lw != 4U || rw != 4U || ls != rs ||
                 fprintf(out, "  ldr w9, [sp, #%zu]\n", (size_t)lhs * 8U) < 0 ||
                 fprintf(out, "  ldr w10, [sp, #%zu]\n", (size_t)rhs * 8U) < 0 ||
                 fputs(ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_LESS
-                          ? "  cmp w9, w10\n  cset w9, lt\n"
+                          ? (ls ? "  cmp w9, w10\n  cset w9, lt\n"
+                                : "  cmp w9, w10\n  cset w9, lo\n")
                           : "  cmp w9, w10\n  cset w9, eq\n", out) == EOF)
                 return false;
             break;
