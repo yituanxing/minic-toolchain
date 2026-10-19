@@ -1277,6 +1277,12 @@ long mini_s64_shr(long a, int shift) { return a >> shift; }
 unsigned long mini_utf8_fragment(unsigned long codepoint, unsigned char mark) {
     return ((codepoint | mark) & 0xffUL) | (codepoint >> 6);
 }
+unsigned long mini_u64_div(unsigned long a, unsigned long b) { return a / b; }
+unsigned long mini_u64_rem(unsigned long a, unsigned long b) { return a % b; }
+long mini_s64_div(long a, long b) { return a / b; }
+long mini_s64_rem(long a, long b) { return a % b; }
+long mini_s64_neg(long a) { return -a; }
+unsigned long mini_u64_neg(unsigned long a) { return -a; }
 EOF
 cat > "$w/driver_lp64_bitops.c" <<'EOF'
 extern unsigned long mini_u64_or(unsigned long, unsigned long);
@@ -1288,6 +1294,12 @@ extern unsigned long mini_u64_shl(unsigned long, unsigned int);
 extern unsigned long mini_u64_varshift(unsigned long, unsigned long);
 extern long mini_s64_shr(long, int);
 extern unsigned long mini_utf8_fragment(unsigned long, unsigned char);
+extern unsigned long mini_u64_div(unsigned long, unsigned long);
+extern unsigned long mini_u64_rem(unsigned long, unsigned long);
+extern long mini_s64_div(long, long);
+extern long mini_s64_rem(long, long);
+extern long mini_s64_neg(long);
+extern unsigned long mini_u64_neg(unsigned long);
 int main(void) {
     volatile unsigned long a = 0xf123456789abcdefUL;
     volatile unsigned long b = 0x0ff00000ff0000aaUL;
@@ -1302,6 +1314,12 @@ int main(void) {
     if (mini_s64_shr(neg, 17) != (neg >> 17)) return 8;
     if (mini_utf8_fragment(a, 0xc0) != (((a | 0xc0UL) & 0xffUL) | (a >> 6)))
         return 9;
+    if (mini_u64_div(a, b) != (a / b)) return 10;
+    if (mini_u64_rem(a, b) != (a % b)) return 11;
+    if (mini_s64_div(neg, -123456789L) != (neg / -123456789L)) return 12;
+    if (mini_s64_rem(neg, -123456789L) != (neg % -123456789L)) return 13;
+    if (mini_s64_neg(neg) != -neg) return 14;
+    if (mini_u64_neg(a) != (0UL - a)) return 15;
     return 42;
 }
 EOF
@@ -1779,7 +1797,7 @@ if [ "$m2_enabled" = "1" ]; then
         echo "FOUR_BACKEND_M38_FP_VARARGS=PASS architectures=2 GNU_QEMU_diff=2 sprintf_binary64=true mixed_fixed_unnamed_double=true"
     fi
     if [ "${FOUR_BACKEND_M39_LP64_BITOPS:-0}" = "1" ]; then
-        echo "FOUR_BACKEND_M39_LP64_BITOPS=PASS architectures=2 GNU_QEMU_diff=2 lp64_and_or_xor=true left_right_shift=true high32_preserved=true"
+        echo "FOUR_BACKEND_M39_LP64_BITOPS=PASS architectures=2 GNU_QEMU_diff=2 lp64_and_or_xor=true left_right_shift=true high32_preserved=true lp64_div_rem_neg=true"
     fi
 else
     echo "FOUR_BACKEND_M1=PASS architectures=2 executable_QEMU_cases=8 GCC_independent_oracles=4"
