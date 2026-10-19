@@ -31,6 +31,24 @@ def call_proxy(args):
     # not proof of MiniC ownership. Replace just after GCC creates the real
     # target .o and before Kbuild archives/links that object.
     wanted = os.environ.get("BUSYBOX_ALLYES_REPLACE_OWNER")
+    map_path = os.environ.get("BUSYBOX_ALLYES_REPLACE_MAP")
+    if map_path and gcc.returncode == 0 and "-c" in args:
+        manifest = json.loads(Path(map_path).read_text(encoding="utf-8"))
+        output = next((args[i + 1] for i, val in enumerate(args[:-1])
+                       if val == "-o"), None)
+        normalized = str(Path(output).resolve()) if output is not None else None
+        if normalized in manifest:
+            import shutil
+            mini_path = Path(manifest[normalized])
+            if not mini_path.is_file():
+                raise SystemExit("Kbuild cohort MiniC object missing")
+            shutil.copy2(mini_path, output)
+            event_dir = Path(os.environ["BUSYBOX_ALLYES_REPORT_ROOT"]) / "combined-events"
+            event_dir.mkdir(exist_ok=True)
+            event = event_dir / (Path(output).stem + ".replace.txt")
+            event.write_text("KBUILD_REPLACE_OWNER=%s mini_sha256=%s\n" %
+                             (output, hashlib.sha256(mini_path.read_bytes()).hexdigest()),
+                             encoding="utf-8")
     if wanted and gcc.returncode == 0 and "-c" in args:
         output = next((args[i + 1] for i, val in enumerate(args[:-1])
                        if val == "-o"), None)
