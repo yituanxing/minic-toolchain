@@ -597,10 +597,13 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
             if (lhs >= fn->value_count || rhs >= fn->value_count ||
                 !small_integer_width(program, target, fn->values[lhs].type, &lw, &ls) ||
                 !small_integer_width(program, target, fn->values[rhs].type, &rw, &rs) ||
-                lw != 4U || rw != 4U || ls != rs ||
+                lw != rw || ls != rs ||
+                !minic_type_equal(fn->values[lhs].type, ins->type) ||
+                minic_type_is_bool_integer(ins->type) ||
                 fprintf(out, "  ldr w9, [sp, #%zu]\n", (size_t)lhs * 8U) < 0 ||
                 fprintf(out, "  ldr w10, [sp, #%zu]\n", (size_t)rhs * 8U) < 0 ||
-                fputs(opcode, out) == EOF) return false;
+                fputs(opcode, out) == EOF ||
+                !emit_integer_normalize(out, lw, ls)) return false;
             break;
         }
         case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND:
