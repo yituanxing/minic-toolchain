@@ -9,7 +9,7 @@ QEMU_LOONGARCH64=qemu-loongarch64
 w=$(mktemp -d)
 trap 'rm -rf "$w"' EXIT HUP INT TERM
 m2_enabled=0
-if [ "${FOUR_BACKEND_M2:-0}" = "1" ] || [ "${FOUR_BACKEND_M2_STACK:-0}" = "1" ] || [ "${FOUR_BACKEND_M3_CALL:-0}" = "1" ] || [ "${FOUR_BACKEND_M4_GLOBAL:-0}" = "1" ] || [ "${FOUR_BACKEND_M5_POINTER:-0}" = "1" ] || [ "${FOUR_BACKEND_M6_ADDRESS:-0}" = "1" ] || [ "${FOUR_BACKEND_M7_FRAME:-0}" = "1" ]; then
+if [ "${FOUR_BACKEND_M2:-0}" = "1" ] || [ "${FOUR_BACKEND_M2_STACK:-0}" = "1" ] || [ "${FOUR_BACKEND_M3_CALL:-0}" = "1" ] || [ "${FOUR_BACKEND_M4_GLOBAL:-0}" = "1" ] || [ "${FOUR_BACKEND_M5_POINTER:-0}" = "1" ] || [ "${FOUR_BACKEND_M6_ADDRESS:-0}" = "1" ] || [ "${FOUR_BACKEND_M7_FRAME:-0}" = "1" ] || [ "${FOUR_BACKEND_M8_NARROW:-0}" = "1" ]; then
     m2_enabled=1
 fi
 cat > "$w/return.i" <<'EOF'
@@ -275,6 +275,57 @@ cat > "$w/driver_local_array.c" <<'EOF'
 extern int mini_local_array(void);
 int main(void) { return mini_local_array(); }
 EOF
+# M8: the *original* KeyExpansion uses both narrow byte loads and
+# Core convert.int. Preserve signedness across two target ABIs.
+cat > "$w/ubyte_read.i" <<'EOF'
+int mini_ubyte_read(unsigned char *p) { return *p; }
+EOF
+cat > "$w/driver_ubyte_read.c" <<'EOF'
+extern int mini_ubyte_read(unsigned char *);
+int main(void) { unsigned char x = 42; return mini_ubyte_read(&x); }
+EOF
+cat > "$w/sbyte_read.i" <<'EOF'
+int mini_sbyte_read(signed char *p) { return *p + 43; }
+EOF
+cat > "$w/driver_sbyte_read.c" <<'EOF'
+extern int mini_sbyte_read(signed char *);
+int main(void) { signed char x = -1; return mini_sbyte_read(&x); }
+EOF
+cat > "$w/byte_write.i" <<'EOF'
+void mini_byte_write(unsigned char *p) { *p = 42; }
+EOF
+cat > "$w/driver_byte_write.c" <<'EOF'
+extern void mini_byte_write(unsigned char *);
+int main(void) { unsigned char x = 0; mini_byte_write(&x); return x; }
+EOF
+cat > "$w/ushort_read.i" <<'EOF'
+int mini_ushort_read(unsigned short *p) { return *p; }
+EOF
+cat > "$w/driver_ushort_read.c" <<'EOF'
+extern int mini_ushort_read(unsigned short *);
+int main(void) { unsigned short x = 42; return mini_ushort_read(&x); }
+EOF
+cat > "$w/short_read.i" <<'EOF'
+int mini_short_read(short *p) { return *p + 45; }
+EOF
+cat > "$w/driver_short_read.c" <<'EOF'
+extern int mini_short_read(short *);
+int main(void) { short x = -3; return mini_short_read(&x); }
+EOF
+cat > "$w/uchar_conv.i" <<'EOF'
+int mini_uchar_conv(int value) { return (unsigned char)value; }
+EOF
+cat > "$w/driver_uchar_conv.c" <<'EOF'
+extern int mini_uchar_conv(int);
+int main(void) { return mini_uchar_conv(298); }
+EOF
+cat > "$w/ushort_conv.i" <<'EOF'
+int mini_ushort_conv(int value) { return (unsigned short)value; }
+EOF
+cat > "$w/driver_ushort_conv.c" <<'EOF'
+extern int mini_ushort_conv(int);
+int main(void) { return mini_ushort_conv(65578); }
+EOF
 check_qemu_exit() {
     emulator=$1
     binary=$2
@@ -323,6 +374,9 @@ for target in aarch64 loongarch64; do
     if [ "${FOUR_BACKEND_M7_FRAME:-0}" = "1" ]; then
         cases="$cases large_frame local_array"
     fi
+    if [ "${FOUR_BACKEND_M8_NARROW:-0}" = "1" ]; then
+        cases="$cases ubyte_read sbyte_read byte_write ushort_read short_read uchar_conv ushort_conv"
+    fi
     if [ "$m2_enabled" = "1" ]; then
         # Independent originals for every new CFG/comparison fixture, not
         # merely an expected return code from a MiniC-owned executable.
@@ -344,6 +398,9 @@ for target in aarch64 loongarch64; do
         fi
         if [ "${FOUR_BACKEND_M7_FRAME:-0}" = "1" ]; then
             oracle_cases="$oracle_cases large_frame local_array"
+        fi
+        if [ "${FOUR_BACKEND_M8_NARROW:-0}" = "1" ]; then
+            oracle_cases="$oracle_cases ubyte_read sbyte_read byte_write ushort_read short_read uchar_conv ushort_conv"
         fi
         for testcase in $oracle_cases; do
             "$gcc" -static -x c "$w/$testcase.i" "$w/driver_$testcase.c" \
@@ -380,6 +437,8 @@ for target in aarch64 loongarch64; do
             compare) "$gcc" -static "$w/$target.compare.o" "$w/driver_compare.c" -o "$w/$target.compare.elf" ;;
             stack9) "$gcc" -static "$w/$target.stack9.o" "$w/driver_stack9.c" -o "$w/$target.stack9.elf" ;;
             stack10) "$gcc" -static "$w/$target.stack10.o" "$w/driver_stack10.c" -o "$w/$target.stack10.elf" ;;
+            ubyte_read|sbyte_read|byte_write|ushort_read|short_read|uchar_conv|ushort_conv)
+                "$gcc" -static "$w/$target.$testcase.o" "$w/driver_$testcase.c" -o "$w/$target.$testcase.elf" ;;
             large_frame|local_array)
                 "$gcc" -static "$w/$target.$testcase.o" "$w/driver_$testcase.c" -o "$w/$target.$testcase.elf" ;;
             field_read|field_write|pointer_index|pointer_negative|pointer_cast)
@@ -442,6 +501,9 @@ if [ "$m2_enabled" = "1" ]; then
     fi
     if [ "${FOUR_BACKEND_M7_FRAME:-0}" = "1" ]; then
         echo "FOUR_BACKEND_M7_FRAME=PASS architectures=2 executable_QEMU_cases=18 large_frame_and_local_array_cases=4 GNU_independent_oracles=14"
+    fi
+    if [ "${FOUR_BACKEND_M8_NARROW:-0}" = "1" ]; then
+        echo "FOUR_BACKEND_M8_NARROW=PASS architectures=2 executable_QEMU_cases=28 signed_unsigned_byte_short_cases=14 GNU_independent_oracles=24"
     fi
 else
     echo "FOUR_BACKEND_M1=PASS architectures=2 executable_QEMU_cases=8 GCC_independent_oracles=4"
