@@ -1192,12 +1192,16 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
             bool sign;
             if (operand >= fn->value_count ||
                 !minic_type_equal(fn->values[operand].type, ins->type) ||
-                !small_integer_width(program, target, ins->type, &width, &sign) ||
+                !scalar_integer_width(program, target, ins->type, &width, &sign) ||
                 minic_type_is_bool_integer(ins->type) ||
-                fprintf(out, "  ldr w9, [sp, #%zu]\n", (size_t)operand * 8U) < 0 ||
-                fputs("  neg w9, w9\n", out) == EOF ||
-                !emit_integer_normalize(out, width, sign)) return machine_emit_reject(fn, "aarch64", name, reject_stage,
-                                    reject_block, reject_ins, __LINE__);
+                fprintf(out, width == 8U ? "  ldr x9, [sp, #%zu]\n"
+                                         : "  ldr w9, [sp, #%zu]\n",
+                        (size_t)operand * 8U) < 0 ||
+                fputs(width == 8U ? "  neg x9, x9\n" : "  neg w9, w9\n",
+                      out) == EOF ||
+                (width != 8U && !emit_integer_normalize(out, width, sign)))
+                return machine_emit_reject(fn, "aarch64", name, reject_stage,
+                                           reject_block, reject_ins, __LINE__);
             break;
         }
         case MINIC_CORE_INSTRUCTION_INTEGER_ADD:
@@ -1274,28 +1278,45 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
         }
         case MINIC_CORE_INSTRUCTION_INTEGER_DIVIDE:
         case MINIC_CORE_INSTRUCTION_INTEGER_REMAINDER: {
-            MinicCoreValueId lhs = ins->value.binary.left;
-            MinicCoreValueId rhs = ins->value.binary.right;
+            const MinicCoreValueId lhs = ins->value.binary.left;
+            const MinicCoreValueId rhs = ins->value.binary.right;
             size_t lw, rw;
-            bool ls, rs;
+            bool ls, rs, wide;
+            const char *op;
             if (lhs >= fn->value_count || rhs >= fn->value_count ||
-                !small_integer_width(program, target, fn->values[lhs].type, &lw, &ls) ||
-                !small_integer_width(program, target, fn->values[rhs].type, &rw, &rs) ||
-                lw != 4U || rw != 4U || ls != rs ||
-                fprintf(out, "  ldr w9, [sp, #%zu]\n", (size_t)lhs * 8U) < 0 ||
-                fprintf(out, "  ldr w10, [sp, #%zu]\n", (size_t)rhs * 8U) < 0)
+                !scalar_integer_width(program, target, fn->values[lhs].type,
+                                      &lw, &ls) ||
+                !scalar_integer_width(program, target, fn->values[rhs].type,
+                                      &rw, &rs) ||
+                lw != rw || (lw != 4U && lw != 8U) || ls != rs ||
+                !minic_type_equal(fn->values[lhs].type, ins->type))
                 return machine_emit_reject(fn, "aarch64", name, reject_stage,
-                                    reject_block, reject_ins, __LINE__);
-            if (ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_DIVIDE) {
-                if (fputs(ls ? "  sdiv w9, w9, w10\n"
-                             : "  udiv w9, w9, w10\n", out) == EOF) return machine_emit_reject(fn, "aarch64", name, reject_stage,
-                                    reject_block, reject_ins, __LINE__);
-            } else if (fputs(ls ? "  sdiv w11, w9, w10\n"
-                                  "  msub w9, w11, w10, w9\n"
-                                : "  udiv w11, w9, w10\n"
-                                  "  msub w9, w11, w10, w9\n", out) == EOF)
+                                           reject_block, reject_ins, __LINE__);
+            wide = lw == 8U;
+            if (fprintf(out, wide ? "  ldr x9, [sp, #%zu]\n"
+                                  : "  ldr w9, [sp, #%zu]\n",
+                        (size_t)lhs * 8U) < 0 ||
+                fprintf(out, wide ? "  ldr x10, [sp, #%zu]\n"
+                                  : "  ldr w10, [sp, #%zu]\n",
+                        (size_t)rhs * 8U) < 0)
                 return machine_emit_reject(fn, "aarch64", name, reject_stage,
-                                    reject_block, reject_ins, __LINE__);
+                                           reject_block, reject_ins, __LINE__);
+            op = ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_DIVIDE
+                ? (wide ? (ls ? "  sdiv x9, x9, x10\n"
+                               : "  udiv x9, x9, x10\n")
+                        : (ls ? "  sdiv w9, w9, w10\n"
+                               : "  udiv w9, w9, w10\n"))
+                : (wide ? (ls ? "  sdiv x11, x9, x10\n"
+                               "  msub x9, x11, x10, x9\n"
+                             : "  udiv x11, x9, x10\n"
+                               "  msub x9, x11, x10, x9\n")
+                        : (ls ? "  sdiv w11, w9, w10\n"
+                               "  msub w9, w11, w10, w9\n"
+                             : "  udiv w11, w9, w10\n"
+                               "  msub w9, w11, w10, w9\n"));
+            if (fputs(op, out) == EOF)
+                return machine_emit_reject(fn, "aarch64", name, reject_stage,
+                                           reject_block, reject_ins, __LINE__);
             break;
         }
         /* M33: cJSON_SetValuestring uses pointer ordering for overlap
