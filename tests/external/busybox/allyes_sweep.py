@@ -221,16 +221,16 @@ def controller(args):
                 "awk": ["awk", "{print $1}"],
                 "grep": ["grep", "-F", "beta"],
                 "sort": ["sort"],
-                "ash": ["ash", "-c", "printf '%s\n' ash-ok"],
+                "sh": ["sh", "-c", "printf '%s\n' sh-ok"],
                 "find": ["find", str(out), "-maxdepth", "0", "-type", "d"],
             }
             expected = {"sed": b"beta\n", "awk": b"alpha\nbeta\n",
                         "grep": b"beta\n", "sort": b"alpha\nbeta\n",
-                        "ash": b"ash-ok\n",
+                        "sh": b"sh-ok\n",
                         "find": (str(out) + "\n").encode()}
             successes = []
             for applet, command in tests.items():
-                data = b"alpha\nbeta\n" if applet not in ("ash", "find") else b""
+                data = b"alpha\nbeta\n" if applet not in ("sh", "find") else b""
                 run = subprocess.run([str(busybox)] + command, input=data,
                                      stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                      check=False)
