@@ -91,16 +91,25 @@ EOF
 # GNU consumes the actual symbol and bytes emitted by MiniC; this
 # isolates ELF flat byte-array initialization from not-yet-supported
 # pointer arithmetic, byte-load Core instructions and int conversion.
+# Distinct original-source global arrays must not silently alias through
+# a target GOT relocation. Early AArch64 emitted the *correct* byte
+# initializers for vector_key but read the neighboring AES sbox instead.
 cat > "$w/global_array.i" <<'EOF'
 const unsigned char mini_table[4] = { 7, 8, 9, 10 };
-int mini_global_array(void) { return 42; }
+const unsigned char mini_second_table[4] = { 99, 35, 254, 118 };
+int mini_global_array(void) {
+    return (int)mini_table[0] + (int)mini_second_table[1];
+}
 EOF
 cat > "$w/driver_global_array.c" <<'EOF'
 extern const unsigned char mini_table[4];
+extern const unsigned char mini_second_table[4];
 extern int mini_global_array(void);
 int main(void) {
     if (mini_table[0] != 7 || mini_table[1] != 8 ||
-        mini_table[2] != 9 || mini_table[3] != 10)
+        mini_table[2] != 9 || mini_table[3] != 10 ||
+        mini_second_table[0] != 99 || mini_second_table[1] != 35 ||
+        mini_second_table[2] != 254 || mini_second_table[3] != 118)
         return 1;
     return mini_global_array();
 }
