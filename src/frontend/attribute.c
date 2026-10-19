@@ -464,14 +464,17 @@ static const MinicAttributeDescriptor minic_attribute_descriptors[] = {
         1U,
         true,
     },
+    /* GNU permits may_alias on a local pointer declarator as well as on
+     * a typedef. It relaxes type-based alias assumptions, never alignment or
+     * the call ABI. Current MiniC Core does not perform TBAA optimization. */
     MINIC_ATTRIBUTE_ENTRY("may_alias",
                           MINIC_ATTRIBUTE_MAY_ALIAS,
                           MINIC_ATTRIBUTE_CLASS_OPTIMIZATION,
-                          MINIC_ATTRIBUTE_TARGET_TYPE),
+                          MINIC_ATTRIBUTE_TARGET_TYPE | MINIC_ATTRIBUTE_TARGET_OBJECT),
     MINIC_ATTRIBUTE_ENTRY("__may_alias__",
                           MINIC_ATTRIBUTE_MAY_ALIAS,
                           MINIC_ATTRIBUTE_CLASS_OPTIMIZATION,
-                          MINIC_ATTRIBUTE_TARGET_TYPE),
+                          MINIC_ATTRIBUTE_TARGET_TYPE | MINIC_ATTRIBUTE_TARGET_OBJECT),
     MINIC_ATTRIBUTE_ENTRY("packed",
                           MINIC_ATTRIBUTE_PACKED,
                           MINIC_ATTRIBUTE_CLASS_LAYOUT,
