@@ -625,9 +625,11 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                 !minic_type_is_pointer(fn->values[addr].type)) return false;
             pointer = minic_type_is_pointer(fn->values[value].type);
             if (!pointer && !minic_type_is_double(fn->values[value].type) &&
+                !minic_type_is_float(fn->values[value].type) &&
                 !scalar_integer_width(program, target, fn->values[value].type,
                                       &width, &sign)) return false;
             if (minic_type_is_double(fn->values[value].type)) width = 8U;
+            if (minic_type_is_float(fn->values[value].type)) width = 4U;
             if (!emit_sp_mem(out, "ld.d", "$t1", (size_t)addr * 8U) ||
                 !emit_sp_mem(out, (pointer || width == 8U) ? "ld.d" : "ld.w", "$t0",
                              (size_t)value * 8U) ||
@@ -649,12 +651,15 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                     ? !minic_type_is_pointer(ins->type)
                     : !minic_type_is_integer(ins->type) &&
                       !minic_type_is_pointer(ins->type) &&
+                      !(minic_type_is_float(ins->type) &&
+                        ins->kind == MINIC_CORE_INSTRUCTION_LOAD) &&
                       !(minic_type_is_double(ins->type) &&
                         (ins->kind == MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT ||
                          ins->kind == MINIC_CORE_INSTRUCTION_LOAD ||
                          ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_DIVIDE ||
                          ins->kind == MINIC_CORE_INSTRUCTION_PARAMETER ||
-                         ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_TO_DOUBLE))))
+                         ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_TO_DOUBLE ||
+                         ins->kind == MINIC_CORE_INSTRUCTION_FLOAT_TO_DOUBLE))))
             {
                 if (getenv("MINIC_M1_TRACE") != NULL)
                     (void)fprintf(stderr,
@@ -845,11 +850,13 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
         }
         case MINIC_CORE_INSTRUCTION_LOAD: {
             const MinicCoreValueId addr = ins->value.load.address;
-            size_t width = minic_type_is_double(ins->type) ? 8U : 0U;
+            size_t width = minic_type_is_double(ins->type) ? 8U :
+                           minic_type_is_float(ins->type) ? 4U : 0U;
             bool sign = false, pointer = minic_type_is_pointer(ins->type);
             if (addr >= fn->value_count ||
                 !minic_type_is_pointer(fn->values[addr].type) ||
                 (!pointer && !minic_type_is_double(ins->type) &&
+                 !minic_type_is_float(ins->type) &&
                  !scalar_integer_width(program, target,
                                        ins->type, &width, &sign)) ||
                 !emit_sp_mem(out, "ld.d", "$t1", (size_t)addr * 8U) ||
@@ -1119,6 +1126,18 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
         }
         /* M28: IEEE integer/double conversions used by cJSON's saturated
          * valueint assignment. Only signed 32-bit conversion is admitted. */
+        /* M31: numeric IEEE binary32->binary64 promotion for float arrays.
+         * Reinterpretation/bitcast is incorrect: perform fcvt.d.s. */
+        case MINIC_CORE_INSTRUCTION_FLOAT_TO_DOUBLE: {
+            const MinicCoreValueId src = ins->value.operand;
+            if (src >= fn->value_count || !minic_type_is_double(ins->type) ||
+                !minic_type_is_float(fn->values[src].type) ||
+                !emit_sp_mem(out, "fld.s", "$ft0", (size_t)src * 8U) ||
+                fputs("  fcvt.d.s $ft0, $ft0\n", out) == EOF ||
+                !emit_sp_mem(out, "fst.d", "$ft0", offset))
+                return false;
+            continue;
+        }
         case MINIC_CORE_INSTRUCTION_INTEGER_TO_DOUBLE: {
             const MinicCoreValueId src = ins->value.operand;
             size_t width;
