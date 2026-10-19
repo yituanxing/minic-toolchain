@@ -575,10 +575,12 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
         }
         switch (ins->kind) {
         case MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT: {
-            size_t width;
-            bool sign;
-            if (!scalar_integer_width(program, target, ins->type,
-                                      &width, &sign)) return false;
+            size_t width = 0U;
+            bool sign = false;
+            /* Preserve the prior 32-bit constant path for Core boolean
+             * literals; only the newly admitted LP64 scalars take 64 bits. */
+            (void)scalar_integer_width(program, target, ins->type,
+                                       &width, &sign);
             if (width == 8U) {
                 if (fprintf(out, "  li.d $t0, %" PRId64 "\n",
                             ins->value.integer_value) < 0) return false;
