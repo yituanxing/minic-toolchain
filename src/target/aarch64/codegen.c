@@ -88,7 +88,7 @@ static bool valid_parameter_type(const MinicC0Program *program,
  * the actual target integer width; reject unsupported 64/128-bit values. */
 static bool valid_return_type(const MinicC0Program *program,
                               const MinicTargetInfo *target, MinicType type) {
-    return minic_type_is_void(type) ||
+    return minic_type_is_void(type) || minic_type_is_double(type) ||
            valid_parameter_type(program, target, type);
 }
 
@@ -475,6 +475,7 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
             is_variadic = sig->is_variadic;
         }
         if (!minic_type_equal(return_type, ins->type) ||
+            minic_type_is_double(return_type) || /* FP call needs separate ABI. */
             !valid_return_type(program, target, return_type) ||
             count > 8U || parameter_count > count ||
             (!is_variadic && parameter_count != count) ||
@@ -607,9 +608,10 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                 addr >= fn->value_count || value >= fn->value_count ||
                 !minic_type_is_pointer(fn->values[addr].type)) return false;
             pointer = minic_type_is_pointer(fn->values[value].type);
-            if (!pointer &&
+            if (!pointer && !minic_type_is_double(fn->values[value].type) &&
                 !scalar_integer_width(program, target, fn->values[value].type,
                                       &width, &sign)) return false;
+            if (minic_type_is_double(fn->values[value].type)) width = 8U;
             if (fprintf(out, "  ldr x10, [sp, #%zu]\n", (size_t)addr * 8U) < 0 ||
                 fprintf(out, (pointer || width == 8U) ? "  ldr x9, [sp, #%zu]\n"
                                                 : "  ldr w9, [sp, #%zu]\n",
@@ -631,7 +633,10 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                    ins->kind == MINIC_CORE_INSTRUCTION_GLOBAL_ADDRESS)
                     ? !minic_type_is_pointer(ins->type)
                     : !minic_type_is_integer(ins->type) &&
-                      !minic_type_is_pointer(ins->type)))
+                      !minic_type_is_pointer(ins->type) &&
+                      !(minic_type_is_double(ins->type) &&
+                        (ins->kind == MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT ||
+                         ins->kind == MINIC_CORE_INSTRUCTION_LOAD))))
             {
                 if (getenv("MINIC_M1_TRACE") != NULL)
                     (void)fprintf(stderr,
@@ -645,6 +650,20 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
             offset = (size_t)ins->result * 8U;
         }
         switch (ins->kind) {
+        case MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT: {
+            const uint64_t bits = ins->value.floating_bits;
+            unsigned int shift;
+            if (!minic_type_is_double(ins->type) ||
+                fprintf(out, "  movz x9, #%" PRIu64 "\n",
+                        bits & UINT64_C(0xffff)) < 0) return false;
+            for (shift = 16U; shift <= 48U; shift += 16U) {
+                if (((bits >> shift) & UINT64_C(0xffff)) != 0U &&
+                    fprintf(out, "  movk x9, #%" PRIu64 ", lsl #%u\n",
+                            (bits >> shift) & UINT64_C(0xffff), shift) < 0)
+                    return false;
+            }
+            break;
+        }
         case MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT: {
             size_t width = 0U;
             bool sign = false;
@@ -813,12 +832,13 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
         }
         case MINIC_CORE_INSTRUCTION_LOAD: {
             const MinicCoreValueId addr = ins->value.load.address;
-            size_t width = 0U;
+            size_t width = minic_type_is_double(ins->type) ? 8U : 0U;
             bool sign = false, pointer = minic_type_is_pointer(ins->type);
             if (addr >= fn->value_count ||
                 !minic_type_is_pointer(fn->values[addr].type) ||
-                (!pointer && !scalar_integer_width(program, target,
-                                                   ins->type, &width, &sign)) ||
+                (!pointer && !minic_type_is_double(ins->type) &&
+                 !scalar_integer_width(program, target,
+                                       ins->type, &width, &sign)) ||
                 fprintf(out, "  ldr x10, [sp, #%zu]\n", (size_t)addr * 8U) < 0 ||
                 (pointer ? fputs("  ldr x9, [x10]\n", out) == EOF
                          : !emit_integer_memory(out, false, width, sign)))
@@ -1105,7 +1125,8 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                               name, block_id, (unsigned int)ins_id, (int)ins->kind);
             return false;
         }
-        if (fprintf(out, register64_type(program, target, ins->type)
+        if (fprintf(out, (register64_type(program, target, ins->type) ||
+                          minic_type_is_double(ins->type))
                              ? "  str x9, [sp, #%zu]\n"
                              : "  str w9, [sp, #%zu]\n", offset) < 0) return false;
     }
@@ -1114,9 +1135,11 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
         switch (block->terminator.kind) {
         case MINIC_CORE_TERMINATOR_RETURN:
             if ((!minic_type_is_void(fn->return_type) &&
-                 fprintf(out, register64_type(program, target, fn->return_type)
-                                  ? "  ldr x0, [sp, #%zu]\n"
-                                  : "  ldr w0, [sp, #%zu]\n",
+                 fprintf(out, minic_type_is_double(fn->return_type)
+                                  ? "  ldr d0, [sp, #%zu]\n"
+                                  : register64_type(program, target, fn->return_type)
+                                      ? "  ldr x0, [sp, #%zu]\n"
+                                      : "  ldr w0, [sp, #%zu]\n",
                          (size_t)block->terminator.return_value * 8U) < 0) ||
                 (has_direct_calls && fprintf(out, "  ldr x30, [sp, #%zu]\n",
                                              save_offset) < 0) ||
