@@ -657,6 +657,8 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                         (ins->kind == MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT ||
                          ins->kind == MINIC_CORE_INSTRUCTION_LOAD ||
                          ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_DIVIDE ||
+                         ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_SUBTRACT ||
+                         ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_MULTIPLY ||
                          ins->kind == MINIC_CORE_INSTRUCTION_PARAMETER ||
                          ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_TO_DOUBLE ||
                          ins->kind == MINIC_CORE_INSTRUCTION_FLOAT_TO_DOUBLE ||
