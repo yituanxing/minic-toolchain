@@ -110,6 +110,31 @@ SH
         # Linux-style census: classify failures for all functions in one
         # unchanged-source compilation rather than per-opcode CI round trips.
         grep 'MINIC_BACKEND_CENSUS' "$work/$target.probe.err" || true
+        grep 'MINIC_CORE_USAGE_SUMMARY' "$work/$target.probe.err" || true
+        # Counts all Core instructions (including those after the first
+        # unsupported operation). Aggregate by family/operand width so the
+        # next fix batch is chosen from the complete source, not one opcode.
+        awk '
+            /MINIC_CORE_USAGE arch=/ {
+                group = ""; bits = ""; n = 0
+                for (i = 1; i <= NF; ++i) {
+                    if ($i ~ /^group=/) group = substr($i, 7)
+                    if ($i ~ /^bits=/) bits = substr($i, 6)
+                    if ($i ~ /^count=/) n = substr($i, 7) + 0
+                }
+                if (group != "" && bits != "")
+                    counts[group "/" bits] += n
+            }
+            END {
+                for (key in counts)
+                    printf "%08d %s\n", counts[key], key
+            }
+        ' "$work/$target.probe.err" | sort -rn | head -n 24 |
+            while IFS= read -r cls; do
+                echo "FOUR_BACKEND_CJSON_CORE_FAMILY target=$target $cls"
+            done
+        grep 'MINIC_CORE_USAGE arch=' "$work/$target.probe.err" |
+            head -n 75 || true
         if grep -q 'MINIC_BACKEND_REJECT' "$work/$target.probe.err"; then
             awk '
                 /MINIC_BACKEND_REJECT/ {
