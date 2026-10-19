@@ -10,6 +10,8 @@
 #include "frontend/parser.h"
 #include "target/riscv64/codegen.h"
 #include "target/x86_64/codegen.h"
+#include "target/aarch64/codegen.h"
+#include "target/loongarch64/codegen.h"
 #include "target/riscv64/layout.h"
 #include "target/target_info.h"
 
@@ -3143,14 +3145,6 @@ int minic_compile_preprocessed_file_for_target(const char *input_path,
         minic_set_diagnostic(diagnostic, input_path, 1U, 1U, "invalid target configuration");
         return 1;
     }
-    /* M0 registers source-language target identities only. Never dispatch
-     * a not-yet-implemented ISA to the existing RV64/x86 code generators. */
-    if (target_info->architecture == MINIC_TARGET_ARCH_AARCH64 ||
-        target_info->architecture == MINIC_TARGET_ARCH_LOONGARCH64) {
-        minic_set_diagnostic(diagnostic, input_path, 1U, 1U,
-                             "target backend not yet implemented");
-        return 1;
-    }
     /* A stack-reused Program pointer does not identify a new TU. */
     minic_inline_local_boolean_domain_cache_clear();
     buffer.data = NULL;
@@ -3275,7 +3269,7 @@ int minic_compile_preprocessed_file_for_target(const char *input_path,
                                                                          core_set.function_count,
                                                                          function_sections,
                                                                          diagnostic);
-        } else {
+        } else if (target_info->architecture == MINIC_TARGET_ARCH_X86_64) {
             success = minic_x86_64_write_c0_program_with_core_functions(output_path,
                                                                         &program,
                                                                         target_info,
@@ -3283,6 +3277,14 @@ int minic_compile_preprocessed_file_for_target(const char *input_path,
                                                                         core_set.function_count,
                                                                         function_sections,
                                                                         diagnostic);
+        } else if (target_info->architecture == MINIC_TARGET_ARCH_AARCH64) {
+            success = minic_aarch64_write_c0_program_with_core_functions(
+                output_path, &program, target_info, core_set.functions,
+                core_set.function_count, function_sections, diagnostic);
+        } else {
+            success = minic_loongarch64_write_c0_program_with_core_functions(
+                output_path, &program, target_info, core_set.functions,
+                core_set.function_count, function_sections, diagnostic);
         }
         minic_bootstrap_trace_stage(input_path,
                                     "codegen",
