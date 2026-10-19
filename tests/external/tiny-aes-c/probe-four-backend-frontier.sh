@@ -194,6 +194,184 @@ for target in aarch64 loongarch64; do
                 fi
                 test -s "$work/$target.$probe.minic.elf" ||
                     { echo "FOUR_BACKEND_TINYAES_PROBE=FAIL target=$target probe=$probe reason=missing_executable" >&2; exit 1; }
+                if [ "$target" = "aarch64" ] && [ "$probe" = "pre_key0" ]; then
+                    echo "FOUR_BACKEND_GLOBAL_ORACLE_SCAN_BEGIN target=$target" >&2
+                    python3 - "$work/$target.$probe.s" <<'PY'
+import sys
+a = open(sys.argv[1]).read().splitlines()
+for sym in ("sbox", "vector_key", "main"):
+    ix = next((i for i, x in enumerate(a) if x.strip() == sym + ":"), -1)
+    print("MINIC_GLOBAL_SYMBOL", sym, "line", ix + 1, flush=True)
+    if ix >= 0:
+        amount = 18 if sym != "main" else 190
+        for i in range(ix, min(ix+amount, len(a))):
+            line = a[i]
+            if sym != "main" or ("got:" in line or ":got_lo12:" in line or i < ix+20):
+                print("ASM", i+1, line, flush=True)
+PY
+                    aarch64-linux-gnu-readelf -W -s "$work/$target.$probe.minic.elf" | grep -E ' (sbox|vector_key)
+                set +e
+                timeout 15s "$qemu" "$work/$target.$probe.gnu.elf" >/dev/null 2>&1
+                reference_byte=$?
+                timeout 15s "$qemu" "$work/$target.$probe.minic.elf" >/dev/null 2>&1
+                minic_byte=$?
+                set -e
+                echo "FOUR_BACKEND_TINYAES_PROBE target=$target probe=$probe GNU_byte=$reference_byte MiniC_byte=$minic_byte derivative_not_acceptance=1" >&2
+                if [ "$probe" = "early_constant" ] && [ "$reference_byte" -ne "$minic_byte" ]; then
+                    echo "FOUR_BACKEND_TINYAES_EARLY_MAIN_DISASM target=$target original_fixture_derivative=1" >&2
+                    objdump_tool=${gcc%-gcc}
+                    case "$target" in
+                        aarch64) objdump_tool=aarch64-linux-gnu-objdump ;;
+                        loongarch64) objdump_tool=loongarch64-linux-gnu-objdump ;;
+                    esac
+                    if command -v "$objdump_tool" >/dev/null 2>&1; then
+                        "$objdump_tool" -d "$work/$target.$probe.minic.elf" | \
+                            sed -n '/<main>:/,+65p' >&2
+                    fi
+                fi
+            done
+
+            # Original runtime has proven byte[0..15] but failed byte[16].
+            # Instrument ONLY a temporary copy of frozen AES for a
+            # differential inside KeyExpansion; original harness/vendor C
+            # above remain pristine and are still the sole acceptance gate.
+            # One stage per derived source: instrumenting all seven
+            # conditions in a single KeyExpansion exceeds the validated
+            # narrow stack-frame envelope and changes its CFG too much.
+            python3 - "$vendor/aes.c" "$work" <<'PY'
+import pathlib, sys
+src = pathlib.Path(sys.argv[1]).read_text()
+directory = pathlib.Path(sys.argv[2])
+repls = [
+    ("    if (i % Nk == 0)",
+     "    if (i == Nk) minic_trace = tempa[0];\n    if (i % Nk == 0)"),
+    ("      // SubWord() is a function",
+     "      if (i == Nk) minic_trace = tempa[0];\n      // SubWord() is a function"),
+    ("      tempa[3] = getSBoxValue(tempa[3]);",
+     "      tempa[3] = getSBoxValue(tempa[3]);\n      if (i == Nk) minic_trace = tempa[0];"),
+    ("      tempa[0] = tempa[0] ^ Rcon[i/Nk];",
+     "      tempa[0] = tempa[0] ^ Rcon[i/Nk];\n      if (i == Nk) minic_trace = tempa[0];"),
+    ("    RoundKey[j + 0] = RoundKey[k + 0] ^ tempa[0];",
+     "    RoundKey[j + 0] = RoundKey[k + 0] ^ tempa[0];\n    if (i == Nk) minic_trace = RoundKey[j + 0];"),
+    ("    j = i * 4; k=(i - Nk) * 4;",
+     "    j = i * 4; k=(i - Nk) * 4;\n    if (i == Nk) minic_trace = j;"),
+    ("    j = i * 4; k=(i - Nk) * 4;",
+     "    j = i * 4; k=(i - Nk) * 4;\n    if (i == Nk) minic_trace = k;"),
+    ("      k = (i - 1) * 4;",
+     "      k = (i - 1) * 4;\n      if (i == Nk) minic_trace = k;"),
+    ("      k = (i - 1) * 4;",
+     "      k = (i - 1) * 4;\n      if (i == Nk) minic_trace = RoundKey[k + 0];"),
+    ("      tempa[0]=RoundKey[k + 0];",
+     "      tempa[0]=RoundKey[k + 0];\n      if (i == Nk) minic_trace = tempa[0];"),
+    ("      tempa[1]=RoundKey[k + 1];",
+     "      tempa[1]=RoundKey[k + 1];\n      if (i == Nk) minic_trace = tempa[0];"),
+    ("      tempa[2]=RoundKey[k + 2];",
+     "      tempa[2]=RoundKey[k + 2];\n      if (i == Nk) minic_trace = tempa[0];"),
+    ("      tempa[3]=RoundKey[k + 3];",
+     "      tempa[3]=RoundKey[k + 3];\n      if (i == Nk) minic_trace = tempa[0];"),
+    ("      tempa[0]=RoundKey[k + 0];",
+     "      tempa[0]=RoundKey[k + 0];\n      if (i == Nk) minic_trace = RoundKey[12];"),
+    ("      k = (i - 1) * 4;",
+     "      k = (i - 1) * 4;\n      if (i == Nk) minic_trace = Key[12];"),
+    ("      k = (i - 1) * 4;",
+     "      k = (i - 1) * 4;\n      if (i == Nk) minic_trace = RoundKey[0];"),
+    ("      k = (i - 1) * 4;",
+     "      k = (i - 1) * 4;\n      if (i == Nk) minic_trace = RoundKey[11];"),
+    ("      k = (i - 1) * 4;",
+     "      k = (i - 1) * 4;\n      if (i == Nk) minic_trace = RoundKey[15];"),
+    ("  // The first round key is the key itself.",
+     "  minic_trace = Key[12];\n  // The first round key is the key itself."),
+    ("  // All other round keys are found from the previous round keys.",
+     "  minic_trace = Key[12];\n  // All other round keys are found from the previous round keys."),
+    ("  // All other round keys are found from the previous round keys.",
+     "  minic_trace = RoundKey[12];\n  // All other round keys are found from the previous round keys."),
+    ("    {\n      k = (i - 1) * 4;",
+     "    {\n      if (i == Nk) minic_trace = Key[12];\n      k = (i - 1) * 4;"),
+    ("    {\n      k = (i - 1) * 4;",
+     "    {\n      if (i == Nk) minic_trace = RoundKey[12];\n      k = (i - 1) * 4;"),
+]
+declaration = "static unsigned char minic_trace;\n"
+keyexp = "static void KeyExpansion(uint8_t* RoundKey, const uint8_t* Key)"
+assert src.count(keyexp) == 1
+for stage, (needle, replacement) in enumerate(repls):
+    assert src.count(needle) >= 1, (stage, needle)
+    modified = src.replace(keyexp, declaration + keyexp, 1)
+    modified = modified.replace(needle, replacement, 1)
+    (directory / f"aes_trace_{stage}.c").write_text(modified)
+PY
+            for stage in 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22; do
+                sed "s|#include \"aes.c\"|#include \"aes_trace_$stage.c\"|" "$fixture" |
+                    awk -v k="$stage" '
+                        { print }
+                        /AES_init_ctx\(context_pointer,/ {
+                            print "    return (int)minic_trace;"
+                        }
+                    ' >"$work/$target.trace$stage.c"
+                "$gcc" -std=c11 -O0 -static -I"$vendor" \
+                    -DECB=1 -DCBC=0 -DCTR=0 -DMULTIPLY_AS_A_FUNCTION=1 \
+                    "$work/$target.trace$stage.c" -o "$work/$target.trace$stage.gnu.elf"
+                "$gcc" -E -P -nostdinc -x c -I"$headers" -I"$vendor" \
+                    -DECB=1 -DCBC=0 -DCTR=0 -DMULTIPLY_AS_A_FUNCTION=1 \
+                    "$work/$target.trace$stage.c" -o "$work/$target.trace$stage.i"
+                if ! MINIC_M1_TRACE=1 "$MINIC_CC" --target="$target-linux" -S \
+                        "$work/$target.trace$stage.i" -o "$work/$target.trace$stage.s" \
+                        2>"$work/$target.trace$stage.compile.err"; then
+                    echo "FOUR_BACKEND_AES_TRACE_BLOCKED target=$target stage=$stage point=MiniC_compile" >&2
+                    grep -m 1 'MINIC_M8_.*REJECT\|MINIC_M8_FRAME_CAP\|MINIC_M8_FRAME_REJECT' \
+                         "$work/$target.trace$stage.compile.err" || true
+                    tail -n 3 "$work/$target.trace$stage.compile.err" >&2
+                    continue
+                fi
+                if ! { "$gcc" -c "$work/$target.trace$stage.s" \
+                            -o "$work/$target.trace$stage.o" &&
+                       "$gcc" -static "$work/$target.trace$stage.o" \
+                            -o "$work/$target.trace$stage.minic.elf"; }; then
+                    echo "FOUR_BACKEND_AES_TRACE_BLOCKED target=$target stage=$stage point=GNU_AS_LD" >&2
+                    continue
+                fi
+                set +e
+                timeout 15s "$qemu" "$work/$target.trace$stage.gnu.elf" >/dev/null 2>&1
+                g=$?
+                timeout 15s "$qemu" "$work/$target.trace$stage.minic.elf" >/dev/null 2>&1
+                m=$?
+                set -e
+                echo "FOUR_BACKEND_AES_TRACE target=$target stage=$stage GNU_byte=$g MiniC_byte=$m derived_source_only=1" >&2
+                if [ "$stage" = 13 ]; then
+                    python3 - "$work/$target.trace$stage.s" "$target" <<'PY'
+import pathlib, sys
+lines = pathlib.Path(sys.argv[1]).read_text().splitlines()
+arch = sys.argv[2]
+needle = ":got:minic_trace" if arch == "aarch64" else "la.global $t0, minic_trace"
+for i, ln in enumerate(lines):
+    if needle in ln:
+        print("FOUR_BACKEND_AES_TRACE_ASM arch=" + arch + " stage=13 asm_context=begin", flush=True)
+        for j in range(max(0, i-48), min(len(lines), i+8)):
+            print("%d %s" % (j + 1, lines[j]), flush=True)
+        print("FOUR_BACKEND_AES_TRACE_ASM arch=" + arch + " stage=13 asm_context=end", flush=True)
+        break
+PY
+                fi
+            done
+        fi
+        failed=$((failed + 1))
+        continue
+    fi
+    if ! cmp -s "$work/$target.gnu.out" "$work/$target.minic.out" ||
+       ! cmp -s "$work/$target.gnu.err" "$work/$target.minic.err"; then
+        echo "FOUR_BACKEND_TINYAES=FAIL target=$target stage=QEMU_differential"
+        exit 1
+    fi
+    echo "FOUR_BACKEND_TINYAES=PASS target=$target original_source=1 GNU_AS_LD=1 QEMU_byte_exact=1"
+    passed=$((passed + 1))
+done
+echo "FOUR_BACKEND_TINYAES_FRONTIER=COMPLETE architectures=2 verified_runtime=$passed blocked=$blocked"
+if [ "$failed" -ne 0 ]; then
+    echo "FOUR_BACKEND_TINYAES_RUNTIME=FAIL failed_targets=$failed" >&2
+    exit 1
+fi
+ >&2 || true
+                    echo "FOUR_BACKEND_GLOBAL_ORACLE_SCAN_END target=$target" >&2
+                fi
                 set +e
                 timeout 15s "$qemu" "$work/$target.$probe.gnu.elf" >/dev/null 2>&1
                 reference_byte=$?
