@@ -1191,3 +1191,127 @@ categorize by source-verified record/class/register/stack cases before
 changing any ABI code. Address missing GCC baseline dependencies
 separately. Keep the 12-object linked/run oracle as the true end-to-end
 regression; no premature generic Machine IR or untested RV64 changes.
+
+## BusyBox maximal C-owner follow-up: 542 → 573 → 576 (2026-10-19)
+
+This is **real original-Kbuild MiniC x86-64 object coverage**, **not** full
+BusyBox runtime or 576 independently tested applets. The unchanged pinned
+BusyBox 1.36.1 source tree uses original `allyesconfig`, with only host
+warning-policy `CONFIG_WERROR` disabled (963 enabled Kconfig symbols).
+Every GNU Kbuild CC invocation still builds the original GNU object, while
+a shadow MiniC invocation preprocesses the same original C source and
+independently emits one x86-64 GNU-assembled object. No shadow object is
+substituted in this discovery workload. The 12-app mixed-GNU/MiniC linked
+runtime test remains the separate actual executable acceptance gate.
+
+### Problem found from **actual** 29 x86 CALL trace diagnostics
+
+A fresh diagnostic [#39183565630](https://github.com/yituanxing/minic-toolchain/actions/runs/39183565630)
+proved that all 29 observed `X86_CALL_GATE` failures were
+`stage=arguments`, not record-return or an unsupported Core opcode
+implementation. Their original callee signatures included:
+- `getsockname`, `sendto`, `bind`, `accept`, `connect`,
+  `recvfrom`: GNU libc's transparent sockaddr pointer union passed
+  **by value**, SysV INTEGER one-eightbyte class.
+- `inet_ntoa`: four-byte `struct in_addr` passed by value, also
+  one INTEGER eightbyte.
+- Variadic `semctl`: object-form variadic union passed in the next
+  integer register / argument stack slot.
+- `service(struct stat, ...)` in `miscutils/devfsd.c` is a **distinct
+  larger aggregate** and remains deliberately unsupported.
+
+Prior x86 code recognized only SQLite Token's specially verified
+16-byte two-GPR record. The added **backend-owned**
+`x86_one_gp_record` classifier validates complete un-packed 1/2/4/8
+byte integer/pointer-only records with natural member offsets and rejects
+floats, nested records, bitfields, non-natural/misaligned/packed cases.
+Incoming and outgoing fixed/variadic object-argument handling now uses
+the appropriate SysV GP register or stack location. Exact-width memory
+loads preserve object bounds, and the existing two-GPR case is retained.
+
+The new `make check-x86_64-one-gp-sysv` functional oracle exercises
+MiniC→GCC and GCC→MiniC real calls with `struct in_addr`-shaped 4B
+record, transparent pointer union, variadic union and a spilled seventh
+integer-register-class argument. The
+[focused run #39184175473](https://github.com/yituanxing/minic-toolchain/actions/runs/39184175473)
+passed:
+`X86_ONE_GP_SYSV=PASS gcc_to_minic=1 minic_to_gcc=1 transparent_union=1 fixed_record=1 variadic_union=1 spilled_record=1`,
+plus the existing x86 M1 and RV64/MiniAR/MiniLD focused checks.
+
+The whole-config + existing 12 applet
+[run #39184302804](https://github.com/yituanxing/minic-toolchain/actions/runs/39184302804)
+then passed its scoped CI and found:
+
+| Metric | Before | After one-GP x86 ABI |
+| --- | ---: | ---: |
+| Real Kbuild C TU attempts | 594 | 594 |
+| MiniC x86 assembly + GNU object succeeded | 542 | **573** |
+| MiniC blockers | 48 | **19** |
+| Host GNU preprocessing blockers | 4 | **2** |
+| Complete GNU BusyBox allconfig image | blocked | blocked |
+| Certified mixed executable applets | 12 | **12** (preserved) |
+
+The increase is **31** native objects for no new shared Core machine-level
+representation or changed RISC-V ABI.
+
+### The next original Kbuild pressure: local `may_alias`
+
+Inspection of the actual archived preprocessed source shows three
+separate failures from local pointers with no-argument
+`__attribute__((__may_alias__))`, in `libbb/lineedit.c`,
+`libbb/signals.c` and `util-linux/mdev.c`. The shared attribute table
+formerly allowed `may_alias` on TYPE targets but incorrectly rejected
+this GNU local pointer declarator position as invalid on OBJECT. Since
+MiniC currently has **no type-based alias analysis (TBAA)**, accepting
+precisely this no-argument local optimization marker is conservative;
+no optimizer is permitted to add TBAA later without preserving its
+semantic alias-relaxing effect. This change does not swallow unknown
+attributes, alter type layout, change machine ABI or downgrade alignment.
+
+Added GCC native runtime, MiniC native runtime and RISC-V assembly
+fixtures for the original local GNU attribute spelling.
+
+[Final focused #39184810279](https://github.com/yituanxing/minic-toolchain/actions/runs/39184810279)
+**SUCCESS**:
+- `X86_ONE_GP_SYSV=PASS` and
+  `PASS: GNU no-argument may_alias local pointer x86/RV64/GCC oracle`.
+- `BUSYBOX_X86_64_EXTRA_MIXED=PASS ... total_MiniC_objects=12 GCC_reference=byte-exact GNU_Kbuild=1`.
+- `BUSYBOX_ALLYES_FRONTIER=DISCOVERY enabled_symbols=963 attempted_C_TUs=594 mini_objects=576 cpp_fail=2 minic_fail=16 asm_fail=0 gcc_fail=3 gcc_full_build=FAIL full_MiniC_busybox=NOT_TESTED`.
+- `TOOLCHAIN_FOCUSED_T1=PASS mode=all independent_test_checks=8 shared_builds=1`.
+
+**Final observed delta: 542 → 576 successful native objects (+34);
+MiniC failures 48 → 16.** This is **576 / 594 = 96.97%** *of attempted
+C translation units*, not executable coverage. GCC's full
+allyesconfig build still fails on removed/changed kernel TC CBQ API
+declarations (e.g. `TCA_CBQ_MAX`) and on unresolved historical RPC
+header paths (`rpc/rpc.h`); do not claim successful full GCC or MiniC
+link, boot, runtime or completed x86 MiniAS/MiniLD.
+
+The remaining 16 MiniC blockers include:
+- Three source `__attribute__((constructor))` uses inside BusyBox's
+  original test registration; these have **link/runtime initialization
+  semantics** and MUST NOT be silently ignored merely to get a green
+  compilation counter.
+- An aggregate `struct stat` memory-class by-value call; **not**
+  a one-GP extension.
+- Larger global initializer/relocation cases, inline asm register
+  constraints, GNU parameter syntax, and several source semantic/Core
+  cases. Each must be handled against the original fixture and GCC
+  behavior, not with a blanket attribute-ignore or unsafe ABI fallback.
+
+Reusable suite entry points:
+`make check-x86_64-one-gp-sysv` for real bidirectional ABI,
+`make check-x86_64-busybox-12` for mixed Kbuild runtime,
+`make check-x86_64-busybox-allyes-discovery` for honest per-TU
+maximal-config coverage with retained original CPP/MiniC/GNU stderr.
+The CI artifact is
+[`busybox-allyes-one-gp-candidate-v1`](https://github.com/yituanxing/minic-toolchain/actions/runs/39184302804);
+a second full-config artifact is attached to
+[#39184810279](https://github.com/yituanxing/minic-toolchain/actions/runs/39184810279).
+
+All temporary modifications of the existing focused workflow were
+restored **byte-for-byte** to main blob
+`cd9a880a5a707f28b5ea63c364c1844ab35e1c56` after the final run.
+No new CI workflows or broad architecture rewrite. A fresh full 2064/2064
+RV64 Linux+QEMU P1 gate is still required before claiming latest shared
+frontend changes are Linux-certified.
