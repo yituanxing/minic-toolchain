@@ -654,7 +654,8 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                         (ins->kind == MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT ||
                          ins->kind == MINIC_CORE_INSTRUCTION_LOAD ||
                          ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_DIVIDE ||
-                         ins->kind == MINIC_CORE_INSTRUCTION_PARAMETER))))
+                         ins->kind == MINIC_CORE_INSTRUCTION_PARAMETER ||
+                         ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_TO_DOUBLE))))
             {
                 if (getenv("MINIC_M1_TRACE") != NULL)
                     (void)fprintf(stderr,
@@ -1085,6 +1086,37 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                 return false;
             (void)sign;
             break;
+        }
+        /* M28: IEEE integer/double conversions used by cJSON's saturated
+         * valueint assignment. Only signed 32-bit conversion is admitted. */
+        case MINIC_CORE_INSTRUCTION_INTEGER_TO_DOUBLE: {
+            const MinicCoreValueId src = ins->value.operand;
+            size_t width;
+            bool sign;
+            if (src >= fn->value_count || !minic_type_is_double(ins->type) ||
+                !scalar_integer_width(program, target, fn->values[src].type,
+                                      &width, &sign) ||
+                width != 4U || !sign ||
+                !emit_sp_mem(out, "ld.w", "$t0", (size_t)src * 8U) ||
+                fputs("  movgr2fr.w $ft0, $t0\n"
+                      "  ffint.d.w $ft0, $ft0\n", out) == EOF ||
+                !emit_sp_mem(out, "fst.d", "$ft0", offset))
+                return false;
+            continue;
+        }
+        case MINIC_CORE_INSTRUCTION_DOUBLE_TO_INTEGER: {
+            const MinicCoreValueId src = ins->value.operand;
+            size_t width;
+            bool sign;
+            if (src >= fn->value_count ||
+                !minic_type_is_double(fn->values[src].type) ||
+                !scalar_integer_width(program, target, ins->type, &width, &sign) ||
+                width != 4U || !sign ||
+                !emit_sp_mem(out, "fld.d", "$ft0", (size_t)src * 8U) ||
+                fputs("  ftintrz.w.d $ft0, $ft0\n"
+                      "  movfr2gr.s $t0, $ft0\n", out) == EOF)
+                return false;
+            break; /* Normal 32-bit SSA store. */
         }
         case MINIC_CORE_INSTRUCTION_INTEGER_CONVERSION: {
             const MinicCoreValueId src = ins->value.operand;
