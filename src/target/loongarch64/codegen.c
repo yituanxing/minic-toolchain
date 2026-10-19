@@ -1,5 +1,6 @@
 #include "target/loongarch64/codegen.h"
 #include "target/backend_core_usage.h"
+#include "target/backend_global_array.h"
 
 #include <inttypes.h>
 #include <stdint.h>
@@ -265,6 +266,39 @@ static bool emit_simple_global(FILE *out, const MinicC0Program *program,
             fprintf(out, ".size %s,%zu\n", obj->name, storage_size) < 0)
             return false;
         return true;
+    }
+    /* zlib real-source pressure: z_errmsg[] is a pointer-relocation
+     * array, configuration_table[] an array of records with call targets,
+     * and inflate/trees expose large arrays of nested flat records.
+     * Share proven DataLayout traversal; preserve ISA-owned ELF relocation. */
+    if (minic_type_is_array(obj->type)) {
+        const MinicArrayType *array =
+            minic_c0_program_array_type(program, obj->type.array_type_id);
+        bool array_of_records;
+        if (array == NULL) return false;
+        array_of_records = minic_type_is_record(array->element_type);
+        if (array_of_records || obj->relocation_count != 0U) {
+            const char *section = obj->is_read_only
+                ? (obj->relocation_count != 0U
+                   ? ".section .data.rel.ro" : ".section .rodata") : ".data";
+            if ((obj->initializer_count != 0U &&
+                 obj->initializer_values == NULL) ||
+                fprintf(out, "%s\n", section) < 0 ||
+                (!obj->is_internal &&
+                 fprintf(out, ".globl %s\n", obj->name) < 0) ||
+                fprintf(out, "  .balign %zu\n.type %s,@object\n%s:\n",
+                        align, obj->name, obj->name) < 0 ||
+                !(array_of_records
+                    ? minic_multi_emit_flat_record_array(
+                          out, program, target, obj, storage_size,
+                          emit_record_relocation)
+                    : minic_multi_emit_relocatable_scalar_array(
+                          out, program, target, obj, storage_size,
+                          emit_record_relocation)) ||
+                fprintf(out, ".size %s,%zu\n", obj->name, storage_size) < 0)
+                return false;
+            return true;
+        }
     }
     if (obj->relocation_count != 0U) return false;
     scalar = obj->type;
