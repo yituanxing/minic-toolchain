@@ -31,6 +31,18 @@ if test "${BUSYBOX_X86_64_EXTRA_DISCOVERY:-0}" = 1; then
 fi
 echo "BUSYBOX_X86_64_SOURCE=PASS version=1.36.1 commit=$commit original=unchanged"
 
+# Optional ALL-ENABLED inventory. This is independent from, and does not
+# weaken, the 12-object byte-exact mixed-Kbuild runtime acceptance below.
+# Upstream allyesconfig resolves dependencies; enumerate genuine C owners
+# actually invoked by upstream Kbuild, not arbitrary source glob matches.
+if test "${BUSYBOX_X86_64_ALLYES_DISCOVERY:-0}" = 1; then
+    report="${BUSYBOX_ALLYES_REPORT_DIR:-$PWD/build/busybox-allyes-$}"
+    echo "BUSYBOX_ALLYES_MODE=DISCOVERY original_commit=$commit report=$report"
+    python3 tests/external/busybox/allyes_sweep.py \
+        --source "$src" --report "$report" --minic "$MINIC_CC" --host-cc "$HOST_CC"
+    exit $?
+fi
+
 # Use upstream Kconfig and Kbuild; alter .config only, never application C.
 if ! (cd "$src" && make -j2 allnoconfig CC="$HOST_CC" \
      >"$work/config.out" 2>"$work/config.err"); then
