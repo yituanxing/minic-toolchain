@@ -713,8 +713,10 @@ check-x86_64-busybox-12: $(MINIC_CC_BINARY)
 	@set -eu; \
 	log=$(mktemp); \
 	trap 'rm -f "$log"' EXIT HUP INT TERM; \
-	if MINIC_CC="$(abspath $(MINIC_CC_BINARY))" \
-	   HOST_CC="$(CC)" BUSYBOX_X86_64_EXTRA_DISCOVERY=1 \
+	# Do not propagate the outer MiniC -Werror / make overrides into pristine BusyBox Kbuild. \
+	if env -u MAKEFLAGS -u MAKEOVERRIDES -u MFLAGS -u GNUMAKEFLAGS -u CFLAGS \
+	   MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	   BUSYBOX_X86_64_EXTRA_DISCOVERY=1 \
 	   sh tests/external/busybox/probe-x86_64.sh >"$log" 2>&1; then \
 	   cat "$log"; \
 	else \
