@@ -23,6 +23,12 @@ static bool valid_int(MinicType type) {
     return minic_type_equal(type, minic_type_int());
 }
 
+/* Comparisons are Core booleans, not 32-bit C int. Both still fit our
+ * private 8-byte SSA slots, with canonical 0/1 in the low 32 bits. */
+static bool valid_int_or_bool(MinicType type) {
+    return valid_int(type) || minic_type_equal(type, minic_type_bool());
+}
+
 static bool emit_function(FILE *out, const MinicFunction *decl,
                           const MinicCoreFunction *fn, size_t id,
                           bool function_sections) {
@@ -63,7 +69,7 @@ static bool emit_function(FILE *out, const MinicFunction *decl,
             if (term->conditional.when_true >= fn->block_count ||
                 term->conditional.when_false >= fn->block_count ||
                 term->conditional.condition >= fn->value_count ||
-                !valid_int(fn->values[term->conditional.condition].type))
+                !valid_int_or_bool(fn->values[term->conditional.condition].type))
                 return false;
             break;
         default:
@@ -112,7 +118,8 @@ static bool emit_function(FILE *out, const MinicFunction *decl,
         if (ins->result == MINIC_CORE_VALUE_INVALID ||
             ins->result >= fn->value_count ||
             (ins->kind == MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS
-                ? !minic_type_is_pointer(ins->type) : !valid_int(ins->type)))
+                ? !minic_type_is_pointer(ins->type)
+                : !valid_int_or_bool(ins->type)))
             return false;
         offset = (size_t)ins->result * 8U;
         switch (ins->kind) {
@@ -157,6 +164,30 @@ static bool emit_function(FILE *out, const MinicFunction *decl,
                 fprintf(out, "  ld.w $t0, $sp, %zu\n", (size_t)lhs * 8U) < 0 ||
                 fprintf(out, "  ld.w $t1, $sp, %zu\n", (size_t)rhs * 8U) < 0 ||
                 fputs(opcode, out) == EOF) return false;
+            break;
+        }
+        case MINIC_CORE_INSTRUCTION_INTEGER_LESS:
+        case MINIC_CORE_INSTRUCTION_SCALAR_EQUAL: {
+            const MinicCoreValueId lhs = ins->value.binary.left;
+            const MinicCoreValueId rhs = ins->value.binary.right;
+            if (lhs >= fn->value_count || rhs >= fn->value_count ||
+                !valid_int(fn->values[lhs].type) ||
+                !valid_int(fn->values[rhs].type) ||
+                fprintf(out, "  ld.w $t0, $sp, %zu\n", (size_t)lhs * 8U) < 0 ||
+                fprintf(out, "  ld.w $t1, $sp, %zu\n", (size_t)rhs * 8U) < 0 ||
+                fputs(ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_LESS
+                          ? "  slt $t0, $t0, $t1\n"
+                          : "  xor $t0, $t0, $t1\n  sltui $t0, $t0, 1\n", out) == EOF)
+                return false;
+            break;
+        }
+        case MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO: {
+            const MinicCoreValueId v = ins->value.operand;
+            if (v >= fn->value_count ||
+                !valid_int_or_bool(fn->values[v].type) ||
+                fprintf(out, "  ld.w $t0, $sp, %zu\n", (size_t)v * 8U) < 0 ||
+                fputs("  sltui $t0, $t0, 1\n", out) == EOF)
+                return false;
             break;
         }
         case MINIC_CORE_INSTRUCTION_INTEGER_CONVERSION: {
