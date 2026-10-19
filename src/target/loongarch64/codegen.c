@@ -844,6 +844,21 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
             size_t src_width = 0U;
             bool src_signed = false;
             bool src_pointer;
+            /* M35: Core pointer->LP64 integer cast keeps the exact address
+             * bit pattern (needed for ptrdiff_t in real cJSON parsing). */
+            if (source < fn->value_count &&
+                minic_type_is_pointer(fn->values[source].type) &&
+                minic_type_is_integer(ins->type)) {
+                size_t width;
+                bool sign;
+                if (!minic_core_scalar_bitcast_types_valid(
+                        ins->type, fn->values[source].type) ||
+                    !scalar_integer_width(program, target, ins->type,
+                                          &width, &sign) || width != 8U ||
+                    !emit_sp_mem(out, "ld.d", "$t0", (size_t)source * 8U))
+                    return false;
+                break;
+            }
             if (source >= fn->value_count ||
                 !minic_type_is_pointer(ins->type) ||
                 !minic_core_scalar_bitcast_types_valid(
