@@ -470,6 +470,21 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
             const size_t stride = ins->value.pointer_offset.element_size;
             size_t iw;
             bool signed_index;
+            if (getenv("MINIC_M1_TRACE") != NULL && base < fn->value_count &&
+                index < fn->value_count) {
+                unsigned int bits = 0U;
+                bool have_bits = minic_target_info_integer_width(
+                    target, program, fn->values[index].type, &bits);
+                (void)fprintf(stderr,
+                    "MINIC_M11_POINTER_DIAG arch=aarch64 function=%s block=%zu ins=%u base=%u base_pointer=%d index=%u index_integer=%d width_known=%d index_bits=%u stride=%zu subtract=%d\n",
+                    name, block_id, (unsigned int)ins_id,
+                    (unsigned int)base,
+                    minic_type_is_pointer(fn->values[base].type) ? 1 : 0,
+                    (unsigned int)index,
+                    minic_type_is_integer(fn->values[index].type) ? 1 : 0,
+                    have_bits ? 1 : 0, bits, stride,
+                    ins->value.pointer_offset.subtract ? 1 : 0);
+            }
             if (base >= fn->value_count || index >= fn->value_count ||
                 !minic_type_is_pointer(fn->values[base].type) ||
                 !small_integer_width(program, target, fn->values[index].type,
