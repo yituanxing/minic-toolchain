@@ -77,13 +77,18 @@
 # identities refreshed for *this* implementation. This pin only authenticates
 # the source under test; full 2064/GNU-link/QEMU P1 is independently required.
 # The exact validated source identities appear below.
+# 2026-10-19 dual-backend closeout: refresh precisely two Git blob identities
+# against actual checked-in shared Core lowering and function/constructor AST.
+# Seven-shard attempt #39194393122 deliberately refused older digests before
+# compilation. These refreshed identities attest INPUTS ONLY, not a Linux PASS;
+# full 2064 compile + original GNU link + QEMU P1 must independently pass.
 # Exact runtime source manifest also updated all 3 affected native
 # C/H blobs; the first full-run attempt #39012800524 failed at intentional
 # pinned SHA gate for compiler.c, not in C compilation or QEMU.
 47b666aab4c53db7d00bd43d327bfa70cfa08ffa src/compiler/compiler.c
-8e2c96cbb177f3c01ff557892f2b3f7a34f48e30 src/core/core_lower.c
+c358b26689814fa38591bdb125e9d9cd0ac12fb1 src/core/core_lower.c
 a8418e45608310687e3d6a1e96da79ca49135870 src/core/core_lower_asm.c
 7997978a9b10a6d01e33dbc00dd11cb3f668f69f src/core/core_lower_internal.h
-818e7ea37824c00f440ed807cf4a59d535d5ac2f src/frontend/ast.h
+b169470ac0892ff171224fb701ec789c223ea2ef src/frontend/ast.h
 89ffef7bb87923ffd481b3b4b329a0190d94e3e3 src/target/riscv64/core_codegen.c
 d55e435041f4e34432a7870b6a2886e9bce70156 src/target/riscv64/function_symbol.h
