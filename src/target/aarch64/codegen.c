@@ -79,7 +79,7 @@ static bool valid_parameter_type(const MinicC0Program *program,
                                  const MinicTargetInfo *target, MinicType type) {
     size_t width;
     bool sign;
-    return minic_type_is_pointer(type) ||
+    return minic_type_is_pointer(type) || minic_type_is_double(type) ||
            scalar_integer_width(program, target, type, &width, &sign);
 }
 
@@ -491,7 +491,8 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
             if (arg->kind != MINIC_CORE_CALL_ARGUMENT_VALUE ||
                 arg->value.value_id >= fn->value_count) return false;
             actual = fn->values[arg->value.value_id].type;
-            if (!valid_parameter_type(program, target, actual)) return false;
+            if (minic_type_is_double(actual) ||
+                !valid_parameter_type(program, target, actual)) return false;
             if (j < parameter_count) {
                 if (!valid_parameter_type(program, target, parameter_types[j]) ||
                     !minic_type_equal(parameter_types[j], actual))
@@ -637,7 +638,8 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                       !(minic_type_is_double(ins->type) &&
                         (ins->kind == MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT ||
                          ins->kind == MINIC_CORE_INSTRUCTION_LOAD ||
-                         ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_DIVIDE))))
+                         ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_DIVIDE ||
+                         ins->kind == MINIC_CORE_INSTRUCTION_PARAMETER))))
             {
                 if (getenv("MINIC_M1_TRACE") != NULL)
                     (void)fprintf(stderr,
@@ -909,24 +911,33 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
             break;
         }
         case MINIC_CORE_INSTRUCTION_PARAMETER: {
-            size_t index = (size_t)ins->value.parameter_index;
-            if (index >= fn->parameter_count) return false;
-            if (index < 8U) {
+            const size_t ordinal = (size_t)ins->value.parameter_index;
+            size_t gp_index = 0U, fp_index = 0U, k;
+            if (ordinal >= fn->parameter_count) return false;
+            /* AAPCS64 maintains independent x0-x7 and d0-d7 cursors. */
+            for (k = 0U; k < ordinal; ++k) {
+                if (minic_type_is_double(fn->parameter_types[k]))
+                    ++fp_index;
+                else
+                    ++gp_index;
+            }
+            if (minic_type_is_double(ins->type)) {
+                if (fp_index >= 8U ||
+                    fprintf(out, "  str d%zu, [sp, #%zu]\n",
+                            fp_index, offset) < 0) return false;
+                continue;
+            }
+            if (gp_index < 8U) {
                 if (fprintf(out, register64_type(program, target, ins->type)
                                  ? "  str x%zu, [sp, #%zu]\n"
                                  : "  str w%zu, [sp, #%zu]\n",
-                            index, offset) < 0)
-                    return false;
+                            gp_index, offset) < 0) return false;
             } else {
-                /* AAPCS64: first eight integer arguments use w0-w7.
-                 * Each subsequent int occupies an 8-byte caller stack
-                 * argument slot, above our own 16-byte-aligned frame. */
-                size_t incoming = frame + (index - 8U) * 8U;
+                const size_t incoming = frame + (gp_index - 8U) * 8U;
                 if (fprintf(out, register64_type(program, target, ins->type)
                              ? "  ldr x9, [sp, #%zu]\n  str x9, [sp, #%zu]\n"
                              : "  ldr w9, [sp, #%zu]\n  str w9, [sp, #%zu]\n",
-                             incoming, offset) < 0)
-                    return false;
+                             incoming, offset) < 0) return false;
             }
             continue;
         }
