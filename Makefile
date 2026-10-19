@@ -794,7 +794,7 @@ check-four-backend-m18-varargs: $(MINIC_CC_BINARY)
 # cJSON_InitHooks: true 64-bit data/function pointer comparison, null
 # predicates and actual ELF first-class function symbol addresses.
 check-four-backend-m19-ptr-compare: $(MINIC_CC_BINARY)
-	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" FOUR_BACKEND_M19_PTR_COMPARE=1 \
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" MINIC_M1_TRACE=1 FOUR_BACKEND_M19_PTR_COMPARE=1 \
 	sh tests/compiler/c0/run-four-backend-m1.sh
 
 check-four-backend-m1: $(MINIC_CC_BINARY)
