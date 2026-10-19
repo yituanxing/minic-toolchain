@@ -565,11 +565,12 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                 return false;
             continue;
         case MINIC_CORE_INSTRUCTION_FUNCTION_ADDRESS: {
-            const MinicCoreFunctionSymbolId id = ins->value.function_symbol_id;
+            const MinicCoreFunctionSymbolId symbol_id =
+                ins->value.function_symbol_id;
             const char *symbol;
-            if (id >= fn->function_symbol_count ||
+            if (symbol_id >= fn->function_symbol_count ||
                 !minic_type_is_pointer(ins->type)) return false;
-            symbol = fn->function_symbols[id].name;
+            symbol = fn->function_symbols[symbol_id].name;
             if (symbol == NULL || symbol[0] == '\0' ||
                 fprintf(out, "  la.global $t0, %s\n", symbol) < 0 ||
                 !emit_sp_mem(out, "st.d", "$t0", offset)) return false;
