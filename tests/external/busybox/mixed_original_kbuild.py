@@ -9,6 +9,7 @@ opt-in; it never claims all BusyBox objects have been replaced.
 """
 import argparse
 import hashlib
+import json
 import os
 from pathlib import Path
 import shlex
@@ -64,7 +65,7 @@ def run_cases(executable, report):
 
 
 def build_with_original_kbuild(root, report, proxy, host_cc, suffix,
-                              owner=None, mini_path=None):
+                              owner=None, mini_path=None, replace_map=None):
     env = os.environ.copy()
     for name in ("MAKEFLAGS", "MAKEOVERRIDES", "MFLAGS", "GNUMAKEFLAGS", "CFLAGS"):
         env.pop(name, None)
@@ -78,6 +79,10 @@ def build_with_original_kbuild(root, report, proxy, host_cc, suffix,
         env["BUSYBOX_ALLYES_REPLACE_OWNER"] = str(owner)
         env["BUSYBOX_ALLYES_REPLACE_MINIC_OBJECT"] = str(mini_path)
         env["BUSYBOX_ALLYES_REPLACE_EVENT"] = str(report / (suffix + ".replace.txt"))
+    if replace_map is not None:
+        if owner is not None:
+            raise ValueError("cannot combine single-owner and cohort routes")
+        env["BUSYBOX_ALLYES_REPLACE_MAP"] = str(replace_map)
     stdout = report / (suffix + ".make.out")
     stderr = report / (suffix + ".make.err")
     with stdout.open("wb") as out, stderr.open("wb") as err:
@@ -242,13 +247,69 @@ def main():
           "original_GNU_oracle_sha256=%s" %
           (len(CANDIDATES), mini_passes, link_passes, runtime_passes,
            len(oracle), sha256(original)), flush=True)
-    if runtime_passes == len(CANDIDATES):
-        print("BUSYBOX_MIXED_COMPLEX=PASS all_five_independent=1 "
-              "GCC_original_oracle=1 real_Kbuild_link=1", flush=True)
-        return 0
-    print("BUSYBOX_MIXED_COMPLEX=BLOCKED passed=%d total=%d" %
-          (runtime_passes, len(CANDIDATES)), flush=True)
-    return 1
+    if runtime_passes != len(CANDIDATES):
+        print("BUSYBOX_MIXED_COMPLEX=BLOCKED passed=%d total=%d" %
+              (runtime_passes, len(CANDIDATES)), flush=True)
+        return 1
+
+    # The five independent substitutions did not test that their object
+    # contributions coexist. Make a sixth REAL Kbuild binary with all five
+    # MiniC source owners injected together. The prior restore passes left
+    # the GNU-only Kbuild and eleven-fixture oracle fully verified.
+    replacements = {}
+    for name, filename in CANDIDATES:
+        owner = root / filename
+        info, mini = shadow[filename]
+        if not owner.is_file() or not mini.is_file():
+            print("BUSYBOX_MIXED_COMPLEX_COMBINED=BLOCKED stage=missing-owner applet=%s" %
+                  name, flush=True)
+            return 1
+        replacements[str(owner.resolve())] = str(mini.resolve())
+    mapping = report / "combined-five-owners.json"
+    mapping.write_text(json.dumps(replacements, sort_keys=True, indent=2),
+                       encoding="utf-8")
+    for name, filename in CANDIDATES:
+        owner = root / filename
+        owner.unlink()
+        invalidate_composite(root, owner)
+    code, _, err = build_with_original_kbuild(
+        root, report, args.proxy, args.host_cc, "combined-five",
+        replace_map=mapping)
+    if code != 0 or not gcc_busybox.is_file():
+        print("BUSYBOX_MIXED_COMPLEX_COMBINED=BLOCKED stage=Kbuild-link exit=%d "
+              "details=%r" % (code, err.read_text(errors="replace")[-1200:]),
+              flush=True)
+        return 1
+    events = report / "combined-events"
+    for name, filename in CANDIDATES:
+        owner = root / filename
+        mini = Path(replacements[str(owner.resolve())])
+        event = events / (name + ".replace.txt")
+        if not owner.is_file() or not event.is_file() or sha256(owner) != sha256(mini):
+            print("BUSYBOX_MIXED_COMPLEX_COMBINED=BLOCKED "
+                  "stage=Kbuild-owner-not-MiniC applet=%s event=%d" %
+                  (name, event.is_file()), flush=True)
+            return 1
+    if sha256(gcc_busybox) == sha256(original):
+        print("BUSYBOX_MIXED_COMPLEX_COMBINED=BLOCKED stage=linked-GNU-reference-unchanged",
+              flush=True)
+        return 1
+    combined = run_cases(gcc_busybox, report)
+    diffs = [key for key, value in oracle.items() if combined.get(key) != value]
+    if diffs:
+        for key in diffs[:5]:
+            print("BUSYBOX_MIXED_COMPLEX_COMBINED_DIFF fixture=%s gcc=%r mixed=%r" %
+                  (key, oracle[key], combined.get(key)), flush=True)
+        print("BUSYBOX_MIXED_COMPLEX_COMBINED=BLOCKED stage=runtime-byte-differential "
+              "fixtures_failed=%d" % len(diffs), flush=True)
+        return 1
+    print("BUSYBOX_MIXED_COMPLEX_COMBINED=PASS MiniC_owners=5 "
+          "real_GNU_Kbuild_link=1 independent_GNU_oracle=1 "
+          "eleven_fixture_byte_exact=1 sha_changed=1", flush=True)
+    print("BUSYBOX_MIXED_COMPLEX=PASS all_five_independent=1 "
+          "combined_five=1 GCC_original_oracle=1 real_Kbuild_link=1",
+          flush=True)
+    return 0
 
 
 if __name__ == "__main__":
