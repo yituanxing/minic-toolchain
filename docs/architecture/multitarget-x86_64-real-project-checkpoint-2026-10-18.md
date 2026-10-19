@@ -1388,3 +1388,19 @@ configuration so that additional original applets can be truly linked
 and executed. Fresh 2064-object RV64 Linux + QEMU P1 on the latest
 shared frontend source remains a merge gate and is not implied by
 the focused RV64/QEMU constructor runtime check.
+
+### Next blocker classification: do not misclassify string subscripts as ICE
+
+`libbb/vfork_daemon_rexec.c` still fails on the original
+`sizeof(char[1 - 2*!!("/proc/self/exe"[0] != '/')])` expression.
+A tempting change was to make the constant evaluator globally fold
+`"string"[0]` as an integer constant expression. A direct independent
+GCC `-std=gnu11 -Werror` check refuted that broad rule:
+`_Static_assert("A\\x42"[1] == 'B', ...)` is **not** an allowed C ICE.
+The expression is accepted in BusyBox's local `sizeof` context because
+a function-scope variably-modified array bound can be runtime-evaluated,
+not because the subscript is a valid ISO C ICE. The speculative
+`const_eval.c` change was therefore reverted **byte-for-byte**
+before any acceptance claim. The right fix is to inspect and preserve
+the function-scope VLA/sizeof evaluation path and GCC behavior.
+The verified **579/594** checkpoint is unchanged.
