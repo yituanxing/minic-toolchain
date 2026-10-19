@@ -29,9 +29,6 @@ static bool valid_int_or_pointer(MinicType type) {
     return valid_int(type) || minic_type_is_pointer(type);
 }
 
-static bool valid_return_type(MinicType type) {
-    return valid_int_or_pointer(type) || minic_type_is_void(type);
-}
 
 static bool valid_int_or_bool(MinicType type) {
     return valid_int(type) || minic_type_equal(type, minic_type_bool());
@@ -66,6 +63,15 @@ static bool valid_parameter_type(const MinicC0Program *program,
     bool sign;
     return minic_type_is_pointer(type) ||
            small_integer_width(program, target, type, &width, &sign);
+}
+
+/* C scalar return ABI is independent from the initial signed-int smoke
+ * gate. Core's unsigned char xtime return and its GNU callers must share
+ * the actual target integer width; reject unsupported 64/128-bit values. */
+static bool valid_return_type(const MinicC0Program *program,
+                              const MinicTargetInfo *target, MinicType type) {
+    return minic_type_is_void(type) ||
+           valid_parameter_type(program, target, type);
 }
 
 static bool emit_integer_memory(FILE *out, bool store,
@@ -214,14 +220,14 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                       "MINIC_M9_GATE arch=aarch64 fn=%s stage=entry values=%zu objects=%zu blocks=%zu params=%zu return_valid=%d inline=%zu\n",
                       name, fn->value_count, fn->object_count,
                       fn->block_count, fn->parameter_count,
-                      valid_return_type(fn->return_type) ? 1 : 0,
+                      valid_return_type(program, target, fn->return_type) ? 1 : 0,
                       fn->inline_asm_count);
     if (name == NULL || name[0] == '\0' ||
         !minic_core_function_verify(fn) ||
         decl->is_constructor || decl->is_weak ||
         decl->visibility != MINIC_SYMBOL_VISIBILITY_DEFAULT ||
         decl->section_name != NULL || decl->alias_target != MINIC_FUNCTION_INVALID ||
-        !valid_return_type(fn->return_type) ||
+        !valid_return_type(program, target, fn->return_type) ||
         fn->block_count == 0U || fn->block_count > 128U || fn->entry_block != 0U ||
         fn->inline_asm_count != 0U || fn->parameter_count > 10U ||
         fn->value_count > 1024U || fn->object_count > 1024U)
@@ -292,13 +298,13 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
              : ins->result == MINIC_CORE_VALUE_INVALID ||
                ins->result >= fn->value_count ||
                !minic_type_equal(fn->values[ins->result].type, ins->type)) ||
-            !valid_return_type(ins->type))
+            !valid_return_type(program, target, ins->type))
             return false;
         callee = &fn->callees[ins->value.call.callee_id];
         begin = ins->value.call.argument_begin;
         count = ins->value.call.argument_count;
         if (callee->name == NULL || callee->name[0] == '\0' ||
-            callee->is_variadic || !valid_return_type(callee->return_type) ||
+            callee->is_variadic || !valid_return_type(program, target, callee->return_type) ||
             count > 8U || callee->parameter_count != count ||
             begin > fn->call_argument_count ||
             count > fn->call_argument_count - begin)
@@ -557,8 +563,14 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
             if (minic_type_is_void(ins->type)) continue;
             if (fputs(minic_type_is_pointer(ins->type)
                           ? "  mov x9, x0\n"
-                          : "  mov w9, w0\n", out) == EOF)
-                return false;
+                          : "  mov w9, w0\n", out) == EOF) return false;
+            if (minic_type_is_integer(ins->type)) {
+                size_t width;
+                bool sign;
+                if (!small_integer_width(program, target, ins->type,
+                                         &width, &sign) ||
+                    !emit_integer_normalize(out, width, sign)) return false;
+            }
             break;
         }
         case MINIC_CORE_INSTRUCTION_PARAMETER: {
