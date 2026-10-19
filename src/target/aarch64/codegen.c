@@ -28,7 +28,7 @@ static bool emit_function(FILE *out, const MinicFunction *decl,
                           bool function_sections) {
     const char *name = minic_c0_function_symbol_name(decl);
     const MinicCoreBlock *block;
-    size_t frame, i;
+    size_t frame, i, values_bytes;
     if (name == NULL || name[0] == '\0' ||
         !minic_core_function_verify(fn) ||
         decl->is_constructor || decl->is_weak ||
@@ -36,9 +36,9 @@ static bool emit_function(FILE *out, const MinicFunction *decl,
         decl->section_name != NULL || decl->alias_target != MINIC_FUNCTION_INVALID ||
         !valid_int(fn->return_type) ||
         fn->block_count != 1U || fn->entry_block != 0U ||
-        fn->object_count != 0U || fn->inline_asm_count != 0U ||
-        fn->parameter_count > 8U ||
-        fn->value_count > 240U || fn->value_count > (SIZE_MAX - 15U) / 8U)
+        fn->inline_asm_count != 0U || fn->parameter_count > 8U ||
+        fn->value_count > 240U || fn->object_count > 240U ||
+        fn->value_count > 240U - fn->object_count)
         return false;
     for (i = 0U; i < fn->parameter_count; ++i)
         if (!valid_int(fn->parameter_types[i])) return false;
@@ -49,7 +49,13 @@ static bool emit_function(FILE *out, const MinicFunction *decl,
         block->terminator.return_value == MINIC_CORE_VALUE_INVALID ||
         block->terminator.return_value >= fn->value_count)
         return false;
-    frame = (fn->value_count * 8U + 15U) & ~(size_t)15U;
+    for (i = 0U; i < fn->object_count; ++i) {
+        const MinicCoreObject *obj = &fn->objects[i];
+        if (!valid_int(obj->type) || obj->element_count != 1U ||
+            obj->explicit_alignment > 8U) return false;
+    }
+    values_bytes = fn->value_count * 8U;
+    frame = ((fn->value_count + fn->object_count) * 8U + 15U) & ~(size_t)15U;
     if (frame > 2016U) return false;
     if (function_sections) {
         if (fprintf(out, ".section .text.%s,\"ax\",%%progbits\n", name) < 0)
@@ -66,8 +72,22 @@ static bool emit_function(FILE *out, const MinicFunction *decl,
         size_t offset;
         if (ins_id >= fn->instruction_count) return false;
         ins = &fn->instructions[ins_id];
+        if (ins->kind == MINIC_CORE_INSTRUCTION_STORE) {
+            const MinicCoreValueId addr = ins->value.store.address;
+            const MinicCoreValueId value = ins->value.store.stored_value;
+            if (ins->result != MINIC_CORE_VALUE_INVALID ||
+                addr >= fn->value_count || value >= fn->value_count ||
+                !minic_type_is_pointer(fn->values[addr].type) ||
+                !valid_int(fn->values[value].type)) return false;
+            if (fprintf(out, "  ldr x10, [sp, #%zu]\n", (size_t)addr * 8U) < 0 ||
+                fprintf(out, "  ldr w9, [sp, #%zu]\n", (size_t)value * 8U) < 0 ||
+                fputs("  str w9, [x10]\n", out) == EOF) return false;
+            continue;
+        }
         if (ins->result == MINIC_CORE_VALUE_INVALID ||
-            ins->result >= fn->value_count || !valid_int(ins->type))
+            ins->result >= fn->value_count ||
+            (ins->kind == MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS
+                ? !minic_type_is_pointer(ins->type) : !valid_int(ins->type)))
             return false;
         offset = (size_t)ins->result * 8U;
         switch (ins->kind) {
@@ -84,6 +104,22 @@ static bool emit_function(FILE *out, const MinicFunction *decl,
                 ((bits >> 16U) != 0U &&
                  fprintf(out, "  movk w9, #%" PRIu32 ", lsl #16\n",
                          bits >> 16U) < 0)) return false;
+            break;
+        }
+        case MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS:
+            if (ins->value.object_id >= fn->object_count ||
+                fprintf(out, "  add x9, sp, #%zu\n",
+                        values_bytes + (size_t)ins->value.object_id * 8U) < 0 ||
+                fprintf(out, "  str x9, [sp, #%zu]\n", offset) < 0)
+                return false;
+            continue;
+        case MINIC_CORE_INSTRUCTION_LOAD: {
+            const MinicCoreValueId addr = ins->value.load.address;
+            if (addr >= fn->value_count ||
+                !minic_type_is_pointer(fn->values[addr].type) ||
+                fprintf(out, "  ldr x10, [sp, #%zu]\n", (size_t)addr * 8U) < 0 ||
+                fputs("  ldr w9, [x10]\n", out) == EOF)
+                return false;
             break;
         }
         case MINIC_CORE_INSTRUCTION_PARAMETER:
