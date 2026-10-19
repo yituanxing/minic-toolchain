@@ -16,11 +16,10 @@ typedef struct MinicDiagnostic {
 } MinicDiagnostic;
 
 /*
- * Compile one normalized, preprocessed C translation unit to RISC-V assembly.
- * 将一个规范化的预处理后 C 翻译单元编译为 RISC-V 汇编。
- *
- * C0 accepts only an int main function with an optional integer return.
- * C0 目前只接受 int main 函数，以及可选的整数 return 语句。
+ * Compile one preprocessed C translation unit to RISC-V64 assembly using
+ * the default target. This compatibility entry point retains the original
+ * source-level ABI; it does not restrict the input to the original C0 subset.
+ * For an explicit target architecture, use the target-aware entry point below.
  */
 int minic_compile_preprocessed_file(const char *input_path,
                                     const char *output_path,
@@ -30,9 +29,11 @@ int minic_compile_preprocessed_file(const char *input_path,
  * true (-ffunction-sections) gives each function an input section. */
 struct MinicTargetInfo;
 
-/* M0: selected target semantics are shared by Parser, Core and codegen.
- * The x86-64 target is recognized but intentionally fails closed until its
- * backend is available; it never silently emits RISC-V assembly. */
+/* Target-aware C-to-assembly entry point. RV64 and x86-64 have independent
+ * code generators; target parsing, DataLayout and Core lowering share the
+ * selected MinicTargetInfo. Unsupported combinations reject explicitly,
+ * never silently emitting assembly for a different target.
+ * GNU assembly, linking and runtime are separate validation stages. */
 int minic_compile_preprocessed_file_for_target(const char *input_path,
                                                const char *output_path,
                                                const struct MinicTargetInfo *target_info,
