@@ -609,9 +609,11 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                 !minic_type_is_pointer(fn->values[addr].type)) return false;
             pointer = minic_type_is_pointer(fn->values[value].type);
             if (!pointer && !minic_type_is_double(fn->values[value].type) &&
+                !minic_type_is_float(fn->values[value].type) &&
                 !scalar_integer_width(program, target, fn->values[value].type,
                                       &width, &sign)) return false;
             if (minic_type_is_double(fn->values[value].type)) width = 8U;
+            if (minic_type_is_float(fn->values[value].type)) width = 4U;
             if (fprintf(out, "  ldr x10, [sp, #%zu]\n", (size_t)addr * 8U) < 0 ||
                 fprintf(out, (pointer || width == 8U) ? "  ldr x9, [sp, #%zu]\n"
                                                 : "  ldr w9, [sp, #%zu]\n",
@@ -634,12 +636,15 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                     ? !minic_type_is_pointer(ins->type)
                     : !minic_type_is_integer(ins->type) &&
                       !minic_type_is_pointer(ins->type) &&
+                      !(minic_type_is_float(ins->type) &&
+                        ins->kind == MINIC_CORE_INSTRUCTION_LOAD) &&
                       !(minic_type_is_double(ins->type) &&
                         (ins->kind == MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT ||
                          ins->kind == MINIC_CORE_INSTRUCTION_LOAD ||
                          ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_DIVIDE ||
                          ins->kind == MINIC_CORE_INSTRUCTION_PARAMETER ||
-                         ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_TO_DOUBLE))))
+                         ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_TO_DOUBLE ||
+                         ins->kind == MINIC_CORE_INSTRUCTION_FLOAT_TO_DOUBLE))))
             {
                 if (getenv("MINIC_M1_TRACE") != NULL)
                     (void)fprintf(stderr,
@@ -875,11 +880,13 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
         }
         case MINIC_CORE_INSTRUCTION_LOAD: {
             const MinicCoreValueId addr = ins->value.load.address;
-            size_t width = minic_type_is_double(ins->type) ? 8U : 0U;
+            size_t width = minic_type_is_double(ins->type) ? 8U :
+                           minic_type_is_float(ins->type) ? 4U : 0U;
             bool sign = false, pointer = minic_type_is_pointer(ins->type);
             if (addr >= fn->value_count ||
                 !minic_type_is_pointer(fn->values[addr].type) ||
                 (!pointer && !minic_type_is_double(ins->type) &&
+                 !minic_type_is_float(ins->type) &&
                  !scalar_integer_width(program, target,
                                        ins->type, &width, &sign)) ||
                 fprintf(out, "  ldr x10, [sp, #%zu]\n", (size_t)addr * 8U) < 0 ||
@@ -1155,6 +1162,20 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
         /* M28: cJSON_CreateNumber converts INT_MIN to binary64, and after
          * saturation converts an in-range double to signed int.
          * Keep wider and unsigned cases fail-closed until ABI-tested. */
+        /* M31: cJSON_CreateFloatArray's float element must be interpreted
+         * numerically, not zero-extended as its 32-bit IEEE bit pattern. */
+        case MINIC_CORE_INSTRUCTION_FLOAT_TO_DOUBLE: {
+            const MinicCoreValueId src = ins->value.operand;
+            if (src >= fn->value_count || !minic_type_is_double(ins->type) ||
+                !minic_type_is_float(fn->values[src].type) ||
+                fprintf(out,
+                        "  ldr s9, [sp, #%zu]\n"
+                        "  fcvt d9, s9\n"
+                        "  str d9, [sp, #%zu]\n",
+                        (size_t)src * 8U, offset) < 0)
+                return false;
+            continue;
+        }
         case MINIC_CORE_INSTRUCTION_INTEGER_TO_DOUBLE: {
             const MinicCoreValueId src = ins->value.operand;
             size_t width;
