@@ -447,15 +447,6 @@ static bool legalize_large_sp_memory(const char *path) {
     return success;
 }
 
-/* Full-size stack slots are addressed through x12, not immediates. */
-static bool emit_sp_address(FILE *out, const char *dst, size_t off) {
-    return off <= MINIC_LARGE_FRAME_MAX &&
-           fprintf(out, "  movz x12, #%zu\n", off & 65535U) >= 0 &&
-           (off <= 65535U ||
-            fprintf(out, "  movk x12, #%zu, lsl #16\n", off >> 16U) >= 0) &&
-           fprintf(out, "  add %s, sp, x12\n", dst) >= 0;
-}
-
 static bool emit_function(FILE *out, const MinicC0Program *program,
                           const MinicTargetInfo *target,
                           const MinicFunction *decl,
@@ -464,8 +455,6 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
     const char *name = minic_c0_function_symbol_name(decl);
     const MinicCoreBlock *block;
     size_t frame, i, object_end, save_offset;
-    size_t va_count = 0U, va_gp_named = 0U, va_fp_named = 0U;
-    size_t va_gp_base = 0U, va_vr_base = 0U, va_tag_base = 0U;
     bool has_direct_calls = false;
     const char *reject_stage = "function_preflight";
     size_t reject_block = SIZE_MAX, reject_ins = SIZE_MAX;
@@ -544,25 +533,6 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
     if (getenv("MINIC_M1_TRACE") != NULL &&
         ((name[0] == 'K' && name[1] == 'e') || (name[0] == 'A' && name[1] == 'd')))
         (void)fprintf(stderr, "MINIC_M9_GATE arch=aarch64 fn=%s stage=parameters_valid\n", name);
-    /* A function-wide Core pass reserves incoming ABI register saves. */
-    for (i = 0U; i < fn->instruction_count; ++i)
-        if (fn->instructions[i].kind ==
-            MINIC_CORE_INSTRUCTION_VARIADIC_ARGUMENT_ADDRESS)
-            ++va_count;
-    if (va_count != 0U) {
-        if (!decl->is_variadic || va_count > 32U)
-            return machine_emit_reject(fn, "aarch64", name, reject_stage,
-                                       reject_block, reject_ins, __LINE__);
-        for (i = 0U; i < fn->parameter_count; ++i) {
-            if (minic_type_is_double(fn->parameter_types[i])) {
-                ++va_fp_named;
-            } else ++va_gp_named;
-        }
-        if (va_gp_named > 8U || va_fp_named > 8U)
-            return machine_emit_reject(fn, "aarch64", name, reject_stage,
-                                       reject_block, reject_ins, __LINE__);
-        /* AAPCS64 requires both GP and SIMD register-save areas. */
-    }
     if (trace_cjson) (void)fprintf(stderr, "MINIC_CJSON_STAGE arch=aarch64 stage=parameters_ok\n");
     /* M2: verify every CFG successor and return before emitting anything.
      * A function's SSA values and local objects retain unique stack slots
@@ -749,19 +719,7 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
     if (trace_cjson) (void)fprintf(stderr, "MINIC_CJSON_STAGE arch=aarch64 stage=calls_ok\n");
     reject_stage = "frame_finalization";
     reject_ins = SIZE_MAX;
-    /* 64 GP bytes, 128 SIMD bytes, independent 32-byte AAPCS64 va_list tags. */
-    if (va_count != 0U) {
-        size_t aligned = (object_end + 15U) & ~(size_t)15U;
-        if (aligned > MINIC_LARGE_FRAME_MAX - 192U ||
-            va_count > (MINIC_LARGE_FRAME_MAX - aligned - 192U) / 32U)
-            return machine_emit_reject(fn, "aarch64", name, reject_stage,
-                                       reject_block, reject_ins, __LINE__);
-        va_gp_base = aligned;
-        va_vr_base = aligned + 64U;
-        va_tag_base = aligned + 192U;
-    }
-    save_offset = va_count != 0U ? va_tag_base + va_count * 32U
-                                 : (object_end + 7U) & ~(size_t)7U;
+    save_offset = (object_end + 7U) & ~(size_t)7U;
     if (va_count != 0U) {
         if (save_offset > MINIC_LARGE_FRAME_MAX - 240U)
             return machine_emit_reject(fn, "aarch64", name,
@@ -819,16 +777,6 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                 return machine_emit_reject(fn, "aarch64", name,
                                            "variadic_save", SIZE_MAX,
                                            SIZE_MAX, __LINE__);
-    }
-    if (va_count != 0U) {
-        if (!emit_sp_address(out, "x12", va_gp_base))
-            return machine_emit_reject(fn, "aarch64", name, reject_stage,
-                                       reject_block, reject_ins, __LINE__);
-        for (i = 0U; i < 8U; ++i)
-            if (fprintf(out, "  str x%zu, [x12, #%zu]\n", i, i * 8U) < 0 ||
-                fprintf(out, "  str q%zu, [x12, #%zu]\n", i, 64U + i * 16U) < 0)
-                return machine_emit_reject(fn, "aarch64", name, reject_stage,
-                                           reject_block, reject_ins, __LINE__);
     }
     reject_stage = "machine_emit";
     for (size_t block_id = 0U; block_id < fn->block_count; ++block_id) {
@@ -1402,48 +1350,6 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                 return machine_emit_reject(fn, "aarch64", name,
                                            reject_stage, reject_block,
                                            reject_ins, __LINE__);
-            break;
-        }
-        case MINIC_CORE_INSTRUCTION_VARIADIC_ARGUMENT_ADDRESS: {
-            size_t site = 0U, k;
-            const size_t gp_left = 8U - va_gp_named;
-            const size_t fp_left = 8U - va_fp_named;
-            if (va_count == 0U || ins->result >= fn->value_count ||
-                !minic_type_is_pointer(ins->type))
-                return machine_emit_reject(fn, "aarch64", name, reject_stage,
-                                           reject_block, reject_ins, __LINE__);
-            for (k = 0U; k < (size_t)ins_id; ++k)
-                if (fn->instructions[k].kind ==
-                    MINIC_CORE_INSTRUCTION_VARIADIC_ARGUMENT_ADDRESS)
-                    ++site;
-            if (site >= va_count ||
-                !emit_sp_address(out, "x9", va_tag_base + site * 32U) ||
-                !emit_sp_address(out, "x10", frame) ||
-                fputs("  str x10, [x9, #0]\n", out) == EOF ||
-                !emit_sp_address(out, "x10", va_gp_base + 64U) ||
-                fputs("  str x10, [x9, #8]\n", out) == EOF ||
-                !emit_sp_address(out, "x10", va_vr_base + 128U) ||
-                fputs("  str x10, [x9, #16]\n", out) == EOF)
-                return machine_emit_reject(fn, "aarch64", name, reject_stage,
-                                           reject_block, reject_ins, __LINE__);
-            if (gp_left != 0U) {
-                if (fprintf(out, "  movn w10, #%zu\n"
-                                 "  str w10, [x9, #24]\n",
-                            gp_left * 8U - 1U) < 0)
-                    return machine_emit_reject(fn, "aarch64", name, reject_stage,
-                                               reject_block, reject_ins, __LINE__);
-            } else if (fputs("  str wzr, [x9, #24]\n", out) == EOF)
-                return machine_emit_reject(fn, "aarch64", name, reject_stage,
-                                           reject_block, reject_ins, __LINE__);
-            if (fp_left != 0U) {
-                if (fprintf(out, "  movn w10, #%zu\n"
-                                 "  str w10, [x9, #28]\n",
-                            fp_left * 16U - 1U) < 0)
-                    return machine_emit_reject(fn, "aarch64", name, reject_stage,
-                                               reject_block, reject_ins, __LINE__);
-            } else if (fputs("  str wzr, [x9, #28]\n", out) == EOF)
-                return machine_emit_reject(fn, "aarch64", name, reject_stage,
-                                           reject_block, reject_ins, __LINE__);
             break;
         }
         case MINIC_CORE_INSTRUCTION_PARAMETER: {
