@@ -320,6 +320,19 @@ static bool emit_function(FILE *out, const MinicFunction *decl,
             }
             break;
         }
+        case MINIC_CORE_INSTRUCTION_SCALAR_BITCAST: {
+            /* Original AES_ECB_encrypt converts uint8_t* to state_t*.
+             * Both are LP64 pointer representations: preserve all 64 bits.
+             * Do NOT incorrectly turn integer/pointer casts into a no-op. */
+            const MinicCoreValueId source = ins->value.operand;
+            if (source >= fn->value_count ||
+                !minic_type_is_pointer(ins->type) ||
+                !minic_type_is_pointer(fn->values[source].type) ||
+                !minic_core_scalar_bitcast_types_valid(
+                    ins->type, fn->values[source].type) ||
+                fprintf(out, "  ldr x9, [sp, #%zu]\n", (size_t)source * 8U) < 0) return false;
+            break;
+        }
         case MINIC_CORE_INSTRUCTION_LOAD: {
             const MinicCoreValueId addr = ins->value.load.address;
             if (addr >= fn->value_count ||
