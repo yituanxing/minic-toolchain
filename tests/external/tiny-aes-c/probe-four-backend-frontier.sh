@@ -115,8 +115,13 @@ for target in aarch64 loongarch64; do
             # diagnostic and never substitutes for the original fixture:
             # compare S-box, round constant and the *actual* first
             # generated round-key byte under both toolchains/QEMU.
-            for probe in pre_constant post_constant pre_sbox post_sbox key17; do
+            for probe in early_constant post_context_constant post_state_constant pre_copy_constant post_copy_constant pre_constant post_constant pre_sbox post_sbox key17; do
                 case "$probe" in
+                    early_constant) expression='77'; position=before_main_start ;;
+                    post_context_constant) expression='77'; position=post_context ;;
+                    post_state_constant) expression='77'; position=post_state ;;
+                    pre_copy_constant) expression='77'; position=pre_copy ;;
+                    post_copy_constant) expression='77'; position=post_copy ;;
                     pre_constant) expression='77'; position=before ;;
                     post_constant) expression='77'; position=after ;;
                     pre_sbox) expression='sbox[207]'; position=before ;;
@@ -124,6 +129,28 @@ for target in aarch64 loongarch64; do
                     key17) expression='context_pointer->RoundKey[16]'; position=after ;;
                 esac
                 awk -v expr="$expression" -v position="$position" '
+                    /^int main\(void\)/ { in_main = 1; print; next }
+                    in_main && /context_pointer = &context;/ {
+                        print
+                        if (position == "post_context") print "    return (int)(" expr ");"
+                        next
+                    }
+                    in_main && /state_pointer = \(state_t\*\)&block\[0\];/ {
+                        print
+                        if (position == "post_state") print "    return (int)(" expr ");"
+                        next
+                    }
+                    in_main && /copy_plaintext\(&block\[0\]\);/ {
+                        if (position == "pre_copy") print "    return (int)(" expr ");"
+                        print
+                        if (position == "post_copy") print "    return (int)(" expr ");"
+                        next
+                    }
+                    in_main && /^\{/ && position == "before_main_start" {
+                        print
+                        print "    return (int)(" expr ");"
+                        next
+                    }
                     /AES_init_ctx\(context_pointer,/ {
                         if (position == "before") print "    return (int)(" expr ");"
                         print
@@ -132,6 +159,10 @@ for target in aarch64 loongarch64; do
                     }
                     { print }
                 ' "$fixture" >"$work/$target.$probe.c"
+                if ! grep -Fq 'return (int)(' "$work/$target.$probe.c"; then
+                    echo "FOUR_BACKEND_TINYAES_PROBE target=$target probe=$probe error=not_inserted" >&2
+                    exit 1
+                fi
                 "$gcc" -std=c11 -O0 -static -I"$vendor" \
                     -DECB=1 -DCBC=0 -DCTR=0 -DMULTIPLY_AS_A_FUNCTION=1 \
                     "$work/$target.$probe.c" -o "$work/$target.$probe.gnu.elf"
@@ -158,6 +189,18 @@ for target in aarch64 loongarch64; do
                 minic_byte=$?
                 set -e
                 echo "FOUR_BACKEND_TINYAES_PROBE target=$target probe=$probe GNU_byte=$reference_byte MiniC_byte=$minic_byte derivative_not_acceptance=1" >&2
+                if [ "$probe" = "early_constant" ] && [ "$reference_byte" -ne "$minic_byte" ]; then
+                    echo "FOUR_BACKEND_TINYAES_EARLY_MAIN_DISASM target=$target original_fixture_derivative=1" >&2
+                    objdump_tool=${gcc%-gcc}
+                    case "$target" in
+                        aarch64) objdump_tool=aarch64-linux-gnu-objdump ;;
+                        loongarch64) objdump_tool=loongarch64-linux-gnu-objdump ;;
+                    esac
+                    if command -v "$objdump_tool" >/dev/null 2>&1; then
+                        "$objdump_tool" -d "$work/$target.$probe.minic.elf" | \
+                            sed -n '/<main>:/,+65p' >&2
+                    fi
+                fi
             done
         fi
         exit 1
