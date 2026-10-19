@@ -746,18 +746,18 @@ check-x86_64-busybox-12: $(MINIC_CC_BINARY)
 # MiniC shadows Kbuild C owners but does NOT claim to link them in this gate.
 check-x86_64-busybox-host-link: $(MINIC_CC_BINARY)
 	@set -eu; \
-	log=$(mktemp); \
-	trap 'rm -f "$log"' EXIT HUP INT TERM; \
+	log=$$(mktemp); \
+	trap 'rm -f "$$log"' EXIT HUP INT TERM; \
 	if env -u MAKEFLAGS -u MAKEOVERRIDES -u MFLAGS -u GNUMAKEFLAGS -u CFLAGS \
 	   MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
 	   BUSYBOX_X86_64_ALLYES_DISCOVERY=1 BUSYBOX_ALLYES_LINK_COMPATIBLE=1 \
 	   BUSYBOX_ALLYES_REPORT_DIR="$(abspath $(BUILD_DIR))/busybox-host-link" \
-	   sh tests/external/busybox/probe-x86_64.sh >"$log" 2>&1; then \
-	   cat "$log"; \
+	   sh tests/external/busybox/probe-x86_64.sh >"$$log" 2>&1; then \
+	   cat "$$log"; \
 	else \
-	   cat "$log"; exit 1; \
+	   cat "$$log"; exit 1; \
 	fi; \
-	grep -Fx 'BUSYBOX_ALLYES_GCC_RUNTIME_ORACLE=PASS applets=6 original_full_Kbuild=1' "$log"
+	grep -Fx 'BUSYBOX_ALLYES_GCC_RUNTIME_ORACLE=PASS applets=6 original_full_Kbuild=1' "$$log"
 
 check-x86_64-busybox-allyes-discovery: $(MINIC_CC_BINARY)
 	@set -eu; \
