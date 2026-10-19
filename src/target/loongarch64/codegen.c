@@ -419,6 +419,7 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
     const char *name = minic_c0_function_symbol_name(decl);
     const MinicCoreBlock *block;
     size_t frame, i, object_end, save_offset;
+    size_t va_count = 0U, va_gp_named = 0U, va_save_bytes = 0U;
     bool has_direct_calls = false;
     const char *reject_stage = "function_preflight";
     size_t reject_block = SIZE_MAX, reject_ins = SIZE_MAX;
@@ -500,6 +501,25 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
     if (getenv("MINIC_M1_TRACE") != NULL &&
         ((name[0] == 'K' && name[1] == 'e') || (name[0] == 'A' && name[1] == 'd')))
         (void)fprintf(stderr, "MINIC_M9_GATE arch=loongarch64 fn=%s stage=parameters_valid\n", name);
+    /* A function-wide Core pass reserves incoming ABI register saves. */
+    for (i = 0U; i < fn->instruction_count; ++i)
+        if (fn->instructions[i].kind ==
+            MINIC_CORE_INSTRUCTION_VARIADIC_ARGUMENT_ADDRESS)
+            ++va_count;
+    if (va_count != 0U) {
+        if (!decl->is_variadic || va_count > 32U)
+            return machine_emit_reject(fn, "loongarch64", name, reject_stage,
+                                       reject_block, reject_ins, __LINE__);
+        for (i = 0U; i < fn->parameter_count; ++i) {
+            if (minic_type_is_double(fn->parameter_types[i])) {
+                /* Floating named args use separate FPRs. */
+            } else ++va_gp_named;
+        }
+        if (va_gp_named > 8U)
+            return machine_emit_reject(fn, "loongarch64", name, reject_stage,
+                                       reject_block, reject_ins, __LINE__);
+        va_save_bytes = (8U - va_gp_named) * 8U;
+    }
     if (trace_cjson) (void)fprintf(stderr, "MINIC_CJSON_STAGE arch=loongarch64 stage=parameters_ok\n");
     /* M2: verify every CFG successor and return before emitting anything.
      * A function's SSA values and local objects retain unique stack slots
@@ -692,6 +712,12 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                                     reject_block, reject_ins, __LINE__);
     frame = (save_offset + (has_direct_calls ? 8U : 0U) +
              (va_count != 0U ? 64U : 0U) + 15U) & ~(size_t)15U;
+    if (va_count != 0U) {
+        if (frame > MINIC_LARGE_FRAME_MAX - va_save_bytes - 15U)
+            return machine_emit_reject(fn, "loongarch64", name, reject_stage,
+                                       reject_block, reject_ins, __LINE__);
+        frame = (frame + va_save_bytes + 15U) & ~(size_t)15U;
+    }
     if (frame > MINIC_LARGE_FRAME_MAX) {
         if (getenv("MINIC_M1_TRACE") != NULL)
             (void)fprintf(stderr,
@@ -728,6 +754,16 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                 return machine_emit_reject(fn, "loongarch64", name,
                                            "variadic_save", SIZE_MAX,
                                            SIZE_MAX, __LINE__);
+    }
+    if (va_count != 0U) {
+        static const char *const gp[8] = {
+            "$a0", "$a1", "$a2", "$a3", "$a4", "$a5", "$a6", "$a7"};
+        /* GCC LP64D: unused GP arguments end exactly at caller-entry SP. */
+        for (i = va_gp_named; i < 8U; ++i)
+            if (!emit_sp_mem(out, "st.d", gp[i],
+                             frame - va_save_bytes + (i - va_gp_named) * 8U))
+                return machine_emit_reject(fn, "loongarch64", name, reject_stage,
+                                           reject_block, reject_ins, __LINE__);
     }
     reject_stage = "machine_emit";
     for (size_t block_id = 0U; block_id < fn->block_count; ++block_id) {
@@ -1214,6 +1250,17 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                 fprintf(out, "  li.d $t0, %zu\n",
                         frame - 64U + va_gp * 8U) < 0 ||
                 fputs("  add.d $t0, $sp, $t0\n", out) == EOF)
+                return machine_emit_reject(fn, "loongarch64", name,
+                                           reject_stage, reject_block,
+                                           reject_ins, __LINE__);
+            break;
+        }
+        case MINIC_CORE_INSTRUCTION_VARIADIC_ARGUMENT_ADDRESS: {
+            if (va_count == 0U || ins->result >= fn->value_count ||
+                !minic_type_is_pointer(ins->type) ||
+                fprintf(out, "  li.d $t3, %zu\n"
+                             "  add.d $t0, $sp, $t3\n",
+                        frame - va_save_bytes) < 0)
                 return machine_emit_reject(fn, "loongarch64", name,
                                            reject_stage, reject_block,
                                            reject_ins, __LINE__);
