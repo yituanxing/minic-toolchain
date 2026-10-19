@@ -79,7 +79,7 @@ static bool valid_parameter_type(const MinicC0Program *program,
                                  const MinicTargetInfo *target, MinicType type) {
     size_t width;
     bool sign;
-    return minic_type_is_pointer(type) ||
+    return minic_type_is_pointer(type) || minic_type_is_double(type) ||
            scalar_integer_width(program, target, type, &width, &sign);
 }
 
@@ -512,7 +512,8 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
             if (arg->kind != MINIC_CORE_CALL_ARGUMENT_VALUE ||
                 arg->value.value_id >= fn->value_count) return false;
             actual = fn->values[arg->value.value_id].type;
-            if (!valid_parameter_type(program, target, actual)) return false;
+            if (minic_type_is_double(actual) ||
+                !valid_parameter_type(program, target, actual)) return false;
             if (j < parameter_count) {
                 if (!valid_parameter_type(program, target, parameter_types[j]) ||
                     !minic_type_equal(parameter_types[j], actual))
@@ -652,7 +653,8 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                       !(minic_type_is_double(ins->type) &&
                         (ins->kind == MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT ||
                          ins->kind == MINIC_CORE_INSTRUCTION_LOAD ||
-                         ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_DIVIDE))))
+                         ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_DIVIDE ||
+                         ins->kind == MINIC_CORE_INSTRUCTION_PARAMETER))))
             {
                 if (getenv("MINIC_M1_TRACE") != NULL)
                     (void)fprintf(stderr,
@@ -882,22 +884,33 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
             break;
         }
         case MINIC_CORE_INSTRUCTION_PARAMETER: {
-            size_t index = (size_t)ins->value.parameter_index;
-            if (index >= fn->parameter_count) return false;
-            if (index < 8U) {
-                if (!emit_sp_mem(out, register64_type(program, target, ins->type) ? "st.d" : "st.w",
-                             index == 0U ? "$a0" : index == 1U ? "$a1" :
-                             index == 2U ? "$a2" : index == 3U ? "$a3" :
-                             index == 4U ? "$a4" : index == 5U ? "$a5" :
-                             index == 6U ? "$a6" : "$a7",
-                             offset))
+            const size_t ordinal = (size_t)ins->value.parameter_index;
+            static const char *const gp_regs[8] = {
+                "$a0", "$a1", "$a2", "$a3", "$a4", "$a5", "$a6", "$a7"};
+            static const char *const fp_regs[8] = {
+                "$fa0", "$fa1", "$fa2", "$fa3", "$fa4", "$fa5", "$fa6", "$fa7"};
+            size_t gp_index = 0U, fp_index = 0U, k;
+            if (ordinal >= fn->parameter_count) return false;
+            /* LoongArch lp64d independently allocates 8 GP and FP regs. */
+            for (k = 0U; k < ordinal; ++k) {
+                if (minic_type_is_double(fn->parameter_types[k]))
+                    ++fp_index;
+                else
+                    ++gp_index;
+            }
+            if (minic_type_is_double(ins->type)) {
+                if (fp_index >= 8U ||
+                    !emit_sp_mem(out, "fst.d", fp_regs[fp_index], offset))
+                    return false;
+                continue;
+            }
+            if (gp_index < 8U) {
+                if (!emit_sp_mem(out, register64_type(program, target, ins->type)
+                                        ? "st.d" : "st.w",
+                                 gp_regs[gp_index], offset))
                     return false;
             } else {
-                /* LoongArch lp64d: eight integer argument registers; the
-                 * ninth and tenth int use 8-byte caller stack slots.
-                 * Stack slots are addressed after allocating our frame.
-                 * The largest offset is 2016+8, within signed imm12. */
-                size_t incoming = frame + (index - 8U) * 8U;
+                const size_t incoming = frame + (gp_index - 8U) * 8U;
                 if (!emit_sp_mem(out, register64_type(program, target, ins->type)
                                         ? "ld.d" : "ld.w", "$t0", incoming) ||
                     !emit_sp_mem(out, register64_type(program, target, ins->type)
