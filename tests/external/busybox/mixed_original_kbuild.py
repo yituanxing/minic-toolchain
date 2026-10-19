@@ -63,15 +63,21 @@ def run_cases(executable, report):
     return results
 
 
-def build_with_original_kbuild(root, report, proxy, host_cc, suffix):
+def build_with_original_kbuild(root, report, proxy, host_cc, suffix,
+                              owner=None, mini_path=None):
     env = os.environ.copy()
     for name in ("MAKEFLAGS", "MAKEOVERRIDES", "MFLAGS", "GNUMAKEFLAGS", "CFLAGS"):
         env.pop(name, None)
     env.update({"BUSYBOX_ALLYES_HOST_CC": host_cc,
                 "BUSYBOX_ALLYES_REPORT_ROOT": str(report),
-                # Never rebuild the previously qualified shadow inputs while
-                # Kbuild only recomputes archive and final executable owners.
+                # Never rebuild independent shadow inputs on the relink.
                 "BUSYBOX_ALLYES_SKIP_SHADOW": "1"})
+    if owner is not None:
+        if mini_path is None:
+            raise ValueError("MiniC substitution requires its object")
+        env["BUSYBOX_ALLYES_REPLACE_OWNER"] = str(owner)
+        env["BUSYBOX_ALLYES_REPLACE_MINIC_OBJECT"] = str(mini_path)
+        env["BUSYBOX_ALLYES_REPLACE_EVENT"] = str(report / (suffix + ".replace.txt"))
     stdout = report / (suffix + ".make.out")
     stderr = report / (suffix + ".make.err")
     with stdout.open("wb") as out, stderr.open("wb") as err:
@@ -168,17 +174,27 @@ def main():
         # Every candidate is tested independently against all-original-GNU
         # objects, so one miscompiled applet cannot contaminate another's
         # verdict. Do not alter upstream application sources, ever.
-        shutil.copy2(mini, path)
+        # Remove the original GCC object, deliberately making Kbuild perform
+        # a *real* source-owner CC invocation. The exact CC proxy compiles the
+        # unmodified source with GCC and substitutes MiniC .o at that owner
+        # boundary, before Kbuild archives and links the resulting object.
+        # Earlier blind cp-then-relink was correctly caught as false ownership:
+        # Kbuild recompiled and overwrote the copied MiniC .o.
+        path.unlink()
         invalidate_composite(root, path)
         code, stdout, stderr = build_with_original_kbuild(
-            root, report, args.proxy, args.host_cc, name)
+            root, report, args.proxy, args.host_cc, name, owner=path,
+            mini_path=mini)
+        replaced_event = report / (name + ".replace.txt")
         if code != 0 or not gcc_busybox.is_file():
             err = stderr.read_text(encoding="utf-8", errors="replace")
             print("BUSYBOX_MIXED_COMPLEX_APPLET=BLOCKED applet=%s stage=GNU-Kbuild-link "
                   "exit=%d detail=%r" % (name, code, err[-850:]), flush=True)
-        elif sha256(path) != sha256(mini):
+        elif not replaced_event.is_file() or sha256(path) != sha256(mini):
             print("BUSYBOX_MIXED_COMPLEX_APPLET=BLOCKED applet=%s "
-                  "stage=Kbuild-recompiled-MiniC-object" % name, flush=True)
+                  "stage=Kbuild-owner-replacement-not-retained event=%d checksum_ok=%d" %
+                  (name, replaced_event.is_file(), sha256(path) == sha256(mini)),
+                  flush=True)
         elif sha256(gcc_busybox) == sha256(original):
             print("BUSYBOX_MIXED_COMPLEX_APPLET=BLOCKED applet=%s stage=linked-binary-unchanged" %
                   name, flush=True)
@@ -200,11 +216,12 @@ def main():
                       "MiniC_object=1 original_GNU_Kbuild_link=1 GCC_11_fixture_byte_exact=1 "
                       "binary_changed=1" % name, flush=True)
         # Restore object and Kbuild aggregates before trying next owner.
-        shutil.copy2(baseline_object, path)
+        if path.exists():
+            path.unlink()
         invalidate_composite(root, path)
         restore_code, _, restore_err = build_with_original_kbuild(
             root, report, args.proxy, args.host_cc, "restore-" + name)
-        if restore_code != 0 or not gcc_busybox.is_file() or sha256(path) != sha256(baseline_object):
+        if restore_code != 0 or not gcc_busybox.is_file() or not path.is_file() or sha256(path) == sha256(mini):
             print("BUSYBOX_MIXED_COMPLEX=FAIL stage=unable-to-restore-GNU-object "
                   "applet=%s exit=%d detail=%r" %
                   (name, restore_code, restore_err.read_text(errors="replace")[-500:]),
