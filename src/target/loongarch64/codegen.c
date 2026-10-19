@@ -401,6 +401,12 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
      * needed to implement basic control-flow correctly. */
     for (i = 0U; i < fn->block_count; ++i) {
         const MinicCoreTerminator *term = &fn->blocks[i].terminator;
+        /* M32 diagnostics: identify the exact CFG gate from the original
+         * 80-block cJSON_Compare rather than guessing at opcode support. */
+        if (trace_cjson && strcmp(name, "cJSON_Compare") == 0)
+            (void)fprintf(stderr, "MINIC_CJSON_CFG arch=loongarch64 block=%zu kind=%d has_term=%d condition=%u\n",
+                          i, (int)term->kind, fn->blocks[i].has_terminator ? 1 : 0,
+                          (unsigned int)term->conditional.condition);
         if (!fn->blocks[i].has_terminator) return false;
         switch (term->kind) {
         case MINIC_CORE_TERMINATOR_RETURN:
