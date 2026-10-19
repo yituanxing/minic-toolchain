@@ -46,6 +46,24 @@ if ! grep -F 'Checking for unistd.h... Yes.' "$work/configure.log" >/dev/null; t
 fi
 printf 'FOUR_BACKEND_ZLIB_SOURCE=VERIFIED commit=%s TUs=15 config=real-upstream\n' "$commit"
 
+# Independent GNU caller pressure-testing the previously unsupported
+# va_start -> gzvprintf ABI path (GP + FP variadic registers).
+cat >"$work/gzprintf-abi.c" <<'EOF'
+#include "zlib.h"
+#include <stdio.h>
+int main(int argc, char **argv) {
+    gzFile file;
+    int written;
+    if (argc != 2) return 2;
+    file = gzopen(argv[1], "wb");
+    if (file == NULL) return 3;
+    written = gzprintf(file, "abi=%d:%s:%.2f", 42, "zlib", 3.25);
+    if (written < 0 || gzclose(file) != Z_OK) return 4;
+    printf("gzprintf-bytes=%d\n", written);
+    return 0;
+}
+EOF
+
 passed=0
 blocked=0
 failed=0
@@ -208,7 +226,49 @@ PY
         failed=$((failed + 1))
         continue
     fi
-    echo "FOUR_BACKEND_ZLIB=PASS target=$target original_source=1 TUs=15 example=GNU_QEMU_byte_exact minigzip=GCC_cross_roundtrip"
+    # The gzip CLI does not necessarily call gzprintf. Check the actual
+    # zlib variadic forwarding ABI against unmodified GCC-built zlib, with
+    # pointers, integers and a double in anonymous argument registers.
+    set --
+    for source in $sources; do
+        stem=${source%.c}
+        set -- "$@" "$work/$target/$stem.o"
+    done
+    if ! "$gcc" -O0 -std=c11 -static -I"$src" "$work/gzprintf-abi.c" "$@" \
+            -o "$work/$target/gzprintf-mini" >"$work/$target/printf-build.out" \
+            2>"$work/$target/printf-build.err"; then
+        echo "FOUR_BACKEND_ZLIB=FAIL target=$target stage=gzprintf_MiniC_link"
+        sed -n '1,18p' "$work/$target/printf-build.err"
+        failed=$((failed + 1))
+        continue
+    fi
+    set --
+    for source in $sources; do set -- "$@" "$src/$source"; done
+    if ! "$gcc" -O0 -std=c11 -static -I"$src" "$work/gzprintf-abi.c" "$@" \
+            -o "$work/$target/gzprintf-gnu"; then
+        echo "FOUR_BACKEND_ZLIB_ORACLE=FAIL target=$target stage=gzprintf_GNU_link" >&2
+        exit 1
+    fi
+    if ! timeout 60s "$qemu" "$work/$target/gzprintf-gnu" \
+            "$work/$target/printf-gnu.gz" >"$work/$target/printf-gnu.out" \
+            2>"$work/$target/printf-gnu.err"; then
+        echo "FOUR_BACKEND_ZLIB_ORACLE=FAIL target=$target stage=gzprintf_GNU_QEMU" >&2
+        exit 1
+    fi
+    if ! timeout 60s "$qemu" "$work/$target/gzprintf-mini" \
+            "$work/$target/printf-mini.gz" >"$work/$target/printf-mini.out" \
+            2>"$work/$target/printf-mini.err" ||
+       ! cmp -s "$work/$target/printf-mini.out" "$work/$target/printf-gnu.out" ||
+       ! cmp -s "$work/$target/printf-mini.err" "$work/$target/printf-gnu.err" ||
+       ! cmp -s "$work/$target/printf-mini.gz" "$work/$target/printf-gnu.gz"; then
+        echo "FOUR_BACKEND_ZLIB=FAIL target=$target stage=gzprintf_GP_FP_variadic_ABI"
+        diff -u "$work/$target/printf-gnu.out" "$work/$target/printf-mini.out" || true
+        diff -u "$work/$target/printf-gnu.err" "$work/$target/printf-mini.err" || true
+        failed=$((failed + 1))
+        continue
+    fi
+    echo "FOUR_BACKEND_ZLIB_GZPRINTF=PASS target=$target integer_pointer_double_variadic=1 GCC_QEMU_byte_exact=1"
+    echo "FOUR_BACKEND_ZLIB=PASS target=$target original_source=1 TUs=15 example=GNU_QEMU_byte_exact minigzip=GCC_cross_roundtrip gzprintf=GNU_QEMU_byte_exact"
     passed=$((passed + 1))
 done
 printf 'FOUR_BACKEND_ZLIB_FRONTIER=COMPLETE architectures=2 verified_runtime=%s blocked=%s failed=%s\n' \

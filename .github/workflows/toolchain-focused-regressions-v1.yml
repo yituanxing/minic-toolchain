@@ -212,9 +212,10 @@ jobs:
           make MODE=release CFLAGS=-Werror BUILD_DIR=build/toolchain-focused-t1-v2 check-four-backend-m38-fp-varargs
           # cJSON is now an accepted project: no permissive regression frontier.
           make MODE=release CFLAGS=-Werror BUILD_DIR=build/toolchain-focused-t1-v2 check-four-backend-cjson-accept
-          # Real zlib source-wide discovery only; strict accept target is separate.
+          # Strict real zlib acceptance: all 15 MiniC-owned TUs, original
+          # example/minigzip GNU/QEMU differential, and gzprintf GP/FP ABI.
           sh -n tests/external/zlib/probe-four-backend-frontier.sh
-          make MODE=release CFLAGS=-Werror BUILD_DIR=build/toolchain-focused-t1-v2 check-four-backend-zlib-frontier
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/toolchain-focused-t1-v2 check-four-backend-zlib-accept
 
       - name: Fetch certified Stage2 for single-runner Kbuild driver preflight
         if: contains(github.event.head_commit.message, '[minic-stage2-driver-smoke]')
