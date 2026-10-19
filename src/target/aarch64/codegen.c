@@ -1067,15 +1067,14 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                 minic_type_is_bool_integer(ins->type))
                 return false;
             wide = lw == 8U;
-            /* M21 covers LP64 addition/subtraction as required by cJSON
-             * strlen(value)+sizeof(""). Multiplication remains 32-bit. */
-            if (wide && ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_MULTIPLY)
-                return false;
+            /* M36: target-native LP64 multiplication, including cJSON's
+             * size_t newsize = needed * 2; low 64 bits follow C unsigned
+             * arithmetic; signed overflow is undefined at the source. */
             opcode = ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_ADD
                 ? (wide ? "  add x9, x9, x10\n" : "  add w9, w9, w10\n")
                 : ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_SUBTRACT
                     ? (wide ? "  sub x9, x9, x10\n" : "  sub w9, w9, w10\n")
-                    : "  mul w9, w9, w10\n";
+                    : (wide ? "  mul x9, x9, x10\n" : "  mul w9, w9, w10\n");
             if (fprintf(out, wide ? "  ldr x9, [sp, #%zu]\n"
                                   : "  ldr w9, [sp, #%zu]\n",
                         (size_t)lhs * 8U) < 0 ||

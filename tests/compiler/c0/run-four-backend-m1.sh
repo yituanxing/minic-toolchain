@@ -1164,6 +1164,27 @@ int main(void) {
     return 42;
 }
 EOF
+# M36: original cJSON ensure() computes newsize = needed * 2 in size_t.
+# Use values above UINT32_MAX to detect any accidental 32-bit lowering.
+cat > "$w/size64_mul.i" <<'EOF'
+unsigned long mini_size_twice(unsigned long n) { return n * 2UL; }
+unsigned long mini_size_product(unsigned long a, unsigned long b) { return a * b; }
+long mini_signed_product(long a, long b) { return a * b; }
+EOF
+cat > "$w/driver_size64_mul.c" <<'EOF'
+extern unsigned long mini_size_twice(unsigned long);
+extern unsigned long mini_size_product(unsigned long, unsigned long);
+extern long mini_signed_product(long, long);
+int main(void) {
+    volatile unsigned long high = 0x200000003UL;
+    volatile unsigned long wrap = ~0UL;
+    if (mini_size_twice(high) != high * 2UL) return 1;
+    if (mini_size_product(high, 3UL) != high * 3UL) return 2;
+    if (mini_size_twice(wrap) != wrap * 2UL) return 3;
+    if (mini_signed_product(-5000000000L, 3L) != -15000000000L) return 4;
+    return 42;
+}
+EOF
 check_qemu_exit() {
     emulator=$1
     binary=$2
@@ -1293,6 +1314,9 @@ for target in aarch64 loongarch64; do
     if [ "${FOUR_BACKEND_M35_PTR_TO_LP64:-0}" = "1" ]; then
         cases="$cases ptr_to_lp64"
     fi
+    if [ "${FOUR_BACKEND_M36_LP64_MUL:-0}" = "1" ]; then
+        cases="$cases size64_mul"
+    fi
     if [ "$m2_enabled" = "1" ]; then
         # Independent originals for every new CFG/comparison fixture, not
         # merely an expected return code from a MiniC-owned executable.
@@ -1396,6 +1420,9 @@ for target in aarch64 loongarch64; do
         if [ "${FOUR_BACKEND_M35_PTR_TO_LP64:-0}" = "1" ]; then
             oracle_cases="$oracle_cases ptr_to_lp64"
         fi
+        if [ "${FOUR_BACKEND_M36_LP64_MUL:-0}" = "1" ]; then
+            oracle_cases="$oracle_cases size64_mul"
+        fi
         for testcase in $oracle_cases; do
             "$gcc" -static -x c "$w/$testcase.i" "$w/driver_$testcase.c" \
                 -o "$w/$target.gnu-$testcase.elf"
@@ -1442,7 +1469,7 @@ for target in aarch64 loongarch64; do
                 "$gcc" -static "$w/$target.$testcase.o" "$w/driver_$testcase.c" -o "$w/$target.$testcase.elf" ;;
             u8_index|s8_index|u16_index|s16_index)
                 "$gcc" -static "$w/$target.$testcase.o" "$w/driver_$testcase.c" -o "$w/$target.$testcase.elf" ;;
-            size64_abi|size64_add|size64_conv|size64_compare|indirect_hooks|double_transport|double_div|fp_parameter|int_double|double_compare|fp_call|float_promote|unreachable_term|pointer_less|fp_call_result|ptr_to_lp64|pointer_null|pointer_equality|function_address)
+            size64_abi|size64_add|size64_conv|size64_compare|indirect_hooks|double_transport|double_div|fp_parameter|int_double|double_compare|fp_call|float_promote|unreachable_term|pointer_less|fp_call_result|ptr_to_lp64|size64_mul|pointer_null|pointer_equality|function_address)
                 "$gcc" -static "$w/$target.$testcase.o" "$w/driver_$testcase.c" -o "$w/$target.$testcase.elf" ;;
             vararg_int|vararg_pointer)
                 "$gcc" -static "$w/$target.$testcase.o" "$w/driver_$testcase.c" -o "$w/$target.$testcase.elf" ;;
@@ -1603,6 +1630,9 @@ if [ "$m2_enabled" = "1" ]; then
     fi
     if [ "${FOUR_BACKEND_M35_PTR_TO_LP64:-0}" = "1" ]; then
         echo "FOUR_BACKEND_M35_PTR_TO_LP64=PASS architectures=2 GNU_QEMU_diff=2 unsigned_signed_LP64_cast=true pointer_difference=true"
+    fi
+    if [ "${FOUR_BACKEND_M36_LP64_MUL:-0}" = "1" ]; then
+        echo "FOUR_BACKEND_M36_LP64_MUL=PASS architectures=2 GNU_QEMU_diff=2 high_32_bits_preserved=true unsigned_wrap=true signed_long=true"
     fi
 else
     echo "FOUR_BACKEND_M1=PASS architectures=2 executable_QEMU_cases=8 GCC_independent_oracles=4"

@@ -1046,13 +1046,12 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                 minic_type_is_bool_integer(ins->type))
                 return false;
             wide = lw == 8U;
-            if (wide && ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_MULTIPLY)
-                return false;
+            /* M36: real LP64 multiplication uses the full 64-bit operands. */
             opcode = ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_ADD
                 ? (wide ? "  add.d $t0, $t0, $t1\n" : "  add.w $t0, $t0, $t1\n")
                 : ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_SUBTRACT
                     ? (wide ? "  sub.d $t0, $t0, $t1\n" : "  sub.w $t0, $t0, $t1\n")
-                    : "  mul.w $t0, $t0, $t1\n";
+                    : (wide ? "  mul.d $t0, $t0, $t1\n" : "  mul.w $t0, $t0, $t1\n");
             if (!emit_sp_mem(out, wide ? "ld.d" : "ld.w", "$t0",
                              (size_t)lhs * 8U) ||
                 !emit_sp_mem(out, wide ? "ld.d" : "ld.w", "$t1",
