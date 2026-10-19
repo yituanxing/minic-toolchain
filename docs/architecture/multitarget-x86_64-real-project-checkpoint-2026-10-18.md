@@ -1315,3 +1315,76 @@ restored **byte-for-byte** to main blob
 No new CI workflows or broad architecture rewrite. A fresh full 2064/2064
 RV64 Linux+QEMU P1 gate is still required before claiming latest shared
 frontend changes are Linux-certified.
+
+## Original BusyBox GNU constructors: 576 → 579 owner objects (2026-10-19)
+
+A new real-source blocker group came from three unchanged original
+BusyBox `CONFIG_UNITTEST` registration definitions in
+`libbb/compare_string_array.c`, `libbb/obscure.c`, and
+`libbb/strrstr.c`. Every one used the exact spelling
+`static void __attribute__((constructor)) register(void) { ... }`.
+GCC calls those functions automatically before `main`; treating this
+attribute as ignored metadata would compile code with incorrect startup
+semantics and would not qualify the files.
+
+Instead, the shared GNU attribute descriptor now explicitly identifies
+`constructor`/`__constructor__` as a **language-semantic,
+non-parse-only attribute**. Function parsing persists a constructor bit
+on the **actual defined void(void) function**, and marks its body
+reachable even when static and not explicitly called in C source.
+Unsupported priority arguments and invalid function signatures remain
+fail-closed (this is not generic constructor-priority support).
+The two independent ELF writers own the correct machine-specific
+startup table: x86-64 emits an ELF `.init_array` function-pointer
+relocation via `.quad`, and RV64 via `.dword`. No Core ISA instruction,
+target ABI sharing, or unsafe extra constructor C call was introduced.
+
+The reproducible `make check-elf-constructors` oracle compares GNU and
+MiniC binaries that have **two static, otherwise-unreferenced constructor
+functions**. Each constructor updates a shared counter, and `main`
+checks the final state. Assertions cover actual linked-and-run startup
+effects (not just successful assembly), correct `.init_array`
+relocations, x86 host execution, RV64 static link + QEMU execution,
+and rejection of priority/signature cases. The first draft check was
+red because it assumed readelf relocations would name local functions;
+GNU correctly emits a relocation to a section symbol. The oracle was
+corrected to verify the `.rela.init_array` section, with independent
+runtime execution proving both constructors' semantics.
+
+Confirmed [focused #39186118041](https://github.com/yituanxing/minic-toolchain/actions/runs/39186118041) **SUCCESS**:
+- `X86_CONSTRUCTOR_ELF=PASS init_array_relocations=2 before_main=1 gcc_oracle=1`.
+- `RV64_CONSTRUCTOR_ELF=PASS init_array_relocations=2 qemu_before_main=1 gcc_oracle=1`.
+- `CONSTRUCTOR_NEGATIVE=PASS unsupported-priority=fail-closed bad-signature=fail-closed`.
+- Existing x86 M1 + focused RV64/MiniAR/MiniLD check remained green.
+
+A separate unchanged BusyBox real-Kbuild 12-object mixed runtime
+and original GNU-based all-config shadow compiler scan passed
+[focused #39186213088](https://github.com/yituanxing/minic-toolchain/actions/runs/39186213088):
+- `BUSYBOX_X86_64_EXTRA_MIXED=PASS ... total_MiniC_objects=12 GCC_reference=byte-exact GNU_Kbuild=1`.
+- `BUSYBOX_ALLYES_FRONTIER=DISCOVERY enabled_symbols=963 attempted_C_TUs=594 mini_objects=579 cpp_fail=2 minic_fail=13 asm_fail=0 gcc_fail=3 gcc_full_build=FAIL full_MiniC_busybox=NOT_TESTED`.
+- `TOOLCHAIN_FOCUSED_T1=PASS mode=all independent_test_checks=8 shared_builds=1`.
+
+Thus the unchanged 594 original C owner workload advanced **576/594
+→ 579/594**, with MiniC codegen failures falling **16 → 13**.
+This is **97.47% of attempted C translation units producing independent
+GNU-assembled MiniC x86-64 objects**, **not** 579 runnable BusyBox
+applets, nor a successfully linked whole BusyBox program. The 12-applet
+mixed runtime gate remains separately verified; all-enabled full GCC
+Kbuild still encounters historical host RPC header paths and removed
+kernel TC CBQ interfaces.
+
+The temporary re-use of existing focused CI workflow was restored
+byte-for-byte to the original main workflow blob
+`cd9a880a5a707f28b5ea63c364c1844ab35e1c56`, with no added CI
+workflows. The two-backend architecture decision stands: keep
+startup behavior as shared C declaration semantics but delegate
+ELF serialization to each target backend.
+
+Next source-driven steps: inspect and test the 13 remaining MiniC
+failures (e.g. larger `struct stat` memory-class ABI, global relocations,
+GNU parameter attributes and constant-expression edges), and in
+parallel qualify a separate host-compatible original GNU BusyBox
+configuration so that additional original applets can be truly linked
+and executed. Fresh 2064-object RV64 Linux + QEMU P1 on the latest
+shared frontend source remains a merge gate and is not implied by
+the focused RV64/QEMU constructor runtime check.
