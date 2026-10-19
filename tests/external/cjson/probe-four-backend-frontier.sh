@@ -89,6 +89,9 @@ SH
         grep -m 1 'MINIC_M8_.*REJECT\|MINIC_M8_FRAME_CAP' "$work/$target.probe.err" || true
         # Bounded cJSON-only backend trace. Earlier 16-line stderr truncation
         # hid the true failing instruction for the 406-instruction function.
+        # The last emitted CFG line is the first rejected block if the
+        # preflight exits before machine instruction emission.
+        grep 'MINIC_CJSON_CFG' "$work/$target.probe.err" | tail -n 4 || true
         grep 'MINIC_CJSON_STAGE' "$work/$target.probe.err" | tail -n 8 || true
         grep 'MINIC_CJSON_STEP' "$work/$target.probe.err" | tail -n 6 || true
         echo "FOUR_BACKEND_CJSON_BOUNDED_STDERR target=$target begin"
