@@ -84,6 +84,8 @@ SH
         echo "FOUR_BACKEND_CJSON=BLOCKED target=$target stage=MiniC_compile_or_runtime status=$status input=original_cJSON_1.7.19"
         printf 'FOUR_BACKEND_CJSON_FIRST_DIAGNOSTIC target=%s %s\n' \
             "$target" "$error_line"
+        # The backend reports the first failed C guard with precise Core context.
+        grep -m 1 'MINIC_BACKEND_REJECT' "$work/$target.probe.err" || true
         grep -m 1 'MINIC_M1_FRONTIER' "$work/$target.probe.err" || true
         grep -m 1 'MINIC_M4_GLOBAL_FRONTIER' "$work/$target.probe.err" || true
         grep -m 1 'MINIC_M8_.*REJECT\|MINIC_M8_FRAME_CAP' "$work/$target.probe.err" || true
