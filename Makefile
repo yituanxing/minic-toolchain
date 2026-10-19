@@ -709,11 +709,12 @@ check-x86_64-sqlite-frontier: $(MINIC_CC_BINARY)
 # keeps extra cases as opt-in discovery; this target requires its precise final
 # byte-for-byte native execution marker, so a discovery-mode early exit is RED.
 # GNU remains the other-object producer, assembler, linker and independent oracle.
+# Clear outer MiniC warning flags and make command-line overrides before
+# invoking pristine upstream BusyBox Kbuild inside the reusable probe.
 check-x86_64-busybox-12: $(MINIC_CC_BINARY)
 	@set -eu; \
 	log=$(mktemp); \
 	trap 'rm -f "$log"' EXIT HUP INT TERM; \
-	# Do not propagate the outer MiniC -Werror / make overrides into pristine BusyBox Kbuild. \
 	if env -u MAKEFLAGS -u MAKEOVERRIDES -u MFLAGS -u GNUMAKEFLAGS -u CFLAGS \
 	   MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
 	   BUSYBOX_X86_64_EXTRA_DISCOVERY=1 \
