@@ -40,7 +40,9 @@ for target in aarch64 loongarch64; do
         # First observed failing function/real Core operation, without
         # flooding CI with an entire large function dump.
         grep -m 1 'MINIC_M[14]_.*FRONTIER' "$work/$target.compile.err" || true
-        sed -n '1,14p' "$work/$target.compile.err"
+        # Show the complete first (small) real Core function; captures the
+        # operation after pointer parameter stores, not just its preamble.
+        sed -n '1,70p' "$work/$target.compile.err"
         blocked=$((blocked + 1))
         continue
     fi
