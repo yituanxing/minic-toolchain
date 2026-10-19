@@ -820,6 +820,42 @@ static bool eval_expression(const MinicC0Program *program,
                               expression->type,
                               (uint64_t)expression->value.integer_value,
                               &value->bits);
+    case MINIC_EXPRESSION_LVALUE_READ: {
+        /* GCC folds a constant index into a string literal as an integer
+         * constant (BusyBox's BB_STATIC_ASSERT expands to this form).
+         * Do not generalize this to mutable or arbitrary const globals:
+         * only parser-synthesized immutable literal payloads are safe. */
+        const MinicExpression *location =
+            minic_c0_program_expression(program, expression->value.unary.operand);
+        const MinicExpression *base;
+        const MinicGlobalObject *object;
+        MinicConstValue index;
+        size_t idx;
+        static const char literal_prefix[] = ".Lminic_string_";
+        if (location == NULL || location->kind != MINIC_EXPRESSION_SUBSCRIPT)
+            return false;
+        base = minic_c0_program_expression(program, location->value.subscript.base);
+        if (base == NULL || base->kind != MINIC_EXPRESSION_GLOBAL_OBJECT ||
+            base->value.global_object_id >= program->global_object_count ||
+            !eval_expression(program, target, location->value.subscript.index,
+                             depth + 1U, &index) ||
+            !minic_type_is_integer(index.type) ||
+            (uint64_t)(size_t)index.bits != index.bits) return false;
+        object = minic_c0_program_global_object(
+            program, base->value.global_object_id);
+        if (object == NULL || object->name == NULL || !object->is_internal ||
+            !object->is_read_only ||
+            strncmp(object->name, literal_prefix,
+                    sizeof(literal_prefix) - 1U) != 0 ||
+            !minic_type_is_integer(location->type) ||
+            !minic_type_equal(location->type, expression->type)) return false;
+        idx = (size_t)index.bits;
+        if (idx >= object->initializer_count || object->initializer_values == NULL)
+            return false;
+        value->type = expression->type;
+        return normalize_bits(program, target, expression->type,
+                              object->initializer_values[idx], &value->bits);
+    }
     case MINIC_EXPRESSION_SIZEOF: {
         size_t size;
 
