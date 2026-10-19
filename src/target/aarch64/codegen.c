@@ -828,22 +828,36 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
         case MINIC_CORE_INSTRUCTION_INTEGER_MULTIPLY: {
             MinicCoreValueId lhs = ins->value.binary.left;
             MinicCoreValueId rhs = ins->value.binary.right;
-            const char *opcode = ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_ADD
-                ? "  add w9, w9, w10\n" :
-                ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_SUBTRACT
-                    ? "  sub w9, w9, w10\n" : "  mul w9, w9, w10\n";
             size_t lw, rw;
             bool ls, rs;
+            bool wide;
+            const char *opcode;
             if (lhs >= fn->value_count || rhs >= fn->value_count ||
-                !small_integer_width(program, target, fn->values[lhs].type, &lw, &ls) ||
-                !small_integer_width(program, target, fn->values[rhs].type, &rw, &rs) ||
+                !scalar_integer_width(program, target, fn->values[lhs].type, &lw, &ls) ||
+                !scalar_integer_width(program, target, fn->values[rhs].type, &rw, &rs) ||
                 lw != rw || ls != rs ||
                 !minic_type_equal(fn->values[lhs].type, ins->type) ||
-                minic_type_is_bool_integer(ins->type) ||
-                fprintf(out, "  ldr w9, [sp, #%zu]\n", (size_t)lhs * 8U) < 0 ||
-                fprintf(out, "  ldr w10, [sp, #%zu]\n", (size_t)rhs * 8U) < 0 ||
+                minic_type_is_bool_integer(ins->type))
+                return false;
+            wide = lw == 8U;
+            /* M21 covers LP64 addition/subtraction as required by cJSON
+             * strlen(value)+sizeof(""). Multiplication remains 32-bit. */
+            if (wide && ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_MULTIPLY)
+                return false;
+            opcode = ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_ADD
+                ? (wide ? "  add x9, x9, x10\n" : "  add w9, w9, w10\n")
+                : ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_SUBTRACT
+                    ? (wide ? "  sub x9, x9, x10\n" : "  sub w9, w9, w10\n")
+                    : "  mul w9, w9, w10\n";
+            if (fprintf(out, wide ? "  ldr x9, [sp, #%zu]\n"
+                                  : "  ldr w9, [sp, #%zu]\n",
+                        (size_t)lhs * 8U) < 0 ||
+                fprintf(out, wide ? "  ldr x10, [sp, #%zu]\n"
+                                  : "  ldr w10, [sp, #%zu]\n",
+                        (size_t)rhs * 8U) < 0 ||
                 fputs(opcode, out) == EOF ||
-                !emit_integer_normalize(out, lw, ls)) return false;
+                (!wide && !emit_integer_normalize(out, lw, ls)))
+                return false;
             break;
         }
         case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND:
