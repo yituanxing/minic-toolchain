@@ -316,6 +316,8 @@ static bool emit_simple_global(FILE *out, const MinicC0Program *program,
  * are SP-positive; naturally aligned objects are laid out after SSA
  * value slots.  Keep bounded <= 8 KiB frames until large-offset ABI
  * access has been independently checked on both targets. */
+#define MINIC_LARGE_FRAME_MAX 262144U
+
 static bool frame_objects(const MinicC0Program *program,
                           const MinicTargetInfo *target,
                           const MinicCoreFunction *fn,
@@ -324,7 +326,7 @@ static bool frame_objects(const MinicC0Program *program,
     size_t pos, i;
     if (program == NULL || target == NULL || fn == NULL ||
         sought_id > fn->object_count ||
-        fn->value_count > 1024U || fn->object_count > 1024U)
+        fn->value_count > 32768U || fn->object_count > 4096U)
         return false;
     pos = fn->value_count * 8U;
     for (i = 0U; i < fn->object_count; ++i) {
@@ -332,18 +334,18 @@ static bool frame_objects(const MinicC0Program *program,
         size_t unit, align, extent;
         if (!minic_data_layout_type(target->data_layout, program,
                                     obj->type, &unit, &align) ||
-            obj->element_count == 0U || unit > 8192U / obj->element_count)
+            obj->element_count == 0U || unit > MINIC_LARGE_FRAME_MAX / obj->element_count)
             return false;
         extent = unit * obj->element_count;
         if (obj->explicit_alignment > align)
             align = obj->explicit_alignment;
         if (align == 0U || align > 16U || (align & (align - 1U)) != 0U)
             return false;
-        if (pos > 8192U - (align - 1U)) return false;
+        if (pos > MINIC_LARGE_FRAME_MAX - (align - 1U)) return false;
         pos = (pos + align - 1U) & ~(align - 1U);
         if (i == sought_id && sought_offset != NULL)
             *sought_offset = pos;
-        if (extent > 8192U - pos) return false;
+        if (extent > MINIC_LARGE_FRAME_MAX - pos) return false;
         pos += extent;
     }
     if (sought_id == fn->object_count && sought_offset != NULL)
@@ -360,14 +362,14 @@ static bool emit_sp_mem(FILE *out, const char *op, const char *reg,
                         size_t offset) {
     if (offset <= 2047U)
         return fprintf(out, "  %s %s, $sp, %zu\n", op, reg, offset) >= 0;
-    if (offset > 16384U) return false;
+    if (offset > MINIC_LARGE_FRAME_MAX) return false;
     return fprintf(out, "  li.d $t3, %zu\n"
                         "  add.d $t3, $sp, $t3\n"
                         "  %s %s, $t3, 0\n", offset, op, reg) >= 0;
 }
 static bool emit_sp_adjust(FILE *out, size_t bytes, bool restore) {
     if (bytes == 0U) return true;
-    if (bytes > 8192U) return false;
+    if (bytes > MINIC_LARGE_FRAME_MAX) return false;
     return fprintf(out, "  li.d $t3, %zu\n"
                         "  %s $sp, $sp, $t3\n", bytes,
                    restore ? "add.d" : "sub.d") >= 0;
@@ -414,9 +416,9 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
         decl->visibility != MINIC_SYMBOL_VISIBILITY_DEFAULT ||
         decl->section_name != NULL || decl->alias_target != MINIC_FUNCTION_INVALID ||
         !valid_return_type(program, target, fn->return_type) ||
-        fn->block_count == 0U || fn->block_count > 128U || fn->entry_block != 0U ||
+        fn->block_count == 0U || fn->block_count > 1024U || fn->entry_block != 0U ||
         fn->inline_asm_count != 0U || fn->parameter_count > 10U ||
-        fn->value_count > 1024U || fn->object_count > 1024U)
+        fn->value_count > 32768U || fn->object_count > 4096U)
         {
             if (getenv("MINIC_BACKEND_CENSUS") != NULL)
                 (void)fprintf(stderr,
@@ -629,12 +631,12 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
     reject_stage = "frame_finalization";
     reject_ins = SIZE_MAX;
     save_offset = (object_end + 7U) & ~(size_t)7U;
-    if (save_offset > 8192U - (has_direct_calls ? 8U : 0U))
+    if (save_offset > MINIC_LARGE_FRAME_MAX - (has_direct_calls ? 8U : 0U))
         return machine_emit_reject(fn, "loongarch64", name, reject_stage,
                                     reject_block, reject_ins, __LINE__);
     frame = (save_offset + (has_direct_calls ? 8U : 0U) + 15U) &
             ~(size_t)15U;
-    if (frame > 8192U) {
+    if (frame > MINIC_LARGE_FRAME_MAX) {
         if (getenv("MINIC_M1_TRACE") != NULL)
             (void)fprintf(stderr,
                           "MINIC_M8_FRAME_CAP arch=loongarch64 function=%s frame=%zu end=%zu\n",

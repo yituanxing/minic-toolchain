@@ -316,6 +316,8 @@ static bool emit_simple_global(FILE *out, const MinicC0Program *program,
  * are SP-positive; naturally aligned objects are laid out after SSA
  * value slots.  Keep bounded <= 8 KiB frames until large-offset ABI
  * access has been independently checked on both targets. */
+#define MINIC_LARGE_FRAME_MAX 262144U
+
 static bool frame_objects(const MinicC0Program *program,
                           const MinicTargetInfo *target,
                           const MinicCoreFunction *fn,
@@ -324,7 +326,7 @@ static bool frame_objects(const MinicC0Program *program,
     size_t pos, i;
     if (program == NULL || target == NULL || fn == NULL ||
         sought_id > fn->object_count ||
-        fn->value_count > 1024U || fn->object_count > 1024U)
+        fn->value_count > 32768U || fn->object_count > 4096U)
         return false;
     pos = fn->value_count * 8U;
     for (i = 0U; i < fn->object_count; ++i) {
@@ -332,24 +334,81 @@ static bool frame_objects(const MinicC0Program *program,
         size_t unit, align, extent;
         if (!minic_data_layout_type(target->data_layout, program,
                                     obj->type, &unit, &align) ||
-            obj->element_count == 0U || unit > 8192U / obj->element_count)
+            obj->element_count == 0U || unit > MINIC_LARGE_FRAME_MAX / obj->element_count)
             return false;
         extent = unit * obj->element_count;
         if (obj->explicit_alignment > align)
             align = obj->explicit_alignment;
         if (align == 0U || align > 16U || (align & (align - 1U)) != 0U)
             return false;
-        if (pos > 8192U - (align - 1U)) return false;
+        if (pos > MINIC_LARGE_FRAME_MAX - (align - 1U)) return false;
         pos = (pos + align - 1U) & ~(align - 1U);
         if (i == sought_id && sought_offset != NULL)
             *sought_offset = pos;
-        if (extent > 8192U - pos) return false;
+        if (extent > MINIC_LARGE_FRAME_MAX - pos) return false;
         pos += extent;
     }
     if (sought_id == fn->object_count && sought_offset != NULL)
         *sought_offset = pos;
     if (object_end != NULL) *object_end = pos;
     return true;
+}
+
+
+/* Target-local final legalization of out-of-range SP-relative memory access.
+ * Full Core SSA stack slots are preserved, and x12 is a reserved scratch.
+ * This pass does not transform small-frame GNU instructions. */
+static bool legalize_large_sp_memory(const char *path) {
+    FILE *input = fopen(path, "rb"), *output, *rewritten;
+    char line[512], copy[8192];
+    size_t size;
+    bool success = true;
+    if (input == NULL) return false;
+    output = tmpfile();
+    if (output == NULL) { (void)fclose(input); return false; }
+    while (fgets(line, sizeof(line), input) != NULL) {
+        char op[16] = {0}, reg[16] = {0};
+        size_t offset = 0U;
+        if (sscanf(line, "  %15s %15[^,], [sp, #%zu]",
+                   op, reg, &offset) == 3 &&
+            (strncmp(op, "ldr", 3U) == 0 ||
+             strncmp(op, "str", 3U) == 0) && offset > 4095U) {
+            const uint64_t imm = (uint64_t)offset;
+            unsigned int shift;
+            if (fprintf(output, "  movz x12, #%" PRIu64 "\n",
+                        imm & UINT64_C(0xffff)) < 0) {
+                success = false; break;
+            }
+            for (shift = 16U; shift <= 48U; shift += 16U) {
+                if (((imm >> shift) & UINT64_C(0xffff)) != 0U &&
+                    fprintf(output, "  movk x12, #%" PRIu64
+                            ", lsl #%u\n",
+                            (imm >> shift) & UINT64_C(0xffff), shift) < 0) {
+                    success = false; break;
+                }
+            }
+            if (!success ||
+                fputs("  add x12, sp, x12\n", output) == EOF ||
+                fprintf(output, "  %s %s, [x12]\n", op, reg) < 0) {
+                success = false; break;
+            }
+        } else if (fputs(line, output) == EOF) {
+            success = false; break;
+        }
+    }
+    if (ferror(input) != 0 || fclose(input) != 0) success = false;
+    if (success && fseek(output, 0L, SEEK_SET) != 0) success = false;
+    rewritten = success ? fopen(path, "wb") : NULL;
+    if (rewritten == NULL) success = false;
+    if (success) {
+        while ((size = fread(copy, 1U, sizeof(copy), output)) != 0U)
+            if (fwrite(copy, 1U, size, rewritten) != size) {
+                success = false; break;
+            }
+        if (ferror(output) != 0 || fclose(rewritten) != 0) success = false;
+    }
+    if (fclose(output) != 0) success = false;
+    return success;
 }
 
 static bool emit_function(FILE *out, const MinicC0Program *program,
@@ -393,9 +452,9 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
         decl->visibility != MINIC_SYMBOL_VISIBILITY_DEFAULT ||
         decl->section_name != NULL || decl->alias_target != MINIC_FUNCTION_INVALID ||
         !valid_return_type(program, target, fn->return_type) ||
-        fn->block_count == 0U || fn->block_count > 128U || fn->entry_block != 0U ||
+        fn->block_count == 0U || fn->block_count > 1024U || fn->entry_block != 0U ||
         fn->inline_asm_count != 0U || fn->parameter_count > 10U ||
-        fn->value_count > 1024U || fn->object_count > 1024U)
+        fn->value_count > 32768U || fn->object_count > 4096U)
         {
             if (getenv("MINIC_BACKEND_CENSUS") != NULL)
                 (void)fprintf(stderr,
@@ -608,12 +667,12 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
     reject_stage = "frame_finalization";
     reject_ins = SIZE_MAX;
     save_offset = (object_end + 7U) & ~(size_t)7U;
-    if (save_offset > 8192U - (has_direct_calls ? 8U : 0U))
+    if (save_offset > MINIC_LARGE_FRAME_MAX - (has_direct_calls ? 8U : 0U))
         return machine_emit_reject(fn, "aarch64", name, reject_stage,
                                     reject_block, reject_ins, __LINE__);
     frame = (save_offset + (has_direct_calls ? 8U : 0U) + 15U) &
             ~(size_t)15U;
-    if (frame > 8192U) {
+    if (frame > MINIC_LARGE_FRAME_MAX) {
         if (getenv("MINIC_M1_TRACE") != NULL)
             (void)fprintf(stderr,
                           "MINIC_M8_FRAME_CAP arch=aarch64 function=%s frame=%zu end=%zu\n",
@@ -635,8 +694,11 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
         return machine_emit_reject(fn, "aarch64", name, reject_stage,
                                     reject_block, reject_ins, __LINE__);
     /* No illegal AArch64 add/sub immediates on real >4KiB frames. */
-    if (frame != 0U && fprintf(out,
-            "  movz x12, #%zu\n  sub sp, sp, x12\n", frame) < 0)
+    if (frame != 0U &&
+        (fprintf(out, "  movz x12, #%zu\n", frame & 65535U) < 0 ||
+         (frame > 65535U &&
+          fprintf(out, "  movk x12, #%zu, lsl #16\n", frame >> 16U) < 0) ||
+         fputs("  sub sp, sp, x12\n", out) == EOF))
         return machine_emit_reject(fn, "aarch64", name, reject_stage,
                                     reject_block, reject_ins, __LINE__);
     if (has_direct_calls &&
@@ -1582,8 +1644,11 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                          (size_t)block->terminator.return_value * 8U) < 0) ||
                 (has_direct_calls && fprintf(out, "  ldr x30, [sp, #%zu]\n",
                                              save_offset) < 0) ||
-                (frame != 0U && fprintf(out,
-                         "  movz x12, #%zu\n  add sp, sp, x12\n", frame) < 0) ||
+                (frame != 0U &&
+                 (fprintf(out, "  movz x12, #%zu\n", frame & 65535U) < 0 ||
+                  (frame > 65535U &&
+                   fprintf(out, "  movk x12, #%zu, lsl #16\n", frame >> 16U) < 0) ||
+                  fputs("  add sp, sp, x12\n", out) == EOF)) ||
                 fputs("  ret\n", out) == EOF) return machine_emit_reject(fn, "aarch64", name, reject_stage,
                                     reject_block, reject_ins, __LINE__);
             break;
@@ -1693,6 +1758,7 @@ bool minic_aarch64_write_c0_program_with_core_functions(
     if (success && fprintf(out, ".section .note.GNU-stack,\"\",%%progbits\n") < 0)
         success = false;
     if (fclose(out) != 0) success = false;
+    if (success && !legalize_large_sp_memory(path)) success = false;
     if (!success) {
         (void)remove(path);
         return fail(diagnostic, path,
