@@ -61,10 +61,13 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          ruby -e 'require "yaml"; YAML.parse_file(".github/workflows/linux-runtime-gcc-baseline.yml"); puts "LINUX_RUNTIME_YAML_PARSE=PASS"'
-          # Catch GitHub Actions expression and schema errors (which
-          # Ruby's plain YAML syntax check intentionally cannot catch).
+          set +e
+          ruby -ryaml -e 'begin; YAML.parse_file(".github/workflows/linux-runtime-gcc-baseline.yml"); puts "LINUX_RUNTIME_YAML_PARSE=PASS"; rescue Psych::SyntaxError => e; warn "LINUX_RUNTIME_YAML_PARSE=FAIL line=#{e.line} column=#{e.column} problem=#{e.problem} context=#{e.context}"; exit 1; end'
+          ruby_rc=$?
           go run github.com/rhysd/actionlint/cmd/actionlint@latest -shellcheck= -pyflakes= .github/workflows/linux-runtime-gcc-baseline.yml
+          actionlint_rc=$?
+          echo "LINUX_YAML_DIAGNOSTIC ruby_rc=$ruby_rc actionlint_rc=$actionlint_rc"
+          test "$ruby_rc" -eq 0 && test "$actionlint_rc" -eq 0
 
       - name: Install union of RV64, archive, static and dynamic linker oracle prerequisites
         run: |
