@@ -238,6 +238,23 @@ static bool emit_flat_record_global(FILE *out,
            fprintf(out, "  .zero %zu\n", storage_size - cursor) >= 0;
 }
 
+/* Emission of target-neutral ELF STV_* binding metadata. */
+static const char *elf_visibility_directive(MinicSymbolVisibility visibility) {
+    switch (visibility) {
+    case MINIC_SYMBOL_VISIBILITY_DEFAULT: return NULL;
+    case MINIC_SYMBOL_VISIBILITY_HIDDEN: return ".hidden";
+    case MINIC_SYMBOL_VISIBILITY_INTERNAL: return ".internal";
+    case MINIC_SYMBOL_VISIBILITY_PROTECTED: return ".protected";
+    default: return NULL;
+    }
+}
+static bool emit_symbol_visibility(FILE *out, MinicSymbolVisibility visibility,
+                                   const char *name) {
+    const char *directive = elf_visibility_directive(visibility);
+    return visibility == MINIC_SYMBOL_VISIBILITY_DEFAULT ||
+           (directive != NULL && fprintf(out, "%s %s\n", directive, name) >= 0);
+}
+
 static bool emit_simple_global(FILE *out, const MinicC0Program *program,
                                const MinicTargetInfo *target,
                                const MinicGlobalObject *obj) {
@@ -245,12 +262,18 @@ static bool emit_simple_global(FILE *out, const MinicC0Program *program,
     size_t storage_size, align, width, scalar_align, i;
     const char *directive;
     if (obj == NULL || obj->name == NULL || !obj->name[0] ||
-        obj->is_weak || obj->visibility != MINIC_SYMBOL_VISIBILITY_DEFAULT ||
+        obj->is_weak ||
+        (obj->visibility != MINIC_SYMBOL_VISIBILITY_DEFAULT &&
+         elf_visibility_directive(obj->visibility) == NULL) ||
         obj->section_name != NULL ||
         obj->alias_target != MINIC_GLOBAL_OBJECT_INVALID ||
         obj->flexible_array_initializer_count != 0U ||
         !minic_data_layout_global_object(target->data_layout, program, obj,
                                          &storage_size, &align)) return false;
+    /* .internal/.hidden must be emitted even for flat record globals. */
+    if (!obj->is_internal &&
+        !emit_symbol_visibility(out, obj->visibility, obj->name))
+        return false;
     if (minic_type_is_record(obj->type)) {
         if (obj->union_selection_count != 0U) return false;
         if (fprintf(out, "%s\n", obj->is_read_only
@@ -486,7 +509,8 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
     if (name == NULL || name[0] == '\0' ||
         !minic_core_function_verify(fn) ||
         decl->is_constructor || decl->is_weak ||
-        decl->visibility != MINIC_SYMBOL_VISIBILITY_DEFAULT ||
+        (decl->visibility != MINIC_SYMBOL_VISIBILITY_DEFAULT &&
+         elf_visibility_directive(decl->visibility) == NULL) ||
         decl->section_name != NULL || decl->alias_target != MINIC_FUNCTION_INVALID ||
         !valid_return_type(program, target, fn->return_type) ||
         fn->block_count == 0U || fn->block_count > 1024U || fn->entry_block != 0U ||
@@ -750,6 +774,10 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
     } else if (fprintf(out, ".text\n") < 0) return machine_emit_reject(fn, "aarch64", name, reject_stage,
                                     reject_block, reject_ins, __LINE__);
     if (!decl->is_internal && fprintf(out, ".globl %s\n", name) < 0)
+        return machine_emit_reject(fn, "aarch64", name, reject_stage,
+                                    reject_block, reject_ins, __LINE__);
+    if (!decl->is_internal &&
+        !emit_symbol_visibility(out, decl->visibility, name))
         return machine_emit_reject(fn, "aarch64", name, reject_stage,
                                     reject_block, reject_ins, __LINE__);
     if (fprintf(out, ".p2align 2\n.type %s,%%function\n%s:\n", name, name) < 0)
