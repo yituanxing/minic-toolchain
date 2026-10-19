@@ -67,7 +67,8 @@ def call_proxy(args):
             mini = subprocess.run(
                 [os.environ["BUSYBOX_ALLYES_MINIC_CC"],
                  "--target=x86_64-linux", "-S", str(preprocessed), "-o", str(asm)],
-                stdout=subprocess.DEVNULL, stderr=e, check=False)
+                stdout=subprocess.DEVNULL, stderr=e, check=False,
+                env={**os.environ, "MINIC_X86_CALL_TRACE": "1"})
         info["minic"] = mini.returncode
         if mini.returncode == 0:
             with (target / "as.err").open("wb") as e:
@@ -113,6 +114,18 @@ def print_frontier(report_root, gcc_success, enabled):
                 useful = [s.strip() for s in error.splitlines() if s.strip()]
             print("BUSYBOX_ALLYES_BLOCKER source=%s kind=%s detail=%s" %
                   (info["source"], stage, (useful[0] if useful else "no diagnostic")[:240]))
+            if stage == "MiniC":
+                gates = [line.strip() for line in error.splitlines()
+                         if line.startswith("X86_CALL_GATE ")]
+                arguments = [line.strip() for line in error.splitlines()
+                             if line.startswith("X86_CALL_ARG ")]
+                if gates:
+                    print("BUSYBOX_ALLYES_CALL_GATE source=%s detail=%s" %
+                          (info["source"], gates[-1][:420]))
+                    for arg in arguments[:16]:
+                        print("BUSYBOX_ALLYES_CALL_ARG source=%s detail=%s" %
+                              (info["source"], arg[:340]))
+
     total = len(results)
     print("BUSYBOX_ALLYES_FRONTIER=DISCOVERY enabled_symbols=%d attempted_C_TUs=%d "
           "mini_objects=%d cpp_fail=%d minic_fail=%d asm_fail=%d gcc_fail=%d "
