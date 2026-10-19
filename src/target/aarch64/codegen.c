@@ -5,9 +5,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-/* M1: prove correct *actual* GNU ELF/ABI assembly, not just target naming.
+/* M1/M2: prove correct *actual* GNU ELF/ABI assembly, not just target naming.
  * Each signed 32-bit Core SSA value gets an 8-byte private stack slot.
- * Only int scalar parameters and integer operations are admitted today.
+ * Scalar int parameters, arithmetic, and basic block branches are admitted.
  * No implicit ABI equivalence with RISC-V64/x86-64 is assumed. */
 static bool fail(MinicDiagnostic *diag, const char *path, const char *why) {
     if (diag != NULL) {
@@ -35,20 +35,41 @@ static bool emit_function(FILE *out, const MinicFunction *decl,
         decl->visibility != MINIC_SYMBOL_VISIBILITY_DEFAULT ||
         decl->section_name != NULL || decl->alias_target != MINIC_FUNCTION_INVALID ||
         !valid_int(fn->return_type) ||
-        fn->block_count != 1U || fn->entry_block != 0U ||
+        fn->block_count == 0U || fn->block_count > 128U || fn->entry_block != 0U ||
         fn->inline_asm_count != 0U || fn->parameter_count > 8U ||
         fn->value_count > 240U || fn->object_count > 240U ||
         fn->value_count > 240U - fn->object_count)
         return false;
     for (i = 0U; i < fn->parameter_count; ++i)
         if (!valid_int(fn->parameter_types[i])) return false;
-    block = &fn->blocks[0];
-    if (!block->has_terminator ||
-        block->terminator.kind != MINIC_CORE_TERMINATOR_RETURN ||
-        block->terminator.return_object != MINIC_CORE_OBJECT_INVALID ||
-        block->terminator.return_value == MINIC_CORE_VALUE_INVALID ||
-        block->terminator.return_value >= fn->value_count)
-        return false;
+    /* M2: verify every CFG successor and return before emitting anything.
+     * A function's SSA values and local objects retain unique stack slots
+     * across blocks, so no architecture-independent register allocator is
+     * needed to implement basic control-flow correctly. */
+    for (i = 0U; i < fn->block_count; ++i) {
+        const MinicCoreTerminator *term = &fn->blocks[i].terminator;
+        if (!fn->blocks[i].has_terminator) return false;
+        switch (term->kind) {
+        case MINIC_CORE_TERMINATOR_RETURN:
+            if (term->return_object != MINIC_CORE_OBJECT_INVALID ||
+                term->return_value == MINIC_CORE_VALUE_INVALID ||
+                term->return_value >= fn->value_count ||
+                !valid_int(fn->values[term->return_value].type)) return false;
+            break;
+        case MINIC_CORE_TERMINATOR_BRANCH:
+            if (term->branch_target >= fn->block_count) return false;
+            break;
+        case MINIC_CORE_TERMINATOR_CONDITIONAL_BRANCH:
+            if (term->conditional.when_true >= fn->block_count ||
+                term->conditional.when_false >= fn->block_count ||
+                term->conditional.condition >= fn->value_count ||
+                !valid_int(fn->values[term->conditional.condition].type))
+                return false;
+            break;
+        default:
+            return false;
+        }
+    }
     for (i = 0U; i < fn->object_count; ++i) {
         const MinicCoreObject *obj = &fn->objects[i];
         if (!valid_int(obj->type) || obj->element_count != 1U ||
@@ -66,7 +87,11 @@ static bool emit_function(FILE *out, const MinicFunction *decl,
     if (fprintf(out, ".p2align 2\n.type %s,%%function\n%s:\n", name, name) < 0)
         return false;
     if (frame != 0U && fprintf(out, "  sub sp, sp, #%zu\n", frame) < 0) return false;
-    for (i = 0U; i < block->instruction_count; ++i) {
+    for (size_t block_id = 0U; block_id < fn->block_count; ++block_id) {
+        block = &fn->blocks[block_id];
+        if (fprintf(out, ".Lmini_arm_f%zu_b%zu:\n", id, block_id) < 0)
+            return false;
+        for (i = 0U; i < block->instruction_count; ++i) {
         MinicCoreInstructionId ins_id = block->instructions[i];
         const MinicCoreInstruction *ins;
         size_t offset;
@@ -156,13 +181,34 @@ static bool emit_function(FILE *out, const MinicFunction *decl,
         }
         if (fprintf(out, "  str w9, [sp, #%zu]\n", offset) < 0) return false;
     }
-    if (fprintf(out, "  ldr w0, [sp, #%zu]\n",
-                (size_t)block->terminator.return_value * 8U) < 0 ||
-        (frame != 0U && fprintf(out, "  add sp, sp, #%zu\n", frame) < 0) ||
-        fputs("  ret\n", out) == EOF ||
-        fprintf(out, ".size %s,.-%s\n", name, name) < 0)
-        return false;
-    (void)id; /* Reserved function-scoped label namespace for later M2 CFG. */
+        /* Branches use the function's own local ELF labels; x9 is a
+         * scratch register and w0 is only defined along return paths. */
+        switch (block->terminator.kind) {
+        case MINIC_CORE_TERMINATOR_RETURN:
+            if (fprintf(out, "  ldr w0, [sp, #%zu]\n",
+                        (size_t)block->terminator.return_value * 8U) < 0 ||
+                (frame != 0U && fprintf(out, "  add sp, sp, #%zu\n", frame) < 0) ||
+                fputs("  ret\n", out) == EOF) return false;
+            break;
+        case MINIC_CORE_TERMINATOR_BRANCH:
+            if (fprintf(out, "  b .Lmini_arm_f%zu_b%u\n",
+                        id, (unsigned int)block->terminator.branch_target) < 0)
+                return false;
+            break;
+        case MINIC_CORE_TERMINATOR_CONDITIONAL_BRANCH:
+            if (fprintf(out,
+                        "  ldr w9, [sp, #%zu]\n"
+                        "  cbnz w9, .Lmini_arm_f%zu_b%u\n"
+                        "  b .Lmini_arm_f%zu_b%u\n",
+                        (size_t)block->terminator.conditional.condition * 8U,
+                        id, (unsigned int)block->terminator.conditional.when_true,
+                        id, (unsigned int)block->terminator.conditional.when_false) < 0)
+                return false;
+            break;
+        default: return false;
+        }
+    }
+    if (fprintf(out, ".size %s,.-%s\n", name, name) < 0) return false;
     return true;
 }
 
