@@ -418,7 +418,9 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
             if (term->conditional.when_true >= fn->block_count ||
                 term->conditional.when_false >= fn->block_count ||
                 term->conditional.condition >= fn->value_count ||
-                !valid_int_or_bool(fn->values[term->conditional.condition].type))
+                (!valid_int_or_bool(fn->values[term->conditional.condition].type) &&
+                 !register64_type(program, target,
+                     fn->values[term->conditional.condition].type)))
                 return false;
             break;
         default:
@@ -1047,9 +1049,11 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                         id, (unsigned int)block->terminator.branch_target) < 0)
                 return false;
             break;
-        case MINIC_CORE_TERMINATOR_CONDITIONAL_BRANCH:
-            if (!emit_sp_mem(out, "ld.w", "$t0",
-                             (size_t)block->terminator.conditional.condition * 8U) ||
+        case MINIC_CORE_TERMINATOR_CONDITIONAL_BRANCH: {
+            const MinicCoreValueId cond = block->terminator.conditional.condition;
+            const bool wide = register64_type(program, target, fn->values[cond].type);
+            if (!emit_sp_mem(out, wide ? "ld.d" : "ld.w", "$t0",
+                             (size_t)cond * 8U) ||
                 fprintf(out,
                         "  bnez $t0, .Lmini_loong_f%zu_b%u\n"
                         "  b .Lmini_loong_f%zu_b%u\n",
@@ -1057,6 +1061,7 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                         id, (unsigned int)block->terminator.conditional.when_false) < 0)
                 return false;
             break;
+        }
         default: return false;
         }
     }
