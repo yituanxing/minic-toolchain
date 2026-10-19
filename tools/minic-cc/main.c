@@ -6,7 +6,7 @@
 #include <string.h>
 
 static void minic_print_usage(FILE *stream, const char *program) {
-    (void)fprintf(stream, "usage: %s -S <preprocessed-input.i> [--target=riscv64-linux|x86_64-linux] [-ffunction-sections|-fno-function-sections] -o <output.s>\n", program);
+    (void)fprintf(stream, "usage: %s -S <preprocessed-input.i> [--target=riscv64-linux|x86_64-linux|aarch64-linux|loongarch64-linux] [-ffunction-sections|-fno-function-sections] -o <output.s>\n", program);
 }
 
 int main(int argc, char **argv) {
