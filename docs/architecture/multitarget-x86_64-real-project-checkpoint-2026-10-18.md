@@ -1682,3 +1682,64 @@ byte-for-byte to main workflow blob
 No new CI workflow was left running as part of the branch.
 Tests are persistent Make targets and source-controlled reusable scripts,
 not one-off generated output.
+
+## Two-backend closeout qualification — 2026-10-19 (post BusyBox 581-owner)
+
+**The previously pending current-source Linux gate is now complete.**
+Source at `8293e4c154e356a61762d06e53e7b8e82e2c20d6` passed
+[Actions #39194554228](https://github.com/yituanxing/minic-toolchain/actions/runs/39194554228):
+
+- Real seven Linux 6.6.143 C-object producer shards: **7/7 passed**
+  (`295+295+295+295+295+295+294=2064`), source-bound MiniC profile.
+- Receiver: `GNU_MINIC_SHARD_MERGE=PASS objects=2064 shards=7`
+  and `COHORT_CANDIDATE_CACHE=HIT objects=2064` **on this run's
+  newly produced full set**; original GNU linking (not an all-MiniLD
+  claim) succeeded.
+- QEMU `COHORT_P1=PASS name=full_all_verified syscalls=12
+  python_era_oracle=PASS`.
+- Final `COHORT_RESULT=PASS candidate_objects=2064
+  scope=FULL_C_UNIVERSE same_config=true`.
+- Separate focused [Actions #39194259311](https://github.com/yituanxing/minic-toolchain/actions/runs/39194259311) also passed:
+  Linux workflow YAML Ruby parse and actionlint checks; RV64 Core
+  tests, MiniAR and MiniLD shared regressions:
+  `TOOLCHAIN_FOCUSED_T1=PASS mode=all independent_test_checks=8
+  shared_builds=1`.
+- Previous BusyBox native executable
+  [Actions #39191910150](https://github.com/yituanxing/minic-toolchain/actions/runs/39191910150):
+  581 simultaneous MiniC-owned original object files plus 12 GNU
+  fallback files, actual upstream Kbuild link, 11/11 byte-exact
+  deterministic full-executable GCC comparison fixtures. **Not**
+  593/593 native MiniC nor all enabled applets' full test suites.
+
+**CI closeout diagnostic:** The pre-existing Linux workflow contained
+a duplicated `gcc-earlycon-hotfix` job and an orphaned copied Stage4
+verifier/upload block. The original file would not parse and blocked
+the normal focused pipeline before any compiler test. Removed only
+the duplicate and orphaned CI blocks, keeping the authoritative
+existing producer/receiver behavior. [Actions #39194259311](https://github.com/yituanxing/minic-toolchain/actions/runs/39194259311)
+proves the repaired workflow YAML parses and actionlint accepts it.
+The first full producer attempt
+[#39194393122](https://github.com/yituanxing/minic-toolchain/actions/runs/39194393122)
+then failed *before* compilation on an outdated source-identity
+manifest. Only two source blob SHA-1 values, `src/core/core_lower.c`
+and `src/frontend/ast.h`, were updated to the **actual checked-in
+source**. This was an input integrity correction, never an assertion
+of correctness; correctness comes from the succeeding full 2064/QEMU
+run linked above. No C semantic changes were made to obtain that
+full Linux PASS.
+
+The temporary feature-branch allowlist changes in both the focused
+and Linux runtime workflows have been removed; the focused workflow
+was restored byte-identically to baseline blob
+`cd9a880a5a707f28b5ea63c364c1844ab35e1c56`.
+The Linux workflow permanently retains only its malformed/duplicated
+CI code correction.
+
+**Handoff status:** The **two-backend implementation + current RV64
+Linux P1 and x86 BusyBox real mixed-executable evidence** are now
+ready for source and PR review as a stable starting point for
+AArch64 and LoongArch64. The PR remains Draft and unmerged;
+remaining 12 BusyBox GNU fallback owners, full-applets acceptance,
+native x86 MiniAS/MiniLD, and broader platform ABI support remain
+explicit future work. Do not claim an all-native compiler toolchain
+or comprehensive BusyBox functional verification.
