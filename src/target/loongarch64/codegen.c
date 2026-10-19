@@ -361,6 +361,16 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
         size_t offset;
         if (ins_id >= fn->instruction_count) return false;
         ins = &fn->instructions[ins_id];
+        /* Only recorded in the temporary original-source failure log,
+         * never in normal builds or public diagnostic stream. */
+        if (getenv("MINIC_M1_TRACE") != NULL &&
+            name[0] == 'K' && name[1] == 'e')
+            (void)fprintf(stderr,
+                          "MINIC_M9_STEP arch=loongarch64 function=%s block=%zu ins=%u kind=%d result=%u type_int=%d type_ptr=%d\n",
+                          name, block_id, (unsigned int)ins_id,
+                          (int)ins->kind, (unsigned int)ins->result,
+                          minic_type_is_integer(ins->type) ? 1 : 0,
+                          minic_type_is_pointer(ins->type) ? 1 : 0);
         if (ins->kind == MINIC_CORE_INSTRUCTION_STORE) {
             const MinicCoreValueId addr = ins->value.store.address;
             const MinicCoreValueId value = ins->value.store.stored_value;
