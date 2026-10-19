@@ -1193,7 +1193,8 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                 !scalar_integer_width(program, target, fn->values[rhs].type,
                                       &rw, &rs) ||
                 (lw != 4U && lw != 8U) ||
-                (rw != 4U && rw != 8U) ||
+                /* C permits 8/16-bit shift-count values after promotion;
+                 * the target consumes their low 32-bit SSA slot. */
                 minic_type_is_bool_integer(ins->type))
                 return machine_emit_reject(fn, "loongarch64", name, reject_stage,
                                            reject_block, reject_ins, __LINE__);

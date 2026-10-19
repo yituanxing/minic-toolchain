@@ -115,6 +115,10 @@ for target in aarch64 loongarch64; do
             first=$(grep -m 1 'MINIC_BACKEND_REJECT\|error:' \
                 "$work/$target/$stem.minic.err" || true)
             echo "FOUR_BACKEND_ZLIB_TU=BLOCKED target=$target source=$source stage=MiniC status=$status $first"
+            # Some errors are global initializers/frame guards, not Core
+            # instruction rejects. Surface their exact owner and shape.
+            grep -m 3 'MINIC_M4_GLOBAL_FRONTIER\|MINIC_M8_FRAME_REJECT\|MINIC_M8_FRAME_CAP' \
+                "$work/$target/$stem.minic.err" || true
             grep -m 1 'MINIC_BACKEND_PREFLIGHT' \
                 "$work/$target/$stem.minic.err" || true
             continue
