@@ -107,6 +107,7 @@ jobs:
           make MODE=release CFLAGS=-Werror BUILD_DIR=build/toolchain-focused-t1-v2 check-four-backend-m25-double-transport
           make MODE=release CFLAGS=-Werror BUILD_DIR=build/toolchain-focused-t1-v2 check-four-backend-m26-double-div
           make MODE=release CFLAGS=-Werror BUILD_DIR=build/toolchain-focused-t1-v2 check-four-backend-m27-fp-parameter
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/toolchain-focused-t1-v2 check-four-backend-m28-int-double
           make MODE=release CFLAGS=-Werror BUILD_DIR=build/toolchain-focused-t1-v2 check-four-backend-cjson-frontier
 
       - name: Fetch certified Stage2 for single-runner Kbuild driver preflight
