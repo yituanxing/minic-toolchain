@@ -1196,6 +1196,27 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
             (void)rs;
             break;
         }
+        /* Original cJSON uses ~ on signed/unsigned scalar values.
+         * Preserve C-width truncation for narrow integers and the full
+         * 64-bit complement for LP64 values. */
+        case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_NOT: {
+            const MinicCoreValueId operand = ins->value.operand;
+            size_t width;
+            bool sign;
+            if (operand >= fn->value_count ||
+                !minic_type_equal(fn->values[operand].type, ins->type) ||
+                !scalar_integer_width(program, target, ins->type, &width, &sign) ||
+                minic_type_is_bool_integer(ins->type) ||
+                fprintf(out, width == 8U ? "  ldr x9, [sp, #%zu]\n"
+                                         : "  ldr w9, [sp, #%zu]\n",
+                        (size_t)operand * 8U) < 0 ||
+                fputs(width == 8U ? "  mvn x9, x9\n" : "  mvn w9, w9\n",
+                      out) == EOF ||
+                (width != 8U && !emit_integer_normalize(out, width, sign)))
+                return machine_emit_reject(fn, "aarch64", name, reject_stage,
+                                           reject_block, reject_ins, __LINE__);
+            break;
+        }
         case MINIC_CORE_INSTRUCTION_INTEGER_NEGATE: {
             const MinicCoreValueId operand = ins->value.operand;
             size_t width;

@@ -1181,6 +1181,25 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
             (void)rs;
             break;
         }
+        /* Original cJSON uses ~ on signed/unsigned scalar values.
+         * NOR against zero is the LoongArch native complement; normalize
+         * subword results before storing the Core SSA slot. */
+        case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_NOT: {
+            const MinicCoreValueId operand = ins->value.operand;
+            size_t width;
+            bool sign;
+            if (operand >= fn->value_count ||
+                !minic_type_equal(fn->values[operand].type, ins->type) ||
+                !scalar_integer_width(program, target, ins->type, &width, &sign) ||
+                minic_type_is_bool_integer(ins->type) ||
+                !emit_sp_mem(out, width == 8U ? "ld.d" : "ld.w",
+                             "$t0", (size_t)operand * 8U) ||
+                fputs("  nor $t0, $t0, $zero\n", out) == EOF ||
+                (width != 8U && !emit_integer_normalize(out, width, sign)))
+                return machine_emit_reject(fn, "loongarch64", name, reject_stage,
+                                           reject_block, reject_ins, __LINE__);
+            break;
+        }
         case MINIC_CORE_INSTRUCTION_INTEGER_NEGATE: {
             const MinicCoreValueId operand = ins->value.operand;
             size_t width;
