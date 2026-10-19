@@ -397,7 +397,9 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
             if (term->conditional.when_true >= fn->block_count ||
                 term->conditional.when_false >= fn->block_count ||
                 term->conditional.condition >= fn->value_count ||
-                !valid_int_or_bool(fn->values[term->conditional.condition].type))
+                (!valid_int_or_bool(fn->values[term->conditional.condition].type) &&
+                 !register64_type(program, target,
+                     fn->values[term->conditional.condition].type)))
                 return false;
             break;
         default:
@@ -1080,16 +1082,22 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                         id, (unsigned int)block->terminator.branch_target) < 0)
                 return false;
             break;
-        case MINIC_CORE_TERMINATOR_CONDITIONAL_BRANCH:
-            if (fprintf(out,
-                        "  ldr w9, [sp, #%zu]\n"
-                        "  cbnz w9, .Lmini_arm_f%zu_b%u\n"
-                        "  b .Lmini_arm_f%zu_b%u\n",
-                        (size_t)block->terminator.conditional.condition * 8U,
+        case MINIC_CORE_TERMINATOR_CONDITIONAL_BRANCH: {
+            const MinicCoreValueId cond = block->terminator.conditional.condition;
+            const bool wide = register64_type(program, target, fn->values[cond].type);
+            if (fprintf(out, wide ? "  ldr x9, [sp, #%zu]\n"
+                                  : "  ldr w9, [sp, #%zu]\n",
+                        (size_t)cond * 8U) < 0 ||
+                fprintf(out, wide
+                            ? "  cbnz x9, .Lmini_arm_f%zu_b%u\n"
+                              "  b .Lmini_arm_f%zu_b%u\n"
+                            : "  cbnz w9, .Lmini_arm_f%zu_b%u\n"
+                              "  b .Lmini_arm_f%zu_b%u\n",
                         id, (unsigned int)block->terminator.conditional.when_true,
                         id, (unsigned int)block->terminator.conditional.when_false) < 0)
                 return false;
             break;
+        }
         default: return false;
         }
     }
