@@ -208,6 +208,7 @@ jobs:
           FOUR_BACKEND_M36_LP64_MUL=1 \
           FOUR_BACKEND_M37_FP_ARITH=1 \
           FOUR_BACKEND_M38_FP_VARARGS=1 \
+          FOUR_BACKEND_M39_LP64_BITOPS=1 \
           make MODE=release CFLAGS=-Werror BUILD_DIR=build/toolchain-focused-t1-v2 check-four-backend-m38-fp-varargs
           make MODE=release CFLAGS=-Werror BUILD_DIR=build/toolchain-focused-t1-v2 check-four-backend-cjson-frontier
 
