@@ -614,3 +614,95 @@ only after source-bound GNU+QEMU differential matching. Temporary
 workflow activation was restored to byte-identical original focused
 blob `cd9a880a5a707f28b5ea63c364c1844ab35e1c56`
 after the certified run. PR #527 remains Draft.
+
+
+## M7 real large frames and local array object layout — 2026-10-19
+
+**Driven by the actual unchanged original AES `KeyExpansion` frontier:**
+11 Core blocks, 130 local Core objects, 768 SSA values and 922 Core
+instructions. Previous M1–M6 emitter allocated exactly eight bytes for
+*every* local object, regardless of whether the original object
+represented one int, pointer, or a repeated C array. It also rejected
+more than 240 SSA values and capped stack frames at 2016 bytes. Simply
+raising those constants would generate invalid LoongArch lp64d 12-bit
+memory offsets and illegal AArch64 SP-add/sub immediates.
+
+**Implemented a correctness-first local target frame contract:**
+- Reuse existing target `MinicDataLayout` for each Core object's
+  element size, repeated element count and effective/explicit alignment
+  (the same semantics already used by the x86 frame builder).
+- Keep SSA stack slots at eight bytes, reserve the precisely sized
+  and aligned object extents after them, and reserve a separately
+  eight-byte-aligned save slot for `x30` / `$ra` only if the function
+  actually calls anything. Align the complete target frame to 16 bytes.
+- Bound this M7 implementation to at most 1024 values and 1024 objects,
+  an **8 KiB frame**, and up to 16-byte local object alignment.
+  Unsupported larger frames/alignments fail closed: M7 is not an
+  unbounded general stack allocator or new register allocator.
+- AArch64: materialize the frame size in `x12`, then use
+  `sub sp,sp,x12` / `add sp,sp,x12` and a separate 64-bit object
+  address calculation, avoiding unencodable add/sub immediates.
+- LoongArch64: use `li.d $t3` and target-owned stack load/store
+  helpers. Use the original fast `$sp + signed-imm12` load/store if
+  the displacement fits, otherwise materialize `$sp + offset`
+  through `$t3` and access displacement 0. Adjust the stack with
+  `sub.d/add.d` register operands. Leave `$t3` reserved and never
+  carry a live SSA value in it.
+- RV64, x86-64, shared frontend/Core semantics, original vendor C,
+  and frozen baseline suites remain untouched.
+
+**Real GNU AS/LD and target QEMU acceptance:**
+
+[Actions #39214294770](https://github.com/yituanxing/minic-toolchain/actions/runs/39214294770)
+SUCCESS on all previous M1–M6 scopes plus
+`FOUR_BACKEND_M7_FRAME=PASS architectures=2 executable_QEMU_cases=18
+large_frame_and_local_array_cases=4 GNU_independent_oracles=14`.
+The two new **original-C** cases per target include many distinct
+local SSA values with sequential integer state and a real three-element
+local int array, each with an independent GNU-built reference binary.
+No synthetic assembly-only PASS or GNU replacement for the
+MiniC-owned object.
+
+[Actions #39215128805](https://github.com/yituanxing/minic-toolchain/actions/runs/39215128805)
+SUCCESS additionally asserts the actual **emitted large-frame machine
+instruction sequence**, then cross-GNU assembles/links/QEMU-executes:
+
+```text
+FOUR_BACKEND_M7_FRAME_ENCODING=PASS target=aarch64 register_SP_adjust=1 large_offset=1
+FOUR_BACKEND_M7_FRAME_ENCODING=PASS target=loongarch64 register_SP_adjust=1 large_offset=1
+FOUR_BACKEND_M7_FRAME=PASS architectures=2 executable_QEMU_cases=18 large_frame_and_local_array_cases=4 GNU_independent_oracles=14
+TOOLCHAIN_FOCUSED_T1=PASS mode=all independent_test_checks=8 shared_builds=1
+```
+
+The earlier first M7 CI failed host `-Werror` on a now-unused
+`values_bytes` local in both backend functions; this was repaired
+in actual source before either green run. Do not count that earlier
+red run as passed, and do not infer broader original project support
+from the M7 synthetic regression.
+
+**Real original AES still blocked:** Both untouched GCC cross-reference
+programs GNU-link and QEMU-pass; both new target MiniC compilers
+continue to reject original `KeyExpansion` with the exact
+`core_blocks=11 core_objects=130 parameters=2 values=768
+instructions=922` signature. Therefore
+`FOUR_BACKEND_TINYAES_FRONTIER=COMPLETE architectures=2
+verified_runtime=0 blocked=2` remains the truthful original-project
+verdict, not an AES PASS.
+
+The current first actual Core trace shows mixed narrow scalar
+`convert.int` values, byte-array pointer arithmetic and `load`,
+which the signed-`int`-centric backend does not yet generally
+lower. These are **candidate next blockers**, not a proved unique
+first failure instruction: the next step should add precise
+fail-stage/type diagnostics and then implement width/sign-aware
+byte and short loads/stores/conversions as observed, with the
+same unchanged original AES and GNU/QEMU oracle. The x86
+backend's proven `x86_scalar_width` and `x86_normalize`
+provide the semantic model; the two new ISA instruction encodings
+must remain target-owned.
+
+Both scoped temporary CI edits were restored **byte-identically**
+to the original existing workflow blob
+`cd9a880a5a707f28b5ea63c364c1844ab35e1c56`
+after verification. This is still Draft PR #527, not a release
+or a claim of original tinyAES project success.
