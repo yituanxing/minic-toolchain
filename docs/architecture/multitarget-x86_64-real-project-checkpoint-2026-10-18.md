@@ -1404,3 +1404,77 @@ not because the subscript is a valid ISO C ICE. The speculative
 before any acceptance claim. The right fix is to inspect and preserve
 the function-scope VLA/sizeof evaluation path and GCC behavior.
 The verified **579/594** checkpoint is unchanged.
+
+## GNU original BusyBox nearly all-enabled full native Kbuild baseline — 2026-10-19
+
+The previous all-enabled 963-symbol Kconfig scan was **not linkable by GCC**
+on the current GitHub Ubuntu host because upstream BusyBox 1.36.1's
+historic SunRPC headers, old Linux TC CBQ UAPI, and mutually incompatible
+`CONFIG_STATIC=y` plus `CONFIG_DEBUG_SANITIZE=y` host flags. That was a
+baseline/host configuration issue, not a MiniC executable regression.
+To establish a real whole-BusyBox oracle **without modifying any original C**,
+the existing `allyes_sweep.py` now has an explicit opt-in
+`BUSYBOX_ALLYES_LINK_COMPATIBLE=1` mode that asks upstream
+`allyesconfig` then changes only six Kconfig choices before upstream
+`oldconfig`: `WERROR`, `TC`, `FEATURE_INETD_RPC`,
+`FEATURE_MOUNT_NFS`, `STATIC`, `DEBUG_SANITIZE`.
+This gives **957 enabled symbols**. It is intentionally **not** the
+unchanged full `allyesconfig` configuration, and 957 means *Kconfig
+symbols*, not 957 independent applets or 957 source files.
+
+The existing original GNU compiler/real Kbuild builds the **whole original
+BusyBox executable** under this host-compatible configuration, using
+the existing transparent compiler proxy. MiniC still runs on independent
+preprocessed snapshots and creates shadow objects; **none of those shadow
+objects are linked in this full-program baseline**.
+
+**Actual successful [focused CI #39187794876](https://github.com/yituanxing/minic-toolchain/actions/runs/39187794876):**
+
+- `BUSYBOX_ALLYES_GCC_KBUILD=PASS original_Kconfig=1 original_sources=1`.
+- `BUSYBOX_ALLYES_GCC_RUNTIME_ORACLE=PASS applets=6 original_full_Kbuild=1`.
+- Native original GNU BusyBox `sed`, `awk`, `grep`, `sort`,
+  `sh`, `find` each ran its deterministic real execution fixture
+  successfully. The first probe erroneously requested `ash`, an
+  applet name *not selected* by this all-enabled Kconfig variant; the
+  exact GCC stderr was `ash: applet not found` (127), and the oracle was
+  corrected to test the real `sh` dispatcher rather than disabling
+  or inventing software.
+- `BUSYBOX_ALLYES_FRONTIER=DISCOVERY enabled_symbols=957 attempted_C_TUs=594 mini_objects=582 cpp_fail=0 minic_fail=12 asm_fail=0 gcc_fail=0 gcc_full_build=PASS full_MiniC_busybox=NOT_TESTED`.
+- `TOOLCHAIN_FOCUSED_T1=PASS mode=all independent_test_checks=8 shared_builds=1`.
+
+**Interpretation:**
+
+| Measured outcome | Exact scope |
+| --- | --- |
+| 594 real original Kbuild C owner attempts | Host-compatible 957-symbol config |
+| 582 independently assembled MiniC x86 objects | Shadow objects; not actually linked or executed in this mode |
+| 12 MiniC codegen/frontend failures | Separate pending compiler blockers |
+| 0 GNU preprocessing/assembly failures | Original C source compilation input |
+| Original **complete BusyBox GNU link** | **PASS** |
+| Six native full-GNU applet runtime cases | **PASS** |
+| 12 MiniC/GCC mixed applet objects | Previous independently certified existing gate, unchanged |
+| Mixed 582-object BusyBox whole executable | **NOT TESTED**, and not certified |
+
+This is a major change in *test readiness*: there is now an independently
+running original GNU full-BusyBox executable, so the next step is to promote
+real staged MiniC object substitution with byte-exact **whole-executable
+differential** rather than endlessly optimizing detached compile counters.
+Start with `sed`, `awk`, `find`, `grep`, `sort` original Kbuild
+objects under the **same frozen 957-symbol** configuration, preserving the
+original GNU-built executable as oracle. Only accept each or combined
+cohort after full Kbuild re-link, deterministic actual applet runtime and
+cross-target focused regressions. No commit in this checkpoint claims those
+five were already replaced.
+
+The reusable fail-closed native full-GNU link target is
+`make check-x86_64-busybox-host-link`, and the same test records each
+shadow original file's detailed stderr plus its input and output objects.
+The temporary branch-local focused CI workflow changes were restored
+byte-for-byte to the baseline blob
+`cd9a880a5a707f28b5ea63c364c1844ab35e1c56` after collecting CI
+evidence. No new workflow was permanently added. The existing
+broken legacy Linux baseline YAML continues to fail dispatch independently.
+
+A fully fresh RV64 2064-source Linux+QEMU P1 qualification on *current*
+feature-head code still has not been run; prior focused RV64 successes do
+not substitute for that merge gate.
