@@ -248,11 +248,11 @@ static bool emit_simple_global(FILE *out, const MinicC0Program *program,
         obj->is_weak || obj->visibility != MINIC_SYMBOL_VISIBILITY_DEFAULT ||
         obj->section_name != NULL ||
         obj->alias_target != MINIC_GLOBAL_OBJECT_INVALID ||
-        obj->union_selection_count != 0U ||
         obj->flexible_array_initializer_count != 0U ||
         !minic_data_layout_global_object(target->data_layout, program, obj,
                                          &storage_size, &align)) return false;
     if (minic_type_is_record(obj->type)) {
+        if (obj->union_selection_count != 0U) return false;
         if (fprintf(out, "%s\n", obj->is_read_only
                         ? (obj->relocation_count != 0U
                            ? ".section .data.rel.ro" : ".section .rodata")
@@ -277,6 +277,7 @@ static bool emit_simple_global(FILE *out, const MinicC0Program *program,
         bool array_of_records;
         if (array == NULL) return false;
         array_of_records = minic_type_is_record(array->element_type);
+        if (obj->union_selection_count != 0U && !array_of_records) return false;
         if (array_of_records || obj->relocation_count != 0U) {
             const char *section = obj->is_read_only
                 ? (obj->relocation_count != 0U
@@ -300,7 +301,8 @@ static bool emit_simple_global(FILE *out, const MinicC0Program *program,
             return true;
         }
     }
-    if (obj->relocation_count != 0U) return false;
+    if (obj->union_selection_count != 0U ||
+        obj->relocation_count != 0U) return false;
     scalar = obj->type;
     while (minic_type_is_array(scalar)) {
         const MinicArrayType *array =
