@@ -399,3 +399,82 @@ original GNU oracle matched byte-for-byte on each ISA.
 Temporary focused CI edits for both M3 and tinyAES frontier runs were
 reverted byte-identically to original main workflow SHA
 `cd9a880a5a707f28b5ea63c364c1844ab35e1c56`.
+
+
+## M4 flat integer and byte globals — 2026-10-19
+
+**Observed pressure:** The original pinned tinyAES-128-ECB harness, which
+already passed the unchanged cross-GNU/QEMU oracle independently for
+AArch64 and LoongArch64, initially failed before function emission on
+both ISA emitters' blanket global-object rejection. Real source includes
+the original sbox/rsbox/Rcon byte tables and pinned test vectors; no
+replacement arrays or altered project source were used.
+
+**Target-owned expansion:** Implement exact small integer scalar / flat
+integer array data initialization using existing shared
+`minic_data_layout_global_object` and `minic_data_layout_type`. Emit
+target ELF `.rodata` / `.data` / `.bss`, matching alignment, scalar
+directives and fully checked initializer length, with ELF object symbols
+and sizes. For a Core `GLOBAL_ADDRESS`, AArch64 uses an actual GOT
+`adrp :got:` + `ldr :got_lo12:` pair; LoongArch64 uses the
+architecture-specific `la.global` pseudo instruction and 64-bit slot
+storage. No shared frontend/Core/RV64/x86 implementation was changed.
+
+**Explicit conservative rejection:** Unknown aggregate/relocation/
+union-selection forms, custom sections, aliases, weak/unsupported
+symbol visibility, incomplete arrays, and file asm stay fail-closed.
+The prior negative test was updated from a plain `int` global
+(now genuinely supported) to an original pointer-relocation global,
+which still must reject and leave no partial assembly.
+
+**Actual [Actions #39207892109](https://github.com/yituanxing/minic-toolchain/actions/runs/39207892109) SUCCESS:**
+
+```text
+FOUR_BACKEND_M4_GLOBAL=PASS architectures=2 executable_QEMU_cases=18 global_cases=4 GNU_independent_oracles=14 unsupported_relocations=fail-closed
+FOUR_BACKEND_TINYAES_GNU=PASS target=aarch64 original_source=1 QEMU_exit=0
+FOUR_BACKEND_TINYAES=BLOCKED target=aarch64 stage=MiniC_line_or_Core input=original_AES128_ECB
+FOUR_BACKEND_TINYAES_GNU=PASS target=loongarch64 original_source=1 QEMU_exit=0
+FOUR_BACKEND_TINYAES=BLOCKED target=loongarch64 stage=MiniC_line_or_Core input=original_AES128_ECB
+FOUR_BACKEND_TINYAES_FRONTIER=COMPLETE architectures=2 verified_runtime=0 blocked=2
+TOOLCHAIN_FOCUSED_T1=PASS mode=all independent_test_checks=8 shared_builds=1
+```
+
+One original small test initially asked MiniC to evaluate
+`(int)sizeof(table)`, which added a separate unsupported Core conversion
+and blocked the first M4 runtime qualification
+([#39207697800](https://github.com/yituanxing/minic-toolchain/actions/runs/39207697800)).
+The corrected independent ELF test has a **GNU-built caller read every
+actual byte from the MiniC-defined externally visible array**; both
+target GNU-linked QEMU programs check exact contents, not merely
+successful assembly of an unreferenced table. The other GNU→MiniC
+test reads a real initialized `int` global from compiled Core code.
+This validates narrowly defined storage and relocation behavior, not
+general new-ISA pointer arithmetic or byte-load support.
+
+**First true program frontier after globals:** Replayed exact original
+tinyAES with bounded `MINIC_M1_TRACE=1` in
+[Actions #39208170711](https://github.com/yituanxing/minic-toolchain/actions/runs/39208170711)
+SUCCESS (GNU originals, 8/8 prior independent toolchain checks). Both
+new targets now reach the first failing original **`AES_init_ctx`**:
+`core_blocks=1 core_objects=5 parameters=2 values=20 instructions=26`.
+The Core trace starts with two pointer parameters, `object.addr` and
+pointer stores. The C source's function is `void AES_init_ctx(struct
+AES_ctx *ctx, const uint8_t *key)`, and the deliberately narrow backend
+still rejects non-`int` return/parameter/object types; this is an
+**observed target ABI/model frontier**, not proof of full AES support.
+The exact failure is not in GNU assembler or QEMU; no MiniC-built AES
+binary has yet been linked or run.
+
+**Next targeted change:** Accept pointer parameters, pointer local object
+storage and void-returning functions with architecture-specific 64-bit
+ABI storage, then diagnose precisely the next original Core
+`AES_init_ctx` operation. Only after real source and machine
+evidence extend to local arrays, field/pointer addressing, narrow
+char load/store, integer bit operations and aggregate layout should
+the two ISA backends claim the original full tinyAES executable.
+
+Both temporary focused CI workflow changes were restored byte-for-byte
+to original main blob
+`cd9a880a5a707f28b5ea63c364c1844ab35e1c56`
+after collecting evidence. Existing x86 backend and its BusyBox owner
+gate remain exactly preserved from main; no early merge claim.
