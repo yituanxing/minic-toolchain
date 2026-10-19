@@ -116,7 +116,7 @@ for target in aarch64 loongarch64; do
             # diagnostic and never substitutes for the original fixture:
             # compare S-box, round constant and the *actual* first
             # generated round-key byte under both toolchains/QEMU.
-            for probe in early_constant post_context_constant post_state_constant pre_copy_constant post_copy_constant pre_constant post_constant pre_sbox post_sbox key17; do
+            for probe in pre_sbox post_sbox key17; do
                 case "$probe" in
                     early_constant) expression='77'; position=before_main_start ;;
                     post_context_constant) expression='77'; position=post_context ;;
@@ -235,6 +235,20 @@ repls = [
      "    j = i * 4; k=(i - Nk) * 4;\n    if (i == Nk) minic_trace = j;"),
     ("    j = i * 4; k=(i - Nk) * 4;",
      "    j = i * 4; k=(i - Nk) * 4;\n    if (i == Nk) minic_trace = k;"),
+    ("      k = (i - 1) * 4;",
+     "      k = (i - 1) * 4;\n      if (i == Nk) minic_trace = k;"),
+    ("      k = (i - 1) * 4;",
+     "      k = (i - 1) * 4;\n      if (i == Nk) minic_trace = RoundKey[k + 0];"),
+    ("      tempa[0]=RoundKey[k + 0];",
+     "      tempa[0]=RoundKey[k + 0];\n      if (i == Nk) minic_trace = tempa[0];"),
+    ("      tempa[1]=RoundKey[k + 1];",
+     "      tempa[1]=RoundKey[k + 1];\n      if (i == Nk) minic_trace = tempa[0];"),
+    ("      tempa[2]=RoundKey[k + 2];",
+     "      tempa[2]=RoundKey[k + 2];\n      if (i == Nk) minic_trace = tempa[0];"),
+    ("      tempa[3]=RoundKey[k + 3];",
+     "      tempa[3]=RoundKey[k + 3];\n      if (i == Nk) minic_trace = tempa[0];"),
+    ("      tempa[0]=RoundKey[k + 0];",
+     "      tempa[0]=RoundKey[k + 0];\n      if (i == Nk) minic_trace = RoundKey[12];"),
 ]
 declaration = "static unsigned char minic_trace;\n"
 keyexp = "static void KeyExpansion(uint8_t* RoundKey, const uint8_t* Key)"
@@ -245,7 +259,7 @@ for stage, (needle, replacement) in enumerate(repls):
     modified = modified.replace(needle, replacement, 1)
     (directory / f"aes_trace_{stage}.c").write_text(modified)
 PY
-            for stage in 0 1 2 3 4 5 6; do
+            for stage in 0 1 2 3 4 5 6 7 8 9 10 11 12 13; do
                 sed "s|#include \"aes.c\"|#include \"aes_trace_$stage.c\"|" "$fixture" |
                     awk -v k="$stage" '
                         { print }
