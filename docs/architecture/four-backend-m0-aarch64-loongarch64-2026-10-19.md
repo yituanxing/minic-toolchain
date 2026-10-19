@@ -478,3 +478,53 @@ to original main blob
 `cd9a880a5a707f28b5ea63c364c1844ab35e1c56`
 after collecting evidence. Existing x86 backend and its BusyBox owner
 gate remain exactly preserved from main; no early merge claim.
+
+
+## M5 signed int / pointer / void ABI — 2026-10-19
+
+Real original tinyAES cross-GNU/QEMU source first reached
+`AES_init_ctx`, which has a `void` return and two pointer parameters
+stored in local pointer objects. This is the observed reason the
+earlier narrow integer-only backend rejected the first original AES
+function. No new shared frontend or Core opcode was necessary.
+
+Both AArch64 and LoongArch64 target-owned Core emitters now extend
+their existing conservative 8-byte-per-SSA-value slots to accept
+64-bit pointer parameters, pointer-local load/store, 64-bit pointer
+returns, pointer-typed direct call arguments/results and effect-only
+`void` direct calls/returns. Actual register width/stack operations
+are separate ISA code paths; the previous 9/10 inbound ordinary integer
+argument tests, scalar CFG and integer ABI remain independent gates.
+
+**Actual [Actions #39208765212](https://github.com/yituanxing/minic-toolchain/actions/runs/39208765212) SUCCESS:**
+
+```text
+FOUR_BACKEND_M3_CALL=PASS architectures=2 executable_QEMU_cases=20 direct_calls=6 GNU_independent_oracles=16
+FOUR_BACKEND_M4_GLOBAL=PASS architectures=2 executable_QEMU_cases=18 global_cases=4 GNU_independent_oracles=14 unsupported_relocations=fail-closed
+FOUR_BACKEND_M5_POINTER=PASS architectures=2 executable_QEMU_cases=20 pointer_void_cases=6 GNU_independent_oracles=16
+TOOLCHAIN_FOCUSED_T1=PASS mode=all independent_test_checks=8 shared_builds=1
+```
+
+The new independent `make check-four-backend-m5-pointer`
+GNU→MiniC static ELF/QEMU cases actually run (i) dereference a pointer
+parameter, (ii) call a `void` MiniC helper that writes through an
+incoming pointer and return its observed value, (iii) return a pointer
+to a GNU caller that checks exact identity and dereferences it.
+Independent identical GNU-source executions serve as reference
+oracles for each target. No x86 backend or RV64 source change.
+
+**Still not an AES PASS.** Identical original tinyAES GNU/QEMU
+reference programs both pass, while MiniC still rejects real
+`AES_init_ctx` during the target Core emitter. The next unsupported
+Core operation(s) and/or local object representation need separate
+owner-specific diagnosis, especially record field addressing, pointer
+offsets, byte accesses, and local arrays. Do not infer a complete
+pointer/addressing model merely from these three valid pointer ABI
+fixtures. Avoid adding a new target-independent Machine IR or
+rewriting x86's already verified code.
+
+The temporary branch workflow allowlist/cross-compiler qualification
+changes were reverted byte-identically to main blob
+`cd9a880a5a707f28b5ea63c364c1844ab35e1c56` after the
+successful real GNU/QEMU and focused regression run. New ISA PR #527
+remains Draft and isolated from main.
