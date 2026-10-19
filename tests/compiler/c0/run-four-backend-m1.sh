@@ -223,13 +223,13 @@ int main(void) {
 }
 EOF
 cat > "$w/pointer_negative.i" <<'EOF'
-int mini_pointer_negative(int *p) { return p[-1]; }
+int mini_pointer_negative(int *p, int offset) { return p[offset]; }
 EOF
 cat > "$w/driver_pointer_negative.c" <<'EOF'
-extern int mini_pointer_negative(int *);
+extern int mini_pointer_negative(int *, int);
 int main(void) {
     int values[3] = { 8, 42, 17 };
-    return mini_pointer_negative(&values[2]);
+    return mini_pointer_negative(&values[2], -1);
 }
 EOF
 check_qemu_exit() {
