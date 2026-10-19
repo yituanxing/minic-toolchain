@@ -243,7 +243,13 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
     /* Object byte extents and alignment are validated by frame_objects.
      * This admits real repeated local arrays without overlapping slots. */
     if (!frame_objects(program, target, fn, fn->object_count, NULL,
-                       &object_end)) return false;
+                       &object_end)) {
+        if (getenv("MINIC_M1_TRACE") != NULL)
+            (void)fprintf(stderr,
+                          "MINIC_M8_FRAME_REJECT arch=aarch64 function=%s values=%zu objects=%zu\n",
+                          name, fn->value_count, fn->object_count);
+        return false;
+    }
     /* Keep this first direct-call ABI step narrow: signed int values in
      * the first eight argument registers, no variadics or indirect calls.
      * Returning through a nested call requires preserving the ISA link
@@ -288,7 +294,13 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
         return false;
     frame = (save_offset + (has_direct_calls ? 8U : 0U) + 15U) &
             ~(size_t)15U;
-    if (frame > 8192U) return false;
+    if (frame > 8192U) {
+        if (getenv("MINIC_M1_TRACE") != NULL)
+            (void)fprintf(stderr,
+                          "MINIC_M8_FRAME_CAP arch=aarch64 function=%s frame=%zu end=%zu\n",
+                          name, frame, object_end);
+        return false;
+    }
     if (function_sections) {
         if (fprintf(out, ".section .text.%s,\"ax\",%%progbits\n", name) < 0)
             return false;
@@ -347,7 +359,16 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                     ? !minic_type_is_pointer(ins->type)
                     : !minic_type_is_integer(ins->type) &&
                       !minic_type_is_pointer(ins->type)))
+            {
+                if (getenv("MINIC_M1_TRACE") != NULL)
+                    (void)fprintf(stderr,
+                                  "MINIC_M8_RESULT_REJECT arch=aarch64 function=%s block=%zu instruction=%u kind=%d result=%u type_integer=%d type_pointer=%d\n",
+                                  name, block_id, (unsigned int)ins_id,
+                                  (int)ins->kind, (unsigned int)ins->result,
+                                  minic_type_is_integer(ins->type) ? 1 : 0,
+                                  minic_type_is_pointer(ins->type) ? 1 : 0);
                 return false;
+            }
             offset = (size_t)ins->result * 8U;
         }
         switch (ins->kind) {
@@ -550,6 +571,10 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
             break;
         }
         default:
+            if (getenv("MINIC_M1_TRACE") != NULL)
+                (void)fprintf(stderr,
+                              "MINIC_M8_OPCODE_REJECT arch=aarch64 function=%s block=%zu instruction=%u kind=%d\n",
+                              name, block_id, (unsigned int)ins_id, (int)ins->kind);
             return false;
         }
         if (fprintf(out, minic_type_is_pointer(ins->type)
