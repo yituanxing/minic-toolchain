@@ -96,15 +96,9 @@ SH
         grep 'MINIC_CJSON_CFG' "$work/$target.probe.err" | tail -n 4 || true
         grep 'MINIC_CJSON_STAGE' "$work/$target.probe.err" | tail -n 8 || true
         grep 'MINIC_CJSON_STEP' "$work/$target.probe.err" | tail -n 6 || true
-        # Report the actual ensure emission frontier separately from other functions.
-        grep 'MINIC_CJSON_STAGE .*function=ensure' "$work/$target.probe.err" | tail -n 1 || true
-        grep 'MINIC_CJSON_STEP .*function=ensure' "$work/$target.probe.err" | tail -n 12 || true
-        grep 'MINIC_CJSON_STAGE .*function=compare_double' "$work/$target.probe.err" | tail -n 1 || true
-        grep 'MINIC_CJSON_STEP .*function=compare_double' "$work/$target.probe.err" | tail -n 12 || true
-        grep 'MINIC_CJSON_STAGE .*function=print_number' "$work/$target.probe.err" | tail -n 1 || true
-        grep 'MINIC_CJSON_STEP .*function=print_number' "$work/$target.probe.err" | tail -n 12 || true
-        grep 'MINIC_M8_.*REJECT .*function=print_number' "$work/$target.probe.err" | tail -n 2 || true
-        grep 'MINIC_M8_OPCODE_REJECT .*function=ensure' "$work/$target.probe.err" | tail -n 1 || true
+        # Do not repeatedly dump successful ensure/compare_double/print_number
+        # traces. The first backend rejection above identifies the actual
+        # blocked function and Core guard; retain bounded generic context.
         echo "FOUR_BACKEND_CJSON_BOUNDED_STDERR target=$target begin"
         sed -n '1,16p' "$work/$target.probe.err"
         echo "FOUR_BACKEND_CJSON_BOUNDED_STDERR target=$target end"
