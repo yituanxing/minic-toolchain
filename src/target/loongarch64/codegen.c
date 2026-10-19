@@ -865,19 +865,28 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                                           : ins->value.call.argument_begin;
             const size_t count = indirect ? ins->value.indirect_call.argument_count
                                           : ins->value.call.argument_count;
-            size_t j;
+            static const char *const gp_regs[8] = {
+                "$a0", "$a1", "$a2", "$a3", "$a4", "$a5", "$a6", "$a7"};
+            static const char *const fp_regs[8] = {
+                "$fa0", "$fa1", "$fa2", "$fa3", "$fa4", "$fa5", "$fa6", "$fa7"};
+            size_t j, gp_index = 0U, fp_index = 0U;
+            /* M30: LoongArch lp64d fixed FP arguments use fa0-fa7, while
+             * integer and pointer arguments independently occupy a0-a7. */
             for (j = 0U; j < count; ++j) {
-                const MinicCoreCallArgument *arg =
-                    &fn->call_arguments[begin + j];
-                if (!emit_sp_mem(out, register64_type(program, target,
-                                        fn->values[arg->value.value_id].type)
-                                        ? "ld.d" : "ld.w",
-                             j == 0U ? "$a0" : j == 1U ? "$a1" :
-                             j == 2U ? "$a2" : j == 3U ? "$a3" :
-                             j == 4U ? "$a4" : j == 5U ? "$a5" :
-                             j == 6U ? "$a6" : "$a7",
-                             (size_t)arg->value.value_id * 8U))
-                    return false;
+                const MinicCoreCallArgument *arg = &fn->call_arguments[begin + j];
+                const MinicType type = fn->values[arg->value.value_id].type;
+                const size_t slot = (size_t)arg->value.value_id * 8U;
+                if (minic_type_is_double(type)) {
+                    if (fp_index >= 8U ||
+                        !emit_sp_mem(out, "fld.d", fp_regs[fp_index++], slot))
+                        return false;
+                } else {
+                    if (gp_index >= 8U ||
+                        !emit_sp_mem(out, register64_type(program, target, type)
+                                            ? "ld.d" : "ld.w",
+                                     gp_regs[gp_index++], slot))
+                        return false;
+                }
             }
             if (indirect) {
                 /* $t2 is caller-clobbered, never an argument or SP scratch.
