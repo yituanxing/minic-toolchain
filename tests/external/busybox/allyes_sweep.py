@@ -237,6 +237,10 @@ def controller(args):
                 passed = run.returncode == 0 and run.stdout == expected[applet]
                 print("BUSYBOX_ALLYES_GCC_RUNTIME=%s applet=%s" %
                       ("PASS" if passed else "FAIL", applet), flush=True)
+                if not passed:
+                    print("BUSYBOX_ALLYES_GCC_RUNTIME_DETAIL applet=%s exit=%d stdout=%r stderr=%r expected=%r" %
+                          (applet, run.returncode, run.stdout[:160],
+                           run.stderr[:160], expected[applet][:160]), flush=True)
                 successes.append(passed)
             if all(successes):
                 print("BUSYBOX_ALLYES_GCC_RUNTIME_ORACLE=PASS applets=%d original_full_Kbuild=1" %
