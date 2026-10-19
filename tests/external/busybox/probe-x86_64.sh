@@ -23,6 +23,12 @@ test "$(git hash-object "$src/coreutils/cut.c")" = 55bdd938611feb51e7bf1b7977f87
 test "$(git hash-object "$src/coreutils/sort.c")" = 01b7c44e5e2cc72027269848b9c025abe45c7506
 test "$(git hash-object "$src/coreutils/uniq.c")" = 06c57f750be6a94de5189495688a3150385166aa
 test "$(git hash-object "$src/coreutils/tr.c")" = 1e402dfdbd4f047677b8f72ac884eb6e38110fb5
+# Optional next cohort: immutable original BusyBox files, never patched.
+if test "${BUSYBOX_X86_64_EXTRA_DISCOVERY:-0}" = 1; then
+    test "$(git hash-object "$src/coreutils/basename.c")" = 0b721c03c150f4f8429a28c45465ed8919550a74
+    test "$(git hash-object "$src/coreutils/dirname.c")" = 5aad121b59268bf24069972e7fd3fe25e4986d05
+    test "$(git hash-object "$src/coreutils/printf.c")" = b89df67f99a9bd81273a6763ca53777f3b758cbc
+fi
 echo "BUSYBOX_X86_64_SOURCE=PASS version=1.36.1 commit=$commit original=unchanged"
 
 # Use upstream Kconfig and Kbuild; alter .config only, never application C.
@@ -33,10 +39,14 @@ if ! (cd "$src" && make -j2 allnoconfig CC="$HOST_CC" \
   exit 1
 fi
 python3 - "$src/.config" <<'PY'
+import os
 import sys
 p = sys.argv[1]
 s = open(p,encoding="utf-8").read()
-for key in ["CAT","ECHO","HEAD","WC","GREP","CUT","SORT","UNIQ","TR"]:
+keys = ["CAT","ECHO","HEAD","WC","GREP","CUT","SORT","UNIQ","TR"]
+if os.environ.get("BUSYBOX_X86_64_EXTRA_DISCOVERY") == "1":
+    keys.extend(["BASENAME", "DIRNAME", "PRINTF"])
+for key in keys:
     old = "# CONFIG_" + key + " is not set"
     new = "CONFIG_" + key + "=y"
     if old in s:
@@ -94,6 +104,19 @@ if ! "$src/busybox" cat "$work/fixture.txt" >"$work/cat.out" ||
   exit 1
 fi
 echo "BUSYBOX_X86_64_BASELINE=PASS GCC_build=busybox applets=cat,echo,head,wc,grep,cut,sort,uniq,tr runtime=byte-exact"
+# Pin independent GCC outputs before replacing any BusyBox object.
+if test "${BUSYBOX_X86_64_EXTRA_DISCOVERY:-0}" = 1; then
+    for key in BASENAME DIRNAME PRINTF; do
+        if ! grep -qx "CONFIG_${key}=y" "$src/.config"; then
+            echo "BUSYBOX_X86_64_EXTRA=BLOCKED stage=Kconfig key=$key" >&2
+            exit 1
+        fi
+    done
+    "$src/busybox" basename /var/log/demo.log .log >"$work/extra.basename.gnu.out"
+    "$src/busybox" dirname /var/log/demo.log >"$work/extra.dirname.gnu.out"
+    "$src/busybox" printf "%s:%04d\\n" native 42 >"$work/extra.printf.gnu.out"
+    echo "BUSYBOX_X86_64_EXTRA_GCC_ORACLE=PASS applets=basename,dirname,printf"
+fi
 passed=0
 blocked=0
 for file in coreutils/cat.c coreutils/echo.c coreutils/head.c coreutils/wc.c \
@@ -147,7 +170,7 @@ if test "$blocked" -ne 0 && test "$(printenv BUSYBOX_X86_64_DISCOVERY || true)" 
 
 
 # Escalate from isolated translation-unit acceptance to the real BusyBox
-# GNU Kbuild link, substituting ONLY the two proven MiniC-generated
+# GNU Kbuild link, substituting the nine proven MiniC-generated
 # applet objects. All other BusyBox objects remain the original GCC build.
 # Rebuild parent composite objects and executable; do not silently
 # reuse the already-GCC-linked baseline busybox.
@@ -195,4 +218,91 @@ if test "$passed" -eq 9 && test "$blocked" -eq 0; then
         exit 1
     fi
     echo "BUSYBOX_X86_64_MIXED=PASS applets=cat,echo,head,wc,grep,cut,sort,uniq,tr objects=MiniC x86 remainder=GCC GNU_Kbuild=1 runtime=byte-exact"
+fi
+# Optional *separate* real-project cohort. The previously certified nine
+# MiniC-owned applets have already passed independent GCC vs mixed runtime
+# comparisons. Do not enlarge the baseline claim if an extra TU is blocked.
+if test "${BUSYBOX_X86_64_EXTRA_DISCOVERY:-0}" = 1; then
+    if test "$passed" -ne 9 || test "$blocked" -ne 0; then
+        echo "BUSYBOX_X86_64_EXTRA=SKIP stage=prior-nine-applets-not-green"
+        exit 0
+    fi
+    extra_passed=0
+    extra_blocked=0
+    for stem in basename dirname printf; do
+        file="coreutils/$stem.c"
+        if ! "$HOST_CC" -E -P -std=gnu11 -D_GNU_SOURCE \
+           -I"$src/include" -I"$src" -include "$src/include/autoconf.h" \
+           "$src/$file" -o "$work/$stem.i" \
+           >"$work/$stem.cpp.out" 2>"$work/$stem.cpp.err"; then
+            echo "BUSYBOX_X86_64_EXTRA_BLOCKER=HOST_CPP source=$file" >&2
+            sed -n '1,22p' "$work/$stem.cpp.err" >&2
+            extra_blocked=$((extra_blocked + 1))
+            continue
+        fi
+        echo "BUSYBOX_X86_64_EXTRA_INPUT=PASS source=$file lines=$(wc -l < "$work/$stem.i")"
+        if ! MINIC_X86_CALL_TRACE=1 CORE_FAST_TRACE=1 "$MINIC_CC" \
+           --target=x86_64-linux -S "$work/$stem.i" -o "$work/$stem.s" \
+           >"$work/$stem.minic.out" 2>"$work/$stem.minic.err"; then
+            echo "BUSYBOX_X86_64_EXTRA_BLOCKER=MiniC source=$file stage=compiler" >&2
+            grep -E 'X86_CALL_GATE|X86_CALL_ARG|FRONTEND_LOOKUP_DETAIL' \
+                 "$work/$stem.minic.err" >&2 || true
+            sed -n '1,35p' "$work/$stem.minic.err" >&2
+            python3 - "$work/$stem.i" "$work/$stem.minic.err" <<'PY' >&2
+import re
+import sys
+diagnostic = open(sys.argv[2], encoding="utf-8", errors="replace").read()
+match = re.search(r"\.i:(\d+):(\d+): error:", diagnostic)
+if match:
+    line = int(match.group(1))
+    with open(sys.argv[1], encoding="utf-8", errors="replace") as stream:
+        for pos, source in enumerate(stream, 1):
+            if line - 2 <= pos <= line + 2:
+                print("BUSYBOX_X86_64_EXTRA_CONTEXT line=%d text=%r" %
+                      (pos, source.rstrip("\n")))
+PY
+            extra_blocked=$((extra_blocked + 1))
+            continue
+        fi
+        if ! "$HOST_CC" -c -x assembler "$work/$stem.s" -o "$work/$stem.minic.o" \
+            >"$work/$stem.as.out" 2>"$work/$stem.as.err"; then
+            echo "BUSYBOX_X86_64_EXTRA_BLOCKER=GNU_AS source=$file" >&2
+            sed -n '1,35p' "$work/$stem.as.err" >&2
+            extra_blocked=$((extra_blocked + 1))
+            continue
+        fi
+        extra_passed=$((extra_passed + 1))
+        echo "BUSYBOX_X86_64_EXTRA_TU=PASS source=$file object=MiniC"
+    done
+    echo "BUSYBOX_X86_64_EXTRA_FRONTIER=DISCOVERY compiled=$extra_passed total=3 blocked=$extra_blocked"
+    if test "$extra_passed" -eq 3 && test "$extra_blocked" -eq 0; then
+        for stem in basename dirname printf; do
+            original_obj="$src/coreutils/$stem.o"
+            if ! test -f "$original_obj"; then
+                echo "BUSYBOX_X86_64_EXTRA=BLOCKED stage=baseline-object-missing applet=$stem" >&2
+                exit 0
+            fi
+            cp "$original_obj" "$work/$stem.gnu.o"
+            cp "$work/$stem.minic.o" "$original_obj"
+        done
+        rm -f "$src/coreutils/built-in.o" "$src/coreutils/lib.a" \
+              "$src/busybox_unstripped" "$src/busybox"
+        if ! (cd "$src" && make -j2 CC="$HOST_CC" busybox \
+               >"$work/mixed-extra.out" 2>"$work/mixed-extra.err"); then
+            echo "BUSYBOX_X86_64_EXTRA=BLOCKED stage=Kbuild-link" >&2
+            tail -n 50 "$work/mixed-extra.err" "$work/mixed-extra.out" >&2 || true
+            exit 0
+        fi
+        if ! "$src/busybox" basename /var/log/demo.log .log >"$work/extra.basename.mini.out" ||
+           ! "$src/busybox" dirname /var/log/demo.log >"$work/extra.dirname.mini.out" ||
+           ! "$src/busybox" printf "%s:%04d\\n" native 42 >"$work/extra.printf.mini.out" ||
+           ! cmp -s "$work/extra.basename.gnu.out" "$work/extra.basename.mini.out" ||
+           ! cmp -s "$work/extra.dirname.gnu.out" "$work/extra.dirname.mini.out" ||
+           ! cmp -s "$work/extra.printf.gnu.out" "$work/extra.printf.mini.out"; then
+            echo "BUSYBOX_X86_64_EXTRA=BLOCKED stage=native-runtime-differential" >&2
+            diff -u "$work/extra.printf.gnu.out" "$work/extra.printf.mini.out" >&2 || true
+            exit 0
+        fi
+        echo "BUSYBOX_X86_64_EXTRA_MIXED=PASS applets=basename,dirname,printf extra_objects=3 total_MiniC_objects=12 GCC_reference=byte-exact GNU_Kbuild=1"
+    fi
 fi
