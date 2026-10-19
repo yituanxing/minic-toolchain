@@ -274,6 +274,37 @@ static bool emit_function(FILE *out, const MinicFunction *decl,
                 fprintf(out, "  st.d $t0, $sp, %zu\n", offset) < 0)
                 return false;
             continue;
+
+        case MINIC_CORE_INSTRUCTION_FIELD_ADDRESS: {
+            const MinicCoreValueId base = ins->value.field_address.base;
+            const size_t bytes = ins->value.field_address.byte_offset;
+            if (base >= fn->value_count ||
+                !minic_type_is_pointer(fn->values[base].type) ||
+                bytes > 2047U ||
+                fprintf(out, "  ld.d $t0, $sp, %zu\n", (size_t)base * 8U) < 0 ||
+                (bytes != 0U && fprintf(out, "  addi.d $t0, $t0, %zu\n", bytes) < 0))
+                return false;
+            break;
+        }
+        case MINIC_CORE_INSTRUCTION_POINTER_OFFSET: {
+            const MinicCoreValueId base = ins->value.pointer_offset.base;
+            const MinicCoreValueId index = ins->value.pointer_offset.index;
+            const size_t stride = ins->value.pointer_offset.element_size;
+            if (base >= fn->value_count || index >= fn->value_count ||
+                !minic_type_is_pointer(fn->values[base].type) ||
+                !valid_int(fn->values[index].type) || stride > 2047U ||
+                fprintf(out, "  ld.d $t0, $sp, %zu\n", (size_t)base * 8U) < 0 ||
+                fprintf(out, "  ld.w $t1, $sp, %zu\n", (size_t)index * 8U) < 0)
+                return false;
+            if (stride != 0U) {
+                if (fprintf(out, "  addi.d $t2, $zero, %zu\n"
+                                 "  mul.d $t1, $t1, $t2\n"
+                                 "  %s $t0, $t0, $t1\n", stride,
+                            ins->value.pointer_offset.subtract ? "sub.d" : "add.d") < 0)
+                    return false;
+            }
+            break;
+        }
         case MINIC_CORE_INSTRUCTION_LOAD: {
             const MinicCoreValueId addr = ins->value.load.address;
             if (addr >= fn->value_count ||
