@@ -9,7 +9,7 @@ QEMU_LOONGARCH64=qemu-loongarch64
 w=$(mktemp -d)
 trap 'rm -rf "$w"' EXIT HUP INT TERM
 m2_enabled=0
-if [ "${FOUR_BACKEND_M2:-0}" = "1" ] || [ "${FOUR_BACKEND_M2_STACK:-0}" = "1" ] || [ "${FOUR_BACKEND_M3_CALL:-0}" = "1" ] || [ "${FOUR_BACKEND_M4_GLOBAL:-0}" = "1" ] || [ "${FOUR_BACKEND_M5_POINTER:-0}" = "1" ] || [ "${FOUR_BACKEND_M6_ADDRESS:-0}" = "1" ] || [ "${FOUR_BACKEND_M7_FRAME:-0}" = "1" ] || [ "${FOUR_BACKEND_M8_NARROW:-0}" = "1" ] || [ "${FOUR_BACKEND_M9_UNSIGNED:-0}" = "1" ] || [ "${FOUR_BACKEND_M10_MOD:-0}" = "1" ] || [ "${FOUR_BACKEND_M11_INDEX:-0}" = "1" ] || [ "${FOUR_BACKEND_M12_BITWISE:-0}" = "1" ] || [ "${FOUR_BACKEND_M13_NARROW_ARITH:-0}" = "1" ] || [ "${FOUR_BACKEND_M14_SHIFT:-0}" = "1" ] || [ "${FOUR_BACKEND_M15_SCALAR_RETURN:-0}" = "1" ]; then
+if [ "${FOUR_BACKEND_M2:-0}" = "1" ] || [ "${FOUR_BACKEND_M2_STACK:-0}" = "1" ] || [ "${FOUR_BACKEND_M3_CALL:-0}" = "1" ] || [ "${FOUR_BACKEND_M4_GLOBAL:-0}" = "1" ] || [ "${FOUR_BACKEND_M5_POINTER:-0}" = "1" ] || [ "${FOUR_BACKEND_M6_ADDRESS:-0}" = "1" ] || [ "${FOUR_BACKEND_M7_FRAME:-0}" = "1" ] || [ "${FOUR_BACKEND_M8_NARROW:-0}" = "1" ] || [ "${FOUR_BACKEND_M9_UNSIGNED:-0}" = "1" ] || [ "${FOUR_BACKEND_M10_MOD:-0}" = "1" ] || [ "${FOUR_BACKEND_M11_INDEX:-0}" = "1" ] || [ "${FOUR_BACKEND_M12_BITWISE:-0}" = "1" ] || [ "${FOUR_BACKEND_M13_NARROW_ARITH:-0}" = "1" ] || [ "${FOUR_BACKEND_M14_SHIFT:-0}" = "1" ] || [ "${FOUR_BACKEND_M15_SCALAR_RETURN:-0}" = "1" ] || [ "${FOUR_BACKEND_M17_RECORD:-0}" = "1" ]; then
     m2_enabled=1
 fi
 cat > "$w/return.i" <<'EOF'
@@ -564,6 +564,59 @@ cat > "$w/driver_u8_internal.c" <<'EOF'
 extern int mini_u8_internal(unsigned char);
 int main(void) { return mini_u8_internal(41u); }
 EOF
+# M17: the untouched original cJSON uses error {NULL,0} and
+# hooks {malloc,free,realloc}; verify target DataLayout field padding
+# and real ELF object/function relocation behavior via GNU consumers.
+cat > "$w/record_zero.i" <<'EOF'
+struct Err { void *json; unsigned long position; };
+struct Err mini_error = { (void *)0, 0 };
+int mini_record_zero(void) { return 42; }
+EOF
+cat > "$w/driver_record_zero.c" <<'EOF'
+struct Err { void *json; unsigned long position; };
+extern struct Err mini_error;
+extern int mini_record_zero(void);
+int main(void) {
+    return mini_error.json == 0 && mini_error.position == 0
+           ? mini_record_zero() : 1;
+}
+EOF
+cat > "$w/record_hooks.i" <<'EOF'
+extern int gnu_helper(int);
+int mini_helper(int x) { return x; }
+struct Hooks { int (*one)(int); int (*two)(int); void *context; };
+struct Hooks mini_hooks = {mini_helper, gnu_helper, (void *)0};
+int mini_record_hooks(void) { return 42; }
+EOF
+cat > "$w/driver_record_hooks.c" <<'EOF'
+int gnu_helper(int x) { return x + 1; }
+struct Hooks { int (*one)(int); int (*two)(int); void *context; };
+extern struct Hooks mini_hooks;
+extern int mini_record_hooks(void);
+int main(void) {
+    if (mini_hooks.one == 0 || mini_hooks.two == 0 ||
+        mini_hooks.context != 0 ||
+        mini_hooks.one(40) != 40 || mini_hooks.two(40) != 41)
+        return 1;
+    return mini_record_hooks();
+}
+EOF
+cat > "$w/record_padding.i" <<'EOF'
+struct Pad { unsigned char lead; int n; unsigned char tail; };
+struct Pad mini_pad = { 3, 42, 6 };
+int mini_record_padding(void) { return 42; }
+EOF
+cat > "$w/driver_record_padding.c" <<'EOF'
+struct Pad { unsigned char lead; int n; unsigned char tail; };
+extern struct Pad mini_pad;
+extern int mini_record_padding(void);
+int main(void) {
+    if (mini_pad.lead != 3 || mini_pad.n != 42 ||
+        mini_pad.tail != 6 || sizeof(mini_pad) != 12)
+        return 1;
+    return mini_record_padding();
+}
+EOF
 check_qemu_exit() {
     emulator=$1
     binary=$2
@@ -636,6 +689,9 @@ for target in aarch64 loongarch64; do
     if [ "${FOUR_BACKEND_M15_SCALAR_RETURN:-0}" = "1" ]; then
         cases="$cases u8_return s8_return u8_external u8_internal"
     fi
+    if [ "${FOUR_BACKEND_M17_RECORD:-0}" = "1" ]; then
+        cases="$cases record_zero record_hooks record_padding"
+    fi
     if [ "$m2_enabled" = "1" ]; then
         # Independent originals for every new CFG/comparison fixture, not
         # merely an expected return code from a MiniC-owned executable.
@@ -682,6 +738,9 @@ for target in aarch64 loongarch64; do
         if [ "${FOUR_BACKEND_M15_SCALAR_RETURN:-0}" = "1" ]; then
             oracle_cases="$oracle_cases u8_return s8_return u8_external u8_internal"
         fi
+        if [ "${FOUR_BACKEND_M17_RECORD:-0}" = "1" ]; then
+            oracle_cases="$oracle_cases record_zero record_hooks record_padding"
+        fi
         for testcase in $oracle_cases; do
             "$gcc" -static -x c "$w/$testcase.i" "$w/driver_$testcase.c" \
                 -o "$w/$target.gnu-$testcase.elf"
@@ -720,6 +779,8 @@ for target in aarch64 loongarch64; do
             bit_xor|bit_and|bit_or|bit_unsigned)
                 "$gcc" -static "$w/$target.$testcase.o" "$w/driver_$testcase.c" -o "$w/$target.$testcase.elf" ;;
             u8_index|s8_index|u16_index|s16_index)
+                "$gcc" -static "$w/$target.$testcase.o" "$w/driver_$testcase.c" -o "$w/$target.$testcase.elf" ;;
+            record_zero|record_hooks|record_padding)
                 "$gcc" -static "$w/$target.$testcase.o" "$w/driver_$testcase.c" -o "$w/$target.$testcase.elf" ;;
             u8_return|s8_return|u8_external|u8_internal)
                 "$gcc" -static "$w/$target.$testcase.o" "$w/driver_$testcase.c" -o "$w/$target.$testcase.elf" ;;
@@ -819,6 +880,9 @@ if [ "$m2_enabled" = "1" ]; then
     fi
     if [ "${FOUR_BACKEND_M15_SCALAR_RETURN:-0}" = "1" ]; then
         echo "FOUR_BACKEND_M15_SCALAR_RETURN=PASS architectures=2 executable_QEMU_cases=22 narrow_return_call_cases=8 GNU_independent_oracles=14"
+    fi
+    if [ "${FOUR_BACKEND_M17_RECORD:-0}" = "1" ]; then
+        echo "FOUR_BACKEND_M17_RECORD=PASS architectures=2 executable_QEMU_cases=20 record_aggregate_relocation_cases=6 GNU_independent_oracles=16"
     fi
 else
     echo "FOUR_BACKEND_M1=PASS architectures=2 executable_QEMU_cases=8 GCC_independent_oracles=4"
