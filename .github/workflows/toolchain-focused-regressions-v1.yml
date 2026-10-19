@@ -22,6 +22,7 @@ on:
       - 'Makefile'
       - '.github/actions/**'
       - '.github/workflows/toolchain-focused-regressions-v1.yml'
+      - '.github/workflows/linux-runtime-gcc-baseline.yml'
       - '!**/*.md'
       - '!tools/ci/**'
   workflow_dispatch:
@@ -36,6 +37,7 @@ on:
           - minic-rv64
           - miniar
           - minild
+          - four-backend
 
 permissions:
   contents: read
@@ -54,10 +56,74 @@ jobs:
         with:
           ref: ${{ github.sha }}
 
+      # Only changes confined to new ISA backends / their GNU-QEMU fixtures
+      # select four-backend; Core, driver, Makefile, CI, unknown paths or
+      # unavailable git history fail open to ALL existing regression owners.
+      - name: Select focused regression owners
+        id: owners
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BEFORE_SHA: ${{ github.event.before }}
+          DISPATCH_MODE: ${{ inputs.mode }}
+        run: |
+          set -Eeuo pipefail
+          mode=all
+          linux_yaml=true
+          if [[ "$EVENT_NAME" == workflow_dispatch ]]; then
+            mode="${DISPATCH_MODE:-all}"
+            if [[ "$mode" != all ]]; then linux_yaml=false; fi
+          else
+            paths="$RUNNER_TEMP/minic-focused-changed-paths.txt"
+            if [[ "$BEFORE_SHA" =~ ^[0-9a-f]{40}$ ]] &&
+               [[ ! "$BEFORE_SHA" =~ ^0+$ ]] &&
+               { git cat-file -e "$BEFORE_SHA^{commit}" 2>/dev/null ||
+                 git fetch --no-tags --depth=1 origin "$BEFORE_SHA"; } &&
+               git diff --name-only "$BEFORE_SHA" "$GITHUB_SHA" > "$paths"; then
+              linux_yaml=false
+              four_only=true
+              [[ -s "$paths" ]] || four_only=false
+              while IFS= read -r changed; do
+                if [[ "$changed" == .github/workflows/linux-runtime-gcc-baseline.yml ]]; then
+                  linux_yaml=true
+                fi
+                case "$changed" in
+                  src/target/aarch64/*|src/target/loongarch64/*|tests/compiler/c0/run-four-backend-m1.sh|tests/external/tinyaes/*|tests/external/cjson/*)
+                    ;;
+                  *) four_only=false ;;
+                esac
+              done < "$paths"
+              if [[ "$four_only" == true ]]; then mode=four-backend; fi
+            else
+              echo 'FOCUSED_OWNER_DIFF=UNAVAILABLE fallback=all owners'
+            fi
+          fi
+          rv64=false
+          miniar=false
+          minild=false
+          four=false
+          case "$mode" in
+            all) rv64=true; miniar=true; minild=true; four=true ;;
+            minic-rv64) rv64=true ;;
+            miniar) miniar=true ;;
+            minild) minild=true ;;
+            four-backend) four=true ;;
+            *) echo "FOCUSED_OWNER_INVALID_MODE=$mode" >&2; exit 1 ;;
+          esac
+          {
+            printf 'mode=%s\n' "$mode"
+            printf 'rv64=%s\n' "$rv64"
+            printf 'miniar=%s\n' "$miniar"
+            printf 'minild=%s\n' "$minild"
+            printf 'four=%s\n' "$four"
+            printf 'linux_yaml=%s\n' "$linux_yaml"
+          } >> "$GITHUB_OUTPUT"
+          echo "FOCUSED_OWNER_PLAN mode=$mode rv64=$rv64 miniar=$miniar minild=$minild four=$four linux_yaml=$linux_yaml"
       # Stage2 2064 preflight checks current source workflow.
       # The bootstrap Linux opt-in workflow has several nested matrix
       # conditions. Parse its real YAML BEFORE another costly seven-way run.
       - name: Parse existing Linux runtime workflow YAML
+        if: steps.owners.outputs.linux_yaml == 'true'
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -78,6 +144,7 @@ jobs:
           /tmp/minic-actionlint-bin/actionlint -shellcheck= -pyflakes= .github/workflows/linux-runtime-gcc-baseline.yml
 
       - name: Install union of RV64, archive, static and dynamic linker oracle prerequisites
+        if: steps.owners.outputs.mode != 'four-backend'
         run: |
           set -Eeuo pipefail
           timeout 240s sudo apt-get -o Acquire::Retries=3 update
@@ -102,9 +169,15 @@ jobs:
       # Temporary actual cJSON 1.7.19 original-source GNU/QEMU survey,
       # run only after proven original AES 2/2 and restore baseline YAML.
       - name: Four backend original AES and cJSON two-target source frontier
+        id: four
+        if: steps.owners.outputs.four == 'true' && steps.build.outcome == 'success'
         shell: bash
         run: |
           set -Eeuo pipefail
+          # Four-backend-only pushes do not need RV64 cross packages.
+          if [[ "${{ steps.owners.outputs.mode }}" == four-backend ]]; then
+            timeout 240s sudo apt-get -o Acquire::Retries=3 update
+          fi
           sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends gcc-aarch64-linux-gnu libc6-dev-arm64-cross gcc-13-loongarch64-linux-gnu libc6-dev-loong64-cross qemu-user
           make MODE=release CFLAGS=-Werror BUILD_DIR=build/toolchain-focused-t1-v2 check-four-backend-tinyaes-accept
           # The 22 named M17-M38 gates share baseline C/GNU/QEMU fixtures.
@@ -160,7 +233,7 @@ jobs:
           echo "BOOTSTRAP_STAGE2_DRIVER_PREFLIGHT=PASS qemu_stage2_dispatch=$(wc -l < "$COHORT_STAGE2_INVOKE_TRACE")"
       - name: Run focused current-product regressions
         id: rv64
-        if: (github.event_name == 'push' || inputs.mode == 'all' || inputs.mode == 'rv64') && steps.build.outcome == 'success'
+        if: steps.owners.outputs.rv64 == 'true' && steps.build.outcome == 'success'
         continue-on-error: true
         shell: bash
         run: |
@@ -235,7 +308,7 @@ jobs:
 
       - name: Validate MiniAR archive contracts
         id: ar_archive
-        if: (github.event_name == 'push' || inputs.mode == 'all' || inputs.mode == 'miniar') && steps.build.outcome == 'success'
+        if: steps.owners.outputs.miniar == 'true' && steps.build.outcome == 'success'
         continue-on-error: true
         shell: bash
         run: |
@@ -245,7 +318,7 @@ jobs:
 
       - name: Validate shared ELF reader contract
         id: ar_reader
-        if: (github.event_name == 'push' || inputs.mode == 'all' || inputs.mode == 'miniar') && steps.build.outcome == 'success'
+        if: steps.owners.outputs.miniar == 'true' && steps.build.outcome == 'success'
         continue-on-error: true
         shell: bash
         run: |
@@ -254,7 +327,7 @@ jobs:
 
       - name: Validate MiniNM archive consumers
         id: ar_nm
-        if: (github.event_name == 'push' || inputs.mode == 'all' || inputs.mode == 'miniar') && steps.build.outcome == 'success'
+        if: steps.owners.outputs.miniar == 'true' && steps.build.outcome == 'success'
         continue-on-error: true
         shell: bash
         run: |
@@ -264,7 +337,7 @@ jobs:
 
       - name: Validate shared ELF writer reader and linker-script contracts
         id: ld_shared
-        if: (github.event_name == 'push' || inputs.mode == 'all' || inputs.mode == 'minild') && steps.build.outcome == 'success'
+        if: steps.owners.outputs.minild == 'true' && steps.build.outcome == 'success'
         continue-on-error: true
         shell: bash
         run: |
@@ -276,7 +349,7 @@ jobs:
 
       - name: Validate MiniLD static A0-A3 contracts
         id: ld_static
-        if: (github.event_name == 'push' || inputs.mode == 'all' || inputs.mode == 'minild') && steps.build.outcome == 'success'
+        if: steps.owners.outputs.minild == 'true' && steps.build.outcome == 'success'
         continue-on-error: true
         shell: bash
         run: |
@@ -288,7 +361,7 @@ jobs:
 
       - name: Validate MiniLD dynamic A4-A6 contracts
         id: ld_dynamic
-        if: (github.event_name == 'push' || inputs.mode == 'all' || inputs.mode == 'minild') && steps.build.outcome == 'success'
+        if: steps.owners.outputs.minild == 'true' && steps.build.outcome == 'success'
         continue-on-error: true
         shell: bash
         run: |
@@ -299,7 +372,7 @@ jobs:
 
       - name: Validate MiniLD section GC contract
         id: ld_gc
-        if: (github.event_name == 'push' || inputs.mode == 'all' || inputs.mode == 'minild') && steps.build.outcome == 'success'
+        if: steps.owners.outputs.minild == 'true' && steps.build.outcome == 'success'
         continue-on-error: true
         shell: bash
         run: |
@@ -314,7 +387,7 @@ jobs:
             sh tests/linker/run-gc-v0.sh
 
       - name: Preserve independent MiniC RV64 regression evidence
-        if: always() && (github.event_name == 'push' || inputs.mode == 'all' || inputs.mode == 'minic-rv64')
+        if: always() && steps.owners.outputs.rv64 == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: minic-rv64-focused-regressions-v1
@@ -327,15 +400,22 @@ jobs:
         id: verdict
         shell: bash
         env:
-          MODE: ${{ github.event_name == 'push' && 'all' || inputs.mode }}
+          MODE: ${{ steps.owners.outputs.mode }}
         run: |
           set -Eeuo pipefail
           mkdir -p build/toolchain-focused-t1-verdict
           failures=0
           echo -e 'owner\tcheck\tresult' > build/toolchain-focused-t1-verdict/outcomes.tsv
+          result="${{ steps.four.outcome }}"
+          printf '%s\t%s\t%s\n' 'four-backend' 'gnu_qemu_cjson_frontier' "$result" >> build/toolchain-focused-t1-verdict/outcomes.tsv
+          if [[ "$MODE" == all || "$MODE" == four-backend ]]; then
+            if [[ "$result" != success ]]; then echo "T1_OWNER_CHECK_FAILED owner=four-backend check=gnu_qemu result=$result"; failures=1; fi
+          elif [[ "$result" != skipped ]]; then
+            echo "T1_UNEXPECTED_OWNER_EXECUTION owner=four-backend check=gnu_qemu result=$result"; failures=1
+          fi
           result="${{ steps.rv64.outcome }}"
           printf '%s\t%s\t%s\n' 'rv64' 'rv64' "$result" >> build/toolchain-focused-t1-verdict/outcomes.tsv
-          if [[ "$MODE" == all || "$MODE" == "rv64" ]]; then
+          if [[ "$MODE" == all || "$MODE" == "minic-rv64" ]]; then
             if [[ "$result" != success ]]; then echo "T1_OWNER_CHECK_FAILED owner=rv64 check=rv64 result=$result"; failures=1; fi
           elif [[ "$result" != skipped ]]; then
             echo "T1_UNEXPECTED_OWNER_EXECUTION owner=rv64 check=rv64 result=$result"; failures=1
@@ -393,9 +473,9 @@ jobs:
           if [[ "${{ steps.build.outcome }}" != success ]]; then failures=1; fi
           cat build/toolchain-focused-t1-verdict/outcomes.tsv
           if [[ "$failures" -eq 0 ]]; then
-            echo "TOOLCHAIN_FOCUSED_T1=PASS mode=$MODE independent_test_checks=8 shared_builds=1"
+            echo "TOOLCHAIN_FOCUSED_T1=PASS mode=$MODE independent_test_checks=9 shared_builds=1"
           else
-            echo "TOOLCHAIN_FOCUSED_T1=FAIL mode=$MODE independent_test_checks=8 shared_builds=1"
+            echo "TOOLCHAIN_FOCUSED_T1=FAIL mode=$MODE independent_test_checks=9 shared_builds=1"
           fi
           exit "$failures"
 
