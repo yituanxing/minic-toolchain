@@ -9,7 +9,7 @@ QEMU_LOONGARCH64=qemu-loongarch64
 w=$(mktemp -d)
 trap 'rm -rf "$w"' EXIT HUP INT TERM
 m2_enabled=0
-if [ "${FOUR_BACKEND_M2:-0}" = "1" ] || [ "${FOUR_BACKEND_M2_STACK:-0}" = "1" ] || [ "${FOUR_BACKEND_M3_CALL:-0}" = "1" ] || [ "${FOUR_BACKEND_M4_GLOBAL:-0}" = "1" ] || [ "${FOUR_BACKEND_M5_POINTER:-0}" = "1" ] || [ "${FOUR_BACKEND_M6_ADDRESS:-0}" = "1" ] || [ "${FOUR_BACKEND_M7_FRAME:-0}" = "1" ] || [ "${FOUR_BACKEND_M8_NARROW:-0}" = "1" ] || [ "${FOUR_BACKEND_M9_UNSIGNED:-0}" = "1" ] || [ "${FOUR_BACKEND_M10_MOD:-0}" = "1" ] || [ "${FOUR_BACKEND_M11_INDEX:-0}" = "1" ] || [ "${FOUR_BACKEND_M12_BITWISE:-0}" = "1" ] || [ "${FOUR_BACKEND_M13_NARROW_ARITH:-0}" = "1" ] || [ "${FOUR_BACKEND_M14_SHIFT:-0}" = "1" ] || [ "${FOUR_BACKEND_M15_SCALAR_RETURN:-0}" = "1" ] || [ "${FOUR_BACKEND_M17_RECORD:-0}" = "1" ] || [ "${FOUR_BACKEND_M18_VARARGS:-0}" = "1" ]; then
+if [ "${FOUR_BACKEND_M2:-0}" = "1" ] || [ "${FOUR_BACKEND_M2_STACK:-0}" = "1" ] || [ "${FOUR_BACKEND_M3_CALL:-0}" = "1" ] || [ "${FOUR_BACKEND_M4_GLOBAL:-0}" = "1" ] || [ "${FOUR_BACKEND_M5_POINTER:-0}" = "1" ] || [ "${FOUR_BACKEND_M6_ADDRESS:-0}" = "1" ] || [ "${FOUR_BACKEND_M7_FRAME:-0}" = "1" ] || [ "${FOUR_BACKEND_M8_NARROW:-0}" = "1" ] || [ "${FOUR_BACKEND_M9_UNSIGNED:-0}" = "1" ] || [ "${FOUR_BACKEND_M10_MOD:-0}" = "1" ] || [ "${FOUR_BACKEND_M11_INDEX:-0}" = "1" ] || [ "${FOUR_BACKEND_M12_BITWISE:-0}" = "1" ] || [ "${FOUR_BACKEND_M13_NARROW_ARITH:-0}" = "1" ] || [ "${FOUR_BACKEND_M14_SHIFT:-0}" = "1" ] || [ "${FOUR_BACKEND_M15_SCALAR_RETURN:-0}" = "1" ] || [ "${FOUR_BACKEND_M17_RECORD:-0}" = "1" ] || [ "${FOUR_BACKEND_M18_VARARGS:-0}" = "1" ] || [ "${FOUR_BACKEND_M19_PTR_COMPARE:-0}" = "1" ]; then
     m2_enabled=1
 fi
 cat > "$w/return.i" <<'EOF'
@@ -650,6 +650,38 @@ int main(void) {
            strcmp(b, "abc:7") == 0 ? 42 : 1;
 }
 EOF
+# M19: cJSON_InitHooks compares hook function pointers and tests
+# hooks == NULL. GNU cross-built callers must observe full LP64 pointer
+# equality and code addresses (not truncated w-reg comparisons).
+cat > "$w/pointer_null.i" <<'EOF'
+int mini_pointer_null(const void *p) { return p == 0 ? 42 : 1; }
+EOF
+cat > "$w/driver_pointer_null.c" <<'EOF'
+extern int mini_pointer_null(const void *);
+int main(void) { return mini_pointer_null((void *)0); }
+EOF
+cat > "$w/pointer_equality.i" <<'EOF'
+int mini_pointer_equality(int *a, int *b) { return a == b ? 42 : 1; }
+EOF
+cat > "$w/driver_pointer_equality.c" <<'EOF'
+extern int mini_pointer_equality(int *, int *);
+int main(void) {
+    int x = 19;
+    return mini_pointer_equality(&x, &x);
+}
+EOF
+cat > "$w/function_address.i" <<'EOF'
+int mini_callback_fn(int x) { return x + 1; }
+int mini_function_address(int (*fn)(int)) {
+    if (fn == mini_callback_fn) return mini_callback_fn(41);
+    return 1;
+}
+EOF
+cat > "$w/driver_function_address.c" <<'EOF'
+extern int mini_callback_fn(int);
+extern int mini_function_address(int (*)(int));
+int main(void) { return mini_function_address(mini_callback_fn); }
+EOF
 check_qemu_exit() {
     emulator=$1
     binary=$2
@@ -728,6 +760,9 @@ for target in aarch64 loongarch64; do
     if [ "${FOUR_BACKEND_M18_VARARGS:-0}" = "1" ]; then
         cases="$cases vararg_int vararg_pointer"
     fi
+    if [ "${FOUR_BACKEND_M19_PTR_COMPARE:-0}" = "1" ]; then
+        cases="$cases pointer_null pointer_equality function_address"
+    fi
     if [ "$m2_enabled" = "1" ]; then
         # Independent originals for every new CFG/comparison fixture, not
         # merely an expected return code from a MiniC-owned executable.
@@ -780,6 +815,9 @@ for target in aarch64 loongarch64; do
         if [ "${FOUR_BACKEND_M18_VARARGS:-0}" = "1" ]; then
             oracle_cases="$oracle_cases vararg_int vararg_pointer"
         fi
+        if [ "${FOUR_BACKEND_M19_PTR_COMPARE:-0}" = "1" ]; then
+            oracle_cases="$oracle_cases pointer_null pointer_equality function_address"
+        fi
         for testcase in $oracle_cases; do
             "$gcc" -static -x c "$w/$testcase.i" "$w/driver_$testcase.c" \
                 -o "$w/$target.gnu-$testcase.elf"
@@ -818,6 +856,8 @@ for target in aarch64 loongarch64; do
             bit_xor|bit_and|bit_or|bit_unsigned)
                 "$gcc" -static "$w/$target.$testcase.o" "$w/driver_$testcase.c" -o "$w/$target.$testcase.elf" ;;
             u8_index|s8_index|u16_index|s16_index)
+                "$gcc" -static "$w/$target.$testcase.o" "$w/driver_$testcase.c" -o "$w/$target.$testcase.elf" ;;
+            pointer_null|pointer_equality|function_address)
                 "$gcc" -static "$w/$target.$testcase.o" "$w/driver_$testcase.c" -o "$w/$target.$testcase.elf" ;;
             vararg_int|vararg_pointer)
                 "$gcc" -static "$w/$target.$testcase.o" "$w/driver_$testcase.c" -o "$w/$target.$testcase.elf" ;;
@@ -927,6 +967,9 @@ if [ "$m2_enabled" = "1" ]; then
     fi
     if [ "${FOUR_BACKEND_M18_VARARGS:-0}" = "1" ]; then
         echo "FOUR_BACKEND_M18_VARARGS=PASS architectures=2 executable_QEMU_cases=18 integer_pointer_variadic_cases=4 GNU_independent_oracles=14"
+    fi
+    if [ "${FOUR_BACKEND_M19_PTR_COMPARE:-0}" = "1" ]; then
+        echo "FOUR_BACKEND_M19_PTR_COMPARE=PASS architectures=2 executable_QEMU_cases=20 pointer_null_equal_function_address_cases=6 GNU_independent_oracles=16"
     fi
 else
     echo "FOUR_BACKEND_M1=PASS architectures=2 executable_QEMU_cases=8 GCC_independent_oracles=4"
