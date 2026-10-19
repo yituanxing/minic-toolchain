@@ -513,9 +513,12 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                     !minic_type_equal(parameter_types[j], actual))
                     return false;
             } else {
-                /* Only promoted 32-bit integer and pointer vararg tail. */
+                /* M38: binary64 variadic tails are ABI-classified in
+                 * the target emitter. Other unnamed scalars remain limited
+                 * to default-promoted 32-bit integer or pointer. */
                 if (!is_variadic ||
-                    (!minic_type_is_pointer(actual) &&
+                    (!minic_type_is_double(actual) &&
+                     !minic_type_is_pointer(actual) &&
                      (!small_integer_width(program, target, actual,
                                            &actual_width, &actual_signed) ||
                       actual_width != 4U))) return false;
@@ -960,9 +963,9 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
             const size_t count = indirect ? ins->value.indirect_call.argument_count
                                           : ins->value.call.argument_count;
             size_t j, gp_index = 0U, fp_index = 0U;
-            /* M30: independently allocate the AAPCS64 GP (x0-x7) and
-             * FP (d0-d7) register banks for fixed-parameter calls.
-             * Variadic binary64 tails are intentionally rejected upstream. */
+            /* M38: AAPCS64 GNU/Linux uses independent GP and FP
+             * register cursors for fixed and variadic scalar binary64 calls.
+             * No aggregate/overflow varargs are admitted. */
             for (j = 0U; j < count; ++j) {
                 const MinicCoreCallArgument *arg = &fn->call_arguments[begin + j];
                 const MinicType type = fn->values[arg->value.value_id].type;

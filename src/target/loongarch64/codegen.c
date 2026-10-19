@@ -534,9 +534,12 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                     !minic_type_equal(parameter_types[j], actual))
                     return false;
             } else {
-                /* Only promoted 32-bit integer and pointer vararg tail. */
+                /* M38: binary64 variadic tails are ABI-classified in
+                 * the target emitter. Other unnamed scalars remain limited
+                 * to default-promoted 32-bit integer or pointer. */
                 if (!is_variadic ||
-                    (!minic_type_is_pointer(actual) &&
+                    (!minic_type_is_double(actual) &&
+                     !minic_type_is_pointer(actual) &&
                      (!small_integer_width(program, target, actual,
                                            &actual_width, &actual_signed) ||
                       actual_width != 4U))) return false;
@@ -931,14 +934,26 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                 "$a0", "$a1", "$a2", "$a3", "$a4", "$a5", "$a6", "$a7"};
             static const char *const fp_regs[8] = {
                 "$fa0", "$fa1", "$fa2", "$fa3", "$fa4", "$fa5", "$fa6", "$fa7"};
+            const size_t parameter_count = indirect
+                ? fn->call_signatures[ins->value.indirect_call.signature_id].parameter_count
+                : fn->callees[ins->value.call.callee_id].parameter_count;
+            const bool is_variadic = indirect
+                ? fn->call_signatures[ins->value.indirect_call.signature_id].is_variadic
+                : fn->callees[ins->value.call.callee_id].is_variadic;
             size_t j, gp_index = 0U, fp_index = 0U;
-            /* M30: LoongArch lp64d fixed FP arguments use fa0-fa7, while
-             * integer and pointer arguments independently occupy a0-a7. */
+            /* M38 lp64d: fixed binary64 uses FP registers, but
+             * unnamed variadic doubles consume GP argument registers as
+             * 64-bit raw payloads, per the LoongArch ELF psABI. */
             for (j = 0U; j < count; ++j) {
                 const MinicCoreCallArgument *arg = &fn->call_arguments[begin + j];
                 const MinicType type = fn->values[arg->value.value_id].type;
                 const size_t slot = (size_t)arg->value.value_id * 8U;
-                if (minic_type_is_double(type)) {
+                if (minic_type_is_double(type) &&
+                    is_variadic && j >= parameter_count) {
+                    if (gp_index >= 8U ||
+                        !emit_sp_mem(out, "ld.d", gp_regs[gp_index++], slot))
+                        return false;
+                } else if (minic_type_is_double(type)) {
                     if (fp_index >= 8U ||
                         !emit_sp_mem(out, "fld.d", fp_regs[fp_index++], slot))
                         return false;
