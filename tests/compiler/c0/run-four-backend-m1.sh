@@ -9,7 +9,7 @@ QEMU_LOONGARCH64=qemu-loongarch64
 w=$(mktemp -d)
 trap 'rm -rf "$w"' EXIT HUP INT TERM
 m2_enabled=0
-if [ "${FOUR_BACKEND_M2:-0}" = "1" ] || [ "${FOUR_BACKEND_M2_STACK:-0}" = "1" ] || [ "${FOUR_BACKEND_M3_CALL:-0}" = "1" ] || [ "${FOUR_BACKEND_M4_GLOBAL:-0}" = "1" ] || [ "${FOUR_BACKEND_M5_POINTER:-0}" = "1" ]; then
+if [ "${FOUR_BACKEND_M2:-0}" = "1" ] || [ "${FOUR_BACKEND_M2_STACK:-0}" = "1" ] || [ "${FOUR_BACKEND_M3_CALL:-0}" = "1" ] || [ "${FOUR_BACKEND_M4_GLOBAL:-0}" = "1" ] || [ "${FOUR_BACKEND_M5_POINTER:-0}" = "1" ] || [ "${FOUR_BACKEND_M6_ADDRESS:-0}" = "1" ]; then
     m2_enabled=1
 fi
 cat > "$w/return.i" <<'EOF'
@@ -187,6 +187,51 @@ int main(void) {
     return ptr == &v ? *ptr : 1;
 }
 EOF
+# M6: the first actual original tinyAES Core path uses
+# field.addr on struct AES_ctx and pointer.offset to the first array byte.
+# These unchanged-C ABI tests target real ELF reads/writes, not only .s.
+cat > "$w/field_read.i" <<'EOF'
+struct Pair { int left; int right; };
+int mini_field_read(struct Pair *p) { return p->right; }
+EOF
+cat > "$w/driver_field_read.c" <<'EOF'
+struct Pair { int left; int right; };
+extern int mini_field_read(struct Pair *);
+int main(void) { struct Pair p = { 7, 42 }; return mini_field_read(&p); }
+EOF
+cat > "$w/field_write.i" <<'EOF'
+struct Pair { int left; int right; };
+void mini_field_write(struct Pair *p) { p->right = 42; }
+EOF
+cat > "$w/driver_field_write.c" <<'EOF'
+struct Pair { int left; int right; };
+extern void mini_field_write(struct Pair *);
+int main(void) {
+    struct Pair p = { 4, 0 };
+    mini_field_write(&p);
+    return p.left == 4 ? p.right : 1;
+}
+EOF
+cat > "$w/pointer_index.i" <<'EOF'
+int mini_pointer_index(int *p, int index) { return p[index]; }
+EOF
+cat > "$w/driver_pointer_index.c" <<'EOF'
+extern int mini_pointer_index(int *, int);
+int main(void) {
+    int values[4] = { 9, 18, 42, 70 };
+    return mini_pointer_index(values, 2);
+}
+EOF
+cat > "$w/pointer_negative.i" <<'EOF'
+int mini_pointer_negative(int *p) { return p[-1]; }
+EOF
+cat > "$w/driver_pointer_negative.c" <<'EOF'
+extern int mini_pointer_negative(int *);
+int main(void) {
+    int values[3] = { 8, 42, 17 };
+    return mini_pointer_negative(&values[2]);
+}
+EOF
 check_qemu_exit() {
     emulator=$1
     binary=$2
@@ -229,6 +274,9 @@ for target in aarch64 loongarch64; do
     if [ "${FOUR_BACKEND_M5_POINTER:-0}" = "1" ]; then
         cases="$cases pointer_read pointer_void pointer_return"
     fi
+    if [ "${FOUR_BACKEND_M6_ADDRESS:-0}" = "1" ]; then
+        cases="$cases field_read field_write pointer_index pointer_negative"
+    fi
     if [ "$m2_enabled" = "1" ]; then
         # Independent originals for every new CFG/comparison fixture, not
         # merely an expected return code from a MiniC-owned executable.
@@ -244,6 +292,9 @@ for target in aarch64 loongarch64; do
         fi
         if [ "${FOUR_BACKEND_M5_POINTER:-0}" = "1" ]; then
             oracle_cases="$oracle_cases pointer_read pointer_void pointer_return"
+        fi
+        if [ "${FOUR_BACKEND_M6_ADDRESS:-0}" = "1" ]; then
+            oracle_cases="$oracle_cases field_read field_write pointer_index pointer_negative"
         fi
         for testcase in $oracle_cases; do
             "$gcc" -static -x c "$w/$testcase.i" "$w/driver_$testcase.c" \
@@ -266,6 +317,8 @@ for target in aarch64 loongarch64; do
             compare) "$gcc" -static "$w/$target.compare.o" "$w/driver_compare.c" -o "$w/$target.compare.elf" ;;
             stack9) "$gcc" -static "$w/$target.stack9.o" "$w/driver_stack9.c" -o "$w/$target.stack9.elf" ;;
             stack10) "$gcc" -static "$w/$target.stack10.o" "$w/driver_stack10.c" -o "$w/$target.stack10.elf" ;;
+            field_read|field_write|pointer_index|pointer_negative)
+                "$gcc" -static "$w/$target.$testcase.o" "$w/driver_$testcase.c" -o "$w/$target.$testcase.elf" ;;
             pointer_read|pointer_void|pointer_return)
                 "$gcc" -static "$w/$target.$testcase.o" "$w/driver_$testcase.c" -o "$w/$target.$testcase.elf" ;;
             global_int|global_array)
@@ -318,6 +371,9 @@ if [ "$m2_enabled" = "1" ]; then
     fi
     if [ "${FOUR_BACKEND_M5_POINTER:-0}" = "1" ]; then
         echo "FOUR_BACKEND_M5_POINTER=PASS architectures=2 executable_QEMU_cases=20 pointer_void_cases=6 GNU_independent_oracles=16"
+    fi
+    if [ "${FOUR_BACKEND_M6_ADDRESS:-0}" = "1" ]; then
+        echo "FOUR_BACKEND_M6_ADDRESS=PASS architectures=2 executable_QEMU_cases=22 field_pointer_cases=8 GNU_independent_oracles=18"
     fi
 else
     echo "FOUR_BACKEND_M1=PASS architectures=2 executable_QEMU_cases=8 GCC_independent_oracles=4"
