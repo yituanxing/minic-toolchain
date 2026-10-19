@@ -930,3 +930,65 @@ inspection; project PR #527 remains Draft. Next: small independent
 GNU/QEMU acceptance reproducer for AArch64 initial 16-byte copy plus
 pointer/stack alias, fix the exact target-only bug, repeat untouched
 AES on both ISAs, then proceed in x86 project order to cJSON.
+
+## M16 original tinyAES AArch64 ELF global-address repair — 2026-10-19
+
+**Fixed, runtime verified on both new targets.** The original AES issue was
+**not** a byte-width or KeyExpansion arithmetic error. The emitted C
+initializer values and linked `vector_key` global were correct, but the
+AArch64 backend used GOT-indirected global addresses:
+
+```asm
+adrp x9, :got:vector_key
+ldr  x9, [x9, :got_lo12:vector_key]
+```
+
+On the exact GNU static ELF executable, `vector_key[0]` unexpectedly
+evaluated to **99** (the first byte of `sbox`), rather than **43**,
+while the actual `.byte` initializer for `vector_key` was correctly 43.
+The check was made by a generated real-source probe in `main`, *before*
+KeyExpansion. ELF `readelf -s` showed distinct sbox/vector_key symbols
+and correct sizes. The target-specific instruction sequence was the only
+modified compiler code; switched the AArch64 target global-address
+lowering to **direct PC-relative ADRP + ADD :lo12: symbol**:
+
+```asm
+adrp x9, vector_key
+add  x9, x9, :lo12:vector_key
+```
+
+This does not change LoongArch64, x86-64, RV64, shared Frontend/Core,
+or the frozen upstream AES source. An existing M4 ELF global fixture
+now additionally verifies **two distinct initialized C arrays with
+different byte sequences** and a MiniC-owned global-load function
+called from GNU, catching the original silent global alias.
+
+Actual complete [CI #39235373197](https://github.com/yituanxing/minic-toolchain/actions/runs/39235373197)
+**SUCCESS**:
+
+```text
+FOUR_BACKEND_TINYAES=PASS target=aarch64 original_source=1 GNU_AS_LD=1 QEMU_byte_exact=1
+FOUR_BACKEND_TINYAES=PASS target=loongarch64 original_source=1 GNU_AS_LD=1 QEMU_byte_exact=1
+FOUR_BACKEND_TINYAES_FRONTIER=COMPLETE architectures=2 verified_runtime=2 blocked=0
+FOUR_BACKEND_TINYAES_ACCEPT=PASS targets=2 original_AES128_ECB=1 GNU_QEMU_diff=1
+TOOLCHAIN_FOCUSED_T1=PASS mode=all independent_test_checks=8 shared_builds=1
+```
+
+The same CI ran **every named M1–M15 target gate** (including M2
+incoming 9th/10th args and M4 globals) using independent cross-GNU
+and target-QEMU oracles; all passed. This includes the added two-object
+global initializer/addressing regression.
+
+The many exploratory diagnostic scripts that had initially reproduced
+the 17th RoundKey mismatch and compared `Key[12]` were **removed**
+from the acceptance test, leaving a short and honest `frontier` plus
+explicit strict `make check-four-backend-tinyaes-accept` gate. The
+vendor source/harness hash checks remain frozen, and neither diagnostic
+derivatives nor cached output can count as acceptance.
+
+Temporary GitHub focused CI edits have again been restored
+**byte-identical** to main workflow SHA
+`cd9a880a5a707f28b5ea63c364c1844ab35e1c56`.
+The PR stays Draft pending branch/code review and next real-project
+promotion in the original x86 order: cJSON, then zlib, Lua, SQLite,
+TinyCC, BusyBox and eventually Linux.
