@@ -1,4 +1,5 @@
 #include "target/aarch64/codegen.h"
+#include "target/backend_core_usage.h"
 
 #include <inttypes.h>
 #include <stdint.h>
@@ -1613,6 +1614,9 @@ bool minic_aarch64_write_c0_program_with_core_functions(
             }
         }
     }
+    if (census)
+        minic_backend_core_usage_dump("aarch64", program, target,
+                                      core_functions, core_function_count);
     if (census)
         (void)fprintf(stderr,
                       "MINIC_BACKEND_CENSUS arch=aarch64 scanned=%zu rejected=%zu\n",
