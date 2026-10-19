@@ -418,6 +418,10 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                    !minic_type_equal(fn->values[term->return_value].type,
                                      fn->return_type))) return false;
             break;
+        case MINIC_CORE_TERMINATOR_UNREACHABLE:
+            /* Verified Core unreachable terminator is a semantic no-return
+             * endpoint, not an implicit branch into the next basic block. */
+            break;
         case MINIC_CORE_TERMINATOR_BRANCH:
             if (term->branch_target >= fn->block_count) return false;
             break;
@@ -1220,6 +1224,10 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                 (has_direct_calls && !emit_sp_mem(out, "ld.d", "$ra", save_offset)) ||
                 (!emit_sp_adjust(out, frame, true)) ||
                 fputs("  ret\n", out) == EOF) return false;
+            break;
+        case MINIC_CORE_TERMINATOR_UNREACHABLE:
+            /* Preserve Core CFG semantics: trap instead of falling through. */
+            if (fputs("  break 0\n", out) == EOF) return false;
             break;
         case MINIC_CORE_TERMINATOR_BRANCH:
             if (fprintf(out, "  b .Lmini_loong_f%zu_b%u\n",
