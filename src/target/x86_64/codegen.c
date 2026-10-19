@@ -83,6 +83,64 @@ static bool x86_storage_width(const MinicC0Program *program,
     return x86_scalar_width(program, target, type, bytes, sign);
 }
 
+/* SysV AMD64: a non-packed, naturally aligned record consisting solely of
+ * integer/pointer fields fits one INTEGER eightbyte when its storage is at
+ * most eight bytes. This includes struct in_addr (4B) and GNU transparent
+ * sockaddr pointer unions (8B). No SSE, nested, packed or bitfield cases
+ * are claimed here; do not guess their ABI classification. We currently
+ * materialize only exact 1/2/4/8-byte loads to avoid overreading objects. */
+static bool x86_one_gp_record(const MinicC0Program *program,
+                              const MinicTargetInfo *target, MinicType type,
+                              size_t *record_bytes) {
+    const MinicRecord *rec;
+    size_t size, align, i;
+    if (program == NULL || target == NULL || record_bytes == NULL ||
+        !minic_type_is_record(type)) return false;
+    rec = minic_c0_program_record(program, type.record_id);
+    if (rec == NULL || !rec->is_complete || rec->field_count == 0U ||
+        rec->is_packed || rec->pack_alignment != 0U ||
+        !minic_data_layout_type(target->data_layout, program, type, &size, &align) ||
+        (size != 1U && size != 2U && size != 4U && size != 8U) ||
+        align == 0U || align > 8U) return false;
+    for (i = 0U; i < rec->field_count; ++i) {
+        const MinicRecordField *field = minic_c0_record_field(rec, i);
+        size_t bytes, field_align, offset;
+        if (field == NULL || field->is_packed || field->is_array ||
+            field->is_bit_field || field->is_flexible_array ||
+            field->is_zero_length_array || field->element_count != 1U ||
+            (!minic_type_is_pointer(field->type) &&
+             !minic_type_is_integer(field->type)) ||
+            !minic_data_layout_type(target->data_layout, program, field->type,
+                                    &bytes, &field_align) ||
+            !minic_data_layout_record_field_offset(target->data_layout, program,
+                                                    rec, i, &offset) ||
+            field_align == 0U || offset % field_align != 0U ||
+            offset > size || bytes > size - offset) return false;
+    }
+    *record_bytes = size;
+    return true;
+}
+
+static bool x86_one_gp_load(FILE *out, size_t bytes) {
+    switch (bytes) {
+    case 1U: return fprintf(out, "  movzbq 0(%%r11), %%rax\n") >= 0;
+    case 2U: return fprintf(out, "  movzwq 0(%%r11), %%rax\n") >= 0;
+    case 4U: return fprintf(out, "  movl 0(%%r11), %%eax\n") >= 0;
+    case 8U: return fprintf(out, "  movq 0(%%r11), %%rax\n") >= 0;
+    default: return false;
+    }
+}
+
+static bool x86_one_gp_store(FILE *out, size_t bytes) {
+    switch (bytes) {
+    case 1U: return fprintf(out, "  movb %%al, 0(%%r10)\n") >= 0;
+    case 2U: return fprintf(out, "  movw %%ax, 0(%%r10)\n") >= 0;
+    case 4U: return fprintf(out, "  movl %%eax, 0(%%r10)\n") >= 0;
+    case 8U: return fprintf(out, "  movq %%rax, 0(%%r10)\n") >= 0;
+    default: return false;
+    }
+}
+
 /* SQLite's Token is a two-eightbyte INTEGER-class SysV aggregate:
  * one pointer at byte 0, one 32-bit integer at byte 8, size 16.
  * Deliberately do not claim general record ABI classification here.
@@ -123,7 +181,7 @@ static bool x86_incoming_cursor(const MinicC0Program *program,
                                 const MinicTargetInfo *target,
                                 const MinicCoreFunction *fn, size_t position,
                                 size_t *gpr, size_t *fp, size_t *stack) {
-    size_t i, width;
+    size_t i, width, one_gp_bytes;
     bool signedness;
     if (fn == NULL || position >= fn->parameter_count ||
         gpr == NULL || fp == NULL || stack == NULL) return false;
@@ -136,9 +194,14 @@ static bool x86_incoming_cursor(const MinicC0Program *program,
         } else if (minic_type_is_long_double(t)) {
             *stack += 2U; /* SysV: x87 arguments use 16-byte stack slots. */
         } else if (minic_type_is_record(t)) {
-            if (!x86_two_gp_record(program, target, t)) return false;
-            if (*gpr <= 4U) *gpr += 2U;
-            else *stack += 2U;
+            if (x86_one_gp_record(program, target, t, &one_gp_bytes)) {
+                if (*gpr < 6U) ++*gpr;
+                else ++*stack;
+            } else {
+                if (!x86_two_gp_record(program, target, t)) return false;
+                if (*gpr <= 4U) *gpr += 2U;
+                else *stack += 2U;
+            }
         } else {
             if (!x86_scalar_width(program, target, t, &width, &signedness))
                 return false;
