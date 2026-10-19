@@ -203,10 +203,10 @@ for sym in ("sbox", "vector_key", "main"):
     ix = next((i for i, x in enumerate(a) if x.strip() == sym + ":"), -1)
     print("MINIC_GLOBAL_SYMBOL", sym, "line", ix + 1, flush=True)
     if ix >= 0:
-        amount = 18 if sym != "main" else 190
+        amount = 18 if sym != "main" else 370
         for i in range(ix, min(ix+amount, len(a))):
             line = a[i]
-            if sym != "main" or ("got:" in line or ":got_lo12:" in line or i < ix+20):
+            if sym != "main" or i < ix + 105 or ("got:" in line or ":got_lo12:" in line):
                 print("ASM", i+1, line, flush=True)
 PY
                     aarch64-linux-gnu-readelf -W -s "$work/$target.$probe.minic.elf" | grep -E '(sbox|vector_key)' >&2 || true
