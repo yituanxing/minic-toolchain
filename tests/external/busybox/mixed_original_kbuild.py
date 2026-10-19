@@ -116,9 +116,23 @@ def main():
     if not gcc_busybox.is_file():
         print("BUSYBOX_MIXED_COMPLEX=BLOCKED stage=original-GNU-busybox-missing")
         return 1
-    original = report / "gcc-reference-busybox"
+    # BusyBox dispatches on argv[0]: the executable MUST be named "busybox"
+    # for explicit 'busybox sed ...' semantics. The first run showed that
+    # naming this reference 'gcc-reference-busybox' falsely made all eleven
+    # GNU applets return 127 while mixed correctly executed the applets.
+    original = report / "gcc-reference" / "busybox"
+    original.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(gcc_busybox, original)
     oracle = run_cases(original, report)
+    expected_basic = {"sed-n": b"beta\n", "awk-sum": b"42\n",
+                      "grep-F": b"beta\nalpha beta\n",
+                      "sort": b"alpha\nalpha beta\nbeta\n"}
+    if any(oracle.get(key) != (0, output, b"")
+           for key, output in expected_basic.items()) or any(
+               status != 0 for status, _, _ in oracle.values()):
+        print("BUSYBOX_MIXED_COMPLEX_GNU_REFERENCE=FAIL reason=applet-dispatch"
+              " verdicts=%r" % oracle, flush=True)
+        return 1
     print("BUSYBOX_MIXED_COMPLEX_GNU_REFERENCE=PASS "
           "original_full_executable_sha256=%s tests=%d" %
           (sha256(original), len(oracle)), flush=True)
@@ -162,6 +176,9 @@ def main():
             err = stderr.read_text(encoding="utf-8", errors="replace")
             print("BUSYBOX_MIXED_COMPLEX_APPLET=BLOCKED applet=%s stage=GNU-Kbuild-link "
                   "exit=%d detail=%r" % (name, code, err[-850:]), flush=True)
+        elif sha256(path) != sha256(mini):
+            print("BUSYBOX_MIXED_COMPLEX_APPLET=BLOCKED applet=%s "
+                  "stage=Kbuild-recompiled-MiniC-object" % name, flush=True)
         elif sha256(gcc_busybox) == sha256(original):
             print("BUSYBOX_MIXED_COMPLEX_APPLET=BLOCKED applet=%s stage=linked-binary-unchanged" %
                   name, flush=True)
@@ -187,12 +204,22 @@ def main():
         invalidate_composite(root, path)
         restore_code, _, restore_err = build_with_original_kbuild(
             root, report, args.proxy, args.host_cc, "restore-" + name)
-        if restore_code != 0 or not gcc_busybox.is_file() or sha256(gcc_busybox) != sha256(original):
-            print("BUSYBOX_MIXED_COMPLEX=FAIL stage=unable-to-restore-GNU-oracle "
+        if restore_code != 0 or not gcc_busybox.is_file() or sha256(path) != sha256(baseline_object):
+            print("BUSYBOX_MIXED_COMPLEX=FAIL stage=unable-to-restore-GNU-object "
                   "applet=%s exit=%d detail=%r" %
                   (name, restore_code, restore_err.read_text(errors="replace")[-500:]),
                   flush=True)
             return 1
+        restored = run_cases(gcc_busybox, report)
+        if restored != oracle:
+            differences = [key for key, value in oracle.items() if restored.get(key) != value]
+            print("BUSYBOX_MIXED_COMPLEX=FAIL stage=restored-GNU-runtime-not-byte-exact "
+                  "applet=%s differing=%s" % (name, differences), flush=True)
+            return 1
+        if sha256(gcc_busybox) != sha256(original):
+            print("BUSYBOX_MIXED_COMPLEX_GNU_REBUILD_NOTE applet=%s "
+                  "binary_sha_changes_on_relink=1 object_and_runtime_verified=1" %
+                  name, flush=True)
     print("BUSYBOX_MIXED_COMPLEX_FRONTIER=DISCOVERY candidates=%d mini_objects=%d "
           "GNU_links=%d runtime_exact=%d fixtures_per_applet=%d "
           "original_GNU_oracle_sha256=%s" %
