@@ -84,7 +84,8 @@ jobs:
               four_only=true
               [[ -s "$paths" ]] || four_only=false
               while IFS= read -r changed; do
-                if [[ "$changed" == .github/workflows/linux-runtime-gcc-baseline.yml ]]; then
+                if [[ "$changed" == .github/workflows/linux-runtime-gcc-baseline.yml ||
+                      "$changed" == .github/workflows/toolchain-focused-regressions-v1.yml ]]; then
                   linux_yaml=true
                 fi
                 case "$changed" in
@@ -141,7 +142,9 @@ jobs:
             /tmp/minic-actionlint-v1.7.12.tar.gz | sha256sum --check --status
           mkdir -p /tmp/minic-actionlint-bin
           tar -xzf /tmp/minic-actionlint-v1.7.12.tar.gz -C /tmp/minic-actionlint-bin actionlint
-          /tmp/minic-actionlint-bin/actionlint -shellcheck= -pyflakes= .github/workflows/linux-runtime-gcc-baseline.yml
+          /tmp/minic-actionlint-bin/actionlint -shellcheck= -pyflakes= \
+            .github/workflows/linux-runtime-gcc-baseline.yml \
+            .github/workflows/toolchain-focused-regressions-v1.yml
 
       - name: Install union of RV64, archive, static and dynamic linker oracle prerequisites
         if: steps.owners.outputs.mode != 'four-backend'
