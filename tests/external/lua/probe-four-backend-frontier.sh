@@ -154,7 +154,77 @@ for target in aarch64 loongarch64; do
         echo "FOUR_BACKEND_LUA=FAIL target=$target stage=luac_link" >&2
         failed=$((failed+1)); continue
     fi
-    echo "FOUR_BACKEND_LUA=PASS target=$target original=5.5.0 TUs=34 lua=GNU_QEMU_byte_exact luac=MiniC_objects"
+    # A successful luac link does NOT establish a functioning compiler.
+    # Compile the same original source with GNU for a byte-exact baseline,
+    # then verify that the MiniC-owned luac creates identical bytecode
+    # and that both bytecode files execute through the MiniC interpreter.
+    set --
+    for file in $sources; do
+        [ "$file" = lua.c ] && continue
+        set -- "$@" "$src/$file"
+    done
+    if ! "$gcc" -O0 -std=c99 -static -DLUA_USE_LINUX -I"$src" \
+            "$@" -lm -ldl -o "$work/$target/luac-gnu" \
+            >"$work/$target/luac-gnu-build.out" \
+            2>"$work/$target/luac-gnu-build.err"; then
+        echo "FOUR_BACKEND_LUA_ORACLE=FAIL target=$target stage=GNU_luac_link" >&2
+        sed -n '1,35p' "$work/$target/luac-gnu-build.err" >&2
+        exit 1
+    fi
+    cat >"$work/$target/pressure.lua" <<'LUA'
+local record = setmetatable({x=13}, {
+    __index=function(_,k) if k == "y" then return 29 end end
+})
+local function f(n) return n + record.y end
+assert(f(record.x) == 42)
+local t = {10,3,2,6}
+table.sort(t)
+assert(table.concat(t, ",") == "2,3,6,10")
+local co = coroutine.create(function()
+    coroutine.yield(21)
+    return 42
+end)
+local ok,v = coroutine.resume(co)
+assert(ok and v == 21)
+ok,v = coroutine.resume(co)
+assert(ok and v == 42)
+print("LUAC_CROSS", f(13), t[1])
+LUA
+    if ! timeout 60s "$qemu" "$work/$target/luac-gnu" \
+            -o "$work/$target/oracle.luac" "$work/$target/pressure.lua" \
+            >"$work/$target/luac-gnu.out" 2>"$work/$target/luac-gnu.err"; then
+        echo "FOUR_BACKEND_LUA_ORACLE=FAIL target=$target stage=GNU_luac_run" >&2
+        sed -n '1,25p' "$work/$target/luac-gnu.err" >&2
+        exit 1
+    fi
+    if ! timeout 60s "$qemu" "$work/$target/luac-minic" \
+            -o "$work/$target/mini.luac" "$work/$target/pressure.lua" \
+            >"$work/$target/luac-mini.out" 2>"$work/$target/luac-mini.err" ||
+       ! cmp -s "$work/$target/oracle.luac" "$work/$target/mini.luac"; then
+        echo "FOUR_BACKEND_LUA=FAIL target=$target stage=luac_bytecode_differential" >&2
+        sed -n '1,35p' "$work/$target/luac-mini.err" >&2
+        failed=$((failed+1)); continue
+    fi
+    if ! timeout 60s "$qemu" "$work/$target/lua-gnu" \
+            "$work/$target/oracle.luac" \
+            >"$work/$target/oracle-bytecode.out" \
+            2>"$work/$target/oracle-bytecode.err"; then
+        echo "FOUR_BACKEND_LUA_ORACLE=FAIL target=$target stage=GNU_bytecode_run" >&2
+        exit 1
+    fi
+    if ! timeout 60s "$qemu" "$work/$target/lua-minic" \
+            "$work/$target/mini.luac" \
+            >"$work/$target/mini-bytecode.out" \
+            2>"$work/$target/mini-bytecode.err" ||
+       ! cmp -s "$work/$target/oracle-bytecode.out" "$work/$target/mini-bytecode.out" ||
+       ! cmp -s "$work/$target/oracle-bytecode.err" "$work/$target/mini-bytecode.err"; then
+        echo "FOUR_BACKEND_LUA=FAIL target=$target stage=luac_runtime_differential" >&2
+        diff -u "$work/$target/oracle-bytecode.out" "$work/$target/mini-bytecode.out" || true
+        sed -n '1,35p' "$work/$target/mini-bytecode.err" >&2
+        failed=$((failed+1)); continue
+    fi
+    echo "FOUR_BACKEND_LUA_LUAC=PASS target=$target original=luac.c MiniC_objects=33 GNU_QEMU_byte_exact=1 runtime=PASS"
+    echo "FOUR_BACKEND_LUA=PASS target=$target original=5.5.0 TUs=34 lua=GNU_QEMU_byte_exact luac=GNU_QEMU_byte_exact"
     passed=$((passed+1))
 done
 echo "FOUR_BACKEND_LUA_FRONTIER=COMPLETE architectures=2 verified_runtime=$passed blocked=$blocked failed=$failed"
