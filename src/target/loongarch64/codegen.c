@@ -169,7 +169,7 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                           bool function_sections) {
     const char *name = minic_c0_function_symbol_name(decl);
     const MinicCoreBlock *block;
-    size_t frame, i, values_bytes, object_end, save_offset;
+    size_t frame, i, object_end, save_offset;
     bool has_direct_calls = false;
     if (name == NULL || name[0] == '\0' ||
         !minic_core_function_verify(fn) ||
@@ -257,7 +257,6 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                 return false;
         }
     }
-    values_bytes = fn->value_count * 8U;
     save_offset = (object_end + 7U) & ~(size_t)7U;
     if (save_offset > 8192U - (has_direct_calls ? 8U : 0U))
         return false;
