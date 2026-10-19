@@ -3136,9 +3136,19 @@ int minic_compile_preprocessed_file_for_target(const char *input_path,
     }
     if (target_info == NULL ||
         (target_info->architecture != MINIC_TARGET_ARCH_RISCV64 &&
-         target_info->architecture != MINIC_TARGET_ARCH_X86_64) ||
+         target_info->architecture != MINIC_TARGET_ARCH_X86_64 &&
+         target_info->architecture != MINIC_TARGET_ARCH_AARCH64 &&
+         target_info->architecture != MINIC_TARGET_ARCH_LOONGARCH64) ||
         target_info->data_layout == NULL || target_info->integer_model == NULL) {
         minic_set_diagnostic(diagnostic, input_path, 1U, 1U, "invalid target configuration");
+        return 1;
+    }
+    /* M0 registers source-language target identities only. Never dispatch
+     * a not-yet-implemented ISA to the existing RV64/x86 code generators. */
+    if (target_info->architecture == MINIC_TARGET_ARCH_AARCH64 ||
+        target_info->architecture == MINIC_TARGET_ARCH_LOONGARCH64) {
+        minic_set_diagnostic(diagnostic, input_path, 1U, 1U,
+                             "target backend not yet implemented");
         return 1;
     }
     /* A stack-reused Program pointer does not identify a new TU. */
