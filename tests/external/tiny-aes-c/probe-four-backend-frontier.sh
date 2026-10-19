@@ -15,6 +15,7 @@ work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT HUP INT TERM
 passed=0
 blocked=0
+failed=0
 for target in aarch64 loongarch64; do
     case "$target" in
         aarch64) gcc=aarch64-linux-gnu-gcc; qemu=qemu-aarch64 ;;
@@ -208,7 +209,73 @@ for target in aarch64 loongarch64; do
                 fi
             done
         fi
-        exit 1
+
+            # Original runtime has proven byte[0..15] but failed byte[16].
+            # Instrument ONLY a temporary copy of frozen AES for a
+            # differential inside KeyExpansion; original harness/vendor C
+            # above remain pristine and are still the sole acceptance gate.
+            python3 - "$vendor/aes.c" "$work/aes.c" <<'PY'
+import pathlib, sys
+src = pathlib.Path(sys.argv[1]).read_text()
+def replace_one(old, new):
+    global src
+    if src.count(old) != 1:
+        raise SystemExit("UNEXPECTED_AES_TRACE_SOURCE " + repr(old))
+    src = src.replace(old, new, 1)
+replace_one("static void KeyExpansion(uint8_t* RoundKey, const uint8_t* Key)",
+            "static unsigned char minic_trace[8];\n"
+            "static void KeyExpansion(uint8_t* RoundKey, const uint8_t* Key)")
+replace_one("    if (i % Nk == 0)",
+            "    if (i == Nk) minic_trace[0] = tempa[0];\n"
+            "    if (i % Nk == 0)")
+replace_one("      // SubWord() is a function",
+            "      if (i == Nk) minic_trace[1] = tempa[0];\n"
+            "      // SubWord() is a function")
+replace_one("      tempa[3] = getSBoxValue(tempa[3]);",
+            "      tempa[3] = getSBoxValue(tempa[3]);\n"
+            "      if (i == Nk) minic_trace[2] = tempa[0];")
+replace_one("      tempa[0] = tempa[0] ^ Rcon[i/Nk];",
+            "      tempa[0] = tempa[0] ^ Rcon[i/Nk];\n"
+            "      if (i == Nk) minic_trace[3] = tempa[0];")
+replace_one("    j = i * 4; k=(i - Nk) * 4;",
+            "    j = i * 4; k=(i - Nk) * 4;\n"
+            "    if (i == Nk) { minic_trace[5] = j; minic_trace[6] = k; }")
+replace_one("    RoundKey[j + 0] = RoundKey[k + 0] ^ tempa[0];",
+            "    RoundKey[j + 0] = RoundKey[k + 0] ^ tempa[0];\n"
+            "    if (i == Nk) minic_trace[4] = RoundKey[j + 0];")
+pathlib.Path(sys.argv[2]).write_text(src)
+PY
+            for stage in 0 1 2 3 4 5 6; do
+                awk -v k="$stage" '
+                    { print }
+                    /AES_init_ctx\(context_pointer,/ {
+                        print "    return (int)minic_trace[" k "];"
+                    }
+                ' "$fixture" >"$work/$target.trace$stage.c"
+                "$gcc" -std=c11 -O0 -static -I"$vendor" \
+                    -DECB=1 -DCBC=0 -DCTR=0 -DMULTIPLY_AS_A_FUNCTION=1 \
+                    "$work/$target.trace$stage.c" -o "$work/$target.trace$stage.gnu.elf"
+                "$gcc" -E -P -nostdinc -x c -I"$headers" -I"$vendor" \
+                    -DECB=1 -DCBC=0 -DCTR=0 -DMULTIPLY_AS_A_FUNCTION=1 \
+                    "$work/$target.trace$stage.c" -o "$work/$target.trace$stage.i"
+                "$MINIC_CC" --target="$target-linux" -S \
+                    "$work/$target.trace$stage.i" -o "$work/$target.trace$stage.s" \
+                    2>"$work/$target.trace$stage.compile.err"
+                "$gcc" -c "$work/$target.trace$stage.s" \
+                    -o "$work/$target.trace$stage.o"
+                "$gcc" -static "$work/$target.trace$stage.o" \
+                    -o "$work/$target.trace$stage.minic.elf"
+                set +e
+                timeout 15s "$qemu" "$work/$target.trace$stage.gnu.elf" >/dev/null 2>&1
+                g=$?
+                timeout 15s "$qemu" "$work/$target.trace$stage.minic.elf" >/dev/null 2>&1
+                m=$?
+                set -e
+                echo "FOUR_BACKEND_AES_TRACE target=$target stage=$stage GNU_byte=$g MiniC_byte=$m derived_source_only=1" >&2
+            done
+        fi
+        failed=$((failed + 1))
+        continue
     fi
     if ! cmp -s "$work/$target.gnu.out" "$work/$target.minic.out" ||
        ! cmp -s "$work/$target.gnu.err" "$work/$target.minic.err"; then
@@ -219,3 +286,7 @@ for target in aarch64 loongarch64; do
     passed=$((passed + 1))
 done
 echo "FOUR_BACKEND_TINYAES_FRONTIER=COMPLETE architectures=2 verified_runtime=$passed blocked=$blocked"
+if [ "$failed" -ne 0 ]; then
+    echo "FOUR_BACKEND_TINYAES_RUNTIME=FAIL failed_targets=$failed" >&2
+    exit 1
+fi
