@@ -116,7 +116,7 @@ for target in aarch64 loongarch64; do
             # diagnostic and never substitutes for the original fixture:
             # compare S-box, round constant and the *actual* first
             # generated round-key byte under both toolchains/QEMU.
-            for probe in pre_key0 pre_key12 pre_key15 pre_sbox0 pre_sbox postcopy_key0 postkey0 key17; do
+            for probe in early_key0 early_key12 pre_key0 pre_key12 pre_key15 pre_sbox0 postcopy_key0 key17; do
                 case "$probe" in
                     early_constant) expression='77'; position=before_main_start ;;
                     post_context_constant) expression='77'; position=post_context ;;
@@ -125,6 +125,8 @@ for target in aarch64 loongarch64; do
                     post_copy_constant) expression='77'; position=post_copy ;;
                     pre_constant) expression='77'; position=before ;;
                     post_constant) expression='77'; position=after ;;
+                    early_key0) expression='vector_key[0]'; position=before_main_start ;;
+                    early_key12) expression='vector_key[12]'; position=before_main_start ;;
                     pre_key0) expression='vector_key[0]'; position=before ;;
                     pre_key12) expression='vector_key[12]'; position=before ;;
                     pre_key15) expression='vector_key[15]'; position=before ;;
@@ -206,7 +208,7 @@ for sym in ("sbox", "vector_key", "main"):
         amount = 18 if sym != "main" else 370
         for i in range(ix, min(ix+amount, len(a))):
             line = a[i]
-            if sym != "main" or i < ix + 105 or ("got:" in line or ":got_lo12:" in line):
+            if sym != "main" or i < ix + 220 or ("got:" in line or ":got_lo12:" in line):
                 print("ASM", i+1, line, flush=True)
 PY
                     aarch64-linux-gnu-readelf -W -s "$work/$target.$probe.minic.elf" | grep -E '(sbox|vector_key)' >&2 || true
