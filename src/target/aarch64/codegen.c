@@ -583,6 +583,28 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
             }
             continue;
         }
+        case MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_LEFT:
+        case MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_RIGHT: {
+            const MinicCoreValueId lhs = ins->value.binary.left;
+            const MinicCoreValueId rhs = ins->value.binary.right;
+            size_t lw, rw;
+            bool ls, rs;
+            if (lhs >= fn->value_count || rhs >= fn->value_count ||
+                !minic_type_equal(fn->values[lhs].type, ins->type) ||
+                !small_integer_width(program, target, fn->values[lhs].type,
+                                     &lw, &ls) ||
+                !small_integer_width(program, target, fn->values[rhs].type,
+                                     &rw, &rs) ||
+                minic_type_is_bool_integer(ins->type) ||
+                fprintf(out, "  ldr w9, [sp, #%zu]\n", (size_t)lhs * 8U) < 0 ||
+                fprintf(out, "  ldr w10, [sp, #%zu]\n", (size_t)rhs * 8U) < 0 ||
+                fputs(ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_LEFT
+                    ? "  lsl w9, w9, w10\n"
+                    : (ls ? "  asr w9, w9, w10\n" : "  lsr w9, w9, w10\n"), out) == EOF ||
+                !emit_integer_normalize(out, lw, ls)) return false;
+            (void)rs;
+            break;
+        }
         case MINIC_CORE_INSTRUCTION_INTEGER_NEGATE: {
             const MinicCoreValueId operand = ins->value.operand;
             size_t width;
