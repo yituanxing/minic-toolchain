@@ -865,12 +865,13 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                     ins->type, fn->values[source].type)) return false;
             src_pointer = minic_type_is_pointer(fn->values[source].type);
             if (!src_pointer &&
-                !small_integer_width(program, target,
-                                     fn->values[source].type,
+                !scalar_integer_width(program, target,
+                                      fn->values[source].type,
                                      &src_width, &src_signed)) return false;
-            if (!emit_sp_mem(out, src_pointer ? "ld.d" : "ld.w", "$t0",
+            if (!emit_sp_mem(out, (src_pointer || src_width == 8U)
+                                 ? "ld.d" : "ld.w", "$t0",
                              (size_t)source * 8U)) return false;
-            if (!src_pointer &&
+            if (!src_pointer && src_width != 8U &&
                 (!emit_integer_normalize(out, src_width, src_signed) ||
                  (src_signed
                     ? fputs("  slli.w $t0, $t0, 0\n", out) == EOF
