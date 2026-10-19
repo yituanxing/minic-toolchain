@@ -741,7 +741,7 @@ check-x86_64-busybox-12: $(MINIC_CC_BINARY)
 # CC interception. GNU still builds every Kbuild object. The MiniC shadow path
 # records all attempted original C owners, including hard failures.
 # Separate from the default 963-symbol discovery scan: keep all supported
-# software enabled, disable only four host-incompatible configuration switches
+# software enabled, disable only six host-incompatible configuration switches
 # and require a real original-GNU BusyBox link + six actual applet executions.
 # MiniC shadows Kbuild C owners but does NOT claim to link them in this gate.
 # Real upstream 957-option GNU BusyBox baseline, then five independently
