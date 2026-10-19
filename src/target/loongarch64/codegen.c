@@ -564,6 +564,17 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                 !emit_sp_mem(out, "st.d", "$t0", offset))
                 return false;
             continue;
+        case MINIC_CORE_INSTRUCTION_FUNCTION_ADDRESS: {
+            const MinicCoreFunctionSymbolId id = ins->value.function_symbol_id;
+            const char *symbol;
+            if (id >= fn->function_symbol_count ||
+                !minic_type_is_pointer(ins->type)) return false;
+            symbol = fn->function_symbols[id].name;
+            if (symbol == NULL || symbol[0] == '\0' ||
+                fprintf(out, "  la.global $t0, %s\n", symbol) < 0 ||
+                !emit_sp_mem(out, "st.d", "$t0", offset)) return false;
+            continue;
+        }
         case MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS: {
             size_t object_offset;
             if (ins->value.object_id >= fn->object_count ||
@@ -823,6 +834,17 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
             const MinicCoreValueId rhs = ins->value.binary.right;
             size_t lw, rw;
             bool ls, rs;
+            if (ins->kind == MINIC_CORE_INSTRUCTION_SCALAR_EQUAL &&
+                lhs < fn->value_count && rhs < fn->value_count &&
+                minic_type_is_pointer(fn->values[lhs].type) &&
+                minic_type_is_pointer(fn->values[rhs].type)) {
+                if (!emit_sp_mem(out, "ld.d", "$t0", (size_t)lhs * 8U) ||
+                    !emit_sp_mem(out, "ld.d", "$t1", (size_t)rhs * 8U) ||
+                    fputs("  xor $t0, $t0, $t1\n"
+                          "  sltui $t0, $t0, 1\n", out) == EOF)
+                    return false;
+                break;
+            }
             if (lhs >= fn->value_count || rhs >= fn->value_count ||
                 !small_integer_width(program, target, fn->values[lhs].type, &lw, &ls) ||
                 !small_integer_width(program, target, fn->values[rhs].type, &rw, &rs) ||
@@ -838,10 +860,15 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
         }
         case MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO: {
             const MinicCoreValueId v = ins->value.operand;
-            if (v >= fn->value_count ||
-                !valid_int_or_bool(fn->values[v].type) ||
-                !emit_sp_mem(out, "ld.w", "$t0", (size_t)v * 8U) ||
-                fputs("  sltui $t0, $t0, 1\n", out) == EOF)
+            bool pointer;
+            if (v >= fn->value_count) return false;
+            pointer = minic_type_is_pointer(fn->values[v].type);
+            if (!pointer && !valid_int_or_bool(fn->values[v].type))
+                return false;
+            if (!emit_sp_mem(out, pointer ? "ld.d" : "ld.w", "$t0",
+                             (size_t)v * 8U) ||
+                fputs(pointer ? "  sltui $t0, $t0, 1\n"
+                              : "  sltui $t0, $t0, 1\n", out) == EOF)
                 return false;
             break;
         }
