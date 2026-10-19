@@ -102,6 +102,95 @@ static bool emit_integer_normalize(FILE *out, size_t width, bool sign) {
  * size ordinary integer globals and flat arrays, but keep ELF emission
  * in the ISA backend. Unsupported aggregate/relocation cases must fail
  * closed, rather than silently manufacture incorrect object bytes. */
+/* cJSON's first original file-scope globals are a flat error record
+ * {null pointer, zero size_t} and a function-pointer hooks record.
+ * Reuse the validated shared target DataLayout for *byte offsets* and
+ * function/object relocation addends. Only bounded flat scalar records
+ * belong here; recursive records/unions/bitfields fail closed. */
+static bool emit_record_relocation(FILE *out, const MinicC0Program *program,
+                                   const MinicTargetInfo *target,
+                                   const MinicGlobalRelocation *reloc,
+                                   size_t width) {
+    const char *name = NULL;
+    int64_t addend;
+    if (reloc == NULL || width != 8U ||
+        target->data_layout->pointer_size != 8U) return false;
+    if (reloc->target_kind == MINIC_GLOBAL_RELOCATION_OBJECT) {
+        const MinicGlobalObject *obj =
+            minic_c0_program_global_object(program, reloc->target_id);
+        if (obj != NULL) name = obj->name;
+    } else if (reloc->target_kind == MINIC_GLOBAL_RELOCATION_FUNCTION) {
+        const MinicFunction *decl =
+            minic_c0_program_function(program, reloc->target_id);
+        if (decl != NULL) name = minic_c0_function_symbol_name(decl);
+    }
+    if (name == NULL || name[0] == '\0' ||
+        !minic_data_layout_global_relocation_target_addend(
+            target->data_layout, program, reloc, &addend)) return false;
+    if (addend == 0)
+        return fprintf(out, "  .8byte %s\n", name) >= 0;
+    return fprintf(out, "  .8byte %s%+" PRId64 "\n", name, addend) >= 0;
+}
+
+static bool emit_flat_record_global(FILE *out,
+                                    const MinicC0Program *program,
+                                    const MinicTargetInfo *target,
+                                    const MinicGlobalObject *obj,
+                                    size_t storage_size) {
+    const MinicRecord *record =
+        minic_c0_program_record(program, obj->type.record_id);
+    size_t i, cursor = 0U, reloc_index = 0U;
+    if (record == NULL || !record->is_complete || record->is_union ||
+        record->field_count == 0U ||
+        record->field_count != obj->initializer_count ||
+        obj->initializer_values == NULL) return false;
+    for (i = 0U; i < record->field_count; ++i) {
+        const MinicRecordField *field = minic_c0_record_field(record, i);
+        const MinicGlobalRelocation *reloc =
+            reloc_index < obj->relocation_count
+                ? &obj->relocations[reloc_index] : NULL;
+        size_t offset, width, alignment;
+        const char *directive;
+        uint64_t bits;
+        if (field == NULL || field->is_bit_field ||
+            field->is_flexible_array || field->element_count != 1U ||
+            (!minic_type_is_integer(field->type) &&
+             !minic_type_is_pointer(field->type)) ||
+            !minic_data_layout_type(target->data_layout, program,
+                                    field->type, &width, &alignment) ||
+            !minic_data_layout_record_field_offset(
+                target->data_layout, program, record, i, &offset) ||
+            (width != 1U && width != 2U && width != 4U && width != 8U) ||
+            offset < cursor || offset > storage_size ||
+            width > storage_size - offset ||
+            fprintf(out, "  .zero %zu\n", offset - cursor) < 0)
+            return false;
+        (void)alignment;
+        if (reloc != NULL &&
+            (reloc->location_kind == MINIC_GLOBAL_RELOCATION_LOCATION_RECORD_FIELD ||
+             reloc->location_kind == MINIC_GLOBAL_RELOCATION_LOCATION_AGGREGATE_SCALAR) &&
+            reloc->location_index == i) {
+            if (!minic_type_is_pointer(field->type) ||
+                obj->initializer_values[i] != 0U ||
+                !emit_record_relocation(out, program, target, reloc, width))
+                return false;
+            ++reloc_index;
+        } else {
+            bits = obj->initializer_values[i];
+            if (width < 8U)
+                bits &= (UINT64_C(1) << (width * 8U)) - UINT64_C(1);
+            directive = width == 1U ? ".byte" : width == 2U ? ".2byte" :
+                        width == 4U ? ".4byte" : ".8byte";
+            if (fprintf(out, "  %s %" PRIu64 "\n", directive, bits) < 0)
+                return false;
+        }
+        cursor = offset + width;
+    }
+    return reloc_index == obj->relocation_count &&
+           cursor <= storage_size &&
+           fprintf(out, "  .zero %zu\n", storage_size - cursor) >= 0;
+}
+
 static bool emit_simple_global(FILE *out, const MinicC0Program *program,
                                const MinicTargetInfo *target,
                                const MinicGlobalObject *obj) {
@@ -112,10 +201,26 @@ static bool emit_simple_global(FILE *out, const MinicC0Program *program,
         obj->is_weak || obj->visibility != MINIC_SYMBOL_VISIBILITY_DEFAULT ||
         obj->section_name != NULL ||
         obj->alias_target != MINIC_GLOBAL_OBJECT_INVALID ||
-        obj->relocation_count != 0U || obj->union_selection_count != 0U ||
+        obj->union_selection_count != 0U ||
         obj->flexible_array_initializer_count != 0U ||
         !minic_data_layout_global_object(target->data_layout, program, obj,
                                          &storage_size, &align)) return false;
+    if (minic_type_is_record(obj->type)) {
+        if (fprintf(out, "%s\n", obj->is_read_only
+                        ? (obj->relocation_count != 0U
+                           ? ".section .data.rel.ro" : ".section .rodata")
+                        : ".data") < 0 ||
+            (!obj->is_internal &&
+             fprintf(out, ".globl %s\n", obj->name) < 0) ||
+            fprintf(out, "  .balign %zu\n.type %s,@object\n%s:\n",
+                    align, obj->name, obj->name) < 0 ||
+            !emit_flat_record_global(out, program, target, obj,
+                                     storage_size) ||
+            fprintf(out, ".size %s,%zu\n", obj->name, storage_size) < 0)
+            return false;
+        return true;
+    }
+    if (obj->relocation_count != 0U) return false;
     scalar = obj->type;
     while (minic_type_is_array(scalar)) {
         const MinicArrayType *array =
