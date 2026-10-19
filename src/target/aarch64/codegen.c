@@ -50,15 +50,36 @@ static bool small_integer_width(const MinicC0Program *program,
     return *width == 1U || *width == 2U || *width == 4U;
 }
 
-/* GNU AAPCS64/lp64d integer parameter slots are one register wide
- * for ordinary 1/2/4-byte integer types; reject wider widths rather
- * than silently truncate arguments in a 32-bit store. */
+/* M20 LP64 scalar-width gate: only ABI and memory operations accept 64 bits.
+ * Narrow arithmetic continues to reject 64-bit values until implemented. */
+static bool scalar_integer_width(const MinicC0Program *program,
+                                 const MinicTargetInfo *target, MinicType type,
+                                 size_t *width, bool *sign) {
+    unsigned int bits;
+    MinicType effective;
+    if (small_integer_width(program, target, type, width, sign)) return true;
+    if (width == NULL || sign == NULL || !minic_type_is_integer(type) ||
+        !minic_c0_type_effective_integer_type(program, type, &effective) ||
+        !minic_target_info_integer_width(target, program, type, &bits) ||
+        bits != 64U) return false;
+    *width = 8U;
+    *sign = minic_type_is_signed_integer(effective);
+    return true;
+}
+static bool register64_type(const MinicC0Program *program,
+                            const MinicTargetInfo *target, MinicType type) {
+    size_t width;
+    bool sign;
+    return minic_type_is_pointer(type) ||
+           (scalar_integer_width(program, target, type, &width, &sign) &&
+            width == 8U);
+}
 static bool valid_parameter_type(const MinicC0Program *program,
                                  const MinicTargetInfo *target, MinicType type) {
     size_t width;
     bool sign;
     return minic_type_is_pointer(type) ||
-           small_integer_width(program, target, type, &width, &sign);
+           scalar_integer_width(program, target, type, &width, &sign);
 }
 
 /* C scalar return ABI is independent from the initial signed-int smoke
@@ -76,13 +97,15 @@ static bool emit_integer_memory(FILE *out, bool store,
     if (store) {
         op = width == 1U ? "  strb w9, [x10]\n" :
              width == 2U ? "  strh w9, [x10]\n" :
-             width == 4U ? "  str w9, [x10]\n" : NULL;
+             width == 4U ? "  str w9, [x10]\n" :
+             width == 8U ? "  str x9, [x10]\n" : NULL;
     } else {
         op = width == 1U ? (sign ? "  ldrsb w9, [x10]\n" :
                                      "  ldrb w9, [x10]\n") :
              width == 2U ? (sign ? "  ldrsh w9, [x10]\n" :
                                      "  ldrh w9, [x10]\n") :
-             width == 4U ? "  ldr w9, [x10]\n" : NULL;
+             width == 4U ? "  ldr w9, [x10]\n" :
+              width == 8U ? "  ldr x9, [x10]\n" : NULL;
     }
     return op != NULL && fputs(op, out) != EOF;
 }
@@ -499,11 +522,11 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                 !minic_type_is_pointer(fn->values[addr].type)) return false;
             pointer = minic_type_is_pointer(fn->values[value].type);
             if (!pointer &&
-                !small_integer_width(program, target, fn->values[value].type,
-                                     &width, &sign)) return false;
+                !scalar_integer_width(program, target, fn->values[value].type,
+                                      &width, &sign)) return false;
             if (fprintf(out, "  ldr x10, [sp, #%zu]\n", (size_t)addr * 8U) < 0 ||
-                fprintf(out, pointer ? "  ldr x9, [sp, #%zu]\n"
-                                     : "  ldr w9, [sp, #%zu]\n",
+                fprintf(out, (pointer || width == 8U) ? "  ldr x9, [sp, #%zu]\n"
+                                                : "  ldr w9, [sp, #%zu]\n",
                         (size_t)value * 8U) < 0 ||
                 (pointer ? fputs("  str x9, [x10]\n", out) == EOF
                          : !emit_integer_memory(out, true, width, sign))) return false;
@@ -688,8 +711,8 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
             bool sign = false, pointer = minic_type_is_pointer(ins->type);
             if (addr >= fn->value_count ||
                 !minic_type_is_pointer(fn->values[addr].type) ||
-                (!pointer && !small_integer_width(program, target,
-                                                  ins->type, &width, &sign)) ||
+                (!pointer && !scalar_integer_width(program, target,
+                                                   ins->type, &width, &sign)) ||
                 fprintf(out, "  ldr x10, [sp, #%zu]\n", (size_t)addr * 8U) < 0 ||
                 (pointer ? fputs("  ldr x9, [x10]\n", out) == EOF
                          : !emit_integer_memory(out, false, width, sign)))
@@ -703,7 +726,7 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                 const MinicCoreCallArgument *arg =
                     &fn->call_arguments[ins->value.call.argument_begin + j];
                 if (fprintf(out,
-                            minic_type_is_pointer(
+                            register64_type(program, target,
                                 fn->values[arg->value.value_id].type)
                                 ? "  ldr x%zu, [sp, #%zu]\n"
                                 : "  ldr w%zu, [sp, #%zu]\n",
@@ -713,15 +736,15 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
             if (fprintf(out, "  bl %s\n", callee->name) < 0)
                 return false;
             if (minic_type_is_void(ins->type)) continue;
-            if (fputs(minic_type_is_pointer(ins->type)
+            if (fputs(register64_type(program, target, ins->type)
                           ? "  mov x9, x0\n"
                           : "  mov w9, w0\n", out) == EOF) return false;
             if (minic_type_is_integer(ins->type)) {
                 size_t width;
                 bool sign;
-                if (!small_integer_width(program, target, ins->type,
-                                         &width, &sign) ||
-                    !emit_integer_normalize(out, width, sign)) return false;
+                if (!scalar_integer_width(program, target, ins->type,
+                                          &width, &sign) ||
+                    (width != 8U && !emit_integer_normalize(out, width, sign))) return false;
             }
             break;
         }
@@ -729,7 +752,7 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
             size_t index = (size_t)ins->value.parameter_index;
             if (index >= fn->parameter_count) return false;
             if (index < 8U) {
-                if (fprintf(out, minic_type_is_pointer(ins->type)
+                if (fprintf(out, register64_type(program, target, ins->type)
                                  ? "  str x%zu, [sp, #%zu]\n"
                                  : "  str w%zu, [sp, #%zu]\n",
                             index, offset) < 0)
@@ -739,7 +762,7 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                  * Each subsequent int occupies an 8-byte caller stack
                  * argument slot, above our own 16-byte-aligned frame. */
                 size_t incoming = frame + (index - 8U) * 8U;
-                if (fprintf(out, minic_type_is_pointer(ins->type)
+                if (fprintf(out, register64_type(program, target, ins->type)
                              ? "  ldr x9, [sp, #%zu]\n  str x9, [sp, #%zu]\n"
                              : "  ldr w9, [sp, #%zu]\n  str w9, [sp, #%zu]\n",
                              incoming, offset) < 0)
@@ -920,7 +943,7 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                               name, block_id, (unsigned int)ins_id, (int)ins->kind);
             return false;
         }
-        if (fprintf(out, minic_type_is_pointer(ins->type)
+        if (fprintf(out, register64_type(program, target, ins->type)
                              ? "  str x9, [sp, #%zu]\n"
                              : "  str w9, [sp, #%zu]\n", offset) < 0) return false;
     }
@@ -929,7 +952,7 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
         switch (block->terminator.kind) {
         case MINIC_CORE_TERMINATOR_RETURN:
             if ((!minic_type_is_void(fn->return_type) &&
-                 fprintf(out, minic_type_is_pointer(fn->return_type)
+                 fprintf(out, register64_type(program, target, fn->return_type)
                                   ? "  ldr x0, [sp, #%zu]\n"
                                   : "  ldr w0, [sp, #%zu]\n",
                          (size_t)block->terminator.return_value * 8U) < 0) ||
