@@ -231,7 +231,7 @@ RV64_ABI_TEST_SOURCES := \
 RV64_ABI_TEST_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(RV64_ABI_TEST_SOURCES))
 RV64_ABI_TEST_BINARY  := $(BUILD_DIR)/tests/target/riscv64/abi-test
 
-.PHONY: all help prepare check check-fast check-target-selection-m0 check-x86_64-busybox-host-link check-elf-constructors check-x86_64-one-gp-sysv check-x86_64-busybox-allyes-discovery check-x86_64-busybox-12 check-x86_64-sqlite-frontier check-x86_64-m1 check-x86_64-tinyaes check-x86_64-cjson check-x86_64-abi-elf check-x86_64-lua-frontier check-x86_64-zlib-frontier check-minias-a0 check-minipp-a0 check-minielf-reader-a0 check-mininm-a0 check-mininm-a1 check-miniobjcopy-a0 check-miniobjcopy-a1 check-minicstrip-a0 check-miniar-a0 check-miniar-a1 check-minild-a0 check-minild-a1 check-minild-a2 check-minild-a3 check-minild-a4 check-minild-a5 check-minild-a6 check-minild-script-a0 check-minild-script-a1 check-token-model check-lexer \
+.PHONY: all help prepare check check-fast check-target-selection-m0 check-x86_64-busybox-complex-five check-x86_64-busybox-host-link check-elf-constructors check-x86_64-one-gp-sysv check-x86_64-busybox-allyes-discovery check-x86_64-busybox-12 check-x86_64-sqlite-frontier check-x86_64-m1 check-x86_64-tinyaes check-x86_64-cjson check-x86_64-abi-elf check-x86_64-lua-frontier check-x86_64-zlib-frontier check-minias-a0 check-minipp-a0 check-minielf-reader-a0 check-mininm-a0 check-mininm-a1 check-miniobjcopy-a0 check-miniobjcopy-a1 check-minicstrip-a0 check-miniar-a0 check-miniar-a1 check-minild-a0 check-minild-a1 check-minild-a2 check-minild-a3 check-minild-a4 check-minild-a5 check-minild-a6 check-minild-script-a0 check-minild-script-a1 check-token-model check-lexer \
 	check-type check-record check-type-alias check-ast-contract check-layout check-rv64-abi \
 	check-static-functions \
 	check-unsigned-declarations check-long-types check-for-loops check-unbounded-for-break \
@@ -744,6 +744,26 @@ check-x86_64-busybox-12: $(MINIC_CC_BINARY)
 # software enabled, disable only four host-incompatible configuration switches
 # and require a real original-GNU BusyBox link + six actual applet executions.
 # MiniC shadows Kbuild C owners but does NOT claim to link them in this gate.
+# Real upstream 957-option GNU BusyBox baseline, then five independently
+# substituted original C object owners (sed, awk, find, grep, sort) and all
+# eleven differential runtime cases per cohort. Unlike compile-only scanning
+# the MiniC .o is incorporated in actual Kbuild linkage. Fail closed.
+check-x86_64-busybox-complex-five: $(MINIC_CC_BINARY)
+	@set -eu; \
+	log=$(mktemp); \
+	trap 'rm -f "$log"' EXIT HUP INT TERM; \
+	if env -u MAKEFLAGS -u MAKEOVERRIDES -u MFLAGS -u GNUMAKEFLAGS -u CFLAGS \
+	   MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
+	   BUSYBOX_X86_64_ALLYES_DISCOVERY=1 BUSYBOX_ALLYES_LINK_COMPATIBLE=1 \
+	   BUSYBOX_ALLYES_MIXED_COHORT=1 \
+	   BUSYBOX_ALLYES_REPORT_DIR="$(abspath $(BUILD_DIR))/busybox-complex-five" \
+	   sh tests/external/busybox/probe-x86_64.sh >"$log" 2>&1; then \
+	   cat "$log"; \
+	else \
+	   cat "$log"; exit 1; \
+	fi; \
+	grep -Fx 'BUSYBOX_MIXED_COMPLEX=PASS all_five_independent=1 GCC_original_oracle=1 real_Kbuild_link=1' "$log"
+
 check-x86_64-busybox-host-link: $(MINIC_CC_BINARY)
 	@set -eu; \
 	log=$$(mktemp); \
