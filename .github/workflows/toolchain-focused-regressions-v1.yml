@@ -94,7 +94,7 @@ jobs:
           BUSYBOX_X86_64_EXTRA_DISCOVERY: "1"
         run: |
           set -Eeuo pipefail
-          sh tests/external/busybox/probe-x86_64.sh
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/toolchain-focused-t1-v2 check-x86_64-busybox-12
 
       # Stage2 artifact mode fix: Actions strips +x; QEMU requires executable ELF.
       # Certified fixture return_42.c for strict direct/driver parity.
