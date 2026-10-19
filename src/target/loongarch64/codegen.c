@@ -422,6 +422,7 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
     bool has_direct_calls = false;
     const char *reject_stage = "function_preflight";
     size_t reject_block = SIZE_MAX, reject_ins = SIZE_MAX;
+    size_t va_count = 0U, va_gp = 0U;
     /* No semantic change: source-specific diagnostics only for the active
      * cJSON failure, never for normal builds or other projects. */
     const bool trace_cjson = getenv("MINIC_M1_TRACE") != NULL &&
@@ -474,6 +475,25 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
             return machine_emit_reject(fn, "loongarch64", name, reject_stage,
                                        reject_block, reject_ins, __LINE__);
         }
+    /* LoongArch lp64d variadic gp cursor is a linear 8-byte register
+     * save area followed immediately by overflow arguments. */
+    if (decl->is_variadic) {
+        for (i = 0U; i < fn->parameter_count; ++i) {
+            if (minic_type_is_double(fn->parameter_types[i]))
+                return machine_emit_reject(fn, "loongarch64", name,
+                                           "variadic_fp_fixed", SIZE_MAX,
+                                           SIZE_MAX, __LINE__);
+            ++va_gp;
+        }
+    }
+    for (i = 0U; i < fn->instruction_count; ++i)
+        if (fn->instructions[i].kind ==
+            MINIC_CORE_INSTRUCTION_VARIADIC_ARGUMENT_ADDRESS) ++va_count;
+    if (va_count != 0U &&
+        (!decl->is_variadic || va_count != 1U || va_gp > 8U))
+        return machine_emit_reject(fn, "loongarch64", name,
+                                   "variadic_preflight", SIZE_MAX,
+                                   SIZE_MAX, __LINE__);
     for (i = 0U; i < fn->parameter_count; ++i)
         if (!valid_parameter_type(program, target, fn->parameter_types[i])) return machine_emit_reject(fn, "loongarch64", name, reject_stage,
                                     reject_block, reject_ins, __LINE__);
@@ -667,11 +687,11 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
     reject_stage = "frame_finalization";
     reject_ins = SIZE_MAX;
     save_offset = (object_end + 7U) & ~(size_t)7U;
-    if (save_offset > MINIC_LARGE_FRAME_MAX - (has_direct_calls ? 8U : 0U))
+    if (save_offset > MINIC_LARGE_FRAME_MAX - (has_direct_calls ? 8U : 0U) - (va_count != 0U ? 64U : 0U))
         return machine_emit_reject(fn, "loongarch64", name, reject_stage,
                                     reject_block, reject_ins, __LINE__);
-    frame = (save_offset + (has_direct_calls ? 8U : 0U) + 15U) &
-            ~(size_t)15U;
+    frame = (save_offset + (has_direct_calls ? 8U : 0U) +
+             (va_count != 0U ? 64U : 0U) + 15U) & ~(size_t)15U;
     if (frame > MINIC_LARGE_FRAME_MAX) {
         if (getenv("MINIC_M1_TRACE") != NULL)
             (void)fprintf(stderr,
@@ -698,6 +718,17 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
     if (has_direct_calls &&
         !emit_sp_mem(out, "st.d", "$ra", save_offset)) return machine_emit_reject(fn, "loongarch64", name, reject_stage,
                                     reject_block, reject_ins, __LINE__);
+    if (va_count != 0U) {
+        static const char *const regs[8] = {
+            "$a0", "$a1", "$a2", "$a3",
+            "$a4", "$a5", "$a6", "$a7"};
+        for (i = 0U; i < 8U; ++i)
+            if (!emit_sp_mem(out, "st.d", regs[i],
+                             frame - 64U + i * 8U))
+                return machine_emit_reject(fn, "loongarch64", name,
+                                           "variadic_save", SIZE_MAX,
+                                           SIZE_MAX, __LINE__);
+    }
     reject_stage = "machine_emit";
     for (size_t block_id = 0U; block_id < fn->block_count; ++block_id) {
         reject_block = block_id;
@@ -1172,6 +1203,20 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                     return machine_emit_reject(fn, "loongarch64", name, reject_stage,
                                     reject_block, reject_ins, __LINE__);
             }
+            break;
+        }
+        case MINIC_CORE_INSTRUCTION_VARIADIC_ARGUMENT_ADDRESS: {
+            /* LoongArch LP64D va_list is a scalar byte cursor.  The
+             * register bank saved at the top of this frame runs directly
+             * into the caller's overflow stack slots at entry SP. */
+            if (va_count != 1U || !minic_type_is_pointer(ins->type) ||
+                ins->result >= fn->value_count ||
+                fprintf(out, "  li.d $t0, %zu\n",
+                        frame - 64U + va_gp * 8U) < 0 ||
+                fputs("  add.d $t0, $sp, $t0\n", out) == EOF)
+                return machine_emit_reject(fn, "loongarch64", name,
+                                           reject_stage, reject_block,
+                                           reject_ins, __LINE__);
             break;
         }
         case MINIC_CORE_INSTRUCTION_PARAMETER: {
