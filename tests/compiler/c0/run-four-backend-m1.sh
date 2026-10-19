@@ -9,7 +9,7 @@ QEMU_LOONGARCH64=qemu-loongarch64
 w=$(mktemp -d)
 trap 'rm -rf "$w"' EXIT HUP INT TERM
 m2_enabled=0
-if [ "${FOUR_BACKEND_M2:-0}" = "1" ] || [ "${FOUR_BACKEND_M2_STACK:-0}" = "1" ] || [ "${FOUR_BACKEND_M3_CALL:-0}" = "1" ]; then
+if [ "${FOUR_BACKEND_M2:-0}" = "1" ] || [ "${FOUR_BACKEND_M2_STACK:-0}" = "1" ] || [ "${FOUR_BACKEND_M3_CALL:-0}" = "1" ] || [ "${FOUR_BACKEND_M4_GLOBAL:-0}" = "1" ]; then
     m2_enabled=1
 fi
 cat > "$w/return.i" <<'EOF'
@@ -73,9 +73,28 @@ int main(void) {
          + mini_lt(4, -2) + mini_eq(3, 8);
 }
 EOF
+# Relocatable pointer data is not supported yet, so the old M1 negative
+# test remains fail-closed even after M4 accepts plain integer globals.
 cat > "$w/unsupported.i" <<'EOF'
-static int global_state = 42;
-int main(void) { return global_state; }
+static int original = 42;
+static int *global_pointer = &original;
+int main(void) { return *global_pointer; }
+EOF
+cat > "$w/global_int.i" <<'EOF'
+static int global_state = 40;
+int mini_global_int(void) { return global_state + 2; }
+EOF
+cat > "$w/driver_global_int.c" <<'EOF'
+extern int mini_global_int(void);
+int main(void) { return mini_global_int(); }
+EOF
+cat > "$w/global_array.i" <<'EOF'
+static const unsigned char table[4] = { 7, 8, 9, 10 };
+int mini_global_array(void) { return (int)sizeof(table) + 38; }
+EOF
+cat > "$w/driver_global_array.c" <<'EOF'
+extern int mini_global_array(void);
+int main(void) { return mini_global_array(); }
 EOF
 # M2-stack ABI extension: the ninth and tenth original C integer
 # parameters are supplied by GNU at incoming sp+0 and sp+8, not registers.
@@ -168,6 +187,9 @@ for target in aarch64 loongarch64; do
     if [ "${FOUR_BACKEND_M3_CALL:-0}" = "1" ]; then
         cases="$cases call_external call_internal call_nested"
     fi
+    if [ "${FOUR_BACKEND_M4_GLOBAL:-0}" = "1" ]; then
+        cases="$cases global_int global_array"
+    fi
     if [ "$m2_enabled" = "1" ]; then
         # Independent originals for every new CFG/comparison fixture, not
         # merely an expected return code from a MiniC-owned executable.
@@ -177,6 +199,9 @@ for target in aarch64 loongarch64; do
         fi
         if [ "${FOUR_BACKEND_M3_CALL:-0}" = "1" ]; then
             oracle_cases="$oracle_cases call_external call_internal call_nested"
+        fi
+        if [ "${FOUR_BACKEND_M4_GLOBAL:-0}" = "1" ]; then
+            oracle_cases="$oracle_cases global_int global_array"
         fi
         for testcase in $oracle_cases; do
             "$gcc" -static -x c "$w/$testcase.i" "$w/driver_$testcase.c" \
@@ -199,6 +224,8 @@ for target in aarch64 loongarch64; do
             compare) "$gcc" -static "$w/$target.compare.o" "$w/driver_compare.c" -o "$w/$target.compare.elf" ;;
             stack9) "$gcc" -static "$w/$target.stack9.o" "$w/driver_stack9.c" -o "$w/$target.stack9.elf" ;;
             stack10) "$gcc" -static "$w/$target.stack10.o" "$w/driver_stack10.c" -o "$w/$target.stack10.elf" ;;
+            global_int|global_array)
+                "$gcc" -static "$w/$target.$testcase.o" "$w/driver_$testcase.c" -o "$w/$target.$testcase.elf" ;;
             call_external|call_internal|call_nested)
                 "$gcc" -static "$w/$target.$testcase.o" "$w/driver_$testcase.c" -o "$w/$target.$testcase.elf" ;;
         esac
@@ -241,6 +268,9 @@ if [ "$m2_enabled" = "1" ]; then
     fi
     if [ "${FOUR_BACKEND_M3_CALL:-0}" = "1" ]; then
         echo "FOUR_BACKEND_M3_CALL=PASS architectures=2 executable_QEMU_cases=20 direct_calls=6 GNU_independent_oracles=16"
+    fi
+    if [ "${FOUR_BACKEND_M4_GLOBAL:-0}" = "1" ]; then
+        echo "FOUR_BACKEND_M4_GLOBAL=PASS architectures=2 executable_QEMU_cases=18 global_cases=4 GNU_independent_oracles=14 unsupported_relocations=fail-closed"
     fi
 else
     echo "FOUR_BACKEND_M1=PASS architectures=2 executable_QEMU_cases=8 GCC_independent_oracles=4"
