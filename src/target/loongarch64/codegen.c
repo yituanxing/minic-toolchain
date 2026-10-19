@@ -817,22 +817,32 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
         case MINIC_CORE_INSTRUCTION_INTEGER_MULTIPLY: {
             MinicCoreValueId lhs = ins->value.binary.left;
             MinicCoreValueId rhs = ins->value.binary.right;
-            const char *opcode = ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_ADD
-                ? "  add.w $t0, $t0, $t1\n" :
-                ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_SUBTRACT
-                    ? "  sub.w $t0, $t0, $t1\n" : "  mul.w $t0, $t0, $t1\n";
             size_t lw, rw;
             bool ls, rs;
+            bool wide;
+            const char *opcode;
             if (lhs >= fn->value_count || rhs >= fn->value_count ||
-                !small_integer_width(program, target, fn->values[lhs].type, &lw, &ls) ||
-                !small_integer_width(program, target, fn->values[rhs].type, &rw, &rs) ||
+                !scalar_integer_width(program, target, fn->values[lhs].type, &lw, &ls) ||
+                !scalar_integer_width(program, target, fn->values[rhs].type, &rw, &rs) ||
                 lw != rw || ls != rs ||
                 !minic_type_equal(fn->values[lhs].type, ins->type) ||
-                minic_type_is_bool_integer(ins->type) ||
-                !emit_sp_mem(out, "ld.w", "$t0", (size_t)lhs * 8U) ||
-                !emit_sp_mem(out, "ld.w", "$t1", (size_t)rhs * 8U) ||
+                minic_type_is_bool_integer(ins->type))
+                return false;
+            wide = lw == 8U;
+            if (wide && ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_MULTIPLY)
+                return false;
+            opcode = ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_ADD
+                ? (wide ? "  add.d $t0, $t0, $t1\n" : "  add.w $t0, $t0, $t1\n")
+                : ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_SUBTRACT
+                    ? (wide ? "  sub.d $t0, $t0, $t1\n" : "  sub.w $t0, $t0, $t1\n")
+                    : "  mul.w $t0, $t0, $t1\n";
+            if (!emit_sp_mem(out, wide ? "ld.d" : "ld.w", "$t0",
+                             (size_t)lhs * 8U) ||
+                !emit_sp_mem(out, wide ? "ld.d" : "ld.w", "$t1",
+                             (size_t)rhs * 8U) ||
                 fputs(opcode, out) == EOF ||
-                !emit_integer_normalize(out, lw, ls)) return false;
+                (!wide && !emit_integer_normalize(out, lw, ls)))
+                return false;
             break;
         }
         case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND:
