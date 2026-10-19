@@ -85,7 +85,11 @@ SH
         printf 'FOUR_BACKEND_CJSON_FIRST_DIAGNOSTIC target=%s %s\n' \
             "$target" "$error_line"
         grep -m 1 'MINIC_M1_FRONTIER' "$work/$target.probe.err" || true
+        grep -m 1 'MINIC_M4_GLOBAL_FRONTIER' "$work/$target.probe.err" || true
         grep -m 1 'MINIC_M8_.*REJECT\|MINIC_M8_FRAME_CAP' "$work/$target.probe.err" || true
+        echo "FOUR_BACKEND_CJSON_BOUNDED_STDERR target=$target begin"
+        sed -n '1,16p' "$work/$target.probe.err"
+        echo "FOUR_BACKEND_CJSON_BOUNDED_STDERR target=$target end"
         # Source and failure diagnostics survive inside the temporary
         # scratch only until this invocation exits; they are not a pass.
         blocked=$((blocked + 1))
