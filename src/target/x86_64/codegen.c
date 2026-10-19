@@ -192,7 +192,10 @@ static bool x86_incoming_cursor(const MinicC0Program *program,
             if (*fp < 8U) ++*fp;
             else ++*stack;
         } else if (minic_type_is_long_double(t)) {
-            *stack += 2U; /* SysV: x87 arguments use 16-byte stack slots. */
+            /* An x87 long double stack argument starts on a 16-byte
+             * boundary even after an odd number of spilled eightbytes. */
+            *stack += *stack & 1U;
+            *stack += 2U;
         } else if (minic_type_is_record(t)) {
             if (x86_one_gp_record(program, target, t, &one_gp_bytes)) {
                 if (*gpr < 6U) ++*gpr;
@@ -209,6 +212,11 @@ static bool x86_incoming_cursor(const MinicC0Program *program,
             else ++*stack;
         }
     }
+    /* The cursor above counts preceding parameters. Align the current
+     * long double too, so a GCC caller and a MiniC callee use the same
+     * 16-byte stack argument slot after a spilled scalar parameter. */
+    if (minic_type_is_long_double(fn->parameter_types[position]))
+        *stack += *stack & 1U;
     return true;
 }
 
@@ -1071,6 +1079,9 @@ static bool x86_emit_call_arguments(FILE *out, const MinicC0Program *program,
             if (float_index < 8U) ++float_index;
             else ++stack_slots;
         } else if (minic_type_is_long_double(type)) {
+            /* SysV x87 stack arguments require a 16-byte start. Keep
+             * preflight in lockstep with the emission pass below. */
+            stack_slots += stack_slots & 1U;
             stack_slots += 2U;
         } else {
             if (!x86_scalar_width(program, target, type, &ignored_bytes,
@@ -1137,6 +1148,10 @@ static bool x86_emit_call_arguments(FILE *out, const MinicC0Program *program,
         type = i < fixed_count ? fixed_types[i] : fn->values[arg->value.value_id].type;
         if (minic_type_is_long_double(type)) {
             size_t off;
+            /* Match the preflight slot cursor and incoming callee cursor.
+             * Otherwise odd preceding stack args silently misplace x87
+             * values by eight bytes in mixed MiniC/GNU calls. */
+            stack_slots += stack_slots & 1U;
             if (!minic_type_is_long_double(fn->values[arg->value.value_id].type) ||
                 frame->value_offsets == NULL) return false;
             off = frame->value_offsets[arg->value.value_id];

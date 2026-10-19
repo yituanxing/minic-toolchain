@@ -783,6 +783,7 @@ check-x86_64-busybox-12: $(MINIC_CC_BINARY)
 # Verify every original owner receipt+SHA and compare whole linked executable
 # against original GNU across 11 deterministic applet cases. Fail closed.
 check-x86_64-busybox-all-eligible: $(MINIC_CC_BINARY)
+	@python3 tests/external/busybox/test_mixed_bulk_coverage.py
 	@set -eu; \
 	log=$$(mktemp); \
 	trap 'rm -f "$$log"' EXIT HUP INT TERM; \

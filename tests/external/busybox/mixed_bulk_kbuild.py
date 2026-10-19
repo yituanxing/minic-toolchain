@@ -20,6 +20,42 @@ import sys
 from mixed_original_kbuild import run_cases, sha256
 
 
+# Exact acceptance from the certified original 957-option 593-object
+# BusyBox 1.36.1 Kbuild. A formerly working MiniC owner must not silently
+# become an extra GCC fallback just because other objects still link.
+CERTIFIED_KBUILD_OWNERS = 593
+CERTIFIED_MINIC_OWNERS = 581
+CERTIFIED_GCC_FALLBACKS = frozenset((
+    "libbb/hash_md5_sha.o",
+    "libbb/verror_msg.o",
+    "libbb/vfork_daemon_rexec.o",
+    "libbb/xconnect.o",
+    "miscutils/devfsd.o",
+    "miscutils/hdparm.o",
+    "networking/ifconfig.o",
+    "networking/tls_sp_c32.o",
+    "procps/top.o",
+    "selinux/chcon.o",
+    "selinux/setfiles.o",
+    "util-linux/mkswap.o",
+))
+
+
+def certified_owner_coverage(mini_owners, gcc_fallbacks):
+    """Fail closed on a regressed owner or a different original Kbuild set.
+
+    A newly supported former GCC fallback is allowed (coverage improves),
+    but newly GCC-owned objects or missing/duplicated owners are not.
+    """
+    minic = list(mini_owners)
+    gnu = list(gcc_fallbacks)
+    names = minic + gnu
+    return (len(names) == CERTIFIED_KBUILD_OWNERS and
+            len(set(names)) == CERTIFIED_KBUILD_OWNERS and
+            len(minic) >= CERTIFIED_MINIC_OWNERS and
+            set(gnu).issubset(CERTIFIED_GCC_FALLBACKS))
+
+
 def log(msg):
     print(msg, flush=True)
 
@@ -67,8 +103,13 @@ def main():
     for name, minic, cpp in skipped:
         log("BUSYBOX_MIXED_BULK_GCC_FALLBACK object=%s minic=%s cpp=%s" %
             (name, minic, cpp))
-    if len(manifest) < 580 or len(skipped) > 14:
-        log("BUSYBOX_MIXED_BULK=BLOCKED stage=unexpected-discovery-coverage")
+    mini_names = [Path(name).relative_to(root).as_posix() for name in manifest]
+    fallback_names = [name for name, _minic, _cpp in skipped]
+    if not certified_owner_coverage(mini_names, fallback_names):
+        log("BUSYBOX_MIXED_BULK=BLOCKED stage=certified-owner-coverage "
+            "mini=%d gcc=%d expected_persistent=%d approved_fallbacks=%d" %
+            (len(mini_names), len(fallback_names), CERTIFIED_KBUILD_OWNERS,
+             len(CERTIFIED_GCC_FALLBACKS)))
         return 1
 
     manifest_file = report / "bulk-kbuild-owner-manifest.json"
