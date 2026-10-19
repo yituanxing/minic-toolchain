@@ -6,7 +6,6 @@ on:
       - "main"
       - "agent/linux-expanded-kbuild-v0"
       - "agent/linux-perf-boolean-domain-v1"
-      - "feature/four-backend-aarch64-loongarch64-m0"
     paths:
       - 'src/**'
       - 'include/**'
@@ -88,14 +87,6 @@ jobs:
       # Certified fixture return_42.c for strict direct/driver parity.
       # Verify the exact certified self-hosted RV64 Stage2 driver hookup on
       # one runner BEFORE burning seven full Linux runners again.
-      # Branch-local first four-backend M0 acceptance: proven missing-backend
-      # failures, preserved old RV64 default and x86 code generation.
-      - name: Check four-backend M0 registry and fail-closed target selection
-        run: |
-          set -Eeuo pipefail
-          make MODE=release CFLAGS=-Werror BUILD_DIR=build/toolchain-focused-t1-v2 check-target-selection-m0
-          make MODE=release CFLAGS=-Werror BUILD_DIR=build/toolchain-focused-t1-v2 check-four-target-model-m0
-
       - name: Fetch certified Stage2 for single-runner Kbuild driver preflight
         if: contains(github.event.head_commit.message, '[minic-stage2-driver-smoke]')
         uses: actions/download-artifact@v4
