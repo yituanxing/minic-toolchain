@@ -1478,3 +1478,113 @@ broken legacy Linux baseline YAML continues to fail dispatch independently.
 A fully fresh RV64 2064-source Linux+QEMU P1 qualification on *current*
 feature-head code still has not been run; prior focused RV64 successes do
 not substitute for that merge gate.
+
+## BusyBox real mixed full-executable x86-64 re-link: five complex applets — 2026-10-19
+
+**This is a new executable-level milestone, beyond earlier independent
+582/594 `.o` shadow compilation.** From the pinned BusyBox 1.36.1
+unmodified C and its **957 enabled-option original upstream Kconfig/Kbuild**
+(the previous host-compatible full-GNU baseline), the new opt-in
+`make check-x86_64-busybox-complex-five` builds and freezes a genuinely
+working all-GNU BusyBox executable as an independent oracle.
+
+The exact five unchanged original C owners are:
+
+| Original BusyBox Kbuild C owner | MiniC x86-64 object replaced? | Independent full mixed BusyBox runtime |
+| --- | --- | --- |
+| `editors/sed.c` → `editors/sed.o` | **Yes** | **PASS** |
+| `editors/awk.c` → `editors/awk.o` | **Yes** | **PASS** |
+| `findutils/find.c` → `findutils/find.o` | **Yes** | **PASS** |
+| `findutils/grep.c` → `findutils/grep.o` | **Yes** | **PASS** |
+| `coreutils/sort.c` → `coreutils/sort.o` | **Yes** | **PASS** |
+
+Each owner was verified by GCC preprocessing the actual Kbuild command,
+MiniC x86-64 assembly generation, independent GNU assembly, and **real
+GNU Kbuild re-linking of the entire BusyBox executable** with only that
+one owner's object substituted, followed by **11 byte-for-byte native
+fixture comparisons** (combined stdout, stderr, exit code) with the
+frozen GCC binary. The object was then actually restored and the complete
+GNU runtime differential re-run before testing the next owner.
+
+**Critical testing loopholes found and closed before acceptance:**
+
+1. BusyBox selects its applet by **`argv[0]`**. A copied GCC reference
+   executable named `gcc-reference-busybox` gave 127/app-not-found
+   while the mixed binary correctly ran real `sed`, `awk`, etc.
+   This cannot be treated as a compiler error. The independent
+   reference was copied to `report/gcc-reference/busybox`, explicitly
+   checked against known GNU runtime outputs, and only then used
+   as the differential oracle.
+2. Merely copying MiniC `.o` into a precompiled BusyBox tree before
+   asking Kbuild to rebuild its parent archive was **not reliable**:
+   the original Kbuild `.cmd`/dependency logic recompiled the
+   applet through GCC and overwrote the MiniC object. An early run
+   [#39189278828](https://github.com/yituanxing/minic-toolchain/actions/runs/39189278828)
+   correctly failed this false-ownership case. The corrected
+   substitution is now attached to the **exact original Kbuild CC
+   invocation for the desired output owner**. The proxy invokes GNU CC
+   with the unchanged original command, then replaces that specific
+   fresh target object with the previously audited MiniC object
+   *before* Kbuild's aggregate archive/link stage. The test requires
+   its explicit owner-replacement receipt and **SHA-256 identity
+   with the MiniC object after Kbuild finishes**. Therefore Kbuild
+   silently rebuilding the object through GCC cannot pass.
+3. GNU BusyBox binary build IDs can change during an otherwise
+   semantically equivalent Kbuild re-link. The restored GNU state
+   is instead required to have an original GCC object, a successful
+   full real Kbuild rebuild and **all eleven** runtime outcomes
+   byte-for-byte identical to the frozen original GNU oracle.
+   A different binary hash is recorded as a diagnostic, not
+   misinterpreted as a program failure.
+
+**Important additional combined acceptance:** After all five independent
+one-owner tests passed, the test deliberately removed the corresponding
+five Kbuild objects and parent aggregates and routed **all five distinct
+MiniC objects simultaneously** into a **sixth full BusyBox executable**.
+The GNU compiler, original Kbuild, and linker still build all remaining
+C owners. The same eleven real applet/shell fixtures ran against the
+frozen original GCC executable with exactly equal stdout, stderr and
+exit code. The test individually checked **all five live MiniC object
+SHA-256 identities and the five original CC-owner replacement receipts**
+inside this *single* resulting executable before allowing a green result.
+This catches cross-applet linkage and interaction defects that isolated
+successful translation units would miss.
+
+**Actual successful
+[CI #39190086179](https://github.com/yituanxing/minic-toolchain/actions/runs/39190086179):**
+
+- `BUSYBOX_MIXED_COMPLEX_GNU_REFERENCE=PASS ... tests=11`.
+- Each of `sed`, `awk`, `find`, `grep`, `sort`:
+  `BUSYBOX_MIXED_COMPLEX_APPLET=PASS ... MiniC_object=1 original_GNU_Kbuild_link=1 GCC_11_fixture_byte_exact=1 binary_changed=1`.
+- `BUSYBOX_MIXED_COMPLEX_FRONTIER=DISCOVERY candidates=5 mini_objects=5 GNU_links=5 runtime_exact=5 fixtures_per_applet=11`.
+- `BUSYBOX_MIXED_COMPLEX_COMBINED=PASS MiniC_owners=5 real_GNU_Kbuild_link=1 independent_GNU_oracle=1 eleven_fixture_byte_exact=1 sha_changed=1`.
+- `BUSYBOX_MIXED_COMPLEX=PASS all_five_independent=1 combined_five=1 GCC_original_oracle=1 real_Kbuild_link=1`.
+- Original allconfig host-compatible scan independently remains
+  `BUSYBOX_ALLYES_FRONTIER=DISCOVERY enabled_symbols=957 attempted_C_TUs=594 mini_objects=582 cpp_fail=0 minic_fail=12 asm_fail=0 gcc_fail=0 gcc_full_build=PASS full_MiniC_busybox=NOT_TESTED`.
+- Focused `TOOLCHAIN_FOCUSED_T1=PASS mode=all independent_test_checks=8 shared_builds=1`.
+
+The compiled verdict is **five MiniC-owned, GNU-linked complex BusyBox
+applet object files functioning together in one real executable**, and
+their eleven carefully scoped execution fixtures are GCC byte-for-byte
+compatible; **this is NOT an all-MiniC BusyBox**. The prior separate
+12-object mixed applet test is not claimed to be part of this specific
+five-owner combined executable (the two cohorts use separate Kconfig
+configurations). Do not add the groups and claim seventeen owners have
+already been tested together.
+
+The test harness retains the original GNU executable, the exact original
+Kbuild per-TU preprocessing inputs, MiniC-generated objects, GNU compiler
+outputs, fresh Kbuild logs for individual and combined links, and
+per-owner replacement receipts. The heavy regression is deliberately
+**opt-in**, reuses the pinned existing BusyBox fixture and Make target,
+and introduces no permanent workflow. Temporary focused-workflow edits
+were restored byte-for-byte to main baseline workflow SHA
+`cd9a880a5a707f28b5ea63c364c1844ab35e1c56`.
+
+**Next:** Expand **coexisting** object ownership to 12 + 5 in the *same*
+host-compatible full-BusyBox Kconfig, then progressively use exact Kbuild
+owner routing to replace more of the 582 successfully generated MiniC
+objects, with staged linker diagnostics, real runtime tests, and a
+careful crash/byte-diff blame strategy. The untouched original
+full-configuration 963-enabled-symbol workload and fresh RV64 full
+Linux 2064 + QEMU P1 remain separate qualification boundaries.
