@@ -32,12 +32,15 @@ for target in aarch64 loongarch64; do
     "$gcc" -E -P -nostdinc -x c -I"$headers" -I"$vendor" \
         -DECB=1 -DCBC=0 -DCTR=0 -DMULTIPLY_AS_A_FUNCTION=1 \
         "$fixture" -o "$work/$target.i"
-    if ! "$MINIC_CC" --target="$target-linux" -S "$work/$target.i" \
+    if ! MINIC_M1_TRACE=1 "$MINIC_CC" --target="$target-linux" -S "$work/$target.i" \
             -o "$work/$target.minic.s" >"$work/$target.compile.out" \
             2>"$work/$target.compile.err"; then
         test ! -e "$work/$target.minic.s"
         printf 'FOUR_BACKEND_TINYAES=BLOCKED target=%s stage=MiniC_line_or_Core input=original_AES128_ECB\n' "$target"
-        sed -n '1,5p' "$work/$target.compile.err"
+        # First observed failing function/real Core operation, without
+        # flooding CI with an entire large function dump.
+        grep -m 1 'MINIC_M[14]_.*FRONTIER' "$work/$target.compile.err" || true
+        sed -n '1,14p' "$work/$target.compile.err"
         blocked=$((blocked + 1))
         continue
     fi
