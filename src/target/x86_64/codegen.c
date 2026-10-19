@@ -1021,7 +1021,7 @@ static bool x86_emit_global(FILE *out, const MinicC0Program *program,
  * silently passed through the wrong register bank. */
 /* SysV has separate six-GPR and eight-SSE argument banks; exhausted bank
  * values are stack-passed in source order.  This is the existing scalar ABI,
- * not aggregate eightbyte classification (which remains fail-closed). */
+ * with the separately validated one-GP/two-GP aggregate shapes below. */
 static bool x86_emit_call_arguments(FILE *out, const MinicC0Program *program,
                                     const MinicTargetInfo *target,
                                     const MinicCoreFunction *fn,
@@ -1047,12 +1047,21 @@ static bool x86_emit_call_arguments(FILE *out, const MinicC0Program *program,
         const MinicCoreCallArgument *arg = &fn->call_arguments[begin + i];
         MinicType type;
         if (arg->kind == MINIC_CORE_CALL_ARGUMENT_OBJECT) {
-            if (i >= fixed_count || arg->value.object_id >= fn->object_count ||
-                !minic_type_equal(fn->objects[arg->value.object_id].type, fixed_types[i]) ||
-                !x86_two_gp_record(program, target, fixed_types[i]))
+            size_t record_bytes;
+            if (arg->value.object_id >= fn->object_count ||
+                (i >= fixed_count && !variadic)) return false;
+            type = i < fixed_count ? fixed_types[i] :
+                    fn->objects[arg->value.object_id].type;
+            if (!minic_type_equal(fn->objects[arg->value.object_id].type, type))
                 return false;
-            if (integer_index <= 4U) integer_index += 2U;
-            else stack_slots += 2U;
+            if (x86_one_gp_record(program, target, type, &record_bytes)) {
+                if (integer_index < 6U) ++integer_index;
+                else ++stack_slots;
+            } else {
+                if (!x86_two_gp_record(program, target, type)) return false;
+                if (integer_index <= 4U) integer_index += 2U;
+                else stack_slots += 2U;
+            }
             continue;
         }
         if (arg->kind != MINIC_CORE_CALL_ARGUMENT_VALUE ||
@@ -1083,11 +1092,27 @@ static bool x86_emit_call_arguments(FILE *out, const MinicC0Program *program,
         const MinicCoreCallArgument *arg = &fn->call_arguments[begin + i];
         MinicType type;
         if (arg->kind == MINIC_CORE_CALL_ARGUMENT_OBJECT) {
-            MinicCoreObjectId object = arg->value.object_id;
-            if (i >= fixed_count ||
-                !x86_two_gp_record(program, target, fixed_types[i]) ||
-                !x86_object_address(out, frame, object, "%r11"))
-                return false;
+            const MinicCoreObjectId object = arg->value.object_id;
+            size_t record_bytes;
+            if (object >= fn->object_count ||
+                (i >= fixed_count && !variadic)) return false;
+            type = i < fixed_count ? fixed_types[i] : fn->objects[object].type;
+            if (!minic_type_equal(fn->objects[object].type, type) ||
+                !x86_object_address(out, frame, object, "%r11")) return false;
+            if (x86_one_gp_record(program, target, type, &record_bytes)) {
+                if (!x86_one_gp_load(out, record_bytes)) return false;
+                if (integer_index < 6U) {
+                    if (fprintf(out, "  movq %%rax, %s\n",
+                                integer_regs[integer_index]) < 0) return false;
+                    ++integer_index;
+                } else {
+                    if (fprintf(out, "  movq %%rax, %zu(%%rsp)\n",
+                                stack_slots * 8U) < 0) return false;
+                    ++stack_slots;
+                }
+                continue;
+            }
+            if (!x86_two_gp_record(program, target, type)) return false;
             if (integer_index <= 4U) {
                 if (fprintf(out,
                     "  movq 0(%%r11), %s\n"
