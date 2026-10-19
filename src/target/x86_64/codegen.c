@@ -2466,6 +2466,11 @@ static bool x86_emit_function(FILE *out, const MinicC0Program *program,
     }
     if (fprintf(out, ".Lmini_x86_f%zu_ret:\n  leave\n  ret\n"
                      ".size %s,.-%s\n", function_id, name, name) < 0) goto done;
+    /* GNU constructor: ELF startup loader traverses .init_array before main.
+     * Do not use ordinary .data; register a relocated function pointer. */
+    if (declaration->is_constructor &&
+        fprintf(out, ".section .init_array,\"aw\",@init_array\n"
+                     ".p2align 3\n  .quad %s\n", name) < 0) goto done;
     success = true;
 done:
     x86_frame_destroy(&frame);
