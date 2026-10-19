@@ -491,8 +491,7 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
             if (arg->kind != MINIC_CORE_CALL_ARGUMENT_VALUE ||
                 arg->value.value_id >= fn->value_count) return false;
             actual = fn->values[arg->value.value_id].type;
-            if (minic_type_is_double(actual) ||
-                !valid_parameter_type(program, target, actual)) return false;
+            if (!valid_parameter_type(program, target, actual)) return false;
             if (j < parameter_count) {
                 if (!valid_parameter_type(program, target, parameter_types[j]) ||
                     !minic_type_equal(parameter_types[j], actual))
