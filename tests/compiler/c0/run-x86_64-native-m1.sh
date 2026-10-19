@@ -79,6 +79,31 @@ set -e
 test "$may_alias_gcc_rc" -eq 42
 echo "PASS: GNU no-argument may_alias local pointer x86/RV64/GCC oracle"
 
+# BusyBox procps/top.c has function parameter [MI_MAX], where MI_MAX is
+# an enumerator, not the name of a preceding parameter. GCC treats it as
+# a fixed ICE bound and adjusts the outer array parameter to a pointer.
+cat > "$tempdir/array_param_enum_ice.i" <<'EOF'
+enum { MI_A, MI_B, MI_MAX };
+static unsigned long enum_array(unsigned long values[MI_MAX]) {
+    return values[MI_A] + values[MI_B];
+}
+int main(void) {
+    unsigned long values[MI_MAX] = {17UL, 25UL};
+    return (int)enum_array(values);
+}
+EOF
+check_exit array_param_enum_ice 42
+"$MINIC_CC" --target=riscv64-linux -S "$tempdir/array_param_enum_ice.i" \
+    -o "$tempdir/array_param_enum_ice.rv64.s"
+"$HOST_CC" -std=gnu11 -no-pie -x c "$tempdir/array_param_enum_ice.i" \
+    -o "$tempdir/array_param_enum_ice.gnu"
+set +e
+"$tempdir/array_param_enum_ice.gnu"
+enum_array_gcc_rc=$?
+set -e
+test "$enum_array_gcc_rc" -eq 42
+echo "PASS: C enum ICE array outer parameter adjusts to pointer on x86/RV64/GCC"
+
 
 cat > "$tempdir/params_call.i" <<'EOF'
 int sum(int a, int b) { return a + b; }
