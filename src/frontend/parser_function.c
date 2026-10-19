@@ -735,6 +735,14 @@ static bool consume_prior_parameter_bound(MinicParser *parser,
                    minic_parser_expect(parser, MINIC_TOKEN_RBRACKET, "expected ']'");
         }
     }
+    /* A sole enum constant such as BusyBox's meminfo[MI_MAX] is a C ICE,
+     * not a prior-parameter VLA bound. Leave it for the existing fixed-bound
+     * parser, which verifies the enum value and outer array adjustment.
+     * Do not accept unknown identifiers or shadow the preceding parameter. */
+    if (minic_parser_find_enum_constant(parser, parser->current.span) !=
+        MINIC_ENUMERATOR_INVALID) {
+        return true;
+    }
     minic_parser_error(parser, "array parameter bound must name a preceding integer parameter");
     return false;
 }
