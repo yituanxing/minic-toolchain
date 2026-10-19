@@ -57,7 +57,7 @@ SH
     set +e
     MINIC_TARGET="$target-linux" MINIC="$work/$target/bin/minic-target" \
         RISCV_CC="$gcc" QEMU_RISCV64="$qemu" \
-        BUILD_DIR="$work/$target" CORE_FAST_TRACE=0 \
+        BUILD_DIR="$work/$target" CORE_FAST_TRACE=0 MINIC_M1_TRACE=1 \
         sh "$root/tests/external/cjson/probe.sh" \
         >"$work/$target.probe.out" 2>"$work/$target.probe.err"
     status=$?
@@ -68,11 +68,24 @@ SH
             sed -n '1,18p' "$work/$target.probe.err" >&2
             exit 1
         fi
-        error_line=$(grep -m 1 'error:\|FAIL external/cjson:' \
-            "$work/$target.probe.err" || true)
+        if grep -q 'FAIL external/cjson: preprocessed line\|FAIL external/cjson: .*blob=' \
+                "$work/$target.probe.err"; then
+            echo "FOUR_BACKEND_CJSON=FAIL target=$target stage=source_identity_or_preprocess" >&2
+            sed -n '1,9p' "$work/$target.probe.err" >&2
+            exit 1
+        fi
+        # The historical probe prints a generic FAIL line first.
+        # Report the first actual MiniC source/Core error instead.
+        error_line=$(grep -m 1 'error:' "$work/$target.probe.err" || true)
+        if [ -z "$error_line" ]; then
+            error_line=$(grep -m 1 'FAIL external/cjson:' \
+                "$work/$target.probe.err" || true)
+        fi
         echo "FOUR_BACKEND_CJSON=BLOCKED target=$target stage=MiniC_compile_or_runtime status=$status input=original_cJSON_1.7.19"
         printf 'FOUR_BACKEND_CJSON_FIRST_DIAGNOSTIC target=%s %s\n' \
             "$target" "$error_line"
+        grep -m 1 'MINIC_M1_FRONTIER' "$work/$target.probe.err" || true
+        grep -m 1 'MINIC_M8_.*REJECT\|MINIC_M8_FRAME_CAP' "$work/$target.probe.err" || true
         # Source and failure diagnostics survive inside the temporary
         # scratch only until this invocation exits; they are not a pass.
         blocked=$((blocked + 1))
