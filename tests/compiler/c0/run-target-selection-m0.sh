@@ -110,7 +110,7 @@ test -s "$temporary_dir/x86-mixed.s"
     -o "$temporary_dir/aarch64.s"
 "$MINIC_CC" --target=loongarch64-linux -S "$temporary_dir/basic.i" \
     -o "$temporary_dir/loongarch64.s"
-grep -F 'mov w9, #42' "$temporary_dir/aarch64.s" >/dev/null
+grep -F 'movz w9, #42' "$temporary_dir/aarch64.s" >/dev/null
 grep -F 'li.w $t0, 42' "$temporary_dir/loongarch64.s" >/dev/null
 echo "PASS: ARM64 and LoongArch64 emit distinct Core integer-return assembly; target M1"
 
