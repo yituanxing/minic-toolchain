@@ -977,18 +977,27 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
             break;
         }
         case MINIC_CORE_INSTRUCTION_INTEGER_CONVERSION: {
-            MinicCoreValueId src = ins->value.operand;
+            const MinicCoreValueId src = ins->value.operand;
             size_t src_width, dst_width;
             bool src_sign, dst_sign;
             if (src >= fn->value_count ||
-                !small_integer_width(program, target,
-                                     fn->values[src].type, &src_width, &src_sign) ||
-                !small_integer_width(program, target, ins->type,
-                                     &dst_width, &dst_sign) ||
-                fprintf(out, "  ldr w9, [sp, #%zu]\n", (size_t)src * 8U) < 0 ||
-                !emit_integer_normalize(out, dst_width, dst_sign)) return false;
-            (void)src_width;
-            (void)src_sign;
+                !scalar_integer_width(program, target,
+                                      fn->values[src].type, &src_width, &src_sign) ||
+                !scalar_integer_width(program, target, ins->type,
+                                      &dst_width, &dst_sign) ||
+                fprintf(out, src_width == 8U
+                            ? "  ldr x9, [sp, #%zu]\n"
+                            : "  ldr w9, [sp, #%zu]\n",
+                        (size_t)src * 8U) < 0)
+                return false;
+            if (dst_width == 8U) {
+                if (src_width != 8U &&
+                    (!emit_integer_normalize(out, src_width, src_sign) ||
+                     (src_sign && fputs("  sxtw x9, w9\n", out) == EOF)))
+                    return false;
+                /* Unsigned narrow source already zero-extends on w writes. */
+            } else if (!emit_integer_normalize(out, dst_width, dst_sign))
+                return false;
             break;
         }
         default:
