@@ -103,19 +103,16 @@ EOF
 test -s "$temporary_dir/rv-mixed.s"
 test -s "$temporary_dir/x86-mixed.s"
 
-# Four-backend M0 must distinguish a registered but unfinished target
-# from an unknown name, and MUST NOT emit x86 or RV64 assembly by accident.
-# This is an intentional negative test, not an ABI/code-generation PASS.
-for target in aarch64-linux loongarch64-linux; do
-    if "$MINIC_CC" --target="$target" -S "$temporary_dir/basic.i" \
-            -o "$temporary_dir/$target.s" 2>"$temporary_dir/$target.err"; then
-        echo "FAIL: M0 $target emitted code without its target backend" >&2
-        exit 1
-    fi
-    grep -F 'target backend not yet implemented' "$temporary_dir/$target.err" >/dev/null
-    test ! -e "$temporary_dir/$target.s"
-done
-echo "PASS: AArch64/LoongArch64 target identities registered; incomplete emitters fail closed"
+# M1 replaces M0's previously necessary missing-backend rejection:
+# GNU-assembler-ready instructions are now produced by distinct ISA emitters.
+# Actual ELF link/QEMU/GCC differentiation is checked in four-backend M1.
+"$MINIC_CC" --target=aarch64-linux -S "$temporary_dir/basic.i" \
+    -o "$temporary_dir/aarch64.s"
+"$MINIC_CC" --target=loongarch64-linux -S "$temporary_dir/basic.i" \
+    -o "$temporary_dir/loongarch64.s"
+grep -F 'mov w9, #42' "$temporary_dir/aarch64.s" >/dev/null
+grep -F 'li.w $t0, 42' "$temporary_dir/loongarch64.s" >/dev/null
+echo "PASS: ARM64 and LoongArch64 emit distinct Core integer-return assembly; target M1"
 
 if "$MINIC_CC" --target=unknown-target -S "$temporary_dir/basic.i" \
         -o "$temporary_dir/unknown.s" 2>"$temporary_dir/unknown.err"; then
