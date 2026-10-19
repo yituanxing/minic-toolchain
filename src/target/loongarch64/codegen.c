@@ -457,11 +457,16 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
             const MinicCoreValueId base = ins->value.pointer_offset.base;
             const MinicCoreValueId index = ins->value.pointer_offset.index;
             const size_t stride = ins->value.pointer_offset.element_size;
+            size_t iw;
+            bool signed_index;
             if (base >= fn->value_count || index >= fn->value_count ||
                 !minic_type_is_pointer(fn->values[base].type) ||
-                !valid_int(fn->values[index].type) || stride > 2047U ||
+                !small_integer_width(program, target, fn->values[index].type,
+                                     &iw, &signed_index) || iw != 4U ||
+                stride > 2047U ||
                 !emit_sp_mem(out, "ld.d", "$t0", (size_t)base * 8U) ||
-                !emit_sp_mem(out, "ld.w", "$t1", (size_t)index * 8U))
+                !emit_sp_mem(out, signed_index ? "ld.w" : "ld.wu",
+                             "$t1", (size_t)index * 8U))
                 return false;
             if (stride != 0U) {
                 if (fprintf(out, "  addi.d $t2, $zero, %zu\n"
@@ -555,9 +560,12 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                 ? "  add.w $t0, $t0, $t1\n" :
                 ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_SUBTRACT
                     ? "  sub.w $t0, $t0, $t1\n" : "  mul.w $t0, $t0, $t1\n";
+            size_t lw, rw;
+            bool ls, rs;
             if (lhs >= fn->value_count || rhs >= fn->value_count ||
-                !valid_int(fn->values[lhs].type) ||
-                !valid_int(fn->values[rhs].type) ||
+                !small_integer_width(program, target, fn->values[lhs].type, &lw, &ls) ||
+                !small_integer_width(program, target, fn->values[rhs].type, &rw, &rs) ||
+                lw != 4U || rw != 4U || ls != rs ||
                 !emit_sp_mem(out, "ld.w", "$t0", (size_t)lhs * 8U) ||
                 !emit_sp_mem(out, "ld.w", "$t1", (size_t)rhs * 8U) ||
                 fputs(opcode, out) == EOF) return false;
@@ -567,13 +575,17 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
         case MINIC_CORE_INSTRUCTION_SCALAR_EQUAL: {
             const MinicCoreValueId lhs = ins->value.binary.left;
             const MinicCoreValueId rhs = ins->value.binary.right;
+            size_t lw, rw;
+            bool ls, rs;
             if (lhs >= fn->value_count || rhs >= fn->value_count ||
-                !valid_int(fn->values[lhs].type) ||
-                !valid_int(fn->values[rhs].type) ||
+                !small_integer_width(program, target, fn->values[lhs].type, &lw, &ls) ||
+                !small_integer_width(program, target, fn->values[rhs].type, &rw, &rs) ||
+                lw != 4U || rw != 4U || ls != rs ||
                 !emit_sp_mem(out, "ld.w", "$t0", (size_t)lhs * 8U) ||
                 !emit_sp_mem(out, "ld.w", "$t1", (size_t)rhs * 8U) ||
                 fputs(ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_LESS
-                          ? "  slt $t0, $t0, $t1\n"
+                          ? (ls ? "  slt $t0, $t0, $t1\n"
+                                : "  sltu $t0, $t0, $t1\n")
                           : "  xor $t0, $t0, $t1\n  sltui $t0, $t0, 1\n", out) == EOF)
                 return false;
             break;
