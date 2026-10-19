@@ -81,7 +81,27 @@ SH
             error_line=$(grep -m 1 'FAIL external/cjson:' \
                 "$work/$target.probe.err" || true)
         fi
-        echo "FOUR_BACKEND_CJSON=BLOCKED target=$target stage=MiniC_compile_or_runtime status=$status input=original_cJSON_1.7.19"
+        # Discovery tolerates only a known unsupported compiler feature.
+        # GNU link errors and incorrect runtime results must fail this job.
+        if grep -q 'FAIL external/cjson: runtime acceptance exit=' \
+                "$work/$target.probe.err"; then
+            verdict=FAIL
+            phase=QEMU_runtime
+        elif grep -q 'FAIL external/cjson: MiniC compile status=' \
+                "$work/$target.probe.err"; then
+            if grep -q 'MINIC_BACKEND_REJECT\|Core instruction/ABI not yet supported\|not yet supported' \
+                    "$work/$target.probe.err"; then
+                verdict=BLOCKED
+                phase=MiniC_unsupported
+            else
+                verdict=FAIL
+                phase=MiniC_compile_unclassified
+            fi
+        else
+            verdict=FAIL
+            phase=GNU_link_or_probe
+        fi
+        echo "FOUR_BACKEND_CJSON=$verdict target=$target stage=$phase status=$status input=original_cJSON_1.7.19"
         printf 'FOUR_BACKEND_CJSON_FIRST_DIAGNOSTIC target=%s %s\n' \
             "$target" "$error_line"
         # The backend reports the first failed C guard with precise Core context.
@@ -104,7 +124,11 @@ SH
         echo "FOUR_BACKEND_CJSON_BOUNDED_STDERR target=$target end"
         # Source and failure diagnostics survive inside the temporary
         # scratch only until this invocation exits; they are not a pass.
-        blocked=$((blocked + 1))
+        if [ "$verdict" = BLOCKED ]; then
+            blocked=$((blocked + 1))
+        else
+            failed=$((failed + 1))
+        fi
         continue
     fi
 
