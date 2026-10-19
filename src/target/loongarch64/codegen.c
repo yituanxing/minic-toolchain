@@ -508,7 +508,8 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
             is_variadic = sig->is_variadic;
         }
         if (!minic_type_equal(return_type, ins->type) ||
-            minic_type_is_double(return_type) || /* FP call needs separate ABI. */
+            /* Fixed binary64 call results are transferred from the target FP
+             * ABI result register; aggregate and other types still fail closed. */
             !valid_return_type(program, target, return_type) ||
             count > 8U || parameter_count > count ||
             (!is_variadic && parameter_count != count) ||
@@ -671,7 +672,9 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                          ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_DIVIDE ||
                          ins->kind == MINIC_CORE_INSTRUCTION_PARAMETER ||
                          ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_TO_DOUBLE ||
-                         ins->kind == MINIC_CORE_INSTRUCTION_FLOAT_TO_DOUBLE))))
+                         ins->kind == MINIC_CORE_INSTRUCTION_FLOAT_TO_DOUBLE ||
+                         ins->kind == MINIC_CORE_INSTRUCTION_CALL ||
+                         ins->kind == MINIC_CORE_INSTRUCTION_INDIRECT_CALL))))
             {
                 if (getenv("MINIC_M1_TRACE") != NULL)
                     (void)fprintf(stderr,
@@ -921,7 +924,11 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                     return false;
             }
             if (minic_type_is_void(ins->type)) continue;
-            if (fputs("  or $t0, $a0, $zero\n", out) == EOF)
+            /* LoongArch lp64d returns IEEE binary64 in fa0, not a0;
+             * movfr2gr.d preserves every bit of the FP result. */
+            if (fputs(minic_type_is_double(ins->type)
+                          ? "  movfr2gr.d $t0, $fa0\n"
+                          : "  or $t0, $a0, $zero\n", out) == EOF)
                 return false;
             if (minic_type_is_integer(ins->type)) {
                 size_t width;
