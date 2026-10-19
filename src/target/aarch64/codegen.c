@@ -581,6 +581,29 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                 fputs(opcode, out) == EOF) return false;
             break;
         }
+        case MINIC_CORE_INSTRUCTION_INTEGER_DIVIDE:
+        case MINIC_CORE_INSTRUCTION_INTEGER_REMAINDER: {
+            MinicCoreValueId lhs = ins->value.binary.left;
+            MinicCoreValueId rhs = ins->value.binary.right;
+            size_t lw, rw;
+            bool ls, rs;
+            if (lhs >= fn->value_count || rhs >= fn->value_count ||
+                !small_integer_width(program, target, fn->values[lhs].type, &lw, &ls) ||
+                !small_integer_width(program, target, fn->values[rhs].type, &rw, &rs) ||
+                lw != 4U || rw != 4U || ls != rs ||
+                fprintf(out, "  ldr w9, [sp, #%zu]\n", (size_t)lhs * 8U) < 0 ||
+                fprintf(out, "  ldr w10, [sp, #%zu]\n", (size_t)rhs * 8U) < 0)
+                return false;
+            if (ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_DIVIDE) {
+                if (fputs(ls ? "  sdiv w9, w9, w10\n"
+                             : "  udiv w9, w9, w10\n", out) == EOF) return false;
+            } else if (fputs(ls ? "  sdiv w11, w9, w10\n"
+                                  "  msub w9, w11, w10, w9\n"
+                                : "  udiv w11, w9, w10\n"
+                                  "  msub w9, w11, w10, w9\n", out) == EOF)
+                return false;
+            break;
+        }
         case MINIC_CORE_INSTRUCTION_INTEGER_LESS:
         case MINIC_CORE_INSTRUCTION_SCALAR_EQUAL: {
             const MinicCoreValueId lhs = ins->value.binary.left;
