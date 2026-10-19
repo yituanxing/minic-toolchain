@@ -574,11 +574,23 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
             offset = (size_t)ins->result * 8U;
         }
         switch (ins->kind) {
-        case MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT:
-            if (ins->value.integer_value < INT32_MIN ||
-                ins->value.integer_value > INT32_MAX) return false;
-            if (fprintf(out, "  li.w $t0, %" PRId64 "\n", ins->value.integer_value) < 0) return false;
+        case MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT: {
+            size_t width;
+            bool sign;
+            if (!scalar_integer_width(program, target, ins->type,
+                                      &width, &sign)) return false;
+            if (width == 8U) {
+                if (fprintf(out, "  li.d $t0, %" PRId64 "\n",
+                            ins->value.integer_value) < 0) return false;
+            } else {
+                if (ins->value.integer_value < INT32_MIN ||
+                    ins->value.integer_value > INT32_MAX ||
+                    fprintf(out, "  li.w $t0, %" PRId64 "\n",
+                            ins->value.integer_value) < 0) return false;
+            }
+            (void)sign;
             break;
+        }
         case MINIC_CORE_INSTRUCTION_GLOBAL_ADDRESS:
             if (ins->value.global_id >= fn->global_count ||
                 fn->globals[ins->value.global_id].name == NULL ||
