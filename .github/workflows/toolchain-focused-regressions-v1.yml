@@ -6,7 +6,6 @@ on:
       - "main"
       - "agent/linux-expanded-kbuild-v0"
       - "agent/linux-perf-boolean-domain-v1"
-      - "fix/x86-long-double-stack-abi-and-busybox-gate" # TEMPORARY: remove after CI qualification
     paths:
       - 'src/**'
       - 'include/**'
@@ -83,18 +82,6 @@ jobs:
           test -x build/toolchain-focused-t1-v2/bin/minic-as
           test -x build/toolchain-focused-t1-v2/bin/minic-ar
           test -x build/toolchain-focused-t1-v2/bin/minic-ld
-
-      # TEMPORARY integration acceptance. Reuse this existing focused job
-      # only; restore this workflow byte-for-byte after successful run.
-      - name: Exercise x86 long-double GCC ABI and BusyBox owner coverage
-        run: |
-          set -Eeuo pipefail
-          export MINIC_CC="$GITHUB_WORKSPACE/build/toolchain-focused-t1-v2/bin/minic-cc"
-          export HOST_CC=cc
-          test -x "$MINIC_CC"
-          sh tests/compiler/c0/run-x86_64-long-double-stack-abi.sh
-          python3 tests/external/busybox/test_mixed_bulk_coverage.py
-          make MODE=release CFLAGS=-Werror BUILD_DIR=build/toolchain-focused-t1-v2 check-x86_64-m1
 
       # Stage2 artifact mode fix: Actions strips +x; QEMU requires executable ELF.
       # Certified fixture return_42.c for strict direct/driver parity.
