@@ -9,7 +9,7 @@ QEMU_LOONGARCH64=qemu-loongarch64
 w=$(mktemp -d)
 trap 'rm -rf "$w"' EXIT HUP INT TERM
 m2_enabled=0
-if [ "${FOUR_BACKEND_M2:-0}" = "1" ] || [ "${FOUR_BACKEND_M2_STACK:-0}" = "1" ] || [ "${FOUR_BACKEND_M3_CALL:-0}" = "1" ] || [ "${FOUR_BACKEND_M4_GLOBAL:-0}" = "1" ] || [ "${FOUR_BACKEND_M5_POINTER:-0}" = "1" ] || [ "${FOUR_BACKEND_M6_ADDRESS:-0}" = "1" ] || [ "${FOUR_BACKEND_M7_FRAME:-0}" = "1" ] || [ "${FOUR_BACKEND_M8_NARROW:-0}" = "1" ] || [ "${FOUR_BACKEND_M9_UNSIGNED:-0}" = "1" ] || [ "${FOUR_BACKEND_M10_MOD:-0}" = "1" ] || [ "${FOUR_BACKEND_M11_INDEX:-0}" = "1" ]; then
+if [ "${FOUR_BACKEND_M2:-0}" = "1" ] || [ "${FOUR_BACKEND_M2_STACK:-0}" = "1" ] || [ "${FOUR_BACKEND_M3_CALL:-0}" = "1" ] || [ "${FOUR_BACKEND_M4_GLOBAL:-0}" = "1" ] || [ "${FOUR_BACKEND_M5_POINTER:-0}" = "1" ] || [ "${FOUR_BACKEND_M6_ADDRESS:-0}" = "1" ] || [ "${FOUR_BACKEND_M7_FRAME:-0}" = "1" ] || [ "${FOUR_BACKEND_M8_NARROW:-0}" = "1" ] || [ "${FOUR_BACKEND_M9_UNSIGNED:-0}" = "1" ] || [ "${FOUR_BACKEND_M10_MOD:-0}" = "1" ] || [ "${FOUR_BACKEND_M11_INDEX:-0}" = "1" ] || [ "${FOUR_BACKEND_M12_BITWISE:-0}" = "1" ]; then
     m2_enabled=1
 fi
 cat > "$w/return.i" <<'EOF'
@@ -415,6 +415,37 @@ cat > "$w/driver_s16_index.c" <<'EOF'
 extern int mini_s16_index(const int *, short);
 int main(void) { int slots[3] = { 10, 42, 15 }; return mini_s16_index(&slots[2], -1); }
 EOF
+# M12: actual AES KeyExpansion now reaches INTEGER_BITWISE_XOR.
+# Cross-GNU oracles cover all three binary bitwise operators and a
+# high-bit unsigned case, executing the MiniC object under each QEMU.
+cat > "$w/bit_xor.i" <<'EOF'
+int mini_bit_xor(int a, int b) { return a ^ b; }
+EOF
+cat > "$w/driver_bit_xor.c" <<'EOF'
+extern int mini_bit_xor(int,int);
+int main(void) { return mini_bit_xor(21, 63); }
+EOF
+cat > "$w/bit_and.i" <<'EOF'
+int mini_bit_and(int a, int b) { return a & b; }
+EOF
+cat > "$w/driver_bit_and.c" <<'EOF'
+extern int mini_bit_and(int,int);
+int main(void) { return mini_bit_and(127, 42); }
+EOF
+cat > "$w/bit_or.i" <<'EOF'
+int mini_bit_or(int a, int b) { return a | b; }
+EOF
+cat > "$w/driver_bit_or.c" <<'EOF'
+extern int mini_bit_or(int,int);
+int main(void) { return mini_bit_or(40, 2); }
+EOF
+cat > "$w/bit_unsigned.i" <<'EOF'
+int mini_bit_unsigned(unsigned int n) { return (int)((n ^ 0xffffffffu) & 255u); }
+EOF
+cat > "$w/driver_bit_unsigned.c" <<'EOF'
+extern int mini_bit_unsigned(unsigned int);
+int main(void) { return mini_bit_unsigned(0xffffffd5u); }
+EOF
 check_qemu_exit() {
     emulator=$1
     binary=$2
@@ -475,6 +506,9 @@ for target in aarch64 loongarch64; do
     if [ "${FOUR_BACKEND_M11_INDEX:-0}" = "1" ]; then
         cases="$cases u8_index s8_index u16_index s16_index"
     fi
+    if [ "${FOUR_BACKEND_M12_BITWISE:-0}" = "1" ]; then
+        cases="$cases bit_xor bit_and bit_or bit_unsigned"
+    fi
     if [ "$m2_enabled" = "1" ]; then
         # Independent originals for every new CFG/comparison fixture, not
         # merely an expected return code from a MiniC-owned executable.
@@ -508,6 +542,9 @@ for target in aarch64 loongarch64; do
         fi
         if [ "${FOUR_BACKEND_M11_INDEX:-0}" = "1" ]; then
             oracle_cases="$oracle_cases u8_index s8_index u16_index s16_index"
+        fi
+        if [ "${FOUR_BACKEND_M12_BITWISE:-0}" = "1" ]; then
+            oracle_cases="$oracle_cases bit_xor bit_and bit_or bit_unsigned"
         fi
         for testcase in $oracle_cases; do
             "$gcc" -static -x c "$w/$testcase.i" "$w/driver_$testcase.c" \
@@ -544,6 +581,8 @@ for target in aarch64 loongarch64; do
             compare) "$gcc" -static "$w/$target.compare.o" "$w/driver_compare.c" -o "$w/$target.compare.elf" ;;
             stack9) "$gcc" -static "$w/$target.stack9.o" "$w/driver_stack9.c" -o "$w/$target.stack9.elf" ;;
             stack10) "$gcc" -static "$w/$target.stack10.o" "$w/driver_stack10.c" -o "$w/$target.stack10.elf" ;;
+            bit_xor|bit_and|bit_or|bit_unsigned)
+                "$gcc" -static "$w/$target.$testcase.o" "$w/driver_$testcase.c" -o "$w/$target.$testcase.elf" ;;
             u8_index|s8_index|u16_index|s16_index)
                 "$gcc" -static "$w/$target.$testcase.o" "$w/driver_$testcase.c" -o "$w/$target.$testcase.elf" ;;
             umod|smod|udiv|sdiv)
@@ -626,6 +665,9 @@ if [ "$m2_enabled" = "1" ]; then
     fi
     if [ "${FOUR_BACKEND_M11_INDEX:-0}" = "1" ]; then
         echo "FOUR_BACKEND_M11_INDEX=PASS architectures=2 executable_QEMU_cases=22 signed_unsigned_byte_halfword_index_cases=8 GNU_independent_oracles=18"
+    fi
+    if [ "${FOUR_BACKEND_M12_BITWISE:-0}" = "1" ]; then
+        echo "FOUR_BACKEND_M12_BITWISE=PASS architectures=2 executable_QEMU_cases=22 signed_unsigned_bitwise_cases=8 GNU_independent_oracles=18"
     fi
 else
     echo "FOUR_BACKEND_M1=PASS architectures=2 executable_QEMU_cases=8 GCC_independent_oracles=4"
