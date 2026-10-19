@@ -58,6 +58,7 @@ SH
     MINIC_TARGET="$target-linux" MINIC="$work/$target/bin/minic-target" \
         RISCV_CC="$gcc" QEMU_RISCV64="$qemu" \
         BUILD_DIR="$work/$target" CORE_FAST_TRACE=0 MINIC_M1_TRACE=1 \
+        MINIC_BACKEND_CENSUS=1 \
         sh "$root/tests/external/cjson/probe.sh" \
         >"$work/$target.probe.out" 2>"$work/$target.probe.err"
     status=$?
@@ -106,6 +107,28 @@ SH
             "$target" "$error_line"
         # The backend reports the first failed C guard with precise Core context.
         grep -m 1 'MINIC_BACKEND_REJECT' "$work/$target.probe.err" || true
+        # Linux-style census: classify failures for all functions in one
+        # unchanged-source compilation rather than per-opcode CI round trips.
+        grep 'MINIC_BACKEND_CENSUS' "$work/$target.probe.err" || true
+        if grep -q 'MINIC_BACKEND_REJECT' "$work/$target.probe.err"; then
+            awk '
+                /MINIC_BACKEND_REJECT/ {
+                    key = ""
+                    for (i = 1; i <= NF; ++i)
+                        if ($i ~ /^(stage|kind|backend_line)=/)
+                            key = key " " $i
+                    count[key]++
+                }
+                END {
+                    for (key in count)
+                        printf "%06d%s\n", count[key], key
+                }
+            ' "$work/$target.probe.err" | sort -rn | head -n 18 |
+                while IFS= read -r cls; do
+                    echo "FOUR_BACKEND_CJSON_ERROR_CLASS target=$target $cls"
+                done
+            grep 'MINIC_BACKEND_REJECT' "$work/$target.probe.err" | head -n 35
+        fi
         grep -m 1 'MINIC_M1_FRONTIER' "$work/$target.probe.err" || true
         grep -m 1 'MINIC_M4_GLOBAL_FRONTIER' "$work/$target.probe.err" || true
         grep -m 1 'MINIC_M8_.*REJECT\|MINIC_M8_FRAME_CAP' "$work/$target.probe.err" || true

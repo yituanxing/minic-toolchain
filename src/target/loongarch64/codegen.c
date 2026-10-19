@@ -386,6 +386,7 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
     /* No semantic change: source-specific diagnostics only for the active
      * cJSON failure, never for normal builds or other projects. */
     const bool trace_cjson = getenv("MINIC_M1_TRACE") != NULL &&
+                             getenv("MINIC_BACKEND_CENSUS") == NULL &&
                              name != NULL &&
                              (strcmp(name, "cJSON_ParseWithLengthOpts") == 0 ||
                                strcmp(name, "cJSON_Compare") == 0 ||
@@ -1489,6 +1490,8 @@ bool minic_loongarch64_write_c0_program_with_core_functions(
     size_t i;
     FILE *out;
     bool success = true;
+    const bool census = getenv("MINIC_BACKEND_CENSUS") != NULL;
+    size_t scanned_functions = 0U, rejected_functions = 0U;
     if (path == NULL || program == NULL || target == NULL ||
         target->architecture != MINIC_TARGET_ARCH_LOONGARCH64 ||
         (core_function_count > 0U && core_functions == NULL) ||
@@ -1510,25 +1513,36 @@ bool minic_loongarch64_write_c0_program_with_core_functions(
                           obj->name != NULL ? obj->name : "<unnamed>",
                           obj->initializer_count, obj->relocation_count);
     }
-    for (i = 0U; i < program->function_count && success; ++i) {
+    /* Linux-style full-TU census, opt-in only: identify the first reject
+     * in EVERY function in one compiler invocation. The partial .s is
+     * ALWAYS discarded if a function fails; normal builds fail fast. */
+    for (i = 0U; i < program->function_count && (success || census); ++i) {
         const MinicFunction *decl = &program->functions[i];
         if (decl->is_defined && (!decl->is_internal || decl->is_referenced)) {
-            success = emit_function(out, program, target, decl, &core_functions[i],
-                                    i, function_sections);
-            if (!success && getenv("MINIC_M1_TRACE") != NULL) {
+            ++scanned_functions;
+            if (!emit_function(out, program, target, decl, &core_functions[i],
+                               i, function_sections)) {
                 const MinicCoreFunction *fn = &core_functions[i];
-                (void)fprintf(stderr,
-                              "MINIC_M1_FRONTIER arch=loongarch64 function=%s "
-                              "core_blocks=%zu core_objects=%zu parameters=%zu "
-                              "values=%zu instructions=%zu\n",
-                              fn->name != NULL ? fn->name : "<unnamed>",
-                              fn->block_count, fn->object_count,
-                              fn->parameter_count, fn->value_count,
-                              fn->instruction_count);
-                (void)minic_core_function_dump(stderr, fn);
+                ++rejected_functions;
+                success = false;
+                if (getenv("MINIC_M1_TRACE") != NULL) {
+                    (void)fprintf(stderr,
+                                  "MINIC_M1_FRONTIER arch=loongarch64 function=%s "
+                                  "core_blocks=%zu core_objects=%zu parameters=%zu "
+                                  "values=%zu instructions=%zu\n",
+                                  fn->name != NULL ? fn->name : "<unnamed>",
+                                  fn->block_count, fn->object_count,
+                                  fn->parameter_count, fn->value_count,
+                                  fn->instruction_count);
+                    if (!census) (void)minic_core_function_dump(stderr, fn);
+                }
             }
         }
     }
+    if (census)
+        (void)fprintf(stderr,
+                      "MINIC_BACKEND_CENSUS arch=loongarch64 scanned=%zu rejected=%zu\n",
+                      scanned_functions, rejected_functions);
     if (success && fprintf(out, ".section .note.GNU-stack,\"\",@progbits\n") < 0)
         success = false;
     if (fclose(out) != 0) success = false;
