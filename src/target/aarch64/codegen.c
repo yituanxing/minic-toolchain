@@ -559,18 +559,34 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
         }
         switch (ins->kind) {
         case MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT: {
-            /* AAPCS64: arbitrary 32-bit constants are NOT legal as a single
-             * mov-immediate pseudo-instruction. MOVZ/MOVK carries exact bits
-             * for negative values and high-halfword payloads alike. */
-            uint32_t bits;
-            if (ins->value.integer_value < INT32_MIN ||
-                ins->value.integer_value > INT32_MAX) return false;
-            bits = (uint32_t)(int32_t)ins->value.integer_value;
-            if (fprintf(out, "  movz w9, #%" PRIu32 "\n",
-                        bits & UINT32_C(0xffff)) < 0 ||
-                ((bits >> 16U) != 0U &&
-                 fprintf(out, "  movk w9, #%" PRIu32 ", lsl #16\n",
-                         bits >> 16U) < 0)) return false;
+            size_t width;
+            bool sign;
+            if (!scalar_integer_width(program, target, ins->type,
+                                      &width, &sign)) return false;
+            if (width == 8U) {
+                /* Full 64-bit constant: preserve high halves AND sign bits. */
+                const uint64_t bits = (uint64_t)ins->value.integer_value;
+                unsigned int shift;
+                if (fprintf(out, "  movz x9, #%" PRIu64 "\n",
+                            bits & UINT64_C(0xffff)) < 0) return false;
+                for (shift = 16U; shift <= 48U; shift += 16U) {
+                    if (((bits >> shift) & UINT64_C(0xffff)) != 0U &&
+                        fprintf(out, "  movk x9, #%" PRIu64 ", lsl #%u\n",
+                                (bits >> shift) & UINT64_C(0xffff), shift) < 0)
+                        return false;
+                }
+            } else {
+                uint32_t bits;
+                if (ins->value.integer_value < INT32_MIN ||
+                    ins->value.integer_value > INT32_MAX) return false;
+                bits = (uint32_t)(int32_t)ins->value.integer_value;
+                if (fprintf(out, "  movz w9, #%" PRIu32 "\n",
+                            bits & UINT32_C(0xffff)) < 0 ||
+                    ((bits >> 16U) != 0U &&
+                     fprintf(out, "  movk w9, #%" PRIu32 ", lsl #16\n",
+                             bits >> 16U) < 0)) return false;
+            }
+            (void)sign;
             break;
         }
         case MINIC_CORE_INSTRUCTION_GLOBAL_ADDRESS:
