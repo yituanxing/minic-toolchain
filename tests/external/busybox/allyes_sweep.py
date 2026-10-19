@@ -25,6 +25,10 @@ def call_proxy(args):
     """Preserve GCC behavior; side-channel diagnostics cannot break GCC."""
     gcc_argv = compiler_argv()
     gcc = subprocess.run(gcc_argv + args, check=False)
+    # When Kbuild relinks a substituted MiniC object cohort, GNU remains
+    # the original compiler; never generate a second shadow/report entry.
+    if os.environ.get("BUSYBOX_ALLYES_SKIP_SHADOW") == "1":
+        return gcc.returncode
     source = next((arg for arg in args if arg.endswith(".c")
                    and not arg.startswith("-")), None)
     if "-c" not in args or source is None:
@@ -251,6 +255,18 @@ def controller(args):
             print("BUSYBOX_ALLYES_GCC_RUNTIME_ORACLE=BLOCKED original_GNU_build=%s" %
                   ("PASS" if rc == 0 else "FAIL"), flush=True)
     attempts = print_frontier(out, rc == 0, enabled)
+    if link_compatible and os.environ.get("BUSYBOX_ALLYES_MIXED_COHORT") == "1":
+        if rc != 0 or not (root / "busybox").is_file():
+            print("BUSYBOX_MIXED_COMPLEX=BLOCKED stage=original-GNU-build")
+            return 1
+        mixed_script = Path(__file__).resolve().with_name("mixed_original_kbuild.py")
+        verdict = subprocess.run(
+            [sys.executable, str(mixed_script), "--source", str(root),
+             "--report", str(out), "--proxy", proxy, "--host-cc", args.host_cc],
+            env=make_env, check=False)
+        if verdict.returncode != 0:
+            print("BUSYBOX_MIXED_COMPLEX=FAIL stage=cohort-validation")
+            return 1
     if attempts == 0:
         print("BUSYBOX_ALLYES_SCAN=FAIL no_real_Kbuild_C_compile_invocations")
         return 1
