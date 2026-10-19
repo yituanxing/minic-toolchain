@@ -762,7 +762,7 @@ check-x86_64-busybox-complex-five: $(MINIC_CC_BINARY)
 	else \
 	   cat "$log"; exit 1; \
 	fi; \
-	grep -Fx 'BUSYBOX_MIXED_COMPLEX=PASS all_five_independent=1 GCC_original_oracle=1 real_Kbuild_link=1' "$log"
+	grep -Fx 'BUSYBOX_MIXED_COMPLEX=PASS all_five_independent=1 combined_five=1 GCC_original_oracle=1 real_Kbuild_link=1' "$log"
 
 check-x86_64-busybox-host-link: $(MINIC_CC_BINARY)
 	@set -eu; \
