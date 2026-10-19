@@ -636,7 +636,8 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                       !minic_type_is_pointer(ins->type) &&
                       !(minic_type_is_double(ins->type) &&
                         (ins->kind == MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT ||
-                         ins->kind == MINIC_CORE_INSTRUCTION_LOAD))))
+                         ins->kind == MINIC_CORE_INSTRUCTION_LOAD ||
+                         ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_DIVIDE))))
             {
                 if (getenv("MINIC_M1_TRACE") != NULL)
                     (void)fprintf(stderr,
@@ -650,6 +651,22 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
             offset = (size_t)ins->result * 8U;
         }
         switch (ins->kind) {
+        case MINIC_CORE_INSTRUCTION_DOUBLE_DIVIDE: {
+            const MinicCoreValueId lhs = ins->value.binary.left;
+            const MinicCoreValueId rhs = ins->value.binary.right;
+            if (!minic_type_is_double(ins->type) ||
+                lhs >= fn->value_count || rhs >= fn->value_count ||
+                !minic_type_is_double(fn->values[lhs].type) ||
+                !minic_type_is_double(fn->values[rhs].type) ||
+                fprintf(out,
+                        "  ldr d9, [sp, #%zu]\n"
+                        "  ldr d10, [sp, #%zu]\n"
+                        "  fdiv d9, d9, d10\n"
+                        "  str d9, [sp, #%zu]\n",
+                        (size_t)lhs * 8U, (size_t)rhs * 8U, offset) < 0)
+                return false;
+            continue; /* Result is already in its full 64-bit SSA slot. */
+        }
         case MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT: {
             const uint64_t bits = ins->value.floating_bits;
             unsigned int shift;
