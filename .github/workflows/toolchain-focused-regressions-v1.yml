@@ -89,7 +89,7 @@ jobs:
                   linux_yaml=true
                 fi
                 case "$changed" in
-                  src/target/aarch64/*|src/target/loongarch64/*|tests/compiler/c0/run-four-backend-m1.sh|tests/external/tiny-aes-c/*|tests/external/cjson/*|tests/external/zlib/*)
+                  src/target/aarch64/*|src/target/loongarch64/*|tests/compiler/c0/run-four-backend-m1.sh|tests/external/tiny-aes-c/*|tests/external/cjson/*|tests/external/zlib/*|tests/external/lua/*)
                     ;;
                   *) four_only=false ;;
                 esac
@@ -216,6 +216,10 @@ jobs:
           # example/minigzip GNU/QEMU differential, and gzprintf GP/FP ABI.
           sh -n tests/external/zlib/probe-four-backend-frontier.sh
           make MODE=release CFLAGS=-Werror BUILD_DIR=build/toolchain-focused-t1-v2 check-four-backend-zlib-accept
+          # Next real project in census/discovery mode; runtime acceptance
+          # requires a separate strict test, never equate BLOCKED with PASS.
+          sh -n tests/external/lua/probe-four-backend-frontier.sh
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/toolchain-focused-t1-v2 check-four-backend-lua-frontier
 
       - name: Fetch certified Stage2 for single-runner Kbuild driver preflight
         if: contains(github.event.head_commit.message, '[minic-stage2-driver-smoke]')
