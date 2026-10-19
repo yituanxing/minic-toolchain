@@ -440,7 +440,7 @@ extern int mini_bit_or(int,int);
 int main(void) { return mini_bit_or(40, 2); }
 EOF
 cat > "$w/bit_unsigned.i" <<'EOF'
-int mini_bit_unsigned(unsigned int n) { return (int)((n ^ 0xffffffffu) & 255u); }
+int mini_bit_unsigned(unsigned int n) { return (int)((n ^ 255u) & 255u); }
 EOF
 cat > "$w/driver_bit_unsigned.c" <<'EOF'
 extern int mini_bit_unsigned(unsigned int);
