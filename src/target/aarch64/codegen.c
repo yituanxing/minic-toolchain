@@ -100,12 +100,55 @@ static bool emit_simple_global(FILE *out, const MinicC0Program *program,
     return fprintf(out, ".size %s,%zu\n", obj->name, storage_size) >= 0;
 }
 
-static bool emit_function(FILE *out, const MinicFunction *decl,
+/* M7: retain x86's established DataLayout-owned object sizing instead
+ * of guessing eight bytes per Core object.  The new-ISA stack slots
+ * are SP-positive; naturally aligned objects are laid out after SSA
+ * value slots.  Keep bounded <= 8 KiB frames until large-offset ABI
+ * access has been independently checked on both targets. */
+static bool frame_objects(const MinicC0Program *program,
+                          const MinicTargetInfo *target,
+                          const MinicCoreFunction *fn,
+                          size_t sought_id, size_t *sought_offset,
+                          size_t *object_end) {
+    size_t pos, i;
+    if (program == NULL || target == NULL || fn == NULL ||
+        sought_id > fn->object_count ||
+        fn->value_count > 1024U || fn->object_count > 1024U)
+        return false;
+    pos = fn->value_count * 8U;
+    for (i = 0U; i < fn->object_count; ++i) {
+        const MinicCoreObject *obj = &fn->objects[i];
+        size_t unit, align, extent;
+        if (!minic_data_layout_type(target->data_layout, program,
+                                    obj->type, &unit, &align) ||
+            obj->element_count == 0U || unit > 8192U / obj->element_count)
+            return false;
+        extent = unit * obj->element_count;
+        if (obj->explicit_alignment > align)
+            align = obj->explicit_alignment;
+        if (align == 0U || align > 16U || (align & (align - 1U)) != 0U)
+            return false;
+        if (pos > 8192U - (align - 1U)) return false;
+        pos = (pos + align - 1U) & ~(align - 1U);
+        if (i == sought_id && sought_offset != NULL)
+            *sought_offset = pos;
+        if (extent > 8192U - pos) return false;
+        pos += extent;
+    }
+    if (sought_id == fn->object_count && sought_offset != NULL)
+        *sought_offset = pos;
+    if (object_end != NULL) *object_end = pos;
+    return true;
+}
+
+static bool emit_function(FILE *out, const MinicC0Program *program,
+                          const MinicTargetInfo *target,
+                          const MinicFunction *decl,
                           const MinicCoreFunction *fn, size_t id,
                           bool function_sections) {
     const char *name = minic_c0_function_symbol_name(decl);
     const MinicCoreBlock *block;
-    size_t frame, i, values_bytes;
+    size_t frame, i, values_bytes, object_end, save_offset;
     bool has_direct_calls = false;
     if (name == NULL || name[0] == '\0' ||
         !minic_core_function_verify(fn) ||
@@ -115,8 +158,7 @@ static bool emit_function(FILE *out, const MinicFunction *decl,
         !valid_return_type(fn->return_type) ||
         fn->block_count == 0U || fn->block_count > 128U || fn->entry_block != 0U ||
         fn->inline_asm_count != 0U || fn->parameter_count > 10U ||
-        fn->value_count > 240U || fn->object_count > 240U ||
-        fn->value_count > 240U - fn->object_count)
+        fn->value_count > 1024U || fn->object_count > 1024U)
         return false;
     for (i = 0U; i < fn->parameter_count; ++i)
         if (!valid_int_or_pointer(fn->parameter_types[i])) return false;
@@ -151,11 +193,10 @@ static bool emit_function(FILE *out, const MinicFunction *decl,
             return false;
         }
     }
-    for (i = 0U; i < fn->object_count; ++i) {
-        const MinicCoreObject *obj = &fn->objects[i];
-        if (!valid_int_or_pointer(obj->type) || obj->element_count != 1U ||
-            obj->explicit_alignment > 8U) return false;
-    }
+    /* Object byte extents and alignment are validated by frame_objects.
+     * This admits real repeated local arrays without overlapping slots. */
+    if (!frame_objects(program, target, fn, fn->object_count, NULL,
+                       &object_end)) return false;
     /* Keep this first direct-call ABI step narrow: signed int values in
      * the first eight argument registers, no variadics or indirect calls.
      * Returning through a nested call requires preserving the ISA link
@@ -196,9 +237,12 @@ static bool emit_function(FILE *out, const MinicFunction *decl,
         }
     }
     values_bytes = fn->value_count * 8U;
-    frame = ((fn->value_count + fn->object_count) * 8U +
-             (has_direct_calls ? 8U : 0U) + 15U) & ~(size_t)15U;
-    if (frame > 2016U) return false;
+    save_offset = (object_end + 7U) & ~(size_t)7U;
+    if (save_offset > 8192U - (has_direct_calls ? 8U : 0U))
+        return false;
+    frame = (save_offset + (has_direct_calls ? 8U : 0U) + 15U) &
+            ~(size_t)15U;
+    if (frame > 8192U) return false;
     if (function_sections) {
         if (fprintf(out, ".section .text.%s,\"ax\",%%progbits\n", name) < 0)
             return false;
@@ -210,7 +254,7 @@ static bool emit_function(FILE *out, const MinicFunction *decl,
     if (frame != 0U && fprintf(out, "  sub sp, sp, #%zu\n", frame) < 0) return false;
     if (has_direct_calls &&
         fprintf(out, "  str x30, [sp, #%zu]\n",
-                values_bytes + fn->object_count * 8U) < 0) return false;
+                save_offset) < 0) return false;
     for (size_t block_id = 0U; block_id < fn->block_count; ++block_id) {
         block = &fn->blocks[block_id];
         if (fprintf(out, ".Lmini_arm_f%zu_b%zu:\n", id, block_id) < 0)
@@ -279,13 +323,18 @@ static bool emit_function(FILE *out, const MinicFunction *decl,
                         fn->globals[ins->value.global_id].name, offset) < 0)
                 return false;
             continue;
-        case MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS:
+        case MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS: {
+            size_t object_offset;
             if (ins->value.object_id >= fn->object_count ||
-                fprintf(out, "  add x9, sp, #%zu\n",
-                        values_bytes + (size_t)ins->value.object_id * 8U) < 0 ||
-                fprintf(out, "  str x9, [sp, #%zu]\n", offset) < 0)
-                return false;
+                !frame_objects(program, target, fn,
+                               (size_t)ins->value.object_id,
+                               &object_offset, NULL) ||
+                fprintf(out, "  movz x9, #%zu\n"
+                             "  add x9, sp, x9\n"
+                             "  str x9, [sp, #%zu]\n",
+                        object_offset, offset) < 0) return false;
             continue;
+        }
 
         case MINIC_CORE_INSTRUCTION_FIELD_ADDRESS: {
             /* The shared Core lowering has already computed byte_offset
@@ -453,7 +502,7 @@ static bool emit_function(FILE *out, const MinicFunction *decl,
                                   : "  ldr w0, [sp, #%zu]\n",
                          (size_t)block->terminator.return_value * 8U) < 0) ||
                 (has_direct_calls && fprintf(out, "  ldr x30, [sp, #%zu]\n",
-                                             values_bytes + fn->object_count * 8U) < 0) ||
+                                             save_offset) < 0) ||
                 (frame != 0U && fprintf(out, "  add sp, sp, #%zu\n", frame) < 0) ||
                 fputs("  ret\n", out) == EOF) return false;
             break;
@@ -511,7 +560,8 @@ bool minic_aarch64_write_c0_program_with_core_functions(
     for (i = 0U; i < program->function_count && success; ++i) {
         const MinicFunction *decl = &program->functions[i];
         if (decl->is_defined && (!decl->is_internal || decl->is_referenced)) {
-            success = emit_function(out, decl, &core_functions[i], i, function_sections);
+            success = emit_function(out, program, target, decl, &core_functions[i],
+                                    i, function_sections);
             if (!success && getenv("MINIC_M1_TRACE") != NULL) {
                 const MinicCoreFunction *fn = &core_functions[i];
                 (void)fprintf(stderr,
