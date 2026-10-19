@@ -895,19 +895,25 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                                           : ins->value.call.argument_begin;
             const size_t count = indirect ? ins->value.indirect_call.argument_count
                                           : ins->value.call.argument_count;
-            size_t j;
-            /* All fixed arguments were verified before any assembly output.
-             * x16 is the AAPCS64 intra-procedure call scratch register. */
+            size_t j, gp_index = 0U, fp_index = 0U;
+            /* M30: independently allocate the AAPCS64 GP (x0-x7) and
+             * FP (d0-d7) register banks for fixed-parameter calls.
+             * Variadic binary64 tails are intentionally rejected upstream. */
             for (j = 0U; j < count; ++j) {
-                const MinicCoreCallArgument *arg =
-                    &fn->call_arguments[begin + j];
-                if (fprintf(out,
-                            register64_type(program, target,
-                                fn->values[arg->value.value_id].type)
-                                ? "  ldr x%zu, [sp, #%zu]\n"
-                                : "  ldr w%zu, [sp, #%zu]\n",
-                            j, (size_t)arg->value.value_id * 8U) < 0)
-                    return false;
+                const MinicCoreCallArgument *arg = &fn->call_arguments[begin + j];
+                const MinicType type = fn->values[arg->value.value_id].type;
+                const size_t slot = (size_t)arg->value.value_id * 8U;
+                if (minic_type_is_double(type)) {
+                    if (fp_index >= 8U ||
+                        fprintf(out, "  ldr d%zu, [sp, #%zu]\n",
+                                fp_index++, slot) < 0) return false;
+                } else {
+                    if (gp_index >= 8U ||
+                        fprintf(out, register64_type(program, target, type)
+                                        ? "  ldr x%zu, [sp, #%zu]\n"
+                                        : "  ldr w%zu, [sp, #%zu]\n",
+                                gp_index++, slot) < 0) return false;
+                }
             }
             if (indirect) {
                 if (fprintf(out, "  ldr x16, [sp, #%zu]\n"
