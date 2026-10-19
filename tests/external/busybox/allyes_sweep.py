@@ -160,27 +160,41 @@ def controller(args):
         return 1
     config_path = root / ".config"
     config = config_path.read_text(errors="replace")
-    if "CONFIG_WERROR=y" in config:
-        # WERROR is a host compiler warning policy, not a BusyBox applet.
-        # libselinux marks security_context_t deprecated on current Ubuntu.
-        # Keep all Kconfig applets/features requested by allyesconfig while
-        # allowing unchanged original BusyBox C to build on this host.
-        config_path.write_text(config.replace("CONFIG_WERROR=y",
-                                              "# CONFIG_WERROR is not set"),
-                               encoding="utf-8")
+    # Optional maximal *host-link-compatible* original BusyBox config.
+    # Default remains the complete upstream applet discovery; only host ABI
+    # obsolescence is excluded in this explicit mode (never patch applet C).
+    link_compatible = os.environ.get("BUSYBOX_ALLYES_LINK_COMPATIBLE") == "1"
+    disabled_host_options = ("WERROR", "TC", "FEATURE_INETD_RPC",
+                             "FEATURE_MOUNT_NFS") if link_compatible else ("WERROR",)
+    changed = []
+    for symbol in disabled_host_options:
+        old_value = "CONFIG_" + symbol + "=y"
+        not_set = "# CONFIG_" + symbol + " is not set"
+        if old_value in config:
+            config = config.replace(old_value, not_set)
+            changed.append(symbol)
+        elif link_compatible and not_set not in config:
+            print("BUSYBOX_ALLYES_CONFIG=FAIL missing-symbol=%s" % symbol)
+            return 1
+    if changed:
+        config_path.write_text(config, encoding="utf-8")
         with (out / "oldconfig.out").open("wb") as stdout, (out / "oldconfig.err").open("wb") as stderr:
             rc = subprocess.run(["make", "oldconfig", "CC=" + args.host_cc],
                                 cwd=root, env=make_env, input=b"\n" * 32,
                                 stdout=stdout, stderr=stderr, check=False).returncode
         if rc:
-            print("BUSYBOX_ALLYES_CONFIG=FAIL stage=oldconfig-WERROR-policy")
+            print("BUSYBOX_ALLYES_CONFIG=FAIL stage=oldconfig-host-policy")
             return 1
         config = config_path.read_text(errors="replace")
-        if "CONFIG_WERROR=y" in config:
-            print("BUSYBOX_ALLYES_CONFIG=FAIL stage=WERROR-was-not-disabled")
-            return 1
-        print("BUSYBOX_ALLYES_HOST_WARNING_POLICY=CONFIG_WERROR_n original_sources=unchanged",
-              flush=True)
+        for symbol in changed:
+            if "CONFIG_" + symbol + "=y" in config:
+                print("BUSYBOX_ALLYES_CONFIG=FAIL failed-to-disable=%s" % symbol)
+                return 1
+        print("BUSYBOX_ALLYES_HOST_EXCLUSIONS=PASS disabled=%s original_sources=unchanged" %
+              ",".join(changed), flush=True)
+    if link_compatible:
+        print("BUSYBOX_ALLYES_HOST_LINK_POLICY=TRY excluded=%s" %
+              ",".join(disabled_host_options), flush=True)
     enabled = len(re.findall(r"^CONFIG_[A-Za-z0-9_]+=y$", config, flags=re.M))
     print("BUSYBOX_ALLYES_CONFIG=PASS mode=original-allyesconfig enabled_symbols=%d" %
           enabled, flush=True)
@@ -198,6 +212,39 @@ def controller(args):
         lines = (out / "build.err").read_text(errors="replace").splitlines()
         print("BUSYBOX_ALLYES_GCC_BUILD_DIAGNOSTIC=" +
               " | ".join(x.strip() for x in lines[-25:])[:1600])
+    if link_compatible:
+        busybox = root / "busybox"
+        if rc == 0 and busybox.is_file():
+            tests = {
+                "sed": ["sed", "-n", "2p"],
+                "awk": ["awk", "{print $1}"],
+                "grep": ["grep", "-F", "beta"],
+                "sort": ["sort"],
+                "ash": ["ash", "-c", "printf '%s\n' ash-ok"],
+                "find": ["find", str(out), "-maxdepth", "0", "-type", "d"],
+            }
+            expected = {"sed": b"beta\n", "awk": b"alpha\nbeta\n",
+                        "grep": b"beta\n", "sort": b"alpha\nbeta\n",
+                        "ash": b"ash-ok\n",
+                        "find": (str(out) + "\n").encode()}
+            successes = []
+            for applet, command in tests.items():
+                data = b"alpha\nbeta\n" if applet not in ("ash", "find") else b""
+                run = subprocess.run([str(busybox)] + command, input=data,
+                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                     check=False)
+                passed = run.returncode == 0 and run.stdout == expected[applet]
+                print("BUSYBOX_ALLYES_GCC_RUNTIME=%s applet=%s" %
+                      ("PASS" if passed else "FAIL", applet), flush=True)
+                successes.append(passed)
+            if all(successes):
+                print("BUSYBOX_ALLYES_GCC_RUNTIME_ORACLE=PASS applets=%d original_full_Kbuild=1" %
+                      len(tests), flush=True)
+            else:
+                print("BUSYBOX_ALLYES_GCC_RUNTIME_ORACLE=FAIL", flush=True)
+        else:
+            print("BUSYBOX_ALLYES_GCC_RUNTIME_ORACLE=BLOCKED original_GNU_build=%s" %
+                  ("PASS" if rc == 0 else "FAIL"), flush=True)
     attempts = print_frontier(out, rc == 0, enabled)
     if attempts == 0:
         print("BUSYBOX_ALLYES_SCAN=FAIL no_real_Kbuild_C_compile_invocations")
