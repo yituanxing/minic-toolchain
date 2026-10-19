@@ -565,6 +565,19 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                         fn->globals[ins->value.global_id].name, offset) < 0)
                 return false;
             continue;
+        case MINIC_CORE_INSTRUCTION_FUNCTION_ADDRESS: {
+            const MinicCoreFunctionSymbolId id = ins->value.function_symbol_id;
+            const char *symbol;
+            if (id >= fn->function_symbol_count ||
+                !minic_type_is_pointer(ins->type)) return false;
+            symbol = fn->function_symbols[id].name;
+            if (symbol == NULL || symbol[0] == '\0' ||
+                fprintf(out, "  adrp x9, %s\n"
+                             "  add x9, x9, :lo12:%s\n"
+                             "  str x9, [sp, #%zu]\n",
+                        symbol, symbol, offset) < 0) return false;
+            continue;
+        }
         case MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS: {
             size_t object_offset;
             if (ins->value.object_id >= fn->object_count ||
@@ -830,6 +843,17 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
             const MinicCoreValueId rhs = ins->value.binary.right;
             size_t lw, rw;
             bool ls, rs;
+            if (ins->kind == MINIC_CORE_INSTRUCTION_SCALAR_EQUAL &&
+                lhs < fn->value_count && rhs < fn->value_count &&
+                minic_type_is_pointer(fn->values[lhs].type) &&
+                minic_type_is_pointer(fn->values[rhs].type)) {
+                if (fprintf(out, "  ldr x9, [sp, #%zu]\n"
+                                 "  ldr x10, [sp, #%zu]\n"
+                                 "  cmp x9, x10\n  cset w9, eq\n",
+                            (size_t)lhs * 8U, (size_t)rhs * 8U) < 0)
+                    return false;
+                break;
+            }
             if (lhs >= fn->value_count || rhs >= fn->value_count ||
                 !small_integer_width(program, target, fn->values[lhs].type, &lw, &ls) ||
                 !small_integer_width(program, target, fn->values[rhs].type, &rw, &rs) ||
@@ -845,10 +869,16 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
         }
         case MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO: {
             const MinicCoreValueId v = ins->value.operand;
-            if (v >= fn->value_count ||
-                !valid_int_or_bool(fn->values[v].type) ||
-                fprintf(out, "  ldr w9, [sp, #%zu]\n", (size_t)v * 8U) < 0 ||
-                fputs("  cmp w9, #0\n  cset w9, eq\n", out) == EOF)
+            bool pointer;
+            if (v >= fn->value_count) return false;
+            pointer = minic_type_is_pointer(fn->values[v].type);
+            if (!pointer && !valid_int_or_bool(fn->values[v].type))
+                return false;
+            if (fprintf(out, pointer ? "  ldr x9, [sp, #%zu]\n"
+                                     : "  ldr w9, [sp, #%zu]\n",
+                        (size_t)v * 8U) < 0 ||
+                fputs(pointer ? "  cmp x9, #0\n  cset w9, eq\n"
+                              : "  cmp w9, #0\n  cset w9, eq\n", out) == EOF)
                 return false;
             break;
         }
