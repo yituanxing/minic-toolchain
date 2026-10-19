@@ -633,7 +633,8 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                          : !emit_integer_memory(out, true, width, sign))) return false;
             continue;
         }
-        if (ins->kind == MINIC_CORE_INSTRUCTION_CALL &&
+        if ((ins->kind == MINIC_CORE_INSTRUCTION_CALL ||
+             ins->kind == MINIC_CORE_INSTRUCTION_INDIRECT_CALL) &&
             minic_type_is_void(ins->type)) {
             /* Verified in the call preflight: an effect-only void call
              * has no Core result slot. Fall through into the call case. */
@@ -807,12 +808,17 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                 return false;
             break;
         }
-        case MINIC_CORE_INSTRUCTION_CALL: {
-            const MinicCoreCallee *callee = &fn->callees[ins->value.call.callee_id];
+        case MINIC_CORE_INSTRUCTION_CALL:
+        case MINIC_CORE_INSTRUCTION_INDIRECT_CALL: {
+            const bool indirect = ins->kind == MINIC_CORE_INSTRUCTION_INDIRECT_CALL;
+            const size_t begin = indirect ? ins->value.indirect_call.argument_begin
+                                          : ins->value.call.argument_begin;
+            const size_t count = indirect ? ins->value.indirect_call.argument_count
+                                          : ins->value.call.argument_count;
             size_t j;
-            for (j = 0U; j < ins->value.call.argument_count; ++j) {
+            for (j = 0U; j < count; ++j) {
                 const MinicCoreCallArgument *arg =
-                    &fn->call_arguments[ins->value.call.argument_begin + j];
+                    &fn->call_arguments[begin + j];
                 if (!emit_sp_mem(out, register64_type(program, target,
                                         fn->values[arg->value.value_id].type)
                                         ? "ld.d" : "ld.w",
@@ -823,8 +829,19 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                              (size_t)arg->value.value_id * 8U))
                     return false;
             }
-            if (fprintf(out, "  bl %s\n", callee->name) < 0)
-                return false;
+            if (indirect) {
+                /* $t2 is caller-clobbered, never an argument or SP scratch.
+                 * JIRL writes $ra; frame epilogue restores its original value. */
+                if (!emit_sp_mem(out, "ld.d", "$t2",
+                                 (size_t)ins->value.indirect_call.callee * 8U) ||
+                    fputs("  jirl $ra, $t2, 0\n", out) == EOF)
+                    return false;
+            } else {
+                const MinicCoreCallee *callee =
+                    &fn->callees[ins->value.call.callee_id];
+                if (fprintf(out, "  bl %s\n", callee->name) < 0)
+                    return false;
+            }
             if (minic_type_is_void(ins->type)) continue;
             if (fputs("  or $t0, $a0, $zero\n", out) == EOF)
                 return false;
@@ -833,7 +850,8 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                 bool sign;
                 if (!scalar_integer_width(program, target, ins->type,
                                           &width, &sign) ||
-                    (width != 8U && !emit_integer_normalize(out, width, sign))) return false;
+                    (width != 8U && !emit_integer_normalize(out, width, sign)))
+                    return false;
             }
             break;
         }
