@@ -88,13 +88,18 @@ jobs:
       # Certified fixture return_42.c for strict direct/driver parity.
       # Verify the exact certified self-hosted RV64 Stage2 driver hookup on
       # one runner BEFORE burning seven full Linux runners again.
-      # Ephemeral AArch64 globals-vs-Sbox diagnosis. Restore byte-for-byte afterward.
-      - name: Original tinyAES GNU QEMU direct vector_key global differential
+      # Temporary dual-target acceptance. Restore exact main YAML after evidence.
+      - name: AArch64 global-address fix AES strict and M1-M15 regression
         shell: bash
         run: |
           set -Eeuo pipefail
           sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends gcc-aarch64-linux-gnu libc6-dev-arm64-cross gcc-13-loongarch64-linux-gnu libc6-dev-loong64-cross qemu-user
-          make MODE=release CFLAGS=-Werror BUILD_DIR=build/toolchain-focused-t1-v2 check-four-backend-tinyaes-frontier
+          sh -n tests/external/tiny-aes-c/probe-four-backend-frontier.sh
+          sh -n tests/compiler/c0/run-four-backend-m1.sh
+          for gate in m1 m2 m2-stack m3-call m4-global m5-pointer m6-address m7-frame m8-narrow m9-unsigned m10-mod m11-index m12-bitwise m13-narrow-arith m14-shift m15-scalar-return; do
+            make MODE=release CFLAGS=-Werror BUILD_DIR=build/toolchain-focused-t1-v2 "check-four-backend-$gate"
+          done
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/toolchain-focused-t1-v2 check-four-backend-tinyaes-accept
 
       - name: Fetch certified Stage2 for single-runner Kbuild driver preflight
         if: contains(github.event.head_commit.message, '[minic-stage2-driver-smoke]')
