@@ -87,7 +87,9 @@ for target in aarch64 loongarch64; do
     check_qemu_exit "$qemu" "$w/$target.gnu.elf" 42
     "$gcc" -static -x c "$w/wide.i" -o "$w/$target.gnu-wide.elf"
     check_qemu_exit "$qemu" "$w/$target.gnu-wide.elf" 64
-    for testcase in return add calc branch loop; do
+    cases="return add calc"
+    if [ "${FOUR_BACKEND_M2:-0}" = "1" ]; then cases="$cases branch loop"; fi
+    for testcase in $cases; do
         MINIC_M1_TRACE=1 "$MINIC_CC" --target="$target-linux" -S "$w/$testcase.i" \
             -o "$w/$target.$testcase.s"
         test -s "$w/$target.$testcase.s"
@@ -113,6 +115,14 @@ for target in aarch64 loongarch64; do
         exit 1
     fi
     test ! -e "$w/$target.unsupported.s"
-    echo "FOUR_BACKEND_M2_TARGET=PASS target=$target MiniC_GNU_link_QEMU=6 CFG_branch=1 CFG_loop=1 unsupported=fail-closed"
+    if [ "${FOUR_BACKEND_M2:-0}" = "1" ]; then
+        echo "FOUR_BACKEND_M2_TARGET=PASS target=$target MiniC_GNU_link_QEMU=6 CFG_branch=1 CFG_loop=1 unsupported=fail-closed"
+    else
+        echo "FOUR_BACKEND_M1_TARGET=PASS target=$target GCC_oracle=2 MiniC_GNU_link_QEMU=4 unsupported=fail-closed"
+    fi
 done
-echo "FOUR_BACKEND_M2=PASS architectures=2 executable_QEMU_cases=12 CFG_cases=4 GCC_independent_oracles=4"
+if [ "${FOUR_BACKEND_M2:-0}" = "1" ]; then
+    echo "FOUR_BACKEND_M2=PASS architectures=2 executable_QEMU_cases=12 CFG_cases=4 GCC_independent_oracles=4"
+else
+    echo "FOUR_BACKEND_M1=PASS architectures=2 executable_QEMU_cases=8 GCC_independent_oracles=4"
+fi
