@@ -29,6 +29,69 @@ static bool valid_int_or_bool(MinicType type) {
     return valid_int(type) || minic_type_equal(type, minic_type_bool());
 }
 
+
+/* Source-driven tinyAES M4 frontier. Reuse existing target DataLayout to
+ * size ordinary integer globals and flat arrays, but keep ELF emission
+ * in the ISA backend. Unsupported aggregate/relocation cases must fail
+ * closed, rather than silently manufacture incorrect object bytes. */
+static bool emit_simple_global(FILE *out, const MinicC0Program *program,
+                               const MinicTargetInfo *target,
+                               const MinicGlobalObject *obj) {
+    MinicType scalar;
+    size_t storage_size, align, width, scalar_align, i;
+    const char *directive;
+    if (obj == NULL || obj->name == NULL || !obj->name[0] ||
+        obj->is_weak || obj->visibility != MINIC_SYMBOL_VISIBILITY_DEFAULT ||
+        obj->section_name != NULL ||
+        obj->alias_target != MINIC_GLOBAL_OBJECT_INVALID ||
+        obj->relocation_count != 0U || obj->union_selection_count != 0U ||
+        obj->flexible_array_initializer_count != 0U ||
+        !minic_data_layout_global_object(target->data_layout, program, obj,
+                                         &storage_size, &align)) return false;
+    scalar = obj->type;
+    while (minic_type_is_array(scalar)) {
+        const MinicArrayType *array =
+            minic_c0_program_array_type(program, scalar.array_type_id);
+        if (array == NULL || array->element_count == 0U) return false;
+        scalar = array->element_type;
+    }
+    if (!minic_type_is_integer(scalar) ||
+        !minic_data_layout_type(target->data_layout, program, scalar,
+                                &width, &scalar_align) ||
+        (width != 1U && width != 2U && width != 4U && width != 8U) ||
+        width > storage_size ||
+        obj->initializer_count > storage_size / width ||
+        (obj->initializer_count > 0U && obj->initializer_values == NULL))
+        return false;
+    (void)scalar_align;
+    directive = width == 1U ? ".byte" : width == 2U ? ".2byte" :
+                width == 4U ? ".4byte" : ".8byte";
+    if (fprintf(out, "%s\n", obj->is_read_only ? ".section .rodata" :
+                ((obj->is_zero_initialized || obj->is_tentative) &&
+                 obj->initializer_count == 0U ? ".bss" : ".data")) < 0)
+        return false;
+    if (!obj->is_internal && fprintf(out, ".globl %s\n", obj->name) < 0)
+        return false;
+    if (fprintf(out, "  .balign %zu\n.type %s,@object\n%s:\n",
+                align, obj->name, obj->name) < 0) return false;
+    if (obj->initializer_count == 0U) {
+        if (fprintf(out, "  .zero %zu\n", storage_size) < 0) return false;
+    } else {
+        for (i = 0U; i < obj->initializer_count; ++i) {
+            uint64_t bits = obj->initializer_values[i];
+            if (width < 8U)
+                bits &= (UINT64_C(1) << (8U * width)) - UINT64_C(1);
+            if (fprintf(out, "  %s %" PRIu64 "\n", directive, bits) < 0)
+                return false;
+        }
+        if (storage_size > obj->initializer_count * width &&
+            fprintf(out, "  .zero %zu\n",
+                    storage_size - obj->initializer_count * width) < 0)
+            return false;
+    }
+    return fprintf(out, ".size %s,%zu\n", obj->name, storage_size) >= 0;
+}
+
 static bool emit_function(FILE *out, const MinicFunction *decl,
                           const MinicCoreFunction *fn, size_t id,
                           bool function_sections) {
@@ -156,7 +219,8 @@ static bool emit_function(FILE *out, const MinicFunction *decl,
         }
         if (ins->result == MINIC_CORE_VALUE_INVALID ||
             ins->result >= fn->value_count ||
-            (ins->kind == MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS
+            ((ins->kind == MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS ||
+               ins->kind == MINIC_CORE_INSTRUCTION_GLOBAL_ADDRESS)
                 ? !minic_type_is_pointer(ins->type)
                 : !valid_int_or_bool(ins->type)))
             return false;
@@ -177,6 +241,16 @@ static bool emit_function(FILE *out, const MinicFunction *decl,
                          bits >> 16U) < 0)) return false;
             break;
         }
+        case MINIC_CORE_INSTRUCTION_GLOBAL_ADDRESS:
+            if (ins->value.global_id >= fn->global_count ||
+                fn->globals[ins->value.global_id].name == NULL ||
+                fprintf(out, "  adrp x9, :got:%s\n"
+                             "  ldr x9, [x9, :got_lo12:%s]\n"
+                             "  str x9, [sp, #%zu]\n",
+                        fn->globals[ins->value.global_id].name,
+                        fn->globals[ins->value.global_id].name, offset) < 0)
+                return false;
+            continue;
         case MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS:
             if (ins->value.object_id >= fn->object_count ||
                 fprintf(out, "  add x9, sp, #%zu\n",
@@ -324,11 +398,22 @@ bool minic_aarch64_write_c0_program_with_core_functions(
         (core_function_count > 0U && core_functions == NULL) ||
         core_function_count != program->function_count)
         return fail(diagnostic, path, "AArch64: invalid Core or target configuration");
-    if (program->global_object_count != 0U || program->file_asm_count != 0U)
-        return fail(diagnostic, path, "AArch64: global objects / file asm not yet supported");
+    if (program->file_asm_count != 0U)
+        return fail(diagnostic, path, "AArch64: file asm not supported");
     out = fopen(path, "wb");
     if (out == NULL)
         return fail(diagnostic, path, "AArch64: cannot open GNU assembly output");
+    for (i = 0U; i < program->global_object_count && success; ++i) {
+        const MinicGlobalObject *obj = &program->global_objects[i];
+        if (!obj->is_extern)
+            success = emit_simple_global(out, program, target, obj);
+        else if (obj->alias_target != MINIC_GLOBAL_OBJECT_INVALID)
+            success = false;
+        if (!success && getenv("MINIC_M1_TRACE") != NULL)
+            (void)fprintf(stderr, "MINIC_M4_GLOBAL_FRONTIER arch=aarch64 name=%s init=%zu reloc=%zu\n",
+                          obj->name != NULL ? obj->name : "<unnamed>",
+                          obj->initializer_count, obj->relocation_count);
+    }
     for (i = 0U; i < program->function_count && success; ++i) {
         const MinicFunction *decl = &program->functions[i];
         if (decl->is_defined && (!decl->is_internal || decl->is_referenced)) {
