@@ -230,7 +230,7 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
     size_t frame, i, object_end, save_offset;
     bool has_direct_calls = false;
     if (getenv("MINIC_M1_TRACE") != NULL &&
-        name != NULL && name[0] == 'K' && name[1] == 'e')
+        name != NULL && ((name[0] == 'K' && name[1] == 'e') || (name[0] == 'A' && name[1] == 'd')))
         (void)fprintf(stderr,
                       "MINIC_M9_GATE arch=loongarch64 fn=%s stage=entry values=%zu objects=%zu blocks=%zu params=%zu return_valid=%d inline=%zu\n",
                       name, fn->value_count, fn->object_count,
@@ -250,7 +250,7 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
     for (i = 0U; i < fn->parameter_count; ++i)
         if (!valid_parameter_type(program, target, fn->parameter_types[i])) return false;
     if (getenv("MINIC_M1_TRACE") != NULL &&
-        name[0] == 'K' && name[1] == 'e')
+        ((name[0] == 'K' && name[1] == 'e') || (name[0] == 'A' && name[1] == 'd')))
         (void)fprintf(stderr, "MINIC_M9_GATE arch=loongarch64 fn=%s stage=parameters_valid\n", name);
     /* M2: verify every CFG successor and return before emitting anything.
      * A function's SSA values and local objects retain unique stack slots
@@ -286,7 +286,7 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
     /* Object byte extents and alignment are validated by frame_objects.
      * This admits real repeated local arrays without overlapping slots. */
     if (getenv("MINIC_M1_TRACE") != NULL &&
-        name[0] == 'K' && name[1] == 'e')
+        ((name[0] == 'K' && name[1] == 'e') || (name[0] == 'A' && name[1] == 'd')))
         (void)fprintf(stderr, "MINIC_M9_GATE arch=loongarch64 fn=%s stage=terminators_valid\n", name);
     if (!frame_objects(program, target, fn, fn->object_count, NULL,
                        &object_end)) {
@@ -337,7 +337,7 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
         }
     }
     if (getenv("MINIC_M1_TRACE") != NULL &&
-        name[0] == 'K' && name[1] == 'e')
+        ((name[0] == 'K' && name[1] == 'e') || (name[0] == 'A' && name[1] == 'd')))
         (void)fprintf(stderr, "MINIC_M9_GATE arch=loongarch64 fn=%s stage=calls_valid object_end=%zu\n",
                       name, object_end);
     save_offset = (object_end + 7U) & ~(size_t)7U;
@@ -376,7 +376,7 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
         /* Only recorded in the temporary original-source failure log,
          * never in normal builds or public diagnostic stream. */
         if (getenv("MINIC_M1_TRACE") != NULL &&
-            name[0] == 'K' && name[1] == 'e')
+            ((name[0] == 'K' && name[1] == 'e') || (name[0] == 'A' && name[1] == 'd')))
             (void)fprintf(stderr,
                           "MINIC_M9_STEP arch=loongarch64 function=%s block=%zu ins=%u kind=%d result=%u type_int=%d type_ptr=%d\n",
                           name, block_id, (unsigned int)ins_id,
