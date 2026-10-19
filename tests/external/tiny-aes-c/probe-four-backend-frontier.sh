@@ -208,7 +208,6 @@ for target in aarch64 loongarch64; do
                     fi
                 fi
             done
-        fi
 
             # Original runtime has proven byte[0..15] but failed byte[16].
             # Instrument ONLY a temporary copy of frozen AES for a
