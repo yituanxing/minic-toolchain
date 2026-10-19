@@ -38,6 +38,53 @@ static bool valid_int_or_bool(MinicType type) {
 }
 
 
+/* M8: x86's width/sign principle, target-owned machine encodings.
+ * A raw Core slot reserves 8 bytes even when the C object is 1 or 2 bytes.
+ * The operand width comes from the target DataLayout, not a hard-coded
+ * assumption about typedef names or host char signedness. */
+static bool small_integer_width(const MinicC0Program *program,
+                                const MinicTargetInfo *target, MinicType type,
+                                size_t *width, bool *sign) {
+    unsigned int bits;
+    MinicType effective;
+    if (width == NULL || sign == NULL ||
+        !minic_type_is_integer(type) ||
+        !minic_c0_type_effective_integer_type(program, type, &effective) ||
+        !minic_target_info_integer_width(target, program, type, &bits) ||
+        bits == 0U || bits > 32U) return false;
+    *width = (bits + 7U) / 8U;
+    *sign = minic_type_is_signed_integer(effective);
+    return *width == 1U || *width == 2U || *width == 4U;
+}
+
+static bool emit_integer_memory(FILE *out, bool store,
+                                size_t width, bool sign) {
+    const char *op = NULL;
+    if (store) {
+        op = width == 1U ? "  st.b $t0, $t1, 0\n" :
+             width == 2U ? "  st.h $t0, $t1, 0\n" :
+             width == 4U ? "  st.w $t0, $t1, 0\n" : NULL;
+    } else {
+        op = width == 1U ? (sign ? "  ld.b $t0, $t1, 0\n" :
+                                     "  ld.bu $t0, $t1, 0\n") :
+             width == 2U ? (sign ? "  ld.h $t0, $t1, 0\n" :
+                                     "  ld.hu $t0, $t1, 0\n") :
+             width == 4U ? "  ld.w $t0, $t1, 0\n" : NULL;
+    }
+    return op != NULL && fputs(op, out) != EOF;
+}
+
+static bool emit_integer_normalize(FILE *out, size_t width, bool sign) {
+    const char *op = width == 1U
+        ? (sign ? "  slli.w $t0, $t0, 24\n  srai.w $t0, $t0, 24\n" :
+                  "  andi $t0, $t0, 255\n")
+        : width == 2U
+            ? (sign ? "  slli.w $t0, $t0, 16\n  srai.w $t0, $t0, 16\n" :
+                      "  bstrpick.w $t0, $t0, 15, 0\n")
+            : width == 4U ? "" : NULL;
+    return op != NULL && fputs(op, out) != EOF;
+}
+
 /* Source-driven tinyAES M4 frontier. Reuse existing target DataLayout to
  * size ordinary integer globals and flat arrays, but keep ELF emission
  * in the ISA backend. Unsupported aggregate/relocation cases must fail
@@ -287,17 +334,20 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
         if (ins->kind == MINIC_CORE_INSTRUCTION_STORE) {
             const MinicCoreValueId addr = ins->value.store.address;
             const MinicCoreValueId value = ins->value.store.stored_value;
+            size_t width = 0U;
+            bool sign = false, pointer;
             if (ins->result != MINIC_CORE_VALUE_INVALID ||
                 addr >= fn->value_count || value >= fn->value_count ||
-                !minic_type_is_pointer(fn->values[addr].type) ||
-                !valid_int_or_pointer(fn->values[value].type)) return false;
+                !minic_type_is_pointer(fn->values[addr].type)) return false;
+            pointer = minic_type_is_pointer(fn->values[value].type);
+            if (!pointer &&
+                !small_integer_width(program, target, fn->values[value].type,
+                                     &width, &sign)) return false;
             if (!emit_sp_mem(out, "ld.d", "$t1", (size_t)addr * 8U) ||
-                !emit_sp_mem(out, minic_type_is_pointer(fn->values[value].type)
-                                       ? "ld.d" : "ld.w", "$t0",
+                !emit_sp_mem(out, pointer ? "ld.d" : "ld.w", "$t0",
                              (size_t)value * 8U) ||
-                fputs(minic_type_is_pointer(fn->values[value].type)
-                          ? "  st.d $t0, $t1, 0\n"
-                          : "  st.w $t0, $t1, 0\n", out) == EOF) return false;
+                (pointer ? fputs("  st.d $t0, $t1, 0\n", out) == EOF
+                         : !emit_integer_memory(out, true, width, sign))) return false;
             continue;
         }
         if (ins->kind == MINIC_CORE_INSTRUCTION_CALL &&
@@ -311,7 +361,7 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                 ((ins->kind == MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS ||
                    ins->kind == MINIC_CORE_INSTRUCTION_GLOBAL_ADDRESS)
                     ? !minic_type_is_pointer(ins->type)
-                    : !valid_int_or_bool(ins->type) &&
+                    : !minic_type_is_integer(ins->type) &&
                       !minic_type_is_pointer(ins->type)))
                 return false;
             offset = (size_t)ins->result * 8U;
@@ -388,12 +438,15 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
         }
         case MINIC_CORE_INSTRUCTION_LOAD: {
             const MinicCoreValueId addr = ins->value.load.address;
+            size_t width = 0U;
+            bool sign = false, pointer = minic_type_is_pointer(ins->type);
             if (addr >= fn->value_count ||
                 !minic_type_is_pointer(fn->values[addr].type) ||
+                (!pointer && !small_integer_width(program, target,
+                                                  ins->type, &width, &sign)) ||
                 !emit_sp_mem(out, "ld.d", "$t1", (size_t)addr * 8U) ||
-                fputs(minic_type_is_pointer(ins->type)
-                          ? "  ld.d $t0, $t1, 0\n"
-                          : "  ld.w $t0, $t1, 0\n", out) == EOF)
+                (pointer ? fputs("  ld.d $t0, $t1, 0\n", out) == EOF
+                         : !emit_integer_memory(out, false, width, sign)))
                 return false;
             break;
         }
@@ -487,9 +540,17 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
         }
         case MINIC_CORE_INSTRUCTION_INTEGER_CONVERSION: {
             MinicCoreValueId src = ins->value.operand;
-            if (src >= fn->value_count || !valid_int(fn->values[src].type) ||
-                !emit_sp_mem(out, "ld.w", "$t0", (size_t)src * 8U))
-                return false;
+            size_t src_width, dst_width;
+            bool src_sign, dst_sign;
+            if (src >= fn->value_count ||
+                !small_integer_width(program, target,
+                                     fn->values[src].type, &src_width, &src_sign) ||
+                !small_integer_width(program, target, ins->type,
+                                     &dst_width, &dst_sign) ||
+                !emit_sp_mem(out, "ld.w", "$t0", (size_t)src * 8U) ||
+                !emit_integer_normalize(out, dst_width, dst_sign)) return false;
+            (void)src_width;
+            (void)src_sign;
             break;
         }
         default:
