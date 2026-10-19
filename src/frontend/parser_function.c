@@ -31,6 +31,7 @@ typedef struct MinicFunctionAttributeContext {
     bool *is_weak;
     bool *is_noreturn;
     bool *force_emit;
+    bool *is_constructor;
     MinicFunctionId *alias_target;
     const char *unsupported_message;
 } MinicFunctionAttributeContext;
@@ -223,6 +224,16 @@ static bool consume_function_attribute(MinicParser *parser,
         return true;
     }
 
+    if (descriptor->kind == MINIC_ATTRIBUTE_CONSTRUCTOR) {
+        /* Startup behavior is semantic, not a parse-only diagnostic. */
+        if (context->is_constructor == NULL || attribute->has_arguments) {
+            minic_parser_error(parser, "GNU constructor requires supported no-priority function");
+            return false;
+        }
+        *context->is_constructor = true;
+        return true;
+    }
+
     if (descriptor->kind == MINIC_ATTRIBUTE_GNU_INLINE) {
         if (!context->allow_gnu_inline) {
             minic_parser_error(parser, "%s", context->unsupported_message);
@@ -270,6 +281,7 @@ static bool parse_function_attribute_lists(MinicParser *parser,
     context.is_weak = is_weak;
     context.is_noreturn = NULL;
     context.force_emit = NULL;
+    context.is_constructor = NULL;
     context.alias_target = NULL;
     context.unsupported_message = unsupported_message;
     return minic_parser_parse_gnu_attribute_lists(parser, consume_function_attribute, &context);
@@ -287,6 +299,7 @@ static bool apply_function_attribute_list(MinicParser *parser,
                                           bool *has_section,
                                           bool *is_weak,
                                           bool *is_noreturn,
+                                          bool *is_constructor,
                                           MinicFunctionId *alias_target,
                                           const char *unsupported_message) {
     MinicFunctionAttributeContext context;
@@ -306,6 +319,7 @@ static bool apply_function_attribute_list(MinicParser *parser,
     context.is_weak = is_weak;
     context.is_noreturn = is_noreturn;
     context.force_emit = NULL;
+    context.is_constructor = is_constructor;
     context.alias_target = alias_target;
     context.unsupported_message = unsupported_message;
     for (index = 0U; index < attributes->count; ++index) {
@@ -448,6 +462,7 @@ static bool parse_persistent_function_attributes(MinicParser *parser,
                                                  bool *is_weak,
                                                  bool *is_noreturn,
                                                  bool *force_emit,
+                                                 bool *is_constructor,
                                                  MinicFunctionId *alias_target) {
     MinicFunctionAttributeContext context;
 
@@ -462,6 +477,7 @@ static bool parse_persistent_function_attributes(MinicParser *parser,
     context.is_weak = is_weak;
     context.is_noreturn = is_noreturn;
     context.force_emit = force_emit;
+    context.is_constructor = is_constructor;
     context.alias_target = alias_target;
     context.unsupported_message =
         "unsupported GNU function attribute; ABI/layout-affecting and unknown attributes must be "
@@ -2452,6 +2468,7 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
     bool has_preparsed_function_parameters;
     bool is_inline;
     bool is_noreturn;
+    bool is_constructor;
     bool force_emit;
     bool is_register_declaration;
     bool is_static_declaration;
@@ -2477,6 +2494,7 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
     has_preparsed_function_parameters = false;
     is_inline = false;
     is_noreturn = false;
+    is_constructor = false;
     force_emit = false;
     is_register_declaration = false;
     is_static_declaration = false;
@@ -2713,6 +2731,7 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
                 &has_section,
                 &is_weak,
                 &is_noreturn,
+                NULL, /* function typed declarator is not startup hook */
                 NULL,
                 "unsupported GNU prefix function attribute; semantic and ABI-affecting attributes "
                 "must be implemented explicitly")) {
@@ -2751,6 +2770,7 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
                     &entity_is_weak,
                     &entity_is_noreturn,
                     &entity_force_emit,
+                    NULL,
                     NULL)) {
                 return false;
             }
@@ -2994,6 +3014,7 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
             &has_section,
             &is_weak,
             &is_noreturn,
+            &is_constructor,
             &alias_target,
             "unsupported GNU prefix function attribute; semantic and ABI-affecting attributes must "
             "be implemented explicitly")) {
@@ -3033,6 +3054,7 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
                                               &is_weak,
                                               &is_noreturn,
                                               &force_emit,
+                                              &is_constructor,
                                               &alias_target)) {
         return false;
     }
@@ -3049,6 +3071,12 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
         }
     }
 
+    if (is_constructor && (!minic_type_is_void(return_type) ||
+                           parameter_count != 0U || is_variadic ||
+                           parser->current.kind == MINIC_TOKEN_SEMICOLON)) {
+        minic_parser_error(parser, "GNU constructor requires a defined void(void) function");
+        return false;
+    }
     if (parser->current.kind == MINIC_TOKEN_SEMICOLON) {
         return finish_function_declaration_entity(parser,
                                                   name_span,
@@ -3194,6 +3222,11 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
     if (is_noreturn &&
         !minic_c0_program_set_function_noreturn(parser->program, function_id, true)) {
         minic_parser_error(parser, "cannot persist noreturn function metadata");
+        return false;
+    }
+    if (is_constructor &&
+        !minic_c0_program_set_function_constructor(parser->program, function_id)) {
+        minic_parser_error(parser, "cannot persist GNU constructor startup metadata");
         return false;
     }
     if (is_weak && !minic_c0_program_set_function_weak(parser->program, function_id, true)) {
