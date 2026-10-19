@@ -175,13 +175,18 @@ for target in aarch64 loongarch64; do
                     echo "FOUR_BACKEND_TINYAES_PROBE target=$target probe=$probe stage=MiniC_compile_failed" >&2
                     continue
                 fi
-                if ! "$gcc" -c "$work/$target.$probe.s" \
-                        -o "$work/$target.$probe.o" &&
-                   "$gcc" -static "$work/$target.$probe.o" \
-                        -o "$work/$target.$probe.minic.elf"; then
+                # Negation MUST apply to the grouped compile+link
+                # command.  `if ! cmd1 && cmd2` skipped linking on
+                # successful cmd1 and silently ran QEMU on a missing ELF.
+                if ! { "$gcc" -c "$work/$target.$probe.s" \
+                         -o "$work/$target.$probe.o" &&
+                       "$gcc" -static "$work/$target.$probe.o" \
+                         -o "$work/$target.$probe.minic.elf"; }; then
                     echo "FOUR_BACKEND_TINYAES_PROBE target=$target probe=$probe stage=GNU_link_failed" >&2
                     continue
                 fi
+                test -s "$work/$target.$probe.minic.elf" ||
+                    { echo "FOUR_BACKEND_TINYAES_PROBE=FAIL target=$target probe=$probe reason=missing_executable" >&2; exit 1; }
                 set +e
                 timeout 15s "$qemu" "$work/$target.$probe.gnu.elf" >/dev/null 2>&1
                 reference_byte=$?
