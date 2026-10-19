@@ -57,6 +57,28 @@ set -e
 test "$gnu_rc" -eq 42
 echo "PASS: GNU diagnostic typedef attributes preserve x86 and RV64 C semantics"
 
+# GNU may_alias is also used on BusyBox local pointer declarators, notably
+# libbb/{signals,lineedit}.c and util-linux/mdev.c. MiniC does not use
+# type-based alias optimizations; this spelling must retain ordinary layout.
+cat > "$tempdir/may_alias_local.i" <<'EOF'
+int main(void) {
+    unsigned long data = 42UL;
+    unsigned long *pointer __attribute__((__may_alias__)) = &data;
+    return (int)*pointer;
+}
+EOF
+check_exit may_alias_local 42
+"$MINIC_CC" --target=riscv64-linux -S "$tempdir/may_alias_local.i" \
+    -o "$tempdir/may_alias_local.rv64.s"
+"$HOST_CC" -std=gnu11 -no-pie -x c "$tempdir/may_alias_local.i" \
+    -o "$tempdir/may_alias_local.gnu"
+set +e
+"$tempdir/may_alias_local.gnu"
+may_alias_gcc_rc=$?
+set -e
+test "$may_alias_gcc_rc" -eq 42
+echo "PASS: GNU no-argument may_alias local pointer x86/RV64/GCC oracle"
+
 
 cat > "$tempdir/params_call.i" <<'EOF'
 int sum(int a, int b) { return a + b; }
