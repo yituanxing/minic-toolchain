@@ -1062,3 +1062,47 @@ Exact CI markers:
 **Correct scope:** 12 MiniC-built applet objects, all other BusyBox objects still GCC-built. The three new applets are checked with one deterministic fixture each; their complete option matrix, the entire BusyBox build under MiniC, and an x86-native Mini preprocessor/assembler/linker are **not** certified. The extra cohort remains opt-in via `BUSYBOX_X86_64_EXTRA_DISCOVERY=1`; default earlier nine-applet qualification is unchanged. A generic CI green result alone must not be used as proof the opt-in cohort passed: verify the explicit `EXTRA_MIXED=PASS` marker. No compiler source implementation changed to obtain this result.
 
 **Next:** promote this newly proven 12-object combination to a durable regression check with an explicit hard-success marker before selecting further original applets, or use a new real workload that exercises unqualified SysV ABI features. Preserve the project-driven decision not to extract Machine IR or rewrite RV64 without evidence.
+
+### BusyBox-12 permanent fail-closed test target verified
+
+Commit `7df191962d7fb40a6fd748a05946fe8621cdd6b3` installs a reusable
+`make check-x86_64-busybox-12` target, reusing the existing
+`tests/external/busybox/probe-x86_64.sh` without introducing a second
+BusyBox driver or a new workflow. The target captures the underlying probe
+output and **requires the exact** `BUSYBOX_X86_64_EXTRA_MIXED=PASS ... total_MiniC_objects=12`
+success marker. A discovery-mode early exit cannot masquerade as a green
+12-object acceptance.
+
+The first attempted Make wrapper [#39181166375](https://github.com/yituanxing/minic-toolchain/actions/runs/39181166375)
+was **red for a test-harness environment defect**, not a MiniC codegen
+failure: the outer `make CFLAGS=-Werror` leaked its command-line override
+via `MAKEFLAGS` into pristine BusyBox Kbuild, turning an upstream
+`libbb/dump.c` `-Wformat-security` warning into an error. The wrapper
+now explicitly clears inherited make flags and MiniC-only `CFLAGS` before
+running the original upstream Kbuild. It does **not** patch any BusyBox
+source or turn off MiniC's own `-Werror` build.
+
+**Final [focused run #39181471987](https://github.com/yituanxing/minic-toolchain/actions/runs/39181471987) — SUCCESS**:
+the permanent Make target prints and strictly checks
+`BUSYBOX_X86_64_EXTRA_FRONTIER=DISCOVERY compiled=3 total=3 blocked=0` and
+`BUSYBOX_X86_64_EXTRA_MIXED=PASS ... total_MiniC_objects=12 GCC_reference=byte-exact GNU_Kbuild=1`.
+The same run completed `TOOLCHAIN_FOCUSED_T1=PASS mode=all independent_test_checks=8 shared_builds=1`.
+The temporary branch-local focused-workflow edits were **restored
+byte-for-byte** to main blob `cd9a880a5a707f28b5ea63c364c1844ab35e1c56`
+after the run. Pre-existing broken `linux-runtime-gcc-baseline.yml`
+dispatch is still independent.
+
+Current reproducible native gate:
+
+```sh
+make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/busybox-x86 \
+  build/busybox-x86/bin/minic-cc
+make MODE=release CFLAGS=-Werror BUILD_DIR=build/busybox-x86 \
+  check-x86_64-busybox-12
+```
+
+This is a genuine twelve-object BusyBox **mixed** GCC/MiniC Kbuild/runtime
+qualification; it is not the full BusyBox C corpus, and does not certify
+a post-TinyCC fresh 2064-object Linux/QEMU regression. The normal nine-applet
+discovery baseline remains available; the new Make target is the strong
+12-object gate for subsequent changes.
