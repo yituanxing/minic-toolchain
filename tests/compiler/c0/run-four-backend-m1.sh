@@ -8,6 +8,10 @@ QEMU_AARCH64=qemu-aarch64
 QEMU_LOONGARCH64=qemu-loongarch64
 w=$(mktemp -d)
 trap 'rm -rf "$w"' EXIT HUP INT TERM
+m2_enabled=0
+if [ "${FOUR_BACKEND_M2:-0}" = "1" ] || [ "${FOUR_BACKEND_M2_STACK:-0}" = "1" ]; then
+    m2_enabled=1
+fi
 cat > "$w/return.i" <<'EOF'
 int main(void) { return 42; }
 EOF
@@ -73,6 +77,26 @@ cat > "$w/unsupported.i" <<'EOF'
 static int global_state = 42;
 int main(void) { return global_state; }
 EOF
+# M2-stack ABI extension: the ninth and tenth original C integer
+# parameters are supplied by GNU at incoming sp+0 and sp+8, not registers.
+cat > "$w/stack9.i" <<'EOF'
+int mini_stack9(int a, int b, int c, int d, int e, int f, int g, int h, int i) {
+    return a + b + c + d + e + f + g + h + i;
+}
+EOF
+cat > "$w/driver_stack9.c" <<'EOF'
+extern int mini_stack9(int, int, int, int, int, int, int, int, int);
+int main(void) { return mini_stack9(1, 2, 3, 4, 5, 6, 7, 8, 6); }
+EOF
+cat > "$w/stack10.i" <<'EOF'
+int mini_stack10(int a, int b, int c, int d, int e, int f, int g, int h, int i, int j) {
+    return a + b + c + d + e + f + g + h + i + j;
+}
+EOF
+cat > "$w/driver_stack10.c" <<'EOF'
+extern int mini_stack10(int, int, int, int, int, int, int, int, int, int);
+int main(void) { return mini_stack10(1, 2, 3, 4, 5, 6, 7, 8, 9, -3); }
+EOF
 check_qemu_exit() {
     emulator=$1
     binary=$2
@@ -102,11 +126,18 @@ for target in aarch64 loongarch64; do
     "$gcc" -static -x c "$w/wide.i" -o "$w/$target.gnu-wide.elf"
     check_qemu_exit "$qemu" "$w/$target.gnu-wide.elf" 64
     cases="return add calc"
-    if [ "${FOUR_BACKEND_M2:-0}" = "1" ]; then cases="$cases branch loop compare"; fi
-    if [ "${FOUR_BACKEND_M2:-0}" = "1" ]; then
+    if [ "$m2_enabled" = "1" ]; then cases="$cases branch loop compare"; fi
+    if [ "${FOUR_BACKEND_M2_STACK:-0}" = "1" ]; then
+        cases="$cases stack9 stack10"
+    fi
+    if [ "$m2_enabled" = "1" ]; then
         # Independent originals for every new CFG/comparison fixture, not
         # merely an expected return code from a MiniC-owned executable.
-        for testcase in branch loop compare; do
+        oracle_cases="branch loop compare"
+        if [ "${FOUR_BACKEND_M2_STACK:-0}" = "1" ]; then
+            oracle_cases="$oracle_cases stack9 stack10"
+        fi
+        for testcase in $oracle_cases; do
             "$gcc" -static -x c "$w/$testcase.i" "$w/driver_$testcase.c" \
                 -o "$w/$target.gnu-$testcase.elf"
             check_qemu_exit "$qemu" "$w/$target.gnu-$testcase.elf" 42
@@ -125,6 +156,8 @@ for target in aarch64 loongarch64; do
             branch) "$gcc" -static "$w/$target.branch.o" "$w/driver_branch.c" -o "$w/$target.branch.elf" ;;
             loop) "$gcc" -static "$w/$target.loop.o" "$w/driver_loop.c" -o "$w/$target.loop.elf" ;;
             compare) "$gcc" -static "$w/$target.compare.o" "$w/driver_compare.c" -o "$w/$target.compare.elf" ;;
+            stack9) "$gcc" -static "$w/$target.stack9.o" "$w/driver_stack9.c" -o "$w/$target.stack9.elf" ;;
+            stack10) "$gcc" -static "$w/$target.stack10.o" "$w/driver_stack10.c" -o "$w/$target.stack10.elf" ;;
         esac
         check_qemu_exit "$qemu" "$w/$target.$testcase.elf" 42
         echo "FOUR_BACKEND_M1_CASE=PASS target=$target case=$testcase MiniC_object=1 GNU_AS_LD=1 QEMU_exit=42"
@@ -140,14 +173,20 @@ for target in aarch64 loongarch64; do
         exit 1
     fi
     test ! -e "$w/$target.unsupported.s"
-    if [ "${FOUR_BACKEND_M2:-0}" = "1" ]; then
+    if [ "$m2_enabled" = "1" ]; then
         echo "FOUR_BACKEND_M2_TARGET=PASS target=$target MiniC_GNU_link_QEMU=7 CFG_branch=1 CFG_loop=1 signed_compare=1 unsupported=fail-closed"
+        if [ "${FOUR_BACKEND_M2_STACK:-0}" = "1" ]; then
+            echo "FOUR_BACKEND_M2_STACK_TARGET=PASS target=$target MiniC_GNU_link_QEMU=9 GNU_stack_argument_oracles=2"
+        fi
     else
         echo "FOUR_BACKEND_M1_TARGET=PASS target=$target GCC_oracle=2 MiniC_GNU_link_QEMU=4 unsupported=fail-closed"
     fi
 done
-if [ "${FOUR_BACKEND_M2:-0}" = "1" ]; then
+if [ "$m2_enabled" = "1" ]; then
     echo "FOUR_BACKEND_M2=PASS architectures=2 executable_QEMU_cases=14 CFG_cases=4 comparison_cases=2 GCC_independent_oracles=10"
+    if [ "${FOUR_BACKEND_M2_STACK:-0}" = "1" ]; then
+        echo "FOUR_BACKEND_M2_STACK=PASS architectures=2 executable_QEMU_cases=18 ninth_tenth_arg_cases=4 GCC_independent_oracles=14"
+    fi
 else
     echo "FOUR_BACKEND_M1=PASS architectures=2 executable_QEMU_cases=8 GCC_independent_oracles=4"
 fi
