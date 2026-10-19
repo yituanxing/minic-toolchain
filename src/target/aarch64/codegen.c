@@ -35,6 +35,7 @@ static bool emit_function(FILE *out, const MinicFunction *decl,
     const char *name = minic_c0_function_symbol_name(decl);
     const MinicCoreBlock *block;
     size_t frame, i, values_bytes;
+    bool has_direct_calls = false;
     if (name == NULL || name[0] == '\0' ||
         !minic_core_function_verify(fn) ||
         decl->is_constructor || decl->is_weak ||
@@ -81,8 +82,43 @@ static bool emit_function(FILE *out, const MinicFunction *decl,
         if (!valid_int(obj->type) || obj->element_count != 1U ||
             obj->explicit_alignment > 8U) return false;
     }
+    /* Keep this first direct-call ABI step narrow: signed int values in
+     * the first eight argument registers, no variadics or indirect calls.
+     * Returning through a nested call requires preserving the ISA link
+     * register in a dedicated frame slot. */
+    for (i = 0U; i < fn->instruction_count; ++i) {
+        const MinicCoreInstruction *ins = &fn->instructions[i];
+        size_t j, begin, count;
+        const MinicCoreCallee *callee;
+        if (ins->kind != MINIC_CORE_INSTRUCTION_CALL) continue;
+        has_direct_calls = true;
+        if (ins->value.call.callee_id >= fn->callee_count ||
+            ins->value.call.result_object != MINIC_CORE_OBJECT_INVALID ||
+            ins->result == MINIC_CORE_VALUE_INVALID ||
+            ins->result >= fn->value_count ||
+            !valid_int(ins->type) || !valid_int(fn->values[ins->result].type))
+            return false;
+        callee = &fn->callees[ins->value.call.callee_id];
+        begin = ins->value.call.argument_begin;
+        count = ins->value.call.argument_count;
+        if (callee->name == NULL || callee->name[0] == '\0' ||
+            callee->is_variadic || !valid_int(callee->return_type) ||
+            count > 8U || callee->parameter_count != count ||
+            begin > fn->call_argument_count ||
+            count > fn->call_argument_count - begin)
+            return false;
+        for (j = 0U; j < count; ++j) {
+            const MinicCoreCallArgument *arg = &fn->call_arguments[begin + j];
+            if (!valid_int(callee->parameter_types[j]) ||
+                arg->kind != MINIC_CORE_CALL_ARGUMENT_VALUE ||
+                arg->value.value_id >= fn->value_count ||
+                !valid_int(fn->values[arg->value.value_id].type))
+                return false;
+        }
+    }
     values_bytes = fn->value_count * 8U;
-    frame = ((fn->value_count + fn->object_count) * 8U + 15U) & ~(size_t)15U;
+    frame = ((fn->value_count + fn->object_count) * 8U +
+             (has_direct_calls ? 8U : 0U) + 15U) & ~(size_t)15U;
     if (frame > 2016U) return false;
     if (function_sections) {
         if (fprintf(out, ".section .text.%s,\"ax\",%%progbits\n", name) < 0)
@@ -93,6 +129,9 @@ static bool emit_function(FILE *out, const MinicFunction *decl,
     if (fprintf(out, ".p2align 2\n.type %s,%%function\n%s:\n", name, name) < 0)
         return false;
     if (frame != 0U && fprintf(out, "  sub sp, sp, #%zu\n", frame) < 0) return false;
+    if (has_direct_calls &&
+        fprintf(out, "  str x30, [sp, #%zu]\n",
+                values_bytes + fn->object_count * 8U) < 0) return false;
     for (size_t block_id = 0U; block_id < fn->block_count; ++block_id) {
         block = &fn->blocks[block_id];
         if (fprintf(out, ".Lmini_arm_f%zu_b%zu:\n", id, block_id) < 0)
@@ -151,6 +190,21 @@ static bool emit_function(FILE *out, const MinicFunction *decl,
                 !minic_type_is_pointer(fn->values[addr].type) ||
                 fprintf(out, "  ldr x10, [sp, #%zu]\n", (size_t)addr * 8U) < 0 ||
                 fputs("  ldr w9, [x10]\n", out) == EOF)
+                return false;
+            break;
+        }
+        case MINIC_CORE_INSTRUCTION_CALL: {
+            const MinicCoreCallee *callee = &fn->callees[ins->value.call.callee_id];
+            size_t j;
+            for (j = 0U; j < ins->value.call.argument_count; ++j) {
+                const MinicCoreCallArgument *arg =
+                    &fn->call_arguments[ins->value.call.argument_begin + j];
+                if (fprintf(out, "  ldr w%zu, [sp, #%zu]\n",
+                            j, (size_t)arg->value.value_id * 8U) < 0)
+                    return false;
+            }
+            if (fprintf(out, "  bl %s\n", callee->name) < 0 ||
+                fputs("  mov w9, w0\n", out) == EOF)
                 return false;
             break;
         }
@@ -230,6 +284,8 @@ static bool emit_function(FILE *out, const MinicFunction *decl,
         case MINIC_CORE_TERMINATOR_RETURN:
             if (fprintf(out, "  ldr w0, [sp, #%zu]\n",
                         (size_t)block->terminator.return_value * 8U) < 0 ||
+                (has_direct_calls && fprintf(out, "  ldr x30, [sp, #%zu]\n",
+                                             values_bytes + fn->object_count * 8U) < 0) ||
                 (frame != 0U && fprintf(out, "  add sp, sp, #%zu\n", frame) < 0) ||
                 fputs("  ret\n", out) == EOF) return false;
             break;
