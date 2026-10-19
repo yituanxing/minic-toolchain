@@ -528,3 +528,89 @@ changes were reverted byte-identically to main blob
 `cd9a880a5a707f28b5ea63c364c1844ab35e1c56` after the
 successful real GNU/QEMU and focused regression run. New ISA PR #527
 remains Draft and isolated from main.
+
+
+## M6 original tinyAES field-address and pointer-bitcast frontier — 2026-10-19
+
+**Original project evidence first, narrow ISA additions second.**
+
+The unmodified frozen AES-128-ECB translation unit produced the actual
+Core for `AES_init_ctx`:
+
+```text
+core function @AES_init_ctx
+  %5 = load %4
+  %6 = field.addr %5, record=0, field=0
+  %11 = pointer.offset %10, %8, stride=1
+  call @KeyExpansion(%17, %19)
+  return
+```
+
+This justified implementing target-local `FIELD_ADDRESS` and
+`POINTER_OFFSET` handling in both new emitters. Core had **already**
+captured the target DataLayout field byte displacement; the backend
+must not recompute record layout or alter the original Core. AArch64
+uses 64-bit base registers, signed `ldrsw` indexes, a legal
+`movz` stride and `mul/add/sub`; LoongArch64 uses the
+separate lp64d 64-bit `ld.d`, signed `ld.w` index,
+`addi.d`, `mul.d` and `add.d/sub.d`. Unencodable field displacement
+or element stride remains a deliberate rejection; only signed `int`
+index values are admitted at present.
+
+The next unchanged AES function, `AES_ECB_encrypt`, actually uses
+`bitcast.scalar` to reinterpret its buffer pointer as `state_t *`.
+The existing Core verifier allows more conversion kinds, but **M6
+admits only 64-bit pointer-to-pointer reinterpretation**, leaving
+integer-to-pointer casts and other width/normalization concerns
+unsupported. This is a representation-preserving operation on both
+LP64 targets, not a source-level workaround.
+
+**Actual [Actions #39212118505](https://github.com/yituanxing/minic-toolchain/actions/runs/39212118505)
+passed first M6 field/index GNU/QEMU cases**, then
+[Actions #39212392877](https://github.com/yituanxing/minic-toolchain/actions/runs/39212392877)
+**SUCCESS** on the complete new scope with pointer bitcast:
+
+```text
+FOUR_BACKEND_M6_ADDRESS=PASS architectures=2 executable_QEMU_cases=24 field_pointer_bitcast_cases=10 GNU_independent_oracles=20
+TOOLCHAIN_FOCUSED_T1=PASS mode=all independent_test_checks=8 shared_builds=1
+FOUR_BACKEND_TINYAES_GNU=PASS target=aarch64 original_source=1 QEMU_exit=0
+FOUR_BACKEND_TINYAES_GNU=PASS target=loongarch64 original_source=1 QEMU_exit=0
+FOUR_BACKEND_TINYAES_FRONTIER=COMPLETE architectures=2 verified_runtime=0 blocked=2
+```
+
+The five **actual ELF/QEMU** M6 tests per ISA use GNU-built callers
+with a real `struct Pair`, signed positive/negative array indexes,
+a byte-address-preserving pointer cast and a field store, and independent
+original-source GNU executable references. Original M1–M5 tests and
+the existing RV64/MiniAR/MiniLD 8/8 checks passed on the same
+source. No shared frontend/Core, RV64, x86 emitter or original vendor
+source was changed.
+
+**Measured next real blocker:** After the new operations, both
+new backends pass code generation of original `AES_init_ctx` and
+`AES_ECB_encrypt` and reach the untouched real AES
+`KeyExpansion`, which lowers to
+
+```text
+MINIC_M1_FRONTIER arch=aarch64 function=KeyExpansion core_blocks=11 core_objects=130 parameters=2 values=768 instructions=922
+MINIC_M1_FRONTIER arch=loongarch64 function=KeyExpansion core_blocks=11 core_objects=130 parameters=2 values=768 instructions=922
+```
+
+Current M1–M6 frame model rejects more than **240 SSA values**, so
+`KeyExpansion` exceeds its fixed-frame/offset representability
+bounds before later integer/byte opcode gaps are examined. The
+existing conservative one-slot-per-value, one-eightbyte-per-object
+frame **must not** be scaled by simply deleting a count check:
+actual object widths/arrays, proper alignment, AArch64 immediate
+encoding and LoongArch signed-12-bit stack displacements require a
+target-owned frame-layout plan and admissible stack-addressing
+strategy. Reuse proven x86 target frame/data-layout patterns and
+shared `MinicDataLayout` contracts without introducing Machine IR.
+
+**Do not claim full original tinyAES or cJSON.** Both original
+GNU-built AES references pass, but **zero MiniC-built full AES
+executables** have completed QEMU. Increment real program acceptance
+only after source-bound GNU+QEMU differential matching. Temporary
+workflow activation was restored to byte-identical original focused
+blob `cd9a880a5a707f28b5ea63c364c1844ab35e1c56`
+after the certified run. PR #527 remains Draft.
