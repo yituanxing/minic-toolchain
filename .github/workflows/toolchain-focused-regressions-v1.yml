@@ -89,7 +89,7 @@ jobs:
                   linux_yaml=true
                 fi
                 case "$changed" in
-                  src/target/aarch64/*|src/target/loongarch64/*|tests/compiler/c0/run-four-backend-m1.sh|tests/external/tiny-aes-c/*|tests/external/cjson/*)
+                  src/target/aarch64/*|src/target/loongarch64/*|tests/compiler/c0/run-four-backend-m1.sh|tests/external/tiny-aes-c/*|tests/external/cjson/*|tests/external/zlib/*)
                     ;;
                   *) four_only=false ;;
                 esac
@@ -210,7 +210,11 @@ jobs:
           FOUR_BACKEND_M38_FP_VARARGS=1 \
           FOUR_BACKEND_M39_LP64_BITOPS=1 \
           make MODE=release CFLAGS=-Werror BUILD_DIR=build/toolchain-focused-t1-v2 check-four-backend-m38-fp-varargs
-          make MODE=release CFLAGS=-Werror BUILD_DIR=build/toolchain-focused-t1-v2 check-four-backend-cjson-frontier
+          # cJSON is now an accepted project: no permissive regression frontier.
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/toolchain-focused-t1-v2 check-four-backend-cjson-accept
+          # Real zlib source-wide discovery only; strict accept target is separate.
+          sh -n tests/external/zlib/probe-four-backend-frontier.sh
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/toolchain-focused-t1-v2 check-four-backend-zlib-frontier
 
       - name: Fetch certified Stage2 for single-runner Kbuild driver preflight
         if: contains(github.event.head_commit.message, '[minic-stage2-driver-smoke]')
