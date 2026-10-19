@@ -286,6 +286,40 @@ static bool emit_function(FILE *out, const MinicFunction *decl,
                 fprintf(out, "  str x9, [sp, #%zu]\n", offset) < 0)
                 return false;
             continue;
+
+        case MINIC_CORE_INSTRUCTION_FIELD_ADDRESS: {
+            /* The shared Core lowering has already computed byte_offset
+             * from the selected target's DataLayout. Only ELF instruction
+             * encoding belongs here; do not reconstruct record offsets. */
+            const MinicCoreValueId base = ins->value.field_address.base;
+            const size_t bytes = ins->value.field_address.byte_offset;
+            if (base >= fn->value_count ||
+                !minic_type_is_pointer(fn->values[base].type) ||
+                bytes > 4095U ||
+                fprintf(out, "  ldr x9, [sp, #%zu]\n", (size_t)base * 8U) < 0 ||
+                (bytes != 0U && fprintf(out, "  add x9, x9, #%zu\n", bytes) < 0))
+                return false;
+            break;
+        }
+        case MINIC_CORE_INSTRUCTION_POINTER_OFFSET: {
+            const MinicCoreValueId base = ins->value.pointer_offset.base;
+            const MinicCoreValueId index = ins->value.pointer_offset.index;
+            const size_t stride = ins->value.pointer_offset.element_size;
+            if (base >= fn->value_count || index >= fn->value_count ||
+                !minic_type_is_pointer(fn->values[base].type) ||
+                !valid_int(fn->values[index].type) || stride > 65535U ||
+                fprintf(out, "  ldr x9, [sp, #%zu]\n", (size_t)base * 8U) < 0 ||
+                fprintf(out, "  ldrsw x10, [sp, #%zu]\n", (size_t)index * 8U) < 0)
+                return false;
+            if (stride != 0U) {
+                if (fprintf(out, "  movz x11, #%zu\n"
+                                 "  mul x10, x10, x11\n"
+                                 "  %s x9, x9, x10\n", stride,
+                            ins->value.pointer_offset.subtract ? "sub" : "add") < 0)
+                    return false;
+            }
+            break;
+        }
         case MINIC_CORE_INSTRUCTION_LOAD: {
             const MinicCoreValueId addr = ins->value.load.address;
             if (addr >= fn->value_count ||
