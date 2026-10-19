@@ -33,6 +33,31 @@ int main(void) { return 42; }
 EOF
 check_exit return42 42
 
+# BusyBox allyesconfig + libselinux: a GNU deprecated typedef is an
+# informational type attribute, not a different object/argument layout.
+# Check both x86 runtime and RV64 parsing; retain diagnostic-only behavior.
+cat > "$tempdir/typedef_deprecated.i" <<'EOF'
+typedef char *LegacyPointer __attribute__((deprecated));
+typedef int LegacyInteger __attribute__((__deprecated__));
+int main(void) {
+    LegacyPointer p = 0;
+    LegacyInteger v = 42;
+    return p == 0 ? v : 1;
+}
+EOF
+check_exit typedef_deprecated 42
+"$MINIC_CC" --target=riscv64-linux -S "$tempdir/typedef_deprecated.i" \
+    -o "$tempdir/typedef_deprecated.rv64.s"
+"$HOST_CC" -Wno-deprecated-declarations -std=gnu11 -no-pie -x c \
+    "$tempdir/typedef_deprecated.i" -o "$tempdir/typedef_deprecated.gnu"
+set +e
+"$tempdir/typedef_deprecated.gnu"
+gnu_rc=$?
+set -e
+test "$gnu_rc" -eq 42
+echo "PASS: GNU diagnostic typedef attributes preserve x86 and RV64 C semantics"
+
+
 cat > "$tempdir/params_call.i" <<'EOF'
 int sum(int a, int b) { return a + b; }
 int main(void) { return sum(17, 25); }
