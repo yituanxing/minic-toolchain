@@ -796,3 +796,57 @@ byte-identically to original SHA
 `cd9a880a5a707f28b5ea63c364c1844ab35e1c56`.
 The original x86/RV64 implementations and shared frontend/Core remain
 untouched; PR #527 remains Draft.
+
+
+## M11–M12 narrow index and bitwise original tinyAES acceptance
+
+The **unchanged pinned tinyAES** original `KeyExpansion` failed at
+block 9, instruction 505, Core `POINTER_OFFSET`. Real GNU/QEMU trace
+captured two *identical* first-failure facts across both new targets:
+`base_pointer=1 index_integer=1 index_bits=8 stride=1 subtract=0`.
+The pointer-offset operation used a byte-sized index; the initial
+AArch64/LoongArch64 emitters only accepted 32-bit index types.
+
+- **M11:** Extended signed/unsigned 8-, 16-, 32-bit pointer index
+  loading and LP64 address arithmetic, with target-owned instructions.
+  Validated genuine MiniC→GNU static ELF/QEMU for 8-bit and 16-bit
+  positive/negative array indexes using untouched ordinary C fixtures.
+  Actual [Actions #39221166189](https://github.com/yituanxing/minic-toolchain/actions/runs/39221166189)
+  **SUCCESS**, `FOUR_BACKEND_M11_INDEX=PASS architectures=2 executable_QEMU_cases=22 signed_unsigned_byte_halfword_index_cases=8 GNU_independent_oracles=18`.
+- Real original `KeyExpansion` then advanced to block 9, instruction
+  634, `INTEGER_BITWISE_XOR`. Both backends now use ISA-native
+  32-bit AND/XOR/OR operations for compatible width/sign operands.
+- **M12:** Added four signed/unsigned bitwise cases per target and
+  independent GNU oracles. The first [Actions #39220814426](https://github.com/yituanxing/minic-toolchain/actions/runs/39220814426)
+  correctly **failed**, because the bitwise fixture also exercised
+  a large unsigned integer constant beyond the current target's
+  restricted immediate support; the fixture was narrowed to test the
+  intended bitwise operation, without altering the upstream AES.
+  Actual [Actions #39221166189](https://github.com/yituanxing/minic-toolchain/actions/runs/39221166189)
+  **SUCCESS**, `FOUR_BACKEND_M12_BITWISE=PASS architectures=2 executable_QEMU_cases=22 signed_unsigned_bitwise_cases=8 GNU_independent_oracles=18`,
+  plus original independent focused 8/8 owner gates.
+- **Important:** M11/M12 test suites repeat M1/M2 base runtime tests;
+  their 22-per-suite totals are *not* 44 distinct new cases. There
+  are eight genuinely added per M11/M12 suite, sixteen across both.
+- The exact unchanged original AES program has now moved *past*
+  `KeyExpansion` into `AddRoundKey`, a genuine AES function with
+  nested byte-sized loop variables `uint8_t i,j`. The latest
+  [Actions #39221512235](https://github.com/yituanxing/minic-toolchain/actions/runs/39221512235)
+  **SUCCESS at the frontier audit** found the first `AddRoundKey`
+  rejected Core at block 3, instruction 134, kind 2
+  (`INTEGER_ADD`), after 113 values and 136 instructions. Current
+  two ISA emitters restrict binary arithmetic to exactly 32-bit,
+  same-signedness operands; the next patch must diagnose actual
+  operand/result widths, promotion and signedness to preserve correct
+  C `uint8_t` loop behavior. The first-failure opcode is known,
+  but the exact type relation has not yet been measured.
+- Both unchanged original **GNU-built** AES reference programs
+  continue to QEMU-pass, but neither architecture has a complete
+  **MiniC-built** AES binary: `verified_runtime=0 blocked=2`.
+  Do not claim AES acceptance or start cJSON before actual
+  target MiniC ELF executable matches the independent GNU oracle.
+- The temporary focused workflow activation has been restored
+  **byte-for-byte** to the original main SHA
+  `cd9a880a5a707f28b5ea63c364c1844ab35e1c56`. New features
+  touch only the two new target backends and target-only tests/
+  documentation, not shared Core, x86-64, RV64, or original vendor C.
