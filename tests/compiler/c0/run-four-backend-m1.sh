@@ -9,7 +9,7 @@ QEMU_LOONGARCH64=qemu-loongarch64
 w=$(mktemp -d)
 trap 'rm -rf "$w"' EXIT HUP INT TERM
 m2_enabled=0
-if [ "${FOUR_BACKEND_M2:-0}" = "1" ] || [ "${FOUR_BACKEND_M2_STACK:-0}" = "1" ] || [ "${FOUR_BACKEND_M3_CALL:-0}" = "1" ] || [ "${FOUR_BACKEND_M4_GLOBAL:-0}" = "1" ] || [ "${FOUR_BACKEND_M5_POINTER:-0}" = "1" ] || [ "${FOUR_BACKEND_M6_ADDRESS:-0}" = "1" ] || [ "${FOUR_BACKEND_M7_FRAME:-0}" = "1" ] || [ "${FOUR_BACKEND_M8_NARROW:-0}" = "1" ] || [ "${FOUR_BACKEND_M9_UNSIGNED:-0}" = "1" ] || [ "${FOUR_BACKEND_M10_MOD:-0}" = "1" ] || [ "${FOUR_BACKEND_M11_INDEX:-0}" = "1" ] || [ "${FOUR_BACKEND_M12_BITWISE:-0}" = "1" ] || [ "${FOUR_BACKEND_M13_NARROW_ARITH:-0}" = "1" ] || [ "${FOUR_BACKEND_M14_SHIFT:-0}" = "1" ]; then
+if [ "${FOUR_BACKEND_M2:-0}" = "1" ] || [ "${FOUR_BACKEND_M2_STACK:-0}" = "1" ] || [ "${FOUR_BACKEND_M3_CALL:-0}" = "1" ] || [ "${FOUR_BACKEND_M4_GLOBAL:-0}" = "1" ] || [ "${FOUR_BACKEND_M5_POINTER:-0}" = "1" ] || [ "${FOUR_BACKEND_M6_ADDRESS:-0}" = "1" ] || [ "${FOUR_BACKEND_M7_FRAME:-0}" = "1" ] || [ "${FOUR_BACKEND_M8_NARROW:-0}" = "1" ] || [ "${FOUR_BACKEND_M9_UNSIGNED:-0}" = "1" ] || [ "${FOUR_BACKEND_M10_MOD:-0}" = "1" ] || [ "${FOUR_BACKEND_M11_INDEX:-0}" = "1" ] || [ "${FOUR_BACKEND_M12_BITWISE:-0}" = "1" ] || [ "${FOUR_BACKEND_M13_NARROW_ARITH:-0}" = "1" ] || [ "${FOUR_BACKEND_M14_SHIFT:-0}" = "1" ] || [ "${FOUR_BACKEND_M15_SCALAR_RETURN:-0}" = "1" ]; then
     m2_enabled=1
 fi
 cat > "$w/return.i" <<'EOF'
@@ -522,6 +522,39 @@ cat > "$w/driver_shift_count.c" <<'EOF'
 extern int mini_shift_count(unsigned short,unsigned char);
 int main(void) { return mini_shift_count(21u,2u); }
 EOF
+# M15: authentic xtime returns uint8_t and GNU callers observe the
+# low-byte ABI; test both external and internally nested direct calls.
+cat > "$w/u8_return.i" <<'EOF'
+unsigned char mini_u8_return(unsigned char x) { return (unsigned char)(x + 43); }
+EOF
+cat > "$w/driver_u8_return.c" <<'EOF'
+extern unsigned char mini_u8_return(unsigned char);
+int main(void) { return (int)mini_u8_return(255u); }
+EOF
+cat > "$w/s8_return.i" <<'EOF'
+signed char mini_s8_return(signed char x) { return x; }
+EOF
+cat > "$w/driver_s8_return.c" <<'EOF'
+extern signed char mini_s8_return(signed char);
+int main(void) { return (int)mini_s8_return(-3) + 45; }
+EOF
+cat > "$w/u8_external.i" <<'EOF'
+extern unsigned char gnu_u8(unsigned char);
+int mini_u8_external(unsigned char x) { return (int)gnu_u8(x); }
+EOF
+cat > "$w/driver_u8_external.c" <<'EOF'
+extern int mini_u8_external(unsigned char);
+unsigned char gnu_u8(unsigned char x) { return (unsigned char)(x + 1); }
+int main(void) { return mini_u8_external(41u); }
+EOF
+cat > "$w/u8_internal.i" <<'EOF'
+static unsigned char mini_u8_helper(unsigned char x) { return (unsigned char)(x + 1); }
+int mini_u8_internal(unsigned char x) { return (int)mini_u8_helper(x); }
+EOF
+cat > "$w/driver_u8_internal.c" <<'EOF'
+extern int mini_u8_internal(unsigned char);
+int main(void) { return mini_u8_internal(41u); }
+EOF
 check_qemu_exit() {
     emulator=$1
     binary=$2
@@ -591,6 +624,9 @@ for target in aarch64 loongarch64; do
     if [ "${FOUR_BACKEND_M14_SHIFT:-0}" = "1" ]; then
         cases="$cases shift_left shift_unsigned shift_signed shift_byte shift_count"
     fi
+    if [ "${FOUR_BACKEND_M15_SCALAR_RETURN:-0}" = "1" ]; then
+        cases="$cases u8_return s8_return u8_external u8_internal"
+    fi
     if [ "$m2_enabled" = "1" ]; then
         # Independent originals for every new CFG/comparison fixture, not
         # merely an expected return code from a MiniC-owned executable.
@@ -634,6 +670,9 @@ for target in aarch64 loongarch64; do
         if [ "${FOUR_BACKEND_M14_SHIFT:-0}" = "1" ]; then
             oracle_cases="$oracle_cases shift_left shift_unsigned shift_signed shift_byte shift_count"
         fi
+        if [ "${FOUR_BACKEND_M15_SCALAR_RETURN:-0}" = "1" ]; then
+            oracle_cases="$oracle_cases u8_return s8_return u8_external u8_internal"
+        fi
         for testcase in $oracle_cases; do
             "$gcc" -static -x c "$w/$testcase.i" "$w/driver_$testcase.c" \
                 -o "$w/$target.gnu-$testcase.elf"
@@ -672,6 +711,8 @@ for target in aarch64 loongarch64; do
             bit_xor|bit_and|bit_or|bit_unsigned)
                 "$gcc" -static "$w/$target.$testcase.o" "$w/driver_$testcase.c" -o "$w/$target.$testcase.elf" ;;
             u8_index|s8_index|u16_index|s16_index)
+                "$gcc" -static "$w/$target.$testcase.o" "$w/driver_$testcase.c" -o "$w/$target.$testcase.elf" ;;
+            u8_return|s8_return|u8_external|u8_internal)
                 "$gcc" -static "$w/$target.$testcase.o" "$w/driver_$testcase.c" -o "$w/$target.$testcase.elf" ;;
             shift_left|shift_unsigned|shift_signed|shift_byte|shift_count)
                 "$gcc" -static "$w/$target.$testcase.o" "$w/driver_$testcase.c" -o "$w/$target.$testcase.elf" ;;
@@ -766,6 +807,9 @@ if [ "$m2_enabled" = "1" ]; then
     fi
     if [ "${FOUR_BACKEND_M14_SHIFT:-0}" = "1" ]; then
         echo "FOUR_BACKEND_M14_SHIFT=PASS architectures=2 executable_QEMU_cases=24 signed_unsigned_shift_cases=10 GNU_independent_oracles=16"
+    fi
+    if [ "${FOUR_BACKEND_M15_SCALAR_RETURN:-0}" = "1" ]; then
+        echo "FOUR_BACKEND_M15_SCALAR_RETURN=PASS architectures=2 executable_QEMU_cases=22 narrow_return_call_cases=8 GNU_independent_oracles=14"
     fi
 else
     echo "FOUR_BACKEND_M1=PASS architectures=2 executable_QEMU_cases=8 GCC_independent_oracles=4"
