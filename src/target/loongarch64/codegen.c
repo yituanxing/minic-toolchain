@@ -648,12 +648,26 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
              * Both are LP64 pointer representations: preserve all 64 bits.
              * Do NOT incorrectly turn integer/pointer casts into a no-op. */
             const MinicCoreValueId source = ins->value.operand;
+            size_t src_width = 0U;
+            bool src_signed = false;
+            bool src_pointer;
             if (source >= fn->value_count ||
                 !minic_type_is_pointer(ins->type) ||
-                !minic_type_is_pointer(fn->values[source].type) ||
                 !minic_core_scalar_bitcast_types_valid(
-                    ins->type, fn->values[source].type) ||
-                !emit_sp_mem(out, "ld.d", "$t0", (size_t)source * 8U)) return false;
+                    ins->type, fn->values[source].type)) return false;
+            src_pointer = minic_type_is_pointer(fn->values[source].type);
+            if (!src_pointer &&
+                !small_integer_width(program, target,
+                                     fn->values[source].type,
+                                     &src_width, &src_signed)) return false;
+            if (!emit_sp_mem(out, src_pointer ? "ld.d" : "ld.w", "$t0",
+                             (size_t)source * 8U)) return false;
+            if (!src_pointer &&
+                (!emit_integer_normalize(out, src_width, src_signed) ||
+                 (src_signed
+                    ? fputs("  slli.w $t0, $t0, 0\n", out) == EOF
+                    : fputs("  bstrpick.d $t0, $t0, 31, 0\n", out) == EOF)))
+                return false;
             break;
         }
         case MINIC_CORE_INSTRUCTION_LOAD: {
