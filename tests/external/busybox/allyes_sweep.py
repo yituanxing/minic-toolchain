@@ -48,9 +48,14 @@ def call_proxy(args):
             event_dir = Path(os.environ["BUSYBOX_ALLYES_REPORT_ROOT"]) / "combined-events"
             event_dir.mkdir(exist_ok=True)
             event = event_dir / (Path(output).stem + ".replace.txt")
-            event.write_text("KBUILD_REPLACE_OWNER=%s mini_sha256=%s\n" %
-                             (output, hashlib.sha256(mini_path.read_bytes()).hexdigest()),
-                             encoding="utf-8")
+            receipt = "KBUILD_REPLACE_OWNER=%s mini_sha256=%s\n" % (
+                output, hashlib.sha256(mini_path.read_bytes()).hexdigest())
+            event.write_text(receipt, encoding="utf-8")
+            # Two distinct Kbuild directories can both own "main.o".
+            # This full-path receipt prevents ambiguous bulk verification.
+            unique = hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:20]
+            (event_dir / (unique + ".replace.txt")).write_text(
+                receipt, encoding="utf-8")
     if wanted and gcc.returncode == 0 and "-c" in args:
         output = next((args[i + 1] for i, val in enumerate(args[:-1])
                        if val == "-o"), None)
@@ -294,6 +299,18 @@ def controller(args):
             print("BUSYBOX_ALLYES_GCC_RUNTIME_ORACLE=BLOCKED original_GNU_build=%s" %
                   ("PASS" if rc == 0 else "FAIL"), flush=True)
     attempts = print_frontier(out, rc == 0, enabled)
+    if link_compatible and os.environ.get("BUSYBOX_ALLYES_MIXED_BULK") == "1":
+        if rc != 0 or not (root / "busybox").is_file():
+            print("BUSYBOX_MIXED_BULK=BLOCKED stage=original-GNU-baseline")
+            return 1
+        bulk_script = Path(__file__).resolve().with_name("mixed_bulk_kbuild.py")
+        bulk_rc = subprocess.run(
+            [sys.executable, str(bulk_script), "--source", str(root),
+             "--report", str(out), "--proxy", proxy, "--host-cc", args.host_cc],
+            env=make_env, check=False).returncode
+        if bulk_rc:
+            print("BUSYBOX_MIXED_BULK=FAIL stage=bulk-cohort")
+            return 1
     if link_compatible and os.environ.get("BUSYBOX_ALLYES_MIXED_COHORT") == "1":
         if rc != 0 or not (root / "busybox").is_file():
             print("BUSYBOX_MIXED_COMPLEX=BLOCKED stage=original-GNU-build")
