@@ -257,6 +257,16 @@ repls = [
      "      k = (i - 1) * 4;\n      if (i == Nk) minic_trace = RoundKey[11];"),
     ("      k = (i - 1) * 4;",
      "      k = (i - 1) * 4;\n      if (i == Nk) minic_trace = RoundKey[15];"),
+    ("  // The first round key is the key itself.",
+     "  minic_trace = Key[12];\n  // The first round key is the key itself."),
+    ("  // All other round keys are found from the previous round keys.",
+     "  minic_trace = Key[12];\n  // All other round keys are found from the previous round keys."),
+    ("  // All other round keys are found from the previous round keys.",
+     "  minic_trace = RoundKey[12];\n  // All other round keys are found from the previous round keys."),
+    ("    {\n      k = (i - 1) * 4;",
+     "    {\n      if (i == Nk) minic_trace = Key[12];\n      k = (i - 1) * 4;"),
+    ("    {\n      k = (i - 1) * 4;",
+     "    {\n      if (i == Nk) minic_trace = RoundKey[12];\n      k = (i - 1) * 4;"),
 ]
 declaration = "static unsigned char minic_trace;\n"
 keyexp = "static void KeyExpansion(uint8_t* RoundKey, const uint8_t* Key)"
@@ -267,7 +277,7 @@ for stage, (needle, replacement) in enumerate(repls):
     modified = modified.replace(needle, replacement, 1)
     (directory / f"aes_trace_{stage}.c").write_text(modified)
 PY
-            for stage in 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17; do
+            for stage in 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22; do
                 sed "s|#include \"aes.c\"|#include \"aes_trace_$stage.c\"|" "$fixture" |
                     awk -v k="$stage" '
                         { print }
