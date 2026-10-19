@@ -603,6 +603,31 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                 fputs(opcode, out) == EOF) return false;
             break;
         }
+        case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND:
+        case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_XOR:
+        case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_OR: {
+            const MinicCoreValueId lhs = ins->value.binary.left;
+            const MinicCoreValueId rhs = ins->value.binary.right;
+            size_t lw, rw;
+            bool ls, rs;
+            const char *opcode;
+            if (lhs >= fn->value_count || rhs >= fn->value_count ||
+                !small_integer_width(program, target, fn->values[lhs].type,
+                                     &lw, &ls) ||
+                !small_integer_width(program, target, fn->values[rhs].type,
+                                     &rw, &rs) ||
+                lw != 4U || rw != 4U || ls != rs ||
+                fprintf(out, "  ldr w9, [sp, #%zu]\n", (size_t)lhs * 8U) < 0 ||
+                fprintf(out, "  ldr w10, [sp, #%zu]\n", (size_t)rhs * 8U) < 0)
+                return false;
+            opcode = ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND
+                ? "  and w9, w9, w10\n"
+                : ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_XOR
+                    ? "  eor w9, w9, w10\n"
+                    : "  orr w9, w9, w10\n";
+            if (fputs(opcode, out) == EOF) return false;
+            break;
+        }
         case MINIC_CORE_INSTRUCTION_INTEGER_DIVIDE:
         case MINIC_CORE_INSTRUCTION_INTEGER_REMAINDER: {
             MinicCoreValueId lhs = ins->value.binary.left;
