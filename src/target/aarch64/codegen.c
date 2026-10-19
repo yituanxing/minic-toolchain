@@ -896,14 +896,14 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                     ins->type, fn->values[source].type)) return false;
             src_pointer = minic_type_is_pointer(fn->values[source].type);
             if (!src_pointer &&
-                !small_integer_width(program, target,
-                                     fn->values[source].type,
+                !scalar_integer_width(program, target,
+                                      fn->values[source].type,
                                      &src_width, &src_signed)) return false;
-            if (fprintf(out, src_pointer
+            if (fprintf(out, (src_pointer || src_width == 8U)
                           ? "  ldr x9, [sp, #%zu]\n"
                           : "  ldr w9, [sp, #%zu]\n",
                         (size_t)source * 8U) < 0) return false;
-            if (!src_pointer &&
+            if (!src_pointer && src_width != 8U &&
                 (!emit_integer_normalize(out, src_width, src_signed) ||
                  fputs(src_signed ? "  sxtw x9, w9\n"
                                   : "  uxtw x9, w9\n", out) == EOF))
