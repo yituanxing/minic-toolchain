@@ -950,7 +950,7 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
             const MinicCoreValueId lhs = ins->value.binary.left;
             const MinicCoreValueId rhs = ins->value.binary.right;
             size_t lw, rw;
-            bool ls, rs;
+            bool ls, rs, wide;
             if (ins->kind == MINIC_CORE_INSTRUCTION_SCALAR_EQUAL &&
                 lhs < fn->value_count && rhs < fn->value_count &&
                 minic_type_is_pointer(fn->values[lhs].type) &&
@@ -963,11 +963,15 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                 break;
             }
             if (lhs >= fn->value_count || rhs >= fn->value_count ||
-                !small_integer_width(program, target, fn->values[lhs].type, &lw, &ls) ||
-                !small_integer_width(program, target, fn->values[rhs].type, &rw, &rs) ||
-                lw != 4U || rw != 4U || ls != rs ||
-                !emit_sp_mem(out, "ld.w", "$t0", (size_t)lhs * 8U) ||
-                !emit_sp_mem(out, "ld.w", "$t1", (size_t)rhs * 8U) ||
+                !scalar_integer_width(program, target, fn->values[lhs].type, &lw, &ls) ||
+                !scalar_integer_width(program, target, fn->values[rhs].type, &rw, &rs) ||
+                lw != rw || ls != rs || (lw != 4U && lw != 8U))
+                return false;
+            wide = lw == 8U;
+            if (!emit_sp_mem(out, wide ? "ld.d" : "ld.w", "$t0",
+                             (size_t)lhs * 8U) ||
+                !emit_sp_mem(out, wide ? "ld.d" : "ld.w", "$t1",
+                             (size_t)rhs * 8U) ||
                 fputs(ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_LESS
                           ? (ls ? "  slt $t0, $t0, $t1\n"
                                 : "  sltu $t0, $t0, $t1\n")
@@ -977,16 +981,21 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
         }
         case MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO: {
             const MinicCoreValueId v = ins->value.operand;
-            bool pointer;
+            size_t width = 0U;
+            bool sign = false;
+            bool pointer, wide;
             if (v >= fn->value_count) return false;
             pointer = minic_type_is_pointer(fn->values[v].type);
-            if (!pointer && !valid_int_or_bool(fn->values[v].type))
+            if (!pointer && !minic_type_equal(fn->values[v].type, minic_type_bool()) &&
+                !scalar_integer_width(program, target, fn->values[v].type,
+                                      &width, &sign))
                 return false;
-            if (!emit_sp_mem(out, pointer ? "ld.d" : "ld.w", "$t0",
+            wide = pointer || width == 8U;
+            if (!emit_sp_mem(out, wide ? "ld.d" : "ld.w", "$t0",
                              (size_t)v * 8U) ||
-                fputs(pointer ? "  sltui $t0, $t0, 1\n"
-                              : "  sltui $t0, $t0, 1\n", out) == EOF)
+                fputs("  sltui $t0, $t0, 1\n", out) == EOF)
                 return false;
+            (void)sign;
             break;
         }
         case MINIC_CORE_INSTRUCTION_INTEGER_CONVERSION: {
