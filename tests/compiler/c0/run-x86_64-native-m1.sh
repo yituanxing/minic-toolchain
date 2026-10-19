@@ -338,6 +338,10 @@ set -e
 test "$native_result" -eq 42
 echo "PASS: x86-64 x87 GNU callee / MiniC caller return ABI"
 
+# Include the odd-spilled-stack x87 ABI test in the existing native M1
+# regression suite; no new workflow or independently-built compiler.
+sh tests/compiler/c0/run-x86_64-long-double-stack-abi.sh
+
 # Explicit double -> long double -> double conversions must use
 # x87, not the binary128 software conversion symbols.
 cat > "$tempdir/tinycc_x87_convert.i" <<'EOF'
