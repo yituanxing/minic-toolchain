@@ -95,6 +95,7 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/toolchain-focused-t1-v2 check-x86_64-m1
           make MODE=release CFLAGS=-Werror BUILD_DIR=build/toolchain-focused-t1-v2 check-x86_64-busybox-all-eligible
 
       - name: Upload original GNU and MiniC all-owner Kbuild diagnostics
