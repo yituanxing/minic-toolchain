@@ -706,3 +706,93 @@ to the original existing workflow blob
 `cd9a880a5a707f28b5ea63c364c1844ab35e1c56`
 after verification. This is still Draft PR #527, not a release
 or a claim of original tinyAES project success.
+
+
+## M8–M10 original KeyExpansion scalar, unsigned, remainder pressure — 2026-10-19
+
+The unmodified original tinyAES `KeyExpansion` is our source of
+required operations; we continue the same project-promotion sequence
+as x86, do not substitute synthetic source and do not claim a
+complete AES binary before QEMU differential execution.
+
+**M8 – width/sign-aware 1-/2-byte memory and `convert.int`:**
+Reused the existing shared target integer-width and effective-type
+metadata (the principle already demonstrated by x86
+`x86_scalar_width`/`x86_normalize`). For ordinary 8-, 16- and
+32-bit integer Core types, the two backends independently encode:
+- Signed/unsigned byte and halfword memory loads, exact-width stores,
+  plus signed/unsigned 8/16-to-32 conversion normalization.
+- Full-width 64-bit pointers are still separate, never emitted
+  through a byte/short integer register.
+- Unsupported wider scalar shapes fail closed rather than being
+  implicitly passed through a 32-bit store.
+- Seven independent GNU-built cross-TU C ABI oracle fixtures per
+  target exercise signed byte read, unsigned byte read, byte write,
+  signed and unsigned halfword loads, and byte/halfword truncation.
+
+[CI #39216929885](https://github.com/yituanxing/minic-toolchain/actions/runs/39216929885)
+SUCCESS:
+
+```text
+FOUR_BACKEND_M8_NARROW=PASS architectures=2 executable_QEMU_cases=28 signed_unsigned_byte_short_cases=14 GNU_independent_oracles=24
+```
+
+**M9 – integer signedness in arithmetic, comparisons and C pointer
+index:** Real `KeyExpansion` failed exactly at Core block 1,
+instruction 22 (`INTEGER_LESS`), because the first backend only
+admitted signed `int` operands. Both targets now select true
+signed-versus-unsigned 32-bit condition instructions for `<`,
+perform ordinary 32-bit wraparound add/sub/mul, and distinguish signed
+and unsigned 32-bit pointer indexes while extending to the 64-bit
+address-register representation. Narrow or wide invalid index
+shapes remain a rejection. The ABI preflight now accepts target-width
+checked unsigned 32-bit arguments, not arbitrary int128 parameters.
+One initial M9 CI failed on that missing unsigned argument ABI gate
+([#39218365264](https://github.com/yituanxing/minic-toolchain/actions/runs/39218365264));
+source was fixed, not hidden in the workflow.
+
+**M10 – signed/unsigned 32-bit divide and remainder:** After M9, the
+next exact original `KeyExpansion` failure was Core block 6,
+instruction 656 (`INTEGER_REMAINDER`). AArch64 uses `sdiv/udiv`,
+then `msub` for remainder; LoongArch64 uses `div.w/div.wu` and
+`mod.w/mod.wu`. The four independent original-source callers per
+target distinguish signed negative remainder from unsigned
+high-bit remainder and exercise 32-bit signed/unsigned quotient
+behavior.
+
+[CI #39218852728](https://github.com/yituanxing/minic-toolchain/actions/runs/39218852728)
+SUCCESS on the final combined source and prior toolchain regressions:
+
+```text
+FOUR_BACKEND_M8_NARROW=PASS architectures=2 executable_QEMU_cases=28 signed_unsigned_byte_short_cases=14 GNU_independent_oracles=24
+FOUR_BACKEND_M9_UNSIGNED=PASS architectures=2 executable_QEMU_cases=20 unsigned_compare_arithmetic_index_cases=6 GNU_independent_oracles=16
+FOUR_BACKEND_M10_MOD=PASS architectures=2 executable_QEMU_cases=22 signed_unsigned_div_mod_cases=8 GNU_independent_oracles=18
+TOOLCHAIN_FOCUSED_T1=PASS mode=all independent_test_checks=8 shared_builds=1
+```
+
+These are **three independently gated suites that each rerun common
+M1/M2 cases**, not 70 distinct new C owner cases. They add 14 + 6 + 8
+new, genuinely MiniC-owned target-executed cases to the proven baseline,
+each independently executed by a GNU cross-compiled original-C oracle.
+
+**Current measured unchanged AES frontier after M10:** Both GNU-built
+original AES-128 ECB reference programs execute and exit successfully
+under their respective QEMUs; **zero** complete MiniC-owned AES
+executables do. The first target rejection remains within
+`KeyExpansion` but has advanced to Core **block 9, instruction 505,
+kind 33 (`POINTER_OFFSET`)**, with
+`core_blocks=11 core_objects=130 values=768 instructions=922`.
+Both architecture traces agree exactly at this point. This
+instruction's *specific* failing contract (index type/width, stride,
+or pointer shape) still needs extraction before a targeted change.
+Do not generalize this into “all pointer offsets work,” and do not
+begin unchanged cJSON until actual AES static ELF/QEMU differential
+passes.
+
+The existing target-only failure trace, guarded by `MINIC_M1_TRACE`,
+records the rejecting stage and last attempted genuine Core instruction.
+The temporary GitHub focused workflow edits have been restored
+byte-identically to original SHA
+`cd9a880a5a707f28b5ea63c364c1844ab35e1c56`.
+The original x86/RV64 implementations and shared frontend/Core remain
+untouched; PR #527 remains Draft.
