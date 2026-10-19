@@ -293,5 +293,8 @@ Machine IR or universal calling convention was added.
 The temporary CI branch allowlist and cross-tool installation step
 were restored byte-for-byte to original focused-workflow blob
 `cd9a880a5a707f28b5ea63c364c1844ab35e1c56` after the green run.
-The separate PR #526 x86 ABI fix in newer `main` still needs reconciliation
-before merging PR #527.
+PR #526 was subsequently merged into this branch with the explicit
+two-parent merge `82ad2768cb3f837aeb027ab2cff7554aaa2c07cc`: upstream x86
+codegen and original BusyBox owner-gate tests have exact main file identities.
+`main` is now behind-by-0 relative to this Draft PR; the merge changed no
+AArch64/LoongArch64 source semantics.
