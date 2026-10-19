@@ -251,7 +251,10 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
         return false;
     if (fprintf(out, ".p2align 2\n.type %s,%%function\n%s:\n", name, name) < 0)
         return false;
-    if (frame != 0U && fprintf(out, "  sub sp, sp, #%zu\n", frame) < 0) return false;
+    /* No illegal AArch64 add/sub immediates on real >4KiB frames. */
+    if (frame != 0U && fprintf(out,
+            "  movz x12, #%zu\n  sub sp, sp, x12\n", frame) < 0)
+        return false;
     if (has_direct_calls &&
         fprintf(out, "  str x30, [sp, #%zu]\n",
                 save_offset) < 0) return false;
@@ -503,7 +506,8 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                          (size_t)block->terminator.return_value * 8U) < 0) ||
                 (has_direct_calls && fprintf(out, "  ldr x30, [sp, #%zu]\n",
                                              save_offset) < 0) ||
-                (frame != 0U && fprintf(out, "  add sp, sp, #%zu\n", frame) < 0) ||
+                (frame != 0U && fprintf(out,
+                         "  movz x12, #%zu\n  add sp, sp, x12\n", frame) < 0) ||
                 fputs("  ret\n", out) == EOF) return false;
             break;
         case MINIC_CORE_TERMINATOR_BRANCH:
