@@ -249,6 +249,14 @@ repls = [
      "      tempa[3]=RoundKey[k + 3];\n      if (i == Nk) minic_trace = tempa[0];"),
     ("      tempa[0]=RoundKey[k + 0];",
      "      tempa[0]=RoundKey[k + 0];\n      if (i == Nk) minic_trace = RoundKey[12];"),
+    ("      k = (i - 1) * 4;",
+     "      k = (i - 1) * 4;\n      if (i == Nk) minic_trace = Key[12];"),
+    ("      k = (i - 1) * 4;",
+     "      k = (i - 1) * 4;\n      if (i == Nk) minic_trace = RoundKey[0];"),
+    ("      k = (i - 1) * 4;",
+     "      k = (i - 1) * 4;\n      if (i == Nk) minic_trace = RoundKey[11];"),
+    ("      k = (i - 1) * 4;",
+     "      k = (i - 1) * 4;\n      if (i == Nk) minic_trace = RoundKey[15];"),
 ]
 declaration = "static unsigned char minic_trace;\n"
 keyexp = "static void KeyExpansion(uint8_t* RoundKey, const uint8_t* Key)"
@@ -259,7 +267,7 @@ for stage, (needle, replacement) in enumerate(repls):
     modified = modified.replace(needle, replacement, 1)
     (directory / f"aes_trace_{stage}.c").write_text(modified)
 PY
-            for stage in 0 1 2 3 4 5 6 7 8 9 10 11 12 13; do
+            for stage in 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17; do
                 sed "s|#include \"aes.c\"|#include \"aes_trace_$stage.c\"|" "$fixture" |
                     awk -v k="$stage" '
                         { print }
@@ -296,6 +304,21 @@ PY
                 m=$?
                 set -e
                 echo "FOUR_BACKEND_AES_TRACE target=$target stage=$stage GNU_byte=$g MiniC_byte=$m derived_source_only=1" >&2
+                if [ "$stage" = 13 ]; then
+                    python3 - "$work/$target.trace$stage.s" "$target" <<'PY'
+import pathlib, sys
+lines = pathlib.Path(sys.argv[1]).read_text().splitlines()
+arch = sys.argv[2]
+needle = ":got:minic_trace" if arch == "aarch64" else "la.global $t0, minic_trace"
+for i, ln in enumerate(lines):
+    if needle in ln:
+        print("FOUR_BACKEND_AES_TRACE_ASM arch=" + arch + " stage=13 asm_context=begin", flush=True)
+        for j in range(max(0, i-48), min(len(lines), i+8)):
+            print("%d %s" % (j + 1, lines[j]), flush=True)
+        print("FOUR_BACKEND_AES_TRACE_ASM arch=" + arch + " stage=13 asm_context=end", flush=True)
+        break
+PY
+                fi
             done
         fi
         failed=$((failed + 1))
