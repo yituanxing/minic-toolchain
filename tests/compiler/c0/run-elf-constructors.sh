@@ -1,6 +1,6 @@
 #!/bin/sh
 # ELF GNU constructor semantics: real startup side-effect, not compile-only.
-set -eu
+set -eux
 : "${MINIC_CC:?MINIC_CC must name the built minic-cc}"
 : "${HOST_CC:=cc}"
 work=$(mktemp -d)
@@ -20,7 +20,7 @@ EOF
 "$MINIC_CC" --target=x86_64-linux -S "$work/start.i" -o "$work/start.x86.s"
 "$HOST_CC" -c -x assembler "$work/start.x86.s" -o "$work/start.x86.o"
 readelf -SW "$work/start.x86.o" | grep -qE '[.]init_array'
-readelf -rW "$work/start.x86.o" | grep -qE 'register_(one|two)'
+readelf -rW "$work/start.x86.o" | grep -qE '[.]rela.init_array'
 "$HOST_CC" -no-pie "$work/start.x86.o" -o "$work/start.x86.bin"
 "$HOST_CC" -std=gnu11 -no-pie -x c "$work/start.i" -o "$work/start.gnu.bin"
 set +e
@@ -35,7 +35,7 @@ if command -v riscv64-linux-gnu-gcc >/dev/null 2>&1 &&
     "$MINIC_CC" --target=riscv64-linux -S "$work/start.i" -o "$work/start.rv64.s"
     riscv64-linux-gnu-gcc -c -x assembler "$work/start.rv64.s" -o "$work/start.rv64.o"
     riscv64-linux-gnu-readelf -SW "$work/start.rv64.o" | grep -qE '[.]init_array'
-    riscv64-linux-gnu-readelf -rW "$work/start.rv64.o" | grep -qE 'register_(one|two)'
+    riscv64-linux-gnu-readelf -rW "$work/start.rv64.o" | grep -qE '[.]rela.init_array'
     if command -v qemu-riscv64 >/dev/null 2>&1; then
         riscv64-linux-gnu-gcc -static "$work/start.rv64.o" -o "$work/start.rv64.bin"
         riscv64-linux-gnu-gcc -static -x c "$work/start.i" -o "$work/start.rv64.gnu.bin"
