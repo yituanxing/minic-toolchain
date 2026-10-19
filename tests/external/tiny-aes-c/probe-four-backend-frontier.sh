@@ -57,7 +57,11 @@ for target in aarch64 loongarch64; do
         blocked=$((blocked + 1))
         continue
     fi
-    test -s "$work/$target.minic.s"
+    if [ ! -s "$work/$target.minic.s" ]; then
+        echo "FOUR_BACKEND_TINYAES=FAIL target=$target stage=MiniC_output_empty exit=1" >&2
+        exit 1
+    fi
+    echo "FOUR_BACKEND_TINYAES_COMPILE=PASS target=$target original_source=1 assembly_bytes=$(wc -c < "$work/$target.minic.s")"
     if ! "$gcc" -c "$work/$target.minic.s" -o "$work/$target.minic.o" \
            2>"$work/$target.assemble.err"; then
         echo "FOUR_BACKEND_TINYAES=BLOCKED target=$target stage=GNU_AS"
@@ -65,9 +69,25 @@ for target in aarch64 loongarch64; do
         blocked=$((blocked + 1))
         continue
     fi
-    "$gcc" -static "$work/$target.minic.o" -o "$work/$target.minic.elf"
+    if ! "$gcc" -static "$work/$target.minic.o" \
+           -o "$work/$target.minic.elf" 2>"$work/$target.link.err"; then
+        echo "FOUR_BACKEND_TINYAES=BLOCKED target=$target stage=GNU_LD" >&2
+        sed -n '1,12p' "$work/$target.link.err"
+        blocked=$((blocked + 1))
+        continue
+    fi
+    echo "FOUR_BACKEND_TINYAES_LINK=PASS target=$target MiniC_object=1 GNU_AS_LD=1"
+    set +e
     timeout 30s "$qemu" "$work/$target.minic.elf" \
         >"$work/$target.minic.out" 2>"$work/$target.minic.err"
+    qemu_status=$?
+    set -e
+    if [ "$qemu_status" -ne 0 ]; then
+        echo "FOUR_BACKEND_TINYAES=FAIL target=$target stage=QEMU_exec exit=$qemu_status" >&2
+        sed -n '1,12p' "$work/$target.minic.err" >&2
+        sed -n '1,12p' "$work/$target.minic.out" >&2
+        exit 1
+    fi
     if ! cmp -s "$work/$target.gnu.out" "$work/$target.minic.out" ||
        ! cmp -s "$work/$target.gnu.err" "$work/$target.minic.err"; then
         echo "FOUR_BACKEND_TINYAES=FAIL target=$target stage=QEMU_differential"
