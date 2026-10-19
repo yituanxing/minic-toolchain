@@ -1588,3 +1588,97 @@ objects, with staged linker diagnostics, real runtime tests, and a
 careful crash/byte-diff blame strategy. The untouched original
 full-configuration 963-enabled-symbol workload and fresh RV64 full
 Linux 2064 + QEMU P1 remain separate qualification boundaries.
+
+## BusyBox 957-option full Kbuild: 581 MiniC object owners concurrently — 2026-10-19
+
+**Milestone: a whole real BusyBox executable successfully links and runs
+with 581 distinct original C object owners built by MiniC x86-64.** All
+other object owners continue to use the unmodified original Kbuild GNU
+toolchain. This is not full MiniC BusyBox, MiniAS, or MiniLD replacement.
+
+The independently frozen reference is a fully linked and runnable
+all-GCC BusyBox 1.36.1 under the reproducible host-compatible
+957-enabled-symbol Kconfig, all original C unmodified. The existing
+`allyes_sweep.py` extracts the actual 594 original GNU CC commands,
+preprocesses their source inputs, compiles an independent MiniC
+x86-64/GNU-AS object for 582 translation units, and records each exact
+source/object/driver outcome. **One generated no-`-o` helper compilation**
+(`page_size_14734.c`) has no persistent Kbuild object owner and
+therefore is *not* eligible for object substitution. That leaves
+**593 materialized original Kbuild `.o` owners**, of which **581
+MiniC-compiled objects** and **12 explicit GCC fallbacks** can currently
+be linked together.
+
+The new `make check-x86_64-busybox-all-eligible` opt-in strong gate
+performs original GNU Kbuild from the same pristine pinned source,
+then removes the exact 581 eligible GCC object owners, invalidates all
+relevant Kbuild parent archives, and forces fresh original GNU CC
+invocations. The shared driver recognizes each requested absolute
+object path, lets the original GNU compiler run unmodified, then
+substitutes only its corresponding proven GNU-assembled MiniC object
+**at that precise CC owner output**, before the original archive and
+final GNU linker stages. The test checks all **581 path-unique replacement
+receipts** and **all 581 SHA-256 object identities** *after* Kbuild
+finishes, to ensure no silent fallback or GCC rebuild erased a MiniC
+object. It then checks the resulting whole BusyBox executable differs
+from the saved GNU binary and executes 11 deterministic applet
+fixtures, comparing exit code, stdout, and stderr byte-for-byte with
+the original all-GCC program. Original BusyBox source is never patched.
+Unlike the prior five-object milestone, all 581 MiniC owners coexist
+in **one linked BusyBox executable**.
+
+**CI [#39191471825](https://github.com/yituanxing/minic-toolchain/actions/runs/39191471825) — SUCCESS** on the original
+frontend showed:
+`BUSYBOX_MIXED_BULK_SOURCE=DISCOVERY original_Kbuild_owners=593 eligible_MiniC=581 GCC_fallback=12`,
+`BUSYBOX_MIXED_BULK_REAL_OWNERS=PASS total=581 SHA256_verified=581 original_Kbuild=1`,
+and
+`BUSYBOX_MIXED_BULK=PASS MiniC_owners=581 GCC_fallback=12 original_full_Kbuild=1 eleven_fixture_byte_exact=1 MiniC_and_GNU_binary_differ=1 full_all_MiniC=NO`.
+
+An independent source-driven correction to array parameter parsing
+fixed a C enum bound `unsigned long meminfo[MI_MAX]` from BusyBox
+`procps/top.c` that had incorrectly been rejected as an unknown
+preceding-parameter VLA bound. The shared frontend now differentiates
+a genuine enum ICE from a preceding named C99 VLA bound and retains
+the existing fixed-bound evaluator. A GCC vs MiniC x86 real runtime
+42 plus RV64 code-generation fixture is committed. **Final
+[#39191910150](https://github.com/yituanxing/minic-toolchain/actions/runs/39191910150) — SUCCESS**:
+`PASS: C enum ICE array outer parameter adjusts to pointer on x86/RV64/GCC`,
+the entire 581-owner replacement and 11 runtime oracle reran successfully,
+and the focused RV64/MiniAR/MiniLD regression finished
+`TOOLCHAIN_FOCUSED_T1=PASS mode=all independent_test_checks=8 shared_builds=1`.
+The `procps/top.c` owner's next exposed blocker is now its
+**x86-64 aggregate ABI CALL lowering** (`display_process_list`, Core
+kind 47), so it correctly remains a GCC fallback; the shared frontend
+improvement did not invent a compiler coverage win.
+
+**The 12 true still-GCC-owned original objects** are:
+`libbb/hash_md5_sha.o`, `libbb/verror_msg.o`,
+`libbb/vfork_daemon_rexec.o`, `libbb/xconnect.o`,
+`miscutils/devfsd.o`, `miscutils/hdparm.o`,
+`networking/ifconfig.o`, `networking/tls_sp_c32.o`,
+`procps/top.o`, `selinux/chcon.o`,
+`selinux/setfiles.o`, `util-linux/mkswap.o`.
+They remain blocked by different explicit compiler issues: Core
+lowering, enum/varying expression semantics, function pointer type
+compatibility, SysV larger-aggregate ABI, static data/relocations,
+GNU inline asm register constraints, pointer assignment qualification
+or GNU declarator attributes. **Do not promote these to MiniC by
+ignoring semantic diagnostics.**
+
+**What the result proves:** full actual original-Kbuild link of 581
+simultaneous MiniC-compiled object owners plus 12 GCC fallback objects;
+all 581 replacements are accounted for and 11 real native whole-program
+fixtures compare equal with the independent GCC executable.
+**What it does NOT prove:** the other BusyBox applets all behave correctly;
+the 11 smoke cases do not exercise every function or every enabled
+applet, and 12 fallback units were still compiled with GCC. This
+result does not certify an all-MiniC build or complete source coverage.
+The 963-symbol pure allyesconfig build and a current full RV64
+Linux 2064 + QEMU P1 pass also remain separately unqualified.
+
+The temporary existing focused CI workflow changes were restored
+byte-for-byte to main workflow blob
+`cd9a880a5a707f28b5ea63c364c1844ab35e1c56`.
+No new CI workflow was left running as part of the branch.
+Tests are persistent Make targets and source-controlled reusable scripts,
+not one-off generated output.
