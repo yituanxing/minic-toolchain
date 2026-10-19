@@ -583,6 +583,26 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                 fputs(opcode, out) == EOF) return false;
             break;
         }
+        case MINIC_CORE_INSTRUCTION_INTEGER_DIVIDE:
+        case MINIC_CORE_INSTRUCTION_INTEGER_REMAINDER: {
+            MinicCoreValueId lhs = ins->value.binary.left;
+            MinicCoreValueId rhs = ins->value.binary.right;
+            size_t lw, rw;
+            bool ls, rs;
+            if (lhs >= fn->value_count || rhs >= fn->value_count ||
+                !small_integer_width(program, target, fn->values[lhs].type, &lw, &ls) ||
+                !small_integer_width(program, target, fn->values[rhs].type, &rw, &rs) ||
+                lw != 4U || rw != 4U || ls != rs ||
+                !emit_sp_mem(out, "ld.w", "$t0", (size_t)lhs * 8U) ||
+                !emit_sp_mem(out, "ld.w", "$t1", (size_t)rhs * 8U) ||
+                fputs(ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_DIVIDE
+                          ? (ls ? "  div.w $t0, $t0, $t1\n"
+                                : "  div.wu $t0, $t0, $t1\n")
+                          : (ls ? "  mod.w $t0, $t0, $t1\n"
+                                : "  mod.wu $t0, $t0, $t1\n"), out) == EOF)
+                return false;
+            break;
+        }
         case MINIC_CORE_INSTRUCTION_INTEGER_LESS:
         case MINIC_CORE_INSTRUCTION_SCALAR_EQUAL: {
             const MinicCoreValueId lhs = ins->value.binary.left;
