@@ -99,6 +99,9 @@ SH
         grep 'MINIC_CJSON_STEP .*function=ensure' "$work/$target.probe.err" | tail -n 12 || true
         grep 'MINIC_CJSON_STAGE .*function=compare_double' "$work/$target.probe.err" | tail -n 1 || true
         grep 'MINIC_CJSON_STEP .*function=compare_double' "$work/$target.probe.err" | tail -n 12 || true
+        grep 'MINIC_CJSON_STAGE .*function=print_number' "$work/$target.probe.err" | tail -n 1 || true
+        grep 'MINIC_CJSON_STEP .*function=print_number' "$work/$target.probe.err" | tail -n 12 || true
+        grep 'MINIC_M8_.*REJECT .*function=print_number' "$work/$target.probe.err" | tail -n 2 || true
         grep 'MINIC_M8_OPCODE_REJECT .*function=ensure' "$work/$target.probe.err" | tail -n 1 || true
         echo "FOUR_BACKEND_CJSON_BOUNDED_STDERR target=$target begin"
         sed -n '1,16p' "$work/$target.probe.err"
