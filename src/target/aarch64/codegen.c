@@ -197,6 +197,14 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
     const MinicCoreBlock *block;
     size_t frame, i, object_end, save_offset;
     bool has_direct_calls = false;
+    if (getenv("MINIC_M1_TRACE") != NULL &&
+        name != NULL && name[0] == 'K' && name[1] == 'e')
+        (void)fprintf(stderr,
+                      "MINIC_M9_GATE arch=aarch64 fn=%s stage=entry values=%zu objects=%zu blocks=%zu params=%zu return_valid=%d inline=%zu\n",
+                      name, fn->value_count, fn->object_count,
+                      fn->block_count, fn->parameter_count,
+                      valid_return_type(fn->return_type) ? 1 : 0,
+                      fn->inline_asm_count);
     if (name == NULL || name[0] == '\0' ||
         !minic_core_function_verify(fn) ||
         decl->is_constructor || decl->is_weak ||
@@ -209,6 +217,9 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
         return false;
     for (i = 0U; i < fn->parameter_count; ++i)
         if (!valid_int_or_pointer(fn->parameter_types[i])) return false;
+    if (getenv("MINIC_M1_TRACE") != NULL &&
+        name[0] == 'K' && name[1] == 'e')
+        (void)fprintf(stderr, "MINIC_M9_GATE arch=aarch64 fn=%s stage=parameters_valid\n", name);
     /* M2: verify every CFG successor and return before emitting anything.
      * A function's SSA values and local objects retain unique stack slots
      * across blocks, so no architecture-independent register allocator is
@@ -242,6 +253,9 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
     }
     /* Object byte extents and alignment are validated by frame_objects.
      * This admits real repeated local arrays without overlapping slots. */
+    if (getenv("MINIC_M1_TRACE") != NULL &&
+        name[0] == 'K' && name[1] == 'e')
+        (void)fprintf(stderr, "MINIC_M9_GATE arch=aarch64 fn=%s stage=terminators_valid\n", name);
     if (!frame_objects(program, target, fn, fn->object_count, NULL,
                        &object_end)) {
         if (getenv("MINIC_M1_TRACE") != NULL)
@@ -289,6 +303,10 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                 return false;
         }
     }
+    if (getenv("MINIC_M1_TRACE") != NULL &&
+        name[0] == 'K' && name[1] == 'e')
+        (void)fprintf(stderr, "MINIC_M9_GATE arch=aarch64 fn=%s stage=calls_valid object_end=%zu\n",
+                      name, object_end);
     save_offset = (object_end + 7U) & ~(size_t)7U;
     if (save_offset > 8192U - (has_direct_calls ? 8U : 0U))
         return false;
