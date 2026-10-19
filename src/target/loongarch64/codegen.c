@@ -1082,6 +1082,21 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                 return false;
             break;
         }
+        /* M33: unsigned 64-bit pointer order for cJSON overlap checks.
+         * Operand pointer equivalence is also enforced in Core IR. */
+        case MINIC_CORE_INSTRUCTION_POINTER_LESS: {
+            const MinicCoreValueId lhs = ins->value.binary.left;
+            const MinicCoreValueId rhs = ins->value.binary.right;
+            if (!minic_type_equal(ins->type, minic_type_int()) ||
+                lhs >= fn->value_count || rhs >= fn->value_count ||
+                !minic_type_is_pointer(fn->values[lhs].type) ||
+                !minic_type_equal(fn->values[lhs].type, fn->values[rhs].type) ||
+                !emit_sp_mem(out, "ld.d", "$t0", (size_t)lhs * 8U) ||
+                !emit_sp_mem(out, "ld.d", "$t1", (size_t)rhs * 8U) ||
+                fputs("  sltu $t0, $t0, $t1\n", out) == EOF)
+                return false;
+            break;
+        }
         case MINIC_CORE_INSTRUCTION_INTEGER_LESS:
         case MINIC_CORE_INSTRUCTION_SCALAR_EQUAL: {
             const MinicCoreValueId lhs = ins->value.binary.left;
