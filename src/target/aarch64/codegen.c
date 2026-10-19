@@ -535,6 +535,39 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                           (int)ins->kind, (unsigned int)ins->result,
                           minic_type_is_integer(ins->type) ? 1 : 0,
                           minic_type_is_pointer(ins->type) ? 1 : 0);
+        /* M23: copy the *exact* target-sized aggregate bytes between Core
+         * addresses, preserving padding and nested hooks (no re-layout).
+         * An effect-only record copy has no SSA result slot. */
+        if (ins->kind == MINIC_CORE_INSTRUCTION_RECORD_COPY) {
+            const MinicCoreValueId dst = ins->value.record_copy.destination_address;
+            const MinicCoreValueId src = ins->value.record_copy.source_address;
+            MinicType dst_type, src_type, dst_unqualified, src_unqualified;
+            size_t bytes, alignment;
+            if (ins->result != MINIC_CORE_VALUE_INVALID ||
+                !minic_type_is_record(ins->type) ||
+                dst >= fn->value_count || src >= fn->value_count ||
+                !minic_type_pointee(fn->values[dst].type, &dst_type) ||
+                !minic_type_pointee(fn->values[src].type, &src_type) ||
+                !minic_type_unqualified(dst_type, &dst_unqualified) ||
+                !minic_type_unqualified(src_type, &src_unqualified) ||
+                !minic_type_equal(dst_unqualified, ins->type) ||
+                !minic_type_equal(src_unqualified, ins->type) ||
+                !minic_data_layout_type(target->data_layout, program, ins->type,
+                                        &bytes, &alignment) ||
+                alignment == 0U || bytes > 2048U)
+                return false;
+            if (fprintf(out, "  ldr x10, [sp, #%zu]\n"
+                             "  ldr x11, [sp, #%zu]\n",
+                        (size_t)dst * 8U, (size_t)src * 8U) < 0)
+                return false;
+            for (size_t byte = 0U; byte < bytes; ++byte)
+                if (fputs("  ldrb w9, [x11]\n"
+                          "  strb w9, [x10]\n"
+                          "  add x11, x11, #1\n"
+                          "  add x10, x10, #1\n", out) == EOF)
+                    return false;
+            continue;
+        }
         if (ins->kind == MINIC_CORE_INSTRUCTION_STORE) {
             const MinicCoreValueId addr = ins->value.store.address;
             const MinicCoreValueId value = ins->value.store.stored_value;
