@@ -111,6 +111,49 @@ for target in aarch64 loongarch64; do
             else
                 echo "FOUR_BACKEND_TINYAES_DIAG target=$target stage=derived_source_compile_failed" >&2
             fi
+            # Three additional source-derived runtime probes, strictly
+            # diagnostic and never substitutes for the original fixture:
+            # compare S-box, round constant and the *actual* first
+            # generated round-key byte under both toolchains/QEMU.
+            for probe in sbox rcon key17; do
+                case "$probe" in
+                    sbox) expression='sbox[207]' ;;
+                    rcon) expression='Rcon[1]' ;;
+                    key17) expression='context_pointer->RoundKey[16]' ;;
+                esac
+                awk -v expr="$expression" '
+                    { print }
+                    /AES_init_ctx\(context_pointer,/ {
+                        print "    return (int)(" expr ");"
+                    }
+                ' "$fixture" >"$work/$target.$probe.c"
+                "$gcc" -std=c11 -O0 -static -I"$vendor" \
+                    -DECB=1 -DCBC=0 -DCTR=0 -DMULTIPLY_AS_A_FUNCTION=1 \
+                    "$work/$target.$probe.c" -o "$work/$target.$probe.gnu.elf"
+                "$gcc" -E -P -nostdinc -x c -I"$headers" -I"$vendor" \
+                    -DECB=1 -DCBC=0 -DCTR=0 -DMULTIPLY_AS_A_FUNCTION=1 \
+                    "$work/$target.$probe.c" -o "$work/$target.$probe.i"
+                if ! "$MINIC_CC" --target="$target-linux" -S \
+                        "$work/$target.$probe.i" -o "$work/$target.$probe.s" \
+                        2>"$work/$target.$probe.compile.err"; then
+                    echo "FOUR_BACKEND_TINYAES_PROBE target=$target probe=$probe stage=MiniC_compile_failed" >&2
+                    continue
+                fi
+                if ! "$gcc" -c "$work/$target.$probe.s" \
+                        -o "$work/$target.$probe.o" &&
+                   "$gcc" -static "$work/$target.$probe.o" \
+                        -o "$work/$target.$probe.minic.elf"; then
+                    echo "FOUR_BACKEND_TINYAES_PROBE target=$target probe=$probe stage=GNU_link_failed" >&2
+                    continue
+                fi
+                set +e
+                timeout 15s "$qemu" "$work/$target.$probe.gnu.elf" >/dev/null 2>&1
+                reference_byte=$?
+                timeout 15s "$qemu" "$work/$target.$probe.minic.elf" >/dev/null 2>&1
+                minic_byte=$?
+                set -e
+                echo "FOUR_BACKEND_TINYAES_PROBE target=$target probe=$probe GNU_byte=$reference_byte MiniC_byte=$minic_byte derivative_not_acceptance=1" >&2
+            done
         fi
         exit 1
     fi
