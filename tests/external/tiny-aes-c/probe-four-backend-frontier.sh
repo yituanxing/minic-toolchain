@@ -86,6 +86,32 @@ for target in aarch64 loongarch64; do
         echo "FOUR_BACKEND_TINYAES=FAIL target=$target stage=QEMU_exec exit=$qemu_status" >&2
         sed -n '1,12p' "$work/$target.minic.err" >&2
         sed -n '1,12p' "$work/$target.minic.out" >&2
+        if [ "$qemu_status" -eq 1 ]; then
+            # The unchanged real fixture returns 1 on *any* RoundKey
+            # mismatch. For diagnosis only, make a temporary derivative
+            # that returns first_mismatch's actual 1-based byte offset;
+            # do not mutate vendor/fixture or count this as acceptance.
+            sed 's/return 1;/return failure;/' "$fixture" >"$work/$target.first_byte.c"
+            "$gcc" -E -P -nostdinc -x c -I"$headers" -I"$vendor" \
+                -DECB=1 -DCBC=0 -DCTR=0 -DMULTIPLY_AS_A_FUNCTION=1 \
+                "$work/$target.first_byte.c" -o "$work/$target.first_byte.i"
+            if "$MINIC_CC" --target="$target-linux" -S \
+                   "$work/$target.first_byte.i" -o "$work/$target.first_byte.s" \
+                   2>"$work/$target.first_byte.compile.err" &&
+               "$gcc" -c "$work/$target.first_byte.s" \
+                   -o "$work/$target.first_byte.o" &&
+               "$gcc" -static "$work/$target.first_byte.o" \
+                   -o "$work/$target.first_byte.elf"; then
+                set +e
+                timeout 30s "$qemu" "$work/$target.first_byte.elf" \
+                    >"$work/$target.first_byte.out" 2>"$work/$target.first_byte.err"
+                mismatch_status=$?
+                set -e
+                echo "FOUR_BACKEND_TINYAES_DIAG target=$target first_RoundKey_mismatch_1based=$mismatch_status derived_fixture_not_original=1" >&2
+            else
+                echo "FOUR_BACKEND_TINYAES_DIAG target=$target stage=derived_source_compile_failed" >&2
+            fi
+        fi
         exit 1
     fi
     if ! cmp -s "$work/$target.gnu.out" "$work/$target.minic.out" ||
