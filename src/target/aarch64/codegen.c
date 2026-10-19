@@ -71,11 +71,21 @@ static bool emit_function(FILE *out, const MinicFunction *decl,
             return false;
         offset = (size_t)ins->result * 8U;
         switch (ins->kind) {
-        case MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT:
+        case MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT: {
+            /* AAPCS64: arbitrary 32-bit constants are NOT legal as a single
+             * mov-immediate pseudo-instruction. MOVZ/MOVK carries exact bits
+             * for negative values and high-halfword payloads alike. */
+            uint32_t bits;
             if (ins->value.integer_value < INT32_MIN ||
-                ins->value.integer_value > UINT16_MAX) return false;
-            if (fprintf(out, "  mov w9, #%" PRId64 "\n", ins->value.integer_value) < 0) return false;
+                ins->value.integer_value > INT32_MAX) return false;
+            bits = (uint32_t)(int32_t)ins->value.integer_value;
+            if (fprintf(out, "  movz w9, #%" PRIu32 "\n",
+                        bits & UINT32_C(0xffff)) < 0 ||
+                ((bits >> 16U) != 0U &&
+                 fprintf(out, "  movk w9, #%" PRIu32 ", lsl #16\n",
+                         bits >> 16U) < 0)) return false;
             break;
+        }
         case MINIC_CORE_INSTRUCTION_PARAMETER:
             if (ins->value.parameter_index >= fn->parameter_count ||
                 fprintf(out, "  str w%zu, [sp, #%zu]\n",
