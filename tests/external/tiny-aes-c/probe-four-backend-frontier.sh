@@ -111,21 +111,26 @@ for target in aarch64 loongarch64; do
             else
                 echo "FOUR_BACKEND_TINYAES_DIAG target=$target stage=derived_source_compile_failed" >&2
             fi
-            # Three additional source-derived runtime probes, strictly
+            # Five controlled source-derived runtime probes, strictly
             # diagnostic and never substitutes for the original fixture:
             # compare S-box, round constant and the *actual* first
             # generated round-key byte under both toolchains/QEMU.
-            for probe in sbox rcon key17; do
+            for probe in pre_constant post_constant pre_sbox post_sbox key17; do
                 case "$probe" in
-                    sbox) expression='sbox[207]' ;;
-                    rcon) expression='Rcon[1]' ;;
-                    key17) expression='context_pointer->RoundKey[16]' ;;
+                    pre_constant) expression='77'; position=before ;;
+                    post_constant) expression='77'; position=after ;;
+                    pre_sbox) expression='sbox[207]'; position=before ;;
+                    post_sbox) expression='sbox[207]'; position=after ;;
+                    key17) expression='context_pointer->RoundKey[16]'; position=after ;;
                 esac
-                awk -v expr="$expression" '
-                    { print }
+                awk -v expr="$expression" -v position="$position" '
                     /AES_init_ctx\(context_pointer,/ {
-                        print "    return (int)(" expr ");"
+                        if (position == "before") print "    return (int)(" expr ");"
+                        print
+                        if (position == "after") print "    return (int)(" expr ");"
+                        next
                     }
+                    { print }
                 ' "$fixture" >"$work/$target.$probe.c"
                 "$gcc" -std=c11 -O0 -static -I"$vendor" \
                     -DECB=1 -DCBC=0 -DCTR=0 -DMULTIPLY_AS_A_FUNCTION=1 \
