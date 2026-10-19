@@ -1,4 +1,5 @@
 #include "target/loongarch64/codegen.h"
+#include "target/backend_core_usage.h"
 
 #include <inttypes.h>
 #include <stdint.h>
@@ -1558,6 +1559,9 @@ bool minic_loongarch64_write_c0_program_with_core_functions(
             }
         }
     }
+    if (census)
+        minic_backend_core_usage_dump("loongarch64", program, target,
+                                      core_functions, core_function_count);
     if (census)
         (void)fprintf(stderr,
                       "MINIC_BACKEND_CENSUS arch=loongarch64 scanned=%zu rejected=%zu\n",
