@@ -88,7 +88,7 @@ static bool valid_parameter_type(const MinicC0Program *program,
  * the actual target integer width; reject unsupported 64/128-bit values. */
 static bool valid_return_type(const MinicC0Program *program,
                               const MinicTargetInfo *target, MinicType type) {
-    return minic_type_is_void(type) ||
+    return minic_type_is_void(type) || minic_type_is_double(type) ||
            valid_parameter_type(program, target, type);
 }
 
@@ -496,6 +496,7 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
             is_variadic = sig->is_variadic;
         }
         if (!minic_type_equal(return_type, ins->type) ||
+            minic_type_is_double(return_type) || /* FP call needs separate ABI. */
             !valid_return_type(program, target, return_type) ||
             count > 8U || parameter_count > count ||
             (!is_variadic && parameter_count != count) ||
@@ -623,9 +624,10 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                 addr >= fn->value_count || value >= fn->value_count ||
                 !minic_type_is_pointer(fn->values[addr].type)) return false;
             pointer = minic_type_is_pointer(fn->values[value].type);
-            if (!pointer &&
+            if (!pointer && !minic_type_is_double(fn->values[value].type) &&
                 !scalar_integer_width(program, target, fn->values[value].type,
                                       &width, &sign)) return false;
+            if (minic_type_is_double(fn->values[value].type)) width = 8U;
             if (!emit_sp_mem(out, "ld.d", "$t1", (size_t)addr * 8U) ||
                 !emit_sp_mem(out, (pointer || width == 8U) ? "ld.d" : "ld.w", "$t0",
                              (size_t)value * 8U) ||
@@ -646,7 +648,10 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                    ins->kind == MINIC_CORE_INSTRUCTION_GLOBAL_ADDRESS)
                     ? !minic_type_is_pointer(ins->type)
                     : !minic_type_is_integer(ins->type) &&
-                      !minic_type_is_pointer(ins->type)))
+                      !minic_type_is_pointer(ins->type) &&
+                      !(minic_type_is_double(ins->type) &&
+                        (ins->kind == MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT ||
+                         ins->kind == MINIC_CORE_INSTRUCTION_LOAD))))
             {
                 if (getenv("MINIC_M1_TRACE") != NULL)
                     (void)fprintf(stderr,
@@ -660,6 +665,11 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
             offset = (size_t)ins->result * 8U;
         }
         switch (ins->kind) {
+        case MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT:
+            if (!minic_type_is_double(ins->type) ||
+                fprintf(out, "  li.d $t0, 0x%016" PRIx64 "\n",
+                        ins->value.floating_bits) < 0) return false;
+            break;
         case MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT: {
             size_t width = 0U;
             bool sign = false;
@@ -796,12 +806,13 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
         }
         case MINIC_CORE_INSTRUCTION_LOAD: {
             const MinicCoreValueId addr = ins->value.load.address;
-            size_t width = 0U;
+            size_t width = minic_type_is_double(ins->type) ? 8U : 0U;
             bool sign = false, pointer = minic_type_is_pointer(ins->type);
             if (addr >= fn->value_count ||
                 !minic_type_is_pointer(fn->values[addr].type) ||
-                (!pointer && !scalar_integer_width(program, target,
-                                                   ins->type, &width, &sign)) ||
+                (!pointer && !minic_type_is_double(ins->type) &&
+                 !scalar_integer_width(program, target,
+                                       ins->type, &width, &sign)) ||
                 !emit_sp_mem(out, "ld.d", "$t1", (size_t)addr * 8U) ||
                 (pointer ? fputs("  ld.d $t0, $t1, 0\n", out) == EOF
                          : !emit_integer_memory(out, false, width, sign)))
@@ -1077,16 +1088,19 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                               name, block_id, (unsigned int)ins_id, (int)ins->kind);
             return false;
         }
-        if (!emit_sp_mem(out, register64_type(program, target, ins->type)
+        if (!emit_sp_mem(out, (register64_type(program, target, ins->type) ||
+                               minic_type_is_double(ins->type))
                               ? "st.d" : "st.w", "$t0", offset)) return false;
     }
         switch (block->terminator.kind) {
         case MINIC_CORE_TERMINATOR_RETURN:
             if ((!minic_type_is_void(fn->return_type) &&
-                 !emit_sp_mem(out, register64_type(program, target, fn->return_type)
-                                         ? "ld.d" : "ld.w",
-                                   "$a0",
-                                   (size_t)block->terminator.return_value * 8U)) ||
+                 !(minic_type_is_double(fn->return_type)
+                       ? emit_sp_mem(out, "fld.d", "$fa0",
+                                     (size_t)block->terminator.return_value * 8U)
+                       : emit_sp_mem(out, register64_type(program, target, fn->return_type)
+                                          ? "ld.d" : "ld.w", "$a0",
+                                     (size_t)block->terminator.return_value * 8U))) ||
                 (has_direct_calls && !emit_sp_mem(out, "ld.d", "$ra", save_offset)) ||
                 (!emit_sp_adjust(out, frame, true)) ||
                 fputs("  ret\n", out) == EOF) return false;
