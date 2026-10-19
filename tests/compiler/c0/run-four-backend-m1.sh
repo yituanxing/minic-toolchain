@@ -356,6 +356,20 @@ for target in aarch64 loongarch64; do
         MINIC_M1_TRACE=1 "$MINIC_CC" --target="$target-linux" -S "$w/$testcase.i" \
             -o "$w/$target.$testcase.s"
         test -s "$w/$target.$testcase.s"
+        if [ "$testcase" = "large_frame" ]; then
+            # Verify the *actual* large-frame register adjust and, on
+            # LoongArch, an out-of-imm12 SP-relative memory operation;
+            # a fake under-2KiB smoke must not satisfy the M7 gate.
+            if [ "$target" = "aarch64" ]; then
+                grep -Fq 'sub sp, sp, x12' "$w/$target.$testcase.s"
+                grep -Fq 'add sp, sp, x12' "$w/$target.$testcase.s"
+            else
+                grep -Fq 'sub.d $sp, $sp, $t3' "$w/$target.$testcase.s"
+                grep -Fq 'add.d $sp, $sp, $t3' "$w/$target.$testcase.s"
+                grep -Fq 'add.d $t3, $sp, $t3' "$w/$target.$testcase.s"
+            fi
+            echo "FOUR_BACKEND_M7_FRAME_ENCODING=PASS target=$target register_SP_adjust=1 large_offset=1"
+        fi
         "$gcc" -c "$w/$target.$testcase.s" -o "$w/$target.$testcase.o"
         case "$testcase" in
             return) "$gcc" -static "$w/$target.return.o" -o "$w/$target.return.elf" ;;
