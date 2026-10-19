@@ -489,10 +489,14 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
             if (base >= fn->value_count || index >= fn->value_count ||
                 !minic_type_is_pointer(fn->values[base].type) ||
                 !small_integer_width(program, target, fn->values[index].type,
-                                     &iw, &signed_index) || iw != 4U ||
+                                     &iw, &signed_index) ||
                 stride > 2047U ||
                 !emit_sp_mem(out, "ld.d", "$t0", (size_t)base * 8U) ||
-                !emit_sp_mem(out, signed_index ? "ld.w" : "ld.wu",
+                !emit_sp_mem(out, iw == 1U
+                                  ? (signed_index ? "ld.b" : "ld.bu")
+                                  : iw == 2U
+                                      ? (signed_index ? "ld.h" : "ld.hu")
+                                      : (signed_index ? "ld.w" : "ld.wu"),
                              "$t1", (size_t)index * 8U))
                 return false;
             if (stride != 0U) {
