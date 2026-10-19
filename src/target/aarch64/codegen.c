@@ -659,12 +659,27 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
              * Both are LP64 pointer representations: preserve all 64 bits.
              * Do NOT incorrectly turn integer/pointer casts into a no-op. */
             const MinicCoreValueId source = ins->value.operand;
+            size_t src_width = 0U;
+            bool src_signed = false;
+            bool src_pointer;
             if (source >= fn->value_count ||
                 !minic_type_is_pointer(ins->type) ||
-                !minic_type_is_pointer(fn->values[source].type) ||
                 !minic_core_scalar_bitcast_types_valid(
-                    ins->type, fn->values[source].type) ||
-                fprintf(out, "  ldr x9, [sp, #%zu]\n", (size_t)source * 8U) < 0) return false;
+                    ins->type, fn->values[source].type)) return false;
+            src_pointer = minic_type_is_pointer(fn->values[source].type);
+            if (!src_pointer &&
+                !small_integer_width(program, target,
+                                     fn->values[source].type,
+                                     &src_width, &src_signed)) return false;
+            if (fprintf(out, src_pointer
+                          ? "  ldr x9, [sp, #%zu]\n"
+                          : "  ldr w9, [sp, #%zu]\n",
+                        (size_t)source * 8U) < 0) return false;
+            if (!src_pointer &&
+                (!emit_integer_normalize(out, src_width, src_signed) ||
+                 fputs(src_signed ? "  sxtw x9, w9\n"
+                                  : "  uxtw x9, w9\n", out) == EOF))
+                return false;
             break;
         }
         case MINIC_CORE_INSTRUCTION_LOAD: {
