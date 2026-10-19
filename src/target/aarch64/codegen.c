@@ -440,16 +440,25 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
             if (term->branch_target >= fn->block_count) return machine_emit_reject(fn, "aarch64", name, reject_stage,
                                     reject_block, reject_ins, __LINE__);
             break;
-        case MINIC_CORE_TERMINATOR_CONDITIONAL_BRANCH:
+        case MINIC_CORE_TERMINATOR_CONDITIONAL_BRANCH: {
+            size_t condition_width = 0U;
+            bool condition_signed = false;
+            /* A Core condition can be an original C narrow integer:
+             * cJSON's input-byte loop tests unsigned char directly.
+             * The branch emission zero-tests the low 32-bit SSA slot. */
             if (term->conditional.when_true >= fn->block_count ||
                 term->conditional.when_false >= fn->block_count ||
                 term->conditional.condition >= fn->value_count ||
                 (!valid_int_or_bool(fn->values[term->conditional.condition].type) &&
                  !register64_type(program, target,
-                     fn->values[term->conditional.condition].type)))
+                     fn->values[term->conditional.condition].type) &&
+                 !scalar_integer_width(program, target,
+                     fn->values[term->conditional.condition].type,
+                     &condition_width, &condition_signed)))
                 return machine_emit_reject(fn, "aarch64", name, reject_stage,
                                     reject_block, reject_ins, __LINE__);
             break;
+        }
         default:
             return machine_emit_reject(fn, "aarch64", name, reject_stage,
                                     reject_block, reject_ins, __LINE__);
