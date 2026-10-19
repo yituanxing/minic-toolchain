@@ -9,7 +9,7 @@ QEMU_LOONGARCH64=qemu-loongarch64
 w=$(mktemp -d)
 trap 'rm -rf "$w"' EXIT HUP INT TERM
 m2_enabled=0
-if [ "${FOUR_BACKEND_M2:-0}" = "1" ] || [ "${FOUR_BACKEND_M2_STACK:-0}" = "1" ] || [ "${FOUR_BACKEND_M3_CALL:-0}" = "1" ] || [ "${FOUR_BACKEND_M4_GLOBAL:-0}" = "1" ] || [ "${FOUR_BACKEND_M5_POINTER:-0}" = "1" ] || [ "${FOUR_BACKEND_M6_ADDRESS:-0}" = "1" ] || [ "${FOUR_BACKEND_M7_FRAME:-0}" = "1" ] || [ "${FOUR_BACKEND_M8_NARROW:-0}" = "1" ] || [ "${FOUR_BACKEND_M9_UNSIGNED:-0}" = "1" ] || [ "${FOUR_BACKEND_M10_MOD:-0}" = "1" ] || [ "${FOUR_BACKEND_M11_INDEX:-0}" = "1" ] || [ "${FOUR_BACKEND_M12_BITWISE:-0}" = "1" ]; then
+if [ "${FOUR_BACKEND_M2:-0}" = "1" ] || [ "${FOUR_BACKEND_M2_STACK:-0}" = "1" ] || [ "${FOUR_BACKEND_M3_CALL:-0}" = "1" ] || [ "${FOUR_BACKEND_M4_GLOBAL:-0}" = "1" ] || [ "${FOUR_BACKEND_M5_POINTER:-0}" = "1" ] || [ "${FOUR_BACKEND_M6_ADDRESS:-0}" = "1" ] || [ "${FOUR_BACKEND_M7_FRAME:-0}" = "1" ] || [ "${FOUR_BACKEND_M8_NARROW:-0}" = "1" ] || [ "${FOUR_BACKEND_M9_UNSIGNED:-0}" = "1" ] || [ "${FOUR_BACKEND_M10_MOD:-0}" = "1" ] || [ "${FOUR_BACKEND_M11_INDEX:-0}" = "1" ] || [ "${FOUR_BACKEND_M12_BITWISE:-0}" = "1" ] || [ "${FOUR_BACKEND_M13_NARROW_ARITH:-0}" = "1" ]; then
     m2_enabled=1
 fi
 cat > "$w/return.i" <<'EOF'
@@ -446,6 +446,44 @@ cat > "$w/driver_bit_unsigned.c" <<'EOF'
 extern int mini_bit_unsigned(unsigned int);
 int main(void) { return mini_bit_unsigned(0xffffffd5u); }
 EOF
+# M13: the first remaining real AddRoundKey Core ADD uses uint8_t.
+# Validate all 8/16-bit arithmetic wrap/extension paths through actual
+# GNU→MiniC executable cross-TU calls, not just assembly inspection.
+cat > "$w/u8_wrap.i" <<'EOF'
+int mini_u8_wrap(void) { unsigned char i = 255; ++i; return (int)i + 42; }
+EOF
+cat > "$w/driver_u8_wrap.c" <<'EOF'
+extern int mini_u8_wrap(void);
+int main(void) { return mini_u8_wrap(); }
+EOF
+cat > "$w/u8_sub.i" <<'EOF'
+int mini_u8_sub(void) { unsigned char i = 0; --i; return (int)i - 213; }
+EOF
+cat > "$w/driver_u8_sub.c" <<'EOF'
+extern int mini_u8_sub(void);
+int main(void) { return mini_u8_sub(); }
+EOF
+cat > "$w/u8_mul.i" <<'EOF'
+int mini_u8_mul(void) { unsigned char i = 100; i *= 3; return (int)i - 2; }
+EOF
+cat > "$w/driver_u8_mul.c" <<'EOF'
+extern int mini_u8_mul(void);
+int main(void) { return mini_u8_mul(); }
+EOF
+cat > "$w/u16_wrap.i" <<'EOF'
+int mini_u16_wrap(void) { unsigned short i = 65535; ++i; return (int)i + 42; }
+EOF
+cat > "$w/driver_u16_wrap.c" <<'EOF'
+extern int mini_u16_wrap(void);
+int main(void) { return mini_u16_wrap(); }
+EOF
+cat > "$w/s8_add.i" <<'EOF'
+int mini_s8_add(void) { signed char i = -5; i += 2; return (int)i + 45; }
+EOF
+cat > "$w/driver_s8_add.c" <<'EOF'
+extern int mini_s8_add(void);
+int main(void) { return mini_s8_add(); }
+EOF
 check_qemu_exit() {
     emulator=$1
     binary=$2
@@ -509,6 +547,9 @@ for target in aarch64 loongarch64; do
     if [ "${FOUR_BACKEND_M12_BITWISE:-0}" = "1" ]; then
         cases="$cases bit_xor bit_and bit_or bit_unsigned"
     fi
+    if [ "${FOUR_BACKEND_M13_NARROW_ARITH:-0}" = "1" ]; then
+        cases="$cases u8_wrap u8_sub u8_mul u16_wrap s8_add"
+    fi
     if [ "$m2_enabled" = "1" ]; then
         # Independent originals for every new CFG/comparison fixture, not
         # merely an expected return code from a MiniC-owned executable.
@@ -545,6 +586,9 @@ for target in aarch64 loongarch64; do
         fi
         if [ "${FOUR_BACKEND_M12_BITWISE:-0}" = "1" ]; then
             oracle_cases="$oracle_cases bit_xor bit_and bit_or bit_unsigned"
+        fi
+        if [ "${FOUR_BACKEND_M13_NARROW_ARITH:-0}" = "1" ]; then
+            oracle_cases="$oracle_cases u8_wrap u8_sub u8_mul u16_wrap s8_add"
         fi
         for testcase in $oracle_cases; do
             "$gcc" -static -x c "$w/$testcase.i" "$w/driver_$testcase.c" \
@@ -584,6 +628,8 @@ for target in aarch64 loongarch64; do
             bit_xor|bit_and|bit_or|bit_unsigned)
                 "$gcc" -static "$w/$target.$testcase.o" "$w/driver_$testcase.c" -o "$w/$target.$testcase.elf" ;;
             u8_index|s8_index|u16_index|s16_index)
+                "$gcc" -static "$w/$target.$testcase.o" "$w/driver_$testcase.c" -o "$w/$target.$testcase.elf" ;;
+            u8_wrap|u8_sub|u8_mul|u16_wrap|s8_add)
                 "$gcc" -static "$w/$target.$testcase.o" "$w/driver_$testcase.c" -o "$w/$target.$testcase.elf" ;;
             umod|smod|udiv|sdiv)
                 "$gcc" -static "$w/$target.$testcase.o" "$w/driver_$testcase.c" -o "$w/$target.$testcase.elf" ;;
@@ -668,6 +714,9 @@ if [ "$m2_enabled" = "1" ]; then
     fi
     if [ "${FOUR_BACKEND_M12_BITWISE:-0}" = "1" ]; then
         echo "FOUR_BACKEND_M12_BITWISE=PASS architectures=2 executable_QEMU_cases=22 signed_unsigned_bitwise_cases=8 GNU_independent_oracles=18"
+    fi
+    if [ "${FOUR_BACKEND_M13_NARROW_ARITH:-0}" = "1" ]; then
+        echo "FOUR_BACKEND_M13_NARROW_ARITH=PASS architectures=2 executable_QEMU_cases=24 narrow_wrap_arithmetic_cases=10 GNU_independent_oracles=16"
     fi
 else
     echo "FOUR_BACKEND_M1=PASS architectures=2 executable_QEMU_cases=8 GCC_independent_oracles=4"
