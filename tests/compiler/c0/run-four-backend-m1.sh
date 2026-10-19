@@ -9,7 +9,7 @@ QEMU_LOONGARCH64=qemu-loongarch64
 w=$(mktemp -d)
 trap 'rm -rf "$w"' EXIT HUP INT TERM
 m2_enabled=0
-if [ "${FOUR_BACKEND_M2:-0}" = "1" ] || [ "${FOUR_BACKEND_M2_STACK:-0}" = "1" ] || [ "${FOUR_BACKEND_M3_CALL:-0}" = "1" ] || [ "${FOUR_BACKEND_M4_GLOBAL:-0}" = "1" ] || [ "${FOUR_BACKEND_M5_POINTER:-0}" = "1" ] || [ "${FOUR_BACKEND_M6_ADDRESS:-0}" = "1" ] || [ "${FOUR_BACKEND_M7_FRAME:-0}" = "1" ] || [ "${FOUR_BACKEND_M8_NARROW:-0}" = "1" ] || [ "${FOUR_BACKEND_M9_UNSIGNED:-0}" = "1" ] || [ "${FOUR_BACKEND_M10_MOD:-0}" = "1" ] || [ "${FOUR_BACKEND_M11_INDEX:-0}" = "1" ] || [ "${FOUR_BACKEND_M12_BITWISE:-0}" = "1" ] || [ "${FOUR_BACKEND_M13_NARROW_ARITH:-0}" = "1" ] || [ "${FOUR_BACKEND_M14_SHIFT:-0}" = "1" ] || [ "${FOUR_BACKEND_M15_SCALAR_RETURN:-0}" = "1" ] || [ "${FOUR_BACKEND_M17_RECORD:-0}" = "1" ] || [ "${FOUR_BACKEND_M18_VARARGS:-0}" = "1" ] || [ "${FOUR_BACKEND_M19_PTR_COMPARE:-0}" = "1" ] || [ "${FOUR_BACKEND_M20_LP64_ABI:-0}" = "1" ] || [ "${FOUR_BACKEND_M21_LP64_ADD:-0}" = "1" ]; then
+if [ "${FOUR_BACKEND_M2:-0}" = "1" ] || [ "${FOUR_BACKEND_M2_STACK:-0}" = "1" ] || [ "${FOUR_BACKEND_M3_CALL:-0}" = "1" ] || [ "${FOUR_BACKEND_M4_GLOBAL:-0}" = "1" ] || [ "${FOUR_BACKEND_M5_POINTER:-0}" = "1" ] || [ "${FOUR_BACKEND_M6_ADDRESS:-0}" = "1" ] || [ "${FOUR_BACKEND_M7_FRAME:-0}" = "1" ] || [ "${FOUR_BACKEND_M8_NARROW:-0}" = "1" ] || [ "${FOUR_BACKEND_M9_UNSIGNED:-0}" = "1" ] || [ "${FOUR_BACKEND_M10_MOD:-0}" = "1" ] || [ "${FOUR_BACKEND_M11_INDEX:-0}" = "1" ] || [ "${FOUR_BACKEND_M12_BITWISE:-0}" = "1" ] || [ "${FOUR_BACKEND_M13_NARROW_ARITH:-0}" = "1" ] || [ "${FOUR_BACKEND_M14_SHIFT:-0}" = "1" ] || [ "${FOUR_BACKEND_M15_SCALAR_RETURN:-0}" = "1" ] || [ "${FOUR_BACKEND_M17_RECORD:-0}" = "1" ] || [ "${FOUR_BACKEND_M18_VARARGS:-0}" = "1" ] || [ "${FOUR_BACKEND_M19_PTR_COMPARE:-0}" = "1" ] || [ "${FOUR_BACKEND_M20_LP64_ABI:-0}" = "1" ] || [ "${FOUR_BACKEND_M21_LP64_ADD:-0}" = "1" ] || [ "${FOUR_BACKEND_M22_LP64_CONV:-0}" = "1" ]; then
     m2_enabled=1
 fi
 cat > "$w/return.i" <<'EOF'
@@ -731,6 +731,33 @@ int main(void) {
     return 42;
 }
 EOF
+# M22: cJSON's local 0 -> size_t conversion, plus signed/unsigned
+# extensions and 64 -> narrow truncation: exact GNU LP64 semantics.
+cat > "$w/size64_conv.i" <<'EOF'
+unsigned long mini_from_int(int n) { return (unsigned long)n; }
+unsigned long mini_from_uint(unsigned int n) { return (unsigned long)n; }
+unsigned long mini_from_short(unsigned short n) { return (unsigned long)n; }
+unsigned int mini_truncate_ulong(unsigned long n) { return (unsigned int)n; }
+unsigned char mini_truncate_byte(unsigned long n) { return (unsigned char)n; }
+unsigned long mini_long_zero(void) { return (unsigned long)0; }
+EOF
+cat > "$w/driver_size64_conv.c" <<'EOF'
+extern unsigned long mini_from_int(int);
+extern unsigned long mini_from_uint(unsigned int);
+extern unsigned long mini_from_short(unsigned short);
+extern unsigned int mini_truncate_ulong(unsigned long);
+extern unsigned char mini_truncate_byte(unsigned long);
+extern unsigned long mini_long_zero(void);
+int main(void) {
+    if (mini_from_int(-1) != ~0UL) return 1;
+    if (mini_from_uint(0x80000001u) != 0x80000001UL) return 2;
+    if (mini_from_short(0xabcd) != 0xabcdUL) return 3;
+    if (mini_truncate_ulong(0x1234567887654321UL) != 0x87654321u) return 4;
+    if (mini_truncate_byte(0x12345678876543a1UL) != 0xa1) return 5;
+    if (mini_long_zero() != 0UL) return 6;
+    return 42;
+}
+EOF
 check_qemu_exit() {
     emulator=$1
     binary=$2
@@ -818,6 +845,9 @@ for target in aarch64 loongarch64; do
     if [ "${FOUR_BACKEND_M21_LP64_ADD:-0}" = "1" ]; then
         cases="$cases size64_add"
     fi
+    if [ "${FOUR_BACKEND_M22_LP64_CONV:-0}" = "1" ]; then
+        cases="$cases size64_conv"
+    fi
     if [ "$m2_enabled" = "1" ]; then
         # Independent originals for every new CFG/comparison fixture, not
         # merely an expected return code from a MiniC-owned executable.
@@ -879,6 +909,9 @@ for target in aarch64 loongarch64; do
         if [ "${FOUR_BACKEND_M21_LP64_ADD:-0}" = "1" ]; then
             oracle_cases="$oracle_cases size64_add"
         fi
+        if [ "${FOUR_BACKEND_M22_LP64_CONV:-0}" = "1" ]; then
+            oracle_cases="$oracle_cases size64_conv"
+        fi
         for testcase in $oracle_cases; do
             "$gcc" -static -x c "$w/$testcase.i" "$w/driver_$testcase.c" \
                 -o "$w/$target.gnu-$testcase.elf"
@@ -918,7 +951,7 @@ for target in aarch64 loongarch64; do
                 "$gcc" -static "$w/$target.$testcase.o" "$w/driver_$testcase.c" -o "$w/$target.$testcase.elf" ;;
             u8_index|s8_index|u16_index|s16_index)
                 "$gcc" -static "$w/$target.$testcase.o" "$w/driver_$testcase.c" -o "$w/$target.$testcase.elf" ;;
-            size64_abi|size64_add|pointer_null|pointer_equality|function_address)
+            size64_abi|size64_add|size64_conv|pointer_null|pointer_equality|function_address)
                 "$gcc" -static "$w/$target.$testcase.o" "$w/driver_$testcase.c" -o "$w/$target.$testcase.elf" ;;
             vararg_int|vararg_pointer)
                 "$gcc" -static "$w/$target.$testcase.o" "$w/driver_$testcase.c" -o "$w/$target.$testcase.elf" ;;
@@ -1037,6 +1070,9 @@ if [ "$m2_enabled" = "1" ]; then
     fi
     if [ "${FOUR_BACKEND_M21_LP64_ADD:-0}" = "1" ]; then
         echo "FOUR_BACKEND_M21_LP64_ADD=PASS architectures=2 GNU_QEMU_diff=2 high_32_bit_add_sub=true signed_long=true"
+    fi
+    if [ "${FOUR_BACKEND_M22_LP64_CONV:-0}" = "1" ]; then
+        echo "FOUR_BACKEND_M22_LP64_CONV=PASS architectures=2 GNU_QEMU_diff=2 signed_unsigned_extend=true truncate64=true"
     fi
 else
     echo "FOUR_BACKEND_M1=PASS architectures=2 executable_QEMU_cases=8 GCC_independent_oracles=4"
