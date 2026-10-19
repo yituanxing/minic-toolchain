@@ -582,6 +582,19 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
             }
             continue;
         }
+        case MINIC_CORE_INSTRUCTION_INTEGER_NEGATE: {
+            const MinicCoreValueId operand = ins->value.operand;
+            size_t width;
+            bool sign;
+            if (operand >= fn->value_count ||
+                !minic_type_equal(fn->values[operand].type, ins->type) ||
+                !small_integer_width(program, target, ins->type, &width, &sign) ||
+                minic_type_is_bool_integer(ins->type) ||
+                !emit_sp_mem(out, "ld.w", "$t0", (size_t)operand * 8U) ||
+                fputs("  sub.w $t0, $zero, $t0\n", out) == EOF ||
+                !emit_integer_normalize(out, width, sign)) return false;
+            break;
+        }
         case MINIC_CORE_INSTRUCTION_INTEGER_ADD:
         case MINIC_CORE_INSTRUCTION_INTEGER_SUBTRACT:
         case MINIC_CORE_INSTRUCTION_INTEGER_MULTIPLY: {
