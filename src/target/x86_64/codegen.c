@@ -1618,17 +1618,29 @@ static bool x86_emit_instruction(FILE *out, const MinicC0Program *program,
     }
     case MINIC_CORE_INSTRUCTION_PARAMETER_OBJECT: {
         static const char *const regs[] = {"%rdi","%rsi","%rdx","%rcx","%r8","%r9"};
-        size_t gpr, xmm, stack_index;
+        size_t gpr, xmm, stack_index, record_bytes = 0U;
         size_t position = ins->value.parameter_object.parameter_index;
         MinicCoreObjectId object = ins->value.parameter_object.object_id;
-        if (!x86_incoming_cursor(program, target, fn, position,
+        bool one_gp;
+        if (position >= fn->parameter_count || object >= fn->object_count ||
+            !x86_incoming_cursor(program, target, fn, position,
                                  &gpr, &xmm, &stack_index) ||
-            !x86_two_gp_record(program, target, fn->parameter_types[position]) ||
-            object >= fn->object_count ||
-            !minic_type_equal(fn->objects[object].type, fn->parameter_types[position]) ||
-            !x86_object_address(out, frame, object, "%r10"))
+            !minic_type_equal(fn->objects[object].type, fn->parameter_types[position]))
             return false;
+        one_gp = x86_one_gp_record(program, target, fn->parameter_types[position],
+                                   &record_bytes);
+        if (!one_gp &&
+            !x86_two_gp_record(program, target, fn->parameter_types[position]))
+            return false;
+        if (!x86_object_address(out, frame, object, "%r10")) return false;
         (void)xmm;
+        if (one_gp) {
+            if (gpr < 6U) {
+                if (fprintf(out, "  movq %s, %%rax\n", regs[gpr]) < 0) return false;
+            } else if (fprintf(out, "  movq %zu(%%rbp), %%rax\n",
+                               16U + stack_index * 8U) < 0) return false;
+            return x86_one_gp_store(out, record_bytes);
+        }
         if (gpr <= 4U)
             return fprintf(out,
                 "  movq %s, 0(%%r10)\n"
