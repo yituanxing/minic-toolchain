@@ -713,17 +713,17 @@ check-x86_64-sqlite-frontier: $(MINIC_CC_BINARY)
 # invoking pristine upstream BusyBox Kbuild inside the reusable probe.
 check-x86_64-busybox-12: $(MINIC_CC_BINARY)
 	@set -eu; \
-	log=$(mktemp); \
-	trap 'rm -f "$log"' EXIT HUP INT TERM; \
+	log=$$(mktemp); \
+	trap 'rm -f "$$log"' EXIT HUP INT TERM; \
 	if env -u MAKEFLAGS -u MAKEOVERRIDES -u MFLAGS -u GNUMAKEFLAGS -u CFLAGS \
 	   MINIC_CC="$(abspath $(MINIC_CC_BINARY))" HOST_CC="$(CC)" \
 	   BUSYBOX_X86_64_EXTRA_DISCOVERY=1 \
-	   sh tests/external/busybox/probe-x86_64.sh >"$log" 2>&1; then \
-	   cat "$log"; \
+	   sh tests/external/busybox/probe-x86_64.sh >"$$log" 2>&1; then \
+	   cat "$$log"; \
 	else \
-	   cat "$log"; exit 1; \
+	   cat "$$log"; exit 1; \
 	fi; \
-	grep -Fx 'BUSYBOX_X86_64_EXTRA_MIXED=PASS applets=basename,dirname,printf extra_objects=3 total_MiniC_objects=12 GCC_reference=byte-exact GNU_Kbuild=1' "$log"
+	grep -Fx 'BUSYBOX_X86_64_EXTRA_MIXED=PASS applets=basename,dirname,printf extra_objects=3 total_MiniC_objects=12 GCC_reference=byte-exact GNU_Kbuild=1' "$$log"
 
 check-fast: check-target-selection-m0 check-x86_64-m1 check-token-model check-lexer check-type check-record check-type-alias check-ast-contract check-layout check-rv64-abi check-static-functions check-unsigned-declarations check-long-types check-for-loops check-unbounded-for-break check-prefix-decrement-update check-cast-expressions check-unsigned-char-layout check-pointer-subscripts check-pointer-arithmetic check-pointer-object-const check-const-locals check-global-objects check-bitwise-xor check-integer-bit-operations check-pointer-members check-expression-statements check-postfix-subscripts check-compound-xor-assignment $(MINIC_BINARY)
 	MINIC="$(abspath $(MINIC_BINARY))" \
