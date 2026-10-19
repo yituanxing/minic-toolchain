@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 /* M1/M2: prove correct *actual* GNU ELF/ABI assembly, not just target naming.
  * Each signed 32-bit Core SSA value gets an 8-byte private stack slot.
@@ -338,6 +339,16 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
     const MinicCoreBlock *block;
     size_t frame, i, object_end, save_offset;
     bool has_direct_calls = false;
+    /* No semantic change: source-specific diagnostics only for the active
+     * cJSON failure, never for normal builds or other projects. */
+    const bool trace_cjson = getenv("MINIC_M1_TRACE") != NULL &&
+                             name != NULL &&
+                             strcmp(name, "cJSON_ParseWithLengthOpts") == 0;
+    if (trace_cjson)
+        (void)fprintf(stderr,
+            "MINIC_CJSON_STAGE arch=aarch64 function=%s stage=entry blocks=%zu values=%zu objects=%zu params=%zu calls=%zu\n",
+            name, fn->block_count, fn->value_count, fn->object_count,
+            fn->parameter_count, fn->callee_count);
     if (getenv("MINIC_M1_TRACE") != NULL &&
         name != NULL && ((name[0] == 'K' && name[1] == 'e') || (name[0] == 'A' && name[1] == 'd')))
         (void)fprintf(stderr,
@@ -361,6 +372,7 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
     if (getenv("MINIC_M1_TRACE") != NULL &&
         ((name[0] == 'K' && name[1] == 'e') || (name[0] == 'A' && name[1] == 'd')))
         (void)fprintf(stderr, "MINIC_M9_GATE arch=aarch64 fn=%s stage=parameters_valid\n", name);
+    if (trace_cjson) (void)fprintf(stderr, "MINIC_CJSON_STAGE arch=aarch64 stage=parameters_ok\n");
     /* M2: verify every CFG successor and return before emitting anything.
      * A function's SSA values and local objects retain unique stack slots
      * across blocks, so no architecture-independent register allocator is
@@ -392,6 +404,7 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
             return false;
         }
     }
+    if (trace_cjson) (void)fprintf(stderr, "MINIC_CJSON_STAGE arch=aarch64 stage=cfg_ok\n");
     /* Object byte extents and alignment are validated by frame_objects.
      * This admits real repeated local arrays without overlapping slots. */
     if (getenv("MINIC_M1_TRACE") != NULL &&
@@ -405,6 +418,7 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                           name, fn->value_count, fn->object_count);
         return false;
     }
+    if (trace_cjson) (void)fprintf(stderr, "MINIC_CJSON_STAGE arch=aarch64 stage=frame_objects_ok end=%zu\n", object_end);
     /* Keep this first direct-call ABI step narrow: signed int values in
      * the first eight argument registers, no variadics or indirect calls.
      * Returning through a nested call requires preserving the ISA link
@@ -465,6 +479,7 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
         ((name[0] == 'K' && name[1] == 'e') || (name[0] == 'A' && name[1] == 'd')))
         (void)fprintf(stderr, "MINIC_M9_GATE arch=aarch64 fn=%s stage=calls_valid object_end=%zu\n",
                       name, object_end);
+    if (trace_cjson) (void)fprintf(stderr, "MINIC_CJSON_STAGE arch=aarch64 stage=calls_ok\n");
     save_offset = (object_end + 7U) & ~(size_t)7U;
     if (save_offset > 8192U - (has_direct_calls ? 8U : 0U))
         return false;
@@ -477,6 +492,7 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                           name, frame, object_end);
         return false;
     }
+    if (trace_cjson) (void)fprintf(stderr, "MINIC_CJSON_STAGE arch=aarch64 stage=machine_emit frame=%zu\n", frame);
     if (function_sections) {
         if (fprintf(out, ".section .text.%s,\"ax\",%%progbits\n", name) < 0)
             return false;
@@ -502,6 +518,13 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
         size_t offset;
         if (ins_id >= fn->instruction_count) return false;
         ins = &fn->instructions[ins_id];
+        if (trace_cjson)
+            (void)fprintf(stderr,
+                "MINIC_CJSON_STEP arch=aarch64 function=%s block=%zu ins=%u kind=%d result=%u type_integer=%d type_pointer=%d\n",
+                name, block_id, (unsigned int)ins_id, (int)ins->kind,
+                (unsigned int)ins->result,
+                minic_type_is_integer(ins->type) ? 1 : 0,
+                minic_type_is_pointer(ins->type) ? 1 : 0);
         /* Only recorded in the temporary original-source failure log,
          * never in normal builds or public diagnostic stream. */
         if (getenv("MINIC_M1_TRACE") != NULL &&
