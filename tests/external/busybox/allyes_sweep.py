@@ -106,7 +106,7 @@ def print_frontier(report_root, gcc_success, enabled):
         if stage != "PASS":
             fname = {"CPP": "cpp.err", "MiniC": "minic.err",
                      "GNU_AS": "as.err"}[stage]
-            error = (path / fname).read_text(encoding="utf-8", errors="replace")
+            error = (path.parent / fname).read_text(encoding="utf-8", errors="replace")
             useful = [s.strip() for s in error.splitlines()
                       if "error:" in s or "fatal error:" in s or "unsupported" in s]
             if not useful:
