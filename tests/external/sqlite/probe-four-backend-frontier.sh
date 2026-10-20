@@ -176,9 +176,9 @@ int main(void) {
     /* This tests sqlite3_mprintf's own one-fixed-argument ABI.
      * The two-fixed-argument nested parser needs its own ABI oracle. */
     show("nested_schema", sqlite3_mprintf(
-        "UPDATE %Q.%s SET type='%s', name=%Q, tbl_name=%Q,"
+        "UPDATE %Q.sqlite_schema SET type='%s', name=%Q, tbl_name=%Q,"
         " rootpage=#%d, sql=%Q WHERE rowid=#%d",
-        "main", "sqlite_schema", "table", "t", "t", 1,
+        "main", "table", "t", "t", 1,
         "CREATE TABLE t(id INTEGER PRIMARY KEY, x INT)", 2));
     return 0;
 }
@@ -462,11 +462,13 @@ new = (matches[0].group(0) +
        '(long long)n,tokenType,(unsigned char)zSql[0],'
        '(unsigned char)zSql[1]);')
 src = re.sub(rx, lambda _: new, src)
+# SQLite's sqlite3RunParser RETURNS int; the previous 'void' regex silently
+# skipped instrumentation, making earlier CI runs non-diagnostic.
 # Log the full *generated* SQL at parser entry. A standalone lexer oracle
 # already passes: distinguish a malformed internal SQL producer from an
 # incorrect parser state transition. This runs only in disposable copies.
 entry = re.search(
-    r'\bvoid\s+sqlite3RunParser\s*\([^)]*\)\s*\{', src)
+    r'\bint\s+sqlite3RunParser\s*\([^)]*\)\s*\{', src)
 if entry is not None:
     diag = ('\nfprintf(stderr,"SQLITE_PARSER_INPUT sql=%.256s\\n",'
             ' zSql ? zSql : "<null>");')
