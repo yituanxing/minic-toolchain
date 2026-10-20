@@ -959,16 +959,34 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                                     reject_block, reject_ins, __LINE__);
             continue;
         }
-        if (ins->kind == MINIC_CORE_INSTRUCTION_STORE) {
-            const MinicCoreValueId addr = ins->value.store.address;
-            const MinicCoreValueId value = ins->value.store.stored_value;
-            size_t width = 0U;
+        if (ins->kind == MINIC_CORE_INSTRUCTION_STORE ||
+            ins->kind == MINIC_CORE_INSTRUCTION_ATOMIC_STORE) {
+            const bool atomic = ins->kind == MINIC_CORE_INSTRUCTION_ATOMIC_STORE;
+            const MinicCoreValueId addr = atomic ? ins->value.atomic_store.address
+                                                  : ins->value.store.address;
+            const MinicCoreValueId value = atomic ? ins->value.atomic_store.stored_value
+                                                   : ins->value.store.stored_value;
+            MinicType pointee;
+            size_t width = 0U, pointee_width = 0U, pointee_align = 0U;
             bool sign = false, pointer;
             if (ins->result != MINIC_CORE_VALUE_INVALID ||
                 addr >= fn->value_count || value >= fn->value_count ||
                 !minic_type_is_pointer(fn->values[addr].type)) return machine_emit_reject(fn, "aarch64", name, reject_stage,
                                     reject_block, reject_ins, __LINE__);
             pointer = minic_type_is_pointer(fn->values[value].type);
+            /* Ordinary naturally aligned scalar loads/stores are the
+             * relaxed atomic primitive on these LP64 ISAs. Preserve the
+             * Core memory effect, but reject every stronger memory order
+             * and non-lock-free aggregate/FP operand explicitly. */
+            if (atomic &&
+                (ins->value.atomic_store.memory_order != 0U ||
+                 !minic_type_pointee(fn->values[addr].type, &pointee) ||
+                 !(minic_type_is_integer(pointee) || minic_type_is_pointer(pointee)) ||
+                 !minic_data_layout_type(target->data_layout, program,
+                                         pointee, &pointee_width, &pointee_align)))
+                return machine_emit_reject(fn, "aarch64", name, reject_stage,
+                                          reject_block, reject_ins, __LINE__);
+
             if (!pointer && !minic_type_is_double(fn->values[value].type) &&
                 !minic_type_is_float(fn->values[value].type) &&
                 !scalar_integer_width(program, target, fn->values[value].type,
@@ -976,6 +994,16 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                                     reject_block, reject_ins, __LINE__);
             if (minic_type_is_double(fn->values[value].type)) width = 8U;
             if (minic_type_is_float(fn->values[value].type)) width = 4U;
+            if (atomic &&
+                (minic_type_is_double(fn->values[value].type) ||
+                 minic_type_is_float(fn->values[value].type) ||
+                 (pointer ? pointee_width != 8U :
+                  (width != 1U && width != 2U &&
+                   width != 4U && width != 8U) ||
+                  width != pointee_width)))
+                return machine_emit_reject(fn, "aarch64", name, reject_stage,
+                                          reject_block, reject_ins, __LINE__);
+            (void)pointee_align;
             if (fprintf(out, "  ldr x10, [sp, #%zu]\n", (size_t)addr * 8U) < 0 ||
                 fprintf(out, (pointer || width == 8U) ? "  ldr x9, [sp, #%zu]\n"
                                                 : "  ldr w9, [sp, #%zu]\n",
@@ -1364,11 +1392,32 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                                     reject_block, reject_ins, __LINE__);
             break;
         }
-        case MINIC_CORE_INSTRUCTION_LOAD: {
-            const MinicCoreValueId addr = ins->value.load.address;
+        case MINIC_CORE_INSTRUCTION_LOAD:
+        case MINIC_CORE_INSTRUCTION_ATOMIC_LOAD: {
+            const bool atomic = ins->kind == MINIC_CORE_INSTRUCTION_ATOMIC_LOAD;
+            const MinicCoreValueId addr = atomic ? ins->value.atomic_load.address
+                                                  : ins->value.load.address;
+            MinicType pointee;
+            size_t pointee_width = 0U, pointee_align = 0U;
             size_t width = minic_type_is_double(ins->type) ? 8U :
                            minic_type_is_float(ins->type) ? 4U : 0U;
             bool sign = false, pointer = minic_type_is_pointer(ins->type);
+            if (atomic &&
+                (ins->value.atomic_load.memory_order != 0U ||
+                 addr >= fn->value_count ||
+                 !minic_type_pointee(fn->values[addr].type, &pointee) ||
+                 !(minic_type_is_integer(pointee) || minic_type_is_pointer(pointee)) ||
+                 !minic_data_layout_type(target->data_layout, program,
+                                         pointee, &pointee_width, &pointee_align) ||
+                 (pointer ? pointee_width != 8U :
+                     !scalar_integer_width(program, target, ins->type,
+                                           &width, &sign) ||
+                     (width != 1U && width != 2U &&
+                      width != 4U && width != 8U) ||
+                     pointee_width != width)))
+                return machine_emit_reject(fn, "aarch64", name, reject_stage,
+                                          reject_block, reject_ins, __LINE__);
+            (void)pointee_align;
             if (addr >= fn->value_count ||
                 !minic_type_is_pointer(fn->values[addr].type) ||
                 (!pointer && !minic_type_is_double(ins->type) &&
