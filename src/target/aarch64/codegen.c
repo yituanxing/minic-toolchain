@@ -687,7 +687,7 @@ static bool emit_function_body(FILE *out, const MinicC0Program *program,
                       fn->inline_asm_count);
     if (name == NULL || name[0] == '\0' ||
         !minic_core_function_verify(fn) ||
-        decl->is_constructor || decl->is_weak ||
+        decl->is_weak ||
         (decl->visibility != MINIC_SYMBOL_VISIBILITY_DEFAULT &&
          elf_visibility_directive(decl->visibility) == NULL) ||
         decl->section_name != NULL || decl->alias_target != MINIC_FUNCTION_INVALID ||
@@ -2877,8 +2877,15 @@ static bool emit_function_body(FILE *out, const MinicC0Program *program,
     }
     reject_stage = "function_finish";
     reject_block = SIZE_MAX;
-    if (fprintf(out, ".size %s,.-%s\n", name, name) < 0) return machine_emit_reject(fn, "aarch64", name, reject_stage,
-                                    reject_block, reject_ins, __LINE__);
+    if (fprintf(out, ".size %s,.-%s\n", name, name) < 0 ||
+        (decl->is_constructor &&
+         fprintf(out, ".section .init_array,\"aw\",%%init_array\n"
+                      ".p2align 3\n  .xword %s\n", name) < 0))
+        return machine_emit_reject(fn, "aarch64", name, reject_stage,
+                                   reject_block, reject_ins, __LINE__);
+    /* ELF initializers are relocation entries in .init_array, not
+     * executable calls in the current Core block. Mirror x86's existing
+     * constructor ABI and let the dynamic loader execute before main. */
     return true;
 }
 

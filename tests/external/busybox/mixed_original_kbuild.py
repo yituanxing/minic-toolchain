@@ -34,7 +34,7 @@ def sha256(path):
 def fixtures(report):
     """No nondeterministic clocks, network, shell environment, or file mutations."""
     sample = b"alpha\nbeta\nalpha beta\n"
-    return (
+    base = (
         ("sed-n", ("sed", "-n", "2p"), sample),
         ("sed-subst", ("sed", "s/alpha/ALPHA/g"), sample),
         ("awk-field", ("awk", "{print $1}"), sample),
@@ -46,6 +46,38 @@ def fixtures(report):
         ("sort", ("sort",), sample),
         ("sort-reverse", ("sort", "-r"), sample),
         ("sh", ("sh", "-c", "printf '%s\n' shell-ok"), b""),
+    )
+    # x86's certified 11 cases stay unchanged. Cross BusyBox enables
+    # dozens of additional original applets, all deterministic, and
+    # compares the entire GNU/QEMU process triplet (rc, stdout, stderr).
+    if not os.environ.get("BUSYBOX_ALLYES_QEMU"):
+        return base
+    return base + (
+        ("printf-format", ("printf", "[%s]:%05d\n", "alpha", "42"), b""),
+        ("expr-integer", ("expr", "37", "+", "5"), b""),
+        ("seq-range", ("seq", "3"), b""),
+        ("factor-integer", ("factor", "360"), b""),
+        ("md5sum-stdin", ("md5sum",), sample),
+        ("sha256sum-stdin", ("sha256sum",), sample),
+        ("cksum-stdin", ("cksum",), sample),
+        ("base64-encode", ("base64",), b"abc\n"),
+        ("base64-decode", ("base64", "-d"), b"YWJjCg==\n"),
+        ("tr-uppercase", ("tr", "a-z", "A-Z"), sample),
+        ("wc-lines", ("wc", "-l"), sample),
+        ("head-first-two", ("head", "-n", "2"), sample),
+        ("tail-last-one", ("tail", "-n", "1"), sample),
+        ("cut-colon-field", ("cut", "-d:", "-f2"), b"abc:17\nxyz:42\n"),
+        ("uniq-count", ("uniq", "-c"), b"a\na\nb\n"),
+        ("sort-numeric", ("sort", "-n"), b"11\n2\n9\n"),
+        ("sed-substitute", ("sed", "s/alpha/ALPHA/g"), sample),
+        ("awk-field-total", ("awk", "-F:", "{s += $2} END {print s}"), b"a:7\nb:35\n"),
+        ("grep-numbered", ("grep", "-n", "-E", "alpha|beta"), sample),
+        ("hexdump-bytes", ("hexdump", "-C"), b"abc\n"),
+        ("od-hex", ("od", "-An", "-tx1"), b"abc\n"),
+        ("basename-suffix", ("basename", "/tmp/project/file.txt", ".txt"), b""),
+        ("dirname-path", ("dirname", "/tmp/project/file.txt"), b""),
+        ("gzip-compress", ("gzip", "-c"), sample),
+        ("bzip2-compress", ("bzip2", "-c"), sample),
     )
 
 

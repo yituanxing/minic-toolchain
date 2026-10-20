@@ -38,7 +38,7 @@ if timeout 900s env CROSS_COMPILE="$prefix" \
 else
     scan_rc=$?
 fi
-grep -E '^(BUSYBOX_ALLYES_(CONFIG=|HOST_EXCLUSIONS=|GCC_KBUILD=|GCC_BUILD_DIAGNOSTIC=|GCC_FIRST_ERRORS=|GCC_SEQUENTIAL=|GCC_REAL_ERRORS |GCC_STOP_CONTEXT |GCC_FINAL_LINK_LOG=|GCC_FINAL_LINK_CAUSE |GCC_FINAL_LINK_FIRST_LINES=|GCC_FINAL_LINK_LAST_LINES=|GCC_LINK_FEATURES=|GCC_LINK_ATTEMPTS=|FRONTIER=|SCAN=|GCC_RUNTIME_ORACLE=)|BUSYBOX_MIXED_BULK(_CROSS_COHORT=|_SOURCE=|_REAL_OWNERS=|_RUNTIME=|_RUNTIME_DIFF|=))' \
+grep -E '^(BUSYBOX_ALLYES_(CONFIG=|HOST_EXCLUSIONS=|GCC_KBUILD=|GCC_BUILD_DIAGNOSTIC=|GCC_FIRST_ERRORS=|GCC_SEQUENTIAL=|GCC_REAL_ERRORS |GCC_STOP_CONTEXT |GCC_FINAL_LINK_LOG=|GCC_FINAL_LINK_CAUSE |GCC_FINAL_LINK_FIRST_LINES=|GCC_FINAL_LINK_LAST_LINES=|GCC_LINK_FEATURES=|GCC_LINK_ATTEMPTS=|FRONTIER=|SCAN=|GCC_RUNTIME_ORACLE=)|BUSYBOX_MIXED_BULK(_CROSS_RUNTIME=|_CROSS_COHORT=|_SOURCE=|_REAL_OWNERS=|_RUNTIME=|_RUNTIME_DIFF|=))' \
   "$work/probe.out" || true
 grep -E '^BUSYBOX_ALLYES_BLOCKER ' "$work/probe.out" | head -n 30 || true
 grep -E '^BUSYBOX_ALLYES_CORE_REJECT ' "$work/probe.out" | head -n 65 || true
@@ -80,8 +80,10 @@ grep -qx 'BUSYBOX_ALLYES_GCC_KBUILD=PASS original_Kconfig=1 original_sources=1' 
   { echo "FOUR_BACKEND_BUSYBOX_ALL_ACCEPT=FAIL target=$target stage=GNU_Kbuild" >&2; exit 1; }
 grep -qx 'BUSYBOX_ALLYES_GCC_RUNTIME_ORACLE=PASS applets=6 original_full_Kbuild=1' "$work/probe.out" ||
   { echo "FOUR_BACKEND_BUSYBOX_ALL_ACCEPT=FAIL target=$target stage=GNU_QEMU_oracle" >&2; exit 1; }
-grep -qx 'BUSYBOX_MIXED_BULK_RUNTIME=DISCOVERY fixtures=11 matches=11 differences=0' "$work/probe.out" ||
+grep -qx 'BUSYBOX_MIXED_BULK_RUNTIME=DISCOVERY fixtures=36 matches=36 differences=0' "$work/probe.out" ||
   { echo "FOUR_BACKEND_BUSYBOX_ALL_ACCEPT=FAIL target=$target stage=MiniC_GNU_QEMU_differential" >&2; exit 1; }
+grep -qx 'BUSYBOX_MIXED_BULK_CROSS_RUNTIME=PASS cases=36 GNU_QEMU_byte_exact=1' "$work/probe.out" ||
+  { echo "FOUR_BACKEND_BUSYBOX_ALL_ACCEPT=FAIL target=$target stage=cross_applet_coverage" >&2; exit 1; }
 receipt=$(grep '^BUSYBOX_MIXED_BULK=PASS MiniC_owners=' "$work/probe.out" || true)
 owner_receipt=$(grep '^BUSYBOX_MIXED_BULK_REAL_OWNERS=PASS total=' "$work/probe.out" || true)
 coverage=$(grep '^BUSYBOX_MIXED_BULK_CROSS_COHORT=DISCOVERY original_Kbuild_owners=581 ' "$work/probe.out" || true)
@@ -99,5 +101,5 @@ if [ -z "$mini" ] || [ -z "$gnu" ] || [ "$mini" -lt "$floor" ] ||
   echo "FOUR_BACKEND_BUSYBOX_ALL_ACCEPT=FAIL target=$target stage=coverage_or_SHA" >&2
   exit 1
 fi
-echo "FOUR_BACKEND_BUSYBOX_ALL_ACCEPT=PASS target=$target original_Kbuild_owners=581 MiniC_owners=$mini GNU_fallbacks=$gnu SHA256_verified=$mini GNU_QEMU_fixtures=11 strict=1 full_all_MiniC=NO"
+echo "FOUR_BACKEND_BUSYBOX_ALL_ACCEPT=PASS target=$target original_Kbuild_owners=581 MiniC_owners=$mini GNU_fallbacks=$gnu SHA256_verified=$mini GNU_QEMU_fixtures=36 strict=1 full_all_MiniC=NO"
 echo "FOUR_BACKEND_BUSYBOX_ALL_KBUILD_END target=$target authenticated_mixed_build=1 full_MiniC=NO"

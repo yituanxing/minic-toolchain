@@ -116,7 +116,8 @@ def main():
         return 1
     shutil.copy2(executable, original)
     oracle = run_cases(original, report)
-    if len(oracle) != 11 or any(item[0] for item in oracle.values()):
+    expected_cases = 36 if os.environ.get("BUSYBOX_ALLYES_QEMU") else 11
+    if len(oracle) != expected_cases or any(item[0] for item in oracle.values()):
         log("BUSYBOX_MIXED_BULK=BLOCKED stage=original-GNU-runtime-oracle")
         return 1
     manifest = {}
@@ -260,6 +261,8 @@ def main():
     if failures:
         log("BUSYBOX_MIXED_BULK=BLOCKED stage=runtime-differential")
         return 1
+    if cross_target:
+        log("BUSYBOX_MIXED_BULK_CROSS_RUNTIME=PASS cases=36 GNU_QEMU_byte_exact=1")
     log("BUSYBOX_MIXED_BULK=PASS MiniC_owners=%d GCC_fallback=%d "
         "original_full_Kbuild=1 eleven_fixture_byte_exact=1 "
         "MiniC_and_GNU_binary_differ=1 full_all_MiniC=NO" %

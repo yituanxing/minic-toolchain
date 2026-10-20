@@ -182,6 +182,11 @@ jobs:
             timeout 240s sudo apt-get -o Acquire::Retries=3 update
           fi
           sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends gcc-aarch64-linux-gnu libc6-dev-arm64-cross gcc-13-loongarch64-linux-gnu libc6-dev-loong64-cross qemu-user
+          # Existing x86/RV64 startup constructor contract now covers both
+          # new ISAs, including two real relocated .init_array entries.
+          sh -n tests/compiler/c0/probe-four-backend-constructors.sh
+          MINIC_CC="$GITHUB_WORKSPACE/build/toolchain-focused-t1-v2/bin/minic-cc" \
+            sh tests/compiler/c0/probe-four-backend-constructors.sh
           # Run the smallest QEMU dynamic-stack ABI oracles FIRST. A
           # failure returns the exact generated assembly within seconds
           # instead of following 179 original Kbuild rebuilds per ISA.
