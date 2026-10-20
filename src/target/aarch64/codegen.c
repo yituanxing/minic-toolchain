@@ -1017,6 +1017,7 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                          ins->kind == MINIC_CORE_INSTRUCTION_PARAMETER ||
                          ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_TO_DOUBLE ||
                          ins->kind == MINIC_CORE_INSTRUCTION_FLOAT_TO_DOUBLE ||
+                         ins->kind == MINIC_CORE_INSTRUCTION_VARIADIC_NEXT_SCALAR ||
                          ins->kind == MINIC_CORE_INSTRUCTION_CALL ||
                          ins->kind == MINIC_CORE_INSTRUCTION_INDIRECT_CALL))))
             {
