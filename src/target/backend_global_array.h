@@ -176,4 +176,37 @@ static bool minic_multi_emit_flat_record_array(FILE *out, const MinicC0Program *
 }
 
 
+/* Lua's HOOKKEY/CLIBS/output pointer globals: zero bytes with relocation
+ * entries and no explicit scalar initializer. Preserve exact offsets using
+ * the same DataLayout algorithm proven by x86. */
+static bool minic_multi_emit_zero_relocation_global(FILE *out, const MinicC0Program *program,
+                                            const MinicTargetInfo *target,
+                                            const MinicGlobalObject *obj,
+                                            size_t storage_size,
+                                            MinicMultiRelocEmitter emit_relocation) {
+    size_t cursor = 0U, i, width;
+    if (out == NULL || program == NULL || target == NULL || obj == NULL ||
+        emit_relocation == NULL ||
+        !obj->is_zero_initialized || obj->initializer_count != 0U ||
+        obj->relocation_count == 0U ||
+        (!minic_type_is_pointer(obj->type) && !minic_type_is_array(obj->type)))
+        return false;
+    width = target->data_layout->pointer_size;
+    if (width != 8U) return false;
+    for (i = 0U; i < obj->relocation_count; ++i) {
+        const MinicGlobalRelocation *reloc = &obj->relocations[i];
+        size_t offset;
+        if (!minic_data_layout_global_relocation_offset(
+                target->data_layout, program, obj, reloc, &offset) ||
+            offset < cursor || offset > storage_size ||
+            width > storage_size - offset ||
+            fprintf(out, "  .zero %zu\n", offset - cursor) < 0 ||
+            !emit_relocation(out, program, target, reloc, width))
+            return false;
+        cursor = offset + width;
+    }
+    return fprintf(out, "  .zero %zu\n", storage_size - cursor) >= 0;
+}
+
+
 #endif /* MINIC_TARGET_BACKEND_GLOBAL_ARRAY_H */

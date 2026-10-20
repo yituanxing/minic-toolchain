@@ -274,6 +274,21 @@ static bool emit_simple_global(FILE *out, const MinicC0Program *program,
     if (!obj->is_internal &&
         !emit_symbol_visibility(out, obj->visibility, obj->name))
         return false;
+    if (obj->is_zero_initialized && obj->initializer_count == 0U &&
+        obj->relocation_count != 0U &&
+        (minic_type_is_pointer(obj->type) || minic_type_is_array(obj->type))) {
+        const char *const section = obj->is_read_only
+            ? ".section .data.rel.ro" : ".data";
+        if (fprintf(out, "%s\n", section) < 0 ||
+            (!obj->is_internal && fprintf(out, ".globl %s\n", obj->name) < 0) ||
+            fprintf(out, "  .balign %zu\n.type %s,@object\n%s:\n",
+                    align, obj->name, obj->name) < 0 ||
+            !minic_multi_emit_zero_relocation_global(out, program, target,
+                obj, storage_size, emit_record_relocation) ||
+            fprintf(out, ".size %s,%zu\n", obj->name, storage_size) < 0)
+            return false;
+        return true;
+    }
     if (minic_type_is_record(obj->type)) {
         if (obj->union_selection_count != 0U) return false;
         if (fprintf(out, "%s\n", obj->is_read_only
