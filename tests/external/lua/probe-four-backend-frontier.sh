@@ -259,6 +259,27 @@ LUA
             od -Ax -tx1 -N 64 "$work/$target/oracle.luac"
             echo "FOUR_BACKEND_LUA_LUAC_MINI_HEADER target=$target"
             od -Ax -tx1 -N 64 "$work/$target/mini.luac"
+            echo "FOUR_BACKEND_LUA_LUAC_DEBUG_ORACLE target=$target"
+            od -Ax -tc -j 510 -N 125 "$work/$target/oracle.luac"
+            echo "FOUR_BACKEND_LUA_LUAC_DEBUG_MINI target=$target"
+            od -Ax -tc -j 510 -N 125 "$work/$target/mini.luac"
+            set +e
+            timeout 60s "$qemu" "$work/$target/luac-gnu" -s \
+                -o "$work/$target/oracle-strip.luac" "$work/$target/pressure.lua"
+            oracle_strip_status=$?
+            timeout 60s "$qemu" "$work/$target/luac-minic" -s \
+                -o "$work/$target/mini-strip.luac" "$work/$target/pressure.lua"
+            mini_strip_status=$?
+            set -e
+            if [ -f "$work/$target/oracle-strip.luac" ] &&
+               [ -f "$work/$target/mini-strip.luac" ]; then
+                if cmp -s "$work/$target/oracle-strip.luac" "$work/$target/mini-strip.luac"; then
+                    strip_equal=yes
+                else
+                    strip_equal=no
+                fi
+                echo "FOUR_BACKEND_LUA_LUAC_STRIPPED target=$target equal=$strip_equal oracle_status=$oracle_strip_status mini_status=$mini_strip_status oracle_size=$(wc -c < "$work/$target/oracle-strip.luac") mini_size=$(wc -c < "$work/$target/mini-strip.luac")"
+            fi
         fi
         failed=$((failed+1)); continue
     fi
