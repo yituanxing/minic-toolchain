@@ -29,6 +29,13 @@ for item in \
   test "$(git hash-object "$root/$rel")" = "$expected"
 done
 echo "FOUR_BACKEND_BUSYBOX_SOURCE=PASS version=1.36.1 commit=$commit"
+if [ "${FOUR_BACKEND_BUSYBOX_GNU_DIAG_FAST:-0}" = 1 ]; then
+  sh tests/external/busybox/probe-four-backend-all-kbuild.sh \
+    "$root" aarch64 aarch64-linux-gnu-gcc aarch64-linux-gnu- \
+    qemu-aarch64 /usr/aarch64-linux-gnu
+  echo "FOUR_BACKEND_BUSYBOX_GNU_DIAG_FAST=COMPLETE strict_179_not_executed=1" >&2
+  exit 1
+fi
 sources='coreutils/cat.c coreutils/echo.c coreutils/head.c coreutils/wc.c findutils/grep.c coreutils/cut.c coreutils/sort.c coreutils/uniq.c coreutils/tr.c'
 next_targets=0
 wide_targets=0
