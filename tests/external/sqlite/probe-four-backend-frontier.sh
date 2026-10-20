@@ -124,19 +124,32 @@ SRC
 cat > "$work/token-ab.c" <<'SRC'
 #include <stdio.h>
 extern int sqlite3GetToken(const unsigned char *, int *);
+extern const unsigned char sqlite3CtypeMap[256];
 int main(void) {
-    const unsigned char *text =
-        (const unsigned char *)"CREATE TABLE t(id INTEGER PRIMARY KEY, x INT);";
-    unsigned long i = 0U;
-    while (text[i] != 0U) {
-        int type = 0;
-        int width = sqlite3GetToken(text + i, &type);
-        printf("%lu:%d:%d:", i, width, type);
-        if (width < 1 || width > 100) return 3;
-        for (int j = 0; j < width; ++j)
-            printf("%02x", text[i + (unsigned long)j]);
-        putchar('\n');
-        i += (unsigned long)width;
+    const char *queries[] = {
+        "CREATE TABLE t(id INTEGER PRIMARY KEY, x INT);",
+        "#1", "rowid=#1", "SELECT 42, #17, :a_2;",
+        "SELECT a FROM t WHERE b=?12 AND c='123';"
+    };
+    /* Check the entire character-class table, not only a single SQL query.
+     * sqlite3CtypeMap['1'] must contain the identifier/digit class bits.
+     * The executable and test driver are otherwise unchanged. */
+    for (int b = 0; b < 256; ++b)
+        printf("ctype:%03d:%02x\n", b, sqlite3CtypeMap[b]);
+    for (unsigned long q = 0; q < sizeof(queries)/sizeof(queries[0]); ++q) {
+        const unsigned char *text = (const unsigned char *)queries[q];
+        unsigned long i = 0U;
+        printf("query=%lu\n", q);
+        while (text[i] != 0U) {
+            int type = 0;
+            int width = sqlite3GetToken(text + i, &type);
+            printf("%lu:%d:%d:", i, width, type);
+            if (width < 1 || width > 100) return 3;
+            for (int j = 0; j < width; ++j)
+                printf("%02x", text[i + (unsigned long)j]);
+            putchar('\n');
+            i += (unsigned long)width;
+        }
     }
     return 0;
 }
@@ -286,7 +299,7 @@ for target in aarch64 loongarch64; do
     done
     if [ "$token_build_ok" -eq 1 ]; then
         if cmp -s "$work/$target/token-gnu.out" "$work/$target/token-mini.out"; then
-            echo "FOUR_BACKEND_SQLITE_LEXER=PASS target=$target full_CREATE_TABLE_token_stream=GNU_QEMU_byte_exact"
+            echo "FOUR_BACKEND_SQLITE_LEXER=PASS target=$target source_token_matrix=5 ctype_table=256 GNU_QEMU_byte_exact=1"
         else
             echo "FOUR_BACKEND_SQLITE_LEXER=FAIL target=$target stage=GNU_QEMU_differential"
             diff -u "$work/$target/token-gnu.out" "$work/$target/token-mini.out" |
