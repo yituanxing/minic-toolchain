@@ -287,7 +287,9 @@ jobs:
           MINIC_CC="$GITHUB_WORKSPACE/build/toolchain-focused-t1-v2/bin/minic-cc" \
             sh tests/compiler/c0/probe-aarch64-pie-extern-got.sh
           sh -n tests/external/busybox/probe-four-backend-frontier.sh
+          sh -n tests/external/busybox/probe-four-backend-expanded.sh
           FOUR_BACKEND_BUSYBOX_SWEEP=1 \
+          FOUR_BACKEND_BUSYBOX_EXPAND=1 \
           MINIC_CC="$GITHUB_WORKSPACE/build/toolchain-focused-t1-v2/bin/minic-cc" \
             sh tests/external/busybox/probe-four-backend-frontier.sh
 
