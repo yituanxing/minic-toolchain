@@ -280,46 +280,108 @@ LUA
                 fi
                 echo "FOUR_BACKEND_LUA_LUAC_STRIPPED target=$target equal=$strip_equal oracle_status=$oracle_strip_status mini_status=$mini_strip_status oracle_size=$(wc -c < "$work/$target/oracle-strip.luac") mini_size=$(wc -c < "$work/$target/mini-strip.luac")"
             fi
-            # Single-object GNU A/B oracle: distinguish source metadata
-            # creation (lparser) from bytecode serialization (ldump).
-            # This is diagnosis only; never count mixed objects as acceptance.
-            for candidate in $sources; do
-                [ "$candidate" = lua.c ] && continue
-                swap=${candidate%.c}
-                if ! "$gcc" -O0 -std=c99 -DLUA_USE_LINUX -I"$src" \
-                        -c "$src/$swap.c" -o "$work/$target/$swap.gnu.o"; then
-                    echo "FOUR_BACKEND_LUA_LUAC_AB=FAIL target=$target swap=$swap stage=GNU_compile"
-                    continue
-                fi
-                set --
-                for source in $sources; do
-                    [ "$source" = lua.c ] && continue
-                    base=${source%.c}
-                    if [ "$base" = "$swap" ]; then
-                        set -- "$@" "$work/$target/$swap.gnu.o"
-                    else
-                        set -- "$@" "$work/$target/$base.o"
-                    fi
-                done
-                if ! "$gcc" -static "$@" -lm -ldl \
-                        -o "$work/$target/luac-ab-$swap"; then
-                    echo "FOUR_BACKEND_LUA_LUAC_AB=FAIL target=$target swap=$swap stage=GNU_link"
-                    continue
-                fi
-                set +e
-                timeout 60s "$qemu" "$work/$target/luac-ab-$swap" \
-                    -o "$work/$target/ab-$swap.luac" "$work/$target/pressure.lua" \
-                    >"$work/$target/ab-$swap.out" 2>"$work/$target/ab-$swap.err"
-                ab_status=$?
-                set -e
-                if [ "$ab_status" -eq 0 ] &&
-                   cmp -s "$work/$target/oracle.luac" "$work/$target/ab-$swap.luac"; then
-                    result=PASS
-                else
-                    result=FAIL
-                fi
-                echo "FOUR_BACKEND_LUA_LUAC_AB=$result target=$target swap=$swap status=$ab_status"
+            # The 33-object A/B isolated lobject.c. Test Lua's formatted
+            # source name and then single-function GNU/MiniC substitutions.
+            # Mixed-toolchain builds are diagnostic, never an acceptance.
+            cat >"$work/$target/pushfstring-driver.c" <<'SRC'
+#include "lua.h"
+#include "lauxlib.h"
+#include <stdio.h>
+#include <string.h>
+int main(void) {
+    lua_State *L = luaL_newstate();
+    const char *want = "@/tmp/minic/pressure.lua";
+    const char *got;
+    int pass;
+    if (L == NULL) return 2;
+    got = lua_pushfstring(L, "@%s", "/tmp/minic/pressure.lua");
+    pass = strcmp(want, got) == 0;
+    printf("LUA_FMT actual=%s expected=%s length=%zu pass=%d\n",
+           got, want, strlen(got), pass);
+    lua_close(L);
+    return pass ? 42 : 1;
+}
+SRC
+            set --
+            for source in $sources; do
+                case "$source" in lua.c|luac.c) continue ;; esac
+                stem=${source%.c}
+                set -- "$@" "$work/$target/$stem.o"
             done
+            if "$gcc" -O0 -std=c99 -I"$src" -static \
+                    "$work/$target/pushfstring-driver.c" "$@" -lm -ldl \
+                    -o "$work/$target/pushfstring-mini"; then
+                set +e
+                timeout 45s "$qemu" "$work/$target/pushfstring-mini" \
+                    >"$work/$target/pushfstring-mini.out" \
+                    2>"$work/$target/pushfstring-mini.err"
+                fmt_status=$?
+                set -e
+                echo "FOUR_BACKEND_LUA_FMT target=$target status=$fmt_status"
+                cat "$work/$target/pushfstring-mini.out"
+                sed -n '1,8p' "$work/$target/pushfstring-mini.err"
+            fi
+            "$gcc" -O0 -std=c99 -DLUA_USE_LINUX -I"$src" \
+                -c "$src/lobject.c" -o "$work/$target/lobject.gnu.o"
+            nm_tool=$( "$gcc" -print-prog-name=nm )
+            objcopy_tool=$( "$gcc" -print-prog-name=objcopy )
+            "$nm_tool" -g --defined-only "$work/$target/lobject.gnu.o" |
+                awk '$2 == "T" {print $3}' >"$work/$target/lobject.exports"
+            if command -v "$objcopy_tool" >/dev/null 2>&1; then
+                while IFS= read -r candidate; do
+                    [ -n "$candidate" ] || continue
+                    cp "$work/$target/lobject.o" \
+                        "$work/$target/lobject.mini.ab.o"
+                    cp "$work/$target/lobject.gnu.o" \
+                        "$work/$target/lobject.gnu.ab.o"
+                    "$objcopy_tool" --redefine-sym \
+                        "$candidate=__mini_shadow_$candidate" \
+                        "$work/$target/lobject.mini.ab.o"
+                    while IFS= read -r other; do
+                        [ -n "$other" ] || continue
+                        [ "$other" = "$candidate" ] && continue
+                        "$objcopy_tool" --redefine-sym \
+                            "$other=__gnu_shadow_$other" \
+                            "$work/$target/lobject.gnu.ab.o"
+                    done <"$work/$target/lobject.exports"
+                    set --
+                    for source in $sources; do
+                        [ "$source" = lua.c ] && continue
+                        stem=${source%.c}
+                        if [ "$stem" = lobject ]; then
+                            set -- "$@" "$work/$target/lobject.mini.ab.o" \
+                                           "$work/$target/lobject.gnu.ab.o"
+                        else
+                            set -- "$@" "$work/$target/$stem.o"
+                        fi
+                    done
+                    if ! "$gcc" -static "$@" -lm -ldl \
+                            -o "$work/$target/luac-ab-$candidate" \
+                            >"$work/$target/ab-link.out" \
+                            2>"$work/$target/ab-link.err"; then
+                        echo "FOUR_BACKEND_LUA_LUAC_FUNCTION_AB=LINK_FAIL target=$target candidate=$candidate"
+                        sed -n '1,3p' "$work/$target/ab-link.err"
+                        continue
+                    fi
+                    set +e
+                    timeout 60s "$qemu" "$work/$target/luac-ab-$candidate" \
+                        -o "$work/$target/ab-$candidate.luac" \
+                        "$work/$target/pressure.lua" \
+                        >"$work/$target/ab.out" 2>"$work/$target/ab.err"
+                    ab_status=$?
+                    set -e
+                    if [ "$ab_status" -eq 0 ] &&
+                       cmp -s "$work/$target/oracle.luac" \
+                              "$work/$target/ab-$candidate.luac"; then
+                        verdict=PASS
+                    else
+                        verdict=FAIL
+                    fi
+                    echo "FOUR_BACKEND_LUA_LUAC_FUNCTION_AB=$verdict target=$target candidate=$candidate status=$ab_status"
+                done <"$work/$target/lobject.exports"
+            else
+                echo "FOUR_BACKEND_LUA_LUAC_FUNCTION_AB=SKIP target=$target objcopy_missing=1"
+            fi
         fi
         failed=$((failed+1)); continue
     fi
