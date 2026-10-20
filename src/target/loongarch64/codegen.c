@@ -1560,11 +1560,46 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
             if (src >= fn->value_count || !minic_type_is_double(ins->type) ||
                 !scalar_integer_width(program, target, fn->values[src].type,
                                       &width, &sign) ||
-                width != 4U || !sign ||
-                !emit_sp_mem(out, "ld.w", "$t0", (size_t)src * 8U) ||
-                fputs("  movgr2fr.w $ft0, $t0\n"
-                      "  ffint.d.w $ft0, $ft0\n", out) == EOF ||
-                !emit_sp_mem(out, "fst.d", "$ft0", offset))
+                !emit_sp_mem(out, width == 8U ? "ld.d" : "ld.w",
+                             "$t0", (size_t)src * 8U) ||
+                (width < 4U && !emit_integer_normalize(out, width, sign)))
+                return machine_emit_reject(fn, "loongarch64", name, reject_stage,
+                                    reject_block, reject_ins, __LINE__);
+            if (width == 8U && !sign) {
+                /* LoongArch base FP has signed ffint.d.l, but not an
+                 * unsigned 64-bit scalar conversion. Split at 32 bits:
+                 * both pieces are exact in FP64, and fadd rounds ONCE.
+                 * This avoids the double-rounding trap of (x>>1)*2. */
+                if (fputs("  srli.d $t1, $t0, 32\n"
+                          "  bstrpick.d $t0, $t0, 31, 0\n"
+                          "  movgr2fr.d $ft0, $t1\n"
+                          "  ffint.d.l $ft0, $ft0\n"
+                          "  movgr2fr.d $ft1, $t0\n"
+                          "  ffint.d.l $ft1, $ft1\n"
+                          "  li.d $t2, 0x41f0000000000000\n"
+                          "  movgr2fr.d $ft2, $t2\n"
+                          "  fmul.d $ft0, $ft0, $ft2\n"
+                          "  fadd.d $ft0, $ft0, $ft1\n", out) == EOF)
+                    return machine_emit_reject(fn, "loongarch64", name, reject_stage,
+                                        reject_block, reject_ins, __LINE__);
+            } else if (width == 4U && !sign) {
+                /* ld.w sign-extends on LP64; zero-extend unsigned int
+                 * before signed-long-to-double conversion. */
+                if (fputs("  bstrpick.d $t0, $t0, 31, 0\n"
+                          "  movgr2fr.d $ft0, $t0\n"
+                          "  ffint.d.l $ft0, $ft0\n", out) == EOF)
+                    return machine_emit_reject(fn, "loongarch64", name, reject_stage,
+                                        reject_block, reject_ins, __LINE__);
+            } else {
+                if (fputs(width == 8U
+                              ? "  movgr2fr.d $ft0, $t0\n"
+                                "  ffint.d.l $ft0, $ft0\n"
+                              : "  movgr2fr.w $ft0, $t0\n"
+                                "  ffint.d.w $ft0, $ft0\n", out) == EOF)
+                    return machine_emit_reject(fn, "loongarch64", name, reject_stage,
+                                        reject_block, reject_ins, __LINE__);
+            }
+            if (!emit_sp_mem(out, "fst.d", "$ft0", offset))
                 return machine_emit_reject(fn, "loongarch64", name, reject_stage,
                                     reject_block, reject_ins, __LINE__);
             continue;

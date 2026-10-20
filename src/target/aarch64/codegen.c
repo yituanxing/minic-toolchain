@@ -1718,15 +1718,23 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
             const MinicCoreValueId src = ins->value.operand;
             size_t width;
             bool sign;
+            /* Numeric C conversion: AArch64 has signed AND unsigned 32/64
+             * integer-to-double instructions. Narrow source values retain
+             * their Core signedness through explicit normalization. */
             if (src >= fn->value_count || !minic_type_is_double(ins->type) ||
                 !scalar_integer_width(program, target, fn->values[src].type,
                                       &width, &sign) ||
-                width != 4U || !sign ||
-                fprintf(out,
-                        "  ldr w9, [sp, #%zu]\n"
-                        "  scvtf d9, w9\n"
-                        "  str d9, [sp, #%zu]\n",
-                        (size_t)src * 8U, offset) < 0)
+                fprintf(out, width == 8U
+                             ? "  ldr x9, [sp, #%zu]\n"
+                             : "  ldr w9, [sp, #%zu]\n",
+                        (size_t)src * 8U) < 0 ||
+                (width < 4U && !emit_integer_normalize(out, width, sign)) ||
+                fputs(width == 8U
+                          ? (sign ? "  scvtf d9, x9\n"
+                                  : "  ucvtf d9, x9\n")
+                          : (sign ? "  scvtf d9, w9\n"
+                                  : "  ucvtf d9, w9\n"), out) == EOF ||
+                fprintf(out, "  str d9, [sp, #%zu]\n", offset) < 0)
                 return machine_emit_reject(fn, "aarch64", name, reject_stage,
                                     reject_block, reject_ins, __LINE__);
             continue;
