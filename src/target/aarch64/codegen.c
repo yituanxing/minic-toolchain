@@ -282,6 +282,24 @@ static bool emit_simple_global(FILE *out, const MinicC0Program *program,
     if (!obj->is_internal &&
         !emit_symbol_visibility(out, obj->visibility, obj->name))
         return false;
+    /* An uninitialized file-scope object is zero-filled, including an
+     * array of records. Original TinyCC __vstack[257] has five-field
+     * SValue records and no explicit initializer. Its bytes are all zero:
+     * requiring 257 recursive record initializers is incorrect.
+     * A definition that has no bytes and no relocations may use .zero
+     * for its entire DataLayout-computed extent, preserving alignment. */
+    if (obj->initializer_count == 0U &&
+        obj->relocation_count == 0U &&
+        obj->union_selection_count == 0U) {
+        const char *section = obj->is_read_only ? ".section .rodata" : ".bss";
+        return fprintf(out, "%s\n", section) >= 0 &&
+            (obj->is_internal ||
+             fprintf(out, ".globl %s\n", obj->name) >= 0) &&
+            fprintf(out, "  .balign %zu\n.type %s,@object\n%s:\n"
+                         "  .zero %zu\n.size %s,%zu\n",
+                    align, obj->name, obj->name, storage_size,
+                    obj->name, storage_size) >= 0;
+    }
     if (obj->is_zero_initialized && obj->initializer_count == 0U &&
         obj->relocation_count != 0U &&
         (minic_type_is_pointer(obj->type) || minic_type_is_array(obj->type))) {
