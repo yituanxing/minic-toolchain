@@ -39,6 +39,7 @@ fi
 sources='coreutils/cat.c coreutils/echo.c coreutils/head.c coreutils/wc.c findutils/grep.c coreutils/cut.c coreutils/sort.c coreutils/uniq.c coreutils/tr.c'
 next_targets=0
 wide_targets=0
+all_targets=0
 for target in aarch64 loongarch64; do
   case "$target" in
     aarch64) gcc=aarch64-linux-gnu-gcc; qemu=qemu-aarch64
@@ -303,6 +304,7 @@ editors/cmp.c editors/diff.c networking/ping.c
         if [ "${FOUR_BACKEND_BUSYBOX_ALLYES:-0}" = 1 ]; then
           sh tests/external/busybox/probe-four-backend-all-kbuild.sh \
             "$root" "$target" "$gcc" "$prefix" "$qemu" "$sysroot"
+          all_targets=$((all_targets+1))
         fi
       fi
     fi
@@ -321,5 +323,12 @@ if [ "${FOUR_BACKEND_BUSYBOX_WIDE:-0}" = 1 ]; then
     exit 1
   fi
   echo "FOUR_BACKEND_BUSYBOX_WIDE_ACCEPT=PASS targets=2 original_Kbuild_owners=179 min_AArch64_MiniC=175 min_LoongArch64_MiniC=175 GNU_QEMU_differential=1"
+fi
+if [ "${FOUR_BACKEND_BUSYBOX_ALLYES:-0}" = 1 ]; then
+  if [ "$all_targets" -ne 2 ]; then
+    echo "FOUR_BACKEND_BUSYBOX_ALL_ACCEPT=FAIL reason=missing_ISA completed=$all_targets" >&2
+    exit 1
+  fi
+  echo "FOUR_BACKEND_BUSYBOX_ALL_ACCEPT=PASS targets=2 original_Kbuild_owners=581 min_AArch64_MiniC=568 min_LoongArch64_MiniC=566 GNU_QEMU_fixtures=11 full_all_MiniC=NO"
 fi
 echo "FOUR_BACKEND_BUSYBOX_DISCOVERY=COMPLETE source_pinned=1 no_all_MiniC_claim=1"

@@ -141,6 +141,24 @@ def call_proxy(args):
                                        "x86_64-linux") == "x86_64-linux"
                      else os.environ))
         info["minic"] = mini.returncode
+        # Trace only representative *failed* upstream source owners.
+        # A small class-level replay avoids a second 581-TU scan while
+        # producing the actual Core instruction kind / rejecting guard.
+        trace_owners = ["coreutils/od.c","editors/awk.c","libbb/compare_string_array.c","libbb/obscure.c","libbb/strrstr.c","miscutils/hdparm.c","archival/libarchive/decompress_bunzip2.c","networking/ifconfig.c","procps/top.c"]
+        if (mini.returncode and os.environ.get("BUSYBOX_ALLYES_MINIC_TARGET",
+                                                  "x86_64-linux") != "x86_64-linux"
+                and source in trace_owners):
+            with (target / "trace.err").open("wb") as e:
+                try:
+                    subprocess.run(
+                        [os.environ["BUSYBOX_ALLYES_MINIC_CC"],
+                         "--target=" + os.environ["BUSYBOX_ALLYES_MINIC_TARGET"],
+                         "-S", str(preprocessed), "-o", str(asm)],
+                        stdout=subprocess.DEVNULL, stderr=e, check=False,
+                        timeout=40, env={**os.environ, "MINIC_M1_TRACE": "1",
+                                         "MINIC_BACKEND_CENSUS": "1"})
+                except subprocess.TimeoutExpired:
+                    e.write(b"BUSYBOX_ALLYES_CORE_TRACE_TIMEOUT\n")
         if mini.returncode == 0:
             with (target / "as.err").open("wb") as e:
                 ass = subprocess.run(gcc_argv + ["-c", "-x", "assembler",
@@ -186,6 +204,16 @@ def print_frontier(report_root, gcc_success, enabled):
             print("BUSYBOX_ALLYES_BLOCKER source=%s kind=%s detail=%s" %
                   (info["source"], stage, (useful[0] if useful else "no diagnostic")[:240]))
             if stage == "MiniC":
+                trace_path = path.parent / "trace.err"
+                if trace_path.is_file():
+                    trace = trace_path.read_text(errors="replace")
+                    captures = [line.strip() for line in trace.splitlines()
+                                if line.startswith(("MINIC_BACKEND_REJECT",
+                                                    "MINIC_M1_FRONTIER",
+                                                    "MINIC_BACKEND_CENSUS"))]
+                    for detail in captures[:6]:
+                        print("BUSYBOX_ALLYES_CORE_REJECT source=%s detail=%s" %
+                              (info["source"], detail[:550]), flush=True)
                 gates = [line.strip() for line in error.splitlines()
                          if line.startswith("X86_CALL_GATE ")]
                 arguments = [line.strip() for line in error.splitlines()

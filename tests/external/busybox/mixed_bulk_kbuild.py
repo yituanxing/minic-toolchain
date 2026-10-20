@@ -41,6 +41,45 @@ CERTIFIED_GCC_FALLBACKS = frozenset((
 ))
 
 
+# Reviewable cross-ISA GNU fallback set from original BusyBox Kbuild
+# and dual QEMU acceptance #39447330925. New MiniC successes remove entries;
+# a previously accepted MiniC owner reverting to GNU is a hard regression.
+CROSS_APPROVED_GCC_FALLBACKS = {
+    "aarch64": frozenset((
+        "coreutils/od.o",
+        "editors/awk.o",
+        "libbb/compare_string_array.o",
+        "libbb/obscure.o",
+        "libbb/strrstr.o",
+        "libbb/vfork_daemon_rexec.o",
+        "libbb/xconnect.o",
+        "miscutils/devfsd.o",
+        "miscutils/devmem.o",
+        "miscutils/hdparm.o",
+        "networking/ifconfig.o",
+        "networking/ntpd.o",
+        "procps/top.o",
+    )),
+    "loongarch64": frozenset((
+        "archival/libarchive/decompress_bunzip2.o",
+        "coreutils/od.o",
+        "editors/awk.o",
+        "libbb/compare_string_array.o",
+        "libbb/obscure.o",
+        "libbb/pw_encrypt.o",
+        "libbb/strrstr.o",
+        "libbb/vfork_daemon_rexec.o",
+        "libbb/xconnect.o",
+        "miscutils/devfsd.o",
+        "miscutils/devmem.o",
+        "miscutils/hdparm.o",
+        "networking/ifconfig.o",
+        "networking/ntpd.o",
+        "procps/top.o",
+    )),
+}
+
+
 def certified_owner_coverage(mini_owners, gcc_fallbacks):
     """Fail closed on a regressed owner or a different original Kbuild set.
 
@@ -129,12 +168,19 @@ def main():
         # cross count. Require broad genuine coverage and unique paths;
         # after GNU/QEMU success the exact cohort can be promoted.
         owner_count = len(mini_names) + len(fallback_names)
-        accepted = (owner_count >= 500 and len(mini_names) >= 500
-                    and len(set(mini_names + fallback_names)) == owner_count)
+        target_name = os.environ["BUSYBOX_ALLYES_MINIC_TARGET"].split("-")[0]
+        approved = CROSS_APPROVED_GCC_FALLBACKS.get(target_name)
+        target_floor = {"aarch64": 568, "loongarch64": 566}.get(target_name)
+        accepted = (owner_count == 581 and target_floor is not None
+                    and len(mini_names) >= target_floor
+                    and len(set(mini_names + fallback_names)) == owner_count
+                    and approved is not None
+                    and set(fallback_names).issubset(approved))
         if not accepted:
             log("BUSYBOX_MIXED_BULK=BLOCKED stage=cross-owner-inventory "
-                "original_Kbuild_owners=%d MiniC=%d GNU_fallbacks=%d" %
-                (owner_count, len(mini_names), len(fallback_names)))
+                "original_Kbuild_owners=%d MiniC=%d GNU_fallbacks=%d unapproved=%s" %
+                (owner_count, len(mini_names), len(fallback_names),
+                 sorted(set(fallback_names) - (approved or frozenset()))))
             return 1
         log("BUSYBOX_MIXED_BULK_CROSS_COHORT=DISCOVERY original_Kbuild_owners=%d"
             " MiniC_qualified=%d GNU_fallbacks=%d full_MiniC=NO" %

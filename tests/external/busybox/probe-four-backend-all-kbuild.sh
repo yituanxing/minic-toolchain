@@ -41,6 +41,7 @@ fi
 grep -E '^(BUSYBOX_ALLYES_(CONFIG=|HOST_EXCLUSIONS=|GCC_KBUILD=|GCC_BUILD_DIAGNOSTIC=|GCC_FIRST_ERRORS=|GCC_SEQUENTIAL=|GCC_REAL_ERRORS |GCC_STOP_CONTEXT |GCC_FINAL_LINK_LOG=|GCC_FINAL_LINK_CAUSE |GCC_FINAL_LINK_FIRST_LINES=|GCC_FINAL_LINK_LAST_LINES=|GCC_LINK_FEATURES=|GCC_LINK_ATTEMPTS=|FRONTIER=|SCAN=|GCC_RUNTIME_ORACLE=)|BUSYBOX_MIXED_BULK(_CROSS_COHORT=|_SOURCE=|_REAL_OWNERS=|_RUNTIME=|_RUNTIME_DIFF|=))' \
   "$work/probe.out" || true
 grep -E '^BUSYBOX_ALLYES_BLOCKER ' "$work/probe.out" | head -n 30 || true
+grep -E '^BUSYBOX_ALLYES_CORE_REJECT ' "$work/probe.out" | head -n 65 || true
 if [ -f "$report/summary.json" ]; then
   python3 - "$report/summary.json" "$target" "$scan_rc" <<'PY'
 import json, sys
@@ -58,7 +59,45 @@ if total < 200:
     print("FOUR_BACKEND_BUSYBOX_ALL_KBUILD=INSUFFICIENT target=%s real_GNU_C_owners=%d min=200" % (target, total), flush=True)
 PY
 else
-  echo "FOUR_BACKEND_BUSYBOX_ALL_KBUILD=BLOCKED target=$target stage=original_allyes_or_early_Kbuild scan_exit=$scan_rc"
-  tail -n 25 "$work/probe.out" "$work/probe.err" || true
+  echo "FOUR_BACKEND_BUSYBOX_ALL_KBUILD=FAIL target=$target stage=no_usable_GNU_Kbuild_census scan_exit=$scan_rc" >&2
+  tail -n 25 "$work/probe.out" "$work/probe.err" >&2 || true
+  exit 1
 fi
-echo "FOUR_BACKEND_BUSYBOX_ALL_KBUILD_END target=$target diagnostic_only=1 no_full_MiniC_claim=1"
+# Promote the existing full ORIGINAL allyesconfig/Kbuild oracle. Previous
+# exploration returned zero even when mixed replacement failed; this contract
+# now requires every SHA receipt, original GNU full link, a changed ELF and
+# all eleven deterministic byte-exact GNU/QEMU applet comparisons.
+if [ "$scan_rc" -ne 0 ]; then
+  echo "FOUR_BACKEND_BUSYBOX_ALL_ACCEPT=FAIL target=$target stage=full_Kbuild_probe status=$scan_rc" >&2
+  exit 1
+fi
+case "$target" in
+  aarch64) floor=568 ;;
+  loongarch64) floor=566 ;;
+  *) exit 1 ;;
+esac
+grep -qx 'BUSYBOX_ALLYES_GCC_KBUILD=PASS original_Kconfig=1 original_sources=1' "$work/probe.out" ||
+  { echo "FOUR_BACKEND_BUSYBOX_ALL_ACCEPT=FAIL target=$target stage=GNU_Kbuild" >&2; exit 1; }
+grep -qx 'BUSYBOX_ALLYES_GCC_RUNTIME_ORACLE=PASS applets=6 original_full_Kbuild=1' "$work/probe.out" ||
+  { echo "FOUR_BACKEND_BUSYBOX_ALL_ACCEPT=FAIL target=$target stage=GNU_QEMU_oracle" >&2; exit 1; }
+grep -qx 'BUSYBOX_MIXED_BULK_RUNTIME=DISCOVERY fixtures=11 matches=11 differences=0' "$work/probe.out" ||
+  { echo "FOUR_BACKEND_BUSYBOX_ALL_ACCEPT=FAIL target=$target stage=MiniC_GNU_QEMU_differential" >&2; exit 1; }
+receipt=$(grep '^BUSYBOX_MIXED_BULK=PASS MiniC_owners=' "$work/probe.out" || true)
+owner_receipt=$(grep '^BUSYBOX_MIXED_BULK_REAL_OWNERS=PASS total=' "$work/probe.out" || true)
+coverage=$(grep '^BUSYBOX_MIXED_BULK_CROSS_COHORT=DISCOVERY original_Kbuild_owners=581 ' "$work/probe.out" || true)
+mini=$(printf '%s\n' "$receipt" | sed -n 's/.*MiniC_owners=\([0-9][0-9]*\) GCC_fallback=.*/\1/p')
+gnu=$(printf '%s\n' "$receipt" | sed -n 's/.* GCC_fallback=\([0-9][0-9]*\) original_full_Kbuild=.*/\1/p')
+case "$receipt" in
+  *" original_full_Kbuild=1 eleven_fixture_byte_exact=1 MiniC_and_GNU_binary_differ=1 full_all_MiniC=NO") ;;
+  *) echo "FOUR_BACKEND_BUSYBOX_ALL_ACCEPT=FAIL target=$target stage=missing_real_mixed_receipt" >&2; exit 1 ;;
+esac
+if [ -z "$mini" ] || [ -z "$gnu" ] || [ "$mini" -lt "$floor" ] ||
+   [ "$((mini + gnu))" -ne 581 ] ||
+   ! printf '%s\n' "$owner_receipt" |
+       grep -qx "BUSYBOX_MIXED_BULK_REAL_OWNERS=PASS total=$mini SHA256_verified=$mini original_Kbuild=1" ||
+   [ -z "$coverage" ]; then
+  echo "FOUR_BACKEND_BUSYBOX_ALL_ACCEPT=FAIL target=$target stage=coverage_or_SHA" >&2
+  exit 1
+fi
+echo "FOUR_BACKEND_BUSYBOX_ALL_ACCEPT=PASS target=$target original_Kbuild_owners=581 MiniC_owners=$mini GNU_fallbacks=$gnu SHA256_verified=$mini GNU_QEMU_fixtures=11 strict=1 full_all_MiniC=NO"
+echo "FOUR_BACKEND_BUSYBOX_ALL_KBUILD_END target=$target authenticated_mixed_build=1 full_MiniC=NO"
