@@ -91,6 +91,22 @@ def main():
         mini = result.parent / "mini.o"
         if all(row.get(k) == 0 for k in ("gcc", "cpp", "minic", "assembler")) \
                 and obj.is_file() and mini.is_file() and obj != mini.resolve():
+            # A successful assembler is not sufficient evidence of a
+            # linkable MiniC object. BusyBox df.c exposed unresolved private
+            # inline-specialization symbols. Keep the real GNU owner for
+            # these only, after auditing the actual target ELF with nm.
+            if os.environ.get("BUSYBOX_ALLYES_MINIC_TARGET", "x86_64-linux") != "x86_64-linux":
+                prefix = os.environ.get("BUSYBOX_ALLYES_CROSS_PREFIX", "")
+                nm = subprocess.run([prefix + "nm", "-u", str(mini)],
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                    check=False)
+                if nm.returncode != 0:
+                    log("BUSYBOX_MIXED_BULK=BLOCKED stage=target-nm object=%s" % obj_name)
+                    return 1
+                if b"__minic_inline_spec_" in nm.stdout:
+                    skipped.append((obj_name, "unresolved-inline", row.get("cpp")))
+                    log("BUSYBOX_MIXED_BULK_INLINE_FALLBACK object=%s" % obj_name)
+                    continue
             if str(obj) in manifest:
                 log("BUSYBOX_MIXED_BULK=FAIL stage=duplicate-Kbuild-owner object=%s" % obj)
                 return 1
@@ -105,7 +121,25 @@ def main():
             (name, minic, cpp))
     mini_names = [Path(name).relative_to(root).as_posix() for name in manifest]
     fallback_names = [name for name, _minic, _cpp in skipped]
-    if not certified_owner_coverage(mini_names, fallback_names):
+    cross_target = os.environ.get("BUSYBOX_ALLYES_MINIC_TARGET",
+                                  "x86_64-linux") != "x86_64-linux"
+    if cross_target:
+        # First cross-ISA *experimental* all-owner real-Kbuild candidate.
+        # Do not use x86's immutable 593/581 certification to invent a
+        # cross count. Require broad genuine coverage and unique paths;
+        # after GNU/QEMU success the exact cohort can be promoted.
+        owner_count = len(mini_names) + len(fallback_names)
+        accepted = (owner_count >= 500 and len(mini_names) >= 500
+                    and len(set(mini_names + fallback_names)) == owner_count)
+        if not accepted:
+            log("BUSYBOX_MIXED_BULK=BLOCKED stage=cross-owner-inventory "
+                "original_Kbuild_owners=%d MiniC=%d GNU_fallbacks=%d" %
+                (owner_count, len(mini_names), len(fallback_names)))
+            return 1
+        log("BUSYBOX_MIXED_BULK_CROSS_COHORT=DISCOVERY original_Kbuild_owners=%d"
+            " MiniC_qualified=%d GNU_fallbacks=%d full_MiniC=NO" %
+            (owner_count, len(mini_names), len(fallback_names)))
+    elif not certified_owner_coverage(mini_names, fallback_names):
         log("BUSYBOX_MIXED_BULK=BLOCKED stage=certified-owner-coverage "
             "mini=%d gcc=%d expected_persistent=%d approved_fallbacks=%d" %
             (len(mini_names), len(fallback_names), CERTIFIED_KBUILD_OWNERS,

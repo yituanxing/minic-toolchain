@@ -55,7 +55,10 @@ def run_cases(executable, report):
     results = {}
     for name, argv, input_bytes in fixtures(report):
         try:
-            proc = subprocess.run([str(executable), *argv], input=input_bytes,
+            qemu = os.environ.get("BUSYBOX_ALLYES_QEMU")
+            sysroot = os.environ.get("BUSYBOX_ALLYES_SYSROOT", "")
+            launch = [qemu, "-L", sysroot] if qemu else []
+            proc = subprocess.run([*launch, str(executable), *argv], input=input_bytes,
                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                   cwd=report, env=env, timeout=25, check=False)
             results[name] = (proc.returncode, proc.stdout, proc.stderr)

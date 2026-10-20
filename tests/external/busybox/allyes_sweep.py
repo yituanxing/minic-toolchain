@@ -226,7 +226,7 @@ def controller(args):
     # valid target build when applets/applets.c cannot even preprocess.
     if link_compatible and os.environ.get("BUSYBOX_ALLYES_MINIC_TARGET",
                                             "x86_64-linux") != "x86_64-linux":
-        disabled_host_options += ("SELINUX",)
+        disabled_host_options += ("SELINUX", "PAM")
     changed = []
     for symbol in disabled_host_options:
         old_value = "CONFIG_" + symbol + "=y"
@@ -273,6 +273,22 @@ def controller(args):
         lines = (out / "build.err").read_text(errors="replace").splitlines()
         print("BUSYBOX_ALLYES_GCC_BUILD_DIAGNOSTIC=" +
               " | ".join(x.strip() for x in lines[-25:])[:1600])
+        # A -k full Kbuild logs harmless warnings *after* the actual
+        # compiler/link failure. Report the first concrete errors, not just
+        # the noisy trailing warnings (essential for cross sysroot triage).
+        actual_errors = [line.strip() for line in lines
+                         if re.search(r"(?:fatal )?error:|undefined reference|cannot find|No such file or directory",
+                                      line)]
+        linker_log = root / "busybox_unstripped.out"
+        if linker_log.exists():
+            actual_errors += [
+                line.strip() for line in
+                linker_log.read_text(errors="replace").splitlines()
+                if re.search(r"undefined reference|error:|cannot find", line)
+            ]
+        if actual_errors:
+            print("BUSYBOX_ALLYES_GCC_FIRST_ERRORS=" +
+                  " | ".join(actual_errors[:14])[:1900], flush=True)
     if link_compatible:
         busybox = root / "busybox"
         if rc == 0 and busybox.is_file():

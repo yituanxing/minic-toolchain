@@ -25,6 +25,8 @@ echo "FOUR_BACKEND_BUSYBOX_ALL_KBUILD_START target=$target original_commit=1a64f
 if timeout 900s env CROSS_COMPILE="$prefix" \
     PKG_CONFIG=pkg-config \
     BUSYBOX_ALLYES_LINK_COMPATIBLE=1 \
+    BUSYBOX_ALLYES_MIXED_BULK=1 \
+    BUSYBOX_ALLYES_CROSS_PREFIX="$prefix" \
     BUSYBOX_ALLYES_MINIC_TARGET="$target-linux" \
     BUSYBOX_ALLYES_QEMU="$qemu" \
     BUSYBOX_ALLYES_SYSROOT="$sysroot" \
@@ -36,7 +38,7 @@ if timeout 900s env CROSS_COMPILE="$prefix" \
 else
     scan_rc=$?
 fi
-grep -E '^BUSYBOX_ALLYES_(CONFIG=|HOST_EXCLUSIONS=|GCC_KBUILD=|GCC_BUILD_DIAGNOSTIC=|FRONTIER=|SCAN=|GCC_RUNTIME_ORACLE=)' \
+grep -E '^(BUSYBOX_ALLYES_(CONFIG=|HOST_EXCLUSIONS=|GCC_KBUILD=|GCC_BUILD_DIAGNOSTIC=|GCC_FIRST_ERRORS=|FRONTIER=|SCAN=|GCC_RUNTIME_ORACLE=)|BUSYBOX_MIXED_BULK(_CROSS_COHORT=|_SOURCE=|_REAL_OWNERS=|_RUNTIME=|_RUNTIME_DIFF|=)))' \
   "$work/probe.out" || true
 grep -E '^BUSYBOX_ALLYES_BLOCKER ' "$work/probe.out" | head -n 30 || true
 if [ -f "$report/summary.json" ]; then
