@@ -263,6 +263,37 @@ static bool emit_symbol_visibility(FILE *out, MinicSymbolVisibility visibility,
            (directive != NULL && fprintf(out, "%s %s\n", directive, name) >= 0);
 }
 
+/* External default-visibility ELF symbols may be interposed by glibc.
+ * AArch64 ADR_PREL_PG_HI21 cannot address optind@@GLIBC from a PIE. Use
+ * GOT for external data/code references. Keep only proven TU-local static
+ * definitions on the already-tested direct ADRP path (AES RoundKey). */
+static bool aarch64_static_object(const MinicC0Program *program,
+                                  const char *symbol) {
+    size_t i;
+    if (program == NULL || symbol == NULL) return false;
+    for (i = 0U; i < program->global_object_count; ++i) {
+        const MinicGlobalObject *obj = &program->global_objects[i];
+        if (obj->name != NULL && strcmp(obj->name, symbol) == 0 &&
+            obj->is_internal && !obj->is_extern &&
+            !obj->is_block_scope_extern_only) return true;
+    }
+    return false;
+}
+
+static bool aarch64_static_function(const MinicC0Program *program,
+                                    const char *symbol) {
+    size_t i;
+    if (program == NULL || symbol == NULL) return false;
+    for (i = 0U; i < program->function_count; ++i) {
+        const MinicFunction *fn = &program->functions[i];
+        const char *name = fn->assembler_name != NULL
+            ? fn->assembler_name : fn->name;
+        if (name != NULL && strcmp(name, symbol) == 0 &&
+            fn->is_defined && fn->is_internal) return true;
+    }
+    return false;
+}
+
 static bool emit_simple_global(FILE *out, const MinicC0Program *program,
                                const MinicTargetInfo *target,
                                const MinicGlobalObject *obj) {
@@ -1438,22 +1469,38 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
             (void)sign;
             break;
         }
-        case MINIC_CORE_INSTRUCTION_GLOBAL_ADDRESS:
+        case MINIC_CORE_INSTRUCTION_GLOBAL_ADDRESS: {
+            const char *symbol;
             if (ins->value.global_id >= fn->global_count ||
-                fn->globals[ins->value.global_id].name == NULL ||
-                /* Static ELF GNU AS/LD backend: use the symbol's direct
-                 * PC-relative page+low12 address, not a GOT-indirected
-                 * local-object reference.  Preserve the full 64-bit
-                 * pointer; the original AES vector_key must not resolve
-                 * as the neighboring S-box object. */
-                fprintf(out, "  adrp x9, %s\n"
-                             "  add x9, x9, :lo12:%s\n"
-                             "  str x9, [sp, #%zu]\n",
-                        fn->globals[ins->value.global_id].name,
-                        fn->globals[ins->value.global_id].name, offset) < 0)
+                fn->globals[ins->value.global_id].name == NULL)
                 return machine_emit_reject(fn, "aarch64", name, reject_stage,
-                                    reject_block, reject_ins, __LINE__);
+                                           reject_block, reject_ins, __LINE__);
+            symbol = fn->globals[ins->value.global_id].name;
+            if (aarch64_static_object(program, symbol)) {
+                /* RoundKey and other proven static-TU objects: preserve
+                 * direct static-PC-relative addresses. */
+                if (fprintf(out, "  adrp x9, %s\n"
+                                 "  add x9, x9, :lo12:%s\n",
+                            symbol, symbol) < 0)
+                    return machine_emit_reject(fn, "aarch64", name,
+                                               reject_stage, reject_block,
+                                               reject_ins, __LINE__);
+            } else {
+                /* External libc optind and default-visible globals require
+                 * GOT relocation in PIE. This also links in static ELF. */
+                if (fprintf(out, "  adrp x9, :got:%s\n"
+                                 "  ldr x9, [x9, :got_lo12:%s]\n",
+                            symbol, symbol) < 0)
+                    return machine_emit_reject(fn, "aarch64", name,
+                                               reject_stage, reject_block,
+                                               reject_ins, __LINE__);
+            }
+            if (fprintf(out, "  str x9, [sp, #%zu]\n", offset) < 0)
+                return machine_emit_reject(fn, "aarch64", name,
+                                           reject_stage, reject_block,
+                                           reject_ins, __LINE__);
             continue;
+        }
         case MINIC_CORE_INSTRUCTION_FUNCTION_ADDRESS: {
             const MinicCoreFunctionSymbolId symbol_id =
                 ins->value.function_symbol_id;
@@ -1462,12 +1509,26 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                 !minic_type_is_pointer(ins->type)) return machine_emit_reject(fn, "aarch64", name, reject_stage,
                                     reject_block, reject_ins, __LINE__);
             symbol = fn->function_symbols[symbol_id].name;
-            if (symbol == NULL || symbol[0] == '\0' ||
-                fprintf(out, "  adrp x9, %s\n"
-                             "  add x9, x9, :lo12:%s\n"
-                             "  str x9, [sp, #%zu]\n",
-                        symbol, symbol, offset) < 0) return machine_emit_reject(fn, "aarch64", name, reject_stage,
-                                    reject_block, reject_ins, __LINE__);
+            if (symbol == NULL || symbol[0] == '\0')
+                return machine_emit_reject(fn, "aarch64", name, reject_stage,
+                                           reject_block, reject_ins, __LINE__);
+            if (aarch64_static_function(program, symbol)) {
+                if (fprintf(out, "  adrp x9, %s\n"
+                                 "  add x9, x9, :lo12:%s\n",
+                            symbol, symbol) < 0)
+                    return machine_emit_reject(fn, "aarch64", name,
+                                               reject_stage, reject_block,
+                                               reject_ins, __LINE__);
+            } else if (fprintf(out, "  adrp x9, :got:%s\n"
+                                    "  ldr x9, [x9, :got_lo12:%s]\n",
+                               symbol, symbol) < 0)
+                return machine_emit_reject(fn, "aarch64", name,
+                                           reject_stage, reject_block,
+                                           reject_ins, __LINE__);
+            if (fprintf(out, "  str x9, [sp, #%zu]\n", offset) < 0)
+                return machine_emit_reject(fn, "aarch64", name,
+                                           reject_stage, reject_block,
+                                           reject_ins, __LINE__);
             continue;
         }
         case MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS: {
