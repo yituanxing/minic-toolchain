@@ -51,6 +51,28 @@ int main(void) {
     return 0;
 }
 SRC
+# LoongArch LP64D: even unsigned 32-bit stack arguments occupy a full
+# 8-byte slot and must be sign-extended according to the ABI. The GNU
+# assembly reader deliberately loads all 64 bits, so a 4-byte store with
+# accidentally-correct low bits cannot pass this test.
+cat >"$tmp/u32-stack.i" <<'SRC'
+extern long gnu_u32_stack_raw(long,long,long,long,long,long,long,long,unsigned int);
+long mini_outgoing_u32_stack(void) {
+    return gnu_u32_stack_raw(1,2,3,4,5,6,7,8,0xffffffffU);
+}
+SRC
+cat >"$tmp/u32-stack-driver.c" <<'SRC'
+extern long mini_outgoing_u32_stack(void);
+__asm__(".text\n"
+        ".globl gnu_u32_stack_raw\n"
+        ".type gnu_u32_stack_raw,@function\n"
+        "gnu_u32_stack_raw:\n"
+        "  ld.d $a0, $sp, 0\n"
+        "  ret\n");
+int main(void) {
+    return mini_outgoing_u32_stack() == -1L ? 0 : 1;
+}
+SRC
 for target in aarch64 loongarch64; do
     case "$target" in
         aarch64) gcc=aarch64-linux-gnu-gcc; qemu=qemu-aarch64 ;;
@@ -66,6 +88,17 @@ for target in aarch64 loongarch64; do
     timeout 45s "$qemu" "$tmp/$target.mini" >"$tmp/$target.mini.out" 2>"$tmp/$target.mini.err"
     cmp "$tmp/$target.gnu.out" "$tmp/$target.mini.out"
     cmp "$tmp/$target.gnu.err" "$tmp/$target.mini.err"
+    if [ "$target" = loongarch64 ]; then
+        "$gcc" -O0 -static -x c "$tmp/u32-stack.i" \
+            "$tmp/u32-stack-driver.c" -o "$tmp/u32-stack.gnu"
+        timeout 45s "$qemu" "$tmp/u32-stack.gnu"
+        "$MINIC_CC" --target="$target-linux" -S "$tmp/u32-stack.i" \
+            -o "$tmp/u32-stack.s"
+        "$gcc" -static -x assembler "$tmp/u32-stack.s" \
+            -x c "$tmp/u32-stack-driver.c" -o "$tmp/u32-stack.mini"
+        timeout 45s "$qemu" "$tmp/u32-stack.mini"
+        echo "FOUR_BACKEND_OUTGOING_U32_STACK=PASS target=loongarch64 full_8byte_slot=1 unsigned32_sign_extended=1 GNU_QEMU_ABI=1"
+    fi
     echo "FOUR_BACKEND_OUTGOING_ABI=PASS target=$target fixed_gp10=1 fixed_fp9=1 incoming_fp9=1 mixed_gp_fp11=1 GNU_QEMU_differential=1"
 done
 echo "FOUR_BACKEND_OUTGOING_ABI_ACCEPT=PASS targets=2 independent_GNU_runtime=1"
