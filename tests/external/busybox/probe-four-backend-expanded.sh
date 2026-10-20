@@ -210,7 +210,7 @@ for file in $sources; do
     # diagnostic only; it cannot promote an unsupported object to PASS.
     if [ "$cohort" = wide ]; then
       case "$file" in
-        coreutils/test.c|archival/gzip.c|init/init.c|miscutils/crond.c|networking/netstat.c|procps/top.c|procps/ps.c|shell/ash.c)
+        coreutils/test.c|archival/gzip.c|init/init.c|loginutils/getty.c|miscutils/ascii.c|miscutils/crond.c|miscutils/devmem.c|miscutils/less.c|networking/netstat.c|networking/ntpd.c|procps/mpstat.c|procps/top.c|procps/ps.c|util-linux/ipcrm.c|util-linux/ipcs.c|shell/ash.c)
           timeout 90s env MINIC_M1_TRACE=1 MINIC_BACKEND_CENSUS=1 \
             "$MINIC_CC" --target="$target-linux" -S "$input" \
             -o "$work/obj/$stem.trace.s" \
