@@ -116,7 +116,7 @@ def main():
         return 1
     shutil.copy2(executable, original)
     oracle = run_cases(original, report)
-    expected_cases = 36 if os.environ.get("BUSYBOX_ALLYES_QEMU") else 11
+    expected_cases = 37 if os.environ.get("BUSYBOX_ALLYES_QEMU") else 11
     if len(oracle) != expected_cases or any(item[0] for item in oracle.values()):
         log("BUSYBOX_MIXED_BULK=BLOCKED stage=original-GNU-runtime-oracle")
         return 1
@@ -171,7 +171,7 @@ def main():
         owner_count = len(mini_names) + len(fallback_names)
         target_name = os.environ["BUSYBOX_ALLYES_MINIC_TARGET"].split("-")[0]
         approved = CROSS_APPROVED_GCC_FALLBACKS.get(target_name)
-        target_floor = {"aarch64": 568, "loongarch64": 566}.get(target_name)
+        target_floor = {"aarch64": 571, "loongarch64": 569}.get(target_name)
         accepted = (owner_count == 581 and target_floor is not None
                     and len(mini_names) >= target_floor
                     and len(set(mini_names + fallback_names)) == owner_count
@@ -262,7 +262,7 @@ def main():
         log("BUSYBOX_MIXED_BULK=BLOCKED stage=runtime-differential")
         return 1
     if cross_target:
-        log("BUSYBOX_MIXED_BULK_CROSS_RUNTIME=PASS cases=36 GNU_QEMU_byte_exact=1")
+        log("BUSYBOX_MIXED_BULK_CROSS_RUNTIME=PASS cases=37 GNU_QEMU_byte_exact=1")
     log("BUSYBOX_MIXED_BULK=PASS MiniC_owners=%d GCC_fallback=%d "
         "original_full_Kbuild=1 eleven_fixture_byte_exact=1 "
         "MiniC_and_GNU_binary_differ=1 full_all_MiniC=NO" %

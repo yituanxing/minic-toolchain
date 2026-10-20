@@ -72,17 +72,17 @@ if [ "$scan_rc" -ne 0 ]; then
   exit 1
 fi
 case "$target" in
-  aarch64) floor=568 ;;
-  loongarch64) floor=566 ;;
+  aarch64) floor=571 ;;
+  loongarch64) floor=569 ;;
   *) exit 1 ;;
 esac
 grep -qx 'BUSYBOX_ALLYES_GCC_KBUILD=PASS original_Kconfig=1 original_sources=1' "$work/probe.out" ||
   { echo "FOUR_BACKEND_BUSYBOX_ALL_ACCEPT=FAIL target=$target stage=GNU_Kbuild" >&2; exit 1; }
 grep -qx 'BUSYBOX_ALLYES_GCC_RUNTIME_ORACLE=PASS applets=6 original_full_Kbuild=1' "$work/probe.out" ||
   { echo "FOUR_BACKEND_BUSYBOX_ALL_ACCEPT=FAIL target=$target stage=GNU_QEMU_oracle" >&2; exit 1; }
-grep -qx 'BUSYBOX_MIXED_BULK_RUNTIME=DISCOVERY fixtures=36 matches=36 differences=0' "$work/probe.out" ||
+grep -qx 'BUSYBOX_MIXED_BULK_RUNTIME=DISCOVERY fixtures=37 matches=37 differences=0' "$work/probe.out" ||
   { echo "FOUR_BACKEND_BUSYBOX_ALL_ACCEPT=FAIL target=$target stage=MiniC_GNU_QEMU_differential" >&2; exit 1; }
-grep -qx 'BUSYBOX_MIXED_BULK_CROSS_RUNTIME=PASS cases=36 GNU_QEMU_byte_exact=1' "$work/probe.out" ||
+grep -qx 'BUSYBOX_MIXED_BULK_CROSS_RUNTIME=PASS cases=37 GNU_QEMU_byte_exact=1' "$work/probe.out" ||
   { echo "FOUR_BACKEND_BUSYBOX_ALL_ACCEPT=FAIL target=$target stage=cross_applet_coverage" >&2; exit 1; }
 receipt=$(grep '^BUSYBOX_MIXED_BULK=PASS MiniC_owners=' "$work/probe.out" || true)
 owner_receipt=$(grep '^BUSYBOX_MIXED_BULK_REAL_OWNERS=PASS total=' "$work/probe.out" || true)
@@ -101,5 +101,5 @@ if [ -z "$mini" ] || [ -z "$gnu" ] || [ "$mini" -lt "$floor" ] ||
   echo "FOUR_BACKEND_BUSYBOX_ALL_ACCEPT=FAIL target=$target stage=coverage_or_SHA" >&2
   exit 1
 fi
-echo "FOUR_BACKEND_BUSYBOX_ALL_ACCEPT=PASS target=$target original_Kbuild_owners=581 MiniC_owners=$mini GNU_fallbacks=$gnu SHA256_verified=$mini GNU_QEMU_fixtures=36 strict=1 full_all_MiniC=NO"
+echo "FOUR_BACKEND_BUSYBOX_ALL_ACCEPT=PASS target=$target original_Kbuild_owners=581 MiniC_owners=$mini GNU_fallbacks=$gnu SHA256_verified=$mini GNU_QEMU_fixtures=37 strict=1 full_all_MiniC=NO"
 echo "FOUR_BACKEND_BUSYBOX_ALL_KBUILD_END target=$target authenticated_mixed_build=1 full_MiniC=NO"

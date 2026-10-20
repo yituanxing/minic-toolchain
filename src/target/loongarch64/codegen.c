@@ -1489,7 +1489,8 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                 !minic_type_is_pointer(fn->values[base].type) ||
                 !scalar_integer_width(program, target, fn->values[index].type,
                                      &iw, &signed_index) ||
-                stride > 2047U ||
+                /* Use a full-size stride literal: addi.d signed imm12
+                 * cannot encode large record/array elements. */
                 !emit_sp_mem(out, "ld.d", "$t0", (size_t)base * 8U) ||
                 !emit_sp_mem(out, iw == 1U
                                   ? (signed_index ? "ld.b" : "ld.bu")
@@ -1501,7 +1502,7 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                 return machine_emit_reject(fn, "loongarch64", name, reject_stage,
                                     reject_block, reject_ins, __LINE__);
             if (stride != 0U) {
-                if (fprintf(out, "  addi.d $t2, $zero, %zu\n"
+                if (fprintf(out, "  li.d $t2, %zu\n"
                                  "  mul.d $t1, $t1, $t2\n"
                                  "  %s $t0, $t0, $t1\n", stride,
                             ins->value.pointer_offset.subtract ? "sub.d" : "add.d") < 0)

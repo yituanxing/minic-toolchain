@@ -8,6 +8,7 @@ BusyBox binary, not just against an expected textual result. This tool is
 opt-in; it never claims all BusyBox objects have been replaced.
 """
 import argparse
+import bz2
 import hashlib
 import json
 import os
@@ -78,6 +79,8 @@ def fixtures(report):
         ("dirname-path", ("dirname", "/tmp/project/file.txt"), b""),
         ("gzip-compress", ("gzip", "-c"), sample),
         ("bzip2-compress", ("bzip2", "-c"), sample),
+        # Actually executes upstream decompress_bunzip2.c in mixed BusyBox.
+        ("bunzip2-decompress", ("bunzip2", "-c"), bz2.compress(sample)),
     )
 
 
