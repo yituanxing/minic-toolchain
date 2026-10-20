@@ -213,6 +213,9 @@ jobs:
           sh -n tests/compiler/c0/probe-four-backend-outgoing-abi.sh
           MINIC_CC="$GITHUB_WORKSPACE/build/toolchain-focused-t1-v2/bin/minic-cc" \
             sh tests/compiler/c0/probe-four-backend-outgoing-abi.sh
+          sh -n tests/compiler/c0/probe-four-backend-global-layout.sh
+          MINIC_CC="$GITHUB_WORKSPACE/build/toolchain-focused-t1-v2/bin/minic-cc" \
+            sh tests/compiler/c0/probe-four-backend-global-layout.sh
           # cJSON is now an accepted project: no permissive regression frontier.
           make MODE=release CFLAGS=-Werror BUILD_DIR=build/toolchain-focused-t1-v2 check-four-backend-cjson-accept
           # Strict real zlib acceptance: all 15 MiniC-owned TUs, original

@@ -289,6 +289,32 @@ static bool emit_simple_global(FILE *out, const MinicC0Program *program,
             return false;
         return true;
     }
+    /* Entirely zero-initialized records and unions have zero target ELF
+     * bytes, regardless of nested member offsets. This is the established
+     * x86 fast path; reject nonzero or relocatable aggregates here. */
+    if (minic_type_is_record(obj->type) && obj->relocation_count == 0U &&
+        (obj->initializer_count != 0U || obj->is_zero_initialized)) {
+        bool all_zero = obj->initializer_count == 0U;
+        if (obj->initializer_count != 0U && obj->initializer_values != NULL) {
+            all_zero = true;
+            for (i = 0U; i < obj->initializer_count; ++i)
+                if (obj->initializer_values[i] != 0U) {
+                    all_zero = false;
+                    break;
+                }
+        }
+        if (all_zero) {
+            const char *const section = obj->is_read_only
+                ? ".section .rodata" : ".bss";
+            return fprintf(out, "%s\n", section) >= 0 &&
+                (obj->is_internal ||
+                 fprintf(out, ".globl %s\n", obj->name) >= 0) &&
+                fprintf(out, "  .balign %zu\n.type %s,@object\n%s:\n"
+                             "  .zero %zu\n.size %s,%zu\n",
+                        align, obj->name, obj->name,
+                        storage_size, obj->name, storage_size) >= 0;
+        }
+    }
     if (minic_type_is_record(obj->type)) {
         if (obj->union_selection_count != 0U) return false;
         if (fprintf(out, "%s\n", obj->is_read_only
@@ -348,7 +374,11 @@ static bool emit_simple_global(FILE *out, const MinicC0Program *program,
         if (array == NULL || array->element_count == 0U) return false;
         scalar = array->element_type;
     }
-    if (!minic_type_is_integer(scalar) ||
+    /* Ordinary nullable pointer objects and arrays of pointer scalars
+     * have exact pointer-sized zero payloads on these two ELF LP64 targets.
+     * Nonzero numeric pointer initializers remain fail-closed. */
+    if ((!minic_type_is_integer(scalar) &&
+         !minic_type_is_pointer(scalar)) ||
         !minic_data_layout_type(target->data_layout, program, scalar,
                                 &width, &scalar_align) ||
         (width != 1U && width != 2U && width != 4U && width != 8U) ||
@@ -372,6 +402,8 @@ static bool emit_simple_global(FILE *out, const MinicC0Program *program,
     } else {
         for (i = 0U; i < obj->initializer_count; ++i) {
             uint64_t bits = obj->initializer_values[i];
+            if (minic_type_is_pointer(scalar) && bits != 0U)
+                return false;
             if (width < 8U)
                 bits &= (UINT64_C(1) << (8U * width)) - UINT64_C(1);
             if (fprintf(out, "  %s %" PRIu64 "\n", directive, bits) < 0)
