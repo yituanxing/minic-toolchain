@@ -29,6 +29,15 @@ int near_spill(long a, long b, long c, long d, long e,
 int mixed_fp(double d, struct Token tok) {
     return d == 1.25 && tok.ptr[0] == 'q' && tok.count == 19U;
 }
+long many16(long a,long b,long c,long d,long e,long f,long g,long h,
+            long i,long j,long k,long l,long m,long n,long o,long p) {
+    return a+b+c+d+e+f+g+h+i+j+k+l+m+n+o+p;
+}
+int many_record11(long a,long b,long c,long d,long e,long f,long g,
+                  long h,long i,long j,struct Token tok) {
+    return a+b+c+d+e+f+g+h+i+j == 55 &&
+           tok.count == 19U && tok.ptr[0] == 'q';
+}
 SRC
 cat >"$w/driver.i" <<'SRC'
 struct Small { int left; int right; };
@@ -38,6 +47,10 @@ int token_value(const char *, int, struct Token);
 int spill_value(long,long,long,long,long,long,long,long,struct Token);
 int near_spill(long,long,long,long,long,long,long,struct Token);
 int mixed_fp(double,struct Token);
+long many16(long,long,long,long,long,long,long,long,
+            long,long,long,long,long,long,long,long);
+int many_record11(long,long,long,long,long,long,long,long,long,long,
+                  struct Token);
 extern int puts(const char *);
 int main(void) {
     struct Small s = {4, 2};
@@ -57,6 +70,11 @@ int main(void) {
     if (!near_spill(1,2,3,4,5,6,7,t)) return 15;
     puts("test-mixed-fp");
     if (!mixed_fp(1.25,t)) return 16;
+    puts("test-16-parameters");
+    if (many16(1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16) != 136)
+        return 19;
+    puts("test-11-parameter-record");
+    if (!many_record11(1,2,3,4,5,6,7,8,9,10,t)) return 20;
     return 42;
 }
 SRC
@@ -101,6 +119,6 @@ for target in aarch64 loongarch64; do
         cmp "$w/$target.gnu.out" "$w/$target.$cc.out"
         cmp "$w/$target.gnu.err" "$w/$target.$cc.err"
     done
-    echo "RECORD_CALL_ABI=PASS target=$target small=1 token16=1 stack=1 partial_gp=1 fp=1 indirect=1 GNU_cross=2"
+    echo "RECORD_CALL_ABI=PASS target=$target small=1 token16=1 stack=1 partial_gp=1 fp=1 indirect=1 sixteen_params=1 record_11th=1 GNU_cross=2"
 done
 echo "RECORD_CALL_ABI_ACCEPT=PASS targets=2"

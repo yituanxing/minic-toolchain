@@ -108,15 +108,15 @@ for target in aarch64 loongarch64; do
             "$work/$target/mini.err" || true
         awk '
             /MINIC_BACKEND_REJECT/ {
-                stage="none"; kind="none"; func="none";
+                stage="none"; opcode="none"; function_name="none";
                 for (i=1;i<=NF;i++) {
                     if ($i ~ /^stage=/) stage=$i;
-                    if ($i ~ /^kind=/) kind=$i;
-                    if ($i ~ /^function=/) func=$i;
+                    if ($i ~ /^kind=/) opcode=$i;
+                    if ($i ~ /^function=/) function_name=$i;
                 }
-                key=stage " " kind
+                key=stage " " opcode
                 count[key]++
-                if (!(key in example)) example[key]=func
+                if (!(key in example)) example[key]=function_name
             }
             END {
                 for (key in count)
