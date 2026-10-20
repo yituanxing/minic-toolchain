@@ -1831,7 +1831,7 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                                       &lw, &ls) ||
                 !scalar_integer_width(program, target, fn->values[rhs].type,
                                       &rw, &rs) ||
-                (lw != 4U && lw != 8U) ||
+                (lw != 1U && lw != 2U && lw != 4U && lw != 8U) ||
                 /* C permits 8/16-bit shift-count values after promotion;
                  * the target consumes their low 32-bit SSA slot. */
                 minic_type_is_bool_integer(ins->type))
@@ -1847,6 +1847,8 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                                   : "  srl.w $t0, $t0, $t1\n"));
             if (!emit_sp_mem(out, wide ? "ld.d" : "ld.w",
                              "$t0", (size_t)lhs * 8U) ||
+                /* Signed narrow shift inputs require extension before sra. */
+                (lw < 4U && !emit_integer_normalize(out, lw, ls)) ||
                 !emit_sp_mem(out, rw == 8U ? "ld.d" : "ld.w",
                              "$t1", (size_t)rhs * 8U) ||
                 fputs(op, out) == EOF ||
@@ -1939,7 +1941,8 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                                       &lw, &ls) ||
                 !scalar_integer_width(program, target, fn->values[rhs].type,
                                       &rw, &rs) ||
-                lw != rw || (lw != 4U && lw != 8U) || ls != rs)
+                lw != rw || (lw != 1U && lw != 2U && lw != 4U && lw != 8U) ||
+                ls != rs || minic_type_is_bool_integer(ins->type))
                 return machine_emit_reject(fn, "loongarch64", name, reject_stage,
                                            reject_block, reject_ins, __LINE__);
             opcode = ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND
@@ -1951,7 +1954,8 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                              "$t0", (size_t)lhs * 8U) ||
                 !emit_sp_mem(out, rw == 8U ? "ld.d" : "ld.w",
                              "$t1", (size_t)rhs * 8U) ||
-                fputs(opcode, out) == EOF)
+                fputs(opcode, out) == EOF ||
+                (lw != 8U && !emit_integer_normalize(out, lw, ls)))
                 return machine_emit_reject(fn, "loongarch64", name, reject_stage,
                                            reject_block, reject_ins, __LINE__);
             break;
