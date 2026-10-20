@@ -742,7 +742,7 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                 (void)fprintf(stderr,
                     "MINIC_CALL_RESULT_REJECT arch=loongarch64 function=%s "
                     "instruction=%zu return_base=%d is_float128=%d "
-                    "return_valid=%d value_match=%d\\n",
+                    "return_valid=%d value_match=%d\n",
                     name, i, (int)ins->type.base_kind,
                     minic_type_is_float128(ins->type) ? 1 : 0,
                     valid_return_type(program, target, ins->type) ? 1 : 0,
