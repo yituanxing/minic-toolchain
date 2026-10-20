@@ -310,16 +310,16 @@ import pathlib, re, sys
 src = pathlib.Path(sys.argv[1]).read_text()
 rx = r'\bn\s*=\s*sqlite3GetToken\s*\(\s*\(u8\s*\*\)\s*zSql\s*,\s*&tokenType\s*\)\s*;'
 matches = list(re.finditer(rx, src))
-if len(matches) != 1:
+if len(matches) == 0:
     print("SQLITE_PARSER_AB_INSTRUMENT=SKIP occurrences=" + str(len(matches)))
     raise SystemExit(1)
 new = (matches[0].group(0) +
        '\nfprintf(stderr,"SQLITE_PARSER_TOKEN n=%lld type=%d b0=%02x b1=%02x\\n",'
        '(long long)n,tokenType,(unsigned char)zSql[0],'
        '(unsigned char)zSql[1]);')
-src = re.sub(rx, lambda _: new, src, count=1)
+src = re.sub(rx, lambda _: new, src)
 pathlib.Path(sys.argv[2]).write_text(src)
-print("SQLITE_PARSER_AB_INSTRUMENT=PASS matched=1")
+print("SQLITE_PARSER_AB_INSTRUMENT=PASS matched=" + str(len(matches)))
 PY
                 then
                     parser_ab_ok=1
