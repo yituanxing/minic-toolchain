@@ -1461,37 +1461,46 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
         }
         case MINIC_CORE_INSTRUCTION_PARAMETER: {
             const size_t ordinal = (size_t)ins->value.parameter_index;
-            size_t gp_index = 0U, fp_index = 0U, k;
-            if (ordinal >= fn->parameter_count) return machine_emit_reject(fn, "aarch64", name, reject_stage,
-                                    reject_block, reject_ins, __LINE__);
-            /* AAPCS64 maintains independent x0-x7 and d0-d7 cursors. */
+            size_t gp_index = 0U, fp_index = 0U, overflow_index = 0U, k;
+            if (ordinal >= fn->parameter_count)
+                return machine_emit_reject(fn, "aarch64", name, reject_stage,
+                                           reject_block, reject_ins, __LINE__);
+            /* AAPCS64: independent x/d argument cursors, with one unified
+             * incoming 8-byte stack-slot sequence for exhausted banks. */
             for (k = 0U; k < ordinal; ++k) {
-                if (minic_type_is_double(fn->parameter_types[k]))
-                    ++fp_index;
-                else
-                    ++gp_index;
+                if (minic_type_is_double(fn->parameter_types[k])) {
+                    if (fp_index++ >= 8U) ++overflow_index;
+                } else if (gp_index++ >= 8U) ++overflow_index;
             }
             if (minic_type_is_double(ins->type)) {
-                if (fp_index >= 8U ||
-                    fprintf(out, "  str d%zu, [sp, #%zu]\n",
-                            fp_index, offset) < 0) return machine_emit_reject(fn, "aarch64", name, reject_stage,
-                                    reject_block, reject_ins, __LINE__);
+                if (fp_index < 8U) {
+                    if (fprintf(out, "  str d%zu, [sp, #%zu]\n",
+                                fp_index, offset) < 0)
+                        return machine_emit_reject(fn, "aarch64", name,
+                                    reject_stage, reject_block, reject_ins, __LINE__);
+                } else if (fprintf(out,
+                                   "  ldr d9, [sp, #%zu]\n"
+                                   "  str d9, [sp, #%zu]\n",
+                                   frame + overflow_index * 8U, offset) < 0)
+                    return machine_emit_reject(fn, "aarch64", name,
+                                    reject_stage, reject_block, reject_ins, __LINE__);
                 continue;
             }
             if (gp_index < 8U) {
                 if (fprintf(out, register64_type(program, target, ins->type)
                                  ? "  str x%zu, [sp, #%zu]\n"
                                  : "  str w%zu, [sp, #%zu]\n",
-                            gp_index, offset) < 0) return machine_emit_reject(fn, "aarch64", name, reject_stage,
-                                    reject_block, reject_ins, __LINE__);
-            } else {
-                const size_t incoming = frame + (gp_index - 8U) * 8U;
-                if (fprintf(out, register64_type(program, target, ins->type)
-                             ? "  ldr x9, [sp, #%zu]\n  str x9, [sp, #%zu]\n"
-                             : "  ldr w9, [sp, #%zu]\n  str w9, [sp, #%zu]\n",
-                             incoming, offset) < 0) return machine_emit_reject(fn, "aarch64", name, reject_stage,
-                                    reject_block, reject_ins, __LINE__);
-            }
+                            gp_index, offset) < 0)
+                    return machine_emit_reject(fn, "aarch64", name,
+                                    reject_stage, reject_block, reject_ins, __LINE__);
+            } else if (fprintf(out, register64_type(program, target, ins->type)
+                               ? "  ldr x9, [sp, #%zu]\n"
+                                 "  str x9, [sp, #%zu]\n"
+                               : "  ldr w9, [sp, #%zu]\n"
+                                 "  str w9, [sp, #%zu]\n",
+                               frame + overflow_index * 8U, offset) < 0)
+                return machine_emit_reject(fn, "aarch64", name,
+                                    reject_stage, reject_block, reject_ins, __LINE__);
             continue;
         }
         case MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_LEFT:
