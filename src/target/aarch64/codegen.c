@@ -1211,7 +1211,8 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                          ins->kind == MINIC_CORE_INSTRUCTION_FLOAT_MULTIPLY ||
                          ins->kind == MINIC_CORE_INSTRUCTION_FLOAT_DIVIDE)) &&
                       !(minic_type_is_long_double(ins->type) &&
-                        (ins->kind == MINIC_CORE_INSTRUCTION_LOAD ||
+                        (ins->kind == MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT ||
+                         ins->kind == MINIC_CORE_INSTRUCTION_LOAD ||
                          ins->kind == MINIC_CORE_INSTRUCTION_PARAMETER ||
                          ins->kind == MINIC_CORE_INSTRUCTION_CALL ||
                          ins->kind == MINIC_CORE_INSTRUCTION_INDIRECT_CALL)) &&
@@ -1325,6 +1326,39 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
             continue;
         }
         case MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT: {
+            if (minic_type_is_long_double(ins->type)) {
+                size_t dst, half;
+                if (!binary128_slot(fn, ld_base, ins->result, &dst))
+                    return machine_emit_reject(fn, "aarch64", name,
+                                               reject_stage, reject_block,
+                                               reject_ins, __LINE__);
+                for (half = 0U; half < 2U; ++half) {
+                    const uint64_t bits = half == 0U
+                        ? ins->value.floating128_bits.low
+                        : ins->value.floating128_bits.high;
+                    unsigned int shift;
+                    if (fprintf(out, "  movz x9, #%" PRIu64 "\n",
+                                bits & UINT64_C(0xffff)) < 0)
+                        return machine_emit_reject(fn, "aarch64", name,
+                                                   reject_stage, reject_block,
+                                                   reject_ins, __LINE__);
+                    for (shift = 16U; shift <= 48U; shift += 16U)
+                        if (((bits >> shift) & UINT64_C(0xffff)) != 0U &&
+                            fprintf(out, "  movk x9, #%" PRIu64
+                                         ", lsl #%u\n",
+                                    (bits >> shift) & UINT64_C(0xffff),
+                                    shift) < 0)
+                            return machine_emit_reject(fn, "aarch64", name,
+                                                       reject_stage, reject_block,
+                                                       reject_ins, __LINE__);
+                    if (fprintf(out, "  str x9, [sp, #%zu]\n",
+                                dst + half * 8U) < 0)
+                        return machine_emit_reject(fn, "aarch64", name,
+                                                   reject_stage, reject_block,
+                                                   reject_ins, __LINE__);
+                }
+                continue;
+            }
             const uint64_t bits = ins->value.floating_bits;
             unsigned int shift;
             if ((!minic_type_is_double(ins->type) &&
