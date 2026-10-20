@@ -171,6 +171,8 @@ int main(void) {
     show("long_positive", sqlite3_mprintf("rowid=#%lld", 1LL));
     show("long_negative", sqlite3_mprintf("rowid=#%lld", -1LL));
     show("mix", sqlite3_mprintf("a=%d b=%d c=%lld d=%s", 1, 2, 3LL, "done"));
+    show("overflow", sqlite3_mprintf("%d,%d,%d,%d,%d,%d,%d,%d,%d,%d",
+         0, 1, 2, 3, 4, 5, 6, 7, 8, 9));
     return 0;
 }
 SRC
