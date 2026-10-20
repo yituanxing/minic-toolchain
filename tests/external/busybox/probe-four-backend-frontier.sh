@@ -282,7 +282,7 @@ editors/cmp.c editors/diff.c networking/ping.c
            [ "$wide_mini" -lt "$wide_min" ] ||
            [ "$wide_mini" -ne "$wide_sha" ] ||
            [ "$((wide_mini + wide_fallback))" -ne 179 ] ||
-           ! grep -qx 'FOUR_BACKEND_BUSYBOX_WIDE_RUNTIME_ACCEPT=PASS fixtures=55' "$wide_receipt"; then
+           ! grep -qx 'FOUR_BACKEND_BUSYBOX_WIDE_RUNTIME_ACCEPT=PASS fixtures=56' "$wide_receipt"; then
           echo "FOUR_BACKEND_BUSYBOX_WIDE_ACCEPT=FAIL target=$target reason=coverage_objects_or_runtime" >&2
           exit 1
         fi

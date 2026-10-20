@@ -873,7 +873,12 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
             /* Fixed binary64 call results are transferred from the target FP
              * ABI result register; aggregate and other types still fail closed. */
             !valid_return_type(program, target, return_type) ||
-            count > 16U || parameter_count > count ||
+            /* Original BusyBox ascii has a 24-argument printf. The existing
+             * AAPCS64/LP64D call emitter already classifies outgoing GP/FP
+             * and spill arguments by cursor, without fixed 16-element
+             * arrays. Admit bounded larger calls, keeping frame/argument
+             * index overflow checks fail-closed. */
+            count > 64U || parameter_count > count ||
             (!is_variadic && parameter_count != count) ||
             begin > fn->call_argument_count ||
             count > fn->call_argument_count - begin ||

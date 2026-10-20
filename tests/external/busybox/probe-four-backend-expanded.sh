@@ -413,6 +413,9 @@ if os.environ.get("FOUR_BACKEND_BUSYBOX_COHORT") == "wide":
       ("cal", ["cal", "1", "2026"], b""),
       ("getopt", ["getopt", "-o", "ab:", "--", "-a", "-b", "42"], b""),
       ("mountpoint", ["mountpoint", "-q", root], b""),
+      # Exercises >16 mixed-register/stack AAPCS64/LP64D varargs directly;
+      # original upstream ascii.c invokes printf with 24 arguments.
+      ("ascii", ["ascii"], b""),
     ])
 for label, argv, input_bytes in cases:
     results = []
