@@ -5264,7 +5264,9 @@ bool minic_parser_add_default_return(MinicParser *parser) {
             return false;
         }
         parser->program->return_expression = statement.expression;
-    } else if (minic_type_is_float(function->return_type)) {
+    } else if (minic_type_is_float(function->return_type) ||
+               minic_type_is_double(function->return_type) ||
+               minic_type_is_long_double(function->return_type)) {
         MinicExpression zero;
         MinicExpression conversion;
         MinicExpressionId zero_id;
