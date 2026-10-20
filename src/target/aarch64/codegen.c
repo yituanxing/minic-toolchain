@@ -1998,7 +1998,7 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                                       &lw, &ls) ||
                 !scalar_integer_width(program, target, fn->values[rhs].type,
                                       &rw, &rs) ||
-                (lw != 4U && lw != 8U) ||
+                (lw != 1U && lw != 2U && lw != 4U && lw != 8U) ||
                 /* C permits 8/16-bit shift-count values after promotion;
                  * the target consumes their low 32-bit SSA slot. */
                 minic_type_is_bool_integer(ins->type))
@@ -2015,6 +2015,9 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
             if (fprintf(out, wide ? "  ldr x9, [sp, #%zu]\n"
                                   : "  ldr w9, [sp, #%zu]\n",
                         (size_t)lhs * 8U) < 0 ||
+                /* Narrow signed shifts need sign-extension BEFORE the
+                 * arithmetic shift; normalizing only the result is late. */
+                (lw < 4U && !emit_integer_normalize(out, lw, ls)) ||
                 fprintf(out, rw == 8U ? "  ldr x10, [sp, #%zu]\n"
                                      : "  ldr w10, [sp, #%zu]\n",
                         (size_t)rhs * 8U) < 0 ||
@@ -2116,7 +2119,8 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                                       &lw, &ls) ||
                 !scalar_integer_width(program, target, fn->values[rhs].type,
                                       &rw, &rs) ||
-                lw != rw || (lw != 4U && lw != 8U) || ls != rs)
+                lw != rw || (lw != 1U && lw != 2U && lw != 4U && lw != 8U) ||
+                ls != rs || minic_type_is_bool_integer(ins->type))
                 return machine_emit_reject(fn, "aarch64", name, reject_stage,
                                            reject_block, reject_ins, __LINE__);
             wide = lw == 8U;
@@ -2131,7 +2135,8 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                 fprintf(out, wide ? "  ldr x10, [sp, #%zu]\n"
                                   : "  ldr w10, [sp, #%zu]\n",
                         (size_t)rhs * 8U) < 0 ||
-                fputs(opcode, out) == EOF)
+                fputs(opcode, out) == EOF ||
+                (lw != 8U && !emit_integer_normalize(out, lw, ls)))
                 return machine_emit_reject(fn, "aarch64", name, reject_stage,
                                            reject_block, reject_ins, __LINE__);
             break;
