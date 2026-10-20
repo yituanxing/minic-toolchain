@@ -89,7 +89,7 @@ jobs:
                   linux_yaml=true
                 fi
                 case "$changed" in
-                  src/target/aarch64/*|src/target/loongarch64/*|tests/compiler/c0/run-four-backend-m1.sh|tests/external/tiny-aes-c/*|tests/external/cjson/*|tests/external/zlib/*|tests/external/lua/*|tests/external/sqlite/*)
+                  src/target/aarch64/*|src/target/loongarch64/*|tests/compiler/c0/run-four-backend-m1.sh|tests/compiler/c0/probe-four-backend-outgoing-abi.sh|tests/external/tiny-aes-c/*|tests/external/cjson/*|tests/external/zlib/*|tests/external/lua/*|tests/external/sqlite/*)
                     ;;
                   *) four_only=false ;;
                 esac
