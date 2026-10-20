@@ -1083,6 +1083,20 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                           (int)ins->kind, (unsigned int)ins->result,
                           minic_type_is_integer(ins->type) ? 1 : 0,
                           minic_type_is_pointer(ins->type) ? 1 : 0);
+        /* A Core compiler barrier is an effect-only ordering constraint
+         * (GNU empty asm with a memory clobber), not a hardware fence and
+         * never an SSA value. Like the existing x86/RV64 backends, preserve
+         * source instruction order and emit no machine instruction. The
+         * previous result-slot gate rejected this valid Core kind in the
+         * original BusyBox test/gzip/netstat/top applets on both ISAs. */
+        if (ins->kind == MINIC_CORE_INSTRUCTION_COMPILER_BARRIER) {
+            if (ins->result != MINIC_CORE_VALUE_INVALID ||
+                !minic_type_is_void(ins->type))
+                return machine_emit_reject(fn, "aarch64", name,
+                                           reject_stage, reject_block,
+                                           reject_ins, __LINE__);
+            continue;
+        }
         /* M23: copy the *exact* target-sized aggregate bytes between Core
          * addresses, preserving padding and nested hooks (no re-layout).
          * An effect-only record copy has no SSA result slot. */
