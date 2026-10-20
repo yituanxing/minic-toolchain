@@ -32,6 +32,7 @@ cat > "$work/workload.c" <<'SRC'
 #include "sqlite3.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #if defined(__loongarch__)
 #include <signal.h>
 #include <ucontext.h>
@@ -75,7 +76,18 @@ static void run(sqlite3 *db, const char *sql) {
     char *error = NULL;
     int rc = sqlite3_exec(db, sql, result, NULL, &error);
     if (rc != SQLITE_OK) {
-        fprintf(stderr, "sqlite failure rc=%d %s\n", rc, error ? error : "");
+        /* GNU-built driver interrogates the REAL MiniC sqlite3.o through
+         * public APIs. Byte offset + SQL bytes distinguish an internal
+         * tokenizer error from a caller/ABI corrupted input pointer. */
+        int offset = sqlite3_error_offset(db);
+        fprintf(stderr, "sqlite failure rc=%d offset=%d sql=%s error=%s\n",
+                rc, offset, sql, error ? error : "");
+        if (offset >= 0 && (unsigned long)offset < strlen(sql))
+            fprintf(stderr,
+                    "SQLITE_RUNTIME_BAD_TOKEN byte=%02x before=%02x after=%02x\n",
+                    (unsigned char)sql[offset],
+                    offset > 0 ? (unsigned char)sql[offset - 1] : 0,
+                    (unsigned char)sql[offset + 1]);
         sqlite3_free(error);
         exit(3);
     }
@@ -86,10 +98,16 @@ int main(void) {
     fprintf(stderr, "SQLITE_RUNTIME_STAGE=open\n");
     if (sqlite3_open(":memory:", &db) != SQLITE_OK) return 1;
     fprintf(stderr, "SQLITE_RUNTIME_STAGE=schema_and_insert\n");
-    run(db, "CREATE TABLE t(id INTEGER PRIMARY KEY, x INT);"
-            "INSERT INTO t VALUES(1,11),(2,13);"
-            "CREATE INDEX t_x ON t(x);"
-            "SELECT SUM(x) AS sum FROM t;");
+    /* Preserve each original statement and its execution order while
+     * reporting the exact failing phase rather than one large sqlite_exec. */
+    fprintf(stderr, "SQLITE_RUNTIME_SUBSTAGE=create_table\n");
+    run(db, "CREATE TABLE t(id INTEGER PRIMARY KEY, x INT);");
+    fprintf(stderr, "SQLITE_RUNTIME_SUBSTAGE=insert\n");
+    run(db, "INSERT INTO t VALUES(1,11),(2,13);");
+    fprintf(stderr, "SQLITE_RUNTIME_SUBSTAGE=create_index\n");
+    run(db, "CREATE INDEX t_x ON t(x);");
+    fprintf(stderr, "SQLITE_RUNTIME_SUBSTAGE=select_sum\n");
+    run(db, "SELECT SUM(x) AS sum FROM t;");
     fprintf(stderr, "SQLITE_RUNTIME_STAGE=transaction\n");
     run(db, "BEGIN; UPDATE t SET x=99 WHERE id=1; ROLLBACK;");
     fprintf(stderr, "SQLITE_RUNTIME_STAGE=select\n");
