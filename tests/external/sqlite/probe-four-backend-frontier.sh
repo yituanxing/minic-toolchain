@@ -247,7 +247,13 @@ for target in aarch64 loongarch64; do
     # character recognition errors from parser-reduction/ABI errors.
     token_build_ok=1
     for cc in gnu mini; do
-        if ! "$gcc" -static "$work/token-ab.c" "$work/$target/$cc.o" \
+        # SQLite declares its internal lexer static. On COPIES of the
+        # original GNU/MiniC objects, expose precisely that one symbol
+        # for an independent harness without editing original sqlite3.c.
+        objcopy_tool=$("$gcc" -print-prog-name=objcopy)
+        if ! "$objcopy_tool" --globalize-symbol=sqlite3GetToken \
+                "$work/$target/$cc.o" "$work/$target/token-$cc.o" ||
+           ! "$gcc" -static "$work/token-ab.c" "$work/$target/token-$cc.o" \
                 -lm -ldl -lpthread -o "$work/$target/token-$cc"; then
             echo "FOUR_BACKEND_SQLITE_LEXER=SKIP target=$target compiler=$cc stage=link"
             token_build_ok=0
