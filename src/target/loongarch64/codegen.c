@@ -103,7 +103,7 @@ static bool valid_parameter_type(const MinicC0Program *program,
     size_t width;
     bool sign;
     return minic_type_is_pointer(type) || minic_type_is_double(type) ||
-           minic_type_is_float(type) ||
+           minic_type_is_float(type) || minic_type_is_long_double(type) ||
            scalar_integer_width(program, target, type, &width, &sign);
 }
 
@@ -113,6 +113,7 @@ static bool valid_parameter_type(const MinicC0Program *program,
 static bool valid_return_type(const MinicC0Program *program,
                               const MinicTargetInfo *target, MinicType type) {
     return minic_type_is_void(type) || minic_type_is_double(type) ||
+           minic_type_is_long_double(type) ||
            valid_parameter_type(program, target, type);
 }
 
@@ -476,6 +477,23 @@ static bool frame_objects(const MinicC0Program *program,
     return true;
 }
 
+/* Preserve binary128 SSA values in distinct sixteen-byte aligned slots,
+ * rather than overwriting adjacent eight-byte scalar values. */
+static bool binary128_slot(const MinicCoreFunction *fn, size_t base,
+                           MinicCoreValueId id, size_t *out) {
+    size_t i, pos = base;
+    if (fn == NULL || out == NULL || id > fn->value_count ||
+        base > MINIC_LARGE_FRAME_MAX) return false;
+    for (i = 0U; i < fn->value_count; ++i) {
+        if (!minic_type_is_long_double(fn->values[i].type)) continue;
+        if (pos > MINIC_LARGE_FRAME_MAX - 16U) return false;
+        if (id == i) { *out = pos; return true; }
+        pos += 16U;
+    }
+    if (id == fn->value_count) { *out = pos; return true; }
+    return false;
+}
+
 /* lp64d load/store immediates are signed 12-bit. Keep the original
  * direct encoding for small frames; for real KeyExpansion-sized frames,
  * materialize the full SP-relative address in reserved $t3.  No other
@@ -569,7 +587,7 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                           bool function_sections) {
     const char *name = minic_c0_function_symbol_name(decl);
     const MinicCoreBlock *block;
-    size_t frame, i, object_end, save_offset;
+    size_t frame, i, object_end, save_offset, ld_base;
     bool has_direct_calls = false;
     bool dynamic_frame = false;
     const char *reject_stage = "function_preflight";
@@ -599,6 +617,11 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                       fn->block_count, fn->parameter_count,
                       valid_return_type(program, target, fn->return_type) ? 1 : 0,
                       fn->inline_asm_count);
+    for (i = 0U; i < fn->parameter_count; ++i)
+        if (minic_type_is_long_double(fn->parameter_types[i]))
+            return machine_emit_reject(fn, "loongarch64", name,
+                                       "binary128_param_pending",
+                                       SIZE_MAX, SIZE_MAX, __LINE__);
     if (name == NULL || name[0] == '\0' ||
         !minic_core_function_verify(fn) ||
         decl->is_constructor || decl->is_weak ||
@@ -746,6 +769,11 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                                     reject_block, reject_ins, __LINE__);
     }
     if (trace_cjson) (void)fprintf(stderr, "MINIC_CJSON_STAGE arch=loongarch64 stage=frame_objects_ok end=%zu\n", object_end);
+    ld_base = (object_end + 15U) & ~(size_t)15U;
+    if (!binary128_slot(fn, ld_base, (MinicCoreValueId)fn->value_count,
+                        &object_end))
+        return machine_emit_reject(fn, "loongarch64", name,
+                                   "binary128_layout", SIZE_MAX, SIZE_MAX, __LINE__);
     /* M24: direct and first-class indirect scalar calls share the same
      * eight integer-register ABI. Aggregate, FP, overflow arguments and
      * unsupported variadic tail types are still rejected before emission. */
@@ -871,6 +899,10 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                                            reject_ins, __LINE__);
             }
             actual = fn->values[arg->value.value_id].type;
+            if (minic_type_is_long_double(actual))
+                return machine_emit_reject(fn, "loongarch64", name,
+                                           "binary128_arg_pending",
+                                           SIZE_MAX, i, __LINE__);
             if (!valid_parameter_type(program, target, actual)) return machine_emit_reject(fn, "loongarch64", name, reject_stage,
                                     reject_block, reject_ins, __LINE__);
             if (j < parameter_count) {
@@ -1076,6 +1108,26 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
             }
             continue;
         }
+        if (ins->kind == MINIC_CORE_INSTRUCTION_STORE &&
+            ins->value.store.stored_value < fn->value_count &&
+            minic_type_is_long_double(
+                fn->values[ins->value.store.stored_value].type)) {
+            const MinicCoreValueId addr = ins->value.store.address;
+            const MinicCoreValueId value = ins->value.store.stored_value;
+            size_t src;
+            if (addr >= fn->value_count ||
+                !minic_type_is_pointer(fn->values[addr].type) ||
+                !binary128_slot(fn, ld_base, value, &src) ||
+                !emit_sp_mem(out, "ld.d", "$t1", (size_t)addr * 8U) ||
+                !emit_sp_mem(out, "ld.d", "$t0", src) ||
+                fputs("  st.d $t0, $t1, 0\n", out) == EOF ||
+                !emit_sp_mem(out, "ld.d", "$t0", src + 8U) ||
+                fputs("  st.d $t0, $t1, 8\n", out) == EOF)
+                return machine_emit_reject(fn, "loongarch64", name,
+                                           reject_stage, reject_block,
+                                           reject_ins, __LINE__);
+            continue;
+        }
         if (ins->kind == MINIC_CORE_INSTRUCTION_STORE ||
             ins->kind == MINIC_CORE_INSTRUCTION_ATOMIC_STORE) {
             const bool atomic = ins->kind == MINIC_CORE_INSTRUCTION_ATOMIC_STORE;
@@ -1154,6 +1206,11 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                          ins->kind == MINIC_CORE_INSTRUCTION_FLOAT_SUBTRACT ||
                          ins->kind == MINIC_CORE_INSTRUCTION_FLOAT_MULTIPLY ||
                          ins->kind == MINIC_CORE_INSTRUCTION_FLOAT_DIVIDE)) &&
+                      !(minic_type_is_long_double(ins->type) &&
+                        (ins->kind == MINIC_CORE_INSTRUCTION_LOAD ||
+                         ins->kind == MINIC_CORE_INSTRUCTION_PARAMETER ||
+                         ins->kind == MINIC_CORE_INSTRUCTION_CALL ||
+                         ins->kind == MINIC_CORE_INSTRUCTION_INDIRECT_CALL)) &&
                       !(minic_type_is_double(ins->type) &&
                         (ins->kind == MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT ||
                          ins->kind == MINIC_CORE_INSTRUCTION_LOAD ||
@@ -1577,6 +1634,23 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
         }
         case MINIC_CORE_INSTRUCTION_LOAD:
         case MINIC_CORE_INSTRUCTION_ATOMIC_LOAD: {
+            if (ins->kind == MINIC_CORE_INSTRUCTION_LOAD &&
+                minic_type_is_long_double(ins->type)) {
+                const MinicCoreValueId addr = ins->value.load.address;
+                size_t dst;
+                if (addr >= fn->value_count ||
+                    !minic_type_is_pointer(fn->values[addr].type) ||
+                    !binary128_slot(fn, ld_base, ins->result, &dst) ||
+                    !emit_sp_mem(out, "ld.d", "$t1", (size_t)addr * 8U) ||
+                    fputs("  ld.d $t0, $t1, 0\n", out) == EOF ||
+                    !emit_sp_mem(out, "st.d", "$t0", dst) ||
+                    fputs("  ld.d $t0, $t1, 8\n", out) == EOF ||
+                    !emit_sp_mem(out, "st.d", "$t0", dst + 8U))
+                    return machine_emit_reject(fn, "loongarch64", name,
+                                               reject_stage, reject_block,
+                                               reject_ins, __LINE__);
+                continue;
+            }
             const bool atomic = ins->kind == MINIC_CORE_INSTRUCTION_ATOMIC_LOAD;
             const MinicCoreValueId addr = atomic ? ins->value.atomic_load.address
                                                   : ins->value.load.address;
@@ -1769,6 +1843,16 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                                            reject_stage, reject_block,
                                            reject_ins, __LINE__);
             if (minic_type_is_void(ins->type)) continue;
+            if (minic_type_is_long_double(ins->type)) {
+                size_t dst;
+                if (!binary128_slot(fn, ld_base, ins->result, &dst) ||
+                    !emit_sp_mem(out, "st.d", "$a0", dst) ||
+                    !emit_sp_mem(out, "st.d", "$a1", dst + 8U))
+                    return machine_emit_reject(fn, "loongarch64", name,
+                                               reject_stage, reject_block,
+                                               reject_ins, __LINE__);
+                continue;
+            }
             if (fputs(minic_type_is_double(ins->type)
                           ? "  movfr2gr.d $t0, $fa0\n"
                           : minic_type_is_float(ins->type)
@@ -2352,7 +2436,18 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
         reject_ins = SIZE_MAX;
         switch (block->terminator.kind) {
         case MINIC_CORE_TERMINATOR_RETURN:
+            if (minic_type_is_long_double(fn->return_type)) {
+                size_t src;
+                if (!binary128_slot(fn, ld_base,
+                                    block->terminator.return_value, &src) ||
+                    !emit_sp_mem(out, "ld.d", "$a0", src) ||
+                    !emit_sp_mem(out, "ld.d", "$a1", src + 8U))
+                    return machine_emit_reject(fn, "loongarch64", name,
+                                               reject_stage, reject_block,
+                                               reject_ins, __LINE__);
+            }
             if ((!minic_type_is_void(fn->return_type) &&
+                 !minic_type_is_long_double(fn->return_type) &&
                  !((minic_type_is_double(fn->return_type) ||
                   minic_type_is_float(fn->return_type))
                        ? emit_sp_mem(out,
