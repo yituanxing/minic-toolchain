@@ -9,6 +9,7 @@ cohort=${FOUR_BACKEND_BUSYBOX_COHORT:-baseline}
 case "$cohort" in
   baseline) tag=FOUR_BACKEND_BUSYBOX_EXPAND ;;
   next) tag=FOUR_BACKEND_BUSYBOX_NEXT ;;
+  wide) tag=FOUR_BACKEND_BUSYBOX_WIDE ;;
   *) echo "BUSYBOX_INVALID_COHORT=$cohort" >&2; exit 1 ;;
 esac
 test "$#" -eq 6
@@ -36,7 +37,7 @@ fi
 extra='BASENAME DIRNAME PRINTF PWD WHOAMI YES UNAME NPROC SLEEP ENV
 PRINTENV MKDIR RMDIR TOUCH TTY HOSTID LOGNAME LINK UNLINK LN MV CP RM
 ID LS TAIL TEE SEQ'
-if [ "$cohort" = next ]; then
+if [ "$cohort" != baseline ]; then
   extra="$extra
 CHGRP CHMOD CHOWN CHROOT CKSUM COMM DATE DD
 DF DOS2UNIX DU EXPR FACTOR FALSE FOLD INSTALL
@@ -44,6 +45,24 @@ MD5SUM MKFIFO MKNOD MKTEMP NICE NL NOHUP OD
 PASTE READLINK REALPATH SHRED SHUF SPLIT STAT SUM
 SYNC TAC TEST TIMEOUT TRUE TRUNCATE TSORT USLEEP
 UUDECODE UUENCODE FIND XARGS SED CMP
+"
+fi
+if [ "$cohort" = wide ]; then
+  extra="$extra
+AR BZIP2 CPIO DPKG_DEB GZIP TAR UNZIP CLEAR
+RESET RESIZE CHVT FGCONSOLE OPENVT INIT HALT ADDUSER
+ADDGROUP DELUSER PASSWD SU GETTY LOGIN SULOGIN CHPASSWD
+ASCII BEEP CROND CRONTAB DEVMEM HEXEDIT INOTIFYD LESS
+MAN MICROCOM MT READAHEAD RFKILL RUNLEVEL STRINGS TIME
+TREE TS TTYSIZE ARP ARPING BRCTL DNSD HOSTNAME
+IFCONFIG IP IPCALC NC NETSTAT NSLOOKUP NTPD PING
+PSCAN ROUTE TELNET TFTP TRACEROUTE WGET WHOIS ZCIP
+FREE FUSER IOSTAT KILL LSOF MPSTAT PGREP PIDOF
+PMAP PS PSTREE PWDX SYSCTL TOP UPTIME WATCH
+BLKID CAL CHRT DMESG EJECT FALLOCATE FLOCK GETOPT
+HEXDUMP HWCLOCK IONICE IPCRM IPCS LAST LOSETUP LSPCI
+LSUSB MESG MOUNT MOUNTPOINT NOLOGIN RENICE REV SETARCH
+SETSID TASKSET UMOUNT WALL ASH
 "
 fi
 python3 - "$src/.config" $extra <<'PY'
@@ -85,7 +104,7 @@ coreutils/unlink.c coreutils/ln.c coreutils/mv.c coreutils/cp.c
 coreutils/rm.c coreutils/id.c coreutils/ls.c coreutils/tail.c
 coreutils/tee.c coreutils/seq.c
 '
-if [ "$cohort" = next ]; then
+if [ "$cohort" != baseline ]; then
   sources="$sources
 coreutils/chgrp.c coreutils/chmod.c coreutils/chown.c coreutils/chroot.c
 coreutils/cksum.c coreutils/comm.c coreutils/date.c coreutils/dd.c
@@ -99,6 +118,38 @@ coreutils/sync.c coreutils/tac.c coreutils/test.c coreutils/timeout.c
 coreutils/true.c coreutils/truncate.c coreutils/tsort.c coreutils/usleep.c
 coreutils/uudecode.c coreutils/uuencode.c findutils/find.c findutils/xargs.c
 editors/sed.c editors/cmp.c
+"
+fi
+if [ "$cohort" = wide ]; then
+  sources="$sources
+archival/ar.c archival/bzip2.c archival/cpio.c archival/dpkg_deb.c
+archival/gzip.c archival/tar.c archival/unzip.c console-tools/clear.c
+console-tools/reset.c console-tools/resize.c console-tools/chvt.c console-tools/fgconsole.c
+console-tools/openvt.c init/init.c init/halt.c loginutils/adduser.c
+loginutils/addgroup.c loginutils/deluser.c loginutils/passwd.c loginutils/su.c
+loginutils/getty.c loginutils/login.c loginutils/sulogin.c loginutils/chpasswd.c
+miscutils/ascii.c miscutils/beep.c miscutils/crond.c miscutils/crontab.c
+miscutils/devmem.c miscutils/hexedit.c miscutils/inotifyd.c miscutils/less.c
+miscutils/man.c miscutils/microcom.c miscutils/mt.c miscutils/readahead.c
+miscutils/rfkill.c miscutils/runlevel.c miscutils/strings.c miscutils/time.c
+miscutils/tree.c miscutils/ts.c miscutils/ttysize.c networking/arp.c
+networking/arping.c networking/brctl.c networking/dnsd.c networking/hostname.c
+networking/ifconfig.c networking/ip.c networking/ipcalc.c networking/nc.c
+networking/netstat.c networking/nslookup.c networking/ntpd.c networking/ping.c
+networking/pscan.c networking/route.c networking/telnet.c networking/tftp.c
+networking/traceroute.c networking/wget.c networking/whois.c networking/zcip.c
+procps/free.c procps/fuser.c procps/iostat.c procps/kill.c
+procps/lsof.c procps/mpstat.c procps/pgrep.c procps/pidof.c
+procps/pmap.c procps/ps.c procps/pstree.c procps/pwdx.c
+procps/sysctl.c procps/top.c procps/uptime.c procps/watch.c
+util-linux/blkid.c util-linux/cal.c util-linux/chrt.c util-linux/dmesg.c
+util-linux/eject.c util-linux/fallocate.c util-linux/flock.c util-linux/getopt.c
+util-linux/hexdump.c util-linux/hwclock.c util-linux/ionice.c util-linux/ipcrm.c
+util-linux/ipcs.c util-linux/last.c util-linux/losetup.c util-linux/lspci.c
+util-linux/lsusb.c util-linux/mesg.c util-linux/mount.c util-linux/mountpoint.c
+util-linux/nologin.c util-linux/renice.c util-linux/rev.c util-linux/setarch.c
+util-linux/setsid.c util-linux/taskset.c util-linux/umount.c util-linux/wall.c
+shell/ash.c
 "
 fi
 total=0
@@ -147,7 +198,7 @@ for file in $sources; do
   # compiler can leave an unresolved internal inline specialization, which
   # GNU ld must *never* be asked to silently resolve. Census all objects
   # before the original Kbuild object swap, using the target's real nm.
-  if [ "$cohort" = next ]; then
+  if [ "$cohort" != baseline ]; then
     if ! "${prefix}nm" -u "$work/obj/$stem.o" > "$work/obj/$stem.undefined"; then
       echo "${tag}=BLOCKED target=$target stage=GNU_NM source=$file"
       exit 0
@@ -166,7 +217,7 @@ for file in $sources; do
 done
 echo "${tag}_FRONTIER target=$target original_Kbuild_owners=$total MiniC_GNU_AS_pass=$passed blocked=$blocked"
 if [ "$blocked" -ne 0 ]; then
-  if [ "$cohort" != next ]; then
+  if [ "$cohort" = baseline ]; then
     echo "${tag}=BLOCKED target=$target stage=selected_real_Kbuild_objects"
     exit 0
   fi
@@ -248,10 +299,12 @@ cases = [
  ("seq", ["seq", "1", "3"], b""),
  ("id", ["id", "-u"], b""),
 ]
-tag = ("FOUR_BACKEND_BUSYBOX_NEXT" if
+tag = ("FOUR_BACKEND_BUSYBOX_WIDE" if
+       os.environ.get("FOUR_BACKEND_BUSYBOX_COHORT") == "wide" else
+       "FOUR_BACKEND_BUSYBOX_NEXT" if
        os.environ.get("FOUR_BACKEND_BUSYBOX_COHORT") == "next"
        else "FOUR_BACKEND_BUSYBOX_EXPAND")
-if os.environ.get("FOUR_BACKEND_BUSYBOX_COHORT") == "next":
+if os.environ.get("FOUR_BACKEND_BUSYBOX_COHORT") in ("next", "wide"):
     cases.extend([
       ("cksum", ["cksum", sample], b""),
       ("comm", ["comm", sample, sample], b""),
@@ -273,6 +326,19 @@ if os.environ.get("FOUR_BACKEND_BUSYBOX_COHORT") == "next":
       ("sed", ["sed", "s/alpha/ALPHA/g", sample], b""),
       ("cmp", ["cmp", sample, sample], b""),
       ("find", ["find", root, "-maxdepth", "0"], b""),
+    ])
+if os.environ.get("FOUR_BACKEND_BUSYBOX_COHORT") == "wide":
+    cases.extend([
+      ("ash", ["ash", "-c", "printf '%s\\n' shell-ok"], b""),
+      ("gzip", ["gzip", "-c", sample], b""),
+      ("hostname", ["hostname"], b""),
+      ("rev", ["rev"], b"abc\ndef\n"),
+      ("hexdump", ["hexdump", "-C", sample], b""),
+      ("strings", ["strings", sample], b""),
+      ("tree", ["tree", "-a", "-i", root], b""),
+      ("cal", ["cal", "1", "2026"], b""),
+      ("getopt", ["getopt", "-o", "ab:", "--", "-a", "-b", "42"], b""),
+      ("mountpoint", ["mountpoint", "-q", root], b""),
     ])
 for label, argv, input_bytes in cases:
     results = []
