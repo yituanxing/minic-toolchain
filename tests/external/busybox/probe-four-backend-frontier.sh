@@ -286,8 +286,13 @@ editors/cmp.c editors/diff.c networking/ping.c
           echo "FOUR_BACKEND_BUSYBOX_WIDE_ACCEPT=FAIL target=$target reason=coverage_objects_or_runtime" >&2
           exit 1
         fi
+        # Real execution of dynamic stack Core lowering: 2 nested alloca
+        # regions with a 10-arg spilled call, plus a runtime-bound VLA.
+        # Fail closed on a crash, ABI mismatch or GNU result difference.
+        sh tests/compiler/c0/probe-four-backend-dynamic-stack.sh \
+          "$target" "$gcc" "$qemu" "$sysroot"
         wide_targets=$((wide_targets+1))
-        echo "FOUR_BACKEND_BUSYBOX_WIDE_ACCEPT=PASS target=$target MiniC_owners=$wide_mini original_Kbuild_owners=179 GNU_fallbacks=$wide_fallback QEMU_cases=58"
+        echo "FOUR_BACKEND_BUSYBOX_WIDE_ACCEPT=PASS target=$target MiniC_owners=$wide_mini original_Kbuild_owners=179 GNU_fallbacks=$wide_fallback QEMU_cases=58 dynamic_stack_runtime=PASS"
       fi
     fi
   fi
