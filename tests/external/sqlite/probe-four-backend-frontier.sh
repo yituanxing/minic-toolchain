@@ -173,15 +173,44 @@ int main(void) {
     show("mix", sqlite3_mprintf("a=%d b=%d c=%lld d=%s", 1, 2, 3LL, "done"));
     show("overflow", sqlite3_mprintf("%d,%d,%d,%d,%d,%d,%d,%d,%d,%d",
          0, 1, 2, 3, 4, 5, 6, 7, 8, 9));
-    /* The original CREATE TABLE path formats two internal #N VM-register
-     * references AFTER mixed pointer/string arguments. The last integer
-     * travels on the caller's stack instead of a GP register. */
+    /* This tests sqlite3_mprintf's own one-fixed-argument ABI.
+     * The two-fixed-argument nested parser needs its own ABI oracle. */
     show("nested_schema", sqlite3_mprintf(
         "UPDATE %Q.%s SET type='%s', name=%Q, tbl_name=%Q,"
         " rootpage=#%d, sql=%Q WHERE rowid=#%d",
         "main", "sqlite_schema", "table", "t", "t", 1,
         "CREATE TABLE t(id INTEGER PRIMARY KEY, x INT)", 2));
     return 0;
+}
+SRC
+# Exact SQLite nested parser call layout: two fixed pointer arguments and
+# seven variadic arguments. The ninth GP argument must arrive via stack.
+cat > "$work/nested-abi.c" <<'SRC'
+#include <stdarg.h>
+#include <stdio.h>
+int nested_abi(char *dst, const char *fmt, ...) {
+    va_list ap;
+    int result;
+    va_start(ap, fmt);
+    result = vsnprintf(dst, 512, fmt, ap);
+    va_end(ap);
+    return result;
+}
+SRC
+cat > "$work/nested-abi-driver.c" <<'SRC'
+#include <stdio.h>
+#include <string.h>
+extern int nested_abi(char *, const char *, ...);
+int main(void) {
+    char s[512] = {0};
+    int n = nested_abi(s,
+        "UPDATE %s.sqlite_schema SET type='%s', name=%s, tbl_name=%s,"
+        " rootpage=#%d, sql=%s WHERE rowid=#%d",
+        "main", "table", "t", "t", 1,
+        "CREATE TABLE t(id INTEGER PRIMARY KEY, x INT)", 2);
+    printf("nested-abi n=%d sql=%s\n", n, s);
+    return n <= 0 || strstr(s, "rootpage=#1") == 0 ||
+           strstr(s, "rowid=#2") == 0 ? 3 : 0;
 }
 SRC
 passed=0
@@ -335,6 +364,53 @@ for target in aarch64 loongarch64; do
             echo "FOUR_BACKEND_SQLITE_LEXER=FAIL target=$target stage=GNU_QEMU_differential"
             diff -u "$work/$target/token-gnu.out" "$work/$target/token-mini.out" |
                 head -n 35 || true
+        fi
+    fi
+    # Exactly the original sqlite3NestedParse register/stack split.
+    # GNU driver calls a separately MiniC-compiled variadic callee.
+    if [ "$target" = loongarch64 ]; then
+        nested_ok=1
+        if ! "$gcc" -E -P -std=gnu11 "$work/nested-abi.c" \
+                -o "$work/$target/nested-abi.i" ||
+           ! timeout 90s "$MINIC_CC" --target="$target-linux" -S \
+                "$work/$target/nested-abi.i" \
+                -o "$work/$target/nested-abi-mini.s" ||
+           ! "$gcc" -c -x assembler "$work/$target/nested-abi-mini.s" \
+                -o "$work/$target/nested-abi-mini.o" ||
+           ! "$gcc" -c -O0 "$work/$target/nested-abi.i" \
+                -o "$work/$target/nested-abi-gnu.o"; then
+            nested_ok=0
+            echo "SQLITE_NESTED_AB=SKIP stage=compile"
+        fi
+        if [ "$nested_ok" -eq 1 ]; then
+            for builder in gnu mini; do
+                if ! "$gcc" -static "$work/nested-abi-driver.c" \
+                        "$work/$target/nested-abi-$builder.o" \
+                        -o "$work/$target/nested-abi-$builder"; then
+                    nested_ok=0
+                    break
+                fi
+                set +e
+                timeout 30s "$qemu" "$work/$target/nested-abi-$builder" \
+                    >"$work/$target/nested-abi-$builder.out" \
+                    2>"$work/$target/nested-abi-$builder.err"
+                status_ab=$?
+                set -e
+                echo "SQLITE_NESTED_AB_RUN compiler=$builder status=$status_ab"
+                if [ "$status_ab" -ne 0 ]; then nested_ok=0; fi
+            done
+            if [ "$nested_ok" -eq 1 ] &&
+               cmp -s "$work/$target/nested-abi-gnu.out" \
+                      "$work/$target/nested-abi-mini.out"; then
+                echo "SQLITE_NESTED_AB=PASS target=$target GNU_QEMU_byte_exact=1"
+            else
+                echo "SQLITE_NESTED_AB=FAIL target=$target stage=two_fixed_seven_variadic"
+                if [ -f "$work/$target/nested-abi-gnu.out" ] &&
+                   [ -f "$work/$target/nested-abi-mini.out" ]; then
+                    diff -u "$work/$target/nested-abi-gnu.out" \
+                            "$work/$target/nested-abi-mini.out" || true
+                fi
+            fi
         fi
     fi
     # Check SQLite's vararg formatter before blaming the lexer/parser.
