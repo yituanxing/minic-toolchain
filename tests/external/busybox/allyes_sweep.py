@@ -27,6 +27,24 @@ def call_proxy(args):
     """Preserve GCC behavior; side-channel diagnostics cannot break GCC."""
     gcc_argv = compiler_argv()
     gcc = subprocess.run(gcc_argv + args, check=False)
+    # BusyBox trylink uses the same CC wrapper for probing and three
+    # distinct link attempts. Record the *actual* reference GCC status and
+    # binary state rather than inferring a linker failure from the last
+    # printed --verbose map. The report is outside the pristine source.
+    if "-o" in args:
+        idx = args.index("-o")
+        if idx + 1 < len(args):
+            output_path = Path(args[idx + 1])
+            if output_path.name == "busybox_unstripped":
+                report = Path(os.environ["BUSYBOX_ALLYES_REPORT_ROOT"])
+                with (report / "gnu-link-attempts.log").open("a", encoding="utf-8") as log:
+                    log.write("rc=%d binary_exists=%d binary_bytes=%d "
+                              "gc_sections=%d verbose=%d argv_count=%d\\n" %
+                              (gcc.returncode, int(output_path.is_file()),
+                               output_path.stat().st_size if output_path.is_file() else 0,
+                               int(any("gc-sections" in arg for arg in args)),
+                               int(any("verbose" in arg for arg in args)),
+                               len(args)))
     # The only supported replacement path is explicit, exact owner routing
     # from an isolated real Kbuild CC invocation. Kbuild may recompile .o on
     # aggregation due to its .cmd metadata, so copying .o *before* make is
@@ -337,6 +355,11 @@ def controller(args):
                                                "CONFIG_PIE=", "CONFIG_EXTRA_LDLIBS=",
                                                "CONFIG_USE_BB_CRYPT="))),
                   flush=True)
+    attempted_link_log = out / "gnu-link-attempts.log"
+    if attempted_link_log.is_file():
+        print("BUSYBOX_ALLYES_GCC_LINK_ATTEMPTS=" +
+              " | ".join(attempted_link_log.read_text().splitlines())[:2800],
+              flush=True)
     print("BUSYBOX_ALLYES_GCC_KBUILD=%s original_Kconfig=1 original_sources=1" %
           ("PASS" if rc == 0 else "BLOCKED"), flush=True)
     if link_compatible:
