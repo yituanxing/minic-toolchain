@@ -271,8 +271,8 @@ editors/cmp.c editors/diff.c networking/ping.c
         wide_sha=$(printf '%s\n' "$wide_record" | sed -n 's/.* SHA_objects_verified=\([0-9][0-9]*\) .*/\1/p')
         wide_fallback=$(printf '%s\n' "$wide_record" | sed -n 's/.* explicit_cohort_GNU_fallbacks=\([0-9][0-9]*\) .*/\1/p')
         case "$target" in
-          aarch64) wide_min=168 ;;
-          loongarch64) wide_min=173 ;;
+          aarch64) wide_min=170 ;;
+          loongarch64) wide_min=175 ;;
         esac
         case "$wide_record" in
           *"original_Kbuild_owners=179 "*"GNU_remaining_owners=yes "*" GNU_QEMU_differential=1 full_MiniC=NO") ;;
@@ -287,7 +287,7 @@ editors/cmp.c editors/diff.c networking/ping.c
           exit 1
         fi
         wide_targets=$((wide_targets+1))
-        echo "FOUR_BACKEND_BUSYBOX_WIDE_ACCEPT=PASS target=$target MiniC_owners=$wide_mini original_Kbuild_owners=179 GNU_fallbacks=$wide_fallback QEMU_cases=55"
+        echo "FOUR_BACKEND_BUSYBOX_WIDE_ACCEPT=PASS target=$target MiniC_owners=$wide_mini original_Kbuild_owners=179 GNU_fallbacks=$wide_fallback QEMU_cases=58"
       fi
     fi
   fi
@@ -304,6 +304,6 @@ if [ "${FOUR_BACKEND_BUSYBOX_WIDE:-0}" = 1 ]; then
     echo "FOUR_BACKEND_BUSYBOX_WIDE_ACCEPT=FAIL reason=missing_target completed=$wide_targets" >&2
     exit 1
   fi
-  echo "FOUR_BACKEND_BUSYBOX_WIDE_ACCEPT=PASS targets=2 original_Kbuild_owners=179 min_AArch64_MiniC=168 min_LoongArch64_MiniC=173 GNU_QEMU_differential=1"
+  echo "FOUR_BACKEND_BUSYBOX_WIDE_ACCEPT=PASS targets=2 original_Kbuild_owners=179 min_AArch64_MiniC=170 min_LoongArch64_MiniC=175 GNU_QEMU_differential=1"
 fi
 echo "FOUR_BACKEND_BUSYBOX_DISCOVERY=COMPLETE source_pinned=1 no_all_MiniC_claim=1"
