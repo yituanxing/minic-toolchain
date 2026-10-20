@@ -36,8 +36,8 @@ int linux_siginfo_record_bound(void) {
 #define STRING_BOUND_CHECK(expr) ((void)sizeof(char[1 - 2 * !!(expr)]))
 int busybox_exec_path_string_bound(void) {
     STRING_BOUND_CHECK("/proc/self/exe"[0] != '/');
-    STRING_BOUND_CHECK("alpha"[5] != '\\0');
-    STRING_BOUND_CHECK("\\x2fbin"[0] != '/');
+    STRING_BOUND_CHECK("alpha"[5] != 0);
+    STRING_BOUND_CHECK("/bin"[0] != 47);
     return 0;
 }
 

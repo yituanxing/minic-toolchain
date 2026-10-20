@@ -33,7 +33,7 @@ fi
 # This must fold bytes of a compiler-owned literal, not arbitrary objects.
 grep -F 'busybox_exec_path_string_bound:' \
     "$work/array_bound_constant_expression.s" >/dev/null
-printf '%s\\n' 'PASS compiler/c0/array_bound_constant_expression GNU_string_literal_index_ICE=1 BusyBox_exec_path=1'
+printf '%s\n' 'PASS compiler/c0/array_bound_constant_expression GNU_string_literal_index_ICE=1 BusyBox_exec_path=1'
 
 grep -F 'expected integer constant expression' \
     "$work/invalid_runtime_array_bound.stderr" >/dev/null
