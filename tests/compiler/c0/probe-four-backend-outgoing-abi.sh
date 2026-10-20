@@ -60,17 +60,28 @@ extern long gnu_u32_stack_raw(long,long,long,long,long,long,long,long,unsigned i
 long mini_outgoing_u32_stack(void) {
     return gnu_u32_stack_raw(1,2,3,4,5,6,7,8,0xffffffffU);
 }
+extern long gnu_s32_stack_raw(long,long,long,long,long,long,long,long,int);
+long mini_outgoing_s32_stack(void) {
+    return gnu_s32_stack_raw(1,2,3,4,5,6,7,8,-1);
+}
 SRC
 cat >"$tmp/u32-stack-driver.c" <<'SRC'
 extern long mini_outgoing_u32_stack(void);
+extern long mini_outgoing_s32_stack(void);
 __asm__(".text\n"
         ".globl gnu_u32_stack_raw\n"
         ".type gnu_u32_stack_raw,@function\n"
         "gnu_u32_stack_raw:\n"
         "  ld.d $a0, $sp, 0\n"
+        "  ret\n"
+        ".globl gnu_s32_stack_raw\n"
+        ".type gnu_s32_stack_raw,@function\n"
+        "gnu_s32_stack_raw:\n"
+        "  ld.d $a0, $sp, 0\n"
         "  ret\n");
 int main(void) {
-    return mini_outgoing_u32_stack() == -1L ? 0 : 1;
+    return mini_outgoing_u32_stack() == -1L &&
+           mini_outgoing_s32_stack() == -1L ? 0 : 1;
 }
 SRC
 for target in aarch64 loongarch64; do
@@ -97,7 +108,7 @@ for target in aarch64 loongarch64; do
         "$gcc" -static -x assembler "$tmp/u32-stack.s" \
             -x c "$tmp/u32-stack-driver.c" -o "$tmp/u32-stack.mini"
         timeout 45s "$qemu" "$tmp/u32-stack.mini"
-        echo "FOUR_BACKEND_OUTGOING_U32_STACK=PASS target=loongarch64 full_8byte_slot=1 unsigned32_sign_extended=1 GNU_QEMU_ABI=1"
+        echo "FOUR_BACKEND_OUTGOING_U32_STACK=PASS target=loongarch64 full_8byte_slot=1 unsigned32_sign_extended=1 signed32_sign_extended=1 GNU_QEMU_ABI=1"
     fi
     echo "FOUR_BACKEND_OUTGOING_ABI=PASS target=$target fixed_gp10=1 fixed_fp9=1 incoming_fp9=1 mixed_gp_fp11=1 GNU_QEMU_differential=1"
 done
