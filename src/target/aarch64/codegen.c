@@ -619,7 +619,7 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
          elf_visibility_directive(decl->visibility) == NULL) ||
         decl->section_name != NULL || decl->alias_target != MINIC_FUNCTION_INVALID ||
         !valid_return_type(program, target, fn->return_type) ||
-        fn->block_count == 0U || fn->block_count > 1024U || fn->entry_block != 0U ||
+        fn->block_count == 0U || fn->block_count > 2048U || fn->entry_block != 0U ||
         fn->inline_asm_count != 0U || fn->parameter_count > 16U ||
         fn->value_count > 32768U || fn->object_count > 8192U)
         {
