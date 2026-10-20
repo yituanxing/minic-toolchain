@@ -84,7 +84,7 @@ for target in aarch64 loongarch64; do
             break
         fi
         set +e
-        timeout 120s env MINIC_M1_TRACE=1 MINIC_BACKEND_CENSUS=1 \
+        timeout 120s env MINIC_M1_TRACE=1 MINIC_BACKEND_CENSUS=1 CORE_FAST_TRACE=1 \
             "$MINIC_CC" --target="$target-linux" -S "$input" \
             -o "$asm" >"$work/$target/$stem.mini.out" \
             2>"$work/$target/$stem.mini.err"
@@ -102,6 +102,13 @@ for target in aarch64 loongarch64; do
             first=$(grep -m 1 -E 'MINIC_BACKEND_REJECT|error:' \
                 "$work/$target/$stem.mini.err" || true)
             echo "FOUR_BACKEND_TINYCC_TU=BLOCKED target=$target source=$file stage=MiniC $first"
+            # Classify semantic return-ABI gaps instead of treating each
+            # TinyCC caller as a separate backend failure.
+            grep -m 2 '^MINIC_CALL_RESULT_REJECT' "$work/$target/$stem.mini.err" || true
+            # Core lowering errors originate BEFORE a target backend and
+            # should not be mistaken for missing ISA opcodes.
+            grep -m 2 -E '^CORE_FAST_|^CORE_IR_|^MINIC_CORE_' \
+                "$work/$target/$stem.mini.err" || true
             continue
         fi
         target_compiled=$((target_compiled+1))
