@@ -1144,6 +1144,9 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                       !minic_type_is_pointer(ins->type) &&
                       !(minic_type_is_float(ins->type) &&
                         (ins->kind == MINIC_CORE_INSTRUCTION_LOAD ||
+                         ins->kind == MINIC_CORE_INSTRUCTION_PARAMETER ||
+                         ins->kind == MINIC_CORE_INSTRUCTION_CALL ||
+                         ins->kind == MINIC_CORE_INSTRUCTION_INDIRECT_CALL ||
                          ins->kind == MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT ||
                          ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_TO_FLOAT ||
                          ins->kind == MINIC_CORE_INSTRUCTION_FLOAT_ADD ||
