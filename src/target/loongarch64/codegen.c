@@ -737,9 +737,20 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
              : ins->result == MINIC_CORE_VALUE_INVALID ||
                ins->result >= fn->value_count ||
                !minic_type_equal(fn->values[ins->result].type, ins->type)) ||
-            !valid_return_type(program, target, ins->type))
+            !valid_return_type(program, target, ins->type)) {
+            if (getenv("MINIC_BACKEND_CENSUS") != NULL)
+                (void)fprintf(stderr,
+                    "MINIC_CALL_RESULT_REJECT arch=loongarch64 function=%s "
+                    "instruction=%zu return_base=%d is_float128=%d "
+                    "return_valid=%d value_match=%d\\n",
+                    name, i, (int)ins->type.base_kind,
+                    minic_type_is_float128(ins->type) ? 1 : 0,
+                    valid_return_type(program, target, ins->type) ? 1 : 0,
+                    ins->result < fn->value_count &&
+                    minic_type_equal(fn->values[ins->result].type, ins->type) ? 1 : 0);
             return machine_emit_reject(fn, "loongarch64", name, reject_stage,
                                     reject_block, reject_ins, __LINE__);
+        }
         if (ins->kind == MINIC_CORE_INSTRUCTION_CALL) {
             const MinicCoreCallee *callee;
             if (ins->value.call.callee_id >= fn->callee_count ||
