@@ -219,6 +219,9 @@ jobs:
           sh -n tests/compiler/c0/probe-four-backend-computed-goto.sh
           MINIC_CC="$GITHUB_WORKSPACE/build/toolchain-focused-t1-v2/bin/minic-cc" \
             sh tests/compiler/c0/probe-four-backend-computed-goto.sh
+          sh -n tests/compiler/c0/probe-four-backend-record-call-abi.sh
+          MINIC_CC="$GITHUB_WORKSPACE/build/toolchain-focused-t1-v2/bin/minic-cc" \
+            sh tests/compiler/c0/probe-four-backend-record-call-abi.sh
           sh -n tests/compiler/c0/probe-four-backend-relaxed-atomics.sh
           MINIC_CC="$GITHUB_WORKSPACE/build/toolchain-focused-t1-v2/bin/minic-cc" \
             sh tests/compiler/c0/probe-four-backend-relaxed-atomics.sh
