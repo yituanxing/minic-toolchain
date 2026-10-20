@@ -629,11 +629,6 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                       fn->block_count, fn->parameter_count,
                       valid_return_type(program, target, fn->return_type) ? 1 : 0,
                       fn->inline_asm_count);
-    for (i = 0U; i < fn->parameter_count; ++i)
-        if (minic_type_is_long_double(fn->parameter_types[i]))
-            return machine_emit_reject(fn, "aarch64", name,
-                                       "binary128_param_pending",
-                                       SIZE_MAX, SIZE_MAX, __LINE__);
     if (name == NULL || name[0] == '\0' ||
         !minic_core_function_verify(fn) ||
         decl->is_constructor || decl->is_weak ||
@@ -906,9 +901,10 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                                            reject_ins, __LINE__);
             }
             actual = fn->values[arg->value.value_id].type;
-            if (minic_type_is_long_double(actual))
+            if (minic_type_is_long_double(actual) &&
+                (j >= parameter_count || is_variadic))
                 return machine_emit_reject(fn, "aarch64", name,
-                                           "binary128_arg_pending",
+                                           "binary128_variadic_pending",
                                            SIZE_MAX, i, __LINE__);
             if (!valid_parameter_type(program, target, actual)) return machine_emit_reject(fn, "aarch64", name, reject_stage,
                                     reject_block, reject_ins, __LINE__);
@@ -1777,7 +1773,12 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                     continue;
                 }
                 const MinicType type = fn->values[arg->value.value_id].type;
-                if (minic_type_is_double(type) || minic_type_is_float(type)) {
+                if (minic_type_is_long_double(type)) {
+                    if (fp_index++ >= 8U) {
+                        overflow_slots += overflow_slots & 1U;
+                        overflow_slots += 2U;
+                    }
+                } else if (minic_type_is_double(type) || minic_type_is_float(type)) {
                     if (fp_index++ >= 8U) ++overflow_slots;
                 } else if (gp_index++ >= 8U) ++overflow_slots;
             }
@@ -1820,7 +1821,31 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                 }
                 const MinicType type = fn->values[arg->value.value_id].type;
                 const size_t slot = (size_t)arg->value.value_id * 8U + stack_bytes;
-                if (minic_type_is_double(type) || minic_type_is_float(type)) {
+                if (minic_type_is_long_double(type)) {
+                    size_t src;
+                    if (!binary128_slot(fn, ld_base, arg->value.value_id, &src))
+                        return machine_emit_reject(fn, "aarch64", name,
+                                                   reject_stage, reject_block,
+                                                   reject_ins, __LINE__);
+                    src += stack_bytes;
+                    if (fp_index < 8U) {
+                        if (fprintf(out, "  ldr q%zu, [sp, #%zu]\n",
+                                    fp_index, src) < 0)
+                            return machine_emit_reject(fn, "aarch64", name,
+                                                       reject_stage, reject_block,
+                                                       reject_ins, __LINE__);
+                    } else {
+                        stack_index += stack_index & 1U;
+                        if (fprintf(out, "  ldr q9, [sp, #%zu]\n"
+                                         "  str q9, [sp, #%zu]\n",
+                                    src, stack_index * 8U) < 0)
+                            return machine_emit_reject(fn, "aarch64", name,
+                                                       reject_stage, reject_block,
+                                                       reject_ins, __LINE__);
+                        stack_index += 2U;
+                    }
+                    ++fp_index;
+                } else if (minic_type_is_double(type) || minic_type_is_float(type)) {
                     const bool is_float = minic_type_is_float(type);
                     if (fp_index < 8U) {
                         if (fprintf(out, is_float ? "  ldr s%zu, [sp, #%zu]\n"
@@ -2034,10 +2059,38 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                         gp_index = 8U;
                         overflow_index += slots;
                     }
+                } else if (minic_type_is_long_double(prior)) {
+                    if (fp_index++ >= 8U) {
+                        overflow_index += overflow_index & 1U;
+                        overflow_index += 2U;
+                    }
                 } else if (minic_type_is_double(prior) ||
                            minic_type_is_float(prior)) {
                     if (fp_index++ >= 8U) ++overflow_index;
                 } else if (gp_index++ >= 8U) ++overflow_index;
+            }
+            if (minic_type_is_long_double(ins->type)) {
+                size_t dst;
+                if (!binary128_slot(fn, ld_base, ins->result, &dst))
+                    return machine_emit_reject(fn, "aarch64", name,
+                                               reject_stage, reject_block,
+                                               reject_ins, __LINE__);
+                if (fp_index < 8U) {
+                    if (fprintf(out, "  str q%zu, [sp, #%zu]\n",
+                                fp_index, dst) < 0)
+                        return machine_emit_reject(fn, "aarch64", name,
+                                                   reject_stage, reject_block,
+                                                   reject_ins, __LINE__);
+                } else {
+                    overflow_index += overflow_index & 1U;
+                    if (fprintf(out, "  ldr q9, [sp, #%zu]\n"
+                                     "  str q9, [sp, #%zu]\n",
+                                frame + overflow_index * 8U, dst) < 0)
+                        return machine_emit_reject(fn, "aarch64", name,
+                                                   reject_stage, reject_block,
+                                                   reject_ins, __LINE__);
+                }
+                continue;
             }
             if (minic_type_is_double(ins->type) ||
                 minic_type_is_float(ins->type)) {
