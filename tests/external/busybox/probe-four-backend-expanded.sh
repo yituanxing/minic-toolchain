@@ -58,14 +58,14 @@ TREE TS TTYSIZE ARP ARPING BRCTL DNSD HOSTNAME
 IFCONFIG IP IPCALC NC NETSTAT NSLOOKUP NTPD PING
 PSCAN ROUTE TELNET TFTP TRACEROUTE WGET WHOIS ZCIP
 FREE FUSER IOSTAT KILL LSOF MPSTAT PGREP PIDOF
-PMAP PS PSTREE PWDX SYSCTL TOP UPTIME WATCH
+PMAP PS PSTREE PWDX BB_SYSCTL TOP UPTIME WATCH
 BLKID CAL CHRT DMESG EJECT FALLOCATE FLOCK GETOPT
 HEXDUMP HWCLOCK IONICE IPCRM IPCS LAST LOSETUP LSPCI
 LSUSB MESG MOUNT MOUNTPOINT NOLOGIN RENICE REV SETARCH
 SETSID TASKSET UMOUNT WALL ASH
 "
 fi
-python3 - "$src/.config" $extra <<'PY'
+if ! python3 - "$src/.config" $extra <<'PY'
 import sys
 p = sys.argv[1]
 s = open(p, encoding="utf-8").read()
@@ -79,6 +79,16 @@ for k in keys:
         raise SystemExit("BUSYBOX_EXPAND_CONFIG_MISSING=" + k)
 open(p, "w", encoding="utf-8").write(s)
 PY
+then
+  # Exploratory third cohort must never turn the already certified two
+  # real Kbuild/QEMU cohorts red because an upstream Kconfig option is
+  # absent or conditional. Report the stage explicitly, without success.
+  if [ "$cohort" = wide ]; then
+    echo "${tag}=BLOCKED target=$target stage=original_Kconfig_missing_option"
+    exit 0
+  fi
+  exit 1
+fi
 if ! (cd "$src" && yes '' | make HOSTCC=cc CC="$gcc" \
     CROSS_COMPILE="$prefix" oldconfig \
     >"$work/oldconfig.out" 2>"$work/oldconfig.err") ||
