@@ -187,7 +187,9 @@ while IFS= read -r file; do
   stem=${stem%.c}
   cp "$work/obj/$stem.o" "$src/${file%.c}.o"
 done < "$work/qualified.list"
-for dir in coreutils findutils; do
+for dir in coreutils findutils editors; do
+  # Every affected directory must reaggregate the exact substituted .o.
+  # Otherwise an old GNU archive can survive while the loose .o SHA matches.
   rm -f "$src/$dir/built-in.o" "$src/$dir/lib.a"
 done
 rm -f "$src/busybox" "$src/busybox_unstripped"
@@ -206,6 +208,10 @@ while IFS= read -r file; do
     exit 0
   fi
 done < "$work/qualified.list"
+if cmp -s "$work/gnu/busybox" "$src/busybox"; then
+  echo "${tag}=BLOCKED target=$target stage=GNU_baseline_binary_unchanged"
+  exit 0
+fi
 cp "$src/busybox" "$work/mini/busybox"
 # Controlled GNU-vs-MiniC comparisons. These original applets are tested
 # through the actual BusyBox dispatcher, with deterministic environment.
