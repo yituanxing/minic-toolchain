@@ -118,7 +118,14 @@ PY
       CROSS_COMPILE="$prefix" busybox \
       >"$work/$target/mixed.out" 2>"$work/$target/mixed.err"); then
     echo "FOUR_BACKEND_BUSYBOX=BLOCKED target=$target stage=GNU_original_Kbuild_relink"
-    tail -n 25 "$work/$target/mixed.err"; continue
+    # BusyBox's original Kbuild trylink captures the linker's stderr into
+    # busybox_unstripped.out (make stdout), so printing only mixed.err hid
+    # the FIRST actual link failure on AArch64.
+    tail -n 55 "$work/$target/mixed.out" "$work/$target/mixed.err" || true
+    if [ -f "$src/busybox_unstripped.out" ]; then
+        tail -n 35 "$src/busybox_unstripped.out" || true
+    fi
+    continue
   fi
   for file in $sources; do
     stem=$(basename "$file" .c)
