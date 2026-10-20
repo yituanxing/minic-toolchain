@@ -163,8 +163,6 @@ static bool emit_record_relocation(FILE *out, const MinicC0Program *program,
     if (reloc == NULL || width != 8U ||
         target->data_layout->pointer_size != 8U) return false;
     if (reloc->target_kind == MINIC_GLOBAL_RELOCATION_LABEL) {
-        /* Original Lua VM computed-goto table: Core records the source
-         * label statement ID, whose address is emitted at its block. */
         const MinicStatement *label =
             minic_c0_program_statement(program, reloc->target_id);
         return label != NULL && label->kind == MINIC_STATEMENT_LABEL &&
@@ -618,10 +616,10 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
             break;
         case MINIC_CORE_TERMINATOR_INDIRECT_BRANCH:
             if (term->indirect_target >= fn->value_count ||
-                !minic_type_is_pointer(
-                    fn->values[term->indirect_target].type))
+                !minic_type_is_pointer(fn->values[term->indirect_target].type))
                 return machine_emit_reject(fn, "loongarch64", name,
-                    reject_stage, reject_block, reject_ins, __LINE__);
+                                           reject_stage, reject_block,
+                                           reject_ins, __LINE__);
             break;
         case MINIC_CORE_TERMINATOR_UNREACHABLE:
             /* Verified Core unreachable terminator is a semantic no-return
@@ -1534,21 +1532,6 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                     ? (wide ? "  sub.d $t0, $t0, $t1\n" : "  sub.w $t0, $t0, $t1\n")
                     : (wide ? "  mul.d $t0, $t0, $t1\n" : "  mul.w $t0, $t0, $t1\n");
             if (!emit_sp_mem(out, wide ? "ld.d" : "ld.w", "$t0",
-                                 (size_t)cond * 8U) ||
-                    fprintf(out,
-                            "  beqz $t0, .Lmini_loong_f%zu_false_%zu\n"
-                            "  b .Lmini_loong_f%zu_b%u\n"
-                            ".Lmini_loong_f%zu_false_%zu:\n"
-                            "  b .Lmini_loong_f%zu_b%u\n",
-                            id, block_id,
-                            id, (unsigned int)block->terminator.conditional.when_true,
-                            id, block_id,
-                            id, (unsigned int)block->terminator.conditional.when_false) < 0)
-                    return machine_emit_reject(fn, "loongarch64", name,
-                        reject_stage, reject_block, reject_ins, __LINE__);
-                break;
-            }
-            if (!emit_sp_mem(out, wide ? "ld.d" : "ld.w", "$t0",
                              (size_t)lhs * 8U) ||
                 !emit_sp_mem(out, wide ? "ld.d" : "ld.w", "$t1",
                              (size_t)rhs * 8U) ||
@@ -1893,8 +1876,7 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                              (size_t)block->terminator.indirect_target * 8U) ||
                 fputs("  jirl $zero, $t0, 0\n", out) == EOF)
                 return machine_emit_reject(fn, "loongarch64", name,
-                                           reject_stage, reject_block,
-                                           reject_ins, __LINE__);
+                    reject_stage, reject_block, reject_ins, __LINE__);
             break;
         case MINIC_CORE_TERMINATOR_UNREACHABLE:
             /* Preserve Core CFG semantics: trap instead of falling through. */
@@ -1910,10 +1892,24 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
         case MINIC_CORE_TERMINATOR_CONDITIONAL_BRANCH: {
             const MinicCoreValueId cond = block->terminator.conditional.condition;
             const bool wide = register64_type(program, target, fn->values[cond].type);
-            /* LoongArch conditional branch reach is smaller than the
-             * full Lua VM body. Short local branch, then wide b targets. */
+            /* The short LoongArch conditional jump must remain nearby. */
             if (fn->block_count > 256U) {
                 if (!emit_sp_mem(out, wide ? "ld.d" : "ld.w", "$t0",
+                                 (size_t)cond * 8U) ||
+                    fprintf(out,
+                            "  beqz $t0, .Lmini_loong_f%zu_false_%zu\n"
+                            "  b .Lmini_loong_f%zu_b%u\n"
+                            ".Lmini_loong_f%zu_false_%zu:\n"
+                            "  b .Lmini_loong_f%zu_b%u\n",
+                            id, block_id,
+                            id, (unsigned int)block->terminator.conditional.when_true,
+                            id, block_id,
+                            id, (unsigned int)block->terminator.conditional.when_false) < 0)
+                    return machine_emit_reject(fn, "loongarch64", name,
+                        reject_stage, reject_block, reject_ins, __LINE__);
+                break;
+            }
+            if (!emit_sp_mem(out, wide ? "ld.d" : "ld.w", "$t0",
                              (size_t)cond * 8U) ||
                 fprintf(out,
                         "  bnez $t0, .Lmini_loong_f%zu_b%u\n"
