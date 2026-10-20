@@ -29,6 +29,12 @@ if "$minic" -S "$work/invalid_runtime_array_bound.i" \
     printf '%s\n' 'FAIL compiler/c0/invalid_runtime_array_bound: compilation unexpectedly succeeded' >&2
     exit 1
 fi
+# Real upstream BusyBox BUILD_BUG_ON expands to sizeof(char[ICE]).
+# This must fold bytes of a compiler-owned literal, not arbitrary objects.
+grep -F 'busybox_exec_path_string_bound:' \
+    "$work/array_bound_constant_expression.s" >/dev/null
+printf '%s\\n' 'PASS compiler/c0/array_bound_constant_expression GNU_string_literal_index_ICE=1 BusyBox_exec_path=1'
+
 grep -F 'expected integer constant expression' \
     "$work/invalid_runtime_array_bound.stderr" >/dev/null
 printf '%s\n' 'PASS compiler/c0/invalid_runtime_array_bound'
