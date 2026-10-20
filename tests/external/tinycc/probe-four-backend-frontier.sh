@@ -30,6 +30,7 @@ for target in aarch64 loongarch64; do
     case "$target" in
         aarch64)
             gcc=aarch64-linux-gnu-gcc
+            qemu=qemu-aarch64
             cpu=aarch64
             defines=-DTCC_TARGET_ARM64
             sources='tcc.c libtcc.c tccpp.c tccgen.c tccelf.c tccasm.c tccrun.c arm64-gen.c arm64-link.c'
@@ -37,6 +38,7 @@ for target in aarch64 loongarch64; do
             ;;
         loongarch64)
             gcc=loongarch64-linux-gnu-gcc-13
+            qemu=qemu-loongarch64
             cpu=x86_64
             defines=-DTCC_TARGET_X86_64
             sources='tcc.c libtcc.c tccpp.c tccgen.c tccelf.c tccasm.c tccrun.c x86_64-gen.c x86_64-link.c i386-asm.c'
@@ -44,6 +46,7 @@ for target in aarch64 loongarch64; do
             ;;
     esac
     command -v "$gcc" >/dev/null
+    command -v "$qemu" >/dev/null
     triplet=$("$gcc" -dumpmachine)
     count=0
     for f in $sources; do count=$((count+1)); done
@@ -58,6 +61,9 @@ for target in aarch64 loongarch64; do
         tail -n 16 "$work/$target/config.err" >&2
         exit 1
     fi
+    gnu_objects=""
+    mixed_objects=""
+    gnu_count=0
     target_compiled=0
     target_assembled=0
     target_blocked=0
@@ -83,6 +89,10 @@ for target in aarch64 loongarch64; do
             failed=$((failed+1))
             break
         fi
+        # GNU reference objects use the same preprocessed bytes. Their
+        # substitution is permitted in the HYBRID diagnostic only.
+        gnu_objects="$gnu_objects $work/$target/$stem.gnu.o"
+        gnu_count=$((gnu_count+1))
         set +e
         timeout 120s env MINIC_M1_TRACE=1 MINIC_BACKEND_CENSUS=1 CORE_FAST_TRACE=1 \
             "$MINIC_CC" --target="$target-linux" -S "$input" \
@@ -97,6 +107,7 @@ for target in aarch64 loongarch64; do
                 break
             fi
             target_blocked=$((target_blocked+1))
+            mixed_objects="$mixed_objects $work/$target/$stem.gnu.o"
             grep '^MINIC_BACKEND_REJECT' "$work/$target/$stem.mini.err" \
                 >>"$work/$target/rejects.log" || true
             first=$(grep -m 1 -E 'MINIC_BACKEND_REJECT|error:' \
@@ -121,8 +132,55 @@ for target in aarch64 loongarch64; do
             break
         fi
         target_assembled=$((target_assembled+1))
+        mixed_objects="$mixed_objects $work/$target/$stem.mini.o"
         echo "FOUR_BACKEND_TINYCC_TU=PASS target=$target source=$file GNU_C_oracle=1 MiniC_GNU_AS=1"
     done
+    # Hybrid is a diagnostic only. GNU substitutes only currently blocked
+    # TinyCC TUs, allowing GNU/QEMU checks of the compiled MiniC subset.
+    if [ "$gnu_count" -eq "$count" ] &&
+       [ "$((target_assembled + target_blocked))" -eq "$count" ]; then
+        hybrid_status=0
+        if ! "$gcc" -static $gnu_objects -lm -ldl \
+                -o "$work/$target/tcc-gnu" \
+                >"$work/$target/tcc-gnu.link.out" \
+                2>"$work/$target/tcc-gnu.link.err"; then
+            hybrid_status=1
+            echo "FOUR_BACKEND_TINYCC_HYBRID=SKIP target=$target stage=GNU_reference_link"
+            tail -n 14 "$work/$target/tcc-gnu.link.err" || true
+        elif ! "$gcc" -static $mixed_objects -lm -ldl \
+                -o "$work/$target/tcc-mixed" \
+                >"$work/$target/tcc-mixed.link.out" \
+                2>"$work/$target/tcc-mixed.link.err"; then
+            hybrid_status=1
+            echo "FOUR_BACKEND_TINYCC_HYBRID=BLOCKED target=$target stage=mixed_link"
+            tail -n 14 "$work/$target/tcc-mixed.link.err" || true
+        fi
+        if [ "$hybrid_status" -eq 0 ]; then
+            for builder in gnu mixed; do
+                set +e
+                timeout 45s "$qemu" "$work/$target/tcc-$builder" -v \
+                    >"$work/$target/tcc-$builder.out" \
+                    2>"$work/$target/tcc-$builder.err"
+                status=$?
+                set -e
+                echo "FOUR_BACKEND_TINYCC_HYBRID_RUN target=$target builder=$builder status=$status"
+                if [ "$status" -ne 0 ]; then hybrid_status=1; fi
+            done
+            if [ "$hybrid_status" -eq 0 ] &&
+               cmp -s "$work/$target/tcc-gnu.out" \
+                      "$work/$target/tcc-mixed.out" &&
+               cmp -s "$work/$target/tcc-gnu.err" \
+                      "$work/$target/tcc-mixed.err"; then
+                echo "FOUR_BACKEND_TINYCC_HYBRID=PASS target=$target MiniC_objects=$target_assembled GNU_fallback_objects=$target_blocked GNU_QEMU_version_diff=1 full_MiniC_acceptance=NOT_CLAIMED"
+            else
+                echo "FOUR_BACKEND_TINYCC_HYBRID=BLOCKED target=$target stage=GNU_QEMU_version_diff MiniC_objects=$target_assembled GNU_fallback_objects=$target_blocked"
+                diff -u "$work/$target/tcc-gnu.out" \
+                        "$work/$target/tcc-mixed.out" | head -n 25 || true
+                diff -u "$work/$target/tcc-gnu.err" \
+                        "$work/$target/tcc-mixed.err" | head -n 25 || true
+            fi
+        fi
+    fi
     if [ -s "$work/$target/rejects.log" ]; then
         awk '
           {
