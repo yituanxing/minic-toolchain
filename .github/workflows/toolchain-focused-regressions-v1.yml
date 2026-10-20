@@ -89,7 +89,7 @@ jobs:
                   linux_yaml=true
                 fi
                 case "$changed" in
-                  src/target/aarch64/*|src/target/loongarch64/*|tests/compiler/c0/run-four-backend-m1.sh|tests/compiler/c0/probe-four-backend-outgoing-abi.sh|tests/compiler/c0/probe-four-backend-switch-dead-prefix.sh|tests/compiler/c0/probe-loongarch64-dynamic-alloca.sh|tests/compiler/c0/probe-aarch64-binary128-return.sh|tests/external/tiny-aes-c/*|tests/external/cjson/*|tests/external/zlib/*|tests/external/lua/*|tests/external/sqlite/*|tests/external/tinycc/*)
+                  src/target/aarch64/*|src/target/loongarch64/*|tests/compiler/c0/run-four-backend-m1.sh|tests/compiler/c0/probe-four-backend-outgoing-abi.sh|tests/compiler/c0/probe-four-backend-switch-dead-prefix.sh|tests/compiler/c0/probe-loongarch64-dynamic-alloca.sh|tests/compiler/c0/probe-aarch64-binary128-return.sh|tests/compiler/c0/probe-loongarch64-binary128-return.sh|tests/external/tiny-aes-c/*|tests/external/cjson/*|tests/external/zlib/*|tests/external/lua/*|tests/external/sqlite/*|tests/external/tinycc/*)
                     ;;
                   *) four_only=false ;;
                 esac
@@ -199,6 +199,9 @@ jobs:
           sh -n tests/compiler/c0/probe-aarch64-binary128-return.sh
           MINIC_CC="$GITHUB_WORKSPACE/build/toolchain-focused-t1-v2/bin/minic-cc" \
             sh tests/compiler/c0/probe-aarch64-binary128-return.sh
+          sh -n tests/compiler/c0/probe-loongarch64-binary128-return.sh
+          MINIC_CC="$GITHUB_WORKSPACE/build/toolchain-focused-t1-v2/bin/minic-cc" \
+            sh tests/compiler/c0/probe-loongarch64-binary128-return.sh
           sh -n tests/external/sqlite/probe-four-backend-frontier.sh
           sqlite_status=0
           make MODE=release CFLAGS=-Werror BUILD_DIR=build/toolchain-focused-t1-v2 check-four-backend-sqlite-frontier || sqlite_status=$?
