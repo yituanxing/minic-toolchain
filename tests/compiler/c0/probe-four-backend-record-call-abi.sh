@@ -38,17 +38,24 @@ int token_value(const char *, int, struct Token);
 int spill_value(long,long,long,long,long,long,long,long,struct Token);
 int near_spill(long,long,long,long,long,long,long,struct Token);
 int mixed_fp(double,struct Token);
+extern int puts(const char *);
 int main(void) {
     struct Small s = {4, 2};
     struct Token t = {"qpayload", 19U};
     int (*fp)(const char *, int, struct Token) = token_value;
     if (s.left != 4 || s.right != 2) return 17;
     if (t.ptr[0] != 'q' || t.count != 19U) return 18;
+    puts("test-small");
     if (small_value(s) != 42) return 11;
+    puts("test-token");
     if (!token_value("prefix",5,t)) return 12;
+    puts("test-indirect");
     if (!fp("prefix",5,t)) return 13;
+    puts("test-overflow");
     if (!spill_value(1,2,3,4,5,6,7,8,t)) return 14;
+    puts("test-one-gp-left");
     if (!near_spill(1,2,3,4,5,6,7,t)) return 15;
+    puts("test-mixed-fp");
     if (!mixed_fp(1.25,t)) return 16;
     return 42;
 }
@@ -86,6 +93,8 @@ for target in aarch64 loongarch64; do
         set -e
         if [ "$status" -ne 42 ]; then
             echo "RECORD_CALL_ABI=FAIL target=$target variant=$cc stage=QEMU status=$status" >&2
+            echo "RECORD_CALL_ABI_RUNTIME_STAGES target=$target compiler=$cc" >&2
+            cat "$w/$target.$cc.out" >&2
             sed -n '1,20p' "$w/$target.$cc.err" >&2
             exit 1
         fi
