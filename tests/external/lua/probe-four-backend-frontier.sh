@@ -55,6 +55,10 @@ for target in aarch64 loongarch64; do
     echo "FOUR_BACKEND_LUA_GNU=PASS target=$target original_Lua_5.5.0=1 QEMU_runtime=1"
 
     compiled=0; assembled=0; target_blocked=0
+    # One source excerpt per distinct frontend-error location, not a
+    # repeated 34-file stderr dump. This shows actual GNU-preprocessed
+    # declarations and prevents guessing cross-glibc syntax issues.
+    parse_context_lines=' '
     : >"$work/$target/rejects.log"
     for file in $sources; do
         stem=${file%.c}
@@ -86,6 +90,27 @@ for target in aarch64 loongarch64; do
             first=$(grep -m 1 'MINIC_BACKEND_REJECT\|error:' \
                 "$work/$target/$stem.minic.err" || true)
             echo "FOUR_BACKEND_LUA_TU=BLOCKED target=$target source=$file stage=MiniC $first"
+            case "$first" in
+                *'.i:'*'error: expected type name'*)
+                    line=$(printf '%s\n' "$first" | sed -n \
+                        's/.*\.i:\([0-9][0-9]*\):[0-9][0-9]*: error:.*/\1/p')
+                    if [ -n "$line" ]; then
+                        case "$parse_context_lines" in
+                            *" $line "*) ;;
+                            *)
+                                parse_context_lines="$parse_context_lines$line "
+                                first_context=$((line > 4 ? line - 4 : 1))
+                                last_context=$((line + 4))
+                                echo "FOUR_BACKEND_LUA_PARSE_CONTEXT target=$target source=$file source_line=$line begin"
+                                sed -n "${first_context},${last_context}p" \
+                                    "$work/$target/$stem.i" | \
+                                    nl -ba -v "$first_context"
+                                echo "FOUR_BACKEND_LUA_PARSE_CONTEXT target=$target source=$file end"
+                                ;;
+                        esac
+                    fi
+                    ;;
+            esac
             grep -m 1 'MINIC_M4_GLOBAL_FRONTIER\|MINIC_BACKEND_PREFLIGHT\|MINIC_M8_FRAME' \
                 "$work/$target/$stem.minic.err" || true
             continue
