@@ -283,6 +283,7 @@ for target in aarch64 loongarch64; do
         # for an independent harness without editing original sqlite3.c.
         objcopy_tool=$("$gcc" -print-prog-name=objcopy)
         if ! "$objcopy_tool" --globalize-symbol=sqlite3GetToken \
+                 --globalize-symbol=sqlite3CtypeMap \
                 "$work/$target/$cc.o" "$work/$target/token-$cc.o" ||
            ! "$gcc" -static "$work/token-ab.c" "$work/$target/token-$cc.o" \
                 -lm -ldl -lpthread -o "$work/$target/token-$cc"; then
