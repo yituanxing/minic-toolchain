@@ -1390,6 +1390,138 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                                     reject_block, reject_ins, __LINE__);
             break;
         }
+        case MINIC_CORE_INSTRUCTION_INTEGER_OVERFLOW: {
+            /* Signed overflow is computed from the sign bits; unsigned
+             * carry/borrow use full-width comparisons. 64-bit multiply
+             * checks MULH high against the low-half sign extension. */
+            const MinicCoreValueId lhs = ins->value.integer_overflow.left;
+            const MinicCoreValueId rhs = ins->value.integer_overflow.right;
+            const MinicCoreValueId address = ins->value.integer_overflow.result_address;
+            MinicType value_type;
+            size_t width;
+            bool is_signed;
+            if (lhs >= fn->value_count || rhs >= fn->value_count ||
+                address >= fn->value_count ||
+                !minic_type_pointee(fn->values[address].type, &value_type) ||
+                !minic_type_is_integer(value_type) ||
+                minic_type_is_bool_integer(value_type) ||
+                minic_type_is_const(value_type) ||
+                minic_type_is_volatile(value_type) ||
+                !minic_type_equal(value_type, fn->values[lhs].type) ||
+                !minic_type_equal(value_type, fn->values[rhs].type) ||
+                !scalar_integer_width(program, target, value_type,
+                                      &width, &is_signed) ||
+                (width != 4U && width != 8U))
+                return machine_emit_reject(fn, "loongarch64", name, reject_stage,
+                                           reject_block, reject_ins, __LINE__);
+            const int op = ins->value.integer_overflow.operator_kind;
+            const bool wide = width == 8U;
+            if (!emit_sp_mem(out, wide ? "ld.d" : "ld.w",
+                             "$t0", (size_t)lhs * 8U) ||
+                !emit_sp_mem(out, wide ? "ld.d" : "ld.w",
+                             "$t1", (size_t)rhs * 8U) ||
+                !emit_sp_mem(out, "ld.d",
+                             "$t2", (size_t)address * 8U))
+                return machine_emit_reject(fn, "loongarch64", name,
+                    reject_stage, reject_block, reject_ins, __LINE__);
+            if (!wide && !is_signed &&
+                fputs("  bstrpick.d $t0, $t0, 31, 0\n"
+                      "  bstrpick.d $t1, $t1, 31, 0\n", out) == EOF)
+                return machine_emit_reject(fn, "loongarch64", name,
+                    reject_stage, reject_block, reject_ins, __LINE__);
+            if (op == MINIC_CORE_INTEGER_OVERFLOW_ADD ||
+                op == MINIC_CORE_INTEGER_OVERFLOW_SUBTRACT) {
+                const bool sub = op == MINIC_CORE_INTEGER_OVERFLOW_SUBTRACT;
+                if (fputs("  or $t3, $t0, $zero\n", out) == EOF ||
+                    fputs(wide
+                          ? (sub ? "  sub.d $t0, $t0, $t1\n"
+                                 : "  add.d $t0, $t0, $t1\n")
+                          : (!is_signed && !sub
+                              ? "  add.d $t0, $t0, $t1\n"
+                              : sub ? "  sub.w $t0, $t0, $t1\n"
+                                    : "  add.w $t0, $t0, $t1\n"), out) == EOF)
+                    return machine_emit_reject(fn, "loongarch64", name,
+                        reject_stage, reject_block, reject_ins, __LINE__);
+                if (is_signed) {
+                    if (fputs(sub
+                          ? "  xor $t4, $t3, $t1\n"
+                            "  xor $t3, $t3, $t0\n"
+                          : "  xor $t4, $t1, $t0\n"
+                            "  xor $t3, $t3, $t0\n", out) == EOF ||
+                        fputs("  and $t4, $t3, $t4\n", out) == EOF ||
+                        (!wide && fputs("  slli.w $t4, $t4, 0\n", out) == EOF) ||
+                        fputs("  slt $t4, $t4, $zero\n", out) == EOF)
+                        return machine_emit_reject(fn, "loongarch64", name,
+                            reject_stage, reject_block, reject_ins, __LINE__);
+                } else if (fputs(sub ? "  sltu $t4, $t3, $t1\n"
+                                     : wide ? "  sltu $t4, $t0, $t3\n"
+                                            : "  srli.d $t4, $t0, 32\n",
+                                 out) == EOF)
+                    return machine_emit_reject(fn, "loongarch64", name,
+                        reject_stage, reject_block, reject_ins, __LINE__);
+            } else if (op == MINIC_CORE_INTEGER_OVERFLOW_MULTIPLY) {
+                if (wide) {
+                    if (fputs(is_signed ? "  mulh.d $t3, $t0, $t1\n"
+                                        : "  mulh.du $t3, $t0, $t1\n", out) == EOF ||
+                        fputs("  mul.d $t0, $t0, $t1\n", out) == EOF ||
+                        (is_signed &&
+                         fputs("  srai.d $t4, $t0, 63\n"
+                               "  xor $t3, $t3, $t4\n", out) == EOF) ||
+                        fputs("  sltu $t4, $zero, $t3\n", out) == EOF)
+                        return machine_emit_reject(fn, "loongarch64", name,
+                            reject_stage, reject_block, reject_ins, __LINE__);
+                } else if (fputs("  mul.d $t3, $t0, $t1\n"
+                                 "  add.w $t0, $t3, $zero\n", out) == EOF ||
+                           (is_signed
+                            ? fputs("  xor $t4, $t3, $t0\n"
+                                    "  sltu $t4, $zero, $t4\n", out) == EOF
+                            : fputs("  srli.d $t4, $t3, 32\n"
+                                    "  sltu $t4, $zero, $t4\n", out) == EOF))
+                    return machine_emit_reject(fn, "loongarch64", name,
+                        reject_stage, reject_block, reject_ins, __LINE__);
+            } else return machine_emit_reject(fn, "loongarch64", name,
+                    reject_stage, reject_block, reject_ins, __LINE__);
+            if (fputs(wide ? "  st.d $t0, $t2, 0\n"
+                          : "  st.w $t0, $t2, 0\n", out) == EOF ||
+                fputs("  or $t0, $t4, $zero\n", out) == EOF)
+                return machine_emit_reject(fn, "loongarch64", name,
+                    reject_stage, reject_block, reject_ins, __LINE__);
+            break;
+        }
+        case MINIC_CORE_INSTRUCTION_INTEGER_CLZ:
+        case MINIC_CORE_INSTRUCTION_INTEGER_CTZ: {
+            const MinicCoreValueId operand = ins->value.operand;
+            unsigned int width;
+            if (operand >= fn->value_count ||
+                !minic_type_is_integer(ins->type) ||
+                !minic_type_is_unsigned_integer(fn->values[operand].type) ||
+                !minic_target_info_integer_width(target, program,
+                          fn->values[operand].type, &width) ||
+                (width != 8U && width != 16U &&
+                 width != 32U && width != 64U) ||
+                !emit_sp_mem(out, width == 64U ? "ld.d" : "ld.w",
+                             "$t0", (size_t)operand * 8U))
+                return machine_emit_reject(fn, "loongarch64", name,
+                    reject_stage, reject_block, reject_ins, __LINE__);
+            if (width < 32U &&
+                fputs(width == 8U
+                          ? "  bstrpick.w $t0, $t0, 7, 0\n"
+                          : "  bstrpick.w $t0, $t0, 15, 0\n", out) == EOF)
+                return machine_emit_reject(fn, "loongarch64", name,
+                    reject_stage, reject_block, reject_ins, __LINE__);
+            if (fputs(ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_CLZ
+                      ? (width == 64U ? "  clz.d $t0, $t0\n"
+                                       : "  clz.w $t0, $t0\n")
+                      : (width == 64U ? "  ctz.d $t0, $t0\n"
+                                       : "  ctz.w $t0, $t0\n"), out) == EOF ||
+                (width < 32U &&
+                 ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_CLZ &&
+                 fprintf(out, "  addi.w $t0, $t0, -%u\n",
+                         32U - width) < 0))
+                return machine_emit_reject(fn, "loongarch64", name,
+                    reject_stage, reject_block, reject_ins, __LINE__);
+            break;
+        }
         case MINIC_CORE_INSTRUCTION_LOAD:
         case MINIC_CORE_INSTRUCTION_ATOMIC_LOAD: {
             const bool atomic = ins->kind == MINIC_CORE_INSTRUCTION_ATOMIC_LOAD;

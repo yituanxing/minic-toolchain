@@ -1505,6 +1505,118 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                                     reject_block, reject_ins, __LINE__);
             break;
         }
+        case MINIC_CORE_INSTRUCTION_INTEGER_OVERFLOW: {
+            /* Complete 32/64-bit signed+unsigned GNU checked arithmetic.
+             * Result bytes are written through Core's pointer; x9 carries
+             * the boolean status to the normal SSA destination afterward. */
+            const MinicCoreValueId lhs = ins->value.integer_overflow.left;
+            const MinicCoreValueId rhs = ins->value.integer_overflow.right;
+            const MinicCoreValueId address = ins->value.integer_overflow.result_address;
+            MinicType value_type;
+            size_t width;
+            bool is_signed;
+            if (lhs >= fn->value_count || rhs >= fn->value_count ||
+                address >= fn->value_count ||
+                !minic_type_pointee(fn->values[address].type, &value_type) ||
+                !minic_type_is_integer(value_type) ||
+                minic_type_is_bool_integer(value_type) ||
+                minic_type_is_const(value_type) ||
+                minic_type_is_volatile(value_type) ||
+                !minic_type_equal(value_type, fn->values[lhs].type) ||
+                !minic_type_equal(value_type, fn->values[rhs].type) ||
+                !scalar_integer_width(program, target, value_type,
+                                      &width, &is_signed) ||
+                (width != 4U && width != 8U))
+                return machine_emit_reject(fn, "aarch64", name, reject_stage,
+                                           reject_block, reject_ins, __LINE__);
+            const bool wide = width == 8U;
+            const int op = ins->value.integer_overflow.operator_kind;
+            if (fprintf(out, wide
+                      ? "  ldr x9, [sp, #%zu]\n  ldr x10, [sp, #%zu]\n"
+                      : "  ldr w9, [sp, #%zu]\n  ldr w10, [sp, #%zu]\n",
+                        (size_t)lhs * 8U, (size_t)rhs * 8U) < 0 ||
+                fprintf(out, "  ldr x11, [sp, #%zu]\n",
+                        (size_t)address * 8U) < 0)
+                return machine_emit_reject(fn, "aarch64", name,
+                    reject_stage, reject_block, reject_ins, __LINE__);
+            if (op == MINIC_CORE_INTEGER_OVERFLOW_ADD ||
+                op == MINIC_CORE_INTEGER_OVERFLOW_SUBTRACT) {
+                const bool sub = op == MINIC_CORE_INTEGER_OVERFLOW_SUBTRACT;
+                const char *instruction = wide
+                    ? (sub ? "  subs x9, x9, x10\n"
+                           : "  adds x9, x9, x10\n")
+                    : (sub ? "  subs w9, w9, w10\n"
+                           : "  adds w9, w9, w10\n");
+                const char *flag = is_signed ? "vs" : sub ? "cc" : "cs";
+                if (fputs(instruction, out) == EOF ||
+                    fprintf(out, "  cset w10, %s\n", flag) < 0)
+                    return machine_emit_reject(fn, "aarch64", name,
+                        reject_stage, reject_block, reject_ins, __LINE__);
+            } else if (op == MINIC_CORE_INTEGER_OVERFLOW_MULTIPLY) {
+                if (wide) {
+                    if (fputs(is_signed ? "  smulh x12, x9, x10\n"
+                                        : "  umulh x12, x9, x10\n", out) == EOF ||
+                        fputs("  mul x9, x9, x10\n", out) == EOF ||
+                        fputs(is_signed
+                             ? "  asr x10, x9, #63\n  cmp x12, x10\n"
+                             : "  cmp x12, #0\n", out) == EOF)
+                        return machine_emit_reject(fn, "aarch64", name,
+                            reject_stage, reject_block, reject_ins, __LINE__);
+                } else if (fputs(is_signed
+                            ? "  smull x12, w9, w10\n"
+                              "  sxtw x10, w12\n  cmp x12, x10\n"
+                            : "  umull x12, w9, w10\n"
+                              "  lsr x10, x12, #32\n  cmp x10, #0\n",
+                            out) == EOF ||
+                           fputs("  mov w9, w12\n", out) == EOF)
+                    return machine_emit_reject(fn, "aarch64", name,
+                        reject_stage, reject_block, reject_ins, __LINE__);
+                if (fputs("  cset w10, ne\n", out) == EOF)
+                    return machine_emit_reject(fn, "aarch64", name,
+                        reject_stage, reject_block, reject_ins, __LINE__);
+            } else return machine_emit_reject(fn, "aarch64", name,
+                    reject_stage, reject_block, reject_ins, __LINE__);
+            if (fputs(wide ? "  str x9, [x11]\n"
+                          : "  str w9, [x11]\n", out) == EOF ||
+                fputs("  mov w9, w10\n", out) == EOF)
+                return machine_emit_reject(fn, "aarch64", name,
+                    reject_stage, reject_block, reject_ins, __LINE__);
+            break;
+        }
+        case MINIC_CORE_INSTRUCTION_INTEGER_CLZ:
+        case MINIC_CORE_INSTRUCTION_INTEGER_CTZ: {
+            const MinicCoreValueId operand = ins->value.operand;
+            unsigned int width;
+            if (operand >= fn->value_count ||
+                !minic_type_is_integer(ins->type) ||
+                !minic_type_is_unsigned_integer(fn->values[operand].type) ||
+                !minic_target_info_integer_width(target, program,
+                          fn->values[operand].type, &width) ||
+                (width != 8U && width != 16U &&
+                 width != 32U && width != 64U) ||
+                fprintf(out, width == 64U
+                           ? "  ldr x9, [sp, #%zu]\n"
+                           : "  ldr w9, [sp, #%zu]\n",
+                        (size_t)operand * 8U) < 0 ||
+                (width != 64U && width < 32U &&
+                 fprintf(out, "  and w9, w9, #%u\n",
+                         (1U << width) - 1U) < 0))
+                return machine_emit_reject(fn, "aarch64", name,
+                    reject_stage, reject_block, reject_ins, __LINE__);
+            if (ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_CTZ &&
+                fputs(width == 64U ? "  rbit x9, x9\n"
+                                   : "  rbit w9, w9\n", out) == EOF)
+                return machine_emit_reject(fn, "aarch64", name,
+                    reject_stage, reject_block, reject_ins, __LINE__);
+            if (fputs(width == 64U ? "  clz x9, x9\n"
+                                   : "  clz w9, w9\n", out) == EOF ||
+                (width < 32U &&
+                 ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_CLZ &&
+                 fprintf(out, "  sub w9, w9, #%u\n", 32U - width) < 0))
+                return machine_emit_reject(fn, "aarch64", name,
+                    reject_stage, reject_block, reject_ins, __LINE__);
+            break;
+        }
         case MINIC_CORE_INSTRUCTION_LOAD:
         case MINIC_CORE_INSTRUCTION_ATOMIC_LOAD: {
             const bool atomic = ins->kind == MINIC_CORE_INSTRUCTION_ATOMIC_LOAD;

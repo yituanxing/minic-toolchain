@@ -429,7 +429,7 @@ static bool minic_multi_integer_record_members(
         total == 0U || alignment == 0U || alignment > 8U)
         return false;
     if (minic_type_is_integer(type) || minic_type_is_pointer(type))
-        return true;
+        return total <= 8U;
     if (!minic_type_is_record(type)) return false;
     record = minic_c0_program_record(program, type.record_id);
     if (record == NULL || !record->is_complete || record->is_packed ||
