@@ -1791,12 +1791,12 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                     for (chunk = 0U; chunk < 2U; ++chunk) {
                         if (chunk < used) {
                             if (!emit_sp_mem(out, "ld.d", gp_regs[gp_index + chunk],
-                                             src + chunk * 8U))
+                                             src + (dynamic_frame ? 0U : stack_bytes) + chunk * 8U))
                                 return machine_emit_reject(fn, "loongarch64", name,
                                                            reject_stage, reject_block,
                                                            reject_ins, __LINE__);
                         } else if (!emit_sp_mem(out, "ld.d", "$t0",
-                                                src + chunk * 8U) ||
+                                                src + (dynamic_frame ? 0U : stack_bytes) + chunk * 8U) ||
                                    !emit_frame_mem(out, "st.d", "$t0",
                                                    (stack_index + chunk - used) * 8U,
                                                    false))
