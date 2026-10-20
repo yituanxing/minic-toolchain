@@ -710,7 +710,7 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
             /* Fixed binary64 call results are transferred from the target FP
              * ABI result register; aggregate and other types still fail closed. */
             !valid_return_type(program, target, return_type) ||
-            count > 8U || parameter_count > count ||
+            count > 16U || parameter_count > count ||
             (!is_variadic && parameter_count != count) ||
             begin > fn->call_argument_count ||
             count > fn->call_argument_count - begin ||
@@ -1310,50 +1310,87 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                                           : ins->value.call.argument_begin;
             const size_t count = indirect ? ins->value.indirect_call.argument_count
                                           : ins->value.call.argument_count;
-            size_t j, gp_index = 0U, fp_index = 0U;
-            /* M38: AAPCS64 GNU/Linux uses independent GP and FP
-             * register cursors for fixed and variadic scalar binary64 calls.
-             * No aggregate/overflow varargs are admitted. */
+            size_t j, gp_index = 0U, fp_index = 0U, overflow_slots = 0U;
+            size_t stack_index = 0U, stack_bytes;
+            /* AAPCS64 has independent x0-x7/v0-v7 argument banks.
+             * Overflow arguments follow source order at the caller's SP;
+             * reserve this area temporarily below the existing SSA frame.
+             * All SSA reads below use the shifted SP-relative address. */
             for (j = 0U; j < count; ++j) {
                 const MinicCoreCallArgument *arg = &fn->call_arguments[begin + j];
                 const MinicType type = fn->values[arg->value.value_id].type;
-                const size_t slot = (size_t)arg->value.value_id * 8U;
                 if (minic_type_is_double(type)) {
-                    if (fp_index >= 8U ||
-                        fprintf(out, "  ldr d%zu, [sp, #%zu]\n",
-                                fp_index++, slot) < 0) return machine_emit_reject(fn, "aarch64", name, reject_stage,
-                                    reject_block, reject_ins, __LINE__);
+                    if (fp_index++ >= 8U) ++overflow_slots;
+                } else if (gp_index++ >= 8U) ++overflow_slots;
+            }
+            stack_bytes = (overflow_slots * 8U + 15U) & ~(size_t)15U;
+            if (stack_bytes != 0U &&
+                fprintf(out, "  sub sp, sp, #%zu\n", stack_bytes) < 0)
+                return machine_emit_reject(fn, "aarch64", name, reject_stage,
+                                           reject_block, reject_ins, __LINE__);
+            gp_index = fp_index = 0U;
+            for (j = 0U; j < count; ++j) {
+                const MinicCoreCallArgument *arg = &fn->call_arguments[begin + j];
+                const MinicType type = fn->values[arg->value.value_id].type;
+                const size_t slot = (size_t)arg->value.value_id * 8U + stack_bytes;
+                if (minic_type_is_double(type)) {
+                    if (fp_index < 8U) {
+                        if (fprintf(out, "  ldr d%zu, [sp, #%zu]\n",
+                                    fp_index, slot) < 0)
+                            return machine_emit_reject(fn, "aarch64", name,
+                                    reject_stage, reject_block, reject_ins, __LINE__);
+                    } else if (fprintf(out,
+                                       "  ldr d9, [sp, #%zu]\n"
+                                       "  str d9, [sp, #%zu]\n",
+                                       slot, stack_index++ * 8U) < 0)
+                        return machine_emit_reject(fn, "aarch64", name,
+                                    reject_stage, reject_block, reject_ins, __LINE__);
+                    ++fp_index;
                 } else {
-                    if (gp_index >= 8U ||
-                        fprintf(out, register64_type(program, target, type)
-                                        ? "  ldr x%zu, [sp, #%zu]\n"
-                                        : "  ldr w%zu, [sp, #%zu]\n",
-                                gp_index++, slot) < 0) return machine_emit_reject(fn, "aarch64", name, reject_stage,
-                                    reject_block, reject_ins, __LINE__);
+                    const bool wide = register64_type(program, target, type);
+                    if (gp_index < 8U) {
+                        if (fprintf(out, wide ? "  ldr x%zu, [sp, #%zu]\n"
+                                              : "  ldr w%zu, [sp, #%zu]\n",
+                                    gp_index, slot) < 0)
+                            return machine_emit_reject(fn, "aarch64", name,
+                                    reject_stage, reject_block, reject_ins, __LINE__);
+                    } else if (fprintf(out,
+                                       wide ? "  ldr x9, [sp, #%zu]\n"
+                                              "  str x9, [sp, #%zu]\n"
+                                            : "  ldr w9, [sp, #%zu]\n"
+                                              "  str w9, [sp, #%zu]\n",
+                                       slot, stack_index++ * 8U) < 0)
+                        return machine_emit_reject(fn, "aarch64", name,
+                                    reject_stage, reject_block, reject_ins, __LINE__);
+                    ++gp_index;
                 }
             }
             if (indirect) {
                 if (fprintf(out, "  ldr x16, [sp, #%zu]\n"
                                  "  blr x16\n",
-                            (size_t)ins->value.indirect_call.callee * 8U) < 0)
+                            (size_t)ins->value.indirect_call.callee * 8U +
+                            stack_bytes) < 0)
                     return machine_emit_reject(fn, "aarch64", name, reject_stage,
-                                    reject_block, reject_ins, __LINE__);
+                                               reject_block, reject_ins, __LINE__);
             } else {
                 const MinicCoreCallee *callee =
                     &fn->callees[ins->value.call.callee_id];
                 if (fprintf(out, "  bl %s\n", callee->name) < 0)
                     return machine_emit_reject(fn, "aarch64", name, reject_stage,
-                                    reject_block, reject_ins, __LINE__);
+                                               reject_block, reject_ins, __LINE__);
             }
+            if (stack_bytes != 0U &&
+                fprintf(out, "  add sp, sp, #%zu\n", stack_bytes) < 0)
+                return machine_emit_reject(fn, "aarch64", name, reject_stage,
+                                           reject_block, reject_ins, __LINE__);
             if (minic_type_is_void(ins->type)) continue;
-            /* AAPCS64 returns IEEE binary64 in d0 (v0), not x0. Move
-             * its exact bits to the common 64-bit SSA spill register. */
             if (fputs(minic_type_is_double(ins->type)
                           ? "  fmov x9, d0\n"
                           : register64_type(program, target, ins->type)
                               ? "  mov x9, x0\n"
-                              : "  mov w9, w0\n", out) == EOF) return machine_emit_reject(fn, "aarch64", name, reject_stage,
-                                    reject_block, reject_ins, __LINE__);
+                              : "  mov w9, w0\n", out) == EOF)
+                return machine_emit_reject(fn, "aarch64", name, reject_stage,
+                                           reject_block, reject_ins, __LINE__);
             if (minic_type_is_integer(ins->type)) {
                 size_t width;
                 bool sign;
@@ -1361,7 +1398,7 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                                           &width, &sign) ||
                     (width != 8U && !emit_integer_normalize(out, width, sign)))
                     return machine_emit_reject(fn, "aarch64", name, reject_stage,
-                                    reject_block, reject_ins, __LINE__);
+                                               reject_block, reject_ins, __LINE__);
             }
             break;
         }
