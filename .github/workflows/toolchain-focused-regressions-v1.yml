@@ -89,7 +89,7 @@ jobs:
                   linux_yaml=true
                 fi
                 case "$changed" in
-                  src/target/aarch64/*|src/target/loongarch64/*|tests/compiler/c0/run-four-backend-m1.sh|tests/compiler/c0/probe-four-backend-outgoing-abi.sh|tests/external/tiny-aes-c/*|tests/external/cjson/*|tests/external/zlib/*|tests/external/lua/*|tests/external/sqlite/*)
+                  src/target/aarch64/*|src/target/loongarch64/*|tests/compiler/c0/run-four-backend-m1.sh|tests/compiler/c0/probe-four-backend-outgoing-abi.sh|tests/external/tiny-aes-c/*|tests/external/cjson/*|tests/external/zlib/*|tests/external/lua/*|tests/external/sqlite/*|tests/external/tinycc/*)
                     ;;
                   *) four_only=false ;;
                 esac
@@ -252,6 +252,12 @@ jobs:
           # and both real interpreter/luac binaries must match GNU/QEMU.
           sh -n tests/external/lua/probe-four-backend-frontier.sh
           make MODE=release CFLAGS=-Werror BUILD_DIR=build/toolchain-focused-t1-v2 check-four-backend-lua-accept
+          # Next pinned upstream source: compiler-object discovery only.
+          # Missing TinyCC backend capabilities are reported by type and TU
+          # without disguising incomplete link/QEMU tests as acceptance.
+          sh -n tests/external/tinycc/probe-four-backend-frontier.sh
+          MINIC_CC="$GITHUB_WORKSPACE/build/toolchain-focused-t1-v2/bin/minic-cc" \
+            sh tests/external/tinycc/probe-four-backend-frontier.sh
 
 
           if [[ "$sqlite_status" -ne 0 ]]; then
