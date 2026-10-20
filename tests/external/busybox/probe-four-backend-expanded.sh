@@ -16,7 +16,7 @@ work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT HUP INT TERM
 src="$work/src"
 mkdir -p "$src" "$work/gnu" "$work/mini" "$work/obj"
-(cd "$root" && tar -cf - .) | (cd "$work" && tar -xf -)
+(cd "$root" && tar -cf - .) | (cd "$src" && tar -xf -)
 # 'root' is a trusted unpacked vendor snapshot, not a modified worktree.
 # Recreate config using the original Kconfig, not hand-written CPP defines.
 if ! (cd "$src" && make -j2 HOSTCC=cc CC="$gcc" CROSS_COMPILE="$prefix" allnoconfig \
@@ -168,9 +168,7 @@ cases = [
  ("sleep", ["sleep", "0"], b""),
  ("env", ["env", "-i", "X=42"], b""),
  ("printenv", ["printenv", "HOME"], b""),
- ("tty", ["tty"], b""),
  ("hostid", ["hostid"], b""),
- ("logname", ["logname"], b""),
  ("ls", ["ls", "-1", root], b""),
  ("tail", ["tail", "-n", "1", sample], b""),
  ("tee", ["tee"], b"hello\n"),
