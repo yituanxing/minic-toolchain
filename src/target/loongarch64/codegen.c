@@ -1097,6 +1097,7 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                       !minic_type_is_pointer(ins->type) &&
                       !(minic_type_is_float(ins->type) &&
                         (ins->kind == MINIC_CORE_INSTRUCTION_LOAD ||
+                         ins->kind == MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT ||
                          ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_TO_FLOAT ||
                          ins->kind == MINIC_CORE_INSTRUCTION_FLOAT_ADD ||
                          ins->kind == MINIC_CORE_INSTRUCTION_FLOAT_SUBTRACT ||
@@ -1203,7 +1204,8 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
             continue;
         }
         case MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT:
-            if (!minic_type_is_double(ins->type) ||
+            if ((!minic_type_is_double(ins->type) &&
+                 !minic_type_is_float(ins->type)) ||
                 fprintf(out, "  li.d $t0, 0x%016" PRIx64 "\n",
                         ins->value.floating_bits) < 0) return machine_emit_reject(fn, "loongarch64", name, reject_stage,
                                     reject_block, reject_ins, __LINE__);
@@ -2144,11 +2146,41 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
             if (src >= fn->value_count ||
                 !minic_type_is_double(fn->values[src].type) ||
                 !scalar_integer_width(program, target, ins->type, &width, &sign) ||
-                (width != 4U && width != 8U) ||
-                (width == 8U && !sign))
+                (width != 4U && width != 8U))
                 return machine_emit_reject(fn, "loongarch64", name,
                                            reject_stage, reject_block,
                                            reject_ins, __LINE__);
+            if (width == 8U && !sign) {
+                /* LP64D supplies signed ftintrz.l.d only. For C-defined
+                 * uint64 conversions, translate the upper half of the
+                 * unsigned domain by 2^63 and restore its high bit. */
+                if (!emit_sp_mem(out, "fld.d", "$ft0",
+                                 (size_t)src * 8U) ||
+                    fprintf(out,
+                       "  li.d $t1, 0x43e0000000000000\n"
+                       "  movgr2fr.d $ft1, $t1\n"
+                       "  fcmp.clt.d $fcc0, $ft0, $ft1\n"
+                       "  movcf2gr $t1, $fcc0\n"
+                       "  bnez $t1, .Lmini_loong_u64_f%zu_v%u_low\n"
+                       "  fsub.d $ft0, $ft0, $ft1\n"
+                       "  ftintrz.l.d $ft0, $ft0\n"
+                       "  movfr2gr.d $t0, $ft0\n"
+                       "  li.d $t1, 0x8000000000000000\n"
+                       "  or $t0, $t0, $t1\n"
+                       "  b .Lmini_loong_u64_f%zu_v%u_done\n"
+                       ".Lmini_loong_u64_f%zu_v%u_low:\n"
+                       "  ftintrz.l.d $ft0, $ft0\n"
+                       "  movfr2gr.d $t0, $ft0\n"
+                       ".Lmini_loong_u64_f%zu_v%u_done:\n",
+                       id, (unsigned int)ins->result,
+                       id, (unsigned int)ins->result,
+                       id, (unsigned int)ins->result,
+                       id, (unsigned int)ins->result) < 0)
+                    return machine_emit_reject(fn, "loongarch64", name,
+                                               reject_stage, reject_block,
+                                               reject_ins, __LINE__);
+                break;
+            }
             conversion = width == 4U && sign
                 ? "  ftintrz.w.d $ft0, $ft0\n"
                   "  movfr2gr.s $t0, $ft0\n"

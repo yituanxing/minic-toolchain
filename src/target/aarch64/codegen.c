@@ -1142,6 +1142,7 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                       !minic_type_is_pointer(ins->type) &&
                       !(minic_type_is_float(ins->type) &&
                         (ins->kind == MINIC_CORE_INSTRUCTION_LOAD ||
+                         ins->kind == MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT ||
                          ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_TO_FLOAT ||
                          ins->kind == MINIC_CORE_INSTRUCTION_FLOAT_ADD ||
                          ins->kind == MINIC_CORE_INSTRUCTION_FLOAT_SUBTRACT ||
@@ -1259,7 +1260,8 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
         case MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT: {
             const uint64_t bits = ins->value.floating_bits;
             unsigned int shift;
-            if (!minic_type_is_double(ins->type) ||
+            if ((!minic_type_is_double(ins->type) &&
+                 !minic_type_is_float(ins->type)) ||
                 fprintf(out, "  movz x9, #%" PRIu64 "\n",
                         bits & UINT64_C(0xffff)) < 0) return machine_emit_reject(fn, "aarch64", name, reject_stage,
                                     reject_block, reject_ins, __LINE__);
@@ -2325,13 +2327,17 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
             if (src >= fn->value_count ||
                 !minic_type_is_double(fn->values[src].type) ||
                 !scalar_integer_width(program, target, ins->type, &width, &sign) ||
-                (width != 4U && width != 8U) ||
-                (width == 8U && !sign))
+                (width != 4U && width != 8U))
                 return machine_emit_reject(fn, "aarch64", name, reject_stage,
                                            reject_block, reject_ins, __LINE__);
-            conversion = width == 8U ? "  fcvtzs x9, d9\n"
-                       : sign ? "  fcvtzs w9, d9\n"
-                              : "  fcvtzu w9, d9\n";
+            /* A64 natively supports unsigned 64-bit binary64 conversion.
+             * C-defined finite inputs truncate toward zero; NaN/overflow
+             * inputs remain outside the C conversion contract. */
+            conversion = width == 8U
+                ? (sign ? "  fcvtzs x9, d9\n"
+                        : "  fcvtzu x9, d9\n")
+                : sign ? "  fcvtzs w9, d9\n"
+                       : "  fcvtzu w9, d9\n";
             if (fprintf(out, "  ldr d9, [sp, #%zu]\n",
                         (size_t)src * 8U) < 0 ||
                 fputs(conversion, out) == EOF)
