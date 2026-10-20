@@ -5,6 +5,12 @@
 # Exploratory until BOTH GNU/QEMU differentials pass: never a fake PASS.
 set -eu
 : "${MINIC_CC:?set MINIC_CC}"
+cohort=${FOUR_BACKEND_BUSYBOX_COHORT:-baseline}
+case "$cohort" in
+  baseline) tag=FOUR_BACKEND_BUSYBOX_EXPAND ;;
+  next) tag=FOUR_BACKEND_BUSYBOX_NEXT ;;
+  *) echo "BUSYBOX_INVALID_COHORT=$cohort" >&2; exit 1 ;;
+esac
 test "$#" -eq 6
 root=$1
 target=$2
@@ -21,7 +27,7 @@ mkdir -p "$src" "$work/gnu" "$work/mini" "$work/obj"
 # Recreate config using the original Kconfig, not hand-written CPP defines.
 if ! (cd "$src" && make -j2 HOSTCC=cc CC="$gcc" CROSS_COMPILE="$prefix" allnoconfig \
     >"$work/config.out" 2>"$work/config.err"); then
-  echo "FOUR_BACKEND_BUSYBOX_EXPAND=BLOCKED target=$target stage=GNU_Kconfig"
+  echo "${tag}=BLOCKED target=$target stage=GNU_Kconfig"
   tail -n 12 "$work/config.err"
   exit 0
 fi
@@ -30,6 +36,16 @@ fi
 extra='BASENAME DIRNAME PRINTF PWD WHOAMI YES UNAME NPROC SLEEP ENV
 PRINTENV MKDIR RMDIR TOUCH TTY HOSTID LOGNAME LINK UNLINK LN MV CP RM
 ID LS TAIL TEE SEQ'
+if [ "$cohort" = next ]; then
+  extra="$extra
+CHGRP CHMOD CHOWN CHROOT CKSUM COMM DATE DD
+DF DOS2UNIX DU EXPR FACTOR FALSE FOLD INSTALL
+MD5SUM MKFIFO MKNOD MKTEMP NICE NL NOHUP OD
+PASTE READLINK REALPATH SHRED SHUF SPLIT STAT SUM
+SYNC TAC TEST TIMEOUT TRUE TRUNCATE TSORT USLEEP
+UUDECODE UUENCODE FIND XARGS SED CMP
+"
+fi
 python3 - "$src/.config" $extra <<'PY'
 import sys
 p = sys.argv[1]
@@ -50,7 +66,7 @@ if ! (cd "$src" && yes '' | make HOSTCC=cc CC="$gcc" \
    ! (cd "$src" && make -j2 HOSTCC=cc CC="$gcc" \
     CROSS_COMPILE="$prefix" busybox \
     >"$work/build.out" 2>"$work/build.err"); then
-  echo "FOUR_BACKEND_BUSYBOX_EXPAND=BLOCKED target=$target stage=GNU_original_build"
+  echo "${tag}=BLOCKED target=$target stage=GNU_original_build"
   tail -n 22 "$work/build.err" "$work/build.out" 2>/dev/null || true
   exit 0
 fi
@@ -69,6 +85,22 @@ coreutils/unlink.c coreutils/ln.c coreutils/mv.c coreutils/cp.c
 coreutils/rm.c coreutils/id.c coreutils/ls.c coreutils/tail.c
 coreutils/tee.c coreutils/seq.c
 '
+if [ "$cohort" = next ]; then
+  sources="$sources
+coreutils/chgrp.c coreutils/chmod.c coreutils/chown.c coreutils/chroot.c
+coreutils/cksum.c coreutils/comm.c coreutils/date.c coreutils/dd.c
+coreutils/df.c coreutils/dos2unix.c coreutils/du.c coreutils/expr.c
+coreutils/factor.c coreutils/false.c coreutils/fold.c coreutils/install.c
+coreutils/md5_sha1_sum.c coreutils/mkfifo.c coreutils/mknod.c coreutils/mktemp.c
+coreutils/nice.c coreutils/nl.c coreutils/nohup.c coreutils/od.c
+coreutils/paste.c coreutils/readlink.c coreutils/realpath.c coreutils/shred.c
+coreutils/shuf.c coreutils/split.c coreutils/stat.c coreutils/sum.c
+coreutils/sync.c coreutils/tac.c coreutils/test.c coreutils/timeout.c
+coreutils/true.c coreutils/truncate.c coreutils/tsort.c coreutils/usleep.c
+coreutils/uudecode.c coreutils/uuencode.c findutils/find.c findutils/xargs.c
+editors/sed.c editors/cmp.c
+"
+fi
 total=0
 passed=0
 blocked=0
@@ -80,14 +112,14 @@ for file in $sources; do
   output="$work/obj/$stem.s"
   if [ ! -f "$src/${file%.c}.o" ]; then
     blocked=$((blocked+1))
-    echo "FOUR_BACKEND_BUSYBOX_EXPAND_TU target=$target source=$file stage=missing_Kbuild_owner"
+    echo "${tag}_TU target=$target source=$file stage=missing_Kbuild_owner"
     continue
   fi
   if ! "$gcc" -E -P -std=gnu11 -D_GNU_SOURCE \
       -I"$src/include" -I"$src" -include "$src/include/autoconf.h" \
       "$src/$file" -o "$input" 2>"$work/obj/$stem.cpp.err"; then
     blocked=$((blocked+1))
-    echo "FOUR_BACKEND_BUSYBOX_EXPAND_TU target=$target source=$file stage=GNU_CPP"
+    echo "${tag}_TU target=$target source=$file stage=GNU_CPP"
     continue
   fi
   if ! timeout 90s env MINIC_BACKEND_CENSUS=1 \
@@ -95,22 +127,22 @@ for file in $sources; do
       2>"$work/obj/$stem.mini.err"; then
     blocked=$((blocked+1))
     first=$(grep -m 1 -E 'MINIC_BACKEND_REJECT|error:' "$work/obj/$stem.mini.err" || true)
-    echo "FOUR_BACKEND_BUSYBOX_EXPAND_TU target=$target source=$file stage=MiniC detail=$first"
+    echo "${tag}_TU target=$target source=$file stage=MiniC detail=$first"
     continue
   fi
   if ! "$gcc" -c -x assembler "$output" -o "$work/obj/$stem.o" \
       2>"$work/obj/$stem.as.err"; then
     blocked=$((blocked+1))
     first=$(head -n 1 "$work/obj/$stem.as.err" || true)
-    echo "FOUR_BACKEND_BUSYBOX_EXPAND_TU target=$target source=$file stage=GNU_AS detail=$first"
+    echo "${tag}_TU target=$target source=$file stage=GNU_AS detail=$first"
     continue
   fi
   passed=$((passed+1))
-  echo "FOUR_BACKEND_BUSYBOX_EXPAND_TU target=$target source=$file stage=MiniC_GNU_AS_PASS"
+  echo "${tag}_TU target=$target source=$file stage=MiniC_GNU_AS_PASS"
 done
-echo "FOUR_BACKEND_BUSYBOX_EXPAND_FRONTIER target=$target original_Kbuild_owners=$total MiniC_GNU_AS_pass=$passed blocked=$blocked"
+echo "${tag}_FRONTIER target=$target original_Kbuild_owners=$total MiniC_GNU_AS_pass=$passed blocked=$blocked"
 if [ "$passed" -ne "$total" ]; then
-  echo "FOUR_BACKEND_BUSYBOX_EXPAND=BLOCKED target=$target stage=selected_real_Kbuild_objects"
+  echo "${tag}=BLOCKED target=$target stage=selected_real_Kbuild_objects"
   exit 0
 fi
 # Swap actual GNU Kbuild owner .o, discard composite archives, and link.
@@ -127,7 +159,7 @@ rm -f "$src/busybox" "$src/busybox_unstripped"
 if ! (cd "$src" && make -j2 HOSTCC=cc CC="$gcc" \
     CROSS_COMPILE="$prefix" busybox \
     >"$work/mixed.out" 2>"$work/mixed.err"); then
-  echo "FOUR_BACKEND_BUSYBOX_EXPAND=BLOCKED target=$target stage=GNU_original_Kbuild_relink"
+  echo "${tag}=BLOCKED target=$target stage=GNU_original_Kbuild_relink"
   tail -n 22 "$work/mixed.out" "$work/mixed.err" "$src/busybox_unstripped.out" 2>/dev/null || true
   exit 0
 fi
@@ -135,7 +167,7 @@ for file in $sources; do
   stem=${file##*/}
   stem=${stem%.c}
   if ! cmp -s "$src/${file%.c}.o" "$work/obj/$stem.o"; then
-    echo "FOUR_BACKEND_BUSYBOX_EXPAND=BLOCKED target=$target stage=GNU_overwrote_MiniC source=$file"
+    echo "${tag}=BLOCKED target=$target stage=GNU_overwrote_MiniC source=$file"
     exit 0
   fi
 done
@@ -175,6 +207,29 @@ cases = [
  ("seq", ["seq", "1", "3"], b""),
  ("id", ["id", "-u"], b""),
 ]
+if os.environ.get("FOUR_BACKEND_BUSYBOX_COHORT") == "next":
+    cases.extend([
+      ("cksum", ["cksum", sample], b""),
+      ("comm", ["comm", sample, sample], b""),
+      ("expr", ["expr", "7", "+", "35"], b""),
+      ("factor", ["factor", "21", "35"], b""),
+      ("false", ["false"], b""),
+      ("true", ["true"], b""),
+      ("fold", ["fold", "-w", "3", sample], b""),
+      ("md5sum", ["md5sum", sample], b""),
+      ("nl", ["nl", sample], b""),
+      ("od", ["od", "-An", "-tx1", sample], b""),
+      ("paste", ["paste", sample, sample], b""),
+      ("realpath", ["realpath", sample], b""),
+      ("stat", ["stat", sample], b""),
+      ("sum", ["sum", sample], b""),
+      ("tac", ["tac", sample], b""),
+      ("test", ["test", "7", "-eq", "7"], b""),
+      ("tsort", ["tsort"], b"a b\\nb c\\n"),
+      ("sed", ["sed", "s/alpha/ALPHA/g", sample], b""),
+      ("cmp", ["cmp", sample, sample], b""),
+      ("find", ["find", root, "-maxdepth", "0"], b""),
+    ])
 for label, argv, input_bytes in cases:
     results = []
     for mode in ("gnu", "mini"):
@@ -183,15 +238,15 @@ for label, argv, input_bytes in cases:
             input=input_bytes, capture_output=True, timeout=20,
             env=dict(os.environ, LC_ALL="C"), check=False)
         results.append((p.returncode, p.stdout, p.stderr))
-    if results[0] != results[1]:
-        print("FOUR_BACKEND_BUSYBOX_EXPAND_RUNTIME=FAIL applet=%s GNU=%r MINI=%r" %
+    if results[0] != results[1] or results[0][0] in (126, 127):
+        print("${tag}_RUNTIME=FAIL applet=%s GNU=%r MINI=%r" %
               (label, results[0], results[1]), flush=True)
         sys.exit(1)
-    print("FOUR_BACKEND_BUSYBOX_EXPAND_RUNTIME=PASS applet=%s" % label, flush=True)
-print("FOUR_BACKEND_BUSYBOX_EXPAND_RUNTIME_ACCEPT=PASS fixtures=%d" % len(cases), flush=True)
+    print("${tag}_RUNTIME=PASS applet=%s" % label, flush=True)
+print("${tag}_RUNTIME_ACCEPT=PASS fixtures=%d" % len(cases), flush=True)
 PY
 then
-  echo "FOUR_BACKEND_BUSYBOX_EXPAND=BLOCKED target=$target stage=GNU_QEMU_differential"
+  echo "${tag}=BLOCKED target=$target stage=GNU_QEMU_differential"
   exit 0
 fi
-echo "FOUR_BACKEND_BUSYBOX_EXPAND=PASS target=$target original_Kbuild_owners=$total MiniC_owners=$passed GNU_remaining_owners=yes SHA_objects_verified=$passed GNU_QEMU_differential=1 full_MiniC=NO"
+echo "${tag}=PASS target=$target original_Kbuild_owners=$total MiniC_owners=$passed GNU_remaining_owners=yes SHA_objects_verified=$passed GNU_QEMU_differential=1 full_MiniC=NO"
