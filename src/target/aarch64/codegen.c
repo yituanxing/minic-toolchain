@@ -557,8 +557,13 @@ static bool legalize_large_sp_memory(const char *path) {
     while (fgets(line, sizeof(line), input) != NULL) {
         char op[16] = {0}, reg[16] = {0};
         size_t offset = 0U;
-        if (sscanf(line, "  %15s %15[^,], [sp, #%zu]",
-                   op, reg, &offset) == 3 &&
+        const bool original_sp =
+            sscanf(line, "  %15s %15[^,], [sp, #%zu]",
+                   op, reg, &offset) == 3;
+        const bool fixed_x19 = !original_sp &&
+            sscanf(line, "  %15s %15[^,], [x19, #%zu]",
+                   op, reg, &offset) == 3;
+        if ((original_sp || fixed_x19) &&
             (strncmp(op, "ldr", 3U) == 0 ||
              strncmp(op, "str", 3U) == 0) && offset > 4095U) {
             const uint64_t imm = (uint64_t)offset;
@@ -576,7 +581,8 @@ static bool legalize_large_sp_memory(const char *path) {
                 }
             }
             if (!success ||
-                fputs("  add x12, sp, x12\n", output) == EOF ||
+                fputs(fixed_x19 ? "  add x12, x19, x12\n" :
+                                   "  add x12, sp, x12\n", output) == EOF ||
                 fprintf(output, "  %s %s, [x12]\n", op, reg) < 0) {
                 success = false; break;
             }
@@ -642,15 +648,16 @@ static bool emit_lp64_record_chunk_parameter(FILE *out, size_t offset,
     return true;
 }
 
-static bool emit_function(FILE *out, const MinicC0Program *program,
-                          const MinicTargetInfo *target,
-                          const MinicFunction *decl,
+static bool emit_function_body(FILE *out, const MinicC0Program *program,
+                               const MinicTargetInfo *target,
+                               const MinicFunction *decl,
                           const MinicCoreFunction *fn, size_t id,
                           bool function_sections) {
     const char *name = minic_c0_function_symbol_name(decl);
     const MinicCoreBlock *block;
     size_t frame, i, object_end, save_offset, ld_base;
     bool has_direct_calls = false;
+    bool dynamic_frame = false;
     const char *reject_stage = "function_preflight";
     size_t reject_block = SIZE_MAX, reject_ins = SIZE_MAX;
     size_t va_count = 0U, va_base = 0U, va_gp = 0U, va_fp = 0U;
@@ -716,9 +723,12 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
             else ++va_gp;
         }
     }
-    for (i = 0U; i < fn->instruction_count; ++i)
+    for (i = 0U; i < fn->instruction_count; ++i) {
         if (fn->instructions[i].kind ==
             MINIC_CORE_INSTRUCTION_VARIADIC_ARGUMENT_ADDRESS) ++va_count;
+        if (fn->instructions[i].kind ==
+            MINIC_CORE_INSTRUCTION_DYNAMIC_STACK_ALLOC) dynamic_frame = true;
+    }
     if (va_count != 0U &&
         (!decl->is_variadic || va_count != 1U ||
          va_gp > 8U || va_fp > 8U))
@@ -1008,11 +1018,12 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
         /* 32-byte va_list tag, 8 gp slots, 8 x 16-byte fp slots. */
         save_offset = va_base + 224U;
     }
-    if (save_offset > MINIC_LARGE_FRAME_MAX - (has_direct_calls ? 8U : 0U))
+    if (save_offset > MINIC_LARGE_FRAME_MAX - (has_direct_calls ? 8U : 0U) -
+                      (dynamic_frame ? 8U : 0U))
         return machine_emit_reject(fn, "aarch64", name, reject_stage,
                                     reject_block, reject_ins, __LINE__);
-    frame = (save_offset + (has_direct_calls ? 8U : 0U) + 15U) &
-            ~(size_t)15U;
+    frame = (save_offset + (has_direct_calls ? 8U : 0U) +
+             (dynamic_frame ? 8U : 0U) + 15U) & ~(size_t)15U;
     if (frame > MINIC_LARGE_FRAME_MAX) {
         if (getenv("MINIC_M1_TRACE") != NULL)
             (void)fprintf(stderr,
@@ -1050,6 +1061,15 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
         fprintf(out, "  str x30, [sp, #%zu]\n",
                 save_offset) < 0) return machine_emit_reject(fn, "aarch64", name, reject_stage,
                                     reject_block, reject_ins, __LINE__);
+    /* x19 is the AAPCS64 callee-saved fixed-frame anchor. A dynamic
+     * alloca changes SP, but SSA slots and incoming parameters do not
+     * change position. The outgoing call spill area still uses raw SP. */
+    if (dynamic_frame &&
+        (fprintf(out, "  str x19, [sp, #%zu]\n",
+                 save_offset + (has_direct_calls ? 8U : 0U)) < 0 ||
+         fputs("  mov x19, sp\n", out) == EOF))
+        return machine_emit_reject(fn, "aarch64", name, reject_stage,
+                                   reject_block, reject_ins, __LINE__);
     if (va_count != 0U) {
         /* Preserve incoming anonymous gp/fp arguments before any call. */
         for (i = 0U; i < 8U; ++i)
@@ -2667,6 +2687,34 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                                            reject_block, reject_ins, __LINE__);
             break;
         }
+        case MINIC_CORE_INSTRUCTION_DYNAMIC_STACK_ALLOC: {
+            const MinicCoreValueId count = ins->value.operand;
+            if (!dynamic_frame || ins->result >= fn->value_count ||
+                count >= fn->value_count || !minic_type_is_pointer(ins->type) ||
+                !minic_type_equal(fn->values[ins->result].type, ins->type) ||
+                !minic_type_equal(fn->values[count].type,
+                                  minic_type_unsigned_long()) ||
+                fprintf(out,
+                    "  ldr x9, [sp, #%zu]\n"
+                    "  adds x10, x9, #15\n"
+                    "  b.cs .Lmini_arm_alloc_overflow_%zu_%u\n"
+                    "  and x10, x10, #-16\n"
+                    "  sub sp, sp, x10\n"
+                    "  mov x9, sp\n"
+                    "  b .Lmini_arm_alloc_done_%zu_%u\n"
+                    ".Lmini_arm_alloc_overflow_%zu_%u:\n"
+                    "  brk #0\n"
+                    ".Lmini_arm_alloc_done_%zu_%u:\n",
+                    (size_t)count * 8U,
+                    id, (unsigned int)ins_id,
+                    id, (unsigned int)ins_id,
+                    id, (unsigned int)ins_id,
+                    id, (unsigned int)ins_id) < 0)
+                return machine_emit_reject(fn, "aarch64", name,
+                                           reject_stage, reject_block,
+                                           reject_ins, __LINE__);
+            break;
+        }
         case MINIC_CORE_INSTRUCTION_INTEGER_CONVERSION: {
             const MinicCoreValueId src = ins->value.operand;
             size_t src_width, dst_width;
@@ -2758,6 +2806,10 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                          (size_t)block->terminator.return_value * 8U) < 0) ||
                 (has_direct_calls && fprintf(out, "  ldr x30, [sp, #%zu]\n",
                                              save_offset) < 0) ||
+                (dynamic_frame &&
+                 (fputs("  mov sp, x19\n", out) == EOF ||
+                  fprintf(out, "  ldr x19, [sp, #%zu]\n",
+                          save_offset + (has_direct_calls ? 8U : 0U)) < 0)) ||
                 (frame != 0U &&
                  (fprintf(out, "  movz x12, #%zu\n", frame & 65535U) < 0 ||
                   (frame > 65535U &&
@@ -2828,6 +2880,97 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
     if (fprintf(out, ".size %s,.-%s\n", name, name) < 0) return machine_emit_reject(fn, "aarch64", name, reject_stage,
                                     reject_block, reject_ins, __LINE__);
     return true;
+}
+
+/* Translate only dynamic-frame functions through a private assembly buffer.
+ * The existing AArch64 emitter speaks [sp,#offset] for its fixed SSA frame.
+ * For alloca functions, those values belong to callee-saved x19 while SP
+ * may move; source-owned outgoing stack argument slots remain relative to SP.
+ * This is a target-local text legalization, just like large-offset handling,
+ * and leaves all non-dynamic code generation byte-for-byte unchanged. */
+static bool copy_dynamic_frame_asm(FILE *out, FILE *input) {
+    char line[1024];
+    bool anchored = false;
+    size_t spill = 0U;
+    while (fgets(line, sizeof(line), input) != NULL) {
+        char *base, *end;
+        unsigned int rd, rn;
+        size_t value;
+        if (strchr(line, '\n') == NULL && !feof(input)) return false;
+        if (strcmp(line, "  mov x19, sp\n") == 0) {
+            anchored = true;
+        } else if (strcmp(line, "  mov sp, x19\n") == 0) {
+            anchored = false;
+            spill = 0U;
+        } else if (anchored && sscanf(line, "  sub sp, sp, #%zu", &value) == 1) {
+            /* Only the bounded outgoing call argument area uses sub #imm.
+             * Dynamic allocations use sub sp, sp, x10, never an immediate. */
+            if (spill != 0U || value == 0U || value > 512U) return false;
+            spill = value;
+        } else if (anchored && sscanf(line, "  add sp, sp, #%zu", &value) == 1) {
+            if (spill != value) return false;
+            spill = 0U;
+        }
+        base = anchored ? strstr(line, "[sp, #") : NULL;
+        if (base != NULL) {
+            unsigned long long offset;
+            offset = strtoull(base + 6U, &end, 10);
+            if (end == base + 6U || *end != ']' ||
+                offset > (unsigned long long)MINIC_LARGE_FRAME_MAX + 512U)
+                return false;
+            if (offset >= (unsigned long long)spill) {
+                const size_t fixed = (size_t)(offset - spill);
+                if (fprintf(out, "%.*s[x19, #%zu]%s",
+                            (int)(base - line), line, fixed, end + 1) < 0)
+                    return false;
+                continue;
+            }
+            /* This byte-range is the caller-owned outgoing spill area. */
+        } else if (anchored &&
+                   sscanf(line, "  add x%u, sp, x%u", &rd, &rn) == 2 &&
+                   rd == rn && rd >= 9U && rd <= 13U) {
+            if (fprintf(out, "  add x%u, x19, x%u\n", rd, rn) < 0 ||
+                /* Record call arguments pre-add spill bytes to their Core
+                 * object offsets. Remove exactly that adjustment after
+                 * rebasing from SP to fixed x19. */
+                (spill != 0U &&
+                 fprintf(out, "  sub x%u, x%u, #%zu\n",
+                         rd, rd, spill) < 0))
+                return false;
+            continue;
+        }
+        if (fputs(line, out) == EOF) return false;
+    }
+    return ferror(input) == 0 && spill == 0U;
+}
+
+static bool emit_function(FILE *out, const MinicC0Program *program,
+                          const MinicTargetInfo *target,
+                          const MinicFunction *decl,
+                          const MinicCoreFunction *fn, size_t id,
+                          bool function_sections) {
+    size_t i;
+    bool dynamic_frame = false, success;
+    FILE *temporary;
+    for (i = 0U; i < fn->instruction_count; ++i)
+        if (fn->instructions[i].kind ==
+            MINIC_CORE_INSTRUCTION_DYNAMIC_STACK_ALLOC) {
+            dynamic_frame = true;
+            break;
+        }
+    if (!dynamic_frame)
+        return emit_function_body(out, program, target, decl, fn, id,
+                                  function_sections);
+    temporary = tmpfile();
+    if (temporary == NULL) return false;
+    success = emit_function_body(temporary, program, target, decl, fn, id,
+                                 function_sections);
+    if (success && (fflush(temporary) != 0 ||
+                    fseek(temporary, 0L, SEEK_SET) != 0 ||
+                    !copy_dynamic_frame_asm(out, temporary)))
+        success = false;
+    if (fclose(temporary) != 0) success = false;
+    return success;
 }
 
 bool minic_aarch64_write_c0_program_with_core_functions(
