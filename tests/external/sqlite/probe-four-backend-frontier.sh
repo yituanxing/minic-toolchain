@@ -50,14 +50,20 @@ static void run(sqlite3 *db, const char *sql) {
 }
 int main(void) {
     sqlite3 *db = NULL;
+    fprintf(stderr, "SQLITE_RUNTIME_STAGE=open\n");
     if (sqlite3_open(":memory:", &db) != SQLITE_OK) return 1;
+    fprintf(stderr, "SQLITE_RUNTIME_STAGE=schema_and_insert\n");
     run(db, "CREATE TABLE t(id INTEGER PRIMARY KEY, x INT);"
             "INSERT INTO t VALUES(1,11),(2,13);"
             "CREATE INDEX t_x ON t(x);"
             "SELECT SUM(x) AS sum FROM t;");
+    fprintf(stderr, "SQLITE_RUNTIME_STAGE=transaction\n");
     run(db, "BEGIN; UPDATE t SET x=99 WHERE id=1; ROLLBACK;");
+    fprintf(stderr, "SQLITE_RUNTIME_STAGE=select\n");
     run(db, "SELECT x FROM t WHERE id=1;");
+    fprintf(stderr, "SQLITE_RUNTIME_STAGE=integrity\n");
     run(db, "PRAGMA integrity_check;");
+    fprintf(stderr, "SQLITE_RUNTIME_STAGE=version_and_close\n");
     printf("sqlite-version=%s\n", sqlite3_libversion());
     return sqlite3_close(db) == SQLITE_OK ? 0 : 2;
 }
@@ -177,7 +183,7 @@ for target in aarch64 loongarch64; do
         if ! timeout 60s "$qemu" "$work/$target/$cc" \
                 >"$work/$target/$cc.stdout" 2>"$work/$target/$cc.stderr"; then
             echo "FOUR_BACKEND_SQLITE=FAIL target=$target stage=$cc-QEMU" >&2
-            sed -n '1,15p' "$work/$target/$cc.stderr" >&2
+            sed -n '1,30p' "$work/$target/$cc.stderr" >&2
             runtime_ok=0
         fi
     done
