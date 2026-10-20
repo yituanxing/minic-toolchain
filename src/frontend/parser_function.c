@@ -21,6 +21,7 @@ static bool function_identifier_is(const MinicParser *parser, const char *name) 
 
 typedef struct MinicFunctionAttributeContext {
     bool allow_gnu_inline;
+    bool allow_header_vector_pcs;
     bool is_internal;
     bool is_inline;
     bool is_extern;
@@ -35,6 +36,29 @@ typedef struct MinicFunctionAttributeContext {
     MinicFunctionId *alias_target;
     const char *unsupported_message;
 } MinicFunctionAttributeContext;
+
+/* AArch64 glibc's math-vector.h has vector PCS declarations with opaque
+ * NEON/SVE return types. Permit only those foreign declarations. Core
+ * lowering still rejects calls or definitions involving opaque vectors. */
+static bool aarch64_header_vector_return(MinicType type) {
+    return type.pointer_depth == 0U &&
+           (type.base_kind == MINIC_TYPE_BASE_AARCH64_FLOAT32X4 ||
+            type.base_kind == MINIC_TYPE_BASE_AARCH64_FLOAT64X2 ||
+            type.base_kind == MINIC_TYPE_BASE_AARCH64_SVE_FLOAT32 ||
+            type.base_kind == MINIC_TYPE_BASE_AARCH64_SVE_FLOAT64 ||
+            type.base_kind == MINIC_TYPE_BASE_AARCH64_SVE_BOOL);
+}
+
+static bool glibc_header_vector_pcs_attribute(const MinicParser *parser,
+                                               const MinicParsedAttribute *attr) {
+    const char *const name = "__aarch64_vector_pcs__";
+    const size_t n = sizeof("__aarch64_vector_pcs__") - 1U;
+    return parser != NULL && attr != NULL && !attr->has_arguments &&
+           parser->target_info != NULL &&
+           parser->target_info->architecture == MINIC_TARGET_ARCH_AARCH64 &&
+           minic_parser_span_length(attr->name_span) == n &&
+           memcmp(parser->source + attr->name_span.begin.offset, name, n) == 0;
+}
 
 static bool function_attribute_class_is_parse_only(MinicAttributeClass semantic_class) {
     return semantic_class == MINIC_ATTRIBUTE_CLASS_INFORMATIONAL ||
@@ -155,6 +179,9 @@ static bool consume_function_attribute(MinicParser *parser,
     }
     context = (MinicFunctionAttributeContext *)opaque_context;
     descriptor = attribute->descriptor;
+    if (descriptor == NULL && context->allow_header_vector_pcs &&
+        glibc_header_vector_pcs_attribute(parser, attribute))
+        return true;
     if (descriptor == NULL ||
         !minic_attribute_allowed_on(descriptor, MINIC_ATTRIBUTE_TARGET_FUNCTION)) {
         minic_parser_error(parser, "%s (attribute=%.*s)",
@@ -277,6 +304,7 @@ static bool parse_function_attribute_lists(MinicParser *parser,
     MinicFunctionAttributeContext context;
 
     context.allow_gnu_inline = allow_gnu_inline;
+    context.allow_header_vector_pcs = false;
     context.is_internal = is_internal;
     context.is_inline = is_inline;
     context.is_extern = false;
@@ -299,6 +327,7 @@ static bool apply_function_attribute_list(MinicParser *parser,
                                           bool is_internal,
                                           bool is_inline,
                                           bool is_extern,
+                                          bool allow_header_vector_pcs,
                                           char *section_name,
                                           size_t section_capacity,
                                           size_t *section_name_length,
@@ -315,6 +344,7 @@ static bool apply_function_attribute_list(MinicParser *parser,
         return false;
     }
     context.allow_gnu_inline = allow_gnu_inline;
+    context.allow_header_vector_pcs = allow_header_vector_pcs;
     context.is_internal = is_internal;
     context.is_inline = is_inline;
     context.is_extern = is_extern;
@@ -2739,6 +2769,7 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
                 is_internal,
                 is_inline,
                 is_extern_declaration,
+                !is_internal && aarch64_header_vector_return(typed_return_type),
                 section_name,
                 sizeof(section_name),
                 &section_name_length,
@@ -3022,6 +3053,7 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
             is_internal,
             is_inline,
             is_extern_declaration,
+            !is_internal && aarch64_header_vector_return(return_type),
             section_name,
             sizeof(section_name),
             &section_name_length,
