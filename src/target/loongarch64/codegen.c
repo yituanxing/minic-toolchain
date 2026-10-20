@@ -1763,9 +1763,22 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
              * double arguments are passed through remaining a0-a7, then
              * spilled on the stack in source order. */
             for (k = 0U; k < ordinal; ++k) {
-                if ((minic_type_is_double(fn->parameter_types[k]) ||
-                     minic_type_is_float(fn->parameter_types[k])) &&
-                    fp_index < 8U) ++fp_index;
+                size_t record_bytes = 0U, slots = 0U;
+                const MinicType prior = fn->parameter_types[k];
+                if (minic_multi_gp_record(program, target, prior,
+                                          &record_bytes, &slots)) {
+                    /* LP64D passes a two-GP record split across the last
+                     * available GAR and stack, unlike AAPCS64. Advance
+                     * both cursors before receiving the NEXT scalar. */
+                    const size_t available = gp_index < 8U
+                        ? 8U - gp_index : 0U;
+                    const size_t used = slots < available
+                        ? slots : available;
+                    gp_index += used;
+                    overflow_index += slots - used;
+                } else if ((minic_type_is_double(prior) ||
+                            minic_type_is_float(prior)) && fp_index < 8U)
+                    ++fp_index;
                 else if (gp_index < 8U) ++gp_index;
                 else ++overflow_index;
             }

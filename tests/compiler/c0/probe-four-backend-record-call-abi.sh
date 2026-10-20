@@ -29,6 +29,28 @@ int near_spill(long a, long b, long c, long d, long e,
 int mixed_fp(double d, struct Token tok) {
     return d == 1.25 && tok.ptr[0] == 'q' && tok.count == 19U;
 }
+int scalar_after_record(struct Token tok, long value, const char *str) {
+    return tok.ptr[0] == 'q' && tok.count == 19U &&
+           value == 37 && str[0] == 'z';
+}
+int pointer_after_mid_record(int prefix, struct Token tok, const char *str) {
+    return prefix == 3 && tok.ptr[0] == 'q' &&
+           tok.count == 19U && str[0] == 'z';
+}
+int double_after_record(struct Token tok, double value, const char *str) {
+    return tok.ptr[0] == 'q' && tok.count == 19U &&
+           value == 2.25 && str[0] == 'z';
+}
+int two_records_then_scalar(struct Token first, struct Token second, long value) {
+    return first.ptr[0] == 'q' && second.ptr[0] == 'q' &&
+           first.count == 19U && second.count == 19U && value == 73;
+}
+int partial_record_then_scalar(long a,long b,long c,long d,
+        long e,long f,long g,struct Token tok,const char *str) {
+    return a+b+c+d+e+f+g == 28 &&
+           tok.ptr[0] == 'q' && tok.count == 19U && str[0] == 'z';
+}
+
 long many16(long a,long b,long c,long d,long e,long f,long g,long h,
             long i,long j,long k,long l,long m,long n,long o,long p) {
     return a+b+c+d+e+f+g+h+i+j+k+l+m+n+o+p;
@@ -47,6 +69,12 @@ int token_value(const char *, int, struct Token);
 int spill_value(long,long,long,long,long,long,long,long,struct Token);
 int near_spill(long,long,long,long,long,long,long,struct Token);
 int mixed_fp(double,struct Token);
+int scalar_after_record(struct Token,long,const char *);
+int pointer_after_mid_record(int,struct Token,const char *);
+int double_after_record(struct Token,double,const char *);
+int two_records_then_scalar(struct Token,struct Token,long);
+int partial_record_then_scalar(long,long,long,long,long,long,long,struct Token,
+                               const char *);
 long many16(long,long,long,long,long,long,long,long,
             long,long,long,long,long,long,long,long);
 int many_record11(long,long,long,long,long,long,long,long,long,long,
@@ -70,6 +98,12 @@ int main(void) {
     if (!near_spill(1,2,3,4,5,6,7,t)) return 15;
     puts("test-mixed-fp");
     if (!mixed_fp(1.25,t)) return 16;
+    puts("test-scalar-after-record");
+    if (!scalar_after_record(t, 37, "z")) return 21;
+    if (!pointer_after_mid_record(3,t,"z")) return 22;
+    if (!double_after_record(t,2.25,"z")) return 23;
+    if (!two_records_then_scalar(t,t,73)) return 24;
+    if (!partial_record_then_scalar(1,2,3,4,5,6,7,t,"z")) return 25;
     puts("test-16-parameters");
     if (many16(1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16) != 136)
         return 19;
@@ -119,6 +153,6 @@ for target in aarch64 loongarch64; do
         cmp "$w/$target.gnu.out" "$w/$target.$cc.out"
         cmp "$w/$target.gnu.err" "$w/$target.$cc.err"
     done
-    echo "RECORD_CALL_ABI=PASS target=$target small=1 token16=1 stack=1 partial_gp=1 fp=1 indirect=1 sixteen_params=1 record_11th=1 GNU_cross=2"
+    echo "RECORD_CALL_ABI=PASS target=$target small=1 token16=1 stack=1 partial_gp=1 fp=1 indirect=1 sixteen_params=1 record_11th=1 scalar_after_record=1 mixed_fp=1 partial_stack=1 GNU_cross=2"
 done
 echo "RECORD_CALL_ABI_ACCEPT=PASS targets=2"

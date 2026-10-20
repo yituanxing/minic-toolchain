@@ -1929,8 +1929,22 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
             /* AAPCS64: independent x/d argument cursors, with one unified
              * incoming 8-byte stack-slot sequence for exhausted banks. */
             for (k = 0U; k < ordinal; ++k) {
-                if (minic_type_is_double(fn->parameter_types[k]) ||
-                    minic_type_is_float(fn->parameter_types[k])) {
+                size_t record_bytes = 0U, slots = 0U;
+                const MinicType prior = fn->parameter_types[k];
+                if (minic_multi_gp_record(program, target, prior,
+                                          &record_bytes, &slots)) {
+                    /* An AAPCS64 integer-class record consumes its entire
+                     * 1/2-GP register group, or ALL of its stack slots.
+                     * A scalar following a record must start AFTER that
+                     * group, never reuse the final record eightbyte. */
+                    if (gp_index + slots <= 8U)
+                        gp_index += slots;
+                    else {
+                        gp_index = 8U;
+                        overflow_index += slots;
+                    }
+                } else if (minic_type_is_double(prior) ||
+                           minic_type_is_float(prior)) {
                     if (fp_index++ >= 8U) ++overflow_index;
                 } else if (gp_index++ >= 8U) ++overflow_index;
             }
