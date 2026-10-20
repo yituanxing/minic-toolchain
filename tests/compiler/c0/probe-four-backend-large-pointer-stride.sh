@@ -12,7 +12,10 @@ work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT HUP INT TERM
 src="$root/tests/compiler/c0/large_pointer_stride.c"
 "$gcc" -O0 -std=gnu11 "$src" -o "$work/gnu.elf"
-timeout 40s "$MINIC_CC" --target="$target-linux" -S "$src" -o "$work/mini.s"
+# Match the existing MiniC+GNU division of labor: MiniC consumes the
+# exact GNU-preprocessed translation unit, not unexpanded stdio headers.
+"$gcc" -E -P -std=gnu11 "$src" -o "$work/source.i"
+timeout 40s "$MINIC_CC" --target="$target-linux" -S "$work/source.i" -o "$work/mini.s"
 "$gcc" "$work/mini.s" -o "$work/mini.elf"
 timeout 20s "$qemu" -L "$sysroot" "$work/gnu.elf" >"$work/gnu.out" 2>"$work/gnu.err"
 timeout 20s "$qemu" -L "$sysroot" "$work/mini.elf" >"$work/mini.out" 2>"$work/mini.err"
