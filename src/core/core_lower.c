@@ -14980,6 +14980,42 @@ static MinicCoreLowerStatus lower_nested_case_switch(
    that re-entry path separate from the case segment so break still reaches the
    synthetic switch exit and only a genuinely referenced label can revive the
    unreachable tail. */
+/* Statements before the first case/default are dead on switch entry.
+ * Do not discard a nested function-goto/asm-goto label silently: it can
+ * still be entered from elsewhere. A depth/AST failure is fail-closed. */
+static bool core_switch_dead_prefix_has_reentry(
+    const MinicCoreLowerContext *context, MinicStatementId id,
+    unsigned int depth) {
+    const MinicC0Program *program;
+    const MinicStatement *stmt;
+    MinicBlockId children[2];
+    size_t child;
+
+    if (context == NULL || context->body == NULL ||
+        context->body->program == NULL || depth >= 64U)
+        return true;
+    program = context->body->program;
+    stmt = minic_c0_program_statement(program, id);
+    if (stmt == NULL) return true;
+    if (stmt->kind == MINIC_STATEMENT_LABEL &&
+        core_switch_label_has_function_reentry(context, id))
+        return true;
+    children[0] = stmt->then_block;
+    children[1] = stmt->else_block;
+    for (child = 0U; child < 2U; ++child) {
+        const MinicBlock *block;
+        size_t k;
+        if (children[child] == MINIC_BLOCK_INVALID) continue;
+        block = minic_c0_program_block(program, children[child]);
+        if (block == NULL) return true;
+        for (k = 0U; k < block->statement_count; ++k)
+            if (core_switch_dead_prefix_has_reentry(
+                    context, block->statements[k], depth + 1U))
+                return true;
+    }
+    return false;
+}
+
 static MinicCoreLowerStatus
 lower_switch(MinicCoreLowerContext *context, const MinicStatement *statement, bool *terminated) {
     const MinicBlock *body;
@@ -15080,23 +15116,29 @@ lower_switch(MinicCoreLowerContext *context, const MinicStatement *statement, bo
         if (source_statement->kind != MINIC_STATEMENT_CASE &&
             source_statement->kind != MINIC_STATEMENT_DEFAULT) {
             if (label_count == 0U) {
+                const MinicStatementId prefix_id = body->statements[source_index];
+                /* The only entry to this part of a switch is a real
+                 * function-level goto/asm-goto. Preserve these labels. */
                 if (source_statement->kind == MINIC_STATEMENT_LABEL &&
-                    source_statement->target_expression == MINIC_EXPRESSION_INVALID &&
-                    source_statement->expression == MINIC_EXPRESSION_INVALID &&
-                    source_statement->target_statement == MINIC_STATEMENT_INVALID &&
-                    pre_case_label_count < MINIC_CORE_SWITCH_LABEL_LIMIT &&
-                    core_switch_label_has_function_reentry(
-                        context, body->statements[source_index])) {
-                    pre_case_labels[pre_case_label_count++] = body->statements[source_index];
+                    core_switch_label_has_function_reentry(context, prefix_id)) {
+                    if (source_statement->target_expression != MINIC_EXPRESSION_INVALID ||
+                        source_statement->expression != MINIC_EXPRESSION_INVALID ||
+                        source_statement->target_statement != MINIC_STATEMENT_INVALID ||
+                        pre_case_label_count >= MINIC_CORE_SWITCH_LABEL_LIMIT)
+                        return MINIC_CORE_LOWER_UNSUPPORTED;
+                    pre_case_labels[pre_case_label_count++] = prefix_id;
                     continue;
                 }
-                (void)fprintf(stderr,
-                              "CORE_SWITCH_DETAIL function=%s gate=prelabel source_index=%zu "
-                              "kind=%d\n",
-                              context->source_function->name,
-                              source_index,
-                              (int)source_statement->kind);
-                return MINIC_CORE_LOWER_UNSUPPORTED;
+                /* A bare statement preceding the first case/default is
+                 * unreachable from switch dispatch. TinyCC's original
+                 * ARM64 prepare_dynamic_rel has assignment/break/if nodes
+                 * here after target-conditioned case labels disappear.
+                 * Ignore such dead statements, but reject any descendant
+                 * with a genuine function-goto reentry path. */
+                if (core_switch_dead_prefix_has_reentry(
+                        context, prefix_id, 0U))
+                    return MINIC_CORE_LOWER_UNSUPPORTED;
+                continue;
             }
             continue;
         }
