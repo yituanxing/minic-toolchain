@@ -173,6 +173,14 @@ int main(void) {
     show("mix", sqlite3_mprintf("a=%d b=%d c=%lld d=%s", 1, 2, 3LL, "done"));
     show("overflow", sqlite3_mprintf("%d,%d,%d,%d,%d,%d,%d,%d,%d,%d",
          0, 1, 2, 3, 4, 5, 6, 7, 8, 9));
+    /* The original CREATE TABLE path formats two internal #N VM-register
+     * references AFTER mixed pointer/string arguments. The last integer
+     * travels on the caller's stack instead of a GP register. */
+    show("nested_schema", sqlite3_mprintf(
+        "UPDATE %Q.%s SET type='%s', name=%Q, tbl_name=%Q,"
+        " rootpage=#%d, sql=%Q WHERE rowid=#%d",
+        "main", "sqlite_schema", "table", "t", "t", 1,
+        "CREATE TABLE t(id INTEGER PRIMARY KEY, x INT)", 2));
     return 0;
 }
 SRC
