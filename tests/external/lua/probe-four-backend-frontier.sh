@@ -130,12 +130,11 @@ for target in aarch64 loongarch64; do
             target_blocked=$((target_blocked + 1))
             echo "FOUR_BACKEND_LUA_TU=BLOCKED target=$target source=$file stage=GNU_AS"
             sed -n '1,9p' "$work/$target/$stem.as.err"
-            # Assemble failures in large Lua VM TUs must show their exact
-            # offending instruction, not merely a generic range message.
-            grep -m 8 -E '\\.s:[0-9]+: Error:' "$work/$target/$stem.as.err" |
+            # Show exact out-of-range AArch64 instructions.
+            grep -m 8 -E '\.s:[0-9]+: Error:' "$work/$target/$stem.as.err" |
                 while IFS= read -r diagnostic; do
-                    line=$(printf '%s\\n' "$diagnostic" |
-                        sed -n 's/.*\\.s:\\([0-9][0-9]*\\):.*/\\1/p')
+                    line=$(printf '%s\n' "$diagnostic" |
+                        sed -n 's/.*\.s:\([0-9][0-9]*\):.*/\1/p')
                     if [ -n "$line" ]; then
                         begin=$((line > 2 ? line - 2 : 1))
                         end=$((line + 2))
