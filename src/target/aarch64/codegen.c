@@ -1480,6 +1480,56 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
             }
             break;
         }
+        case MINIC_CORE_INSTRUCTION_VARIADIC_NEXT_SCALAR: {
+            /* AAPCS64 va_list: {__stack, __gr_top, __vr_top,
+             * __gr_offs, __vr_offs}. Read from the correct register bank
+             * (GP slots = 8 bytes, FP slots = 16 bytes) or from the
+             * incoming overflow stack, then update the mutable cursor. */
+            const bool fp = minic_type_is_double(ins->type);
+            size_t width = 8U;
+            bool sign = false;
+            if (ins->result >= fn->value_count ||
+                ins->value.operand >= fn->value_count ||
+                !minic_type_is_pointer(
+                    fn->values[ins->value.operand].type) ||
+                (!fp && !minic_type_is_pointer(ins->type) &&
+                 !scalar_integer_width(program, target, ins->type,
+                                       &width, &sign)))
+                return machine_emit_reject(fn, "aarch64", name,
+                    reject_stage, reject_block, reject_ins, __LINE__);
+            if (fprintf(out,
+                        "  ldr x9, [sp, #%zu]\n"
+                        "  ldrsw x10, [x9, #%u]\n"
+                        "  cmp w10, #0\n"
+                        "  b.ge .Lmini_arm_va_f%zu_r%u_stack\n"
+                        "  ldr x11, [x9, #%u]\n"
+                        "  add x11, x11, x10\n"
+                        "  ldr x13, [x11]\n"
+                        "  add w10, w10, #%u\n"
+                        "  str w10, [x9, #%u]\n"
+                        "  b .Lmini_arm_va_f%zu_r%u_done\n"
+                        ".Lmini_arm_va_f%zu_r%u_stack:\n"
+                        "  ldr x11, [x9]\n"
+                        "  ldr x13, [x11]\n"
+                        "  add x11, x11, #8\n"
+                        "  str x11, [x9]\n"
+                        ".Lmini_arm_va_f%zu_r%u_done:\n"
+                        "  mov x9, x13\n",
+                        (size_t)ins->value.operand * 8U,
+                        fp ? 28U : 24U,
+                        id, (unsigned int)ins->result,
+                        fp ? 16U : 8U,
+                        fp ? 16U : 8U,
+                        fp ? 28U : 24U,
+                        id, (unsigned int)ins->result,
+                        id, (unsigned int)ins->result,
+                        id, (unsigned int)ins->result) < 0 ||
+                (!fp && !minic_type_is_pointer(ins->type) &&
+                 width != 8U && !emit_integer_normalize(out, width, sign)))
+                return machine_emit_reject(fn, "aarch64", name,
+                    reject_stage, reject_block, reject_ins, __LINE__);
+            break;
+        }
         case MINIC_CORE_INSTRUCTION_VARIADIC_ARGUMENT_ADDRESS: {
             const size_t stack_top = frame;
             const size_t gr_top = va_base + 96U;

@@ -8491,7 +8491,11 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
             return status;
         }
         if (context->target != NULL &&
-            context->target->architecture == MINIC_TARGET_ARCH_X86_64) {
+            (context->target->architecture == MINIC_TARGET_ARCH_X86_64 ||
+             context->target->architecture == MINIC_TARGET_ARCH_AARCH64)) {
+            /* SysV x86 and AAPCS64 use an ABI-owned register-bank cursor,
+             * unlike the linear 8-byte pointer path of RV64/LoongArch.
+             * VARIADIC_NEXT_SCALAR handles the typed read and advance. */
             /* An x86 __va_list_tag tracks two register banks and overflow
              * stack storage.  Core must not model it as RV64's linear
              * 8-byte pointer increment. Emit one typed semantic read. */
