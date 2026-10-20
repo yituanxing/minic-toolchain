@@ -1751,7 +1751,7 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
             if (indirect) {
                 if (!emit_sp_mem(out, "ld.d", "$t2",
                                  (size_t)ins->value.indirect_call.callee * 8U +
-                                 stack_bytes) ||
+                                 (dynamic_frame ? 0U : stack_bytes)) ||
                     fputs("  jirl $ra, $t2, 0\n", out) == EOF)
                     return machine_emit_reject(fn, "loongarch64", name,
                                                reject_stage, reject_block,
