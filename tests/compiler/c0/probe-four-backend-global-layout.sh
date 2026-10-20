@@ -96,7 +96,7 @@ for target in aarch64 loongarch64; do
             echo "FOUR_BACKEND_GLOBAL_LAYOUT=HARNESS_FAIL target=$target family=$family stage=gnu_qemu" >&2
             exit 1
         fi
-        if ! "$MINIC_CC" --target="$target-linux" -S "$src" -o "$w/$target.$family.s" >"$w/mini.out" 2>"$w/mini.err"; then
+        if ! MINIC_M1_TRACE=1 "$MINIC_CC" --target="$target-linux" -S "$src" -o "$w/$target.$family.s" >"$w/mini.out" 2>"$w/mini.err"; then
             echo "FOUR_BACKEND_GLOBAL_LAYOUT=BLOCKED target=$target family=$family stage=minic"
             sed -n '1,8p' "$w/mini.err"
             failed=1

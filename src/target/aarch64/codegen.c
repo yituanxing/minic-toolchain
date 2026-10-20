@@ -289,11 +289,10 @@ static bool emit_simple_global(FILE *out, const MinicC0Program *program,
             return false;
         return true;
     }
-    /* Entirely zero-initialized records and unions have zero target ELF
-     * bytes, regardless of nested member offsets. This is the established
-     * x86 fast path; reject nonzero or relocatable aggregates here. */
-    if (minic_type_is_record(obj->type) && obj->relocation_count == 0U &&
-        (obj->initializer_count != 0U || obj->is_zero_initialized)) {
+    /* File-scope records/unions lacking scalar initializers are zero-filled
+     * even when an implicit definition has no is_zero_initialized flag.
+     * Also accept explicit all-zero initializers, not relocation payloads. */
+    if (minic_type_is_record(obj->type) && obj->relocation_count == 0U) {
         bool all_zero = obj->initializer_count == 0U;
         if (obj->initializer_count != 0U && obj->initializer_values != NULL) {
             all_zero = true;
