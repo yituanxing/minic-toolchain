@@ -99,6 +99,22 @@ type_is_valid(const MinicC0Program *program, const MinicTargetInfo *target, Mini
                type.function_type_id == MINIC_FUNCTION_TYPE_INVALID &&
                type.integer_sign == MINIC_INTEGER_SIGN_NONE &&
                type.integer_rank == MINIC_INTEGER_RANK_NONE && !type.is_plain_char;
+    case MINIC_TYPE_BASE_AARCH64_FLOAT32X4:
+    case MINIC_TYPE_BASE_AARCH64_FLOAT64X2:
+    case MINIC_TYPE_BASE_AARCH64_SVE_FLOAT32:
+    case MINIC_TYPE_BASE_AARCH64_SVE_FLOAT64:
+    case MINIC_TYPE_BASE_AARCH64_SVE_BOOL:
+        /* Header-level GCC vector builtin identity, not a scalar alias.
+         * Accept C typedef declarations, but do not claim vector ABI,
+         * alignment, sizeof, passing or machine operation support. */
+        return target != NULL &&
+               target->architecture == MINIC_TARGET_ARCH_AARCH64 &&
+               type.record_id == MINIC_RECORD_INVALID &&
+               type.array_type_id == MINIC_ARRAY_TYPE_INVALID &&
+               type.function_type_id == MINIC_FUNCTION_TYPE_INVALID &&
+               type.integer_sign == MINIC_INTEGER_SIGN_NONE &&
+               type.integer_rank == MINIC_INTEGER_RANK_NONE &&
+               !type.is_plain_char;
     case MINIC_TYPE_BASE_X86_VA_LIST_CURSOR:
         /* Builtin va_list is represented internally by a pointer-sized
          * cursor proxy. Its address can also appear as T** in Core STORE,
