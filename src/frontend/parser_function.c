@@ -157,7 +157,10 @@ static bool consume_function_attribute(MinicParser *parser,
     descriptor = attribute->descriptor;
     if (descriptor == NULL ||
         !minic_attribute_allowed_on(descriptor, MINIC_ATTRIBUTE_TARGET_FUNCTION)) {
-        minic_parser_error(parser, "%s", context->unsupported_message);
+        minic_parser_error(parser, "%s (attribute=%.*s)",
+                           context->unsupported_message,
+                           (int)minic_parser_span_length(attribute->name_span),
+                           parser->source + attribute->name_span.begin.offset);
         return false;
     }
 
@@ -256,7 +259,10 @@ static bool consume_function_attribute(MinicParser *parser,
     }
 
     if (!function_attribute_class_is_parse_only(descriptor->semantic_class)) {
-        minic_parser_error(parser, "%s", context->unsupported_message);
+        minic_parser_error(parser, "%s (attribute=%.*s)",
+                           context->unsupported_message,
+                           (int)minic_parser_span_length(attribute->name_span),
+                           parser->source + attribute->name_span.begin.offset);
         return false;
     }
     return true;

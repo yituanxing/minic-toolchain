@@ -662,6 +662,17 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
             parameter_count = sig->parameter_count;
             is_variadic = sig->is_variadic;
         }
+        /* Batch Lua triage: expose actual ABI gate dimensions rather than
+         * spending a runner cycle on each failed translation unit. */
+        if (getenv("MINIC_BACKEND_CENSUS") != NULL && count > 8U)
+            (void)fprintf(stderr,
+                          "MINIC_BACKEND_CALL_GATE arch=loongarch64 function=%s "
+                          "instruction=%zu count=%zu fixed=%zu variadic=%d "
+                          "indirect=%d return_valid=%d\n",
+                          name, i, count, parameter_count,
+                          is_variadic ? 1 : 0,
+                          ins->kind == MINIC_CORE_INSTRUCTION_INDIRECT_CALL ? 1 : 0,
+                          valid_return_type(program, target, return_type) ? 1 : 0);
         if (!minic_type_equal(return_type, ins->type) ||
             /* Fixed binary64 call results are transferred from the target FP
              * ABI result register; aggregate and other types still fail closed. */
