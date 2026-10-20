@@ -1050,8 +1050,9 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
         case MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT: {
             size_t width = 0U;
             bool sign = false;
-            /* Preserve the prior 32-bit constant path for Core boolean
-             * literals; only the newly admitted LP64 scalars take 64 bits. */
+            /* Match x86 Core constant semantics: the destination integer
+             * type determines narrowing, not the original int64 payload.
+             * Lua exercises out-of-range literals in cast/enum contexts. */
             (void)scalar_integer_width(program, target, ins->type,
                                        &width, &sign);
             if (width == 8U) {
@@ -1070,10 +1071,11 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                 }
             } else {
                 uint32_t bits;
-                if (ins->value.integer_value < INT32_MIN ||
-                    (ins->value.integer_value > INT32_MAX &&
-                     (width != 4U || sign ||
-                      (uint64_t)ins->value.integer_value > UINT32_MAX))) return machine_emit_reject(fn, "aarch64", name, reject_stage,
+                /* Non-integer Core pseudo-bools retain the old 32-bit
+                 * conservative gate; real 8/16/32-bit values wrap to width. */
+                if (width == 0U &&
+                    (ins->value.integer_value < INT32_MIN ||
+                     ins->value.integer_value > INT32_MAX)) return machine_emit_reject(fn, "aarch64", name, reject_stage,
                                     reject_block, reject_ins, __LINE__);
                 bits = (uint32_t)(int32_t)ins->value.integer_value;
                 if (fprintf(out, "  movz w9, #%" PRIu32 "\n",
@@ -1082,6 +1084,10 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                      fprintf(out, "  movk w9, #%" PRIu32 ", lsl #16\n",
                              bits >> 16U) < 0)) return machine_emit_reject(fn, "aarch64", name, reject_stage,
                                     reject_block, reject_ins, __LINE__);
+                if ((width == 1U || width == 2U) &&
+                    !emit_integer_normalize(out, width, sign))
+                    return machine_emit_reject(fn, "aarch64", name, reject_stage,
+                                               reject_block, reject_ins, __LINE__);
             }
             (void)sign;
             break;

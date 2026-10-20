@@ -981,8 +981,9 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
         case MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT: {
             size_t width = 0U;
             bool sign = false;
-            /* Preserve the prior 32-bit constant path for Core boolean
-             * literals; only the newly admitted LP64 scalars take 64 bits. */
+            /* Match x86 Core constant semantics: the destination integer
+             * type determines narrowing, not the original int64 payload.
+             * Lua exercises out-of-range literals in cast/enum contexts. */
             (void)scalar_integer_width(program, target, ins->type,
                                        &width, &sign);
             if (width == 8U) {
@@ -990,13 +991,14 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                             ins->value.integer_value) < 0) return machine_emit_reject(fn, "loongarch64", name, reject_stage,
                                     reject_block, reject_ins, __LINE__);
             } else {
-                if (ins->value.integer_value < INT32_MIN ||
-                    (ins->value.integer_value > INT32_MAX &&
-                     (width != 4U || sign ||
-                      (uint64_t)ins->value.integer_value > UINT32_MAX)) ||
+                if ((width == 0U &&
+                     (ins->value.integer_value < INT32_MIN ||
+                      ins->value.integer_value > INT32_MAX)) ||
                     fprintf(out, "  li.w $t0, %" PRId64 "\n",
                             (int64_t)(int32_t)(uint32_t)
-                                ins->value.integer_value) < 0) return machine_emit_reject(fn, "loongarch64", name, reject_stage,
+                                ins->value.integer_value) < 0 ||
+                    ((width == 1U || width == 2U) &&
+                     !emit_integer_normalize(out, width, sign))) return machine_emit_reject(fn, "loongarch64", name, reject_stage,
                                     reject_block, reject_ins, __LINE__);
             }
             (void)sign;
