@@ -141,6 +141,9 @@ coreutils/uudecode.c coreutils/uuencode.c findutils/find.c findutils/xargs.c
 editors/sed.c editors/cmp.c
 "
 fi
+# Five original C files were not Kbuild owners under this real .config:
+# miscutils/{readahead,runlevel}.c and util-linux/{last,nologin,wall}.c.
+# Keep upstream Kconfig unchanged, but do not invent object ownership.
 if [ "$cohort" = wide ]; then
   sources="$sources
 archival/ar.c archival/bzip2.c archival/cpio.c archival/dpkg_deb.c
@@ -149,26 +152,24 @@ console-tools/reset.c console-tools/resize.c console-tools/chvt.c console-tools/
 console-tools/openvt.c init/init.c init/halt.c loginutils/getty.c
 miscutils/ascii.c miscutils/beep.c miscutils/crond.c miscutils/crontab.c
 miscutils/devmem.c miscutils/hexedit.c miscutils/inotifyd.c miscutils/less.c
-miscutils/man.c miscutils/microcom.c miscutils/mt.c miscutils/readahead.c
-miscutils/rfkill.c miscutils/runlevel.c miscutils/strings.c miscutils/time.c
-miscutils/tree.c miscutils/ts.c miscutils/ttysize.c networking/arp.c
-networking/arping.c networking/brctl.c networking/dnsd.c networking/hostname.c
-networking/ifconfig.c networking/ip.c networking/ipcalc.c networking/nc.c
-networking/netstat.c networking/nslookup.c networking/ntpd.c networking/ping.c
-networking/pscan.c networking/route.c networking/telnet.c networking/tftp.c
-networking/traceroute.c networking/wget.c networking/whois.c networking/zcip.c
-procps/free.c procps/fuser.c procps/iostat.c procps/kill.c
-procps/lsof.c procps/mpstat.c procps/pgrep.c procps/pidof.c
-procps/pmap.c procps/ps.c procps/pstree.c procps/pwdx.c
-procps/sysctl.c procps/top.c procps/uptime.c procps/watch.c
-util-linux/blkid.c util-linux/cal.c util-linux/chrt.c util-linux/dmesg.c
-util-linux/eject.c util-linux/fallocate.c util-linux/flock.c util-linux/getopt.c
-util-linux/hexdump.c util-linux/hwclock.c util-linux/ionice.c util-linux/ipcrm.c
-util-linux/ipcs.c util-linux/last.c util-linux/losetup.c util-linux/lspci.c
-util-linux/lsusb.c util-linux/mesg.c util-linux/mount.c util-linux/mountpoint.c
-util-linux/nologin.c util-linux/renice.c util-linux/rev.c util-linux/setarch.c
-util-linux/setsid.c util-linux/taskset.c util-linux/umount.c util-linux/wall.c
-shell/ash.c
+miscutils/man.c miscutils/microcom.c miscutils/mt.c miscutils/rfkill.c
+miscutils/strings.c miscutils/time.c miscutils/tree.c miscutils/ts.c
+miscutils/ttysize.c networking/arp.c networking/arping.c networking/brctl.c
+networking/dnsd.c networking/hostname.c networking/ifconfig.c networking/ip.c
+networking/ipcalc.c networking/nc.c networking/netstat.c networking/nslookup.c
+networking/ntpd.c networking/ping.c networking/pscan.c networking/route.c
+networking/telnet.c networking/tftp.c networking/traceroute.c networking/wget.c
+networking/whois.c networking/zcip.c procps/free.c procps/fuser.c
+procps/iostat.c procps/kill.c procps/lsof.c procps/mpstat.c
+procps/pgrep.c procps/pidof.c procps/pmap.c procps/ps.c
+procps/pstree.c procps/pwdx.c procps/sysctl.c procps/top.c
+procps/uptime.c procps/watch.c util-linux/blkid.c util-linux/cal.c
+util-linux/chrt.c util-linux/dmesg.c util-linux/eject.c util-linux/fallocate.c
+util-linux/flock.c util-linux/getopt.c util-linux/hexdump.c util-linux/hwclock.c
+util-linux/ionice.c util-linux/ipcrm.c util-linux/ipcs.c util-linux/losetup.c
+util-linux/lspci.c util-linux/lsusb.c util-linux/mesg.c util-linux/mount.c
+util-linux/mountpoint.c util-linux/renice.c util-linux/rev.c util-linux/setarch.c
+util-linux/setsid.c util-linux/taskset.c util-linux/umount.c shell/ash.c
 "
 fi
 total=0
@@ -243,7 +244,42 @@ if [ "$blocked" -ne 0 ]; then
   # Original GNU Kbuild retains *only* observed, explicit fallbacks.
   # The former 82/83 first-reject census proved test.c requires an
   # unsupported Core instruction/ABI on BOTH new ISAs.
-  unexpected=$(grep -v -x -e 'coreutils/test.c' -e 'coreutils/df.c' "$work/unsupported.list" || true)
+  # First complete dual-ISA 184-source census (CI #39417252989) found
+  # exactly 23 AArch64 / 21 LoongArch64 known GNU fallbacks. The five
+  # Kconfig-inactive C paths are omitted from this 179-*active-owner* scope.
+  # A formerly supported owner may improve, but never silently regress to
+  # an unreviewed GNU fallback or a missing Kbuild source.
+  if [ "$cohort" = wide ]; then
+    approved_fallbacks='
+coreutils/df.c
+coreutils/test.c
+archival/gzip.c
+init/init.c
+loginutils/getty.c
+miscutils/ascii.c
+miscutils/crond.c
+miscutils/devmem.c
+miscutils/hexedit.c
+miscutils/less.c
+networking/arping.c
+networking/netstat.c
+networking/ntpd.c
+networking/traceroute.c
+networking/wget.c
+procps/iostat.c
+procps/mpstat.c
+procps/ps.c
+procps/pstree.c
+procps/top.c
+util-linux/ipcrm.c
+util-linux/ipcs.c
+shell/ash.c
+'
+    printf '%s\n' $approved_fallbacks > "$work/approved_fallbacks.txt"
+    unexpected=$(grep -v -x -f "$work/approved_fallbacks.txt" "$work/unsupported.list" || true)
+  else
+    unexpected=$(grep -v -x -e 'coreutils/test.c' -e 'coreutils/df.c' "$work/unsupported.list" || true)
+  fi
   if [ -n "$unexpected" ]; then
     echo "${tag}=BLOCKED target=$target stage=unapproved_fallback details=$unexpected"
     exit 0
