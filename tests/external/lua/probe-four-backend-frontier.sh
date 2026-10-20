@@ -283,7 +283,9 @@ LUA
             # Single-object GNU A/B oracle: distinguish source metadata
             # creation (lparser) from bytecode serialization (ldump).
             # This is diagnosis only; never count mixed objects as acceptance.
-            for swap in ldump lparser; do
+            for candidate in $sources; do
+                [ "$candidate" = lua.c ] && continue
+                swap=${candidate%.c}
                 if ! "$gcc" -O0 -std=c99 -DLUA_USE_LINUX -I"$src" \
                         -c "$src/$swap.c" -o "$work/$target/$swap.gnu.o"; then
                     echo "FOUR_BACKEND_LUA_LUAC_AB=FAIL target=$target swap=$swap stage=GNU_compile"
