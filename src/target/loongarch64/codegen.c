@@ -2441,7 +2441,8 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
             if (src >= fn->value_count ||
                 !minic_type_is_double(fn->values[src].type) ||
                 !scalar_integer_width(program, target, ins->type, &width, &sign) ||
-                (width != 4U && width != 8U))
+                (width != 1U && width != 2U &&
+                 width != 4U && width != 8U))
                 return machine_emit_reject(fn, "loongarch64", name,
                                            reject_stage, reject_block,
                                            reject_ins, __LINE__);
@@ -2484,7 +2485,8 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
             if (!emit_sp_mem(out, "fld.d", "$ft0", (size_t)src * 8U) ||
                 fputs(conversion, out) == EOF ||
                 (width == 4U && !sign &&
-                 fputs("  bstrpick.d $t0, $t0, 31, 0\n", out) == EOF))
+                 fputs("  bstrpick.d $t0, $t0, 31, 0\n", out) == EOF) ||
+                (width < 4U && !emit_integer_normalize(out, width, sign)))
                 return machine_emit_reject(fn, "loongarch64", name,
                                            reject_stage, reject_block,
                                            reject_ins, __LINE__);

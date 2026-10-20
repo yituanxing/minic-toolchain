@@ -72,6 +72,7 @@ def fixtures(report):
         ("sort-numeric", ("sort", "-n"), b"11\n2\n9\n"),
         ("sed-substitute", ("sed", "s/alpha/ALPHA/g"), sample),
         ("awk-field-total", ("awk", "-F:", "{s += $2} END {print s}"), b"a:7\nb:35\n"),
+        ("awk-printf-char", ("awk", 'BEGIN { printf "%c%c\\n", 65, 66 }'), b""),
         ("grep-numbered", ("grep", "-n", "-E", "alpha|beta"), sample),
         ("hexdump-bytes", ("hexdump", "-C"), b"abc\n"),
         ("od-hex", ("od", "-An", "-tx1"), b"abc\n"),

@@ -2669,7 +2669,8 @@ static bool emit_function_body(FILE *out, const MinicC0Program *program,
             if (src >= fn->value_count ||
                 !minic_type_is_double(fn->values[src].type) ||
                 !scalar_integer_width(program, target, ins->type, &width, &sign) ||
-                (width != 4U && width != 8U))
+                (width != 1U && width != 2U &&
+                 width != 4U && width != 8U))
                 return machine_emit_reject(fn, "aarch64", name, reject_stage,
                                            reject_block, reject_ins, __LINE__);
             /* A64 natively supports unsigned 64-bit binary64 conversion.
@@ -2682,7 +2683,8 @@ static bool emit_function_body(FILE *out, const MinicC0Program *program,
                        : "  fcvtzu w9, d9\n";
             if (fprintf(out, "  ldr d9, [sp, #%zu]\n",
                         (size_t)src * 8U) < 0 ||
-                fputs(conversion, out) == EOF)
+                fputs(conversion, out) == EOF ||
+                (width < 4U && !emit_integer_normalize(out, width, sign)))
                 return machine_emit_reject(fn, "aarch64", name, reject_stage,
                                            reject_block, reject_ins, __LINE__);
             break;

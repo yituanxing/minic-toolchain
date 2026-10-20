@@ -205,6 +205,14 @@ jobs:
           MINIC_CC="$GITHUB_WORKSPACE/build/toolchain-focused-t1-v2/bin/minic-cc" \
             sh tests/compiler/c0/probe-four-backend-large-pointer-stride.sh \
               loongarch64 loongarch64-linux-gnu-gcc-13 qemu-loongarch64 /usr/loongarch64-linux-gnu
+          # GNU/QEMU C-defined double-to-signed/unsigned char/short oracle.
+          sh -n tests/compiler/c0/probe-four-backend-double-narrow.sh
+          MINIC_CC="$GITHUB_WORKSPACE/build/toolchain-focused-t1-v2/bin/minic-cc" \
+            sh tests/compiler/c0/probe-four-backend-double-narrow.sh \
+              aarch64 aarch64-linux-gnu-gcc qemu-aarch64 /usr/aarch64-linux-gnu
+          MINIC_CC="$GITHUB_WORKSPACE/build/toolchain-focused-t1-v2/bin/minic-cc" \
+            sh tests/compiler/c0/probe-four-backend-double-narrow.sh \
+              loongarch64 loongarch64-linux-gnu-gcc-13 qemu-loongarch64 /usr/loongarch64-linux-gnu
           # Fast first-divergence result for the active LoongArch defect.
           # Preserve every existing mandatory regression below, even when
           # SQLite is not yet accepted: report the SQLite failure at the end.
