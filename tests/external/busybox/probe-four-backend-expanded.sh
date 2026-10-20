@@ -204,6 +204,24 @@ for file in $sources; do
     printf '%s\n' "$file" >> "$work/unsupported.list"
     first=$(grep -m 1 -E 'MINIC_BACKEND_REJECT|error:' "$work/obj/$stem.mini.err" || true)
     echo "${tag}_TU target=$target source=$file stage=MiniC detail=$first"
+    # The generic M1 failure alone is not actionable. On a handful of
+    # representative real TU failures, reuse the existing backend whitebox
+    # trace to report precise Core kind / backend guard and line. This is
+    # diagnostic only; it cannot promote an unsupported object to PASS.
+    if [ "$cohort" = wide ]; then
+      case "$file" in
+        coreutils/test.c|archival/gzip.c|init/init.c|miscutils/crond.c|networking/netstat.c|procps/top.c|procps/ps.c|shell/ash.c)
+          timeout 90s env MINIC_M1_TRACE=1 MINIC_BACKEND_CENSUS=1 \
+            "$MINIC_CC" --target="$target-linux" -S "$input" \
+            -o "$work/obj/$stem.trace.s" \
+            2>"$work/obj/$stem.trace.err" || true
+          grep -E -m 8 '^MINIC_BACKEND_REJECT|^MINIC_M1_FRONTIER|^MINIC_BACKEND_CENSUS' \
+            "$work/obj/$stem.trace.err" | while IFS= read -r trace_line; do
+              echo "${tag}_TRACE target=$target source=$file $trace_line"
+            done || true
+          ;;
+      esac
+    fi
     continue
   fi
   if ! "$gcc" -c -x assembler "$output" -o "$work/obj/$stem.o" \

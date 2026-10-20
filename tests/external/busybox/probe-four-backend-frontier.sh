@@ -31,6 +31,7 @@ done
 echo "FOUR_BACKEND_BUSYBOX_SOURCE=PASS version=1.36.1 commit=$commit"
 sources='coreutils/cat.c coreutils/echo.c coreutils/head.c coreutils/wc.c findutils/grep.c coreutils/cut.c coreutils/sort.c coreutils/uniq.c coreutils/tr.c'
 next_targets=0
+wide_targets=0
 for target in aarch64 loongarch64; do
   case "$target" in
     aarch64) gcc=aarch64-linux-gnu-gcc; qemu=qemu-aarch64
@@ -255,13 +256,38 @@ editors/cmp.c editors/diff.c networking/ping.c
       fi
       next_targets=$((next_targets+1))
       echo "FOUR_BACKEND_BUSYBOX_NEXT_ACCEPT=PASS target=$target MiniC_owners=$minic_count original_Kbuild_owners=83"
-      # Next scope is exploratory: original Kconfig/Kbuild on 192
-      # selected source owners, including ash/init/mount/tar/gzip and
-      # networking. Never mask a regression of the certified 81/83 cohort.
+      # Large original Kconfig/Kbuild owner cohort: 179 real objects.
+      # Discovery exits zero even if the original linker or MiniC fails.
+      # Strictly require a proven mixed *relinked* binary, all object SHA
+      # checks, and the exact 55-case GNU/QEMU differential receipt.
       if [ "${FOUR_BACKEND_BUSYBOX_WIDE:-0}" = 1 ]; then
+        wide_receipt="$work/$target/wide-cohort.txt"
         FOUR_BACKEND_BUSYBOX_COHORT=wide \
           sh tests/external/busybox/probe-four-backend-expanded.sh \
-            "$root" "$target" "$gcc" "$prefix" "$qemu" "$sysroot"
+            "$root" "$target" "$gcc" "$prefix" "$qemu" "$sysroot" \
+          | tee "$wide_receipt"
+        wide_record=$(grep "^FOUR_BACKEND_BUSYBOX_WIDE=PASS target=$target " "$wide_receipt" || true)
+        wide_mini=$(printf '%s\n' "$wide_record" | sed -n 's/.* MiniC_owners=\([0-9][0-9]*\) .*/\1/p')
+        wide_sha=$(printf '%s\n' "$wide_record" | sed -n 's/.* SHA_objects_verified=\([0-9][0-9]*\) .*/\1/p')
+        wide_fallback=$(printf '%s\n' "$wide_record" | sed -n 's/.* explicit_cohort_GNU_fallbacks=\([0-9][0-9]*\) .*/\1/p')
+        case "$target" in
+          aarch64) wide_min=156 ;;
+          loongarch64) wide_min=158 ;;
+        esac
+        case "$wide_record" in
+          *"original_Kbuild_owners=179 "*"GNU_remaining_owners=yes "*" GNU_QEMU_differential=1 full_MiniC=NO") ;;
+          *) echo "FOUR_BACKEND_BUSYBOX_WIDE_ACCEPT=FAIL target=$target reason=no_real_Kbuild_QEMU_receipt" >&2; exit 1 ;;
+        esac
+        if [ -z "$wide_mini" ] || [ -z "$wide_sha" ] || [ -z "$wide_fallback" ] ||
+           [ "$wide_mini" -lt "$wide_min" ] ||
+           [ "$wide_mini" -ne "$wide_sha" ] ||
+           [ "$((wide_mini + wide_fallback))" -ne 179 ] ||
+           ! grep -qx 'FOUR_BACKEND_BUSYBOX_WIDE_RUNTIME_ACCEPT=PASS fixtures=55' "$wide_receipt"; then
+          echo "FOUR_BACKEND_BUSYBOX_WIDE_ACCEPT=FAIL target=$target reason=coverage_objects_or_runtime" >&2
+          exit 1
+        fi
+        wide_targets=$((wide_targets+1))
+        echo "FOUR_BACKEND_BUSYBOX_WIDE_ACCEPT=PASS target=$target MiniC_owners=$wide_mini original_Kbuild_owners=179 GNU_fallbacks=$wide_fallback QEMU_cases=55"
       fi
     fi
   fi
@@ -272,5 +298,12 @@ if [ "${FOUR_BACKEND_BUSYBOX_NEXT:-0}" = 1 ]; then
     exit 1
   fi
   echo "FOUR_BACKEND_BUSYBOX_NEXT_ACCEPT=PASS targets=2 original_Kbuild_owners=83 min_MiniC_owners=81 GNU_QEMU_differential=1"
+fi
+if [ "${FOUR_BACKEND_BUSYBOX_WIDE:-0}" = 1 ]; then
+  if [ "$wide_targets" -ne 2 ]; then
+    echo "FOUR_BACKEND_BUSYBOX_WIDE_ACCEPT=FAIL reason=missing_target completed=$wide_targets" >&2
+    exit 1
+  fi
+  echo "FOUR_BACKEND_BUSYBOX_WIDE_ACCEPT=PASS targets=2 original_Kbuild_owners=179 min_AArch64_MiniC=156 min_LoongArch64_MiniC=158 GNU_QEMU_differential=1"
 fi
 echo "FOUR_BACKEND_BUSYBOX_DISCOVERY=COMPLETE source_pinned=1 no_all_MiniC_claim=1"
