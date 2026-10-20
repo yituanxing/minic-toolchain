@@ -106,7 +106,9 @@ bool minic_parser_token_starts_type_name(const MinicParser *parser, MinicToken t
             return true;
         }
         if (parser->target_info != NULL &&
-            parser->target_info->architecture == MINIC_TARGET_ARCH_X86_64 &&
+            (parser->target_info->architecture == MINIC_TARGET_ARCH_X86_64 ||
+             parser->target_info->architecture == MINIC_TARGET_ARCH_AARCH64 ||
+             parser->target_info->architecture == MINIC_TARGET_ARCH_LOONGARCH64) &&
             (minic_parser_token_text_equals(parser, token, "_Float128") ||
              minic_parser_token_text_equals(parser, token, "_Float32") ||
              minic_parser_token_text_equals(parser, token, "_Float64") ||
@@ -578,14 +580,16 @@ bool minic_parser_parse_type_specifiers(MinicParser *parser, MinicType *type) {
                minic_parser_identifier_is(parser, "_Float64") ||
                minic_parser_identifier_is(parser, "_Float32x") ||
                minic_parser_identifier_is(parser, "_Float64x")) {
-        /* Lua and SQLite pull genuine glibc extended-floating prototypes
-         * into the original preprocessed C. Keep ABI-visible C type
-         * identities distinct: GCC does NOT treat _Float32/float or
-         * _Float64/double as compatible C types. Only model declarations,
-         * sizeof, alignment and pointer identity here; actual extended-FP
-         * operations and calls remain backend fail-closed. */
+        /* All three Linux backends encounter _Float32/_Float64/x/128 in
+         * genuine glibc declarations (SQLite pulls in strtof32/64 early).
+         * Preserve the existing DISTINCT source type identities, even when
+         * precision matches float/double. This recognizes declarations and
+         * type queries, not target extended-FP operations or call ABI:
+         * those must remain backend fail-closed until separately proven. */
         if (parser->target_info == NULL ||
-            parser->target_info->architecture != MINIC_TARGET_ARCH_X86_64) {
+            (parser->target_info->architecture != MINIC_TARGET_ARCH_X86_64 &&
+             parser->target_info->architecture != MINIC_TARGET_ARCH_AARCH64 &&
+             parser->target_info->architecture != MINIC_TARGET_ARCH_LOONGARCH64)) {
             minic_parser_error(parser, "extended float type is unsupported on this target");
             return false;
         }
