@@ -100,8 +100,43 @@ for target in aarch64 loongarch64; do
             echo "FOUR_BACKEND_SQLITE=BLOCKED target=$target stage=MiniC status=$status"
             blocked=$((blocked + 1))
         fi
+        # One full SQLite compilation collects ALL rejected functions.
+        # Group the reject census by stage/opcode and print representative
+        # function names, rather than one CI cycle per individual rejection.
+        echo "FOUR_BACKEND_SQLITE_FIRST_FAILURE target=$target"
         grep -m 2 -E 'MINIC_BACKEND_REJECT|MINIC_M4_GLOBAL_FRONTIER|MINIC_BACKEND_PREFLIGHT|error:' \
             "$work/$target/mini.err" || true
+        awk '
+            /MINIC_BACKEND_REJECT/ {
+                stage="none"; kind="none"; func="none";
+                for (i=1;i<=NF;i++) {
+                    if ($i ~ /^stage=/) stage=$i;
+                    if ($i ~ /^kind=/) kind=$i;
+                    if ($i ~ /^function=/) func=$i;
+                }
+                key=stage " " kind
+                count[key]++
+                if (!(key in example)) example[key]=func
+            }
+            END {
+                for (key in count)
+                    printf "%06d %s example=%s\n",count[key],key,example[key]
+            }
+        ' "$work/$target/mini.err" | sort -rn | head -n 20 |
+            while IFS= read -r line; do
+                echo "FOUR_BACKEND_SQLITE_ERROR_CLASS target=$target $line"
+            done
+        grep -m 12 'MINIC_M4_GLOBAL_FRONTIER' \
+            "$work/$target/mini.err" |
+            while IFS= read -r line; do
+                echo "FOUR_BACKEND_SQLITE_GLOBAL_CLASS target=$target $line"
+            done
+        grep -m 12 'MINIC_BACKEND_CALL_GATE' \
+            "$work/$target/mini.err" |
+            while IFS= read -r line; do
+                echo "FOUR_BACKEND_SQLITE_CALL_CLASS target=$target $line"
+            done
+
         tail -n 5 "$work/$target/mini.err"
         lineno=$(sed -n 's/.*sqlite3\.i:\([0-9][0-9]*\):[0-9][0-9]*: error:.*/\1/p' \
                  "$work/$target/mini.err" | head -n 1)
