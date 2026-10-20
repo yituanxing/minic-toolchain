@@ -492,6 +492,21 @@ if len(nested_matches) == 1:
     print("SQLITE_NESTED_SQL_INSTRUMENT=PASS")
 else:
     print("SQLITE_NESTED_SQL_INSTRUMENT=SKIP occurrences=" + str(len(nested_matches)))
+# Observe values immediately before the source caller packages the seven
+# variadic arguments. If regRowid is already negative, investigate its
+# producer; if positive, investigate the 9th-GP argument / va_list path.
+callsite_rx = r'sqlite3NestedParse\s*\(\s*pParse\s*,\s*"UPDATE %Q\."'
+callsites = list(re.finditer(callsite_rx, src))
+if len(callsites) == 1:
+    at = callsites[0].start()
+    report = ('fprintf(stderr,'
+              '"SQLITE_NESTED_CALLSITE regRoot=%d regRowid=%d\\n",'
+              'pParse->regRoot,pParse->regRowid);\n')
+    src = src[:at] + report + src[at:]
+    print("SQLITE_NESTED_CALLSITE_INSTRUMENT=PASS")
+else:
+    print("SQLITE_NESTED_CALLSITE_INSTRUMENT=SKIP occurrences="
+          + str(len(callsites)))
 pathlib.Path(sys.argv[2]).write_text(src)
 print("SQLITE_PARSER_AB_INSTRUMENT=PASS matched=" + str(len(matches)))
 PY
@@ -536,6 +551,10 @@ PY
                              >"$work/$target/gnu-tokens.txt" || true
                         grep '^SQLITE_PARSER_TOKEN' "$work/$target/mini-diag.err" \
                              >"$work/$target/mini-tokens.txt" || true
+                        echo "SQLITE_NESTED_CALLSITE_AB_GNU"
+                        grep '^SQLITE_NESTED_CALLSITE' "$work/$target/gnu-diag.err" | head -n 8 || true
+                        echo "SQLITE_NESTED_CALLSITE_AB_MINI"
+                        grep '^SQLITE_NESTED_CALLSITE' "$work/$target/mini-diag.err" | head -n 8 || true
                         echo "SQLITE_NESTED_SQL_AB_GNU"
                         grep '^SQLITE_NESTED_SQL ' "$work/$target/gnu-diag.err" | head -n 12 || true
                         echo "SQLITE_NESTED_SQL_AB_MINI"
