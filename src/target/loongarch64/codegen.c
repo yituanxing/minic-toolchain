@@ -934,8 +934,8 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                                     reject_block, reject_ins, __LINE__);
     if (!emit_sp_adjust(out, frame, false) ||
         (dynamic_frame &&
-         (!emit_sp_mem(out, "st.d", "$s0",
-                       save_offset + (has_direct_calls ? 8U : 0U)) ||
+         (!emit_frame_mem(out, "st.d", "$s0",
+                         save_offset + (has_direct_calls ? 8U : 0U), false) ||
           fputs("  move $s0, $sp\n", out) == EOF)))
         return machine_emit_reject(fn, "loongarch64", name, reject_stage,
                                     reject_block, reject_ins, __LINE__);
