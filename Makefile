@@ -789,8 +789,8 @@ check-four-backend-zlib-accept: $(MINIC_CC_BINARY)
 	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" FOUR_BACKEND_ZLIB_REQUIRE=1 \
 	sh tests/external/zlib/probe-four-backend-frontier.sh
 
-# Original Lua 5.5.0 after accepted zlib; discovery inventories all 34
-# official TUs for both ISAs with cross-GNU/QEMU original runtime oracle.
+# Lua 5.5.0 official 34-TU original source and cross-GNU/QEMU oracle.
+# Frontier remains available for diagnosis; CI uses the strict acceptance.
 check-four-backend-lua-frontier: $(MINIC_CC_BINARY)
 	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" \
 	sh tests/external/lua/probe-four-backend-frontier.sh
