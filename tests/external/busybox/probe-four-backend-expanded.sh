@@ -416,6 +416,10 @@ if os.environ.get("FOUR_BACKEND_BUSYBOX_COHORT") == "wide":
       # Exercises >16 mixed-register/stack AAPCS64/LP64D varargs directly;
       # original upstream ascii.c invokes printf with 24 arguments.
       ("ascii", ["ascii"], b""),
+      # Read-only SysV-IPC inspection plus safe BusyBox dispatch smoke.
+      # ipcs.c and ipcrm.c have real semctl(..., union semun) call paths.
+      ("ipcs", ["ipcs", "-l"], b""),
+      ("ipcrm", ["ipcrm", "--help"], b""),
     ])
 for label, argv, input_bytes in cases:
     results = []

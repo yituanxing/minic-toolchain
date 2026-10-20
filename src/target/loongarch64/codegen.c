@@ -893,13 +893,23 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
             if (arg->kind == MINIC_CORE_CALL_ARGUMENT_OBJECT) {
                 const MinicCoreObjectId object_id = arg->value.object_id;
                 size_t record_size, record_slots;
-                if (j >= parameter_count || object_id >= fn->object_count ||
+                /* Original BusyBox ipcrm/ipcs pass union semun by
+                 * value to variadic semctl(). A single integer-class
+                 * eightbyte uses the ordinary GP/overflow integer ABI,
+                 * including when the argument is beyond the fixed list.
+                 * Larger variadic aggregates and FP/HFA records remain
+                 * explicitly unsupported rather than guessed. */
+                if (object_id >= fn->object_count ||
                     fn->objects[object_id].element_count != 1U ||
-                    !minic_type_equal(fn->objects[object_id].type,
-                                      parameter_types[j]) ||
+                    (j < parameter_count &&
+                     !minic_type_equal(fn->objects[object_id].type,
+                                       parameter_types[j])) ||
+                    (j >= parameter_count && !is_variadic) ||
                     !minic_multi_gp_record(program, target,
-                                           parameter_types[j],
-                                           &record_size, &record_slots))
+                                           fn->objects[object_id].type,
+                                           &record_size, &record_slots) ||
+                    (j >= parameter_count &&
+                     (record_size > 8U || record_slots != 1U)))
                     return machine_emit_reject(fn, "loongarch64", name,
                                                reject_stage, reject_block,
                                                reject_ins, __LINE__);
