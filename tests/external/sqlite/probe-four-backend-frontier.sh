@@ -28,9 +28,41 @@ unzip -q "$work/upstream.zip" -d "$work"
 src="$work/sqlite-amalgamation-$source_id"
 test -s "$src/sqlite3.c" && test -s "$src/sqlite3.h"
 cat > "$work/workload.c" <<'SRC'
+#define _GNU_SOURCE
 #include "sqlite3.h"
 #include <stdio.h>
 #include <stdlib.h>
+#if defined(__loongarch__)
+#include <signal.h>
+#include <ucontext.h>
+/* GNU-built test harness only; never injected into SQLite or MiniC objects.
+ * Capture the exact faulting PC and ABI argument state without huge traces. */
+static void sql_fault(int signum, siginfo_t *info, void *context) {
+    const ucontext_t *uc = (const ucontext_t *)context;
+    fprintf(stderr,
+            "SQLITE_RUNTIME_FAULT signal=%d pc=0x%llx ra=0x%llx"
+            " sp=0x%llx a0=0x%llx a1=0x%llx a2=0x%llx"
+            " address=%p\n", signum,
+            (unsigned long long)uc->uc_mcontext.__pc,
+            (unsigned long long)uc->uc_mcontext.__gregs[1],
+            (unsigned long long)uc->uc_mcontext.__gregs[3],
+            (unsigned long long)uc->uc_mcontext.__gregs[4],
+            (unsigned long long)uc->uc_mcontext.__gregs[5],
+            (unsigned long long)uc->uc_mcontext.__gregs[6],
+            info->si_addr);
+    _Exit(98);
+}
+static void install_sql_fault_handler(void) {
+    struct sigaction action = {0};
+    action.sa_sigaction = sql_fault;
+    sigemptyset(&action.sa_mask);
+    action.sa_flags = SA_SIGINFO;
+    (void)sigaction(SIGSEGV, &action, NULL);
+    (void)sigaction(SIGBUS, &action, NULL);
+}
+#else
+static void install_sql_fault_handler(void) {}
+#endif
 static int result(void *data, int n, char **values, char **names) {
     int i;
     (void)data;
@@ -50,6 +82,7 @@ static void run(sqlite3 *db, const char *sql) {
 }
 int main(void) {
     sqlite3 *db = NULL;
+    install_sql_fault_handler();
     fprintf(stderr, "SQLITE_RUNTIME_STAGE=open\n");
     if (sqlite3_open(":memory:", &db) != SQLITE_OK) return 1;
     fprintf(stderr, "SQLITE_RUNTIME_STAGE=schema_and_insert\n");
