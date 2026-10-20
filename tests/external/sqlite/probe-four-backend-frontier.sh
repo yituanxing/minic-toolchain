@@ -255,7 +255,8 @@ for pc in branches:
     describe("BRANCH", pc)
 for pc in traceblocks:
     describe("EXEC", pc)
-PY            fi
+PY
+            fi
             runtime_ok=0
         fi
     done
