@@ -81,7 +81,12 @@ for target in aarch64 loongarch64; do
     mkdir -p "$work/$target"
     input="$work/$target/sqlite3.i"
     asm="$work/$target/sqlite3.s"
-    define='-DSQLITE_THREADSAFE=0 -DSQLITE_OMIT_LOAD_EXTENSION'
+    # SQLite officially provides a portable 64-bit implementation of
+    # multiply128/multiply160 when SQLITE_DISABLE_INTRINSIC is enabled.
+    # MiniC does not yet claim 128-bit scalar SSA/ABI correctness, so use
+    # SQLite's unmodified supported portable source path for BOTH MiniC
+    # and the GNU oracle. This is not a claim of general __uint128_t support.
+    define='-DSQLITE_THREADSAFE=0 -DSQLITE_OMIT_LOAD_EXTENSION -DSQLITE_DISABLE_INTRINSIC'
     # Cross-preprocess each target's real GNU libc. Never feed x86 headers.
     if ! "$gcc" -E -P -std=gnu11 $define -I"$src" "$src/sqlite3.c" \
             -o "$input" >"$work/$target/pp.out" 2>"$work/$target/pp.err"; then
@@ -215,11 +220,21 @@ for target in aarch64 loongarch64; do
                         "$work/$target/symbols.txt" <<'PY'
 import bisect, re, sys
 from collections import deque
-pcs = deque(maxlen=20)
+
+pcs = deque(maxlen=12)
+branches = deque(maxlen=10)
+traceblocks = deque(maxlen=8)
 with open(sys.argv[1], errors='replace') as f:
     for line in f:
-        m = re.match(r'(?:0x([0-9a-fA-F]+):|Trace [^\\n]*?0x([0-9a-fA-F]{6,}))', line)
-        if m: pcs.append(int(m.group(1) or m.group(2), 16))
+        m = re.match(r'^0x([0-9a-fA-F]+):', line)
+        if m:
+            pcs.append(int(m.group(1), 16))
+        b = re.search(r'\b(?:bl|b|jirl)\s+[^#\n]*#\s*0x([0-9a-fA-F]+)', line)
+        if b:
+            branches.append(int(b.group(1), 16))
+        t = re.search(r'^Trace .*?\[([0-9a-fA-F]{8,})/', line)
+        if t:
+            traceblocks.append(int(t.group(1), 16))
 symbols = []
 with open(sys.argv[2]) as f:
     for line in f:
@@ -229,13 +244,18 @@ with open(sys.argv[2]) as f:
             except ValueError: pass
 symbols.sort()
 addresses = [p for p, _ in symbols]
-for pc in list(pcs)[-15:]:
+def describe(tag, pc):
     at = bisect.bisect_right(addresses, pc) - 1
     name = symbols[at][1] if at >= 0 else '<unknown>'
     base = symbols[at][0] if at >= 0 else 0
-    print(f"FOUR_BACKEND_SQLITE_TRACE_PC pc=0x{pc:x} function={name} offset=0x{pc-base:x}")
-PY
-            fi
+    print(f"FOUR_BACKEND_SQLITE_TRACE_{tag} pc=0x{pc:x} function={name} offset=0x{pc-base:x}")
+for pc in pcs:
+    describe("PC", pc)
+for pc in branches:
+    describe("BRANCH", pc)
+for pc in traceblocks:
+    describe("EXEC", pc)
+PY            fi
             runtime_ok=0
         fi
     done
