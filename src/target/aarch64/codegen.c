@@ -1213,10 +1213,16 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                 !frame_objects(program, target, fn,
                                (size_t)ins->value.object_id,
                                &object_offset, NULL) ||
-                fprintf(out, "  movz x9, #%zu\n"
-                             "  add x9, sp, x9\n"
-                             "  str x9, [sp, #%zu]\n",
-                        object_offset, offset) < 0) return machine_emit_reject(fn, "aarch64", name, reject_stage,
+                /* Large Lua VM stack objects exceed the 16-bit movz
+                 * immediate. Keep the exact DataLayout offset and
+                 * materialize it in the same reserved x9 scratch. */
+                fprintf(out, "  movz x9, #%zu\n",
+                        object_offset & 65535U) < 0 ||
+                (object_offset > 65535U &&
+                 fprintf(out, "  movk x9, #%zu, lsl #16\n",
+                         object_offset >> 16U) < 0) ||
+                fputs("  add x9, sp, x9\n", out) == EOF ||
+                fprintf(out, "  str x9, [sp, #%zu]\n", offset) < 0) return machine_emit_reject(fn, "aarch64", name, reject_stage,
                                     reject_block, reject_ins, __LINE__);
             continue;
         }
