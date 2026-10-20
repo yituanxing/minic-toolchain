@@ -23,8 +23,11 @@ echo "FOUR_BACKEND_BUSYBOX_ALL_KBUILD_START target=$target original_commit=1a64f
 # Reuse x86's host-link-compatible upstream Kconfig policy with the actual
 # cross GNU compiler. Source and Kbuild itself remain pristine.
 if timeout 900s env CROSS_COMPILE="$prefix" \
+    PKG_CONFIG=pkg-config \
     BUSYBOX_ALLYES_LINK_COMPATIBLE=1 \
     BUSYBOX_ALLYES_MINIC_TARGET="$target-linux" \
+    BUSYBOX_ALLYES_QEMU="$qemu" \
+    BUSYBOX_ALLYES_SYSROOT="$sysroot" \
     python3 "$repo/tests/external/busybox/allyes_sweep.py" \
       --source "$src" --report "$report" \
       --minic "$MINIC_CC" --host-cc "$gcc" \

@@ -220,6 +220,13 @@ def controller(args):
     disabled_host_options = ("WERROR", "TC", "FEATURE_INETD_RPC",
                              "FEATURE_MOUNT_NFS", "STATIC",
                              "DEBUG_SANITIZE") if link_compatible else ("WERROR",)
+    # Genuine cross sysroots need not contain the host's libselinux headers
+    # or archive. Disable that single original upstream Kconfig option,
+    # NOT its C sources, instead of presenting 957 enabled options as a
+    # valid target build when applets/applets.c cannot even preprocess.
+    if link_compatible and os.environ.get("BUSYBOX_ALLYES_MINIC_TARGET",
+                                            "x86_64-linux") != "x86_64-linux":
+        disabled_host_options += ("SELINUX",)
     changed = []
     for symbol in disabled_host_options:
         old_value = "CONFIG_" + symbol + "=y"
@@ -284,7 +291,10 @@ def controller(args):
             successes = []
             for applet, command in tests.items():
                 data = b"alpha\nbeta\n" if applet not in ("sh", "find") else b""
-                run = subprocess.run([str(busybox)] + command, input=data,
+                qemu = os.environ.get("BUSYBOX_ALLYES_QEMU")
+                sysroot = os.environ.get("BUSYBOX_ALLYES_SYSROOT", "")
+                launch = ([qemu, "-L", sysroot] if qemu else [])
+                run = subprocess.run(launch + [str(busybox)] + command, input=data,
                                      stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                      check=False)
                 passed = run.returncode == 0 and run.stdout == expected[applet]
