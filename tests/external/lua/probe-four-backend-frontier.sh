@@ -280,6 +280,44 @@ LUA
                 fi
                 echo "FOUR_BACKEND_LUA_LUAC_STRIPPED target=$target equal=$strip_equal oracle_status=$oracle_strip_status mini_status=$mini_strip_status oracle_size=$(wc -c < "$work/$target/oracle-strip.luac") mini_size=$(wc -c < "$work/$target/mini-strip.luac")"
             fi
+            # Single-object GNU A/B oracle: distinguish source metadata
+            # creation (lparser) from bytecode serialization (ldump).
+            # This is diagnosis only; never count mixed objects as acceptance.
+            for swap in ldump lparser; do
+                if ! "$gcc" -O0 -std=c99 -DLUA_USE_LINUX -I"$src" \
+                        -c "$src/$swap.c" -o "$work/$target/$swap.gnu.o"; then
+                    echo "FOUR_BACKEND_LUA_LUAC_AB=FAIL target=$target swap=$swap stage=GNU_compile"
+                    continue
+                fi
+                set --
+                for source in $sources; do
+                    [ "$source" = lua.c ] && continue
+                    base=${source%.c}
+                    if [ "$base" = "$swap" ]; then
+                        set -- "$@" "$work/$target/$swap.gnu.o"
+                    else
+                        set -- "$@" "$work/$target/$base.o"
+                    fi
+                done
+                if ! "$gcc" -static "$@" -lm -ldl \
+                        -o "$work/$target/luac-ab-$swap"; then
+                    echo "FOUR_BACKEND_LUA_LUAC_AB=FAIL target=$target swap=$swap stage=GNU_link"
+                    continue
+                fi
+                set +e
+                timeout 60s "$qemu" "$work/$target/luac-ab-$swap" \
+                    -o "$work/$target/ab-$swap.luac" "$work/$target/pressure.lua" \
+                    >"$work/$target/ab-$swap.out" 2>"$work/$target/ab-$swap.err"
+                ab_status=$?
+                set -e
+                if [ "$ab_status" -eq 0 ] &&
+                   cmp -s "$work/$target/oracle.luac" "$work/$target/ab-$swap.luac"; then
+                    result=PASS
+                else
+                    result=FAIL
+                fi
+                echo "FOUR_BACKEND_LUA_LUAC_AB=$result target=$target swap=$swap status=$ab_status"
+            done
         fi
         failed=$((failed+1)); continue
     fi
