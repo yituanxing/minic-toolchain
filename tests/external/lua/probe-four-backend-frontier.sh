@@ -242,12 +242,24 @@ LUA
         sed -n '1,25p' "$work/$target/luac-gnu.err" >&2
         exit 1
     fi
-    if ! timeout 60s "$qemu" "$work/$target/luac-minic" \
-            -o "$work/$target/mini.luac" "$work/$target/pressure.lua" \
-            >"$work/$target/luac-mini.out" 2>"$work/$target/luac-mini.err" ||
+    set +e
+    timeout 60s "$qemu" "$work/$target/luac-minic" \
+        -o "$work/$target/mini.luac" "$work/$target/pressure.lua" \
+        >"$work/$target/luac-mini.out" 2>"$work/$target/luac-mini.err"
+    mini_luac_status=$?
+    set -e
+    if [ "$mini_luac_status" -ne 0 ] ||
        ! cmp -s "$work/$target/oracle.luac" "$work/$target/mini.luac"; then
-        echo "FOUR_BACKEND_LUA=FAIL target=$target stage=luac_bytecode_differential" >&2
+        echo "FOUR_BACKEND_LUA=FAIL target=$target stage=luac_bytecode_differential status=$mini_luac_status" >&2
         sed -n '1,35p' "$work/$target/luac-mini.err" >&2
+        if [ -f "$work/$target/mini.luac" ]; then
+            echo "FOUR_BACKEND_LUA_LUAC_DIFF target=$target oracle_size=$(wc -c < "$work/$target/oracle.luac") mini_size=$(wc -c < "$work/$target/mini.luac")"
+            cmp -l "$work/$target/oracle.luac" "$work/$target/mini.luac" | head -n 16 || true
+            echo "FOUR_BACKEND_LUA_LUAC_ORACLE_HEADER target=$target"
+            od -Ax -tx1 -N 64 "$work/$target/oracle.luac"
+            echo "FOUR_BACKEND_LUA_LUAC_MINI_HEADER target=$target"
+            od -Ax -tx1 -N 64 "$work/$target/mini.luac"
+        fi
         failed=$((failed+1)); continue
     fi
     if ! timeout 60s "$qemu" "$work/$target/lua-gnu" \
