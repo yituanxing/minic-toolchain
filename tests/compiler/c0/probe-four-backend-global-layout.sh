@@ -41,6 +41,27 @@ int main(void) {
 }
 SRC
             ;;
+        nonzero_union)
+            cat <<'SRC'
+static const union Endian {
+    int word;
+    unsigned char low;
+} nativeendian = {1};
+int main(void) { return nativeendian.low == 1 ? 42 : 2; }
+SRC
+            ;;
+        nested_nonzero)
+            cat <<'SRC'
+union Val { void *p; unsigned long bits; };
+struct TValue { union Val value; unsigned char tag; };
+struct Node { struct TValue tv; int key; union Val next; };
+static const struct Node node = { {{0}, 5}, 3, {0} };
+int main(void) {
+    return (node.tv.value.p == 0 && node.tv.tag == 5 &&
+            node.key == 3 && node.next.bits == 0) ? 42 : 2;
+}
+SRC
+            ;;
         implicit_record)
             cat <<'SRC'
 union U { unsigned long bits; void *pointer; };
@@ -88,7 +109,7 @@ for target in aarch64 loongarch64; do
         aarch64) gcc=aarch64-linux-gnu-gcc; qemu=qemu-aarch64 ;;
         loongarch64) gcc=loongarch64-linux-gnu-gcc-13; qemu=qemu-loongarch64 ;;
     esac
-    for family in null_scalar null_array zero_union zero_record implicit_record combined; do
+    for family in null_scalar null_array zero_union zero_record implicit_record nonzero_union nested_nonzero combined; do
         src="$w/$target.$family.i"
         write_case "$family" >"$src"
         "$gcc" -static -x c "$src" -o "$w/$target.$family.gnu"
@@ -119,7 +140,7 @@ for target in aarch64 loongarch64; do
     done
 done
 if [ "$failed" -ne 0 ]; then
-    echo "FOUR_BACKEND_GLOBAL_LAYOUT_ACCEPT=FAIL targets=2 families=6" >&2
+    echo "FOUR_BACKEND_GLOBAL_LAYOUT_ACCEPT=FAIL targets=2 families=8" >&2
     exit 1
 fi
-echo "FOUR_BACKEND_GLOBAL_LAYOUT_ACCEPT=PASS targets=2 families=6 GNU_QEMU_diff=1"
+echo "FOUR_BACKEND_GLOBAL_LAYOUT_ACCEPT=PASS targets=2 families=8 GNU_QEMU_diff=1"

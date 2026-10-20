@@ -315,7 +315,13 @@ static bool emit_simple_global(FILE *out, const MinicC0Program *program,
         }
     }
     if (minic_type_is_record(obj->type)) {
-        if (obj->union_selection_count != 0U) return false;
+        const MinicRecord *record =
+            minic_c0_program_record(program, obj->type.record_id);
+        const bool recursive = record != NULL &&
+            (record->is_union ||
+             record->field_count != obj->initializer_count ||
+             obj->union_selection_count != 0U);
+        if (record == NULL) return false;
         if (fprintf(out, "%s\n", obj->is_read_only
                         ? (obj->relocation_count != 0U
                            ? ".section .data.rel.ro" : ".section .rodata")
@@ -324,8 +330,12 @@ static bool emit_simple_global(FILE *out, const MinicC0Program *program,
              fprintf(out, ".globl %s\n", obj->name) < 0) ||
             fprintf(out, "  .balign %zu\n.type %s,@object\n%s:\n",
                     align, obj->name, obj->name) < 0 ||
-            !emit_flat_record_global(out, program, target, obj,
-                                     storage_size) ||
+            !(recursive
+                  ? minic_multi_emit_recursive_record_global(
+                        out, program, target, obj, storage_size,
+                        emit_record_relocation)
+                  : emit_flat_record_global(out, program, target, obj,
+                                            storage_size)) ||
             fprintf(out, ".size %s,%zu\n", obj->name, storage_size) < 0)
             return false;
         return true;
