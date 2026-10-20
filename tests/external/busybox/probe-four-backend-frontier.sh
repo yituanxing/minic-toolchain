@@ -228,5 +228,9 @@ editors/cmp.c editors/diff.c networking/ping.c
     done
     echo "FOUR_BACKEND_BUSYBOX_SWEEP=COMPLETE target=$target scanned=$total MiniC_GNU_AS_pass=$pass CPP_blocked=$cpp_fail MiniC_blocked=$mini_fail GNU_AS_blocked=$as_fail Kbuild_owner_claim=NO"
   fi
+  if [ "${FOUR_BACKEND_BUSYBOX_EXPAND:-0}" = 1 ]; then
+    sh tests/external/busybox/probe-four-backend-expanded.sh \
+      "$root" "$target" "$gcc" "$prefix" "$qemu" "$sysroot"
+  fi
 done
 echo "FOUR_BACKEND_BUSYBOX_DISCOVERY=COMPLETE source_pinned=1 no_all_MiniC_claim=1"
