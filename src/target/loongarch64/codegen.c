@@ -1687,7 +1687,13 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                                     reject_stage, reject_block, reject_ins, __LINE__);
                     } else if (!emit_sp_mem(out, wide ? "ld.d" : "ld.w",
                                             "$t0", slot) ||
-                               !emit_sp_mem(out, wide ? "st.d" : "st.w",
+                               /* The LoongArch LP64D stack argument slot is
+                                * 8 bytes even for 32-bit int/unsigned int.
+                                * ld.w sign-extends both (ABI requirement),
+                                * so st.d must write all 64 bits. st.w left
+                                * the upper half uninitialized and could
+                                * poison a variadic callee's 8-byte va slot. */
+                               !emit_sp_mem(out, "st.d",
                                             "$t0", stack_index++ * 8U))
                         return machine_emit_reject(fn, "loongarch64", name,
                                     reject_stage, reject_block, reject_ins, __LINE__);
