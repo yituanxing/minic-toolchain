@@ -1203,7 +1203,8 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                          ins->kind == MINIC_CORE_INSTRUCTION_FLOAT_MULTIPLY ||
                          ins->kind == MINIC_CORE_INSTRUCTION_FLOAT_DIVIDE)) &&
                       !(minic_type_is_long_double(ins->type) &&
-                        (ins->kind == MINIC_CORE_INSTRUCTION_LOAD ||
+                        (ins->kind == MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT ||
+                         ins->kind == MINIC_CORE_INSTRUCTION_LOAD ||
                          ins->kind == MINIC_CORE_INSTRUCTION_PARAMETER ||
                          ins->kind == MINIC_CORE_INSTRUCTION_CALL ||
                          ins->kind == MINIC_CORE_INSTRUCTION_INDIRECT_CALL)) &&
@@ -1308,6 +1309,20 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
             continue;
         }
         case MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT:
+            if (minic_type_is_long_double(ins->type)) {
+                size_t dst;
+                if (!binary128_slot(fn, ld_base, ins->result, &dst) ||
+                    fprintf(out, "  li.d $t0, 0x%016" PRIx64 "\n",
+                            ins->value.floating128_bits.low) < 0 ||
+                    !emit_sp_mem(out, "st.d", "$t0", dst) ||
+                    fprintf(out, "  li.d $t0, 0x%016" PRIx64 "\n",
+                            ins->value.floating128_bits.high) < 0 ||
+                    !emit_sp_mem(out, "st.d", "$t0", dst + 8U))
+                    return machine_emit_reject(fn, "loongarch64", name,
+                                               reject_stage, reject_block,
+                                               reject_ins, __LINE__);
+                continue;
+            }
             if ((!minic_type_is_double(ins->type) &&
                  !minic_type_is_float(ins->type)) ||
                 fprintf(out, "  li.d $t0, 0x%016" PRIx64 "\n",
