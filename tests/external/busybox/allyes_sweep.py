@@ -114,9 +114,14 @@ def call_proxy(args):
         with (target / "minic.err").open("wb") as e:
             mini = subprocess.run(
                 [os.environ["BUSYBOX_ALLYES_MINIC_CC"],
-                 "--target=x86_64-linux", "-S", str(preprocessed), "-o", str(asm)],
+                 "--target=" + os.environ.get("BUSYBOX_ALLYES_MINIC_TARGET",
+                                              "x86_64-linux"),
+                 "-S", str(preprocessed), "-o", str(asm)],
                 stdout=subprocess.DEVNULL, stderr=e, check=False,
-                env={**os.environ, "MINIC_X86_CALL_TRACE": "1"})
+                env=({**os.environ, "MINIC_X86_CALL_TRACE": "1"}
+                     if os.environ.get("BUSYBOX_ALLYES_MINIC_TARGET",
+                                       "x86_64-linux") == "x86_64-linux"
+                     else os.environ))
         info["minic"] = mini.returncode
         if mini.returncode == 0:
             with (target / "as.err").open("wb") as e:

@@ -290,6 +290,13 @@ editors/cmp.c editors/diff.c networking/ping.c
         # focused job, before these expensive original Kbuild cohorts.
         wide_targets=$((wide_targets+1))
         echo "FOUR_BACKEND_BUSYBOX_WIDE_ACCEPT=PASS target=$target MiniC_owners=$wide_mini original_Kbuild_owners=179 GNU_fallbacks=$wide_fallback QEMU_cases=58 dynamic_stack_runtime=PASS"
+        # Beyond selected applets, inventory every ACTUAL original Kbuild
+        # C owner under maximal upstream allyesconfig. Experimental scope
+        # never weakens the strict 175/179 mixed QEMU contract above.
+        if [ "${FOUR_BACKEND_BUSYBOX_ALLYES:-0}" = 1 ]; then
+          sh tests/external/busybox/probe-four-backend-all-kbuild.sh \
+            "$root" "$target" "$gcc" "$prefix" "$qemu" "$sysroot"
+        fi
       fi
     fi
   fi
