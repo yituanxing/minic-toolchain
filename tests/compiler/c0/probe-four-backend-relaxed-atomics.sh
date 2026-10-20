@@ -1,5 +1,5 @@
 #!/bin/sh
-# C11 GNU relaxed atomics: AArch64 / LoongArch64 full-size typed
+# C11 GNU relaxed atomics (memory_order=0): AArch64 / LoongArch64 full-size typed
 # store+load, GNU assembly/link and QEMU result byte comparison.
 # Does not certify acquire/release/SC or thread interleavings.
 set -eu
@@ -14,16 +14,16 @@ static unsigned long wide;
 static int chosen;
 static int *global_ptr;
 int main(void) {
-    __atomic_store_n(&tiny, (unsigned char)7, __ATOMIC_RELAXED);
-    __atomic_store_n(&half, (unsigned short)11, __ATOMIC_RELAXED);
-    __atomic_store_n(&word, 13U, __ATOMIC_RELAXED);
-    __atomic_store_n(&wide, 17UL, __ATOMIC_RELAXED);
-    __atomic_store_n(&global_ptr, &chosen, __ATOMIC_RELAXED);
-    if (__atomic_load_n(&tiny, __ATOMIC_RELAXED) != 7 ||
-        __atomic_load_n(&half, __ATOMIC_RELAXED) != 11 ||
-        __atomic_load_n(&word, __ATOMIC_RELAXED) != 13 ||
-        __atomic_load_n(&wide, __ATOMIC_RELAXED) != 17 ||
-        __atomic_load_n(&global_ptr, __ATOMIC_RELAXED) != &chosen)
+    __atomic_store_n(&tiny, (unsigned char)7, 0);
+    __atomic_store_n(&half, (unsigned short)11, 0);
+    __atomic_store_n(&word, 13U, 0);
+    __atomic_store_n(&wide, 17UL, 0);
+    __atomic_store_n(&global_ptr, &chosen, 0);
+    if (__atomic_load_n(&tiny, 0) != 7 ||
+        __atomic_load_n(&half, 0) != 11 ||
+        __atomic_load_n(&word, 0) != 13 ||
+        __atomic_load_n(&wide, 0) != 17 ||
+        __atomic_load_n(&global_ptr, 0) != &chosen)
         return 1;
     return 42;
 }
