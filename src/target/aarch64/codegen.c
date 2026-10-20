@@ -2900,8 +2900,16 @@ static bool copy_dynamic_frame_asm(FILE *out, FILE *input) {
         if (strcmp(line, "  mov x19, sp\n") == 0) {
             anchored = true;
         } else if (strcmp(line, "  mov sp, x19\n") == 0) {
+            /* Epilogue must load the saved x19 from the restored SP.
+             * This unanchors only the current RETURN terminator, not
+             * subsequent textually later CFG blocks: they may be reached
+             * by a branch from earlier blocks and still use dynamic SP. */
             anchored = false;
             spill = 0U;
+        } else if (!anchored && strcmp(line, "  ret\n") == 0) {
+            if (fputs(line, out) == EOF) return false;
+            anchored = true;
+            continue;
         } else if (anchored && sscanf(line, "  sub sp, sp, #%zu", &value) == 1) {
             /* Only the bounded outgoing call argument area uses sub #imm.
              * Dynamic allocations use sub sp, sp, x10, never an immediate. */
