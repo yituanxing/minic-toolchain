@@ -5,7 +5,7 @@ set -eu
 : "${MINIC_CC:?set MINIC_CC to the actual minic-cc}"
 w=$(mktemp -d)
 trap 'rm -rf "$w"' EXIT HUP INT TERM
-cat >"$w/forward.i" <<'SRC'
+cat >"$w/forward.c" <<'SRC'
 #include <stdarg.h>
 #include <string.h>
 static int readargs(va_list a) {
@@ -30,6 +30,7 @@ int main(void) {
 SRC
 gcc=aarch64-linux-gnu-gcc
 qemu=qemu-aarch64
+"$gcc" -E -P -std=c99 "$w/forward.c" -o "$w/forward.i"
 "$gcc" -static -x c "$w/forward.i" -o "$w/gnu"
 MINIC_M1_TRACE=1 "$MINIC_CC" --target=aarch64-linux -S \
     "$w/forward.i" -o "$w/mini.s"
