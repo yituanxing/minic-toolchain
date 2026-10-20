@@ -39,7 +39,7 @@ def call_proxy(args):
                 report = Path(os.environ["BUSYBOX_ALLYES_REPORT_ROOT"])
                 with (report / "gnu-link-attempts.log").open("a", encoding="utf-8") as log:
                     log.write("rc=%d binary_exists=%d binary_bytes=%d "
-                              "gc_sections=%d verbose=%d argv_count=%d\\n" %
+                              "gc_sections=%d verbose=%d argv_count=%d\n" %
                               (gcc.returncode, int(output_path.is_file()),
                                output_path.stat().st_size if output_path.is_file() else 0,
                                int(any("gc-sections" in arg for arg in args)),

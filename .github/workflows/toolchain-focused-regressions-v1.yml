@@ -304,6 +304,7 @@ jobs:
           FOUR_BACKEND_BUSYBOX_NEXT=1 \
           FOUR_BACKEND_BUSYBOX_WIDE=1 \
           FOUR_BACKEND_BUSYBOX_ALLYES=1 \
+          FOUR_BACKEND_BUSYBOX_GNU_DIAG_FAST=1 \
           MINIC_CC="$GITHUB_WORKSPACE/build/toolchain-focused-t1-v2/bin/minic-cc" \
             sh tests/external/busybox/probe-four-backend-frontier.sh
 
