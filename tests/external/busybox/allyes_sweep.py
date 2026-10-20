@@ -244,7 +244,13 @@ def controller(args):
     # valid target build when applets/applets.c cannot even preprocess.
     if link_compatible and os.environ.get("BUSYBOX_ALLYES_MINIC_TARGET",
                                             "x86_64-linux") != "x86_64-linux":
-        disabled_host_options += ("SELINUX", "PAM")
+        # Upstream libbb/common_bufsiz.c explicitly defaults this
+        # optional page-tail optimization OFF, and documents disabling it
+        # for linker/post-link _end failures. The allyesconfig-only
+        # scripts/generate_BUFSIZ.sh --post probes host NM/CC on a target
+        # ELF and can fail *after* GNU successfully links BusyBox. Do not
+        # patch original BusyBox scripts or misclassify this as MiniC ABI.
+        disabled_host_options += ("SELINUX", "PAM", "FEATURE_USE_BSS_TAIL")
     changed = []
     for symbol in disabled_host_options:
         old_value = "CONFIG_" + symbol + "=y"
