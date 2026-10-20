@@ -207,6 +207,9 @@ cases = [
  ("seq", ["seq", "1", "3"], b""),
  ("id", ["id", "-u"], b""),
 ]
+tag = ("FOUR_BACKEND_BUSYBOX_NEXT" if
+       os.environ.get("FOUR_BACKEND_BUSYBOX_COHORT") == "next"
+       else "FOUR_BACKEND_BUSYBOX_EXPAND")
 if os.environ.get("FOUR_BACKEND_BUSYBOX_COHORT") == "next":
     cases.extend([
       ("cksum", ["cksum", sample], b""),
@@ -225,7 +228,7 @@ if os.environ.get("FOUR_BACKEND_BUSYBOX_COHORT") == "next":
       ("sum", ["sum", sample], b""),
       ("tac", ["tac", sample], b""),
       ("test", ["test", "7", "-eq", "7"], b""),
-      ("tsort", ["tsort"], b"a b\\nb c\\n"),
+      ("tsort", ["tsort"], b"a b\nb c\n"),
       ("sed", ["sed", "s/alpha/ALPHA/g", sample], b""),
       ("cmp", ["cmp", sample, sample], b""),
       ("find", ["find", root, "-maxdepth", "0"], b""),
@@ -239,11 +242,11 @@ for label, argv, input_bytes in cases:
             env=dict(os.environ, LC_ALL="C"), check=False)
         results.append((p.returncode, p.stdout, p.stderr))
     if results[0] != results[1] or results[0][0] in (126, 127):
-        print("${tag}_RUNTIME=FAIL applet=%s GNU=%r MINI=%r" %
-              (label, results[0], results[1]), flush=True)
+        print("%s_RUNTIME=FAIL applet=%s GNU=%r MINI=%r" %
+              (tag, label, results[0], results[1]), flush=True)
         sys.exit(1)
-    print("${tag}_RUNTIME=PASS applet=%s" % label, flush=True)
-print("${tag}_RUNTIME_ACCEPT=PASS fixtures=%d" % len(cases), flush=True)
+    print("%s_RUNTIME=PASS applet=%s" % (tag, label), flush=True)
+print("%s_RUNTIME_ACCEPT=PASS fixtures=%d" % (tag, len(cases)), flush=True)
 PY
 then
   echo "${tag}=BLOCKED target=$target stage=GNU_QEMU_differential"
