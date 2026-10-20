@@ -617,11 +617,6 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                       fn->block_count, fn->parameter_count,
                       valid_return_type(program, target, fn->return_type) ? 1 : 0,
                       fn->inline_asm_count);
-    for (i = 0U; i < fn->parameter_count; ++i)
-        if (minic_type_is_long_double(fn->parameter_types[i]))
-            return machine_emit_reject(fn, "loongarch64", name,
-                                       "binary128_param_pending",
-                                       SIZE_MAX, SIZE_MAX, __LINE__);
     if (name == NULL || name[0] == '\0' ||
         !minic_core_function_verify(fn) ||
         decl->is_constructor || decl->is_weak ||
@@ -899,9 +894,10 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                                            reject_ins, __LINE__);
             }
             actual = fn->values[arg->value.value_id].type;
-            if (minic_type_is_long_double(actual))
+            if (minic_type_is_long_double(actual) &&
+                (j >= parameter_count || is_variadic))
                 return machine_emit_reject(fn, "loongarch64", name,
-                                           "binary128_arg_pending",
+                                           "binary128_variadic_pending",
                                            SIZE_MAX, i, __LINE__);
             if (!valid_parameter_type(program, target, actual)) return machine_emit_reject(fn, "loongarch64", name, reject_stage,
                                     reject_block, reject_ins, __LINE__);
@@ -1732,7 +1728,12 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                                      minic_type_is_float(type)) &&
                                     (!is_variadic || j < parameter_count) &&
                                     fp_index < 8U;
-                if (use_fp) {
+                if (minic_type_is_long_double(type)) {
+                    const size_t available = gp_index < 8U ? 8U - gp_index : 0U;
+                    const size_t used = available < 2U ? available : 2U;
+                    gp_index += used;
+                    overflow_slots += 2U - used;
+                } else if (use_fp) {
                     if (fp_index++ >= 8U) ++overflow_slots;
                 } else if (gp_index++ >= 8U) ++overflow_slots;
             }
@@ -1779,6 +1780,34 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                 const MinicType type = fn->values[arg->value.value_id].type;
                 const size_t slot = (size_t)arg->value.value_id * 8U +
                     (dynamic_frame ? 0U : stack_bytes);
+                if (minic_type_is_long_double(type)) {
+                    size_t src, chunk;
+                    const size_t available = gp_index < 8U ? 8U - gp_index : 0U;
+                    const size_t used = available < 2U ? available : 2U;
+                    if (!binary128_slot(fn, ld_base, arg->value.value_id, &src))
+                        return machine_emit_reject(fn, "loongarch64", name,
+                                                   reject_stage, reject_block,
+                                                   reject_ins, __LINE__);
+                    for (chunk = 0U; chunk < 2U; ++chunk) {
+                        if (chunk < used) {
+                            if (!emit_sp_mem(out, "ld.d", gp_regs[gp_index + chunk],
+                                             src + chunk * 8U))
+                                return machine_emit_reject(fn, "loongarch64", name,
+                                                           reject_stage, reject_block,
+                                                           reject_ins, __LINE__);
+                        } else if (!emit_sp_mem(out, "ld.d", "$t0",
+                                                src + chunk * 8U) ||
+                                   !emit_frame_mem(out, "st.d", "$t0",
+                                                   (stack_index + chunk - used) * 8U,
+                                                   false))
+                            return machine_emit_reject(fn, "loongarch64", name,
+                                                       reject_stage, reject_block,
+                                                       reject_ins, __LINE__);
+                    }
+                    gp_index += used;
+                    stack_index += 2U - used;
+                    continue;
+                }
                 const bool use_fp = (minic_type_is_double(type) ||
                                      minic_type_is_float(type)) &&
                                     (!is_variadic || j < parameter_count) &&
@@ -1915,11 +1944,41 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                         ? slots : available;
                     gp_index += used;
                     overflow_index += slots - used;
+                } else if (minic_type_is_long_double(prior)) {
+                    const size_t available = gp_index < 8U ? 8U - gp_index : 0U;
+                    const size_t used = available < 2U ? available : 2U;
+                    gp_index += used;
+                    overflow_index += 2U - used;
                 } else if ((minic_type_is_double(prior) ||
                             minic_type_is_float(prior)) && fp_index < 8U)
                     ++fp_index;
                 else if (gp_index < 8U) ++gp_index;
                 else ++overflow_index;
+            }
+            if (minic_type_is_long_double(ins->type)) {
+                size_t dst, chunk;
+                const size_t available = gp_index < 8U ? 8U - gp_index : 0U;
+                const size_t used = available < 2U ? available : 2U;
+                if (!binary128_slot(fn, ld_base, ins->result, &dst))
+                    return machine_emit_reject(fn, "loongarch64", name,
+                                               reject_stage, reject_block,
+                                               reject_ins, __LINE__);
+                for (chunk = 0U; chunk < 2U; ++chunk) {
+                    if (chunk < used) {
+                        if (!emit_sp_mem(out, "st.d", gp_regs[gp_index + chunk],
+                                         dst + chunk * 8U))
+                            return machine_emit_reject(fn, "loongarch64", name,
+                                                       reject_stage, reject_block,
+                                                       reject_ins, __LINE__);
+                    } else if (!emit_sp_mem(out, "ld.d", "$t0",
+                                            frame + (overflow_index + chunk - used) * 8U) ||
+                               !emit_sp_mem(out, "st.d", "$t0",
+                                            dst + chunk * 8U))
+                        return machine_emit_reject(fn, "loongarch64", name,
+                                                   reject_stage, reject_block,
+                                                   reject_ins, __LINE__);
+                }
+                continue;
             }
             if ((minic_type_is_double(ins->type) ||
                  minic_type_is_float(ins->type)) && fp_index < 8U) {
