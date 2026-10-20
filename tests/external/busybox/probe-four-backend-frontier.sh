@@ -231,6 +231,11 @@ editors/cmp.c editors/diff.c networking/ping.c
   if [ "${FOUR_BACKEND_BUSYBOX_EXPAND:-0}" = 1 ]; then
     sh tests/external/busybox/probe-four-backend-expanded.sh \
       "$root" "$target" "$gcc" "$prefix" "$qemu" "$sysroot"
+    if [ "${FOUR_BACKEND_BUSYBOX_NEXT:-0}" = 1 ]; then
+      FOUR_BACKEND_BUSYBOX_COHORT=next \
+        sh tests/external/busybox/probe-four-backend-expanded.sh \
+          "$root" "$target" "$gcc" "$prefix" "$qemu" "$sysroot"
+    fi
   fi
 done
 echo "FOUR_BACKEND_BUSYBOX_DISCOVERY=COMPLETE source_pinned=1 no_all_MiniC_claim=1"
