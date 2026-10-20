@@ -540,7 +540,7 @@ static bool emit_lp64_record_chunk_argument(FILE *out, size_t offset,
                                              size_t bytes, bool in_reg,
                                              size_t gp, size_t stack_slot) {
     size_t b;
-    if (bytes == 0U || bytes > 8U || gp > 9U) return false;
+    if (bytes == 0U || bytes > 8U || (in_reg && gp >= 8U)) return false;
     if (fprintf(out, "  movz x11, #%zu\n", offset & 65535U) < 0 ||
         (offset > 65535U &&
          fprintf(out, "  movk x11, #%zu, lsl #16\n", offset >> 16U) < 0) ||
@@ -559,7 +559,7 @@ static bool emit_lp64_record_chunk_parameter(FILE *out, size_t offset,
                                               size_t bytes, bool in_reg,
                                               size_t gp, size_t incoming_offset) {
     size_t b;
-    if (bytes == 0U || bytes > 8U || gp > 9U ||
+    if (bytes == 0U || bytes > 8U || (in_reg && gp >= 8U) ||
         fprintf(out, "  movz x11, #%zu\n", offset & 65535U) < 0 ||
         (offset > 65535U &&
          fprintf(out, "  movk x11, #%zu, lsl #16\n", offset >> 16U) < 0) ||
