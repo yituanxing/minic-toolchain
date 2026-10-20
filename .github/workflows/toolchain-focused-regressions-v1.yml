@@ -89,7 +89,7 @@ jobs:
                   linux_yaml=true
                 fi
                 case "$changed" in
-                  src/target/aarch64/*|src/target/loongarch64/*|tests/compiler/c0/run-four-backend-m1.sh|tests/external/tiny-aes-c/*|tests/external/cjson/*|tests/external/zlib/*|tests/external/lua/*)
+                  src/target/aarch64/*|src/target/loongarch64/*|tests/compiler/c0/run-four-backend-m1.sh|tests/external/tiny-aes-c/*|tests/external/cjson/*|tests/external/zlib/*|tests/external/lua/*|tests/external/sqlite/*)
                     ;;
                   *) four_only=false ;;
                 esac
@@ -233,6 +233,11 @@ jobs:
           # and both real interpreter/luac binaries must match GNU/QEMU.
           sh -n tests/external/lua/probe-four-backend-frontier.sh
           make MODE=release CFLAGS=-Werror BUILD_DIR=build/toolchain-focused-t1-v2 check-four-backend-lua-accept
+          # Next original project (no partial success claims). One pinned
+          # amalgamation per ISA, timeout and first error with source context.
+          # Discovery never treats a blocked TU as accepted SQLite.
+          sh -n tests/external/sqlite/probe-four-backend-frontier.sh
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/toolchain-focused-t1-v2 check-four-backend-sqlite-frontier
 
       - name: Fetch certified Stage2 for single-runner Kbuild driver preflight
         if: contains(github.event.head_commit.message, '[minic-stage2-driver-smoke]')

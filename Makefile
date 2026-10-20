@@ -799,6 +799,16 @@ check-four-backend-lua-accept: $(MINIC_CC_BINARY)
 	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" FOUR_BACKEND_LUA_REQUIRE=1 \
 	sh tests/external/lua/probe-four-backend-frontier.sh
 
+# Original SQLite 3.54.1 two-ISA amalgamation. Frontier is discovery only.
+# A status=BLOCKED never counts as project acceptance.
+check-four-backend-sqlite-frontier: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" \
+	sh tests/external/sqlite/probe-four-backend-frontier.sh
+
+check-four-backend-sqlite-accept: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" FOUR_BACKEND_SQLITE_REQUIRE=1 \
+	sh tests/external/sqlite/probe-four-backend-frontier.sh
+
 # Real cJSON M17 flat record and ELF callback relocations; independent
 # GNU caller checks target DataLayout field bytes under both QEMUs.
 check-four-backend-m17-record: $(MINIC_CC_BINARY)
