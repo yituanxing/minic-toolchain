@@ -96,6 +96,13 @@ if ! (cd "$src" && yes '' | make HOSTCC=cc CC="$gcc" \
     CROSS_COMPILE="$prefix" busybox \
     >"$work/build.out" 2>"$work/build.err"); then
   echo "${tag}=BLOCKED target=$target stage=GNU_original_build"
+  # BusyBox's Kbuild trylink captures the *real* GNU linker stderr in
+  # busybox_unstripped.out. stderr/build.err ends with harmless GCC warnings
+  # and hides the first undefined symbol unless this file is printed.
+  if [ -f "$src/busybox_unstripped.out" ]; then
+    grep -E -m 16 'undefined reference|multiple definition|relocation|collect2: error|ld: error|cannot find' "$src/busybox_unstripped.out" || true
+    tail -n 26 "$src/busybox_unstripped.out" || true
+  fi
   tail -n 22 "$work/build.err" "$work/build.out" 2>/dev/null || true
   exit 0
 fi
@@ -248,9 +255,10 @@ while IFS= read -r file; do
   stem=${stem%.c}
   cp "$work/obj/$stem.o" "$src/${file%.c}.o"
 done < "$work/qualified.list"
-for dir in coreutils findutils editors; do
-  # Every affected directory must reaggregate the exact substituted .o.
-  # Otherwise an old GNU archive can survive while the loose .o SHA matches.
+# Every directory with a replaced Kbuild source owner must be rebuilt.
+# The wide cohort includes shell/init/networking/archival/procps etc.; the
+# earlier hardcoded 3 directories would retain stale GNU archives.
+cut -d/ -f1 "$work/qualified.list" | sort -u | while IFS= read -r dir; do
   rm -f "$src/$dir/built-in.o" "$src/$dir/lib.a"
 done
 rm -f "$src/busybox" "$src/busybox_unstripped"
