@@ -267,28 +267,56 @@ def controller(args):
         rc = subprocess.run(["make", "-k", "-j4", "CC=" + proxy, "busybox"],
                             cwd=root, env=make_env, stdout=stdout, stderr=stderr,
                             check=False).returncode
+    if rc != 0:
+        # RV64's existing Kbuild wrapper distinguishes C producers from
+        # build-system control traffic. Reuse the exact original Kbuild
+        # dependency graph; after the comprehensive -k shadow census a
+        # sequential GNU-only pass isolates the FIRST real failing target,
+        # without repeating all MiniC compiler invocations or forging a
+        # successful full build.
+        retry_env = dict(make_env)
+        retry_env["BUSYBOX_ALLYES_SKIP_SHADOW"] = "1"
+        with (out / "gnu-sequential.out").open("wb") as stdout, \
+             (out / "gnu-sequential.err").open("wb") as stderr:
+            retry_rc = subprocess.run(
+                ["make", "-j1", "CC=" + proxy, "busybox"],
+                cwd=root, env=retry_env, stdout=stdout, stderr=stderr,
+                check=False).returncode
+        print("BUSYBOX_ALLYES_GCC_SEQUENTIAL=%s initial_parallel_rc=%d sequential_rc=%d" %
+              ("PASS" if retry_rc == 0 else "BLOCKED", rc, retry_rc),
+              flush=True)
+        if retry_rc == 0:
+            rc = 0
+        else:
+            # Avoid searching for the string 'error:' in the *source
+            # snippets* of a GCC warning such as bb_error_msg("read error:").
+            # Source snippets were previously mistaken for linker errors.
+            pattern = re.compile(
+                r"^(?:[^ ]+:[0-9]+(?::[0-9]+)?: )?(?:fatal )?error:"
+                r"|undefined reference|^collect2:|^/usr/bin/ld:"
+                r"|^make(?:\\[[0-9]+\\])?: \\*\\*\\*"
+                r"|No rule to make target|cannot find -l"
+            )
+            for filename in ("gnu-sequential.err", "gnu-sequential.out",
+                             "build.err", "build.out"):
+                text = (out / filename).read_text(errors="replace")
+                lines = [line.strip() for line in text.splitlines()
+                         if pattern.search(line)]
+                print("BUSYBOX_ALLYES_GCC_REAL_ERRORS file=%s matches=%d first=%s" %
+                      (filename, len(lines),
+                       " | ".join(lines[:16])[:3200]), flush=True)
+                if filename.startswith("gnu-sequential"):
+                    print("BUSYBOX_ALLYES_GCC_STOP_CONTEXT file=%s lines=%s" %
+                          (filename,
+                           " | ".join(text.splitlines()[-32:])[:2500]),
+                          flush=True)
+            linker_log = root / "busybox_unstripped.out"
+            if linker_log.is_file():
+                ls = linker_log.read_text(errors="replace")
+                print("BUSYBOX_ALLYES_GCC_FINAL_LINK_LOG=" +
+                      " | ".join(ls.splitlines()[-35:])[:3800], flush=True)
     print("BUSYBOX_ALLYES_GCC_KBUILD=%s original_Kconfig=1 original_sources=1" %
           ("PASS" if rc == 0 else "BLOCKED"), flush=True)
-    if rc != 0:
-        lines = (out / "build.err").read_text(errors="replace").splitlines()
-        print("BUSYBOX_ALLYES_GCC_BUILD_DIAGNOSTIC=" +
-              " | ".join(x.strip() for x in lines[-25:])[:1600])
-        # A -k full Kbuild logs harmless warnings *after* the actual
-        # compiler/link failure. Report the first concrete errors, not just
-        # the noisy trailing warnings (essential for cross sysroot triage).
-        actual_errors = [line.strip() for line in lines
-                         if re.search(r"(?:fatal )?error:|undefined reference|cannot find|No such file or directory",
-                                      line)]
-        linker_log = root / "busybox_unstripped.out"
-        if linker_log.exists():
-            actual_errors += [
-                line.strip() for line in
-                linker_log.read_text(errors="replace").splitlines()
-                if re.search(r"undefined reference|error:|cannot find", line)
-            ]
-        if actual_errors:
-            print("BUSYBOX_ALLYES_GCC_FIRST_ERRORS=" +
-                  " | ".join(actual_errors[:14])[:1900], flush=True)
     if link_compatible:
         busybox = root / "busybox"
         if rc == 0 and busybox.is_file():
