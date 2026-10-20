@@ -142,6 +142,11 @@ for target in aarch64 loongarch64; do
             while IFS= read -r line; do
                 echo "FOUR_BACKEND_SQLITE_CALL_ARGUMENT target=$target $line"
             done
+        grep -m 12 'MINIC_SQLITE_CONVERSION_LIMIT' \
+            "$work/$target/mini.err" |
+            while IFS= read -r line; do
+                echo "FOUR_BACKEND_SQLITE_CONVERSION_CLASS target=$target $line"
+            done
         grep -m 12 'MINIC_BACKEND_CALL_GATE' \
             "$work/$target/mini.err" |
             while IFS= read -r line; do
@@ -184,6 +189,53 @@ for target in aarch64 loongarch64; do
                 >"$work/$target/$cc.stdout" 2>"$work/$target/$cc.stderr"; then
             echo "FOUR_BACKEND_SQLITE=FAIL target=$target stage=$cc-QEMU" >&2
             sed -n '1,30p' "$work/$target/$cc.stderr" >&2
+            if [ "$cc" = mini ] && [ "$target" = loongarch64 ]; then
+                # Run the same REAL MiniC-built SQLite binary under QEMU's
+                # block trace. This is a diagnostic replay, not a pass.
+                set +e
+                timeout 20s "$qemu" -d in_asm,exec \
+                    -D "$work/$target/mini-qemu.log" \
+                    "$work/$target/mini" >"$work/$target/trace.out" \
+                    2>"$work/$target/trace.err"
+                qemu_trace_status=$?
+                set -e
+                echo "FOUR_BACKEND_SQLITE_TRACE target=$target replay_status=$qemu_trace_status"
+                tail -n 32 "$work/$target/mini-qemu.log" 2>/dev/null |
+                    while IFS= read -r line; do
+                        echo "FOUR_BACKEND_SQLITE_TRACE_LINE $line"
+                    done
+                # GNU's function symbol table can map QEMU guest PCs to
+                # the exact function responsible, even for 2500+ symbols.
+                "$gcc" -print-prog-name=nm >"$work/$target/nm-command"
+                nm_tool=$(cat "$work/$target/nm-command")
+                "$nm_tool" -n "$work/$target/mini" |
+                    awk '$2=="t" || $2=="T" {print $1, $3}' \
+                    >"$work/$target/symbols.txt"
+                python3 - "$work/$target/mini-qemu.log" \
+                        "$work/$target/symbols.txt" <<'PY'
+import bisect, re, sys
+from collections import deque
+pcs = deque(maxlen=20)
+with open(sys.argv[1], errors='replace') as f:
+    for line in f:
+        m = re.match(r'(?:0x([0-9a-fA-F]+):|Trace [^\\n]*?0x([0-9a-fA-F]{6,}))', line)
+        if m: pcs.append(int(m.group(1) or m.group(2), 16))
+symbols = []
+with open(sys.argv[2]) as f:
+    for line in f:
+        v = line.split(maxsplit=1)
+        if len(v) == 2:
+            try: symbols.append((int(v[0], 16), v[1].strip()))
+            except ValueError: pass
+symbols.sort()
+addresses = [p for p, _ in symbols]
+for pc in list(pcs)[-15:]:
+    at = bisect.bisect_right(addresses, pc) - 1
+    name = symbols[at][1] if at >= 0 else '<unknown>'
+    base = symbols[at][0] if at >= 0 else 0
+    print(f"FOUR_BACKEND_SQLITE_TRACE_PC pc=0x{pc:x} function={name} offset=0x{pc-base:x}")
+PY
+            fi
             runtime_ok=0
         fi
     done

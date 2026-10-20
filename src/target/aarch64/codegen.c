@@ -2366,6 +2366,29 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
             const MinicCoreValueId src = ins->value.operand;
             size_t src_width, dst_width;
             bool src_sign, dst_sign;
+            /* Inventory both source/destination C integer widths before
+             * admitting a cast. The SQLite 128-bit helper includes a type
+             * conversion outside the already-proven 32/64 scalar subset. */
+            if (getenv("MINIC_BACKEND_CENSUS") != NULL) {
+                size_t source_bytes = 0U, dest_bytes = 0U;
+                bool source_sign = false, dest_sign = false;
+                const bool source_ok = src < fn->value_count &&
+                    scalar_integer_width(program, target,
+                        fn->values[src].type, &source_bytes, &source_sign);
+                const bool dest_ok = scalar_integer_width(
+                    program, target, ins->type, &dest_bytes, &dest_sign);
+                if (!source_ok || !dest_ok)
+                    (void)fprintf(stderr,
+                        "MINIC_SQLITE_CONVERSION_LIMIT arch=aarch64 function=%s"
+                        " ins=%zu source_ok=%d src_bytes=%zu src_sign=%d"
+                        " dest_ok=%d dst_bytes=%zu dst_sign=%d"
+                        " source_kind=%d dest_kind=%d\\n",
+                        name, ins_id, source_ok, source_bytes, source_sign,
+                        dest_ok, dest_bytes, dest_sign,
+                        src < fn->value_count
+                            ? (int)fn->values[src].type.base_kind : -1,
+                        (int)ins->type.base_kind);
+            }
             if (src >= fn->value_count ||
                 !scalar_integer_width(program, target,
                                       fn->values[src].type, &src_width, &src_sign) ||
