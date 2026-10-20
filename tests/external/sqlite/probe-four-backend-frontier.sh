@@ -101,6 +101,28 @@ int main(void) {
     return sqlite3_close(db) == SQLITE_OK ? 0 : 2;
 }
 SRC
+# Tokenization A/B uses the unmodified SQLite engine, including its lexer
+# tables, so one test evaluates all symbol/data/bitwidth decisions at once.
+cat > "$work/token-ab.c" <<'SRC'
+#include <stdio.h>
+extern int sqlite3GetToken(const unsigned char *, int *);
+int main(void) {
+    const unsigned char *text =
+        (const unsigned char *)"CREATE TABLE t(id INTEGER PRIMARY KEY, x INT);";
+    unsigned long i = 0U;
+    while (text[i] != 0U) {
+        int type = 0;
+        int width = sqlite3GetToken(text + i, &type);
+        printf("%lu:%d:%d:", i, width, type);
+        if (width < 1 || width > 100) return 3;
+        for (int j = 0; j < width; ++j)
+            printf("%02x", text[i + (unsigned long)j]);
+        putchar('\n');
+        i += (unsigned long)width;
+    }
+    return 0;
+}
+SRC
 passed=0
 blocked=0
 failed=0
@@ -220,6 +242,32 @@ for target in aarch64 loongarch64; do
         echo "FOUR_BACKEND_SQLITE=FAIL target=$target stage=GNU_or_MiniC_link" >&2
         failed=$((failed + 1))
         continue
+    fi
+    # First run an independent lexer/token-table oracle to separate raw
+    # character recognition errors from parser-reduction/ABI errors.
+    token_build_ok=1
+    for cc in gnu mini; do
+        if ! "$gcc" -static "$work/token-ab.c" "$work/$target/$cc.o" \
+                -lm -ldl -lpthread -o "$work/$target/token-$cc"; then
+            echo "FOUR_BACKEND_SQLITE_LEXER=SKIP target=$target compiler=$cc stage=link"
+            token_build_ok=0
+            break
+        fi
+        if ! timeout 45s "$qemu" "$work/$target/token-$cc" \
+                >"$work/$target/token-$cc.out" 2>"$work/$target/token-$cc.err"; then
+            echo "FOUR_BACKEND_SQLITE_LEXER=FAIL target=$target compiler=$cc stage=QEMU"
+            token_build_ok=0
+            break
+        fi
+    done
+    if [ "$token_build_ok" -eq 1 ]; then
+        if cmp -s "$work/$target/token-gnu.out" "$work/$target/token-mini.out"; then
+            echo "FOUR_BACKEND_SQLITE_LEXER=PASS target=$target full_CREATE_TABLE_token_stream=GNU_QEMU_byte_exact"
+        else
+            echo "FOUR_BACKEND_SQLITE_LEXER=FAIL target=$target stage=GNU_QEMU_differential"
+            diff -u "$work/$target/token-gnu.out" "$work/$target/token-mini.out" |
+                head -n 35 || true
+        fi
     fi
     runtime_ok=1
     for cc in gnu mini; do
