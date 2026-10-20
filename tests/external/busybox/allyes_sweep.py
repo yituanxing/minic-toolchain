@@ -313,8 +313,30 @@ def controller(args):
             linker_log = root / "busybox_unstripped.out"
             if linker_log.is_file():
                 ls = linker_log.read_text(errors="replace")
-                print("BUSYBOX_ALLYES_GCC_FINAL_LINK_LOG=" +
-                      " | ".join(ls.splitlines()[-35:])[:3800], flush=True)
+                whole_lines = ls.splitlines()
+                root_errors = [(i + 1, ln.strip()) for i, ln in enumerate(whole_lines)
+                               if re.search(
+                                 r"undefined reference|collect2:|error:|fatal:|"
+                                 r"relocation (?:.*)out of range|cannot find|"
+                                 r"No such file or directory|file not recognized|"
+                                 r"^/usr/[^ ]*/ld:|^ld: |^FAIL|^Failed",
+                                 ln)]
+                print("BUSYBOX_ALLYES_GCC_FINAL_LINK_CAUSE matches=%d lines=%s" %
+                      (len(root_errors),
+                       " | ".join("line%d:%s" % item for item in
+                                  root_errors[:25])[:5800]), flush=True)
+                print("BUSYBOX_ALLYES_GCC_FINAL_LINK_FIRST_LINES=" +
+                      " | ".join(whole_lines[:25])[:3300], flush=True)
+                print("BUSYBOX_ALLYES_GCC_FINAL_LINK_LAST_LINES=" +
+                      " | ".join(whole_lines[-18:])[:2300], flush=True)
+            print("BUSYBOX_ALLYES_GCC_LINK_FEATURES=" +
+                  " ".join(line for line in config.splitlines()
+                           if line.startswith(("CONFIG_BUILD_LIBBUSYBOX=",
+                                               "CONFIG_FEATURE_INDIVIDUAL=",
+                                               "CONFIG_FEATURE_SHARED_BUSYBOX=",
+                                               "CONFIG_PIE=", "CONFIG_EXTRA_LDLIBS=",
+                                               "CONFIG_USE_BB_CRYPT="))),
+                  flush=True)
     print("BUSYBOX_ALLYES_GCC_KBUILD=%s original_Kconfig=1 original_sources=1" %
           ("PASS" if rc == 0 else "BLOCKED"), flush=True)
     if link_compatible:
