@@ -364,4 +364,52 @@ static bool minic_multi_emit_recursive_record_global(
 }
 
 
+/* One shared recursive layout for arrays of records with nested array,
+ * record and union fields. Keep the proven flat-array fast path for zlib
+ * and route more complex initializer slot shapes through the x86-derived
+ * recursive DataLayout walk (aXformType: 6 records, 60 flattened slots).
+ * No backend may guess field offsets or silently truncate initializers. */
+static bool minic_multi_emit_record_array_global(
+    FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicGlobalObject *object, size_t storage_size,
+    MinicMultiRelocEmitter emit_relocation) {
+    const MinicArrayType *array;
+    const MinicRecord *record;
+    bool flat;
+    size_t i, init = 0U, reloc = 0U, unions = 0U, emitted;
+    if (out == NULL || program == NULL || target == NULL || object == NULL ||
+        emit_relocation == NULL || !minic_type_is_array(object->type))
+        return false;
+    array = minic_c0_program_array_type(program, object->type.array_type_id);
+    if (array == NULL || !minic_type_is_record(array->element_type))
+        return false;
+    record = minic_c0_program_record(program, array->element_type.record_id);
+    if (record == NULL || !record->is_complete ||
+        record->field_count == 0U || array->element_count == 0U)
+        return false;
+    flat = !record->is_union &&
+           record->field_count <= SIZE_MAX / array->element_count &&
+           record->field_count * array->element_count == object->initializer_count;
+    for (i = 0U; i < record->field_count && flat; ++i) {
+        const MinicRecordField *field = minic_c0_record_field(record, i);
+        if (field == NULL || field->element_count != 1U ||
+            minic_type_is_array(field->type) ||
+            (minic_type_is_record(field->type) &&
+             !minic_c0_program_record(program, field->type.record_id)->is_union))
+            flat = false;
+    }
+    if (flat)
+        return minic_multi_emit_flat_record_array(
+            out, program, target, object, storage_size, emit_relocation);
+    if (!minic_multi_emit_recursive_global_value(
+            out, program, target, object, object->type,
+            &init, &reloc, &unions, &emitted, 0U, emit_relocation))
+        return false;
+    return emitted == storage_size &&
+           init == object->initializer_count &&
+           reloc == object->relocation_count &&
+           unions == object->union_selection_count;
+}
+
+
 #endif /* MINIC_TARGET_BACKEND_GLOBAL_ARRAY_H */

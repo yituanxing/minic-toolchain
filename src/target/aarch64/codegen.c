@@ -369,7 +369,7 @@ static bool emit_simple_global(FILE *out, const MinicC0Program *program,
                 fprintf(out, "  .balign %zu\n.type %s,@object\n%s:\n",
                         align, obj->name, obj->name) < 0 ||
                 !(array_of_records
-                    ? minic_multi_emit_flat_record_array(
+                    ? minic_multi_emit_record_array_global(
                           out, program, target, obj, storage_size,
                           emit_record_relocation)
                     : minic_multi_emit_relocatable_scalar_array(

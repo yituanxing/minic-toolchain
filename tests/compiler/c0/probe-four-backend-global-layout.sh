@@ -62,6 +62,51 @@ int main(void) {
 }
 SRC
             ;;
+        nested_record_array)
+            cat <<'SRC'
+struct Xform {
+    unsigned char input[4];
+    unsigned short mapping[3];
+    unsigned int flags;
+    unsigned long masks[2];
+};
+static const struct Xform aXformType[6] = {
+    {{1,2,3,4}, {5,6,7}, 8, {9,10}},
+    {{2,3,4,5}, {6,7,8}, 9, {10,11}},
+    {{3,4,5,6}, {7,8,9}, 10, {11,12}},
+    {{4,5,6,7}, {8,9,10}, 11, {12,13}},
+    {{5,6,7,8}, {9,10,11}, 12, {13,14}},
+    {{6,7,8,9}, {10,11,12}, 13, {14,15}}
+};
+int main(void) {
+    return (aXformType[0].input[0] == 1 &&
+            aXformType[1].mapping[1] == 7 &&
+            aXformType[2].flags == 10 &&
+            aXformType[3].masks[1] == 13 &&
+            aXformType[4].input[3] == 8 &&
+            aXformType[5].masks[0] == 14) ? 42 : 2;
+}
+SRC
+            ;;
+        nested_record_array_reloc)
+            cat <<'SRC'
+static int item = 73;
+struct Entry {
+    unsigned short indices[2];
+    int *ptr;
+    unsigned char extra[3];
+};
+static const struct Entry table[2] = {
+    {{1,2}, &item, {3,4,5}},
+    {{6,7}, &item, {8,9,10}}
+};
+int main(void) {
+    return (table[0].ptr == &item && table[1].ptr == &item &&
+            *table[0].ptr == 73 && table[1].extra[2] == 10 &&
+            table[0].indices[1] == 2) ? 42 : 3;
+}
+SRC
+            ;;
         implicit_record)
             cat <<'SRC'
 union U { unsigned long bits; void *pointer; };
@@ -109,7 +154,7 @@ for target in aarch64 loongarch64; do
         aarch64) gcc=aarch64-linux-gnu-gcc; qemu=qemu-aarch64 ;;
         loongarch64) gcc=loongarch64-linux-gnu-gcc-13; qemu=qemu-loongarch64 ;;
     esac
-    for family in null_scalar null_array zero_union zero_record implicit_record nonzero_union nested_nonzero combined; do
+    for family in null_scalar null_array zero_union zero_record implicit_record nonzero_union nested_nonzero nested_record_array nested_record_array_reloc combined; do
         src="$w/$target.$family.i"
         write_case "$family" >"$src"
         "$gcc" -static -x c "$src" -o "$w/$target.$family.gnu"
@@ -140,7 +185,7 @@ for target in aarch64 loongarch64; do
     done
 done
 if [ "$failed" -ne 0 ]; then
-    echo "FOUR_BACKEND_GLOBAL_LAYOUT_ACCEPT=FAIL targets=2 families=8" >&2
+    echo "FOUR_BACKEND_GLOBAL_LAYOUT_ACCEPT=FAIL targets=2 families=10" >&2
     exit 1
 fi
-echo "FOUR_BACKEND_GLOBAL_LAYOUT_ACCEPT=PASS targets=2 families=8 GNU_QEMU_diff=1"
+echo "FOUR_BACKEND_GLOBAL_LAYOUT_ACCEPT=PASS targets=2 families=10 GNU_QEMU_diff=1"
