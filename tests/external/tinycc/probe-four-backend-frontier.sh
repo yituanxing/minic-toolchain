@@ -39,6 +39,7 @@ SRC
 passed=0
 blocked=0
 failed=0
+runtime_accepted=0
 for target in aarch64 loongarch64; do
     case "$target" in
         aarch64)
@@ -79,6 +80,7 @@ for target in aarch64 loongarch64; do
     gnu_count=0
     target_compiled=0
     target_assembled=0
+    target_runtime_accepted=0
     target_blocked=0
     : >"$work/$target/rejects.log"
     for file in $sources; do
@@ -229,6 +231,11 @@ for target in aarch64 loongarch64; do
                    cmp -s "$work/$target/consumer-gnu.run.err" \
                           "$work/$target/consumer-mixed.run.err"; then
                     echo "FOUR_BACKEND_TINYCC_HYBRID_FUNCTIONAL=PASS target=$target generated_target=$backend MiniC_objects=$target_assembled GNU_fallback_objects=$target_blocked independent_GNU_TinyCC_oracle=1 consumer_exit=0 full_MiniC_acceptance=NOT_CLAIMED"
+                    if [ "$target_blocked" -eq 0 ] &&
+                       [ "$target_assembled" -eq "$count" ]; then
+                        target_runtime_accepted=1
+                        echo "FOUR_BACKEND_TINYCC_SMOKE=PASS target=$target original_TUs=$count GNU_fallback_objects=0 GNU_QEMU_compiler=1 generated_target=$backend consumer_exit=0 GNU_oracle_byte_exact=1"
+                    fi
                 else
                     echo "FOUR_BACKEND_TINYCC_HYBRID_FUNCTIONAL=BLOCKED target=$target generated_target=$backend stage=compile_link_or_run"
                 fi
@@ -261,9 +268,17 @@ for target in aarch64 loongarch64; do
     elif [ "$target_assembled" -eq "$count" ]; then
         passed=$((passed+1))
     fi
-    echo "FOUR_BACKEND_TINYCC_TARGET target=$target tcc_backend=$backend original_TUs=$count compiled=$target_compiled assembled=$target_assembled blocked=$target_blocked runtime=NOT_TESTED"
+    if [ "$target_runtime_accepted" -eq 1 ]; then
+        runtime_accepted=$((runtime_accepted+1))
+        runtime_status=PASS
+    elif [ "$target_blocked" -gt 0 ]; then
+        runtime_status=HYBRID_ONLY
+    else
+        runtime_status=NOT_ACCEPTED
+    fi
+    echo "FOUR_BACKEND_TINYCC_TARGET target=$target tcc_backend=$backend original_TUs=$count compiled=$target_compiled assembled=$target_assembled blocked=$target_blocked runtime=$runtime_status"
 done
-echo "FOUR_BACKEND_TINYCC_FRONTIER=COMPLETE object_sets=$passed blocked_targets=$blocked failed=$failed runtime_acceptance=NOT_CLAIMED"
+echo "FOUR_BACKEND_TINYCC_FRONTIER=COMPLETE object_sets=$passed blocked_targets=$blocked failed=$failed runtime_accepted=$runtime_accepted"
 if [ "$failed" -ne 0 ]; then exit 1; fi
 # A full-object gate is available later; discovery does not pretend success.
 if [ "$(printenv FOUR_BACKEND_TINYCC_REQUIRE_OBJECTS || true)" = 1 ] &&
@@ -272,5 +287,13 @@ if [ "$(printenv FOUR_BACKEND_TINYCC_REQUIRE_OBJECTS || true)" = 1 ] &&
     exit 1
 fi
 if [ "$passed" -eq 2 ]; then
-    echo "FOUR_BACKEND_TINYCC_OBJECTS=PASS targets=2 pristine_source=1 GNU_AS=1 runtime_acceptance=NOT_CLAIMED"
+    echo "FOUR_BACKEND_TINYCC_OBJECTS=PASS targets=2 pristine_source=1 GNU_AS=1"
+fi
+if [ "$runtime_accepted" -eq 2 ]; then
+    echo "FOUR_BACKEND_TINYCC_SMOKE_ACCEPT=PASS targets=2 GNU_fallback=0 original_source=1 GNU_QEMU_TinyCC=1 independent_consumer=1"
+fi
+if [ "${FOUR_BACKEND_TINYCC_REQUIRE_SMOKE:-0}" = 1 ] &&
+   [ "$runtime_accepted" -ne 2 ]; then
+    echo "FOUR_BACKEND_TINYCC_SMOKE_ACCEPT=FAIL verified=$runtime_accepted" >&2
+    exit 1
 fi
