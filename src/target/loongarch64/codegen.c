@@ -690,15 +690,15 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                     return machine_emit_reject(fn, "loongarch64", name, reject_stage,
                                     reject_block, reject_ins, __LINE__);
             } else {
-                /* M38: binary64 variadic tails are ABI-classified in
-                 * the target emitter. Other unnamed scalars remain limited
-                 * to default-promoted 32-bit integer or pointer. */
+                /* Lua source uses size_t/long-long variadic arguments.
+                 * Preserve 32-bit promotions and classify full LP64
+                 * integer values in the native general-purpose registers. */
                 if (!is_variadic ||
                     (!minic_type_is_double(actual) &&
                      !minic_type_is_pointer(actual) &&
-                     (!small_integer_width(program, target, actual,
-                                           &actual_width, &actual_signed) ||
-                      actual_width != 4U))) return machine_emit_reject(fn, "loongarch64", name, reject_stage,
+                     (!scalar_integer_width(program, target, actual,
+                                            &actual_width, &actual_signed) ||
+                      (actual_width != 4U && actual_width != 8U)))) return machine_emit_reject(fn, "loongarch64", name, reject_stage,
                                     reject_block, reject_ins, __LINE__);
             }
         }
