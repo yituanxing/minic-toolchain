@@ -47,11 +47,15 @@ SYNC TAC TEST TIMEOUT TRUE TRUNCATE TSORT USLEEP
 UUDECODE UUENCODE FIND XARGS SED CMP
 "
 fi
+# The baseline GNU cross toolchains have no target crypt() library:
+# both wide original GNU builds failed in libbb/pw_encrypt.o. Keep the
+# password-management applets as a separate, explicit target-sysroot
+# prerequisite rather than misreporting them as MiniC compiler defects.
+# GETTY is retained; the password crypto consumers are excluded.
 if [ "$cohort" = wide ]; then
   extra="$extra
 AR BZIP2 CPIO DPKG_DEB GZIP TAR UNZIP CLEAR
-RESET RESIZE CHVT FGCONSOLE OPENVT INIT HALT ADDUSER
-ADDGROUP DELUSER PASSWD SU GETTY LOGIN SULOGIN CHPASSWD
+RESET RESIZE CHVT FGCONSOLE OPENVT INIT HALT GETTY
 ASCII BEEP CROND CRONTAB DEVMEM HEXEDIT INOTIFYD LESS
 MAN MICROCOM MT READAHEAD RFKILL RUNLEVEL STRINGS TIME
 TREE TS TTYSIZE ARP ARPING BRCTL DNSD HOSTNAME
@@ -142,9 +146,7 @@ if [ "$cohort" = wide ]; then
 archival/ar.c archival/bzip2.c archival/cpio.c archival/dpkg_deb.c
 archival/gzip.c archival/tar.c archival/unzip.c console-tools/clear.c
 console-tools/reset.c console-tools/resize.c console-tools/chvt.c console-tools/fgconsole.c
-console-tools/openvt.c init/init.c init/halt.c loginutils/adduser.c
-loginutils/addgroup.c loginutils/deluser.c loginutils/passwd.c loginutils/su.c
-loginutils/getty.c loginutils/login.c loginutils/sulogin.c loginutils/chpasswd.c
+console-tools/openvt.c init/init.c init/halt.c loginutils/getty.c
 miscutils/ascii.c miscutils/beep.c miscutils/crond.c miscutils/crontab.c
 miscutils/devmem.c miscutils/hexedit.c miscutils/inotifyd.c miscutils/less.c
 miscutils/man.c miscutils/microcom.c miscutils/mt.c miscutils/readahead.c
