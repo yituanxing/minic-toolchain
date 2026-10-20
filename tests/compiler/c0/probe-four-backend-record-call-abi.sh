@@ -42,12 +42,12 @@ int main(void) {
     struct Small s = {4, 2};
     struct Token t = {"qpayload", 19U};
     int (*fp)(const char *, int, struct Token) = token_value;
-    if (small_value(s) != 42 ||
-        !token_value("prefix",5,t) ||
-        !fp("prefix",5,t) ||
-        !spill_value(1,2,3,4,5,6,7,8,t) ||
-        !near_spill(1,2,3,4,5,6,7,t) ||
-        !mixed_fp(1.25,t)) return 1;
+    if (small_value(s) != 42) return 11;
+    if (!token_value("prefix",5,t)) return 12;
+    if (!fp("prefix",5,t)) return 13;
+    if (!spill_value(1,2,3,4,5,6,7,8,t)) return 14;
+    if (!near_spill(1,2,3,4,5,6,7,t)) return 15;
+    if (!mixed_fp(1.25,t)) return 16;
     return 42;
 }
 SRC
