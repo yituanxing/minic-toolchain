@@ -162,6 +162,14 @@ static bool emit_record_relocation(FILE *out, const MinicC0Program *program,
     int64_t addend;
     if (reloc == NULL || width != 8U ||
         target->data_layout->pointer_size != 8U) return false;
+    if (reloc->target_kind == MINIC_GLOBAL_RELOCATION_LABEL) {
+        /* Original Lua VM computed-goto table: Core records the source
+         * label statement ID, whose address is emitted at its block. */
+        const MinicStatement *label =
+            minic_c0_program_statement(program, reloc->target_id);
+        return label != NULL && label->kind == MINIC_STATEMENT_LABEL &&
+               fprintf(out, "  .8byte .Luser_%zu\n", reloc->target_id) >= 0;
+    }
     if (reloc->target_kind == MINIC_GLOBAL_RELOCATION_OBJECT) {
         const MinicGlobalObject *obj =
             minic_c0_program_global_object(program, reloc->target_id);
@@ -431,7 +439,7 @@ static bool emit_simple_global(FILE *out, const MinicC0Program *program,
  * are SP-positive; naturally aligned objects are laid out after SSA
  * value slots.  Keep bounded <= 8 KiB frames until large-offset ABI
  * access has been independently checked on both targets. */
-#define MINIC_LARGE_FRAME_MAX 262144U
+#define MINIC_LARGE_FRAME_MAX 1048576U
 
 static bool frame_objects(const MinicC0Program *program,
                           const MinicTargetInfo *target,
@@ -441,7 +449,7 @@ static bool frame_objects(const MinicC0Program *program,
     size_t pos, i;
     if (program == NULL || target == NULL || fn == NULL ||
         sought_id > fn->object_count ||
-        fn->value_count > 32768U || fn->object_count > 4096U)
+        fn->value_count > 32768U || fn->object_count > 8192U)
         return false;
     pos = fn->value_count * 8U;
     for (i = 0U; i < fn->object_count; ++i) {
@@ -571,7 +579,7 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
         !valid_return_type(program, target, fn->return_type) ||
         fn->block_count == 0U || fn->block_count > 1024U || fn->entry_block != 0U ||
         fn->inline_asm_count != 0U || fn->parameter_count > 10U ||
-        fn->value_count > 32768U || fn->object_count > 4096U)
+        fn->value_count > 32768U || fn->object_count > 8192U)
         {
             if (getenv("MINIC_BACKEND_CENSUS") != NULL)
                 (void)fprintf(stderr,
@@ -640,6 +648,13 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                    !minic_type_equal(fn->values[term->return_value].type,
                                      fn->return_type))) return machine_emit_reject(fn, "aarch64", name, reject_stage,
                                     reject_block, reject_ins, __LINE__);
+            break;
+        case MINIC_CORE_TERMINATOR_INDIRECT_BRANCH:
+            if (term->indirect_target >= fn->value_count ||
+                !minic_type_is_pointer(
+                    fn->values[term->indirect_target].type))
+                return machine_emit_reject(fn, "aarch64", name,
+                    reject_stage, reject_block, reject_ins, __LINE__);
             break;
         case MINIC_CORE_TERMINATOR_UNREACHABLE:
             /* Verified Core unreachable terminator is a semantic no-return
@@ -879,7 +894,10 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
         reject_ins = SIZE_MAX;
         reject_stage = "machine_emit";
         block = &fn->blocks[block_id];
-        if (fprintf(out, ".Lmini_arm_f%zu_b%zu:\n", id, block_id) < 0)
+        if (fprintf(out, ".Lmini_arm_f%zu_b%zu:\n", id, block_id) < 0 ||
+            (block->source_label_id != SIZE_MAX &&
+             !fn->suppress_source_label_aliases &&
+             fprintf(out, ".Luser_%zu:\n", block->source_label_id) < 0))
             return machine_emit_reject(fn, "aarch64", name, reject_stage,
                                     reject_block, reject_ins, __LINE__);
         for (i = 0U; i < block->instruction_count; ++i) {
@@ -1587,6 +1605,27 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                                    : "  asr w9, w9, w10\n")
                            : (wide ? "  lsr x9, x9, x10\n"
                                    : "  lsr w9, w9, w10\n"));
+            /* A64 cbnz is limited to +/-1MiB. For large Lua VM CFGs,
+             * use a nearby cbz and long-range unconditional branches. */
+            if (fn->block_count > 256U) {
+                if (fprintf(out, wide ? "  ldr x9, [sp, #%zu]\n"
+                                      : "  ldr w9, [sp, #%zu]\n",
+                            (size_t)cond * 8U) < 0 ||
+                    fprintf(out, wide
+                            ? "  cbz x9, .Lmini_arm_f%zu_false_%zu\n"
+                            : "  cbz w9, .Lmini_arm_f%zu_false_%zu\n",
+                            id, block_id) < 0 ||
+                    fprintf(out,
+                            "  b .Lmini_arm_f%zu_b%u\n"
+                            ".Lmini_arm_f%zu_false_%zu:\n"
+                            "  b .Lmini_arm_f%zu_b%u\n",
+                            id, (unsigned int)block->terminator.conditional.when_true,
+                            id, block_id,
+                            id, (unsigned int)block->terminator.conditional.when_false) < 0)
+                    return machine_emit_reject(fn, "aarch64", name,
+                        reject_stage, reject_block, reject_ins, __LINE__);
+                break;
+            }
             if (fprintf(out, wide ? "  ldr x9, [sp, #%zu]\n"
                                   : "  ldr w9, [sp, #%zu]\n",
                         (size_t)lhs * 8U) < 0 ||
@@ -2010,6 +2049,13 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                   fputs("  add sp, sp, x12\n", out) == EOF)) ||
                 fputs("  ret\n", out) == EOF) return machine_emit_reject(fn, "aarch64", name, reject_stage,
                                     reject_block, reject_ins, __LINE__);
+            break;
+        case MINIC_CORE_TERMINATOR_INDIRECT_BRANCH:
+            if (fprintf(out, "  ldr x9, [sp, #%zu]\n  br x9\n",
+                        (size_t)block->terminator.indirect_target * 8U) < 0)
+                return machine_emit_reject(fn, "aarch64", name,
+                                           reject_stage, reject_block,
+                                           reject_ins, __LINE__);
             break;
         case MINIC_CORE_TERMINATOR_UNREACHABLE:
             /* Preserve Core CFG semantics: trap instead of falling through. */
