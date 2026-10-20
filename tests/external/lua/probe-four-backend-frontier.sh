@@ -113,7 +113,13 @@ for target in aarch64 loongarch64; do
             esac
             grep -m 2 'MINIC_BACKEND_CALL_GATE' \
                 "$work/$target/$stem.minic.err" || true
-            grep -m 1 'MINIC_M4_GLOBAL_FRONTIER\|MINIC_BACKEND_PREFLIGHT\|MINIC_M8_FRAME' \
+            # Show independent global + function preflight blockers, not
+            # only whichever was logged first. Lua VM has both classes.
+            grep -m 1 'MINIC_M4_GLOBAL_FRONTIER' \
+                "$work/$target/$stem.minic.err" || true
+            grep -m 1 'MINIC_BACKEND_PREFLIGHT' \
+                "$work/$target/$stem.minic.err" || true
+            grep -m 1 'MINIC_M8_FRAME' \
                 "$work/$target/$stem.minic.err" || true
             continue
         fi
