@@ -4,7 +4,7 @@ set -eu
 : "$MINIC_CC"
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT HUP INT TERM
-cat >"$work/switch.i" <<'SRC'
+cat >"$work/switch.c" <<'SRC'
 static int switch_dead_prefix(int condition) {
     int score = 0;
     for (int i = 0; i < 3; ++i) {
@@ -29,11 +29,14 @@ for target in aarch64 loongarch64; do
         aarch64) gcc=aarch64-linux-gnu-gcc; qemu=qemu-aarch64 ;;
         loongarch64) gcc=loongarch64-linux-gnu-gcc-13; qemu=qemu-loongarch64 ;;
     esac
-    "$gcc" -O0 -std=gnu11 -static -x c "$work/switch.i" \
+    # MiniC's -S accepts the already GNU-preprocessed .i, not raw comments.
+    # Feed exactly the SAME preprocessed bytes to the GNU reference.
+    "$gcc" -E -P -std=gnu11 "$work/switch.c" -o "$work/$target.i"
+    "$gcc" -O0 -std=gnu11 -static -x c "$work/$target.i" \
         -o "$work/$target.gnu"
     timeout 45s "$qemu" "$work/$target.gnu" \
         >"$work/$target.gnu.out" 2>"$work/$target.gnu.err"
-    "$MINIC_CC" --target="$target-linux" -S "$work/switch.i" \
+    "$MINIC_CC" --target="$target-linux" -S "$work/$target.i" \
         -o "$work/$target.s"
     "$gcc" -static -x assembler "$work/$target.s" \
         -o "$work/$target.mini"
