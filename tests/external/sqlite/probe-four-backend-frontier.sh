@@ -197,17 +197,25 @@ int nested_abi(char *dst, const char *fmt, ...) {
     return result;
 }
 SRC
-cat > "$work/nested-abi-driver.c" <<'SRC'
-#include <stdio.h>
-#include <string.h>
+# Caller and callee compile independently under GNU or MiniC, giving all
+# four combinations and separating outgoing calls from va_start/va_arg.
+cat > "$work/nested-abi-call.i" <<'SRC'
 extern int nested_abi(char *, const char *, ...);
-int main(void) {
-    char s[512] = {0};
-    int n = nested_abi(s,
+int nested_abi_call(char *s) {
+    return nested_abi(s,
         "UPDATE %s.sqlite_schema SET type='%s', name=%s, tbl_name=%s,"
         " rootpage=#%d, sql=%s WHERE rowid=#%d",
         "main", "table", "t", "t", 1,
         "CREATE TABLE t(id INTEGER PRIMARY KEY, x INT)", 2);
+}
+SRC
+cat > "$work/nested-abi-driver.c" <<'SRC'
+#include <stdio.h>
+#include <string.h>
+extern int nested_abi_call(char *);
+int main(void) {
+    char s[512] = {0};
+    int n = nested_abi_call(s);
     printf("nested-abi n=%d sql=%s\n", n, s);
     return n <= 0 || strstr(s, "rootpage=#1") == 0 ||
            strstr(s, "rowid=#2") == 0 ? 3 : 0;
@@ -366,8 +374,8 @@ for target in aarch64 loongarch64; do
                 head -n 35 || true
         fi
     fi
-    # Exactly the original sqlite3NestedParse register/stack split.
-    # GNU driver calls a separately MiniC-compiled variadic callee.
+    # Isolate the real 9-GP-argument boundary: GNU/MiniC caller x
+    # GNU/MiniC variadic callee, all linked against the SAME GNU libc.
     if [ "$target" = loongarch64 ]; then
         nested_ok=1
         if ! "$gcc" -E -P -std=gnu11 "$work/nested-abi.c" \
@@ -378,39 +386,54 @@ for target in aarch64 loongarch64; do
            ! "$gcc" -c -x assembler "$work/$target/nested-abi-mini.s" \
                 -o "$work/$target/nested-abi-mini.o" ||
            ! "$gcc" -c -O0 "$work/$target/nested-abi.i" \
-                -o "$work/$target/nested-abi-gnu.o"; then
+                -o "$work/$target/nested-abi-gnu.o" ||
+           ! timeout 90s "$MINIC_CC" --target="$target-linux" -S \
+                "$work/nested-abi-call.i" \
+                -o "$work/$target/nested-call-mini.s" ||
+           ! "$gcc" -c -x assembler "$work/$target/nested-call-mini.s" \
+                -o "$work/$target/nested-call-mini.o" ||
+           ! "$gcc" -c -O0 "$work/nested-abi-call.i" \
+                -o "$work/$target/nested-call-gnu.o"; then
             nested_ok=0
             echo "SQLITE_NESTED_AB=SKIP stage=compile"
         fi
         if [ "$nested_ok" -eq 1 ]; then
-            for builder in gnu mini; do
-                if ! "$gcc" -static "$work/nested-abi-driver.c" \
-                        "$work/$target/nested-abi-$builder.o" \
-                        -o "$work/$target/nested-abi-$builder"; then
-                    nested_ok=0
-                    break
-                fi
-                set +e
-                timeout 30s "$qemu" "$work/$target/nested-abi-$builder" \
-                    >"$work/$target/nested-abi-$builder.out" \
-                    2>"$work/$target/nested-abi-$builder.err"
-                status_ab=$?
-                set -e
-                echo "SQLITE_NESTED_AB_RUN compiler=$builder status=$status_ab"
-                if [ "$status_ab" -ne 0 ]; then nested_ok=0; fi
+            for caller in gnu mini; do
+                for callee in gnu mini; do
+                    label="$caller-$callee"
+                    if ! "$gcc" -static "$work/nested-abi-driver.c" \
+                            "$work/$target/nested-call-$caller.o" \
+                            "$work/$target/nested-abi-$callee.o" \
+                            -o "$work/$target/nested-$label"; then
+                        nested_ok=0
+                        echo "SQLITE_NESTED_AB_CASE=FAIL caller=$caller callee=$callee stage=link"
+                        continue
+                    fi
+                    set +e
+                    timeout 30s "$qemu" "$work/$target/nested-$label" \
+                        >"$work/$target/nested-$label.out" \
+                        2>"$work/$target/nested-$label.err"
+                    status_ab=$?
+                    set -e
+                    if [ "$status_ab" -eq 0 ] &&
+                       cmp -s "$work/$target/nested-gnu-gnu.out" \
+                              "$work/$target/nested-$label.out"; then
+                        echo "SQLITE_NESTED_AB_CASE=PASS caller=$caller callee=$callee"
+                    else
+                        nested_ok=0
+                        echo "SQLITE_NESTED_AB_CASE=FAIL caller=$caller callee=$callee status=$status_ab"
+                        if [ -f "$work/$target/nested-$label.out" ]; then
+                            diff -u "$work/$target/nested-gnu-gnu.out" \
+                                    "$work/$target/nested-$label.out" || true
+                        fi
+                    fi
+                done
             done
-            if [ "$nested_ok" -eq 1 ] &&
-               cmp -s "$work/$target/nested-abi-gnu.out" \
-                      "$work/$target/nested-abi-mini.out"; then
-                echo "SQLITE_NESTED_AB=PASS target=$target GNU_QEMU_byte_exact=1"
-            else
-                echo "SQLITE_NESTED_AB=FAIL target=$target stage=two_fixed_seven_variadic"
-                if [ -f "$work/$target/nested-abi-gnu.out" ] &&
-                   [ -f "$work/$target/nested-abi-mini.out" ]; then
-                    diff -u "$work/$target/nested-abi-gnu.out" \
-                            "$work/$target/nested-abi-mini.out" || true
-                fi
-            fi
+        fi
+        if [ "$nested_ok" -eq 1 ]; then
+            echo "SQLITE_NESTED_AB=PASS target=loongarch64 GNU_QEMU_matrix=4"
+        else
+            echo "SQLITE_NESTED_AB=FAIL target=loongarch64 stage=ABI_call_matrix"
         fi
     fi
     # Check SQLite's vararg formatter before blaming the lexer/parser.
