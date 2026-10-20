@@ -44,12 +44,19 @@ for fixture in $fixtures; do
      ! cmp -s "$work/$fixture.gnu.stderr" "$work/$fixture.mini.stderr"; then
     echo "FOUR_BACKEND_DYNAMIC_STACK=FAIL target=$target fixture=$fixture stage=QEMU_GNU_DIFFERENTIAL" >&2
     tail -n 20 "$work/$fixture.gnu.stderr" "$work/$fixture.mini.stderr" >&2 || true
-    # Keep the failing MiniC assembly in this single CI log, not in
-    # a second runner iteration or as an inaccessible temp file.
-    # The VLA reproducer is only ~100 Core values, so 240 lines suffice.
+    # Minimized GNU/QEMU reproduction: preserve the full failed TU and
+    # final AArch64 basic-block/CPU registers (not a speculative fix).
     echo "FOUR_BACKEND_DYNAMIC_STACK_ASM_BEGIN target=$target fixture=$fixture" >&2
-    sed -n '1,240p' "$mini_asm" >&2 || true
+    sed -n '1,650p' "$mini_asm" >&2 || true
     echo "FOUR_BACKEND_DYNAMIC_STACK_ASM_END target=$target fixture=$fixture" >&2
+    timeout 12s "$qemu" -L "$sysroot" -d in_asm,cpu \
+      -D "$work/$fixture.qemu-trace" "$work/$fixture.mini.elf" \
+      > /dev/null 2> /dev/null || true
+    if [ -f "$work/$fixture.qemu-trace" ]; then
+      echo "FOUR_BACKEND_DYNAMIC_STACK_QEMU_TRACE_BEGIN target=$target fixture=$fixture" >&2
+      tail -n 145 "$work/$fixture.qemu-trace" >&2 || true
+      echo "FOUR_BACKEND_DYNAMIC_STACK_QEMU_TRACE_END target=$target fixture=$fixture" >&2
+    fi
     exit 1
   fi
   passed=$((passed + 1))
