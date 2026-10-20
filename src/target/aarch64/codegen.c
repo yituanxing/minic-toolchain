@@ -2382,8 +2382,8 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                         "MINIC_SQLITE_CONVERSION_LIMIT arch=aarch64 function=%s"
                         " ins=%zu source_ok=%d src_bytes=%zu src_sign=%d"
                         " dest_ok=%d dst_bytes=%zu dst_sign=%d"
-                        " source_kind=%d dest_kind=%d\\n",
-                        name, ins_id, source_ok, source_bytes, source_sign,
+                        " source_kind=%d dest_kind=%d\n",
+                        name, (size_t)ins_id, source_ok, source_bytes, source_sign,
                         dest_ok, dest_bytes, dest_sign,
                         src < fn->value_count
                             ? (int)fn->values[src].type.base_kind : -1,
