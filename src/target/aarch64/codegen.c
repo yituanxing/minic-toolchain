@@ -103,6 +103,7 @@ static bool valid_parameter_type(const MinicC0Program *program,
     size_t width;
     bool sign;
     return minic_type_is_pointer(type) || minic_type_is_double(type) ||
+           minic_type_is_float(type) ||
            scalar_integer_width(program, target, type, &width, &sign);
 }
 
@@ -644,7 +645,8 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
      * For other variadic shapes fail closed until a GNU ABI test exists. */
     if (decl->is_variadic) {
         for (i = 0U; i < fn->parameter_count; ++i) {
-            if (minic_type_is_double(fn->parameter_types[i])) ++va_fp;
+            if (minic_type_is_double(fn->parameter_types[i]) ||
+                minic_type_is_float(fn->parameter_types[i])) ++va_fp;
             else ++va_gp;
         }
     }
@@ -1690,7 +1692,7 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                     continue;
                 }
                 const MinicType type = fn->values[arg->value.value_id].type;
-                if (minic_type_is_double(type)) {
+                if (minic_type_is_double(type) || minic_type_is_float(type)) {
                     if (fp_index++ >= 8U) ++overflow_slots;
                 } else if (gp_index++ >= 8U) ++overflow_slots;
             }
@@ -1733,15 +1735,19 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                 }
                 const MinicType type = fn->values[arg->value.value_id].type;
                 const size_t slot = (size_t)arg->value.value_id * 8U + stack_bytes;
-                if (minic_type_is_double(type)) {
+                if (minic_type_is_double(type) || minic_type_is_float(type)) {
+                    const bool is_float = minic_type_is_float(type);
                     if (fp_index < 8U) {
-                        if (fprintf(out, "  ldr d%zu, [sp, #%zu]\n",
+                        if (fprintf(out, is_float ? "  ldr s%zu, [sp, #%zu]\n"
+                                                  : "  ldr d%zu, [sp, #%zu]\n",
                                     fp_index, slot) < 0)
                             return machine_emit_reject(fn, "aarch64", name,
                                     reject_stage, reject_block, reject_ins, __LINE__);
-                    } else if (fprintf(out,
-                                       "  ldr d9, [sp, #%zu]\n"
-                                       "  str d9, [sp, #%zu]\n",
+                    } else if (fprintf(out, is_float
+                                       ? "  ldr s9, [sp, #%zu]\n"
+                                         "  str s9, [sp, #%zu]\n"
+                                       : "  ldr d9, [sp, #%zu]\n"
+                                         "  str d9, [sp, #%zu]\n",
                                        slot, stack_index++ * 8U) < 0)
                         return machine_emit_reject(fn, "aarch64", name,
                                     reject_stage, reject_block, reject_ins, __LINE__);
@@ -1786,6 +1792,8 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
             if (minic_type_is_void(ins->type)) continue;
             if (fputs(minic_type_is_double(ins->type)
                           ? "  fmov x9, d0\n"
+                          : minic_type_is_float(ins->type)
+                              ? "  fmov w9, s0\n"
                           : register64_type(program, target, ins->type)
                               ? "  mov x9, x0\n"
                               : "  mov w9, w0\n", out) == EOF)
@@ -1918,19 +1926,25 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
             /* AAPCS64: independent x/d argument cursors, with one unified
              * incoming 8-byte stack-slot sequence for exhausted banks. */
             for (k = 0U; k < ordinal; ++k) {
-                if (minic_type_is_double(fn->parameter_types[k])) {
+                if (minic_type_is_double(fn->parameter_types[k]) ||
+                    minic_type_is_float(fn->parameter_types[k])) {
                     if (fp_index++ >= 8U) ++overflow_index;
                 } else if (gp_index++ >= 8U) ++overflow_index;
             }
-            if (minic_type_is_double(ins->type)) {
+            if (minic_type_is_double(ins->type) ||
+                minic_type_is_float(ins->type)) {
+                const bool is_float = minic_type_is_float(ins->type);
                 if (fp_index < 8U) {
-                    if (fprintf(out, "  str d%zu, [sp, #%zu]\n",
+                    if (fprintf(out, is_float ? "  str s%zu, [sp, #%zu]\n"
+                                              : "  str d%zu, [sp, #%zu]\n",
                                 fp_index, offset) < 0)
                         return machine_emit_reject(fn, "aarch64", name,
                                     reject_stage, reject_block, reject_ins, __LINE__);
-                } else if (fprintf(out,
-                                   "  ldr d9, [sp, #%zu]\n"
-                                   "  str d9, [sp, #%zu]\n",
+                } else if (fprintf(out, is_float
+                                     ? "  ldr s9, [sp, #%zu]\n"
+                                       "  str s9, [sp, #%zu]\n"
+                                     : "  ldr d9, [sp, #%zu]\n"
+                                       "  str d9, [sp, #%zu]\n",
                                    frame + overflow_index * 8U, offset) < 0)
                     return machine_emit_reject(fn, "aarch64", name,
                                     reject_stage, reject_block, reject_ins, __LINE__);
@@ -2395,6 +2409,8 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
             if ((!minic_type_is_void(fn->return_type) &&
                  fprintf(out, minic_type_is_double(fn->return_type)
                                   ? "  ldr d0, [sp, #%zu]\n"
+                                  : minic_type_is_float(fn->return_type)
+                                      ? "  ldr s0, [sp, #%zu]\n"
                                   : register64_type(program, target, fn->return_type)
                                       ? "  ldr x0, [sp, #%zu]\n"
                                       : "  ldr w0, [sp, #%zu]\n",

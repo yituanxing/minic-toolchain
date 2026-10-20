@@ -103,6 +103,7 @@ static bool valid_parameter_type(const MinicC0Program *program,
     size_t width;
     bool sign;
     return minic_type_is_pointer(type) || minic_type_is_double(type) ||
+           minic_type_is_float(type) ||
            scalar_integer_width(program, target, type, &width, &sign);
 }
 
@@ -1603,7 +1604,8 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                     continue;
                 }
                 const MinicType type = fn->values[arg->value.value_id].type;
-                const bool use_fp = minic_type_is_double(type) &&
+                const bool use_fp = (minic_type_is_double(type) ||
+                                     minic_type_is_float(type)) &&
                                     (!is_variadic || j < parameter_count) &&
                                     fp_index < 8U;
                 if (use_fp) {
@@ -1652,17 +1654,23 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                 }
                 const MinicType type = fn->values[arg->value.value_id].type;
                 const size_t slot = (size_t)arg->value.value_id * 8U + stack_bytes;
-                const bool use_fp = minic_type_is_double(type) &&
+                const bool use_fp = (minic_type_is_double(type) ||
+                                     minic_type_is_float(type)) &&
                                     (!is_variadic || j < parameter_count) &&
                                     fp_index < 8U;
                 if (use_fp) {
                     if (fp_index < 8U) {
-                        if (!emit_sp_mem(out, "fld.d", fp_regs[fp_index], slot))
+                        if (!emit_sp_mem(out, minic_type_is_float(type)
+                                               ? "fld.s" : "fld.d",
+                                         fp_regs[fp_index], slot))
                             return machine_emit_reject(fn, "loongarch64", name,
                                     reject_stage, reject_block, reject_ins, __LINE__);
-                    } else if (!emit_sp_mem(out, "fld.d", "$ft0", slot) ||
-                               !emit_sp_mem(out, "fst.d", "$ft0",
-                                            stack_index++ * 8U))
+                    } else if (!emit_sp_mem(out, minic_type_is_float(type)
+                                                   ? "fld.s" : "fld.d",
+                                            "$ft0", slot) ||
+                               !emit_sp_mem(out, minic_type_is_float(type)
+                                                   ? "fst.s" : "fst.d",
+                                            "$ft0", stack_index++ * 8U))
                         return machine_emit_reject(fn, "loongarch64", name,
                                     reject_stage, reject_block, reject_ins, __LINE__);
                     ++fp_index;
@@ -1706,6 +1714,8 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
             if (minic_type_is_void(ins->type)) continue;
             if (fputs(minic_type_is_double(ins->type)
                           ? "  movfr2gr.d $t0, $fa0\n"
+                          : minic_type_is_float(ins->type)
+                              ? "  movfr2gr.s $t0, $fa0\n"
                           : "  or $t0, $a0, $zero\n", out) == EOF)
                 return machine_emit_reject(fn, "loongarch64", name,
                                            reject_stage, reject_block,
@@ -1750,13 +1760,17 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
              * double arguments are passed through remaining a0-a7, then
              * spilled on the stack in source order. */
             for (k = 0U; k < ordinal; ++k) {
-                if (minic_type_is_double(fn->parameter_types[k]) &&
+                if ((minic_type_is_double(fn->parameter_types[k]) ||
+                     minic_type_is_float(fn->parameter_types[k])) &&
                     fp_index < 8U) ++fp_index;
                 else if (gp_index < 8U) ++gp_index;
                 else ++overflow_index;
             }
-            if (minic_type_is_double(ins->type) && fp_index < 8U) {
-                if (!emit_sp_mem(out, "fst.d", fp_regs[fp_index], offset))
+            if ((minic_type_is_double(ins->type) ||
+                 minic_type_is_float(ins->type)) && fp_index < 8U) {
+                if (!emit_sp_mem(out, minic_type_is_float(ins->type)
+                                      ? "fst.s" : "fst.d",
+                                 fp_regs[fp_index], offset))
                     return machine_emit_reject(fn, "loongarch64", name,
                                     reject_stage, reject_block, reject_ins, __LINE__);
             } else if (gp_index < 8U) {
@@ -2239,8 +2253,11 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
         switch (block->terminator.kind) {
         case MINIC_CORE_TERMINATOR_RETURN:
             if ((!minic_type_is_void(fn->return_type) &&
-                 !(minic_type_is_double(fn->return_type)
-                       ? emit_sp_mem(out, "fld.d", "$fa0",
+                 !((minic_type_is_double(fn->return_type) ||
+                  minic_type_is_float(fn->return_type))
+                       ? emit_sp_mem(out,
+                                     minic_type_is_float(fn->return_type)
+                                         ? "fld.s" : "fld.d", "$fa0",
                                      (size_t)block->terminator.return_value * 8U)
                        : emit_sp_mem(out, register64_type(program, target, fn->return_type)
                                           ? "ld.d" : "ld.w", "$a0",
