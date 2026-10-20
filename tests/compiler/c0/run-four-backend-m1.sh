@@ -73,12 +73,18 @@ int main(void) {
          + mini_lt(4, -2) + mini_eq(3, 8);
 }
 EOF
-# Relocatable pointer data is not supported yet, so the old M1 negative
-# test remains fail-closed even after M4 accepts plain integer globals.
-cat > "$w/unsupported.i" <<'EOF'
+# Lua's zero-initialized relocatable global support also admits ordinary
+# pointer initializers. Cross GNU/QEMU proves the original pointer object
+# reaches the correct target, rather than silently accepting bad assembly.
+cat > "$w/global_pointer.i" <<'EOF'
 static int original = 42;
 static int *global_pointer = &original;
 int main(void) { return *global_pointer; }
+EOF
+# Preserve fail-closed coverage for an actually unsupported weak definition.
+cat > "$w/unsupported.i" <<'EOF'
+__attribute__((weak)) int unsupported_weak_global = 42;
+int main(void) { return unsupported_weak_global; }
 EOF
 cat > "$w/global_int.i" <<'EOF'
 static int global_state = 40;
@@ -165,9 +171,18 @@ extern int mini_nested(int);
 int gnu_twice(int n) { return n * 2; }
 int main(void) { return mini_nested(1); }
 EOF
+# The original nine-argument call is now supported by the outgoing
+# argument-stack ABI. Test it against an independent GNU callee.
 cat > "$w/call_unsupported.i" <<'EOF'
 extern int gnu_nine(int,int,int,int,int,int,int,int,int);
 int mini_unsupported(void) { return gnu_nine(1,2,3,4,5,6,7,8,9); }
+EOF
+cat > "$w/driver_call_unsupported.c" <<'EOF'
+extern int mini_unsupported(void);
+int gnu_nine(int a,int b,int c,int d,int e,int f,int g,int h,int i) {
+    return a+b+c+d+e+f+g+h+i-3;
+}
+int main(void) { return mini_unsupported(); }
 EOF
 # Following the first genuine AES_init_ctx pointer/void ABI frontier.
 cat > "$w/pointer_read.i" <<'EOF'
@@ -1676,20 +1691,35 @@ for target in aarch64 loongarch64; do
     "$gcc" -static "$w/$target.wide.o" -o "$w/$target.wide.elf"
     check_qemu_exit "$qemu" "$w/$target.wide.elf" 64
     echo "FOUR_BACKEND_M1_CASE=PASS target=$target case=wide-immediate MiniC_object=1 GNU_AS_LD=1 QEMU_exit=64 GCC_oracle=64"
+    # The formerly rejected pointer relocation is now real functionality.
+    # Its GNU oracle must produce the same executable behavior on each ISA.
+    "$gcc" -static -x c "$w/global_pointer.i" -o "$w/$target.global_pointer.gnu.elf"
+    check_qemu_exit "$qemu" "$w/$target.global_pointer.gnu.elf" 42
+    "$MINIC_CC" --target="$target-linux" -S "$w/global_pointer.i" \
+        -o "$w/$target.global_pointer.s"
+    "$gcc" -static -x assembler "$w/$target.global_pointer.s" \
+        -o "$w/$target.global_pointer.mini.elf"
+    check_qemu_exit "$qemu" "$w/$target.global_pointer.mini.elf" 42
+    echo "FOUR_BACKEND_M1_GLOBAL_POINTER=PASS target=$target original_source=1 GNU_QEMU_oracle=42 MiniC_GNU_QEMU=42"
+
+    # Weak definitions still require symbol-binding semantics we have not
+    # implemented. Retain a negative gate on that *actual* unsupported ABI.
     if "$MINIC_CC" --target="$target-linux" -S "$w/unsupported.i" \
             -o "$w/$target.unsupported.s" 2>"$w/$target.unsupported.err"; then
-        echo "FOUR_BACKEND_M1=FAIL target=$target admitted unsupported global" >&2
+        echo "FOUR_BACKEND_M1=FAIL target=$target admitted unsupported weak global" >&2
         exit 1
     fi
     test ! -e "$w/$target.unsupported.s"
     if [ "${FOUR_BACKEND_M3_CALL:-0}" = "1" ]; then
-        if "$MINIC_CC" --target="$target-linux" -S "$w/call_unsupported.i" \
-                -o "$w/$target.call_unsupported.s" 2>"$w/$target.call_unsupported.err"; then
-            echo "FOUR_BACKEND_M3_CALL=FAIL target=$target accepted unsupported nine-argument caller" >&2
-            exit 1
-        fi
-        test ! -e "$w/$target.call_unsupported.s"
-        echo "FOUR_BACKEND_M3_CALL_TARGET=PASS target=$target MiniC_GNU_link_QEMU=10 direct_call_cases=3 GNU_oracles=3 unsupported_calls=fail-closed"
+        "$gcc" -static -x c "$w/call_unsupported.i" \
+            "$w/driver_call_unsupported.c" -o "$w/$target.call_unsupported.gnu.elf"
+        check_qemu_exit "$qemu" "$w/$target.call_unsupported.gnu.elf" 42
+        "$MINIC_CC" --target="$target-linux" -S "$w/call_unsupported.i" \
+            -o "$w/$target.call_unsupported.s"
+        "$gcc" -static -x assembler "$w/$target.call_unsupported.s" \
+            -x c "$w/driver_call_unsupported.c" -o "$w/$target.call_unsupported.mini.elf"
+        check_qemu_exit "$qemu" "$w/$target.call_unsupported.mini.elf" 42
+        echo "FOUR_BACKEND_M3_CALL_TARGET=PASS target=$target nine_arg_outgoing_abi=1 GNU_QEMU_independent_oracle=1"
     fi
     if [ "$m2_enabled" = "1" ]; then
         echo "FOUR_BACKEND_M2_TARGET=PASS target=$target MiniC_GNU_link_QEMU=7 CFG_branch=1 CFG_loop=1 signed_compare=1 unsupported=fail-closed"
