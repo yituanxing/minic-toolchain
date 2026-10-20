@@ -1461,6 +1461,22 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                     }
                     continue;
                 }
+                const MinicType type = fn->values[arg->value.value_id].type;
+                const bool use_fp = minic_type_is_double(type) &&
+                                    (!is_variadic || j < parameter_count) &&
+                                    fp_index < 8U;
+                if (use_fp) {
+                    if (fp_index++ >= 8U) ++overflow_slots;
+                } else if (gp_index++ >= 8U) ++overflow_slots;
+            }
+            stack_bytes = (overflow_slots * 8U + 15U) & ~(size_t)15U;
+            if (stack_bytes != 0U && !emit_sp_adjust(out, stack_bytes, false))
+                return machine_emit_reject(fn, "loongarch64", name,
+                                           reject_stage, reject_block,
+                                           reject_ins, __LINE__);
+            gp_index = fp_index = 0U;
+            for (j = 0U; j < count; ++j) {
+                const MinicCoreCallArgument *arg = &fn->call_arguments[begin + j];
                 if (arg->kind == MINIC_CORE_CALL_ARGUMENT_OBJECT) {
                     size_t record_size, slots, object_offset, chunk;
                     const MinicCoreObjectId object_id = arg->value.object_id;
@@ -1490,22 +1506,6 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                     }
                     continue;
                 }
-                const MinicType type = fn->values[arg->value.value_id].type;
-                const bool use_fp = minic_type_is_double(type) &&
-                                    (!is_variadic || j < parameter_count) &&
-                                    fp_index < 8U;
-                if (use_fp) {
-                    if (fp_index++ >= 8U) ++overflow_slots;
-                } else if (gp_index++ >= 8U) ++overflow_slots;
-            }
-            stack_bytes = (overflow_slots * 8U + 15U) & ~(size_t)15U;
-            if (stack_bytes != 0U && !emit_sp_adjust(out, stack_bytes, false))
-                return machine_emit_reject(fn, "loongarch64", name,
-                                           reject_stage, reject_block,
-                                           reject_ins, __LINE__);
-            gp_index = fp_index = 0U;
-            for (j = 0U; j < count; ++j) {
-                const MinicCoreCallArgument *arg = &fn->call_arguments[begin + j];
                 const MinicType type = fn->values[arg->value.value_id].type;
                 const size_t slot = (size_t)arg->value.value_id * 8U + stack_bytes;
                 const bool use_fp = minic_type_is_double(type) &&
