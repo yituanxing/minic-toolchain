@@ -532,6 +532,49 @@ static bool legalize_large_sp_memory(const char *path) {
     return success;
 }
 
+
+/* One or two INTEGER-class ABI eightbytes. Serialize actual record bytes,
+ * not a speculative 64-bit load across a partial object/array boundary.
+ * x9-x11 are scratch; x12 remains reserved for large-SP legalization. */
+static bool emit_lp64_record_chunk_argument(FILE *out, size_t offset,
+                                             size_t bytes, bool in_reg,
+                                             size_t gp, size_t stack_slot) {
+    size_t b;
+    if (bytes == 0U || bytes > 8U || gp > 9U) return false;
+    if (fprintf(out, "  movz x11, #%zu\n", offset & 65535U) < 0 ||
+        (offset > 65535U &&
+         fprintf(out, "  movk x11, #%zu, lsl #16\n", offset >> 16U) < 0) ||
+        fputs("  add x11, sp, x11\n  mov x9, xzr\n", out) == EOF)
+        return false;
+    for (b = 0U; b < bytes; ++b)
+        if (fprintf(out, "  ldrb w10, [x11, #%zu]\n"
+                         "  orr x9, x9, x10, lsl #%zu\n",
+                    b, b * 8U) < 0) return false;
+    return in_reg
+        ? fprintf(out, "  mov x%zu, x9\n", gp) >= 0
+        : fprintf(out, "  str x9, [sp, #%zu]\n", stack_slot * 8U) >= 0;
+}
+
+static bool emit_lp64_record_chunk_parameter(FILE *out, size_t offset,
+                                              size_t bytes, bool in_reg,
+                                              size_t gp, size_t incoming_offset) {
+    size_t b;
+    if (bytes == 0U || bytes > 8U || gp > 9U ||
+        fprintf(out, "  movz x11, #%zu\n", offset & 65535U) < 0 ||
+        (offset > 65535U &&
+         fprintf(out, "  movk x11, #%zu, lsl #16\n", offset >> 16U) < 0) ||
+        fputs("  add x11, sp, x11\n", out) == EOF ||
+        (in_reg
+         ? fprintf(out, "  mov x9, x%zu\n", gp) < 0
+         : fprintf(out, "  ldr x9, [sp, #%zu]\n", incoming_offset) < 0))
+        return false;
+    for (b = 0U; b < bytes; ++b)
+        if (fprintf(out, "  strb w9, [x11, #%zu]\n", b) < 0 ||
+            (b + 1U < bytes && fputs("  lsr x9, x9, #8\n", out) == EOF))
+            return false;
+    return true;
+}
+
 static bool emit_function(FILE *out, const MinicC0Program *program,
                           const MinicTargetInfo *target,
                           const MinicFunction *decl,
@@ -613,9 +656,14 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
          va_gp > 8U || va_fp > 8U))
         return machine_emit_reject(fn, "aarch64", name, "variadic_preflight",
                                    SIZE_MAX, SIZE_MAX, __LINE__);
-    for (i = 0U; i < fn->parameter_count; ++i)
-        if (!valid_parameter_type(program, target, fn->parameter_types[i])) return machine_emit_reject(fn, "aarch64", name, reject_stage,
-                                    reject_block, reject_ins, __LINE__);
+    for (i = 0U; i < fn->parameter_count; ++i) {
+        size_t record_size, record_slots;
+        if (!valid_parameter_type(program, target, fn->parameter_types[i]) &&
+            !minic_multi_gp_record(program, target, fn->parameter_types[i],
+                                   &record_size, &record_slots))
+            return machine_emit_reject(fn, "aarch64", name, reject_stage,
+                                       reject_block, reject_ins, __LINE__);
+    }
     if (getenv("MINIC_M1_TRACE") != NULL &&
         ((name[0] == 'K' && name[1] == 'e') || (name[0] == 'A' && name[1] == 'd')))
         (void)fprintf(stderr, "MINIC_M9_GATE arch=aarch64 fn=%s stage=parameters_valid\n", name);
@@ -791,6 +839,21 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
             MinicType actual;
             size_t actual_width;
             bool actual_signed;
+            if (arg->kind == MINIC_CORE_CALL_ARGUMENT_OBJECT) {
+                const MinicCoreObjectId object_id = arg->value.object_id;
+                size_t record_size, record_slots;
+                if (j >= parameter_count || object_id >= fn->object_count ||
+                    fn->objects[object_id].element_count != 1U ||
+                    !minic_type_equal(fn->objects[object_id].type,
+                                      parameter_types[j]) ||
+                    !minic_multi_gp_record(program, target,
+                                           parameter_types[j],
+                                           &record_size, &record_slots))
+                    return machine_emit_reject(fn, "aarch64", name,
+                                               reject_stage, reject_block,
+                                               reject_ins, __LINE__);
+                continue;
+            }
             if (arg->kind != MINIC_CORE_CALL_ARGUMENT_VALUE ||
                 arg->value.value_id >= fn->value_count) {
                 if (getenv("MINIC_BACKEND_CENSUS") != NULL)
@@ -965,6 +1028,48 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                           "  add x10, x10, #1\n", out) == EOF)
                     return machine_emit_reject(fn, "aarch64", name, reject_stage,
                                     reject_block, reject_ins, __LINE__);
+            continue;
+        }
+        if (ins->kind == MINIC_CORE_INSTRUCTION_PARAMETER_OBJECT) {
+            const size_t position = ins->value.parameter_object.parameter_index;
+            const MinicCoreObjectId obj_id = ins->value.parameter_object.object_id;
+            size_t size, slots, object_offset, gp = 0U, fp = 0U;
+            size_t stack = 0U, k, chunk;
+            if (ins->result != MINIC_CORE_VALUE_INVALID ||
+                position >= fn->parameter_count ||
+                obj_id >= fn->object_count ||
+                !minic_type_equal(fn->objects[obj_id].type,
+                                  fn->parameter_types[position]) ||
+                fn->objects[obj_id].element_count != 1U ||
+                !minic_multi_gp_record(program, target,
+                        fn->parameter_types[position], &size, &slots) ||
+                !frame_objects(program, target, fn, obj_id,
+                               &object_offset, NULL))
+                return machine_emit_reject(fn, "aarch64", name,
+                    reject_stage, reject_block, reject_ins, __LINE__);
+            for (k = 0U; k < position; ++k) {
+                const MinicType previous = fn->parameter_types[k];
+                size_t other_size, other_slots;
+                if (minic_multi_gp_record(program, target, previous,
+                                          &other_size, &other_slots)) {
+                    if (gp + other_slots <= 8U) gp += other_slots;
+                    else { gp = 8U; stack += other_slots; }
+                } else if (minic_type_is_double(previous) ) {
+                    if (fp++ >= 8U) ++stack;
+                } else {
+                    if (gp++ >= 8U) ++stack;
+                }
+            }
+            for (chunk = 0U; chunk < slots; ++chunk) {
+                const bool in_reg = gp + slots <= 8U;
+                const size_t payload = size - chunk * 8U >= 8U
+                    ? 8U : size - chunk * 8U;
+                if (!emit_lp64_record_chunk_parameter(out,
+                        object_offset + chunk * 8U, payload,
+                        in_reg, gp + chunk, frame + (stack + chunk) * 8U))
+                    return machine_emit_reject(fn, "aarch64", name,
+                        reject_stage, reject_block, reject_ins, __LINE__);
+            }
             continue;
         }
         if (ins->kind == MINIC_CORE_INSTRUCTION_STORE ||
@@ -1454,6 +1559,51 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
              * All SSA reads below use the shifted SP-relative address. */
             for (j = 0U; j < count; ++j) {
                 const MinicCoreCallArgument *arg = &fn->call_arguments[begin + j];
+                if (arg->kind == MINIC_CORE_CALL_ARGUMENT_OBJECT) {
+                    size_t record_size, slots;
+                    const MinicCoreObject *object =
+                        &fn->objects[arg->value.object_id];
+                    if (!minic_multi_gp_record(program, target, object->type,
+                                               &record_size, &slots))
+                        return machine_emit_reject(fn, "aarch64", name,
+                              reject_stage, reject_block, reject_ins, __LINE__);
+                    if (gp_index + slots <= 8U)
+                        gp_index += slots;
+                    else {
+                        gp_index = 8U;
+                        overflow_slots += slots;
+                    }
+                    continue;
+                }
+                if (arg->kind == MINIC_CORE_CALL_ARGUMENT_OBJECT) {
+                    size_t record_size, slots, object_offset, chunk;
+                    const MinicCoreObjectId object_id = arg->value.object_id;
+                    if (!minic_multi_gp_record(program, target,
+                             fn->objects[object_id].type,
+                             &record_size, &slots) ||
+                        !frame_objects(program, target, fn, object_id,
+                                       &object_offset, NULL))
+                        return machine_emit_reject(fn, "aarch64", name,
+                              reject_stage, reject_block, reject_ins, __LINE__);
+                    for (chunk = 0U; chunk < slots; ++chunk) {
+                        const bool in_reg = gp_index + slots <= 8U;
+                        const size_t payload = record_size - chunk * 8U >= 8U
+                            ? 8U : record_size - chunk * 8U;
+                        if (!emit_lp64_record_chunk_argument(
+                                out, object_offset + stack_bytes + chunk * 8U,
+                                payload, in_reg, gp_index + chunk,
+                                stack_index + chunk))
+                            return machine_emit_reject(fn, "aarch64", name,
+                                  reject_stage, reject_block, reject_ins, __LINE__);
+                    }
+                    if (gp_index + slots <= 8U)
+                        gp_index += slots;
+                    else {
+                        gp_index = 8U;
+                        stack_index += slots;
+                    }
+                    continue;
+                }
                 const MinicType type = fn->values[arg->value.value_id].type;
                 if (minic_type_is_double(type)) {
                     if (fp_index++ >= 8U) ++overflow_slots;
