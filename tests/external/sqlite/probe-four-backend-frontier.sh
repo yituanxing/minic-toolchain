@@ -162,7 +162,7 @@ cat > "$work/format-ab.c" <<'SRC'
 extern char *sqlite3_mprintf(const char *, ...);
 extern void sqlite3_free(void *);
 static void show(const char *label, char *s) {
-    printf("%s=%s\\n", label, s ? s : "<null>");
+    printf("%s=%s\n", label, s ? s : "<null>");
     sqlite3_free(s);
 }
 int main(void) {
@@ -331,10 +331,10 @@ for target in aarch64 loongarch64; do
     if [ "$target" = loongarch64 ]; then
         format_ab_ok=1
         for cc in gnu mini; do
-            if ! "$gcc" -static "$work/format-ab.c" "$work/$target/$cc.o" \\
+            if ! "$gcc" -static "$work/format-ab.c" "$work/$target/$cc.o" \
                     -lm -ldl -lpthread -o "$work/$target/format-$cc" ||
-               ! timeout 30s "$qemu" "$work/$target/format-$cc" \\
-                    >"$work/$target/format-$cc.out" \\
+               ! timeout 30s "$qemu" "$work/$target/format-$cc" \
+                    >"$work/$target/format-$cc.out" \
                     2>"$work/$target/format-$cc.err"; then
                 format_ab_ok=0
                 echo "SQLITE_FORMAT_AB=SKIP builder=$cc stage=link_or_qemu"
@@ -346,7 +346,7 @@ for target in aarch64 loongarch64; do
                 echo "SQLITE_FORMAT_AB=PASS target=$target GNU_QEMU_byte_exact=1"
             else
                 echo "SQLITE_FORMAT_AB=FAIL target=$target stage=GNU_QEMU_differential"
-                diff -u "$work/$target/format-gnu.out" \\
+                diff -u "$work/$target/format-gnu.out" \
                         "$work/$target/format-mini.out" | head -n 40 || true
             fi
         fi
