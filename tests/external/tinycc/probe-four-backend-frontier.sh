@@ -23,6 +23,19 @@ test "$(git hash-object "$src/configure")" = 1ee3acb8c944ccc5083d6ce0df9d39d7c48
 test "$(cat "$src/VERSION")" = 0.9.27
 echo "FOUR_BACKEND_TINYCC_SOURCE=VERIFIED release=0.9.27 commit=$commit"
 
+# The compiler binary must generate a NEW object, not merely answer -v.
+cat >"$work/consumer.c" <<'SRC'
+int mini_tinycc_compute(void) {
+    int sum = 0;
+    for (int i = 0; i < 16; i++)
+        sum += (i & 1) ? 3 : 2;
+    return sum + 2;
+}
+SRC
+cat >"$work/consumer-main.c" <<'SRC'
+extern int mini_tinycc_compute(void);
+int main(void) { return mini_tinycc_compute() == 42 ? 0 : 3; }
+SRC
 passed=0
 blocked=0
 failed=0
@@ -172,6 +185,53 @@ for target in aarch64 loongarch64; do
                cmp -s "$work/$target/tcc-gnu.err" \
                       "$work/$target/tcc-mixed.err"; then
                 echo "FOUR_BACKEND_TINYCC_HYBRID=PASS target=$target MiniC_objects=$target_assembled GNU_fallback_objects=$target_blocked GNU_QEMU_version_diff=1 full_MiniC_acceptance=NOT_CLAIMED"
+                # Compile previously unseen C source through BOTH TinyCC
+                # executables and run their generated objects. On LoongArch,
+                # TinyCC 0.9.27 emits an x86-64 cross-target object; link and
+                # execute that consumer on the x86-64 CI host, not QEMU-Loong.
+                functional_ok=1
+                for builder in gnu mixed; do
+                    if ! timeout 45s "$qemu" "$work/$target/tcc-$builder" \
+                            -c "$work/consumer.c" \
+                            -o "$work/$target/consumer-$builder.o" \
+                            >"$work/$target/consumer-$builder.cc.out" \
+                            2>"$work/$target/consumer-$builder.cc.err"; then
+                        functional_ok=0
+                        echo "FOUR_BACKEND_TINYCC_HYBRID_FUNCTIONAL=BLOCKED target=$target builder=$builder stage=TinyCC_compile"
+                        tail -n 14 "$work/$target/consumer-$builder.cc.err" || true
+                        break
+                    fi
+                    if [ "$target" = aarch64 ]; then
+                        if ! "$gcc" -static "$work/consumer-main.c" \
+                                "$work/$target/consumer-$builder.o" \
+                                -o "$work/$target/consumer-$builder" ||
+                           ! timeout 45s "$qemu" "$work/$target/consumer-$builder" \
+                                >"$work/$target/consumer-$builder.run.out" \
+                                2>"$work/$target/consumer-$builder.run.err"; then
+                            functional_ok=0
+                            break
+                        fi
+                    else
+                        if ! cc -no-pie "$work/consumer-main.c" \
+                                "$work/$target/consumer-$builder.o" \
+                                -o "$work/$target/consumer-$builder" ||
+                           ! timeout 45s "$work/$target/consumer-$builder" \
+                                >"$work/$target/consumer-$builder.run.out" \
+                                2>"$work/$target/consumer-$builder.run.err"; then
+                            functional_ok=0
+                            break
+                        fi
+                    fi
+                done
+                if [ "$functional_ok" -eq 1 ] &&
+                   cmp -s "$work/$target/consumer-gnu.run.out" \
+                          "$work/$target/consumer-mixed.run.out" &&
+                   cmp -s "$work/$target/consumer-gnu.run.err" \
+                          "$work/$target/consumer-mixed.run.err"; then
+                    echo "FOUR_BACKEND_TINYCC_HYBRID_FUNCTIONAL=PASS target=$target generated_target=$backend MiniC_objects=$target_assembled GNU_fallback_objects=$target_blocked independent_GNU_TinyCC_oracle=1 consumer_exit=0 full_MiniC_acceptance=NOT_CLAIMED"
+                else
+                    echo "FOUR_BACKEND_TINYCC_HYBRID_FUNCTIONAL=BLOCKED target=$target generated_target=$backend stage=compile_link_or_run"
+                fi
             else
                 echo "FOUR_BACKEND_TINYCC_HYBRID=BLOCKED target=$target stage=GNU_QEMU_version_diff MiniC_objects=$target_assembled GNU_fallback_objects=$target_blocked"
                 diff -u "$work/$target/tcc-gnu.out" \
