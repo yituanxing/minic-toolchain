@@ -30,6 +30,7 @@ for item in \
 done
 echo "FOUR_BACKEND_BUSYBOX_SOURCE=PASS version=1.36.1 commit=$commit"
 sources='coreutils/cat.c coreutils/echo.c coreutils/head.c coreutils/wc.c findutils/grep.c coreutils/cut.c coreutils/sort.c coreutils/uniq.c coreutils/tr.c'
+next_targets=0
 for target in aarch64 loongarch64; do
   case "$target" in
     aarch64) gcc=aarch64-linux-gnu-gcc; qemu=qemu-aarch64
@@ -232,10 +233,36 @@ editors/cmp.c editors/diff.c networking/ping.c
     sh tests/external/busybox/probe-four-backend-expanded.sh \
       "$root" "$target" "$gcc" "$prefix" "$qemu" "$sysroot"
     if [ "${FOUR_BACKEND_BUSYBOX_NEXT:-0}" = 1 ]; then
+      next_receipt="$work/$target/next-cohort.txt"
       FOUR_BACKEND_BUSYBOX_COHORT=next \
         sh tests/external/busybox/probe-four-backend-expanded.sh \
-          "$root" "$target" "$gcc" "$prefix" "$qemu" "$sysroot"
+          "$root" "$target" "$gcc" "$prefix" "$qemu" "$sysroot" \
+        | tee "$next_receipt"
+      # Discovery exits zero on a blocked stage. Promotion must read the
+      # exact final acceptance receipt, not the process exit or workflow green.
+      # Future MiniC improvements (82/83) are allowed, regressions below
+      # the certified 81 or missing QEMU checks are red.
+      record=$(grep "^FOUR_BACKEND_BUSYBOX_NEXT=PASS target=$target " "$next_receipt" || true)
+      minic_count=$(printf '%s\n' "$record" | sed -n 's/.* MiniC_owners=\([0-9][0-9]*\) .*/\1/p')
+      case "$record" in
+        *"original_Kbuild_owners=83 "*"SHA_objects_verified="*" GNU_QEMU_differential=1 full_MiniC=NO") ;;
+        *) echo "FOUR_BACKEND_BUSYBOX_NEXT_ACCEPT=FAIL target=$target reason=no_real_Kbuild_QEMU_receipt" >&2; exit 1 ;;
+      esac
+      if [ -z "$minic_count" ] || [ "$minic_count" -lt 81 ] ||
+         ! grep -qx 'FOUR_BACKEND_BUSYBOX_NEXT_RUNTIME_ACCEPT=PASS fixtures=45' "$next_receipt"; then
+        echo "FOUR_BACKEND_BUSYBOX_NEXT_ACCEPT=FAIL target=$target reason=coverage_or_runtime" >&2
+        exit 1
+      fi
+      next_targets=$((next_targets+1))
+      echo "FOUR_BACKEND_BUSYBOX_NEXT_ACCEPT=PASS target=$target MiniC_owners=$minic_count original_Kbuild_owners=83"
     fi
   fi
 done
+if [ "${FOUR_BACKEND_BUSYBOX_NEXT:-0}" = 1 ]; then
+  if [ "$next_targets" -ne 2 ]; then
+    echo "FOUR_BACKEND_BUSYBOX_NEXT_ACCEPT=FAIL reason=missing_target completed=$next_targets" >&2
+    exit 1
+  fi
+  echo "FOUR_BACKEND_BUSYBOX_NEXT_ACCEPT=PASS targets=2 original_Kbuild_owners=83 min_MiniC_owners=81 GNU_QEMU_differential=1"
+fi
 echo "FOUR_BACKEND_BUSYBOX_DISCOVERY=COMPLETE source_pinned=1 no_all_MiniC_claim=1"
