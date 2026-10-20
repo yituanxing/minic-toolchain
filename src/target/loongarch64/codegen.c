@@ -504,7 +504,7 @@ static bool emit_lp64_record_chunk_argument(FILE *out, size_t offset,
                                              size_t bytes, bool in_reg,
                                              size_t gp, size_t stack_slot) {
     size_t b;
-    if (bytes == 0U || bytes > 8U || gp > 9U ||
+    if (bytes == 0U || bytes > 8U || (in_reg && gp >= 8U) ||
         fprintf(out, "  li.d $t2, %zu\n"
                      "  add.d $t2, $sp, $t2\n"
                      "  move $t0, $zero\n", offset) < 0)
@@ -523,7 +523,7 @@ static bool emit_lp64_record_chunk_parameter(FILE *out, size_t offset,
                                               size_t bytes, bool in_reg,
                                               size_t gp, size_t incoming_offset) {
     size_t b;
-    if (bytes == 0U || bytes > 8U || gp > 9U ||
+    if (bytes == 0U || bytes > 8U || (in_reg && gp >= 8U) ||
         fprintf(out, "  li.d $t2, %zu\n"
                      "  add.d $t2, $sp, $t2\n", offset) < 0 ||
         (in_reg
