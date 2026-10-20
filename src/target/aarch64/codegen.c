@@ -1605,10 +1605,7 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                                    : "  asr w9, w9, w10\n")
                            : (wide ? "  lsr x9, x9, x10\n"
                                    : "  lsr w9, w9, w10\n"));
-            /* A64 cbnz is limited to +/-1MiB. For large Lua VM CFGs,
-             * use a nearby cbz and long-range unconditional branches. */
-            if (fn->block_count > 256U) {
-                if (fprintf(out, wide ? "  ldr x9, [sp, #%zu]\n"
+            if (fprintf(out, wide ? "  ldr x9, [sp, #%zu]\n"
                                       : "  ldr w9, [sp, #%zu]\n",
                             (size_t)cond * 8U) < 0 ||
                     fprintf(out, wide
@@ -2071,7 +2068,10 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
         case MINIC_CORE_TERMINATOR_CONDITIONAL_BRANCH: {
             const MinicCoreValueId cond = block->terminator.conditional.condition;
             const bool wide = register64_type(program, target, fn->values[cond].type);
-            if (fprintf(out, wide ? "  ldr x9, [sp, #%zu]\n"
+            /* A64 cbnz is limited to +/-1MiB. For large Lua VM CFGs,
+             * use a nearby cbz and long-range unconditional branches. */
+            if (fn->block_count > 256U) {
+                if (fprintf(out, wide ? "  ldr x9, [sp, #%zu]\n"
                                   : "  ldr w9, [sp, #%zu]\n",
                         (size_t)cond * 8U) < 0 ||
                 fprintf(out, wide

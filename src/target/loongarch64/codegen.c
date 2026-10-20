@@ -1533,10 +1533,7 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                 : ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_SUBTRACT
                     ? (wide ? "  sub.d $t0, $t0, $t1\n" : "  sub.w $t0, $t0, $t1\n")
                     : (wide ? "  mul.d $t0, $t0, $t1\n" : "  mul.w $t0, $t0, $t1\n");
-            /* LoongArch conditional branch reach is smaller than the
-             * full Lua VM body. Short local branch, then wide b targets. */
-            if (fn->block_count > 256U) {
-                if (!emit_sp_mem(out, wide ? "ld.d" : "ld.w", "$t0",
+            if (!emit_sp_mem(out, wide ? "ld.d" : "ld.w", "$t0",
                                  (size_t)cond * 8U) ||
                     fprintf(out,
                             "  beqz $t0, .Lmini_loong_f%zu_false_%zu\n"
@@ -1913,7 +1910,10 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
         case MINIC_CORE_TERMINATOR_CONDITIONAL_BRANCH: {
             const MinicCoreValueId cond = block->terminator.conditional.condition;
             const bool wide = register64_type(program, target, fn->values[cond].type);
-            if (!emit_sp_mem(out, wide ? "ld.d" : "ld.w", "$t0",
+            /* LoongArch conditional branch reach is smaller than the
+             * full Lua VM body. Short local branch, then wide b targets. */
+            if (fn->block_count > 256U) {
+                if (!emit_sp_mem(out, wide ? "ld.d" : "ld.w", "$t0",
                              (size_t)cond * 8U) ||
                 fprintf(out,
                         "  bnez $t0, .Lmini_loong_f%zu_b%u\n"
