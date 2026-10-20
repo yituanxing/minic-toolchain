@@ -89,7 +89,7 @@ jobs:
                   linux_yaml=true
                 fi
                 case "$changed" in
-                  src/target/aarch64/*|src/target/loongarch64/*|tests/compiler/c0/run-four-backend-m1.sh|tests/compiler/c0/probe-four-backend-outgoing-abi.sh|tests/compiler/c0/probe-four-backend-switch-dead-prefix.sh|tests/compiler/c0/probe-loongarch64-dynamic-alloca.sh|tests/compiler/c0/probe-aarch64-binary128-return.sh|tests/compiler/c0/probe-loongarch64-binary128-return.sh|tests/compiler/c0/probe-four-backend-zero-record-array.sh|tests/external/tiny-aes-c/*|tests/external/cjson/*|tests/external/zlib/*|tests/external/lua/*|tests/external/sqlite/*|tests/external/tinycc/*|tests/external/busybox/*)
+                  src/target/aarch64/*|src/target/loongarch64/*|tests/compiler/c0/run-four-backend-m1.sh|tests/compiler/c0/probe-four-backend-outgoing-abi.sh|tests/compiler/c0/probe-four-backend-switch-dead-prefix.sh|tests/compiler/c0/probe-loongarch64-dynamic-alloca.sh|tests/compiler/c0/probe-aarch64-binary128-return.sh|tests/compiler/c0/probe-loongarch64-binary128-return.sh|tests/compiler/c0/probe-four-backend-zero-record-array.sh|tests/compiler/c0/probe-aarch64-pie-extern-got.sh|tests/external/tiny-aes-c/*|tests/external/cjson/*|tests/external/zlib/*|tests/external/lua/*|tests/external/sqlite/*|tests/external/tinycc/*|tests/external/busybox/*)
                     ;;
                   *) four_only=false ;;
                 esac
@@ -281,6 +281,11 @@ jobs:
           # config/object-swap oracle with original cross Kbuild and QEMU.
           # Discovery reports blocked stages but does NOT claim a full
           # MiniC BusyBox nor weaken the six accepted projects above.
+          # AArch64 BusyBox exposed a real PIE interposable libc symbol:
+          # R_AARCH64_ADR_PREL_PG_HI21 cannot address optind@@GLIBC.
+          sh -n tests/compiler/c0/probe-aarch64-pie-extern-got.sh
+          MINIC_CC="$GITHUB_WORKSPACE/build/toolchain-focused-t1-v2/bin/minic-cc" \
+            sh tests/compiler/c0/probe-aarch64-pie-extern-got.sh
           sh -n tests/external/busybox/probe-four-backend-frontier.sh
           MINIC_CC="$GITHUB_WORKSPACE/build/toolchain-focused-t1-v2/bin/minic-cc" \
             sh tests/external/busybox/probe-four-backend-frontier.sh
