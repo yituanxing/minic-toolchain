@@ -130,7 +130,7 @@ for target in aarch64 loongarch64; do
             echo "FOUR_BACKEND_TINYCC_TU=BLOCKED target=$target source=$file stage=MiniC $first"
             if [ "$file" = tccgen.c ]; then
                 echo "FOUR_BACKEND_TINYCC_TCCGEN_DIAG target=$target source=$file"
-                grep -E 'MINIC_BACKEND_REJECT|MINIC_M[0-9]+_OPCODE_REJECT|MINIC_M1_FRONTIER|MINIC_BACKEND_CENSUS|MINIC_BACKEND_PREFLIGHT|MINIC_M8_RESULT_REJECT|CORE_FAST_TRACE' \
+                grep -E 'MINIC_BACKEND_REJECT|MINIC_M[0-9]+_OPCODE_REJECT|MINIC_M1_FRONTIER|MINIC_BACKEND_CENSUS|MINIC_BACKEND_PREFLIGHT|MINIC_M8_RESULT_REJECT|MINIC_M4_GLOBAL_FRONTIER|CORE_FAST_TRACE' \
                     "$work/$target/$stem.mini.err" | head -n 12 || true
                 tail -n 8 "$work/$target/$stem.mini.err"
             fi
