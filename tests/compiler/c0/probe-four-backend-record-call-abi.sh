@@ -42,6 +42,8 @@ int main(void) {
     struct Small s = {4, 2};
     struct Token t = {"qpayload", 19U};
     int (*fp)(const char *, int, struct Token) = token_value;
+    if (s.left != 4 || s.right != 2) return 17;
+    if (t.ptr[0] != 'q' || t.count != 19U) return 18;
     if (small_value(s) != 42) return 11;
     if (!token_value("prefix",5,t)) return 12;
     if (!fp("prefix",5,t)) return 13;
