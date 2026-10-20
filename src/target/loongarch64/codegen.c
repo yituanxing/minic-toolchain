@@ -866,10 +866,17 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                     : !minic_type_is_integer(ins->type) &&
                       !minic_type_is_pointer(ins->type) &&
                       !(minic_type_is_float(ins->type) &&
-                        ins->kind == MINIC_CORE_INSTRUCTION_LOAD) &&
+                        (ins->kind == MINIC_CORE_INSTRUCTION_LOAD ||
+                         ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_TO_FLOAT ||
+                         ins->kind == MINIC_CORE_INSTRUCTION_FLOAT_ADD ||
+                         ins->kind == MINIC_CORE_INSTRUCTION_FLOAT_SUBTRACT ||
+                         ins->kind == MINIC_CORE_INSTRUCTION_FLOAT_MULTIPLY ||
+                         ins->kind == MINIC_CORE_INSTRUCTION_FLOAT_DIVIDE)) &&
                       !(minic_type_is_double(ins->type) &&
                         (ins->kind == MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT ||
                          ins->kind == MINIC_CORE_INSTRUCTION_LOAD ||
+                         ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_ADD ||
+                         ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_NEGATE ||
                          ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_DIVIDE ||
                          ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_SUBTRACT ||
                          ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_MULTIPLY ||
@@ -916,13 +923,16 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
             break;
         }
         /* M37: source-observed cJSON binary64 subtract and multiply. */
+        case MINIC_CORE_INSTRUCTION_DOUBLE_ADD:
         case MINIC_CORE_INSTRUCTION_DOUBLE_SUBTRACT:
         case MINIC_CORE_INSTRUCTION_DOUBLE_MULTIPLY: {
             const MinicCoreValueId lhs = ins->value.binary.left;
             const MinicCoreValueId rhs = ins->value.binary.right;
-            const char *op = ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_SUBTRACT
-                ? "  fsub.d $ft0, $ft0, $ft1\n"
-                : "  fmul.d $ft0, $ft0, $ft1\n";
+            const char *op = ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_ADD
+                ? "  fadd.d $ft0, $ft0, $ft1\n"
+                : ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_SUBTRACT
+                    ? "  fsub.d $ft0, $ft0, $ft1\n"
+                    : "  fmul.d $ft0, $ft0, $ft1\n";
             if (!minic_type_is_double(ins->type) ||
                 lhs >= fn->value_count || rhs >= fn->value_count ||
                 !minic_type_is_double(fn->values[lhs].type) ||
@@ -948,6 +958,18 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                 !emit_sp_mem(out, "fst.d", "$ft0", offset))
                 return machine_emit_reject(fn, "loongarch64", name, reject_stage,
                                     reject_block, reject_ins, __LINE__);
+            continue;
+        }
+        case MINIC_CORE_INSTRUCTION_DOUBLE_NEGATE: {
+            const MinicCoreValueId operand = ins->value.operand;
+            if (!minic_type_is_double(ins->type) ||
+                operand >= fn->value_count ||
+                !minic_type_is_double(fn->values[operand].type) ||
+                !emit_sp_mem(out, "fld.d", "$ft0", (size_t)operand * 8U) ||
+                fputs("  fneg.d $ft0, $ft0\n", out) == EOF ||
+                !emit_sp_mem(out, "fst.d", "$ft0", offset))
+                return machine_emit_reject(fn, "loongarch64", name, reject_stage,
+                                           reject_block, reject_ins, __LINE__);
             continue;
         }
         case MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT:
@@ -1542,6 +1564,43 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
          * valueint assignment. Only signed 32-bit conversion is admitted. */
         /* M31: numeric IEEE binary32->binary64 promotion for float arrays.
          * Reinterpretation/bitcast is incorrect: perform fcvt.d.s. */
+        case MINIC_CORE_INSTRUCTION_DOUBLE_TO_FLOAT: {
+            const MinicCoreValueId source = ins->value.operand;
+            if (!minic_type_is_float(ins->type) ||
+                source >= fn->value_count ||
+                !minic_type_is_double(fn->values[source].type) ||
+                !emit_sp_mem(out, "fld.d", "$ft0", (size_t)source * 8U) ||
+                fputs("  fcvt.s.d $ft0, $ft0\n", out) == EOF ||
+                !emit_sp_mem(out, "fst.s", "$ft0", offset))
+                return machine_emit_reject(fn, "loongarch64", name, reject_stage,
+                                           reject_block, reject_ins, __LINE__);
+            continue;
+        }
+        case MINIC_CORE_INSTRUCTION_FLOAT_ADD:
+        case MINIC_CORE_INSTRUCTION_FLOAT_SUBTRACT:
+        case MINIC_CORE_INSTRUCTION_FLOAT_MULTIPLY:
+        case MINIC_CORE_INSTRUCTION_FLOAT_DIVIDE: {
+            const MinicCoreValueId lhs = ins->value.binary.left;
+            const MinicCoreValueId rhs = ins->value.binary.right;
+            const char *op = ins->kind == MINIC_CORE_INSTRUCTION_FLOAT_ADD
+                ? "  fadd.s $ft0, $ft0, $ft1\n"
+                : ins->kind == MINIC_CORE_INSTRUCTION_FLOAT_SUBTRACT
+                    ? "  fsub.s $ft0, $ft0, $ft1\n"
+                    : ins->kind == MINIC_CORE_INSTRUCTION_FLOAT_MULTIPLY
+                        ? "  fmul.s $ft0, $ft0, $ft1\n"
+                        : "  fdiv.s $ft0, $ft0, $ft1\n";
+            if (!minic_type_is_float(ins->type) ||
+                lhs >= fn->value_count || rhs >= fn->value_count ||
+                !minic_type_is_float(fn->values[lhs].type) ||
+                !minic_type_is_float(fn->values[rhs].type) ||
+                !emit_sp_mem(out, "fld.s", "$ft0", (size_t)lhs * 8U) ||
+                !emit_sp_mem(out, "fld.s", "$ft1", (size_t)rhs * 8U) ||
+                fputs(op, out) == EOF ||
+                !emit_sp_mem(out, "fst.s", "$ft0", offset))
+                return machine_emit_reject(fn, "loongarch64", name, reject_stage,
+                                           reject_block, reject_ins, __LINE__);
+            continue;
+        }
         case MINIC_CORE_INSTRUCTION_FLOAT_TO_DOUBLE: {
             const MinicCoreValueId src = ins->value.operand;
             if (src >= fn->value_count || !minic_type_is_double(ins->type) ||

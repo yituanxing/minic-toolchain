@@ -917,10 +917,17 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                     : !minic_type_is_integer(ins->type) &&
                       !minic_type_is_pointer(ins->type) &&
                       !(minic_type_is_float(ins->type) &&
-                        ins->kind == MINIC_CORE_INSTRUCTION_LOAD) &&
+                        (ins->kind == MINIC_CORE_INSTRUCTION_LOAD ||
+                         ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_TO_FLOAT ||
+                         ins->kind == MINIC_CORE_INSTRUCTION_FLOAT_ADD ||
+                         ins->kind == MINIC_CORE_INSTRUCTION_FLOAT_SUBTRACT ||
+                         ins->kind == MINIC_CORE_INSTRUCTION_FLOAT_MULTIPLY ||
+                         ins->kind == MINIC_CORE_INSTRUCTION_FLOAT_DIVIDE)) &&
                       !(minic_type_is_double(ins->type) &&
                         (ins->kind == MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT ||
                          ins->kind == MINIC_CORE_INSTRUCTION_LOAD ||
+                         ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_ADD ||
+                         ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_NEGATE ||
                          ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_DIVIDE ||
                          ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_SUBTRACT ||
                          ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_MULTIPLY ||
@@ -970,12 +977,16 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
         }
         /* M37: cJSON compare_double's a-b and tolerance multiplication.
          * Keep full IEEE-754 binary64 payloads in FP registers/SSA slots. */
+        case MINIC_CORE_INSTRUCTION_DOUBLE_ADD:
         case MINIC_CORE_INSTRUCTION_DOUBLE_SUBTRACT:
         case MINIC_CORE_INSTRUCTION_DOUBLE_MULTIPLY: {
             const MinicCoreValueId lhs = ins->value.binary.left;
             const MinicCoreValueId rhs = ins->value.binary.right;
-            const char *op = ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_SUBTRACT
-                ? "  fsub d9, d9, d10\n" : "  fmul d9, d9, d10\n";
+            const char *op = ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_ADD
+                ? "  fadd d9, d9, d10\n"
+                : ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_SUBTRACT
+                    ? "  fsub d9, d9, d10\n"
+                    : "  fmul d9, d9, d10\n";
             if (!minic_type_is_double(ins->type) ||
                 lhs >= fn->value_count || rhs >= fn->value_count ||
                 !minic_type_is_double(fn->values[lhs].type) ||
@@ -1005,6 +1016,20 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                 return machine_emit_reject(fn, "aarch64", name, reject_stage,
                                     reject_block, reject_ins, __LINE__);
             continue; /* Result is already in its full 64-bit SSA slot. */
+        }
+        /* Unary IEEE-754 sign flip includes -0 and all NaN payloads. */
+        case MINIC_CORE_INSTRUCTION_DOUBLE_NEGATE: {
+            const MinicCoreValueId operand = ins->value.operand;
+            if (!minic_type_is_double(ins->type) ||
+                operand >= fn->value_count ||
+                !minic_type_is_double(fn->values[operand].type) ||
+                fprintf(out, "  ldr d9, [sp, #%zu]\n"
+                             "  fneg d9, d9\n"
+                             "  str d9, [sp, #%zu]\n",
+                        (size_t)operand * 8U, offset) < 0)
+                return machine_emit_reject(fn, "aarch64", name, reject_stage,
+                                           reject_block, reject_ins, __LINE__);
+            continue;
         }
         case MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT: {
             const uint64_t bits = ins->value.floating_bits;
@@ -1701,6 +1726,45 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
          * Keep wider and unsigned cases fail-closed until ABI-tested. */
         /* M31: cJSON_CreateFloatArray's float element must be interpreted
          * numerically, not zero-extended as its 32-bit IEEE bit pattern. */
+        case MINIC_CORE_INSTRUCTION_DOUBLE_TO_FLOAT: {
+            const MinicCoreValueId source = ins->value.operand;
+            if (!minic_type_is_float(ins->type) ||
+                source >= fn->value_count ||
+                !minic_type_is_double(fn->values[source].type) ||
+                fprintf(out, "  ldr d9, [sp, #%zu]\n"
+                             "  fcvt s9, d9\n"
+                             "  str s9, [sp, #%zu]\n",
+                        (size_t)source * 8U, offset) < 0)
+                return machine_emit_reject(fn, "aarch64", name, reject_stage,
+                                           reject_block, reject_ins, __LINE__);
+            continue;
+        }
+        case MINIC_CORE_INSTRUCTION_FLOAT_ADD:
+        case MINIC_CORE_INSTRUCTION_FLOAT_SUBTRACT:
+        case MINIC_CORE_INSTRUCTION_FLOAT_MULTIPLY:
+        case MINIC_CORE_INSTRUCTION_FLOAT_DIVIDE: {
+            const MinicCoreValueId lhs = ins->value.binary.left;
+            const MinicCoreValueId rhs = ins->value.binary.right;
+            const char *op = ins->kind == MINIC_CORE_INSTRUCTION_FLOAT_ADD
+                ? "  fadd s9, s9, s10\n"
+                : ins->kind == MINIC_CORE_INSTRUCTION_FLOAT_SUBTRACT
+                    ? "  fsub s9, s9, s10\n"
+                    : ins->kind == MINIC_CORE_INSTRUCTION_FLOAT_MULTIPLY
+                        ? "  fmul s9, s9, s10\n"
+                        : "  fdiv s9, s9, s10\n";
+            if (!minic_type_is_float(ins->type) ||
+                lhs >= fn->value_count || rhs >= fn->value_count ||
+                !minic_type_is_float(fn->values[lhs].type) ||
+                !minic_type_is_float(fn->values[rhs].type) ||
+                fprintf(out, "  ldr s9, [sp, #%zu]\n"
+                             "  ldr s10, [sp, #%zu]\n",
+                        (size_t)lhs * 8U, (size_t)rhs * 8U) < 0 ||
+                fputs(op, out) == EOF ||
+                fprintf(out, "  str s9, [sp, #%zu]\n", offset) < 0)
+                return machine_emit_reject(fn, "aarch64", name, reject_stage,
+                                           reject_block, reject_ins, __LINE__);
+            continue;
+        }
         case MINIC_CORE_INSTRUCTION_FLOAT_TO_DOUBLE: {
             const MinicCoreValueId src = ins->value.operand;
             if (src >= fn->value_count || !minic_type_is_double(ins->type) ||
