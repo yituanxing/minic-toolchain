@@ -128,6 +128,12 @@ for target in aarch64 loongarch64; do
             first=$(grep -m 1 -E 'MINIC_BACKEND_REJECT|error:' \
                 "$work/$target/$stem.mini.err" || true)
             echo "FOUR_BACKEND_TINYCC_TU=BLOCKED target=$target source=$file stage=MiniC $first"
+            if [ "$file" = tccgen.c ]; then
+                echo "FOUR_BACKEND_TINYCC_TCCGEN_DIAG target=$target source=$file"
+                grep -E 'MINIC_BACKEND_REJECT|MINIC_M[0-9]+_OPCODE_REJECT|MINIC_M1_FRONTIER|MINIC_BACKEND_CENSUS|MINIC_BACKEND_PREFLIGHT|MINIC_M8_RESULT_REJECT|CORE_FAST_TRACE' \
+                    "$work/$target/$stem.mini.err" | head -n 12 || true
+                tail -n 8 "$work/$target/$stem.mini.err"
+            fi
             # Classify semantic return-ABI gaps instead of treating each
             # TinyCC caller as a separate backend failure.
             grep -m 2 '^MINIC_CALL_RESULT_REJECT' "$work/$target/$stem.mini.err" || true
