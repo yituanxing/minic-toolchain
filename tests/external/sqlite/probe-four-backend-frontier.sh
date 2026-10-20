@@ -378,6 +378,18 @@ new = (matches[0].group(0) +
        '(long long)n,tokenType,(unsigned char)zSql[0],'
        '(unsigned char)zSql[1]);')
 src = re.sub(rx, lambda _: new, src)
+# Log the full *generated* SQL at parser entry. A standalone lexer oracle
+# already passes: distinguish a malformed internal SQL producer from an
+# incorrect parser state transition. This runs only in disposable copies.
+entry = re.search(
+    r'\bvoid\s+sqlite3RunParser\s*\([^)]*\)\s*\{', src)
+if entry is not None:
+    diag = ('\nfprintf(stderr,"SQLITE_PARSER_INPUT sql=%.256s\\n",'
+            ' zSql ? zSql : "<null>");')
+    src = src[:entry.end()] + diag + src[entry.end():]
+    print("SQLITE_PARSER_INPUT_INSTRUMENT=PASS")
+else:
+    print("SQLITE_PARSER_INPUT_INSTRUMENT=SKIP")
 pathlib.Path(sys.argv[2]).write_text(src)
 print("SQLITE_PARSER_AB_INSTRUMENT=PASS matched=" + str(len(matches)))
 PY
@@ -392,7 +404,9 @@ PY
                             -o "$work/$target/mini-diag.s" \
                             >"$work/$target/mini-diag.compile.out" 2>"$work/$target/mini-diag.compile.err" ||
                        ! "$gcc" -c -x assembler "$work/$target/mini-diag.s" \
-                            -o "$work/$target/mini-diag.o"; then
+                            -o "$work/$target/mini-diag.o" \
+                            >"$work/$target/mini-diag.as.out" \
+                            2>"$work/$target/mini-diag.as.err"; then
                         parser_ab_ok=0
                         echo "SQLITE_PARSER_AB=SKIP stage=compile"
                         tail -n 4 "$work/$target/mini-diag.compile.err" || true
@@ -420,6 +434,10 @@ PY
                              >"$work/$target/gnu-tokens.txt" || true
                         grep '^SQLITE_PARSER_TOKEN' "$work/$target/mini-diag.err" \
                              >"$work/$target/mini-tokens.txt" || true
+                        echo "SQLITE_PARSER_AB_INPUT_GNU"
+                        grep '^SQLITE_PARSER_INPUT' "$work/$target/gnu-diag.err" | head -n 12 || true
+                        echo "SQLITE_PARSER_AB_INPUT_MINI"
+                        grep '^SQLITE_PARSER_INPUT' "$work/$target/mini-diag.err" | head -n 12 || true
                         echo "SQLITE_PARSER_AB_COUNTS gnu=$(wc -l < "$work/$target/gnu-tokens.txt") mini=$(wc -l < "$work/$target/mini-tokens.txt")"
                         diff -u "$work/$target/gnu-tokens.txt" \
                                 "$work/$target/mini-tokens.txt" |
@@ -427,67 +445,10 @@ PY
                         tail -n 8 "$work/$target/mini-diag.err"
                     fi
                 fi
-                # Run the same REAL MiniC-built SQLite binary under QEMU's
-                # block trace. This is a diagnostic replay, not a pass.
-                set +e
-                timeout 20s "$qemu" -d in_asm,exec \
-                    -D "$work/$target/mini-qemu.log" \
-                    "$work/$target/mini" >"$work/$target/trace.out" \
-                    2>"$work/$target/trace.err"
-                qemu_trace_status=$?
-                set -e
-                echo "FOUR_BACKEND_SQLITE_TRACE target=$target replay_status=$qemu_trace_status"
-                tail -n 32 "$work/$target/mini-qemu.log" 2>/dev/null |
-                    while IFS= read -r line; do
-                        echo "FOUR_BACKEND_SQLITE_TRACE_LINE $line"
-                    done
-                # GNU's function symbol table can map QEMU guest PCs to
-                # the exact function responsible, even for 2500+ symbols.
-                "$gcc" -print-prog-name=nm >"$work/$target/nm-command"
-                nm_tool=$(cat "$work/$target/nm-command")
-                "$nm_tool" -n "$work/$target/mini" |
-                    awk '$2=="t" || $2=="T" {print $1, $3}' \
-                    >"$work/$target/symbols.txt"
-                python3 - "$work/$target/mini-qemu.log" \
-                        "$work/$target/symbols.txt" <<'PY'
-import bisect, re, sys
-from collections import deque
-
-pcs = deque(maxlen=12)
-branches = deque(maxlen=10)
-traceblocks = deque(maxlen=8)
-with open(sys.argv[1], errors='replace') as f:
-    for line in f:
-        m = re.match(r'^0x([0-9a-fA-F]+):', line)
-        if m:
-            pcs.append(int(m.group(1), 16))
-        b = re.search(r'\b(?:bl|b|jirl)\s+[^#\n]*#\s*0x([0-9a-fA-F]+)', line)
-        if b:
-            branches.append(int(b.group(1), 16))
-        t = re.search(r'^Trace .*?\[([0-9a-fA-F]{8,})/', line)
-        if t:
-            traceblocks.append(int(t.group(1), 16))
-symbols = []
-with open(sys.argv[2]) as f:
-    for line in f:
-        v = line.split(maxsplit=1)
-        if len(v) == 2:
-            try: symbols.append((int(v[0], 16), v[1].strip()))
-            except ValueError: pass
-symbols.sort()
-addresses = [p for p, _ in symbols]
-def describe(tag, pc):
-    at = bisect.bisect_right(addresses, pc) - 1
-    name = symbols[at][1] if at >= 0 else '<unknown>'
-    base = symbols[at][0] if at >= 0 else 0
-    print(f"FOUR_BACKEND_SQLITE_TRACE_{tag} pc=0x{pc:x} function={name} offset=0x{pc-base:x}")
-for pc in pcs:
-    describe("PC", pc)
-for pc in branches:
-    describe("BRANCH", pc)
-for pc in traceblocks:
-    describe("EXEC", pc)
-PY
+                # A normal SQLite SQL-error exit is not a hardware fault.
+                # Avoid a second full QEMU instruction trace that cannot
+                # identify the originating malformed SQL producer.
+                echo "SQLITE_PARSER_AB_TRACE=SKIP reason=normal_SQL_error"
             fi
             runtime_ok=0
         fi
