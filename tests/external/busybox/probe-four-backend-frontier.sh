@@ -167,5 +167,66 @@ PY
     continue
   fi
   echo "FOUR_BACKEND_BUSYBOX_MIXED=PASS target=$target MiniC_Kbuild_owners=9 GNU_remaining_owners=yes original_Kconfig_Kbuild=1 QEMU_GNU_byte_exact=1 full_MiniC=NO"
+
+  # One *class-level* survey per ISA: no extra CI job and no changes to
+  # the certified nine-owner binary. These are untouched upstream BusyBox
+  # sources preprocessed under the accepted nine-applet Kconfig; they are
+  # not claimed as active Kbuild owners until separately promoted.
+  if [ "${FOUR_BACKEND_BUSYBOX_SWEEP:-0}" = 1 ]; then
+    sweep_sources='
+coreutils/basename.c coreutils/dirname.c coreutils/printf.c
+coreutils/pwd.c coreutils/whoami.c coreutils/yes.c coreutils/uname.c
+coreutils/nproc.c coreutils/sleep.c coreutils/env.c coreutils/printenv.c
+coreutils/mkdir.c coreutils/rmdir.c coreutils/touch.c coreutils/tty.c
+coreutils/hostid.c coreutils/logname.c coreutils/link.c
+coreutils/unlink.c coreutils/ln.c coreutils/mv.c coreutils/cp.c
+coreutils/rm.c coreutils/id.c coreutils/ls.c coreutils/tail.c
+coreutils/tee.c coreutils/seq.c coreutils/chmod.c coreutils/chgrp.c
+coreutils/chown.c coreutils/stat.c coreutils/split.c coreutils/date.c
+coreutils/df.c coreutils/du.c coreutils/cksum.c coreutils/nl.c
+coreutils/fold.c coreutils/expand.c coreutils/paste.c coreutils/readlink.c
+coreutils/realpath.c coreutils/mktemp.c coreutils/od.c coreutils/sum.c
+coreutils/sync.c coreutils/truncate.c coreutils/usleep.c
+coreutils/who.c coreutils/md5_sha1_sum.c coreutils/shuf.c
+findutils/find.c findutils/xargs.c editors/sed.c editors/awk.c
+editors/cmp.c editors/diff.c networking/ping.c
+'
+    pass=0; cpp_fail=0; mini_fail=0; as_fail=0; total=0
+    for file in $sweep_sources; do
+      total=$((total+1))
+      stem=${file##*/}
+      stem=${stem%.c}
+      input="$work/$target/sweep-$stem.i"
+      output="$work/$target/sweep-$stem.s"
+      if ! "$gcc" -E -P -std=gnu11 -D_GNU_SOURCE \
+          -I"$src/include" -I"$src" -include "$src/include/autoconf.h" \
+          "$src/$file" -o "$input" > /dev/null \
+          2>"$work/$target/sweep-$stem.cpp.err"; then
+        cpp_fail=$((cpp_fail+1))
+        echo "FOUR_BACKEND_BUSYBOX_SWEEP_TU target=$target source=$file stage=CPP"
+        continue
+      fi
+      if ! timeout 90s env MINIC_BACKEND_CENSUS=1 \
+          "$MINIC_CC" --target="$target-linux" -S "$input" -o "$output" \
+          2>"$work/$target/sweep-$stem.mini.err"; then
+        mini_fail=$((mini_fail+1))
+        first=$(grep -m 1 -E 'MINIC_BACKEND_REJECT|error:' \
+          "$work/$target/sweep-$stem.mini.err" || true)
+        echo "FOUR_BACKEND_BUSYBOX_SWEEP_TU target=$target source=$file stage=MiniC detail=$first"
+        continue
+      fi
+      if ! "$gcc" -c -x assembler "$output" \
+          -o "$work/$target/sweep-$stem.o" \
+          2>"$work/$target/sweep-$stem.as.err"; then
+        as_fail=$((as_fail+1))
+        first=$(head -n 1 "$work/$target/sweep-$stem.as.err" || true)
+        echo "FOUR_BACKEND_BUSYBOX_SWEEP_TU target=$target source=$file stage=GNU_AS detail=$first"
+        continue
+      fi
+      pass=$((pass+1))
+      echo "FOUR_BACKEND_BUSYBOX_SWEEP_TU target=$target source=$file stage=MiniC_GNU_AS_PASS"
+    done
+    echo "FOUR_BACKEND_BUSYBOX_SWEEP=COMPLETE target=$target scanned=$total MiniC_GNU_AS_pass=$pass CPP_blocked=$cpp_fail MiniC_blocked=$mini_fail GNU_AS_blocked=$as_fail Kbuild_owner_claim=NO"
+  fi
 done
 echo "FOUR_BACKEND_BUSYBOX_DISCOVERY=COMPLETE source_pinned=1 no_all_MiniC_claim=1"
