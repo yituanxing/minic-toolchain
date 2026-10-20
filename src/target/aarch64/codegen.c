@@ -1813,17 +1813,26 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
             const MinicCoreValueId src = ins->value.operand;
             size_t width;
             bool sign;
+            const char *conversion;
+            /* Lua's lua_Integer is signed LP64; C double-to-integer
+             * conversion truncates toward zero. Keep unsigned64 fail-closed
+             * until its full-range ABI oracle is introduced. */
             if (src >= fn->value_count ||
                 !minic_type_is_double(fn->values[src].type) ||
                 !scalar_integer_width(program, target, ins->type, &width, &sign) ||
-                width != 4U || !sign ||
-                fprintf(out,
-                        "  ldr d9, [sp, #%zu]\n"
-                        "  fcvtzs w9, d9\n",
-                        (size_t)src * 8U) < 0)
+                (width != 4U && width != 8U) ||
+                (width == 8U && !sign))
                 return machine_emit_reject(fn, "aarch64", name, reject_stage,
-                                    reject_block, reject_ins, __LINE__);
-            break; /* Normal 32-bit SSA store. */
+                                           reject_block, reject_ins, __LINE__);
+            conversion = width == 8U ? "  fcvtzs x9, d9\n"
+                       : sign ? "  fcvtzs w9, d9\n"
+                              : "  fcvtzu w9, d9\n";
+            if (fprintf(out, "  ldr d9, [sp, #%zu]\n",
+                        (size_t)src * 8U) < 0 ||
+                fputs(conversion, out) == EOF)
+                return machine_emit_reject(fn, "aarch64", name, reject_stage,
+                                           reject_block, reject_ins, __LINE__);
+            break;
         }
         case MINIC_CORE_INSTRUCTION_INTEGER_CONVERSION: {
             const MinicCoreValueId src = ins->value.operand;

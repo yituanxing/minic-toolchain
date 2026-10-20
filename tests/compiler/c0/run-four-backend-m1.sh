@@ -933,6 +933,8 @@ EOF
 cat > "$w/int_double.i" <<'EOF'
 double mini_s32_to_double(int value) { return (double)value; }
 int mini_double_to_s32(double value) { return (int)value; }
+long mini_double_to_s64(double value) { return (long)value; }
+unsigned int mini_double_to_u32(double value) { return (unsigned int)value; }
 double mini_s32_roundtrip(int value) {
     double tmp = (double)value;
     return tmp;
@@ -943,6 +945,8 @@ cat > "$w/driver_int_double.c" <<'EOF'
 #include <string.h>
 extern double mini_s32_to_double(int);
 extern int mini_double_to_s32(double);
+extern long mini_double_to_s64(double);
+extern unsigned int mini_double_to_u32(double);
 extern double mini_s32_roundtrip(int);
 static uint64_t bits(double value) {
     uint64_t raw;
@@ -958,6 +962,16 @@ int main(void) {
         if (bits(mini_s32_to_double(values[i])) != bits((double)values[i])) return 1;
         if (bits(mini_s32_roundtrip(values[i])) != bits((double)values[i])) return 2;
         if (mini_double_to_s32(decimals[i]) != (int)decimals[i]) return 3;
+    }
+    {
+        const double wide[] = {0.0, 1.75, -1.75,
+                               1099511627776.75, -1099511627776.75,
+                               4611686018427386880.0};
+        const double u32[] = {0.0, 1.75, 2147483648.75, 4294967295.0};
+        for (i = 0; i < sizeof(wide)/sizeof(wide[0]); ++i)
+            if (mini_double_to_s64(wide[i]) != (long)wide[i]) return 4;
+        for (i = 0; i < sizeof(u32)/sizeof(u32[0]); ++i)
+            if (mini_double_to_u32(u32[i]) != (unsigned int)u32[i]) return 5;
     }
     return 42;
 }

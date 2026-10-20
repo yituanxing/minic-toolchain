@@ -1669,16 +1669,31 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
             const MinicCoreValueId src = ins->value.operand;
             size_t width;
             bool sign;
+            const char *conversion;
+            /* LoongArch's ftintrz.l.d converts binary64 to signed64.
+             * That also covers the entire unsigned32 range: retain its
+             * low 32 bits for the Core result. Unsigned64 remains gated. */
             if (src >= fn->value_count ||
                 !minic_type_is_double(fn->values[src].type) ||
                 !scalar_integer_width(program, target, ins->type, &width, &sign) ||
-                width != 4U || !sign ||
-                !emit_sp_mem(out, "fld.d", "$ft0", (size_t)src * 8U) ||
-                fputs("  ftintrz.w.d $ft0, $ft0\n"
-                      "  movfr2gr.s $t0, $ft0\n", out) == EOF)
-                return machine_emit_reject(fn, "loongarch64", name, reject_stage,
-                                    reject_block, reject_ins, __LINE__);
-            break; /* Normal 32-bit SSA store. */
+                (width != 4U && width != 8U) ||
+                (width == 8U && !sign))
+                return machine_emit_reject(fn, "loongarch64", name,
+                                           reject_stage, reject_block,
+                                           reject_ins, __LINE__);
+            conversion = width == 4U && sign
+                ? "  ftintrz.w.d $ft0, $ft0\n"
+                  "  movfr2gr.s $t0, $ft0\n"
+                : "  ftintrz.l.d $ft0, $ft0\n"
+                  "  movfr2gr.d $t0, $ft0\n";
+            if (!emit_sp_mem(out, "fld.d", "$ft0", (size_t)src * 8U) ||
+                fputs(conversion, out) == EOF ||
+                (width == 4U && !sign &&
+                 fputs("  bstrpick.d $t0, $t0, 31, 0\n", out) == EOF))
+                return machine_emit_reject(fn, "loongarch64", name,
+                                           reject_stage, reject_block,
+                                           reject_ins, __LINE__);
+            break;
         }
         case MINIC_CORE_INSTRUCTION_INTEGER_CONVERSION: {
             const MinicCoreValueId src = ins->value.operand;
