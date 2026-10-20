@@ -300,6 +300,73 @@ for target in aarch64 loongarch64; do
             echo "FOUR_BACKEND_SQLITE=FAIL target=$target stage=$cc-QEMU" >&2
             sed -n '1,30p' "$work/$target/$cc.stderr" >&2
             if [ "$cc" = mini ] && [ "$target" = loongarch64 ]; then
+                # Recompile a disposable instrumented COPY of the exact
+                # original preprocessed amalgamation, once with GNU and once
+                # with MiniC. Each sqlite3RunParser token is recorded with
+                # its length, classification and input bytes. This is an
+                # A/B diagnostic only: acceptance still uses ORIGINAL bytes.
+                if python3 - "$input" "$work/$target/sqlite-diag.i" <<'PY'
+import pathlib, re, sys
+src = pathlib.Path(sys.argv[1]).read_text()
+rx = r'\bn\s*=\s*sqlite3GetToken\s*\(\s*\(u8\s*\*\)\s*zSql\s*,\s*&tokenType\s*\)\s*;'
+matches = list(re.finditer(rx, src))
+if len(matches) != 1:
+    print("SQLITE_PARSER_AB_INSTRUMENT=SKIP occurrences=" + str(len(matches)))
+    raise SystemExit(1)
+new = (matches[0].group(0) +
+       '\nfprintf(stderr,"SQLITE_PARSER_TOKEN n=%lld type=%d b0=%02x b1=%02x\\n",'
+       '(long long)n,tokenType,(unsigned char)zSql[0],'
+       '(unsigned char)zSql[1]);')
+src = re.sub(rx, lambda _: new, src, count=1)
+pathlib.Path(sys.argv[2]).write_text(src)
+print("SQLITE_PARSER_AB_INSTRUMENT=PASS matched=1")
+PY
+                then
+                    parser_ab_ok=1
+                    if ! "$gcc" -O0 -c -x c \
+                            "$work/$target/sqlite-diag.i" \
+                            -o "$work/$target/gnu-diag.o" \
+                            >"$work/$target/gnu-diag.compile.out" 2>"$work/$target/gnu-diag.compile.err" ||
+                       ! timeout 120s "$MINIC_CC" --target="$target-linux" \
+                            -S "$work/$target/sqlite-diag.i" \
+                            -o "$work/$target/mini-diag.s" \
+                            >"$work/$target/mini-diag.compile.out" 2>"$work/$target/mini-diag.compile.err" ||
+                       ! "$gcc" -c -x assembler "$work/$target/mini-diag.s" \
+                            -o "$work/$target/mini-diag.o"; then
+                        parser_ab_ok=0
+                        echo "SQLITE_PARSER_AB=SKIP stage=compile"
+                        tail -n 4 "$work/$target/mini-diag.compile.err" || true
+                    fi
+                    if [ "$parser_ab_ok" -eq 1 ]; then
+                        for builder in gnu mini; do
+                            if ! "$gcc" -static -I"$src" "$work/workload.c" \
+                                    "$work/$target/$builder-diag.o" \
+                                    -lm -ldl -lpthread -o "$work/$target/$builder-diag"; then
+                                parser_ab_ok=0
+                                echo "SQLITE_PARSER_AB=SKIP builder=$builder stage=link"
+                                break
+                            fi
+                            set +e
+                            timeout 30s "$qemu" "$work/$target/$builder-diag" \
+                                 >"$work/$target/$builder-diag.out" \
+                                 2>"$work/$target/$builder-diag.err"
+                            ab_status=$?
+                            set -e
+                            echo "SQLITE_PARSER_AB_RUN builder=$builder status=$ab_status"
+                        done
+                    fi
+                    if [ "$parser_ab_ok" -eq 1 ]; then
+                        grep '^SQLITE_PARSER_TOKEN' "$work/$target/gnu-diag.err" \
+                             >"$work/$target/gnu-tokens.txt" || true
+                        grep '^SQLITE_PARSER_TOKEN' "$work/$target/mini-diag.err" \
+                             >"$work/$target/mini-tokens.txt" || true
+                        echo "SQLITE_PARSER_AB_COUNTS gnu=$(wc -l < "$work/$target/gnu-tokens.txt") mini=$(wc -l < "$work/$target/mini-tokens.txt")"
+                        diff -u "$work/$target/gnu-tokens.txt" \
+                                "$work/$target/mini-tokens.txt" |
+                            head -n 60 || true
+                        tail -n 8 "$work/$target/mini-diag.err"
+                    fi
+                fi
                 # Run the same REAL MiniC-built SQLite binary under QEMU's
                 # block trace. This is a diagnostic replay, not a pass.
                 set +e
