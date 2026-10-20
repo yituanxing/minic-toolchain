@@ -154,6 +154,26 @@ int main(void) {
     return 0;
 }
 SRC
+# Independently exercise SQLite's own variadic formatting on the original
+# GNU/MiniC objects. This is a low-cost A/B before the full SQL parser:
+# no generated SQL, parser instrumentation or code changes are required.
+cat > "$work/format-ab.c" <<'SRC'
+#include <stdio.h>
+extern char *sqlite3_mprintf(const char *, ...);
+extern void sqlite3_free(void *);
+static void show(const char *label, char *s) {
+    printf("%s=%s\\n", label, s ? s : "<null>");
+    sqlite3_free(s);
+}
+int main(void) {
+    show("int_positive", sqlite3_mprintf("rowid=#%d", 1));
+    show("int_negative", sqlite3_mprintf("rowid=#%d", -1));
+    show("long_positive", sqlite3_mprintf("rowid=#%lld", 1LL));
+    show("long_negative", sqlite3_mprintf("rowid=#%lld", -1LL));
+    show("mix", sqlite3_mprintf("a=%d b=%d c=%lld d=%s", 1, 2, 3LL, "done"));
+    return 0;
+}
+SRC
 passed=0
 blocked=0
 failed=0
@@ -305,6 +325,30 @@ for target in aarch64 loongarch64; do
             echo "FOUR_BACKEND_SQLITE_LEXER=FAIL target=$target stage=GNU_QEMU_differential"
             diff -u "$work/$target/token-gnu.out" "$work/$target/token-mini.out" |
                 head -n 35 || true
+        fi
+    fi
+    # Check SQLite's vararg formatter before blaming the lexer/parser.
+    if [ "$target" = loongarch64 ]; then
+        format_ab_ok=1
+        for cc in gnu mini; do
+            if ! "$gcc" -static "$work/format-ab.c" "$work/$target/$cc.o" \\
+                    -lm -ldl -lpthread -o "$work/$target/format-$cc" ||
+               ! timeout 30s "$qemu" "$work/$target/format-$cc" \\
+                    >"$work/$target/format-$cc.out" \\
+                    2>"$work/$target/format-$cc.err"; then
+                format_ab_ok=0
+                echo "SQLITE_FORMAT_AB=SKIP builder=$cc stage=link_or_qemu"
+                break
+            fi
+        done
+        if [ "$format_ab_ok" -eq 1 ]; then
+            if cmp -s "$work/$target/format-gnu.out" "$work/$target/format-mini.out"; then
+                echo "SQLITE_FORMAT_AB=PASS target=$target GNU_QEMU_byte_exact=1"
+            else
+                echo "SQLITE_FORMAT_AB=FAIL target=$target stage=GNU_QEMU_differential"
+                diff -u "$work/$target/format-gnu.out" \\
+                        "$work/$target/format-mini.out" | head -n 40 || true
+            fi
         fi
     fi
     runtime_ok=1
