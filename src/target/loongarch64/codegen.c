@@ -1000,8 +1000,13 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                 size_t other_size, other_slots;
                 if (minic_multi_gp_record(program, target, previous,
                                           &other_size, &other_slots)) {
-                    if (gp + other_slots <= 8U) gp += other_slots;
-                    else { gp = 8U; stack += other_slots; }
+                    /* LP64D may split a two-eightbyte record between
+                     * its final available GAR and the first stack slot. */
+                    const size_t registers = gp < 8U ? 8U - gp : 0U;
+                    const size_t used = other_slots < registers
+                        ? other_slots : registers;
+                    gp += used;
+                    stack += other_slots - used;
                 } else if (minic_type_is_double(previous) && fp < 8U) {
                     ++fp;
                 } else {
@@ -1009,12 +1014,15 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                 }
             }
             for (chunk = 0U; chunk < slots; ++chunk) {
-                const bool in_reg = gp + slots <= 8U;
+                const size_t registers = gp < 8U ? 8U - gp : 0U;
+                const bool in_reg = chunk < registers;
+                const size_t stack_slot = in_reg ? 0U :
+                    stack + chunk - registers;
                 const size_t payload = size - chunk * 8U >= 8U
                     ? 8U : size - chunk * 8U;
                 if (!emit_lp64_record_chunk_parameter(out,
                         object_offset + chunk * 8U, payload,
-                        in_reg, gp + chunk, frame + (stack + chunk) * 8U))
+                        in_reg, gp + chunk, frame + stack_slot * 8U))
                     return machine_emit_reject(fn, "loongarch64", name,
                         reject_stage, reject_block, reject_ins, __LINE__);
             }
@@ -1453,12 +1461,11 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                                                &record_size, &slots))
                         return machine_emit_reject(fn, "loongarch64", name,
                               reject_stage, reject_block, reject_ins, __LINE__);
-                    if (gp_index + slots <= 8U)
-                        gp_index += slots;
-                    else {
-                        gp_index = 8U;
-                        overflow_slots += slots;
-                    }
+                    const size_t available = gp_index < 8U
+                        ? 8U - gp_index : 0U;
+                    const size_t used = slots < available ? slots : available;
+                    gp_index += used;
+                    overflow_slots += slots - used;
                     continue;
                 }
                 const MinicType type = fn->values[arg->value.value_id].type;
@@ -1488,22 +1495,25 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                         return machine_emit_reject(fn, "loongarch64", name,
                               reject_stage, reject_block, reject_ins, __LINE__);
                     for (chunk = 0U; chunk < slots; ++chunk) {
-                        const bool in_reg = gp_index + slots <= 8U;
+                        const size_t available = gp_index < 8U
+                            ? 8U - gp_index : 0U;
+                        const bool in_reg = chunk < available;
+                        const size_t stack_slot = in_reg ? 0U :
+                            stack_index + chunk - available;
                         const size_t payload = record_size - chunk * 8U >= 8U
                             ? 8U : record_size - chunk * 8U;
                         if (!emit_lp64_record_chunk_argument(
                                 out, object_offset + stack_bytes + chunk * 8U,
                                 payload, in_reg, gp_index + chunk,
-                                stack_index + chunk))
+                                stack_slot))
                             return machine_emit_reject(fn, "loongarch64", name,
                                   reject_stage, reject_block, reject_ins, __LINE__);
                     }
-                    if (gp_index + slots <= 8U)
-                        gp_index += slots;
-                    else {
-                        gp_index = 8U;
-                        stack_index += slots;
-                    }
+                    const size_t available = gp_index < 8U
+                        ? 8U - gp_index : 0U;
+                    const size_t used = slots < available ? slots : available;
+                    gp_index += used;
+                    stack_index += slots - used;
                     continue;
                 }
                 const MinicType type = fn->values[arg->value.value_id].type;
