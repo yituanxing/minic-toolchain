@@ -390,6 +390,24 @@ if entry is not None:
     print("SQLITE_PARSER_INPUT_INSTRUMENT=PASS")
 else:
     print("SQLITE_PARSER_INPUT_INSTRUMENT=SKIP")
+# SQLite builds internal SQL with sqlite3NestedParse / sqlite3VMPrintf.
+# Capture BOTH the format and its product in the original GNU/Mini copies;
+# #N is an SQLite VM register token, so an invalid "#-" is typically a
+# producer/data corruption rather than a missing lexer feature.
+nested_rx = (r'\bzSql\s*=\s*sqlite3VMPrintf\s*\(\s*db\s*,'
+             r'\s*zFormat\s*,\s*ap\s*\)\s*;')
+nested_matches = list(re.finditer(nested_rx, src))
+if len(nested_matches) == 1:
+    end = nested_matches[0].end()
+    nested_diag = (
+        '\nfprintf(stderr,'
+        '"SQLITE_NESTED_SQL fmt=%.96s sql=%.256s\\n",'
+        ' zFormat ? zFormat : "<null>",'
+        ' zSql ? zSql : "<null>");')
+    src = src[:end] + nested_diag + src[end:]
+    print("SQLITE_NESTED_SQL_INSTRUMENT=PASS")
+else:
+    print("SQLITE_NESTED_SQL_INSTRUMENT=SKIP occurrences=" + str(len(nested_matches)))
 pathlib.Path(sys.argv[2]).write_text(src)
 print("SQLITE_PARSER_AB_INSTRUMENT=PASS matched=" + str(len(matches)))
 PY
@@ -434,6 +452,10 @@ PY
                              >"$work/$target/gnu-tokens.txt" || true
                         grep '^SQLITE_PARSER_TOKEN' "$work/$target/mini-diag.err" \
                              >"$work/$target/mini-tokens.txt" || true
+                        echo "SQLITE_NESTED_SQL_AB_GNU"
+                        grep '^SQLITE_NESTED_SQL ' "$work/$target/gnu-diag.err" | head -n 12 || true
+                        echo "SQLITE_NESTED_SQL_AB_MINI"
+                        grep '^SQLITE_NESTED_SQL ' "$work/$target/mini-diag.err" | head -n 12 || true
                         echo "SQLITE_PARSER_AB_INPUT_GNU"
                         grep '^SQLITE_PARSER_INPUT' "$work/$target/gnu-diag.err" | head -n 12 || true
                         echo "SQLITE_PARSER_AB_INPUT_MINI"
