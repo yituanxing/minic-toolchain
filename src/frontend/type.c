@@ -218,6 +218,15 @@ MinicType minic_type_float64x(void) {
     return minic_type_scalar(MINIC_TYPE_BASE_FLOAT64X);
 }
 
+/* This function recognizes declared ABI builtin identities, but does not
+ * assign invented sizes or scalar machine operations to NEON/SVE vectors. */
+MinicType minic_type_aarch64_header_builtin(MinicTypeBaseKind base_kind) {
+    if (base_kind < MINIC_TYPE_BASE_AARCH64_FLOAT32X4 ||
+        base_kind > MINIC_TYPE_BASE_AARCH64_SVE_BOOL)
+        return minic_type_void();
+    return minic_type_scalar(base_kind);
+}
+
 /* A distinct, pointer-sized runtime proxy. It must never be mistaken for
  * the actual SysV array type in C type-layout queries. */
 MinicType minic_type_x86_va_list_cursor(void) {

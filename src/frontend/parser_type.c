@@ -50,6 +50,32 @@ static bool minic_parser_gnu_int128_name(const MinicParser *parser,
     return false;
 }
 
+/* AArch64 glibc includes GCC builtin NEON/SVE typedefs in otherwise
+ * scalar headers. Keep their C identities opaque and distinct: accepting
+ * the TYPE SPELLING does not enable vector layout, storage or execution. */
+static bool minic_parser_aarch64_header_builtin(const MinicParser *parser,
+                                                MinicToken token,
+                                                MinicType *out_type) {
+    MinicTypeBaseKind base;
+    if (parser == NULL || parser->target_info == NULL ||
+        parser->target_info->architecture != MINIC_TARGET_ARCH_AARCH64 ||
+        token.kind != MINIC_TOKEN_IDENTIFIER) return false;
+    if (minic_parser_token_text_equals(parser, token, "__Float32x4_t"))
+        base = MINIC_TYPE_BASE_AARCH64_FLOAT32X4;
+    else if (minic_parser_token_text_equals(parser, token, "__Float64x2_t"))
+        base = MINIC_TYPE_BASE_AARCH64_FLOAT64X2;
+    else if (minic_parser_token_text_equals(parser, token, "__SVFloat32_t"))
+        base = MINIC_TYPE_BASE_AARCH64_SVE_FLOAT32;
+    else if (minic_parser_token_text_equals(parser, token, "__SVFloat64_t"))
+        base = MINIC_TYPE_BASE_AARCH64_SVE_FLOAT64;
+    else if (minic_parser_token_text_equals(parser, token, "__SVBool_t"))
+        base = MINIC_TYPE_BASE_AARCH64_SVE_BOOL;
+    else return false;
+    if (out_type != NULL)
+        *out_type = minic_type_aarch64_header_builtin(base);
+    return true;
+}
+
 bool minic_parser_token_starts_type_name(const MinicParser *parser, MinicToken token) {
     bool int128_unsigned;
     MinicParserOrdinaryBinding nearest_binding;
@@ -75,7 +101,8 @@ bool minic_parser_token_starts_type_name(const MinicParser *parser, MinicToken t
         if (parser == NULL) {
             return false;
         }
-        if (minic_parser_token_is_gnu_typeof(parser, token)) {
+        if (minic_parser_token_is_gnu_typeof(parser, token) ||
+            minic_parser_aarch64_header_builtin(parser, token, NULL)) {
             return true;
         }
         if (parser->target_info != NULL &&
@@ -572,6 +599,9 @@ bool minic_parser_parse_type_specifiers(MinicParser *parser, MinicType *type) {
             parsed_type = minic_type_float64x();
         else
             parsed_type = minic_type_float128();
+        if (!minic_parser_advance(parser)) return false;
+    } else if (minic_parser_aarch64_header_builtin(
+                   parser, parser->current, &parsed_type)) {
         if (!minic_parser_advance(parser)) return false;
     } else if (minic_parser_identifier_is(parser, "__builtin_va_list")) {
         /* RV64 keeps the validated sequential pointer model. On x86-64
