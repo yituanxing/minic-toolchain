@@ -269,10 +269,12 @@ jobs:
           # and both real interpreter/luac binaries must match GNU/QEMU.
           sh -n tests/external/lua/probe-four-backend-frontier.sh
           make MODE=release CFLAGS=-Werror BUILD_DIR=build/toolchain-focused-t1-v2 check-four-backend-lua-accept
-          # Next pinned upstream source: compiler-object discovery only.
-          # Missing TinyCC backend capabilities are reported by type and TU
-          # without disguising incomplete link/QEMU tests as acceptance.
+          # TinyCC 0.9.27 is now a mandatory original-source acceptance:
+          # all 9/10 TUs compiled by MiniC, zero GNU C-object fallbacks,
+          # GNU assemble/link, QEMU TinyCC, and a GNU-differential C consumer.
           sh -n tests/external/tinycc/probe-four-backend-frontier.sh
+          FOUR_BACKEND_TINYCC_REQUIRE_OBJECTS=1 \
+          FOUR_BACKEND_TINYCC_REQUIRE_SMOKE=1 \
           MINIC_CC="$GITHUB_WORKSPACE/build/toolchain-focused-t1-v2/bin/minic-cc" \
             sh tests/external/tinycc/probe-four-backend-frontier.sh
 
