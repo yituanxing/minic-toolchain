@@ -255,6 +255,14 @@ editors/cmp.c editors/diff.c networking/ping.c
       fi
       next_targets=$((next_targets+1))
       echo "FOUR_BACKEND_BUSYBOX_NEXT_ACCEPT=PASS target=$target MiniC_owners=$minic_count original_Kbuild_owners=83"
+      # Next scope is exploratory: original Kconfig/Kbuild on 192
+      # selected source owners, including ash/init/mount/tar/gzip and
+      # networking. Never mask a regression of the certified 81/83 cohort.
+      if [ "${FOUR_BACKEND_BUSYBOX_WIDE:-0}" = 1 ]; then
+        FOUR_BACKEND_BUSYBOX_COHORT=wide \
+          sh tests/external/busybox/probe-four-backend-expanded.sh \
+            "$root" "$target" "$gcc" "$prefix" "$qemu" "$sysroot"
+      fi
     fi
   fi
 done
