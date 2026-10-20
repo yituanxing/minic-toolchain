@@ -131,6 +131,11 @@ for target in aarch64 loongarch64; do
             while IFS= read -r line; do
                 echo "FOUR_BACKEND_SQLITE_GLOBAL_CLASS target=$target $line"
             done
+        grep -m 12 'MINIC_SQLITE_CALL_ARGUMENT' \
+            "$work/$target/mini.err" |
+            while IFS= read -r line; do
+                echo "FOUR_BACKEND_SQLITE_CALL_ARGUMENT target=$target $line"
+            done
         grep -m 12 'MINIC_BACKEND_CALL_GATE' \
             "$work/$target/mini.err" |
             while IFS= read -r line; do

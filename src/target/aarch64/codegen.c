@@ -792,8 +792,16 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
             size_t actual_width;
             bool actual_signed;
             if (arg->kind != MINIC_CORE_CALL_ARGUMENT_VALUE ||
-                arg->value.value_id >= fn->value_count) return machine_emit_reject(fn, "aarch64", name, reject_stage,
-                                    reject_block, reject_ins, __LINE__);
+                arg->value.value_id >= fn->value_count) {
+                if (getenv("MINIC_BACKEND_CENSUS") != NULL)
+                    (void)fprintf(stderr,
+                        "MINIC_SQLITE_CALL_ARGUMENT arch=aarch64 function=%s argument=%zu arg_kind=%d fixed=%zu total=%zu expected_base=%d\n",
+                        name, j, (int)arg->kind, parameter_count, count,
+                        j < parameter_count ? (int)parameter_types[j].base_kind : -1);
+                return machine_emit_reject(fn, "aarch64", name,
+                                           reject_stage, reject_block,
+                                           reject_ins, __LINE__);
+            }
             actual = fn->values[arg->value.value_id].type;
             if (!valid_parameter_type(program, target, actual)) return machine_emit_reject(fn, "aarch64", name, reject_stage,
                                     reject_block, reject_ins, __LINE__);
@@ -2223,10 +2231,21 @@ bool minic_aarch64_write_c0_program_with_core_functions(
             success = emit_simple_global(out, program, target, obj);
         else if (obj->alias_target != MINIC_GLOBAL_OBJECT_INVALID)
             success = false;
-        if (!success && getenv("MINIC_M1_TRACE") != NULL)
-            (void)fprintf(stderr, "MINIC_M4_GLOBAL_FRONTIER arch=aarch64 name=%s init=%zu reloc=%zu\n",
-                          obj->name != NULL ? obj->name : "<unnamed>",
-                          obj->initializer_count, obj->relocation_count);
+        if (!success && getenv("MINIC_M1_TRACE") != NULL) {
+            const MinicArrayType *array = minic_type_is_array(obj->type)
+                ? minic_c0_program_array_type(program, obj->type.array_type_id) : NULL;
+            const MinicRecord *record = array != NULL &&
+                minic_type_is_record(array->element_type)
+                ? minic_c0_program_record(program, array->element_type.record_id) : NULL;
+            (void)fprintf(stderr,
+                "MINIC_M4_GLOBAL_FRONTIER arch=aarch64 name=%s init=%zu reloc=%zu type_kind=%d element_kind=%d element_count=%zu fields=%zu\n",
+                obj->name != NULL ? obj->name : "<unnamed>",
+                obj->initializer_count, obj->relocation_count,
+                (int)obj->type.base_kind,
+                array != NULL ? (int)array->element_type.base_kind : -1,
+                array != NULL ? array->element_count : 0U,
+                record != NULL ? record->field_count : 0U);
+        }
     }
     /* Linux-style full-TU census, opt-in only: identify the first reject
      * in EVERY function in one compiler invocation. The partial .s is
