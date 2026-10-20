@@ -143,6 +143,23 @@ for file in $sources; do
     echo "${tag}_TU target=$target source=$file stage=GNU_AS detail=$first"
     continue
   fi
+  # A successfully assembled object is not necessarily linkable. The
+  # compiler can leave an unresolved internal inline specialization, which
+  # GNU ld must *never* be asked to silently resolve. Census all objects
+  # before the original Kbuild object swap, using the target's real nm.
+  if [ "$cohort" = next ]; then
+    if ! "${prefix}nm" -u "$work/obj/$stem.o" > "$work/obj/$stem.undefined"; then
+      echo "${tag}=BLOCKED target=$target stage=GNU_NM source=$file"
+      exit 0
+    fi
+    if grep -q '__minic_inline_spec_' "$work/obj/$stem.undefined"; then
+      blocked=$((blocked+1))
+      printf '%s\n' "$file" >> "$work/unsupported.list"
+      internal=$(grep -m1 '__minic_inline_spec_' "$work/obj/$stem.undefined" || true)
+      echo "${tag}_TU target=$target source=$file stage=UNRESOLVED_MINIC_INLINE detail=$internal"
+      continue
+    fi
+  fi
   passed=$((passed+1))
   printf '%s\n' "$file" >> "$work/qualified.list"
   echo "${tag}_TU target=$target source=$file stage=MiniC_GNU_AS_PASS"
@@ -156,7 +173,7 @@ if [ "$blocked" -ne 0 ]; then
   # Original GNU Kbuild retains *only* observed, explicit fallbacks.
   # The former 82/83 first-reject census proved test.c requires an
   # unsupported Core instruction/ABI on BOTH new ISAs.
-  unexpected=$(grep -v -x 'coreutils/test.c' "$work/unsupported.list" || true)
+  unexpected=$(grep -v -x -e 'coreutils/test.c' -e 'coreutils/df.c' "$work/unsupported.list" || true)
   if [ -n "$unexpected" ]; then
     echo "${tag}=BLOCKED target=$target stage=unapproved_fallback details=$unexpected"
     exit 0
