@@ -182,6 +182,16 @@ jobs:
             timeout 240s sudo apt-get -o Acquire::Retries=3 update
           fi
           sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends gcc-aarch64-linux-gnu libc6-dev-arm64-cross gcc-13-loongarch64-linux-gnu libc6-dev-loong64-cross qemu-user
+          # Run the smallest QEMU dynamic-stack ABI oracles FIRST. A
+          # failure returns the exact generated assembly within seconds
+          # instead of following 179 original Kbuild rebuilds per ISA.
+          sh -n tests/compiler/c0/probe-four-backend-dynamic-stack.sh
+          MINIC_CC="$GITHUB_WORKSPACE/build/toolchain-focused-t1-v2/bin/minic-cc" \
+            sh tests/compiler/c0/probe-four-backend-dynamic-stack.sh \
+              aarch64 aarch64-linux-gnu-gcc qemu-aarch64 /usr/aarch64-linux-gnu
+          MINIC_CC="$GITHUB_WORKSPACE/build/toolchain-focused-t1-v2/bin/minic-cc" \
+            sh tests/compiler/c0/probe-four-backend-dynamic-stack.sh \
+              loongarch64 loongarch64-linux-gnu-gcc-13 qemu-loongarch64 /usr/loongarch64-linux-gnu
           # Fast first-divergence result for the active LoongArch defect.
           # Preserve every existing mandatory regression below, even when
           # SQLite is not yet accepted: report the SQLite failure at the end.
