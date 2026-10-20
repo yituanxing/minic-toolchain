@@ -104,6 +104,8 @@ fi
 total=0
 passed=0
 blocked=0
+: > "$work/qualified.list"
+: > "$work/unsupported.list"
 for file in $sources; do
   total=$((total + 1))
   stem=${file##*/}
@@ -112,6 +114,7 @@ for file in $sources; do
   output="$work/obj/$stem.s"
   if [ ! -f "$src/${file%.c}.o" ]; then
     blocked=$((blocked+1))
+    printf '%s\n' "$file" >> "$work/unsupported.list"
     echo "${tag}_TU target=$target source=$file stage=missing_Kbuild_owner"
     continue
   fi
@@ -119,6 +122,7 @@ for file in $sources; do
       -I"$src/include" -I"$src" -include "$src/include/autoconf.h" \
       "$src/$file" -o "$input" 2>"$work/obj/$stem.cpp.err"; then
     blocked=$((blocked+1))
+    printf '%s\n' "$file" >> "$work/unsupported.list"
     echo "${tag}_TU target=$target source=$file stage=GNU_CPP"
     continue
   fi
@@ -126,6 +130,7 @@ for file in $sources; do
       "$MINIC_CC" --target="$target-linux" -S "$input" -o "$output" \
       2>"$work/obj/$stem.mini.err"; then
     blocked=$((blocked+1))
+    printf '%s\n' "$file" >> "$work/unsupported.list"
     first=$(grep -m 1 -E 'MINIC_BACKEND_REJECT|error:' "$work/obj/$stem.mini.err" || true)
     echo "${tag}_TU target=$target source=$file stage=MiniC detail=$first"
     continue
@@ -133,25 +138,38 @@ for file in $sources; do
   if ! "$gcc" -c -x assembler "$output" -o "$work/obj/$stem.o" \
       2>"$work/obj/$stem.as.err"; then
     blocked=$((blocked+1))
+    printf '%s\n' "$file" >> "$work/unsupported.list"
     first=$(head -n 1 "$work/obj/$stem.as.err" || true)
     echo "${tag}_TU target=$target source=$file stage=GNU_AS detail=$first"
     continue
   fi
   passed=$((passed+1))
+  printf '%s\n' "$file" >> "$work/qualified.list"
   echo "${tag}_TU target=$target source=$file stage=MiniC_GNU_AS_PASS"
 done
 echo "${tag}_FRONTIER target=$target original_Kbuild_owners=$total MiniC_GNU_AS_pass=$passed blocked=$blocked"
-if [ "$passed" -ne "$total" ]; then
-  echo "${tag}=BLOCKED target=$target stage=selected_real_Kbuild_objects"
-  exit 0
+if [ "$blocked" -ne 0 ]; then
+  if [ "$cohort" != next ]; then
+    echo "${tag}=BLOCKED target=$target stage=selected_real_Kbuild_objects"
+    exit 0
+  fi
+  # Original GNU Kbuild retains *only* observed, explicit fallbacks.
+  # The former 82/83 first-reject census proved test.c requires an
+  # unsupported Core instruction/ABI on BOTH new ISAs.
+  unexpected=$(grep -v -x 'coreutils/test.c' "$work/unsupported.list" || true)
+  if [ -n "$unexpected" ]; then
+    echo "${tag}=BLOCKED target=$target stage=unapproved_fallback details=$unexpected"
+    exit 0
+  fi
+  echo "${tag}_GNU_FALLBACK=KNOWN target=$target owners=$blocked files=$(tr '\n' ',' < "$work/unsupported.list")"
 fi
 # Swap actual GNU Kbuild owner .o, discard composite archives, and link.
 # SHA-compare EVERY substituted object to detect silent GNU overwrites.
-for file in $sources; do
+while IFS= read -r file; do
   stem=${file##*/}
   stem=${stem%.c}
   cp "$work/obj/$stem.o" "$src/${file%.c}.o"
-done
+done < "$work/qualified.list"
 for dir in coreutils findutils; do
   rm -f "$src/$dir/built-in.o" "$src/$dir/lib.a"
 done
@@ -163,14 +181,14 @@ if ! (cd "$src" && make -j2 HOSTCC=cc CC="$gcc" \
   tail -n 22 "$work/mixed.out" "$work/mixed.err" "$src/busybox_unstripped.out" 2>/dev/null || true
   exit 0
 fi
-for file in $sources; do
+while IFS= read -r file; do
   stem=${file##*/}
   stem=${stem%.c}
   if ! cmp -s "$src/${file%.c}.o" "$work/obj/$stem.o"; then
     echo "${tag}=BLOCKED target=$target stage=GNU_overwrote_MiniC source=$file"
     exit 0
   fi
-done
+done < "$work/qualified.list"
 cp "$src/busybox" "$work/mini/busybox"
 # Controlled GNU-vs-MiniC comparisons. These original applets are tested
 # through the actual BusyBox dispatcher, with deterministic environment.
@@ -252,4 +270,4 @@ then
   echo "${tag}=BLOCKED target=$target stage=GNU_QEMU_differential"
   exit 0
 fi
-echo "${tag}=PASS target=$target original_Kbuild_owners=$total MiniC_owners=$passed GNU_remaining_owners=yes SHA_objects_verified=$passed GNU_QEMU_differential=1 full_MiniC=NO"
+echo "${tag}=PASS target=$target original_Kbuild_owners=$total MiniC_owners=$passed GNU_remaining_owners=yes SHA_objects_verified=$passed explicit_cohort_GNU_fallbacks=$blocked GNU_QEMU_differential=1 full_MiniC=NO"
