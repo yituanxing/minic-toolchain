@@ -43,7 +43,10 @@ MINIC_INCLUDES := -Iinclude -Isrc
 
 MINIC_SOURCES := \
 	src/compiler/compiler.c \
-	src/compiler/inline_specialize.c \
+	src/compiler/inline_integer.c \
+	src/compiler/inline_symbolic.c \
+	src/compiler/inline_boolean.c \
+	src/compiler/inline_reference.c \
 	src/compiler/core_reachability.c \
 	src/core/core_ir.c \
 	src/core/value_uses.c \

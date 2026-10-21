@@ -392,3 +392,28 @@ All complete specialization and CFG algorithms are source-preserved,
 with only required external linkage changes for six top-level stage
 operations. Run four-ISA GNU/QEMU and RV64 Linux owners before claiming
 the new translation-unit split is verified.
+
+## Re-audit of AST specialization families: two private dependencies only
+
+After moving 2,345 lines from the stage driver to the AST
+specialization module, a **second complete review** found four
+semantically separate families. No machine target knows about them.
+
+- `compiler/inline_integer.c`: checked integer parameter clones.
+- `compiler/inline_symbolic.c`: symbolic expression and parameter clones.
+- `compiler/inline_boolean.c`: local boolean fact cache and range clones.
+- `compiler/inline_reference.c`: final AST/non-Core reference preservation.
+
+The only cross-family implementation dependencies are two validated
+AST clone constructors, now explicitly declared in
+`inline_specialize_internal.h` (integer used by symbolic, symbolic
+used by boolean). These are **not** placed into `core/core_ir.h` or
+any backend function table. The compiler driver continues to run
+integer -> symbolic -> boolean -> final-reference stages in its
+original order and resets the per-TU boolean cache at both boundaries.
+
+The 33 original private/entry functions were checked unchanged in
+the first extraction. This second grouping preserves the same function
+bodies with exactly two required private linkage changes. RV64
+Linux/native optimized paths and the x86/AArch64/LoongArch64 backends
+remain byte-for-byte untouched by the AST organization.
