@@ -251,7 +251,7 @@ MinicCoreLowerStatus minic_core_lower_loop_statement(
     bool *terminated);
 
 /* Structured CFG: if owns source guards/fact joins, switch owns case dispatch;
- * general lower_block still owns statement traversal and loop handling. */
+ * general lower_block still owns statement traversal and label reentry. */
 MinicCoreLowerStatus minic_core_lower_if(
     MinicCoreLowerContext *context, const MinicStatement *statement,
     bool *terminated);

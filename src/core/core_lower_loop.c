@@ -457,48 +457,48 @@ MinicCoreLowerStatus minic_core_lower_loop_statement(
     MinicCoreLowerStatus status;
     if (context == NULL || statement == NULL || terminated == NULL)
         return MINIC_CORE_LOWER_ERROR;
-                const MinicBlock *local_fact_loop_body;
-                MinicBlock local_fact_single_iteration_body;
-                MinicStatementId local_fact_continue_label;
-                MinicCoreLocalIntegerConstant *loop_incoming_facts;
-                bool local_fact_single_pass;
+    const MinicBlock *local_fact_loop_body;
+    MinicBlock local_fact_single_iteration_body;
+    MinicStatementId local_fact_continue_label;
+    MinicCoreLocalIntegerConstant *loop_incoming_facts;
+    bool local_fact_single_pass;
 
-                loop_incoming_facts = minic_core_local_facts_snapshot(context);
-                if (context->source_function != NULL &&
-                    context->source_function->local_count != 0U &&
-                    loop_incoming_facts == NULL) {
-                    return MINIC_CORE_LOWER_ERROR;
-                }
+    loop_incoming_facts = minic_core_local_facts_snapshot(context);
+    if (context->source_function != NULL &&
+        context->source_function->local_count != 0U &&
+        loop_incoming_facts == NULL) {
+        return MINIC_CORE_LOWER_ERROR;
+    }
 
-                local_fact_loop_body = minic_c0_program_block(
-                    context->body->program, statement->then_block);
-                local_fact_continue_label = MINIC_STATEMENT_INVALID;
-                local_fact_single_pass =
-                    local_fact_loop_body != NULL &&
-                    minic_core_loop_normalized_do_while_zero_body(context,
-                                                  statement,
-                                                  local_fact_loop_body,
-                                                  &local_fact_single_iteration_body,
-                                                  &local_fact_continue_label) &&
-                    !minic_core_loop_normalized_do_while_block_needs_exit(context,
-                                                          &local_fact_single_iteration_body,
-                                                          local_fact_continue_label,
-                                                          true);
-                if (!local_fact_single_pass) {
-                    /* Loop-body changes invalidate specialized parameters
-                       before the initial condition and later backedges. */
-                    core_invalidate_loop_mutated_specialization_facts(context, statement);
-                    minic_core_local_facts_clear_known(context);
-                    core_restore_loop_invariant_facts(
-                        context, loop_incoming_facts, statement);
-                }
-                status = minic_core_lower_loop_cfg(
-                    context, statement, MINIC_STATEMENT_INVALID, terminated);
-                if (!local_fact_single_pass) {
-                    minic_core_local_facts_clear_known(context);
-                    core_restore_loop_invariant_facts(
-                        context, loop_incoming_facts, statement);
-                }
-                free(loop_incoming_facts);
+    local_fact_loop_body = minic_c0_program_block(
+        context->body->program, statement->then_block);
+    local_fact_continue_label = MINIC_STATEMENT_INVALID;
+    local_fact_single_pass =
+        local_fact_loop_body != NULL &&
+        minic_core_loop_normalized_do_while_zero_body(context,
+                                      statement,
+                                      local_fact_loop_body,
+                                      &local_fact_single_iteration_body,
+                                      &local_fact_continue_label) &&
+        !minic_core_loop_normalized_do_while_block_needs_exit(context,
+                                              &local_fact_single_iteration_body,
+                                              local_fact_continue_label,
+                                              true);
+    if (!local_fact_single_pass) {
+        /* Loop-body changes invalidate specialized parameters
+           before the initial condition and later backedges. */
+        core_invalidate_loop_mutated_specialization_facts(context, statement);
+        minic_core_local_facts_clear_known(context);
+        core_restore_loop_invariant_facts(
+            context, loop_incoming_facts, statement);
+    }
+    status = minic_core_lower_loop_cfg(
+        context, statement, MINIC_STATEMENT_INVALID, terminated);
+    if (!local_fact_single_pass) {
+        minic_core_local_facts_clear_known(context);
+        core_restore_loop_invariant_facts(
+            context, loop_incoming_facts, statement);
+    }
+    free(loop_incoming_facts);
     return status;
 }
