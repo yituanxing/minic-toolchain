@@ -93,6 +93,7 @@ MINIC_SOURCES := \
 	src/frontend/parser_enum.c \
 	src/frontend/parser_core.c \
 	src/frontend/parser_expression.c \
+	src/frontend/parser_builtins.c \
 	src/frontend/parser_function.c \
 	src/frontend/parser_global.c \
 	src/frontend/parser_member.c \
