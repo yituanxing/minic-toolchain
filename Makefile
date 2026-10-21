@@ -45,6 +45,7 @@ MINIC_SOURCES := \
 	src/compiler/compiler.c \
 	src/core/core_ir.c \
 	src/core/value_uses.c \
+	src/core/reentry_index.c \
 	src/core/core_lower.c \
 	src/core/core_lower_bool.c \
 	src/core/core_lower_types.c \

@@ -321,3 +321,26 @@ These are deliberately target-owned low-level machine operations;
 a future Machine IR must distinguish frame indices from explicit
 outgoing stack positions. Do not merge ISA machine registers or invent
 common LP64 opcode emission merely to deduplicate code.
+
+## Whole-compiler audit: the largest coupling is now Core lowering, not four target ABIs
+
+Re-check all repository source owners after the four-backend work: the
+largest core file, `core_lower.c`, has ~16.7k source lines, with one
+`lower_expression()` dispatch ~4.4k lines. None of these should be split
+by arbitrary file length into target-specific ABI layers: it performs
+AST/CFG and Core semantic lowering, and already consumes selected
+`TargetInfo` for C DataLayout.
+
+One real independent stateful island has now been moved intact into
+`core/reentry_index.{h,c}`: construction/cleanup of the scoped incoming
+goto/asm-goto/label-address index, indexed discarded-branch membership
+query, and internal-loop label query. The two downstream Core decision
+sites now use narrow functions, rather than directly touching the cache
+struct or counters. OOM/invalid AST retains the previous conservative
+fallback scans. It is a *process-global scoped index* and is explicitly
+not a concurrent compilation capability; do not infer thread-safety.
+
+The read-only Core SSA use visitor remains `core/value_uses.c`; full AST
+lowering stays separate from RV64 `legalize.c` and all machine-level
+frame/ABI modules. Gate with reentry/goto/switch/inline-asm regression
+and Linux original owners, not just a successful rebuild.
