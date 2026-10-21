@@ -16,7 +16,7 @@ bool minic_multi_direct_record_copy_extent(
         return false;
     dst = ins->value.record_copy.destination_address;
     src = ins->value.record_copy.source_address;
-    if ( || ins->kind != MINIC_CORE_INSTRUCTION_RECORD_COPY ||
+    if (ins->kind != MINIC_CORE_INSTRUCTION_RECORD_COPY ||
         ins->result != MINIC_CORE_VALUE_INVALID ||
         !minic_type_is_record(ins->type) ||
         dst >= fn->value_count || src >= fn->value_count ||
@@ -46,8 +46,7 @@ bool minic_multi_direct_parameter_object_location(
         return false;
     position = ins->value.parameter_object.parameter_index;
     obj_id = ins->value.parameter_object.object_id;
-    if (
-        ins->kind != MINIC_CORE_INSTRUCTION_PARAMETER_OBJECT ||
+    if (ins->kind != MINIC_CORE_INSTRUCTION_PARAMETER_OBJECT ||
         position >= incoming_plan->argument_count ||
         position >= fn->parameter_count)
         return false;
@@ -80,8 +79,7 @@ bool minic_multi_direct_scalar_store_shape(
                   : ins->value.store.address;
     value = atomic ? ins->value.atomic_store.stored_value
                    : ins->value.store.stored_value;
-    if (
-        (ins->kind != MINIC_CORE_INSTRUCTION_STORE && !atomic) ||
+    if ((ins->kind != MINIC_CORE_INSTRUCTION_STORE && !atomic) ||
         ins->result != MINIC_CORE_VALUE_INVALID ||
         addr >= fn->value_count || value >= fn->value_count ||
         !minic_type_is_pointer(fn->values[addr].type))
