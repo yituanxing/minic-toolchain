@@ -121,7 +121,7 @@ bool minic_multi_direct_lp64_calls_preflight(
              * and spill arguments by cursor, without fixed 16-element
              * arrays. Admit bounded larger calls, keeping frame/argument
              * index overflow checks fail-closed. */
-            count > 64U || parameter_count > count ||
+            count > MINIC_DIRECT_LP64_MAX_CALL_ARGUMENTS || parameter_count > count ||
             (!is_variadic && parameter_count != count) ||
             begin > fn->call_argument_count ||
             count > fn->call_argument_count - begin ||
