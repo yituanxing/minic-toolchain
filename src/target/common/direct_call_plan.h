@@ -23,10 +23,10 @@ typedef struct MinicLP64ArgumentLocation {
     size_t size_bytes, chunks;
 } MinicLP64ArgumentLocation;
 
-typedef struct MinicLP64DirectCallPlan {
+typedef struct MinicLP64ArgumentPlan {
     size_t argument_count, stack_slots, stack_bytes;
     MinicLP64ArgumentLocation arguments[MINIC_DIRECT_LP64_MAX_CALL_ARGUMENTS];
-} MinicLP64DirectCallPlan;
+} MinicLP64ArgumentPlan;
 
 /* Only previously admitted Core CALL/INDIRECT_CALL shapes. Explicitly keep
  * ABI differences: AAPCS64 whole-record spill vs LP64D split record,
@@ -35,6 +35,13 @@ bool minic_lp64_plan_direct_call(const MinicC0Program *program,
     const MinicTargetInfo *target, const MinicCoreFunction *fn,
     const MinicCoreInstruction *call, MinicLP64DirectABI abi,
     MinicDirectLP64IndirectRecord indirect_record,
-    MinicLP64DirectCallPlan *plan);
+    MinicLP64ArgumentPlan *plan);
+
+/* Identical argument-location representation for callee ingress. */
+bool minic_lp64_plan_incoming_parameters(
+    const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicCoreFunction *fn, MinicLP64DirectABI abi,
+    MinicDirectLP64IndirectRecord indirect_record,
+    MinicLP64ArgumentPlan *plan);
 
 #endif
