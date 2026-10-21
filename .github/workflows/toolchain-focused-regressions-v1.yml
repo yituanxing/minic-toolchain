@@ -206,6 +206,11 @@ jobs:
           MINIC_CC="$GITHUB_WORKSPACE/build/toolchain-focused-t1-v2/bin/minic-cc" \
             sh tests/compiler/c0/probe-four-backend-dynamic-stack.sh \
               loongarch64 loongarch64-linux-gnu-gcc-13 qemu-loongarch64 /usr/loongarch64-linux-gnu
+          # C bit-field source-to-Core contract. GNU receives matching
+          # struct state; MiniC emits only its own semantics and machine code.
+          sh -n tests/compiler/c0/probe-four-backend-bitfield-core.sh
+          MINIC_CC="$GITHUB_WORKSPACE/build/toolchain-focused-t1-v2/bin/minic-cc" \
+            sh tests/compiler/c0/probe-four-backend-bitfield-core.sh
           # Full-size (>imm12) pointer arithmetic, GNU+MiniC QEMU differential.
           sh -n tests/compiler/c0/probe-four-backend-large-pointer-stride.sh
           MINIC_CC="$GITHUB_WORKSPACE/build/toolchain-focused-t1-v2/bin/minic-cc" \
