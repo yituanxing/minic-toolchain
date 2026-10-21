@@ -193,11 +193,12 @@ static bool emit_lp64_record_chunk_parameter(FILE *out, size_t offset,
     return true;
 }
 
-static bool emit_function_body(FILE *out, const MinicC0Program *program,
+static bool emit_function_body_with_frame(FILE *out, const MinicC0Program *program,
                                const MinicTargetInfo *target,
                                const MinicFunction *decl,
                           const MinicCoreFunction *fn, size_t id,
-                          bool function_sections) {
+                          bool function_sections,
+                          MinicLP64FramePlan *frame_plan) {
     const char *name = minic_c0_function_symbol_name(decl);
     const MinicCoreBlock *block;
     MinicLP64ArgumentPlan incoming_plan;
@@ -292,8 +293,7 @@ static bool emit_function_body(FILE *out, const MinicC0Program *program,
         (void)fprintf(stderr, "MINIC_M9_GATE arch=aarch64 fn=%s stage=terminators_valid\n", name);
     reject_stage = "frame_layout";
     reject_block = SIZE_MAX;
-    if (!minic_lp64_frame_objects(program, target, fn, fn->object_count, NULL,
-                       &object_end)) {
+    if (!minic_lp64_frame_plan_objects(program, target, fn, frame_plan)) {
         if (getenv("MINIC_M1_TRACE") != NULL)
             (void)fprintf(stderr,
                           "MINIC_M8_FRAME_REJECT arch=aarch64 function=%s values=%zu objects=%zu\n",
@@ -301,12 +301,13 @@ static bool emit_function_body(FILE *out, const MinicC0Program *program,
         return minic_multi_direct_machine_reject(fn, "aarch64", name, reject_stage,
                                     reject_block, reject_ins, __LINE__);
     }
+    object_end = frame_plan->object_end;
     if (trace_cjson) (void)fprintf(stderr, "MINIC_CJSON_STAGE arch=aarch64 stage=frame_objects_ok end=%zu\n", object_end);
     ld_base = (object_end + 15U) & ~(size_t)15U;
-    if (!minic_lp64_binary128_slot(fn, ld_base, (MinicCoreValueId)fn->value_count,
-                        &object_end))
+    if (!minic_lp64_frame_plan_wide(fn, ld_base, frame_plan))
         return minic_multi_direct_machine_reject(fn, "aarch64", name, "binary128_layout",
                                    SIZE_MAX, SIZE_MAX, __LINE__);
+    object_end = frame_plan->wide_end;
     /* M24: direct and first-class indirect scalar calls share the same
      * eight integer-register ABI. Aggregate, FP, overflow arguments and
      * unsupported variadic tail types are still rejected before emission. */
@@ -487,8 +488,7 @@ static bool emit_function_body(FILE *out, const MinicC0Program *program,
                 fn->objects[obj_id].element_count != 1U ||
                 (location->kind != MINIC_LP64_ARGUMENT_RECORD &&
                  location->kind != MINIC_LP64_ARGUMENT_INDIRECT_RECORD) ||
-                !minic_lp64_frame_objects(program, target, fn, obj_id,
-                               &object_offset, NULL))
+                !minic_lp64_frame_plan_object(frame_plan, obj_id, &object_offset))
                 return minic_multi_direct_machine_reject(fn, "aarch64", name,
                     reject_stage, reject_block, reject_ins, __LINE__);
             size = location->size_bytes;
@@ -542,7 +542,7 @@ static bool emit_function_body(FILE *out, const MinicC0Program *program,
             size_t src;
             if (addr >= fn->value_count ||
                 !minic_type_is_pointer(fn->values[addr].type) ||
-                !minic_lp64_binary128_slot(fn, ld_base, value, &src) ||
+                !minic_lp64_frame_plan_wide_slot(frame_plan, value, &src) ||
                 fprintf(out, "  ldr x10, [sp, #%zu]\n"
                              "  ldr x9, [sp, #%zu]\n"
                              "  ldr x11, [sp, #%zu]\n"
@@ -562,7 +562,7 @@ static bool emit_function_body(FILE *out, const MinicC0Program *program,
             size_t src;
             if (addr >= fn->value_count ||
                 !minic_type_is_pointer(fn->values[addr].type) ||
-                !minic_lp64_binary128_slot(fn, ld_base, value, &src) ||
+                !minic_lp64_frame_plan_wide_slot(frame_plan, value, &src) ||
                 fprintf(out, "  ldr x10, [sp, #%zu]\n"
                              "  ldr q9, [sp, #%zu]\n"
                              "  str q9, [x10]\n",
@@ -772,7 +772,7 @@ static bool emit_function_body(FILE *out, const MinicC0Program *program,
         case MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT: {
             if (minic_type_is_long_double(ins->type)) {
                 size_t dst, half;
-                if (!minic_lp64_binary128_slot(fn, ld_base, ins->result, &dst))
+                if (!minic_lp64_frame_plan_wide_slot(frame_plan, ins->result, &dst))
                     return minic_multi_direct_machine_reject(fn, "aarch64", name,
                                                reject_stage, reject_block,
                                                reject_ins, __LINE__);
@@ -929,9 +929,7 @@ static bool emit_function_body(FILE *out, const MinicC0Program *program,
         case MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS: {
             size_t object_offset;
             if (ins->value.object_id >= fn->object_count ||
-                !minic_lp64_frame_objects(program, target, fn,
-                               (size_t)ins->value.object_id,
-                               &object_offset, NULL) ||
+                !minic_lp64_frame_plan_object(frame_plan, (size_t)ins->value.object_id, &object_offset) ||
                 /* Large Lua VM stack objects exceed the 16-bit movz
                  * immediate. Keep the exact DataLayout offset and
                  * materialize it in the same reserved x9 scratch. */
@@ -1202,7 +1200,7 @@ static bool emit_function_body(FILE *out, const MinicC0Program *program,
                 size_t dst;
                 if (addr >= fn->value_count ||
                     !minic_type_is_pointer(fn->values[addr].type) ||
-                    !minic_lp64_binary128_slot(fn, ld_base, ins->result, &dst) ||
+                    !minic_lp64_frame_plan_wide_slot(frame_plan, ins->result, &dst) ||
                     fprintf(out, "  ldr x10, [sp, #%zu]\n"
                                  "  ldr x9, [x10]\n"
                                  "  ldr x11, [x10, #8]\n"
@@ -1219,7 +1217,7 @@ static bool emit_function_body(FILE *out, const MinicC0Program *program,
                 size_t dst;
                 if (addr >= fn->value_count ||
                     !minic_type_is_pointer(fn->values[addr].type) ||
-                    !minic_lp64_binary128_slot(fn, ld_base, ins->result, &dst) ||
+                    !minic_lp64_frame_plan_wide_slot(frame_plan, ins->result, &dst) ||
                     fprintf(out, "  ldr x10, [sp, #%zu]\n"
                                  "  ldr q9, [x10]\n"
                                  "  str q9, [sp, #%zu]\n",
@@ -1296,8 +1294,7 @@ static bool emit_function_body(FILE *out, const MinicC0Program *program,
                 if (arg->kind == MINIC_CORE_CALL_ARGUMENT_OBJECT) {
                     size_t record_size, slots, object_offset, chunk;
                     const MinicCoreObjectId object_id = arg->value.object_id;
-                    if (!minic_lp64_frame_objects(program, target, fn, object_id,
-                                       &object_offset, NULL))
+                    if (!minic_lp64_frame_plan_object(frame_plan, object_id, &object_offset))
                         return minic_multi_direct_machine_reject(fn, "aarch64", name,
                               reject_stage, reject_block, reject_ins, __LINE__);
                     if (!minic_multi_gp_record(program, target,
@@ -1336,7 +1333,7 @@ static bool emit_function_body(FILE *out, const MinicC0Program *program,
                 const size_t slot = (size_t)arg->value.value_id * 8U + stack_bytes;
                 if (minic_type_is_long_double(type)) {
                     size_t src;
-                    if (!minic_lp64_binary128_slot(fn, ld_base, arg->value.value_id, &src))
+                    if (!minic_lp64_frame_plan_wide_slot(frame_plan, arg->value.value_id, &src))
                         return minic_multi_direct_machine_reject(fn, "aarch64", name,
                                                    reject_stage, reject_block,
                                                    reject_ins, __LINE__);
@@ -1416,8 +1413,7 @@ static bool emit_function_body(FILE *out, const MinicC0Program *program,
                     !minic_multi_gp_record(program, target, ins->type,
                                            &bytes, &slots) ||
                     bytes == 0U || bytes > 16U || slots > 2U ||
-                    !minic_lp64_frame_objects(program, target, fn, object_id,
-                                   &dst, NULL))
+                    !minic_lp64_frame_plan_object(frame_plan, object_id, &dst))
                     return minic_multi_direct_machine_reject(fn, "aarch64", name,
                                                reject_stage, reject_block,
                                                reject_ins, __LINE__);
@@ -1434,7 +1430,7 @@ static bool emit_function_body(FILE *out, const MinicC0Program *program,
             }
             if (minic_type_is_long_double(ins->type)) {
                 size_t dst;
-                if (!minic_lp64_binary128_slot(fn, ld_base, ins->result, &dst) ||
+                if (!minic_lp64_frame_plan_wide_slot(frame_plan, ins->result, &dst) ||
                     fprintf(out, "  str q0, [sp, #%zu]\n", dst) < 0)
                     return minic_multi_direct_machine_reject(fn, "aarch64", name,
                                                reject_stage, reject_block,
@@ -1581,7 +1577,7 @@ static bool emit_function_body(FILE *out, const MinicC0Program *program,
                     reject_stage, reject_block, reject_ins, __LINE__);
             if (minic_type_is_long_double(ins->type)) {
                 size_t dst;
-                if (!minic_lp64_binary128_slot(fn, ld_base, ins->result, &dst))
+                if (!minic_lp64_frame_plan_wide_slot(frame_plan, ins->result, &dst))
                     return minic_multi_direct_machine_reject(fn, "aarch64", name,
                                                reject_stage, reject_block,
                                                reject_ins, __LINE__);
@@ -1650,8 +1646,8 @@ static bool emit_function_body(FILE *out, const MinicC0Program *program,
                     !minic_type_is_int128_integer(fn->values[lhs].type) ||
                     !minic_lp64_scalar_integer_width(program, target,
                         fn->values[rhs].type, &rw, &rs) ||
-                    !minic_lp64_binary128_slot(fn, ld_base, lhs, &src_offset) ||
-                    !minic_lp64_binary128_slot(fn, ld_base, ins->result, &dst_offset) ||
+                    !minic_lp64_frame_plan_wide_slot(frame_plan, lhs, &src_offset) ||
+                    !minic_lp64_frame_plan_wide_slot(frame_plan, ins->result, &dst_offset) ||
                     fprintf(out, rw == 8U ?
                             "  ldr x10, [sp, #%zu]\n" :
                             "  ldr w10, [sp, #%zu]\n", (size_t)rhs * 8U) < 0 ||
@@ -2120,7 +2116,7 @@ static bool emit_function_body(FILE *out, const MinicC0Program *program,
                 const bool dst128 = minic_type_is_int128_integer(ins->type);
                 size_t src_offset = 0U, dst_offset = 0U;
                 if (src128) {
-                    if (!minic_lp64_binary128_slot(fn, ld_base, src, &src_offset) ||
+                    if (!minic_lp64_frame_plan_wide_slot(frame_plan, src, &src_offset) ||
                         fprintf(out, "  ldr x9, [sp, #%zu]\n"
                                      "  ldr x10, [sp, #%zu]\n",
                                 src_offset, src_offset + 8U) < 0)
@@ -2141,7 +2137,7 @@ static bool emit_function_body(FILE *out, const MinicC0Program *program,
                             reject_stage, reject_block, reject_ins, __LINE__);
                 }
                 if (dst128) {
-                    if (!minic_lp64_binary128_slot(fn, ld_base, ins->result, &dst_offset) ||
+                    if (!minic_lp64_frame_plan_wide_slot(frame_plan, ins->result, &dst_offset) ||
                         fprintf(out, "  str x9, [sp, #%zu]\n"
                                      "  str x10, [sp, #%zu]\n",
                                 dst_offset, dst_offset + 8U) < 0)
@@ -2225,8 +2221,7 @@ static bool emit_function_body(FILE *out, const MinicC0Program *program,
         case MINIC_CORE_TERMINATOR_RETURN:
             if (minic_type_is_long_double(fn->return_type)) {
                 size_t src;
-                if (!minic_lp64_binary128_slot(fn, ld_base,
-                                    block->terminator.return_value, &src) ||
+                if (!minic_lp64_frame_plan_wide_slot(frame_plan, block->terminator.return_value, &src) ||
                     fprintf(out, "  ldr q0, [sp, #%zu]\n", src) < 0)
                     return minic_multi_direct_machine_reject(fn, "aarch64", name,
                                                reject_stage, reject_block,
@@ -2325,6 +2320,21 @@ static bool emit_function_body(FILE *out, const MinicC0Program *program,
      * executable calls in the current Core block. Mirror x86's existing
      * constructor ABI and let the dynamic loader execute before main. */
     return true;
+}
+
+/* The function emitter may reject from many target-specific instruction
+ * paths. Centralize the layout lifetime here instead of adding scattered
+ * frees or changing those diagnostic/error paths. */
+static bool emit_function_body(FILE *out, const MinicC0Program *program,
+                               const MinicTargetInfo *target,
+                               const MinicFunction *decl,
+                               const MinicCoreFunction *fn, size_t id,
+                               bool function_sections) {
+    MinicLP64FramePlan frame_plan = {0};
+    bool success = emit_function_body_with_frame(
+        out, program, target, decl, fn, id, function_sections, &frame_plan);
+    minic_lp64_frame_plan_destroy(&frame_plan);
+    return success;
 }
 
 /* Translate only dynamic-frame functions through a private assembly buffer.

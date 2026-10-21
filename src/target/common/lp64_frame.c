@@ -1,25 +1,36 @@
 #include "target/common/lp64_frame.h"
+#include <stdint.h>
+#include <stdlib.h>
 
-/* Replaceable bounded frame algorithm (direct emitter mode). */
+/* Bounded function-local layout, shared by AAPCS64 and LoongArch LP64D.
+ * Identical offsets/guards to the historical per-access scans, but O(N)
+ * once per function and O(1) on the emission hot path. */
 #define MINIC_LARGE_FRAME_MAX 1048576U
 
-bool minic_lp64_frame_objects(const MinicC0Program *program,
-                          const MinicTargetInfo *target,
-                          const MinicCoreFunction *fn,
-                          size_t sought_id, size_t *sought_offset,
-                          size_t *object_end) {
+bool minic_lp64_frame_plan_objects(
+    const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicCoreFunction *fn, MinicLP64FramePlan *plan) {
     size_t pos, i;
-    if (program == NULL || target == NULL || fn == NULL ||
-        sought_id > fn->object_count ||
-        fn->value_count > 32768U || fn->object_count > 8192U)
+    if (program == NULL || target == NULL || fn == NULL || plan == NULL ||
+        fn->value_count > 32768U || fn->object_count > 8192U ||
+        (fn->object_count != 0U && fn->objects == NULL) ||
+        plan->object_offsets != NULL || plan->wide_offsets != NULL)
         return false;
+    if (fn->object_count != 0U) {
+        plan->object_offsets =
+            (size_t *)malloc(fn->object_count * sizeof(*plan->object_offsets));
+        if (plan->object_offsets == NULL) return false;
+    }
+    plan->object_count = fn->object_count;
+    plan->value_count = fn->value_count;
     pos = fn->value_count * 8U;
     for (i = 0U; i < fn->object_count; ++i) {
         const MinicCoreObject *obj = &fn->objects[i];
         size_t unit, align, extent;
         if (!minic_data_layout_type(target->data_layout, program,
                                     obj->type, &unit, &align) ||
-            obj->element_count == 0U || unit > MINIC_LARGE_FRAME_MAX / obj->element_count)
+            obj->element_count == 0U ||
+            unit > MINIC_LARGE_FRAME_MAX / obj->element_count)
             return false;
         extent = unit * obj->element_count;
         if (obj->explicit_alignment > align)
@@ -28,31 +39,61 @@ bool minic_lp64_frame_objects(const MinicC0Program *program,
             return false;
         if (pos > MINIC_LARGE_FRAME_MAX - (align - 1U)) return false;
         pos = (pos + align - 1U) & ~(align - 1U);
-        if (i == sought_id && sought_offset != NULL)
-            *sought_offset = pos;
+        plan->object_offsets[i] = pos;
         if (extent > MINIC_LARGE_FRAME_MAX - pos) return false;
         pos += extent;
     }
-    if (sought_id == fn->object_count && sought_offset != NULL)
-        *sought_offset = pos;
-    if (object_end != NULL) *object_end = pos;
+    plan->object_end = pos;
     return true;
 }
 
-bool minic_lp64_binary128_slot(const MinicCoreFunction *fn, size_t base,
-                           MinicCoreValueId id, size_t *out) {
-    size_t i, pos = base;
-    if (fn == NULL || out == NULL || id > fn->value_count ||
-        base > MINIC_LARGE_FRAME_MAX) return false;
+bool minic_lp64_frame_plan_wide(
+    const MinicCoreFunction *fn, size_t wide_base, MinicLP64FramePlan *plan) {
+    size_t i, pos = wide_base;
+    if (fn == NULL || plan == NULL || fn->value_count != plan->value_count ||
+        wide_base > MINIC_LARGE_FRAME_MAX || plan->wide_offsets != NULL ||
+        (fn->value_count != 0U && fn->values == NULL))
+        return false;
+    if (fn->value_count != 0U) {
+        plan->wide_offsets =
+            (size_t *)malloc(fn->value_count * sizeof(*plan->wide_offsets));
+        if (plan->wide_offsets == NULL) return false;
+    }
     for (i = 0U; i < fn->value_count; ++i) {
+        plan->wide_offsets[i] = SIZE_MAX;
         if (!minic_type_is_long_double(fn->values[i].type) &&
             !minic_type_is_int128_integer(fn->values[i].type)) continue;
         if (pos > MINIC_LARGE_FRAME_MAX - 16U) return false;
-        if (id == i) { *out = pos; return true; }
+        plan->wide_offsets[i] = pos;
         pos += 16U;
     }
-    if (id == fn->value_count) { *out = pos; return true; }
-    return false;
+    plan->wide_base = wide_base;
+    plan->wide_end = pos;
+    return true;
+}
+
+bool minic_lp64_frame_plan_object(
+    const MinicLP64FramePlan *plan, size_t object_id, size_t *offset) {
+    if (plan == NULL || offset == NULL || object_id >= plan->object_count ||
+        plan->object_offsets == NULL) return false;
+    *offset = plan->object_offsets[object_id];
+    return true;
+}
+
+bool minic_lp64_frame_plan_wide_slot(
+    const MinicLP64FramePlan *plan, MinicCoreValueId value_id, size_t *offset) {
+    if (plan == NULL || offset == NULL || value_id >= plan->value_count ||
+        plan->wide_offsets == NULL ||
+        plan->wide_offsets[value_id] == SIZE_MAX) return false;
+    *offset = plan->wide_offsets[value_id];
+    return true;
+}
+
+void minic_lp64_frame_plan_destroy(MinicLP64FramePlan *plan) {
+    if (plan == NULL) return;
+    free(plan->object_offsets);
+    free(plan->wide_offsets);
+    *plan = (MinicLP64FramePlan){0};
 }
 
 /* AAPCS64 reserves a separate 224-byte varargs tag/GP/FP save region.
