@@ -67,6 +67,57 @@ static bool minic_multi_gp_record(const MinicC0Program *program,
 /* Both LP64 ABIs pass >32-byte aggregate arguments by a pointer to a
  * caller-owned copy. This range excludes all 1-4 element FP/HFA classes;
  * no guessed classification for exotic or over-aligned structures. */
+/* AAPCS64 B.3 classifies HFA/HVA before B.4's >16-byte indirect
+ * composite rule. Three/four long doubles occupy 48/64 bytes but must
+ * travel in SIMD/FP registers, not through a GP pointer to a copy.
+ * Until target-specific HFA/HVA classification and marshaling exist,
+ * conservatively reject large FP/opaque records on AArch64. LP64D
+ * LoongArch explicitly classifies >16-byte records by reference. */
+static bool minic_multi_aarch64_special_aggregate_member(
+    const MinicC0Program *program, MinicType type, unsigned int depth) {
+    size_t i;
+    if (depth > 16U) return true;
+    switch (type.base_kind) {
+    case MINIC_TYPE_BASE_FLOAT:
+    case MINIC_TYPE_BASE_DOUBLE:
+    case MINIC_TYPE_BASE_LONG_DOUBLE:
+    case MINIC_TYPE_BASE_FLOAT128:
+    case MINIC_TYPE_BASE_FLOAT32:
+    case MINIC_TYPE_BASE_FLOAT64:
+    case MINIC_TYPE_BASE_FLOAT32X:
+    case MINIC_TYPE_BASE_FLOAT64X:
+    case MINIC_TYPE_BASE_AARCH64_FLOAT32X4:
+    case MINIC_TYPE_BASE_AARCH64_FLOAT64X2:
+    case MINIC_TYPE_BASE_AARCH64_SVE_FLOAT32:
+    case MINIC_TYPE_BASE_AARCH64_SVE_FLOAT64:
+    case MINIC_TYPE_BASE_AARCH64_SVE_BOOL:
+        return true;
+    default: break;
+    }
+    if (minic_type_is_array(type)) {
+        const MinicArrayType *array =
+            minic_c0_program_array_type(program, type.array_type_id);
+        return array == NULL ||
+            minic_multi_aarch64_special_aggregate_member(
+                program, array->element_type, depth + 1U);
+    }
+    if (minic_type_is_record(type)) {
+        const MinicRecord *record =
+            minic_c0_program_record(program, type.record_id);
+        if (record == NULL || !record->is_complete) return true;
+        for (i = 0U; i < record->field_count; ++i) {
+            const MinicRecordField *field =
+                minic_c0_record_field(record, i);
+            if (field == NULL ||
+                minic_multi_aarch64_special_aggregate_member(
+                    program, field->type, depth + 1U))
+                return true;
+        }
+        return false;
+    }
+    return !minic_type_is_integer(type) && !minic_type_is_pointer(type);
+}
+
 static bool minic_multi_indirect_record(const MinicC0Program *program,
                                         const MinicTargetInfo *target,
                                         MinicType type, size_t *bytes) {
@@ -75,7 +126,9 @@ static bool minic_multi_indirect_record(const MinicC0Program *program,
         !minic_type_is_record(type) ||
         !minic_data_layout_type(target->data_layout, program, type,
                                 &size, &align) ||
-        size <= 32U || size > 2048U || align == 0U || align > 16U)
+        size <= 32U || size > 2048U || align == 0U || align > 16U ||
+        (target->architecture == MINIC_TARGET_ARCH_AARCH64 &&
+         minic_multi_aarch64_special_aggregate_member(program, type, 0U)))
         return false;
     *bytes = size;
     return true;
