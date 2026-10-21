@@ -199,7 +199,7 @@ static bool emit_function_body(FILE *out, const MinicC0Program *program,
                           bool function_sections) {
     const char *name = minic_c0_function_symbol_name(decl);
     const MinicCoreBlock *block;
-    size_t frame, i, object_end, save_offset, ld_base;
+    size_t frame = 0U, i, object_end, save_offset, ld_base;
     bool has_direct_calls = false;
     bool dynamic_frame = false;
     const char *reject_stage = "function_preflight";
@@ -317,10 +317,15 @@ static bool emit_function_body(FILE *out, const MinicC0Program *program,
     if (!minic_lp64_finalize_direct_frame(
             object_end, has_direct_calls, dynamic_frame, va_count != 0U,
             MINIC_LP64_FRAME_AAPCS64,
-            &save_offset, &va_base, &frame))
+            &save_offset, &va_base, &frame)) {
+        if (getenv("MINIC_M1_TRACE") != NULL && frame > MINIC_LARGE_FRAME_MAX)
+            (void)fprintf(stderr,
+                          "MINIC_M8_FRAME_CAP arch=aarch64 function=%s frame=%zu end=%zu\n",
+                          name, frame, object_end);
         return minic_multi_direct_machine_reject(fn, "aarch64", name,
                                                 reject_stage, reject_block,
                                                 reject_ins, __LINE__);
+    }
     if (trace_cjson) (void)fprintf(stderr, "MINIC_CJSON_STAGE arch=aarch64 stage=machine_emit frame=%zu\n", frame);
     if (function_sections) {
         if (fprintf(out, ".section .text.%s,\"ax\",%%progbits\n", name) < 0)
