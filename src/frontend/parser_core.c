@@ -194,7 +194,7 @@ size_t minic_parser_span_length(MinicSourceSpan span) {
 }
 
 /* One lexical identifier matcher for general grammar and builtin parsing. */
-bool minic_parser_current_identifier_is(const MinicParser *parser, const char *name) {
+bool minic_parser_current_identifier_lexeme_equals_cstr(const MinicParser *parser, const char *name) {
     size_t length;
 
     if (parser == NULL || name == NULL || parser->current.kind != MINIC_TOKEN_IDENTIFIER) {

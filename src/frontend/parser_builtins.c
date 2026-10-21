@@ -87,7 +87,7 @@ static bool parse_builtin_memcpy(MinicParser *parser, MinicExpressionId *express
     MinicSourcePosition end;
 
     if (parser == NULL || expression_id == NULL ||
-        !minic_parser_current_identifier_is(parser, "__builtin_memcpy")) {
+        !minic_parser_current_identifier_lexeme_equals_cstr(parser, "__builtin_memcpy")) {
         return false;
     }
     begin = parser->current.span.begin;
@@ -185,7 +185,7 @@ static bool parse_builtin_memmove(MinicParser *parser, MinicExpressionId *expres
     MinicSourcePosition end;
 
     if (parser == NULL || expression_id == NULL ||
-        !minic_parser_current_identifier_is(parser, "__builtin_memmove")) {
+        !minic_parser_current_identifier_lexeme_equals_cstr(parser, "__builtin_memmove")) {
         return false;
     }
     begin = parser->current.span.begin;
@@ -279,7 +279,7 @@ static bool parse_builtin_memset(MinicParser *parser, MinicExpressionId *express
     MinicSourcePosition end;
 
     if (parser == NULL || expression_id == NULL ||
-        !minic_parser_current_identifier_is(parser, "__builtin_memset")) {
+        !minic_parser_current_identifier_lexeme_equals_cstr(parser, "__builtin_memset")) {
         return false;
     }
     begin = parser->current.span.begin;
@@ -320,7 +320,7 @@ static bool parse_builtin_extract_return_addr(MinicParser *parser,
     MinicType void_pointer_type;
 
     if (parser == NULL || expression_id == NULL ||
-        !minic_parser_current_identifier_is(parser, "__builtin_extract_return_addr")) {
+        !minic_parser_current_identifier_lexeme_equals_cstr(parser, "__builtin_extract_return_addr")) {
         return false;
     }
     begin = parser->current.span.begin;
@@ -366,7 +366,7 @@ static bool parse_builtin_expect(MinicParser *parser, MinicExpressionId *express
     int64_t expected_value;
 
     if (parser == NULL || expression_id == NULL ||
-        !minic_parser_current_identifier_is(parser, "__builtin_expect")) {
+        !minic_parser_current_identifier_lexeme_equals_cstr(parser, "__builtin_expect")) {
         return false;
     }
     begin = parser->current.span.begin;
@@ -423,7 +423,7 @@ static bool parse_builtin_atomic_load(MinicParser *parser,
     size_t bytes;
     int64_t order;
     if (parser == NULL || expression_id == NULL ||
-        !minic_parser_current_identifier_is(parser, "__atomic_load_n")) return false;
+        !minic_parser_current_identifier_lexeme_equals_cstr(parser, "__atomic_load_n")) return false;
     begin = parser->current.span.begin;
     if (!minic_parser_advance(parser) ||
         !minic_parser_expect(parser, MINIC_TOKEN_LPAREN,
@@ -475,7 +475,7 @@ static bool parse_builtin_atomic_store(MinicParser *parser,
     int64_t order;
     size_t bytes;
     if (parser == NULL || expression_id == NULL ||
-        !minic_parser_current_identifier_is(parser, "__atomic_store_n")) return false;
+        !minic_parser_current_identifier_lexeme_equals_cstr(parser, "__atomic_store_n")) return false;
     begin = parser->current.span.begin;
     if (!minic_parser_advance(parser) ||
         !minic_parser_expect(parser, MINIC_TOKEN_LPAREN,
@@ -532,7 +532,7 @@ static bool parse_builtin_prefetch(MinicParser *parser, MinicExpressionId *expre
     int64_t locality = 3;
 
     if (parser == NULL || expression_id == NULL ||
-        !minic_parser_current_identifier_is(parser, "__builtin_prefetch")) {
+        !minic_parser_current_identifier_lexeme_equals_cstr(parser, "__builtin_prefetch")) {
         return false;
     }
     begin = parser->current.span.begin;
@@ -896,7 +896,7 @@ parse_generic_selection(MinicParser *parser, MinicExpressionId *expression_id, b
     bool saw_matching_type = false;
     bool saw_default = false;
 
-    if (!minic_parser_current_identifier_is(parser, "_Generic") || !minic_parser_advance(parser) ||
+    if (!minic_parser_current_identifier_lexeme_equals_cstr(parser, "_Generic") || !minic_parser_advance(parser) ||
         !minic_parser_expect(parser, MINIC_TOKEN_LPAREN, "expected '(' after _Generic") ||
         !minic_parser_expression_parse_internal(parser, &controlling_id, 0U, true)) {
         return false;
@@ -975,7 +975,7 @@ static bool parse_builtin_types_compatible_p(MinicParser *parser,
     MinicType left_type;
     MinicType right_type;
 
-    if (!minic_parser_current_identifier_is(parser, "__builtin_types_compatible_p")) {
+    if (!minic_parser_current_identifier_lexeme_equals_cstr(parser, "__builtin_types_compatible_p")) {
         return false;
     }
     begin = parser->current.span.begin;
@@ -1010,7 +1010,7 @@ parse_builtin_choose_expr(MinicParser *parser, MinicExpressionId *expression_id,
     MinicConstValue condition_value;
     bool condition_is_zero;
 
-    if (!minic_parser_current_identifier_is(parser, "__builtin_choose_expr")) {
+    if (!minic_parser_current_identifier_lexeme_equals_cstr(parser, "__builtin_choose_expr")) {
         return false;
     }
     if (!minic_parser_advance(parser) ||
@@ -1137,7 +1137,7 @@ static bool parse_builtin_object_size(MinicParser *parser, MinicExpressionId *ex
     uint64_t result_bits;
 
     if (parser == NULL || expression_id == NULL ||
-        !minic_parser_current_identifier_is(parser, "__builtin_object_size")) {
+        !minic_parser_current_identifier_lexeme_equals_cstr(parser, "__builtin_object_size")) {
         return false;
     }
     begin = parser->current.span.begin;
@@ -1200,7 +1200,7 @@ static bool parse_builtin_constant_p(MinicParser *parser, MinicExpressionId *exp
     bool is_constant;
 
     if (parser == NULL || expression_id == NULL ||
-        !minic_parser_current_identifier_is(parser, "__builtin_constant_p")) {
+        !minic_parser_current_identifier_lexeme_equals_cstr(parser, "__builtin_constant_p")) {
         return false;
     }
     begin = parser->current.span.begin;
@@ -1253,7 +1253,7 @@ static bool parse_builtin_call_frame_address(MinicParser *parser,
     int64_t level;
 
     if (parser == NULL || spelling == NULL || expression_id == NULL ||
-        !minic_parser_current_identifier_is(parser, spelling)) {
+        !minic_parser_current_identifier_lexeme_equals_cstr(parser, spelling)) {
         return false;
     }
     begin = parser->current.span.begin;
@@ -1304,12 +1304,12 @@ static bool parse_builtin_positive_infinity(MinicParser *parser, MinicExpression
      * The existing __builtin_huge_val() is binary64; the *f form must
      * preserve binary32 storage and be promoted only by C conversions. */
     if (parser == NULL || expression_id == NULL ||
-        (!minic_parser_current_identifier_is(parser, "__builtin_huge_val") &&
-         !minic_parser_current_identifier_is(parser, "__builtin_inf") &&
-         !minic_parser_current_identifier_is(parser, "__builtin_inff"))) {
+        (!minic_parser_current_identifier_lexeme_equals_cstr(parser, "__builtin_huge_val") &&
+         !minic_parser_current_identifier_lexeme_equals_cstr(parser, "__builtin_inf") &&
+         !minic_parser_current_identifier_lexeme_equals_cstr(parser, "__builtin_inff"))) {
         return false;
     }
-    is_float = minic_parser_current_identifier_is(parser, "__builtin_inff");
+    is_float = minic_parser_current_identifier_lexeme_equals_cstr(parser, "__builtin_inff");
     begin = parser->current.span.begin;
     if (!minic_parser_advance(parser) ||
         !minic_parser_expect(
@@ -1340,7 +1340,7 @@ static bool parse_builtin_alloca(MinicParser *parser, MinicExpressionId *express
     MinicSourcePosition end;
 
     if (parser == NULL || expression_id == NULL ||
-        !minic_parser_current_identifier_is(parser, "__builtin_alloca")) {
+        !minic_parser_current_identifier_lexeme_equals_cstr(parser, "__builtin_alloca")) {
         return false;
     }
     begin = parser->current.span.begin;
@@ -1402,7 +1402,7 @@ static bool parse_builtin_unreachable(MinicParser *parser, MinicExpressionId *ex
     MinicSourcePosition begin;
 
     if (parser == NULL || expression_id == NULL ||
-        !minic_parser_current_identifier_is(parser, "__builtin_unreachable")) {
+        !minic_parser_current_identifier_lexeme_equals_cstr(parser, "__builtin_unreachable")) {
         return false;
     }
     begin = parser->current.span.begin;
@@ -1438,7 +1438,7 @@ static bool parse_builtin_unary(MinicParser *parser,
     MinicType argument_type;
 
     if (parser == NULL || spelling == NULL || expression_id == NULL ||
-        !minic_parser_current_identifier_is(parser, spelling)) {
+        !minic_parser_current_identifier_lexeme_equals_cstr(parser, spelling)) {
         return false;
     }
     switch (operator_kind) {
@@ -1850,28 +1850,28 @@ bool minic_parser_try_builtin_primary_early(
         return false;
     *handled = false;
 
-    if (minic_parser_current_identifier_is(parser, "__builtin_va_start")) {
+    if (minic_parser_current_identifier_lexeme_equals_cstr(parser, "__builtin_va_start")) {
         if (!parse_builtin_va_start(parser, &primary_id)) {
             return false;
         }
         *handled = true;
         return minic_parser_finish_value_expression(parser, primary_id, decay_array, expression_id);
     }
-    if (minic_parser_current_identifier_is(parser, "__builtin_va_copy")) {
+    if (minic_parser_current_identifier_lexeme_equals_cstr(parser, "__builtin_va_copy")) {
         if (!parse_builtin_va_copy(parser, &primary_id)) {
             return false;
         }
         *handled = true;
         return minic_parser_finish_value_expression(parser, primary_id, decay_array, expression_id);
     }
-    if (minic_parser_current_identifier_is(parser, "__builtin_va_end")) {
+    if (minic_parser_current_identifier_lexeme_equals_cstr(parser, "__builtin_va_end")) {
         if (!parse_builtin_va_end(parser, &primary_id)) {
             return false;
         }
         *handled = true;
         return minic_parser_finish_value_expression(parser, primary_id, decay_array, expression_id);
     }
-    if (minic_parser_current_identifier_is(parser, "__builtin_va_arg")) {
+    if (minic_parser_current_identifier_lexeme_equals_cstr(parser, "__builtin_va_arg")) {
         if (!parse_builtin_va_arg(parser, &primary_id) ||
             !minic_parser_parse_postfix(parser, primary_id, &primary_id)) {
             return false;
@@ -1879,9 +1879,9 @@ bool minic_parser_try_builtin_primary_early(
         *handled = true;
         return minic_parser_finish_value_expression(parser, primary_id, decay_array, expression_id);
     }
-    if (minic_parser_current_identifier_is(parser, "__builtin_huge_val") ||
-        minic_parser_current_identifier_is(parser, "__builtin_inf") ||
-        minic_parser_current_identifier_is(parser, "__builtin_inff")) {
+    if (minic_parser_current_identifier_lexeme_equals_cstr(parser, "__builtin_huge_val") ||
+        minic_parser_current_identifier_lexeme_equals_cstr(parser, "__builtin_inf") ||
+        minic_parser_current_identifier_lexeme_equals_cstr(parser, "__builtin_inff")) {
         if (!parse_builtin_positive_infinity(parser, &primary_id) ||
             !minic_parser_parse_postfix(parser, primary_id, &primary_id)) {
             return false;
@@ -1889,7 +1889,7 @@ bool minic_parser_try_builtin_primary_early(
         *handled = true;
         return minic_parser_finish_value_expression(parser, primary_id, decay_array, expression_id);
     }
-    if (minic_parser_current_identifier_is(parser, "__builtin_alloca")) {
+    if (minic_parser_current_identifier_lexeme_equals_cstr(parser, "__builtin_alloca")) {
         if (!parse_builtin_alloca(parser, &primary_id) ||
             !minic_parser_parse_postfix(parser, primary_id, &primary_id)) {
             return false;
@@ -1897,7 +1897,7 @@ bool minic_parser_try_builtin_primary_early(
         *handled = true;
         return minic_parser_finish_value_expression(parser, primary_id, decay_array, expression_id);
     }
-    if (minic_parser_current_identifier_is(parser, "__builtin_unreachable")) {
+    if (minic_parser_current_identifier_lexeme_equals_cstr(parser, "__builtin_unreachable")) {
         if (!parse_builtin_unreachable(parser, &primary_id) ||
             !minic_parser_parse_postfix(parser, primary_id, &primary_id)) {
             return false;
@@ -1905,7 +1905,7 @@ bool minic_parser_try_builtin_primary_early(
         *handled = true;
         return minic_parser_finish_value_expression(parser, primary_id, decay_array, expression_id);
     }
-    if (minic_parser_current_identifier_is(parser, "__builtin_return_address")) {
+    if (minic_parser_current_identifier_lexeme_equals_cstr(parser, "__builtin_return_address")) {
         if (!parse_builtin_call_frame_address(
                 parser, MINIC_CALL_FRAME_ADDRESS_RETURN, "__builtin_return_address", &primary_id) ||
             !minic_parser_parse_postfix(parser, primary_id, &primary_id)) {
@@ -1914,7 +1914,7 @@ bool minic_parser_try_builtin_primary_early(
         *handled = true;
         return minic_parser_finish_value_expression(parser, primary_id, decay_array, expression_id);
     }
-    if (minic_parser_current_identifier_is(parser, "__builtin_frame_address")) {
+    if (minic_parser_current_identifier_lexeme_equals_cstr(parser, "__builtin_frame_address")) {
         if (!parse_builtin_call_frame_address(
                 parser, MINIC_CALL_FRAME_ADDRESS_FRAME, "__builtin_frame_address", &primary_id) ||
             !minic_parser_parse_postfix(parser, primary_id, &primary_id)) {
@@ -1923,28 +1923,28 @@ bool minic_parser_try_builtin_primary_early(
         *handled = true;
         return minic_parser_finish_value_expression(parser, primary_id, decay_array, expression_id);
     }
-    if (minic_parser_current_identifier_is(parser, "__builtin_bswap16")) {
+    if (minic_parser_current_identifier_lexeme_equals_cstr(parser, "__builtin_bswap16")) {
         if (!parse_builtin_unary(
                 parser, MINIC_BUILTIN_UNARY_BSWAP16, "__builtin_bswap16", &primary_id) ||
             !minic_parser_parse_postfix(parser, primary_id, &primary_id)) return false;
         *handled = true;
         return minic_parser_finish_value_expression(parser, primary_id, decay_array, expression_id);
     }
-    if (minic_parser_current_identifier_is(parser, "__builtin_bswap32")) {
+    if (minic_parser_current_identifier_lexeme_equals_cstr(parser, "__builtin_bswap32")) {
         if (!parse_builtin_unary(
                 parser, MINIC_BUILTIN_UNARY_BSWAP32, "__builtin_bswap32", &primary_id) ||
             !minic_parser_parse_postfix(parser, primary_id, &primary_id)) return false;
         *handled = true;
         return minic_parser_finish_value_expression(parser, primary_id, decay_array, expression_id);
     }
-    if (minic_parser_current_identifier_is(parser, "__builtin_bswap64")) {
+    if (minic_parser_current_identifier_lexeme_equals_cstr(parser, "__builtin_bswap64")) {
         if (!parse_builtin_unary(
                 parser, MINIC_BUILTIN_UNARY_BSWAP64, "__builtin_bswap64", &primary_id) ||
             !minic_parser_parse_postfix(parser, primary_id, &primary_id)) return false;
         *handled = true;
         return minic_parser_finish_value_expression(parser, primary_id, decay_array, expression_id);
     }
-    if (minic_parser_current_identifier_is(parser, "__builtin_clz")) {
+    if (minic_parser_current_identifier_lexeme_equals_cstr(parser, "__builtin_clz")) {
         if (!parse_builtin_unary(parser, MINIC_BUILTIN_UNARY_CLZ, "__builtin_clz", &primary_id) ||
             !minic_parser_parse_postfix(parser, primary_id, &primary_id)) {
             return false;
@@ -1952,7 +1952,7 @@ bool minic_parser_try_builtin_primary_early(
         *handled = true;
         return minic_parser_finish_value_expression(parser, primary_id, decay_array, expression_id);
     }
-    if (minic_parser_current_identifier_is(parser, "__builtin_clzl")) {
+    if (minic_parser_current_identifier_lexeme_equals_cstr(parser, "__builtin_clzl")) {
         if (!parse_builtin_unary(parser, MINIC_BUILTIN_UNARY_CLZL, "__builtin_clzl", &primary_id) ||
             !minic_parser_parse_postfix(parser, primary_id, &primary_id)) {
             return false;
@@ -1960,7 +1960,7 @@ bool minic_parser_try_builtin_primary_early(
         *handled = true;
         return minic_parser_finish_value_expression(parser, primary_id, decay_array, expression_id);
     }
-    if (minic_parser_current_identifier_is(parser, "__builtin_clzll")) {
+    if (minic_parser_current_identifier_lexeme_equals_cstr(parser, "__builtin_clzll")) {
         if (!parse_builtin_unary(
                 parser, MINIC_BUILTIN_UNARY_CLZLL, "__builtin_clzll", &primary_id) ||
             !minic_parser_parse_postfix(parser, primary_id, &primary_id)) {
@@ -1969,7 +1969,7 @@ bool minic_parser_try_builtin_primary_early(
         *handled = true;
         return minic_parser_finish_value_expression(parser, primary_id, decay_array, expression_id);
     }
-    if (minic_parser_current_identifier_is(parser, "__builtin_ctz")) {
+    if (minic_parser_current_identifier_lexeme_equals_cstr(parser, "__builtin_ctz")) {
         if (!parse_builtin_unary(parser, MINIC_BUILTIN_UNARY_CTZ, "__builtin_ctz", &primary_id) ||
             !minic_parser_parse_postfix(parser, primary_id, &primary_id)) {
             return false;
@@ -1977,7 +1977,7 @@ bool minic_parser_try_builtin_primary_early(
         *handled = true;
         return minic_parser_finish_value_expression(parser, primary_id, decay_array, expression_id);
     }
-    if (minic_parser_current_identifier_is(parser, "__builtin_ctzl")) {
+    if (minic_parser_current_identifier_lexeme_equals_cstr(parser, "__builtin_ctzl")) {
         if (!parse_builtin_unary(parser, MINIC_BUILTIN_UNARY_CTZL, "__builtin_ctzl", &primary_id) ||
             !minic_parser_parse_postfix(parser, primary_id, &primary_id)) {
             return false;
@@ -1985,7 +1985,7 @@ bool minic_parser_try_builtin_primary_early(
         *handled = true;
         return minic_parser_finish_value_expression(parser, primary_id, decay_array, expression_id);
     }
-    if (minic_parser_current_identifier_is(parser, "__builtin_ctzll")) {
+    if (minic_parser_current_identifier_lexeme_equals_cstr(parser, "__builtin_ctzll")) {
         if (!parse_builtin_unary(
                 parser, MINIC_BUILTIN_UNARY_CTZLL, "__builtin_ctzll", &primary_id) ||
             !minic_parser_parse_postfix(parser, primary_id, &primary_id)) {
@@ -1994,7 +1994,7 @@ bool minic_parser_try_builtin_primary_early(
         *handled = true;
         return minic_parser_finish_value_expression(parser, primary_id, decay_array, expression_id);
     }
-    if (minic_parser_current_identifier_is(parser, "__builtin_ffs")) {
+    if (minic_parser_current_identifier_lexeme_equals_cstr(parser, "__builtin_ffs")) {
         if (!parse_builtin_unary(
                 parser, MINIC_BUILTIN_UNARY_FFSLL, "__builtin_ffs", &primary_id) ||
             !minic_parser_parse_postfix(parser, primary_id, &primary_id)) {
@@ -2003,7 +2003,7 @@ bool minic_parser_try_builtin_primary_early(
         *handled = true;
         return minic_parser_finish_value_expression(parser, primary_id, decay_array, expression_id);
     }
-    if (minic_parser_current_identifier_is(parser, "__builtin_ffsl")) {
+    if (minic_parser_current_identifier_lexeme_equals_cstr(parser, "__builtin_ffsl")) {
         if (!parse_builtin_unary(
                 parser, MINIC_BUILTIN_UNARY_FFSLL, "__builtin_ffsl", &primary_id) ||
             !minic_parser_parse_postfix(parser, primary_id, &primary_id)) {
@@ -2012,7 +2012,7 @@ bool minic_parser_try_builtin_primary_early(
         *handled = true;
         return minic_parser_finish_value_expression(parser, primary_id, decay_array, expression_id);
     }
-    if (minic_parser_current_identifier_is(parser, "__builtin_ffsll")) {
+    if (minic_parser_current_identifier_lexeme_equals_cstr(parser, "__builtin_ffsll")) {
         if (!parse_builtin_unary(
                 parser, MINIC_BUILTIN_UNARY_FFSLL, "__builtin_ffsll", &primary_id) ||
             !minic_parser_parse_postfix(parser, primary_id, &primary_id)) {
@@ -2021,7 +2021,7 @@ bool minic_parser_try_builtin_primary_early(
         *handled = true;
         return minic_parser_finish_value_expression(parser, primary_id, decay_array, expression_id);
     }
-    if (minic_parser_current_identifier_is(parser, "__builtin_isdigit")) {
+    if (minic_parser_current_identifier_lexeme_equals_cstr(parser, "__builtin_isdigit")) {
         if (!parse_builtin_unary(
                 parser, MINIC_BUILTIN_UNARY_ISDIGIT, "__builtin_isdigit", &primary_id) ||
             !minic_parser_parse_postfix(parser, primary_id, &primary_id)) {
@@ -2030,7 +2030,7 @@ bool minic_parser_try_builtin_primary_early(
         *handled = true;
         return minic_parser_finish_value_expression(parser, primary_id, decay_array, expression_id);
     }
-    if (minic_parser_current_identifier_is(parser, "__builtin_constant_p")) {
+    if (minic_parser_current_identifier_lexeme_equals_cstr(parser, "__builtin_constant_p")) {
         if (!parse_builtin_constant_p(parser, &primary_id) ||
             !minic_parser_parse_postfix(parser, primary_id, &primary_id)) {
             return false;
@@ -2038,7 +2038,7 @@ bool minic_parser_try_builtin_primary_early(
         *handled = true;
         return minic_parser_finish_value_expression(parser, primary_id, decay_array, expression_id);
     }
-    if (minic_parser_current_identifier_is(parser, "__builtin_object_size")) {
+    if (minic_parser_current_identifier_lexeme_equals_cstr(parser, "__builtin_object_size")) {
         if (!parse_builtin_object_size(parser, &primary_id) ||
             !minic_parser_parse_postfix(parser, primary_id, &primary_id)) {
             return false;
@@ -2046,7 +2046,7 @@ bool minic_parser_try_builtin_primary_early(
         *handled = true;
         return minic_parser_finish_value_expression(parser, primary_id, decay_array, expression_id);
     }
-    if (minic_parser_current_identifier_is(parser, "__builtin_add_overflow")) {
+    if (minic_parser_current_identifier_lexeme_equals_cstr(parser, "__builtin_add_overflow")) {
         if (!parse_builtin_overflow(parser, MINIC_OVERFLOW_ADD, &primary_id) ||
             !minic_parser_parse_postfix(parser, primary_id, &primary_id)) {
             return false;
@@ -2054,7 +2054,7 @@ bool minic_parser_try_builtin_primary_early(
         *handled = true;
         return minic_parser_finish_value_expression(parser, primary_id, decay_array, expression_id);
     }
-    if (minic_parser_current_identifier_is(parser, "__builtin_sub_overflow")) {
+    if (minic_parser_current_identifier_lexeme_equals_cstr(parser, "__builtin_sub_overflow")) {
         if (!parse_builtin_overflow(parser, MINIC_OVERFLOW_SUBTRACT, &primary_id) ||
             !minic_parser_parse_postfix(parser, primary_id, &primary_id)) {
             return false;
@@ -2062,7 +2062,7 @@ bool minic_parser_try_builtin_primary_early(
         *handled = true;
         return minic_parser_finish_value_expression(parser, primary_id, decay_array, expression_id);
     }
-    if (minic_parser_current_identifier_is(parser, "__builtin_mul_overflow")) {
+    if (minic_parser_current_identifier_lexeme_equals_cstr(parser, "__builtin_mul_overflow")) {
         if (!parse_builtin_overflow(parser, MINIC_OVERFLOW_MULTIPLY, &primary_id) ||
             !minic_parser_parse_postfix(parser, primary_id, &primary_id)) {
             return false;
@@ -2070,7 +2070,7 @@ bool minic_parser_try_builtin_primary_early(
         *handled = true;
         return minic_parser_finish_value_expression(parser, primary_id, decay_array, expression_id);
     }
-    if (minic_parser_current_identifier_is(parser, "__builtin_types_compatible_p")) {
+    if (minic_parser_current_identifier_lexeme_equals_cstr(parser, "__builtin_types_compatible_p")) {
         if (!parse_builtin_types_compatible_p(parser, &primary_id) ||
             !minic_parser_parse_postfix(parser, primary_id, &primary_id)) {
             return false;
@@ -2078,7 +2078,7 @@ bool minic_parser_try_builtin_primary_early(
         *handled = true;
         return minic_parser_finish_value_expression(parser, primary_id, decay_array, expression_id);
     }
-    if (minic_parser_current_identifier_is(parser, "__builtin_choose_expr")) {
+    if (minic_parser_current_identifier_lexeme_equals_cstr(parser, "__builtin_choose_expr")) {
         if (!parse_builtin_choose_expr(parser, &primary_id, decay_array) ||
             !minic_parser_parse_postfix(parser, primary_id, &primary_id)) {
             return false;
@@ -2086,7 +2086,7 @@ bool minic_parser_try_builtin_primary_early(
         *handled = true;
         return minic_parser_finish_value_expression(parser, primary_id, decay_array, expression_id);
     }
-    if (minic_parser_current_identifier_is(parser, "_Generic")) {
+    if (minic_parser_current_identifier_lexeme_equals_cstr(parser, "_Generic")) {
         if (!parse_generic_selection(parser, &primary_id, decay_array) ||
             !minic_parser_parse_postfix(parser, primary_id, &primary_id)) {
             return false;
@@ -2105,21 +2105,21 @@ bool minic_parser_try_builtin_primary_late(
         return false;
     *handled = false;
 
-    if (minic_parser_current_identifier_is(parser, "__atomic_load_n")) {
+    if (minic_parser_current_identifier_lexeme_equals_cstr(parser, "__atomic_load_n")) {
         if (!parse_builtin_atomic_load(parser, &primary_id) ||
             !minic_parser_parse_postfix(parser, primary_id, &primary_id))
             return false;
         *handled = true;
         return minic_parser_finish_value_expression(parser, primary_id, decay_array, expression_id);
     }
-    if (minic_parser_current_identifier_is(parser, "__atomic_store_n")) {
+    if (minic_parser_current_identifier_lexeme_equals_cstr(parser, "__atomic_store_n")) {
         if (!parse_builtin_atomic_store(parser, &primary_id) ||
             !minic_parser_parse_postfix(parser, primary_id, &primary_id))
             return false;
         *handled = true;
         return minic_parser_finish_value_expression(parser, primary_id, decay_array, expression_id);
     }
-    if (minic_parser_current_identifier_is(parser, "__builtin_memcpy")) {
+    if (minic_parser_current_identifier_lexeme_equals_cstr(parser, "__builtin_memcpy")) {
         if (!parse_builtin_memcpy(parser, &primary_id) ||
             !minic_parser_parse_postfix(parser, primary_id, &primary_id)) {
             return false;
@@ -2127,7 +2127,7 @@ bool minic_parser_try_builtin_primary_late(
         *handled = true;
         return minic_parser_finish_value_expression(parser, primary_id, decay_array, expression_id);
     }
-    if (minic_parser_current_identifier_is(parser, "__builtin_memmove")) {
+    if (minic_parser_current_identifier_lexeme_equals_cstr(parser, "__builtin_memmove")) {
         if (!parse_builtin_memmove(parser, &primary_id) ||
             !minic_parser_parse_postfix(parser, primary_id, &primary_id)) {
             return false;
@@ -2135,7 +2135,7 @@ bool minic_parser_try_builtin_primary_late(
         *handled = true;
         return minic_parser_finish_value_expression(parser, primary_id, decay_array, expression_id);
     }
-    if (minic_parser_current_identifier_is(parser, "__builtin_memset")) {
+    if (minic_parser_current_identifier_lexeme_equals_cstr(parser, "__builtin_memset")) {
         if (!parse_builtin_memset(parser, &primary_id) ||
             !minic_parser_parse_postfix(parser, primary_id, &primary_id)) {
             return false;
@@ -2143,7 +2143,7 @@ bool minic_parser_try_builtin_primary_late(
         *handled = true;
         return minic_parser_finish_value_expression(parser, primary_id, decay_array, expression_id);
     }
-    if (minic_parser_current_identifier_is(parser, "__builtin_extract_return_addr")) {
+    if (minic_parser_current_identifier_lexeme_equals_cstr(parser, "__builtin_extract_return_addr")) {
         if (!parse_builtin_extract_return_addr(parser, &primary_id) ||
             !minic_parser_parse_postfix(parser, primary_id, &primary_id)) {
             return false;
@@ -2151,7 +2151,7 @@ bool minic_parser_try_builtin_primary_late(
         *handled = true;
         return minic_parser_finish_value_expression(parser, primary_id, decay_array, expression_id);
     }
-    if (minic_parser_current_identifier_is(parser, "__builtin_expect")) {
+    if (minic_parser_current_identifier_lexeme_equals_cstr(parser, "__builtin_expect")) {
         if (!parse_builtin_expect(parser, &primary_id) ||
             !minic_parser_parse_postfix(parser, primary_id, &primary_id)) {
             return false;
@@ -2159,7 +2159,7 @@ bool minic_parser_try_builtin_primary_late(
         *handled = true;
         return minic_parser_finish_value_expression(parser, primary_id, decay_array, expression_id);
     }
-    if (minic_parser_current_identifier_is(parser, "__builtin_prefetch")) {
+    if (minic_parser_current_identifier_lexeme_equals_cstr(parser, "__builtin_prefetch")) {
         if (!parse_builtin_prefetch(parser, &primary_id) ||
             !minic_parser_parse_postfix(parser, primary_id, &primary_id)) {
             return false;

@@ -1195,9 +1195,9 @@ static bool parse_primary(MinicParser *parser, MinicExpressionId *expression_id,
         /* GNU C spells the same lexical function name as
          * __func__, __FUNCTION__ and __PRETTY_FUNCTION__.
          * In C++ the last form has a richer signature; MiniC parses C. */
-        if (minic_parser_current_identifier_is(parser, "__func__") ||
-            minic_parser_current_identifier_is(parser, "__FUNCTION__") ||
-            minic_parser_current_identifier_is(parser, "__PRETTY_FUNCTION__")) {
+        if (minic_parser_current_identifier_lexeme_equals_cstr(parser, "__func__") ||
+            minic_parser_current_identifier_lexeme_equals_cstr(parser, "__FUNCTION__") ||
+            minic_parser_current_identifier_lexeme_equals_cstr(parser, "__PRETTY_FUNCTION__")) {
             name_span = parser->current.span;
             if (!minic_parser_get_predefined_function_name_object(parser, &global_object_id) ||
                 !minic_parser_advance(parser) ||
@@ -1750,7 +1750,7 @@ static bool parse_unary(MinicParser *parser, MinicExpressionId *expression_id, b
        not change the type, value category, or runtime behavior of its operand,
        so keep it out of AST/Core and continue through the ordinary unary/cast
        grammar. */
-    if (minic_parser_current_identifier_is(parser, "__extension__")) {
+    if (minic_parser_current_identifier_lexeme_equals_cstr(parser, "__extension__")) {
         if (!minic_parser_advance(parser)) {
             return false;
         }

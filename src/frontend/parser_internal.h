@@ -540,7 +540,7 @@ bool minic_parser_parse_string_text(MinicParser *parser,
                                     MinicSourceSpan *span);
 /* Private grammar seam: two builtin probe phases preserve original lexical
  * precedence, with only scalar-literal parsing between them. */
-bool minic_parser_current_identifier_is(const MinicParser *parser, const char *name);
+bool minic_parser_current_identifier_lexeme_equals_cstr(const MinicParser *parser, const char *name);
 bool minic_parser_finish_value_expression(
     MinicParser *parser, MinicExpressionId input_id,
     bool decay_array, MinicExpressionId *expression_id);
