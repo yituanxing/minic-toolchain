@@ -537,7 +537,8 @@ static bool binary128_slot(const MinicCoreFunction *fn, size_t base,
     if (fn == NULL || out == NULL || id > fn->value_count ||
         base > MINIC_LARGE_FRAME_MAX) return false;
     for (i = 0U; i < fn->value_count; ++i) {
-        if (!minic_type_is_long_double(fn->values[i].type)) continue;
+        if (!minic_type_is_long_double(fn->values[i].type) &&
+            !minic_type_is_int128_integer(fn->values[i].type)) continue;
         if (pos > MINIC_LARGE_FRAME_MAX - 16U) return false;
         if (id == i) { *out = pos; return true; }
         pos += 16U;
@@ -2720,6 +2721,52 @@ static bool emit_function_body(FILE *out, const MinicC0Program *program,
             const MinicCoreValueId src = ins->value.operand;
             size_t src_width, dst_width;
             bool src_sign, dst_sign;
+            /* RV64-proven pair model: keep int128 as low/high 64-bit halves,
+             * in isolated 16-byte SSA slots. No silent XLEN truncation. */
+            if (src < fn->value_count &&
+                (minic_type_is_int128_integer(ins->type) ||
+                 minic_type_is_int128_integer(fn->values[src].type))) {
+                const bool src128 = minic_type_is_int128_integer(fn->values[src].type);
+                const bool dst128 = minic_type_is_int128_integer(ins->type);
+                size_t src_offset = 0U, dst_offset = 0U;
+                if (src128) {
+                    if (!binary128_slot(fn, ld_base, src, &src_offset) ||
+                        fprintf(out, "  ldr x9, [sp, #%zu]\n"
+                                     "  ldr x10, [sp, #%zu]\n",
+                                src_offset, src_offset + 8U) < 0)
+                        return machine_emit_reject(fn, "aarch64", name,
+                            reject_stage, reject_block, reject_ins, __LINE__);
+                } else {
+                    if (!scalar_integer_width(program, target,
+                            fn->values[src].type, &src_width, &src_sign) ||
+                        fprintf(out, src_width == 8U ?
+                                "  ldr x9, [sp, #%zu]\n" :
+                                "  ldr w9, [sp, #%zu]\n", (size_t)src * 8U) < 0 ||
+                        (src_width < 8U &&
+                         (!emit_integer_normalize(out, src_width, src_sign) ||
+                          (src_sign && fputs("  sxtw x9, w9\n", out) == EOF))) ||
+                        fputs(src_sign ? "  asr x10, x9, #63\n" :
+                                         "  mov x10, xzr\n", out) == EOF)
+                        return machine_emit_reject(fn, "aarch64", name,
+                            reject_stage, reject_block, reject_ins, __LINE__);
+                }
+                if (dst128) {
+                    if (!binary128_slot(fn, ld_base, ins->result, &dst_offset) ||
+                        fprintf(out, "  str x9, [sp, #%zu]\n"
+                                     "  str x10, [sp, #%zu]\n",
+                                dst_offset, dst_offset + 8U) < 0)
+                        return machine_emit_reject(fn, "aarch64", name,
+                            reject_stage, reject_block, reject_ins, __LINE__);
+                    continue;
+                }
+                if (!scalar_integer_width(program, target, ins->type,
+                                           &dst_width, &dst_sign) ||
+                    (dst_width < 8U &&
+                     !emit_integer_normalize(out, dst_width, dst_sign)))
+                    return machine_emit_reject(fn, "aarch64", name,
+                        reject_stage, reject_block, reject_ins, __LINE__);
+                break;
+            }
             /* Inventory both source/destination C integer widths before
              * admitting a cast. The SQLite 128-bit helper includes a type
              * conversion outside the already-proven 32/64 scalar subset. */

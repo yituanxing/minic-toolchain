@@ -244,6 +244,9 @@ jobs:
             sh tests/compiler/c0/probe-loongarch64-binary128-return.sh
           # Original GNU binary128 producer and libc snprintf() variadic
           # consumer: test LP64D even-GAR pairing and stack overflow.
+          sh -n tests/compiler/c0/probe-four-backend-int128-conversion.sh
+          MINIC_CC="$GITHUB_WORKSPACE/build/toolchain-focused-t1-v2/bin/minic-cc" \
+            sh tests/compiler/c0/probe-four-backend-int128-conversion.sh
           sh -n tests/compiler/c0/probe-four-backend-binary128-variadic.sh
           MINIC_CC="$GITHUB_WORKSPACE/build/toolchain-focused-t1-v2/bin/minic-cc" \
             sh tests/compiler/c0/probe-four-backend-binary128-variadic.sh

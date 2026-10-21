@@ -506,7 +506,8 @@ static bool binary128_slot(const MinicCoreFunction *fn, size_t base,
     if (fn == NULL || out == NULL || id > fn->value_count ||
         base > MINIC_LARGE_FRAME_MAX) return false;
     for (i = 0U; i < fn->value_count; ++i) {
-        if (!minic_type_is_long_double(fn->values[i].type)) continue;
+        if (!minic_type_is_long_double(fn->values[i].type) &&
+            !minic_type_is_int128_integer(fn->values[i].type)) continue;
         if (pos > MINIC_LARGE_FRAME_MAX - 16U) return false;
         if (id == i) { *out = pos; return true; }
         pos += 16U;
@@ -2532,6 +2533,49 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
             const MinicCoreValueId src = ins->value.operand;
             size_t src_width, dst_width;
             bool src_sign, dst_sign;
+            /* RV64-proven pair model, using isolated 16-byte SSA slots. */
+            if (src < fn->value_count &&
+                (minic_type_is_int128_integer(ins->type) ||
+                 minic_type_is_int128_integer(fn->values[src].type))) {
+                const bool src128 = minic_type_is_int128_integer(fn->values[src].type);
+                const bool dst128 = minic_type_is_int128_integer(ins->type);
+                size_t src_offset = 0U, dst_offset = 0U;
+                if (src128) {
+                    if (!binary128_slot(fn, ld_base, src, &src_offset) ||
+                        !emit_sp_mem(out, "ld.d", "$t0", src_offset) ||
+                        !emit_sp_mem(out, "ld.d", "$t1", src_offset + 8U))
+                        return machine_emit_reject(fn, "loongarch64", name,
+                            reject_stage, reject_block, reject_ins, __LINE__);
+                } else {
+                    if (!scalar_integer_width(program, target,
+                            fn->values[src].type, &src_width, &src_sign) ||
+                        !emit_sp_mem(out, src_width == 8U ? "ld.d" : "ld.w",
+                            "$t0", (size_t)src * 8U) ||
+                        (src_width < 8U &&
+                         !emit_integer_normalize(out, src_width, src_sign)) ||
+                        (src_width == 4U && !src_sign &&
+                         fputs("  bstrpick.d $t0, $t0, 31, 0\n", out) == EOF) ||
+                        fputs(src_sign ? "  srai.d $t1, $t0, 63\n" :
+                                         "  move $t1, $zero\n", out) == EOF)
+                        return machine_emit_reject(fn, "loongarch64", name,
+                            reject_stage, reject_block, reject_ins, __LINE__);
+                }
+                if (dst128) {
+                    if (!binary128_slot(fn, ld_base, ins->result, &dst_offset) ||
+                        !emit_sp_mem(out, "st.d", "$t0", dst_offset) ||
+                        !emit_sp_mem(out, "st.d", "$t1", dst_offset + 8U))
+                        return machine_emit_reject(fn, "loongarch64", name,
+                            reject_stage, reject_block, reject_ins, __LINE__);
+                    continue;
+                }
+                if (!scalar_integer_width(program, target, ins->type,
+                                           &dst_width, &dst_sign) ||
+                    (dst_width < 8U &&
+                     !emit_integer_normalize(out, dst_width, dst_sign)))
+                    return machine_emit_reject(fn, "loongarch64", name,
+                        reject_stage, reject_block, reject_ins, __LINE__);
+                break;
+            }
             if (src >= fn->value_count ||
                 !scalar_integer_width(program, target,
                                       fn->values[src].type, &src_width, &src_sign) ||
