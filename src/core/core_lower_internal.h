@@ -149,6 +149,10 @@ bool core_import_fixed_register_binding(MinicCoreLowerContext *context,
 bool core_scalar_expression_value_type(const MinicFunctionBodyView *body,
                                        const MinicExpression *expression,
                                        MinicType *value_type);
+/* Generic source local-object identity, shared by scalar and record lowering. */
+MinicCoreLowerStatus minic_core_lower_internal_local_object(
+    MinicCoreLowerContext *context, MinicLocalId local_id,
+    MinicCoreObjectId *object_id);
 MinicCoreLowerStatus ensure_statement_block(MinicCoreLowerContext *context,
                                             MinicStatementId statement_id,
                                             MinicCoreBlockId *block_id);
@@ -186,9 +190,9 @@ MinicCoreLowerStatus minic_core_lower_bit_field_update(
 
 /* Record/aggregate lowering owns materialized record objects and copies.
  * These interfaces describe source semantics, never machine ABI placement. */
-MinicCoreLowerStatus minic_core_lower_internal_local_object(
-    MinicCoreLowerContext *context, MinicLocalId local_id,
-    MinicCoreObjectId *object_id);
+MinicCoreLowerStatus minic_core_lower_internal_record_materialized_address(
+    MinicCoreLowerContext *context, MinicExpressionId expression_id,
+    MinicCoreValueId *address_id);
 MinicCoreLowerStatus minic_core_lower_record_compound_literal_object(
     MinicCoreLowerContext *context, const MinicExpression *expression,
     MinicCoreObjectId *object_id);
@@ -204,9 +208,6 @@ MinicCoreLowerStatus minic_core_lower_record_copy_statement(
 /* The call family owns C argument evaluation, value/object snapshots,
  * indirect callee ordering and Core CALL instructions. ABI registers are
  * placed later in the target subsystem, not by this internal API. */
-MinicCoreLowerStatus minic_core_lower_internal_record_materialized_address(
-    MinicCoreLowerContext *context, MinicExpressionId expression_id,
-    MinicCoreValueId *address_id);
 MinicCoreLowerStatus minic_core_lower_direct_call(
     MinicCoreLowerContext *context, const MinicExpression *expression,
     MinicCoreValueId *value_id);
