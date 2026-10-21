@@ -1,4 +1,5 @@
 #include "core/core_lower_internal.h"
+#include "core/source_loop_shapes.h"
 
 #include "frontend/const_eval.h"
 #include "frontend/expression_semantics.h"
@@ -13530,321 +13531,6 @@ lower_if(MinicCoreLowerContext *context, const MinicStatement *statement, bool *
     return MINIC_CORE_LOWER_OK;
 }
 
-static bool internal_while_label_pair(const MinicStatement *label, const MinicStatement *loop) {
-    bool same_begin;
-
-    if (label == NULL || loop == NULL) {
-        return false;
-    }
-    same_begin = label->span.begin.offset == loop->span.begin.offset &&
-                 label->span.begin.line == loop->span.begin.line &&
-                 label->span.begin.column == loop->span.begin.column;
-    return label->kind == MINIC_STATEMENT_LABEL && loop->kind == MINIC_STATEMENT_WHILE &&
-           same_begin && label->target_expression == MINIC_EXPRESSION_INVALID &&
-           label->expression == MINIC_EXPRESSION_INVALID &&
-           label->target_statement == MINIC_STATEMENT_INVALID;
-}
-
-static bool source_position_equal(MinicSourcePosition left, MinicSourcePosition right) {
-    return left.offset == right.offset && left.line == right.line && left.column == right.column;
-}
-
-static bool core_cleanup_edge_is_empty(const MinicStatement *statement) {
-    return statement != NULL &&
-           statement->cleanup_context == statement->cleanup_stop_context;
-}
-
-/* M121_SELECTIVE_DO_WHILE_ZERO_EXIT_CFG: parse_do_while lowers source
-   `do BODY while (0)` into a synthetic while(1) tail. Preserve the historical
-   flattening path when BODY has no control transfer to this loop; only build a
-   real exit block when a source break/continue actually needs loop ownership. */
-static bool normalized_do_while_zero_body(const MinicCoreLowerContext *context,
-                                          const MinicStatement *loop,
-                                          const MinicBlock *body,
-                                          MinicBlock *single_iteration_body,
-                                          MinicStatementId *continue_label_statement) {
-    const MinicExpression *loop_condition;
-    const MinicExpression *negated_condition;
-    const MinicExpression *source_condition;
-    const MinicStatement *continue_label;
-    const MinicStatement *condition_check;
-    const MinicStatement *break_statement;
-    const MinicBlock *break_block;
-    MinicStatementId continue_id;
-
-    if (context == NULL || context->body == NULL || context->body->program == NULL ||
-        loop == NULL || body == NULL || single_iteration_body == NULL ||
-        continue_label_statement == NULL || body->statement_count < 2U) {
-        return false;
-    }
-    loop_condition = minic_c0_program_expression(context->body->program, loop->expression);
-    continue_id = body->statements[body->statement_count - 2U];
-    continue_label = minic_c0_program_statement(context->body->program, continue_id);
-    condition_check = minic_c0_program_statement(
-        context->body->program, body->statements[body->statement_count - 1U]);
-    if (loop_condition == NULL || loop_condition->kind != MINIC_EXPRESSION_INTEGER ||
-        !minic_type_is_integer(loop_condition->type) || loop_condition->value.integer_value != 1 ||
-        continue_label == NULL || continue_label->kind != MINIC_STATEMENT_LABEL ||
-        continue_label->target_expression != MINIC_EXPRESSION_INVALID ||
-        continue_label->expression != MINIC_EXPRESSION_INVALID ||
-        continue_label->target_statement != MINIC_STATEMENT_INVALID ||
-        !source_position_equal(continue_label->span.begin, loop->span.begin) ||
-        condition_check == NULL || condition_check->kind != MINIC_STATEMENT_IF ||
-        condition_check->expression == MINIC_EXPRESSION_INVALID ||
-        condition_check->then_block == MINIC_BLOCK_INVALID ||
-        condition_check->else_block != MINIC_BLOCK_INVALID ||
-        !source_position_equal(condition_check->span.begin, loop->span.begin)) {
-        return false;
-    }
-    negated_condition =
-        minic_c0_program_expression(context->body->program, condition_check->expression);
-    if (negated_condition == NULL || negated_condition->kind != MINIC_EXPRESSION_UNARY ||
-        negated_condition->value.unary.operator_kind != MINIC_UNARY_LOGICAL_NOT) {
-        return false;
-    }
-    source_condition = minic_c0_program_expression(
-        context->body->program, negated_condition->value.unary.operand);
-    if (source_condition == NULL || source_condition->kind != MINIC_EXPRESSION_INTEGER ||
-        !minic_type_is_integer(source_condition->type) || source_condition->value.integer_value != 0) {
-        return false;
-    }
-    break_block = minic_c0_program_block(context->body->program, condition_check->then_block);
-    if (break_block == NULL || break_block->statement_count != 1U) {
-        return false;
-    }
-    break_statement = minic_c0_program_statement(context->body->program, break_block->statements[0]);
-    if (break_statement == NULL || break_statement->kind != MINIC_STATEMENT_BREAK ||
-        !core_cleanup_edge_is_empty(break_statement) ||
-        !source_position_equal(break_statement->span.begin, loop->span.begin)) {
-        return false;
-    }
-
-    *single_iteration_body = *body;
-    single_iteration_body->statement_count -= 2U;
-    *continue_label_statement = continue_id;
-    return true;
-}
-
-static bool normalized_do_while_block_needs_exit(
-    const MinicCoreLowerContext *context,
-    const MinicBlock *block,
-    MinicStatementId continue_label_statement,
-    bool break_targets_outer_loop) {
-    size_t index;
-
-    if (context == NULL || context->body == NULL || context->body->program == NULL ||
-        block == NULL) {
-        return true;
-    }
-    for (index = 0U; index < block->statement_count; ++index) {
-        const MinicStatement *statement = minic_c0_program_statement(
-            context->body->program, block->statements[index]);
-        if (statement == NULL) {
-            return true;
-        }
-        if (break_targets_outer_loop && statement->kind == MINIC_STATEMENT_BREAK) {
-            return true;
-        }
-        if (statement->kind == MINIC_STATEMENT_GOTO &&
-            statement->target_statement == continue_label_statement) {
-            return true;
-        }
-        if (statement->kind == MINIC_STATEMENT_IF ||
-            statement->kind == MINIC_STATEMENT_WHILE ||
-            statement->kind == MINIC_STATEMENT_SWITCH) {
-            const MinicBlock *then_block = statement->then_block == MINIC_BLOCK_INVALID
-                                                ? NULL
-                                                : minic_c0_program_block(
-                                                      context->body->program,
-                                                      statement->then_block);
-            const MinicBlock *else_block = statement->else_block == MINIC_BLOCK_INVALID
-                                                ? NULL
-                                                : minic_c0_program_block(
-                                                      context->body->program,
-                                                      statement->else_block);
-            bool nested_break_targets_outer =
-                statement->kind == MINIC_STATEMENT_IF ? break_targets_outer_loop : false;
-            if (statement->then_block != MINIC_BLOCK_INVALID &&
-                (then_block == NULL || normalized_do_while_block_needs_exit(
-                                           context,
-                                           then_block,
-                                           continue_label_statement,
-                                           nested_break_targets_outer))) {
-                return true;
-            }
-            if (statement->else_block != MINIC_BLOCK_INVALID &&
-                (else_block == NULL || normalized_do_while_block_needs_exit(
-                                           context,
-                                           else_block,
-                                           continue_label_statement,
-                                           nested_break_targets_outer))) {
-                return true;
-            }
-        }
-    }
-    return false;
-}
-
-/* M78_OMITTED_FOR_CONDITION: parse_for represents a missing source
-   condition as MINIC_EXPRESSION_INVALID and appends its synthetic continue
-   label to the loop body. Recognize the no-update variant explicitly so Core
-   can distinguish `for (;;)` from an invalid source while statement. */
-/* M159_CONSTANT_TRUE_DO_WHILE_REACHABILITY_OWNER: parse_do_while lowers
-   every source do/while into an outer synthetic while(1), followed inside its
-   body by a synthetic continue label and `if (!source_condition) break`.
-   When source_condition is a compile-time nonzero integer and the original
-   body contains no break/continue edge that needs those synthetic nodes, that
-   tail is unreachable control metadata.  Strip it from the executable view so
-   the ordinary constant-true while CFG has no false exit predecessor. */
-static bool normalized_do_while_true_body(const MinicCoreLowerContext *context,
-                                          const MinicStatement *loop,
-                                          const MinicBlock *body,
-                                          MinicBlock *iteration_body,
-                                          MinicStatementId *continue_label_statement) {
-    const MinicExpression *loop_condition;
-    const MinicExpression *negated_condition;
-    const MinicExpression *source_condition;
-    const MinicStatement *continue_label;
-    const MinicStatement *condition_check;
-    const MinicStatement *break_statement;
-    const MinicBlock *break_block;
-    MinicConstValue condition_value;
-    MinicStatementId continue_id;
-    bool is_zero;
-
-    if (context == NULL || context->body == NULL || context->body->program == NULL ||
-        context->target == NULL || loop == NULL || body == NULL || iteration_body == NULL ||
-        continue_label_statement == NULL || body->statement_count < 2U) {
-        return false;
-    }
-    loop_condition = minic_c0_program_expression(context->body->program, loop->expression);
-    continue_id = body->statements[body->statement_count - 2U];
-    continue_label = minic_c0_program_statement(context->body->program, continue_id);
-    condition_check = minic_c0_program_statement(
-        context->body->program, body->statements[body->statement_count - 1U]);
-    if (loop_condition == NULL || loop_condition->kind != MINIC_EXPRESSION_INTEGER ||
-        !minic_type_is_integer(loop_condition->type) || loop_condition->value.integer_value != 1 ||
-        continue_label == NULL || continue_label->kind != MINIC_STATEMENT_LABEL ||
-        continue_label->target_expression != MINIC_EXPRESSION_INVALID ||
-        continue_label->expression != MINIC_EXPRESSION_INVALID ||
-        continue_label->target_statement != MINIC_STATEMENT_INVALID ||
-        !source_position_equal(continue_label->span.begin, loop->span.begin) ||
-        condition_check == NULL || condition_check->kind != MINIC_STATEMENT_IF ||
-        condition_check->expression == MINIC_EXPRESSION_INVALID ||
-        condition_check->then_block == MINIC_BLOCK_INVALID ||
-        condition_check->else_block != MINIC_BLOCK_INVALID ||
-        !source_position_equal(condition_check->span.begin, loop->span.begin)) {
-        return false;
-    }
-    negated_condition =
-        minic_c0_program_expression(context->body->program, condition_check->expression);
-    if (negated_condition == NULL || negated_condition->kind != MINIC_EXPRESSION_UNARY ||
-        negated_condition->value.unary.operator_kind != MINIC_UNARY_LOGICAL_NOT) {
-        return false;
-    }
-    source_condition = minic_c0_program_expression(
-        context->body->program, negated_condition->value.unary.operand);
-    if (source_condition == NULL || !minic_type_is_integer(source_condition->type) ||
-        !minic_const_eval_integer(context->body->program,
-                                 context->target,
-                                 negated_condition->value.unary.operand,
-                                 &condition_value) ||
-        !minic_const_value_is_zero(context->body->program,
-                                   context->target,
-                                   &condition_value,
-                                   &is_zero) ||
-        is_zero) {
-        return false;
-    }
-    break_block = minic_c0_program_block(context->body->program, condition_check->then_block);
-    if (break_block == NULL || break_block->statement_count != 1U) {
-        return false;
-    }
-    break_statement = minic_c0_program_statement(context->body->program, break_block->statements[0]);
-    if (break_statement == NULL || break_statement->kind != MINIC_STATEMENT_BREAK ||
-        !core_cleanup_edge_is_empty(break_statement) ||
-        !source_position_equal(break_statement->span.begin, loop->span.begin)) {
-        return false;
-    }
-
-    /* The source condition is proven nonzero, so the parser's trailing
-       `if (!condition) break` is unreachable. Preserve source continue
-       semantics by binding the synthetic continue label to the real loop
-       condition block instead of retaining the synthetic tail. Source break
-       statements remain ordinary loop-owned edges to exit_block. */
-    *iteration_body = *body;
-    iteration_body->statement_count -= 2U;
-    *continue_label_statement = continue_id;
-    return true;
-}
-
-static bool normalized_for_continue_tail(const MinicCoreLowerContext *context,
-                                         const MinicStatement *loop,
-                                         const MinicBlock *body,
-                                         MinicBlock *iteration_body) {
-    const MinicStatement *continue_label;
-
-    if (context == NULL || context->body == NULL || context->body->program == NULL ||
-        loop == NULL || body == NULL || iteration_body == NULL || body->statement_count < 1U) {
-        return false;
-    }
-    continue_label = minic_c0_program_statement(
-        context->body->program, body->statements[body->statement_count - 1U]);
-    if (continue_label == NULL || continue_label->kind != MINIC_STATEMENT_LABEL ||
-        continue_label->target_expression != MINIC_EXPRESSION_INVALID ||
-        continue_label->expression != MINIC_EXPRESSION_INVALID ||
-        continue_label->target_statement != MINIC_STATEMENT_INVALID ||
-        !source_position_equal(continue_label->span.begin, loop->span.begin)) {
-        return false;
-    }
-    /* A normalized for-loop's synthetic continue label is part of the
-       iteration body only when reaching it does not cross a cleanup lifetime.
-       Cleanup-bearing scopes keep the historical tail shape until Core owns
-       cleanup transitions explicitly. */
-    *iteration_body = *body;
-    if (!core_cleanup_edge_is_empty(continue_label)) {
-        iteration_body->statement_count -= 1U;
-    }
-    return true;
-}
-
-static bool normalized_for_update_tail(const MinicCoreLowerContext *context,
-                                       const MinicStatement *loop,
-                                       const MinicBlock *body,
-                                       MinicBlock *iteration_body,
-                                       const MinicStatement **update_statement) {
-    const MinicStatement *continue_label;
-    const MinicStatement *update;
-
-    if (context == NULL || context->body == NULL || context->body->program == NULL ||
-        loop == NULL || body == NULL || iteration_body == NULL || update_statement == NULL ||
-        body->statement_count < 2U) {
-        return false;
-    }
-    continue_label = minic_c0_program_statement(context->body->program,
-                                                body->statements[body->statement_count - 2U]);
-    update = minic_c0_program_statement(context->body->program,
-                                        body->statements[body->statement_count - 1U]);
-    if (continue_label == NULL || continue_label->kind != MINIC_STATEMENT_LABEL ||
-        continue_label->target_expression != MINIC_EXPRESSION_INVALID ||
-        continue_label->expression != MINIC_EXPRESSION_INVALID ||
-        continue_label->target_statement != MINIC_STATEMENT_INVALID ||
-        !source_position_equal(continue_label->span.begin, loop->span.begin) || update == NULL ||
-        update->kind != MINIC_STATEMENT_EXPRESSION || !core_cleanup_edge_is_empty(update) ||
-        update->expression == MINIC_EXPRESSION_INVALID) {
-        return false;
-    }
-    /* The update is always outside the lowered iteration body.  Preserve the
-       preceding synthetic continue label only for a zero-distance cleanup
-       edge; otherwise leave cleanup-bearing for scopes on the established
-       fail-closed path. */
-    *iteration_body = *body;
-    iteration_body->statement_count -=
-        core_cleanup_edge_is_empty(continue_label) ? 1U : 2U;
-    *update_statement = update;
-    return true;
-}
-
 /* M132_UNBOUNDED_FOR_TERMINATION: structured control-flow reachability is
    the owner of whether a synthetic loop exit can fall through. In particular,
    an omitted-condition GNU/C `for (;;)` has no natural edge to its exit block;
@@ -13921,7 +13607,7 @@ lower_while(MinicCoreLowerContext *context,
 
     if (context == NULL || context->body == NULL || context->body->program == NULL ||
         context->function == NULL || statement == NULL || terminated == NULL ||
-        statement->kind != MINIC_STATEMENT_WHILE || !core_cleanup_edge_is_empty(statement) ||
+        statement->kind != MINIC_STATEMENT_WHILE || !minic_core_loop_cleanup_edge_is_empty(statement) ||
         statement->then_block == MINIC_BLOCK_INVALID ||
         statement->else_block != MINIC_BLOCK_INVALID) {
         return MINIC_CORE_LOWER_UNSUPPORTED;
@@ -13941,12 +13627,12 @@ lower_while(MinicCoreLowerContext *context,
         }
     }
     normalized_do_while_continue = MINIC_STATEMENT_INVALID;
-    if (normalized_do_while_zero_body(context,
+    if (minic_core_loop_normalized_do_while_zero_body(context,
                                       statement,
                                       body_source,
                                       &normalized_do_while_body,
                                       &normalized_do_while_continue)) {
-        if (!normalized_do_while_block_needs_exit(context,
+        if (!minic_core_loop_normalized_do_while_block_needs_exit(context,
                                                   &normalized_do_while_body,
                                                   normalized_do_while_continue,
                                                   true)) {
@@ -14002,17 +13688,17 @@ lower_while(MinicCoreLowerContext *context,
     for_update = NULL;
     normalized_for = false;
     normalized_for_continue = MINIC_STATEMENT_INVALID;
-    if (normalized_for_update_tail(
+    if (minic_core_loop_normalized_for_update_tail(
             context, statement, body_source, &normalized_for_body, &for_update)) {
         iteration_source = &normalized_for_body;
         normalized_for = true;
-    } else if (normalized_for_continue_tail(
+    } else if (minic_core_loop_normalized_for_continue_tail(
                    context, statement, body_source, &normalized_for_body)) {
         iteration_source = &normalized_for_body;
         normalized_for = true;
     }
     if (!normalized_for &&
-        normalized_do_while_true_body(context,
+        minic_core_loop_normalized_do_while_true_body(context,
                                       statement,
                                       body_source,
                                       &normalized_do_while_body,
@@ -14024,8 +13710,8 @@ lower_while(MinicCoreLowerContext *context,
         continue_label_statement = normalized_do_while_continue;
         iteration_source = &normalized_do_while_body;
     }
-    /* M149_PARSER_TAIL_CONTINUE_PROVENANCE_OWNER: normalized_for_update_tail
-       and normalized_for_continue_tail have already proven the exact parser
+    /* M149_PARSER_TAIL_CONTINUE_PROVENANCE_OWNER: minic_core_loop_normalized_for_update_tail
+       and minic_core_loop_normalized_for_continue_tail have already proven the exact parser
        shape and same-span synthetic LABEL at the source for-loop tail.  Use
        that statement id directly; never recover identity by scanning GOTOs.
        If the adjacent-label path also supplied an id, require exact agreement.
@@ -14681,7 +14367,7 @@ static MinicCoreLowerStatus lower_nested_case_switch(
     for (label_index = 0U; label_index < label_count; ++label_index) {
         const MinicStatement *label_statement = labels[label_index].statement;
 
-        if (!core_cleanup_edge_is_empty(label_statement) ||
+        if (!minic_core_loop_cleanup_edge_is_empty(label_statement) ||
             label_statement->then_block != MINIC_BLOCK_INVALID ||
             label_statement->else_block != MINIC_BLOCK_INVALID) {
             return MINIC_CORE_LOWER_UNSUPPORTED;
@@ -14881,7 +14567,7 @@ lower_switch(MinicCoreLowerContext *context, const MinicStatement *statement, bo
     if (context == NULL || context->body == NULL || context->body->program == NULL ||
         context->function == NULL || statement == NULL || terminated == NULL ||
         statement->kind != MINIC_STATEMENT_SWITCH ||
-        !core_cleanup_edge_is_empty(statement) ||
+        !minic_core_loop_cleanup_edge_is_empty(statement) ||
         statement->expression == MINIC_EXPRESSION_INVALID ||
         statement->then_block == MINIC_BLOCK_INVALID ||
         statement->else_block != MINIC_BLOCK_INVALID || context->target == NULL) {
@@ -14980,7 +14666,7 @@ lower_switch(MinicCoreLowerContext *context, const MinicStatement *statement, bo
             }
             continue;
         }
-        if (!core_cleanup_edge_is_empty(source_statement) ||
+        if (!minic_core_loop_cleanup_edge_is_empty(source_statement) ||
             source_statement->then_block != MINIC_BLOCK_INVALID ||
             source_statement->else_block != MINIC_BLOCK_INVALID ||
             label_count >= MINIC_CORE_SWITCH_LABEL_LIMIT) {
@@ -15218,7 +14904,7 @@ lower_switch(MinicCoreLowerContext *context, const MinicStatement *statement, bo
                 continue;
             }
             if (segment_statement->kind == MINIC_STATEMENT_BREAK) {
-                if (!core_cleanup_edge_is_empty(segment_statement)) {
+                if (!minic_core_loop_cleanup_edge_is_empty(segment_statement)) {
                     (void)fprintf(stderr,
                                   "CORE_SWITCH_DETAIL function=%s gate=break-cleanup "
                                   "source_index=%zu scan=%zu cleanup=%llu stop=%llu\n",
@@ -15630,7 +15316,7 @@ static bool core_unreachable_statement_has_bound_reentry(
 
 /* M144_UNREFERENCED_LOOP_LABEL_METADATA_OWNER: parser loop normalization can
    leave an otherwise-empty label at the condition tail even when no source
-   continue/goto refers to it.  internal_while_label_pair() gives this label a
+   continue/goto refers to it.  minic_core_loop_internal_while_label_pair() gives this label a
    strong identity: its source position is exactly that of one normalized WHILE.
    Treat it as non-executable parser metadata only when that owner is unique and
    the label has no direct goto, asm-goto, or &&label reference anywhere in the
@@ -15664,7 +15350,7 @@ static bool core_unreferenced_internal_loop_label(
                 minic_c0_program_statement(program, index);
             if (candidate == NULL) return false;
             if (candidate->kind == MINIC_STATEMENT_WHILE &&
-                internal_while_label_pair(label, candidate)) {
+                minic_core_loop_internal_while_label_pair(label, candidate)) {
                 ++loop_matches;
                 if (loop_matches > 1U) return false;
             }
@@ -15679,7 +15365,7 @@ static bool core_unreferenced_internal_loop_label(
             return false;
         }
         if (candidate->kind == MINIC_STATEMENT_WHILE &&
-            internal_while_label_pair(label, candidate)) {
+            minic_core_loop_internal_while_label_pair(label, candidate)) {
             loop_matches += 1U;
             if (loop_matches > 1U) {
                 return false;
@@ -16091,7 +15777,7 @@ lower_block(MinicCoreLowerContext *context, const MinicBlock *source_block, bool
                 unreachable_loop_id = source_block->statements[statement_index + 1U];
                 unreachable_loop =
                     minic_c0_program_statement(context->body->program, unreachable_loop_id);
-                if (internal_while_label_pair(statement, unreachable_loop)) {
+                if (minic_core_loop_internal_while_label_pair(statement, unreachable_loop)) {
                     if (core_unreachable_statement_has_external_reentry(
                             context,
                             unreachable_loop,
@@ -16188,7 +15874,7 @@ lower_block(MinicCoreLowerContext *context, const MinicBlock *source_block, bool
               statement->target_statement != MINIC_STATEMENT_INVALID) &&
             !(statement->kind == MINIC_STATEMENT_LABEL &&
               statement_index + 1U < source_block->statement_count &&
-              internal_while_label_pair(
+              minic_core_loop_internal_while_label_pair(
                   statement,
                   minic_c0_program_statement(
                       context->body->program,
@@ -16243,7 +15929,7 @@ lower_block(MinicCoreLowerContext *context, const MinicBlock *source_block, bool
             if (statement_index + 1U < source_block->statement_count) {
                 MinicStatementId next_statement_id = source_block->statements[statement_index + 1U];
                 loop = minic_c0_program_statement(context->body->program, next_statement_id);
-                internal_loop_label = internal_while_label_pair(statement, loop);
+                internal_loop_label = minic_core_loop_internal_while_label_pair(statement, loop);
             }
             if (internal_loop_label) {
                 status = lower_while(context,
@@ -16397,12 +16083,12 @@ lower_block(MinicCoreLowerContext *context, const MinicBlock *source_block, bool
                 local_fact_continue_label = MINIC_STATEMENT_INVALID;
                 local_fact_single_pass =
                     local_fact_loop_body != NULL &&
-                    normalized_do_while_zero_body(context,
+                    minic_core_loop_normalized_do_while_zero_body(context,
                                                   statement,
                                                   local_fact_loop_body,
                                                   &local_fact_single_iteration_body,
                                                   &local_fact_continue_label) &&
-                    !normalized_do_while_block_needs_exit(context,
+                    !minic_core_loop_normalized_do_while_block_needs_exit(context,
                                                           &local_fact_single_iteration_body,
                                                           local_fact_continue_label,
                                                           true);
