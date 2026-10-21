@@ -58,6 +58,8 @@ MINIC_SOURCES := \
 	src/core/core_lower_bit_fields.c \
 	src/core/core_lower_assignments.c \
 	src/core/core_lower_record.c \
+	src/core/core_lower_local_effects.c \
+	src/core/core_lower_loop.c \
 	src/core/core_lower_if.c \
 	src/core/core_lower_switch.c \
 	src/core/core_lower_calls.c \
