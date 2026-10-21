@@ -329,6 +329,6 @@ if [ "${FOUR_BACKEND_BUSYBOX_ALLYES:-0}" = 1 ]; then
     echo "FOUR_BACKEND_BUSYBOX_ALL_ACCEPT=FAIL reason=missing_ISA completed=$all_targets" >&2
     exit 1
   fi
-  echo "FOUR_BACKEND_BUSYBOX_ALL_ACCEPT=PASS targets=2 original_Kbuild_owners=581 min_AArch64_MiniC=575 min_LoongArch64_MiniC=575 GNU_QEMU_fixtures=38 full_all_MiniC=NO"
+  echo "FOUR_BACKEND_BUSYBOX_ALL_ACCEPT=PASS targets=2 original_Kbuild_owners=581 min_AArch64_MiniC=581 min_LoongArch64_MiniC=581 GNU_C_fallbacks=0 GNU_QEMU_fixtures=38 all_C_owners_MiniC=YES assembler_linker=GNU full_all_MiniC=NO"
 fi
 echo "FOUR_BACKEND_BUSYBOX_DISCOVERY=COMPLETE source_pinned=1 no_all_MiniC_claim=1"

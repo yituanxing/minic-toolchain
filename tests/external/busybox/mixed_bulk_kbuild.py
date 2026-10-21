@@ -171,11 +171,14 @@ def main():
         owner_count = len(mini_names) + len(fallback_names)
         target_name = os.environ["BUSYBOX_ALLYES_MINIC_TARGET"].split("-")[0]
         approved = CROSS_APPROVED_GCC_FALLBACKS.get(target_name)
-        target_floor = {"aarch64": 571, "loongarch64": 569}.get(target_name)
+        # Full-original-Kbuild 581/581 milestone; never silently regress
+        # even one owner back to GCC. This does not claim MiniC AS/LD.
+        target_floor = {"aarch64": 581, "loongarch64": 581}.get(target_name)
         accepted = (owner_count == 581 and target_floor is not None
                     and len(mini_names) >= target_floor
                     and len(set(mini_names + fallback_names)) == owner_count
                     and approved is not None
+                    and len(fallback_names) == 0
                     and set(fallback_names).issubset(approved))
         if not accepted:
             log("BUSYBOX_MIXED_BULK=BLOCKED stage=cross-owner-inventory "
@@ -263,6 +266,10 @@ def main():
         return 1
     if cross_target:
         log("BUSYBOX_MIXED_BULK_CROSS_RUNTIME=PASS cases=38 GNU_QEMU_byte_exact=1")
+    if cross_target and len(mini_names) == 581 and len(skipped) == 0:
+        log("BUSYBOX_MIXED_BULK_ALL_C_OWNERS=PASS original_Kbuild_owners=581 "
+            "MiniC_owners=581 GNU_C_fallbacks=0 "
+            "SHA256_verified=581 link_toolchain=GNU")
     log("BUSYBOX_MIXED_BULK=PASS MiniC_owners=%d GCC_fallback=%d "
         "original_full_Kbuild=1 eleven_fixture_byte_exact=1 "
         "MiniC_and_GNU_binary_differ=1 full_all_MiniC=NO" %
