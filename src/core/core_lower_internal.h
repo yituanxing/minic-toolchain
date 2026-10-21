@@ -167,7 +167,8 @@ MinicCoreLowerStatus append_scalar_bitcast(MinicCoreLowerContext *context,
 /* Scalar value coercions keep C language semantics separate from machine ABI. */
 MinicCoreLowerStatus minic_core_lower_internal_append_long_double_conversion(
     MinicCoreLowerContext *context, MinicSourceSpan span, MinicType target_type,
-    MinicCoreValueId source_value, MinicCoreValueId *value_id);
+    MinicType source_type, MinicCoreValueId source_value,
+    MinicCoreValueId *value_id);
 
 MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
                                       MinicExpressionId expression_id,
