@@ -1,6 +1,7 @@
 #include "target/aarch64/codegen.h"
 #include "target/backend_core_usage.h"
 #include "target/backend_global_array.h"
+#include "target/backend_abi_record.h"
 
 #include <inttypes.h>
 #include <stdint.h>
