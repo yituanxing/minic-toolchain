@@ -77,8 +77,8 @@ bool minic_loongarch64_emit_parameter_object(FILE *out,
 const size_t position = ins->value.parameter_object.parameter_index;
             const MinicCoreObjectId obj_id = ins->value.parameter_object.object_id;
             const MinicLP64ArgumentLocation *location =
-                position < incoming_plan.argument_count
-                    ? &incoming_plan.arguments[position] : NULL;
+                position < incoming_plan->argument_count
+                    ? &incoming_plan->arguments[position] : NULL;
             size_t size, slots, object_offset, k, chunk;
             if (location == NULL || ins->result != MINIC_CORE_VALUE_INVALID ||
                 obj_id >= fn->object_count ||
