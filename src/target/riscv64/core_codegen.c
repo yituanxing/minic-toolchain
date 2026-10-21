@@ -2,6 +2,9 @@
 
 #include "target/riscv64/codegen_internal.h"
 #include "target/riscv64/abi.h"
+#include "target/riscv64/frame_requirements.h"
+#include "target/riscv64/spill_layout.h"
+#include "core/value_uses.h"
 #include "target/data_layout.h"
 
 #include <inttypes.h>
@@ -122,710 +125,6 @@ static bool align_up(size_t value, size_t alignment, size_t *result) {
     }
     *result = value + (alignment - remainder);
     return true;
-}
-
-/* M79_CALL_FRAME_RETURN_ADDRESS: a return-address query needs the entry
-   value of ra even in a function that has no ordinary Core CALL yet. Save it
-   in the prologue whenever either a call or this semantic instruction exists. */
-static bool core_function_needs_saved_return_address(const MinicCoreFunction *function) {
-    size_t instruction_index;
-
-    if (function == NULL) {
-        return false;
-    }
-    for (instruction_index = 0U; instruction_index < function->instruction_count;
-         ++instruction_index) {
-        MinicCoreInstructionKind kind = function->instructions[instruction_index].kind;
-        if (kind == MINIC_CORE_INSTRUCTION_CALL ||
-            kind == MINIC_CORE_INSTRUCTION_INDIRECT_CALL) {
-            return true;
-        }
-        if (kind == MINIC_CORE_INSTRUCTION_CALL_FRAME_ADDRESS &&
-            function->instructions[instruction_index].value.call_frame_address.kind ==
-                MINIC_CORE_CALL_FRAME_ADDRESS_RETURN) {
-            return true;
-        }
-    }
-    return false;
-}
-
-static bool core_function_uses_structured_inline_asm(
-    const MinicCoreFunction *function) {
-    size_t instruction_index;
-
-    if (function == NULL) {
-        return false;
-    }
-    for (instruction_index = 0U; instruction_index < function->instruction_count;
-         ++instruction_index) {
-        if (function->instructions[instruction_index].kind ==
-            MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM) {
-            return true;
-        }
-    }
-    return false;
-}
-
-static bool core_function_uses_dynamic_stack_alloc(
-    const MinicCoreFunction *function) {
-    size_t instruction_index;
-
-    if (function == NULL) {
-        return false;
-    }
-    for (instruction_index = 0U; instruction_index < function->instruction_count;
-         ++instruction_index) {
-        if (function->instructions[instruction_index].kind ==
-            MINIC_CORE_INSTRUCTION_DYNAMIC_STACK_ALLOC) {
-            return true;
-        }
-    }
-    return false;
-}
-
-static bool core_function_uses_variadic_argument_address(
-    const MinicCoreFunction *function) {
-    size_t instruction_index;
-
-    if (function == NULL) {
-        return false;
-    }
-    for (instruction_index = 0U; instruction_index < function->instruction_count;
-         ++instruction_index) {
-        if (function->instructions[instruction_index].kind ==
-            MINIC_CORE_INSTRUCTION_VARIADIC_ARGUMENT_ADDRESS) {
-            return true;
-        }
-    }
-    return false;
-}
-
-static bool core_variadic_fixed_prefix(const MinicC0Program *program,
-                                       const MinicCoreFunction *function,
-                                       size_t *integer_parameter_count,
-                                       size_t *fixed_stack_slots) {
-    MinicRiscv64AbiCursor cursor;
-    MinicRiscv64AbiValue return_value;
-    size_t parameter_index;
-
-    if (program == NULL || function == NULL || integer_parameter_count == NULL ||
-        fixed_stack_slots == NULL ||
-        !minic_riscv64_abi_cursor_initialize_for_return(
-            program, function->return_type, &cursor, &return_value)) {
-        return false;
-    }
-    (void)return_value;
-    for (parameter_index = 0U; parameter_index < function->parameter_count; ++parameter_index) {
-        MinicRiscv64AbiArgumentLocation location;
-
-        if (!minic_riscv64_abi_place_argument(
-                program, function->parameter_types[parameter_index], true, &cursor, &location)) {
-            return false;
-        }
-    }
-    /* RV64 varargs are contiguous after the named prefix. If integer argument
-       registers remain, preserve them in the callee frame as before. Once the
-       named prefix has exhausted a0-a7, the first unnamed argument starts
-       directly after the named incoming stack slots. Keep mixed register/stack
-       prefixes fail-closed unless all integer argument registers are consumed. */
-    if (cursor.integer_register_count > 8U ||
-        (cursor.stack_slot_count != 0U && cursor.integer_register_count != 8U)) {
-        return false;
-    }
-    *integer_parameter_count = cursor.integer_register_count;
-    *fixed_stack_slots = cursor.stack_slot_count;
-    return true;
-}
-
-/* M168_RV64_INDIRECT_CALL_STACK: reserve one fixed outgoing stack area
-   shared by direct and indirect calls.  The ABI cursor remains the single owner
-   of register/stack placement; Core keeps only VALUE/OBJECT arguments. */
-static bool core_call_outgoing_stack_size(const MinicC0Program *program,
-                                          const MinicCoreFunction *function,
-                                          size_t *result) {
-    size_t instruction_index;
-    size_t maximum_stack_slots;
-
-    if (program == NULL || function == NULL || result == NULL) {
-        return false;
-    }
-    maximum_stack_slots = 0U;
-    for (instruction_index = 0U; instruction_index < function->instruction_count;
-         ++instruction_index) {
-        const MinicCoreInstruction *instruction = &function->instructions[instruction_index];
-        const MinicType *parameter_types;
-        size_t parameter_count;
-        bool is_variadic;
-        size_t argument_begin;
-        size_t argument_count;
-        MinicType return_type;
-        MinicRiscv64AbiCursor cursor;
-        MinicRiscv64AbiValue return_value;
-        size_t argument_index;
-
-        if (instruction->kind == MINIC_CORE_INSTRUCTION_CALL) {
-            const MinicCoreCallee *callee;
-            if (instruction->value.call.callee_id >= function->callee_count ||
-                instruction->value.call.argument_begin > function->call_argument_count ||
-                instruction->value.call.argument_count >
-                    function->call_argument_count - instruction->value.call.argument_begin) {
-                return false;
-            }
-            callee = &function->callees[instruction->value.call.callee_id];
-            parameter_types = callee->parameter_types;
-            parameter_count = callee->parameter_count;
-            is_variadic = callee->is_variadic;
-            argument_begin = instruction->value.call.argument_begin;
-            argument_count = instruction->value.call.argument_count;
-            return_type = callee->return_type;
-        } else if (instruction->kind == MINIC_CORE_INSTRUCTION_INDIRECT_CALL) {
-            const MinicCoreCallSignature *signature;
-            if (instruction->value.indirect_call.signature_id >= function->call_signature_count ||
-                instruction->value.indirect_call.argument_begin > function->call_argument_count ||
-                instruction->value.indirect_call.argument_count >
-                    function->call_argument_count - instruction->value.indirect_call.argument_begin) {
-                return false;
-            }
-            signature = &function->call_signatures[instruction->value.indirect_call.signature_id];
-            parameter_types = signature->parameter_types;
-            parameter_count = signature->parameter_count;
-            is_variadic = signature->is_variadic;
-            argument_begin = instruction->value.indirect_call.argument_begin;
-            argument_count = instruction->value.indirect_call.argument_count;
-            return_type = signature->return_type;
-        } else {
-            continue;
-        }
-
-        if (!minic_riscv64_abi_cursor_initialize_for_return(
-                program, return_type, &cursor, &return_value)) {
-            return false;
-        }
-        (void)return_value;
-        for (argument_index = 0U; argument_index < argument_count; ++argument_index) {
-            const MinicCoreCallArgument *argument =
-                &function->call_arguments[argument_begin + argument_index];
-            MinicRiscv64AbiArgumentLocation location;
-            MinicType argument_type;
-            bool is_fixed_parameter = argument_index < parameter_count;
-
-            if (is_fixed_parameter) {
-                argument_type = parameter_types[argument_index];
-            } else {
-                if (!is_variadic) {
-                    return false;
-                }
-                if (argument->kind == MINIC_CORE_CALL_ARGUMENT_VALUE) {
-                    if (argument->value.value_id >= function->value_count) {
-                        return false;
-                    }
-                    argument_type = function->values[argument->value.value_id].type;
-                } else if (argument->kind == MINIC_CORE_CALL_ARGUMENT_OBJECT) {
-                    if (argument->value.object_id >= function->object_count ||
-                        !minic_type_is_record(
-                            function->objects[argument->value.object_id].type)) {
-                        return false;
-                    }
-                    argument_type = function->objects[argument->value.object_id].type;
-                } else {
-                    return false;
-                }
-            }
-            if (!minic_riscv64_abi_place_argument(
-                    program, argument_type, is_fixed_parameter, &cursor, &location)) {
-                return false;
-            }
-        }
-        if (cursor.stack_slot_count > maximum_stack_slots) {
-            maximum_stack_slots = cursor.stack_slot_count;
-        }
-    }
-    if (maximum_stack_slots > SIZE_MAX / 8U) {
-        return false;
-    }
-    *result = maximum_stack_slots * 8U;
-    return true;
-}
-
-/* IRQ_FRAME_PACK_V0: Core scalar spill values are block-local. Keep the
-   existing conservative no-liveness-reuse contract, but do not spend 16 bytes
-   on every <= XLEN value merely because int128 needs a two-XLEN pair. */
-static bool core_value_spill_slot_size(const MinicC0Program *program,
-                                       const MinicCoreFunction *function,
-                                       MinicCoreValueId value_id,
-                                       size_t *slot_size) {
-    size_t value_size;
-    size_t value_alignment;
-
-    if (program == NULL || function == NULL || slot_size == NULL ||
-        value_id >= function->value_count ||
-        !minic_data_layout_type(minic_default_data_layout(),
-                                program,
-                                function->values[value_id].type,
-                                &value_size,
-                                &value_alignment) ||
-        value_size == 0U || value_size > 16U) {
-        return false;
-    }
-    (void)value_alignment;
-    *slot_size = value_size > 8U ? 16U : 8U;
-    return true;
-}
-
-/* IRQ_FRAME_REUSE_V0: Core SSA availability is reset at every basic-block
-   boundary. Reuse physical spill slots inside one block only after the last
-   semantic use of a value. A result is allocated before the current
-   instruction's operands are released, so an instruction never aliases an
-   output spill with an input that it still has to read. */
-typedef bool (*CoreValueUseVisitor)(MinicCoreValueId value_id, void *context);
-
-static bool core_visit_value_use(MinicCoreValueId value_id,
-                                 CoreValueUseVisitor visitor,
-                                 void *context) {
-    return visitor != NULL && value_id != MINIC_CORE_VALUE_INVALID &&
-           visitor(value_id, context);
-}
-
-static bool core_visit_call_argument_uses(const MinicCoreFunction *function,
-                                          size_t argument_begin,
-                                          size_t argument_count,
-                                          CoreValueUseVisitor visitor,
-                                          void *context) {
-    size_t i;
-
-    if (function == NULL || argument_begin > function->call_argument_count ||
-        argument_count > function->call_argument_count - argument_begin) {
-        return false;
-    }
-    for (i = 0U; i < argument_count; ++i) {
-        const MinicCoreCallArgument *argument =
-            &function->call_arguments[argument_begin + i];
-        if (argument->kind == MINIC_CORE_CALL_ARGUMENT_VALUE &&
-            !core_visit_value_use(argument->value.value_id, visitor, context)) {
-            return false;
-        }
-    }
-    return true;
-}
-
-static bool core_visit_instruction_value_uses(const MinicCoreFunction *function,
-                                              const MinicCoreInstruction *instruction,
-                                              CoreValueUseVisitor visitor,
-                                              void *context) {
-    size_t i;
-
-    if (function == NULL || instruction == NULL || visitor == NULL) {
-        return false;
-    }
-    switch (instruction->kind) {
-    case MINIC_CORE_INSTRUCTION_FLOAT_ADD:
-    case MINIC_CORE_INSTRUCTION_FLOAT_SUBTRACT:
-    case MINIC_CORE_INSTRUCTION_FLOAT_MULTIPLY:
-    case MINIC_CORE_INSTRUCTION_FLOAT_DIVIDE:
-    case MINIC_CORE_INSTRUCTION_DOUBLE_ADD:
-    case MINIC_CORE_INSTRUCTION_DOUBLE_SUBTRACT:
-    case MINIC_CORE_INSTRUCTION_DOUBLE_MULTIPLY:
-    case MINIC_CORE_INSTRUCTION_DOUBLE_DIVIDE:
-    case MINIC_CORE_INSTRUCTION_DOUBLE_EQUAL:
-    case MINIC_CORE_INSTRUCTION_DOUBLE_LESS:
-    case MINIC_CORE_INSTRUCTION_DOUBLE_LESS_EQUAL:
-    case MINIC_CORE_INSTRUCTION_INTEGER_ADD:
-    case MINIC_CORE_INSTRUCTION_INTEGER_SUBTRACT:
-    case MINIC_CORE_INSTRUCTION_INTEGER_MULTIPLY:
-    case MINIC_CORE_INSTRUCTION_INTEGER_DIVIDE:
-    case MINIC_CORE_INSTRUCTION_INTEGER_REMAINDER:
-    case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND:
-    case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_XOR:
-    case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_OR:
-    case MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_LEFT:
-    case MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_RIGHT:
-    case MINIC_CORE_INSTRUCTION_INTEGER_LESS:
-    case MINIC_CORE_INSTRUCTION_POINTER_LESS:
-    case MINIC_CORE_INSTRUCTION_SCALAR_EQUAL:
-        return core_visit_value_use(instruction->value.binary.left, visitor, context) &&
-               core_visit_value_use(instruction->value.binary.right, visitor, context);
-
-    case MINIC_CORE_INSTRUCTION_INTEGER_OVERFLOW:
-        return core_visit_value_use(instruction->value.integer_overflow.left, visitor, context) &&
-               core_visit_value_use(instruction->value.integer_overflow.right, visitor, context) &&
-               core_visit_value_use(
-                   instruction->value.integer_overflow.result_address, visitor, context);
-
-    case MINIC_CORE_INSTRUCTION_INTEGER_CONVERSION:
-    case MINIC_CORE_INSTRUCTION_INTEGER_TO_DOUBLE:
-    case MINIC_CORE_INSTRUCTION_DOUBLE_TO_INTEGER:
-    case MINIC_CORE_INSTRUCTION_SCALAR_BITCAST:
-    case MINIC_CORE_INSTRUCTION_INTEGER_NEGATE:
-    case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_NOT:
-    case MINIC_CORE_INSTRUCTION_INTEGER_CLZ:
-    case MINIC_CORE_INSTRUCTION_INTEGER_CTZ:
-    case MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO:
-    case MINIC_CORE_INSTRUCTION_DOUBLE_NEGATE:
-    case MINIC_CORE_INSTRUCTION_FLOAT_TO_DOUBLE:
-    case MINIC_CORE_INSTRUCTION_DOUBLE_TO_FLOAT:
-    case MINIC_CORE_INSTRUCTION_DYNAMIC_STACK_ALLOC:
-    case MINIC_CORE_INSTRUCTION_VARIADIC_NEXT_SCALAR:
-        return core_visit_value_use(instruction->value.operand, visitor, context);
-
-    case MINIC_CORE_INSTRUCTION_FIELD_ADDRESS:
-        return core_visit_value_use(instruction->value.field_address.base, visitor, context);
-    case MINIC_CORE_INSTRUCTION_POINTER_OFFSET:
-        return core_visit_value_use(instruction->value.pointer_offset.base, visitor, context) &&
-               core_visit_value_use(instruction->value.pointer_offset.index, visitor, context);
-    case MINIC_CORE_INSTRUCTION_LOAD:
-        return core_visit_value_use(instruction->value.load.address, visitor, context);
-    case MINIC_CORE_INSTRUCTION_ATOMIC_LOAD:
-        return core_visit_value_use(instruction->value.atomic_load.address, visitor, context);
-    case MINIC_CORE_INSTRUCTION_ATOMIC_STORE:
-        return core_visit_value_use(
-                   instruction->value.atomic_store.address, visitor, context) &&
-               core_visit_value_use(
-                   instruction->value.atomic_store.stored_value, visitor, context);
-    case MINIC_CORE_INSTRUCTION_STORE:
-        return core_visit_value_use(instruction->value.store.address, visitor, context) &&
-               core_visit_value_use(instruction->value.store.stored_value, visitor, context);
-    case MINIC_CORE_INSTRUCTION_RECORD_LOAD:
-        return core_visit_value_use(
-            instruction->value.record_load.source_address, visitor, context);
-    case MINIC_CORE_INSTRUCTION_RECORD_COPY:
-        return core_visit_value_use(
-                   instruction->value.record_copy.destination_address, visitor, context) &&
-               core_visit_value_use(
-                   instruction->value.record_copy.source_address, visitor, context);
-    case MINIC_CORE_INSTRUCTION_REGISTER_OUTPUT_INPUT_INLINE_ASM:
-        return core_visit_value_use(
-            instruction->value.register_output_input_inline_asm.operand, visitor, context);
-    case MINIC_CORE_INSTRUCTION_MEMORY_READWRITE_SCALAR_INPUT_INLINE_ASM:
-        return core_visit_value_use(
-                   instruction->value.memory_readwrite_scalar_input_inline_asm.memory_address,
-                   visitor,
-                   context) &&
-               core_visit_value_use(
-                   instruction->value.memory_readwrite_scalar_input_inline_asm.operand,
-                   visitor,
-                   context);
-    case MINIC_CORE_INSTRUCTION_SCALAR_INPUT_INLINE_ASM:
-        return core_visit_value_use(
-            instruction->value.scalar_input_inline_asm.operand, visitor, context);
-    case MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM:
-        if (instruction->value.structured_inline_asm.operand_count >
-            MINIC_CORE_STRUCTURED_INLINE_ASM_OPERAND_LIMIT) {
-            return false;
-        }
-        for (i = 0U; i < instruction->value.structured_inline_asm.operand_count; ++i) {
-            if (!core_visit_value_use(
-                    instruction->value.structured_inline_asm.operands[i].value,
-                    visitor,
-                    context)) {
-                return false;
-            }
-        }
-        return true;
-    case MINIC_CORE_INSTRUCTION_CALL:
-        return core_visit_call_argument_uses(function,
-                                             instruction->value.call.argument_begin,
-                                             instruction->value.call.argument_count,
-                                             visitor,
-                                             context);
-    case MINIC_CORE_INSTRUCTION_INDIRECT_CALL:
-        return core_visit_value_use(instruction->value.indirect_call.callee, visitor, context) &&
-               core_visit_call_argument_uses(function,
-                                             instruction->value.indirect_call.argument_begin,
-                                             instruction->value.indirect_call.argument_count,
-                                             visitor,
-                                             context);
-
-    case MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT:
-    case MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT:
-    case MINIC_CORE_INSTRUCTION_PARAMETER:
-    case MINIC_CORE_INSTRUCTION_FIXED_REGISTER_READ:
-    case MINIC_CORE_INSTRUCTION_PARAMETER_OBJECT:
-    case MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS:
-    case MINIC_CORE_INSTRUCTION_GLOBAL_ADDRESS:
-    case MINIC_CORE_INSTRUCTION_FUNCTION_ADDRESS:
-    case MINIC_CORE_INSTRUCTION_BLOCK_ADDRESS:
-    case MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM:
-    case MINIC_CORE_INSTRUCTION_REGISTER_OUTPUT_INLINE_ASM:
-    case MINIC_CORE_INSTRUCTION_COMPILER_BARRIER:
-    case MINIC_CORE_INSTRUCTION_CALL_FRAME_ADDRESS:
-    case MINIC_CORE_INSTRUCTION_VARIADIC_ARGUMENT_ADDRESS:
-        return true;
-    }
-    return false;
-}
-
-static bool core_visit_terminator_value_uses(const MinicCoreTerminator *terminator,
-                                             CoreValueUseVisitor visitor,
-                                             void *context) {
-    if (terminator == NULL || visitor == NULL) {
-        return false;
-    }
-    switch (terminator->kind) {
-    case MINIC_CORE_TERMINATOR_RETURN:
-        return terminator->return_value == MINIC_CORE_VALUE_INVALID ||
-               core_visit_value_use(terminator->return_value, visitor, context);
-    case MINIC_CORE_TERMINATOR_INDIRECT_BRANCH:
-        return core_visit_value_use(terminator->indirect_target, visitor, context);
-    case MINIC_CORE_TERMINATOR_CONDITIONAL_BRANCH:
-        return core_visit_value_use(terminator->conditional.condition, visitor, context);
-    case MINIC_CORE_TERMINATOR_BRANCH:
-    case MINIC_CORE_TERMINATOR_UNREACHABLE:
-        return true;
-    }
-    return false;
-}
-
-typedef struct CoreSpillUseCountContext {
-    const MinicCoreFunction *function;
-    size_t *remaining_uses;
-} CoreSpillUseCountContext;
-
-static bool core_spill_count_use(MinicCoreValueId value_id, void *opaque) {
-    CoreSpillUseCountContext *context = (CoreSpillUseCountContext *)opaque;
-    if (context == NULL || context->function == NULL || context->remaining_uses == NULL ||
-        value_id >= context->function->value_count ||
-        context->remaining_uses[value_id] == SIZE_MAX) {
-        return false;
-    }
-    ++context->remaining_uses[value_id];
-    return true;
-}
-
-typedef struct CoreSpillConsumeContext {
-    const MinicC0Program *program;
-    const MinicCoreFunction *function;
-    size_t *remaining_uses;
-    size_t *active_units;
-    bool *occupied_units;
-    size_t unit_count;
-} CoreSpillConsumeContext;
-
-static bool core_spill_consume_use(MinicCoreValueId value_id, void *opaque) {
-    CoreSpillConsumeContext *context = (CoreSpillConsumeContext *)opaque;
-    size_t slot_size;
-    size_t units;
-    size_t start;
-    size_t i;
-
-    if (context == NULL || context->program == NULL || context->function == NULL ||
-        context->remaining_uses == NULL || context->active_units == NULL ||
-        context->occupied_units == NULL || value_id >= context->function->value_count ||
-        context->remaining_uses[value_id] == 0U ||
-        context->active_units[value_id] == SIZE_MAX ||
-        !core_value_spill_slot_size(
-            context->program, context->function, value_id, &slot_size) ||
-        (slot_size != 8U && slot_size != 16U)) {
-        return false;
-    }
-    --context->remaining_uses[value_id];
-    if (context->remaining_uses[value_id] != 0U) {
-        return true;
-    }
-    units = slot_size / 8U;
-    start = context->active_units[value_id];
-    if (start > context->unit_count || units > context->unit_count - start) {
-        return false;
-    }
-    for (i = 0U; i < units; ++i) {
-        if (!context->occupied_units[start + i]) {
-            return false;
-        }
-        context->occupied_units[start + i] = false;
-    }
-    context->active_units[value_id] = SIZE_MAX;
-    return true;
-}
-
-static bool core_spill_find_units(const bool *occupied_units,
-                                  size_t unit_count,
-                                  size_t needed_units,
-                                  size_t *start_unit) {
-    size_t start;
-
-    if (occupied_units == NULL || start_unit == NULL || needed_units == 0U ||
-        needed_units > unit_count) {
-        return false;
-    }
-    for (start = 0U; start <= unit_count - needed_units; ++start) {
-        size_t i;
-        bool free_run = true;
-        for (i = 0U; i < needed_units; ++i) {
-            if (occupied_units[start + i]) {
-                free_run = false;
-                break;
-            }
-        }
-        if (free_run) {
-            *start_unit = start;
-            return true;
-        }
-    }
-    return false;
-}
-
-static bool core_block_reused_spill_layout(const MinicC0Program *program,
-                                           const MinicCoreFunction *function,
-                                           const MinicCoreBlock *block,
-                                           size_t value_base_offset,
-                                           size_t *value_offsets,
-                                           size_t *peak_bytes) {
-    size_t *remaining_uses = NULL;
-    size_t *active_units = NULL;
-    bool *occupied_units = NULL;
-    size_t total_units = 0U;
-    size_t peak_units = 0U;
-    size_t instruction_index;
-    CoreSpillUseCountContext count_context;
-    CoreSpillConsumeContext consume_context;
-    bool ok = false;
-
-    if (program == NULL || function == NULL || block == NULL || peak_bytes == NULL) {
-        return false;
-    }
-    for (instruction_index = 0U; instruction_index < block->instruction_count;
-         ++instruction_index) {
-        MinicCoreInstructionId instruction_id = block->instructions[instruction_index];
-        const MinicCoreInstruction *instruction;
-        size_t slot_size;
-        if (instruction_id >= function->instruction_count) {
-            return false;
-        }
-        instruction = &function->instructions[instruction_id];
-        if (instruction->result == MINIC_CORE_VALUE_INVALID) {
-            continue;
-        }
-        if (instruction->result >= function->value_count ||
-            !core_value_spill_slot_size(program, function, instruction->result, &slot_size) ||
-            (slot_size != 8U && slot_size != 16U) ||
-            total_units > SIZE_MAX - slot_size / 8U) {
-            return false;
-        }
-        total_units += slot_size / 8U;
-    }
-    if (total_units == 0U) {
-        *peak_bytes = 0U;
-        return true;
-    }
-    if (function->value_count > SIZE_MAX / sizeof(*remaining_uses) ||
-        function->value_count > SIZE_MAX / sizeof(*active_units)) {
-        return false;
-    }
-    remaining_uses = (size_t *)calloc(function->value_count, sizeof(*remaining_uses));
-    active_units = (size_t *)malloc(function->value_count * sizeof(*active_units));
-    occupied_units = (bool *)calloc(total_units, sizeof(*occupied_units));
-    if (remaining_uses == NULL || active_units == NULL || occupied_units == NULL) {
-        goto done;
-    }
-    for (instruction_index = 0U; instruction_index < function->value_count;
-         ++instruction_index) {
-        active_units[instruction_index] = SIZE_MAX;
-    }
-    count_context.function = function;
-    count_context.remaining_uses = remaining_uses;
-    for (instruction_index = 0U; instruction_index < block->instruction_count;
-         ++instruction_index) {
-        MinicCoreInstructionId instruction_id = block->instructions[instruction_index];
-        if (instruction_id >= function->instruction_count ||
-            !core_visit_instruction_value_uses(function,
-                                               &function->instructions[instruction_id],
-                                               core_spill_count_use,
-                                               &count_context)) {
-            goto done;
-        }
-    }
-    if (!block->has_terminator ||
-        !core_visit_terminator_value_uses(
-            &block->terminator, core_spill_count_use, &count_context)) {
-        goto done;
-    }
-
-    consume_context.program = program;
-    consume_context.function = function;
-    consume_context.remaining_uses = remaining_uses;
-    consume_context.active_units = active_units;
-    consume_context.occupied_units = occupied_units;
-    consume_context.unit_count = total_units;
-
-    for (instruction_index = 0U; instruction_index < block->instruction_count;
-         ++instruction_index) {
-        MinicCoreInstructionId instruction_id = block->instructions[instruction_index];
-        const MinicCoreInstruction *instruction = &function->instructions[instruction_id];
-
-        if (instruction->result != MINIC_CORE_VALUE_INVALID) {
-            size_t slot_size;
-            size_t units;
-            size_t start;
-            size_t i;
-            MinicCoreValueId result = instruction->result;
-
-            if (result >= function->value_count || active_units[result] != SIZE_MAX ||
-                !core_value_spill_slot_size(program, function, result, &slot_size) ||
-                (slot_size != 8U && slot_size != 16U)) {
-                goto done;
-            }
-            units = slot_size / 8U;
-            if (!core_spill_find_units(occupied_units, total_units, units, &start)) {
-                goto done;
-            }
-            for (i = 0U; i < units; ++i) {
-                occupied_units[start + i] = true;
-            }
-            active_units[result] = start;
-            if (start + units > peak_units) {
-                peak_units = start + units;
-            }
-            if (value_offsets != NULL) {
-                if (value_offsets[result] != SIZE_MAX || start > SIZE_MAX / 8U ||
-                    value_base_offset > SIZE_MAX - start * 8U) {
-                    goto done;
-                }
-                value_offsets[result] = value_base_offset + start * 8U;
-            }
-        }
-
-        if (!core_visit_instruction_value_uses(function,
-                                               instruction,
-                                               core_spill_consume_use,
-                                               &consume_context)) {
-            goto done;
-        }
-        if (instruction->result != MINIC_CORE_VALUE_INVALID &&
-            remaining_uses[instruction->result] == 0U) {
-            MinicCoreValueId result = instruction->result;
-            size_t slot_size;
-            size_t units;
-            size_t start = active_units[result];
-            size_t i;
-            if (start == SIZE_MAX ||
-                !core_value_spill_slot_size(program, function, result, &slot_size) ||
-                (slot_size != 8U && slot_size != 16U)) {
-                goto done;
-            }
-            units = slot_size / 8U;
-            if (start > total_units || units > total_units - start) {
-                goto done;
-            }
-            for (i = 0U; i < units; ++i) {
-                if (!occupied_units[start + i]) {
-                    goto done;
-                }
-                occupied_units[start + i] = false;
-            }
-            active_units[result] = SIZE_MAX;
-        }
-    }
-    if (!core_visit_terminator_value_uses(
-            &block->terminator, core_spill_consume_use, &consume_context)) {
-        goto done;
-    }
-    *peak_bytes = peak_units * 8U;
-    ok = true;
-
-done:
-    free(occupied_units);
-    free(active_units);
-    free(remaining_uses);
-    return ok;
 }
 
 /* RECORD_CALL_RESULT_SNAPSHOT_REUSE_V0: Core by-value record arguments may
@@ -1252,7 +551,7 @@ static bool core_object_address_build_use_index(const MinicCoreFunction *functio
             const MinicCoreInstruction *instruction;
             if (id >= function->instruction_count) goto unavailable;
             instruction = &function->instructions[id];
-            if (!core_visit_instruction_value_uses(
+            if (!minic_core_visit_instruction_value_uses(
                     function, instruction, core_object_address_note_use, &build)) {
                 goto unavailable;
             }
@@ -1268,7 +567,7 @@ static bool core_object_address_build_use_index(const MinicCoreFunction *functio
             }
         }
         if (block->has_terminator &&
-            !core_visit_terminator_value_uses(
+            !minic_core_visit_terminator_value_uses(
                 &block->terminator, core_object_address_note_use, &build)) {
             goto unavailable;
         }
@@ -1587,7 +886,7 @@ static bool core_scalar_object_interval(const MinicC0Program *program,
                             return false;
                         }
                         use_instruction = &function->instructions[use_id];
-                        if (!core_visit_instruction_value_uses(function,
+                        if (!minic_core_visit_instruction_value_uses(function,
                                                                use_instruction,
                                                                core_count_target_value_use,
                                                                &total_uses)) {
@@ -1613,7 +912,7 @@ static bool core_scalar_object_interval(const MinicC0Program *program,
                         }
                     }
                     if (candidate_block->has_terminator &&
-                        !core_visit_terminator_value_uses(&candidate_block->terminator,
+                        !minic_core_visit_terminator_value_uses(&candidate_block->terminator,
                                                          core_count_target_value_use,
                                                          &total_uses)) {
                         return false;
@@ -1916,9 +1215,9 @@ static bool core_frame_initialize(const MinicC0Program *program,
     frame->value_offsets = NULL;
     frame->reachable_blocks = NULL;
     frame->value_slot_count = 0U;
-    frame->has_dynamic_stack_alloc = core_function_uses_dynamic_stack_alloc(function);
+    frame->has_dynamic_stack_alloc = minic_riscv64_core_function_uses_dynamic_stack_alloc(function);
     frame->saved_frame_base_offset = 0U;
-    if (!core_call_outgoing_stack_size(program, function, &outgoing_argument_size)) {
+    if (!minic_riscv64_core_call_outgoing_stack_size(program, function, &outgoing_argument_size)) {
         return false;
     }
     frame->outgoing_argument_size = outgoing_argument_size;
@@ -2020,7 +1319,7 @@ static bool core_frame_initialize(const MinicC0Program *program,
 
         for (block_index = 0U; block_index < function->block_count; ++block_index) {
             size_t block_bytes;
-            if (!core_block_reused_spill_layout(program,
+            if (!minic_riscv64_block_reused_spill_layout(program,
                                                 function,
                                                 &function->blocks[block_index],
                                                 frame->value_base_offset,
@@ -2039,7 +1338,7 @@ static bool core_frame_initialize(const MinicC0Program *program,
         frame->value_slot_count = maximum_block_bytes / 8U;
         storage_size = frame->value_base_offset + maximum_block_bytes;
     }
-    frame->saves_return_address = core_function_needs_saved_return_address(function);
+    frame->saves_return_address = minic_riscv64_core_function_needs_saved_return_address(function);
     frame->return_address_offset = 0U;
     if (frame->saves_return_address) {
         if (!align_up(storage_size, 8U, &frame->return_address_offset) ||
@@ -2081,7 +1380,7 @@ static bool core_frame_initialize(const MinicC0Program *program,
     }
 
     frame->preserves_structured_asm_callee_saved =
-        core_function_uses_structured_inline_asm(function);
+        minic_riscv64_core_function_uses_structured_inline_asm(function);
     /*
      * Structured inline asm may explicitly bind/clobber s0. Dynamic-stack
      * functions reserve s0 as the stable fixed-frame base, so keep the mixed
@@ -2120,12 +1419,12 @@ static bool core_frame_initialize(const MinicC0Program *program,
     }
 
     frame->has_variadic_argument_address =
-        core_function_uses_variadic_argument_address(function);
+        minic_riscv64_core_function_uses_variadic_argument_address(function);
     frame->integer_parameter_count = 0U;
     frame->variadic_fixed_stack_slots = 0U;
     frame->varargs_size = 0U;
     if (frame->has_variadic_argument_address) {
-        if (!core_variadic_fixed_prefix(program,
+        if (!minic_riscv64_core_variadic_fixed_prefix(program,
                                         function,
                                         &frame->integer_parameter_count,
                                         &frame->variadic_fixed_stack_slots)) {
@@ -2268,7 +1567,7 @@ static bool core_frame_initialize(const MinicC0Program *program,
 
         for (block_index = 0U; block_index < function->block_count; ++block_index) {
             size_t block_bytes;
-            if (!core_block_reused_spill_layout(program,
+            if (!minic_riscv64_block_reused_spill_layout(program,
                                                 function,
                                                 &function->blocks[block_index],
                                                 frame->value_base_offset,
@@ -3856,7 +3155,7 @@ static bool core_instruction_supported(const MinicC0Program *program,
         return program != NULL && instruction->result < function->value_count &&
                minic_type_equal(function->values[instruction->result].type, instruction->type) &&
                minic_type_is_pointer(instruction->type) &&
-               core_variadic_fixed_prefix(
+               minic_riscv64_core_variadic_fixed_prefix(
                    program, function, &integer_parameter_count, &fixed_stack_slots);
     }
     case MINIC_CORE_INSTRUCTION_PARAMETER:

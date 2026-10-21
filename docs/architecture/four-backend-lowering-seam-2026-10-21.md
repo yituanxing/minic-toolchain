@@ -163,3 +163,56 @@ use these frame indices/plans before stack offsets are materialized.
 Release compilation under `-Werror`, x86 real programs and existing
 four-architecture GNU/QEMU checks are required before declaring
 behavioral equivalence.
+
+## RV64 machine-lowering responsibilities: frame requirements, not generic frame
+
+The six production RV64 Core/psABI requirement queries are now compiled in
+`riscv64/frame_requirements.{h,c}`. They decide whether to save the return
+address, detect structured inline asm and dynamic stack allocation, handle
+variadic parameter prefixes, and size the maximum outgoing argument area.
+They consult the established `riscv64/abi.c`, not x86 SysV or the new-ISA
+LP64 admission helpers.
+
+The actual RV64 `core_frame_initialize`, value spill reuse, scalar object
+lifetime/interval cache and inline asm register allocator remain in
+`core_codegen.c`: extraction is *not* authorization to replace or slow down
+that optimized machinery. These are stable inputs to eventual Machine IR
+lowering, without modifying Core IR or register/stack semantics.
+
+Both x86-64 (frame/abi/global) and RV64 (frame requirements/abi/global)
+are now explicitly part of the multi-arch modularization work. The
+original GNU/QEMU source-owner and Linux gates remain mandatory.
+
+## Architecture-wide pass after extraction (2026-10-21)
+
+Four backend files were reviewed together rather than seeking maximum
+source deduplication. Current ownership boundaries:
+
+| ISA | ABI admission/placement | Frame and SSA spill layout | Target emission |
+| --- | --- | --- | --- |
+| RV64 | `riscv64/abi.c`, `frame_requirements.c` | `riscv64/spill_layout.c` and advanced `core_codegen.c` intervals/object cache | `riscv64/core_codegen.c` |
+| x86-64 | `x86_64/abi.c` SysV classifiers | `x86_64/frame.c` SysV varargs/alignment | `x86_64/codegen.c` |
+| AArch64 | target-owned placement, narrow `common/lp64_aggregate.c` admission | optional bounded `common/lp64_frame.c` | `aarch64/codegen.c` |
+| LoongArch64 | target-owned placement, narrow `common/lp64_aggregate.c` admission | optional bounded `common/lp64_frame.c` | `loongarch64/codegen.c` |
+
+Global variables are orthogonal to Machine IR: RV64 and x86 own their
+ABI/format-specific ELF global entry points; AArch64 and LoongArch64 share
+the same verified simple global and relocation code; all use shared
+DataLayout helpers only for proven equivalent operations.
+
+IR/liveness seam: the former RV64 `core_visit_*` use enumeration is
+now `core/value_uses.{h,c}`. Only the Core **semantic value-use walk**
+is common. SSA spill allocation remains a separately optional
+`riscv64/spill_layout.c` policy. Neither physical registers, stack offsets
+nor a target ABI leak back into Core. Unsupported Core opcode visitation
+continues to return failure. This makes the future Machine IR handoff
+easier to implement without adding an unused instruction representation.
+
+Next machine-level priority should be measured (load/store redundancy,
+frame size, emitted machine instructions, compile and runtime cost) against
+real BusyBox/SQLite functions before imposing a generic register allocator.
+No LLVM-style instruction table or catch-all Backend vtable has been added.
+
+Acceptance gate: native warning-as-error build, existing RV64 Linux and
+x86 real-source owners, dual original AArch64/LoongArch64 581/581 BusyBox
+GNU/QEMU byte-differential. A source-equivalent move alone does not pass.

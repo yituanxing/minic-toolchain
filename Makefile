@@ -44,6 +44,7 @@ MINIC_INCLUDES := -Iinclude -Isrc
 MINIC_SOURCES := \
 	src/compiler/compiler.c \
 	src/core/core_ir.c \
+	src/core/value_uses.c \
 	src/core/core_lower.c \
 	src/core/core_lower_bool.c \
 	src/core/core_lower_types.c \
@@ -92,6 +93,8 @@ MINIC_SOURCES := \
 	src/target/riscv64/layout.c \
 	src/target/riscv64/codegen_support.c \
 	src/target/riscv64/core_codegen.c \
+	src/target/riscv64/spill_layout.c \
+	src/target/riscv64/frame_requirements.c \
 	src/target/riscv64/codegen_function.c \
 	src/target/riscv64/global_emit.c \
 	src/target/x86_64/codegen.c \
