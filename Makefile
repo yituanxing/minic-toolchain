@@ -86,6 +86,7 @@ MINIC_SOURCES := \
 	src/target/target_info.c \
 	src/target/backend.c \
 	src/target/common/global_emit.c \
+	src/target/common/direct_program_emit.c \
 	src/target/common/lp64_aggregate.c \
 	src/target/common/lp64_scalar.c \
 	src/target/common/lp64_frame.c \
@@ -105,7 +106,9 @@ MINIC_SOURCES := \
 	src/target/x86_64/global_emit.c \
 	src/target/aarch64/abi.c \
 	src/target/aarch64/codegen.c \
+	src/target/aarch64/asm_legalize.c \
 	src/target/loongarch64/codegen.c \
+	src/target/loongarch64/frame_emit.c \
 	tools/minic-cc/main.c
 MINIC_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(MINIC_SOURCES))
 MINIC_CC_BINARY := $(BUILD_DIR)/bin/minic-cc
