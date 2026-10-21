@@ -146,3 +146,20 @@ This directly separates semantic ABI classification from target machine
 emission without demanding an immediate Machine IR. No common LP64
 classifier is assumed across RV64/x86/AArch64/LoongArch64. Runtime
 certification still requires original project GNU differential gates.
+
+## x86-64 frame-planning seam
+
+`x86_64/frame.{h,c}` now owns the actual SysV AMD64 frame plan:
+8-/16-byte Core SSA value slots, varargs register-save area and va_start
+tags, object placements, >16-byte aligned RSP-relative object bases, and
+overflow checks. `codegen.c` retains the x86 addressing sequences,
+prologue/epilogue and physical register selection. ABI classifier
+`x86_64/abi.c` remains a distinct module.
+
+The refactor moves the **existing** planner, not a simplified generic
+one; optimized RV64 remains independent. A later target Machine IR can
+use these frame indices/plans before stack offsets are materialized.
+
+Release compilation under `-Werror`, x86 real programs and existing
+four-architecture GNU/QEMU checks are required before declaring
+behavioral equivalence.
