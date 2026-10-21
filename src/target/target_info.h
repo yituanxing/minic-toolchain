@@ -51,7 +51,7 @@ typedef struct MinicTargetInfo {
     /* Transitional frontend pointer-va_list policy: an existing pointer
      * assignment is accepted for this ABI. This does NOT establish correct
      * value-copy semantics for structured AAPCS64 cursors. */
-    bool variadic_pointer_copy_supported;
+    bool variadic_pointer_assignment_compatible;
 } MinicTargetInfo;
 
 extern const char *const minic_riscv64_argument_registers[8];

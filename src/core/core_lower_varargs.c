@@ -9,13 +9,6 @@
 MinicCoreLowerStatus minic_core_lower_vararg_scalar(
     MinicCoreLowerContext *context, const MinicExpression *expression,
     MinicCoreValueId *value_id) {
-    if (context == NULL || expression == NULL || value_id == NULL ||
-        context->target == NULL ||
-        expression->kind != MINIC_EXPRESSION_BUILTIN_VA_ARG)
-        return MINIC_CORE_LOWER_ERROR;
-    if (context->target->variadic_scalar_read_kind ==
-        MINIC_VARIADIC_SCALAR_READ_UNSUPPORTED)
-        return MINIC_CORE_LOWER_UNSUPPORTED;
     const MinicExpression *target;
     MinicCoreInstruction operation;
     MinicCoreLowerStatus status;
@@ -29,6 +22,14 @@ MinicCoreLowerStatus minic_core_lower_vararg_scalar(
     MinicType value_pointer_type;
     size_t value_size;
     size_t value_alignment;
+
+    if (context == NULL || expression == NULL || value_id == NULL ||
+        context->target == NULL ||
+        expression->kind != MINIC_EXPRESSION_BUILTIN_VA_ARG)
+        return MINIC_CORE_LOWER_ERROR;
+    if (context->target->variadic_scalar_read_kind ==
+        MINIC_VARIADIC_SCALAR_READ_UNSUPPORTED)
+        return MINIC_CORE_LOWER_UNSUPPORTED;
 
     target = minic_c0_program_expression(
         context->body->program, expression->value.unary.operand);
@@ -204,9 +205,10 @@ MinicCoreLowerStatus minic_core_lower_vararg_statement(
                    : MINIC_CORE_LOWER_ERROR;
     }
     if (expression->kind == MINIC_EXPRESSION_BUILTIN_VA_COPY) {
-        /* Pointer assignment is valid only if the ABI advertises it.
-         * A structured cursor needs a genuine value copy, not an alias. */
-        if (!context->target->variadic_pointer_copy_supported)
+        /* Transitional pointer-assignment compatibility is not proof of
+         * structured va_list value-copy correctness. The real ABI-specific
+         * copy must eventually become a distinct semantic IR operation. */
+        if (!context->target->variadic_pointer_assignment_compatible)
             return MINIC_CORE_LOWER_UNSUPPORTED;
         return minic_core_lower_assignment_pair(context,
                                      expression->value.binary.left,
