@@ -676,7 +676,7 @@ minic_core_lower_switch(MinicCoreLowerContext *context, const MinicStatement *st
     size_t default_label;
     size_t first_case_label;
     size_t label_count;
-    MinicStatementId pre_case_labels[MINIC_CORE_SWITCH_LABEL_LIMIT];
+    size_t first_pre_case_index;
     size_t pre_case_label_count;
     size_t source_index;
     bool all_segments_terminate;
@@ -748,6 +748,7 @@ minic_core_lower_switch(MinicCoreLowerContext *context, const MinicStatement *st
     first_case_label = SIZE_MAX;
     label_count = 0U;
     pre_case_label_count = 0U;
+    first_pre_case_index = SIZE_MAX;
     for (source_index = 0U; source_index < body->statement_count; ++source_index) {
         const MinicStatement *source_statement;
 
@@ -769,7 +770,9 @@ minic_core_lower_switch(MinicCoreLowerContext *context, const MinicStatement *st
                         source_statement->target_statement != MINIC_STATEMENT_INVALID ||
                         pre_case_label_count >= MINIC_CORE_SWITCH_LABEL_LIMIT)
                         return MINIC_CORE_LOWER_UNSUPPORTED;
-                    pre_case_labels[pre_case_label_count++] = prefix_id;
+                    if (first_pre_case_index == SIZE_MAX)
+                        first_pre_case_index = source_index;
+                    ++pre_case_label_count;
                     continue;
                 }
                 /* A bare statement preceding the first case/default is
@@ -853,34 +856,8 @@ minic_core_lower_switch(MinicCoreLowerContext *context, const MinicStatement *st
         }
     }
 
-    if (pre_case_label_count != 0U) {
-        MinicCoreBlockId first_body_target;
-        size_t pre_index;
-
-        if (label_count == 0U) {
-            return MINIC_CORE_LOWER_UNSUPPORTED;
-        }
-        first_body_target = labels[0].body_block;
-        for (pre_index = 0U; pre_index < pre_case_label_count; ++pre_index) {
-            const MinicStatement *pre_label;
-            MinicCoreBlockId pre_block;
-
-            pre_label = minic_c0_program_statement(
-                context->body->program, pre_case_labels[pre_index]);
-            if (pre_label == NULL ||
-                ensure_statement_block(
-                    context, pre_case_labels[pre_index], &pre_block) != MINIC_CORE_LOWER_OK) {
-                return MINIC_CORE_LOWER_ERROR;
-            }
-            if (!context->function->blocks[pre_block].has_terminator) {
-                status = minic_core_lower_internal_set_branch(
-                    context, pre_block, pre_label->span, first_body_target);
-                if (status != MINIC_CORE_LOWER_OK) {
-                    return status;
-                }
-            }
-        }
-    }
+    if (pre_case_label_count != 0U && label_count == 0U)
+        return MINIC_CORE_LOWER_UNSUPPORTED;
 
     default_target = default_label == SIZE_MAX ? exit_block : labels[default_label].body_block;
     dispatch_target =
@@ -972,6 +949,55 @@ minic_core_lower_switch(MinicCoreLowerContext *context, const MinicStatement *st
                 return status;
             }
         }
+    }
+
+    /* A function-level goto may enter a label before the first case.
+     * The ordinary switch dispatch never enters this prefix, but the goto
+     * must execute every subsequent source statement, including a break,
+     * rather than teleporting directly to the first case body. Lower the
+     * reachable suffix in a detached CFG block. Restore local facts because
+     * the switch dispatch and case segments do not execute that suffix. */
+    if (pre_case_label_count != 0U) {
+        MinicCoreLocalIntegerConstant *saved_facts;
+        MinicCoreBlockId saved_block;
+        MinicCoreBlockId saved_break_target;
+        MinicCoreBlockId prefix_entry;
+        MinicBlock prefix_segment;
+        bool prefix_terminated;
+
+        if (first_pre_case_index == SIZE_MAX ||
+            first_pre_case_index >= labels[0].source_index)
+            return MINIC_CORE_LOWER_ERROR;
+        saved_facts = minic_core_local_facts_snapshot(context);
+        if (context->source_function != NULL &&
+            context->source_function->local_count != 0U &&
+            saved_facts == NULL)
+            return MINIC_CORE_LOWER_ERROR;
+        if (!minic_core_function_add_block(context->function, &prefix_entry)) {
+            free(saved_facts);
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        prefix_segment = *body;
+        prefix_segment.statements = body->statements + first_pre_case_index;
+        prefix_segment.statement_count =
+            labels[0].source_index - first_pre_case_index;
+        prefix_segment.statement_capacity = prefix_segment.statement_count;
+        saved_block = context->block_id;
+        saved_break_target = context->break_target;
+        context->block_id = prefix_entry;
+        context->break_target = exit_block;
+        prefix_terminated = false;
+        status = minic_core_lower_internal_lower_block(
+            context, &prefix_segment, &prefix_terminated);
+        context->break_target = saved_break_target;
+        if (status == MINIC_CORE_LOWER_OK && !prefix_terminated)
+            status = minic_core_lower_internal_set_branch(
+                context, context->block_id, statement->span,
+                labels[0].body_block);
+        context->block_id = saved_block;
+        minic_core_local_facts_restore(context, saved_facts);
+        free(saved_facts);
+        if (status != MINIC_CORE_LOWER_OK) return status;
     }
 
     /* M101_TERMINATING_SWITCH_FALLTHROUGH: termination is a property of the
