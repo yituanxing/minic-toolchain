@@ -1,13 +1,6 @@
 #include "core/value_uses.h"
 
 /* Extracted without rewriting the tested RV64 Core SSA use enumeration. */
-/* IRQ_FRAME_REUSE_V0: Core SSA availability is reset at every basic-block
-   boundary. Reuse physical spill slots inside one block only after the last
-   semantic use of a value. A result is allocated before the current
-   instruction's operands are released, so an instruction never aliases an
-   output spill with an input that it still has to read. */
-typedef bool (*MinicCoreValueUseVisitor)(MinicCoreValueId value_id, void *context);
-
 static bool core_visit_value_use(MinicCoreValueId value_id,
                                  MinicCoreValueUseVisitor visitor,
                                  void *context) {

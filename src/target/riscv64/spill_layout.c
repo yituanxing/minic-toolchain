@@ -4,6 +4,11 @@
 #include <stdint.h>
 #include <stdlib.h>
 /* The optimized RV64 block-local 8/16-byte spill algorithm remains unchanged. */
+/* IRQ_FRAME_REUSE_V0: Core SSA availability is reset at every basic-block
+   boundary. Reuse physical spill slots inside one block only after the last
+   semantic use of a value. A result is allocated before the current
+   instruction's operands are released, so an instruction never aliases an
+   output spill with an input that it still has to read. */
 /* IRQ_FRAME_PACK_V0: Core scalar spill values are block-local. Keep the
    existing conservative no-liveness-reuse contract, but do not spend 16 bytes
    on every <= XLEN value merely because int128 needs a two-XLEN pair. */
