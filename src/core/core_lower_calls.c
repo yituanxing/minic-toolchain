@@ -582,6 +582,68 @@ static const MinicFunction *core_select_boolean_range_specialization(
     return best;
 }
 
+/* One source evaluation and one typed VALUE/OBJECT snapshot per argument.
+ * Direct, indirect and aggregate-returning calls must share this ordering.
+ * The optional direct name preserves existing diagnostics for failed scalar
+ * expression lowering; no ABI register assignment happens at this stage. */
+static MinicCoreLowerStatus core_prepare_call_argument(
+    MinicCoreLowerContext *context, const MinicExpression *call,
+    size_t index, MinicType type, bool fixed, const char *direct_name,
+    MinicCoreCallArgument *argument, MinicCoreObjectId *snapshot_object) {
+    MinicCoreLowerStatus status;
+    MinicExpressionId source;
+    if (context == NULL || call == NULL || argument == NULL ||
+        snapshot_object == NULL) return MINIC_CORE_LOWER_ERROR;
+    source = minic_c0_call_argument(call, index);
+    if (minic_type_is_record(type)) {
+        argument->kind = MINIC_CORE_CALL_ARGUMENT_OBJECT;
+        return lower_record_call_argument_object(
+            context, source, type, &argument->value.object_id);
+    }
+    argument->kind = MINIC_CORE_CALL_ARGUMENT_VALUE;
+    status = fixed
+        ? minic_core_lower_internal_lower_scalar_assignment_value(
+              context, type, source, &argument->value.value_id)
+        : lower_expression(context, source, &argument->value.value_id);
+    if (status != MINIC_CORE_LOWER_OK) {
+        if (direct_name != NULL) {
+            (void)fprintf(stderr,
+                "CORE_LOWER_DETAIL marker=BATCH_D_VARIADIC_DIRECT_CALL function=%s "
+                "stage=direct-call callee=%s arg=%zu fixed=%d reason=argument-lower status=%d\n",
+                context->source_function != NULL
+                    ? context->source_function->name : "?",
+                direct_name, index, fixed ? 1 : 0, (int)status);
+        }
+        return status;
+    }
+    if (argument->value.value_id >= context->function->value_count ||
+        !minic_type_equal(
+            context->function->values[argument->value.value_id].type, type))
+        return MINIC_CORE_LOWER_ERROR;
+    return minic_core_lower_internal_spill_scalar_value(
+        context, call->span, type, argument->value.value_id,
+        snapshot_object);
+}
+
+/* Evaluate each source expression exactly once before replaying saved SSA
+ * values in the eventual call block. An indirect callee may itself branch,
+ * so the caller determines *when* this reload occurs. */
+static MinicCoreLowerStatus core_reload_call_arguments(
+    MinicCoreLowerContext *context, const MinicExpression *call,
+    const MinicType *types, const MinicCoreObjectId *snapshots,
+    MinicCoreCallArgument *arguments, size_t count) {
+    size_t i;
+    for (i = 0U; i < count; ++i) {
+        MinicCoreLowerStatus status;
+        if (arguments[i].kind == MINIC_CORE_CALL_ARGUMENT_OBJECT) continue;
+        status = minic_core_lower_internal_reload_scalar_value(
+            context, call->span, types[i], snapshots[i],
+            &arguments[i].value.value_id);
+        if (status != MINIC_CORE_LOWER_OK) return status;
+    }
+    return MINIC_CORE_LOWER_OK;
+}
+
 MinicCoreLowerStatus minic_core_lower_direct_call(MinicCoreLowerContext *context,
                                               const MinicExpression *expression,
                                               MinicCoreValueId *value_id) {
@@ -691,76 +753,21 @@ MinicCoreLowerStatus minic_core_lower_direct_call(MinicCoreLowerContext *context
         return MINIC_CORE_LOWER_ERROR;
     }
     for (argument_index = 0U; argument_index < argument_count; ++argument_index) {
-        if (minic_type_is_record(argument_types[argument_index])) {
-            MinicCoreObjectId object_id;
-
-            status = lower_record_call_argument_object(
-                context,
-                minic_c0_call_argument(expression, argument_index),
-                argument_types[argument_index],
-                &object_id);
-            if (status != MINIC_CORE_LOWER_OK) {
-                free(arguments);
-                return status;
-            }
-            arguments[argument_index].kind = MINIC_CORE_CALL_ARGUMENT_OBJECT;
-            arguments[argument_index].value.object_id = object_id;
-            continue;
-        }
-        arguments[argument_index].kind = MINIC_CORE_CALL_ARGUMENT_VALUE;
-        if (argument_index < callee->parameter_count) {
-            status = minic_core_lower_internal_lower_scalar_assignment_value(
-                context,
-                argument_types[argument_index],
-                minic_c0_call_argument(expression, argument_index),
-                &arguments[argument_index].value.value_id);
-        } else {
-            status = lower_expression(context,
-                                      minic_c0_call_argument(expression, argument_index),
-                                      &arguments[argument_index].value.value_id);
-        }
-        if (status != MINIC_CORE_LOWER_OK) {
-            (void)fprintf(stderr,
-                          "CORE_LOWER_DETAIL marker=BATCH_D_VARIADIC_DIRECT_CALL function=%s "
-                          "stage=direct-call callee=%s arg=%zu fixed=%d reason=argument-lower status=%d\n",
-                          context->source_function != NULL ? context->source_function->name : "?",
-                          callee_name,
-                          argument_index,
-                          argument_index < callee->parameter_count ? 1 : 0,
-                          (int)status);
-            free(arguments);
-            return status;
-        }
-        if (arguments[argument_index].value.value_id >= context->function->value_count ||
-            !minic_type_equal(
-                context->function->values[arguments[argument_index].value.value_id].type,
-                argument_types[argument_index])) {
-            free(arguments);
-            return MINIC_CORE_LOWER_ERROR;
-        }
-        status = minic_core_lower_internal_spill_scalar_value(context,
-                                    expression->span,
-                                    argument_types[argument_index],
-                                    arguments[argument_index].value.value_id,
-                                    &argument_objects[argument_index]);
+        status = core_prepare_call_argument(
+            context, expression, argument_index, argument_types[argument_index],
+            argument_index < callee->parameter_count, callee_name,
+            &arguments[argument_index], &argument_objects[argument_index]);
         if (status != MINIC_CORE_LOWER_OK) {
             free(arguments);
             return status;
         }
     }
-    for (argument_index = 0U; argument_index < argument_count; ++argument_index) {
-        if (arguments[argument_index].kind == MINIC_CORE_CALL_ARGUMENT_OBJECT) {
-            continue;
-        }
-        status = minic_core_lower_internal_reload_scalar_value(context,
-                                     expression->span,
-                                     argument_types[argument_index],
-                                     argument_objects[argument_index],
-                                     &arguments[argument_index].value.value_id);
-        if (status != MINIC_CORE_LOWER_OK) {
-            free(arguments);
-            return status;
-        }
+    status = core_reload_call_arguments(
+        context, expression, argument_types, argument_objects,
+        arguments, argument_count);
+    if (status != MINIC_CORE_LOWER_OK) {
+        free(arguments);
+        return status;
     }
     if (!minic_core_function_add_callee(context->function,
                                         callee_name,
@@ -851,62 +858,21 @@ MinicCoreLowerStatus minic_core_lower_direct_record_call_object(
         return MINIC_CORE_LOWER_ERROR;
     }
     for (argument_index = 0U; argument_index < callee->parameter_count; ++argument_index) {
-        if (minic_type_is_record(callee->parameter_types[argument_index])) {
-            MinicCoreObjectId object_id;
-
-            status = lower_record_call_argument_object(
-                context,
-                minic_c0_call_argument(expression, argument_index),
-                callee->parameter_types[argument_index],
-                &object_id);
-            if (status != MINIC_CORE_LOWER_OK) {
-                free(arguments);
-                return status;
-            }
-            arguments[argument_index].kind = MINIC_CORE_CALL_ARGUMENT_OBJECT;
-            arguments[argument_index].value.object_id = object_id;
-            continue;
-        }
-        arguments[argument_index].kind = MINIC_CORE_CALL_ARGUMENT_VALUE;
-        status = minic_core_lower_internal_lower_scalar_assignment_value(
-            context,
-            callee->parameter_types[argument_index],
-            minic_c0_call_argument(expression, argument_index),
-            &arguments[argument_index].value.value_id);
-        if (status != MINIC_CORE_LOWER_OK) {
-            free(arguments);
-            return status;
-        }
-        if (arguments[argument_index].value.value_id >= context->function->value_count ||
-            !minic_type_equal(
-                context->function->values[arguments[argument_index].value.value_id].type,
-                callee->parameter_types[argument_index])) {
-            free(arguments);
-            return MINIC_CORE_LOWER_ERROR;
-        }
-        status = minic_core_lower_internal_spill_scalar_value(context,
-                                    expression->span,
-                                    callee->parameter_types[argument_index],
-                                    arguments[argument_index].value.value_id,
-                                    &argument_objects[argument_index]);
+        status = core_prepare_call_argument(
+            context, expression, argument_index, callee->parameter_types[argument_index],
+            true, NULL, &arguments[argument_index],
+            &argument_objects[argument_index]);
         if (status != MINIC_CORE_LOWER_OK) {
             free(arguments);
             return status;
         }
     }
-    for (argument_index = 0U; argument_index < callee->parameter_count; ++argument_index) {
-        if (arguments[argument_index].kind == MINIC_CORE_CALL_ARGUMENT_OBJECT) {
-            continue;
-        }
-        status = minic_core_lower_internal_reload_scalar_value(context,
-                                     expression->span,
-                                     callee->parameter_types[argument_index],
-                                     argument_objects[argument_index],
-                                     &arguments[argument_index].value.value_id);
-        if (status != MINIC_CORE_LOWER_OK) {
-            free(arguments);
-            return status;
-        }
+    status = core_reload_call_arguments(
+        context, expression, callee->parameter_types, argument_objects,
+        arguments, callee->parameter_count);
+    if (status != MINIC_CORE_LOWER_OK) {
+        free(arguments);
+        return status;
     }
     if (!minic_core_function_add_callee(context->function,
                                         callee_name,
@@ -1022,66 +988,30 @@ MinicCoreLowerStatus minic_core_lower_indirect_call(MinicCoreLowerContext *conte
        the actual scalar type. Every VALUE is spilled until the callee has been
        evaluated so the final indirect call block owns all SSA inputs. */
     for (argument_index = 0U; argument_index < argument_count; ++argument_index) {
-        if (argument_index < signature->parameter_count) {
+        bool fixed = argument_index < signature->parameter_count;
+        if (fixed) {
             argument_types[argument_index] = signature->parameter_types[argument_index];
-            if (minic_type_is_record(argument_types[argument_index])) {
-                MinicCoreObjectId object_id;
-
-                status = lower_record_call_argument_object(
-                    context,
-                    minic_c0_call_argument(expression, argument_index),
-                    argument_types[argument_index],
-                    &object_id);
-                if (status != MINIC_CORE_LOWER_OK) {
-                    free(arguments);
-                    return status;
-                }
-                arguments[argument_index].kind = MINIC_CORE_CALL_ARGUMENT_OBJECT;
-                arguments[argument_index].value.object_id = object_id;
-                continue;
-            }
-            if (!core_memory_scalar_type(argument_types[argument_index])) {
-                free(arguments);
-                return MINIC_CORE_LOWER_UNSUPPORTED;
-            }
-            arguments[argument_index].kind = MINIC_CORE_CALL_ARGUMENT_VALUE;
-            status = minic_core_lower_internal_lower_scalar_assignment_value(
-                context,
-                argument_types[argument_index],
-                minic_c0_call_argument(expression, argument_index),
-                &arguments[argument_index].value.value_id);
-        } else {
-            const MinicExpression *argument_expression = minic_c0_program_expression(
-                context->body->program, minic_c0_call_argument(expression, argument_index));
-
-            if (argument_expression == NULL ||
-                !core_scalar_expression_value_type(
-                    context->body, argument_expression, &argument_types[argument_index]) ||
+            if (!minic_type_is_record(argument_types[argument_index]) &&
                 !core_memory_scalar_type(argument_types[argument_index])) {
                 free(arguments);
                 return MINIC_CORE_LOWER_UNSUPPORTED;
             }
-            arguments[argument_index].kind = MINIC_CORE_CALL_ARGUMENT_VALUE;
-            status = lower_expression(context,
-                                      minic_c0_call_argument(expression, argument_index),
-                                      &arguments[argument_index].value.value_id);
+        } else {
+            const MinicExpression *arg = minic_c0_program_expression(
+                context->body->program,
+                minic_c0_call_argument(expression, argument_index));
+            if (arg == NULL ||
+                !core_scalar_expression_value_type(
+                    context->body, arg, &argument_types[argument_index]) ||
+                !core_memory_scalar_type(argument_types[argument_index])) {
+                free(arguments);
+                return MINIC_CORE_LOWER_UNSUPPORTED;
+            }
         }
-        if (status != MINIC_CORE_LOWER_OK) {
-            free(arguments);
-            return status;
-        }
-        if (arguments[argument_index].value.value_id >= context->function->value_count ||
-            !minic_type_equal(
-                context->function->values[arguments[argument_index].value.value_id].type,
-                argument_types[argument_index])) {
-            free(arguments);
-            return MINIC_CORE_LOWER_ERROR;
-        }
-        status = minic_core_lower_internal_spill_scalar_value(context,
-                                    expression->span,
-                                    argument_types[argument_index],
-                                    arguments[argument_index].value.value_id,
-                                    &argument_objects[argument_index]);
+        status = core_prepare_call_argument(
+            context, expression, argument_index,
+            argument_types[argument_index], fixed, NULL,
+            &arguments[argument_index], &argument_objects[argument_index]);
         if (status != MINIC_CORE_LOWER_OK) {
             free(arguments);
             return status;
@@ -1093,19 +1023,12 @@ MinicCoreLowerStatus minic_core_lower_indirect_call(MinicCoreLowerContext *conte
         free(arguments);
         return status;
     }
-    for (argument_index = 0U; argument_index < argument_count; ++argument_index) {
-        if (arguments[argument_index].kind == MINIC_CORE_CALL_ARGUMENT_OBJECT) {
-            continue;
-        }
-        status = minic_core_lower_internal_reload_scalar_value(context,
-                                     expression->span,
-                                     argument_types[argument_index],
-                                     argument_objects[argument_index],
-                                     &arguments[argument_index].value.value_id);
-        if (status != MINIC_CORE_LOWER_OK) {
-            free(arguments);
-            return status;
-        }
+    status = core_reload_call_arguments(
+        context, expression, argument_types, argument_objects,
+        arguments, argument_count);
+    if (status != MINIC_CORE_LOWER_OK) {
+        free(arguments);
+        return status;
     }
     if (callee_value >= context->function->value_count ||
         !minic_type_equal(context->function->values[callee_value].type, callee_value_type)) {
