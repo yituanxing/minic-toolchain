@@ -19,9 +19,42 @@ static int switch_dead_prefix(int condition) {
     }
     return score;
 }
+/* A case nested inside an if still belongs to the enclosing switch. */
+static int switch_nested_case(int x) {
+    int result = 0;
+    switch (x) {
+        if (x > 0) {
+            case 3: result = 37; break;
+        }
+        case 4: result = 41; break;
+        default: result = 43; break;
+    }
+    return result;
+}
+/* A goto from before the switch can enter an ordinary label in its body.
+ * That label must survive dead-prefix elimination. */
+static int switch_label_reentry(int x) {
+    int value = 0;
+    if (x == 11) goto entering;
+    switch (x) {
+        value = -1000;
+entering:
+        value = 29;
+        break;
+        case 2: value = 23; break;
+        default: value = 17; break;
+    }
+    return value;
+}
 int main(void) {
     return switch_dead_prefix(1) == 42 &&
-           switch_dead_prefix(0) == 42 ? 0 : 3;
+           switch_dead_prefix(0) == 42 &&
+           switch_nested_case(3) == 37 &&
+           switch_nested_case(4) == 41 &&
+           switch_nested_case(5) == 43 &&
+           switch_label_reentry(11) == 29 &&
+           switch_label_reentry(2) == 23 &&
+           switch_label_reentry(1) == 17 ? 0 : 3;
 }
 SRC
 for target in aarch64 loongarch64; do
@@ -44,5 +77,5 @@ for target in aarch64 loongarch64; do
         >"$work/$target.mini.out" 2>"$work/$target.mini.err"
     cmp "$work/$target.gnu.out" "$work/$target.mini.out"
     cmp "$work/$target.gnu.err" "$work/$target.mini.err"
-    echo "FOUR_BACKEND_SWITCH_DEAD_PREFIX=PASS target=$target GNU_QEMU_byte_exact=1 normalized_for=1 switch_default=1"
+    echo "FOUR_BACKEND_SWITCH_DEAD_PREFIX=PASS target=$target GNU_QEMU_byte_exact=1 normalized_for=1 switch_default=1 nested_case=1 external_reentry=1"
 done

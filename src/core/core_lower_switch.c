@@ -234,6 +234,9 @@ static bool core_switch_label_has_function_reentry(
     if (label == NULL || label->kind != MINIC_STATEMENT_LABEL) {
         return false;
     }
+    if (minic_core_reentry_index_ready(context->reentry_index, program))
+        return minic_core_reentry_index_switch_label_referenced(
+            context->reentry_index, program, label_id);
     for (index = 0U; index < program->statement_count; ++index) {
         const MinicStatement *source;
 

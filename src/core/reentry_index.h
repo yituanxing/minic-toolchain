@@ -27,4 +27,9 @@ bool minic_core_reentry_index_unreferenced_loop_label(
     MinicCoreReentryIndex *index, const MinicC0Program *program,
     MinicStatementId label_id);
 
+/* Exact source switch-label query when fully indexed. Includes explicit
+ * goto, asm goto and address-taken labels, not computed-goto sources. */
+bool minic_core_reentry_index_switch_label_referenced(
+    MinicCoreReentryIndex *index, const MinicC0Program *program,
+    MinicStatementId label_id);
 #endif
