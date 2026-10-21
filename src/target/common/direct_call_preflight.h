@@ -7,6 +7,9 @@
 #include <stdbool.h>
 #include <stddef.h>
 
+/* Shared admission/planning bound for the two direct LP64 backends. */
+#define MINIC_DIRECT_LP64_MAX_CALL_ARGUMENTS 64U
+
 /* ABI aggregate indirection stays target-owned: AAPCS64 differs from LP64D.
  * Validate C/Core call shapes without deciding register/stack placement. */
 typedef bool (*MinicDirectLP64IndirectRecord)(
