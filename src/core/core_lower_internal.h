@@ -19,6 +19,7 @@ typedef struct MinicCoreLowerContext {
     const MinicFunctionBodyView *body;
     const MinicFunction *source_function;
     const MinicTargetInfo *target;
+    MinicCoreReentryIndex *reentry_index; /* Borrowed from Core Function Set. */
     MinicCoreFunction *function;
     MinicCoreBlockId block_id;
     MinicCoreBlockId break_target;

@@ -15,5 +15,8 @@ typedef enum MinicCoreLowerStatus {
 MinicCoreLowerStatus minic_core_lower_function(const MinicFunctionBodyView *body,
                                                const MinicTargetInfo *target,
                                                MinicCoreFunction *output);
+MinicCoreLowerStatus minic_core_lower_function_with_index(
+    const MinicFunctionBodyView *body, const MinicTargetInfo *target,
+    MinicCoreFunction *output, MinicCoreReentryIndex *index);
 
 #endif

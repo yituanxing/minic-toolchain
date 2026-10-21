@@ -42,6 +42,7 @@ bool minic_prepare_core_function_set(const MinicC0Program *program,
                                             const MinicTargetInfo *target,
                                             MinicCoreFunctionSet *output) {
     MinicCoreFunctionSet set;
+    MinicCoreReentryIndex *index;
     size_t function_index;
 
     if (program == NULL || target == NULL || output == NULL ||
@@ -68,7 +69,7 @@ bool minic_prepare_core_function_set(const MinicC0Program *program,
     }
     /* The AST statement/expression graph is immutable during Core Lowering.
      * Reuse one validated incoming-edge map for all ordinary and clone bodies. */
-    minic_core_lower_reentry_index_begin(program);
+    index = minic_core_reentry_index_create(program);
     for (function_index = 0U; function_index < set.function_count; ++function_index) {
         const MinicFunction *function;
         MinicFunctionBodyView body;
@@ -97,7 +98,8 @@ bool minic_prepare_core_function_set(const MinicC0Program *program,
             (void)fflush(stderr);
         }
         set.statuses[function_index] =
-            minic_core_lower_function(&body, target, &set.functions[function_index]);
+            minic_core_lower_function_with_index(&body, target,
+                                                &set.functions[function_index], index);
         if (minic_core_set_bootstrap_trace_enabled()) {
             (void)fprintf(stderr,
                           "MINIC_BOOTSTRAP_TRACE stage=core-lower state=end "
@@ -110,7 +112,7 @@ bool minic_prepare_core_function_set(const MinicC0Program *program,
             (void)fflush(stderr);
         }
     }
-    minic_core_lower_reentry_index_end();
+    minic_core_reentry_index_destroy(index);
     minic_core_function_set_destroy(output);
     *output = set;
     return true;
