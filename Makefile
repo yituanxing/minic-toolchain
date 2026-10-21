@@ -45,6 +45,7 @@ MINIC_SOURCES := \
 	src/compiler/compiler.c \
 	src/core/core_ir.c \
 	src/core/value_uses.c \
+	src/core/reentry_index.c \
 	src/core/core_lower.c \
 	src/core/core_lower_bool.c \
 	src/core/core_lower_types.c \
@@ -85,6 +86,7 @@ MINIC_SOURCES := \
 	src/target/data_layout.c \
 	src/target/target_info.c \
 	src/target/backend.c \
+	src/target/backend_core_usage.c \
 	src/target/common/global_emit.c \
 	src/target/common/direct_program_emit.c \
 	src/target/common/lp64_aggregate.c \
