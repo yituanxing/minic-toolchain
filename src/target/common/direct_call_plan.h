@@ -6,8 +6,6 @@
 #include <stdbool.h>
 #include <stddef.h>
 
-#define MINIC_LP64_MAX_CALL_ARGUMENTS 64U
-
 /* ABI locations are resolved before emission; the target emitter only
  * transfers values to the selected machine locations. */
 typedef enum MinicLP64ArgumentKind {
@@ -27,7 +25,7 @@ typedef struct MinicLP64ArgumentLocation {
 
 typedef struct MinicLP64DirectCallPlan {
     size_t argument_count, stack_slots, stack_bytes;
-    MinicLP64ArgumentLocation arguments[MINIC_LP64_MAX_CALL_ARGUMENTS];
+    MinicLP64ArgumentLocation arguments[MINIC_DIRECT_LP64_MAX_CALL_ARGUMENTS];
 } MinicLP64DirectCallPlan;
 
 /* Only previously admitted Core CALL/INDIRECT_CALL shapes. Explicitly keep
