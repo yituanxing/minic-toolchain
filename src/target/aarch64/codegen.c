@@ -1570,54 +1570,31 @@ static bool emit_function_body(FILE *out, const MinicC0Program *program,
         }
         case MINIC_CORE_INSTRUCTION_PARAMETER: {
             const size_t ordinal = (size_t)ins->value.parameter_index;
-            size_t gp_index = 0U, fp_index = 0U, overflow_index = 0U, k;
-            if (ordinal >= fn->parameter_count)
-                return minic_multi_direct_machine_reject(fn, "aarch64", name, reject_stage,
-                                           reject_block, reject_ins, __LINE__);
-            /* AAPCS64: independent x/d argument cursors, with one unified
-             * incoming 8-byte stack-slot sequence for exhausted banks. */
-            for (k = 0U; k < ordinal; ++k) {
-                size_t record_bytes = 0U, slots = 0U;
-                const MinicType prior = fn->parameter_types[k];
-                if (minic_multi_gp_record(program, target, prior,
-                                          &record_bytes, &slots)) {
-                    /* An AAPCS64 integer-class record consumes its entire
-                     * 1/2-GP register group, or ALL of its stack slots.
-                     * A scalar following a record must start AFTER that
-                     * group, never reuse the final record eightbyte. */
-                    if (gp_index + slots <= 8U)
-                        gp_index += slots;
-                    else {
-                        gp_index = 8U;
-                        overflow_index += slots;
-                    }
-                } else if (minic_type_is_long_double(prior)) {
-                    if (fp_index++ >= 8U) {
-                        overflow_index += overflow_index & 1U;
-                        overflow_index += 2U;
-                    }
-                } else if (minic_type_is_double(prior) ||
-                           minic_type_is_float(prior)) {
-                    if (fp_index++ >= 8U) ++overflow_index;
-                } else if (gp_index++ >= 8U) ++overflow_index;
-            }
+            const MinicLP64ArgumentLocation *location =
+                ordinal < incoming_plan.argument_count
+                    ? &incoming_plan.arguments[ordinal] : NULL;
+            if (location == NULL || !minic_type_equal(ins->type,
+                                                    fn->parameter_types[ordinal]) ||
+                location->kind == MINIC_LP64_ARGUMENT_RECORD ||
+                location->kind == MINIC_LP64_ARGUMENT_INDIRECT_RECORD)
+                return minic_multi_direct_machine_reject(fn, "aarch64", name,
+                    reject_stage, reject_block, reject_ins, __LINE__);
             if (minic_type_is_long_double(ins->type)) {
                 size_t dst;
                 if (!minic_lp64_binary128_slot(fn, ld_base, ins->result, &dst))
                     return minic_multi_direct_machine_reject(fn, "aarch64", name,
                                                reject_stage, reject_block,
                                                reject_ins, __LINE__);
-                if (fp_index < 8U) {
+                if (location->fp_registers != 0U) {
                     if (fprintf(out, "  str q%zu, [sp, #%zu]\n",
-                                fp_index, dst) < 0)
+                                location->fp_first, dst) < 0)
                         return minic_multi_direct_machine_reject(fn, "aarch64", name,
                                                    reject_stage, reject_block,
                                                    reject_ins, __LINE__);
                 } else {
-                    overflow_index += overflow_index & 1U;
                     if (fprintf(out, "  ldr q9, [sp, #%zu]\n"
                                      "  str q9, [sp, #%zu]\n",
-                                frame + overflow_index * 8U, dst) < 0)
+                                frame + location->stack_first * 8U, dst) < 0)
                         return minic_multi_direct_machine_reject(fn, "aarch64", name,
                                                    reject_stage, reject_block,
                                                    reject_ins, __LINE__);
@@ -1627,10 +1604,10 @@ static bool emit_function_body(FILE *out, const MinicC0Program *program,
             if (minic_type_is_double(ins->type) ||
                 minic_type_is_float(ins->type)) {
                 const bool is_float = minic_type_is_float(ins->type);
-                if (fp_index < 8U) {
+                if (location->fp_registers != 0U) {
                     if (fprintf(out, is_float ? "  str s%zu, [sp, #%zu]\n"
                                               : "  str d%zu, [sp, #%zu]\n",
-                                fp_index, offset) < 0)
+                                location->fp_first, offset) < 0)
                         return minic_multi_direct_machine_reject(fn, "aarch64", name,
                                     reject_stage, reject_block, reject_ins, __LINE__);
                 } else if (fprintf(out, is_float
@@ -1638,16 +1615,16 @@ static bool emit_function_body(FILE *out, const MinicC0Program *program,
                                        "  str s9, [sp, #%zu]\n"
                                      : "  ldr d9, [sp, #%zu]\n"
                                        "  str d9, [sp, #%zu]\n",
-                                   frame + overflow_index * 8U, offset) < 0)
+                                   frame + location->stack_first * 8U, offset) < 0)
                     return minic_multi_direct_machine_reject(fn, "aarch64", name,
                                     reject_stage, reject_block, reject_ins, __LINE__);
                 continue;
             }
-            if (gp_index < 8U) {
+            if (location->gp_registers != 0U) {
                 if (fprintf(out, minic_lp64_register64_type(program, target, ins->type)
                                  ? "  str x%zu, [sp, #%zu]\n"
                                  : "  str w%zu, [sp, #%zu]\n",
-                            gp_index, offset) < 0)
+                            location->gp_first, offset) < 0)
                     return minic_multi_direct_machine_reject(fn, "aarch64", name,
                                     reject_stage, reject_block, reject_ins, __LINE__);
             } else if (fprintf(out, minic_lp64_register64_type(program, target, ins->type)
@@ -1655,7 +1632,7 @@ static bool emit_function_body(FILE *out, const MinicC0Program *program,
                                  "  str x9, [sp, #%zu]\n"
                                : "  ldr w9, [sp, #%zu]\n"
                                  "  str w9, [sp, #%zu]\n",
-                               frame + overflow_index * 8U, offset) < 0)
+                               frame + location->stack_first * 8U, offset) < 0)
                 return minic_multi_direct_machine_reject(fn, "aarch64", name,
                                     reject_stage, reject_block, reject_ins, __LINE__);
             continue;
