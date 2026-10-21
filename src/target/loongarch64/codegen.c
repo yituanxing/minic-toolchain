@@ -1151,6 +1151,26 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
             }
             continue;
         }
+        /* Store both 64-bit limbs, with no hidden 128-bit truncation. */
+        if (ins->kind == MINIC_CORE_INSTRUCTION_STORE &&
+            ins->value.store.stored_value < fn->value_count &&
+            minic_type_is_int128_integer(
+                fn->values[ins->value.store.stored_value].type)) {
+            const MinicCoreValueId addr = ins->value.store.address;
+            const MinicCoreValueId value = ins->value.store.stored_value;
+            size_t src;
+            if (addr >= fn->value_count ||
+                !minic_type_is_pointer(fn->values[addr].type) ||
+                !binary128_slot(fn, ld_base, value, &src) ||
+                !emit_sp_mem(out, "ld.d", "$t1", (size_t)addr * 8U) ||
+                !emit_sp_mem(out, "ld.d", "$t0", src) ||
+                fputs("  st.d $t0, $t1, 0\n", out) == EOF ||
+                !emit_sp_mem(out, "ld.d", "$t0", src + 8U) ||
+                fputs("  st.d $t0, $t1, 8\n", out) == EOF)
+                return machine_emit_reject(fn, "loongarch64", name,
+                    reject_stage, reject_block, reject_ins, __LINE__);
+            continue;
+        }
         if (ins->kind == MINIC_CORE_INSTRUCTION_STORE &&
             ins->value.store.stored_value < fn->value_count &&
             minic_type_is_long_double(
@@ -1694,6 +1714,22 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
         case MINIC_CORE_INSTRUCTION_LOAD:
         case MINIC_CORE_INSTRUCTION_ATOMIC_LOAD: {
             if (ins->kind == MINIC_CORE_INSTRUCTION_LOAD &&
+                minic_type_is_int128_integer(ins->type)) {
+                const MinicCoreValueId addr = ins->value.load.address;
+                size_t dst;
+                if (addr >= fn->value_count ||
+                    !minic_type_is_pointer(fn->values[addr].type) ||
+                    !binary128_slot(fn, ld_base, ins->result, &dst) ||
+                    !emit_sp_mem(out, "ld.d", "$t1", (size_t)addr * 8U) ||
+                    fputs("  ld.d $t0, $t1, 0\n", out) == EOF ||
+                    !emit_sp_mem(out, "st.d", "$t0", dst) ||
+                    fputs("  ld.d $t0, $t1, 8\n", out) == EOF ||
+                    !emit_sp_mem(out, "st.d", "$t0", dst + 8U))
+                    return machine_emit_reject(fn, "loongarch64", name,
+                        reject_stage, reject_block, reject_ins, __LINE__);
+                continue;
+            }
+            if (ins->kind == MINIC_CORE_INSTRUCTION_LOAD &&
                 minic_type_is_long_double(ins->type)) {
                 const MinicCoreValueId addr = ins->value.load.address;
                 size_t dst;
@@ -2087,6 +2123,46 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
         case MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_LEFT:
         case MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_RIGHT: {
             const MinicCoreValueId lhs = ins->value.binary.left;
+            if (ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_RIGHT &&
+                minic_type_is_int128_integer(ins->type)) {
+                const MinicCoreValueId rhs = ins->value.binary.right;
+                size_t src_offset, dst_offset, rw;
+                bool rs;
+                const bool sign = minic_type_is_signed_integer(ins->type);
+                if (lhs >= fn->value_count || rhs >= fn->value_count ||
+                    !minic_type_is_int128_integer(fn->values[lhs].type) ||
+                    !scalar_integer_width(program, target,
+                        fn->values[rhs].type, &rw, &rs) ||
+                    !binary128_slot(fn, ld_base, lhs, &src_offset) ||
+                    !binary128_slot(fn, ld_base, ins->result, &dst_offset) ||
+                    !emit_sp_mem(out, "ld.d", "$t0", src_offset) ||
+                    !emit_sp_mem(out, "ld.d", "$t1", src_offset + 8U) ||
+                    !emit_sp_mem(out, rw == 8U ? "ld.d" : "ld.w",
+                                 "$t2", (size_t)rhs * 8U) ||
+                    fputs("  beqz $t2, 2f\n"
+                          "  li.d $t4, 64\n"
+                          "  bgeu $t2, $t4, 1f\n"
+                          "  sub.d $t4, $zero, $t2\n"
+                          "  sll.d $t4, $t1, $t4\n"
+                          "  srl.d $t0, $t0, $t2\n"
+                          "  or $t0, $t0, $t4\n", out) == EOF ||
+                    fputs(sign ? "  sra.d $t1, $t1, $t2\n" :
+                                 "  srl.d $t1, $t1, $t2\n", out) == EOF ||
+                    fputs("  b 2f\n"
+                          "1:\n"
+                          "  addi.d $t2, $t2, -64\n", out) == EOF ||
+                    fputs(sign ? "  sra.d $t0, $t1, $t2\n"
+                                 "  srai.d $t1, $t1, 63\n" :
+                                 "  srl.d $t0, $t1, $t2\n"
+                                 "  move $t1, $zero\n", out) == EOF ||
+                    fputs("2:\n", out) == EOF ||
+                    !emit_sp_mem(out, "st.d", "$t0", dst_offset) ||
+                    !emit_sp_mem(out, "st.d", "$t1", dst_offset + 8U))
+                    return machine_emit_reject(fn, "loongarch64", name,
+                        reject_stage, reject_block, reject_ins, __LINE__);
+                (void)rs;
+                continue;
+            }
             const MinicCoreValueId rhs = ins->value.binary.right;
             size_t lw, rw;
             bool ls, rs;

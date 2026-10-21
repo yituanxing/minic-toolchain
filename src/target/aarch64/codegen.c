@@ -1210,6 +1210,28 @@ static bool emit_function_body(FILE *out, const MinicC0Program *program,
             }
             continue;
         }
+        /* Preserve both halves of volatile/nonvolatile int128 stores.
+         * Unlike atomic stores this is two plain 64-bit memory writes. */
+        if (ins->kind == MINIC_CORE_INSTRUCTION_STORE &&
+            ins->value.store.stored_value < fn->value_count &&
+            minic_type_is_int128_integer(
+                fn->values[ins->value.store.stored_value].type)) {
+            const MinicCoreValueId addr = ins->value.store.address;
+            const MinicCoreValueId value = ins->value.store.stored_value;
+            size_t src;
+            if (addr >= fn->value_count ||
+                !minic_type_is_pointer(fn->values[addr].type) ||
+                !binary128_slot(fn, ld_base, value, &src) ||
+                fprintf(out, "  ldr x10, [sp, #%zu]\n"
+                             "  ldr x9, [sp, #%zu]\n"
+                             "  ldr x11, [sp, #%zu]\n"
+                             "  str x9, [x10]\n"
+                             "  str x11, [x10, #8]\n",
+                        (size_t)addr * 8U, src, src + 8U) < 0)
+                return machine_emit_reject(fn, "aarch64", name,
+                    reject_stage, reject_block, reject_ins, __LINE__);
+            continue;
+        }
         if (ins->kind == MINIC_CORE_INSTRUCTION_STORE &&
             ins->value.store.stored_value < fn->value_count &&
             minic_type_is_long_double(
@@ -1851,6 +1873,23 @@ static bool emit_function_body(FILE *out, const MinicC0Program *program,
         case MINIC_CORE_INSTRUCTION_LOAD:
         case MINIC_CORE_INSTRUCTION_ATOMIC_LOAD: {
             if (ins->kind == MINIC_CORE_INSTRUCTION_LOAD &&
+                minic_type_is_int128_integer(ins->type)) {
+                const MinicCoreValueId addr = ins->value.load.address;
+                size_t dst;
+                if (addr >= fn->value_count ||
+                    !minic_type_is_pointer(fn->values[addr].type) ||
+                    !binary128_slot(fn, ld_base, ins->result, &dst) ||
+                    fprintf(out, "  ldr x10, [sp, #%zu]\n"
+                                 "  ldr x9, [x10]\n"
+                                 "  ldr x11, [x10, #8]\n"
+                                 "  str x9, [sp, #%zu]\n"
+                                 "  str x11, [sp, #%zu]\n",
+                            (size_t)addr * 8U, dst, dst + 8U) < 0)
+                    return machine_emit_reject(fn, "aarch64", name,
+                        reject_stage, reject_block, reject_ins, __LINE__);
+                continue;
+            }
+            if (ins->kind == MINIC_CORE_INSTRUCTION_LOAD &&
                 minic_type_is_long_double(ins->type)) {
                 const MinicCoreValueId addr = ins->value.load.address;
                 size_t dst;
@@ -2293,6 +2332,49 @@ static bool emit_function_body(FILE *out, const MinicC0Program *program,
         case MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_LEFT:
         case MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_RIGHT: {
             const MinicCoreValueId lhs = ins->value.binary.left;
+            if (ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_RIGHT &&
+                minic_type_is_int128_integer(ins->type)) {
+                const MinicCoreValueId rhs = ins->value.binary.right;
+                size_t src_offset, dst_offset, rw;
+                bool rs;
+                const bool sign = minic_type_is_signed_integer(ins->type);
+                if (lhs >= fn->value_count || rhs >= fn->value_count ||
+                    !minic_type_is_int128_integer(fn->values[lhs].type) ||
+                    !scalar_integer_width(program, target,
+                        fn->values[rhs].type, &rw, &rs) ||
+                    !binary128_slot(fn, ld_base, lhs, &src_offset) ||
+                    !binary128_slot(fn, ld_base, ins->result, &dst_offset) ||
+                    fprintf(out, rw == 8U ?
+                            "  ldr x10, [sp, #%zu]\n" :
+                            "  ldr w10, [sp, #%zu]\n", (size_t)rhs * 8U) < 0 ||
+                    fprintf(out, "  ldr x9, [sp, #%zu]\n"
+                                 "  ldr x11, [sp, #%zu]\n",
+                            src_offset, src_offset + 8U) < 0 ||
+                    fputs("  cbz x10, 2f\n"
+                          "  cmp x10, #64\n"
+                          "  b.hs 1f\n"
+                          "  neg x13, x10\n"
+                          "  lsl x13, x11, x13\n"
+                          "  lsr x9, x9, x10\n"
+                          "  orr x9, x9, x13\n", out) == EOF ||
+                    fputs(sign ? "  asr x11, x11, x10\n" :
+                                 "  lsr x11, x11, x10\n", out) == EOF ||
+                    fputs("  b 2f\n"
+                          "1:\n"
+                          "  sub x10, x10, #64\n", out) == EOF ||
+                    fputs(sign ? "  asr x9, x11, x10\n"
+                                 "  asr x11, x11, #63\n" :
+                                 "  lsr x9, x11, x10\n"
+                                 "  mov x11, xzr\n", out) == EOF ||
+                    fprintf(out, "2:\n"
+                                 "  str x9, [sp, #%zu]\n"
+                                 "  str x11, [sp, #%zu]\n",
+                            dst_offset, dst_offset + 8U) < 0)
+                    return machine_emit_reject(fn, "aarch64", name,
+                        reject_stage, reject_block, reject_ins, __LINE__);
+                (void)rs;
+                continue;
+            }
             const MinicCoreValueId rhs = ins->value.binary.right;
             size_t lw, rw;
             bool ls, rs;
