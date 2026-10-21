@@ -110,3 +110,25 @@ assignment, calling sequences and machine instruction legalization remain in
 the owning emitters. The ELF global emission pipeline and symbol handling are
 also now compiled once, with a replaceable relocation callback. Future MIR
 would replace the private machine path, not frontend Core semantics.
+
+## Mature-target audit and isolation: RV64 and x86-64
+
+RV64's existing GNU/global record, bitfield, relocation and file-asm
+functions have moved intact from `codegen_function.c` to
+`riscv64/global_emit.c`, preserving RV-specific directives, ABI,
+layout and optimized stack-slot reuse. The driver and machine emitter
+continue calling the same functions via explicit declarations.
+
+x86-64's ~570-line target-owned global emission has moved to
+`x86_64/global_emit.c`. In contrast to AArch64/LoongArch64,
+its SysV-specific aggregate/weak/section handling remains independent.
+The already proven `common/global_emit.c` zero-initializer relocation
+walker and ELF symbol-visibility mappings are consumed with an x86
+relocation callback; those helpers retain the same offset/size guards.
+
+Four targets now separate binary data/relocation emission from Core
+machine instruction lowering. Future target Machine IR should be
+introduced in the latter boundary. No universal ABI or common
+physical-register allocator is asserted, and RV64's optimized frame
+planner remains untouched. Source movement is not a runtime proof:
+original GNU/QEMU real-project owner regressions decide acceptance.
