@@ -196,3 +196,26 @@ bool minic_core_reentry_index_unreferenced_loop_label(
     ++index->indexed_loop_queries;
     return true;
 }
+
+/* Source-label reentry is a graph query, not an O(program size) rescan for
+ * every switch case. If the cache isn't complete, caller uses its original
+ * conservative whole-program scan; no negative facts from a partial index. */
+bool minic_core_reentry_index_switch_label_referenced(
+    MinicCoreReentryIndex *index, const MinicC0Program *program,
+    MinicStatementId label_id) {
+    size_t edge;
+    if (!minic_core_reentry_index_ready(index, program) ||
+        label_id >= program->statement_count) return false;
+    if (index->addressed[label_id] != 0U) return true;
+    for (edge = index->heads[label_id]; edge != SIZE_MAX;
+         edge = index->incoming[edge].next) {
+        const MinicStatement *source = minic_c0_program_statement(
+            program, index->incoming[edge].source_statement);
+        if (source == NULL) return false;
+        if ((source->kind == MINIC_STATEMENT_GOTO &&
+             source->expression == MINIC_EXPRESSION_INVALID) ||
+            (source->kind == MINIC_STATEMENT_INLINE_ASM &&
+             source->inline_asm_id < program->inline_asm_count)) return true;
+    }
+    return false;
+}
