@@ -17,7 +17,7 @@ typedef struct MinicCoreReentryIncoming {
     size_t next;
 } MinicCoreReentryIncoming;
 
-typedef struct MinicCoreReentryIndex {
+struct MinicCoreReentryIndex {
     const MinicC0Program *program;
     size_t *heads;
     MinicCoreReentryIncoming *incoming;
@@ -25,40 +25,38 @@ typedef struct MinicCoreReentryIndex {
     size_t incoming_count;
     unsigned long long indexed_if_queries;
     unsigned long long indexed_loop_queries;
-} MinicCoreReentryIndex;
+};
 
-static MinicCoreReentryIndex minic_core_reentry_index;
-
-void minic_core_lower_reentry_index_end(void) {
+void minic_core_reentry_index_destroy(MinicCoreReentryIndex *index) {
+    if (index == NULL) return;
     if (getenv("MINIC_CORE_REENTRY_INDEX_PERF") != NULL &&
-        minic_core_reentry_index.program != NULL) {
+        index->program != NULL) {
         (void)fprintf(stderr,
                       "MINIC_CORE_REENTRY_INDEX ready=1 incoming=%zu "
                       "indexed_if=%llu indexed_loop=%llu statements=%zu expressions=%zu\n",
-                      minic_core_reentry_index.incoming_count,
-                      minic_core_reentry_index.indexed_if_queries,
-                      minic_core_reentry_index.indexed_loop_queries,
-                      minic_core_reentry_index.program->statement_count,
-                      minic_core_reentry_index.program->expression_count);
+                      index->incoming_count,
+                      index->indexed_if_queries,
+                      index->indexed_loop_queries,
+                      index->program->statement_count,
+                      index->program->expression_count);
     }
-    free(minic_core_reentry_index.heads);
-    free(minic_core_reentry_index.incoming);
-    free(minic_core_reentry_index.addressed);
-    (void)memset(&minic_core_reentry_index, 0, sizeof(minic_core_reentry_index));
+    free(index->heads);
+    free(index->incoming);
+    free(index->addressed);
+    free(index);
 }
 
-void minic_core_lower_reentry_index_begin(const MinicC0Program *program) {
+MinicCoreReentryIndex *minic_core_reentry_index_create(const MinicC0Program *program) {
     size_t statement_count;
     size_t incoming_count;
     size_t i;
     size_t next_incoming;
-    MinicCoreReentryIndex *index = &minic_core_reentry_index;
-
-    minic_core_lower_reentry_index_end();
+    MinicCoreReentryIndex *index = (MinicCoreReentryIndex *)calloc(1U, sizeof(*index));
+    if (index == NULL) return NULL;
     if (program == NULL || program->statement_count == 0U ||
         program->statement_count > SIZE_MAX / sizeof(*index->heads) ||
         program->statement_count > SIZE_MAX / sizeof(*index->addressed)) {
-        return;
+        goto fallback;
     }
     statement_count = program->statement_count;
     incoming_count = 0U;
@@ -66,27 +64,27 @@ void minic_core_lower_reentry_index_begin(const MinicC0Program *program) {
     for (i = 0U; i < statement_count; ++i) {
         const MinicStatement *source = minic_c0_program_statement(program, i);
         if (source == NULL) {
-            return;
+            goto fallback;
         }
         if (source->kind == MINIC_STATEMENT_GOTO &&
             source->target_statement < statement_count) {
-            if (incoming_count == SIZE_MAX) return;
+            if (incoming_count == SIZE_MAX) goto fallback;
             ++incoming_count;
         } else if (source->kind == MINIC_STATEMENT_INLINE_ASM &&
                    source->inline_asm_id < program->inline_asm_count) {
             const MinicInlineAsm *code = &program->inline_asms[source->inline_asm_id];
             size_t label_index;
             if (!code->is_goto) continue;
-            if (code->label_count != 0U && code->labels == NULL) return;
+            if (code->label_count != 0U && code->labels == NULL) goto fallback;
             for (label_index = 0U; label_index < code->label_count; ++label_index) {
                 if (code->labels[label_index].target_statement < statement_count) {
-                    if (incoming_count == SIZE_MAX) return;
+                    if (incoming_count == SIZE_MAX) goto fallback;
                     ++incoming_count;
                 }
             }
         }
     }
-    if (incoming_count > SIZE_MAX / sizeof(*index->incoming)) return;
+    if (incoming_count > SIZE_MAX / sizeof(*index->incoming)) goto fallback;
     index->heads = (size_t *)malloc(statement_count * sizeof(*index->heads));
     index->addressed =
         (unsigned char *)calloc(statement_count, sizeof(*index->addressed));
@@ -138,29 +136,32 @@ void minic_core_lower_reentry_index_begin(const MinicC0Program *program) {
     if (next_incoming != incoming_count) goto fallback;
     index->incoming_count = incoming_count;
     index->program = program; /* Publish only after the entire graph is valid. */
-    return;
+    return index;
 
 fallback:
-    minic_core_lower_reentry_index_end();
+    minic_core_reentry_index_destroy(index);
+    return NULL;
 }
 
 
 
-bool minic_core_reentry_index_ready(const MinicC0Program *program) {
-    return program != NULL && minic_core_reentry_index.program == program;
+bool minic_core_reentry_index_ready(const MinicCoreReentryIndex *index,
+                                   const MinicC0Program *program) {
+    return index != NULL && program != NULL && index->program == program;
 }
 
 void minic_core_reentry_index_check_discarded(
-    const MinicC0Program *program, const bool *membership, bool *unsafe) {
+    MinicCoreReentryIndex *index, const MinicC0Program *program,
+    const bool *membership, bool *unsafe) {
     size_t index;
     if (unsafe == NULL) return;
-    if (!minic_core_reentry_index_ready(program) || membership == NULL) {
+    if (!minic_core_reentry_index_ready(index, program) || membership == NULL) {
         *unsafe = true;
         return;
     }
     /* Case/default labels are independently dispatched; direct internal
      * goto edges disappear along with the discarded subtree. */
-    ++minic_core_reentry_index.indexed_if_queries;
+    ++index->indexed_if_queries;
     for (index = 0U; index < program->statement_count && !*unsafe; ++index) {
         const MinicStatement *statement;
         size_t edge;
@@ -168,13 +169,13 @@ void minic_core_reentry_index_check_discarded(
         statement = minic_c0_program_statement(program, index);
         if (statement == NULL || statement->kind == MINIC_STATEMENT_CASE ||
             statement->kind == MINIC_STATEMENT_DEFAULT ||
-            minic_core_reentry_index.addressed[index] != 0U) {
+            index->addressed[index] != 0U) {
             *unsafe = true;
             break;
         }
-        for (edge = minic_core_reentry_index.heads[index]; edge != SIZE_MAX;
-             edge = minic_core_reentry_index.incoming[edge].next) {
-            size_t source = minic_core_reentry_index.incoming[edge].source_statement;
+        for (edge = index->heads[index]; edge != SIZE_MAX;
+             edge = index->incoming[edge].next) {
+            size_t source = index->incoming[edge].source_statement;
             if (!membership[source]) {
                 *unsafe = true;
                 break;
@@ -184,12 +185,13 @@ void minic_core_reentry_index_check_discarded(
 }
 
 bool minic_core_reentry_index_unreferenced_loop_label(
-    const MinicC0Program *program, MinicStatementId label_id) {
-    if (!minic_core_reentry_index_ready(program) ||
+    MinicCoreReentryIndex *index, const MinicC0Program *program,
+    MinicStatementId label_id) {
+    if (!minic_core_reentry_index_ready(index, program) ||
         label_id >= program->statement_count ||
-        minic_core_reentry_index.heads[label_id] != SIZE_MAX ||
-        minic_core_reentry_index.addressed[label_id] != 0U)
+        index->heads[label_id] != SIZE_MAX ||
+        index->addressed[label_id] != 0U)
         return false;
-    ++minic_core_reentry_index.indexed_loop_queries;
+    ++index->indexed_loop_queries;
     return true;
 }

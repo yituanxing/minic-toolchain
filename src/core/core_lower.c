@@ -8496,8 +8496,9 @@ static bool core_block_contains_reentry_label(const MinicCoreLowerContext *conte
     unsafe = !core_mark_discarded_if_membership(
         context, block, visited_blocks, statement_membership);
 
-    if (minic_core_reentry_index_ready(program)) {
-        minic_core_reentry_index_check_discarded(program, statement_membership, &unsafe);
+    if (minic_core_reentry_index_ready(context->reentry_index, program)) {
+        minic_core_reentry_index_check_discarded(
+            context->reentry_index, program, statement_membership, &unsafe);
     } else {
         /* case/default labels are entered by switch dispatch, independently of
            lexical fallthrough, so never prune a subtree that owns one. */
@@ -11061,10 +11062,11 @@ static bool core_unreferenced_internal_loop_label(
         return false;
     }
 
-    if (minic_core_reentry_index_ready(program)) {
+    if (minic_core_reentry_index_ready(context->reentry_index, program)) {
         /* Exact early-exit semantics: referenced labels are never
          * optimization-only internal while metadata. */
-        if (!minic_core_reentry_index_unreferenced_loop_label(program, label_id))
+        if (!minic_core_reentry_index_unreferenced_loop_label(
+                context->reentry_index, program, label_id))
             return false;
         loop_matches = 0U;
         for (index = 0U; index < program->statement_count; ++index) {
@@ -11867,9 +11869,10 @@ lower_block(MinicCoreLowerContext *context, const MinicBlock *source_block, bool
     return MINIC_CORE_LOWER_OK;
 }
 
-MinicCoreLowerStatus minic_core_lower_function(const MinicFunctionBodyView *body,
+MinicCoreLowerStatus minic_core_lower_function_with_index(const MinicFunctionBodyView *body,
                                                const MinicTargetInfo *target,
-                                               MinicCoreFunction *output) {
+                                               MinicCoreFunction *output,
+                                               MinicCoreReentryIndex *reentry_index) {
     const MinicFunction *source_function;
     const MinicBlock *source_block;
     MinicCoreFunction lowered;
@@ -11934,6 +11937,7 @@ MinicCoreLowerStatus minic_core_lower_function(const MinicFunctionBodyView *body
     context.body = body;
     context.source_function = source_function;
     context.target = target;
+    context.reentry_index = reentry_index;
     context.function = &lowered;
     lowered.suppress_source_label_aliases = source_function->is_integer_specialization;
     context.block_id = block_id;
@@ -11974,4 +11978,11 @@ MinicCoreLowerStatus minic_core_lower_function(const MinicFunctionBodyView *body
     minic_core_function_destroy(output);
     *output = lowered;
     return MINIC_CORE_LOWER_OK;
+}
+
+/* Standalone Core IR clients retain conservative no-index lowering. */
+MinicCoreLowerStatus minic_core_lower_function(const MinicFunctionBodyView *body,
+                                               const MinicTargetInfo *target,
+                                               MinicCoreFunction *output) {
+    return minic_core_lower_function_with_index(body, target, output, NULL);
 }
