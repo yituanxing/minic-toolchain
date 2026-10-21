@@ -55,6 +55,8 @@ MINIC_SOURCES := \
 	src/core/value_uses.c \
 	src/core/reentry_index.c \
 	src/core/core_lower.c \
+	src/core/core_lower_address.c \
+	src/core/core_lower_scalar_values.c \
 	src/core/core_lower_bit_fields.c \
 	src/core/core_lower_assignments.c \
 	src/core/core_lower_record.c \
