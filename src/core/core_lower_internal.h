@@ -29,6 +29,14 @@ typedef struct MinicCoreLowerContext {
     size_t statement_block_count;
 } MinicCoreLowerContext;
 
+/* Private Core-lowering facts: no target-specific machine state. */
+void core_local_constant_set(MinicCoreLowerContext *, MinicLocalId,
+                             const MinicConstValue *);
+bool core_const_eval_integer_with_locals(const MinicCoreLowerContext *,
+                                         MinicExpressionId, MinicConstValue *);
+bool core_const_signed_value(const MinicCoreLowerContext *,
+                             const MinicConstValue *, int64_t *);
+
 bool core_capture_enum_metadata(MinicCoreLowerContext *context);
 /* Source-wide fail-closed _Bool==0 fact used only by Core CFG lowering. */
 bool core_zero_bool_cfg_condition(const MinicCoreLowerContext *context,

@@ -495,3 +495,19 @@ and never treat unknown/volatile/escaped values as unconditional facts.
 This is a semantic Core pass interface, not speculative Machine IR.
 Revalidate compiler warnings, original RV64 Linux, x86 SysV projects,
 AArch64/LoongArch64 original BusyBox GNU/QEMU and negative HFA ABI gate.
+
+## Global audit follow-up: constant-call CFG oracle
+
+The dominant remaining module after the four-backend and compiler pass
+splits is AST-to-Core lowering. This commit moves the **existing bounded**
+constant-return callee and small-loop CFG evaluator from the giant
+`core_lower.c` into `core/cfg_constant_calls.{c,h}`. The fact-dependent
+Core helpers remain in `core_lower.c`, with three narrow private
+prototypes instead of reimplementing any source-wide proof. The algorithm,
+cleanup-edge conditions, iteration guards and fallback rejection paths
+are unchanged. There is no Machine IR, instruction selection, ABI
+change or speculative common lowering policy.
+
+Accept only after warning-as-error toolchain compilation and all original
+RV64, x86-64, AArch64, LoongArch64 regression evidence. This is a
+responsibility separation, not a performance claim.
