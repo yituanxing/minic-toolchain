@@ -68,6 +68,7 @@ MINIC_SOURCES := \
 	src/core/core_lower_calls.c \
 	src/core/core_lower_expr_flow.c \
 	src/core/core_lower_expr_scalar.c \
+	src/core/core_lower_arithmetic.c \
 	src/core/core_lower_const_facts.c \
 	src/core/cfg_constant_calls.c \
 	src/core/local_facts.c \

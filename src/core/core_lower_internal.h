@@ -182,6 +182,18 @@ MinicCoreLowerStatus minic_core_lower_vararg_statement(
 MinicCoreLowerStatus minic_core_lower_inline_asm(MinicCoreLowerContext *context,
                                                  const MinicStatement *statement);
 
+/* Integer/floating arithmetic, unary promotions and scalar compound RMW.
+ * Exact source evaluation order is preserved; target instructions stay later. */
+MinicCoreLowerStatus minic_core_lower_try_arithmetic_unary(
+    MinicCoreLowerContext *context, const MinicExpression *expression,
+    MinicCoreValueId *value_id, bool *handled);
+MinicCoreLowerStatus minic_core_lower_try_arithmetic_binary(
+    MinicCoreLowerContext *context, const MinicExpression *expression,
+    MinicCoreValueId *value_id, bool *handled);
+MinicCoreLowerStatus minic_core_lower_try_arithmetic_compound(
+    MinicCoreLowerContext *context, const MinicExpression *expression,
+    MinicCoreValueId *value_id, bool *handled);
+
 /* C bit-field semantics: one cohesive source-to-Core operation family.
  * The same signedness/width and target DataLayout contracts cover read,
  * compound assignment and increment/decrement. */
