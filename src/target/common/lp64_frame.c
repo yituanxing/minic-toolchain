@@ -80,9 +80,10 @@ bool minic_lp64_finalize_direct_frame(
         required += 64U;
     if (save > MINIC_LARGE_FRAME_MAX - required) return false;
     frame = (save + required + 15U) & ~(size_t)15U;
+    /* Expose the rejected size for the existing opt-in FRAME_CAP trace. */
+    *frame_size = frame;
     if (frame > MINIC_LARGE_FRAME_MAX) return false;
     *save_offset = save;
-    *frame_size = frame;
     if (va_base != NULL) *va_base = va;
     return true;
 }
