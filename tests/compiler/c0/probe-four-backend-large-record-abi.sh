@@ -34,7 +34,9 @@ for target in aarch64 loongarch64; do
     esac
     "$cc" -static -I"$work" "$work/mini.c" "$work/gnu.c" -o "$work/$target.gnu"
     "$cc" -I"$work" -c "$work/gnu.c" -o "$work/$target.gnu.o"
-    if ! "$MINIC_CC" --target="$target-linux" -S -I"$work" "$work/mini.c" \
+    # MiniC consumes preprocessed translation units: GCC owns -I/-E only.
+    "$cc" -E -P -I"$work" "$work/mini.c" -o "$work/$target.mini.i"
+    if ! "$MINIC_CC" --target="$target-linux" -S "$work/$target.mini.i" \
              -o "$work/$target.s" 2>"$work/mini.err"; then
         echo "FOUR_BACKEND_LARGE_RECORD_ABI=FAIL target=$target stage=minic" >&2
         head -18 "$work/mini.err" >&2
