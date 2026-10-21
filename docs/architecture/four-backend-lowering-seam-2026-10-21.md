@@ -132,3 +132,17 @@ introduced in the latter boundary. No universal ABI or common
 physical-register allocator is asserted, and RV64's optimized frame
 planner remains untouched. Source movement is not a runtime proof:
 original GNU/QEMU real-project owner regressions decide acceptance.
+
+## x86 SysV ABI owns classification independently
+
+The codegen-internal SysV scalar storage width, one/two INTEGER-eightbyte
+record admission, and incoming GPR/SSE/stack argument cursor are now
+compiled once in `x86_64/abi.c` with explicit `abi.h` contracts. The
+full classifier code has been moved, not rewritten. Call emission and
+instruction selection still use the x86 backend's machine registers;
+RV64 keeps its already separate `riscv64/abi.c`.
+
+This directly separates semantic ABI classification from target machine
+emission without demanding an immediate Machine IR. No common LP64
+classifier is assumed across RV64/x86/AArch64/LoongArch64. Runtime
+certification still requires original project GNU differential gates.
