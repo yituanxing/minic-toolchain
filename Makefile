@@ -56,6 +56,7 @@ MINIC_SOURCES := \
 	src/core/reentry_index.c \
 	src/core/core_lower.c \
 	src/core/core_lower_bit_fields.c \
+	src/core/core_lower_assignments.c \
 	src/core/core_lower_calls.c \
 	src/core/core_lower_expr_flow.c \
 	src/core/core_lower_expr_scalar.c \

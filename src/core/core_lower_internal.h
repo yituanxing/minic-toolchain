@@ -200,4 +200,19 @@ MinicCoreLowerStatus minic_core_lower_indirect_call(
     MinicCoreLowerContext *context, const MinicExpression *expression,
     MinicCoreValueId *value_id);
 
+/* Source-to-Core assignments; target ABI and machine details never enter. */
+MinicCoreLowerStatus minic_core_lower_assignment_pair(
+    MinicCoreLowerContext *context, MinicExpressionId target_id,
+    MinicExpressionId source_id, MinicSourceSpan span,
+    MinicCoreValueId *result_value);
+MinicCoreLowerStatus minic_core_lower_assignment(
+    MinicCoreLowerContext *context, const MinicStatement *statement);
+MinicCoreLowerStatus minic_core_lower_scalar_update(
+    MinicCoreLowerContext *context, const MinicExpression *expression,
+    MinicCoreValueId *value_id);
+MinicCoreLowerStatus minic_core_lower_try_bit_field_assignment(
+    MinicCoreLowerContext *context, const MinicExpression *target,
+    MinicExpressionId source_id, MinicSourceSpan span,
+    MinicCoreValueId *result_value, bool *matched);
+
 #endif
