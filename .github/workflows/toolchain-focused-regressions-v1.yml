@@ -247,6 +247,10 @@ jobs:
           # Original volatile 128-bit memory and two-limb shift oracle.
           # The original BusyBox top uses glibc div_t, an 8-byte
           # integer-class result returned in x0/a0, not scalar SSA.
+          # 144B AAPCS64 / LoongArch LP64D composite argument GNU/QEMU.
+          sh -n tests/compiler/c0/probe-four-backend-large-record-abi.sh
+          MINIC_CC="$GITHUB_WORKSPACE/build/toolchain-focused-t1-v2/bin/minic-cc" \
+            sh tests/compiler/c0/probe-four-backend-large-record-abi.sh
           sh -n tests/compiler/c0/probe-four-backend-small-record-return.sh
           MINIC_CC="$GITHUB_WORKSPACE/build/toolchain-focused-t1-v2/bin/minic-cc" \
             sh tests/compiler/c0/probe-four-backend-small-record-return.sh

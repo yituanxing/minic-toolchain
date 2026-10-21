@@ -626,4 +626,20 @@ static bool minic_multi_gp_record(const MinicC0Program *program,
     return true;
 }
 
+/* Both LP64 ABIs pass >32-byte aggregate arguments by a pointer to a
+ * caller-owned copy. This range excludes all 1-4 element FP/HFA classes;
+ * no guessed classification for exotic or over-aligned structures. */
+static bool minic_multi_indirect_record(const MinicC0Program *program,
+                                        const MinicTargetInfo *target,
+                                        MinicType type, size_t *bytes) {
+    size_t size, align;
+    if (program == NULL || target == NULL || bytes == NULL ||
+        !minic_type_is_record(type) ||
+        !minic_data_layout_type(target->data_layout, program, type,
+                                &size, &align) ||
+        size <= 32U || size > 2048U || align == 0U || align > 16U)
+        return false;
+    *bytes = size;
+    return true;
+}
 #endif /* MINIC_TARGET_BACKEND_GLOBAL_ARRAY_H */
