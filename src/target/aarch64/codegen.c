@@ -1,6 +1,7 @@
 #include "target/aarch64/codegen.h"
 #include "target/backend_core_usage.h"
-#include "target/backend_global_array.h"
+#include "target/common/global_emit.h"
+#include "target/common/lp64_aggregate.h"
 
 #include <inttypes.h>
 #include <stdint.h>

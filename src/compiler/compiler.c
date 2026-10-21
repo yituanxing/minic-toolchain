@@ -8,11 +8,7 @@
 #include "frontend/const_eval.h"
 #include "frontend/function_body.h"
 #include "frontend/parser.h"
-#include "target/riscv64/codegen.h"
-#include "target/x86_64/codegen.h"
-#include "target/aarch64/codegen.h"
-#include "target/loongarch64/codegen.h"
-#include "target/riscv64/layout.h"
+#include "target/backend.h"
 #include "target/target_info.h"
 
 #include <errno.h>
@@ -3124,6 +3120,7 @@ int minic_compile_preprocessed_file_for_target(const char *input_path,
     MinicC0Program program;
     MinicCoreFunctionSet core_set;
     MinicC0AstVerifyFailure verify_failure;
+    const MinicBackend *backend;
     bool success;
 
     if (input_path == NULL || output_path == NULL) {
@@ -3136,11 +3133,8 @@ int minic_compile_preprocessed_file_for_target(const char *input_path,
         diagnostic->column = 1U;
         diagnostic->message[0] = '\0';
     }
-    if (target_info == NULL ||
-        (target_info->architecture != MINIC_TARGET_ARCH_RISCV64 &&
-         target_info->architecture != MINIC_TARGET_ARCH_X86_64 &&
-         target_info->architecture != MINIC_TARGET_ARCH_AARCH64 &&
-         target_info->architecture != MINIC_TARGET_ARCH_LOONGARCH64) ||
+    backend = minic_backend_for_target(target_info);
+    if (target_info == NULL || backend == NULL ||
         target_info->data_layout == NULL || target_info->integer_model == NULL) {
         minic_set_diagnostic(diagnostic, input_path, 1U, 1U, "invalid target configuration");
         return 1;
@@ -3252,9 +3246,9 @@ int minic_compile_preprocessed_file_for_target(const char *input_path,
                                     success ? "end-ok" : "end-fail",
                                     program.function_count);
     }
-    if (success && target_info->architecture == MINIC_TARGET_ARCH_RISCV64) {
+    if (success && backend->prepare_program != NULL) {
         minic_bootstrap_trace_stage(input_path, "layout", "begin", program.function_count);
-        success = minic_riscv64_layout_program(input_path, &program, diagnostic);
+        success = backend->prepare_program(input_path, &program, target_info, diagnostic);
         minic_bootstrap_trace_stage(input_path,
                                     "layout",
                                     success ? "end-ok" : "end-fail",
@@ -3262,30 +3256,9 @@ int minic_compile_preprocessed_file_for_target(const char *input_path,
     }
     if (success) {
         minic_bootstrap_trace_stage(input_path, "codegen", "begin", program.function_count);
-        if (target_info->architecture == MINIC_TARGET_ARCH_RISCV64) {
-            success = minic_riscv64_write_c0_program_with_core_functions(output_path,
-                                                                         &program,
-                                                                         core_set.functions,
-                                                                         core_set.function_count,
-                                                                         function_sections,
-                                                                         diagnostic);
-        } else if (target_info->architecture == MINIC_TARGET_ARCH_X86_64) {
-            success = minic_x86_64_write_c0_program_with_core_functions(output_path,
-                                                                        &program,
-                                                                        target_info,
-                                                                        core_set.functions,
-                                                                        core_set.function_count,
-                                                                        function_sections,
-                                                                        diagnostic);
-        } else if (target_info->architecture == MINIC_TARGET_ARCH_AARCH64) {
-            success = minic_aarch64_write_c0_program_with_core_functions(
-                output_path, &program, target_info, core_set.functions,
-                core_set.function_count, function_sections, diagnostic);
-        } else {
-            success = minic_loongarch64_write_c0_program_with_core_functions(
-                output_path, &program, target_info, core_set.functions,
-                core_set.function_count, function_sections, diagnostic);
-        }
+        success = minic_backend_emit_assembly(
+            backend, output_path, &program, target_info, core_set.functions,
+            core_set.function_count, function_sections, diagnostic);
         minic_bootstrap_trace_stage(input_path,
                                     "codegen",
                                     success ? "end-ok" : "end-fail",
