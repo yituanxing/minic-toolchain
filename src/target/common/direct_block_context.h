@@ -27,6 +27,5 @@ typedef struct MinicDirectLP64BlockContext {
     size_t va_count;
     bool has_direct_calls;
     bool dynamic_frame;
-    bool trace_cjson;
 } MinicDirectLP64BlockContext;
 #endif

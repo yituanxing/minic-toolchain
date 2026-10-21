@@ -72,30 +72,6 @@ static bool emit_function_with_frame(FILE *out, const MinicC0Program *program,
     const char *reject_stage = "function_preflight";
     size_t reject_block = SIZE_MAX, reject_ins = SIZE_MAX;
     size_t va_count = 0U, va_gp = 0U;
-    /* No semantic change: source-specific diagnostics only for the active
-     * cJSON failure, never for normal builds or other projects. */
-    const bool trace_cjson = getenv("MINIC_M1_TRACE") != NULL &&
-                             getenv("MINIC_BACKEND_CENSUS") == NULL &&
-                             name != NULL &&
-                             (strcmp(name, "cJSON_ParseWithLengthOpts") == 0 ||
-                               strcmp(name, "cJSON_Compare") == 0 ||
-                               strcmp(name, "parse_number") == 0 ||
-                               strcmp(name, "ensure") == 0 ||
-                               strcmp(name, "compare_double") == 0 ||
-                               strcmp(name, "print_number") == 0);
-    if (trace_cjson)
-        (void)fprintf(stderr,
-            "MINIC_CJSON_STAGE arch=loongarch64 function=%s stage=entry blocks=%zu values=%zu objects=%zu params=%zu calls=%zu\n",
-            name, fn->block_count, fn->value_count, fn->object_count,
-            fn->parameter_count, fn->callee_count);
-    if (getenv("MINIC_M1_TRACE") != NULL &&
-        name != NULL && ((name[0] == 'K' && name[1] == 'e') || (name[0] == 'A' && name[1] == 'd')))
-        (void)fprintf(stderr,
-                      "MINIC_M9_GATE arch=loongarch64 fn=%s stage=entry values=%zu objects=%zu blocks=%zu params=%zu return_valid=%d inline=%zu\n",
-                      name, fn->value_count, fn->object_count,
-                      fn->block_count, fn->parameter_count,
-                      minic_lp64_valid_return_type(program, target, fn->return_type) ? 1 : 0,
-                      fn->inline_asm_count);
     if (!minic_multi_direct_lp64_function_preflight(program, target, decl, fn,
                                                "loongarch64", name))
         return minic_multi_direct_machine_reject(fn, "loongarch64", name,
@@ -122,22 +98,13 @@ static bool emit_function_with_frame(FILE *out, const MinicC0Program *program,
         va_gp = profile.fixed_gp_count;
         dynamic_frame = profile.has_dynamic_stack;
     }
-    if (getenv("MINIC_M1_TRACE") != NULL &&
-        ((name[0] == 'K' && name[1] == 'e') || (name[0] == 'A' && name[1] == 'd')))
-        (void)fprintf(stderr, "MINIC_M9_GATE arch=loongarch64 fn=%s stage=parameters_valid\n", name);
-    if (trace_cjson) (void)fprintf(stderr, "MINIC_CJSON_STAGE arch=loongarch64 stage=parameters_ok\n");
     reject_stage = "cfg_preflight";
     if (!minic_multi_direct_lp64_cfg_preflight(program, target, fn,
-                                         "loongarch64", name, trace_cjson,
                                          &reject_block))
         return minic_multi_direct_machine_reject(fn, "loongarch64", name,
             reject_stage, reject_block, reject_ins, __LINE__);
-    if (trace_cjson) (void)fprintf(stderr, "MINIC_CJSON_STAGE arch=loongarch64 stage=cfg_ok\n");
     /* Object byte extents and alignment are validated by minic_lp64_frame_objects.
      * This admits real repeated local arrays without overlapping slots. */
-    if (getenv("MINIC_M1_TRACE") != NULL &&
-        ((name[0] == 'K' && name[1] == 'e') || (name[0] == 'A' && name[1] == 'd')))
-        (void)fprintf(stderr, "MINIC_M9_GATE arch=loongarch64 fn=%s stage=terminators_valid\n", name);
     reject_stage = "frame_layout";
     reject_block = SIZE_MAX;
     if (!minic_lp64_frame_plan_objects(program, target, fn, frame_plan)) {
@@ -149,7 +116,6 @@ static bool emit_function_with_frame(FILE *out, const MinicC0Program *program,
                                     reject_block, reject_ins, __LINE__);
     }
     object_end = frame_plan->object_end;
-    if (trace_cjson) (void)fprintf(stderr, "MINIC_CJSON_STAGE arch=loongarch64 stage=frame_objects_ok end=%zu\n", object_end);
     ld_base = (object_end + 15U) & ~(size_t)15U;
     if (!minic_lp64_frame_plan_wide(fn, ld_base, frame_plan))
         return minic_multi_direct_machine_reject(fn, "loongarch64", name,
@@ -166,11 +132,6 @@ static bool emit_function_with_frame(FILE *out, const MinicC0Program *program,
         return minic_multi_direct_machine_reject(fn, "loongarch64", name,
                                                 reject_stage, reject_block,
                                                 reject_ins, __LINE__);
-    if (getenv("MINIC_M1_TRACE") != NULL &&
-        ((name[0] == 'K' && name[1] == 'e') || (name[0] == 'A' && name[1] == 'd')))
-        (void)fprintf(stderr, "MINIC_M9_GATE arch=loongarch64 fn=%s stage=calls_valid object_end=%zu\n",
-                      name, object_end);
-    if (trace_cjson) (void)fprintf(stderr, "MINIC_CJSON_STAGE arch=loongarch64 stage=calls_ok\n");
     reject_stage = "frame_finalization";
     reject_ins = SIZE_MAX;
     if (!minic_lp64_finalize_direct_frame(
@@ -185,7 +146,6 @@ static bool emit_function_with_frame(FILE *out, const MinicC0Program *program,
                                                 reject_stage, reject_block,
                                                 reject_ins, __LINE__);
     }
-    if (trace_cjson) (void)fprintf(stderr, "MINIC_CJSON_STAGE arch=loongarch64 stage=machine_emit frame=%zu\n", frame);
     if (function_sections) {
         if (fprintf(out, ".section .text.%s,\"ax\",@progbits\n", name) < 0)
             return minic_multi_direct_machine_reject(fn, "loongarch64", name, reject_stage,
@@ -231,7 +191,7 @@ static bool emit_function_with_frame(FILE *out, const MinicC0Program *program,
             .name = name, .id = id, .frame = frame,
             .save_offset = save_offset, .va_gp = va_gp,
             .va_count = va_count, .has_direct_calls = has_direct_calls,
-            .dynamic_frame = dynamic_frame, .trace_cjson = trace_cjson
+            .dynamic_frame = dynamic_frame
         };
         if (!minic_loongarch64_emit_core_blocks(out, &blocks)) return false;
     }
