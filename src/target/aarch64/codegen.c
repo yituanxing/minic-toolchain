@@ -978,11 +978,6 @@ static bool emit_function_body(FILE *out, const MinicC0Program *program,
                                            reject_ins, __LINE__);
             }
             actual = fn->values[arg->value.value_id].type;
-            if (minic_type_is_long_double(actual) &&
-                (j >= parameter_count || is_variadic))
-                return machine_emit_reject(fn, "aarch64", name,
-                                           "binary128_variadic_pending",
-                                           SIZE_MAX, i, __LINE__);
             if (!valid_parameter_type(program, target, actual)) return machine_emit_reject(fn, "aarch64", name, reject_stage,
                                     reject_block, reject_ins, __LINE__);
             if (j < parameter_count) {
@@ -995,7 +990,8 @@ static bool emit_function_body(FILE *out, const MinicC0Program *program,
                  * Preserve 32-bit promotions and classify full LP64
                  * integer values in the native general-purpose registers. */
                 if (!is_variadic ||
-                    (!minic_type_is_double(actual) &&
+                    (!minic_type_is_long_double(actual) &&
+                     !minic_type_is_double(actual) &&
                      !minic_type_is_pointer(actual) &&
                      (!scalar_integer_width(program, target, actual,
                                             &actual_width, &actual_signed) ||

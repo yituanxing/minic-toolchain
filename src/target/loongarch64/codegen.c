@@ -930,11 +930,6 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                                            reject_ins, __LINE__);
             }
             actual = fn->values[arg->value.value_id].type;
-            if (minic_type_is_long_double(actual) &&
-                (j >= parameter_count || is_variadic))
-                return machine_emit_reject(fn, "loongarch64", name,
-                                           "binary128_variadic_pending",
-                                           SIZE_MAX, i, __LINE__);
             if (!valid_parameter_type(program, target, actual)) return machine_emit_reject(fn, "loongarch64", name, reject_stage,
                                     reject_block, reject_ins, __LINE__);
             if (j < parameter_count) {
@@ -947,7 +942,8 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                  * Preserve 32-bit promotions and classify full LP64
                  * integer values in the native general-purpose registers. */
                 if (!is_variadic ||
-                    (!minic_type_is_double(actual) &&
+                    (!minic_type_is_long_double(actual) &&
+                     !minic_type_is_double(actual) &&
                      !minic_type_is_pointer(actual) &&
                      (!scalar_integer_width(program, target, actual,
                                             &actual_width, &actual_signed) ||
@@ -1795,8 +1791,15 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                                     (!is_variadic || j < parameter_count) &&
                                     fp_index < 8U;
                 if (minic_type_is_long_double(type)) {
+                    /* LP64D unnamed binary128 requires an even-numbered
+                     * GAR pair, rather than an odd a3/a5/a7 start. */
+                    if (is_variadic && j >= parameter_count &&
+                        gp_index < 8U && (gp_index & 1U))
+                        ++gp_index;
                     const size_t available = gp_index < 8U ? 8U - gp_index : 0U;
                     const size_t used = available < 2U ? available : 2U;
+                    if (used == 0U && (overflow_slots & 1U))
+                        ++overflow_slots;
                     gp_index += used;
                     overflow_slots += 2U - used;
                 } else if (use_fp) {
@@ -1848,8 +1851,13 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                     (dynamic_frame ? 0U : stack_bytes);
                 if (minic_type_is_long_double(type)) {
                     size_t src, chunk;
+                    if (is_variadic && j >= parameter_count &&
+                        gp_index < 8U && (gp_index & 1U))
+                        ++gp_index;
                     const size_t available = gp_index < 8U ? 8U - gp_index : 0U;
                     const size_t used = available < 2U ? available : 2U;
+                    if (used == 0U && (stack_index & 1U))
+                        ++stack_index;
                     if (!binary128_slot(fn, ld_base, arg->value.value_id, &src))
                         return machine_emit_reject(fn, "loongarch64", name,
                                                    reject_stage, reject_block,
