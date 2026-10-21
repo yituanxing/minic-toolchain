@@ -200,8 +200,11 @@ def print_frontier(report_root, gcc_success, enabled):
             fname = {"CPP": "cpp.err", "MiniC": "minic.err",
                      "GNU_AS": "as.err"}[stage]
             error = (path.parent / fname).read_text(encoding="utf-8", errors="replace")
+            # GNU AS uses capitalized "Error:" and starts stderr with
+            # "Assembler messages:". Report the actual first failing line,
+            # not that uninformative header, on every architecture.
             useful = [s.strip() for s in error.splitlines()
-                      if "error:" in s or "fatal error:" in s or "unsupported" in s]
+                      if "error:" in s.lower() or "unsupported" in s.lower()]
             if not useful:
                 useful = [s.strip() for s in error.splitlines() if s.strip()]
             print("BUSYBOX_ALLYES_BLOCKER source=%s kind=%s detail=%s" %

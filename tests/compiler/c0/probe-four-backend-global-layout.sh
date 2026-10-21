@@ -88,6 +88,22 @@ int main(void) {
 }
 SRC
             ;;
+        flexible_record_global)
+            cat <<'SRC'
+typedef struct masks_labels_t {
+    const char *labels;
+    const int masks[];
+} masks_labels_t;
+static const masks_labels_t pio_modes = {
+    .labels = "pio3\0pio4\0pio?\0",
+    .masks = {1, 2, ~3}
+};
+int main(void) {
+    return (pio_modes.labels[0] == 'p' && pio_modes.masks[0] == 1 &&
+            pio_modes.masks[1] == 2 && pio_modes.masks[2] == -4) ? 42 : 2;
+}
+SRC
+            ;;
         bitfield_record_array)
             cat <<'SRC'
 struct Option {
@@ -181,7 +197,7 @@ for target in aarch64 loongarch64; do
         aarch64) gcc=aarch64-linux-gnu-gcc; qemu=qemu-aarch64 ;;
         loongarch64) gcc=loongarch64-linux-gnu-gcc-13; qemu=qemu-loongarch64 ;;
     esac
-    for family in null_scalar null_array zero_union zero_record implicit_record nonzero_union nested_nonzero nested_record_array nested_record_array_reloc bitfield_record_array combined; do
+    for family in null_scalar null_array zero_union zero_record implicit_record nonzero_union nested_nonzero nested_record_array nested_record_array_reloc flexible_record_global bitfield_record_array combined; do
         src="$w/$target.$family.i"
         write_case "$family" >"$src"
         "$gcc" -static -x c "$src" -o "$w/$target.$family.gnu"
@@ -212,7 +228,7 @@ for target in aarch64 loongarch64; do
     done
 done
 if [ "$failed" -ne 0 ]; then
-    echo "FOUR_BACKEND_GLOBAL_LAYOUT_ACCEPT=FAIL targets=2 families=11" >&2
+    echo "FOUR_BACKEND_GLOBAL_LAYOUT_ACCEPT=FAIL targets=2 families=12" >&2
     exit 1
 fi
-echo "FOUR_BACKEND_GLOBAL_LAYOUT_ACCEPT=PASS targets=2 families=11 GNU_QEMU_diff=1"
+echo "FOUR_BACKEND_GLOBAL_LAYOUT_ACCEPT=PASS targets=2 families=12 GNU_QEMU_diff=1"
