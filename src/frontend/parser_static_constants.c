@@ -266,29 +266,6 @@ static bool static_object_address_relocation_target(const MinicParser *parser,
     return true;
 }
 
-typedef struct MinicStaticObjectRelocationTarget {
-    MinicGlobalObjectId object_id;
-    size_t member_indices[MINIC_GLOBAL_RELOCATION_MAX_MEMBER_DEPTH];
-    size_t member_depth;
-    int64_t byte_addend;
-} MinicStaticObjectRelocationTarget;
-
-typedef struct MinicStaticPointerInitializer {
-    bool has_relocation;
-    bool relocation_is_function;
-    bool relocation_is_label;
-    bool has_explicit_pointer_cast;
-    uint64_t bits;
-    MinicFunctionId function_id;
-    MinicStatementId label_statement_id;
-    MinicStaticObjectRelocationTarget relocation_target;
-} MinicStaticPointerInitializer;
-
-typedef struct MinicStaticArraySlot {
-    uint64_t integer_bits;
-    MinicStaticPointerInitializer pointer_initializer;
-} MinicStaticArraySlot;
-
 static bool static_object_subobject_relocation_path(const MinicParser *parser,
                                                     MinicExpressionId expression_id,
                                                     MinicStaticObjectRelocationTarget *target) {
