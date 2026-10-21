@@ -258,6 +258,31 @@ Acceptance: verify full RV64 Linux original compilation and performance
 receipts, x86 owner targets and AArch64/LoongArch64 original GNU/QEMU
 regressions. A moved byte-identical algorithm is not a CI verdict.
 
+## RV64 machine legalization: the next true lowering responsibility
+
+After extraction of target ABI, Core semantic SSA uses, value spill
+layout and object liveness, RV64 still interleaved scalar type widths,
+Core memory/record operation support and checked calling convention
+admission with the concrete GNU assembly emitter. A 690-line cluster
+of 12 production legality queries now lives in
+`riscv64/legalize.{h,c}` with the exact source bodies retained.
+
+The module consumes the established RV64 psABI classifier and DataLayout
+queries. All unknown or unsupported width/record/overflow/call shapes
+still fail closed. `riscv64/core_codegen.c` retains the actual
+per-op dispatch, inline-asm and register handling, mature frame
+allocation, instruction emission, and ABI parameter construction.
+
+This split prepares future target legalization -> optional machine IR
+without inventing machine instructions yet. Cross-architecture review
+confirmed that x86 SysV and AArch64 HFA conventions cannot be blindly
+normalized into RV64 psABI; shared Core operand-use analysis remains
+target-neutral and is deliberately not moved into this module.
+
+**Validation boundary:** historical CI remains a baseline only; the
+current PR must pass warning-as-error toolchain build, four-ISA
+GNU/QEMU real-source regression, and RV64 Linux owners before merging.
+
 ## Cross-ISA program output: reuse lifecycle, keep ABI/instruction-private
 
 Both AArch64 and LoongArch64 had *byte-identical* `fail` and

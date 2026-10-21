@@ -96,6 +96,7 @@ MINIC_SOURCES := \
 	src/target/riscv64/core_codegen.c \
 	src/target/riscv64/spill_layout.c \
 	src/target/riscv64/object_liveness.c \
+	src/target/riscv64/legalize.c \
 	src/target/riscv64/frame_requirements.c \
 	src/target/riscv64/codegen_function.c \
 	src/target/riscv64/global_emit.c \
