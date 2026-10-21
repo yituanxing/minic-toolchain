@@ -163,3 +163,22 @@ use these frame indices/plans before stack offsets are materialized.
 Release compilation under `-Werror`, x86 real programs and existing
 four-architecture GNU/QEMU checks are required before declaring
 behavioral equivalence.
+
+## RV64 machine-lowering responsibilities: frame requirements, not generic frame
+
+The six production RV64 Core/psABI requirement queries are now compiled in
+`riscv64/frame_requirements.{h,c}`. They decide whether to save the return
+address, detect structured inline asm and dynamic stack allocation, handle
+variadic parameter prefixes, and size the maximum outgoing argument area.
+They consult the established `riscv64/abi.c`, not x86 SysV or the new-ISA
+LP64 admission helpers.
+
+The actual RV64 `core_frame_initialize`, value spill reuse, scalar object
+lifetime/interval cache and inline asm register allocator remain in
+`core_codegen.c`: extraction is *not* authorization to replace or slow down
+that optimized machinery. These are stable inputs to eventual Machine IR
+lowering, without modifying Core IR or register/stack semantics.
+
+Both x86-64 (frame/abi/global) and RV64 (frame requirements/abi/global)
+are now explicitly part of the multi-arch modularization work. The
+original GNU/QEMU source-owner and Linux gates remain mandatory.
