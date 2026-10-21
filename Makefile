@@ -96,6 +96,8 @@ MINIC_SOURCES := \
 	src/frontend/parser_builtins.c \
 	src/frontend/parser_function.c \
 	src/frontend/parser_global.c \
+	src/frontend/parser_global_lookup.c \
+	src/frontend/parser_static_constants.c \
 	src/frontend/parser_member.c \
 	src/frontend/parser_postfix.c \
 	src/frontend/parser_record.c \
