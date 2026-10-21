@@ -856,6 +856,61 @@ static bool gnu_function_pointer_to_void_call_conversion_compatible(MinicType ta
            minic_type_is_function(source_pointee);
 }
 
+/* glibc's GNU __SOCKADDR_ARG transparent union is ABI-equivalent to
+ * a pointer argument and is intentionally accepted in function-pointer
+ * declarations such as BusyBox get_lsa(fd, getsockname). Match complete
+ * signatures, differing ONLY where a transparent union's validated first
+ * pointer member is identical to the corresponding pointer parameter.
+ * Other incompatible function-pointer prototypes remain rejected. */
+static bool gnu_transparent_union_function_pointer_call_compatible(
+    const MinicC0Program *program, MinicType target, MinicType source) {
+    MinicType target_fn, source_fn;
+    const MinicFunctionType *want, *have;
+    size_t i;
+    bool saw_transparent_union = false;
+
+    if (program == NULL || !minic_type_pointee(target, &target_fn) ||
+        !minic_type_is_function(target_fn))
+        return false;
+    if (minic_type_is_function(source)) {
+        source_fn = source;
+    } else if (!minic_type_pointee(source, &source_fn) ||
+               !minic_type_is_function(source_fn)) {
+        return false;
+    }
+    want = minic_c0_program_function_type(program, target_fn.function_type_id);
+    have = minic_c0_program_function_type(program, source_fn.function_type_id);
+    if (want == NULL || have == NULL ||
+        want->parameter_count != have->parameter_count ||
+        want->is_variadic != have->is_variadic ||
+        !minic_c0_types_compatible(program, want->return_type, have->return_type))
+        return false;
+    for (i = 0U; i < want->parameter_count; ++i) {
+        MinicType target_abi, source_abi;
+        const MinicRecord *w = minic_type_is_record(want->parameter_types[i])
+            ? minic_c0_program_record(program, want->parameter_types[i].record_id)
+            : NULL;
+        const MinicRecord *h = minic_type_is_record(have->parameter_types[i])
+            ? minic_c0_program_record(program, have->parameter_types[i].record_id)
+            : NULL;
+        if (minic_c0_types_compatible(program, want->parameter_types[i],
+                                     have->parameter_types[i]))
+            continue;
+        if (!((w != NULL && w->is_transparent_union) ||
+              (h != NULL && h->is_transparent_union)) ||
+            !minic_c0_fixed_parameter_abi_type(
+                program, want->parameter_types[i], &target_abi) ||
+            !minic_c0_fixed_parameter_abi_type(
+                program, have->parameter_types[i], &source_abi) ||
+            !minic_type_is_pointer(target_abi) ||
+            !minic_type_is_pointer(source_abi) ||
+            !minic_c0_types_compatible(program, target_abi, source_abi))
+            return false;
+        saw_transparent_union = true;
+    }
+    return saw_transparent_union;
+}
+
 static bool gnu_function_pointer_bridge_call_conversion_compatible(const MinicC0Program *program,
                                                                    MinicType target,
                                                                    const MinicExpression *source) {
@@ -905,6 +960,8 @@ bool minic_parser_apply_fixed_call_argument_conversion(MinicParser *parser,
         gnu_enum_integer_pointer_call_conversion_compatible(
             parser->program, target_type, source->type) ||
         gnu_function_pointer_to_void_call_conversion_compatible(target_type, source->type) ||
+        gnu_transparent_union_function_pointer_call_compatible(
+            parser->program, target_type, source->type) ||
         gnu_function_pointer_bridge_call_conversion_compatible(
             parser->program, target_type, source);
     if (!needs_explicit_conversion) {
