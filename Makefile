@@ -86,6 +86,7 @@ MINIC_SOURCES := \
 	src/target/data_layout.c \
 	src/target/target_info.c \
 	src/target/backend.c \
+	src/target/backend_core_usage.c \
 	src/target/common/global_emit.c \
 	src/target/common/direct_program_emit.c \
 	src/target/common/lp64_aggregate.c \

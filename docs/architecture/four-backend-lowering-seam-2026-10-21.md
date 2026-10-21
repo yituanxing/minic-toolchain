@@ -344,3 +344,17 @@ The read-only Core SSA use visitor remains `core/value_uses.c`; full AST
 lowering stays separate from RV64 `legalize.c` and all machine-level
 frame/ABI modules. Gate with reentry/goto/switch/inline-asm regression
 and Linux original owners, not just a successful rebuild.
+
+## Compiler diagnostics: source inventory is not machine legalization
+
+The opt-in `MINIC_CORE_USAGE` implementation was previously a ~200-line
+static-function header. The two new-ISA emitters consumed it via their TU
+driver; retaining such header functions for more targets would duplicate
+compiled code and blur the diagnostic / target code boundary.
+Move the three original implementations to separately compiled
+`target/backend_core_usage.c`, retaining a declaration-only header.
+Counters, data-width bins and `support_verified=0` remain unchanged.
+
+The Core usage census reports observed workload operations; it does not
+certify instruction legalization or ABI correctness. Four-ISA acceptance
+requires GNU/QEMU real workloads and negative ABI guards.
