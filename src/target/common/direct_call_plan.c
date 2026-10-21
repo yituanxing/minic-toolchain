@@ -47,9 +47,6 @@ bool minic_lp64_plan_direct_call(const MinicC0Program *program,
         size_t chunks = 1U, size = 0U;
         bool record = false, by_reference = false;
         MinicType type;
-        loc->gp_cursor = gp;
-        loc->fp_cursor = fp;
-        loc->stack_cursor = stack;
         loc->gp_first = loc->fp_first = loc->stack_first = SIZE_MAX;
         if (arg->kind == MINIC_CORE_CALL_ARGUMENT_OBJECT) {
             if (arg->value.object_id >= fn->object_count) return false;
