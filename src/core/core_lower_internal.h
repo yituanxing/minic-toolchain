@@ -215,4 +215,13 @@ MinicCoreLowerStatus minic_core_lower_try_bit_field_assignment(
     MinicExpressionId source_id, MinicSourceSpan span,
     MinicCoreValueId *result_value, bool *matched);
 
+/* Structured CFG: switch selects cases, general lower_block owns traversal. */
+MinicCoreLowerStatus minic_core_lower_switch(
+    MinicCoreLowerContext *context, const MinicStatement *statement,
+    bool *terminated);
+MinicCoreLowerStatus minic_core_lower_internal_lower_block(
+    MinicCoreLowerContext *context, const MinicBlock *source_block,
+    bool *terminated);
+bool minic_core_lower_internal_block_has_predecessor(
+    const MinicCoreFunction *function, MinicCoreBlockId target);
 #endif
