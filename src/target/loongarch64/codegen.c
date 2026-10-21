@@ -4,6 +4,7 @@
 #include "target/common/lp64_scalar.h"
 #include "target/common/lp64_frame.h"
 #include "target/common/lp64_aggregate.h"
+#include "target/loongarch64/frame_emit.h"
 
 #include <inttypes.h>
 #include <stdint.h>
@@ -101,7 +102,7 @@ static bool emit_integer_normalize(FILE *out, size_t width, bool sign) {
  * are SP-positive; naturally aligned objects are laid out after SSA
  * value slots.  Keep bounded <= 8 KiB frames until large-offset ABI
  * access has been independently checked on both targets. */
-#define MINIC_LARGE_FRAME_MAX 1048576U
+
 
 
 
@@ -113,37 +114,14 @@ static bool emit_integer_normalize(FILE *out, size_t width, bool sign) {
  * direct encoding for small frames; for real KeyExpansion-sized frames,
  * materialize the full SP-relative address in reserved $t3.  No other
  * emitter instruction may treat $t3 as a live Core value. */
-static bool emit_sp_mem(FILE *out, const char *op, const char *reg,
-                        size_t offset) {
-    if (offset <= 2047U)
-        return fprintf(out, "  %s %s, $sp, %zu\n", op, reg, offset) >= 0;
-    if (offset > MINIC_LARGE_FRAME_MAX) return false;
-    return fprintf(out, "  li.d $t3, %zu\n"
-                        "  add.d $t3, $sp, $t3\n"
-                        "  %s %s, $t3, 0\n", offset, op, reg) >= 0;
-}
-static bool emit_sp_adjust(FILE *out, size_t bytes, bool restore) {
-    if (bytes == 0U) return true;
-    if (bytes > MINIC_LARGE_FRAME_MAX) return false;
-    return fprintf(out, "  li.d $t3, %zu\n"
-                        "  %s $sp, $sp, $t3\n", bytes,
-                   restore ? "add.d" : "sub.d") >= 0;
-}
+
+
 
 
 /* Dynamic alloca changes SP. Anchor every fixed Core SSA/object slot
  * to callee-saved s0 ONLY for functions containing that instruction.
  * Raw SP remains the ABI outgoing stack-argument base. */
-static bool emit_frame_mem(FILE *out, const char *op, const char *reg,
-                           size_t offset, bool dynamic_frame) {
-    if (!dynamic_frame) return emit_sp_mem(out, op, reg, offset);
-    if (offset <= 2047U)
-        return fprintf(out, "  %s %s, $s0, %zu\n", op, reg, offset) >= 0;
-    if (offset > MINIC_LARGE_FRAME_MAX) return false;
-    return fprintf(out, "  li.d $t3, %zu\n"
-                        "  add.d $t3, $s0, $t3\n"
-                        "  %s %s, $t3, 0\n", offset, op, reg) >= 0;
-}
+
 
 /* LP64D integral aggregate bytes travel in one/two a-registers or
  * eightbyte stack slots. Use byte packing to avoid reading beyond a
@@ -166,7 +144,7 @@ static bool emit_lp64_record_chunk_argument(FILE *out, size_t offset,
                     b, b * 8U) < 0) return false;
     if (in_reg)
         return fprintf(out, "  or $a%zu, $t0, $zero\n", gp) >= 0;
-    return emit_sp_mem(out, "st.d", "$t0", stack_slot * 8U);
+    return minic_loongarch64_emit_sp_mem(out, "st.d", "$t0", stack_slot * 8U);
 }
 
 static bool emit_lp64_record_chunk_parameter(FILE *out, size_t offset,
@@ -180,7 +158,7 @@ static bool emit_lp64_record_chunk_parameter(FILE *out, size_t offset,
                 dynamic_frame ? "$s0" : "$sp") < 0 ||
         (in_reg
          ? fprintf(out, "  or $t0, $a%zu, $zero\n", gp) < 0
-         : !emit_frame_mem(out, "ld.d", "$t0",
+         : !minic_loongarch64_emit_frame_mem(out, "ld.d", "$t0",
                            incoming_offset, dynamic_frame)))
         return false;
     for (b = 0U; b < bytes; ++b)
@@ -193,7 +171,7 @@ static bool emit_lp64_record_chunk_parameter(FILE *out, size_t offset,
 /* Macro scoped to emit_function: keep all existing fixed Core frame
  * accesses explicit, but distinguish them from outgoing SP slots. */
 #define emit_sp_mem(_out, _op, _reg, _offset) \
-    emit_frame_mem((_out), (_op), (_reg), (_offset), dynamic_frame)
+    minic_loongarch64_emit_frame_mem((_out), (_op), (_reg), (_offset), dynamic_frame)
 
 static bool emit_function(FILE *out, const MinicC0Program *program,
                           const MinicTargetInfo *target,
@@ -612,9 +590,9 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
     if (fprintf(out, ".p2align 2\n.type %s,@function\n%s:\n", name, name) < 0)
         return minic_multi_direct_machine_reject(fn, "loongarch64", name, reject_stage,
                                     reject_block, reject_ins, __LINE__);
-    if (!emit_sp_adjust(out, frame, false) ||
+    if (!minic_loongarch64_emit_sp_adjust(out, frame, false) ||
         (dynamic_frame &&
-         (!emit_frame_mem(out, "st.d", "$s0",
+         (!minic_loongarch64_emit_frame_mem(out, "st.d", "$s0",
                          save_offset + (has_direct_calls ? 8U : 0U), false) ||
           fputs("  move $s0, $sp\n", out) == EOF)))
         return minic_multi_direct_machine_reject(fn, "loongarch64", name, reject_stage,
@@ -1493,7 +1471,7 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                 } else if (gp_index++ >= 8U) ++overflow_slots;
             }
             stack_bytes = (overflow_slots * 8U + 15U) & ~(size_t)15U;
-            if (stack_bytes != 0U && !emit_sp_adjust(out, stack_bytes, false))
+            if (stack_bytes != 0U && !minic_loongarch64_emit_sp_adjust(out, stack_bytes, false))
                 return minic_multi_direct_machine_reject(fn, "loongarch64", name,
                                            reject_stage, reject_block,
                                            reject_ins, __LINE__);
@@ -1518,7 +1496,7 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                                     src, dynamic_frame ? "$s0" : "$sp") < 0 ||
                             (gp_index < 8U
                              ? fprintf(out, "  move $a%zu, $t0\n", gp_index) < 0
-                             : !emit_frame_mem(out, "st.d", "$t0",
+                             : !minic_loongarch64_emit_frame_mem(out, "st.d", "$t0",
                                                stack_index * 8U, false)))
                             return minic_multi_direct_machine_reject(fn, "loongarch64", name,
                                 reject_stage, reject_block, reject_ins, __LINE__);
@@ -1572,7 +1550,7 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                                                            reject_ins, __LINE__);
                         } else if (!emit_sp_mem(out, "ld.d", "$t0",
                                                 src + (dynamic_frame ? 0U : stack_bytes) + chunk * 8U) ||
-                                   !emit_frame_mem(out, "st.d", "$t0",
+                                   !minic_loongarch64_emit_frame_mem(out, "st.d", "$t0",
                                                    (stack_index + chunk - used) * 8U,
                                                    false))
                             return minic_multi_direct_machine_reject(fn, "loongarch64", name,
@@ -1597,7 +1575,7 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                     } else if (!emit_sp_mem(out, minic_type_is_float(type)
                                                    ? "fld.s" : "fld.d",
                                             "$ft0", slot) ||
-                               !emit_frame_mem(out, minic_type_is_float(type)
+                               !minic_loongarch64_emit_frame_mem(out, minic_type_is_float(type)
                                                    ? "fst.s" : "fst.d",
                                             "$ft0", stack_index++ * 8U, false))
                         return minic_multi_direct_machine_reject(fn, "loongarch64", name,
@@ -1619,7 +1597,7 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                                 * so st.d must write all 64 bits. st.w left
                                 * the upper half uninitialized and could
                                 * poison a variadic callee's 8-byte va slot. */
-                               !emit_frame_mem(out, "st.d",
+                               !minic_loongarch64_emit_frame_mem(out, "st.d",
                                             "$t0", stack_index++ * 8U, false))
                         return minic_multi_direct_machine_reject(fn, "loongarch64", name,
                                     reject_stage, reject_block, reject_ins, __LINE__);
@@ -1642,7 +1620,7 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                                                reject_stage, reject_block,
                                                reject_ins, __LINE__);
             }
-            if (stack_bytes != 0U && !emit_sp_adjust(out, stack_bytes, true))
+            if (stack_bytes != 0U && !minic_loongarch64_emit_sp_adjust(out, stack_bytes, true))
                 return minic_multi_direct_machine_reject(fn, "loongarch64", name,
                                            reject_stage, reject_block,
                                            reject_ins, __LINE__);
@@ -2403,10 +2381,10 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                 (has_direct_calls && !emit_sp_mem(out, "ld.d", "$ra", save_offset)) ||
                 (dynamic_frame &&
                  (fputs("  move $sp, $s0\n", out) == EOF ||
-                  !emit_frame_mem(out, "ld.d", "$s0",
+                  !minic_loongarch64_emit_frame_mem(out, "ld.d", "$s0",
                                   save_offset + (has_direct_calls ? 8U : 0U),
                                   false))) ||
-                (!emit_sp_adjust(out, frame, true)) ||
+                (!minic_loongarch64_emit_sp_adjust(out, frame, true)) ||
                 fputs("  ret\n", out) == EOF) return minic_multi_direct_machine_reject(fn, "loongarch64", name, reject_stage,
                                     reject_block, reject_ins, __LINE__);
             break;

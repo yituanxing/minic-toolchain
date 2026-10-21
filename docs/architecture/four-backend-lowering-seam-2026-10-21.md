@@ -303,3 +303,21 @@ direct-LP64 driver, because their TU/ABI contracts are more elaborate.
 This is output/diagnostic policy ownership, not Machine IR or a
 universal target emitter. Original GNU-QEMU BusyBox full-owner
 verdicts and negative AArch64 HFA diagnostics are authoritative.
+
+## ISA-specific final lowering (preserve different machine mechanisms)
+
+AArch64's two original GNU text passes (large SP displacement and
+dynamic alloca rebase from SP to callee-saved x19) have moved, unchanged,
+to `aarch64/asm_legalize.{h,c}`. The TU driver still calls the
+AArch64-only post-emission legalization callback; no other backend does.
+
+LoongArch64's original stack/large-offset address routines are now in
+`loongarch64/frame_emit.{h,c}`. They still use reserved $t3 and s0,
+and retain the local `emit_sp_mem` macro inside the function emitter:
+only fixed frame references are based on s0 for alloca, while outgoing
+ABI stack arguments remain SP-based.
+
+These are deliberately target-owned low-level machine operations;
+a future Machine IR must distinguish frame indices from explicit
+outgoing stack positions. Do not merge ISA machine registers or invent
+common LP64 opcode emission merely to deduplicate code.

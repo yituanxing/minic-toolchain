@@ -5,6 +5,7 @@
 #include "target/common/lp64_frame.h"
 #include "target/common/lp64_aggregate.h"
 #include "target/aarch64/abi.h"
+#include "target/aarch64/asm_legalize.h"
 
 #include <inttypes.h>
 #include <stdint.h>
@@ -133,7 +134,7 @@ static bool aarch64_static_function(const MinicC0Program *program,
  * are SP-positive; naturally aligned objects are laid out after SSA
  * value slots.  Keep bounded <= 8 KiB frames until large-offset ABI
  * access has been independently checked on both targets. */
-#define MINIC_LARGE_FRAME_MAX 1048576U
+
 
 
 
@@ -144,64 +145,7 @@ static bool aarch64_static_function(const MinicC0Program *program,
 /* Target-local final legalization of out-of-range SP-relative memory access.
  * Full Core SSA stack slots are preserved, and x12 is a reserved scratch.
  * This pass does not transform small-frame GNU instructions. */
-static bool legalize_large_sp_memory(const char *path) {
-    FILE *input = fopen(path, "rb"), *output, *rewritten;
-    char line[512], copy[8192];
-    size_t size;
-    bool success = true;
-    if (input == NULL) return false;
-    output = tmpfile();
-    if (output == NULL) { (void)fclose(input); return false; }
-    while (fgets(line, sizeof(line), input) != NULL) {
-        char op[16] = {0}, reg[16] = {0};
-        size_t offset = 0U;
-        const bool original_sp =
-            sscanf(line, "  %15s %15[^,], [sp, #%zu]",
-                   op, reg, &offset) == 3;
-        const bool fixed_x19 = !original_sp &&
-            sscanf(line, "  %15s %15[^,], [x19, #%zu]",
-                   op, reg, &offset) == 3;
-        if ((original_sp || fixed_x19) &&
-            (strncmp(op, "ldr", 3U) == 0 ||
-             strncmp(op, "str", 3U) == 0) && offset > 4095U) {
-            const uint64_t imm = (uint64_t)offset;
-            unsigned int shift;
-            if (fprintf(output, "  movz x12, #%" PRIu64 "\n",
-                        imm & UINT64_C(0xffff)) < 0) {
-                success = false; break;
-            }
-            for (shift = 16U; shift <= 48U; shift += 16U) {
-                if (((imm >> shift) & UINT64_C(0xffff)) != 0U &&
-                    fprintf(output, "  movk x12, #%" PRIu64
-                            ", lsl #%u\n",
-                            (imm >> shift) & UINT64_C(0xffff), shift) < 0) {
-                    success = false; break;
-                }
-            }
-            if (!success ||
-                fputs(fixed_x19 ? "  add x12, x19, x12\n" :
-                                   "  add x12, sp, x12\n", output) == EOF ||
-                fprintf(output, "  %s %s, [x12]\n", op, reg) < 0) {
-                success = false; break;
-            }
-        } else if (fputs(line, output) == EOF) {
-            success = false; break;
-        }
-    }
-    if (ferror(input) != 0 || fclose(input) != 0) success = false;
-    if (success && fseek(output, 0L, SEEK_SET) != 0) success = false;
-    rewritten = success ? fopen(path, "wb") : NULL;
-    if (rewritten == NULL) success = false;
-    if (success) {
-        while ((size = fread(copy, 1U, sizeof(copy), output)) != 0U)
-            if (fwrite(copy, 1U, size, rewritten) != size) {
-                success = false; break;
-            }
-        if (ferror(output) != 0 || fclose(rewritten) != 0) success = false;
-    }
-    if (fclose(output) != 0) success = false;
-    return success;
-}
+
 
 
 /* One or two INTEGER-class ABI eightbytes. Serialize actual record bytes,
@@ -2719,69 +2663,7 @@ static bool emit_function_body(FILE *out, const MinicC0Program *program,
  * may move; source-owned outgoing stack argument slots remain relative to SP.
  * This is a target-local text legalization, just like large-offset handling,
  * and leaves all non-dynamic code generation byte-for-byte unchanged. */
-static bool copy_dynamic_frame_asm(FILE *out, FILE *input) {
-    char line[1024];
-    bool anchored = false;
-    size_t spill = 0U;
-    while (fgets(line, sizeof(line), input) != NULL) {
-        char *base, *end;
-        unsigned int rd, rn;
-        size_t value;
-        if (strchr(line, '\n') == NULL && !feof(input)) return false;
-        if (strcmp(line, "  mov x19, sp\n") == 0) {
-            anchored = true;
-        } else if (strcmp(line, "  mov sp, x19\n") == 0) {
-            /* Epilogue must load the saved x19 from the restored SP.
-             * This unanchors only the current RETURN terminator, not
-             * subsequent textually later CFG blocks: they may be reached
-             * by a branch from earlier blocks and still use dynamic SP. */
-            anchored = false;
-            spill = 0U;
-        } else if (!anchored && strcmp(line, "  ret\n") == 0) {
-            if (fputs(line, out) == EOF) return false;
-            anchored = true;
-            continue;
-        } else if (anchored && sscanf(line, "  sub sp, sp, #%zu", &value) == 1) {
-            /* Only the bounded outgoing call argument area uses sub #imm.
-             * Dynamic allocations use sub sp, sp, x10, never an immediate. */
-            if (spill != 0U || value == 0U || value > 512U) return false;
-            spill = value;
-        } else if (anchored && sscanf(line, "  add sp, sp, #%zu", &value) == 1) {
-            if (spill != value) return false;
-            spill = 0U;
-        }
-        base = anchored ? strstr(line, "[sp, #") : NULL;
-        if (base != NULL) {
-            unsigned long long offset;
-            offset = strtoull(base + 6U, &end, 10);
-            if (end == base + 6U || *end != ']' ||
-                offset > (unsigned long long)MINIC_LARGE_FRAME_MAX + 512U)
-                return false;
-            if (offset >= (unsigned long long)spill) {
-                const size_t fixed = (size_t)(offset - spill);
-                if (fprintf(out, "%.*s[x19, #%zu]%s",
-                            (int)(base - line), line, fixed, end + 1) < 0)
-                    return false;
-                continue;
-            }
-            /* This byte-range is the caller-owned outgoing spill area. */
-        } else if (anchored &&
-                   sscanf(line, "  add x%u, sp, x%u", &rd, &rn) == 2 &&
-                   rd == rn && rd >= 9U && rd <= 13U) {
-            if (fprintf(out, "  add x%u, x19, x%u\n", rd, rn) < 0 ||
-                /* Record call arguments pre-add spill bytes to their Core
-                 * object offsets. Remove exactly that adjustment after
-                 * rebasing from SP to fixed x19. */
-                (spill != 0U &&
-                 fprintf(out, "  sub x%u, x%u, #%zu\n",
-                         rd, rd, spill) < 0))
-                return false;
-            continue;
-        }
-        if (fputs(line, out) == EOF) return false;
-    }
-    return ferror(input) == 0 && spill == 0U;
-}
+
 
 static bool emit_function(FILE *out, const MinicC0Program *program,
                           const MinicTargetInfo *target,
@@ -2806,7 +2688,7 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                                  function_sections);
     if (success && (fflush(temporary) != 0 ||
                     fseek(temporary, 0L, SEEK_SET) != 0 ||
-                    !copy_dynamic_frame_asm(out, temporary)))
+                    !minic_aarch64_copy_dynamic_frame_asm(out, temporary)))
         success = false;
     if (fclose(temporary) != 0) success = false;
     return success;
@@ -2823,7 +2705,7 @@ bool minic_aarch64_write_c0_program_with_core_functions(
         "AArch64",
         ".section .note.GNU-stack,\"\",%progbits\n",
         emit_function,
-        legalize_large_sp_memory
+        minic_aarch64_legalize_large_sp_memory
     };
     return minic_multi_direct_write_program(
         path, program, target, core_functions, core_function_count,
