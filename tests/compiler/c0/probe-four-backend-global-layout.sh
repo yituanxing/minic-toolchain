@@ -88,6 +88,35 @@ int main(void) {
 }
 SRC
             ;;
+        bitfield_record_array)
+            cat <<'SRC'
+/* BusyBox ifconfig OptArray shape: relocation, adjacent 6:10 bitfields,
+ * and an ordinary short. Distinguish bad bit packing from a correct 42. */
+struct Option {
+    const char *name;
+    const unsigned int flags:6;
+    const unsigned int arg_flags:10;
+    const unsigned short selector;
+};
+static const struct Option options[3] = {
+    {"metric", 37, 777, 0x1234},
+    {"broadcast", 21, 523, 0xabcd},
+    {0, 0, 0, 0}
+};
+int main(void) {
+    const unsigned char *raw = (const unsigned char *)&options[0];
+    return (sizeof(struct Option) == 16 &&
+            options[0].name[0] == 'm' && options[1].name[0] == 'b' &&
+            options[0].flags == 37 && options[0].arg_flags == 777 &&
+            options[1].flags == 21 && options[1].arg_flags == 523 &&
+            options[0].selector == 0x1234 &&
+            options[1].selector == 0xabcd &&
+            raw[8] == (unsigned char)(37 | ((777 & 3) << 6)) &&
+            raw[9] == (unsigned char)(777 >> 2) &&
+            options[2].name == 0) ? 42 : 1;
+}
+SRC
+            ;;
         nested_record_array_reloc)
             cat <<'SRC'
 static int item = 73;
@@ -154,7 +183,7 @@ for target in aarch64 loongarch64; do
         aarch64) gcc=aarch64-linux-gnu-gcc; qemu=qemu-aarch64 ;;
         loongarch64) gcc=loongarch64-linux-gnu-gcc-13; qemu=qemu-loongarch64 ;;
     esac
-    for family in null_scalar null_array zero_union zero_record implicit_record nonzero_union nested_nonzero nested_record_array nested_record_array_reloc combined; do
+    for family in null_scalar null_array zero_union zero_record implicit_record nonzero_union nested_nonzero nested_record_array nested_record_array_reloc bitfield_record_array combined; do
         src="$w/$target.$family.i"
         write_case "$family" >"$src"
         "$gcc" -static -x c "$src" -o "$w/$target.$family.gnu"
@@ -185,7 +214,7 @@ for target in aarch64 loongarch64; do
     done
 done
 if [ "$failed" -ne 0 ]; then
-    echo "FOUR_BACKEND_GLOBAL_LAYOUT_ACCEPT=FAIL targets=2 families=10" >&2
+    echo "FOUR_BACKEND_GLOBAL_LAYOUT_ACCEPT=FAIL targets=2 families=11" >&2
     exit 1
 fi
-echo "FOUR_BACKEND_GLOBAL_LAYOUT_ACCEPT=PASS targets=2 families=10 GNU_QEMU_diff=1"
+echo "FOUR_BACKEND_GLOBAL_LAYOUT_ACCEPT=PASS targets=2 families=11 GNU_QEMU_diff=1"
