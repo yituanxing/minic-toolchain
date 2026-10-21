@@ -805,12 +805,31 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
         if (ins->kind != MINIC_CORE_INSTRUCTION_CALL &&
             ins->kind != MINIC_CORE_INSTRUCTION_INDIRECT_CALL) continue;
         has_direct_calls = true; /* Also preserve the link register for blr/jirl. */
-        if ((minic_type_is_void(ins->type)
+        /* GNU div_t/ldiv_t and similar small integer-only aggregate
+         * results travel in one or two GP registers. Core represents their
+         * destination as a result_object, NOT a scalar SSA result value.
+         * Keep large/FP-class/indirect aggregate returns unsupported. */
+        bool small_record_result = false;
+        size_t return_record_bytes = 0U, return_record_slots = 0U;
+        if (ins->kind == MINIC_CORE_INSTRUCTION_CALL &&
+            minic_type_is_record(ins->type) &&
+            ins->value.call.result_object < fn->object_count &&
+            ins->result == MINIC_CORE_VALUE_INVALID &&
+            fn->objects[ins->value.call.result_object].element_count == 1U &&
+            minic_type_equal(fn->objects[ins->value.call.result_object].type,
+                             ins->type) &&
+            minic_multi_gp_record(program, target, ins->type,
+                                  &return_record_bytes, &return_record_slots) &&
+            return_record_bytes > 0U && return_record_bytes <= 16U &&
+            return_record_slots >= 1U && return_record_slots <= 2U)
+            small_record_result = true;
+        if (!small_record_result &&
+            ((minic_type_is_void(ins->type)
              ? ins->result != MINIC_CORE_VALUE_INVALID
              : ins->result == MINIC_CORE_VALUE_INVALID ||
                ins->result >= fn->value_count ||
                !minic_type_equal(fn->values[ins->result].type, ins->type)) ||
-            !valid_return_type(program, target, ins->type)) {
+            !valid_return_type(program, target, ins->type))) {
             if (getenv("MINIC_BACKEND_CENSUS") != NULL)
                 (void)fprintf(stderr,
                     "MINIC_CALL_RESULT_REJECT arch=loongarch64 function=%s "
@@ -827,7 +846,8 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
         if (ins->kind == MINIC_CORE_INSTRUCTION_CALL) {
             const MinicCoreCallee *callee;
             if (ins->value.call.callee_id >= fn->callee_count ||
-                ins->value.call.result_object != MINIC_CORE_OBJECT_INVALID)
+                (ins->value.call.result_object != MINIC_CORE_OBJECT_INVALID &&
+                 !small_record_result))
                 return machine_emit_reject(fn, "loongarch64", name, reject_stage,
                                     reject_block, reject_ins, __LINE__);
             callee = &fn->callees[ins->value.call.callee_id];
@@ -876,7 +896,8 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
         if (!minic_type_equal(return_type, ins->type) ||
             /* Fixed binary64 call results are transferred from the target FP
              * ABI result register; aggregate and other types still fail closed. */
-            !valid_return_type(program, target, return_type) ||
+            (!small_record_result &&
+             !valid_return_type(program, target, return_type)) ||
             /* Original BusyBox ascii has a 24-argument printf. The existing
              * AAPCS64/LP64D call emitter already classifies outgoing GP/FP
              * and spill arguments by cursor, without fixed 16-element
@@ -1246,8 +1267,11 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
         }
         if ((ins->kind == MINIC_CORE_INSTRUCTION_CALL ||
              ins->kind == MINIC_CORE_INSTRUCTION_INDIRECT_CALL) &&
-            minic_type_is_void(ins->type)) {
-            /* Verified in the call preflight: an effect-only void call
+            (minic_type_is_void(ins->type) ||
+             (ins->kind == MINIC_CORE_INSTRUCTION_CALL &&
+              minic_type_is_record(ins->type) &&
+              ins->value.call.result_object != MINIC_CORE_OBJECT_INVALID))) {
+            /* Verified in call preflight: effect-only calls
              * has no Core result slot. Fall through into the call case. */
             offset = 0U;
         } else {
@@ -1983,6 +2007,30 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                                            reject_stage, reject_block,
                                            reject_ins, __LINE__);
             if (minic_type_is_void(ins->type)) continue;
+            if (minic_type_is_record(ins->type)) {
+                const MinicCoreObjectId object_id =
+                    ins->value.call.result_object;
+                size_t bytes, slots, dst, chunk;
+                if (indirect || object_id >= fn->object_count ||
+                    !minic_multi_gp_record(program, target, ins->type,
+                                           &bytes, &slots) ||
+                    bytes == 0U || bytes > 16U || slots > 2U ||
+                    !frame_objects(program, target, fn, object_id,
+                                   &dst, NULL))
+                    return machine_emit_reject(fn, "loongarch64", name,
+                                               reject_stage, reject_block,
+                                               reject_ins, __LINE__);
+                for (chunk = 0U; chunk < slots; ++chunk) {
+                    const size_t payload = bytes - chunk * 8U >= 8U
+                        ? 8U : bytes - chunk * 8U;
+                    if (!emit_lp64_record_chunk_parameter(out,
+                            dst + chunk * 8U, payload, true, chunk, 0U, dynamic_frame))
+                        return machine_emit_reject(fn, "loongarch64", name,
+                                                   reject_stage, reject_block,
+                                                   reject_ins, __LINE__);
+                }
+                continue;
+            }
             if (minic_type_is_long_double(ins->type)) {
                 size_t dst;
                 if (!binary128_slot(fn, ld_base, ins->result, &dst) ||
