@@ -47,14 +47,15 @@ entering:
     return value;
 }
 int main(void) {
-    return switch_dead_prefix(1) == 42 &&
-           switch_dead_prefix(0) == 42 &&
-           switch_nested_case(3) == 37 &&
-           switch_nested_case(4) == 41 &&
-           switch_nested_case(5) == 43 &&
-           switch_label_reentry(11) == 29 &&
-           switch_label_reentry(2) == 23 &&
-           switch_label_reentry(1) == 17 ? 0 : 3;
+    if (switch_dead_prefix(1) != 42) return 1;
+    if (switch_dead_prefix(0) != 42) return 2;
+    if (switch_nested_case(3) != 37) return 3;
+    if (switch_nested_case(4) != 41) return 4;
+    if (switch_nested_case(5) != 43) return 5;
+    if (switch_label_reentry(11) != 29) return 6;
+    if (switch_label_reentry(2) != 23) return 7;
+    if (switch_label_reentry(1) != 17) return 8;
+    return 0;
 }
 SRC
 for target in aarch64 loongarch64; do
@@ -67,14 +68,26 @@ for target in aarch64 loongarch64; do
     "$gcc" -E -P -std=gnu11 "$work/switch.c" -o "$work/$target.i"
     "$gcc" -O0 -std=gnu11 -static -x c "$work/$target.i" \
         -o "$work/$target.gnu"
-    timeout 45s "$qemu" "$work/$target.gnu" \
-        >"$work/$target.gnu.out" 2>"$work/$target.gnu.err"
+    if timeout 45s "$qemu" "$work/$target.gnu" \
+        >"$work/$target.gnu.out" 2>"$work/$target.gnu.err"; then
+        :
+    else
+        rc=$?
+        printf '%s\n' "FOUR_BACKEND_SWITCH_DIAG target=$target owner=GNU failing_case=$rc" >&2
+        exit "$rc"
+    fi
     "$MINIC_CC" --target="$target-linux" -S "$work/$target.i" \
         -o "$work/$target.s"
     "$gcc" -static -x assembler "$work/$target.s" \
         -o "$work/$target.mini"
-    timeout 45s "$qemu" "$work/$target.mini" \
-        >"$work/$target.mini.out" 2>"$work/$target.mini.err"
+    if timeout 45s "$qemu" "$work/$target.mini" \
+        >"$work/$target.mini.out" 2>"$work/$target.mini.err"; then
+        :
+    else
+        rc=$?
+        printf '%s\n' "FOUR_BACKEND_SWITCH_DIAG target=$target owner=MiniC failing_case=$rc" >&2
+        exit "$rc"
+    fi
     cmp "$work/$target.gnu.out" "$work/$target.mini.out"
     cmp "$work/$target.gnu.err" "$work/$target.mini.err"
     echo "FOUR_BACKEND_SWITCH_DEAD_PREFIX=PASS target=$target GNU_QEMU_byte_exact=1 normalized_for=1 switch_default=1 nested_case=1 external_reentry=1"
