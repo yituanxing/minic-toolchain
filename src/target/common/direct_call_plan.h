@@ -2,7 +2,7 @@
 #define MINIC_TARGET_COMMON_DIRECT_CALL_PLAN_H
 
 #include "target/common/direct_call_preflight.h"
-#include "target/common/lp64_frame.h"
+#include "target/common/direct_lp64_abi.h"
 #include <stdbool.h>
 #include <stddef.h>
 
@@ -35,7 +35,7 @@ typedef struct MinicLP64DirectCallPlan {
  * unnamed variadic GP promotion and binary128 even-register alignment. */
 bool minic_lp64_plan_direct_call(const MinicC0Program *program,
     const MinicTargetInfo *target, const MinicCoreFunction *fn,
-    const MinicCoreInstruction *call, MinicLP64DirectFrameABI abi,
+    const MinicCoreInstruction *call, MinicLP64DirectABI abi,
     MinicDirectLP64IndirectRecord indirect_record,
     MinicLP64DirectCallPlan *plan);
 
