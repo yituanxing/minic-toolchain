@@ -1155,14 +1155,8 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                 "$a0", "$a1", "$a2", "$a3", "$a4", "$a5", "$a6", "$a7"};
             static const char *const fp_regs[8] = {
                 "$fa0", "$fa1", "$fa2", "$fa3", "$fa4", "$fa5", "$fa6", "$fa7"};
-            const size_t parameter_count = indirect
-                ? fn->call_signatures[ins->value.indirect_call.signature_id].parameter_count
-                : fn->callees[ins->value.call.callee_id].parameter_count;
-            const bool is_variadic = indirect
-                ? fn->call_signatures[ins->value.indirect_call.signature_id].is_variadic
-                : fn->callees[ins->value.call.callee_id].is_variadic;
-            size_t j, gp_index = 0U, fp_index = 0U;
-            size_t stack_index = 0U, stack_bytes;
+            size_t j;
+            size_t stack_bytes;
             MinicLP64DirectCallPlan call_plan;
             /* Resolve ABI locations once before allocating outgoing stack
              * space; the same plan drives each argument's source cursor. */
@@ -1178,13 +1172,9 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                 return minic_multi_direct_machine_reject(fn, "loongarch64", name,
                                            reject_stage, reject_block,
                                            reject_ins, __LINE__);
-            gp_index = fp_index = 0U;
             for (j = 0U; j < count; ++j) {
                 const MinicCoreCallArgument *arg = &fn->call_arguments[begin + j];
                 const MinicLP64ArgumentLocation *location = &call_plan.arguments[j];
-                gp_index = location->gp_cursor;
-                fp_index = location->fp_cursor;
-                stack_index = location->stack_cursor;
                 if (arg->kind == MINIC_CORE_CALL_ARGUMENT_OBJECT) {
                     size_t record_size, slots, object_offset, chunk;
                     const MinicCoreObjectId object_id = arg->value.object_id;
@@ -1201,35 +1191,27 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                             fprintf(out, "  li.d $t0, %zu\n"
                                          "  add.d $t0, %s, $t0\n",
                                     src, dynamic_frame ? "$s0" : "$sp") < 0 ||
-                            (gp_index < 8U
-                             ? fprintf(out, "  move $a%zu, $t0\n", gp_index) < 0
+                            (location->gp_registers != 0U
+                             ? fprintf(out, "  move $a%zu, $t0\n", location->gp_first) < 0
                              : !minic_loongarch64_emit_frame_mem(out, "st.d", "$t0",
-                                               stack_index * 8U, false)))
+                                               location->stack_first * 8U, false)))
                             return minic_multi_direct_machine_reject(fn, "loongarch64", name,
                                 reject_stage, reject_block, reject_ins, __LINE__);
-                        if (gp_index++ >= 8U) ++stack_index;
                         continue;
                     }
                     for (chunk = 0U; chunk < slots; ++chunk) {
-                        const size_t available = gp_index < 8U
-                            ? 8U - gp_index : 0U;
-                        const bool in_reg = chunk < available;
+                        const bool in_reg = chunk < location->gp_registers;
                         const size_t stack_slot = in_reg ? 0U :
-                            stack_index + chunk - available;
+                            location->stack_first + chunk - location->gp_registers;
                         const size_t payload = record_size - chunk * 8U >= 8U
                             ? 8U : record_size - chunk * 8U;
                         if (!emit_lp64_record_chunk_argument(
                                 out, object_offset + (dynamic_frame ? 0U : stack_bytes) + chunk * 8U,
-                                payload, in_reg, gp_index + chunk,
+                                payload, in_reg, in_reg ? location->gp_first + chunk : 0U,
                                 stack_slot, dynamic_frame))
                             return minic_multi_direct_machine_reject(fn, "loongarch64", name,
                                   reject_stage, reject_block, reject_ins, __LINE__);
                     }
-                    const size_t available = gp_index < 8U
-                        ? 8U - gp_index : 0U;
-                    const size_t used = slots < available ? slots : available;
-                    gp_index += used;
-                    stack_index += slots - used;
                     continue;
                 }
                 const MinicType type = fn->values[arg->value.value_id].type;
@@ -1237,20 +1219,14 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                     (dynamic_frame ? 0U : stack_bytes);
                 if (minic_type_is_long_double(type)) {
                     size_t src, chunk;
-                    if (is_variadic && j >= parameter_count &&
-                        gp_index < 8U && (gp_index & 1U))
-                        ++gp_index;
-                    const size_t available = gp_index < 8U ? 8U - gp_index : 0U;
-                    const size_t used = available < 2U ? available : 2U;
-                    if (used == 0U && (stack_index & 1U))
-                        ++stack_index;
+                    const size_t used = location->gp_registers;
                     if (!minic_lp64_binary128_slot(fn, ld_base, arg->value.value_id, &src))
                         return minic_multi_direct_machine_reject(fn, "loongarch64", name,
                                                    reject_stage, reject_block,
                                                    reject_ins, __LINE__);
                     for (chunk = 0U; chunk < 2U; ++chunk) {
                         if (chunk < used) {
-                            if (!emit_sp_mem(out, "ld.d", gp_regs[gp_index + chunk],
+                            if (!emit_sp_mem(out, "ld.d", gp_regs[location->gp_first + chunk],
                                              src + (dynamic_frame ? 0U : stack_bytes) + chunk * 8U))
                                 return minic_multi_direct_machine_reject(fn, "loongarch64", name,
                                                            reject_stage, reject_block,
@@ -1258,25 +1234,20 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                         } else if (!emit_sp_mem(out, "ld.d", "$t0",
                                                 src + (dynamic_frame ? 0U : stack_bytes) + chunk * 8U) ||
                                    !minic_loongarch64_emit_frame_mem(out, "st.d", "$t0",
-                                                   (stack_index + chunk - used) * 8U,
+                                                   (location->stack_first + chunk - used) * 8U,
                                                    false))
                             return minic_multi_direct_machine_reject(fn, "loongarch64", name,
                                                        reject_stage, reject_block,
                                                        reject_ins, __LINE__);
                     }
-                    gp_index += used;
-                    stack_index += 2U - used;
                     continue;
                 }
-                const bool use_fp = (minic_type_is_double(type) ||
-                                     minic_type_is_float(type)) &&
-                                    (!is_variadic || j < parameter_count) &&
-                                    fp_index < 8U;
+                const bool use_fp = location->fp_registers != 0U;
                 if (use_fp) {
-                    if (fp_index < 8U) {
+                    if (location->fp_registers != 0U) {
                         if (!emit_sp_mem(out, minic_type_is_float(type)
                                                ? "fld.s" : "fld.d",
-                                         fp_regs[fp_index], slot))
+                                         fp_regs[location->fp_first], slot))
                             return minic_multi_direct_machine_reject(fn, "loongarch64", name,
                                     reject_stage, reject_block, reject_ins, __LINE__);
                     } else if (!emit_sp_mem(out, minic_type_is_float(type)
@@ -1284,16 +1255,15 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                                             "$ft0", slot) ||
                                !minic_loongarch64_emit_frame_mem(out, minic_type_is_float(type)
                                                    ? "fst.s" : "fst.d",
-                                            "$ft0", stack_index++ * 8U, false))
+                                            "$ft0", location->stack_first * 8U, false))
                         return minic_multi_direct_machine_reject(fn, "loongarch64", name,
                                     reject_stage, reject_block, reject_ins, __LINE__);
-                    ++fp_index;
                 } else {
                     const bool wide = minic_type_is_double(type) ||
                         minic_lp64_register64_type(program, target, type);
-                    if (gp_index < 8U) {
+                    if (location->gp_registers != 0U) {
                         if (!emit_sp_mem(out, wide ? "ld.d" : "ld.w",
-                                         gp_regs[gp_index], slot))
+                                         gp_regs[location->gp_first], slot))
                             return minic_multi_direct_machine_reject(fn, "loongarch64", name,
                                     reject_stage, reject_block, reject_ins, __LINE__);
                     } else if (!emit_sp_mem(out, wide ? "ld.d" : "ld.w",
@@ -1305,10 +1275,9 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                                 * the upper half uninitialized and could
                                 * poison a variadic callee's 8-byte va slot. */
                                !minic_loongarch64_emit_frame_mem(out, "st.d",
-                                            "$t0", stack_index++ * 8U, false))
+                                            "$t0", location->stack_first * 8U, false))
                         return minic_multi_direct_machine_reject(fn, "loongarch64", name,
                                     reject_stage, reject_block, reject_ins, __LINE__);
-                    ++gp_index;
                 }
             }
             if (indirect) {
