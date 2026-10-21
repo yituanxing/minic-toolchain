@@ -89,7 +89,7 @@ jobs:
                   linux_yaml=true
                 fi
                 case "$changed" in
-                  src/target/aarch64/*|src/target/loongarch64/*|tests/compiler/c0/run-four-backend-m1.sh|tests/compiler/c0/probe-four-backend-outgoing-abi.sh|tests/compiler/c0/probe-four-backend-switch-dead-prefix.sh|tests/compiler/c0/probe-loongarch64-dynamic-alloca.sh|tests/compiler/c0/probe-aarch64-binary128-return.sh|tests/compiler/c0/probe-loongarch64-binary128-return.sh|tests/compiler/c0/probe-four-backend-zero-record-array.sh|tests/compiler/c0/probe-aarch64-pie-extern-got.sh|tests/external/tiny-aes-c/*|tests/external/cjson/*|tests/external/zlib/*|tests/external/lua/*|tests/external/sqlite/*|tests/external/tinycc/*|tests/external/busybox/*)
+                  src/target/aarch64/*|src/target/loongarch64/*|tests/compiler/c0/run-four-backend-m1.sh|tests/compiler/c0/probe-four-backend-outgoing-abi.sh|tests/compiler/c0/probe-four-backend-switch-dead-prefix.sh|tests/compiler/c0/probe-loongarch64-dynamic-alloca.sh|tests/compiler/c0/probe-aarch64-binary128-return.sh|tests/compiler/c0/probe-loongarch64-binary128-return.sh|tests/compiler/c0/probe-four-backend-zero-record-array.sh|tests/compiler/c0/probe-aarch64-pie-extern-got.sh|tests/compiler/c0/probe-four-backend-aapcs64-hfa-guard.sh|tests/external/tiny-aes-c/*|tests/external/cjson/*|tests/external/zlib/*|tests/external/lua/*|tests/external/sqlite/*|tests/external/tinycc/*|tests/external/busybox/*)
                     ;;
                   *) four_only=false ;;
                 esac
@@ -248,6 +248,11 @@ jobs:
           # The original BusyBox top uses glibc div_t, an 8-byte
           # integer-class result returned in x0/a0, not scalar SSA.
           # 144B AAPCS64 / LoongArch LP64D composite argument GNU/QEMU.
+          # AAPCS64 HFA/HVA must not silently take the GP-indirect path.
+          # This is a fast explicit negative ABI gate, not runtime fallback.
+          sh -n tests/compiler/c0/probe-four-backend-aapcs64-hfa-guard.sh
+          MINIC_CC="$GITHUB_WORKSPACE/build/toolchain-focused-t1-v2/bin/minic-cc" \
+            sh tests/compiler/c0/probe-four-backend-aapcs64-hfa-guard.sh
           sh -n tests/compiler/c0/probe-four-backend-large-record-abi.sh
           MINIC_CC="$GITHUB_WORKSPACE/build/toolchain-focused-t1-v2/bin/minic-cc" \
             sh tests/compiler/c0/probe-four-backend-large-record-abi.sh
