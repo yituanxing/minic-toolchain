@@ -721,7 +721,7 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
                     callee->return_type)) {
                 return false;
             }
-        } else if (!core_call_scalar_type(callee->return_type) ||
+        } else if (!minic_core_ir_call_scalar_type(callee->return_type) ||
                    instruction->value.call.result_object != MINIC_CORE_OBJECT_INVALID ||
                    !instruction_result_is_valid(function, instruction)) {
             return false;
@@ -743,7 +743,7 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
                     MinicCoreValueId value_id = argument->value.value_id;
 
                     if (value_id >= function->value_count || !available_values[value_id] ||
-                        !core_call_scalar_type(function->values[value_id].type)) {
+                        !minic_core_ir_call_scalar_type(function->values[value_id].type)) {
                         return false;
                     }
                     continue;
@@ -762,7 +762,7 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
             {
                 MinicType parameter_type = callee->parameter_types[parameter_index];
 
-                if (core_call_scalar_type(parameter_type)) {
+                if (minic_core_ir_call_scalar_type(parameter_type)) {
                     MinicCoreValueId value_id;
 
                     if (argument->kind != MINIC_CORE_CALL_ARGUMENT_VALUE) {
@@ -844,7 +844,7 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
                 }
                 value_id = argument->value.value_id;
                 if (value_id >= function->value_count || !available_values[value_id] ||
-                    !core_call_scalar_type(function->values[value_id].type)) {
+                    !minic_core_ir_call_scalar_type(function->values[value_id].type)) {
                     return false;
                 }
                 continue;
@@ -852,7 +852,7 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
             {
                 MinicType parameter_type = signature->parameter_types[parameter_index];
 
-                if (core_call_scalar_type(parameter_type)) {
+                if (minic_core_ir_call_scalar_type(parameter_type)) {
                     MinicCoreValueId value_id;
 
                     if (argument->kind != MINIC_CORE_CALL_ARGUMENT_VALUE) {
@@ -1030,7 +1030,7 @@ bool minic_core_function_verify(const MinicCoreFunction *function) {
 
         global = &function->globals[index];
         if (global->name == NULL || global->name_length == 0U ||
-            !core_global_addressable_type(global->type)) {
+            !minic_core_ir_global_addressable_type(global->type)) {
             return false;
         }
     }
@@ -1040,7 +1040,7 @@ bool minic_core_function_verify(const MinicCoreFunction *function) {
 
         callee = &function->callees[index];
         if (callee->name == NULL || callee->name_length == 0U ||
-            !core_direct_call_return_type(callee->return_type) ||
+            !minic_core_ir_direct_call_return_type(callee->return_type) ||
             (callee->parameter_count != 0U && callee->parameter_types == NULL)) {
             return false;
         }
@@ -1048,7 +1048,7 @@ bool minic_core_function_verify(const MinicCoreFunction *function) {
            scalar-or-record parameter contract used by creation and CALL
            instruction verification. Indirect signatures remain scalar-only. */
         for (parameter_index = 0U; parameter_index < callee->parameter_count; ++parameter_index) {
-            if (!core_call_parameter_type(callee->parameter_types[parameter_index])) {
+            if (!minic_core_ir_call_parameter_type(callee->parameter_types[parameter_index])) {
                 return false;
             }
         }
@@ -1060,13 +1060,13 @@ bool minic_core_function_verify(const MinicCoreFunction *function) {
         signature = &function->call_signatures[index];
         if (signature->function_type_id == MINIC_FUNCTION_TYPE_INVALID ||
             (!minic_type_is_void(signature->return_type) &&
-             !core_call_scalar_type(signature->return_type)) ||
+             !minic_core_ir_call_scalar_type(signature->return_type)) ||
             (signature->parameter_count != 0U && signature->parameter_types == NULL)) {
             return false;
         }
         for (parameter_index = 0U; parameter_index < signature->parameter_count;
              ++parameter_index) {
-            if (!core_call_parameter_type(signature->parameter_types[parameter_index])) {
+            if (!minic_core_ir_call_parameter_type(signature->parameter_types[parameter_index])) {
                 return false;
             }
         }

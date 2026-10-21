@@ -16,7 +16,10 @@ It changes compilation-unit ownership, not the Core representation or any opcode
 
 All verifier and dump function bodies were moved byte-for-byte. Exactly four
 pre-existing helper definitions changed visibility from private to
-Core-internal, with one declaration per helper in the internal header.
+Core-internal, with namespaced symbols and one declaration per helper in the
+internal header. The global-addressable predicate intentionally admits void
+linker symbols; it must **not** collide with the distinct source-to-Core
+lowering predicate in `core_lower_types.c`.
 
 Validation gate: warnings-as-errors native build, four-ISA focused GNU/QEMU
 real workloads, RV64 original Linux/performance coverage, x86 ABI gates,
