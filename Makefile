@@ -101,6 +101,7 @@ MINIC_SOURCES := \
 	src/frontend/parser_external_object.c \
 	src/frontend/parser_pragma.c \
 	src/frontend/parser_global.c \
+	src/frontend/parser_static_initializer.c \
 	src/frontend/parser_global_lookup.c \
 	src/frontend/parser_static_constants.c \
 	src/frontend/parser_member.c \
