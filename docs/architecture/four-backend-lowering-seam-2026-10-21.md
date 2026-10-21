@@ -445,3 +445,29 @@ goto, switch labels and inline asm. Blind line-range chopping would risk
 violating the per-TU reentry index and specialization invariants.
 Four target backends, the shared ELF/LP64 services and existing GNU/QEMU
 owner gates remain unchanged in this source-ownership refactor.
+
+## Source AST loop shape recognition is not machine lowering
+
+After reviewing the recently split compiler specialization, Core CFG
+reentry ownership and all four target backends, the remaining ~16.6k-line
+`core/core_lower.c` still owned parser-provenance checks for normalized
+`do {} while (0)`, constant-true `do/while`, and synthetic `for`
+continue/update labels. These are front-end/source CFG semantics, not
+target-specific instructions or ABI policy.
+
+The coherent ~320-line AST-only group now lives in
+`core/source_loop_shapes.{h,c}`, with seven explicitly declared source
+shape queries. Both the source-body predicates and all call sites are
+mechanically preserved; the private position-equality helper stays local.
+The shape tests include strict source-position, label identity, cleanup
+context, and failure-on-unrecognized-form guards. No AST, Core IR or
+function CFG representation changes.
+
+Important exclusion: Core branch emission, block predecessor accounting,
+the scoped reentry index, and machine target legalization remain with
+their existing owners. This is a *semantic boundary*, not a generic
+loop optimization pass or an excuse to infer unproven goto reachability.
+
+Verification needs compiler -Werror build, normalized-for/continue,
+do-while/zero/true/return, CFG reentry and all four original GNU/QEMU
+owner regressions; source identity alone is not runtime certification.
