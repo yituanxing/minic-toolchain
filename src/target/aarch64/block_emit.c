@@ -1,4 +1,5 @@
 #include "target/aarch64/block_emit.h"
+#include "target/common/direct_instruction_semantics.h"
 #include "target/common/lp64_aggregate.h"
 #include "target/common/lp64_scalar.h"
 #include "target/aarch64/abi.h"
@@ -39,20 +40,8 @@ bool minic_aarch64_emit_record_copy(FILE *out, const MinicC0Program *program,
     const MinicCoreInstruction *ins) {
 const MinicCoreValueId dst = ins->value.record_copy.destination_address;
             const MinicCoreValueId src = ins->value.record_copy.source_address;
-            MinicType dst_type, src_type, dst_unqualified, src_unqualified;
-            size_t bytes, alignment;
-            if (ins->result != MINIC_CORE_VALUE_INVALID ||
-                !minic_type_is_record(ins->type) ||
-                dst >= fn->value_count || src >= fn->value_count ||
-                !minic_type_pointee(fn->values[dst].type, &dst_type) ||
-                !minic_type_pointee(fn->values[src].type, &src_type) ||
-                !minic_type_unqualified(dst_type, &dst_unqualified) ||
-                !minic_type_unqualified(src_type, &src_unqualified) ||
-                !minic_type_equal(dst_unqualified, ins->type) ||
-                !minic_type_equal(src_unqualified, ins->type) ||
-                !minic_data_layout_type(target->data_layout, program, ins->type,
-                                        &bytes, &alignment) ||
-                alignment == 0U || bytes > 2048U)
+            size_t bytes;
+            if (!minic_multi_direct_record_copy_extent(program, target, fn, ins, &bytes))
                 return false;
             if (fprintf(out, "  ldr x10, [sp, #%zu]\n"
                              "  ldr x11, [sp, #%zu]\n",
@@ -71,20 +60,10 @@ bool minic_aarch64_emit_parameter_object(FILE *out,
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
     const MinicLP64ArgumentPlan *incoming_plan,
     const MinicLP64FramePlan *frame_plan, size_t frame) {
-const size_t position = ins->value.parameter_object.parameter_index;
-            const MinicCoreObjectId obj_id = ins->value.parameter_object.object_id;
-            const MinicLP64ArgumentLocation *location =
-                position < incoming_plan->argument_count
-                    ? &incoming_plan->arguments[position] : NULL;
+const MinicLP64ArgumentLocation *location;
             size_t size, slots, object_offset, k, chunk;
-            if (location == NULL || ins->result != MINIC_CORE_VALUE_INVALID ||
-                obj_id >= fn->object_count ||
-                !minic_type_equal(fn->objects[obj_id].type,
-                                  fn->parameter_types[position]) ||
-                fn->objects[obj_id].element_count != 1U ||
-                (location->kind != MINIC_LP64_ARGUMENT_RECORD &&
-                 location->kind != MINIC_LP64_ARGUMENT_INDIRECT_RECORD) ||
-                !minic_lp64_frame_plan_object(frame_plan, obj_id, &object_offset))
+            if (!minic_multi_direct_parameter_object_location(
+                    fn, ins, incoming_plan, frame_plan, &location, &object_offset))
                 return false;
             size = location->size_bytes;
             slots = location->kind == MINIC_LP64_ARGUMENT_RECORD
@@ -482,44 +461,12 @@ bool minic_aarch64_emit_core_blocks(FILE *out, const MinicDirectLP64BlockContext
                                                   : ins->value.store.address;
             const MinicCoreValueId value = atomic ? ins->value.atomic_store.stored_value
                                                    : ins->value.store.stored_value;
-            MinicType pointee;
-            size_t width = 0U, pointee_width = 0U, pointee_align = 0U;
-            bool sign = false, pointer;
-            if (ins->result != MINIC_CORE_VALUE_INVALID ||
-                addr >= fn->value_count || value >= fn->value_count ||
-                !minic_type_is_pointer(fn->values[addr].type)) return minic_multi_direct_machine_reject(fn, "aarch64", name, reject_stage,
-                                    reject_block, reject_ins, __LINE__);
-            pointer = minic_type_is_pointer(fn->values[value].type);
-            /* Ordinary naturally aligned scalar loads/stores are the
-             * relaxed atomic primitive on these LP64 ISAs. Preserve the
-             * Core memory effect, but reject every stronger memory order
-             * and non-lock-free aggregate/FP operand explicitly. */
-            if (atomic &&
-                (ins->value.atomic_store.memory_order != 0U ||
-                 !minic_type_pointee(fn->values[addr].type, &pointee) ||
-                 !(minic_type_is_integer(pointee) || minic_type_is_pointer(pointee)) ||
-                 !minic_data_layout_type(target->data_layout, program,
-                                         pointee, &pointee_width, &pointee_align)))
-                return minic_multi_direct_machine_reject(fn, "aarch64", name, reject_stage,
-                                          reject_block, reject_ins, __LINE__);
-
-            if (!pointer && !minic_type_is_double(fn->values[value].type) &&
-                !minic_type_is_float(fn->values[value].type) &&
-                !minic_lp64_scalar_integer_width(program, target, fn->values[value].type,
-                                      &width, &sign)) return minic_multi_direct_machine_reject(fn, "aarch64", name, reject_stage,
-                                    reject_block, reject_ins, __LINE__);
-            if (minic_type_is_double(fn->values[value].type)) width = 8U;
-            if (minic_type_is_float(fn->values[value].type)) width = 4U;
-            if (atomic &&
-                (minic_type_is_double(fn->values[value].type) ||
-                 minic_type_is_float(fn->values[value].type) ||
-                 (pointer ? pointee_width != 8U :
-                  (width != 1U && width != 2U &&
-                   width != 4U && width != 8U) ||
-                  width != pointee_width)))
-                return minic_multi_direct_machine_reject(fn, "aarch64", name, reject_stage,
-                                          reject_block, reject_ins, __LINE__);
-            (void)pointee_align;
+            size_t width = 0U;
+            bool sign = false, pointer = false;
+            if (!minic_multi_direct_scalar_store_shape(
+                    program, target, fn, ins, &width, &sign, &pointer))
+                return minic_multi_direct_machine_reject(fn, "aarch64",
+                    name, reject_stage, reject_block, reject_ins, __LINE__);
             if (fprintf(out, "  ldr x10, [sp, #%zu]\n", (size_t)addr * 8U) < 0 ||
                 fprintf(out, (pointer || width == 8U) ? "  ldr x9, [sp, #%zu]\n"
                                                 : "  ldr w9, [sp, #%zu]\n",
