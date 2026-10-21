@@ -476,42 +476,31 @@ static bool emit_function_body(FILE *out, const MinicC0Program *program,
         if (ins->kind == MINIC_CORE_INSTRUCTION_PARAMETER_OBJECT) {
             const size_t position = ins->value.parameter_object.parameter_index;
             const MinicCoreObjectId obj_id = ins->value.parameter_object.object_id;
-            size_t size = 0U, slots = 0U, object_offset, gp = 0U, fp = 0U;
-            size_t stack = 0U, k, chunk;
-            if (ins->result != MINIC_CORE_VALUE_INVALID ||
-                position >= fn->parameter_count ||
+            const MinicLP64ArgumentLocation *location =
+                position < incoming_plan.argument_count
+                    ? &incoming_plan.arguments[position] : NULL;
+            size_t size, slots, object_offset, k, chunk;
+            if (location == NULL || ins->result != MINIC_CORE_VALUE_INVALID ||
                 obj_id >= fn->object_count ||
                 !minic_type_equal(fn->objects[obj_id].type,
                                   fn->parameter_types[position]) ||
                 fn->objects[obj_id].element_count != 1U ||
-                (!minic_multi_gp_record(program, target,
-                         fn->parameter_types[position], &size, &slots) &&
-                 !minic_aarch64_indirect_record(program, target,
-                         fn->parameter_types[position], &size)) ||
+                (location->kind != MINIC_LP64_ARGUMENT_RECORD &&
+                 location->kind != MINIC_LP64_ARGUMENT_INDIRECT_RECORD) ||
                 !minic_lp64_frame_objects(program, target, fn, obj_id,
                                &object_offset, NULL))
                 return minic_multi_direct_machine_reject(fn, "aarch64", name,
                     reject_stage, reject_block, reject_ins, __LINE__);
-            for (k = 0U; k < position; ++k) {
-                const MinicType previous = fn->parameter_types[k];
-                size_t other_size, other_slots;
-                if (minic_multi_gp_record(program, target, previous,
-                                          &other_size, &other_slots)) {
-                    if (gp + other_slots <= 8U) gp += other_slots;
-                    else { gp = 8U; stack += other_slots; }
-                } else if (minic_type_is_double(previous) ) {
-                    if (fp++ >= 8U) ++stack;
-                } else {
-                    if (gp++ >= 8U) ++stack;
-                }
-            }
-            if (slots == 0U) {
+            size = location->size_bytes;
+            slots = location->kind == MINIC_LP64_ARGUMENT_RECORD
+                ? location->chunks : 0U;
+            if (location->kind == MINIC_LP64_ARGUMENT_INDIRECT_RECORD) {
                 /* Composite by-reference parameter: copy the caller-owned
                  * bytes to this callee's independently addressable object. */
-                if ((gp < 8U
-                     ? fprintf(out, "  mov x10, x%zu\n", gp) < 0
+                if ((location->gp_registers != 0U
+                     ? fprintf(out, "  mov x10, x%zu\n", location->gp_first) < 0
                      : fprintf(out, "  ldr x10, [sp, #%zu]\n",
-                               frame + stack * 8U) < 0) ||
+                               frame + location->stack_first * 8U) < 0) ||
                     fprintf(out, "  movz x11, #%zu\n",
                             object_offset & 65535U) < 0 ||
                     (object_offset > 65535U &&
@@ -529,12 +518,14 @@ static bool emit_function_body(FILE *out, const MinicC0Program *program,
                 continue;
             }
             for (chunk = 0U; chunk < slots; ++chunk) {
-                const bool in_reg = gp + slots <= 8U;
+                const bool in_reg = chunk < location->gp_registers;
                 const size_t payload = size - chunk * 8U >= 8U
                     ? 8U : size - chunk * 8U;
                 if (!emit_lp64_record_chunk_parameter(out,
                         object_offset + chunk * 8U, payload,
-                        in_reg, gp + chunk, frame + (stack + chunk) * 8U))
+                        in_reg, in_reg ? location->gp_first + chunk : 0U,
+                        in_reg ? 0U : frame +
+                                     (location->stack_first + chunk) * 8U))
                     return minic_multi_direct_machine_reject(fn, "aarch64", name,
                         reject_stage, reject_block, reject_ins, __LINE__);
             }
