@@ -2,6 +2,7 @@
 #include "target/common/global_emit.h"
 #include "target/common/direct_program_emit.h"
 #include "target/common/direct_preflight.h"
+#include "target/common/direct_function_profile.h"
 #include "target/common/direct_call_preflight.h"
 #include "target/common/direct_call_plan.h"
 #include "target/common/lp64_scalar.h"
@@ -219,47 +220,28 @@ static bool emit_function_with_frame(FILE *out, const MinicC0Program *program,
                                                "loongarch64", name))
         return minic_multi_direct_machine_reject(fn, "loongarch64", name,
             reject_stage, reject_block, reject_ins, __LINE__);
-    /* LoongArch lp64d variadic gp cursor is a linear 8-byte register
-     * save area followed immediately by overflow arguments. */
-    if (decl->is_variadic) {
-        for (i = 0U; i < fn->parameter_count; ++i) {
-            if (minic_type_is_double(fn->parameter_types[i]))
-                return minic_multi_direct_machine_reject(fn, "loongarch64", name,
-                                           "variadic_fp_fixed", SIZE_MAX,
-                                           SIZE_MAX, __LINE__);
-            ++va_gp;
+    /* Validated shared function requirements and incoming ABI locations.
+     * Only source/Core shape is shared; AAPCS64/LP64D classifiers differ. */
+    {
+        MinicDirectLP64FunctionProfile profile;
+        MinicDirectLP64ProfileResult result =
+            minic_multi_direct_lp64_profile_function(
+                program, target, decl, fn, MINIC_LP64_ABI_LOONGARCH64_LP64D,
+                minic_multi_indirect_record, &incoming_plan, &profile);
+        if (result != MINIC_DIRECT_LP64_PROFILE_OK) {
+            const char *stage =
+                result == MINIC_DIRECT_LP64_PROFILE_VARIADIC_FIXED_FLOAT
+                    ? "variadic_fp_fixed" :
+                result == MINIC_DIRECT_LP64_PROFILE_VARIADIC_SHAPE
+                    ? "variadic_preflight" : reject_stage;
+            return minic_multi_direct_machine_reject(
+                fn, "loongarch64", name, stage,
+                reject_block, reject_ins, __LINE__);
         }
+        va_count = profile.variadic_address_count;
+        va_gp = profile.fixed_gp_count;
+        dynamic_frame = profile.has_dynamic_stack;
     }
-    for (i = 0U; i < fn->instruction_count; ++i) {
-        if (fn->instructions[i].kind ==
-            MINIC_CORE_INSTRUCTION_VARIADIC_ARGUMENT_ADDRESS) ++va_count;
-        if (fn->instructions[i].kind ==
-            MINIC_CORE_INSTRUCTION_DYNAMIC_STACK_ALLOC) dynamic_frame = true;
-    }
-    if (va_count != 0U &&
-        (!decl->is_variadic || va_count != 1U || va_gp > 8U))
-        return minic_multi_direct_machine_reject(fn, "loongarch64", name,
-                                   "variadic_preflight", SIZE_MAX,
-                                   SIZE_MAX, __LINE__);
-    for (i = 0U; i < fn->parameter_count; ++i) {
-        size_t record_size, record_slots;
-        if (!minic_lp64_valid_parameter_type(program, target, fn->parameter_types[i]) &&
-            !minic_multi_gp_record(program, target, fn->parameter_types[i],
-                                   &record_size, &record_slots) &&
-            !minic_multi_indirect_record(program, target,
-                                         fn->parameter_types[i], &record_size))
-            return minic_multi_direct_machine_reject(fn, "loongarch64", name, reject_stage,
-                                       reject_block, reject_ins, __LINE__);
-    }
-    /* A single incoming ABI location plan is shared by scalar and object
-     * parameter handlers, including mixed GP/FP and aggregate boundaries. */
-    if (!minic_lp64_plan_incoming_parameters(
-            program, target, fn,
-            MINIC_LP64_ABI_LOONGARCH64_LP64D,
-            minic_multi_indirect_record,
-            &incoming_plan))
-        return minic_multi_direct_machine_reject(fn, "loongarch64", name,
-            reject_stage, reject_block, reject_ins, __LINE__);
     if (getenv("MINIC_M1_TRACE") != NULL &&
         ((name[0] == 'K' && name[1] == 'e') || (name[0] == 'A' && name[1] == 'd')))
         (void)fprintf(stderr, "MINIC_M9_GATE arch=loongarch64 fn=%s stage=parameters_valid\n", name);
