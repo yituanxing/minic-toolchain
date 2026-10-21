@@ -5,6 +5,8 @@ set -eu
 : "${MINIC_CC:?set MINIC_CC to built minic-cc}"
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT HUP INT TERM
+# An .i input is already preprocessed: no C comments or directives are valid here.
+# Boundary checks exercise seven GP registers followed by a two-eightbyte record.
 cat >"$tmp/overflow.i" <<'SRC'
 extern long gnu_gp10(long,long,long,long,long,long,long,long,long,long);
 extern double gnu_fp9(double,double,double,double,double,double,double,double,double);
@@ -23,8 +25,6 @@ double mini_incoming_fp9(double a,double b,double c,double d,double e,
 long mini_outgoing_mixed(void) {
     return gnu_mix11(1,2.5,3,4,5,6,7,8,9,10,11.5);
 }
-/* Seven GP scalars leave one register: AAPCS64 spills the complete 16B
- * record, while LP64D splits it between the final GP register and stack. */
 struct MiniPair { long left; long right; };
 extern long gnu_record_boundary(long,long,long,long,long,long,long,struct MiniPair);
 long mini_outgoing_record_boundary(void) {
@@ -33,8 +33,6 @@ long mini_outgoing_record_boundary(void) {
     pair.right = 19;
     return gnu_record_boundary(1,2,3,4,5,6,7,pair);
 }
-/* The reverse ABI boundary: GNU passes args, MiniC receives them.
- * Also catch mixed FP + struct and scalar-after-record cursor ordering. */
 long mini_incoming_record_boundary(long a,long b,long c,long d,long e,long f,
                                   long g,struct MiniPair p) {
     return a==1 && b==2 && c==3 && d==4 && e==5 && f==6 && g==7 &&
