@@ -237,6 +237,18 @@ MinicCoreLowerStatus minic_core_lower_try_bit_field_assignment(
 bool core_expression_may_modify_local(
     const MinicCoreLowerContext *context, MinicExpressionId expression_id,
     MinicLocalId local_id, unsigned int depth);
+bool core_block_may_modify_local(
+    const MinicCoreLowerContext *context, const MinicBlock *block,
+    MinicLocalId local_id, unsigned int depth);
+
+/* Loop owns normalized source CFG and while-specific fact barriers.
+ * The split entry preserves parser-created while/for label pairs. */
+MinicCoreLowerStatus minic_core_lower_loop_cfg(
+    MinicCoreLowerContext *context, const MinicStatement *statement,
+    MinicStatementId continue_label_statement, bool *terminated);
+MinicCoreLowerStatus minic_core_lower_loop_statement(
+    MinicCoreLowerContext *context, const MinicStatement *statement,
+    bool *terminated);
 
 /* Structured CFG: if owns source guards/fact joins, switch owns case dispatch;
  * general lower_block still owns statement traversal and loop handling. */
