@@ -4,6 +4,7 @@
 #include "target/common/lp64_scalar.h"
 #include "target/common/lp64_frame.h"
 #include "target/common/lp64_aggregate.h"
+#include "target/aarch64/abi.h"
 
 #include <inttypes.h>
 #include <stdint.h>
@@ -360,7 +361,7 @@ static bool emit_function_body(FILE *out, const MinicC0Program *program,
         if (!minic_lp64_valid_parameter_type(program, target, fn->parameter_types[i]) &&
             !minic_multi_gp_record(program, target, fn->parameter_types[i],
                                    &record_size, &record_slots) &&
-            !minic_multi_indirect_record(program, target,
+            !minic_aarch64_indirect_record(program, target,
                                          fn->parameter_types[i], &record_size))
             return machine_emit_reject(fn, "aarch64", name, reject_stage,
                                        reject_block, reject_ins, __LINE__);
@@ -601,7 +602,7 @@ static bool emit_function_body(FILE *out, const MinicC0Program *program,
                                             fn->objects[object_id].type,
                                             &record_size, &record_slots) &&
                      (j >= parameter_count ||
-                      !minic_multi_indirect_record(program, target,
+                      !minic_aarch64_indirect_record(program, target,
                              fn->objects[object_id].type, &record_size))) ||
                     (j >= parameter_count &&
                      (record_size > 8U || record_slots != 1U)))
@@ -824,7 +825,7 @@ static bool emit_function_body(FILE *out, const MinicC0Program *program,
                 fn->objects[obj_id].element_count != 1U ||
                 (!minic_multi_gp_record(program, target,
                          fn->parameter_types[position], &size, &slots) &&
-                 !minic_multi_indirect_record(program, target,
+                 !minic_aarch64_indirect_record(program, target,
                          fn->parameter_types[position], &size)) ||
                 !minic_lp64_frame_objects(program, target, fn, obj_id,
                                &object_offset, NULL))
@@ -1634,7 +1635,7 @@ static bool emit_function_body(FILE *out, const MinicC0Program *program,
                         &fn->objects[arg->value.object_id];
                     if (!minic_multi_gp_record(program, target, object->type,
                                                &record_size, &slots)) {
-                        if (!minic_multi_indirect_record(program, target,
+                        if (!minic_aarch64_indirect_record(program, target,
                                                          object->type, &record_size))
                             return machine_emit_reject(fn, "aarch64", name,
                                 reject_stage, reject_block, reject_ins, __LINE__);
@@ -1677,7 +1678,7 @@ static bool emit_function_body(FILE *out, const MinicC0Program *program,
                     if (!minic_multi_gp_record(program, target,
                             fn->objects[object_id].type, &record_size, &slots)) {
                         const size_t src = object_offset + stack_bytes;
-                        if (!minic_multi_indirect_record(program, target,
+                        if (!minic_aarch64_indirect_record(program, target,
                                 fn->objects[object_id].type, &record_size) ||
                             fprintf(out, "  movz x9, #%zu\n",
                                     src & 65535U) < 0 ||
