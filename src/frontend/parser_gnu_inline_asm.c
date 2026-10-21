@@ -407,7 +407,3 @@ bool minic_parser_gnu_inline_asm_statement(MinicParser *parser) {
     return minic_parser_add_statement(parser, &statement);
 }
 
-typedef struct MinicStatementAttributeContext {
-    bool saw_fallthrough;
-    bool saw_informational;
-} MinicStatementAttributeContext;

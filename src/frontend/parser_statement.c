@@ -1864,6 +1864,11 @@ bool minic_parser_add_default_return(MinicParser *parser) {
     return minic_parser_add_statement(parser, &statement);
 }
 
+typedef struct MinicStatementAttributeContext {
+    bool saw_fallthrough;
+    bool saw_informational;
+} MinicStatementAttributeContext;
+
 static bool consume_statement_attribute(MinicParser *parser,
                                         const MinicParsedAttribute *attribute,
                                         void *opaque_context) {
