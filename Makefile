@@ -86,6 +86,8 @@ MINIC_SOURCES := \
 	src/target/backend.c \
 	src/target/common/global_emit.c \
 	src/target/common/lp64_aggregate.c \
+	src/target/common/lp64_scalar.c \
+	src/target/common/lp64_frame.c \
 	src/target/riscv64/abi.c \
 	src/target/riscv64/layout.c \
 	src/target/riscv64/codegen_support.c \

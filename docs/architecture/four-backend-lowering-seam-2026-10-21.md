@@ -99,3 +99,14 @@ machine-function builder/optimizer/emitter without changing semantic lowering.
 
 Do not introduce a catch-all target DSL, generic physical register allocator or
 ABI-equivalence assumption as part of this seam change.
+
+## Second pass: extracted observed two-ISA commonality
+
+The two new emitters had identical scalar type admission and frame object
+layout functions, including auxiliary binary128/int128 slots. These are now
+independent, compiled-once strategies in `lp64_scalar.c` and `lp64_frame.c`.
+They are **not** imposed on mature RV64 or x86. Backend-specific ABI register
+assignment, calling sequences and machine instruction legalization remain in
+the owning emitters. The ELF global emission pipeline and symbol handling are
+also now compiled once, with a replaceable relocation callback. Future MIR
+would replace the private machine path, not frontend Core semantics.
