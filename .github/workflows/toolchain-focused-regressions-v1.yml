@@ -187,6 +187,15 @@ jobs:
           sh -n tests/compiler/c0/probe-four-backend-constructors.sh
           MINIC_CC="$GITHUB_WORKSPACE/build/toolchain-focused-t1-v2/bin/minic-cc" \
             sh tests/compiler/c0/probe-four-backend-constructors.sh
+          # GCC glibc __SOCKADDR_ARG callback parameter with transparent
+          # union must match the pointer ABI, but not arbitrary signatures.
+          sh -n tests/compiler/c0/probe-four-backend-transparent-union-callback.sh
+          MINIC_CC="$GITHUB_WORKSPACE/build/toolchain-focused-t1-v2/bin/minic-cc" \
+            sh tests/compiler/c0/probe-four-backend-transparent-union-callback.sh \
+              aarch64 aarch64-linux-gnu-gcc qemu-aarch64 /usr/aarch64-linux-gnu
+          MINIC_CC="$GITHUB_WORKSPACE/build/toolchain-focused-t1-v2/bin/minic-cc" \
+            sh tests/compiler/c0/probe-four-backend-transparent-union-callback.sh \
+              loongarch64 loongarch64-linux-gnu-gcc-13 qemu-loongarch64 /usr/loongarch64-linux-gnu
           # Run the smallest QEMU dynamic-stack ABI oracles FIRST. A
           # failure returns the exact generated assembly within seconds
           # instead of following 179 original Kbuild rebuilds per ISA.
