@@ -231,6 +231,10 @@ def print_frontier(report_root, gcc_success, enabled):
                     captures = [line.strip() for line in trace.splitlines()
                                 if line.startswith(("MINIC_BACKEND_REJECT",
                                                     "MINIC_M1_FRONTIER",
+                                                    "MINIC_M4_GLOBAL_FRONTIER",
+                                                    "MINIC_M8_OPCODE_REJECT",
+                                                    "MINIC_SQLITE_CONVERSION_LIMIT",
+                                                    "MINIC_BACKEND_PREFLIGHT",
                                                     "MINIC_BACKEND_CENSUS",
                                                     "MINIC_CALL_RESULT_REJECT",
                                                     "MINIC_BACKEND_CALL_GATE",

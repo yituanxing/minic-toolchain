@@ -73,8 +73,8 @@ if [ "$scan_rc" -ne 0 ]; then
   exit 1
 fi
 case "$target" in
-  aarch64) floor=574 ;;
-  loongarch64) floor=574 ;;
+  aarch64) floor=575 ;;
+  loongarch64) floor=575 ;;
   *) exit 1 ;;
 esac
 grep -qx 'BUSYBOX_ALLYES_GCC_KBUILD=PASS original_Kconfig=1 original_sources=1' "$work/probe.out" ||
