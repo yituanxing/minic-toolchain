@@ -33,6 +33,19 @@ long mini_outgoing_record_boundary(void) {
     pair.right = 19;
     return gnu_record_boundary(1,2,3,4,5,6,7,pair);
 }
+/* The reverse ABI boundary: GNU passes args, MiniC receives them.
+ * Also catch mixed FP + struct and scalar-after-record cursor ordering. */
+long mini_incoming_record_boundary(long a,long b,long c,long d,long e,long f,
+                                  long g,struct MiniPair p) {
+    return a==1 && b==2 && c==3 && d==4 && e==5 && f==6 && g==7 &&
+           p.left==23 && p.right==19 ? 42 : 0;
+}
+long mini_incoming_float_record(float f,double d,struct MiniPair p) {
+    return f==1.25f && d==2.5 && p.left==23 && p.right==19 ? 42 : 0;
+}
+long mini_incoming_after_record(struct MiniPair p,long marker) {
+    return p.left==23 && p.right==19 && marker==7 ? 42 : 0;
+}
 SRC
 cat >"$tmp/driver.c" <<'SRC'
 extern long mini_outgoing_gp(void);
@@ -41,6 +54,9 @@ extern double mini_incoming_fp9(double,double,double,double,double,double,double
 extern long mini_outgoing_mixed(void);
 struct MiniPair { long left; long right; };
 extern long mini_outgoing_record_boundary(void);
+extern long mini_incoming_record_boundary(long,long,long,long,long,long,long,struct MiniPair);
+extern long mini_incoming_float_record(float,double,struct MiniPair);
+extern long mini_incoming_after_record(struct MiniPair,long);
 long gnu_gp10(long a,long b,long c,long d,long e,long f,long g,long h,long i,long j) {
     return a==1 && b==2 && c==3 && d==4 && e==5 && f==6 &&
            g==7 && h==8 && i==9 && j==10 ? 42 : 0;
@@ -66,6 +82,10 @@ int main(void) {
     if (mini_incoming_fp9(1.25,2.25,3.25,4.25,5.25,6.25,7.25,8.25,9.25)!=42.0) return 4;
     if (mini_outgoing_mixed()!=42) return 3;
     if (mini_outgoing_record_boundary()!=42) return 5;
+    struct MiniPair pair = {23,19};
+    if (mini_incoming_record_boundary(1,2,3,4,5,6,7,pair)!=42) return 6;
+    if (mini_incoming_float_record(1.25f,2.5,pair)!=42) return 7;
+    if (mini_incoming_after_record(pair,7)!=42) return 8;
     return 0;
 }
 SRC
@@ -128,6 +148,6 @@ for target in aarch64 loongarch64; do
         timeout 45s "$qemu" "$tmp/u32-stack.mini"
         echo "FOUR_BACKEND_OUTGOING_U32_STACK=PASS target=loongarch64 full_8byte_slot=1 unsigned32_sign_extended=1 signed32_sign_extended=1 GNU_QEMU_ABI=1"
     fi
-    echo "FOUR_BACKEND_OUTGOING_ABI=PASS target=$target fixed_gp10=1 fixed_fp9=1 incoming_fp9=1 mixed_gp_fp11=1 record2_boundary_split=1 GNU_QEMU_differential=1"
+    echo "FOUR_BACKEND_OUTGOING_ABI=PASS target=$target fixed_gp10=1 fixed_fp9=1 incoming_fp9=1 mixed_gp_fp11=1 record2_boundary_split=1 incoming_record_split=1 incoming_float_record=1 incoming_scalar_after_record=1 GNU_QEMU_differential=1"
 done
 echo "FOUR_BACKEND_OUTGOING_ABI_ACCEPT=PASS targets=2 independent_GNU_runtime=1"
