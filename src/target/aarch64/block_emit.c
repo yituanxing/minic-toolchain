@@ -429,7 +429,7 @@ bool minic_aarch64_emit_core_blocks(FILE *out, const MinicDirectLP64BlockContext
         }
         if (ins->kind == MINIC_CORE_INSTRUCTION_PARAMETER_OBJECT) {
             if (!minic_aarch64_emit_parameter_object(out, fn, ins,
-                    &incoming_plan, frame_plan, frame))
+                    incoming_plan, frame_plan, frame))
                 return minic_multi_direct_machine_reject(fn, "aarch64", name,
                     reject_stage, reject_block, reject_ins, __LINE__);
             continue;
