@@ -167,6 +167,12 @@ MinicCoreLowerStatus append_scalar_bitcast(MinicCoreLowerContext *context,
 MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
                                       MinicExpressionId expression_id,
                                       MinicCoreValueId *value_id);
+/* Source-level GNU variadic builtin family. No architecture enum is consumed. */
+MinicCoreLowerStatus minic_core_lower_vararg_scalar(
+    MinicCoreLowerContext *context, const MinicExpression *expression,
+    MinicCoreValueId *value_id);
+MinicCoreLowerStatus minic_core_lower_vararg_statement(
+    MinicCoreLowerContext *context, const MinicExpression *expression);
 MinicCoreLowerStatus minic_core_lower_inline_asm(MinicCoreLowerContext *context,
                                                  const MinicStatement *statement);
 
