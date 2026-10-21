@@ -90,8 +90,6 @@ SRC
             ;;
         bitfield_record_array)
             cat <<'SRC'
-/* BusyBox ifconfig OptArray shape: relocation, adjacent 6:10 bitfields,
- * and an ordinary short. Distinguish bad bit packing from a correct 42. */
 struct Option {
     const char *name;
     const unsigned int flags:6;
