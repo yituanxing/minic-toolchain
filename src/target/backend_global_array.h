@@ -103,6 +103,73 @@ static bool minic_multi_emit_flat_record_array(FILE *out, const MinicC0Program *
             size_t offset, field_bytes, field_align;
             MinicType emitted_type;
             size_t emitted_bytes, emitted_alignment, emitted_offset = 0U;
+            /* BusyBox ifconfig OptArray: two adjacent unsigned bit-fields
+             * (6 + 10 bits) share a 16-bit storage run between a pointer
+             * relocation and a short. Use DataLayout's exact bit offsets,
+             * rather than treating their declared int type as two ints.
+             * Admit only complete, contiguous, byte-aligned <=64-bit runs;
+             * keep uncommon layouts/bit-field relocations fail-closed. */
+            if (field != NULL && field->is_bit_field) {
+                size_t begin, first_bit, bit_cursor, next, b;
+                uint64_t packed = 0U;
+                if (record_bytes > SIZE_MAX / 8U ||
+                    !minic_data_layout_record_field_layout(
+                         target->data_layout, program, record, field_index,
+                         &begin, &first_bit) ||
+                    first_bit != 0U || begin < cursor ||
+                    begin > record_bytes) return false;
+                bit_cursor = begin * 8U;
+                for (next = field_index; next < record->field_count; ++next) {
+                    const MinicRecordField *bf =
+                        minic_c0_record_field(record, next);
+                    size_t byte_offset, bit_offset, width, local_bit;
+                    uint64_t mask;
+                    const MinicGlobalRelocation *next_reloc =
+                        relocation_index < object->relocation_count
+                            ? &object->relocations[relocation_index] : NULL;
+                    if (bf == NULL) return false;
+                    if (!bf->is_bit_field) break;
+                    if (!minic_type_is_integer(bf->type) ||
+                        bf->element_count != 1U || bf->bit_width == 0U ||
+                        bf->bit_width > 64U ||
+                        initializer_index >= object->initializer_count ||
+                        !minic_data_layout_record_field_layout(
+                            target->data_layout, program, record, next,
+                            &byte_offset, &bit_offset) ||
+                        byte_offset > record_bytes ||
+                        byte_offset > SIZE_MAX / 8U ||
+                        byte_offset * 8U + bit_offset != bit_cursor)
+                        return false;
+                    local_bit = bit_cursor - begin * 8U;
+                    width = bf->bit_width;
+                    if (local_bit >= 64U || width > 64U - local_bit)
+                        return false;
+                    if (next_reloc != NULL &&
+                        next_reloc->location_index == initializer_index &&
+                        (next_reloc->location_kind ==
+                             MINIC_GLOBAL_RELOCATION_LOCATION_AGGREGATE_SCALAR ||
+                         next_reloc->location_kind ==
+                             MINIC_GLOBAL_RELOCATION_LOCATION_RECORD_FIELD))
+                        return false;
+                    mask = width == 64U ? UINT64_MAX :
+                        (UINT64_C(1) << width) - UINT64_C(1);
+                    packed |= (object->initializer_values[initializer_index] &
+                               mask) << local_bit;
+                    bit_cursor += width;
+                    ++initializer_index;
+                }
+                if ((bit_cursor & 7U) != 0U ||
+                    bit_cursor / 8U > record_bytes ||
+                    fprintf(out, "  .zero %zu\n", begin - cursor) < 0)
+                    return false;
+                for (b = 0U; b < bit_cursor / 8U - begin; ++b)
+                    if (!minic_multi_emit_data_bits(
+                            out, 1U, (packed >> (8U * b)) & UINT64_C(255)))
+                        return false;
+                cursor = bit_cursor / 8U;
+                field_index = next - 1U;
+                continue;
+            }
             if (field == NULL || field->is_bit_field || field->is_flexible_array ||
                 field->element_count != 1U ||
                 !minic_data_layout_type(target->data_layout, program, field->type,
