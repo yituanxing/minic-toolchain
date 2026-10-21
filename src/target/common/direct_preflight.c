@@ -49,10 +49,9 @@ bool minic_multi_direct_lp64_function_preflight(
 
 bool minic_multi_direct_lp64_cfg_preflight(
     const MinicC0Program *program, const MinicTargetInfo *target,
-    const MinicCoreFunction *fn, const char *arch, const char *name,
-    bool trace_cjson, size_t *failed_block) {
+    const MinicCoreFunction *fn, size_t *failed_block) {
     size_t i;
-    if (program == NULL || target == NULL || fn == NULL || arch == NULL ||
+    if (program == NULL || target == NULL || fn == NULL ||
         failed_block == NULL) return false;
     *failed_block = SIZE_MAX;
     /* M2: verify every CFG successor and return before emitting anything.
@@ -62,12 +61,6 @@ bool minic_multi_direct_lp64_cfg_preflight(
     for (i = 0U; i < fn->block_count; ++i) {
         *failed_block = i;
         const MinicCoreTerminator *term = &fn->blocks[i].terminator;
-        /* M32 diagnostics: identify the exact CFG gate from the original
-         * 80-block cJSON_Compare rather than guessing at opcode support. */
-        if (trace_cjson && strcmp(name, "cJSON_Compare") == 0)
-            (void)fprintf(stderr, "MINIC_CJSON_CFG arch=%s block=%zu kind=%d has_term=%d condition=%u\n",
-                          arch, i, (int)term->kind, fn->blocks[i].has_terminator ? 1 : 0,
-                          (unsigned int)term->conditional.condition);
         if (!fn->blocks[i].has_terminator) return false;
         switch (term->kind) {
         case MINIC_CORE_TERMINATOR_RETURN:

@@ -326,7 +326,7 @@ bool minic_aarch64_emit_core_blocks(FILE *out, const MinicDirectLP64BlockContext
     size_t id, frame, save_offset, va_count, va_gp, i;
     size_t va_base, va_fp;
     size_t reject_block = SIZE_MAX, reject_ins = SIZE_MAX;
-    bool has_direct_calls, dynamic_frame, trace_cjson;
+    bool has_direct_calls, dynamic_frame;
     if (out == NULL || ctx == NULL || ctx->program == NULL ||
         ctx->target == NULL || ctx->fn == NULL || ctx->frame_plan == NULL ||
         ctx->incoming_plan == NULL || ctx->name == NULL) return false;
@@ -345,7 +345,6 @@ bool minic_aarch64_emit_core_blocks(FILE *out, const MinicDirectLP64BlockContext
     va_fp = ctx->va_fp;
     has_direct_calls = ctx->has_direct_calls;
     dynamic_frame = ctx->dynamic_frame;
-    trace_cjson = ctx->trace_cjson;
     reject_stage = "machine_emit";
     for (size_t block_id = 0U; block_id < fn->block_count; ++block_id) {
         reject_block = block_id;
@@ -366,23 +365,6 @@ bool minic_aarch64_emit_core_blocks(FILE *out, const MinicDirectLP64BlockContext
                                     reject_block, reject_ins, __LINE__);
         ins = &fn->instructions[ins_id];
         reject_ins = (size_t)ins_id;
-        if (trace_cjson)
-            (void)fprintf(stderr,
-                "MINIC_CJSON_STEP arch=aarch64 function=%s block=%zu ins=%u kind=%d result=%u type_integer=%d type_pointer=%d\n",
-                name, block_id, (unsigned int)ins_id, (int)ins->kind,
-                (unsigned int)ins->result,
-                minic_type_is_integer(ins->type) ? 1 : 0,
-                minic_type_is_pointer(ins->type) ? 1 : 0);
-        /* Only recorded in the temporary original-source failure log,
-         * never in normal builds or public diagnostic stream. */
-        if (getenv("MINIC_M1_TRACE") != NULL &&
-            ((name[0] == 'K' && name[1] == 'e') || (name[0] == 'A' && name[1] == 'd')))
-            (void)fprintf(stderr,
-                          "MINIC_M9_STEP arch=aarch64 function=%s block=%zu ins=%u kind=%d result=%u type_int=%d type_ptr=%d\n",
-                          name, block_id, (unsigned int)ins_id,
-                          (int)ins->kind, (unsigned int)ins->result,
-                          minic_type_is_integer(ins->type) ? 1 : 0,
-                          minic_type_is_pointer(ins->type) ? 1 : 0);
         /* A Core compiler barrier is an effect-only ordering constraint
          * (GNU empty asm with a memory clobber), not a hardware fence and
          * never an SSA value. Like the existing x86/RV64 backends, preserve
