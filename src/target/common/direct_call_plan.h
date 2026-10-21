@@ -8,9 +8,8 @@
 
 #define MINIC_LP64_MAX_CALL_ARGUMENTS 64U
 
-/* Location is computed before machine emission. Cursor fields preserve the
- * input state for existing direct emitters; actual locations permit a later
- * location-driven handler with no independent register assignment. */
+/* ABI locations are resolved before emission; the target emitter only
+ * transfers values to the selected machine locations. */
 typedef enum MinicLP64ArgumentKind {
     MINIC_LP64_ARGUMENT_GP,
     MINIC_LP64_ARGUMENT_FP,
@@ -21,7 +20,6 @@ typedef enum MinicLP64ArgumentKind {
 
 typedef struct MinicLP64ArgumentLocation {
     MinicLP64ArgumentKind kind;
-    size_t gp_cursor, fp_cursor, stack_cursor;
     size_t gp_first, fp_first, stack_first;
     size_t gp_registers, fp_registers, stack_slots;
     size_t size_bytes, chunks;
