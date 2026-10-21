@@ -29,6 +29,87 @@ typedef struct MinicCoreLowerContext {
     size_t statement_block_count;
 } MinicCoreLowerContext;
 
+/* Private source-to-Core expression families, deliberately not public ABI.
+ * Their effectful CFG and scalar building primitives stay Core-owned. */
+MinicCoreLowerStatus minic_core_lower_try_conditional(
+    MinicCoreLowerContext *context, const MinicExpression *expression,
+    MinicCoreValueId *value_id, bool *handled);
+MinicCoreLowerStatus minic_core_lower_try_sequenced(
+    MinicCoreLowerContext *context, const MinicExpression *expression,
+    MinicCoreValueId *value_id, MinicExpressionId expression_id, bool *handled);
+MinicCoreLowerStatus minic_core_lower_try_builtin_unary(
+    MinicCoreLowerContext *context, const MinicExpression *expression,
+    MinicCoreValueId *value_id, bool *handled);
+MinicCoreLowerStatus minic_core_lower_try_comparisons(
+    MinicCoreLowerContext *context, const MinicExpression *expression,
+    MinicCoreValueId *value_id, bool *handled);
+MinicCoreLowerStatus minic_core_lower_try_pointer_arithmetic(
+    MinicCoreLowerContext *context, const MinicExpression *expression,
+    MinicCoreValueId *value_id, bool *handled);
+
+/* Cross-module Core lowering primitives required by expression families.
+ * Namespaced to avoid collisions with frontend, backend or toolchain code. */
+MinicCoreLowerStatus minic_core_lower_internal_set_branch(MinicCoreLowerContext *context,
+                                       MinicCoreBlockId block_id,
+                                       MinicSourceSpan span,
+                                       MinicCoreBlockId target);
+MinicCoreLowerStatus minic_core_lower_internal_lower_condition_branch(MinicCoreLowerContext *context,
+                                                   MinicExpressionId expression_id,
+                                                   MinicSourceSpan span,
+                                                   MinicCoreBlockId when_true,
+                                                   MinicCoreBlockId when_false);
+MinicCoreLowerStatus minic_core_lower_internal_reload_scalar_value(MinicCoreLowerContext *context,
+                                                MinicSourceSpan span,
+                                                MinicType type,
+                                                MinicCoreObjectId object_id,
+                                                MinicCoreValueId *value_id);
+MinicCoreLowerStatus minic_core_lower_internal_append_integer_conversion(MinicCoreLowerContext *context,
+                                                      MinicSourceSpan span,
+                                                      MinicType target_type,
+                                                      MinicCoreValueId source_value,
+                                                      MinicCoreValueId *value_id);
+MinicCoreLowerStatus minic_core_lower_internal_lower_scalar_assignment_value(MinicCoreLowerContext *context,
+                                                          MinicType target_type,
+                                                          MinicExpressionId expression_id,
+                                                          MinicCoreValueId *value_id);
+MinicCoreLowerStatus minic_core_lower_internal_store_scalar_value(MinicCoreLowerContext *context,
+                                               MinicSourceSpan span,
+                                               MinicType type,
+                                               MinicCoreObjectId object_id,
+                                               MinicCoreValueId value_id);
+MinicCoreLowerStatus minic_core_lower_internal_lower_expression_statement(MinicCoreLowerContext *context,
+                                                       const MinicStatement *statement);
+MinicCoreLowerStatus minic_core_lower_internal_spill_scalar_value(MinicCoreLowerContext *context,
+                                               MinicSourceSpan span,
+                                               MinicType type,
+                                               MinicCoreValueId value_id,
+                                               MinicCoreObjectId *object_id);
+MinicCoreLowerStatus minic_core_lower_internal_lower_scalar_equality_operands(MinicCoreLowerContext *context,
+                                                           MinicExpressionId left_id,
+                                                           MinicExpressionId right_id,
+                                                           MinicCoreValueId *left_value,
+                                                           MinicCoreValueId *right_value);
+MinicCoreLowerStatus minic_core_lower_internal_lower_integer_binary_operands(MinicCoreLowerContext *context,
+                                                          MinicExpressionId left_id,
+                                                          MinicExpressionId right_id,
+                                                          MinicType result_type,
+                                                          MinicCoreValueId *left_value,
+                                                          MinicCoreValueId *right_value);
+MinicCoreLowerStatus minic_core_lower_internal_lower_floating_binary_operands(MinicCoreLowerContext *context,
+                                                         MinicExpressionId left_id,
+                                                         MinicExpressionId right_id,
+                                                         MinicType result_type,
+                                                         MinicCoreValueId *left_value,
+                                                         MinicCoreValueId *right_value);
+MinicCoreLowerStatus minic_core_lower_internal_append_long_double_binary_helper(
+    MinicCoreLowerContext *context,
+    MinicSourceSpan span,
+    const char *helper,
+    MinicCoreValueId left,
+    MinicCoreValueId right,
+    MinicType return_type,
+    MinicCoreValueId *value_id);
+
 /* Private Core-lowering facts: no target-specific machine state. */
 void core_local_constant_set(MinicCoreLowerContext *, MinicLocalId,
                              const MinicConstValue *);

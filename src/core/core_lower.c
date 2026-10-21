@@ -18,11 +18,11 @@ static MinicCoreLowerStatus lower_assignment_pair(MinicCoreLowerContext *context
                                                   MinicExpressionId source_id,
                                                   MinicSourceSpan span,
                                                   MinicCoreValueId *result_value);
-static MinicCoreLowerStatus lower_expression_statement(
+MinicCoreLowerStatus minic_core_lower_internal_lower_expression_statement(
     MinicCoreLowerContext *context, const MinicStatement *statement);
 static MinicCoreLowerStatus
 lower_block(MinicCoreLowerContext *context, const MinicBlock *source_block, bool *terminated);
-static MinicCoreLowerStatus set_branch(MinicCoreLowerContext *context,
+MinicCoreLowerStatus minic_core_lower_internal_set_branch(MinicCoreLowerContext *context,
                                        MinicCoreBlockId block_id,
                                        MinicSourceSpan span,
                                        MinicCoreBlockId target);
@@ -35,7 +35,7 @@ bool core_const_eval_integer_with_locals(const MinicCoreLowerContext *context,
 
 
 
-static MinicCoreLowerStatus lower_condition_branch(MinicCoreLowerContext *context,
+MinicCoreLowerStatus minic_core_lower_internal_lower_condition_branch(MinicCoreLowerContext *context,
                                                    MinicExpressionId expression_id,
                                                    MinicSourceSpan span,
                                                    MinicCoreBlockId when_true,
@@ -43,12 +43,12 @@ static MinicCoreLowerStatus lower_condition_branch(MinicCoreLowerContext *contex
 static MinicCoreLowerStatus lower_scalar_update(MinicCoreLowerContext *context,
                                                 const MinicExpression *expression,
                                                 MinicCoreValueId *value_id);
-static MinicCoreLowerStatus spill_scalar_value(MinicCoreLowerContext *context,
+MinicCoreLowerStatus minic_core_lower_internal_spill_scalar_value(MinicCoreLowerContext *context,
                                                MinicSourceSpan span,
                                                MinicType type,
                                                MinicCoreValueId value_id,
                                                MinicCoreObjectId *object_id);
-static MinicCoreLowerStatus reload_scalar_value(MinicCoreLowerContext *context,
+MinicCoreLowerStatus minic_core_lower_internal_reload_scalar_value(MinicCoreLowerContext *context,
                                                 MinicSourceSpan span,
                                                 MinicType type,
                                                 MinicCoreObjectId object_id,
@@ -69,12 +69,12 @@ static MinicCoreLowerStatus lower_record_materialized_address(
     MinicCoreLowerContext *context,
     MinicExpressionId expression_id,
     MinicCoreValueId *address_id);
-static MinicCoreLowerStatus append_integer_conversion(MinicCoreLowerContext *context,
+MinicCoreLowerStatus minic_core_lower_internal_append_integer_conversion(MinicCoreLowerContext *context,
                                                       MinicSourceSpan span,
                                                       MinicType target_type,
                                                       MinicCoreValueId source_value,
                                                       MinicCoreValueId *value_id);
-static MinicCoreLowerStatus lower_scalar_assignment_value(MinicCoreLowerContext *context,
+MinicCoreLowerStatus minic_core_lower_internal_lower_scalar_assignment_value(MinicCoreLowerContext *context,
                                                           MinicType target_type,
                                                           MinicExpressionId expression_id,
                                                           MinicCoreValueId *value_id);
@@ -823,7 +823,7 @@ MinicCoreLowerStatus lower_address(MinicCoreLowerContext *context,
             }
         }
         subscript_status =
-            spill_scalar_value(context, base->span, pointer_type, base_value, &base_object);
+            minic_core_lower_internal_spill_scalar_value(context, base->span, pointer_type, base_value, &base_object);
         if (subscript_status != MINIC_CORE_LOWER_OK) {
             return subscript_status;
         }
@@ -845,14 +845,14 @@ MinicCoreLowerStatus lower_address(MinicCoreLowerContext *context,
             return MINIC_CORE_LOWER_ERROR;
         }
         if (!minic_type_equal(context->function->values[index_value].type, index_value_type)) {
-            subscript_status = append_integer_conversion(
+            subscript_status = minic_core_lower_internal_append_integer_conversion(
                 context, index->span, index_value_type, index_value, &index_value);
             if (subscript_status != MINIC_CORE_LOWER_OK) {
                 return subscript_status;
             }
         }
         subscript_status =
-            reload_scalar_value(context, base->span, pointer_type, base_object, &base_value);
+            minic_core_lower_internal_reload_scalar_value(context, base->span, pointer_type, base_object, &base_value);
         if (subscript_status != MINIC_CORE_LOWER_OK) {
             (void)fprintf(stderr,
                           "CORE_SUBSCRIPT_STAGE function=%s stage=reload-base status=%d\n",
@@ -925,7 +925,7 @@ MinicCoreLowerStatus lower_address(MinicCoreLowerContext *context,
     return MINIC_CORE_LOWER_UNSUPPORTED;
 }
 
-static MinicCoreLowerStatus append_integer_conversion(MinicCoreLowerContext *context,
+MinicCoreLowerStatus minic_core_lower_internal_append_integer_conversion(MinicCoreLowerContext *context,
                                                       MinicSourceSpan span,
                                                       MinicType target_type,
                                                       MinicCoreValueId source_value,
@@ -989,7 +989,7 @@ MinicCoreLowerStatus append_scalar_bitcast(MinicCoreLowerContext *context,
                : MINIC_CORE_LOWER_ERROR;
 }
 
-static MinicCoreLowerStatus spill_scalar_value(MinicCoreLowerContext *context,
+MinicCoreLowerStatus minic_core_lower_internal_spill_scalar_value(MinicCoreLowerContext *context,
                                                MinicSourceSpan span,
                                                MinicType type,
                                                MinicCoreValueId value_id,
@@ -1034,7 +1034,7 @@ static MinicCoreLowerStatus spill_scalar_value(MinicCoreLowerContext *context,
                : MINIC_CORE_LOWER_ERROR;
 }
 
-static MinicCoreLowerStatus store_scalar_value(MinicCoreLowerContext *context,
+MinicCoreLowerStatus minic_core_lower_internal_store_scalar_value(MinicCoreLowerContext *context,
                                                MinicSourceSpan span,
                                                MinicType type,
                                                MinicCoreObjectId object_id,
@@ -1078,7 +1078,7 @@ static MinicCoreLowerStatus store_scalar_value(MinicCoreLowerContext *context,
                : MINIC_CORE_LOWER_ERROR;
 }
 
-static MinicCoreLowerStatus reload_scalar_value(MinicCoreLowerContext *context,
+MinicCoreLowerStatus minic_core_lower_internal_reload_scalar_value(MinicCoreLowerContext *context,
                                                 MinicSourceSpan span,
                                                 MinicType type,
                                                 MinicCoreObjectId object_id,
@@ -1119,7 +1119,7 @@ static MinicCoreLowerStatus reload_scalar_value(MinicCoreLowerContext *context,
                : MINIC_CORE_LOWER_ERROR;
 }
 
-static MinicCoreLowerStatus lower_scalar_equality_operands(MinicCoreLowerContext *context,
+MinicCoreLowerStatus minic_core_lower_internal_lower_scalar_equality_operands(MinicCoreLowerContext *context,
                                                            MinicExpressionId left_id,
                                                            MinicExpressionId right_id,
                                                            MinicCoreValueId *left_value,
@@ -1197,7 +1197,7 @@ static MinicCoreLowerStatus lower_scalar_equality_operands(MinicCoreLowerContext
         return MINIC_CORE_LOWER_ERROR;
     }
     if (integer_comparison) {
-        status = append_integer_conversion(
+        status = minic_core_lower_internal_append_integer_conversion(
             context, left_expression->span, comparison_type, left_source, &left_normalized);
         if (status != MINIC_CORE_LOWER_OK) {
             return status;
@@ -1211,7 +1211,7 @@ static MinicCoreLowerStatus lower_scalar_equality_operands(MinicCoreLowerContext
     } else {
         return MINIC_CORE_LOWER_ERROR;
     }
-    status = spill_scalar_value(
+    status = minic_core_lower_internal_spill_scalar_value(
         context, left_expression->span, comparison_type, left_normalized, &left_object);
     if (status != MINIC_CORE_LOWER_OK) {
         return status;
@@ -1226,7 +1226,7 @@ static MinicCoreLowerStatus lower_scalar_equality_operands(MinicCoreLowerContext
         return MINIC_CORE_LOWER_ERROR;
     }
     if (integer_comparison) {
-        status = append_integer_conversion(
+        status = minic_core_lower_internal_append_integer_conversion(
             context, right_expression->span, comparison_type, right_source, &right_normalized);
         if (status != MINIC_CORE_LOWER_OK) {
             return status;
@@ -1240,7 +1240,7 @@ static MinicCoreLowerStatus lower_scalar_equality_operands(MinicCoreLowerContext
     } else {
         return MINIC_CORE_LOWER_ERROR;
     }
-    status = reload_scalar_value(
+    status = minic_core_lower_internal_reload_scalar_value(
         context, left_expression->span, comparison_type, left_object, left_value);
     if (status != MINIC_CORE_LOWER_OK) {
         return status;
@@ -1249,7 +1249,7 @@ static MinicCoreLowerStatus lower_scalar_equality_operands(MinicCoreLowerContext
     return MINIC_CORE_LOWER_OK;
 }
 
-static MinicCoreLowerStatus lower_integer_binary_operands(MinicCoreLowerContext *context,
+MinicCoreLowerStatus minic_core_lower_internal_lower_integer_binary_operands(MinicCoreLowerContext *context,
                                                           MinicExpressionId left_id,
                                                           MinicExpressionId right_id,
                                                           MinicType result_type,
@@ -1283,14 +1283,14 @@ static MinicCoreLowerStatus lower_integer_binary_operands(MinicCoreLowerContext 
                       context->source_function != NULL ? context->source_function->name : "?", (int)status);
         return status;
     }
-    status = append_integer_conversion(
+    status = minic_core_lower_internal_append_integer_conversion(
         context, left_expression->span, result_type, left_source, &left_normalized);
     if (status != MINIC_CORE_LOWER_OK) {
         (void)fprintf(stderr, "CORE_LOWER_DETAIL marker=M90_HOT_ERROR_DETAIL function=%s stage=integer-binary reason=left-convert status=%d\n",
                       context->source_function != NULL ? context->source_function->name : "?", (int)status);
         return status;
     }
-    status = spill_scalar_value(
+    status = minic_core_lower_internal_spill_scalar_value(
         context, left_expression->span, result_type, left_normalized, &left_object);
     if (status != MINIC_CORE_LOWER_OK) {
         (void)fprintf(stderr, "CORE_LOWER_DETAIL marker=M90_HOT_ERROR_DETAIL function=%s stage=integer-binary reason=left-spill status=%d\n",
@@ -1304,7 +1304,7 @@ static MinicCoreLowerStatus lower_integer_binary_operands(MinicCoreLowerContext 
                       context->source_function != NULL ? context->source_function->name : "?", (int)status);
         return status;
     }
-    status = append_integer_conversion(
+    status = minic_core_lower_internal_append_integer_conversion(
         context, right_expression->span, result_type, right_source, &right_normalized);
     if (status != MINIC_CORE_LOWER_OK) {
         (void)fprintf(stderr, "CORE_LOWER_DETAIL marker=M90_HOT_ERROR_DETAIL function=%s stage=integer-binary reason=right-convert status=%d\n",
@@ -1312,7 +1312,7 @@ static MinicCoreLowerStatus lower_integer_binary_operands(MinicCoreLowerContext 
         return status;
     }
     status =
-        reload_scalar_value(context, left_expression->span, result_type, left_object, left_value);
+        minic_core_lower_internal_reload_scalar_value(context, left_expression->span, result_type, left_object, left_value);
     if (status != MINIC_CORE_LOWER_OK) {
         (void)fprintf(stderr, "CORE_LOWER_DETAIL marker=M90_HOT_ERROR_DETAIL function=%s stage=integer-binary reason=left-reload status=%d\n",
                       context->source_function != NULL ? context->source_function->name : "?", (int)status);
@@ -1322,7 +1322,7 @@ static MinicCoreLowerStatus lower_integer_binary_operands(MinicCoreLowerContext 
     return MINIC_CORE_LOWER_OK;
 }
 
-static MinicCoreLowerStatus lower_floating_binary_operands(MinicCoreLowerContext *context,
+MinicCoreLowerStatus minic_core_lower_internal_lower_floating_binary_operands(MinicCoreLowerContext *context,
                                                          MinicExpressionId left_id,
                                                          MinicExpressionId right_id,
                                                          MinicType result_type,
@@ -1347,20 +1347,20 @@ static MinicCoreLowerStatus lower_floating_binary_operands(MinicCoreLowerContext
         return MINIC_CORE_LOWER_ERROR;
     }
 
-    status = lower_scalar_assignment_value(context, result_type, left_id, &left_source);
+    status = minic_core_lower_internal_lower_scalar_assignment_value(context, result_type, left_id, &left_source);
     if (status != MINIC_CORE_LOWER_OK) {
         return status;
     }
-    status = spill_scalar_value(
+    status = minic_core_lower_internal_spill_scalar_value(
         context, left_expression->span, result_type, left_source, &left_object);
     if (status != MINIC_CORE_LOWER_OK) {
         return status;
     }
-    status = lower_scalar_assignment_value(context, result_type, right_id, &right_source);
+    status = minic_core_lower_internal_lower_scalar_assignment_value(context, result_type, right_id, &right_source);
     if (status != MINIC_CORE_LOWER_OK) {
         return status;
     }
-    status = reload_scalar_value(
+    status = minic_core_lower_internal_reload_scalar_value(
         context, left_expression->span, result_type, left_object, left_value);
     if (status != MINIC_CORE_LOWER_OK) {
         return status;
@@ -1871,7 +1871,7 @@ static MinicCoreLowerStatus lower_record_conditional_object(
         !minic_core_function_add_block(context->function, &merge_block)) {
         return MINIC_CORE_LOWER_ERROR;
     }
-    status = lower_condition_branch(context,
+    status = minic_core_lower_internal_lower_condition_branch(context,
                                     expression->value.conditional.condition,
                                     expression->span,
                                     true_block,
@@ -1907,7 +1907,7 @@ static MinicCoreLowerStatus lower_record_conditional_object(
             context->function, context->block_id, &operation)) {
         return MINIC_CORE_LOWER_ERROR;
     }
-    status = set_branch(context, context->block_id, expression->span, merge_block);
+    status = minic_core_lower_internal_set_branch(context, context->block_id, expression->span, merge_block);
     if (status != MINIC_CORE_LOWER_OK) {
         return status;
     }
@@ -1939,7 +1939,7 @@ static MinicCoreLowerStatus lower_record_conditional_object(
             context->function, context->block_id, &operation)) {
         return MINIC_CORE_LOWER_ERROR;
     }
-    status = set_branch(context, context->block_id, expression->span, merge_block);
+    status = minic_core_lower_internal_set_branch(context, context->block_id, expression->span, merge_block);
     if (status != MINIC_CORE_LOWER_OK) {
         return status;
     }
@@ -2132,7 +2132,7 @@ static MinicCoreLowerStatus lower_integer_assignment_value(MinicCoreLowerContext
     if (status != MINIC_CORE_LOWER_OK) {
         return status;
     }
-    return append_integer_conversion(
+    return minic_core_lower_internal_append_integer_conversion(
         context, expression->span, result_type, source_value, value_id);
 }
 
@@ -2290,7 +2290,7 @@ static MinicCoreLowerStatus append_long_double_conversion(
                 *value_id = converted_value;
                 return MINIC_CORE_LOWER_OK;
             }
-            return append_integer_conversion(
+            return minic_core_lower_internal_append_integer_conversion(
                 context, span, target_type, converted_value, value_id);
         }
     }
@@ -2300,7 +2300,7 @@ static MinicCoreLowerStatus append_long_double_conversion(
         context, span, helper, target_type, &parameter_type, &source_value, 1U, value_id);
 }
 
-static MinicCoreLowerStatus append_long_double_binary_helper(
+MinicCoreLowerStatus minic_core_lower_internal_append_long_double_binary_helper(
     MinicCoreLowerContext *context,
     MinicSourceSpan span,
     const char *helper,
@@ -2319,7 +2319,7 @@ static MinicCoreLowerStatus append_long_double_binary_helper(
                                       parameter_types, argument_values, 2U, value_id);
 }
 
-static MinicCoreLowerStatus lower_scalar_assignment_value(MinicCoreLowerContext *context,
+MinicCoreLowerStatus minic_core_lower_internal_lower_scalar_assignment_value(MinicCoreLowerContext *context,
                                                           MinicType target_type,
                                                           MinicExpressionId expression_id,
                                                           MinicCoreValueId *value_id) {
@@ -2471,7 +2471,7 @@ static MinicCoreLowerStatus lower_scalar_assignment_value(MinicCoreLowerContext 
             context->function, context->block_id, &instruction, &truth_value)) {
         return MINIC_CORE_LOWER_ERROR;
     }
-    return append_integer_conversion(context, expression->span, target_type, truth_value, value_id);
+    return minic_core_lower_internal_append_integer_conversion(context, expression->span, target_type, truth_value, value_id);
 }
 
 /* M85_RECORD_CALL_ARGUMENT: materialize a by-value record argument as a
@@ -2553,7 +2553,7 @@ static MinicCoreLowerStatus lower_record_call_argument_object(
         if (!found || field == NULL) {
             return MINIC_CORE_LOWER_UNSUPPORTED;
         }
-        status = lower_scalar_assignment_value(
+        status = minic_core_lower_internal_lower_scalar_assignment_value(
             context, field->type, expression_id, &field_value);
         if (status != MINIC_CORE_LOWER_OK) {
             return status;
@@ -3172,7 +3172,7 @@ static MinicCoreLowerStatus lower_direct_call(MinicCoreLowerContext *context,
         }
         arguments[argument_index].kind = MINIC_CORE_CALL_ARGUMENT_VALUE;
         if (argument_index < callee->parameter_count) {
-            status = lower_scalar_assignment_value(
+            status = minic_core_lower_internal_lower_scalar_assignment_value(
                 context,
                 argument_types[argument_index],
                 minic_c0_call_argument(expression, argument_index),
@@ -3201,7 +3201,7 @@ static MinicCoreLowerStatus lower_direct_call(MinicCoreLowerContext *context,
             free(arguments);
             return MINIC_CORE_LOWER_ERROR;
         }
-        status = spill_scalar_value(context,
+        status = minic_core_lower_internal_spill_scalar_value(context,
                                     expression->span,
                                     argument_types[argument_index],
                                     arguments[argument_index].value.value_id,
@@ -3215,7 +3215,7 @@ static MinicCoreLowerStatus lower_direct_call(MinicCoreLowerContext *context,
         if (arguments[argument_index].kind == MINIC_CORE_CALL_ARGUMENT_OBJECT) {
             continue;
         }
-        status = reload_scalar_value(context,
+        status = minic_core_lower_internal_reload_scalar_value(context,
                                      expression->span,
                                      argument_types[argument_index],
                                      argument_objects[argument_index],
@@ -3331,7 +3331,7 @@ static MinicCoreLowerStatus lower_direct_record_call_object(
             continue;
         }
         arguments[argument_index].kind = MINIC_CORE_CALL_ARGUMENT_VALUE;
-        status = lower_scalar_assignment_value(
+        status = minic_core_lower_internal_lower_scalar_assignment_value(
             context,
             callee->parameter_types[argument_index],
             minic_c0_call_argument(expression, argument_index),
@@ -3347,7 +3347,7 @@ static MinicCoreLowerStatus lower_direct_record_call_object(
             free(arguments);
             return MINIC_CORE_LOWER_ERROR;
         }
-        status = spill_scalar_value(context,
+        status = minic_core_lower_internal_spill_scalar_value(context,
                                     expression->span,
                                     callee->parameter_types[argument_index],
                                     arguments[argument_index].value.value_id,
@@ -3361,7 +3361,7 @@ static MinicCoreLowerStatus lower_direct_record_call_object(
         if (arguments[argument_index].kind == MINIC_CORE_CALL_ARGUMENT_OBJECT) {
             continue;
         }
-        status = reload_scalar_value(context,
+        status = minic_core_lower_internal_reload_scalar_value(context,
                                      expression->span,
                                      callee->parameter_types[argument_index],
                                      argument_objects[argument_index],
@@ -3508,7 +3508,7 @@ static MinicCoreLowerStatus lower_indirect_call(MinicCoreLowerContext *context,
                 return MINIC_CORE_LOWER_UNSUPPORTED;
             }
             arguments[argument_index].kind = MINIC_CORE_CALL_ARGUMENT_VALUE;
-            status = lower_scalar_assignment_value(
+            status = minic_core_lower_internal_lower_scalar_assignment_value(
                 context,
                 argument_types[argument_index],
                 minic_c0_call_argument(expression, argument_index),
@@ -3540,7 +3540,7 @@ static MinicCoreLowerStatus lower_indirect_call(MinicCoreLowerContext *context,
             free(arguments);
             return MINIC_CORE_LOWER_ERROR;
         }
-        status = spill_scalar_value(context,
+        status = minic_core_lower_internal_spill_scalar_value(context,
                                     expression->span,
                                     argument_types[argument_index],
                                     arguments[argument_index].value.value_id,
@@ -3560,7 +3560,7 @@ static MinicCoreLowerStatus lower_indirect_call(MinicCoreLowerContext *context,
         if (arguments[argument_index].kind == MINIC_CORE_CALL_ARGUMENT_OBJECT) {
             continue;
         }
-        status = reload_scalar_value(context,
+        status = minic_core_lower_internal_reload_scalar_value(context,
                                      expression->span,
                                      argument_types[argument_index],
                                      argument_objects[argument_index],
@@ -3762,7 +3762,7 @@ static MinicCoreLowerStatus try_lower_bit_field_read(
                     *value_id = current;
                     return MINIC_CORE_LOWER_OK;
                 }
-                return append_integer_conversion(
+                return minic_core_lower_internal_append_integer_conversion(
                     context, expression->span, value_type, current, value_id);
             }
             {
@@ -3774,7 +3774,7 @@ static MinicCoreLowerStatus try_lower_bit_field_read(
                     value_width != storage_width) {
                     return MINIC_CORE_LOWER_UNSUPPORTED;
                 }
-                status = append_integer_conversion(
+                status = minic_core_lower_internal_append_integer_conversion(
                     context, expression->span, value_type, current, &signed_current);
                 if (status != MINIC_CORE_LOWER_OK) {
                     return status;
@@ -4035,7 +4035,7 @@ static MinicCoreLowerStatus try_lower_bit_field_compound(
                 }
             }
             if (!minic_type_equal(bit_storage_type, bit_value_type)) {
-                bit_status = append_integer_conversion(context,
+                bit_status = minic_core_lower_internal_append_integer_conversion(context,
                                                        bit_target->span,
                                                        bit_value_type,
                                                        bit_current,
@@ -4094,7 +4094,7 @@ static MinicCoreLowerStatus try_lower_bit_field_compound(
                     return MINIC_CORE_LOWER_ERROR;
                 }
             }
-            bit_status = append_integer_conversion(context,
+            bit_status = minic_core_lower_internal_append_integer_conversion(context,
                                                    bit_target->span,
                                                    bit_common_type,
                                                    bit_current,
@@ -4103,12 +4103,12 @@ static MinicCoreLowerStatus try_lower_bit_field_compound(
                 return bit_status;
             }
             bit_address_type = context->function->values[bit_address].type;
-            bit_status = spill_scalar_value(
+            bit_status = minic_core_lower_internal_spill_scalar_value(
                 context, bit_target->span, bit_address_type, bit_address, &bit_address_object);
             if (bit_status != MINIC_CORE_LOWER_OK) {
                 return bit_status;
             }
-            bit_status = spill_scalar_value(context,
+            bit_status = minic_core_lower_internal_spill_scalar_value(context,
                                             bit_target->span,
                                             bit_common_type,
                                             bit_current_common,
@@ -4121,12 +4121,12 @@ static MinicCoreLowerStatus try_lower_bit_field_compound(
             if (bit_status != MINIC_CORE_LOWER_OK) {
                 return bit_status;
             }
-            bit_status = append_integer_conversion(
+            bit_status = minic_core_lower_internal_append_integer_conversion(
                 context, bit_source->span, bit_right_type, bit_rhs, &bit_rhs_common);
             if (bit_status != MINIC_CORE_LOWER_OK) {
                 return bit_status;
             }
-            bit_status = reload_scalar_value(context,
+            bit_status = minic_core_lower_internal_reload_scalar_value(context,
                                              bit_target->span,
                                              bit_common_type,
                                              bit_current_object,
@@ -4134,7 +4134,7 @@ static MinicCoreLowerStatus try_lower_bit_field_compound(
             if (bit_status != MINIC_CORE_LOWER_OK) {
                 return bit_status;
             }
-            bit_status = reload_scalar_value(context,
+            bit_status = minic_core_lower_internal_reload_scalar_value(context,
                                              bit_target->span,
                                              bit_address_type,
                                              bit_address_object,
@@ -4186,7 +4186,7 @@ static MinicCoreLowerStatus try_lower_bit_field_compound(
                     context->function, context->block_id, &bit_instruction, &bit_result)) {
                 return MINIC_CORE_LOWER_ERROR;
             }
-            bit_status = append_integer_conversion(context,
+            bit_status = minic_core_lower_internal_append_integer_conversion(context,
                                                    expression->span,
                                                    bit_value_type,
                                                    bit_result,
@@ -4197,7 +4197,7 @@ static MinicCoreLowerStatus try_lower_bit_field_compound(
             if (minic_type_equal(bit_storage_type, bit_value_type)) {
                 bit_field_storage = bit_stored_value;
             } else {
-                bit_status = append_integer_conversion(context,
+                bit_status = minic_core_lower_internal_append_integer_conversion(context,
                                                        expression->span,
                                                        bit_storage_type,
                                                        bit_stored_value,
@@ -4239,7 +4239,7 @@ static MinicCoreLowerStatus try_lower_bit_field_compound(
             }
             if (minic_type_is_signed_integer(bit_value_type)) {
                 if (!minic_type_equal(bit_storage_type, bit_value_type)) {
-                    bit_status = append_integer_conversion(context,
+                    bit_status = minic_core_lower_internal_append_integer_conversion(context,
                                                            expression->span,
                                                            bit_value_type,
                                                            bit_field_storage,
@@ -4401,1794 +4401,13 @@ static MinicCoreLowerStatus try_lower_bit_field_compound(
     return MINIC_CORE_LOWER_OK;
 }
 
-/* The following five expression families are intentionally retained in the
- * Core lowering owner until their private CFG/memory helper boundaries can
- * be moved without widening APIs or leaking target ABI semantics. */
+/* Expression operation families live in dedicated Core translation units;
+ * their private contract is in core_lower_internal.h. */
 /* conditional pruning, void conditionals, omitted-middle GNU ternary, scalar CFG joins. All candidate branches preserve original source order. */
-static MinicCoreLowerStatus core_try_lower_conditional(
-    MinicCoreLowerContext *context, const MinicExpression *expression,
-    MinicCoreValueId *value_id, bool *handled) {
-    *handled = false;
-    /* M57_CONSTANT_CONDITIONAL_PRUNING: if the frontend can prove
-       the condition, lower only the selected arm. Besides being smaller CFG,
-       this is semantically important for GNU compile-time choice idioms: the
-       dead arm may contain target builtins that are never evaluated. */
-    if (expression->kind == MINIC_EXPRESSION_CONDITIONAL &&
-        !expression->value.conditional.uses_condition_value &&
-        expression->value.conditional.when_true != MINIC_EXPRESSION_INVALID &&
-        expression->value.conditional.when_false != MINIC_EXPRESSION_INVALID &&
-        context->target != NULL) {
-        MinicConstValue condition_value;
-        MinicExpressionId selected_expression;
-        bool condition_is_zero;
-
-        if (minic_const_eval_integer(context->body->program,
-                                     context->target,
-                                     expression->value.conditional.condition,
-                                     &condition_value) &&
-            minic_const_value_is_zero(context->body->program,
-                                      context->target,
-                                      &condition_value,
-                                      &condition_is_zero)) {
-            selected_expression = condition_is_zero
-                                      ? expression->value.conditional.when_false
-                                      : expression->value.conditional.when_true;
-            if (minic_type_is_void(expression->type)) {
-                MinicCoreLowerStatus status;
-                MinicCoreValueId discarded_value;
-
-                status = lower_expression(context, selected_expression, &discarded_value);
-                if (status != MINIC_CORE_LOWER_OK) {
-                    { *handled = true; return status; }
-                }
-                if (discarded_value != MINIC_CORE_VALUE_INVALID) {
-                    { *handled = true; return MINIC_CORE_LOWER_ERROR; }
-                }
-                *value_id = MINIC_CORE_VALUE_INVALID;
-                { *handled = true; return MINIC_CORE_LOWER_OK; }
-            }
-            if (!core_memory_scalar_type(expression->type)) {
-                { *handled = true; return MINIC_CORE_LOWER_UNSUPPORTED; }
-            }
-            { *handled = true; return lower_scalar_assignment_value(
-                context, expression->type, selected_expression, value_id); }
-        }
-    }
-    /* M53_VOID_CONDITIONAL_EXPRESSION: C permits an effect-only
-       conditional when both arms have void type. Model it as CFG only; there is
-       deliberately no synthetic scalar result or spill object. */
-    if (expression->kind == MINIC_EXPRESSION_CONDITIONAL &&
-        !expression->value.conditional.uses_condition_value &&
-        expression->value.conditional.when_true != MINIC_EXPRESSION_INVALID &&
-        expression->value.conditional.when_false != MINIC_EXPRESSION_INVALID &&
-        minic_type_is_void(expression->type)) {
-        const MinicExpression *false_expression;
-        const MinicExpression *true_expression;
-        MinicCoreBlockId false_block;
-        MinicCoreBlockId merge_block;
-        MinicCoreBlockId true_block;
-        MinicCoreValueId discarded_value;
-        MinicCoreLowerStatus status;
-
-        true_expression = minic_c0_program_expression(
-            context->body->program, expression->value.conditional.when_true);
-        false_expression = minic_c0_program_expression(
-            context->body->program, expression->value.conditional.when_false);
-        if (true_expression == NULL || false_expression == NULL) {
-            { *handled = true; return MINIC_CORE_LOWER_ERROR; }
-        }
-        if (!minic_type_is_void(true_expression->type) ||
-            !minic_type_is_void(false_expression->type)) {
-            { *handled = true; return MINIC_CORE_LOWER_UNSUPPORTED; }
-        }
-        if (!minic_core_function_add_block(context->function, &true_block) ||
-            !minic_core_function_add_block(context->function, &false_block) ||
-            !minic_core_function_add_block(context->function, &merge_block)) {
-            { *handled = true; return MINIC_CORE_LOWER_ERROR; }
-        }
-        status = lower_condition_branch(context,
-                                        expression->value.conditional.condition,
-                                        expression->span,
-                                        true_block,
-                                        false_block);
-        if (status != MINIC_CORE_LOWER_OK) {
-            { *handled = true; return status; }
-        }
-
-        context->block_id = true_block;
-        status = lower_expression(
-            context, expression->value.conditional.when_true, &discarded_value);
-        if (status != MINIC_CORE_LOWER_OK) {
-            { *handled = true; return status; }
-        }
-        if (discarded_value != MINIC_CORE_VALUE_INVALID) {
-            { *handled = true; return MINIC_CORE_LOWER_ERROR; }
-        }
-        status = set_branch(context, context->block_id, expression->span, merge_block);
-        if (status != MINIC_CORE_LOWER_OK) {
-            { *handled = true; return status; }
-        }
-
-        context->block_id = false_block;
-        status = lower_expression(
-            context, expression->value.conditional.when_false, &discarded_value);
-        if (status != MINIC_CORE_LOWER_OK) {
-            { *handled = true; return status; }
-        }
-        if (discarded_value != MINIC_CORE_VALUE_INVALID) {
-            { *handled = true; return MINIC_CORE_LOWER_ERROR; }
-        }
-        status = set_branch(context, context->block_id, expression->span, merge_block);
-        if (status != MINIC_CORE_LOWER_OK) {
-            { *handled = true; return status; }
-        }
-
-        context->block_id = merge_block;
-        *value_id = MINIC_CORE_VALUE_INVALID;
-        { *handled = true; return MINIC_CORE_LOWER_OK; }
-    }
-    /* BATCH_N_GNU_OMITTED_MIDDLE_CONDITIONAL: GNU `a ?: b` reuses the
-       already-evaluated condition value on the true path.  Materialize that
-       converted value before branching so `a` is evaluated exactly once; the
-       false path alone evaluates and overwrites with `b`. */
-    if (expression->kind == MINIC_EXPRESSION_CONDITIONAL &&
-        expression->value.conditional.uses_condition_value) {
-        const MinicExpression *condition_expression;
-        const MinicExpression *false_expression;
-        MinicCoreBlockId false_block;
-        MinicCoreBlockId merge_block;
-        MinicCoreBlockId true_block;
-        MinicCoreBlockId branch_true;
-        MinicCoreBlockId branch_false;
-        MinicCoreObjectId result_object;
-        MinicCoreValueId condition_value;
-        MinicCoreValueId true_value;
-        MinicCoreValueId false_value;
-        MinicCoreValueId branch_value;
-        MinicCoreLowerStatus status;
-        MinicCoreInstruction zero_test;
-        MinicCoreTerminator terminator;
-        MinicType assignment_type;
-        MinicType result_type;
-
-        if (expression->value.conditional.condition == MINIC_EXPRESSION_INVALID ||
-            expression->value.conditional.when_true != expression->value.conditional.condition ||
-            expression->value.conditional.when_false == MINIC_EXPRESSION_INVALID ||
-            !core_scalar_expression_value_type(context->body, expression, &result_type) ||
-            !core_memory_scalar_type(result_type)) {
-            { *handled = true; return MINIC_CORE_LOWER_UNSUPPORTED; }
-        }
-        condition_expression = minic_c0_program_expression(
-            context->body->program, expression->value.conditional.condition);
-        false_expression = minic_c0_program_expression(
-            context->body->program, expression->value.conditional.when_false);
-        if (condition_expression == NULL || false_expression == NULL ||
-            (!minic_type_is_integer(condition_expression->type) &&
-             !minic_type_is_pointer(condition_expression->type)) ||
-            !minic_c0_assignment_compatible(context->body->program,
-                                            result_type,
-                                            expression->value.conditional.condition) ||
-            !minic_c0_assignment_compatible(context->body->program,
-                                            result_type,
-                                            expression->value.conditional.when_false)) {
-            { *handled = true; return MINIC_CORE_LOWER_UNSUPPORTED; }
-        }
-        if (!minic_core_function_add_object(
-                context->function, expression->span, result_type, &result_object) ||
-            !minic_core_function_add_block(context->function, &true_block) ||
-            !minic_core_function_add_block(context->function, &false_block) ||
-            !minic_core_function_add_block(context->function, &merge_block)) {
-            { *handled = true; return MINIC_CORE_LOWER_ERROR; }
-        }
-
-        status = lower_expression(
-            context, expression->value.conditional.condition, &condition_value);
-        if (status != MINIC_CORE_LOWER_OK) {
-            { *handled = true; return status; }
-        }
-        if (condition_value >= context->function->value_count) {
-            { *handled = true; return MINIC_CORE_LOWER_ERROR; }
-        }
-        if (minic_type_is_integer(result_type) &&
-            minic_type_is_integer(condition_expression->type)) {
-            if (!minic_c0_integer_assignment_value_type(
-                    context->body->program,
-                    result_type,
-                    expression->value.conditional.condition,
-                    &assignment_type)) {
-                { *handled = true; return MINIC_CORE_LOWER_UNSUPPORTED; }
-            }
-            status = append_integer_conversion(context,
-                                               condition_expression->span,
-                                               assignment_type,
-                                               condition_value,
-                                               &true_value);
-        } else if (minic_type_is_pointer(result_type) &&
-                   (minic_type_is_pointer(condition_expression->type) ||
-                    minic_c0_expression_is_null_pointer_constant_v0(
-                        context->body->program,
-                        expression->value.conditional.condition))) {
-            status = append_scalar_bitcast(context,
-                                           condition_expression->span,
-                                           result_type,
-                                           condition_value,
-                                           &true_value);
-        } else {
-            { *handled = true; return MINIC_CORE_LOWER_UNSUPPORTED; }
-        }
-        if (status != MINIC_CORE_LOWER_OK) {
-            { *handled = true; return status; }
-        }
-        status = store_scalar_value(context,
-                                    condition_expression->span,
-                                    result_type,
-                                    result_object,
-                                    true_value);
-        if (status != MINIC_CORE_LOWER_OK) {
-            { *handled = true; return status; }
-        }
-
-        branch_value = condition_value;
-        branch_true = true_block;
-        branch_false = false_block;
-        if (minic_type_is_pointer(condition_expression->type)) {
-            MinicCoreBlockId original_true;
-
-            if (!minic_type_is_pointer(context->function->values[branch_value].type)) {
-                { *handled = true; return MINIC_CORE_LOWER_ERROR; }
-            }
-            (void)memset(&zero_test, 0, sizeof(zero_test));
-            zero_test.kind = MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO;
-            zero_test.span = expression->span;
-            zero_test.type = minic_type_int();
-            zero_test.result = MINIC_CORE_VALUE_INVALID;
-            zero_test.value.operand = branch_value;
-            if (!minic_core_function_append_value_instruction(
-                    context->function, context->block_id, &zero_test, &branch_value)) {
-                { *handled = true; return MINIC_CORE_LOWER_ERROR; }
-            }
-            original_true = branch_true;
-            branch_true = branch_false;
-            branch_false = original_true;
-        } else if (!minic_type_is_integer(context->function->values[branch_value].type)) {
-            { *handled = true; return MINIC_CORE_LOWER_ERROR; }
-        }
-        (void)memset(&terminator, 0, sizeof(terminator));
-        terminator.kind = MINIC_CORE_TERMINATOR_CONDITIONAL_BRANCH;
-        terminator.span = expression->span;
-        terminator.return_value = MINIC_CORE_VALUE_INVALID;
-        terminator.conditional.condition = branch_value;
-        terminator.conditional.when_true = branch_true;
-        terminator.conditional.when_false = branch_false;
-        if (!minic_core_function_set_terminator(
-                context->function, context->block_id, &terminator)) {
-            { *handled = true; return MINIC_CORE_LOWER_ERROR; }
-        }
-
-        context->block_id = true_block;
-        status = set_branch(context, context->block_id, expression->span, merge_block);
-        if (status != MINIC_CORE_LOWER_OK) {
-            { *handled = true; return status; }
-        }
-
-        context->block_id = false_block;
-        status = lower_scalar_assignment_value(context,
-                                               result_type,
-                                               expression->value.conditional.when_false,
-                                               &false_value);
-        if (status != MINIC_CORE_LOWER_OK) {
-            { *handled = true; return status; }
-        }
-        status = store_scalar_value(context,
-                                    false_expression->span,
-                                    result_type,
-                                    result_object,
-                                    false_value);
-        if (status != MINIC_CORE_LOWER_OK) {
-            { *handled = true; return status; }
-        }
-        status = set_branch(context, context->block_id, expression->span, merge_block);
-        if (status != MINIC_CORE_LOWER_OK) {
-            { *handled = true; return status; }
-        }
-
-        context->block_id = merge_block;
-        { *handled = true; return reload_scalar_value(
-            context, expression->span, result_type, result_object, value_id); }
-    }
-    if (expression->kind == MINIC_EXPRESSION_CONDITIONAL) {
-        const MinicExpression *false_expression;
-        const MinicExpression *true_expression;
-        MinicCoreBlockId false_block;
-        MinicCoreBlockId merge_block;
-        MinicCoreBlockId true_block;
-        MinicCoreObjectId result_object;
-        MinicCoreValueId arm_value;
-        MinicCoreLowerStatus status;
-        MinicType false_type;
-        MinicType result_type;
-        MinicType true_type;
-
-        /* M60_POINTER_CONDITIONAL_VALUE: C conditional values may be pointer
-           scalars as well as integers. The existing arm conversion, spill and
-           reload machinery is already scalar-generic, so keep the semantic
-           restriction at the Core scalar boundary rather than at integer-only. */
-        if (expression->value.conditional.uses_condition_value ||
-            expression->value.conditional.when_true == MINIC_EXPRESSION_INVALID ||
-            expression->value.conditional.when_false == MINIC_EXPRESSION_INVALID ||
-            !core_scalar_expression_value_type(context->body, expression, &result_type) ||
-            !core_memory_scalar_type(result_type)) {
-            { *handled = true; return MINIC_CORE_LOWER_UNSUPPORTED; }
-        }
-        true_expression = minic_c0_program_expression(context->body->program,
-                                                      expression->value.conditional.when_true);
-        false_expression = minic_c0_program_expression(context->body->program,
-                                                       expression->value.conditional.when_false);
-        if (true_expression == NULL || false_expression == NULL) {
-            { *handled = true; return MINIC_CORE_LOWER_ERROR; }
-        }
-        /* M55_SCALAR_CONDITIONAL_ARM_CONVERSION: the frontend owns the
-           conditional result type. The selected arm undergoes the same scalar
-           conversion as assignment to that type; its source type need not
-           already be identical. */
-        if (!core_scalar_expression_value_type(context->body, true_expression, &true_type) ||
-            !core_scalar_expression_value_type(context->body, false_expression, &false_type)) {
-            { *handled = true; return MINIC_CORE_LOWER_UNSUPPORTED; }
-        }
-        if (!minic_core_function_add_object(
-                context->function, expression->span, result_type, &result_object) ||
-            !minic_core_function_add_block(context->function, &true_block) ||
-            !minic_core_function_add_block(context->function, &false_block) ||
-            !minic_core_function_add_block(context->function, &merge_block)) {
-            { *handled = true; return MINIC_CORE_LOWER_ERROR; }
-        }
-
-        status = lower_condition_branch(context,
-                                        expression->value.conditional.condition,
-                                        expression->span,
-                                        true_block,
-                                        false_block);
-        if (status != MINIC_CORE_LOWER_OK) {
-            { *handled = true; return status; }
-        }
-
-        context->block_id = true_block;
-        status = lower_scalar_assignment_value(context,
-                                               result_type,
-                                               expression->value.conditional.when_true,
-                                               &arm_value);
-        if (status != MINIC_CORE_LOWER_OK) {
-            { *handled = true; return status; }
-        }
-        status = store_scalar_value(
-            context, true_expression->span, result_type, result_object, arm_value);
-        if (status != MINIC_CORE_LOWER_OK) {
-            { *handled = true; return status; }
-        }
-        status = set_branch(context, context->block_id, expression->span, merge_block);
-        if (status != MINIC_CORE_LOWER_OK) {
-            { *handled = true; return status; }
-        }
-
-        context->block_id = false_block;
-        status = lower_scalar_assignment_value(context,
-                                               result_type,
-                                               expression->value.conditional.when_false,
-                                               &arm_value);
-        if (status != MINIC_CORE_LOWER_OK) {
-            { *handled = true; return status; }
-        }
-        status = store_scalar_value(
-            context, false_expression->span, result_type, result_object, arm_value);
-        if (status != MINIC_CORE_LOWER_OK) {
-            { *handled = true; return status; }
-        }
-        status = set_branch(context, context->block_id, expression->span, merge_block);
-        if (status != MINIC_CORE_LOWER_OK) {
-            { *handled = true; return status; }
-        }
-
-        context->block_id = merge_block;
-        { *handled = true; return reload_scalar_value(
-            context, expression->span, result_type, result_object, value_id); }
-    }
-    return MINIC_CORE_LOWER_OK;
-}
-
 /* comma sequencing and short-circuit logical materialization. All candidate branches preserve original source order. */
-static MinicCoreLowerStatus core_try_lower_sequenced(
-    MinicCoreLowerContext *context, const MinicExpression *expression,
-    MinicCoreValueId *value_id, MinicExpressionId expression_id, bool *handled) {
-    MinicCoreInstruction instruction;
-    *handled = false;
-    /* M73_COMMA_EXPRESSION_VALUE: the left operand is sequenced for
-       side effects and its scalar value is discarded; the right operand
-       supplies the value of the whole comma expression. Unsupported left
-       operand forms remain fail-closed through lower_expression(). */
-    if (expression->kind == MINIC_EXPRESSION_BINARY &&
-        expression->value.binary.operator_kind == MINIC_BINARY_COMMA) {
-        const MinicExpression *discarded_expression;
-        MinicStatement discarded_statement;
-        MinicCoreLowerStatus status;
-
-        discarded_expression = minic_c0_program_expression(
-            context->body->program, expression->value.binary.left);
-        if (discarded_expression == NULL) {
-            { *handled = true; return MINIC_CORE_LOWER_ERROR; }
-        }
-        (void)memset(&discarded_statement, 0, sizeof(discarded_statement));
-        discarded_statement.kind = MINIC_STATEMENT_EXPRESSION;
-        discarded_statement.span = discarded_expression->span;
-        discarded_statement.expression = expression->value.binary.left;
-        status = lower_expression_statement(context, &discarded_statement);
-        if (status != MINIC_CORE_LOWER_OK) {
-            if (getenv("CORE_FAST_TRACE") != NULL) {
-                const MinicExpression *right_expression =
-                    minic_c0_program_expression(context->body->program,
-                                                expression->value.binary.right);
-                (void)fprintf(stderr,
-                              "CORE_COMMA_TRACE function=%s stage=left status=%d left_kind=%d right_kind=%d\n",
-                              context->source_function != NULL ? context->source_function->name : "?",
-                              (int)status,
-                              discarded_expression != NULL ? (int)discarded_expression->kind : -1,
-                              right_expression != NULL ? (int)right_expression->kind : -1);
-            }
-            { *handled = true; return status; }
-        }
-        status = lower_expression(context, expression->value.binary.right, value_id);
-        if (status != MINIC_CORE_LOWER_OK && getenv("CORE_FAST_TRACE") != NULL) {
-            const MinicExpression *right_expression =
-                minic_c0_program_expression(context->body->program,
-                                            expression->value.binary.right);
-            (void)fprintf(stderr,
-                          "CORE_COMMA_TRACE function=%s stage=right status=%d left_kind=%d right_kind=%d right_base=%d right_ptr=%u\n",
-                          context->source_function != NULL ? context->source_function->name : "?",
-                          (int)status,
-                          discarded_expression != NULL ? (int)discarded_expression->kind : -1,
-                          right_expression != NULL ? (int)right_expression->kind : -1,
-                          right_expression != NULL ? (int)right_expression->type.base_kind : -1,
-                          right_expression != NULL ? right_expression->type.pointer_depth : 0U);
-        }
-        { *handled = true; return status; }
-    }
-
-    /* M58_LOGICAL_OR_VALUE: lower_condition_branch already owns the
-       short-circuit semantics for both && and ||. Their value materialization
-       is identical: branch to true/false, store 1/0, then reload. */
-    if (expression->kind == MINIC_EXPRESSION_BINARY &&
-        (expression->value.binary.operator_kind == MINIC_BINARY_LOGICAL_AND ||
-         expression->value.binary.operator_kind == MINIC_BINARY_LOGICAL_OR)) {
-        MinicCoreBlockId false_block;
-        MinicCoreBlockId merge_block;
-        MinicCoreBlockId true_block;
-        MinicCoreObjectId result_object;
-        MinicCoreValueId address_value;
-        MinicCoreValueId constant_value;
-        MinicCoreLowerStatus status;
-        MinicType result_pointer_type;
-
-        if (!minic_type_equal(expression->type, minic_type_int()) ||
-            !minic_type_pointer_to(minic_type_int(), &result_pointer_type)) {
-            { *handled = true; return MINIC_CORE_LOWER_ERROR; }
-        }
-        if (!minic_core_function_add_object(
-                context->function, expression->span, minic_type_int(), &result_object) ||
-            !minic_core_function_add_block(context->function, &true_block) ||
-            !minic_core_function_add_block(context->function, &false_block) ||
-            !minic_core_function_add_block(context->function, &merge_block)) {
-            { *handled = true; return MINIC_CORE_LOWER_ERROR; }
-        }
-
-        status = lower_condition_branch(
-            context, expression_id, expression->span, true_block, false_block);
-        if (status != MINIC_CORE_LOWER_OK) {
-            { *handled = true; return status; }
-        }
-
-        context->block_id = false_block;
-        (void)memset(&instruction, 0, sizeof(instruction));
-        instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
-        instruction.span = expression->span;
-        instruction.type = minic_type_int();
-        instruction.result = MINIC_CORE_VALUE_INVALID;
-        instruction.value.integer_value = 0;
-        if (!minic_core_function_append_value_instruction(
-                context->function, context->block_id, &instruction, &constant_value)) {
-            { *handled = true; return MINIC_CORE_LOWER_ERROR; }
-        }
-        (void)memset(&instruction, 0, sizeof(instruction));
-        instruction.kind = MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS;
-        instruction.span = expression->span;
-        instruction.type = result_pointer_type;
-        instruction.result = MINIC_CORE_VALUE_INVALID;
-        instruction.value.object_id = result_object;
-        if (!minic_core_function_append_value_instruction(
-                context->function, context->block_id, &instruction, &address_value)) {
-            { *handled = true; return MINIC_CORE_LOWER_ERROR; }
-        }
-        (void)memset(&instruction, 0, sizeof(instruction));
-        instruction.kind = MINIC_CORE_INSTRUCTION_STORE;
-        instruction.span = expression->span;
-        instruction.type = minic_type_void();
-        instruction.result = MINIC_CORE_VALUE_INVALID;
-        instruction.value.store.address = address_value;
-        instruction.value.store.stored_value = constant_value;
-        instruction.value.store.is_volatile = false;
-        if (!minic_core_function_append_effect_instruction(
-                context->function, context->block_id, &instruction)) {
-            { *handled = true; return MINIC_CORE_LOWER_ERROR; }
-        }
-        status = set_branch(context, context->block_id, expression->span, merge_block);
-        if (status != MINIC_CORE_LOWER_OK) {
-            { *handled = true; return status; }
-        }
-
-        context->block_id = true_block;
-        (void)memset(&instruction, 0, sizeof(instruction));
-        instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
-        instruction.span = expression->span;
-        instruction.type = minic_type_int();
-        instruction.result = MINIC_CORE_VALUE_INVALID;
-        instruction.value.integer_value = 1;
-        if (!minic_core_function_append_value_instruction(
-                context->function, context->block_id, &instruction, &constant_value)) {
-            { *handled = true; return MINIC_CORE_LOWER_ERROR; }
-        }
-        (void)memset(&instruction, 0, sizeof(instruction));
-        instruction.kind = MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS;
-        instruction.span = expression->span;
-        instruction.type = result_pointer_type;
-        instruction.result = MINIC_CORE_VALUE_INVALID;
-        instruction.value.object_id = result_object;
-        if (!minic_core_function_append_value_instruction(
-                context->function, context->block_id, &instruction, &address_value)) {
-            { *handled = true; return MINIC_CORE_LOWER_ERROR; }
-        }
-        (void)memset(&instruction, 0, sizeof(instruction));
-        instruction.kind = MINIC_CORE_INSTRUCTION_STORE;
-        instruction.span = expression->span;
-        instruction.type = minic_type_void();
-        instruction.result = MINIC_CORE_VALUE_INVALID;
-        instruction.value.store.address = address_value;
-        instruction.value.store.stored_value = constant_value;
-        instruction.value.store.is_volatile = false;
-        if (!minic_core_function_append_effect_instruction(
-                context->function, context->block_id, &instruction)) {
-            { *handled = true; return MINIC_CORE_LOWER_ERROR; }
-        }
-        status = set_branch(context, context->block_id, expression->span, merge_block);
-        if (status != MINIC_CORE_LOWER_OK) {
-            { *handled = true; return status; }
-        }
-
-        context->block_id = merge_block;
-        (void)memset(&instruction, 0, sizeof(instruction));
-        instruction.kind = MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS;
-        instruction.span = expression->span;
-        instruction.type = result_pointer_type;
-        instruction.result = MINIC_CORE_VALUE_INVALID;
-        instruction.value.object_id = result_object;
-        if (!minic_core_function_append_value_instruction(
-                context->function, context->block_id, &instruction, &address_value)) {
-            { *handled = true; return MINIC_CORE_LOWER_ERROR; }
-        }
-        (void)memset(&instruction, 0, sizeof(instruction));
-        instruction.kind = MINIC_CORE_INSTRUCTION_LOAD;
-        instruction.span = expression->span;
-        instruction.type = minic_type_int();
-        instruction.result = MINIC_CORE_VALUE_INVALID;
-        instruction.value.load.address = address_value;
-        instruction.value.load.is_volatile = false;
-        { *handled = true; return minic_core_function_append_value_instruction(
-                   context->function, context->block_id, &instruction, value_id)
-                   ? MINIC_CORE_LOWER_OK
-                   : MINIC_CORE_LOWER_ERROR; }
-    }
-    return MINIC_CORE_LOWER_OK;
-}
-
 /* GNU integer leaf builtins, bit helpers and capability-gated scalar intrinsics. All candidate branches preserve original source order. */
-static MinicCoreLowerStatus core_try_lower_builtin_unary(
-    MinicCoreLowerContext *context, const MinicExpression *expression,
-    MinicCoreValueId *value_id, bool *handled) {
-    MinicCoreInstruction instruction;
-    *handled = false;
-    /* M129_LEAF_EXPRESSION_OWNERS: __builtin_isdigit is a pure integer leaf.
-       Preserve the existing direct-backend contract without target-specific
-       instructions: convert once to unsigned int, subtract '0' modulo the
-       unsigned width, then compare against 10.  The unsigned range test is
-       true exactly for the ten decimal digit codes, including for negative
-       int inputs where the subtraction wraps above the range. */
-    if (expression->kind == MINIC_EXPRESSION_BUILTIN_UNARY &&
-        expression->value.builtin_unary.operator_kind == MINIC_BUILTIN_UNARY_CONSTANT_P) {
-        MinicConstValue ignored_constant;
-        bool is_constant;
-
-        is_constant = core_const_eval_integer_with_locals(
-            context, expression->value.builtin_unary.operand, &ignored_constant);
-        (void)memset(&instruction, 0, sizeof(instruction));
-        instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
-        instruction.span = expression->span;
-        instruction.type = minic_type_int();
-        instruction.result = MINIC_CORE_VALUE_INVALID;
-        instruction.value.integer_value = is_constant ? 1 : 0;
-        { *handled = true; return minic_core_function_append_value_instruction(
-                   context->function, context->block_id, &instruction, value_id)
-                   ? MINIC_CORE_LOWER_OK
-                   : MINIC_CORE_LOWER_ERROR; }
-    }
-
-    if (expression->kind == MINIC_EXPRESSION_BUILTIN_UNARY &&
-        expression->value.builtin_unary.operator_kind == MINIC_BUILTIN_UNARY_ISDIGIT) {
-        const MinicExpression *operand;
-        MinicCoreInstruction builtin_instruction;
-        MinicCoreLowerStatus status;
-        MinicCoreValueId operand_value;
-        MinicCoreValueId normalized_value;
-        MinicCoreValueId zero_code;
-        MinicCoreValueId offset_value;
-        MinicCoreValueId digit_count;
-
-        operand = minic_c0_program_expression(
-            context->body->program, expression->value.builtin_unary.operand);
-        if (operand == NULL || !minic_type_equal(operand->type, minic_type_int()) ||
-            !minic_type_equal(expression->type, minic_type_int())) {
-            { *handled = true; return MINIC_CORE_LOWER_UNSUPPORTED; }
-        }
-        status = lower_expression(
-            context, expression->value.builtin_unary.operand, &operand_value);
-        if (status != MINIC_CORE_LOWER_OK) {
-            { *handled = true; return status; }
-        }
-        status = append_integer_conversion(context,
-                                           operand->span,
-                                           minic_type_unsigned_int(),
-                                           operand_value,
-                                           &normalized_value);
-        if (status != MINIC_CORE_LOWER_OK) {
-            { *handled = true; return status; }
-        }
-        (void)memset(&builtin_instruction, 0, sizeof(builtin_instruction));
-        builtin_instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
-        builtin_instruction.span = expression->span;
-        builtin_instruction.type = minic_type_unsigned_int();
-        builtin_instruction.result = MINIC_CORE_VALUE_INVALID;
-        builtin_instruction.value.integer_value = 48;
-        if (!minic_core_function_append_value_instruction(
-                context->function, context->block_id, &builtin_instruction, &zero_code)) {
-            { *handled = true; return MINIC_CORE_LOWER_ERROR; }
-        }
-        (void)memset(&builtin_instruction, 0, sizeof(builtin_instruction));
-        builtin_instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_SUBTRACT;
-        builtin_instruction.span = expression->span;
-        builtin_instruction.type = minic_type_unsigned_int();
-        builtin_instruction.result = MINIC_CORE_VALUE_INVALID;
-        builtin_instruction.value.binary.left = normalized_value;
-        builtin_instruction.value.binary.right = zero_code;
-        if (!minic_core_function_append_value_instruction(
-                context->function, context->block_id, &builtin_instruction, &offset_value)) {
-            { *handled = true; return MINIC_CORE_LOWER_ERROR; }
-        }
-        (void)memset(&builtin_instruction, 0, sizeof(builtin_instruction));
-        builtin_instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
-        builtin_instruction.span = expression->span;
-        builtin_instruction.type = minic_type_unsigned_int();
-        builtin_instruction.result = MINIC_CORE_VALUE_INVALID;
-        builtin_instruction.value.integer_value = 10;
-        if (!minic_core_function_append_value_instruction(
-                context->function, context->block_id, &builtin_instruction, &digit_count)) {
-            { *handled = true; return MINIC_CORE_LOWER_ERROR; }
-        }
-        (void)memset(&builtin_instruction, 0, sizeof(builtin_instruction));
-        builtin_instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_LESS;
-        builtin_instruction.span = expression->span;
-        builtin_instruction.type = minic_type_int();
-        builtin_instruction.result = MINIC_CORE_VALUE_INVALID;
-        builtin_instruction.value.binary.left = offset_value;
-        builtin_instruction.value.binary.right = digit_count;
-        { *handled = true; return minic_core_function_append_value_instruction(
-                   context->function, context->block_id, &builtin_instruction, value_id)
-                   ? MINIC_CORE_LOWER_OK
-                   : MINIC_CORE_LOWER_ERROR; }
-    }
-
-    /* M175F_RUNTIME_FFSLL_OWNER: __builtin_ffsll returns a one-based
-       least-significant-set-bit index and zero for a zero operand.  Reuse the
-       existing unsigned-long CTZ semantic owner instead of introducing a
-       target-specific FFS instruction.  RV64's long and long long are both
-       64-bit, so converting signed long long to unsigned long preserves the
-       operand bit pattern modulo 2^64.  The double zero-test yields a canonical
-       int nonzero mask; multiplying by it maps the CTZ zero sentinel (64) back
-       to the required ffsll zero result. */
-    if (expression->kind == MINIC_EXPRESSION_BUILTIN_UNARY &&
-        expression->value.builtin_unary.operator_kind == MINIC_BUILTIN_UNARY_FFSLL) {
-        const MinicExpression *operand;
-        MinicCoreInstruction builtin_instruction;
-        MinicCoreLowerStatus status;
-        MinicCoreValueId operand_value;
-        MinicCoreValueId unsigned_value;
-        MinicCoreValueId trailing_zero_count;
-        MinicCoreValueId one;
-        MinicCoreValueId one_based_index;
-        MinicCoreValueId is_zero;
-        MinicCoreValueId is_nonzero;
-
-        operand = minic_c0_program_expression(
-            context->body->program, expression->value.builtin_unary.operand);
-        if (operand == NULL || !minic_type_equal(operand->type, minic_type_long_long()) ||
-            !minic_type_equal(expression->type, minic_type_int())) {
-            { *handled = true; return MINIC_CORE_LOWER_UNSUPPORTED; }
-        }
-        status = lower_expression(
-            context, expression->value.builtin_unary.operand, &operand_value);
-        if (status != MINIC_CORE_LOWER_OK) {
-            { *handled = true; return status; }
-        }
-        if (operand_value >= context->function->value_count ||
-            !minic_type_equal(context->function->values[operand_value].type,
-                              minic_type_long_long())) {
-            { *handled = true; return MINIC_CORE_LOWER_ERROR; }
-        }
-        status = append_integer_conversion(
-            context, operand->span, minic_type_unsigned_long(), operand_value, &unsigned_value);
-        if (status != MINIC_CORE_LOWER_OK) {
-            { *handled = true; return status; }
-        }
-
-        (void)memset(&builtin_instruction, 0, sizeof(builtin_instruction));
-        builtin_instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_CTZ;
-        builtin_instruction.span = expression->span;
-        builtin_instruction.type = minic_type_int();
-        builtin_instruction.result = MINIC_CORE_VALUE_INVALID;
-        builtin_instruction.value.operand = unsigned_value;
-        if (!minic_core_function_append_value_instruction(
-                context->function,
-                context->block_id,
-                &builtin_instruction,
-                &trailing_zero_count)) {
-            { *handled = true; return MINIC_CORE_LOWER_ERROR; }
-        }
-
-        (void)memset(&builtin_instruction, 0, sizeof(builtin_instruction));
-        builtin_instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
-        builtin_instruction.span = expression->span;
-        builtin_instruction.type = minic_type_int();
-        builtin_instruction.result = MINIC_CORE_VALUE_INVALID;
-        builtin_instruction.value.integer_value = 1;
-        if (!minic_core_function_append_value_instruction(
-                context->function, context->block_id, &builtin_instruction, &one)) {
-            { *handled = true; return MINIC_CORE_LOWER_ERROR; }
-        }
-
-        (void)memset(&builtin_instruction, 0, sizeof(builtin_instruction));
-        builtin_instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_ADD;
-        builtin_instruction.span = expression->span;
-        builtin_instruction.type = minic_type_int();
-        builtin_instruction.result = MINIC_CORE_VALUE_INVALID;
-        builtin_instruction.value.binary.left = trailing_zero_count;
-        builtin_instruction.value.binary.right = one;
-        if (!minic_core_function_append_value_instruction(
-                context->function, context->block_id, &builtin_instruction, &one_based_index)) {
-            { *handled = true; return MINIC_CORE_LOWER_ERROR; }
-        }
-
-        (void)memset(&builtin_instruction, 0, sizeof(builtin_instruction));
-        builtin_instruction.kind = MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO;
-        builtin_instruction.span = expression->span;
-        builtin_instruction.type = minic_type_int();
-        builtin_instruction.result = MINIC_CORE_VALUE_INVALID;
-        builtin_instruction.value.operand = unsigned_value;
-        if (!minic_core_function_append_value_instruction(
-                context->function, context->block_id, &builtin_instruction, &is_zero)) {
-            { *handled = true; return MINIC_CORE_LOWER_ERROR; }
-        }
-
-        (void)memset(&builtin_instruction, 0, sizeof(builtin_instruction));
-        builtin_instruction.kind = MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO;
-        builtin_instruction.span = expression->span;
-        builtin_instruction.type = minic_type_int();
-        builtin_instruction.result = MINIC_CORE_VALUE_INVALID;
-        builtin_instruction.value.operand = is_zero;
-        if (!minic_core_function_append_value_instruction(
-                context->function, context->block_id, &builtin_instruction, &is_nonzero)) {
-            { *handled = true; return MINIC_CORE_LOWER_ERROR; }
-        }
-
-        (void)memset(&builtin_instruction, 0, sizeof(builtin_instruction));
-        builtin_instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_MULTIPLY;
-        builtin_instruction.span = expression->span;
-        builtin_instruction.type = minic_type_int();
-        builtin_instruction.result = MINIC_CORE_VALUE_INVALID;
-        builtin_instruction.value.binary.left = one_based_index;
-        builtin_instruction.value.binary.right = is_nonzero;
-        { *handled = true; return minic_core_function_append_value_instruction(
-                   context->function, context->block_id, &builtin_instruction, value_id)
-                   ? MINIC_CORE_LOWER_OK
-                   : MINIC_CORE_LOWER_ERROR; }
-    }
-
-    /* SQLite 3.54.1 glibc __bswap_{16,32,64} pressure: lower once to
-     * target-neutral integer Core operations. RV64 and x86 both reuse the
-     * existing shift/mask/OR semantics; ISA lowering stays target-owned.
-     * Do NOT inline the source operand N times: bswap(f(i++)) is evaluated
-     * exactly once. The intermediate type is 32 bits for bswap16 and the
-     * corresponding unsigned width for bswap32/64. */
-    if (expression->kind == MINIC_EXPRESSION_BUILTIN_UNARY &&
-        (expression->value.builtin_unary.operator_kind == MINIC_BUILTIN_UNARY_BSWAP16 ||
-         expression->value.builtin_unary.operator_kind == MINIC_BUILTIN_UNARY_BSWAP32 ||
-         expression->value.builtin_unary.operator_kind == MINIC_BUILTIN_UNARY_BSWAP64)) {
-        const MinicExpression *operand;
-        MinicBuiltinUnaryOperator opcode;
-        MinicType work_type, result_type;
-        MinicCoreValueId input, accumulator, term, mask, shift, next_value;
-        MinicCoreInstruction bit;
-        MinicCoreLowerStatus status;
-        size_t byte_count, i;
-
-        opcode = expression->value.builtin_unary.operator_kind;
-        result_type = opcode == MINIC_BUILTIN_UNARY_BSWAP16
-                          ? minic_type_unsigned_short()
-                          : opcode == MINIC_BUILTIN_UNARY_BSWAP32
-                                ? minic_type_unsigned_int()
-                                : minic_type_unsigned_long_long();
-        work_type = opcode == MINIC_BUILTIN_UNARY_BSWAP16
-                        ? minic_type_unsigned_int() : result_type;
-        byte_count = opcode == MINIC_BUILTIN_UNARY_BSWAP16 ? 2U
-                     : opcode == MINIC_BUILTIN_UNARY_BSWAP32 ? 4U : 8U;
-        operand = minic_c0_program_expression(
-            context->body->program, expression->value.builtin_unary.operand);
-        if (operand == NULL || !minic_type_equal(expression->type, result_type) ||
-            !minic_type_equal(operand->type, result_type))
-            { *handled = true; return MINIC_CORE_LOWER_UNSUPPORTED; }
-        status = lower_expression(context, expression->value.builtin_unary.operand, &input);
-        if (status != MINIC_CORE_LOWER_OK) { *handled = true; return status; }
-        if (byte_count == 2U) {
-            status = append_integer_conversion(
-                context, expression->span, work_type, input, &input);
-            if (status != MINIC_CORE_LOWER_OK) { *handled = true; return status; }
-        }
-        (void)memset(&bit, 0, sizeof(bit));
-        bit.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
-        bit.span = expression->span;
-        bit.type = work_type;
-        bit.result = MINIC_CORE_VALUE_INVALID;
-        bit.value.integer_value = 0;
-        if (!minic_core_function_append_value_instruction(
-                context->function, context->block_id, &bit, &accumulator))
-            { *handled = true; return MINIC_CORE_LOWER_ERROR; }
-        bit.value.integer_value = 255;
-        if (!minic_core_function_append_value_instruction(
-                context->function, context->block_id, &bit, &mask))
-            { *handled = true; return MINIC_CORE_LOWER_ERROR; }
-        for (i = 0U; i < byte_count; ++i) {
-            bit.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
-            bit.type = work_type;
-            bit.value.integer_value = (int64_t)(i * 8U);
-            if (!minic_core_function_append_value_instruction(
-                    context->function, context->block_id, &bit, &shift))
-                { *handled = true; return MINIC_CORE_LOWER_ERROR; }
-            bit.kind = MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_RIGHT;
-            bit.value.binary.left = input;
-            bit.value.binary.right = shift;
-            if (!minic_core_function_append_value_instruction(
-                    context->function, context->block_id, &bit, &term))
-                { *handled = true; return MINIC_CORE_LOWER_ERROR; }
-            bit.kind = MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND;
-            bit.value.binary.left = term;
-            bit.value.binary.right = mask;
-            if (!minic_core_function_append_value_instruction(
-                    context->function, context->block_id, &bit, &term))
-                { *handled = true; return MINIC_CORE_LOWER_ERROR; }
-            bit.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
-            bit.value.integer_value = (int64_t)((byte_count - 1U - i) * 8U);
-            if (!minic_core_function_append_value_instruction(
-                    context->function, context->block_id, &bit, &shift))
-                { *handled = true; return MINIC_CORE_LOWER_ERROR; }
-            bit.kind = MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_LEFT;
-            bit.value.binary.left = term;
-            bit.value.binary.right = shift;
-            if (!minic_core_function_append_value_instruction(
-                    context->function, context->block_id, &bit, &term))
-                { *handled = true; return MINIC_CORE_LOWER_ERROR; }
-            bit.kind = MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_OR;
-            bit.value.binary.left = accumulator;
-            bit.value.binary.right = term;
-            if (!minic_core_function_append_value_instruction(
-                    context->function, context->block_id, &bit, &next_value))
-                { *handled = true; return MINIC_CORE_LOWER_ERROR; }
-            accumulator = next_value;
-        }
-        if (byte_count == 2U) {
-            status = append_integer_conversion(
-                context, expression->span, result_type, accumulator, &accumulator);
-            if (status != MINIC_CORE_LOWER_OK) { *handled = true; return status; }
-        }
-        *value_id = accumulator;
-        { *handled = true; return MINIC_CORE_LOWER_OK; }
-    }
-
-    if (expression->kind == MINIC_EXPRESSION_BUILTIN_UNARY &&
-        (expression->value.builtin_unary.operator_kind == MINIC_BUILTIN_UNARY_CLZ ||
-         expression->value.builtin_unary.operator_kind == MINIC_BUILTIN_UNARY_CLZL ||
-         expression->value.builtin_unary.operator_kind == MINIC_BUILTIN_UNARY_CLZLL ||
-         expression->value.builtin_unary.operator_kind == MINIC_BUILTIN_UNARY_CTZ ||
-         expression->value.builtin_unary.operator_kind == MINIC_BUILTIN_UNARY_CTZL ||
-         expression->value.builtin_unary.operator_kind == MINIC_BUILTIN_UNARY_CTZLL)) {
-        const MinicExpression *operand;
-        MinicCoreValueId operand_value;
-        MinicCoreLowerStatus status;
-        bool is_clz;
-
-        operand = minic_c0_program_expression(
-            context->body->program, expression->value.builtin_unary.operand);
-        if (operand == NULL || !minic_type_is_unsigned_integer(operand->type) ||
-            !minic_type_equal(expression->type, minic_type_int())) {
-            { *handled = true; return MINIC_CORE_LOWER_UNSUPPORTED; }
-        }
-        status = lower_expression(
-            context, expression->value.builtin_unary.operand, &operand_value);
-        if (status != MINIC_CORE_LOWER_OK) {
-            { *handled = true; return status; }
-        }
-        if (operand_value >= context->function->value_count ||
-            !minic_type_equal(context->function->values[operand_value].type, operand->type)) {
-            { *handled = true; return MINIC_CORE_LOWER_ERROR; }
-        }
-        is_clz = expression->value.builtin_unary.operator_kind == MINIC_BUILTIN_UNARY_CLZ ||
-                 expression->value.builtin_unary.operator_kind == MINIC_BUILTIN_UNARY_CLZL ||
-                 expression->value.builtin_unary.operator_kind == MINIC_BUILTIN_UNARY_CLZLL;
-        (void)memset(&instruction, 0, sizeof(instruction));
-        instruction.kind = is_clz ? MINIC_CORE_INSTRUCTION_INTEGER_CLZ
-                                  : MINIC_CORE_INSTRUCTION_INTEGER_CTZ;
-        instruction.span = expression->span;
-        instruction.type = minic_type_int();
-        instruction.result = MINIC_CORE_VALUE_INVALID;
-        instruction.value.operand = operand_value;
-        { *handled = true; return minic_core_function_append_value_instruction(
-                   context->function, context->block_id, &instruction, value_id)
-                   ? MINIC_CORE_LOWER_OK
-                   : MINIC_CORE_LOWER_ERROR; }
-    }
-    return MINIC_CORE_LOWER_OK;
-}
-
 /* floating/integer equality and ordering, target-aware conversions. All candidate branches preserve original source order. */
-static MinicCoreLowerStatus core_try_lower_comparisons(
-    MinicCoreLowerContext *context, const MinicExpression *expression,
-    MinicCoreValueId *value_id, bool *handled) {
-    MinicCoreInstruction instruction;
-    *handled = false;
-    /* RUNTIME_R0_DOUBLE_COMPARE: equality uses the same binary64
-       assignment-conversion seam as arithmetic, so mixed integer/double
-       operands are normalized before Core comparison. */
-    if (expression->kind == MINIC_EXPRESSION_BINARY &&
-        (expression->value.binary.operator_kind == MINIC_BINARY_EQUAL ||
-         expression->value.binary.operator_kind == MINIC_BINARY_NOT_EQUAL)) {
-        const MinicExpression *left_expression;
-        const MinicExpression *right_expression;
-        MinicType left_type;
-        MinicType right_type;
-
-        left_expression = minic_c0_program_expression(
-            context->body->program, expression->value.binary.left);
-        right_expression = minic_c0_program_expression(
-            context->body->program, expression->value.binary.right);
-        if (left_expression == NULL || right_expression == NULL ||
-            !core_scalar_expression_value_type(context->body, left_expression, &left_type) ||
-            !core_scalar_expression_value_type(context->body, right_expression, &right_type)) {
-            { *handled = true; return MINIC_CORE_LOWER_ERROR; }
-        }
-        if (minic_type_is_long_double(left_type) || minic_type_is_long_double(right_type)) {
-            MinicCoreInstruction zero_test_instruction;
-            MinicCoreValueId compare_value;
-            MinicCoreValueId equal_value;
-            MinicCoreValueId left;
-            MinicCoreValueId right;
-            MinicCoreLowerStatus status;
-
-            if (!minic_type_equal(expression->type, minic_type_int())) {
-                { *handled = true; return MINIC_CORE_LOWER_ERROR; }
-            }
-            status = lower_floating_binary_operands(
-                context, expression->value.binary.left, expression->value.binary.right,
-                minic_type_long_double(), &left, &right);
-            if (status != MINIC_CORE_LOWER_OK) { *handled = true; return status; }
-            status = append_long_double_binary_helper(
-                context, expression->span, "__eqtf2", left, right, minic_type_int(),
-                &compare_value);
-            if (status != MINIC_CORE_LOWER_OK) { *handled = true; return status; }
-            (void)memset(&zero_test_instruction, 0, sizeof(zero_test_instruction));
-            zero_test_instruction.kind = MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO;
-            zero_test_instruction.span = expression->span;
-            zero_test_instruction.type = minic_type_int();
-            zero_test_instruction.result = MINIC_CORE_VALUE_INVALID;
-            zero_test_instruction.value.operand = compare_value;
-            if (!minic_core_function_append_value_instruction(
-                    context->function, context->block_id, &zero_test_instruction, &equal_value)) {
-                { *handled = true; return MINIC_CORE_LOWER_ERROR; }
-            }
-            if (expression->value.binary.operator_kind == MINIC_BINARY_EQUAL) {
-                *value_id = equal_value;
-                { *handled = true; return MINIC_CORE_LOWER_OK; }
-            }
-            zero_test_instruction.value.operand = equal_value;
-            { *handled = true; return minic_core_function_append_value_instruction(
-                       context->function, context->block_id, &zero_test_instruction, value_id)
-                       ? MINIC_CORE_LOWER_OK : MINIC_CORE_LOWER_ERROR; }
-        }
-        if (minic_type_is_double(left_type) || minic_type_is_double(right_type)) {
-            MinicCoreInstruction zero_test_instruction;
-            MinicCoreValueId equal_value;
-            MinicCoreValueId left;
-            MinicCoreValueId right;
-            MinicCoreLowerStatus status;
-
-            if (!minic_type_equal(expression->type, minic_type_int())) {
-                { *handled = true; return MINIC_CORE_LOWER_ERROR; }
-            }
-            status = lower_floating_binary_operands(context,
-                                                  expression->value.binary.left,
-                                                  expression->value.binary.right,
-                                                  minic_type_double(),
-                                                  &left,
-                                                  &right);
-            if (status != MINIC_CORE_LOWER_OK) {
-                { *handled = true; return status; }
-            }
-            (void)memset(&instruction, 0, sizeof(instruction));
-            instruction.kind = MINIC_CORE_INSTRUCTION_DOUBLE_EQUAL;
-            instruction.span = expression->span;
-            instruction.type = minic_type_int();
-            instruction.result = MINIC_CORE_VALUE_INVALID;
-            instruction.value.binary.left = left;
-            instruction.value.binary.right = right;
-            if (expression->value.binary.operator_kind == MINIC_BINARY_EQUAL) {
-                { *handled = true; return minic_core_function_append_value_instruction(
-                           context->function, context->block_id, &instruction, value_id)
-                           ? MINIC_CORE_LOWER_OK
-                           : MINIC_CORE_LOWER_ERROR; }
-            }
-            if (!minic_core_function_append_value_instruction(
-                    context->function, context->block_id, &instruction, &equal_value)) {
-                { *handled = true; return MINIC_CORE_LOWER_ERROR; }
-            }
-            (void)memset(&zero_test_instruction, 0, sizeof(zero_test_instruction));
-            zero_test_instruction.kind = MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO;
-            zero_test_instruction.span = expression->span;
-            zero_test_instruction.type = minic_type_int();
-            zero_test_instruction.result = MINIC_CORE_VALUE_INVALID;
-            zero_test_instruction.value.operand = equal_value;
-            { *handled = true; return minic_core_function_append_value_instruction(
-                       context->function,
-                       context->block_id,
-                       &zero_test_instruction,
-                       value_id)
-                       ? MINIC_CORE_LOWER_OK
-                       : MINIC_CORE_LOWER_ERROR; }
-        }
-    }
-
-    if (expression->kind == MINIC_EXPRESSION_BINARY &&
-        expression->value.binary.operator_kind == MINIC_BINARY_EQUAL) {
-        MinicCoreValueId left;
-        MinicCoreValueId right;
-        MinicCoreLowerStatus status;
-
-        if (!minic_type_equal(expression->type, minic_type_int())) {
-            { *handled = true; return MINIC_CORE_LOWER_ERROR; }
-        }
-        status = lower_scalar_equality_operands(
-            context, expression->value.binary.left, expression->value.binary.right, &left, &right);
-        if (status != MINIC_CORE_LOWER_OK) {
-            { *handled = true; return status; }
-        }
-        (void)memset(&instruction, 0, sizeof(instruction));
-        instruction.kind = MINIC_CORE_INSTRUCTION_SCALAR_EQUAL;
-        instruction.span = expression->span;
-        instruction.type = minic_type_int();
-        instruction.result = MINIC_CORE_VALUE_INVALID;
-        instruction.value.binary.left = left;
-        instruction.value.binary.right = right;
-        { *handled = true; return minic_core_function_append_value_instruction(
-                   context->function, context->block_id, &instruction, value_id)
-                   ? MINIC_CORE_LOWER_OK
-                   : MINIC_CORE_LOWER_ERROR; }
-    }
-    if (expression->kind == MINIC_EXPRESSION_BINARY &&
-        expression->value.binary.operator_kind == MINIC_BINARY_NOT_EQUAL) {
-        MinicCoreInstruction zero_test_instruction;
-        MinicCoreValueId equal_value;
-        MinicCoreValueId left;
-        MinicCoreValueId right;
-        MinicCoreLowerStatus status;
-
-        if (!minic_type_equal(expression->type, minic_type_int())) {
-            { *handled = true; return MINIC_CORE_LOWER_ERROR; }
-        }
-        status = lower_scalar_equality_operands(
-            context, expression->value.binary.left, expression->value.binary.right, &left, &right);
-        if (status != MINIC_CORE_LOWER_OK) {
-            { *handled = true; return status; }
-        }
-        (void)memset(&instruction, 0, sizeof(instruction));
-        instruction.kind = MINIC_CORE_INSTRUCTION_SCALAR_EQUAL;
-        instruction.span = expression->span;
-        instruction.type = minic_type_int();
-        instruction.result = MINIC_CORE_VALUE_INVALID;
-        instruction.value.binary.left = left;
-        instruction.value.binary.right = right;
-        if (!minic_core_function_append_value_instruction(
-                context->function, context->block_id, &instruction, &equal_value)) {
-            { *handled = true; return MINIC_CORE_LOWER_ERROR; }
-        }
-        (void)memset(&zero_test_instruction, 0, sizeof(zero_test_instruction));
-        zero_test_instruction.kind = MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO;
-        zero_test_instruction.span = expression->span;
-        zero_test_instruction.type = minic_type_int();
-        zero_test_instruction.result = MINIC_CORE_VALUE_INVALID;
-        zero_test_instruction.value.operand = equal_value;
-        { *handled = true; return minic_core_function_append_value_instruction(
-                   context->function, context->block_id, &zero_test_instruction, value_id)
-                   ? MINIC_CORE_LOWER_OK
-                   : MINIC_CORE_LOWER_ERROR; }
-    }
-    /* Ordered binary128 comparisons use libgcc's comparison helpers.
-       __lttf2 returns a negative value only for an ordered less-than.
-       __letf2 returns a positive value for greater-than or unordered; therefore
-       !(0 < result) implements ordered <=.  Swap operands for > and >= so no
-       NaN-sensitive boolean inversion changes C semantics. */
-    if (expression->kind == MINIC_EXPRESSION_BINARY &&
-        (expression->value.binary.operator_kind == MINIC_BINARY_LESS ||
-         expression->value.binary.operator_kind == MINIC_BINARY_LESS_EQUAL ||
-         expression->value.binary.operator_kind == MINIC_BINARY_GREATER ||
-         expression->value.binary.operator_kind == MINIC_BINARY_GREATER_EQUAL)) {
-        const MinicExpression *left_expression;
-        const MinicExpression *right_expression;
-        MinicType left_type;
-        MinicType right_type;
-
-        left_expression = minic_c0_program_expression(
-            context->body->program, expression->value.binary.left);
-        right_expression = minic_c0_program_expression(
-            context->body->program, expression->value.binary.right);
-        if (left_expression == NULL || right_expression == NULL ||
-            !core_scalar_expression_value_type(context->body, left_expression, &left_type) ||
-            !core_scalar_expression_value_type(context->body, right_expression, &right_type)) {
-            { *handled = true; return MINIC_CORE_LOWER_ERROR; }
-        }
-        if (minic_type_is_long_double(left_type) ||
-            minic_type_is_long_double(right_type)) {
-            MinicCoreInstruction compare_instruction;
-            MinicCoreInstruction zero_instruction;
-            MinicCoreInstruction invert_instruction;
-            MinicCoreValueId compare_value;
-            MinicCoreValueId left;
-            MinicCoreValueId right;
-            MinicCoreValueId zero_value;
-            MinicCoreValueId predicate_value;
-            MinicCoreLowerStatus status;
-            bool inclusive;
-            bool swap;
-
-            if (!minic_type_equal(expression->type, minic_type_int())) {
-                { *handled = true; return MINIC_CORE_LOWER_ERROR; }
-            }
-            status = lower_floating_binary_operands(context,
-                                                    expression->value.binary.left,
-                                                    expression->value.binary.right,
-                                                    minic_type_long_double(),
-                                                    &left,
-                                                    &right);
-            if (status != MINIC_CORE_LOWER_OK) {
-                { *handled = true; return status; }
-            }
-            inclusive =
-                expression->value.binary.operator_kind == MINIC_BINARY_LESS_EQUAL ||
-                expression->value.binary.operator_kind == MINIC_BINARY_GREATER_EQUAL;
-            swap =
-                expression->value.binary.operator_kind == MINIC_BINARY_GREATER ||
-                expression->value.binary.operator_kind == MINIC_BINARY_GREATER_EQUAL;
-            status = append_long_double_binary_helper(context,
-                                                      expression->span,
-                                                      inclusive ? "__letf2" : "__lttf2",
-                                                      swap ? right : left,
-                                                      swap ? left : right,
-                                                      minic_type_int(),
-                                                      &compare_value);
-            if (status != MINIC_CORE_LOWER_OK) {
-                { *handled = true; return status; }
-            }
-            (void)memset(&zero_instruction, 0, sizeof(zero_instruction));
-            zero_instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
-            zero_instruction.span = expression->span;
-            zero_instruction.type = minic_type_int();
-            zero_instruction.result = MINIC_CORE_VALUE_INVALID;
-            zero_instruction.value.integer_value = 0;
-            if (!minic_core_function_append_value_instruction(
-                    context->function, context->block_id, &zero_instruction, &zero_value)) {
-                { *handled = true; return MINIC_CORE_LOWER_ERROR; }
-            }
-            (void)memset(&compare_instruction, 0, sizeof(compare_instruction));
-            compare_instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_LESS;
-            compare_instruction.span = expression->span;
-            compare_instruction.type = minic_type_int();
-            compare_instruction.result = MINIC_CORE_VALUE_INVALID;
-            compare_instruction.value.binary.left = inclusive ? zero_value : compare_value;
-            compare_instruction.value.binary.right = inclusive ? compare_value : zero_value;
-            if (!minic_core_function_append_value_instruction(
-                    context->function, context->block_id, &compare_instruction, &predicate_value)) {
-                { *handled = true; return MINIC_CORE_LOWER_ERROR; }
-            }
-            if (!inclusive) {
-                *value_id = predicate_value;
-                { *handled = true; return MINIC_CORE_LOWER_OK; }
-            }
-            (void)memset(&invert_instruction, 0, sizeof(invert_instruction));
-            invert_instruction.kind = MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO;
-            invert_instruction.span = expression->span;
-            invert_instruction.type = minic_type_int();
-            invert_instruction.result = MINIC_CORE_VALUE_INVALID;
-            invert_instruction.value.operand = predicate_value;
-            { *handled = true; return minic_core_function_append_value_instruction(
-                       context->function, context->block_id, &invert_instruction, value_id)
-                       ? MINIC_CORE_LOWER_OK
-                       : MINIC_CORE_LOWER_ERROR; }
-        }
-    }
-
-    /* Ordered binary64 relational comparisons must remain direct IEEE-754
-       predicates.  <= uses LE; > and >= swap operands.  No inversion is used,
-       so unordered NaN inputs remain false as required by C. */
-    if (expression->kind == MINIC_EXPRESSION_BINARY &&
-        (expression->value.binary.operator_kind == MINIC_BINARY_LESS ||
-         expression->value.binary.operator_kind == MINIC_BINARY_LESS_EQUAL ||
-         expression->value.binary.operator_kind == MINIC_BINARY_GREATER ||
-         expression->value.binary.operator_kind == MINIC_BINARY_GREATER_EQUAL)) {
-        const MinicExpression *left_expression;
-        const MinicExpression *right_expression;
-        MinicType left_type;
-        MinicType right_type;
-
-        left_expression = minic_c0_program_expression(
-            context->body->program, expression->value.binary.left);
-        right_expression = minic_c0_program_expression(
-            context->body->program, expression->value.binary.right);
-        if (left_expression == NULL || right_expression == NULL ||
-            !core_scalar_expression_value_type(context->body, left_expression, &left_type) ||
-            !core_scalar_expression_value_type(context->body, right_expression, &right_type)) {
-            { *handled = true; return MINIC_CORE_LOWER_ERROR; }
-        }
-        if (minic_type_is_double(left_type) || minic_type_is_double(right_type)) {
-            MinicCoreValueId left;
-            MinicCoreValueId right;
-            MinicCoreLowerStatus status;
-            bool swap;
-
-            if (!minic_type_equal(expression->type, minic_type_int())) {
-                { *handled = true; return MINIC_CORE_LOWER_ERROR; }
-            }
-            status = lower_floating_binary_operands(context,
-                                                  expression->value.binary.left,
-                                                  expression->value.binary.right,
-                                                  minic_type_double(),
-                                                  &left,
-                                                  &right);
-            if (status != MINIC_CORE_LOWER_OK) {
-                { *handled = true; return status; }
-            }
-            swap = expression->value.binary.operator_kind == MINIC_BINARY_GREATER ||
-                   expression->value.binary.operator_kind == MINIC_BINARY_GREATER_EQUAL;
-            (void)memset(&instruction, 0, sizeof(instruction));
-            instruction.kind =
-                expression->value.binary.operator_kind == MINIC_BINARY_LESS ||
-                        expression->value.binary.operator_kind == MINIC_BINARY_GREATER
-                    ? MINIC_CORE_INSTRUCTION_DOUBLE_LESS
-                    : MINIC_CORE_INSTRUCTION_DOUBLE_LESS_EQUAL;
-            instruction.span = expression->span;
-            instruction.type = minic_type_int();
-            instruction.result = MINIC_CORE_VALUE_INVALID;
-            instruction.value.binary.left = swap ? right : left;
-            instruction.value.binary.right = swap ? left : right;
-            { *handled = true; return minic_core_function_append_value_instruction(
-                       context->function, context->block_id, &instruction, value_id)
-                       ? MINIC_CORE_LOWER_OK
-                       : MINIC_CORE_LOWER_ERROR; }
-        }
-    }
-
-    if (expression->kind == MINIC_EXPRESSION_BINARY &&
-        (expression->value.binary.operator_kind == MINIC_BINARY_LESS ||
-         expression->value.binary.operator_kind == MINIC_BINARY_LESS_EQUAL ||
-         expression->value.binary.operator_kind == MINIC_BINARY_GREATER ||
-         expression->value.binary.operator_kind == MINIC_BINARY_GREATER_EQUAL)) {
-        const MinicExpression *left_expression;
-        const MinicExpression *right_expression;
-        MinicCoreInstruction invert_instruction;
-        MinicCoreValueId left;
-        MinicCoreValueId less_value;
-        MinicCoreValueId right;
-        MinicCoreLowerStatus status;
-        MinicType common_type;
-        MinicType left_type;
-        MinicType right_type;
-        bool invert;
-        bool swap;
-
-        if (!minic_type_equal(expression->type, minic_type_int())) {
-            { *handled = true; return MINIC_CORE_LOWER_ERROR; }
-        }
-        left_expression =
-            minic_c0_program_expression(context->body->program, expression->value.binary.left);
-        right_expression =
-            minic_c0_program_expression(context->body->program, expression->value.binary.right);
-        if (left_expression != NULL && right_expression != NULL &&
-            core_scalar_expression_value_type(context->body, left_expression, &left_type) &&
-            core_scalar_expression_value_type(context->body, right_expression, &right_type) &&
-            minic_type_is_pointer(left_type) && minic_type_is_pointer(right_type)) {
-            /* M156_STRUCTURAL_POINTER_RELATIONAL_OWNER: relational
-               legality is already decided by frontend/Sema, including GNU void
-               pointers and structurally compatible pointer-to-array shapes.
-               Core only needs one bit representation for POINTER_LESS.  The
-               ordinary conditional-pointer common type remains preferred; if
-               side-table identity prevents one despite accepted relational
-               compatibility, use the left representation and bitcast both
-               operands, matching the established equality owner. */
-            if (!minic_c0_pointer_relational_compatible(
-                    context->body->program, left_type, right_type)) {
-                { *handled = true; return MINIC_CORE_LOWER_UNSUPPORTED; }
-            }
-            if (!minic_type_conditional_pointer_common(
-                    left_type, right_type, &common_type)) {
-                common_type = left_type;
-            }
-            status = lower_expression(context, expression->value.binary.left, &left);
-            if (status != MINIC_CORE_LOWER_OK) {
-                { *handled = true; return status; }
-            }
-            if (left >= context->function->value_count) {
-                { *handled = true; return MINIC_CORE_LOWER_ERROR; }
-            }
-            if (!minic_type_equal(context->function->values[left].type, common_type)) {
-                status = append_scalar_bitcast(
-                    context, left_expression->span, common_type, left, &left);
-                if (status != MINIC_CORE_LOWER_OK) {
-                    { *handled = true; return status; }
-                }
-            }
-            /* M117_BLOCK_LOCAL_POINTER_RELATIONAL: lowering the right operand
-               may create a new Core block. Spill the normalized left pointer so
-               the eventual POINTER_LESS never references an SSA value owned by
-               a predecessor block. */
-            MinicCoreObjectId left_object;
-            status = spill_scalar_value(
-                context, left_expression->span, common_type, left, &left_object);
-            if (status != MINIC_CORE_LOWER_OK) {
-                { *handled = true; return status; }
-            }
-            status = lower_expression(context, expression->value.binary.right, &right);
-            if (status != MINIC_CORE_LOWER_OK) {
-                { *handled = true; return status; }
-            }
-            if (right >= context->function->value_count) {
-                { *handled = true; return MINIC_CORE_LOWER_ERROR; }
-            }
-            if (!minic_type_equal(context->function->values[right].type, common_type)) {
-                status = append_scalar_bitcast(
-                    context, right_expression->span, common_type, right, &right);
-                if (status != MINIC_CORE_LOWER_OK) {
-                    { *handled = true; return status; }
-                }
-            }
-            /* M117_BLOCK_LOCAL_POINTER_RELATIONAL: reload only after the right
-               operand is fully lowered and normalized, in the final comparison
-               block. */
-            status = reload_scalar_value(
-                context, left_expression->span, common_type, left_object, &left);
-            if (status != MINIC_CORE_LOWER_OK) {
-                { *handled = true; return status; }
-            }
-            swap = expression->value.binary.operator_kind == MINIC_BINARY_GREATER ||
-                   expression->value.binary.operator_kind == MINIC_BINARY_LESS_EQUAL;
-            invert = expression->value.binary.operator_kind == MINIC_BINARY_LESS_EQUAL ||
-                     expression->value.binary.operator_kind == MINIC_BINARY_GREATER_EQUAL;
-            (void)memset(&instruction, 0, sizeof(instruction));
-            instruction.kind = MINIC_CORE_INSTRUCTION_POINTER_LESS;
-            instruction.span = expression->span;
-            instruction.type = minic_type_int();
-            instruction.result = MINIC_CORE_VALUE_INVALID;
-            instruction.value.binary.left = swap ? right : left;
-            instruction.value.binary.right = swap ? left : right;
-            if (!minic_core_function_append_value_instruction(
-                    context->function, context->block_id, &instruction, &less_value)) {
-                { *handled = true; return MINIC_CORE_LOWER_ERROR; }
-            }
-            if (!invert) {
-                *value_id = less_value;
-                { *handled = true; return MINIC_CORE_LOWER_OK; }
-            }
-            (void)memset(&invert_instruction, 0, sizeof(invert_instruction));
-            invert_instruction.kind = MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO;
-            invert_instruction.span = expression->span;
-            invert_instruction.type = minic_type_int();
-            invert_instruction.result = MINIC_CORE_VALUE_INVALID;
-            invert_instruction.value.operand = less_value;
-            { *handled = true; return minic_core_function_append_value_instruction(
-                       context->function, context->block_id, &invert_instruction, value_id)
-                       ? MINIC_CORE_LOWER_OK
-                       : MINIC_CORE_LOWER_ERROR; }
-        }
-    }
-
-    if (expression->kind == MINIC_EXPRESSION_BINARY &&
-        expression->value.binary.operator_kind == MINIC_BINARY_LESS) {
-        const MinicExpression *left_expression;
-        const MinicExpression *right_expression;
-        MinicCoreValueId left;
-        MinicCoreValueId right;
-        MinicCoreLowerStatus status;
-        MinicType common_type;
-
-        if (!minic_type_equal(expression->type, minic_type_int()) || context->target == NULL) {
-            { *handled = true; return MINIC_CORE_LOWER_ERROR; }
-        }
-        left_expression =
-            minic_c0_program_expression(context->body->program, expression->value.binary.left);
-        right_expression =
-            minic_c0_program_expression(context->body->program, expression->value.binary.right);
-        if (left_expression == NULL || right_expression == NULL ||
-            !minic_type_is_integer(left_expression->type) ||
-            !minic_type_is_integer(right_expression->type) ||
-            !minic_target_info_integer_common_for_program(context->target,
-                                                          context->body->program,
-                                                          left_expression->type,
-                                                          right_expression->type,
-                                                          &common_type)) {
-            { *handled = true; return MINIC_CORE_LOWER_UNSUPPORTED; }
-        }
-        status = lower_integer_binary_operands(context,
-                                               expression->value.binary.left,
-                                               expression->value.binary.right,
-                                               common_type,
-                                               &left,
-                                               &right);
-        if (status != MINIC_CORE_LOWER_OK) {
-            { *handled = true; return status; }
-        }
-        (void)memset(&instruction, 0, sizeof(instruction));
-        instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_LESS;
-        instruction.span = expression->span;
-        instruction.type = minic_type_int();
-        instruction.result = MINIC_CORE_VALUE_INVALID;
-        instruction.value.binary.left = left;
-        instruction.value.binary.right = right;
-        { *handled = true; return minic_core_function_append_value_instruction(
-                   context->function, context->block_id, &instruction, value_id)
-                   ? MINIC_CORE_LOWER_OK
-                   : MINIC_CORE_LOWER_ERROR; }
-    }
-    if (expression->kind == MINIC_EXPRESSION_BINARY &&
-        (expression->value.binary.operator_kind == MINIC_BINARY_LESS_EQUAL ||
-         expression->value.binary.operator_kind == MINIC_BINARY_GREATER ||
-         expression->value.binary.operator_kind == MINIC_BINARY_GREATER_EQUAL)) {
-        const MinicExpression *left_expression;
-        const MinicExpression *right_expression;
-        MinicCoreInstruction invert_instruction;
-        MinicCoreValueId left;
-        MinicCoreValueId less_value;
-        MinicCoreValueId right;
-        MinicCoreLowerStatus status;
-        MinicType common_type;
-        MinicType left_type;
-        MinicType right_type;
-        bool invert;
-        bool swap;
-
-        if (!minic_type_equal(expression->type, minic_type_int()) || context->target == NULL) {
-            { *handled = true; return MINIC_CORE_LOWER_ERROR; }
-        }
-        left_expression =
-            minic_c0_program_expression(context->body->program, expression->value.binary.left);
-        right_expression =
-            minic_c0_program_expression(context->body->program, expression->value.binary.right);
-        if (left_expression == NULL || right_expression == NULL ||
-            !core_scalar_expression_value_type(context->body, left_expression, &left_type) ||
-            !core_scalar_expression_value_type(context->body, right_expression, &right_type) ||
-            !minic_type_is_integer(left_type) || !minic_type_is_integer(right_type) ||
-            !minic_target_info_integer_common_for_program(
-                context->target, context->body->program, left_type, right_type, &common_type)) {
-            { *handled = true; return MINIC_CORE_LOWER_UNSUPPORTED; }
-        }
-        status = lower_integer_binary_operands(context,
-                                               expression->value.binary.left,
-                                               expression->value.binary.right,
-                                               common_type,
-                                               &left,
-                                               &right);
-        if (status != MINIC_CORE_LOWER_OK) {
-            { *handled = true; return status; }
-        }
-        swap = expression->value.binary.operator_kind == MINIC_BINARY_GREATER ||
-               expression->value.binary.operator_kind == MINIC_BINARY_LESS_EQUAL;
-        invert = expression->value.binary.operator_kind == MINIC_BINARY_LESS_EQUAL ||
-                 expression->value.binary.operator_kind == MINIC_BINARY_GREATER_EQUAL;
-        (void)memset(&instruction, 0, sizeof(instruction));
-        instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_LESS;
-        instruction.span = expression->span;
-        instruction.type = minic_type_int();
-        instruction.result = MINIC_CORE_VALUE_INVALID;
-        instruction.value.binary.left = swap ? right : left;
-        instruction.value.binary.right = swap ? left : right;
-        if (!minic_core_function_append_value_instruction(
-                context->function, context->block_id, &instruction, &less_value)) {
-            { *handled = true; return MINIC_CORE_LOWER_ERROR; }
-        }
-        if (!invert) {
-            *value_id = less_value;
-            { *handled = true; return MINIC_CORE_LOWER_OK; }
-        }
-        (void)memset(&invert_instruction, 0, sizeof(invert_instruction));
-        invert_instruction.kind = MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO;
-        invert_instruction.span = expression->span;
-        invert_instruction.type = minic_type_int();
-        invert_instruction.result = MINIC_CORE_VALUE_INVALID;
-        invert_instruction.value.operand = less_value;
-        { *handled = true; return minic_core_function_append_value_instruction(
-                   context->function, context->block_id, &invert_instruction, value_id)
-                   ? MINIC_CORE_LOWER_OK
-                   : MINIC_CORE_LOWER_ERROR; }
-    }
-    return MINIC_CORE_LOWER_OK;
-}
-
 /* pointer difference and pointer/integer offset semantics. All candidate branches preserve original source order. */
-static MinicCoreLowerStatus core_try_lower_pointer_arithmetic(
-    MinicCoreLowerContext *context, const MinicExpression *expression,
-    MinicCoreValueId *value_id, bool *handled) {
-    MinicCoreInstruction instruction;
-    *handled = false;
-    /* M93_POINTER_DIFFERENCE: pointer - pointer produces an integer
-       element distance. Compose existing target-neutral Core scalar primitives:
-       pointer-to-integer bitcasts, byte subtraction, then signed division by
-       the semantic pointee stride. */
-    if (expression->kind == MINIC_EXPRESSION_BINARY &&
-        expression->value.binary.operator_kind == MINIC_BINARY_SUBTRACT &&
-        minic_type_is_integer(expression->type)) {
-        const MinicExpression *left_expression;
-        const MinicExpression *right_expression;
-        MinicCoreLowerStatus status;
-        MinicCoreObjectId left_object;
-        MinicCoreValueId left_pointer;
-        MinicCoreValueId right_pointer;
-        MinicCoreValueId left_integer;
-        MinicCoreValueId right_integer;
-        MinicCoreValueId byte_difference;
-        MinicCoreValueId divisor;
-        MinicType left_type;
-        MinicType right_type;
-        size_t element_size;
-
-        left_expression = minic_c0_program_expression(
-            context->body->program, expression->value.binary.left);
-        right_expression = minic_c0_program_expression(
-            context->body->program, expression->value.binary.right);
-        if (left_expression != NULL && right_expression != NULL &&
-            core_scalar_expression_value_type(context->body, left_expression, &left_type) &&
-            core_scalar_expression_value_type(context->body, right_expression, &right_type) &&
-            minic_type_is_pointer(left_type) && minic_type_is_pointer(right_type) &&
-            /* BATCH_W_QUALIFIED_POINTER_DIFFERENCE: language compatibility is
-               owned by frontend/Sema.  `const T * - T *` is a valid pointer
-               difference when the pointed-to object types are compatible;
-               Core must not re-impose exact pointer-type equality after Sema
-               has accepted the expression.  The representation and stride
-               lowering below remain target-neutral and unchanged. */
-            minic_c0_pointer_difference_compatible(
-                context->body->program, left_type, right_type) &&
-            minic_c0_pointer_arithmetic_element_size(context->body->program,
-                                                      core_data_layout(context),
-                                                      left_type,
-                                                      &element_size) &&
-            /* M131_ZERO_STRIDE_POINTER_DIFFERENCE_FAIL_CLOSED: unlike pointer
-               +/- integer, pointer difference divides by the pointee stride. */
-            element_size != 0U) {
-            status = lower_expression(
-                context, expression->value.binary.left, &left_pointer);
-            if (status != MINIC_CORE_LOWER_OK) {
-                { *handled = true; return status; }
-            }
-            status = append_scalar_bitcast(
-                context, left_expression->span, expression->type, left_pointer, &left_integer);
-            if (status != MINIC_CORE_LOWER_OK) {
-                { *handled = true; return status; }
-            }
-            status = spill_scalar_value(
-                context, left_expression->span, expression->type, left_integer, &left_object);
-            if (status != MINIC_CORE_LOWER_OK) {
-                { *handled = true; return status; }
-            }
-            status = lower_expression(
-                context, expression->value.binary.right, &right_pointer);
-            if (status != MINIC_CORE_LOWER_OK) {
-                { *handled = true; return status; }
-            }
-            status = append_scalar_bitcast(
-                context, right_expression->span, expression->type, right_pointer, &right_integer);
-            if (status != MINIC_CORE_LOWER_OK) {
-                { *handled = true; return status; }
-            }
-            status = reload_scalar_value(
-                context, left_expression->span, expression->type, left_object, &left_integer);
-            if (status != MINIC_CORE_LOWER_OK) {
-                { *handled = true; return status; }
-            }
-
-            (void)memset(&instruction, 0, sizeof(instruction));
-            instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_SUBTRACT;
-            instruction.span = expression->span;
-            instruction.type = expression->type;
-            instruction.result = MINIC_CORE_VALUE_INVALID;
-            instruction.value.binary.left = left_integer;
-            instruction.value.binary.right = right_integer;
-            if (!minic_core_function_append_value_instruction(
-                    context->function, context->block_id, &instruction, &byte_difference)) {
-                { *handled = true; return MINIC_CORE_LOWER_ERROR; }
-            }
-            if (element_size == 1U) {
-                *value_id = byte_difference;
-                { *handled = true; return MINIC_CORE_LOWER_OK; }
-            }
-
-            (void)memset(&instruction, 0, sizeof(instruction));
-            instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
-            instruction.span = expression->span;
-            instruction.type = expression->type;
-            instruction.result = MINIC_CORE_VALUE_INVALID;
-            instruction.value.integer_value = (int64_t)element_size;
-            if (!minic_core_function_append_value_instruction(
-                    context->function, context->block_id, &instruction, &divisor)) {
-                { *handled = true; return MINIC_CORE_LOWER_ERROR; }
-            }
-            (void)memset(&instruction, 0, sizeof(instruction));
-            instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_DIVIDE;
-            instruction.span = expression->span;
-            instruction.type = expression->type;
-            instruction.result = MINIC_CORE_VALUE_INVALID;
-            instruction.value.binary.left = byte_difference;
-            instruction.value.binary.right = divisor;
-            { *handled = true; return minic_core_function_append_value_instruction(
-                       context->function, context->block_id, &instruction, value_id)
-                       ? MINIC_CORE_LOWER_OK
-                       : MINIC_CORE_LOWER_ERROR; }
-        }
-    }
-
-    /* M82_BINARY_POINTER_SUBTRACTION: C/GNU pointer +/- integer share the
-       same scaled-offset primitive. Subtraction is only valid with the pointer
-       on the left; integer - pointer remains fail-closed. */
-    if (expression->kind == MINIC_EXPRESSION_BINARY &&
-        (expression->value.binary.operator_kind == MINIC_BINARY_ADD ||
-         expression->value.binary.operator_kind == MINIC_BINARY_SUBTRACT) &&
-        minic_type_is_pointer(expression->type)) {
-        const MinicExpression *left_expression;
-        const MinicExpression *pointer_expression;
-        const MinicExpression *right_expression;
-        const MinicExpression *index_expression;
-        MinicExpressionId pointer_id;
-        MinicExpressionId index_id;
-        MinicCoreObjectId pointer_object;
-        MinicCoreValueId pointer_value;
-        MinicCoreValueId index_value;
-        MinicCoreValueId offset_value;
-        MinicCoreLowerStatus status;
-        MinicType expression_value_type;
-        MinicType pointer_source_type;
-        MinicType pointer_value_type;
-        MinicType index_value_type;
-        size_t element_size;
-
-        left_expression =
-            minic_c0_program_expression(context->body->program, expression->value.binary.left);
-        right_expression =
-            minic_c0_program_expression(context->body->program, expression->value.binary.right);
-        if (left_expression == NULL || right_expression == NULL) {
-            { *handled = true; return MINIC_CORE_LOWER_ERROR; }
-        }
-        if (minic_type_is_pointer(left_expression->type) &&
-            minic_type_is_integer(right_expression->type)) {
-            pointer_expression = left_expression;
-            index_expression = right_expression;
-            pointer_id = expression->value.binary.left;
-            index_id = expression->value.binary.right;
-        } else if (expression->value.binary.operator_kind == MINIC_BINARY_ADD &&
-                   minic_type_is_integer(left_expression->type) &&
-                   minic_type_is_pointer(right_expression->type)) {
-            pointer_expression = right_expression;
-            index_expression = left_expression;
-            pointer_id = expression->value.binary.right;
-            index_id = expression->value.binary.left;
-        } else {
-            { *handled = true; return MINIC_CORE_LOWER_UNSUPPORTED; }
-        }
-        /* BATCH_U_POINTER_ARITH_VALUE_TYPES: Core consumes scalar values, not
-           lvalue storage qualifiers.  A member reached through `const T *`
-           has a const-qualified lvalue type in the semantic AST, but its
-           lvalue-to-rvalue result is the unqualified scalar value transported
-           by Core.  Use the shared value-type seam for both operands instead
-           of comparing emitted values against raw expression storage types. */
-        /* M116_POINTER_ARITH_RVALUE_TYPE: pointer arithmetic consumes and
-           produces C scalar values.  A nested arithmetic expression may retain
-           a top-level qualifier in the semantic AST spelling, but that qualifier
-           belongs to the source object, not the transported rvalue.  Canonicalize
-           only the pointer operand's top-level qualifier here; pointee qualifiers
-           remain part of the pointer type. */
-        if (!core_scalar_expression_value_type(
-                context->body, pointer_expression, &pointer_source_type) ||
-            !minic_type_unqualified(pointer_source_type, &pointer_value_type) ||
-            !core_scalar_expression_value_type(
-                context->body, index_expression, &index_value_type) ||
-            !minic_type_is_pointer(pointer_value_type) ||
-            !minic_type_is_integer(index_value_type) ||
-            !minic_type_unqualified(expression->type, &expression_value_type) ||
-            !minic_type_equal(pointer_value_type, expression_value_type) ||
-            !minic_c0_pointer_arithmetic_element_size(context->body->program,
-                                                      core_data_layout(context),
-                                                      pointer_value_type,
-                                                      &element_size)) {
-            { *handled = true; return MINIC_CORE_LOWER_UNSUPPORTED; }
-        }
-        status = lower_expression(context, pointer_id, &pointer_value);
-        if (status != MINIC_CORE_LOWER_OK) {
-            { *handled = true; return status; }
-        }
-        status = spill_scalar_value(context,
-                                    pointer_expression->span,
-                                    pointer_value_type,
-                                    pointer_value,
-                                    &pointer_object);
-        if (status != MINIC_CORE_LOWER_OK) {
-            { *handled = true; return status; }
-        }
-        status = lower_expression(context, index_id, &index_value);
-        if (status != MINIC_CORE_LOWER_OK) {
-            { *handled = true; return status; }
-        }
-        status = reload_scalar_value(context,
-                                     pointer_expression->span,
-                                     pointer_value_type,
-                                     pointer_object,
-                                     &pointer_value);
-        if (status != MINIC_CORE_LOWER_OK) {
-            { *handled = true; return status; }
-        }
-        if (pointer_value >= context->function->value_count ||
-            index_value >= context->function->value_count ||
-            !minic_type_equal(context->function->values[pointer_value].type,
-                              pointer_value_type) ||
-            !minic_type_equal(context->function->values[index_value].type,
-                              index_value_type)) {
-            { *handled = true; return MINIC_CORE_LOWER_ERROR; }
-        }
-        instruction.kind = MINIC_CORE_INSTRUCTION_POINTER_OFFSET;
-        instruction.type = pointer_value_type;
-        instruction.value.pointer_offset.base = pointer_value;
-        instruction.value.pointer_offset.index = index_value;
-        instruction.value.pointer_offset.element_size = element_size;
-        /* M116_POINTER_ARITH_RVALUE_TYPE: POINTER_OFFSET already has the
-           canonical lvalue-to-rvalue pointer type.  Do not re-attach a top-level
-           qualifier merely because the AST keeps that source spelling; nested
-           pointer arithmetic and return/assignment conversion consume the value
-           type, not the storage-qualified spelling. */
-        instruction.value.pointer_offset.subtract =
-            expression->value.binary.operator_kind == MINIC_BINARY_SUBTRACT;
-        if (!minic_core_function_append_value_instruction(
-                context->function, context->block_id, &instruction, &offset_value)) {
-            { *handled = true; return MINIC_CORE_LOWER_ERROR; }
-        }
-        *value_id = offset_value;
-        { *handled = true; return MINIC_CORE_LOWER_OK; }
-    }
-    return MINIC_CORE_LOWER_OK;
-}
-
 MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
                                              MinicExpressionId expression_id,
                                              MinicCoreValueId *value_id) {
@@ -6466,12 +4685,12 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
                 return MINIC_CORE_LOWER_ERROR;
             }
             address_type = context->function->values[address].type;
-            status = spill_scalar_value(
+            status = minic_core_lower_internal_spill_scalar_value(
                 context, target->span, address_type, address, &address_object);
             if (status != MINIC_CORE_LOWER_OK) {
                 return status;
             }
-            status = spill_scalar_value(
+            status = minic_core_lower_internal_spill_scalar_value(
                 context, target->span, stored_type, current, &current_object);
             if (status != MINIC_CORE_LOWER_OK) {
                 return status;
@@ -6484,12 +4703,12 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
                 !minic_type_equal(context->function->values[index].type, index_type)) {
                 return MINIC_CORE_LOWER_ERROR;
             }
-            status = reload_scalar_value(
+            status = minic_core_lower_internal_reload_scalar_value(
                 context, target->span, stored_type, current_object, &current);
             if (status != MINIC_CORE_LOWER_OK) {
                 return status;
             }
-            status = reload_scalar_value(
+            status = minic_core_lower_internal_reload_scalar_value(
                 context, target->span, address_type, address_object, &address);
             if (status != MINIC_CORE_LOWER_OK) {
                 return status;
@@ -6707,14 +4926,14 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
     /* Delegate conditional as one ordered, fail-closed semantic family. */
     {
         bool handled = false;
-        MinicCoreLowerStatus status = core_try_lower_conditional(
+        MinicCoreLowerStatus status = minic_core_lower_try_conditional(
             context, expression, value_id, &handled);
         if (handled) return status;
     }
     /* Delegate sequenced as one ordered, fail-closed semantic family. */
     {
         bool handled = false;
-        MinicCoreLowerStatus status = core_try_lower_sequenced(
+        MinicCoreLowerStatus status = minic_core_lower_try_sequenced(
             context, expression, value_id, expression_id, &handled);
         if (handled) return status;
     }
@@ -6801,7 +5020,7 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
     /* Delegate builtin unary as one ordered, fail-closed semantic family. */
     {
         bool handled = false;
-        MinicCoreLowerStatus status = core_try_lower_builtin_unary(
+        MinicCoreLowerStatus status = minic_core_lower_try_builtin_unary(
             context, expression, value_id, &handled);
         if (handled) return status;
     }
@@ -6881,7 +5100,7 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
         MinicCoreValueId zero_value;
         MinicCoreLowerStatus status;
 
-        status = lower_scalar_assignment_value(context, minic_type_long_double(),
+        status = minic_core_lower_internal_lower_scalar_assignment_value(context, minic_type_long_double(),
                                                expression->value.unary.operand, &operand_value);
         if (status != MINIC_CORE_LOWER_OK) return status;
         (void)memset(&zero_instruction, 0, sizeof(zero_instruction));
@@ -6895,7 +5114,7 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
                 context->function, context->block_id, &zero_instruction, &zero_value)) {
             return MINIC_CORE_LOWER_ERROR;
         }
-        return append_long_double_binary_helper(
+        return minic_core_lower_internal_append_long_double_binary_helper(
             context, expression->span, "__subtf3", zero_value, operand_value,
             minic_type_long_double(), value_id);
     }
@@ -6962,7 +5181,7 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
         if (operand_expression == NULL) {
             return MINIC_CORE_LOWER_ERROR;
         }
-        status = lower_scalar_assignment_value(context,
+        status = minic_core_lower_internal_lower_scalar_assignment_value(context,
                                                minic_type_double(),
                                                expression->value.unary.operand,
                                                &operand_value);
@@ -7001,7 +5220,7 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
         if (status != MINIC_CORE_LOWER_OK) {
             return status;
         }
-        status = append_integer_conversion(
+        status = minic_core_lower_internal_append_integer_conversion(
             context, operand_expression->span, promoted_type, operand_value, &operand_value);
         if (status != MINIC_CORE_LOWER_OK) {
             return status;
@@ -7038,7 +5257,7 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
         if (status != MINIC_CORE_LOWER_OK) {
             return status;
         }
-        status = append_integer_conversion(
+        status = minic_core_lower_internal_append_integer_conversion(
             context, operand_expression->span, promoted_type, operand_value, &operand_value);
         if (status != MINIC_CORE_LOWER_OK) {
             return status;
@@ -7138,7 +5357,7 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
             return MINIC_CORE_LOWER_ERROR;
         }
         if (minic_type_is_integer(target_type) && minic_type_is_integer(source_type)) {
-            return append_integer_conversion(
+            return minic_core_lower_internal_append_integer_conversion(
                 context, expression->span, target_type, operand_value, value_id);
         }
         if (minic_type_is_long_double(target_type) ||
@@ -7441,14 +5660,14 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
         if (minic_type_equal(left_value_type, left_type)) {
             left = left_source;
         } else {
-            status = append_integer_conversion(
+            status = minic_core_lower_internal_append_integer_conversion(
                 context, left_expression->span, left_value_type, left_source, &left);
             if (status != MINIC_CORE_LOWER_OK) {
                 return status;
             }
         }
         status =
-            spill_scalar_value(context, left_expression->span, left_value_type, left, &left_object);
+            minic_core_lower_internal_spill_scalar_value(context, left_expression->span, left_value_type, left, &left_object);
         if (status != MINIC_CORE_LOWER_OK) {
             return status;
         }
@@ -7464,14 +5683,14 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
         if (minic_type_equal(right_value_type, right_type)) {
             right = right_source;
         } else {
-            status = append_integer_conversion(
+            status = minic_core_lower_internal_append_integer_conversion(
                 context, right_expression->span, right_value_type, right_source, &right);
             if (status != MINIC_CORE_LOWER_OK) {
                 return status;
             }
         }
         status =
-            spill_scalar_value(context, right_expression->span, right_value_type, right, &right_object);
+            minic_core_lower_internal_spill_scalar_value(context, right_expression->span, right_value_type, right, &right_object);
         if (status != MINIC_CORE_LOWER_OK) {
             return status;
         }
@@ -7482,12 +5701,12 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
             return status;
         }
         status =
-            reload_scalar_value(context, left_expression->span, left_value_type, left_object, &left);
+            minic_core_lower_internal_reload_scalar_value(context, left_expression->span, left_value_type, left_object, &left);
         if (status != MINIC_CORE_LOWER_OK) {
             return status;
         }
         status =
-            reload_scalar_value(context, right_expression->span, right_value_type, right_object, &right);
+            minic_core_lower_internal_reload_scalar_value(context, right_expression->span, right_value_type, right_object, &right);
         if (status != MINIC_CORE_LOWER_OK) {
             return status;
         }
@@ -7519,14 +5738,14 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
     /* Delegate comparisons as one ordered, fail-closed semantic family. */
     {
         bool handled = false;
-        MinicCoreLowerStatus status = core_try_lower_comparisons(
+        MinicCoreLowerStatus status = minic_core_lower_try_comparisons(
             context, expression, value_id, &handled);
         if (handled) return status;
     }
     /* Delegate pointer arithmetic as one ordered, fail-closed semantic family. */
     {
         bool handled = false;
-        MinicCoreLowerStatus status = core_try_lower_pointer_arithmetic(
+        MinicCoreLowerStatus status = minic_core_lower_try_pointer_arithmetic(
             context, expression, value_id, &handled);
         if (handled) return status;
     }
@@ -7540,7 +5759,7 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
         MinicCoreValueId left;
         MinicCoreValueId right;
         MinicCoreLowerStatus status;
-        status = lower_integer_binary_operands(context,
+        status = minic_core_lower_internal_lower_integer_binary_operands(context,
                                                expression->value.binary.left,
                                                expression->value.binary.right,
                                                expression->type,
@@ -7586,7 +5805,7 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
         MinicCoreValueId right;
         MinicCoreLowerStatus status;
 
-        status = lower_floating_binary_operands(
+        status = minic_core_lower_internal_lower_floating_binary_operands(
             context, expression->value.binary.left, expression->value.binary.right,
             minic_type_long_double(), &left, &right);
         if (status != MINIC_CORE_LOWER_OK) return status;
@@ -7594,7 +5813,7 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
                  expression->value.binary.operator_kind == MINIC_BINARY_SUBTRACT ? "__subtf3" :
                  expression->value.binary.operator_kind == MINIC_BINARY_MULTIPLY ? "__multf3" :
                  "__divtf3";
-        return append_long_double_binary_helper(
+        return minic_core_lower_internal_append_long_double_binary_helper(
             context, expression->span, helper, left, right, minic_type_long_double(), value_id);
     }
 
@@ -7612,7 +5831,7 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
         bool is_float;
 
         is_float = minic_type_is_float(expression->type);
-        status = lower_floating_binary_operands(context,
+        status = minic_core_lower_internal_lower_floating_binary_operands(context,
                                               expression->value.binary.left,
                                               expression->value.binary.right,
                                               expression->type,
@@ -7662,7 +5881,7 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
         if (!minic_type_is_integer(expression->type)) {
             return MINIC_CORE_LOWER_UNSUPPORTED;
         }
-        status = lower_integer_binary_operands(context,
+        status = minic_core_lower_internal_lower_integer_binary_operands(context,
                                                expression->value.binary.left,
                                                expression->value.binary.right,
                                                expression->type,
@@ -7688,7 +5907,7 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
         if (!minic_type_is_integer(expression->type)) {
             return MINIC_CORE_LOWER_UNSUPPORTED;
         }
-        status = lower_integer_binary_operands(context,
+        status = minic_core_lower_internal_lower_integer_binary_operands(context,
                                                expression->value.binary.left,
                                                expression->value.binary.right,
                                                expression->type,
@@ -7714,7 +5933,7 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
         if (!minic_type_is_integer(expression->type)) {
             return MINIC_CORE_LOWER_UNSUPPORTED;
         }
-        status = lower_integer_binary_operands(context,
+        status = minic_core_lower_internal_lower_integer_binary_operands(context,
                                                expression->value.binary.left,
                                                expression->value.binary.right,
                                                expression->type,
@@ -7758,12 +5977,12 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
         if (status != MINIC_CORE_LOWER_OK) {
             return status;
         }
-        status = append_integer_conversion(
+        status = minic_core_lower_internal_append_integer_conversion(
             context, left_expression->span, expression->type, left_source, &left);
         if (status != MINIC_CORE_LOWER_OK) {
             return status;
         }
-        status = spill_scalar_value(
+        status = minic_core_lower_internal_spill_scalar_value(
             context, left_expression->span, expression->type, left, &left_object);
         if (status != MINIC_CORE_LOWER_OK) {
             return status;
@@ -7772,7 +5991,7 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
         if (status != MINIC_CORE_LOWER_OK) {
             return status;
         }
-        status = reload_scalar_value(
+        status = minic_core_lower_internal_reload_scalar_value(
             context, left_expression->span, expression->type, left_object, &left);
         if (status != MINIC_CORE_LOWER_OK) {
             return status;
@@ -7852,27 +6071,27 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
                 return MINIC_CORE_LOWER_ERROR;
             }
             address_type = context->function->values[address].type;
-            status = spill_scalar_value(
+            status = minic_core_lower_internal_spill_scalar_value(
                 context, target->span, address_type, address, &address_object);
             if (status != MINIC_CORE_LOWER_OK) {
                 return status;
             }
-            status = spill_scalar_value(
+            status = minic_core_lower_internal_spill_scalar_value(
                 context, target->span, stored_type, current, &current_object);
             if (status != MINIC_CORE_LOWER_OK) {
                 return status;
             }
-            status = lower_scalar_assignment_value(
+            status = minic_core_lower_internal_lower_scalar_assignment_value(
                 context, stored_type, expression->value.binary.right, &right);
             if (status != MINIC_CORE_LOWER_OK) {
                 return status;
             }
-            status = reload_scalar_value(
+            status = minic_core_lower_internal_reload_scalar_value(
                 context, target->span, stored_type, current_object, &current);
             if (status != MINIC_CORE_LOWER_OK) {
                 return status;
             }
-            status = reload_scalar_value(
+            status = minic_core_lower_internal_reload_scalar_value(
                 context, target->span, address_type, address_object, &address);
             if (status != MINIC_CORE_LOWER_OK) {
                 return status;
@@ -7883,7 +6102,7 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
                     expression->value.binary.operator_kind == MINIC_BINARY_SUBTRACT ? "__subtf3" :
                     expression->value.binary.operator_kind == MINIC_BINARY_MULTIPLY ? "__multf3" :
                     "__divtf3";
-                status = append_long_double_binary_helper(
+                status = minic_core_lower_internal_append_long_double_binary_helper(
                     context, expression->span, helper, current, right,
                     minic_type_long_double(), &result);
                 if (status != MINIC_CORE_LOWER_OK) return status;
@@ -8023,7 +6242,7 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
             return MINIC_CORE_LOWER_ERROR;
         }
         status =
-            append_integer_conversion(context, target->span, common_type, current, &current_common);
+            minic_core_lower_internal_append_integer_conversion(context, target->span, common_type, current, &current_common);
         if (status != MINIC_CORE_LOWER_OK) {
             return status;
         }
@@ -8031,12 +6250,12 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
             return MINIC_CORE_LOWER_ERROR;
         }
         address_type = context->function->values[address].type;
-        status = spill_scalar_value(context, target->span, address_type, address, &address_object);
+        status = minic_core_lower_internal_spill_scalar_value(context, target->span, address_type, address, &address_object);
         if (status != MINIC_CORE_LOWER_OK) {
             return status;
         }
         status =
-            spill_scalar_value(context, target->span, common_type, current_common, &current_object);
+            minic_core_lower_internal_spill_scalar_value(context, target->span, common_type, current_common, &current_object);
         if (status != MINIC_CORE_LOWER_OK) {
             return status;
         }
@@ -8045,16 +6264,16 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
             return status;
         }
         status =
-            append_integer_conversion(context, source->span, right_type, right, &right_common);
+            minic_core_lower_internal_append_integer_conversion(context, source->span, right_type, right, &right_common);
         if (status != MINIC_CORE_LOWER_OK) {
             return status;
         }
-        status = reload_scalar_value(
+        status = minic_core_lower_internal_reload_scalar_value(
             context, target->span, common_type, current_object, &current_common);
         if (status != MINIC_CORE_LOWER_OK) {
             return status;
         }
-        status = reload_scalar_value(context, target->span, address_type, address_object, &address);
+        status = minic_core_lower_internal_reload_scalar_value(context, target->span, address_type, address_object, &address);
         if (status != MINIC_CORE_LOWER_OK) {
             return status;
         }
@@ -8102,7 +6321,7 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
                 context->function, context->block_id, &instruction, &result)) {
             return MINIC_CORE_LOWER_ERROR;
         }
-        status = append_integer_conversion(
+        status = minic_core_lower_internal_append_integer_conversion(
             context, expression->span, stored_type, result, &stored_value);
         if (status != MINIC_CORE_LOWER_OK) {
             return status;
@@ -8250,12 +6469,12 @@ static MinicCoreLowerStatus lower_assignment_pair(MinicCoreLowerContext *context
                 return MINIC_CORE_LOWER_ERROR;
             }
 
-            bit_status = lower_scalar_assignment_value(
+            bit_status = minic_core_lower_internal_lower_scalar_assignment_value(
                 context, value_type, source_id, &field_value);
             if (bit_status != MINIC_CORE_LOWER_OK) {
                 return bit_status;
             }
-            bit_status = spill_scalar_value(
+            bit_status = minic_core_lower_internal_spill_scalar_value(
                 context, span, value_type, field_value, &source_object);
             if (bit_status != MINIC_CORE_LOWER_OK) {
                 return bit_status;
@@ -8290,7 +6509,7 @@ static MinicCoreLowerStatus lower_assignment_pair(MinicCoreLowerContext *context
                     context->function, context->block_id, &operation, &current)) {
                 return MINIC_CORE_LOWER_ERROR;
             }
-            bit_status = reload_scalar_value(
+            bit_status = minic_core_lower_internal_reload_scalar_value(
                 context, span, value_type, source_object, &field_value);
             if (bit_status != MINIC_CORE_LOWER_OK) {
                 return bit_status;
@@ -8298,7 +6517,7 @@ static MinicCoreLowerStatus lower_assignment_pair(MinicCoreLowerContext *context
             if (minic_type_equal(storage_type, value_type)) {
                 field_storage = field_value;
             } else {
-                bit_status = append_integer_conversion(
+                bit_status = minic_core_lower_internal_append_integer_conversion(
                     context, span, storage_type, field_value, &field_storage);
                 if (bit_status != MINIC_CORE_LOWER_OK) {
                     return bit_status;
@@ -8334,7 +6553,7 @@ static MinicCoreLowerStatus lower_assignment_pair(MinicCoreLowerContext *context
             if (minic_type_equal(storage_type, value_type)) {
                 assigned_value = field_storage;
             } else {
-                bit_status = append_integer_conversion(
+                bit_status = minic_core_lower_internal_append_integer_conversion(
                     context, span, value_type, field_storage, &assigned_value);
                 if (bit_status != MINIC_CORE_LOWER_OK) {
                     return bit_status;
@@ -8469,7 +6688,7 @@ static MinicCoreLowerStatus lower_assignment_pair(MinicCoreLowerContext *context
         !core_memory_scalar_type(stored_type)) {
         return MINIC_CORE_LOWER_UNSUPPORTED;
     }
-    status = lower_scalar_assignment_value(context, stored_type, source_id, &stored_value);
+    status = minic_core_lower_internal_lower_scalar_assignment_value(context, stored_type, source_id, &stored_value);
     if (status != MINIC_CORE_LOWER_OK) {
         {
             const MinicExpression *target_expression;
@@ -8494,7 +6713,7 @@ static MinicCoreLowerStatus lower_assignment_pair(MinicCoreLowerContext *context
         }
         return status;
     }
-    status = spill_scalar_value(context, span, stored_type, stored_value, &stored_object);
+    status = minic_core_lower_internal_spill_scalar_value(context, span, stored_type, stored_value, &stored_object);
     if (status != MINIC_CORE_LOWER_OK) {
         (void)fprintf(stderr, "CORE_ASSIGN_STAGE function=%s stage=spill status=%d\n",
                       context->source_function != NULL ? context->source_function->name : "?",
@@ -8508,7 +6727,7 @@ static MinicCoreLowerStatus lower_assignment_pair(MinicCoreLowerContext *context
                       (int)status);
         return status;
     }
-    status = reload_scalar_value(context, span, stored_type, stored_object, &stored_value);
+    status = minic_core_lower_internal_reload_scalar_value(context, span, stored_type, stored_object, &stored_value);
     if (status != MINIC_CORE_LOWER_OK) {
         (void)fprintf(stderr, "CORE_ASSIGN_STAGE function=%s stage=reload status=%d\n",
                       context->source_function != NULL ? context->source_function->name : "?",
@@ -8535,7 +6754,7 @@ static MinicCoreLowerStatus lower_assignment_pair(MinicCoreLowerContext *context
         bool fact_known;
         bool null_pointer_known;
         null_pointer_known = minic_core_lower_known_null_pointer(context, source_id);
-        /* M191_STATEMENT_EXPRESSION_POSTLOWER_FACT: lower_scalar_assignment_value()
+        /* M191_STATEMENT_EXPRESSION_POSTLOWER_FACT: minic_core_lower_internal_lower_scalar_assignment_value()
            has already executed a GNU statement-expression block at this point.
            If its final expression is now a proven integer local fact, consume
            that fact directly instead of asking the intentionally narrow
@@ -8768,7 +6987,7 @@ static MinicCoreLowerStatus lower_integer_bit_field_update(
     }
     current_field = shifted_current;
     if (!minic_type_equal(storage_type, value_type)) {
-        status = append_integer_conversion(
+        status = minic_core_lower_internal_append_integer_conversion(
             context, operand->span, value_type, current_field, &current_field);
         if (status != MINIC_CORE_LOWER_OK) {
             return status;
@@ -8815,7 +7034,7 @@ static MinicCoreLowerStatus lower_integer_bit_field_update(
             return MINIC_CORE_LOWER_ERROR;
         }
     }
-    status = append_integer_conversion(
+    status = minic_core_lower_internal_append_integer_conversion(
         context, operand->span, promoted_type, current_field, &current_promoted);
     if (status != MINIC_CORE_LOWER_OK) {
         return status;
@@ -8843,14 +7062,14 @@ static MinicCoreLowerStatus lower_integer_bit_field_update(
             context->function, context->block_id, &instruction, &updated_promoted)) {
         return MINIC_CORE_LOWER_ERROR;
     }
-    status = append_integer_conversion(
+    status = minic_core_lower_internal_append_integer_conversion(
         context, expression->span, value_type, updated_promoted, &updated_value);
     if (status != MINIC_CORE_LOWER_OK) {
         return status;
     }
     field_storage = updated_value;
     if (!minic_type_equal(value_type, storage_type)) {
-        status = append_integer_conversion(
+        status = minic_core_lower_internal_append_integer_conversion(
             context, expression->span, storage_type, field_storage, &field_storage);
         if (status != MINIC_CORE_LOWER_OK) {
             return status;
@@ -8885,7 +7104,7 @@ static MinicCoreLowerStatus lower_integer_bit_field_update(
     if (minic_type_equal(storage_type, value_type)) {
         updated_value = field_storage;
     } else {
-        status = append_integer_conversion(
+        status = minic_core_lower_internal_append_integer_conversion(
             context, expression->span, value_type, field_storage, &updated_value);
         if (status != MINIC_CORE_LOWER_OK) {
             return status;
@@ -9161,7 +7380,7 @@ static MinicCoreLowerStatus lower_scalar_update(MinicCoreLowerContext *context,
                 context->function, context->block_id, &instruction, &one)) {
             return MINIC_CORE_LOWER_ERROR;
         }
-        status = append_long_double_binary_helper(
+        status = minic_core_lower_internal_append_long_double_binary_helper(
             context, expression->span, helper, current, one, stored_type, &updated);
         if (status != MINIC_CORE_LOWER_OK) {
             return status;
@@ -9280,7 +7499,7 @@ static bool core_p1_pure_discarded_local_address_comparison(
            core_p1_plain_local_address(program, comparison->value.binary.right);
 }
 
-static MinicCoreLowerStatus lower_expression_statement(MinicCoreLowerContext *context,
+MinicCoreLowerStatus minic_core_lower_internal_lower_expression_statement(MinicCoreLowerContext *context,
                                                        const MinicStatement *statement) {
     const MinicExpression *expression;
     MinicExpressionId source_id;
@@ -9323,15 +7542,15 @@ static MinicCoreLowerStatus lower_expression_statement(MinicCoreLowerContext *co
          * GNU builtin arguments have no specified mutual evaluation order:
          * choosing value first preserves single evaluation without referring
          * to a Core SSA value from a predecessor block. */
-        status = lower_scalar_assignment_value(
+        status = minic_core_lower_internal_lower_scalar_assignment_value(
             context, target_type, expression->value.atomic_store.source, &value);
         if (status != MINIC_CORE_LOWER_OK) return status;
-        status = spill_scalar_value(
+        status = minic_core_lower_internal_spill_scalar_value(
             context, expression->span, target_type, value, &stored_object);
         if (status != MINIC_CORE_LOWER_OK) return status;
         status = lower_expression(context, expression->value.atomic_store.address, &address);
         if (status != MINIC_CORE_LOWER_OK) return status;
-        status = reload_scalar_value(
+        status = minic_core_lower_internal_reload_scalar_value(
             context, expression->span, target_type, stored_object, &value);
         if (status != MINIC_CORE_LOWER_OK) return status;
         (void)memset(&atomic, 0, sizeof(atomic));
@@ -9439,7 +7658,7 @@ static MinicCoreLowerStatus lower_expression_statement(MinicCoreLowerContext *co
         discarded.else_block = MINIC_BLOCK_INVALID;
         discarded.expression = expression->value.binary.left;
         discarded.span = left_expression->span;
-        status = lower_expression_statement(context, &discarded);
+        status = minic_core_lower_internal_lower_expression_statement(context, &discarded);
         if (status != MINIC_CORE_LOWER_OK) {
             return status;
         }
@@ -9452,7 +7671,7 @@ static MinicCoreLowerStatus lower_expression_statement(MinicCoreLowerContext *co
 
         discarded.expression = expression->value.binary.right;
         discarded.span = right_expression->span;
-        return lower_expression_statement(context, &discarded);
+        return minic_core_lower_internal_lower_expression_statement(context, &discarded);
     }
     /* M129_LEAF_EXPRESSION_OWNERS: keep M86B as the default discarded-record
        assignment owner. Only conditional aggregate RHS values need the newer
@@ -9828,7 +8047,7 @@ static MinicCoreLowerStatus lower_return(MinicCoreLowerContext *context,
         if (core_memory_scalar_type(context->source_function->return_type)) {
             /* M175B_SCALAR_RETURN_OWNER: all Core memory scalars use the same
                C assignment/value transport at the return boundary. */
-            status = lower_scalar_assignment_value(context,
+            status = minic_core_lower_internal_lower_scalar_assignment_value(context,
                                                    context->source_function->return_type,
                                                    statement->expression,
                                                    &terminator.return_value);
@@ -9892,7 +8111,7 @@ static MinicCoreLowerStatus lower_return(MinicCoreLowerContext *context,
        reload it before installing the RETURN terminator. */
     if (has_cleanup) {
         if (core_memory_scalar_type(context->source_function->return_type)) {
-            status = spill_scalar_value(context, statement->span,
+            status = minic_core_lower_internal_spill_scalar_value(context, statement->span,
                                         context->source_function->return_type,
                                         terminator.return_value, &cleanup_return_object);
             if (status != MINIC_CORE_LOWER_OK) {
@@ -9905,7 +8124,7 @@ static MinicCoreLowerStatus lower_return(MinicCoreLowerContext *context,
             return status;
         }
         if (core_memory_scalar_type(context->source_function->return_type)) {
-            status = reload_scalar_value(context, statement->span,
+            status = minic_core_lower_internal_reload_scalar_value(context, statement->span,
                                          context->source_function->return_type,
                                          cleanup_return_object, &terminator.return_value);
             if (status != MINIC_CORE_LOWER_OK) {
@@ -9918,7 +8137,7 @@ static MinicCoreLowerStatus lower_return(MinicCoreLowerContext *context,
                : MINIC_CORE_LOWER_ERROR;
 }
 
-static MinicCoreLowerStatus set_branch(MinicCoreLowerContext *context,
+MinicCoreLowerStatus minic_core_lower_internal_set_branch(MinicCoreLowerContext *context,
                                        MinicCoreBlockId block_id,
                                        MinicSourceSpan span,
                                        MinicCoreBlockId target) {
@@ -9937,7 +8156,7 @@ static MinicCoreLowerStatus set_branch(MinicCoreLowerContext *context,
                : MINIC_CORE_LOWER_ERROR;
 }
 
-static MinicCoreLowerStatus lower_condition_branch(MinicCoreLowerContext *context,
+MinicCoreLowerStatus minic_core_lower_internal_lower_condition_branch(MinicCoreLowerContext *context,
                                                    MinicExpressionId expression_id,
                                                    MinicSourceSpan span,
                                                    MinicCoreBlockId when_true,
@@ -9990,7 +8209,7 @@ static MinicCoreLowerStatus lower_condition_branch(MinicCoreLowerContext *contex
             fold_false = true;
         }
         if (fold_false) {
-            return set_branch(context, context->block_id, span, when_false);
+            return minic_core_lower_internal_set_branch(context, context->block_id, span, when_false);
         }
     }
     if (minic_type_is_integer(expression->type)) {
@@ -10001,7 +8220,7 @@ static MinicCoreLowerStatus lower_condition_branch(MinicCoreLowerContext *contex
                                       context->target,
                                       &condition_constant,
                                       &condition_is_zero)) {
-            return set_branch(context,
+            return minic_core_lower_internal_set_branch(context,
                               context->block_id,
                               span,
                               condition_is_zero ? when_false : when_true);
@@ -10030,7 +8249,7 @@ static MinicCoreLowerStatus lower_condition_branch(MinicCoreLowerContext *contex
             minic_c0_program_expression(context->body->program, expression->value.unary.operand);
         if (operand != NULL &&
             (minic_type_is_integer(operand->type) || minic_type_is_pointer(operand->type))) {
-            return lower_condition_branch(
+            return minic_core_lower_internal_lower_condition_branch(
                 context, expression->value.unary.operand, span, when_false, when_true);
         }
     }
@@ -10049,7 +8268,7 @@ static MinicCoreLowerStatus lower_condition_branch(MinicCoreLowerContext *contex
                 context->target, context->body->program, expression->type, &destination_width) &&
             (minic_type_equal(operand->type, expression->type) ||
              destination_width > source_width)) {
-            return lower_condition_branch(
+            return minic_core_lower_internal_lower_condition_branch(
                 context, expression->value.unary.operand, span, when_true, when_false);
         }
     }
@@ -10072,21 +8291,21 @@ static MinicCoreLowerStatus lower_condition_branch(MinicCoreLowerContext *contex
                                       &left_constant,
                                       &left_is_zero)) {
             if (left_is_zero) {
-                return set_branch(context, context->block_id, span, when_false);
+                return minic_core_lower_internal_set_branch(context, context->block_id, span, when_false);
             }
-            return lower_condition_branch(
+            return minic_core_lower_internal_lower_condition_branch(
                 context, expression->value.binary.right, span, when_true, when_false);
         }
         if (!minic_core_function_add_block(context->function, &right_block)) {
             return MINIC_CORE_LOWER_ERROR;
         }
-        status = lower_condition_branch(
+        status = minic_core_lower_internal_lower_condition_branch(
             context, expression->value.binary.left, span, right_block, when_false);
         if (status != MINIC_CORE_LOWER_OK) {
             return status;
         }
         context->block_id = right_block;
-        return lower_condition_branch(
+        return minic_core_lower_internal_lower_condition_branch(
             context, expression->value.binary.right, span, when_true, when_false);
     }
     if (expression->kind == MINIC_EXPRESSION_BINARY &&
@@ -10108,21 +8327,21 @@ static MinicCoreLowerStatus lower_condition_branch(MinicCoreLowerContext *contex
                                       &left_constant,
                                       &left_is_zero)) {
             if (!left_is_zero) {
-                return set_branch(context, context->block_id, span, when_true);
+                return minic_core_lower_internal_set_branch(context, context->block_id, span, when_true);
             }
-            return lower_condition_branch(
+            return minic_core_lower_internal_lower_condition_branch(
                 context, expression->value.binary.right, span, when_true, when_false);
         }
         if (!minic_core_function_add_block(context->function, &right_block)) {
             return MINIC_CORE_LOWER_ERROR;
         }
-        status = lower_condition_branch(
+        status = minic_core_lower_internal_lower_condition_branch(
             context, expression->value.binary.left, span, when_true, right_block);
         if (status != MINIC_CORE_LOWER_OK) {
             return status;
         }
         context->block_id = right_block;
-        return lower_condition_branch(
+        return minic_core_lower_internal_lower_condition_branch(
             context, expression->value.binary.right, span, when_true, when_false);
     }
 
@@ -10949,13 +9168,13 @@ lower_if(MinicCoreLowerContext *context, const MinicStatement *statement, bool *
             return MINIC_CORE_LOWER_ERROR;
         }
         if (!then_terminated) {
-            status = set_branch(context, then_continuation_block, statement->span, merge_block);
+            status = minic_core_lower_internal_set_branch(context, then_continuation_block, statement->span, merge_block);
             if (status != MINIC_CORE_LOWER_OK) {
                 return status;
             }
         }
         if (else_source != NULL && !else_terminated) {
-            status = set_branch(context, else_continuation_block, statement->span, merge_block);
+            status = minic_core_lower_internal_set_branch(context, else_continuation_block, statement->span, merge_block);
             if (status != MINIC_CORE_LOWER_OK) {
                 return status;
             }
@@ -10980,7 +9199,7 @@ lower_if(MinicCoreLowerContext *context, const MinicStatement *statement, bool *
             (size_t)statement->expression, (unsigned int)condition_block,
             (unsigned int)then_block, (unsigned int)false_target,
             needs_merge ? 1 : 0);
-    status = lower_condition_branch(
+    status = minic_core_lower_internal_lower_condition_branch(
         context, statement->expression, statement->span, then_block, false_target);
     if (status != MINIC_CORE_LOWER_OK) {
         (void)fprintf(stderr,
@@ -11175,7 +9394,7 @@ lower_while(MinicCoreLowerContext *context,
                 return status;
             }
             if (!body_terminated) {
-                status = set_branch(
+                status = minic_core_lower_internal_set_branch(
                     context, context->block_id, statement->span, single_iteration_exit);
                 if (status != MINIC_CORE_LOWER_OK) {
                     return status;
@@ -11288,7 +9507,7 @@ lower_while(MinicCoreLowerContext *context,
         context->statement_blocks[continue_label_statement] =
             for_update != NULL ? update_block : condition_block;
     }
-    status = set_branch(context, preheader_block, statement->span, condition_block);
+    status = minic_core_lower_internal_set_branch(context, preheader_block, statement->span, condition_block);
     if (status != MINIC_CORE_LOWER_OK) {
         return status;
     }
@@ -11299,7 +9518,7 @@ lower_while(MinicCoreLowerContext *context,
         /* C defines an omitted for-condition as true, and a proven nonzero
            integer constant has the same CFG reachability. Keep an explicit
            Core condition block so break/backedge ownership remains identical. */
-        status = set_branch(context, condition_block, statement->span, body_block);
+        status = minic_core_lower_internal_set_branch(context, condition_block, statement->span, body_block);
         if (status != MINIC_CORE_LOWER_OK) {
             return status;
         }
@@ -11307,7 +9526,7 @@ lower_while(MinicCoreLowerContext *context,
         /* M84_SHARED_LOOP_CONDITION_BRANCH: if/while/normalized-for share one
            scalar-condition owner. This admits pointer truth values and keeps
            !/&&/|| short-circuit CFG construction out of the loop lowering. */
-        status = lower_condition_branch(context,
+        status = minic_core_lower_internal_lower_condition_branch(context,
                                         statement->expression,
                                         statement->span,
                                         body_block,
@@ -11339,13 +9558,13 @@ lower_while(MinicCoreLowerContext *context,
            body fallthrough and every continue edge at one update owner, then
            evaluate the update exactly once before the condition backedge. */
         if (!body_terminated) {
-            status = set_branch(context, context->block_id, statement->span, update_block);
+            status = minic_core_lower_internal_set_branch(context, context->block_id, statement->span, update_block);
             if (status != MINIC_CORE_LOWER_OK) {
                 return status;
             }
         }
         context->block_id = update_block;
-        status = lower_expression_statement(context, for_update);
+        status = minic_core_lower_internal_lower_expression_statement(context, for_update);
         if (status != MINIC_CORE_LOWER_OK) {
             return status;
         }
@@ -11354,14 +9573,14 @@ lower_while(MinicCoreLowerContext *context,
             body_terminated = true;
         } else {
             body_terminated = false;
-            status = set_branch(context, context->block_id, statement->span, condition_block);
+            status = minic_core_lower_internal_set_branch(context, context->block_id, statement->span, condition_block);
             if (status != MINIC_CORE_LOWER_OK) {
                 return status;
             }
         }
     } else {
         if (!body_terminated && for_update != NULL) {
-            status = lower_expression_statement(context, for_update);
+            status = minic_core_lower_internal_lower_expression_statement(context, for_update);
             if (status != MINIC_CORE_LOWER_OK) {
                 return status;
             }
@@ -11371,7 +9590,7 @@ lower_while(MinicCoreLowerContext *context,
             }
         }
         if (!body_terminated) {
-            status = set_branch(context, context->block_id, statement->span, condition_block);
+            status = minic_core_lower_internal_set_branch(context, context->block_id, statement->span, condition_block);
             if (status != MINIC_CORE_LOWER_OK) {
                 return status;
             }
@@ -11498,7 +9717,7 @@ static MinicCoreLowerStatus lower_switch_case_dispatch(MinicCoreLowerContext *co
         return MINIC_CORE_LOWER_UNSUPPORTED;
     }
 
-    status = reload_scalar_value(
+    status = minic_core_lower_internal_reload_scalar_value(
         context, case_statement->span, selector_type, selector_object, &selector);
     if (status != MINIC_CORE_LOWER_OK) {
         return status;
@@ -11586,7 +9805,7 @@ static MinicCoreLowerStatus lower_switch_case_dispatch(MinicCoreLowerContext *co
         if (status != MINIC_CORE_LOWER_OK) {
             return status;
         }
-        status = reload_scalar_value(
+        status = minic_core_lower_internal_reload_scalar_value(
             context, case_statement->span, selector_type, selector_object, &selector);
         if (status != MINIC_CORE_LOWER_OK) {
             return status;
@@ -11897,12 +10116,12 @@ static MinicCoreLowerStatus lower_nested_case_switch(
     if (status != MINIC_CORE_LOWER_OK) {
         return status;
     }
-    status = append_integer_conversion(
+    status = minic_core_lower_internal_append_integer_conversion(
         context, statement->span, selector_type, selector_source, &selector_normalized);
     if (status != MINIC_CORE_LOWER_OK) {
         return status;
     }
-    status = spill_scalar_value(
+    status = minic_core_lower_internal_spill_scalar_value(
         context, statement->span, selector_type, selector_normalized, &selector_object);
     if (status != MINIC_CORE_LOWER_OK) {
         return status;
@@ -11929,7 +10148,7 @@ static MinicCoreLowerStatus lower_nested_case_switch(
         default_label == SIZE_MAX ? exit_block : labels[default_label].body_block;
     dispatch_target =
         first_case_label == SIZE_MAX ? default_target : labels[first_case_label].test_block;
-    status = set_branch(context, context->block_id, statement->span, dispatch_target);
+    status = minic_core_lower_internal_set_branch(context, context->block_id, statement->span, dispatch_target);
     if (status != MINIC_CORE_LOWER_OK) {
         return status;
     }
@@ -11976,7 +10195,7 @@ static MinicCoreLowerStatus lower_nested_case_switch(
         return status;
     }
     if (!body_terminated) {
-        status = set_branch(context, context->block_id, statement->span, exit_block);
+        status = minic_core_lower_internal_set_branch(context, context->block_id, statement->span, exit_block);
         if (status != MINIC_CORE_LOWER_OK) {
             return status;
         }
@@ -12213,12 +10432,12 @@ lower_switch(MinicCoreLowerContext *context, const MinicStatement *statement, bo
     if (status != MINIC_CORE_LOWER_OK) {
         return status;
     }
-    status = append_integer_conversion(
+    status = minic_core_lower_internal_append_integer_conversion(
         context, selector_expression->span, selector_type, selector_source, &selector_normalized);
     if (status != MINIC_CORE_LOWER_OK) {
         return status;
     }
-    status = spill_scalar_value(
+    status = minic_core_lower_internal_spill_scalar_value(
         context, selector_expression->span, selector_type, selector_normalized, &selector_object);
     if (status != MINIC_CORE_LOWER_OK) {
         return status;
@@ -12257,7 +10476,7 @@ lower_switch(MinicCoreLowerContext *context, const MinicStatement *statement, bo
                 return MINIC_CORE_LOWER_ERROR;
             }
             if (!context->function->blocks[pre_block].has_terminator) {
-                status = set_branch(
+                status = minic_core_lower_internal_set_branch(
                     context, pre_block, pre_label->span, first_body_target);
                 if (status != MINIC_CORE_LOWER_OK) {
                     return status;
@@ -12323,7 +10542,7 @@ lower_switch(MinicCoreLowerContext *context, const MinicStatement *statement, bo
             }
         }
     }
-    status = set_branch(context, context->block_id, statement->span, dispatch_target);
+    status = minic_core_lower_internal_set_branch(context, context->block_id, statement->span, dispatch_target);
     if (status != MINIC_CORE_LOWER_OK) {
         return status;
     }
@@ -12454,7 +10673,7 @@ lower_switch(MinicCoreLowerContext *context, const MinicStatement *statement, bo
         } else {
             fallthrough_target = exit_block;
         }
-        status = set_branch(context, context->block_id, statement->span, fallthrough_target);
+        status = minic_core_lower_internal_set_branch(context, context->block_id, statement->span, fallthrough_target);
         if (status != MINIC_CORE_LOWER_OK) {
             return status;
         }
@@ -12500,7 +10719,7 @@ lower_switch(MinicCoreLowerContext *context, const MinicStatement *statement, bo
                     source_index + 1U < label_count
                         ? labels[source_index + 1U].body_block
                         : exit_block;
-                status = set_branch(
+                status = minic_core_lower_internal_set_branch(
                     context, context->block_id, reentry_label->span, reentry_fallthrough);
                 if (status != MINIC_CORE_LOWER_OK) {
                     return status;
@@ -13415,7 +11634,7 @@ lower_block(MinicCoreLowerContext *context, const MinicBlock *source_block, bool
                 return status;
             }
             if (!block_terminated && context->block_id != label_block) {
-                status = set_branch(
+                status = minic_core_lower_internal_set_branch(
                     context, context->block_id, statement->span, label_block);
                 if (status != MINIC_CORE_LOWER_OK) {
                     return status;
@@ -13448,7 +11667,7 @@ lower_block(MinicCoreLowerContext *context, const MinicBlock *source_block, bool
                 status = ensure_statement_block(context, label_statement_id, &label_block);
                 if (status != MINIC_CORE_LOWER_OK) return status;
                 if (!block_terminated && context->block_id != label_block) {
-                    status = set_branch(context, context->block_id, statement->span, label_block);
+                    status = minic_core_lower_internal_set_branch(context, context->block_id, statement->span, label_block);
                     if (status != MINIC_CORE_LOWER_OK) return status;
                 }
                 context->block_id = label_block;
@@ -13466,7 +11685,7 @@ lower_block(MinicCoreLowerContext *context, const MinicBlock *source_block, bool
                 status = lower_record_copy_statement(context, statement);
                 break;
             case MINIC_STATEMENT_EXPRESSION:
-                status = lower_expression_statement(context, statement);
+                status = minic_core_lower_internal_lower_expression_statement(context, statement);
                 if (status == MINIC_CORE_LOWER_OK &&
                     context->block_id < context->function->block_count &&
                     context->function->blocks[context->block_id].has_terminator) {
@@ -13493,7 +11712,7 @@ lower_block(MinicCoreLowerContext *context, const MinicBlock *source_block, bool
                         break;
                     }
                 }
-                status = set_branch(
+                status = minic_core_lower_internal_set_branch(
                     context, context->block_id, statement->span, context->break_target);
                 statement_terminated = status == MINIC_CORE_LOWER_OK;
                 break;
@@ -13558,7 +11777,7 @@ lower_block(MinicCoreLowerContext *context, const MinicBlock *source_block, bool
                 status = ensure_statement_block(
                     context, statement->target_statement, &target_block);
                 if (status == MINIC_CORE_LOWER_OK) {
-                    status = set_branch(
+                    status = minic_core_lower_internal_set_branch(
                         context, context->block_id, statement->span, target_block);
                 }
                 statement_terminated = status == MINIC_CORE_LOWER_OK;
