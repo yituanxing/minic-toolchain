@@ -257,3 +257,24 @@ regalloc/ABI/Machine IR, and Core IR remains architecture independent.
 Acceptance: verify full RV64 Linux original compilation and performance
 receipts, x86 owner targets and AArch64/LoongArch64 original GNU/QEMU
 regressions. A moved byte-identical algorithm is not a CI verdict.
+
+## Cross-ISA program output: reuse lifecycle, keep ABI/instruction-private
+
+Both AArch64 and LoongArch64 had *byte-identical* `fail` and
+`machine_emit_reject` helpers and two near-identical TU-level output
+drivers with the same mandatory no-partial-assembly, opt-in full TU
+census and GNU global initializer loop. These are now compiled once
+as `target/common/direct_program_emit.{c,h}`.
+
+The explicit configuration contains only ISA identification, GNU-stack
+note text, a function-emitter callback, and optional post-output
+legalizer. AArch64 retains its verified large-SP memory text legalization;
+LoongArch64 continues emitting its own large stack accesses immediately.
+Both continue to own their entire ABI register placement, Core legality,
+function codegen and assembler instructions. RV64's Linux-native
+driver and x86 SysV driver are **not** redirected into this narrower
+direct-LP64 driver, because their TU/ABI contracts are more elaborate.
+
+This is output/diagnostic policy ownership, not Machine IR or a
+universal target emitter. Original GNU-QEMU BusyBox full-owner
+verdicts and negative AArch64 HFA diagnostics are authoritative.

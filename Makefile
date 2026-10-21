@@ -86,6 +86,7 @@ MINIC_SOURCES := \
 	src/target/target_info.c \
 	src/target/backend.c \
 	src/target/common/global_emit.c \
+	src/target/common/direct_program_emit.c \
 	src/target/common/lp64_aggregate.c \
 	src/target/common/lp64_scalar.c \
 	src/target/common/lp64_frame.c \
