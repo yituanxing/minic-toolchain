@@ -1,5 +1,6 @@
 #include "core/core_lower_internal.h"
 #include "core/source_loop_shapes.h"
+#include "core/local_facts.h"
 
 #include "frontend/const_eval.h"
 #include "frontend/expression_semantics.h"
@@ -195,226 +196,6 @@ static MinicCoreLowerStatus lower_scalar_assignment_value(MinicCoreLowerContext 
                                                           MinicType target_type,
                                                           MinicExpressionId expression_id,
                                                           MinicCoreValueId *value_id);
-
-
-/* LINUX_LOCAL_INTEGER_CONSTANTS_V0
- *
- * This is intentionally a tiny straight-line fact table, not an optimizer.
- * A fact is admitted only for an unescaped non-volatile direct local integer.
- * Unknown CFG joins discard all facts.  The purpose is to preserve C/GNU
- * compile-time reachability idioms after their constant value has travelled
- * through a local object (notably Linux BUILD_BUG_ON/compiletime_assert). */
-static bool core_local_constant_index(const MinicCoreLowerContext *context,
-                                      MinicLocalId local_id,
-                                      size_t *index) {
-    if (context == NULL || context->source_function == NULL || index == NULL ||
-        local_id < context->source_function->local_begin) {
-        return false;
-    }
-    *index = local_id - context->source_function->local_begin;
-    return *index < context->source_function->local_count &&
-           context->local_integer_constants != NULL;
-}
-
-
-
-static bool core_inline_spec_fact_trace_enabled(const MinicCoreLowerContext *context) {
-    const char *text;
-    char *end;
-    unsigned long long source_id;
-
-    if (context == NULL || context->source_function == NULL ||
-        !context->source_function->is_integer_specialization) {
-        return false;
-    }
-    text = getenv("MINIC_INLINE_SPEC_FACT_TRACE_SOURCE");
-    if (text == NULL || *text == '\0') {
-        return false;
-    }
-    end = NULL;
-    source_id = strtoull(text, &end, 10);
-    return end != text && end != NULL && *end == '\0' &&
-           source_id == (unsigned long long)context->source_function->specialization_source;
-}
-
-/* M179_TERMINATING_GUARD_FACTS: Core builds branch bodies before it emits
- * the condition block.  Keep one copy of the straight-line facts that reach an
- * uncertain if so condition lowering sees the correct incoming state.  When a
- * no-else true arm terminates (the common `if (err) return/goto` guard), the
- * only continuation is the false edge, so facts surviving condition evaluation
- * remain valid there instead of being discarded at a fictitious merge. */
-static MinicCoreLocalIntegerConstant *core_local_constants_snapshot(
-    const MinicCoreLowerContext *context) {
-    MinicCoreLocalIntegerConstant *copy;
-    size_t count;
-
-    if (context == NULL || context->source_function == NULL) {
-        return NULL;
-    }
-    count = context->source_function->local_count;
-    if (count == 0U) {
-        return NULL;
-    }
-    if (context->local_integer_constants == NULL ||
-        count > SIZE_MAX / sizeof(*copy)) {
-        return NULL;
-    }
-    copy = (MinicCoreLocalIntegerConstant *)malloc(count * sizeof(*copy));
-    if (copy == NULL) {
-        return NULL;
-    }
-    (void)memcpy(copy,
-                 context->local_integer_constants,
-                 count * sizeof(*copy));
-    return copy;
-}
-
-static void core_local_constants_restore(
-    MinicCoreLowerContext *context,
-    const MinicCoreLocalIntegerConstant *snapshot) {
-    size_t count;
-
-    if (context == NULL || context->source_function == NULL ||
-        context->local_integer_constants == NULL || snapshot == NULL) {
-        return;
-    }
-    count = context->source_function->local_count;
-    if (count == 0U || count > SIZE_MAX / sizeof(*snapshot)) {
-        return;
-    }
-    (void)memcpy(context->local_integer_constants,
-                 snapshot,
-                 count * sizeof(*snapshot));
-}
-
-static void core_local_constants_clear_known(MinicCoreLowerContext *context) {
-    size_t index;
-
-    if (getenv("MINIC_LOCAL_FACT_TRACE") != NULL && context != NULL &&
-        context->source_function != NULL) {
-        (void)fprintf(stderr,
-                      "LOCAL_FACT_CLEAR function=%s\n",
-                      context->source_function->name != NULL ? context->source_function->name : "?");
-    }
-    if (context == NULL || context->source_function == NULL ||
-        context->local_integer_constants == NULL) {
-        return;
-    }
-    for (index = 0U; index < context->source_function->local_count; ++index) {
-        MinicCoreLocalIntegerConstant *fact = &context->local_integer_constants[index];
-        if (getenv("MINIC_SHMEM_IF_TRACE") != NULL &&
-            context->source_function->name != NULL &&
-            strcmp(context->source_function->name, "shmem_alloc_and_acct_folio") == 0 &&
-            fact->known) {
-            (void)fprintf(stderr, "SHMEM_FACT_EVENT event=clear local=%zu bits=%llu escaped=%d\n",
-                (size_t)(context->source_function->local_begin + index),
-                (unsigned long long)fact->value.bits, fact->escaped ? 1 : 0);
-        }
-        if (fact->specialization_known && !fact->specialization_modified &&
-            !fact->escaped) {
-            fact->value = fact->specialization_value;
-            fact->known = true;
-        } else if (fact->program_zero_stable && !fact->escaped) {
-            fact->known = true;
-        } else {
-            fact->known = false;
-        }
-        if (fact->specialization_known && core_inline_spec_fact_trace_enabled(context)) {
-            (void)fprintf(stderr,
-                          "INLINE_SPEC_FACT event=clear function=%s source=%zu local=%zu known=%d modified=%d escaped=%d bits=%" PRIu64 "\n",
-                          context->source_function->name != NULL
-                              ? context->source_function->name
-                              : "?",
-                          (size_t)context->source_function->specialization_source,
-                          (size_t)(context->source_function->local_begin + index),
-                          fact->known ? 1 : 0,
-                          fact->specialization_modified ? 1 : 0,
-                          fact->escaped ? 1 : 0,
-                          fact->specialization_value.bits);
-        }
-    }
-}
-
-static void core_local_constant_invalidate(MinicCoreLowerContext *context,
-                                           MinicLocalId local_id) {
-    size_t index;
-    if (core_local_constant_index(context, local_id, &index)) {
-        MinicCoreLocalIntegerConstant *fact = &context->local_integer_constants[index];
-        fact->known = false;
-        if (fact->specialization_known) {
-            fact->specialization_modified = true;
-            if (core_inline_spec_fact_trace_enabled(context)) {
-                (void)fprintf(stderr,
-                              "INLINE_SPEC_FACT event=invalidate function=%s source=%zu local=%zu bits=%" PRIu64 "\n",
-                              context->source_function->name != NULL
-                                  ? context->source_function->name
-                                  : "?",
-                              (size_t)context->source_function->specialization_source,
-                              (size_t)local_id,
-                              fact->specialization_value.bits);
-            }
-        }
-    }
-}
-
-static void core_local_constant_escape(MinicCoreLowerContext *context,
-                                       MinicLocalId local_id) {
-    size_t index;
-    if (core_local_constant_index(context, local_id, &index)) {
-        MinicCoreLocalIntegerConstant *fact = &context->local_integer_constants[index];
-        fact->known = false;
-        fact->escaped = true;
-        if (fact->specialization_known) {
-            fact->specialization_modified = true;
-            if (core_inline_spec_fact_trace_enabled(context)) {
-                (void)fprintf(stderr,
-                              "INLINE_SPEC_FACT event=escape function=%s source=%zu local=%zu bits=%" PRIu64 "\n",
-                              context->source_function->name != NULL
-                                  ? context->source_function->name
-                                  : "?",
-                              (size_t)context->source_function->specialization_source,
-                              (size_t)local_id,
-                              fact->specialization_value.bits);
-            }
-        }
-    }
-}
-
-static bool core_local_constant_get(const MinicCoreLowerContext *context,
-                                    MinicLocalId local_id,
-                                    MinicConstValue *value) {
-    const MinicLocal *local;
-    size_t index;
-
-    if (core_local_constant_index(context, local_id, &index) &&
-        context->local_integer_constants[index].specialization_known &&
-        core_inline_spec_fact_trace_enabled(context)) {
-        const MinicCoreLocalIntegerConstant *fact = &context->local_integer_constants[index];
-        (void)fprintf(stderr,
-                      "INLINE_SPEC_FACT event=get function=%s source=%zu local=%zu known=%d modified=%d escaped=%d bits=%" PRIu64 "\n",
-                      context->source_function->name != NULL
-                          ? context->source_function->name
-                          : "?",
-                      (size_t)context->source_function->specialization_source,
-                      (size_t)local_id,
-                      fact->known ? 1 : 0,
-                      fact->specialization_modified ? 1 : 0,
-                      fact->escaped ? 1 : 0,
-                      fact->specialization_value.bits);
-    }
-    if (value == NULL || !core_local_constant_index(context, local_id, &index) ||
-        !context->local_integer_constants[index].known ||
-        context->local_integer_constants[index].escaped || context->body == NULL ||
-        context->body->program == NULL) {
-        return false;
-    }
-    local = minic_c0_program_local(context->body->program, local_id);
-    if (local == NULL || minic_type_is_volatile(local->type)) {
-        return false;
-    }
-    *value = context->local_integer_constants[index].value;
-    return true;
-}
 
 
 /* RUNTIME_STABLE_ZERO_BOOLS_V0
@@ -687,7 +468,7 @@ static void core_local_constant_set(MinicCoreLowerContext *context,
 
     if (value == NULL || context == NULL || context->body == NULL ||
         context->body->program == NULL || context->target == NULL ||
-        !core_local_constant_index(context, local_id, &index) ||
+        !minic_core_local_fact_index(context, local_id, &index) ||
         context->local_integer_constants[index].escaped) {
         return;
     }
@@ -766,45 +547,6 @@ static bool core_direct_local_read(const MinicCoreLowerContext *context,
     return true;
 }
 
-static void core_local_null_pointer_set(MinicCoreLowerContext *context,
-                                        MinicLocalId local_id) {
-    const MinicLocal *local;
-    size_t index;
-
-    if (context == NULL || context->body == NULL || context->body->program == NULL ||
-        !core_local_constant_index(context, local_id, &index) ||
-        context->local_integer_constants[index].escaped) {
-        return;
-    }
-    local = minic_c0_program_local(context->body->program, local_id);
-    if (local == NULL || local->is_array || minic_type_is_volatile(local->type) ||
-        !minic_type_is_pointer(local->type)) {
-        context->local_integer_constants[index].known = false;
-        return;
-    }
-    context->local_integer_constants[index].value.type = minic_type_int();
-    context->local_integer_constants[index].value.bits = 0U;
-    context->local_integer_constants[index].known = true;
-}
-
-static bool core_local_null_pointer_get(const MinicCoreLowerContext *context,
-                                        MinicLocalId local_id) {
-    const MinicLocal *local;
-    size_t index;
-
-    if (!core_local_constant_index(context, local_id, &index) ||
-        !context->local_integer_constants[index].known ||
-        context->local_integer_constants[index].escaped || context->body == NULL ||
-        context->body->program == NULL) {
-        return false;
-    }
-    local = minic_c0_program_local(context->body->program, local_id);
-    return local != NULL && !local->is_array && !minic_type_is_volatile(local->type) &&
-           minic_type_is_pointer(local->type) &&
-           minic_type_is_integer(context->local_integer_constants[index].value.type) &&
-           context->local_integer_constants[index].value.bits == 0U;
-}
-
 static bool core_expression_known_null_pointer_depth(
     const MinicCoreLowerContext *context,
     MinicExpressionId expression_id,
@@ -832,7 +574,7 @@ static bool core_expression_known_null_pointer_depth(
             context, expression->value.unary.operand, depth + 1U);
     }
     if (core_direct_local_read(context, expression_id, &local_id) &&
-        core_local_null_pointer_get(context, local_id)) {
+        minic_core_local_null_pointer_get(context, local_id)) {
         return true;
     }
     if (expression->kind == MINIC_EXPRESSION_CALL &&
@@ -1158,7 +900,7 @@ static bool core_cfg_small_loop_update_expression(MinicCoreLowerContext *context
          expression->value.binary.operator_kind == MINIC_BINARY_SUBTRACT) &&
         core_cfg_small_loop_target_local(
             context, expression->value.binary.left, &local_id) &&
-        core_local_constant_get(context, local_id, &left) &&
+        minic_core_local_fact_get(context, local_id, &left) &&
         core_const_eval_integer_with_locals(
             context, expression->value.binary.right, &right)) {
         left_expression = minic_c0_program_expression(
@@ -1174,7 +916,7 @@ static bool core_cfg_small_loop_update_expression(MinicCoreLowerContext *context
             return false;
         }
         core_local_constant_set(context, local_id, &result);
-        return core_local_constant_get(context, local_id, &left);
+        return minic_core_local_fact_get(context, local_id, &left);
     }
     if (expression->kind == MINIC_EXPRESSION_ASSIGNMENT &&
         core_cfg_small_loop_target_local(
@@ -1182,7 +924,7 @@ static bool core_cfg_small_loop_update_expression(MinicCoreLowerContext *context
         core_const_eval_integer_with_locals(
             context, expression->value.binary.right, &result)) {
         core_local_constant_set(context, local_id, &result);
-        return core_local_constant_get(context, local_id, &left);
+        return minic_core_local_fact_get(context, local_id, &left);
     }
     if (expression->kind == MINIC_EXPRESSION_UNARY &&
         (expression->value.unary.operator_kind == MINIC_UNARY_POST_INCREMENT ||
@@ -1191,7 +933,7 @@ static bool core_cfg_small_loop_update_expression(MinicCoreLowerContext *context
          expression->value.unary.operator_kind == MINIC_UNARY_PRE_DECREMENT) &&
         core_cfg_small_loop_target_local(
             context, expression->value.unary.operand, &local_id) &&
-        core_local_constant_get(context, local_id, &left)) {
+        minic_core_local_fact_get(context, local_id, &left)) {
         MinicConstValue one;
         const MinicExpression *operand = minic_c0_program_expression(
             context->body->program, expression->value.unary.operand);
@@ -1211,7 +953,7 @@ static bool core_cfg_small_loop_update_expression(MinicCoreLowerContext *context
             return false;
         }
         core_local_constant_set(context, local_id, &result);
-        return core_local_constant_get(context, local_id, &left);
+        return minic_core_local_fact_get(context, local_id, &left);
     }
     return false;
 }
@@ -1235,7 +977,7 @@ static bool core_cfg_small_loop_execute_statement(MinicCoreLowerContext *context
         statement->expression != MINIC_EXPRESSION_INVALID &&
         core_const_eval_integer_with_locals(context, statement->expression, &value)) {
         core_local_constant_set(context, local_id, &value);
-        return core_local_constant_get(context, local_id, &check);
+        return minic_core_local_fact_get(context, local_id, &check);
     }
     if (statement->kind == MINIC_STATEMENT_EXPRESSION &&
         statement->expression != MINIC_EXPRESSION_INVALID) {
@@ -1921,7 +1663,7 @@ static bool core_const_eval_integer_with_locals(const MinicCoreLowerContext *con
                 }
                 core_local_constant_set(
                     &nested_context, target->value.local_id, &assigned);
-                if (!core_local_constant_get(
+                if (!minic_core_local_fact_get(
                         &nested_context, target->value.local_id, &check)) {
                     goto statement_expression_done;
                 }
@@ -1943,7 +1685,7 @@ statement_expression_done:
     }
 
     if (core_direct_local_read(context, expression_id, &local_id) &&
-        core_local_constant_get(context, local_id, &operand_value)) {
+        minic_core_local_fact_get(context, local_id, &operand_value)) {
         return minic_const_value_convert_integer(context->body->program,
                                                  context->target,
                                                  &operand_value,
@@ -2086,7 +1828,7 @@ statement_expression_done:
             &statement_result_local);
         statement_result_local_known =
             statement_result_direct_local &&
-            core_local_constant_get(
+            minic_core_local_fact_get(
                 context, statement_result_local, &statement_result_local_value);
         statement_known = core_const_eval_integer_with_locals(
             context, expression->value.statement_expression.result, &operand_value);
@@ -2915,14 +2657,14 @@ static MinicCoreLowerStatus lower_parameter_ingress(MinicCoreLowerContext *conte
                 core_local_constant_set(context, local_id, &specialized_value);
                 {
                     size_t specialized_index;
-                    if (core_local_constant_index(context, local_id, &specialized_index) &&
+                    if (minic_core_local_fact_index(context, local_id, &specialized_index) &&
                         context->local_integer_constants[specialized_index].known) {
                         MinicCoreLocalIntegerConstant *fact =
                             &context->local_integer_constants[specialized_index];
                         fact->specialization_value = fact->value;
                         fact->specialization_known = true;
                         fact->specialization_modified = false;
-                        if (core_inline_spec_fact_trace_enabled(context)) {
+                        if (minic_core_inline_spec_fact_trace_enabled(context)) {
                             (void)fprintf(stderr,
                                           "INLINE_SPEC_FACT event=seed function=%s source=%zu local=%zu bits=%" PRIu64 "\n",
                                           context->source_function->name != NULL
@@ -6280,7 +6022,7 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
                               (size_t)fact_target->value.local_id,
                               (size_t)expression_id);
             }
-            core_local_constant_invalidate(context, fact_target->value.local_id);
+            minic_core_local_fact_invalidate(context, fact_target->value.local_id);
         }
     }
     /* Runtime allocation is a pointer-producing rvalue. Its target-neutral
@@ -7545,7 +7287,7 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
             context->body->program, expression->value.unary.operand);
         if (addressed_expression != NULL &&
             addressed_expression->kind == MINIC_EXPRESSION_LOCAL) {
-            core_local_constant_escape(context, addressed_expression->value.local_id);
+            minic_core_local_fact_escape(context, addressed_expression->value.local_id);
         }
         status = lower_address(context, expression->value.unary.operand, value_id);
         if (status != MINIC_CORE_LOWER_OK) {
@@ -7981,7 +7723,7 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
             context->body->program, expression->value.unary.operand);
         if (updated_expression != NULL &&
             updated_expression->kind == MINIC_EXPRESSION_LOCAL) {
-            core_local_constant_invalidate(context, updated_expression->value.local_id);
+            minic_core_local_fact_invalidate(context, updated_expression->value.local_id);
         }
         return lower_scalar_update(context, expression, value_id);
     }
@@ -11055,7 +10797,7 @@ static MinicCoreLowerStatus lower_assignment_pair(MinicCoreLowerContext *context
                 fact_known = true;
             }
         }
-        core_local_constant_invalidate(context, target->value.local_id);
+        minic_core_local_fact_invalidate(context, target->value.local_id);
         if (!fact_known) {
             fact_known = core_const_eval_integer_with_locals(
                 context, source_id, &stored_constant);
@@ -11063,7 +10805,7 @@ static MinicCoreLowerStatus lower_assignment_pair(MinicCoreLowerContext *context
         if (fact_known) {
             core_local_constant_set(context, target->value.local_id, &stored_constant);
         } else if (null_pointer_known) {
-            core_local_null_pointer_set(context, target->value.local_id);
+            minic_core_local_null_pointer_set(context, target->value.local_id);
         }
         if (getenv("MINIC_LOCAL_FACT_TRACE") != NULL) {
             (void)fprintf(stderr,
@@ -12894,19 +12636,19 @@ static void core_local_constants_meet_if_paths(
         return;
     }
     if (then_continues && !else_continues && then_facts != NULL) {
-        core_local_constants_restore(context, then_facts);
+        minic_core_local_facts_restore(context, then_facts);
         return;
     }
     if (!then_continues && else_continues && else_facts != NULL) {
-        core_local_constants_restore(context, else_facts);
+        minic_core_local_facts_restore(context, else_facts);
         return;
     }
     if (!then_continues && !else_continues) {
-        core_local_constants_clear_known(context);
+        minic_core_local_facts_clear_known(context);
         return;
     }
     if (then_facts == NULL || else_facts == NULL) {
-        core_local_constants_clear_known(context);
+        minic_core_local_facts_clear_known(context);
         return;
     }
 
@@ -13227,7 +12969,7 @@ lower_if(MinicCoreLowerContext *context, const MinicStatement *statement, bool *
         bool local_read = core_direct_local_read(
             context, statement->expression, &traced_local);
         bool fact_local = local_read &&
-            core_local_constant_index(context, traced_local, &fact_idx);
+            minic_core_local_fact_index(context, traced_local, &fact_idx);
         bool known = core_const_eval_integer_with_locals(
             context, statement->expression, &traced);
         (void)fprintf(stderr,
@@ -13251,7 +12993,7 @@ lower_if(MinicCoreLowerContext *context, const MinicStatement *statement, bool *
         bool local_read = core_direct_local_read(
             context, statement->expression, &traced_local);
         bool fact_local = local_read &&
-            core_local_constant_index(context, traced_local, &fact_idx);
+            minic_core_local_fact_index(context, traced_local, &fact_idx);
         bool known = core_const_eval_integer_with_locals(
             context, statement->expression, &traced);
         (void)fprintf(stderr,
@@ -13339,7 +13081,7 @@ lower_if(MinicCoreLowerContext *context, const MinicStatement *statement, bool *
         context->source_function != NULL &&
         strcmp(context->source_function->name, "shmem_alloc_and_acct_folio") == 0) {
         size_t dbg_idx;
-        if (core_local_constant_index(context, (MinicLocalId)10022U, &dbg_idx)) {
+        if (minic_core_local_fact_index(context, (MinicLocalId)10022U, &dbg_idx)) {
             (void)fprintf(stderr, "SHMEM_IF_FLOW line=%zu edge=entry huge_known=%d val=%llu snap=%d pure=%d reentry=%d\n",
                statement->span.begin.line,
                context->local_integer_constants[dbg_idx].known ? 1 : 0,
@@ -13349,7 +13091,7 @@ lower_if(MinicCoreLowerContext *context, const MinicStatement *statement, bool *
                core_block_contains_reentry_label(context, then_source) ? 1 : 0);
         }
     }
-    incoming_facts = core_local_constants_snapshot(context);
+    incoming_facts = minic_core_local_facts_snapshot(context);
     if (context->source_function != NULL &&
         context->source_function->local_count != 0U && incoming_facts == NULL) {
         return MINIC_CORE_LOWER_ERROR;
@@ -13358,11 +13100,11 @@ lower_if(MinicCoreLowerContext *context, const MinicStatement *statement, bool *
     then_facts = NULL;
     else_facts = NULL;
     if (!preserve_guard_facts) {
-        core_local_constants_clear_known(context);
+        minic_core_local_facts_clear_known(context);
         core_local_constants_prepare_if_branch(
             context, incoming_facts, statement->expression);
     }
-    branch_entry_facts = core_local_constants_snapshot(context);
+    branch_entry_facts = minic_core_local_facts_snapshot(context);
     if (context->source_function != NULL &&
         context->source_function->local_count != 0U && branch_entry_facts == NULL) {
         free(incoming_facts);
@@ -13404,7 +13146,7 @@ lower_if(MinicCoreLowerContext *context, const MinicStatement *statement, bool *
     if (fallthrough_facts != NULL) {
         then_exit_facts = core_runtime_if_copy_facts(context);
     }
-    then_facts = core_local_constants_snapshot(context);
+    then_facts = minic_core_local_facts_snapshot(context);
     if (context->source_function != NULL &&
         context->source_function->local_count != 0U && then_facts == NULL) {
         free(branch_entry_facts);
@@ -13414,7 +13156,7 @@ lower_if(MinicCoreLowerContext *context, const MinicStatement *statement, bool *
     else_continuation_block = MINIC_CORE_BLOCK_INVALID;
     else_terminated = false;
     if (else_source != NULL) {
-        core_local_constants_restore(context, branch_entry_facts);
+        minic_core_local_facts_restore(context, branch_entry_facts);
         context->block_id = else_block;
         status = lower_block(context, else_source, &else_terminated);
         if (status != MINIC_CORE_LOWER_OK) {
@@ -13429,7 +13171,7 @@ lower_if(MinicCoreLowerContext *context, const MinicStatement *statement, bool *
             return status;
         }
         else_continuation_block = context->block_id;
-        else_facts = core_local_constants_snapshot(context);
+        else_facts = minic_core_local_facts_snapshot(context);
         if (context->source_function != NULL &&
             context->source_function->local_count != 0U && else_facts == NULL) {
             free(then_facts);
@@ -13466,11 +13208,11 @@ lower_if(MinicCoreLowerContext *context, const MinicStatement *statement, bool *
 
     continuation_block = context->block_id;
     context->block_id = condition_block;
-    core_local_constants_restore(context, incoming_facts);
+    minic_core_local_facts_restore(context, incoming_facts);
     /* DOMINANCE_IF_GUARD_FACT_BARRIER: speculative body facts do not
        dominate the earlier condition_block. Rebuild the runtime predicate
        with only immutable source/specialization facts, not body updates. */
-    core_local_constants_clear_known(context);
+    minic_core_local_facts_clear_known(context);
     if (context->source_function && context->source_function->name &&
         strcmp(context->source_function->name, "genl_op_from_split") == 0)
         (void)fprintf(stderr, "GENL_IF_PATH stage=pre_guard expr=%zu condition=%u then=%u else=%u need_merge=%d\n",
@@ -13513,7 +13255,7 @@ lower_if(MinicCoreLowerContext *context, const MinicStatement *statement, bool *
         context->source_function != NULL &&
         strcmp(context->source_function->name, "shmem_alloc_and_acct_folio") == 0) {
         size_t dbg_idx;
-        if (core_local_constant_index(context, (MinicLocalId)10022U, &dbg_idx)) {
+        if (minic_core_local_fact_index(context, (MinicLocalId)10022U, &dbg_idx)) {
             (void)fprintf(stderr, "SHMEM_IF_FLOW line=%zu edge=merge huge_known=%d val=%llu terminated=%d\n",
                 statement->span.begin.line,
                 context->local_integer_constants[dbg_idx].known ? 1 : 0,
@@ -15691,7 +15433,7 @@ static void core_invalidate_loop_mutated_specialization_facts(
                  context, loop_statement->expression, local_id, 0U)) ||
             core_block_may_modify_local(context, body, local_id, 0U);
         if (may_mutate) {
-            core_local_constant_invalidate(context, local_id);
+            minic_core_local_fact_invalidate(context, local_id);
             if (getenv("MINIC_LOOP_MUTATED_FACT_TRACE") != NULL) {
                 (void)fprintf(stderr,
                               "LOOP_SPECIALIZATION_FACT_KILL function=%s local=%zu\n",
@@ -15925,7 +15667,7 @@ lower_block(MinicCoreLowerContext *context, const MinicBlock *source_block, bool
             /* C labels are control-flow join points. A backward goto can
                invalidate all local facts learned on the first arrival.
                Keep the IR branches; only drop speculative local facts. */
-            core_local_constants_clear_known(context);
+            minic_core_local_facts_clear_known(context);
             if (statement_index + 1U < source_block->statement_count) {
                 MinicStatementId next_statement_id = source_block->statements[statement_index + 1U];
                 loop = minic_c0_program_statement(context->body->program, next_statement_id);
@@ -15951,7 +15693,7 @@ lower_block(MinicCoreLowerContext *context, const MinicBlock *source_block, bool
                 context->block_id = label_block;
                 /* M190_USER_LABEL_FACT_BARRIER: a goto target is a CFG join,
                    not a straight-line transfer from its lexical predecessor. */
-                core_local_constants_clear_known(context);
+                minic_core_local_facts_clear_known(context);
             }
         } else {
             switch (statement->kind) {
@@ -15972,7 +15714,7 @@ lower_block(MinicCoreLowerContext *context, const MinicBlock *source_block, bool
                 break;
             case MINIC_STATEMENT_INLINE_ASM:
                 status = minic_core_lower_inline_asm(context, statement);
-                core_local_constants_clear_known(context);
+                minic_core_local_facts_clear_known(context);
                 break;
             case MINIC_STATEMENT_RETURN:
                 status = lower_return(context, statement);
@@ -16071,7 +15813,7 @@ lower_block(MinicCoreLowerContext *context, const MinicBlock *source_block, bool
                 MinicCoreLocalIntegerConstant *loop_incoming_facts;
                 bool local_fact_single_pass;
 
-                loop_incoming_facts = core_local_constants_snapshot(context);
+                loop_incoming_facts = minic_core_local_facts_snapshot(context);
                 if (context->source_function != NULL &&
                     context->source_function->local_count != 0U &&
                     loop_incoming_facts == NULL) {
@@ -16096,14 +15838,14 @@ lower_block(MinicCoreLowerContext *context, const MinicBlock *source_block, bool
                     /* Loop-body changes invalidate specialized parameters
                        before the initial condition and later backedges. */
                     core_invalidate_loop_mutated_specialization_facts(context, statement);
-                    core_local_constants_clear_known(context);
+                    minic_core_local_facts_clear_known(context);
                     core_restore_loop_invariant_facts(
                         context, loop_incoming_facts, statement);
                 }
                 status = lower_while(
                     context, statement, MINIC_STATEMENT_INVALID, &statement_terminated);
                 if (!local_fact_single_pass) {
-                    core_local_constants_clear_known(context);
+                    minic_core_local_facts_clear_known(context);
                     core_restore_loop_invariant_facts(
                         context, loop_incoming_facts, statement);
                 }
@@ -16111,9 +15853,9 @@ lower_block(MinicCoreLowerContext *context, const MinicBlock *source_block, bool
                 break;
             }
             case MINIC_STATEMENT_SWITCH:
-                core_local_constants_clear_known(context);
+                minic_core_local_facts_clear_known(context);
                 status = lower_switch(context, statement, &statement_terminated);
-                core_local_constants_clear_known(context);
+                minic_core_local_facts_clear_known(context);
                 break;
             default:
                 (void)fprintf(stderr,

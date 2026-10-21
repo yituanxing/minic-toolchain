@@ -471,3 +471,27 @@ loop optimization pass or an excuse to infer unproven goto reachability.
 Verification needs compiler -Werror build, normalized-for/continue,
 do-while/zero/true/return, CFG reentry and all four original GNU/QEMU
 owner regressions; source identity alone is not runtime certification.
+
+## Global AST/Core check: local fact state is not machine lowering
+
+The global review shows that previous optimization extraction improved the
+machine backends (RV64 ABI, legality, advanced object lifetimes, x86 SysV
+frame and two new-ISA native accessors), while the Core source lowerer
+still owns more than 16k lines of expression, CFG and local fact code.
+The next real seam is ABOVE target-specific machine lowering.
+
+A source-audited 10-function local integer and null-pointer fact state
+family now compiles once in `core/local_facts.{h,c}`. Existing code
+for source specialization diagnostics, array-backed facts, snapshots,
+restore, escape barriers, clear-to-known-specialization, null pointer
+checks and scalar reads was moved without changing conditions.
+
+Critically, `core_local_constant_set` and source-wide stable-zero proof
+remain in `core_lower.c`, where they must consult the existing
+source-level external goto/asm label reentry oracle. Do not relocate
+source-wide CFG invariants into an isolated fact hash or an ISA backend,
+and never treat unknown/volatile/escaped values as unconditional facts.
+
+This is a semantic Core pass interface, not speculative Machine IR.
+Revalidate compiler warnings, original RV64 Linux, x86 SysV projects,
+AArch64/LoongArch64 original BusyBox GNU/QEMU and negative HFA ABI gate.
