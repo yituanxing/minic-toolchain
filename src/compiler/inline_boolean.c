@@ -223,6 +223,18 @@ static size_t minic_perf_boolean_domain_queries;
 static size_t minic_perf_boolean_domain_builds;
 static size_t minic_perf_boolean_domain_fallbacks;
 
+/* Diagnostics belong to the pass that owns the counters. Keeping
+ * them private prevents the TU driver from depending on pass internals. */
+void minic_inline_boolean_domain_perf_dump(FILE *out) {
+    if (out == NULL) return;
+    (void)fprintf(out,
+                  "MINIC_BOOLEAN_DOMAIN queries=%zu builds=%zu fallbacks=%zu\n",
+                  minic_perf_boolean_domain_queries,
+                  minic_perf_boolean_domain_builds,
+                  minic_perf_boolean_domain_fallbacks);
+}
+
+
 void minic_inline_local_boolean_domain_cache_clear(void) {
     free(minic_inline_local_boolean_domain_cache.values);
     (void)memset(&minic_inline_local_boolean_domain_cache, 0,

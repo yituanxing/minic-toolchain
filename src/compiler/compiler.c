@@ -484,11 +484,7 @@ int minic_compile_preprocessed_file_for_target(const char *input_path,
     minic_core_function_set_destroy(&core_set);
     minic_c0_program_destroy(&program);
     if (getenv("MINIC_BOOLEAN_DOMAIN_PERF") != NULL) {
-        (void)fprintf(stderr,
-                      "MINIC_BOOLEAN_DOMAIN queries=%zu builds=%zu fallbacks=%zu\n",
-                      minic_perf_boolean_domain_queries,
-                      minic_perf_boolean_domain_builds,
-                      minic_perf_boolean_domain_fallbacks);
+        minic_inline_boolean_domain_perf_dump(stderr);
     }
     minic_inline_local_boolean_domain_cache_clear();
     free(buffer.data);
