@@ -358,3 +358,37 @@ Counters, data-width bins and `support_verified=0` remain unchanged.
 The Core usage census reports observed workload operations; it does not
 certify instruction legalization or ABI correctness. Four-ISA acceptance
 requires GNU/QEMU real workloads and negative ABI guards.
+
+## Global audit: AST specialization, Core CFG, and target Machine IR are different stages
+
+The prior sequence moved RV64 ABI / liveness / legality and the two
+LP64 direct program drivers into named compilation units. Reviewing the
+full source tree revealed a *larger misplaced responsibility*: the
+`src/compiler/compiler.c` stage driver still contained >2,700 lines of
+AST inline specialization and lowered-Core reachability logic. These are
+neither target instruction emission nor frontend parser code.
+
+They are now separated without changing the pipeline order:
+
+- `compiler/inline_specialize.{c,h}` keeps the established three AST
+  specialization families (integer, symbolic, boolean-domain), its
+  per-TU fact cache reset, and source reference finalization.
+- `compiler/core_reachability.{c,h}` keeps the original CFG/block walk,
+  source-label and indirect-branch roots, non-Core relocation/function
+  alias roots, allocation-failure fallback, and pruning of dead clones.
+- `compiler/core_function_set.h` expresses the real translation-unit
+  Core function/status lifetime contract consumed by both driver and
+  reachability pass. No machine register/frame data enters this type.
+- `compiler/compiler.c` remains the actual parse/normalize/verify,
+  optimize, Core-lower, prune, target-emit **stage coordinator**.
+
+This audit also confirms the 800-kB `core/core_lower.c` and large
+target `codegen.c` files are separate future cleanup concerns;
+do not prematurely merge AST optimization, Core legality, and target
+legalization into a single invented Machine IR abstraction. Every
+new lowering layer must retain existing LLVM/GNU-QEMU oracle behavior.
+
+All complete specialization and CFG algorithms are source-preserved,
+with only required external linkage changes for six top-level stage
+operations. Run four-ISA GNU/QEMU and RV64 Linux owners before claiming
+the new translation-unit split is verified.
