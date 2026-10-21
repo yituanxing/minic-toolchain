@@ -215,7 +215,16 @@ MinicCoreLowerStatus minic_core_lower_try_bit_field_assignment(
     MinicExpressionId source_id, MinicSourceSpan span,
     MinicCoreValueId *result_value, bool *matched);
 
-/* Structured CFG: switch selects cases, general lower_block owns traversal. */
+/* Shared source-effect probe: if and loop CFG both consume this conservative check. */
+bool core_expression_may_modify_local(
+    const MinicCoreLowerContext *context, MinicExpressionId expression_id,
+    MinicLocalId local_id, unsigned int depth);
+
+/* Structured CFG: if owns source guards/fact joins, switch owns case dispatch;
+ * general lower_block still owns statement traversal and loop handling. */
+MinicCoreLowerStatus minic_core_lower_if(
+    MinicCoreLowerContext *context, const MinicStatement *statement,
+    bool *terminated);
 MinicCoreLowerStatus minic_core_lower_switch(
     MinicCoreLowerContext *context, const MinicStatement *statement,
     bool *terminated);
