@@ -7,6 +7,8 @@ on:
       - "agent/linux-expanded-kbuild-v0"
       - "agent/linux-perf-boolean-domain-v1"
       - "feature/four-backend-aarch64-loongarch64-m0"
+      # Enable owner-scoped verification for standalone backend refactor PRs.
+      - "refactor/four-backend-*"
     paths:
       - 'src/**'
       - 'include/**'
