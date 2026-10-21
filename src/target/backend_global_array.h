@@ -413,6 +413,95 @@ static bool minic_multi_emit_record_array_global(
 
 
 
+/* GNU permits a static record object to initialize its trailing flexible
+ * integer array (BusyBox hdparm's masks_labels_t). Core represents the
+ * payload as one flattened slot per scalar; DataLayout alone computes the
+ * actual storage extent, offsets and alignment. This helper deliberately
+ * admits only flat pointer/integer prefix fields followed by a last,
+ * non-bitfield flexible integer member. Never guess bitfield packing or
+ * nested-object offsets. ELF relocations remain backend-owned. */
+static bool minic_multi_emit_flexible_record_global(
+    FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicGlobalObject *object, size_t storage_size,
+    MinicMultiRelocEmitter emit_relocation) {
+    const MinicRecord *record;
+    const MinicRecordField *tail;
+    size_t i, slot = 0U, cursor = 0U, reloc_index = 0U;
+    size_t tail_offset, tail_width, tail_align;
+    if (out == NULL || program == NULL || target == NULL || object == NULL ||
+        emit_relocation == NULL || !minic_type_is_record(object->type) ||
+        object->flexible_array_initializer_count == 0U ||
+        object->initializer_values == NULL ||
+        object->union_selection_count != 0U)
+        return false;
+    record = minic_c0_program_record(program, object->type.record_id);
+    if (record == NULL || !record->is_complete || record->is_union ||
+        record->field_count < 2U ||
+        record->field_count - 1U > SIZE_MAX - object->flexible_array_initializer_count ||
+        object->initializer_count != record->field_count - 1U +
+                                     object->flexible_array_initializer_count)
+        return false;
+    tail = minic_c0_record_field(record, record->field_count - 1U);
+    if (tail == NULL || !tail->is_flexible_array || tail->is_bit_field ||
+        !minic_type_is_integer(tail->type) ||
+        !minic_data_layout_type(target->data_layout, program, tail->type,
+                                &tail_width, &tail_align) ||
+        minic_multi_data_directive(tail_width) == NULL ||
+        !minic_data_layout_record_field_offset(
+            target->data_layout, program, record, record->field_count - 1U,
+            &tail_offset))
+        return false;
+    (void)tail_align;
+    for (i = 0U; i + 1U < record->field_count; ++i) {
+        const MinicRecordField *field = minic_c0_record_field(record, i);
+        const MinicGlobalRelocation *reloc = reloc_index < object->relocation_count
+            ? &object->relocations[reloc_index] : NULL;
+        size_t offset, width, alignment;
+        if (field == NULL || field->is_bit_field || field->is_flexible_array ||
+            field->is_zero_length_array || field->element_count != 1U ||
+            (!minic_type_is_integer(field->type) &&
+             !minic_type_is_pointer(field->type)) ||
+            !minic_data_layout_type(target->data_layout, program, field->type,
+                                    &width, &alignment) ||
+            minic_multi_data_directive(width) == NULL ||
+            !minic_data_layout_record_field_offset(
+                target->data_layout, program, record, i, &offset) ||
+            offset < cursor || offset > storage_size ||
+            width > storage_size - offset ||
+            fprintf(out, "  .zero %zu\\n", offset - cursor) < 0)
+            return false;
+        (void)alignment;
+        if (reloc != NULL &&
+            (reloc->location_kind == MINIC_GLOBAL_RELOCATION_LOCATION_RECORD_FIELD ||
+             reloc->location_kind == MINIC_GLOBAL_RELOCATION_LOCATION_AGGREGATE_SCALAR) &&
+            reloc->location_index == slot) {
+            if (!minic_type_is_pointer(field->type) ||
+                object->initializer_values[slot] != 0U ||
+                !emit_relocation(out, program, target, reloc, width))
+                return false;
+            ++reloc_index;
+        } else if (!minic_multi_emit_data_bits(
+                       out, width, object->initializer_values[slot])) {
+            return false;
+        }
+        ++slot;
+        cursor = offset + width;
+    }
+    if (tail_offset < cursor || tail_offset > storage_size ||
+        tail_width > (storage_size - tail_offset) /
+                         object->flexible_array_initializer_count ||
+        fprintf(out, "  .zero %zu\\n", tail_offset - cursor) < 0 ||
+        reloc_index != object->relocation_count)
+        return false;
+    for (i = 0U; i < object->flexible_array_initializer_count; ++i) {
+        if (!minic_multi_emit_data_bits(out, tail_width,
+                                        object->initializer_values[slot++]))
+            return false;
+    }
+    cursor = tail_offset + object->flexible_array_initializer_count * tail_width;
+    return slot == object->initializer_count && cursor == storage_size;
+}
+
 /* Integer-class LP64 record arguments, shared only as ABI classification.
  * Layout remains target-owned; register placement is ISA-specific.
  * Never claim HFAs, packed/unaligned records, bitfields or vector ABI.

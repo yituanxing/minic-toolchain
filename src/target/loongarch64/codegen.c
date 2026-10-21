@@ -275,7 +275,6 @@ static bool emit_simple_global(FILE *out, const MinicC0Program *program,
          elf_visibility_directive(obj->visibility) == NULL) ||
         obj->section_name != NULL ||
         obj->alias_target != MINIC_GLOBAL_OBJECT_INVALID ||
-        obj->flexible_array_initializer_count != 0U ||
         !minic_data_layout_global_object(target->data_layout, program, obj,
                                          &storage_size, &align)) return false;
     /* .internal/.hidden must be emitted even for flat record globals. */
@@ -356,12 +355,16 @@ static bool emit_simple_global(FILE *out, const MinicC0Program *program,
              fprintf(out, ".globl %s\n", obj->name) < 0) ||
             fprintf(out, "  .balign %zu\n.type %s,@object\n%s:\n",
                     align, obj->name, obj->name) < 0 ||
-            !(recursive
-                  ? minic_multi_emit_recursive_record_global(
+            !(obj->flexible_array_initializer_count != 0U
+                  ? minic_multi_emit_flexible_record_global(
                         out, program, target, obj, storage_size,
                         emit_record_relocation)
-                  : emit_flat_record_global(out, program, target, obj,
-                                            storage_size)) ||
+                  : recursive
+                    ? minic_multi_emit_recursive_record_global(
+                          out, program, target, obj, storage_size,
+                          emit_record_relocation)
+                    : emit_flat_record_global(out, program, target, obj,
+                                              storage_size)) ||
             fprintf(out, ".size %s,%zu\n", obj->name, storage_size) < 0)
             return false;
         return true;
