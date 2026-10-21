@@ -212,7 +212,7 @@ def print_frontier(report_root, gcc_success, enabled):
                 # preprocessed expression at the frontend rejection site;
                 # raw xconnect.c line numbers are NOT the same after the
                 # target sysroot headers are expanded.
-                match = re.search(r"input\\.i:(\\d+):(\\d+):\\s*error:", error)
+                match = re.search(r"input\.i:(\d+):(\d+):\s*error:", error)
                 if match:
                     source_lines = (path.parent / "input.i").read_text(
                         errors="replace").splitlines()
