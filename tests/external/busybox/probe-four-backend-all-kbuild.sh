@@ -42,6 +42,7 @@ grep -E '^(BUSYBOX_ALLYES_(CONFIG=|HOST_EXCLUSIONS=|GCC_KBUILD=|GCC_BUILD_DIAGNO
   "$work/probe.out" || true
 grep -E '^BUSYBOX_ALLYES_BLOCKER ' "$work/probe.out" | head -n 30 || true
 grep -E '^BUSYBOX_ALLYES_CORE_REJECT ' "$work/probe.out" | head -n 65 || true
+grep -E '^BUSYBOX_ALLYES_CPP_CONTEXT ' "$work/probe.out" | head -n 16 || true
 if [ -f "$report/summary.json" ]; then
   python3 - "$report/summary.json" "$target" "$scan_rc" <<'PY'
 import json, sys
@@ -72,8 +73,8 @@ if [ "$scan_rc" -ne 0 ]; then
   exit 1
 fi
 case "$target" in
-  aarch64) floor=571 ;;
-  loongarch64) floor=569 ;;
+  aarch64) floor=574 ;;
+  loongarch64) floor=574 ;;
   *) exit 1 ;;
 esac
 grep -qx 'BUSYBOX_ALLYES_GCC_KBUILD=PASS original_Kconfig=1 original_sources=1' "$work/probe.out" ||

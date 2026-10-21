@@ -144,7 +144,10 @@ def call_proxy(args):
         # Trace only representative *failed* upstream source owners.
         # A small class-level replay avoids a second 581-TU scan while
         # producing the actual Core instruction kind / rejecting guard.
-        trace_owners = ["coreutils/od.c","editors/awk.c","libbb/compare_string_array.c","libbb/obscure.c","libbb/strrstr.c","miscutils/hdparm.c","archival/libarchive/decompress_bunzip2.c","networking/ifconfig.c","procps/top.c"]
+        trace_owners = ("coreutils/od.c", "libbb/xconnect.c",
+                        "miscutils/devfsd.c", "miscutils/devmem.c",
+                        "miscutils/hdparm.c", "networking/ifconfig.c",
+                        "procps/top.c")
         if (mini.returncode and os.environ.get("BUSYBOX_ALLYES_MINIC_TARGET",
                                                   "x86_64-linux") != "x86_64-linux"
                 and source in trace_owners):
@@ -203,6 +206,24 @@ def print_frontier(report_root, gcc_success, enabled):
                 useful = [s.strip() for s in error.splitlines() if s.strip()]
             print("BUSYBOX_ALLYES_BLOCKER source=%s kind=%s detail=%s" %
                   (info["source"], stage, (useful[0] if useful else "no diagnostic")[:240]))
+            if stage == "MiniC" and info["source"] in (
+                    "libbb/xconnect.c", "libbb/vfork_daemon_rexec.c"):
+                # Upstream GNU CPP is the oracle. Report the exact
+                # preprocessed expression at the frontend rejection site;
+                # raw xconnect.c line numbers are NOT the same after the
+                # target sysroot headers are expanded.
+                match = re.search(r"input\\.i:(\\d+):(\\d+):\\s*error:", error)
+                if match:
+                    source_lines = (path.parent / "input.i").read_text(
+                        errors="replace").splitlines()
+                    at = int(match.group(1))
+                    preview = " | ".join(
+                        "%d:%s" % (k + 1, source_lines[k].strip())
+                        for k in range(max(0, at - 3),
+                                       min(len(source_lines), at + 2))
+                    )
+                    print("BUSYBOX_ALLYES_CPP_CONTEXT source=%s line=%d text=%s" %
+                          (info["source"], at, preview[:1100]), flush=True)
             if stage == "MiniC":
                 trace_path = path.parent / "trace.err"
                 if trace_path.is_file():
@@ -210,7 +231,10 @@ def print_frontier(report_root, gcc_success, enabled):
                     captures = [line.strip() for line in trace.splitlines()
                                 if line.startswith(("MINIC_BACKEND_REJECT",
                                                     "MINIC_M1_FRONTIER",
-                                                    "MINIC_BACKEND_CENSUS"))]
+                                                    "MINIC_BACKEND_CENSUS",
+                                                    "MINIC_CALL_RESULT_REJECT",
+                                                    "MINIC_BACKEND_CALL_GATE",
+                                                    "MINIC_M8_FRAME_REJECT"))]
                     for detail in captures[:6]:
                         print("BUSYBOX_ALLYES_CORE_REJECT source=%s detail=%s" %
                               (info["source"], detail[:550]), flush=True)
