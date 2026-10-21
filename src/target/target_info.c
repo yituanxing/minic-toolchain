@@ -187,6 +187,9 @@ const MinicTargetInfo *minic_target_info_for_architecture(
             rv64_target.word_integer_rank = MINIC_INTEGER_RANK_LONG;
             rv64_target.gnu_sizeof_void_is_one = true;
             rv64_target.gnu_sizeof_function_is_one = true;
+            rv64_target.variadic_scalar_read_kind = MINIC_VARIADIC_SCALAR_READ_LINEAR_SLOT;
+            rv64_target.variadic_linear_slot_bytes = 8U;
+            rv64_target.variadic_pointer_copy_supported = true;
             rv64_target.call_frame_return_address_level0 = true;
             rv64_target.call_frame_frame_address_level0 = true;
         }
@@ -201,6 +204,9 @@ const MinicTargetInfo *minic_target_info_for_architecture(
             x86_64_target.word_integer_rank = MINIC_INTEGER_RANK_LONG;
             x86_64_target.gnu_sizeof_void_is_one = true;
             x86_64_target.gnu_sizeof_function_is_one = true;
+            x86_64_target.variadic_scalar_read_kind = MINIC_VARIADIC_SCALAR_READ_ABI_CURSOR;
+            x86_64_target.variadic_linear_slot_bytes = 0U;
+            x86_64_target.variadic_pointer_copy_supported = false;
             /* Machine-level frame address and return address support awaits
              * the x86-64 backend.  Do not accept these builtins prematurely. */
         }
@@ -215,6 +221,9 @@ const MinicTargetInfo *minic_target_info_for_architecture(
             aarch64_target.word_integer_rank = MINIC_INTEGER_RANK_LONG;
             aarch64_target.gnu_sizeof_void_is_one = true;
             aarch64_target.gnu_sizeof_function_is_one = true;
+            aarch64_target.variadic_scalar_read_kind = MINIC_VARIADIC_SCALAR_READ_ABI_CURSOR;
+            aarch64_target.variadic_linear_slot_bytes = 0U;
+            aarch64_target.variadic_pointer_copy_supported = true;
         }
         return &aarch64_target;
     }
@@ -227,6 +236,9 @@ const MinicTargetInfo *minic_target_info_for_architecture(
             loongarch64_target.word_integer_rank = MINIC_INTEGER_RANK_LONG;
             loongarch64_target.gnu_sizeof_void_is_one = true;
             loongarch64_target.gnu_sizeof_function_is_one = true;
+            loongarch64_target.variadic_scalar_read_kind = MINIC_VARIADIC_SCALAR_READ_LINEAR_SLOT;
+            loongarch64_target.variadic_linear_slot_bytes = 8U;
+            loongarch64_target.variadic_pointer_copy_supported = true;
         }
         return &loongarch64_target;
     }

@@ -2720,142 +2720,8 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
                    ? MINIC_CORE_LOWER_OK
                    : MINIC_CORE_LOWER_ERROR;
     }
-    /* GNU va_arg is a stateful cursor read.  The frontend keeps va_list as a
-       modifiable pointer lvalue; Core performs the target-neutral load, typed
-       dereference, one ABI-slot cursor advance, and writeback.  RV64 owns the
-       concrete 8-byte variadic slot width. */
-    if (expression->kind == MINIC_EXPRESSION_BUILTIN_VA_ARG) {
-        const MinicExpression *target;
-        MinicCoreInstruction operation;
-        MinicCoreLowerStatus status;
-        MinicCoreValueId list_address;
-        MinicCoreValueId cursor_value;
-        MinicCoreValueId value_address;
-        MinicCoreValueId argument_value;
-        MinicCoreValueId one;
-        MinicCoreValueId next_cursor;
-        MinicType cursor_type;
-        MinicType value_pointer_type;
-        size_t value_size;
-        size_t value_alignment;
-
-        target = minic_c0_program_expression(
-            context->body->program, expression->value.unary.operand);
-        if (target == NULL || target->value_category != MINIC_VALUE_LVALUE ||
-            !minic_type_is_pointer(target->type) || minic_type_is_const(target->type) ||
-            !minic_type_unqualified(target->type, &cursor_type) ||
-            !minic_type_is_pointer(cursor_type) ||
-            (!minic_type_is_integer(expression->type) &&
-             !minic_type_is_pointer(expression->type) &&
-             !minic_type_is_double(expression->type)) ||
-            !minic_data_layout_type(core_data_layout(context),
-                                    context->body->program,
-                                    expression->type,
-                                    &value_size,
-                                    &value_alignment) ||
-            value_size == 0U || value_size > 8U || value_alignment > 8U ||
-            !minic_type_pointer_to(expression->type, &value_pointer_type)) {
-            return MINIC_CORE_LOWER_UNSUPPORTED;
-        }
-        status = lower_address(context, expression->value.unary.operand, &list_address);
-        if (status != MINIC_CORE_LOWER_OK) {
-            return status;
-        }
-        if (context->target != NULL &&
-            (context->target->architecture == MINIC_TARGET_ARCH_X86_64 ||
-             context->target->architecture == MINIC_TARGET_ARCH_AARCH64)) {
-            /* SysV x86 and AAPCS64 use an ABI-owned register-bank cursor,
-             * unlike the linear 8-byte pointer path of RV64/LoongArch.
-             * VARIADIC_NEXT_SCALAR handles the typed read and advance. */
-            /* An x86 __va_list_tag tracks two register banks and overflow
-             * stack storage.  Core must not model it as RV64's linear
-             * 8-byte pointer increment. Emit one typed semantic read. */
-            (void)memset(&operation, 0, sizeof(operation));
-            operation.kind = MINIC_CORE_INSTRUCTION_LOAD;
-            operation.span = expression->span;
-            operation.type = cursor_type;
-            operation.result = MINIC_CORE_VALUE_INVALID;
-            operation.value.load.address = list_address;
-            operation.value.load.is_volatile = minic_type_is_volatile(target->type);
-            if (!minic_core_function_append_value_instruction(
-                    context->function, context->block_id, &operation,
-                    &cursor_value)) return MINIC_CORE_LOWER_ERROR;
-            (void)memset(&operation, 0, sizeof(operation));
-            operation.kind = MINIC_CORE_INSTRUCTION_VARIADIC_NEXT_SCALAR;
-            operation.span = expression->span;
-            operation.type = expression->type;
-            operation.result = MINIC_CORE_VALUE_INVALID;
-            operation.value.operand = cursor_value;
-            return minic_core_function_append_value_instruction(
-                       context->function, context->block_id, &operation,
-                       value_id)
-                       ? MINIC_CORE_LOWER_OK : MINIC_CORE_LOWER_ERROR;
-        }
-        (void)memset(&operation, 0, sizeof(operation));
-        operation.kind = MINIC_CORE_INSTRUCTION_LOAD;
-        operation.span = expression->span;
-        operation.type = cursor_type;
-        operation.result = MINIC_CORE_VALUE_INVALID;
-        operation.value.load.address = list_address;
-        operation.value.load.is_volatile = minic_type_is_volatile(target->type);
-        if (!minic_core_function_append_value_instruction(
-                context->function, context->block_id, &operation, &cursor_value)) {
-            return MINIC_CORE_LOWER_ERROR;
-        }
-        status = append_scalar_bitcast(
-            context, expression->span, value_pointer_type, cursor_value, &value_address);
-        if (status != MINIC_CORE_LOWER_OK) {
-            return status;
-        }
-        (void)memset(&operation, 0, sizeof(operation));
-        operation.kind = MINIC_CORE_INSTRUCTION_LOAD;
-        operation.span = expression->span;
-        operation.type = expression->type;
-        operation.result = MINIC_CORE_VALUE_INVALID;
-        operation.value.load.address = value_address;
-        operation.value.load.is_volatile = false;
-        if (!minic_core_function_append_value_instruction(
-                context->function, context->block_id, &operation, &argument_value)) {
-            return MINIC_CORE_LOWER_ERROR;
-        }
-        (void)memset(&operation, 0, sizeof(operation));
-        operation.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
-        operation.span = expression->span;
-        operation.type = minic_type_int();
-        operation.result = MINIC_CORE_VALUE_INVALID;
-        operation.value.integer_value = 1;
-        if (!minic_core_function_append_value_instruction(
-                context->function, context->block_id, &operation, &one)) {
-            return MINIC_CORE_LOWER_ERROR;
-        }
-        (void)memset(&operation, 0, sizeof(operation));
-        operation.kind = MINIC_CORE_INSTRUCTION_POINTER_OFFSET;
-        operation.span = expression->span;
-        operation.type = cursor_type;
-        operation.result = MINIC_CORE_VALUE_INVALID;
-        operation.value.pointer_offset.base = cursor_value;
-        operation.value.pointer_offset.index = one;
-        operation.value.pointer_offset.element_size = 8U;
-        operation.value.pointer_offset.subtract = false;
-        if (!minic_core_function_append_value_instruction(
-                context->function, context->block_id, &operation, &next_cursor)) {
-            return MINIC_CORE_LOWER_ERROR;
-        }
-        (void)memset(&operation, 0, sizeof(operation));
-        operation.kind = MINIC_CORE_INSTRUCTION_STORE;
-        operation.span = expression->span;
-        operation.type = minic_type_void();
-        operation.result = MINIC_CORE_VALUE_INVALID;
-        operation.value.store.address = list_address;
-        operation.value.store.stored_value = next_cursor;
-        operation.value.store.is_volatile = minic_type_is_volatile(target->type);
-        if (!minic_core_function_append_effect_instruction(
-                context->function, context->block_id, &operation)) {
-            return MINIC_CORE_LOWER_ERROR;
-        }
-        *value_id = argument_value;
-        return MINIC_CORE_LOWER_OK;
-    }
+    if (expression->kind == MINIC_EXPRESSION_BUILTIN_VA_ARG)
+        return minic_core_lower_vararg_scalar(context, expression, value_id);
 
     /* M79_CALL_FRAME_RETURN_ADDRESS: keep the semantic builtin in Core rather
        than lowering it to a target register in the frontend. The first seam
@@ -3764,10 +3630,6 @@ MinicCoreLowerStatus minic_core_lower_internal_lower_expression_statement(MinicC
     if (expression == NULL) {
         return MINIC_CORE_LOWER_ERROR;
     }
-    /* M123_VARIADIC_ARGUMENT_ADDRESS: GNU va builtins are parsed and
-       type-checked by frontend/Sema. Core owns their target-neutral execution
-       semantics while the selected ABI/backend owns the register save area.
-       The current frontend va_list model is a modifiable pointer lvalue. */
     /* SQLite's GNU atomic store: a distinct Core memory effect, not an
      * ordinary scalar assignment that later passes might erase or reorder.
      * Evaluate address and value exactly once in source order. RV64 rejects
@@ -3816,67 +3678,10 @@ MinicCoreLowerStatus minic_core_lower_internal_lower_expression_statement(MinicC
                    context->function, context->block_id, &atomic)
                    ? MINIC_CORE_LOWER_OK : MINIC_CORE_LOWER_ERROR;
     }
-    if (expression->kind == MINIC_EXPRESSION_BUILTIN_VA_START) {
-        const MinicExpression *target;
-        MinicCoreInstruction instruction;
-        MinicCoreLowerStatus status;
-        MinicCoreValueId cursor_value;
-        MinicCoreValueId target_address;
-        MinicType value_type;
-
-        target_id = expression->value.unary.operand;
-        target = minic_c0_program_expression(context->body->program, target_id);
-        if (context->source_function == NULL || !context->source_function->is_variadic ||
-            target == NULL || target->value_category != MINIC_VALUE_LVALUE ||
-            !minic_type_is_pointer(target->type) || minic_type_is_const(target->type) ||
-            !minic_type_unqualified(target->type, &value_type) ||
-            !minic_type_is_pointer(value_type)) {
-            return MINIC_CORE_LOWER_UNSUPPORTED;
-        }
-        status = lower_address(context, target_id, &target_address);
-        if (status != MINIC_CORE_LOWER_OK) {
-            return status;
-        }
-        (void)memset(&instruction, 0, sizeof(instruction));
-        instruction.kind = MINIC_CORE_INSTRUCTION_VARIADIC_ARGUMENT_ADDRESS;
-        instruction.span = expression->span;
-        instruction.type = value_type;
-        instruction.result = MINIC_CORE_VALUE_INVALID;
-        if (!minic_core_function_append_value_instruction(
-                context->function, context->block_id, &instruction, &cursor_value)) {
-            return MINIC_CORE_LOWER_ERROR;
-        }
-        (void)memset(&instruction, 0, sizeof(instruction));
-        instruction.kind = MINIC_CORE_INSTRUCTION_STORE;
-        instruction.span = expression->span;
-        instruction.type = minic_type_void();
-        instruction.result = MINIC_CORE_VALUE_INVALID;
-        instruction.value.store.address = target_address;
-        instruction.value.store.stored_value = cursor_value;
-        instruction.value.store.is_volatile = minic_type_is_volatile(target->type);
-        return minic_core_function_append_effect_instruction(
-                   context->function, context->block_id, &instruction)
-                   ? MINIC_CORE_LOWER_OK
-                   : MINIC_CORE_LOWER_ERROR;
-    }
-    if (expression->kind == MINIC_EXPRESSION_BUILTIN_VA_COPY) {
-        /* Pointer assignment aliases x86 SysV's mutable 24-byte cursor
-         * instead of copying it. Reject until an independent tag-copy
-         * operation has been implemented; keep RV64 semantics unchanged. */
-        if (context->target != NULL &&
-            context->target->architecture == MINIC_TARGET_ARCH_X86_64)
-            return MINIC_CORE_LOWER_UNSUPPORTED;
-        return minic_core_lower_assignment_pair(context,
-                                     expression->value.binary.left,
-                                     expression->value.binary.right,
-                                     expression->span,
-                                     NULL);
-    }
-    if (expression->kind == MINIC_EXPRESSION_BUILTIN_VA_END) {
-        MinicCoreValueId discarded_address;
-
-        return lower_address(context, expression->value.unary.operand, &discarded_address);
-    }
+    if (expression->kind == MINIC_EXPRESSION_BUILTIN_VA_START ||
+        expression->kind == MINIC_EXPRESSION_BUILTIN_VA_COPY ||
+        expression->kind == MINIC_EXPRESSION_BUILTIN_VA_END)
+        return minic_core_lower_vararg_statement(context, expression);
 
     /* M122_DISCARDED_COMMA_EFFECT_SEQUENCE: the C comma operator is an
        explicit sequencing boundary. In expression-statement context its final
