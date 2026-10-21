@@ -146,3 +146,22 @@ This directly separates semantic ABI classification from target machine
 emission without demanding an immediate Machine IR. No common LP64
 classifier is assumed across RV64/x86/AArch64/LoongArch64. Runtime
 certification still requires original project GNU differential gates.
+
+## Mature-backend follow-up: frame and requirement seams
+
+x86 SysV's existing `MinicX86Frame` and full frame init/destroy
+implementation now live in `x86_64/frame.{h,c}`; the x86 machine emitter
+consumes the unchanged plan, retaining varargs register-save/overflow logic
+and dynamically aligned object frames. ABI classification remains in
+`x86_64/abi.c` and machine instructions in `x86_64/codegen.c`.
+
+RV64's six existing call/frame requirements helpers are extracted into
+`riscv64/frame_requirements.{h,c}`, reusing the established RV psABI
+classifier. The ~7k-line target machine emitter still owns the optimized
+Core SSA spill slot reuse, scalar object intervals, inline-asm register
+allocation, and final frame layout. Deliberately **no** generic frame
+allocator, premature physical register abstraction or Machine IR exists.
+
+This creates an explicit place for future machine-function lowering while
+keeping Core IR architecture-independent. All extraction results need real
+GNU/QEMU runtime verification beyond source identity and warning-free build.
