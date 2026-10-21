@@ -3,6 +3,7 @@
 #include "target/common/direct_program_emit.h"
 #include "target/common/direct_preflight.h"
 #include "target/common/direct_call_preflight.h"
+#include "target/common/direct_call_plan.h"
 #include "target/common/lp64_scalar.h"
 #include "target/common/lp64_frame.h"
 #include "target/common/lp64_aggregate.h"
@@ -1160,55 +1161,19 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
             const bool is_variadic = indirect
                 ? fn->call_signatures[ins->value.indirect_call.signature_id].is_variadic
                 : fn->callees[ins->value.call.callee_id].is_variadic;
-            size_t j, gp_index = 0U, fp_index = 0U, overflow_slots = 0U;
+            size_t j, gp_index = 0U, fp_index = 0U;
             size_t stack_index = 0U, stack_bytes;
-            /* LP64D unnamed variadic doubles consume GP slots, while fixed
-             * FP args use independent fa0-fa7. Overflow slots start at SP.
-             * Temporarily lower SP; reload SSA values with the added offset. */
-            for (j = 0U; j < count; ++j) {
-                const MinicCoreCallArgument *arg = &fn->call_arguments[begin + j];
-                if (arg->kind == MINIC_CORE_CALL_ARGUMENT_OBJECT) {
-                    size_t record_size, slots;
-                    const MinicCoreObject *object =
-                        &fn->objects[arg->value.object_id];
-                    if (!minic_multi_gp_record(program, target, object->type,
-                                               &record_size, &slots)) {
-                        if (!minic_multi_indirect_record(program, target,
-                                                         object->type, &record_size))
-                            return minic_multi_direct_machine_reject(fn, "loongarch64", name,
-                                reject_stage, reject_block, reject_ins, __LINE__);
-                        if (gp_index++ >= 8U) ++overflow_slots;
-                        continue;
-                    }
-                    const size_t available = gp_index < 8U
-                        ? 8U - gp_index : 0U;
-                    const size_t used = slots < available ? slots : available;
-                    gp_index += used;
-                    overflow_slots += slots - used;
-                    continue;
-                }
-                const MinicType type = fn->values[arg->value.value_id].type;
-                const bool use_fp = (minic_type_is_double(type) ||
-                                     minic_type_is_float(type)) &&
-                                    (!is_variadic || j < parameter_count) &&
-                                    fp_index < 8U;
-                if (minic_type_is_long_double(type)) {
-                    /* LP64D unnamed binary128 requires an even-numbered
-                     * GAR pair, rather than an odd a3/a5/a7 start. */
-                    if (is_variadic && j >= parameter_count &&
-                        gp_index < 8U && (gp_index & 1U))
-                        ++gp_index;
-                    const size_t available = gp_index < 8U ? 8U - gp_index : 0U;
-                    const size_t used = available < 2U ? available : 2U;
-                    if (used == 0U && (overflow_slots & 1U))
-                        ++overflow_slots;
-                    gp_index += used;
-                    overflow_slots += 2U - used;
-                } else if (use_fp) {
-                    if (fp_index++ >= 8U) ++overflow_slots;
-                } else if (gp_index++ >= 8U) ++overflow_slots;
-            }
-            stack_bytes = (overflow_slots * 8U + 15U) & ~(size_t)15U;
+            MinicLP64DirectCallPlan call_plan;
+            /* Resolve ABI locations once before allocating outgoing stack
+             * space; the same plan drives each argument's source cursor. */
+            if (!minic_lp64_plan_direct_call(
+                    program, target, fn, ins,
+                    MINIC_LP64_FRAME_LOONGARCH64_LP64D,
+                    minic_multi_indirect_record,
+                    &call_plan))
+                return minic_multi_direct_machine_reject(fn, "loongarch64", name,
+                    reject_stage, reject_block, reject_ins, __LINE__);
+            stack_bytes = call_plan.stack_bytes;
             if (stack_bytes != 0U && !minic_loongarch64_emit_sp_adjust(out, stack_bytes, false))
                 return minic_multi_direct_machine_reject(fn, "loongarch64", name,
                                            reject_stage, reject_block,
@@ -1216,6 +1181,10 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
             gp_index = fp_index = 0U;
             for (j = 0U; j < count; ++j) {
                 const MinicCoreCallArgument *arg = &fn->call_arguments[begin + j];
+                const MinicLP64ArgumentLocation *location = &call_plan.arguments[j];
+                gp_index = location->gp_cursor;
+                fp_index = location->fp_cursor;
+                stack_index = location->stack_cursor;
                 if (arg->kind == MINIC_CORE_CALL_ARGUMENT_OBJECT) {
                     size_t record_size, slots, object_offset, chunk;
                     const MinicCoreObjectId object_id = arg->value.object_id;
