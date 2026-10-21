@@ -106,6 +106,8 @@ MINIC_SOURCES := \
 	src/frontend/parser_record.c \
 	src/frontend/parser_static_assert.c \
 	src/frontend/parser_statement.c \
+	src/frontend/parser_labels.c \
+	src/frontend/parser_inline_asm.c \
 	src/frontend/parser_runtime_initializer.c \
 	src/frontend/parser_string.c \
 	src/frontend/parser_type.c \
