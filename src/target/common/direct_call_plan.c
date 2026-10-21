@@ -35,7 +35,7 @@ bool minic_lp64_plan_direct_call(const MinicC0Program *program,
         fixed = signature->parameter_count;
         variadic = signature->is_variadic;
     } else return false;
-    if (count > MINIC_LP64_MAX_CALL_ARGUMENTS || fixed > count ||
+    if (count > MINIC_DIRECT_LP64_MAX_CALL_ARGUMENTS || fixed > count ||
         (!variadic && fixed != count) || begin > fn->call_argument_count ||
         count > fn->call_argument_count - begin)
         return false;
