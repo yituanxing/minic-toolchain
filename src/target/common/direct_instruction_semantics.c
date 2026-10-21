@@ -8,12 +8,15 @@ bool minic_multi_direct_record_copy_extent(
     const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
     size_t *bytes) {
-    const MinicCoreValueId dst = ins->value.record_copy.destination_address;
-    const MinicCoreValueId src = ins->value.record_copy.source_address;
+    MinicCoreValueId dst, src;
     MinicType dst_type, src_type, dst_unqualified, src_unqualified;
     size_t alignment;
     if (program == NULL || target == NULL || fn == NULL || ins == NULL ||
-        bytes == NULL || ins->kind != MINIC_CORE_INSTRUCTION_RECORD_COPY ||
+        bytes == NULL)
+        return false;
+    dst = ins->value.record_copy.destination_address;
+    src = ins->value.record_copy.source_address;
+    if ( || ins->kind != MINIC_CORE_INSTRUCTION_RECORD_COPY ||
         ins->result != MINIC_CORE_VALUE_INVALID ||
         !minic_type_is_record(ins->type) ||
         dst >= fn->value_count || src >= fn->value_count ||
@@ -35,11 +38,15 @@ bool minic_multi_direct_parameter_object_location(
     const MinicLP64ArgumentPlan *incoming_plan,
     const MinicLP64FramePlan *frame_plan,
     const MinicLP64ArgumentLocation **location, size_t *object_offset) {
-    const size_t position = ins->value.parameter_object.parameter_index;
-    const MinicCoreObjectId obj_id = ins->value.parameter_object.object_id;
+    size_t position;
+    MinicCoreObjectId obj_id;
     const MinicLP64ArgumentLocation *loc;
     if (fn == NULL || ins == NULL || incoming_plan == NULL ||
-        frame_plan == NULL || location == NULL || object_offset == NULL ||
+        frame_plan == NULL || location == NULL || object_offset == NULL)
+        return false;
+    position = ins->value.parameter_object.parameter_index;
+    obj_id = ins->value.parameter_object.object_id;
+    if (
         ins->kind != MINIC_CORE_INSTRUCTION_PARAMETER_OBJECT ||
         position >= incoming_plan->argument_count ||
         position >= fn->parameter_count)
@@ -61,15 +68,19 @@ bool minic_multi_direct_scalar_store_shape(
     const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
     size_t *width, bool *is_signed, bool *is_pointer) {
-    const bool atomic = ins->kind == MINIC_CORE_INSTRUCTION_ATOMIC_STORE;
-    const MinicCoreValueId addr = atomic ? ins->value.atomic_store.address
-                                         : ins->value.store.address;
-    const MinicCoreValueId value = atomic ? ins->value.atomic_store.stored_value
-                                          : ins->value.store.stored_value;
+    bool atomic;
+    MinicCoreValueId addr, value;
     MinicType pointee;
     size_t pointee_width = 0U, pointee_align = 0U;
     if (program == NULL || target == NULL || fn == NULL || ins == NULL ||
-        width == NULL || is_signed == NULL || is_pointer == NULL ||
+        width == NULL || is_signed == NULL || is_pointer == NULL)
+        return false;
+    atomic = ins->kind == MINIC_CORE_INSTRUCTION_ATOMIC_STORE;
+    addr = atomic ? ins->value.atomic_store.address
+                  : ins->value.store.address;
+    value = atomic ? ins->value.atomic_store.stored_value
+                   : ins->value.store.stored_value;
+    if (
         (ins->kind != MINIC_CORE_INSTRUCTION_STORE && !atomic) ||
         ins->result != MINIC_CORE_VALUE_INVALID ||
         addr >= fn->value_count || value >= fn->value_count ||
