@@ -55,6 +55,8 @@ MINIC_SOURCES := \
 	src/core/value_uses.c \
 	src/core/reentry_index.c \
 	src/core/core_lower.c \
+	src/core/core_lower_expr_flow.c \
+	src/core/core_lower_expr_scalar.c \
 	src/core/core_lower_const_facts.c \
 	src/core/cfg_constant_calls.c \
 	src/core/local_facts.c \
