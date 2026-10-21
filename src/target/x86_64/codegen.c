@@ -2,6 +2,7 @@
 
 #include "target/data_layout.h"
 #include "target/x86_64/global_emit.h"
+#include "target/x86_64/abi.h"
 
 #include <inttypes.h>
 #include <limits.h>
@@ -50,77 +51,11 @@ static bool x86_align(size_t value, size_t alignment, size_t *out) {
     return true;
 }
 
-static bool x86_scalar_width(const MinicC0Program *program,
-                             const MinicTargetInfo *target,
-                             MinicType type, size_t *bytes, bool *is_signed) {
-    unsigned int bits;
-    MinicType effective;
-    if (bytes == NULL || is_signed == NULL) return false;
-    if (minic_type_is_pointer(type)) {
-        *bytes = target->data_layout->pointer_size;
-        *is_signed = false;
-        return *bytes == 8U;
-    }
-    if (!minic_type_is_integer(type) ||
-        !minic_c0_type_effective_integer_type(program, type, &effective) ||
-        !minic_target_info_integer_width(target, program, type, &bits) ||
-        bits == 0U || bits > 64U) return false;
-    *bytes = (bits + 7U) / 8U;
-    *is_signed = minic_type_is_signed_integer(effective);
-    return *bytes == 1U || *bytes == 2U || *bytes == 4U || *bytes == 8U;
-}
 
-/* Values are stored as raw machine bits in eight-byte Core slots.  Floating
- * load/store must not pass through the integer sign-extension path. */
-static bool x86_storage_width(const MinicC0Program *program,
-                              const MinicTargetInfo *target, MinicType type,
-                              size_t *bytes, bool *sign) {
-    if (minic_type_is_float(type) || minic_type_is_double(type)) {
-        if (bytes == NULL || sign == NULL) return false;
-        *bytes = minic_type_is_float(type) ? 4U : 8U;
-        *sign = false;
-        return true;
-    }
-    return x86_scalar_width(program, target, type, bytes, sign);
-}
 
-/* SysV AMD64: a non-packed, naturally aligned record consisting solely of
- * integer/pointer fields fits one INTEGER eightbyte when its storage is at
- * most eight bytes. This includes struct in_addr (4B) and GNU transparent
- * sockaddr pointer unions (8B). No SSE, nested, packed or bitfield cases
- * are claimed here; do not guess their ABI classification. We currently
- * materialize only exact 1/2/4/8-byte loads to avoid overreading objects. */
-static bool x86_one_gp_record(const MinicC0Program *program,
-                              const MinicTargetInfo *target, MinicType type,
-                              size_t *record_bytes) {
-    const MinicRecord *rec;
-    size_t size, align, i;
-    if (program == NULL || target == NULL || record_bytes == NULL ||
-        !minic_type_is_record(type)) return false;
-    rec = minic_c0_program_record(program, type.record_id);
-    if (rec == NULL || !rec->is_complete || rec->field_count == 0U ||
-        rec->is_packed || rec->pack_alignment != 0U ||
-        !minic_data_layout_type(target->data_layout, program, type, &size, &align) ||
-        (size != 1U && size != 2U && size != 4U && size != 8U) ||
-        align == 0U || align > 8U) return false;
-    for (i = 0U; i < rec->field_count; ++i) {
-        const MinicRecordField *field = minic_c0_record_field(rec, i);
-        size_t bytes, field_align, offset;
-        if (field == NULL || field->is_packed || field->is_array ||
-            field->is_bit_field || field->is_flexible_array ||
-            field->is_zero_length_array || field->element_count != 1U ||
-            (!minic_type_is_pointer(field->type) &&
-             !minic_type_is_integer(field->type)) ||
-            !minic_data_layout_type(target->data_layout, program, field->type,
-                                    &bytes, &field_align) ||
-            !minic_data_layout_record_field_offset(target->data_layout, program,
-                                                    rec, i, &offset) ||
-            field_align == 0U || offset % field_align != 0U ||
-            offset > size || bytes > size - offset) return false;
-    }
-    *record_bytes = size;
-    return true;
-}
+
+
+
 
 static bool x86_one_gp_load(FILE *out, size_t bytes) {
     switch (bytes) {
@@ -142,90 +77,15 @@ static bool x86_one_gp_store(FILE *out, size_t bytes) {
     }
 }
 
-/* SQLite's Token is a two-eightbyte INTEGER-class SysV aggregate:
- * one pointer at byte 0, one 32-bit integer at byte 8, size 16.
- * Deliberately do not claim general record ABI classification here.
- * Reject packed/misaligned, floating and nested records until proved. */
-static bool x86_two_gp_record(const MinicC0Program *program,
-                              const MinicTargetInfo *target, MinicType type) {
-    const MinicRecord *rec;
-    const MinicRecordField *a, *b;
-    size_t bytes, align, a_offset, b_offset, a_bytes, b_bytes, ignored;
-    if (program == NULL || target == NULL || !minic_type_is_record(type))
-        return false;
-    rec = minic_c0_program_record(program, type.record_id);
-    if (rec == NULL || !rec->is_complete || rec->is_union ||
-        rec->is_packed || rec->field_count != 2U)
-        return false;
-    a = minic_c0_record_field(rec, 0U);
-    b = minic_c0_record_field(rec, 1U);
-    if (a == NULL || b == NULL || a->is_packed || b->is_packed ||
-        a->is_bit_field || b->is_bit_field ||
-        a->element_count != 1U || b->element_count != 1U ||
-        a->is_array || b->is_array ||
-        !minic_type_is_pointer(a->type) || !minic_type_is_integer(b->type))
-        return false;
-    return minic_data_layout_type(target->data_layout, program, type, &bytes, &align) &&
-           minic_data_layout_type(target->data_layout, program, a->type, &a_bytes, &ignored) &&
-           minic_data_layout_type(target->data_layout, program, b->type, &b_bytes, &ignored) &&
-           minic_data_layout_record_field_offset(target->data_layout, program, rec, 0U, &a_offset) &&
-           minic_data_layout_record_field_offset(target->data_layout, program, rec, 1U, &b_offset) &&
-           bytes == 16U && align == 8U &&
-           a_offset == 0U && b_offset == 8U &&
-           a_bytes == 8U && b_bytes == 4U;
-}
 
-/* Shared SysV register-bank/stack cursor for incoming parameters.
- * A two-GP record is indivisible for register allocation: if fewer than
- * two registers remain, both eightbytes go on the argument stack. */
-static bool x86_incoming_cursor(const MinicC0Program *program,
-                                const MinicTargetInfo *target,
-                                const MinicCoreFunction *fn, size_t position,
-                                size_t *gpr, size_t *fp, size_t *stack) {
-    size_t i, width, one_gp_bytes;
-    bool signedness;
-    if (fn == NULL || position >= fn->parameter_count ||
-        gpr == NULL || fp == NULL || stack == NULL) return false;
-    *gpr = *fp = *stack = 0U;
-    for (i = 0U; i < position; ++i) {
-        MinicType t = fn->parameter_types[i];
-        if (minic_type_is_float(t) || minic_type_is_double(t)) {
-            if (*fp < 8U) ++*fp;
-            else ++*stack;
-        } else if (minic_type_is_long_double(t)) {
-            /* An x87 long double stack argument starts on a 16-byte
-             * boundary even after an odd number of spilled eightbytes. */
-            *stack += *stack & 1U;
-            *stack += 2U;
-        } else if (minic_type_is_record(t)) {
-            if (x86_one_gp_record(program, target, t, &one_gp_bytes)) {
-                if (*gpr < 6U) ++*gpr;
-                else ++*stack;
-            } else {
-                if (!x86_two_gp_record(program, target, t)) return false;
-                if (*gpr <= 4U) *gpr += 2U;
-                else *stack += 2U;
-            }
-        } else {
-            if (!x86_scalar_width(program, target, t, &width, &signedness))
-                return false;
-            if (*gpr < 6U) ++*gpr;
-            else ++*stack;
-        }
-    }
-    /* The cursor above counts preceding parameters. Align the current
-     * long double too, so a GCC caller and a MiniC callee use the same
-     * 16-byte stack argument slot after a spilled scalar parameter. */
-    if (minic_type_is_long_double(fn->parameter_types[position]))
-        *stack += *stack & 1U;
-    return true;
-}
+
+
 
 static bool x86_normalize(FILE *out, const MinicC0Program *program,
                           const MinicTargetInfo *target, MinicType type) {
     size_t bytes;
     bool sign;
-    if (!x86_scalar_width(program, target, type, &bytes, &sign)) return false;
+    if (!minic_x86_64_scalar_width(program, target, type, &bytes, &sign)) return false;
     if (minic_type_is_bool_integer(type))
         return fprintf(out, "  testq %%rax, %%rax\n  setne %%al\n  movzbq %%al, %%rax\n") >= 0;
     switch (bytes) {
@@ -346,7 +206,7 @@ static bool x86_frame_init(const MinicC0Program *program, const MinicTargetInfo 
                 if (fp_used < 8U) ++fp_used;
                 else ++stack_used;
             } else {
-                if (!x86_scalar_width(program, target, p, &width, &ignored_signed))
+                if (!minic_x86_64_scalar_width(program, target, p, &width, &ignored_signed))
                     return false; /* Aggregate SysV classification not yet implemented. */
                 if (gp_used < 6U) ++gp_used;
                 else ++stack_used;
@@ -498,11 +358,11 @@ static bool x86_emit_call_arguments(FILE *out, const MinicC0Program *program,
                     fn->objects[arg->value.object_id].type;
             if (!minic_type_equal(fn->objects[arg->value.object_id].type, type))
                 return false;
-            if (x86_one_gp_record(program, target, type, &record_bytes)) {
+            if (minic_x86_64_one_gp_record(program, target, type, &record_bytes)) {
                 if (integer_index < 6U) ++integer_index;
                 else ++stack_slots;
             } else {
-                if (!x86_two_gp_record(program, target, type)) return false;
+                if (!minic_x86_64_two_gp_record(program, target, type)) return false;
                 if (integer_index <= 4U) integer_index += 2U;
                 else stack_slots += 2U;
             }
@@ -520,7 +380,7 @@ static bool x86_emit_call_arguments(FILE *out, const MinicC0Program *program,
             stack_slots += stack_slots & 1U;
             stack_slots += 2U;
         } else {
-            if (!x86_scalar_width(program, target, type, &ignored_bytes,
+            if (!minic_x86_64_scalar_width(program, target, type, &ignored_bytes,
                                   &ignored_sign)) return false;
             if (integer_index < 6U) ++integer_index;
             else ++stack_slots;
@@ -546,7 +406,7 @@ static bool x86_emit_call_arguments(FILE *out, const MinicC0Program *program,
             type = i < fixed_count ? fixed_types[i] : fn->objects[object].type;
             if (!minic_type_equal(fn->objects[object].type, type) ||
                 !x86_object_address(out, frame, object, "%r11")) return false;
-            if (x86_one_gp_record(program, target, type, &record_bytes)) {
+            if (minic_x86_64_one_gp_record(program, target, type, &record_bytes)) {
                 if (!x86_one_gp_load(out, record_bytes)) return false;
                 if (integer_index < 6U) {
                     if (fprintf(out, "  movq %%rax, %s\n",
@@ -559,7 +419,7 @@ static bool x86_emit_call_arguments(FILE *out, const MinicC0Program *program,
                 }
                 continue;
             }
-            if (!x86_two_gp_record(program, target, type)) return false;
+            if (!minic_x86_64_two_gp_record(program, target, type)) return false;
             if (integer_index <= 4U) {
                 if (fprintf(out,
                     "  movq 0(%%r11), %s\n"
@@ -898,7 +758,7 @@ static bool x86_emit_instruction(FILE *out, const MinicC0Program *program,
         size_t source_bytes;
         bool source_signed;
         if (operand >= fn->value_count || !minic_type_is_double(ins->type) ||
-            !x86_scalar_width(program, target, fn->values[operand].type,
+            !minic_x86_64_scalar_width(program, target, fn->values[operand].type,
                               &source_bytes, &source_signed) ||
             !x86_value_load(out, frame, operand, "%rax"))
             return false;
@@ -925,7 +785,7 @@ static bool x86_emit_instruction(FILE *out, const MinicC0Program *program,
         if (operand >= fn->value_count ||
             !minic_type_is_double(fn->values[operand].type) ||
             !minic_type_is_integer(ins->type) ||
-            !x86_scalar_width(program, target, ins->type, &dst_bytes, &dst_signed) ||
+            !minic_x86_64_scalar_width(program, target, ins->type, &dst_bytes, &dst_signed) ||
             !x86_value_load(out, frame, operand, "%rax") ||
             fprintf(out, "  movq %%rax, %%xmm0\n") < 0)
             return false;
@@ -1031,7 +891,7 @@ static bool x86_emit_instruction(FILE *out, const MinicC0Program *program,
                 return false;
             return x86_i128_store(out, frame, ins->result, "%rax", "%rdx");
         }
-        if (!x86_scalar_width(program, target, ins->type, &bytes, &sign) ||
+        if (!minic_x86_64_scalar_width(program, target, ins->type, &bytes, &sign) ||
             fprintf(out, "  movabsq $%" PRId64 ", %%rax\n", ins->value.integer_value) < 0)
             return false;
         return x86_normalize(out, program, target, ins->type) &&
@@ -1040,7 +900,7 @@ static bool x86_emit_instruction(FILE *out, const MinicC0Program *program,
         static const char *const regs[] = {"%rdi", "%rsi", "%rdx", "%rcx", "%r8", "%r9"};
         size_t gpr, xmm, stack_index;
         const size_t position = ins->value.parameter_index;
-        if (!x86_incoming_cursor(program, target, fn, position,
+        if (!minic_x86_64_incoming_cursor(program, target, fn, position,
                                  &gpr, &xmm, &stack_index))
             return false;
         if (minic_type_is_long_double(ins->type)) {
@@ -1074,14 +934,14 @@ static bool x86_emit_instruction(FILE *out, const MinicC0Program *program,
         MinicCoreObjectId object = ins->value.parameter_object.object_id;
         bool one_gp;
         if (position >= fn->parameter_count || object >= fn->object_count ||
-            !x86_incoming_cursor(program, target, fn, position,
+            !minic_x86_64_incoming_cursor(program, target, fn, position,
                                  &gpr, &xmm, &stack_index) ||
             !minic_type_equal(fn->objects[object].type, fn->parameter_types[position]))
             return false;
-        one_gp = x86_one_gp_record(program, target, fn->parameter_types[position],
+        one_gp = minic_x86_64_one_gp_record(program, target, fn->parameter_types[position],
                                    &record_bytes);
         if (!one_gp &&
-            !x86_two_gp_record(program, target, fn->parameter_types[position]))
+            !minic_x86_64_two_gp_record(program, target, fn->parameter_types[position]))
             return false;
         if (!x86_object_address(out, frame, object, "%r10")) return false;
         (void)xmm;
@@ -1133,7 +993,7 @@ static bool x86_emit_instruction(FILE *out, const MinicC0Program *program,
         if (ins->result >= fn->value_count ||
             ins->value.operand >= fn->value_count ||
             !minic_type_is_pointer(fn->values[ins->value.operand].type) ||
-            (!is_fp && !x86_scalar_width(program, target, ins->type,
+            (!is_fp && !minic_x86_64_scalar_width(program, target, ins->type,
                                          &ignored_width, &ignored_signed)))
             return false;
         if (!x86_value_load(out, frame, ins->value.operand, "%r10"))
@@ -1255,7 +1115,7 @@ static bool x86_emit_instruction(FILE *out, const MinicC0Program *program,
             } else {
                 size_t source_bytes;
                 bool signed_source;
-                if (!x86_scalar_width(program, target, source_type,
+                if (!minic_x86_64_scalar_width(program, target, source_type,
                                       &source_bytes, &signed_source) ||
                     !x86_value_load(out, frame, source, "%rax") ||
                     fprintf(out, signed_source
@@ -1279,9 +1139,9 @@ static bool x86_emit_instruction(FILE *out, const MinicC0Program *program,
         bool src_sign;
         if (operand >= fn->value_count ||
             !minic_core_scalar_bitcast_types_valid(ins->type, fn->values[operand].type) ||
-            !x86_scalar_width(program, target, fn->values[operand].type,
+            !minic_x86_64_scalar_width(program, target, fn->values[operand].type,
                               &src_bytes, &src_sign) ||
-            !x86_scalar_width(program, target, ins->type, &bytes, &sign)) return false;
+            !minic_x86_64_scalar_width(program, target, ins->type, &bytes, &sign)) return false;
         /* Core bitcast models pointer/integer conversions, not only same-width
          * reinterpretation. Source values are already canonical in 64-bit
          * Core slots, and the destination normalization applies truncation. */
@@ -1301,7 +1161,7 @@ static bool x86_emit_instruction(FILE *out, const MinicC0Program *program,
                    fprintf(out, "  movq (%%r10), %%rax\n"
                                 "  movq 8(%%r10), %%rdx\n") >= 0 &&
                    x86_i128_store(out, frame, ins->result, "%rax", "%rdx");
-        if (!x86_storage_width(program, target, ins->type, &bytes, &sign)) return false;
+        if (!minic_x86_64_storage_width(program, target, ins->type, &bytes, &sign)) return false;
         return x86_value_load(out, frame, ins->value.load.address, "%r10") &&
                x86_load_memory(out, bytes, sign) &&
                x86_value_store(out, frame, ins->result);
@@ -1312,7 +1172,7 @@ static bool x86_emit_instruction(FILE *out, const MinicC0Program *program,
             addr >= fn->value_count ||
             !minic_type_pointee(fn->values[addr].type, &pointee) ||
             !(minic_type_is_integer(pointee) || minic_type_is_pointer(pointee)) ||
-            !x86_storage_width(program, target, pointee, &bytes, &sign))
+            !minic_x86_64_storage_width(program, target, pointee, &bytes, &sign))
             return false;
         /* Aligned scalar x86 MOV has atomicity at supported widths. */
         return x86_value_load(out, frame, addr, "%r10") &&
@@ -1327,7 +1187,7 @@ static bool x86_emit_instruction(FILE *out, const MinicC0Program *program,
             src >= fn->value_count || addr >= fn->value_count ||
             !minic_type_pointee(fn->values[addr].type, &pointee) ||
             !(minic_type_is_integer(pointee) || minic_type_is_pointer(pointee)) ||
-            !x86_storage_width(program, target, pointee, &bytes, &sign))
+            !minic_x86_64_storage_width(program, target, pointee, &bytes, &sign))
             return false;
         /* Naturally aligned 1/2/4/8-byte scalar MOV writes are atomic on
          * x86-64. Only relaxed semantics are implemented: sequentially
@@ -1349,7 +1209,7 @@ static bool x86_emit_instruction(FILE *out, const MinicC0Program *program,
                    fprintf(out, "  movq %%rax, (%%r10)\n"
                                 "  movq %%rdx, 8(%%r10)\n") >= 0;
         if (src >= fn->value_count ||
-            !x86_storage_width(program, target, fn->values[src].type, &bytes, &sign))
+            !minic_x86_64_storage_width(program, target, fn->values[src].type, &bytes, &sign))
             return false;
         return x86_value_load(out, frame, ins->value.store.address, "%r10") &&
                x86_value_load(out, frame, src, "%rax") &&
@@ -1370,7 +1230,7 @@ static bool x86_emit_instruction(FILE *out, const MinicC0Program *program,
             minic_type_is_const(result_type) || minic_type_is_volatile(result_type) ||
             !minic_type_equal(result_type, fn->values[lhs].type) ||
             !minic_type_equal(result_type, fn->values[rhs].type) ||
-            !x86_scalar_width(program, target, result_type, &width, &signed_result) ||
+            !minic_x86_64_scalar_width(program, target, result_type, &width, &signed_result) ||
             (width != 4U && width != 8U))
             return false;
         switch (ins->value.integer_overflow.operator_kind) {
@@ -1596,7 +1456,7 @@ static bool x86_emit_instruction(FILE *out, const MinicC0Program *program,
             break;
         case MINIC_CORE_INSTRUCTION_INTEGER_DIVIDE:
         case MINIC_CORE_INSTRUCTION_INTEGER_REMAINDER:
-            if (!x86_scalar_width(program, target, fn->values[left].type, &bytes, &sign) ||
+            if (!minic_x86_64_scalar_width(program, target, fn->values[left].type, &bytes, &sign) ||
                 fprintf(out, sign ? "  cqto\n  idivq %%r10\n" :
                                     "  xorq %%rdx, %%rdx\n  divq %%r10\n") < 0)
                 return false;
@@ -1616,7 +1476,7 @@ static bool x86_emit_instruction(FILE *out, const MinicC0Program *program,
             if (fprintf(out, "  movb %%r10b, %%cl\n  shlq %%cl, %%rax\n") < 0) return false;
             break;
         case MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_RIGHT:
-            if (!x86_scalar_width(program, target, fn->values[left].type, &bytes, &sign) ||
+            if (!minic_x86_64_scalar_width(program, target, fn->values[left].type, &bytes, &sign) ||
                 fprintf(out, sign ? "  movb %%r10b, %%cl\n  sarq %%cl, %%rax\n"
                                   : "  movb %%r10b, %%cl\n  shrq %%cl, %%rax\n") < 0)
                 return false;
@@ -1624,7 +1484,7 @@ static bool x86_emit_instruction(FILE *out, const MinicC0Program *program,
         case MINIC_CORE_INSTRUCTION_INTEGER_LESS:
         case MINIC_CORE_INSTRUCTION_POINTER_LESS:
         case MINIC_CORE_INSTRUCTION_SCALAR_EQUAL:
-            if (!x86_scalar_width(program, target, fn->values[left].type, &bytes, &sign) ||
+            if (!minic_x86_64_scalar_width(program, target, fn->values[left].type, &bytes, &sign) ||
                 fprintf(out, "  cmpq %%r10, %%rax\n") < 0) return false;
             if (ins->kind == MINIC_CORE_INSTRUCTION_SCALAR_EQUAL) {
                 if (fprintf(out, "  sete %%al\n") < 0) return false;
