@@ -48,7 +48,9 @@ typedef struct MinicTargetInfo {
     bool call_frame_frame_address_level0;
     MinicVariadicScalarReadKind variadic_scalar_read_kind;
     size_t variadic_linear_slot_bytes;
-    /* Current frontend pointer-va_list assignment compatibility policy. */
+    /* Transitional frontend pointer-va_list policy: an existing pointer
+     * assignment is accepted for this ABI. This does NOT establish correct
+     * value-copy semantics for structured AAPCS64 cursors. */
     bool variadic_pointer_copy_supported;
 } MinicTargetInfo;
 
