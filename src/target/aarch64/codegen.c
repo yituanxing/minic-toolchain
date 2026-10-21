@@ -232,7 +232,7 @@ static bool emit_function_body_with_frame(FILE *out, const MinicC0Program *progr
                                            SIZE_MAX, __LINE__);
     }
     reject_stage = "machine_emit";
-    for (size_t block_id = 0U; bl    {
+    {
         const MinicDirectLP64BlockContext blocks = {
             .program = program, .target = target, .fn = fn,
             .frame_plan = frame_plan, .incoming_plan = &incoming_plan,
@@ -244,7 +244,7 @@ static bool emit_function_body_with_frame(FILE *out, const MinicC0Program *progr
         };
         if (!minic_aarch64_emit_core_blocks(out, &blocks)) return false;
     }
-sh";
+    reject_stage = "function_finish";
     reject_block = SIZE_MAX;
     if (fprintf(out, ".size %s,.-%s\n", name, name) < 0 ||
         (decl->is_constructor &&
