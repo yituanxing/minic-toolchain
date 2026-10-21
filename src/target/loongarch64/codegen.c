@@ -1242,22 +1242,12 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                     }
                     continue;
                 }
-                const bool use_fp = location->fp_registers != 0U;
-                if (use_fp) {
-                    if (location->fp_registers != 0U) {
-                        if (!emit_sp_mem(out, minic_type_is_float(type)
-                                               ? "fld.s" : "fld.d",
-                                         fp_regs[location->fp_first], slot))
-                            return minic_multi_direct_machine_reject(fn, "loongarch64", name,
-                                    reject_stage, reject_block, reject_ins, __LINE__);
-                    } else if (!emit_sp_mem(out, minic_type_is_float(type)
-                                                   ? "fld.s" : "fld.d",
-                                            "$ft0", slot) ||
-                               !minic_loongarch64_emit_frame_mem(out, minic_type_is_float(type)
-                                                   ? "fst.s" : "fst.d",
-                                            "$ft0", location->stack_first * 8U, false))
+                if (location->fp_registers != 0U) {
+                    if (!emit_sp_mem(out, minic_type_is_float(type)
+                                           ? "fld.s" : "fld.d",
+                                     fp_regs[location->fp_first], slot))
                         return minic_multi_direct_machine_reject(fn, "loongarch64", name,
-                                    reject_stage, reject_block, reject_ins, __LINE__);
+                                reject_stage, reject_block, reject_ins, __LINE__);
                 } else {
                     const bool wide = minic_type_is_double(type) ||
                         minic_lp64_register64_type(program, target, type);
