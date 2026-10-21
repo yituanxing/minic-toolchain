@@ -108,7 +108,7 @@ const size_t position = ins->value.parameter_object.parameter_index;
                               "  strb w9, [x11], #1\n", out) == EOF)
                         return false;
                 }
-                continue;
+                return true;
             }
             for (chunk = 0U; chunk < slots; ++chunk) {
                 const bool in_reg = chunk < location->gp_registers;
