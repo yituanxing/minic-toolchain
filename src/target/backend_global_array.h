@@ -468,7 +468,7 @@ static bool minic_multi_emit_flexible_record_global(
                 target->data_layout, program, record, i, &offset) ||
             offset < cursor || offset > storage_size ||
             width > storage_size - offset ||
-            fprintf(out, "  .zero %zu\\n", offset - cursor) < 0)
+            fprintf(out, "  .zero %zu\n", offset - cursor) < 0)
             return false;
         (void)alignment;
         if (reloc != NULL &&
@@ -490,7 +490,7 @@ static bool minic_multi_emit_flexible_record_global(
     if (tail_offset < cursor || tail_offset > storage_size ||
         tail_width > (storage_size - tail_offset) /
                          object->flexible_array_initializer_count ||
-        fprintf(out, "  .zero %zu\\n", tail_offset - cursor) < 0 ||
+        fprintf(out, "  .zero %zu\n", tail_offset - cursor) < 0 ||
         reloc_index != object->relocation_count)
         return false;
     for (i = 0U; i < object->flexible_array_initializer_count; ++i) {
