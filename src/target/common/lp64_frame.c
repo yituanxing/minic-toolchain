@@ -54,3 +54,36 @@ bool minic_lp64_binary128_slot(const MinicCoreFunction *fn, size_t base,
     if (id == fn->value_count) { *out = pos; return true; }
     return false;
 }
+
+/* AAPCS64 reserves a separate 224-byte varargs tag/GP/FP save region.
+ * LoongArch LP64D uses 64 bytes of integer argument saves.
+ * Preserve existing ABI-specific bounds, offset and stack alignment. */
+bool minic_lp64_finalize_direct_frame(
+    size_t object_end, bool has_calls, bool dynamic_frame, bool has_varargs,
+    MinicLP64DirectABI abi, size_t *save_offset, size_t *va_base,
+    size_t *frame_size) {
+    size_t save, required, frame, va = 0U;
+    if (save_offset == NULL || frame_size == NULL ||
+        object_end > MINIC_LARGE_FRAME_MAX ||
+        (abi != MINIC_LP64_ABI_AAPCS64 &&
+         abi != MINIC_LP64_ABI_LOONGARCH64_LP64D))
+        return false;
+    save = (object_end + 7U) & ~(size_t)7U;
+    if (abi == MINIC_LP64_ABI_AAPCS64 && has_varargs) {
+        if (va_base == NULL || save > MINIC_LARGE_FRAME_MAX - 240U)
+            return false;
+        va = (save + 15U) & ~(size_t)15U;
+        save = va + 224U;
+    }
+    required = (has_calls ? 8U : 0U) + (dynamic_frame ? 8U : 0U);
+    if (abi == MINIC_LP64_ABI_LOONGARCH64_LP64D && has_varargs)
+        required += 64U;
+    if (save > MINIC_LARGE_FRAME_MAX - required) return false;
+    frame = (save + required + 15U) & ~(size_t)15U;
+    /* Expose the rejected size for the existing opt-in FRAME_CAP trace. */
+    *frame_size = frame;
+    if (frame > MINIC_LARGE_FRAME_MAX) return false;
+    *save_offset = save;
+    if (va_base != NULL) *va_base = va;
+    return true;
+}

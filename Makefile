@@ -104,6 +104,8 @@ MINIC_SOURCES := \
 	src/target/common/global_emit.c \
 	src/target/common/direct_program_emit.c \
 	src/target/common/direct_preflight.c \
+	src/target/common/direct_call_preflight.c \
+	src/target/common/direct_call_plan.c \
 	src/target/common/lp64_aggregate.c \
 	src/target/common/lp64_scalar.c \
 	src/target/common/lp64_frame.c \
