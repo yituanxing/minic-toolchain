@@ -417,3 +417,31 @@ the first extraction. This second grouping preserves the same function
 bodies with exactly two required private linkage changes. RV64
 Linux/native optimized paths and the x86/AArch64/LoongArch64 backends
 remain byte-for-byte untouched by the AST organization.
+
+## Global compiler/target audit: own the Core-set transaction separately
+
+The four-ISA integration previously concentrated on backend modules.
+Reviewing the *entire* compiler pipeline after AST specialization and
+Core CFG reentry extraction showed that `compiler.c` still owned the
+function-set allocation/lowering transaction and the global incoming-edge
+index lifetime. Its `minic_core_function_set_initialize/destroy` and
+`minic_prepare_core_function_set` production functions now live in
+`compiler/core_function_set.{h,c}`, and the driver calls the same
+functions through explicit compiler-internal signatures.
+
+The module preserves one `reentry_index_begin/end` scope around all
+original/clone function lowerings and keeps per-function bootstrap
+diagnostics opt-in. The Core status validation and user-facing diagnostic
+policy deliberately remain in `compiler.c`, at the pipeline boundary.
+This prevents architecture-specific code or future Machine IR work from
+owning AST/CFG lifetime. The main driver remains orchestration only.
+
+Remaining large source risks identified in the audit:
+`core/core_lower.c` (about 800 KB) is an AST semantics/CFG state machine,
+not a single extractable pass. Its local fact propagation, expression
+lowering, statement/control-flow lowering and cleanup edges should be
+isolated by *dependency domain*, with source-specific tests for computed
+goto, switch labels and inline asm. Blind line-range chopping would risk
+violating the per-TU reentry index and specialization invariants.
+Four target backends, the shared ELF/LP64 services and existing GNU/QEMU
+owner gates remain unchanged in this source-ownership refactor.
