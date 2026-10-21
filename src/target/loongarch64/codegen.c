@@ -302,7 +302,7 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
     reject_ins = SIZE_MAX;
     if (!minic_lp64_finalize_direct_frame(
             object_end, has_direct_calls, dynamic_frame, va_count != 0U,
-            MINIC_LP64_FRAME_LOONGARCH64_LP64D,
+            MINIC_LP64_ABI_LOONGARCH64_LP64D,
             &save_offset, NULL, &frame)) {
         if (getenv("MINIC_M1_TRACE") != NULL && frame > MINIC_LARGE_FRAME_MAX)
             (void)fprintf(stderr,
@@ -1162,7 +1162,7 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
              * space; the same plan drives each argument's source cursor. */
             if (!minic_lp64_plan_direct_call(
                     program, target, fn, ins,
-                    MINIC_LP64_FRAME_LOONGARCH64_LP64D,
+                    MINIC_LP64_ABI_LOONGARCH64_LP64D,
                     minic_multi_indirect_record,
                     &call_plan))
                 return minic_multi_direct_machine_reject(fn, "loongarch64", name,
