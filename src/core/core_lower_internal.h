@@ -184,4 +184,20 @@ MinicCoreLowerStatus minic_core_lower_bit_field_update(
     const MinicExpression *operand, bool increment, bool prefix,
     MinicCoreValueId *value_id);
 
+/* The call family owns C argument evaluation, value/object snapshots,
+ * indirect callee ordering and Core CALL instructions. ABI registers are
+ * placed later in the target subsystem, not by this internal API. */
+MinicCoreLowerStatus minic_core_lower_internal_record_materialized_address(
+    MinicCoreLowerContext *context, MinicExpressionId expression_id,
+    MinicCoreValueId *address_id);
+MinicCoreLowerStatus minic_core_lower_direct_call(
+    MinicCoreLowerContext *context, const MinicExpression *expression,
+    MinicCoreValueId *value_id);
+MinicCoreLowerStatus minic_core_lower_direct_record_call_object(
+    MinicCoreLowerContext *context, const MinicExpression *expression,
+    MinicCoreObjectId *result_object);
+MinicCoreLowerStatus minic_core_lower_indirect_call(
+    MinicCoreLowerContext *context, const MinicExpression *expression,
+    MinicCoreValueId *value_id);
+
 #endif
