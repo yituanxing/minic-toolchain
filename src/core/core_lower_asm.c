@@ -1583,22 +1583,11 @@ static bool core_inline_asm_rewind_dead_local_assignment(
     return false;
 }
 
-MinicCoreLowerStatus minic_core_lower_inline_asm(MinicCoreLowerContext *context,
-                                                    const MinicStatement *statement) {
-    const MinicInlineAsm *source;
-    MinicCoreInlineAsmId inline_asm_id;
-    MinicCoreInstruction instruction;
-
-    if (context == NULL || context->body == NULL || context->body->program == NULL ||
-        context->function == NULL || statement == NULL ||
-        statement->inline_asm_id == MINIC_INLINE_ASM_INVALID) {
-        return MINIC_CORE_LOWER_ERROR;
-    }
-    source = minic_c0_program_inline_asm(context->body->program, statement->inline_asm_id);
-    if (source == NULL) {
-        return MINIC_CORE_LOWER_ERROR;
-    }
-
+/* Diagnostics are outside the emission dispatcher. Their original
+ * relative placement (before first candidate / after every candidate)
+ * is intentional and must not change. */
+static void core_asm_trace_input_batch(
+    const MinicCoreLowerContext *context, const MinicInlineAsm *source) {
     if (getenv("MINIC_ASM_BATCH_TRACE") != NULL &&
         source->output_count == 1U && source->input_count != 0U &&
         source->outputs != NULL && source->inputs != NULL) {
@@ -1688,7 +1677,65 @@ MinicCoreLowerStatus minic_core_lower_inline_asm(MinicCoreLowerContext *context,
                           trace_resolved && trace_text != NULL ? trace_text : "");
         }
     }
+}
 
+static void core_asm_trace_unclaimed(
+    const MinicCoreLowerContext *context, const MinicInlineAsm *source) {
+    /* M87_IMMEDIATE_ASM_FRONTIER_TRACE: report details only after every
+       supported inline-asm path above has declined the statement. This keeps
+       frontier observability from becoming a false first-error locator. */
+    if (source->is_volatile && !source->is_goto && source->output_count == 0U &&
+        source->input_count != 0U && source->inputs != NULL && source->label_count == 0U) {
+        size_t trace_input_index;
+
+        (void)fprintf(stderr,
+                      "CORE_ASM_DETAIL reason=unclaimed function=%s inputs=%zu "
+                      "reg_clobbers=%zu clobbers=%zu memory=%d template_length=%zu\n",
+                      context->source_function != NULL ? context->source_function->name : "?",
+                      source->input_count,
+                      source->register_clobber_count,
+                      source->clobber_count,
+                      source->has_memory_clobber ? 1 : 0,
+                      source->template_length);
+        for (trace_input_index = 0U; trace_input_index < source->input_count; ++trace_input_index) {
+            const MinicInlineAsmOperand *trace_operand = &source->inputs[trace_input_index];
+            const MinicExpression *trace_expression = minic_c0_program_expression(
+                context->body->program, trace_operand->expression);
+            char trace_integer_text[MINIC_CORE_IMMEDIATE_TEXT_LIMIT];
+            const char *trace_resolved_text = NULL;
+            size_t trace_resolved_length = 0U;
+            bool trace_resolved = core_inline_asm_immediate_text(
+                context,
+                trace_operand,
+                trace_integer_text,
+                sizeof(trace_integer_text),
+                &trace_resolved_text,
+                &trace_resolved_length);
+            (void)trace_resolved_text;
+            (void)fprintf(stderr,
+                          "CORE_ASM_DETAIL input function=%s index=%zu constraint=%.*s "
+                          "access=%d expr_kind=%d immediate_resolved=%d resolved_length=%zu\n",
+                          context->source_function != NULL ? context->source_function->name : "?",
+                          trace_input_index,
+                          (int)trace_operand->constraint_length,
+                          trace_operand->constraint_text != NULL ? trace_operand->constraint_text : "",
+                          (int)trace_operand->access,
+                          trace_expression != NULL ? (int)trace_expression->kind : -1,
+                          trace_resolved ? 1 : 0,
+                          trace_resolved_length);
+        }
+    }
+
+}
+
+/* Ordered GNU-asm shape admission: the first committed case wins.
+ * Unsupported shapes fall through without claiming ownership. */
+static MinicCoreLowerStatus core_asm_try_immediate_output_csr(
+    MinicCoreLowerContext *context, const MinicStatement *statement,
+    const MinicInlineAsm *source, bool *handled) {
+    *handled = false;
+    MinicCoreInlineAsmId inline_asm_id;
+    MinicCoreInstruction instruction;
     /* Linux RISC-V CSR helpers use one write-only register output plus an rK
        input and a memory clobber.  M126A below intentionally accepts rK as a
        scalar-register alternative, but doing so first materializes a constant
@@ -1731,7 +1778,7 @@ MinicCoreLowerStatus minic_core_lower_inline_asm(MinicCoreLowerContext *context,
                 context->body->program, output_expression->value.local_id);
             if (local == NULL) {
                 free(specialized_template);
-                return MINIC_CORE_LOWER_ERROR;
+                { *handled = true; return MINIC_CORE_LOWER_ERROR; }
             }
             if (!local->is_array &&
                 minic_c0_program_local_fixed_register_binding(
@@ -1824,7 +1871,7 @@ MinicCoreLowerStatus minic_core_lower_inline_asm(MinicCoreLowerContext *context,
                                               ? context->source_function->name
                                               : "?");
                         }
-                        return MINIC_CORE_LOWER_ERROR;
+                        { *handled = true; return MINIC_CORE_LOWER_ERROR; }
                     }
                 }
                 if (same_local_rk) {
@@ -1852,7 +1899,7 @@ MinicCoreLowerStatus minic_core_lower_inline_asm(MinicCoreLowerContext *context,
                                       context->function->value_count,
                                       context->function->object_count);
                     }
-                    return MINIC_CORE_LOWER_ERROR;
+                    { *handled = true; return MINIC_CORE_LOWER_ERROR; }
                 }
                 {
                     MinicCoreLowerStatus address_status =
@@ -1873,7 +1920,7 @@ MinicCoreLowerStatus minic_core_lower_inline_asm(MinicCoreLowerContext *context,
                                       context->function->object_count);
                     }
                     if (address_status != MINIC_CORE_LOWER_OK) {
-                        return address_status;
+                        { *handled = true; return address_status; }
                     }
                 }
                 (void)memset(&instruction, 0, sizeof(instruction));
@@ -1901,13 +1948,24 @@ MinicCoreLowerStatus minic_core_lower_inline_asm(MinicCoreLowerContext *context,
                                       context->function->value_count,
                                       context->function->object_count);
                     }
-                    return stored ? MINIC_CORE_LOWER_OK : MINIC_CORE_LOWER_ERROR;
+                    { *handled = true; return stored ? MINIC_CORE_LOWER_OK : MINIC_CORE_LOWER_ERROR; }
                 }
             }
         }
         free(specialized_template);
     }
 
+    return MINIC_CORE_LOWER_OK;
+}
+
+/* Ordered GNU-asm shape admission: the first committed case wins.
+ * Unsupported shapes fall through without claiming ownership. */
+static MinicCoreLowerStatus core_asm_try_structured_roles_and_asm_goto(
+    MinicCoreLowerContext *context, const MinicStatement *statement,
+    const MinicInlineAsm *source, bool *handled) {
+    *handled = false;
+    MinicCoreInlineAsmId inline_asm_id;
+    MinicCoreInstruction instruction;
     /* M126A_GENERIC_STRUCTURED_ASM: canonical role lowering for register/memory
        extended asm. Preflight is deliberately side-effect free: an asm that
        ultimately belongs to an older/specialized path must not leave partial
@@ -2056,7 +2114,7 @@ MinicCoreLowerStatus minic_core_lower_inline_asm(MinicCoreLowerContext *context,
                     if (!core_import_fixed_register_binding(
                             context, binding->fixed_register_binding_id, &core_binding_id)) {
                         free(numeric_template);
-                        return MINIC_CORE_LOWER_ERROR;
+                        { *handled = true; return MINIC_CORE_LOWER_ERROR; }
                     }
                     binding->fixed_register_binding_id = core_binding_id;
                 }
@@ -2068,7 +2126,7 @@ MinicCoreLowerStatus minic_core_lower_inline_asm(MinicCoreLowerContext *context,
                     context, source->outputs[output_index].expression, &binding->value);
                 if (status != MINIC_CORE_LOWER_OK) {
                     free(numeric_template);
-                    return status;
+                    { *handled = true; return status; }
                 }
             }
             for (input_index = 0U; input_index < source->input_count; ++input_index) {
@@ -2084,7 +2142,7 @@ MinicCoreLowerStatus minic_core_lower_inline_asm(MinicCoreLowerContext *context,
                 }
                 if (status != MINIC_CORE_LOWER_OK) {
                     free(numeric_template);
-                    return status;
+                    { *handled = true; return status; }
                 }
             }
 
@@ -2095,7 +2153,7 @@ MinicCoreLowerStatus minic_core_lower_inline_asm(MinicCoreLowerContext *context,
                                                             source->has_memory_clobber,
                                                             &inline_asm_id)) {
                 free(numeric_template);
-                return MINIC_CORE_LOWER_ERROR;
+                { *handled = true; return MINIC_CORE_LOWER_ERROR; }
             }
             free(numeric_template);
             numeric_template = NULL;
@@ -2109,14 +2167,14 @@ MinicCoreLowerStatus minic_core_lower_inline_asm(MinicCoreLowerContext *context,
                         inline_asm_id,
                         clobber->name,
                         clobber->name_length)) {
-                    return MINIC_CORE_LOWER_ERROR;
+                    { *handled = true; return MINIC_CORE_LOWER_ERROR; }
                 }
             }
             structured.value.structured_inline_asm.inline_asm_id = inline_asm_id;
-            return minic_core_function_append_effect_instruction(
+            { *handled = true; return minic_core_function_append_effect_instruction(
                        context->function, context->block_id, &structured)
                        ? MINIC_CORE_LOWER_OK
-                       : MINIC_CORE_LOWER_ERROR;
+                       : MINIC_CORE_LOWER_ERROR; }
         }
         free(numeric_template);
     }
@@ -2134,7 +2192,7 @@ MinicCoreLowerStatus minic_core_lower_inline_asm(MinicCoreLowerContext *context,
 
         status = ensure_statement_block(context, source->labels[0].target_statement, &target_block);
         if (status != MINIC_CORE_LOWER_OK) {
-            return status;
+            { *handled = true; return status; }
         }
         input_resolved = core_inline_asm_immediate_text(context,
                                                         &source->inputs[0],
@@ -2146,7 +2204,7 @@ MinicCoreLowerStatus minic_core_lower_inline_asm(MinicCoreLowerContext *context,
         numeric_template_length = 0U;
         if (!core_inline_asm_single_label_goto_numeric_template(
                 source, &numeric_template, &numeric_template_length)) {
-            return MINIC_CORE_LOWER_ERROR;
+            { *handled = true; return MINIC_CORE_LOWER_ERROR; }
         }
         if (input_resolved) {
             char *baked_template = NULL;
@@ -2159,7 +2217,7 @@ MinicCoreLowerStatus minic_core_lower_inline_asm(MinicCoreLowerContext *context,
                                                                &baked_template,
                                                                &baked_length)) {
                 free(numeric_template);
-                return MINIC_CORE_LOWER_ERROR;
+                { *handled = true; return MINIC_CORE_LOWER_ERROR; }
             }
             free(numeric_template);
             numeric_template = baked_template;
@@ -2172,7 +2230,7 @@ MinicCoreLowerStatus minic_core_lower_inline_asm(MinicCoreLowerContext *context,
                                                        false,
                                                        &inline_asm_id)) {
             free(numeric_template);
-            return MINIC_CORE_LOWER_ERROR;
+            { *handled = true; return MINIC_CORE_LOWER_ERROR; }
         }
         free(numeric_template);
         stored = &context->function->inline_asms[inline_asm_id];
@@ -2188,12 +2246,22 @@ MinicCoreLowerStatus minic_core_lower_inline_asm(MinicCoreLowerContext *context,
         instruction.type = minic_type_void();
         instruction.result = MINIC_CORE_VALUE_INVALID;
         instruction.value.inline_asm_id = inline_asm_id;
-        return minic_core_function_append_effect_instruction(
+        { *handled = true; return minic_core_function_append_effect_instruction(
                    context->function, context->block_id, &instruction)
                    ? MINIC_CORE_LOWER_OK
-                   : MINIC_CORE_LOWER_ERROR;
+                   : MINIC_CORE_LOWER_ERROR; }
     }
 
+    return MINIC_CORE_LOWER_OK;
+}
+
+/* Ordered GNU-asm shape admission: the first committed case wins.
+ * Unsupported shapes fall through without claiming ownership. */
+static MinicCoreLowerStatus core_asm_try_fixed_and_register_operands(
+    MinicCoreLowerContext *context, const MinicStatement *statement,
+    const MinicInlineAsm *source, bool *handled) {
+    *handled = false;
+    MinicCoreInlineAsmId inline_asm_id;
     /* M105_FIXED_REGISTER_STRUCTURED_ASM: Linux SBI-style extended asm uses
        two +r outputs and six r inputs, all backed by GNU local fixed-register
        variables. Import each frontend binding into Core-owned opaque metadata;
@@ -2233,7 +2301,7 @@ MinicCoreLowerStatus minic_core_lower_inline_asm(MinicCoreLowerContext *context,
             }
             local = minic_c0_program_local(context->body->program, expression->value.local_id);
             if (local == NULL) {
-                return MINIC_CORE_LOWER_ERROR;
+                { *handled = true; return MINIC_CORE_LOWER_ERROR; }
             }
             if (local->is_array || !minic_type_equal(local->type, expression->type)) {
                 supported_shape = false;
@@ -2270,7 +2338,7 @@ MinicCoreLowerStatus minic_core_lower_inline_asm(MinicCoreLowerContext *context,
             free(numeric_template);
             numeric_template = NULL;
             if (!added) {
-                return MINIC_CORE_LOWER_ERROR;
+                { *handled = true; return MINIC_CORE_LOWER_ERROR; }
             }
             (void)memset(&structured, 0, sizeof(structured));
             structured.kind = MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM;
@@ -2293,12 +2361,12 @@ MinicCoreLowerStatus minic_core_lower_inline_asm(MinicCoreLowerContext *context,
                         context,
                         fixed_binding_ids[output_index],
                         &binding->fixed_register_binding_id)) {
-                    return MINIC_CORE_LOWER_ERROR;
+                    { *handled = true; return MINIC_CORE_LOWER_ERROR; }
                 }
                 binding->has_fixed_register_binding = true;
                 status = lower_address(context, operand->expression, &binding->value);
                 if (status != MINIC_CORE_LOWER_OK) {
-                    return status;
+                    { *handled = true; return status; }
                 }
             }
             for (input_index = 0U; input_index < source->input_count; ++input_index) {
@@ -2314,18 +2382,18 @@ MinicCoreLowerStatus minic_core_lower_inline_asm(MinicCoreLowerContext *context,
                         context,
                         fixed_binding_ids[operand_index],
                         &binding->fixed_register_binding_id)) {
-                    return MINIC_CORE_LOWER_ERROR;
+                    { *handled = true; return MINIC_CORE_LOWER_ERROR; }
                 }
                 binding->has_fixed_register_binding = true;
                 status = lower_expression(context, operand->expression, &binding->value);
                 if (status != MINIC_CORE_LOWER_OK) {
-                    return status;
+                    { *handled = true; return status; }
                 }
             }
-            return minic_core_function_append_effect_instruction(
+            { *handled = true; return minic_core_function_append_effect_instruction(
                        context->function, context->block_id, &structured)
                        ? MINIC_CORE_LOWER_OK
-                       : MINIC_CORE_LOWER_ERROR;
+                       : MINIC_CORE_LOWER_ERROR; }
         }
         free(numeric_template);
     }
@@ -2375,7 +2443,7 @@ MinicCoreLowerStatus minic_core_lower_inline_asm(MinicCoreLowerContext *context,
             free(numeric_template);
             numeric_template = NULL;
             if (!added) {
-                return MINIC_CORE_LOWER_ERROR;
+                { *handled = true; return MINIC_CORE_LOWER_ERROR; }
             }
             (void)memset(&structured, 0, sizeof(structured));
             structured.kind = MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM;
@@ -2394,13 +2462,13 @@ MinicCoreLowerStatus minic_core_lower_inline_asm(MinicCoreLowerContext *context,
                 output_status = lower_address(
                     context, source->outputs[output_index].expression, &binding->value);
                 if (output_status != MINIC_CORE_LOWER_OK) {
-                    return output_status;
+                    { *handled = true; return output_status; }
                 }
             }
-            return minic_core_function_append_effect_instruction(
+            { *handled = true; return minic_core_function_append_effect_instruction(
                        context->function, context->block_id, &structured)
                        ? MINIC_CORE_LOWER_OK
-                       : MINIC_CORE_LOWER_ERROR;
+                       : MINIC_CORE_LOWER_ERROR; }
         }
         free(numeric_template);
     }
@@ -2444,7 +2512,7 @@ MinicCoreLowerStatus minic_core_lower_inline_asm(MinicCoreLowerContext *context,
             free(numeric_template);
             numeric_template = NULL;
             if (!added) {
-                return MINIC_CORE_LOWER_ERROR;
+                { *handled = true; return MINIC_CORE_LOWER_ERROR; }
             }
             (void)memset(&structured, 0, sizeof(structured));
             structured.kind = MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM;
@@ -2463,13 +2531,13 @@ MinicCoreLowerStatus minic_core_lower_inline_asm(MinicCoreLowerContext *context,
                 input_status = lower_expression(
                     context, source->inputs[input_index].expression, &binding->value);
                 if (input_status != MINIC_CORE_LOWER_OK) {
-                    return input_status;
+                    { *handled = true; return input_status; }
                 }
             }
-            return minic_core_function_append_effect_instruction(
+            { *handled = true; return minic_core_function_append_effect_instruction(
                        context->function, context->block_id, &structured)
                        ? MINIC_CORE_LOWER_OK
-                       : MINIC_CORE_LOWER_ERROR;
+                       : MINIC_CORE_LOWER_ERROR; }
         }
         free(numeric_template);
     }
@@ -2511,7 +2579,7 @@ MinicCoreLowerStatus minic_core_lower_inline_asm(MinicCoreLowerContext *context,
                 }
                 local = minic_c0_program_local(context->body->program, expression->value.local_id);
                 if (local == NULL) {
-                    return MINIC_CORE_LOWER_ERROR;
+                    { *handled = true; return MINIC_CORE_LOWER_ERROR; }
                 }
                 if (local->is_array ||
                     minic_c0_program_local_fixed_register_binding(
@@ -2562,7 +2630,7 @@ MinicCoreLowerStatus minic_core_lower_inline_asm(MinicCoreLowerContext *context,
                                                                &inline_asm_id);
             free(numeric_template);
             if (!added) {
-                return MINIC_CORE_LOWER_ERROR;
+                { *handled = true; return MINIC_CORE_LOWER_ERROR; }
             }
             (void)memset(&structured, 0, sizeof(structured));
             structured.kind = MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM;
@@ -2585,7 +2653,7 @@ MinicCoreLowerStatus minic_core_lower_inline_asm(MinicCoreLowerContext *context,
                                     : MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
                 status = lower_address(context, operand->expression, &binding->value);
                 if (status != MINIC_CORE_LOWER_OK) {
-                    return status;
+                    { *handled = true; return status; }
                 }
             }
             for (input_index = 0U; input_index < source->input_count; ++input_index) {
@@ -2598,17 +2666,28 @@ MinicCoreLowerStatus minic_core_lower_inline_asm(MinicCoreLowerContext *context,
                 binding->operand_index = source->output_count + input_index;
                 status = lower_expression(context, operand->expression, &binding->value);
                 if (status != MINIC_CORE_LOWER_OK) {
-                    return status;
+                    { *handled = true; return status; }
                 }
             }
-            return minic_core_function_append_effect_instruction(
+            { *handled = true; return minic_core_function_append_effect_instruction(
                        context->function, context->block_id, &structured)
                        ? MINIC_CORE_LOWER_OK
-                       : MINIC_CORE_LOWER_ERROR;
+                       : MINIC_CORE_LOWER_ERROR; }
         }
         free(numeric_template);
     }
 
+    return MINIC_CORE_LOWER_OK;
+}
+
+/* Ordered GNU-asm shape admission: the first committed case wins.
+ * Unsupported shapes fall through without claiming ownership. */
+static MinicCoreLowerStatus core_asm_try_atomic_and_immediate_forms(
+    MinicCoreLowerContext *context, const MinicStatement *statement,
+    const MinicInlineAsm *source, bool *handled) {
+    *handled = false;
+    MinicCoreInlineAsmId inline_asm_id;
+    MinicCoreInstruction instruction;
     if (!source->is_goto && source->template_text != NULL &&
         source->template_length != 0U && source->output_count == 0U &&
         source->input_count != 0U && source->inputs != NULL && source->label_count == 0U &&
@@ -2632,7 +2711,7 @@ MinicCoreLowerStatus minic_core_lower_inline_asm(MinicCoreLowerContext *context,
                                                               &inline_asm_id);
             free(specialized_template);
             if (!added) {
-                return MINIC_CORE_LOWER_ERROR;
+                { *handled = true; return MINIC_CORE_LOWER_ERROR; }
             }
             (void)memset(&instruction, 0, sizeof(instruction));
             instruction.kind = MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM;
@@ -2640,10 +2719,10 @@ MinicCoreLowerStatus minic_core_lower_inline_asm(MinicCoreLowerContext *context,
             instruction.type = minic_type_void();
             instruction.result = MINIC_CORE_VALUE_INVALID;
             instruction.value.inline_asm_id = inline_asm_id;
-            return minic_core_function_append_effect_instruction(
+            { *handled = true; return minic_core_function_append_effect_instruction(
                        context->function, context->block_id, &instruction)
                        ? MINIC_CORE_LOWER_OK
-                       : MINIC_CORE_LOWER_ERROR;
+                       : MINIC_CORE_LOWER_ERROR; }
         }
     }
 
@@ -2657,10 +2736,10 @@ MinicCoreLowerStatus minic_core_lower_inline_asm(MinicCoreLowerContext *context,
         instruction.span = statement->span;
         instruction.type = minic_type_void();
         instruction.result = MINIC_CORE_VALUE_INVALID;
-        return minic_core_function_append_effect_instruction(
+        { *handled = true; return minic_core_function_append_effect_instruction(
                    context->function, context->block_id, &instruction)
                    ? MINIC_CORE_LOWER_OK
-                   : MINIC_CORE_LOWER_ERROR;
+                   : MINIC_CORE_LOWER_ERROR; }
     }
 
     /* M113_MIXED_ATOMIC_STRUCTURED_ASM: preserve a four-operand
@@ -2754,7 +2833,7 @@ MinicCoreLowerStatus minic_core_lower_inline_asm(MinicCoreLowerContext *context,
             free(numeric_template);
             numeric_template = NULL;
             if (!added) {
-                return MINIC_CORE_LOWER_ERROR;
+                { *handled = true; return MINIC_CORE_LOWER_ERROR; }
             }
             (void)memset(&structured, 0, sizeof(structured));
             structured.kind = MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM;
@@ -2776,7 +2855,7 @@ MinicCoreLowerStatus minic_core_lower_inline_asm(MinicCoreLowerContext *context,
                 status = lower_address(
                     context, source->outputs[output_index].expression, &binding->value);
                 if (status != MINIC_CORE_LOWER_OK) {
-                    return status;
+                    { *handled = true; return status; }
                 }
             }
             structured.value.structured_inline_asm.operands[3].kind =
@@ -2785,12 +2864,12 @@ MinicCoreLowerStatus minic_core_lower_inline_asm(MinicCoreLowerContext *context,
             status = lower_expression(
                 context, input->expression, &structured.value.structured_inline_asm.operands[3].value);
             if (status != MINIC_CORE_LOWER_OK) {
-                return status;
+                { *handled = true; return status; }
             }
-            return minic_core_function_append_effect_instruction(
+            { *handled = true; return minic_core_function_append_effect_instruction(
                        context->function, context->block_id, &structured)
                        ? MINIC_CORE_LOWER_OK
-                       : MINIC_CORE_LOWER_ERROR;
+                       : MINIC_CORE_LOWER_ERROR; }
         }
         free(numeric_template);
     }
@@ -2886,7 +2965,7 @@ MinicCoreLowerStatus minic_core_lower_inline_asm(MinicCoreLowerContext *context,
             free(numeric_template);
             numeric_template = NULL;
             if (!added) {
-                return MINIC_CORE_LOWER_ERROR;
+                { *handled = true; return MINIC_CORE_LOWER_ERROR; }
             }
             (void)memset(&structured, 0, sizeof(structured));
             structured.kind = MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM;
@@ -2913,7 +2992,7 @@ MinicCoreLowerStatus minic_core_lower_inline_asm(MinicCoreLowerContext *context,
                 }
                 status = lower_address(context, operand->expression, &binding->value);
                 if (status != MINIC_CORE_LOWER_OK) {
-                    return status;
+                    { *handled = true; return status; }
                 }
             }
             for (input_index = 0U; input_index < source->input_count; ++input_index) {
@@ -2924,13 +3003,13 @@ MinicCoreLowerStatus minic_core_lower_inline_asm(MinicCoreLowerContext *context,
                 status = lower_expression(
                     context, source->inputs[input_index].expression, &binding->value);
                 if (status != MINIC_CORE_LOWER_OK) {
-                    return status;
+                    { *handled = true; return status; }
                 }
             }
-            return minic_core_function_append_effect_instruction(
+            { *handled = true; return minic_core_function_append_effect_instruction(
                        context->function, context->block_id, &structured)
                        ? MINIC_CORE_LOWER_OK
-                       : MINIC_CORE_LOWER_ERROR;
+                       : MINIC_CORE_LOWER_ERROR; }
         }
         free(numeric_template);
     }
@@ -3005,7 +3084,7 @@ MinicCoreLowerStatus minic_core_lower_inline_asm(MinicCoreLowerContext *context,
             free(numeric_template);
             numeric_template = NULL;
             if (!added) {
-                return MINIC_CORE_LOWER_ERROR;
+                { *handled = true; return MINIC_CORE_LOWER_ERROR; }
             }
             (void)memset(&structured, 0, sizeof(structured));
             structured.kind = MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM;
@@ -3026,7 +3105,7 @@ MinicCoreLowerStatus minic_core_lower_inline_asm(MinicCoreLowerContext *context,
                                     : MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
                 status = lower_address(context, operand->expression, &binding->value);
                 if (status != MINIC_CORE_LOWER_OK) {
-                    return status;
+                    { *handled = true; return status; }
                 }
             }
             structured.value.structured_inline_asm.operands[2].kind =
@@ -3035,12 +3114,12 @@ MinicCoreLowerStatus minic_core_lower_inline_asm(MinicCoreLowerContext *context,
             status = lower_address(
                 context, input->expression, &structured.value.structured_inline_asm.operands[2].value);
             if (status != MINIC_CORE_LOWER_OK) {
-                return status;
+                { *handled = true; return status; }
             }
-            return minic_core_function_append_effect_instruction(
+            { *handled = true; return minic_core_function_append_effect_instruction(
                        context->function, context->block_id, &structured)
                        ? MINIC_CORE_LOWER_OK
-                       : MINIC_CORE_LOWER_ERROR;
+                       : MINIC_CORE_LOWER_ERROR; }
         }
         free(numeric_template);
     }
@@ -3145,7 +3224,7 @@ MinicCoreLowerStatus minic_core_lower_inline_asm(MinicCoreLowerContext *context,
                                                            source->has_memory_clobber,
                                                            &inline_asm_id)) {
                 free(numeric_template);
-                return MINIC_CORE_LOWER_ERROR;
+                { *handled = true; return MINIC_CORE_LOWER_ERROR; }
             }
             free(numeric_template);
             numeric_template = NULL;
@@ -3168,7 +3247,7 @@ MinicCoreLowerStatus minic_core_lower_inline_asm(MinicCoreLowerContext *context,
                                     : MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT;
                 status = lower_address(context, operand->expression, &binding->value);
                 if (status != MINIC_CORE_LOWER_OK) {
-                    return status;
+                    { *handled = true; return status; }
                 }
             }
             structured.value.structured_inline_asm.operands[2].kind =
@@ -3177,16 +3256,27 @@ MinicCoreLowerStatus minic_core_lower_inline_asm(MinicCoreLowerContext *context,
             status = lower_expression(
                 context, input->expression, &structured.value.structured_inline_asm.operands[2].value);
             if (status != MINIC_CORE_LOWER_OK) {
-                return status;
+                { *handled = true; return status; }
             }
-            return minic_core_function_append_effect_instruction(
+            { *handled = true; return minic_core_function_append_effect_instruction(
                        context->function, context->block_id, &structured)
                        ? MINIC_CORE_LOWER_OK
-                       : MINIC_CORE_LOWER_ERROR;
+                       : MINIC_CORE_LOWER_ERROR; }
         }
         free(numeric_template);
     }
 
+    return MINIC_CORE_LOWER_OK;
+}
+
+/* Ordered GNU-asm shape admission: the first committed case wins.
+ * Unsupported shapes fall through without claiming ownership. */
+static MinicCoreLowerStatus core_asm_try_mixed_memory_forms(
+    MinicCoreLowerContext *context, const MinicStatement *statement,
+    const MinicInlineAsm *source, bool *handled) {
+    *handled = false;
+    MinicCoreInlineAsmId inline_asm_id;
+    MinicCoreInstruction instruction;
     if (source->is_volatile && !source->is_goto && source->template_text != NULL &&
         source->template_length != 0U && source->outputs != NULL && source->inputs != NULL &&
         source->output_count == 2U && source->input_count == 1U && source->has_memory_clobber &&
@@ -3222,14 +3312,14 @@ MinicCoreLowerStatus minic_core_lower_inline_asm(MinicCoreLowerContext *context,
             if (candidate->access == MINIC_INLINE_ASM_OPERAND_READ_WRITE &&
                 core_inline_asm_constraint_is(candidate, "+A")) {
                 if (memory_output != NULL) {
-                    return MINIC_CORE_LOWER_UNSUPPORTED;
+                    { *handled = true; return MINIC_CORE_LOWER_UNSUPPORTED; }
                 }
                 memory_output = candidate;
                 memory_index = output_index;
             } else if (candidate->access == MINIC_INLINE_ASM_OPERAND_WRITE_ONLY &&
                        core_inline_asm_register_output_constraint(candidate)) {
                 if (register_output != NULL) {
-                    return MINIC_CORE_LOWER_UNSUPPORTED;
+                    { *handled = true; return MINIC_CORE_LOWER_UNSUPPORTED; }
                 }
                 register_output = candidate;
                 register_index = output_index;
@@ -3266,7 +3356,7 @@ MinicCoreLowerStatus minic_core_lower_inline_asm(MinicCoreLowerContext *context,
             register_local = minic_c0_program_local(
                 context->body->program, register_expression->value.local_id);
             if (register_local == NULL) {
-                return MINIC_CORE_LOWER_ERROR;
+                { *handled = true; return MINIC_CORE_LOWER_ERROR; }
             }
             if (!register_local->is_array &&
                 minic_c0_program_local_fixed_register_binding(
@@ -3274,16 +3364,16 @@ MinicCoreLowerStatus minic_core_lower_inline_asm(MinicCoreLowerContext *context,
                 minic_type_equal(register_local->type, register_expression->type)) {
                 status = lower_expression(context, input->expression, &input_value);
                 if (status != MINIC_CORE_LOWER_OK) {
-                    return status;
+                    { *handled = true; return status; }
                 }
                 status = lower_address(context, memory_output->expression, &memory_address);
                 if (status != MINIC_CORE_LOWER_OK) {
-                    return status;
+                    { *handled = true; return status; }
                 }
                 if (input_value >= context->function->value_count ||
                     memory_address >= context->function->value_count ||
                     !minic_type_equal(context->function->values[input_value].type, input_type)) {
-                    return MINIC_CORE_LOWER_ERROR;
+                    { *handled = true; return MINIC_CORE_LOWER_ERROR; }
                 }
                 if (!minic_core_function_add_opaque_inline_asm(context->function,
                                                                source->template_text,
@@ -3291,7 +3381,7 @@ MinicCoreLowerStatus minic_core_lower_inline_asm(MinicCoreLowerContext *context,
                                                                source->is_volatile,
                                                                source->has_memory_clobber,
                                                                &inline_asm_id)) {
-                    return MINIC_CORE_LOWER_ERROR;
+                    { *handled = true; return MINIC_CORE_LOWER_ERROR; }
                 }
                 (void)memset(&instruction, 0, sizeof(instruction));
                 instruction.kind = MINIC_CORE_INSTRUCTION_MEMORY_READWRITE_SCALAR_INPUT_INLINE_ASM;
@@ -3311,11 +3401,11 @@ MinicCoreLowerStatus minic_core_lower_inline_asm(MinicCoreLowerContext *context,
                     2U;
                 if (!minic_core_function_append_value_instruction(
                         context->function, context->block_id, &instruction, &output_value)) {
-                    return MINIC_CORE_LOWER_ERROR;
+                    { *handled = true; return MINIC_CORE_LOWER_ERROR; }
                 }
                 status = lower_address(context, register_output->expression, &output_address);
                 if (status != MINIC_CORE_LOWER_OK) {
-                    return status;
+                    { *handled = true; return status; }
                 }
                 (void)memset(&instruction, 0, sizeof(instruction));
                 instruction.kind = MINIC_CORE_INSTRUCTION_STORE;
@@ -3342,7 +3432,7 @@ MinicCoreLowerStatus minic_core_lower_inline_asm(MinicCoreLowerContext *context,
                                       context->function->value_count,
                                       context->function->object_count);
                     }
-                    return stored ? MINIC_CORE_LOWER_OK : MINIC_CORE_LOWER_ERROR;
+                    { *handled = true; return stored ? MINIC_CORE_LOWER_OK : MINIC_CORE_LOWER_ERROR; }
                 }
             }
         }
@@ -3380,16 +3470,16 @@ MinicCoreLowerStatus minic_core_lower_inline_asm(MinicCoreLowerContext *context,
             minic_type_equal(memory_type, input_type)) {
             status = lower_expression(context, input->expression, &input_value);
             if (status != MINIC_CORE_LOWER_OK) {
-                return status;
+                { *handled = true; return status; }
             }
             status = lower_address(context, memory_output->expression, &memory_address);
             if (status != MINIC_CORE_LOWER_OK) {
-                return status;
+                { *handled = true; return status; }
             }
             if (input_value >= context->function->value_count ||
                 memory_address >= context->function->value_count ||
                 !minic_type_equal(context->function->values[input_value].type, input_type)) {
-                return MINIC_CORE_LOWER_ERROR;
+                { *handled = true; return MINIC_CORE_LOWER_ERROR; }
             }
             if (!minic_core_function_add_opaque_inline_asm(context->function,
                                                            source->template_text,
@@ -3397,7 +3487,7 @@ MinicCoreLowerStatus minic_core_lower_inline_asm(MinicCoreLowerContext *context,
                                                            source->is_volatile,
                                                            source->has_memory_clobber,
                                                            &inline_asm_id)) {
-                return MINIC_CORE_LOWER_ERROR;
+                { *handled = true; return MINIC_CORE_LOWER_ERROR; }
             }
             (void)memset(&instruction, 0, sizeof(instruction));
             instruction.kind = MINIC_CORE_INSTRUCTION_MEMORY_READWRITE_SCALAR_INPUT_INLINE_ASM;
@@ -3414,10 +3504,10 @@ MinicCoreLowerStatus minic_core_lower_inline_asm(MinicCoreLowerContext *context,
                 SIZE_MAX;
             instruction.value.memory_readwrite_scalar_input_inline_asm.scalar_input_operand_index =
                 1U;
-            return minic_core_function_append_effect_instruction(
+            { *handled = true; return minic_core_function_append_effect_instruction(
                        context->function, context->block_id, &instruction)
                        ? MINIC_CORE_LOWER_OK
-                       : MINIC_CORE_LOWER_ERROR;
+                       : MINIC_CORE_LOWER_ERROR; }
         }
     }
 
@@ -3467,7 +3557,7 @@ MinicCoreLowerStatus minic_core_lower_inline_asm(MinicCoreLowerContext *context,
             local = minic_c0_program_local(
                 context->body->program, output_expression->value.local_id);
             if (local == NULL) {
-                return MINIC_CORE_LOWER_ERROR;
+                { *handled = true; return MINIC_CORE_LOWER_ERROR; }
             }
             if (!local->is_array &&
                 minic_c0_program_local_fixed_register_binding(
@@ -3487,7 +3577,7 @@ MinicCoreLowerStatus minic_core_lower_inline_asm(MinicCoreLowerContext *context,
                             &inline_asm_id);
                         free(specialized_template);
                         if (!added) {
-                            return MINIC_CORE_LOWER_ERROR;
+                            { *handled = true; return MINIC_CORE_LOWER_ERROR; }
                         }
                         (void)memset(&instruction, 0, sizeof(instruction));
                         instruction.kind = MINIC_CORE_INSTRUCTION_REGISTER_OUTPUT_INLINE_ASM;
@@ -3500,11 +3590,11 @@ MinicCoreLowerStatus minic_core_lower_inline_asm(MinicCoreLowerContext *context,
                                 context->block_id,
                                 &instruction,
                                 &output_value)) {
-                            return MINIC_CORE_LOWER_ERROR;
+                            { *handled = true; return MINIC_CORE_LOWER_ERROR; }
                         }
                         if (lower_address(context, output->expression, &address_id) !=
                             MINIC_CORE_LOWER_OK) {
-                            return MINIC_CORE_LOWER_ERROR;
+                            { *handled = true; return MINIC_CORE_LOWER_ERROR; }
                         }
                         (void)memset(&instruction, 0, sizeof(instruction));
                         instruction.kind = MINIC_CORE_INSTRUCTION_STORE;
@@ -3514,20 +3604,20 @@ MinicCoreLowerStatus minic_core_lower_inline_asm(MinicCoreLowerContext *context,
                         instruction.value.store.address = address_id;
                         instruction.value.store.stored_value = output_value;
                         instruction.value.store.is_volatile = false;
-                        return minic_core_function_append_effect_instruction(
+                        { *handled = true; return minic_core_function_append_effect_instruction(
                                    context->function, context->block_id, &instruction)
                                    ? MINIC_CORE_LOWER_OK
-                                   : MINIC_CORE_LOWER_ERROR;
+                                   : MINIC_CORE_LOWER_ERROR; }
                     }
                     free(specialized_template);
                 }
                 status = lower_expression(context, input->expression, &input_value);
                 if (status != MINIC_CORE_LOWER_OK) {
-                    return status;
+                    { *handled = true; return status; }
                 }
                 if (input_value >= context->function->value_count ||
                     !minic_type_equal(context->function->values[input_value].type, input_type)) {
-                    return MINIC_CORE_LOWER_ERROR;
+                    { *handled = true; return MINIC_CORE_LOWER_ERROR; }
                 }
                 if (!minic_core_function_add_opaque_inline_asm(context->function,
                                                                source->template_text,
@@ -3535,7 +3625,7 @@ MinicCoreLowerStatus minic_core_lower_inline_asm(MinicCoreLowerContext *context,
                                                                source->is_volatile,
                                                                source->has_memory_clobber,
                                                                &inline_asm_id)) {
-                    return MINIC_CORE_LOWER_ERROR;
+                    { *handled = true; return MINIC_CORE_LOWER_ERROR; }
                 }
                 (void)memset(&instruction, 0, sizeof(instruction));
                 instruction.kind = MINIC_CORE_INSTRUCTION_REGISTER_OUTPUT_INPUT_INLINE_ASM;
@@ -3546,10 +3636,10 @@ MinicCoreLowerStatus minic_core_lower_inline_asm(MinicCoreLowerContext *context,
                 instruction.value.register_output_input_inline_asm.operand = input_value;
                 if (!minic_core_function_append_value_instruction(
                         context->function, context->block_id, &instruction, &output_value)) {
-                    return MINIC_CORE_LOWER_ERROR;
+                    { *handled = true; return MINIC_CORE_LOWER_ERROR; }
                 }
                 if (lower_address(context, output->expression, &address_id) != MINIC_CORE_LOWER_OK) {
-                    return MINIC_CORE_LOWER_ERROR;
+                    { *handled = true; return MINIC_CORE_LOWER_ERROR; }
                 }
                 (void)memset(&instruction, 0, sizeof(instruction));
                 instruction.kind = MINIC_CORE_INSTRUCTION_STORE;
@@ -3576,12 +3666,23 @@ MinicCoreLowerStatus minic_core_lower_inline_asm(MinicCoreLowerContext *context,
                                       context->function->value_count,
                                       context->function->object_count);
                     }
-                    return stored ? MINIC_CORE_LOWER_OK : MINIC_CORE_LOWER_ERROR;
+                    { *handled = true; return stored ? MINIC_CORE_LOWER_OK : MINIC_CORE_LOWER_ERROR; }
                 }
             }
         }
     }
 
+    return MINIC_CORE_LOWER_OK;
+}
+
+/* Ordered GNU-asm shape admission: the first committed case wins.
+ * Unsupported shapes fall through without claiming ownership. */
+static MinicCoreLowerStatus core_asm_try_readwrite_and_output_specialization(
+    MinicCoreLowerContext *context, const MinicStatement *statement,
+    const MinicInlineAsm *source, bool *handled) {
+    *handled = false;
+    MinicCoreInlineAsmId inline_asm_id;
+    MinicCoreInstruction instruction;
     /* BATCH_L_STRUCTURED_REGISTER_READWRITE: after compile-time i/I inputs
        are specialized into target text, preserve a +r operand as one
        address-backed read/write register binding. Register-clobber names stay
@@ -3622,7 +3723,7 @@ MinicCoreLowerStatus minic_core_lower_inline_asm(MinicCoreLowerContext *context,
                                                                &inline_asm_id);
             free(specialized_template);
             if (!added) {
-                return MINIC_CORE_LOWER_ERROR;
+                { *handled = true; return MINIC_CORE_LOWER_ERROR; }
             }
             for (clobber_index = 0U; clobber_index < source->register_clobber_count;
                  ++clobber_index) {
@@ -3634,7 +3735,7 @@ MinicCoreLowerStatus minic_core_lower_inline_asm(MinicCoreLowerContext *context,
                         inline_asm_id,
                         clobber->name,
                         clobber->name_length)) {
-                    return MINIC_CORE_LOWER_ERROR;
+                    { *handled = true; return MINIC_CORE_LOWER_ERROR; }
                 }
             }
 
@@ -3650,12 +3751,12 @@ MinicCoreLowerStatus minic_core_lower_inline_asm(MinicCoreLowerContext *context,
             binding->operand_index = 0U;
             status = lower_address(context, output->expression, &binding->value);
             if (status != MINIC_CORE_LOWER_OK) {
-                return status;
+                { *handled = true; return status; }
             }
-            return minic_core_function_append_effect_instruction(
+            { *handled = true; return minic_core_function_append_effect_instruction(
                        context->function, context->block_id, &structured)
                        ? MINIC_CORE_LOWER_OK
-                       : MINIC_CORE_LOWER_ERROR;
+                       : MINIC_CORE_LOWER_ERROR; }
         }
         free(specialized_template);
     }
@@ -3704,7 +3805,7 @@ MinicCoreLowerStatus minic_core_lower_inline_asm(MinicCoreLowerContext *context,
                 context->body->program, output_expression->value.local_id);
             if (local == NULL) {
                 free(specialized_template);
-                return MINIC_CORE_LOWER_ERROR;
+                { *handled = true; return MINIC_CORE_LOWER_ERROR; }
             }
             if (!local->is_array &&
                 minic_c0_program_local_fixed_register_binding(
@@ -3720,7 +3821,7 @@ MinicCoreLowerStatus minic_core_lower_inline_asm(MinicCoreLowerContext *context,
                                                                source->has_memory_clobber,
                                                                &inline_asm_id)) {
                     free(specialized_template);
-                    return MINIC_CORE_LOWER_ERROR;
+                    { *handled = true; return MINIC_CORE_LOWER_ERROR; }
                 }
                 free(specialized_template);
                 (void)memset(&instruction, 0, sizeof(instruction));
@@ -3731,10 +3832,10 @@ MinicCoreLowerStatus minic_core_lower_inline_asm(MinicCoreLowerContext *context,
                 instruction.value.inline_asm_id = inline_asm_id;
                 if (!minic_core_function_append_value_instruction(
                         context->function, context->block_id, &instruction, &output_value)) {
-                    return MINIC_CORE_LOWER_ERROR;
+                    { *handled = true; return MINIC_CORE_LOWER_ERROR; }
                 }
                 if (lower_address(context, output->expression, &address_id) != MINIC_CORE_LOWER_OK) {
-                    return MINIC_CORE_LOWER_ERROR;
+                    { *handled = true; return MINIC_CORE_LOWER_ERROR; }
                 }
                 (void)memset(&instruction, 0, sizeof(instruction));
                 instruction.kind = MINIC_CORE_INSTRUCTION_STORE;
@@ -3761,7 +3862,7 @@ MinicCoreLowerStatus minic_core_lower_inline_asm(MinicCoreLowerContext *context,
                                       context->function->value_count,
                                       context->function->object_count);
                     }
-                    return stored ? MINIC_CORE_LOWER_OK : MINIC_CORE_LOWER_ERROR;
+                    { *handled = true; return stored ? MINIC_CORE_LOWER_OK : MINIC_CORE_LOWER_ERROR; }
                 }
             }
         }
@@ -3799,7 +3900,7 @@ MinicCoreLowerStatus minic_core_lower_inline_asm(MinicCoreLowerContext *context,
             local = minic_c0_program_local(
                 context->body->program, output_expression->value.local_id);
             if (local == NULL) {
-                return MINIC_CORE_LOWER_ERROR;
+                { *handled = true; return MINIC_CORE_LOWER_ERROR; }
             }
             if (!local->is_array &&
                 minic_c0_program_local_fixed_register_binding(
@@ -3811,7 +3912,7 @@ MinicCoreLowerStatus minic_core_lower_inline_asm(MinicCoreLowerContext *context,
                                                                source->is_volatile,
                                                                source->has_memory_clobber,
                                                                &inline_asm_id)) {
-                    return MINIC_CORE_LOWER_ERROR;
+                    { *handled = true; return MINIC_CORE_LOWER_ERROR; }
                 }
                 (void)memset(&instruction, 0, sizeof(instruction));
                 instruction.kind = MINIC_CORE_INSTRUCTION_REGISTER_OUTPUT_INLINE_ASM;
@@ -3821,10 +3922,10 @@ MinicCoreLowerStatus minic_core_lower_inline_asm(MinicCoreLowerContext *context,
                 instruction.value.inline_asm_id = inline_asm_id;
                 if (!minic_core_function_append_value_instruction(
                         context->function, context->block_id, &instruction, &output_value)) {
-                    return MINIC_CORE_LOWER_ERROR;
+                    { *handled = true; return MINIC_CORE_LOWER_ERROR; }
                 }
                 if (lower_address(context, output->expression, &address_id) != MINIC_CORE_LOWER_OK) {
-                    return MINIC_CORE_LOWER_ERROR;
+                    { *handled = true; return MINIC_CORE_LOWER_ERROR; }
                 }
                 (void)memset(&instruction, 0, sizeof(instruction));
                 instruction.kind = MINIC_CORE_INSTRUCTION_STORE;
@@ -3851,12 +3952,23 @@ MinicCoreLowerStatus minic_core_lower_inline_asm(MinicCoreLowerContext *context,
                                       context->function->value_count,
                                       context->function->object_count);
                     }
-                    return stored ? MINIC_CORE_LOWER_OK : MINIC_CORE_LOWER_ERROR;
+                    { *handled = true; return stored ? MINIC_CORE_LOWER_OK : MINIC_CORE_LOWER_ERROR; }
                 }
             }
         }
     }
 
+    return MINIC_CORE_LOWER_OK;
+}
+
+/* Ordered GNU-asm shape admission: the first committed case wins.
+ * Unsupported shapes fall through without claiming ownership. */
+static MinicCoreLowerStatus core_asm_try_empty_barrier_scalar_forms(
+    MinicCoreLowerContext *context, const MinicStatement *statement,
+    const MinicInlineAsm *source, bool *handled) {
+    *handled = false;
+    MinicCoreInlineAsmId inline_asm_id;
+    MinicCoreInstruction instruction;
     /* M77_EMPTY_TIED_ASM_COPY: an empty, nonvolatile GNU asm with one
        register output tied to input 0 carries no target instruction semantics.
        It preserves the input register bit-pattern in the output. Model that
@@ -3893,16 +4005,16 @@ MinicCoreLowerStatus minic_core_lower_inline_asm(MinicCoreLowerContext *context,
             core_scalar_expression_value_type(context->body, input_expression, &input_type)) {
             status = lower_expression(context, input->expression, &input_value);
             if (status != MINIC_CORE_LOWER_OK) {
-                return status;
+                { *handled = true; return status; }
             }
             status = append_scalar_bitcast(
                 context, statement->span, output_type, input_value, &output_value);
             if (status != MINIC_CORE_LOWER_OK) {
-                return status;
+                { *handled = true; return status; }
             }
             status = lower_address(context, output->expression, &output_address);
             if (status != MINIC_CORE_LOWER_OK) {
-                return status;
+                { *handled = true; return status; }
             }
             (void)memset(&store, 0, sizeof(store));
             store.kind = MINIC_CORE_INSTRUCTION_STORE;
@@ -3912,10 +4024,10 @@ MinicCoreLowerStatus minic_core_lower_inline_asm(MinicCoreLowerContext *context,
             store.value.store.address = output_address;
             store.value.store.stored_value = output_value;
             store.value.store.is_volatile = minic_type_is_volatile(output_expression->type);
-            return minic_core_function_append_effect_instruction(
+            { *handled = true; return minic_core_function_append_effect_instruction(
                        context->function, context->block_id, &store)
                        ? MINIC_CORE_LOWER_OK
-                       : MINIC_CORE_LOWER_ERROR;
+                       : MINIC_CORE_LOWER_ERROR; }
         }
     }
 
@@ -3940,12 +4052,12 @@ MinicCoreLowerStatus minic_core_lower_inline_asm(MinicCoreLowerContext *context,
             local =
                 minic_c0_program_local(context->body->program, output_expression->value.local_id);
             if (local == NULL) {
-                return MINIC_CORE_LOWER_ERROR;
+                { *handled = true; return MINIC_CORE_LOWER_ERROR; }
             }
             if (!local->is_array && !local->is_register_storage &&
                 minic_type_equal(local->type, output_expression->type) &&
                 !minic_type_is_const(local->type) && !minic_type_is_volatile(local->type)) {
-                return MINIC_CORE_LOWER_OK;
+                { *handled = true; return MINIC_CORE_LOWER_OK; }
             }
         }
     }
@@ -3964,7 +4076,7 @@ MinicCoreLowerStatus minic_core_lower_inline_asm(MinicCoreLowerContext *context,
                                                        true,
                                                        false,
                                                        &inline_asm_id)) {
-            return MINIC_CORE_LOWER_ERROR;
+            { *handled = true; return MINIC_CORE_LOWER_ERROR; }
         }
         (void)memset(&instruction, 0, sizeof(instruction));
         instruction.kind = MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM;
@@ -3972,10 +4084,10 @@ MinicCoreLowerStatus minic_core_lower_inline_asm(MinicCoreLowerContext *context,
         instruction.type = minic_type_void();
         instruction.result = MINIC_CORE_VALUE_INVALID;
         instruction.value.inline_asm_id = inline_asm_id;
-        return minic_core_function_append_effect_instruction(
+        { *handled = true; return minic_core_function_append_effect_instruction(
                    context->function, context->block_id, &instruction)
                    ? MINIC_CORE_LOWER_OK
-                   : MINIC_CORE_LOWER_ERROR;
+                   : MINIC_CORE_LOWER_ERROR; }
     }
 
     /* M59_EMPTY_SCALAR_INPUT_BARRIER: GNU barrier_data() is an empty
@@ -4004,21 +4116,21 @@ MinicCoreLowerStatus minic_core_lower_inline_asm(MinicCoreLowerContext *context,
             core_scalar_expression_value_type(context->body, input_expression, &input_type)) {
             input_status = lower_expression(context, input->expression, &discarded_input);
             if (input_status != MINIC_CORE_LOWER_OK) {
-                return input_status;
+                { *handled = true; return input_status; }
             }
             if (discarded_input >= context->function->value_count ||
                 !minic_type_equal(context->function->values[discarded_input].type, input_type)) {
-                return MINIC_CORE_LOWER_ERROR;
+                { *handled = true; return MINIC_CORE_LOWER_ERROR; }
             }
             (void)memset(&instruction, 0, sizeof(instruction));
             instruction.kind = MINIC_CORE_INSTRUCTION_COMPILER_BARRIER;
             instruction.span = statement->span;
             instruction.type = minic_type_void();
             instruction.result = MINIC_CORE_VALUE_INVALID;
-            return minic_core_function_append_effect_instruction(
+            { *handled = true; return minic_core_function_append_effect_instruction(
                        context->function, context->block_id, &instruction)
                        ? MINIC_CORE_LOWER_OK
-                       : MINIC_CORE_LOWER_ERROR;
+                       : MINIC_CORE_LOWER_ERROR; }
         }
     }
 
@@ -4072,7 +4184,7 @@ MinicCoreLowerStatus minic_core_lower_inline_asm(MinicCoreLowerContext *context,
                                                               &inline_asm_id);
             free(numeric_template);
             if (!added) {
-                return MINIC_CORE_LOWER_ERROR;
+                { *handled = true; return MINIC_CORE_LOWER_ERROR; }
             }
             (void)memset(&structured, 0, sizeof(structured));
             structured.kind = MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM;
@@ -4091,13 +4203,13 @@ MinicCoreLowerStatus minic_core_lower_inline_asm(MinicCoreLowerContext *context,
                 status = lower_expression(context, source->inputs[input_index].expression,
                                           &binding->value);
                 if (status != MINIC_CORE_LOWER_OK) {
-                    return status;
+                    { *handled = true; return status; }
                 }
             }
-            return minic_core_function_append_effect_instruction(
+            { *handled = true; return minic_core_function_append_effect_instruction(
                        context->function, context->block_id, &structured)
                        ? MINIC_CORE_LOWER_OK
-                       : MINIC_CORE_LOWER_ERROR;
+                       : MINIC_CORE_LOWER_ERROR; }
         }
         free(numeric_template);
     }
@@ -4127,11 +4239,11 @@ MinicCoreLowerStatus minic_core_lower_inline_asm(MinicCoreLowerContext *context,
             core_scalar_expression_value_type(context->body, input_expression, &input_type)) {
             input_status = lower_expression(context, input->expression, &input_value);
             if (input_status != MINIC_CORE_LOWER_OK) {
-                return input_status;
+                { *handled = true; return input_status; }
             }
             if (input_value >= context->function->value_count ||
                 !minic_type_equal(context->function->values[input_value].type, input_type)) {
-                return MINIC_CORE_LOWER_ERROR;
+                { *handled = true; return MINIC_CORE_LOWER_ERROR; }
             }
             if (!minic_core_function_add_opaque_inline_asm(context->function,
                                                            source->template_text,
@@ -4139,7 +4251,7 @@ MinicCoreLowerStatus minic_core_lower_inline_asm(MinicCoreLowerContext *context,
                                                            true,
                                                            source->has_memory_clobber,
                                                            &inline_asm_id)) {
-                return MINIC_CORE_LOWER_ERROR;
+                { *handled = true; return MINIC_CORE_LOWER_ERROR; }
             }
             (void)memset(&instruction, 0, sizeof(instruction));
             instruction.kind = MINIC_CORE_INSTRUCTION_SCALAR_INPUT_INLINE_ASM;
@@ -4148,57 +4260,66 @@ MinicCoreLowerStatus minic_core_lower_inline_asm(MinicCoreLowerContext *context,
             instruction.result = MINIC_CORE_VALUE_INVALID;
             instruction.value.scalar_input_inline_asm.inline_asm_id = inline_asm_id;
             instruction.value.scalar_input_inline_asm.operand = input_value;
-            return minic_core_function_append_effect_instruction(
+            { *handled = true; return minic_core_function_append_effect_instruction(
                        context->function, context->block_id, &instruction)
                        ? MINIC_CORE_LOWER_OK
-                       : MINIC_CORE_LOWER_ERROR;
+                       : MINIC_CORE_LOWER_ERROR; }
         }
     }
 
-    /* M87_IMMEDIATE_ASM_FRONTIER_TRACE: report details only after every
-       supported inline-asm path above has declined the statement. This keeps
-       frontier observability from becoming a false first-error locator. */
-    if (source->is_volatile && !source->is_goto && source->output_count == 0U &&
-        source->input_count != 0U && source->inputs != NULL && source->label_count == 0U) {
-        size_t trace_input_index;
+    return MINIC_CORE_LOWER_OK;
+}
 
-        (void)fprintf(stderr,
-                      "CORE_ASM_DETAIL reason=unclaimed function=%s inputs=%zu "
-                      "reg_clobbers=%zu clobbers=%zu memory=%d template_length=%zu\n",
-                      context->source_function != NULL ? context->source_function->name : "?",
-                      source->input_count,
-                      source->register_clobber_count,
-                      source->clobber_count,
-                      source->has_memory_clobber ? 1 : 0,
-                      source->template_length);
-        for (trace_input_index = 0U; trace_input_index < source->input_count; ++trace_input_index) {
-            const MinicInlineAsmOperand *trace_operand = &source->inputs[trace_input_index];
-            const MinicExpression *trace_expression = minic_c0_program_expression(
-                context->body->program, trace_operand->expression);
-            char trace_integer_text[MINIC_CORE_IMMEDIATE_TEXT_LIMIT];
-            const char *trace_resolved_text = NULL;
-            size_t trace_resolved_length = 0U;
-            bool trace_resolved = core_inline_asm_immediate_text(
-                context,
-                trace_operand,
-                trace_integer_text,
-                sizeof(trace_integer_text),
-                &trace_resolved_text,
-                &trace_resolved_length);
-            (void)trace_resolved_text;
-            (void)fprintf(stderr,
-                          "CORE_ASM_DETAIL input function=%s index=%zu constraint=%.*s "
-                          "access=%d expr_kind=%d immediate_resolved=%d resolved_length=%zu\n",
-                          context->source_function != NULL ? context->source_function->name : "?",
-                          trace_input_index,
-                          (int)trace_operand->constraint_length,
-                          trace_operand->constraint_text != NULL ? trace_operand->constraint_text : "",
-                          (int)trace_operand->access,
-                          trace_expression != NULL ? (int)trace_expression->kind : -1,
-                          trace_resolved ? 1 : 0,
-                          trace_resolved_length);
-        }
+MinicCoreLowerStatus minic_core_lower_inline_asm(MinicCoreLowerContext *context,
+                                                    const MinicStatement *statement) {
+    const MinicInlineAsm *source;
+    MinicCoreInlineAsmId inline_asm_id;
+    MinicCoreInstruction instruction;
+    MinicCoreLowerStatus status;
+    bool handled;
+
+    if (context == NULL || context->body == NULL || context->body->program == NULL ||
+        context->function == NULL || statement == NULL ||
+        statement->inline_asm_id == MINIC_INLINE_ASM_INVALID) {
+        return MINIC_CORE_LOWER_ERROR;
     }
+    source = minic_c0_program_inline_asm(context->body->program, statement->inline_asm_id);
+    if (source == NULL) {
+        return MINIC_CORE_LOWER_ERROR;
+    }
+
+
+    core_asm_trace_input_batch(context, source);
+
+    handled = false;
+    status = core_asm_try_immediate_output_csr(context, statement, source, &handled);
+    if (handled) return status;
+
+    handled = false;
+    status = core_asm_try_structured_roles_and_asm_goto(context, statement, source, &handled);
+    if (handled) return status;
+
+    handled = false;
+    status = core_asm_try_fixed_and_register_operands(context, statement, source, &handled);
+    if (handled) return status;
+
+    handled = false;
+    status = core_asm_try_atomic_and_immediate_forms(context, statement, source, &handled);
+    if (handled) return status;
+
+    handled = false;
+    status = core_asm_try_mixed_memory_forms(context, statement, source, &handled);
+    if (handled) return status;
+
+    handled = false;
+    status = core_asm_try_readwrite_and_output_specialization(context, statement, source, &handled);
+    if (handled) return status;
+
+    handled = false;
+    status = core_asm_try_empty_barrier_scalar_forms(context, statement, source, &handled);
+    if (handled) return status;
+
+    core_asm_trace_unclaimed(context, source);
 
     if (!source->is_volatile || source->is_goto || source->template_text == NULL ||
         source->template_length == 0U || source->output_count != 0U || source->input_count != 0U ||
@@ -4224,4 +4345,3 @@ MinicCoreLowerStatus minic_core_lower_inline_asm(MinicCoreLowerContext *context,
                ? MINIC_CORE_LOWER_OK
                : MINIC_CORE_LOWER_ERROR;
 }
-
