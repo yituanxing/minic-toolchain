@@ -234,3 +234,26 @@ an architecture switch and preserves the existing LoongArch LP64D behavior.
 A dedicated original-GNU AArch64 negative test ensures that the legal HFA
 signature is rejected by MiniC *at function preflight* and no partial
 assembly remains. Existing positive 144-byte integer record probes remain.
+
+## RV64 object-liveness ownership: preserve the mature per-function optimizer
+
+The remaining RV64 machine codegen file had a coherent ~980-line
+object/record-liveness domain: immutable RECORD_LOAD call snapshot
+storage reuse, CoreObject address lifetime intervals, optional reuse
+indices, slot coloring, and a function-scoped cache. The complete
+existing implementation now lives in `riscv64/object_liveness.{h,c}`.
+
+A narrow target interface exports scalar-type admission, record-call
+snapshot reuse qualification, object slot reuse layout, and the
+previous optional cross-block focus flag setter. No lifetime rule,
+data representation, or stack-offset policy was changed.
+
+`riscv64/core_codegen.c` retains advanced frame assembly, structured
+inline asm, register effects, machine operations, and all GNU emission.
+`x86_64/frame.c` and the other ISAs' optional LP64 frame strategy are
+unchanged. This is **target-owned reuse analysis**, not a universal
+regalloc/ABI/Machine IR, and Core IR remains architecture independent.
+
+Acceptance: verify full RV64 Linux original compilation and performance
+receipts, x86 owner targets and AArch64/LoongArch64 original GNU/QEMU
+regressions. A moved byte-identical algorithm is not a CI verdict.
