@@ -166,4 +166,22 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
 MinicCoreLowerStatus minic_core_lower_inline_asm(MinicCoreLowerContext *context,
                                                  const MinicStatement *statement);
 
+/* C bit-field semantics: one cohesive source-to-Core operation family.
+ * The same signedness/width and target DataLayout contracts cover read,
+ * compound assignment and increment/decrement. */
+MinicCoreLowerStatus minic_core_lower_internal_append_field_address(
+    MinicCoreLowerContext *context, MinicSourceSpan span,
+    MinicCoreValueId base_id, MinicRecordId record_id, size_t field_index,
+    MinicType field_type, MinicCoreValueId *address_id);
+MinicCoreLowerStatus minic_core_lower_try_bit_field_read(
+    MinicCoreLowerContext *context, const MinicExpression *expression,
+    MinicCoreValueId *value_id, bool *matched);
+MinicCoreLowerStatus minic_core_lower_try_bit_field_compound(
+    MinicCoreLowerContext *context, const MinicExpression *expression,
+    MinicCoreValueId *value_id, bool *matched);
+MinicCoreLowerStatus minic_core_lower_bit_field_update(
+    MinicCoreLowerContext *context, const MinicExpression *expression,
+    const MinicExpression *operand, bool increment, bool prefix,
+    MinicCoreValueId *value_id);
+
 #endif
