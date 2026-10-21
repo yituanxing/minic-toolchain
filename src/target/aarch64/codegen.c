@@ -200,6 +200,7 @@ static bool emit_function_body(FILE *out, const MinicC0Program *program,
                           bool function_sections) {
     const char *name = minic_c0_function_symbol_name(decl);
     const MinicCoreBlock *block;
+    MinicLP64ArgumentPlan incoming_plan;
     size_t frame = 0U, i, object_end, save_offset, ld_base;
     bool has_direct_calls = false;
     bool dynamic_frame = false;
@@ -264,6 +265,15 @@ static bool emit_function_body(FILE *out, const MinicC0Program *program,
             return minic_multi_direct_machine_reject(fn, "aarch64", name, reject_stage,
                                        reject_block, reject_ins, __LINE__);
     }
+    /* A single incoming ABI location plan is shared by scalar and object
+     * parameter handlers, including mixed GP/FP and aggregate boundaries. */
+    if (!minic_lp64_plan_incoming_parameters(
+            program, target, fn,
+            MINIC_LP64_ABI_AAPCS64,
+            minic_aarch64_indirect_record,
+            &incoming_plan))
+        return minic_multi_direct_machine_reject(fn, "aarch64", name,
+            reject_stage, reject_block, reject_ins, __LINE__);
     if (getenv("MINIC_M1_TRACE") != NULL &&
         ((name[0] == 'K' && name[1] == 'e') || (name[0] == 'A' && name[1] == 'd')))
         (void)fprintf(stderr, "MINIC_M9_GATE arch=aarch64 fn=%s stage=parameters_valid\n", name);
@@ -1274,7 +1284,7 @@ static bool emit_function_body(FILE *out, const MinicC0Program *program,
                                           : ins->value.call.argument_count;
             size_t j;
             size_t stack_bytes;
-            MinicLP64DirectCallPlan call_plan;
+            MinicLP64ArgumentPlan call_plan;
             /* Resolve ABI locations once before allocating outgoing stack
              * space; the same plan drives each argument's source cursor. */
             if (!minic_lp64_plan_direct_call(
