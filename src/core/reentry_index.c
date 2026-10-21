@@ -8,7 +8,7 @@
 /* Dedicated owner for read-only incoming AST edges and opt-in counters;
  * no target ABI or physical machine resource belongs in this layer. */
 /* Read-only incoming control-flow references for one Core Function Set build.
- * Bounded to minic_prepare_core_function_set() by explicit begin/end calls.
+ * Owned by minic_prepare_core_function_set() and explicitly passed to lowerings.
  * Standalone users of minic_core_lower_function() keep the legacy proof path.
  * Invalid AST or allocation failure disables the index: never infer absence
  * of a goto, asm-goto, or label address from an incomplete index. */
@@ -153,7 +153,7 @@ bool minic_core_reentry_index_ready(const MinicCoreReentryIndex *index,
 void minic_core_reentry_index_check_discarded(
     MinicCoreReentryIndex *index, const MinicC0Program *program,
     const bool *membership, bool *unsafe) {
-    size_t index;
+    size_t statement_index;
     if (unsafe == NULL) return;
     if (!minic_core_reentry_index_ready(index, program) || membership == NULL) {
         *unsafe = true;
@@ -162,18 +162,19 @@ void minic_core_reentry_index_check_discarded(
     /* Case/default labels are independently dispatched; direct internal
      * goto edges disappear along with the discarded subtree. */
     ++index->indexed_if_queries;
-    for (index = 0U; index < program->statement_count && !*unsafe; ++index) {
+    for (statement_index = 0U; statement_index < program->statement_count && !*unsafe;
+         ++statement_index) {
         const MinicStatement *statement;
         size_t edge;
-        if (!membership[index]) continue;
-        statement = minic_c0_program_statement(program, index);
+        if (!membership[statement_index]) continue;
+        statement = minic_c0_program_statement(program, statement_index);
         if (statement == NULL || statement->kind == MINIC_STATEMENT_CASE ||
             statement->kind == MINIC_STATEMENT_DEFAULT ||
-            index->addressed[index] != 0U) {
+            index->addressed[statement_index] != 0U) {
             *unsafe = true;
             break;
         }
-        for (edge = index->heads[index]; edge != SIZE_MAX;
+        for (edge = index->heads[statement_index]; edge != SIZE_MAX;
              edge = index->incoming[edge].next) {
             size_t source = index->incoming[edge].source_statement;
             if (!membership[source]) {
