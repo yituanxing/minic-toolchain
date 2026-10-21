@@ -184,6 +184,23 @@ MinicCoreLowerStatus minic_core_lower_bit_field_update(
     const MinicExpression *operand, bool increment, bool prefix,
     MinicCoreValueId *value_id);
 
+/* Record/aggregate lowering owns materialized record objects and copies.
+ * These interfaces describe source semantics, never machine ABI placement. */
+MinicCoreLowerStatus minic_core_lower_internal_local_object(
+    MinicCoreLowerContext *context, MinicLocalId local_id,
+    MinicCoreObjectId *object_id);
+MinicCoreLowerStatus minic_core_lower_record_compound_literal_object(
+    MinicCoreLowerContext *context, const MinicExpression *expression,
+    MinicCoreObjectId *object_id);
+MinicCoreLowerStatus minic_core_lower_record_conditional_object(
+    MinicCoreLowerContext *context, const MinicExpression *expression,
+    MinicCoreObjectId *result_object);
+MinicCoreLowerStatus minic_core_lower_record_load_object(
+    MinicCoreLowerContext *context, MinicExpressionId expression_id,
+    MinicCoreObjectId *object_id);
+MinicCoreLowerStatus minic_core_lower_record_copy_statement(
+    MinicCoreLowerContext *context, const MinicStatement *statement);
+
 /* The call family owns C argument evaluation, value/object snapshots,
  * indirect callee ordering and Core CALL instructions. ABI registers are
  * placed later in the target subsystem, not by this internal API. */
