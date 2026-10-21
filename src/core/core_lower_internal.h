@@ -37,6 +37,16 @@ bool core_const_eval_integer_with_locals(const MinicCoreLowerContext *,
 bool core_const_signed_value(const MinicCoreLowerContext *,
                              const MinicConstValue *, int64_t *);
 
+/* Conservatively shared between fact oracle and source-to-Core lowering. */
+bool minic_core_lower_direct_local_read(const MinicCoreLowerContext *,
+                                        MinicExpressionId, MinicLocalId *);
+bool minic_core_lower_known_null_pointer(const MinicCoreLowerContext *,
+                                         MinicExpressionId);
+bool minic_core_lower_boolean_range_expression(const MinicCoreLowerContext *,
+                                               MinicExpressionId, unsigned int);
+bool minic_core_lower_unreachable_external_reentry(
+    const MinicCoreLowerContext *, const MinicStatement *, MinicStatementId);
+
 bool core_capture_enum_metadata(MinicCoreLowerContext *context);
 /* Source-wide fail-closed _Bool==0 fact used only by Core CFG lowering. */
 bool core_zero_bool_cfg_condition(const MinicCoreLowerContext *context,
