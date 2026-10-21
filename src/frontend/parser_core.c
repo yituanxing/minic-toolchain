@@ -193,6 +193,18 @@ size_t minic_parser_span_length(MinicSourceSpan span) {
     return span.end.offset - span.begin.offset;
 }
 
+/* One lexical identifier matcher for general grammar and builtin parsing. */
+bool minic_parser_current_identifier_is(const MinicParser *parser, const char *name) {
+    size_t length;
+
+    if (parser == NULL || name == NULL || parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
+        return false;
+    }
+    length = minic_parser_span_length(parser->current.span);
+    return strlen(name) == length &&
+           memcmp(parser->source + parser->current.span.begin.offset, name, length) == 0;
+}
+
 bool minic_parser_span_equals(const MinicParser *parser,
                               MinicSourceSpan left,
                               MinicSourceSpan right) {

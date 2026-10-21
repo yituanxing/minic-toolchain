@@ -1750,7 +1750,7 @@ static bool parse_unary(MinicParser *parser, MinicExpressionId *expression_id, b
        not change the type, value category, or runtime behavior of its operand,
        so keep it out of AST/Core and continue through the ordinary unary/cast
        grammar. */
-    if (minic_parser_token_text_equals(parser, "__extension__")) {
+    if (minic_parser_current_identifier_is(parser, "__extension__")) {
         if (!minic_parser_advance(parser)) {
             return false;
         }
