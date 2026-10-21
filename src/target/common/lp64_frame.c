@@ -60,23 +60,23 @@ bool minic_lp64_binary128_slot(const MinicCoreFunction *fn, size_t base,
  * Preserve existing ABI-specific bounds, offset and stack alignment. */
 bool minic_lp64_finalize_direct_frame(
     size_t object_end, bool has_calls, bool dynamic_frame, bool has_varargs,
-    MinicLP64DirectFrameABI abi, size_t *save_offset, size_t *va_base,
+    MinicLP64DirectABI abi, size_t *save_offset, size_t *va_base,
     size_t *frame_size) {
     size_t save, required, frame, va = 0U;
     if (save_offset == NULL || frame_size == NULL ||
         object_end > MINIC_LARGE_FRAME_MAX ||
-        (abi != MINIC_LP64_FRAME_AAPCS64 &&
-         abi != MINIC_LP64_FRAME_LOONGARCH64_LP64D))
+        (abi != MINIC_LP64_ABI_AAPCS64 &&
+         abi != MINIC_LP64_ABI_LOONGARCH64_LP64D))
         return false;
     save = (object_end + 7U) & ~(size_t)7U;
-    if (abi == MINIC_LP64_FRAME_AAPCS64 && has_varargs) {
+    if (abi == MINIC_LP64_ABI_AAPCS64 && has_varargs) {
         if (va_base == NULL || save > MINIC_LARGE_FRAME_MAX - 240U)
             return false;
         va = (save + 15U) & ~(size_t)15U;
         save = va + 224U;
     }
     required = (has_calls ? 8U : 0U) + (dynamic_frame ? 8U : 0U);
-    if (abi == MINIC_LP64_FRAME_LOONGARCH64_LP64D && has_varargs)
+    if (abi == MINIC_LP64_ABI_LOONGARCH64_LP64D && has_varargs)
         required += 64U;
     if (save > MINIC_LARGE_FRAME_MAX - required) return false;
     frame = (save + required + 15U) & ~(size_t)15U;
