@@ -276,12 +276,19 @@ static MinicCoreLowerStatus lower_record_va_arg_object(
     size_t value_alignment;
 
     if (context == NULL || context->body == NULL || context->body->program == NULL ||
-        context->function == NULL || expression == NULL || object_id == NULL ||
+        context->function == NULL || context->target == NULL ||
+        context->target->variadic_scalar_read_kind !=
+            MINIC_VARIADIC_SCALAR_READ_LINEAR_SLOT ||
+        context->target->variadic_linear_slot_bytes == 0U ||
+        expression == NULL || object_id == NULL ||
         expression->kind != MINIC_EXPRESSION_BUILTIN_VA_ARG ||
         !minic_type_unqualified(expression->type, &record_type) ||
         !minic_type_is_record(record_type)) {
         return MINIC_CORE_LOWER_UNSUPPORTED;
     }
+    /* A structured GP/FP cursor needs a target-specific aggregate ABI
+     * classifier; reinterpreting its tag pointer as a linear record slot
+     * would silently read unrelated bytes. Reject until it is modeled. */
     target = minic_c0_program_expression(
         context->body->program, expression->value.unary.operand);
     if (target == NULL || target->value_category != MINIC_VALUE_LVALUE ||
@@ -363,7 +370,8 @@ static MinicCoreLowerStatus lower_record_va_arg_object(
     operation.result = MINIC_CORE_VALUE_INVALID;
     operation.value.pointer_offset.base = cursor_value;
     operation.value.pointer_offset.index = one;
-    operation.value.pointer_offset.element_size = 8U;
+    operation.value.pointer_offset.element_size =
+        context->target->variadic_linear_slot_bytes;
     operation.value.pointer_offset.subtract = false;
     if (!minic_core_function_append_value_instruction(
             context->function, context->block_id, &operation, &next_cursor)) {
