@@ -315,7 +315,7 @@ bool minic_core_function_add_object(MinicCoreFunction *function,
 /* M155_EXTERN_VOID_SYMBOL_ADDRESS_OWNER: a Core global entry names a symbol,
    not allocated private storage.  A void-typed linker symbol may therefore
    participate in GLOBAL_ADDRESS while LOAD/STORE still reject void pointees. */
-bool core_global_addressable_type(MinicType type) {
+bool minic_core_ir_global_addressable_type(MinicType type) {
     return minic_type_is_integer(type) || minic_type_is_pointer(type) ||
            minic_type_is_array(type) || minic_type_is_record(type) ||
            minic_type_is_void(type);
@@ -331,7 +331,7 @@ bool minic_core_function_add_global(MinicCoreFunction *function,
 
     if (function == NULL || name == NULL || name_length == 0U || global_id == NULL ||
         function->global_count >= (size_t)UINT32_MAX ||
-        !core_global_addressable_type(type)) {
+        !minic_core_ir_global_addressable_type(type)) {
         return false;
     }
     for (index = 0U; index < function->global_count; ++index) {
@@ -401,7 +401,7 @@ bool minic_core_function_add_function_symbol(MinicCoreFunction *function,
     return true;
 }
 
-bool core_call_scalar_type(MinicType type) {
+bool minic_core_ir_call_scalar_type(MinicType type) {
     /* Scalar call transport is an IR contract, not an arithmetic capability.
        Keep binary32 and binary64 on the same call seam; target ABI placement
        still decides the physical floating registers. */
@@ -412,14 +412,14 @@ bool core_call_scalar_type(MinicType type) {
 
 /* M85_RECORD_CALL_ARGUMENT: direct calls may transport address-backed records
    as object snapshots while return values remain on the existing scalar seam. */
-bool core_call_parameter_type(MinicType type) {
-    return core_call_scalar_type(type) || minic_type_is_record(type);
+bool minic_core_ir_call_parameter_type(MinicType type) {
+    return minic_core_ir_call_scalar_type(type) || minic_type_is_record(type);
 }
 
 /* M86_DIRECT_RECORD_CALL_RESULT: direct callees may return an address-backed
    record object. Indirect-call signatures stay on the scalar-return seam. */
-bool core_direct_call_return_type(MinicType type) {
-    return minic_type_is_void(type) || core_call_scalar_type(type) || minic_type_is_record(type);
+bool minic_core_ir_direct_call_return_type(MinicType type) {
+    return minic_type_is_void(type) || minic_core_ir_call_scalar_type(type) || minic_type_is_record(type);
 }
 
 static bool callee_signature_equal(const MinicCoreCallee *callee,
@@ -458,13 +458,13 @@ bool minic_core_function_add_callee(MinicCoreFunction *function,
 
     if (function == NULL || name == NULL || name_length == 0U || callee_id == NULL ||
         function->callee_count >= (size_t)UINT32_MAX ||
-        !core_direct_call_return_type(return_type) ||
+        !minic_core_ir_direct_call_return_type(return_type) ||
         (parameter_count != 0U && parameter_types == NULL) ||
         parameter_count > SIZE_MAX / sizeof(*stored.parameter_types)) {
         return false;
     }
     for (index = 0U; index < parameter_count; ++index) {
-        if (!core_call_parameter_type(parameter_types[index])) {
+        if (!minic_core_ir_call_parameter_type(parameter_types[index])) {
             return false;
         }
     }
@@ -567,13 +567,13 @@ bool minic_core_function_add_call_signature(MinicCoreFunction *function,
     if (function == NULL || signature_id == NULL ||
         function_type_id == MINIC_FUNCTION_TYPE_INVALID ||
         function->call_signature_count >= (size_t)UINT32_MAX ||
-        (!minic_type_is_void(return_type) && !core_call_scalar_type(return_type)) ||
+        (!minic_type_is_void(return_type) && !minic_core_ir_call_scalar_type(return_type)) ||
         (parameter_count != 0U && parameter_types == NULL) ||
         parameter_count > SIZE_MAX / sizeof(*stored.parameter_types)) {
         return false;
     }
     for (index = 0U; index < parameter_count; ++index) {
-        if (!core_call_parameter_type(parameter_types[index])) {
+        if (!minic_core_ir_call_parameter_type(parameter_types[index])) {
             return false;
         }
     }
