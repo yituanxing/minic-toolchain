@@ -218,34 +218,22 @@ typedef struct MinicInlineLocalBooleanDomainCache {
     size_t inline_asm_count;
 } MinicInlineLocalBooleanDomainCache;
 
-static MinicInlineLocalBooleanDomainCache minic_inline_local_boolean_domain_cache;
-static size_t minic_perf_boolean_domain_queries;
-static size_t minic_perf_boolean_domain_builds;
-static size_t minic_perf_boolean_domain_fallbacks;
+/* Local to one AST boolean specialization invocation. */
+typedef struct MinicInlineBooleanDomainPassState {
+    MinicInlineLocalBooleanDomainCache cache;
+    MinicInlineBooleanDomainStats stats;
+} MinicInlineBooleanDomainPassState;
 
-/* Diagnostics belong to the pass that owns the counters. Keeping
- * them private prevents the TU driver from depending on pass internals. */
-void minic_inline_boolean_domain_perf_dump(FILE *out) {
-    if (out == NULL) return;
+void minic_inline_boolean_domain_perf_dump(
+    FILE *out, const MinicInlineBooleanDomainStats *stats) {
+    if (out == NULL || stats == NULL) return;
     (void)fprintf(out,
                   "MINIC_BOOLEAN_DOMAIN queries=%zu builds=%zu fallbacks=%zu\n",
-                  minic_perf_boolean_domain_queries,
-                  minic_perf_boolean_domain_builds,
-                  minic_perf_boolean_domain_fallbacks);
-}
-
-
-void minic_inline_local_boolean_domain_cache_clear(void) {
-    free(minic_inline_local_boolean_domain_cache.values);
-    (void)memset(&minic_inline_local_boolean_domain_cache, 0,
-                 sizeof(minic_inline_local_boolean_domain_cache));
-    minic_perf_boolean_domain_queries = 0U;
-    minic_perf_boolean_domain_builds = 0U;
-    minic_perf_boolean_domain_fallbacks = 0U;
+                  stats->queries, stats->builds, stats->fallbacks);
 }
 
 static bool minic_inline_build_local_boolean_domain_cache(
-    const MinicC0Program *program) {
+    const MinicC0Program *program, MinicInlineBooleanDomainPassState *state) {
     bool *values = NULL;
     bool *parameter = NULL;
     bool *saw_assignment = NULL;
@@ -377,14 +365,14 @@ static bool minic_inline_build_local_boolean_domain_cache(
     free(parameter);
     free(saw_assignment);
     free(invalid);
-    free(minic_inline_local_boolean_domain_cache.values);
-    minic_inline_local_boolean_domain_cache.program = program;
-    minic_inline_local_boolean_domain_cache.values = values;
-    minic_inline_local_boolean_domain_cache.local_count = program->local_count;
-    minic_inline_local_boolean_domain_cache.statement_count = program->statement_count;
-    minic_inline_local_boolean_domain_cache.expression_count = program->expression_count;
-    minic_inline_local_boolean_domain_cache.inline_asm_count = program->inline_asm_count;
-    minic_perf_boolean_domain_builds += 1U;
+    free(state->cache.values);
+    state->cache.program = program;
+    state->cache.values = values;
+    state->cache.local_count = program->local_count;
+    state->cache.statement_count = program->statement_count;
+    state->cache.expression_count = program->expression_count;
+    state->cache.inline_asm_count = program->inline_asm_count;
+    state->stats.builds += 1U;
     return true;
 }
 
@@ -392,25 +380,25 @@ static bool minic_inline_build_local_boolean_domain_cache(
 /* MINIC_BOOLEAN_DOMAIN_SCOPED_NATIVE_V1: certified on 500 real Linux inputs. */
 static bool minic_inline_local_boolean_domain(
     const MinicC0Program *program,
-    MinicLocalId local_id) {
+    MinicLocalId local_id, MinicInlineBooleanDomainPassState *state) {
     if (program == NULL || local_id >= program->local_count) {
         return false;
     }
-    minic_perf_boolean_domain_queries += 1U;
+    state->stats.queries += 1U;
     /* An appended clone may grow the underlying arenas without changing
      * the Program address. All arenas referenced by write scanning matter. */
-    if (minic_inline_local_boolean_domain_cache.program != program ||
-        minic_inline_local_boolean_domain_cache.local_count != program->local_count ||
-        minic_inline_local_boolean_domain_cache.statement_count != program->statement_count ||
-        minic_inline_local_boolean_domain_cache.expression_count != program->expression_count ||
-        minic_inline_local_boolean_domain_cache.inline_asm_count != program->inline_asm_count ||
-        minic_inline_local_boolean_domain_cache.values == NULL) {
-        if (!minic_inline_build_local_boolean_domain_cache(program)) {
-            minic_perf_boolean_domain_fallbacks += 1U;
+    if (state->cache.program != program ||
+        state->cache.local_count != program->local_count ||
+        state->cache.statement_count != program->statement_count ||
+        state->cache.expression_count != program->expression_count ||
+        state->cache.inline_asm_count != program->inline_asm_count ||
+        state->cache.values == NULL) {
+        if (!minic_inline_build_local_boolean_domain_cache(program, state)) {
+            state->stats.fallbacks += 1U;
             return minic_inline_local_boolean_domain_legacy(program, local_id);
         }
     }
-    return minic_inline_local_boolean_domain_cache.values[local_id];
+    return state->cache.values[local_id];
 }
 
 static bool minic_inline_boolean_range_argument(
@@ -418,7 +406,7 @@ static bool minic_inline_boolean_range_argument(
     const MinicFunction *caller,
     MinicExpressionId expression_id,
     bool *used_caller_fact,
-    unsigned int depth) {
+    unsigned int depth, MinicInlineBooleanDomainPassState *state) {
     const MinicExpression *expression;
 
     if (program == NULL || used_caller_fact == NULL || depth > 32U) {
@@ -440,12 +428,12 @@ static bool minic_inline_boolean_range_argument(
             caller,
             expression->value.unary.operand,
             used_caller_fact,
-            depth + 1U);
+            depth + 1U, state);
     }
     if (expression->kind == MINIC_EXPRESSION_LOCAL) {
         MinicLocalId local_id = expression->value.local_id;
 
-        if (minic_inline_local_boolean_domain(program, local_id)) {
+        if (minic_inline_local_boolean_domain(program, local_id, state)) {
             return true;
         }
         if (caller != NULL && caller->is_integer_specialization &&
@@ -565,9 +553,9 @@ static bool minic_add_inline_boolean_range_specialization(
     return true;
 }
 
-bool minic_specialize_inline_boolean_range_calls(
+static bool minic_specialize_inline_boolean_range_calls_for_pass(
     MinicC0Program *program,
-    const MinicTargetInfo *target) {
+    const MinicTargetInfo *target, MinicInlineBooleanDomainPassState *state) {
     size_t expression_index;
     size_t direct_clone_count = 0U;
     size_t transitive_clone_count = 0U;
@@ -640,7 +628,7 @@ bool minic_specialize_inline_boolean_range_calls(
                     NULL,
                     minic_c0_call_argument(call, i),
                     &used_caller_fact,
-                    0U)) {
+                    0U, state)) {
                 continue;
             }
             if (!boolean_range_known[i]) {
@@ -837,7 +825,7 @@ bool minic_specialize_inline_boolean_range_calls(
                             &caller,
                             minic_c0_call_argument(nested, parameter_index),
                             &argument_used_caller_fact,
-                            0U)) {
+                            0U, state)) {
                         continue;
                     }
                     used_caller_fact =
@@ -912,3 +900,16 @@ bool minic_specialize_inline_boolean_range_calls(
     return true;
 }
 
+
+/* Own the cache over the complete pass, even on conservative early failure. */
+bool minic_specialize_inline_boolean_range_calls(
+    MinicC0Program *program, const MinicTargetInfo *target,
+    MinicInlineBooleanDomainStats *stats_out) {
+    MinicInlineBooleanDomainPassState state;
+    bool success;
+    (void)memset(&state, 0, sizeof(state));
+    success = minic_specialize_inline_boolean_range_calls_for_pass(program, target, &state);
+    if (stats_out != NULL) *stats_out = state.stats;
+    free(state.cache.values);
+    return success;
+}

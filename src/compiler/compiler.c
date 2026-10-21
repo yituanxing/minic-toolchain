@@ -232,6 +232,7 @@ int minic_compile_preprocessed_file_for_target(const char *input_path,
     MinicCoreFunctionSet core_set;
     MinicC0AstVerifyFailure verify_failure;
     const MinicBackend *backend;
+    MinicInlineBooleanDomainStats boolean_stats = {0};
     bool success;
 
     if (input_path == NULL || output_path == NULL) {
@@ -250,8 +251,7 @@ int minic_compile_preprocessed_file_for_target(const char *input_path,
         minic_set_diagnostic(diagnostic, input_path, 1U, 1U, "invalid target configuration");
         return 1;
     }
-    /* A stack-reused Program pointer does not identify a new TU. */
-    minic_inline_local_boolean_domain_cache_clear();
+    /* The AST pass itself owns its short-lived BooleanDomain cache. */
     buffer.data = NULL;
     buffer.size = 0U;
     if (!minic_read_file(input_path, &buffer, diagnostic)) {
@@ -316,7 +316,7 @@ int minic_compile_preprocessed_file_for_target(const char *input_path,
                              "cannot specialize inline symbolic address call sites");
         success = false;
     }
-    if (success && !minic_specialize_inline_boolean_range_calls(&program, target_info)) {
+    if (success && !minic_specialize_inline_boolean_range_calls(&program, target_info, &boolean_stats)) {
         minic_set_diagnostic(diagnostic, input_path, 1U, 1U,
                              "cannot specialize inline boolean range call sites");
         success = false;
@@ -379,9 +379,8 @@ int minic_compile_preprocessed_file_for_target(const char *input_path,
     minic_core_function_set_destroy(&core_set);
     minic_c0_program_destroy(&program);
     if (getenv("MINIC_BOOLEAN_DOMAIN_PERF") != NULL) {
-        minic_inline_boolean_domain_perf_dump(stderr);
+        minic_inline_boolean_domain_perf_dump(stderr, &boolean_stats);
     }
-    minic_inline_local_boolean_domain_cache_clear();
     free(buffer.data);
     return success ? 0 : 1;
 }
