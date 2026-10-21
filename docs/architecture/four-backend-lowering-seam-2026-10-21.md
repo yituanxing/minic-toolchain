@@ -217,6 +217,24 @@ Acceptance gate: native warning-as-error build, existing RV64 Linux and
 x86 real-source owners, dual original AArch64/LoongArch64 581/581 BusyBox
 GNU/QEMU byte-differential. A source-equivalent move alone does not pass.
 
+## ABI correctness: AArch64 HFA/HVA is not a generic LP64 record
+
+The old `backend_abi_record.h` patch in PR #528 is based on a removed
+header and must not be merged verbatim. Its valid finding is retained:
+AAPCS64 B.3 classifies HFAs/HVAs *before* the generic indirect aggregate
+rule. A 4x 16-byte `long double` record is not a GP pointer argument.
+
+The new `aarch64/abi.{h,c}` module wraps the already-shared bounded
+indirect classification, rejecting aggregates containing floating, SIMD,
+SVE or otherwise unknown element types until the actual AAPCS64 register
+classifier and marshaling are implemented. Other targets keep their own
+calling convention. This avoids polluting `common/lp64_aggregate.c` with
+an architecture switch and preserves the existing LoongArch LP64D behavior.
+
+A dedicated original-GNU AArch64 negative test ensures that the legal HFA
+signature is rejected by MiniC *at function preflight* and no partial
+assembly remains. Existing positive 144-byte integer record probes remain.
+
 ## RV64 object-liveness ownership: preserve the mature per-function optimizer
 
 The remaining RV64 machine codegen file had a coherent ~980-line

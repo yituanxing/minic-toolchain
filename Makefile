@@ -102,6 +102,7 @@ MINIC_SOURCES := \
 	src/target/x86_64/abi.c \
 	src/target/x86_64/frame.c \
 	src/target/x86_64/global_emit.c \
+	src/target/aarch64/abi.c \
 	src/target/aarch64/codegen.c \
 	src/target/loongarch64/codegen.c \
 	tools/minic-cc/main.c
