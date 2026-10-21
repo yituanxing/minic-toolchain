@@ -93,7 +93,9 @@ MINIC_SOURCES := \
 	src/target/riscv64/codegen_support.c \
 	src/target/riscv64/core_codegen.c \
 	src/target/riscv64/codegen_function.c \
+	src/target/riscv64/global_emit.c \
 	src/target/x86_64/codegen.c \
+	src/target/x86_64/global_emit.c \
 	src/target/aarch64/codegen.c \
 	src/target/loongarch64/codegen.c \
 	tools/minic-cc/main.c
