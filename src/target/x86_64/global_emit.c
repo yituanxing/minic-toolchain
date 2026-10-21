@@ -546,10 +546,3 @@ bool minic_x86_64_emit_global(FILE *out, const MinicC0Program *program,
     return fprintf(out, ".size %s,%zu\n", obj->name, storage_size) >= 0;
 }
 
-/* SysV uses independent integer and SSE register sequences.  Both direct
- * and indirect calls share this small classification/placement routine; an
- * unsupported argument class or register overflow fails instead of being
- * silently passed through the wrong register bank. */
-/* SysV has separate six-GPR and eight-SSE argument banks; exhausted bank
- * values are stack-passed in source order.  This is the existing scalar ABI,
- * with the separately validated one-GP/two-GP aggregate shapes below. */
