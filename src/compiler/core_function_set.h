@@ -11,4 +11,12 @@ typedef struct MinicCoreFunctionSet {
     MinicCoreLowerStatus *statuses;
     size_t function_count;
 } MinicCoreFunctionSet;
+/* Compiler-internal AST->Core per-TU function lifecycle. The outgoing
+ * statuses/verified Core IR are consumed by independent backend targets. */
+void minic_core_function_set_initialize(MinicCoreFunctionSet *set);
+void minic_core_function_set_destroy(MinicCoreFunctionSet *set);
+bool minic_prepare_core_function_set(const MinicC0Program *program,
+                                     const MinicTargetInfo *target,
+                                     MinicCoreFunctionSet *output);
+
 #endif
