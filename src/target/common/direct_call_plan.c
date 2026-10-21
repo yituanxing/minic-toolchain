@@ -7,15 +7,15 @@
  * Passes no target-specific assembly and allocates no dynamic storage. */
 bool minic_lp64_plan_direct_call(const MinicC0Program *program,
     const MinicTargetInfo *target, const MinicCoreFunction *fn,
-    const MinicCoreInstruction *call, MinicLP64DirectFrameABI abi,
+    const MinicCoreInstruction *call, MinicLP64DirectABI abi,
     MinicDirectLP64IndirectRecord indirect_record,
     MinicLP64DirectCallPlan *plan) {
     size_t begin, count, fixed, gp = 0U, fp = 0U, stack = 0U, j;
     bool variadic;
     if (program == NULL || target == NULL || fn == NULL || call == NULL ||
         indirect_record == NULL || plan == NULL ||
-        (abi != MINIC_LP64_FRAME_AAPCS64 &&
-         abi != MINIC_LP64_FRAME_LOONGARCH64_LP64D))
+        (abi != MINIC_LP64_ABI_AAPCS64 &&
+         abi != MINIC_LP64_ABI_LOONGARCH64_LP64D))
         return false;
     if (call->kind == MINIC_CORE_INSTRUCTION_CALL) {
         const MinicCoreCallee *callee;
@@ -76,7 +76,7 @@ bool minic_lp64_plan_direct_call(const MinicC0Program *program,
                 ++gp;
             } else {
                 size_t available = gp < 8U ? 8U - gp : 0U;
-                const size_t used = abi == MINIC_LP64_FRAME_AAPCS64
+                const size_t used = abi == MINIC_LP64_ABI_AAPCS64
                     ? (available >= chunks ? chunks : 0U)
                     : (available < chunks ? available : chunks);
                 loc->kind = MINIC_LP64_ARGUMENT_RECORD;
@@ -89,12 +89,12 @@ bool minic_lp64_plan_direct_call(const MinicC0Program *program,
                     loc->stack_slots = chunks - used;
                     stack += chunks - used;
                 }
-                gp = abi == MINIC_LP64_FRAME_AAPCS64 && used == 0U
+                gp = abi == MINIC_LP64_ABI_AAPCS64 && used == 0U
                     ? 8U : gp + used;
             }
         } else if (minic_type_is_long_double(type)) {
             loc->kind = MINIC_LP64_ARGUMENT_WIDE;
-            if (abi == MINIC_LP64_FRAME_AAPCS64) {
+            if (abi == MINIC_LP64_ABI_AAPCS64) {
                 if (fp < 8U) {
                     loc->fp_first = fp;
                     loc->fp_registers = 1U;
@@ -122,7 +122,7 @@ bool minic_lp64_plan_direct_call(const MinicC0Program *program,
                 gp += used;
             }
         } else if (minic_type_is_double(type) || minic_type_is_float(type)) {
-            const bool use_fp = abi == MINIC_LP64_FRAME_AAPCS64 ||
+            const bool use_fp = abi == MINIC_LP64_ABI_AAPCS64 ||
                 ((!variadic || j < fixed) && fp < 8U);
             if (use_fp) {
                 loc->kind = MINIC_LP64_ARGUMENT_FP;
