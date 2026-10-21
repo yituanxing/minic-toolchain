@@ -14,7 +14,7 @@
  * independent of the function-level preflight and frame lifetime. Machine
  * register syntax remains strictly owned by this ISA. */
 
-bool minic_aarch64_emit_lp64_record_chunk_parameter(FILE *out, size_t offset,
+bool minic_aarch64_minic_aarch64_emit_lp64_record_chunk_parameter(FILE *out, size_t offset,
                                               size_t bytes, bool in_reg,
                                               size_t gp, size_t incoming_offset) {
     size_t b;
@@ -114,7 +114,7 @@ const size_t position = ins->value.parameter_object.parameter_index;
                 const bool in_reg = chunk < location->gp_registers;
                 const size_t payload = size - chunk * 8U >= 8U
                     ? 8U : size - chunk * 8U;
-                if (!emit_lp64_record_chunk_parameter(out,
+                if (!minic_aarch64_emit_lp64_record_chunk_parameter(out,
                         object_offset + chunk * 8U, payload,
                         in_reg, in_reg ? location->gp_first + chunk : 0U,
                         in_reg ? 0U : frame +
