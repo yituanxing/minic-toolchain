@@ -1,6 +1,9 @@
 #ifndef MINIC_TARGET_COMMON_LP64_FRAME_H
 #define MINIC_TARGET_COMMON_LP64_FRAME_H
 
+/* Shared bounded frame contract for both direct LP64 backends. */
+#define MINIC_LARGE_FRAME_MAX 1048576U
+
 #include "core/core_ir.h"
 #include "target/common/direct_lp64_abi.h"
 #include "frontend/ast.h"
