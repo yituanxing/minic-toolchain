@@ -49,12 +49,6 @@ static const MinicCoreFixedRegisterBinding *core_fixed_register_binding(
                : NULL;
 }
 
-static bool core_effective_integer_type(const MinicCoreFunction *function,
-                                        MinicType type,
-                                        MinicType *effective_type) {
-    return minic_core_function_effective_integer_type(function, type, effective_type);
-}
-
 /* M74_GLOBAL_RECORD_ADDRESS / M155_EXTERN_VOID_SYMBOL_ADDRESS_OWNER:
    RV64 global.addr must keep assembler-local `.L*` symbols PC-relative in
    early position-independent code. Use `lla` only for `.L*` symbols; keep
