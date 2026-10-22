@@ -1529,14 +1529,11 @@ bool minic_aarch64_emit_core_blocks(FILE *out, const MinicDirectLP64BlockContext
             bool ls, rs;
             bool wide;
             const char *opcode;
-            if (lhs >= fn->value_count || rhs >= fn->value_count ||
-                !minic_lp64_scalar_integer_width(program, target, fn->values[lhs].type, &lw, &ls) ||
-                !minic_lp64_scalar_integer_width(program, target, fn->values[rhs].type, &rw, &rs) ||
-                lw != rw || ls != rs ||
-                !minic_type_equal(fn->values[lhs].type, ins->type) ||
-                minic_type_is_bool_integer(ins->type))
-                return minic_multi_direct_machine_reject(fn, "aarch64", name, reject_stage,
-                                    reject_block, reject_ins, __LINE__);
+            if (!minic_multi_direct_integer_binary_shape(
+                    program, target, fn, ins, &lw, &rw, &ls, &rs))
+                return minic_multi_direct_machine_reject(
+                    fn, "aarch64", name, reject_stage, reject_block,
+                    reject_ins, __LINE__);
             wide = lw == 8U;
             /* M36: target-native LP64 multiplication, including cJSON's
              * size_t newsize = needed * 2; low 64 bits follow C unsigned
@@ -1567,15 +1564,11 @@ bool minic_aarch64_emit_core_blocks(FILE *out, const MinicDirectLP64BlockContext
             bool ls, rs;
             bool wide;
             const char *opcode;
-            if (lhs >= fn->value_count || rhs >= fn->value_count ||
-                !minic_lp64_scalar_integer_width(program, target, fn->values[lhs].type,
-                                      &lw, &ls) ||
-                !minic_lp64_scalar_integer_width(program, target, fn->values[rhs].type,
-                                      &rw, &rs) ||
-                lw != rw || (lw != 1U && lw != 2U && lw != 4U && lw != 8U) ||
-                ls != rs || minic_type_is_bool_integer(ins->type))
-                return minic_multi_direct_machine_reject(fn, "aarch64", name, reject_stage,
-                                           reject_block, reject_ins, __LINE__);
+            if (!minic_multi_direct_integer_binary_shape(
+                    program, target, fn, ins, &lw, &rw, &ls, &rs))
+                return minic_multi_direct_machine_reject(
+                    fn, "aarch64", name, reject_stage, reject_block,
+                    reject_ins, __LINE__);
             wide = lw == 8U;
             opcode = ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND
                 ? (wide ? "  and x9, x9, x10\n" : "  and w9, w9, w10\n")
@@ -1601,15 +1594,11 @@ bool minic_aarch64_emit_core_blocks(FILE *out, const MinicDirectLP64BlockContext
             size_t lw, rw;
             bool ls, rs, wide;
             const char *op;
-            if (lhs >= fn->value_count || rhs >= fn->value_count ||
-                !minic_lp64_scalar_integer_width(program, target, fn->values[lhs].type,
-                                      &lw, &ls) ||
-                !minic_lp64_scalar_integer_width(program, target, fn->values[rhs].type,
-                                      &rw, &rs) ||
-                lw != rw || (lw != 4U && lw != 8U) || ls != rs ||
-                !minic_type_equal(fn->values[lhs].type, ins->type))
-                return minic_multi_direct_machine_reject(fn, "aarch64", name, reject_stage,
-                                           reject_block, reject_ins, __LINE__);
+            if (!minic_multi_direct_integer_binary_shape(
+                    program, target, fn, ins, &lw, &rw, &ls, &rs))
+                return minic_multi_direct_machine_reject(
+                    fn, "aarch64", name, reject_stage, reject_block,
+                    reject_ins, __LINE__);
             wide = lw == 8U;
             if (fprintf(out, wide ? "  ldr x9, [sp, #%zu]\n"
                                   : "  ldr w9, [sp, #%zu]\n",
