@@ -5,14 +5,14 @@ set -eu
 : "${MINIC_CC:?set MINIC_CC to minic-cc}"
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT HUP INT TERM
+# A .i file is already preprocessed: the MiniC raw-C path intentionally
+# does not rerun C comment stripping. Keep oracle explanation in shell code.
+# Exercise binary32/64 arithmetic, IEEE unordered comparisons and numeric casts.
 cat >"$work/conversions.i" <<'SRC'
 static unsigned long d_to_u64(double x) { return (unsigned long)x; }
 static float one_half(void) { return 1.5f; }
 static float minus_zero(void) { return -0.0f; }
 static double half(void) { return 0.5; }
-/* This oracle follows the whole FP Core path into target-owned instructions:
- * binary32/64 arithmetic, ordered comparisons (including unordered NaN),
- * signed/unsigned conversions, and SSE/LP64D-sized SSA writes. */
 static int fp_machine_family(void) {
     volatile float f = 1.25f, g = 2.5f;
     volatile double a = 5.5, b = 1.25;
