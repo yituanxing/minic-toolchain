@@ -9,6 +9,9 @@
  * widths, aggregate operations, overflow arithmetic and call psABI.
  * A shared frontend/Core semantic invariant is NOT an ISA capability.
  * Never rewrite an unsupported operation as successful lowering. */
+/* Shared RV64 admissibility of machine-representable scalars; no liveness dependency. */
+bool minic_riscv64_scalar_type(MinicType);
+
 bool minic_riscv64_core_integer_type_is_signed(const MinicCoreFunction *function,
                                         MinicType type,
                                         bool *is_signed);

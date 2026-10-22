@@ -1,9 +1,16 @@
 #include "target/riscv64/legalize.h"
 #include "target/riscv64/abi.h"
-#include "target/riscv64/object_liveness.h"
 #include "target/data_layout.h"
 #include <stdint.h>
 #include <limits.h>
+
+/* Original target scalar gate remains shared by RV64 object analysis
+ * and instruction-admission queries. */
+bool minic_riscv64_scalar_type(MinicType type) {
+    return minic_type_is_integer(type) || minic_type_is_pointer(type) ||
+           minic_type_is_float(type) || minic_type_is_double(type) ||
+           minic_type_is_long_double(type);
+}
 
 /* Existing production RV64 instruction and calling-convention legal gates.
  * Moved from core_codegen.c without changing any comparisons or fallbacks.
