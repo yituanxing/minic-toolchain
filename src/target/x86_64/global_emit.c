@@ -37,13 +37,7 @@ static bool x86_emit_relocation(FILE *out, const MinicC0Program *program,
         return label != NULL && label->kind == MINIC_STATEMENT_LABEL &&
                fprintf(out, "  %s .Luser_%zu\n", directive, reloc->target_id) >= 0;
     }
-    if (reloc->target_kind == MINIC_GLOBAL_RELOCATION_OBJECT) {
-        const MinicGlobalObject *object = minic_c0_program_global_object(program, reloc->target_id);
-        if (object != NULL) name = object->name;
-    } else if (reloc->target_kind == MINIC_GLOBAL_RELOCATION_FUNCTION) {
-        const MinicFunction *function = minic_c0_program_function(program, reloc->target_id);
-        if (function != NULL) name = minic_c0_function_symbol_name(function);
-    }
+    name = minic_multi_global_relocation_target_name(program, reloc);
     if (name == NULL || name[0] == '\0' ||
         !minic_data_layout_global_relocation_target_addend(target->data_layout,
                                                            program, reloc, &addend)) return false;

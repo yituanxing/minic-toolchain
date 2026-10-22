@@ -125,28 +125,6 @@ static bool minic_riscv64_emit_zero_bytes(FILE *file, size_t size) {
     return size == 0U || fprintf(file, "  .zero %zu\n", size) >= 0;
 }
 
-static const char *
-minic_riscv64_global_relocation_target_name(const MinicC0Program *program,
-                                            const MinicGlobalRelocation *relocation) {
-    if (program == NULL || relocation == NULL) {
-        return NULL;
-    }
-    if (relocation->target_kind == MINIC_GLOBAL_RELOCATION_OBJECT) {
-        const MinicGlobalObject *target;
-
-        target = minic_c0_program_global_object(program, relocation->target_id);
-        return target != NULL && target->name_length != 0U ? target->name : NULL;
-    }
-    if (relocation->target_kind == MINIC_GLOBAL_RELOCATION_FUNCTION) {
-        const MinicFunction *target;
-
-        target = minic_c0_program_function(program, relocation->target_id);
-        return target != NULL && target->name_length != 0U ? minic_c0_function_symbol_name(target)
-                                                           : NULL;
-    }
-    return NULL;
-}
-
 static bool minic_riscv64_emit_symbol_value(FILE *file,
                                             const MinicC0Program *program,
                                             const MinicGlobalRelocation *relocation,
@@ -166,7 +144,7 @@ static bool minic_riscv64_emit_symbol_value(FILE *file,
         return label != NULL && label->kind == MINIC_STATEMENT_LABEL &&
                fprintf(file, "  %s .Luser_%zu\n", directive, relocation->target_id) >= 0;
     }
-    target_name = minic_riscv64_global_relocation_target_name(program, relocation);
+    target_name = minic_multi_global_relocation_target_name(program, relocation);
     if (target_name == NULL || target_name[0] == '\0' ||
         !minic_data_layout_global_relocation_target_addend(
             minic_default_data_layout(), program, relocation, &target_addend)) {
@@ -751,22 +729,32 @@ static bool minic_riscv64_emit_constant_value(FILE *file,
     return false;
 }
 
+/* A fully emitted recursive initializer must consume every original
+ * flattened value and relocation exactly once, with the DataLayout extent.
+ * Record fast-path eligibility remains separate from this traversal. */
+static bool minic_riscv64_emit_complete_recursive_global(
+    FILE *file, const MinicC0Program *program, const MinicGlobalObject *object) {
+    size_t object_alignment, storage_size, emitted_size;
+    size_t initializer_index = 0U, relocation_index = 0U;
+    if (file == NULL || program == NULL || object == NULL ||
+        !minic_data_layout_global_object(
+            minic_default_data_layout(), program, object,
+            &storage_size, &object_alignment))
+        return false;
+    (void)object_alignment;
+    if (!minic_riscv64_emit_constant_value(
+            file, program, object, object->type,
+            &initializer_index, &relocation_index, &emitted_size))
+        return false;
+    return initializer_index == object->initializer_count &&
+           relocation_index == object->relocation_count &&
+           emitted_size == storage_size;
+}
+
 static bool minic_riscv64_emit_record_values(FILE *file,
                                              const MinicC0Program *program,
                                              const MinicGlobalObject *object) {
-    size_t object_alignment;
-    size_t storage_size;
-
-    if (!minic_data_layout_global_object(
-            minic_default_data_layout(), program, object, &storage_size, &object_alignment)) {
-        return false;
-    }
-    (void)object_alignment;
-
     const MinicRecord *record;
-    size_t emitted_size;
-    size_t initializer_index;
-    size_t relocation_index;
 
     if (file == NULL || program == NULL || object == NULL || !minic_type_is_record(object->type) ||
         object->is_zero_initialized) {
@@ -806,18 +794,7 @@ static bool minic_riscv64_emit_record_values(FILE *file,
             return minic_riscv64_emit_direct_record_values(file, program, object, record);
         }
     }
-    initializer_index = 0U;
-    relocation_index = 0U;
-    emitted_size = 0U;
-    return minic_riscv64_emit_constant_value(file,
-                                             program,
-                                             object,
-                                             object->type,
-                                             &initializer_index,
-                                             &relocation_index,
-                                             &emitted_size) &&
-           initializer_index == object->initializer_count &&
-           relocation_index == object->relocation_count && emitted_size == storage_size;
+    return minic_riscv64_emit_complete_recursive_global(file, program, object);
 }
 
 static bool minic_riscv64_array_uses_recursive_initializer(
@@ -833,34 +810,12 @@ static bool minic_riscv64_array_uses_recursive_initializer(
             minic_type_is_array(array_type->element_type));
 }
 
-static bool minic_riscv64_emit_recursive_array_values(FILE *file,
-                                                      const MinicC0Program *program,
-                                                      const MinicGlobalObject *object) {
-    size_t object_alignment;
-    size_t storage_size;
-    size_t emitted_size;
-    size_t initializer_index;
-    size_t relocation_index;
-
-    if (file == NULL || program == NULL || object == NULL || object->is_zero_initialized ||
-        !minic_type_is_array(object->type) ||
-        !minic_data_layout_global_object(
-            minic_default_data_layout(), program, object, &storage_size, &object_alignment)) {
+static bool minic_riscv64_emit_recursive_array_values(
+    FILE *file, const MinicC0Program *program, const MinicGlobalObject *object) {
+    if (file == NULL || program == NULL || object == NULL ||
+        object->is_zero_initialized || !minic_type_is_array(object->type))
         return false;
-    }
-    (void)object_alignment;
-    initializer_index = 0U;
-    relocation_index = 0U;
-    emitted_size = 0U;
-    return minic_riscv64_emit_constant_value(file,
-                                             program,
-                                             object,
-                                             object->type,
-                                             &initializer_index,
-                                             &relocation_index,
-                                             &emitted_size) &&
-           initializer_index == object->initializer_count &&
-           relocation_index == object->relocation_count && emitted_size == storage_size;
+    return minic_riscv64_emit_complete_recursive_global(file, program, object);
 }
 
 bool minic_riscv64_emit_file_asm(FILE *file, const MinicFileAsm *file_asm) {
@@ -995,19 +950,9 @@ bool minic_riscv64_emit_global_object(FILE *file,
         if (fprintf(file, object->is_weak ? ".weak %s\n" : ".globl %s\n", object->name) < 0) {
             return false;
         }
-        if (object->visibility != MINIC_SYMBOL_VISIBILITY_DEFAULT) {
-            const char *visibility_directive;
-
-            visibility_directive =
-                object->visibility == MINIC_SYMBOL_VISIBILITY_HIDDEN      ? ".hidden"
-                : object->visibility == MINIC_SYMBOL_VISIBILITY_INTERNAL  ? ".internal"
-                : object->visibility == MINIC_SYMBOL_VISIBILITY_PROTECTED ? ".protected"
-                                                                          : NULL;
-            if (visibility_directive == NULL ||
-                fprintf(file, "%s %s\n", visibility_directive, object->name) < 0) {
-                return false;
-            }
-        }
+        if (!minic_multi_emit_elf_symbol_visibility(
+                file, object->visibility, object->name))
+            return false;
     }
     if (fprintf(file,
                 ".type %s, @object\n"

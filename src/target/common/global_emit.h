@@ -40,6 +40,10 @@ bool minic_multi_emit_flexible_record_global(
 bool minic_multi_emit_simple_global(
     FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicGlobalObject *object, MinicMultiRelocEmitter emit_relocation);
+/* Resolve function/object AST identity for target-owned ELF relocations. */
+const char *minic_multi_global_relocation_target_name(
+    const MinicC0Program *program, const MinicGlobalRelocation *relocation);
+
 bool minic_multi_emit_elf_relocation(
     FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicGlobalRelocation *relocation, size_t width);
