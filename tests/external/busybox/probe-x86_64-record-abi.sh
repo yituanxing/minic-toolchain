@@ -7,6 +7,11 @@ mkdir -p "$scratch"
 cat > "$scratch/abi.c" <<'SOURCE'
 #include <stdlib.h>
 #include <stdio.h>
+/* Upstream libsepol callback argument: format annotates the function type,
+ * not the pointer-object. Parse the original GNU function-pointer grammar. */
+extern void bind_callback(void (*fn)(void *, const char *, ...)
+    __attribute__((format(printf, 2, 3))), void *context);
+static const char *const_provider(void) { return "GNU"; }
 struct large { unsigned long a, b, c; unsigned char tail[5]; };
 static unsigned long receive_by_value(struct large x, long bonus)
 {
@@ -18,12 +23,15 @@ int main(void)
 {
     struct large x;
     div_t pair = div(103, 9);
+    char *legacy_security_context;
+    legacy_security_context = const_provider();
     x.a = 11; x.b = 13; x.c = 17;
     x.tail[0] = 2; x.tail[1] = 3; x.tail[2] = 4;
     x.tail[3] = 5; x.tail[4] = 7;
-    printf("sysv-record %d:%d %lu\n", pair.quot, pair.rem,
-           receive_by_value(x, 19));
-    return (pair.quot != 11 || pair.rem != 4
+    printf("sysv-record %d:%d %lu %c\n", pair.quot, pair.rem,
+           receive_by_value(x, 19), legacy_security_context[0]);
+    return (legacy_security_context[0] != 'G' ||
+            pair.quot != 11 || pair.rem != 4
             || receive_by_value(x, 19) != 163UL);
 }
 SOURCE
@@ -35,4 +43,4 @@ cc -no-pie "$scratch/abi.o" -o "$scratch/minic"
 "$scratch/gnu" > "$scratch/gnu.stdout"
 "$scratch/minic" > "$scratch/minic.stdout"
 cmp "$scratch/gnu.stdout" "$scratch/minic.stdout"
-echo 'X86_SYSV_RECORD_ABI=PASS libc_div_t=RAX 32B_record_by_value=STACK GNU_runtime=byte_exact'
+echo 'X86_SYSV_RECORD_ABI=PASS libc_div_t=RAX 32B_record_by_value=STACK GNU_const_pointer_compat=1 callback_format_attribute=1 runtime_byte_exact=1'

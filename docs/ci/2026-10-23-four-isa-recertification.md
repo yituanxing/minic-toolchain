@@ -118,3 +118,17 @@ repeat GNU/QEMU 581/581 acceptance on an ABI change that only affects x86;
 main's x86 strict and original BusyBox gates remain in place. All shared
 frontend, Core, compiler, target-common, and Linux-source path changes still
 trigger the respective owner suites. No historical artifact/cache was deleted.
+
+## 2026-10-23 x86 BusyBox ABI batch result
+
+After commit `6d6400b`, the unchanged GNU BusyBox 1.36.1 all-eligible
+upstream Kbuild passed its full and mixed runtime oracle with **587/593 C
+owners from MiniC** and **6 GCC C fallbacks**. Two substantive x86 SysV gaps
+are closed: the call to libc `div()` returning an 8-byte INTEGER-class
+`div_t` aggregate via RAX and `service(struct stat)` carrying a >16-byte
+MEMORY-class record by value on the stack. Dedicated GCC differential
+`X86_SYSV_RECORD_ABI=PASS` validates both, and existing 11 original BusyBox
+Kbuild fixtures remain byte-identical. Next distinct failure families are
+`context_str()` const qualifier downgrade in two SELinux files,
+`sepol_set_callback` callback format declarator, x86 asm clobbers, and Core
+support for `cpuid` and variadic `bb_verror_msg`.

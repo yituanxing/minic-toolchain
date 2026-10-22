@@ -277,13 +277,19 @@ static bool consume_parameter_declarator_attribute(MinicParser *parser,
                                                    void *opaque_context) {
     const MinicAttributeDescriptor *descriptor;
 
-    (void)opaque_context;
+    const bool *function_parameter = (const bool *)opaque_context;
     if (parser == NULL || attribute == NULL) {
         return false;
     }
     descriptor = attribute->descriptor;
+    /* GNU function-pointer declarator parameters may carry attributes of
+     * the referenced FUNCTION (e.g. libsepol callback format(printf,...)).
+     * Those are informational/diagnostic, not an attribute on the pointer
+     * OBJECT. Never admit a function attribute for an ordinary scalar. */
     if (descriptor == NULL ||
-        !minic_attribute_allowed_on(descriptor, MINIC_ATTRIBUTE_TARGET_OBJECT)) {
+        (!minic_attribute_allowed_on(descriptor, MINIC_ATTRIBUTE_TARGET_OBJECT) &&
+         !(function_parameter != NULL && *function_parameter &&
+           minic_attribute_allowed_on(descriptor, MINIC_ATTRIBUTE_TARGET_FUNCTION)))) {
         minic_parser_error(parser, "unsupported GNU parameter declarator attribute");
         return false;
     }
@@ -296,14 +302,16 @@ static bool consume_parameter_declarator_attribute(MinicParser *parser,
 }
 
 static bool apply_parameter_declarator_attribute_list(MinicParser *parser,
-                                                      const MinicParsedAttributeList *attributes) {
+                                                      const MinicParsedAttributeList *attributes,
+                                                      const bool *function_parameter) {
     size_t index;
 
     if (parser == NULL || attributes == NULL) {
         return false;
     }
     for (index = 0U; index < attributes->count; ++index) {
-        if (!consume_parameter_declarator_attribute(parser, &attributes->values[index], NULL)) {
+        if (!consume_parameter_declarator_attribute(
+                parser, &attributes->values[index], (void *)function_parameter)) {
             return false;
         }
     }
@@ -457,10 +465,13 @@ bool minic_parser_parse_parameter_list(MinicParser *parser,
             return false;
         }
 
-        if (!apply_parameter_declarator_attribute_list(parser, &leading_attributes) ||
-            !apply_parameter_declarator_attribute_list(parser, &post_type_attributes) ||
+        if (!apply_parameter_declarator_attribute_list(
+                parser, &leading_attributes, &is_function_pointer_parameter) ||
+            !apply_parameter_declarator_attribute_list(
+                parser, &post_type_attributes, &is_function_pointer_parameter) ||
             !minic_parser_parse_gnu_attribute_lists(
-                parser, consume_parameter_declarator_attribute, NULL)) {
+                parser, consume_parameter_declarator_attribute,
+                &is_function_pointer_parameter)) {
             return false;
         }
 
