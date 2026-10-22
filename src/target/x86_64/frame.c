@@ -34,6 +34,9 @@ bool minic_x86_64_frame_init(const MinicC0Program *program, const MinicTargetInf
         fn->value_count > (size_t)INT32_MAX / 8U) return false;
     if (!minic_core_function_facts_analyze(fn, &facts)) return false;
     (void)memset(frame, 0, sizeof(*frame));
+    if (!minic_x86_64_plan_incoming_arguments(
+            program, target, fn, &frame->incoming_arguments))
+        return false;
     if (!minic_core_object_storage_plan_build(
             program, target->data_layout, fn, &frame->object_storage))
         return false;
@@ -56,9 +59,7 @@ bool minic_x86_64_frame_init(const MinicC0Program *program, const MinicTargetInf
     /* Discover semantic va_start sites from Core. A VA cursor is not an RV64
      * sequential argument pointer under SysV x86-64. */
     if (frame->varargs_count != 0U) {
-        size_t count = 0U, gp_used = 0U, fp_used = 0U, stack_used = 0U;
-        size_t width;
-        bool ignored_signed;
+        size_t count = 0U, gp_used, fp_used, stack_used;
         if (frame->varargs_count > SIZE_MAX / sizeof(*frame->varargs_results) ||
             (frame->varargs_results = (MinicCoreValueId *)calloc(
                  frame->varargs_count, sizeof(*frame->varargs_results))) == NULL)
@@ -70,18 +71,18 @@ bool minic_x86_64_frame_init(const MinicC0Program *program, const MinicTargetInf
                 frame->varargs_results[count++] = ins->result;
             }
         }
+        /* Variadic frame support currently admits only scalar named
+         * parameters; reuse the already-classified SysV argument locations
+         * instead of maintaining a second register-bank cursor. */
         for (i = 0U; i < fn->parameter_count; ++i) {
-            MinicType p = fn->parameter_types[i];
-            if (minic_type_is_double(p) || minic_type_is_float(p)) {
-                if (fp_used < 8U) ++fp_used;
-                else ++stack_used;
-            } else {
-                if (!minic_x86_64_scalar_width(program, target, p, &width, &ignored_signed))
-                    return false; /* Aggregate SysV classification not yet implemented. */
-                if (gp_used < 6U) ++gp_used;
-                else ++stack_used;
-            }
+            MinicX86ArgClass kind = frame->incoming_arguments.locations[i].kind;
+            if (kind != MINIC_X86_ARG_INTEGER &&
+                kind != MINIC_X86_ARG_SSE)
+                return false;
         }
+        gp_used = frame->incoming_arguments.end.gp_used;
+        fp_used = frame->incoming_arguments.end.fp_used;
+        stack_used = frame->incoming_arguments.end.stack_slots;
         if (stack_used > ((size_t)INT32_MAX - 16U) / 8U ||
             value_bytes > (size_t)INT32_MAX - 176U ||
             !minic_x86_64_align(value_bytes + 176U, 16U, &frame->varargs_regsave_offset) ||
@@ -151,6 +152,7 @@ void minic_x86_64_frame_destroy(MinicX86Frame *frame) {
     if (frame == NULL) return;
     free(frame->value_offsets);
     free(frame->object_offsets);
+    minic_x86_64_argument_plan_destroy(&frame->incoming_arguments);
     minic_core_object_storage_plan_destroy(&frame->object_storage);
     free(frame->varargs_results);
     (void)memset(frame, 0, sizeof(*frame));

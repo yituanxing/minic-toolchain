@@ -46,71 +46,85 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
         return x86_normalize(out, program, target, ins->type) &&
                x86_value_store(out, frame, ins->result);
     case MINIC_CORE_INSTRUCTION_PARAMETER: {
-        static const char *const regs[] = {"%rdi", "%rsi", "%rdx", "%rcx", "%r8", "%r9"};
-        size_t gpr, xmm, stack_index;
-        const size_t position = ins->value.parameter_index;
-        if (!minic_x86_64_incoming_cursor(program, target, fn, position,
-                                 &gpr, &xmm, &stack_index))
+        static const char *const regs[] = {
+            "%rdi", "%rsi", "%rdx", "%rcx", "%r8", "%r9"};
+        size_t position = ins->value.parameter_index;
+        const MinicX86ArgLocation *location;
+        if (position >= frame->incoming_arguments.argument_count ||
+            frame->incoming_arguments.locations == NULL)
             return false;
+        location = &frame->incoming_arguments.locations[position];
         if (minic_type_is_long_double(ins->type)) {
-            if (fprintf(out, "  fldt %zu(%%rbp)\n",
-                        16U + stack_index * 8U) < 0)
+            if (location->kind != MINIC_X86_ARG_X87_MEMORY ||
+                fprintf(out, "  fldt %zu(%%rbp)\n",
+                        16U + location->stack_index * 8U) < 0)
                 return false;
             return x86_x87_store(out, frame, ins->result);
         }
         if (minic_type_is_double(ins->type) || minic_type_is_float(ins->type)) {
-            if (xmm < 8U) {
+            if (location->kind != MINIC_X86_ARG_SSE) return false;
+            if (!location->on_stack) {
                 if (fprintf(out, minic_type_is_double(ins->type)
                              ? "  movq %%xmm%zu, %%rax\n"
-                             : "  movd %%xmm%zu, %%eax\n", xmm) < 0)
+                             : "  movd %%xmm%zu, %%eax\n",
+                            location->fp_index) < 0)
                     return false;
             } else if (fprintf(out, "  movq %zu(%%rbp), %%rax\n",
-                               16U + stack_index * 8U) < 0) return false;
+                               16U + location->stack_index * 8U) < 0)
+                return false;
         } else {
-            if (gpr < 6U) {
-                if (fprintf(out, "  movq %s, %%rax\n", regs[gpr]) < 0)
+            if (location->kind != MINIC_X86_ARG_INTEGER) return false;
+            if (!location->on_stack) {
+                if (fprintf(out, "  movq %s, %%rax\n",
+                            regs[location->gp_index]) < 0)
                     return false;
             } else if (fprintf(out, "  movq %zu(%%rbp), %%rax\n",
-                               16U + stack_index * 8U) < 0) return false;
+                               16U + location->stack_index * 8U) < 0)
+                return false;
             if (!x86_normalize(out, program, target, ins->type)) return false;
         }
         return x86_value_store(out, frame, ins->result);
     }
     case MINIC_CORE_INSTRUCTION_PARAMETER_OBJECT: {
-        static const char *const regs[] = {"%rdi","%rsi","%rdx","%rcx","%r8","%r9"};
-        size_t gpr, xmm, stack_index, record_bytes = 0U;
-        size_t position = ins->value.parameter_object.parameter_index;
-        MinicCoreObjectId object = ins->value.parameter_object.object_id;
-        bool one_gp;
-        if (position >= fn->parameter_count || object >= fn->object_count ||
-            !minic_x86_64_incoming_cursor(program, target, fn, position,
-                                 &gpr, &xmm, &stack_index) ||
-            !minic_type_equal(fn->objects[object].type, fn->parameter_types[position]))
+        static const char *const regs[] = {
+            "%rdi", "%rsi", "%rdx", "%rcx", "%r8", "%r9"};
+        const size_t position = ins->value.parameter_object.parameter_index;
+        const MinicCoreObjectId object = ins->value.parameter_object.object_id;
+        const MinicX86ArgLocation *location;
+        if (position >= frame->incoming_arguments.argument_count ||
+            frame->incoming_arguments.locations == NULL ||
+            object >= fn->object_count ||
+            !minic_type_equal(fn->objects[object].type,
+                              fn->parameter_types[position]))
             return false;
-        one_gp = minic_x86_64_one_gp_record(program, target, fn->parameter_types[position],
-                                   &record_bytes);
-        if (!one_gp &&
-            !minic_x86_64_two_gp_record(program, target, fn->parameter_types[position]))
+        location = &frame->incoming_arguments.locations[position];
+        if (location->kind != MINIC_X86_ARG_RECORD_ONE_GP &&
+            location->kind != MINIC_X86_ARG_RECORD_TWO_GP)
             return false;
-        if (!x86_object_address(out, frame, object, "%r10")) return false;
-        (void)xmm;
-        if (one_gp) {
-            if (gpr < 6U) {
-                if (fprintf(out, "  movq %s, %%rax\n", regs[gpr]) < 0) return false;
+        if (!x86_object_address(out, frame, object, "%r10"))
+            return false;
+        if (location->kind == MINIC_X86_ARG_RECORD_ONE_GP) {
+            if (!location->on_stack) {
+                if (fprintf(out, "  movq %s, %%rax\n",
+                            regs[location->gp_index]) < 0) return false;
             } else if (fprintf(out, "  movq %zu(%%rbp), %%rax\n",
-                               16U + stack_index * 8U) < 0) return false;
-            return x86_one_gp_store(out, record_bytes);
+                               16U + location->stack_index * 8U) < 0)
+                return false;
+            return x86_one_gp_store(out, location->record_bytes);
         }
-        if (gpr <= 4U)
+        if (!location->on_stack)
             return fprintf(out,
                 "  movq %s, 0(%%r10)\n"
-                "  movq %s, 8(%%r10)\n", regs[gpr], regs[gpr + 1U]) >= 0;
+                "  movq %s, 8(%%r10)\n",
+                regs[location->gp_index],
+                regs[location->gp_index + 1U]) >= 0;
         return fprintf(out,
             "  movq %zu(%%rbp), %%rax\n"
             "  movq %%rax, 0(%%r10)\n"
             "  movq %zu(%%rbp), %%rax\n"
             "  movq %%rax, 8(%%r10)\n",
-            16U + stack_index * 8U, 24U + stack_index * 8U) >= 0;
+            16U + location->stack_index * 8U,
+            24U + location->stack_index * 8U) >= 0;
     }
     case MINIC_CORE_INSTRUCTION_GLOBAL_ADDRESS:
         if (ins->value.global_id >= fn->global_count ||
