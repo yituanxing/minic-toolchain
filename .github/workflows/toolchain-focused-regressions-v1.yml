@@ -22,6 +22,11 @@ on:
       - '.github/workflows/linux-runtime-gcc-baseline.yml'
       - '!**/*.md'
       - '!tools/ci/**'
+      # x86-only implementation and dedicated ABI probe are covered by
+      # MiniC Native Strict Gate + scoped BusyBox acceptance. Do not rerun
+      # the two new ISA 581-owner GNU/QEMU matrix for an x86-only edit.
+      - '!src/target/x86_64/**'
+      - '!tests/external/busybox/probe-x86_64-record-abi.sh'
   workflow_dispatch:
     inputs:
       mode:

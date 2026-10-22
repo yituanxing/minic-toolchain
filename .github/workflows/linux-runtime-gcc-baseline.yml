@@ -15,7 +15,16 @@ on:
       - 'docs/ci/native-runtime44-perf4-validated-sha1.txt'
       # Single canonical product line: source ownership must trigger its
       # existing Linux oracle, not require pushing onto obsolete agent refs.
-      - 'src/**'
+      # RV64 Linux ownership only: x86/AArch64/LoongArch64 ISA emitter edits
+      # cannot affect this compiler's RV64 C or Linux QEMU ABI.
+      - 'src/compiler/**'
+      - 'src/core/**'
+      - 'src/frontend/**'
+      - 'src/target/riscv64/**'
+      - 'src/target/common/**'
+      - 'src/target/backend*'
+      - 'src/target/data_layout*'
+      - 'src/target/target_info*'
       - 'include/minic/**'
       - 'tools/minic/**'
       - 'tools/minic-cc/**'

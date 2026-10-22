@@ -103,3 +103,18 @@ After current RV64 Linux QEMU P1 and the other architectures' six real-software
 tests pass, repair any residual BusyBox original-all-C-owner gaps on x86-64.
 Then requalify original BusyBox AArch64 and LoongArch64 and begin the Linux
 cross-target bring-up **without silently falling back to GCC for C ownership**.
+
+## CI scope split after SysV ABI cleanup
+
+`minic-capability-recertify.yml` has one automatically triggered x86
+BusyBox/ABI job on x86 target and exact BusyBox probe edits. The separate six
+real-software projects already passed in #39824576716 and remain selectable
+on demand with workflow_dispatch `mode=software` or `mode=all`.
+The RV64 Linux seven-shard workflow now listens to shared MiniC and RV64
+backend owner paths rather than `src/**`; x86/AArch64/LoongArch64-only emitter
+edits no longer instantiate an irrelevant **skipped** Linux job. The T1
+multi-architecture workflow excludes pure x86 target edits, avoiding costly
+repeat GNU/QEMU 581/581 acceptance on an ABI change that only affects x86;
+main's x86 strict and original BusyBox gates remain in place. All shared
+frontend, Core, compiler, target-common, and Linux-source path changes still
+trigger the respective owner suites. No historical artifact/cache was deleted.
