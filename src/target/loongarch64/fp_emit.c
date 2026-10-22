@@ -3,6 +3,7 @@
 #include "target/common/lp64_scalar.h"
 #include "target/loongarch64/frame_emit.h"
 #include <stdint.h>
+#include <inttypes.h>
 #include <stdio.h>
 
 #define emit_sp_mem(_out, _op, _reg, _offset) \
@@ -15,16 +16,36 @@
 bool minic_loongarch64_emit_fp_instruction(
     FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
-    size_t offset, size_t id, bool dynamic_frame, bool (*normalize)(FILE *, size_t, bool),
+    size_t offset, size_t id, bool dynamic_frame, const MinicLP64FramePlan *frame_plan,
+    bool (*normalize)(FILE *, size_t, bool),
     bool *needs_gp_store) {
     if (out == NULL || program == NULL || target == NULL ||
-        fn == NULL || ins == NULL || normalize == NULL ||
+        fn == NULL || ins == NULL || frame_plan == NULL || normalize == NULL ||
         needs_gp_store == NULL)
         return false;
     *needs_gp_store = false;
     switch (ins->kind) {
         /* LoongArch FCC ordered comparisons naturally reject unordered
          * operands: fcmp.ceq/clt/cle is false if either operand is NaN. */
+        case MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT:
+            if (minic_type_is_long_double(ins->type)) {
+                size_t dst;
+                if (!minic_lp64_frame_plan_wide_slot(frame_plan, ins->result, &dst) ||
+                    fprintf(out, "  li.d $t0, 0x%016" PRIx64 "\n",
+                            ins->value.floating128_bits.low) < 0 ||
+                    !emit_sp_mem(out, "st.d", "$t0", dst) ||
+                    fprintf(out, "  li.d $t0, 0x%016" PRIx64 "\n",
+                            ins->value.floating128_bits.high) < 0 ||
+                    !emit_sp_mem(out, "st.d", "$t0", dst + 8U))
+                    return false;
+                return true;
+            }
+            if ((!minic_type_is_double(ins->type) &&
+                 !minic_type_is_float(ins->type)) ||
+                fprintf(out, "  li.d $t0, 0x%016" PRIx64 "\n",
+                        ins->value.floating_bits) < 0) return false;
+            *needs_gp_store = true;
+            return true;
         case MINIC_CORE_INSTRUCTION_DOUBLE_EQUAL:
         case MINIC_CORE_INSTRUCTION_DOUBLE_LESS:
         case MINIC_CORE_INSTRUCTION_DOUBLE_LESS_EQUAL: {
