@@ -4,6 +4,7 @@
 #include "frontend/ast.h"
 #include "target/riscv64/asm_plan.h"
 #include "target/riscv64/abi.h"
+#include "target/riscv64/object_liveness.h"
 #include "target/riscv64/function_abi_plan.h"
 #include "target/common/core_object_storage.h"
 #include <stdbool.h>
@@ -17,6 +18,7 @@ typedef struct MinicRiscv64CoreFrame {
     size_t value_slot_count;
     size_t *object_offsets;
     MinicCoreObjectStoragePlan object_storage;
+    MinicRiscv64ObjectReusePlan object_reuse;
     size_t *value_offsets;
     MinicRiscv64AbiArgumentLocation *parameter_locations;
     size_t parameter_location_count;
@@ -55,7 +57,7 @@ bool minic_riscv64_core_frame_initialize(
  * locations to the frame; the input plan becomes empty on success. */
 bool minic_riscv64_core_frame_initialize_prepared(
     const MinicC0Program *, const MinicCoreFunction *,
-    MinicRiscv64CoreFrame *, MinicRiscv64FunctionAbiPlan *);
+    MinicRiscv64CoreFrame *, MinicRiscv64FunctionAbiPlan *, bool);
 void minic_riscv64_core_frame_destroy(MinicRiscv64CoreFrame *);
 bool minic_riscv64_core_frame_parameter_location(
     const MinicRiscv64CoreFrame *, size_t, MinicRiscv64AbiArgumentLocation *);

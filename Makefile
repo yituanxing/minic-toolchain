@@ -159,6 +159,8 @@ MINIC_SOURCES := \
 	src/target/riscv64/asm_plan.c \
 	src/target/riscv64/spill_layout.c \
 	src/target/riscv64/object_liveness.c \
+	src/target/riscv64/object_intervals.c \
+	src/target/riscv64/record_snapshot.c \
 	src/target/riscv64/legalize.c \
 	src/target/riscv64/frame_requirements.c \
 	src/target/riscv64/codegen_function.c \

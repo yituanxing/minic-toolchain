@@ -31,7 +31,8 @@ static bool align_up(size_t value, size_t alignment, size_t *result) {
 
 bool minic_riscv64_core_frame_initialize_prepared(
     const MinicC0Program *program, const MinicCoreFunction *function,
-    MinicRiscv64CoreFrame *frame, MinicRiscv64FunctionAbiPlan *abi_plan) {
+    MinicRiscv64CoreFrame *frame, MinicRiscv64FunctionAbiPlan *abi_plan,
+    bool crossblock_enabled) {
     size_t object_index;
     size_t storage_size;
     size_t required_size;
@@ -51,6 +52,7 @@ bool minic_riscv64_core_frame_initialize_prepared(
     frame->has_named_parameter_cursor = false;
     frame->value_slot_count = 0U;
     frame->object_storage = (MinicCoreObjectStoragePlan){0};
+    frame->object_reuse = (MinicRiscv64ObjectReusePlan){0};
     if (!minic_core_function_facts_analyze(function, &facts) ||
         !minic_core_object_storage_plan_build(
             program, minic_default_data_layout(), function,
@@ -69,12 +71,11 @@ bool minic_riscv64_core_frame_initialize_prepared(
     }
     storage_size = outgoing_argument_size;
     maximum_object_alignment = 16U;
-    if (!minic_riscv64_scalar_object_reuse_layout(program,
-                                         function,
-                                         MINIC_CORE_OBJECT_INVALID,
-                                         NULL,
-                                         NULL,
-                                         &scalar_reuse_pool_slots)) {
+    if (!minic_riscv64_object_reuse_plan_build(
+            program, function, crossblock_enabled, &frame->object_reuse) ||
+        !minic_riscv64_object_reuse_plan_get(
+            &frame->object_reuse, MINIC_CORE_OBJECT_INVALID,
+            NULL, NULL, &scalar_reuse_pool_slots)) {
         return false;
     }
     for (object_index = 0U; object_index < function->object_count; ++object_index) {
@@ -92,8 +93,8 @@ bool minic_riscv64_core_frame_initialize_prepared(
             bool scalar_reusable;
             size_t scalar_slot;
             size_t scalar_peak;
-            if (!minic_riscv64_scalar_object_reuse_layout(program,
-                                                 function,
+            if (!minic_riscv64_object_reuse_plan_get(
+                                                 &frame->object_reuse,
                                                  (MinicCoreObjectId)object_index,
                                                  &scalar_reusable,
                                                  &scalar_slot,
@@ -301,8 +302,8 @@ bool minic_riscv64_core_frame_initialize_prepared(
                 bool scalar_reusable;
                 size_t scalar_slot;
                 size_t scalar_peak;
-                if (!minic_riscv64_scalar_object_reuse_layout(program,
-                                                     function,
+                if (!minic_riscv64_object_reuse_plan_get(
+                                                     &frame->object_reuse,
                                                      (MinicCoreObjectId)cached_index,
                                                      &scalar_reusable,
                                                      &scalar_slot,
@@ -423,7 +424,7 @@ bool minic_riscv64_core_frame_initialize(
     const MinicC0Program *program, const MinicCoreFunction *function,
     MinicRiscv64CoreFrame *frame) {
     return minic_riscv64_core_frame_initialize_prepared(
-        program, function, frame, NULL);
+        program, function, frame, NULL, true);
 }
 
 void minic_riscv64_core_frame_destroy(MinicRiscv64CoreFrame *frame) {
@@ -431,7 +432,7 @@ void minic_riscv64_core_frame_destroy(MinicRiscv64CoreFrame *frame) {
         return;
     }
     minic_riscv64_asm_function_plan_destroy(&frame->asm_plan);
-    minic_riscv64_object_liveness_end_function();
+    minic_riscv64_object_reuse_plan_destroy(&frame->object_reuse);
     free(frame->value_offsets);
     frame->value_offsets = NULL;
     free(frame->parameter_locations);
