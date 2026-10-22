@@ -10,6 +10,9 @@ on:
     paths:
       - '.github/workflows/minic-capability-recertify.yml'
       - 'src/target/x86_64/**'
+      # Original GNU BusyBox SELinux callback/type compatibility owners.
+      - 'src/frontend/parser_statement.c'
+      - 'src/frontend/parser_function_parameters.c'
       - 'tests/external/busybox/allyes_sweep.py'
       - 'tests/external/busybox/probe-x86_64-record-abi.sh'
   workflow_dispatch:
