@@ -425,7 +425,7 @@ bool minic_multi_emit_recursive_record_global(
         !minic_multi_emit_recursive_global_value(
             out, program, target, object, object->type,
             &initializer_index, &relocation_index, &matched_union_selections,
-            &emitted_size, 0U, emit_relocation))
+            &emitted_size, 0U, emit_relocation, NULL))
         return false;
     return emitted_size == storage_size &&
            initializer_index == object->initializer_count &&
@@ -433,6 +433,73 @@ bool minic_multi_emit_recursive_record_global(
            matched_union_selections == object->union_selection_count;
 }
 
+
+/* Preflight must be side-effect free: a shape rejected here falls back to
+ * RV64's feature-complete bitfield/flexible/zero-sized specializations.
+ * No target calls a partial shared writer and then rewinds emitted bytes. */
+static bool minic_multi_recursive_shape_supported_at(
+    const MinicC0Program *program, MinicType type, unsigned int depth) {
+    if (program == NULL || depth > 32U)
+        return false;
+    if (minic_type_is_integer(type) || minic_type_is_pointer(type) ||
+        minic_type_is_float(type) || minic_type_is_double(type))
+        return true;
+    if (minic_type_is_array(type)) {
+        const MinicArrayType *array =
+            minic_c0_program_array_type(program, type.array_type_id);
+        return array != NULL && !array->is_zero_length &&
+               array->element_count != 0U &&
+               minic_multi_recursive_shape_supported_at(
+                   program, array->element_type, depth + 1U);
+    }
+    if (minic_type_is_record(type)) {
+        const MinicRecord *record = minic_c0_program_record(program, type.record_id);
+        size_t index;
+        if (record == NULL || !record->is_complete || record->field_count == 0U)
+            return false;
+        for (index = 0U; index < record->field_count; ++index) {
+            const MinicRecordField *field = minic_c0_record_field(record, index);
+            if (field == NULL || field->is_bit_field || field->is_flexible_array)
+                return false;
+            if (field->is_zero_length_array)
+                continue;
+            if (field->element_count == 0U ||
+                !minic_multi_recursive_shape_supported_at(
+                    program, field->type, depth + 1U))
+                return false;
+        }
+        return true;
+    }
+    return false;
+}
+
+bool minic_multi_recursive_shape_supported(
+    const MinicC0Program *program, MinicType type) {
+    return minic_multi_recursive_shape_supported_at(program, type, 0U);
+}
+
+bool minic_multi_emit_recursive_aggregate_global(
+    FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicGlobalObject *object, size_t storage_size,
+    MinicMultiRelocEmitter emit_relocation,
+    MinicMultiScalarBitsEmitter emit_bits) {
+    size_t initializer_index = 0U, relocation_index = 0U;
+    size_t matched_union_selections = 0U, emitted_size;
+    if (out == NULL || program == NULL || target == NULL || object == NULL ||
+        emit_relocation == NULL ||
+        (!minic_type_is_record(object->type) &&
+         !minic_type_is_array(object->type)) ||
+        !minic_multi_recursive_shape_supported(program, object->type) ||
+        !minic_multi_emit_recursive_global_value(
+            out, program, target, object, object->type,
+            &initializer_index, &relocation_index, &matched_union_selections,
+            &emitted_size, 0U, emit_relocation, emit_bits))
+        return false;
+    return emitted_size == storage_size &&
+           initializer_index == object->initializer_count &&
+           relocation_index == object->relocation_count &&
+           matched_union_selections == object->union_selection_count;
+}
 
 /* One shared recursive layout for arrays of records with nested array,
  * record and union fields. Keep the proven flat-array fast path for zlib
