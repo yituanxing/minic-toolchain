@@ -32,6 +32,9 @@ typedef struct MinicCoreLowerContext {
 
 /* Private source-to-Core expression families, deliberately not public ABI.
  * Their effectful CFG and scalar building primitives stay Core-owned. */
+MinicCoreLowerStatus minic_core_lower_try_statement_expression(
+    MinicCoreLowerContext *context, const MinicExpression *expression,
+    MinicCoreValueId *value_id, bool *handled);
 MinicCoreLowerStatus minic_core_lower_try_conditional(
     MinicCoreLowerContext *context, const MinicExpression *expression,
     MinicCoreValueId *value_id, bool *handled);

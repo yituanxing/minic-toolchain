@@ -592,3 +592,77 @@ MinicCoreLowerStatus minic_core_lower_try_sequenced(
     return MINIC_CORE_LOWER_OK;
 }
 
+/* GNU statement expression: AST block + optional tail expression -> Core
+ * effects and an optional result. Perform all tail/type admission before
+ * mutating Core blocks; lower the shared block exactly once. */
+MinicCoreLowerStatus minic_core_lower_try_statement_expression(
+    MinicCoreLowerContext *context, const MinicExpression *expression,
+    MinicCoreValueId *value_id, bool *handled) {
+    const MinicBlock *statement_block;
+    const MinicExpression *statement_result;
+    const MinicExpressionId result_id =
+        expression != NULL ? expression->value.statement_expression.result
+                           : MINIC_EXPRESSION_INVALID;
+    MinicCoreValueId result_value;
+    MinicCoreLowerStatus status;
+    MinicType result_type;
+    bool result_is_void;
+    bool terminated;
+
+    if (handled == NULL || context == NULL || expression == NULL || value_id == NULL ||
+        context->body == NULL || context->body->program == NULL ||
+        context->function == NULL)
+        return MINIC_CORE_LOWER_ERROR;
+    *handled = false;
+    if (expression->kind != MINIC_EXPRESSION_STATEMENT)
+        return MINIC_CORE_LOWER_OK;
+    *handled = true;
+
+    statement_block = minic_c0_program_block(
+        context->body->program, expression->value.statement_expression.block);
+    if (statement_block == NULL)
+        return MINIC_CORE_LOWER_ERROR;
+
+    result_is_void = minic_type_is_void(expression->type);
+    if (result_id == MINIC_EXPRESSION_INVALID) {
+        if (!result_is_void)
+            return MINIC_CORE_LOWER_ERROR;
+    } else {
+        /* Preserve the original scalar type admission before tail lookup. */
+        if (!result_is_void &&
+            !core_scalar_expression_value_type(context->body, expression, &result_type))
+            return MINIC_CORE_LOWER_UNSUPPORTED;
+        statement_result = minic_c0_program_expression(
+            context->body->program, result_id);
+        if (statement_result == NULL)
+            return MINIC_CORE_LOWER_ERROR;
+        if (result_is_void && !minic_type_is_void(statement_result->type))
+            return MINIC_CORE_LOWER_UNSUPPORTED;
+    }
+
+    status = minic_core_lower_internal_lower_block(context, statement_block, &terminated);
+    if (status != MINIC_CORE_LOWER_OK)
+        return status;
+    if (terminated)
+        return MINIC_CORE_LOWER_UNSUPPORTED;
+
+    if (result_id == MINIC_EXPRESSION_INVALID) {
+        *value_id = MINIC_CORE_VALUE_INVALID;
+        return MINIC_CORE_LOWER_OK;
+    }
+    status = lower_expression(context, result_id, &result_value);
+    if (status != MINIC_CORE_LOWER_OK)
+        return status;
+    if (result_is_void) {
+        if (result_value != MINIC_CORE_VALUE_INVALID)
+            return MINIC_CORE_LOWER_ERROR;
+        *value_id = MINIC_CORE_VALUE_INVALID;
+        return MINIC_CORE_LOWER_OK;
+    }
+    if (result_value >= context->function->value_count ||
+        !minic_type_equal(context->function->values[result_value].type, result_type))
+        return MINIC_CORE_LOWER_ERROR;
+    *value_id = result_value;
+    return MINIC_CORE_LOWER_OK;
+}
+
