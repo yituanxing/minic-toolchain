@@ -157,11 +157,13 @@ MINIC_SOURCES := \
 	src/target/aarch64/abi.c \
 	src/target/aarch64/codegen.c \
 	src/target/aarch64/block_emit.c \
+	src/target/aarch64/call_emit.c \
 	src/target/aarch64/integer_emit.c \
 	src/target/aarch64/fp_emit.c \
 	src/target/aarch64/asm_legalize.c \
 	src/target/loongarch64/codegen.c \
 	src/target/loongarch64/block_emit.c \
+	src/target/loongarch64/call_emit.c \
 	src/target/loongarch64/integer_emit.c \
 	src/target/loongarch64/fp_emit.c \
 	src/target/loongarch64/frame_emit.c \
