@@ -498,10 +498,14 @@ static bool lower_runtime_scalar_array_plan(MinicParser *parser,
                                             MinicType element_type,
                                             size_t element_count,
                                             MinicSourceSpan initializer_span,
-                                            const MinicArrayInitializerPlan *plan,
+                                            MinicArrayInitializerPlan *plan,
                                             const MinicExpressionId *action_values) {
     size_t action_id;
     size_t index;
+    if (!minic_array_initializer_plan_finalize(plan)) {
+        minic_parser_error(parser, "cannot resolve runtime scalar initializer ownership");
+        return false;
+    }
 
     for (index = 0U; index < element_count; ++index) {
         size_t owner;
@@ -532,11 +536,12 @@ static bool lower_runtime_scalar_array_plan(MinicParser *parser,
                                     parser, element_type, lowered_value_id, &lowered_value_id)) {
             return false;
         }
-        for (index = 0U; index < element_count; ++index) {
-            if (minic_array_initializer_plan_action_owns(plan, action_id, index) &&
-                !add_array_object_element_assignment(parser, base_id, index, lowered_value_id)) {
+        for (index = plan->final_first_by_action[action_id];
+             index != MINIC_INITIALIZER_ACTION_INVALID;
+             index = plan->final_next_by_index[index]) {
+            if (!add_array_object_element_assignment(
+                    parser, base_id, index, lowered_value_id))
                 return false;
-            }
         }
     }
     return true;
@@ -818,7 +823,7 @@ static bool lower_runtime_scalar_array_plan(MinicParser *parser,
                                             MinicType element_type,
                                             size_t element_count,
                                             MinicSourceSpan initializer_span,
-                                            const MinicArrayInitializerPlan *plan,
+                                            MinicArrayInitializerPlan *plan,
                                             const MinicExpressionId *action_values);
 
 static bool parse_inferred_runtime_array_initializer(MinicParser *parser,

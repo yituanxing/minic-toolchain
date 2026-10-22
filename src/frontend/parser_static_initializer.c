@@ -795,6 +795,10 @@ bool minic_parser_static_scalar_array_transaction(MinicParser *parser,
             goto done;
         }
     }
+    if (!minic_array_initializer_plan_finalize(&plan)) {
+        minic_parser_error(parser, "cannot resolve static scalar initializer ownership");
+        goto done;
+    }
     if (!grow_static_array_slots(parser, &final_slots, &final_capacity, extent)) {
         goto done;
     }
@@ -1257,6 +1261,10 @@ static bool parse_static_forward_array_initializer(MinicParser *parser,
         goto done;
     }
     extent = minic_array_initializer_plan_element_count(&plan);
+    if (!minic_array_initializer_plan_finalize(&plan)) {
+        minic_parser_error(parser, "cannot resolve static aggregate initializer ownership");
+        goto done;
+    }
     for (index = 0U; index < extent; ++index) {
         size_t owner;
 

@@ -1354,3 +1354,41 @@ int main(void) {
 }
 EOF
 check_exit statement_control_cfg_dataflow 42
+
+# GNU designated/ranged initializer precedence and evaluate-once contracts:
+# static scalars, static aggregate slots, and runtime scalar overrides.
+cat > "$tempdir/initializer_owner_index.i" <<'EOF'
+struct Pair { int a; int b; };
+static int global_values[8] = {
+    [0 ... 7] = 1, [2 ... 5] = 3, [4] = 4
+};
+static struct Pair globals[4] = {
+    [0 ... 3] = { 1, 2 }, [1 ... 2] = { 3, 4 }, [2] = { 5, 6 }
+};
+static int calls;
+static int evaluate(int value) { ++calls; return value; }
+int main(void) {
+    int values[7] = {
+        [0 ... 6] = evaluate(99), [0 ... 6] = evaluate(6),
+        [1 ... 3] = evaluate(12), [4] = evaluate(3),
+        [6] = evaluate(1)
+    };
+    if (global_values[0] != 1 || global_values[1] != 1 ||
+        global_values[2] != 3 || global_values[3] != 3 ||
+        global_values[4] != 4 || global_values[5] != 3 ||
+        global_values[6] != 1 || global_values[7] != 1)
+        return 1;
+    if (globals[0].a != 1 || globals[0].b != 2 ||
+        globals[1].a != 3 || globals[1].b != 4 ||
+        globals[2].a != 5 || globals[2].b != 6 ||
+        globals[3].a != 1 || globals[3].b != 2)
+        return 2;
+    if (values[0] != 6 || values[1] != 12 ||
+        values[2] != 12 || values[3] != 12 ||
+        values[4] != 3 || values[5] != 6 ||
+        values[6] != 1 || calls != 4)
+        return 3;
+    return 42;
+}
+EOF
+check_exit initializer_owner_index 42
