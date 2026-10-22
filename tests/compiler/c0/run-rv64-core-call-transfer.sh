@@ -73,7 +73,9 @@ ASM
 "$RISCV_CC" -fno-pie -fno-pic -O0 -c "$w/provider.c" -o "$w/provider.o"
 "$RISCV_CC" -fno-pie -fno-pic -c "$w/start.s" -o "$w/start.o"
 "$RISCV_CC" -fno-pie -fno-pic -O0 -c "$w/client.c" -o "$w/gnu-client.o"
-"$MINIC" -S "$w/client.c" -o "$w/mini-client.s"
+# MiniC -S consumes preprocessed C; feed both compilers the same semantics.
+"$RISCV_CC" -E -P -x c "$w/client.c" -o "$w/client.i"
+"$MINIC" -S "$w/client.i" -o "$w/mini-client.s"
 "$RISCV_CC" -fno-pie -fno-pic -c "$w/mini-client.s" -o "$w/mini-client.o"
 for owner in gnu mini; do
     "$RISCV_LD" -static -e _start -o "$w/$owner.elf" \

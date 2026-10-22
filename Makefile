@@ -144,6 +144,7 @@ MINIC_SOURCES := \
 	src/target/riscv64/layout.c \
 	src/target/riscv64/codegen_support.c \
 	src/target/riscv64/core_codegen.c \
+	src/target/riscv64/asm_plan.c \
 	src/target/riscv64/spill_layout.c \
 	src/target/riscv64/object_liveness.c \
 	src/target/riscv64/legalize.c \
