@@ -10,6 +10,7 @@
 typedef struct MinicDirectLP64FunctionPlan {
     MinicLP64ArgumentPlan incoming_plan;
     MinicLP64FramePlan frame_plan;
+    MinicLP64CallPlanCache outgoing_calls;
     size_t frame_size;
     size_t save_offset;
     size_t variadic_save_base;

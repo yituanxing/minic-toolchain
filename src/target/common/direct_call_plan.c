@@ -2,6 +2,7 @@
 #include "target/common/core_call_view.h"
 #include "target/common/lp64_aggregate.h"
 #include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
 
 /* Locations are ABI-owned; no architecture-specific instructions here. */
@@ -174,4 +175,71 @@ bool minic_lp64_plan_incoming_parameters(
     return minic_lp64_plan_types(program, target, fn->parameter_types,
         fn->parameter_count, fn->parameter_count, false, abi,
         indirect_record, plan);
+}
+
+/* Compact, function-lifetime ABI call placements keyed by Core IDs.
+ * One shared ABI classifier serves both LP64 ISA emitters. */
+bool minic_lp64_plan_function_calls(
+    const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicCoreFunction *fn, MinicLP64DirectABI abi,
+    MinicDirectLP64IndirectRecord indirect_record,
+    MinicLP64CallPlanCache *cache) {
+    size_t id;
+    if (program == NULL || target == NULL || fn == NULL || cache == NULL ||
+        cache->by_instruction != NULL || cache->instruction_count != 0U ||
+        indirect_record == NULL ||
+        (fn->instruction_count != 0U && fn->instructions == NULL) ||
+        fn->instruction_count > SIZE_MAX / sizeof(*cache->by_instruction))
+        return false;
+    if (fn->instruction_count == 0U) return true;
+    cache->by_instruction = (MinicLP64PreparedCall **)calloc(
+        fn->instruction_count, sizeof(*cache->by_instruction));
+    if (cache->by_instruction == NULL) return false;
+    cache->instruction_count = fn->instruction_count;
+    for (id = 0U; id < fn->instruction_count; ++id) {
+        const MinicCoreInstruction *ins = &fn->instructions[id];
+        MinicLP64ArgumentPlan scratch;
+        MinicLP64PreparedCall *site;
+        size_t bytes;
+        if (ins->kind != MINIC_CORE_INSTRUCTION_CALL &&
+            ins->kind != MINIC_CORE_INSTRUCTION_INDIRECT_CALL)
+            continue;
+        if (!minic_lp64_plan_direct_call(
+                program, target, fn, ins, abi, indirect_record, &scratch) ||
+            scratch.argument_count >
+                (SIZE_MAX - sizeof(*site)) / sizeof(*site->arguments))
+            goto failed;
+        bytes = sizeof(*site) +
+            scratch.argument_count * sizeof(*site->arguments);
+        site = (MinicLP64PreparedCall *)malloc(bytes);
+        if (site == NULL) goto failed;
+        site->argument_count = scratch.argument_count;
+        site->stack_bytes = scratch.stack_bytes;
+        if (scratch.argument_count != 0U)
+            memcpy(site->arguments, scratch.arguments,
+                   scratch.argument_count * sizeof(*site->arguments));
+        cache->by_instruction[id] = site;
+    }
+    return true;
+failed:
+    minic_lp64_call_plan_cache_destroy(cache);
+    return false;
+}
+
+const MinicLP64PreparedCall *minic_lp64_function_call_plan(
+    const MinicLP64CallPlanCache *cache, size_t instruction_id) {
+    if (cache == NULL || instruction_id >= cache->instruction_count ||
+        cache->by_instruction == NULL)
+        return NULL;
+    return cache->by_instruction[instruction_id];
+}
+
+void minic_lp64_call_plan_cache_destroy(MinicLP64CallPlanCache *cache) {
+    size_t i;
+    if (cache == NULL) return;
+    for (i = 0U; i < cache->instruction_count; ++i)
+        free(cache->by_instruction[i]);
+    free(cache->by_instruction);
+    cache->by_instruction = NULL;
+    cache->instruction_count = 0U;
 }

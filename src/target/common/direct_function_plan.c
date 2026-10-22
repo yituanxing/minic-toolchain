@@ -80,6 +80,13 @@ bool minic_multi_direct_lp64_function_plan_prepare(
             &plan->failed_instruction, &plan->has_calls))
         return false;
 
+    plan->failed_stage = "call_planning";
+    plan->failed_instruction = SIZE_MAX;
+    if (plan->has_calls &&
+        !minic_lp64_plan_function_calls(program, target, fn, abi,
+                                       indirect_record, &plan->outgoing_calls))
+        return false;
+
     plan->failed_stage = "frame_finalization";
     plan->failed_instruction = SIZE_MAX;
     if (!minic_lp64_finalize_direct_frame(
@@ -102,6 +109,7 @@ void minic_multi_direct_lp64_function_plan_destroy(
     MinicDirectLP64FunctionPlan *plan) {
     if (plan == NULL)
         return;
+    minic_lp64_call_plan_cache_destroy(&plan->outgoing_calls);
     minic_lp64_frame_plan_destroy(&plan->frame_plan);
     (void)memset(plan, 0, sizeof(*plan));
 }
