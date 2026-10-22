@@ -3,6 +3,7 @@
 #include "core/core_ir.h"
 #include "frontend/ast.h"
 #include "target/riscv64/asm_plan.h"
+#include "target/riscv64/abi.h"
 #include <stdbool.h>
 #include <stddef.h>
 
@@ -14,6 +15,10 @@ typedef struct MinicRiscv64CoreFrame {
     size_t value_slot_count;
     size_t *object_offsets;
     size_t *value_offsets;
+    MinicRiscv64AbiArgumentLocation *parameter_locations;
+    size_t parameter_location_count;
+    MinicRiscv64AbiCursor named_parameter_cursor;
+    bool has_named_parameter_cursor;
     /* M177_CONSTANT_SWITCH_CFG_OWNER: suppress target emission of Core blocks
        that have no executable predecessor after semantic CFG pruning. */
     bool *reachable_blocks;
@@ -44,6 +49,8 @@ typedef struct MinicRiscv64CoreFrame {
 bool minic_riscv64_core_frame_initialize(
     const MinicC0Program *, const MinicCoreFunction *, MinicRiscv64CoreFrame *);
 void minic_riscv64_core_frame_destroy(MinicRiscv64CoreFrame *);
+bool minic_riscv64_core_frame_parameter_location(
+    const MinicRiscv64CoreFrame *, size_t, MinicRiscv64AbiArgumentLocation *);
 bool minic_riscv64_core_frame_object_offset(
     const MinicC0Program *, const MinicCoreFunction *,
     const MinicRiscv64CoreFrame *, MinicCoreObjectId, size_t *);

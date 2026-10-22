@@ -1,82 +1,49 @@
 #include "target/riscv64/frame_requirements.h"
 #include "target/riscv64/abi.h"
 #include <stdint.h>
+#include <string.h>
 
 /* Preserve ABI-specific requirement queries, not a simplistic common frame. */
 /* M79_CALL_FRAME_RETURN_ADDRESS: a return-address query needs the entry
    value of ra even in a function that has no ordinary Core CALL yet. Save it
    in the prologue whenever either a call or this semantic instruction exists. */
-bool minic_riscv64_core_function_needs_saved_return_address(const MinicCoreFunction *function) {
+/* Scan Core instructions once for independent RV64 frame requirements.
+ * Outgoing argument sizing still uses the ABI classifier's checked walk. */
+bool minic_riscv64_core_function_requirements(
+    const MinicCoreFunction *function,
+    MinicRiscv64CoreFunctionRequirements *result) {
     size_t instruction_index;
-
-    if (function == NULL) {
+    if (function == NULL || result == NULL ||
+        (function->instruction_count != 0U && function->instructions == NULL))
         return false;
-    }
+    memset(result, 0, sizeof(*result));
     for (instruction_index = 0U; instruction_index < function->instruction_count;
          ++instruction_index) {
-        MinicCoreInstructionKind kind = function->instructions[instruction_index].kind;
-        if (kind == MINIC_CORE_INSTRUCTION_CALL ||
-            kind == MINIC_CORE_INSTRUCTION_INDIRECT_CALL) {
-            return true;
-        }
-        if (kind == MINIC_CORE_INSTRUCTION_CALL_FRAME_ADDRESS &&
-            function->instructions[instruction_index].value.call_frame_address.kind ==
-                MINIC_CORE_CALL_FRAME_ADDRESS_RETURN) {
-            return true;
-        }
-    }
-    return false;
-}
-
-bool minic_riscv64_core_function_uses_structured_inline_asm(
-    const MinicCoreFunction *function) {
-    size_t instruction_index;
-
-    if (function == NULL) {
-        return false;
-    }
-    for (instruction_index = 0U; instruction_index < function->instruction_count;
-         ++instruction_index) {
-        if (function->instructions[instruction_index].kind ==
-            MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM) {
-            return true;
+        const MinicCoreInstruction *instruction = &function->instructions[instruction_index];
+        switch (instruction->kind) {
+        case MINIC_CORE_INSTRUCTION_CALL:
+        case MINIC_CORE_INSTRUCTION_INDIRECT_CALL:
+            result->needs_saved_return_address = true;
+            break;
+        case MINIC_CORE_INSTRUCTION_CALL_FRAME_ADDRESS:
+            if (instruction->value.call_frame_address.kind ==
+                MINIC_CORE_CALL_FRAME_ADDRESS_RETURN)
+                result->needs_saved_return_address = true;
+            break;
+        case MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM:
+            result->uses_structured_inline_asm = true;
+            break;
+        case MINIC_CORE_INSTRUCTION_DYNAMIC_STACK_ALLOC:
+            result->uses_dynamic_stack_alloc = true;
+            break;
+        case MINIC_CORE_INSTRUCTION_VARIADIC_ARGUMENT_ADDRESS:
+            result->uses_variadic_argument_address = true;
+            break;
+        default:
+            break;
         }
     }
-    return false;
-}
-
-bool minic_riscv64_core_function_uses_dynamic_stack_alloc(
-    const MinicCoreFunction *function) {
-    size_t instruction_index;
-
-    if (function == NULL) {
-        return false;
-    }
-    for (instruction_index = 0U; instruction_index < function->instruction_count;
-         ++instruction_index) {
-        if (function->instructions[instruction_index].kind ==
-            MINIC_CORE_INSTRUCTION_DYNAMIC_STACK_ALLOC) {
-            return true;
-        }
-    }
-    return false;
-}
-
-bool minic_riscv64_core_function_uses_variadic_argument_address(
-    const MinicCoreFunction *function) {
-    size_t instruction_index;
-
-    if (function == NULL) {
-        return false;
-    }
-    for (instruction_index = 0U; instruction_index < function->instruction_count;
-         ++instruction_index) {
-        if (function->instructions[instruction_index].kind ==
-            MINIC_CORE_INSTRUCTION_VARIADIC_ARGUMENT_ADDRESS) {
-            return true;
-        }
-    }
-    return false;
+    return true;
 }
 
 bool minic_riscv64_core_variadic_fixed_prefix(const MinicC0Program *program,
@@ -107,13 +74,8 @@ bool minic_riscv64_core_variadic_fixed_prefix(const MinicC0Program *program,
        named prefix has exhausted a0-a7, the first unnamed argument starts
        directly after the named incoming stack slots. Keep mixed register/stack
        prefixes fail-closed unless all integer argument registers are consumed. */
-    if (cursor.integer_register_count > 8U ||
-        (cursor.stack_slot_count != 0U && cursor.integer_register_count != 8U)) {
-        return false;
-    }
-    *integer_parameter_count = cursor.integer_register_count;
-    *fixed_stack_slots = cursor.stack_slot_count;
-    return true;
+    return minic_riscv64_abi_variadic_prefix_from_cursor(
+        &cursor, integer_parameter_count, fixed_stack_slots);
 }
 
 /* M168_RV64_INDIRECT_CALL_STACK: reserve one fixed outgoing stack area

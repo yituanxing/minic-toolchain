@@ -9,35 +9,6 @@
 
 /* Keep the proven direct/indirect psABI marshalling and the inbound paths
  * together; the frame and ABI cursor both remain independent owners. */
-static bool core_parameter_location(const MinicC0Program *program,
-                                    const MinicCoreFunction *function,
-                                    size_t parameter_index,
-                                    MinicRiscv64AbiArgumentLocation *location) {
-    MinicRiscv64AbiCursor cursor;
-    MinicRiscv64AbiValue return_value;
-    size_t index;
-
-    if (program == NULL || function == NULL || location == NULL ||
-        parameter_index >= function->parameter_count ||
-        !minic_riscv64_abi_cursor_initialize_for_return(
-            program, function->return_type, &cursor, &return_value)) {
-        return false;
-    }
-    (void)return_value;
-    for (index = 0U; index <= parameter_index; ++index) {
-        MinicRiscv64AbiArgumentLocation current;
-
-        if (!minic_riscv64_abi_place_argument(
-                program, function->parameter_types[index], true, &cursor, &current)) {
-            return false;
-        }
-        if (index == parameter_index) {
-            *location = current;
-        }
-    }
-    return true;
-}
-
 static bool emit_incoming_stack_load64(FILE *file,
                                                const MinicRiscv64CoreFrame *frame,
                                                const char *destination_register,
@@ -95,7 +66,7 @@ bool minic_riscv64_emit_incoming_parameter(FILE *file,
     if (program != NULL) {
         MinicRiscv64AbiArgumentLocation location;
 
-        if (!core_parameter_location(program, function, parameter_index, &location)) {
+        if (!minic_riscv64_core_frame_parameter_location(frame, parameter_index, &location)) {
             return false;
         }
         if (location.value.kind == MINIC_RISCV64_ABI_VALUE_FLOAT &&
@@ -212,8 +183,8 @@ bool minic_riscv64_emit_incoming_parameter_object(FILE *file,
         return false;
     }
     object_id = instruction->value.parameter_object.object_id;
-    if (!core_parameter_location(
-            program, function, instruction->value.parameter_object.parameter_index, &location) ||
+    if (!minic_riscv64_core_frame_parameter_location(
+            frame, instruction->value.parameter_object.parameter_index, &location) ||
         object_id >= function->object_count ||
         !minic_type_unqualified(function->objects[object_id].type, &object_value_type) ||
         !minic_type_equal(

@@ -151,6 +151,18 @@ bool minic_riscv64_abi_cursor_initialize_for_return(const MinicC0Program *progra
     return true;
 }
 
+bool minic_riscv64_abi_variadic_prefix_from_cursor(
+    const MinicRiscv64AbiCursor *cursor, size_t *integer_parameter_count,
+    size_t *fixed_stack_slots) {
+    if (cursor == NULL || integer_parameter_count == NULL || fixed_stack_slots == NULL ||
+        cursor->integer_register_count > 8U ||
+        (cursor->stack_slot_count != 0U && cursor->integer_register_count != 8U))
+        return false;
+    *integer_parameter_count = cursor->integer_register_count;
+    *fixed_stack_slots = cursor->stack_slot_count;
+    return true;
+}
+
 bool minic_riscv64_abi_classify_value(const MinicC0Program *program,
                                       MinicType type,
                                       MinicRiscv64AbiValue *value) {
