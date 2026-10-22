@@ -70,6 +70,34 @@ bool minic_multi_direct_parameter_object_location(
  * The AAPCS64 front end admits binary64 VA_ARG while the LoongArch64 LP64D
  * direct backend has not yet admitted that result: retain that difference
  * explicitly in allow_variadic_double_result. */
+/* A compiler barrier is an ordering constraint in the Core stream, not a
+ * machine fence and not a produced SSA value. */
+bool minic_multi_direct_compiler_barrier_shape(const MinicCoreInstruction *ins) {
+    return ins != NULL &&
+           ins->kind == MINIC_CORE_INSTRUCTION_COMPILER_BARRIER &&
+           ins->result == MINIC_CORE_VALUE_INVALID &&
+           minic_type_is_void(ins->type);
+}
+
+/* Both direct LP64 emitters materialize int128 and long double in a 16-byte
+ * Core frame slot, but select fundamentally different ISA load/store forms.
+ * Validate the common source address and slot identity only once. */
+bool minic_multi_direct_wide_store_shape(
+    const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
+    const MinicLP64FramePlan *frame_plan, size_t *value_offset) {
+    MinicCoreValueId address, value;
+    if (fn == NULL || ins == NULL || frame_plan == NULL ||
+        value_offset == NULL || ins->kind != MINIC_CORE_INSTRUCTION_STORE)
+        return false;
+    address = ins->value.store.address;
+    value = ins->value.store.stored_value;
+    return address < fn->value_count && value < fn->value_count &&
+           minic_type_is_pointer(fn->values[address].type) &&
+           (minic_type_is_int128_integer(fn->values[value].type) ||
+            minic_type_is_long_double(fn->values[value].type)) &&
+           minic_lp64_frame_plan_wide_slot(frame_plan, value, value_offset);
+}
+
 bool minic_multi_direct_result_slot_offset(
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
     bool allow_variadic_double_result, size_t *offset) {
