@@ -1,0 +1,61 @@
+#include "target/common/direct_function_profile.h"
+#include "target/common/core_function_facts.h"
+#include "target/common/lp64_aggregate.h"
+#include "target/common/lp64_scalar.h"
+
+#include <string.h>
+
+/* Shared source/Core admission, with the original ISA-owned ABI selection.
+ * AAPCS64 uses independent GP/FP fixed-parameter banks; LP64D's current
+ * linear variadic cursor rejects fixed double and counts the rest as GP. */
+MinicDirectLP64ProfileResult minic_multi_direct_lp64_profile_function(
+    const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicFunction *decl, const MinicCoreFunction *fn,
+    MinicLP64DirectABI abi, MinicDirectLP64IndirectRecord indirect_record,
+    MinicLP64ArgumentPlan *incoming, MinicDirectLP64FunctionProfile *profile) {
+    size_t i;
+    MinicCoreFunctionFacts facts;
+
+    if (program == NULL || target == NULL || decl == NULL || fn == NULL ||
+        incoming == NULL || profile == NULL || indirect_record == NULL ||
+        (abi != MINIC_LP64_ABI_AAPCS64 &&
+         abi != MINIC_LP64_ABI_LOONGARCH64_LP64D))
+        return MINIC_DIRECT_LP64_PROFILE_PARAMETER_SHAPE;
+    if (!minic_core_function_facts_analyze(fn, &facts))
+        return MINIC_DIRECT_LP64_PROFILE_PARAMETER_SHAPE;
+    (void)memset(profile, 0, sizeof(*profile));
+    profile->variadic_address_count = facts.variadic_address_count;
+    profile->has_dynamic_stack = facts.uses_dynamic_stack_alloc;
+    if (decl->is_variadic) {
+        for (i = 0U; i < fn->parameter_count; ++i) {
+            if (abi == MINIC_LP64_ABI_AAPCS64) {
+                if (minic_type_is_double(fn->parameter_types[i]) ||
+                    minic_type_is_float(fn->parameter_types[i]))
+                    ++profile->fixed_fp_count;
+                else
+                    ++profile->fixed_gp_count;
+            } else {
+                if (minic_type_is_double(fn->parameter_types[i]))
+                    return MINIC_DIRECT_LP64_PROFILE_VARIADIC_FIXED_FLOAT;
+                ++profile->fixed_gp_count;
+            }
+        }
+    }
+    if (profile->variadic_address_count != 0U &&
+        (!decl->is_variadic || profile->variadic_address_count != 1U ||
+         profile->fixed_gp_count > 8U || profile->fixed_fp_count > 8U))
+        return MINIC_DIRECT_LP64_PROFILE_VARIADIC_SHAPE;
+
+    for (i = 0U; i < fn->parameter_count; ++i) {
+        size_t record_size, record_slots;
+        if (!minic_lp64_valid_parameter_type(program, target, fn->parameter_types[i]) &&
+            !minic_multi_gp_record(program, target, fn->parameter_types[i],
+                                   &record_size, &record_slots) &&
+            !indirect_record(program, target, fn->parameter_types[i], &record_size))
+            return MINIC_DIRECT_LP64_PROFILE_PARAMETER_SHAPE;
+    }
+    if (!minic_lp64_plan_incoming_parameters(
+            program, target, fn, abi, indirect_record, incoming))
+        return MINIC_DIRECT_LP64_PROFILE_PARAMETER_SHAPE;
+    return MINIC_DIRECT_LP64_PROFILE_OK;
+}

@@ -9,8 +9,17 @@
 
 typedef enum MinicTargetArchitecture {
     MINIC_TARGET_ARCH_RISCV64 = 0,
-    MINIC_TARGET_ARCH_X86_64
+    MINIC_TARGET_ARCH_X86_64,
+    MINIC_TARGET_ARCH_AARCH64,
+    MINIC_TARGET_ARCH_LOONGARCH64
 } MinicTargetArchitecture;
+
+/* Zero is invalid: a newly registered target must specify its cursor. */
+typedef enum MinicVariadicScalarReadKind {
+    MINIC_VARIADIC_SCALAR_READ_UNSUPPORTED = 0,
+    MINIC_VARIADIC_SCALAR_READ_LINEAR_SLOT,
+    MINIC_VARIADIC_SCALAR_READ_ABI_CURSOR
+} MinicVariadicScalarReadKind;
 
 typedef enum MinicIntegerLiteralBase {
     MINIC_INTEGER_LITERAL_BASE_BINARY = 2,
@@ -37,6 +46,12 @@ typedef struct MinicTargetInfo {
     bool gnu_sizeof_function_is_one;
     bool call_frame_return_address_level0;
     bool call_frame_frame_address_level0;
+    MinicVariadicScalarReadKind variadic_scalar_read_kind;
+    size_t variadic_linear_slot_bytes;
+    /* Transitional frontend pointer-va_list policy: an existing pointer
+     * assignment is accepted for this ABI. This does NOT establish correct
+     * value-copy semantics for structured AAPCS64 cursors. */
+    bool variadic_pointer_assignment_compatible;
 } MinicTargetInfo;
 
 extern const char *const minic_riscv64_argument_registers[8];

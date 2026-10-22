@@ -1,0 +1,46 @@
+name: MiniC Native Strict Backend Gate
+
+on:
+  push:
+    branches:
+      - main
+      - feature/four-backend-aarch64-loongarch64-m0
+    paths:
+      - 'src/target/**'
+      - 'src/core/**'
+      - 'src/frontend/**'
+      - 'Makefile'
+      - '.github/workflows/minic-native-refactor-gate.yml'
+      - 'tests/compiler/c0/check-minic-target-boundaries.sh'
+  workflow_dispatch:
+
+concurrency:
+  group: minic-native-backend-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  minic-native:
+    name: MiniC strict compile and x86 runtime
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check MiniC backend ownership invariants
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          bash tests/compiler/c0/check-minic-target-boundaries.sh
+      - name: Strictly compile all MiniC targets without apt or QEMU prerequisites
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/minic-native-backend all
+          test -x build/minic-native-backend/bin/minic
+          test -x build/minic-native-backend/bin/minic-cc
+      - name: Native x86-64 ABI and runtime smoke
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(uname -m)" = x86_64
+          MINIC_CC="$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc" \
+            HOST_CC=cc sh tests/compiler/c0/run-x86_64-native-m1.sh

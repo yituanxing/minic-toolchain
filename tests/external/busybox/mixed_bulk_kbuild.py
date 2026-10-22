@@ -41,6 +41,45 @@ CERTIFIED_GCC_FALLBACKS = frozenset((
 ))
 
 
+# Reviewable cross-ISA GNU fallback set from original BusyBox Kbuild
+# and dual QEMU acceptance #39447330925. New MiniC successes remove entries;
+# a previously accepted MiniC owner reverting to GNU is a hard regression.
+CROSS_APPROVED_GCC_FALLBACKS = {
+    "aarch64": frozenset((
+        "coreutils/od.o",
+        "editors/awk.o",
+        "libbb/compare_string_array.o",
+        "libbb/obscure.o",
+        "libbb/strrstr.o",
+        "libbb/vfork_daemon_rexec.o",
+        "libbb/xconnect.o",
+        "miscutils/devfsd.o",
+        "miscutils/devmem.o",
+        "miscutils/hdparm.o",
+        "networking/ifconfig.o",
+        "networking/ntpd.o",
+        "procps/top.o",
+    )),
+    "loongarch64": frozenset((
+        "archival/libarchive/decompress_bunzip2.o",
+        "coreutils/od.o",
+        "editors/awk.o",
+        "libbb/compare_string_array.o",
+        "libbb/obscure.o",
+        "libbb/pw_encrypt.o",
+        "libbb/strrstr.o",
+        "libbb/vfork_daemon_rexec.o",
+        "libbb/xconnect.o",
+        "miscutils/devfsd.o",
+        "miscutils/devmem.o",
+        "miscutils/hdparm.o",
+        "networking/ifconfig.o",
+        "networking/ntpd.o",
+        "procps/top.o",
+    )),
+}
+
+
 def certified_owner_coverage(mini_owners, gcc_fallbacks):
     """Fail closed on a regressed owner or a different original Kbuild set.
 
@@ -77,7 +116,8 @@ def main():
         return 1
     shutil.copy2(executable, original)
     oracle = run_cases(original, report)
-    if len(oracle) != 11 or any(item[0] for item in oracle.values()):
+    expected_cases = 38 if os.environ.get("BUSYBOX_ALLYES_QEMU") else 11
+    if len(oracle) != expected_cases or any(item[0] for item in oracle.values()):
         log("BUSYBOX_MIXED_BULK=BLOCKED stage=original-GNU-runtime-oracle")
         return 1
     manifest = {}
@@ -91,6 +131,22 @@ def main():
         mini = result.parent / "mini.o"
         if all(row.get(k) == 0 for k in ("gcc", "cpp", "minic", "assembler")) \
                 and obj.is_file() and mini.is_file() and obj != mini.resolve():
+            # A successful assembler is not sufficient evidence of a
+            # linkable MiniC object. BusyBox df.c exposed unresolved private
+            # inline-specialization symbols. Keep the real GNU owner for
+            # these only, after auditing the actual target ELF with nm.
+            if os.environ.get("BUSYBOX_ALLYES_MINIC_TARGET", "x86_64-linux") != "x86_64-linux":
+                prefix = os.environ.get("BUSYBOX_ALLYES_CROSS_PREFIX", "")
+                nm = subprocess.run([prefix + "nm", "-u", str(mini)],
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                    check=False)
+                if nm.returncode != 0:
+                    log("BUSYBOX_MIXED_BULK=BLOCKED stage=target-nm object=%s" % obj_name)
+                    return 1
+                if b"__minic_inline_spec_" in nm.stdout:
+                    skipped.append((obj_name, "unresolved-inline", row.get("cpp")))
+                    log("BUSYBOX_MIXED_BULK_INLINE_FALLBACK object=%s" % obj_name)
+                    continue
             if str(obj) in manifest:
                 log("BUSYBOX_MIXED_BULK=FAIL stage=duplicate-Kbuild-owner object=%s" % obj)
                 return 1
@@ -105,7 +161,35 @@ def main():
             (name, minic, cpp))
     mini_names = [Path(name).relative_to(root).as_posix() for name in manifest]
     fallback_names = [name for name, _minic, _cpp in skipped]
-    if not certified_owner_coverage(mini_names, fallback_names):
+    cross_target = os.environ.get("BUSYBOX_ALLYES_MINIC_TARGET",
+                                  "x86_64-linux") != "x86_64-linux"
+    if cross_target:
+        # First cross-ISA *experimental* all-owner real-Kbuild candidate.
+        # Do not use x86's immutable 593/581 certification to invent a
+        # cross count. Require broad genuine coverage and unique paths;
+        # after GNU/QEMU success the exact cohort can be promoted.
+        owner_count = len(mini_names) + len(fallback_names)
+        target_name = os.environ["BUSYBOX_ALLYES_MINIC_TARGET"].split("-")[0]
+        approved = CROSS_APPROVED_GCC_FALLBACKS.get(target_name)
+        # Full-original-Kbuild 581/581 milestone; never silently regress
+        # even one owner back to GCC. This does not claim MiniC AS/LD.
+        target_floor = {"aarch64": 581, "loongarch64": 581}.get(target_name)
+        accepted = (owner_count == 581 and target_floor is not None
+                    and len(mini_names) >= target_floor
+                    and len(set(mini_names + fallback_names)) == owner_count
+                    and approved is not None
+                    and len(fallback_names) == 0
+                    and set(fallback_names).issubset(approved))
+        if not accepted:
+            log("BUSYBOX_MIXED_BULK=BLOCKED stage=cross-owner-inventory "
+                "original_Kbuild_owners=%d MiniC=%d GNU_fallbacks=%d unapproved=%s" %
+                (owner_count, len(mini_names), len(fallback_names),
+                 sorted(set(fallback_names) - (approved or frozenset()))))
+            return 1
+        log("BUSYBOX_MIXED_BULK_CROSS_COHORT=DISCOVERY original_Kbuild_owners=%d"
+            " MiniC_qualified=%d GNU_fallbacks=%d full_MiniC=NO" %
+            (owner_count, len(mini_names), len(fallback_names)))
+    elif not certified_owner_coverage(mini_names, fallback_names):
         log("BUSYBOX_MIXED_BULK=BLOCKED stage=certified-owner-coverage "
             "mini=%d gcc=%d expected_persistent=%d approved_fallbacks=%d" %
             (len(mini_names), len(fallback_names), CERTIFIED_KBUILD_OWNERS,
@@ -180,6 +264,12 @@ def main():
     if failures:
         log("BUSYBOX_MIXED_BULK=BLOCKED stage=runtime-differential")
         return 1
+    if cross_target:
+        log("BUSYBOX_MIXED_BULK_CROSS_RUNTIME=PASS cases=38 GNU_QEMU_byte_exact=1")
+    if cross_target and len(mini_names) == 581 and len(skipped) == 0:
+        log("BUSYBOX_MIXED_BULK_ALL_C_OWNERS=PASS original_Kbuild_owners=581 "
+            "MiniC_owners=581 GNU_C_fallbacks=0 "
+            "SHA256_verified=581 link_toolchain=GNU")
     log("BUSYBOX_MIXED_BULK=PASS MiniC_owners=%d GCC_fallback=%d "
         "original_full_Kbuild=1 eleven_fixture_byte_exact=1 "
         "MiniC_and_GNU_binary_differ=1 full_all_MiniC=NO" %

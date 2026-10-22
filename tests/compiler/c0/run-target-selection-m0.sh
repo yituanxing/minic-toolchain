@@ -103,6 +103,17 @@ EOF
 test -s "$temporary_dir/rv-mixed.s"
 test -s "$temporary_dir/x86-mixed.s"
 
+# M1 replaces M0's previously necessary missing-backend rejection:
+# GNU-assembler-ready instructions are now produced by distinct ISA emitters.
+# Actual ELF link/QEMU/GCC differentiation is checked in four-backend M1.
+"$MINIC_CC" --target=aarch64-linux -S "$temporary_dir/basic.i" \
+    -o "$temporary_dir/aarch64.s"
+"$MINIC_CC" --target=loongarch64-linux -S "$temporary_dir/basic.i" \
+    -o "$temporary_dir/loongarch64.s"
+grep -F 'movz w9, #42' "$temporary_dir/aarch64.s" >/dev/null
+grep -F 'li.w $t0, 42' "$temporary_dir/loongarch64.s" >/dev/null
+echo "PASS: ARM64 and LoongArch64 emit distinct Core integer-return assembly; target M1"
+
 if "$MINIC_CC" --target=unknown-target -S "$temporary_dir/basic.i" \
         -o "$temporary_dir/unknown.s" 2>"$temporary_dir/unknown.err"; then
     echo "FAIL: unknown target unexpectedly accepted" >&2

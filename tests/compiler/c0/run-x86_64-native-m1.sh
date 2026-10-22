@@ -1257,3 +1257,300 @@ int main(void) {
 }
 EOF
 check_exit nested_record_arrays 42
+
+# GNU statement-expression result and effect forms are separately admitted by
+# Core CFG lowering. One runtime checks scalar tail, void tail, and no tail.
+cat > "$tempdir/gnu_statement_expression_dataflow.i" <<'EOF'
+static int state;
+static int add_three(void) { state += 3; return state; }
+static void add_five(void) { state += 5; }
+int main(void) {
+    int returned = ({ state += 2; add_three(); });
+    (void)({ add_five(); });
+    ({ state += 1; ; });
+    return returned == 5 && state == 11 ? 42 : 1;
+}
+EOF
+check_exit gnu_statement_expression_dataflow 42
+
+# Preserve qualified scalar load/store, prefix/postfix value selection and
+# pointer compound RMW while one Core owner constructs all memory effects.
+cat > "$tempdir/core_scalar_memory_effects.i" <<'EOF'
+static volatile int global = 19;
+static int values[3] = { 8, 42, 9 };
+int main(void) {
+    int old = global++;
+    int updated = ++global;
+    int *cursor = &values[0];
+    if (old != 19 || updated != 21 || global != 21) return 1;
+    cursor += 1;
+    if (*cursor != 42) return 2;
+    cursor -= 1;
+    if (*cursor != 8) return 3;
+    global = 42;
+    return global;
+}
+EOF
+check_exit core_scalar_memory_effects 42
+
+# Core's pointer compound owner must restore the pointer and prior value
+# after a CFG-producing RHS. Aggregate return-object terminators are not yet
+# supported by the x86 native backend (x86_emit_terminator rejects them), so
+# keep record-call member acceptance in the capable cross-target oracles.
+cat > "$tempdir/core_pointer_cfg_rmw.i" <<'EOF'
+static int index_calls;
+static int next_index(void) { index_calls++; return 1; }
+int main(void) {
+    int values[3] = { 8, 42, 9 };
+    int *cursor = &values[0];
+    cursor += index_calls == 0 ? next_index() : 2;
+    if (*cursor != 42 || index_calls != 1) return 1;
+    cursor -= index_calls == 1 ? next_index() : 2;
+    if (*cursor != 8 || index_calls != 2) return 2;
+    return 42;
+}
+EOF
+check_exit core_pointer_cfg_rmw 42
+
+# C function-scope labels and block-scoped GNU __label__ must keep the
+# original forward reference, cleanup lifetime and goto binding semantics.
+cat > "$tempdir/forward_goto_local_label.i" <<'EOF'
+int main(void) {
+    int value = 0;
+    goto ordinary;
+    value = 100;
+ordinary:
+    value = 40;
+    {
+        __label__ local;
+        goto local;
+        value = 100;
+local:
+        value += 2;
+    }
+    return value;
+}
+EOF
+check_exit forward_goto_local_label 42
+
+# Branch, loop and switch parsing must preserve AST block ownership,
+# fallthrough, break/continue targets and for expression side-effect order.
+cat > "$tempdir/statement_control_cfg_dataflow.i" <<'EOF'
+int main(void) {
+    int total = 0;
+    int i = 0;
+    for (; i < 4; ++i) {
+        if (i == 1) continue;
+        switch (i) {
+            case 0: total += 2; break;
+            case 2: total += 20; break;
+            default: total += 4;
+        }
+    }
+    i = 0;
+    while (i < 2) { total += 3; ++i; }
+    do { total += 7; } while (0);
+    return total + 3;
+}
+EOF
+check_exit statement_control_cfg_dataflow 42
+
+# One action may be overwritten across a designated range; ownership must be
+# last-wins for static and runtime arrays without quadratic element/action
+# rescans. Runtime nonoverridden range expressions evaluate only once.
+cat > "$tempdir/initializer_range_ownership.i" <<'EOF'
+static int static_values[64] = {
+    [0 ... 63] = 1,
+    [9 ... 20] = 3,
+    [17] = 42
+};
+static int calls;
+static int value(void) { ++calls; return 7; }
+int main(void) {
+    int automatic[64] = {
+        [0 ... 63] = 2,
+        [9 ... 20] = value(),
+        [17] = 42
+    };
+    if (static_values[0] != 1 || static_values[12] != 3 ||
+        static_values[17] != 42 || static_values[22] != 1)
+        return 1;
+    if (automatic[0] != 2 || automatic[12] != 7 ||
+        automatic[17] != 42 || automatic[22] != 2 || calls != 1)
+        return 2;
+    return static_values[17];
+}
+EOF
+check_exit initializer_range_ownership 42
+
+# The final-owner snapshot must also preserve static record-array ranges and
+# skip fully overridden runtime expression side effects without reordering.
+cat > "$tempdir/initializer_record_owner_index.i" <<'EOF'
+struct Pair { int a; int b; };
+static struct Pair values[4] = {
+    [0 ... 3] = { 1, 2 }, [1 ... 2] = { 3, 4 }, [2] = { 5, 6 }
+};
+static int calls;
+static int evaluate(int value) { ++calls; return value; }
+int main(void) {
+    int local[7] = {
+        [0 ... 6] = evaluate(99), [0 ... 6] = evaluate(6),
+        [1 ... 3] = evaluate(12), [4] = evaluate(3),
+        [6] = evaluate(1)
+    };
+    if (values[0].a != 1 || values[0].b != 2 ||
+        values[1].a != 3 || values[1].b != 4 ||
+        values[2].a != 5 || values[2].b != 6 ||
+        values[3].a != 1 || values[3].b != 2) return 1;
+    if (local[0] != 6 || local[1] != 12 || local[2] != 12 ||
+        local[3] != 12 || local[4] != 3 || local[5] != 6 ||
+        local[6] != 1 || calls != 4) return 2;
+    return 42;
+}
+EOF
+check_exit initializer_record_owner_index 42
+
+# Shared relocation replay: large sorted pointer tables avoid quadratic
+# insertion scans while rebased object/function/record targets remain correct.
+cat > "$tempdir/initializer_relocation_owners.i" <<'EOF'
+static int values[4] = {5, 7, 9, 11};
+static int *const slots[512] = {
+    [0 ... 511] = &values[1], [2] = &values[3], [511] = &values[0]
+};
+static int answer(void) { return 42; }
+static int (*call)(void) = answer;
+struct Pair { int *target; int tag; };
+static struct Pair pairs[3] = {
+    [0 ... 2] = { &values[1], 3 }, [1] = { &values[2], 5 }
+};
+int main(void) {
+    if (slots[0] != &values[1] || slots[2] != &values[3] ||
+        slots[250] != &values[1] || slots[511] != &values[0]) return 1;
+    if (pairs[0].target != &values[1] || pairs[1].target != &values[2] ||
+        pairs[2].target != &values[1] || pairs[1].tag != 5) return 2;
+    if (call() != 42) return 3;
+    return 42;
+}
+EOF
+check_exit initializer_relocation_owners 42
+
+# Sparse static initializer materialization must not allocate an extra
+# full-array pointer-action payload; unowned slots zero-fill and both object
+# and function relocations remain associated with the selected owner.
+cat > "$tempdir/initializer_sparse_stream.i" <<'EOF'
+static int table[4] = {5, 7, 9, 11};
+static int *const sparse[2048] = {
+    [512] = &table[2],
+    [1024 ... 1026] = &table[0],
+    [1025] = &table[3],
+    [2047] = &table[1]
+};
+static int integers[4096] = {
+    [100 ... 300] = 4, [200 ... 250] = 7, [4095] = 42
+};
+int main(void) {
+    if (sparse[0] != 0 || sparse[511] != 0 || sparse[512] != &table[2] ||
+        sparse[513] != 0 || sparse[1024] != &table[0] ||
+        sparse[1025] != &table[3] || sparse[1026] != &table[0] ||
+        sparse[1027] != 0 || sparse[2047] != &table[1])
+        return 1;
+    if (integers[0] != 0 || integers[150] != 4 ||
+        integers[230] != 7 || integers[300] != 4 ||
+        integers[301] != 0)
+        return 2;
+    return integers[4095];
+}
+EOF
+check_exit initializer_sparse_stream 42
+
+# One DataLayout walk now owns the flat record payload for all backends,
+# while the target retains its GNU scalar directives and reloc spelling.
+cat > "$tempdir/initializer_shared_flat_record.i" <<'EOF'
+static long target_words[4] = {5, 7, 11, 13};
+struct Flat { int count; double ratio; long *address; float factor; };
+static struct Flat flat = {17, 3.5, &target_words[2], 1.25f};
+static long *const addresses[5] = {
+    &target_words[1], 0, &target_words[3],
+    &target_words[0], &target_words[2]
+};
+int main(void) {
+    if (flat.count != 17 || flat.ratio != 3.5 ||
+        flat.address != &target_words[2] || flat.factor != 1.25f)
+        return 1;
+    if (addresses[0] != &target_words[1] || addresses[1] != 0 ||
+        addresses[2] != &target_words[3] ||
+        addresses[3] != &target_words[0] ||
+        addresses[4] != &target_words[2])
+        return 2;
+    return 42;
+}
+EOF
+check_exit initializer_shared_flat_record 42
+
+# Shared recursive GlobalObject data layout for nested records and pointers;
+# the per-target GNU numeric/relocation formatting stays independent.
+cat > "$tempdir/initializer_nested_shared_layout.i" <<'EOF'
+static int elements[4] = {3, 5, 7, 11};
+struct Inner { unsigned short count; int *pointer; };
+struct Outer { struct Inner members[2]; long sum; };
+static struct Outer shared = {
+    {{17, &elements[1]}, {29, &elements[3]}}, 41
+};
+int main(void) {
+    if (shared.members[0].count != 17 ||
+        shared.members[0].pointer != &elements[1] ||
+        shared.members[1].count != 29 ||
+        shared.members[1].pointer != &elements[3] ||
+        shared.sum != 41)
+        return 1;
+    return 42;
+}
+EOF
+check_exit initializer_nested_shared_layout 42
+
+# Confirm the single common bitfield packer works in the flat record-array
+# entry point, which formerly had a second bespoke 64-bit shift algorithm.
+cat > "$tempdir/initializer_flat_bitfield_array.i" <<'EOF'
+static long nums[4] = {3, 5, 7, 11};
+struct BitRecord {
+    long *ref;
+    unsigned int mode:6;
+    unsigned int options:10;
+    unsigned short end;
+};
+static struct BitRecord entries[2] = {
+    {&nums[1], 17, 301, 9},
+    {&nums[3], 11, 203, 13}
+};
+int main(void) {
+    return entries[0].ref == &nums[1] &&
+           entries[0].mode == 17 && entries[0].options == 301 &&
+           entries[0].end == 9 && entries[1].ref == &nums[3] &&
+           entries[1].mode == 11 && entries[1].options == 203 &&
+           entries[1].end == 13 ? 42 : 1;
+}
+EOF
+check_exit initializer_flat_bitfield_array 42
+
+# Ordinary record and its initialized GNU flexible tail must share one
+# storage-extent calculation rather than two serialized byte walks.
+cat > "$tempdir/initializer_mixed_flexible_record.i" <<'EOF'
+static int pointed[3] = {5, 7, 11};
+struct Mix {
+    unsigned int a:6;
+    unsigned int b:10;
+    int *address;
+    unsigned long tail[];
+};
+static struct Mix mix = {
+    .a = 17, .b = 301, .address = &pointed[1],
+    .tail = { [0 ... 2] = 11UL }
+};
+int main(void) {
+    return mix.a == 17 && mix.b == 301 &&
+           mix.address == &pointed[1] &&
+           mix.tail[0] == 11 && mix.tail[1] == 11 &&
+           mix.tail[2] == 11 ? 42 : 1;
+}
+EOF
+check_exit initializer_mixed_flexible_record 42

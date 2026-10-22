@@ -43,12 +43,44 @@ MINIC_INCLUDES := -Iinclude -Isrc
 
 MINIC_SOURCES := \
 	src/compiler/compiler.c \
+	src/compiler/core_function_set.c \
+	src/compiler/inline_integer.c \
+	src/compiler/inline_symbolic.c \
+	src/compiler/inline_boolean.c \
+	src/compiler/inline_reference.c \
+	src/compiler/core_reachability.c \
 	src/core/core_ir.c \
+	src/core/core_ir_verify.c \
+	src/core/core_ir_dump.c \
+	src/core/value_uses.c \
+	src/core/reentry_index.c \
 	src/core/core_lower.c \
+	src/core/core_lower_expression.c \
+	src/core/core_lower_address.c \
+	src/core/core_lower_scalar_values.c \
+	src/core/core_lower_bit_fields.c \
+	src/core/core_lower_assignments.c \
+	src/core/core_lower_record.c \
+	src/core/core_lower_varargs.c \
+	src/core/core_lower_local_effects.c \
+	src/core/core_lower_loop.c \
+	src/core/core_lower_if.c \
+	src/core/core_lower_switch.c \
+	src/core/core_lower_calls.c \
+	src/core/core_lower_expr_flow.c \
+	src/core/core_lower_expr_scalar.c \
+	src/core/core_lower_arithmetic.c \
+	src/core/core_lower_const_facts.c \
+	src/core/cfg_constant_calls.c \
+	src/core/local_facts.c \
+	src/core/source_loop_shapes.c \
 	src/core/core_lower_bool.c \
 	src/core/core_lower_types.c \
 	src/core/core_lower_metadata.c \
 	src/core/core_lower_asm.c \
+	src/core/core_lower_asm_operands.c \
+	src/core/core_lower_asm_structured.c \
+	src/core/core_lower_asm_scalar_forms.c \
 	src/frontend/attribute.c \
 	src/frontend/ast.c \
 	src/frontend/expression_semantics.c \
@@ -68,13 +100,26 @@ MINIC_SOURCES := \
 	src/frontend/parser_enum.c \
 	src/frontend/parser_core.c \
 	src/frontend/parser_expression.c \
+	src/frontend/parser_builtins.c \
+	src/frontend/parser_builtin_memory.c \
 	src/frontend/parser_function.c \
+	src/frontend/parser_function_parameters.c \
+	src/frontend/parser_external_object.c \
+	src/frontend/parser_pragma.c \
 	src/frontend/parser_global.c \
+	src/frontend/parser_static_initializer.c \
+	src/frontend/parser_global_lookup.c \
+	src/frontend/parser_static_constants.c \
 	src/frontend/parser_member.c \
 	src/frontend/parser_postfix.c \
 	src/frontend/parser_record.c \
 	src/frontend/parser_static_assert.c \
 	src/frontend/parser_statement.c \
+	src/frontend/parser_statement_control.c \
+	src/frontend/parser_labels.c \
+	src/frontend/parser_local_declarations.c \
+	src/frontend/parser_gnu_inline_asm.c \
+	src/frontend/parser_runtime_initializer.c \
 	src/frontend/parser_string.c \
 	src/frontend/parser_type.c \
 	src/frontend/parser_type_query.c \
@@ -83,12 +128,74 @@ MINIC_SOURCES := \
 	src/frontend/type.c \
 	src/target/data_layout.c \
 	src/target/target_info.c \
+	src/target/backend.c \
+	src/target/backend_core_usage.c \
+	src/target/common/global_emit.c \
+	src/target/common/direct_program_emit.c \
+	src/target/common/direct_preflight.c \
+	src/target/common/direct_function_profile.c \
+	src/target/common/direct_function_plan.c \
+	src/target/common/core_function_facts.c \
+	src/target/common/core_object_storage.c \
+	src/target/common/core_call_view.c \
+	src/target/common/direct_call_preflight.c \
+	src/target/common/direct_call_plan.c \
+	src/target/common/direct_instruction_semantics.c \
+	src/target/common/direct_residual_plan.c \
+	src/target/common/lp64_aggregate.c \
+	src/target/common/lp64_scalar.c \
+	src/target/common/lp64_frame.c \
 	src/target/riscv64/abi.c \
 	src/target/riscv64/layout.c \
 	src/target/riscv64/codegen_support.c \
 	src/target/riscv64/core_codegen.c \
+	src/target/riscv64/core_admission.c \
+	src/target/riscv64/function_abi_plan.c \
+	src/target/riscv64/memory_emit.c \
+	src/target/riscv64/inline_asm_emit.c \
+	src/target/riscv64/call_emit.c \
+	src/target/riscv64/scalar_emit.c \
+	src/target/riscv64/fp_emit.c \
+	src/target/riscv64/overflow_emit.c \
+	src/target/riscv64/frame_layout.c \
+	src/target/riscv64/frame_access.c \
+	src/target/riscv64/asm_plan.c \
+	src/target/riscv64/spill_layout.c \
+	src/target/riscv64/object_liveness.c \
+	src/target/riscv64/object_intervals.c \
+	src/target/riscv64/record_snapshot.c \
+	src/target/riscv64/legalize.c \
+	src/target/riscv64/frame_requirements.c \
 	src/target/riscv64/codegen_function.c \
+	src/target/riscv64/global_emit.c \
 	src/target/x86_64/codegen.c \
+	src/target/x86_64/machine_emit.c \
+	src/target/x86_64/machine_support.c \
+	src/target/x86_64/machine_fp.c \
+	src/target/x86_64/machine_call.c \
+	src/target/x86_64/abi.c \
+	src/target/x86_64/call_plan.c \
+	src/target/x86_64/frame.c \
+	src/target/x86_64/global_emit.c \
+	src/target/aarch64/abi.c \
+	src/target/aarch64/codegen.c \
+	src/target/aarch64/block_emit.c \
+	src/target/aarch64/residual_emit.c \
+	src/target/aarch64/scalar_normalize.c \
+	src/target/aarch64/memory_emit.c \
+	src/target/aarch64/call_emit.c \
+	src/target/aarch64/integer_emit.c \
+	src/target/aarch64/fp_emit.c \
+	src/target/aarch64/asm_legalize.c \
+	src/target/loongarch64/codegen.c \
+	src/target/loongarch64/block_emit.c \
+	src/target/loongarch64/residual_emit.c \
+	src/target/loongarch64/scalar_normalize.c \
+	src/target/loongarch64/memory_emit.c \
+	src/target/loongarch64/call_emit.c \
+	src/target/loongarch64/integer_emit.c \
+	src/target/loongarch64/fp_emit.c \
+	src/target/loongarch64/frame_emit.c \
 	tools/minic-cc/main.c
 MINIC_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(MINIC_SOURCES))
 MINIC_CC_BINARY := $(BUILD_DIR)/bin/minic-cc
@@ -231,7 +338,7 @@ RV64_ABI_TEST_SOURCES := \
 RV64_ABI_TEST_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(RV64_ABI_TEST_SOURCES))
 RV64_ABI_TEST_BINARY  := $(BUILD_DIR)/tests/target/riscv64/abi-test
 
-.PHONY: all help prepare check check-fast check-target-selection-m0 check-x86_64-busybox-all-eligible check-x86_64-busybox-complex-five check-x86_64-busybox-host-link check-elf-constructors check-x86_64-one-gp-sysv check-x86_64-busybox-allyes-discovery check-x86_64-busybox-12 check-x86_64-sqlite-frontier check-x86_64-m1 check-x86_64-tinyaes check-x86_64-cjson check-x86_64-abi-elf check-x86_64-lua-frontier check-x86_64-zlib-frontier check-minias-a0 check-minipp-a0 check-minielf-reader-a0 check-mininm-a0 check-mininm-a1 check-miniobjcopy-a0 check-miniobjcopy-a1 check-minicstrip-a0 check-miniar-a0 check-miniar-a1 check-minild-a0 check-minild-a1 check-minild-a2 check-minild-a3 check-minild-a4 check-minild-a5 check-minild-a6 check-minild-script-a0 check-minild-script-a1 check-token-model check-lexer \
+.PHONY: all help prepare check check-fast check-four-backend-lua-frontier check-four-backend-lua-accept check-four-backend-zlib-frontier check-four-backend-zlib-accept check-target-selection-m0 check-four-backend-m39-lp64-bitops check-four-backend-m15-scalar-return check-four-backend-m14-shift check-four-backend-m13-narrow-arith check-four-backend-m12-bitwise check-four-backend-m11-index check-four-backend-m10-mod check-four-backend-m9-unsigned check-four-backend-m8-narrow check-four-backend-m7-frame check-four-backend-m6-address check-four-backend-m5-pointer check-four-backend-m4-global check-four-backend-m38-fp-varargs check-four-backend-m37-fp-arith check-four-backend-m36-lp64-mul check-four-backend-m35-ptr-to-lp64 check-four-backend-m34-fp-call-result check-four-backend-m33-pointer-less check-four-backend-m32-unreachable check-four-backend-m31-float-promote check-four-backend-m30-fp-call check-four-backend-m29-double-cmp check-four-backend-m28-int-double check-four-backend-m27-fp-parameter check-four-backend-m26-double-div check-four-backend-m25-double-transport check-four-backend-m24-indirect-call check-four-backend-m23-lp64-compare check-four-backend-m22-lp64-conv check-four-backend-m21-lp64-add check-four-backend-m20-lp64-abi check-four-backend-m19-ptr-compare check-four-backend-m18-varargs check-four-backend-m17-record check-four-backend-cjson-accept check-four-backend-cjson-frontier check-four-backend-tinyaes-accept check-four-backend-tinyaes-frontier check-four-backend-m3-call check-four-backend-m2-stack check-four-backend-m2 check-four-backend-m1 check-four-target-model-m0 check-x86_64-busybox-all-eligible check-x86_64-busybox-complex-five check-x86_64-busybox-host-link check-elf-constructors check-x86_64-one-gp-sysv check-x86_64-busybox-allyes-discovery check-x86_64-busybox-12 check-x86_64-sqlite-frontier check-x86_64-m1 check-x86_64-tinyaes check-x86_64-cjson check-x86_64-abi-elf check-x86_64-lua-frontier check-x86_64-zlib-frontier check-minias-a0 check-minipp-a0 check-minielf-reader-a0 check-mininm-a0 check-mininm-a1 check-miniobjcopy-a0 check-miniobjcopy-a1 check-minicstrip-a0 check-miniar-a0 check-miniar-a1 check-minild-a0 check-minild-a1 check-minild-a2 check-minild-a3 check-minild-a4 check-minild-a5 check-minild-a6 check-minild-script-a0 check-minild-script-a1 check-token-model check-lexer \
 	check-type check-record check-type-alias check-ast-contract check-layout check-rv64-abi \
 	check-static-functions \
 	check-unsigned-declarations check-long-types check-for-loops check-unbounded-for-break \
@@ -663,6 +770,280 @@ check-compound-xor-assignment: $(MINIC_BINARY)
 	HOST_CC="$(CC)" \
 	BUILD_DIR="$(abspath $(BUILD_DIR))" \
 	sh tests/compiler/c0/run-compound-xor-assignment.sh
+
+# LP64 type-model ABI oracle for the two registered (not yet emitted) ISAs.
+# Link to the same *already compiled* MiniC library objects as minic-cc.
+# Shared GNU/ELF/QEMU runner, independently selected architecture/ABI tools.
+# Run only with both cross-GCC toolchains and qemu-user actually installed.
+# M2 uses the same proven cross-GNU/ELF/QEMU harness with a larger Core
+# CFG corpus; M1 remains an independent early-ISA smoke gate.
+check-four-backend-m2: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" FOUR_BACKEND_M2=1 \
+	sh tests/compiler/c0/run-four-backend-m1.sh
+
+# Keep the baseline M1/M2 suites independent; GNU -> MiniC 9/10-argument
+# tests live in an opt-in extension of the proven ELF/QEMU harness.
+check-four-backend-m2-stack: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" FOUR_BACKEND_M2_STACK=1 \
+	sh tests/compiler/c0/run-four-backend-m1.sh
+
+# GNU cross-TU and actual MiniC nested callers; the next observed x86
+# sequence gate before attempting unchanged tinyAES/cJSON source.
+check-four-backend-m3-call: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" FOUR_BACKEND_M3_CALL=1 \
+	sh tests/compiler/c0/run-four-backend-m1.sh
+
+# Narrow static integer and byte array globals, and explicit relocation rejection.
+check-four-backend-m4-global: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" FOUR_BACKEND_M4_GLOBAL=1 \
+	sh tests/compiler/c0/run-four-backend-m1.sh
+
+# Original AES_init_ctx first signature frontier: pointer and void ABI.
+check-four-backend-m5-pointer: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" FOUR_BACKEND_M5_POINTER=1 \
+	sh tests/compiler/c0/run-four-backend-m1.sh
+
+# Source-observed first original AES_init_ctx field.addr / pointer.offset:
+# GNU->MiniC on real struct and array storage, both target QEMUs.
+check-four-backend-m6-address: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" FOUR_BACKEND_M6_ADDRESS=1 \
+	sh tests/compiler/c0/run-four-backend-m1.sh
+
+# Local object layout and >2KiB stack displacements validated by
+# independent cross-GNU static link and genuine target QEMU execution.
+check-four-backend-m7-frame: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" FOUR_BACKEND_M7_FRAME=1 \
+	sh tests/compiler/c0/run-four-backend-m1.sh
+
+# Original KeyExpansion uint8_t and integer-conversion Core frontier:
+# real C signed/unsigned 1B/2B memory and conversions, GNU-linked QEMU.
+check-four-backend-m8-narrow: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" FOUR_BACKEND_M8_NARROW=1 \
+	sh tests/compiler/c0/run-four-backend-m1.sh
+
+# Actual AES KeyExpansion signedness frontier: unsigned 32-bit compare
+# and offset, independently built by GNU and through target QEMU.
+check-four-backend-m9-unsigned: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" FOUR_BACKEND_M9_UNSIGNED=1 \
+	sh tests/compiler/c0/run-four-backend-m1.sh
+
+# GNU/QEMU-backed signed/unsigned divide and remainder ABI.
+check-four-backend-m10-mod: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" FOUR_BACKEND_M10_MOD=1 \
+	sh tests/compiler/c0/run-four-backend-m1.sh
+
+# Actual original AES pointer.offset with narrow signed/unsigned index:
+# distinct GNU and MiniC ELF + QEMU cross execution.
+check-four-backend-m11-index: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" FOUR_BACKEND_M11_INDEX=1 \
+	sh tests/compiler/c0/run-four-backend-m1.sh
+
+# Original AES KeyExpansion AND/XOR/OR target-owned machine lowering.
+check-four-backend-m12-bitwise: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" FOUR_BACKEND_M12_BITWISE=1 \
+	sh tests/compiler/c0/run-four-backend-m1.sh
+
+# TinyAES AddRoundKey actual uint8_t add/sub/mul: both cross-GNU/QEMU
+# with independent oracle executables to check width and signedness.
+check-four-backend-m13-narrow-arith: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" FOUR_BACKEND_M13_NARROW_ARITH=1 \
+	sh tests/compiler/c0/run-four-backend-m1.sh
+
+# True target variable signed/unsigned shifts in original xtime:
+# independent GNU and MiniC static ELF/QEMU executables per ISA.
+check-four-backend-m14-shift: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" FOUR_BACKEND_M14_SHIFT=1 \
+	sh tests/compiler/c0/run-four-backend-m1.sh
+
+# xtime authentic uint8_t result ABI, including signed char and
+# native-vs-GNU callee return normalization under both target QEMUs.
+check-four-backend-m15-scalar-return: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" FOUR_BACKEND_M15_SCALAR_RETURN=1 \
+	sh tests/compiler/c0/run-four-backend-m1.sh
+
+# First pinned, unchanged real project in the same x86 promotion order:
+# a blocked compiler frontier is printed honestly, not a runtime PASS.
+check-four-backend-tinyaes-frontier: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" \
+	sh tests/external/tiny-aes-c/probe-four-backend-frontier.sh
+
+# Strict production acceptance: BOTH unmodified original AES-128 ECB
+# binaries must be MiniC compiled, GNU linked, and QEMU-byte-exact.
+check-four-backend-tinyaes-accept: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" FOUR_BACKEND_TINYAES_REQUIRE=1 \
+	sh tests/external/tiny-aes-c/probe-four-backend-frontier.sh
+
+# Historical x86 order: only after original tinyAES 2/2 passes, promote
+# the exact already-pinned cJSON 1.7.19 core and its existing test gates.
+# GNU may preprocess/assemble/link, never compile the accepted core.
+check-four-backend-cjson-frontier: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" \
+	sh tests/external/cjson/probe-four-backend-frontier.sh
+
+check-four-backend-cjson-accept: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" FOUR_BACKEND_CJSON_REQUIRE=1 \
+	sh tests/external/cjson/probe-four-backend-frontier.sh
+
+# Next original real project after tinyAES and cJSON: all 15 pinned zlib
+# library TUs, GNU cross-oracle/QEMU, error-census discovery before acceptance.
+check-four-backend-zlib-frontier: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" \
+	sh tests/external/zlib/probe-four-backend-frontier.sh
+
+check-four-backend-zlib-accept: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" FOUR_BACKEND_ZLIB_REQUIRE=1 \
+	sh tests/external/zlib/probe-four-backend-frontier.sh
+
+# Lua 5.5.0 official 34-TU original source and cross-GNU/QEMU oracle.
+# Frontier remains available for diagnosis; CI uses the strict acceptance.
+check-four-backend-lua-frontier: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" \
+	sh tests/external/lua/probe-four-backend-frontier.sh
+
+check-four-backend-lua-accept: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" FOUR_BACKEND_LUA_REQUIRE=1 \
+	sh tests/external/lua/probe-four-backend-frontier.sh
+
+# Original SQLite 3.54.1 two-ISA amalgamation. Frontier is discovery only.
+# A status=BLOCKED never counts as project acceptance.
+check-four-backend-sqlite-frontier: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" \
+	sh tests/external/sqlite/probe-four-backend-frontier.sh
+
+check-four-backend-sqlite-accept: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" FOUR_BACKEND_SQLITE_REQUIRE=1 \
+	sh tests/external/sqlite/probe-four-backend-frontier.sh
+
+# Real cJSON M17 flat record and ELF callback relocations; independent
+# GNU caller checks target DataLayout field bytes under both QEMUs.
+check-four-backend-m17-record: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" FOUR_BACKEND_M17_RECORD=1 \
+	sh tests/compiler/c0/run-four-backend-m1.sh
+
+# cJSON_Version's original sprintf uses only promoted integer and pointer
+# variadic parameters, verified as GNU ABI cross-TU ELF/QEMU operations.
+check-four-backend-m18-varargs: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" FOUR_BACKEND_M18_VARARGS=1 \
+	sh tests/compiler/c0/run-four-backend-m1.sh
+
+# cJSON_InitHooks: true 64-bit data/function pointer comparison, null
+# predicates and actual ELF first-class function symbol addresses.
+check-four-backend-m19-ptr-compare: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" MINIC_M1_TRACE=1 FOUR_BACKEND_M19_PTR_COMPARE=1 \
+	sh tests/compiler/c0/run-four-backend-m1.sh
+
+# cJSON initializes size_t and handles signed/unsigned scalar casts.
+# Full-width cJSON size_t equality, ordering, sign and zero predicates.
+# cJSON global_hooks: native first-class function pointer calls, GNU/QEMU.
+# Source-driven cJSON_GetNumberValue: binary64 payload and FP-return ABI.
+# cJSON_GetNumberValue's NaN literal arises from IEEE 0/0 division.
+# Original cJSON_CreateNumber: independently classified LP64d floating params.
+# cJSON_CreateNumber's signed32/IEEE binary64 numeric conversion frontier.
+# cJSON_CreateNumber: NaN-correct IEEE-754 ordered double comparisons.
+# cJSON_CreateIntArray forwards binary64 to a fixed-parameter callee.
+# cJSON_CreateFloatArray: IEEE float32 memory and numeric binary64 promotion.
+# Original cJSON_Compare explicit Core unreachable terminator, checked with GNU/QEMU.
+# cJSON_SetValuestring ordered 64-bit pointer overlap checks.
+# cJSON parse_number's GNU strtod and callback binary64 result ABI.
+# Original cJSON parse_number: LP64 pointer-to-integer and byte offsets.
+# Original cJSON ensure(): size_t multiplication with full LP64 semantics.
+# Original cJSON compare_double: IEEE binary64 subtract and multiply.
+# Original cJSON print_number: ABI-specific variadic binary64 calling.
+# M39: original cJSON utf16_literal_to_utf8 uses unsigned long
+# bitwise masks and shifts. Assert LP64 width with GNU/QEMU on both ISAs.
+check-four-backend-m39-lp64-bitops: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" FOUR_BACKEND_M39_LP64_BITOPS=1 \
+	sh tests/compiler/c0/run-four-backend-m1.sh
+
+check-four-backend-m38-fp-varargs: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" FOUR_BACKEND_M38_FP_VARARGS=1 \
+	sh tests/compiler/c0/run-four-backend-m1.sh
+
+check-four-backend-m37-fp-arith: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" FOUR_BACKEND_M37_FP_ARITH=1 \
+	sh tests/compiler/c0/run-four-backend-m1.sh
+
+check-four-backend-m36-lp64-mul: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" FOUR_BACKEND_M36_LP64_MUL=1 \
+	sh tests/compiler/c0/run-four-backend-m1.sh
+
+check-four-backend-m35-ptr-to-lp64: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" FOUR_BACKEND_M35_PTR_TO_LP64=1 \
+	sh tests/compiler/c0/run-four-backend-m1.sh
+
+check-four-backend-m34-fp-call-result: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" FOUR_BACKEND_M34_FP_CALL_RESULT=1 \
+	sh tests/compiler/c0/run-four-backend-m1.sh
+
+check-four-backend-m33-pointer-less: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" FOUR_BACKEND_M33_POINTER_LESS=1 \
+	sh tests/compiler/c0/run-four-backend-m1.sh
+
+check-four-backend-m32-unreachable: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" FOUR_BACKEND_M32_UNREACHABLE=1 \
+	sh tests/compiler/c0/run-four-backend-m1.sh
+
+check-four-backend-m31-float-promote: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" FOUR_BACKEND_M31_FLOAT_PROMOTE=1 \
+	sh tests/compiler/c0/run-four-backend-m1.sh
+
+check-four-backend-m30-fp-call: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" FOUR_BACKEND_M30_FP_CALL=1 \
+	sh tests/compiler/c0/run-four-backend-m1.sh
+
+check-four-backend-m29-double-cmp: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" FOUR_BACKEND_M29_DOUBLE_CMP=1 \
+	sh tests/compiler/c0/run-four-backend-m1.sh
+
+check-four-backend-m28-int-double: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" FOUR_BACKEND_M28_INT_DOUBLE=1 \
+	sh tests/compiler/c0/run-four-backend-m1.sh
+
+check-four-backend-m27-fp-parameter: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" FOUR_BACKEND_M27_FP_PARAMETER=1 \
+	sh tests/compiler/c0/run-four-backend-m1.sh
+
+check-four-backend-m26-double-div: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" FOUR_BACKEND_M26_DOUBLE_DIV=1 \
+	sh tests/compiler/c0/run-four-backend-m1.sh
+
+check-four-backend-m25-double-transport: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" FOUR_BACKEND_M25_DOUBLE_TRANSPORT=1 \
+	sh tests/compiler/c0/run-four-backend-m1.sh
+
+check-four-backend-m24-indirect-call: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" FOUR_BACKEND_M24_INDIRECT_CALL=1 \
+	sh tests/compiler/c0/run-four-backend-m1.sh
+
+check-four-backend-m23-lp64-compare: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" FOUR_BACKEND_M23_LP64_COMPARE=1 \
+	sh tests/compiler/c0/run-four-backend-m1.sh
+
+check-four-backend-m22-lp64-conv: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" FOUR_BACKEND_M22_LP64_CONV=1 \
+	sh tests/compiler/c0/run-four-backend-m1.sh
+
+# cJSON's strlen(value)+sizeof("") is native size_t arithmetic.
+check-four-backend-m21-lp64-add: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" FOUR_BACKEND_M21_LP64_ADD=1 \
+	sh tests/compiler/c0/run-four-backend-m1.sh
+
+# cJSON's size_t frontier: ABI high-half, scalar memory and GNU callers.
+check-four-backend-m20-lp64-abi: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" FOUR_BACKEND_M20_LP64_ABI=1 \
+	sh tests/compiler/c0/run-four-backend-m1.sh
+
+check-four-backend-m1: $(MINIC_CC_BINARY)
+	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" \
+	sh tests/compiler/c0/run-four-backend-m1.sh
+
+check-four-target-model-m0: $(MINIC_CC_BINARY)
+	@mkdir -p "$(BUILD_DIR)/tests/target"
+	$(CC) $(CPPFLAGS) $(MINIC_INCLUDES) $(MINIC_CFLAGS) \
+		tests/compiler/c0/check-four-target-model-m0.c \
+		$(filter-out $(BUILD_DIR)/obj/tools/minic-cc/main.o,$(MINIC_OBJECTS)) \
+		$(MINIC_LDFLAGS) -o "$(BUILD_DIR)/tests/target/four-target-model-m0"
+	"$(BUILD_DIR)/tests/target/four-target-model-m0"
 
 check-target-selection-m0: $(MINIC_CC_BINARY)
 	MINIC_CC="$(abspath $(MINIC_CC_BINARY))" \

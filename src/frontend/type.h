@@ -38,7 +38,16 @@ typedef enum MinicTypeBaseKind {
     MINIC_TYPE_BASE_FLOAT32,
     MINIC_TYPE_BASE_FLOAT64,
     MINIC_TYPE_BASE_FLOAT32X,
-    MINIC_TYPE_BASE_FLOAT64X
+    MINIC_TYPE_BASE_FLOAT64X,
+    /* AArch64 glibc declares GCC's NEON/SVE builtin vector types even when
+     * the C program never uses SIMD. Preserve separate opaque identities:
+     * typedef parsing is supported; layout and machine operations reject
+     * until each vector ABI has been implemented and verified. */
+    MINIC_TYPE_BASE_AARCH64_FLOAT32X4,
+    MINIC_TYPE_BASE_AARCH64_FLOAT64X2,
+    MINIC_TYPE_BASE_AARCH64_SVE_FLOAT32,
+    MINIC_TYPE_BASE_AARCH64_SVE_FLOAT64,
+    MINIC_TYPE_BASE_AARCH64_SVE_BOOL
 } MinicTypeBaseKind;
 
 typedef enum MinicIntegerSign {
@@ -106,6 +115,8 @@ MinicType minic_type_float32(void);
 MinicType minic_type_float64(void);
 MinicType minic_type_float32x(void);
 MinicType minic_type_float64x(void);
+/* Header-only opaque AArch64 builtin SIMD identities, not scalar aliases. */
+MinicType minic_type_aarch64_header_builtin(MinicTypeBaseKind base_kind);
 MinicType minic_type_x86_va_list_cursor(void);
 bool minic_type_is_x86_va_list_cursor(MinicType type);
 MinicType minic_type_function(MinicFunctionTypeId function_type_id);

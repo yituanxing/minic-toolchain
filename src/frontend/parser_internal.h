@@ -538,6 +538,25 @@ bool minic_parser_parse_string_text(MinicParser *parser,
                                     char **text,
                                     size_t *length,
                                     MinicSourceSpan *span);
+/* Private grammar seam: two builtin probe phases preserve original lexical
+ * precedence, with only scalar-literal parsing between them. */
+bool minic_parser_current_identifier_lexeme_equals_cstr(const MinicParser *parser, const char *name);
+bool minic_parser_finish_value_expression(
+    MinicParser *parser, MinicExpressionId input_id,
+    bool decay_array, MinicExpressionId *expression_id);
+bool minic_parser_expression_parse_internal(
+    MinicParser *parser, MinicExpressionId *expression_id,
+    unsigned int minimum_precedence, bool decay_array);
+bool minic_parser_expression_parse_call_arguments(
+    MinicParser *parser, MinicExpression *call_expression,
+    const MinicFunction *callee);
+bool minic_parser_try_builtin_primary_early(
+    MinicParser *parser, MinicExpressionId *expression_id,
+    bool decay_array, bool *handled);
+bool minic_parser_try_builtin_primary_late(
+    MinicParser *parser, MinicExpressionId *expression_id,
+    bool decay_array, bool *handled);
+
 bool minic_parser_token_starts_expression(MinicTokenKind kind);
 bool minic_parser_parse_expression(MinicParser *parser,
                                    MinicExpressionId *expression_id,

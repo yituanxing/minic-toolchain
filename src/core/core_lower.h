@@ -2,6 +2,7 @@
 #define MINIC_CORE_CORE_LOWER_H
 
 #include "core/core_ir.h"
+#include "core/reentry_index.h"
 #include "frontend/function_body.h"
 #include "target/target_info.h"
 
@@ -11,13 +12,11 @@ typedef enum MinicCoreLowerStatus {
     MINIC_CORE_LOWER_ERROR
 } MinicCoreLowerStatus;
 
-/* Optional scoped read-only reentry index for one compilation's Core Set.
- * begin() falls back to existing per-query scans on validation/OOM failure. */
-void minic_core_lower_reentry_index_begin(const MinicC0Program *program);
-void minic_core_lower_reentry_index_end(void);
-
 MinicCoreLowerStatus minic_core_lower_function(const MinicFunctionBodyView *body,
                                                const MinicTargetInfo *target,
                                                MinicCoreFunction *output);
+MinicCoreLowerStatus minic_core_lower_function_with_index(
+    const MinicFunctionBodyView *body, const MinicTargetInfo *target,
+    MinicCoreFunction *output, MinicCoreReentryIndex *index);
 
 #endif

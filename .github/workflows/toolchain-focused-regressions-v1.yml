@@ -21,6 +21,7 @@ on:
       - 'Makefile'
       - '.github/actions/**'
       - '.github/workflows/toolchain-focused-regressions-v1.yml'
+      - '.github/workflows/linux-runtime-gcc-baseline.yml'
       - '!**/*.md'
       - '!tools/ci/**'
   workflow_dispatch:
@@ -35,6 +36,7 @@ on:
           - minic-rv64
           - miniar
           - minild
+          - four-backend
 
 permissions:
   contents: read
@@ -53,19 +55,98 @@ jobs:
         with:
           ref: ${{ github.sha }}
 
+      # Only changes confined to new ISA backends / their GNU-QEMU fixtures
+      # select four-backend; Core, driver, Makefile, CI, unknown paths or
+      # unavailable git history fail open to ALL existing regression owners.
+      - name: Select focused regression owners
+        id: owners
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BEFORE_SHA: ${{ github.event.before }}
+          DISPATCH_MODE: ${{ inputs.mode }}
+        run: |
+          set -Eeuo pipefail
+          mode=all
+          linux_yaml=true
+          if [[ "$EVENT_NAME" == workflow_dispatch ]]; then
+            mode="${DISPATCH_MODE:-all}"
+            if [[ "$mode" != all ]]; then linux_yaml=false; fi
+          else
+            paths="$RUNNER_TEMP/minic-focused-changed-paths.txt"
+            if [[ "$BEFORE_SHA" =~ ^[0-9a-f]{40}$ ]] &&
+               [[ ! "$BEFORE_SHA" =~ ^0+$ ]] &&
+               { git cat-file -e "$BEFORE_SHA^{commit}" 2>/dev/null ||
+                 git fetch --no-tags --depth=1 origin "$BEFORE_SHA"; } &&
+               git diff --name-only "$BEFORE_SHA" "$GITHUB_SHA" > "$paths"; then
+              linux_yaml=false
+              four_only=true
+              [[ -s "$paths" ]] || four_only=false
+              while IFS= read -r changed; do
+                if [[ "$changed" == .github/workflows/linux-runtime-gcc-baseline.yml ||
+                      "$changed" == .github/workflows/toolchain-focused-regressions-v1.yml ]]; then
+                  linux_yaml=true
+                fi
+                case "$changed" in
+                  src/target/aarch64/*|src/target/loongarch64/*|tests/compiler/c0/run-four-backend-m1.sh|tests/compiler/c0/probe-four-backend-outgoing-abi.sh|tests/compiler/c0/probe-four-backend-switch-dead-prefix.sh|tests/compiler/c0/probe-loongarch64-dynamic-alloca.sh|tests/compiler/c0/probe-aarch64-binary128-return.sh|tests/compiler/c0/probe-loongarch64-binary128-return.sh|tests/compiler/c0/probe-four-backend-zero-record-array.sh|tests/compiler/c0/probe-aarch64-pie-extern-got.sh|tests/compiler/c0/probe-four-backend-aapcs64-hfa-guard.sh|tests/external/tiny-aes-c/*|tests/external/cjson/*|tests/external/zlib/*|tests/external/lua/*|tests/external/sqlite/*|tests/external/tinycc/*|tests/external/busybox/*)
+                    ;;
+                  *) four_only=false ;;
+                esac
+              done < "$paths"
+              if [[ "$four_only" == true ]]; then mode=four-backend; fi
+            else
+              echo 'FOCUSED_OWNER_DIFF=UNAVAILABLE fallback=all owners'
+            fi
+          fi
+          rv64=false
+          miniar=false
+          minild=false
+          four=false
+          case "$mode" in
+            all) rv64=true; miniar=true; minild=true; four=true ;;
+            minic-rv64) rv64=true ;;
+            miniar) miniar=true ;;
+            minild) minild=true ;;
+            four-backend) four=true ;;
+            *) echo "FOCUSED_OWNER_INVALID_MODE=$mode" >&2; exit 1 ;;
+          esac
+          {
+            printf 'mode=%s\n' "$mode"
+            printf 'rv64=%s\n' "$rv64"
+            printf 'miniar=%s\n' "$miniar"
+            printf 'minild=%s\n' "$minild"
+            printf 'four=%s\n' "$four"
+            printf 'linux_yaml=%s\n' "$linux_yaml"
+          } >> "$GITHUB_OUTPUT"
+          echo "FOCUSED_OWNER_PLAN mode=$mode rv64=$rv64 miniar=$miniar minild=$minild four=$four linux_yaml=$linux_yaml"
       # Stage2 2064 preflight checks current source workflow.
       # The bootstrap Linux opt-in workflow has several nested matrix
       # conditions. Parse its real YAML BEFORE another costly seven-way run.
       - name: Parse existing Linux runtime workflow YAML
+        if: steps.owners.outputs.linux_yaml == 'true'
         shell: bash
         run: |
           set -Eeuo pipefail
           ruby -e 'require "yaml"; YAML.parse_file(".github/workflows/linux-runtime-gcc-baseline.yml"); puts "LINUX_RUNTIME_YAML_PARSE=PASS"'
           # Catch GitHub Actions expression and schema errors (which
           # Ruby's plain YAML syntax check intentionally cannot catch).
-          go run github.com/rhysd/actionlint/cmd/actionlint@latest -shellcheck= -pyflakes= .github/workflows/linux-runtime-gcc-baseline.yml
+          # Pin the official actionlint release and verify its published digest.
+          # go run @latest fetched a whole replacement Go 1.26 toolchain on
+          # ubuntu-24.04 (70s preflight in #39273247308), masking test gains.
+          curl --fail --location --silent --show-error --retry 3 --connect-timeout 10 \
+            --max-time 45 \
+            https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz \
+            -o /tmp/minic-actionlint-v1.7.12.tar.gz
+          printf '%s  %s\n' '8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8' \
+            /tmp/minic-actionlint-v1.7.12.tar.gz | sha256sum --check --status
+          mkdir -p /tmp/minic-actionlint-bin
+          tar -xzf /tmp/minic-actionlint-v1.7.12.tar.gz -C /tmp/minic-actionlint-bin actionlint
+          /tmp/minic-actionlint-bin/actionlint -shellcheck= -pyflakes= \
+            .github/workflows/linux-runtime-gcc-baseline.yml \
+            .github/workflows/toolchain-focused-regressions-v1.yml
 
       - name: Install union of RV64, archive, static and dynamic linker oracle prerequisites
+        if: steps.owners.outputs.mode != 'four-backend'
         run: |
           set -Eeuo pipefail
           timeout 240s sudo apt-get -o Acquire::Retries=3 update
@@ -83,10 +164,228 @@ jobs:
           test -x build/toolchain-focused-t1-v2/bin/minic-ar
           test -x build/toolchain-focused-t1-v2/bin/minic-ld
 
+      # Core or x86 global-layout refactors must run a native executable
+      # contract, not merely compile the compiler and cross-check two new ISAs.
+      # Reuse the existing broad x86 smoke rather than inventing another test.
+      - name: Validate x86-64 native source-to-global-object ABI
+        if: steps.owners.outputs.mode == 'all' && steps.build.outcome == 'success'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(uname -m)" = x86_64
+          MINIC_CC="$GITHUB_WORKSPACE/build/toolchain-focused-t1-v2/bin/minic-cc" \
+            HOST_CC=cc sh tests/compiler/c0/run-x86_64-native-m1.sh
+          echo "MINIC_X86_NATIVE_M1=PASS data_layout=checked runtime=checked"
+
       # Stage2 artifact mode fix: Actions strips +x; QEMU requires executable ELF.
       # Certified fixture return_42.c for strict direct/driver parity.
       # Verify the exact certified self-hosted RV64 Stage2 driver hookup on
       # one runner BEFORE burning seven full Linux runners again.
+      # Temporary actual cJSON 1.7.19 original-source GNU/QEMU survey,
+      # run only after proven original AES 2/2 and restore baseline YAML.
+      - name: Four backend original AES and cJSON two-target source frontier
+        id: four
+        if: steps.owners.outputs.four == 'true' && steps.build.outcome == 'success'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          # Four-backend-only pushes do not need RV64 cross packages.
+          if [[ "${{ steps.owners.outputs.mode }}" == four-backend ]]; then
+            timeout 240s sudo apt-get -o Acquire::Retries=3 update
+          fi
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends gcc-aarch64-linux-gnu libc6-dev-arm64-cross gcc-13-loongarch64-linux-gnu libc6-dev-loong64-cross qemu-user
+          # Existing x86/RV64 startup constructor contract now covers both
+          # new ISAs, including two real relocated .init_array entries.
+          sh -n tests/compiler/c0/probe-four-backend-constructors.sh
+          MINIC_CC="$GITHUB_WORKSPACE/build/toolchain-focused-t1-v2/bin/minic-cc" \
+            sh tests/compiler/c0/probe-four-backend-constructors.sh
+          # GCC glibc __SOCKADDR_ARG callback parameter with transparent
+          # union must match the pointer ABI, but not arbitrary signatures.
+          sh -n tests/compiler/c0/probe-four-backend-transparent-union-callback.sh
+          MINIC_CC="$GITHUB_WORKSPACE/build/toolchain-focused-t1-v2/bin/minic-cc" \
+            sh tests/compiler/c0/probe-four-backend-transparent-union-callback.sh \
+              aarch64 aarch64-linux-gnu-gcc qemu-aarch64 /usr/aarch64-linux-gnu
+          MINIC_CC="$GITHUB_WORKSPACE/build/toolchain-focused-t1-v2/bin/minic-cc" \
+            sh tests/compiler/c0/probe-four-backend-transparent-union-callback.sh \
+              loongarch64 loongarch64-linux-gnu-gcc-13 qemu-loongarch64 /usr/loongarch64-linux-gnu
+          # Run the smallest QEMU dynamic-stack ABI oracles FIRST. A
+          # failure returns the exact generated assembly within seconds
+          # instead of following 179 original Kbuild rebuilds per ISA.
+          sh -n tests/compiler/c0/probe-four-backend-dynamic-stack.sh
+          MINIC_CC="$GITHUB_WORKSPACE/build/toolchain-focused-t1-v2/bin/minic-cc" \
+            sh tests/compiler/c0/probe-four-backend-dynamic-stack.sh \
+              aarch64 aarch64-linux-gnu-gcc qemu-aarch64 /usr/aarch64-linux-gnu
+          MINIC_CC="$GITHUB_WORKSPACE/build/toolchain-focused-t1-v2/bin/minic-cc" \
+            sh tests/compiler/c0/probe-four-backend-dynamic-stack.sh \
+              loongarch64 loongarch64-linux-gnu-gcc-13 qemu-loongarch64 /usr/loongarch64-linux-gnu
+          # C bit-field source-to-Core contract. GNU receives matching
+          # struct state; MiniC emits only its own semantics and machine code.
+          sh -n tests/compiler/c0/probe-four-backend-bitfield-core.sh
+          MINIC_CC="$GITHUB_WORKSPACE/build/toolchain-focused-t1-v2/bin/minic-cc" \
+            sh tests/compiler/c0/probe-four-backend-bitfield-core.sh
+          # Full-size (>imm12) pointer arithmetic, GNU+MiniC QEMU differential.
+          sh -n tests/compiler/c0/probe-four-backend-large-pointer-stride.sh
+          MINIC_CC="$GITHUB_WORKSPACE/build/toolchain-focused-t1-v2/bin/minic-cc" \
+            sh tests/compiler/c0/probe-four-backend-large-pointer-stride.sh \
+              aarch64 aarch64-linux-gnu-gcc qemu-aarch64 /usr/aarch64-linux-gnu
+          MINIC_CC="$GITHUB_WORKSPACE/build/toolchain-focused-t1-v2/bin/minic-cc" \
+            sh tests/compiler/c0/probe-four-backend-large-pointer-stride.sh \
+              loongarch64 loongarch64-linux-gnu-gcc-13 qemu-loongarch64 /usr/loongarch64-linux-gnu
+          # GNU/QEMU C-defined double-to-signed/unsigned char/short oracle.
+          sh -n tests/compiler/c0/probe-four-backend-double-narrow.sh
+          MINIC_CC="$GITHUB_WORKSPACE/build/toolchain-focused-t1-v2/bin/minic-cc" \
+            sh tests/compiler/c0/probe-four-backend-double-narrow.sh \
+              aarch64 aarch64-linux-gnu-gcc qemu-aarch64 /usr/aarch64-linux-gnu
+          MINIC_CC="$GITHUB_WORKSPACE/build/toolchain-focused-t1-v2/bin/minic-cc" \
+            sh tests/compiler/c0/probe-four-backend-double-narrow.sh \
+              loongarch64 loongarch64-linux-gnu-gcc-13 qemu-loongarch64 /usr/loongarch64-linux-gnu
+          # Fast first-divergence result for the active LoongArch defect.
+          # Preserve every existing mandatory regression below, even when
+          # SQLite is not yet accepted: report the SQLite failure at the end.
+          sh -n tests/compiler/c0/probe-four-backend-outgoing-abi.sh
+          MINIC_CC="$GITHUB_WORKSPACE/build/toolchain-focused-t1-v2/bin/minic-cc" \
+            sh tests/compiler/c0/probe-four-backend-outgoing-abi.sh
+          # Core must preserve legal unreachable switch prefixes from the
+          # untouched upstream TinyCC ARM64 build (and both new ISAs).
+          sh -n tests/compiler/c0/probe-four-backend-switch-dead-prefix.sh
+          MINIC_CC="$GITHUB_WORKSPACE/build/toolchain-focused-t1-v2/bin/minic-cc" \
+            sh tests/compiler/c0/probe-four-backend-switch-dead-prefix.sh
+          sh -n tests/compiler/c0/probe-loongarch64-dynamic-alloca.sh
+          MINIC_CC="$GITHUB_WORKSPACE/build/toolchain-focused-t1-v2/bin/minic-cc" \
+            sh tests/compiler/c0/probe-loongarch64-dynamic-alloca.sh
+          sh -n tests/compiler/c0/probe-aarch64-binary128-return.sh
+          MINIC_CC="$GITHUB_WORKSPACE/build/toolchain-focused-t1-v2/bin/minic-cc" \
+            sh tests/compiler/c0/probe-aarch64-binary128-return.sh
+          sh -n tests/compiler/c0/probe-loongarch64-binary128-return.sh
+          MINIC_CC="$GITHUB_WORKSPACE/build/toolchain-focused-t1-v2/bin/minic-cc" \
+            sh tests/compiler/c0/probe-loongarch64-binary128-return.sh
+          # Original GNU binary128 producer and libc snprintf() variadic
+          # consumer: test LP64D even-GAR pairing and stack overflow.
+          # Original volatile 128-bit memory and two-limb shift oracle.
+          # The original BusyBox top uses glibc div_t, an 8-byte
+          # integer-class result returned in x0/a0, not scalar SSA.
+          # 144B AAPCS64 / LoongArch LP64D composite argument GNU/QEMU.
+          # AAPCS64 HFA/HVA must not silently take the GP-indirect path.
+          # This is a fast explicit negative ABI gate, not runtime fallback.
+          sh -n tests/compiler/c0/probe-four-backend-aapcs64-hfa-guard.sh
+          MINIC_CC="$GITHUB_WORKSPACE/build/toolchain-focused-t1-v2/bin/minic-cc" \
+            sh tests/compiler/c0/probe-four-backend-aapcs64-hfa-guard.sh
+          sh -n tests/compiler/c0/probe-four-backend-large-record-abi.sh
+          MINIC_CC="$GITHUB_WORKSPACE/build/toolchain-focused-t1-v2/bin/minic-cc" \
+            sh tests/compiler/c0/probe-four-backend-large-record-abi.sh
+          sh -n tests/compiler/c0/probe-four-backend-small-record-return.sh
+          MINIC_CC="$GITHUB_WORKSPACE/build/toolchain-focused-t1-v2/bin/minic-cc" \
+            sh tests/compiler/c0/probe-four-backend-small-record-return.sh
+          sh -n tests/compiler/c0/probe-four-backend-int128-memory.sh
+          MINIC_CC="$GITHUB_WORKSPACE/build/toolchain-focused-t1-v2/bin/minic-cc" \
+            sh tests/compiler/c0/probe-four-backend-int128-memory.sh
+          sh -n tests/compiler/c0/probe-four-backend-int128-conversion.sh
+          MINIC_CC="$GITHUB_WORKSPACE/build/toolchain-focused-t1-v2/bin/minic-cc" \
+            sh tests/compiler/c0/probe-four-backend-int128-conversion.sh
+          sh -n tests/compiler/c0/probe-four-backend-binary128-variadic.sh
+          MINIC_CC="$GITHUB_WORKSPACE/build/toolchain-focused-t1-v2/bin/minic-cc" \
+            sh tests/compiler/c0/probe-four-backend-binary128-variadic.sh
+          sh -n tests/compiler/c0/probe-four-backend-zero-record-array.sh
+          MINIC_CC="$GITHUB_WORKSPACE/build/toolchain-focused-t1-v2/bin/minic-cc" \
+            sh tests/compiler/c0/probe-four-backend-zero-record-array.sh
+          sh -n tests/external/sqlite/probe-four-backend-frontier.sh
+          sqlite_status=0
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/toolchain-focused-t1-v2 check-four-backend-sqlite-frontier || sqlite_status=$?
+          echo "FOUR_BACKEND_SQLITE_EARLY_RESULT status=$sqlite_status"
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/toolchain-focused-t1-v2 check-four-backend-tinyaes-accept
+          # The 22 named M17-M38 gates share baseline C/GNU/QEMU fixtures.
+          # Enable them together: each independent case executes once per ISA,
+          # while the existing script still emits each individual Mxx PASS.
+          FOUR_BACKEND_M17_RECORD=1 \
+          FOUR_BACKEND_M18_VARARGS=1 \
+          FOUR_BACKEND_M19_PTR_COMPARE=1 \
+          FOUR_BACKEND_M20_LP64_ABI=1 \
+          FOUR_BACKEND_M21_LP64_ADD=1 \
+          FOUR_BACKEND_M22_LP64_CONV=1 \
+          FOUR_BACKEND_M23_LP64_COMPARE=1 \
+          FOUR_BACKEND_M24_INDIRECT_CALL=1 \
+          FOUR_BACKEND_M25_DOUBLE_TRANSPORT=1 \
+          FOUR_BACKEND_M26_DOUBLE_DIV=1 \
+          FOUR_BACKEND_M27_FP_PARAMETER=1 \
+          FOUR_BACKEND_M28_INT_DOUBLE=1 \
+          FOUR_BACKEND_M29_DOUBLE_CMP=1 \
+          FOUR_BACKEND_M30_FP_CALL=1 \
+          FOUR_BACKEND_M31_FLOAT_PROMOTE=1 \
+          FOUR_BACKEND_M32_UNREACHABLE=1 \
+          FOUR_BACKEND_M33_POINTER_LESS=1 \
+          FOUR_BACKEND_M34_FP_CALL_RESULT=1 \
+          FOUR_BACKEND_M35_PTR_TO_LP64=1 \
+          FOUR_BACKEND_M36_LP64_MUL=1 \
+          FOUR_BACKEND_M37_FP_ARITH=1 \
+          FOUR_BACKEND_M38_FP_VARARGS=1 \
+          FOUR_BACKEND_M39_LP64_BITOPS=1 \
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/toolchain-focused-t1-v2 check-four-backend-m38-fp-varargs
+          sh -n tests/compiler/c0/probe-aarch64-va-list-forward.sh
+          MINIC_CC="$GITHUB_WORKSPACE/build/toolchain-focused-t1-v2/bin/minic-cc" \
+            sh tests/compiler/c0/probe-aarch64-va-list-forward.sh
+          sh -n tests/compiler/c0/probe-four-backend-computed-goto.sh
+          MINIC_CC="$GITHUB_WORKSPACE/build/toolchain-focused-t1-v2/bin/minic-cc" \
+            sh tests/compiler/c0/probe-four-backend-computed-goto.sh
+          sh -n tests/compiler/c0/probe-four-backend-fp-conversions.sh
+          MINIC_CC="$GITHUB_WORKSPACE/build/toolchain-focused-t1-v2/bin/minic-cc" \
+            sh tests/compiler/c0/probe-four-backend-fp-conversions.sh
+          sh -n tests/compiler/c0/probe-four-backend-integer-intrinsics.sh
+          MINIC_CC="$GITHUB_WORKSPACE/build/toolchain-focused-t1-v2/bin/minic-cc" \
+            sh tests/compiler/c0/probe-four-backend-integer-intrinsics.sh
+          sh -n tests/compiler/c0/probe-four-backend-record-call-abi.sh
+          MINIC_CC="$GITHUB_WORKSPACE/build/toolchain-focused-t1-v2/bin/minic-cc" \
+            sh tests/compiler/c0/probe-four-backend-record-call-abi.sh
+          sh -n tests/compiler/c0/probe-four-backend-relaxed-atomics.sh
+          MINIC_CC="$GITHUB_WORKSPACE/build/toolchain-focused-t1-v2/bin/minic-cc" \
+            sh tests/compiler/c0/probe-four-backend-relaxed-atomics.sh
+          sh -n tests/compiler/c0/probe-four-backend-global-layout.sh
+          MINIC_CC="$GITHUB_WORKSPACE/build/toolchain-focused-t1-v2/bin/minic-cc" \
+            sh tests/compiler/c0/probe-four-backend-global-layout.sh
+          # cJSON is now an accepted project: no permissive regression frontier.
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/toolchain-focused-t1-v2 check-four-backend-cjson-accept
+          # Strict real zlib acceptance: all 15 MiniC-owned TUs, original
+          # example/minigzip GNU/QEMU differential, and gzprintf GP/FP ABI.
+          sh -n tests/external/zlib/probe-four-backend-frontier.sh
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/toolchain-focused-t1-v2 check-four-backend-zlib-accept
+          # Lua 5.5.0 is now a strict two-ISA acceptance, not a
+          # permissive discovery frontier: all 34 original TUs must pass
+          # and both real interpreter/luac binaries must match GNU/QEMU.
+          sh -n tests/external/lua/probe-four-backend-frontier.sh
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/toolchain-focused-t1-v2 check-four-backend-lua-accept
+          # TinyCC 0.9.27 is now a mandatory original-source acceptance:
+          # all 9/10 TUs compiled by MiniC, zero GNU C-object fallbacks,
+          # GNU assemble/link, QEMU TinyCC, and a GNU-differential C consumer.
+          sh -n tests/external/tinycc/probe-four-backend-frontier.sh
+          FOUR_BACKEND_TINYCC_REQUIRE_OBJECTS=1 \
+          FOUR_BACKEND_TINYCC_REQUIRE_SMOKE=1 \
+          MINIC_CC="$GITHUB_WORKSPACE/build/toolchain-focused-t1-v2/bin/minic-cc" \
+            sh tests/external/tinycc/probe-four-backend-frontier.sh
+          # Next original software: BusyBox 1.36.1. Reuse x86 nine-applet
+          # config/object-swap oracle with original cross Kbuild and QEMU.
+          # Discovery reports blocked stages but does NOT claim a full
+          # MiniC BusyBox nor weaken the six accepted projects above.
+          # AArch64 BusyBox exposed a real PIE interposable libc symbol:
+          # R_AARCH64_ADR_PREL_PG_HI21 cannot address optind@@GLIBC.
+          sh -n tests/compiler/c0/probe-aarch64-pie-extern-got.sh
+          MINIC_CC="$GITHUB_WORKSPACE/build/toolchain-focused-t1-v2/bin/minic-cc" \
+            sh tests/compiler/c0/probe-aarch64-pie-extern-got.sh
+          sh -n tests/external/busybox/probe-four-backend-frontier.sh
+          sh -n tests/external/busybox/probe-four-backend-expanded.sh
+          sh -n tests/external/busybox/probe-four-backend-all-kbuild.sh
+          FOUR_BACKEND_BUSYBOX_SWEEP=1 \
+          FOUR_BACKEND_BUSYBOX_EXPAND=1 \
+          FOUR_BACKEND_BUSYBOX_NEXT=1 \
+          FOUR_BACKEND_BUSYBOX_WIDE=1 \
+          FOUR_BACKEND_BUSYBOX_ALLYES=1 \
+          MINIC_CC="$GITHUB_WORKSPACE/build/toolchain-focused-t1-v2/bin/minic-cc" \
+            sh tests/external/busybox/probe-four-backend-frontier.sh
+
+
+          if [[ "$sqlite_status" -ne 0 ]]; then
+            echo "FOUR_BACKEND_SQLITE_ACCEPT=FAIL status=$sqlite_status"
+            exit "$sqlite_status"
+          fi
+
       - name: Fetch certified Stage2 for single-runner Kbuild driver preflight
         if: contains(github.event.head_commit.message, '[minic-stage2-driver-smoke]')
         uses: actions/download-artifact@v4
@@ -112,7 +411,7 @@ jobs:
           echo "BOOTSTRAP_STAGE2_DRIVER_PREFLIGHT=PASS qemu_stage2_dispatch=$(wc -l < "$COHORT_STAGE2_INVOKE_TRACE")"
       - name: Run focused current-product regressions
         id: rv64
-        if: (github.event_name == 'push' || inputs.mode == 'all' || inputs.mode == 'rv64') && steps.build.outcome == 'success'
+        if: steps.owners.outputs.rv64 == 'true' && steps.build.outcome == 'success'
         continue-on-error: true
         shell: bash
         run: |
@@ -147,6 +446,15 @@ jobs:
           # target macro producer is compiled into the native minic-cpp.
           bash tests/preprocessor/run-target-predefines-native.sh \
             "$GITHUB_WORKSPACE/build/toolchain-focused-t1-v2/bin/minic-cpp"
+
+          # Reuse the already-built RV64 compiler for the complete static
+          # aggregate/relocation assembly suite, including fallback bitfields
+          # and the new common nested DataLayout path. No separate CI job.
+          MINIC="$minic" \
+          BUILD_DIR="$work/static-aggregate-layout" \
+          RISCV_CC=riscv64-linux-gnu-gcc \
+          QEMU_RISCV64=qemu-riscv64 \
+            sh tests/compiler/c0/run-static-aggregate-initializers.sh
 
           MINIC="$minic" \
           BUILD_DIR="$work" \
@@ -187,7 +495,7 @@ jobs:
 
       - name: Validate MiniAR archive contracts
         id: ar_archive
-        if: (github.event_name == 'push' || inputs.mode == 'all' || inputs.mode == 'miniar') && steps.build.outcome == 'success'
+        if: steps.owners.outputs.miniar == 'true' && steps.build.outcome == 'success'
         continue-on-error: true
         shell: bash
         run: |
@@ -197,7 +505,7 @@ jobs:
 
       - name: Validate shared ELF reader contract
         id: ar_reader
-        if: (github.event_name == 'push' || inputs.mode == 'all' || inputs.mode == 'miniar') && steps.build.outcome == 'success'
+        if: steps.owners.outputs.miniar == 'true' && steps.build.outcome == 'success'
         continue-on-error: true
         shell: bash
         run: |
@@ -206,7 +514,7 @@ jobs:
 
       - name: Validate MiniNM archive consumers
         id: ar_nm
-        if: (github.event_name == 'push' || inputs.mode == 'all' || inputs.mode == 'miniar') && steps.build.outcome == 'success'
+        if: steps.owners.outputs.miniar == 'true' && steps.build.outcome == 'success'
         continue-on-error: true
         shell: bash
         run: |
@@ -216,7 +524,7 @@ jobs:
 
       - name: Validate shared ELF writer reader and linker-script contracts
         id: ld_shared
-        if: (github.event_name == 'push' || inputs.mode == 'all' || inputs.mode == 'minild') && steps.build.outcome == 'success'
+        if: steps.owners.outputs.minild == 'true' && steps.build.outcome == 'success'
         continue-on-error: true
         shell: bash
         run: |
@@ -228,7 +536,7 @@ jobs:
 
       - name: Validate MiniLD static A0-A3 contracts
         id: ld_static
-        if: (github.event_name == 'push' || inputs.mode == 'all' || inputs.mode == 'minild') && steps.build.outcome == 'success'
+        if: steps.owners.outputs.minild == 'true' && steps.build.outcome == 'success'
         continue-on-error: true
         shell: bash
         run: |
@@ -240,7 +548,7 @@ jobs:
 
       - name: Validate MiniLD dynamic A4-A6 contracts
         id: ld_dynamic
-        if: (github.event_name == 'push' || inputs.mode == 'all' || inputs.mode == 'minild') && steps.build.outcome == 'success'
+        if: steps.owners.outputs.minild == 'true' && steps.build.outcome == 'success'
         continue-on-error: true
         shell: bash
         run: |
@@ -251,7 +559,7 @@ jobs:
 
       - name: Validate MiniLD section GC contract
         id: ld_gc
-        if: (github.event_name == 'push' || inputs.mode == 'all' || inputs.mode == 'minild') && steps.build.outcome == 'success'
+        if: steps.owners.outputs.minild == 'true' && steps.build.outcome == 'success'
         continue-on-error: true
         shell: bash
         run: |
@@ -266,7 +574,7 @@ jobs:
             sh tests/linker/run-gc-v0.sh
 
       - name: Preserve independent MiniC RV64 regression evidence
-        if: always() && (github.event_name == 'push' || inputs.mode == 'all' || inputs.mode == 'minic-rv64')
+        if: always() && steps.owners.outputs.rv64 == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: minic-rv64-focused-regressions-v1
@@ -279,15 +587,22 @@ jobs:
         id: verdict
         shell: bash
         env:
-          MODE: ${{ github.event_name == 'push' && 'all' || inputs.mode }}
+          MODE: ${{ steps.owners.outputs.mode }}
         run: |
           set -Eeuo pipefail
           mkdir -p build/toolchain-focused-t1-verdict
           failures=0
           echo -e 'owner\tcheck\tresult' > build/toolchain-focused-t1-verdict/outcomes.tsv
+          result="${{ steps.four.outcome }}"
+          printf '%s\t%s\t%s\n' 'four-backend' 'gnu_qemu_cjson_frontier' "$result" >> build/toolchain-focused-t1-verdict/outcomes.tsv
+          if [[ "$MODE" == all || "$MODE" == four-backend ]]; then
+            if [[ "$result" != success ]]; then echo "T1_OWNER_CHECK_FAILED owner=four-backend check=gnu_qemu result=$result"; failures=1; fi
+          elif [[ "$result" != skipped ]]; then
+            echo "T1_UNEXPECTED_OWNER_EXECUTION owner=four-backend check=gnu_qemu result=$result"; failures=1
+          fi
           result="${{ steps.rv64.outcome }}"
           printf '%s\t%s\t%s\n' 'rv64' 'rv64' "$result" >> build/toolchain-focused-t1-verdict/outcomes.tsv
-          if [[ "$MODE" == all || "$MODE" == "rv64" ]]; then
+          if [[ "$MODE" == all || "$MODE" == "minic-rv64" ]]; then
             if [[ "$result" != success ]]; then echo "T1_OWNER_CHECK_FAILED owner=rv64 check=rv64 result=$result"; failures=1; fi
           elif [[ "$result" != skipped ]]; then
             echo "T1_UNEXPECTED_OWNER_EXECUTION owner=rv64 check=rv64 result=$result"; failures=1
@@ -345,9 +660,9 @@ jobs:
           if [[ "${{ steps.build.outcome }}" != success ]]; then failures=1; fi
           cat build/toolchain-focused-t1-verdict/outcomes.tsv
           if [[ "$failures" -eq 0 ]]; then
-            echo "TOOLCHAIN_FOCUSED_T1=PASS mode=$MODE independent_test_checks=8 shared_builds=1"
+            echo "TOOLCHAIN_FOCUSED_T1=PASS mode=$MODE independent_test_checks=9 shared_builds=1"
           else
-            echo "TOOLCHAIN_FOCUSED_T1=FAIL mode=$MODE independent_test_checks=8 shared_builds=1"
+            echo "TOOLCHAIN_FOCUSED_T1=FAIL mode=$MODE independent_test_checks=9 shared_builds=1"
           fi
           exit "$failures"
 

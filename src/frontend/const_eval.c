@@ -820,6 +820,54 @@ static bool eval_expression(const MinicC0Program *program,
                               expression->type,
                               (uint64_t)expression->value.integer_value,
                               &value->bits);
+    case MINIC_EXPRESSION_LVALUE_READ: {
+        const MinicExpression *operand =
+            minic_c0_program_expression(program, expression->value.unary.operand);
+        /* GCC accepts indexing of a narrow string literal in an integer
+         * constant-expression array bound. Do not generalize this to
+         * reads from user-defined static/const objects or mutable arrays. */
+        if (operand == NULL || operand->kind != MINIC_EXPRESSION_SUBSCRIPT)
+            return false;
+        return eval_expression(program, target, expression->value.unary.operand,
+                               depth + 1U, value);
+    }
+    case MINIC_EXPRESSION_SUBSCRIPT: {
+        const MinicExpression *base;
+        const MinicGlobalObject *literal;
+        MinicConstValue subscript;
+        uint64_t index;
+        int64_t signed_index;
+        base = minic_c0_program_expression(program, expression->value.subscript.base);
+        if (base == NULL || base->kind != MINIC_EXPRESSION_GLOBAL_OBJECT)
+            return false;
+        literal = minic_c0_program_global_object(program, base->value.global_object_id);
+        /* String literals are anonymous, immutable, compiler-owned objects.
+         * Their name is emitted by parser_string.c. A user-declared const
+         * global is NOT an integer constant expression in GNU C. */
+        if (literal == NULL || literal->name == NULL ||
+            strncmp(literal->name, ".Lminic_string_", 15U) != 0 ||
+            !literal->is_internal || !literal->is_read_only ||
+            !minic_type_is_integer(expression->type) ||
+            !eval_expression(program, target, expression->value.subscript.index,
+                             depth + 1U, &subscript))
+            return false;
+        if (integer_type_is_signed(program, subscript.type)) {
+            if (!value_signed(program, target, &subscript, &signed_index) ||
+                signed_index < 0)
+                return false;
+            index = (uint64_t)signed_index;
+        } else if (!normalize_bits(program, target, subscript.type,
+                                   subscript.bits, &index)) {
+            return false;
+        }
+        if (index >= literal->initializer_count ||
+            literal->initializer_values == NULL)
+            return false;
+        value->type = expression->type;
+        return normalize_bits(program, target, expression->type,
+                              literal->initializer_values[(size_t)index],
+                              &value->bits);
+    }
     case MINIC_EXPRESSION_SIZEOF: {
         size_t size;
 

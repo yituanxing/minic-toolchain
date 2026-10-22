@@ -35,6 +35,45 @@ static const MinicDataLayout minic_x86_64_linux_data_layout_value = {
     .float128_alignment = 16U,
 };
 
+/* AAPCS64 LP64, unsigned plain char, 16-byte IEEE quad long double.
+ * Pointer and scalar widths alone DO NOT determine AAPCS64 HFA/HVA ABI.
+ * This descriptor only covers C object layout, not call classification. */
+static const MinicDataLayout minic_aarch64_linux_layout = {
+    .pointer_size = 8U,
+    .pointer_alignment = 8U,
+    .integer_size = {0U, 1U, 1U, 2U, 4U, 8U, 8U, 16U},
+    .integer_alignment = {0U, 1U, 1U, 2U, 4U, 8U, 8U, 16U},
+    .float_size = 4U,
+    .float_alignment = 4U,
+    .double_size = 8U,
+    .double_alignment = 8U,
+    .long_double_size = 16U,
+    .long_double_alignment = 16U,
+};
+
+/* LoongArch Linux ELF lp64d: a distinct target despite matching LP64
+ * scalar sizes. Its register and stack calling rules are NOT RV64's. */
+static const MinicDataLayout minic_loongarch64_linux_layout = {
+    .pointer_size = 8U,
+    .pointer_alignment = 8U,
+    .integer_size = {0U, 1U, 1U, 2U, 4U, 8U, 8U, 16U},
+    .integer_alignment = {0U, 1U, 1U, 2U, 4U, 8U, 8U, 16U},
+    .float_size = 4U,
+    .float_alignment = 4U,
+    .double_size = 8U,
+    .double_alignment = 8U,
+    .long_double_size = 16U,
+    .long_double_alignment = 16U,
+};
+
+const MinicDataLayout *minic_aarch64_linux_data_layout(void) {
+    return &minic_aarch64_linux_layout;
+}
+
+const MinicDataLayout *minic_loongarch64_linux_data_layout(void) {
+    return &minic_loongarch64_linux_layout;
+}
+
 const MinicDataLayout *minic_default_data_layout(void) {
     return &minic_rv64_data_layout;
 }

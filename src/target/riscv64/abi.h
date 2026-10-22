@@ -6,6 +6,10 @@
 #include <stdbool.h>
 #include <stddef.h>
 
+/* RV64 psABI register banks shared by caller, callee and variadic save area. */
+extern const char *const minic_riscv64_abi_integer_argument_registers[8];
+extern const char *const minic_riscv64_abi_floating_argument_registers[8];
+
 typedef enum MinicRiscv64AbiValueKind {
     MINIC_RISCV64_ABI_VALUE_INVALID = 0,
     MINIC_RISCV64_ABI_VALUE_VOID,
@@ -49,6 +53,9 @@ bool minic_riscv64_abi_cursor_initialize_for_return(const MinicC0Program *progra
                                                     MinicType return_type,
                                                     MinicRiscv64AbiCursor *cursor,
                                                     MinicRiscv64AbiValue *return_value);
+/* Shared RV64 named-prefix cursor validation for variadic functions. */
+bool minic_riscv64_abi_variadic_prefix_from_cursor(
+    const MinicRiscv64AbiCursor *, size_t *, size_t *);
 bool minic_riscv64_abi_classify_value(const MinicC0Program *program,
                                       MinicType type,
                                       MinicRiscv64AbiValue *value);

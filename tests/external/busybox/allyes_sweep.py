@@ -27,6 +27,24 @@ def call_proxy(args):
     """Preserve GCC behavior; side-channel diagnostics cannot break GCC."""
     gcc_argv = compiler_argv()
     gcc = subprocess.run(gcc_argv + args, check=False)
+    # BusyBox trylink uses the same CC wrapper for probing and three
+    # distinct link attempts. Record the *actual* reference GCC status and
+    # binary state rather than inferring a linker failure from the last
+    # printed --verbose map. The report is outside the pristine source.
+    if "-o" in args:
+        idx = args.index("-o")
+        if idx + 1 < len(args):
+            output_path = Path(args[idx + 1])
+            if output_path.name == "busybox_unstripped":
+                report = Path(os.environ["BUSYBOX_ALLYES_REPORT_ROOT"])
+                with (report / "gnu-link-attempts.log").open("a", encoding="utf-8") as log:
+                    log.write("rc=%d binary_exists=%d binary_bytes=%d "
+                              "gc_sections=%d verbose=%d argv_count=%d\n" %
+                              (gcc.returncode, int(output_path.is_file()),
+                               output_path.stat().st_size if output_path.is_file() else 0,
+                               int(any("gc-sections" in arg for arg in args)),
+                               int(any("verbose" in arg for arg in args)),
+                               len(args)))
     # The only supported replacement path is explicit, exact owner routing
     # from an isolated real Kbuild CC invocation. Kbuild may recompile .o on
     # aggregation due to its .cmd metadata, so copying .o *before* make is
@@ -114,10 +132,36 @@ def call_proxy(args):
         with (target / "minic.err").open("wb") as e:
             mini = subprocess.run(
                 [os.environ["BUSYBOX_ALLYES_MINIC_CC"],
-                 "--target=x86_64-linux", "-S", str(preprocessed), "-o", str(asm)],
+                 "--target=" + os.environ.get("BUSYBOX_ALLYES_MINIC_TARGET",
+                                              "x86_64-linux"),
+                 "-S", str(preprocessed), "-o", str(asm)],
                 stdout=subprocess.DEVNULL, stderr=e, check=False,
-                env={**os.environ, "MINIC_X86_CALL_TRACE": "1"})
+                env=({**os.environ, "MINIC_X86_CALL_TRACE": "1"}
+                     if os.environ.get("BUSYBOX_ALLYES_MINIC_TARGET",
+                                       "x86_64-linux") == "x86_64-linux"
+                     else os.environ))
         info["minic"] = mini.returncode
+        # Trace only representative *failed* upstream source owners.
+        # A small class-level replay avoids a second 581-TU scan while
+        # producing the actual Core instruction kind / rejecting guard.
+        trace_owners = ("coreutils/od.c", "libbb/xconnect.c",
+                        "miscutils/devfsd.c", "miscutils/devmem.c",
+                        "miscutils/hdparm.c", "networking/ifconfig.c",
+                        "procps/top.c")
+        if (mini.returncode and os.environ.get("BUSYBOX_ALLYES_MINIC_TARGET",
+                                                  "x86_64-linux") != "x86_64-linux"
+                and source in trace_owners):
+            with (target / "trace.err").open("wb") as e:
+                try:
+                    subprocess.run(
+                        [os.environ["BUSYBOX_ALLYES_MINIC_CC"],
+                         "--target=" + os.environ["BUSYBOX_ALLYES_MINIC_TARGET"],
+                         "-S", str(preprocessed), "-o", str(asm)],
+                        stdout=subprocess.DEVNULL, stderr=e, check=False,
+                        timeout=40, env={**os.environ, "MINIC_M1_TRACE": "1",
+                                         "MINIC_BACKEND_CENSUS": "1"})
+                except subprocess.TimeoutExpired:
+                    e.write(b"BUSYBOX_ALLYES_CORE_TRACE_TIMEOUT\n")
         if mini.returncode == 0:
             with (target / "as.err").open("wb") as e:
                 ass = subprocess.run(gcc_argv + ["-c", "-x", "assembler",
@@ -156,13 +200,51 @@ def print_frontier(report_root, gcc_success, enabled):
             fname = {"CPP": "cpp.err", "MiniC": "minic.err",
                      "GNU_AS": "as.err"}[stage]
             error = (path.parent / fname).read_text(encoding="utf-8", errors="replace")
+            # GNU AS uses capitalized "Error:" and starts stderr with
+            # "Assembler messages:". Report the actual first failing line,
+            # not that uninformative header, on every architecture.
             useful = [s.strip() for s in error.splitlines()
-                      if "error:" in s or "fatal error:" in s or "unsupported" in s]
+                      if "error:" in s.lower() or "unsupported" in s.lower()]
             if not useful:
                 useful = [s.strip() for s in error.splitlines() if s.strip()]
             print("BUSYBOX_ALLYES_BLOCKER source=%s kind=%s detail=%s" %
                   (info["source"], stage, (useful[0] if useful else "no diagnostic")[:240]))
+            if stage == "MiniC" and info["source"] in (
+                    "libbb/xconnect.c", "libbb/vfork_daemon_rexec.c"):
+                # Upstream GNU CPP is the oracle. Report the exact
+                # preprocessed expression at the frontend rejection site;
+                # raw xconnect.c line numbers are NOT the same after the
+                # target sysroot headers are expanded.
+                match = re.search(r"input\.i:(\d+):(\d+):\s*error:", error)
+                if match:
+                    source_lines = (path.parent / "input.i").read_text(
+                        errors="replace").splitlines()
+                    at = int(match.group(1))
+                    preview = " | ".join(
+                        "%d:%s" % (k + 1, source_lines[k].strip())
+                        for k in range(max(0, at - 3),
+                                       min(len(source_lines), at + 2))
+                    )
+                    print("BUSYBOX_ALLYES_CPP_CONTEXT source=%s line=%d text=%s" %
+                          (info["source"], at, preview[:1100]), flush=True)
             if stage == "MiniC":
+                trace_path = path.parent / "trace.err"
+                if trace_path.is_file():
+                    trace = trace_path.read_text(errors="replace")
+                    captures = [line.strip() for line in trace.splitlines()
+                                if line.startswith(("MINIC_BACKEND_REJECT",
+                                                    "MINIC_M1_FRONTIER",
+                                                    "MINIC_M4_GLOBAL_FRONTIER",
+                                                    "MINIC_M8_OPCODE_REJECT",
+                                                    "MINIC_SQLITE_CONVERSION_LIMIT",
+                                                    "MINIC_BACKEND_PREFLIGHT",
+                                                    "MINIC_BACKEND_CENSUS",
+                                                    "MINIC_CALL_RESULT_REJECT",
+                                                    "MINIC_BACKEND_CALL_GATE",
+                                                    "MINIC_M8_FRAME_REJECT"))]
+                    for detail in captures[:6]:
+                        print("BUSYBOX_ALLYES_CORE_REJECT source=%s detail=%s" %
+                              (info["source"], detail[:550]), flush=True)
                 gates = [line.strip() for line in error.splitlines()
                          if line.startswith("X86_CALL_GATE ")]
                 arguments = [line.strip() for line in error.splitlines()
@@ -215,6 +297,19 @@ def controller(args):
     disabled_host_options = ("WERROR", "TC", "FEATURE_INETD_RPC",
                              "FEATURE_MOUNT_NFS", "STATIC",
                              "DEBUG_SANITIZE") if link_compatible else ("WERROR",)
+    # Genuine cross sysroots need not contain the host's libselinux headers
+    # or archive. Disable that single original upstream Kconfig option,
+    # NOT its C sources, instead of presenting 957 enabled options as a
+    # valid target build when applets/applets.c cannot even preprocess.
+    if link_compatible and os.environ.get("BUSYBOX_ALLYES_MINIC_TARGET",
+                                            "x86_64-linux") != "x86_64-linux":
+        # Upstream libbb/common_bufsiz.c explicitly defaults this
+        # optional page-tail optimization OFF, and documents disabling it
+        # for linker/post-link _end failures. The allyesconfig-only
+        # scripts/generate_BUFSIZ.sh --post probes host NM/CC on a target
+        # ELF and can fail *after* GNU successfully links BusyBox. Do not
+        # patch original BusyBox scripts or misclassify this as MiniC ABI.
+        disabled_host_options += ("SELINUX", "PAM", "FEATURE_USE_BSS_TAIL")
     changed = []
     for symbol in disabled_host_options:
         old_value = "CONFIG_" + symbol + "=y"
@@ -255,12 +350,83 @@ def controller(args):
         rc = subprocess.run(["make", "-k", "-j4", "CC=" + proxy, "busybox"],
                             cwd=root, env=make_env, stdout=stdout, stderr=stderr,
                             check=False).returncode
+    if rc != 0:
+        # RV64's existing Kbuild wrapper distinguishes C producers from
+        # build-system control traffic. Reuse the exact original Kbuild
+        # dependency graph; after the comprehensive -k shadow census a
+        # sequential GNU-only pass isolates the FIRST real failing target,
+        # without repeating all MiniC compiler invocations or forging a
+        # successful full build.
+        retry_env = dict(make_env)
+        retry_env["BUSYBOX_ALLYES_SKIP_SHADOW"] = "1"
+        with (out / "gnu-sequential.out").open("wb") as stdout, \
+             (out / "gnu-sequential.err").open("wb") as stderr:
+            retry_rc = subprocess.run(
+                ["make", "-j1", "CC=" + proxy, "busybox"],
+                cwd=root, env=retry_env, stdout=stdout, stderr=stderr,
+                check=False).returncode
+        print("BUSYBOX_ALLYES_GCC_SEQUENTIAL=%s initial_parallel_rc=%d sequential_rc=%d" %
+              ("PASS" if retry_rc == 0 else "BLOCKED", rc, retry_rc),
+              flush=True)
+        if retry_rc == 0:
+            rc = 0
+        else:
+            # Avoid searching for the string 'error:' in the *source
+            # snippets* of a GCC warning such as bb_error_msg("read error:").
+            # Source snippets were previously mistaken for linker errors.
+            pattern = re.compile(
+                r"^(?:[^ ]+:[0-9]+(?::[0-9]+)?: )?(?:fatal )?error:"
+                r"|undefined reference|^collect2:|^/usr/bin/ld:"
+                r"|^make(?:\\[[0-9]+\\])?: \\*\\*\\*"
+                r"|No rule to make target|cannot find -l"
+            )
+            for filename in ("gnu-sequential.err", "gnu-sequential.out",
+                             "build.err", "build.out"):
+                text = (out / filename).read_text(errors="replace")
+                lines = [line.strip() for line in text.splitlines()
+                         if pattern.search(line)]
+                print("BUSYBOX_ALLYES_GCC_REAL_ERRORS file=%s matches=%d first=%s" %
+                      (filename, len(lines),
+                       " | ".join(lines[:16])[:3200]), flush=True)
+                if filename.startswith("gnu-sequential"):
+                    print("BUSYBOX_ALLYES_GCC_STOP_CONTEXT file=%s lines=%s" %
+                          (filename,
+                           " | ".join(text.splitlines()[-32:])[:2500]),
+                          flush=True)
+            linker_log = root / "busybox_unstripped.out"
+            if linker_log.is_file():
+                ls = linker_log.read_text(errors="replace")
+                whole_lines = ls.splitlines()
+                root_errors = [(i + 1, ln.strip()) for i, ln in enumerate(whole_lines)
+                               if re.search(
+                                 r"undefined reference|collect2:|error:|fatal:|"
+                                 r"relocation (?:.*)out of range|cannot find|"
+                                 r"No such file or directory|file not recognized|"
+                                 r"^/usr/[^ ]*/ld:|^ld: |^FAIL|^Failed",
+                                 ln)]
+                print("BUSYBOX_ALLYES_GCC_FINAL_LINK_CAUSE matches=%d lines=%s" %
+                      (len(root_errors),
+                       " | ".join("line%d:%s" % item for item in
+                                  root_errors[:25])[:5800]), flush=True)
+                print("BUSYBOX_ALLYES_GCC_FINAL_LINK_FIRST_LINES=" +
+                      " | ".join(whole_lines[:25])[:3300], flush=True)
+                print("BUSYBOX_ALLYES_GCC_FINAL_LINK_LAST_LINES=" +
+                      " | ".join(whole_lines[-18:])[:2300], flush=True)
+            print("BUSYBOX_ALLYES_GCC_LINK_FEATURES=" +
+                  " ".join(line for line in config.splitlines()
+                           if line.startswith(("CONFIG_BUILD_LIBBUSYBOX=",
+                                               "CONFIG_FEATURE_INDIVIDUAL=",
+                                               "CONFIG_FEATURE_SHARED_BUSYBOX=",
+                                               "CONFIG_PIE=", "CONFIG_EXTRA_LDLIBS=",
+                                               "CONFIG_USE_BB_CRYPT="))),
+                  flush=True)
+    attempted_link_log = out / "gnu-link-attempts.log"
+    if attempted_link_log.is_file():
+        print("BUSYBOX_ALLYES_GCC_LINK_ATTEMPTS=" +
+              " | ".join(attempted_link_log.read_text().splitlines())[:2800],
+              flush=True)
     print("BUSYBOX_ALLYES_GCC_KBUILD=%s original_Kconfig=1 original_sources=1" %
           ("PASS" if rc == 0 else "BLOCKED"), flush=True)
-    if rc != 0:
-        lines = (out / "build.err").read_text(errors="replace").splitlines()
-        print("BUSYBOX_ALLYES_GCC_BUILD_DIAGNOSTIC=" +
-              " | ".join(x.strip() for x in lines[-25:])[:1600])
     if link_compatible:
         busybox = root / "busybox"
         if rc == 0 and busybox.is_file():
@@ -279,7 +445,10 @@ def controller(args):
             successes = []
             for applet, command in tests.items():
                 data = b"alpha\nbeta\n" if applet not in ("sh", "find") else b""
-                run = subprocess.run([str(busybox)] + command, input=data,
+                qemu = os.environ.get("BUSYBOX_ALLYES_QEMU")
+                sysroot = os.environ.get("BUSYBOX_ALLYES_SYSROOT", "")
+                launch = ([qemu, "-L", sysroot] if qemu else [])
+                run = subprocess.run(launch + [str(busybox)] + command, input=data,
                                      stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                      check=False)
                 passed = run.returncode == 0 and run.stdout == expected[applet]
