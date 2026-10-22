@@ -97,6 +97,7 @@ MINIC_SOURCES := \
 	src/frontend/parser_core.c \
 	src/frontend/parser_expression.c \
 	src/frontend/parser_builtins.c \
+	src/frontend/parser_builtin_memory.c \
 	src/frontend/parser_function.c \
 	src/frontend/parser_function_parameters.c \
 	src/frontend/parser_external_object.c \
