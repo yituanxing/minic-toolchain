@@ -1,6 +1,7 @@
 #ifndef MINIC_TARGET_RISCV64_FRAME_LAYOUT_H
 #define MINIC_TARGET_RISCV64_FRAME_LAYOUT_H
 #include "core/core_ir.h"
+#include "frontend/ast.h"
 #include "target/riscv64/asm_plan.h"
 #include <stdbool.h>
 #include <stddef.h>
