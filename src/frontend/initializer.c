@@ -84,6 +84,101 @@ bool minic_array_initializer_plan_add_designated(MinicArrayInitializerPlan *plan
     return add_action(plan, first_index, last_index, action_id);
 }
 
+/* Find the next element not assigned to a later initializer action.
+ * This iterative path compression avoids recursion for large range chains. */
+static size_t initializer_find_unclaimed(size_t *successor,
+                                         size_t extent, size_t index) {
+    size_t root = index;
+    while (root < extent && successor[root] != root)
+        root = successor[root];
+    while (index < extent && successor[index] != index) {
+        const size_t next = successor[index];
+        successor[index] = root;
+        index = next;
+    }
+    return root;
+}
+
+/* Reverse ownership resolution with an interval skip-set. Every slot is
+ * claimed at most once, including repeated [0 ... n] overwrites, rather than
+ * checking every action for each slot. The resulting forward chains recover
+ * action source order and increasing element order for runtime evaluation. */
+bool minic_array_initializer_plan_resolve(
+    const MinicArrayInitializerPlan *plan, MinicArrayInitializerResolved *result) {
+    MinicArrayInitializerResolved temp = {0};
+    size_t *successor = NULL;
+    size_t extent, action_id, index;
+    if (plan == NULL || result == NULL)
+        return false;
+    *result = temp;
+    extent = minic_array_initializer_plan_element_count(plan);
+    if (extent > SIZE_MAX / sizeof(size_t) ||
+        plan->action_count > SIZE_MAX / sizeof(size_t) ||
+        (plan->action_count != 0U && plan->actions == NULL))
+        return false;
+    temp.element_count = extent;
+    temp.action_count = plan->action_count;
+    if (extent != 0U) {
+        temp.owners = (size_t *)malloc(extent * sizeof(size_t));
+        temp.next_owned = (size_t *)malloc(extent * sizeof(size_t));
+        successor = (size_t *)malloc(extent * sizeof(size_t));
+        if (temp.owners == NULL || temp.next_owned == NULL || successor == NULL)
+            goto fail;
+        for (index = 0U; index < extent; ++index) {
+            temp.owners[index] = MINIC_INITIALIZER_ACTION_INVALID;
+            temp.next_owned[index] = MINIC_INITIALIZER_ACTION_INVALID;
+            successor[index] = index;
+        }
+    }
+    if (plan->action_count != 0U) {
+        temp.final_counts = (size_t *)calloc(plan->action_count, sizeof(size_t));
+        temp.first_owned = (size_t *)malloc(plan->action_count * sizeof(size_t));
+        if (temp.final_counts == NULL || temp.first_owned == NULL)
+            goto fail;
+        for (action_id = 0U; action_id < plan->action_count; ++action_id)
+            temp.first_owned[action_id] = MINIC_INITIALIZER_ACTION_INVALID;
+    }
+    for (action_id = plan->action_count; action_id != 0U; --action_id) {
+        const MinicArrayInitializerAction *action = &plan->actions[action_id - 1U];
+        size_t at;
+        if (action->first_index > action->last_index ||
+            action->last_index >= extent)
+            goto fail;
+        at = initializer_find_unclaimed(successor, extent, action->first_index);
+        while (at < extent && at <= action->last_index) {
+            temp.owners[at] = action_id - 1U;
+            ++temp.final_counts[action_id - 1U];
+            successor[at] = initializer_find_unclaimed(successor, extent, at + 1U);
+            at = initializer_find_unclaimed(successor, extent, at);
+        }
+    }
+    for (index = extent; index != 0U; --index) {
+        const size_t element = index - 1U;
+        const size_t owner = temp.owners[element];
+        if (owner != MINIC_INITIALIZER_ACTION_INVALID) {
+            temp.next_owned[element] = temp.first_owned[owner];
+            temp.first_owned[owner] = element;
+        }
+    }
+    free(successor);
+    *result = temp;
+    return true;
+fail:
+    free(successor);
+    minic_array_initializer_resolved_destroy(&temp);
+    return false;
+}
+
+void minic_array_initializer_resolved_destroy(MinicArrayInitializerResolved *resolved) {
+    if (resolved == NULL)
+        return;
+    free(resolved->owners);
+    free(resolved->final_counts);
+    free(resolved->first_owned);
+    free(resolved->next_owned);
+    *resolved = (MinicArrayInitializerResolved){0};
+}
+
 size_t minic_array_initializer_plan_element_count(const MinicArrayInitializerPlan *plan) {
     if (plan == NULL) {
         return 0U;
