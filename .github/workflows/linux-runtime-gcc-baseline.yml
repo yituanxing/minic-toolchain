@@ -4,8 +4,6 @@ on:
   push:
     branches:
       - "main"
-      - "agent/linux-expanded-kbuild-v0"
-      - "agent/linux-perf-boolean-domain-v1"
     paths:
       - '.github/workflows/linux-runtime-gcc-baseline.yml'
       - 'tests/external/linux/**'

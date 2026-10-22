@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - main
-      - feature/four-backend-aarch64-loongarch64-m0
     paths:
       - 'src/target/**'
       - 'src/core/**'

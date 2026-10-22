@@ -1,6 +1,5 @@
-# Trigger only after main's full focused suite accepted the #527 merge.
-# Check PR provenance and every ref's immutable SHA before deletion.
-# Remove this temporary workflow after its single successful run.
+# One-shot conversion to main-only repository, following focused CI success.
+# Any unmerged commits are first retained through immutable archive tags.
 name: MiniC One-Shot Merged PR Branch Cleanup
 on:
   workflow_run:
@@ -11,115 +10,146 @@ permissions:
   contents: write
   pull-requests: read
 concurrency:
-  group: minic-merged-pr-branch-cleanup
+  group: minic-main-only-prune
   cancel-in-progress: false
 jobs:
   prune:
     if: github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 20
     steps:
-      - name: Delete only exact merged PR temporary refs
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Archive divergent history and leave only main
         shell: bash
         env:
-          GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
           GH_ACCEPTED_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           set -Eeuo pipefail
-          python3 - <<'PY'
-          import json, os, urllib.request, urllib.error, urllib.parse, re
+          python3 - <<'PY_MAIN_ONLY'
+          import json, os, re, subprocess, urllib.error, urllib.parse, urllib.request
+          
           repo = os.environ["GH_REPO"]
           token = os.environ["GH_TOKEN"]
-          api_base = "https://api.github.com/repos/" + repo
+          accepted = os.environ["GH_ACCEPTED_SHA"]
+          root = "https://api.github.com/repos/" + repo
           headers = {"Authorization": "Bearer " + token,
                      "Accept": "application/vnd.github+json",
                      "X-GitHub-Api-Version": "2022-11-28"}
-          def api(endpoint, method="GET"):
-              req = urllib.request.Request(api_base + endpoint, headers=headers,
-                                           method=method)
-              with urllib.request.urlopen(req, timeout=35) as response:
-                  raw = response.read()
-                  return json.loads(raw) if raw else None
-          def paged(endpoint):
-              result = []
-              for page in range(1, 30):
-                  rows = api(endpoint + ("&" if "?" in endpoint else "?") +
-                             "per_page=100&page=" + str(page))
-                  if not isinstance(rows, list):
-                      raise RuntimeError("GitHub unexpected response; refuse cleanup")
-                  result.extend(rows)
-                  if len(rows) < 100: return result
-              raise RuntimeError("branch/PR pagination limit exceeded")
-          pr = api("/pulls/527")
-          if not pr.get("merged_at") or pr["base"]["ref"] != "main":
-              raise RuntimeError("PR527 not merged into main; abort")
-          head = pr.get("head") or {}
-          hrepo = head.get("repo") or {}
-          if (head.get("ref") != "feature/four-backend-aarch64-loongarch64-m0"
-              or hrepo.get("full_name") != repo or not head.get("sha")):
-              raise RuntimeError("PR527 unexpected feature source; abort")
-          main = api("/branches/main")
-          accepted = os.environ["GH_ACCEPTED_SHA"]
-          if pr.get("merge_commit_sha") != accepted:
-              raise RuntimeError("focused workflow not the PR527 merge commit; abort")
-          if main["commit"]["sha"] != accepted:
-              raise RuntimeError("main advanced beyond accepted merge commit; abort")
-          protected = {"main", "agent/linux-expanded-kbuild-v0",
-                       "agent/linux-rv64-only-parallel-v1",
-                       "agent/linux-perf-boolean-domain-v1",
-                       "archive/all-progress-2026-10-04",
-                       "feature/multitarget-m0-target-context"}
+          
+          def api(endpoint, method="GET", payload=None, missing_ok=False):
+              data = json.dumps(payload).encode("utf-8") if payload is not None else None
+              request = urllib.request.Request(root + endpoint, data=data, headers=headers, method=method)
+              if data is not None:
+                  request.add_header("Content-Type", "application/json")
+              try:
+                  with urllib.request.urlopen(request, timeout=35) as response:
+                      raw = response.read()
+                      return json.loads(raw) if raw else None
+              except urllib.error.HTTPError as exc:
+                  if missing_ok and exc.code == 404:
+                      return None
+                  raise
+          
+          def paged(path):
+              all_rows = []
+              for page in range(1, 50):
+                  part = api(path + ("&" if "?" in path else "?") + "per_page=100&page=" + str(page))
+                  if not isinstance(part, list):
+                      raise RuntimeError("Unexpected GitHub pagination response")
+                  all_rows.extend(part)
+                  if len(part) < 100:
+                      return all_rows
+              raise RuntimeError("Pagination cap reached; refuse destructive cleanup")
+          
+          def enc(name):
+              return urllib.parse.quote(name, safe="/")
+          
+          def require_main_sha():
+              got = api("/branches/main")["commit"]["sha"]
+              if got != accepted:
+                  raise RuntimeError("main moved from verified focused-CI SHA; refuse cleanup")
+          
+          require_main_sha()
+          merged = api("/pulls/527")
+          if not merged.get("merged_at") or merged["base"]["ref"] != "main":
+              raise RuntimeError("Four-architecture PR527 not merged to main")
           open_prs = paged("/pulls?state=open")
-          open_heads = {p["head"]["ref"] for p in open_prs
-                        if (p.get("head") or {}).get("repo") and
-                        p["head"]["repo"].get("full_name") == repo}
-          closed = paged("/pulls?state=closed")
-          merged_heads = {}
-          for p in closed:
-              h, b = p.get("head") or {}, p.get("base") or {}
-              r = h.get("repo") or {}
-              if (p.get("merged_at") and
-                  b.get("ref") == "feature/four-backend-aarch64-loongarch64-m0"
-                  and r.get("full_name") == repo and
-                  h.get("ref") and h.get("sha")):
-                  merged_heads[h["ref"]] = h["sha"]
+          if open_prs:
+              raise RuntimeError("Open PRs found; cannot delete branches in an active review")
           branches = paged("/branches")
-          candidates = []
-          for branch in branches:
-              name = branch["name"]
-              if (name in protected or name in open_heads or
-                  branch.get("protected") or
-                  name == "feature/four-backend-aarch64-loongarch64-m0"):
+          others = [b for b in branches if b["name"] != "main"]
+          if any(b["name"] == "main" and b["commit"]["sha"] != accepted for b in branches):
+              raise RuntimeError("main branch moved during inventory")
+          if any(b.get("protected") for b in others):
+              raise RuntimeError("Protected non-main branches require a separate governance decision")
+          print(f"MAIN_ONLY_INVENTORY branches={len(branches)} candidates={len(others)}", flush=True)
+          
+          # Important: preserve every tip NOT reachable from main as a durable Git tag.
+          # A tag is not a branch; it allows recovery of work that was never merged.
+          backups = []
+          for b in others:
+              name, sha = b["name"], b["commit"]["sha"]
+              if not re.fullmatch(r"[0-9a-f]{40}", sha):
+                  raise RuntimeError("Invalid branch SHA " + name)
+              test = subprocess.run(["git", "cat-file", "-e", sha + "^{commit}"], capture_output=True)
+              if test.returncode:
+                  raise RuntimeError("Missing local commit object for " + name)
+              ancestor = subprocess.run(["git", "merge-base", "--is-ancestor", sha, accepted],
+                                        capture_output=True)
+              if ancestor.returncode not in (0, 1):
+                  raise RuntimeError("Cannot determine ancestry for " + name)
+              if ancestor.returncode == 1:
+                  tag = "branch-archive/2026-10-23/" + name
+                  backups.append((name, sha, tag))
+          # All backup tags are completed BEFORE deleting the first branch.
+          for name, sha, tag in backups:
+              endpoint = "/git/ref/tags/" + enc(tag)
+              exists = api(endpoint, missing_ok=True)
+              if exists is None:
+                  api("/git/refs", method="POST",
+                      payload={"ref": "refs/tags/" + tag, "sha": sha})
+              elif exists.get("object", {}).get("sha") != sha:
+                  raise RuntimeError("Existing archive tag points elsewhere: " + tag)
+              verified = api(endpoint)
+              if verified["object"]["sha"] != sha:
+                  raise RuntimeError("Cannot verify archive: " + tag)
+              print("MAIN_ONLY_ARCHIVED " + name + " -> " + tag + "@" + sha[:12], flush=True)
+          
+          require_main_sha()
+          if paged("/pulls?state=open"):
+              raise RuntimeError("PR created during backup; refuse deletion")
+          deleted = 0
+          for b in others:
+              name, sha = b["name"], b["commit"]["sha"]
+              current = api("/branches/" + enc(name), missing_ok=True)
+              if current is None:
+                  print("MAIN_ONLY_ALREADY_GONE " + name, flush=True)
                   continue
-              if not re.match(r"^(refactor/|fix/|test/|docs/)", name):
-                  continue
-              if merged_heads.get(name) != branch["commit"]["sha"]:
-                  continue
-              candidates.append((name, branch["commit"]["sha"]))
-          print("MINIC_CLEANUP_CANDIDATES=" + str(len(candidates)),
-                flush=True)
-          for name, sha in candidates:
-              encoded = urllib.parse.quote(name, safe="/")
-              current = api("/branches/" + encoded)
-              if current["commit"]["sha"] != sha:
-                  print("MINIC_CLEANUP_SKIP_UPDATED=" + name, flush=True)
-                  continue
-              api("/git/refs/heads/" + encoded, method="DELETE")
-              print("MINIC_CLEANUP_DELETED=" + name, flush=True)
-          # Only after all merged temporary PR tips were evaluated do we
-          # remove the now-merged integration branch. PR #527 is closed and
-          # validated above; never force-delete a moved/protected source.
-          feature_name = "feature/four-backend-aarch64-loongarch64-m0"
-          current_feature = api("/branches/" + feature_name)
-          if (current_feature.get("protected") or
-              current_feature["commit"]["sha"] != head["sha"]):
-              print("MINIC_CLEANUP_FEATURE=RETAINED_SHA_MOVED_OR_PROTECTED",
-                    flush=True)
-          else:
-              api("/git/refs/heads/" + feature_name, method="DELETE")
-              print("MINIC_CLEANUP_FEATURE=DELETED", flush=True)
-          print("MINIC_CLEANUP_PR527=MERGED pr_heads=" +
-                str(len(merged_heads)) + " candidates=" +
-                str(len(candidates)), flush=True)
-          PY
+              if current["commit"]["sha"] != sha or current.get("protected"):
+                  raise RuntimeError("Branch moved or gained protection: " + name)
+              require_main_sha()
+              api("/git/refs/heads/" + enc(name), method="DELETE")
+              deleted += 1
+              print("MAIN_ONLY_DELETED " + name, flush=True)
+          
+          remaining = [b["name"] for b in paged("/branches")]
+          if remaining != ["main"]:
+              raise RuntimeError("Post-cleanup branch inventory not exactly main: " + repr(remaining))
+          print(f"MAIN_ONLY_VERIFIED branches=1 archived_unique_tips={len(backups)} deleted={deleted}", flush=True)
+          
+          # Retire this one-shot workflow itself via a GitHub-token commit.
+          # Token-authored commits do not start a new GitHub Actions push run.
+          require_main_sha()
+          workflow_path = ".github/workflows/minic-one-shot-merged-branch-cleanup.yml"
+          document = api("/contents/" + workflow_path)
+          api("/contents/" + workflow_path, method="DELETE", payload={
+              "message": "chore(ci): retire completed one-shot main-only branch cleanup",
+              "sha": document["sha"], "branch": "main"})
+          print("MAIN_ONLY_ONE_SHOT_WORKFLOW=RETIRED", flush=True)
+          
+          PY_MAIN_ONLY
