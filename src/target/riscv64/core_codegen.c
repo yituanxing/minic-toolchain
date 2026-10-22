@@ -2388,28 +2388,11 @@ static bool emit_call(FILE *file,
         MinicRiscv64AbiArgumentLocation location;
         MinicType argument_type;
         bool is_fixed_parameter;
-
-        is_fixed_parameter = argument_index < callee->parameter_count;
-        if (is_fixed_parameter) {
-            argument_type = callee->parameter_types[argument_index];
-        } else {
-            if (!callee->is_variadic) {
-                return false;
-            }
-            if (argument->kind == MINIC_CORE_CALL_ARGUMENT_VALUE) {
-                if (argument->value.value_id >= function->value_count) {
-                    return false;
-                }
-                argument_type = function->values[argument->value.value_id].type;
-            } else if (argument->kind == MINIC_CORE_CALL_ARGUMENT_OBJECT) {
-                if (argument->value.object_id >= function->object_count) {
-                    return false;
-                }
-                argument_type = function->objects[argument->value.object_id].type;
-            } else {
-                return false;
-            }
-        }
+        if (!minic_riscv64_core_call_argument_type(
+                function, argument, callee->parameter_types, callee->parameter_count,
+                callee->is_variadic, argument_index, &argument_type,
+                &is_fixed_parameter))
+            return false;
         if (!minic_riscv64_abi_place_argument(
                 program, argument_type, is_fixed_parameter, &cursor, &location)) {
             return false;
@@ -2490,7 +2473,6 @@ static bool emit_indirect_call(FILE *file,
             program, signature->return_type, &cursor, &return_value)) {
         return false;
     }
-    (void)return_value;
     for (argument_index = 0U;
          argument_index < instruction->value.indirect_call.argument_count;
          ++argument_index) {
@@ -2498,13 +2480,12 @@ static bool emit_indirect_call(FILE *file,
             instruction->value.indirect_call.argument_begin + argument_index];
         MinicRiscv64AbiArgumentLocation location;
         MinicType argument_type;
-        bool is_fixed_parameter = argument_index < signature->parameter_count;
-
-        if (is_fixed_parameter) {
-            argument_type = signature->parameter_types[argument_index];
-        } else {
-            argument_type = function->values[argument->value.value_id].type;
-        }
+        bool is_fixed_parameter;
+        if (!minic_riscv64_core_call_argument_type(
+                function, argument, signature->parameter_types, signature->parameter_count,
+                signature->is_variadic, argument_index, &argument_type,
+                &is_fixed_parameter))
+            return false;
         if (!minic_riscv64_abi_place_argument(
                 program, argument_type, is_fixed_parameter, &cursor, &location)) {
             return false;
