@@ -108,7 +108,7 @@ jobs:
           # The first full Kbuild survey failed before MiniC on missing
           # selinux/selinux.h and libsepol.pc, not a compiler failure.
           packages=(libselinux1-dev libsepol-dev libcap-dev libacl1-dev
-                    libcrypt-dev pkg-config)
+                    libcrypt-dev libpam0g-dev libaudit-dev pkg-config)
           if ! timeout 300s sudo apt-get -o Acquire::Retries=3 \
                install -y --no-install-recommends "${packages[@]}"; then
             timeout 180s sudo apt-get -o Acquire::Retries=3 update
@@ -117,6 +117,7 @@ jobs:
           fi
           test -f /usr/include/selinux/selinux.h
           pkg-config --exists libselinux libsepol
+          test -f /usr/include/security/pam_appl.h
           echo "BUSYBOX_X86_64_HOST_DEPENDENCIES=PASS selinux=1 sepol=1"
       - name: Audit original full Kbuild - SHA checked eligible owners, residual GNU fallback
         id: all
