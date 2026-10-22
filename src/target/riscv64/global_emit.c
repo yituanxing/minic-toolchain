@@ -656,6 +656,20 @@ static bool minic_riscv64_emit_complete_recursive_global(
             &storage_size, &object_alignment))
         return false;
     (void)object_alignment;
+    /* RV64 now consumes the common DataLayout walk for ordinary nested
+     * records, arrays and selected unions.  Only target-specific GNU bits
+     * and symbol spelling are left in callbacks. */
+    if (minic_multi_recursive_shape_supported(program, object->type)) {
+        const MinicTargetInfo *target =
+            minic_target_info_for_architecture(MINIC_TARGET_ARCH_RISCV64);
+        return target != NULL &&
+               minic_multi_emit_recursive_aggregate_global(
+                   file, program, target, object, storage_size,
+                   minic_riscv64_emit_symbol_relocation,
+                   minic_riscv64_emit_shared_bits);
+    }
+    /* Keep the RV64 bitfield, flexible and GNU zero-size walker until those
+     * capabilities have a shared implementation with identical semantics. */
     if (!minic_riscv64_emit_constant_value(
             file, program, object, object->type,
             &initializer_index, &relocation_index, &emitted_size))
