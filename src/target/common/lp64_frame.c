@@ -5,7 +5,6 @@
 /* Bounded function-local layout, shared by AAPCS64 and LoongArch LP64D.
  * Identical offsets/guards to the historical per-access scans, but O(N)
  * once per function and O(1) on the emission hot path. */
-#define MINIC_LARGE_FRAME_MAX 1048576U
 
 bool minic_lp64_frame_plan_objects(
     const MinicC0Program *program, const MinicTargetInfo *target,
