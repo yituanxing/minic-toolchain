@@ -1,0 +1,78 @@
+name: MiniC Four-Backend Refactor Paired Performance
+
+on:
+  push:
+    branches:
+      - feature/four-backend-aarch64-loongarch64-m0
+    paths:
+      - '.github/workflows/minic-refactor-paired-perf.yml'
+      - 'tests/compiler/perf/minic-four-backend-refactor-ab.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: minic-four-backend-refactor-perf-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  paired-ab:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - name: Retrieve fixed pre-refactor baseline
+        shell: bash
+        env:
+          BASE_SHA: c638ba10a55533c6332d204fc6eb6c086ed7b67d
+        run: |
+          set -Eeuo pipefail
+          mkdir -p "$RUNNER_TEMP/minic-refactor-perf"
+          git fetch --no-tags --depth=1 origin "$BASE_SHA"
+          git worktree add --detach "$RUNNER_TEMP/minic-refactor-perf/baseline" "$BASE_SHA"
+          test "$(git -C "$RUNNER_TEMP/minic-refactor-perf/baseline" rev-parse HEAD)" = "$BASE_SHA"
+          printf 'MINIC_PERF_AB_BASELINE=%s\nMINIC_PERF_AB_CANDIDATE=%s\n' "$BASE_SHA" "$GITHUB_SHA"
+      - name: Build both MiniC binaries in separate source trees
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make -C "$RUNNER_TEMP/minic-refactor-perf/baseline" \
+            -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/perf-ab all
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/perf-ab all
+          test -x "$RUNNER_TEMP/minic-refactor-perf/baseline/build/perf-ab/bin/minic-cc"
+          test -x "$GITHUB_WORKSPACE/build/perf-ab/bin/minic-cc"
+      - name: Freeze original upstream AES C fixture into one preprocessed source
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir -p "$RUNNER_TEMP/minic-refactor-perf/inputs"
+          cc -E -P -nostdinc -x c \
+            -I"$GITHUB_WORKSPACE/tests/external/tiny-aes-c/include" \
+            -I"$GITHUB_WORKSPACE/tests/vendor/tiny-aes-c/upstream" \
+            -DECB=1 -DCBC=0 -DCTR=0 -DMULTIPLY_AS_A_FUNCTION=1 \
+            "$GITHUB_WORKSPACE/tests/external/tiny-aes-c/aes128_ecb_vectors.c" \
+            -o "$RUNNER_TEMP/minic-refactor-perf/inputs/original-aes128-ecb.i"
+          test -s "$RUNNER_TEMP/minic-refactor-perf/inputs/original-aes128-ecb.i"
+          sha256sum "$RUNNER_TEMP/minic-refactor-perf/inputs/original-aes128-ecb.i"
+      - name: Four ISA serial paired A/B and native output differential
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 tests/compiler/perf/minic-four-backend-refactor-ab.py \
+            --baseline "$RUNNER_TEMP/minic-refactor-perf/baseline/build/perf-ab/bin/minic-cc" \
+            --candidate "$GITHUB_WORKSPACE/build/perf-ab/bin/minic-cc" \
+            --source "$RUNNER_TEMP/minic-refactor-perf/inputs/original-aes128-ecb.i" \
+            --output "$RUNNER_TEMP/minic-refactor-perf/result" \
+            --repeats 4
+          cat "$RUNNER_TEMP/minic-refactor-perf/result/summary.md" >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: minic-four-backend-refactor-paired-ab
+          path: |
+            ${{ runner.temp }}/minic-refactor-perf/result/summary.md
+            ${{ runner.temp }}/minic-refactor-perf/result/results.json
+          if-no-files-found: warn
