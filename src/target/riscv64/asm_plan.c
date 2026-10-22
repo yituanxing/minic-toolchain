@@ -90,8 +90,8 @@ static bool core_asm_register_is_caller_saved(const char *name) {
 
 static bool core_asm_register_is_callee_saved(const char *name) {
     size_t index;
-    for (index = 0U; index < CORE_ASM_CALLEE_SAVED_COUNT; ++index) {
-        if (core_asm_register_name_equal(name, core_asm_callee_saved_registers[index])) {
+    for (index = 0U; index < MINIC_RISCV64_ASM_CALLEE_SAVED_COUNT; ++index) {
+        if (core_asm_register_name_equal(name, minic_riscv64_asm_callee_saved_registers[index])) {
             return true;
         }
     }
