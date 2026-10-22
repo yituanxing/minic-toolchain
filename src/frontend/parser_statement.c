@@ -78,7 +78,7 @@ bool minic_parser_statement_assignment_conversion(MinicParser *parser,
     }
     if (statement_gnu_discard_const_one_pointer(target_type, source->type)) {
         /* Preserve a precise cast in the AST. This is the same underlying
-         * pointer representation; never silently permit void**/char** or
+         * pointer representation; never silently permit deeper pointer chains or
          * a volatile qualification drop. */
         (void)memset(&conversion, 0, sizeof(conversion));
         conversion.kind = MINIC_EXPRESSION_CAST;
