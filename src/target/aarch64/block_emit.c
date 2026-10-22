@@ -372,8 +372,7 @@ bool minic_aarch64_emit_core_blocks(FILE *out, const MinicDirectLP64BlockContext
          * previous result-slot gate rejected this valid Core kind in the
          * original BusyBox test/gzip/netstat/top applets on both ISAs. */
         if (ins->kind == MINIC_CORE_INSTRUCTION_COMPILER_BARRIER) {
-            if (ins->result != MINIC_CORE_VALUE_INVALID ||
-                !minic_type_is_void(ins->type))
+            if (!minic_multi_direct_compiler_barrier_shape(ins))
                 return minic_multi_direct_machine_reject(fn, "aarch64", name,
                                            reject_stage, reject_block,
                                            reject_ins, __LINE__);
@@ -404,9 +403,8 @@ bool minic_aarch64_emit_core_blocks(FILE *out, const MinicDirectLP64BlockContext
             const MinicCoreValueId addr = ins->value.store.address;
             const MinicCoreValueId value = ins->value.store.stored_value;
             size_t src;
-            if (addr >= fn->value_count ||
-                !minic_type_is_pointer(fn->values[addr].type) ||
-                !minic_lp64_frame_plan_wide_slot(frame_plan, value, &src) ||
+            if (!minic_multi_direct_wide_store_shape(
+                    fn, ins, frame_plan, &src) ||
                 fprintf(out, "  ldr x10, [sp, #%zu]\n"
                              "  ldr x9, [sp, #%zu]\n"
                              "  ldr x11, [sp, #%zu]\n"
@@ -424,9 +422,8 @@ bool minic_aarch64_emit_core_blocks(FILE *out, const MinicDirectLP64BlockContext
             const MinicCoreValueId addr = ins->value.store.address;
             const MinicCoreValueId value = ins->value.store.stored_value;
             size_t src;
-            if (addr >= fn->value_count ||
-                !minic_type_is_pointer(fn->values[addr].type) ||
-                !minic_lp64_frame_plan_wide_slot(frame_plan, value, &src) ||
+            if (!minic_multi_direct_wide_store_shape(
+                    fn, ins, frame_plan, &src) ||
                 fprintf(out, "  ldr x10, [sp, #%zu]\n"
                              "  ldr q9, [sp, #%zu]\n"
                              "  str q9, [x10]\n",
@@ -481,10 +478,8 @@ bool minic_aarch64_emit_core_blocks(FILE *out, const MinicDirectLP64BlockContext
             const MinicCoreValueId rhs = ins->value.binary.right;
             const char *condition = ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_EQUAL
                 ? "eq" : ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_LESS ? "lo" : "ls";
-            if (!minic_type_equal(ins->type, minic_type_int()) ||
-                lhs >= fn->value_count || rhs >= fn->value_count ||
-                !minic_type_is_double(fn->values[lhs].type) ||
-                !minic_type_is_double(fn->values[rhs].type) ||
+            if (!minic_multi_direct_floating_shape(
+                    program, target, fn, ins, NULL, NULL) ||
                 fprintf(out,
                         "  ldr d9, [sp, #%zu]\n"
                         "  ldr d10, [sp, #%zu]\n"
@@ -508,10 +503,8 @@ bool minic_aarch64_emit_core_blocks(FILE *out, const MinicDirectLP64BlockContext
                 : ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_SUBTRACT
                     ? "  fsub d9, d9, d10\n"
                     : "  fmul d9, d9, d10\n";
-            if (!minic_type_is_double(ins->type) ||
-                lhs >= fn->value_count || rhs >= fn->value_count ||
-                !minic_type_is_double(fn->values[lhs].type) ||
-                !minic_type_is_double(fn->values[rhs].type) ||
+            if (!minic_multi_direct_floating_shape(
+                    program, target, fn, ins, NULL, NULL) ||
                 fprintf(out, "  ldr d9, [sp, #%zu]\n"
                              "  ldr d10, [sp, #%zu]\n",
                         (size_t)lhs * 8U, (size_t)rhs * 8U) < 0 ||
@@ -524,10 +517,8 @@ bool minic_aarch64_emit_core_blocks(FILE *out, const MinicDirectLP64BlockContext
         case MINIC_CORE_INSTRUCTION_DOUBLE_DIVIDE: {
             const MinicCoreValueId lhs = ins->value.binary.left;
             const MinicCoreValueId rhs = ins->value.binary.right;
-            if (!minic_type_is_double(ins->type) ||
-                lhs >= fn->value_count || rhs >= fn->value_count ||
-                !minic_type_is_double(fn->values[lhs].type) ||
-                !minic_type_is_double(fn->values[rhs].type) ||
+            if (!minic_multi_direct_floating_shape(
+                    program, target, fn, ins, NULL, NULL) ||
                 fprintf(out,
                         "  ldr d9, [sp, #%zu]\n"
                         "  ldr d10, [sp, #%zu]\n"
@@ -541,9 +532,8 @@ bool minic_aarch64_emit_core_blocks(FILE *out, const MinicDirectLP64BlockContext
         /* Unary IEEE-754 sign flip includes -0 and all NaN payloads. */
         case MINIC_CORE_INSTRUCTION_DOUBLE_NEGATE: {
             const MinicCoreValueId operand = ins->value.operand;
-            if (!minic_type_is_double(ins->type) ||
-                operand >= fn->value_count ||
-                !minic_type_is_double(fn->values[operand].type) ||
+            if (!minic_multi_direct_floating_shape(
+                    program, target, fn, ins, NULL, NULL) ||
                 fprintf(out, "  ldr d9, [sp, #%zu]\n"
                              "  fneg d9, d9\n"
                              "  str d9, [sp, #%zu]\n",
@@ -1677,9 +1667,8 @@ bool minic_aarch64_emit_core_blocks(FILE *out, const MinicDirectLP64BlockContext
          * numerically, not zero-extended as its 32-bit IEEE bit pattern. */
         case MINIC_CORE_INSTRUCTION_DOUBLE_TO_FLOAT: {
             const MinicCoreValueId source = ins->value.operand;
-            if (!minic_type_is_float(ins->type) ||
-                source >= fn->value_count ||
-                !minic_type_is_double(fn->values[source].type) ||
+            if (!minic_multi_direct_floating_shape(
+                    program, target, fn, ins, NULL, NULL) ||
                 fprintf(out, "  ldr d9, [sp, #%zu]\n"
                              "  fcvt s9, d9\n"
                              "  str s9, [sp, #%zu]\n",
@@ -1701,10 +1690,8 @@ bool minic_aarch64_emit_core_blocks(FILE *out, const MinicDirectLP64BlockContext
                     : ins->kind == MINIC_CORE_INSTRUCTION_FLOAT_MULTIPLY
                         ? "  fmul s9, s9, s10\n"
                         : "  fdiv s9, s9, s10\n";
-            if (!minic_type_is_float(ins->type) ||
-                lhs >= fn->value_count || rhs >= fn->value_count ||
-                !minic_type_is_float(fn->values[lhs].type) ||
-                !minic_type_is_float(fn->values[rhs].type) ||
+            if (!minic_multi_direct_floating_shape(
+                    program, target, fn, ins, NULL, NULL) ||
                 fprintf(out, "  ldr s9, [sp, #%zu]\n"
                              "  ldr s10, [sp, #%zu]\n",
                         (size_t)lhs * 8U, (size_t)rhs * 8U) < 0 ||
@@ -1716,8 +1703,8 @@ bool minic_aarch64_emit_core_blocks(FILE *out, const MinicDirectLP64BlockContext
         }
         case MINIC_CORE_INSTRUCTION_FLOAT_TO_DOUBLE: {
             const MinicCoreValueId src = ins->value.operand;
-            if (src >= fn->value_count || !minic_type_is_double(ins->type) ||
-                !minic_type_is_float(fn->values[src].type) ||
+            if (!minic_multi_direct_floating_shape(
+                    program, target, fn, ins, NULL, NULL) ||
                 fprintf(out,
                         "  ldr s9, [sp, #%zu]\n"
                         "  fcvt d9, s9\n"
@@ -1734,9 +1721,8 @@ bool minic_aarch64_emit_core_blocks(FILE *out, const MinicDirectLP64BlockContext
             /* Numeric C conversion: AArch64 has signed AND unsigned 32/64
              * integer-to-double instructions. Narrow source values retain
              * their Core signedness through explicit normalization. */
-            if (src >= fn->value_count || !minic_type_is_double(ins->type) ||
-                !minic_lp64_scalar_integer_width(program, target, fn->values[src].type,
-                                      &width, &sign) ||
+            if (!minic_multi_direct_floating_shape(
+                    program, target, fn, ins, &width, &sign) ||
                 fprintf(out, width == 8U
                              ? "  ldr x9, [sp, #%zu]\n"
                              : "  ldr w9, [sp, #%zu]\n",
@@ -1760,11 +1746,8 @@ bool minic_aarch64_emit_core_blocks(FILE *out, const MinicDirectLP64BlockContext
             /* Lua's lua_Integer is signed LP64; C double-to-integer
              * conversion truncates toward zero. Keep unsigned64 fail-closed
              * until its full-range ABI oracle is introduced. */
-            if (src >= fn->value_count ||
-                !minic_type_is_double(fn->values[src].type) ||
-                !minic_lp64_scalar_integer_width(program, target, ins->type, &width, &sign) ||
-                (width != 1U && width != 2U &&
-                 width != 4U && width != 8U))
+            if (!minic_multi_direct_floating_shape(
+                    program, target, fn, ins, &width, &sign))
                 return minic_multi_direct_machine_reject(fn, "aarch64", name, reject_stage,
                                            reject_block, reject_ins, __LINE__);
             /* A64 natively supports unsigned 64-bit binary64 conversion.

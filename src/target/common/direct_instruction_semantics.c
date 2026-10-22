@@ -65,11 +65,37 @@ bool minic_multi_direct_parameter_object_location(
 }
 
 
-/* One machine-independent result-shape gate for the two direct LP64 codegen
- * owners. It checks Core value and type semantics, not ISA instructions.
- * The AAPCS64 front end admits binary64 VA_ARG while the LoongArch64 LP64D
- * direct backend has not yet admitted that result: retain that difference
- * explicitly in allow_variadic_double_result. */
+/* A compiler barrier is an ordering constraint in the Core stream, not a
+ * machine fence and not a produced SSA value. */
+bool minic_multi_direct_compiler_barrier_shape(const MinicCoreInstruction *ins) {
+    return ins != NULL &&
+           ins->kind == MINIC_CORE_INSTRUCTION_COMPILER_BARRIER &&
+           ins->result == MINIC_CORE_VALUE_INVALID &&
+           minic_type_is_void(ins->type);
+}
+
+/* Both direct LP64 emitters materialize int128 and long double in a 16-byte
+ * Core frame slot, but select fundamentally different ISA load/store forms.
+ * Validate the common source address and slot identity only once. */
+bool minic_multi_direct_wide_store_shape(
+    const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
+    const MinicLP64FramePlan *frame_plan, size_t *value_offset) {
+    MinicCoreValueId address, value;
+    if (fn == NULL || ins == NULL || frame_plan == NULL ||
+        value_offset == NULL || ins->kind != MINIC_CORE_INSTRUCTION_STORE)
+        return false;
+    address = ins->value.store.address;
+    value = ins->value.store.stored_value;
+    return address < fn->value_count && value < fn->value_count &&
+           minic_type_is_pointer(fn->values[address].type) &&
+           (minic_type_is_int128_integer(fn->values[value].type) ||
+            minic_type_is_long_double(fn->values[value].type)) &&
+           minic_lp64_frame_plan_wide_slot(frame_plan, value, value_offset);
+}
+
+/* One machine-independent result-shape gate for direct LP64 codegen.
+ * AArch64 admits binary64 VA_ARG; LoongArch64 does not yet, so callers
+ * select that documented ISA capability explicitly. */
 bool minic_multi_direct_result_slot_offset(
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
     bool allow_variadic_double_result, size_t *offset) {
@@ -130,6 +156,84 @@ bool minic_multi_direct_result_slot_offset(
 }
 
 
+
+/* Instruction kinds and Core operand/result types are not properties of
+ * an ISA encoder. Keep the shared IEEE-754 validation here, but leave the
+ * actual AArch64/LoongArch64 floating opcodes and register transfers local. */
+bool minic_multi_direct_floating_shape(
+    const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
+    size_t *integer_width, bool *integer_signed) {
+    MinicCoreValueId left, right, operand;
+    if (fn == NULL || ins == NULL)
+        return false;
+    switch (ins->kind) {
+    case MINIC_CORE_INSTRUCTION_DOUBLE_EQUAL:
+    case MINIC_CORE_INSTRUCTION_DOUBLE_LESS:
+    case MINIC_CORE_INSTRUCTION_DOUBLE_LESS_EQUAL:
+    case MINIC_CORE_INSTRUCTION_DOUBLE_ADD:
+    case MINIC_CORE_INSTRUCTION_DOUBLE_SUBTRACT:
+    case MINIC_CORE_INSTRUCTION_DOUBLE_MULTIPLY:
+    case MINIC_CORE_INSTRUCTION_DOUBLE_DIVIDE:
+        left = ins->value.binary.left;
+        right = ins->value.binary.right;
+        return (ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_EQUAL ||
+                ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_LESS ||
+                ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_LESS_EQUAL
+                    ? minic_type_equal(ins->type, minic_type_int())
+                    : minic_type_is_double(ins->type)) &&
+               left < fn->value_count && right < fn->value_count &&
+               minic_type_is_double(fn->values[left].type) &&
+               minic_type_is_double(fn->values[right].type);
+    case MINIC_CORE_INSTRUCTION_FLOAT_ADD:
+    case MINIC_CORE_INSTRUCTION_FLOAT_SUBTRACT:
+    case MINIC_CORE_INSTRUCTION_FLOAT_MULTIPLY:
+    case MINIC_CORE_INSTRUCTION_FLOAT_DIVIDE:
+        left = ins->value.binary.left;
+        right = ins->value.binary.right;
+        return minic_type_is_float(ins->type) &&
+               left < fn->value_count && right < fn->value_count &&
+               minic_type_is_float(fn->values[left].type) &&
+               minic_type_is_float(fn->values[right].type);
+    case MINIC_CORE_INSTRUCTION_DOUBLE_NEGATE:
+        operand = ins->value.operand;
+        return minic_type_is_double(ins->type) &&
+               operand < fn->value_count &&
+               minic_type_is_double(fn->values[operand].type);
+    case MINIC_CORE_INSTRUCTION_DOUBLE_TO_FLOAT:
+        operand = ins->value.operand;
+        return minic_type_is_float(ins->type) &&
+               operand < fn->value_count &&
+               minic_type_is_double(fn->values[operand].type);
+    case MINIC_CORE_INSTRUCTION_FLOAT_TO_DOUBLE:
+        operand = ins->value.operand;
+        return minic_type_is_double(ins->type) &&
+               operand < fn->value_count &&
+               minic_type_is_float(fn->values[operand].type);
+    case MINIC_CORE_INSTRUCTION_INTEGER_TO_DOUBLE:
+        operand = ins->value.operand;
+        return program != NULL && target != NULL &&
+               integer_width != NULL && integer_signed != NULL &&
+               minic_type_is_double(ins->type) &&
+               operand < fn->value_count &&
+               minic_lp64_scalar_integer_width(
+                   program, target, fn->values[operand].type,
+                   integer_width, integer_signed);
+    case MINIC_CORE_INSTRUCTION_DOUBLE_TO_INTEGER:
+        operand = ins->value.operand;
+        if (program == NULL || target == NULL ||
+            integer_width == NULL || integer_signed == NULL ||
+            operand >= fn->value_count ||
+            !minic_type_is_double(fn->values[operand].type) ||
+            !minic_lp64_scalar_integer_width(
+                program, target, ins->type, integer_width, integer_signed))
+            return false;
+        return *integer_width == 1U || *integer_width == 2U ||
+               *integer_width == 4U || *integer_width == 8U;
+    default:
+        return false;
+    }
+}
 
 /* Scalar bitcast shape for direct LP64 lowering. Pointer->integer must
  * preserve all 64 address bits; integer->pointer keeps narrow source width
