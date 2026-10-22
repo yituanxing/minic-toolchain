@@ -401,7 +401,6 @@ bool minic_aarch64_emit_core_blocks(FILE *out, const MinicDirectLP64BlockContext
             minic_type_is_int128_integer(
                 fn->values[ins->value.store.stored_value].type)) {
             const MinicCoreValueId addr = ins->value.store.address;
-            const MinicCoreValueId value = ins->value.store.stored_value;
             size_t src;
             if (!minic_multi_direct_wide_store_shape(
                     fn, ins, frame_plan, &src) ||
@@ -420,7 +419,6 @@ bool minic_aarch64_emit_core_blocks(FILE *out, const MinicDirectLP64BlockContext
             minic_type_is_long_double(
                 fn->values[ins->value.store.stored_value].type)) {
             const MinicCoreValueId addr = ins->value.store.address;
-            const MinicCoreValueId value = ins->value.store.stored_value;
             size_t src;
             if (!minic_multi_direct_wide_store_shape(
                     fn, ins, frame_plan, &src) ||
