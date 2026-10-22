@@ -21,9 +21,6 @@ bool minic_aarch64_emit_fp_instruction(
         return false;
     *needs_gp_store = false;
     switch (ins->kind) {
-        /* Ordered IEEE comparisons: AArch64 FCMP sets C=1 on unordered.
-         * 'lt' (N!=V) is WRONG for NaN. Use unsigned lo/ls conditions:
-         * those are true only for ordered < or <= respectively. */
         case MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT: {
             if (minic_type_is_long_double(ins->type)) {
                 size_t dst, half;
@@ -65,6 +62,9 @@ bool minic_aarch64_emit_fp_instruction(
             *needs_gp_store = true;
             return true;
         }
+        /* Ordered IEEE comparisons: AArch64 FCMP sets C=1 on unordered.
+         * 'lt' (N!=V) is WRONG for NaN. Use unsigned lo/ls conditions:
+         * those are true only for ordered < or <= respectively. */
         case MINIC_CORE_INSTRUCTION_DOUBLE_EQUAL:
         case MINIC_CORE_INSTRUCTION_DOUBLE_LESS:
         case MINIC_CORE_INSTRUCTION_DOUBLE_LESS_EQUAL: {
