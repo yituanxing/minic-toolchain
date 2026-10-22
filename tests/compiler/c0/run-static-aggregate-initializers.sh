@@ -88,9 +88,6 @@ if "$minic" -S "$root/tests/compiler/c0/invalid_static_record_compound_literal_t
     exit 1
 fi
 grep -F 'static record compound literal type mismatch' "$build_dir/invalid.stderr" >/dev/null
-printf '%s\n' \
-    'PASS compiler/c0/static-aggregate-initializers compound-literal=record nested-nonzero=recursive zero-size-local-array=accepted static-fam=gnu-range+extended-storage union-selection=forward+anonymous-struct+backward-reloc designated-inner=shared mismatch=fail-closed'
-
 # RV64's flat record and pointer relocation array now share the common
 # DataLayout slot walk, while preserving .word/.half/.dword GNU directives.
 cat > "$build_dir/static_flat_reloc_shared.c" <<'EOF'
@@ -113,3 +110,5 @@ grep -F '  .word 17' "$build_dir/static_flat_reloc_shared.s" >/dev/null
 grep -F '  .dword record_target+8' "$build_dir/static_flat_reloc_shared.s" >/dev/null
 grep -F '  .half 23' "$build_dir/static_flat_reloc_shared.s" >/dev/null
 grep -F '  .dword record_target+12' "$build_dir/static_flat_reloc_shared.s" >/dev/null
+printf '%s\n' \
+    'PASS compiler/c0/static-aggregate-initializers compound-literal=record nested-nonzero=recursive zero-size-local-array=accepted static-fam=gnu-range+extended-storage union-selection=forward+anonymous-struct+backward-reloc designated-inner=shared flat-record=shared-rv64-layout mismatch=fail-closed'
