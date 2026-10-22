@@ -110,5 +110,28 @@ grep -F '  .word 17' "$build_dir/static_flat_reloc_shared.s" >/dev/null
 grep -F '  .dword record_target+8' "$build_dir/static_flat_reloc_shared.s" >/dev/null
 grep -F '  .half 23' "$build_dir/static_flat_reloc_shared.s" >/dev/null
 grep -F '  .dword record_target+12' "$build_dir/static_flat_reloc_shared.s" >/dev/null
+
+# Force the RV64 record-array path through shared recursive DataLayout.
+# Assert relocation addends and target-specific .dword spelling, while the
+# existing tests cover bitfield/flexible fallback compatibility.
+cat > "$build_dir/static_nested_shared_layout.c" <<'EOF'
+static int members_target[4] = {3, 5, 7, 11};
+struct Inner { unsigned short count; int *pointer; };
+struct Outer { struct Inner members[2]; unsigned long total; };
+static struct Outer shared_nested = {
+    {{17, &members_target[1]}, {29, &members_target[3]}}, 41
+};
+int main(void) {
+    return shared_nested.members[0].count == 17 &&
+           shared_nested.members[0].pointer == &members_target[1] &&
+           shared_nested.members[1].count == 29 &&
+           shared_nested.members[1].pointer == &members_target[3] &&
+           shared_nested.total == 41 ? 42 : 1;
+}
+EOF
+"$minic" -S "$build_dir/static_nested_shared_layout.c" \
+    -o "$build_dir/static_nested_shared_layout.s"
+grep -F '  .dword members_target+4' "$build_dir/static_nested_shared_layout.s" >/dev/null
+grep -F '  .dword members_target+12' "$build_dir/static_nested_shared_layout.s" >/dev/null
 printf '%s\n' \
-    'PASS compiler/c0/static-aggregate-initializers compound-literal=record nested-nonzero=recursive zero-size-local-array=accepted static-fam=gnu-range+extended-storage union-selection=forward+anonymous-struct+backward-reloc designated-inner=shared flat-record=shared-rv64-layout mismatch=fail-closed'
+    'PASS compiler/c0/static-aggregate-initializers compound-literal=record nested-nonzero=recursive zero-size-local-array=accepted static-fam=gnu-range+extended-storage union-selection=forward+anonymous-struct+backward-reloc designated-inner=shared flat-record=shared-rv64-layout nested=shared-recursive mismatch=fail-closed'
