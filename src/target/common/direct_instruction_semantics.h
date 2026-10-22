@@ -18,6 +18,13 @@ bool minic_multi_direct_parameter_object_location(
     const MinicLP64FramePlan *frame_plan,
     const MinicLP64ArgumentLocation **location, size_t *object_offset);
 
+/* Effect-only compiler barriers and wide (128-bit) stores share Core IR
+ * shape admission. ISA-specific bytes/register transfer remain target-owned. */
+bool minic_multi_direct_compiler_barrier_shape(const MinicCoreInstruction *ins);
+bool minic_multi_direct_wide_store_shape(
+    const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
+    const MinicLP64FramePlan *frame_plan, size_t *value_offset);
+
 /* Source/Core instruction-value admission shared by AAPCS64 and LP64D.
  * The bool preserves the one documented double-varargs ISA difference. */
 bool minic_multi_direct_result_slot_offset(
