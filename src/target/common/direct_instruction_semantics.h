@@ -24,6 +24,16 @@ bool minic_multi_direct_result_slot_offset(
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
     bool allow_variadic_double_result, size_t *offset);
 
+/* IEEE source operands, destination type and scalar integer-conversion
+ * width/sign form a Core semantic contract shared by AArch64 and LoongArch64.
+ * The two ISA emitters still choose register sequences, rounding operations,
+ * and calling convention independently. Width/sign are outputs only for
+ * INTEGER_TO_DOUBLE and DOUBLE_TO_INTEGER; other kinds admit NULL outputs. */
+bool minic_multi_direct_floating_shape(
+    const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
+    size_t *integer_width, bool *integer_signed);
+
 /* Private machine-independent admission; register allocation, ISA instruction
  * selection and all native emission stay in the target backends. */
 /* Exact direct-LP64 Core pointer/int cast and pointer-order admission. */
