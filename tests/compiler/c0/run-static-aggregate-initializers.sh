@@ -88,5 +88,27 @@ if "$minic" -S "$root/tests/compiler/c0/invalid_static_record_compound_literal_t
     exit 1
 fi
 grep -F 'static record compound literal type mismatch' "$build_dir/invalid.stderr" >/dev/null
+# RV64's flat record and pointer relocation array now share the common
+# DataLayout slot walk, while preserving .word/.half/.dword GNU directives.
+cat > "$build_dir/static_flat_reloc_shared.c" <<'EOF'
+static int record_target[4] = {2, 3, 5, 7};
+struct FlatReloc { int count; int *ptr; unsigned short flags; };
+static struct FlatReloc shared = {17, &record_target[2], 23};
+static int *const pointers[4] = {
+    &record_target[1], 0, &record_target[3], &record_target[0]
+};
+int main(void) {
+    return shared.count == 17 && shared.ptr == &record_target[2] &&
+           shared.flags == 23 && pointers[0] == &record_target[1] &&
+           pointers[1] == 0 && pointers[2] == &record_target[3] &&
+           pointers[3] == &record_target[0] ? 42 : 1;
+}
+EOF
+"$minic" -S "$build_dir/static_flat_reloc_shared.c" \
+    -o "$build_dir/static_flat_reloc_shared.s"
+grep -F '  .word 17' "$build_dir/static_flat_reloc_shared.s" >/dev/null
+grep -F '  .dword record_target+8' "$build_dir/static_flat_reloc_shared.s" >/dev/null
+grep -F '  .half 23' "$build_dir/static_flat_reloc_shared.s" >/dev/null
+grep -F '  .dword record_target+12' "$build_dir/static_flat_reloc_shared.s" >/dev/null
 printf '%s\n' \
-    'PASS compiler/c0/static-aggregate-initializers compound-literal=record nested-nonzero=recursive zero-size-local-array=accepted static-fam=gnu-range+extended-storage union-selection=forward+anonymous-struct+backward-reloc designated-inner=shared mismatch=fail-closed'
+    'PASS compiler/c0/static-aggregate-initializers compound-literal=record nested-nonzero=recursive zero-size-local-array=accepted static-fam=gnu-range+extended-storage union-selection=forward+anonymous-struct+backward-reloc designated-inner=shared flat-record=shared-rv64-layout mismatch=fail-closed'

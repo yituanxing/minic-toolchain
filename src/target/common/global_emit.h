@@ -7,17 +7,30 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdio.h>
+#include <stdint.h>
 
 /* Initializer layout is independent of instruction selection. The caller
  * retains ownership of the target relocation expression/encoding. */
 typedef bool (*MinicMultiRelocEmitter)(FILE *, const MinicC0Program *,
                                        const MinicTargetInfo *,
                                        const MinicGlobalRelocation *, size_t);
+/* Scalar payload spelling belongs to the target; DataLayout and relocation
+ * slot traversal remain shared between the four supported architectures. */
+typedef bool (*MinicMultiScalarBitsEmitter)(FILE *, const MinicC0Program *,
+                                            const MinicTargetInfo *, MinicType,
+                                            uint64_t);
 
 bool minic_multi_emit_relocatable_scalar_array(
     FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicGlobalObject *object, size_t storage_size,
-    MinicMultiRelocEmitter emit_relocation);
+    MinicMultiRelocEmitter emit_relocation,
+    MinicMultiScalarBitsEmitter emit_bits);
+/* Canonical flat-record layout walk; target callbacks retain assembly syntax. */
+bool minic_multi_emit_flat_record_global(
+    FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicGlobalObject *object, size_t storage_size,
+    MinicMultiRelocEmitter emit_relocation,
+    MinicMultiScalarBitsEmitter emit_bits);
 bool minic_multi_emit_zero_relocation_global(
     FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicGlobalObject *object, size_t storage_size,

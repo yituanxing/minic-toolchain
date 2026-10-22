@@ -46,48 +46,16 @@ static bool x86_emit_relocation(FILE *out, const MinicC0Program *program,
     return fprintf(out, "  %s %s%+" PRId64 "\n", directive, name, addend) >= 0;
 }
 
-/* Lua 5.5.0 has top-level records with selected nested union members.
- * Reuse Core's flattened initializer slots and selected-member metadata,
- * and the shared DataLayout for the exact target byte offsets. This is a
- * bounded target-owned emitter: bit-fields/flexible fields fail closed. */
-static bool x86_emit_record_global(FILE *out, const MinicC0Program *program,
-                                   const MinicTargetInfo *target,
-                                   const MinicGlobalObject *obj, size_t storage_size) {
-    const MinicRecord *record;
-    size_t i, cursor = 0U, relocation_index = 0U;
-    if (!minic_type_is_record(obj->type)) return false;
-    record = minic_c0_program_record(program, obj->type.record_id);
-    if (record == NULL || !record->is_complete || record->is_union ||
-        record->field_count != obj->initializer_count) return false;
-    for (i = 0U; i < record->field_count; ++i) {
-        const MinicRecordField *field = minic_c0_record_field(record, i);
-        const MinicGlobalRelocation *reloc =
-            relocation_index < obj->relocation_count ? &obj->relocations[relocation_index] : NULL;
-        size_t off, width, align;
-        if (field == NULL || field->is_bit_field || field->is_flexible_array ||
-            field->element_count != 1U ||
-            (!minic_type_is_integer(field->type) && !minic_type_is_pointer(field->type) &&
-             !minic_type_is_float(field->type) && !minic_type_is_double(field->type)) ||
-            !minic_data_layout_type(target->data_layout, program, field->type, &width, &align) ||
-            x86_data_directive(width) == NULL ||
-            !minic_data_layout_record_field_offset(target->data_layout, program, record, i, &off) ||
-            off < cursor || off > storage_size || width > storage_size - off ||
-            fprintf(out, "  .zero %zu\n", off - cursor) < 0) return false;
-        (void)align;
-        if (reloc != NULL &&
-            (reloc->location_kind == MINIC_GLOBAL_RELOCATION_LOCATION_RECORD_FIELD ||
-             reloc->location_kind == MINIC_GLOBAL_RELOCATION_LOCATION_AGGREGATE_SCALAR) &&
-            reloc->location_index == i) {
-            if (obj->initializer_values[i] != 0U ||
-                !x86_emit_relocation(out, program, target, reloc, width)) return false;
-            ++relocation_index;
-        } else if (!x86_emit_data_bits(out, width, obj->initializer_values[i])) {
-            return false;
-        }
-        cursor = off + width;
-    }
-    return relocation_index == obj->relocation_count && cursor <= storage_size &&
-           fprintf(out, "  .zero %zu\n", storage_size - cursor) >= 0;
+/* Flat records now use one shared layout walk.  Retain x86's legacy
+ * .word/.long/.quad scalar spelling in the target-owned callback. */
+static bool x86_emit_typed_bits(FILE *out, const MinicC0Program *program,
+                                const MinicTargetInfo *target, MinicType type,
+                                uint64_t bits) {
+    size_t width, alignment;
+    return target != NULL &&
+           minic_data_layout_type(target->data_layout, program, type,
+                                  &width, &alignment) &&
+           x86_emit_data_bits(out, width, bits);
 }
 
 /* A flat array of pointer/scalar constants with per-element ELF relocation.
@@ -185,8 +153,9 @@ bool minic_x86_64_emit_global(FILE *out, const MinicC0Program *program,
             if (!minic_multi_emit_recursive_record_global(
                     out, program, target, obj, storage_size,
                     x86_emit_relocation)) return false;
-        } else if (!x86_emit_record_global(
-                       out, program, target, obj, storage_size)) return false;
+        } else if (!minic_multi_emit_flat_record_global(
+                       out, program, target, obj, storage_size,
+                       x86_emit_relocation, x86_emit_typed_bits)) return false;
     } else if (array_of_records) {
         /* Shared layout owns flattened/recursive initializer slots,
          * including selected nested unions. ELF relocations remain x86. */
@@ -194,9 +163,11 @@ bool minic_x86_64_emit_global(FILE *out, const MinicC0Program *program,
                 out, program, target, obj, storage_size,
                 x86_emit_relocation)) return false;
     } else if (minic_type_is_array(obj->type) && obj->relocation_count != 0U) {
+        /* Preserve the existing .2byte/.4byte/.8byte spelling on x86 arrays.
+         * Only RV64 overrides scalar directives on the shared walk. */
         if (!minic_multi_emit_relocatable_scalar_array(
                 out, program, target, obj, storage_size,
-                x86_emit_relocation)) return false;
+                x86_emit_relocation, NULL)) return false;
     } else if (obj->relocation_count != 0U) {
         /* Simple pointer globals: relocatable target address or function. */
         if (obj->initializer_count != 1U || obj->relocation_count != 1U ||
