@@ -457,7 +457,7 @@ bool minic_riscv64_core_frame_object_offset(const MinicC0Program *program,
     return true;
 }
 
-static bool
+bool
 minic_riscv64_core_frame_value_offset(const MinicRiscv64CoreFrame *frame, MinicCoreValueId value_id, size_t *offset) {
     if (frame == NULL || offset == NULL || value_id >= frame->value_count ||
         frame->value_offsets == NULL || frame->value_offsets[value_id] == SIZE_MAX) {
