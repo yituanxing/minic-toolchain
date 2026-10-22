@@ -453,8 +453,10 @@ bool minic_aarch64_emit_core_blocks(FILE *out, const MinicDirectLP64BlockContext
             /* Match x86 Core constant semantics: the destination integer
              * type determines narrowing, not the original int64 payload.
              * Lua exercises out-of-range literals in cast/enum contexts. */
-            (void)minic_lp64_scalar_integer_width(program, target, ins->type,
-                                       &width, &sign);
+            if (!minic_multi_direct_constant_integer_shape(
+                    program, target, ins, &width, &sign))
+                return minic_multi_direct_machine_reject(
+                    fn, "aarch64", name, reject_stage, reject_block, reject_ins, __LINE__);
             if (width == 8U) {
                 /* Full 64-bit constant: preserve high halves AND sign bits. */
                 const uint64_t bits = (uint64_t)ins->value.integer_value;
@@ -473,10 +475,6 @@ bool minic_aarch64_emit_core_blocks(FILE *out, const MinicDirectLP64BlockContext
                 uint32_t bits;
                 /* Non-integer Core pseudo-bools retain the old 32-bit
                  * conservative gate; real 8/16/32-bit values wrap to width. */
-                if (width == 0U &&
-                    (ins->value.integer_value < INT32_MIN ||
-                     ins->value.integer_value > INT32_MAX)) return minic_multi_direct_machine_reject(fn, "aarch64", name, reject_stage,
-                                    reject_block, reject_ins, __LINE__);
                 bits = (uint32_t)(int32_t)ins->value.integer_value;
                 if (fprintf(out, "  movz w9, #%" PRIu32 "\n",
                             bits & UINT32_C(0xffff)) < 0 ||
@@ -494,11 +492,9 @@ bool minic_aarch64_emit_core_blocks(FILE *out, const MinicDirectLP64BlockContext
         }
         case MINIC_CORE_INSTRUCTION_GLOBAL_ADDRESS: {
             const char *symbol;
-            if (ins->value.global_id >= fn->global_count ||
-                fn->globals[ins->value.global_id].name == NULL)
-                return minic_multi_direct_machine_reject(fn, "aarch64", name, reject_stage,
-                                           reject_block, reject_ins, __LINE__);
-            symbol = fn->globals[ins->value.global_id].name;
+            if (!minic_multi_direct_global_address_symbol(fn, ins, &symbol))
+                return minic_multi_direct_machine_reject(
+                    fn, "aarch64", name, reject_stage, reject_block, reject_ins, __LINE__);
             if (aarch64_static_object(program, symbol)) {
                 /* RoundKey and other proven static-TU objects: preserve
                  * direct static-PC-relative addresses. */
@@ -525,14 +521,8 @@ bool minic_aarch64_emit_core_blocks(FILE *out, const MinicDirectLP64BlockContext
             continue;
         }
         case MINIC_CORE_INSTRUCTION_FUNCTION_ADDRESS: {
-            const MinicCoreFunctionSymbolId symbol_id =
-                ins->value.function_symbol_id;
             const char *symbol;
-            if (symbol_id >= fn->function_symbol_count ||
-                !minic_type_is_pointer(ins->type)) return minic_multi_direct_machine_reject(fn, "aarch64", name, reject_stage,
-                                    reject_block, reject_ins, __LINE__);
-            symbol = fn->function_symbols[symbol_id].name;
-            if (symbol == NULL || symbol[0] == '\0')
+            if (!minic_multi_direct_function_address_symbol(fn, ins, &symbol))
                 return minic_multi_direct_machine_reject(fn, "aarch64", name, reject_stage,
                                            reject_block, reject_ins, __LINE__);
             if (aarch64_static_function(program, symbol)) {
@@ -556,8 +546,8 @@ bool minic_aarch64_emit_core_blocks(FILE *out, const MinicDirectLP64BlockContext
         }
         case MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS: {
             size_t object_offset;
-            if (ins->value.object_id >= fn->object_count ||
-                !minic_lp64_frame_plan_object(frame_plan, (size_t)ins->value.object_id, &object_offset) ||
+            if (!minic_multi_direct_object_address_location(
+                    fn, ins, frame_plan, &object_offset) ||
                 /* Large Lua VM stack objects exceed the 16-bit movz
                  * immediate. Keep the exact DataLayout offset and
                  * materialize it in the same reserved x9 scratch. */
@@ -575,10 +565,10 @@ bool minic_aarch64_emit_core_blocks(FILE *out, const MinicDirectLP64BlockContext
         case MINIC_CORE_INSTRUCTION_FIELD_ADDRESS: {
             /* Core already computed the DataLayout record byte displacement.
              * Large zlib structures exceed the ISA add-immediate range. */
-            const MinicCoreValueId base = ins->value.field_address.base;
-            const size_t bytes = ins->value.field_address.byte_offset;
-            if (base >= fn->value_count ||
-                !minic_type_is_pointer(fn->values[base].type) ||
+            MinicCoreValueId base;
+            size_t bytes;
+            if (!minic_multi_direct_field_address_shape(
+                    fn, ins, &base, &bytes) ||
                 fprintf(out, "  ldr x9, [sp, #%zu]\n",
                         (size_t)base * 8U) < 0)
                 return minic_multi_direct_machine_reject(fn, "aarch64", name, reject_stage,
@@ -796,11 +786,8 @@ bool minic_aarch64_emit_core_blocks(FILE *out, const MinicDirectLP64BlockContext
         }
         case MINIC_CORE_INSTRUCTION_DYNAMIC_STACK_ALLOC: {
             const MinicCoreValueId count = ins->value.operand;
-            if (!dynamic_frame || ins->result >= fn->value_count ||
-                count >= fn->value_count || !minic_type_is_pointer(ins->type) ||
-                !minic_type_equal(fn->values[ins->result].type, ins->type) ||
-                !minic_type_equal(fn->values[count].type,
-                                  minic_type_unsigned_long()) ||
+            if (!minic_multi_direct_dynamic_stack_alloc_shape(
+                    fn, ins, dynamic_frame) ||
                 fprintf(out,
                     "  ldr x9, [sp, #%zu]\n"
                     "  adds x10, x9, #15\n"

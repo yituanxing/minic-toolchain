@@ -422,17 +422,16 @@ bool minic_loongarch64_emit_core_blocks(FILE *out, const MinicDirectLP64BlockCon
             /* Match x86 Core constant semantics: the destination integer
              * type determines narrowing, not the original int64 payload.
              * Lua exercises out-of-range literals in cast/enum contexts. */
-            (void)minic_lp64_scalar_integer_width(program, target, ins->type,
-                                       &width, &sign);
+            if (!minic_multi_direct_constant_integer_shape(
+                    program, target, ins, &width, &sign))
+                return minic_multi_direct_machine_reject(
+                    fn, "loongarch64", name, reject_stage, reject_block, reject_ins, __LINE__);
             if (width == 8U) {
                 if (fprintf(out, "  li.d $t0, %" PRId64 "\n",
                             ins->value.integer_value) < 0) return minic_multi_direct_machine_reject(fn, "loongarch64", name, reject_stage,
                                     reject_block, reject_ins, __LINE__);
             } else {
-                if ((width == 0U &&
-                     (ins->value.integer_value < INT32_MIN ||
-                      ins->value.integer_value > INT32_MAX)) ||
-                    fprintf(out, "  li.w $t0, %" PRId64 "\n",
+                if (fprintf(out, "  li.w $t0, %" PRId64 "\n",
                             (int64_t)(int32_t)(uint32_t)
                                 ins->value.integer_value) < 0 ||
                     ((width == 1U || width == 2U) &&
@@ -442,24 +441,18 @@ bool minic_loongarch64_emit_core_blocks(FILE *out, const MinicDirectLP64BlockCon
             (void)sign;
             break;
         }
-        case MINIC_CORE_INSTRUCTION_GLOBAL_ADDRESS:
-            if (ins->value.global_id >= fn->global_count ||
-                fn->globals[ins->value.global_id].name == NULL ||
-                fprintf(out, "  la.global $t0, %s\n",
-                        fn->globals[ins->value.global_id].name) < 0 ||
+        case MINIC_CORE_INSTRUCTION_GLOBAL_ADDRESS: {
+            const char *symbol;
+            if (!minic_multi_direct_global_address_symbol(fn, ins, &symbol) ||
+                fprintf(out, "  la.global $t0, %s\n", symbol) < 0 ||
                 !emit_sp_mem(out, "st.d", "$t0", offset))
                 return minic_multi_direct_machine_reject(fn, "loongarch64", name, reject_stage,
                                     reject_block, reject_ins, __LINE__);
             continue;
+        }
         case MINIC_CORE_INSTRUCTION_FUNCTION_ADDRESS: {
-            const MinicCoreFunctionSymbolId symbol_id =
-                ins->value.function_symbol_id;
             const char *symbol;
-            if (symbol_id >= fn->function_symbol_count ||
-                !minic_type_is_pointer(ins->type)) return minic_multi_direct_machine_reject(fn, "loongarch64", name, reject_stage,
-                                    reject_block, reject_ins, __LINE__);
-            symbol = fn->function_symbols[symbol_id].name;
-            if (symbol == NULL || symbol[0] == '\0' ||
+            if (!minic_multi_direct_function_address_symbol(fn, ins, &symbol) ||
                 fprintf(out, "  la.global $t0, %s\n", symbol) < 0 ||
                 !emit_sp_mem(out, "st.d", "$t0", offset)) return minic_multi_direct_machine_reject(fn, "loongarch64", name, reject_stage,
                                     reject_block, reject_ins, __LINE__);
@@ -467,8 +460,8 @@ bool minic_loongarch64_emit_core_blocks(FILE *out, const MinicDirectLP64BlockCon
         }
         case MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS: {
             size_t object_offset;
-            if (ins->value.object_id >= fn->object_count ||
-                !minic_lp64_frame_plan_object(frame_plan, (size_t)ins->value.object_id, &object_offset) ||
+            if (!minic_multi_direct_object_address_location(
+                    fn, ins, frame_plan, &object_offset) ||
                 fprintf(out, "  li.d $t0, %zu\n"
                              "  add.d $t0, %s, $t0\n",
                         object_offset, dynamic_frame ? "$s0" : "$sp") < 0 ||
@@ -480,10 +473,10 @@ bool minic_loongarch64_emit_core_blocks(FILE *out, const MinicDirectLP64BlockCon
         case MINIC_CORE_INSTRUCTION_FIELD_ADDRESS: {
             /* The full Core DataLayout byte offset may exceed signed imm12.
              * li.d + add.d preserves the computed record layout. */
-            const MinicCoreValueId base = ins->value.field_address.base;
-            const size_t bytes = ins->value.field_address.byte_offset;
-            if (base >= fn->value_count ||
-                !minic_type_is_pointer(fn->values[base].type) ||
+            MinicCoreValueId base;
+            size_t bytes;
+            if (!minic_multi_direct_field_address_shape(
+                    fn, ins, &base, &bytes) ||
                 !emit_sp_mem(out, "ld.d", "$t0", (size_t)base * 8U))
                 return minic_multi_direct_machine_reject(fn, "loongarch64", name, reject_stage,
                                            reject_block, reject_ins, __LINE__);
@@ -594,11 +587,8 @@ bool minic_loongarch64_emit_core_blocks(FILE *out, const MinicDirectLP64BlockCon
         }
         case MINIC_CORE_INSTRUCTION_DYNAMIC_STACK_ALLOC: {
             const MinicCoreValueId count = ins->value.operand;
-            if (!dynamic_frame || ins->result >= fn->value_count ||
-                count >= fn->value_count || !minic_type_is_pointer(ins->type) ||
-                !minic_type_equal(fn->values[ins->result].type, ins->type) ||
-                !minic_type_equal(fn->values[count].type,
-                                  minic_type_unsigned_long()) ||
+            if (!minic_multi_direct_dynamic_stack_alloc_shape(
+                    fn, ins, dynamic_frame) ||
                 !emit_sp_mem(out, "ld.d", "$t0", (size_t)count * 8U) ||
                 fprintf(out,
                     "  addi.d $t1, $t0, 15\n"
