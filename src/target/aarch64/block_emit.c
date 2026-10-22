@@ -1,4 +1,5 @@
 #include "target/aarch64/block_emit.h"
+#include "target/aarch64/fp_emit.h"
 #include "target/common/direct_instruction_semantics.h"
 #include "target/common/lp64_aggregate.h"
 #include "target/common/lp64_scalar.h"
@@ -465,131 +466,31 @@ bool minic_aarch64_emit_core_blocks(FILE *out, const MinicDirectLP64BlockContext
             return minic_multi_direct_machine_reject(
                 fn, "aarch64", name, reject_stage, reject_block, reject_ins, __LINE__);
         }
+        /* The native FP instruction family is a single target-owned
+         * emission unit; Core semantics are shared, machine opcodes are not.
+         * GP-producing comparisons/conversions reuse normal writeback. */
+        if (minic_multi_direct_fp_instruction_kind(ins->kind)) {
+            bool needs_gp_store = false;
+            if (!minic_aarch64_emit_fp_instruction(
+                    out, program, target, fn, ins, offset,
+                    frame_plan,
+                    emit_integer_normalize,
+                    &needs_gp_store))
+                return minic_multi_direct_machine_reject(
+                    fn, "aarch64", name, reject_stage, reject_block,
+                    reject_ins, __LINE__);
+            if (needs_gp_store) {
+                if (fprintf(out, (minic_lp64_register64_type(program, target, ins->type) ||
+                                  minic_type_is_double(ins->type))
+                                     ? "  str x9, [sp, #%zu]\n"
+                                     : "  str w9, [sp, #%zu]\n", offset) < 0)
+                    return minic_multi_direct_machine_reject(
+                        fn, "aarch64", name, reject_stage, reject_block,
+                        reject_ins, __LINE__);
+            }
+            continue;
+        }
         switch (ins->kind) {
-        /* Ordered IEEE comparisons: AArch64 FCMP sets C=1 on unordered.
-         * 'lt' (N!=V) is WRONG for NaN. Use unsigned lo/ls conditions:
-         * those are true only for ordered < or <= respectively. */
-        case MINIC_CORE_INSTRUCTION_DOUBLE_EQUAL:
-        case MINIC_CORE_INSTRUCTION_DOUBLE_LESS:
-        case MINIC_CORE_INSTRUCTION_DOUBLE_LESS_EQUAL: {
-            const MinicCoreValueId lhs = ins->value.binary.left;
-            const MinicCoreValueId rhs = ins->value.binary.right;
-            const char *condition = ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_EQUAL
-                ? "eq" : ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_LESS ? "lo" : "ls";
-            if (!minic_multi_direct_floating_shape(
-                    program, target, fn, ins, NULL, NULL) ||
-                fprintf(out,
-                        "  ldr d9, [sp, #%zu]\n"
-                        "  ldr d10, [sp, #%zu]\n"
-                        "  fcmp d9, d10\n"
-                        "  cset w9, %s\n",
-                        (size_t)lhs * 8U, (size_t)rhs * 8U,
-                        condition) < 0)
-                return minic_multi_direct_machine_reject(fn, "aarch64", name, reject_stage,
-                                    reject_block, reject_ins, __LINE__);
-            break;
-        }
-        /* M37: cJSON compare_double's a-b and tolerance multiplication.
-         * Keep full IEEE-754 binary64 payloads in FP registers/SSA slots. */
-        case MINIC_CORE_INSTRUCTION_DOUBLE_ADD:
-        case MINIC_CORE_INSTRUCTION_DOUBLE_SUBTRACT:
-        case MINIC_CORE_INSTRUCTION_DOUBLE_MULTIPLY: {
-            const MinicCoreValueId lhs = ins->value.binary.left;
-            const MinicCoreValueId rhs = ins->value.binary.right;
-            const char *op = ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_ADD
-                ? "  fadd d9, d9, d10\n"
-                : ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_SUBTRACT
-                    ? "  fsub d9, d9, d10\n"
-                    : "  fmul d9, d9, d10\n";
-            if (!minic_multi_direct_floating_shape(
-                    program, target, fn, ins, NULL, NULL) ||
-                fprintf(out, "  ldr d9, [sp, #%zu]\n"
-                             "  ldr d10, [sp, #%zu]\n",
-                        (size_t)lhs * 8U, (size_t)rhs * 8U) < 0 ||
-                fputs(op, out) == EOF ||
-                fprintf(out, "  str d9, [sp, #%zu]\n", offset) < 0)
-                return minic_multi_direct_machine_reject(fn, "aarch64", name, reject_stage,
-                                    reject_block, reject_ins, __LINE__);
-            continue;
-        }
-        case MINIC_CORE_INSTRUCTION_DOUBLE_DIVIDE: {
-            const MinicCoreValueId lhs = ins->value.binary.left;
-            const MinicCoreValueId rhs = ins->value.binary.right;
-            if (!minic_multi_direct_floating_shape(
-                    program, target, fn, ins, NULL, NULL) ||
-                fprintf(out,
-                        "  ldr d9, [sp, #%zu]\n"
-                        "  ldr d10, [sp, #%zu]\n"
-                        "  fdiv d9, d9, d10\n"
-                        "  str d9, [sp, #%zu]\n",
-                        (size_t)lhs * 8U, (size_t)rhs * 8U, offset) < 0)
-                return minic_multi_direct_machine_reject(fn, "aarch64", name, reject_stage,
-                                    reject_block, reject_ins, __LINE__);
-            continue; /* Result is already in its full 64-bit SSA slot. */
-        }
-        /* Unary IEEE-754 sign flip includes -0 and all NaN payloads. */
-        case MINIC_CORE_INSTRUCTION_DOUBLE_NEGATE: {
-            const MinicCoreValueId operand = ins->value.operand;
-            if (!minic_multi_direct_floating_shape(
-                    program, target, fn, ins, NULL, NULL) ||
-                fprintf(out, "  ldr d9, [sp, #%zu]\n"
-                             "  fneg d9, d9\n"
-                             "  str d9, [sp, #%zu]\n",
-                        (size_t)operand * 8U, offset) < 0)
-                return minic_multi_direct_machine_reject(fn, "aarch64", name, reject_stage,
-                                           reject_block, reject_ins, __LINE__);
-            continue;
-        }
-        case MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT: {
-            if (minic_type_is_long_double(ins->type)) {
-                size_t dst, half;
-                if (!minic_lp64_frame_plan_wide_slot(frame_plan, ins->result, &dst))
-                    return minic_multi_direct_machine_reject(fn, "aarch64", name,
-                                               reject_stage, reject_block,
-                                               reject_ins, __LINE__);
-                for (half = 0U; half < 2U; ++half) {
-                    const uint64_t bits = half == 0U
-                        ? ins->value.floating128_bits.low
-                        : ins->value.floating128_bits.high;
-                    unsigned int shift;
-                    if (fprintf(out, "  movz x9, #%" PRIu64 "\n",
-                                bits & UINT64_C(0xffff)) < 0)
-                        return minic_multi_direct_machine_reject(fn, "aarch64", name,
-                                                   reject_stage, reject_block,
-                                                   reject_ins, __LINE__);
-                    for (shift = 16U; shift <= 48U; shift += 16U)
-                        if (((bits >> shift) & UINT64_C(0xffff)) != 0U &&
-                            fprintf(out, "  movk x9, #%" PRIu64
-                                         ", lsl #%u\n",
-                                    (bits >> shift) & UINT64_C(0xffff),
-                                    shift) < 0)
-                            return minic_multi_direct_machine_reject(fn, "aarch64", name,
-                                                       reject_stage, reject_block,
-                                                       reject_ins, __LINE__);
-                    if (fprintf(out, "  str x9, [sp, #%zu]\n",
-                                dst + half * 8U) < 0)
-                        return minic_multi_direct_machine_reject(fn, "aarch64", name,
-                                                   reject_stage, reject_block,
-                                                   reject_ins, __LINE__);
-                }
-                continue;
-            }
-            const uint64_t bits = ins->value.floating_bits;
-            unsigned int shift;
-            if ((!minic_type_is_double(ins->type) &&
-                 !minic_type_is_float(ins->type)) ||
-                fprintf(out, "  movz x9, #%" PRIu64 "\n",
-                        bits & UINT64_C(0xffff)) < 0) return minic_multi_direct_machine_reject(fn, "aarch64", name, reject_stage,
-                                    reject_block, reject_ins, __LINE__);
-            for (shift = 16U; shift <= 48U; shift += 16U) {
-                if (((bits >> shift) & UINT64_C(0xffff)) != 0U &&
-                    fprintf(out, "  movk x9, #%" PRIu64 ", lsl #%u\n",
-                            (bits >> shift) & UINT64_C(0xffff), shift) < 0)
-                    return minic_multi_direct_machine_reject(fn, "aarch64", name, reject_stage,
-                                    reject_block, reject_ins, __LINE__);
-            }
-            break;
-        }
         case MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT: {
             size_t width = 0U;
             bool sign = false;
@@ -1656,112 +1557,6 @@ bool minic_aarch64_emit_core_blocks(FILE *out, const MinicDirectLP64BlockContext
                 return minic_multi_direct_machine_reject(fn, "aarch64", name, reject_stage,
                                     reject_block, reject_ins, __LINE__);
             (void)sign;
-            break;
-        }
-        /* M28: cJSON_CreateNumber converts INT_MIN to binary64, and after
-         * saturation converts an in-range double to signed int.
-         * Keep wider and unsigned cases fail-closed until ABI-tested. */
-        /* M31: cJSON_CreateFloatArray's float element must be interpreted
-         * numerically, not zero-extended as its 32-bit IEEE bit pattern. */
-        case MINIC_CORE_INSTRUCTION_DOUBLE_TO_FLOAT: {
-            const MinicCoreValueId source = ins->value.operand;
-            if (!minic_multi_direct_floating_shape(
-                    program, target, fn, ins, NULL, NULL) ||
-                fprintf(out, "  ldr d9, [sp, #%zu]\n"
-                             "  fcvt s9, d9\n"
-                             "  str s9, [sp, #%zu]\n",
-                        (size_t)source * 8U, offset) < 0)
-                return minic_multi_direct_machine_reject(fn, "aarch64", name, reject_stage,
-                                           reject_block, reject_ins, __LINE__);
-            continue;
-        }
-        case MINIC_CORE_INSTRUCTION_FLOAT_ADD:
-        case MINIC_CORE_INSTRUCTION_FLOAT_SUBTRACT:
-        case MINIC_CORE_INSTRUCTION_FLOAT_MULTIPLY:
-        case MINIC_CORE_INSTRUCTION_FLOAT_DIVIDE: {
-            const MinicCoreValueId lhs = ins->value.binary.left;
-            const MinicCoreValueId rhs = ins->value.binary.right;
-            const char *op = ins->kind == MINIC_CORE_INSTRUCTION_FLOAT_ADD
-                ? "  fadd s9, s9, s10\n"
-                : ins->kind == MINIC_CORE_INSTRUCTION_FLOAT_SUBTRACT
-                    ? "  fsub s9, s9, s10\n"
-                    : ins->kind == MINIC_CORE_INSTRUCTION_FLOAT_MULTIPLY
-                        ? "  fmul s9, s9, s10\n"
-                        : "  fdiv s9, s9, s10\n";
-            if (!minic_multi_direct_floating_shape(
-                    program, target, fn, ins, NULL, NULL) ||
-                fprintf(out, "  ldr s9, [sp, #%zu]\n"
-                             "  ldr s10, [sp, #%zu]\n",
-                        (size_t)lhs * 8U, (size_t)rhs * 8U) < 0 ||
-                fputs(op, out) == EOF ||
-                fprintf(out, "  str s9, [sp, #%zu]\n", offset) < 0)
-                return minic_multi_direct_machine_reject(fn, "aarch64", name, reject_stage,
-                                           reject_block, reject_ins, __LINE__);
-            continue;
-        }
-        case MINIC_CORE_INSTRUCTION_FLOAT_TO_DOUBLE: {
-            const MinicCoreValueId src = ins->value.operand;
-            if (!minic_multi_direct_floating_shape(
-                    program, target, fn, ins, NULL, NULL) ||
-                fprintf(out,
-                        "  ldr s9, [sp, #%zu]\n"
-                        "  fcvt d9, s9\n"
-                        "  str d9, [sp, #%zu]\n",
-                        (size_t)src * 8U, offset) < 0)
-                return minic_multi_direct_machine_reject(fn, "aarch64", name, reject_stage,
-                                    reject_block, reject_ins, __LINE__);
-            continue;
-        }
-        case MINIC_CORE_INSTRUCTION_INTEGER_TO_DOUBLE: {
-            const MinicCoreValueId src = ins->value.operand;
-            size_t width;
-            bool sign;
-            /* Numeric C conversion: AArch64 has signed AND unsigned 32/64
-             * integer-to-double instructions. Narrow source values retain
-             * their Core signedness through explicit normalization. */
-            if (!minic_multi_direct_floating_shape(
-                    program, target, fn, ins, &width, &sign) ||
-                fprintf(out, width == 8U
-                             ? "  ldr x9, [sp, #%zu]\n"
-                             : "  ldr w9, [sp, #%zu]\n",
-                        (size_t)src * 8U) < 0 ||
-                (width < 4U && !emit_integer_normalize(out, width, sign)) ||
-                fputs(width == 8U
-                          ? (sign ? "  scvtf d9, x9\n"
-                                  : "  ucvtf d9, x9\n")
-                          : (sign ? "  scvtf d9, w9\n"
-                                  : "  ucvtf d9, w9\n"), out) == EOF ||
-                fprintf(out, "  str d9, [sp, #%zu]\n", offset) < 0)
-                return minic_multi_direct_machine_reject(fn, "aarch64", name, reject_stage,
-                                    reject_block, reject_ins, __LINE__);
-            continue;
-        }
-        case MINIC_CORE_INSTRUCTION_DOUBLE_TO_INTEGER: {
-            const MinicCoreValueId src = ins->value.operand;
-            size_t width;
-            bool sign;
-            const char *conversion;
-            /* Lua's lua_Integer is signed LP64; C double-to-integer
-             * conversion truncates toward zero. Keep unsigned64 fail-closed
-             * until its full-range ABI oracle is introduced. */
-            if (!minic_multi_direct_floating_shape(
-                    program, target, fn, ins, &width, &sign))
-                return minic_multi_direct_machine_reject(fn, "aarch64", name, reject_stage,
-                                           reject_block, reject_ins, __LINE__);
-            /* A64 natively supports unsigned 64-bit binary64 conversion.
-             * C-defined finite inputs truncate toward zero; NaN/overflow
-             * inputs remain outside the C conversion contract. */
-            conversion = width == 8U
-                ? (sign ? "  fcvtzs x9, d9\n"
-                        : "  fcvtzu x9, d9\n")
-                : sign ? "  fcvtzs w9, d9\n"
-                       : "  fcvtzu w9, d9\n";
-            if (fprintf(out, "  ldr d9, [sp, #%zu]\n",
-                        (size_t)src * 8U) < 0 ||
-                fputs(conversion, out) == EOF ||
-                (width < 4U && !emit_integer_normalize(out, width, sign)))
-                return minic_multi_direct_machine_reject(fn, "aarch64", name, reject_stage,
-                                           reject_block, reject_ins, __LINE__);
             break;
         }
         case MINIC_CORE_INSTRUCTION_DYNAMIC_STACK_ALLOC: {

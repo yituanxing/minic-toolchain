@@ -10,6 +10,30 @@ static unsigned long d_to_u64(double x) { return (unsigned long)x; }
 static float one_half(void) { return 1.5f; }
 static float minus_zero(void) { return -0.0f; }
 static double half(void) { return 0.5; }
+/* This oracle follows the whole FP Core path into target-owned instructions:
+ * binary32/64 arithmetic, ordered comparisons (including unordered NaN),
+ * signed/unsigned conversions, and SSE/LP64D-sized SSA writes. */
+static int fp_machine_family(void) {
+    volatile float f = 1.25f, g = 2.5f;
+    volatile double a = 5.5, b = 1.25;
+    volatile double zero = 0.0;
+    double unordered = zero / zero;
+    double promoted = f;
+    float rounded = (float)a;
+    if (f + g != 3.75f || f - g != -1.25f ||
+        f * g != 3.125f || g / f != 2.0f) return 21;
+    if (a + b != 6.75 || a - b != 4.25 ||
+        a * b != 6.875 || a / b < 4.39 || a / b > 4.41) return 22;
+    if (a < b || a <= b || !(a == a) || !(b < a) || !(b <= a))
+        return 23;
+    if (unordered == unordered || unordered < a || unordered <= a ||
+        a < unordered || a <= unordered) return 24;
+    if (promoted != 1.25 || rounded != 5.5f ||
+        (double)(float)1.5 != 1.5) return 25;
+    if ((double)(int)-42 != -42.0 ||
+        (int)(double)-42.75 != -42) return 26;
+    return 0;
+}
 int main(void) {
     volatile double a = 9223372036854775808.0;
     volatile double b = 9223372036854779904.0;
@@ -22,6 +46,7 @@ int main(void) {
     if (d_to_u64(d) != 42UL || d_to_u64(e) != 0UL) return 14;
     if (one_half() != 1.5f || half() != 0.5) return 15;
     if (!(minus_zero() == 0.0f)) return 16;
+    { int fp_error = fp_machine_family(); if (fp_error != 0) return fp_error; }
     return 42;
 }
 SRC
@@ -52,6 +77,6 @@ for target in aarch64 loongarch64; do
     done
     cmp "$work/$target.gnu.out" "$work/$target.mini.out"
     cmp "$work/$target.gnu.err" "$work/$target.mini.err"
-    echo "FP_CONVERSIONS=PASS target=$target unsigned64=1 below_and_above_2^63=1 float_literal=1 GNU_QEMU_diff=1"
+    echo "FP_CONVERSIONS=PASS target=$target unsigned64=1 below_and_above_2^63=1 float_literal=1 ieee_arith=1 unordered_compare=1 GNU_QEMU_diff=1"
 done
 echo "FP_CONVERSIONS_ACCEPT=PASS targets=2"

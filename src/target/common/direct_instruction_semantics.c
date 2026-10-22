@@ -160,6 +160,34 @@ bool minic_multi_direct_result_slot_offset(
 /* Instruction kinds and Core operand/result types are not properties of
  * an ISA encoder. Keep the shared IEEE-754 validation here, but leave the
  * actual AArch64/LoongArch64 floating opcodes and register transfers local. */
+/* This is the complete numeric machine family implemented by both
+ * direct LP64 emitters. SSA/result types remain validated by the separate
+ * minic_multi_direct_floating_shape gate, never by opcode alone. */
+bool minic_multi_direct_fp_instruction_kind(MinicCoreInstructionKind kind) {
+    switch (kind) {
+    case MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT:
+    case MINIC_CORE_INSTRUCTION_DOUBLE_EQUAL:
+    case MINIC_CORE_INSTRUCTION_DOUBLE_LESS:
+    case MINIC_CORE_INSTRUCTION_DOUBLE_LESS_EQUAL:
+    case MINIC_CORE_INSTRUCTION_DOUBLE_ADD:
+    case MINIC_CORE_INSTRUCTION_DOUBLE_SUBTRACT:
+    case MINIC_CORE_INSTRUCTION_DOUBLE_MULTIPLY:
+    case MINIC_CORE_INSTRUCTION_DOUBLE_DIVIDE:
+    case MINIC_CORE_INSTRUCTION_DOUBLE_NEGATE:
+    case MINIC_CORE_INSTRUCTION_FLOAT_ADD:
+    case MINIC_CORE_INSTRUCTION_FLOAT_SUBTRACT:
+    case MINIC_CORE_INSTRUCTION_FLOAT_MULTIPLY:
+    case MINIC_CORE_INSTRUCTION_FLOAT_DIVIDE:
+    case MINIC_CORE_INSTRUCTION_FLOAT_TO_DOUBLE:
+    case MINIC_CORE_INSTRUCTION_DOUBLE_TO_FLOAT:
+    case MINIC_CORE_INSTRUCTION_INTEGER_TO_DOUBLE:
+    case MINIC_CORE_INSTRUCTION_DOUBLE_TO_INTEGER:
+        return true;
+    default:
+        return false;
+    }
+}
+
 bool minic_multi_direct_floating_shape(
     const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
@@ -168,6 +196,10 @@ bool minic_multi_direct_floating_shape(
     if (fn == NULL || ins == NULL)
         return false;
     switch (ins->kind) {
+    case MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT:
+        return minic_type_is_float(ins->type) ||
+               minic_type_is_double(ins->type) ||
+               minic_type_is_long_double(ins->type);
     case MINIC_CORE_INSTRUCTION_DOUBLE_EQUAL:
     case MINIC_CORE_INSTRUCTION_DOUBLE_LESS:
     case MINIC_CORE_INSTRUCTION_DOUBLE_LESS_EQUAL:
