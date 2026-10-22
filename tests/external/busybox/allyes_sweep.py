@@ -210,7 +210,13 @@ def print_frontier(report_root, gcc_success, enabled):
             print("BUSYBOX_ALLYES_BLOCKER source=%s kind=%s detail=%s" %
                   (info["source"], stage, (useful[0] if useful else "no diagnostic")[:240]))
             if stage == "MiniC" and info["source"] in (
-                    "libbb/xconnect.c", "libbb/vfork_daemon_rexec.c"):
+                    "libbb/xconnect.c", "libbb/vfork_daemon_rexec.c",
+                    "selinux/chcon.c", "selinux/setfiles.c",
+                    "util-linux/mkswap.c", "networking/tls_sp_c32.c"):
+                # Original BusyBox source remains pristine. This context is
+                # from the exact GNU-preprocessed file fed to MiniC. It
+                # distinguishes type/attribute frontend defects from the
+                # upstream C line and avoids blind source-specific fixes.
                 # Upstream GNU CPP is the oracle. Report the exact
                 # preprocessed expression at the frontend rejection site;
                 # raw xconnect.c line numbers are NOT the same after the
