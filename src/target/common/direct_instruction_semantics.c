@@ -1,4 +1,5 @@
 #include "target/common/direct_instruction_semantics.h"
+#include "core/core_ir.h"
 #include "target/common/lp64_scalar.h"
 #include "target/data_layout.h"
 
@@ -129,16 +130,6 @@ bool minic_multi_direct_result_slot_offset(
 }
 
 
-/* Non-wide scalar LOAD/ATOMIC_LOAD admission. Both direct LP64 backends
- * have the same target-independent relaxed-only atomic and value-width
- * contracts; they remain responsible for the actual machine loads. */
-
-/* Shared LP64 validation for integer binary arithmetic, bitwise, and
- * division/remainder: width, signedness and result-type restrictions remain
- * distinct across these three operation families. Encoding is ISA-owned. */
-
-/* The direct LP64 backends share Core unary/shift/compare contracts; register
- * choice, signed extensions and actual machine encodings remain target-owned. */
 
 /* Scalar bitcast shape for direct LP64 lowering. Pointer->integer must
  * preserve all 64 address bits; integer->pointer keeps narrow source width
@@ -194,6 +185,8 @@ bool minic_multi_direct_pointer_less_shape(
            minic_type_equal(fn->values[lhs].type, fn->values[rhs].type);
 }
 
+/* Core unary/shift/compare type admission is shared across direct LP64
+ * targets. Native extensions and opcode selection remain ISA-owned. */
 bool minic_multi_direct_integer_unary_shape(
     const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
@@ -337,6 +330,8 @@ bool minic_multi_direct_pointer_offset_shape(
            ins->value.pointer_offset.element_size <= maximum_stride;
 }
 
+/* Arithmetic, bitwise and division/remainder retain distinct result-type
+ * and 8/16/32/64-bit restrictions above the common pair decoder. */
 bool minic_multi_direct_integer_binary_shape(
     const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
@@ -376,6 +371,8 @@ bool minic_multi_direct_integer_binary_shape(
            minic_type_equal(fn->values[lhs].type, ins->type);
 }
 
+/* The direct LP64 backends admit relaxed-only atomic scalar loads.
+ * This remains strictly a source/Core value-shape gate. */
 bool minic_multi_direct_scalar_load_shape(
     const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
