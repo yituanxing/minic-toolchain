@@ -344,8 +344,7 @@ bool minic_loongarch64_emit_core_blocks(FILE *out, const MinicDirectLP64BlockCon
          * previous result-slot gate rejected this valid Core kind in the
          * original BusyBox test/gzip/netstat/top applets on both ISAs. */
         if (ins->kind == MINIC_CORE_INSTRUCTION_COMPILER_BARRIER) {
-            if (ins->result != MINIC_CORE_VALUE_INVALID ||
-                !minic_type_is_void(ins->type))
+            if (!minic_multi_direct_compiler_barrier_shape(ins))
                 return minic_multi_direct_machine_reject(fn, "loongarch64", name,
                                            reject_stage, reject_block,
                                            reject_ins, __LINE__);
@@ -375,9 +374,8 @@ bool minic_loongarch64_emit_core_blocks(FILE *out, const MinicDirectLP64BlockCon
             const MinicCoreValueId addr = ins->value.store.address;
             const MinicCoreValueId value = ins->value.store.stored_value;
             size_t src;
-            if (addr >= fn->value_count ||
-                !minic_type_is_pointer(fn->values[addr].type) ||
-                !minic_lp64_frame_plan_wide_slot(frame_plan, value, &src) ||
+            if (!minic_multi_direct_wide_store_shape(
+                    fn, ins, frame_plan, &src) ||
                 !emit_sp_mem(out, "ld.d", "$t1", (size_t)addr * 8U) ||
                 !emit_sp_mem(out, "ld.d", "$t0", src) ||
                 fputs("  st.d $t0, $t1, 0\n", out) == EOF ||
@@ -394,9 +392,8 @@ bool minic_loongarch64_emit_core_blocks(FILE *out, const MinicDirectLP64BlockCon
             const MinicCoreValueId addr = ins->value.store.address;
             const MinicCoreValueId value = ins->value.store.stored_value;
             size_t src;
-            if (addr >= fn->value_count ||
-                !minic_type_is_pointer(fn->values[addr].type) ||
-                !minic_lp64_frame_plan_wide_slot(frame_plan, value, &src) ||
+            if (!minic_multi_direct_wide_store_shape(
+                    fn, ins, frame_plan, &src) ||
                 !emit_sp_mem(out, "ld.d", "$t1", (size_t)addr * 8U) ||
                 !emit_sp_mem(out, "ld.d", "$t0", src) ||
                 fputs("  st.d $t0, $t1, 0\n", out) == EOF ||
