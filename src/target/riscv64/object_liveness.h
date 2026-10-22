@@ -14,4 +14,6 @@ bool minic_riscv64_scalar_object_reuse_layout(
     const MinicC0Program *, const MinicCoreFunction *, MinicCoreObjectId,
     bool *, size_t *, size_t *);
 void minic_riscv64_object_liveness_set_crossblock_enabled(bool);
+void minic_riscv64_object_liveness_begin_function(void);
+void minic_riscv64_object_liveness_end_function(void);
 #endif

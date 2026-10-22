@@ -866,6 +866,13 @@ static void core_scalar_object_reuse_cache_clear(void) {
     core_scalar_object_reuse_cache.peak_slots = 0U;
 }
 
+void minic_riscv64_object_liveness_begin_function(void) {
+    core_scalar_object_reuse_cache_clear();
+}
+void minic_riscv64_object_liveness_end_function(void) {
+    core_scalar_object_reuse_cache_clear();
+}
+
 bool minic_riscv64_scalar_object_reuse_layout(const MinicC0Program *program,
                                             const MinicCoreFunction *function,
                                             MinicCoreObjectId target,
