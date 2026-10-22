@@ -1462,3 +1462,27 @@ int main(void) {
 }
 EOF
 check_exit initializer_sparse_stream 42
+
+# One DataLayout walk now owns the flat record payload for all backends,
+# while the target retains its GNU scalar directives and reloc spelling.
+cat > "$tempdir/initializer_shared_flat_record.i" <<'EOF'
+static long target_words[4] = {5, 7, 11, 13};
+struct Flat { int count; double ratio; long *address; float factor; };
+static struct Flat flat = {17, 3.5, &target_words[2], 1.25f};
+static long *const addresses[5] = {
+    &target_words[1], 0, &target_words[3],
+    &target_words[0], &target_words[2]
+};
+int main(void) {
+    if (flat.count != 17 || flat.ratio != 3.5 ||
+        flat.address != &target_words[2] || flat.factor != 1.25f)
+        return 1;
+    if (addresses[0] != &target_words[1] || addresses[1] != 0 ||
+        addresses[2] != &target_words[3] ||
+        addresses[3] != &target_words[0] ||
+        addresses[4] != &target_words[2])
+        return 2;
+    return 42;
+}
+EOF
+check_exit initializer_shared_flat_record 42
