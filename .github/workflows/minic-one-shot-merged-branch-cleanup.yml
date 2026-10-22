@@ -1,11 +1,11 @@
-# One-shot conversion to main-only repository, following focused CI success.
-# Any unmerged commits are first retained through immutable archive tags.
+# One-shot main-only cleanup after PR #524 and #527 were already merged.
+# Retain divergent branch history as tags, never overwrite current main.
 name: MiniC One-Shot Merged PR Branch Cleanup
 on:
-  workflow_run:
-    workflows: ["Toolchain Focused Regression Suite (RV64, AR, LD)"]
-    types: [completed]
+  push:
     branches: [main]
+    paths:
+      - ".github/workflows/minic-one-shot-merged-branch-cleanup.yml"
 permissions:
   contents: write
   pull-requests: read
@@ -14,7 +14,6 @@ concurrency:
   cancel-in-progress: false
 jobs:
   prune:
-    if: github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -27,7 +26,7 @@ jobs:
         env:
           GH_REPO: ${{ github.repository }}
           GH_TOKEN: ${{ github.token }}
-          GH_ACCEPTED_SHA: ${{ github.event.workflow_run.head_sha }}
+          GH_ACCEPTED_SHA: ${{ github.sha }}
         run: |
           set -Eeuo pipefail
           python3 - <<'PY_MAIN_ONLY'
@@ -75,6 +74,23 @@ jobs:
                   raise RuntimeError("main moved from verified focused-CI SHA; refuse cleanup")
           
           require_main_sha()
+          # Prior pinned full cross-ISA, assembly A/B, and strict-main receipts.
+          # Only CI/branch-routing changed since the verified MiniC feature.
+          proofs = (
+              (39811267455, "fcde7db2feb2aed752a765c513a250949e480cdb"),
+              (39811267579, "fcde7db2feb2aed752a765c513a250949e480cdb"),
+              (39817254824, "9987e353b40758cba7883235c0ba3affaa8a16aa"),
+          )
+          for run_id, expected_sha in proofs:
+              run = api("/actions/runs/" + str(run_id))
+              if (run.get("conclusion") != "success" or
+                  run.get("head_sha") != expected_sha):
+                  raise RuntimeError("Required clean CI receipt invalid: " + str(run_id))
+          prior = api("/pulls/524")
+          if (not prior.get("merged_at") or
+              prior.get("head", {}).get("sha") !=
+              "4957d1835276d1456c2d10e0e8176a2c4d660e2c"):
+              raise RuntimeError("RV64/x86 multitarget PR524 not already integrated")
           merged = api("/pulls/527")
           if not merged.get("merged_at") or merged["base"]["ref"] != "main":
               raise RuntimeError("Four-architecture PR527 not merged to main")
