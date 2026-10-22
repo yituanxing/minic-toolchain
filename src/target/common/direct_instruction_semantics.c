@@ -256,7 +256,7 @@ bool minic_multi_direct_integer_shift_shape(
          ins->kind != MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_RIGHT))
         return false;
     lhs = ins->value.binary.left;
-    return lhs < fn->value_count && rhs < fn->value_count &&
+    return lhs < fn->value_count &&
            minic_type_equal(fn->values[lhs].type, ins->type) &&
            core_direct_integer_pair(program, target, fn, ins,
                                     left_width, right_width,
