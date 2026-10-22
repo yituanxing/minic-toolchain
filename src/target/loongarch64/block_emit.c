@@ -4,6 +4,7 @@
 #include "target/loongarch64/integer_emit.h"
 #include "target/loongarch64/fp_emit.h"
 #include "target/common/direct_instruction_semantics.h"
+#include "target/common/direct_residual_plan.h"
 #include "target/common/lp64_aggregate.h"
 #include "target/common/lp64_scalar.h"
 #include "target/loongarch64/frame_emit.h"
@@ -618,71 +619,75 @@ bool minic_loongarch64_emit_core_blocks(FILE *out, const MinicDirectLP64BlockCon
         }
         case MINIC_CORE_INSTRUCTION_INTEGER_CONVERSION: {
             const MinicCoreValueId src = ins->value.operand;
-            size_t src_width, dst_width;
-            bool src_sign, dst_sign;
-            /* RV64-proven pair model, using isolated 16-byte SSA slots. */
-            if (src < fn->value_count &&
-                (minic_type_is_int128_integer(ins->type) ||
-                 minic_type_is_int128_integer(fn->values[src].type))) {
-                const bool src128 = minic_type_is_int128_integer(fn->values[src].type);
-                const bool dst128 = minic_type_is_int128_integer(ins->type);
-                size_t src_offset = 0U, dst_offset = 0U;
-                if (src128) {
-                    if (!minic_lp64_frame_plan_wide_slot(frame_plan, src, &src_offset) ||
-                        !emit_sp_mem(out, "ld.d", "$t0", src_offset) ||
-                        !emit_sp_mem(out, "ld.d", "$t1", src_offset + 8U))
-                        return minic_multi_direct_machine_reject(fn, "loongarch64", name,
-                            reject_stage, reject_block, reject_ins, __LINE__);
-                } else {
-                    if (!minic_lp64_scalar_integer_width(program, target,
-                            fn->values[src].type, &src_width, &src_sign) ||
-                        !emit_sp_mem(out, src_width == 8U ? "ld.d" : "ld.w",
-                            "$t0", (size_t)src * 8U) ||
-                        (src_width < 8U &&
-                         !emit_integer_normalize(out, src_width, src_sign)) ||
-                        (src_width == 4U && !src_sign &&
-                         fputs("  bstrpick.d $t0, $t0, 31, 0\n", out) == EOF) ||
-                        fputs(src_sign ? "  srai.d $t1, $t0, 63\n" :
-                                         "  move $t1, $zero\n", out) == EOF)
-                        return minic_multi_direct_machine_reject(fn, "loongarch64", name,
-                            reject_stage, reject_block, reject_ins, __LINE__);
-                }
-                if (dst128) {
-                    if (!minic_lp64_frame_plan_wide_slot(frame_plan, ins->result, &dst_offset) ||
-                        !emit_sp_mem(out, "st.d", "$t0", dst_offset) ||
-                        !emit_sp_mem(out, "st.d", "$t1", dst_offset + 8U))
-                        return minic_multi_direct_machine_reject(fn, "loongarch64", name,
-                            reject_stage, reject_block, reject_ins, __LINE__);
+            MinicDirectIntegerCastPlan cast;
+            if (!minic_multi_direct_integer_cast_plan(
+                    program, target, fn, ins, frame_plan, &cast))
+                return minic_multi_direct_machine_reject(
+                    fn, "loongarch64", name, reject_stage,
+                    reject_block, reject_ins, __LINE__);
+            if (cast.source_wide || cast.target_wide) {
+                if (cast.source_wide) {
+                    if (!emit_sp_mem(out, "ld.d", "$t0",
+                                     cast.source_wide_offset) ||
+                        !emit_sp_mem(out, "ld.d", "$t1",
+                                     cast.source_wide_offset + 8U))
+                        return minic_multi_direct_machine_reject(
+                            fn, "loongarch64", name, reject_stage,
+                            reject_block, reject_ins, __LINE__);
+                } else if (!emit_sp_mem(out,
+                                 cast.source_width == 8U ? "ld.d" : "ld.w",
+                                 "$t0", (size_t)src * 8U) ||
+                           (cast.source_width < 8U &&
+                            !emit_integer_normalize(
+                                out, cast.source_width, cast.source_signed)) ||
+                           (cast.source_width == 4U && !cast.source_signed &&
+                            fputs("  bstrpick.d $t0, $t0, 31, 0\n",
+                                  out) == EOF) ||
+                           fputs(cast.source_signed
+                                 ? "  srai.d $t1, $t0, 63\n"
+                                 : "  move $t1, $zero\n", out) == EOF)
+                    return minic_multi_direct_machine_reject(
+                        fn, "loongarch64", name, reject_stage,
+                        reject_block, reject_ins, __LINE__);
+                if (cast.target_wide) {
+                    if (!emit_sp_mem(out, "st.d", "$t0",
+                                     cast.target_wide_offset) ||
+                        !emit_sp_mem(out, "st.d", "$t1",
+                                     cast.target_wide_offset + 8U))
+                        return minic_multi_direct_machine_reject(
+                            fn, "loongarch64", name, reject_stage,
+                            reject_block, reject_ins, __LINE__);
                     continue;
                 }
-                if (!minic_lp64_scalar_integer_width(program, target, ins->type,
-                                           &dst_width, &dst_sign) ||
-                    (dst_width < 8U &&
-                     !emit_integer_normalize(out, dst_width, dst_sign)))
-                    return minic_multi_direct_machine_reject(fn, "loongarch64", name,
-                        reject_stage, reject_block, reject_ins, __LINE__);
+                if (cast.target_width < 8U &&
+                    !emit_integer_normalize(out, cast.target_width,
+                                            cast.target_signed))
+                    return minic_multi_direct_machine_reject(
+                        fn, "loongarch64", name, reject_stage,
+                        reject_block, reject_ins, __LINE__);
                 break;
             }
-            if (src >= fn->value_count ||
-                !minic_lp64_scalar_integer_width(program, target,
-                                      fn->values[src].type, &src_width, &src_sign) ||
-                !minic_lp64_scalar_integer_width(program, target, ins->type,
-                                      &dst_width, &dst_sign) ||
-                !emit_sp_mem(out, src_width == 8U ? "ld.d" : "ld.w",
-                             "$t0", (size_t)src * 8U))
-                return minic_multi_direct_machine_reject(fn, "loongarch64", name, reject_stage,
-                                    reject_block, reject_ins, __LINE__);
-            if (dst_width == 8U) {
-                if (src_width != 8U &&
-                    (!emit_integer_normalize(out, src_width, src_sign) ||
-                     (!src_sign &&
-                      fputs("  bstrpick.d $t0, $t0, 31, 0\n", out) == EOF)))
-                    return minic_multi_direct_machine_reject(fn, "loongarch64", name, reject_stage,
-                                    reject_block, reject_ins, __LINE__);
-                /* LoongArch ld.w sign-extends: unsigned32 needs masking. */
-            } else if (!emit_integer_normalize(out, dst_width, dst_sign))
-                return minic_multi_direct_machine_reject(fn, "loongarch64", name, reject_stage,
-                                    reject_block, reject_ins, __LINE__);
+            if (!emit_sp_mem(out,
+                    cast.source_width == 8U ? "ld.d" : "ld.w",
+                    "$t0", (size_t)src * 8U))
+                return minic_multi_direct_machine_reject(
+                    fn, "loongarch64", name, reject_stage,
+                    reject_block, reject_ins, __LINE__);
+            if (cast.target_width == 8U) {
+                if (cast.source_width != 8U &&
+                    (!emit_integer_normalize(
+                        out, cast.source_width, cast.source_signed) ||
+                     (!cast.source_signed &&
+                      fputs("  bstrpick.d $t0, $t0, 31, 0\n",
+                            out) == EOF)))
+                    return minic_multi_direct_machine_reject(
+                        fn, "loongarch64", name, reject_stage,
+                        reject_block, reject_ins, __LINE__);
+            } else if (!emit_integer_normalize(out, cast.target_width,
+                                               cast.target_signed))
+                return minic_multi_direct_machine_reject(
+                    fn, "loongarch64", name, reject_stage,
+                    reject_block, reject_ins, __LINE__);
             break;
         }
         default:

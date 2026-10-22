@@ -4,6 +4,7 @@
 #include "target/aarch64/integer_emit.h"
 #include "target/aarch64/fp_emit.h"
 #include "target/common/direct_instruction_semantics.h"
+#include "target/common/direct_residual_plan.h"
 #include "target/common/lp64_aggregate.h"
 #include "target/common/lp64_scalar.h"
 #include "target/aarch64/abi.h"
@@ -823,98 +824,78 @@ bool minic_aarch64_emit_core_blocks(FILE *out, const MinicDirectLP64BlockContext
         }
         case MINIC_CORE_INSTRUCTION_INTEGER_CONVERSION: {
             const MinicCoreValueId src = ins->value.operand;
-            size_t src_width, dst_width;
-            bool src_sign, dst_sign;
-            /* RV64-proven pair model: keep int128 as low/high 64-bit halves,
-             * in isolated 16-byte SSA slots. No silent XLEN truncation. */
-            if (src < fn->value_count &&
-                (minic_type_is_int128_integer(ins->type) ||
-                 minic_type_is_int128_integer(fn->values[src].type))) {
-                const bool src128 = minic_type_is_int128_integer(fn->values[src].type);
-                const bool dst128 = minic_type_is_int128_integer(ins->type);
-                size_t src_offset = 0U, dst_offset = 0U;
-                if (src128) {
-                    if (!minic_lp64_frame_plan_wide_slot(frame_plan, src, &src_offset) ||
-                        fprintf(out, "  ldr x9, [sp, #%zu]\n"
+            MinicDirectIntegerCastPlan cast;
+            if (!minic_multi_direct_integer_cast_plan(
+                    program, target, fn, ins, frame_plan, &cast))
+                return minic_multi_direct_machine_reject(
+                    fn, "aarch64", name, reject_stage,
+                    reject_block, reject_ins, __LINE__);
+
+            /* int128 SSA slots have independently owned 16-byte addresses.
+             * Cast admission resolves both wide locations once. */
+            if (cast.source_wide || cast.target_wide) {
+                if (cast.source_wide) {
+                    if (fprintf(out, "  ldr x9, [sp, #%zu]\n"
                                      "  ldr x10, [sp, #%zu]\n",
-                                src_offset, src_offset + 8U) < 0)
-                        return minic_multi_direct_machine_reject(fn, "aarch64", name,
-                            reject_stage, reject_block, reject_ins, __LINE__);
-                } else {
-                    if (!minic_lp64_scalar_integer_width(program, target,
-                            fn->values[src].type, &src_width, &src_sign) ||
-                        fprintf(out, src_width == 8U ?
-                                "  ldr x9, [sp, #%zu]\n" :
-                                "  ldr w9, [sp, #%zu]\n", (size_t)src * 8U) < 0 ||
-                        (src_width < 8U &&
-                         (!emit_integer_normalize(out, src_width, src_sign) ||
-                          (src_sign && fputs("  sxtw x9, w9\n", out) == EOF))) ||
-                        fputs(src_sign ? "  asr x10, x9, #63\n" :
-                                         "  mov x10, xzr\n", out) == EOF)
-                        return minic_multi_direct_machine_reject(fn, "aarch64", name,
-                            reject_stage, reject_block, reject_ins, __LINE__);
-                }
-                if (dst128) {
-                    if (!minic_lp64_frame_plan_wide_slot(frame_plan, ins->result, &dst_offset) ||
-                        fprintf(out, "  str x9, [sp, #%zu]\n"
+                                cast.source_wide_offset,
+                                cast.source_wide_offset + 8U) < 0)
+                        return minic_multi_direct_machine_reject(
+                            fn, "aarch64", name, reject_stage,
+                            reject_block, reject_ins, __LINE__);
+                } else if (fprintf(out, cast.source_width == 8U
+                                       ? "  ldr x9, [sp, #%zu]\n"
+                                       : "  ldr w9, [sp, #%zu]\n",
+                                   (size_t)cast.operand * 8U) < 0 ||
+                           (cast.source_width < 8U &&
+                            (!emit_integer_normalize(
+                                  out, cast.source_width, cast.source_signed) ||
+                             (cast.source_signed &&
+                              fputs("  sxtw x9, w9\n", out) == EOF))) ||
+                           fputs(cast.source_signed
+                                     ? "  asr x10, x9, #63\n"
+                                     : "  mov x10, xzr\n", out) == EOF)
+                    return minic_multi_direct_machine_reject(
+                        fn, "aarch64", name, reject_stage,
+                        reject_block, reject_ins, __LINE__);
+                if (cast.target_wide) {
+                    if (fprintf(out, "  str x9, [sp, #%zu]\n"
                                      "  str x10, [sp, #%zu]\n",
-                                dst_offset, dst_offset + 8U) < 0)
-                        return minic_multi_direct_machine_reject(fn, "aarch64", name,
-                            reject_stage, reject_block, reject_ins, __LINE__);
+                                cast.target_wide_offset,
+                                cast.target_wide_offset + 8U) < 0)
+                        return minic_multi_direct_machine_reject(
+                            fn, "aarch64", name, reject_stage,
+                            reject_block, reject_ins, __LINE__);
                     continue;
                 }
-                if (!minic_lp64_scalar_integer_width(program, target, ins->type,
-                                           &dst_width, &dst_sign) ||
-                    (dst_width < 8U &&
-                     !emit_integer_normalize(out, dst_width, dst_sign)))
-                    return minic_multi_direct_machine_reject(fn, "aarch64", name,
-                        reject_stage, reject_block, reject_ins, __LINE__);
+                if (cast.target_width < 8U &&
+                    !emit_integer_normalize(out, cast.target_width,
+                                            cast.target_signed))
+                    return minic_multi_direct_machine_reject(
+                        fn, "aarch64", name, reject_stage,
+                        reject_block, reject_ins, __LINE__);
                 break;
             }
-            /* Inventory both source/destination C integer widths before
-             * admitting a cast. The SQLite 128-bit helper includes a type
-             * conversion outside the already-proven 32/64 scalar subset. */
-            if (getenv("MINIC_BACKEND_CENSUS") != NULL) {
-                size_t source_bytes = 0U, dest_bytes = 0U;
-                bool source_sign = false, dest_sign = false;
-                const bool source_ok = src < fn->value_count &&
-                    minic_lp64_scalar_integer_width(program, target,
-                        fn->values[src].type, &source_bytes, &source_sign);
-                const bool dest_ok = minic_lp64_scalar_integer_width(
-                    program, target, ins->type, &dest_bytes, &dest_sign);
-                if (!source_ok || !dest_ok)
-                    (void)fprintf(stderr,
-                        "MINIC_SQLITE_CONVERSION_LIMIT arch=aarch64 function=%s"
-                        " ins=%zu source_ok=%d src_bytes=%zu src_sign=%d"
-                        " dest_ok=%d dst_bytes=%zu dst_sign=%d"
-                        " source_kind=%d dest_kind=%d\n",
-                        name, (size_t)ins_id, source_ok, source_bytes, source_sign,
-                        dest_ok, dest_bytes, dest_sign,
-                        src < fn->value_count
-                            ? (int)fn->values[src].type.base_kind : -1,
-                        (int)ins->type.base_kind);
-            }
-            if (src >= fn->value_count ||
-                !minic_lp64_scalar_integer_width(program, target,
-                                      fn->values[src].type, &src_width, &src_sign) ||
-                !minic_lp64_scalar_integer_width(program, target, ins->type,
-                                      &dst_width, &dst_sign) ||
-                fprintf(out, src_width == 8U
-                            ? "  ldr x9, [sp, #%zu]\n"
-                            : "  ldr w9, [sp, #%zu]\n",
+            if (fprintf(out, cast.source_width == 8U
+                                 ? "  ldr x9, [sp, #%zu]\n"
+                                 : "  ldr w9, [sp, #%zu]\n",
                         (size_t)src * 8U) < 0)
-                return minic_multi_direct_machine_reject(fn, "aarch64", name, reject_stage,
-                                    reject_block, reject_ins, __LINE__);
-            if (dst_width == 8U) {
-                if (src_width != 8U &&
-                    (!emit_integer_normalize(out, src_width, src_sign) ||
-                     (src_sign && fputs("  sxtw x9, w9\n", out) == EOF)))
-                    return minic_multi_direct_machine_reject(fn, "aarch64", name, reject_stage,
-                                    reject_block, reject_ins, __LINE__);
-                /* Unsigned narrow source already zero-extends on w writes. */
-            } else if (!emit_integer_normalize(out, dst_width, dst_sign))
-                return minic_multi_direct_machine_reject(fn, "aarch64", name, reject_stage,
-                                    reject_block, reject_ins, __LINE__);
+                return minic_multi_direct_machine_reject(
+                    fn, "aarch64", name, reject_stage,
+                    reject_block, reject_ins, __LINE__);
+            if (cast.target_width == 8U) {
+                if (cast.source_width != 8U &&
+                    (!emit_integer_normalize(
+                        out, cast.source_width, cast.source_signed) ||
+                     (cast.source_signed &&
+                      fputs("  sxtw x9, w9\n", out) == EOF)))
+                    return minic_multi_direct_machine_reject(
+                        fn, "aarch64", name, reject_stage,
+                        reject_block, reject_ins, __LINE__);
+            } else if (!emit_integer_normalize(out, cast.target_width,
+                                               cast.target_signed))
+                return minic_multi_direct_machine_reject(
+                    fn, "aarch64", name, reject_stage,
+                    reject_block, reject_ins, __LINE__);
             break;
         }
         default:
