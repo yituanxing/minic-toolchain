@@ -53,8 +53,11 @@ jobs:
           pr = api("/pulls/527")
           if not pr.get("merged_at") or pr["base"]["ref"] != "main":
               raise RuntimeError("PR527 not merged into main; abort")
-          if pr["head"]["sha"] != "fcde7db2feb2aed752a765c513a250949e480cdb":
-              raise RuntimeError("PR527 unexpected head; abort")
+          head = pr.get("head") or {}
+          hrepo = head.get("repo") or {}
+          if (head.get("ref") != "feature/four-backend-aarch64-loongarch64-m0"
+              or hrepo.get("full_name") != repo or not head.get("sha")):
+              raise RuntimeError("PR527 unexpected feature source; abort")
           main = api("/branches/main")
           if main["commit"]["sha"] != os.environ["GITHUB_SHA"]:
               raise RuntimeError("main changed since run began; abort")
