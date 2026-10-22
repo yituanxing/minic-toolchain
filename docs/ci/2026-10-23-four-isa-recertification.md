@@ -1,4 +1,58 @@
-# 2026-10-23: current-main compiler capability recertification
+## Verified current-main receipts (2026-10-23)
+
+- **AArch64 and LoongArch64: PASS** on source-identical post-merge MiniC:
+  [focused T1 #39823172574](https://github.com/yituanxing/minic-toolchain/actions/runs/39823172574),
+  commit `d438e1a02f15be0d3cc9f449cb7e9f0d8171d371`.
+  `TOOLCHAIN_FOCUSED_T1=PASS mode=all independent_test_checks=9 shared_builds=1`.
+  Mandatory upstream tinyAES, cJSON, zlib, Lua, SQLite and TinyCC functional
+  differential succeeded. Original BusyBox 1.36.1 (upstream GNU Kconfig/Kbuild):
+  **581/581 MiniC C owners**, **0 GNU C fallbacks**, SHA attestations, original
+  GNU assembler and linker, and **38 GNU/QEMU byte-identical fixtures per ISA**.
+  The reported `full_all_MiniC=NO` deliberately means the non-C assembler,
+  linker, libc and toolchain are GNU; it does not invalidate full C ownership.
+- **x86-64 six original software projects: PASS**:
+  [#39823613104](https://github.com/yituanxing/minic-toolchain/actions/runs/39823613104),
+  commit `bae9cdcd16d1df4abda1060444a84ec347d6c7f0`.
+  `MINIC_X86_SOFTWARE_ALL=PASS projects=6`. Covers TinyAES, cJSON,
+  zlib 15 TUs/minigzip cross-roundtrip, real native Lua 5.5.0 (33/33 assembled,
+  interpreter and PIE stdout comparison; extra luac and PIE bytecode identical),
+  SQLite 3.54.1 GNU differential and TinyCC 36 original compiler-suite cases.
+- **x86-64 BusyBox: MIXED KBUILD PASS, NOT YET FULL C OWNERSHIP**:
+  [#39824576716](https://github.com/yituanxing/minic-toolchain/actions/runs/39824576716),
+  commit `b963668601f60c22771781d4bbe27d24dc1d73f9`.
+  Real 957-option original source Kconfig, original GNU full binary and 6
+  original-runtime oracles succeeded. **585 / 593 real GNU C owners** are
+  MiniC-built, all SHA-verified, **8 GNU owner fallbacks**; original GNU vs
+  MiniC-mixed Kbuild **11/11 runtime fixtures byte-identical**. One extra C
+  translation unit beyond the 593 link-owner cohort was probed. Remaining
+  `mkswap.o`, `top.o`, `verror_msg.o`, `devfsd.o`,
+  `setfiles.o`, `tls_sp_c32.o`, `chcon.o`, and `hash_md5_sha.o`.
+  The separately pinned 12-owner real Kbuild acceptance passes.
+- **RV64 Linux 6.6.143: REQUALIFICATION NOT YET COMPLETE.**
+  Keep using historical existing 7-way `gcc-shards` producing 295/295/295/
+  295/295/295/294 = **2064 original C objects**. After retiring stale
+  Runtime44 pre-refactor source-hash requirements and narrowly excluding
+  timestamp-derived `init/version.o`/`vmlinux.o` in GNU preflight, run
+  [#39823830749](https://github.com/yituanxing/minic-toolchain/actions/runs/39823830749)
+  had **4/7 successful** shards and 3 still stuck on GNU RISC-V apt package
+  installation at inspection time. A bounded apt retry was added at
+  `47e19308528bb9c896989345f1755cc024a5e1ad`, triggering
+  [#39825131467](https://github.com/yituanxing/minic-toolchain/actions/runs/39825131467).
+  **Do not claim Linux 2064/2064/QEMU P1 accepted until the receiver's current
+  run logs explicitly show SHA authenticated 2064-owner union, GNU link and
+  QEMU P1 runtime PASS.**
+
+### Next engineering gate
+
+The other three ISA real-software acceptance proofs above are complete.
+The remaining blockers are infrastructure completion of the 7-way RV64 Linux
+runner+receiver and the **8 x86 BusyBox C owners** listed above; AArch64 and
+LoongArch64 BusyBox **full C ownership is already done**. After full RV64 Linux
+P1, target the eight x86 source errors as a single batch and standardize all
+three BusyBox Kconfig/ABI/real runtime fixtures before the three new Linux
+ports. Do not claim GCC/assembler/linker replacements without their own proof.
+
+## Plan and preserved CI contracts
 
 ## Scope and acceptance (not yet certified)
 
