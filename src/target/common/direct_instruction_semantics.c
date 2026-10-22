@@ -163,6 +163,35 @@ bool minic_multi_direct_result_slot_offset(
 /* This is the complete numeric machine family implemented by both
  * direct LP64 emitters. SSA/result types remain validated by the separate
  * minic_multi_direct_floating_shape gate, never by opcode alone. */
+/* Complete Core integer, pointer-comparison and bit-operation machine
+ * family shared by AAPCS64 and LP64D; instruction encodings remain ISA-owned. */
+bool minic_multi_direct_integer_machine_kind(MinicCoreInstructionKind kind) {
+    switch (kind) {
+    case MINIC_CORE_INSTRUCTION_INTEGER_OVERFLOW:
+    case MINIC_CORE_INSTRUCTION_INTEGER_CLZ:
+    case MINIC_CORE_INSTRUCTION_INTEGER_CTZ:
+    case MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_LEFT:
+    case MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_RIGHT:
+    case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_NOT:
+    case MINIC_CORE_INSTRUCTION_INTEGER_NEGATE:
+    case MINIC_CORE_INSTRUCTION_INTEGER_ADD:
+    case MINIC_CORE_INSTRUCTION_INTEGER_SUBTRACT:
+    case MINIC_CORE_INSTRUCTION_INTEGER_MULTIPLY:
+    case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND:
+    case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_XOR:
+    case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_OR:
+    case MINIC_CORE_INSTRUCTION_INTEGER_DIVIDE:
+    case MINIC_CORE_INSTRUCTION_INTEGER_REMAINDER:
+    case MINIC_CORE_INSTRUCTION_POINTER_LESS:
+    case MINIC_CORE_INSTRUCTION_INTEGER_LESS:
+    case MINIC_CORE_INSTRUCTION_SCALAR_EQUAL:
+    case MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO:
+        return true;
+    default:
+        return false;
+    }
+}
+
 bool minic_multi_direct_fp_instruction_kind(MinicCoreInstructionKind kind) {
     switch (kind) {
     case MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT:
