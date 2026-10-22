@@ -1,6 +1,7 @@
 #include "target/riscv64/scalar_emit.h"
 #include "target/riscv64/codegen_internal.h"
 #include "target/riscv64/legalize.h"
+#include "target/common/direct_instruction_semantics.h"
 #include "target/riscv64/frame_access.h"
 #include <inttypes.h>
 #include <stdint.h>
@@ -638,8 +639,9 @@ bool minic_riscv64_emit_scalar_instruction(
     case MINIC_CORE_INSTRUCTION_INTEGER_CLZ: {
         unsigned int width;
 
-        if (!minic_riscv64_core_unsigned_integer_width(
-                program, function, instruction->value.operand, &width) ||
+        if (!minic_multi_direct_integer_bitscan_shape(
+                program, minic_target_info_for_architecture(MINIC_TARGET_ARCH_RISCV64),
+                function, instruction, &width) ||
             !minic_riscv64_frame_load_value(file, frame, instruction->value.operand, "t0") ||
             fprintf(file,
                     "  li t1, 0\n"
@@ -664,8 +666,9 @@ bool minic_riscv64_emit_scalar_instruction(
     case MINIC_CORE_INSTRUCTION_INTEGER_CTZ: {
         unsigned int width;
 
-        if (!minic_riscv64_core_unsigned_integer_width(
-                program, function, instruction->value.operand, &width) ||
+        if (!minic_multi_direct_integer_bitscan_shape(
+                program, minic_target_info_for_architecture(MINIC_TARGET_ARCH_RISCV64),
+                function, instruction, &width) ||
             !minic_riscv64_frame_load_value(file, frame, instruction->value.operand, "t0") ||
             fprintf(file,
                     "  beqz t0, .L%s_core_ctz_zero_%" PRIu32 "\n"
