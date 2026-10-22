@@ -1,4 +1,5 @@
 #include "target/x86_64/frame.h"
+#include "target/common/core_function_facts.h"
 #include "target/x86_64/abi.h"
 #include "target/data_layout.h"
 
@@ -28,9 +29,12 @@ bool minic_x86_64_align(size_t value, size_t alignment, size_t *out) {
 bool minic_x86_64_frame_init(const MinicC0Program *program, const MinicTargetInfo *target,
                            const MinicCoreFunction *fn, MinicX86Frame *frame) {
     size_t pos, i, value_bytes, maximum_alignment = 16U;
+    MinicCoreFunctionFacts facts;
     if (program == NULL || target == NULL || fn == NULL || frame == NULL ||
         fn->value_count > (size_t)INT32_MAX / 8U) return false;
+    if (!minic_core_function_facts_analyze(fn, &facts)) return false;
     (void)memset(frame, 0, sizeof(*frame));
+    frame->varargs_count = facts.variadic_address_count;
     frame->value_count = fn->value_count;
     frame->object_count = fn->object_count;
     value_bytes = 0U;
@@ -48,10 +52,6 @@ bool minic_x86_64_frame_init(const MinicC0Program *program, const MinicTargetInf
     }
     /* Discover semantic va_start sites from Core. A VA cursor is not an RV64
      * sequential argument pointer under SysV x86-64. */
-    for (i = 0U; i < fn->instruction_count; ++i) {
-        if (fn->instructions[i].kind == MINIC_CORE_INSTRUCTION_VARIADIC_ARGUMENT_ADDRESS)
-            ++frame->varargs_count;
-    }
     if (frame->varargs_count != 0U) {
         size_t count = 0U, gp_used = 0U, fp_used = 0U, stack_used = 0U;
         size_t width;
