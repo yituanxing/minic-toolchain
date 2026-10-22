@@ -21,7 +21,8 @@ bool minic_multi_emit_relocatable_scalar_array(FILE *out, const MinicC0Program *
                                               const MinicTargetInfo *target,
                                               const MinicGlobalObject *obj,
                                               size_t storage_size,
-                                              MinicMultiRelocEmitter emit_relocation) {
+                                              MinicMultiRelocEmitter emit_relocation,
+                                               MinicMultiScalarBitsEmitter emit_bits) {
     const MinicArrayType *arr;
     size_t element_bytes, alignment, i, relocation_index = 0U;
     if (!minic_type_is_array(obj->type)) return false;
@@ -48,8 +49,12 @@ bool minic_multi_emit_relocatable_scalar_array(FILE *out, const MinicC0Program *
                 !emit_relocation(out, program, target, reloc, element_bytes))
                 return false;
             ++relocation_index;
-        } else if (!minic_multi_emit_data_bits(out, element_bytes,
-                                       obj->initializer_values[i])) return false;
+        } else if (!(emit_bits != NULL
+                        ? emit_bits(out, program, target, arr->element_type,
+                                    obj->initializer_values[i])
+                        : minic_multi_emit_data_bits(
+                              out, element_bytes, obj->initializer_values[i])))
+            return false;
     }
     return relocation_index == obj->relocation_count;
 }
@@ -609,12 +614,13 @@ bool minic_multi_emit_elf_relocation(FILE *out, const MinicC0Program *program,
     return fprintf(out, "  .8byte %s%+" PRId64 "\n", name, addend) >= 0;
 }
 
-static bool minic_multi_emit_flat_record_global(FILE *out,
+bool minic_multi_emit_flat_record_global(FILE *out,
                                     const MinicC0Program *program,
                                     const MinicTargetInfo *target,
                                     const MinicGlobalObject *obj,
                                     size_t storage_size,
-                                           MinicMultiRelocEmitter emit_relocation) {
+                                           MinicMultiRelocEmitter emit_relocation,
+                                           MinicMultiScalarBitsEmitter emit_bits) {
     const MinicRecord *record =
         minic_c0_program_record(program, obj->type.record_id);
     size_t i, cursor = 0U, reloc_index = 0U;
@@ -628,12 +634,12 @@ static bool minic_multi_emit_flat_record_global(FILE *out,
             reloc_index < obj->relocation_count
                 ? &obj->relocations[reloc_index] : NULL;
         size_t offset, width, alignment;
-        const char *directive;
-        uint64_t bits;
         if (field == NULL || field->is_bit_field ||
             field->is_flexible_array || field->element_count != 1U ||
             (!minic_type_is_integer(field->type) &&
-             !minic_type_is_pointer(field->type)) ||
+             !minic_type_is_pointer(field->type) &&
+             !minic_type_is_float(field->type) &&
+             !minic_type_is_double(field->type)) ||
             !minic_data_layout_type(target->data_layout, program,
                                     field->type, &width, &alignment) ||
             !minic_data_layout_record_field_offset(
@@ -648,20 +654,18 @@ static bool minic_multi_emit_flat_record_global(FILE *out,
             (reloc->location_kind == MINIC_GLOBAL_RELOCATION_LOCATION_RECORD_FIELD ||
              reloc->location_kind == MINIC_GLOBAL_RELOCATION_LOCATION_AGGREGATE_SCALAR) &&
             reloc->location_index == i) {
-            if (!minic_type_is_pointer(field->type) ||
+            if ((!minic_type_is_pointer(field->type) &&
+                 !minic_type_is_integer(field->type)) ||
                 obj->initializer_values[i] != 0U ||
                 !emit_relocation(out, program, target, reloc, width))
                 return false;
             ++reloc_index;
-        } else {
-            bits = obj->initializer_values[i];
-            if (width < 8U)
-                bits &= (UINT64_C(1) << (width * 8U)) - UINT64_C(1);
-            directive = width == 1U ? ".byte" : width == 2U ? ".2byte" :
-                        width == 4U ? ".4byte" : ".8byte";
-            if (fprintf(out, "  %s %" PRIu64 "\n", directive, bits) < 0)
-                return false;
-        }
+        } else if (!(emit_bits != NULL
+                         ? emit_bits(out, program, target, field->type,
+                                     obj->initializer_values[i])
+                         : minic_multi_emit_data_bits(
+                               out, width, obj->initializer_values[i])))
+            return false;
         cursor = offset + width;
     }
     return reloc_index == obj->relocation_count &&
@@ -788,7 +792,7 @@ bool minic_multi_emit_simple_global(FILE *out, const MinicC0Program *program,
                           out, program, target, obj, storage_size,
                           emit_relocation)
                     : minic_multi_emit_flat_record_global(out, program, target, obj,
-                                              storage_size, emit_relocation)) ||
+                                              storage_size, emit_relocation, NULL)) ||
             fprintf(out, ".size %s,%zu\n", obj->name, storage_size) < 0)
             return false;
         return true;
@@ -821,7 +825,7 @@ bool minic_multi_emit_simple_global(FILE *out, const MinicC0Program *program,
                           emit_relocation)
                     : minic_multi_emit_relocatable_scalar_array(
                           out, program, target, obj, storage_size,
-                          emit_relocation)) ||
+                          emit_relocation, NULL)) ||
                 fprintf(out, ".size %s,%zu\n", obj->name, storage_size) < 0)
                 return false;
             return true;
