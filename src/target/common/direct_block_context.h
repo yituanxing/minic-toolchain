@@ -17,6 +17,7 @@ typedef struct MinicDirectLP64BlockContext {
     const MinicCoreFunction *fn;
     const MinicLP64FramePlan *frame_plan;
     const MinicLP64ArgumentPlan *incoming_plan;
+    const MinicLP64CallPlanCache *outgoing_calls;
     const char *name;
     size_t id;
     size_t frame;

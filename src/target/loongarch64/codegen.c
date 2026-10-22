@@ -116,6 +116,7 @@ static bool emit_function_with_plan(FILE *out,
         const MinicDirectLP64BlockContext blocks = {
             .program = program, .target = target, .fn = fn,
             .frame_plan = &plan->frame_plan, .incoming_plan = &plan->incoming_plan,
+            .outgoing_calls = &plan->outgoing_calls,
             .name = name, .id = id, .frame = frame,
             .save_offset = save_offset, .va_gp = va_gp,
             .va_count = va_count, .has_direct_calls = has_direct_calls,

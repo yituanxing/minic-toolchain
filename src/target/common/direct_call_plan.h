@@ -28,6 +28,24 @@ typedef struct MinicLP64ArgumentPlan {
     MinicLP64ArgumentLocation arguments[MINIC_DIRECT_LP64_MAX_CALL_ARGUMENTS];
 } MinicLP64ArgumentPlan;
 
+/* Persistent ABI placements sized by each actual call, not 64 padded args. */
+typedef struct MinicLP64PreparedCall {
+    size_t argument_count;
+    size_t stack_bytes;
+    MinicLP64ArgumentLocation arguments[];
+} MinicLP64PreparedCall;
+typedef struct MinicLP64CallPlanCache {
+    size_t instruction_count;
+    MinicLP64PreparedCall **by_instruction;
+} MinicLP64CallPlanCache;
+bool minic_lp64_plan_function_calls(
+    const MinicC0Program *, const MinicTargetInfo *,
+    const MinicCoreFunction *, MinicLP64DirectABI,
+    MinicDirectLP64IndirectRecord, MinicLP64CallPlanCache *);
+const MinicLP64PreparedCall *minic_lp64_function_call_plan(
+    const MinicLP64CallPlanCache *, size_t instruction_id);
+void minic_lp64_call_plan_cache_destroy(MinicLP64CallPlanCache *);
+
 /* Only previously admitted Core CALL/INDIRECT_CALL shapes. Explicitly keep
  * ABI differences: AAPCS64 whole-record spill vs LP64D split record,
  * unnamed variadic GP promotion and binary128 even-register alignment. */

@@ -45,7 +45,8 @@ bool minic_aarch64_emit_abi_instruction(
     size_t frame;
     if (out == NULL || ctx == NULL || ctx->program == NULL ||
         ctx->target == NULL || ctx->fn == NULL || ctx->frame_plan == NULL ||
-        ctx->incoming_plan == NULL || ins == NULL || normalize == NULL ||
+        ctx->incoming_plan == NULL || ctx->outgoing_calls == NULL ||
+        ins == NULL || normalize == NULL ||
         needs_gp_store == NULL)
         return false;
     program = ctx->program;
@@ -65,22 +66,24 @@ bool minic_aarch64_emit_abi_instruction(
                                           : ins->value.call.argument_count;
             size_t j;
             size_t stack_bytes;
-            MinicLP64ArgumentPlan call_plan;
-            /* Resolve ABI locations once before allocating outgoing stack
-             * space; the same plan drives each argument's source cursor. */
-            if (!minic_lp64_plan_direct_call(
-                    program, target, fn, ins,
-                    MINIC_LP64_ABI_AAPCS64,
-                    minic_aarch64_indirect_record,
-                    &call_plan))
+            const MinicLP64PreparedCall *call_plan;
+            size_t call_id;
+            if (fn->instructions == NULL ||
+                ins < fn->instructions ||
+                ins >= fn->instructions + fn->instruction_count)
                 return false;
-            stack_bytes = call_plan.stack_bytes;
+            call_id = (size_t)(ins - fn->instructions);
+            call_plan = minic_lp64_function_call_plan(
+                ctx->outgoing_calls, call_id);
+            if (call_plan == NULL || call_plan->argument_count != count)
+                return false;
+            stack_bytes = call_plan->stack_bytes;
             if (stack_bytes != 0U &&
                 fprintf(out, "  sub sp, sp, #%zu\n", stack_bytes) < 0)
                 return false;
             for (j = 0U; j < count; ++j) {
                 const MinicCoreCallArgument *arg = &fn->call_arguments[begin + j];
-                const MinicLP64ArgumentLocation *location = &call_plan.arguments[j];
+                const MinicLP64ArgumentLocation *location = &call_plan->arguments[j];
                 if (arg->kind == MINIC_CORE_CALL_ARGUMENT_OBJECT) {
                     size_t record_size, slots, object_offset, chunk;
                     const MinicCoreObjectId object_id = arg->value.object_id;
