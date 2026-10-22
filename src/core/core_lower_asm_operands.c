@@ -60,8 +60,6 @@ bool core_inline_asm_register_output_constraint(const MinicInlineAsmOperand *ope
    has access to the semantic program, then transport the resulting target
    text through the existing opaque-asm instruction. This keeps Core unaware
    of RISC-V BUG/WARN semantics and avoids runtime SSA values for constants. */
-#define MINIC_CORE_IMMEDIATE_ASM_LIMIT 8U
-#define MINIC_CORE_IMMEDIATE_TEXT_LIMIT 64U
 
 static const MinicExpression *core_inline_asm_strip_immediate_wrappers(
     const MinicC0Program *program, MinicExpressionId expression_id) {
