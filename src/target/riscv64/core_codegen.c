@@ -472,7 +472,6 @@ static bool emit_core_function_with_symbol(FILE *file,
         return false;
     }
     memset(&frame, 0, sizeof(frame));
-    minic_riscv64_object_liveness_begin_function();
     if (bootstrap_trace) {
         (void)fprintf(stderr,
                       "MINIC_BOOTSTRAP_TRACE stage=core-codegen-capability state=end "
@@ -485,18 +484,19 @@ static bool emit_core_function_with_symbol(FILE *file,
                       symbol_name);
         (void)fflush(stderr);
     }
-    /* Opt-in P1 test changes only the selected function's frame. */
+    /* Cross-block sharing policy is a function/frame input, not global. */
     {
         const char *focus = getenv("MINIC_P1_CROSSBLOCK_FUNCTION");
-        minic_riscv64_object_liveness_set_crossblock_enabled(
-            focus == NULL || focus[0] == 0 ||
-            strcmp(focus, symbol_name) == 0);
-    }
-    if (!minic_riscv64_asm_function_plan_build(function, &frame.asm_plan) ||
-        !minic_riscv64_core_frame_initialize_prepared(
-            program, function, &frame, program != NULL ? &abi_plan : NULL)) {
-        minic_riscv64_function_abi_plan_destroy(&abi_plan);
-        return core_frame_fail(&frame);
+        const bool crossblock_enabled =
+            focus == NULL || focus[0] == '\0' ||
+            strcmp(focus, symbol_name) == 0;
+        if (!minic_riscv64_asm_function_plan_build(function, &frame.asm_plan) ||
+            !minic_riscv64_core_frame_initialize_prepared(
+                program, function, &frame,
+                program != NULL ? &abi_plan : NULL, crossblock_enabled)) {
+            minic_riscv64_function_abi_plan_destroy(&abi_plan);
+            return core_frame_fail(&frame);
+        }
     }
     minic_riscv64_function_abi_plan_destroy(&abi_plan);
     if (!minic_riscv64_core_frame_mark_reachable_blocks(function, &frame)) {
