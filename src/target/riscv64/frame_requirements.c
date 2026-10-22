@@ -119,6 +119,45 @@ bool minic_riscv64_core_variadic_fixed_prefix(const MinicC0Program *program,
 /* M168_RV64_INDIRECT_CALL_STACK: reserve one fixed outgoing stack area
    shared by direct and indirect calls.  The ABI cursor remains the single owner
    of register/stack placement; Core keeps only VALUE/OBJECT arguments. */
+/* One semantic argument-type resolver feeds RV64 psABI sizing and both
+ * machine call forms. A variadic OBJECT argument must really be a record;
+ * Core never silently classifies an arbitrary object as a scalar. */
+bool minic_riscv64_core_call_argument_type(
+    const MinicCoreFunction *function,
+    const MinicCoreCallArgument *argument,
+    const MinicType *parameter_types, size_t parameter_count,
+    bool is_variadic, size_t argument_index,
+    MinicType *argument_type, bool *is_fixed_parameter) {
+    if (function == NULL || argument == NULL || argument_type == NULL ||
+        is_fixed_parameter == NULL)
+        return false;
+    *is_fixed_parameter = argument_index < parameter_count;
+    if (*is_fixed_parameter) {
+        if (parameter_types == NULL)
+            return false;
+        *argument_type = parameter_types[argument_index];
+        return true;
+    }
+    if (!is_variadic)
+        return false;
+    if (argument->kind == MINIC_CORE_CALL_ARGUMENT_VALUE) {
+        MinicCoreValueId id = argument->value.value_id;
+        if (id >= function->value_count || function->values == NULL)
+            return false;
+        *argument_type = function->values[id].type;
+        return true;
+    }
+    if (argument->kind == MINIC_CORE_CALL_ARGUMENT_OBJECT) {
+        MinicCoreObjectId id = argument->value.object_id;
+        if (id >= function->object_count || function->objects == NULL ||
+            !minic_type_is_record(function->objects[id].type))
+            return false;
+        *argument_type = function->objects[id].type;
+        return true;
+    }
+    return false;
+}
+
 bool minic_riscv64_core_call_outgoing_stack_size(const MinicC0Program *program,
                                           const MinicCoreFunction *function,
                                           size_t *result) {
@@ -186,30 +225,12 @@ bool minic_riscv64_core_call_outgoing_stack_size(const MinicC0Program *program,
                 &function->call_arguments[argument_begin + argument_index];
             MinicRiscv64AbiArgumentLocation location;
             MinicType argument_type;
-            bool is_fixed_parameter = argument_index < parameter_count;
-
-            if (is_fixed_parameter) {
-                argument_type = parameter_types[argument_index];
-            } else {
-                if (!is_variadic) {
-                    return false;
-                }
-                if (argument->kind == MINIC_CORE_CALL_ARGUMENT_VALUE) {
-                    if (argument->value.value_id >= function->value_count) {
-                        return false;
-                    }
-                    argument_type = function->values[argument->value.value_id].type;
-                } else if (argument->kind == MINIC_CORE_CALL_ARGUMENT_OBJECT) {
-                    if (argument->value.object_id >= function->object_count ||
-                        !minic_type_is_record(
-                            function->objects[argument->value.object_id].type)) {
-                        return false;
-                    }
-                    argument_type = function->objects[argument->value.object_id].type;
-                } else {
-                    return false;
-                }
-            }
+            bool is_fixed_parameter;
+            if (!minic_riscv64_core_call_argument_type(
+                    function, argument, parameter_types, parameter_count,
+                    is_variadic, argument_index, &argument_type,
+                    &is_fixed_parameter))
+                return false;
             if (!minic_riscv64_abi_place_argument(
                     program, argument_type, is_fixed_parameter, &cursor, &location)) {
                 return false;
