@@ -1,8 +1,9 @@
-name: MiniC Native Strict Refactor Gate
+name: MiniC Native Strict Backend Gate
 
 on:
   push:
     branches:
+      - main
       - feature/four-backend-aarch64-loongarch64-m0
     paths:
       - 'src/target/**'
@@ -14,7 +15,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: minic-native-refactor-${{ github.ref }}
+  group: minic-native-backend-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -33,13 +34,13 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/minic-native-refactor all
-          test -x build/minic-native-refactor/bin/minic
-          test -x build/minic-native-refactor/bin/minic-cc
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/minic-native-backend all
+          test -x build/minic-native-backend/bin/minic
+          test -x build/minic-native-backend/bin/minic-cc
       - name: Native x86-64 ABI and runtime smoke
         shell: bash
         run: |
           set -Eeuo pipefail
           test "$(uname -m)" = x86_64
-          MINIC_CC="$GITHUB_WORKSPACE/build/minic-native-refactor/bin/minic-cc" \
+          MINIC_CC="$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc" \
             HOST_CC=cc sh tests/compiler/c0/run-x86_64-native-m1.sh

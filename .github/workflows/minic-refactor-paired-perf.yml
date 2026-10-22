@@ -1,13 +1,6 @@
-name: MiniC Four-Backend Refactor Paired Performance
+name: MiniC Four-Backend Refactor Paired Performance (Manual A/B)
 
 on:
-  push:
-    branches:
-      - feature/four-backend-aarch64-loongarch64-m0
-    paths:
-      - '.github/workflows/minic-refactor-paired-perf.yml'
-      - 'tests/compiler/perf/minic-four-backend-refactor-ab.py'
-      - 'tests/external/cjson/probe.sh'
   workflow_dispatch:
 
 permissions:
