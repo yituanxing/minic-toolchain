@@ -1,4 +1,5 @@
 #include "target/riscv64/legalize.h"
+#include "target/common/core_call_view.h"
 #include "target/riscv64/abi.h"
 #include "target/data_layout.h"
 #include <stdint.h>
@@ -343,27 +344,18 @@ bool minic_riscv64_core_integer_overflow_supported(const MinicC0Program *program
 bool minic_riscv64_core_direct_call_supported(const MinicC0Program *program,
                                        const MinicCoreFunction *function,
                                        const MinicCoreInstruction *instruction) {
+    MinicCoreCallView call;
     const MinicCoreCallee *callee;
     MinicRiscv64AbiCursor cursor;
     MinicRiscv64AbiValue return_value;
     size_t argument_index;
 
-    if (function == NULL || instruction == NULL ||
-        instruction->kind != MINIC_CORE_INSTRUCTION_CALL ||
-        instruction->value.call.callee_id >= function->callee_count) {
+    if (!minic_core_call_view_build(function, instruction, &call) ||
+        call.callee == NULL)
         return false;
-    }
-    callee = &function->callees[instruction->value.call.callee_id];
-    if (callee->name == NULL || callee->name_length == 0U ||
-        (!callee->is_variadic &&
-         instruction->value.call.argument_count != callee->parameter_count) ||
-        (callee->is_variadic &&
-         instruction->value.call.argument_count < callee->parameter_count) ||
-        instruction->value.call.argument_begin > function->call_argument_count ||
-        instruction->value.call.argument_count >
-            function->call_argument_count - instruction->value.call.argument_begin) {
+    callee = call.callee;
+    if (callee->name == NULL || callee->name_length == 0U)
         return false;
-    }
     if (program == NULL) {
         if ((!minic_type_is_void(callee->return_type) &&
              !minic_riscv64_scalar_type(callee->return_type)) ||
@@ -547,32 +539,16 @@ bool minic_riscv64_core_direct_call_supported(const MinicC0Program *program,
 bool minic_riscv64_core_indirect_call_supported(const MinicC0Program *program,
                                          const MinicCoreFunction *function,
                                          const MinicCoreInstruction *instruction) {
+    MinicCoreCallView call;
     const MinicCoreCallSignature *signature;
     MinicRiscv64AbiCursor cursor;
     MinicRiscv64AbiValue return_value;
-    MinicType function_type;
     size_t argument_index;
 
-    if (function == NULL || instruction == NULL ||
-        instruction->kind != MINIC_CORE_INSTRUCTION_INDIRECT_CALL ||
-        instruction->value.indirect_call.signature_id >= function->call_signature_count ||
-        instruction->value.indirect_call.callee >= function->value_count ||
-        instruction->value.indirect_call.argument_begin > function->call_argument_count ||
-        instruction->value.indirect_call.argument_count >
-            function->call_argument_count - instruction->value.indirect_call.argument_begin ||
-        !minic_type_pointee(
-            function->values[instruction->value.indirect_call.callee].type, &function_type) ||
-        !minic_type_is_function(function_type)) {
+    if (!minic_core_call_view_build(function, instruction, &call) ||
+        call.signature == NULL)
         return false;
-    }
-    signature = &function->call_signatures[instruction->value.indirect_call.signature_id];
-    if (function_type.function_type_id != signature->function_type_id ||
-        (!signature->is_variadic &&
-         instruction->value.indirect_call.argument_count != signature->parameter_count) ||
-        (signature->is_variadic &&
-         instruction->value.indirect_call.argument_count < signature->parameter_count)) {
-        return false;
-    }
+    signature = call.signature;
     if (program == NULL) {
         if ((!minic_type_is_void(signature->return_type) &&
              !minic_riscv64_scalar_type(signature->return_type)) ||

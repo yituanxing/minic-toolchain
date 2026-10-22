@@ -135,6 +135,7 @@ MINIC_SOURCES := \
 	src/target/common/direct_preflight.c \
 	src/target/common/direct_function_profile.c \
 	src/target/common/core_function_facts.c \
+	src/target/common/core_call_view.c \
 	src/target/common/direct_call_preflight.c \
 	src/target/common/direct_call_plan.c \
 	src/target/common/direct_instruction_semantics.c \

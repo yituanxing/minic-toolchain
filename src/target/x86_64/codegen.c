@@ -1,4 +1,5 @@
 #include "target/x86_64/codegen.h"
+#include "target/common/core_call_view.h"
 
 #include "target/data_layout.h"
 #include "target/x86_64/global_emit.h"
@@ -1338,13 +1339,16 @@ static bool x86_emit_instruction(FILE *out, const MinicC0Program *program,
             return false;
         return x86_value_store(out, frame, ins->result);
     case MINIC_CORE_INSTRUCTION_CALL: {
-        const size_t begin = ins->value.call.argument_begin;
-        const size_t count = ins->value.call.argument_count;
-        const size_t callee_id = ins->value.call.callee_id;
+        MinicCoreCallView call;
         const MinicCoreCallee *callee;
+        size_t begin, count;
         size_t outgoing_bytes = 0U;
-        if (callee_id >= fn->callee_count) return false;
-        callee = &fn->callees[callee_id];
+        if (!minic_core_call_view_build(fn, ins, &call) ||
+            call.callee == NULL)
+            return false;
+        callee = call.callee;
+        begin = call.argument_begin;
+        count = call.argument_count;
         if (ins->value.call.result_object != MINIC_CORE_OBJECT_INVALID ||
             callee->name == NULL) {
             if (getenv("MINIC_X86_CALL_TRACE") != NULL)
@@ -1421,19 +1425,18 @@ static bool x86_emit_instruction(FILE *out, const MinicC0Program *program,
         return true;
     }
     case MINIC_CORE_INSTRUCTION_INDIRECT_CALL: {
-        const size_t signature_id = ins->value.indirect_call.signature_id;
+        MinicCoreCallView call;
         const MinicCoreValueId callee = ins->value.indirect_call.callee;
-        const size_t begin = ins->value.indirect_call.argument_begin;
-        const size_t count = ins->value.indirect_call.argument_count;
         const MinicCoreCallSignature *signature;
-        MinicType function_type;
+        size_t begin, count;
         size_t outgoing_bytes = 0U;
-        if (signature_id >= fn->call_signature_count || callee >= fn->value_count ||
-            !minic_type_pointee(fn->values[callee].type, &function_type) ||
-            !minic_type_is_function(function_type)) return false;
-        signature = &fn->call_signatures[signature_id];
-        if (function_type.function_type_id != signature->function_type_id ||
-            !x86_emit_call_arguments(out, program, target, fn, frame, begin, count,
+        if (!minic_core_call_view_build(fn, ins, &call) ||
+            call.signature == NULL)
+            return false;
+        signature = call.signature;
+        begin = call.argument_begin;
+        count = call.argument_count;
+        if (!x86_emit_call_arguments(out, program, target, fn, frame, begin, count,
                                      signature->parameter_types, signature->parameter_count,
                                      signature->is_variadic, &outgoing_bytes) ||
             !x86_value_load(out, frame, callee, "%r11") ||
