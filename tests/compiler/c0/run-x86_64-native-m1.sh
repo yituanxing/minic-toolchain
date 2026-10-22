@@ -1486,3 +1486,24 @@ int main(void) {
 }
 EOF
 check_exit initializer_shared_flat_record 42
+
+# Shared recursive GlobalObject data layout for nested records and pointers;
+# the per-target GNU numeric/relocation formatting stays independent.
+cat > "$tempdir/initializer_nested_shared_layout.i" <<'EOF'
+static int elements[4] = {3, 5, 7, 11};
+struct Inner { unsigned short count; int *pointer; };
+struct Outer { struct Inner members[2]; long sum; };
+static struct Outer shared = {
+    {{17, &elements[1]}, {29, &elements[3]}}, 41
+};
+int main(void) {
+    if (shared.members[0].count != 17 ||
+        shared.members[0].pointer != &elements[1] ||
+        shared.members[1].count != 29 ||
+        shared.members[1].pointer != &elements[3] ||
+        shared.sum != 41)
+        return 1;
+    return 42;
+}
+EOF
+check_exit initializer_nested_shared_layout 42
