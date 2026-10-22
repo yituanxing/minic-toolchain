@@ -197,61 +197,6 @@ bool minic_loongarch64_emit_terminator(FILE *out,
 
 
 /* All Core blocks and their machine instruction cases are target-owned. */
-static bool emit_integer_normalize(FILE *out, size_t width, bool sign) {
-    const char *op = width == 1U
-        ? (sign ? "  slli.w $t0, $t0, 24\n  srai.w $t0, $t0, 24\n" :
-                  "  andi $t0, $t0, 255\n")
-        : width == 2U
-            ? (sign ? "  slli.w $t0, $t0, 16\n  srai.w $t0, $t0, 16\n" :
-                      "  bstrpick.w $t0, $t0, 15, 0\n")
-            : width == 4U ? "" : NULL;
-    return op != NULL && fputs(op, out) != EOF;
-}
-
-/* Source-driven tinyAES M4 frontier. Reuse existing target DataLayout to
- * size ordinary integer globals and flat arrays, but keep ELF emission
- * in the ISA backend. Unsupported aggregate/relocation cases must fail
- * closed, rather than silently manufacture incorrect object bytes. */
-/* cJSON's first original file-scope globals are a flat error record
- * {null pointer, zero size_t} and a function-pointer hooks record.
- * Reuse the validated shared target DataLayout for *byte offsets* and
- * function/object relocation addends. Only bounded flat scalar records
- * belong here; recursive records/unions/bitfields fail closed. */
-
-
-
-
-/* Emission of target-neutral ELF STV_* binding metadata. */
-
-
-
-
-
-/* M7: retain x86's established DataLayout-owned object sizing instead
- * of guessing eight bytes per Core object.  The new-ISA stack slots
- * are SP-positive; naturally aligned objects are laid out after SSA
- * value slots.  Keep bounded <= 8 KiB frames until large-offset ABI
- * access has been independently checked on both targets. */
-
-
-
-
-/* Preserve binary128 SSA values in distinct sixteen-byte aligned slots,
- * rather than overwriting adjacent eight-byte scalar values. */
-
-
-/* lp64d load/store immediates are signed 12-bit. Keep the original
- * direct encoding for small frames; for real KeyExpansion-sized frames,
- * materialize the full SP-relative address in reserved $t3.  No other
- * emitter instruction may treat $t3 as a live Core value. */
-
-
-
-
-/* Dynamic alloca changes SP. Anchor every fixed Core SSA/object slot
- * to callee-saved s0 ONLY for functions containing that instruction.
- * Raw SP remains the ABI outgoing stack-argument base. */
-
 
 /* The fixed-frame register is target-specific; one machine writeback
  * owner prevents memory/FP/ALU/ABI lowering from diverging on slot widths. */
@@ -417,7 +362,7 @@ bool minic_loongarch64_emit_core_blocks(FILE *out, const MinicDirectLP64BlockCon
         {
             bool needs_writeback = false;
             if (!minic_loongarch64_emit_residual_instruction(out, ctx, ins_id, block_id,
-                    offset, emit_integer_normalize, &needs_writeback))
+                    offset, &needs_writeback))
                 return minic_multi_direct_machine_reject(
                     fn, "loongarch64", name, reject_stage,
                     reject_block, reject_ins, __LINE__);

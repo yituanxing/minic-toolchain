@@ -20,11 +20,22 @@
 /* Residual machine lowering after Core family admission. Each case is
  * target owned; planning and type checks are shared with the other LP64
  * backend, preserving AArch64 and LoongArch64 ABI/ISA divergence. */
+static bool residual_integer_normalize(FILE *out, size_t width, bool sign) {
+    const char *op = width == 1U
+        ? (sign ? "  slli.w $t0, $t0, 24\n  srai.w $t0, $t0, 24\n" :
+                  "  andi $t0, $t0, 255\n")
+        : width == 2U
+            ? (sign ? "  slli.w $t0, $t0, 16\n  srai.w $t0, $t0, 16\n" :
+                      "  bstrpick.w $t0, $t0, 15, 0\n")
+            : width == 4U ? "" : NULL;
+    return op != NULL && fputs(op, out) != EOF;
+}
+
+
 bool minic_loongarch64_emit_residual_instruction(
     FILE *out, const MinicDirectLP64BlockContext *ctx,
     MinicCoreInstructionId ins_id, size_t block_id,
-    size_t offset, bool (*normalize)(FILE *, size_t, bool),
-    bool *needs_writeback) {
+    size_t offset, bool *needs_writeback) {
     const MinicC0Program *program;
     const MinicTargetInfo *target;
     const MinicCoreFunction *fn;
@@ -35,8 +46,7 @@ bool minic_loongarch64_emit_residual_instruction(
     size_t id, frame, va_gp, va_count, reject_block;
     size_t reject_ins;
     bool dynamic_frame;
-    if (out == NULL || ctx == NULL || normalize == NULL ||
-        needs_writeback == NULL || ctx->fn == NULL ||
+    if (out == NULL || ctx == NULL || needs_writeback == NULL || ctx->fn == NULL ||
         ctx->program == NULL || ctx->target == NULL ||
         ctx->frame_plan == NULL || ctx->name == NULL ||
         ins_id >= ctx->fn->instruction_count)
@@ -75,7 +85,7 @@ bool minic_loongarch64_emit_residual_instruction(
                             (int64_t)(int32_t)(uint32_t)
                                 ins->value.integer_value) < 0 ||
                     ((width == 1U || width == 2U) &&
-                     !normalize(out, width, sign))) return minic_multi_direct_machine_reject(fn, "loongarch64", name, reject_stage,
+                     !residual_integer_normalize(out, width, sign))) return minic_multi_direct_machine_reject(fn, "loongarch64", name, reject_stage,
                                     reject_block, reject_ins, __LINE__);
             }
             (void)sign;
@@ -202,7 +212,7 @@ bool minic_loongarch64_emit_residual_instruction(
                              (size_t)source * 8U)) return minic_multi_direct_machine_reject(fn, "loongarch64", name, reject_stage,
                                     reject_block, reject_ins, __LINE__);
             if (!src_pointer && src_width != 8U &&
-                (!normalize(out, src_width, src_signed) ||
+                (!residual_integer_normalize(out, src_width, src_signed) ||
                  (src_signed
                     ? fputs("  slli.w $t0, $t0, 0\n", out) == EOF
                     : fputs("  bstrpick.d $t0, $t0, 31, 0\n", out) == EOF)))
@@ -290,7 +300,7 @@ bool minic_loongarch64_emit_residual_instruction(
                     { *needs_writeback = false; return true; }
                 }
                 if (cast.target_width < 8U &&
-                    !normalize(out, cast.target_width,
+                    !residual_integer_normalize(out, cast.target_width,
                                             cast.target_signed))
                     return minic_multi_direct_machine_reject(
                         fn, "loongarch64", name, reject_stage,
@@ -313,7 +323,7 @@ bool minic_loongarch64_emit_residual_instruction(
                     return minic_multi_direct_machine_reject(
                         fn, "loongarch64", name, reject_stage,
                         reject_block, reject_ins, __LINE__);
-            } else if (!normalize(out, cast.target_width,
+            } else if (!residual_integer_normalize(out, cast.target_width,
                                                cast.target_signed))
                 return minic_multi_direct_machine_reject(
                     fn, "loongarch64", name, reject_stage,
