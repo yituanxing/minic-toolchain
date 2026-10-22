@@ -1,4 +1,5 @@
 #include "target/common/direct_function_profile.h"
+#include "target/common/core_function_facts.h"
 #include "target/common/lp64_aggregate.h"
 #include "target/common/lp64_scalar.h"
 
@@ -13,13 +14,18 @@ MinicDirectLP64ProfileResult minic_multi_direct_lp64_profile_function(
     MinicLP64DirectABI abi, MinicDirectLP64IndirectRecord indirect_record,
     MinicLP64ArgumentPlan *incoming, MinicDirectLP64FunctionProfile *profile) {
     size_t i;
+    MinicCoreFunctionFacts facts;
 
     if (program == NULL || target == NULL || decl == NULL || fn == NULL ||
         incoming == NULL || profile == NULL || indirect_record == NULL ||
         (abi != MINIC_LP64_ABI_AAPCS64 &&
          abi != MINIC_LP64_ABI_LOONGARCH64_LP64D))
         return MINIC_DIRECT_LP64_PROFILE_PARAMETER_SHAPE;
+    if (!minic_core_function_facts_analyze(fn, &facts))
+        return MINIC_DIRECT_LP64_PROFILE_PARAMETER_SHAPE;
     (void)memset(profile, 0, sizeof(*profile));
+    profile->variadic_address_count = facts.variadic_address_count;
+    profile->has_dynamic_stack = facts.uses_dynamic_stack_alloc;
     if (decl->is_variadic) {
         for (i = 0U; i < fn->parameter_count; ++i) {
             if (abi == MINIC_LP64_ABI_AAPCS64) {
@@ -34,14 +40,6 @@ MinicDirectLP64ProfileResult minic_multi_direct_lp64_profile_function(
                 ++profile->fixed_gp_count;
             }
         }
-    }
-    for (i = 0U; i < fn->instruction_count; ++i) {
-        if (fn->instructions[i].kind ==
-            MINIC_CORE_INSTRUCTION_VARIADIC_ARGUMENT_ADDRESS)
-            ++profile->variadic_address_count;
-        if (fn->instructions[i].kind ==
-            MINIC_CORE_INSTRUCTION_DYNAMIC_STACK_ALLOC)
-            profile->has_dynamic_stack = true;
     }
     if (profile->variadic_address_count != 0U &&
         (!decl->is_variadic || profile->variadic_address_count != 1U ||
