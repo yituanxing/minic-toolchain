@@ -39,7 +39,8 @@ bool minic_aarch64_emit_fp_instruction(
                         (size_t)lhs * 8U, (size_t)rhs * 8U,
                         condition) < 0)
                 return false;
-            *needs_gp_store = true; return true;
+            *needs_gp_store = true;
+            return true;
         }
         /* M37: cJSON compare_double's a-b and tolerance multiplication.
          * Keep full IEEE-754 binary64 payloads in FP registers/SSA slots. */
@@ -154,7 +155,7 @@ bool minic_aarch64_emit_fp_instruction(
                              ? "  ldr x9, [sp, #%zu]\n"
                              : "  ldr w9, [sp, #%zu]\n",
                         (size_t)src * 8U) < 0 ||
-                (width < 4U && !emit_integer_normalize(out, width, sign)) ||
+                (width < 4U && !normalize(out, width, sign)) ||
                 fputs(width == 8U
                           ? (sign ? "  scvtf d9, x9\n"
                                   : "  ucvtf d9, x9\n")
@@ -186,9 +187,10 @@ bool minic_aarch64_emit_fp_instruction(
             if (fprintf(out, "  ldr d9, [sp, #%zu]\n",
                         (size_t)src * 8U) < 0 ||
                 fputs(conversion, out) == EOF ||
-                (width < 4U && !emit_integer_normalize(out, width, sign)))
+                (width < 4U && !normalize(out, width, sign)))
                 return false;
-            *needs_gp_store = true; return true;
+            *needs_gp_store = true;
+            return true;
         }
     default:
         return false;
