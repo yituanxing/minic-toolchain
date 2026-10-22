@@ -24,6 +24,25 @@ bool minic_multi_direct_result_slot_offset(
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
     bool allow_variadic_double_result, size_t *offset);
 
+/* Common scalar and relaxed atomic LOAD shape (ISA emission stays local). */
+/* Shared Core operand shape for LP64 integer arithmetic, bitwise and div. */
+bool minic_multi_direct_integer_binary_shape(
+    const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
+    size_t *left_width, size_t *right_width,
+    bool *left_signed, bool *right_signed);
+
+bool minic_multi_direct_scalar_load_shape(
+    const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
+    size_t *width, bool *is_signed, bool *is_pointer);
+
+/* Wide load pointer and frame-admission: target decides 128-bit transfers. */
+bool minic_multi_direct_wide_scalar_load_location(
+    const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
+    const MinicLP64FramePlan *frame_plan, MinicCoreValueId *address,
+    size_t *destination_offset);
+
 bool minic_multi_direct_scalar_store_shape(
     const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
