@@ -19,7 +19,9 @@ mkdir -p "$ev"
 # not a runtime PASS until the seven live shards and QEMU gate complete.
 native_manifest="docs/ci/native-runtime44-perf4-validated-sha1.txt"
 native_profile=0
-if [[ "${MINIC_CURRENT_MAIN_SEVEN_RECHECK:-0}" == 1 ]]; then
+if [[ "${MINIC_CURRENT_MAIN_SEVEN_RECHECK:-0}" == 1 ]] ||
+   { [[ "${GITHUB_REF:-}" == refs/heads/main ]] &&
+     git log -1 --format=%B | grep -Fq '[linux-runtime-gcc-sharded]'; }; then
   # The 2026-10-22 four-backend refactor changed valid C file hashes.
   # The old Runtime44 SHA manifest is historical and *cannot* certify
   # the new source. Validate the exact checked-out current main commit
