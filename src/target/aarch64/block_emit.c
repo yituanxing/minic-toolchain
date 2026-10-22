@@ -1,4 +1,5 @@
 #include "target/aarch64/block_emit.h"
+#include "target/aarch64/memory_emit.h"
 #include "target/aarch64/call_emit.h"
 #include "target/aarch64/integer_emit.h"
 #include "target/aarch64/fp_emit.h"
@@ -197,25 +198,6 @@ bool minic_aarch64_emit_terminator(FILE *out,
 }
 
 /* All Core blocks and their machine instruction cases are target-owned. */
-static bool emit_integer_memory(FILE *out, bool store,
-                                size_t width, bool sign) {
-    const char *op = NULL;
-    if (store) {
-        op = width == 1U ? "  strb w9, [x10]\n" :
-             width == 2U ? "  strh w9, [x10]\n" :
-             width == 4U ? "  str w9, [x10]\n" :
-             width == 8U ? "  str x9, [x10]\n" : NULL;
-    } else {
-        op = width == 1U ? (sign ? "  ldrsb w9, [x10]\n" :
-                                     "  ldrb w9, [x10]\n") :
-             width == 2U ? (sign ? "  ldrsh w9, [x10]\n" :
-                                     "  ldrh w9, [x10]\n") :
-             width == 4U ? "  ldr w9, [x10]\n" :
-              width == 8U ? "  ldr x9, [x10]\n" : NULL;
-    }
-    return op != NULL && fputs(op, out) != EOF;
-}
-
 static bool emit_integer_normalize(FILE *out, size_t width, bool sign) {
     const char *op = width == 1U
         ? (sign ? "  sxtb w9, w9\n" :
@@ -377,61 +359,30 @@ bool minic_aarch64_emit_core_blocks(FILE *out, const MinicDirectLP64BlockContext
         }
         /* Preserve both halves of volatile/nonvolatile int128 stores.
          * Unlike atomic stores this is two plain 64-bit memory writes. */
-        if (ins->kind == MINIC_CORE_INSTRUCTION_STORE &&
-            ins->value.store.stored_value < fn->value_count &&
-            minic_type_is_int128_integer(
-                fn->values[ins->value.store.stored_value].type)) {
-            const MinicCoreValueId addr = ins->value.store.address;
-            size_t src;
-            if (!minic_multi_direct_wide_store_shape(
-                    fn, ins, frame_plan, &src) ||
-                fprintf(out, "  ldr x10, [sp, #%zu]\n"
-                             "  ldr x9, [sp, #%zu]\n"
-                             "  ldr x11, [sp, #%zu]\n"
-                             "  str x9, [x10]\n"
-                             "  str x11, [x10, #8]\n",
-                        (size_t)addr * 8U, src, src + 8U) < 0)
-                return minic_multi_direct_machine_reject(fn, "aarch64", name,
-                    reject_stage, reject_block, reject_ins, __LINE__);
-            continue;
-        }
-        if (ins->kind == MINIC_CORE_INSTRUCTION_STORE &&
-            ins->value.store.stored_value < fn->value_count &&
-            minic_type_is_long_double(
-                fn->values[ins->value.store.stored_value].type)) {
-            const MinicCoreValueId addr = ins->value.store.address;
-            size_t src;
-            if (!minic_multi_direct_wide_store_shape(
-                    fn, ins, frame_plan, &src) ||
-                fprintf(out, "  ldr x10, [sp, #%zu]\n"
-                             "  ldr q9, [sp, #%zu]\n"
-                             "  str q9, [x10]\n",
-                        (size_t)addr * 8U, src) < 0)
-                return minic_multi_direct_machine_reject(fn, "aarch64", name,
-                                           reject_stage, reject_block,
-                                           reject_ins, __LINE__);
-            continue;
-        }
-        if (ins->kind == MINIC_CORE_INSTRUCTION_STORE ||
-            ins->kind == MINIC_CORE_INSTRUCTION_ATOMIC_STORE) {
-            const bool atomic = ins->kind == MINIC_CORE_INSTRUCTION_ATOMIC_STORE;
-            const MinicCoreValueId addr = atomic ? ins->value.atomic_store.address
-                                                  : ins->value.store.address;
-            const MinicCoreValueId value = atomic ? ins->value.atomic_store.stored_value
-                                                   : ins->value.store.stored_value;
-            size_t width = 0U;
-            bool sign = false, pointer = false;
-            if (!minic_multi_direct_scalar_store_shape(
-                    program, target, fn, ins, &width, &sign, &pointer))
-                return minic_multi_direct_machine_reject(fn, "aarch64",
-                    name, reject_stage, reject_block, reject_ins, __LINE__);
-            if (fprintf(out, "  ldr x10, [sp, #%zu]\n", (size_t)addr * 8U) < 0 ||
-                fprintf(out, (pointer || width == 8U) ? "  ldr x9, [sp, #%zu]\n"
-                                                : "  ldr w9, [sp, #%zu]\n",
-                        (size_t)value * 8U) < 0 ||
-                (pointer ? fputs("  str x9, [x10]\n", out) == EOF
-                         : !emit_integer_memory(out, true, width, sign))) return minic_multi_direct_machine_reject(fn, "aarch64", name, reject_stage,
-                                    reject_block, reject_ins, __LINE__);
+        /* Memory effects precede the ordinary SSA gate: stores are effect
+         * only, loads either produce a scalar GP value or a wide slot. */
+        if (minic_multi_direct_memory_machine_kind(ins->kind)) {
+            bool needs_gp_store = false;
+            if (ins->kind == MINIC_CORE_INSTRUCTION_LOAD ||
+                ins->kind == MINIC_CORE_INSTRUCTION_ATOMIC_LOAD) {
+                if (!minic_multi_direct_result_slot_offset(
+                        fn, ins, true, &offset))
+                    return minic_multi_direct_machine_reject(
+                        fn, "aarch64", name, reject_stage, reject_block, reject_ins, __LINE__);
+            }
+            if (!minic_aarch64_emit_memory_instruction(
+                    out, program, target, fn, ins, frame_plan,
+                    &needs_gp_store))
+                return minic_multi_direct_machine_reject(
+                    fn, "aarch64", name, reject_stage, reject_block, reject_ins, __LINE__);
+            if (needs_gp_store) {
+                if (fprintf(out, (minic_lp64_register64_type(program, target, ins->type) ||
+                                   minic_type_is_double(ins->type))
+                                       ? "  str x9, [sp, #%zu]\n"
+                                       : "  str w9, [sp, #%zu]\n", offset) < 0)
+                    return minic_multi_direct_machine_reject(
+                        fn, "aarch64", name, reject_stage, reject_block, reject_ins, __LINE__);
+            }
             continue;
         }
         if (!minic_multi_direct_result_slot_offset(
@@ -750,56 +701,6 @@ bool minic_aarch64_emit_core_blocks(FILE *out, const MinicDirectLP64BlockContext
                 (!emit_integer_normalize(out, src_width, src_signed) ||
                  fputs(src_signed ? "  sxtw x9, w9\n"
                                   : "  uxtw x9, w9\n", out) == EOF))
-                return minic_multi_direct_machine_reject(fn, "aarch64", name, reject_stage,
-                                    reject_block, reject_ins, __LINE__);
-            break;
-        }
-        case MINIC_CORE_INSTRUCTION_LOAD:
-        case MINIC_CORE_INSTRUCTION_ATOMIC_LOAD: {
-            if (ins->kind == MINIC_CORE_INSTRUCTION_LOAD &&
-                minic_type_is_int128_integer(ins->type)) {
-                MinicCoreValueId addr;
-                size_t dst;
-                if (!minic_multi_direct_wide_scalar_load_location(
-                        fn, ins, frame_plan, &addr, &dst) ||
-                fprintf(out, "  ldr x10, [sp, #%zu]\n"
-                                 "  ldr x9, [x10]\n"
-                                 "  ldr x11, [x10, #8]\n"
-                                 "  str x9, [sp, #%zu]\n"
-                                 "  str x11, [sp, #%zu]\n",
-                            (size_t)addr * 8U, dst, dst + 8U) < 0)
-                    return minic_multi_direct_machine_reject(fn, "aarch64", name,
-                        reject_stage, reject_block, reject_ins, __LINE__);
-                continue;
-            }
-            if (ins->kind == MINIC_CORE_INSTRUCTION_LOAD &&
-                minic_type_is_long_double(ins->type)) {
-                MinicCoreValueId addr;
-                size_t dst;
-                if (!minic_multi_direct_wide_scalar_load_location(
-                        fn, ins, frame_plan, &addr, &dst) ||
-                fprintf(out, "  ldr x10, [sp, #%zu]\n"
-                                 "  ldr q9, [x10]\n"
-                                 "  str q9, [sp, #%zu]\n",
-                            (size_t)addr * 8U, dst) < 0)
-                    return minic_multi_direct_machine_reject(fn, "aarch64", name,
-                                               reject_stage, reject_block,
-                                               reject_ins, __LINE__);
-                continue;
-            }
-            const bool atomic = ins->kind == MINIC_CORE_INSTRUCTION_ATOMIC_LOAD;
-            const MinicCoreValueId addr = atomic ? ins->value.atomic_load.address
-                                                  : ins->value.load.address;
-            size_t width = 0U;
-            bool sign = false, pointer = false;
-            if (!minic_multi_direct_scalar_load_shape(
-                    program, target, fn, ins, &width, &sign, &pointer))
-                return minic_multi_direct_machine_reject(fn, "aarch64", name,
-                    reject_stage, reject_block, reject_ins, __LINE__);
-            if (
-                fprintf(out, "  ldr x10, [sp, #%zu]\n", (size_t)addr * 8U) < 0 ||
-                (pointer ? fputs("  ldr x9, [x10]\n", out) == EOF
-                         : !emit_integer_memory(out, false, width, sign)))
                 return minic_multi_direct_machine_reject(fn, "aarch64", name, reject_stage,
                                     reject_block, reject_ins, __LINE__);
             break;
