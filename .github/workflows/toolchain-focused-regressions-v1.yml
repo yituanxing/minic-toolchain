@@ -448,6 +448,13 @@ jobs:
           bash tests/preprocessor/run-target-predefines-native.sh \
             "$GITHUB_WORKSPACE/build/toolchain-focused-t1-v2/bin/minic-cpp"
 
+          # Reuse the already-built RV64 compiler for the complete static
+          # aggregate/relocation assembly suite, including fallback bitfields
+          # and the new common nested DataLayout path. No separate CI job.
+          MINIC="$minic" \
+          BUILD_DIR="$work/static-aggregate-layout" \
+            sh tests/compiler/c0/run-static-aggregate-initializers.sh
+
           MINIC="$minic" \
           BUILD_DIR="$work" \
           RISCV_CC=riscv64-linux-gnu-gcc \
