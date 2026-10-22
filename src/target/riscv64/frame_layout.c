@@ -29,38 +29,9 @@ static bool align_up(size_t value, size_t alignment, size_t *result) {
     return true;
 }
 
-/* Named RV64 parameters are laid out once; the call emitter only reads
- * the resulting locations, independent of Core PARAMETER instruction order. */
-static bool core_frame_plan_parameters(
+bool minic_riscv64_core_frame_initialize_prepared(
     const MinicC0Program *program, const MinicCoreFunction *function,
-    MinicRiscv64CoreFrame *frame, MinicRiscv64AbiCursor *cursor) {
-    size_t index;
-    if (program == NULL || function == NULL || frame == NULL || cursor == NULL)
-        return false;
-    if (function->parameter_count != 0U) {
-        if (function->parameter_types == NULL ||
-            function->parameter_count > SIZE_MAX / sizeof(*frame->parameter_locations))
-            return false;
-        frame->parameter_locations = (MinicRiscv64AbiArgumentLocation *)calloc(
-            function->parameter_count, sizeof(*frame->parameter_locations));
-        if (frame->parameter_locations == NULL)
-            return false;
-    }
-    for (index = 0U; index < function->parameter_count; ++index) {
-        if (!minic_riscv64_abi_place_argument(
-                program, function->parameter_types[index], true,
-                cursor, &frame->parameter_locations[index]))
-            return false;
-    }
-    frame->parameter_location_count = function->parameter_count;
-    frame->named_parameter_cursor = *cursor;
-    frame->has_named_parameter_cursor = true;
-    return true;
-}
-
-bool minic_riscv64_core_frame_initialize(const MinicC0Program *program,
-                                  const MinicCoreFunction *function,
-                                  MinicRiscv64CoreFrame *frame) {
+    MinicRiscv64CoreFrame *frame, MinicRiscv64FunctionAbiPlan *abi_plan) {
     size_t object_index;
     size_t storage_size;
     size_t required_size;
@@ -201,14 +172,32 @@ bool minic_riscv64_core_frame_initialize(const MinicC0Program *program,
     frame->has_hidden_result_pointer = false;
     frame->hidden_result_pointer_offset = 0U;
     if (program != NULL) {
-        MinicRiscv64AbiCursor return_cursor;
+        MinicRiscv64FunctionAbiPlan local_plan = {0};
+        MinicRiscv64FunctionAbiPlan *ready = abi_plan;
         MinicRiscv64AbiValue return_value;
 
-        if (!minic_riscv64_abi_cursor_initialize_for_return(
-                program, function->return_type, &return_cursor, &return_value) ||
-            !core_frame_plan_parameters(program, function, frame, &return_cursor)) {
+        if (ready == NULL) {
+            if (!minic_riscv64_function_abi_plan_build(
+                    program, function, &local_plan))
+                return false;
+            ready = &local_plan;
+        }
+        if (!ready->prepared ||
+            ready->parameter_location_count != function->parameter_count ||
+            (function->parameter_count != 0U &&
+             ready->parameter_locations == NULL)) {
+            minic_riscv64_function_abi_plan_destroy(&local_plan);
             return false;
         }
+        return_value = ready->return_value;
+        frame->parameter_locations = ready->parameter_locations;
+        frame->parameter_location_count = ready->parameter_location_count;
+        frame->named_parameter_cursor = ready->named_parameter_cursor;
+        frame->has_named_parameter_cursor = true;
+        ready->parameter_locations = NULL;
+        ready->parameter_location_count = 0U;
+        ready->prepared = false;
+        minic_riscv64_function_abi_plan_destroy(&local_plan);
         if (return_value.kind == MINIC_RISCV64_ABI_VALUE_INDIRECT) {
             if (!minic_type_is_record(function->return_type) ||
                 return_value.storage_size <= 16U || return_value.slot_count != 1U ||
@@ -428,6 +417,13 @@ bool minic_riscv64_core_frame_initialize(const MinicC0Program *program,
                       function->object_count);
     }
     return true;
+}
+
+bool minic_riscv64_core_frame_initialize(
+    const MinicC0Program *program, const MinicCoreFunction *function,
+    MinicRiscv64CoreFrame *frame) {
+    return minic_riscv64_core_frame_initialize_prepared(
+        program, function, frame, NULL);
 }
 
 void minic_riscv64_core_frame_destroy(MinicRiscv64CoreFrame *frame) {

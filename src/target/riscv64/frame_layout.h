@@ -4,6 +4,7 @@
 #include "frontend/ast.h"
 #include "target/riscv64/asm_plan.h"
 #include "target/riscv64/abi.h"
+#include "target/riscv64/function_abi_plan.h"
 #include "target/common/core_object_storage.h"
 #include <stdbool.h>
 #include <stddef.h>
@@ -50,6 +51,11 @@ typedef struct MinicRiscv64CoreFrame {
 
 bool minic_riscv64_core_frame_initialize(
     const MinicC0Program *, const MinicCoreFunction *, MinicRiscv64CoreFrame *);
+/* Consume a prevalidated ABI plan. This transfers ownership of parameter
+ * locations to the frame; the input plan becomes empty on success. */
+bool minic_riscv64_core_frame_initialize_prepared(
+    const MinicC0Program *, const MinicCoreFunction *,
+    MinicRiscv64CoreFrame *, MinicRiscv64FunctionAbiPlan *);
 void minic_riscv64_core_frame_destroy(MinicRiscv64CoreFrame *);
 bool minic_riscv64_core_frame_parameter_location(
     const MinicRiscv64CoreFrame *, size_t, MinicRiscv64AbiArgumentLocation *);
