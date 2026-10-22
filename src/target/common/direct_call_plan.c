@@ -1,4 +1,5 @@
 #include "target/common/direct_call_plan.h"
+#include "target/common/core_call_view.h"
 #include "target/common/lp64_aggregate.h"
 #include <stdint.h>
 #include <string.h>
@@ -145,47 +146,20 @@ bool minic_lp64_plan_direct_call(const MinicC0Program *program,
     MinicDirectLP64IndirectRecord indirect_record,
     MinicLP64ArgumentPlan *plan) {
     MinicType types[MINIC_DIRECT_LP64_MAX_CALL_ARGUMENTS];
-    size_t begin, count, fixed, j;
-    bool variadic;
-    if (fn == NULL || call == NULL) return false;
-    if (call->kind == MINIC_CORE_INSTRUCTION_CALL) {
-        const MinicCoreCallee *callee;
-        if (call->value.call.callee_id >= fn->callee_count) return false;
-        callee = &fn->callees[call->value.call.callee_id];
-        begin = call->value.call.argument_begin;
-        count = call->value.call.argument_count;
-        fixed = callee->parameter_count;
-        variadic = callee->is_variadic;
-    } else if (call->kind == MINIC_CORE_INSTRUCTION_INDIRECT_CALL) {
-        const MinicCoreCallSignature *signature;
-        if (call->value.indirect_call.signature_id >= fn->call_signature_count)
-            return false;
-        signature = &fn->call_signatures[call->value.indirect_call.signature_id];
-        begin = call->value.indirect_call.argument_begin;
-        count = call->value.indirect_call.argument_count;
-        fixed = signature->parameter_count;
-        variadic = signature->is_variadic;
-    } else return false;
-    if (count > MINIC_DIRECT_LP64_MAX_CALL_ARGUMENTS || begin > fn->call_argument_count ||
-        count > fn->call_argument_count - begin ||
-        (count != 0U && fn->call_arguments == NULL))
+    MinicCoreCallView view;
+    size_t count, j;
+    if (!minic_core_call_view_build(fn, call, &view) ||
+        view.argument_count > MINIC_DIRECT_LP64_MAX_CALL_ARGUMENTS)
         return false;
+    count = view.argument_count;
     for (j = 0U; j < count; ++j) {
-        const MinicCoreCallArgument *arg = &fn->call_arguments[begin + j];
-        if (arg->kind == MINIC_CORE_CALL_ARGUMENT_OBJECT) {
-            if (arg->value.object_id >= fn->object_count ||
-                fn->objects == NULL) return false;
-            types[j] = fn->objects[arg->value.object_id].type;
-            if (!minic_type_is_record(types[j])) return false;
-        } else if (arg->kind == MINIC_CORE_CALL_ARGUMENT_VALUE) {
-            if (arg->value.value_id >= fn->value_count ||
-                fn->values == NULL) return false;
-            types[j] = fn->values[arg->value.value_id].type;
-            if (minic_type_is_record(types[j])) return false;
-        } else return false;
+        const MinicCoreCallArgument *arg = &view.arguments[j];
+        if (!minic_core_call_argument_actual_type(fn, arg, &types[j]))
+            return false;
     }
-    return minic_lp64_plan_types(program, target, types, count, fixed,
-                                variadic, abi, indirect_record, plan);
+    return minic_lp64_plan_types(program, target, types, count,
+                                view.parameter_count, view.is_variadic,
+                                abi, indirect_record, plan);
 }
 
 /* One-time per-function ingress planning. All function parameters are named

@@ -1,4 +1,5 @@
 #include "target/riscv64/call_emit.h"
+#include "target/common/core_call_view.h"
 #include "target/riscv64/abi.h"
 #include "target/riscv64/frame_access.h"
 #include "target/riscv64/frame_requirements.h"
@@ -566,15 +567,18 @@ bool minic_riscv64_emit_direct_call(FILE *file,
                       const MinicCoreFunction *function,
                       const MinicRiscv64CoreFrame *frame,
                       const MinicCoreInstruction *instruction) {
+    MinicCoreCallView call;
     const MinicCoreCallee *callee;
     MinicRiscv64AbiCursor cursor;
     MinicRiscv64AbiValue return_value;
     if (file == NULL || program == NULL || function == NULL || frame == NULL ||
         instruction == NULL || instruction->kind != MINIC_CORE_INSTRUCTION_CALL ||
-        !minic_riscv64_core_direct_call_supported(program, function, instruction)) {
+        !minic_riscv64_core_direct_call_supported(program, function, instruction) ||
+        !minic_core_call_view_build(function, instruction, &call) ||
+        call.callee == NULL) {
         return false;
     }
-    callee = &function->callees[instruction->value.call.callee_id];
+    callee = call.callee;
     if (!minic_riscv64_abi_cursor_initialize_for_return(
             program, callee->return_type, &cursor, &return_value)) {
         return false;
@@ -591,10 +595,9 @@ bool minic_riscv64_emit_direct_call(FILE *file,
     }
     if (!emit_core_call_arguments(
             file, program, function, frame,
-            instruction->value.call.argument_begin,
-            instruction->value.call.argument_count,
-            callee->parameter_types, callee->parameter_count,
-            callee->is_variadic, true, &cursor))
+            call.argument_begin, call.argument_count,
+            call.parameter_types, call.parameter_count,
+            call.is_variadic, true, &cursor))
         return false;
     if (fprintf(file, "  call %s\n", callee->name) < 0) {
         return false;
@@ -652,25 +655,27 @@ bool minic_riscv64_emit_indirect_call(FILE *file,
                                const MinicCoreFunction *function,
                                const MinicRiscv64CoreFrame *frame,
                                const MinicCoreInstruction *instruction) {
+    MinicCoreCallView call;
     const MinicCoreCallSignature *signature;
     MinicRiscv64AbiCursor cursor;
     MinicRiscv64AbiValue return_value;
     if (file == NULL || program == NULL || function == NULL || frame == NULL ||
         instruction == NULL || instruction->kind != MINIC_CORE_INSTRUCTION_INDIRECT_CALL ||
-        !minic_riscv64_core_indirect_call_supported(program, function, instruction)) {
+        !minic_riscv64_core_indirect_call_supported(program, function, instruction) ||
+        !minic_core_call_view_build(function, instruction, &call) ||
+        call.signature == NULL) {
         return false;
     }
-    signature = &function->call_signatures[instruction->value.indirect_call.signature_id];
+    signature = call.signature;
     if (!minic_riscv64_abi_cursor_initialize_for_return(
             program, signature->return_type, &cursor, &return_value)) {
         return false;
     }
     if (!emit_core_call_arguments(
             file, program, function, frame,
-            instruction->value.indirect_call.argument_begin,
-            instruction->value.indirect_call.argument_count,
-            signature->parameter_types, signature->parameter_count,
-            signature->is_variadic, false, &cursor))
+            call.argument_begin, call.argument_count,
+            call.parameter_types, call.parameter_count,
+            call.is_variadic, false, &cursor))
         return false;
     if (!minic_riscv64_frame_load_value(file, frame, instruction->value.indirect_call.callee, "t0") ||
         fprintf(file, "  jalr ra, t0, 0\n") < 0) {

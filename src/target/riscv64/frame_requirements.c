@@ -1,4 +1,5 @@
 #include "target/riscv64/frame_requirements.h"
+#include "target/common/core_call_view.h"
 #include "target/riscv64/abi.h"
 #include <stdint.h>
 
@@ -60,24 +61,8 @@ bool minic_riscv64_core_call_argument_type(
         *argument_type = parameter_types[argument_index];
         return true;
     }
-    if (!is_variadic)
-        return false;
-    if (argument->kind == MINIC_CORE_CALL_ARGUMENT_VALUE) {
-        MinicCoreValueId id = argument->value.value_id;
-        if (id >= function->value_count || function->values == NULL)
-            return false;
-        *argument_type = function->values[id].type;
-        return true;
-    }
-    if (argument->kind == MINIC_CORE_CALL_ARGUMENT_OBJECT) {
-        MinicCoreObjectId id = argument->value.object_id;
-        if (id >= function->object_count || function->objects == NULL ||
-            !minic_type_is_record(function->objects[id].type))
-            return false;
-        *argument_type = function->objects[id].type;
-        return true;
-    }
-    return false;
+    return is_variadic &&
+           minic_core_call_argument_actual_type(function, argument, argument_type);
 }
 
 bool minic_riscv64_core_call_outgoing_stack_size(const MinicC0Program *program,
@@ -93,64 +78,31 @@ bool minic_riscv64_core_call_outgoing_stack_size(const MinicC0Program *program,
     for (instruction_index = 0U; instruction_index < function->instruction_count;
          ++instruction_index) {
         const MinicCoreInstruction *instruction = &function->instructions[instruction_index];
-        const MinicType *parameter_types;
-        size_t parameter_count;
-        bool is_variadic;
-        size_t argument_begin;
-        size_t argument_count;
-        MinicType return_type;
+        MinicCoreCallView call;
         MinicRiscv64AbiCursor cursor;
         MinicRiscv64AbiValue return_value;
         size_t argument_index;
 
-        if (instruction->kind == MINIC_CORE_INSTRUCTION_CALL) {
-            const MinicCoreCallee *callee;
-            if (instruction->value.call.callee_id >= function->callee_count ||
-                instruction->value.call.argument_begin > function->call_argument_count ||
-                instruction->value.call.argument_count >
-                    function->call_argument_count - instruction->value.call.argument_begin) {
-                return false;
-            }
-            callee = &function->callees[instruction->value.call.callee_id];
-            parameter_types = callee->parameter_types;
-            parameter_count = callee->parameter_count;
-            is_variadic = callee->is_variadic;
-            argument_begin = instruction->value.call.argument_begin;
-            argument_count = instruction->value.call.argument_count;
-            return_type = callee->return_type;
-        } else if (instruction->kind == MINIC_CORE_INSTRUCTION_INDIRECT_CALL) {
-            const MinicCoreCallSignature *signature;
-            if (instruction->value.indirect_call.signature_id >= function->call_signature_count ||
-                instruction->value.indirect_call.argument_begin > function->call_argument_count ||
-                instruction->value.indirect_call.argument_count >
-                    function->call_argument_count - instruction->value.indirect_call.argument_begin) {
-                return false;
-            }
-            signature = &function->call_signatures[instruction->value.indirect_call.signature_id];
-            parameter_types = signature->parameter_types;
-            parameter_count = signature->parameter_count;
-            is_variadic = signature->is_variadic;
-            argument_begin = instruction->value.indirect_call.argument_begin;
-            argument_count = instruction->value.indirect_call.argument_count;
-            return_type = signature->return_type;
-        } else {
+        if (instruction->kind != MINIC_CORE_INSTRUCTION_CALL &&
+            instruction->kind != MINIC_CORE_INSTRUCTION_INDIRECT_CALL)
             continue;
-        }
+        if (!minic_core_call_view_build(function, instruction, &call))
+            return false;
 
         if (!minic_riscv64_abi_cursor_initialize_for_return(
-                program, return_type, &cursor, &return_value)) {
+                program, call.return_type, &cursor, &return_value)) {
             return false;
         }
         (void)return_value;
-        for (argument_index = 0U; argument_index < argument_count; ++argument_index) {
+        for (argument_index = 0U; argument_index < call.argument_count; ++argument_index) {
             const MinicCoreCallArgument *argument =
-                &function->call_arguments[argument_begin + argument_index];
+                &call.arguments[argument_index];
             MinicRiscv64AbiArgumentLocation location;
             MinicType argument_type;
             bool is_fixed_parameter;
             if (!minic_riscv64_core_call_argument_type(
-                    function, argument, parameter_types, parameter_count,
-                    is_variadic, argument_index, &argument_type,
+                    function, argument, call.parameter_types, call.parameter_count,
+                    call.is_variadic, argument_index, &argument_type,
                     &is_fixed_parameter))
                 return false;
             if (!minic_riscv64_abi_place_argument(

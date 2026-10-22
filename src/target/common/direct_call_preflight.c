@@ -1,4 +1,5 @@
 #include "target/common/direct_call_preflight.h"
+#include "target/common/core_call_view.h"
 #include "target/common/lp64_aggregate.h"
 #include "target/common/lp64_scalar.h"
 #include <stdint.h>
@@ -21,6 +22,7 @@ bool minic_multi_direct_lp64_calls_preflight(
     for (i = 0U; i < fn->instruction_count; ++i) {
         *failed_instruction = i;
         const MinicCoreInstruction *ins = &fn->instructions[i];
+        MinicCoreCallView call;
         const MinicType *parameter_types;
         MinicType return_type;
         size_t j, begin, count, parameter_count;
@@ -65,41 +67,19 @@ bool minic_multi_direct_lp64_calls_preflight(
                     minic_type_equal(fn->values[ins->result].type, ins->type) ? 1 : 0);
             return false;
         }
-        if (ins->kind == MINIC_CORE_INSTRUCTION_CALL) {
-            const MinicCoreCallee *callee;
-            if (ins->value.call.callee_id >= fn->callee_count ||
-                (ins->value.call.result_object != MINIC_CORE_OBJECT_INVALID &&
-                 !small_record_result))
-                return false;
-            callee = &fn->callees[ins->value.call.callee_id];
-            if (callee->name == NULL || callee->name[0] == '\0')
-                return false;
-            begin = ins->value.call.argument_begin;
-            count = ins->value.call.argument_count;
-            return_type = callee->return_type;
-            parameter_types = callee->parameter_types;
-            parameter_count = callee->parameter_count;
-            is_variadic = callee->is_variadic;
-        } else {
-            const MinicCoreCallSignature *sig;
-            MinicType pointee;
-            const MinicCoreValueId function_pointer =
-                ins->value.indirect_call.callee;
-            if (ins->value.indirect_call.signature_id >= fn->call_signature_count ||
-                function_pointer >= fn->value_count ||
-                !minic_type_pointee(fn->values[function_pointer].type, &pointee) ||
-                !minic_type_is_function(pointee))
-                return false;
-            sig = &fn->call_signatures[ins->value.indirect_call.signature_id];
-            if (pointee.function_type_id != sig->function_type_id)
-                return false;
-            begin = ins->value.indirect_call.argument_begin;
-            count = ins->value.indirect_call.argument_count;
-            return_type = sig->return_type;
-            parameter_types = sig->parameter_types;
-            parameter_count = sig->parameter_count;
-            is_variadic = sig->is_variadic;
-        }
+        if (!minic_core_call_view_build(fn, ins, &call))
+            return false;
+        if (call.callee != NULL &&
+            ((ins->value.call.result_object != MINIC_CORE_OBJECT_INVALID &&
+              !small_record_result) ||
+             call.callee->name == NULL || call.callee->name[0] == '\0'))
+            return false;
+        begin = call.argument_begin;
+        count = call.argument_count;
+        return_type = call.return_type;
+        parameter_types = call.parameter_types;
+        parameter_count = call.parameter_count;
+        is_variadic = call.is_variadic;
         /* Batch Lua triage: expose actual ABI gate dimensions rather than
          * spending a runner cycle on each failed translation unit. */
         if (getenv("MINIC_BACKEND_CENSUS") != NULL && count > 8U)
@@ -128,7 +108,7 @@ bool minic_multi_direct_lp64_calls_preflight(
             (parameter_count != 0U && parameter_types == NULL))
             return false;
         for (j = 0U; j < count; ++j) {
-            const MinicCoreCallArgument *arg = &fn->call_arguments[begin + j];
+            const MinicCoreCallArgument *arg = &call.arguments[j];
             MinicType actual;
             size_t actual_width;
             bool actual_signed;
