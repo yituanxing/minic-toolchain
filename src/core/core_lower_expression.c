@@ -104,64 +104,14 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
             minic_core_lower_try_bit_field_read(context, expression, value_id, &matched);
         if (matched || status != MINIC_CORE_LOWER_OK) return status;
     }
-    /* BATCH_R_RECORD_CALL_MEMBER_VALUE: projecting a scalar field from a
-       direct aggregate-returning call consumes the call's existing result
-       object. Form its address, project the field, then load the scalar value.
-       This is a generic aggregate-rvalue projection; indirect aggregate calls
-       and bit-field projections remain fail-closed until their own seams exist. */
-    if (expression->kind == MINIC_EXPRESSION_MEMBER &&
-        core_memory_scalar_type(expression->type)) {
-        const MinicExpression *base;
-        const MinicRecord *record;
-        const MinicRecordField *field;
-        MinicCoreObjectId result_object;
-        MinicCoreValueId base_address;
-        MinicCoreValueId field_address;
-        MinicCoreLowerStatus status;
-        MinicType pointer_type;
-        MinicType value_type;
 
-        base = minic_c0_program_expression(context->body->program, expression->value.member.base);
-        record = minic_c0_program_record(context->body->program, expression->value.member.record_id);
-        field = minic_c0_record_field(record, expression->value.member.field_index);
-        if (base != NULL && base->kind == MINIC_EXPRESSION_CALL &&
-            base->value.call.function_id != MINIC_FUNCTION_INVALID &&
-            minic_type_is_record(base->type) &&
-            base->type.record_id == expression->value.member.record_id &&
-            record != NULL && field != NULL && !field->is_bit_field &&
-            minic_type_unqualified(expression->type, &value_type) &&
-            core_memory_scalar_type(value_type)) {
-            status = minic_core_lower_direct_record_call_object(context, base, &result_object);
-            if (status != MINIC_CORE_LOWER_OK) {
-                return status;
-            }
-            if (!minic_type_pointer_to(base->type, &pointer_type)) {
-                return MINIC_CORE_LOWER_ERROR;
-            }
-            (void)memset(&instruction, 0, sizeof(instruction));
-            instruction.kind = MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS;
-            instruction.span = base->span;
-            instruction.type = pointer_type;
-            instruction.result = MINIC_CORE_VALUE_INVALID;
-            instruction.value.object_id = result_object;
-            if (!minic_core_function_append_value_instruction(
-                    context->function, context->block_id, &instruction, &base_address)) {
-                return MINIC_CORE_LOWER_ERROR;
-            }
-            status = minic_core_lower_internal_append_field_address(context,
-                                          expression->span,
-                                          base_address,
-                                          expression->value.member.record_id,
-                                          expression->value.member.field_index,
-                                          expression->type,
-                                          &field_address);
-            if (status != MINIC_CORE_LOWER_OK) {
-                return status;
-            }
-            return minic_core_lower_internal_emit_scalar_load(
-                context, expression->span, value_type, field_address,
-                minic_type_is_volatile(expression->type), value_id);
-        }
+    /* Aggregate call results have record-owned materialization semantics.
+     * All unmatched member lvalues still follow the ordinary address path. */
+    {
+        bool handled = false;
+        MinicCoreLowerStatus status = minic_core_lower_try_direct_record_member(
+            context, expression, value_id, &handled);
+        if (handled || status != MINIC_CORE_LOWER_OK) return status;
     }
     if (expression->value_category == MINIC_VALUE_LVALUE &&
         core_memory_scalar_type(expression->type)) {
@@ -199,120 +149,14 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
         }
         return lower_expression(context, expression->value.unary.operand, value_id);
     }
-    /* M75_POINTER_COMPOUND_ASSIGNMENT_VALUE: pointer += / -= evaluates
-       the destination lvalue once, loads its current pointer value, applies a
-       scaled integer offset, stores the updated pointer, and yields that value.
-       Keep subtraction explicit in Core: negating an unsigned RHS before
-       pointer.offset would change its width/extension semantics. */
-    if (expression->kind == MINIC_EXPRESSION_COMPOUND_ASSIGNMENT) {
-        const MinicExpression *source;
-        const MinicExpression *target;
-        MinicCoreObjectId address_object;
-        MinicCoreObjectId current_object;
-        MinicCoreValueId address;
-        MinicCoreValueId current;
-        MinicCoreValueId index;
-        MinicCoreValueId updated;
-        MinicCoreLowerStatus status;
-        MinicType address_type;
-        MinicType expression_value_type;
-        MinicType index_type;
-        MinicType stored_type;
-        size_t element_size;
-        bool subtract;
 
-        target = minic_c0_program_expression(
-            context->body->program, expression->value.binary.left);
-        if (target == NULL) {
-            return MINIC_CORE_LOWER_ERROR;
-        }
-        /* M76_POINTER_COMPOUND_DISPATCH: only claim compound assignments whose
-           destination is actually a pointer. Integer +=/-=/&=/|=/... must
-           continue to the established M51 integer compound-assignment path. */
-        if (minic_type_unqualified(target->type, &stored_type) &&
-            minic_type_is_pointer(stored_type)) {
-            source = minic_c0_program_expression(
-                context->body->program, expression->value.binary.right);
-            subtract = expression->value.binary.operator_kind == MINIC_BINARY_SUBTRACT;
-            if (source == NULL || target->value_category != MINIC_VALUE_LVALUE ||
-                minic_type_is_const(target->type) ||
-                (expression->value.binary.operator_kind != MINIC_BINARY_ADD &&
-                 expression->value.binary.operator_kind != MINIC_BINARY_SUBTRACT) ||
-                !minic_type_unqualified(expression->type, &expression_value_type) ||
-                !minic_type_equal(expression_value_type, stored_type) ||
-                !core_scalar_expression_value_type(context->body, source, &index_type) ||
-                !minic_type_is_integer(index_type) ||
-                !minic_c0_pointer_arithmetic_element_size(context->body->program,
-                                                          core_data_layout(context),
-                                                          stored_type,
-                                                          &element_size)) {
-                return MINIC_CORE_LOWER_UNSUPPORTED;
-            }
-            status = lower_address(context, expression->value.binary.left, &address);
-            if (status != MINIC_CORE_LOWER_OK) {
-                return status;
-            }
-            status = minic_core_lower_internal_emit_scalar_load(
-                context, expression->span, stored_type, address,
-                minic_type_is_volatile(target->type), &current);
-            if (status != MINIC_CORE_LOWER_OK) return status;
-            /* M126A_POINTER_COMPOUND_BLOCK_LOCAL: the RHS may create CFG (for
-               example a call with a conditional argument). Preserve both the
-               destination address and its pre-update pointer value before
-               lowering that RHS so POINTER_OFFSET and STORE are formed from
-               values reloaded in the final RHS block. */
-            if (address >= context->function->value_count) {
-                return MINIC_CORE_LOWER_ERROR;
-            }
-            address_type = context->function->values[address].type;
-            status = minic_core_lower_internal_spill_scalar_value(
-                context, target->span, address_type, address, &address_object);
-            if (status != MINIC_CORE_LOWER_OK) {
-                return status;
-            }
-            status = minic_core_lower_internal_spill_scalar_value(
-                context, target->span, stored_type, current, &current_object);
-            if (status != MINIC_CORE_LOWER_OK) {
-                return status;
-            }
-            status = lower_expression(context, expression->value.binary.right, &index);
-            if (status != MINIC_CORE_LOWER_OK) {
-                return status;
-            }
-            if (index >= context->function->value_count ||
-                !minic_type_equal(context->function->values[index].type, index_type)) {
-                return MINIC_CORE_LOWER_ERROR;
-            }
-            status = minic_core_lower_internal_reload_scalar_value(
-                context, target->span, stored_type, current_object, &current);
-            if (status != MINIC_CORE_LOWER_OK) {
-                return status;
-            }
-            status = minic_core_lower_internal_reload_scalar_value(
-                context, target->span, address_type, address_object, &address);
-            if (status != MINIC_CORE_LOWER_OK) {
-                return status;
-            }
-            (void)memset(&instruction, 0, sizeof(instruction));
-            instruction.kind = MINIC_CORE_INSTRUCTION_POINTER_OFFSET;
-            instruction.span = expression->span;
-            instruction.type = stored_type;
-            instruction.result = MINIC_CORE_VALUE_INVALID;
-            instruction.value.pointer_offset.base = current;
-            instruction.value.pointer_offset.index = index;
-            instruction.value.pointer_offset.element_size = element_size;
-            instruction.value.pointer_offset.subtract = subtract;
-            if (!minic_core_function_append_value_instruction(
-                    context->function, context->block_id, &instruction, &updated)) {
-                return MINIC_CORE_LOWER_ERROR;
-            }
-            status = minic_core_lower_internal_emit_scalar_store(
-                context, expression->span, address, updated,
-                minic_type_is_volatile(target->type));
-            if (status != MINIC_CORE_LOWER_OK) return status;
-            *value_id = updated;
-            return MINIC_CORE_LOWER_OK;
-        }
+    /* Compound pointer updates share the assignment RMW owner, which preserves
+     * the address and pre-update value across a CFG-producing RHS. */
+    {
+        bool handled = false;
+        MinicCoreLowerStatus status = minic_core_lower_try_pointer_compound_assignment(
+            context, expression, value_id, &handled);
+        if (handled || status != MINIC_CORE_LOWER_OK) return status;
     }
 
     /* M115_CHAINED_BIT_FIELD_ASSIGNMENT: a simple scalar assignment has one
