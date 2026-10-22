@@ -46,7 +46,7 @@ int main(void) {
     if (d_to_u64(d) != 42UL || d_to_u64(e) != 0UL) return 14;
     if (one_half() != 1.5f || half() != 0.5) return 15;
     if (!(minus_zero() == 0.0f)) return 16;
-    if (fp_machine_family() != 0) return fp_machine_family();
+    { int fp_error = fp_machine_family(); if (fp_error != 0) return fp_error; }
     return 42;
 }
 SRC
