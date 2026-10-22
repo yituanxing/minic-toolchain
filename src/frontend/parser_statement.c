@@ -883,11 +883,6 @@ static bool parse_gnu_statement_attribute(MinicParser *parser) {
     return true;
 }
 
-static bool token_starts_local_declaration(const MinicParser *parser) {
-    return parser != NULL &&
-           minic_parser_token_starts_declaration_specifiers(parser, parser->current);
-}
-
 static bool block_record_starts_standalone_declaration(MinicParser *parser, bool *is_standalone) {
     MinicParser probe;
     size_t brace_depth;
@@ -1042,7 +1037,7 @@ bool minic_parser_parse_statement(MinicParser *parser, bool allow_declaration) {
             return minic_parser_parse_record_definition(parser);
         }
     }
-    if (token_starts_local_declaration(parser)) {
+    if (minic_parser_token_starts_declaration_specifiers(parser, parser->current)) {
         if (!allow_declaration) {
             minic_parser_error(parser, "a declaration requires a compound statement scope");
             return false;
