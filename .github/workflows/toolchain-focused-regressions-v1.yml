@@ -672,3 +672,5 @@ jobs:
           path: build/toolchain-focused-t1-verdict/outcomes.tsv
           if-no-files-found: warn
           retention-days: 7
+
+# One-time main-only branch retirement audit uses this focused regression gate.

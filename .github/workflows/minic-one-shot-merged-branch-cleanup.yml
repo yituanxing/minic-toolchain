@@ -31,7 +31,7 @@ jobs:
         run: |
           set -Eeuo pipefail
           python3 - <<'PY_MAIN_ONLY'
-          import json, os, re, subprocess, urllib.error, urllib.parse, urllib.request
+          import json, os, re, subprocess, time, urllib.error, urllib.parse, urllib.request
           
           repo = os.environ["GH_REPO"]
           token = os.environ["GH_TOKEN"]
@@ -119,6 +119,7 @@ jobs:
               if verified["object"]["sha"] != sha:
                   raise RuntimeError("Cannot verify archive: " + tag)
               print("MAIN_ONLY_ARCHIVED " + name + " -> " + tag + "@" + sha[:12], flush=True)
+              time.sleep(1.0)
           
           require_main_sha()
           if paged("/pulls?state=open"):
@@ -136,6 +137,7 @@ jobs:
               api("/git/refs/heads/" + enc(name), method="DELETE")
               deleted += 1
               print("MAIN_ONLY_DELETED " + name, flush=True)
+              time.sleep(1.0)  # respect GitHub secondary mutation rate limits
           
           remaining = [b["name"] for b in paged("/branches")]
           if remaining != ["main"]:
