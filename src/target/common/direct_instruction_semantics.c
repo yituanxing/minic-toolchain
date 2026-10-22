@@ -165,6 +165,7 @@ bool minic_multi_direct_result_slot_offset(
  * minic_multi_direct_floating_shape gate, never by opcode alone. */
 bool minic_multi_direct_fp_instruction_kind(MinicCoreInstructionKind kind) {
     switch (kind) {
+    case MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT:
     case MINIC_CORE_INSTRUCTION_DOUBLE_EQUAL:
     case MINIC_CORE_INSTRUCTION_DOUBLE_LESS:
     case MINIC_CORE_INSTRUCTION_DOUBLE_LESS_EQUAL:
@@ -195,6 +196,10 @@ bool minic_multi_direct_floating_shape(
     if (fn == NULL || ins == NULL)
         return false;
     switch (ins->kind) {
+    case MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT:
+        return minic_type_is_float(ins->type) ||
+               minic_type_is_double(ins->type) ||
+               minic_type_is_long_double(ins->type);
     case MINIC_CORE_INSTRUCTION_DOUBLE_EQUAL:
     case MINIC_CORE_INSTRUCTION_DOUBLE_LESS:
     case MINIC_CORE_INSTRUCTION_DOUBLE_LESS_EQUAL:
