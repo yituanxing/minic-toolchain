@@ -1332,3 +1332,25 @@ local:
 }
 EOF
 check_exit forward_goto_local_label 42
+
+# Branch, loop and switch parsing must preserve AST block ownership,
+# fallthrough, break/continue targets and for expression side-effect order.
+cat > "$tempdir/statement_control_cfg_dataflow.i" <<'EOF'
+int main(void) {
+    int total = 0;
+    int i = 0;
+    for (; i < 4; ++i) {
+        if (i == 1) continue;
+        switch (i) {
+            case 0: total += 2; break;
+            case 2: total += 20; break;
+            default: total += 4;
+        }
+    }
+    i = 0;
+    while (i < 2) { total += 3; ++i; }
+    do { total += 7; } while (0);
+    return total + 3;
+}
+EOF
+check_exit statement_control_cfg_dataflow 42
