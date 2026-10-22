@@ -132,3 +132,38 @@ Kbuild fixtures remain byte-identical. Next distinct failure families are
 `context_str()` const qualifier downgrade in two SELinux files,
 `sepol_set_callback` callback format declarator, x86 asm clobbers, and Core
 support for `cpuid` and variadic `bb_verror_msg`.
+
+## Native x86 completion: 590/593 current BusyBox C owners
+
+Canonical original BusyBox 1.36.1 GNU Kbuild/957-option current-main
+acceptance [#39873618503](https://github.com/yituanxing/minic-toolchain/actions/runs/39873618503)
+returned `success` on `ee4a83a5361f2ac0cd1697f74212dd97f8841e45`.
+
+- `BUSYBOX_MIXED_BULK=PASS MiniC_owners=590 GCC_fallback=3 original_full_Kbuild=1 eleven_fixture_byte_exact=1`.
+- `BUSYBOX_ALLYES_FRONTIER=DISCOVERY enabled_symbols=957 attempted_C_TUs=594 mini_objects=591 cpp_fail=0 minic_fail=3 asm_fail=0 gcc_fail=0 gcc_full_build=PASS`.
+- Dedicated genuine executable differential: `X86_SYSV_RECORD_ABI=PASS`
+  for libc `div_t` return in RAX and >16B struct by-value stack arguments.
+  The GNU `const char *`→legacy `char *` assignment (diagnosed by GNU)
+  and function-pointer format attribute also compile and run identically.
+  Negative check `X86_GNU_CONST_DISCARD_NEGATIVE=PASS` rejects nested pointer
+  and volatile qualifier drops.
+- Source and linker provenance still correspond to original BusyBox.
+  **Three** unresolved C owners remain (do not claim full MiniC BusyBox):
+  `libbb/hash_md5_sha.c` / `cpuid()`: multi-output GNU inline asm;
+  `libbb/verror_msg.c` / `bb_verror_msg()`: x86 va_list/Core lowering;
+  `networking/tls_sp_c32.c`: GNU inline asm cc/dx clobber and mixed
+  constraints. These need real Core→x86 instruction/ABI work, not preprocessor
+  rewrites or pretending GNU fallback is MiniC.
+- The current RV64 Linux seven-shard, GNU-link and QEMU P1 attestation is
+  successful at [#39823830749](https://github.com/yituanxing/minic-toolchain/actions/runs/39823830749)
+  and the retry [#39825131467](https://github.com/yituanxing/minic-toolchain/actions/runs/39825131467).
+  This x86/frontend change still needs its full AArch64/LoongArch64 focused
+  regression completion; the strict native gate is already green at
+  [#39873618508](https://github.com/yituanxing/minic-toolchain/actions/runs/39873618508).
+
+CI ownership: native x86 strict is routine; original full BusyBox 957-option
+is selected for x86 target, parser statement/parameter declaration, or
+existing BusyBox replay scripts; the six original x86 software projects
+are opt-in since they already passed with unchanged source. Pure x86 ISA
+changes do not trigger seven Linux shards or the two 581-owner new-ISA QEMU
+regressions. Only `main` branch remains.
