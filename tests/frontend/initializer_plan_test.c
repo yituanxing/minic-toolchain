@@ -1,147 +1,138 @@
 #include "frontend/initializer.h"
-
 #include <assert.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 
-static void test_fixed_bound_positional_and_designated_sequence(void) {
+/* Naive source-ordered reference independent of the reverse DSU algorithm. */
+static void check_reference(const MinicArrayInitializerPlan *plan,
+                            const MinicArrayInitializerResolved *r) {
+    size_t i, action;
+    const size_t extent = minic_array_initializer_plan_element_count(plan);
+    size_t *counts = NULL;
+    assert(r->element_count == extent && r->action_count == plan->action_count);
+    if (plan->action_count != 0U) {
+        counts = (size_t *)calloc(plan->action_count, sizeof(*counts));
+        assert(counts != NULL);
+    }
+    for (i = 0U; i < extent; ++i) {
+        size_t expected = MINIC_INITIALIZER_ACTION_INVALID;
+        for (action = 0U; action < plan->action_count; ++action) {
+            if (i >= plan->actions[action].first_index &&
+                i <= plan->actions[action].last_index)
+                expected = action;
+        }
+        assert(r->owners[i] == expected);
+        if (expected != MINIC_INITIALIZER_ACTION_INVALID)
+            ++counts[expected];
+    }
+    for (action = 0U; action < plan->action_count; ++action) {
+        size_t seen = 0U, previous = MINIC_INITIALIZER_ACTION_INVALID;
+        assert(r->final_counts[action] == counts[action]);
+        for (i = r->first_owned[action];
+             i != MINIC_INITIALIZER_ACTION_INVALID; i = r->next_owned[i]) {
+            assert(i < extent && seen < extent);
+            assert(r->owners[i] == action);
+            assert(previous == MINIC_INITIALIZER_ACTION_INVALID || i > previous);
+            previous = i;
+            ++seen;
+        }
+        assert(seen == counts[action]);
+    }
+    free(counts);
+}
+
+static void test_fixed_and_invalid(void) {
     MinicArrayInitializerPlan plan;
-    size_t designated_action;
-    size_t positional_action;
-    size_t owner;
-
+    MinicArrayInitializerResolved r = {0};
+    size_t id = 77U;
     minic_array_initializer_plan_initialize(&plan, 4U, false);
-    assert(minic_array_initializer_plan_element_count(&plan) == 4U);
-
-    assert(minic_array_initializer_plan_add_designated(&plan, 1U, 2U, &designated_action));
-    assert(designated_action == 0U);
-    assert(plan.next_index == 3U);
-
-    assert(minic_array_initializer_plan_add_positional(&plan, &positional_action));
-    assert(positional_action == 1U);
+    assert(minic_array_initializer_plan_add_designated(&plan, 1U, 2U, &id) && id == 0U);
+    assert(minic_array_initializer_plan_add_positional(&plan, &id) && id == 1U);
     assert(plan.next_index == 4U);
-    assert(plan.action_count == 2U);
-
-    assert(minic_array_initializer_plan_final_owner(&plan, 0U, &owner));
-    assert(owner == MINIC_INITIALIZER_ACTION_INVALID);
-    assert(minic_array_initializer_plan_final_owner(&plan, 1U, &owner));
-    assert(owner == designated_action);
-    assert(minic_array_initializer_plan_final_owner(&plan, 2U, &owner));
-    assert(owner == designated_action);
-    assert(minic_array_initializer_plan_final_owner(&plan, 3U, &owner));
-    assert(owner == positional_action);
-
-    assert(minic_array_initializer_plan_action_final_count(&plan, designated_action) == 2U);
-    assert(minic_array_initializer_plan_action_final_count(&plan, positional_action) == 1U);
-
-    assert(!minic_array_initializer_plan_add_positional(&plan, &owner));
-    assert(plan.action_count == 2U);
-    assert(plan.next_index == 4U);
-    assert(!minic_array_initializer_plan_add_designated(&plan, 4U, 4U, &owner));
-    assert(!minic_array_initializer_plan_add_designated(&plan, 3U, 2U, &owner));
-    assert(!minic_array_initializer_plan_add_designated(&plan, 0U, SIZE_MAX, &owner));
-    assert(plan.action_count == 2U);
-
-    assert(!minic_array_initializer_plan_final_owner(&plan, 4U, &owner));
-    assert(!minic_array_initializer_plan_action_owns(&plan, 99U, 1U));
-    assert(minic_array_initializer_plan_action_final_count(&plan, 99U) == 0U);
-
-    minic_array_initializer_plan_destroy(&plan);
-}
-
-static void test_inferred_bound_overlap_and_last_wins(void) {
-    MinicArrayInitializerPlan plan;
-    size_t first_action;
-    size_t range_action;
-    size_t continued_action;
-    size_t overwrite_action;
-    size_t owner;
-
-    minic_array_initializer_plan_initialize(&plan, 0U, true);
-    assert(minic_array_initializer_plan_element_count(&plan) == 0U);
-
-    assert(minic_array_initializer_plan_add_positional(&plan, &first_action));
-    assert(first_action == 0U);
-    assert(minic_array_initializer_plan_element_count(&plan) == 1U);
-
-    assert(minic_array_initializer_plan_add_designated(&plan, 3U, 5U, &range_action));
-    assert(range_action == 1U);
-    assert(plan.next_index == 6U);
-    assert(minic_array_initializer_plan_element_count(&plan) == 6U);
-
-    assert(minic_array_initializer_plan_add_positional(&plan, &continued_action));
-    assert(continued_action == 2U);
-    assert(plan.next_index == 7U);
-    assert(minic_array_initializer_plan_element_count(&plan) == 7U);
-
-    assert(minic_array_initializer_plan_add_designated(&plan, 4U, 6U, &overwrite_action));
-    assert(overwrite_action == 3U);
-    assert(plan.next_index == 7U);
-    assert(minic_array_initializer_plan_element_count(&plan) == 7U);
-
-    assert(minic_array_initializer_plan_final_owner(&plan, 0U, &owner));
-    assert(owner == first_action);
-    assert(minic_array_initializer_plan_final_owner(&plan, 1U, &owner));
-    assert(owner == MINIC_INITIALIZER_ACTION_INVALID);
-    assert(minic_array_initializer_plan_final_owner(&plan, 2U, &owner));
-    assert(owner == MINIC_INITIALIZER_ACTION_INVALID);
-    assert(minic_array_initializer_plan_final_owner(&plan, 3U, &owner));
-    assert(owner == range_action);
-    assert(minic_array_initializer_plan_final_owner(&plan, 4U, &owner));
-    assert(owner == overwrite_action);
-    assert(minic_array_initializer_plan_final_owner(&plan, 5U, &owner));
-    assert(owner == overwrite_action);
-    assert(minic_array_initializer_plan_final_owner(&plan, 6U, &owner));
-    assert(owner == overwrite_action);
-
-    assert(minic_array_initializer_plan_action_final_count(&plan, first_action) == 1U);
-    assert(minic_array_initializer_plan_action_final_count(&plan, range_action) == 1U);
-    assert(minic_array_initializer_plan_action_final_count(&plan, continued_action) == 0U);
-    assert(minic_array_initializer_plan_action_final_count(&plan, overwrite_action) == 3U);
-
-    assert(minic_array_initializer_plan_action_owns(&plan, range_action, 3U));
-    assert(!minic_array_initializer_plan_action_owns(&plan, range_action, 4U));
-    assert(!minic_array_initializer_plan_action_owns(&plan, continued_action, 6U));
-    assert(minic_array_initializer_plan_action_owns(&plan, overwrite_action, 6U));
-
-    minic_array_initializer_plan_destroy(&plan);
-}
-
-static void test_invalid_inputs_do_not_publish_actions(void) {
-    MinicArrayInitializerPlan plan;
-    size_t action_id;
-
-    minic_array_initializer_plan_initialize(&plan, 3U, false);
-
-    action_id = 77U;
-    assert(!minic_array_initializer_plan_add_designated(&plan, 2U, 1U, &action_id));
-    assert(action_id == 77U);
-    assert(plan.action_count == 0U);
-    assert(plan.next_index == 0U);
-
-    assert(!minic_array_initializer_plan_add_designated(&plan, 0U, SIZE_MAX, &action_id));
-    assert(action_id == 77U);
-    assert(plan.action_count == 0U);
-    assert(plan.next_index == 0U);
-
-    assert(!minic_array_initializer_plan_add_designated(&plan, 3U, 3U, &action_id));
-    assert(action_id == 77U);
-    assert(plan.action_count == 0U);
-    assert(plan.next_index == 0U);
-
-    assert(!minic_array_initializer_plan_add_positional(NULL, &action_id));
+    assert(!minic_array_initializer_plan_add_positional(&plan, &id));
+    assert(!minic_array_initializer_plan_add_designated(&plan, 4U, 4U, &id));
+    assert(!minic_array_initializer_plan_add_designated(&plan, 3U, 2U, &id));
+    assert(!minic_array_initializer_plan_add_designated(&plan, 0U, SIZE_MAX, &id));
+    assert(!minic_array_initializer_plan_add_positional(NULL, &id));
     assert(!minic_array_initializer_plan_add_positional(&plan, NULL));
-    assert(!minic_array_initializer_plan_add_designated(NULL, 0U, 0U, &action_id));
-    assert(!minic_array_initializer_plan_final_owner(NULL, 0U, &action_id));
-    assert(!minic_array_initializer_plan_final_owner(&plan, 0U, NULL));
+    assert(!minic_array_initializer_plan_resolve(NULL, &r));
+    assert(!minic_array_initializer_plan_resolve(&plan, NULL));
+    assert(minic_array_initializer_plan_resolve(&plan, &r));
+    check_reference(&plan, &r);
+    assert(r.owners[0] == MINIC_INITIALIZER_ACTION_INVALID);
+    assert(r.owners[1] == 0U && r.owners[2] == 0U && r.owners[3] == 1U);
+    minic_array_initializer_resolved_destroy(&r);
+    minic_array_initializer_plan_destroy(&plan);
+}
 
+static void test_inferred_last_wins(void) {
+    MinicArrayInitializerPlan plan;
+    MinicArrayInitializerResolved r = {0};
+    size_t id;
+    minic_array_initializer_plan_initialize(&plan, 0U, true);
+    assert(minic_array_initializer_plan_add_positional(&plan, &id) && id == 0U);
+    assert(minic_array_initializer_plan_add_designated(&plan, 3U, 5U, &id) && id == 1U);
+    assert(minic_array_initializer_plan_add_positional(&plan, &id) && id == 2U);
+    assert(minic_array_initializer_plan_add_designated(&plan, 4U, 6U, &id) && id == 3U);
+    assert(minic_array_initializer_plan_element_count(&plan) == 7U);
+    assert(minic_array_initializer_plan_resolve(&plan, &r));
+    check_reference(&plan, &r);
+    assert(r.final_counts[0] == 1U && r.final_counts[1] == 1U);
+    assert(r.final_counts[2] == 0U && r.final_counts[3] == 3U);
+    minic_array_initializer_resolved_destroy(&r);
+    minic_array_initializer_plan_destroy(&plan);
+}
+
+static uint32_t random_step(uint32_t *seed) {
+    *seed = *seed * UINT32_C(1664525) + UINT32_C(1013904223);
+    return *seed;
+}
+
+static void test_dense_overlapping_ranges(void) {
+    uint32_t seed = UINT32_C(0x52135487);
+    size_t trial;
+    for (trial = 0U; trial < 128U; ++trial) {
+        MinicArrayInitializerPlan plan;
+        MinicArrayInitializerResolved r = {0};
+        size_t i, id;
+        const size_t extent = 1U + (size_t)(random_step(&seed) % 96U);
+        const size_t count = 1U + (size_t)(random_step(&seed) % 128U);
+        minic_array_initializer_plan_initialize(&plan, extent, false);
+        for (i = 0U; i < count; ++i) {
+            size_t first = random_step(&seed) % extent;
+            size_t last = random_step(&seed) % extent;
+            if (first > last) {
+                size_t swap = first;
+                first = last;
+                last = swap;
+            }
+            assert(minic_array_initializer_plan_add_designated(
+                &plan, first, last, &id));
+            assert(id == i);
+        }
+        assert(minic_array_initializer_plan_resolve(&plan, &r));
+        check_reference(&plan, &r);
+        minic_array_initializer_resolved_destroy(&r);
+        minic_array_initializer_plan_destroy(&plan);
+    }
+}
+
+static void test_empty(void) {
+    MinicArrayInitializerPlan plan;
+    MinicArrayInitializerResolved r = {0};
+    minic_array_initializer_plan_initialize(&plan, 0U, true);
+    assert(minic_array_initializer_plan_resolve(&plan, &r));
+    check_reference(&plan, &r);
+    minic_array_initializer_resolved_destroy(&r);
     minic_array_initializer_plan_destroy(&plan);
 }
 
 int main(void) {
-    test_fixed_bound_positional_and_designated_sequence();
-    test_inferred_bound_overlap_and_last_wins();
-    test_invalid_inputs_do_not_publish_actions();
+    test_fixed_and_invalid();
+    test_inferred_last_wins();
+    test_dense_overlapping_ranges();
+    test_empty();
     puts("PASS frontend/initializer-plan");
     return 0;
 }

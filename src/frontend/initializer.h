@@ -51,13 +51,5 @@ bool minic_array_initializer_plan_resolve(
 void minic_array_initializer_resolved_destroy(MinicArrayInitializerResolved *resolved);
 
 size_t minic_array_initializer_plan_element_count(const MinicArrayInitializerPlan *plan);
-bool minic_array_initializer_plan_final_owner(const MinicArrayInitializerPlan *plan,
-                                              size_t element_index,
-                                              size_t *action_id);
-bool minic_array_initializer_plan_action_owns(const MinicArrayInitializerPlan *plan,
-                                              size_t action_id,
-                                              size_t element_index);
-size_t minic_array_initializer_plan_action_final_count(const MinicArrayInitializerPlan *plan,
-                                                       size_t action_id);
 
 #endif
