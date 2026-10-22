@@ -35,6 +35,15 @@ bool minic_multi_emit_zero_relocation_global(
     FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicGlobalObject *object, size_t storage_size,
     MinicMultiRelocEmitter emit_relocation);
+/* Admit only nested records/arrays/unions the common recursive walker can
+ * serialize without RV64's special bitfield/flexible-array paths. */
+bool minic_multi_recursive_shape_supported(
+    const MinicC0Program *program, MinicType type);
+bool minic_multi_emit_recursive_aggregate_global(
+    FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicGlobalObject *object, size_t storage_size,
+    MinicMultiRelocEmitter emit_relocation,
+    MinicMultiScalarBitsEmitter emit_bits);
 bool minic_multi_emit_recursive_record_global(
     FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicGlobalObject *object, size_t storage_size,
