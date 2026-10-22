@@ -249,6 +249,7 @@ bool minic_multi_emit_zero_relocation_global(FILE *out, const MinicC0Program *pr
         obj->relocation_count == 0U ||
         (!minic_type_is_pointer(obj->type) &&
          !minic_type_is_array(obj->type) &&
+         !minic_type_is_record(obj->type) &&
          !(minic_type_is_integer(obj->type) && storage_size == target->data_layout->pointer_size)))
         return false;
     width = target->data_layout->pointer_size;
