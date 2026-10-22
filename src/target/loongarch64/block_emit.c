@@ -428,65 +428,17 @@ bool minic_loongarch64_emit_core_blocks(FILE *out, const MinicDirectLP64BlockCon
                                     reject_block, reject_ins, __LINE__);
             continue;
         }
-        if ((ins->kind == MINIC_CORE_INSTRUCTION_CALL ||
-             ins->kind == MINIC_CORE_INSTRUCTION_INDIRECT_CALL) &&
-            (minic_type_is_void(ins->type) ||
-             (ins->kind == MINIC_CORE_INSTRUCTION_CALL &&
-              minic_type_is_record(ins->type) &&
-              ins->value.call.result_object != MINIC_CORE_OBJECT_INVALID))) {
-            /* Verified in call preflight: effect-only calls
-             * has no Core result slot. Fall through into the call case. */
-            offset = 0U;
-        } else {
-            if (ins->result == MINIC_CORE_VALUE_INVALID ||
-                ins->result >= fn->value_count ||
-                ((ins->kind == MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS ||
-                   ins->kind == MINIC_CORE_INSTRUCTION_GLOBAL_ADDRESS)
-                    ? !minic_type_is_pointer(ins->type)
-                    : !minic_type_is_integer(ins->type) &&
-                      !minic_type_is_pointer(ins->type) &&
-                      !(minic_type_is_float(ins->type) &&
-                        (ins->kind == MINIC_CORE_INSTRUCTION_LOAD ||
-                         ins->kind == MINIC_CORE_INSTRUCTION_PARAMETER ||
-                         ins->kind == MINIC_CORE_INSTRUCTION_CALL ||
-                         ins->kind == MINIC_CORE_INSTRUCTION_INDIRECT_CALL ||
-                         ins->kind == MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT ||
-                         ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_TO_FLOAT ||
-                         ins->kind == MINIC_CORE_INSTRUCTION_FLOAT_ADD ||
-                         ins->kind == MINIC_CORE_INSTRUCTION_FLOAT_SUBTRACT ||
-                         ins->kind == MINIC_CORE_INSTRUCTION_FLOAT_MULTIPLY ||
-                         ins->kind == MINIC_CORE_INSTRUCTION_FLOAT_DIVIDE)) &&
-                      !(minic_type_is_long_double(ins->type) &&
-                        (ins->kind == MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT ||
-                         ins->kind == MINIC_CORE_INSTRUCTION_LOAD ||
-                         ins->kind == MINIC_CORE_INSTRUCTION_PARAMETER ||
-                         ins->kind == MINIC_CORE_INSTRUCTION_CALL ||
-                         ins->kind == MINIC_CORE_INSTRUCTION_INDIRECT_CALL)) &&
-                      !(minic_type_is_double(ins->type) &&
-                        (ins->kind == MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT ||
-                         ins->kind == MINIC_CORE_INSTRUCTION_LOAD ||
-                         ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_ADD ||
-                         ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_NEGATE ||
-                         ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_DIVIDE ||
-                         ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_SUBTRACT ||
-                         ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_MULTIPLY ||
-                         ins->kind == MINIC_CORE_INSTRUCTION_PARAMETER ||
-                         ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_TO_DOUBLE ||
-                         ins->kind == MINIC_CORE_INSTRUCTION_FLOAT_TO_DOUBLE ||
-                         ins->kind == MINIC_CORE_INSTRUCTION_CALL ||
-                         ins->kind == MINIC_CORE_INSTRUCTION_INDIRECT_CALL))))
-            {
-                if (getenv("MINIC_M1_TRACE") != NULL)
-                    (void)fprintf(stderr,
-                                  "MINIC_M8_RESULT_REJECT arch=loongarch64 function=%s block=%zu instruction=%u kind=%d result=%u type_integer=%d type_pointer=%d\n",
-                                  name, block_id, (unsigned int)ins_id,
-                                  (int)ins->kind, (unsigned int)ins->result,
-                                  minic_type_is_integer(ins->type) ? 1 : 0,
-                                  minic_type_is_pointer(ins->type) ? 1 : 0);
-                return minic_multi_direct_machine_reject(fn, "loongarch64", name, reject_stage,
-                                    reject_block, reject_ins, __LINE__);
-            }
-            offset = (size_t)ins->result * 8U;
+        if (!minic_multi_direct_result_slot_offset(
+                fn, ins, false, &offset)) {
+            if (getenv("MINIC_M1_TRACE") != NULL)
+                (void)fprintf(stderr,
+                              "MINIC_M8_RESULT_REJECT arch=loongarch64 function=%s block=%zu instruction=%u kind=%d result=%u type_integer=%d type_pointer=%d\n",
+                              name, block_id, (unsigned int)ins_id,
+                              (int)ins->kind, (unsigned int)ins->result,
+                              minic_type_is_integer(ins->type) ? 1 : 0,
+                              minic_type_is_pointer(ins->type) ? 1 : 0);
+            return minic_multi_direct_machine_reject(
+                fn, "loongarch64", name, reject_stage, reject_block, reject_ins, __LINE__);
         }
         switch (ins->kind) {
         /* LoongArch FCC ordered comparisons naturally reject unordered

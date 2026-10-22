@@ -63,6 +63,71 @@ bool minic_multi_direct_parameter_object_location(
     return true;
 }
 
+
+/* One machine-independent result-shape gate for the two direct LP64 codegen
+ * owners. It checks Core value and type semantics, not ISA instructions.
+ * The AAPCS64 front end admits binary64 VA_ARG while the LoongArch64 LP64D
+ * direct backend has not yet admitted that result: retain that difference
+ * explicitly in allow_variadic_double_result. */
+bool minic_multi_direct_result_slot_offset(
+    const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
+    bool allow_variadic_double_result, size_t *offset) {
+    if (fn == NULL || ins == NULL || offset == NULL)
+        return false;
+    if ((ins->kind == MINIC_CORE_INSTRUCTION_CALL ||
+         ins->kind == MINIC_CORE_INSTRUCTION_INDIRECT_CALL) &&
+        (minic_type_is_void(ins->type) ||
+         (ins->kind == MINIC_CORE_INSTRUCTION_CALL &&
+          minic_type_is_record(ins->type) &&
+          ins->value.call.result_object != MINIC_CORE_OBJECT_INVALID))) {
+        /* Effect-only call or record-result object: no scalar Core slot. */
+        *offset = 0U;
+        return true;
+    }
+    if (ins->result == MINIC_CORE_VALUE_INVALID ||
+        ins->result >= fn->value_count ||
+        ((ins->kind == MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS ||
+          ins->kind == MINIC_CORE_INSTRUCTION_GLOBAL_ADDRESS)
+            ? !minic_type_is_pointer(ins->type)
+            : !minic_type_is_integer(ins->type) &&
+              !minic_type_is_pointer(ins->type) &&
+              !(minic_type_is_float(ins->type) &&
+                (ins->kind == MINIC_CORE_INSTRUCTION_LOAD ||
+                 ins->kind == MINIC_CORE_INSTRUCTION_PARAMETER ||
+                 ins->kind == MINIC_CORE_INSTRUCTION_CALL ||
+                 ins->kind == MINIC_CORE_INSTRUCTION_INDIRECT_CALL ||
+                 ins->kind == MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT ||
+                 ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_TO_FLOAT ||
+                 ins->kind == MINIC_CORE_INSTRUCTION_FLOAT_ADD ||
+                 ins->kind == MINIC_CORE_INSTRUCTION_FLOAT_SUBTRACT ||
+                 ins->kind == MINIC_CORE_INSTRUCTION_FLOAT_MULTIPLY ||
+                 ins->kind == MINIC_CORE_INSTRUCTION_FLOAT_DIVIDE)) &&
+              !(minic_type_is_long_double(ins->type) &&
+                (ins->kind == MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT ||
+                 ins->kind == MINIC_CORE_INSTRUCTION_LOAD ||
+                 ins->kind == MINIC_CORE_INSTRUCTION_PARAMETER ||
+                 ins->kind == MINIC_CORE_INSTRUCTION_CALL ||
+                 ins->kind == MINIC_CORE_INSTRUCTION_INDIRECT_CALL)) &&
+              !(minic_type_is_double(ins->type) &&
+                (ins->kind == MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT ||
+                 ins->kind == MINIC_CORE_INSTRUCTION_LOAD ||
+                 ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_ADD ||
+                 ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_NEGATE ||
+                 ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_DIVIDE ||
+                 ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_SUBTRACT ||
+                 ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_MULTIPLY ||
+                 ins->kind == MINIC_CORE_INSTRUCTION_PARAMETER ||
+                 ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_TO_DOUBLE ||
+                 ins->kind == MINIC_CORE_INSTRUCTION_FLOAT_TO_DOUBLE ||
+                 (allow_variadic_double_result &&
+                  ins->kind == MINIC_CORE_INSTRUCTION_VARIADIC_NEXT_SCALAR) ||
+                 ins->kind == MINIC_CORE_INSTRUCTION_CALL ||
+                 ins->kind == MINIC_CORE_INSTRUCTION_INDIRECT_CALL))))
+        return false;
+    *offset = (size_t)ins->result * 8U;
+    return true;
+}
+
 bool minic_multi_direct_scalar_store_shape(
     const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
