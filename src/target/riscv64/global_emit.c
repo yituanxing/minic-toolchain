@@ -1,5 +1,6 @@
 #include "target/riscv64/codegen.h"
 #include "target/riscv64/global_emit.h"
+#include "target/common/global_emit.h"
 #include "target/riscv64/abi.h"
 #include "target/riscv64/codegen_internal.h"
 #include "target/riscv64/core_codegen.h"
