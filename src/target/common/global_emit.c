@@ -283,7 +283,8 @@ static bool minic_multi_emit_recursive_global_value(
     const MinicGlobalObject *object, MinicType type, size_t *initializer_index,
     size_t *relocation_index, size_t *matched_union_selections,
     size_t *emitted_size, unsigned int depth,
-    MinicMultiRelocEmitter emit_relocation) {
+    MinicMultiRelocEmitter emit_relocation,
+    MinicMultiScalarBitsEmitter emit_bits) {
     size_t type_size, type_alignment;
     if (out == NULL || program == NULL || target == NULL || object == NULL ||
         initializer_index == NULL || relocation_index == NULL ||
@@ -308,8 +309,11 @@ static bool minic_multi_emit_recursive_global_value(
                 !emit_relocation(out, program, target, reloc, type_size))
                 return false;
             ++*relocation_index;
-        } else if (!minic_multi_emit_data_bits(
-                       out, type_size, object->initializer_values[*initializer_index]))
+        } else if (!(emit_bits != NULL
+                         ? emit_bits(out, program, target, type,
+                                     object->initializer_values[*initializer_index])
+                         : minic_multi_emit_data_bits(
+                               out, type_size, object->initializer_values[*initializer_index])))
             return false;
         ++*initializer_index;
         *emitted_size = type_size;
@@ -325,8 +329,8 @@ static bool minic_multi_emit_recursive_global_value(
             if (!minic_multi_emit_recursive_global_value(
                     out, program, target, object, arr->element_type,
                     initializer_index, relocation_index, matched_union_selections,
-                    &emitted, depth + 1U, emit_relocation) ||
-                emitted > type_size - cursor)
+                    &emitted, depth + 1U, emit_relocation, emit_bits) ||
+                (cursor > type_size || emitted > type_size - cursor))
                 return false;
             cursor += emitted;
         }
@@ -359,10 +363,10 @@ static bool minic_multi_emit_recursive_global_value(
         for (i = begin; i < end; ++i) {
             const MinicRecordField *field = minic_c0_record_field(record, i);
             size_t field_offset, element;
-            if (field == NULL || field->is_bit_field ||
-                field->is_flexible_array || field->element_count == 0U)
+            if (field == NULL || field->is_bit_field || field->is_flexible_array)
                 return false;
             if (field->is_zero_length_array) continue;
+            if (field->element_count == 0U) return false;
             if (record->is_union) {
                 field_offset = 0U;
             } else if (!minic_data_layout_record_field_offset(
@@ -379,8 +383,8 @@ static bool minic_multi_emit_recursive_global_value(
                 if (!minic_multi_emit_recursive_global_value(
                         out, program, target, object, field->type,
                         initializer_index, relocation_index, matched_union_selections,
-                        &emitted, depth + 1U, emit_relocation) ||
-                    emitted > type_size - cursor)
+                        &emitted, depth + 1U, emit_relocation, emit_bits) ||
+                    (cursor > type_size || emitted > type_size - cursor))
                     return false;
                 cursor += emitted;
             }
@@ -469,7 +473,7 @@ bool minic_multi_emit_record_array_global(
             out, program, target, object, storage_size, emit_relocation);
     if (!minic_multi_emit_recursive_global_value(
             out, program, target, object, object->type,
-            &init, &reloc, &unions, &emitted, 0U, emit_relocation))
+            &init, &reloc, &unions, &emitted, 0U, emit_relocation, NULL))
         return false;
     return emitted == storage_size &&
            init == object->initializer_count &&
