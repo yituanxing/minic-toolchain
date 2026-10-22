@@ -3,7 +3,7 @@
 #include "target/common/global_emit.h"
 #include "target/common/direct_program_emit.h"
 #include "target/common/direct_preflight.h"
-#include "target/common/direct_function_profile.h"
+#include "target/common/direct_function_plan.h"
 #include "target/common/direct_call_preflight.h"
 #include "target/common/direct_call_plan.h"
 #include "target/common/lp64_scalar.h"
@@ -54,95 +54,24 @@
  * the actual target integer width; reject unsupported 64/128-bit values. */
 
 
-static bool emit_function_body_with_frame(FILE *out, const MinicC0Program *program,
+static bool emit_function_body_with_plan(FILE *out,
+                               const MinicC0Program *program,
                                const MinicTargetInfo *target,
                                const MinicFunction *decl,
-                          const MinicCoreFunction *fn, size_t id,
-                          bool function_sections,
-                          MinicLP64FramePlan *frame_plan) {
+                               const MinicCoreFunction *fn, size_t id,
+                               bool function_sections,
+                               const MinicDirectLP64FunctionPlan *plan) {
     const char *name = minic_c0_function_symbol_name(decl);
-    MinicLP64ArgumentPlan incoming_plan;
-    size_t frame = 0U, i, object_end, save_offset, ld_base;
-    bool has_direct_calls = false;
-    bool dynamic_frame = false;
-    const char *reject_stage = "function_preflight";
-    size_t reject_block = SIZE_MAX, reject_ins = SIZE_MAX;
-    size_t va_count = 0U, va_base = 0U, va_gp = 0U, va_fp = 0U;
-    if (!minic_multi_direct_lp64_function_preflight(program, target, decl, fn,
-                                               "aarch64", name))
-        return minic_multi_direct_machine_reject(fn, "aarch64", name,
-            reject_stage, reject_block, reject_ins, __LINE__);
-    /* Validated shared function requirements and incoming ABI locations.
-     * Only source/Core shape is shared; AAPCS64/LP64D classifiers differ. */
-    {
-        MinicDirectLP64FunctionProfile profile;
-        MinicDirectLP64ProfileResult result =
-            minic_multi_direct_lp64_profile_function(
-                program, target, decl, fn, MINIC_LP64_ABI_AAPCS64,
-                minic_aarch64_indirect_record, &incoming_plan, &profile);
-        if (result != MINIC_DIRECT_LP64_PROFILE_OK) {
-            const char *stage =
-                result == MINIC_DIRECT_LP64_PROFILE_VARIADIC_FIXED_FLOAT
-                    ? "variadic_fp_fixed" :
-                result == MINIC_DIRECT_LP64_PROFILE_VARIADIC_SHAPE
-                    ? "variadic_preflight" : reject_stage;
-            return minic_multi_direct_machine_reject(
-                fn, "aarch64", name, stage,
-                reject_block, reject_ins, __LINE__);
-        }
-        va_count = profile.variadic_address_count;
-        va_gp = profile.fixed_gp_count;
-        va_fp = profile.fixed_fp_count;
-        dynamic_frame = profile.has_dynamic_stack;
-    }
-    reject_stage = "cfg_preflight";
-    if (!minic_multi_direct_lp64_cfg_preflight(program, target, fn,
-                                         &reject_block))
-        return minic_multi_direct_machine_reject(fn, "aarch64", name,
-            reject_stage, reject_block, reject_ins, __LINE__);
-    /* Object byte extents and alignment are validated by minic_lp64_frame_objects.
-     * This admits real repeated local arrays without overlapping slots. */
-    reject_stage = "frame_layout";
-    reject_block = SIZE_MAX;
-    if (!minic_lp64_frame_plan_objects(program, target, fn, frame_plan)) {
-        if (getenv("MINIC_M1_TRACE") != NULL)
-            (void)fprintf(stderr,
-                          "MINIC_M8_FRAME_REJECT arch=aarch64 function=%s values=%zu objects=%zu\n",
-                          name, fn->value_count, fn->object_count);
-        return minic_multi_direct_machine_reject(fn, "aarch64", name, reject_stage,
-                                    reject_block, reject_ins, __LINE__);
-    }
-    object_end = frame_plan->object_end;
-    ld_base = (object_end + 15U) & ~(size_t)15U;
-    if (!minic_lp64_frame_plan_wide(fn, ld_base, frame_plan))
-        return minic_multi_direct_machine_reject(fn, "aarch64", name, "binary128_layout",
-                                   SIZE_MAX, SIZE_MAX, __LINE__);
-    object_end = frame_plan->wide_end;
-    /* M24: direct and first-class indirect scalar calls share the same
-     * eight integer-register ABI. Aggregate, FP, overflow arguments and
-     * unsupported variadic tail types are still rejected before emission. */
-    reject_stage = "call_preflight";
-    if (!minic_multi_direct_lp64_calls_preflight(
-            program, target, fn, "aarch64", name,
-            minic_aarch64_indirect_record,
-            &reject_ins, &has_direct_calls))
-        return minic_multi_direct_machine_reject(fn, "aarch64", name,
-                                                reject_stage, reject_block,
-                                                reject_ins, __LINE__);
-    reject_stage = "frame_finalization";
-    reject_ins = SIZE_MAX;
-    if (!minic_lp64_finalize_direct_frame(
-            object_end, has_direct_calls, dynamic_frame, va_count != 0U,
-            MINIC_LP64_ABI_AAPCS64,
-            &save_offset, &va_base, &frame)) {
-        if (getenv("MINIC_M1_TRACE") != NULL && frame > MINIC_LARGE_FRAME_MAX)
-            (void)fprintf(stderr,
-                          "MINIC_M8_FRAME_CAP arch=aarch64 function=%s frame=%zu end=%zu\n",
-                          name, frame, object_end);
-        return minic_multi_direct_machine_reject(fn, "aarch64", name,
-                                                reject_stage, reject_block,
-                                                reject_ins, __LINE__);
-    }
+    const size_t frame = plan->frame_size;
+    const size_t save_offset = plan->save_offset;
+    const size_t va_base = plan->variadic_save_base;
+    const size_t va_count = plan->variadic_count;
+    const size_t va_gp = plan->variadic_gp_count;
+    const size_t va_fp = plan->variadic_fp_count;
+    const bool has_direct_calls = plan->has_calls;
+    const bool dynamic_frame = plan->has_dynamic_stack;
+    const char *reject_stage = "frame_finalization";
+    size_t reject_block = SIZE_MAX, reject_ins = SIZE_MAX, i;
     if (function_sections) {
         if (fprintf(out, ".section .text.%s,\"ax\",%%progbits\n", name) < 0)
             return minic_multi_direct_machine_reject(fn, "aarch64", name, reject_stage,
@@ -195,7 +124,7 @@ static bool emit_function_body_with_frame(FILE *out, const MinicC0Program *progr
     {
         const MinicDirectLP64BlockContext blocks = {
             .program = program, .target = target, .fn = fn,
-            .frame_plan = frame_plan, .incoming_plan = &incoming_plan,
+            .frame_plan = &plan->frame_plan, .incoming_plan = &plan->incoming_plan,
             .name = name, .id = id, .frame = frame,
             .save_offset = save_offset, .va_gp = va_gp,
             .va_base = va_base, .va_fp = va_fp,
@@ -218,55 +147,44 @@ static bool emit_function_body_with_frame(FILE *out, const MinicC0Program *progr
     return true;
 }
 
-/* The function emitter may reject from many target-specific instruction
- * paths. Centralize the layout lifetime here instead of adding scattered
- * frees or changing those diagnostic/error paths. */
-static bool emit_function_body(FILE *out, const MinicC0Program *program,
-                               const MinicTargetInfo *target,
-                               const MinicFunction *decl,
-                               const MinicCoreFunction *fn, size_t id,
-                               bool function_sections) {
-    MinicLP64FramePlan frame_plan = {0};
-    bool success = emit_function_body_with_frame(
-        out, program, target, decl, fn, id, function_sections, &frame_plan);
-    minic_lp64_frame_plan_destroy(&frame_plan);
-    return success;
-}
-
-/* Translate only dynamic-frame functions through a private assembly buffer.
- * The existing AArch64 emitter speaks [sp,#offset] for its fixed SSA frame.
- * For alloca functions, those values belong to callee-saved x19 while SP
- * may move; source-owned outgoing stack argument slots remain relative to SP.
- * This is a target-local text legalization, just like large-offset handling,
- * and leaves all non-dynamic code generation byte-for-byte unchanged. */
-
-
+/* Construct one complete call/frame plan and reuse it for machine emission.
+ * AArch64 dynamic-SP text legalization sees the *same* analyzed function,
+ * rather than running a separate Core instruction scan to rediscover alloca. */
 static bool emit_function(FILE *out, const MinicC0Program *program,
                           const MinicTargetInfo *target,
                           const MinicFunction *decl,
                           const MinicCoreFunction *fn, size_t id,
                           bool function_sections) {
-    size_t i;
-    bool dynamic_frame = false, success;
-    FILE *temporary;
-    for (i = 0U; i < fn->instruction_count; ++i)
-        if (fn->instructions[i].kind ==
-            MINIC_CORE_INSTRUCTION_DYNAMIC_STACK_ALLOC) {
-            dynamic_frame = true;
-            break;
-        }
-    if (!dynamic_frame)
-        return emit_function_body(out, program, target, decl, fn, id,
-                                  function_sections);
+    MinicDirectLP64FunctionPlan plan = {0};
+    const char *name = minic_c0_function_symbol_name(decl);
+    bool success = false;
+    FILE *temporary = NULL;
+    if (!minic_multi_direct_lp64_function_plan_prepare(
+            program, target, decl, fn, "aarch64",
+            MINIC_LP64_ABI_AAPCS64, minic_aarch64_indirect_record, &plan)) {
+        (void)minic_multi_direct_machine_reject(fn, "aarch64", name,
+            plan.failed_stage, plan.failed_block,
+            plan.failed_instruction, __LINE__);
+        goto done;
+    }
+    if (!plan.has_dynamic_stack) {
+        success = emit_function_body_with_plan(
+            out, program, target, decl, fn, id, function_sections, &plan);
+        goto done;
+    }
     temporary = tmpfile();
-    if (temporary == NULL) return false;
-    success = emit_function_body(temporary, program, target, decl, fn, id,
-                                 function_sections);
+    if (temporary == NULL)
+        goto done;
+    success = emit_function_body_with_plan(
+        temporary, program, target, decl, fn, id, function_sections, &plan);
     if (success && (fflush(temporary) != 0 ||
                     fseek(temporary, 0L, SEEK_SET) != 0 ||
                     !minic_aarch64_copy_dynamic_frame_asm(out, temporary)))
         success = false;
-    if (fclose(temporary) != 0) success = false;
+done:
+    if (temporary != NULL && fclose(temporary) != 0)
+        success = false;
+    minic_multi_direct_lp64_function_plan_destroy(&plan);
     return success;
 }
 
