@@ -452,10 +452,8 @@ bool minic_loongarch64_emit_core_blocks(FILE *out, const MinicDirectLP64BlockCon
                 ? "fcmp.ceq.d" :
                 ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_LESS
                     ? "fcmp.clt.d" : "fcmp.cle.d";
-            if (!minic_type_equal(ins->type, minic_type_int()) ||
-                lhs >= fn->value_count || rhs >= fn->value_count ||
-                !minic_type_is_double(fn->values[lhs].type) ||
-                !minic_type_is_double(fn->values[rhs].type) ||
+            if (!minic_multi_direct_floating_shape(
+                    program, target, fn, ins, NULL, NULL) ||
                 !emit_sp_mem(out, "fld.d", "$ft0", (size_t)lhs * 8U) ||
                 !emit_sp_mem(out, "fld.d", "$ft1", (size_t)rhs * 8U) ||
                 fprintf(out, "  %s $fcc0, $ft0, $ft1\n"
@@ -475,10 +473,8 @@ bool minic_loongarch64_emit_core_blocks(FILE *out, const MinicDirectLP64BlockCon
                 : ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_SUBTRACT
                     ? "  fsub.d $ft0, $ft0, $ft1\n"
                     : "  fmul.d $ft0, $ft0, $ft1\n";
-            if (!minic_type_is_double(ins->type) ||
-                lhs >= fn->value_count || rhs >= fn->value_count ||
-                !minic_type_is_double(fn->values[lhs].type) ||
-                !minic_type_is_double(fn->values[rhs].type) ||
+            if (!minic_multi_direct_floating_shape(
+                    program, target, fn, ins, NULL, NULL) ||
                 !emit_sp_mem(out, "fld.d", "$ft0", (size_t)lhs * 8U) ||
                 !emit_sp_mem(out, "fld.d", "$ft1", (size_t)rhs * 8U) ||
                 fputs(op, out) == EOF ||
@@ -490,10 +486,8 @@ bool minic_loongarch64_emit_core_blocks(FILE *out, const MinicDirectLP64BlockCon
         case MINIC_CORE_INSTRUCTION_DOUBLE_DIVIDE: {
             const MinicCoreValueId lhs = ins->value.binary.left;
             const MinicCoreValueId rhs = ins->value.binary.right;
-            if (!minic_type_is_double(ins->type) ||
-                lhs >= fn->value_count || rhs >= fn->value_count ||
-                !minic_type_is_double(fn->values[lhs].type) ||
-                !minic_type_is_double(fn->values[rhs].type) ||
+            if (!minic_multi_direct_floating_shape(
+                    program, target, fn, ins, NULL, NULL) ||
                 !emit_sp_mem(out, "fld.d", "$ft0", (size_t)lhs * 8U) ||
                 !emit_sp_mem(out, "fld.d", "$ft1", (size_t)rhs * 8U) ||
                 fputs("  fdiv.d $ft0, $ft0, $ft1\n", out) == EOF ||
@@ -504,9 +498,8 @@ bool minic_loongarch64_emit_core_blocks(FILE *out, const MinicDirectLP64BlockCon
         }
         case MINIC_CORE_INSTRUCTION_DOUBLE_NEGATE: {
             const MinicCoreValueId operand = ins->value.operand;
-            if (!minic_type_is_double(ins->type) ||
-                operand >= fn->value_count ||
-                !minic_type_is_double(fn->values[operand].type) ||
+            if (!minic_multi_direct_floating_shape(
+                    program, target, fn, ins, NULL, NULL) ||
                 !emit_sp_mem(out, "fld.d", "$ft0", (size_t)operand * 8U) ||
                 fputs("  fneg.d $ft0, $ft0\n", out) == EOF ||
                 !emit_sp_mem(out, "fst.d", "$ft0", offset))
@@ -1428,9 +1421,8 @@ bool minic_loongarch64_emit_core_blocks(FILE *out, const MinicDirectLP64BlockCon
          * Reinterpretation/bitcast is incorrect: perform fcvt.d.s. */
         case MINIC_CORE_INSTRUCTION_DOUBLE_TO_FLOAT: {
             const MinicCoreValueId source = ins->value.operand;
-            if (!minic_type_is_float(ins->type) ||
-                source >= fn->value_count ||
-                !minic_type_is_double(fn->values[source].type) ||
+            if (!minic_multi_direct_floating_shape(
+                    program, target, fn, ins, NULL, NULL) ||
                 !emit_sp_mem(out, "fld.d", "$ft0", (size_t)source * 8U) ||
                 fputs("  fcvt.s.d $ft0, $ft0\n", out) == EOF ||
                 !emit_sp_mem(out, "fst.s", "$ft0", offset))
@@ -1451,10 +1443,8 @@ bool minic_loongarch64_emit_core_blocks(FILE *out, const MinicDirectLP64BlockCon
                     : ins->kind == MINIC_CORE_INSTRUCTION_FLOAT_MULTIPLY
                         ? "  fmul.s $ft0, $ft0, $ft1\n"
                         : "  fdiv.s $ft0, $ft0, $ft1\n";
-            if (!minic_type_is_float(ins->type) ||
-                lhs >= fn->value_count || rhs >= fn->value_count ||
-                !minic_type_is_float(fn->values[lhs].type) ||
-                !minic_type_is_float(fn->values[rhs].type) ||
+            if (!minic_multi_direct_floating_shape(
+                    program, target, fn, ins, NULL, NULL) ||
                 !emit_sp_mem(out, "fld.s", "$ft0", (size_t)lhs * 8U) ||
                 !emit_sp_mem(out, "fld.s", "$ft1", (size_t)rhs * 8U) ||
                 fputs(op, out) == EOF ||
@@ -1465,8 +1455,8 @@ bool minic_loongarch64_emit_core_blocks(FILE *out, const MinicDirectLP64BlockCon
         }
         case MINIC_CORE_INSTRUCTION_FLOAT_TO_DOUBLE: {
             const MinicCoreValueId src = ins->value.operand;
-            if (src >= fn->value_count || !minic_type_is_double(ins->type) ||
-                !minic_type_is_float(fn->values[src].type) ||
+            if (!minic_multi_direct_floating_shape(
+                    program, target, fn, ins, NULL, NULL) ||
                 !emit_sp_mem(out, "fld.s", "$ft0", (size_t)src * 8U) ||
                 fputs("  fcvt.d.s $ft0, $ft0\n", out) == EOF ||
                 !emit_sp_mem(out, "fst.d", "$ft0", offset))
@@ -1478,9 +1468,8 @@ bool minic_loongarch64_emit_core_blocks(FILE *out, const MinicDirectLP64BlockCon
             const MinicCoreValueId src = ins->value.operand;
             size_t width;
             bool sign;
-            if (src >= fn->value_count || !minic_type_is_double(ins->type) ||
-                !minic_lp64_scalar_integer_width(program, target, fn->values[src].type,
-                                      &width, &sign) ||
+            if (!minic_multi_direct_floating_shape(
+                    program, target, fn, ins, &width, &sign) ||
                 !emit_sp_mem(out, width == 8U ? "ld.d" : "ld.w",
                              "$t0", (size_t)src * 8U) ||
                 (width < 4U && !emit_integer_normalize(out, width, sign)))
@@ -1533,11 +1522,8 @@ bool minic_loongarch64_emit_core_blocks(FILE *out, const MinicDirectLP64BlockCon
             /* LoongArch's ftintrz.l.d converts binary64 to signed64.
              * That also covers the entire unsigned32 range: retain its
              * low 32 bits for the Core result. Unsigned64 remains gated. */
-            if (src >= fn->value_count ||
-                !minic_type_is_double(fn->values[src].type) ||
-                !minic_lp64_scalar_integer_width(program, target, ins->type, &width, &sign) ||
-                (width != 1U && width != 2U &&
-                 width != 4U && width != 8U))
+            if (!minic_multi_direct_floating_shape(
+                    program, target, fn, ins, &width, &sign))
                 return minic_multi_direct_machine_reject(fn, "loongarch64", name,
                                            reject_stage, reject_block,
                                            reject_ins, __LINE__);
