@@ -222,6 +222,38 @@ bool minic_multi_direct_integer_bitscan_shape(
             *width == 32U || *width == 64U);
 }
 
+/* The two ISA implementations consume the same Core call/parameter ABI
+ * transfer family. Planning remains target-ABI-specific at the call site. */
+bool minic_multi_direct_abi_transfer_kind(MinicCoreInstructionKind kind) {
+    return kind == MINIC_CORE_INSTRUCTION_CALL ||
+           kind == MINIC_CORE_INSTRUCTION_INDIRECT_CALL ||
+           kind == MINIC_CORE_INSTRUCTION_PARAMETER;
+}
+
+/* Bounds and scalar result typing are a Core contract, not a per-ISA
+ * register assignment rule. The ABI-specific plan already owns whether
+ * a named parameter occupies FP/GP registers or caller stack. */
+bool minic_multi_direct_scalar_parameter_location(
+    const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
+    const MinicLP64ArgumentPlan *incoming,
+    const MinicLP64ArgumentLocation **location) {
+    size_t ordinal;
+    if (fn == NULL || ins == NULL || incoming == NULL ||
+        location == NULL ||
+        ins->kind != MINIC_CORE_INSTRUCTION_PARAMETER ||
+        fn->parameter_types == NULL)
+        return false;
+    ordinal = (size_t)ins->value.parameter_index;
+    if (ordinal >= fn->parameter_count ||
+        ordinal >= incoming->argument_count ||
+        !minic_type_equal(ins->type, fn->parameter_types[ordinal]) ||
+        incoming->arguments[ordinal].kind == MINIC_LP64_ARGUMENT_RECORD ||
+        incoming->arguments[ordinal].kind == MINIC_LP64_ARGUMENT_INDIRECT_RECORD)
+        return false;
+    *location = &incoming->arguments[ordinal];
+    return true;
+}
+
 bool minic_multi_direct_integer_machine_kind(MinicCoreInstructionKind kind) {
     switch (kind) {
     case MINIC_CORE_INSTRUCTION_INTEGER_OVERFLOW:
