@@ -1330,14 +1330,6 @@ static bool parse_for(MinicParser *parser) {
     return success;
 }
 
-static bool identifier_equals(const MinicParser *parser,
-                              MinicSourceSpan span,
-                              const char *text,
-                              size_t text_length) {
-    return minic_parser_span_length(span) == text_length &&
-           memcmp(parser->source + span.begin.offset, text, text_length) == 0;
-}
-
 static bool parse_break(MinicParser *parser) {
     MinicStatement statement;
 
@@ -1579,8 +1571,8 @@ static bool gnu_attribute_list_has_statement_shape(const MinicParser *parser) {
     MinicParser probe;
 
     if (parser == NULL || parser->current.kind != MINIC_TOKEN_IDENTIFIER ||
-        (!identifier_equals(parser, parser->current.span, "__attribute__", 13U) &&
-         !identifier_equals(parser, parser->current.span, "__attribute", 11U))) {
+        (!minic_parser_current_identifier_lexeme_equals_cstr(parser, "__attribute__") &&
+         !minic_parser_current_identifier_lexeme_equals_cstr(parser, "__attribute"))) {
         return false;
     }
     probe = *parser;
@@ -1734,7 +1726,7 @@ bool minic_parser_parse_statement(MinicParser *parser, bool allow_declaration) {
     }
     if (parser->current.kind == MINIC_TOKEN_KW_EXTERN ||
         (parser->current.kind == MINIC_TOKEN_IDENTIFIER &&
-         identifier_equals(parser, parser->current.span, "__attribute__", 13U))) {
+         minic_parser_current_identifier_lexeme_equals_cstr(parser, "__attribute__"))) {
         if (!allow_declaration) {
             minic_parser_error(parser, "a declaration requires a compound statement scope");
             return false;
