@@ -77,6 +77,7 @@ MINIC_SOURCES := \
 	src/core/core_lower_types.c \
 	src/core/core_lower_metadata.c \
 	src/core/core_lower_asm.c \
+	src/core/core_lower_asm_scalar_forms.c \
 	src/frontend/attribute.c \
 	src/frontend/ast.c \
 	src/frontend/expression_semantics.c \
