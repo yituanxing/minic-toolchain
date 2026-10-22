@@ -114,13 +114,13 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
             source = 16U + location->stack_index * 8U;
             for (j = 0U; j + 8U <= location->record_bytes; j += 8U)
                 if (fprintf(out,
-                    "  movq %zu(%%rbp), %%rax\\n"
-                    "  movq %%rax, %zu(%%r10)\\n",
+                    "  movq %zu(%%rbp), %%rax\n"
+                    "  movq %%rax, %zu(%%r10)\n",
                     source + j, j) < 0) return false;
             for (; j < location->record_bytes; ++j)
                 if (fprintf(out,
-                    "  movzbq %zu(%%rbp), %%rax\\n"
-                    "  movb %%al, %zu(%%r10)\\n",
+                    "  movzbq %zu(%%rbp), %%rax\n"
+                    "  movb %%al, %zu(%%r10)\n",
                     source + j, j) < 0) return false;
             return true;
         }

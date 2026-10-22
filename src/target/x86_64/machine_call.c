@@ -45,7 +45,7 @@ static bool x86_emit_call_arguments_planned(
             if (frame->objects_from_aligned_rsp) {
                 if (frame->object_offsets[object] >
                     SIZE_MAX - plan->stack_bytes ||
-                    fprintf(out, "  leaq %zu(%%rsp), %%r11\\n",
+                    fprintf(out, "  leaq %zu(%%rsp), %%r11\n",
                             frame->object_offsets[object] +
                             plan->stack_bytes) < 0) return false;
             } else if (!x86_object_address(out, frame, object, "%r11"))
@@ -68,13 +68,13 @@ static bool x86_emit_call_arguments_planned(
                     dest > SIZE_MAX - loc->record_bytes) return false;
                 for (j = 0U; j + 8U <= loc->record_bytes; j += 8U)
                     if (fprintf(out,
-                          "  movq %zu(%%r11), %%rax\\n"
-                          "  movq %%rax, %zu(%%rsp)\\n", j, dest + j) < 0)
+                          "  movq %zu(%%r11), %%rax\n"
+                          "  movq %%rax, %zu(%%rsp)\n", j, dest + j) < 0)
                         return false;
                 for (; j < loc->record_bytes; ++j)
                     if (fprintf(out,
-                          "  movzbq %zu(%%r11), %%rax\\n"
-                          "  movb %%al, %zu(%%rsp)\\n", j, dest + j) < 0)
+                          "  movzbq %zu(%%r11), %%rax\n"
+                          "  movb %%al, %zu(%%rsp)\n", j, dest + j) < 0)
                         return false;
                 continue;
             }
@@ -171,8 +171,8 @@ static bool x86_emit_call_record_result(
         return x86_one_gp_store(out, bytes);
     if (minic_x86_64_two_gp_record(program, target, callee->return_type))
         return fprintf(out,
-            "  movq %%rax, 0(%%r10)\\n"
-            "  movq %%rdx, 8(%%r10)\\n") >= 0;
+            "  movq %%rax, 0(%%r10)\n"
+            "  movq %%rdx, 8(%%r10)\n") >= 0;
     return false;
 }
 

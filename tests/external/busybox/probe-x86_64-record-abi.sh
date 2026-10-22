@@ -21,7 +21,7 @@ int main(void)
     x.a = 11; x.b = 13; x.c = 17;
     x.tail[0] = 2; x.tail[1] = 3; x.tail[2] = 4;
     x.tail[3] = 5; x.tail[4] = 7;
-    printf("sysv-record %d:%d %lu\\n", pair.quot, pair.rem,
+    printf("sysv-record %d:%d %lu\n", pair.quot, pair.rem,
            receive_by_value(x, 19));
     return (pair.quot != 11 || pair.rem != 4
             || receive_by_value(x, 19) != 163UL);
