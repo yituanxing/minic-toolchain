@@ -979,12 +979,11 @@ bool minic_aarch64_emit_core_blocks(FILE *out, const MinicDirectLP64BlockContext
         case MINIC_CORE_INSTRUCTION_ATOMIC_LOAD: {
             if (ins->kind == MINIC_CORE_INSTRUCTION_LOAD &&
                 minic_type_is_int128_integer(ins->type)) {
-                const MinicCoreValueId addr = ins->value.load.address;
+                MinicCoreValueId addr;
                 size_t dst;
-                if (addr >= fn->value_count ||
-                    !minic_type_is_pointer(fn->values[addr].type) ||
-                    !minic_lp64_frame_plan_wide_slot(frame_plan, ins->result, &dst) ||
-                    fprintf(out, "  ldr x10, [sp, #%zu]\n"
+                if (!minic_multi_direct_wide_scalar_load_location(
+                        fn, ins, frame_plan, &addr, &dst) ||
+                fprintf(out, "  ldr x10, [sp, #%zu]\n"
                                  "  ldr x9, [x10]\n"
                                  "  ldr x11, [x10, #8]\n"
                                  "  str x9, [sp, #%zu]\n"
@@ -996,12 +995,11 @@ bool minic_aarch64_emit_core_blocks(FILE *out, const MinicDirectLP64BlockContext
             }
             if (ins->kind == MINIC_CORE_INSTRUCTION_LOAD &&
                 minic_type_is_long_double(ins->type)) {
-                const MinicCoreValueId addr = ins->value.load.address;
+                MinicCoreValueId addr;
                 size_t dst;
-                if (addr >= fn->value_count ||
-                    !minic_type_is_pointer(fn->values[addr].type) ||
-                    !minic_lp64_frame_plan_wide_slot(frame_plan, ins->result, &dst) ||
-                    fprintf(out, "  ldr x10, [sp, #%zu]\n"
+                if (!minic_multi_direct_wide_scalar_load_location(
+                        fn, ins, frame_plan, &addr, &dst) ||
+                fprintf(out, "  ldr x10, [sp, #%zu]\n"
                                  "  ldr q9, [x10]\n"
                                  "  str q9, [sp, #%zu]\n",
                             (size_t)addr * 8U, dst) < 0)
@@ -1013,33 +1011,13 @@ bool minic_aarch64_emit_core_blocks(FILE *out, const MinicDirectLP64BlockContext
             const bool atomic = ins->kind == MINIC_CORE_INSTRUCTION_ATOMIC_LOAD;
             const MinicCoreValueId addr = atomic ? ins->value.atomic_load.address
                                                   : ins->value.load.address;
-            MinicType pointee;
-            size_t pointee_width = 0U, pointee_align = 0U;
-            size_t width = minic_type_is_double(ins->type) ? 8U :
-                           minic_type_is_float(ins->type) ? 4U : 0U;
-            bool sign = false, pointer = minic_type_is_pointer(ins->type);
-            if (atomic &&
-                (ins->value.atomic_load.memory_order != 0U ||
-                 addr >= fn->value_count ||
-                 !minic_type_pointee(fn->values[addr].type, &pointee) ||
-                 !(minic_type_is_integer(pointee) || minic_type_is_pointer(pointee)) ||
-                 !minic_data_layout_type(target->data_layout, program,
-                                         pointee, &pointee_width, &pointee_align) ||
-                 (pointer ? pointee_width != 8U :
-                     !minic_lp64_scalar_integer_width(program, target, ins->type,
-                                           &width, &sign) ||
-                     (width != 1U && width != 2U &&
-                      width != 4U && width != 8U) ||
-                     pointee_width != width)))
-                return minic_multi_direct_machine_reject(fn, "aarch64", name, reject_stage,
-                                          reject_block, reject_ins, __LINE__);
-            (void)pointee_align;
-            if (addr >= fn->value_count ||
-                !minic_type_is_pointer(fn->values[addr].type) ||
-                (!pointer && !minic_type_is_double(ins->type) &&
-                 !minic_type_is_float(ins->type) &&
-                 !minic_lp64_scalar_integer_width(program, target,
-                                       ins->type, &width, &sign)) ||
+            size_t width = 0U;
+            bool sign = false, pointer = false;
+            if (!minic_multi_direct_scalar_load_shape(
+                    program, target, fn, ins, &width, &sign, &pointer))
+                return minic_multi_direct_machine_reject(fn, "aarch64", name,
+                    reject_stage, reject_block, reject_ins, __LINE__);
+            if (
                 fprintf(out, "  ldr x10, [sp, #%zu]\n", (size_t)addr * 8U) < 0 ||
                 (pointer ? fputs("  ldr x9, [x10]\n", out) == EOF
                          : !emit_integer_memory(out, false, width, sign)))
