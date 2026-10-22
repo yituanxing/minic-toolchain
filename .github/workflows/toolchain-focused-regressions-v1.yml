@@ -165,6 +165,19 @@ jobs:
           test -x build/toolchain-focused-t1-v2/bin/minic-ar
           test -x build/toolchain-focused-t1-v2/bin/minic-ld
 
+      # Core or x86 global-layout refactors must run a native executable
+      # contract, not merely compile the compiler and cross-check two new ISAs.
+      # Reuse the existing broad x86 smoke rather than inventing another test.
+      - name: Validate x86-64 native source-to-global-object ABI
+        if: steps.owners.outputs.mode == 'all' && steps.build.outcome == 'success'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(uname -m)" = x86_64
+          MINIC_CC="$GITHUB_WORKSPACE/build/toolchain-focused-t1-v2/bin/minic-cc" \
+            HOST_CC=cc sh tests/compiler/c0/run-x86_64-native-m1.sh
+          echo "MINIC_X86_NATIVE_M1=PASS data_layout=checked runtime=checked"
+
       # Stage2 artifact mode fix: Actions strips +x; QEMU requires executable ELF.
       # Certified fixture return_42.c for strict direct/driver parity.
       # Verify the exact certified self-hosted RV64 Stage2 driver hookup on
