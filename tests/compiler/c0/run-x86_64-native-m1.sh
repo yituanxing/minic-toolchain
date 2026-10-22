@@ -1382,3 +1382,30 @@ int main(void) {
 }
 EOF
 check_exit initializer_range_ownership 42
+
+# The final-owner snapshot must also preserve static record-array ranges and
+# skip fully overridden runtime expression side effects without reordering.
+cat > "$tempdir/initializer_record_owner_index.i" <<'EOF'
+struct Pair { int a; int b; };
+static struct Pair values[4] = {
+    [0 ... 3] = { 1, 2 }, [1 ... 2] = { 3, 4 }, [2] = { 5, 6 }
+};
+static int calls;
+static int evaluate(int value) { ++calls; return value; }
+int main(void) {
+    int local[7] = {
+        [0 ... 6] = evaluate(99), [0 ... 6] = evaluate(6),
+        [1 ... 3] = evaluate(12), [4] = evaluate(3),
+        [6] = evaluate(1)
+    };
+    if (values[0].a != 1 || values[0].b != 2 ||
+        values[1].a != 3 || values[1].b != 4 ||
+        values[2].a != 5 || values[2].b != 6 ||
+        values[3].a != 1 || values[3].b != 2) return 1;
+    if (local[0] != 6 || local[1] != 12 || local[2] != 12 ||
+        local[3] != 12 || local[4] != 3 || local[5] != 6 ||
+        local[6] != 1 || calls != 4) return 2;
+    return 42;
+}
+EOF
+check_exit initializer_record_owner_index 42
