@@ -6,10 +6,16 @@
 #include <stddef.h>
 /* Read-only Core/psABI requirements; real spill and object-reuse
  * optimization continues in the mature RV64 function codegen. */
-bool minic_riscv64_core_function_needs_saved_return_address(const MinicCoreFunction *);
-bool minic_riscv64_core_function_uses_structured_inline_asm(const MinicCoreFunction *);
-bool minic_riscv64_core_function_uses_dynamic_stack_alloc(const MinicCoreFunction *);
-bool minic_riscv64_core_function_uses_variadic_argument_address(const MinicCoreFunction *);
+typedef struct MinicRiscv64CoreFunctionRequirements {
+    bool needs_saved_return_address;
+    bool uses_structured_inline_asm;
+    bool uses_dynamic_stack_alloc;
+    bool uses_variadic_argument_address;
+} MinicRiscv64CoreFunctionRequirements;
+
+/* Pass-one Core shape summary used by the function's Frame Layout owner. */
+bool minic_riscv64_core_function_requirements(
+    const MinicCoreFunction *, MinicRiscv64CoreFunctionRequirements *);
 bool minic_riscv64_core_variadic_fixed_prefix(const MinicC0Program *,
                                                const MinicCoreFunction *, size_t *, size_t *);
 /* The psABI argument type used for outgoing-area sizing must be identical

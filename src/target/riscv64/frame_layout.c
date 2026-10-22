@@ -66,6 +66,7 @@ bool minic_riscv64_core_frame_initialize(const MinicC0Program *program,
     size_t outgoing_argument_size;
     size_t maximum_object_alignment;
     size_t scalar_reuse_pool_slots;
+    MinicRiscv64CoreFunctionRequirements requirements;
 
     if (function == NULL || frame == NULL) {
         return false;
@@ -77,7 +78,9 @@ bool minic_riscv64_core_frame_initialize(const MinicC0Program *program,
     frame->parameter_location_count = 0U;
     frame->has_named_parameter_cursor = false;
     frame->value_slot_count = 0U;
-    frame->has_dynamic_stack_alloc = minic_riscv64_core_function_uses_dynamic_stack_alloc(function);
+    if (!minic_riscv64_core_function_requirements(function, &requirements))
+        return false;
+    frame->has_dynamic_stack_alloc = requirements.uses_dynamic_stack_alloc;
     frame->saved_frame_base_offset = 0U;
     if (!minic_riscv64_core_call_outgoing_stack_size(program, function, &outgoing_argument_size)) {
         return false;
@@ -200,7 +203,7 @@ bool minic_riscv64_core_frame_initialize(const MinicC0Program *program,
         frame->value_slot_count = maximum_block_bytes / 8U;
         storage_size = frame->value_base_offset + maximum_block_bytes;
     }
-    frame->saves_return_address = minic_riscv64_core_function_needs_saved_return_address(function);
+    frame->saves_return_address = requirements.needs_saved_return_address;
     frame->return_address_offset = 0U;
     if (frame->saves_return_address) {
         if (!align_up(storage_size, 8U, &frame->return_address_offset) ||
@@ -242,7 +245,7 @@ bool minic_riscv64_core_frame_initialize(const MinicC0Program *program,
     }
 
     frame->preserves_structured_asm_callee_saved =
-        minic_riscv64_core_function_uses_structured_inline_asm(function);
+        requirements.uses_structured_inline_asm;
     /*
      * Structured inline asm may explicitly bind/clobber s0. Dynamic-stack
      * functions reserve s0 as the stable fixed-frame base, so keep the mixed
@@ -274,8 +277,7 @@ bool minic_riscv64_core_frame_initialize(const MinicC0Program *program,
         storage_size = frame->entry_sp_offset + 8U;
     }
 
-    frame->has_variadic_argument_address =
-        minic_riscv64_core_function_uses_variadic_argument_address(function);
+    frame->has_variadic_argument_address = requirements.uses_variadic_argument_address;
     frame->integer_parameter_count = 0U;
     frame->variadic_fixed_stack_slots = 0U;
     frame->varargs_size = 0U;
