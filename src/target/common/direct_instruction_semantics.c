@@ -163,6 +163,92 @@ bool minic_multi_direct_result_slot_offset(
 /* This is the complete numeric machine family implemented by both
  * direct LP64 emitters. SSA/result types remain validated by the separate
  * minic_multi_direct_floating_shape gate, never by opcode alone. */
+/* Complete Core integer, pointer-comparison and bit-operation machine
+ * family shared by AAPCS64 and LP64D; instruction encodings remain ISA-owned. */
+/* One checked overflow operator/value/pointee contract for GNU overflow
+ * builtins. These are shared Core semantics rather than native flags:
+ * AArch64 uses NZCV, LoongArch64 constructs carry/overflow with integer ops. */
+bool minic_multi_direct_integer_overflow_shape(
+    const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
+    size_t *width, bool *is_signed) {
+    MinicCoreValueId left, right, address;
+    MinicType value_type;
+    int op;
+    if (program == NULL || target == NULL || fn == NULL || ins == NULL ||
+        width == NULL || is_signed == NULL ||
+        ins->kind != MINIC_CORE_INSTRUCTION_INTEGER_OVERFLOW)
+        return false;
+    left = ins->value.integer_overflow.left;
+    right = ins->value.integer_overflow.right;
+    address = ins->value.integer_overflow.result_address;
+    op = ins->value.integer_overflow.operator_kind;
+    return left < fn->value_count && right < fn->value_count &&
+           address < fn->value_count &&
+           (op == MINIC_CORE_INTEGER_OVERFLOW_ADD ||
+            op == MINIC_CORE_INTEGER_OVERFLOW_SUBTRACT ||
+            op == MINIC_CORE_INTEGER_OVERFLOW_MULTIPLY) &&
+           minic_type_pointee(fn->values[address].type, &value_type) &&
+           minic_type_is_integer(value_type) &&
+           !minic_type_is_bool_integer(value_type) &&
+           !minic_type_is_const(value_type) &&
+           !minic_type_is_volatile(value_type) &&
+           minic_type_equal(value_type, fn->values[left].type) &&
+           minic_type_equal(value_type, fn->values[right].type) &&
+           minic_lp64_scalar_integer_width(
+               program, target, value_type, width, is_signed) &&
+           (*width == 4U || *width == 8U);
+}
+
+/* CLZ/CTZ are defined here for unsigned 8/16/32/64 Core operands.
+ * The ISA owns masking or bitfield extraction and exact machine opcodes. */
+bool minic_multi_direct_integer_bitscan_shape(
+    const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
+    unsigned int *width) {
+    MinicCoreValueId operand;
+    if (program == NULL || target == NULL || fn == NULL ||
+        ins == NULL || width == NULL ||
+        (ins->kind != MINIC_CORE_INSTRUCTION_INTEGER_CLZ &&
+         ins->kind != MINIC_CORE_INSTRUCTION_INTEGER_CTZ))
+        return false;
+    operand = ins->value.operand;
+    return operand < fn->value_count &&
+           minic_type_is_integer(ins->type) &&
+           minic_type_is_unsigned_integer(fn->values[operand].type) &&
+           minic_target_info_integer_width(
+               target, program, fn->values[operand].type, width) &&
+           (*width == 8U || *width == 16U ||
+            *width == 32U || *width == 64U);
+}
+
+bool minic_multi_direct_integer_machine_kind(MinicCoreInstructionKind kind) {
+    switch (kind) {
+    case MINIC_CORE_INSTRUCTION_INTEGER_OVERFLOW:
+    case MINIC_CORE_INSTRUCTION_INTEGER_CLZ:
+    case MINIC_CORE_INSTRUCTION_INTEGER_CTZ:
+    case MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_LEFT:
+    case MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_RIGHT:
+    case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_NOT:
+    case MINIC_CORE_INSTRUCTION_INTEGER_NEGATE:
+    case MINIC_CORE_INSTRUCTION_INTEGER_ADD:
+    case MINIC_CORE_INSTRUCTION_INTEGER_SUBTRACT:
+    case MINIC_CORE_INSTRUCTION_INTEGER_MULTIPLY:
+    case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND:
+    case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_XOR:
+    case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_OR:
+    case MINIC_CORE_INSTRUCTION_INTEGER_DIVIDE:
+    case MINIC_CORE_INSTRUCTION_INTEGER_REMAINDER:
+    case MINIC_CORE_INSTRUCTION_POINTER_LESS:
+    case MINIC_CORE_INSTRUCTION_INTEGER_LESS:
+    case MINIC_CORE_INSTRUCTION_SCALAR_EQUAL:
+    case MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO:
+        return true;
+    default:
+        return false;
+    }
+}
+
 bool minic_multi_direct_fp_instruction_kind(MinicCoreInstructionKind kind) {
     switch (kind) {
     case MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT:
