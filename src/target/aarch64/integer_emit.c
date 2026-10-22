@@ -26,21 +26,10 @@ bool minic_aarch64_emit_integer_instruction(
             const MinicCoreValueId lhs = ins->value.integer_overflow.left;
             const MinicCoreValueId rhs = ins->value.integer_overflow.right;
             const MinicCoreValueId address = ins->value.integer_overflow.result_address;
-            MinicType value_type;
             size_t width;
             bool is_signed;
-            if (lhs >= fn->value_count || rhs >= fn->value_count ||
-                address >= fn->value_count ||
-                !minic_type_pointee(fn->values[address].type, &value_type) ||
-                !minic_type_is_integer(value_type) ||
-                minic_type_is_bool_integer(value_type) ||
-                minic_type_is_const(value_type) ||
-                minic_type_is_volatile(value_type) ||
-                !minic_type_equal(value_type, fn->values[lhs].type) ||
-                !minic_type_equal(value_type, fn->values[rhs].type) ||
-                !minic_lp64_scalar_integer_width(program, target, value_type,
-                                      &width, &is_signed) ||
-                (width != 4U && width != 8U))
+            if (!minic_multi_direct_integer_overflow_shape(
+                    program, target, fn, ins, &width, &is_signed))
                 return false;
             const bool wide = width == 8U;
             const int op = ins->value.integer_overflow.operator_kind;
@@ -94,13 +83,8 @@ bool minic_aarch64_emit_integer_instruction(
         case MINIC_CORE_INSTRUCTION_INTEGER_CTZ: {
             const MinicCoreValueId operand = ins->value.operand;
             unsigned int width;
-            if (operand >= fn->value_count ||
-                !minic_type_is_integer(ins->type) ||
-                !minic_type_is_unsigned_integer(fn->values[operand].type) ||
-                !minic_target_info_integer_width(target, program,
-                          fn->values[operand].type, &width) ||
-                (width != 8U && width != 16U &&
-                 width != 32U && width != 64U) ||
+            if (!minic_multi_direct_integer_bitscan_shape(
+                    program, target, fn, ins, &width) ||
                 fprintf(out, width == 64U
                            ? "  ldr x9, [sp, #%zu]\n"
                            : "  ldr w9, [sp, #%zu]\n",
