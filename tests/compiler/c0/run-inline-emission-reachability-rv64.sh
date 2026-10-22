@@ -123,3 +123,8 @@ RISCV_LD="$RISCV_LD" QEMU_RISCV64="$QEMU_RISCV64" \
 # privileged; do NOT attempt to execute them in user-mode QEMU.
 MINIC="$MINIC" BUILD_DIR="$BUILD_DIR" RISCV_CC="$RISCV_CC" \
   bash "$(dirname "$0")/run-riscv64-irqflags-gcc-differential-v1.sh"
+
+# One ABI marshaller now owns RV64 Core direct and indirect argument transfer.
+MINIC="$MINIC" BUILD_DIR="$BUILD_DIR" RISCV_CC="$RISCV_CC" \
+RISCV_LD="$RISCV_LD" QEMU_RISCV64="$QEMU_RISCV64" \
+  bash "$(dirname "$0")/run-rv64-core-call-transfer.sh"
