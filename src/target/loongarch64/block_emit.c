@@ -443,7 +443,8 @@ bool minic_loongarch64_emit_core_blocks(FILE *out, const MinicDirectLP64BlockCon
             bool needs_gp_store = false;
             if (!minic_loongarch64_emit_fp_instruction(
                     out, program, target, fn, ins, offset,
-                    id, dynamic_frame, emit_integer_normalize,
+                    id, dynamic_frame, frame_plan,
+                    emit_integer_normalize,
                     &needs_gp_store))
                 return minic_multi_direct_machine_reject(
                     fn, "loongarch64", name, reject_stage, reject_block,
@@ -460,27 +461,6 @@ bool minic_loongarch64_emit_core_blocks(FILE *out, const MinicDirectLP64BlockCon
             continue;
         }
         switch (ins->kind) {
-        case MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT:
-            if (minic_type_is_long_double(ins->type)) {
-                size_t dst;
-                if (!minic_lp64_frame_plan_wide_slot(frame_plan, ins->result, &dst) ||
-                    fprintf(out, "  li.d $t0, 0x%016" PRIx64 "\n",
-                            ins->value.floating128_bits.low) < 0 ||
-                    !emit_sp_mem(out, "st.d", "$t0", dst) ||
-                    fprintf(out, "  li.d $t0, 0x%016" PRIx64 "\n",
-                            ins->value.floating128_bits.high) < 0 ||
-                    !emit_sp_mem(out, "st.d", "$t0", dst + 8U))
-                    return minic_multi_direct_machine_reject(fn, "loongarch64", name,
-                                               reject_stage, reject_block,
-                                               reject_ins, __LINE__);
-                continue;
-            }
-            if ((!minic_type_is_double(ins->type) &&
-                 !minic_type_is_float(ins->type)) ||
-                fprintf(out, "  li.d $t0, 0x%016" PRIx64 "\n",
-                        ins->value.floating_bits) < 0) return minic_multi_direct_machine_reject(fn, "loongarch64", name, reject_stage,
-                                    reject_block, reject_ins, __LINE__);
-            break;
         case MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT: {
             size_t width = 0U;
             bool sign = false;
