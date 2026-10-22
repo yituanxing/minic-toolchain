@@ -4,6 +4,7 @@
 #include "core/core_ir.h"
 #include "frontend/ast.h"
 #include "target/target_info.h"
+#include "target/common/core_object_storage.h"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -17,6 +18,7 @@ typedef struct MinicX86Frame {
     size_t value_count;
     size_t *value_offsets;
     size_t *object_offsets;
+    MinicCoreObjectStoragePlan object_storage;
     size_t object_count;
     size_t frame_size;
     size_t object_base_alignment;

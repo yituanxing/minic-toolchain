@@ -1,4 +1,5 @@
 #include "target/common/lp64_frame.h"
+#include "target/common/core_object_storage.h"
 #include <stdint.h>
 #include <stdlib.h>
 
@@ -24,17 +25,14 @@ bool minic_lp64_frame_plan_objects(
     plan->value_count = fn->value_count;
     pos = fn->value_count * 8U;
     for (i = 0U; i < fn->object_count; ++i) {
-        const MinicCoreObject *obj = &fn->objects[i];
-        size_t unit, align, extent;
-        if (!minic_data_layout_type(target->data_layout, program,
-                                    obj->type, &unit, &align) ||
-            obj->element_count == 0U ||
-            unit > MINIC_LARGE_FRAME_MAX / obj->element_count)
+        MinicCoreObjectStorage storage;
+        size_t align, extent;
+        if (!minic_core_object_storage(program, target->data_layout,
+                                       &fn->objects[i], &storage))
             return false;
-        extent = unit * obj->element_count;
-        if (obj->explicit_alignment > align)
-            align = obj->explicit_alignment;
-        if (align == 0U || align > 16U || (align & (align - 1U)) != 0U)
+        align = storage.alignment;
+        extent = storage.extent;
+        if (align > 16U || extent > MINIC_LARGE_FRAME_MAX)
             return false;
         if (pos > MINIC_LARGE_FRAME_MAX - (align - 1U)) return false;
         pos = (pos + align - 1U) & ~(align - 1U);
