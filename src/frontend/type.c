@@ -424,6 +424,23 @@ bool minic_type_gnu_pointer_sign_compatible(MinicType target, MinicType source) 
     return true;
 }
 
+/* This is a GNU C diagnosable constraint violation (-Wdiscarded-qualifiers),
+ * never a general C assignment-compatibility rule. Frontend assignment
+ * expression and statement contexts insert the same explicit AST cast only
+ * after this one-level, identical-pointee, nonvolatile proof. */
+bool minic_type_gnu_discard_const_one_pointer_compatible(MinicType target,
+                                                         MinicType source) {
+    MinicType t, s, tu, su;
+    return target.pointer_depth == 1U && source.pointer_depth == 1U &&
+           minic_type_pointee(target, &t) &&
+           minic_type_pointee(source, &s) &&
+           minic_type_is_const(s) && !minic_type_is_const(t) &&
+           (!minic_type_is_volatile(s) || minic_type_is_volatile(t)) &&
+           minic_type_unqualified(t, &tu) &&
+           minic_type_unqualified(s, &su) &&
+           minic_type_equal(tu, su) && !minic_type_is_function(tu);
+}
+
 bool minic_type_conditional_pointer_common(MinicType left, MinicType right, MinicType *result) {
     MinicType left_pointer;
     MinicType right_pointer;

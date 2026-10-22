@@ -43,4 +43,19 @@ cc -no-pie "$scratch/abi.o" -o "$scratch/minic"
 "$scratch/gnu" > "$scratch/gnu.stdout"
 "$scratch/minic" > "$scratch/minic.stdout"
 cmp "$scratch/gnu.stdout" "$scratch/minic.stdout"
+# A one-level const conversion (GNU warning) must not accidentally admit
+# pointer-to-pointer qualification drops or discard volatile qualifiers.
+cat > "$scratch/invalid.c" <<'NEGATIVE'
+void bad(char **pp, const char **c, volatile const char *v, char *p) {
+    pp = c;
+    p = v;
+}
+NEGATIVE
+cc -E -P -x c "$scratch/invalid.c" -o "$scratch/invalid.i"
+if "$compiler" --target=x86_64-linux -S "$scratch/invalid.i" -o "$scratch/invalid.s" \
+     >"$scratch/invalid.stdout" 2>"$scratch/invalid.stderr"; then
+  echo "X86_GNU_CONST_DISCARD_NEGATIVE=FAIL illegal_pointer_conversion_admitted" >&2
+  exit 1
+fi
+echo 'X86_GNU_CONST_DISCARD_NEGATIVE=PASS unsafe_pointer_conversions_rejected'
 echo 'X86_SYSV_RECORD_ABI=PASS libc_div_t=RAX 32B_record_by_value=STACK GNU_const_pointer_compat=1 callback_format_attribute=1 runtime_byte_exact=1'

@@ -38,25 +38,6 @@ bool minic_parser_statement_modifiable_lvalue(const MinicExpression *expression)
            !minic_type_is_const(expression->type);
 }
 
-/* GCC accepts this C constraint violation with -Wdiscarded-qualifiers,
- * unless warnings are promoted to errors. BusyBox's original SELinux
- * headers use legacy char* security_context_t while context_str() returns
- * const char*. Represent the implicitly diagnosed conversion as an explicit
- * pointer-width-preserving AST cast; never weaken type equality, qualifier
- * checks for deeper pointers, or Core IR's verifier. */
-static bool statement_gnu_discard_const_one_pointer(MinicType target,
-                                                    MinicType source) {
-    MinicType t, s, tu, su;
-    return target.pointer_depth == 1U && source.pointer_depth == 1U &&
-           minic_type_pointee(target, &t) &&
-           minic_type_pointee(source, &s) &&
-           minic_type_is_const(s) && !minic_type_is_const(t) &&
-           (!minic_type_is_volatile(s) || minic_type_is_volatile(t)) &&
-           minic_type_unqualified(t, &tu) &&
-           minic_type_unqualified(s, &su) &&
-           minic_type_equal(tu, su) && !minic_type_is_function(tu);
-}
-
 bool minic_parser_statement_assignment_conversion(MinicParser *parser,
                                         MinicType target_type,
                                         MinicExpressionId *expression_id) {
@@ -76,7 +57,7 @@ bool minic_parser_statement_assignment_conversion(MinicParser *parser,
     if (minic_c0_assignment_compatible(parser->program, target_type, source_id)) {
         return true;
     }
-    if (statement_gnu_discard_const_one_pointer(target_type, source->type)) {
+    if (minic_type_gnu_discard_const_one_pointer_compatible(target_type, source->type)) {
         /* Preserve a precise cast in the AST. This is the same underlying
          * pointer representation; never silently permit deeper pointer chains or
          * a volatile qualification drop. */
