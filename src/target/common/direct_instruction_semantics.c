@@ -248,7 +248,7 @@ bool minic_multi_direct_integer_shift_shape(
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
     size_t *left_width, size_t *right_width,
     bool *left_signed, bool *right_signed) {
-    MinicCoreValueId lhs, rhs;
+    MinicCoreValueId lhs;
     if (program == NULL || target == NULL || fn == NULL || ins == NULL ||
         left_width == NULL || right_width == NULL ||
         left_signed == NULL || right_signed == NULL ||
@@ -256,7 +256,6 @@ bool minic_multi_direct_integer_shift_shape(
          ins->kind != MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_RIGHT))
         return false;
     lhs = ins->value.binary.left;
-    rhs = ins->value.binary.right;
     return lhs < fn->value_count && rhs < fn->value_count &&
            minic_type_equal(fn->values[lhs].type, ins->type) &&
            core_direct_integer_pair(program, target, fn, ins,
@@ -272,15 +271,12 @@ bool minic_multi_direct_integer_compare_shape(
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
     size_t *left_width, size_t *right_width,
     bool *left_signed, bool *right_signed) {
-    MinicCoreValueId lhs, rhs;
     if (program == NULL || target == NULL || fn == NULL || ins == NULL ||
         left_width == NULL || right_width == NULL ||
         left_signed == NULL || right_signed == NULL ||
         (ins->kind != MINIC_CORE_INSTRUCTION_INTEGER_LESS &&
          ins->kind != MINIC_CORE_INSTRUCTION_SCALAR_EQUAL))
         return false;
-    lhs = ins->value.binary.left;
-    rhs = ins->value.binary.right;
     return core_direct_integer_pair(program, target, fn, ins,
                                     left_width, right_width,
                                     left_signed, right_signed) &&
@@ -337,7 +333,7 @@ bool minic_multi_direct_integer_binary_shape(
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
     size_t *left_width, size_t *right_width,
     bool *left_signed, bool *right_signed) {
-    MinicCoreValueId lhs, rhs;
+    MinicCoreValueId lhs;
     bool arithmetic, bitwise, division;
     if (program == NULL || target == NULL || fn == NULL || ins == NULL ||
         left_width == NULL || right_width == NULL ||
@@ -354,7 +350,6 @@ bool minic_multi_direct_integer_binary_shape(
     if (!arithmetic && !bitwise && !division)
         return false;
     lhs = ins->value.binary.left;
-    rhs = ins->value.binary.right;
     if (!core_direct_integer_pair(program, target, fn, ins,
                                   left_width, right_width,
                                   left_signed, right_signed) ||
