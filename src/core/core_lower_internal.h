@@ -62,6 +62,15 @@ MinicCoreLowerStatus minic_core_lower_internal_lower_condition_branch(MinicCoreL
                                                    MinicSourceSpan span,
                                                    MinicCoreBlockId when_true,
                                                    MinicCoreBlockId when_false);
+/* Canonical scalar Core LOAD/STORE encoding; source owner supplies span,
+ * unqualified value type, observable volatility, and evaluation order. */
+MinicCoreLowerStatus minic_core_lower_internal_emit_scalar_load(
+    MinicCoreLowerContext *context, MinicSourceSpan span, MinicType type,
+    MinicCoreValueId address_id, bool is_volatile, MinicCoreValueId *value_id);
+MinicCoreLowerStatus minic_core_lower_internal_emit_scalar_store(
+    MinicCoreLowerContext *context, MinicSourceSpan span,
+    MinicCoreValueId address_id, MinicCoreValueId stored_value, bool is_volatile);
+
 MinicCoreLowerStatus minic_core_lower_internal_reload_scalar_value(MinicCoreLowerContext *context,
                                                 MinicSourceSpan span,
                                                 MinicType type,
