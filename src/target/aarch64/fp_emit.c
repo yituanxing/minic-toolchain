@@ -1,4 +1,5 @@
 #include "target/aarch64/fp_emit.h"
+#include "target/aarch64/scalar_normalize.h"
 #include "target/common/direct_instruction_semantics.h"
 #include "target/common/lp64_scalar.h"
 #include <stdint.h>
@@ -13,10 +14,9 @@ bool minic_aarch64_emit_fp_instruction(
     FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
     size_t offset, const MinicLP64FramePlan *frame_plan,
-    bool (*normalize)(FILE *, size_t, bool),
     bool *needs_gp_store) {
     if (out == NULL || program == NULL || target == NULL ||
-        fn == NULL || ins == NULL || frame_plan == NULL || normalize == NULL ||
+        fn == NULL || ins == NULL || frame_plan == NULL || 
         needs_gp_store == NULL)
         return false;
     *needs_gp_store = false;
@@ -198,7 +198,7 @@ bool minic_aarch64_emit_fp_instruction(
                              ? "  ldr x9, [sp, #%zu]\n"
                              : "  ldr w9, [sp, #%zu]\n",
                         (size_t)src * 8U) < 0 ||
-                (width < 4U && !normalize(out, width, sign)) ||
+                (width < 4U && !minic_aarch64_emit_integer_normalize(out, width, sign)) ||
                 fputs(width == 8U
                           ? (sign ? "  scvtf d9, x9\n"
                                   : "  ucvtf d9, x9\n")
@@ -230,7 +230,7 @@ bool minic_aarch64_emit_fp_instruction(
             if (fprintf(out, "  ldr d9, [sp, #%zu]\n",
                         (size_t)src * 8U) < 0 ||
                 fputs(conversion, out) == EOF ||
-                (width < 4U && !normalize(out, width, sign)))
+                (width < 4U && !minic_aarch64_emit_integer_normalize(out, width, sign)))
                 return false;
             *needs_gp_store = true;
             return true;

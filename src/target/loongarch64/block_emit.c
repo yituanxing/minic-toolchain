@@ -314,7 +314,6 @@ bool minic_loongarch64_emit_core_blocks(FILE *out, const MinicDirectLP64BlockCon
             if (!minic_loongarch64_emit_fp_instruction(
                     out, program, target, fn, ins, offset,
                     id, dynamic_frame, frame_plan,
-                    minic_loongarch64_emit_integer_normalize,
                     &needs_gp_store))
                 return minic_multi_direct_machine_reject(
                     fn, "loongarch64", name, reject_stage, reject_block,
@@ -332,7 +331,7 @@ bool minic_loongarch64_emit_core_blocks(FILE *out, const MinicDirectLP64BlockCon
             bool needs_gp_store = false;
             if (!minic_loongarch64_emit_integer_instruction(
                     out, program, target, fn, ins, frame_plan,
-                    dynamic_frame, minic_loongarch64_emit_integer_normalize, &needs_gp_store))
+                    dynamic_frame, &needs_gp_store))
                 return minic_multi_direct_machine_reject(
                     fn, "loongarch64", name, reject_stage, reject_block,
                     reject_ins, __LINE__);
@@ -348,7 +347,7 @@ bool minic_loongarch64_emit_core_blocks(FILE *out, const MinicDirectLP64BlockCon
         if (shape.family == MINIC_DIRECT_MACHINE_ABI) {
             bool needs_gp_store = false;
             if (!minic_loongarch64_emit_abi_instruction(
-                    out, ctx, ins, offset, minic_loongarch64_emit_integer_normalize,
+                    out, ctx, ins, offset,
                     &needs_gp_store))
                 return minic_multi_direct_machine_reject(
                     fn, "loongarch64", name, reject_stage, reject_block,

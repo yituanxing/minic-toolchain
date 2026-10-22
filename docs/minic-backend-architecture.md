@@ -59,10 +59,9 @@ inline-assembly behavior, so do not force it into an AAPCS64/LP64D-only API.
   integer-cast widths/signs/128-bit Core stack-slot facts; native machine
   lowering consumes those facts.
 - Each direct LP64 ISA has one target-owned `scalar_normalize.c` primitive
-  reused by FP, integer, ABI and residual machine families. The block emitter
-  passes the shared native helper to older machine-family interfaces, but
-  the residual family calls it directly: it no longer round-trips a callback
-  through the block dispatcher.
+  reused directly by FP, integer, ABI and residual machine families. No
+  block-emitter callback or forwarding parameter remains across modules
+  inside the same ISA. This is independent of the Core type-width classifier.
 
 ### Failure and lifetime invariants
 

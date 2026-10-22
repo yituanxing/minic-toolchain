@@ -12,7 +12,6 @@
 bool minic_aarch64_emit_abi_instruction(
     FILE *out, const MinicDirectLP64BlockContext *ctx,
     const MinicCoreInstruction *ins, size_t offset,
-    bool (*normalize)(FILE *, size_t, bool),
     bool *needs_gp_store);
 
 #endif

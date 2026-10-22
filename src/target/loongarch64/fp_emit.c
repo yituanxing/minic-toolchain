@@ -1,4 +1,5 @@
 #include "target/loongarch64/fp_emit.h"
+#include "target/loongarch64/scalar_normalize.h"
 #include "target/common/direct_instruction_semantics.h"
 #include "target/common/lp64_scalar.h"
 #include "target/loongarch64/frame_emit.h"
@@ -17,10 +18,9 @@ bool minic_loongarch64_emit_fp_instruction(
     FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
     size_t offset, size_t id, bool dynamic_frame, const MinicLP64FramePlan *frame_plan,
-    bool (*normalize)(FILE *, size_t, bool),
     bool *needs_gp_store) {
     if (out == NULL || program == NULL || target == NULL ||
-        fn == NULL || ins == NULL || frame_plan == NULL || normalize == NULL ||
+        fn == NULL || ins == NULL || frame_plan == NULL || 
         needs_gp_store == NULL)
         return false;
     *needs_gp_store = false;
@@ -162,7 +162,7 @@ bool minic_loongarch64_emit_fp_instruction(
                     program, target, fn, ins, &width, &sign) ||
                 !emit_sp_mem(out, width == 8U ? "ld.d" : "ld.w",
                              "$t0", (size_t)src * 8U) ||
-                (width < 4U && !normalize(out, width, sign)))
+                (width < 4U && !minic_loongarch64_emit_integer_normalize(out, width, sign)))
                 return false;
             if (width == 8U && !sign) {
                 /* LoongArch base FP has signed ffint.d.l, but not an
@@ -249,7 +249,7 @@ bool minic_loongarch64_emit_fp_instruction(
                 fputs(conversion, out) == EOF ||
                 (width == 4U && !sign &&
                  fputs("  bstrpick.d $t0, $t0, 31, 0\n", out) == EOF) ||
-                (width < 4U && !normalize(out, width, sign)))
+                (width < 4U && !minic_loongarch64_emit_integer_normalize(out, width, sign)))
                 return false;
             *needs_gp_store = true;
             return true;
