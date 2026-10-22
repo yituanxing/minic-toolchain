@@ -3,6 +3,7 @@
 #include "target/riscv64/frame_access.h"
 #include "target/riscv64/codegen_internal.h"
 #include "target/riscv64/legalize.h"
+#include <inttypes.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
