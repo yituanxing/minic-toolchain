@@ -1,4 +1,5 @@
 #include "target/common/direct_instruction_semantics.h"
+#include "core/core_ir.h"
 #include "target/common/lp64_scalar.h"
 #include "target/data_layout.h"
 
@@ -129,16 +130,63 @@ bool minic_multi_direct_result_slot_offset(
 }
 
 
-/* Non-wide scalar LOAD/ATOMIC_LOAD admission. Both direct LP64 backends
- * have the same target-independent relaxed-only atomic and value-width
- * contracts; they remain responsible for the actual machine loads. */
 
-/* Shared LP64 validation for integer binary arithmetic, bitwise, and
- * division/remainder: width, signedness and result-type restrictions remain
- * distinct across these three operation families. Encoding is ISA-owned. */
+/* Scalar bitcast shape for direct LP64 lowering. Pointer->integer must
+ * preserve all 64 address bits; integer->pointer keeps narrow source width
+ * for the ISA's existing sign/zero-extension sequence. */
+bool minic_multi_direct_scalar_bitcast_shape(
+    const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
+    bool *pointer_to_integer, size_t *source_width,
+    bool *source_signed, bool *source_pointer) {
+    MinicCoreValueId source;
+    MinicType input;
+    size_t output_width;
+    bool output_signed;
+    if (program == NULL || target == NULL || fn == NULL || ins == NULL ||
+        pointer_to_integer == NULL || source_width == NULL ||
+        source_signed == NULL || source_pointer == NULL ||
+        ins->kind != MINIC_CORE_INSTRUCTION_SCALAR_BITCAST)
+        return false;
+    source = ins->value.operand;
+    if (source >= fn->value_count)
+        return false;
+    input = fn->values[source].type;
+    if (!minic_core_scalar_bitcast_types_valid(ins->type, input))
+        return false;
+    *source_pointer = minic_type_is_pointer(input);
+    *pointer_to_integer = *source_pointer && minic_type_is_integer(ins->type);
+    *source_width = 0U;
+    *source_signed = false;
+    if (*pointer_to_integer)
+        return minic_lp64_scalar_integer_width(program, target, ins->type,
+                                                &output_width, &output_signed) &&
+               output_width == 8U;
+    if (!minic_type_is_pointer(ins->type))
+        return false;
+    return *source_pointer ||
+           minic_lp64_scalar_integer_width(program, target, input,
+                                          source_width, source_signed);
+}
 
-/* The direct LP64 backends share Core unary/shift/compare contracts; register
- * choice, signed extensions and actual machine encodings remain target-owned. */
+/* POINTER_LESS compares two identically typed pointer Core values and
+ * produces C int. The unsigned machine comparison is ISA-owned. */
+bool minic_multi_direct_pointer_less_shape(
+    const MinicCoreFunction *fn, const MinicCoreInstruction *ins) {
+    MinicCoreValueId lhs, rhs;
+    if (fn == NULL || ins == NULL ||
+        ins->kind != MINIC_CORE_INSTRUCTION_POINTER_LESS ||
+        !minic_type_equal(ins->type, minic_type_int()))
+        return false;
+    lhs = ins->value.binary.left;
+    rhs = ins->value.binary.right;
+    return lhs < fn->value_count && rhs < fn->value_count &&
+           minic_type_is_pointer(fn->values[lhs].type) &&
+           minic_type_equal(fn->values[lhs].type, fn->values[rhs].type);
+}
+
+/* Core unary/shift/compare type admission is shared across direct LP64
+ * targets. Native extensions and opcode selection remain ISA-owned. */
 bool minic_multi_direct_integer_unary_shape(
     const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
@@ -157,12 +205,50 @@ bool minic_multi_direct_integer_unary_shape(
            !minic_type_is_bool_integer(ins->type);
 }
 
+/* File-private Core operand decoders. The public family probes below
+ * retain their independent type, boolean, width and ABI admission rules. */
+static bool core_direct_integer_pair(
+    const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
+    size_t *lw, size_t *rw, bool *ls, bool *rs) {
+    MinicCoreValueId lhs, rhs;
+    if (program == NULL || target == NULL || fn == NULL || ins == NULL ||
+        lw == NULL || rw == NULL || ls == NULL || rs == NULL)
+        return false;
+    lhs = ins->value.binary.left;
+    rhs = ins->value.binary.right;
+    return lhs < fn->value_count && rhs < fn->value_count &&
+           minic_lp64_scalar_integer_width(program, target, fn->values[lhs].type,
+                                          lw, ls) &&
+           minic_lp64_scalar_integer_width(program, target, fn->values[rhs].type,
+                                          rw, rs);
+}
+
+/* This remains a relaxed-only atomic preflight, not a C11 memory model.
+ * LOAD and STORE apply separate payload/bit-width tests afterward. */
+static bool core_direct_relaxed_atomic_pointee_width(
+    const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicCoreFunction *fn, MinicCoreValueId address,
+    unsigned int order, size_t *width) {
+    MinicType pointee;
+    size_t align;
+    if (program == NULL || target == NULL || fn == NULL || width == NULL ||
+        order != 0U || address >= fn->value_count ||
+        !minic_type_pointee(fn->values[address].type, &pointee) ||
+        !(minic_type_is_integer(pointee) || minic_type_is_pointer(pointee)) ||
+        !minic_data_layout_type(target->data_layout, program, pointee,
+                                width, &align))
+        return false;
+    (void)align;
+    return true;
+}
+
 bool minic_multi_direct_integer_shift_shape(
     const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
     size_t *left_width, size_t *right_width,
     bool *left_signed, bool *right_signed) {
-    MinicCoreValueId lhs, rhs;
+    MinicCoreValueId lhs;
     if (program == NULL || target == NULL || fn == NULL || ins == NULL ||
         left_width == NULL || right_width == NULL ||
         left_signed == NULL || right_signed == NULL ||
@@ -170,13 +256,11 @@ bool minic_multi_direct_integer_shift_shape(
          ins->kind != MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_RIGHT))
         return false;
     lhs = ins->value.binary.left;
-    rhs = ins->value.binary.right;
     return lhs < fn->value_count && rhs < fn->value_count &&
            minic_type_equal(fn->values[lhs].type, ins->type) &&
-           minic_lp64_scalar_integer_width(program, target, fn->values[lhs].type,
-                                          left_width, left_signed) &&
-           minic_lp64_scalar_integer_width(program, target, fn->values[rhs].type,
-                                          right_width, right_signed) &&
+           core_direct_integer_pair(program, target, fn, ins,
+                                    left_width, right_width,
+                                    left_signed, right_signed) &&
            (*left_width == 1U || *left_width == 2U ||
             *left_width == 4U || *left_width == 8U) &&
            !minic_type_is_bool_integer(ins->type);
@@ -187,20 +271,15 @@ bool minic_multi_direct_integer_compare_shape(
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
     size_t *left_width, size_t *right_width,
     bool *left_signed, bool *right_signed) {
-    MinicCoreValueId lhs, rhs;
     if (program == NULL || target == NULL || fn == NULL || ins == NULL ||
         left_width == NULL || right_width == NULL ||
         left_signed == NULL || right_signed == NULL ||
         (ins->kind != MINIC_CORE_INSTRUCTION_INTEGER_LESS &&
          ins->kind != MINIC_CORE_INSTRUCTION_SCALAR_EQUAL))
         return false;
-    lhs = ins->value.binary.left;
-    rhs = ins->value.binary.right;
-    return lhs < fn->value_count && rhs < fn->value_count &&
-           minic_lp64_scalar_integer_width(program, target, fn->values[lhs].type,
-                                          left_width, left_signed) &&
-           minic_lp64_scalar_integer_width(program, target, fn->values[rhs].type,
-                                          right_width, right_signed) &&
+    return core_direct_integer_pair(program, target, fn, ins,
+                                    left_width, right_width,
+                                    left_signed, right_signed) &&
            *left_width == *right_width && *left_signed == *right_signed &&
            (*left_width == 4U || *left_width == 8U);
 }
@@ -247,12 +326,14 @@ bool minic_multi_direct_pointer_offset_shape(
            ins->value.pointer_offset.element_size <= maximum_stride;
 }
 
+/* Arithmetic, bitwise and division/remainder retain distinct result-type
+ * and 8/16/32/64-bit restrictions above the common pair decoder. */
 bool minic_multi_direct_integer_binary_shape(
     const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
     size_t *left_width, size_t *right_width,
     bool *left_signed, bool *right_signed) {
-    MinicCoreValueId lhs, rhs;
+    MinicCoreValueId lhs;
     bool arithmetic, bitwise, division;
     if (program == NULL || target == NULL || fn == NULL || ins == NULL ||
         left_width == NULL || right_width == NULL ||
@@ -269,12 +350,9 @@ bool minic_multi_direct_integer_binary_shape(
     if (!arithmetic && !bitwise && !division)
         return false;
     lhs = ins->value.binary.left;
-    rhs = ins->value.binary.right;
-    if (lhs >= fn->value_count || rhs >= fn->value_count ||
-        !minic_lp64_scalar_integer_width(program, target, fn->values[lhs].type,
-                                         left_width, left_signed) ||
-        !minic_lp64_scalar_integer_width(program, target, fn->values[rhs].type,
-                                         right_width, right_signed) ||
+    if (!core_direct_integer_pair(program, target, fn, ins,
+                                  left_width, right_width,
+                                  left_signed, right_signed) ||
         *left_width != *right_width || *left_signed != *right_signed)
         return false;
     if (arithmetic)
@@ -288,14 +366,15 @@ bool minic_multi_direct_integer_binary_shape(
            minic_type_equal(fn->values[lhs].type, ins->type);
 }
 
+/* The direct LP64 backends admit relaxed-only atomic scalar loads.
+ * This remains strictly a source/Core value-shape gate. */
 bool minic_multi_direct_scalar_load_shape(
     const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
     size_t *width, bool *is_signed, bool *is_pointer) {
     bool atomic;
     MinicCoreValueId address;
-    MinicType pointee;
-    size_t pointee_width = 0U, pointee_align = 0U;
+    size_t pointee_width = 0U;
     if (program == NULL || target == NULL || fn == NULL || ins == NULL ||
         width == NULL || is_signed == NULL || is_pointer == NULL)
         return false;
@@ -308,12 +387,9 @@ bool minic_multi_direct_scalar_load_shape(
     *is_signed = false;
     *is_pointer = minic_type_is_pointer(ins->type);
     if (atomic &&
-        (ins->value.atomic_load.memory_order != 0U ||
-         address >= fn->value_count ||
-         !minic_type_pointee(fn->values[address].type, &pointee) ||
-         !(minic_type_is_integer(pointee) || minic_type_is_pointer(pointee)) ||
-         !minic_data_layout_type(target->data_layout, program, pointee,
-                                 &pointee_width, &pointee_align) ||
+        (!core_direct_relaxed_atomic_pointee_width(
+             program, target, fn, address,
+             ins->value.atomic_load.memory_order, &pointee_width) ||
          (*is_pointer ? pointee_width != 8U :
             !minic_lp64_scalar_integer_width(program, target, ins->type,
                                              width, is_signed) ||
@@ -321,7 +397,6 @@ bool minic_multi_direct_scalar_load_shape(
              *width != 8U) ||
             pointee_width != *width)))
         return false;
-    (void)pointee_align;
     if (address >= fn->value_count ||
         !minic_type_is_pointer(fn->values[address].type) ||
         (!*is_pointer && !minic_type_is_double(ins->type) &&
@@ -357,8 +432,7 @@ bool minic_multi_direct_scalar_store_shape(
     size_t *width, bool *is_signed, bool *is_pointer) {
     bool atomic;
     MinicCoreValueId addr, value;
-    MinicType pointee;
-    size_t pointee_width = 0U, pointee_align = 0U;
+    size_t pointee_width = 0U;
     if (program == NULL || target == NULL || fn == NULL || ins == NULL ||
         width == NULL || is_signed == NULL || is_pointer == NULL)
         return false;
@@ -378,11 +452,9 @@ bool minic_multi_direct_scalar_store_shape(
     /* These are the existing *relaxed-only*, scalar, naturally-aligned
      * admission rules. This is not a general atomic memory model. */
     if (atomic &&
-        (ins->value.atomic_store.memory_order != 0U ||
-         !minic_type_pointee(fn->values[addr].type, &pointee) ||
-         !(minic_type_is_integer(pointee) || minic_type_is_pointer(pointee)) ||
-         !minic_data_layout_type(target->data_layout, program,
-                                 pointee, &pointee_width, &pointee_align)))
+        !core_direct_relaxed_atomic_pointee_width(
+             program, target, fn, addr,
+             ins->value.atomic_store.memory_order, &pointee_width))
         return false;
     if (!*is_pointer && !minic_type_is_double(fn->values[value].type) &&
         !minic_type_is_float(fn->values[value].type) &&
@@ -401,6 +473,5 @@ bool minic_multi_direct_scalar_store_shape(
            *width != 4U && *width != 8U) ||
           *width != pointee_width)))
         return false;
-    (void)pointee_align;
     return true;
 }

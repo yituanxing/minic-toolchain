@@ -24,11 +24,17 @@ bool minic_multi_direct_result_slot_offset(
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
     bool allow_variadic_double_result, size_t *offset);
 
-/* Common scalar and relaxed atomic LOAD shape (ISA emission stays local). */
-/* Shared Core operand shape for LP64 integer arithmetic, bitwise and div. */
+/* Private machine-independent admission; register allocation, ISA instruction
+ * selection and all native emission stay in the target backends. */
+/* Exact direct-LP64 Core pointer/int cast and pointer-order admission. */
+bool minic_multi_direct_scalar_bitcast_shape(
+    const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
+    bool *pointer_to_integer, size_t *source_width,
+    bool *source_signed, bool *source_pointer);
+bool minic_multi_direct_pointer_less_shape(
+    const MinicCoreFunction *fn, const MinicCoreInstruction *ins);
 
-/* Core-only operand admission for existing AArch64/LoongArch64 instructions.
- * Each machine backend is still responsible for assembly and diagnostics. */
 bool minic_multi_direct_integer_unary_shape(
     const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
@@ -52,12 +58,14 @@ bool minic_multi_direct_pointer_offset_shape(
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
     size_t maximum_stride, size_t *index_width, bool *index_signed);
 
+/* Scalar integer binary families keep their existing ABI width rules. */
 bool minic_multi_direct_integer_binary_shape(
     const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
     size_t *left_width, size_t *right_width,
     bool *left_signed, bool *right_signed);
 
+/* Relaxed-only scalar LOAD/ATOMIC_LOAD shape validation. */
 bool minic_multi_direct_scalar_load_shape(
     const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
