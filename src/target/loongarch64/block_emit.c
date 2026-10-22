@@ -1,4 +1,5 @@
 #include "target/loongarch64/block_emit.h"
+#include "target/loongarch64/memory_emit.h"
 #include "target/loongarch64/call_emit.h"
 #include "target/loongarch64/integer_emit.h"
 #include "target/loongarch64/fp_emit.h"
@@ -194,25 +195,6 @@ bool minic_loongarch64_emit_terminator(FILE *out,
 
 
 /* All Core blocks and their machine instruction cases are target-owned. */
-static bool emit_integer_memory(FILE *out, bool store,
-                                size_t width, bool sign) {
-    const char *op = NULL;
-    if (store) {
-        op = width == 1U ? "  st.b $t0, $t1, 0\n" :
-             width == 2U ? "  st.h $t0, $t1, 0\n" :
-             width == 4U ? "  st.w $t0, $t1, 0\n" :
-             width == 8U ? "  st.d $t0, $t1, 0\n" : NULL;
-    } else {
-        op = width == 1U ? (sign ? "  ld.b $t0, $t1, 0\n" :
-                                     "  ld.bu $t0, $t1, 0\n") :
-             width == 2U ? (sign ? "  ld.h $t0, $t1, 0\n" :
-                                     "  ld.hu $t0, $t1, 0\n") :
-             width == 4U ? "  ld.w $t0, $t1, 0\n" :
-              width == 8U ? "  ld.d $t0, $t1, 0\n" : NULL;
-    }
-    return op != NULL && fputs(op, out) != EOF;
-}
-
 static bool emit_integer_normalize(FILE *out, size_t width, bool sign) {
     const char *op = width == 1U
         ? (sign ? "  slli.w $t0, $t0, 24\n  srai.w $t0, $t0, 24\n" :
@@ -346,60 +328,29 @@ bool minic_loongarch64_emit_core_blocks(FILE *out, const MinicDirectLP64BlockCon
             continue;
         }
         /* Store both 64-bit limbs, with no hidden 128-bit truncation. */
-        if (ins->kind == MINIC_CORE_INSTRUCTION_STORE &&
-            ins->value.store.stored_value < fn->value_count &&
-            minic_type_is_int128_integer(
-                fn->values[ins->value.store.stored_value].type)) {
-            const MinicCoreValueId addr = ins->value.store.address;
-            size_t src;
-            if (!minic_multi_direct_wide_store_shape(
-                    fn, ins, frame_plan, &src) ||
-                !emit_sp_mem(out, "ld.d", "$t1", (size_t)addr * 8U) ||
-                !emit_sp_mem(out, "ld.d", "$t0", src) ||
-                fputs("  st.d $t0, $t1, 0\n", out) == EOF ||
-                !emit_sp_mem(out, "ld.d", "$t0", src + 8U) ||
-                fputs("  st.d $t0, $t1, 8\n", out) == EOF)
-                return minic_multi_direct_machine_reject(fn, "loongarch64", name,
-                    reject_stage, reject_block, reject_ins, __LINE__);
-            continue;
-        }
-        if (ins->kind == MINIC_CORE_INSTRUCTION_STORE &&
-            ins->value.store.stored_value < fn->value_count &&
-            minic_type_is_long_double(
-                fn->values[ins->value.store.stored_value].type)) {
-            const MinicCoreValueId addr = ins->value.store.address;
-            size_t src;
-            if (!minic_multi_direct_wide_store_shape(
-                    fn, ins, frame_plan, &src) ||
-                !emit_sp_mem(out, "ld.d", "$t1", (size_t)addr * 8U) ||
-                !emit_sp_mem(out, "ld.d", "$t0", src) ||
-                fputs("  st.d $t0, $t1, 0\n", out) == EOF ||
-                !emit_sp_mem(out, "ld.d", "$t0", src + 8U) ||
-                fputs("  st.d $t0, $t1, 8\n", out) == EOF)
-                return minic_multi_direct_machine_reject(fn, "loongarch64", name,
-                                           reject_stage, reject_block,
-                                           reject_ins, __LINE__);
-            continue;
-        }
-        if (ins->kind == MINIC_CORE_INSTRUCTION_STORE ||
-            ins->kind == MINIC_CORE_INSTRUCTION_ATOMIC_STORE) {
-            const bool atomic = ins->kind == MINIC_CORE_INSTRUCTION_ATOMIC_STORE;
-            const MinicCoreValueId addr = atomic ? ins->value.atomic_store.address
-                                                  : ins->value.store.address;
-            const MinicCoreValueId value = atomic ? ins->value.atomic_store.stored_value
-                                                   : ins->value.store.stored_value;
-            size_t width = 0U;
-            bool sign = false, pointer = false;
-            if (!minic_multi_direct_scalar_store_shape(
-                    program, target, fn, ins, &width, &sign, &pointer))
-                return minic_multi_direct_machine_reject(fn, "loongarch64",
-                    name, reject_stage, reject_block, reject_ins, __LINE__);
-            if (!emit_sp_mem(out, "ld.d", "$t1", (size_t)addr * 8U) ||
-                !emit_sp_mem(out, (pointer || width == 8U) ? "ld.d" : "ld.w", "$t0",
-                             (size_t)value * 8U) ||
-                (pointer ? fputs("  st.d $t0, $t1, 0\n", out) == EOF
-                         : !emit_integer_memory(out, true, width, sign))) return minic_multi_direct_machine_reject(fn, "loongarch64", name, reject_stage,
-                                    reject_block, reject_ins, __LINE__);
+        /* Memory effects precede the ordinary SSA gate: stores are effect
+         * only, loads either produce a scalar GP value or a wide slot. */
+        if (minic_multi_direct_memory_machine_kind(ins->kind)) {
+            bool needs_gp_store = false;
+            if (ins->kind == MINIC_CORE_INSTRUCTION_LOAD ||
+                ins->kind == MINIC_CORE_INSTRUCTION_ATOMIC_LOAD) {
+                if (!minic_multi_direct_result_slot_offset(
+                        fn, ins, false, &offset))
+                    return minic_multi_direct_machine_reject(
+                        fn, "loongarch64", name, reject_stage, reject_block, reject_ins, __LINE__);
+            }
+            if (!minic_loongarch64_emit_memory_instruction(
+                    out, program, target, fn, ins, frame_plan,
+                    dynamic_frame, &needs_gp_store))
+                return minic_multi_direct_machine_reject(
+                    fn, "loongarch64", name, reject_stage, reject_block, reject_ins, __LINE__);
+            if (needs_gp_store) {
+                if (!emit_sp_mem(out, (minic_lp64_register64_type(program, target, ins->type) ||
+                                       minic_type_is_double(ins->type)) ? "st.d" : "st.w",
+                                 "$t0", offset))
+                    return minic_multi_direct_machine_reject(
+                        fn, "loongarch64", name, reject_stage, reject_block, reject_ins, __LINE__);
+            }
             continue;
         }
         if (!minic_multi_direct_result_slot_offset(
@@ -637,56 +588,6 @@ bool minic_loongarch64_emit_core_blocks(FILE *out, const MinicDirectLP64BlockCon
                  (src_signed
                     ? fputs("  slli.w $t0, $t0, 0\n", out) == EOF
                     : fputs("  bstrpick.d $t0, $t0, 31, 0\n", out) == EOF)))
-                return minic_multi_direct_machine_reject(fn, "loongarch64", name, reject_stage,
-                                    reject_block, reject_ins, __LINE__);
-            break;
-        }
-        case MINIC_CORE_INSTRUCTION_LOAD:
-        case MINIC_CORE_INSTRUCTION_ATOMIC_LOAD: {
-            if (ins->kind == MINIC_CORE_INSTRUCTION_LOAD &&
-                minic_type_is_int128_integer(ins->type)) {
-                MinicCoreValueId addr;
-                size_t dst;
-                if (!minic_multi_direct_wide_scalar_load_location(
-                        fn, ins, frame_plan, &addr, &dst) ||
-                !emit_sp_mem(out, "ld.d", "$t1", (size_t)addr * 8U) ||
-                    fputs("  ld.d $t0, $t1, 0\n", out) == EOF ||
-                    !emit_sp_mem(out, "st.d", "$t0", dst) ||
-                    fputs("  ld.d $t0, $t1, 8\n", out) == EOF ||
-                    !emit_sp_mem(out, "st.d", "$t0", dst + 8U))
-                    return minic_multi_direct_machine_reject(fn, "loongarch64", name,
-                        reject_stage, reject_block, reject_ins, __LINE__);
-                continue;
-            }
-            if (ins->kind == MINIC_CORE_INSTRUCTION_LOAD &&
-                minic_type_is_long_double(ins->type)) {
-                MinicCoreValueId addr;
-                size_t dst;
-                if (!minic_multi_direct_wide_scalar_load_location(
-                        fn, ins, frame_plan, &addr, &dst) ||
-                !emit_sp_mem(out, "ld.d", "$t1", (size_t)addr * 8U) ||
-                    fputs("  ld.d $t0, $t1, 0\n", out) == EOF ||
-                    !emit_sp_mem(out, "st.d", "$t0", dst) ||
-                    fputs("  ld.d $t0, $t1, 8\n", out) == EOF ||
-                    !emit_sp_mem(out, "st.d", "$t0", dst + 8U))
-                    return minic_multi_direct_machine_reject(fn, "loongarch64", name,
-                                               reject_stage, reject_block,
-                                               reject_ins, __LINE__);
-                continue;
-            }
-            const bool atomic = ins->kind == MINIC_CORE_INSTRUCTION_ATOMIC_LOAD;
-            const MinicCoreValueId addr = atomic ? ins->value.atomic_load.address
-                                                  : ins->value.load.address;
-            size_t width = 0U;
-            bool sign = false, pointer = false;
-            if (!minic_multi_direct_scalar_load_shape(
-                    program, target, fn, ins, &width, &sign, &pointer))
-                return minic_multi_direct_machine_reject(fn, "loongarch64", name,
-                    reject_stage, reject_block, reject_ins, __LINE__);
-            if (
-                !emit_sp_mem(out, "ld.d", "$t1", (size_t)addr * 8U) ||
-                (pointer ? fputs("  ld.d $t0, $t1, 0\n", out) == EOF
-                         : !emit_integer_memory(out, false, width, sign)))
                 return minic_multi_direct_machine_reject(fn, "loongarch64", name, reject_stage,
                                     reject_block, reject_ins, __LINE__);
             break;

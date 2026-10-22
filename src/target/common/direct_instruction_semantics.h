@@ -44,6 +44,7 @@ bool minic_multi_direct_integer_bitscan_shape(
     const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
     unsigned int *width);
+bool minic_multi_direct_memory_machine_kind(MinicCoreInstructionKind kind);
 bool minic_multi_direct_abi_transfer_kind(MinicCoreInstructionKind kind);
 bool minic_multi_direct_scalar_parameter_location(
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
