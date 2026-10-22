@@ -79,7 +79,11 @@ bool minic_riscv64_core_frame_initialize(const MinicC0Program *program,
     frame->parameter_location_count = 0U;
     frame->has_named_parameter_cursor = false;
     frame->value_slot_count = 0U;
-    if (!minic_core_function_facts_analyze(function, &facts))
+    frame->object_storage = (MinicCoreObjectStoragePlan){0};
+    if (!minic_core_function_facts_analyze(function, &facts) ||
+        !minic_core_object_storage_plan_build(
+            program, minic_default_data_layout(), function,
+            &frame->object_storage))
         return false;
     frame->has_dynamic_stack_alloc = facts.uses_dynamic_stack_alloc;
     frame->saved_frame_base_offset = 0U;
@@ -103,36 +107,16 @@ bool minic_riscv64_core_frame_initialize(const MinicC0Program *program,
         return false;
     }
     for (object_index = 0U; object_index < function->object_count; ++object_index) {
-        size_t object_size;
-        size_t object_alignment;
-
-        if (!minic_data_layout_type(minic_default_data_layout(),
-                                    program,
-                                    function->objects[object_index].type,
-                                    &object_size,
-                                    &object_alignment) ||
-            (object_size == 0U &&
-             !minic_type_is_record(function->objects[object_index].type)) ||
-            object_alignment == 0U ||
-            (object_alignment & (object_alignment - 1U)) != 0U ||
-            function->objects[object_index].element_count == 0U ||
-            object_size > SIZE_MAX / function->objects[object_index].element_count) {
+        const MinicCoreObjectStorage *object =
+            &frame->object_storage.objects[object_index];
+        const size_t object_size = object->extent;
+        const size_t object_alignment = object->alignment;
+        if (object_size == 0U &&
+            !minic_type_is_record(function->objects[object_index].type))
             return false;
-        }
-        if (function->objects[object_index].explicit_alignment != 0U) {
-            size_t explicit_alignment = function->objects[object_index].explicit_alignment;
-
-            if ((explicit_alignment & (explicit_alignment - 1U)) != 0U) {
-                return false;
-            }
-            if (explicit_alignment > object_alignment) {
-                object_alignment = explicit_alignment;
-            }
-        }
         if (object_alignment > maximum_object_alignment) {
             maximum_object_alignment = object_alignment;
         }
-        object_size *= function->objects[object_index].element_count;
         if (object_index <= UINT32_MAX) {
             bool scalar_reusable;
             size_t scalar_slot;
@@ -320,26 +304,10 @@ bool minic_riscv64_core_frame_initialize(const MinicC0Program *program,
         }
         cached_offset = frame->outgoing_argument_size;
         for (cached_index = 0U; cached_index < function->object_count; ++cached_index) {
-            size_t object_size;
-            size_t object_alignment;
-
-            if (!minic_data_layout_type(minic_default_data_layout(),
-                                        program,
-                                        function->objects[cached_index].type,
-                                        &object_size,
-                                        &object_alignment) ||
-                object_alignment == 0U ||
-                (object_alignment & (object_alignment - 1U)) != 0U ||
-                function->objects[cached_index].element_count == 0U ||
-                object_size > SIZE_MAX / function->objects[cached_index].element_count) {
-                free(frame->object_offsets);
-                frame->object_offsets = NULL;
-                return false;
-            }
-            if (function->objects[cached_index].explicit_alignment != 0U &&
-                function->objects[cached_index].explicit_alignment > object_alignment) {
-                object_alignment = function->objects[cached_index].explicit_alignment;
-            }
+            const MinicCoreObjectStorage *object =
+                &frame->object_storage.objects[cached_index];
+            const size_t object_size = object->extent;
+            const size_t object_alignment = object->alignment;
             if (cached_index <= UINT32_MAX) {
                 bool scalar_reusable;
                 size_t scalar_slot;
@@ -396,7 +364,6 @@ bool minic_riscv64_core_frame_initialize(const MinicC0Program *program,
                 return false;
             }
             frame->object_offsets[cached_index] = cached_offset;
-            object_size *= function->objects[cached_index].element_count;
             if (cached_offset > SIZE_MAX - object_size) {
                 free(frame->object_offsets);
                 frame->object_offsets = NULL;
@@ -477,6 +444,7 @@ void minic_riscv64_core_frame_destroy(MinicRiscv64CoreFrame *frame) {
     frame->has_named_parameter_cursor = false;
     free(frame->object_offsets);
     frame->object_offsets = NULL;
+    minic_core_object_storage_plan_destroy(&frame->object_storage);
     free(frame->reachable_blocks);
     frame->reachable_blocks = NULL;
 }

@@ -34,6 +34,9 @@ bool minic_x86_64_frame_init(const MinicC0Program *program, const MinicTargetInf
         fn->value_count > (size_t)INT32_MAX / 8U) return false;
     if (!minic_core_function_facts_analyze(fn, &facts)) return false;
     (void)memset(frame, 0, sizeof(*frame));
+    if (!minic_core_object_storage_plan_build(
+            program, target->data_layout, fn, &frame->object_storage))
+        return false;
     frame->varargs_count = facts.variadic_address_count;
     frame->value_count = fn->value_count;
     frame->object_count = fn->object_count;
@@ -99,13 +102,7 @@ bool minic_x86_64_frame_init(const MinicC0Program *program, const MinicTargetInf
      * Above 16, a separate %rsp-relative, dynamically aligned object base
      * is needed.  An offset aligned relative to %rbp is NOT enough. */
     for (i = 0U; i < fn->object_count; ++i) {
-        const MinicCoreObject *obj = &fn->objects[i];
-        size_t size, alignment;
-        if (!minic_data_layout_type(target->data_layout, program, obj->type,
-                                    &size, &alignment)) return false;
-        if (obj->explicit_alignment > alignment) alignment = obj->explicit_alignment;
-        if (alignment == 0U || (alignment & (alignment - 1U)) != 0U ||
-            alignment > (size_t)INT32_MAX) return false;
+        const size_t alignment = frame->object_storage.objects[i].alignment;
         if (alignment > maximum_alignment) maximum_alignment = alignment;
     }
     frame->object_base_alignment = maximum_alignment;
@@ -115,14 +112,8 @@ bool minic_x86_64_frame_init(const MinicC0Program *program, const MinicTargetInf
               ? frame->varargs_tag_base_offset + frame->varargs_count * 24U
               : value_bytes;
     for (i = 0U; i < fn->object_count; ++i) {
-        const MinicCoreObject *obj = &fn->objects[i];
-        size_t size, alignment;
-        if (!minic_data_layout_type(target->data_layout, program, obj->type,
-                                    &size, &alignment) ||
-            obj->element_count == 0U || size > SIZE_MAX / obj->element_count)
-            return false;
-        size *= obj->element_count;
-        if (obj->explicit_alignment > alignment) alignment = obj->explicit_alignment;
+        const size_t size = frame->object_storage.objects[i].extent;
+        const size_t alignment = frame->object_storage.objects[i].alignment;
         if (frame->objects_from_aligned_rsp) {
             /* Positive offsets from the aligned %rsp denote object START. */
             if (!minic_x86_64_align(pos, alignment, &pos) || pos > SIZE_MAX - size)
@@ -158,6 +149,7 @@ void minic_x86_64_frame_destroy(MinicX86Frame *frame) {
     if (frame == NULL) return;
     free(frame->value_offsets);
     free(frame->object_offsets);
+    minic_core_object_storage_plan_destroy(&frame->object_storage);
     free(frame->varargs_results);
     (void)memset(frame, 0, sizeof(*frame));
 }
