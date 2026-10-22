@@ -9,6 +9,13 @@ on:
     paths:
       - '.github/workflows/minic-capability-recertify.yml'
   workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Run all, six real projects, or BusyBox ABI/frontier'
+        type: choice
+        required: true
+        default: all
+        options: [all, software, busybox]
 
 permissions:
   contents: read
@@ -19,6 +26,7 @@ concurrency:
 
 jobs:
   x86-real-software:
+    if: github.event_name == 'workflow_dispatch' && (inputs.mode == 'all' || inputs.mode == 'software')
     name: x86-64 pinned AES/cJSON/zlib/Lua/SQLite/TinyCC
     runs-on: ubuntu-24.04
     timeout-minutes: 75
@@ -90,6 +98,7 @@ jobs:
           echo 'MINIC_X86_SOFTWARE_ALL=PASS projects=6 original_sources=1 GNU_differential=1'
 
   x86-busybox-frontier:
+    if: github.event_name == 'push' || inputs.mode == 'all' || inputs.mode == 'busybox'
     name: x86-64 upstream BusyBox full-Kbuild coverage (report gaps)
     runs-on: ubuntu-24.04
     timeout-minutes: 75
@@ -97,6 +106,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: Compile current MiniC
         run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/capability-busybox all
+      - name: Verify x86 SysV small record return and large stack record parameters
+        run: bash tests/external/busybox/probe-x86_64-record-abi.sh build/capability-busybox/bin/minic-cc
       - name: Verify pinned upstream mixed real-Kbuild 12 owners
         id: twelve
         continue-on-error: true

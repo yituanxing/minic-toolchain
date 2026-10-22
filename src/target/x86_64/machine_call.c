@@ -38,8 +38,17 @@ static bool x86_emit_call_arguments_planned(
         if (arg->kind == MINIC_CORE_CALL_ARGUMENT_OBJECT) {
             const MinicCoreObjectId object = arg->value.object_id;
             if (object >= fn->object_count ||
-                !minic_type_equal(fn->objects[object].type, type) ||
-                !x86_object_address(out, frame, object, "%r11"))
+                !minic_type_equal(fn->objects[object].type, type))
+                return false;
+            /* Outgoing stack reservation changes RSP-relative local-object
+             * addresses in highly aligned frames. Compensate precisely. */
+            if (frame->objects_from_aligned_rsp) {
+                if (frame->object_offsets[object] >
+                    SIZE_MAX - plan->stack_bytes ||
+                    fprintf(out, "  leaq %zu(%%rsp), %%r11\\n",
+                            frame->object_offsets[object] +
+                            plan->stack_bytes) < 0) return false;
+            } else if (!x86_object_address(out, frame, object, "%r11"))
                 return false;
             if (loc->kind == MINIC_X86_ARG_RECORD_ONE_GP) {
                 if (!x86_one_gp_load(out, loc->record_bytes)) return false;
@@ -48,6 +57,25 @@ static bool x86_emit_call_arguments_planned(
                                 gp_regs[loc->gp_index]) < 0) return false;
                 } else if (fprintf(out, "  movq %%rax, %zu(%%rsp)\n",
                                    loc->stack_index * 8U) < 0) return false;
+                continue;
+            }
+            if (loc->kind == MINIC_X86_ARG_RECORD_MEMORY) {
+                /* Scalar registers holding prior arguments are live. Copy
+                 * stack-passed >16-byte record without touching them, and
+                 * never overread the exact final partial eightbyte. */
+                size_t j, dest = loc->stack_index * 8U;
+                if (loc->stack_index > SIZE_MAX / 8U ||
+                    dest > SIZE_MAX - loc->record_bytes) return false;
+                for (j = 0U; j + 8U <= loc->record_bytes; j += 8U)
+                    if (fprintf(out,
+                          "  movq %zu(%%r11), %%rax\\n"
+                          "  movq %%rax, %zu(%%rsp)\\n", j, dest + j) < 0)
+                        return false;
+                for (; j < loc->record_bytes; ++j)
+                    if (fprintf(out,
+                          "  movzbq %zu(%%r11), %%rax\\n"
+                          "  movb %%al, %zu(%%rsp)\\n", j, dest + j) < 0)
+                        return false;
                 continue;
             }
             if (loc->kind != MINIC_X86_ARG_RECORD_TWO_GP) return false;
@@ -125,6 +153,27 @@ static bool x86_emit_call_arguments(
     if (ok) *allocated_stack_bytes = plan.stack_bytes;
     minic_x86_64_argument_plan_destroy(&plan);
     return ok;
+}
+
+/* The SysV INTEGER-class aggregate return travels in RAX/RDX.
+ * MEMORY/sret or SSE-class aggregate results remain fail-closed. */
+static bool x86_emit_call_record_result(
+    FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicCoreFunction *fn, const MinicX86Frame *frame,
+    const MinicCoreCallee *callee, MinicCoreObjectId object) {
+    size_t bytes;
+    if (object >= fn->object_count ||
+        !minic_type_is_record(callee->return_type) ||
+        !minic_type_equal(fn->objects[object].type, callee->return_type) ||
+        !x86_object_address(out, frame, object, "%r10"))
+        return false;
+    if (minic_x86_64_one_gp_record(program, target, callee->return_type, &bytes))
+        return x86_one_gp_store(out, bytes);
+    if (minic_x86_64_two_gp_record(program, target, callee->return_type))
+        return fprintf(out,
+            "  movq %%rax, 0(%%r10)\\n"
+            "  movq %%rdx, 8(%%r10)\\n") >= 0;
+    return false;
 }
 
 static bool x86_emit_call_result(FILE *out, const MinicC0Program *program,
@@ -347,8 +396,7 @@ bool minic_x86_64_emit_call_instruction(
         callee = call.callee;
         begin = call.argument_begin;
         count = call.argument_count;
-        if (ins->value.call.result_object != MINIC_CORE_OBJECT_INVALID ||
-            callee->name == NULL) {
+        if (callee->name == NULL) {
             if (getenv("MINIC_X86_CALL_TRACE") != NULL)
                 (void)fprintf(stderr,
                     "X86_CALL_GATE function=%s callee=%s stage=record-result "
@@ -406,8 +454,13 @@ bool minic_x86_64_emit_call_instruction(
             (outgoing_bytes != 0U &&
              fprintf(out, "  addq $%zu, %%rsp\n", outgoing_bytes) < 0))
             return false;
-        if (!x86_emit_call_result(out, program, target, frame,
-                                  callee->return_type, ins->result)) {
+        if (!(ins->value.call.result_object != MINIC_CORE_OBJECT_INVALID
+                  ? (ins->result == MINIC_CORE_VALUE_INVALID &&
+                     x86_emit_call_record_result(
+                         out, program, target, fn, frame, callee,
+                         ins->value.call.result_object))
+                  : x86_emit_call_result(out, program, target, frame,
+                                         callee->return_type, ins->result))) {
             if (getenv("MINIC_X86_CALL_TRACE") != NULL)
                 (void)fprintf(stderr,
                     "X86_CALL_GATE function=%s callee=%s stage=return "

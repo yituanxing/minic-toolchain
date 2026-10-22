@@ -1,5 +1,6 @@
 #include "target/x86_64/call_plan.h"
 #include "target/x86_64/abi.h"
+#include "target/data_layout.h"
 #include <limits.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -29,7 +30,28 @@ static bool x86_sysv_place(const MinicC0Program *program,
             loc->kind = MINIC_X86_ARG_RECORD_TWO_GP;
             if (cursor->gp_used <= 4U) cursor->gp_used += 2U;
             else { loc->on_stack = true; cursor->stack_slots += 2U; }
-        } else return false;
+        } else {
+            /* SysV AMD64 classifies any aggregate larger than 16 bytes as
+             * MEMORY. Smaller unsupported SSE or mixed classes must remain
+             * explicit failures. Keep emission bounded to avoid huge stubs. */
+            size_t alignment;
+            if (!minic_data_layout_type(target->data_layout, program, type,
+                                        &bytes, &alignment) ||
+                bytes <= 16U || bytes > 4096U ||
+                alignment == 0U || alignment > 16U)
+                return false;
+            loc->kind = MINIC_X86_ARG_RECORD_MEMORY;
+            loc->record_bytes = bytes;
+            loc->on_stack = true;
+            if (alignment > 8U) {
+                if (cursor->stack_slots == SIZE_MAX) return false;
+                cursor->stack_slots += cursor->stack_slots & 1U;
+            }
+            loc->stack_index = cursor->stack_slots;
+            if (cursor->stack_slots > SIZE_MAX - (bytes + 7U) / 8U)
+                return false;
+            cursor->stack_slots += (bytes + 7U) / 8U;
+        }
     } else if (minic_type_is_float(type) || minic_type_is_double(type)) {
         loc->kind = MINIC_X86_ARG_SSE;
         if (cursor->fp_used < 8U) ++cursor->fp_used;

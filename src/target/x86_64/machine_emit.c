@@ -99,10 +99,31 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
             return false;
         location = &frame->incoming_arguments.locations[position];
         if (location->kind != MINIC_X86_ARG_RECORD_ONE_GP &&
-            location->kind != MINIC_X86_ARG_RECORD_TWO_GP)
+            location->kind != MINIC_X86_ARG_RECORD_TWO_GP &&
+            location->kind != MINIC_X86_ARG_RECORD_MEMORY)
             return false;
         if (!x86_object_address(out, frame, object, "%r10"))
             return false;
+        if (location->kind == MINIC_X86_ARG_RECORD_MEMORY) {
+            size_t j, source;
+            if (!location->on_stack || location->stack_index > SIZE_MAX / 8U ||
+                location->stack_index * 8U > (size_t)INT32_MAX - 16U ||
+                location->record_bytes > (size_t)INT32_MAX - 16U -
+                                          location->stack_index * 8U)
+                return false;
+            source = 16U + location->stack_index * 8U;
+            for (j = 0U; j + 8U <= location->record_bytes; j += 8U)
+                if (fprintf(out,
+                    "  movq %zu(%%rbp), %%rax\\n"
+                    "  movq %%rax, %zu(%%r10)\\n",
+                    source + j, j) < 0) return false;
+            for (; j < location->record_bytes; ++j)
+                if (fprintf(out,
+                    "  movzbq %zu(%%rbp), %%rax\\n"
+                    "  movb %%al, %zu(%%r10)\\n",
+                    source + j, j) < 0) return false;
+            return true;
+        }
         if (location->kind == MINIC_X86_ARG_RECORD_ONE_GP) {
             if (!location->on_stack) {
                 if (fprintf(out, "  movq %s, %%rax\n",
