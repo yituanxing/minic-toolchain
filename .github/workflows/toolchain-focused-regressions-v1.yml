@@ -147,10 +147,23 @@ jobs:
         if: steps.owners.outputs.mode != 'four-backend'
         run: |
           set -Eeuo pipefail
-          timeout 240s sudo apt-get -o Acquire::Retries=3 update
-          timeout 240s sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
-            build-essential binutils gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
-            libc6-riscv64-cross libc6-dev-riscv64-cross qemu-user
+          # On ubuntu-24.04 the original unconditional apt update consumed the
+          # entire 240s deadline in run 39818019254 before any compiler test.
+          # Try the runner's ready package indexes first; refresh only on
+          # failure. Repository/network failures remain explicitly RED.
+          packages=(build-essential binutils gcc-riscv64-linux-gnu
+                    binutils-riscv64-linux-gnu libc6-riscv64-cross
+                    libc6-dev-riscv64-cross qemu-user)
+          if ! timeout 360s sudo apt-get -o Acquire::Retries=3 \
+               -o DPkg::Lock::Timeout=60 install -y --no-install-recommends \
+               "${packages[@]}"; then
+            echo "FOCUSED_APT=RETRY_STAGE first_install_failed_or_timed_out=1"
+            timeout 300s sudo apt-get -o Acquire::Retries=3 update
+            timeout 480s sudo apt-get -o Acquire::Retries=3 \
+              -o DPkg::Lock::Timeout=60 install -y --no-install-recommends \
+              "${packages[@]}"
+          fi
+          echo "FOCUSED_APT=PASS packages=${#packages[@]}"
 
       - name: Compile Mini toolchain exactly once for three independent verdicts
         id: build

@@ -6,6 +6,8 @@ on:
       - "main"
     paths:
       - '.github/workflows/linux-runtime-gcc-baseline.yml'
+      # One explicitly audited four-ISA + seven-shard current-source recertification.
+      - '.github/workflows/minic-capability-recertify.yml'
       - 'tests/external/linux/**'
       - 'tools/ci/**'
       # Native source identity is part of the Kbuild compiler acceptance gate;

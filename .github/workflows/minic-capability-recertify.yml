@@ -1,0 +1,120 @@
+# Opt-in pinned software acceptance on the *current* main compiler.
+# RV64 Linux 2064 C owners -> GNU link -> real QEMU P1 uses the existing
+# seven-shard jobs in linux-runtime-gcc-baseline.yml; do not duplicate them.
+# AArch64/LoongArch64 original projects run in the single-build focused T1.
+name: MiniC Current Main x86-64 Real Software Acceptance
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/minic-capability-recertify.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: minic-current-real-software-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  x86-real-software:
+    name: x86-64 pinned AES/cJSON/zlib/Lua/SQLite/TinyCC
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile all four target backends strictly once
+        id: compile
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/capability-x86 all
+          test -x build/capability-x86/bin/minic-cc
+      - name: Original tinyAES source, GCC native differential
+        id: aes
+        if: steps.compile.outcome == 'success'
+        continue-on-error: true
+        run: make MODE=release CFLAGS=-Werror BUILD_DIR=build/capability-x86 check-x86_64-tinyaes
+      - name: Original cJSON source, GCC native differential
+        id: cjson
+        if: steps.compile.outcome == 'success'
+        continue-on-error: true
+        run: make MODE=release CFLAGS=-Werror BUILD_DIR=build/capability-x86 check-x86_64-cjson
+      - name: Original zlib full 15 TUs, minigzip differential
+        id: zlib
+        if: steps.compile.outcome == 'success'
+        continue-on-error: true
+        run: make MODE=release CFLAGS=-Werror BUILD_DIR=build/capability-x86 check-x86_64-zlib-frontier
+      - name: Original Lua 5.5.0, native interpreter and luac
+        id: lua
+        if: steps.compile.outcome == 'success'
+        continue-on-error: true
+        run: make MODE=release CFLAGS=-Werror BUILD_DIR=build/capability-x86 check-x86_64-lua-frontier
+      - name: Original SQLite 3.54.1, transactions and GNU differential
+        id: sqlite
+        if: steps.compile.outcome == 'success'
+        continue-on-error: true
+        run: make MODE=release CFLAGS=-Werror BUILD_DIR=build/capability-x86 check-x86_64-sqlite-frontier
+      - name: Original TinyCC, native compiler and consumer / 36 cases
+        id: tinycc
+        if: steps.compile.outcome == 'success'
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          TINYCC_X86_64_DISCOVERY=0 \
+          MINIC_CC="$GITHUB_WORKSPACE/build/capability-x86/bin/minic-cc" \
+          HOST_CC=cc sh tests/external/tinycc/probe-x86_64.sh
+      - name: Collect independent real-software certification verdicts
+        if: always()
+        shell: bash
+        env:
+          COMPILE: ${{ steps.compile.outcome }}
+          AES: ${{ steps.aes.outcome }}
+          CJSON: ${{ steps.cjson.outcome }}
+          ZLIB: ${{ steps.zlib.outcome }}
+          LUA: ${{ steps.lua.outcome }}
+          SQLITE: ${{ steps.sqlite.outcome }}
+          TINYCC: ${{ steps.tinycc.outcome }}
+        run: |
+          set -Eeuo pipefail
+          failed=0
+          for name in COMPILE AES CJSON ZLIB LUA SQLITE TINYCC; do
+            result="${!name}"
+            echo "MINIC_X86_SOFTWARE_${name}=${result}"
+            printf '%s: %s\n' "$name" "$result" >> "$GITHUB_STEP_SUMMARY"
+            [[ "$result" == success ]] || failed=1
+          done
+          test "$failed" = 0
+          echo 'MINIC_X86_SOFTWARE_ALL=PASS projects=6 original_sources=1 GNU_differential=1'
+
+  x86-busybox-frontier:
+    name: x86-64 upstream BusyBox full-Kbuild coverage (report gaps)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile current MiniC
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/capability-busybox all
+      - name: Verify pinned upstream mixed real-Kbuild 12 owners
+        id: twelve
+        continue-on-error: true
+        run: make MODE=release CFLAGS=-Werror BUILD_DIR=build/capability-busybox check-x86_64-busybox-12
+      - name: Audit original full Kbuild: SHA checked eligible owners, residual GNU fallback
+        id: all
+        continue-on-error: true
+        run: make MODE=release CFLAGS=-Werror BUILD_DIR=build/capability-busybox check-x86_64-busybox-all-eligible
+      - name: Report independent BusyBox verdicts
+        if: always()
+        env:
+          TWELVE: ${{ steps.twelve.outcome }}
+          ALL_ELIGIBLE: ${{ steps.all.outcome }}
+        run: |
+          set -Eeuo pipefail
+          echo "BUSYBOX_X86_PINNED_12=${TWELVE}"
+          echo "BUSYBOX_X86_ALL_ELIGIBLE=${ALL_ELIGIBLE}"
+          printf 'BusyBox 12-owner: %s\nBusyBox full Kbuild eligible-owner: %s\n' \
+             "$TWELVE" "$ALL_ELIGIBLE" >> "$GITHUB_STEP_SUMMARY"
+          test "$TWELVE" = success && test "$ALL_ELIGIBLE" = success
+          echo 'BUSYBOX_X86_COVERAGE=PASS qualified_eligible_owners_only=1 full_MiniC=NOT_CLAIMED'
