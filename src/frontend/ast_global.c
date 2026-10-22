@@ -675,7 +675,11 @@ static bool global_object_type_initializer_slot_count_at(const MinicC0Program *p
     if (program == NULL || object == NULL || slot_count == NULL) {
         return false;
     }
-    if (minic_type_is_integer(type) || minic_type_is_pointer(type)) {
+    /* Preserve the same scalar slot cardinality as ast.c: a floating
+     * field still occupies one flattened initializer slot before any later
+     * pointer relocation in the enclosing record. */
+    if (minic_type_is_integer(type) || minic_type_is_pointer(type) ||
+        minic_type_is_float(type) || minic_type_is_double(type)) {
         *slot_count = 1U;
         return true;
     }
@@ -784,7 +788,8 @@ static bool aggregate_scalar_slot_type_for_object(const MinicC0Program *program,
     if (program == NULL || object == NULL || slot_type == NULL || target_slot < base_slot) {
         return false;
     }
-    if (minic_type_is_integer(type) || minic_type_is_pointer(type)) {
+    if (minic_type_is_integer(type) || minic_type_is_pointer(type) ||
+        minic_type_is_float(type) || minic_type_is_double(type)) {
         if (target_slot != base_slot) {
             return false;
         }
