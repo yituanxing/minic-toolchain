@@ -1134,6 +1134,7 @@ static bool add_global_symbol_relocation(MinicC0Program *program,
     bool slot_is_integer;
     bool slot_is_pointer;
     size_t insertion_index;
+    size_t lower, upper;
     size_t path_index;
 
     if (program == NULL || global_object_id >= program->global_object_count ||
@@ -1188,20 +1189,29 @@ static bool add_global_symbol_relocation(MinicC0Program *program,
            location_kind != MINIC_GLOBAL_RELOCATION_LOCATION_AGGREGATE_SCALAR)))) {
         return false;
     }
-    insertion_index = 0U;
-    while (insertion_index < object->relocation_count) {
-        const MinicGlobalRelocation *existing;
-
-        existing = &object->relocations[insertion_index];
-        if (existing->location_kind != location_kind ||
-            existing->location_index == location_index) {
+    /* Relocations are kept in ascending slot order. A linear insertion
+     * scan was quadratic for pointer tables with thousands of entries.
+     * Binary search retains ordering, duplicate rejection, and the existing
+     * memmove path for genuinely out-of-order designators. */
+    if (object->relocation_count != 0U &&
+        object->relocations[0].location_kind != location_kind)
+        return false;
+    lower = 0U;
+    upper = object->relocation_count;
+    while (lower < upper) {
+        const size_t middle = lower + (upper - lower) / 2U;
+        const MinicGlobalRelocation *existing = &object->relocations[middle];
+        if (existing->location_kind != location_kind)
             return false;
-        }
-        if (existing->location_index > location_index) {
-            break;
-        }
-        insertion_index += 1U;
+        if (existing->location_index < location_index)
+            lower = middle + 1U;
+        else
+            upper = middle;
     }
+    insertion_index = lower;
+    if (insertion_index < object->relocation_count &&
+        object->relocations[insertion_index].location_index == location_index)
+        return false;
     if (!grow_array((void **)&object->relocations,
                     &object->relocation_capacity,
                     object->relocation_count,
@@ -1227,6 +1237,21 @@ static bool add_global_symbol_relocation(MinicC0Program *program,
     }
     object->relocation_count += 1U;
     return true;
+}
+
+/* Replay an existing relocation without duplicating target-kind dispatch.
+ * Every replay still passes canonical slot, type and duplicate validation. */
+bool minic_c0_global_object_add_relocation(
+    MinicC0Program *program, MinicGlobalObjectId global_object_id,
+    const MinicGlobalRelocation *relocation) {
+    if (relocation == NULL ||
+        relocation->target_member_depth > MINIC_GLOBAL_RELOCATION_MAX_MEMBER_DEPTH)
+        return false;
+    return add_global_symbol_relocation(
+        program, global_object_id, relocation->location_kind,
+        relocation->location_index, relocation->target_kind, relocation->target_id,
+        relocation->target_member_indices, relocation->target_member_depth,
+        relocation->target_byte_addend, relocation->has_explicit_pointer_cast);
 }
 
 bool minic_c0_global_object_add_function_relocation(MinicC0Program *program,

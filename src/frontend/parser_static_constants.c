@@ -936,3 +936,38 @@ bool minic_parser_static_symbol_floating_initializer_bits(MinicParser *parser,
     }
     return true;
 }
+
+/* Convert the parsed symbolic pointer exactly once. All downstream
+ * consumers use the same AST relocation validation and ordered insertion. */
+bool minic_parser_static_commit_pointer_relocation(
+    MinicC0Program *program, MinicGlobalObjectId object_id,
+    MinicGlobalRelocationLocationKind location_kind, size_t location_index,
+    const MinicStaticPointerInitializer *initializer) {
+    MinicGlobalRelocation relocation = {0};
+
+    if (program == NULL || initializer == NULL || !initializer->has_relocation ||
+        (initializer->relocation_is_label && initializer->relocation_is_function))
+        return false;
+    relocation.location_kind = location_kind;
+    relocation.location_index = location_index;
+    relocation.has_explicit_pointer_cast = initializer->has_explicit_pointer_cast;
+    if (initializer->relocation_is_label) {
+        relocation.target_kind = MINIC_GLOBAL_RELOCATION_LABEL;
+        relocation.target_id = initializer->label_statement_id;
+    } else if (initializer->relocation_is_function) {
+        relocation.target_kind = MINIC_GLOBAL_RELOCATION_FUNCTION;
+        relocation.target_id = initializer->function_id;
+    } else {
+        const MinicStaticObjectRelocationTarget *target =
+            &initializer->relocation_target;
+        if (target->member_depth > MINIC_GLOBAL_RELOCATION_MAX_MEMBER_DEPTH)
+            return false;
+        relocation.target_kind = MINIC_GLOBAL_RELOCATION_OBJECT;
+        relocation.target_id = target->object_id;
+        relocation.target_member_depth = target->member_depth;
+        relocation.target_byte_addend = target->byte_addend;
+        (void)memcpy(relocation.target_member_indices, target->member_indices,
+                     target->member_depth * sizeof(target->member_indices[0]));
+    }
+    return minic_c0_global_object_add_relocation(program, object_id, &relocation);
+}
