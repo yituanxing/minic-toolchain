@@ -408,6 +408,10 @@ jobs:
             export MINIC_LINUX_FULL_CROSSBLOCK=1 MINIC_OPT_PURE_DISCARDED_ADDRESS_EQ=1
             echo "BLAKE2S_SINGLE=PROFILE exact_full_crossblock_profile=true"
           fi
+          # Main-only recertification: verify the current checked-out
+          # compiler instead of applying the immutable 2026-10-17 patch
+          # overlay or requiring obsolete pre-refactor file hashes.
+          export MINIC_CURRENT_MAIN_SEVEN_RECHECK=1
           bash tools/ci/linux-runtime-build-minic-profile-v1.sh \
             "$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-toolchain" "$ev/compiler"
           if [[ "${{ (contains(github.event.head_commit.message, '[linux-perf-boolean-single]') || contains(github.event.head_commit.message, '[linux-perf-hotowners]')) && !contains(github.event.head_commit.message, '[minic-source-paired-ab]') }}" == true ]]; then

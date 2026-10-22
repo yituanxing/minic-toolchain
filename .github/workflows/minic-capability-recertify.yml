@@ -101,7 +101,7 @@ jobs:
         id: twelve
         continue-on-error: true
         run: make MODE=release CFLAGS=-Werror BUILD_DIR=build/capability-busybox check-x86_64-busybox-12
-      - name: Audit original full Kbuild: SHA checked eligible owners, residual GNU fallback
+      - name: Audit original full Kbuild - SHA checked eligible owners, residual GNU fallback
         id: all
         continue-on-error: true
         run: make MODE=release CFLAGS=-Werror BUILD_DIR=build/capability-busybox check-x86_64-busybox-all-eligible

@@ -19,7 +19,17 @@ mkdir -p "$ev"
 # not a runtime PASS until the seven live shards and QEMU gate complete.
 native_manifest="docs/ci/native-runtime44-perf4-validated-sha1.txt"
 native_profile=0
-if [[ -f "$native_manifest" ]]; then
+if [[ "${MINIC_CURRENT_MAIN_SEVEN_RECHECK:-0}" == 1 ]]; then
+  # The 2026-10-22 four-backend refactor changed valid C file hashes.
+  # The old Runtime44 SHA manifest is historical and *cannot* certify
+  # the new source. Validate the exact checked-out current main commit
+  # instead, then compile 2064 real C owners with the existing seven-way
+  # GNU-Kbuild source/ASM/link/QEMU oracle (no patch injection).
+  test -n "${GITHUB_SHA:-}" && test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+  git diff --quiet -- src include Makefile
+  native_profile=1
+  echo "MINIC_CURRENT_MAIN_PROFILE=CHECKED_OUT_SOURCE_VALIDATED sha=$GITHUB_SHA old_runtime44_sha_manifest=HISTORICAL_ONLY"
+elif [[ -f "$native_manifest" ]]; then
   native_profile=1
   while read -r expected file; do
     [[ "$expected" =~ ^[0-9a-f]{40}$ ]] || continue

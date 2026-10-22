@@ -12,9 +12,9 @@ so this *new* run explicitly rechecks the current compiler binaries.
    `linux-runtime-gcc-baseline.yml` `gcc-shards` matrix
    `[0,1,2,3,4,5,6]` plus `gcc-shard-verify` receiver. Assert complete
    canonical 2,064 real MiniC C objects, SHA-checked seven shard union, GNU
-   assemble/link, and QEMU P1 syscall/runtime. The opt-in commit tags are
-   `[linux-runtime-gcc-sharded] [linux-runtime-full-crossblock]
-   [linux-runtime-p1-defined-crossblock]`.
+   assemble/link, and QEMU P1 syscall/runtime. The opt-in commit tag is `[linux-runtime-gcc-sharded]` with
+   `MINIC_CURRENT_MAIN_SEVEN_RECHECK=1` to recertify current checked-in source
+   (the original Runtime44 SHA manifest belongs to pre-refactor code).
 2. **AArch64 + LoongArch64**: reuse `toolchain-focused-regressions-v1.yml`
    `mode=all` one-build regression, which includes real tinyAES, cJSON, zlib,
    Lua, SQLite, TinyCC, and original BusyBox 581/581 MiniC C owners with
