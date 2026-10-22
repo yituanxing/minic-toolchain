@@ -1,18 +1,11 @@
 #include "target/riscv64/object_liveness.h"
+#include "target/riscv64/legalize.h"
 #include "core/value_uses.h"
 #include "target/data_layout.h"
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
-/* Original target scalar gate remains shared by RV64 object analysis
- * and instruction-admission queries. */
-bool minic_riscv64_scalar_type(MinicType type) {
-    return minic_type_is_integer(type) || minic_type_is_pointer(type) ||
-           minic_type_is_float(type) || minic_type_is_double(type) ||
-           minic_type_is_long_double(type);
-}
 
 /* Reuse the original optional cache and same per-function liveness
  * heuristics; no new machine representation or changed ABI constraints. */
