@@ -107,13 +107,8 @@ bool minic_riscv64_core_variadic_fixed_prefix(const MinicC0Program *program,
        named prefix has exhausted a0-a7, the first unnamed argument starts
        directly after the named incoming stack slots. Keep mixed register/stack
        prefixes fail-closed unless all integer argument registers are consumed. */
-    if (cursor.integer_register_count > 8U ||
-        (cursor.stack_slot_count != 0U && cursor.integer_register_count != 8U)) {
-        return false;
-    }
-    *integer_parameter_count = cursor.integer_register_count;
-    *fixed_stack_slots = cursor.stack_slot_count;
-    return true;
+    return minic_riscv64_abi_variadic_prefix_from_cursor(
+        &cursor, integer_parameter_count, fixed_stack_slots);
 }
 
 /* M168_RV64_INDIRECT_CALL_STACK: reserve one fixed outgoing stack area

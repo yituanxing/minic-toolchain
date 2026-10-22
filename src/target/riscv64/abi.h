@@ -53,6 +53,9 @@ bool minic_riscv64_abi_cursor_initialize_for_return(const MinicC0Program *progra
                                                     MinicType return_type,
                                                     MinicRiscv64AbiCursor *cursor,
                                                     MinicRiscv64AbiValue *return_value);
+/* Shared RV64 named-prefix cursor validation for variadic functions. */
+bool minic_riscv64_abi_variadic_prefix_from_cursor(
+    const MinicRiscv64AbiCursor *, size_t *, size_t *);
 bool minic_riscv64_abi_classify_value(const MinicC0Program *program,
                                       MinicType type,
                                       MinicRiscv64AbiValue *value);

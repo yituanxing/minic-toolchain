@@ -28,6 +28,35 @@ static bool align_up(size_t value, size_t alignment, size_t *result) {
     return true;
 }
 
+/* Named RV64 parameters are laid out once; the call emitter only reads
+ * the resulting locations, independent of Core PARAMETER instruction order. */
+static bool core_frame_plan_parameters(
+    const MinicC0Program *program, const MinicCoreFunction *function,
+    MinicRiscv64CoreFrame *frame, MinicRiscv64AbiCursor *cursor) {
+    size_t index;
+    if (program == NULL || function == NULL || frame == NULL || cursor == NULL)
+        return false;
+    if (function->parameter_count != 0U) {
+        if (function->parameter_types == NULL ||
+            function->parameter_count > SIZE_MAX / sizeof(*frame->parameter_locations))
+            return false;
+        frame->parameter_locations = (MinicRiscv64AbiArgumentLocation *)calloc(
+            function->parameter_count, sizeof(*frame->parameter_locations));
+        if (frame->parameter_locations == NULL)
+            return false;
+    }
+    for (index = 0U; index < function->parameter_count; ++index) {
+        if (!minic_riscv64_abi_place_argument(
+                program, function->parameter_types[index], true,
+                cursor, &frame->parameter_locations[index]))
+            return false;
+    }
+    frame->parameter_location_count = function->parameter_count;
+    frame->named_parameter_cursor = *cursor;
+    frame->has_named_parameter_cursor = true;
+    return true;
+}
+
 bool minic_riscv64_core_frame_initialize(const MinicC0Program *program,
                                   const MinicCoreFunction *function,
                                   MinicRiscv64CoreFrame *frame) {
@@ -44,6 +73,9 @@ bool minic_riscv64_core_frame_initialize(const MinicC0Program *program,
     frame->object_offsets = NULL;
     frame->value_offsets = NULL;
     frame->reachable_blocks = NULL;
+    frame->parameter_locations = NULL;
+    frame->parameter_location_count = 0U;
+    frame->has_named_parameter_cursor = false;
     frame->value_slot_count = 0U;
     frame->has_dynamic_stack_alloc = minic_riscv64_core_function_uses_dynamic_stack_alloc(function);
     frame->saved_frame_base_offset = 0U;
@@ -185,10 +217,10 @@ bool minic_riscv64_core_frame_initialize(const MinicC0Program *program,
         MinicRiscv64AbiValue return_value;
 
         if (!minic_riscv64_abi_cursor_initialize_for_return(
-                program, function->return_type, &return_cursor, &return_value)) {
+                program, function->return_type, &return_cursor, &return_value) ||
+            !core_frame_plan_parameters(program, function, frame, &return_cursor)) {
             return false;
         }
-        (void)return_cursor;
         if (return_value.kind == MINIC_RISCV64_ABI_VALUE_INDIRECT) {
             if (!minic_type_is_record(function->return_type) ||
                 return_value.storage_size <= 16U || return_value.slot_count != 1U ||
@@ -248,10 +280,11 @@ bool minic_riscv64_core_frame_initialize(const MinicC0Program *program,
     frame->variadic_fixed_stack_slots = 0U;
     frame->varargs_size = 0U;
     if (frame->has_variadic_argument_address) {
-        if (!minic_riscv64_core_variadic_fixed_prefix(program,
-                                        function,
-                                        &frame->integer_parameter_count,
-                                        &frame->variadic_fixed_stack_slots)) {
+        if (!frame->has_named_parameter_cursor ||
+            !minic_riscv64_abi_variadic_prefix_from_cursor(
+                &frame->named_parameter_cursor,
+                &frame->integer_parameter_count,
+                &frame->variadic_fixed_stack_slots)) {
             return false;
         }
         frame->varargs_size = (8U - frame->integer_parameter_count) * 8U;
@@ -435,10 +468,25 @@ void minic_riscv64_core_frame_destroy(MinicRiscv64CoreFrame *frame) {
     minic_riscv64_object_liveness_end_function();
     free(frame->value_offsets);
     frame->value_offsets = NULL;
+    free(frame->parameter_locations);
+    frame->parameter_locations = NULL;
+    frame->parameter_location_count = 0U;
+    frame->has_named_parameter_cursor = false;
     free(frame->object_offsets);
     frame->object_offsets = NULL;
     free(frame->reachable_blocks);
     frame->reachable_blocks = NULL;
+}
+
+bool minic_riscv64_core_frame_parameter_location(
+    const MinicRiscv64CoreFrame *frame, size_t parameter_index,
+    MinicRiscv64AbiArgumentLocation *location) {
+    if (frame == NULL || location == NULL || !frame->has_named_parameter_cursor ||
+        parameter_index >= frame->parameter_location_count ||
+        frame->parameter_locations == NULL)
+        return false;
+    *location = frame->parameter_locations[parameter_index];
+    return true;
 }
 
 bool minic_riscv64_core_frame_object_offset(const MinicC0Program *program,
