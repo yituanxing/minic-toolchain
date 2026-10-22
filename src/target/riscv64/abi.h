@@ -6,6 +6,10 @@
 #include <stdbool.h>
 #include <stddef.h>
 
+/* RV64 psABI register banks shared by caller, callee and variadic save area. */
+extern const char *const minic_riscv64_abi_integer_argument_registers[8];
+extern const char *const minic_riscv64_abi_floating_argument_registers[8];
+
 typedef enum MinicRiscv64AbiValueKind {
     MINIC_RISCV64_ABI_VALUE_INVALID = 0,
     MINIC_RISCV64_ABI_VALUE_VOID,

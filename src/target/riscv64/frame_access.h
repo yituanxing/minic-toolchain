@@ -14,4 +14,9 @@ bool minic_riscv64_frame_load_int128(FILE *, const MinicRiscv64CoreFrame *,
                                      MinicCoreValueId, const char *, const char *);
 bool minic_riscv64_frame_store_int128(FILE *, const MinicRiscv64CoreFrame *,
                                       MinicCoreValueId, const char *, const char *);
+/* psABI record fragments (1..8 bytes), shared by call transport and memory. */
+bool minic_riscv64_frame_load_chunk(FILE *, const MinicRiscv64CoreFrame *,
+                                    const char *, size_t, size_t);
+bool minic_riscv64_frame_store_chunk(FILE *, const MinicRiscv64CoreFrame *,
+                                     const char *, size_t, size_t);
 #endif

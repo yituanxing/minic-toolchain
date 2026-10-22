@@ -144,6 +144,7 @@ MINIC_SOURCES := \
 	src/target/riscv64/layout.c \
 	src/target/riscv64/codegen_support.c \
 	src/target/riscv64/core_codegen.c \
+	src/target/riscv64/call_emit.c \
 	src/target/riscv64/scalar_emit.c \
 	src/target/riscv64/frame_layout.c \
 	src/target/riscv64/frame_access.c \
