@@ -1409,3 +1409,27 @@ int main(void) {
 }
 EOF
 check_exit initializer_record_owner_index 42
+
+# Shared relocation replay: large sorted pointer tables avoid quadratic
+# insertion scans while rebased object/function/record targets remain correct.
+cat > "$tempdir/initializer_relocation_owners.i" <<'EOF'
+static int values[4] = {5, 7, 9, 11};
+static int *const slots[512] = {
+    [0 ... 511] = &values[1], [2] = &values[3], [511] = &values[0]
+};
+static int answer(void) { return 42; }
+static int (*call)(void) = answer;
+struct Pair { int *target; int tag; };
+static struct Pair pairs[3] = {
+    [0 ... 2] = { &values[1], 3 }, [1] = { &values[2], 5 }
+};
+int main(void) {
+    if (slots[0] != &values[1] || slots[2] != &values[3] ||
+        slots[250] != &values[1] || slots[511] != &values[0]) return 1;
+    if (pairs[0].target != &values[1] || pairs[1].target != &values[2] ||
+        pairs[2].target != &values[1] || pairs[1].tag != 5) return 2;
+    if (call() != 42) return 3;
+    return 42;
+}
+EOF
+check_exit initializer_relocation_owners 42

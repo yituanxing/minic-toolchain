@@ -33,6 +33,11 @@ bool minic_parser_static_symbol_function_relocation(const MinicC0Program *progra
 bool minic_parser_static_symbol_add_pointer_offset(int64_t base, int64_t delta, int64_t *result);
 bool minic_parser_static_symbol_object_relocation_path(const MinicParser *parser, MinicExpressionId expression_id, MinicStaticObjectRelocationTarget *target);
 bool minic_parser_static_symbol_pointer_initializer(MinicParser *parser, MinicType target_type, MinicStaticPointerInitializer *initializer);
+/* Shared symbolic-address commit for scalar, array and record initializers. */
+bool minic_parser_static_commit_pointer_relocation(
+    MinicC0Program *program, MinicGlobalObjectId object_id,
+    MinicGlobalRelocationLocationKind location_kind, size_t location_index,
+    const MinicStaticPointerInitializer *initializer);
 bool minic_parser_static_symbol_floating_initializer_bits(MinicParser *parser, MinicType target_type, uint64_t *bits);
 
 #endif

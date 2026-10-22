@@ -318,48 +318,10 @@ static bool parse_static_scalar_constant_at(MinicParser *parser,
                 minic_parser_error(parser, "cannot reserve nested static relocation slot");
                 return false;
             }
-            if (initializer.relocation_is_label) {
-                recorded = minic_c0_global_object_add_label_relocation(
-                    parser->program,
-                    object_id,
-                    MINIC_GLOBAL_RELOCATION_LOCATION_AGGREGATE_SCALAR,
-                    slot_index,
-                    initializer.label_statement_id);
-            } else if (initializer.relocation_is_function) {
-                recorded = initializer.has_explicit_pointer_cast
-                               ? minic_c0_global_object_add_function_relocation_cast(
-                                     parser->program,
-                                     object_id,
-                                     MINIC_GLOBAL_RELOCATION_LOCATION_AGGREGATE_SCALAR,
-                                     slot_index,
-                                     initializer.function_id)
-                               : minic_c0_global_object_add_function_relocation(
-                                     parser->program,
-                                     object_id,
-                                     MINIC_GLOBAL_RELOCATION_LOCATION_AGGREGATE_SCALAR,
-                                     slot_index,
-                                     initializer.function_id);
-            } else {
-                recorded = initializer.has_explicit_pointer_cast
-                               ? minic_c0_global_object_add_object_relocation_path_addend_cast(
-                                     parser->program,
-                                     object_id,
-                                     MINIC_GLOBAL_RELOCATION_LOCATION_AGGREGATE_SCALAR,
-                                     slot_index,
-                                     initializer.relocation_target.object_id,
-                                     initializer.relocation_target.member_indices,
-                                     initializer.relocation_target.member_depth,
-                                     initializer.relocation_target.byte_addend)
-                               : minic_c0_global_object_add_object_relocation_path_addend(
-                                     parser->program,
-                                     object_id,
-                                     MINIC_GLOBAL_RELOCATION_LOCATION_AGGREGATE_SCALAR,
-                                     slot_index,
-                                     initializer.relocation_target.object_id,
-                                     initializer.relocation_target.member_indices,
-                                     initializer.relocation_target.member_depth,
-                                     initializer.relocation_target.byte_addend);
-            }
+            recorded = minic_parser_static_commit_pointer_relocation(
+                parser->program, object_id,
+                MINIC_GLOBAL_RELOCATION_LOCATION_AGGREGATE_SCALAR,
+                slot_index, &initializer);
             if (!recorded) {
                 const char *trace = getenv("CORE_FAST_TRACE");
                 if (trace != NULL && trace[0] != '\0' && strcmp(trace, "0") != 0) {
@@ -518,48 +480,10 @@ materialize_static_pointer_array_slot(MinicParser *parser,
     if (!initializer->has_relocation) {
         return true;
     }
-    if (initializer->relocation_is_label) {
-        recorded = minic_c0_global_object_add_label_relocation(
-            parser->program,
-            object_id,
-            MINIC_GLOBAL_RELOCATION_LOCATION_AGGREGATE_SCALAR,
-            slot_index,
-            initializer->label_statement_id);
-    } else if (initializer->relocation_is_function) {
-        recorded = initializer->has_explicit_pointer_cast
-                       ? minic_c0_global_object_add_function_relocation_cast(
-                             parser->program,
-                             object_id,
-                             MINIC_GLOBAL_RELOCATION_LOCATION_AGGREGATE_SCALAR,
-                             slot_index,
-                             initializer->function_id)
-                       : minic_c0_global_object_add_function_relocation(
-                             parser->program,
-                             object_id,
-                             MINIC_GLOBAL_RELOCATION_LOCATION_AGGREGATE_SCALAR,
-                             slot_index,
-                             initializer->function_id);
-    } else {
-        recorded = initializer->has_explicit_pointer_cast
-                       ? minic_c0_global_object_add_object_relocation_path_addend_cast(
-                             parser->program,
-                             object_id,
-                             MINIC_GLOBAL_RELOCATION_LOCATION_AGGREGATE_SCALAR,
-                             slot_index,
-                             initializer->relocation_target.object_id,
-                             initializer->relocation_target.member_indices,
-                             initializer->relocation_target.member_depth,
-                             initializer->relocation_target.byte_addend)
-                       : minic_c0_global_object_add_object_relocation_path_addend(
-                             parser->program,
-                             object_id,
-                             MINIC_GLOBAL_RELOCATION_LOCATION_AGGREGATE_SCALAR,
-                             slot_index,
-                             initializer->relocation_target.object_id,
-                             initializer->relocation_target.member_indices,
-                             initializer->relocation_target.member_depth,
-                             initializer->relocation_target.byte_addend);
-    }
+    recorded = minic_parser_static_commit_pointer_relocation(
+        parser->program, object_id,
+        MINIC_GLOBAL_RELOCATION_LOCATION_AGGREGATE_SCALAR,
+        slot_index, initializer);
     if (!recorded) {
         MinicType slot_type;
 
@@ -1032,47 +956,12 @@ materialize_static_aggregate_array_action(MinicParser *parser,
             return false;
         }
         location_index = destination_begin + relocation->location_index;
-        if (relocation->target_kind == MINIC_GLOBAL_RELOCATION_LABEL) {
-            recorded = minic_c0_global_object_add_label_relocation(
-                parser->program,
-                object_id,
-                MINIC_GLOBAL_RELOCATION_LOCATION_AGGREGATE_SCALAR,
-                location_index,
-                (MinicStatementId)relocation->target_id);
-        } else if (relocation->target_kind == MINIC_GLOBAL_RELOCATION_FUNCTION) {
-            recorded = relocation->has_explicit_pointer_cast
-                           ? minic_c0_global_object_add_function_relocation_cast(
-                                 parser->program,
-                                 object_id,
-                                 MINIC_GLOBAL_RELOCATION_LOCATION_AGGREGATE_SCALAR,
-                                 location_index,
-                                 (MinicFunctionId)relocation->target_id)
-                           : minic_c0_global_object_add_function_relocation(
-                                 parser->program,
-                                 object_id,
-                                 MINIC_GLOBAL_RELOCATION_LOCATION_AGGREGATE_SCALAR,
-                                 location_index,
-                                 (MinicFunctionId)relocation->target_id);
-        } else {
-            recorded = relocation->has_explicit_pointer_cast
-                           ? minic_c0_global_object_add_object_relocation_path_addend_cast(
-                                 parser->program,
-                                 object_id,
-                                 MINIC_GLOBAL_RELOCATION_LOCATION_AGGREGATE_SCALAR,
-                                 location_index,
-                                 (MinicGlobalObjectId)relocation->target_id,
-                                 relocation->target_member_indices,
-                                 relocation->target_member_depth,
-                                 relocation->target_byte_addend)
-                           : minic_c0_global_object_add_object_relocation_path_addend(
-                                 parser->program,
-                                 object_id,
-                                 MINIC_GLOBAL_RELOCATION_LOCATION_AGGREGATE_SCALAR,
-                                 location_index,
-                                 (MinicGlobalObjectId)relocation->target_id,
-                                 relocation->target_member_indices,
-                                 relocation->target_member_depth,
-                                 relocation->target_byte_addend);
+        {
+            MinicGlobalRelocation rebased = *relocation;
+            rebased.location_kind = MINIC_GLOBAL_RELOCATION_LOCATION_AGGREGATE_SCALAR;
+            rebased.location_index = location_index;
+            recorded = minic_c0_global_object_add_relocation(
+                parser->program, object_id, &rebased);
         }
         if (!recorded) {
             minic_parser_error(parser,

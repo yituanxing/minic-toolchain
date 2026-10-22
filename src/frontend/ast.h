@@ -930,6 +930,11 @@ bool minic_c0_global_record_field_initializer_slot(const MinicC0Program *program
                                                    const MinicRecord *record,
                                                    size_t field_index,
                                                    size_t *slot_index);
+/* Replay a validated relocation after rebasing its destination slot. */
+bool minic_c0_global_object_add_relocation(
+    MinicC0Program *program, MinicGlobalObjectId global_object_id,
+    const MinicGlobalRelocation *relocation);
+
 bool minic_c0_global_object_add_function_relocation(MinicC0Program *program,
                                                     MinicGlobalObjectId global_object_id,
                                                     MinicGlobalRelocationLocationKind location_kind,
