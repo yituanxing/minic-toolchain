@@ -12,5 +12,5 @@
 bool minic_loongarch64_emit_residual_instruction(
     FILE *, const MinicDirectLP64BlockContext *, MinicCoreInstructionId,
     size_t block_id, size_t result_offset,
-    bool (*normalize)(FILE *, size_t, bool), bool *needs_writeback);
+    bool *needs_writeback);
 #endif

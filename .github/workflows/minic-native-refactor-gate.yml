@@ -10,6 +10,7 @@ on:
       - 'src/frontend/**'
       - 'Makefile'
       - '.github/workflows/minic-native-refactor-gate.yml'
+      - 'tests/compiler/c0/check-minic-target-boundaries.sh'
   workflow_dispatch:
 
 concurrency:
@@ -23,6 +24,11 @@ jobs:
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
+      - name: Check MiniC backend ownership invariants
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          bash tests/compiler/c0/check-minic-target-boundaries.sh
       - name: Strictly compile all MiniC targets without apt or QEMU prerequisites
         shell: bash
         run: |

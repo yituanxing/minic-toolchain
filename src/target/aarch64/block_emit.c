@@ -200,56 +200,6 @@ bool minic_aarch64_emit_terminator(FILE *out,
 }
 
 /* All Core blocks and their machine instruction cases are target-owned. */
-static bool emit_integer_normalize(FILE *out, size_t width, bool sign) {
-    const char *op = width == 1U
-        ? (sign ? "  sxtb w9, w9\n" :
-                  "  uxtb w9, w9\n")
-        : width == 2U
-            ? (sign ? "  sxth w9, w9\n" :
-                      "  uxth w9, w9\n")
-            : width == 4U ? "" : NULL;
-    return op != NULL && fputs(op, out) != EOF;
-}
-
-/* Source-driven tinyAES M4 frontier. Reuse existing target DataLayout to
- * size ordinary integer globals and flat arrays, but keep ELF emission
- * in the ISA backend. Unsupported aggregate/relocation cases must fail
- * closed, rather than silently manufacture incorrect object bytes. */
-/* cJSON's first original file-scope globals are a flat error record
- * {null pointer, zero size_t} and a function-pointer hooks record.
- * Reuse the validated shared target DataLayout for *byte offsets* and
- * function/object relocation addends. Only bounded flat scalar records
- * belong here; recursive records/unions/bitfields fail closed. */
-
-
-
-
-/* Emission of target-neutral ELF STV_* binding metadata. */
-
-
-
-/* External default-visibility ELF symbols may be interposed by glibc.
- * AArch64 ADR_PREL_PG_HI21 cannot address optind@@GLIBC from a PIE. Use
- * GOT for external data/code references. Keep only proven TU-local static
- * definitions on the already-tested direct ADRP path (AES RoundKey). */
-/* M7: retain x86's established DataLayout-owned object sizing instead
- * of guessing eight bytes per Core object.  The new-ISA stack slots
- * are SP-positive; naturally aligned objects are laid out after SSA
- * value slots.  Keep bounded <= 8 KiB frames until large-offset ABI
- * access has been independently checked on both targets. */
-
-
-
-
-
-/* Preserve 16-byte long-double SSA values outside 8-byte scalar slots. */
-
-
-/* Target-local final legalization of out-of-range SP-relative memory access.
- * Full Core SSA stack slots are preserved, and x12 is a reserved scratch.
- * This pass does not transform small-frame GNU instructions. */
-
-
 
 /* All Core GP-producing instruction families share this final slot
  * transport. The F/D arithmetic and ABI remain native and may opt into
@@ -416,7 +366,7 @@ bool minic_aarch64_emit_core_blocks(FILE *out, const MinicDirectLP64BlockContext
         {
             bool needs_writeback = false;
             if (!minic_aarch64_emit_residual_instruction(out, ctx, ins_id, block_id,
-                    offset, emit_integer_normalize, &needs_writeback))
+                    offset, &needs_writeback))
                 return minic_multi_direct_machine_reject(
                     fn, "aarch64", name, reject_stage,
                     reject_block, reject_ins, __LINE__);
