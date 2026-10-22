@@ -160,51 +160,29 @@ static bool minic_riscv64_emit_symbol_value(FILE *file,
     return fprintf(file, "  %s %s%" PRId64 "\n", directive, target_name, target_addend) >= 0;
 }
 
+/* Reuse the proven common zero-relocation byte walk.  Keep RV64's .dword
+ * spelling and expression syntax behind a narrow target-owned callback. */
+static bool minic_riscv64_emit_symbol_relocation(
+    FILE *file, const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicGlobalRelocation *relocation, size_t width) {
+    return target != NULL && target->architecture == MINIC_TARGET_ARCH_RISCV64 &&
+           minic_riscv64_emit_symbol_value(file, program, relocation, width);
+}
+
 static bool
 emit_symbol_relocs(FILE *file, const MinicC0Program *program, const MinicGlobalObject *object) {
-    size_t object_alignment;
-    size_t storage_size;
+    const MinicTargetInfo *target =
+        minic_target_info_for_architecture(MINIC_TARGET_ARCH_RISCV64);
+    size_t size, alignment;
 
-    if (!minic_data_layout_global_object(
-            minic_default_data_layout(), program, object, &storage_size, &object_alignment)) {
+    if (file == NULL || program == NULL || object == NULL || target == NULL ||
+        !minic_data_layout_global_object(
+            target->data_layout, program, object, &size, &alignment))
         return false;
-    }
-    (void)object_alignment;
-
-    MinicType pointer_type;
-    size_t pointer_width;
-    size_t pointer_alignment;
-    size_t cursor;
-    size_t relocation_index;
-
-    if (file == NULL || program == NULL || object == NULL || !object->is_zero_initialized ||
-        object->relocation_count == 0U || object->initializer_count != 0U ||
-        !minic_type_pointer_to(minic_type_void(), &pointer_type) ||
-        !minic_riscv64_type_layout(program, pointer_type, &pointer_width, &pointer_alignment) ||
-        pointer_width != 8U) {
-        return false;
-    }
-    (void)pointer_alignment;
-
-    cursor = 0U;
-    for (relocation_index = 0U; relocation_index < object->relocation_count; ++relocation_index) {
-        const MinicGlobalRelocation *relocation;
-        size_t storage_offset;
-
-        relocation = &object->relocations[relocation_index];
-        if (!minic_data_layout_global_relocation_offset(
-                minic_default_data_layout(), program, object, relocation, &storage_offset)) {
-            return false;
-        }
-        if (storage_offset < cursor || storage_offset > storage_size ||
-            pointer_width > storage_size - storage_offset ||
-            !minic_riscv64_emit_zero_bytes(file, storage_offset - cursor) ||
-            !minic_riscv64_emit_symbol_value(file, program, relocation, pointer_width)) {
-            return false;
-        }
-        cursor = storage_offset + pointer_width;
-    }
-    return cursor <= storage_size && minic_riscv64_emit_zero_bytes(file, storage_size - cursor);
+    (void)alignment;
+    return minic_multi_emit_zero_relocation_global(
+        file, program, target, object, size,
+        minic_riscv64_emit_symbol_relocation);
 }
 
 static bool minic_riscv64_record_has_bit_fields(const MinicRecord *record) {

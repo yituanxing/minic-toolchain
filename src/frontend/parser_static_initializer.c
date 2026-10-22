@@ -530,22 +530,37 @@ materialize_static_pointer_array_slot(MinicParser *parser,
     return true;
 }
 
+/* Stream the resolved owner directly into GlobalObject storage.
+ * The old implementation allocated and copied a full array of large
+ * MinicStaticArraySlot records before serializing them a second time.
+ * Only the source action payloads and the compact owner index are needed. */
 static bool materialize_static_array_slots(MinicParser *parser,
                                            MinicGlobalObjectId object_id,
                                            MinicType element_type,
-                                           const MinicStaticArraySlot *slots,
-                                           size_t slot_count,
+                                           const MinicStaticArraySlot *action_values,
+                                           const MinicArrayInitializerResolved *resolved,
                                            size_t aggregate_slot_base) {
+    const MinicStaticArraySlot zero_slot = {0};
     size_t index;
 
-    if (parser == NULL || (slot_count != 0U && slots == NULL) ||
-        (!minic_type_is_integer(element_type) && !minic_type_is_pointer(element_type))) {
+    if (parser == NULL || resolved == NULL ||
+        (resolved->element_count != 0U && resolved->owners == NULL) ||
+        (resolved->action_count != 0U && action_values == NULL) ||
+        (!minic_type_is_integer(element_type) && !minic_type_is_pointer(element_type)))
         return false;
-    }
-    for (index = 0U; index < slot_count; ++index) {
+    for (index = 0U; index < resolved->element_count; ++index) {
+        const size_t owner = resolved->owners[index];
+        const MinicStaticArraySlot *slot;
+        if (owner == MINIC_INITIALIZER_ACTION_INVALID) {
+            slot = &zero_slot;
+        } else {
+            if (owner >= resolved->action_count)
+                return false;
+            slot = &action_values[owner];
+        }
         if (minic_type_is_integer(element_type)) {
             if (!minic_c0_global_object_add_initializer_bits(
-                    parser->program, object_id, slots[index].integer_bits)) {
+                    parser->program, object_id, slot->integer_bits)) {
                 minic_parser_error(parser, "cannot materialize static integer array slot");
                 return false;
             }
@@ -558,7 +573,7 @@ static bool materialize_static_array_slots(MinicParser *parser,
             }
             aggregate_slot = aggregate_slot_base + index;
             if (!materialize_static_pointer_array_slot(
-                    parser, object_id, aggregate_slot, &slots[index].pointer_initializer)) {
+                    parser, object_id, aggregate_slot, &slot->pointer_initializer)) {
                 if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
                     minic_parser_error(parser, "cannot materialize static pointer array slot");
                 }
@@ -594,18 +609,13 @@ bool minic_parser_static_scalar_array_transaction(MinicParser *parser,
     MinicArrayInitializerPlan plan;
     MinicArrayInitializerResolved resolved = {0};
     MinicStaticArraySlot *action_values;
-    MinicStaticArraySlot *final_slots;
     const MinicGlobalObject *object;
     size_t action_capacity;
-    size_t final_capacity;
     size_t extent;
-    size_t index;
     bool success;
 
     action_values = NULL;
-    final_slots = NULL;
     action_capacity = 0U;
-    final_capacity = 0U;
     extent = 0U;
     success = false;
     if (parser != NULL && !infer_bound && element_count != 0U &&
@@ -724,21 +734,11 @@ bool minic_parser_static_scalar_array_transaction(MinicParser *parser,
         minic_parser_error(parser, "cannot resolve static array initializer owners");
         goto done;
     }
-    if (!grow_static_array_slots(parser, &final_slots, &final_capacity, extent)) {
-        goto done;
-    }
-    for (index = 0U; index < extent; ++index) {
-        const size_t owner = resolved.owners[index];
-        if (owner != MINIC_INITIALIZER_ACTION_INVALID)
-            final_slots[index] = action_values[owner];
-    }
     object = minic_c0_program_global_object(parser->program, object_id);
     if (object == NULL ||
-        !materialize_static_array_slots(parser,
-                                        object_id,
-                                        element_type,
-                                        final_slots,
-                                        extent,
+        resolved.element_count != extent ||
+        !materialize_static_array_slots(parser, object_id, element_type,
+                                        action_values, &resolved,
                                         object->initializer_count)) {
         goto done;
     }
@@ -746,7 +746,6 @@ bool minic_parser_static_scalar_array_transaction(MinicParser *parser,
 
 done:
     free(action_values);
-    free(final_slots);
     minic_array_initializer_resolved_destroy(&resolved);
     minic_array_initializer_plan_destroy(&plan);
     return success;

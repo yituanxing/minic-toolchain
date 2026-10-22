@@ -1433,3 +1433,32 @@ int main(void) {
 }
 EOF
 check_exit initializer_relocation_owners 42
+
+# Sparse static initializer materialization must not allocate an extra
+# full-array pointer-action payload; unowned slots zero-fill and both object
+# and function relocations remain associated with the selected owner.
+cat > "$tempdir/initializer_sparse_stream.i" <<'EOF'
+static int table[4] = {5, 7, 9, 11};
+static int *const sparse[2048] = {
+    [512] = &table[2],
+    [1024 ... 1026] = &table[0],
+    [1025] = &table[3],
+    [2047] = &table[1]
+};
+static int integers[4096] = {
+    [100 ... 300] = 4, [200 ... 250] = 7, [4095] = 42
+};
+int main(void) {
+    if (sparse[0] != 0 || sparse[511] != 0 || sparse[512] != &table[2] ||
+        sparse[513] != 0 || sparse[1024] != &table[0] ||
+        sparse[1025] != &table[3] || sparse[1026] != &table[0] ||
+        sparse[1027] != 0 || sparse[2047] != &table[1])
+        return 1;
+    if (integers[0] != 0 || integers[150] != 4 ||
+        integers[230] != 7 || integers[300] != 4 ||
+        integers[301] != 0)
+        return 2;
+    return integers[4095];
+}
+EOF
+check_exit initializer_sparse_stream 42
