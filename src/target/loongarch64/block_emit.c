@@ -470,7 +470,8 @@ bool minic_loongarch64_emit_core_blocks(FILE *out, const MinicDirectLP64BlockCon
                     reject_ins, __LINE__);
             if (needs_gp_store) {
                 if (!emit_sp_mem(out,
-                        minic_lp64_register64_type(program, target, ins->type)
+                        (minic_lp64_register64_type(program, target, ins->type) ||
+                         minic_type_is_double(ins->type))
                             ? "st.d" : "st.w", "$t0", offset))
                     return minic_multi_direct_machine_reject(
                         fn, "loongarch64", name, reject_stage, reject_block,
