@@ -738,3 +738,48 @@ bool minic_multi_direct_scalar_store_shape(
         return false;
     return true;
 }
+
+/* One dispatch classifier and SSA-result guard for both LP64 direct
+ * backends. Effect-only instructions deliberately have no scalar slots. */
+bool minic_multi_direct_machine_instruction_shape(
+    const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
+    bool allow_variadic_double_result,
+    MinicDirectMachineInstructionShape *shape) {
+    if (fn == NULL || ins == NULL || shape == NULL)
+        return false;
+    shape->result_offset = 0U;
+    if (ins->kind == MINIC_CORE_INSTRUCTION_COMPILER_BARRIER) {
+        if (!minic_multi_direct_compiler_barrier_shape(ins))
+            return false;
+        shape->family = MINIC_DIRECT_MACHINE_COMPILER_BARRIER;
+        return true;
+    }
+    if (ins->kind == MINIC_CORE_INSTRUCTION_RECORD_COPY) {
+        shape->family = MINIC_DIRECT_MACHINE_RECORD_COPY;
+        return true;
+    }
+    if (ins->kind == MINIC_CORE_INSTRUCTION_PARAMETER_OBJECT) {
+        shape->family = MINIC_DIRECT_MACHINE_PARAMETER_OBJECT;
+        return true;
+    }
+    if (minic_multi_direct_memory_machine_kind(ins->kind)) {
+        shape->family = MINIC_DIRECT_MACHINE_MEMORY;
+        return (ins->kind != MINIC_CORE_INSTRUCTION_LOAD &&
+                ins->kind != MINIC_CORE_INSTRUCTION_ATOMIC_LOAD) ||
+               minic_multi_direct_result_slot_offset(
+                   fn, ins, allow_variadic_double_result,
+                   &shape->result_offset);
+    }
+    if (!minic_multi_direct_result_slot_offset(
+            fn, ins, allow_variadic_double_result, &shape->result_offset))
+        return false;
+    if (minic_multi_direct_fp_instruction_kind(ins->kind))
+        shape->family = MINIC_DIRECT_MACHINE_FP;
+    else if (minic_multi_direct_integer_machine_kind(ins->kind))
+        shape->family = MINIC_DIRECT_MACHINE_INTEGER;
+    else if (minic_multi_direct_abi_transfer_kind(ins->kind))
+        shape->family = MINIC_DIRECT_MACHINE_ABI;
+    else
+        shape->family = MINIC_DIRECT_MACHINE_RESIDUAL;
+    return true;
+}

@@ -115,4 +115,27 @@ bool minic_multi_direct_scalar_store_shape(
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
     size_t *width, bool *is_signed, bool *is_pointer);
 
+
+/* Common checked Core dispatch outcome. Actual register width, memory
+ * transport, opcode and ABI remain independently owned by each ISA. */
+typedef enum MinicDirectMachineFamily {
+    MINIC_DIRECT_MACHINE_COMPILER_BARRIER,
+    MINIC_DIRECT_MACHINE_RECORD_COPY,
+    MINIC_DIRECT_MACHINE_PARAMETER_OBJECT,
+    MINIC_DIRECT_MACHINE_MEMORY,
+    MINIC_DIRECT_MACHINE_FP,
+    MINIC_DIRECT_MACHINE_INTEGER,
+    MINIC_DIRECT_MACHINE_ABI,
+    MINIC_DIRECT_MACHINE_RESIDUAL
+} MinicDirectMachineFamily;
+typedef struct MinicDirectMachineInstructionShape {
+    MinicDirectMachineFamily family;
+    size_t result_offset;
+} MinicDirectMachineInstructionShape;
+
+bool minic_multi_direct_machine_instruction_shape(
+    const MinicCoreFunction *, const MinicCoreInstruction *,
+    bool allow_variadic_double_result,
+    MinicDirectMachineInstructionShape *);
+
 #endif

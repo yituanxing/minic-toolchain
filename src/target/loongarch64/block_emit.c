@@ -251,6 +251,18 @@ static bool emit_integer_normalize(FILE *out, size_t width, bool sign) {
  * Raw SP remains the ABI outgoing stack-argument base. */
 
 
+/* The fixed-frame register is target-specific; one machine writeback
+ * owner prevents memory/FP/ALU/ABI lowering from diverging on slot widths. */
+static bool loongarch64_emit_gp_result(
+    FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicCoreInstruction *ins, size_t offset, bool include_double,
+    bool dynamic_frame) {
+    const bool wide = minic_lp64_register64_type(program, target, ins->type) ||
+                      (include_double && minic_type_is_double(ins->type));
+    return minic_loongarch64_emit_frame_mem(
+        out, wide ? "st.d" : "st.w", "$t0", offset, dynamic_frame);
+}
+
 bool minic_loongarch64_emit_core_blocks(FILE *out, const MinicDirectLP64BlockContext *ctx) {
     const MinicC0Program *program;
     const MinicTargetInfo *target;
@@ -294,33 +306,35 @@ bool minic_loongarch64_emit_core_blocks(FILE *out, const MinicDirectLP64BlockCon
         MinicCoreInstructionId ins_id = block->instructions[i];
         const MinicCoreInstruction *ins;
         size_t offset;
+        MinicDirectMachineInstructionShape shape;
         if (ins_id >= fn->instruction_count) return minic_multi_direct_machine_reject(fn, "loongarch64", name, reject_stage,
                                     reject_block, reject_ins, __LINE__);
         ins = &fn->instructions[ins_id];
         reject_ins = (size_t)ins_id;
+        if (!minic_multi_direct_machine_instruction_shape(
+                fn, ins, false, &shape))
+            return minic_multi_direct_machine_reject(
+                fn, "loongarch64", name, reject_stage,
+                reject_block, reject_ins, __LINE__);
+        offset = shape.result_offset;
         /* A Core compiler barrier is an effect-only ordering constraint
          * (GNU empty asm with a memory clobber), not a hardware fence and
          * never an SSA value. Like the existing x86/RV64 backends, preserve
          * source instruction order and emit no machine instruction. The
          * previous result-slot gate rejected this valid Core kind in the
          * original BusyBox test/gzip/netstat/top applets on both ISAs. */
-        if (ins->kind == MINIC_CORE_INSTRUCTION_COMPILER_BARRIER) {
-            if (!minic_multi_direct_compiler_barrier_shape(ins))
-                return minic_multi_direct_machine_reject(fn, "loongarch64", name,
-                                           reject_stage, reject_block,
-                                           reject_ins, __LINE__);
+        if (shape.family == MINIC_DIRECT_MACHINE_COMPILER_BARRIER)
             continue;
-        }
         /* M23: copy the *exact* target-sized aggregate bytes between Core
          * addresses, preserving padding and nested hooks (no re-layout).
          * An effect-only record copy has no SSA result slot. */
-        if (ins->kind == MINIC_CORE_INSTRUCTION_RECORD_COPY) {
+        if (shape.family == MINIC_DIRECT_MACHINE_RECORD_COPY) {
             if (!minic_loongarch64_emit_record_copy(out, program, target, fn, ins, dynamic_frame))
                 return minic_multi_direct_machine_reject(fn, "loongarch64", name,
                     reject_stage, reject_block, reject_ins, __LINE__);
             continue;
         }
-        if (ins->kind == MINIC_CORE_INSTRUCTION_PARAMETER_OBJECT) {
+        if (shape.family == MINIC_DIRECT_MACHINE_PARAMETER_OBJECT) {
             if (!minic_loongarch64_emit_parameter_object(out, fn, ins,
                     incoming_plan, frame_plan, frame, dynamic_frame))
                 return minic_multi_direct_machine_reject(fn, "loongarch64", name,
@@ -330,45 +344,26 @@ bool minic_loongarch64_emit_core_blocks(FILE *out, const MinicDirectLP64BlockCon
         /* Store both 64-bit limbs, with no hidden 128-bit truncation. */
         /* Memory effects precede the ordinary SSA gate: stores are effect
          * only, loads either produce a scalar GP value or a wide slot. */
-        if (minic_multi_direct_memory_machine_kind(ins->kind)) {
+        if (shape.family == MINIC_DIRECT_MACHINE_MEMORY) {
             bool needs_gp_store = false;
-            if (ins->kind == MINIC_CORE_INSTRUCTION_LOAD ||
-                ins->kind == MINIC_CORE_INSTRUCTION_ATOMIC_LOAD) {
-                if (!minic_multi_direct_result_slot_offset(
-                        fn, ins, false, &offset))
-                    return minic_multi_direct_machine_reject(
-                        fn, "loongarch64", name, reject_stage, reject_block, reject_ins, __LINE__);
-            }
             if (!minic_loongarch64_emit_memory_instruction(
                     out, program, target, fn, ins, frame_plan,
                     dynamic_frame, &needs_gp_store))
                 return minic_multi_direct_machine_reject(
                     fn, "loongarch64", name, reject_stage, reject_block, reject_ins, __LINE__);
-            if (needs_gp_store) {
-                if (!emit_sp_mem(out, (minic_lp64_register64_type(program, target, ins->type) ||
-                                       minic_type_is_double(ins->type)) ? "st.d" : "st.w",
-                                 "$t0", offset))
-                    return minic_multi_direct_machine_reject(
-                        fn, "loongarch64", name, reject_stage, reject_block, reject_ins, __LINE__);
-            }
+            if (needs_gp_store && !loongarch64_emit_gp_result(
+                    out, program, target, ins, offset, true, dynamic_frame))
+                return minic_multi_direct_machine_reject(
+                    fn, "loongarch64", name, reject_stage,
+                    reject_block, reject_ins, __LINE__);
             continue;
         }
-        if (!minic_multi_direct_result_slot_offset(
-                fn, ins, false, &offset)) {
-            if (getenv("MINIC_M1_TRACE") != NULL)
-                (void)fprintf(stderr,
-                              "MINIC_M8_RESULT_REJECT arch=loongarch64 function=%s block=%zu instruction=%u kind=%d result=%u type_integer=%d type_pointer=%d\n",
-                              name, block_id, (unsigned int)ins_id,
-                              (int)ins->kind, (unsigned int)ins->result,
-                              minic_type_is_integer(ins->type) ? 1 : 0,
-                              minic_type_is_pointer(ins->type) ? 1 : 0);
-            return minic_multi_direct_machine_reject(
-                fn, "loongarch64", name, reject_stage, reject_block, reject_ins, __LINE__);
-        }
+        /* The Core result slot and family have already been admitted by
+         * minic_multi_direct_machine_instruction_shape(). */
         /* The native FP instruction family is a single target-owned
          * emission unit; Core semantics are shared, machine opcodes are not.
          * GP-producing comparisons/conversions reuse normal writeback. */
-        if (minic_multi_direct_fp_instruction_kind(ins->kind)) {
+        if (shape.family == MINIC_DIRECT_MACHINE_FP) {
             bool needs_gp_store = false;
             if (!minic_loongarch64_emit_fp_instruction(
                     out, program, target, fn, ins, offset,
@@ -378,20 +373,16 @@ bool minic_loongarch64_emit_core_blocks(FILE *out, const MinicDirectLP64BlockCon
                 return minic_multi_direct_machine_reject(
                     fn, "loongarch64", name, reject_stage, reject_block,
                     reject_ins, __LINE__);
-            if (needs_gp_store) {
-                if (!emit_sp_mem(out,
-                        (minic_lp64_register64_type(program, target, ins->type) ||
-                         minic_type_is_double(ins->type)) ? "st.d" : "st.w",
-                        "$t0", offset))
-                    return minic_multi_direct_machine_reject(
-                        fn, "loongarch64", name, reject_stage, reject_block,
-                        reject_ins, __LINE__);
-            }
+            if (needs_gp_store && !loongarch64_emit_gp_result(
+                    out, program, target, ins, offset, true, dynamic_frame))
+                return minic_multi_direct_machine_reject(
+                    fn, "loongarch64", name, reject_stage,
+                    reject_block, reject_ins, __LINE__);
             continue;
         }
         /* Integer and pointer ALU is a complete native instruction family.
          * Shared Core widths/shapes; ISA-dependent flags and bit arithmetic. */
-        if (minic_multi_direct_integer_machine_kind(ins->kind)) {
+        if (shape.family == MINIC_DIRECT_MACHINE_INTEGER) {
             bool needs_gp_store = false;
             if (!minic_loongarch64_emit_integer_instruction(
                     out, program, target, fn, ins, frame_plan,
@@ -399,19 +390,16 @@ bool minic_loongarch64_emit_core_blocks(FILE *out, const MinicDirectLP64BlockCon
                 return minic_multi_direct_machine_reject(
                     fn, "loongarch64", name, reject_stage, reject_block,
                     reject_ins, __LINE__);
-            if (needs_gp_store) {
-                if (!emit_sp_mem(out,
-                        minic_lp64_register64_type(program, target, ins->type)
-                            ? "st.d" : "st.w", "$t0", offset))
-                    return minic_multi_direct_machine_reject(
-                        fn, "loongarch64", name, reject_stage, reject_block,
-                        reject_ins, __LINE__);
-            }
+            if (needs_gp_store && !loongarch64_emit_gp_result(
+                    out, program, target, ins, offset, false, dynamic_frame))
+                return minic_multi_direct_machine_reject(
+                    fn, "loongarch64", name, reject_stage,
+                    reject_block, reject_ins, __LINE__);
             continue;
         }
         /* Calls and callee ingress form a single ABI transfer family.
          * The native emitter consumes the common argument location plan. */
-        if (minic_multi_direct_abi_transfer_kind(ins->kind)) {
+        if (shape.family == MINIC_DIRECT_MACHINE_ABI) {
             bool needs_gp_store = false;
             if (!minic_loongarch64_emit_abi_instruction(
                     out, ctx, ins, offset, emit_integer_normalize,
@@ -419,15 +407,11 @@ bool minic_loongarch64_emit_core_blocks(FILE *out, const MinicDirectLP64BlockCon
                 return minic_multi_direct_machine_reject(
                     fn, "loongarch64", name, reject_stage, reject_block,
                     reject_ins, __LINE__);
-            if (needs_gp_store) {
-                if (!emit_sp_mem(out,
-                        (minic_lp64_register64_type(program, target, ins->type) ||
-                         minic_type_is_double(ins->type))
-                            ? "st.d" : "st.w", "$t0", offset))
-                    return minic_multi_direct_machine_reject(
-                        fn, "loongarch64", name, reject_stage, reject_block,
-                        reject_ins, __LINE__);
-            }
+            if (needs_gp_store && !loongarch64_emit_gp_result(
+                    out, program, target, ins, offset, true, dynamic_frame))
+                return minic_multi_direct_machine_reject(
+                    fn, "loongarch64", name, reject_stage,
+                    reject_block, reject_ins, __LINE__);
             continue;
         }
         switch (ins->kind) {
@@ -709,10 +693,10 @@ bool minic_loongarch64_emit_core_blocks(FILE *out, const MinicDirectLP64BlockCon
             return minic_multi_direct_machine_reject(fn, "loongarch64", name, reject_stage,
                                     reject_block, reject_ins, __LINE__);
         }
-        if (!emit_sp_mem(out, (minic_lp64_register64_type(program, target, ins->type) ||
-                               minic_type_is_double(ins->type))
-                              ? "st.d" : "st.w", "$t0", offset)) return minic_multi_direct_machine_reject(fn, "loongarch64", name, reject_stage,
-                                    reject_block, reject_ins, __LINE__);
+        if (!loongarch64_emit_gp_result(out, program, target, ins, offset, true, dynamic_frame))
+            return minic_multi_direct_machine_reject(
+                fn, "loongarch64", name, reject_stage,
+                reject_block, reject_ins, __LINE__);
     }
         reject_stage = "terminator_emit";
         reject_ins = SIZE_MAX;
