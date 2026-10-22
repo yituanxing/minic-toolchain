@@ -11,7 +11,7 @@
 static bool emit_simple_integer_binary(
     FILE *file, const MinicC0Program *program, const MinicRiscv64CoreFrame *frame,
     const MinicCoreInstruction *instruction, const char *opcode) {
-    if (file == NULL || program == NULL || frame == NULL ||
+    if (file == NULL || frame == NULL ||
         instruction == NULL || opcode == NULL ||
         !minic_riscv64_frame_load_value(file, frame, instruction->value.binary.left, "t0") ||
         !minic_riscv64_frame_load_value(file, frame, instruction->value.binary.right, "t1") ||
@@ -27,7 +27,7 @@ bool minic_riscv64_emit_scalar_instruction(
     FILE *file, const MinicC0Program *program,
     const MinicCoreFunction *function, const MinicRiscv64CoreFrame *frame,
     const char *symbol_name, const MinicCoreInstruction *instruction) {
-    if (file == NULL || program == NULL || function == NULL ||
+    if (file == NULL || function == NULL ||
         frame == NULL || symbol_name == NULL || instruction == NULL)
         return false;
     switch (instruction->kind) {
