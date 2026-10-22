@@ -599,9 +599,10 @@ bool minic_multi_emit_recursive_record_global(
                emit_relocation, NULL);
 }
 
-/* Preflight must be side-effect free: a shape rejected here falls back to
- * RV64's feature-complete bitfield/flexible/zero-sized specializations.
- * No target calls a partial shared writer and then rewinds emitted bytes. */
+/* Recursive aggregate shape inspection must be side-effect free. All four
+ * backends now share this layout walk, including RV64's GNU flexible/empty
+ * record extensions and bitfield byte packing. Unsupported shapes fail
+ * before any assembly is emitted, rather than fabricating a zero payload. */
 static bool minic_multi_recursive_shape_supported_at(
     const MinicC0Program *program, MinicType type, unsigned int depth) {
     if (program == NULL || depth > 32U)
@@ -724,14 +725,10 @@ bool minic_multi_emit_record_array_global(
 }
 
 
-/* GNU permits a static record object to initialize its trailing flexible
- * integer array (BusyBox hdparm's masks_labels_t). Core represents the
- * payload as one flattened slot per scalar; DataLayout alone computes the
- * actual storage extent, offsets and alignment. This helper deliberately
- * admits only flat pointer/integer prefix fields followed by a last,
- * non-bitfield flexible integer member. Never guess bitfield packing or
- * nested-object offsets. ELF relocations remain backend-owned. */
-/* Flexible record tails are ordinary recursive record fields whose concrete
+/* GNU permits a static record object to initialize a trailing flexible
+ * array (BusyBox hdparm's masks_labels_t). The parser owns the flattened
+ * scalar slots, while GlobalObject DataLayout owns concrete storage size.
+ * Flexible record tails are ordinary recursive fields whose concrete
  * extent comes from the complete GlobalObject DataLayout, not sizeof(record).
  * Preserve the public entry point for callers; there is no separate payload
  * traversal/relocation order to maintain. */
