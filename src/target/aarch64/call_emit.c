@@ -218,7 +218,7 @@ bool minic_aarch64_emit_abi_instruction(
                 bool sign;
                 if (!minic_lp64_scalar_integer_width(program, target, ins->type,
                                           &width, &sign) ||
-                    (width != 8U && !emit_integer_normalize(out, width, sign)))
+                    (width != 8U && !normalize(out, width, sign)))
                     return false;
             }
             *needs_gp_store = true;
