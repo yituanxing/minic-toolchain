@@ -480,13 +480,13 @@ bool minic_aarch64_emit_core_blocks(FILE *out, const MinicDirectLP64BlockContext
                     fn, "aarch64", name, reject_stage, reject_block,
                     reject_ins, __LINE__);
             if (needs_gp_store) {
-            if (fprintf(out, (minic_lp64_register64_type(program, target, ins->type) ||
-                              minic_type_is_double(ins->type))
-                                 ? "  str x9, [sp, #%zu]\n"
-                                 : "  str w9, [sp, #%zu]\n", offset) < 0)
-                return minic_multi_direct_machine_reject(
-                    fn, "aarch64", name, reject_stage, reject_block,
-                    reject_ins, __LINE__);
+                if (fprintf(out, (minic_lp64_register64_type(program, target, ins->type) ||
+                                  minic_type_is_double(ins->type))
+                                     ? "  str x9, [sp, #%zu]\n"
+                                     : "  str w9, [sp, #%zu]\n", offset) < 0)
+                    return minic_multi_direct_machine_reject(
+                        fn, "aarch64", name, reject_stage, reject_block,
+                        reject_ins, __LINE__);
             }
             continue;
         }
