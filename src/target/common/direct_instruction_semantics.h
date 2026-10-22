@@ -29,6 +29,15 @@ bool minic_multi_direct_result_slot_offset(
 
 /* Core-only operand admission for existing AArch64/LoongArch64 instructions.
  * Each machine backend is still responsible for assembly and diagnostics. */
+/* Exact direct-LP64 Core pointer/int cast and pointer-order admission. */
+bool minic_multi_direct_scalar_bitcast_shape(
+    const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
+    bool *pointer_to_integer, size_t *source_width,
+    bool *source_signed, bool *source_pointer);
+bool minic_multi_direct_pointer_less_shape(
+    const MinicCoreFunction *fn, const MinicCoreInstruction *ins);
+
 bool minic_multi_direct_integer_unary_shape(
     const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,

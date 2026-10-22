@@ -811,42 +811,24 @@ bool minic_aarch64_emit_core_blocks(FILE *out, const MinicDirectLP64BlockContext
             break;
         }
         case MINIC_CORE_INSTRUCTION_SCALAR_BITCAST: {
-            /* Original AES_ECB_encrypt converts uint8_t* to state_t*.
-             * Both are LP64 pointer representations: preserve all 64 bits.
-             * Do NOT incorrectly turn integer/pointer casts into a no-op. */
             const MinicCoreValueId source = ins->value.operand;
             size_t src_width = 0U;
             bool src_signed = false;
-            bool src_pointer;
-            /* M35: cJSON parse_number computes after_end - number_c_string.
-             * Preserve all LP64 pointer bits for signed/unsigned long casts.
-             * Sub-width truncation remains fail-closed until tested. */
-            if (source < fn->value_count &&
-                minic_type_is_pointer(fn->values[source].type) &&
-                minic_type_is_integer(ins->type)) {
-                size_t width;
-                bool sign;
-                if (!minic_core_scalar_bitcast_types_valid(
-                        ins->type, fn->values[source].type) ||
-                    !minic_lp64_scalar_integer_width(program, target, ins->type,
-                                          &width, &sign) || width != 8U ||
-                    fprintf(out, "  ldr x9, [sp, #%zu]\n",
+            bool src_pointer = false;
+            bool pointer_to_integer = false;
+            if (!minic_multi_direct_scalar_bitcast_shape(
+                    program, target, fn, ins, &pointer_to_integer,
+                    &src_width, &src_signed, &src_pointer))
+                return minic_multi_direct_machine_reject(
+                    fn, "aarch64", name, reject_stage, reject_block,
+                    reject_ins, __LINE__);
+            if (pointer_to_integer) {
+                if (fprintf(out, "  ldr x9, [sp, #%zu]\n",
                             (size_t)source * 8U) < 0)
                     return minic_multi_direct_machine_reject(fn, "aarch64", name, reject_stage,
                                     reject_block, reject_ins, __LINE__);
                 break;
             }
-            if (source >= fn->value_count ||
-                !minic_type_is_pointer(ins->type) ||
-                !minic_core_scalar_bitcast_types_valid(
-                    ins->type, fn->values[source].type)) return minic_multi_direct_machine_reject(fn, "aarch64", name, reject_stage,
-                                    reject_block, reject_ins, __LINE__);
-            src_pointer = minic_type_is_pointer(fn->values[source].type);
-            if (!src_pointer &&
-                !minic_lp64_scalar_integer_width(program, target,
-                                      fn->values[source].type,
-                                     &src_width, &src_signed)) return minic_multi_direct_machine_reject(fn, "aarch64", name, reject_stage,
-                                    reject_block, reject_ins, __LINE__);
             if (fprintf(out, (src_pointer || src_width == 8U)
                           ? "  ldr x9, [sp, #%zu]\n"
                           : "  ldr w9, [sp, #%zu]\n",
@@ -1617,10 +1599,7 @@ bool minic_aarch64_emit_core_blocks(FILE *out, const MinicDirectLP64BlockContext
         case MINIC_CORE_INSTRUCTION_POINTER_LESS: {
             const MinicCoreValueId lhs = ins->value.binary.left;
             const MinicCoreValueId rhs = ins->value.binary.right;
-            if (!minic_type_equal(ins->type, minic_type_int()) ||
-                lhs >= fn->value_count || rhs >= fn->value_count ||
-                !minic_type_is_pointer(fn->values[lhs].type) ||
-                !minic_type_equal(fn->values[lhs].type, fn->values[rhs].type) ||
+            if (!minic_multi_direct_pointer_less_shape(fn, ins) ||
                 fprintf(out, "  ldr x9, [sp, #%zu]\n"
                              "  ldr x10, [sp, #%zu]\n"
                              "  cmp x9, x10\n"

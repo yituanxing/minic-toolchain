@@ -139,6 +139,61 @@ bool minic_multi_direct_result_slot_offset(
 
 /* The direct LP64 backends share Core unary/shift/compare contracts; register
  * choice, signed extensions and actual machine encodings remain target-owned. */
+
+/* Scalar bitcast shape for direct LP64 lowering. Pointer->integer must
+ * preserve all 64 address bits; integer->pointer keeps narrow source width
+ * for the ISA's existing sign/zero-extension sequence. */
+bool minic_multi_direct_scalar_bitcast_shape(
+    const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
+    bool *pointer_to_integer, size_t *source_width,
+    bool *source_signed, bool *source_pointer) {
+    MinicCoreValueId source;
+    MinicType input;
+    size_t output_width;
+    bool output_signed;
+    if (program == NULL || target == NULL || fn == NULL || ins == NULL ||
+        pointer_to_integer == NULL || source_width == NULL ||
+        source_signed == NULL || source_pointer == NULL ||
+        ins->kind != MINIC_CORE_INSTRUCTION_SCALAR_BITCAST)
+        return false;
+    source = ins->value.operand;
+    if (source >= fn->value_count)
+        return false;
+    input = fn->values[source].type;
+    if (!minic_core_scalar_bitcast_types_valid(ins->type, input))
+        return false;
+    *source_pointer = minic_type_is_pointer(input);
+    *pointer_to_integer = *source_pointer && minic_type_is_integer(ins->type);
+    *source_width = 0U;
+    *source_signed = false;
+    if (*pointer_to_integer)
+        return minic_lp64_scalar_integer_width(program, target, ins->type,
+                                                &output_width, &output_signed) &&
+               output_width == 8U;
+    if (!minic_type_is_pointer(ins->type))
+        return false;
+    return *source_pointer ||
+           minic_lp64_scalar_integer_width(program, target, input,
+                                          source_width, source_signed);
+}
+
+/* POINTER_LESS compares two identically typed pointer Core values and
+ * produces C int. The unsigned machine comparison is ISA-owned. */
+bool minic_multi_direct_pointer_less_shape(
+    const MinicCoreFunction *fn, const MinicCoreInstruction *ins) {
+    MinicCoreValueId lhs, rhs;
+    if (fn == NULL || ins == NULL ||
+        ins->kind != MINIC_CORE_INSTRUCTION_POINTER_LESS ||
+        !minic_type_equal(ins->type, minic_type_int()))
+        return false;
+    lhs = ins->value.binary.left;
+    rhs = ins->value.binary.right;
+    return lhs < fn->value_count && rhs < fn->value_count &&
+           minic_type_is_pointer(fn->values[lhs].type) &&
+           minic_type_equal(fn->values[lhs].type, fn->values[rhs].type);
+}
+
 bool minic_multi_direct_integer_unary_shape(
     const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
