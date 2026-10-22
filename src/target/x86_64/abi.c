@@ -4,7 +4,7 @@
 
 /* Extracted SysV AMD64 classifier: integer widths, conservative aggregates
  * and register-bank/stack ingress. The existing rules stay byte-for-byte;
- * target-specific machine emission remains in codegen.c. */
+ * target-specific machine emission remains in machine_emit.c and machine_call.c. */
 
 bool minic_x86_64_scalar_width(const MinicC0Program *program,
                              const MinicTargetInfo *target,

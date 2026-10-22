@@ -424,14 +424,11 @@ bool minic_x86_64_emit_call_instruction(
         MinicCoreCallView call;
         const MinicCoreValueId callee = ins->value.indirect_call.callee;
         const MinicCoreCallSignature *signature;
-        size_t begin, count;
         size_t outgoing_bytes = 0U;
         if (!minic_core_call_view_build(fn, ins, &call) ||
             call.signature == NULL)
             return false;
         signature = call.signature;
-        begin = call.argument_begin;
-        count = call.argument_count;
         if (!x86_emit_call_arguments(out, program, target, fn, frame,
                                      &call, &outgoing_bytes) ||
             !x86_value_load(out, frame, callee, "%r11") ||
