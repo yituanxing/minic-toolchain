@@ -64,6 +64,12 @@ for arch in aarch64 loongarch64; do
   lacks "$block" 'minic_multi_direct_result_slot_offset('
   lacks "$header" '(*normalize)'
   lacks "$residual" '(*normalize)'
+  lacks "$block" "minic_${arch}_emit_integer_normalize"
+  for owner in fp_emit integer_emit call_emit; do
+    has "src/target/$arch/$owner.c" "minic_${arch}_emit_integer_normalize("
+    lacks "src/target/$arch/$owner.c" '(*normalize)'
+    lacks "src/target/$arch/$owner.h" '(*normalize)'
+  done
   if grep -Eq '^[[:space:]]*case[[:space:]]+MINIC_CORE_INSTRUCTION_' "$block"; then
     fail "$block has residual Core cases; native cases belong in family owners"
   fi

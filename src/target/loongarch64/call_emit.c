@@ -1,4 +1,5 @@
 #include "target/loongarch64/call_emit.h"
+#include "target/loongarch64/scalar_normalize.h"
 #include "target/loongarch64/block_emit.h"
 #include "target/common/direct_instruction_semantics.h"
 #include "target/common/direct_call_plan.h"
@@ -41,7 +42,6 @@ static bool emit_lp64_record_chunk_argument(FILE *out, size_t offset,
 bool minic_loongarch64_emit_abi_instruction(
     FILE *out, const MinicDirectLP64BlockContext *ctx,
     const MinicCoreInstruction *ins, size_t offset,
-    bool (*normalize)(FILE *, size_t, bool),
     bool *needs_gp_store) {
     const MinicC0Program *program;
     const MinicTargetInfo *target;
@@ -53,7 +53,7 @@ bool minic_loongarch64_emit_abi_instruction(
     if (out == NULL || ctx == NULL || ctx->program == NULL ||
         ctx->target == NULL || ctx->fn == NULL || ctx->frame_plan == NULL ||
         ctx->incoming_plan == NULL || ctx->outgoing_calls == NULL ||
-        ins == NULL || normalize == NULL ||
+        ins == NULL ||
         needs_gp_store == NULL)
         return false;
     program = ctx->program;
@@ -230,7 +230,7 @@ bool minic_loongarch64_emit_abi_instruction(
                 bool sign;
                 if (!minic_lp64_scalar_integer_width(program, target, ins->type,
                                           &width, &sign) ||
-                    (width != 8U && !normalize(out, width, sign)))
+                    (width != 8U && !minic_loongarch64_emit_integer_normalize(out, width, sign)))
                     return false;
             }
             *needs_gp_store = true;

@@ -1,4 +1,5 @@
 #include "target/aarch64/integer_emit.h"
+#include "target/aarch64/scalar_normalize.h"
 #include "target/common/direct_instruction_semantics.h"
 #include "target/common/lp64_scalar.h"
 #include <stdio.h>
@@ -11,11 +12,10 @@ bool minic_aarch64_emit_integer_instruction(
     FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
     const MinicLP64FramePlan *frame_plan,
-    bool (*normalize)(FILE *, size_t, bool),
     bool *needs_gp_store) {
     if (out == NULL || program == NULL || target == NULL ||
         fn == NULL || ins == NULL || frame_plan == NULL ||
-        normalize == NULL || needs_gp_store == NULL)
+         needs_gp_store == NULL)
         return false;
     *needs_gp_store = false;
     switch (ins->kind) {
@@ -172,12 +172,12 @@ bool minic_aarch64_emit_integer_instruction(
                         (size_t)lhs * 8U) < 0 ||
                 /* Narrow signed shifts need sign-extension BEFORE the
                  * arithmetic shift; normalizing only the result is late. */
-                (lw < 4U && !normalize(out, lw, ls)) ||
+                (lw < 4U && !minic_aarch64_emit_integer_normalize(out, lw, ls)) ||
                 fprintf(out, rw == 8U ? "  ldr x10, [sp, #%zu]\n"
                                      : "  ldr w10, [sp, #%zu]\n",
                         (size_t)rhs * 8U) < 0 ||
                 fputs(op, out) == EOF ||
-                (!wide && !normalize(out, lw, ls)))
+                (!wide && !minic_aarch64_emit_integer_normalize(out, lw, ls)))
                 return false;
             (void)rs;
             *needs_gp_store = true;
@@ -197,7 +197,7 @@ bool minic_aarch64_emit_integer_instruction(
                         (size_t)operand * 8U) < 0 ||
                 fputs(width == 8U ? "  mvn x9, x9\n" : "  mvn w9, w9\n",
                       out) == EOF ||
-                (width != 8U && !normalize(out, width, sign)))
+                (width != 8U && !minic_aarch64_emit_integer_normalize(out, width, sign)))
                 return false;
             *needs_gp_store = true;
             return true;
@@ -213,7 +213,7 @@ bool minic_aarch64_emit_integer_instruction(
                         (size_t)operand * 8U) < 0 ||
                 fputs(width == 8U ? "  neg x9, x9\n" : "  neg w9, w9\n",
                       out) == EOF ||
-                (width != 8U && !normalize(out, width, sign)))
+                (width != 8U && !minic_aarch64_emit_integer_normalize(out, width, sign)))
                 return false;
             *needs_gp_store = true;
             return true;
@@ -246,7 +246,7 @@ bool minic_aarch64_emit_integer_instruction(
                                   : "  ldr w10, [sp, #%zu]\n",
                         (size_t)rhs * 8U) < 0 ||
                 fputs(opcode, out) == EOF ||
-                (!wide && !normalize(out, lw, ls)))
+                (!wide && !minic_aarch64_emit_integer_normalize(out, lw, ls)))
                 return false;
             *needs_gp_store = true;
             return true;
@@ -276,7 +276,7 @@ bool minic_aarch64_emit_integer_instruction(
                                   : "  ldr w10, [sp, #%zu]\n",
                         (size_t)rhs * 8U) < 0 ||
                 fputs(opcode, out) == EOF ||
-                (lw != 8U && !normalize(out, lw, ls)))
+                (lw != 8U && !minic_aarch64_emit_integer_normalize(out, lw, ls)))
                 return false;
             *needs_gp_store = true;
             return true;

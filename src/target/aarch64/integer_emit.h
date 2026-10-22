@@ -15,7 +15,6 @@ bool minic_aarch64_emit_integer_instruction(
     FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
     const MinicLP64FramePlan *frame_plan,
-    bool (*normalize)(FILE *, size_t, bool),
     bool *needs_gp_store);
 
 #endif

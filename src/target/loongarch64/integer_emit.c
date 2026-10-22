@@ -1,4 +1,5 @@
 #include "target/loongarch64/integer_emit.h"
+#include "target/loongarch64/scalar_normalize.h"
 #include "target/common/direct_instruction_semantics.h"
 #include "target/common/lp64_scalar.h"
 #include "target/loongarch64/frame_emit.h"
@@ -16,11 +17,11 @@ bool minic_loongarch64_emit_integer_instruction(
     FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
     const MinicLP64FramePlan *frame_plan,
-    bool dynamic_frame, bool (*normalize)(FILE *, size_t, bool),
+    bool dynamic_frame,
     bool *needs_gp_store) {
     if (out == NULL || program == NULL || target == NULL ||
         fn == NULL || ins == NULL || frame_plan == NULL ||
-        normalize == NULL || needs_gp_store == NULL)
+         needs_gp_store == NULL)
         return false;
     *needs_gp_store = false;
     switch (ins->kind) {
@@ -190,11 +191,11 @@ bool minic_loongarch64_emit_integer_instruction(
             if (!emit_sp_mem(out, wide ? "ld.d" : "ld.w",
                              "$t0", (size_t)lhs * 8U) ||
                 /* Signed narrow shift inputs require extension before sra. */
-                (lw < 4U && !normalize(out, lw, ls)) ||
+                (lw < 4U && !minic_loongarch64_emit_integer_normalize(out, lw, ls)) ||
                 !emit_sp_mem(out, rw == 8U ? "ld.d" : "ld.w",
                              "$t1", (size_t)rhs * 8U) ||
                 fputs(op, out) == EOF ||
-                (!wide && !normalize(out, lw, ls)))
+                (!wide && !minic_loongarch64_emit_integer_normalize(out, lw, ls)))
                 return false;
             (void)rs;
             *needs_gp_store = true;
@@ -212,7 +213,7 @@ bool minic_loongarch64_emit_integer_instruction(
                 !emit_sp_mem(out, width == 8U ? "ld.d" : "ld.w",
                              "$t0", (size_t)operand * 8U) ||
                 fputs("  nor $t0, $t0, $zero\n", out) == EOF ||
-                (width != 8U && !normalize(out, width, sign)))
+                (width != 8U && !minic_loongarch64_emit_integer_normalize(out, width, sign)))
                 return false;
             *needs_gp_store = true;
             return true;
@@ -227,7 +228,7 @@ bool minic_loongarch64_emit_integer_instruction(
                              "$t0", (size_t)operand * 8U) ||
                 fputs(width == 8U ? "  sub.d $t0, $zero, $t0\n"
                                   : "  sub.w $t0, $zero, $t0\n", out) == EOF ||
-                (width != 8U && !normalize(out, width, sign)))
+                (width != 8U && !minic_loongarch64_emit_integer_normalize(out, width, sign)))
                 return false;
             *needs_gp_store = true;
             return true;
@@ -256,7 +257,7 @@ bool minic_loongarch64_emit_integer_instruction(
                 !emit_sp_mem(out, wide ? "ld.d" : "ld.w", "$t1",
                              (size_t)rhs * 8U) ||
                 fputs(opcode, out) == EOF ||
-                (!wide && !normalize(out, lw, ls)))
+                (!wide && !minic_loongarch64_emit_integer_normalize(out, lw, ls)))
                 return false;
             *needs_gp_store = true;
             return true;
@@ -282,7 +283,7 @@ bool minic_loongarch64_emit_integer_instruction(
                 !emit_sp_mem(out, rw == 8U ? "ld.d" : "ld.w",
                              "$t1", (size_t)rhs * 8U) ||
                 fputs(opcode, out) == EOF ||
-                (lw != 8U && !normalize(out, lw, ls)))
+                (lw != 8U && !minic_loongarch64_emit_integer_normalize(out, lw, ls)))
                 return false;
             *needs_gp_store = true;
             return true;
