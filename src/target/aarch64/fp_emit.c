@@ -2,6 +2,7 @@
 #include "target/common/direct_instruction_semantics.h"
 #include "target/common/lp64_scalar.h"
 #include <stdint.h>
+#include <inttypes.h>
 #include <stdio.h>
 
 /* Own the native instruction sequences for the IEEE numeric family.
@@ -11,10 +12,11 @@
 bool minic_aarch64_emit_fp_instruction(
     FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
-    size_t offset, bool (*normalize)(FILE *, size_t, bool),
+    size_t offset, const MinicLP64FramePlan *frame_plan,
+    bool (*normalize)(FILE *, size_t, bool),
     bool *needs_gp_store) {
     if (out == NULL || program == NULL || target == NULL ||
-        fn == NULL || ins == NULL || normalize == NULL ||
+        fn == NULL || ins == NULL || frame_plan == NULL || normalize == NULL ||
         needs_gp_store == NULL)
         return false;
     *needs_gp_store = false;
@@ -22,6 +24,47 @@ bool minic_aarch64_emit_fp_instruction(
         /* Ordered IEEE comparisons: AArch64 FCMP sets C=1 on unordered.
          * 'lt' (N!=V) is WRONG for NaN. Use unsigned lo/ls conditions:
          * those are true only for ordered < or <= respectively. */
+        case MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT: {
+            if (minic_type_is_long_double(ins->type)) {
+                size_t dst, half;
+                if (!minic_lp64_frame_plan_wide_slot(frame_plan, ins->result, &dst))
+                    return false;
+                for (half = 0U; half < 2U; ++half) {
+                    const uint64_t bits = half == 0U
+                        ? ins->value.floating128_bits.low
+                        : ins->value.floating128_bits.high;
+                    unsigned int shift;
+                    if (fprintf(out, "  movz x9, #%" PRIu64 "\n",
+                                bits & UINT64_C(0xffff)) < 0)
+                        return false;
+                    for (shift = 16U; shift <= 48U; shift += 16U)
+                        if (((bits >> shift) & UINT64_C(0xffff)) != 0U &&
+                            fprintf(out, "  movk x9, #%" PRIu64
+                                         ", lsl #%u\n",
+                                    (bits >> shift) & UINT64_C(0xffff),
+                                    shift) < 0)
+                            return false;
+                    if (fprintf(out, "  str x9, [sp, #%zu]\n",
+                                dst + half * 8U) < 0)
+                        return false;
+                }
+                return true;
+            }
+            const uint64_t bits = ins->value.floating_bits;
+            unsigned int shift;
+            if ((!minic_type_is_double(ins->type) &&
+                 !minic_type_is_float(ins->type)) ||
+                fprintf(out, "  movz x9, #%" PRIu64 "\n",
+                        bits & UINT64_C(0xffff)) < 0) return false;
+            for (shift = 16U; shift <= 48U; shift += 16U) {
+                if (((bits >> shift) & UINT64_C(0xffff)) != 0U &&
+                    fprintf(out, "  movk x9, #%" PRIu64 ", lsl #%u\n",
+                            (bits >> shift) & UINT64_C(0xffff), shift) < 0)
+                    return false;
+            }
+            *needs_gp_store = true;
+            return true;
+        }
         case MINIC_CORE_INSTRUCTION_DOUBLE_EQUAL:
         case MINIC_CORE_INSTRUCTION_DOUBLE_LESS:
         case MINIC_CORE_INSTRUCTION_DOUBLE_LESS_EQUAL: {
