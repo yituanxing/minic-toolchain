@@ -461,8 +461,28 @@ static bool minic_multi_emit_recursive_global_value(
             minic_c0_program_record(program, type.record_id);
         size_t begin = 0U, end, start_slot = *initializer_index;
         size_t union_span = 0U, cursor = 0U, i;
-        if (record == NULL || !record->is_complete || record->field_count == 0U)
+        size_t record_storage_size = type_size;
+        if (record == NULL || !record->is_complete)
             return false;
+        /* A GNU-initialized trailing flexible array extends the storage
+         * beyond sizeof(struct). The global-object DataLayout, not the
+         * declared record type size, owns the concrete output extent. */
+        if (object->flexible_array_initializer_count != 0U &&
+            minic_type_is_record(object->type) &&
+            object->type.record_id == type.record_id) {
+            size_t object_alignment;
+            if (!minic_data_layout_global_object(
+                    target->data_layout, program, object,
+                    &record_storage_size, &object_alignment))
+                return false;
+            (void)object_alignment;
+        }
+        if (record->field_count == 0U) {
+            if (type_size != 0U)
+                return false;
+            *emitted_size = 0U;
+            return true;
+        }
         end = record->field_count;
         if (record->is_union) {
             size_t selected = 0U;
@@ -480,9 +500,37 @@ static bool minic_multi_emit_recursive_global_value(
         for (i = begin; i < end; ++i) {
             const MinicRecordField *field = minic_c0_record_field(record, i);
             size_t field_offset, element;
-            if (field == NULL || field->is_flexible_array)
+            if (field == NULL)
                 return false;
             if (field->is_zero_length_array) continue;
+            if (field->is_flexible_array) {
+                size_t flexible_count, element;
+                if (record->is_union || i + 1U != end ||
+                    !minic_data_layout_record_field_offset(
+                        target->data_layout, program, record, i, &field_offset) ||
+                    field_offset < cursor ||
+                    field_offset > record_storage_size ||
+                    !minic_multi_emit_zero_bytes(out, field_offset - cursor))
+                    return false;
+                cursor = field_offset;
+                flexible_count = minic_type_is_record(object->type) &&
+                                 object->type.record_id == type.record_id
+                                     ? object->flexible_array_initializer_count
+                                     : 0U;
+                for (element = 0U; element < flexible_count; ++element) {
+                    size_t emitted;
+                    if (!minic_multi_emit_recursive_global_value(
+                            out, program, target, object, field->type,
+                            initializer_index, relocation_index,
+                            matched_union_selections, &emitted, depth + 1U,
+                            emit_relocation, emit_bits) ||
+                        cursor > record_storage_size ||
+                        emitted > record_storage_size - cursor)
+                        return false;
+                    cursor += emitted;
+                }
+                continue;
+            }
             if (field->is_bit_field) {
                 if (!minic_multi_emit_record_bit_field_run(
                         out, program, target, object, record, end, type_size,
@@ -514,8 +562,9 @@ static bool minic_multi_emit_recursive_global_value(
                 cursor += emitted;
             }
         }
-        if (cursor > type_size ||
-            fprintf(out, "  .zero %zu\n", type_size - cursor) < 0)
+        if (cursor > record_storage_size ||
+            !minic_multi_emit_zero_bytes(
+                out, record_storage_size - cursor))
             return false;
         if (record->is_union && union_span != 0U) {
             size_t end_slot, slot;
@@ -534,7 +583,7 @@ static bool minic_multi_emit_recursive_global_value(
             }
             *initializer_index = end_slot;
         }
-        *emitted_size = type_size;
+        *emitted_size = record_storage_size;
         return true;
     }
     return false;
@@ -580,14 +629,23 @@ static bool minic_multi_recursive_shape_supported_at(
     if (minic_type_is_record(type)) {
         const MinicRecord *record = minic_c0_program_record(program, type.record_id);
         size_t index;
-        if (record == NULL || !record->is_complete || record->field_count == 0U)
+        /* Complete empty records have zero bytes/slots; they are valid
+         * GNU aggregate members on RV64 and do not require a private walk. */
+        if (record == NULL || !record->is_complete)
             return false;
         for (index = 0U; index < record->field_count; ++index) {
             const MinicRecordField *field = minic_c0_record_field(record, index);
-            if (field == NULL || field->is_flexible_array)
+            if (field == NULL)
                 return false;
             if (field->is_zero_length_array)
                 continue;
+            if (field->is_flexible_array) {
+                if (record->is_union || index + 1U != record->field_count ||
+                    !minic_multi_recursive_shape_supported_at(
+                        program, field->type, depth + 1U))
+                    return false;
+                continue;
+            }
             if (field->is_bit_field) {
                 if (!minic_type_is_integer(field->type) ||
                     field->bit_width > 64U || field->element_count != 1U)
