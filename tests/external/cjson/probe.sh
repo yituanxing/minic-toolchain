@@ -195,6 +195,15 @@ verify_preprocessed_line 319 '    if (number >= 0x7fffffff)'
 verify_preprocessed_line 329 '        item->valueint = (int)number;'
 verify_preprocessed_line 332 '    input_buffer->offset += (size_t)(after_end - number_c_string);'
 
+# Reuse the exact upstream vendor hashes, frozen minimal headers and line
+# verification for apt-free compiler throughput comparisons. This exits
+# before MiniC, GNU assembly, linking or QEMU; the normal oracle is unchanged.
+if test "${MINIC_CJSON_PREPROCESS_ONLY:-0}" = 1; then
+    test -s "$preprocessed"
+    printf '%s\n' "PASS external/cjson preprocess-only source=$preprocessed"
+    exit 0
+fi
+
 set +e
 CORE_FAST_TRACE=${CORE_FAST_TRACE:-1} "$minic" -S "$preprocessed" -o "$assembly" \
     >"$work/minic.stdout" 2>"$diagnostic"

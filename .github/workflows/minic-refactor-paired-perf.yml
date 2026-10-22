@@ -7,6 +7,7 @@ on:
     paths:
       - '.github/workflows/minic-refactor-paired-perf.yml'
       - 'tests/compiler/perf/minic-four-backend-refactor-ab.py'
+      - 'tests/external/cjson/probe.sh'
   workflow_dispatch:
 
 permissions:
@@ -57,6 +58,19 @@ jobs:
             -o "$RUNNER_TEMP/minic-refactor-perf/inputs/original-aes128-ecb.i"
           test -s "$RUNNER_TEMP/minic-refactor-perf/inputs/original-aes128-ecb.i"
           sha256sum "$RUNNER_TEMP/minic-refactor-perf/inputs/original-aes128-ecb.i"
+      - name: Freeze original upstream cJSON C using the existing verified oracle preprocessor
+        shell: bash
+        env:
+          MINIC_CJSON_PREPROCESS_ONLY: '1'
+          RISCV_CC: cc
+          QEMU_RISCV64: env
+        run: |
+          set -Eeuo pipefail
+          BUILD_DIR="$RUNNER_TEMP/minic-refactor-perf" sh tests/external/cjson/probe.sh
+          cp "$RUNNER_TEMP/minic-refactor-perf/tests/external/cjson/cJSON.i" \
+            "$RUNNER_TEMP/minic-refactor-perf/inputs/original-cjson-1.7.19.i"
+          test -s "$RUNNER_TEMP/minic-refactor-perf/inputs/original-cjson-1.7.19.i"
+          sha256sum "$RUNNER_TEMP/minic-refactor-perf/inputs/original-cjson-1.7.19.i"
       - name: Four ISA serial paired A/B and native output differential
         shell: bash
         run: |
@@ -65,14 +79,27 @@ jobs:
             --baseline "$RUNNER_TEMP/minic-refactor-perf/baseline/build/perf-ab/bin/minic-cc" \
             --candidate "$GITHUB_WORKSPACE/build/perf-ab/bin/minic-cc" \
             --source "$RUNNER_TEMP/minic-refactor-perf/inputs/original-aes128-ecb.i" \
-            --output "$RUNNER_TEMP/minic-refactor-perf/result" \
-            --repeats 4
-          cat "$RUNNER_TEMP/minic-refactor-perf/result/summary.md" >> "$GITHUB_STEP_SUMMARY"
+            --output "$RUNNER_TEMP/minic-refactor-perf/result/aes" \
+            --repeats 4 \
+            --label tinyAES-128-ECB
+          python3 tests/compiler/perf/minic-four-backend-refactor-ab.py \
+            --baseline "$RUNNER_TEMP/minic-refactor-perf/baseline/build/perf-ab/bin/minic-cc" \
+            --candidate "$GITHUB_WORKSPACE/build/perf-ab/bin/minic-cc" \
+            --source "$RUNNER_TEMP/minic-refactor-perf/inputs/original-cjson-1.7.19.i" \
+            --output "$RUNNER_TEMP/minic-refactor-perf/result/cjson" \
+            --repeats 4 \
+            --label cJSON-1.7.19 \
+            --compile-only
+          cat "$RUNNER_TEMP/minic-refactor-perf/result/aes/summary.md" >> "$GITHUB_STEP_SUMMARY"
+          printf '\n\n' >> "$GITHUB_STEP_SUMMARY"
+          cat "$RUNNER_TEMP/minic-refactor-perf/result/cjson/summary.md" >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: minic-four-backend-refactor-paired-ab
           path: |
-            ${{ runner.temp }}/minic-refactor-perf/result/summary.md
-            ${{ runner.temp }}/minic-refactor-perf/result/results.json
+            ${{ runner.temp }}/minic-refactor-perf/result/aes/summary.md
+            ${{ runner.temp }}/minic-refactor-perf/result/aes/results.json
+            ${{ runner.temp }}/minic-refactor-perf/result/cjson/summary.md
+            ${{ runner.temp }}/minic-refactor-perf/result/cjson/results.json
           if-no-files-found: warn
