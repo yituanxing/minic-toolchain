@@ -6,7 +6,6 @@ on:
       - "main"
       - "agent/linux-expanded-kbuild-v0"
       - "agent/linux-perf-boolean-domain-v1"
-      - "feature/four-backend-aarch64-loongarch64-m0"
     paths:
       - 'src/**'
       - 'include/**'

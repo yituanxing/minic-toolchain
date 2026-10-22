@@ -1,0 +1,106 @@
+# One-shot post-merge cleanup of PR branches incorporated by #527.
+# Only exact unchanged tips of PRs already merged into the feature branch.
+# Remove this workflow after one successful run on main.
+name: MiniC One-Shot Merged PR Branch Cleanup
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/minic-one-shot-merged-branch-cleanup.yml'
+permissions:
+  contents: write
+  pull-requests: read
+concurrency:
+  group: minic-merged-pr-branch-cleanup
+  cancel-in-progress: false
+jobs:
+  prune:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Delete only exact merged PR temporary refs
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          import json, os, urllib.request, urllib.error, urllib.parse, re
+          repo = os.environ["GH_REPO"]
+          token = os.environ["GH_TOKEN"]
+          api_base = "https://api.github.com/repos/" + repo
+          headers = {"Authorization": "Bearer " + token,
+                     "Accept": "application/vnd.github+json",
+                     "X-GitHub-Api-Version": "2022-11-28"}
+          def api(endpoint, method="GET"):
+              req = urllib.request.Request(api_base + endpoint, headers=headers,
+                                           method=method)
+              with urllib.request.urlopen(req, timeout=35) as response:
+                  raw = response.read()
+                  return json.loads(raw) if raw else None
+          def paged(endpoint):
+              result = []
+              for page in range(1, 30):
+                  rows = api(endpoint + ("&" if "?" in endpoint else "?") +
+                             "per_page=100&page=" + str(page))
+                  if not isinstance(rows, list):
+                      raise RuntimeError("GitHub unexpected response; refuse cleanup")
+                  result.extend(rows)
+                  if len(rows) < 100: return result
+              raise RuntimeError("branch/PR pagination limit exceeded")
+          pr = api("/pulls/527")
+          if not pr.get("merged_at") or pr["base"]["ref"] != "main":
+              raise RuntimeError("PR527 not merged into main; abort")
+          if pr["head"]["sha"] != "fcde7db2feb2aed752a765c513a250949e480cdb":
+              raise RuntimeError("PR527 unexpected head; abort")
+          main = api("/branches/main")
+          if main["commit"]["sha"] != os.environ["GITHUB_SHA"]:
+              raise RuntimeError("main changed since run began; abort")
+          protected = {"main", "agent/linux-expanded-kbuild-v0",
+                       "agent/linux-rv64-only-parallel-v1",
+                       "agent/linux-perf-boolean-domain-v1",
+                       "archive/all-progress-2026-10-04",
+                       "feature/multitarget-m0-target-context"}
+          open_prs = paged("/pulls?state=open")
+          open_heads = {p["head"]["ref"] for p in open_prs
+                        if (p.get("head") or {}).get("repo") and
+                        p["head"]["repo"].get("full_name") == repo}
+          closed = paged("/pulls?state=closed")
+          merged_heads = {}
+          for p in closed:
+              h, b = p.get("head") or {}, p.get("base") or {}
+              r = h.get("repo") or {}
+              if (p.get("merged_at") and
+                  b.get("ref") == "feature/four-backend-aarch64-loongarch64-m0"
+                  and r.get("full_name") == repo and
+                  h.get("ref") and h.get("sha")):
+                  merged_heads[h["ref"]] = h["sha"]
+          branches = paged("/branches")
+          candidates = []
+          for branch in branches:
+              name = branch["name"]
+              if (name in protected or name in open_heads or
+                  branch.get("protected") or
+                  name == "feature/four-backend-aarch64-loongarch64-m0"):
+                  continue
+              if not re.match(r"^(refactor/|fix/|test/|docs/)", name):
+                  continue
+              if merged_heads.get(name) != branch["commit"]["sha"]:
+                  continue
+              candidates.append((name, branch["commit"]["sha"]))
+          print("MINIC_CLEANUP_CANDIDATES=" + str(len(candidates)),
+                flush=True)
+          for name, sha in candidates:
+              encoded = urllib.parse.quote(name, safe="/")
+              current = api("/branches/" + encoded)
+              if current["commit"]["sha"] != sha:
+                  print("MINIC_CLEANUP_SKIP_UPDATED=" + name, flush=True)
+                  continue
+              api("/git/refs/heads/" + encoded, method="DELETE")
+              print("MINIC_CLEANUP_DELETED=" + name, flush=True)
+          print("MINIC_CLEANUP_PR527=MERGED pr_heads=" +
+                str(len(merged_heads)) + " candidates=" +
+                str(len(candidates)), flush=True)
+          PY
