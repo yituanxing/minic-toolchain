@@ -127,13 +127,14 @@ jobs:
               endpoint = "/git/ref/tags/" + enc(tag)
               exists = api(endpoint, missing_ok=True)
               if exists is None:
-                  api("/git/refs", method="POST",
-                      payload={"ref": "refs/tags/" + tag, "sha": sha})
+                  created = api("/git/refs", method="POST",
+                                payload={"ref": "refs/tags/" + tag, "sha": sha})
+                  if (created or {}).get("object", {}).get("sha") != sha:
+                      raise RuntimeError("Tag creation response invalid: " + tag)
               elif exists.get("object", {}).get("sha") != sha:
                   raise RuntimeError("Existing archive tag points elsewhere: " + tag)
-              verified = api(endpoint)
-              if verified["object"]["sha"] != sha:
-                  raise RuntimeError("Cannot verify archive: " + tag)
+              # GitHub can return a transient 404 on GET immediately after POST;
+              # successful creation's returned SHA is the verification.
               print("MAIN_ONLY_ARCHIVED " + name + " -> " + tag + "@" + sha[:12], flush=True)
               time.sleep(1.0)
           
