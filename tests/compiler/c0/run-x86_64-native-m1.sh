@@ -1311,3 +1311,24 @@ int main(void) {
 }
 EOF
 check_exit core_pointer_cfg_rmw 42
+
+# C function-scope labels and block-scoped GNU __label__ must keep the
+# original forward reference, cleanup lifetime and goto binding semantics.
+cat > "$tempdir/forward_goto_local_label.i" <<'EOF'
+int main(void) {
+    int value = 0;
+    goto ordinary;
+    value = 100;
+ordinary:
+    value = 40;
+    {
+        __label__ local;
+        goto local;
+        value = 100;
+local:
+        value += 2;
+    }
+    return value;
+}
+EOF
+check_exit forward_goto_local_label 42
