@@ -1292,3 +1292,26 @@ int main(void) {
 }
 EOF
 check_exit core_scalar_memory_effects 42
+
+# Real source-to-Core aggregate member projection and CFG-splitting pointer RMW.
+# Both previously lived inside the expression dispatcher; acceptance validates
+# the new record/assignment owner boundaries, with no extra CI workflow.
+cat > "$tempdir/core_rmw_aggregate_dataflow.i" <<'EOF'
+struct Pair { int first; int second; };
+static struct Pair make_pair(void) {
+    struct Pair p = { 40, 2 };
+    return p;
+}
+static int index_calls;
+static int next_index(void) { index_calls++; return 1; }
+int main(void) {
+    int values[3] = { 8, 42, 9 };
+    int *cursor = &values[0];
+    cursor += index_calls == 0 ? next_index() : 2;
+    if (*cursor != 42 || index_calls != 1) return 1;
+    cursor -= index_calls == 1 ? next_index() : 2;
+    if (*cursor != 8 || index_calls != 2) return 2;
+    return make_pair().first + make_pair().second;
+}
+EOF
+check_exit core_rmw_aggregate_dataflow 42

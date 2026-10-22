@@ -379,3 +379,135 @@ MinicCoreLowerStatus minic_core_lower_scalar_update(MinicCoreLowerContext *conte
     return MINIC_CORE_LOWER_OK;
 }
 
+/* Pointer compound RMW is owned by assignment semantics. Address and
+ * original pointer are snapshotted before any RHS expression that can split
+ * Core CFG; a failed admission leaves integer compound handling unclaimed. */
+MinicCoreLowerStatus minic_core_lower_try_pointer_compound_assignment(
+    MinicCoreLowerContext *context, const MinicExpression *expression,
+    MinicCoreValueId *value_id, bool *handled) {
+    MinicCoreInstruction instruction;
+    if (handled == NULL || context == NULL || expression == NULL || value_id == NULL ||
+        context->body == NULL || context->body->program == NULL ||
+        context->function == NULL)
+        return MINIC_CORE_LOWER_ERROR;
+    *handled = false;
+    /* M75_POINTER_COMPOUND_ASSIGNMENT_VALUE: pointer += / -= evaluates
+       the destination lvalue once, loads its current pointer value, applies a
+       scaled integer offset, stores the updated pointer, and yields that value.
+       Keep subtraction explicit in Core: negating an unsigned RHS before
+       pointer.offset would change its width/extension semantics. */
+    if (expression->kind == MINIC_EXPRESSION_COMPOUND_ASSIGNMENT) {
+        const MinicExpression *source;
+        const MinicExpression *target;
+        MinicCoreObjectId address_object;
+        MinicCoreObjectId current_object;
+        MinicCoreValueId address;
+        MinicCoreValueId current;
+        MinicCoreValueId index;
+        MinicCoreValueId updated;
+        MinicCoreLowerStatus status;
+        MinicType address_type;
+        MinicType expression_value_type;
+        MinicType index_type;
+        MinicType stored_type;
+        size_t element_size;
+        bool subtract;
+
+        target = minic_c0_program_expression(
+            context->body->program, expression->value.binary.left);
+        if (target == NULL) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        /* M76_POINTER_COMPOUND_DISPATCH: only claim compound assignments whose
+           destination is actually a pointer. Integer +=/-=/&=/|=/... must
+           continue to the established M51 integer compound-assignment path. */
+        if (minic_type_unqualified(target->type, &stored_type) &&
+            minic_type_is_pointer(stored_type)) {
+            *handled = true;
+            source = minic_c0_program_expression(
+                context->body->program, expression->value.binary.right);
+            subtract = expression->value.binary.operator_kind == MINIC_BINARY_SUBTRACT;
+            if (source == NULL || target->value_category != MINIC_VALUE_LVALUE ||
+                minic_type_is_const(target->type) ||
+                (expression->value.binary.operator_kind != MINIC_BINARY_ADD &&
+                 expression->value.binary.operator_kind != MINIC_BINARY_SUBTRACT) ||
+                !minic_type_unqualified(expression->type, &expression_value_type) ||
+                !minic_type_equal(expression_value_type, stored_type) ||
+                !core_scalar_expression_value_type(context->body, source, &index_type) ||
+                !minic_type_is_integer(index_type) ||
+                !minic_c0_pointer_arithmetic_element_size(context->body->program,
+                                                          core_data_layout(context),
+                                                          stored_type,
+                                                          &element_size)) {
+                return MINIC_CORE_LOWER_UNSUPPORTED;
+            }
+            status = lower_address(context, expression->value.binary.left, &address);
+            if (status != MINIC_CORE_LOWER_OK) {
+                return status;
+            }
+            status = minic_core_lower_internal_emit_scalar_load(
+                context, expression->span, stored_type, address,
+                minic_type_is_volatile(target->type), &current);
+            if (status != MINIC_CORE_LOWER_OK) return status;
+            /* M126A_POINTER_COMPOUND_BLOCK_LOCAL: the RHS may create CFG (for
+               example a call with a conditional argument). Preserve both the
+               destination address and its pre-update pointer value before
+               lowering that RHS so POINTER_OFFSET and STORE are formed from
+               values reloaded in the final RHS block. */
+            if (address >= context->function->value_count) {
+                return MINIC_CORE_LOWER_ERROR;
+            }
+            address_type = context->function->values[address].type;
+            status = minic_core_lower_internal_spill_scalar_value(
+                context, target->span, address_type, address, &address_object);
+            if (status != MINIC_CORE_LOWER_OK) {
+                return status;
+            }
+            status = minic_core_lower_internal_spill_scalar_value(
+                context, target->span, stored_type, current, &current_object);
+            if (status != MINIC_CORE_LOWER_OK) {
+                return status;
+            }
+            status = lower_expression(context, expression->value.binary.right, &index);
+            if (status != MINIC_CORE_LOWER_OK) {
+                return status;
+            }
+            if (index >= context->function->value_count ||
+                !minic_type_equal(context->function->values[index].type, index_type)) {
+                return MINIC_CORE_LOWER_ERROR;
+            }
+            status = minic_core_lower_internal_reload_scalar_value(
+                context, target->span, stored_type, current_object, &current);
+            if (status != MINIC_CORE_LOWER_OK) {
+                return status;
+            }
+            status = minic_core_lower_internal_reload_scalar_value(
+                context, target->span, address_type, address_object, &address);
+            if (status != MINIC_CORE_LOWER_OK) {
+                return status;
+            }
+            (void)memset(&instruction, 0, sizeof(instruction));
+            instruction.kind = MINIC_CORE_INSTRUCTION_POINTER_OFFSET;
+            instruction.span = expression->span;
+            instruction.type = stored_type;
+            instruction.result = MINIC_CORE_VALUE_INVALID;
+            instruction.value.pointer_offset.base = current;
+            instruction.value.pointer_offset.index = index;
+            instruction.value.pointer_offset.element_size = element_size;
+            instruction.value.pointer_offset.subtract = subtract;
+            if (!minic_core_function_append_value_instruction(
+                    context->function, context->block_id, &instruction, &updated)) {
+                return MINIC_CORE_LOWER_ERROR;
+            }
+            status = minic_core_lower_internal_emit_scalar_store(
+                context, expression->span, address, updated,
+                minic_type_is_volatile(target->type));
+            if (status != MINIC_CORE_LOWER_OK) return status;
+            *value_id = updated;
+            return MINIC_CORE_LOWER_OK;
+        }
+    }
+
+    return MINIC_CORE_LOWER_OK;
+}
+

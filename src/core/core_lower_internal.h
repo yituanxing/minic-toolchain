@@ -32,6 +32,15 @@ typedef struct MinicCoreLowerContext {
 
 /* Private source-to-Core expression families, deliberately not public ABI.
  * Their effectful CFG and scalar building primitives stay Core-owned. */
+/* Preflighted source-to-Core family contracts. A probe may decline
+ * without mutating Core; handled=true means it owns the resulting status. */
+MinicCoreLowerStatus minic_core_lower_try_direct_record_member(
+    MinicCoreLowerContext *context, const MinicExpression *expression,
+    MinicCoreValueId *value_id, bool *handled);
+MinicCoreLowerStatus minic_core_lower_try_pointer_compound_assignment(
+    MinicCoreLowerContext *context, const MinicExpression *expression,
+    MinicCoreValueId *value_id, bool *handled);
+
 MinicCoreLowerStatus minic_core_lower_try_statement_expression(
     MinicCoreLowerContext *context, const MinicExpression *expression,
     MinicCoreValueId *value_id, bool *handled);
