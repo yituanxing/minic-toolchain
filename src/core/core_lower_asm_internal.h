@@ -3,6 +3,11 @@
 
 #include "core/core_lower_internal.h"
 
+/* Shared GNU asm input-normalization bounds: consumed by operand decoding,
+ * tracing and CSR structured-effect lowering across separate C files. */
+#define MINIC_CORE_IMMEDIATE_ASM_LIMIT 8U
+#define MINIC_CORE_IMMEDIATE_TEXT_LIMIT 64U
+
 /* Private AST inline-asm operand normalization → Core effect admission seam.
  * Lowering probes deliberately retain their original ordered dispatch:
  * the first probe that claims an input owns any Core mutations. */
