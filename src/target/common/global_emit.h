@@ -37,6 +37,13 @@ bool minic_multi_emit_zero_relocation_global(
     MinicMultiRelocEmitter emit_relocation);
 /* Admit only nested records/arrays/unions the common recursive walker can
  * serialize without RV64's special bitfield/flexible-array paths. */
+/* Shared ELF bitfield packing, including explicit zero-width barriers,
+ * stored as data bytes by the common recursive GlobalObject layout. */
+bool minic_multi_emit_record_bit_field_run(
+    FILE *file, const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicGlobalObject *object, const MinicRecord *record,
+    size_t field_limit, size_t type_size, size_t *field_index,
+    size_t *initializer_index, size_t *relocation_index, size_t *cursor);
 bool minic_multi_recursive_shape_supported(
     const MinicC0Program *program, MinicType type);
 bool minic_multi_emit_recursive_aggregate_global(

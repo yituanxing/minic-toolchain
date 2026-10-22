@@ -453,6 +453,8 @@ jobs:
           # and the new common nested DataLayout path. No separate CI job.
           MINIC="$minic" \
           BUILD_DIR="$work/static-aggregate-layout" \
+          RISCV_CC=riscv64-linux-gnu-gcc \
+          QEMU_RISCV64=qemu-riscv64 \
             sh tests/compiler/c0/run-static-aggregate-initializers.sh
 
           MINIC="$minic" \

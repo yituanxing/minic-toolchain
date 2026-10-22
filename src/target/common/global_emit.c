@@ -2,6 +2,7 @@
 
 #include <inttypes.h>
 #include <stdint.h>
+#include <stdlib.h>
 
 /* Formerly duplicated as static definitions in two target translation units.
  * Preserve the proven DataLayout walk byte-for-byte: aggregate/union slot
@@ -278,6 +279,178 @@ bool minic_multi_emit_zero_relocation_global(FILE *out, const MinicC0Program *pr
 /* Lua nested static records and selected unions reuse x86's recursive
  * DataLayout walk, with target-specific ELF relocation callbacks. Keep
  * the established slot, union selection, padding and depth guards. */
+/* Bitfield packing is a DataLayout operation, not an ISA-codegen task.
+ * The RV64 legacy walker and the shared recursive walker invoke this same
+ * checked byte-range implementation. */
+static bool minic_multi_emit_zero_bytes(FILE *file, size_t size) {
+    return size == 0U || fprintf(file, "  .zero %zu\n", size) >= 0;
+}
+
+bool minic_multi_emit_record_bit_field_run(FILE *file,
+                                                    const MinicC0Program *program,
+                                                    const MinicTargetInfo *target,
+                                                    const MinicGlobalObject *object,
+                                                    const MinicRecord *record,
+                                                    size_t field_limit,
+                                                    size_t type_size,
+                                                    size_t *field_index,
+                                                    size_t *initializer_index,
+                                                    size_t *relocation_index,
+                                                    size_t *cursor) {
+    uint8_t *bytes;
+    size_t run_first;
+    size_t run_end;
+    size_t run_start_offset;
+    size_t run_start_bit;
+    size_t run_end_offset;
+    size_t run_size;
+    size_t index;
+
+    if (file == NULL || program == NULL || target == NULL ||
+        target->data_layout == NULL || object == NULL || record == NULL ||
+        field_index == NULL || initializer_index == NULL || relocation_index == NULL ||
+        cursor == NULL || *field_index >= field_limit ||
+        !record->fields[*field_index].is_bit_field) {
+        return false;
+    }
+    run_first = *field_index;
+    if (record->fields[run_first].bit_width == 0U) {
+        const MinicGlobalRelocation *relocation;
+        size_t slot_index;
+
+        if (*initializer_index >= object->initializer_count) {
+            return false;
+        }
+        slot_index = *initializer_index;
+        if (object->initializer_values[slot_index] != 0U) {
+            return false;
+        }
+        relocation = *relocation_index < object->relocation_count
+                         ? &object->relocations[*relocation_index]
+                         : NULL;
+        if (relocation != NULL &&
+            relocation->location_kind == MINIC_GLOBAL_RELOCATION_LOCATION_AGGREGATE_SCALAR &&
+            relocation->location_index <= slot_index) {
+            return false;
+        }
+        *initializer_index += 1U;
+        return true;
+    }
+    run_end = run_first;
+    while (run_end < field_limit && record->fields[run_end].is_bit_field &&
+           record->fields[run_end].bit_width != 0U) {
+        run_end += 1U;
+    }
+    if (!minic_data_layout_record_field_layout(target->data_layout,
+                                               program,
+                                               record,
+                                               run_first,
+                                               &run_start_offset,
+                                               &run_start_bit) ||
+        run_start_bit >= 8U || run_start_offset < *cursor) {
+        return false;
+    }
+    if (run_end < field_limit) {
+        size_t next_bit_offset;
+
+        if (!minic_data_layout_record_field_layout(target->data_layout,
+                                                   program,
+                                                   record,
+                                                   run_end,
+                                                   &run_end_offset,
+                                                   &next_bit_offset)) {
+            return false;
+        }
+        (void)next_bit_offset;
+    } else {
+        run_end_offset = type_size;
+    }
+    if (run_end_offset < run_start_offset || run_end_offset > type_size ||
+        !minic_multi_emit_zero_bytes(file, run_start_offset - *cursor)) {
+        return false;
+    }
+    run_size = run_end_offset - run_start_offset;
+    bytes = run_size == 0U ? NULL : (uint8_t *)calloc(run_size, sizeof(*bytes));
+    if (run_size != 0U && bytes == NULL) {
+        return false;
+    }
+
+    for (index = run_first; index < run_end; ++index) {
+        const MinicRecordField *field;
+        const MinicGlobalRelocation *relocation;
+        uint64_t bits;
+        uint64_t mask;
+        size_t slot_index;
+        size_t field_offset;
+        size_t bit_offset;
+        size_t relative_bit;
+        size_t bit_index;
+
+        field = &record->fields[index];
+        if (*initializer_index >= object->initializer_count) {
+            free(bytes);
+            return false;
+        }
+        slot_index = *initializer_index;
+        bits = object->initializer_values[slot_index];
+        *initializer_index += 1U;
+        relocation = *relocation_index < object->relocation_count
+                         ? &object->relocations[*relocation_index]
+                         : NULL;
+        if (relocation != NULL &&
+            relocation->location_kind == MINIC_GLOBAL_RELOCATION_LOCATION_AGGREGATE_SCALAR &&
+            relocation->location_index <= slot_index) {
+            free(bytes);
+            return false;
+        }
+        if (!minic_data_layout_record_field_layout(
+                target->data_layout, program, record, index, &field_offset, &bit_offset) ||
+            field_offset < run_start_offset || bit_offset >= 8U) {
+            free(bytes);
+            return false;
+        }
+        if (field->bit_width == 0U) {
+            if (bits != 0U) {
+                free(bytes);
+                return false;
+            }
+            continue;
+        }
+        if (field->bit_width > 64U || field_offset - run_start_offset > SIZE_MAX / 8U) {
+            free(bytes);
+            return false;
+        }
+        relative_bit = (field_offset - run_start_offset) * 8U + bit_offset;
+        if (run_size > SIZE_MAX / 8U || relative_bit > run_size * 8U ||
+            field->bit_width > run_size * 8U - relative_bit) {
+            free(bytes);
+            return false;
+        }
+        mask =
+            field->bit_width == 64U ? UINT64_MAX : (UINT64_C(1) << field->bit_width) - UINT64_C(1);
+        bits &= mask;
+        for (bit_index = 0U; bit_index < field->bit_width; ++bit_index) {
+            size_t positioned_bit;
+
+            if ((bits & (UINT64_C(1) << bit_index)) == 0U) {
+                continue;
+            }
+            positioned_bit = relative_bit + bit_index;
+            bytes[positioned_bit / 8U] |= (uint8_t)(1U << (positioned_bit % 8U));
+        }
+    }
+    for (index = 0U; index < run_size; ++index) {
+        if (fprintf(file, "  .byte %u\n", (unsigned int)bytes[index]) < 0) {
+            free(bytes);
+            return false;
+        }
+    }
+    free(bytes);
+    *cursor = run_end_offset;
+    *field_index = run_end - 1U;
+    return true;
+}
+
 static bool minic_multi_emit_recursive_global_value(
     FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicGlobalObject *object, MinicType type, size_t *initializer_index,
@@ -363,9 +536,17 @@ static bool minic_multi_emit_recursive_global_value(
         for (i = begin; i < end; ++i) {
             const MinicRecordField *field = minic_c0_record_field(record, i);
             size_t field_offset, element;
-            if (field == NULL || field->is_bit_field || field->is_flexible_array)
+            if (field == NULL || field->is_flexible_array)
                 return false;
             if (field->is_zero_length_array) continue;
+            if (field->is_bit_field) {
+                if (!minic_multi_emit_record_bit_field_run(
+                        out, program, target, object, record, end, type_size,
+                        &i, initializer_index, relocation_index, &cursor))
+                    return false;
+                if (record->is_union) break;
+                continue;
+            }
             if (field->element_count == 0U) return false;
             if (record->is_union) {
                 field_offset = 0U;
@@ -459,10 +640,16 @@ static bool minic_multi_recursive_shape_supported_at(
             return false;
         for (index = 0U; index < record->field_count; ++index) {
             const MinicRecordField *field = minic_c0_record_field(record, index);
-            if (field == NULL || field->is_bit_field || field->is_flexible_array)
+            if (field == NULL || field->is_flexible_array)
                 return false;
             if (field->is_zero_length_array)
                 continue;
+            if (field->is_bit_field) {
+                if (!minic_type_is_integer(field->type) ||
+                    field->bit_width > 64U || field->element_count != 1U)
+                    return false;
+                continue;
+            }
             if (field->element_count == 0U ||
                 !minic_multi_recursive_shape_supported_at(
                     program, field->type, depth + 1U))

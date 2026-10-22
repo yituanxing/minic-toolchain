@@ -133,5 +133,62 @@ EOF
     -o "$build_dir/static_nested_shared_layout.s"
 grep -F '  .dword members_target+4' "$build_dir/static_nested_shared_layout.s" >/dev/null
 grep -F '  .dword members_target+12' "$build_dir/static_nested_shared_layout.s" >/dev/null
+# Bitfield + relocation combinations used to bypass the shared recursive
+# walker entirely. Verify the same source against GNU GCC and MiniC under
+# QEMU; the aggregate is intentionally nested, has a zero-width barrier and
+# a pointer relocation following a bitfield run.
+cat > "$build_dir/static_bitfield_shared.c" <<'EOF'
+static int target_words[5] = {2, 3, 5, 7, 11};
+struct Bits {
+    unsigned int a:6;
+    unsigned int b:10;
+    unsigned int :0;
+    unsigned int c:13;
+    unsigned int d:5;
+    int *pointer;
+};
+struct Aggregate {
+    struct Bits bits[2];
+    long tail;
+};
+static struct Aggregate shared_bits = {
+    {{17, 301, 4119, 19, &target_words[2]},
+     {11, 203, 33, 9, &target_words[4]}},
+    41
+};
+int main(void) {
+    return shared_bits.bits[0].a == 17 &&
+           shared_bits.bits[0].b == 301 &&
+           shared_bits.bits[0].c == 4119 &&
+           shared_bits.bits[0].d == 19 &&
+           shared_bits.bits[0].pointer == &target_words[2] &&
+           shared_bits.bits[1].a == 11 &&
+           shared_bits.bits[1].b == 203 &&
+           shared_bits.bits[1].c == 33 &&
+           shared_bits.bits[1].d == 9 &&
+           shared_bits.bits[1].pointer == &target_words[4] &&
+           shared_bits.tail == 41 ? 42 : 1;
+}
+EOF
+"$minic" -S "$build_dir/static_bitfield_shared.c" \
+    -o "$build_dir/static_bitfield_shared.s"
+grep -F '.dword target_words+8' "$build_dir/static_bitfield_shared.s" >/dev/null
+grep -F '.dword target_words+16' "$build_dir/static_bitfield_shared.s" >/dev/null
+if [ -n "${RISCV_CC:-}" ] && [ -n "${QEMU_RISCV64:-}" ]; then
+    "$RISCV_CC" -static -no-pie -o "$build_dir/static_bitfield_shared.minic" \
+        "$build_dir/static_bitfield_shared.s"
+    "$RISCV_CC" -static -no-pie -o "$build_dir/static_bitfield_shared.gcc" \
+        "$build_dir/static_bitfield_shared.c"
+    for compiler in minic gcc; do
+        set +e
+        "$QEMU_RISCV64" "$build_dir/static_bitfield_shared.$compiler"
+        actual=$?
+        set -e
+        if [ "$actual" -ne 42 ]; then
+            echo "FAIL recursive bitfield GlobalObject GNU-QEMU compiler=$compiler exit=$actual" >&2
+            exit 1
+        fi
+    done
+fi
 printf '%s\n' \
-    'PASS compiler/c0/static-aggregate-initializers compound-literal=record nested-nonzero=recursive zero-size-local-array=accepted static-fam=gnu-range+extended-storage union-selection=forward+anonymous-struct+backward-reloc designated-inner=shared flat-record=shared-rv64-layout nested=shared-recursive mismatch=fail-closed'
+    'PASS compiler/c0/static-aggregate-initializers compound-literal=record nested-nonzero=recursive zero-size-local-array=accepted static-fam=gnu-range+extended-storage union-selection=forward+anonymous-struct+backward-reloc designated-inner=shared flat-record=shared-rv64-layout nested=shared-recursive bitfields=shared-packed mismatch=fail-closed'
