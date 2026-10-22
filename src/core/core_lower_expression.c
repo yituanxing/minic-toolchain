@@ -158,17 +158,9 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
             if (status != MINIC_CORE_LOWER_OK) {
                 return status;
             }
-            (void)memset(&instruction, 0, sizeof(instruction));
-            instruction.kind = MINIC_CORE_INSTRUCTION_LOAD;
-            instruction.span = expression->span;
-            instruction.type = value_type;
-            instruction.result = MINIC_CORE_VALUE_INVALID;
-            instruction.value.load.address = field_address;
-            instruction.value.load.is_volatile = minic_type_is_volatile(expression->type);
-            return minic_core_function_append_value_instruction(
-                       context->function, context->block_id, &instruction, value_id)
-                       ? MINIC_CORE_LOWER_OK
-                       : MINIC_CORE_LOWER_ERROR;
+            return minic_core_lower_internal_emit_scalar_load(
+                context, expression->span, value_type, field_address,
+                minic_type_is_volatile(expression->type), value_id);
         }
     }
     if (expression->value_category == MINIC_VALUE_LVALUE &&
@@ -180,19 +172,12 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
         if (status != MINIC_CORE_LOWER_OK) {
             return status;
         }
-        (void)memset(&instruction, 0, sizeof(instruction));
-        instruction.kind = MINIC_CORE_INSTRUCTION_LOAD;
-        instruction.span = expression->span;
-        instruction.result = MINIC_CORE_VALUE_INVALID;
-        instruction.value.load.address = address_id;
-        instruction.value.load.is_volatile = minic_type_is_volatile(expression->type);
-        if (!minic_type_unqualified(expression->type, &instruction.type)) {
+        MinicType unqualified_type;
+        if (!minic_type_unqualified(expression->type, &unqualified_type))
             return MINIC_CORE_LOWER_ERROR;
-        }
-        return minic_core_function_append_value_instruction(
-                   context->function, context->block_id, &instruction, value_id)
-                   ? MINIC_CORE_LOWER_OK
-                   : MINIC_CORE_LOWER_ERROR;
+        return minic_core_lower_internal_emit_scalar_load(
+            context, expression->span, unqualified_type, address_id,
+            minic_type_is_volatile(expression->type), value_id);
     }
     if (expression->value_category != MINIC_VALUE_RVALUE) {
         return MINIC_CORE_LOWER_UNSUPPORTED;
@@ -222,7 +207,6 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
     if (expression->kind == MINIC_EXPRESSION_COMPOUND_ASSIGNMENT) {
         const MinicExpression *source;
         const MinicExpression *target;
-        MinicCoreInstruction store;
         MinicCoreObjectId address_object;
         MinicCoreObjectId current_object;
         MinicCoreValueId address;
@@ -268,17 +252,10 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
             if (status != MINIC_CORE_LOWER_OK) {
                 return status;
             }
-            (void)memset(&instruction, 0, sizeof(instruction));
-            instruction.kind = MINIC_CORE_INSTRUCTION_LOAD;
-            instruction.span = expression->span;
-            instruction.type = stored_type;
-            instruction.result = MINIC_CORE_VALUE_INVALID;
-            instruction.value.load.address = address;
-            instruction.value.load.is_volatile = minic_type_is_volatile(target->type);
-            if (!minic_core_function_append_value_instruction(
-                    context->function, context->block_id, &instruction, &current)) {
-                return MINIC_CORE_LOWER_ERROR;
-            }
+            status = minic_core_lower_internal_emit_scalar_load(
+                context, expression->span, stored_type, address,
+                minic_type_is_volatile(target->type), &current);
+            if (status != MINIC_CORE_LOWER_OK) return status;
             /* M126A_POINTER_COMPOUND_BLOCK_LOCAL: the RHS may create CFG (for
                example a call with a conditional argument). Preserve both the
                destination address and its pre-update pointer value before
@@ -329,18 +306,10 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
                     context->function, context->block_id, &instruction, &updated)) {
                 return MINIC_CORE_LOWER_ERROR;
             }
-            (void)memset(&store, 0, sizeof(store));
-            store.kind = MINIC_CORE_INSTRUCTION_STORE;
-            store.span = expression->span;
-            store.type = minic_type_void();
-            store.result = MINIC_CORE_VALUE_INVALID;
-            store.value.store.address = address;
-            store.value.store.stored_value = updated;
-            store.value.store.is_volatile = minic_type_is_volatile(target->type);
-            if (!minic_core_function_append_effect_instruction(
-                    context->function, context->block_id, &store)) {
-                return MINIC_CORE_LOWER_ERROR;
-            }
+            status = minic_core_lower_internal_emit_scalar_store(
+                context, expression->span, address, updated,
+                minic_type_is_volatile(target->type));
+            if (status != MINIC_CORE_LOWER_OK) return status;
             *value_id = updated;
             return MINIC_CORE_LOWER_OK;
         }

@@ -1272,3 +1272,23 @@ int main(void) {
 }
 EOF
 check_exit gnu_statement_expression_dataflow 42
+
+# Preserve qualified scalar load/store, prefix/postfix value selection and
+# pointer compound RMW while one Core owner constructs all memory effects.
+cat > "$tempdir/core_scalar_memory_effects.i" <<'EOF'
+static volatile int global = 19;
+static int values[3] = { 8, 42, 9 };
+int main(void) {
+    int old = global++;
+    int updated = ++global;
+    int *cursor = &values[0];
+    if (old != 19 || updated != 21 || global != 21) return 1;
+    cursor += 1;
+    if (*cursor != 42) return 2;
+    cursor -= 1;
+    if (*cursor != 8) return 3;
+    global = 42;
+    return global;
+}
+EOF
+check_exit core_scalar_memory_effects 42

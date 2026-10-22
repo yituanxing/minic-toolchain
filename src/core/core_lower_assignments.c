@@ -21,7 +21,6 @@ MinicCoreLowerStatus minic_core_lower_assignment_pair(MinicCoreLowerContext *con
     const MinicExpression *target;
     const MinicExpression *source;
     const MinicExpression *source_operand;
-    MinicCoreInstruction instruction;
     MinicCoreObjectId stored_object;
     MinicCoreValueId address_id;
     MinicCoreValueId stored_value;
@@ -104,16 +103,9 @@ MinicCoreLowerStatus minic_core_lower_assignment_pair(MinicCoreLowerContext *con
                       (int)status);
         return status;
     }
-    (void)memset(&instruction, 0, sizeof(instruction));
-    instruction.kind = MINIC_CORE_INSTRUCTION_STORE;
-    instruction.span = span;
-    instruction.type = minic_type_void();
-    instruction.result = MINIC_CORE_VALUE_INVALID;
-    instruction.value.store.address = address_id;
-    instruction.value.store.stored_value = stored_value;
-    instruction.value.store.is_volatile = minic_type_is_volatile(target->type);
-    if (!minic_core_function_append_effect_instruction(
-            context->function, context->block_id, &instruction)) {
+    if (minic_core_lower_internal_emit_scalar_store(
+            context, span, address_id, stored_value,
+            minic_type_is_volatile(target->type)) != MINIC_CORE_LOWER_OK) {
         (void)fprintf(stderr, "CORE_ASSIGN_STAGE function=%s stage=store status=%d\n",
                       context->source_function != NULL ? context->source_function->name : "?",
                       (int)MINIC_CORE_LOWER_ERROR);
@@ -257,17 +249,10 @@ MinicCoreLowerStatus minic_core_lower_scalar_update(MinicCoreLowerContext *conte
         return status;
     }
 
-    (void)memset(&instruction, 0, sizeof(instruction));
-    instruction.kind = MINIC_CORE_INSTRUCTION_LOAD;
-    instruction.span = expression->span;
-    instruction.type = stored_type;
-    instruction.result = MINIC_CORE_VALUE_INVALID;
-    instruction.value.load.address = address;
-    instruction.value.load.is_volatile = minic_type_is_volatile(operand->type);
-    if (!minic_core_function_append_value_instruction(
-            context->function, context->block_id, &instruction, &current)) {
-        return MINIC_CORE_LOWER_ERROR;
-    }
+    status = minic_core_lower_internal_emit_scalar_load(
+        context, expression->span, stored_type, address,
+        minic_type_is_volatile(operand->type), &current);
+    if (status != MINIC_CORE_LOWER_OK) return status;
 
     if (minic_type_is_integer(stored_type)) {
         (void)memset(&instruction, 0, sizeof(instruction));
@@ -386,18 +371,10 @@ MinicCoreLowerStatus minic_core_lower_scalar_update(MinicCoreLowerContext *conte
         return MINIC_CORE_LOWER_UNSUPPORTED;
     }
 
-    (void)memset(&instruction, 0, sizeof(instruction));
-    instruction.kind = MINIC_CORE_INSTRUCTION_STORE;
-    instruction.span = expression->span;
-    instruction.type = minic_type_void();
-    instruction.result = MINIC_CORE_VALUE_INVALID;
-    instruction.value.store.address = address;
-    instruction.value.store.stored_value = updated;
-    instruction.value.store.is_volatile = minic_type_is_volatile(operand->type);
-    if (!minic_core_function_append_effect_instruction(
-            context->function, context->block_id, &instruction)) {
-        return MINIC_CORE_LOWER_ERROR;
-    }
+    status = minic_core_lower_internal_emit_scalar_store(
+        context, expression->span, address, updated,
+        minic_type_is_volatile(operand->type));
+    if (status != MINIC_CORE_LOWER_OK) return status;
     *value_id = prefix ? updated : current;
     return MINIC_CORE_LOWER_OK;
 }
