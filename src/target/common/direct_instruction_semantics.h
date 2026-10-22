@@ -36,6 +36,7 @@ bool minic_multi_direct_result_slot_offset(
  * The two ISA emitters still choose register sequences, rounding operations,
  * and calling convention independently. Width/sign are outputs only for
  * INTEGER_TO_DOUBLE and DOUBLE_TO_INTEGER; other kinds admit NULL outputs. */
+bool minic_multi_direct_fp_instruction_kind(MinicCoreInstructionKind kind);
 bool minic_multi_direct_floating_shape(
     const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
