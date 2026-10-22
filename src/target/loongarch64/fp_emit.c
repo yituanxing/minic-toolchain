@@ -25,8 +25,6 @@ bool minic_loongarch64_emit_fp_instruction(
         return false;
     *needs_gp_store = false;
     switch (ins->kind) {
-        /* LoongArch FCC ordered comparisons naturally reject unordered
-         * operands: fcmp.ceq/clt/cle is false if either operand is NaN. */
         case MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT:
             if (minic_type_is_long_double(ins->type)) {
                 size_t dst;
@@ -46,6 +44,8 @@ bool minic_loongarch64_emit_fp_instruction(
                         ins->value.floating_bits) < 0) return false;
             *needs_gp_store = true;
             return true;
+        /* LoongArch FCC ordered comparisons naturally reject unordered
+         * operands: fcmp.ceq/clt/cle is false if either operand is NaN. */
         case MINIC_CORE_INSTRUCTION_DOUBLE_EQUAL:
         case MINIC_CORE_INSTRUCTION_DOUBLE_LESS:
         case MINIC_CORE_INSTRUCTION_DOUBLE_LESS_EQUAL: {
