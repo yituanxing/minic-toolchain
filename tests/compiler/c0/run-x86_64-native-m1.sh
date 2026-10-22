@@ -1257,3 +1257,18 @@ int main(void) {
 }
 EOF
 check_exit nested_record_arrays 42
+
+# GNU statement-expression result and effect forms are separately admitted by
+# Core CFG lowering. One runtime checks scalar tail, void tail, and no tail.
+cat > "$tempdir/gnu_statement_expression_dataflow.i" <<'EOF'
+static int state;
+static int add_three(void) { state += 3; return state; }
+static void add_five(void) { state += 5; }
+int main(void) {
+    int returned = ({ state += 2; add_three(); });
+    (void)({ add_five(); });
+    ({ state += 1; ; });
+    return returned == 5 && state == 11 ? 42 : 1;
+}
+EOF
+check_exit gnu_statement_expression_dataflow 42

@@ -600,9 +600,7 @@ MinicCoreLowerStatus minic_core_lower_try_statement_expression(
     MinicCoreValueId *value_id, bool *handled) {
     const MinicBlock *statement_block;
     const MinicExpression *statement_result;
-    const MinicExpressionId result_id =
-        expression != NULL ? expression->value.statement_expression.result
-                           : MINIC_EXPRESSION_INVALID;
+    MinicExpressionId result_id;
     MinicCoreValueId result_value;
     MinicCoreLowerStatus status;
     MinicType result_type;
@@ -617,6 +615,7 @@ MinicCoreLowerStatus minic_core_lower_try_statement_expression(
     if (expression->kind != MINIC_EXPRESSION_STATEMENT)
         return MINIC_CORE_LOWER_OK;
     *handled = true;
+    result_id = expression->value.statement_expression.result;
 
     statement_block = minic_c0_program_block(
         context->body->program, expression->value.statement_expression.block);
