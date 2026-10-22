@@ -65,11 +65,6 @@ bool minic_multi_direct_parameter_object_location(
 }
 
 
-/* One machine-independent result-shape gate for the two direct LP64 codegen
- * owners. It checks Core value and type semantics, not ISA instructions.
- * The AAPCS64 front end admits binary64 VA_ARG while the LoongArch64 LP64D
- * direct backend has not yet admitted that result: retain that difference
- * explicitly in allow_variadic_double_result. */
 /* A compiler barrier is an ordering constraint in the Core stream, not a
  * machine fence and not a produced SSA value. */
 bool minic_multi_direct_compiler_barrier_shape(const MinicCoreInstruction *ins) {
@@ -98,6 +93,9 @@ bool minic_multi_direct_wide_store_shape(
            minic_lp64_frame_plan_wide_slot(frame_plan, value, value_offset);
 }
 
+/* One machine-independent result-shape gate for direct LP64 codegen.
+ * AArch64 admits binary64 VA_ARG; LoongArch64 does not yet, so callers
+ * select that documented ISA capability explicitly. */
 bool minic_multi_direct_result_slot_offset(
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
     bool allow_variadic_double_result, size_t *offset) {
@@ -159,9 +157,6 @@ bool minic_multi_direct_result_slot_offset(
 
 
 
-/* Scalar bitcast shape for direct LP64 lowering. Pointer->integer must
- * preserve all 64 address bits; integer->pointer keeps narrow source width
- * for the ISA's existing sign/zero-extension sequence. */
 /* Instruction kinds and Core operand/result types are not properties of
  * an ISA encoder. Keep the shared IEEE-754 validation here, but leave the
  * actual AArch64/LoongArch64 floating opcodes and register transfers local. */
@@ -240,6 +235,9 @@ bool minic_multi_direct_floating_shape(
     }
 }
 
+/* Scalar bitcast shape for direct LP64 lowering. Pointer->integer must
+ * preserve all 64 address bits; integer->pointer keeps narrow source width
+ * for the ISA's existing sign/zero-extension sequence. */
 bool minic_multi_direct_scalar_bitcast_shape(
     const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
