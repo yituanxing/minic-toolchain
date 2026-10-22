@@ -11,7 +11,8 @@ w="$BUILD_DIR/core-call-transfer"
 rm -rf "$w"
 mkdir -p "$w"
 cat >"$w/client.c" <<'SRC'
-struct Pair { unsigned int tag; unsigned short count; unsigned short flags; };
+/* 16 bytes, with a partially filled second integer ABI eightbyte. */
+struct Pair { unsigned long tag; unsigned int count; unsigned short flags; };
 extern long gnu_gp10(long,long,long,long,long,long,long,long,long,long);
 extern long gnu_record(struct Pair,long);
 extern double gnu_double(double,double);
@@ -27,7 +28,7 @@ int rv64_transfer_entry(void) {
     double (*fp)(double,double);
     long direct, indirect, record_direct, record_indirect;
     double direct_fp, indirect_fp;
-    value.tag = 13U;
+    value.tag = 13UL;
     value.count = 17U;
     value.flags = 5U;
     gp = gnu_gp10;
@@ -46,7 +47,8 @@ int rv64_transfer_entry(void) {
 }
 SRC
 cat >"$w/provider.c" <<'SRC'
-struct Pair { unsigned int tag; unsigned short count; unsigned short flags; };
+/* 16 bytes, with a partially filled second integer ABI eightbyte. */
+struct Pair { unsigned long tag; unsigned int count; unsigned short flags; };
 long gnu_gp10(long a,long b,long c,long d,long e,
               long f,long g,long h,long i,long j) {
     return a+b+c+d+e+f+g+h+i+j;
