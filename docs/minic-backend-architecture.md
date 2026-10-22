@@ -58,9 +58,11 @@ inline-assembly behavior, so do not force it into an AAPCS64/LP64D-only API.
 - AArch64 and LoongArch64 share instruction-family/result-slot checks and
   integer-cast widths/signs/128-bit Core stack-slot facts; native machine
   lowering consumes those facts.
-- Both direct LP64 residual emitters own their own native integer-normalization
-  instructions; block emission does not pass a target-specific callback back
-  into the same ISA.
+- Each direct LP64 ISA has one target-owned `scalar_normalize.c` primitive
+  reused by FP, integer, ABI and residual machine families. The block emitter
+  passes the shared native helper to older machine-family interfaces, but
+  the residual family calls it directly: it no longer round-trips a callback
+  through the block dispatcher.
 
 ### Failure and lifetime invariants
 

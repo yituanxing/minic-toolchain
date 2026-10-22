@@ -1,4 +1,5 @@
 #include "target/aarch64/block_emit.h"
+#include "target/aarch64/scalar_normalize.h"
 #include "target/aarch64/residual_emit.h"
 #include "target/aarch64/memory_emit.h"
 #include "target/aarch64/call_emit.h"
@@ -317,7 +318,7 @@ bool minic_aarch64_emit_core_blocks(FILE *out, const MinicDirectLP64BlockContext
             if (!minic_aarch64_emit_fp_instruction(
                     out, program, target, fn, ins, offset,
                     frame_plan,
-                    emit_integer_normalize,
+                    minic_aarch64_emit_integer_normalize,
                     &needs_gp_store))
                 return minic_multi_direct_machine_reject(
                     fn, "aarch64", name, reject_stage, reject_block,
@@ -335,7 +336,7 @@ bool minic_aarch64_emit_core_blocks(FILE *out, const MinicDirectLP64BlockContext
             bool needs_gp_store = false;
             if (!minic_aarch64_emit_integer_instruction(
                     out, program, target, fn, ins, frame_plan,
-                    emit_integer_normalize, &needs_gp_store))
+                    minic_aarch64_emit_integer_normalize, &needs_gp_store))
                 return minic_multi_direct_machine_reject(
                     fn, "aarch64", name, reject_stage, reject_block,
                     reject_ins, __LINE__);
@@ -351,7 +352,7 @@ bool minic_aarch64_emit_core_blocks(FILE *out, const MinicDirectLP64BlockContext
         if (shape.family == MINIC_DIRECT_MACHINE_ABI) {
             bool needs_gp_store = false;
             if (!minic_aarch64_emit_abi_instruction(
-                    out, ctx, ins, offset, emit_integer_normalize,
+                    out, ctx, ins, offset, minic_aarch64_emit_integer_normalize,
                     &needs_gp_store))
                 return minic_multi_direct_machine_reject(
                     fn, "aarch64", name, reject_stage, reject_block,

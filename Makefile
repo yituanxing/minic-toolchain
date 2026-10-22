@@ -181,6 +181,7 @@ MINIC_SOURCES := \
 	src/target/aarch64/codegen.c \
 	src/target/aarch64/block_emit.c \
 	src/target/aarch64/residual_emit.c \
+	src/target/aarch64/scalar_normalize.c \
 	src/target/aarch64/memory_emit.c \
 	src/target/aarch64/call_emit.c \
 	src/target/aarch64/integer_emit.c \
@@ -189,6 +190,7 @@ MINIC_SOURCES := \
 	src/target/loongarch64/codegen.c \
 	src/target/loongarch64/block_emit.c \
 	src/target/loongarch64/residual_emit.c \
+	src/target/loongarch64/scalar_normalize.c \
 	src/target/loongarch64/memory_emit.c \
 	src/target/loongarch64/call_emit.c \
 	src/target/loongarch64/integer_emit.c \

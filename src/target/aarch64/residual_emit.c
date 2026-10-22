@@ -1,4 +1,5 @@
 #include "target/aarch64/residual_emit.h"
+#include "target/aarch64/scalar_normalize.h"
 #include "target/common/direct_residual_plan.h"
 #include "target/common/direct_instruction_semantics.h"
 #include "target/common/lp64_scalar.h"
@@ -45,16 +46,6 @@ static bool aarch64_static_function(const MinicC0Program *program,
 /* Residual machine lowering after Core family admission. Each case is
  * target owned; planning and type checks are shared with the other LP64
  * backend, preserving AArch64 and LoongArch64 ABI/ISA divergence. */
-static bool residual_integer_normalize(FILE *out, size_t width, bool sign) {
-    const char *op = width == 1U
-        ? (sign ? "  sxtb w9, w9\n" :
-                  "  uxtb w9, w9\n")
-        : width == 2U
-            ? (sign ? "  sxth w9, w9\n" :
-                      "  uxth w9, w9\n")
-            : width == 4U ? "" : NULL;
-    return op != NULL && fputs(op, out) != EOF;
-}
 
 
 bool minic_aarch64_emit_residual_instruction(
@@ -129,7 +120,7 @@ bool minic_aarch64_emit_residual_instruction(
                              bits >> 16U) < 0)) return minic_multi_direct_machine_reject(fn, "aarch64", name, reject_stage,
                                     reject_block, reject_ins, __LINE__);
                 if ((width == 1U || width == 2U) &&
-                    !residual_integer_normalize(out, width, sign))
+                    !minic_aarch64_emit_integer_normalize(out, width, sign))
                     return minic_multi_direct_machine_reject(fn, "aarch64", name, reject_stage,
                                                reject_block, reject_ins, __LINE__);
             }
@@ -316,7 +307,7 @@ bool minic_aarch64_emit_residual_instruction(
                         (size_t)source * 8U) < 0) return minic_multi_direct_machine_reject(fn, "aarch64", name, reject_stage,
                                     reject_block, reject_ins, __LINE__);
             if (!src_pointer && src_width != 8U &&
-                (!residual_integer_normalize(out, src_width, src_signed) ||
+                (!minic_aarch64_emit_integer_normalize(out, src_width, src_signed) ||
                  fputs(src_signed ? "  sxtw x9, w9\n"
                                   : "  uxtw x9, w9\n", out) == EOF))
                 return minic_multi_direct_machine_reject(fn, "aarch64", name, reject_stage,
@@ -368,7 +359,7 @@ bool minic_aarch64_emit_residual_instruction(
                         id, (unsigned int)ins->result,
                         id, (unsigned int)ins->result) < 0 ||
                 (!fp && !minic_type_is_pointer(ins->type) &&
-                 width != 8U && !residual_integer_normalize(out, width, sign)))
+                 width != 8U && !minic_aarch64_emit_integer_normalize(out, width, sign)))
                 return minic_multi_direct_machine_reject(fn, "aarch64", name,
                     reject_stage, reject_block, reject_ins, __LINE__);
             break;
@@ -480,7 +471,7 @@ bool minic_aarch64_emit_residual_instruction(
                                        : "  ldr w9, [sp, #%zu]\n",
                                    (size_t)cast.operand * 8U) < 0 ||
                            (cast.source_width < 8U &&
-                            (!normalize(
+                            (!minic_aarch64_emit_integer_normalize(
                                   out, cast.source_width, cast.source_signed) ||
                              (cast.source_signed &&
                               fputs("  sxtw x9, w9\n", out) == EOF))) ||
@@ -501,7 +492,7 @@ bool minic_aarch64_emit_residual_instruction(
                     { *needs_writeback = false; return true; }
                 }
                 if (cast.target_width < 8U &&
-                    !residual_integer_normalize(out, cast.target_width,
+                    !minic_aarch64_emit_integer_normalize(out, cast.target_width,
                                             cast.target_signed))
                     return minic_multi_direct_machine_reject(
                         fn, "aarch64", name, reject_stage,
@@ -517,14 +508,14 @@ bool minic_aarch64_emit_residual_instruction(
                     reject_block, reject_ins, __LINE__);
             if (cast.target_width == 8U) {
                 if (cast.source_width != 8U &&
-                    (!normalize(
+                    (!minic_aarch64_emit_integer_normalize(
                         out, cast.source_width, cast.source_signed) ||
                      (cast.source_signed &&
                       fputs("  sxtw x9, w9\n", out) == EOF)))
                     return minic_multi_direct_machine_reject(
                         fn, "aarch64", name, reject_stage,
                         reject_block, reject_ins, __LINE__);
-            } else if (!residual_integer_normalize(out, cast.target_width,
+            } else if (!minic_aarch64_emit_integer_normalize(out, cast.target_width,
                                                cast.target_signed))
                 return minic_multi_direct_machine_reject(
                     fn, "aarch64", name, reject_stage,
