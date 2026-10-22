@@ -167,6 +167,7 @@ MINIC_SOURCES := \
 	src/target/x86_64/machine_fp.c \
 	src/target/x86_64/machine_call.c \
 	src/target/x86_64/abi.c \
+	src/target/x86_64/call_plan.c \
 	src/target/x86_64/frame.c \
 	src/target/x86_64/global_emit.c \
 	src/target/aarch64/abi.c \

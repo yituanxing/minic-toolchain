@@ -16,8 +16,5 @@ bool minic_x86_64_storage_width(const MinicC0Program *, const MinicTargetInfo *,
 bool minic_x86_64_one_gp_record(const MinicC0Program *, const MinicTargetInfo *,
                                 MinicType, size_t *);
 bool minic_x86_64_two_gp_record(const MinicC0Program *, const MinicTargetInfo *, MinicType);
-bool minic_x86_64_incoming_cursor(const MinicC0Program *, const MinicTargetInfo *,
-                                  const MinicCoreFunction *, size_t,
-                                  size_t *, size_t *, size_t *);
 
 #endif

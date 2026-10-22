@@ -1,5 +1,6 @@
 #include "target/x86_64/machine_internal.h"
 #include "target/x86_64/abi.h"
+#include "target/x86_64/call_plan.h"
 #include "target/common/core_call_view.h"
 #include <inttypes.h>
 #include <limits.h>
@@ -10,167 +11,120 @@
 
 /* Entire SysV/x87 call ABI transport: prepare args, lower direct/indirect
  * calls, preserve target return values. No redundant machine dispatch path. */
-static bool x86_emit_call_arguments(FILE *out, const MinicC0Program *program,
-                                    const MinicTargetInfo *target,
-                                    const MinicCoreFunction *fn,
-                                    const MinicX86Frame *frame,
-                                    size_t begin, size_t count,
-                                    const MinicType *fixed_types,
-                                    size_t fixed_count, bool variadic,
-                                    size_t *allocated_stack_bytes) {
-    static const char *const integer_regs[] =
+/* SysV argument classification is completed by the same planner used for
+ * incoming parameters; this function only transfers Core values/records
+ * into already selected native registers and outgoing stack locations. */
+static bool x86_emit_call_arguments_planned(
+    FILE *out, const MinicCoreFunction *fn, const MinicX86Frame *frame,
+    const MinicCoreCallView *view, const MinicX86ArgumentPlan *plan) {
+    static const char *const gp_regs[] =
         {"%rdi", "%rsi", "%rdx", "%rcx", "%r8", "%r9"};
-    size_t i, integer_index = 0U, float_index = 0U;
-    size_t stack_slots = 0U, aligned_bytes = 0U;
-    size_t ignored_bytes;
-    bool ignored_sign;
-    if (allocated_stack_bytes == NULL ||
-        (fixed_count != 0U && fixed_types == NULL) ||
-        count < fixed_count || (!variadic && count != fixed_count) ||
-        begin > fn->call_argument_count ||
-        count > fn->call_argument_count - begin) return false;
-
-    /* Preflight types and stack allocation before emitting argument moves. */
-    for (i = 0U; i < count; ++i) {
-        const MinicCoreCallArgument *arg = &fn->call_arguments[begin + i];
-        MinicType type;
-        if (arg->kind == MINIC_CORE_CALL_ARGUMENT_OBJECT) {
-            size_t record_bytes;
-            if (arg->value.object_id >= fn->object_count ||
-                (i >= fixed_count && !variadic)) return false;
-            type = i < fixed_count ? fixed_types[i] :
-                    fn->objects[arg->value.object_id].type;
-            if (!minic_type_equal(fn->objects[arg->value.object_id].type, type))
-                return false;
-            if (minic_x86_64_one_gp_record(program, target, type, &record_bytes)) {
-                if (integer_index < 6U) ++integer_index;
-                else ++stack_slots;
-            } else {
-                if (!minic_x86_64_two_gp_record(program, target, type)) return false;
-                if (integer_index <= 4U) integer_index += 2U;
-                else stack_slots += 2U;
-            }
-            continue;
-        }
-        if (arg->kind != MINIC_CORE_CALL_ARGUMENT_VALUE ||
-            arg->value.value_id >= fn->value_count) return false;
-        type = i < fixed_count ? fixed_types[i] : fn->values[arg->value.value_id].type;
-        if (minic_type_is_double(type) || minic_type_is_float(type)) {
-            if (float_index < 8U) ++float_index;
-            else ++stack_slots;
-        } else if (minic_type_is_long_double(type)) {
-            /* SysV x87 stack arguments require a 16-byte start. Keep
-             * preflight in lockstep with the emission pass below. */
-            stack_slots += stack_slots & 1U;
-            stack_slots += 2U;
-        } else {
-            if (!minic_x86_64_scalar_width(program, target, type, &ignored_bytes,
-                                  &ignored_sign)) return false;
-            if (integer_index < 6U) ++integer_index;
-            else ++stack_slots;
-        }
-    }
-    if (stack_slots > (size_t)INT32_MAX / 8U ||
-        !minic_x86_64_align(stack_slots * 8U, 16U, &aligned_bytes) ||
-        aligned_bytes > (size_t)INT32_MAX) return false;
-    if (aligned_bytes != 0U &&
-        fprintf(out, "  subq $%zu, %%rsp\n", aligned_bytes) < 0) return false;
-    *allocated_stack_bytes = aligned_bytes;
-    integer_index = 0U;
-    float_index = 0U;
-    stack_slots = 0U;
-    for (i = 0U; i < count; ++i) {
-        const MinicCoreCallArgument *arg = &fn->call_arguments[begin + i];
-        MinicType type;
+    size_t i;
+    if (out == NULL || fn == NULL || frame == NULL || view == NULL ||
+        plan == NULL || plan->argument_count != view->argument_count ||
+        (plan->argument_count != 0U && plan->locations == NULL))
+        return false;
+    if (plan->stack_bytes != 0U &&
+        fprintf(out, "  subq $%zu, %%rsp\n", plan->stack_bytes) < 0)
+        return false;
+    for (i = 0U; i < view->argument_count; ++i) {
+        const MinicCoreCallArgument *arg = &view->arguments[i];
+        const MinicX86ArgLocation *loc = &plan->locations[i];
+        MinicType type = i < view->parameter_count
+            ? view->parameter_types[i]
+            : (arg->kind == MINIC_CORE_CALL_ARGUMENT_OBJECT
+                ? fn->objects[arg->value.object_id].type
+                : fn->values[arg->value.value_id].type);
         if (arg->kind == MINIC_CORE_CALL_ARGUMENT_OBJECT) {
             const MinicCoreObjectId object = arg->value.object_id;
-            size_t record_bytes;
             if (object >= fn->object_count ||
-                (i >= fixed_count && !variadic)) return false;
-            type = i < fixed_count ? fixed_types[i] : fn->objects[object].type;
-            if (!minic_type_equal(fn->objects[object].type, type) ||
-                !x86_object_address(out, frame, object, "%r11")) return false;
-            if (minic_x86_64_one_gp_record(program, target, type, &record_bytes)) {
-                if (!x86_one_gp_load(out, record_bytes)) return false;
-                if (integer_index < 6U) {
+                !minic_type_equal(fn->objects[object].type, type) ||
+                !x86_object_address(out, frame, object, "%r11"))
+                return false;
+            if (loc->kind == MINIC_X86_ARG_RECORD_ONE_GP) {
+                if (!x86_one_gp_load(out, loc->record_bytes)) return false;
+                if (!loc->on_stack) {
                     if (fprintf(out, "  movq %%rax, %s\n",
-                                integer_regs[integer_index]) < 0) return false;
-                    ++integer_index;
-                } else {
-                    if (fprintf(out, "  movq %%rax, %zu(%%rsp)\n",
-                                stack_slots * 8U) < 0) return false;
-                    ++stack_slots;
-                }
+                                gp_regs[loc->gp_index]) < 0) return false;
+                } else if (fprintf(out, "  movq %%rax, %zu(%%rsp)\n",
+                                   loc->stack_index * 8U) < 0) return false;
                 continue;
             }
-            if (!minic_x86_64_two_gp_record(program, target, type)) return false;
-            if (integer_index <= 4U) {
+            if (loc->kind != MINIC_X86_ARG_RECORD_TWO_GP) return false;
+            if (!loc->on_stack) {
                 if (fprintf(out,
                     "  movq 0(%%r11), %s\n"
                     "  movq 8(%%r11), %s\n",
-                    integer_regs[integer_index], integer_regs[integer_index + 1U]) < 0)
+                    gp_regs[loc->gp_index],
+                    gp_regs[loc->gp_index + 1U]) < 0)
                     return false;
-                integer_index += 2U;
-            } else {
-                if (fprintf(out,
+            } else if (fprintf(out,
                     "  movq 0(%%r11), %%rax\n"
                     "  movq %%rax, %zu(%%rsp)\n"
                     "  movq 8(%%r11), %%rax\n"
                     "  movq %%rax, %zu(%%rsp)\n",
-                    stack_slots * 8U, (stack_slots + 1U) * 8U) < 0)
-                    return false;
-                stack_slots += 2U;
-            }
+                    loc->stack_index * 8U,
+                    (loc->stack_index + 1U) * 8U) < 0)
+                return false;
             continue;
         }
         if (arg->kind != MINIC_CORE_CALL_ARGUMENT_VALUE ||
-            arg->value.value_id >= fn->value_count) return false;
-        type = i < fixed_count ? fixed_types[i] : fn->values[arg->value.value_id].type;
-        if (minic_type_is_long_double(type)) {
-            size_t off;
-            /* Match the preflight slot cursor and incoming callee cursor.
-             * Otherwise odd preceding stack args silently misplace x87
-             * values by eight bytes in mixed MiniC/GNU calls. */
-            stack_slots += stack_slots & 1U;
+            arg->value.value_id >= fn->value_count)
+            return false;
+        if (loc->kind == MINIC_X86_ARG_X87_MEMORY) {
+            size_t offset;
             if (!minic_type_is_long_double(fn->values[arg->value.value_id].type) ||
-                frame->value_offsets == NULL) return false;
-            off = frame->value_offsets[arg->value.value_id];
-            if (off < 16U || fprintf(out,
+                frame->value_offsets == NULL)
+                return false;
+            offset = frame->value_offsets[arg->value.value_id];
+            if (offset < 16U || fprintf(out,
                 "  movq -%zu(%%rbp), %%rax\n"
                 "  movq %%rax, %zu(%%rsp)\n"
                 "  movq -%zu(%%rbp), %%rax\n"
                 "  movq %%rax, %zu(%%rsp)\n",
-                off, stack_slots * 8U, off - 8U,
-                (stack_slots + 1U) * 8U) < 0) return false;
-            stack_slots += 2U;
+                offset, loc->stack_index * 8U, offset - 8U,
+                (loc->stack_index + 1U) * 8U) < 0) return false;
             continue;
         }
-        if (!x86_value_load(out, frame, arg->value.value_id, "%rax")) return false;
-        if (minic_type_is_double(type) || minic_type_is_float(type)) {
-            if (float_index < 8U) {
-                if (fprintf(out,
-                            minic_type_is_double(type)
-                                ? "  movq %%rax, %%xmm%zu\n"
-                                : "  movd %%eax, %%xmm%zu\n",
-                            float_index) < 0) return false;
-                ++float_index;
-            } else {
-                if (fprintf(out, "  movq %%rax, %zu(%%rsp)\n", stack_slots * 8U) < 0)
+        if (!x86_value_load(out, frame, arg->value.value_id, "%rax"))
+            return false;
+        if (loc->kind == MINIC_X86_ARG_SSE) {
+            if (!loc->on_stack) {
+                if (fprintf(out, minic_type_is_double(type)
+                            ? "  movq %%rax, %%xmm%zu\n"
+                            : "  movd %%eax, %%xmm%zu\n",
+                            loc->fp_index) < 0)
                     return false;
-                ++stack_slots;
-            }
-        } else if (integer_index < 6U) {
-            if (fprintf(out, "  movq %%rax, %s\n", integer_regs[integer_index]) < 0)
-                return false;
-            ++integer_index;
-        } else {
-            if (fprintf(out, "  movq %%rax, %zu(%%rsp)\n", stack_slots * 8U) < 0)
-                return false;
-            ++stack_slots;
-        }
+            } else if (fprintf(out, "  movq %%rax, %zu(%%rsp)\n",
+                               loc->stack_index * 8U) < 0) return false;
+        } else if (loc->kind == MINIC_X86_ARG_INTEGER) {
+            if (!loc->on_stack) {
+                if (fprintf(out, "  movq %%rax, %s\n",
+                            gp_regs[loc->gp_index]) < 0) return false;
+            } else if (fprintf(out, "  movq %%rax, %zu(%%rsp)\n",
+                               loc->stack_index * 8U) < 0) return false;
+        } else return false;
     }
-    /* SysV variadic calls advertise the number of used XMM argument regs. */
-    return !variadic || fprintf(out, "  movb $%zu, %%al\n", float_index) >= 0;
+    /* Variadic SysV callees receive the number of used SSE argument regs. */
+    return !plan->is_variadic ||
+           fprintf(out, "  movb $%zu, %%al\n", plan->end.fp_used) >= 0;
+}
+
+static bool x86_emit_call_arguments(
+    FILE *out, const MinicC0Program *program,
+    const MinicTargetInfo *target, const MinicCoreFunction *fn,
+    const MinicX86Frame *frame, const MinicCoreCallView *call,
+    size_t *allocated_stack_bytes) {
+    MinicX86ArgumentPlan plan = {0};
+    bool ok;
+    if (allocated_stack_bytes == NULL || call == NULL ||
+        !minic_x86_64_plan_outgoing_arguments(
+            program, target, fn, call, &plan))
+        return false;
+    ok = x86_emit_call_arguments_planned(out, fn, frame, call, &plan);
+    if (ok) *allocated_stack_bytes = plan.stack_bytes;
+    minic_x86_64_argument_plan_destroy(&plan);
+    return ok;
 }
 
 static bool x86_emit_call_result(FILE *out, const MinicC0Program *program,
@@ -426,9 +380,7 @@ bool minic_x86_64_emit_call_instruction(
             }
         }
         if (!x86_emit_call_arguments(out, program, target, fn, frame,
-                                     begin, count, callee->parameter_types,
-                                     callee->parameter_count, callee->is_variadic,
-                                     &outgoing_bytes)) {
+                                     &call, &outgoing_bytes)) {
             if (getenv("MINIC_X86_CALL_TRACE") != NULL) {
                 size_t j;
                 (void)fprintf(stderr,
@@ -472,17 +424,13 @@ bool minic_x86_64_emit_call_instruction(
         MinicCoreCallView call;
         const MinicCoreValueId callee = ins->value.indirect_call.callee;
         const MinicCoreCallSignature *signature;
-        size_t begin, count;
         size_t outgoing_bytes = 0U;
         if (!minic_core_call_view_build(fn, ins, &call) ||
             call.signature == NULL)
             return false;
         signature = call.signature;
-        begin = call.argument_begin;
-        count = call.argument_count;
-        if (!x86_emit_call_arguments(out, program, target, fn, frame, begin, count,
-                                     signature->parameter_types, signature->parameter_count,
-                                     signature->is_variadic, &outgoing_bytes) ||
+        if (!x86_emit_call_arguments(out, program, target, fn, frame,
+                                     &call, &outgoing_bytes) ||
             !x86_value_load(out, frame, callee, "%r11") ||
             fprintf(out, "  call *%%r11\n") < 0 ||
             (outgoing_bytes != 0U &&
