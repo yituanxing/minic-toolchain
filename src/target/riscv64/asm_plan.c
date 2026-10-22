@@ -360,8 +360,15 @@ bool minic_riscv64_asm_function_plan_build(
     if (function == NULL || plan == NULL) return false;
     memset(plan, 0, sizeof(*plan));
     if (function->instruction_count == 0U) return true;
-    if (function->instructions == NULL ||
-        function->instruction_count > SIZE_MAX / sizeof(*plan->instructions)) return false;
+    if (function->instructions == NULL) return false;
+    /* Most functions have no structured asm: avoid allocating a table for
+     * every Core instruction on the ordinary code generation path. */
+    for (i = 0U; i < function->instruction_count; ++i) {
+        if (function->instructions[i].kind == MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM)
+            break;
+    }
+    if (i == function->instruction_count) return true;
+    if (function->instruction_count > SIZE_MAX / sizeof(*plan->instructions)) return false;
     plan->instructions = (MinicRiscv64AsmInstructionPlan *)calloc(
         function->instruction_count, sizeof(*plan->instructions));
     if (plan->instructions == NULL) return false;
