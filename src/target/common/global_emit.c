@@ -563,6 +563,26 @@ bool minic_multi_emit_flexible_record_global(
 
 /* Shared ELF object path; target relocations remain callback-selectable. */
 
+/* Symbol identity is language-level AST metadata, not an ELF dialect.
+ * All target relocation renderers still own directive and addend spelling. */
+const char *minic_multi_global_relocation_target_name(
+    const MinicC0Program *program, const MinicGlobalRelocation *relocation) {
+    if (program == NULL || relocation == NULL)
+        return NULL;
+    if (relocation->target_kind == MINIC_GLOBAL_RELOCATION_OBJECT) {
+        const MinicGlobalObject *object =
+            minic_c0_program_global_object(program, relocation->target_id);
+        return object != NULL && object->name_length != 0U ? object->name : NULL;
+    }
+    if (relocation->target_kind == MINIC_GLOBAL_RELOCATION_FUNCTION) {
+        const MinicFunction *function =
+            minic_c0_program_function(program, relocation->target_id);
+        return function != NULL && function->name_length != 0U
+            ? minic_c0_function_symbol_name(function) : NULL;
+    }
+    return NULL;
+}
+
 bool minic_multi_emit_elf_relocation(FILE *out, const MinicC0Program *program,
                                    const MinicTargetInfo *target,
                                    const MinicGlobalRelocation *reloc,
@@ -577,15 +597,7 @@ bool minic_multi_emit_elf_relocation(FILE *out, const MinicC0Program *program,
         return label != NULL && label->kind == MINIC_STATEMENT_LABEL &&
                fprintf(out, "  .8byte .Luser_%zu\n", reloc->target_id) >= 0;
     }
-    if (reloc->target_kind == MINIC_GLOBAL_RELOCATION_OBJECT) {
-        const MinicGlobalObject *obj =
-            minic_c0_program_global_object(program, reloc->target_id);
-        if (obj != NULL) name = obj->name;
-    } else if (reloc->target_kind == MINIC_GLOBAL_RELOCATION_FUNCTION) {
-        const MinicFunction *decl =
-            minic_c0_program_function(program, reloc->target_id);
-        if (decl != NULL) name = minic_c0_function_symbol_name(decl);
-    }
+    name = minic_multi_global_relocation_target_name(program, reloc);
     if (name == NULL || name[0] == '\0' ||
         !minic_data_layout_global_relocation_target_addend(
             target->data_layout, program, reloc, &addend)) return false;
