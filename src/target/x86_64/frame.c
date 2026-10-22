@@ -103,6 +103,8 @@ bool minic_x86_64_frame_init(const MinicC0Program *program, const MinicTargetInf
      * is needed.  An offset aligned relative to %rbp is NOT enough. */
     for (i = 0U; i < fn->object_count; ++i) {
         const size_t alignment = frame->object_storage.objects[i].alignment;
+        /* SysV frame offsets are constrained to signed 32-bit displacements. */
+        if (alignment > (size_t)INT32_MAX) return false;
         if (alignment > maximum_alignment) maximum_alignment = alignment;
     }
     frame->object_base_alignment = maximum_alignment;
