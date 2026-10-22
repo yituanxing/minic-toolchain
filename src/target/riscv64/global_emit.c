@@ -90,6 +90,14 @@ static bool minic_riscv64_emit_typed_bits(FILE *file,
     }
 }
 
+/* Shared layout emits via RV64's existing typed GNU scalar spelling. */
+static bool minic_riscv64_emit_shared_bits(
+    FILE *file, const MinicC0Program *program,
+    const MinicTargetInfo *target, MinicType type, uint64_t bits) {
+    return target != NULL && target->architecture == MINIC_TARGET_ARCH_RISCV64 &&
+           minic_riscv64_emit_typed_bits(file, program, type, bits);
+}
+
 static bool minic_riscv64_global_scalar_type(const MinicC0Program *program,
                                              MinicType object_type,
                                              MinicType *scalar_type,
@@ -362,81 +370,8 @@ static bool minic_riscv64_emit_record_bit_field_run(FILE *file,
     return true;
 }
 
-static bool minic_riscv64_emit_direct_record_values(FILE *file,
-                                                    const MinicC0Program *program,
-                                                    const MinicGlobalObject *object,
-                                                    const MinicRecord *record) {
-    size_t object_alignment;
-    size_t storage_size;
-
-    if (!minic_data_layout_global_object(
-            minic_default_data_layout(), program, object, &storage_size, &object_alignment)) {
-        return false;
-    }
-    (void)object_alignment;
-
-    size_t cursor;
-    size_t field_index;
-    size_t relocation_index;
-
-    if (file == NULL || program == NULL || object == NULL || record == NULL ||
-        !record->is_complete || record->is_union ||
-        object->initializer_count != record->field_count) {
-        return false;
-    }
-    cursor = 0U;
-    relocation_index = 0U;
-    for (field_index = 0U; field_index < record->field_count; ++field_index) {
-        const MinicRecordField *field;
-        const MinicGlobalRelocation *relocation;
-        size_t field_size;
-        size_t field_alignment;
-        size_t field_offset;
-        uint64_t value;
-
-        field = minic_c0_record_field(record, field_index);
-        if (field == NULL || field->element_count != 1U || field->is_flexible_array ||
-            !minic_riscv64_type_layout(program, field->type, &field_size, &field_alignment) ||
-            !minic_data_layout_record_field_offset(
-                minic_default_data_layout(), program, record, field_index, &field_offset)) {
-            return false;
-        }
-        (void)field_alignment;
-        if (field_offset < cursor || field_offset > storage_size ||
-            field_size > storage_size - field_offset ||
-            !minic_riscv64_emit_zero_bytes(file, field_offset - cursor)) {
-            return false;
-        }
-        value = object->initializer_values[field_index];
-        relocation = relocation_index < object->relocation_count
-                         ? &object->relocations[relocation_index]
-                         : NULL;
-        if (relocation != NULL &&
-            relocation->location_kind == MINIC_GLOBAL_RELOCATION_LOCATION_RECORD_FIELD &&
-            relocation->location_index == field_index) {
-            if ((!minic_type_is_pointer(field->type) && !minic_type_is_integer(field->type)) ||
-                value != 0U ||
-                !minic_riscv64_emit_symbol_value(file, program, relocation, field_size)) {
-                return false;
-            }
-            relocation_index += 1U;
-        } else if (minic_type_is_integer(field->type) || minic_type_is_pointer(field->type) ||
-                   minic_type_is_float(field->type) || minic_type_is_double(field->type)) {
-            if (!minic_riscv64_emit_typed_bits(file, program, field->type, value)) {
-                return false;
-            }
-        } else {
-            if (value != 0U || !minic_type_is_record(field->type) ||
-                !minic_riscv64_emit_zero_bytes(file, field_size)) {
-                return false;
-            }
-        }
-        cursor = field_offset + field_size;
-    }
-    return relocation_index == object->relocation_count && cursor <= storage_size &&
-           minic_riscv64_emit_zero_bytes(file, storage_size - cursor);
-}
-
+/* Flat record offsets, fields, relocation slots now have one owner in
+ * common/global_emit.c.  Recursive bitfields and unions remain below. */
 static bool minic_riscv64_emit_constant_value(FILE *file,
                                               const MinicC0Program *program,
                                               const MinicGlobalObject *object,
@@ -770,7 +705,19 @@ static bool minic_riscv64_emit_record_values(FILE *file,
         if (!record->is_union && object->initializer_count == record->field_count &&
             !has_recursive_relocation && !has_nonscalar_field &&
             !minic_riscv64_record_has_bit_fields(record)) {
-            return minic_riscv64_emit_direct_record_values(file, program, object, record);
+            const MinicTargetInfo *target =
+                minic_target_info_for_architecture(MINIC_TARGET_ARCH_RISCV64);
+            size_t storage_size, object_alignment;
+            if (target == NULL ||
+                !minic_data_layout_global_object(
+                    target->data_layout, program, object,
+                    &storage_size, &object_alignment))
+                return false;
+            (void)object_alignment;
+            return minic_multi_emit_flat_record_global(
+                file, program, target, object, storage_size,
+                minic_riscv64_emit_symbol_relocation,
+                minic_riscv64_emit_shared_bits);
         }
     }
     return minic_riscv64_emit_complete_recursive_global(file, program, object);
@@ -787,6 +734,20 @@ static bool minic_riscv64_array_uses_recursive_initializer(
     return array_type != NULL &&
            (minic_type_is_record(array_type->element_type) ||
             minic_type_is_array(array_type->element_type));
+}
+
+/* Only homogeneous scalar relocations are eligible for the common slot
+ * walker; nested records, unions and arrays still use the RV64 recursion. */
+static bool minic_riscv64_is_flat_relocation_array(
+    const MinicC0Program *program, const MinicGlobalObject *object) {
+    const MinicArrayType *array;
+    if (program == NULL || object == NULL || !minic_type_is_array(object->type) ||
+        object->relocation_count == 0U)
+        return false;
+    array = minic_c0_program_array_type(program, object->type.array_type_id);
+    return array != NULL &&
+           (minic_type_is_integer(array->element_type) ||
+            minic_type_is_pointer(array->element_type));
 }
 
 static bool minic_riscv64_emit_recursive_array_values(
@@ -949,6 +910,16 @@ bool minic_riscv64_emit_global_object(FILE *file,
         if (!minic_riscv64_emit_record_values(file, program, object)) {
             return false;
         }
+    } else if (minic_riscv64_is_flat_relocation_array(program, object) &&
+               object->initializer_count != 0U) {
+        const MinicTargetInfo *target =
+            minic_target_info_for_architecture(MINIC_TARGET_ARCH_RISCV64);
+        if (target == NULL ||
+            !minic_multi_emit_relocatable_scalar_array(
+                file, program, target, object, storage_size,
+                minic_riscv64_emit_symbol_relocation,
+                minic_riscv64_emit_shared_bits))
+            return false;
     } else if ((minic_riscv64_array_uses_recursive_initializer(program, object->type) ||
                 (minic_type_is_array(object->type) && object->relocation_count != 0U)) &&
                object->initializer_count != 0U) {
