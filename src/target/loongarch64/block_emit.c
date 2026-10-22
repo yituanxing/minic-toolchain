@@ -642,12 +642,9 @@ bool minic_loongarch64_emit_core_blocks(FILE *out, const MinicDirectLP64BlockCon
                     have_bits ? 1 : 0, bits, stride,
                     ins->value.pointer_offset.subtract ? 1 : 0);
             }
-            if (base >= fn->value_count || index >= fn->value_count ||
-                !minic_type_is_pointer(fn->values[base].type) ||
-                !minic_lp64_scalar_integer_width(program, target, fn->values[index].type,
-                                     &iw, &signed_index) ||
-                /* Use a full-size stride literal: addi.d signed imm12
-                 * cannot encode large record/array elements. */
+            if (!minic_multi_direct_pointer_offset_shape(
+                    program, target, fn, ins, (size_t)-1, &iw, &signed_index) ||
+                /* Full-width stride literal; keep LoongArch64-only assembly. */
                 !emit_sp_mem(out, "ld.d", "$t0", (size_t)base * 8U) ||
                 !emit_sp_mem(out, iw == 1U
                                   ? (signed_index ? "ld.b" : "ld.bu")
@@ -1228,16 +1225,8 @@ bool minic_loongarch64_emit_core_blocks(FILE *out, const MinicDirectLP64BlockCon
             bool ls, rs;
             bool wide;
             const char *op;
-            if (lhs >= fn->value_count || rhs >= fn->value_count ||
-                !minic_type_equal(fn->values[lhs].type, ins->type) ||
-                !minic_lp64_scalar_integer_width(program, target, fn->values[lhs].type,
-                                      &lw, &ls) ||
-                !minic_lp64_scalar_integer_width(program, target, fn->values[rhs].type,
-                                      &rw, &rs) ||
-                (lw != 1U && lw != 2U && lw != 4U && lw != 8U) ||
-                /* C permits 8/16-bit shift-count values after promotion;
-                 * the target consumes their low 32-bit SSA slot. */
-                minic_type_is_bool_integer(ins->type))
+            if (!minic_multi_direct_integer_shift_shape(
+                    program, target, fn, ins, &lw, &rw, &ls, &rs))
                 return minic_multi_direct_machine_reject(fn, "loongarch64", name, reject_stage,
                                            reject_block, reject_ins, __LINE__);
             wide = lw == 8U;
@@ -1268,10 +1257,8 @@ bool minic_loongarch64_emit_core_blocks(FILE *out, const MinicDirectLP64BlockCon
             const MinicCoreValueId operand = ins->value.operand;
             size_t width;
             bool sign;
-            if (operand >= fn->value_count ||
-                !minic_type_equal(fn->values[operand].type, ins->type) ||
-                !minic_lp64_scalar_integer_width(program, target, ins->type, &width, &sign) ||
-                minic_type_is_bool_integer(ins->type) ||
+            if (!minic_multi_direct_integer_unary_shape(
+                    program, target, fn, ins, &width, &sign) ||
                 !emit_sp_mem(out, width == 8U ? "ld.d" : "ld.w",
                              "$t0", (size_t)operand * 8U) ||
                 fputs("  nor $t0, $t0, $zero\n", out) == EOF ||
@@ -1284,10 +1271,8 @@ bool minic_loongarch64_emit_core_blocks(FILE *out, const MinicDirectLP64BlockCon
             const MinicCoreValueId operand = ins->value.operand;
             size_t width;
             bool sign;
-            if (operand >= fn->value_count ||
-                !minic_type_equal(fn->values[operand].type, ins->type) ||
-                !minic_lp64_scalar_integer_width(program, target, ins->type, &width, &sign) ||
-                minic_type_is_bool_integer(ins->type) ||
+            if (!minic_multi_direct_integer_unary_shape(
+                    program, target, fn, ins, &width, &sign) ||
                 !emit_sp_mem(out, width == 8U ? "ld.d" : "ld.w",
                              "$t0", (size_t)operand * 8U) ||
                 fputs(width == 8U ? "  sub.d $t0, $zero, $t0\n"
@@ -1422,10 +1407,8 @@ bool minic_loongarch64_emit_core_blocks(FILE *out, const MinicDirectLP64BlockCon
                                     reject_block, reject_ins, __LINE__);
                 break;
             }
-            if (lhs >= fn->value_count || rhs >= fn->value_count ||
-                !minic_lp64_scalar_integer_width(program, target, fn->values[lhs].type, &lw, &ls) ||
-                !minic_lp64_scalar_integer_width(program, target, fn->values[rhs].type, &rw, &rs) ||
-                lw != rw || ls != rs || (lw != 4U && lw != 8U))
+            if (!minic_multi_direct_integer_compare_shape(
+                    program, target, fn, ins, &lw, &rw, &ls, &rs))
                 return minic_multi_direct_machine_reject(fn, "loongarch64", name, reject_stage,
                                     reject_block, reject_ins, __LINE__);
             wide = lw == 8U;
@@ -1446,12 +1429,8 @@ bool minic_loongarch64_emit_core_blocks(FILE *out, const MinicDirectLP64BlockCon
             size_t width = 0U;
             bool sign = false;
             bool pointer, wide;
-            if (v >= fn->value_count) return minic_multi_direct_machine_reject(fn, "loongarch64", name, reject_stage,
-                                    reject_block, reject_ins, __LINE__);
-            pointer = minic_type_is_pointer(fn->values[v].type);
-            if (!pointer && !minic_type_equal(fn->values[v].type, minic_type_bool()) &&
-                !minic_lp64_scalar_integer_width(program, target, fn->values[v].type,
-                                      &width, &sign))
+            if (!minic_multi_direct_scalar_zero_shape(
+                    program, target, fn, ins, &width, &sign, &pointer))
                 return minic_multi_direct_machine_reject(fn, "loongarch64", name, reject_stage,
                                     reject_block, reject_ins, __LINE__);
             wide = pointer || width == 8U;

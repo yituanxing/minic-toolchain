@@ -26,6 +26,32 @@ bool minic_multi_direct_result_slot_offset(
 
 /* Common scalar and relaxed atomic LOAD shape (ISA emission stays local). */
 /* Shared Core operand shape for LP64 integer arithmetic, bitwise and div. */
+
+/* Core-only operand admission for existing AArch64/LoongArch64 instructions.
+ * Each machine backend is still responsible for assembly and diagnostics. */
+bool minic_multi_direct_integer_unary_shape(
+    const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
+    size_t *width, bool *is_signed);
+bool minic_multi_direct_integer_shift_shape(
+    const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
+    size_t *left_width, size_t *right_width,
+    bool *left_signed, bool *right_signed);
+bool minic_multi_direct_integer_compare_shape(
+    const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
+    size_t *left_width, size_t *right_width,
+    bool *left_signed, bool *right_signed);
+bool minic_multi_direct_scalar_zero_shape(
+    const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
+    size_t *width, bool *is_signed, bool *is_pointer);
+bool minic_multi_direct_pointer_offset_shape(
+    const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
+    size_t maximum_stride, size_t *index_width, bool *index_signed);
+
 bool minic_multi_direct_integer_binary_shape(
     const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,

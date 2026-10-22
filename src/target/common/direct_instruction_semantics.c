@@ -136,6 +136,117 @@ bool minic_multi_direct_result_slot_offset(
 /* Shared LP64 validation for integer binary arithmetic, bitwise, and
  * division/remainder: width, signedness and result-type restrictions remain
  * distinct across these three operation families. Encoding is ISA-owned. */
+
+/* The direct LP64 backends share Core unary/shift/compare contracts; register
+ * choice, signed extensions and actual machine encodings remain target-owned. */
+bool minic_multi_direct_integer_unary_shape(
+    const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
+    size_t *width, bool *is_signed) {
+    MinicCoreValueId operand;
+    if (program == NULL || target == NULL || fn == NULL || ins == NULL ||
+        width == NULL || is_signed == NULL ||
+        (ins->kind != MINIC_CORE_INSTRUCTION_INTEGER_NEGATE &&
+         ins->kind != MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_NOT))
+        return false;
+    operand = ins->value.operand;
+    return operand < fn->value_count &&
+           minic_type_equal(fn->values[operand].type, ins->type) &&
+           minic_lp64_scalar_integer_width(program, target, ins->type,
+                                          width, is_signed) &&
+           !minic_type_is_bool_integer(ins->type);
+}
+
+bool minic_multi_direct_integer_shift_shape(
+    const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
+    size_t *left_width, size_t *right_width,
+    bool *left_signed, bool *right_signed) {
+    MinicCoreValueId lhs, rhs;
+    if (program == NULL || target == NULL || fn == NULL || ins == NULL ||
+        left_width == NULL || right_width == NULL ||
+        left_signed == NULL || right_signed == NULL ||
+        (ins->kind != MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_LEFT &&
+         ins->kind != MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_RIGHT))
+        return false;
+    lhs = ins->value.binary.left;
+    rhs = ins->value.binary.right;
+    return lhs < fn->value_count && rhs < fn->value_count &&
+           minic_type_equal(fn->values[lhs].type, ins->type) &&
+           minic_lp64_scalar_integer_width(program, target, fn->values[lhs].type,
+                                          left_width, left_signed) &&
+           minic_lp64_scalar_integer_width(program, target, fn->values[rhs].type,
+                                          right_width, right_signed) &&
+           (*left_width == 1U || *left_width == 2U ||
+            *left_width == 4U || *left_width == 8U) &&
+           !minic_type_is_bool_integer(ins->type);
+}
+
+bool minic_multi_direct_integer_compare_shape(
+    const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
+    size_t *left_width, size_t *right_width,
+    bool *left_signed, bool *right_signed) {
+    MinicCoreValueId lhs, rhs;
+    if (program == NULL || target == NULL || fn == NULL || ins == NULL ||
+        left_width == NULL || right_width == NULL ||
+        left_signed == NULL || right_signed == NULL ||
+        (ins->kind != MINIC_CORE_INSTRUCTION_INTEGER_LESS &&
+         ins->kind != MINIC_CORE_INSTRUCTION_SCALAR_EQUAL))
+        return false;
+    lhs = ins->value.binary.left;
+    rhs = ins->value.binary.right;
+    return lhs < fn->value_count && rhs < fn->value_count &&
+           minic_lp64_scalar_integer_width(program, target, fn->values[lhs].type,
+                                          left_width, left_signed) &&
+           minic_lp64_scalar_integer_width(program, target, fn->values[rhs].type,
+                                          right_width, right_signed) &&
+           *left_width == *right_width && *left_signed == *right_signed &&
+           (*left_width == 4U || *left_width == 8U);
+}
+
+bool minic_multi_direct_scalar_zero_shape(
+    const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
+    size_t *width, bool *is_signed, bool *is_pointer) {
+    MinicCoreValueId operand;
+    MinicType type;
+    if (program == NULL || target == NULL || fn == NULL || ins == NULL ||
+        width == NULL || is_signed == NULL || is_pointer == NULL ||
+        ins->kind != MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO)
+        return false;
+    operand = ins->value.operand;
+    if (operand >= fn->value_count) return false;
+    type = fn->values[operand].type;
+    *is_pointer = minic_type_is_pointer(type);
+    *width = 0U;
+    *is_signed = false;
+    return *is_pointer || minic_type_equal(type, minic_type_bool()) ||
+           minic_lp64_scalar_integer_width(program, target, type,
+                                          width, is_signed);
+}
+
+/* AArch64's current direct emitter admits a 16-bit element-stride literal;
+ * LoongArch64 materializes full-width strides. Keep the different limits. */
+bool minic_multi_direct_pointer_offset_shape(
+    const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
+    size_t maximum_stride, size_t *index_width, bool *index_signed) {
+    MinicCoreValueId base, index;
+    if (program == NULL || target == NULL || fn == NULL || ins == NULL ||
+        index_width == NULL || index_signed == NULL ||
+        ins->kind != MINIC_CORE_INSTRUCTION_POINTER_OFFSET)
+        return false;
+    base = ins->value.pointer_offset.base;
+    index = ins->value.pointer_offset.index;
+    return base < fn->value_count && index < fn->value_count &&
+           minic_type_is_pointer(fn->values[base].type) &&
+           minic_lp64_scalar_integer_width(program, target,
+                                          fn->values[index].type,
+                                          index_width, index_signed) &&
+           ins->value.pointer_offset.element_size <= maximum_stride;
+}
+
 bool minic_multi_direct_integer_binary_shape(
     const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
