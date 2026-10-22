@@ -41,7 +41,8 @@ bool minic_loongarch64_emit_fp_instruction(
                 fprintf(out, "  %s $fcc0, $ft0, $ft1\n"
                              "  movcf2gr $t0, $fcc0\n", op) < 0)
                 return false;
-            *needs_gp_store = true; return true;
+            *needs_gp_store = true;
+            return true;
         }
         /* M37: source-observed cJSON binary64 subtract and multiply. */
         case MINIC_CORE_INSTRUCTION_DOUBLE_ADD:
@@ -140,7 +141,7 @@ bool minic_loongarch64_emit_fp_instruction(
                     program, target, fn, ins, &width, &sign) ||
                 !emit_sp_mem(out, width == 8U ? "ld.d" : "ld.w",
                              "$t0", (size_t)src * 8U) ||
-                (width < 4U && !emit_integer_normalize(out, width, sign)))
+                (width < 4U && !normalize(out, width, sign)))
                 return false;
             if (width == 8U && !sign) {
                 /* LoongArch base FP has signed ffint.d.l, but not an
@@ -215,7 +216,8 @@ bool minic_loongarch64_emit_fp_instruction(
                        id, (unsigned int)ins->result,
                        id, (unsigned int)ins->result) < 0)
                     return false;
-                *needs_gp_store = true; return true;
+                *needs_gp_store = true;
+            return true;
             }
             conversion = width == 4U && sign
                 ? "  ftintrz.w.d $ft0, $ft0\n"
@@ -226,9 +228,10 @@ bool minic_loongarch64_emit_fp_instruction(
                 fputs(conversion, out) == EOF ||
                 (width == 4U && !sign &&
                  fputs("  bstrpick.d $t0, $t0, 31, 0\n", out) == EOF) ||
-                (width < 4U && !emit_integer_normalize(out, width, sign)))
+                (width < 4U && !normalize(out, width, sign)))
                 return false;
-            *needs_gp_store = true; return true;
+            *needs_gp_store = true;
+            return true;
         }
     default:
         return false;
