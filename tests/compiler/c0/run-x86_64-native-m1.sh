@@ -1354,3 +1354,31 @@ int main(void) {
 }
 EOF
 check_exit statement_control_cfg_dataflow 42
+
+# One action may be overwritten across a designated range; ownership must be
+# last-wins for static and runtime arrays without quadratic element/action
+# rescans. Runtime nonoverridden range expressions evaluate only once.
+cat > "$tempdir/initializer_range_ownership.i" <<'EOF'
+static int static_values[64] = {
+    [0 ... 63] = 1,
+    [9 ... 20] = 3,
+    [17] = 42
+};
+static int calls;
+static int value(void) { ++calls; return 7; }
+int main(void) {
+    int automatic[64] = {
+        [0 ... 63] = 2,
+        [9 ... 20] = value(),
+        [17] = 42
+    };
+    if (static_values[0] != 1 || static_values[12] != 3 ||
+        static_values[17] != 42 || static_values[22] != 1)
+        return 1;
+    if (automatic[0] != 2 || automatic[12] != 7 ||
+        automatic[17] != 42 || automatic[22] != 2 || calls != 1)
+        return 2;
+    return static_values[17];
+}
+EOF
+check_exit initializer_range_ownership 42

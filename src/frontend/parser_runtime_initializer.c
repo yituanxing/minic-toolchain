@@ -500,46 +500,46 @@ static bool lower_runtime_scalar_array_plan(MinicParser *parser,
                                             MinicSourceSpan initializer_span,
                                             const MinicArrayInitializerPlan *plan,
                                             const MinicExpressionId *action_values) {
-    size_t action_id;
-    size_t index;
+    MinicArrayInitializerResolved resolved = {0};
+    size_t action_id, index;
+    bool success = false;
 
-    for (index = 0U; index < element_count; ++index) {
-        size_t owner;
-
-        if (!minic_array_initializer_plan_final_owner(plan, index, &owner)) {
-            return false;
-        }
-        if (owner == MINIC_INITIALIZER_ACTION_INVALID &&
-            !add_array_object_zero_element(parser, base_id, index, initializer_span)) {
-            return false;
-        }
+    if (!minic_array_initializer_plan_resolve(plan, &resolved) ||
+        resolved.element_count != element_count) {
+        if (parser != NULL)
+            minic_parser_error(parser, "cannot resolve runtime array initializer owners");
+        goto done;
     }
-
-    for (action_id = 0U; action_id < plan->action_count; ++action_id) {
-        size_t final_count;
+    for (index = 0U; index < element_count; ++index) {
+        if (resolved.owners[index] == MINIC_INITIALIZER_ACTION_INVALID &&
+            !add_array_object_zero_element(parser, base_id, index, initializer_span))
+            goto done;
+    }
+    for (action_id = 0U; action_id < resolved.action_count; ++action_id) {
         MinicExpressionId lowered_value_id;
-
-        final_count = minic_array_initializer_plan_action_final_count(plan, action_id);
-        if (final_count == 0U) {
-            /* A fully-overridden initializer has unspecified side effects; GCC discards it. */
+        if (resolved.final_counts[action_id] == 0U) {
+            /* Preserve the existing GCC-compatible fully-overridden effect elision. */
             continue;
         }
         lowered_value_id = action_values[action_id];
-        if (lowered_value_id == MINIC_EXPRESSION_INVALID) {
-            return false;
-        }
-        if (final_count > 1U && !add_runtime_initializer_once_read(
-                                    parser, element_type, lowered_value_id, &lowered_value_id)) {
-            return false;
-        }
-        for (index = 0U; index < element_count; ++index) {
-            if (minic_array_initializer_plan_action_owns(plan, action_id, index) &&
-                !add_array_object_element_assignment(parser, base_id, index, lowered_value_id)) {
-                return false;
-            }
+        if (lowered_value_id == MINIC_EXPRESSION_INVALID)
+            goto done;
+        if (resolved.final_counts[action_id] > 1U &&
+            !add_runtime_initializer_once_read(
+                parser, element_type, lowered_value_id, &lowered_value_id))
+            goto done;
+        for (index = resolved.first_owned[action_id];
+             index != MINIC_INITIALIZER_ACTION_INVALID;
+             index = resolved.next_owned[index]) {
+            if (!add_array_object_element_assignment(
+                    parser, base_id, index, lowered_value_id))
+                goto done;
         }
     }
-    return true;
+    success = true;
+done:
+    minic_array_initializer_resolved_destroy(&resolved);
+    return success;
 }
 
 static bool parse_fixed_runtime_scalar_array_initializer(MinicParser *parser,
