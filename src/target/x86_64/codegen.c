@@ -1598,7 +1598,17 @@ static bool x86_emit_function(FILE *out, const MinicC0Program *program,
         }
         if (!block->has_terminator ||
             !x86_emit_terminator(out, &frame, &block->terminator, fn, function_id)) {
-            x86_error(diag, path, "x86-64 Core terminator unsupported");
+            char message[256];
+            (void)snprintf(message, sizeof(message),
+                           "x86-64 Core terminator unsupported: function %s block=%zu kind=%d "
+                           "has_terminator=%d return_object=%u",
+                           name, block_index,
+                           block->has_terminator ? (int)block->terminator.kind : -1,
+                           block->has_terminator ? 1 : 0,
+                           block->has_terminator
+                               ? (unsigned int)block->terminator.return_object
+                               : 0U);
+            x86_error(diag, path, message);
             goto done;
         }
     }
