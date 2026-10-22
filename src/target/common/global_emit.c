@@ -504,7 +504,7 @@ static bool minic_multi_emit_recursive_global_value(
                 return false;
             if (field->is_zero_length_array) continue;
             if (field->is_flexible_array) {
-                size_t flexible_count, element;
+                size_t flexible_count;
                 if (record->is_union || i + 1U != end ||
                     !minic_data_layout_record_field_offset(
                         target->data_layout, program, record, i, &field_offset) ||
