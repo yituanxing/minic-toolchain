@@ -163,6 +163,9 @@ MINIC_SOURCES := \
 	src/target/riscv64/global_emit.c \
 	src/target/x86_64/codegen.c \
 	src/target/x86_64/machine_emit.c \
+	src/target/x86_64/machine_support.c \
+	src/target/x86_64/machine_fp.c \
+	src/target/x86_64/machine_call.c \
 	src/target/x86_64/abi.c \
 	src/target/x86_64/frame.c \
 	src/target/x86_64/global_emit.c \
