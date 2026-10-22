@@ -12,6 +12,14 @@ esac
 tempdir=$(mktemp -d)
 trap 'rm -rf "$tempdir"' EXIT HUP INT TERM
 
+# Run the Frontend optimizer's standalone ownership oracle in the SAME fast
+# x86 native job: -Werror catches dead APIs while deterministic interval
+# properties protect against future last-writer/linked-action regressions.
+"$HOST_CC" -std=c11 -O2 -Wall -Wextra -Werror -Isrc \
+    src/frontend/initializer.c tests/frontend/initializer_plan_test.c \
+    -o "$tempdir/initializer-plan-unit.bin"
+"$tempdir/initializer-plan-unit.bin"
+
 check_exit() {
   name="$1"
   expected="$2"
