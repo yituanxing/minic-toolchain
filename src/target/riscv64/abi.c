@@ -1,5 +1,28 @@
 #include "target/riscv64/abi.h"
 
+const char *const minic_riscv64_abi_integer_argument_registers[8] = {
+    "a0",
+    "a1",
+    "a2",
+    "a3",
+    "a4",
+    "a5",
+    "a6",
+    "a7",
+};
+
+const char *const minic_riscv64_abi_floating_argument_registers[8] = {
+    "fa0",
+    "fa1",
+    "fa2",
+    "fa3",
+    "fa4",
+    "fa5",
+    "fa6",
+    "fa7",
+};
+
+
 #include "target/data_layout.h"
 
 #include <stdint.h>
