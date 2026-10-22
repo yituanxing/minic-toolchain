@@ -525,7 +525,7 @@ static bool parse_expression_or_assignment_statement(MinicParser *parser,
            minic_parser_add_statement(parser, &statement);
 }
 
-bool minic_parser_minic_parser_parse_compound_statement(MinicParser *parser) {
+bool minic_parser_parse_compound_statement(MinicParser *parser) {
     MinicCleanupContextId scope_cleanup_context;
     bool success;
 
