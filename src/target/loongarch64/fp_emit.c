@@ -20,7 +20,7 @@ bool minic_loongarch64_emit_fp_instruction(
     size_t offset, size_t id, bool dynamic_frame, const MinicLP64FramePlan *frame_plan,
     bool *needs_gp_store) {
     if (out == NULL || program == NULL || target == NULL ||
-        fn == NULL || ins == NULL || frame_plan == NULL || 
+        fn == NULL || ins == NULL || frame_plan == NULL ||
         needs_gp_store == NULL)
         return false;
     *needs_gp_store = false;

@@ -297,8 +297,7 @@ bool minic_aarch64_emit_core_blocks(FILE *out, const MinicDirectLP64BlockContext
         if (shape.family == MINIC_DIRECT_MACHINE_MEMORY) {
             bool needs_gp_store = false;
             if (!minic_aarch64_emit_memory_instruction(
-                    out, program, target, fn, ins, frame_plan,
-                    &needs_gp_store))
+                    out, program, target, fn, ins, frame_plan, &needs_gp_store))
                 return minic_multi_direct_machine_reject(
                     fn, "aarch64", name, reject_stage, reject_block, reject_ins, __LINE__);
             if (needs_gp_store && !aarch64_emit_gp_result(
@@ -317,8 +316,7 @@ bool minic_aarch64_emit_core_blocks(FILE *out, const MinicDirectLP64BlockContext
             bool needs_gp_store = false;
             if (!minic_aarch64_emit_fp_instruction(
                     out, program, target, fn, ins, offset,
-                    frame_plan,
-                    &needs_gp_store))
+                    frame_plan, &needs_gp_store))
                 return minic_multi_direct_machine_reject(
                     fn, "aarch64", name, reject_stage, reject_block,
                     reject_ins, __LINE__);
@@ -334,8 +332,7 @@ bool minic_aarch64_emit_core_blocks(FILE *out, const MinicDirectLP64BlockContext
         if (shape.family == MINIC_DIRECT_MACHINE_INTEGER) {
             bool needs_gp_store = false;
             if (!minic_aarch64_emit_integer_instruction(
-                    out, program, target, fn, ins, frame_plan,
-                    &needs_gp_store))
+                    out, program, target, fn, ins, frame_plan, &needs_gp_store))
                 return minic_multi_direct_machine_reject(
                     fn, "aarch64", name, reject_stage, reject_block,
                     reject_ins, __LINE__);
@@ -351,8 +348,7 @@ bool minic_aarch64_emit_core_blocks(FILE *out, const MinicDirectLP64BlockContext
         if (shape.family == MINIC_DIRECT_MACHINE_ABI) {
             bool needs_gp_store = false;
             if (!minic_aarch64_emit_abi_instruction(
-                    out, ctx, ins, offset,
-                    &needs_gp_store))
+                    out, ctx, ins, offset, &needs_gp_store))
                 return minic_multi_direct_machine_reject(
                     fn, "aarch64", name, reject_stage, reject_block,
                     reject_ins, __LINE__);

@@ -53,7 +53,7 @@ bool minic_loongarch64_emit_abi_instruction(
     if (out == NULL || ctx == NULL || ctx->program == NULL ||
         ctx->target == NULL || ctx->fn == NULL || ctx->frame_plan == NULL ||
         ctx->incoming_plan == NULL || ctx->outgoing_calls == NULL ||
-        ins == NULL || 
+        ins == NULL ||
         needs_gp_store == NULL)
         return false;
     program = ctx->program;
