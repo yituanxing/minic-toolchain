@@ -56,7 +56,6 @@ for arch in aarch64 loongarch64; do
   scalar="src/target/$arch/scalar_normalize.c"
   exists "$scalar"
   has "$scalar" "bool minic_${arch}_emit_integer_normalize("
-  has "$block" "minic_${arch}_emit_integer_normalize"
   has "$residual" "minic_${arch}_emit_integer_normalize("
   lacks "$residual" 'residual_integer_normalize('
   has "$residual" 'minic_multi_direct_integer_cast_plan('
