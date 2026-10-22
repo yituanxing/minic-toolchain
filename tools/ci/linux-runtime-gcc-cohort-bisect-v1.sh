@@ -42,6 +42,21 @@ case "${COHORT_ACTION:-all}" in
   all|compile|verify) ;;
   *) echo "COHORT_ACTION=ERROR unknown_action=${COHORT_ACTION}" >&2; exit 64 ;;
 esac
+# Re-certify current main against the exact historical seven partitions.
+# Cached GNU Kbuild regenerates only timestamp-derived init/version.o and
+# vmlinux.o. Enable the EXISTING narrowly scoped exemptions, never permit
+# unverified MiniC owner substitutions, and never relax a non-seven run.
+if [[ "${GITHUB_REF:-}" == refs/heads/main ]] &&
+   git -C "$repo" log -1 --format=%B "${GITHUB_SHA:-HEAD}" |
+     grep -Fq '[linux-runtime-gcc-sharded]'; then
+  if [[ "${COHORT_ACTION:-all}" == compile ]]; then
+    export COHORT_GNU_PREFLIGHT_ALLOW_SEVEN_SHARD_VOLATILE=1
+    echo "MINIC_CURRENT_MAIN_SEVEN=SHARD_TIMESTAMP_SCOPE_ONLY"
+  elif [[ "${COHORT_ACTION:-all}" == verify ]]; then
+    export COHORT_GNU_PREFLIGHT_ALLOW_SEVEN_RECEIVER_VOLATILE=1
+    echo "MINIC_CURRENT_MAIN_SEVEN=RECEIVER_TIMESTAMP_SCOPE_ONLY"
+  fi
+fi
 expected_cfg=$(sed -n 's/^config_sha256=//p' "$prov/gcc-baseline.txt")
 actual_cfg=$(sha256sum "$out/.config" | cut -d' ' -f1)
 [[ "$expected_cfg" == "$actual_cfg" && -n "$expected_cfg" ]] || {
