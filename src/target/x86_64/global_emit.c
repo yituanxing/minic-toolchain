@@ -163,9 +163,11 @@ bool minic_x86_64_emit_global(FILE *out, const MinicC0Program *program,
                 out, program, target, obj, storage_size,
                 x86_emit_relocation)) return false;
     } else if (minic_type_is_array(obj->type) && obj->relocation_count != 0U) {
+        /* Preserve the existing .2byte/.4byte/.8byte spelling on x86 arrays.
+         * Only RV64 overrides scalar directives on the shared walk. */
         if (!minic_multi_emit_relocatable_scalar_array(
                 out, program, target, obj, storage_size,
-                x86_emit_relocation, x86_emit_typed_bits)) return false;
+                x86_emit_relocation, NULL)) return false;
     } else if (obj->relocation_count != 0U) {
         /* Simple pointer globals: relocatable target address or function. */
         if (obj->initializer_count != 1U || obj->relocation_count != 1U ||
