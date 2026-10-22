@@ -16,11 +16,6 @@ bool minic_riscv64_core_integer_type_is_signed(const MinicCoreFunction *function
                                         MinicType type,
                                         bool *is_signed);
 
-bool minic_riscv64_core_unsigned_integer_width(const MinicC0Program *program,
-                                        const MinicCoreFunction *function,
-                                        MinicCoreValueId value_id,
-                                        unsigned int *width);
-
 bool minic_riscv64_core_field_address_supported(const MinicCoreInstruction *instruction,
                                          size_t *field_offset);
 

@@ -29,30 +29,6 @@ bool minic_riscv64_core_integer_type_is_signed(const MinicCoreFunction *function
     return true;
 }
 
-bool minic_riscv64_core_unsigned_integer_width(const MinicC0Program *program,
-                                        const MinicCoreFunction *function,
-                                        MinicCoreValueId value_id,
-                                        unsigned int *width) {
-    size_t size;
-    size_t alignment;
-    MinicType type;
-
-    if (program == NULL || function == NULL || width == NULL ||
-        value_id >= function->value_count) {
-        return false;
-    }
-    type = function->values[value_id].type;
-    if (!minic_type_is_unsigned_integer(type) ||
-        !minic_data_layout_type(
-            minic_default_data_layout(), program, type, &size, &alignment) ||
-        size == 0U || size > 8U) {
-        return false;
-    }
-    (void)alignment;
-    *width = (unsigned int)(size * 8U);
-    return true;
-}
-
 bool minic_riscv64_core_field_address_supported(const MinicCoreInstruction *instruction,
                                          size_t *field_offset) {
     if (instruction == NULL || instruction->kind != MINIC_CORE_INSTRUCTION_FIELD_ADDRESS) {
