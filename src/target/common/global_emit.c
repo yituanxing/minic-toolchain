@@ -100,71 +100,15 @@ static bool minic_multi_emit_flat_record_array(FILE *out, const MinicC0Program *
             size_t offset, field_bytes, field_align;
             MinicType emitted_type;
             size_t emitted_bytes, emitted_alignment, emitted_offset = 0U;
-            /* BusyBox ifconfig OptArray: two adjacent unsigned bit-fields
-             * (6 + 10 bits) share a 16-bit storage run between a pointer
-             * relocation and a short. Use DataLayout's exact bit offsets,
-             * rather than treating their declared int type as two ints.
-             * Admit only complete, contiguous, byte-aligned <=64-bit runs;
-             * keep uncommon layouts/bit-field relocations fail-closed. */
+            /* The flattened record-array fast path uses the same checked
+             * DataLayout bitfield packer as recursive records and RV64.
+             * This removes its independent <=64-bit/byte-aligned algorithm. */
             if (field != NULL && field->is_bit_field) {
-                size_t begin, first_bit, bit_cursor, next, b;
-                uint64_t packed = 0U;
-                if (record_bytes > SIZE_MAX / 8U ||
-                    !minic_data_layout_record_field_layout(
-                         target->data_layout, program, record, field_index,
-                         &begin, &first_bit) ||
-                    first_bit != 0U || begin < cursor ||
-                    begin > record_bytes) return false;
-                bit_cursor = begin * 8U;
-                for (next = field_index; next < record->field_count; ++next) {
-                    const MinicRecordField *bf =
-                        minic_c0_record_field(record, next);
-                    size_t byte_offset, bit_offset, width, local_bit;
-                    uint64_t mask;
-                    const MinicGlobalRelocation *next_reloc =
-                        relocation_index < object->relocation_count
-                            ? &object->relocations[relocation_index] : NULL;
-                    if (bf == NULL) return false;
-                    if (!bf->is_bit_field) break;
-                    if (!minic_type_is_integer(bf->type) ||
-                        bf->element_count != 1U || bf->bit_width == 0U ||
-                        bf->bit_width > 64U ||
-                        initializer_index >= object->initializer_count ||
-                        !minic_data_layout_record_field_layout(
-                            target->data_layout, program, record, next,
-                            &byte_offset, &bit_offset) ||
-                        byte_offset > record_bytes ||
-                        byte_offset > SIZE_MAX / 8U ||
-                        byte_offset * 8U + bit_offset != bit_cursor)
-                        return false;
-                    local_bit = bit_cursor - begin * 8U;
-                    width = bf->bit_width;
-                    if (local_bit >= 64U || width > 64U - local_bit)
-                        return false;
-                    if (next_reloc != NULL &&
-                        next_reloc->location_index == initializer_index &&
-                        (next_reloc->location_kind ==
-                             MINIC_GLOBAL_RELOCATION_LOCATION_AGGREGATE_SCALAR ||
-                         next_reloc->location_kind ==
-                             MINIC_GLOBAL_RELOCATION_LOCATION_RECORD_FIELD))
-                        return false;
-                    mask = width == 64U ? UINT64_MAX :
-                        (UINT64_C(1) << width) - UINT64_C(1);
-                    packed |= (object->initializer_values[initializer_index] &
-                               mask) << local_bit;
-                    bit_cursor += width;
-                    ++initializer_index;
-                }
-                if ((bit_cursor & 7U) != 0U ||
-                    bit_cursor / 8U > record_bytes ||
-                    fprintf(out, "  .zero %zu\n", begin - cursor) < 0)
+                if (!minic_multi_emit_record_bit_field_run(
+                        out, program, target, object, record, record->field_count,
+                        record_bytes, &field_index, &initializer_index,
+                        &relocation_index, &cursor))
                     return false;
-                for (b = 0U; b < bit_cursor / 8U - begin; ++b)
-                    if (!minic_multi_emit_data_bits(
-                            out, 1U, (packed >> (8U * b)) & UINT64_C(255)))
-                        return false;
-                cursor = bit_cursor / 8U;
-                field_index = next - 1U;
                 continue;
             }
             if (field == NULL || field->is_bit_field || field->is_flexible_array ||
@@ -517,8 +461,28 @@ static bool minic_multi_emit_recursive_global_value(
             minic_c0_program_record(program, type.record_id);
         size_t begin = 0U, end, start_slot = *initializer_index;
         size_t union_span = 0U, cursor = 0U, i;
-        if (record == NULL || !record->is_complete || record->field_count == 0U)
+        size_t record_storage_size = type_size;
+        if (record == NULL || !record->is_complete)
             return false;
+        /* A GNU-initialized trailing flexible array extends the storage
+         * beyond sizeof(struct). The global-object DataLayout, not the
+         * declared record type size, owns the concrete output extent. */
+        if (object->flexible_array_initializer_count != 0U &&
+            minic_type_is_record(object->type) &&
+            object->type.record_id == type.record_id) {
+            size_t object_alignment;
+            if (!minic_data_layout_global_object(
+                    target->data_layout, program, object,
+                    &record_storage_size, &object_alignment))
+                return false;
+            (void)object_alignment;
+        }
+        if (record->field_count == 0U) {
+            if (type_size != 0U)
+                return false;
+            *emitted_size = 0U;
+            return true;
+        }
         end = record->field_count;
         if (record->is_union) {
             size_t selected = 0U;
@@ -536,9 +500,37 @@ static bool minic_multi_emit_recursive_global_value(
         for (i = begin; i < end; ++i) {
             const MinicRecordField *field = minic_c0_record_field(record, i);
             size_t field_offset, element;
-            if (field == NULL || field->is_flexible_array)
+            if (field == NULL)
                 return false;
             if (field->is_zero_length_array) continue;
+            if (field->is_flexible_array) {
+                size_t flexible_count, element;
+                if (record->is_union || i + 1U != end ||
+                    !minic_data_layout_record_field_offset(
+                        target->data_layout, program, record, i, &field_offset) ||
+                    field_offset < cursor ||
+                    field_offset > record_storage_size ||
+                    !minic_multi_emit_zero_bytes(out, field_offset - cursor))
+                    return false;
+                cursor = field_offset;
+                flexible_count = minic_type_is_record(object->type) &&
+                                 object->type.record_id == type.record_id
+                                     ? object->flexible_array_initializer_count
+                                     : 0U;
+                for (element = 0U; element < flexible_count; ++element) {
+                    size_t emitted;
+                    if (!minic_multi_emit_recursive_global_value(
+                            out, program, target, object, field->type,
+                            initializer_index, relocation_index,
+                            matched_union_selections, &emitted, depth + 1U,
+                            emit_relocation, emit_bits) ||
+                        cursor > record_storage_size ||
+                        emitted > record_storage_size - cursor)
+                        return false;
+                    cursor += emitted;
+                }
+                continue;
+            }
             if (field->is_bit_field) {
                 if (!minic_multi_emit_record_bit_field_run(
                         out, program, target, object, record, end, type_size,
@@ -570,8 +562,9 @@ static bool minic_multi_emit_recursive_global_value(
                 cursor += emitted;
             }
         }
-        if (cursor > type_size ||
-            fprintf(out, "  .zero %zu\n", type_size - cursor) < 0)
+        if (cursor > record_storage_size ||
+            !minic_multi_emit_zero_bytes(
+                out, record_storage_size - cursor))
             return false;
         if (record->is_union && union_span != 0U) {
             size_t end_slot, slot;
@@ -590,7 +583,7 @@ static bool minic_multi_emit_recursive_global_value(
             }
             *initializer_index = end_slot;
         }
-        *emitted_size = type_size;
+        *emitted_size = record_storage_size;
         return true;
     }
     return false;
@@ -600,24 +593,16 @@ bool minic_multi_emit_recursive_record_global(
     FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicGlobalObject *object, size_t storage_size,
     MinicMultiRelocEmitter emit_relocation) {
-    size_t initializer_index = 0U, relocation_index = 0U;
-    size_t matched_union_selections = 0U, emitted_size;
-    if (!minic_type_is_record(object->type) ||
-        !minic_multi_emit_recursive_global_value(
-            out, program, target, object, object->type,
-            &initializer_index, &relocation_index, &matched_union_selections,
-            &emitted_size, 0U, emit_relocation, NULL))
-        return false;
-    return emitted_size == storage_size &&
-           initializer_index == object->initializer_count &&
-           relocation_index == object->relocation_count &&
-           matched_union_selections == object->union_selection_count;
+    return object != NULL && minic_type_is_record(object->type) &&
+           minic_multi_emit_recursive_aggregate_global(
+               out, program, target, object, storage_size,
+               emit_relocation, NULL);
 }
 
-
-/* Preflight must be side-effect free: a shape rejected here falls back to
- * RV64's feature-complete bitfield/flexible/zero-sized specializations.
- * No target calls a partial shared writer and then rewinds emitted bytes. */
+/* Recursive aggregate shape inspection must be side-effect free. All four
+ * backends now share this layout walk, including RV64's GNU flexible/empty
+ * record extensions and bitfield byte packing. Unsupported shapes fail
+ * before any assembly is emitted, rather than fabricating a zero payload. */
 static bool minic_multi_recursive_shape_supported_at(
     const MinicC0Program *program, MinicType type, unsigned int depth) {
     if (program == NULL || depth > 32U)
@@ -636,14 +621,23 @@ static bool minic_multi_recursive_shape_supported_at(
     if (minic_type_is_record(type)) {
         const MinicRecord *record = minic_c0_program_record(program, type.record_id);
         size_t index;
-        if (record == NULL || !record->is_complete || record->field_count == 0U)
+        /* Complete empty records have zero bytes/slots; they are valid
+         * GNU aggregate members on RV64 and do not require a private walk. */
+        if (record == NULL || !record->is_complete)
             return false;
         for (index = 0U; index < record->field_count; ++index) {
             const MinicRecordField *field = minic_c0_record_field(record, index);
-            if (field == NULL || field->is_flexible_array)
+            if (field == NULL)
                 return false;
             if (field->is_zero_length_array)
                 continue;
+            if (field->is_flexible_array) {
+                if (record->is_union || index + 1U != record->field_count ||
+                    !minic_multi_recursive_shape_supported_at(
+                        program, field->type, depth + 1U))
+                    return false;
+                continue;
+            }
             if (field->is_bit_field) {
                 if (!minic_type_is_integer(field->type) ||
                     field->bit_width > 64U || field->element_count != 1U)
@@ -700,7 +694,7 @@ bool minic_multi_emit_record_array_global(
     const MinicArrayType *array;
     const MinicRecord *record;
     bool flat;
-    size_t i, init = 0U, reloc = 0U, unions = 0U, emitted;
+    size_t i;
     if (out == NULL || program == NULL || target == NULL || object == NULL ||
         emit_relocation == NULL || !minic_type_is_array(object->type))
         return false;
@@ -725,105 +719,28 @@ bool minic_multi_emit_record_array_global(
     if (flat)
         return minic_multi_emit_flat_record_array(
             out, program, target, object, storage_size, emit_relocation);
-    if (!minic_multi_emit_recursive_global_value(
-            out, program, target, object, object->type,
-            &init, &reloc, &unions, &emitted, 0U, emit_relocation, NULL))
-        return false;
-    return emitted == storage_size &&
-           init == object->initializer_count &&
-           reloc == object->relocation_count &&
-           unions == object->union_selection_count;
+    return minic_multi_emit_recursive_aggregate_global(
+        out, program, target, object, storage_size,
+        emit_relocation, NULL);
 }
 
 
-
-/* GNU permits a static record object to initialize its trailing flexible
- * integer array (BusyBox hdparm's masks_labels_t). Core represents the
- * payload as one flattened slot per scalar; DataLayout alone computes the
- * actual storage extent, offsets and alignment. This helper deliberately
- * admits only flat pointer/integer prefix fields followed by a last,
- * non-bitfield flexible integer member. Never guess bitfield packing or
- * nested-object offsets. ELF relocations remain backend-owned. */
+/* GNU permits a static record object to initialize a trailing flexible
+ * array (BusyBox hdparm's masks_labels_t). The parser owns the flattened
+ * scalar slots, while GlobalObject DataLayout owns concrete storage size.
+ * Flexible record tails are ordinary recursive fields whose concrete
+ * extent comes from the complete GlobalObject DataLayout, not sizeof(record).
+ * Preserve the public entry point for callers; there is no separate payload
+ * traversal/relocation order to maintain. */
 bool minic_multi_emit_flexible_record_global(
     FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicGlobalObject *object, size_t storage_size,
     MinicMultiRelocEmitter emit_relocation) {
-    const MinicRecord *record;
-    const MinicRecordField *tail;
-    size_t i, slot = 0U, cursor = 0U, reloc_index = 0U;
-    size_t tail_offset, tail_width, tail_align;
-    if (out == NULL || program == NULL || target == NULL || object == NULL ||
-        emit_relocation == NULL || !minic_type_is_record(object->type) ||
-        object->flexible_array_initializer_count == 0U ||
-        object->initializer_values == NULL ||
-        object->union_selection_count != 0U)
-        return false;
-    record = minic_c0_program_record(program, object->type.record_id);
-    if (record == NULL || !record->is_complete || record->is_union ||
-        record->field_count < 2U ||
-        record->field_count - 1U > SIZE_MAX - object->flexible_array_initializer_count ||
-        object->initializer_count != record->field_count - 1U +
-                                     object->flexible_array_initializer_count)
-        return false;
-    tail = minic_c0_record_field(record, record->field_count - 1U);
-    if (tail == NULL || !tail->is_flexible_array || tail->is_bit_field ||
-        !minic_type_is_integer(tail->type) ||
-        !minic_data_layout_type(target->data_layout, program, tail->type,
-                                &tail_width, &tail_align) ||
-        minic_multi_data_directive(tail_width) == NULL ||
-        !minic_data_layout_record_field_offset(
-            target->data_layout, program, record, record->field_count - 1U,
-            &tail_offset))
-        return false;
-    (void)tail_align;
-    for (i = 0U; i + 1U < record->field_count; ++i) {
-        const MinicRecordField *field = minic_c0_record_field(record, i);
-        const MinicGlobalRelocation *reloc = reloc_index < object->relocation_count
-            ? &object->relocations[reloc_index] : NULL;
-        size_t offset, width, alignment;
-        if (field == NULL || field->is_bit_field || field->is_flexible_array ||
-            field->is_zero_length_array || field->element_count != 1U ||
-            (!minic_type_is_integer(field->type) &&
-             !minic_type_is_pointer(field->type)) ||
-            !minic_data_layout_type(target->data_layout, program, field->type,
-                                    &width, &alignment) ||
-            minic_multi_data_directive(width) == NULL ||
-            !minic_data_layout_record_field_offset(
-                target->data_layout, program, record, i, &offset) ||
-            offset < cursor || offset > storage_size ||
-            width > storage_size - offset ||
-            fprintf(out, "  .zero %zu\n", offset - cursor) < 0)
-            return false;
-        (void)alignment;
-        if (reloc != NULL &&
-            (reloc->location_kind == MINIC_GLOBAL_RELOCATION_LOCATION_RECORD_FIELD ||
-             reloc->location_kind == MINIC_GLOBAL_RELOCATION_LOCATION_AGGREGATE_SCALAR) &&
-            reloc->location_index == slot) {
-            if (!minic_type_is_pointer(field->type) ||
-                object->initializer_values[slot] != 0U ||
-                !emit_relocation(out, program, target, reloc, width))
-                return false;
-            ++reloc_index;
-        } else if (!minic_multi_emit_data_bits(
-                       out, width, object->initializer_values[slot])) {
-            return false;
-        }
-        ++slot;
-        cursor = offset + width;
-    }
-    if (tail_offset < cursor || tail_offset > storage_size ||
-        tail_width > (storage_size - tail_offset) /
-                         object->flexible_array_initializer_count ||
-        fprintf(out, "  .zero %zu\n", tail_offset - cursor) < 0 ||
-        reloc_index != object->relocation_count)
-        return false;
-    for (i = 0U; i < object->flexible_array_initializer_count; ++i) {
-        if (!minic_multi_emit_data_bits(out, tail_width,
-                                        object->initializer_values[slot++]))
-            return false;
-    }
-    cursor = tail_offset + object->flexible_array_initializer_count * tail_width;
-    return slot == object->initializer_count && cursor == storage_size;
+    return object != NULL && minic_type_is_record(object->type) &&
+           object->flexible_array_initializer_count != 0U &&
+           minic_multi_emit_recursive_aggregate_global(
+               out, program, target, object, storage_size,
+               emit_relocation, NULL);
 }
 
 

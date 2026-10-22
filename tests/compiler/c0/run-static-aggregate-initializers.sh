@@ -190,5 +190,71 @@ if [ -n "${RISCV_CC:-}" ] && [ -n "${QEMU_RISCV64:-}" ]; then
         fi
     done
 fi
+
+# RV64 previously used its own complete recursive serializer for these
+# shapes.  Both GNU and MiniC must agree in real QEMU execution, including
+# relocated pointers after bitfields and a dynamically extended GNU FAM.
+cat > "$build_dir/static_mixed_flexible_shared.c" <<'EOF'
+static long pointed[4] = {3, 5, 7, 11};
+struct Mix {
+    unsigned int a:6;
+    unsigned int b:10;
+    long *address;
+    unsigned long tail[];
+};
+static struct Mix mix = {
+    .a = 17, .b = 301, .address = &pointed[2],
+    .tail = { [0 ... 3] = 11UL }
+};
+int main(void) {
+    return mix.a == 17 && mix.b == 301 &&
+           mix.address == &pointed[2] &&
+           mix.tail[0] == 11 && mix.tail[1] == 11 &&
+           mix.tail[2] == 11 && mix.tail[3] == 11 ? 42 : 1;
+}
+EOF
+"$minic" -S "$build_dir/static_mixed_flexible_shared.c" \
+    -o "$build_dir/static_mixed_flexible_shared.s"
+grep -F '.dword pointed+16' "$build_dir/static_mixed_flexible_shared.s" >/dev/null
+grep -F '.size mix, 48' "$build_dir/static_mixed_flexible_shared.s" >/dev/null
+test "$(grep -c '  .dword 11' "$build_dir/static_mixed_flexible_shared.s")" -ge 4
+
+# Zero-sized GNU fields and nested complete empty records consume no
+# flattened slots, yet must preserve the offsets of later stored members.
+cat > "$build_dir/static_empty_nested_shared.c" <<'EOF'
+struct Empty {};
+struct Mixed {
+    unsigned int prefix;
+    struct Empty none;
+    unsigned char missing[0];
+    unsigned long last;
+};
+static struct Mixed sparse = { .prefix = 7, .last = 41 };
+int main(void) {
+    return sparse.prefix == 7 && sparse.last == 41 ? 42 : 1;
+}
+EOF
+"$minic" -S "$build_dir/static_empty_nested_shared.c" \
+    -o "$build_dir/static_empty_nested_shared.s"
+grep -F '  .dword 41' "$build_dir/static_empty_nested_shared.s" >/dev/null
+
+if [ -n "${RISCV_CC:-}" ] && [ -n "${QEMU_RISCV64:-}" ]; then
+    for case_name in static_mixed_flexible_shared static_empty_nested_shared; do
+        "$RISCV_CC" -static -no-pie \
+            -o "$build_dir/$case_name.minic" "$build_dir/$case_name.s"
+        "$RISCV_CC" -static -no-pie \
+            -o "$build_dir/$case_name.gcc" "$build_dir/$case_name.c"
+        for compiler in minic gcc; do
+            set +e
+            "$QEMU_RISCV64" "$build_dir/$case_name.$compiler"
+            status=$?
+            set -e
+            if [ "$status" -ne 42 ]; then
+                echo "FAIL shared GlobalObject GNU-QEMU case=$case_name compiler=$compiler exit=$status" >&2
+                exit 1
+            fi
+        done
+    done
+fi
 printf '%s\n' \
-    'PASS compiler/c0/static-aggregate-initializers compound-literal=record nested-nonzero=recursive zero-size-local-array=accepted static-fam=gnu-range+extended-storage union-selection=forward+anonymous-struct+backward-reloc designated-inner=shared flat-record=shared-rv64-layout nested=shared-recursive bitfields=shared-packed mismatch=fail-closed'
+    'PASS compiler/c0/static-aggregate-initializers compound-literal=record nested-nonzero=recursive zero-size-local-array=accepted static-fam=gnu-range+extended-storage union-selection=forward+anonymous-struct+backward-reloc designated-inner=shared flat-record=shared-rv64-layout nested=shared-recursive bitfields=shared-packed flex=shared-recursive empty=zero-slot mismatch=fail-closed'

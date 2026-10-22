@@ -1507,3 +1507,50 @@ int main(void) {
 }
 EOF
 check_exit initializer_nested_shared_layout 42
+
+# Confirm the single common bitfield packer works in the flat record-array
+# entry point, which formerly had a second bespoke 64-bit shift algorithm.
+cat > "$tempdir/initializer_flat_bitfield_array.i" <<'EOF'
+static long nums[4] = {3, 5, 7, 11};
+struct BitRecord {
+    long *ref;
+    unsigned int mode:6;
+    unsigned int options:10;
+    unsigned short end;
+};
+static struct BitRecord entries[2] = {
+    {&nums[1], 17, 301, 9},
+    {&nums[3], 11, 203, 13}
+};
+int main(void) {
+    return entries[0].ref == &nums[1] &&
+           entries[0].mode == 17 && entries[0].options == 301 &&
+           entries[0].end == 9 && entries[1].ref == &nums[3] &&
+           entries[1].mode == 11 && entries[1].options == 203 &&
+           entries[1].end == 13 ? 42 : 1;
+}
+EOF
+check_exit initializer_flat_bitfield_array 42
+
+# Ordinary record and its initialized GNU flexible tail must share one
+# storage-extent calculation rather than two serialized byte walks.
+cat > "$tempdir/initializer_mixed_flexible_record.i" <<'EOF'
+static int pointed[3] = {5, 7, 11};
+struct Mix {
+    unsigned int a:6;
+    unsigned int b:10;
+    int *address;
+    unsigned long tail[];
+};
+static struct Mix mix = {
+    .a = 17, .b = 301, .address = &pointed[1],
+    .tail = { [0 ... 2] = 11UL }
+};
+int main(void) {
+    return mix.a == 17 && mix.b == 301 &&
+           mix.address == &pointed[1] &&
+           mix.tail[0] == 11 && mix.tail[1] == 11 &&
+           mix.tail[2] == 11 ? 42 : 1;
+}
+EOF
+check_exit initializer_mixed_flexible_record 42
