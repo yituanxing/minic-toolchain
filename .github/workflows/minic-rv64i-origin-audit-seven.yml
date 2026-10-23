@@ -81,13 +81,82 @@ jobs:
             limit: 352
     steps:
       - uses: actions/checkout@v4
-      - name: Restore exact Linux 6.6.143 preprocessed corpus (fail closed)
+      - name: Restore exact Linux 6.6.143 preprocessed corpus
         id: corpus
         uses: actions/cache/restore@v4
         with:
           path: build/${{ matrix.corpus_dir }}
           key: ${{ matrix.label == 'first500' && format('linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-{0}', hashFiles('tests/external/linux/replay-indices.txt')) || matrix.cache_key }}
-          fail-on-cache-miss: true
+      # Main cannot read caches produced only on now-deleted feature branches.
+      # Reconstruct exact Kbuild .i on miss using the existing seven-shard
+      # materializer; never substitute stale or differently configured inputs.
+      - name: Fetch pinned Linux 6.6.143 source on cache miss
+        if: steps.corpus.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          src="build/rv64i-origin-linux-${{ matrix.label }}"
+          mkdir -p "$src"
+          git -C "$src" init -q
+          git -C "$src" remote add origin https://github.com/gregkh/linux.git
+          git -C "$src" fetch --depth=1 --no-tags origin d1cfde2d5d15be14123bdd1689162bd27f995a90
+          git -C "$src" checkout -q --detach FETCH_HEAD
+          test "$(git -C "$src" rev-parse HEAD)" = d1cfde2d5d15be14123bdd1689162bd27f995a90
+      - name: Install pinned corpus cross-build dependencies on miss
+        if: steps.corpus.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 update
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 install -y --no-install-recommends \
+            gcc-riscv64-linux-gnu libc6-dev-riscv64-cross flex bison bc libelf-dev libssl-dev
+      - name: Regenerate exact original Kbuild TU window on cache miss
+        if: steps.corpus.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          label="${{ matrix.label }}"
+          builder="$GITHUB_WORKSPACE/build/rv64i-origin-$label-materializer"
+          corpus="$GITHUB_WORKSPACE/build/${{ matrix.corpus_dir }}"
+          export LINUX_BATCH_MATERIALIZE_ONLY=1
+          export BUILD_DIR="$builder"
+          export LINUX_SOURCE_TREE="$GITHUB_WORKSPACE/build/rv64i-origin-linux-$label"
+          export CROSS_COMPILE=riscv64-linux-gnu-
+          export LINUX_BATCH_OFFSET=${{ matrix.offset }}
+          export LINUX_BATCH_LIMIT=${{ matrix.limit }}
+          export LINUX_BATCH_JOBS=4
+          if [[ "$label" == next500d || "$label" == final352 ]]; then
+            export LINUX_BATCH_MATERIALIZE_MAKE_JOBS=1
+          fi
+          sh tests/external/linux/batch_probe.sh
+          python3 - "$builder" "$corpus" "${{ matrix.offset }}" "${{ matrix.limit }}" <<'PY'
+          from pathlib import Path
+          import shutil
+          import sys
+          builder, corpus = map(Path, sys.argv[1:3])
+          offset, limit = map(int, sys.argv[3:5])
+          lines = [x for x in (builder / "selected-tus.txt").read_text().splitlines() if x.strip()]
+          assert len(lines) == limit, (len(lines), limit)
+          indices = [int(line.split("\t", 1)[0]) for line in lines]
+          assert indices == list(range(offset, offset + limit)), "wrong frozen TU window"
+          shutil.rmtree(corpus, ignore_errors=True)
+          (corpus / "kbuild").mkdir(parents=True)
+          (corpus / "selected-tus.txt").write_text("\n".join(lines) + "\n")
+          for line in lines:
+              _, _, rel, _ = line.split("\t", 3)
+              source = builder / "kbuild" / rel
+              assert source.is_file() and source.stat().st_size, rel
+              dest = corpus / "kbuild" / rel
+              dest.parent.mkdir(parents=True, exist_ok=True)
+              shutil.copy2(source, dest)
+          print(f"RV64I_ORIGIN_CORPUS=REBUILT exact={limit} range={offset}-{offset+limit-1}")
+          PY
+      - name: Cache rebuilt corpus on main for future seven-way runs
+        if: steps.corpus.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: build/${{ matrix.corpus_dir }}
+          key: ${{ matrix.label == 'first500' && format('linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-{0}', hashFiles('tests/external/linux/replay-indices.txt')) || matrix.cache_key }}
       - name: Validate frozen manifest
         shell: bash
         run: |
