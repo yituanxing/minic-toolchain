@@ -197,6 +197,24 @@ jobs:
       # Certified fixture return_42.c for strict direct/driver parity.
       # Verify the exact certified self-hosted RV64 Stage2 driver hookup on
       # one runner BEFORE burning seven full Linux runners again.
+      # Exact cross-ISA BusyBox closure for RV64. This reuses the already
+      # compiled MiniC and installed RV64 GCC/QEMU in this focused runner;
+      # no fourth CI pipeline or legacy toolchain wrapper is created.
+      # Counts derive from original RV64 Kbuild, never from ARM/Loong.
+      - name: RV64 original BusyBox all Kbuild C owners and 38 QEMU differentials
+        id: rv64_busybox
+        if: steps.owners.outputs.rv64 == 'true' && steps.build.outcome == 'success'
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sh -n tests/external/busybox/check-pinned-1361-source.sh
+          sh -n tests/external/busybox/probe-rv64-all-kbuild.sh
+          sh -n tests/external/busybox/probe-four-backend-all-kbuild.sh
+          python3 -m py_compile tests/external/busybox/mixed_bulk_kbuild.py
+          MINIC_CC="$GITHUB_WORKSPACE/build/toolchain-focused-t1-v2/bin/minic-cc" \
+            sh tests/external/busybox/probe-rv64-all-kbuild.sh
+
       # Temporary actual cJSON 1.7.19 original-source GNU/QEMU survey,
       # run only after proven original AES 2/2 and restore baseline YAML.
       - name: Four backend original AES and cJSON two-target source frontier
@@ -496,23 +514,6 @@ jobs:
             sh tests/driver/run-section-gc-v0.sh
 
           echo "MINIC_RV64_FOCUSED_REGRESSIONS_V1=PASS inline-emission=PASS constant-if=PASS section-gc=PASS"
-
-      # Exact cross-ISA BusyBox closure for RV64. This reuses the already
-      # compiled MiniC and installed RV64 GCC/QEMU in this focused runner;
-      # no fourth CI pipeline or legacy toolchain wrapper is created.
-      # Counts derive from original RV64 Kbuild, never from ARM/Loong.
-      - name: RV64 original BusyBox all Kbuild C owners and 38 QEMU differentials
-        id: rv64_busybox
-        if: steps.owners.outputs.rv64 == 'true' && steps.build.outcome == 'success'
-        continue-on-error: true
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          sh -n tests/external/busybox/probe-rv64-all-kbuild.sh
-          sh -n tests/external/busybox/probe-four-backend-all-kbuild.sh
-          python3 -m py_compile tests/external/busybox/mixed_bulk_kbuild.py
-          MINIC_CC="$GITHUB_WORKSPACE/build/toolchain-focused-t1-v2/bin/minic-cc" \
-            sh tests/external/busybox/probe-rv64-all-kbuild.sh
 
       - name: Profile-only exact earlycon differential against frozen GNU input
         if: github.event_name == 'push' && contains(github.event.head_commit.message, '[earlycon-profile-probe]')
