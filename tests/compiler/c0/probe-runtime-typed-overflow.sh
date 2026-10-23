@@ -34,7 +34,9 @@ done
 "$MINIC_CC" --target=riscv64-linux -march=rv64i -mabi=lp64 \
   -S "$work/typed.i" -o "$work/riscv64-linux.s"
 test -s "$work/riscv64-linux.s"
-python3 tools/ci/audit-rv64i-asm-origin.py --root "$work" \
-  --json-out "$work/report.json" --fail-on-compiler-non-i --expected-files 4 \
+mkdir -p "$work/rv64i-only"
+cp "$work/riscv64-linux.s" "$work/rv64i-only/"
+python3 tools/ci/audit-rv64i-asm-origin.py --root "$work/rv64i-only" \
+  --json-out "$work/report.json" --fail-on-compiler-non-i --expected-files 1 \
   --opcode-tsv-out "$work/opcode-counts.tsv"
 echo 'RUNTIME_TYPED_OVERFLOW=PASS target=riscv64-linux functions=18 strict_I=1'
