@@ -380,6 +380,58 @@ MinicCoreLowerStatus minic_core_lower_try_comparisons(
     MinicCoreValueId *value_id, bool *handled) {
     MinicCoreInstruction instruction;
     *handled = false;
+    /* __builtin_isnan(v) = !(v == v), but the operand is evaluated exactly
+     * once, not twice as it would be if we duplicated the AST. Both float
+     * and double share our already validated Core binary64 equality path.
+     * The float->double conversion preserves NaN classification. */
+    if (expression->kind == MINIC_EXPRESSION_BUILTIN_UNARY &&
+        expression->value.builtin_unary.operator_kind == MINIC_BUILTIN_UNARY_ISNAN) {
+        const MinicExpression *operand = minic_c0_program_expression(
+            context->body->program, expression->value.builtin_unary.operand);
+        MinicCoreValueId source, widened, equal;
+        MinicCoreLowerStatus status;
+        MinicCoreInstruction compare, test;
+        *handled = true;
+        if (operand == NULL ||
+            (!minic_type_is_float(operand->type) &&
+             !minic_type_is_double(operand->type)) ||
+            !minic_type_equal(expression->type, minic_type_int()))
+            return MINIC_CORE_LOWER_ERROR;
+        status = lower_expression(context, expression->value.builtin_unary.operand, &source);
+        if (status != MINIC_CORE_LOWER_OK)
+            return status;
+        widened = source;
+        if (minic_type_is_float(operand->type)) {
+            (void)memset(&compare, 0, sizeof(compare));
+            compare.kind = MINIC_CORE_INSTRUCTION_FLOAT_TO_DOUBLE;
+            compare.span = expression->span;
+            compare.type = minic_type_double();
+            compare.result = MINIC_CORE_VALUE_INVALID;
+            compare.value.operand = source;
+            if (!minic_core_function_append_value_instruction(
+                    context->function, context->block_id, &compare, &widened))
+                return MINIC_CORE_LOWER_ERROR;
+        }
+        (void)memset(&compare, 0, sizeof(compare));
+        compare.kind = MINIC_CORE_INSTRUCTION_DOUBLE_EQUAL;
+        compare.span = expression->span;
+        compare.type = minic_type_int();
+        compare.result = MINIC_CORE_VALUE_INVALID;
+        compare.value.binary.left = widened;
+        compare.value.binary.right = widened;
+        if (!minic_core_function_append_value_instruction(
+                context->function, context->block_id, &compare, &equal))
+            return MINIC_CORE_LOWER_ERROR;
+        (void)memset(&test, 0, sizeof(test));
+        test.kind = MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO;
+        test.span = expression->span;
+        test.type = minic_type_int();
+        test.result = MINIC_CORE_VALUE_INVALID;
+        test.value.operand = equal;
+        return minic_core_function_append_value_instruction(
+                   context->function, context->block_id, &test, value_id)
+                   ? MINIC_CORE_LOWER_OK : MINIC_CORE_LOWER_ERROR;
+    }
     /* RUNTIME_R0_DOUBLE_COMPARE: equality uses the same binary64
        assignment-conversion seam as arithmetic, so mixed integer/double
        operands are normalized before Core comparison. */
