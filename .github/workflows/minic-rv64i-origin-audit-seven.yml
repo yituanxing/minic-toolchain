@@ -10,6 +10,7 @@ on:
       - 'tests/compiler/c0/probe-rv64i-asm-origin.sh'
       - 'tests/compiler/c0/probe-rv64i-int128-libcalls.sh'
       - 'tests/compiler/c0/probe-rv64i-int128-pairs.sh'
+      - 'src/frontend/parser_builtins.c'
       - 'src/target/riscv64/scalar_emit.c'
       - 'src/target/riscv64/runtime_libcall.c'
       - 'src/target/riscv64/isa.c'
@@ -45,6 +46,17 @@ jobs:
           bash tests/compiler/c0/probe-rv64i-asm-origin.sh "$GITHUB_WORKSPACE/build/rv64i-origin-smoke/bin/minic-cc"
           bash tests/compiler/c0/probe-rv64i-int128-libcalls.sh "$GITHUB_WORKSPACE/build/rv64i-origin-smoke/bin/minic-cc"
           bash tests/compiler/c0/probe-rv64i-int128-pairs.sh "$GITHUB_WORKSPACE/build/rv64i-origin-smoke/bin/minic-cc"
+          # Qualify GNU ICE constant-p fallback before the full Linux cohort.
+          work="$(mktemp -d)"
+          trap 'rm -rf "$work"' EXIT
+          cc -E -P -std=gnu11 -x c tests/compiler/c0/gnu_constant_p_ice_regression.c -o "$work/valid.i"
+          build/rv64i-origin-smoke/bin/minic -march=rv64i -mabi=lp64 -S "$work/valid.i" -o "$work/valid.s"
+          cc -E -P -std=gnu11 -x c tests/compiler/c0/gnu_choose_dynamic_condition_reject.c -o "$work/invalid.i"
+          if build/rv64i-origin-smoke/bin/minic -march=rv64i -mabi=lp64 -S "$work/invalid.i" -o "$work/invalid.s" 2>"$work/invalid.err"; then
+            echo "RV64I_ICE_PROBE=FAIL arbitrary_dynamic_choose_allowed=1"
+            exit 1
+          fi
+          echo "RV64I_ICE_PROBE=PASS builtin_constant_p=0 in ICE, direct_dynamic_choose=rejected"
 
   linux-shard:
     # Seven full shards run only by explicit dispatch or tagged push.
@@ -240,6 +252,7 @@ jobs:
           path: |
             build/rv64i-origin-${{ matrix.label }}-replay/batch-results.json
             build/rv64i-origin-${{ matrix.label }}-replay/batch-results.tsv
+            build/rv64i-origin-${{ matrix.label }}-replay/failure-contexts.txt
             build/rv64i-origin-${{ matrix.label }}-replay/rv64i-origin-report.json
             build/rv64i-origin-${{ matrix.label }}-replay/rv64i-opcode-counts.tsv
             build/rv64i-origin-${{ matrix.label }}-replay/minic-stderr/**/*.stderr
