@@ -130,21 +130,10 @@ SRC
 test -s "$tmp/record-fpabi.s"
 
 # A base-I ISA does not imply every GNU C extension is implemented.
-# Explicit ISA profiles must reject as-yet-unqualified i128 constant
-# construction; binary pair operations are now independently validated below.
-for variant in constant; do
-  case "$variant" in
-    constant) body='unsigned __int128 probe(void) { unsigned __int128 a = 33; return a; }' ;;
-  esac
-  printf '%s\n' "$body" >"$tmp/int128-$variant.i"
-  if "$MINIC_CC" --target=riscv64-linux -march=rv64i -mabi=lp64 \
-    -S "$tmp/int128-$variant.i" -o "$tmp/invalid-int128-$variant.s" \
-    >"$tmp/128.out" 2>"$tmp/128.err"; then
-    echo "RV64I_INT128=FAIL accepted unsafe $variant" >&2; exit 1
-  fi
-  test ! -e "$tmp/invalid-int128-$variant.s"
-done
-# Equality and relational TI operations were qualified through upstream
+# Ordinary 64-bit literal widening to __int128 is supported through the
+# already verified two-register integer-conversion path. Pair arithmetic,
+# divrem libcalls and strict ISA machine opcodes are tested independently by
+# probe-rv64i-int128-pairs.sh.
 # __cmpti2/__ucmpti2; only the still-unimplemented TI operators above reject.
 cat >"$tmp/qualified-i128-comparisons.i" <<'SRC'
 typedef unsigned __int128 U128;
