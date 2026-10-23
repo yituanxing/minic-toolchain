@@ -41,7 +41,8 @@ bool minic_riscv64_write_c0_program_with_core_functions(const char *path,
      * directives that a textual opcode audit cannot prove safe. Reject these
      * in the initial strict RV64I profile until an ISA-aware asm contract is
      * qualified. This has no impact on the legacy RV64 emission path. */
-    if (target != NULL && target->riscv_isa.strict_isa) {
+    if (target != NULL && target->riscv_isa.strict_isa &&
+        !minic_riscv64_asm_audit_mode()) {
         if (program->file_asm_count != 0U) {
             minic_riscv64_set_diagnostic(
                 diagnostic, path, "rv64i: file-scope inline assembly is not qualified");
@@ -161,7 +162,11 @@ bool minic_riscv64_write_c0_program_with_core_functions(const char *path,
         success = fprintf(file, ".text\n") >= 0;
         for (file_asm_index = 0U; success && file_asm_index < program->file_asm_count;
              ++file_asm_index) {
-            success = minic_riscv64_emit_file_asm(file, &program->file_asms[file_asm_index]);
+            success = minic_riscv64_asm_audit_marker(file, true) &&
+                      minic_riscv64_emit_file_asm(file, &program->file_asms[file_asm_index]);
+            if (success && minic_riscv64_asm_audit_mode())
+                success = fputc('\n', file) != EOF;
+            if (success) success = minic_riscv64_asm_audit_marker(file, false);
         }
     }
     if (success) {
