@@ -6,6 +6,7 @@ on:
     paths:
       - '.github/workflows/minic-rv64i-origin-audit-seven.yml'
       - 'tools/ci/audit-rv64i-asm-origin.py'
+      - 'tools/ci/summarize-rv64i-seven-v1.py'
       - 'tests/compiler/c0/probe-rv64i-asm-origin.sh'
       - 'tests/compiler/c0/probe-rv64i-int128-libcalls.sh'
       - 'tests/compiler/c0/probe-rv64i-int128-pairs.sh'
@@ -32,7 +33,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Static audit checker validation
         run: |
-          python3 -m py_compile tools/ci/audit-rv64i-asm-origin.py tests/external/linux/corpus_replay.py
+          python3 -m py_compile tools/ci/audit-rv64i-asm-origin.py tools/ci/summarize-rv64i-seven-v1.py tests/external/linux/corpus_replay.py
           bash -n tests/compiler/c0/probe-rv64i-asm-origin.sh
           bash -n tests/compiler/c0/probe-rv64i-int128-libcalls.sh
           bash -n tests/compiler/c0/probe-rv64i-int128-pairs.sh
@@ -262,38 +263,24 @@ jobs:
     needs: [linux-shard]
     runs-on: ubuntu-24.04
     steps:
+      - uses: actions/checkout@v4
       - name: Download all seven evidence artifacts
         uses: actions/download-artifact@v4
         with:
           pattern: rv64i-origin-*
           path: evidence
-      - name: Aggregate without hiding unsupported Linux C units
+      - name: Aggregate exact 3352-index coverage, provenance and ISA counts
         shell: bash
         run: |
           set -Eeuo pipefail
-          python3 - <<'PY'
-          import json
-          from pathlib import Path
-          reports = sorted(Path("evidence").rglob("rv64i-origin-report.json"))
-          print("RV64I_SEVEN_REPORTS=" + str(len(reports)))
-          expected = 7
-          totals = dict(selected=0, compiled=0, compiler_non_i=0,
-                        inline_regions=0, asm_M=0, asm_A=0,
-                        asm_Zicsr=0, asm_Zifencei=0)
-          for path in reports:
-              s = json.loads(path.read_text())["summary"]
-              totals["selected"] += s["selected"] or 0
-              totals["compiled"] += s["compile_pass"] or 0
-              totals["compiler_non_i"] += s["compiler_non_i"]
-              totals["inline_regions"] += s["inline_regions"]
-              for k in ("M", "A", "Zicsr", "Zifencei"):
-                  totals["asm_" + k] += s["inline"].get(k, 0)
-          print("RV64I_SEVEN_SUMMARY " + json.dumps(totals, sort_keys=True))
-          if len(reports) != expected or totals["selected"] != 3352:
-              raise SystemExit("INCOMPLETE: not all 3352 frozen TUs were examined")
-          if totals["compiled"] != totals["selected"]:
-              raise SystemExit("INCOMPLETE: not all TUs produced .s; see per-shard diagnostics")
-          if totals["compiler_non_i"]:
-              raise SystemExit("FAIL: MiniC emitted non-I outside user inline ASM")
-          print("RV64I_SEVEN_COMPLETE=PASS")
-          PY
+          python3 tools/ci/summarize-rv64i-seven-v1.py \
+            --evidence evidence \
+            --json-out rv64i-seven-aggregate.json
+      - name: Retain machine-readable seven-shard aggregate
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rv64i-seven-aggregate-${{ github.sha }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: rv64i-seven-aggregate.json
