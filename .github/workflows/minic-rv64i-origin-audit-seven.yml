@@ -176,11 +176,12 @@ jobs:
           label="${{ matrix.label }}"
           work="$GITHUB_WORKSPACE/build/rv64i-origin-$label-replay"
           compiler="$GITHUB_WORKSPACE/build/rv64i-origin-$label/bin/minic"
+          # Select local 0..N indices; manifest indices already encode global offsets.
           python3 tests/external/linux/corpus_replay.py \
             --minic "$compiler" \
             --corpus "$GITHUB_WORKSPACE/build/${{ matrix.corpus_dir }}" \
             --work "$work" --jobs 4 \
-            --offset ${{ matrix.offset }} --limit ${{ matrix.limit }} \
+            --offset 0 --limit ${{ matrix.limit }} \
             --sample-count 0 --rv64i-origin-audit
           python3 tools/ci/audit-rv64i-asm-origin.py \
             --root "$work/minic-out" \
