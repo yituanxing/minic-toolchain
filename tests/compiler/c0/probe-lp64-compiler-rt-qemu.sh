@@ -39,6 +39,7 @@ union Pair { U value; struct { u64 low,high; } part; };
 union F { float f; unsigned bits; };
 union D { double f; u64 bits; };
 static volatile u64 opaque_zero;
+extern void emit_failure(unsigned case_number, unsigned actual_bits);
 extern U __multi3(U,U),__udivti3(U,U),__umodti3(U,U);
 extern I __divti3(I,I),__modti3(I,I),__ashrti3(I,int);
 extern int __cmpti2(I,I),__ucmpti2(U,U);
@@ -73,7 +74,14 @@ int main(void) {
     if (!equal((U)__ashrti3((I)pair(~(u64)0,0),64),
                ~(u64)0,~(u64)0)) return 10;
     if (fb(__addsf3(f(0x3f800000U),f(0x40000000U)))!=0x40400000U) return 11;
-    if (fb(__subsf3(f(0x40000000U),f(0x3f000000U)))!=0x3fc00000U) return 12;
+    /* Distinguish a negative-operand __addsf3 bug from __subsf3's
+     * sign-flip wrapper; report the actual IEEE payload on failure. */
+    {
+        unsigned got=fb(__addsf3(f(0x40000000U),f(0xbf000000U)));
+        if (got!=0x3fc00000U) { emit_failure(21,got); return 21; }
+        got=fb(__subsf3(f(0x40000000U),f(0x3f000000U)));
+        if (got!=0x3fc00000U) { emit_failure(12,got); return 12; }
+    }
     if (fb(__mulsf3(f(0x40000000U),f(0x3f000000U)))!=0x3f800000U) return 13;
     if (fb(__divsf3(f(0x3f800000U),f(0x40000000U)))!=0x3f000000U) return 14;
     if (db(__adddf3(d(0x3ff0000000000000UL),d(0x4000000000000000UL)))
@@ -97,10 +105,34 @@ _start:
     bl main
     mov x8, #93
     svc #0
+.globl emit_failure
+emit_failure:
+    sub sp, sp, #16
+    str w0, [sp]
+    str w1, [sp, #4]
+    mov x0, #2
+    mov x1, sp
+    mov x2, #8
+    mov x8, #64
+    svc #0
+    add sp, sp, #16
+    ret
 #elif defined(__loongarch64)
     bl main
     li.w $a7, 93
     syscall 0
+.globl emit_failure
+emit_failure:
+    addi.d $sp, $sp, -16
+    st.w $a0, $sp, 0
+    st.w $a1, $sp, 4
+    li.w $a0, 2
+    move $a1, $sp
+    li.w $a2, 8
+    li.w $a7, 64
+    syscall 0
+    addi.d $sp, $sp, 16
+    ret
 #else
 #error unsupported architecture
 #endif
@@ -114,11 +146,15 @@ for mode in reference minic; do
         -fno-pie -no-pie -Wl,-e,_start \
         "$work/start.o" "$work/check.o" "$archive" -o "$work/$mode.elf"
     set +e
-    timeout 45s "$qemu" "$work/$mode.elf"
+    timeout 45s "$qemu" "$work/$mode.elf" >"$work/$mode.out" 2>"$work/$mode.err"
     result=$?
     set -e
     if (( result != 0 )); then
         echo "LP64_RUNTIME_QEMU=FAIL target=$target mode=$mode case=$result" >&2
+        if [[ -s "$work/$mode.err" ]]; then
+            echo "LP64_RUNTIME_DIAGNOSTIC=case_number,actual_IEEE754_bits" >&2
+            od -An -tx4 "$work/$mode.err" >&2
+        fi
         exit 1
     fi
     echo "LP64_RUNTIME_QEMU=PASS target=$target mode=$mode cases=20 type=upstream_runtime"
