@@ -167,3 +167,35 @@ existing BusyBox replay scripts; the six original x86 software projects
 are opt-in since they already passed with unchanged source. Pure x86 ISA
 changes do not trigger seven Linux shards or the two 581-owner new-ISA QEMU
 regressions. Only `main` branch remains.
+
+## 2026-10-23 SysV `va_copy` completion
+
+The previous x86 `va_copy` implementation was intentionally rejected
+because treating its va_list as an ordinary pointer would incorrectly alias
+both cursors. The new Core `MINIC_CORE_INSTRUCTION_VARIADIC_COPY` represents
+an ABI cursor state copy rather than a pointer assignment; the x86 emitter
+allocates one dedicated frame tag per cloned cursor, copies the full 24-byte
+SysV AMD64 state and independently advances both tags. The existing scalar
+cursor assignment on RV64 and other targets is unchanged, and RV64 explicitly
+rejects the newly appended effect opcode. Core verification, value-use
+tracking, IR dump and strict native executable tests cover the new semantics.
+The earlier fail-closed native oracle has been replaced with a GNU-vs-MiniC
+positive runtime test of both independent 17/19 long arguments.
+
+Accepted by original BusyBox 1.36.1 full Kbuild
+[#39878415198](https://github.com/yituanxing/minic-toolchain/actions/runs/39878415198):
+`BUSYBOX_MIXED_BULK=PASS MiniC_owners=591 GCC_fallback=2 original_full_Kbuild=1 eleven_fixture_byte_exact=1`.
+The original complete enabled-option discovery produced
+`attempted_C_TUs=594 mini_objects=592 minic_fail=2`.
+Thus **591 of the 593 eligible Kbuild C owners** now truly build with MiniC,
+with only two original GNU C owners remaining: `libbb/hash_md5_sha.c`'s
+multi-register x86 `cpuid` inline asm and
+`networking/tls_sp_c32.c`'s x86 condition-code and register clobber/operand
+constraints. Do not describe this as full all-MiniC BusyBox acceptance.
+
+The strict native source/runtime test
+[#39878621773](https://github.com/yituanxing/minic-toolchain/actions/runs/39878621773)
+passed at `db51789d772bd5c7255fe76c3e7329917ff6a0f6`.
+The full four-backend focused regression for that source revision was still
+running at the time of this entry; do not claim it passed until complete.
+Only branch `main` exists.
