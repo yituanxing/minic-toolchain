@@ -61,6 +61,106 @@ static bool emit_int128_runtime_call(
         file, frame, instruction->result, "t0");
 }
 
+
+/* RV64 integer-pair Core lowering: shared 128-bit language semantics, with
+ * only base-I add/sub/logic/shift machine instructions. Low word is first
+ * in the frame and in the LP64 ABI. Never truncate an i128 to t0. */
+static bool emit_int128_pair_binary(
+    FILE *file, const MinicRiscv64CoreFrame *frame,
+    const MinicCoreFunction *function, const MinicCoreInstruction *instruction,
+    const char *opcode) {
+    MinicCoreValueId left = instruction->value.binary.left;
+    MinicCoreValueId right = instruction->value.binary.right;
+    if (left >= function->value_count || right >= function->value_count ||
+        !minic_type_is_int128_integer(function->values[left].type) ||
+        !minic_type_is_int128_integer(function->values[right].type) ||
+        !minic_riscv64_frame_load_int128(file, frame, left, "t0", "t1") ||
+        !minic_riscv64_frame_load_int128(file, frame, right, "t2", "t3"))
+        return false;
+    if (instruction->kind == MINIC_CORE_INSTRUCTION_INTEGER_ADD) {
+        if (fprintf(file,
+                    "  add t4, t0, t2\n"
+                    "  sltu t5, t4, t0\n"
+                    "  add t1, t1, t3\n"
+                    "  add t1, t1, t5\n"
+                    "  mv t0, t4\n") < 0)
+            return false;
+    } else if (instruction->kind == MINIC_CORE_INSTRUCTION_INTEGER_SUBTRACT) {
+        if (fprintf(file,
+                    "  sltu t5, t0, t2\n"
+                    "  sub t0, t0, t2\n"
+                    "  sub t1, t1, t3\n"
+                    "  sub t1, t1, t5\n") < 0)
+            return false;
+    } else if (opcode == NULL ||
+               fprintf(file, "  %s t0, t0, t2\n  %s t1, t1, t3\n",
+                       opcode, opcode) < 0)
+        return false;
+    return minic_riscv64_frame_store_int128(
+        file, frame, instruction->result, "t0", "t1");
+}
+
+static bool emit_int128_pair_unary(
+    FILE *file, const MinicRiscv64CoreFrame *frame,
+    const MinicCoreFunction *function, const MinicCoreInstruction *instruction) {
+    const MinicCoreValueId operand = instruction->value.operand;
+    if (operand >= function->value_count ||
+        !minic_type_is_int128_integer(function->values[operand].type) ||
+        !minic_riscv64_frame_load_int128(file, frame, operand, "t0", "t1"))
+        return false;
+    if (instruction->kind == MINIC_CORE_INSTRUCTION_INTEGER_NEGATE) {
+        if (fprintf(file,
+                    "  snez t4, t0\n"
+                    "  neg t0, t0\n"
+                    "  neg t1, t1\n"
+                    "  sub t1, t1, t4\n") < 0)
+            return false;
+    } else if (instruction->kind == MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_NOT) {
+        if (fprintf(file, "  not t0, t0\n  not t1, t1\n") < 0)
+            return false;
+    } else
+        return false;
+    return minic_riscv64_frame_store_int128(
+        file, frame, instruction->result, "t0", "t1");
+}
+
+static bool emit_int128_pair_shift_left(
+    FILE *file, const MinicRiscv64CoreFrame *frame,
+    const MinicCoreFunction *function, const MinicCoreInstruction *instruction,
+    const char *symbol_name) {
+    MinicCoreValueId left = instruction->value.binary.left;
+    MinicCoreValueId right = instruction->value.binary.right;
+    if (left >= function->value_count || right >= function->value_count ||
+        !minic_type_is_int128_integer(function->values[left].type) ||
+        !minic_type_is_integer(function->values[right].type) ||
+        minic_type_is_int128_integer(function->values[right].type) ||
+        !minic_riscv64_frame_load_int128(file, frame, left, "t0", "t1") ||
+        !minic_riscv64_frame_load_value(file, frame, right, "t2") ||
+        fprintf(file,
+                "  beqz t2, .L%s_core_i128_shl_done_%" PRIu32 "\n"
+                "  li t3, 64\n"
+                "  bgeu t2, t3, .L%s_core_i128_shl_ge64_%" PRIu32 "\n"
+                "  neg t3, t2\n"
+                "  srl t4, t0, t3\n"
+                "  sll t1, t1, t2\n"
+                "  or t1, t1, t4\n"
+                "  sll t0, t0, t2\n"
+                "  j .L%s_core_i128_shl_done_%" PRIu32 "\n"
+                ".L%s_core_i128_shl_ge64_%" PRIu32 ":\n"
+                "  addi t2, t2, -64\n"
+                "  sll t1, t0, t2\n"
+                "  li t0, 0\n"
+                ".L%s_core_i128_shl_done_%" PRIu32 ":\n",
+                symbol_name, instruction->result,
+                symbol_name, instruction->result,
+                symbol_name, instruction->result,
+                symbol_name, instruction->result,
+                symbol_name, instruction->result) < 0)
+        return false;
+    return minic_riscv64_frame_store_int128(
+        file, frame, instruction->result, "t0", "t1");
+}
+
 bool minic_riscv64_emit_scalar_instruction(
     FILE *file, const MinicC0Program *program,
     const MinicCoreFunction *function, const MinicRiscv64CoreFrame *frame,
@@ -77,6 +177,43 @@ bool minic_riscv64_emit_scalar_instruction(
     if (instruction->kind == MINIC_CORE_INSTRUCTION_INTEGER_OVERFLOW)
         return minic_riscv64_emit_overflow_instruction(
             file, program, function, frame, instruction, isa);
+    /* The ordinary scalar emitters consume only one XLEN word.
+     * The pair emitter is the unique selection seam for wide I operations. */
+    if (minic_type_is_int128_integer(instruction->type)) {
+        switch (instruction->kind) {
+        case MINIC_CORE_INSTRUCTION_INTEGER_ADD:
+        case MINIC_CORE_INSTRUCTION_INTEGER_SUBTRACT:
+        case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND:
+        case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_XOR:
+        case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_OR:
+            return emit_int128_pair_binary(
+                file, frame, function, instruction,
+                instruction->kind == MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND ? "and" :
+                instruction->kind == MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_XOR ? "xor" :
+                instruction->kind == MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_OR ? "or" : NULL);
+        case MINIC_CORE_INSTRUCTION_INTEGER_NEGATE:
+        case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_NOT:
+            return emit_int128_pair_unary(file, frame, function, instruction);
+        case MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_LEFT:
+            return emit_int128_pair_shift_left(
+                file, frame, function, instruction, symbol_name);
+        case MINIC_CORE_INSTRUCTION_INTEGER_DIVIDE:
+        case MINIC_CORE_INSTRUCTION_INTEGER_REMAINDER:
+            if (isa != NULL && isa->strict_isa) {
+                const bool is_unsigned =
+                    minic_type_is_unsigned_integer(instruction->type);
+                const char *sym =
+                    instruction->kind == MINIC_CORE_INSTRUCTION_INTEGER_DIVIDE
+                        ? (is_unsigned ? "__udivti3" : "__divti3")
+                        : (is_unsigned ? "__umodti3" : "__modti3");
+                return emit_int128_runtime_call(
+                    file, frame, function, instruction, sym, true, false);
+            }
+            return false;
+        default:
+            break;
+        }
+    }
     switch (instruction->kind) {
     case MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT:
         if (fprintf(file, "  li t0, %" PRId64 "\n", instruction->value.integer_value) < 0 ||
