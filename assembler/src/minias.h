@@ -16,7 +16,7 @@ int minias_assemble_file_target_isa(const char *input_path,
                                     const char *output_path,
                                     bool elf32,
                                     uint32_t elf_flags,
-                                    bool strict_rv64i,
+                                    unsigned strict_i_xlen,
                                     FILE *diagnostic);
 int minias_assemble_file_target(const char *input_path,
                                 const char *output_path,

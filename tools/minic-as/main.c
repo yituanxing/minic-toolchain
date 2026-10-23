@@ -125,6 +125,12 @@ int main(int argc, char **argv) {
     /* Only the explicitly qualified rv64i profile opts into an ISA
      * encoding contract. Legacy unqualified assembler acceptance remains
      * untouched for Linux/kernel and other existing toolchain users. */
+    if (march != NULL && strcmp(march, "rv32i") == 0 &&
+        (!elf32 || (mabi != NULL && strcmp(mabi, "ilp32") != 0) ||
+         (elf_flags & 0xFU) != 0U)) {
+        fprintf(stderr, "minic-as: incompatible-riscv-isa-abi:rv32i requires ilp32\n");
+        return 2;
+    }
     if (march != NULL && strcmp(march, "rv64i") == 0 &&
         (elf32 || (mabi != NULL && strcmp(mabi, "lp64") != 0) ||
          (elf_flags & 0xFU) != 0U)) {
@@ -135,6 +141,7 @@ int main(int argc, char **argv) {
                                            output,
                                            elf32,
                                            elf_flags,
-                                           march != NULL && strcmp(march, "rv64i") == 0,
+                                           march != NULL && strcmp(march, "rv32i") == 0 ? 32U :
+                                           march != NULL && strcmp(march, "rv64i") == 0 ? 64U : 0U,
                                            stderr);
 }

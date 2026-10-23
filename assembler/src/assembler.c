@@ -4741,7 +4741,7 @@ bool minias_emit_sections(MiniAs *as) {
  *
  * This intentionally differs from the default legacy MiniAS input mode,
  * which supports RISC-V extension instructions and raw kernel assembly. */
-static bool strict_rv64i_word(uint32_t w) {
+static bool strict_base_i_word(uint32_t w, unsigned xlen) {
     uint32_t op = w & 127U;
     uint32_t f3 = (w >> 12U) & 7U;
     uint32_t f7 = (w >> 25U) & 127U;
@@ -4756,16 +4756,21 @@ static bool strict_rv64i_word(uint32_t w) {
         return f3 == 0U;
     case 0x63U: /* branch */
         return f3 == 0U || f3 == 1U || f3 >= 4U;
-    case 0x03U: /* RV64 integer loads */
-        return f3 != 7U;
-    case 0x23U: /* integer stores */
-        return f3 <= 3U;
-    case 0x13U: /* immediate */
-        if (f3 == 1U) return (w >> 26U) == 0U;
+    case 0x03U: /* RV32 LB/LH/LW/LBU/LHU; RV64 adds LD/LWU */
+        return f3 <= 2U || f3 == 4U || f3 == 5U ||
+               (xlen == 64U && (f3 == 3U || f3 == 6U));
+    case 0x23U: /* RV32 SB/SH/SW; RV64 adds SD */
+        return f3 <= (xlen == 32U ? 2U : 3U);
+    case 0x13U: /* immediate, RV32 has only five shamt bits */
+        if (f3 == 1U)
+            return xlen == 32U ? (w >> 25U) == 0U : (w >> 26U) == 0U;
         if (f3 == 5U)
-            return (w >> 26U) == 0U || (w >> 26U) == 16U;
+            return xlen == 32U ?
+                ((w >> 25U) == 0U || (w >> 25U) == 32U) :
+                ((w >> 26U) == 0U || (w >> 26U) == 16U);
         return f3 != 1U && f3 != 5U;
-    case 0x1bU: /* RV64 word-immediate */
+    case 0x1bU: /* RV64-only word-immediate */
+        if (xlen != 64U) return false;
         if (f3 == 0U) return true;
         if (f3 == 1U) return f7 == 0U;
         if (f3 == 5U) return f7 == 0U || f7 == 32U;
@@ -4773,6 +4778,7 @@ static bool strict_rv64i_word(uint32_t w) {
     case 0x33U: /* register ALU, excluding M */
         return f7 == 0U || (f7 == 32U && (f3 == 0U || f3 == 5U));
     case 0x3bU: /* RV64 word ALU, excluding M */
+        if (xlen != 64U) return false;
         return (f7 == 0U && (f3 == 0U || f3 == 1U || f3 == 5U)) ||
                (f7 == 32U && (f3 == 0U || f3 == 5U));
     case 0x0fU: /* FENCE only, no FENCE.I/Ztso */
@@ -4787,26 +4793,30 @@ static bool strict_rv64i_word(uint32_t w) {
     }
 }
 
-static bool strict_rv64i_check_sections(MiniAs *as) {
+static bool strict_base_i_check_sections(MiniAs *as) {
     size_t i;
-    if (!as->strict_rv64i) return true;
+    if (as->strict_i_xlen == 0U) return true;
+    if (as->strict_i_xlen != 32U && as->strict_i_xlen != 64U) {
+        minias_set_error(as, "unsupported-strict-riscv-xlen");
+        return false;
+    }
     for (i = 0U; i < as->section_count; ++i) {
         const MiniAsSection *section = &as->sections[i];
         size_t offset;
         if ((section->flags & MINIAS_SHF_EXECINSTR) == 0U) continue;
         if (section->size % 4U != 0U) {
-            minias_set_error(as, "rv64i-unaligned-executable-section:%s",
-                             section->name);
+            minias_set_error(as, "rv%ui-unaligned-executable-section:%s",
+                             as->strict_i_xlen, section->name);
             return false;
         }
         for (offset = 0U; offset < section->size; offset += 4U) {
             const unsigned char *p = section->data + offset;
             uint32_t w = (uint32_t)p[0] | ((uint32_t)p[1] << 8U) |
                          ((uint32_t)p[2] << 16U) | ((uint32_t)p[3] << 24U);
-            if (!strict_rv64i_word(w)) {
+            if (!strict_base_i_word(w, as->strict_i_xlen)) {
                 minias_set_error(as,
-                                 "rv64i-unsupported-machine-encoding:%s:offset=%zu:word=%08x",
-                                 section->name, offset, (unsigned)w);
+                                 "rv%ui-unsupported-machine-encoding:%s:offset=%zu:word=%08x",
+                                 as->strict_i_xlen, section->name, offset, (unsigned)w);
                 return false;
             }
         }
@@ -4818,7 +4828,7 @@ int minias_assemble_file_target_isa(const char *input_path,
                                     const char *output_path,
                                     bool elf32,
                                     uint32_t elf_flags,
-                                    bool strict_rv64i,
+                                    unsigned strict_i_xlen,
                                     FILE *diagnostic) {
     size_t *long_branch_lines = NULL;
     size_t long_branch_count = 0U;
@@ -4832,7 +4842,8 @@ int minias_assemble_file_target_isa(const char *input_path,
 
         minias_init(&as);
         as.elf_flags = elf_flags;
-        as.strict_rv64i = strict_rv64i;
+        as.strict_rv64i = strict_i_xlen != 0U;
+        as.strict_i_xlen = strict_i_xlen;
         as.forced_long_branch_lines = long_branch_lines;
         as.forced_long_branch_count = long_branch_count;
         parsed = as.error[0] == '\0' && minias_parse_file(&as, input_path);
@@ -4850,7 +4861,7 @@ int minias_assemble_file_target_isa(const char *input_path,
         }
         if (parsed && as.error[0] == '\0' &&
             minias_emit_sections(&as) &&
-            strict_rv64i_check_sections(&as) &&
+            strict_base_i_check_sections(&as) &&
             (elf32 ? minias_write_elf32(&as, output_path)
                    : minias_write_elf64(&as, output_path))) {
             rc = 0;

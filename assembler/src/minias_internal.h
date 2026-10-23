@@ -177,7 +177,8 @@ typedef struct MiniAs {
     bool cfi_active;
     bool cfi_signal_frame;
     uint32_t elf_flags;
-    bool strict_rv64i;
+    bool strict_rv64i; /* legacy strict directive gating, both XLENs */
+    unsigned strict_i_xlen; /* 0=legacy, 32=RV32I, 64=RV64I */
     const size_t *forced_long_branch_lines;
     size_t forced_long_branch_count;
     int current_section;

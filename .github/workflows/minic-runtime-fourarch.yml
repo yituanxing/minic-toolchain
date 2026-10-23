@@ -43,6 +43,15 @@ on:
       - "tests/compiler/c0/probe-runtime-isnan.sh"
       - "tests/compiler/c0/probe-rv64i-int128-pairs-qemu.sh"
       - "tests/compiler/c0/probe-rv64i-kbuild-abi.sh"
+      - "tests/assembler/probe-rv32i-elf32.sh"
+      - "assembler/src/**"
+      - "tools/minic-as/main.c"
+      - "src/target/data_layout.c"
+      - "src/target/data_layout.h"
+      - "src/target/target_info.c"
+      - "src/target/target_info.h"
+      - "tests/compiler/c0/check-four-target-model-m0.c"
+      - "tests/compiler/c0/run-target-selection-m0.sh"
       - "tests/external/linux/stage2_kbuild_cc.sh"
       - "tests/compiler/c0/probe-rv64i-softfloat-runtime-qemu.sh"
       - "tests/compiler/c0/probe-runtime-typed-overflow.sh"
@@ -89,6 +98,15 @@ jobs:
           python3 -m py_compile tools/runtime/build_runtime.py
           python3 tools/runtime/build_runtime.py --print-sources
           make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/runtime-ci all
+      - name: Prove RV32 ILP32 target model and strict ELF32 assembler
+        if: matrix.target == 'riscv64'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/runtime-ci \
+            check-four-target-model-m0 check-target-selection-m0
+          MINIAS="$GITHUB_WORKSPACE/build/runtime-ci/bin/minic-as" \
+            bash tests/assembler/probe-rv32i-elf32.sh
       - name: Reference compiler compile of identical runtime source set
         id: reference
         shell: bash

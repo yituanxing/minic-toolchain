@@ -52,6 +52,12 @@ static size_t emitted_symbol_count(const MiniAs *as) {
  * + file-length + ULEB(Tag_arch=5) + NUL-terminated ISA string.
  * The profile is exact rv64i2p1, and thus never advertises extensions the
  * strict-I encoder refuses. Emit nothing for the historical default. */
+static const unsigned char rv32i_ilp32_attributes[] = {
+    0x41, 0x19, 0x00, 0x00, 0x00,
+    'r', 'i', 's', 'c', 'v', 0x00,
+    0x01, 0x0f, 0x00, 0x00, 0x00,
+    0x05, 'r', 'v', '3', '2', 'i', '2', 'p', '1', 0x00
+};
 static const unsigned char rv64i_lp64_attributes[] = {
     0x41, 0x19, 0x00, 0x00, 0x00,
     'r', 'i', 's', 'c', 'v', 0x00,
@@ -80,7 +86,8 @@ static bool minias_write_elf(MiniAs *as,
     bool ok = false;
 
     expected_symbol_count = emitted_symbol_count(as);
-    strict_arch_attribute = as->strict_rv64i && elf_class == ELFCLASS64;
+    strict_arch_attribute = (as->strict_i_xlen == 32U && elf_class == ELFCLASS32) ||
+                            (as->strict_i_xlen == 64U && elf_class == ELFCLASS64);
     if (strict_arch_attribute &&
         minias_find_section(as, ".riscv.attributes") >= 0) {
         minias_set_error(as, "rv64i-duplicate-arch-attribute-section");
@@ -128,8 +135,10 @@ static bool minias_write_elf(MiniAs *as,
         attr->flags = 0U;
         attr->alignment = 1U;
         attr->entry_size = 0U;
-        attr->data = rv64i_lp64_attributes;
-        attr->size = sizeof(rv64i_lp64_attributes);
+        attr->data = as->strict_i_xlen == 32U ?
+            rv32i_ilp32_attributes : rv64i_lp64_attributes;
+        attr->size = as->strict_i_xlen == 32U ?
+            sizeof(rv32i_ilp32_attributes) : sizeof(rv64i_lp64_attributes);
     }
 
     for (i = 0U; i < as->symbol_count; ++i) {
