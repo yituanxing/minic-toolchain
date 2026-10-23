@@ -4740,7 +4740,7 @@ bool minias_emit_sections(MiniAs *as) {
  * every 4-byte word must be a real base-I instruction.
  *
  * This intentionally differs from the default legacy MiniAS input mode,
- * which supports RISC-V M/F/D/C/Z*/A instructions and raw kernel assembly. */
+ * which supports RISC-V extension instructions and raw kernel assembly. */
 static bool strict_rv64i_word(uint32_t w) {
     uint32_t op = w & 127U;
     uint32_t f3 = (w >> 12U) & 7U;
