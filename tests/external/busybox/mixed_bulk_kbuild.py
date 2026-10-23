@@ -259,16 +259,16 @@ def main():
                             ("kbuild_stderr", report / "bulk.make.err"),
                             ("linker_redirect", root / "busybox_unstripped.out")):
             if not path.is_file():
-                log("BUSYBOX_MIXED_LINK_DIAGNOSTIC source=%s exists=0" % label)
+                log("BUSYBOX_MIXED_BULK=LINK_DIAGNOSTIC source=%s exists=0" % label)
                 continue
             content = path.read_text(encoding="utf-8", errors="replace")
             lines = content.splitlines()
             errors = [(n, line) for n, line in enumerate(lines, 1)
                       if pattern.search(line)]
-            log("BUSYBOX_MIXED_LINK_DIAGNOSTIC source=%s lines=%d "
+            log("BUSYBOX_MIXED_BULK=LINK_DIAGNOSTIC source=%s lines=%d "
                 "matching_errors=%d first=%r" %
                 (label, len(lines), len(errors), errors[:22]))
-            log("BUSYBOX_MIXED_LINK_CONTEXT source=%s head=%r tail=%r" %
+            log("BUSYBOX_MIXED_BULK=LINK_CONTEXT source=%s head=%r tail=%r" %
                 (label, lines[:16], lines[-22:]))
         return 1
     events = report / "combined-events"
