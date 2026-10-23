@@ -709,6 +709,24 @@ MinicCoreLowerStatus minic_core_lower_internal_lower_scalar_assignment_value(Min
         return lower_integer_assignment_value(context, target_type, expression_id, value_id);
     }
 
+    /* Shared integer-zero -> binary32/64 constant fold: a typed numeric
+     * conversion of C literal zero is exactly +0.0, not an arbitrary
+     * bitcast. Preserve one Core FP constant for all target backends. */
+    if (expression->kind == MINIC_EXPRESSION_INTEGER &&
+        expression->value.integer_value == 0 &&
+        minic_type_is_integer(expression->type) &&
+        (minic_type_is_float(target_type) || minic_type_is_double(target_type))) {
+        (void)memset(&instruction, 0, sizeof(instruction));
+        instruction.kind = MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT;
+        instruction.span = expression->span;
+        instruction.type = target_type;
+        instruction.result = MINIC_CORE_VALUE_INVALID;
+        instruction.value.floating_bits = 0U;
+        return minic_core_function_append_value_instruction(
+                   context->function, context->block_id, &instruction, value_id)
+               ? MINIC_CORE_LOWER_OK : MINIC_CORE_LOWER_ERROR;
+    }
+
     status = lower_expression(context, expression_id, &source_value);
     if (status != MINIC_CORE_LOWER_OK) {
         return status;
