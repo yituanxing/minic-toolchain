@@ -32,7 +32,7 @@ has src/target/common/direct_residual_plan.c \
 has src/target/x86_64/machine_call.c \
   'minic_x86_64_plan_outgoing_arguments('
 has src/target/riscv64/core_codegen.c \
-  'minic_riscv64_core_function_admit('
+  'minic_riscv64_core_function_admit_profile('
 has src/target/riscv64/frame_layout.c \
   'minic_riscv64_object_reuse_plan_build('
 
