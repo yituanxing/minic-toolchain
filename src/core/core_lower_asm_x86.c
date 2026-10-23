@@ -198,7 +198,8 @@ MinicCoreLowerStatus core_asm_try_x86_register_contract(
     /* The observable output makes even a GNU nonvolatile CPUID semantically
      * effectful. Conservatively do not optimize or discard it. */
     if (!minic_core_function_add_opaque_inline_asm(
-            ctx->function, normalized, length, true, false, &id)) {
+            ctx->function, normalized, length, true,
+            source->has_memory_clobber, &id)) {
         free(normalized);
         return MINIC_CORE_LOWER_ERROR;
     }
