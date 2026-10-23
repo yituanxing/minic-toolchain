@@ -450,7 +450,8 @@ $(RV64I_RUNTIME_DIR)/%.o: $(RV64I_RUNTIME_SRC)/%.S $(RV64I_RUNTIME_SRC)/riscv-as
 $(RV64I_RUNTIME_DIR)/softfp/%.o: $(RV64I_SOFTFP_SRC)/%.c $(wildcard $(RV64I_SOFTFP_SRC)/*.h $(RV64I_SOFTFP_SRC)/*.inc)
 	@mkdir -p "$(dir $@)"
 	$(RISCV_RUNTIME_CC) -std=gnu11 -O2 -ffreestanding -fno-builtin \
-	  -fno-stack-protector -fno-lto -fno-pic \
+	  -fno-stack-protector -fno-lto -fno-pic -nostdinc \
+	  -isystem "$($(RISCV_RUNTIME_CC) -print-file-name=include)" \
 	  -march=rv64i -mabi=lp64 -I"$(RV64I_SOFTFP_SRC)" -c "$<" -o "$@"
 
 $(RV64I_RUNTIME_ARCHIVE): $(RV64I_RUNTIME_OBJECTS)
