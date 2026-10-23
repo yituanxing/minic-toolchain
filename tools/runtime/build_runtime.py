@@ -74,6 +74,11 @@ def source_compile(args: argparse.Namespace, manifest: dict, target: str,
     cpp_cmd = [args.clang, *target_flags(config), "-E", "-P", "-std=gnu11",
                "-U__SIZEOF_FLOAT128__", "-U__FLOAT128__",
                "-D__STDC_VERSION__=199409L",
+               # The pinned GCC stdint-gcc.h expects the GCC internal
+               # constant macros that Clang's freestanding predefines omit.
+               # They must be accurate for our four LP64 targets.
+               "-D__UINT32_C(x)=x##U", "-D__INT32_C(x)=x",
+               "-D__UINT64_C(x)=x##UL", "-D__INT64_C(x)=x##L",
                "-ffreestanding", "-fno-builtin", "-nostdinc", *includes,
                str(source), "-o", str(pp_file)]
     result = dict(source=name, stage="preprocess", success=False, object=str(obj_file))
