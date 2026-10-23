@@ -1121,7 +1121,11 @@ int main(void) { return verify_copy(7, 17L, 19L) ? 42 : 13; }
 EOF
 check_exit varargs_copy 42
 "$HOST_CC" -x c -std=gnu11 "$tempdir/varargs_copy.i" -o "$tempdir/gcc-varargs-copy"
+set +e
 "$tempdir/gcc-varargs-copy"
+gcc_copy_status=$?
+set -e
+test "$gcc_copy_status" -eq 42
 echo "PASS: SysV x86 va_copy snapshots independent 24-byte ABI cursor"
 
 
