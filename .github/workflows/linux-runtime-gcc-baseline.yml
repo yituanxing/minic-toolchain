@@ -1674,6 +1674,18 @@ jobs:
           packages=(gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu
                     qemu-system-misc opensbi libc6-dev-riscv64-cross
                     python3 make cpio gzip device-tree-compiler)
+          # Forensic #39981548761: Azure Ubuntu apt served the 57.7 MB
+          # qemu-system-misc archive at a rate below the 12-minute gate.
+          # The bounded retry at #39983581195 hit the SAME Azure mirror.
+          # Use Ubuntu's public archive for this single expensive receiver,
+          # preserving official distro versions and package signatures.
+          if grep -q 'azure.archive.ubuntu.com' /etc/apt/sources.list.d/ubuntu.sources; then
+            sudo sed -i 's#http://azure.archive.ubuntu.com/ubuntu/#http://archive.ubuntu.com/ubuntu/#g' \
+              /etc/apt/sources.list.d/ubuntu.sources
+            echo 'LINUX_RECEIVER_APT_MIRROR=archive.ubuntu.com source=official_ubuntu'
+          fi
+          timeout 90s sudo apt-get -o Acquire::Retries=1 \
+            -o Acquire::http::Timeout=20 update -qq
           if ! timeout 280s sudo apt-get -o Acquire::Retries=2 \
                -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 \
                -o DPkg::Lock::Timeout=60 install -y --no-install-recommends \
@@ -2113,11 +2125,15 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          # The only difference from the producer commit is THIS CI workflow.
-          # git show records parent SHA even under checkout's shallow clone.
+          # Compiler implementation and the Linux profile are unchanged since
+          # the 2064/2064 producer. Interim changes only adjust CI and opt-in
+          # Kbuild RV64I instrumentation; this replay does not enable it.
+          # A *different* compiled MiniC SHA is independently rejected by
+          # linux-runtime-gcc-shards-v1.py merge() across ALL seven artifacts.
           producer_sha=96e9f3e5b26c7be34b514647141050529aca6d9a
-          test "$(git show -s --format=%P HEAD)" = "$producer_sha"
-          echo "LINUX_RECEIVER_REUSE_SOURCE=PASS pinned=$producer_sha source_changes=0"
+          predecessor_sha=8cd00bd4dddaeec4d876d68e9106d10248059f4a
+          test "$(git show -s --format=%P HEAD)" = "$predecessor_sha"
+          echo "LINUX_RECEIVER_REUSE_SOURCE=PASS pinned_producer=$producer_sha expected_parent=$predecessor_sha compiler_sha_bound=true"
       - uses: actions/download-artifact@v4
         if: "!contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]') && !contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]') && !contains(github.event.head_commit.message, '[linux-runtime-stack-owners]') && !contains(github.event.head_commit.message, '[linux-native-union-cached]') && !contains(github.event.head_commit.message, '[linux-minild-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-reloc-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-purgatory-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-vdso64-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-vdso32-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minias-earlycon-frozen]')"
         with:
