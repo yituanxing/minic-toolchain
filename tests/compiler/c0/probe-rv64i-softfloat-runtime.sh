@@ -146,9 +146,19 @@ _start:
   li a1, 0x4002000000000000
   call __adddf3
   li t0, 0x400e000000000000
-  xor a0, a0, t0
-  snez a0, a0
-  li a7, 93
+  beq a0, t0, 1f
+  addi sp, sp, -16
+  sd a0, 0(sp)
+  li a0, 2
+  mv a1, sp
+  li a2, 8
+  li a7, 64
+  ecall
+  addi sp, sp, 16
+  li a0, 1
+  j 2f
+1: li a0, 0
+2: li a7, 93
   ecall
 SRC
 riscv64-linux-gnu-gcc -march=rv64i -mabi=lp64 -nostdlib \
@@ -162,6 +172,10 @@ set -e
 if (( direct_rc != 0 )); then
   echo "RV64_SOFTFP_RUNTIME_DIRECT=FAIL __adddf3 rc=$direct_rc" >&2
   cat "$work/runtime-direct.err" >&2
+  if [[ -s "$work/runtime-direct.err" ]]; then
+    echo "RV64_SOFTFP_RUNTIME_DIRECT=actual_bits:" >&2
+    od -An -tx8 "$work/runtime-direct.err" >&2
+  fi
   exit 1
 fi
 echo 'RV64_SOFTFP_RUNTIME_DIRECT=PASS __adddf3 pure_integer_ABI=1'
