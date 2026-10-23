@@ -6,7 +6,7 @@
 #include <string.h>
 
 static void minic_print_usage(FILE *stream, const char *program) {
-    (void)fprintf(stream, "usage: %s -S <preprocessed-input.i> [--target=riscv64-linux|x86_64-linux|aarch64-linux|loongarch64-linux] [-ffunction-sections|-fno-function-sections] [-fPIE|-fPIC|-fno-pie] -o <output.s>\n", program);
+    (void)fprintf(stream, "usage: %s -S <preprocessed-input.i> [--target=riscv64-linux|x86_64-linux|aarch64-linux|loongarch64-linux] [-march=rv64i -mabi=lp64] [-ffunction-sections|-fno-function-sections] [-fPIE|-fPIC|-fno-pie] -o <output.s>\n", program);
 }
 
 int main(int argc, char **argv) {
@@ -21,6 +21,8 @@ int main(int argc, char **argv) {
     const char *target_name = "riscv64-linux";
     const MinicTargetInfo *target_info;
     bool target_given = false;
+    const char *march = NULL;
+    const char *mabi = NULL;
 
     input_path = NULL;
     output_path = NULL;
@@ -52,6 +54,18 @@ int main(int argc, char **argv) {
             }
             target_name = argv[index] + 9U;
             target_given = true;
+        } else if (strncmp(argv[index], "-march=", 7U) == 0) {
+            if (march != NULL) { (void)fprintf(stderr, "%s: duplicate -march\n", argv[0]); return 2; }
+            march = argv[index] + 7U;
+        } else if (strcmp(argv[index], "-march") == 0) {
+            if (march != NULL || index + 1 >= argc) return 2;
+            march = argv[++index];
+        } else if (strncmp(argv[index], "-mabi=", 6U) == 0) {
+            if (mabi != NULL) { (void)fprintf(stderr, "%s: duplicate -mabi\n", argv[0]); return 2; }
+            mabi = argv[index] + 6U;
+        } else if (strcmp(argv[index], "-mabi") == 0) {
+            if (mabi != NULL || index + 1 >= argc) return 2;
+            mabi = argv[++index];
         } else if (strcmp(argv[index], "-ffunction-sections") == 0) {
             function_sections = true;
         } else if (strcmp(argv[index], "-fno-function-sections") == 0) {
@@ -94,6 +108,18 @@ int main(int argc, char **argv) {
      * is invocation-scoped and does not affect parsed language semantics. */
     selected_target = *target_info;
     selected_target.position_independent = position_independent;
+    if (march != NULL || mabi != NULL) {
+        char reason[240];
+        if (selected_target.architecture != MINIC_TARGET_ARCH_RISCV64) {
+            (void)fprintf(stderr, "%s: -march/-mabi currently require RISC-V\n", argv[0]);
+            return 2;
+        }
+        if (!minic_riscv_isa_resolve(march, mabi, &selected_target.riscv_isa,
+                                     reason, sizeof(reason))) {
+            (void)fprintf(stderr, "%s: invalid RISC-V configuration: %s\n", argv[0], reason);
+            return 2;
+        }
+    }
     result = minic_compile_preprocessed_file_for_target(
         input_path, output_path, &selected_target, function_sections, &diagnostic);
     if (result != 0) {

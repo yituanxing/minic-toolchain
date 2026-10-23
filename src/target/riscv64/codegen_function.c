@@ -6,6 +6,7 @@
 #include "target/riscv64/core_codegen.h"
 #include "target/riscv64/function_symbol.h"
 #include "target/data_layout.h"
+#include "target/riscv64/isa.h"
 
 #include <errno.h>
 #include <inttypes.h>
@@ -18,7 +19,7 @@ bool minic_riscv64_write_c0_program_with_core_functions(const char *path,
                                                         const MinicCoreFunction *core_functions,
                                                         size_t core_function_count,
                                                         bool function_sections,
-                                                        bool position_independent,
+                                                        const MinicTargetInfo *target,
                                                         MinicDiagnostic *diagnostic) {
     FILE *file;
     size_t global_index;
@@ -34,6 +35,36 @@ bool minic_riscv64_write_c0_program_with_core_functions(const char *path,
         minic_riscv64_set_diagnostic(
             diagnostic, path, "Core function map does not match program functions");
         return false;
+    }
+
+    /* Arbitrary GNU inline/file asm may encode instructions via raw data
+     * directives that a textual opcode audit cannot prove safe. Reject these
+     * in the initial strict RV64I profile until an ISA-aware asm contract is
+     * qualified. This has no impact on the legacy RV64 emission path. */
+    if (target != NULL && target->riscv_isa.strict_base_i) {
+        if (program->file_asm_count != 0U) {
+            minic_riscv64_set_diagnostic(
+                diagnostic, path, "rv64i: file-scope inline assembly is not qualified");
+            return false;
+        }
+        for (function_index = 0U; function_index < core_function_count; ++function_index) {
+            const MinicCoreFunction *f = &core_functions[function_index];
+            size_t i;
+            for (i = 0U; i < f->instruction_count; ++i) {
+                switch (f->instructions[i].kind) {
+                case MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM:
+                case MINIC_CORE_INSTRUCTION_REGISTER_OUTPUT_INLINE_ASM:
+                case MINIC_CORE_INSTRUCTION_REGISTER_OUTPUT_INPUT_INLINE_ASM:
+                case MINIC_CORE_INSTRUCTION_MEMORY_READWRITE_SCALAR_INPUT_INLINE_ASM:
+                case MINIC_CORE_INSTRUCTION_SCALAR_INPUT_INLINE_ASM:
+                case MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM:
+                    minic_riscv64_set_diagnostic(
+                        diagnostic, path, "rv64i: inline assembly is not yet ISA-qualified");
+                    return false;
+                default: break;
+                }
+            }
+        }
     }
 
     file = fopen(path, "wb");
@@ -198,7 +229,7 @@ bool minic_riscv64_write_c0_program_with_core_functions(const char *path,
             symbol.function_sections = function_sections;
             success = success && minic_riscv64_emit_core_function_for_program_with_symbol(
                           file, program, core_function, &symbol,
-                          position_independent);
+                          target != NULL && target->position_independent);
             /* GNU constructor is a real ELF init action on RV64 as well:
              * retain its address as an init_array relocation, never discard. */
             if (success && function->is_constructor) {
@@ -241,6 +272,16 @@ bool minic_riscv64_write_c0_program_with_core_functions(const char *path,
     if (fclose(file) != 0 && success) {
         minic_riscv64_set_diagnostic(diagnostic, path, "cannot close RISC-V assembly output");
         success = false;
+    }
+    /* Strict RV64I audits ACTUAL machine output from every emission family.
+     * Legacy RV64 Linux/selfhost output has zero additional work. */
+    if (success && target != NULL && target->riscv_isa.strict_base_i) {
+        char isa_error[240];
+        if (!minic_riscv64_check_base_i_assembly(path, isa_error, sizeof(isa_error))) {
+            minic_riscv64_set_diagnostic(diagnostic, path, isa_error);
+            (void)remove(path);
+            return false;
+        }
     }
     return success;
 }

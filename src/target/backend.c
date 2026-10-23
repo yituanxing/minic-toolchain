@@ -26,7 +26,7 @@ static bool emit_riscv64(const char *output_path, const MinicC0Program *program,
                         MinicDiagnostic *diagnostic) {
     return minic_riscv64_write_c0_program_with_core_functions(
         output_path, program, functions, function_count,
-        function_sections, target != NULL && target->position_independent,
+        function_sections, target,
         diagnostic);
 }
 

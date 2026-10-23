@@ -4,6 +4,7 @@
 #include "core/core_ir.h"
 #include "frontend/ast.h"
 #include "minic/compiler.h"
+#include "target/target_info.h"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -13,7 +14,7 @@ bool minic_riscv64_write_c0_program_with_core_functions(const char *path,
                                                         const MinicCoreFunction *core_functions,
                                                         size_t core_function_count,
                                                         bool function_sections,
-                                                        bool position_independent,
+                                                        const MinicTargetInfo *target,
                                                         MinicDiagnostic *diagnostic);
 
 #endif

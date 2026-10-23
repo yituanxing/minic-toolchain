@@ -2,6 +2,7 @@
 #define MINIC_TARGET_TARGET_INFO_H
 
 #include "target/data_layout.h"
+#include "target/riscv64/isa.h"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -61,6 +62,8 @@ typedef struct MinicTargetInfo {
      * The canonical target descriptors default to static PC-relative.
      * A CLI invocation copies the descriptor before setting this bit. */
     bool position_independent;
+    /* RISC-V-specific, per-invocation subtarget. Legacy default preserved. */
+    MinicRiscvIsa riscv_isa;
 } MinicTargetInfo;
 
 extern const char *const minic_riscv64_argument_registers[8];

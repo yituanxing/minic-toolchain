@@ -15,6 +15,7 @@ on:
       - 'tests/compiler/c0/run-x86_64-native-m1.sh'
       - 'tests/compiler/c0/probe-rv64-extended-float-native.sh'
       - 'tests/compiler/c0/probe-rv64-pic-glibc-got.sh'
+      - 'tests/compiler/c0/probe-rv64i-strict-isa.sh'
   workflow_dispatch:
 
 concurrency:
@@ -56,6 +57,13 @@ jobs:
           MINIC_CC="$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc" \
             MINIC_PIC_ASM_ONLY=1 sh tests/compiler/c0/probe-rv64-pic-glibc-got.sh
 
+      - name: RV64I strict ISA and ABI positive/negative tests
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          bash -n tests/compiler/c0/probe-rv64i-strict-isa.sh
+          MINIC_CC="$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc" \
+            bash tests/compiler/c0/probe-rv64i-strict-isa.sh
       - name: Native x86-64 ABI and runtime smoke
         shell: bash
         run: |
