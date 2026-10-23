@@ -83,7 +83,20 @@ jobs:
       - name: Install target-independent LLVM compiler and tools
         run: |
           set -Eeuo pipefail
-          sudo apt-get -o Acquire::Retries=3 update
+          # Runner apt uses mirror+file:/etc/apt/apt-mirrors.txt; the Azure
+          # mirror has repeatedly stalled 45-minute cross-target builds.
+          # Our accepted Linux receiver used the signed official Ubuntu
+          # archive and fetched QEMU in seconds. Reuse the same repair here.
+          for sources in /etc/apt/apt-mirrors.txt \
+                         /etc/apt/sources.list.d/ubuntu.sources; do
+            if [[ -f "$sources" ]] &&
+               grep -q 'azure.archive.ubuntu.com' "$sources"; then
+              sudo sed -i 's#azure.archive.ubuntu.com#archive.ubuntu.com#g' "$sources"
+              echo "FOURARCH_APT_SOURCE=OFFICIAL_UBUNTU file=$sources"
+            fi
+          done
+          sudo apt-get -o Acquire::Retries=3 \
+               -o Acquire::http::Timeout=30 update
           sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
             clang llvm
           if [[ "${{ matrix.target }}" == riscv64 ]]; then
