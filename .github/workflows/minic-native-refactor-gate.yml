@@ -11,6 +11,8 @@ on:
       - 'Makefile'
       - '.github/workflows/minic-native-refactor-gate.yml'
       - 'tests/compiler/c0/check-minic-target-boundaries.sh'
+      # Changes to the native ABI/oracle must execute the native gate too.
+      - 'tests/compiler/c0/run-x86_64-native-m1.sh'
   workflow_dispatch:
 
 concurrency:
