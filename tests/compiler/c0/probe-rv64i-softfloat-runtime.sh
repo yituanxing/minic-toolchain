@@ -34,7 +34,7 @@ for sym in __addsf3 __subsf3 __mulsf3 __divsf3 \
     exit 1
   }
 done
-if grep -Eq '^[[:space:]]*(fadd|fsub|fmul|fdiv|fmv|fcvt|fld|fsd)\\.' \
+if grep -Eq '^[[:space:]]*(fadd|fsub|fmul|fdiv|fmv|fcvt|fld|fsd)\.' \
     "$work/minic-fp.s"; then
   echo 'RV64_SOFTFP=FAIL MiniC emitted hardware FP instructions' >&2
   exit 1
@@ -45,6 +45,13 @@ fi
 cat >"$work/gnu-oracle.c" <<'SRC'
 typedef union { float value; unsigned bits; } F;
 typedef union { double value; unsigned long bits; } D;
+static void show_failed_double(unsigned long bits) {
+  register unsigned long a0 asm("a0") = 2UL;
+  register unsigned long a1 asm("a1") = (unsigned long)&bits;
+  register unsigned long a2 asm("a2") = 8UL;
+  register unsigned long a7 asm("a7") = 64UL;
+  asm volatile("ecall" : "+r"(a0) : "r"(a1), "r"(a2), "r"(a7) : "memory");
+}
 extern float sf_add(float, float), sf_sub(float, float);
 extern float sf_mul(float, float), sf_div(float, float);
 extern double df_add(double, double), df_sub(double, double);
@@ -67,7 +74,10 @@ int evaluate(void) {
   f.value = sf_div(f9.value, f4.value);
   if (f.bits != 0x40100000U) return 4; // 9 / 4 = 2.25
   d.value = df_add(da.value, db.value);
-  if (d.bits != 0x400e000000000000UL) return 5;
+  if (d.bits != 0x400e000000000000UL) {
+    show_failed_double(d.bits);
+    return 5;
+  }
   d.value = df_sub(da.value, db.value);
   if (d.bits != 0xbfe8000000000000UL) return 6;
   d.value = df_mul(da.value, d2.value);
@@ -126,6 +136,35 @@ SRC
 riscv64-linux-gnu-gcc -march=rv64i -mabi=lp64 -O0 -ffreestanding \
   -fno-builtin -fno-stack-protector -fno-pic -fno-pie \
   -c "$work/gnu-oracle.c" -o "$work/gnu-oracle.o"
+# Isolate the runtime independently of MiniC ABI lowering. This
+# directly passes IEEE-754 double payloads as a0/a1 and checks the raw a0.
+cat >"$work/runtime-direct.s" <<'SRC'
+.section .text
+.globl _start
+_start:
+  li a0, 0x3ff8000000000000
+  li a1, 0x4002000000000000
+  call __adddf3
+  li t0, 0x400e000000000000
+  xor a0, a0, t0
+  snez a0, a0
+  li a7, 93
+  ecall
+SRC
+riscv64-linux-gnu-gcc -march=rv64i -mabi=lp64 -nostdlib \
+  -static -no-pie -Wl,-e,_start "$work/runtime-direct.s" "$runtime" \
+  -o "$work/runtime-direct.elf"
+set +e
+qemu-riscv64 "$work/runtime-direct.elf" >"$work/runtime-direct.out" \
+  2>"$work/runtime-direct.err"
+direct_rc=$?
+set -e
+if (( direct_rc != 0 )); then
+  echo "RV64_SOFTFP_RUNTIME_DIRECT=FAIL __adddf3 rc=$direct_rc" >&2
+  cat "$work/runtime-direct.err" >&2
+  exit 1
+fi
+echo 'RV64_SOFTFP_RUNTIME_DIRECT=PASS __adddf3 pure_integer_ABI=1'
 riscv64-linux-gnu-gcc -march=rv64i -mabi=lp64 \
   -c "$work/minic-fp.s" -o "$work/minic-fp-gnu-as.o"
 python3 "$machine_audit" "$work/gnu-oracle.o" "$work/minic-fp-gnu-as.o"
@@ -154,6 +193,10 @@ set -e
 if (( rc != 0 )); then
   echo "RV64_SOFTFP_QEMU=FAIL source=GNU-AS case=$rc" >&2
   cat "$work/softfp-gnu-as.err" >&2
+  if [[ -s "$work/softfp-gnu-as.err" ]]; then
+    echo 'RV64_SOFTFP_QEMU=actual_64bit_hex:' >&2
+    od -An -tx8 "$work/softfp-gnu-as.err" >&2
+  fi
   exit 1
 fi
 python3 "$machine_audit" "$work/softfp-gnu-as.elf"
