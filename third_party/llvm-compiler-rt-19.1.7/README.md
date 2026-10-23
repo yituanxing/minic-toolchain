@@ -1,8 +1,13 @@
 # Pinned LLVM compiler-rt software-floating runtime for RV64I/LP64
 
 Upstream source: https://github.com/llvm/llvm-project/tree/llvmorg-19.1.7/compiler-rt/lib/builtins
-Tag: `llvmorg-19.1.7`; every C/.h/.inc file in this directory is copied
-**unmodified** from that upstream tag. The `LICENSE.TXT` is copied from
+Tag: `llvmorg-19.1.7`; the runtime C/.h/.inc sources in this directory are copied
+**unmodified** from that upstream tag. Four standard freestanding headers
+in `freestanding-clang/` are independently copied **unmodified** from
+`clang/lib/Headers/{float,limits,stdbool,stdint}.h` at the same LLVM tag.
+They avoid depending on cross-glibc LP64 multilib headers (Debian's default
+cross sysroot may have LP64D-only `gnu/stubs`). They are compilation
+headers, not private floating arithmetic implementations. The `LICENSE.TXT` is copied from
 `compiler-rt/LICENSE.TXT`: Apache-2.0 with LLVM exceptions.
 
 This is third-party compiler runtime code, not MiniC's own IEEE-754
