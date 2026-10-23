@@ -87,21 +87,21 @@ bool minic_riscv_isa_admit_core_instruction(
      * compiler extension such as __int128, but it must not miscompile one. */
     switch (instruction->kind) {
     case MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT:
+    case MINIC_CORE_INSTRUCTION_INTEGER_CLZ:
+    case MINIC_CORE_INSTRUCTION_INTEGER_CTZ:
+        if (minic_type_is_int128_integer(instruction->type))
+            return reject(reason, capacity,
+                          "__int128 operation has no qualified two-limb lowering");
+        break;
     case MINIC_CORE_INSTRUCTION_INTEGER_ADD:
     case MINIC_CORE_INSTRUCTION_INTEGER_SUBTRACT:
-    case MINIC_CORE_INSTRUCTION_INTEGER_DIVIDE:
-    case MINIC_CORE_INSTRUCTION_INTEGER_REMAINDER:
     case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND:
     case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_XOR:
     case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_OR:
     case MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_LEFT:
     case MINIC_CORE_INSTRUCTION_INTEGER_NEGATE:
     case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_NOT:
-    case MINIC_CORE_INSTRUCTION_INTEGER_CLZ:
-    case MINIC_CORE_INSTRUCTION_INTEGER_CTZ:
-        if (minic_type_is_int128_integer(instruction->type))
-            return reject(reason, capacity,
-                          "__int128 operation has no qualified two-limb lowering");
+        /* These all have two-limb RV64I implementations in scalar_emit.c. */
         break;
     case MINIC_CORE_INSTRUCTION_INTEGER_LESS:
     case MINIC_CORE_INSTRUCTION_SCALAR_EQUAL:
@@ -135,7 +135,7 @@ bool minic_riscv_isa_admit_core_instruction(
         break;
     case MINIC_CORE_INSTRUCTION_INTEGER_DIVIDE:
     case MINIC_CORE_INSTRUCTION_INTEGER_REMAINDER:
-        /* 128-bit division/remainder already failed above. Ordinary
+        /* Wide division/remainder uses compiler-rt TI libcalls, ordinary
          * 32/64-bit operands use native M or external libgcc helpers. */
         return true;
     case MINIC_CORE_INSTRUCTION_POINTER_OFFSET:
