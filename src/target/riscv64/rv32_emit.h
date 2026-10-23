@@ -11,9 +11,9 @@
  * Validated scalar operations only; never reuse RV64's 8-byte frame slots. */
 bool minic_riscv32_write_core_program(const char *path,
                                       const MinicC0Program *program,
+                                      const MinicTargetInfo *target,
                                       const MinicCoreFunction *functions,
                                       size_t function_count,
                                       bool function_sections,
-                                      const MinicTargetInfo *target,
                                       MinicDiagnostic *diagnostic);
 #endif
