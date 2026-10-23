@@ -154,10 +154,20 @@ def inspect(path: Path) -> dict:
     marker_errors = 0
     directives = 0
     seen_begin = seen_end = 0
-    # Keep a bounded sample; a real driver might have many directives.
+    last_report_position = 0
+    last_report_lineno = 1
+    # Keep a bounded sample. Count newline spans incrementally rather than
+    # rescanning every prefix from byte zero for each .section directive.
     def record(pos: int, **kw: object) -> None:
-        if len(findings) < 200:
-            findings.append(dict(line=data.count(b"\n", 0, pos) + 1, **kw))
+        nonlocal last_report_position, last_report_lineno
+        if len(findings) >= 200:
+            return
+        if pos < last_report_position:
+            last_report_position = 0
+            last_report_lineno = 1
+        last_report_lineno += data.count(b"\n", last_report_position, pos)
+        last_report_position = pos
+        findings.append(dict(line=last_report_lineno, **kw))
 
     def classify(op: str, region: str, pos: int) -> None:
         nonlocal directives
