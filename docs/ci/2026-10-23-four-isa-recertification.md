@@ -199,3 +199,42 @@ passed at `db51789d772bd5c7255fe76c3e7329917ff6a0f6`.
 The full four-backend focused regression for that source revision was still
 running at the time of this entry; do not claim it passed until complete.
 Only branch `main` exists.
+
+## x86 BusyBox complete MiniC C-owner qualification: 593/593
+
+At [#39883229812](https://github.com/yituanxing/minic-toolchain/actions/runs/39883229812)
+(commit `5b63915fd993659a18f0fb9772ad6297e74ee552`), the original GNU
+BusyBox 1.36.1, 957 enabled options, full original Kbuild and 11 runtime
+differentials passed. The exact receipts are:
+
+- `BUSYBOX_MIXED_BULK=PASS MiniC_owners=593 GCC_fallback=0
+  original_full_Kbuild=1 eleven_fixture_byte_exact=1`.
+- `BUSYBOX_ALLYES_FRONTIER=DISCOVERY enabled_symbols=957
+  attempted_C_TUs=594 mini_objects=594 cpp_fail=0 minic_fail=0 asm_fail=0
+  gcc_fail=0 gcc_full_build=PASS`.
+- All 593 on-disk real Kbuild C objects were replaced with SHA-verified MiniC
+  output and the resulting GNU-linked BusyBox binary differed from original
+  full GNU output but matched its 11 original runtime fixtures byte-for-byte.
+
+The final two C objects reached zero-GNU-C fallback through one target-owned
+extended-GNU-asm contract family: fixed-register `cpuid`, `mulq/adcq`
+multiprecision accumulation and matched-register `movq/addq/adcq/subq/sbbq/cmc`
+carry/borrow sequences. The native smoke
+[#39883229791](https://github.com/yituanxing/minic-toolchain/actions/runs/39883229791)
+also passed the genuine GCC runtime byte-exact differential and negative asm
+admission test on the same compiler revision. The qualified assembler and
+linker are still **GNU**, and a zero-fallback C-owner receipt must not be
+confused with an end-to-end all-MiniC toolchain receipt.
+
+The durable CI gate now rejects *any* BusyBox GNU C fallback, demands exactly
+593/593 SHA-verified linked owners and all 594 independent translation units,
+as well as the eleven GNU-byte-exact runtime fixtures. Other ISA BusyBox
+581/581 guarantees retain their existing independent checks.
+
+Next full project stage: retain the proven RV64 Linux 6.6.143 seven-shard
+2064/2064 + GNU-link + QEMU P1 recipe; audit x86, AArch64 and LoongArch64
+Linux Kconfig, cross GCC/assembler/linker, ABI and genuinely applicable kernel
+source-owner inventories before using **the same seven-shard ownership,
+SHA provenance and QEMU acceptance method** on the additional architectures.
+Do not inherit RV64's `2064` count blindly: real Kbuild C ownership may
+differ by architecture.

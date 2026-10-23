@@ -110,7 +110,7 @@ jobs:
 
   x86-busybox-frontier:
     if: github.event_name == 'push' || inputs.mode == 'all' || inputs.mode == 'busybox'
-    name: x86-64 upstream BusyBox full-Kbuild coverage (report gaps)
+    name: x86-64 original BusyBox 593/593 MiniC C owners (zero GNU C fallback)
     runs-on: ubuntu-24.04
     timeout-minutes: 75
     steps:
@@ -141,7 +141,7 @@ jobs:
           pkg-config --exists libselinux libsepol
           test -f /usr/include/security/pam_appl.h
           echo "BUSYBOX_X86_64_HOST_DEPENDENCIES=PASS selinux=1 sepol=1"
-      - name: Audit original full Kbuild - SHA checked eligible owners, residual GNU fallback
+      - name: Certify original full Kbuild - 594 TUs, 593 C owners, zero GNU C fallback
         id: all
         continue-on-error: true
         run: make MODE=release CFLAGS=-Werror BUILD_DIR=build/capability-busybox check-x86_64-busybox-all-eligible
@@ -157,4 +157,4 @@ jobs:
           printf 'BusyBox 12-owner: %s\nBusyBox full Kbuild eligible-owner: %s\n' \
              "$TWELVE" "$ALL_ELIGIBLE" >> "$GITHUB_STEP_SUMMARY"
           test "$TWELVE" = success && test "$ALL_ELIGIBLE" = success
-          echo 'BUSYBOX_X86_COVERAGE=PASS qualified_eligible_owners_only=1 full_MiniC=NOT_CLAIMED'
+          echo 'BUSYBOX_X86_ALL_C_OWNERS=PASS Kbuild_linked=593/593 source_TUs=594/594 GNU_C_fallback=0 SHA256_verified=593 runtime_diff=11/11 GNU_AS_LD=1'

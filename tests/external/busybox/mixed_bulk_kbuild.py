@@ -266,6 +266,14 @@ def main():
         return 1
     if cross_target:
         log("BUSYBOX_MIXED_BULK_CROSS_RUNTIME=PASS cases=38 GNU_QEMU_byte_exact=1")
+    # Native 957-option original-source milestone: both the entire unique
+    # Kbuild-linked 593 C-owner cohort and its on-disk MiniC/SHA attestations
+    # are required. A mixed GNU C fallback is not full MiniC C coverage.
+    if not cross_target and len(mini_names) == 593 and len(skipped) == 0 \
+            and verified == 593:
+        log("BUSYBOX_MIXED_BULK_ALL_C_OWNERS=PASS original_Kbuild_owners=593 "
+            "MiniC_owners=593 GNU_C_fallbacks=0 "
+            "SHA256_verified=593 link_toolchain=GNU")
     if cross_target and len(mini_names) == 581 and len(skipped) == 0:
         log("BUSYBOX_MIXED_BULK_ALL_C_OWNERS=PASS original_Kbuild_owners=581 "
             "MiniC_owners=581 GNU_C_fallbacks=0 "
