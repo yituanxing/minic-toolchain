@@ -62,7 +62,7 @@ def isa(op: str) -> str:
     return "UNKNOWN"
 
 
-def inspect(path: Path) -> dict:
+def inspect_reference(path: Path) -> dict:
     counts = {"compiler": Counter(), "inline": Counter()}
     findings: list[dict] = []
     in_asm = False
@@ -132,6 +132,117 @@ def inspect(path: Path) -> dict:
                 marker_errors=marker_errors, unverified_directives=directives,
                 compiler_non_i=sum(n for k, n in counts["compiler"].items() if k != "I"),
                 findings=findings)
+
+
+
+# Fast C-regex event scanner. A full 500-TU Linux shard generates a very large
+# amount of assembly; Python-level tokenization of *every blank/comment/label*
+# line repeatedly exceeded runner lifetimes. Here the regex engine skips those
+# lines in C, yielding only real instruction/directive and provenance events.
+ASM_EVENT = re.compile(
+    rb"(?m)^[ \t]*(?:# MINIC_RV64I_ASM_(BEGIN|END)[ \t]*$|"
+    rb"(?:(?:[.$_A-Za-z0-9]+):[ \t]*)*([._A-Za-z][._A-Za-z0-9]*)(?=[ \t]|$))"
+)
+
+
+def inspect(path: Path) -> dict:
+    data = path.read_bytes()
+    counts = {"compiler": Counter(), "inline": Counter()}
+    findings: list[dict] = []
+    in_asm = False
+    origins = 0
+    marker_errors = 0
+    directives = 0
+    seen_begin = seen_end = 0
+    # Keep a bounded sample; a real driver might have many directives.
+    def record(pos: int, **kw: object) -> None:
+        if len(findings) < 200:
+            findings.append(dict(line=data.count(b"\n", 0, pos) + 1, **kw))
+
+    def classify(op: str, region: str, pos: int) -> None:
+        nonlocal directives
+        op = op.lower()
+        if op.startswith("."):
+            if op in ESCAPE:
+                directives += 1
+                record(pos, origin=region, kind="UNVERIFIED_DIRECTIVE", opcode=op)
+            return
+        kind = isa(op)
+        counts[region][kind] += 1
+        if (region == "compiler" and kind != "I") or kind == "UNKNOWN":
+            record(pos, origin=region, kind="NON_I_OR_UNKNOWN", opcode=op, isa=kind)
+
+    for match in ASM_EVENT.finditer(data):
+        marker = match.group(1)
+        if marker is not None:
+            if marker == b"BEGIN":
+                seen_begin += 1
+                if in_asm:
+                    marker_errors += 1
+                    record(match.start(), kind="NESTED_MARKER")
+                else:
+                    in_asm = True
+                    origins += 1
+            else:
+                seen_end += 1
+                if not in_asm:
+                    marker_errors += 1
+                    record(match.start(), kind="UNPAIRED_END")
+                else:
+                    in_asm = False
+            continue
+        word = match.group(2)
+        if word is None:
+            continue
+        region = "inline" if in_asm else "compiler"
+        classify(word.decode("ascii", errors="replace"), region, match.start())
+        # GAS also accepts multiple statements on a line. Only exceptional
+        # semicolon lines take the slower legacy tokenizer.
+        end = data.find(b"\n", match.end())
+        if end < 0:
+            end = len(data)
+        tail = data[match.end():end]
+        if b";" not in tail:
+            continue
+        tail = tail.split(b"#", 1)[0]
+        for segment in tail.split(b";")[1:]:
+            text = segment.decode("utf-8", errors="replace").strip()
+            while text:
+                label = LABEL.match(text)
+                if label is None:
+                    break
+                text = text[label.end():].strip()
+            if not text:
+                continue
+            op = MNEMONIC.match(text)
+            if op is None:
+                marker_errors += 1
+                record(match.start(), origin=region, kind="UNPARSED_SEMICOLON")
+            else:
+                classify(op.group(1), region, match.start())
+
+    # A malformed marker must never silently turn an inline M instruction
+    # into trusted compiler code (or conceal an instruction in user ASM).
+    for marker, seen in (
+        (b"MINIC_RV64I_ASM_BEGIN", seen_begin),
+        (b"MINIC_RV64I_ASM_END", seen_end),
+    ):
+        if data.count(marker) != seen:
+            marker_errors += 1
+            record(0, kind="MALFORMED_MARKER")
+    if in_asm:
+        marker_errors += 1
+        record(len(data), kind="UNCLOSED_ASM")
+    return dict(
+        file=str(path),
+        compiler=dict(counts["compiler"]),
+        inline=dict(counts["inline"]),
+        inline_regions=origins,
+        marker_errors=marker_errors,
+        unverified_directives=directives,
+        compiler_non_i=sum(v for k, v in counts["compiler"].items() if k != "I"),
+        findings=findings,
+    )
 
 
 def main() -> int:
