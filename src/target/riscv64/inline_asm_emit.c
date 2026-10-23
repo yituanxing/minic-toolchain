@@ -3,6 +3,7 @@
 #include "target/riscv64/frame_access.h"
 #include "target/riscv64/codegen_internal.h"
 #include "target/riscv64/legalize.h"
+#include "target/riscv64/isa.h"
 #include <inttypes.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -357,7 +358,8 @@ static bool emit_opaque_inline_asm(FILE *file,
         } else if (fprintf(file, "  ") < 0) {
             return false;
         }
-        for (index = 0U; index < inline_asm->template_length; ++index) {
+        if (!minic_riscv64_asm_audit_marker(file, true)) return false;
+    for (index = 0U; index < inline_asm->template_length; ++index) {
             if (inline_asm->template_text[index] != '%') {
                 if (fputc((unsigned char)inline_asm->template_text[index], file) == EOF) {
                     return false;
@@ -404,11 +406,13 @@ static bool emit_opaque_inline_asm(FILE *file,
             }
             return false;
         }
-        return fputc('\n', file) != EOF;
+        return fputc('\n', file) != EOF &&
+           minic_riscv64_asm_audit_marker(file, false);
     }
     if (fprintf(file, "  ") < 0) {
         return false;
     }
+    if (!minic_riscv64_asm_audit_marker(file, true)) return false;
     for (index = 0U; index < inline_asm->template_length; ++index) {
         if (inline_asm->template_text[index] != '%') {
             if (fputc((unsigned char)inline_asm->template_text[index], file) == EOF) {
@@ -425,7 +429,8 @@ static bool emit_opaque_inline_asm(FILE *file,
         }
         index += 1U;
     }
-    return fputc('\n', file) != EOF;
+    return fputc('\n', file) != EOF &&
+           minic_riscv64_asm_audit_marker(file, false);
 }
 
 static bool emit_register_output_inline_asm(
@@ -445,6 +450,7 @@ static bool emit_register_output_inline_asm(
     if (fprintf(file, "  ") < 0) {
         return false;
     }
+    if (!minic_riscv64_asm_audit_marker(file, true)) return false;
     for (index = 0U; index < inline_asm->template_length; ++index) {
         if (inline_asm->template_text[index] != '%') {
             if (fputc((unsigned char)inline_asm->template_text[index], file) == EOF) {
@@ -466,6 +472,7 @@ static bool emit_register_output_inline_asm(
         }
     }
     if (fputc('\n', file) == EOF ||
+        !minic_riscv64_asm_audit_marker(file, false) ||
         (minic_type_is_integer(instruction->type) &&
          !minic_riscv64_emit_integer_conversion_for_program(
              file, program, instruction->type, "t0"))) {
@@ -494,6 +501,7 @@ static bool emit_register_output_input_inline_asm(
     if (fprintf(file, "  ") < 0) {
         return false;
     }
+    if (!minic_riscv64_asm_audit_marker(file, true)) return false;
     for (index = 0U; index < inline_asm->template_length; ++index) {
         if (inline_asm->template_text[index] != '%') {
             if (fputc((unsigned char)inline_asm->template_text[index], file) == EOF) {
@@ -519,6 +527,7 @@ static bool emit_register_output_input_inline_asm(
         }
     }
     if (fputc('\n', file) == EOF ||
+        !minic_riscv64_asm_audit_marker(file, false) ||
         (minic_type_is_integer(instruction->type) &&
          !minic_riscv64_emit_integer_conversion_for_program(
              file, program, instruction->type, "t0"))) {
@@ -562,6 +571,7 @@ static bool emit_memory_readwrite_scalar_input_inline_asm(
     if (fprintf(file, "  ") < 0) {
         return false;
     }
+    if (!minic_riscv64_asm_audit_marker(file, true)) return false;
     for (index = 0U; index < inline_asm->template_length; ++index) {
         size_t operand_index;
         unsigned char ch;
@@ -600,7 +610,8 @@ static bool emit_memory_readwrite_scalar_input_inline_asm(
             return false;
         }
     }
-    if (fputc('\n', file) == EOF) {
+    if (fputc('\n', file) == EOF ||
+        !minic_riscv64_asm_audit_marker(file, false)) {
         return false;
     }
     if (!has_register_output) {
@@ -632,6 +643,7 @@ static bool emit_scalar_input_inline_asm(
     if (fprintf(file, "  ") < 0) {
         return false;
     }
+    if (!minic_riscv64_asm_audit_marker(file, true)) return false;
     for (index = 0U; index < inline_asm->template_length; ++index) {
         if (inline_asm->template_text[index] != '%') {
             if (fputc((unsigned char)inline_asm->template_text[index], file) == EOF) {
@@ -652,7 +664,8 @@ static bool emit_scalar_input_inline_asm(
             return false;
         }
     }
-    return fputc('\n', file) != EOF;
+    return fputc('\n', file) != EOF &&
+           minic_riscv64_asm_audit_marker(file, false);
 }
 
 static bool emit_structured_inline_asm(FILE *file,
@@ -718,6 +731,7 @@ static bool emit_structured_inline_asm(FILE *file,
     if (fprintf(file, "  ") < 0) {
         return false;
     }
+    if (!minic_riscv64_asm_audit_marker(file, true)) return false;
     for (index = 0U; index < inline_asm->template_length; ++index) {
         unsigned char ch;
         size_t operand_index;
@@ -758,7 +772,8 @@ static bool emit_structured_inline_asm(FILE *file,
             return false;
         }
     }
-    if (fputc('\n', file) == EOF) {
+    if (fputc('\n', file) == EOF ||
+        !minic_riscv64_asm_audit_marker(file, false)) {
         return false;
     }
 
