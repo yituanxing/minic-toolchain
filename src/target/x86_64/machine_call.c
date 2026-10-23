@@ -99,6 +99,31 @@ static bool x86_emit_call_arguments_planned(
         if (arg->kind != MINIC_CORE_CALL_ARGUMENT_VALUE ||
             arg->value.value_id >= fn->value_count)
             return false;
+        if (loc->kind == MINIC_X86_ARG_I128_TWO_GP) {
+            /* Use only caller-saved scratch registers outside the six GP
+             * argument registers. Using rdx here would clobber an earlier
+             * prepared argument before the actual CALL instruction. */
+            if (!minic_type_is_int128_integer(type) ||
+                !minic_type_is_int128_integer(
+                    fn->values[arg->value.value_id].type) ||
+                !x86_i128_load(out, frame, arg->value.value_id,
+                               "%r10", "%r11"))
+                return false;
+            if (!loc->on_stack) {
+                if (loc->gp_index > 4U ||
+                    fprintf(out, "  movq %%r10, %s\n"
+                                 "  movq %%r11, %s\n",
+                            gp_regs[loc->gp_index],
+                            gp_regs[loc->gp_index + 1U]) < 0)
+                    return false;
+            } else if (fprintf(out,
+                    "  movq %%r10, %zu(%%rsp)\n"
+                    "  movq %%r11, %zu(%%rsp)\n",
+                    loc->stack_index * 8U,
+                    (loc->stack_index + 1U) * 8U) < 0)
+                return false;
+            continue;
+        }
         if (loc->kind == MINIC_X86_ARG_X87_MEMORY) {
             size_t offset;
             if (!minic_type_is_long_double(fn->values[arg->value.value_id].type) ||
