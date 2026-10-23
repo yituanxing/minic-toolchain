@@ -112,6 +112,12 @@ def summarise(evidence: Path) -> dict:
         "inline_instruction_classes": dict(sorted(inline.items())),
         "compiler_top_opcodes": opcodes["compiler"].most_common(30),
         "inline_top_opcodes": opcodes["inline"].most_common(30),
+        # Full census, never truncate the user's compiler versus inline ASM
+        # machine-instruction accounting to the top-30 presentation subset.
+        "all_opcode_counts": {
+            region: dict(sorted(counts.items()))
+            for region, counts in opcodes.items()
+        },
         "shards": shard_rows,
         "failed_tus": failures,
         "error_groups": Counter(row["message"] for row in failures).most_common(25),
@@ -142,6 +148,13 @@ def main() -> int:
         "inline_Zifencei": report["inline_instruction_classes"].get("Zifencei", 0),
         "errors": len(report["problems"]),
     }, sort_keys=True))
+    for origin in ("compiler", "inline"):
+        top = sorted(report["all_opcode_counts"][origin].items(),
+                     key=lambda item: (-item[1], item[0]))[:20]
+        print("RV64I_SEVEN_OPCODE_TOP origin={} {}".format(
+            origin, " ".join(f"{op}:{count}" for op, count in top)))
+    for reason, count in report["error_groups"][:15]:
+        print(f"RV64I_SEVEN_FAIL_CLASS count={count} reason={reason[:220]}")
     for item in report["failed_tus"][:45]:
         print("RV64I_SEVEN_FAILED_TU " + json.dumps(item, sort_keys=True))
     for error in report["problems"]:
