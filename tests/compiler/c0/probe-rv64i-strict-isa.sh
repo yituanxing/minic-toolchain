@@ -316,6 +316,80 @@ SRC
       done
     done
     echo 'RV64_DIVREM_QEMU=PASS cases=14 profiles=3 signed_unsigned_32_64=1 gcc_oracle=1 upstream_libgcc_archive=1'
+
+    # Checked overflow cannot depend on M instructions, may call two helpers,
+    # and must preserve the wrapped result, pointer and original return address.
+    cat >"$tmp/checkedmul.i" <<'SRC'
+static int signed_checked(long a, long b, long wrapped, int overflow) {
+  long out = 123;
+  int flag = __builtin_mul_overflow(a, b, &out);
+  return flag == overflow && out == wrapped;
+}
+static int unsigned_checked(unsigned long a, unsigned long b,
+                            unsigned long wrapped, int overflow) {
+  unsigned long out = 123;
+  int flag = __builtin_mul_overflow(a, b, &out);
+  return flag == overflow && out == wrapped;
+}
+static int narrow_checked(int a, int b, int wrapped, int overflow) {
+  int out = 123;
+  int flag = __builtin_mul_overflow(a, b, &out);
+  return flag == overflow && out == wrapped;
+}
+static int narrow_unsigned_checked(unsigned a, unsigned b,
+                                   unsigned wrapped, int overflow) {
+  unsigned out = 123;
+  int flag = __builtin_mul_overflow(a, b, &out);
+  return flag == overflow && out == wrapped;
+}
+int evaluate(void) {
+  long lo = (-9223372036854775807L - 1L);
+  long hi = 9223372036854775807L;
+  unsigned long umax = 18446744073709551615UL;
+  if (!signed_checked(hi, 2L, -2L, 1)) return 1;
+  if (!signed_checked(lo, -1L, lo, 1)) return 2;
+  if (!signed_checked(-1L, lo, lo, 1)) return 3;
+  if (!signed_checked(-7L, 8L, -56L, 0)) return 4;
+  if (!signed_checked(0L, lo, 0L, 0)) return 5;
+  if (!unsigned_checked(umax, 2UL, umax - 1UL, 1)) return 6;
+  if (!unsigned_checked(umax, 1UL, umax, 0)) return 7;
+  if (!unsigned_checked(0UL, umax, 0UL, 0)) return 8;
+  if (!narrow_checked(50000, 50000, -1794967296, 1)) return 9;
+  if (!narrow_checked(-17, 3, -51, 0)) return 10;
+  if (!narrow_unsigned_checked(4294967295U, 2U, 4294967294U, 1)) return 11;
+  if (!narrow_unsigned_checked(7U, 9U, 63U, 0)) return 12;
+  return 0;
+}
+SRC
+    "$MINIC_CC" --target=riscv64-linux -march=rv64i -mabi=lp64 \
+      -S "$tmp/checkedmul.i" -o "$tmp/checkedmul.s"
+    grep -q 'call __muldi3' "$tmp/checkedmul.s"
+    grep -q 'call __divdi3' "$tmp/checkedmul.s"
+    grep -q 'call __udivdi3' "$tmp/checkedmul.s"
+    grep -Eq '[[:space:]]+sd ra,' "$tmp/checkedmul.s"
+    grep -Eq '[[:space:]]+ld ra,' "$tmp/checkedmul.s"
+    cat >"$tmp/checkedmul-start.s" <<'SRC'
+.section .text
+.globl _start
+_start:
+  call evaluate
+  li a7, 93
+  ecall
+SRC
+    riscv64-linux-gnu-gcc -march=rv64i -mabi=lp64 \
+      -nostdlib -static -no-pie -Wl,-e,_start \
+      "$tmp/checkedmul-start.s" "$tmp/checkedmul.s" \
+      "$runtime_lib" -o "$tmp/checkedmul.elf"
+    set +e
+    qemu-riscv64 "$tmp/checkedmul.elf" >"$tmp/checkedmul.out" 2>"$tmp/checkedmul.err"
+    checked_rc=$?
+    set -e
+    if (( checked_rc != 0 )); then
+      echo "RV64_CHECKED_MUL_QEMU=FAIL case=$checked_rc" >&2
+      cat "$tmp/checkedmul.err" >&2
+      exit 1
+    fi
+    echo 'RV64_CHECKED_MUL_QEMU=PASS cases=12 signed_unsigned_32_64=1 overflow_min_neg1=1'
     # End-to-end staged MiniC driver: ISA/ABI flags must reach the C
     # frontend and assembler, and a caller-supplied runtime archive must
     # be honored by MiniLD after its referencing objects.

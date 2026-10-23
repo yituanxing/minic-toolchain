@@ -52,6 +52,10 @@ bool minic_riscv64_needs_arithmetic_libcall(const MinicRiscvIsa *isa,
         case MINIC_CORE_INSTRUCTION_INTEGER_MULTIPLY:
             if (!minic_type_is_int128_integer(instruction->type)) return true;
             break;
+        case MINIC_CORE_INSTRUCTION_INTEGER_OVERFLOW:
+            if (instruction->value.integer_overflow.operator_kind ==
+                MINIC_CORE_INTEGER_OVERFLOW_MULTIPLY) return true;
+            break;
         case MINIC_CORE_INSTRUCTION_INTEGER_DIVIDE:
         case MINIC_CORE_INSTRUCTION_INTEGER_REMAINDER:
             return true;

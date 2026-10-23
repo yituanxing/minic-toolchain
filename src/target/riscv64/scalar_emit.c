@@ -42,7 +42,7 @@ bool minic_riscv64_emit_scalar_instruction(
             file, program, function, frame, instruction);
     if (instruction->kind == MINIC_CORE_INSTRUCTION_INTEGER_OVERFLOW)
         return minic_riscv64_emit_overflow_instruction(
-            file, program, function, frame, instruction);
+            file, program, function, frame, instruction, isa);
     switch (instruction->kind) {
     case MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT:
         if (fprintf(file, "  li t0, %" PRId64 "\n", instruction->value.integer_value) < 0 ||

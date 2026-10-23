@@ -73,7 +73,7 @@ bool minic_riscv_isa_admit_core_instruction(
     if (isa == NULL || !isa->strict_isa || instruction == NULL) return true;
     switch (instruction->kind) {
     case MINIC_CORE_INSTRUCTION_INTEGER_MULTIPLY:
-        /* Native MUL or qualified RV64I shift/add modulo-2^64 lowering.
+        /* Native MUL or qualified RV64I __muldi3 libcall.
          * 128-bit multiplication still emits MULHU and requires M. */
         if (!minic_type_is_int128_integer(instruction->type))
             return true;
@@ -83,21 +83,17 @@ bool minic_riscv_isa_admit_core_instruction(
         break;
     case MINIC_CORE_INSTRUCTION_INTEGER_DIVIDE:
     case MINIC_CORE_INSTRUCTION_INTEGER_REMAINDER:
-        /* The ISA selector now has both native M and RV64I signed/unsigned
-         * restoring division; an M absence is no longer a compile error. */
+        /* Native M or standard RV64I signed/unsigned libgcc div/rem calls;
+         * a missing M extension is not itself a compile error. */
         return true;
     case MINIC_CORE_INSTRUCTION_POINTER_OFFSET:
-        /* RV64I pointer scaling now selects SLLI for power-of-two sizes or
-         * qualified software multiplication for odd record sizes. */
+        /* RV64I pointer scaling selects SLLI for power-of-two sizes or
+         * __muldi3 for odd record sizes. */
         return true;
     case MINIC_CORE_INSTRUCTION_INTEGER_OVERFLOW:
-        if (instruction->value.integer_overflow.operator_kind ==
-            MINIC_CORE_INTEGER_OVERFLOW_MULTIPLY) {
-            required = MINIC_RISCV_FEATURE_M;
-            machine = "mul";
-            extension = "M";
-        }
-        break;
+        /* All admitted <=64-bit checked multiply shapes use libgcc in
+         * strict-I; checked ADD and SUB need only I instructions. */
+        return true;
     case MINIC_CORE_INSTRUCTION_FLOAT_ADD:
     case MINIC_CORE_INSTRUCTION_FLOAT_SUBTRACT:
     case MINIC_CORE_INSTRUCTION_FLOAT_MULTIPLY:

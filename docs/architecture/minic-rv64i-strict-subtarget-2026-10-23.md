@@ -46,8 +46,12 @@ very small inline transformations such as SLLI for constant scaling.
 For <=32-bit integer operations, inputs are first canonicalized to the
 effective signed/unsigned scalar type before passing the full XLEN arguments
 to the external helper. Normal scalar result conversion and spills remain
-owned by the mature Core and frame lowering. 128-bit operations and checked
-multiplication still need separate qualified lowering and may reject RV64I.
+owned by the mature Core and frame lowering. 128-bit operations still need separate qualified lowering and may reject RV64I.
+For <=64-bit checked multiplication, strict RV64I uses __muldi3 and an
+optional __divdi3 / __udivdi3 check; it stores the low wrapped result and
+reports overflow, explicitly handling signed INT64_MIN * -1 without relying
+on the target division overflow result. These calls share the ordinary
+frame/return-address and compiler runtime contracts.
 
 ## Runtime provider and licensing
 
@@ -81,9 +85,12 @@ GCC native-RV64IM arithmetic for signed/unsigned 32- and 64-bit inputs.
 Kernel 2064 objects and existing real-software acceptance remain regression
 baselines, not a reason to run seven complete Linux shards per small edit.
 
-Next prioritize verified RuntimeLibcall ABI coverage (64-bit arithmetic,
-checked overflow and 128-bit only when upstream builtin availability is
-confirmed), then full ABI configuration and RV32 ILP32. Do not develop more
+The verified first-pass strict-I scalar boundary now includes <=64-bit
+ordinary and checked multiplication, signed/unsigned division and remainder,
+bit scans and pointer scaling. Still reject 128-bit multiply, floating-point
+LP64 signatures, unqualified ISA combinations, and arbitrary inline asm.
+Next address 128-bit arithmetic only after verifying exact upstream runtime
+symbol/ABI contracts, then complete LP64 floating ABI and RV32 ILP32. Do not develop more
 MiniC-private arithmetic libraries.
 
 ## First-class optional archive
