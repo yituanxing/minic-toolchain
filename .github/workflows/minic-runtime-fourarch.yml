@@ -11,6 +11,10 @@ on:
       - "src/target/riscv64/runtime_libcall.c"
       - "src/target/riscv64/scalar_emit.c"
       - "src/frontend/parser_builtins.c"
+      - "src/frontend/ast.h"
+      - "src/frontend/ast_verifier.c"
+      - "src/core/core_lower_expr_scalar.c"
+      - "tests/compiler/c0/probe-runtime-isnan.sh"
       - "tests/compiler/c0/probe-runtime-typed-overflow.sh"
       - ".github/workflows/minic-runtime-fourarch.yml"
       - "Makefile"
@@ -75,6 +79,7 @@ jobs:
           MINIC_CC: build/runtime-ci/bin/minic-cc
         run: |
           bash tests/compiler/c0/probe-runtime-typed-overflow.sh
+          bash tests/compiler/c0/probe-runtime-isnan.sh
       - name: Save both target and reference reports, object diagnostics and .s
         if: always()
         uses: actions/upload-artifact@v4
