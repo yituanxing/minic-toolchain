@@ -16,6 +16,8 @@ on:
       - "src/frontend/ast.h"
       - "src/frontend/ast_verifier.c"
       - "src/core/core_lower_expr_scalar.c"
+      - "src/core/core_lower_expression.c"
+      - "src/core/core_lower_scalar_values.c"
       - "tests/compiler/c0/probe-runtime-isnan.sh"
       - "tests/compiler/c0/probe-rv64i-int128-pairs-qemu.sh"
       - "tests/compiler/c0/probe-runtime-typed-overflow.sh"
