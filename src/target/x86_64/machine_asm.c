@@ -1,4 +1,5 @@
 #include "target/x86_64/machine_internal.h"
+#include "target/x86_64/abi.h"
 
 #include <stdio.h>
 #include <string.h>
