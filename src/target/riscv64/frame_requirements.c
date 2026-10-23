@@ -65,9 +65,9 @@ bool minic_riscv64_core_call_argument_type(
            minic_core_call_argument_actual_type(function, argument, argument_type);
 }
 
-bool minic_riscv64_core_call_outgoing_stack_size(const MinicC0Program *program,
-                                          const MinicCoreFunction *function,
-                                          size_t *result) {
+bool minic_riscv64_core_call_outgoing_stack_size_profile(
+    const MinicC0Program *program, const MinicCoreFunction *function,
+    bool lp64_soft_float, size_t *result) {
     size_t instruction_index;
     size_t maximum_stack_slots;
 
@@ -89,8 +89,9 @@ bool minic_riscv64_core_call_outgoing_stack_size(const MinicC0Program *program,
         if (!minic_core_call_view_build(function, instruction, &call))
             return false;
 
-        if (!minic_riscv64_abi_cursor_initialize_for_return(
-                program, call.return_type, &cursor, &return_value)) {
+        if (!minic_riscv64_abi_cursor_initialize_for_return_profile(
+                program, call.return_type, lp64_soft_float,
+                &cursor, &return_value)) {
             return false;
         }
         (void)return_value;
@@ -119,5 +120,11 @@ bool minic_riscv64_core_call_outgoing_stack_size(const MinicC0Program *program,
     }
     *result = maximum_stack_slots * 8U;
     return true;
+}
+bool minic_riscv64_core_call_outgoing_stack_size(
+    const MinicC0Program *program, const MinicCoreFunction *function,
+    size_t *result) {
+    return minic_riscv64_core_call_outgoing_stack_size_profile(
+        program, function, false, result);
 }
 

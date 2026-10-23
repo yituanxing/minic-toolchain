@@ -251,12 +251,18 @@ static bool core_function_can_emit(const MinicC0Program *program,
                     return core_rv64_capability_reject(function, "parameter-indirect", index, -1);
                 }
             } else if (location.value.kind == MINIC_RISCV64_ABI_VALUE_FLOAT) {
+                bool soft = abi_plan->named_parameter_cursor.lp64_soft_float;
+                bool correct_location =
+                    soft ? (location.floating_register_count == 0U &&
+                            location.integer_register_count +
+                              location.stack_slot_count == 1U)
+                         : (location.floating_register_count == 1U &&
+                            location.floating_register_begin < 8U &&
+                            location.integer_register_count == 0U &&
+                            location.stack_slot_count == 0U);
                 if ((!minic_type_is_float(function->parameter_types[index]) &&
                      !minic_type_is_double(function->parameter_types[index])) ||
-                    location.floating_register_count != 1U ||
-                    location.floating_register_begin >= 8U ||
-                    location.integer_register_count != 0U ||
-                    location.stack_slot_count != 0U) {
+                    !correct_location) {
                     return core_rv64_capability_reject(function, "parameter-float", index, -1);
                 }
             } else if (location.value.kind == MINIC_RISCV64_ABI_VALUE_WIDE_SCALAR) {
@@ -318,16 +324,23 @@ static bool core_function_can_emit(const MinicC0Program *program,
     return true;
 }
 
-bool minic_riscv64_core_function_admit(
+bool minic_riscv64_core_function_admit_profile(
     const MinicC0Program *program, const MinicCoreFunction *function,
-    MinicRiscv64FunctionAbiPlan *abi_plan) {
+    MinicRiscv64FunctionAbiPlan *abi_plan, bool lp64_soft_float) {
     if (function == NULL || !minic_core_function_verify(function))
         return core_rv64_capability_reject(function, "verify", 0U, -1);
     if (program != NULL &&
         (abi_plan == NULL ||
-         !minic_riscv64_function_abi_plan_build(program, function, abi_plan)))
+         !minic_riscv64_function_abi_plan_build_profile(
+             program, function, abi_plan, lp64_soft_float)))
         return core_rv64_capability_reject(function, "function-abi", 0U, -1);
     return core_function_can_emit(program, function, abi_plan);
+}
+bool minic_riscv64_core_function_admit(
+    const MinicC0Program *program, const MinicCoreFunction *function,
+    MinicRiscv64FunctionAbiPlan *abi_plan) {
+    return minic_riscv64_core_function_admit_profile(
+        program, function, abi_plan, false);
 }
 bool minic_riscv64_core_function_can_emit(const MinicCoreFunction *function) {
     return core_function_can_emit(NULL, function, NULL);

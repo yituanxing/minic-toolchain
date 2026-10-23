@@ -362,7 +362,10 @@ static bool emit_terminator(FILE *file,
             if (program == NULL || terminator->return_object >= function->object_count ||
                 !minic_type_equal(function->objects[terminator->return_object].type,
                                   function->return_type) ||
-                !minic_riscv64_abi_classify_value(program, function->return_type, &return_value) ||
+                !minic_riscv64_abi_classify_value_profile(
+                    program, function->return_type,
+                    frame->named_parameter_cursor.lp64_soft_float,
+                    &return_value) ||
                 !minic_riscv64_core_frame_object_offset(program, function, frame, terminator->return_object, &object_offset) ||
                 !minic_riscv64_frame_emit_address(file, frame, "t0", object_offset)) {
                 return false;
@@ -421,8 +424,9 @@ static bool emit_terminator(FILE *file,
                     file, frame, terminator->return_value, "a0", "a1")) {
                 return false;
             }
-        } else if (minic_type_is_float(function->return_type) ||
-                   minic_type_is_double(function->return_type)) {
+        } else if (!frame->named_parameter_cursor.lp64_soft_float &&
+                   (minic_type_is_float(function->return_type) ||
+                    minic_type_is_double(function->return_type))) {
             const char *move_opcode =
                 minic_type_is_double(function->return_type) ? "fmv.d.x" : "fmv.w.x";
             if (terminator->return_value == MINIC_CORE_VALUE_INVALID ||
@@ -500,7 +504,10 @@ static bool emit_core_function_with_symbol(FILE *file,
                       function != NULL ? function->value_count : 0U);
         (void)fflush(stderr);
     }
-    if (!minic_riscv64_core_function_admit(program, function, &abi_plan)) {
+    if (!minic_riscv64_core_function_admit_profile(
+            program, function, &abi_plan,
+            isa != NULL && isa->strict_isa &&
+            isa->abi == MINIC_RISCV_ABI_LP64)) {
         minic_riscv64_function_abi_plan_destroy(&abi_plan);
         return false;
     }

@@ -16,6 +16,9 @@ bool minic_riscv64_core_call_argument_type(
     const MinicType *parameter_types, size_t parameter_count,
     bool is_variadic, size_t argument_index,
     MinicType *argument_type, bool *is_fixed_parameter);
+bool minic_riscv64_core_call_outgoing_stack_size_profile(
+    const MinicC0Program *, const MinicCoreFunction *,
+    bool lp64_soft_float, size_t *);
 bool minic_riscv64_core_call_outgoing_stack_size(const MinicC0Program *,
                                                  const MinicCoreFunction *, size_t *);
 #endif

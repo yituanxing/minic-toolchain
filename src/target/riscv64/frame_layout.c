@@ -60,7 +60,10 @@ bool minic_riscv64_core_frame_initialize_prepared(
         return false;
     frame->has_dynamic_stack_alloc = facts.uses_dynamic_stack_alloc;
     frame->saved_frame_base_offset = 0U;
-    if (!minic_riscv64_core_call_outgoing_stack_size(program, function, &outgoing_argument_size)) {
+    if (!minic_riscv64_core_call_outgoing_stack_size_profile(
+            program, function,
+            abi_plan != NULL && abi_plan->named_parameter_cursor.lp64_soft_float,
+            &outgoing_argument_size)) {
         return false;
     }
     frame->outgoing_argument_size = outgoing_argument_size;
