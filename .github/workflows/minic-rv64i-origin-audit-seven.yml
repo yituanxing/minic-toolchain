@@ -7,6 +7,12 @@ on:
       - '.github/workflows/minic-rv64i-origin-audit-seven.yml'
       - 'tools/ci/audit-rv64i-asm-origin.py'
       - 'tests/compiler/c0/probe-rv64i-asm-origin.sh'
+      - 'tests/compiler/c0/probe-rv64i-int128-libcalls.sh'
+      - 'src/target/riscv64/scalar_emit.c'
+      - 'src/target/riscv64/runtime_libcall.c'
+      - 'src/target/riscv64/isa.c'
+      - 'third_party/llvm-compiler-rt-19.1.7/**'
+      - 'Makefile'
       - 'tests/external/linux/corpus_replay.py'
   workflow_dispatch:
 
@@ -27,12 +33,14 @@ jobs:
         run: |
           python3 -m py_compile tools/ci/audit-rv64i-asm-origin.py tests/external/linux/corpus_replay.py
           bash -n tests/compiler/c0/probe-rv64i-asm-origin.sh
+          bash -n tests/compiler/c0/probe-rv64i-int128-libcalls.sh
       - name: Compile MiniC and prove source-ASM provenance
         shell: bash
         run: |
           set -Eeuo pipefail
           make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/rv64i-origin-smoke all
           bash tests/compiler/c0/probe-rv64i-asm-origin.sh "$GITHUB_WORKSPACE/build/rv64i-origin-smoke/bin/minic-cc"
+          bash tests/compiler/c0/probe-rv64i-int128-libcalls.sh "$GITHUB_WORKSPACE/build/rv64i-origin-smoke/bin/minic-cc"
 
   linux-shard:
     # Seven full shards run only by explicit dispatch or tagged push.
@@ -215,6 +223,7 @@ jobs:
             --root "$work/minic-out" \
             --batch-results "$work/batch-results.json" \
             --json-out "$work/rv64i-origin-report.json" \
+            --opcode-tsv-out "$work/rv64i-opcode-counts.tsv" \
             --fail-on-compiler-non-i
       - name: Upload scanned verdicts and diagnostics
         if: always()
@@ -228,6 +237,7 @@ jobs:
             build/rv64i-origin-${{ matrix.label }}-replay/batch-results.json
             build/rv64i-origin-${{ matrix.label }}-replay/batch-results.tsv
             build/rv64i-origin-${{ matrix.label }}-replay/rv64i-origin-report.json
+            build/rv64i-origin-${{ matrix.label }}-replay/rv64i-opcode-counts.tsv
             build/rv64i-origin-${{ matrix.label }}-replay/minic-stderr/**/*.stderr
       - name: Publish exact shard coverage
         if: always()
