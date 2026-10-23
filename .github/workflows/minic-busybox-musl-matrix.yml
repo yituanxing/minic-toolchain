@@ -7,6 +7,11 @@ on:
       - '.github/workflows/minic-busybox-musl-matrix.yml'
       - 'tests/external/busybox/probe-musl-four-isa.sh'
       - 'tests/external/busybox/musl-gcc-oracle.py'
+      - 'src/frontend/attribute.c'
+      - 'src/frontend/attribute.h'
+      - 'src/target/common/global_emit.c'
+      - 'src/target/common/global_emit.h'
+      - 'src/target/x86_64/global_emit.c'
 concurrency:
   group: minic-busybox-musl-${{ github.ref }}
   cancel-in-progress: true

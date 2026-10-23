@@ -119,6 +119,42 @@ if test "$gnu_rc" != 42 || test "$mini_rc" != 42 ||
   exit 1
 fi
 echo "MUSL_RETURNS_TWICE=PASS target=$target original_musl_setjmp_header=1 GNU_MiniC_QEMU_byte_exact=1"
+# Original musl time.h has unnamed zero-width bitfields in struct timespec.
+# Test this real ABI/layout class before all 581 original BusyBox C owners.
+cat >"$work/bitfield.c" <<'SRC'
+#include <time.h>
+#include <stdio.h>
+static int value(void) {
+    static const struct timespec ts = { 0, 32 * 1000 * 1000 };
+    return ts.tv_sec == 0 && ts.tv_nsec == 32000000;
+}
+int main(void) {
+    puts(value() ? "timespec-ok" : "timespec-fail");
+    return value() ? 42 : 1;
+}
+SRC
+"$cc" "${headers[@]}" -O0 -E -P "$work/bitfield.c" -o "$work/bitfield.i"
+"$cc" "${headers[@]}" -O0 -fno-pic -fno-pie -c "$work/bitfield.c" -o "$work/bitfield-gnu.o"
+"$MINIC_CC" "--target=$target-linux" -S "$work/bitfield.i" -o "$work/bitfield-mini.s"
+"$cc" -c -x assembler "$work/bitfield-mini.s" -o "$work/bitfield-mini.o"
+for impl in gnu mini; do
+  "$cc" -nostdlib -static -no-pie -Wl,-e,_start \
+    "$work/build/obj/crt/crt1.o" "$work/build/obj/crt/crti.o" "$work/bitfield-$impl.o" \
+    -Wl,--start-group "$work/build/lib/libc.a" "$libgcc" -Wl,--end-group \
+    "$work/build/obj/crt/crtn.o" -o "$work/bitfield-$impl"
+done
+set +e
+"$qemu" "$work/bitfield-gnu" >"$work/bitfield-gnu.out" 2>"$work/bitfield-gnu.err"; gnu_rc=$?
+"$qemu" "$work/bitfield-mini" >"$work/bitfield-mini.out" 2>"$work/bitfield-mini.err"; mini_rc=$?
+set -e
+if test "$gnu_rc" != 42 || test "$mini_rc" != 42 ||
+   ! cmp -s "$work/bitfield-gnu.out" "$work/bitfield-mini.out" ||
+   ! cmp -s "$work/bitfield-gnu.err" "$work/bitfield-mini.err"; then
+  echo "MUSL_TIMESPEC_BITFIELD=FAIL target=$target gcc=$gnu_rc minic=$mini_rc" >&2
+  exit 1
+fi
+echo "MUSL_TIMESPEC_BITFIELD=PASS target=$target original_musl_timeh=1 GNU_MiniC_QEMU_byte_exact=1"
+
 
 commit=1a64f6a20aaf6ea4dbba68bbfa8cc1ab7e5c57c4
 curl -fsSL --retry 4 --retry-delay 2 --connect-timeout 15 \
