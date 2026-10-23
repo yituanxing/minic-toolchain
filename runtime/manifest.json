@@ -69,5 +69,23 @@
       "minic_flags": [],
       "clang_flags": []
     }
-  }
+  },
+  "portable_generic_fallbacks": [
+    {
+      "target": "aarch64",
+      "groups": [
+        "soft_float"
+      ],
+      "undefine_macro": "__aarch64__",
+      "reason": "upstream compiler-rt portable softfloat instead of target fmax intrinsics"
+    },
+    {
+      "target": "x86_64",
+      "sources": [
+        "udivmodti4.c"
+      ],
+      "undefine_macro": "__x86_64__",
+      "reason": "use upstream Knuth C divide, not GCC-specific divq inline assembly"
+    }
+  ]
 }
