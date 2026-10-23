@@ -71,17 +71,19 @@ def source_compile(args: argparse.Namespace, manifest: dict, target: str,
     # C99 complex types that MiniC does not parse. Select the header's
     # portable struct/softfloat branch for BOTH reference and MiniC builds.
     # Do not modify or fork upstream compiler-rt algorithms.
-    # compiler-rt's AArch64 fmax wrappers are hardware-optimization
-    # shortcuts, not required by the algorithms. On our portable software-FP
-    # profile, select the library's own generic fallback implementation, with
-    # no dependency on the missing target-only __builtin_fmax[f] intrinsic.
-    # Both Clang oracle and MiniC compile exactly these same preprocessed TUs.
-    portable_fp_flags = (
-        ["-U__aarch64__"]
-        if target == "aarch64" and name in manifest["groups"]["soft_float"]
-        else []
-    )
-    cpp_cmd = [args.clang, *target_flags(config), *portable_fp_flags,
+    # Prefer upstream compiler-rt's generic C algorithms over target-specific
+    # inline assembly or hardware-only fast paths. Both reference and MiniC
+    # compile identical preprocessed code; policy lives in the manifest,
+    # not as per-helper forks in the four code generators.
+    generic_flags: list[str] = []
+    for policy in manifest.get("portable_generic_fallbacks", []):
+        if policy["target"] != target:
+            continue
+        if (name in policy.get("sources", []) or
+                any(name in manifest["groups"][group]
+                    for group in policy.get("groups", []))):
+            generic_flags.append("-U" + policy["undefine_macro"])
+    cpp_cmd = [args.clang, *target_flags(config), *generic_flags,
                "-E", "-P", "-std=gnu11",
                "-U__SIZEOF_FLOAT128__", "-U__FLOAT128__",
                "-D__STDC_VERSION__=199409L",
