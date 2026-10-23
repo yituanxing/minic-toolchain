@@ -61,6 +61,13 @@ cat >"$work/start.S" <<'EOF'
   .text
   .global _start
 _start:
+  # -nostdlib omits glibc/crt startup. GCC may relax access to volatile
+  # test globals into gp-relative instructions, so initialize gp exactly
+  # as the official RISC-V crt would do before entering C.
+  .option push
+  .option norelax
+  la gp, __global_pointer$
+  .option pop
   call main
   li a7, 93
   ecall
