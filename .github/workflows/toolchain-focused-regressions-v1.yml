@@ -84,8 +84,21 @@ jobs:
                git diff --name-only "$BEFORE_SHA" "$GITHUB_SHA" > "$paths"; then
               linux_yaml=false
               four_only=true
-              [[ -s "$paths" ]] || four_only=false
+              # Scoped RV64 BusyBox harness/CI fixes must not rerun both
+              # accepted AArch64/LoongArch64 full BusyBox matrices or MiniLD.
+              # Require at least one actual RV64 harness/apt file change;
+              # workflow-only or shared implementation changes remain ALL.
+              rv_busybox_only=true
+              rv_busybox_changes=0
+              [[ -s "$paths" ]] || { four_only=false; rv_busybox_only=false; }
               while IFS= read -r changed; do
+                case "$changed" in
+                  tests/external/busybox/probe-rv64-all-kbuild.sh|tests/external/busybox/check-pinned-1361-source.sh|tools/ci/focused-rv64-apt-cache-v1.sh)
+                    rv_busybox_changes=$((rv_busybox_changes + 1)) ;;
+                  .github/workflows/toolchain-focused-regressions-v1.yml)
+                    ;;  # accompanying reviewed CI edit
+                  *) rv_busybox_only=false ;;
+                esac
                 if [[ "$changed" == .github/workflows/linux-runtime-gcc-baseline.yml ||
                       "$changed" == .github/workflows/toolchain-focused-regressions-v1.yml ]]; then
                   linux_yaml=true
@@ -96,7 +109,11 @@ jobs:
                   *) four_only=false ;;
                 esac
               done < "$paths"
-              if [[ "$four_only" == true ]]; then mode=four-backend; fi
+              if [[ "$rv_busybox_only" == true && "$rv_busybox_changes" -gt 0 ]]; then
+                mode=minic-rv64
+              elif [[ "$four_only" == true ]]; then
+                mode=four-backend
+              fi
             else
               echo 'FOCUSED_OWNER_DIFF=UNAVAILABLE fallback=all owners'
             fi
@@ -148,27 +165,23 @@ jobs:
             .github/workflows/linux-runtime-gcc-baseline.yml \
             .github/workflows/toolchain-focused-regressions-v1.yml
 
-      - name: Install union of RV64, archive, static and dynamic linker oracle prerequisites
+      # Reuse the proven Ubuntu-24.04 RV64 cross-toolchain archive cache
+      # from linux-core-all3352.yml. A 50MB mirror download took ~14 min and
+      # never reached MiniC in run 39890671519; no 360+300+480s retries.
+      - name: Restore validated RISC-V package archives
         if: steps.owners.outputs.mode != 'four-backend'
-        run: |
-          set -Eeuo pipefail
-          # On ubuntu-24.04 the original unconditional apt update consumed the
-          # entire 240s deadline in run 39818019254 before any compiler test.
-          # Try the runner's ready package indexes first; refresh only on
-          # failure. Repository/network failures remain explicitly RED.
-          packages=(build-essential binutils gcc-riscv64-linux-gnu
-                    binutils-riscv64-linux-gnu libc6-riscv64-cross
-                    libc6-dev-riscv64-cross qemu-user)
-          if ! timeout 360s sudo apt-get -o Acquire::Retries=3 \
-               -o DPkg::Lock::Timeout=60 install -y --no-install-recommends \
-               "${packages[@]}"; then
-            echo "FOCUSED_APT=RETRY_STAGE first_install_failed_or_timed_out=1"
-            timeout 300s sudo apt-get -o Acquire::Retries=3 update
-            timeout 480s sudo apt-get -o Acquire::Retries=3 \
-              -o DPkg::Lock::Timeout=60 install -y --no-install-recommends \
-              "${packages[@]}"
-          fi
-          echo "FOCUSED_APT=PASS packages=${#packages[@]}"
+        id: rv64_apt_cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/minic-apt/archives
+          key: rv64-apt-${{ runner.os }}-${{ runner.arch }}-noble-${{ hashFiles('tools/ci/ubuntu-24.04-packages.txt') }}
+
+      - name: Install focused RV64 cross-tools from cache or bounded download
+        if: steps.owners.outputs.mode != 'four-backend'
+        shell: bash
+        env:
+          RV64_CACHE_HIT: ${{ steps.rv64_apt_cache.outputs.cache-hit }}
+        run: bash tools/ci/focused-rv64-apt-cache-v1.sh
 
       - name: Compile Mini toolchain exactly once for three independent verdicts
         id: build
