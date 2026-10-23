@@ -93,6 +93,32 @@ jobs:
           bash tests/compiler/c0/probe-rv64i-int128-pairs-qemu.sh \
             "$GITHUB_WORKSPACE/build/runtime-ci/bin/minic-cc" \
             "$GITHUB_WORKSPACE/build/runtime-verdict/reference/riscv64/libminic-rt.a"
+      # Failures in RV64I compiler-rt should be diagnosable without waiting
+      # for the slower cross-GNU toolchain installation on the RV64 matrix.
+      - name: Diagnose RV64I software-FP Core selection on host shard
+        if: always() && matrix.target == 'x86_64'
+        shell: bash
+        env:
+          MINIC_RV64I_CORE_REJECT_TRACE: '1'
+        run: |
+          set -Eeuo pipefail
+          rc=0
+          python3 tools/runtime/build_runtime.py \
+            --backend minic --targets riscv64 --groups soft_float \
+            --no-primitives --minic "$GITHUB_WORKSPACE/build/runtime-ci/bin/minic-cc" \
+            --build-dir build/runtime-diagnostic --jobs 4 || rc=$?
+          echo "RUNTIME_RV64_SOFTFP_DIAGNOSTIC_EXIT=$rc"
+          for log in build/runtime-diagnostic/minic/riscv64/logs/*.minic.log; do
+            grep -E 'RV64I_CORE_REJECT|<riscv-isa>|Core IR does not yet' "$log" | head -n 8 || :
+          done
+      - name: Save cross-RV64I diagnostic logs
+        if: always() && matrix.target == 'x86_64'
+        uses: actions/upload-artifact@v4
+        with:
+          name: compiler-rt-rv64i-softfp-debug-${{ github.sha }}
+          path: build/runtime-diagnostic/
+          retention-days: 7
+          if-no-files-found: warn
       - name: Save both target and reference reports, object diagnostics and .s
         if: always()
         uses: actions/upload-artifact@v4
