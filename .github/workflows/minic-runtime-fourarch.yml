@@ -35,6 +35,7 @@ on:
       - "src/target/x86_64/frame.c"
       - "tests/compiler/c0/probe-x86-int128-runtime-abi.sh"
       - "tests/compiler/c0/probe-x86-compiler-rt-native.sh"
+      - "tests/compiler/c0/probe-lp64-compiler-rt-qemu.sh"
       - "tests/compiler/c0/probe-runtime-isnan.sh"
       - "tests/compiler/c0/probe-rv64i-int128-pairs-qemu.sh"
       - "tests/compiler/c0/probe-rv64i-softfloat-runtime-qemu.sh"
@@ -69,6 +70,11 @@ jobs:
           if [[ "${{ matrix.target }}" == riscv64 ]]; then
             sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
               gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu qemu-user
+          elif [[ "${{ matrix.target }}" == aarch64 ||                   "${{ matrix.target }}" == loongarch64 ]]; then
+            # LLVM/LLD target all ISAs; QEMU executes freestanding ELF with
+            # no target sysroot, GNU toolchain or libc download.
+            sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+              lld qemu-user
           fi
       - name: Check manifest and build MiniC exactly once per shard
         shell: bash
@@ -166,6 +172,15 @@ jobs:
           set -Eeuo pipefail
           bash tests/compiler/c0/probe-x86-compiler-rt-native.sh \
             "$GITHUB_WORKSPACE/build/runtime-verdict/minic/x86_64/libminic-rt.a"
+      - name: QEMU execute upstream runtime with native ABI on new LP64 targets
+        if: matrix.target == 'aarch64' || matrix.target == 'loongarch64'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          bash tests/compiler/c0/probe-lp64-compiler-rt-qemu.sh \
+            "${{ matrix.target }}" \
+            "$GITHUB_WORKSPACE/build/runtime-verdict/reference/${{ matrix.target }}/libminic-rt.a" \
+            "$GITHUB_WORKSPACE/build/runtime-verdict/minic/${{ matrix.target }}/libminic-rt.a"
       - name: Save both target and reference reports, object diagnostics and .s
         if: always()
         uses: actions/upload-artifact@v4
