@@ -45,6 +45,10 @@ static bool emit_instruction(FILE *file,
         return false;
     }
     switch (instruction->kind) {
+    case MINIC_CORE_INSTRUCTION_VARIADIC_COPY:
+        /* SysV 24-byte cursor copying is x86-only; RV64 keeps its linear
+         * cursor-assignment path and must reject this opcode explicitly. */
+        return false;
     case MINIC_CORE_INSTRUCTION_VARIADIC_NEXT_SCALAR:
     case MINIC_CORE_INSTRUCTION_ATOMIC_STORE:
     case MINIC_CORE_INSTRUCTION_ATOMIC_LOAD:
