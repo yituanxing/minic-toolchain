@@ -176,6 +176,15 @@ if (( direct_rc != 0 )); then
     echo "RV64_SOFTFP_RUNTIME_DIRECT=actual_bits:" >&2
     od -An -tx8 "$work/runtime-direct.err" >&2
   fi
+  echo 'RV64_SOFTFP_DEBUG=caller:' >&2
+  riscv64-linux-gnu-objdump -d -M no-aliases "$work/runtime-direct.elf" |
+    sed -n '/<_start>:/,+17p' >&2
+  echo 'RV64_SOFTFP_DEBUG=callee:' >&2
+  riscv64-linux-gnu-objdump -d -M no-aliases "$work/runtime-direct.elf" |
+    sed -n '/<__adddf3>:/,+90p' >&2
+  echo 'RV64_SOFTFP_DEBUG=runtime_abi_flags:' >&2
+  riscv64-linux-gnu-readelf -h "$(dirname "$runtime")/softfp/adddf3.o" |
+    grep -E 'Machine:|Flags:' >&2
   exit 1
 fi
 echo 'RV64_SOFTFP_RUNTIME_DIRECT=PASS __adddf3 pure_integer_ABI=1'
