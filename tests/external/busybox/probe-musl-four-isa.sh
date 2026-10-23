@@ -79,6 +79,47 @@ if test "$gcc_rc" != 42 || test "$mini_rc" != 42 ||
   exit 1
 fi
 echo "MUSL_MATRIX_ABI=PASS target=$target libc=musl-1.2.5 CRT=musl static=1 GCC_MiniC_QEMU_byte_exact=1"
+
+# The GNU returns_twice attribute in musl's setjmp.h must not silently
+# collapse a longjmp re-entry into a single-return CFG optimization.
+cat >"$work/returns-twice.c" <<'SRC'
+#include <setjmp.h>
+#include <stdio.h>
+static jmp_buf checkpoint;
+static volatile int entered;
+int main(void) {
+  int rc = setjmp(checkpoint);
+  if (rc == 0) {
+    entered = 1;
+    longjmp(checkpoint, 42);
+  }
+  printf("musl-longjmp:%d:%d\n", rc, entered);
+  return rc == 42 && entered == 1 ? 42 : 1;
+}
+SRC
+"$cc" "${headers[@]}" -O0 -E -P "$work/returns-twice.c" -o "$work/setjmp.i"
+"$cc" "${headers[@]}" -O0 -fno-pic -fno-pie -c "$work/returns-twice.c" -o "$work/setjmp-gnu.o"
+"$MINIC_CC" "--target=$target-linux" -S "$work/setjmp.i" -o "$work/setjmp-mini.s"
+"$cc" -c -x assembler "$work/setjmp-mini.s" -o "$work/setjmp-mini.o"
+for impl in gnu mini; do
+  "$cc" -nostdlib -static -no-pie -Wl,-e,_start \
+    "$work/build/obj/crt/crt1.o" "$work/build/obj/crt/crti.o" "$work/setjmp-$impl.o" \
+    -Wl,--start-group "$work/build/lib/libc.a" "$libgcc" -Wl,--end-group \
+    "$work/build/obj/crt/crtn.o" -o "$work/setjmp-$impl"
+done
+set +e
+"$qemu" "$work/setjmp-gnu" >"$work/setjmp-gnu.out" 2>"$work/setjmp-gnu.err"; gnu_rc=$?
+"$qemu" "$work/setjmp-mini" >"$work/setjmp-mini.out" 2>"$work/setjmp-mini.err"; mini_rc=$?
+set -e
+if test "$gnu_rc" != 42 || test "$mini_rc" != 42 ||
+   ! cmp -s "$work/setjmp-gnu.out" "$work/setjmp-mini.out" ||
+   ! cmp -s "$work/setjmp-gnu.err" "$work/setjmp-mini.err"; then
+  echo "MUSL_RETURNS_TWICE=FAIL target=$target gcc=$gnu_rc minic=$mini_rc" >&2
+  head -c 800 "$work/setjmp-gnu.err" "$work/setjmp-mini.err" >&2 || true
+  exit 1
+fi
+echo "MUSL_RETURNS_TWICE=PASS target=$target original_musl_setjmp_header=1 GNU_MiniC_QEMU_byte_exact=1"
+
 commit=1a64f6a20aaf6ea4dbba68bbfa8cc1ab7e5c57c4
 curl -fsSL --retry 4 --retry-delay 2 --connect-timeout 15 \
   "https://github.com/mirror/busybox/archive/$commit.tar.gz" \

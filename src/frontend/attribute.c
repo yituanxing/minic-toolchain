@@ -301,6 +301,19 @@ static const MinicAttributeDescriptor minic_attribute_descriptors[] = {
                           MINIC_ATTRIBUTE_NORETURN,
                           MINIC_ATTRIBUTE_CLASS_CONTROL_FLOW,
                           MINIC_ATTRIBUTE_TARGET_FUNCTION),
+    /* musl setjmp.h declares setjmp and _setjmp returns_twice.
+     * MiniC's current O0 call lowering materializes state on the stack,
+     * does not assume one return, and must preserve that observable ABI. */
+    {
+        "returns_twice", sizeof("returns_twice") - 1U,
+        MINIC_ATTRIBUTE_RETURNS_TWICE, MINIC_ATTRIBUTE_CLASS_CONTROL_FLOW,
+        MINIC_ATTRIBUTE_TARGET_FUNCTION, 0U, 0U, true,
+    },
+    {
+        "__returns_twice__", sizeof("__returns_twice__") - 1U,
+        MINIC_ATTRIBUTE_RETURNS_TWICE, MINIC_ATTRIBUTE_CLASS_CONTROL_FLOW,
+        MINIC_ATTRIBUTE_TARGET_FUNCTION, 0U, 0U, true,
+    },
     MINIC_ATTRIBUTE_ENTRY("deprecated",
                           MINIC_ATTRIBUTE_DEPRECATED,
                           MINIC_ATTRIBUTE_CLASS_DIAGNOSTIC,

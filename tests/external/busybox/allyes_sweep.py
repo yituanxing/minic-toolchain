@@ -342,6 +342,12 @@ def controller(args):
         # ELF and can fail *after* GNU successfully links BusyBox. Do not
         # patch original BusyBox scripts or misclassify this as MiniC ABI.
         disabled_host_options += ("SELINUX", "PAM", "FEATURE_USE_BSS_TAIL")
+    if link_compatible and os.environ.get("BUSYBOX_ALLYES_MUSL_MATRIX") == "1":
+        # Original BusyBox asks for GNU-only glibc regex internals under
+        # allyesconfig. musl intentionally implements POSIX regex instead.
+        # Disable the exact two incompatible OPTIONAL features, not grep
+        # itself, and keep 38 real applet runtime fixtures including grep.
+        disabled_host_options += ("EXTRA_COMPAT", "FEATURE_VI_REGEX_SEARCH")
     changed = []
     for symbol in disabled_host_options:
         old_value = "CONFIG_" + symbol + "=y"

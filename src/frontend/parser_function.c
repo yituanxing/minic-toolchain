@@ -286,6 +286,10 @@ static bool consume_function_attribute(MinicParser *parser,
         return true;
     }
 
+    /* returns_twice on an external setjmp declaration is admitted only
+     * through the known control-flow descriptor. O0 callers retain a
+     * concrete ABI frame across both normal and longjmp returns; a
+     * GNU/QEMU setjmp/longjmp differential guards this contract. */
     if (!function_attribute_class_is_parse_only(descriptor->semantic_class)) {
         minic_parser_error(parser, "%s (attribute=%.*s)",
                            context->unsupported_message,
