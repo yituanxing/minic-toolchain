@@ -501,6 +501,102 @@ SRC
       exit 1
     fi
     echo 'RV64_CHECKED_MUL_QEMU=PASS cases=12 signed_unsigned_32_64=1 overflow_min_neg1=1'
+
+    # GNU start code exercises true LP64 psABI interoperability. No
+    # software FP library is needed here: only raw floating payloads move
+    # through scalar, aggregate, indirect-call and spilled stack positions.
+    cat >"$tmp/lp64-abi.i" <<'SRC'
+float echo_float(float v) { return v; }
+double echo_double(double v) { return v; }
+struct Box { double value; };
+struct Box echo_box(struct Box v) { return v; }
+struct Pair { double value; long tag; };
+struct Pair echo_pair(struct Pair v) { return v; }
+double through_pointer(double (*fn)(double), double v) { return fn(v); }
+double ninth(double a, double b, double c, double d, double e,
+             double f, double g, double h, double i) { return i; }
+SRC
+    "$MINIC_CC" --target=riscv64-linux -march=rv64i -mabi=lp64 \
+      -S "$tmp/lp64-abi.i" -o "$tmp/lp64-abi.s"
+    if grep -Eq '^[[:space:]]*(fmv|fld|fsd|fadd|fsub|fmul|fdiv|fcvt)\\.' \
+      "$tmp/lp64-abi.s"; then
+      echo 'RV64_LP64_QEMU=FAIL floating register usage' >&2; exit 1
+    fi
+    cat >"$tmp/lp64-start.s" <<'SRC'
+.section .text
+.globl _start
+_start:
+    li a0, 0x400921fb54442d18
+    mv s0, a0
+    call echo_double
+    bne a0, s0, 1f
+    li a0, 0x40490fdb
+    mv s0, a0
+    call echo_float
+    slli a0, a0, 32
+    srli a0, a0, 32
+    bne a0, s0, 2f
+    li a0, 0x400921fb54442d18
+    mv s0, a0
+    call echo_box
+    bne a0, s0, 3f
+    li a0, 0x400921fb54442d18
+    li a1, 0x1234abcd
+    mv s0, a0
+    mv s1, a1
+    call echo_pair
+    bne a0, s0, 4f
+    bne a1, s1, 4f
+    lla a0, echo_double
+    li a1, 0x400921fb54442d18
+    mv s0, a1
+    call through_pointer
+    bne a0, s0, 5f
+    addi sp, sp, -16
+    li t0, 0x400921fb54442d18
+    sd t0, 0(sp)
+    li a0, 1
+    li a1, 2
+    li a2, 3
+    li a3, 4
+    li a4, 5
+    li a5, 6
+    li a6, 7
+    li a7, 8
+    mv s0, t0
+    call ninth
+    addi sp, sp, 16
+    bne a0, s0, 6f
+    li a0, 0
+    j 7f
+1:  li a0, 1
+    j 7f
+2:  li a0, 2
+    j 7f
+3:  li a0, 3
+    j 7f
+4:  li a0, 4
+    j 7f
+5:  li a0, 5
+    j 7f
+6:  li a0, 6
+7:  li a7, 93
+    ecall
+SRC
+    riscv64-linux-gnu-gcc -march=rv64i -mabi=lp64 -nostdlib -static \
+      -Wl,-e,_start "$tmp/lp64-start.s" "$tmp/lp64-abi.s" \
+      -o "$tmp/lp64-abi.elf"
+    set +e
+    qemu-riscv64 "$tmp/lp64-abi.elf" >"$tmp/lp64.out" 2>"$tmp/lp64.err"
+    lp64_rc=$?
+    set -e
+    if (( lp64_rc != 0 )); then
+      echo "RV64_LP64_QEMU=FAIL case=$lp64_rc" >&2
+      cat "$tmp/lp64.err" >&2
+      exit 1
+    fi
+    python3 "$machine_audit" "$tmp/lp64-abi.elf"
+    echo 'RV64_LP64_QEMU=PASS float_double=1 struct=2 indirect=1 stack_ninth=1'
     # The final ELF includes our upstream libgcc archive. Validate the
     # linked byte encodings too, not merely our .s or .o files.
     python3 "$machine_audit" "$tmp/checkedmul.elf" \
