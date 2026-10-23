@@ -1124,8 +1124,6 @@ jobs:
   # Explicit, optional 7-runner producer for the same pure-GCC C universe.
   # Do not use this lane for everyday single-TU debugging.
   gcc-shards:
-    env:
-      MINIC_KBUILD_RV64I_ORIGIN_AUDIT: ${{ contains(github.event.head_commit.message, '[linux-rv64i-full2064]') && '1' || '0' }}
     if: github.event_name == 'push' && !contains(github.event.head_commit.message, '[linux-runtime-gcc-receiver-reuse]') && (contains(github.event.head_commit.message, '[linux-perf-2064-ab]') || contains(github.event.head_commit.message, '[linux-runtime-gcc-sharded]') || contains(github.event.head_commit.message, '[linux-minias-seven-shards]') || (contains(github.event.head_commit.message, '[linux-minipp-seven-integration]') && !contains(github.event.head_commit.message, '[linux-minipp-seven-replay]')) || contains(github.event.head_commit.message, '[linux-minipp-native-rules-C]') || contains(github.event.head_commit.message, '[minic-bootstrap-stage2-linux2064]') || contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux2064]'))
     runs-on: ubuntu-24.04
     timeout-minutes: 75
@@ -1502,9 +1500,6 @@ jobs:
             echo "MINIC_FRESH_FULL2064=ENABLED seven_runner_compilers=true candidate_cache=DISABLED cpu_rss=ENABLED"
           fi
           export COHORT_ACTION=compile COHORT_ALLOW_SHARD=1
-          if [[ "$MINIC_KBUILD_RV64I_ORIGIN_AUDIT" == 1 ]]; then
-            echo 'RV64I_LINUX_COMPILE=ENABLED strict_march=rv64i abi=lp64 kbuild_GNU_AS=original full_owners=2064 shards=7'
-          fi
           if [[ "${{ contains(github.event.head_commit.message, '[linux-boolean-native-full]') }}" == true ]]; then
             # Keep the established seven-way stride schedule; reuse GNU Kbuild
             # preprocessing and GNU AS, measuring only the actual MiniC compiler.
@@ -1640,8 +1635,6 @@ jobs:
           retention-days: 3
 
   gcc-shard-verify:
-    env:
-      MINIC_KBUILD_RV64I_ORIGIN_AUDIT: ${{ contains(github.event.head_commit.message, '[linux-rv64i-full2064]') && '1' || '0' }}
     needs: gcc-shards
     # Use the SAME receiver job for exact immutable Image reboots. When the
     # seven producer jobs are skipped, always() prevents needs' implicit skip;
@@ -2725,9 +2718,6 @@ jobs:
           work="$GITHUB_WORKSPACE/build/linux-runtime-gcc"
           ev="$GITHUB_WORKSPACE/build/linux-runtime-gcc-cohort-v1"
           export COHORT_ACTION=verify
-          if [[ "$MINIC_KBUILD_RV64I_ORIGIN_AUDIT" == 1 ]]; then
-            echo 'RV64I_LINUX_VERIFY=ENABLED strict_march=rv64i original_Kbuild_AS=true full_owners=2064 QEMU_P1=required'
-          fi
           if [[ "${{ contains(github.event.head_commit.message, '[linux-perf-integrated-full]') }}" == true ]]; then
             export COHORT_GNU_PREFLIGHT_ALLOW_SEVEN_RECEIVER_VOLATILE=1
           fi
