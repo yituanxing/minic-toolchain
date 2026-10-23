@@ -42,6 +42,8 @@ int main(int argc, char **argv) {
     const char *output = NULL;
     bool elf32 = false;
     uint32_t elf_flags = 0U;
+    const char *march = NULL;
+    const char *mabi = NULL;
     int i;
 
     for (i = 1; i < argc; ++i) {
@@ -53,6 +55,7 @@ int main(int argc, char **argv) {
             output = argv[i];
         } else if (strncmp(argv[i], "-march=", 7U) == 0) {
             const char *arch = argv[i] + 7;
+            march = arch;
             if (strncmp(arch, "rv32", 4U) == 0) {
                 elf32 = true;
             } else if (strncmp(arch, "rv64", 4U) == 0) {
@@ -69,6 +72,7 @@ int main(int argc, char **argv) {
         } else if (strncmp(argv[i], "-mabi=", 6U) == 0) {
             const char *abi = argv[i] + 6;
             uint32_t abi_flags = 0U;
+            mabi = abi;
 
             if (strcmp(abi, "ilp32") == 0) {
                 elf32 = true;
@@ -118,9 +122,19 @@ int main(int argc, char **argv) {
         usage(stderr, argv[0]);
         return 2;
     }
-    return minias_assemble_file_target(input,
-                                       output,
-                                       elf32,
-                                       elf_flags,
-                                       stderr);
+    /* Only the explicitly qualified rv64i profile opts into an ISA
+     * encoding contract. Legacy unqualified assembler acceptance remains
+     * untouched for Linux/kernel and other existing toolchain users. */
+    if (march != NULL && strcmp(march, "rv64i") == 0 &&
+        (elf32 || (mabi != NULL && strcmp(mabi, "lp64") != 0) ||
+         (elf_flags & 0xFU) != 0U)) {
+        fprintf(stderr, "minic-as: incompatible-riscv-isa-abi:rv64i requires lp64\n");
+        return 2;
+    }
+    return minias_assemble_file_target_isa(input,
+                                           output,
+                                           elf32,
+                                           elf_flags,
+                                           march != NULL && strcmp(march, "rv64i") == 0,
+                                           stderr);
 }

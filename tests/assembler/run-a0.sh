@@ -36,6 +36,77 @@ EOF
 }
 
 
+
+# Explicit rv64i/lp64 must be fail-closed for EVERY MiniAS encoder family,
+# not just annotate an ELF header. Check real machine words produced from
+# pseudos, invalid extension instructions and silent GNU .option escapes.
+cat >"$work/strict-i-positive.s" <<'EOF_I'
+.text
+.globl strict_i_positive
+strict_i_positive:
+    li a0, 37
+    mv a1, a0
+    add a0, a0, a1
+    call strict_i_target
+    ret
+strict_i_target:
+    ret
+EOF_I
+"$MINIAS" -march=rv64i -mabi=lp64 -o "$work/strict-i-positive.o" \
+    "$work/strict-i-positive.s"
+readelf -h "$work/strict-i-positive.o" | grep -q 'Flags:.*soft-float ABI'
+test -s "$work/strict-i-positive.o"
+
+for bad in mul div fadd.s fadd.d amoadd.w c.li csrrw fence.i sfence.vma pause; do
+    case "$bad" in
+        mul) instruction='mul a0, a0, a1' ;;
+        div) instruction='div a0, a0, a1' ;;
+        fadd.s) instruction='fadd.s fa0, fa1, fa2' ;;
+        fadd.d) instruction='fadd.d fa0, fa1, fa2' ;;
+        amoadd.w) instruction='amoadd.w a0, a1, (a2)' ;;
+        c.li) instruction='c.li a0, 1' ;;
+        csrrw) instruction='csrrw a0, 0x300, a1' ;;
+        fence.i) instruction='fence.i' ;;
+        sfence.vma) instruction='sfence.vma' ;;
+        pause) instruction='pause' ;;
+    esac
+    printf '.text\n.globl test_i\ntest_i:\n    %s\n' "$instruction" >"$work/strict-i-bad.s"
+    rm -f "$work/strict-i-bad.o"
+    if "$MINIAS" -march=rv64i -mabi=lp64 -o "$work/strict-i-bad.o" \
+        "$work/strict-i-bad.s" >"$work/strict-i-bad.out" \
+        2>"$work/strict-i-bad.err"; then
+        echo "MiniAS accepted non-I machine instruction under rv64i: $bad" >&2
+        exit 1
+    fi
+    test ! -e "$work/strict-i-bad.o"
+    grep -Eq 'rv64i-unsupported-machine-encoding|unsupported-instruction' \
+        "$work/strict-i-bad.err"
+done
+for escape in '.insn r 51, 0, 1, a0, a0, a1' '.word 0x02050533' \
+              '.option arch,+m' '.option rvc' '.org 8'; do
+    printf '.text\n.globl test_i\ntest_i:\n    %s\n' "$escape" >"$work/strict-i-escape.s"
+    rm -f "$work/strict-i-escape.o"
+    if "$MINIAS" -march=rv64i -mabi=lp64 -o "$work/strict-i-escape.o" \
+        "$work/strict-i-escape.s" >"$work/strict-i-escape.out" \
+        2>"$work/strict-i-escape.err"; then
+        echo "MiniAS accepted ISA escape under rv64i: $escape" >&2
+        exit 1
+    fi
+    test ! -e "$work/strict-i-escape.o"
+    grep -q 'unsupported-isa-' "$work/strict-i-escape.err"
+done
+cat >"$work/strict-i-bad-abi.s" <<'EOF_I'
+.text
+ret
+EOF_I
+if "$MINIAS" -mabi=lp64d -march=rv64i -o "$work/strict-i-bad-abi.o" \
+    "$work/strict-i-bad-abi.s" 2>"$work/strict-i-bad-abi.err"; then
+    echo 'MiniAS rv64i accepted lp64d' >&2
+    exit 1
+fi
+grep -q 'incompatible-riscv-isa-abi' "$work/strict-i-bad-abi.err"
+echo 'MINIAS_RV64I_ISA=PASS pseudos=1 negative_m_f_d_a_c_csr_zifencei=1 escapes=5 wrong_abi=1'
+
 # Regression: GNU RISC-V assembler fills executable .p2align with NOPs,
 # not 0x0000 (C.UNIMP). A zero-fill bug in the Zbb strcmp fast path passes
 # ELF/symbol checks but traps before the Linux boot banner in real QEMU.

@@ -177,6 +177,7 @@ typedef struct MiniAs {
     bool cfi_active;
     bool cfi_signal_frame;
     uint32_t elf_flags;
+    bool strict_rv64i;
     const size_t *forced_long_branch_lines;
     size_t forced_long_branch_count;
     int current_section;

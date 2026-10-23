@@ -2999,6 +2999,11 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
         }
     }
 
+    if (as->strict_rv64i && strcmp(op, ".insn") == 0) {
+        /* .insn is a raw-byte escape hatch; do not treat it as ISA-proof. */
+        minias_set_error(as, "unsupported-isa-escape:.insn:line=%zu", line);
+        return false;
+    }
     if (op[0] == '.' && strcmp(op, ".insn") != 0) {
         /*
          * Native Linux VDSO sources use only the procedure-boundary CFI
@@ -3124,6 +3129,16 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
             return pop_section(as, line);
         }
         if (strcmp(op, ".option") == 0) {
+            if (as->strict_rv64i &&
+                strcmp(args, "pic") != 0 && strcmp(args, "nopic") != 0 &&
+                strcmp(args, "push") != 0 && strcmp(args, "pop") != 0 &&
+                strcmp(args, "norvc") != 0 && strcmp(args, "norelax") != 0 &&
+                strcmp(args, "relax") != 0) {
+                minias_set_error(as,
+                                 "unsupported-isa-option:%s:line=%zu",
+                                 args, line);
+                return false;
+            }
             /*
              * RISC-V GNU as starts in NOPIC mode. Its 'la' pseudo op is
              * PC-relative unless the effective source explicitly enables
@@ -3168,6 +3183,12 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
             return handle_align(as, op, args, line);
         }
         if (strcmp(op, ".org") == 0) {
+            if (as->strict_rv64i &&
+                (as->sections[(size_t)as->current_section].flags &
+                 MINIAS_SHF_EXECINSTR) != 0U) {
+                minias_set_error(as, "unsupported-isa-escape:.org:line=%zu", line);
+                return false;
+            }
             char *rewritten_args = NULL;
             bool ok;
 
@@ -3185,6 +3206,14 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
             strcmp(op, ".space") == 0 || strcmp(op, ".asciz") == 0 ||
             strcmp(op, ".string") == 0 || strcmp(op, ".ascii") == 0 ||
             strcmp(op, ".incbin") == 0) {
+            if (as->strict_rv64i &&
+                (as->sections[(size_t)as->current_section].flags &
+                 MINIAS_SHF_EXECINSTR) != 0U) {
+                minias_set_error(as,
+                                 "unsupported-isa-escape:%s-in-exec:line=%zu",
+                                 op, line);
+                return false;
+            }
             char *rewritten_args = NULL;
             bool ok;
 
@@ -4703,11 +4732,91 @@ bool minias_emit_sections(MiniAs *as) {
     return true;
 }
 
-int minias_assemble_file_target(const char *input_path,
-                                const char *output_path,
-                                bool elf32,
-                                uint32_t elf_flags,
-                                FILE *diagnostic) {
+
+/* Validate raw 32-bit encodings AFTER macro/ISA pseudo expansion, section
+ * padding and relocation placeholders. This protects all emission families,
+ * including a newly added pseudo unknown to a handwritten opcode allowlist.
+ * For strict-I executable sections, no raw .word/.insn/.org data is allowed:
+ * every 4-byte word must be a real base-I instruction.
+ *
+ * This intentionally differs from the default legacy MiniAS input mode,
+ * which supports RISC-V M/F/D/C/Z*/A instructions and raw kernel assembly. */
+static bool strict_rv64i_word(uint32_t w) {
+    uint32_t op = w & 127U;
+    uint32_t f3 = (w >> 12U) & 7U;
+    uint32_t f7 = (w >> 25U) & 127U;
+
+    if ((w & 3U) != 3U) return false;
+    switch (op) {
+    case 0x17U: /* AUIPC */
+    case 0x37U: /* LUI */
+    case 0x6fU: /* JAL */
+        return true;
+    case 0x67U: /* JALR */
+        return f3 == 0U;
+    case 0x63U: /* branch */
+        return f3 == 0U || f3 == 1U || f3 >= 4U;
+    case 0x03U: /* RV64 integer loads */
+        return f3 != 7U;
+    case 0x23U: /* integer stores */
+        return f3 <= 3U;
+    case 0x13U: /* immediate */
+        if (f3 == 1U) return (w >> 26U) == 0U;
+        if (f3 == 5U)
+            return (w >> 26U) == 0U || (w >> 26U) == 16U;
+        return f3 != 1U && f3 != 5U;
+    case 0x1bU: /* RV64 word-immediate */
+        if (f3 == 0U) return true;
+        if (f3 == 1U) return f7 == 0U;
+        if (f3 == 5U) return f7 == 0U || f7 == 32U;
+        return false;
+    case 0x33U: /* register ALU, excluding M */
+        return f7 == 0U || (f7 == 32U && (f3 == 0U || f3 == 5U));
+    case 0x3bU: /* RV64 word ALU, excluding M */
+        return (f7 == 0U && (f3 == 0U || f3 == 1U || f3 == 5U)) ||
+               (f7 == 32U && (f3 == 0U || f3 == 5U));
+    case 0x0fU: /* FENCE only, no FENCE.I/Ztso */
+        return f3 == 0U && (w >> 28U) == 0U;
+    case 0x73U: /* ECALL, EBREAK only, no Zicsr or privileged ops */
+        return w == UINT32_C(0x00000073) || w == UINT32_C(0x00100073);
+    default:
+        return false;
+    }
+}
+
+static bool strict_rv64i_check_sections(MiniAs *as) {
+    size_t i;
+    if (!as->strict_rv64i) return true;
+    for (i = 0U; i < as->section_count; ++i) {
+        const MiniAsSection *section = &as->sections[i];
+        size_t offset;
+        if ((section->flags & MINIAS_SHF_EXECINSTR) == 0U) continue;
+        if (section->size % 4U != 0U) {
+            minias_set_error(as, "rv64i-unaligned-executable-section:%s",
+                             section->name);
+            return false;
+        }
+        for (offset = 0U; offset < section->size; offset += 4U) {
+            const unsigned char *p = section->data + offset;
+            uint32_t w = (uint32_t)p[0] | ((uint32_t)p[1] << 8U) |
+                         ((uint32_t)p[2] << 16U) | ((uint32_t)p[3] << 24U);
+            if (!strict_rv64i_word(w)) {
+                minias_set_error(as,
+                                 "rv64i-unsupported-machine-encoding:%s:offset=%zu:word=%08x",
+                                 section->name, offset, (unsigned)w);
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+int minias_assemble_file_target_isa(const char *input_path,
+                                    const char *output_path,
+                                    bool elf32,
+                                    uint32_t elf_flags,
+                                    bool strict_rv64i,
+                                    FILE *diagnostic) {
     size_t *long_branch_lines = NULL;
     size_t long_branch_count = 0U;
     size_t long_branch_capacity = 0U;
@@ -4720,6 +4829,7 @@ int minias_assemble_file_target(const char *input_path,
 
         minias_init(&as);
         as.elf_flags = elf_flags;
+        as.strict_rv64i = strict_rv64i;
         as.forced_long_branch_lines = long_branch_lines;
         as.forced_long_branch_count = long_branch_count;
         parsed = as.error[0] == '\0' && minias_parse_file(&as, input_path);
@@ -4737,6 +4847,7 @@ int minias_assemble_file_target(const char *input_path,
         }
         if (parsed && as.error[0] == '\0' &&
             minias_emit_sections(&as) &&
+            strict_rv64i_check_sections(&as) &&
             (elf32 ? minias_write_elf32(&as, output_path)
                    : minias_write_elf64(&as, output_path))) {
             rc = 0;
@@ -4751,6 +4862,17 @@ int minias_assemble_file_target(const char *input_path,
     }
     free(long_branch_lines);
     return rc;
+}
+
+/* Historical API stays permissive: only explicit -march=rv64i activates
+ * ISA qualification so the existing MiniAS/Linux acceptance does not change. */
+int minias_assemble_file_target(const char *input_path,
+                                const char *output_path,
+                                bool elf32,
+                                uint32_t elf_flags,
+                                FILE *diagnostic) {
+    return minias_assemble_file_target_isa(
+        input_path, output_path, elf32, elf_flags, false, diagnostic);
 }
 
 int minias_assemble_file_class(const char *input_path,

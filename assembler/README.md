@@ -29,6 +29,32 @@ The C implementation is split by ownership:
 The older Python MiniAS is used as a semantic and bug-history reference, not as a
 physical code template.
 
+## Explicit strict RV64I profile
+
+MiniAS historically accepts a broad set of RISC-V instructions and GNU
+pseudos. Merely supplying `-march=rv64i` previously changed the ELF flags
+but did not restrict encoded instructions, allowing an M/F/D/A/C opcode to
+escape into a purported RV64I object. That was **not** a valid ISA contract.
+
+Now the explicit `minic-as -march=rv64i -mabi=lp64` path validates the
+machine words emitted into every executable section *after* pseudo expansion,
+alignment and fixup creation. Only RV64I base integer encodings (including
+ECALL/EBREAK/FENCE) are accepted. M/F/D/A/C, CSR, FENCE.I and unqualified
+instructions fail with an encoding/section offset diagnostic and do not
+produce a successful .o. Raw .insn, data in executable sections, .org in
+executable sections, and ISA-altering/ignored .option directives fail
+closed, rather than concealing unverified code bytes.
+
+This is deliberately an opt-in policy of the *assembler*, independent
+from MiniC's Core/ISA selector. The historical default and other -march
+spellings retain their prior general Linux assembly compatibility until
+they receive explicit ISA-mode qualification. Full `.riscv.attributes`
+emission is a separate ELF metadata concern; the immediate protection
+here is byte-level ISA legality and an LP64 soft-float e_flags guard.
+A generic Linux ELF with arbitrary inline data in .text is **not**
+supported by the strict-I opt-in mode until such data is separately
+represented with a provable instruction/data distinction.
+
 ## Real-program convergence
 
 ## Linux convergence pipeline
