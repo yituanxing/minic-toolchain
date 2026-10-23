@@ -106,7 +106,9 @@ bool minic_riscv64_classify_abi_value_profile(
         result->register_chunks = 1U;
         return true;
     }
-    if (minic_type_is_long_double(type) && size == 16U) {
+    if ((minic_type_is_long_double(type) ||
+         (lp64_soft_float && minic_type_is_int128_integer(type))) &&
+        size == 16U) {
         result->kind = MINIC_RISCV64_ABI_VALUE_WIDE_SCALAR;
         result->register_chunks = 2U;
         return true;
@@ -257,6 +259,23 @@ bool minic_riscv64_abi_place_argument(const MinicC0Program *program,
          result.value.kind == MINIC_RISCV64_ABI_VALUE_WIDE_SCALAR)
             ? result.value.slot_count
             : 1U;
+    /* RISC-V psABI: unnamed varargs requiring 16-byte alignment use
+     * even-numbered register pairs; if no pair remains they are entirely
+     * stack-passed, and subsequent args must also use the stack. The
+     * named 2-XLEN arguments may split a7 + first stack slot instead. */
+    if (next.lp64_soft_float && !is_fixed_parameter &&
+        integer_slots == 2U) {
+        size_t size, alignment;
+        if (!minic_data_layout_type(minic_default_data_layout(), program, type,
+                                    &size, &alignment))
+            return false;
+        if (alignment >= 16U) {
+            if ((next.integer_register_count & 1U) != 0U)
+                ++next.integer_register_count;
+            if (next.integer_register_count > 6U)
+                next.integer_register_count = 8U;
+        }
+    }
     available_integer_registers =
         MINIC_RISCV64_ABI_ARGUMENT_REGISTER_COUNT - next.integer_register_count;
     result.integer_register_begin = next.integer_register_count;

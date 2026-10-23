@@ -420,7 +420,8 @@ static bool emit_terminator(FILE *file,
             } else {
                 return false;
             }
-        } else if (minic_type_is_long_double(function->return_type)) {
+        } else if (minic_type_is_long_double(function->return_type) ||
+                   minic_type_is_int128_integer(function->return_type)) {
             if (terminator->return_value == MINIC_CORE_VALUE_INVALID ||
                 !minic_riscv64_frame_load_int128(
                     file, frame, terminator->return_value, "a0", "a1")) {

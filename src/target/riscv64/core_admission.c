@@ -224,7 +224,8 @@ static bool core_function_can_emit(const MinicC0Program *program,
                 return core_rv64_capability_reject(function, "return-indirect", 0U, -1);
             }
         } else if (return_value.kind == MINIC_RISCV64_ABI_VALUE_WIDE_SCALAR) {
-            if (!minic_type_is_long_double(function->return_type) ||
+            if ((!minic_type_is_long_double(function->return_type) &&
+                 !minic_type_is_int128_integer(function->return_type)) ||
                 return_value.storage_size != 16U || return_value.slot_count != 2U) {
                 return core_rv64_capability_reject(
                     function, "return-wide-scalar", 0U, -1);
@@ -266,7 +267,8 @@ static bool core_function_can_emit(const MinicC0Program *program,
                     return core_rv64_capability_reject(function, "parameter-float", index, -1);
                 }
             } else if (location.value.kind == MINIC_RISCV64_ABI_VALUE_WIDE_SCALAR) {
-                if (!minic_type_is_long_double(function->parameter_types[index]) ||
+                if ((!minic_type_is_long_double(function->parameter_types[index]) &&
+                     !minic_type_is_int128_integer(function->parameter_types[index])) ||
                     location.value.storage_size != 16U || location.value.slot_count != 2U ||
                     location.floating_register_count != 0U ||
                     location.integer_register_count + location.stack_slot_count != 2U ||

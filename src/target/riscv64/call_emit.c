@@ -96,7 +96,8 @@ bool minic_riscv64_emit_incoming_parameter(FILE *file,
                 return false;
             }
         } else if (location.value.kind == MINIC_RISCV64_ABI_VALUE_WIDE_SCALAR &&
-                   minic_type_is_long_double(instruction->type)) {
+                   (minic_type_is_long_double(instruction->type) ||
+                    minic_type_is_int128_integer(instruction->type))) {
             const char *chunk_registers[2] = {"t0", "t1"};
             size_t chunk_index;
 
@@ -319,7 +320,8 @@ static bool emit_core_call_argument(
             const char *chunk_registers[2] = {"t0", "t1"};
             size_t chunk_index;
 
-            if (!direct_call || !minic_type_is_long_double(argument_type) ||
+            if ((!minic_type_is_long_double(argument_type) &&
+                  !minic_type_is_int128_integer(argument_type)) ||
                 location->value.storage_size != 16U || location->value.slot_count != 2U ||
                 location->floating_register_count != 0U ||
                 location->integer_register_count + location->stack_slot_count != 2U ||
@@ -648,7 +650,8 @@ bool minic_riscv64_emit_direct_call(FILE *file,
         }
         return true;
     }
-    if (minic_type_is_long_double(instruction->type)) {
+    if (minic_type_is_long_double(instruction->type) ||
+        minic_type_is_int128_integer(instruction->type)) {
         return return_value.kind == MINIC_RISCV64_ABI_VALUE_WIDE_SCALAR &&
                return_value.storage_size == 16U && return_value.slot_count == 2U &&
                minic_riscv64_frame_store_int128(file, frame, instruction->result, "a0", "a1");

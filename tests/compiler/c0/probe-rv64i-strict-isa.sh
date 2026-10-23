@@ -147,16 +147,15 @@ for variant in div add shl equal; do
   fi
   test ! -e "$tmp/invalid-int128-$variant.s"
 done
-cat >"$tmp/unsupported-i128-abi.i" <<'SRC'
+cat >"$tmp/qualified-i128-abi.i" <<'SRC'
 unsigned __int128 passthrough(unsigned __int128 a) { return a; }
 SRC
-if "$MINIC_CC" --target=riscv64-linux -march=rv64i -mabi=lp64 \
-  -S "$tmp/unsupported-i128-abi.i" -o "$tmp/invalid-i128-abi.s" \
-  >"$tmp/i128-abi.out" 2>"$tmp/i128-abi.err"; then
-  echo 'RV64I_INT128=FAIL accepted unqualified two-register ABI' >&2; exit 1
-fi
-grep -q '__int128 parameter/return' "$tmp/i128-abi.err"
-test ! -e "$tmp/invalid-i128-abi.s"
+"$MINIC_CC" --target=riscv64-linux -march=rv64i -mabi=lp64 \
+  -S "$tmp/qualified-i128-abi.i" -o "$tmp/qualified-i128-abi.s"
+test -s "$tmp/qualified-i128-abi.s"
+grep -Eq '[[:space:]]+mv t[01], a[01]' "$tmp/qualified-i128-abi.s" || {
+  echo 'RV64I_INT128=FAIL two-register incoming ABI missing' >&2; exit 1
+}
 
 
 # Real LP64 psABI accepts floats, structs and variadic signatures.

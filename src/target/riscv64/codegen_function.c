@@ -67,29 +67,9 @@ bool minic_riscv64_write_c0_program_with_core_functions(const char *path,
         }
     }
 
-    /* The current integer ABI classifier treats a scalar __int128 as
-     * one integer register, which is not the RV64 psABI two-XLEN contract.
-     * Refuse referenced prototypes as well as definitions in explicit ISA
-     * profiles; the opcode audit cannot diagnose an ABI-only miscompile.
-     * Do not alter the existing default RV64/Linux contract. */
-    if (target != NULL && target->riscv_isa.strict_isa) {
-        for (function_index = 0U; function_index < program->function_count;
-             ++function_index) {
-            const MinicFunction *f = &program->functions[function_index];
-            size_t i;
-            bool wide_abi = minic_type_is_int128_integer(f->return_type);
-            if (!f->is_defined && !f->is_referenced)
-                continue;
-            for (i = 0U; !wide_abi && i < f->parameter_count; ++i)
-                wide_abi = minic_type_is_int128_integer(f->parameter_types[i]);
-            if (wide_abi) {
-                minic_riscv64_set_diagnostic(
-                    diagnostic, path,
-                    "__int128 parameter/return requires unqualified RV64 two-register ABI");
-                return false;
-            }
-        }
-    }
+    /* LP64 uses two XLEN slots for C __int128 parameters and returns.
+     * Unsupported 128-bit ARITHMETIC remains rejected by Core ISA
+     * legalization, rather than rejecting otherwise ABI-valid prototypes. */
 
     /* Full LP64 integer-register psABI: float/double arguments and returns
      * travel in GPRs, and records use XLEN-word chunks/indirect storage.
