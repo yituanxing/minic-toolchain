@@ -78,6 +78,15 @@ static bool x86_emit_function(FILE *out, const MinicC0Program *program,
     if (frame.objects_from_aligned_rsp &&
         fprintf(out, "  andq $-%zu, %%rsp\n", frame.object_base_alignment) < 0)
         goto done;
+    if (frame.saves_incoming_gp) {
+        static const char *const regs[6] = {
+            "%rdi", "%rsi", "%rdx", "%rcx", "%r8", "%r9"};
+        size_t i;
+        for (i = 0U; i < 6U; ++i)
+            if (fprintf(out, "  movq %s, -%zu(%%rbp)\n",
+                        regs[i], frame.incoming_gp_save_offset + i * 8U) < 0)
+                goto done;
+    }
     if (frame.varargs_count != 0U) {
         static const char *const gp_registers[] =
             {"%rdi", "%rsi", "%rdx", "%rcx", "%r8", "%r9"};
