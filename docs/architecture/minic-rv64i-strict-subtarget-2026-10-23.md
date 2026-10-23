@@ -59,6 +59,38 @@ reports overflow, explicitly handling signed INT64_MIN * -1 without relying
 on the target division overflow result. These calls share the ordinary
 frame/return-address and compiler runtime contracts.
 
+## Initial LP64 ABI boundary and soft-float library calls
+
+For explicitly selected `-march=rv64i -mabi=lp64` (and `rv64im/lp64`),
+MiniC currently admits **only integer, enum, pointer and void-result public
+function signatures**. A pointer is carried as one XLEN integer slot. All
+by-value record/array signatures, 128-bit scalar signatures, variadic
+functions, and float/double parameters or returns fail before emitting .s.
+The direct and indirect Core call signatures are also preflight-checked
+instead of checking only function definitions. This is intentionally a
+narrow *implemented subset*, not the full LP64 psABI: standard LP64 can
+also pass floating values in integer registers.
+
+GCC libgcc (and LLVM compiler-rt) already provides software floating-point
+routines. MiniC does not need a new floating arithmetic algorithm. If the
+public signature is supported, local `float`/`double` binary arithmetic
+without an F/D extension now emits standard `__addsf3`, `__subsf3`,
+`__mulsf3`, `__divsf3` and matching `*df3` runtime calls with their
+raw operand bits through `a0/a1`; the result returns in `a0`.
+The same pre-existing frame RA mechanism covers these implicit calls.
+Operations not yet mapped to a soft-float libcall, including comparisons
+and conversions, continue to reject unsupported ISA paths.
+
+**Important: linking is not yet automatic.** Our pinned
+`libminic-rt.a` contains only selected GCC **integer** helpers. The new
+float calls require a compatible, independently obtained/buildable
+RV64I/LP64 GCC libgcc or LLVM compiler-rt archive via `--rtlib=PATH`.
+A host cross-GCC default LP64D libgcc.a cannot be silently used as LP64.
+The focused test currently verifies compiler, strict ISA and GNU AS
+acceptance for these calls; an end-to-end float QEMU PASS additionally
+requires such a matching soft-float runtime provider. Do not claim a
+self-contained soft-float runtime until it is actually linked and run.
+
 ## Runtime provider and licensing
 
 **MiniC is not the linker or runtime package.** The final build must supply

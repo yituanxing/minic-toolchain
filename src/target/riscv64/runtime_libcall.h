@@ -17,6 +17,10 @@ typedef enum MinicRiscv64ArithmeticLibcall {
     MINIC_RISCV64_LIBCALL_UMOD
 } MinicRiscv64ArithmeticLibcall;
 
+/* NULL selects existing native F/D or an unsupported non-arithmetic op.
+ * A non-NULL name selects an external standard libgcc soft-float helper. */
+const char *minic_riscv64_softfloat_binary_symbol(
+    const MinicRiscvIsa *isa, MinicCoreInstructionKind kind);
 bool minic_riscv64_needs_arithmetic_libcall(const MinicRiscvIsa *isa,
                                              const MinicCoreFunction *function);
 bool minic_riscv64_uses_arithmetic_libcall(const MinicRiscvIsa *isa);

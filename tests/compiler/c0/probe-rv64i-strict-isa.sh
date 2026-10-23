@@ -163,6 +163,94 @@ fi
 grep -q '__int128 parameter/return' "$tmp/i128-abi.err"
 test ! -e "$tmp/invalid-i128-abi.s"
 
+
+# First supported LP64 ABI contract is intentionally *scalar integer-only*.
+# This includes pointers (carried as XLEN integers), and void results,
+# but NOT by-value aggregates, varargs, floating signatures or __int128.
+cat >"$tmp/strict-abi-integer.i" <<'SRC'
+long pass(long value, unsigned count, const char *ptr) {
+  return value + count + (ptr != 0);
+}
+SRC
+"$MINIC_CC" --target=riscv64-linux -march=rv64i -mabi=lp64 \
+  -S "$tmp/strict-abi-integer.i" -o "$tmp/strict-abi-integer.s"
+test -s "$tmp/strict-abi-integer.s"
+for variant in aggregate variadic; do
+  case "$variant" in
+    aggregate) body='struct Pair { long x; long y; }; struct Pair take(struct Pair v) { return v; }' ;;
+    variadic) body='int take(int a, ...) { return a; }' ;;
+  esac
+  printf '%s\n' "$body" >"$tmp/strict-abi-$variant.i"
+  if "$MINIC_CC" --target=riscv64-linux -march=rv64i -mabi=lp64 \
+       -S "$tmp/strict-abi-$variant.i" -o "$tmp/invalid-$variant.s" \
+       >"$tmp/$variant.out" 2>"$tmp/$variant.err"; then
+    echo "RV64_LP64_ABI=FAIL admitted $variant" >&2; exit 1
+  fi
+  grep -q 'LP64 integer-only ABI' "$tmp/$variant.err" || {
+    cat "$tmp/$variant.err" >&2; exit 1;
+  }
+  test ! -e "$tmp/invalid-$variant.s"
+done
+cat >"$tmp/strict-abi-indirect.i" <<'SRC'
+int invoke(double (*fn)(double), int x) { return (int)fn(x); }
+SRC
+if "$MINIC_CC" --target=riscv64-linux -march=rv64i -mabi=lp64 \
+     -S "$tmp/strict-abi-indirect.i" -o "$tmp/invalid-indirect.s" \
+     >"$tmp/indirect.out" 2>"$tmp/indirect.err"; then
+  echo 'RV64_LP64_ABI=FAIL admitted indirect floating signature' >&2; exit 1
+fi
+grep -q 'LP64 integer-only ABI' "$tmp/indirect.err" || {
+  cat "$tmp/indirect.err" >&2; exit 1;
+}
+test ! -e "$tmp/invalid-indirect.s"
+
+# Non-ABI-exposed local float/double arithmetic: the function takes and
+# returns integer bit patterns. All calculations use standard GCC soft-float
+# symbols through RV64I integer argument registers, never F/D instructions.
+cat >"$tmp/softfp-local.i" <<'SRC'
+union D { double value; unsigned long bits; };
+union F { float value; unsigned bits; };
+unsigned long add_double_bits(unsigned long a, unsigned long b) {
+  union D x, y, z;
+  x.bits = a; y.bits = b;
+  z.value = x.value + y.value;
+  return z.bits;
+}
+unsigned long div_double_bits(unsigned long a, unsigned long b) {
+  union D x, y, z;
+  x.bits = a; y.bits = b;
+  z.value = x.value / y.value;
+  return z.bits;
+}
+unsigned add_float_bits(unsigned a, unsigned b) {
+  union F x, y, z;
+  x.bits = a; y.bits = b;
+  z.value = x.value + y.value;
+  return z.bits;
+}
+unsigned mul_float_bits(unsigned a, unsigned b) {
+  union F x, y, z;
+  x.bits = a; y.bits = b;
+  z.value = x.value * y.value;
+  return z.bits;
+}
+SRC
+for march in rv64i rv64im; do
+  "$MINIC_CC" --target=riscv64-linux "-march=$march" -mabi=lp64 \
+    -S "$tmp/softfp-local.i" -o "$tmp/softfp-$march.s"
+  for sym in __adddf3 __divdf3 __addsf3 __mulsf3; do
+    grep -q "call $sym" "$tmp/softfp-$march.s" || {
+      echo "RV64_SOFTFP=FAIL missing $sym in $march" >&2; exit 1;
+    }
+  done
+  grep -Eq '[[:space:]]+sd ra,' "$tmp/softfp-$march.s"
+  grep -Eq '[[:space:]]+ld ra,' "$tmp/softfp-$march.s"
+  if grep -Eq '^[[:space:]]*(fadd|fsub|fmul|fdiv|fcvt|fmv)\.' "$tmp/softfp-$march.s"; then
+    echo "RV64_SOFTFP=FAIL leaked F/D opcode in $march" >&2; exit 1
+  fi
+done
+echo 'RV64_LP64_ABI=PASS scalar_integer_pointer_only=1 aggregates_varargs_indirect_fp_rejected=1'
+echo 'RV64_SOFTFP_LIBCALL=PASS sf=2 df=2 interface_integer_only=1'
 # The GNU assembler is an independent legality oracle for each exact profile.
 if command -v riscv64-linux-gnu-gcc >/dev/null 2>&1; then
   # The same optional archived upstream runtime used by real MiniC links.
@@ -182,7 +270,7 @@ if command -v riscv64-linux-gnu-gcc >/dev/null 2>&1; then
       -c "$tmp/$march.s" -o "$tmp/$march.o"
     test -s "$tmp/$march.o"
   done
-  for testasm in rv64i-mul rv64i-fullarith longptr-i oddptr-i; do
+  for testasm in rv64i-mul rv64i-fullarith longptr-i oddptr-i softfp-rv64i; do
     riscv64-linux-gnu-gcc -march=rv64i -mabi=lp64 \
       -c "$tmp/$testasm.s" -o "$tmp/$testasm.o"
     test -s "$tmp/$testasm.o"

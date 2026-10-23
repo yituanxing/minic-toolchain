@@ -52,6 +52,14 @@ bool minic_riscv_isa_soft_float_signature_supported(
     const MinicRiscvIsa *isa, const MinicC0Program *program,
     const MinicFunction *function);
 
+/* Deliberately narrow first LP64 ABI guarantee. Only scalar one-XLEN
+ * integer, enum and pointer arguments/results (or void result); no
+ * aggregates, soft-float signatures, 128-bit or variadic calls. Applies
+ * equally to direct declarations and Core direct/indirect call signatures. */
+bool minic_riscv_isa_lp64_integer_signature_supported(
+    MinicType return_type, const MinicType *parameter_types,
+    size_t parameter_count, bool is_variadic);
+
 /* End-to-end fail-closed instruction selection audit, over the actual
  * assembler text (including frame, helper and address emission). */
 bool minic_riscv64_check_isa_assembly(const char *path,

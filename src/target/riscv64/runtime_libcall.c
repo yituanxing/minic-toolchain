@@ -38,16 +38,50 @@ static const char *native_opcode(MinicRiscv64ArithmeticLibcall operation) {
     default: return NULL;
     }
 }
+/* GCC libgcc / compiler-rt standard SF/DF binary arithmetic helpers. The
+ * RISC-V LP64 soft ABI passes the 32/64-bit payload in a0/a1, returning
+ * its bits in a0. These are not included in our integer-only archive;
+ * the final link must supply an RV64I+LP64 soft-float runtime build. */
+const char *minic_riscv64_softfloat_binary_symbol(
+    const MinicRiscvIsa *isa, MinicCoreInstructionKind kind) {
+    if (isa == NULL || !isa->strict_isa ||
+        isa->abi != MINIC_RISCV_ABI_LP64)
+        return NULL;
+    switch (kind) {
+    case MINIC_CORE_INSTRUCTION_FLOAT_ADD:
+        return minic_riscv_isa_has(isa, MINIC_RISCV_FEATURE_F) ? NULL : "__addsf3";
+    case MINIC_CORE_INSTRUCTION_FLOAT_SUBTRACT:
+        return minic_riscv_isa_has(isa, MINIC_RISCV_FEATURE_F) ? NULL : "__subsf3";
+    case MINIC_CORE_INSTRUCTION_FLOAT_MULTIPLY:
+        return minic_riscv_isa_has(isa, MINIC_RISCV_FEATURE_F) ? NULL : "__mulsf3";
+    case MINIC_CORE_INSTRUCTION_FLOAT_DIVIDE:
+        return minic_riscv_isa_has(isa, MINIC_RISCV_FEATURE_F) ? NULL : "__divsf3";
+    case MINIC_CORE_INSTRUCTION_DOUBLE_ADD:
+        return minic_riscv_isa_has(isa, MINIC_RISCV_FEATURE_D) ? NULL : "__adddf3";
+    case MINIC_CORE_INSTRUCTION_DOUBLE_SUBTRACT:
+        return minic_riscv_isa_has(isa, MINIC_RISCV_FEATURE_D) ? NULL : "__subdf3";
+    case MINIC_CORE_INSTRUCTION_DOUBLE_MULTIPLY:
+        return minic_riscv_isa_has(isa, MINIC_RISCV_FEATURE_D) ? NULL : "__muldf3";
+    case MINIC_CORE_INSTRUCTION_DOUBLE_DIVIDE:
+        return minic_riscv_isa_has(isa, MINIC_RISCV_FEATURE_D) ? NULL : "__divdf3";
+    default:
+        return NULL;
+    }
+}
+
 bool minic_riscv64_needs_arithmetic_libcall(const MinicRiscvIsa *isa,
                                              const MinicCoreFunction *function) {
     size_t i;
-    if (!minic_riscv64_uses_arithmetic_libcall(isa) || function == NULL)
+    if (isa == NULL || !isa->strict_isa || function == NULL)
         return false;
     /* Frame requirements deliberately overapproximate unreachable blocks.
      * This can waste one saved-ra slot in strict-I mode, but can never
      * clobber the function's entry return address. */
     for (i = 0U; i < function->instruction_count; ++i) {
         const MinicCoreInstruction *instruction = &function->instructions[i];
+        if (minic_riscv64_softfloat_binary_symbol(isa, instruction->kind) != NULL)
+            return true;
+        if (!minic_riscv64_uses_arithmetic_libcall(isa)) continue;
         switch (instruction->kind) {
         case MINIC_CORE_INSTRUCTION_INTEGER_MULTIPLY:
             if (!minic_type_is_int128_integer(instruction->type)) return true;

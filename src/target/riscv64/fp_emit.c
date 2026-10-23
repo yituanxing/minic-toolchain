@@ -1,6 +1,7 @@
 #include "target/riscv64/fp_emit.h"
 #include "target/riscv64/codegen_internal.h"
 #include "target/riscv64/frame_access.h"
+#include "target/riscv64/runtime_libcall.h"
 #include "target/common/direct_instruction_semantics.h"
 #include <inttypes.h>
 #include <stdint.h>
@@ -13,7 +14,7 @@
  * register sequence and 32-bit result zero-extension on the RV64F path. */
 static bool rv64_emit_fp_binary(
     FILE *file, const MinicRiscv64CoreFrame *frame,
-    const MinicCoreInstruction *instruction) {
+    const MinicCoreInstruction *instruction, const MinicRiscvIsa *isa) {
     bool is_double;
     const char *op;
     switch (instruction->kind) {
@@ -34,6 +35,25 @@ static bool rv64_emit_fp_binary(
         !minic_riscv64_frame_load_value(
             file, frame, instruction->value.binary.right, "t1"))
         return false;
+    {
+        const char *helper =
+            minic_riscv64_softfloat_binary_symbol(isa, instruction->kind);
+        if (helper != NULL) {
+            /* No fp registers or hidden arithmetic implementation. The
+             * existing frame plan preserved ra for this implicit call. */
+            if (fprintf(file,
+                        "  mv a0, t0\n"
+                        "  mv a1, t1\n"
+                        "  call %s\n"
+                        "  mv t0, a0\n", helper) < 0)
+                return false;
+            if (!is_double &&
+                fprintf(file, "  slli t0, t0, 32\n  srli t0, t0, 32\n") < 0)
+                return false;
+            return minic_riscv64_frame_store_value(
+                file, frame, instruction->result, "t0");
+        }
+    }
     if (is_double) {
         if (fprintf(file,
                     "  fmv.d.x ft0, t0\n"
@@ -57,7 +77,7 @@ static bool rv64_emit_fp_binary(
 bool minic_riscv64_emit_fp_instruction(
     FILE *file, const MinicC0Program *program,
     const MinicCoreFunction *function, const MinicRiscv64CoreFrame *frame,
-    const MinicCoreInstruction *instruction) {
+    const MinicCoreInstruction *instruction, const MinicRiscvIsa *isa) {
     if (file == NULL || function == NULL || frame == NULL ||
         instruction == NULL ||
         !minic_multi_direct_fp_instruction_kind(instruction->kind))
@@ -98,7 +118,7 @@ bool minic_riscv64_emit_fp_instruction(
     case MINIC_CORE_INSTRUCTION_DOUBLE_SUBTRACT:
     case MINIC_CORE_INSTRUCTION_DOUBLE_MULTIPLY:
     case MINIC_CORE_INSTRUCTION_DOUBLE_DIVIDE:
-        return rv64_emit_fp_binary(file, frame, instruction);
+        return rv64_emit_fp_binary(file, frame, instruction, isa);
     case MINIC_CORE_INSTRUCTION_DOUBLE_EQUAL:
     case MINIC_CORE_INSTRUCTION_DOUBLE_LESS:
     case MINIC_CORE_INSTRUCTION_DOUBLE_LESS_EQUAL: {

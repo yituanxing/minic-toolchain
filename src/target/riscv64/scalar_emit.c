@@ -39,7 +39,7 @@ bool minic_riscv64_emit_scalar_instruction(
      * RV64 keeps its own fmv/fcvt and floating register sequences. */
     if (minic_multi_direct_fp_instruction_kind(instruction->kind))
         return minic_riscv64_emit_fp_instruction(
-            file, program, function, frame, instruction);
+            file, program, function, frame, instruction, isa);
     if (instruction->kind == MINIC_CORE_INSTRUCTION_INTEGER_OVERFLOW)
         return minic_riscv64_emit_overflow_instruction(
             file, program, function, frame, instruction, isa);

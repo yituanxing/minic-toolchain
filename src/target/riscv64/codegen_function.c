@@ -103,6 +103,8 @@ bool minic_riscv64_write_c0_program_with_core_functions(const char *path,
             const MinicFunction *f = &program->functions[function_index];
             if (!f->is_defined || (f->is_internal && !f->is_referenced))
                 continue;
+            if (!f->is_defined && !f->is_referenced)
+                continue;
             if (!minic_riscv_isa_soft_float_signature_supported(
                     &target->riscv_isa, program, f)) {
                 minic_riscv64_set_diagnostic(
@@ -110,6 +112,48 @@ bool minic_riscv64_write_c0_program_with_core_functions(const char *path,
                     "LP64 soft-float ABI for floating parameter/return "
                     "(including record members) is not yet qualified");
                 return false;
+            }
+            if (!minic_riscv_isa_lp64_integer_signature_supported(
+                    f->return_type, f->parameter_types, f->parameter_count,
+                    f->is_variadic)) {
+                minic_riscv64_set_diagnostic(
+                    diagnostic, path,
+                    "LP64 integer-only ABI: only <=64-bit integer/pointer "
+                    "parameters and results; no records, floating-point "
+                    "signatures, __int128 or variadic calls");
+                return false;
+            }
+        }
+        /* A valid local prototype is not enough: calls can use external
+         * callees or indirect function pointers with a different signature.
+         * Validate the actual Core signatures before emitting any .s. */
+        for (function_index = 0U; function_index < core_function_count;
+             ++function_index) {
+            const MinicCoreFunction *core = &core_functions[function_index];
+            size_t index;
+            if (!program->functions[function_index].is_defined)
+                continue;
+            for (index = 0U; index < core->callee_count; ++index) {
+                const MinicCoreCallee *callee = &core->callees[index];
+                if (!minic_riscv_isa_lp64_integer_signature_supported(
+                        callee->return_type, callee->parameter_types,
+                        callee->parameter_count, callee->is_variadic)) {
+                    minic_riscv64_set_diagnostic(
+                        diagnostic, path,
+                        "LP64 integer-only ABI: unsupported direct callee signature");
+                    return false;
+                }
+            }
+            for (index = 0U; index < core->call_signature_count; ++index) {
+                const MinicCoreCallSignature *call = &core->call_signatures[index];
+                if (!minic_riscv_isa_lp64_integer_signature_supported(
+                        call->return_type, call->parameter_types,
+                        call->parameter_count, call->is_variadic)) {
+                    minic_riscv64_set_diagnostic(
+                        diagnostic, path,
+                        "LP64 integer-only ABI: unsupported indirect call signature");
+                    return false;
+                }
             }
         }
     }
