@@ -267,7 +267,7 @@ bool minic_riscv64_asm_audit_mode(void) {
 
 bool minic_riscv64_asm_audit_marker(FILE *file, bool begin) {
     if (!minic_riscv64_asm_audit_mode()) return true;
-    return file != NULL && fprintf(file, "# MINIC_RV64I_ASM_%s\\n",
+    return file != NULL && fprintf(file, "# MINIC_RV64I_ASM_%s\n",
                                    begin ? "BEGIN" : "END") >= 0;
 }
 
@@ -383,8 +383,8 @@ bool minic_riscv64_check_isa_assembly(const char *path,
         (void)n;
         ++lineno;
         while (isspace((unsigned char)*p)) ++p;
-        if (provenance && strncmp(p, "# MINIC_RV64I_ASM_BEGIN", 25) == 0 &&
-            (p[25] == '\\n' || p[25] == '\\0')) {
+        if (provenance && strncmp(p, "# MINIC_RV64I_ASM_BEGIN", 23) == 0 &&
+            (p[23] == '\n' || p[23] == '\0')) {
             if (in_user_asm) {
                 valid = reject(reason, capacity, "nested inline asm provenance markers");
                 break;
@@ -392,8 +392,8 @@ bool minic_riscv64_check_isa_assembly(const char *path,
             in_user_asm = true;
             continue;
         }
-        if (provenance && strncmp(p, "# MINIC_RV64I_ASM_END", 23) == 0 &&
-            (p[23] == '\\n' || p[23] == '\\0')) {
+        if (provenance && strncmp(p, "# MINIC_RV64I_ASM_END", 21) == 0 &&
+            (p[21] == '\n' || p[21] == '\0')) {
             if (!in_user_asm) {
                 valid = reject(reason, capacity, "unpaired inline asm end marker");
                 break;
@@ -402,7 +402,7 @@ bool minic_riscv64_check_isa_assembly(const char *path,
             continue;
         }
         if (in_user_asm) continue;
-        if (*p == '\\0' || *p == '#' || *p == ';') continue;
+        if (*p == '\0' || *p == '#' || *p == ';') continue;
         if (*p == '.') {
             if (escape_directive(p)) {
                 if (reason != NULL && capacity != 0U)
