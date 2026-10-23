@@ -32,12 +32,28 @@ static bool x86_emit_function(FILE *out, const MinicC0Program *program,
     const char *vis;
     size_t block_index;
     bool success = false;
-    if (name == NULL || name[0] == '\0' ||
-        !minic_core_function_verify(fn) ||
-        !minic_x86_64_frame_init(program, target, fn, &frame)) {
-        minic_x86_64_frame_destroy(&frame);
-        x86_error(diag, path, "x86-64 cannot allocate or verify Core function frame");
-        return false;
+    {
+        const bool named = name != NULL && name[0] != '\0';
+        const bool verified = named && minic_core_function_verify(fn);
+        const bool planned = verified &&
+            minic_x86_64_frame_init(program, target, fn, &frame);
+        if (!planned) {
+            if (getenv("MINIC_M1_TRACE") != NULL) {
+                (void)fprintf(stderr,
+                    "MINIC_X86_FRAME_REJECT function=%s stage=%s "
+                    "values=%zu params=%zu blocks=%zu\n",
+                    named ? name : "(unnamed)",
+                    !named ? "invalid-name" :
+                    !verified ? "core-verification" : "abi-or-frame",
+                    fn->value_count, fn->parameter_count, fn->block_count);
+                if (verified)
+                    (void)minic_core_function_dump(stderr, fn);
+            }
+            minic_x86_64_frame_destroy(&frame);
+            x86_error(diag, path,
+                      "x86-64 cannot allocate or verify Core function frame");
+            return false;
+        }
     }
     if (declaration->section_name != NULL) {
         if (fprintf(out, ".section %s,\"ax\",@progbits\n", declaration->section_name) < 0)
