@@ -146,3 +146,44 @@ jobs:
           else
             echo "RV64I_ORIGIN_SHARD=INCOMPLETE no_report=1"
           fi
+
+  audit-summary:
+    if: always() && (github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[rv64i-seven]'))
+    needs: [linux-shard]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Download all seven evidence artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: rv64i-origin-*
+          path: evidence
+      - name: Aggregate without hiding unsupported Linux C units
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          reports = sorted(Path("evidence").rglob("rv64i-origin-report.json"))
+          print("RV64I_SEVEN_REPORTS=" + str(len(reports)))
+          expected = 7
+          totals = dict(selected=0, compiled=0, compiler_non_i=0,
+                        inline_regions=0, asm_M=0, asm_A=0,
+                        asm_Zicsr=0, asm_Zifencei=0)
+          for path in reports:
+              s = json.loads(path.read_text())["summary"]
+              totals["selected"] += s["selected"] or 0
+              totals["compiled"] += s["compile_pass"] or 0
+              totals["compiler_non_i"] += s["compiler_non_i"]
+              totals["inline_regions"] += s["inline_regions"]
+              for k in ("M", "A", "Zicsr", "Zifencei"):
+                  totals["asm_" + k] += s["inline"].get(k, 0)
+          print("RV64I_SEVEN_SUMMARY " + json.dumps(totals, sort_keys=True))
+          if len(reports) != expected or totals["selected"] != 3352:
+              raise SystemExit("INCOMPLETE: not all 3352 frozen TUs were examined")
+          if totals["compiled"] != totals["selected"]:
+              raise SystemExit("INCOMPLETE: not all TUs produced .s; see per-shard diagnostics")
+          if totals["compiler_non_i"]:
+              raise SystemExit("FAIL: MiniC emitted non-I outside user inline ASM")
+          print("RV64I_SEVEN_COMPLETE=PASS")
+          PY
