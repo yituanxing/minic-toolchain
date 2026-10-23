@@ -114,6 +114,26 @@ grep -F 'movz w9, #42' "$temporary_dir/aarch64.s" >/dev/null
 grep -F 'li.w $t0, 42' "$temporary_dir/loongarch64.s" >/dev/null
 echo "PASS: ARM64 and LoongArch64 emit distinct Core integer-return assembly; target M1"
 
+# New RV32 TargetInfo parses ISA/ABI identity and rejects the dangerous
+# RV64 machine emitter until it is actually XLEN/ILP32 qualified.
+if "$MINIC_CC" --target=riscv32-linux -march=rv32i -mabi=ilp32 \
+        -S "$temporary_dir/basic.i" -o "$temporary_dir/rv32.s" \
+        2>"$temporary_dir/rv32.err"; then
+    echo "FAIL: RV32 ILP32 must not emit unqualified RV64 code" >&2
+    exit 1
+fi
+grep -F 'machine/ABI lowering is not yet qualified' "$temporary_dir/rv32.err" >/dev/null
+test ! -e "$temporary_dir/rv32.s"
+if "$MINIC_CC" --target=riscv32-linux -march=rv64i -mabi=lp64 \
+        -S "$temporary_dir/basic.i" -o "$temporary_dir/rv32-mixed.s" \
+        2>"$temporary_dir/rv32-mixed.err"; then
+    echo "FAIL: RV32 must reject RV64 ISA/ABI" >&2
+    exit 1
+fi
+grep -F 'invalid RISC-V configuration' "$temporary_dir/rv32-mixed.err" >/dev/null
+test ! -e "$temporary_dir/rv32-mixed.s"
+echo 'RV32_TARGET_GATE=PASS model_registered=1 mixed_isa_rejected=1 unsafe_emission_rejected=1'
+
 if "$MINIC_CC" --target=unknown-target -S "$temporary_dir/basic.i" \
         -o "$temporary_dir/unknown.s" 2>"$temporary_dir/unknown.err"; then
     echo "FAIL: unknown target unexpectedly accepted" >&2

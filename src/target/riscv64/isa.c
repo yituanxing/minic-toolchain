@@ -24,8 +24,24 @@ bool minic_riscv_isa_has(const MinicRiscvIsa *isa, uint32_t requirements) {
 bool minic_riscv_isa_resolve(const char *march, const char *mabi,
                              MinicRiscvIsa *isa, char *reason, size_t capacity) {
     MinicRiscvIsa resolved;
-    if (isa == NULL || isa->xlen != 64U)
-        return reject(reason, capacity, "only the RV64 backend is qualified");
+    if (isa == NULL || (isa->xlen != 64U && isa->xlen != 32U))
+        return reject(reason, capacity, "unsupported RISC-V XLEN");
+    if (isa->xlen == 32U) {
+        /* RV32 is a separate ILP32 target. Do not reinterpret RV64 'I'
+         * as a 32-bit code generation implementation. The backend must
+         * independently qualify 32-bit instructions and ABI before output. */
+        if (march != NULL && strcmp(march, "rv32i") != 0)
+            return reject(reason, capacity, "RV32 currently accepts rv32i only");
+        if (mabi != NULL && strcmp(mabi, "ilp32") != 0)
+            return reject(reason, capacity, "rv32i requires ilp32");
+        resolved = *isa;
+        resolved.xlen = 32U;
+        resolved.abi = MINIC_RISCV_ABI_ILP32;
+        resolved.features = 0U;
+        resolved.strict_isa = true;
+        *isa = resolved;
+        return true;
+    }
     if (march == NULL) {
         if (mabi == NULL || strcmp(mabi, "lp64d") == 0) return true;
         return reject(reason, capacity,

@@ -44,6 +44,36 @@ static int verify_lp64(const char *name,
     return 0;
 }
 
+/* RV32 is a distinct ILP32 consumer of the existing TargetInfo/DataLayout
+ * model. Test GNU C language promotions, not only raw pointer bytes. */
+static int verify_rv32(void) {
+    const MinicTargetInfo *t = minic_target_info_from_name("riscv32-linux");
+    MinicType v;
+    unsigned width = 0U;
+    if (t == NULL || t->architecture != MINIC_TARGET_ARCH_RISCV32 ||
+        t->riscv_isa.xlen != 32U || t->riscv_isa.abi != MINIC_RISCV_ABI_ILP32 ||
+        t->data_layout->pointer_size != 4U ||
+        t->data_layout->pointer_alignment != 4U ||
+        t->data_layout->integer_size[MINIC_INTEGER_RANK_LONG] != 4U ||
+        t->data_layout->integer_size[MINIC_INTEGER_RANK_LONG_LONG] != 8U ||
+        t->data_layout->integer_alignment[MINIC_INTEGER_RANK_LONG_LONG] != 8U ||
+        t->integer_model->semantic_width_bits[MINIC_INTEGER_RANK_LONG] != 32U ||
+        t->integer_model->semantic_width_bits[MINIC_INTEGER_RANK_LONG_LONG] != 64U ||
+        t->integer_model->plain_char_sign != MINIC_INTEGER_SIGN_UNSIGNED ||
+        t->word_integer_rank != MINIC_INTEGER_RANK_INT ||
+        t->variadic_scalar_read_kind != MINIC_VARIADIC_SCALAR_READ_UNSUPPORTED ||
+        !minic_target_info_integer_width(t, NULL, minic_type_long(), &width) ||
+        width != 32U ||
+        !minic_target_info_integer_common(t, minic_type_unsigned_int(),
+                                          minic_type_long(), &v) ||
+        !minic_type_equal(v, minic_type_unsigned_long()) ||
+        !minic_target_info_integer_common(t, minic_type_unsigned_long(),
+                                          minic_type_long_long(), &v) ||
+        !minic_type_equal(v, minic_type_long_long()))
+        return puts("RV32_ILP32_MODEL=FAIL") == EOF ? 1 : 1;
+    return puts("RV32_ILP32_MODEL=PASS xlen=32 ptr=4 long=4 longlong=8 signedness=qualified") == EOF ? 1 : 0;
+}
+
 int main(void) {
     const MinicTargetInfo *rv = minic_default_target_info();
     const MinicTargetInfo *x86 = minic_target_info_from_name("x86_64-linux");
@@ -59,7 +89,8 @@ int main(void) {
         (void)fprintf(stderr, "FAIL four independent target identities\n");
         return 1;
     }
-    if (verify_lp64("aarch64-linux", MINIC_TARGET_ARCH_AARCH64,
+    if (verify_rv32() != 0 ||
+        verify_lp64("aarch64-linux", MINIC_TARGET_ARCH_AARCH64,
                     MINIC_INTEGER_SIGN_UNSIGNED, MINIC_INTEGER_RANK_INT,
                     MINIC_INTEGER_SIGN_UNSIGNED) != 0 ||
         verify_lp64("loongarch64-linux", MINIC_TARGET_ARCH_LOONGARCH64,

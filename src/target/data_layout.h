@@ -23,6 +23,8 @@ typedef struct MinicDataLayout {
 } MinicDataLayout;
 
 const MinicDataLayout *minic_default_data_layout(void);
+/* ILP32 data model for RV32; semantic widths and storage are target-owned. */
+const MinicDataLayout *minic_riscv32_linux_data_layout(void);
 /* x86-64 Linux SysV has a distinct target identity even when sizes coincide. */
 const MinicDataLayout *minic_x86_64_linux_data_layout(void);
 /* AAPCS64 LP64 and LoongArch ELF lp64d: separate target-owned layouts. */

@@ -14,6 +14,19 @@ static const MinicTargetIntegerModel minic_rv64_integer_model = {
                             [MINIC_INTEGER_RANK_INT128] = 128U},
 };
 
+/* RV32 Linux ILP32; semantic integer conversions must not inherit LP64.
+ * Plain char is unsigned on RISC-V; wchar_t uses the normal signed int ABI. */
+static const MinicTargetIntegerModel minic_rv32_integer_model = {
+    .plain_char_sign = MINIC_INTEGER_SIGN_UNSIGNED,
+    .semantic_width_bits = {[MINIC_INTEGER_RANK_BOOL] = 1U,
+                            [MINIC_INTEGER_RANK_CHAR] = 8U,
+                            [MINIC_INTEGER_RANK_SHORT] = 16U,
+                            [MINIC_INTEGER_RANK_INT] = 32U,
+                            [MINIC_INTEGER_RANK_LONG] = 32U,
+                            [MINIC_INTEGER_RANK_LONG_LONG] = 64U,
+                            [MINIC_INTEGER_RANK_INT128] = 128U},
+};
+
 /* LP64, signed plain char and signed 32-bit wchar_t on x86-64 Linux. */
 static const MinicTargetIntegerModel minic_x86_64_linux_integer_model = {
     .plain_char_sign = MINIC_INTEGER_SIGN_SIGNED,
@@ -174,10 +187,32 @@ integer_literal_fits(const MinicTargetIntegerModel *model, MinicType type, uint6
 const MinicTargetInfo *minic_target_info_for_architecture(
     MinicTargetArchitecture architecture) {
     static MinicTargetInfo rv64_target;
+    static MinicTargetInfo rv32_target;
     static MinicTargetInfo x86_64_target;
     static MinicTargetInfo aarch64_target;
     static MinicTargetInfo loongarch64_target;
 
+    if (architecture == MINIC_TARGET_ARCH_RISCV32) {
+        if (rv32_target.data_layout == NULL) {
+            rv32_target.architecture = MINIC_TARGET_ARCH_RISCV32;
+            rv32_target.riscv_isa.xlen = 32U;
+            rv32_target.riscv_isa.abi = MINIC_RISCV_ABI_ILP32;
+            rv32_target.riscv_isa.strict_isa = true;
+            rv32_target.data_layout = minic_riscv32_linux_data_layout();
+            rv32_target.integer_model = &minic_rv32_integer_model;
+            rv32_target.wide_character_type = minic_type_int();
+            rv32_target.word_integer_rank = MINIC_INTEGER_RANK_INT;
+            rv32_target.gnu_sizeof_void_is_one = true;
+            rv32_target.gnu_sizeof_function_is_one = true;
+            /* RV32 calls need their own ILP32 register-pair/frame lowering.
+             * Never copy an LP64 cursor until that machine side is qualified. */
+            rv32_target.variadic_scalar_read_kind =
+                MINIC_VARIADIC_SCALAR_READ_UNSUPPORTED;
+            rv32_target.variadic_copy_kind =
+                MINIC_VARIADIC_COPY_UNSUPPORTED;
+        }
+        return &rv32_target;
+    }
     if (architecture == MINIC_TARGET_ARCH_RISCV64) {
         if (rv64_target.data_layout == NULL) {
             rv64_target.architecture = MINIC_TARGET_ARCH_RISCV64;
@@ -255,6 +290,9 @@ const MinicTargetInfo *minic_default_target_info(void) {
 const MinicTargetInfo *minic_target_info_from_name(const char *name) {
     if (name == NULL) {
         return NULL;
+    }
+    if (strcmp(name, "riscv32-linux") == 0) {
+        return minic_target_info_for_architecture(MINIC_TARGET_ARCH_RISCV32);
     }
     if (strcmp(name, "riscv64-linux") == 0) {
         return minic_target_info_for_architecture(MINIC_TARGET_ARCH_RISCV64);

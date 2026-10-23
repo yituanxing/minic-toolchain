@@ -53,6 +53,10 @@ const MinicBackend *minic_backend_for_target(const MinicTargetInfo *target) {
     if (target == NULL) return NULL;
     switch (target->architecture) {
     case MINIC_TARGET_ARCH_RISCV64: return &riscv64_backend;
+    case MINIC_TARGET_ARCH_RISCV32:
+        /* No RV64 assembly emitter can represent a 32-bit ILP32 target.
+         * The shared RISC-V backend is extended in place, not duplicated. */
+        return NULL;
     case MINIC_TARGET_ARCH_X86_64: return &x86_64_backend;
     case MINIC_TARGET_ARCH_AARCH64: return &aarch64_backend;
     case MINIC_TARGET_ARCH_LOONGARCH64: return &loongarch64_backend;

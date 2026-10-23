@@ -11,6 +11,7 @@
  * This is invocation state, never a process-global "current architecture". */
 typedef enum MinicRiscvAbi {
     MINIC_RISCV_ABI_INVALID = 0,
+    MINIC_RISCV_ABI_ILP32,
     MINIC_RISCV_ABI_LP64,
     MINIC_RISCV_ABI_LP64D
 } MinicRiscvAbi;

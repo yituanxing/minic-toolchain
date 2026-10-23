@@ -6,7 +6,7 @@
 #include <string.h>
 
 static void minic_print_usage(FILE *stream, const char *program) {
-    (void)fprintf(stream, "usage: %s -S <preprocessed-input.i> [--target=riscv64-linux|x86_64-linux|aarch64-linux|loongarch64-linux] [-march=rv64i|rv64im|rv64imafd] [-mabi=lp64|lp64d] [-ffunction-sections|-fno-function-sections] [-fPIE|-fPIC|-fno-pie] -o <output.s>\n", program);
+    (void)fprintf(stream, "usage: %s -S <preprocessed-input.i> [--target=riscv32-linux|riscv64-linux|x86_64-linux|aarch64-linux|loongarch64-linux] [-march=rv32i|rv64i|rv64im|rv64imafd] [-mabi=ilp32|lp64|lp64d] [-ffunction-sections|-fno-function-sections] [-fPIE|-fPIC|-fno-pie] -o <output.s>\n", program);
 }
 
 int main(int argc, char **argv) {
@@ -110,7 +110,8 @@ int main(int argc, char **argv) {
     selected_target.position_independent = position_independent;
     if (march != NULL || mabi != NULL) {
         char reason[240];
-        if (selected_target.architecture != MINIC_TARGET_ARCH_RISCV64) {
+        if (selected_target.architecture != MINIC_TARGET_ARCH_RISCV64 &&
+            selected_target.architecture != MINIC_TARGET_ARCH_RISCV32) {
             (void)fprintf(stderr, "%s: -march/-mabi currently require RISC-V\n", argv[0]);
             return 2;
         }
@@ -119,6 +120,15 @@ int main(int argc, char **argv) {
             (void)fprintf(stderr, "%s: invalid RISC-V configuration: %s\n", argv[0], reason);
             return 2;
         }
+    }
+    if (selected_target.architecture == MINIC_TARGET_ARCH_RISCV32) {
+        /* TargetInfo is real and usable by Sema, but RV64 emission contains
+         * LD/SD, OP-32 and 8-byte frame assumptions. Reject instead of
+         * producing plausible-looking, silently invalid ELF32 code. */
+        (void)fprintf(stderr,
+                      "%s: RV32I ILP32 target model is registered; "
+                      "machine/ABI lowering is not yet qualified\n", argv[0]);
+        return 2;
     }
     result = minic_compile_preprocessed_file_for_target(
         input_path, output_path, &selected_target, function_sections, &diagnostic);
