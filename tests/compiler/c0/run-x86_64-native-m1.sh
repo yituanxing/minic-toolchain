@@ -1247,12 +1247,22 @@ static void dec_mod(unsigned long *p)
 {
     asm volatile ("subq $1, (%0)" : "=r"(p) : "0"(p) : "memory");
 }
-static long three_output(unsigned long *p, unsigned long offset)
+static long three_output(unsigned long *p)
 {
-    unsigned long borrow;
-    asm volatile ("subq %1,(%0)\nsbbq %2,%2"
+    unsigned long offset, borrow;
+    /* Original BusyBox 256-bit modulus subtraction: complement carry and
+     * a matched 0xffffffff unsigned-int constant passed to a 64-bit register. */
+    asm volatile (
+"\n addq $1, (%0)"
+"\n cmc"
+"\n sbbq %1, 1*8(%0)"
+"\n sbbq $0, 2*8(%0)"
+"\n movq 3*8(%0), %2"
+"\n sbbq $0, %2"
+"\n addq %1, %2"
+"\n movq %2, 3*8(%0)"
       : "=r"(p), "=r"(offset), "=r"(borrow)
-      : "0"(p), "1"(offset) : "memory");
+      : "0"(p), "1"(0x00000000ffffffff) : "memory");
     return borrow;
 }
 int main(void)
@@ -1266,7 +1276,7 @@ int main(void)
     printf("sub %ld %lu %lu %lu %lu\n",carry,r[0],r[1],r[2],r[3]);
     dec_mod(r);
     printf("dec %lu\n",r[0]);
-    carry = three_output(r, 3UL);
+    carry = three_output(r);
     printf("three %ld %lu\n",carry,r[0]);
     return 42;
 }

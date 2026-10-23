@@ -100,7 +100,9 @@ static bool emit_memory_clobber_matched(
         } else if (b[i].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT)
             return false;
         if (!minic_x86_64_scalar_width(program, target, type, &bytes, &sign) ||
-            bytes != 8U) return false;
+            (bytes != 8U &&
+             !(i >= outputs && bytes == 4U && minic_type_is_integer(type))))
+            return false;
     }
     for (i = 0U; i < count-outputs; ++i)
         if (!x86_value_load(out, frame, b[outputs+i].value, regs[i]))

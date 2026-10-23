@@ -50,12 +50,14 @@ static bool matched_register_template(const MinicInlineAsm *src, size_t outputs)
                src->template_text[i] >= 'a' &&
                src->template_text[i] <= 'z') ++i;
         len = i - begin;
-        if (len != 4U ||
-            (memcmp(src->template_text + begin, "movq", 4U) != 0 &&
-             memcmp(src->template_text + begin, "addq", 4U) != 0 &&
-             memcmp(src->template_text + begin, "adcq", 4U) != 0 &&
-             memcmp(src->template_text + begin, "subq", 4U) != 0 &&
-             memcmp(src->template_text + begin, "sbbq", 4U) != 0))
+        if (!((len == 3U &&
+               memcmp(src->template_text + begin, "cmc", 3U) == 0) ||
+              (len == 4U &&
+               (memcmp(src->template_text + begin, "movq", 4U) == 0 ||
+                memcmp(src->template_text + begin, "addq", 4U) == 0 ||
+                memcmp(src->template_text + begin, "adcq", 4U) == 0 ||
+                memcmp(src->template_text + begin, "subq", 4U) == 0 ||
+                memcmp(src->template_text + begin, "sbbq", 4U) == 0))))
             return false;
         ++lines;
         while (i < src->template_length && src->template_text[i] != '\n') {
