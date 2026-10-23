@@ -105,10 +105,14 @@ bool minic_riscv_isa_admit_core_instruction(
         break;
     case MINIC_CORE_INSTRUCTION_INTEGER_LESS:
     case MINIC_CORE_INSTRUCTION_SCALAR_EQUAL:
-        if (core_operand_is_i128(function, instruction->value.binary.left) ||
-            core_operand_is_i128(function, instruction->value.binary.right))
+        if ((core_operand_is_i128(function, instruction->value.binary.left) ||
+             core_operand_is_i128(function, instruction->value.binary.right)) &&
+            minic_riscv_isa_has(isa, MINIC_RISCV_FEATURE_M)) {
+            /* Native M emitters already handle other 128-bit operations,
+             * but the existing comparison emitters do not lower pairs. */
             return reject(reason, capacity,
                           "__int128 comparison has no qualified two-limb lowering");
+        }
         break;
     case MINIC_CORE_INSTRUCTION_SCALAR_BITCAST:
         if (minic_type_is_int128_integer(instruction->type) ||
@@ -120,9 +124,10 @@ bool minic_riscv_isa_admit_core_instruction(
     }
     switch (instruction->kind) {
     case MINIC_CORE_INSTRUCTION_INTEGER_MULTIPLY:
-        /* Native MUL or qualified RV64I __muldi3 libcall.
-         * 128-bit multiplication still emits MULHU and requires M. */
-        if (!minic_type_is_int128_integer(instruction->type))
+        /* <=64-bit RV64I uses __muldi3; 128-bit uses upstream
+         * compiler-rt __multi3 with integer-register LP64 calling ABI. */
+        if (!minic_type_is_int128_integer(instruction->type) ||
+            !minic_riscv_isa_has(isa, MINIC_RISCV_FEATURE_M))
             return true;
         required = MINIC_RISCV_FEATURE_M;
         machine = "mulhu";
