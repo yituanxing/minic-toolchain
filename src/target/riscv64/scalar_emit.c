@@ -27,6 +27,40 @@ static bool emit_simple_integer_binary(
     return minic_riscv64_frame_store_value(file, frame, instruction->result, "t0");
 }
 
+/* RV64 LP64 passes TI integers as low/high XLEN register pairs.
+ * Source operands are frame-owned, so incoming a0..a3 can be loaded
+ * without destructive aliasing. This helper is only used without M.
+ * The frame planner must save ra for these runtime calls. */
+static bool emit_int128_runtime_call(
+    FILE *file, const MinicRiscv64CoreFrame *frame,
+    const MinicCoreFunction *function, const MinicCoreInstruction *instruction,
+    const char *symbol, bool two_word_result, bool equal_result) {
+    MinicCoreValueId left;
+    MinicCoreValueId right;
+    if (file == NULL || frame == NULL || function == NULL ||
+        instruction == NULL || symbol == NULL || !frame->saves_return_address)
+        return false;
+    left = instruction->value.binary.left;
+    right = instruction->value.binary.right;
+    if (left >= function->value_count || right >= function->value_count ||
+        !minic_type_is_int128_integer(function->values[left].type) ||
+        !minic_type_is_int128_integer(function->values[right].type) ||
+        !minic_riscv64_frame_load_int128(file, frame, left, "a0", "a1") ||
+        !minic_riscv64_frame_load_int128(file, frame, right, "a2", "a3") ||
+        fprintf(file, "  call %s\n", symbol) < 0)
+        return false;
+    if (two_word_result)
+        return minic_riscv64_frame_store_int128(
+            file, frame, instruction->result, "a0", "a1");
+    /* GCC/libgcc TI compare ABI: 0 less, 1 equal, 2 greater. */
+    if (fprintf(file, equal_result
+                ? "  addi t0, a0, -1\n  seqz t0, t0\n"
+                : "  seqz t0, a0\n") < 0)
+        return false;
+    return minic_riscv64_frame_store_value(
+        file, frame, instruction->result, "t0");
+}
+
 bool minic_riscv64_emit_scalar_instruction(
     FILE *file, const MinicC0Program *program,
     const MinicCoreFunction *function, const MinicRiscv64CoreFrame *frame,
@@ -57,6 +91,9 @@ bool minic_riscv64_emit_scalar_instruction(
         return emit_simple_integer_binary(file, program, frame, instruction, "sub");
     case MINIC_CORE_INSTRUCTION_INTEGER_MULTIPLY:
         if (minic_type_is_int128_integer(instruction->type)) {
+            if (minic_riscv64_uses_arithmetic_libcall(isa))
+                return emit_int128_runtime_call(
+                    file, frame, function, instruction, "__multi3", true, false);
             MinicCoreValueId left = instruction->value.binary.left;
             MinicCoreValueId right = instruction->value.binary.right;
 
@@ -186,6 +223,17 @@ bool minic_riscv64_emit_scalar_instruction(
         return minic_riscv64_frame_store_value(file, frame, instruction->result, "t0");
     }
     case MINIC_CORE_INSTRUCTION_INTEGER_LESS: {
+        if (minic_riscv64_uses_arithmetic_libcall(isa) &&
+            instruction->value.binary.left < function->value_count &&
+            minic_type_is_int128_integer(
+                function->values[instruction->value.binary.left].type)) {
+            const MinicType wide_type =
+                function->values[instruction->value.binary.left].type;
+            return emit_int128_runtime_call(
+                file, frame, function, instruction,
+                minic_type_is_unsigned_integer(wide_type)
+                    ? "__ucmpti2" : "__cmpti2", false, false);
+        }
         MinicType effective_type;
         MinicType operand_type;
         const char *opcode;
@@ -222,6 +270,12 @@ bool minic_riscv64_emit_scalar_instruction(
         }
         return minic_riscv64_frame_store_value(file, frame, instruction->result, "t0");
     case MINIC_CORE_INSTRUCTION_SCALAR_EQUAL:
+        if (minic_riscv64_uses_arithmetic_libcall(isa) &&
+            instruction->value.binary.left < function->value_count &&
+            minic_type_is_int128_integer(
+                function->values[instruction->value.binary.left].type))
+            return emit_int128_runtime_call(
+                file, frame, function, instruction, "__ucmpti2", false, true);
         if (!minic_riscv64_frame_load_value(file, frame, instruction->value.binary.left, "t0") ||
             !minic_riscv64_frame_load_value(file, frame, instruction->value.binary.right, "t1") ||
             fprintf(file, "  xor t0, t0, t1\n  seqz t0, t0\n") < 0) {
