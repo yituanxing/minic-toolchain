@@ -34,6 +34,24 @@ jobs:
           test "$(wc -l <build/linux-next500c-corpus/selected-tus.txt)" -eq 500
       - name: Build compiler once
         run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/rv64i-nouveau-ice all
+      - name: Cross-check GNU constant_p in ICE and MiniC strict RV64I result
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          w="$GITHUB_WORKSPACE/build/rv64i-nouveau-ice-probe"
+          mkdir -p "$w"
+          cc -std=gnu11 -fsyntax-only tests/compiler/c0/gnu_constant_p_ice_regression.c
+          cc -E -P -std=gnu11 -x c tests/compiler/c0/gnu_constant_p_ice_regression.c -o "$w/valid.i"
+          "$GITHUB_WORKSPACE/build/rv64i-nouveau-ice/bin/minic" \
+            -march=rv64i -mabi=lp64 -S "$w/valid.i" -o "$w/valid.s"
+          test -s "$w/valid.s"
+          cc -E -P -std=gnu11 -x c tests/compiler/c0/gnu_choose_dynamic_condition_reject.c -o "$w/invalid.i"
+          if "$GITHUB_WORKSPACE/build/rv64i-nouveau-ice/bin/minic" \
+             -march=rv64i -mabi=lp64 -S "$w/invalid.i" -o "$w/invalid.s" >"$w/invalid.log" 2>&1; then
+            echo "NOUVEAU_ICE_GUARD=FAIL arbitrary_nonconstant_choose_allowed=1"
+            exit 1
+          fi
+          echo "NOUVEAU_ICE_GUARD=PASS resolved_static=1 unresolved_constant_p_zero=1 dynamic_choose_rejected=1"
       - name: Reproduce representative Nouveau errors and show exact preprocessed expressions
         shell: bash
         run: |
@@ -73,6 +91,11 @@ jobs:
                       break
           PY
           echo "NOUVEAU_ICE_EXIT=$rc"
+          if (( rc != 0 )); then
+            echo "NOUVEAU_ICE_REGRESSION=FAIL selected=4"
+            exit 1
+          fi
+          echo "NOUVEAU_ICE_REGRESSION=PASS selected=4"
       - name: Preserve isolated failed-TU evidence
         if: always()
         uses: actions/upload-artifact@v4

@@ -709,6 +709,7 @@ parse_builtin_choose_expr(MinicParser *parser, MinicExpressionId *expression_id,
     MinicExpressionId when_true_id;
     MinicExpressionId when_false_id;
     MinicConstValue condition_value;
+    const MinicExpression *condition_expr;
     bool condition_is_zero;
 
     if (!minic_parser_current_identifier_lexeme_equals_cstr(parser, "__builtin_choose_expr")) {
@@ -728,10 +729,25 @@ parse_builtin_choose_expr(MinicParser *parser, MinicExpressionId *expression_id,
             parser, MINIC_TOKEN_RPAREN, "expected ')' after __builtin_choose_expr")) {
         return false;
     }
-    if (!minic_const_eval_integer(
-            parser->program, parser->target_info, condition_id, &condition_value) ||
-        !minic_const_value_is_zero(
-            parser->program, parser->target_info, &condition_value, &condition_is_zero)) {
+    condition_expr = minic_c0_program_expression(parser->program, condition_id);
+    /* __builtin_constant_p is itself an ICE in a GNU choose-expression.
+     * An unresolved query means "not proved constant" (zero) IN THIS
+     * constant-expression context.  Keep its original Core expression for
+     * ordinary runtime/local-fact uses: folding it globally to zero would
+     * lose the existing straight-line constant propagation.
+     *
+     * Linux Nouveau's PUSH_* _Static_assert macros expand exactly this
+     * pattern for nonconstant _p->cur < _p->seg bounds checks. */
+    if (condition_expr != NULL &&
+        condition_expr->kind == MINIC_EXPRESSION_BUILTIN_UNARY &&
+        condition_expr->value.builtin_unary.operator_kind ==
+            MINIC_BUILTIN_UNARY_CONSTANT_P) {
+        condition_is_zero = true;
+    } else if (!minic_const_eval_integer(
+                   parser->program, parser->target_info, condition_id, &condition_value) ||
+               !minic_const_value_is_zero(
+                   parser->program, parser->target_info,
+                   &condition_value, &condition_is_zero)) {
         minic_parser_error(
             parser, "__builtin_choose_expr condition must be an integer constant expression");
         return false;
