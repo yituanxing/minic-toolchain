@@ -39,6 +39,18 @@ if [[ "${RV64_CACHE_HIT:-false}" == true ]]; then
   fi
 fi
 
+# Hosted Ubuntu 24.04 resolves mirror+file:/etc/apt/apt-mirrors.txt with
+# azure.archive.ubuntu.com first. Rewriting ubuntu.sources alone does NOT
+# override that list; a stalled 19 MB GCC download previously hit timeout 124.
+# On a cold cache, drop only the slow Azure entry when the canonical mirror is
+# already present. Retain the signed Ubuntu indexes and other fallback mirrors.
+if [[ -f /etc/apt/apt-mirrors.txt ]] &&
+   grep -q 'http://archive.ubuntu.com/ubuntu' /etc/apt/apt-mirrors.txt &&
+   grep -q 'azure.archive.ubuntu.com/ubuntu' /etc/apt/apt-mirrors.txt; then
+  sudo sed -i '/azure\\.archive\\.ubuntu\\.com\\/ubuntu/d' /etc/apt/apt-mirrors.txt
+  echo 'FOCUSED_APT=MIRROR archive_list_azure_removed=1'
+fi
+
 # Cold cache or missing dependencies: one bounded attempt only. The old
 # 360s apt install -> 300s apt update -> 480s apt install hid mirror stalls
 # for 14m and never executed a single compiler test.
