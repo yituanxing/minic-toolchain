@@ -190,6 +190,18 @@ bool minic_riscv_isa_admit_core_instruction(
     default: break;
     }
     if (required == 0U || minic_riscv_isa_has(isa, required)) return true;
+    /* Distinguish the exact failing Core opcode, not merely the FP ISA
+     * family used as a diagnostic placeholder. This is useful when a
+     * compiler-rt translation unit contains many inline helper functions. */
+    if (getenv("MINIC_RV64I_CORE_REJECT_TRACE") != NULL)
+        (void)fprintf(stderr,
+            "RV64I_CORE_REJECT kind=%d base=%d sign=%d rank=%d "
+            "result=%" PRIu32 " span=%zu:%zu machine=%s\n",
+            (int)instruction->kind, (int)instruction->type.base_kind,
+            (int)instruction->type.integer_sign,
+            (int)instruction->type.integer_rank,
+            (unsigned)instruction->result,
+            machine == NULL ? "(none)" : machine);
     if (reason != NULL && capacity > 0U)
         (void)snprintf(reason, capacity,
                        "RISC-V instruction '%s' requires %s; selected ISA lacks "
