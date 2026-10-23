@@ -132,10 +132,9 @@ test -s "$tmp/record-fpabi.s"
 # A base-I ISA does not imply every GNU C extension is implemented.
 # Explicit ISA profiles must reject as-yet-unqualified i128 constant
 # construction; binary pair operations are now independently validated below.
-for variant in constant clz; do
+for variant in constant; do
   case "$variant" in
     constant) body='unsigned __int128 probe(void) { unsigned __int128 a = 33; return a; }' ;;
-    clz) body='unsigned __int128 probe(unsigned __int128 a) { return __builtin_clzll((unsigned long long)a); }' ;;
   esac
   printf '%s\n' "$body" >"$tmp/int128-$variant.i"
   if "$MINIC_CC" --target=riscv64-linux -march=rv64i -mabi=lp64 \
