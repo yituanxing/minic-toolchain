@@ -246,6 +246,30 @@ if [[ -x "$minias" ]]; then
   fi
   python3 "$machine_audit" "$work/softfp-minias.elf"
   echo 'RV64_SOFTFP_MINIAS=PASS ISA=rv64i psABI=lp64'
+
+  # Verify *our* linker extracts the same LLVM compiler-rt members on demand
+  # from the same archive as GNU ld, without substituting a default LP64D
+  # toolchain or reassembling MiniC's code via GNU AS.
+  minic_driver="$(dirname "$minic_cc")/minic"
+  if [[ -x "$minic_driver" ]]; then
+    riscv64-linux-gnu-gcc -march=rv64i -mabi=lp64 \
+      -c "$work/start.s" -o "$work/start.o"
+    "$minic_driver" -static -nostdlib -march=rv64i -mabi=lp64 \
+      "--rtlib=$runtime" "$work/start.o" "$work/gnu-oracle.o" \
+      "$work/minic-fp-minias.o" -o "$work/softfp-minild.elf"
+    set +e
+    qemu-riscv64 "$work/softfp-minild.elf" >"$work/softfp-minild.out" \
+      2>"$work/softfp-minild.err"
+    rc=$?
+    set -e
+    if (( rc != 0 )); then
+      echo "RV64_SOFTFP_QEMU=FAIL source=MiniLD case=$rc" >&2
+      cat "$work/softfp-minild.err" >&2
+      exit 1
+    fi
+    python3 "$machine_audit" "$work/softfp-minild.elf"
+    echo 'RV64_SOFTFP_MINILD=PASS minic_driver=1 minias=1 archive=17 gnu_caller=1 cases=15'
+  fi
 fi
 
 # Runtime implementation objects themselves must not contain illegal
