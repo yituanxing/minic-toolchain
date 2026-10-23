@@ -552,7 +552,7 @@ static bool emit_core_function_with_symbol(FILE *file,
                 char reason[220];
                 if (id >= function->instruction_count ||
                     !minic_riscv_isa_admit_core_instruction(
-                        isa, id < function->instruction_count ?
+                        isa, function, id < function->instruction_count ?
                         &function->instructions[id] : NULL,
                         reason, sizeof(reason))) {
                     char message[256];

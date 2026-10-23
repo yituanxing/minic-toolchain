@@ -134,6 +134,35 @@ fi
 grep -q 'LP64 soft-float ABI' "$tmp/record-fpabi.err"
 test ! -e "$tmp/invalid-record-fpabi.s"
 
+# A base-I ISA does not imply every GNU C extension is implemented.
+# Explicit targets must never quietly truncate 128-bit arithmetic or use an
+# incorrect one-register __int128 ABI merely because emitted opcodes are I.
+for variant in div add shl equal; do
+  case "$variant" in
+    div) body='unsigned __int128 probe(void) { unsigned __int128 a = 33, b = 3; return a / b; }' ;;
+    add) body='unsigned __int128 probe(void) { unsigned __int128 a = 33, b = 3; return a + b; }' ;;
+    shl) body='unsigned __int128 probe(void) { unsigned __int128 a = 1; return a << 66; }' ;;
+    equal) body='int probe(void) { unsigned __int128 a = 1, b = 2; return a == b; }' ;;
+  esac
+  printf '%s\n' "$body" >"$tmp/int128-$variant.i"
+  if "$MINIC_CC" --target=riscv64-linux -march=rv64i -mabi=lp64 \
+    -S "$tmp/int128-$variant.i" -o "$tmp/invalid-int128-$variant.s" \
+    >"$tmp/128.out" 2>"$tmp/128.err"; then
+    echo "RV64I_INT128=FAIL accepted unsafe $variant" >&2; exit 1
+  fi
+  test ! -e "$tmp/invalid-int128-$variant.s"
+done
+cat >"$tmp/unsupported-i128-abi.i" <<'SRC'
+unsigned __int128 passthrough(unsigned __int128 a) { return a; }
+SRC
+if "$MINIC_CC" --target=riscv64-linux -march=rv64i -mabi=lp64 \
+  -S "$tmp/unsupported-i128-abi.i" -o "$tmp/invalid-i128-abi.s" \
+  >"$tmp/i128-abi.out" 2>"$tmp/i128-abi.err"; then
+  echo 'RV64I_INT128=FAIL accepted unqualified two-register ABI' >&2; exit 1
+fi
+grep -q '__int128 parameter/return' "$tmp/i128-abi.err"
+test ! -e "$tmp/invalid-i128-abi.s"
+
 # The GNU assembler is an independent legality oracle for each exact profile.
 if command -v riscv64-linux-gnu-gcc >/dev/null 2>&1; then
   # The same optional archived upstream runtime used by real MiniC links.

@@ -42,8 +42,8 @@ bool minic_riscv_isa_has(const MinicRiscvIsa *isa, uint32_t requirements);
 #include "core/core_ir.h"
 #include "frontend/ast.h"
 bool minic_riscv_isa_admit_core_instruction(
-    const MinicRiscvIsa *isa, const MinicCoreInstruction *instruction,
-    char *reason, size_t capacity);
+    const MinicRiscvIsa *isa, const MinicCoreFunction *function,
+    const MinicCoreInstruction *instruction, char *reason, size_t capacity);
 
 /* LP64 soft-float calls cannot silently use the old LP64D floating register
  * ABI, even when a C function only copies a float without FP arithmetic.

@@ -46,7 +46,13 @@ very small inline transformations such as SLLI for constant scaling.
 For <=32-bit integer operations, inputs are first canonicalized to the
 effective signed/unsigned scalar type before passing the full XLEN arguments
 to the external helper. Normal scalar result conversion and spills remain
-owned by the mature Core and frame lowering. 128-bit operations still need separate qualified lowering and may reject RV64I.
+owned by the mature Core and frame lowering. 128-bit operations still need separately qualified lowering. In explicit
+ISA modes the compiler now rejects known scalar two-limb hazards (addition,
+division/remainder, left shifts, comparisons and scalar bitcasts) before
+emission, and rejects __int128 argument/return ABI signatures until two-XLEN
+register placement is qualified. Existing pair-aware memory and conversion
+mechanisms are unchanged. These are explicit unsupported boundaries, not
+permission to silently truncate to 64 bits.
 For <=64-bit checked multiplication, strict RV64I uses __muldi3 and an
 optional __divdi3 / __udivdi3 check; it stores the low wrapped result and
 reports overflow, explicitly handling signed INT64_MIN * -1 without relying

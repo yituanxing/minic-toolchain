@@ -64,13 +64,60 @@ bool minic_riscv_isa_resolve(const char *march, const char *mabi,
  * choices, not frontend C-language admission: multiply may later choose a
  * qualified software lowering. The final emitted-ISA audit still catches all
  * implicit M/F/D instructions in helpers, calls and prologue/epilogue. */
+/* A few historical RV64 scalar emitters only load the low 64 bits.
+ * Never silently apply those emitters to a __int128 Core value under an
+ * explicit ISA. Independent, already-pair-aware conversions, memory
+ * operations, and right shifts retain their existing lowering. */
+static bool core_operand_is_i128(const MinicCoreFunction *function,
+                                 MinicCoreValueId value) {
+    return function != NULL && value < function->value_count &&
+           minic_type_is_int128_integer(function->values[value].type);
+}
+
 bool minic_riscv_isa_admit_core_instruction(
-    const MinicRiscvIsa *isa, const MinicCoreInstruction *instruction,
+    const MinicRiscvIsa *isa, const MinicCoreFunction *function,
+    const MinicCoreInstruction *instruction,
     char *reason, size_t capacity) {
     uint32_t required = 0U;
     const char *machine = NULL;
     const char *extension = NULL;
     if (isa == NULL || !isa->strict_isa || instruction == NULL) return true;
+    /* Reject unqualified two-limb operations BEFORE even the first emitted
+     * instruction. A 32-bit base ISA has no obligation to implement a C
+     * compiler extension such as __int128, but it must not miscompile one. */
+    switch (instruction->kind) {
+    case MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT:
+    case MINIC_CORE_INSTRUCTION_INTEGER_ADD:
+    case MINIC_CORE_INSTRUCTION_INTEGER_SUBTRACT:
+    case MINIC_CORE_INSTRUCTION_INTEGER_DIVIDE:
+    case MINIC_CORE_INSTRUCTION_INTEGER_REMAINDER:
+    case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND:
+    case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_XOR:
+    case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_OR:
+    case MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_LEFT:
+    case MINIC_CORE_INSTRUCTION_INTEGER_NEGATE:
+    case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_NOT:
+    case MINIC_CORE_INSTRUCTION_INTEGER_CLZ:
+    case MINIC_CORE_INSTRUCTION_INTEGER_CTZ:
+        if (minic_type_is_int128_integer(instruction->type))
+            return reject(reason, capacity,
+                          "__int128 operation has no qualified two-limb lowering");
+        break;
+    case MINIC_CORE_INSTRUCTION_INTEGER_LESS:
+    case MINIC_CORE_INSTRUCTION_SCALAR_EQUAL:
+        if (core_operand_is_i128(function, instruction->value.binary.left) ||
+            core_operand_is_i128(function, instruction->value.binary.right))
+            return reject(reason, capacity,
+                          "__int128 comparison has no qualified two-limb lowering");
+        break;
+    case MINIC_CORE_INSTRUCTION_SCALAR_BITCAST:
+        if (minic_type_is_int128_integer(instruction->type) ||
+            core_operand_is_i128(function, instruction->value.operand))
+            return reject(reason, capacity,
+                          "__int128 scalar bitcast has no qualified pair lowering");
+        break;
+    default: break;
+    }
     switch (instruction->kind) {
     case MINIC_CORE_INSTRUCTION_INTEGER_MULTIPLY:
         /* Native MUL or qualified RV64I __muldi3 libcall.
@@ -83,8 +130,8 @@ bool minic_riscv_isa_admit_core_instruction(
         break;
     case MINIC_CORE_INSTRUCTION_INTEGER_DIVIDE:
     case MINIC_CORE_INSTRUCTION_INTEGER_REMAINDER:
-        /* Native M or standard RV64I signed/unsigned libgcc div/rem calls;
-         * a missing M extension is not itself a compile error. */
+        /* 128-bit division/remainder already failed above. Ordinary
+         * 32/64-bit operands use native M or external libgcc helpers. */
         return true;
     case MINIC_CORE_INSTRUCTION_POINTER_OFFSET:
         /* RV64I pointer scaling selects SLLI for power-of-two sizes or
