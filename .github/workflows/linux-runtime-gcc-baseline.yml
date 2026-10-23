@@ -2141,8 +2141,14 @@ jobs:
           # A *different* compiled MiniC SHA is independently rejected by
           # linux-runtime-gcc-shards-v1.py merge() across ALL seven artifacts.
           producer_sha=96e9f3e5b26c7be34b514647141050529aca6d9a
-          predecessor_sha=02f5cd4bb0761eff4c4c461e83cee2f647bab8d2
-          test "$(git show -s --format=%P HEAD)" = "$predecessor_sha"
+          predecessor_sha=5ce5bac0b2110f1650414cb4f5a73e749fb18dcc
+          # checkout@v4 fetch-depth=1 hides ancestors from git log/show,
+          # but cat-file of HEAD contains its real raw commit parent.
+          actual_parent=$(git cat-file -p HEAD | sed -n 's/^parent //p')
+          if [[ "$actual_parent" != "$predecessor_sha" ]]; then
+            echo "LINUX_RECEIVER_REUSE_SOURCE=FAIL parent=$actual_parent expected=$predecessor_sha" >&2
+            exit 15
+          fi
           echo "LINUX_RECEIVER_REUSE_SOURCE=PASS pinned_producer=$producer_sha expected_parent=$predecessor_sha compiler_sha_bound=true"
       - uses: actions/download-artifact@v4
         if: "!contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]') && !contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]') && !contains(github.event.head_commit.message, '[linux-runtime-stack-owners]') && !contains(github.event.head_commit.message, '[linux-native-union-cached]') && !contains(github.event.head_commit.message, '[linux-minild-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-reloc-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-purgatory-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-vdso64-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-vdso32-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minias-earlycon-frozen]')"
