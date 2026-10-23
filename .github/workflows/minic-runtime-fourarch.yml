@@ -95,6 +95,10 @@ jobs:
           bash tests/compiler/c0/probe-rv64i-int128-pairs-qemu.sh \
             "$GITHUB_WORKSPACE/build/runtime-ci/bin/minic-cc" \
             "$GITHUB_WORKSPACE/build/runtime-verdict/reference/riscv64/libminic-rt.a"
+          echo "RUNTIME_QEMU_LIBRARY=MiniC-built"
+          bash tests/compiler/c0/probe-rv64i-int128-pairs-qemu.sh \
+            "$GITHUB_WORKSPACE/build/runtime-ci/bin/minic-cc" \
+            "$GITHUB_WORKSPACE/build/runtime-verdict/minic/riscv64/libminic-rt.a"
       # Failures in RV64I compiler-rt should be diagnosable without waiting
       # for the slower cross-GNU toolchain installation on the RV64 matrix.
       - name: Diagnose RV64I software-FP Core selection on host shard
