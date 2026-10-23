@@ -216,6 +216,18 @@ bool minic_riscv64_emit_scalar_instruction(
     }
     switch (instruction->kind) {
     case MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT:
+        if (minic_type_is_int128_integer(instruction->type)) {
+            /* Core immediate storage is signed int64. Sign-extend this
+             * mathematical integer into the LP64 low/high register pair.
+             * Wider literals must be built from separate Core operations. */
+            if (fprintf(file, "  li t0, %" PRId64 "\n"
+                              "  li t1, %d\n",
+                        instruction->value.integer_value,
+                        instruction->value.integer_value < 0 ? -1 : 0) < 0)
+                return false;
+            return minic_riscv64_frame_store_int128(
+                file, frame, instruction->result, "t0", "t1");
+        }
         if (fprintf(file, "  li t0, %" PRId64 "\n", instruction->value.integer_value) < 0 ||
             !minic_riscv64_emit_integer_conversion_for_program(
                 file, program, instruction->type, "t0")) {
