@@ -86,12 +86,15 @@ bool minic_riscv_isa_admit_core_instruction(
      * instruction. A 32-bit base ISA has no obligation to implement a C
      * compiler extension such as __int128, but it must not miscompile one. */
     switch (instruction->kind) {
-    case MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT:
     case MINIC_CORE_INSTRUCTION_INTEGER_CLZ:
     case MINIC_CORE_INSTRUCTION_INTEGER_CTZ:
         if (minic_type_is_int128_integer(instruction->type))
             return reject(reason, capacity,
                           "__int128 operation has no qualified two-limb lowering");
+        break;
+    case MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT:
+        /* Core integer constants use one signed 64-bit immediate; RV64I
+         * materializes its 128-bit sign-extension in a second integer slot. */
         break;
     case MINIC_CORE_INSTRUCTION_INTEGER_ADD:
     case MINIC_CORE_INSTRUCTION_INTEGER_SUBTRACT:
