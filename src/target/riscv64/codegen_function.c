@@ -67,6 +67,29 @@ bool minic_riscv64_write_c0_program_with_core_functions(const char *path,
         }
     }
 
+    /* The current RV64 psABI lowering selects floating argument/return
+     * registers unconditionally. This is correct for legacy LP64D but WRONG
+     * for explicit LP64 soft-float even when the function only forwards a
+     * double. Reject scalar and nested-aggregate FP signatures until LP64
+     * integer-register ABI classification is implemented and qualified. */
+    if (target != NULL && target->riscv_isa.strict_isa &&
+        target->riscv_isa.abi == MINIC_RISCV_ABI_LP64) {
+        for (function_index = 0U; function_index < program->function_count;
+             ++function_index) {
+            const MinicFunction *f = &program->functions[function_index];
+            if (!f->is_defined || (f->is_internal && !f->is_referenced))
+                continue;
+            if (!minic_riscv_isa_soft_float_signature_supported(
+                    &target->riscv_isa, program, f)) {
+                minic_riscv64_set_diagnostic(
+                    diagnostic, path,
+                    "LP64 soft-float ABI for floating parameter/return "
+                    "(including record members) is not yet qualified");
+                return false;
+            }
+        }
+    }
+
     file = fopen(path, "wb");
     if (file == NULL) {
         char message[256];
@@ -229,7 +252,8 @@ bool minic_riscv64_write_c0_program_with_core_functions(const char *path,
             symbol.function_sections = function_sections;
             success = success && minic_riscv64_emit_core_function_for_program_with_symbol(
                           file, program, core_function, &symbol,
-                          target != NULL && target->position_independent);
+                          target != NULL && target->position_independent,
+                          target != NULL ? &target->riscv_isa : NULL, diagnostic);
             /* GNU constructor is a real ELF init action on RV64 as well:
              * retain its address as an init_array relocation, never discard. */
             if (success && function->is_constructor) {
@@ -283,5 +307,7 @@ bool minic_riscv64_write_c0_program_with_core_functions(const char *path,
             return false;
         }
     }
+    if (!success && target != NULL && target->riscv_isa.strict_isa)
+        (void)remove(path);
     return success;
 }

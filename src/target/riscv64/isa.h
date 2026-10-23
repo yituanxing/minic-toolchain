@@ -35,6 +35,23 @@ bool minic_riscv_isa_resolve(const char *march, const char *mabi,
                              MinicRiscvIsa *isa, char *reason, size_t capacity);
 bool minic_riscv_isa_has(const MinicRiscvIsa *isa, uint32_t requirements);
 
+/* A small target-owned instruction-family selector. Call only for reachable
+ * Core instructions, after frame/ABI planning and before emitting machine
+ * bytes. Unknown auxiliary opcodes are still audited in the final assembler
+ * stream. This selection has no cost in the historical default path. */
+#include "core/core_ir.h"
+#include "frontend/ast.h"
+bool minic_riscv_isa_admit_core_instruction(
+    const MinicRiscvIsa *isa, const MinicCoreInstruction *instruction,
+    char *reason, size_t capacity);
+
+/* LP64 soft-float calls cannot silently use the old LP64D floating register
+ * ABI, even when a C function only copies a float without FP arithmetic.
+ * Inspect nested record/array argument and return types too. */
+bool minic_riscv_isa_soft_float_signature_supported(
+    const MinicRiscvIsa *isa, const MinicC0Program *program,
+    const MinicFunction *function);
+
 /* End-to-end fail-closed instruction selection audit, over the actual
  * assembler text (including frame, helper and address emission). */
 bool minic_riscv64_check_isa_assembly(const char *path,

@@ -36,7 +36,7 @@ for march in rv64i rv64im; do
       -S "$tmp/float.i" -o "$tmp/invalid-float.s" >"$tmp/fp.out" 2>"$tmp/fp.err"; then
     echo "RV64_ISA=FAIL $march accepted FP" >&2; exit 1
   fi
-  grep -Eq 'requires F(/D)?' "$tmp/fp.err"
+  grep -Eq 'requires F(/D)?|LP64 soft-float ABI' "$tmp/fp.err"
   test ! -e "$tmp/invalid-float.s"
 done
 for selection in "rv64i lp64d" "rv64im lp64d" "rv64imafd lp64"; do
@@ -54,6 +54,56 @@ for unqualified in rv64gc rv64imac rv32i rv64imaf; do
   fi
   grep -q 'supported explicit -march' "$tmp/bad.err"
 done
+
+# ISA selection is made over reachable blocks, including implicit pointer
+# scaling and overflow helpers, not merely the literal C multiply operator.
+cat >"$tmp/charptr.i" <<'SRC'
+char *advance(char *p, long offset) { return p + offset; }
+SRC
+"$MINIC_CC" --target=riscv64-linux -march=rv64i -mabi=lp64 \
+  -S "$tmp/charptr.i" -o "$tmp/charptr.s"
+test -s "$tmp/charptr.s"
+
+cat >"$tmp/longptr.i" <<'SRC'
+long *advance(long *p, long offset) { return p + offset; }
+SRC
+if "$MINIC_CC" --target=riscv64-linux -march=rv64i -mabi=lp64 \
+   -S "$tmp/longptr.i" -o "$tmp/invalid-pointer.s" \
+   >"$tmp/pointer.out" 2>"$tmp/pointer.err"; then
+  echo "RV64_ISA=FAIL rv64i admitted pointer scale needing M" >&2; exit 1
+fi
+grep -Eq "instruction '(mul|mulh)' requires M" "$tmp/pointer.err"
+test ! -e "$tmp/invalid-pointer.s"
+"$MINIC_CC" --target=riscv64-linux -march=rv64im -mabi=lp64 \
+  -S "$tmp/longptr.i" -o "$tmp/longptr-im.s"
+test -s "$tmp/longptr-im.s"
+
+# A plain double passthrough has NO FP arithmetic but the existing RV64
+# psABI uses fa0; it is *not* a correct LP64 soft-float ABI implementation.
+# The compiler must fail closed rather than successfully emit the wrong ABI.
+cat >"$tmp/fpabi.i" <<'SRC'
+double passthrough(double value) { return value; }
+SRC
+for march in rv64i rv64im; do
+  if "$MINIC_CC" --target=riscv64-linux "-march=$march" -mabi=lp64 \
+     -S "$tmp/fpabi.i" -o "$tmp/invalid-fpabi.s" \
+     >"$tmp/fpabi.out" 2>"$tmp/fpabi.err"; then
+    echo "RV64_ISA=FAIL $march admitted wrong float calling ABI" >&2; exit 1
+  fi
+  grep -q 'LP64 soft-float ABI' "$tmp/fpabi.err"
+  test ! -e "$tmp/invalid-fpabi.s"
+done
+cat >"$tmp/record-fpabi.i" <<'SRC'
+struct Box { double value; };
+struct Box passthrough(struct Box box) { return box; }
+SRC
+if "$MINIC_CC" --target=riscv64-linux -march=rv64im -mabi=lp64 \
+  -S "$tmp/record-fpabi.i" -o "$tmp/invalid-record-fpabi.s" \
+  >"$tmp/record-fpabi.out" 2>"$tmp/record-fpabi.err"; then
+  echo "RV64_ISA=FAIL admitted FP aggregate ABI" >&2; exit 1
+fi
+grep -q 'LP64 soft-float ABI' "$tmp/record-fpabi.err"
+test ! -e "$tmp/invalid-record-fpabi.s"
 
 # The GNU assembler is an independent legality oracle for each exact profile.
 if command -v riscv64-linux-gnu-gcc >/dev/null 2>&1; then

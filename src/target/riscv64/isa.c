@@ -1,5 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
 #include "target/riscv64/isa.h"
+#include "frontend/ast.h"
+#include "core/core_ir.h"
 
 #include <ctype.h>
 #include <stdio.h>
@@ -55,6 +57,126 @@ bool minic_riscv_isa_resolve(const char *march, const char *mabi,
                       "rv64imafd requires lp64d");
     }
     *isa = resolved;
+    return true;
+}
+
+/* Planner decisions apply to reachable Core ops only. These are *machine*
+ * choices, not frontend C-language admission: multiply may later choose a
+ * qualified software lowering. The final emitted-ISA audit still catches all
+ * implicit M/F/D instructions in helpers, calls and prologue/epilogue. */
+bool minic_riscv_isa_admit_core_instruction(
+    const MinicRiscvIsa *isa, const MinicCoreInstruction *instruction,
+    char *reason, size_t capacity) {
+    uint32_t required = 0U;
+    const char *machine = NULL;
+    const char *extension = NULL;
+    if (isa == NULL || !isa->strict_isa || instruction == NULL) return true;
+    switch (instruction->kind) {
+    case MINIC_CORE_INSTRUCTION_INTEGER_MULTIPLY:
+    case MINIC_CORE_INSTRUCTION_INTEGER_DIVIDE:
+    case MINIC_CORE_INSTRUCTION_INTEGER_REMAINDER:
+        required = MINIC_RISCV_FEATURE_M;
+        machine = instruction->kind == MINIC_CORE_INSTRUCTION_INTEGER_MULTIPLY
+                      ? "mul" : instruction->kind == MINIC_CORE_INSTRUCTION_INTEGER_DIVIDE
+                          ? "div" : "rem";
+        extension = "M";
+        break;
+    case MINIC_CORE_INSTRUCTION_POINTER_OFFSET:
+        /* The current selected RV64 pointer scaling emits MUL for non-unit
+         * element size. Do not reject the semantic pointer instruction when
+         * it already has unit stride. */
+        if (instruction->value.pointer_offset.element_size != 1U) {
+            required = MINIC_RISCV_FEATURE_M;
+            machine = "mul";
+            extension = "M";
+        }
+        break;
+    case MINIC_CORE_INSTRUCTION_INTEGER_OVERFLOW:
+        if (instruction->value.integer_overflow.operator_kind ==
+            MINIC_CORE_INTEGER_OVERFLOW_MULTIPLY) {
+            required = MINIC_RISCV_FEATURE_M;
+            machine = "mul";
+            extension = "M";
+        }
+        break;
+    case MINIC_CORE_INSTRUCTION_FLOAT_ADD:
+    case MINIC_CORE_INSTRUCTION_FLOAT_SUBTRACT:
+    case MINIC_CORE_INSTRUCTION_FLOAT_MULTIPLY:
+    case MINIC_CORE_INSTRUCTION_FLOAT_DIVIDE:
+        required = MINIC_RISCV_FEATURE_F;
+        machine = "fadd.s";
+        extension = "F";
+        break;
+    case MINIC_CORE_INSTRUCTION_DOUBLE_ADD:
+    case MINIC_CORE_INSTRUCTION_DOUBLE_SUBTRACT:
+    case MINIC_CORE_INSTRUCTION_DOUBLE_MULTIPLY:
+    case MINIC_CORE_INSTRUCTION_DOUBLE_DIVIDE:
+    case MINIC_CORE_INSTRUCTION_DOUBLE_EQUAL:
+    case MINIC_CORE_INSTRUCTION_DOUBLE_LESS:
+    case MINIC_CORE_INSTRUCTION_DOUBLE_LESS_EQUAL:
+    case MINIC_CORE_INSTRUCTION_DOUBLE_NEGATE:
+    case MINIC_CORE_INSTRUCTION_INTEGER_TO_DOUBLE:
+    case MINIC_CORE_INSTRUCTION_FLOAT_TO_DOUBLE:
+    case MINIC_CORE_INSTRUCTION_DOUBLE_TO_FLOAT:
+    case MINIC_CORE_INSTRUCTION_DOUBLE_TO_INTEGER:
+        required = MINIC_RISCV_FEATURE_F | MINIC_RISCV_FEATURE_D;
+        machine = "fadd.d";
+        extension = "F/D";
+        break;
+    default: break;
+    }
+    if (required == 0U || minic_riscv_isa_has(isa, required)) return true;
+    if (reason != NULL && capacity > 0U)
+        (void)snprintf(reason, capacity,
+                       "RISC-V instruction '%s' requires %s; selected ISA lacks "
+                       "hardware lowering and software lowering is not qualified",
+                       machine, extension);
+    return false;
+}
+
+static bool abi_type_contains_float(const MinicC0Program *program,
+                                    MinicType type, unsigned depth) {
+    size_t i;
+    if (type.pointer_depth != 0U) return false;
+    if (depth > 32U) return true;
+    switch (type.base_kind) {
+    case MINIC_TYPE_BASE_FLOAT:
+    case MINIC_TYPE_BASE_DOUBLE:
+    case MINIC_TYPE_BASE_LONG_DOUBLE:
+    case MINIC_TYPE_BASE_FLOAT128:
+    case MINIC_TYPE_BASE_FLOAT32:
+    case MINIC_TYPE_BASE_FLOAT64:
+    case MINIC_TYPE_BASE_FLOAT32X:
+    case MINIC_TYPE_BASE_FLOAT64X:
+        return true;
+    case MINIC_TYPE_BASE_RECORD: {
+        const MinicRecord *record = minic_c0_program_record(program, type.record_id);
+        if (record == NULL || !record->is_complete) return true;
+        for (i = 0U; i < record->field_count; ++i)
+            if (abi_type_contains_float(program, record->fields[i].type, depth + 1U))
+                return true;
+        return false;
+    }
+    case MINIC_TYPE_BASE_ARRAY: {
+        const MinicArrayType *array = minic_c0_program_array_type(program, type.array_type_id);
+        return array == NULL || abi_type_contains_float(program, array->element_type, depth + 1U);
+    }
+    default: return false;
+    }
+}
+
+bool minic_riscv_isa_soft_float_signature_supported(
+    const MinicRiscvIsa *isa, const MinicC0Program *program,
+    const MinicFunction *function) {
+    size_t i;
+    if (isa == NULL || !isa->strict_isa || isa->abi != MINIC_RISCV_ABI_LP64)
+        return true;
+    if (program == NULL || function == NULL ||
+        abi_type_contains_float(program, function->return_type, 0U))
+        return false;
+    for (i = 0U; i < function->parameter_count; ++i)
+        if (abi_type_contains_float(program, function->parameter_types[i], 0U))
+            return false;
     return true;
 }
 

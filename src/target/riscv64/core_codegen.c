@@ -453,7 +453,9 @@ static bool emit_core_function_with_symbol(FILE *file,
                                                     const MinicC0Program *program,
                                                     const MinicCoreFunction *function,
                                                     const MinicRiscv64FunctionSymbol *symbol,
-                                                    bool position_independent) {
+                                                    bool position_independent,
+                                                    const MinicRiscvIsa *isa,
+                                                    MinicDiagnostic *diagnostic) {
     MinicRiscv64CoreFrame frame;
     MinicRiscv64FunctionAbiPlan abi_plan = {0};
     const char *symbol_name;
@@ -510,6 +512,37 @@ static bool emit_core_function_with_symbol(FILE *file,
     minic_riscv64_function_abi_plan_destroy(&abi_plan);
     if (!minic_riscv64_core_frame_mark_reachable_blocks(function, &frame)) {
         return core_frame_fail(&frame);
+    }
+    /* ISA-specific instruction selection occurs AFTER actual CFG reachability
+     * is known but BEFORE any function machine code is written. No Core
+     * semantic restriction and no second frame/ABI analysis are introduced.
+     * Only explicit ISA profiles pay for this pass. The output auditor
+     * remains a final guard for implicit frame/call/helper instructions. */
+    if (isa != NULL && isa->strict_isa) {
+        for (block_index = 0U; block_index < function->block_count; ++block_index) {
+            const MinicCoreBlock *block = &function->blocks[block_index];
+            size_t j;
+            if (frame.reachable_blocks != NULL && !frame.reachable_blocks[block_index])
+                continue;
+            for (j = 0U; j < block->instruction_count; ++j) {
+                MinicCoreInstructionId id = block->instructions[j];
+                char reason[220];
+                if (id >= function->instruction_count ||
+                    !minic_riscv_isa_admit_core_instruction(
+                        isa, id < function->instruction_count ?
+                        &function->instructions[id] : NULL,
+                        reason, sizeof(reason))) {
+                    char message[256];
+                    (void)snprintf(message, sizeof(message),
+                                   "function %.64s block=%zu instruction=%u: %.145s",
+                                   symbol_name, block_index, (unsigned int)id,
+                                   id < function->instruction_count ?
+                                       reason : "invalid Core instruction id");
+                    minic_riscv64_set_diagnostic(diagnostic, "<riscv-isa>", message);
+                    return core_frame_fail(&frame);
+                }
+            }
+        }
     }
     if (bootstrap_trace) {
         (void)fprintf(stderr,
@@ -695,7 +728,8 @@ static bool emit_core_function_with_symbol(FILE *file,
 
 bool minic_riscv64_emit_core_function_with_symbol(
     FILE *file, const MinicCoreFunction *function, const MinicRiscv64FunctionSymbol *symbol) {
-    return emit_core_function_with_symbol(file, NULL, function, symbol, false);
+    return emit_core_function_with_symbol(file, NULL, function, symbol, false,
+                                          NULL, NULL);
 }
 
 bool minic_riscv64_emit_core_function_for_program_with_symbol(
@@ -703,8 +737,10 @@ bool minic_riscv64_emit_core_function_for_program_with_symbol(
     const MinicC0Program *program,
     const MinicCoreFunction *function,
     const MinicRiscv64FunctionSymbol *symbol,
-    bool position_independent) {
+    bool position_independent,
+    const MinicRiscvIsa *isa,
+    MinicDiagnostic *diagnostic) {
     return program != NULL &&
            emit_core_function_with_symbol(file, program, function, symbol,
-                                          position_independent);
+                                          position_independent, isa, diagnostic);
 }

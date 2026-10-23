@@ -3,6 +3,8 @@
 
 #include "core/core_ir.h"
 #include "target/riscv64/function_symbol.h"
+#include "target/riscv64/isa.h"
+#include "minic/compiler.h"
 
 #include <stdbool.h>
 #include <stdio.h>
@@ -28,7 +30,9 @@ bool minic_riscv64_emit_core_function_for_program_with_symbol(
     const MinicC0Program *program,
     const MinicCoreFunction *function,
     const MinicRiscv64FunctionSymbol *symbol,
-    bool position_independent);
+    bool position_independent,
+    const MinicRiscvIsa *isa,
+    MinicDiagnostic *diagnostic);
 
 static inline bool minic_riscv64_emit_core_function(FILE *file,
                                                      const MinicCoreFunction *function,
