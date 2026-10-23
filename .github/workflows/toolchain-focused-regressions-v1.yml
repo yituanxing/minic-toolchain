@@ -497,6 +497,23 @@ jobs:
 
           echo "MINIC_RV64_FOCUSED_REGRESSIONS_V1=PASS inline-emission=PASS constant-if=PASS section-gc=PASS"
 
+      # Exact cross-ISA BusyBox closure for RV64. This reuses the already
+      # compiled MiniC and installed RV64 GCC/QEMU in this focused runner;
+      # no fourth CI pipeline or legacy toolchain wrapper is created.
+      # Counts derive from original RV64 Kbuild, never from ARM/Loong.
+      - name: RV64 original BusyBox all Kbuild C owners and 38 QEMU differentials
+        id: rv64_busybox
+        if: steps.owners.outputs.rv64 == 'true' && steps.build.outcome == 'success'
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sh -n tests/external/busybox/probe-rv64-all-kbuild.sh
+          sh -n tests/external/busybox/probe-four-backend-all-kbuild.sh
+          python3 -m py_compile tests/external/busybox/mixed_bulk_kbuild.py
+          MINIC_CC="$GITHUB_WORKSPACE/build/toolchain-focused-t1-v2/bin/minic-cc" \
+            sh tests/external/busybox/probe-rv64-all-kbuild.sh
+
       - name: Profile-only exact earlycon differential against frozen GNU input
         if: github.event_name == 'push' && contains(github.event.head_commit.message, '[earlycon-profile-probe]')
         continue-on-error: true
@@ -623,6 +640,13 @@ jobs:
           elif [[ "$result" != skipped ]]; then
             echo "T1_UNEXPECTED_OWNER_EXECUTION owner=rv64 check=rv64 result=$result"; failures=1
           fi
+          result="${{ steps.rv64_busybox.outcome }}"
+          printf '%s\t%s\t%s\n' 'rv64' 'original_busybox_1361_all_c_owners' "$result" >> build/toolchain-focused-t1-verdict/outcomes.tsv
+          if [[ "$MODE" == all || "$MODE" == "minic-rv64" ]]; then
+            if [[ "$result" != success ]]; then echo "T1_OWNER_CHECK_FAILED owner=rv64 check=busybox_full_kbuild result=$result"; failures=1; fi
+          elif [[ "$result" != skipped ]]; then
+            echo "T1_UNEXPECTED_OWNER_EXECUTION owner=rv64 check=busybox_full_kbuild result=$result"; failures=1
+          fi
           result="${{ steps.ar_archive.outcome }}"
           printf '%s\t%s\t%s\n' 'miniar' 'ar_archive' "$result" >> build/toolchain-focused-t1-verdict/outcomes.tsv
           if [[ "$MODE" == all || "$MODE" == "miniar" ]]; then
@@ -676,9 +700,9 @@ jobs:
           if [[ "${{ steps.build.outcome }}" != success ]]; then failures=1; fi
           cat build/toolchain-focused-t1-verdict/outcomes.tsv
           if [[ "$failures" -eq 0 ]]; then
-            echo "TOOLCHAIN_FOCUSED_T1=PASS mode=$MODE independent_test_checks=9 shared_builds=1"
+            echo "TOOLCHAIN_FOCUSED_T1=PASS mode=$MODE independent_test_checks=10 shared_builds=1"
           else
-            echo "TOOLCHAIN_FOCUSED_T1=FAIL mode=$MODE independent_test_checks=9 shared_builds=1"
+            echo "TOOLCHAIN_FOCUSED_T1=FAIL mode=$MODE independent_test_checks=10 shared_builds=1"
           fi
           exit "$failures"
 

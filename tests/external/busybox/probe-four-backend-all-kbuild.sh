@@ -73,9 +73,10 @@ if [ "$scan_rc" -ne 0 ]; then
   exit 1
 fi
 case "$target" in
+  riscv64) floor=500 ;;
   aarch64) floor=581 ;;
   loongarch64) floor=581 ;;
-  *) exit 1 ;;
+  *) echo "unsupported cross target: $target" >&2; exit 1 ;;
 esac
 grep -qx 'BUSYBOX_ALLYES_GCC_KBUILD=PASS original_Kconfig=1 original_sources=1' "$work/probe.out" ||
   { echo "FOUR_BACKEND_BUSYBOX_ALL_ACCEPT=FAIL target=$target stage=GNU_Kbuild" >&2; exit 1; }
@@ -85,11 +86,10 @@ grep -qx 'BUSYBOX_MIXED_BULK_RUNTIME=DISCOVERY fixtures=38 matches=38 difference
   { echo "FOUR_BACKEND_BUSYBOX_ALL_ACCEPT=FAIL target=$target stage=MiniC_GNU_QEMU_differential" >&2; exit 1; }
 grep -qx 'BUSYBOX_MIXED_BULK_CROSS_RUNTIME=PASS cases=38 GNU_QEMU_byte_exact=1' "$work/probe.out" ||
   { echo "FOUR_BACKEND_BUSYBOX_ALL_ACCEPT=FAIL target=$target stage=cross_applet_coverage" >&2; exit 1; }
-grep -qx 'BUSYBOX_MIXED_BULK_ALL_C_OWNERS=PASS original_Kbuild_owners=581 MiniC_owners=581 GNU_C_fallbacks=0 SHA256_verified=581 link_toolchain=GNU' "$work/probe.out" ||
-  { echo "FOUR_BACKEND_BUSYBOX_ALL_ACCEPT=FAIL target=$target stage=missing_zero_fallback_sha_receipt" >&2; exit 1; }
 receipt=$(grep '^BUSYBOX_MIXED_BULK=PASS MiniC_owners=' "$work/probe.out" || true)
 owner_receipt=$(grep '^BUSYBOX_MIXED_BULK_REAL_OWNERS=PASS total=' "$work/probe.out" || true)
-coverage=$(grep '^BUSYBOX_MIXED_BULK_CROSS_COHORT=DISCOVERY original_Kbuild_owners=581 ' "$work/probe.out" || true)
+coverage=$(grep '^BUSYBOX_MIXED_BULK_CROSS_COHORT=DISCOVERY original_Kbuild_owners=' "$work/probe.out" || true)
+owner_manifest=$(grep '^BUSYBOX_MIXED_BULK_ALL_C_OWNERS=PASS original_Kbuild_owners=' "$work/probe.out" || true)
 mini=$(printf '%s\n' "$receipt" | sed -n 's/.*MiniC_owners=\([0-9][0-9]*\) GCC_fallback=.*/\1/p')
 gnu=$(printf '%s\n' "$receipt" | sed -n 's/.* GCC_fallback=\([0-9][0-9]*\) original_full_Kbuild=.*/\1/p')
 case "$receipt" in
@@ -97,13 +97,16 @@ case "$receipt" in
   *) echo "FOUR_BACKEND_BUSYBOX_ALL_ACCEPT=FAIL target=$target stage=missing_real_mixed_receipt" >&2; exit 1 ;;
 esac
 if [ -z "$mini" ] || [ -z "$gnu" ] || [ "$mini" -lt "$floor" ] ||
-   [ "$mini" -ne 581 ] || [ "$gnu" -ne 0 ] ||
-   [ "$((mini + gnu))" -ne 581 ] ||
+   [ "$gnu" -ne 0 ] ||
+   { [ "$target" != riscv64 ] && [ "$mini" -ne 581 ]; } ||
+   ! printf '%s\n' "$owner_manifest" |
+       grep -qx "BUSYBOX_MIXED_BULK_ALL_C_OWNERS=PASS original_Kbuild_owners=$mini MiniC_owners=$mini GNU_C_fallbacks=0 SHA256_verified=$mini link_toolchain=GNU" ||
    ! printf '%s\n' "$owner_receipt" |
        grep -qx "BUSYBOX_MIXED_BULK_REAL_OWNERS=PASS total=$mini SHA256_verified=$mini original_Kbuild=1" ||
-   [ -z "$coverage" ]; then
+   ! printf '%s\n' "$coverage" |
+       grep -qx "BUSYBOX_MIXED_BULK_CROSS_COHORT=DISCOVERY original_Kbuild_owners=$mini MiniC_qualified=$mini GNU_fallbacks=0 full_MiniC=NO"; then
   echo "FOUR_BACKEND_BUSYBOX_ALL_ACCEPT=FAIL target=$target stage=coverage_or_SHA" >&2
   exit 1
 fi
-echo "FOUR_BACKEND_BUSYBOX_ALL_ACCEPT=PASS target=$target original_Kbuild_owners=581 MiniC_owners=$mini GNU_fallbacks=$gnu SHA256_verified=$mini GNU_QEMU_fixtures=38 strict=1 all_C_owners_MiniC=YES assembler_linker=GNU full_all_MiniC=NO"
+echo "FOUR_BACKEND_BUSYBOX_ALL_ACCEPT=PASS target=$target original_Kbuild_owners=$mini MiniC_owners=$mini GNU_fallbacks=$gnu SHA256_verified=$mini GNU_QEMU_fixtures=38 strict=1 all_C_owners_MiniC=YES assembler_linker=GNU full_all_MiniC=NO"
 echo "FOUR_BACKEND_BUSYBOX_ALL_KBUILD_END target=$target authenticated_mixed_build=1 full_MiniC=NO"

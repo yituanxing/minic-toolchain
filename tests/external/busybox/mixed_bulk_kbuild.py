@@ -45,6 +45,10 @@ CERTIFIED_GCC_FALLBACKS = frozenset((
 # and dual QEMU acceptance #39447330925. New MiniC successes remove entries;
 # a previously accepted MiniC owner reverting to GNU is a hard regression.
 CROSS_APPROVED_GCC_FALLBACKS = {
+    # RV64 enters the same original BusyBox 1.36.1 all-C-owner contract.
+    # Unlike historical BusyBox 1.38.0/408-applet proofs, no GNU C fallback
+    # is acceptable; owner count is discovered from real RV64 Kbuild.
+    "riscv64": frozenset(),
     "aarch64": frozenset((
         "coreutils/od.o",
         "editors/awk.o",
@@ -171,11 +175,14 @@ def main():
         owner_count = len(mini_names) + len(fallback_names)
         target_name = os.environ["BUSYBOX_ALLYES_MINIC_TARGET"].split("-")[0]
         approved = CROSS_APPROVED_GCC_FALLBACKS.get(target_name)
-        # Full-original-Kbuild 581/581 milestone; never silently regress
-        # even one owner back to GCC. This does not claim MiniC AS/LD.
-        target_floor = {"aarch64": 581, "loongarch64": 581}.get(target_name)
-        accepted = (owner_count == 581 and target_floor is not None
-                    and len(mini_names) >= target_floor
+        # Already certified AArch64/LoongArch64 cohorts retain exact 581.
+        # RV64 must discover its OWN original Kconfig/Kbuild object inventory;
+        # never import the x86 or AArch owner count as its baseline.
+        target_floor = {"riscv64": 500, "aarch64": 581,
+                        "loongarch64": 581}.get(target_name)
+        count_ok = (owner_count >= target_floor if target_name == "riscv64"
+                    else owner_count == target_floor) if target_floor is not None else False
+        accepted = (count_ok and len(mini_names) == owner_count
                     and len(set(mini_names + fallback_names)) == owner_count
                     and approved is not None
                     and len(fallback_names) == 0
@@ -274,10 +281,13 @@ def main():
         log("BUSYBOX_MIXED_BULK_ALL_C_OWNERS=PASS original_Kbuild_owners=593 "
             "MiniC_owners=593 GNU_C_fallbacks=0 "
             "SHA256_verified=593 link_toolchain=GNU")
-    if cross_target and len(mini_names) == 581 and len(skipped) == 0:
-        log("BUSYBOX_MIXED_BULK_ALL_C_OWNERS=PASS original_Kbuild_owners=581 "
-            "MiniC_owners=581 GNU_C_fallbacks=0 "
-            "SHA256_verified=581 link_toolchain=GNU")
+    if cross_target and not skipped and len(mini_names) == verified:
+        # Reuse the identical SHA-checked Kbuild receipt for any target's
+        # admitted all-owner cohort, keeping the per-target measured count.
+        log("BUSYBOX_MIXED_BULK_ALL_C_OWNERS=PASS original_Kbuild_owners=%d "
+            "MiniC_owners=%d GNU_C_fallbacks=0 "
+            "SHA256_verified=%d link_toolchain=GNU" %
+            (verified, verified, verified))
     log("BUSYBOX_MIXED_BULK=PASS MiniC_owners=%d GCC_fallback=%d "
         "original_full_Kbuild=1 eleven_fixture_byte_exact=1 "
         "MiniC_and_GNU_binary_differ=1 full_all_MiniC=NO" %
