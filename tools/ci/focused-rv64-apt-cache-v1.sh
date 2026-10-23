@@ -47,7 +47,7 @@ fi
 if [[ -f /etc/apt/apt-mirrors.txt ]] &&
    grep -q 'http://archive.ubuntu.com/ubuntu' /etc/apt/apt-mirrors.txt &&
    grep -q 'azure.archive.ubuntu.com/ubuntu' /etc/apt/apt-mirrors.txt; then
-  sudo sed -i '/azure\\.archive\\.ubuntu\\.com\\/ubuntu/d' /etc/apt/apt-mirrors.txt
+  sudo sed -i '/azure[.]archive[.]ubuntu[.]com/d' /etc/apt/apt-mirrors.txt
   echo 'FOCUSED_APT=MIRROR archive_list_azure_removed=1'
 fi
 
