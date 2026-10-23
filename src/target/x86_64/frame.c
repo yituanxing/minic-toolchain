@@ -56,6 +56,20 @@ bool minic_x86_64_frame_init(const MinicC0Program *program, const MinicTargetInf
         value_bytes += slot;
         frame->value_offsets[i] = value_bytes;
     }
+    /* Freeze the entire incoming GP register bank before any Core
+     * instruction can use RDX as the high limb of a temporary. Otherwise
+     * an early __int128 parameter may destroy a later GP parameter before
+     * its PARAMETER instruction executes. No overhead for functions without
+     * TI parameters. 48 bytes also preserves 16-byte frame alignment. */
+    for (i = 0U; i < fn->parameter_count; ++i)
+        if (minic_type_is_int128_integer(fn->parameter_types[i])) {
+            if (value_bytes > (size_t)INT32_MAX - 48U)
+                return false;
+            frame->saves_incoming_gp = true;
+            frame->incoming_gp_save_offset = value_bytes + 8U;
+            value_bytes += 48U;
+            break;
+        }
     /* Discover semantic va_start sites from Core. A VA cursor is not an RV64
      * sequential argument pointer under SysV x86-64. */
     if (frame->varargs_count != 0U) {
