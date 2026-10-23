@@ -23,6 +23,8 @@ on:
       - "src/target/x86_64/machine_emit.c"
       - "src/target/x86_64/machine_call.c"
       - "src/target/x86_64/codegen.c"
+      - "src/target/x86_64/frame.h"
+      - "src/target/x86_64/frame.c"
       - "tests/compiler/c0/probe-x86-int128-runtime-abi.sh"
       - "tests/compiler/c0/probe-x86-compiler-rt-native.sh"
       - "tests/compiler/c0/probe-runtime-isnan.sh"
