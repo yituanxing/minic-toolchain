@@ -54,7 +54,14 @@ strict_i_target:
 EOF_I
 "$MINIAS" -march=rv64i -mabi=lp64 -o "$work/strict-i-positive.o" \
     "$work/strict-i-positive.s"
-readelf -h "$work/strict-i-positive.o" | grep -q 'Flags:.*soft-float ABI'
+# ELF e_flags 0x0 is exactly RV64I LP64 soft float and no RVC.
+# Some readelf builds omit the decoded 'soft-float ABI' suffix for 0x0.
+if ! readelf -h "$work/strict-i-positive.o" |
+    grep -Eq 'Flags:.*0x0([^[:xdigit:]]|$)'; then
+    echo 'MiniAS strict-I expected ELF flags=0x0' >&2
+    readelf -h "$work/strict-i-positive.o" >&2
+    exit 1
+fi
 test -s "$work/strict-i-positive.o"
 
 for bad in mul div fadd.s fadd.d amoadd.w c.li csrrw fence.i sfence.vma pause; do
@@ -80,7 +87,11 @@ for bad in mul div fadd.s fadd.d amoadd.w c.li csrrw fence.i sfence.vma pause; d
     fi
     test ! -e "$work/strict-i-bad.o"
     grep -Eq 'rv64i-unsupported-machine-encoding|unsupported-instruction' \
-        "$work/strict-i-bad.err"
+        "$work/strict-i-bad.err" || {
+        echo "MiniAS strict-I expected rejection diagnostic not found: $work/strict-i-bad.err" >&2
+        cat "$work/strict-i-bad.err" >&2
+        exit 1
+    }
 done
 for escape in '.insn r 51, 0, 1, a0, a0, a1' '.word 0x02050533' \
               '.option arch,+m' '.option rvc' '.org 8'; do
@@ -93,7 +104,11 @@ for escape in '.insn r 51, 0, 1, a0, a0, a1' '.word 0x02050533' \
         exit 1
     fi
     test ! -e "$work/strict-i-escape.o"
-    grep -q 'unsupported-isa-' "$work/strict-i-escape.err"
+    grep -q 'unsupported-isa-' "$work/strict-i-escape.err" || {
+        echo "MiniAS strict-I expected rejection diagnostic not found: $work/strict-i-escape.err" >&2
+        cat "$work/strict-i-escape.err" >&2
+        exit 1
+    }
 done
 cat >"$work/strict-i-bad-abi.s" <<'EOF_I'
 .text
@@ -104,7 +119,11 @@ if "$MINIAS" -mabi=lp64d -march=rv64i -o "$work/strict-i-bad-abi.o" \
     echo 'MiniAS rv64i accepted lp64d' >&2
     exit 1
 fi
-grep -q 'incompatible-riscv-isa-abi' "$work/strict-i-bad-abi.err"
+grep -q 'incompatible-riscv-isa-abi' "$work/strict-i-bad-abi.err" || {
+        echo "MiniAS strict-I expected rejection diagnostic not found: $work/strict-i-bad-abi.err" >&2
+        cat "$work/strict-i-bad-abi.err" >&2
+        exit 1
+    }
 echo 'MINIAS_RV64I_ISA=PASS pseudos=1 negative_m_f_d_a_c_csr_zifencei=1 escapes=5 wrong_abi=1'
 
 # Regression: GNU RISC-V assembler fills executable .p2align with NOPs,
