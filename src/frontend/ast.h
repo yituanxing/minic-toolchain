@@ -123,7 +123,9 @@ typedef enum MinicBuiltinUnaryOperator {
     /* SQLite/glibc <bits/byteswap.h>: pure, single-evaluation byte swaps. */
     MINIC_BUILTIN_UNARY_BSWAP16,
     MINIC_BUILTIN_UNARY_BSWAP32,
-    MINIC_BUILTIN_UNARY_BSWAP64
+    MINIC_BUILTIN_UNARY_BSWAP64,
+    /* IEEE-754 unordered self-comparison; operand must be evaluated once. */
+    MINIC_BUILTIN_UNARY_ISNAN
 } MinicBuiltinUnaryOperator;
 
 typedef enum MinicCallFrameAddressKind {
