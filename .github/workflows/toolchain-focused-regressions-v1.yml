@@ -205,6 +205,25 @@ jobs:
           test -x build/toolchain-focused-t1-v2/bin/minic-ar
           test -x build/toolchain-focused-t1-v2/bin/minic-ld
 
+      # MiniAS has a broad legacy ISA surface; changes to its encoder
+      # require the strict-I pseudo/extension/escape gate as well as native A0.
+      # Scope this test to assembler owners to avoid slowing every compiler
+      # backend push. If diff provenance is unavailable, fail open.
+      - name: MiniAS A0 and strict RV64I ISA contract (assembler changes only)
+        if: steps.owners.outputs.mode != 'four-backend'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          paths="$RUNNER_TEMP/minic-focused-changed-paths.txt"
+          if [[ -s "$paths" ]] &&
+             ! grep -Eq '^(assembler/|tools/minic-as/|tests/assembler/)' "$paths"; then
+            echo 'MINIAS_SCOPED_A0=SKIP no assembler owner changes'
+          else
+            make MODE=release CFLAGS=-Werror \
+              BUILD_DIR=build/toolchain-focused-t1-v2 check-minias-a0
+            echo 'MINIAS_SCOPED_A0=PASS default=1 explicit_rv64i=1'
+          fi
+
       # Core or x86 global-layout refactors must run a native executable
       # contract, not merely compile the compiler and cross-check two new ISAs.
       # Reuse the existing broad x86 smoke rather than inventing another test.
