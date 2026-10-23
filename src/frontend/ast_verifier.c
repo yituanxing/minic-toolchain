@@ -838,6 +838,12 @@ static bool verify_expression(const MinicC0Program *program,
         case MINIC_BUILTIN_UNARY_ISDIGIT:
             expected_operand_type = minic_type_int();
             break;
+        case MINIC_BUILTIN_UNARY_ISNAN:
+            return builtin_operand != NULL &&
+                   (minic_type_is_float(builtin_operand->type) ||
+                    minic_type_is_double(builtin_operand->type)) &&
+                   expression->value_category == MINIC_VALUE_RVALUE &&
+                   minic_type_equal(expression->type, minic_type_int());
         case MINIC_BUILTIN_UNARY_BSWAP16:
             expected_operand_type = minic_type_unsigned_short();
             break;
