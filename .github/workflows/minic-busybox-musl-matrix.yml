@@ -1,4 +1,4 @@
-name: MiniC BusyBox musl Four ISA Preflight
+name: MiniC BusyBox musl Four ISA Full Kbuild Matrix
 on:
   workflow_dispatch:
   push:
@@ -6,6 +6,7 @@ on:
     paths:
       - '.github/workflows/minic-busybox-musl-matrix.yml'
       - 'tests/external/busybox/probe-musl-four-isa.sh'
+      - 'tests/external/busybox/musl-gcc-oracle.py'
 concurrency:
   group: minic-busybox-musl-${{ github.ref }}
   cancel-in-progress: true
@@ -14,7 +15,7 @@ permissions:
 jobs:
   musl-four:
     runs-on: ubuntu-24.04
-    timeout-minutes: 35
+    timeout-minutes: 50
     strategy:
       fail-fast: false
       matrix:
@@ -41,7 +42,7 @@ jobs:
           set -Eeuo pipefail
           make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/busybox-musl-four all
           test -s build/busybox-musl-four/bin/minic-cc
-      - name: Original pinned BusyBox source and static musl GNU-MiniC-QEMU ABI
+      - name: Original pinned BusyBox, static musl, all Kbuild MiniC objects and QEMU
         id: smoke
         shell: bash
         env:
@@ -49,9 +50,10 @@ jobs:
         run: |
           set -Eeuo pipefail
           bash -n tests/external/busybox/probe-musl-four-isa.sh
+          python3 -m py_compile tests/external/busybox/musl-gcc-oracle.py
           bash tests/external/busybox/probe-musl-four-isa.sh \
             "${{ matrix.arch }}" "${{ matrix.gcc }}" "${{ matrix.prefix }}" "${{ matrix.qemu }}"
       - name: Record per-ISA musl status without claiming full BusyBox
         if: always()
         run: |
-          echo "BUSYBOX_TWO_LIBC_STAGE arch=${{ matrix.arch }} musl_preflight=${{ steps.smoke.outcome }} full_busybox_musl=NOT_YET_QUALIFIED glibc_all_owner=HISTORICALLY_PASS"
+          echo "BUSYBOX_TWO_LIBC_STAGE arch=${{ matrix.arch }} musl_full_Kbuild=${{ steps.smoke.outcome }} glibc_all_owner=HISTORICALLY_PASS"

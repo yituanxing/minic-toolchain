@@ -86,3 +86,36 @@ curl -fsSL --retry 4 --retry-delay 2 --connect-timeout 15 \
 tar -xzf "$work/busybox.tgz" --strip-components=1 -C "$work/busybox"
 sh "$repo/tests/external/busybox/check-pinned-1361-source.sh" "$work/busybox"
 echo "MUSL_MATRIX_SOURCE=PASS target=$target version=BusyBox-1.36.1 commit=$commit"
+
+# GNU full Kbuild and MiniC all-owner substitution use this SINGLE prepared
+# musl toolchain and pristine pinned 1.36.1 sources. Counts are target-specific
+# and must not be borrowed from the known glibc 593/581 successes.
+export MINIC_MUSL_GCC="$cc" MINIC_MUSL_SYSROOT="$work/sysroot"
+export MINIC_MUSL_BUILTIN="$builtin" MINIC_MUSL_BUILD="$work/build"
+export MINIC_MUSL_UAPI="$repo/tests/linker/fixtures/busybox-uapi"
+export MINIC_MUSL_LIBGCC="$libgcc"
+report="$work/report"; mkdir -p "$report"
+set +e
+timeout 1200s env CROSS_COMPILE="$prefix" PKG_CONFIG=pkg-config \
+  BUSYBOX_ALLYES_LINK_COMPATIBLE=1 BUSYBOX_ALLYES_MIXED_BULK=1 \
+  BUSYBOX_ALLYES_MUSL_MATRIX=1 BUSYBOX_ALLYES_MINIC_PIC=0 \
+  BUSYBOX_ALLYES_MINIC_TARGET="$target-linux" \
+  BUSYBOX_ALLYES_CROSS_PREFIX="$prefix" BUSYBOX_ALLYES_QEMU="$qemu" \
+  BUSYBOX_ALLYES_SYSROOT="$work/sysroot" \
+  python3 "$repo/tests/external/busybox/allyes_sweep.py" \
+    --source "$work/busybox" --report "$report" --minic "$MINIC_CC" \
+    --host-cc "python3 $repo/tests/external/busybox/musl-gcc-oracle.py" \
+  >"$work/kbuild.out" 2>"$work/kbuild.err"
+rc=$?
+set -e
+grep -E '^(BUSYBOX_ALLYES_(CONFIG=|HOST_EXCLUSIONS=|GCC_KBUILD=|GCC_REAL_ERRORS |FRONTIER=|BLOCKER )|BUSYBOX_MUSL_FULL_ACCEPT=|BUSYBOX_MIXED_BULK(=|_CROSS_RUNTIME=|_CROSS_COHORT=|_REAL_OWNERS=|_RUNTIME=))' "$work/kbuild.out" | head -n 110 || true
+if test "$rc" != 0; then
+  echo "BUSYBOX_MUSL_ACCEPT=FAIL target=$target source=BusyBox1.36.1 stage=real_Kbuild_and_MiniC_cohort rc=$rc" >&2
+  tail -n 28 "$work/kbuild.out" "$work/kbuild.err" >&2
+  exit 1
+fi
+grep -q '^BUSYBOX_MUSL_FULL_ACCEPT=PASS .*GCC_fallbacks=0 .*QEMU_differentials=38' "$work/kbuild.out" || {
+  echo "BUSYBOX_MUSL_ACCEPT=FAIL target=$target stage=missing_real_all_C_owner_SHA_QEMU_receipt" >&2
+  exit 1
+}
+echo "BUSYBOX_MUSL_ACCEPT=PASS target=$target BusyBox=1.36.1 libc=musl1.2.5 all_real_C_owners_MiniC=YES GNU_C_fallback=0 GNU_asm_link=1 QEMU_differential=38"

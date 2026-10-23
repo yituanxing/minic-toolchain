@@ -331,8 +331,10 @@ def controller(args):
     # or archive. Disable that single original upstream Kconfig option,
     # NOT its C sources, instead of presenting 957 enabled options as a
     # valid target build when applets/applets.c cannot even preprocess.
-    if link_compatible and os.environ.get("BUSYBOX_ALLYES_MINIC_TARGET",
-                                            "x86_64-linux") != "x86_64-linux":
+    if link_compatible and (
+            os.environ.get("BUSYBOX_ALLYES_MINIC_TARGET",
+                           "x86_64-linux") != "x86_64-linux" or
+            os.environ.get("BUSYBOX_ALLYES_MUSL_MATRIX") == "1"):
         # Upstream libbb/common_bufsiz.c explicitly defaults this
         # optional page-tail optimization OFF, and documents disabling it
         # for linker/post-link _end failures. The allyesconfig-only
