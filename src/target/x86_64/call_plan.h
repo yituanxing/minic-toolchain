@@ -11,7 +11,10 @@
 typedef enum MinicX86ArgClass {
     MINIC_X86_ARG_INTEGER, MINIC_X86_ARG_SSE, MINIC_X86_ARG_X87_MEMORY,
     MINIC_X86_ARG_RECORD_ONE_GP, MINIC_X86_ARG_RECORD_TWO_GP,
-    MINIC_X86_ARG_RECORD_MEMORY
+    MINIC_X86_ARG_RECORD_MEMORY,
+    /* SysV AMD64 classifies __int128 as two INTEGER eightbytes.
+     * Both registers must be available; otherwise pass aligned on stack. */
+    MINIC_X86_ARG_I128_TWO_GP
 } MinicX86ArgClass;
 
 typedef struct MinicX86ArgLocation {
