@@ -309,11 +309,11 @@ def main() -> int:
     if args.opcode_tsv_out is not None:
         args.opcode_tsv_out.parent.mkdir(parents=True, exist_ok=True)
         with args.opcode_tsv_out.open("w") as sink:
-            sink.write("origin\topcode\tisa\tcount\\n")
+            sink.write("origin\topcode\tisa\tcount\n")
             for region in ("compiler", "inline"):
                 for opcode, n in sorted(opcode_totals[region].items(),
                                         key=lambda row: (-row[1], row[0])):
-                    sink.write(f"{region}\t{opcode}\t{isa(opcode)}\t{n}\\n")
+                    sink.write(f"{region}\t{opcode}\t{isa(opcode)}\t{n}\n")
     for region in ("compiler", "inline"):
         ranking = opcode_totals[region].most_common(20)
         print("RV64I_OPCODE_TOP origin={} {}".format(
