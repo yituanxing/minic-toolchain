@@ -1,0 +1,73 @@
+{
+  "schema_version": 1,
+  "upstream": "llvmorg-19.1.7",
+  "shared_source_root": "third_party/llvm-compiler-rt-19.1.7",
+  "groups": {
+    "int128_mul_compare": [
+      "multi3.c",
+      "cmpti2.c",
+      "ucmpti2.c"
+    ],
+    "int128_div_rem_shift": [
+      "divti3.c",
+      "udivti3.c",
+      "modti3.c",
+      "umodti3.c",
+      "udivmodti4.c",
+      "ashlti3.c",
+      "ashrti3.c",
+      "lshrti3.c"
+    ],
+    "soft_float": [
+      "addsf3.c",
+      "subsf3.c",
+      "mulsf3.c",
+      "divsf3.c",
+      "adddf3.c",
+      "subdf3.c",
+      "muldf3.c",
+      "divdf3.c",
+      "fp_mode.c"
+    ],
+    "support": [
+      "clzdi2.c",
+      "clzsi2.c"
+    ]
+  },
+  "targets": {
+    "x86_64": {
+      "triple": "x86_64-unknown-linux-gnu",
+      "minic_target": "x86_64-linux",
+      "minic_flags": [],
+      "clang_flags": []
+    },
+    "riscv64": {
+      "triple": "riscv64-unknown-linux-gnu",
+      "minic_target": "riscv64-linux",
+      "minic_flags": [
+        "-march=rv64i",
+        "-mabi=lp64"
+      ],
+      "clang_flags": [
+        "-march=rv64i",
+        "-mabi=lp64"
+      ],
+      "assembly_primitives": [
+        "third_party/gcc-riscv-14.2.0/muldi3.S",
+        "third_party/gcc-riscv-14.2.0/div.S"
+      ]
+    },
+    "aarch64": {
+      "triple": "aarch64-unknown-linux-gnu",
+      "minic_target": "aarch64-linux",
+      "minic_flags": [],
+      "clang_flags": []
+    },
+    "loongarch64": {
+      "triple": "loongarch64-unknown-linux-gnu",
+      "minic_target": "loongarch64-linux",
+      "minic_flags": [],
+      "clang_flags": []
+    }
+  }
+}
