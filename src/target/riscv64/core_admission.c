@@ -84,6 +84,10 @@ static bool core_instruction_supported(const MinicC0Program *program,
         /* RV64 atomic ISA/memory-order lowering is not qualified yet.
          * Never map Core atomic.store to an ordinary unqualified store. */
         return false;
+    case MINIC_CORE_INSTRUCTION_VARIADIC_COPY:
+        /* SysV 24-byte cursor copying is x86-only; RV64 keeps its linear
+         * cursor-assignment path and must reject this opcode explicitly. */
+        return false;
     case MINIC_CORE_INSTRUCTION_VARIADIC_NEXT_SCALAR:
         /* This typed SysV variadic read must never silently reuse the
          * existing RV64 8-byte linear va_arg lowering. */
