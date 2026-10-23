@@ -31,12 +31,54 @@ static bool mulacc_text(const MinicInlineAsm *src) {
     return strcmp(text, expected) == 0;
 }
 
+/* The GNU =r + matched-digit family owns only explicit register operands.
+ * No hidden target machine registers, jumps, labels, function calls or
+ * directives. Every template instruction is made of a conservative x86
+ * scalar carry/move mnemonic and references only %0..%{outputs-1}. */
+static bool matched_register_template(const MinicInlineAsm *src, size_t outputs) {
+    size_t i = 0U, lines = 0U, refs = 0U;
+    if (!src->template_text || src->template_length > 1024U) return false;
+    while (i < src->template_length) {
+        size_t begin, len;
+        while (i < src->template_length &&
+               (src->template_text[i] == ' ' || src->template_text[i] == '\t' ||
+                src->template_text[i] == '\r')) ++i;
+        if (i == src->template_length) break;
+        if (src->template_text[i] == '\n') { ++i; continue; }
+        begin = i;
+        while (i < src->template_length &&
+               src->template_text[i] >= 'a' &&
+               src->template_text[i] <= 'z') ++i;
+        len = i - begin;
+        if (len != 4U ||
+            (memcmp(src->template_text + begin, "movq", 4U) != 0 &&
+             memcmp(src->template_text + begin, "addq", 4U) != 0 &&
+             memcmp(src->template_text + begin, "adcq", 4U) != 0 &&
+             memcmp(src->template_text + begin, "subq", 4U) != 0 &&
+             memcmp(src->template_text + begin, "sbbq", 4U) != 0))
+            return false;
+        ++lines;
+        while (i < src->template_length && src->template_text[i] != '\n') {
+            if (src->template_text[i] == '%') {
+                if (i + 1U >= src->template_length ||
+                    src->template_text[i+1U] < '0' ||
+                    (size_t)(src->template_text[i+1U]-'0') >= outputs)
+                    return false;
+                ++refs;
+                i += 2U;
+            } else ++i;
+        }
+    }
+    return lines > 0U && refs > 0U;
+}
+
 static bool qualified(const MinicC0Program *program,
                       const MinicInlineAsm *src, bool *is_mulacc) {
     static const char *const cpuid_out[4] = {"=a","=b","=c","=d"};
     static const char *const cpuid_in[4] = {"0","1","2","3"};
     static const char *const mul_in[5] = {"0","1","2","a","m"};
     size_t i, n;
+    bool generic = false;
     MinicType normalized;
     if (!program || !src || !src->template_text || !src->outputs ||
         !src->inputs || src->is_goto || src->label_count != 0U ||
@@ -66,6 +108,24 @@ static bool qualified(const MinicC0Program *program,
                 !c_is(&src->inputs[i], mul_in[i])) return false;
         if (!c_is(&src->inputs[3], "a") ||
             !c_is(&src->inputs[4], "m")) return false;
+    } else if (src->is_volatile && src->has_memory_clobber &&
+               src->clobber_count == 1U &&
+               src->register_clobber_count == 0U &&
+               ((src->output_count == 4U && src->input_count == 3U) ||
+                (src->output_count == 3U && src->input_count == 2U) ||
+                (src->output_count == 1U && src->input_count == 1U)) &&
+               matched_register_template(src, src->output_count)) {
+        *is_mulacc = false;
+        generic = true;
+        n = src->output_count;
+        for (i = 0U; i < n; ++i)
+            if (!c_is(&src->outputs[i], "=r")) return false;
+        for (i = 0U; i < src->input_count; ++i) {
+            const MinicInlineAsmOperand *op = &src->inputs[i];
+            if (!op->constraint_text || op->constraint_length != 1U ||
+                op->constraint_text[0] != (char)('0' + i))
+                return false;
+        }
     } else return false;
 
     for (i = 0U; i < src->output_count + src->input_count; ++i) {
@@ -77,7 +137,9 @@ static bool qualified(const MinicC0Program *program,
         const MinicType target_type =
             *is_mulacc ? minic_type_unsigned_long() : minic_type_unsigned_int();
         if (!expr || !minic_type_unqualified(expr->type, &normalized) ||
-            !minic_type_equal(normalized, target_type) ||
+            (generic ? (!minic_type_is_integer(normalized) &&
+                        !minic_type_is_pointer(normalized))
+                     : !minic_type_equal(normalized, target_type)) ||
             (is_output && (expr->value_category != MINIC_VALUE_LVALUE ||
                            minic_type_is_const(expr->type))) ||
             (*is_mulacc && i == 7U &&

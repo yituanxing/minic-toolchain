@@ -1193,6 +1193,103 @@ test "$gnu_status" -eq 42
 cmp "$tempdir/x86_asm_registers.gnu.out" "$tempdir/x86_asm_registers.mini.out"
 echo "PASS: x86 fixed/matched-register CPUID + cc/dx-clobbered MULADC GNU executable byte-exact"
 
+# A second x86 contract family shares output/matched input semantics but
+# uses GNU "memory" rather than fixed registers. The real BusyBox TLS 256-bit
+# add/sub source uses four "=r" outputs, three matching pointer inputs and a
+# carry/borrow register; its P-256 modulus path has one or three outputs.
+cat > "$tempdir/x86_asm_memory.c" <<'EOF'
+#include <stdio.h>
+static long add4(unsigned long *r, const unsigned long *a,
+                 const unsigned long *b)
+{
+    unsigned long carry;
+    asm volatile (
+"\n movq (%0), %3"
+"\n addq (%1), %3"
+"\n movq %3, (%2)"
+"\n movq 1*8(%0), %3"
+"\n adcq 1*8(%1), %3"
+"\n movq %3, 1*8(%2)"
+"\n movq 2*8(%0), %3"
+"\n adcq 2*8(%1), %3"
+"\n movq %3, 2*8(%2)"
+"\n movq 3*8(%0), %3"
+"\n adcq 3*8(%1), %3"
+"\n movq %3, 3*8(%2)"
+"\n sbbq %3, %3"
+      : "=r"(a), "=r"(b), "=r"(r), "=r"(carry)
+      : "0"(a), "1"(b), "2"(r) : "memory");
+    return carry;
+}
+static long sub4(unsigned long *r, const unsigned long *a,
+                 const unsigned long *b)
+{
+    unsigned long borrow;
+    asm volatile (
+"\n movq (%0), %3"
+"\n subq (%1), %3"
+"\n movq %3, (%2)"
+"\n movq 1*8(%0), %3"
+"\n sbbq 1*8(%1), %3"
+"\n movq %3, 1*8(%2)"
+"\n movq 2*8(%0), %3"
+"\n sbbq 2*8(%1), %3"
+"\n movq %3, 2*8(%2)"
+"\n movq 3*8(%0), %3"
+"\n sbbq 3*8(%1), %3"
+"\n movq %3, 3*8(%2)"
+"\n sbbq %3, %3"
+      : "=r"(a), "=r"(b), "=r"(r), "=r"(borrow)
+      : "0"(a), "1"(b), "2"(r) : "memory");
+    return borrow;
+}
+static void dec_mod(unsigned long *p)
+{
+    asm volatile ("subq $1, (%0)" : "=r"(p) : "0"(p) : "memory");
+}
+static long three_output(unsigned long *p, unsigned long offset)
+{
+    unsigned long borrow;
+    asm volatile ("subq %1,(%0)\nsbbq %2,%2"
+      : "=r"(p), "=r"(offset), "=r"(borrow)
+      : "0"(p), "1"(offset) : "memory");
+    return borrow;
+}
+int main(void)
+{
+    unsigned long a[4] = {~0UL, 0, 0, 0};
+    unsigned long b[4] = {2, 0, 0, 0};
+    unsigned long r[4] = {0, 0, 0, 0};
+    long carry = add4(r,a,b);
+    printf("add %ld %lu %lu %lu %lu\n",carry,r[0],r[1],r[2],r[3]);
+    carry = sub4(r,a,b);
+    printf("sub %ld %lu %lu %lu %lu\n",carry,r[0],r[1],r[2],r[3]);
+    dec_mod(r);
+    printf("dec %lu\n",r[0]);
+    carry = three_output(r, 3UL);
+    printf("three %ld %lu\n",carry,r[0]);
+    return 42;
+}
+EOF
+"$HOST_CC" -std=gnu11 -E -P -x c "$tempdir/x86_asm_memory.c" \
+    -o "$tempdir/x86_asm_memory.i"
+"$MINIC_CC" --target=x86_64-linux -S "$tempdir/x86_asm_memory.i" \
+    -o "$tempdir/x86_asm_memory.s"
+"$HOST_CC" -no-pie -x assembler "$tempdir/x86_asm_memory.s" \
+    -o "$tempdir/x86_asm_memory.mini"
+"$HOST_CC" -no-pie -std=gnu11 -x c "$tempdir/x86_asm_memory.i" \
+    -o "$tempdir/x86_asm_memory.gnu"
+set +e
+"$tempdir/x86_asm_memory.mini" > "$tempdir/x86_asm_memory.mini.out"
+mini_status=$?
+"$tempdir/x86_asm_memory.gnu" > "$tempdir/x86_asm_memory.gnu.out"
+gnu_status=$?
+set -e
+test "$mini_status" -eq 42
+test "$gnu_status" -eq 42
+cmp "$tempdir/x86_asm_memory.gnu.out" "$tempdir/x86_asm_memory.mini.out"
+echo "PASS: x86 four/three/one output matched-register memory asm GNU byte-exact"
+
 # The above does not grant arbitrary templates with similar constraints.
 cat > "$tempdir/x86_asm_registers_unsupported.i" <<'EOF'
 int main(void) {

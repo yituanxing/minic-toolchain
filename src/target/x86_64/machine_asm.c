@@ -51,6 +51,68 @@ static bool emit_mulacc_template(FILE *out, const MinicCoreInlineAsm *info) {
     return fputc('\n', out) != EOF;
 }
 
+
+/* Register-only GNU "=r"/matching-digit group with memory clobber. The
+ * template has no implicit registers, and Core's preflight restricts the
+ * instructions to mov/add/adc/sub/sbb and %N registers. No per-BusyBox-function
+ * rewrites: the same ABI operand assignment works for add, sub and mod. */
+static bool emit_matched_register_template(
+    FILE *out, const MinicCoreInlineAsm *info, size_t outputs) {
+    static const char *const regs[] = {"%r8", "%r9", "%r10", "%rcx"};
+    size_t i;
+    for (i = 0U; i < info->template_length; ++i) {
+        if (info->template_text[i] != '%') {
+            if (fputc(info->template_text[i], out) == EOF) return false;
+        } else {
+            if (++i >= info->template_length ||
+                info->template_text[i] < '0' ||
+                (size_t)(info->template_text[i] - '0') >= outputs ||
+                fputs(regs[(size_t)(info->template_text[i] - '0')], out) == EOF)
+                return false;
+        }
+    }
+    return fputc('\n', out) != EOF;
+}
+
+static bool emit_memory_clobber_matched(
+    FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicCoreFunction *fn, const MinicX86Frame *frame,
+    const MinicCoreInstruction *ins, const MinicCoreInlineAsm *info) {
+    static const char *const regs[] = {"%r8", "%r9", "%r10", "%rcx"};
+    const size_t count = ins->value.structured_inline_asm.operand_count;
+    const size_t outputs = count == 7U ? 4U : count == 5U ? 3U :
+                           count == 2U ? 1U : 0U;
+    const MinicCoreStructuredInlineAsmOperand *b =
+        ins->value.structured_inline_asm.operands;
+    size_t i, bytes;
+    bool sign;
+    if (outputs == 0U || !info->has_memory_clobber ||
+        info->register_clobber_count != 0U) return false;
+    for (i = 0U; i < count; ++i) {
+        MinicType type;
+        if (b[i].value >= fn->value_count || b[i].operand_index != i ||
+            b[i].has_fixed_register_binding || b[i].early_clobber)
+            return false;
+        type = fn->values[b[i].value].type;
+        if (i < outputs) {
+            if (b[i].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT ||
+                !minic_type_pointee(type, &type)) return false;
+        } else if (b[i].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT)
+            return false;
+        if (!minic_x86_64_scalar_width(program, target, type, &bytes, &sign) ||
+            bytes != 8U) return false;
+    }
+    for (i = 0U; i < count-outputs; ++i)
+        if (!x86_value_load(out, frame, b[outputs+i].value, regs[i]))
+            return false;
+    if (!emit_matched_register_template(out, info, outputs)) return false;
+    for (i = 0U; i < outputs; ++i)
+        if (!x86_value_load(out, frame, b[i].value, "%r11") ||
+            fprintf(out, "  movq %s, (%%r11)\n", regs[i]) < 0)
+            return false;
+    return true;
+}
+
 bool minic_x86_64_emit_structured_asm(
     FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicX86Frame *frame,
@@ -73,9 +135,12 @@ bool minic_x86_64_emit_structured_asm(
         return false;
     info = &fn->inline_asms[ins->value.structured_inline_asm.inline_asm_id];
     bindings = ins->value.structured_inline_asm.operands;
-    if (!info->template_text ||
-        ins->value.structured_inline_asm.operand_count != 8U ||
-        !info->is_volatile || info->has_memory_clobber)
+    if (!info->template_text || !info->is_volatile)
+        return false;
+    if (info->has_memory_clobber)
+        return emit_memory_clobber_matched(
+            out, program, target, fn, frame, ins, info);
+    if (ins->value.structured_inline_asm.operand_count != 8U)
         return false;
     cpuid = info->template_length == 5U &&
         memcmp(info->template_text, "cpuid", 5U) == 0 &&
