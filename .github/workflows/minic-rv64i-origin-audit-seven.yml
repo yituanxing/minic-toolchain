@@ -177,12 +177,20 @@ jobs:
           work="$GITHUB_WORKSPACE/build/rv64i-origin-$label-replay"
           compiler="$GITHUB_WORKSPACE/build/rv64i-origin-$label/bin/minic"
           # Select local 0..N indices; manifest indices already encode global offsets.
+          # A nonzero replay exit means some Linux TUs could not compile.
+          # Still scan every generated .s and preserve exact failed-TU evidence.
+          # The global coverage aggregator fails separately on missing TUs.
+          set +e
           python3 tests/external/linux/corpus_replay.py \
             --minic "$compiler" \
             --corpus "$GITHUB_WORKSPACE/build/${{ matrix.corpus_dir }}" \
             --work "$work" --jobs 4 \
             --offset 0 --limit ${{ matrix.limit }} \
             --sample-count 0 --rv64i-origin-audit
+          replay_rc=$?
+          set -e
+          echo "RV64I_ORIGIN_REPLAY_EXIT=$replay_rc shard=$label"
+          test -s "$work/batch-results.json"
           python3 tools/ci/audit-rv64i-asm-origin.py \
             --root "$work/minic-out" \
             --batch-results "$work/batch-results.json" \
