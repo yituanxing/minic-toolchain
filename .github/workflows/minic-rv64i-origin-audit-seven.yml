@@ -1,0 +1,148 @@
+name: MiniC RV64I Origin Audit (7 frozen Linux shards)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/minic-rv64i-origin-audit-seven.yml'
+      - 'tools/ci/audit-rv64i-asm-origin.py'
+      - 'tests/compiler/c0/probe-rv64i-asm-origin.sh'
+      - 'tests/external/linux/corpus_replay.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rv64i-origin-audit-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Static audit checker validation
+        run: |
+          python3 -m py_compile tools/ci/audit-rv64i-asm-origin.py tests/external/linux/corpus_replay.py
+          bash -n tests/compiler/c0/probe-rv64i-asm-origin.sh
+      - name: Compile MiniC and prove source-ASM provenance
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/rv64i-origin-smoke all
+          bash tests/compiler/c0/probe-rv64i-asm-origin.sh "$GITHUB_WORKSPACE/build/rv64i-origin-smoke/bin/minic-cc"
+
+  linux-shard:
+    # Seven full shards run only by explicit dispatch or tagged push.
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[rv64i-seven]')
+    needs: smoke
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: first500
+            corpus_dir: linux-focus-corpus
+            cache_key: linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-${{ hashFiles('tests/external/linux/replay-indices.txt') }}
+            offset: 0
+            limit: 500
+          - label: new500
+            corpus_dir: linux-new500-corpus
+            cache_key: linux-new500-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-indices-500-999
+            offset: 500
+            limit: 500
+          - label: next500
+            corpus_dir: linux-next500-corpus
+            cache_key: linux-next500-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-indices-1000-1499
+            offset: 1000
+            limit: 500
+          - label: next500b
+            corpus_dir: linux-next500b-corpus
+            cache_key: linux-next500b-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-indices-1500-1999
+            offset: 1500
+            limit: 500
+          - label: next500c
+            corpus_dir: linux-next500c-corpus
+            cache_key: linux-next500c-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-indices-2000-2499
+            offset: 2000
+            limit: 500
+          - label: next500d
+            corpus_dir: linux-next500d-corpus
+            cache_key: linux-next500d-corpus-v4-6.6.143-rv64-defconfig-gcc13.3.0-indices-2500-2999
+            offset: 2500
+            limit: 500
+          - label: final352
+            corpus_dir: linux-final352-corpus
+            cache_key: linux-final352-corpus-v2-6.6.143-rv64-defconfig-gcc13.3.0-indices-3000-3351
+            offset: 3000
+            limit: 352
+    steps:
+      - uses: actions/checkout@v4
+      - name: Restore exact Linux 6.6.143 preprocessed corpus (fail closed)
+        id: corpus
+        uses: actions/cache/restore@v4
+        with:
+          path: build/${{ matrix.corpus_dir }}
+          key: ${{ matrix.cache_key }}
+          fail-on-cache-miss: true
+      - name: Validate frozen manifest
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          manifest="build/${{ matrix.corpus_dir }}/selected-tus.txt"
+          test -s "$manifest"
+          test "$(grep -cve '^[[:space:]]*$' "$manifest")" -eq ${{ matrix.limit }}
+          test "$(head -1 "$manifest" | cut -f1)" -eq ${{ matrix.offset }}
+      - name: Build MiniC (no assembler needed for textual audit)
+        shell: bash
+        run: |
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/rv64i-origin-${{ matrix.label }} all
+      - name: Produce every available MiniC .s, preserving inline M/A/Z
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          label="${{ matrix.label }}"
+          work="$GITHUB_WORKSPACE/build/rv64i-origin-$label-replay"
+          compiler="$GITHUB_WORKSPACE/build/rv64i-origin-$label/bin/minic"
+          python3 tests/external/linux/corpus_replay.py \
+            --minic "$compiler" \
+            --corpus "$GITHUB_WORKSPACE/build/${{ matrix.corpus_dir }}" \
+            --work "$work" --jobs 4 \
+            --offset ${{ matrix.offset }} --limit ${{ matrix.limit }} \
+            --sample-count 0 --rv64i-origin-audit
+          python3 tools/ci/audit-rv64i-asm-origin.py \
+            --root "$work/minic-out" \
+            --batch-results "$work/batch-results.json" \
+            --json-out "$work/rv64i-origin-report.json" \
+            --fail-on-compiler-non-i
+      - name: Upload generated .s and reasoned verdicts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rv64i-origin-${{ matrix.label }}-${{ github.sha }}
+          if-no-files-found: warn
+          retention-days: 7
+          compression-level: 6
+          path: |
+            build/rv64i-origin-${{ matrix.label }}-replay/minic-out/**/*.s
+            build/rv64i-origin-${{ matrix.label }}-replay/batch-results.json
+            build/rv64i-origin-${{ matrix.label }}-replay/batch-results.tsv
+            build/rv64i-origin-${{ matrix.label }}-replay/rv64i-origin-report.json
+            build/rv64i-origin-${{ matrix.label }}-replay/minic-stderr/**/*.stderr
+      - name: Publish exact shard coverage
+        if: always()
+        shell: bash
+        run: |
+          p="build/rv64i-origin-${{ matrix.label }}-replay/rv64i-origin-report.json"
+          if [[ -s "$p" ]]; then
+            python3 - "$p" <<'PY'
+          import json,sys
+          s=json.load(open(sys.argv[1]))["summary"]
+          print("RV64I_ORIGIN_SHARD " + json.dumps(s, sort_keys=True)[:3000])
+          PY
+          else
+            echo "RV64I_ORIGIN_SHARD=INCOMPLETE no_report=1"
+          fi
