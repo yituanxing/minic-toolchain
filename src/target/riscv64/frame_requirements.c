@@ -7,18 +7,19 @@
 /* M79_CALL_FRAME_RETURN_ADDRESS: a return-address query needs the entry
    value of ra even in a function that has no ordinary Core CALL yet. Save it
    in the prologue whenever either a call or this semantic instruction exists. */
-bool minic_riscv64_core_variadic_fixed_prefix(const MinicC0Program *program,
-                                       const MinicCoreFunction *function,
-                                       size_t *integer_parameter_count,
-                                       size_t *fixed_stack_slots) {
+bool minic_riscv64_core_variadic_fixed_prefix_profile(
+    const MinicC0Program *program, const MinicCoreFunction *function,
+    bool lp64_soft_float, size_t *integer_parameter_count,
+    size_t *fixed_stack_slots) {
     MinicRiscv64AbiCursor cursor;
     MinicRiscv64AbiValue return_value;
     size_t parameter_index;
 
     if (program == NULL || function == NULL || integer_parameter_count == NULL ||
         fixed_stack_slots == NULL ||
-        !minic_riscv64_abi_cursor_initialize_for_return(
-            program, function->return_type, &cursor, &return_value)) {
+        !minic_riscv64_abi_cursor_initialize_for_return_profile(
+            program, function->return_type, lp64_soft_float,
+            &cursor, &return_value)) {
         return false;
     }
     (void)return_value;
@@ -45,6 +46,12 @@ bool minic_riscv64_core_variadic_fixed_prefix(const MinicC0Program *program,
 /* One semantic argument-type resolver feeds RV64 psABI sizing and both
  * machine call forms. A variadic OBJECT argument must really be a record;
  * Core never silently classifies an arbitrary object as a scalar. */
+bool minic_riscv64_core_variadic_fixed_prefix(
+    const MinicC0Program *program, const MinicCoreFunction *function,
+    size_t *integer_parameter_count, size_t *fixed_stack_slots) {
+    return minic_riscv64_core_variadic_fixed_prefix_profile(
+        program, function, false, integer_parameter_count, fixed_stack_slots);
+}
 bool minic_riscv64_core_call_argument_type(
     const MinicCoreFunction *function,
     const MinicCoreCallArgument *argument,

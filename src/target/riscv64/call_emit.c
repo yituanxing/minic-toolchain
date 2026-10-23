@@ -71,6 +71,7 @@ bool minic_riscv64_emit_incoming_parameter(FILE *file,
             return false;
         }
         if (location.value.kind == MINIC_RISCV64_ABI_VALUE_FLOAT &&
+            location.floating_register_count != 0U &&
             (minic_type_is_float(instruction->type) ||
              minic_type_is_double(instruction->type))) {
             if (location.floating_register_count != 1U ||
@@ -125,7 +126,8 @@ bool minic_riscv64_emit_incoming_parameter(FILE *file,
             }
             return minic_riscv64_frame_store_int128(
                 file, frame, instruction->result, chunk_registers[0], chunk_registers[1]);
-        } else if (location.value.kind == MINIC_RISCV64_ABI_VALUE_INTEGER &&
+        } else if ((location.value.kind == MINIC_RISCV64_ABI_VALUE_INTEGER ||
+                    location.value.kind == MINIC_RISCV64_ABI_VALUE_FLOAT) &&
                    location.floating_register_count == 0U) {
             if (location.integer_register_count == 1U && location.stack_slot_count == 0U &&
                 location.integer_register_begin < 8U) {
@@ -504,6 +506,9 @@ static bool emit_core_call_scalar_result(
         if (return_value->kind != MINIC_RISCV64_ABI_VALUE_FLOAT) {
             return false;
         }
+        if (frame->named_parameter_cursor.lp64_soft_float)
+            return minic_riscv64_frame_store_value(
+                file, frame, instruction->result, "a0");
         if (minic_type_is_double(instruction->type)) {
             if (fprintf(file, "  fmv.x.d a0, fa0\n") < 0) {
                 return false;
@@ -579,8 +584,10 @@ bool minic_riscv64_emit_direct_call(FILE *file,
         return false;
     }
     callee = call.callee;
-    if (!minic_riscv64_abi_cursor_initialize_for_return(
-            program, callee->return_type, &cursor, &return_value)) {
+    if (!minic_riscv64_abi_cursor_initialize_for_return_profile(
+            program, callee->return_type,
+            frame->named_parameter_cursor.lp64_soft_float,
+            &cursor, &return_value)) {
         return false;
     }
     if (return_value.kind == MINIC_RISCV64_ABI_VALUE_INDIRECT) {
@@ -667,8 +674,10 @@ bool minic_riscv64_emit_indirect_call(FILE *file,
         return false;
     }
     signature = call.signature;
-    if (!minic_riscv64_abi_cursor_initialize_for_return(
-            program, signature->return_type, &cursor, &return_value)) {
+    if (!minic_riscv64_abi_cursor_initialize_for_return_profile(
+            program, signature->return_type,
+            frame->named_parameter_cursor.lp64_soft_float,
+            &cursor, &return_value)) {
         return false;
     }
     if (!emit_core_call_arguments(

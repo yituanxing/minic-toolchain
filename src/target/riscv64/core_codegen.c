@@ -372,11 +372,13 @@ static bool emit_terminator(FILE *file,
             }
             if (return_value.kind == MINIC_RISCV64_ABI_VALUE_AGGREGATE) {
                 if (return_value.slot_count == 0U || return_value.slot_count > 2U ||
-                    !minic_riscv64_emit_integer_aggregate_load_chunk(
-                        file, program, function->return_type, 0U, "a0", "t0") ||
+                    !minic_riscv64_emit_integer_aggregate_load_chunk_profile(
+                        file, program, function->return_type, 0U, "a0", "t0",
+                        frame->named_parameter_cursor.lp64_soft_float) ||
                     (return_value.slot_count == 2U &&
-                     !minic_riscv64_emit_integer_aggregate_load_chunk(
-                         file, program, function->return_type, 1U, "a1", "t0"))) {
+                     !minic_riscv64_emit_integer_aggregate_load_chunk_profile(
+                         file, program, function->return_type, 1U, "a1", "t0",
+                         frame->named_parameter_cursor.lp64_soft_float))) {
                     return false;
                 }
             } else if (return_value.kind == MINIC_RISCV64_ABI_VALUE_INDIRECT) {

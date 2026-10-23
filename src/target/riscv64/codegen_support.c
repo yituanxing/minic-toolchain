@@ -45,14 +45,14 @@ static const char *minic_riscv64_store_instruction(MinicType type) {
                                                                                   : "sw";
 }
 
-static bool minic_riscv64_integer_aggregate_abi(const MinicC0Program *program,
-                                         MinicType type,
-                                         size_t *storage_size,
-                                         size_t *register_chunks) {
+static bool minic_riscv64_integer_aggregate_abi(
+    const MinicC0Program *program, MinicType type,
+    size_t *storage_size, size_t *register_chunks, bool lp64_soft_float) {
     MinicRiscv64AbiValue value;
 
     if (storage_size == NULL || register_chunks == NULL ||
-        !minic_riscv64_abi_classify_value(program, type, &value) ||
+        !minic_riscv64_abi_classify_value_profile(
+            program, type, lp64_soft_float, &value) ||
         value.kind != MINIC_RISCV64_ABI_VALUE_AGGREGATE) {
         return false;
     }
@@ -61,12 +61,10 @@ static bool minic_riscv64_integer_aggregate_abi(const MinicC0Program *program,
     return true;
 }
 
-bool minic_riscv64_emit_integer_aggregate_load_chunk(FILE *file,
-                                                     const MinicC0Program *program,
-                                                     MinicType type,
-                                                     size_t chunk_index,
-                                                     const char *destination_register,
-                                                     const char *address_register) {
+bool minic_riscv64_emit_integer_aggregate_load_chunk_profile(
+    FILE *file, const MinicC0Program *program, MinicType type,
+    size_t chunk_index, const char *destination_register,
+    const char *address_register, bool lp64_soft_float) {
     size_t chunk_count;
     size_t chunk_offset;
     size_t chunk_size;
@@ -74,7 +72,8 @@ bool minic_riscv64_emit_integer_aggregate_load_chunk(FILE *file,
     size_t storage_size;
 
     if (file == NULL || destination_register == NULL || address_register == NULL ||
-        !minic_riscv64_integer_aggregate_abi(program, type, &storage_size, &chunk_count) ||
+        !minic_riscv64_integer_aggregate_abi(
+            program, type, &storage_size, &chunk_count, lp64_soft_float) ||
         chunk_index >= chunk_count || chunk_index > SIZE_MAX / 8U) {
         return false;
     }
@@ -122,6 +121,15 @@ bool minic_riscv64_emit_integer_aggregate_load_chunk(FILE *file,
         }
     }
     return true;
+}
+
+bool minic_riscv64_emit_integer_aggregate_load_chunk(
+    FILE *file, const MinicC0Program *program, MinicType type,
+    size_t chunk_index, const char *destination_register,
+    const char *address_register) {
+    return minic_riscv64_emit_integer_aggregate_load_chunk_profile(
+        file, program, type, chunk_index,
+        destination_register, address_register, false);
 }
 
 void minic_riscv64_set_diagnostic(MinicDiagnostic *diagnostic,
