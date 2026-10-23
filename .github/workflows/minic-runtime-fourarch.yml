@@ -42,6 +42,8 @@ on:
       - "tests/compiler/c0/probe-lp64-compiler-rt-qemu.sh"
       - "tests/compiler/c0/probe-runtime-isnan.sh"
       - "tests/compiler/c0/probe-rv64i-int128-pairs-qemu.sh"
+      - "tests/compiler/c0/probe-rv64i-kbuild-abi.sh"
+      - "tests/external/linux/stage2_kbuild_cc.sh"
       - "tests/compiler/c0/probe-rv64i-softfloat-runtime-qemu.sh"
       - "tests/compiler/c0/probe-runtime-typed-overflow.sh"
       - ".github/workflows/minic-runtime-fourarch.yml"
@@ -116,6 +118,13 @@ jobs:
         run: |
           bash tests/compiler/c0/probe-runtime-typed-overflow.sh
           bash tests/compiler/c0/probe-runtime-isnan.sh
+      - name: Audit real Kbuild MiniC strict-I and original kernel inline ASM
+        if: matrix.target == 'riscv64'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          bash tests/compiler/c0/probe-rv64i-kbuild-abi.sh \
+            "$GITHUB_WORKSPACE/build/runtime-ci/bin/minic"
       - name: QEMU differential verify 16 RV64I i128 ABI operations
         if: always() && matrix.target == 'riscv64'
         shell: bash

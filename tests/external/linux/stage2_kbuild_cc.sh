@@ -7,6 +7,10 @@ keep=${MINIC_KEEP_INTERMEDIATES:-0}
 trace=${MINIC_KBUILD_TRACE:-}
 gcc_vdso=${MINIC_KBUILD_GCC_VDSO:-0}
 gcc_purgatory=${MINIC_KBUILD_GCC_PURGATORY:-0}
+# Opt-in *compiler only* RV64I Kbuild audit. Preserve Kbuild's original GNU
+# assembler ISA flags for explicit user/kernel inline M/A/CSR instructions.
+# The linker must separately close compiler-generated software arithmetic.
+rv64i_origin_audit=${MINIC_KBUILD_RV64I_ORIGIN_AUDIT:-0}
 
 if [[ -z "$minic" ]]; then
   echo "MINIC_KBUILD_ERROR MINIC is not set" >&2
@@ -215,6 +219,15 @@ else
 fi
 
 [[ -z "$trace" ]] || printf 'minic input=%q output=%q\n' "$preprocessed" "$assembly" >>"$trace"
+minic_target_args=()
+if [[ "$rv64i_origin_audit" == 1 ]]; then
+  # Audit is explicit, never silently enabled for production Kbuild. MiniC
+  # emits strict RV64I and brackets the original user ASM for provenance.
+  # GNU assembler still gets the ORIGINAL -march/-mabi Kbuild arguments:
+  # removing M/A here would incorrectly reject Linux's own inline ASM.
+  minic_target_args=(-march=rv64i -mabi=lp64)
+  [[ -z "$trace" ]] || printf 'minic rv64i_origin_audit=1 source=%q\n' "$preprocessed" >>"$trace"
+fi
 set +e
 if [[ -n "${MINIC_PERF_AB_BASELINE:-}" ]]; then
   # Strict opt-in: time old and new compilers on the SAME GNU-generated .i,
@@ -227,8 +240,14 @@ if [[ -n "${MINIC_PERF_AB_BASELINE:-}" ]]; then
     --log "${MINIC_PERF_AB_LOG:?}" --owner "$output_file"
   status=$?
 else
-  CORE_FAST_TRACE=${CORE_FAST_TRACE:-1} "$minic" -S "$preprocessed" -o "$assembly" \
-    >"$minic_stdout" 2>"$minic_stderr"
+  if [[ "$rv64i_origin_audit" == 1 ]]; then
+    MINIC_RV64I_ASM_AUDIT=1 CORE_FAST_TRACE=${CORE_FAST_TRACE:-1} \
+      "$minic" "${minic_target_args[@]}" -S "$preprocessed" -o "$assembly" \
+      >"$minic_stdout" 2>"$minic_stderr"
+  else
+    CORE_FAST_TRACE=${CORE_FAST_TRACE:-1} "$minic" -S "$preprocessed" -o "$assembly" \
+      >"$minic_stdout" 2>"$minic_stderr"
+  fi
   status=$?
 fi
 set -e
