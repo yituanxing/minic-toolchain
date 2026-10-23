@@ -25,6 +25,7 @@ RV64I_SOFTFP_SRC := third_party/llvm-compiler-rt-19.1.7
 RV64I_SOFTFP_SOURCES := \
   addsf3.c subsf3.c mulsf3.c divsf3.c \
   adddf3.c subdf3.c muldf3.c divdf3.c \
+  multi3.c cmpti2.c ucmpti2.c \
   clzdi2.c clzsi2.c fp_mode.c
 RV64I_SOFTFP_OBJECTS := $(addprefix $(RV64I_RUNTIME_DIR)/softfp/,$(RV64I_SOFTFP_SOURCES:.c=.o))
 RV64I_RUNTIME_OBJECTS := \
@@ -463,13 +464,14 @@ $(RV64I_RUNTIME_ARCHIVE): $(RV64I_RUNTIME_OBJECTS)
 check-rv64i-runtime-archive: runtime-rv64i
 	@symbols="$$($(RISCV_RUNTIME_NM) -g --defined-only $(RV64I_RUNTIME_ARCHIVE))"; \
 	for name in __muldi3 __divdi3 __udivdi3 __moddi3 __umoddi3 \
+	  __multi3 __cmpti2 __ucmpti2 \
 	  __addsf3 __subsf3 __mulsf3 __divsf3 \
 	  __adddf3 __subdf3 __muldf3 __divdf3 \
 	  __clzdi2 __clzsi2 __fe_getround __fe_raise_inexact; do \
 	  printf '%s\n' "$$symbols" | awk '{print $$NF}' | grep -Fx "$$name" >/dev/null || { \
 	    echo "RV64I_RUNTIME_ARCHIVE=FAIL missing $$name" >&2; exit 1; }; \
 	done
-	@echo "RV64I_RUNTIME_ARCHIVE=PASS path=$(RV64I_RUNTIME_ARCHIVE) isa=rv64i abi=lp64 symbols=17 integer=5 softfp=8 deps=4"
+	@echo "RV64I_RUNTIME_ARCHIVE=PASS path=$(RV64I_RUNTIME_ARCHIVE) isa=rv64i abi=lp64 symbols=20 integer=8 softfp=8 deps=4"
 
 prepare:
 	@mkdir -p "$(BUILD_DIR)"
