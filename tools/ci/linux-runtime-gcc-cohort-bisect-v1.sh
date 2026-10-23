@@ -248,6 +248,16 @@ if [[ "${COHORT_GNU_PREFLIGHT_ALLOW_BOOL_SINGLE:-0}" == 1 || "${COHORT_GNU_PREFL
   compiler_sig=$(printf '%s\n%s\n' "$compiler_sig" "$(sha256sum "$cc_bin" | cut -d' ' -f1)" | sha256sum | cut -d' ' -f1)
   echo "BOOLEAN_CACHE_SINGLE=CC_IDENTITY sha256=$(sha256sum "$cc_bin" | cut -d' ' -f1)"
 fi
+# Compiler ISA/psABI is part of candidate identity. Never reuse
+# earlier rv64gc-era Kbuild objects in a strict RV64I campaign.
+if [[ "${MINIC_KBUILD_RV64I_ORIGIN_AUDIT:-0}" == 1 ]]; then
+  [[ "${COHORT_ACTION:-all}" == compile || "${COHORT_ACTION:-all}" == verify ]] || {
+    echo 'COHORT_RV64I=FAIL unsupported_scope' >&2; exit 8;
+  }
+  compiler_sig=$(printf '%s\n%s\n' "$compiler_sig" "minic-march=rv64i-mabi=lp64-source-provenance-v1" |
+    sha256sum | cut -d' ' -f1)
+  echo "COHORT_RV64I=ENABLED compiler_march=rv64i compiler_mabi=lp64 gcc_assembler_isa=unchanged cache_identity=ISA_BOUND"
+fi
 assembler_sig=$(sha256sum /usr/bin/riscv64-linux-gnu-as | cut -d' ' -f1)
 gold_sig=$(sha256sum "$prov/gcc-objects.sha256" | cut -d' ' -f1)
 list_sig=$(sha256sum "$objects_file" | cut -d' ' -f1)
