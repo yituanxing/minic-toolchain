@@ -534,7 +534,7 @@ static bool emit_core_function_with_symbol(FILE *file,
                         reason, sizeof(reason))) {
                     char message[256];
                     (void)snprintf(message, sizeof(message),
-                                   "function %.64s block=%zu instruction=%u: %.145s",
+                                   "function %.64s block=%zu instruction=%u: %.64s",
                                    symbol_name, block_index, (unsigned int)id,
                                    id < function->instruction_count ?
                                        reason : "invalid Core instruction id");
