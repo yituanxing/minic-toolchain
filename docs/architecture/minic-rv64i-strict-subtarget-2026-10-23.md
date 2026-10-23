@@ -9,12 +9,12 @@ implicit RV64 profile remains unchanged to preserve Linux/BusyBox outputs.
 | ISA | ABI | Machine arithmetic | Additional runtime |
 | --- | --- | --- | --- |
 | implicit legacy RV64 | LP64D | existing native M/F/D codegen | existing build-provided runtime |
-| `rv64i` | `lp64` | integer I operations, shift for power-of-two scaling | **external** GCC libgcc or LLVM compiler-rt for MUL/DIV/REM |
+| `rv64i` | `lp64` | base-I instructions, software arithmetic via libcalls | opt-in pinned GCC integer + LLVM compiler-rt SF/DF helpers |
 | `rv64im` | `lp64` | native M integer arithmetic | none for ordinary scalar MUL/DIV/REM |
 | `rv64imafd` | `lp64d` | existing hard-float codegen plus M/A feature admission | existing build-provided runtime |
 
 ISA/ABI mismatches and unimplemented `-march` strings fail closed. RV32,
-arbitrary user inline asm, full soft-float LP64 function calling, atomics
+arbitrary user inline asm, complete soft-float conversions/comparisons, atomics
 and unqualified extension combinations remain unsupported. An ISA extension
 being present does not imply all corresponding C operations are implemented.
 
@@ -49,9 +49,8 @@ to the external helper. Normal scalar result conversion and spills remain
 owned by the mature Core and frame lowering. 128-bit operations still need separately qualified lowering. In explicit
 ISA modes the compiler now rejects known scalar two-limb hazards (addition,
 division/remainder, left shifts, comparisons and scalar bitcasts) before
-emission, and rejects __int128 argument/return ABI signatures until two-XLEN
-register placement is qualified. Existing pair-aware memory and conversion
-mechanisms are unchanged. These are explicit unsupported boundaries, not
+emission, while __int128 arguments and returns now use the standard two-XLEN register
+placement. Existing pair-aware memory and conversion mechanisms are unchanged. These are explicit unsupported boundaries, not
 permission to silently truncate to 64 bits.
 For <=64-bit checked multiplication, strict RV64I uses __muldi3 and an
 optional __divdi3 / __udivdi3 check; it stores the low wrapped result and
@@ -79,13 +78,14 @@ especially variadic 2-XLEN alignment and complete 128-bit scalar support.
 Missing operations must give precise errors; valid LP64 signatures must
 not be forbidden merely because MiniC does not yet optimize them.
 
-**libgcc supplies software floating arithmetic.** MiniC maps local
-`float`/`double` addition/subtraction/multiplication/division to standard
-`__*sf3`/`__*df3` helpers using the same GPR ABI. Our pinned integer-only
-`libminic-rt.a` does not yet contain these software-float implementations:
-the final link requires RV64I/LP64-compatible libgcc/compiler-rt, explicitly
-supplied via `--rtlib=PATH`. Full floating-point comparisons/conversions
-remain unqualified until their standard helpers are integrated.
+**Standard libgcc / compiler-rt provides software floating arithmetic.**
+MiniC maps `float`/`double` addition/subtraction/multiplication/division
+to `__*sf3`/`__*df3` routines using the same LP64 GPR ABI. Our optional
+`libminic-rt.a` now packages *unmodified LLVM compiler-rt 19.1.7* SF/DF
+implementations alongside the existing GCC integer routines. It is selected
+explicitly with `--rtlib=PATH`; no special default runtime is assumed.
+Floating comparisons/conversions and full floating-environment behavior
+remain a separately qualified compiler/runtime feature.
 
 ## Runtime provider and licensing
 
@@ -95,13 +95,16 @@ A `call __muldi3` assembler file can be ISA-correct while linking against
 an ABI-incompatible libgcc.a is not; never assume the host cross toolchain's
 default multilib is correct for `rv64i/lp64`.
 
-For deterministic optional runtime packaging and CI linking, the repository vendors unchanged
-GCC 14.2.0 RISC-V libgcc assembler sources `muldi3.S` and `div.S`, plus
-upstream assembly macros and full GPL-3.0 / GCC Runtime Library Exception
-3.1 license notices, under `third_party/gcc-riscv-14.2.0/`. The opt-in `make runtime-rv64i` target builds
-those third-party objects with `-march=rv64i -mabi=lp64` and never injects
-them into MiniC itself. A production toolchain may use a matching GCC
-libgcc or LLVM compiler-rt implementation instead.
+For deterministic optional runtime packaging and CI linking, the repository
+vendors unchanged GCC 14.2.0 RISC-V libgcc integer assembly plus GPL-3.0 /
+GCC Runtime Library Exception 3.1 notices under
+`third_party/gcc-riscv-14.2.0/`, and unchanged LLVM compiler-rt 19.1.7
+software floating-point C/header sources with separate Apache-2.0 + LLVM
+exception license under `third_party/llvm-compiler-rt-19.1.7/`.
+`make runtime-rv64i` cross-compiles each source with
+`-march=rv64i -mabi=lp64`, never injects source into MiniC, and combines
+them as one optional static archive. A production toolchain may provide a
+matching full GCC libgcc or LLVM compiler-rt archive instead.
 
 The `minic-cc` entrypoint currently consumes already preprocessed `.i`
 source; the producer of those inputs must use a matching ISA/ABI macro
@@ -135,19 +138,23 @@ The native backend gate checks strict compilation, feature admission,
 ABI rejections, presence of the external symbols, frame save/restore and
 historical byte-exact default output. The focused cross-toolchain gate
 reuses its existing single compiler build and cached GNU/QEMU tools,
-assembles explicit RV64I/LP64 targets strictly, builds the upstream GCC
-libgcc runtime sources, links freestanding ELF and compares results with
-GCC native-RV64IM arithmetic for signed/unsigned 32- and 64-bit inputs.
+assembles explicit RV64I/LP64 targets strictly, builds the pinned GCC + LLVM compiler-rt runtime sources, links
+freestanding ELF, and tests GCC-to-MiniC soft-float calls under RV64I LP64
+against independent IEEE-754 bit patterns (including NaN, subnormal,
+signed-zero, ties-to-even and infinity), with no hidden F/D instructions.
+Integer arithmetic remains compared with GNU RV64IM results.
 Kernel 2064 objects and existing real-software acceptance remain regression
 baselines, not a reason to run seven complete Linux shards per small edit.
 
 The verified first-pass strict-I scalar boundary now includes <=64-bit
 ordinary and checked multiplication, signed/unsigned division and remainder,
-bit scans and pointer scaling. Still reject 128-bit multiply, floating-point
-LP64 signatures, unqualified ISA combinations, and arbitrary inline asm.
-Next address 128-bit arithmetic only after verifying exact upstream runtime
-symbol/ABI contracts, then complete LP64 floating ABI and RV32 ILP32. Do not develop more
-MiniC-private arithmetic libraries.
+bit scans, pointer scaling and software SF/DF binary arithmetic. LP64
+float/double signatures are valid and transported via integer registers;
+arbitrary inline asm, unqualified ISA combinations, 128-bit arithmetic and
+unmapped floating conversions/comparisons require independent legalization.
+Next address remaining C semantics through upstream runtime symbols and
+independent cross-GCC/QEMU verification; do not add MiniC-private arithmetic
+algorithms.
 
 ## First-class optional archive
 

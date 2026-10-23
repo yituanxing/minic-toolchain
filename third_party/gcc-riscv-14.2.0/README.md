@@ -11,5 +11,7 @@ License: GPL-3.0-or-later with GCC Runtime Library Exception 3.1.
 sources with `-march=rv64i -mabi=lp64` to guarantee the exact ISA and psABI
 while validating MiniC's standard `__muldi3`, `__divdi3`, `__udivdi3`,
 `__moddi3`, and `__umoddi3` calls. Production builds must link a
-compatible GCC libgcc or LLVM compiler-rt runtime from the target toolchain;
-MiniC emits ABI calls but neither owns nor links these test files itself.
+compatible GCC libgcc or LLVM compiler-rt runtime from the target toolchain.
+The optional archive also packages unmodified LLVM compiler-rt 19.1.7
+software-floating sources from ../llvm-compiler-rt-19.1.7 under their
+separate Apache/LLVM runtime license. It remains opt-in at final link.

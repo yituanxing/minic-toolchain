@@ -596,6 +596,8 @@ SRC
     fi
     python3 "$machine_audit" "$tmp/lp64-abi.elf"
     echo 'RV64_LP64_QEMU=PASS float_double=1 struct=2 indirect=1 stack_ninth=1'
+    bash "$repo_root/tests/compiler/c0/probe-rv64i-softfloat-runtime.sh" \
+      "$MINIC_CC" "$runtime_lib" "$machine_audit" "$tmp/softfloat-runtime"
     # The final ELF includes our upstream libgcc archive. Validate the
     # linked byte encodings too, not merely our .s or .o files.
     python3 "$machine_audit" "$tmp/checkedmul.elf" \
