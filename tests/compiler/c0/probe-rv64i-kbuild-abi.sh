@@ -33,8 +33,10 @@ MINIC="$minic" REAL_CC=riscv64-linux-gnu-gcc \
 MINIC_KBUILD_RV64I_ORIGIN_AUDIT=1 MINIC_KEEP_INTERMEDIATES=1 \
 MINIC_KBUILD_TRACE="$work/trace.log" \
   bash tests/external/linux/stage2_kbuild_cc.sh \
-    -c -march=rv64gc -mabi=lp64 -o "$work/linux.o" "$work/linux.c"
+    -c -march=rv64gc -mabi=lp64 -MMD -MF "$work/linux.d" \
+    -o "$work/linux.o" "$work/linux.c"
 test -s "$work/linux.o"
+test -s "$work/linux.d"
 test -s "$work/linux.minic-stage2.s"
 grep -q '^minic rv64i_origin_audit=1 ' "$work/trace.log"
 python3 tools/ci/audit-rv64i-asm-origin.py \
