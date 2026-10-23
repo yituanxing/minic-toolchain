@@ -66,7 +66,14 @@ def source_compile(args: argparse.Namespace, manifest: dict, target: str,
         "-I" + str(ROOT / "third_party/gcc-riscv-14.2.0"),
         "-isystem", str(ROOT / manifest["shared_source_root"] / "freestanding-clang"),
     ]
+    # These source members contain only integer and SF/DF runtime code.
+    # An upstream shared header also advertises GCC __float128 and native
+    # C99 complex types that MiniC does not parse. Select the header's
+    # portable struct/softfloat branch for BOTH reference and MiniC builds.
+    # Do not modify or fork upstream compiler-rt algorithms.
     cpp_cmd = [args.clang, *target_flags(config), "-E", "-P", "-std=gnu11",
+               "-U__SIZEOF_FLOAT128__", "-U__FLOAT128__",
+               "-D__STDC_VERSION__=199409L",
                "-ffreestanding", "-fno-builtin", "-nostdinc", *includes,
                str(source), "-o", str(pp_file)]
     result = dict(source=name, stage="preprocess", success=False, object=str(obj_file))
@@ -86,7 +93,7 @@ def source_compile(args: argparse.Namespace, manifest: dict, target: str,
     else:
         cc_cmd = [args.clang, *target_flags(config), "-O2", "-fno-builtin",
                   "-ffreestanding", "-fno-pic", "-fno-stack-protector", "-fno-lto",
-                  "-c", "-x", "c-cpp-output", str(pp_file), "-o", str(obj_file)]
+                  "-c", "-x", "c", str(pp_file), "-o", str(obj_file)]
         if not execute(cc_cmd, output / "logs" / (name + ".reference.log")) or not obj_file.is_file():
             result["stage"] = "reference"
             return result
