@@ -18,6 +18,12 @@ on:
       - "src/core/core_lower_expr_scalar.c"
       - "src/core/core_lower_expression.c"
       - "src/core/core_lower_scalar_values.c"
+      - "src/target/x86_64/call_plan.h"
+      - "src/target/x86_64/call_plan.c"
+      - "src/target/x86_64/machine_emit.c"
+      - "src/target/x86_64/machine_call.c"
+      - "src/target/x86_64/codegen.c"
+      - "tests/compiler/c0/probe-x86-int128-runtime-abi.sh"
       - "tests/compiler/c0/probe-runtime-isnan.sh"
       - "tests/compiler/c0/probe-rv64i-int128-pairs-qemu.sh"
       - "tests/compiler/c0/probe-rv64i-softfloat-runtime-qemu.sh"
@@ -74,6 +80,7 @@ jobs:
         shell: bash
         env:
           MINIC_RV64I_CORE_REJECT_TRACE: '1'
+          MINIC_M1_TRACE: '1'
         run: |
           set -Eeuo pipefail
           python3 tools/runtime/build_runtime.py \
@@ -134,6 +141,13 @@ jobs:
           bash tests/compiler/c0/probe-rv64i-softfloat-runtime-qemu.sh \
             "$GITHUB_WORKSPACE/build/runtime-verdict/reference/riscv64/libminic-rt.a" \
             "$GITHUB_WORKSPACE/build/runtime-verdict/minic/riscv64/libminic-rt.a"
+      - name: Validate x86-64 SysV TI ABI against GNU C driver
+        if: always() && matrix.target == 'x86_64'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          bash tests/compiler/c0/probe-x86-int128-runtime-abi.sh \
+            "$GITHUB_WORKSPACE/build/runtime-ci/bin/minic-cc"
       - name: Save both target and reference reports, object diagnostics and .s
         if: always()
         uses: actions/upload-artifact@v4
