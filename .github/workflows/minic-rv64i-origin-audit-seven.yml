@@ -191,12 +191,32 @@ jobs:
           set -e
           echo "RV64I_ORIGIN_REPLAY_EXIT=$replay_rc shard=$label"
           test -s "$work/batch-results.json"
+      # Keep .s and failed-translation-unit evidence even if a large textual
+      # scanner process or runner later fails. Use a separate Actions step.
+      - name: Preserve source .s before ISA analysis
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rv64i-sources-${{ matrix.label }}-${{ github.sha }}
+          if-no-files-found: warn
+          retention-days: 7
+          compression-level: 1
+          path: |
+            build/rv64i-origin-${{ matrix.label }}-replay/minic-out/
+            build/rv64i-origin-${{ matrix.label }}-replay/batch-results.json
+            build/rv64i-origin-${{ matrix.label }}-replay/batch-results.tsv
+      - name: Scan every generated assembly for compiler-origin non-I
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          label="${{ matrix.label }}"
+          work="$GITHUB_WORKSPACE/build/rv64i-origin-$label-replay"
           python3 tools/ci/audit-rv64i-asm-origin.py \
             --root "$work/minic-out" \
             --batch-results "$work/batch-results.json" \
             --json-out "$work/rv64i-origin-report.json" \
             --fail-on-compiler-non-i
-      - name: Upload generated .s and reasoned verdicts
+      - name: Upload scanned verdicts and diagnostics
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -205,7 +225,6 @@ jobs:
           retention-days: 7
           compression-level: 6
           path: |
-            build/rv64i-origin-${{ matrix.label }}-replay/minic-out/**/*.s
             build/rv64i-origin-${{ matrix.label }}-replay/batch-results.json
             build/rv64i-origin-${{ matrix.label }}-replay/batch-results.tsv
             build/rv64i-origin-${{ matrix.label }}-replay/rv64i-origin-report.json
