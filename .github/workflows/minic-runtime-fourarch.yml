@@ -11,6 +11,8 @@ on:
       - "src/target/common/lp64_scalar.c"
       - "src/target/common/direct_call_plan.c"
       - "src/target/aarch64/call_emit.c"
+      - "src/target/aarch64/integer_emit.c"
+      - "src/target/loongarch64/integer_emit.c"
       - "src/target/loongarch64/call_emit.c"
       - "src/target/aarch64/block_emit.c"
       - "src/target/loongarch64/block_emit.c"

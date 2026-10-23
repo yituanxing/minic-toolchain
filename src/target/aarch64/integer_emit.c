@@ -18,6 +18,157 @@ bool minic_aarch64_emit_integer_instruction(
          needs_gp_store == NULL)
         return false;
     *needs_gp_store = false;
+    /* Wide Core values are always two consecutive 64-bit frame limbs.
+     * Keep carry/borrow, signed high-word ordering and source-pair
+     * validation here, independent of the AAPCS64 call classifier. */
+    if ((ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_NEGATE ||
+         ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_NOT) &&
+        minic_type_is_int128_integer(ins->type)) {
+        const MinicCoreValueId src = ins->value.operand;
+        size_t from, to;
+        if (src >= fn->value_count ||
+            !minic_type_equal(fn->values[src].type, ins->type) ||
+            !minic_lp64_frame_plan_wide_slot(frame_plan, src, &from) ||
+            !minic_lp64_frame_plan_wide_slot(frame_plan, ins->result, &to) ||
+            fprintf(out, "  ldr x9, [sp, #%zu]\n"
+                         "  ldr x10, [sp, #%zu]\n",
+                    from, from + 8U) < 0 ||
+            fputs(ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_NEGATE
+                  ? "  negs x9, x9\n  ngc x10, x10\n"
+                  : "  mvn x9, x9\n  mvn x10, x10\n", out) == EOF ||
+            fprintf(out, "  str x9, [sp, #%zu]\n"
+                         "  str x10, [sp, #%zu]\n", to, to + 8U) < 0)
+            return false;
+        return true;
+    }
+    if (ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_ADD ||
+        ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_SUBTRACT ||
+        ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND ||
+        ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_XOR ||
+        ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_OR ||
+        ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_LESS ||
+        ins->kind == MINIC_CORE_INSTRUCTION_SCALAR_EQUAL) {
+        const MinicCoreValueId lhs = ins->value.binary.left;
+        const MinicCoreValueId rhs = ins->value.binary.right;
+        const bool comparison =
+            ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_LESS ||
+            ins->kind == MINIC_CORE_INSTRUCTION_SCALAR_EQUAL;
+        if (lhs < fn->value_count && rhs < fn->value_count &&
+            minic_type_is_int128_integer(fn->values[lhs].type)) {
+            size_t left, right, dst = 0U;
+            const bool sign = minic_type_is_signed_integer(fn->values[lhs].type);
+            const char *op = NULL;
+            if (!minic_type_equal(fn->values[lhs].type, fn->values[rhs].type) ||
+                (!comparison &&
+                 !minic_type_equal(ins->type, fn->values[lhs].type)) ||
+                !minic_lp64_frame_plan_wide_slot(frame_plan, lhs, &left) ||
+                !minic_lp64_frame_plan_wide_slot(frame_plan, rhs, &right) ||
+                (!comparison &&
+                 !minic_lp64_frame_plan_wide_slot(frame_plan, ins->result, &dst)) ||
+                fprintf(out, "  ldr x9, [sp, #%zu]\n"
+                             "  ldr x10, [sp, #%zu]\n"
+                             "  ldr x11, [sp, #%zu]\n"
+                             "  ldr x13, [sp, #%zu]\n",
+                        left, left + 8U, right, right + 8U) < 0)
+                return false;
+            switch (ins->kind) {
+            case MINIC_CORE_INSTRUCTION_INTEGER_ADD:
+                op = "  adds x9, x9, x11\n  adc x10, x10, x13\n";
+                break;
+            case MINIC_CORE_INSTRUCTION_INTEGER_SUBTRACT:
+                op = "  subs x9, x9, x11\n  sbc x10, x10, x13\n";
+                break;
+            case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND:
+                op = "  and x9, x9, x11\n  and x10, x10, x13\n";
+                break;
+            case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_XOR:
+                op = "  eor x9, x9, x11\n  eor x10, x10, x13\n";
+                break;
+            case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_OR:
+                op = "  orr x9, x9, x11\n  orr x10, x10, x13\n";
+                break;
+            case MINIC_CORE_INSTRUCTION_INTEGER_LESS:
+                op = sign
+                    ? "  cmp x10, x13\n  cset w14, lt\n  cset w15, eq\n"
+                    : "  cmp x10, x13\n  cset w14, lo\n  cset w15, eq\n";
+                break;
+            case MINIC_CORE_INSTRUCTION_SCALAR_EQUAL:
+                op = "  eor x9, x9, x11\n"
+                     "  eor x10, x10, x13\n"
+                     "  orr x9, x9, x10\n"
+                     "  cmp x9, #0\n  cset w9, eq\n";
+                break;
+            default: return false;
+            }
+            if (fputs(op, out) == EOF) return false;
+            if (ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_LESS) {
+                if (fputs("  cmp x9, x11\n  cset w9, lo\n"
+                          "  and w9, w9, w15\n  orr w9, w9, w14\n", out) == EOF)
+                    return false;
+            }
+            if (comparison) {
+                *needs_gp_store = true;
+                return true;
+            }
+            return fprintf(out, "  str x9, [sp, #%zu]\n"
+                                "  str x10, [sp, #%zu]\n",
+                           dst, dst + 8U) >= 0;
+        }
+    }
+    if (ins->kind == MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO) {
+        const MinicCoreValueId src = ins->value.operand;
+        size_t from;
+        if (src < fn->value_count &&
+            minic_type_is_int128_integer(fn->values[src].type)) {
+            if (!minic_lp64_frame_plan_wide_slot(frame_plan, src, &from) ||
+                fprintf(out, "  ldr x9, [sp, #%zu]\n"
+                             "  ldr x10, [sp, #%zu]\n"
+                             "  orr x9, x9, x10\n"
+                             "  cmp x9, #0\n  cset w9, eq\n",
+                        from, from + 8U) < 0)
+                return false;
+            *needs_gp_store = true;
+            return true;
+        }
+    }
+    if (ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_LEFT &&
+        minic_type_is_int128_integer(ins->type)) {
+        const MinicCoreValueId lhs = ins->value.binary.left;
+        const MinicCoreValueId rhs = ins->value.binary.right;
+        size_t src, dst, rw;
+        bool sign;
+        if (lhs >= fn->value_count || rhs >= fn->value_count ||
+            !minic_type_equal(fn->values[lhs].type, ins->type) ||
+            !minic_lp64_scalar_integer_width(program, target,
+                fn->values[rhs].type, &rw, &sign) ||
+            !minic_lp64_frame_plan_wide_slot(frame_plan, lhs, &src) ||
+            !minic_lp64_frame_plan_wide_slot(frame_plan, ins->result, &dst) ||
+            fprintf(out, rw == 8U ? "  ldr x10, [sp, #%zu]\n"
+                                   : "  ldr w10, [sp, #%zu]\n",
+                    (size_t)rhs * 8U) < 0 ||
+            fprintf(out, "  ldr x9, [sp, #%zu]\n"
+                         "  ldr x11, [sp, #%zu]\n",
+                    src, src + 8U) < 0 ||
+            fputs("  cbz x10, 2f\n"
+                  "  cmp x10, #64\n  b.hs 1f\n"
+                  "  neg x13, x10\n"
+                  "  lsr x13, x9, x13\n"
+                  "  lsl x11, x11, x10\n"
+                  "  orr x11, x11, x13\n"
+                  "  lsl x9, x9, x10\n"
+                  "  b 2f\n"
+                  "1:\n"
+                  "  sub x10, x10, #64\n"
+                  "  lsl x11, x9, x10\n"
+                  "  mov x9, xzr\n"
+                  "2:\n", out) == EOF ||
+            fprintf(out, "  str x9, [sp, #%zu]\n"
+                         "  str x11, [sp, #%zu]\n",
+                    dst, dst + 8U) < 0)
+            return false;
+        (void)sign;
+        return true;
+    }
     switch (ins->kind) {
         case MINIC_CORE_INSTRUCTION_INTEGER_OVERFLOW: {
             /* Complete 32/64-bit signed+unsigned GNU checked arithmetic.

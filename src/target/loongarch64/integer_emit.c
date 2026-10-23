@@ -24,6 +24,166 @@ bool minic_loongarch64_emit_integer_instruction(
          needs_gp_store == NULL)
         return false;
     *needs_gp_store = false;
+    /* Two 64-bit limbs per Core TI value, with explicit carry/borrow.
+     * The LP64D ABI transfer remains owned by call_emit.c. */
+    if ((ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_NEGATE ||
+         ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_NOT) &&
+        minic_type_is_int128_integer(ins->type)) {
+        const MinicCoreValueId src = ins->value.operand;
+        size_t from, to;
+        if (src >= fn->value_count ||
+            !minic_type_equal(fn->values[src].type, ins->type) ||
+            !minic_lp64_frame_plan_wide_slot(frame_plan, src, &from) ||
+            !minic_lp64_frame_plan_wide_slot(frame_plan, ins->result, &to) ||
+            !emit_sp_mem(out, "ld.d", "$t0", from) ||
+            !emit_sp_mem(out, "ld.d", "$t1", from + 8U) ||
+            fputs(ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_NEGATE
+                  ? "  sub.d $t3, $zero, $t0\n"
+                    "  sltu $t4, $zero, $t0\n"
+                    "  sub.d $t1, $zero, $t1\n"
+                    "  sub.d $t1, $t1, $t4\n"
+                    "  move $t0, $t3\n"
+                  : "  nor $t0, $t0, $zero\n"
+                    "  nor $t1, $t1, $zero\n", out) == EOF ||
+            !emit_sp_mem(out, "st.d", "$t0", to) ||
+            !emit_sp_mem(out, "st.d", "$t1", to + 8U))
+            return false;
+        return true;
+    }
+    if (ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_ADD ||
+        ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_SUBTRACT ||
+        ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND ||
+        ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_XOR ||
+        ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_OR ||
+        ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_LESS ||
+        ins->kind == MINIC_CORE_INSTRUCTION_SCALAR_EQUAL) {
+        const MinicCoreValueId lhs = ins->value.binary.left;
+        const MinicCoreValueId rhs = ins->value.binary.right;
+        const bool comparison =
+            ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_LESS ||
+            ins->kind == MINIC_CORE_INSTRUCTION_SCALAR_EQUAL;
+        if (lhs < fn->value_count && rhs < fn->value_count &&
+            minic_type_is_int128_integer(fn->values[lhs].type)) {
+            size_t left, right, dst = 0U;
+            const bool sign = minic_type_is_signed_integer(fn->values[lhs].type);
+            const char *op = NULL;
+            if (!minic_type_equal(fn->values[lhs].type, fn->values[rhs].type) ||
+                (!comparison &&
+                 !minic_type_equal(ins->type, fn->values[lhs].type)) ||
+                !minic_lp64_frame_plan_wide_slot(frame_plan, lhs, &left) ||
+                !minic_lp64_frame_plan_wide_slot(frame_plan, rhs, &right) ||
+                (!comparison &&
+                 !minic_lp64_frame_plan_wide_slot(frame_plan, ins->result, &dst)) ||
+                !emit_sp_mem(out, "ld.d", "$t0", left) ||
+                !emit_sp_mem(out, "ld.d", "$t1", left + 8U) ||
+                !emit_sp_mem(out, "ld.d", "$t2", right) ||
+                !emit_sp_mem(out, "ld.d", "$t3", right + 8U))
+                return false;
+            switch (ins->kind) {
+            case MINIC_CORE_INSTRUCTION_INTEGER_ADD:
+                op = "  move $t4, $t0\n"
+                     "  add.d $t0, $t0, $t2\n"
+                     "  sltu $t4, $t0, $t4\n"
+                     "  add.d $t1, $t1, $t3\n"
+                     "  add.d $t1, $t1, $t4\n";
+                break;
+            case MINIC_CORE_INSTRUCTION_INTEGER_SUBTRACT:
+                op = "  sltu $t4, $t0, $t2\n"
+                     "  sub.d $t0, $t0, $t2\n"
+                     "  sub.d $t1, $t1, $t3\n"
+                     "  sub.d $t1, $t1, $t4\n";
+                break;
+            case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND:
+                op = "  and $t0, $t0, $t2\n  and $t1, $t1, $t3\n";
+                break;
+            case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_XOR:
+                op = "  xor $t0, $t0, $t2\n  xor $t1, $t1, $t3\n";
+                break;
+            case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_OR:
+                op = "  or $t0, $t0, $t2\n  or $t1, $t1, $t3\n";
+                break;
+            case MINIC_CORE_INSTRUCTION_INTEGER_LESS:
+                op = sign
+                    ? "  xor $t4, $t1, $t3\n"
+                      "  sltui $t4, $t4, 1\n"
+                      "  slt $t1, $t1, $t3\n"
+                    : "  xor $t4, $t1, $t3\n"
+                      "  sltui $t4, $t4, 1\n"
+                      "  sltu $t1, $t1, $t3\n";
+                break;
+            case MINIC_CORE_INSTRUCTION_SCALAR_EQUAL:
+                op = "  xor $t0, $t0, $t2\n"
+                     "  xor $t1, $t1, $t3\n"
+                     "  or $t0, $t0, $t1\n"
+                     "  sltui $t0, $t0, 1\n";
+                break;
+            default: return false;
+            }
+            if (fputs(op, out) == EOF) return false;
+            if (ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_LESS &&
+                fputs("  sltu $t0, $t0, $t2\n"
+                      "  and $t0, $t0, $t4\n"
+                      "  or $t0, $t0, $t1\n", out) == EOF)
+                return false;
+            if (comparison) {
+                *needs_gp_store = true;
+                return true;
+            }
+            return emit_sp_mem(out, "st.d", "$t0", dst) &&
+                   emit_sp_mem(out, "st.d", "$t1", dst + 8U);
+        }
+    }
+    if (ins->kind == MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO) {
+        const MinicCoreValueId src = ins->value.operand;
+        size_t from;
+        if (src < fn->value_count &&
+            minic_type_is_int128_integer(fn->values[src].type)) {
+            if (!minic_lp64_frame_plan_wide_slot(frame_plan, src, &from) ||
+                !emit_sp_mem(out, "ld.d", "$t0", from) ||
+                !emit_sp_mem(out, "ld.d", "$t1", from + 8U) ||
+                fputs("  or $t0, $t0, $t1\n"
+                      "  sltui $t0, $t0, 1\n", out) == EOF)
+                return false;
+            *needs_gp_store = true;
+            return true;
+        }
+    }
+    if (ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_LEFT &&
+        minic_type_is_int128_integer(ins->type)) {
+        const MinicCoreValueId lhs = ins->value.binary.left;
+        const MinicCoreValueId rhs = ins->value.binary.right;
+        size_t src, dst, rw;
+        bool sign;
+        if (lhs >= fn->value_count || rhs >= fn->value_count ||
+            !minic_type_equal(fn->values[lhs].type, ins->type) ||
+            !minic_lp64_scalar_integer_width(program, target,
+                fn->values[rhs].type, &rw, &sign) ||
+            !minic_lp64_frame_plan_wide_slot(frame_plan, lhs, &src) ||
+            !minic_lp64_frame_plan_wide_slot(frame_plan, ins->result, &dst) ||
+            !emit_sp_mem(out, "ld.d", "$t0", src) ||
+            !emit_sp_mem(out, "ld.d", "$t1", src + 8U) ||
+            !emit_sp_mem(out, rw == 8U ? "ld.d" : "ld.w", "$t2",
+                         (size_t)rhs * 8U) ||
+            fputs("  beqz $t2, 2f\n"
+                  "  li.d $t4, 64\n"
+                  "  bgeu $t2, $t4, 1f\n"
+                  "  sub.d $t3, $zero, $t2\n"
+                  "  srl.d $t3, $t0, $t3\n"
+                  "  sll.d $t1, $t1, $t2\n"
+                  "  or $t1, $t1, $t3\n"
+                  "  sll.d $t0, $t0, $t2\n"
+                  "  b 2f\n"
+                  "1:\n"
+                  "  addi.d $t2, $t2, -64\n"
+                  "  sll.d $t1, $t0, $t2\n"
+                  "  move $t0, $zero\n"
+                  "2:\n", out) == EOF ||
+            !emit_sp_mem(out, "st.d", "$t0", dst) ||
+            !emit_sp_mem(out, "st.d", "$t1", dst + 8U))
+            return false;
+        (void)sign;
+        return true;
+    }
     switch (ins->kind) {
         case MINIC_CORE_INSTRUCTION_INTEGER_OVERFLOW: {
             /* Signed overflow is computed from the sign bits; unsigned
