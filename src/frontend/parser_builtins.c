@@ -1220,6 +1220,46 @@ static bool parse_builtin_unary(MinicParser *parser,
            minic_parser_add_expression(parser, &expression, expression_id);
 }
 
+/* Floating classification is not an external function declaration.
+ * Keep the operand as a single AST child so side effects occur exactly
+ * once even though the lowering compares the resulting value to itself. */
+static bool parse_builtin_isnan(MinicParser *parser,
+                                MinicExpressionId *expression_id) {
+    MinicExpression expression;
+    MinicExpressionId operand_id;
+    const MinicExpression *operand;
+    MinicSourcePosition begin;
+    if (parser == NULL || expression_id == NULL ||
+        !minic_parser_current_identifier_lexeme_equals_cstr(parser, "__builtin_isnan"))
+        return false;
+    begin = parser->current.span.begin;
+    if (!minic_parser_advance(parser) ||
+        !minic_parser_expect(parser, MINIC_TOKEN_LPAREN,
+                             "expected '(' after __builtin_isnan") ||
+        !minic_parser_expression_parse_internal(parser, &operand_id, 0U, true) ||
+        !minic_parser_expect(parser, MINIC_TOKEN_RPAREN,
+                             "expected ')' after __builtin_isnan operand"))
+        return false;
+    operand = minic_c0_program_expression(parser->program, operand_id);
+    if (operand == NULL ||
+        (!minic_type_is_float(operand->type) &&
+         !minic_type_is_double(operand->type))) {
+        minic_parser_error(parser,
+                           "__builtin_isnan requires float or double operand");
+        return false;
+    }
+    (void)memset(&expression, 0, sizeof(expression));
+    expression.kind = MINIC_EXPRESSION_BUILTIN_UNARY;
+    expression.span.begin = begin;
+    expression.span.end = parser->current.span.end;
+    expression.type = minic_type_int();
+    expression.value_category = MINIC_VALUE_RVALUE;
+    expression.value.builtin_unary.operator_kind = MINIC_BUILTIN_UNARY_ISNAN;
+    expression.value.builtin_unary.operand = operand_id;
+    return minic_parser_advance(parser) &&
+           minic_parser_add_expression(parser, &expression, expression_id);
+}
+
 static bool normalize_overflow_integer_operand(MinicParser *parser,
                                                MinicExpressionId *operand_id,
                                                MinicType result_type) {
@@ -1779,6 +1819,13 @@ bool minic_parser_try_builtin_primary_early(
             !minic_parser_parse_postfix(parser, primary_id, &primary_id)) {
             return false;
         }
+        *handled = true;
+        return minic_parser_finish_value_expression(parser, primary_id, decay_array, expression_id);
+    }
+    if (minic_parser_current_identifier_lexeme_equals_cstr(parser, "__builtin_isnan")) {
+        if (!parse_builtin_isnan(parser, &primary_id) ||
+            !minic_parser_parse_postfix(parser, primary_id, &primary_id))
+            return false;
         *handled = true;
         return minic_parser_finish_value_expression(parser, primary_id, decay_array, expression_id);
     }
