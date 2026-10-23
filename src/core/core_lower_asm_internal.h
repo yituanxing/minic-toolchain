@@ -81,6 +81,10 @@ bool core_inline_asm_expression_is_local(
     MinicExpressionId expression_id,
     MinicLocalId local_id);
 
+MinicCoreLowerStatus core_asm_try_x86_register_contract(
+    MinicCoreLowerContext *context, const MinicStatement *statement,
+    const MinicInlineAsm *source, bool *handled);
+
 MinicCoreLowerStatus core_asm_try_immediate_output_csr(
     MinicCoreLowerContext *context, const MinicStatement *statement,
     const MinicInlineAsm *source, bool *handled);

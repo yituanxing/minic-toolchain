@@ -570,9 +570,13 @@ bool minic_target_info_local_fixed_register_supported(const MinicTargetInfo *tar
 bool minic_target_info_inline_asm_register_clobber_supported(const MinicTargetInfo *target,
                                                              const char *name,
                                                              size_t name_length) {
-    if (target == NULL || target->architecture != MINIC_TARGET_ARCH_RISCV64 || name == NULL) {
-        return false;
-    }
+    if (target == NULL || name == NULL) return false;
+    /* x86 only: the core and machine backends independently check that
+     * flags and RDX are genuinely clobbered, and preserve SysV RBX. */
+    if (target->architecture == MINIC_TARGET_ARCH_X86_64)
+        return name_length == 2U &&
+               (memcmp(name, "cc", 2U) == 0 || memcmp(name, "dx", 2U) == 0);
+    if (target->architecture != MINIC_TARGET_ARCH_RISCV64) return false;
     /* TargetConstraint v1 keeps temporary registers available to the current
      * inline-asm operand allocator while also recognizing the RV64 argument
      * registers as clobber-only physical registers. The backend never allocates

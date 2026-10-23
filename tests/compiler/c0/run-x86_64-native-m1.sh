@@ -1131,6 +1131,86 @@ echo "PASS: SysV x86 va_copy snapshots independent 24-byte ABI cursor"
 
 
 
+# Original BusyBox SHA CPUID and TLS large-number multiply-accumulate use
+# the same GNU extended-asm input/output constraint family. These exercise
+# the unmodified source spellings: four matched physical outputs, =rm mixed
+# register/memory outputs, explicit RAX/memory inputs and cc/dx clobbers.
+# Run a genuine GCC executable as the runtime output oracle.
+cat > "$tempdir/x86_asm_registers.c" <<'EOF'
+#include <stdio.h>
+#include <stdint.h>
+static void cpuid4(unsigned *a, unsigned *b, unsigned *c, unsigned *d)
+{
+    asm ("cpuid"
+        : "=a"(*a), "=b"(*b), "=c"(*c), "=d"(*d)
+        : "0"(*a), "1"(*b), "2"(*c), "3"(*d));
+}
+static void carry3(unsigned long a, unsigned long b,
+                   unsigned long low, unsigned long mid, unsigned long high)
+{
+    unsigned long aa[1] = {a};
+    unsigned long bb[1] = {b};
+    asm volatile (
+"\n      mulq  %7"
+"\n      addq  %%rax, %0"
+"\n      adcq  %%rdx, %1"
+"\n      adcq  $0, %2"
+        : "=rm" (low), "=rm" (mid), "=rm" (high)
+        : "0" (low), "1" (mid), "2" (high),
+          "a" (aa[0]), "m" (bb[0])
+        : "cc", "dx");
+    printf("mulacc %016lx %016lx %016lx\n", low, mid, high);
+}
+int main(void)
+{
+    unsigned a = 0, b = 0, c = 0, d = 0;
+    cpuid4(&a, &b, &c, &d);
+    printf("cpuid0 %08x %08x %08x %08x\n", a, b, c, d);
+    a = 7; b = 0; c = 0; d = 0;
+    cpuid4(&a, &b, &c, &d);
+    printf("cpuid7 %08x %08x %08x %08x\n", a, b, c, d);
+    carry3(3UL, 5UL, ~0UL, 8UL, 9UL);
+    carry3(~0UL, ~0UL, 11UL, 13UL, 17UL);
+    return 42;
+}
+EOF
+"$HOST_CC" -std=gnu11 -E -P -x c "$tempdir/x86_asm_registers.c" \
+    -o "$tempdir/x86_asm_registers.i"
+"$MINIC_CC" --target=x86_64-linux -S "$tempdir/x86_asm_registers.i" \
+    -o "$tempdir/x86_asm_registers.s"
+"$HOST_CC" -no-pie -x assembler "$tempdir/x86_asm_registers.s" \
+    -o "$tempdir/x86_asm_registers.mini"
+"$HOST_CC" -no-pie -std=gnu11 -x c "$tempdir/x86_asm_registers.i" \
+    -o "$tempdir/x86_asm_registers.gnu"
+set +e
+"$tempdir/x86_asm_registers.mini" > "$tempdir/x86_asm_registers.mini.out"
+mini_status=$?
+"$tempdir/x86_asm_registers.gnu" > "$tempdir/x86_asm_registers.gnu.out"
+gnu_status=$?
+set -e
+test "$mini_status" -eq 42
+test "$gnu_status" -eq 42
+cmp "$tempdir/x86_asm_registers.gnu.out" "$tempdir/x86_asm_registers.mini.out"
+echo "PASS: x86 fixed/matched-register CPUID + cc/dx-clobbered MULADC GNU executable byte-exact"
+
+# The above does not grant arbitrary templates with similar constraints.
+cat > "$tempdir/x86_asm_registers_unsupported.i" <<'EOF'
+int main(void) {
+    unsigned a = 7, b = 0, c = 0, d = 0;
+    asm("ud2" : "=a"(a), "=b"(b), "=c"(c), "=d"(d)
+              : "0"(a), "1"(b), "2"(c), "3"(d));
+    return 0;
+}
+EOF
+if "$MINIC_CC" --target=x86_64-linux -S \
+    "$tempdir/x86_asm_registers_unsupported.i" \
+    -o "$tempdir/x86_asm_registers_unsupported.s" > "$tempdir/x86asm.out" \
+    2> "$tempdir/x86asm.err"; then
+    echo "FAIL: unsupported x86 asm template accepted without register allocator" >&2
+    exit 1
+fi
+echo "PASS: unsupported x86 extended asm remains fail-closed"
+
 # SQLite 3.54.1 glibc <byteswap.h> uses these GNU builtins.
 # Runtime fixture checks full width, zero, overflow and *single evaluation*.
 cat > "$tempdir/sqlite_bswap.i" <<'EOF'

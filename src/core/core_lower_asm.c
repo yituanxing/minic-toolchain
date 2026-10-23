@@ -178,6 +178,13 @@ MinicCoreLowerStatus minic_core_lower_inline_asm(MinicCoreLowerContext *context,
 
     core_asm_trace_input_batch(context, source);
 
+    /* Target-selected GNU register constraints still transport a canonical
+     * structured Core effect. Preflight does not mutate on an unsupported
+     * shape; other targets retain the original ordered lowering. */
+    handled = false;
+    status = core_asm_try_x86_register_contract(context, statement, source, &handled);
+    if (handled) return status;
+
     handled = false;
     status = core_asm_try_immediate_output_csr(context, statement, source, &handled);
     if (handled) return status;

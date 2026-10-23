@@ -23,6 +23,11 @@ bool minic_x86_64_emit_fp_instruction(
     FILE *, const MinicC0Program *, const MinicTargetInfo *,
     const MinicCoreFunction *, const MinicX86Frame *,
     const MinicCoreInstruction *);
+bool minic_x86_64_emit_structured_asm(
+    FILE *, const MinicC0Program *, const MinicTargetInfo *,
+    const MinicCoreFunction *, const MinicX86Frame *,
+    const MinicCoreInstruction *);
+
 bool minic_x86_64_emit_call_instruction(
     FILE *, const MinicC0Program *, const MinicTargetInfo *,
     const MinicCoreFunction *, const MinicX86Frame *,
