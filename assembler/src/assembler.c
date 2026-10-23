@@ -3238,7 +3238,8 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
         if (!rewrite_numeric_local_refs(as, args, &rewritten_args, line)) {
             return false;
         }
-        if (!minias_riscv_measure(op,
+        if (!minias_riscv_measure(as->strict_i_xlen,
+                                  op,
                                   rewritten_args,
                                   &size,
                                   reason,

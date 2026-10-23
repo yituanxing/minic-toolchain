@@ -215,7 +215,8 @@ void minias_set_error(MiniAs *as, const char *format, ...);
 char *minias_strdup(const char *text);
 char *minias_trim(char *text);
 
-bool minias_riscv_measure(const char *op,
+bool minias_riscv_measure(unsigned strict_i_xlen,
+                          const char *op,
                           const char *args,
                           uint32_t *size,
                           char *reason,

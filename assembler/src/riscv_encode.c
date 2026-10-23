@@ -492,6 +492,20 @@ static bool parse_li_bits(const char *text,
     return true;
 }
 
+/* RV32 li accepts the exact 32-bit bit pattern or its 64-bit sign extension.
+ * The existing RV64 pseudo expansion is untouched. This keeps first-pass
+ * label layout in agreement with encoding and forbids silent truncation. */
+static bool rv32_li_value(uint64_t bits, int64_t *result) {
+    uint32_t narrow = (uint32_t)bits;
+    int64_t signed_value = (narrow & UINT32_C(0x80000000)) ?
+        (int64_t)narrow - INT64_C(4294967296) : (int64_t)narrow;
+    if (result == NULL ||
+        (bits != (uint64_t)narrow && bits != (uint64_t)signed_value))
+        return false;
+    *result = signed_value;
+    return true;
+}
+
 static uint32_t li64_materialized_size(uint64_t bits) {
     int byte_index = 7;
     uint32_t instructions = 1U;
@@ -1059,7 +1073,8 @@ static bool parse_call_target(const char *text, MiniAsSymbolExpr *expr) {
     return minias_parse_symbol_addend(normalized, expr);
 }
 
-bool minias_riscv_measure(const char *op,
+bool minias_riscv_measure(unsigned strict_i_xlen,
+                          const char *op,
                           const char *args,
                           uint32_t *size,
                           char *reason,
@@ -1223,7 +1238,20 @@ bool minias_riscv_measure(const char *op,
                            count >= 2U ? operands[1] : args);
             return false;
         }
-        if (fits_signed32) {
+        if (strict_i_xlen == 32U) {
+            int64_t rv32_value;
+            int64_t high;
+            int64_t low;
+            if (!rv32_li_value(bits, &rv32_value)) {
+                (void)snprintf(reason, reason_size,
+                               "rv32i-li-overflows-32-bits:%s", operands[1]);
+                return false;
+            }
+            high = (rv32_value + INT64_C(2048)) >> 12;
+            low = rv32_value - high * INT64_C(4096);
+            *size = (rv32_value >= -2048 && rv32_value <= 2047) ||
+                    low == 0 ? 4U : 8U;
+        } else if (fits_signed32) {
             *size = signed_value >= -2048 && signed_value <= 2047 ? 4U : 8U;
         } else {
             *size = li64_materialized_size(bits);
@@ -1887,6 +1915,27 @@ bool minias_riscv_encode(MiniAs *as, const MiniAsStmt *stmt) {
         if (count != 2U || !require_reg(as, stmt, operands[0], &rd) ||
             !parse_li_bits(operands[1], &bits, &fits_signed32, &signed_value)) {
             return false;
+        }
+        if (as->strict_i_xlen == 32U) {
+            int64_t rv32_value;
+            int64_t hi;
+            int64_t lo;
+            if (!rv32_li_value(bits, &rv32_value)) {
+                minias_set_error(as, "rv32i-li-overflows-32-bits:line=%zu",
+                                 stmt->line);
+                return false;
+            }
+            if (rv32_value >= -2048 && rv32_value <= 2047)
+                return append_u32(as, stmt->section,
+                                  enc_i(0x13U, rd, 0U, 0, rv32_value));
+            hi = (rv32_value + INT64_C(2048)) >> 12;
+            lo = rv32_value - hi * INT64_C(4096);
+            if (!append_u32(as, stmt->section,
+                            0x37U | ((uint32_t)rd << 7U) |
+                            (((uint32_t)hi & UINT32_C(0xfffff)) << 12U)))
+                return false;
+            return lo == 0 || append_u32(
+                as, stmt->section, enc_i(0x13U, rd, 0U, rd, lo));
         }
         if (fits_signed32) {
             int64_t hi;

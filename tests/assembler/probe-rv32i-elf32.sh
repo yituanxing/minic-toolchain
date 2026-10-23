@@ -32,6 +32,34 @@ grep -F 'rv32i2p1' "$work/attributes.txt"
 "$RISCV_OBJCOPY" -j .text -O binary "$work/native.o" "$work/native.bin"
 "$RISCV_OBJCOPY" -j .text -O binary "$work/reference.o" "$work/reference.bin"
 cmp "$work/native.bin" "$work/reference.bin"
+# RV32I li must use the RV32 base-I LUI/ADDI sequence, NEVER RV64 ADDIW
+# or accidental 64-bit shifts. Check exact GNU bits at signedness edges.
+cat >"$work/imm.s" <<'SRC'
+.text
+.globl rv32_immediate
+rv32_immediate:
+    li a0, 0x80000000
+    li a1, 0xffffffff
+    li a2, 2048
+    li a3, -2049
+    li a4, 0x12345000
+    li a5, 0x7fffffff
+    ret
+SRC
+"$MINIAS" -march=rv32i -mabi=ilp32 -o "$work/imm-mini.o" "$work/imm.s"
+"$RISCV_GCC" -march=rv32i -mabi=ilp32 -x assembler -c \
+    "$work/imm.s" -o "$work/imm-gcc.o"
+"$RISCV_OBJCOPY" -j .text -O binary "$work/imm-mini.o" "$work/imm-mini.bin"
+"$RISCV_OBJCOPY" -j .text -O binary "$work/imm-gcc.o" "$work/imm-gcc.bin"
+cmp "$work/imm-mini.bin" "$work/imm-gcc.bin"
+printf '.text\nli a0, 0x100000000\n' >"$work/outofrange.s"
+if "$MINIAS" -march=rv32i -mabi=ilp32 \
+     -o "$work/outofrange.o" "$work/outofrange.s" \
+     >"$work/outofrange.out" 2>"$work/outofrange.err"; then
+    echo 'RV32I_LI=FAIL accepted_overflow_32bit_imm' >&2; exit 1
+fi
+grep -F 'rv32i-li-overflows-32-bits' "$work/outofrange.err"
+echo 'RV32I_LI=PASS GNU_AS_bytes_equal=true signed_unsigned_edges=6 overflow=reject'
 # Execute an actual freestanding RV32 Linux ELF32 binary: no compiler-runtime
 # or sysroot dependency, and this checks binutils' ELF32 input contract.
 cat >"$work/exit.s" <<'SRC'
