@@ -480,6 +480,25 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
             return minic_core_lower_internal_append_long_double_conversion(
                 context, expression->span, target_type, source_type, operand_value, value_id);
         }
+        /* C integer constant 0 converts exactly to positive IEEE zero,
+         * independent of the target's hardware FP extensions. Do not
+         * manufacture an integer->double runtime dependency for a zero
+         * initializer, then double->float it for float objects. This is a
+         * language-level fold shared by all four target backends. */
+        if (minic_type_is_integer(source_type) &&
+            operand->kind == MINIC_EXPRESSION_INTEGER &&
+            operand->value.integer_value == 0 &&
+            (minic_type_is_double(target_type) || minic_type_is_float(target_type))) {
+            (void)memset(&instruction, 0, sizeof(instruction));
+            instruction.kind = MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT;
+            instruction.span = expression->span;
+            instruction.type = target_type;
+            instruction.result = MINIC_CORE_VALUE_INVALID;
+            instruction.value.floating_bits = UINT64_C(0);
+            return minic_core_function_append_value_instruction(
+                       context->function, context->block_id, &instruction, value_id)
+                   ? MINIC_CORE_LOWER_OK : MINIC_CORE_LOWER_ERROR;
+        }
         (void)memset(&instruction, 0, sizeof(instruction));
         instruction.span = expression->span;
         instruction.type = target_type;
