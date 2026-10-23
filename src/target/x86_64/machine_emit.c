@@ -570,7 +570,9 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
                 ins->kind != MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_OR &&
                 ins->kind != MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_XOR &&
                 ins->kind != MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_LEFT &&
-                ins->kind != MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_RIGHT)
+                ins->kind != MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_RIGHT &&
+                ins->kind != MINIC_CORE_INSTRUCTION_INTEGER_LESS &&
+                ins->kind != MINIC_CORE_INSTRUCTION_SCALAR_EQUAL)
                 return false;
             if (!x86_i128_load(out, frame, left, "%rax", "%rdx"))
                 return false;
@@ -649,6 +651,33 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
                 if (fprintf(out, "  xorq %%r10, %%rax\n  xorq %%r11, %%rdx\n") < 0)
                     return false;
                 break;
+            case MINIC_CORE_INSTRUCTION_INTEGER_LESS:
+                /* Compare high words with source signedness; when high
+                 * words match, compare the low words unsigned. Do the low
+                 * comparison first to avoid clobbering the input with setcc. */
+                if (fprintf(out,
+                    "  cmpq %%r10, %%rax\n"
+                    "  setb %%cl\n"
+                    "  cmpq %%r11, %%rdx\n"
+                    "%s"
+                    "  sete %%dl\n"
+                    "  andb %%cl, %%dl\n"
+                    "  orb %%dl, %%al\n"
+                    "  movzbq %%al, %%rax\n",
+                    minic_type_is_signed_integer(fn->values[left].type)
+                      ? "  setl %al\n" : "  setb %al\n") < 0)
+                    return false;
+                return x86_value_store(out, frame, ins->result);
+            case MINIC_CORE_INSTRUCTION_SCALAR_EQUAL:
+                if (fprintf(out,
+                    "  cmpq %%r10, %%rax\n"
+                    "  sete %%cl\n"
+                    "  cmpq %%r11, %%rdx\n"
+                    "  sete %%al\n"
+                    "  andb %%cl, %%al\n"
+                    "  movzbq %%al, %%rax\n") < 0)
+                    return false;
+                return x86_value_store(out, frame, ins->result);
             default: return false;
             }
             return x86_i128_store(out, frame, ins->result, "%rax", "%rdx");
