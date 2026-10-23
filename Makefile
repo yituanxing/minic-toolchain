@@ -22,11 +22,8 @@ RV64I_RUNTIME_SRC := third_party/gcc-riscv-14.2.0
 RV64I_RUNTIME_DIR := $(BUILD_DIR)/runtime/riscv64/rv64i-lp64
 RV64I_RUNTIME_ARCHIVE := $(RV64I_RUNTIME_DIR)/libminic-rt.a
 RV64I_SOFTFP_SRC := third_party/llvm-compiler-rt-19.1.7
-RV64I_SOFTFP_SOURCES := \
-  addsf3.c subsf3.c mulsf3.c divsf3.c \
-  adddf3.c subdf3.c muldf3.c divdf3.c \
-  multi3.c cmpti2.c ucmpti2.c \
-  clzdi2.c clzsi2.c fp_mode.c
+# The manifest is the sole runtime source inventory for all four targets.
+RV64I_SOFTFP_SOURCES := $(shell python3 tools/runtime/build_runtime.py --print-sources)
 RV64I_SOFTFP_OBJECTS := $(addprefix $(RV64I_RUNTIME_DIR)/softfp/,$(RV64I_SOFTFP_SOURCES:.c=.o))
 RV64I_RUNTIME_OBJECTS := \
   $(RV64I_RUNTIME_DIR)/muldi3.o \
@@ -363,7 +360,7 @@ RV64_ABI_TEST_SOURCES := \
 RV64_ABI_TEST_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(RV64_ABI_TEST_SOURCES))
 RV64_ABI_TEST_BINARY  := $(BUILD_DIR)/tests/target/riscv64/abi-test
 
-.PHONY: runtime-rv64i check-rv64i-runtime-archive all help prepare check check-fast check-four-backend-lua-frontier check-four-backend-lua-accept check-four-backend-zlib-frontier check-four-backend-zlib-accept check-target-selection-m0 check-four-backend-m39-lp64-bitops check-four-backend-m15-scalar-return check-four-backend-m14-shift check-four-backend-m13-narrow-arith check-four-backend-m12-bitwise check-four-backend-m11-index check-four-backend-m10-mod check-four-backend-m9-unsigned check-four-backend-m8-narrow check-four-backend-m7-frame check-four-backend-m6-address check-four-backend-m5-pointer check-four-backend-m4-global check-four-backend-m38-fp-varargs check-four-backend-m37-fp-arith check-four-backend-m36-lp64-mul check-four-backend-m35-ptr-to-lp64 check-four-backend-m34-fp-call-result check-four-backend-m33-pointer-less check-four-backend-m32-unreachable check-four-backend-m31-float-promote check-four-backend-m30-fp-call check-four-backend-m29-double-cmp check-four-backend-m28-int-double check-four-backend-m27-fp-parameter check-four-backend-m26-double-div check-four-backend-m25-double-transport check-four-backend-m24-indirect-call check-four-backend-m23-lp64-compare check-four-backend-m22-lp64-conv check-four-backend-m21-lp64-add check-four-backend-m20-lp64-abi check-four-backend-m19-ptr-compare check-four-backend-m18-varargs check-four-backend-m17-record check-four-backend-cjson-accept check-four-backend-cjson-frontier check-four-backend-tinyaes-accept check-four-backend-tinyaes-frontier check-four-backend-m3-call check-four-backend-m2-stack check-four-backend-m2 check-four-backend-m1 check-four-target-model-m0 check-x86_64-busybox-all-eligible check-x86_64-busybox-complex-five check-x86_64-busybox-host-link check-elf-constructors check-x86_64-one-gp-sysv check-x86_64-busybox-allyes-discovery check-x86_64-busybox-12 check-x86_64-sqlite-frontier check-x86_64-m1 check-x86_64-tinyaes check-x86_64-cjson check-x86_64-abi-elf check-x86_64-lua-frontier check-x86_64-zlib-frontier check-minias-a0 check-minipp-a0 check-minielf-reader-a0 check-mininm-a0 check-mininm-a1 check-miniobjcopy-a0 check-miniobjcopy-a1 check-minicstrip-a0 check-miniar-a0 check-miniar-a1 check-minild-a0 check-minild-a1 check-minild-a2 check-minild-a3 check-minild-a4 check-minild-a5 check-minild-a6 check-minild-script-a0 check-minild-script-a1 check-token-model check-lexer \
+.PHONY: runtime-fourarch runtime-fourarch-reference runtime-rv64i check-rv64i-runtime-archive all help prepare check check-fast check-four-backend-lua-frontier check-four-backend-lua-accept check-four-backend-zlib-frontier check-four-backend-zlib-accept check-target-selection-m0 check-four-backend-m39-lp64-bitops check-four-backend-m15-scalar-return check-four-backend-m14-shift check-four-backend-m13-narrow-arith check-four-backend-m12-bitwise check-four-backend-m11-index check-four-backend-m10-mod check-four-backend-m9-unsigned check-four-backend-m8-narrow check-four-backend-m7-frame check-four-backend-m6-address check-four-backend-m5-pointer check-four-backend-m4-global check-four-backend-m38-fp-varargs check-four-backend-m37-fp-arith check-four-backend-m36-lp64-mul check-four-backend-m35-ptr-to-lp64 check-four-backend-m34-fp-call-result check-four-backend-m33-pointer-less check-four-backend-m32-unreachable check-four-backend-m31-float-promote check-four-backend-m30-fp-call check-four-backend-m29-double-cmp check-four-backend-m28-int-double check-four-backend-m27-fp-parameter check-four-backend-m26-double-div check-four-backend-m25-double-transport check-four-backend-m24-indirect-call check-four-backend-m23-lp64-compare check-four-backend-m22-lp64-conv check-four-backend-m21-lp64-add check-four-backend-m20-lp64-abi check-four-backend-m19-ptr-compare check-four-backend-m18-varargs check-four-backend-m17-record check-four-backend-cjson-accept check-four-backend-cjson-frontier check-four-backend-tinyaes-accept check-four-backend-tinyaes-frontier check-four-backend-m3-call check-four-backend-m2-stack check-four-backend-m2 check-four-backend-m1 check-four-target-model-m0 check-x86_64-busybox-all-eligible check-x86_64-busybox-complex-five check-x86_64-busybox-host-link check-elf-constructors check-x86_64-one-gp-sysv check-x86_64-busybox-allyes-discovery check-x86_64-busybox-12 check-x86_64-sqlite-frontier check-x86_64-m1 check-x86_64-tinyaes check-x86_64-cjson check-x86_64-abi-elf check-x86_64-lua-frontier check-x86_64-zlib-frontier check-minias-a0 check-minipp-a0 check-minielf-reader-a0 check-mininm-a0 check-mininm-a1 check-miniobjcopy-a0 check-miniobjcopy-a1 check-minicstrip-a0 check-miniar-a0 check-miniar-a1 check-minild-a0 check-minild-a1 check-minild-a2 check-minild-a3 check-minild-a4 check-minild-a5 check-minild-a6 check-minild-script-a0 check-minild-script-a1 check-token-model check-lexer \
 	check-type check-record check-type-alias check-ast-contract check-layout check-rv64-abi \
 	check-static-functions \
 	check-unsigned-declarations check-long-types check-for-loops check-unbounded-for-break \
@@ -440,6 +437,17 @@ help:
 
 # Real optional target runtime package. It is deliberately not a MiniC core
 # dependency and is not a replacement for the complete libgcc multilib.
+# Shared third-party C implementations are compiled by the *existing*
+# MiniC backends, not copied into architecture-specific code generators.
+# Compiler-rt's primitive RV64I libgcc .S remain the explicit seed objects.
+runtime-fourarch: $(MINIC_CC_BINARY)
+	python3 tools/runtime/build_runtime.py --backend minic --minic "$(MINIC_CC_BINARY)" \
+	  --build-dir "$(BUILD_DIR)/runtime-fourarch"
+
+runtime-fourarch-reference:
+	python3 tools/runtime/build_runtime.py --backend reference \
+	  --build-dir "$(BUILD_DIR)/runtime-fourarch"
+
 runtime-rv64i: $(RV64I_RUNTIME_ARCHIVE)
 
 $(RV64I_RUNTIME_DIR)/%.o: $(RV64I_RUNTIME_SRC)/%.S $(RV64I_RUNTIME_SRC)/riscv-asm.h
@@ -465,13 +473,15 @@ check-rv64i-runtime-archive: runtime-rv64i
 	@symbols="$$($(RISCV_RUNTIME_NM) -g --defined-only $(RV64I_RUNTIME_ARCHIVE))"; \
 	for name in __muldi3 __divdi3 __udivdi3 __moddi3 __umoddi3 \
 	  __multi3 __cmpti2 __ucmpti2 \
+	  __divti3 __udivti3 __modti3 __umodti3 __udivmodti4 \
+	  __ashlti3 __ashrti3 __lshrti3 \
 	  __addsf3 __subsf3 __mulsf3 __divsf3 \
 	  __adddf3 __subdf3 __muldf3 __divdf3 \
 	  __clzdi2 __clzsi2 __fe_getround __fe_raise_inexact; do \
 	  printf '%s\n' "$$symbols" | awk '{print $$NF}' | grep -Fx "$$name" >/dev/null || { \
 	    echo "RV64I_RUNTIME_ARCHIVE=FAIL missing $$name" >&2; exit 1; }; \
 	done
-	@echo "RV64I_RUNTIME_ARCHIVE=PASS path=$(RV64I_RUNTIME_ARCHIVE) isa=rv64i abi=lp64 symbols=20 integer=8 softfp=8 deps=4"
+	@echo "RV64I_RUNTIME_ARCHIVE=PASS path=$(RV64I_RUNTIME_ARCHIVE) isa=rv64i abi=lp64 symbols=28 integer=16 softfp=8 deps=4"
 
 prepare:
 	@mkdir -p "$(BUILD_DIR)"
