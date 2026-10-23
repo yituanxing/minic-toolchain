@@ -130,13 +130,12 @@ SRC
 test -s "$tmp/record-fpabi.s"
 
 # A base-I ISA does not imply every GNU C extension is implemented.
-# Explicit targets must never quietly truncate 128-bit arithmetic or use an
-# incorrect one-register __int128 ABI merely because emitted opcodes are I.
-for variant in div add shl; do
+# Explicit ISA profiles must reject as-yet-unqualified i128 constant
+# construction; binary pair operations are now independently validated below.
+for variant in constant clz; do
   case "$variant" in
-    div) body='unsigned __int128 probe(void) { unsigned __int128 a = 33, b = 3; return a / b; }' ;;
-    add) body='unsigned __int128 probe(void) { unsigned __int128 a = 33, b = 3; return a + b; }' ;;
-    shl) body='unsigned __int128 probe(void) { unsigned __int128 a = 1; return a << 66; }' ;;
+    constant) body='unsigned __int128 probe(void) { unsigned __int128 a = 33; return a; }' ;;
+    clz) body='unsigned __int128 probe(unsigned __int128 a) { return __builtin_clzll((unsigned long long)a); }' ;;
   esac
   printf '%s\n' "$body" >"$tmp/int128-$variant.i"
   if "$MINIC_CC" --target=riscv64-linux -march=rv64i -mabi=lp64 \
