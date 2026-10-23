@@ -109,6 +109,11 @@ bool minic_core_visit_instruction_value_uses(const MinicCoreFunction *function,
     case MINIC_CORE_INSTRUCTION_RECORD_LOAD:
         return core_visit_value_use(
             instruction->value.record_load.source_address, visitor, context);
+    case MINIC_CORE_INSTRUCTION_VARIADIC_COPY:
+        return core_visit_value_use(
+                   instruction->value.variadic_copy.destination, visitor, context) &&
+               core_visit_value_use(
+                   instruction->value.variadic_copy.source, visitor, context);
     case MINIC_CORE_INSTRUCTION_RECORD_COPY:
         return core_visit_value_use(
                    instruction->value.record_copy.destination_address, visitor, context) &&

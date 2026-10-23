@@ -136,7 +136,11 @@ typedef enum MinicCoreInstructionKind {
     MINIC_CORE_INSTRUCTION_VARIADIC_NEXT_SCALAR,
     /* Target-neutral atomic write; memory order remains explicit. */
     MINIC_CORE_INSTRUCTION_ATOMIC_STORE,
-    MINIC_CORE_INSTRUCTION_ATOMIC_LOAD
+    MINIC_CORE_INSTRUCTION_ATOMIC_LOAD,
+    /* va_copy is a value copy of the target's ABI cursor state, NOT
+     * assignment of the frontend's pointer-shaped va_list proxy.
+     * Both Core operands are pointer SSA values; target copies its real tag. */
+    MINIC_CORE_INSTRUCTION_VARIADIC_COPY
 } MinicCoreInstructionKind;
 
 /* M91_BUILTIN_UNREACHABLE_TERMINATOR: unreachable is a CFG fact, not a
@@ -371,6 +375,11 @@ typedef struct MinicCoreInstruction {
             MinicCoreValueId destination_address;
             MinicCoreValueId source_address;
         } record_copy;
+        /* Target ABI state-copy: left=destination cursor pointer, right=source. */
+        struct {
+            MinicCoreValueId destination;
+            MinicCoreValueId source;
+        } variadic_copy;
         MinicCoreInlineAsmId inline_asm_id;
         struct {
             MinicCoreInlineAsmId inline_asm_id;

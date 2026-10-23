@@ -205,9 +205,66 @@ MinicCoreLowerStatus minic_core_lower_vararg_statement(
                    : MINIC_CORE_LOWER_ERROR;
     }
     if (expression->kind == MINIC_EXPRESSION_BUILTIN_VA_COPY) {
-        /* Transitional pointer-assignment compatibility is not proof of
-         * structured va_list value-copy correctness. The real ABI-specific
-         * copy must eventually become a distinct semantic IR operation. */
+        /* SysV AMD64's va_list is a 24-byte mutable __va_list_tag[1].
+         * Source and destination may be independent and will be advanced
+         * separately by va_arg. A pointer assignment aliases the same tag
+         * and silently changes vararg values; allocate a fresh tag in the
+         * x86 function's frame, copy its whole ABI state, then write back
+         * only the fresh tag address to the destination va_list lvalue. */
+        if (context->target->architecture == MINIC_TARGET_ARCH_X86_64) {
+            const MinicExpression *target;
+            const MinicExpression *source;
+            MinicCoreValueId dest_address, source_cursor, new_cursor;
+            MinicCoreInstruction instruction;
+            MinicCoreLowerStatus status;
+            MinicType cursor_type;
+            target = minic_c0_program_expression(
+                context->body->program, expression->value.binary.left);
+            source = minic_c0_program_expression(
+                context->body->program, expression->value.binary.right);
+            if (target == NULL || source == NULL ||
+                target->value_category != MINIC_VALUE_LVALUE ||
+                !minic_type_is_pointer(target->type) ||
+                !minic_type_is_x86_va_list_cursor(target->type) ||
+                !minic_type_equal(target->type, source->type) ||
+                !minic_type_unqualified(target->type, &cursor_type))
+                return MINIC_CORE_LOWER_UNSUPPORTED;
+            status = lower_address(context, expression->value.binary.left, &dest_address);
+            if (status != MINIC_CORE_LOWER_OK) return status;
+            status = lower_expression(context, expression->value.binary.right, &source_cursor);
+            if (status != MINIC_CORE_LOWER_OK) return status;
+            (void)memset(&instruction, 0, sizeof(instruction));
+            instruction.kind = MINIC_CORE_INSTRUCTION_VARIADIC_ARGUMENT_ADDRESS;
+            instruction.span = expression->span;
+            instruction.type = cursor_type;
+            instruction.result = MINIC_CORE_VALUE_INVALID;
+            if (!minic_core_function_append_value_instruction(
+                    context->function, context->block_id, &instruction, &new_cursor))
+                return MINIC_CORE_LOWER_ERROR;
+            (void)memset(&instruction, 0, sizeof(instruction));
+            instruction.kind = MINIC_CORE_INSTRUCTION_VARIADIC_COPY;
+            instruction.span = expression->span;
+            instruction.type = minic_type_void();
+            instruction.result = MINIC_CORE_VALUE_INVALID;
+            instruction.value.variadic_copy.destination = new_cursor;
+            instruction.value.variadic_copy.source = source_cursor;
+            if (!minic_core_function_append_effect_instruction(
+                    context->function, context->block_id, &instruction))
+                return MINIC_CORE_LOWER_ERROR;
+            (void)memset(&instruction, 0, sizeof(instruction));
+            instruction.kind = MINIC_CORE_INSTRUCTION_STORE;
+            instruction.span = expression->span;
+            instruction.type = minic_type_void();
+            instruction.result = MINIC_CORE_VALUE_INVALID;
+            instruction.value.store.address = dest_address;
+            instruction.value.store.stored_value = new_cursor;
+            instruction.value.store.is_volatile = minic_type_is_volatile(target->type);
+            return minic_core_function_append_effect_instruction(
+                       context->function, context->block_id, &instruction)
+                       ? MINIC_CORE_LOWER_OK : MINIC_CORE_LOWER_ERROR;
+        }
+        /* Other targets with a scalar cursor representation explicitly
+         * authorize va_copy as a scalar assignment; don't change them. */
         if (!context->target->variadic_pointer_assignment_compatible)
             return MINIC_CORE_LOWER_UNSUPPORTED;
         return minic_core_lower_assignment_pair(context,

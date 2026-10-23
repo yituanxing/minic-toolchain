@@ -282,6 +282,17 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
     case MINIC_CORE_INSTRUCTION_VARIADIC_ARGUMENT_ADDRESS:
         return instruction_result_is_valid(function, instruction) &&
                minic_type_is_pointer(instruction->type);
+    case MINIC_CORE_INSTRUCTION_VARIADIC_COPY: {
+        const MinicCoreValueId dst = instruction->value.variadic_copy.destination;
+        const MinicCoreValueId src = instruction->value.variadic_copy.source;
+        return instruction->result == MINIC_CORE_VALUE_INVALID &&
+               minic_type_is_void(instruction->type) &&
+               dst < function->value_count && src < function->value_count &&
+               available_values[dst] && available_values[src] &&
+               minic_type_is_pointer(function->values[dst].type) &&
+               minic_type_equal(function->values[dst].type,
+                                function->values[src].type);
+    }
     case MINIC_CORE_INSTRUCTION_VARIADIC_NEXT_SCALAR: {
         const MinicCoreValueId list = instruction->value.operand;
         return instruction_result_is_valid(function, instruction) &&

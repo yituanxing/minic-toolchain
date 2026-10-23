@@ -206,6 +206,23 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
             return false;
         return x86_value_store(out, frame, ins->result);
     }
+    case MINIC_CORE_INSTRUCTION_VARIADIC_COPY: {
+        /* 24-byte SysV __va_list_tag = two u32 offsets plus two pointers.
+         * Copy three aligned eightbytes into the private tag allocated by
+         * VARIADIC_ARGUMENT_ADDRESS. Do not alias the source cursor. */
+        if (!x86_value_load(out, frame,
+                            ins->value.variadic_copy.destination, "%r10") ||
+            !x86_value_load(out, frame,
+                            ins->value.variadic_copy.source, "%r11"))
+            return false;
+        return fprintf(out,
+                "  movq 0(%%r11), %%rax\n"
+                "  movq %%rax, 0(%%r10)\n"
+                "  movq 8(%%r11), %%rax\n"
+                "  movq %%rax, 8(%%r10)\n"
+                "  movq 16(%%r11), %%rax\n"
+                "  movq %%rax, 16(%%r10)\n") >= 0;
+    }
     case MINIC_CORE_INSTRUCTION_VARIADIC_ARGUMENT_ADDRESS: {
         size_t i;
         size_t tag_offset = 0U;

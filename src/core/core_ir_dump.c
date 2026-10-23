@@ -262,6 +262,11 @@ static bool dump_instruction(FILE *output,
         return fprintf(output,
                        "  %%%" PRIu32 " = variadic.argument.address\n",
                        instruction->result) >= 0;
+    case MINIC_CORE_INSTRUCTION_VARIADIC_COPY:
+        return fprintf(output,
+                       "  variadic.copy %%%" PRIu32 ", %%%" PRIu32 "\n",
+                       instruction->value.variadic_copy.source,
+                       instruction->value.variadic_copy.destination) >= 0;
     case MINIC_CORE_INSTRUCTION_VARIADIC_NEXT_SCALAR:
         return fprintf(output, "  %%%" PRIu32 " = variadic.next %%%" PRIu32 "\n",
                        instruction->result, instruction->value.operand) >= 0;
