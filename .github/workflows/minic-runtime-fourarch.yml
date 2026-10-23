@@ -20,6 +20,7 @@ on:
       - "src/core/core_lower_scalar_values.c"
       - "tests/compiler/c0/probe-runtime-isnan.sh"
       - "tests/compiler/c0/probe-rv64i-int128-pairs-qemu.sh"
+      - "tests/compiler/c0/probe-rv64i-softfloat-runtime-qemu.sh"
       - "tests/compiler/c0/probe-runtime-typed-overflow.sh"
       - ".github/workflows/minic-runtime-fourarch.yml"
       - "Makefile"
@@ -125,6 +126,14 @@ jobs:
           path: build/runtime-diagnostic/
           retention-days: 7
           if-no-files-found: warn
+      - name: QEMU verify IEEE-754 bit-exact softfloat against both libraries
+        if: always() && matrix.target == 'riscv64'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          bash tests/compiler/c0/probe-rv64i-softfloat-runtime-qemu.sh \
+            "$GITHUB_WORKSPACE/build/runtime-verdict/reference/riscv64/libminic-rt.a" \
+            "$GITHUB_WORKSPACE/build/runtime-verdict/minic/riscv64/libminic-rt.a"
       - name: Save both target and reference reports, object diagnostics and .s
         if: always()
         uses: actions/upload-artifact@v4
