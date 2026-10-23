@@ -30,6 +30,16 @@ typedef bool (*MinicBackendEmitProgram)(
     size_t function_count, bool function_sections,
     MinicDiagnostic *diagnostic);
 
+/* Target selects operand roles; Core materializes their semantic values.
+ * No physical registers, ISA opcodes or frame offsets enter Core IR. */
+typedef struct MinicTargetInlineAsmContract {
+    size_t operand_count;
+    MinicCoreStructuredInlineAsmOperandKind kinds[MINIC_CORE_STRUCTURED_INLINE_ASM_OPERAND_LIMIT];
+} MinicTargetInlineAsmContract;
+
+typedef bool (*MinicBackendQualifyInlineAsm)(
+    const MinicC0Program *, const MinicInlineAsm *, MinicTargetInlineAsmContract *);
+
 typedef struct MinicBackend {
     MinicTargetArchitecture architecture;
     const char *name;
@@ -39,10 +49,17 @@ typedef struct MinicBackend {
     /* This is the only Core-to-machine handoff in the compile driver.
      * Today: direct GNU text. Future: lower, optimize and emit Machine IR. */
     MinicBackendEmitProgram emit_program;
+    /* Optional target contract for GNU multi-operand inline assembly. */
+    MinicBackendQualifyInlineAsm qualify_inline_asm;
 } MinicBackend;
 
 /* Fail closed on unknown architecture. No default or host fallback. */
 const MinicBackend *minic_backend_for_target(const MinicTargetInfo *target);
+
+/* Source-level admission query; absence means defer to existing Core probes. */
+bool minic_backend_qualify_inline_asm(
+    const MinicBackend *, const MinicC0Program *, const MinicInlineAsm *,
+    MinicTargetInlineAsmContract *);
 
 /* Stable driver-facing emission seam. Machine IR can be inserted here. */
 bool minic_backend_emit_assembly(

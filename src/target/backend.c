@@ -3,8 +3,10 @@
 #include "target/riscv64/codegen.h"
 #include "target/riscv64/layout.h"
 #include "target/x86_64/codegen.h"
+#include "target/x86_64/asm_contract.h"
 #include "target/aarch64/codegen.h"
 #include "target/loongarch64/codegen.h"
+#include <string.h>
 
 /*
  * Adapt the mature RV64 backend without rewriting its validated ABI and
@@ -31,19 +33,20 @@ static bool emit_riscv64(const char *output_path, const MinicC0Program *program,
 /* Explicit selection avoids accidental target-number indexing and fallback.
  * More targets can register here without modifying compiler.c or Core IR. */
 static const MinicBackend riscv64_backend = {
-    MINIC_TARGET_ARCH_RISCV64, "riscv64", prepare_riscv64, emit_riscv64
+    MINIC_TARGET_ARCH_RISCV64, "riscv64", prepare_riscv64, emit_riscv64, NULL
 };
 static const MinicBackend x86_64_backend = {
     MINIC_TARGET_ARCH_X86_64, "x86_64", NULL,
-    minic_x86_64_write_c0_program_with_core_functions
+    minic_x86_64_write_c0_program_with_core_functions,
+    minic_x86_64_qualify_inline_asm
 };
 static const MinicBackend aarch64_backend = {
     MINIC_TARGET_ARCH_AARCH64, "aarch64", NULL,
-    minic_aarch64_write_c0_program_with_core_functions
+    minic_aarch64_write_c0_program_with_core_functions, NULL
 };
 static const MinicBackend loongarch64_backend = {
     MINIC_TARGET_ARCH_LOONGARCH64, "loongarch64", NULL,
-    minic_loongarch64_write_c0_program_with_core_functions
+    minic_loongarch64_write_c0_program_with_core_functions, NULL
 };
 
 const MinicBackend *minic_backend_for_target(const MinicTargetInfo *target) {
@@ -55,6 +58,17 @@ const MinicBackend *minic_backend_for_target(const MinicTargetInfo *target) {
     case MINIC_TARGET_ARCH_LOONGARCH64: return &loongarch64_backend;
     }
     return NULL;
+}
+
+bool minic_backend_qualify_inline_asm(
+    const MinicBackend *backend, const MinicC0Program *program,
+    const MinicInlineAsm *source, MinicTargetInlineAsmContract *contract) {
+    if (!backend || !program || !source || !contract ||
+        !backend->qualify_inline_asm) return false;
+    memset(contract, 0, sizeof(*contract));
+    return backend->qualify_inline_asm(program, source, contract) &&
+           contract->operand_count == source->output_count + source->input_count &&
+           contract->operand_count <= MINIC_CORE_STRUCTURED_INLINE_ASM_OPERAND_LIMIT;
 }
 
 bool minic_backend_emit_assembly(

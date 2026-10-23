@@ -1,5 +1,6 @@
 #include "target/x86_64/machine_internal.h"
 #include "target/x86_64/abi.h"
+#include "target/x86_64/asm_contract.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -12,21 +13,6 @@ static bool clobber_is(const MinicCoreInlineAsmRegisterClobber *c,
     const size_t len = strlen(name);
     return c->name && c->name_length == len &&
            memcmp(c->name, name, len) == 0;
-}
-
-static bool is_mulacc_template(const MinicCoreInlineAsm *info) {
-    static const char expected[] = "mulq%7addq%%rax,%0adcq%%rdx,%1adcq$0,%2";
-    char buf[128];
-    size_t i, j = 0U;
-    if (info->template_length >= sizeof(buf)) return false;
-    for (i = 0U; i < info->template_length; ++i) {
-        const char c = info->template_text[i];
-        if (c == ' ' || c == '\t' || c == '\r' || c == '\n') continue;
-        if (j + 1U >= sizeof(buf)) return false;
-        buf[j++] = c;
-    }
-    buf[j] = '\0';
-    return strcmp(buf, expected) == 0;
 }
 
 /* Print GNU numeric template references using x86 assigned physical regs.
@@ -87,7 +73,10 @@ static bool emit_memory_clobber_matched(
     size_t i, bytes;
     bool sign;
     if (outputs == 0U || !info->has_memory_clobber ||
-        info->register_clobber_count != 0U) return false;
+        info->register_clobber_count != 0U ||
+        !minic_x86_64_asm_matched_template(info->template_text,
+                                          info->template_length, outputs))
+        return false;
     for (i = 0U; i < count; ++i) {
         MinicType type;
         if (b[i].value >= fn->value_count || b[i].operand_index != i ||
@@ -153,7 +142,8 @@ bool minic_x86_64_emit_structured_asm(
           clobber_is(&info->register_clobbers[1], "dx")) ||
          (clobber_is(&info->register_clobbers[0], "dx") &&
           clobber_is(&info->register_clobbers[1], "cc"))) &&
-        is_mulacc_template(info);
+        minic_x86_64_asm_mulacc_template(info->template_text,
+                                         info->template_length);
     if (!cpuid && !mulacc) return false;
 
     /* Revalidate the target frame layout and register/value kinds. A future

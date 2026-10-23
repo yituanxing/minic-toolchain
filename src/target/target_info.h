@@ -21,6 +21,14 @@ typedef enum MinicVariadicScalarReadKind {
     MINIC_VARIADIC_SCALAR_READ_ABI_CURSOR
 } MinicVariadicScalarReadKind;
 
+/* ABI policy, not a Core architecture switch. Copying a structured cursor
+ * differs from assigning a scalar cursor; unsupported is always explicit. */
+typedef enum MinicVariadicCopyKind {
+    MINIC_VARIADIC_COPY_UNSUPPORTED = 0,
+    MINIC_VARIADIC_COPY_SCALAR_ASSIGNMENT,
+    MINIC_VARIADIC_COPY_ABI_STATE
+} MinicVariadicCopyKind;
+
 typedef enum MinicIntegerLiteralBase {
     MINIC_INTEGER_LITERAL_BASE_BINARY = 2,
     MINIC_INTEGER_LITERAL_BASE_OCTAL = 8,
@@ -48,10 +56,7 @@ typedef struct MinicTargetInfo {
     bool call_frame_frame_address_level0;
     MinicVariadicScalarReadKind variadic_scalar_read_kind;
     size_t variadic_linear_slot_bytes;
-    /* Transitional frontend pointer-va_list policy: an existing pointer
-     * assignment is accepted for this ABI. This does NOT establish correct
-     * value-copy semantics for structured AAPCS64 cursors. */
-    bool variadic_pointer_assignment_compatible;
+    MinicVariadicCopyKind variadic_copy_kind;
 } MinicTargetInfo;
 
 extern const char *const minic_riscv64_argument_registers[8];
@@ -61,6 +66,8 @@ const MinicTargetInfo *minic_target_info_for_architecture(MinicTargetArchitectur
 const MinicTargetInfo *minic_target_info_from_name(const char *name);
 const MinicDataLayout *minic_target_info_data_layout(const MinicTargetInfo *target);
 const MinicTargetIntegerModel *minic_target_info_integer_model(const MinicTargetInfo *target);
+bool minic_target_info_variadic_state_copy_type_supported(
+    const MinicTargetInfo *, MinicType);
 bool minic_target_info_plain_char_sign(const MinicTargetInfo *target, MinicIntegerSign *sign);
 bool minic_target_info_plain_char_type(const MinicTargetInfo *target, MinicType *type);
 bool minic_target_info_wide_character_type(const MinicTargetInfo *target, MinicType *type);

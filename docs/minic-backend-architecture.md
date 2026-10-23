@@ -119,3 +119,30 @@ A green native gate does **not** imply the full cross-target suite passed.
 
 Scope: **MiniC only**. A failing test in MiniAS/MiniLD may still be informative,
 but the backend-architecture refactor does not modify those toolchains.
+
+## GNU inline assembly and ABI cursor extension contract (2026-10-23)
+
+The driver still selects one of four `MinicBackend` implementations; the
+Core-to-Backend machine emission seam is unchanged. New GNU multi-operand
+assembly forms now qualify through the selected backend's optional
+`qualify_inline_asm` callback. x86 owns GNU register constraints, instruction
+whitelists and template qualification in `x86_64/asm_contract.c`; the Core
+`core_lower_asm_target.c` only turns target-approved operand roles into typed
+SSA values/addresses and a structured side-effect instruction. The x86
+`machine_asm.c` continues to own physical registers, SysV preservation,
+clobbers and assembly output. Both qualification and emission use the same
+x86 template predicates, preventing the two rule sets from drifting.
+Other ISAs retain their existing ordered Core GNU asm probes until a proven
+new contract is supplied. Unsupported forms must not mutate Core IR.
+
+`va_copy` follows `TargetInfo.variadic_copy_kind`: scalar cursor assignment,
+ABI state copy, or explicit unsupported. The Core ABI-state sequence allocates
+independent cursor storage, copies its semantic state, then writes back the
+cursor address. The target checks supported cursor types; x86 still owns its
+24-byte SysV tag copy and frame layout. The transitional scalar policy of the
+other three ISAs is preserved, not upgraded to full structured ABI support.
+
+The mandatory backend-boundary gate now rejects restoration of x86 Core
+architecture dispatch and ensures that template classification stays owned
+by the ISA. Extend the architecture's existing qualifier/emitter rather than
+adding another `core_asm_try_<ISA>` branch for each new Linux inline asm.

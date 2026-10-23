@@ -205,13 +205,10 @@ MinicCoreLowerStatus minic_core_lower_vararg_statement(
                    : MINIC_CORE_LOWER_ERROR;
     }
     if (expression->kind == MINIC_EXPRESSION_BUILTIN_VA_COPY) {
-        /* SysV AMD64's va_list is a 24-byte mutable __va_list_tag[1].
-         * Source and destination may be independent and will be advanced
-         * separately by va_arg. A pointer assignment aliases the same tag
-         * and silently changes vararg values; allocate a fresh tag in the
-         * x86 function's frame, copy its whole ABI state, then write back
-         * only the fresh tag address to the destination va_list lvalue. */
-        if (context->target->architecture == MINIC_TARGET_ARCH_X86_64) {
+        /* An ABI-state cursor copy requires independently mutable storage.
+         * The target validates the source cursor type and emits its native
+         * state transfer; Core only models allocation/copy/writeback. */
+        if (context->target->variadic_copy_kind == MINIC_VARIADIC_COPY_ABI_STATE) {
             const MinicExpression *target;
             const MinicExpression *source;
             MinicCoreValueId dest_address, source_cursor, new_cursor;
@@ -225,7 +222,8 @@ MinicCoreLowerStatus minic_core_lower_vararg_statement(
             if (target == NULL || source == NULL ||
                 target->value_category != MINIC_VALUE_LVALUE ||
                 !minic_type_is_pointer(target->type) ||
-                !minic_type_is_x86_va_list_cursor(target->type) ||
+                !minic_target_info_variadic_state_copy_type_supported(
+                    context->target, target->type) ||
                 !minic_type_equal(target->type, source->type) ||
                 !minic_type_unqualified(target->type, &cursor_type))
                 return MINIC_CORE_LOWER_UNSUPPORTED;
@@ -263,9 +261,10 @@ MinicCoreLowerStatus minic_core_lower_vararg_statement(
                        context->function, context->block_id, &instruction)
                        ? MINIC_CORE_LOWER_OK : MINIC_CORE_LOWER_ERROR;
         }
-        /* Other targets with a scalar cursor representation explicitly
-         * authorize va_copy as a scalar assignment; don't change them. */
-        if (!context->target->variadic_pointer_assignment_compatible)
+        /* Preserve existing scalar-cursor policy. Unknown ABI policies
+         * fail closed rather than treating a structured cursor as pointer. */
+        if (context->target->variadic_copy_kind !=
+                MINIC_VARIADIC_COPY_SCALAR_ASSIGNMENT)
             return MINIC_CORE_LOWER_UNSUPPORTED;
         return minic_core_lower_assignment_pair(context,
                                      expression->value.binary.left,

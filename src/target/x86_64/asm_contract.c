@@ -1,14 +1,16 @@
-#include "core/core_lower_asm_internal.h"
-#include <stdlib.h>
+#include "target/x86_64/asm_contract.h"
 #include <string.h>
 
-/* Source-independent x86 register-constraint ownership. A complete input
- * contract is checked without Core mutations; machine register allocation
- * remains in the x86 emitter. The currently qualified forms are a four-way
- * matched fixed-register instruction, and a 192-bit carry-chain with
- * register-or-memory outputs plus an explicit memory input. */
+/* Target-owned GNU register/constraint admission: no Core lowering state,
+ * no SSA mutation. Additional x86 forms extend this owner, not core_lower. */
+static bool target_constraint_is(const MinicInlineAsmOperand *op, const char *s) {
+    const size_t n = s ? strlen(s) : 0U;
+    return op && s && op->constraint_text && op->constraint_length == n &&
+           memcmp(op->constraint_text, s, n) == 0;
+}
+
 static bool c_is(const MinicInlineAsmOperand *op, const char *s) {
-    return core_inline_asm_constraint_is(op, s);
+    return target_constraint_is(op, s);
 }
 static bool clobber_is(const MinicInlineAsmRegisterClobber *op, const char *s) {
     const size_t n = strlen(s);
@@ -16,13 +18,14 @@ static bool clobber_is(const MinicInlineAsmRegisterClobber *op, const char *s) {
 }
 /* Whitespace is irrelevant for these four specific instructions, whose
  * operand constraints and exact instruction sequence are checked together. */
-static bool mulacc_text(const MinicInlineAsm *src) {
+bool minic_x86_64_asm_mulacc_template(const char *template_text,
+                                       size_t template_length) {
     static const char expected[] = "mulq%7addq%%rax,%0adcq%%rdx,%1adcq$0,%2";
     char text[128];
     size_t i, j = 0U;
-    if (src->template_length >= sizeof(text)) return false;
-    for (i = 0U; i < src->template_length; ++i) {
-        const char c = src->template_text[i];
+    if (template_length >= sizeof(text)) return false;
+    for (i = 0U; i < template_length; ++i) {
+        const char c = template_text[i];
         if (c == ' ' || c == '\t' || c == '\r' || c == '\n') continue;
         if (j >= sizeof(text)-1U) return false;
         text[j++] = c;
@@ -35,36 +38,37 @@ static bool mulacc_text(const MinicInlineAsm *src) {
  * No hidden target machine registers, jumps, labels, function calls or
  * directives. Every template instruction is made of a conservative x86
  * scalar carry/move mnemonic and references only %0..%{outputs-1}. */
-static bool matched_register_template(const MinicInlineAsm *src, size_t outputs) {
+bool minic_x86_64_asm_matched_template(const char *template_text,
+                                        size_t template_length, size_t outputs) {
     size_t i = 0U, lines = 0U, refs = 0U;
-    if (!src->template_text || src->template_length > 1024U) return false;
-    while (i < src->template_length) {
+    if (!template_text || template_length > 1024U) return false;
+    while (i < template_length) {
         size_t begin, len;
-        while (i < src->template_length &&
-               (src->template_text[i] == ' ' || src->template_text[i] == '\t' ||
-                src->template_text[i] == '\r')) ++i;
-        if (i == src->template_length) break;
-        if (src->template_text[i] == '\n') { ++i; continue; }
+        while (i < template_length &&
+               (template_text[i] == ' ' || template_text[i] == '\t' ||
+                template_text[i] == '\r')) ++i;
+        if (i == template_length) break;
+        if (template_text[i] == '\n') { ++i; continue; }
         begin = i;
-        while (i < src->template_length &&
-               src->template_text[i] >= 'a' &&
-               src->template_text[i] <= 'z') ++i;
+        while (i < template_length &&
+               template_text[i] >= 'a' &&
+               template_text[i] <= 'z') ++i;
         len = i - begin;
         if (!((len == 3U &&
-               memcmp(src->template_text + begin, "cmc", 3U) == 0) ||
+               memcmp(template_text + begin, "cmc", 3U) == 0) ||
               (len == 4U &&
-               (memcmp(src->template_text + begin, "movq", 4U) == 0 ||
-                memcmp(src->template_text + begin, "addq", 4U) == 0 ||
-                memcmp(src->template_text + begin, "adcq", 4U) == 0 ||
-                memcmp(src->template_text + begin, "subq", 4U) == 0 ||
-                memcmp(src->template_text + begin, "sbbq", 4U) == 0))))
+               (memcmp(template_text + begin, "movq", 4U) == 0 ||
+                memcmp(template_text + begin, "addq", 4U) == 0 ||
+                memcmp(template_text + begin, "adcq", 4U) == 0 ||
+                memcmp(template_text + begin, "subq", 4U) == 0 ||
+                memcmp(template_text + begin, "sbbq", 4U) == 0))))
             return false;
         ++lines;
-        while (i < src->template_length && src->template_text[i] != '\n') {
-            if (src->template_text[i] == '%') {
-                if (i + 1U >= src->template_length ||
-                    src->template_text[i+1U] < '0' ||
-                    (size_t)(src->template_text[i+1U]-'0') >= outputs)
+        while (i < template_length && template_text[i] != '\n') {
+            if (template_text[i] == '%') {
+                if (i + 1U >= template_length ||
+                    template_text[i+1U] < '0' ||
+                    (size_t)(template_text[i+1U]-'0') >= outputs)
                     return false;
                 ++refs;
                 i += 2U;
@@ -102,7 +106,7 @@ static bool qualified(const MinicC0Program *program,
                  clobber_is(&src->register_clobbers[1], "dx")) ||
                 (clobber_is(&src->register_clobbers[0], "dx") &&
                  clobber_is(&src->register_clobbers[1], "cc"))) &&
-               mulacc_text(src)) {
+               minic_x86_64_asm_mulacc_template(src->template_text, src->template_length)) {
         *is_mulacc = true;
         n = 3U;
         for (i = 0U; i < n; ++i)
@@ -116,7 +120,7 @@ static bool qualified(const MinicC0Program *program,
                ((src->output_count == 4U && src->input_count == 3U) ||
                 (src->output_count == 3U && src->input_count == 2U) ||
                 (src->output_count == 1U && src->input_count == 1U)) &&
-               matched_register_template(src, src->output_count)) {
+               minic_x86_64_asm_matched_template(src->template_text, src->template_length, src->output_count)) {
         *is_mulacc = false;
         generic = true;
         n = src->output_count;
@@ -151,69 +155,20 @@ static bool qualified(const MinicC0Program *program,
     return true;
 }
 
-MinicCoreLowerStatus core_asm_try_x86_register_contract(
-    MinicCoreLowerContext *ctx, const MinicStatement *statement,
-    const MinicInlineAsm *source, bool *handled) {
-    MinicCoreInstruction ins;
-    MinicCoreInlineAsmId id;
-    char *normalized = NULL;
-    size_t length, i;
-    bool mulacc;
-    if (!handled) return MINIC_CORE_LOWER_ERROR;
-    *handled = false;
-    if (!ctx || !ctx->target ||
-        ctx->target->architecture != MINIC_TARGET_ARCH_X86_64 ||
-        !ctx->body || !ctx->body->program || !ctx->function ||
-        !statement || !qualified(ctx->body->program, source, &mulacc))
-        return MINIC_CORE_LOWER_OK;
-    *handled = true;
-    if (!core_inline_asm_numeric_template(source, &normalized, &length))
-        return MINIC_CORE_LOWER_ERROR;
-    memset(&ins, 0, sizeof(ins));
-    ins.kind = MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM;
-    ins.span = statement->span;
-    ins.type = minic_type_void();
-    ins.result = MINIC_CORE_VALUE_INVALID;
-    ins.value.structured_inline_asm.operand_count =
-        source->output_count + source->input_count;
-    for (i = 0U; i < ins.value.structured_inline_asm.operand_count; ++i) {
-        const bool output = i < source->output_count;
-        const MinicInlineAsmOperand *op = output ? &source->outputs[i]
-            : &source->inputs[i - source->output_count];
-        MinicCoreStructuredInlineAsmOperand *bind =
-            &ins.value.structured_inline_asm.operands[i];
-        MinicCoreLowerStatus status;
-        bind->operand_index = i;
-        bind->kind = output
+bool minic_x86_64_qualify_inline_asm(
+    const MinicC0Program *program, const MinicInlineAsm *source,
+    MinicTargetInlineAsmContract *contract) {
+    bool is_mulacc = false;
+    size_t i, count;
+    if (!contract || !qualified(program, source, &is_mulacc)) return false;
+    count = source->output_count + source->input_count;
+    if (count > MINIC_CORE_STRUCTURED_INLINE_ASM_OPERAND_LIMIT) return false;
+    contract->operand_count = count;
+    for (i = 0U; i < count; ++i)
+        contract->kinds[i] = i < source->output_count
             ? MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT
-            : (mulacc && i == 7U
+            : is_mulacc && i == 7U
                 ? MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT
-                : MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT);
-        status = (output || (mulacc && i == 7U))
-            ? lower_address(ctx, op->expression, &bind->value)
-            : lower_expression(ctx, op->expression, &bind->value);
-        if (status != MINIC_CORE_LOWER_OK) {
-            free(normalized);
-            return status;
-        }
-    }
-    /* The observable output makes even a GNU nonvolatile CPUID semantically
-     * effectful. Conservatively do not optimize or discard it. */
-    if (!minic_core_function_add_opaque_inline_asm(
-            ctx->function, normalized, length, true,
-            source->has_memory_clobber, &id)) {
-        free(normalized);
-        return MINIC_CORE_LOWER_ERROR;
-    }
-    free(normalized);
-    for (i = 0U; i < source->register_clobber_count; ++i) {
-        const MinicInlineAsmRegisterClobber *c = &source->register_clobbers[i];
-        if (!minic_core_function_add_inline_asm_register_clobber(
-                ctx->function, id, c->name, c->name_length))
-            return MINIC_CORE_LOWER_ERROR;
-    }
-    ins.value.structured_inline_asm.inline_asm_id = id;
-    return minic_core_function_append_effect_instruction(
-        ctx->function, ctx->block_id, &ins)
-        ? MINIC_CORE_LOWER_OK : MINIC_CORE_LOWER_ERROR;
+                : MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    return true;
 }

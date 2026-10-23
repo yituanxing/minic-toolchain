@@ -189,7 +189,7 @@ const MinicTargetInfo *minic_target_info_for_architecture(
             rv64_target.gnu_sizeof_function_is_one = true;
             rv64_target.variadic_scalar_read_kind = MINIC_VARIADIC_SCALAR_READ_LINEAR_SLOT;
             rv64_target.variadic_linear_slot_bytes = 8U;
-            rv64_target.variadic_pointer_assignment_compatible = true;
+            rv64_target.variadic_copy_kind = MINIC_VARIADIC_COPY_SCALAR_ASSIGNMENT;
             rv64_target.call_frame_return_address_level0 = true;
             rv64_target.call_frame_frame_address_level0 = true;
         }
@@ -206,7 +206,7 @@ const MinicTargetInfo *minic_target_info_for_architecture(
             x86_64_target.gnu_sizeof_function_is_one = true;
             x86_64_target.variadic_scalar_read_kind = MINIC_VARIADIC_SCALAR_READ_ABI_CURSOR;
             x86_64_target.variadic_linear_slot_bytes = 0U;
-            x86_64_target.variadic_pointer_assignment_compatible = false;
+            x86_64_target.variadic_copy_kind = MINIC_VARIADIC_COPY_ABI_STATE;
             /* Machine-level frame address and return address support awaits
              * the x86-64 backend.  Do not accept these builtins prematurely. */
         }
@@ -223,7 +223,7 @@ const MinicTargetInfo *minic_target_info_for_architecture(
             aarch64_target.gnu_sizeof_function_is_one = true;
             aarch64_target.variadic_scalar_read_kind = MINIC_VARIADIC_SCALAR_READ_ABI_CURSOR;
             aarch64_target.variadic_linear_slot_bytes = 0U;
-            aarch64_target.variadic_pointer_assignment_compatible = true;
+            aarch64_target.variadic_copy_kind = MINIC_VARIADIC_COPY_SCALAR_ASSIGNMENT;
         }
         return &aarch64_target;
     }
@@ -238,7 +238,7 @@ const MinicTargetInfo *minic_target_info_for_architecture(
             loongarch64_target.gnu_sizeof_function_is_one = true;
             loongarch64_target.variadic_scalar_read_kind = MINIC_VARIADIC_SCALAR_READ_LINEAR_SLOT;
             loongarch64_target.variadic_linear_slot_bytes = 8U;
-            loongarch64_target.variadic_pointer_assignment_compatible = true;
+            loongarch64_target.variadic_copy_kind = MINIC_VARIADIC_COPY_SCALAR_ASSIGNMENT;
         }
         return &loongarch64_target;
     }
@@ -596,4 +596,18 @@ bool minic_target_info_inline_asm_immediate_constraint_supported(const MinicTarg
     }
     /* RISC-V GCC constraint I is a signed 12-bit integer immediate. */
     return constraint_length == 1U && constraint[0] == 'I' && value >= -2048 && value <= 2047;
+}
+
+/* The ABI owns the state-cursor representation; Core never tests an ISA.
+ * Other structured cursor ABIs must explicitly implement their own policy. */
+bool minic_target_info_variadic_state_copy_type_supported(
+    const MinicTargetInfo *target, MinicType type) {
+    if (!target || target->variadic_copy_kind != MINIC_VARIADIC_COPY_ABI_STATE)
+        return false;
+    switch (target->architecture) {
+    case MINIC_TARGET_ARCH_X86_64:
+        return minic_type_is_x86_va_list_cursor(type);
+    default:
+        return false;
+    }
 }

@@ -74,4 +74,20 @@ for arch in aarch64 loongarch64; do
   fi
 done
 
+# New capabilities must extend the existing Backend/Target contract, not
+# introduce ISA switches into Core or duplicate GNU template qualification.
+for file in src/target/x86_64/asm_contract.c src/target/x86_64/asm_contract.h \
+            src/core/core_lower_asm_target.c; do exists "$file"; done
+has src/target/backend.c 'minic_x86_64_qualify_inline_asm'
+has src/core/core_lower_asm_target.c 'minic_backend_qualify_inline_asm('
+has src/target/x86_64/machine_asm.c 'minic_x86_64_asm_mulacc_template('
+has src/target/x86_64/machine_asm.c 'minic_x86_64_asm_matched_template('
+lacks src/core/core_lower_asm.c 'core_asm_try_x86_register_contract('
+lacks src/core/core_lower_varargs.c 'MINIC_TARGET_ARCH_X86_64'
+has src/core/core_lower_varargs.c 'MINIC_VARIADIC_COPY_ABI_STATE'
+has src/target/target_info.h 'MinicVariadicCopyKind'
+if [[ -e src/core/core_lower_asm_x86.c ]]; then
+  fail 'legacy x86-specific Core classifier must not return'
+fi
+
 printf 'MINIC_BACKEND_BOUNDARY_CHECK=PASS\n'
