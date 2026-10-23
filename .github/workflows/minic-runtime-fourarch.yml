@@ -10,6 +10,8 @@ on:
       - "third_party/gcc-riscv-14.2.0/**"
       - "src/target/riscv64/runtime_libcall.c"
       - "src/target/riscv64/scalar_emit.c"
+      - "src/target/riscv64/isa.c"
+      - "src/target/riscv64/fp_emit.c"
       - "src/frontend/parser_builtins.c"
       - "src/frontend/ast.h"
       - "src/frontend/ast_verifier.c"
