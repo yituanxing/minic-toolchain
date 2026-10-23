@@ -81,6 +81,13 @@ bool minic_riscv64_needs_arithmetic_libcall(const MinicRiscvIsa *isa,
         const MinicCoreInstruction *instruction = &function->instructions[i];
         if (minic_riscv64_softfloat_binary_symbol(isa, instruction->kind) != NULL)
             return true;
+        /* TI division and remainder always require compiler-rt, even on
+         * RV64IM where native DIV handles only XLEN operands. Their call
+         * must reserve the saved return-address slot in every strict ABI. */
+        if (minic_type_is_int128_integer(instruction->type) &&
+            (instruction->kind == MINIC_CORE_INSTRUCTION_INTEGER_DIVIDE ||
+             instruction->kind == MINIC_CORE_INSTRUCTION_INTEGER_REMAINDER))
+            return true;
         if (!minic_riscv64_uses_arithmetic_libcall(isa)) continue;
         switch (instruction->kind) {
         case MINIC_CORE_INSTRUCTION_INTEGER_MULTIPLY:
