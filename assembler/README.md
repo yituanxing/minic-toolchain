@@ -48,9 +48,10 @@ closed, rather than concealing unverified code bytes.
 This is deliberately an opt-in policy of the *assembler*, independent
 from MiniC's Core/ISA selector. The historical default and other -march
 spellings retain their prior general Linux assembly compatibility until
-they receive explicit ISA-mode qualification. Full `.riscv.attributes`
-emission is a separate ELF metadata concern; the immediate protection
-here is byte-level ISA legality and an LP64 soft-float e_flags guard.
+they receive explicit ISA-mode qualification. Explicit RV64I now emits `SHT_RISCV_ATTRIBUTES` with
+`Tag_RISCV_arch = rv64i2p1` in the exact ELF object, alongside the
+LP64 soft-float/no-RVC `e_flags` and byte-level ISA instruction gate.
+Legacy/default assembler input remains unchanged.
 A generic Linux ELF with arbitrary inline data in .text is **not**
 supported by the strict-I opt-in mode until such data is separately
 represented with a provable instruction/data distinction.

@@ -63,6 +63,11 @@ if ! readelf -h "$work/strict-i-positive.o" |
     exit 1
 fi
 test -s "$work/strict-i-positive.o"
+readelf -A "$work/strict-i-positive.o" | grep -q 'Tag_RISCV_arch: "rv64i2p1"' || {
+    echo 'MiniAS explicit RV64I is missing its ELF ISA attribute' >&2
+    readelf -A "$work/strict-i-positive.o" >&2
+    exit 1
+}
 
 for bad in mul div fadd.s fadd.d amoadd.w c.li csrrw fence.i sfence.vma pause; do
     case "$bad" in
