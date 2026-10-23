@@ -4776,7 +4776,10 @@ static bool strict_rv64i_word(uint32_t w) {
         return (f7 == 0U && (f3 == 0U || f3 == 1U || f3 == 5U)) ||
                (f7 == 32U && (f3 == 0U || f3 == 5U));
     case 0x0fU: /* FENCE only, no FENCE.I/Ztso */
-        return f3 == 0U && (w >> 28U) == 0U;
+        /* PAUSE is encoded as a reserved FENCE hint (Zihintpause);
+         * it is not an instruction of the explicit base-I profile. */
+        return f3 == 0U && (w >> 28U) == 0U &&
+               w != UINT32_C(0x0100000f);
     case 0x73U: /* ECALL, EBREAK only, no Zicsr or privileged ops */
         return w == UINT32_C(0x00000073) || w == UINT32_C(0x00100073);
     default:

@@ -86,7 +86,7 @@ for bad in mul div fadd.s fadd.d amoadd.w c.li csrrw fence.i sfence.vma pause; d
         exit 1
     fi
     test ! -e "$work/strict-i-bad.o"
-    grep -Eq 'rv64i-unsupported-machine-encoding|unsupported-instruction' \
+    grep -Eq 'rv64i-unsupported-machine-encoding|rv64i-unaligned-executable-section|unsupported-instruction' \
         "$work/strict-i-bad.err" || {
         echo "MiniAS strict-I expected rejection diagnostic not found: $work/strict-i-bad.err" >&2
         cat "$work/strict-i-bad.err" >&2

@@ -39,7 +39,7 @@ escape into a purported RV64I object. That was **not** a valid ISA contract.
 Now the explicit `minic-as -march=rv64i -mabi=lp64` path validates the
 machine words emitted into every executable section *after* pseudo expansion,
 alignment and fixup creation. Only RV64I base integer encodings (including
-ECALL/EBREAK/FENCE) are accepted. M/F/D/A/C, CSR, FENCE.I and unqualified
+ECALL/EBREAK/FENCE, but excluding the Zihintpause PAUSE hint) are accepted. M/F/D/A/C, CSR, FENCE.I and unqualified
 instructions fail with an encoding/section offset diagnostic and do not
 produce a successful .o. Raw .insn, data in executable sections, .org in
 executable sections, and ISA-altering/ignored .option directives fail
