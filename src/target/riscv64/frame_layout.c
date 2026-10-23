@@ -32,7 +32,7 @@ static bool align_up(size_t value, size_t alignment, size_t *result) {
 bool minic_riscv64_core_frame_initialize_prepared(
     const MinicC0Program *program, const MinicCoreFunction *function,
     MinicRiscv64CoreFrame *frame, MinicRiscv64FunctionAbiPlan *abi_plan,
-    bool crossblock_enabled) {
+    bool crossblock_enabled, bool force_save_return_address) {
     size_t object_index;
     size_t storage_size;
     size_t required_size;
@@ -160,7 +160,8 @@ bool minic_riscv64_core_frame_initialize_prepared(
         frame->value_slot_count = maximum_block_bytes / 8U;
         storage_size = frame->value_base_offset + maximum_block_bytes;
     }
-    frame->saves_return_address = facts.needs_saved_return_address;
+    frame->saves_return_address =
+        facts.needs_saved_return_address || force_save_return_address;
     frame->return_address_offset = 0U;
     if (frame->saves_return_address) {
         if (!align_up(storage_size, 8U, &frame->return_address_offset) ||
@@ -424,7 +425,7 @@ bool minic_riscv64_core_frame_initialize(
     const MinicC0Program *program, const MinicCoreFunction *function,
     MinicRiscv64CoreFrame *frame) {
     return minic_riscv64_core_frame_initialize_prepared(
-        program, function, frame, NULL, true);
+        program, function, frame, NULL, true, false);
 }
 
 void minic_riscv64_core_frame_destroy(MinicRiscv64CoreFrame *frame) {

@@ -27,11 +27,14 @@ for selection in "rv64i lp64 add" "rv64im lp64 mul" "rv64imafd lp64d float"; do
   test -s "$tmp/$march.s"
 done
 
-# RV64I lowers 64-bit multiply, signed/unsigned divide and remainder using
-# only base-I instructions; RV64IM still selects hardware M.
+# RV64I emits standard integer compiler-runtime libcalls, with NO arithmetic
+# algorithms maintained inside MiniC. RV64IM still selects native M.
 "$MINIC_CC" --target=riscv64-linux -march=rv64i -mabi=lp64 \
   -S "$tmp/mul.i" -o "$tmp/rv64i-fullarith.s"
 test -s "$tmp/rv64i-fullarith.s"
+for symbol in __muldi3 __divdi3 __moddi3; do
+  grep -q "call $symbol" "$tmp/rv64i-fullarith.s"
+done
 if grep -Eq '^[[:space:]]*(mul|mulh|div|divu|rem|remu)[[:space:]]' "$tmp/rv64i-fullarith.s"; then
   echo "RV64_ISA=FAIL rv64i arithmetic leaked M" >&2; exit 1
 fi
@@ -40,7 +43,7 @@ grep -Eq '^[[:space:]]*rem[[:space:]]' "$tmp/rv64im.s"
 "$MINIC_CC" --target=riscv64-linux -march=rv64i -mabi=lp64 \
     -S "$tmp/mulonly.i" -o "$tmp/rv64i-mul.s"
 test -s "$tmp/rv64i-mul.s"
-grep -q '1:' "$tmp/rv64i-mul.s"
+grep -q 'call __muldi3' "$tmp/rv64i-mul.s"
 if grep -Eq '^[[:space:]]*(mul|mulh|div|rem)[[:space:]]' "$tmp/rv64i-mul.s"; then
   echo 'RV64_ISA=FAIL RV64I software multiply leaked M' >&2; exit 1
 fi
@@ -92,7 +95,11 @@ struct Packed3 *evaluate(struct Packed3 *p, long n) { return p + n; }
 SRC
 "$MINIC_CC" --target=riscv64-linux -march=rv64i -mabi=lp64 \
   -S "$tmp/oddptr.i" -o "$tmp/oddptr-i.s"
-grep -q '1:' "$tmp/oddptr-i.s"
+grep -q 'call __muldi3' "$tmp/oddptr-i.s"
+# The pointer base must be RELOADED after the call, because t0 is
+# caller-clobbered, and the compiler must preserve the function entry ra.
+grep -Eq '[[:space:]]+sd ra,' "$tmp/oddptr-i.s"
+grep -Eq '[[:space:]]+ld ra,' "$tmp/oddptr-i.s"
 if grep -Eq '^[[:space:]]*mul[[:space:]]' "$tmp/oddptr-i.s"; then
   echo 'RV64_ISA=FAIL odd-size pointer scale emitted hardware M' >&2; exit 1
 fi
@@ -129,6 +136,14 @@ test ! -e "$tmp/invalid-record-fpabi.s"
 
 # The GNU assembler is an independent legality oracle for each exact profile.
 if command -v riscv64-linux-gnu-gcc >/dev/null 2>&1; then
+  # GCC libgcc 14.2.0 upstream RISC-V runtime sources, pinned unchanged
+  # in tests/third_party (GPL-3.0 with GCC Runtime Library Exception 3.1).
+  # These are TEST LINK PROVIDERS only, not MiniC-owned arithmetic code.
+  runtime_src=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../third_party/gcc-riscv-14.2.0" && pwd)
+  for kind in muldi3 div; do
+    riscv64-linux-gnu-gcc -march=rv64i -mabi=lp64 \
+      -I "$runtime_src" -c "$runtime_src/$kind.S" -o "$tmp/libgcc-$kind.o"
+  done
   for selection in "rv64i lp64 add" "rv64im lp64 mul" "rv64imafd lp64d float"; do
     read -r march mabi source <<<"$selection"
     riscv64-linux-gnu-gcc "-march=$march" "-mabi=$mabi" \
@@ -162,7 +177,8 @@ SRC
         if [[ "$compiler" == gnu ]]; then input="$tmp/gnu-$march.s"; fi
         riscv64-linux-gnu-gcc "-march=$march" "-mabi=$mabi" \
           -nostdlib -static -no-pie -Wl,-e,_start \
-          "$tmp/start.s" "$input" -o "$tmp/$compiler-$march.elf"
+          "$tmp/start.s" "$input" "$tmp/libgcc-muldi3.o" "$tmp/libgcc-div.o" \
+          -o "$tmp/$compiler-$march.elf"
         set +e
         qemu-riscv64 "$tmp/$compiler-$march.elf" \
           >"$tmp/$compiler-$march.out" 2>"$tmp/$compiler-$march.err"
@@ -193,7 +209,8 @@ _start:
 SRC
       riscv64-linux-gnu-gcc -march=rv64i -mabi=lp64 \
         -nostdlib -static -no-pie -Wl,-e,_start \
-        "$tmp/softstart.s" "$tmp/$source.s" -o "$tmp/software.elf"
+        "$tmp/softstart.s" "$tmp/$source.s" \
+          "$tmp/libgcc-muldi3.o" "$tmp/libgcc-div.o" -o "$tmp/software.elf"
       set +e
       qemu-riscv64 "$tmp/software.elf" >"$tmp/soft.out" 2>"$tmp/soft.err"
       rc=$?
@@ -217,7 +234,8 @@ _start:
 SRC
     riscv64-linux-gnu-gcc -march=rv64i -mabi=lp64 \
       -nostdlib -static -no-pie -Wl,-e,_start \
-      "$tmp/arithstart.s" "$tmp/rv64i-fullarith.s" -o "$tmp/rv64i-fullarith.elf"
+      "$tmp/arithstart.s" "$tmp/rv64i-fullarith.s" \
+      "$tmp/libgcc-muldi3.o" "$tmp/libgcc-div.o" -o "$tmp/rv64i-fullarith.elf"
     set +e
     qemu-riscv64 "$tmp/rv64i-fullarith.elf" >"$tmp/fullarith.out" 2>"$tmp/fullarith.err"
     rc=$?
@@ -257,7 +275,8 @@ SRC
         "srem -37 4 255" "srem -37 -4 255" "srem 37 -4 1" \
         "udiv -1 3 85" "urem -1 3 0" \
         "sdiv32 -37 4 247" "srem32 -37 4 255" \
-        "udiv32 -1 3 85" "urem32 -1 3 0"; do
+        "udiv32 -1 3 85" "urem32 -1 3 0" \
+        "udiv32 -1 7 36" "urem32 -1 7 3"; do
       read -r variant left right expected <<<"$sample"
       cat >"$tmp/divstart.s" <<SRC
 .section .text
@@ -274,7 +293,8 @@ SRC
         source="$tmp/$compiler-$variant-$march.s"
         riscv64-linux-gnu-gcc "-march=$march" -mabi=lp64 \
           -nostdlib -static -no-pie -Wl,-e,_start \
-          "$tmp/divstart.s" "$source" -o "$tmp/$profile.elf"
+          "$tmp/divstart.s" "$source" \
+          "$tmp/libgcc-muldi3.o" "$tmp/libgcc-div.o" -o "$tmp/$profile.elf"
         set +e
         qemu-riscv64 "$tmp/$profile.elf" >"$tmp/$profile.out" 2>"$tmp/$profile.err"
         rc=$?
@@ -286,8 +306,8 @@ SRC
         fi
       done
     done
-    echo 'RV64_DIVREM_QEMU=PASS cases=12 profiles=3 signed_unsigned_32_64=1 gcc_oracle=1'
+    echo 'RV64_DIVREM_QEMU=PASS cases=14 profiles=3 signed_unsigned_32_64=1 gcc_oracle=1 upstream_libgcc=1'
     echo 'RV64_ISA_QEMU=PASS profiles=rv64i,rv64im gnu_minic_exit_exact=1'
   fi
 fi
-echo 'RV64_ISA_PROFILES=PASS rv64i_lp64=1 rv64im_lp64=1 rv64imafd_lp64d=1 software_mul=1 software_divrem=1 pointer_scale=1 rejected_isa_abi=1 default_byte_exact=1'
+echo 'RV64_ISA_PROFILES=PASS rv64i_lp64=1 rv64im_lp64=1 rv64imafd_lp64d=1 runtime_libcalls=5 pointer_scale=1 rejected_isa_abi=1 default_byte_exact=1'

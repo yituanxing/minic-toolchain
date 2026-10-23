@@ -57,7 +57,7 @@ bool minic_riscv64_core_frame_initialize(
  * locations to the frame; the input plan becomes empty on success. */
 bool minic_riscv64_core_frame_initialize_prepared(
     const MinicC0Program *, const MinicCoreFunction *,
-    MinicRiscv64CoreFrame *, MinicRiscv64FunctionAbiPlan *, bool);
+    MinicRiscv64CoreFrame *, MinicRiscv64FunctionAbiPlan *, bool, bool);
 void minic_riscv64_core_frame_destroy(MinicRiscv64CoreFrame *);
 bool minic_riscv64_core_frame_parameter_location(
     const MinicRiscv64CoreFrame *, size_t, MinicRiscv64AbiArgumentLocation *);

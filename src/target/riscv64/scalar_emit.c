@@ -5,8 +5,7 @@
 #include "target/riscv64/legalize.h"
 #include "target/common/direct_instruction_semantics.h"
 #include "target/riscv64/frame_access.h"
-#include "target/riscv64/multiply_emit.h"
-#include "target/riscv64/divide_emit.h"
+#include "target/riscv64/runtime_libcall.h"
 #include <inttypes.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -79,7 +78,8 @@ bool minic_riscv64_emit_scalar_instruction(
         }
         if (!minic_riscv64_frame_load_value(file, frame, instruction->value.binary.left, "t0") ||
             !minic_riscv64_frame_load_value(file, frame, instruction->value.binary.right, "t1") ||
-            !minic_riscv64_emit_multiply64(file, isa, "t0", "t0", "t1", "t2", "t3") ||
+            !minic_riscv64_emit_arithmetic_libcall(
+                file, isa, MINIC_RISCV64_LIBCALL_MUL, "t0", "t0", "t1") ||
             !minic_riscv64_emit_integer_conversion_for_program(
                 file, program, instruction->type, "t0")) {
             return false;
@@ -94,9 +94,22 @@ bool minic_riscv64_emit_scalar_instruction(
         }
         if (!minic_riscv64_frame_load_value(file, frame, instruction->value.binary.left, "t0") ||
             !minic_riscv64_frame_load_value(file, frame, instruction->value.binary.right, "t1") ||
-            !minic_riscv64_emit_divrem64(
-                file, isa, minic_type_is_unsigned_integer(effective_type),
-                instruction->kind == MINIC_CORE_INSTRUCTION_INTEGER_REMAINDER) ||
+            /* LP64 libcalls consume full XLEN inputs. Canonicalize 32-bit
+             * signed/unsigned operands before entering libgcc/compiler-rt.
+             * Leave the historical M hardware path byte-for-byte intact. */
+            (minic_riscv64_uses_arithmetic_libcall(isa) &&
+             (!minic_riscv64_emit_integer_conversion_for_program(
+                  file, program, effective_type, "t0") ||
+              !minic_riscv64_emit_integer_conversion_for_program(
+                  file, program, effective_type, "t1"))) ||
+            !minic_riscv64_emit_arithmetic_libcall(
+                file, isa,
+                instruction->kind == MINIC_CORE_INSTRUCTION_INTEGER_REMAINDER
+                  ? (minic_type_is_unsigned_integer(effective_type)
+                       ? MINIC_RISCV64_LIBCALL_UMOD : MINIC_RISCV64_LIBCALL_SMOD)
+                  : (minic_type_is_unsigned_integer(effective_type)
+                       ? MINIC_RISCV64_LIBCALL_UDIV : MINIC_RISCV64_LIBCALL_SDIV),
+                "t0", "t0", "t1") ||
             !minic_riscv64_emit_integer_conversion_for_program(
                 file, program, instruction->type, "t0")) {
             return false;

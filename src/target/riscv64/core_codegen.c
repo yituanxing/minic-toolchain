@@ -15,7 +15,7 @@
 #include "target/riscv64/spill_layout.h"
 #include "target/riscv64/object_liveness.h"
 #include "target/riscv64/legalize.h"
-#include "target/riscv64/multiply_emit.h"
+#include "target/riscv64/runtime_libcall.h"
 #include "core/value_uses.h"
 #include "target/data_layout.h"
 
@@ -111,8 +111,8 @@ static bool emit_instruction(FILE *file,
                                 minic_riscv64_log2_power_of_two(size)) < 0)
                         return false;
                 } else if (fprintf(file, "  li t2, %zu\n", size) < 0 ||
-                           !minic_riscv64_emit_multiply64(
-                               file, isa, "t1", "t1", "t2", "t5", "t3")) {
+                           !minic_riscv64_emit_arithmetic_libcall(
+                               file, isa, MINIC_RISCV64_LIBCALL_MUL, "t1", "t1", "t2")) {
                     return false;
                 }
             } else if (fprintf(file,
@@ -121,6 +121,14 @@ static bool emit_instruction(FILE *file,
                 return false;
             }
         }
+        /* A library call clobbers t0: reload the original base from its
+         * frame-owned Core value before the final pointer add/subtract. */
+        if (minic_riscv64_uses_arithmetic_libcall(isa) &&
+            instruction->value.pointer_offset.element_size != 1U &&
+            !minic_riscv64_power_of_two(instruction->value.pointer_offset.element_size) &&
+            !minic_riscv64_frame_load_value(
+                file, frame, instruction->value.pointer_offset.base, "t0"))
+            return false;
         /* M75_POINTER_COMPOUND_ASSIGNMENT_VALUE: retain subtraction through
            the Core boundary so an unsigned index is scaled before `sub`. */
         if (fprintf(file,
@@ -518,7 +526,8 @@ static bool emit_core_function_with_symbol(FILE *file,
         if (!minic_riscv64_asm_function_plan_build(function, &frame.asm_plan) ||
             !minic_riscv64_core_frame_initialize_prepared(
                 program, function, &frame,
-                program != NULL ? &abi_plan : NULL, crossblock_enabled)) {
+                program != NULL ? &abi_plan : NULL, crossblock_enabled,
+                minic_riscv64_needs_arithmetic_libcall(isa, function))) {
             minic_riscv64_function_abi_plan_destroy(&abi_plan);
             return core_frame_fail(&frame);
         }
