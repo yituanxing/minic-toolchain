@@ -15,6 +15,7 @@ on:
       - "src/frontend/ast_verifier.c"
       - "src/core/core_lower_expr_scalar.c"
       - "tests/compiler/c0/probe-runtime-isnan.sh"
+      - "tests/compiler/c0/probe-rv64i-int128-pairs-qemu.sh"
       - "tests/compiler/c0/probe-runtime-typed-overflow.sh"
       - ".github/workflows/minic-runtime-fourarch.yml"
       - "Makefile"
@@ -45,7 +46,7 @@ jobs:
             clang llvm
           if [[ "${{ matrix.target }}" == riscv64 ]]; then
             sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
-              gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu
+              gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu qemu-user
           fi
       - name: Check manifest and build MiniC exactly once per shard
         shell: bash
@@ -80,6 +81,14 @@ jobs:
         run: |
           bash tests/compiler/c0/probe-runtime-typed-overflow.sh
           bash tests/compiler/c0/probe-runtime-isnan.sh
+      - name: QEMU differential verify 16 RV64I i128 ABI operations
+        if: always() && matrix.target == 'riscv64'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          bash tests/compiler/c0/probe-rv64i-int128-pairs-qemu.sh \
+            "$GITHUB_WORKSPACE/build/runtime-ci/bin/minic-cc" \
+            "$GITHUB_WORKSPACE/build/runtime-verdict/reference/riscv64/libminic-rt.a"
       - name: Save both target and reference reports, object diagnostics and .s
         if: always()
         uses: actions/upload-artifact@v4
