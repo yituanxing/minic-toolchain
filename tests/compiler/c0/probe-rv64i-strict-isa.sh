@@ -158,6 +158,16 @@ if command -v riscv64-linux-gnu-gcc >/dev/null 2>&1; then
       -c "$tmp/$testasm.s" -o "$tmp/$testasm.o"
     test -s "$tmp/$testasm.o"
   done
+  # The .s file has GNU assembler pseudos (li/mv/call/ret); only the
+  # assembled instructions are the ISA contract. Decode REAL machine words
+  # and ELF ISA/ABI attributes in addition to our pre-assembly text audit.
+  command -v python3 >/dev/null
+  command -v riscv64-linux-gnu-objdump >/dev/null
+  command -v riscv64-linux-gnu-readelf >/dev/null
+  machine_audit="$repo_root/tests/compiler/c0/audit-rv64i-machine.py"
+  python3 "$machine_audit" --selftest
+  python3 "$machine_audit" "$tmp/rv64i.o" "$tmp/rv64i-mul.o" \
+    "$tmp/rv64i-fullarith.o" "$tmp/longptr-i.o" "$tmp/oddptr-i.o"
   echo 'RV64_ISA_GNU_AS=PASS profiles=3 rv64i_mul_div_rem=1 pointer_scales=2'
   if command -v qemu-riscv64 >/dev/null 2>&1; then
     cat >"$tmp/start.s" <<'SRC'
@@ -390,6 +400,10 @@ SRC
       exit 1
     fi
     echo 'RV64_CHECKED_MUL_QEMU=PASS cases=12 signed_unsigned_32_64=1 overflow_min_neg1=1'
+    # The final ELF includes our upstream libgcc archive. Validate the
+    # linked byte encodings too, not merely our .s or .o files.
+    python3 "$machine_audit" "$tmp/checkedmul.elf" \
+      "$tmp/rv64i-fullarith.elf" "$tmp/minic-rv64i.elf"
     # End-to-end staged MiniC driver: ISA/ABI flags must reach the C
     # frontend and assembler, and a caller-supplied runtime archive must
     # be honored by MiniLD after its referencing objects.

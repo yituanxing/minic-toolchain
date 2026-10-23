@@ -73,6 +73,28 @@ The `minic-cc` entrypoint currently consumes already preprocessed `.i`
 source; the producer of those inputs must use a matching ISA/ABI macro
 context. This work does not alter MiniPP, MiniAS or MiniLD.
 
+## Assembly pseudos versus real machine instructions
+
+The strict ISA promise concerns the 32-bit encoded instructions in linked
+ELF, **not** the spelling of the intermediate GNU assembly source. For
+example, `li a0, 9`, `mv a0, a1`, `ret` and `call __muldi3` are assembler
+pseudo-instructions that expand to base-I ADDI/JALR/AUIPC/JALR machine
+instructions. Large `li` constants may expand to several base-I instructions,
+and call/address pseudos permit correct relocation/relaxation at link time.
+Removing these pseudos from MiniC's `.s` output is not needed to target
+RV64I; duplicating GNU AS relocation logic in the backend would increase
+maintenance burden.
+
+Our compiler's `-march=rv64i -mabi=lp64` output is already audited for
+allowed opcode families before assembling. The focused acceptance now also
+runs `audit-rv64i-machine.py` on actual GNU-assembled objects and linked
+freestanding ELF (including our pinned libgcc runtime). The independent
+post-assembly gate checks the ELF ISA attribute, soft-float/no-RVC flags,
+and each disassembled 32-bit encoding against the base-I machine format. It
+rejects M/A/F/D/C, CSR, FENCE.I, reserved and unknown encodings.
+This gate is for code-only acceptance fixtures, not arbitrary ELF files with
+data bytes embedded in executable sections.
+
 ## Verification and next work
 
 The native backend gate checks strict compilation, feature admission,
