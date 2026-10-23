@@ -120,7 +120,8 @@ bool minic_loongarch64_emit_terminator(FILE *out,
     bool dynamic_frame) {
         switch (block->terminator.kind) {
         case MINIC_CORE_TERMINATOR_RETURN:
-            if (minic_type_is_long_double(fn->return_type)) {
+            if (minic_type_is_long_double(fn->return_type) ||
+                minic_type_is_int128_integer(fn->return_type)) {
                 size_t src;
                 if (!minic_lp64_frame_plan_wide_slot(frame_plan, block->terminator.return_value, &src) ||
                     !emit_sp_mem(out, "ld.d", "$a0", src) ||
@@ -129,6 +130,7 @@ bool minic_loongarch64_emit_terminator(FILE *out,
             }
             if ((!minic_type_is_void(fn->return_type) &&
                  !minic_type_is_long_double(fn->return_type) &&
+                 !minic_type_is_int128_integer(fn->return_type) &&
                  !((minic_type_is_double(fn->return_type) ||
                   minic_type_is_float(fn->return_type))
                        ? emit_sp_mem(out,

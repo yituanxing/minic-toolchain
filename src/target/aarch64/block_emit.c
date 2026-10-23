@@ -118,6 +118,15 @@ bool minic_aarch64_emit_terminator(FILE *out,
     bool dynamic_frame) {
         switch (block->terminator.kind) {
         case MINIC_CORE_TERMINATOR_RETURN:
+            if (minic_type_is_int128_integer(fn->return_type)) {
+                size_t src;
+                if (!minic_lp64_frame_plan_wide_slot(
+                        frame_plan, block->terminator.return_value, &src) ||
+                    fprintf(out, "  ldr x0, [sp, #%zu]\n"
+                                 "  ldr x1, [sp, #%zu]\n",
+                            src, src + 8U) < 0)
+                    return false;
+            }
             if (minic_type_is_long_double(fn->return_type)) {
                 size_t src;
                 if (!minic_lp64_frame_plan_wide_slot(frame_plan, block->terminator.return_value, &src) ||
@@ -126,6 +135,7 @@ bool minic_aarch64_emit_terminator(FILE *out,
             }
             if ((!minic_type_is_void(fn->return_type) &&
                  !minic_type_is_long_double(fn->return_type) &&
+                 !minic_type_is_int128_integer(fn->return_type) &&
                  fprintf(out, minic_type_is_double(fn->return_type)
                                   ? "  ldr d0, [sp, #%zu]\n"
                                   : minic_type_is_float(fn->return_type)

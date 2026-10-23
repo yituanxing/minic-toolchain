@@ -66,6 +66,40 @@ static bool minic_lp64_plan_types(
                 gp = abi == MINIC_LP64_ABI_AAPCS64 && used == 0U
                     ? 8U : gp + used;
             }
+        } else if (minic_type_is_int128_integer(type)) {
+            /* TI is an integral 16-byte scalar, not a single GP word.
+             * AAPCS64 C.10/C.11 mandates even GPR pairs and whole aligned
+             * stack spills; LoongArch LP64D can split the final GPR pair. */
+            loc->kind = MINIC_LP64_ARGUMENT_WIDE;
+            loc->size_bytes = 16U;
+            loc->chunks = 2U;
+            if (abi == MINIC_LP64_ABI_AAPCS64) {
+                gp = (gp + 1U) & ~(size_t)1U;
+                if (gp <= 6U) {
+                    loc->gp_first = gp;
+                    loc->gp_registers = 2U;
+                    gp += 2U;
+                } else {
+                    gp = 8U;
+                    stack += stack & 1U;
+                    loc->stack_first = stack;
+                    loc->stack_slots = 2U;
+                    stack += 2U;
+                }
+            } else {
+                const size_t available = gp < 8U ? 8U - gp : 0U;
+                const size_t used = available < 2U ? available : 2U;
+                if (used != 0U) {
+                    loc->gp_first = gp;
+                    loc->gp_registers = used;
+                } else stack += stack & 1U;
+                if (used < 2U) {
+                    loc->stack_first = stack;
+                    loc->stack_slots = 2U - used;
+                    stack += 2U - used;
+                }
+                gp += used;
+            }
         } else if (minic_type_is_long_double(type)) {
             loc->kind = MINIC_LP64_ARGUMENT_WIDE;
             if (abi == MINIC_LP64_ABI_AAPCS64) {

@@ -55,6 +55,7 @@ bool minic_lp64_valid_parameter_type(const MinicC0Program *program,
     bool sign;
     return minic_type_is_pointer(type) || minic_type_is_double(type) ||
            minic_type_is_float(type) || minic_type_is_long_double(type) ||
+           minic_type_is_int128_integer(type) ||
            minic_lp64_scalar_integer_width(program, target, type, &width, &sign);
 }
 

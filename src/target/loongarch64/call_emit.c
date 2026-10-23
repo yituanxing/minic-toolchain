@@ -133,7 +133,8 @@ bool minic_loongarch64_emit_abi_instruction(
                 const MinicType type = fn->values[arg->value.value_id].type;
                 const size_t slot = (size_t)arg->value.value_id * 8U +
                     (dynamic_frame ? 0U : stack_bytes);
-                if (minic_type_is_long_double(type)) {
+                if (minic_type_is_long_double(type) ||
+                    minic_type_is_int128_integer(type)) {
                     size_t src, chunk;
                     const size_t used = location->gp_registers;
                     if (!minic_lp64_frame_plan_wide_slot(frame_plan, arg->value.value_id, &src))
@@ -211,7 +212,8 @@ bool minic_loongarch64_emit_abi_instruction(
                 }
                 return true;
             }
-            if (minic_type_is_long_double(ins->type)) {
+            if (minic_type_is_long_double(ins->type) ||
+                minic_type_is_int128_integer(ins->type)) {
                 size_t dst;
                 if (!minic_lp64_frame_plan_wide_slot(frame_plan, ins->result, &dst) ||
                     !emit_sp_mem(out, "st.d", "$a0", dst) ||
@@ -245,7 +247,8 @@ bool minic_loongarch64_emit_abi_instruction(
             if (!minic_multi_direct_scalar_parameter_location(
                     fn, ins, incoming_plan, &location))
                 return false;
-            if (minic_type_is_long_double(ins->type)) {
+            if (minic_type_is_long_double(ins->type) ||
+                minic_type_is_int128_integer(ins->type)) {
                 size_t dst, chunk;
                 const size_t used = location->gp_registers;
                 if (!minic_lp64_frame_plan_wide_slot(frame_plan, ins->result, &dst))

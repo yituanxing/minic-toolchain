@@ -121,7 +121,29 @@ bool minic_aarch64_emit_abi_instruction(
                 }
                 const MinicType type = fn->values[arg->value.value_id].type;
                 const size_t slot = (size_t)arg->value.value_id * 8U + stack_bytes;
-                if (minic_type_is_long_double(type)) {
+                if (minic_type_is_int128_integer(type)) {
+                    size_t src, limb;
+                    if (location->kind != MINIC_LP64_ARGUMENT_WIDE ||
+                        !minic_lp64_frame_plan_wide_slot(frame_plan,
+                            arg->value.value_id, &src))
+                        return false;
+                    src += stack_bytes;
+                    for (limb = 0U; limb < 2U; ++limb) {
+                        if (location->gp_registers == 2U) {
+                            if (fprintf(out, "  ldr x%zu, [sp, #%zu]\n",
+                                    location->gp_first + limb,
+                                    src + limb * 8U) < 0)
+                                return false;
+                        } else if (location->gp_registers == 0U &&
+                                   fprintf(out, "  ldr x9, [sp, #%zu]\n"
+                                                "  str x9, [sp, #%zu]\n",
+                                           src + limb * 8U,
+                                           (location->stack_first + limb) * 8U) < 0)
+                            return false;
+                        else if (location->gp_registers != 0U)
+                            return false;
+                    }
+                } else if (minic_type_is_long_double(type)) {
                     size_t src;
                     if (!minic_lp64_frame_plan_wide_slot(frame_plan, arg->value.value_id, &src))
                         return false;
@@ -201,6 +223,15 @@ bool minic_aarch64_emit_abi_instruction(
                 }
                 return true;
             }
+            if (minic_type_is_int128_integer(ins->type)) {
+                size_t dst;
+                if (!minic_lp64_frame_plan_wide_slot(frame_plan, ins->result, &dst) ||
+                    fprintf(out, "  str x0, [sp, #%zu]\n"
+                                 "  str x1, [sp, #%zu]\n",
+                            dst, dst + 8U) < 0)
+                    return false;
+                return true;
+            }
             if (minic_type_is_long_double(ins->type)) {
                 size_t dst;
                 if (!minic_lp64_frame_plan_wide_slot(frame_plan, ins->result, &dst) ||
@@ -232,6 +263,27 @@ bool minic_aarch64_emit_abi_instruction(
             if (!minic_multi_direct_scalar_parameter_location(
                     fn, ins, incoming_plan, &location))
                 return false;
+            if (minic_type_is_int128_integer(ins->type)) {
+                size_t dst, limb;
+                if (location->kind != MINIC_LP64_ARGUMENT_WIDE ||
+                    !minic_lp64_frame_plan_wide_slot(frame_plan, ins->result, &dst))
+                    return false;
+                for (limb = 0U; limb < 2U; ++limb) {
+                    if (location->gp_registers == 2U) {
+                        if (fprintf(out, "  str x%zu, [sp, #%zu]\n",
+                                    location->gp_first + limb, dst + limb * 8U) < 0)
+                            return false;
+                    } else if (location->gp_registers == 0U &&
+                               fprintf(out, "  ldr x9, [sp, #%zu]\n"
+                                            "  str x9, [sp, #%zu]\n",
+                                       frame + (location->stack_first + limb) * 8U,
+                                       dst + limb * 8U) < 0)
+                        return false;
+                    else if (location->gp_registers != 0U)
+                        return false;
+                }
+                return true;
+            }
             if (minic_type_is_long_double(ins->type)) {
                 size_t dst;
                 if (!minic_lp64_frame_plan_wide_slot(frame_plan, ins->result, &dst))
