@@ -84,7 +84,16 @@ bool minic_riscv64_needs_arithmetic_libcall(const MinicRiscvIsa *isa,
         if (!minic_riscv64_uses_arithmetic_libcall(isa)) continue;
         switch (instruction->kind) {
         case MINIC_CORE_INSTRUCTION_INTEGER_MULTIPLY:
-            if (!minic_type_is_int128_integer(instruction->type)) return true;
+            /* __multi3 is the 128-bit RV64 LP64 runtime entry point. */
+            return true;
+        case MINIC_CORE_INSTRUCTION_INTEGER_LESS:
+        case MINIC_CORE_INSTRUCTION_SCALAR_EQUAL:
+            /* Soft-only two-limb integer comparisons use __cmpti2 or
+             * __ucmpti2; plain scalar comparisons do not need a call. */
+            if (instruction->value.binary.left < function->value_count &&
+                minic_type_is_int128_integer(
+                    function->values[instruction->value.binary.left].type))
+                return true;
             break;
         case MINIC_CORE_INSTRUCTION_INTEGER_OVERFLOW:
             if (instruction->value.integer_overflow.operator_kind ==
