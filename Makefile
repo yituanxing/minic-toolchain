@@ -1151,9 +1151,9 @@ check-x86_64-busybox-all-eligible: $(MINIC_CC_BINARY)
 	else \
 	   cat "$$log"; exit 1; \
 	fi; \
-	grep -Fx 'BUSYBOX_MIXED_BULK=PASS MiniC_owners=593 GCC_fallback=0 original_full_Kbuild=1 eleven_fixture_byte_exact=1 MiniC_and_GNU_binary_differ=1 full_all_MiniC=NO' "$log"; \
-	grep -Fx 'BUSYBOX_MIXED_BULK_ALL_C_OWNERS=PASS original_Kbuild_owners=593 MiniC_owners=593 GNU_C_fallbacks=0 SHA256_verified=593 link_toolchain=GNU' "$log"; \
-	grep -Fx 'BUSYBOX_ALLYES_FRONTIER=DISCOVERY enabled_symbols=957 attempted_C_TUs=594 mini_objects=594 cpp_fail=0 minic_fail=0 asm_fail=0 gcc_fail=0 gcc_full_build=PASS full_MiniC_busybox=NOT_TESTED' "$log"
+	grep -Fx 'BUSYBOX_MIXED_BULK=PASS MiniC_owners=593 GCC_fallback=0 original_full_Kbuild=1 eleven_fixture_byte_exact=1 MiniC_and_GNU_binary_differ=1 full_all_MiniC=NO' "$$log"; \
+	grep -Fx 'BUSYBOX_MIXED_BULK_ALL_C_OWNERS=PASS original_Kbuild_owners=593 MiniC_owners=593 GNU_C_fallbacks=0 SHA256_verified=593 link_toolchain=GNU' "$$log"; \
+	grep -Fx 'BUSYBOX_ALLYES_FRONTIER=DISCOVERY enabled_symbols=957 attempted_C_TUs=594 mini_objects=594 cpp_fail=0 minic_fail=0 asm_fail=0 gcc_fail=0 gcc_full_build=PASS full_MiniC_busybox=NOT_TESTED' "$$log"
 
 check-x86_64-busybox-complex-five: $(MINIC_CC_BINARY)
 	@set -eu; \
