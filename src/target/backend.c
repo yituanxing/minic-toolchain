@@ -2,6 +2,7 @@
 
 #include "target/riscv64/codegen.h"
 #include "target/riscv64/layout.h"
+#include "target/riscv64/rv32_emit.h"
 #include "target/x86_64/codegen.h"
 #include "target/x86_64/asm_contract.h"
 #include "target/aarch64/codegen.h"
@@ -35,6 +36,9 @@ static bool emit_riscv64(const char *output_path, const MinicC0Program *program,
 static const MinicBackend riscv64_backend = {
     MINIC_TARGET_ARCH_RISCV64, "riscv64", prepare_riscv64, emit_riscv64, NULL
 };
+static const MinicBackend riscv32_backend = {
+    MINIC_TARGET_ARCH_RISCV32, "riscv32", NULL, minic_riscv32_write_core_program, NULL
+};
 static const MinicBackend x86_64_backend = {
     MINIC_TARGET_ARCH_X86_64, "x86_64", NULL,
     minic_x86_64_write_c0_program_with_core_functions,
@@ -53,10 +57,7 @@ const MinicBackend *minic_backend_for_target(const MinicTargetInfo *target) {
     if (target == NULL) return NULL;
     switch (target->architecture) {
     case MINIC_TARGET_ARCH_RISCV64: return &riscv64_backend;
-    case MINIC_TARGET_ARCH_RISCV32:
-        /* No RV64 assembly emitter can represent a 32-bit ILP32 target.
-         * The shared RISC-V backend is extended in place, not duplicated. */
-        return NULL;
+    case MINIC_TARGET_ARCH_RISCV32: return &riscv32_backend;
     case MINIC_TARGET_ARCH_X86_64: return &x86_64_backend;
     case MINIC_TARGET_ARCH_AARCH64: return &aarch64_backend;
     case MINIC_TARGET_ARCH_LOONGARCH64: return &loongarch64_backend;

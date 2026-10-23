@@ -121,15 +121,6 @@ int main(int argc, char **argv) {
             return 2;
         }
     }
-    if (selected_target.architecture == MINIC_TARGET_ARCH_RISCV32) {
-        /* TargetInfo is real and usable by Sema, but RV64 emission contains
-         * LD/SD, OP-32 and 8-byte frame assumptions. Reject instead of
-         * producing plausible-looking, silently invalid ELF32 code. */
-        (void)fprintf(stderr,
-                      "%s: RV32I ILP32 target model is registered; "
-                      "machine/ABI lowering is not yet qualified\n", argv[0]);
-        return 2;
-    }
     result = minic_compile_preprocessed_file_for_target(
         input_path, output_path, &selected_target, function_sections, &diagnostic);
     if (result != 0) {
