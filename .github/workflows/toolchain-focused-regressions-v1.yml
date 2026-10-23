@@ -86,6 +86,8 @@ jobs:
               four_only=true
               # Scoped RV64 BusyBox harness/CI fixes must not rerun both
               # accepted AArch64/LoongArch64 full BusyBox matrices or MiniLD.
+              # mixed_bulk_kbuild.py is included here ONLY for this
+              # diagnostic-only edit. Shared linkage logic requires all-owner CI.
               # Require at least one actual RV64 harness/apt file change;
               # workflow-only or shared implementation changes remain ALL.
               rv_busybox_only=true
@@ -93,7 +95,7 @@ jobs:
               [[ -s "$paths" ]] || { four_only=false; rv_busybox_only=false; }
               while IFS= read -r changed; do
                 case "$changed" in
-                  tests/external/busybox/probe-rv64-all-kbuild.sh|tests/external/busybox/check-pinned-1361-source.sh|tools/ci/focused-rv64-apt-cache-v1.sh)
+                  tests/external/busybox/probe-rv64-all-kbuild.sh|tests/external/busybox/check-pinned-1361-source.sh|tools/ci/focused-rv64-apt-cache-v1.sh|tests/external/busybox/mixed_bulk_kbuild.py)
                     rv_busybox_changes=$((rv_busybox_changes + 1)) ;;
                   .github/workflows/toolchain-focused-regressions-v1.yml)
                     ;;  # accompanying reviewed CI edit

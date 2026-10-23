@@ -243,6 +243,33 @@ def main():
         logs = (report / "bulk.make.err").read_text(errors="replace")
         log("BUSYBOX_MIXED_BULK=BLOCKED stage=original-Kbuild-link exit=%d "
             "last_stderr=%r" % (rc, logs[-4000:]))
+        # BusyBox diverts the full ld output to busybox_unstripped.out.
+        # Printing just make's final stderr previously hid the actual link
+        # error under 100s of compiler warnings. Surface the FIRST errors
+        # and both ends of that canonical linker diagnostic on CI.
+        import re
+        pattern = re.compile(
+            r"undefined reference|collect2:|(^|[: ])(?:fatal )?error:"
+            r"|relocation .* (?:out of range|truncated)|cannot find"
+            r"|No such file|file format not recognized|overflowed by"
+            r"|^/usr/[^ ]*/ld:|^ld: |^FAIL|^Failed",
+            re.IGNORECASE,
+        )
+        for label, path in (("kbuild_stdout", report / "bulk.make.out"),
+                            ("kbuild_stderr", report / "bulk.make.err"),
+                            ("linker_redirect", root / "busybox_unstripped.out")):
+            if not path.is_file():
+                log("BUSYBOX_MIXED_LINK_DIAGNOSTIC source=%s exists=0" % label)
+                continue
+            content = path.read_text(encoding="utf-8", errors="replace")
+            lines = content.splitlines()
+            errors = [(n, line) for n, line in enumerate(lines, 1)
+                      if pattern.search(line)]
+            log("BUSYBOX_MIXED_LINK_DIAGNOSTIC source=%s lines=%d "
+                "matching_errors=%d first=%r" %
+                (label, len(lines), len(errors), errors[:22]))
+            log("BUSYBOX_MIXED_LINK_CONTEXT source=%s head=%r tail=%r" %
+                (label, lines[:16], lines[-22:]))
         return 1
     events = report / "combined-events"
     verified = 0
