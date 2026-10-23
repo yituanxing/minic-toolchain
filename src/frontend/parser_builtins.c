@@ -1236,10 +1236,12 @@ static bool parse_builtin_isnan(MinicParser *parser,
     if (!minic_parser_advance(parser) ||
         !minic_parser_expect(parser, MINIC_TOKEN_LPAREN,
                              "expected '(' after __builtin_isnan") ||
-        !minic_parser_expression_parse_internal(parser, &operand_id, 0U, true) ||
-        !minic_parser_expect(parser, MINIC_TOKEN_RPAREN,
-                             "expected ')' after __builtin_isnan operand"))
+        !minic_parser_expression_parse_internal(parser, &operand_id, 0U, true))
         return false;
+    if (parser->current.kind != MINIC_TOKEN_RPAREN) {
+        minic_parser_error(parser, "expected ')' after __builtin_isnan operand");
+        return false;
+    }
     operand = minic_c0_program_expression(parser->program, operand_id);
     if (operand == NULL ||
         (!minic_type_is_float(operand->type) &&
