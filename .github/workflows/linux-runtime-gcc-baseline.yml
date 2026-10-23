@@ -1679,10 +1679,20 @@ jobs:
           # The bounded retry at #39983581195 hit the SAME Azure mirror.
           # Use Ubuntu's public archive for this single expensive receiver,
           # preserving official distro versions and package signatures.
-          if grep -q 'azure.archive.ubuntu.com' /etc/apt/sources.list.d/ubuntu.sources; then
-            sudo sed -i 's#http://azure.archive.ubuntu.com/ubuntu/#http://archive.ubuntu.com/ubuntu/#g' \
-              /etc/apt/sources.list.d/ubuntu.sources
-            echo 'LINUX_RECEIVER_APT_MIRROR=archive.ubuntu.com source=official_ubuntu'
+          # GitHub Ubuntu 24.04 Actions images resolve the actual mirror
+          # from 'URIs: mirror+file:/etc/apt/apt-mirrors.txt'. Rewriting only
+          # ubuntu.sources does NOT change Azure package downloads.
+          for sources in /etc/apt/apt-mirrors.txt \
+                         /etc/apt/sources.list.d/ubuntu.sources; do
+            if [[ -f "$sources" ]] &&
+               grep -q 'azure.archive.ubuntu.com' "$sources"; then
+              sudo sed -i 's#azure.archive.ubuntu.com#archive.ubuntu.com#g' "$sources"
+              echo "LINUX_RECEIVER_APT_MIRROR=FIXED file=$sources target=archive.ubuntu.com"
+            fi
+          done
+          if grep -q 'azure.archive.ubuntu.com' /etc/apt/apt-mirrors.txt 2>/dev/null; then
+            echo 'LINUX_RECEIVER_APT_MIRROR=FAIL still_azure_mirrorlist' >&2
+            exit 14
           fi
           timeout 90s sudo apt-get -o Acquire::Retries=1 \
             -o Acquire::http::Timeout=20 update -qq
@@ -2131,7 +2141,7 @@ jobs:
           # A *different* compiled MiniC SHA is independently rejected by
           # linux-runtime-gcc-shards-v1.py merge() across ALL seven artifacts.
           producer_sha=96e9f3e5b26c7be34b514647141050529aca6d9a
-          predecessor_sha=8cd00bd4dddaeec4d876d68e9106d10248059f4a
+          predecessor_sha=02f5cd4bb0761eff4c4c461e83cee2f647bab8d2
           test "$(git show -s --format=%P HEAD)" = "$predecessor_sha"
           echo "LINUX_RECEIVER_REUSE_SOURCE=PASS pinned_producer=$producer_sha expected_parent=$predecessor_sha compiler_sha_bound=true"
       - uses: actions/download-artifact@v4
