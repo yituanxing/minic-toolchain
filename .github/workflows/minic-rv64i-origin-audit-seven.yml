@@ -8,6 +8,7 @@ on:
       - 'tools/ci/audit-rv64i-asm-origin.py'
       - 'tests/compiler/c0/probe-rv64i-asm-origin.sh'
       - 'tests/compiler/c0/probe-rv64i-int128-libcalls.sh'
+      - 'tests/compiler/c0/probe-rv64i-int128-pairs.sh'
       - 'src/target/riscv64/scalar_emit.c'
       - 'src/target/riscv64/runtime_libcall.c'
       - 'src/target/riscv64/isa.c'
@@ -34,6 +35,7 @@ jobs:
           python3 -m py_compile tools/ci/audit-rv64i-asm-origin.py tests/external/linux/corpus_replay.py
           bash -n tests/compiler/c0/probe-rv64i-asm-origin.sh
           bash -n tests/compiler/c0/probe-rv64i-int128-libcalls.sh
+          bash -n tests/compiler/c0/probe-rv64i-int128-pairs.sh
       - name: Compile MiniC and prove source-ASM provenance
         shell: bash
         run: |
@@ -41,6 +43,7 @@ jobs:
           make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/rv64i-origin-smoke all
           bash tests/compiler/c0/probe-rv64i-asm-origin.sh "$GITHUB_WORKSPACE/build/rv64i-origin-smoke/bin/minic-cc"
           bash tests/compiler/c0/probe-rv64i-int128-libcalls.sh "$GITHUB_WORKSPACE/build/rv64i-origin-smoke/bin/minic-cc"
+          bash tests/compiler/c0/probe-rv64i-int128-pairs.sh "$GITHUB_WORKSPACE/build/rv64i-origin-smoke/bin/minic-cc"
 
   linux-shard:
     # Seven full shards run only by explicit dispatch or tagged push.
