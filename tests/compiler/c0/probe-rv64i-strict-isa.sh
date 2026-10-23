@@ -27,8 +27,16 @@ for selection in "rv64i lp64 add" "rv64im lp64 mul" "rv64imafd lp64d float"; do
   test -s "$tmp/$march.s"
 done
 
-# RV64I now lowers 64-bit multiply to proven shift/add instructions;
-# division and remainder still fail explicitly without M.
+# RV64I lowers 64-bit multiply, signed/unsigned divide and remainder using
+# only base-I instructions; RV64IM still selects hardware M.
+"$MINIC_CC" --target=riscv64-linux -march=rv64i -mabi=lp64 \
+  -S "$tmp/mul.i" -o "$tmp/rv64i-fullarith.s"
+test -s "$tmp/rv64i-fullarith.s"
+if grep -Eq '^[[:space:]]*(mul|mulh|div|divu|rem|remu)[[:space:]]' "$tmp/rv64i-fullarith.s"; then
+  echo "RV64_ISA=FAIL rv64i arithmetic leaked M" >&2; exit 1
+fi
+grep -Eq '^[[:space:]]*div[[:space:]]' "$tmp/rv64im.s"
+grep -Eq '^[[:space:]]*rem[[:space:]]' "$tmp/rv64im.s"
 "$MINIC_CC" --target=riscv64-linux -march=rv64i -mabi=lp64 \
     -S "$tmp/mulonly.i" -o "$tmp/rv64i-mul.s"
 test -s "$tmp/rv64i-mul.s"
@@ -36,12 +44,6 @@ grep -q '1:' "$tmp/rv64i-mul.s"
 if grep -Eq '^[[:space:]]*(mul|mulh|div|rem)[[:space:]]' "$tmp/rv64i-mul.s"; then
   echo 'RV64_ISA=FAIL RV64I software multiply leaked M' >&2; exit 1
 fi
-if "$MINIC_CC" --target=riscv64-linux -march=rv64i -mabi=lp64 \
-    -S "$tmp/mul.i" -o "$tmp/invalid-div.s" >"$tmp/mul.stdout" 2>"$tmp/mul.stderr"; then
-  echo 'RV64_ISA=FAIL rv64i native divide admitted' >&2; exit 1
-fi
-grep -Eq "instruction '(div|rem)' requires M" "$tmp/mul.stderr"
-test ! -e "$tmp/invalid-div.s"
 for march in rv64i rv64im; do
   if "$MINIC_CC" --target=riscv64-linux "-march=$march" -mabi=lp64 \
       -S "$tmp/float.i" -o "$tmp/invalid-float.s" >"$tmp/fp.out" 2>"$tmp/fp.err"; then
@@ -133,12 +135,12 @@ if command -v riscv64-linux-gnu-gcc >/dev/null 2>&1; then
       -c "$tmp/$march.s" -o "$tmp/$march.o"
     test -s "$tmp/$march.o"
   done
-  for testasm in rv64i-mul longptr-i oddptr-i; do
+  for testasm in rv64i-mul rv64i-fullarith longptr-i oddptr-i; do
     riscv64-linux-gnu-gcc -march=rv64i -mabi=lp64 \
       -c "$tmp/$testasm.s" -o "$tmp/$testasm.o"
     test -s "$tmp/$testasm.o"
   done
-  echo 'RV64_ISA_GNU_AS=PASS profiles=3 soft_multiply=1 pointer_scale_pow2=1 pointer_scale_odd=1'
+  echo 'RV64_ISA_GNU_AS=PASS profiles=3 rv64i_mul_div_rem=1 pointer_scales=2'
   if command -v qemu-riscv64 >/dev/null 2>&1; then
     cat >"$tmp/start.s" <<'SRC'
 .section .text
@@ -203,7 +205,89 @@ SRC
       fi
     done
     echo 'RV64_SOFTMUL_QEMU=PASS signed_negative=1 zero=1 odd_pointer=1'
+    cat >"$tmp/arithstart.s" <<'SRC'
+.section .text
+.globl _start
+_start:
+  li a0, 9
+  li a1, 4
+  call evaluate
+  li a7, 93
+  ecall
+SRC
+    riscv64-linux-gnu-gcc -march=rv64i -mabi=lp64 \
+      -nostdlib -static -no-pie -Wl,-e,_start \
+      "$tmp/arithstart.s" "$tmp/rv64i-fullarith.s" -o "$tmp/rv64i-fullarith.elf"
+    set +e
+    qemu-riscv64 "$tmp/rv64i-fullarith.elf" >"$tmp/fullarith.out" 2>"$tmp/fullarith.err"
+    rc=$?
+    set -e
+    if (( rc != 37 )); then
+      echo "RV64_ARITH_QEMU=FAIL combined mul/div/rem rc=$rc expected=37" >&2
+      cat "$tmp/fullarith.err" >&2
+      exit 1
+    fi
+    for variant in sdiv srem udiv urem sdiv32 srem32 udiv32 urem32; do
+      case "$variant" in
+        sdiv)   code='long evaluate(long a,long b) {return a/b;}' ;;
+        srem)   code='long evaluate(long a,long b) {return a%b;}' ;;
+        udiv)   code='unsigned long evaluate(unsigned long a,unsigned long b) {return a/b;}' ;;
+        urem)   code='unsigned long evaluate(unsigned long a,unsigned long b) {return a%b;}' ;;
+        sdiv32) code='int evaluate(int a,int b) {return a/b;}' ;;
+        srem32) code='int evaluate(int a,int b) {return a%b;}' ;;
+        udiv32) code='unsigned evaluate(unsigned a,unsigned b) {return a/b;}' ;;
+        urem32) code='unsigned evaluate(unsigned a,unsigned b) {return a%b;}' ;;
+      esac
+      printf '%s\n' "$code" >"$tmp/$variant.i"
+      for march in rv64i rv64im; do
+        "$MINIC_CC" --target=riscv64-linux "-march=$march" -mabi=lp64 \
+          -S "$tmp/$variant.i" -o "$tmp/minic-$variant-$march.s"
+        riscv64-linux-gnu-gcc "-march=$march" -mabi=lp64 \
+          -c "$tmp/minic-$variant-$march.s" -o "$tmp/minic-$variant-$march.o"
+      done
+      riscv64-linux-gnu-gcc -march=rv64im -mabi=lp64 \
+        -O0 -ffreestanding -fno-pic -fno-pie -S \
+        "$tmp/$variant.i" -o "$tmp/gnu-$variant-rv64im.s"
+    done
+    # Real ELF runtime differential against the hardware-M GNU oracle.
+    # Exit status observes the low eight bits; signed/unsigned 32/64 cases
+    # include a highest-bit dividend and positive/negative divisors.
+    for sample in \
+        "sdiv -37 4 247" "sdiv -37 -4 9" "sdiv 37 -4 247" \
+        "srem -37 4 255" "srem -37 -4 255" "srem 37 -4 1" \
+        "udiv -1 3 85" "urem -1 3 0" \
+        "sdiv32 -37 4 247" "srem32 -37 4 255" \
+        "udiv32 -1 3 85" "urem32 -1 3 0"; do
+      read -r variant left right expected <<<"$sample"
+      cat >"$tmp/divstart.s" <<SRC
+.section .text
+.globl _start
+_start:
+  li a0, $left
+  li a1, $right
+  call evaluate
+  li a7, 93
+  ecall
+SRC
+      for profile in minic-rv64i minic-rv64im gnu-rv64im; do
+        IFS=- read -r compiler march <<<"$profile"
+        source="$tmp/$compiler-$variant-$march.s"
+        riscv64-linux-gnu-gcc "-march=$march" -mabi=lp64 \
+          -nostdlib -static -no-pie -Wl,-e,_start \
+          "$tmp/divstart.s" "$source" -o "$tmp/$profile.elf"
+        set +e
+        qemu-riscv64 "$tmp/$profile.elf" >"$tmp/$profile.out" 2>"$tmp/$profile.err"
+        rc=$?
+        set -e
+        if (( rc != expected )); then
+          echo "RV64_DIVREM_QEMU=FAIL variant=$variant a=$left b=$right profile=$profile rc=$rc expected=$expected" >&2
+          cat "$tmp/$profile.err" >&2
+          exit 1
+        fi
+      done
+    done
+    echo 'RV64_DIVREM_QEMU=PASS cases=12 profiles=3 signed_unsigned_32_64=1 gcc_oracle=1'
     echo 'RV64_ISA_QEMU=PASS profiles=rv64i,rv64im gnu_minic_exit_exact=1'
   fi
 fi
-echo 'RV64_ISA_PROFILES=PASS rv64i_lp64=1 rv64im_lp64=1 rv64imafd_lp64d=1 software_mul=1 pointer_scale=1 rejected_isa_abi=1 default_byte_exact=1'
+echo 'RV64_ISA_PROFILES=PASS rv64i_lp64=1 rv64im_lp64=1 rv64imafd_lp64d=1 software_mul=1 software_divrem=1 pointer_scale=1 rejected_isa_abi=1 default_byte_exact=1'

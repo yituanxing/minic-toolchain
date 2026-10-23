@@ -6,6 +6,7 @@
 #include "target/common/direct_instruction_semantics.h"
 #include "target/riscv64/frame_access.h"
 #include "target/riscv64/multiply_emit.h"
+#include "target/riscv64/divide_emit.h"
 #include <inttypes.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -87,19 +88,15 @@ bool minic_riscv64_emit_scalar_instruction(
     case MINIC_CORE_INSTRUCTION_INTEGER_DIVIDE:
     case MINIC_CORE_INSTRUCTION_INTEGER_REMAINDER: {
         MinicType effective_type;
-        const char *opcode;
-
-        if (!minic_core_function_effective_integer_type(function, instruction->type, &effective_type)) {
+        if (!minic_core_function_effective_integer_type(
+                function, instruction->type, &effective_type)) {
             return false;
-        }
-        if (instruction->kind == MINIC_CORE_INSTRUCTION_INTEGER_DIVIDE) {
-            opcode = minic_type_is_unsigned_integer(effective_type) ? "divu" : "div";
-        } else {
-            opcode = minic_type_is_unsigned_integer(effective_type) ? "remu" : "rem";
         }
         if (!minic_riscv64_frame_load_value(file, frame, instruction->value.binary.left, "t0") ||
             !minic_riscv64_frame_load_value(file, frame, instruction->value.binary.right, "t1") ||
-            fprintf(file, "  %s t0, t0, t1\n", opcode) < 0 ||
+            !minic_riscv64_emit_divrem64(
+                file, isa, minic_type_is_unsigned_integer(effective_type),
+                instruction->kind == MINIC_CORE_INSTRUCTION_INTEGER_REMAINDER) ||
             !minic_riscv64_emit_integer_conversion_for_program(
                 file, program, instruction->type, "t0")) {
             return false;

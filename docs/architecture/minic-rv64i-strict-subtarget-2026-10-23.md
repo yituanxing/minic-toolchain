@@ -86,3 +86,20 @@ Fast tests include RV64I strictly assembled source, unsigned/signed scalar
 multiply, zero/negative multiplier, power-of-two and odd-sized pointer
 scaling, GNU cross-assembler ISA checks, and QEMU process results, in
 addition to the unchanged legacy ISA/ABI negative coverage.
+
+## RV64I signed/unsigned software integer divide and remainder
+
+The RV64 integer machine selector now offers both native M and RV64I
+restoring long division for scalar quotient/remainder. A 64-iteration bit
+algorithm shifts quotient into t0 and tracks the full 65-bit intermediate
+remainder with a separate carry check; the latter is essential for unsigned
+high-bit dividends. Signed operands use two's-complement magnitudes and
+restore the proper quotient/remainder signs. Existing Core width conversion
+handles 32-bit scalar results; no Frontend, Core, ABI or frame duplication.
+
+Original default RV64 and explicit RV64IM instructions stay on the exact
+native div/divu/rem/remu paths. Both software alternatives are target-local
+and have no dependency on libc/libgcc. C division by zero and MIN/-1 overflow
+are undefined and not advertised. GNU strict -march assemblers and QEMU
+real-ELF differential tests cover an integrated multiply/divide/remainder
+program plus signed/unsigned 32- and 64-bit cases and a GNU hardware-M oracle.

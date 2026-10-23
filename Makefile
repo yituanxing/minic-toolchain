@@ -158,6 +158,7 @@ MINIC_SOURCES := \
 	src/target/riscv64/call_emit.c \
 	src/target/riscv64/scalar_emit.c \
 	src/target/riscv64/multiply_emit.c \
+	src/target/riscv64/divide_emit.c \
 	src/target/riscv64/fp_emit.c \
 	src/target/riscv64/overflow_emit.c \
 	src/target/riscv64/frame_layout.c \

@@ -83,11 +83,9 @@ bool minic_riscv_isa_admit_core_instruction(
         break;
     case MINIC_CORE_INSTRUCTION_INTEGER_DIVIDE:
     case MINIC_CORE_INSTRUCTION_INTEGER_REMAINDER:
-        required = MINIC_RISCV_FEATURE_M;
-        machine = instruction->kind == MINIC_CORE_INSTRUCTION_INTEGER_DIVIDE
-                      ? "div" : "rem";
-        extension = "M";
-        break;
+        /* The ISA selector now has both native M and RV64I signed/unsigned
+         * restoring division; an M absence is no longer a compile error. */
+        return true;
     case MINIC_CORE_INSTRUCTION_POINTER_OFFSET:
         /* RV64I pointer scaling now selects SLLI for power-of-two sizes or
          * qualified software multiplication for odd record sizes. */
