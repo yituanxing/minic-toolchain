@@ -141,6 +141,24 @@ def call_proxy(args):
                                        "x86_64-linux") == "x86_64-linux"
                      else os.environ))
         info["minic"] = mini.returncode
+        # Two remaining x86 families (cpuid inline asm and SysV va_list)
+        # need a bounded secondary run with Core diagnostics. This does
+        # not edit original BusyBox and only reruns an actually failed TU.
+        if mini.returncode and os.environ.get(
+                "BUSYBOX_ALLYES_MINIC_TARGET", "x86_64-linux") == "x86_64-linux" \
+                and source in ("libbb/hash_md5_sha.c", "libbb/verror_msg.c"):
+            with (target / "trace.err").open("wb") as e:
+                try:
+                    subprocess.run(
+                        [os.environ["BUSYBOX_ALLYES_MINIC_CC"], "--target=x86_64-linux",
+                         "-S", str(preprocessed), "-o", str(asm)],
+                        stdout=subprocess.DEVNULL, stderr=e, check=False,
+                        timeout=40,
+                        env={**os.environ, "MINIC_M1_TRACE": "1",
+                             "MINIC_ASM_BATCH_TRACE": "1",
+                             "MINIC_BACKEND_CENSUS": "1"})
+                except subprocess.TimeoutExpired:
+                    e.write(b"BUSYBOX_ALLYES_X86_TRACE_TIMEOUT\\n")
         # Trace only representative *failed* upstream source owners.
         # A small class-level replay avoids a second 581-TU scan while
         # producing the actual Core instruction kind / rejecting guard.
@@ -247,7 +265,10 @@ def print_frontier(report_root, gcc_success, enabled):
                                                     "MINIC_BACKEND_CENSUS",
                                                     "MINIC_CALL_RESULT_REJECT",
                                                     "MINIC_BACKEND_CALL_GATE",
-                                                    "MINIC_M8_FRAME_REJECT"))]
+                                                    "MINIC_M8_FRAME_REJECT",
+                                                    "CORE_EXPR_STMT_DETAIL",
+                                                    "CORE_ASM_DETAIL",
+                                                    "CORE_LOWER_"))]
                     for detail in captures[:6]:
                         print("BUSYBOX_ALLYES_CORE_REJECT source=%s detail=%s" %
                               (info["source"], detail[:550]), flush=True)

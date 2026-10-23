@@ -1099,26 +1099,30 @@ check_exit varargs_type_identity 42
     "$tempdir/varargs_type_identity.i"
 echo "PASS: x86 SysV va_list opaque cursor identity and fail-closed sizeof"
 
-# Until true destination-owned va_copy tagging is designed, do not silently
-# turn the SysV cursor copy into a pointer alias (RV64 semantics are unchanged).
-cat > "$tempdir/varargs_copy_unsupported.i" <<'EOF'
+# A SysV va_copy must clone its 24-byte tag. Check independently advancing
+# both cursors, rather than only checking that parsing/code generation succeeds.
+cat > "$tempdir/varargs_copy.i" <<'EOF'
 typedef __builtin_va_list va_list;
-int bad_copy(int fixed, ...) {
+int verify_copy(int fixed, ...) {
     va_list first, second;
+    long a, b, next_a, next_b;
     __builtin_va_start(first, fixed);
     __builtin_va_copy(second, first);
-    __builtin_va_end(first);
+    a = __builtin_va_arg(first, long);
+    next_a = __builtin_va_arg(first, long);
+    b = __builtin_va_arg(second, long);
+    next_b = __builtin_va_arg(second, long);
     __builtin_va_end(second);
-    return 0;
+    __builtin_va_end(first);
+    return fixed == 7 && a == 17 && next_a == 19 &&
+           b == 17 && next_b == 19;
 }
+int main(void) { return verify_copy(7, 17L, 19L) ? 42 : 13; }
 EOF
-if "$MINIC_CC" --target=x86_64-linux -S "$tempdir/varargs_copy_unsupported.i" \
-    -o "$tempdir/varargs_copy_unsupported.s" >"$tempdir/va_copy.out" 2>"$tempdir/va_copy.err"; then
-    echo "FAIL: unsafe SysV x86 va_copy pointer alias was accepted" >&2
-    exit 1
-fi
-test ! -e "$tempdir/varargs_copy_unsupported.s"
-echo "PASS: SysV va_copy without independent cursor intentionally fails closed"
+check_exit varargs_copy 42
+"$HOST_CC" -x c -std=gnu11 "$tempdir/varargs_copy.i" -o "$tempdir/gcc-varargs-copy"
+"$tempdir/gcc-varargs-copy"
+echo "PASS: SysV x86 va_copy snapshots independent 24-byte ABI cursor"
 
 
 
