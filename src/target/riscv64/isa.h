@@ -4,6 +4,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
 
 /* ISA extensions and the psABI are independent. The default RV64 legacy
  * profile remains untouched; explicit -march selects a strictly audited ISA.
@@ -59,6 +60,13 @@ bool minic_riscv_isa_soft_float_signature_supported(
 bool minic_riscv_isa_lp64_integer_signature_supported(
     MinicType return_type, const MinicType *parameter_types,
     size_t parameter_count, bool is_variadic);
+
+/* Opt-in experiment for frozen Linux .i corpus: compiler-owned instructions
+ * must remain RV64I; user-provided inline/file asm is provenance tagged and
+ * kept verbatim apart from operand substitution. Default strict behavior does
+ * NOT accept inline asm. Never use this mode as final ELF ISA certification. */
+bool minic_riscv64_asm_audit_mode(void);
+bool minic_riscv64_asm_audit_marker(FILE *file, bool begin);
 
 /* End-to-end fail-closed instruction selection audit, over the actual
  * assembler text (including frame, helper and address emission). */
