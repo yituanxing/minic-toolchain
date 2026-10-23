@@ -14,7 +14,10 @@ command -v riscv64-linux-gnu-objdump >/dev/null
 command -v riscv64-linux-gnu-nm >/dev/null
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
-cat > "$work/linux.i" <<'SRC'
+# Feed the Kbuild wrapper a real .c input. An unpreprocessed ".i" with
+# comments is not a legitimate GNU -E product (and MiniC correctly rejected
+# the fixture at column one). This must exercise GNU -E -> MiniC -S -> GNU-AS.
+cat > "$work/linux.c" <<'SRC'
 /* Same original Kbuild contract: kernel-owned inline ISA, compiler-owned C. */
 unsigned long kernel_c_math(unsigned long a, unsigned long b) {
     unsigned long product = a * b;
@@ -30,7 +33,7 @@ MINIC="$minic" REAL_CC=riscv64-linux-gnu-gcc \
 MINIC_KBUILD_RV64I_ORIGIN_AUDIT=1 MINIC_KEEP_INTERMEDIATES=1 \
 MINIC_KBUILD_TRACE="$work/trace.log" \
   bash tests/external/linux/stage2_kbuild_cc.sh \
-    -c -march=rv64gc -mabi=lp64 -o "$work/linux.o" "$work/linux.i"
+    -c -march=rv64gc -mabi=lp64 -o "$work/linux.o" "$work/linux.c"
 test -s "$work/linux.o"
 test -s "$work/linux.minic-stage2.s"
 grep -q '^minic rv64i_origin_audit=1 ' "$work/trace.log"
