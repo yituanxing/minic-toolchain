@@ -1,0 +1,86 @@
+name: MiniC RV64I Nouveau ICE Focus
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/minic-rv64i-nouveau-ice-focused.yml'
+      - 'src/frontend/parser_builtins.c'
+      - 'src/frontend/constant_eval.c'
+      - 'src/frontend/const_eval/**'
+    # Focus is strictly opt-in; never rerun seven Linux shards for one parser defect.
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: rv64i-nouveau-ice-focus-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  selected-ice:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[rv64i-focus]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Restore pinned next500c corpus
+        id: corpus
+        uses: actions/cache/restore@v4
+        with:
+          path: build/linux-next500c-corpus
+          key: linux-next500c-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-indices-2000-2499
+      - name: Require verified existing Linux corpus (fail on cache miss)
+        shell: bash
+        run: |
+          test "${{ steps.corpus.outputs.cache-hit }}" = 'true'
+          test "$(wc -l <build/linux-next500c-corpus/selected-tus.txt)" -eq 500
+      - name: Build compiler once
+        run: make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/rv64i-nouveau-ice all
+      - name: Reproduce representative Nouveau errors and show exact preprocessed expressions
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          set +e
+          python3 tests/external/linux/corpus_replay.py \
+            --minic "$GITHUB_WORKSPACE/build/rv64i-nouveau-ice/bin/minic" \
+            --corpus "$GITHUB_WORKSPACE/build/linux-next500c-corpus" \
+            --work "$GITHUB_WORKSPACE/build/rv64i-nouveau-focused" \
+            --jobs 3 --indices 2298,2305,2337,2389 \
+            --rv64i-origin-audit >build/rv64i-nouveau-summary.log 2>&1
+          rc=$?
+          set -e
+          python3 - <<'PY'
+          from pathlib import Path
+          import json,re
+          work=Path('build/rv64i-nouveau-focused')
+          corpus=Path('build/linux-next500c-corpus/kbuild')
+          rows=json.loads((work/'batch-results.json').read_text())
+          for r in rows:
+              print('NOUVEAU_ICE_REPLAY index={} status={} line={} message={}'.format(
+                  r['index'],r['status'],r.get('first_error_line'),r.get('message')),flush=True)
+              line=r.get('first_error_line')
+              if line is None:
+                  continue
+              p=corpus/r['input']
+              with p.open(errors='replace') as f:
+                  lines=f.readlines()
+              i=int(line)-1
+              for j in range(max(0,i-3), min(len(lines),i+4)):
+                  t=lines[j].rstrip()
+                  print('NOUVEAU_ICE_SOURCE index={} line={} bytes={} text={!r}'.format(
+                      r['index'],j+1,len(t),t[:1600]),flush=True)
+              for j in range(i,-1,-1):
+                  if re.match(r'^# [0-9]+ ',lines[j]):
+                      print('NOUVEAU_ICE_ORIGIN index={} {}'.format(r['index'],lines[j].rstrip()[:350]))
+                      break
+          PY
+          echo "NOUVEAU_ICE_EXIT=$rc"
+      - name: Preserve isolated failed-TU evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rv64i-nouveau-ice-${{ github.sha }}
+          retention-days: 7
+          path: |
+            build/rv64i-nouveau-focused/batch-results.json
+            build/rv64i-nouveau-focused/failure-contexts.txt
+            build/rv64i-nouveau-summary.log
+            build/rv64i-nouveau-focused/minic-stderr/**/*.stderr
