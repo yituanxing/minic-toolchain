@@ -132,12 +132,11 @@ test -s "$tmp/record-fpabi.s"
 # A base-I ISA does not imply every GNU C extension is implemented.
 # Explicit targets must never quietly truncate 128-bit arithmetic or use an
 # incorrect one-register __int128 ABI merely because emitted opcodes are I.
-for variant in div add shl equal; do
+for variant in div add shl; do
   case "$variant" in
     div) body='unsigned __int128 probe(void) { unsigned __int128 a = 33, b = 3; return a / b; }' ;;
     add) body='unsigned __int128 probe(void) { unsigned __int128 a = 33, b = 3; return a + b; }' ;;
     shl) body='unsigned __int128 probe(void) { unsigned __int128 a = 1; return a << 66; }' ;;
-    equal) body='int probe(void) { unsigned __int128 a = 1, b = 2; return a == b; }' ;;
   esac
   printf '%s\n' "$body" >"$tmp/int128-$variant.i"
   if "$MINIC_CC" --target=riscv64-linux -march=rv64i -mabi=lp64 \
@@ -147,6 +146,19 @@ for variant in div add shl equal; do
   fi
   test ! -e "$tmp/invalid-int128-$variant.s"
 done
+# Equality and relational TI operations were qualified through upstream
+# __cmpti2/__ucmpti2; only the still-unimplemented TI operators above reject.
+cat >"$tmp/qualified-i128-comparisons.i" <<'SRC'
+typedef unsigned __int128 U128;
+typedef __int128 I128;
+int eq(U128 a, U128 b) { return a == b; }
+int slt(I128 a, I128 b) { return a < b; }
+int ult(U128 a, U128 b) { return a < b; }
+SRC
+"$MINIC_CC" --target=riscv64-linux -march=rv64i -mabi=lp64 \
+  -S "$tmp/qualified-i128-comparisons.i" -o "$tmp/qualified-i128-comparisons.s"
+grep -q 'call __cmpti2' "$tmp/qualified-i128-comparisons.s"
+grep -q 'call __ucmpti2' "$tmp/qualified-i128-comparisons.s"
 cat >"$tmp/qualified-i128-abi.i" <<'SRC'
 unsigned __int128 passthrough(unsigned __int128 a) { return a; }
 SRC
