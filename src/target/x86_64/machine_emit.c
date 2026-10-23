@@ -61,11 +61,19 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
                 return false;
             if (!location->on_stack) {
                 if (location->gp_index > 4U ||
-                    fprintf(out,
-                        "  movq %s, %%r10\n"
-                        "  movq %s, %%r11\n",
-                        regs[location->gp_index],
-                        regs[location->gp_index + 1U]) < 0)
+                    (frame->saves_incoming_gp
+                     ? fprintf(out,
+                         "  movq -%zu(%%rbp), %%r10\n"
+                         "  movq -%zu(%%rbp), %%r11\n",
+                         frame->incoming_gp_save_offset +
+                             location->gp_index * 8U,
+                         frame->incoming_gp_save_offset +
+                             (location->gp_index + 1U) * 8U)
+                     : fprintf(out,
+                         "  movq %s, %%r10\n"
+                         "  movq %s, %%r11\n",
+                         regs[location->gp_index],
+                         regs[location->gp_index + 1U])) < 0)
                     return false;
             } else if (fprintf(out,
                     "  movq %zu(%%rbp), %%r10\n"
@@ -96,8 +104,12 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
         } else {
             if (location->kind != MINIC_X86_ARG_INTEGER) return false;
             if (!location->on_stack) {
-                if (fprintf(out, "  movq %s, %%rax\n",
-                            regs[location->gp_index]) < 0)
+                if ((frame->saves_incoming_gp
+                     ? fprintf(out, "  movq -%zu(%%rbp), %%rax\n",
+                         frame->incoming_gp_save_offset +
+                             location->gp_index * 8U)
+                     : fprintf(out, "  movq %s, %%rax\n",
+                         regs[location->gp_index])) < 0)
                     return false;
             } else if (fprintf(out, "  movq %zu(%%rbp), %%rax\n",
                                16U + location->stack_index * 8U) < 0)
