@@ -46,7 +46,7 @@ jobs:
         include:
           - label: first500
             corpus_dir: linux-focus-corpus
-            cache_key: linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-${{ hashFiles('tests/external/linux/replay-indices.txt') }}
+            cache_key: first500-dynamic
             offset: 0
             limit: 500
           - label: new500
@@ -86,7 +86,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: build/${{ matrix.corpus_dir }}
-          key: ${{ matrix.cache_key }}
+          key: ${{ matrix.label == 'first500' && format('linux-focus-corpus-v1-6.6.143-rv64-defconfig-gcc13.3.0-{0}', hashFiles('tests/external/linux/replay-indices.txt')) || matrix.cache_key }}
           fail-on-cache-miss: true
       - name: Validate frozen manifest
         shell: bash
