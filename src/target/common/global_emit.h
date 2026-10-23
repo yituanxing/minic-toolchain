@@ -26,6 +26,8 @@ bool minic_multi_emit_relocatable_scalar_array(
     MinicMultiRelocEmitter emit_relocation,
     MinicMultiScalarBitsEmitter emit_bits);
 /* Canonical flat-record layout walk; target callbacks retain assembly syntax. */
+bool minic_multi_record_initializer_needs_recursive(
+    const MinicRecord *record, const MinicGlobalObject *object);
 bool minic_multi_emit_flat_record_global(
     FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicGlobalObject *object, size_t storage_size,

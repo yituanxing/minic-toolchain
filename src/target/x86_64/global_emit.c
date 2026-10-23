@@ -148,8 +148,7 @@ bool minic_x86_64_emit_global(FILE *out, const MinicC0Program *program,
          * Preserve the established flat-record emission for legacy
          * RECORD_FIELD relocation locations. */
         if (record == NULL) return false;
-        if (obj->union_selection_count != 0U ||
-            obj->initializer_count != record->field_count) {
+        if (minic_multi_record_initializer_needs_recursive(record, obj)) {
             if (!minic_multi_emit_recursive_record_global(
                     out, program, target, obj, storage_size,
                     x86_emit_relocation)) return false;

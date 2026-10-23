@@ -168,7 +168,7 @@ def call_proxy(args):
         trace_owners = ("coreutils/od.c", "libbb/xconnect.c",
                         "miscutils/devfsd.c", "miscutils/devmem.c",
                         "miscutils/hdparm.c", "networking/ifconfig.c",
-                        "procps/top.c")
+                        "procps/top.c", "util-linux/mdev.c")
         if (mini.returncode and os.environ.get("BUSYBOX_ALLYES_MINIC_TARGET",
                                                   "x86_64-linux") != "x86_64-linux"
                 and source in trace_owners):

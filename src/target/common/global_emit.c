@@ -789,6 +789,27 @@ bool minic_multi_emit_elf_relocation(FILE *out, const MinicC0Program *program,
     return fprintf(out, "  .8byte %s%+" PRId64 "\n", name, addend) >= 0;
 }
 
+/* A record with ABI bit-fields (including musl zero-width timespec
+ * barriers) cannot use the flat scalar field walk. Select the already
+ * verified recursive DataLayout walker across all four architectures. */
+bool minic_multi_record_initializer_needs_recursive(
+    const MinicRecord *record, const MinicGlobalObject *object) {
+    size_t index;
+    if (record == NULL || object == NULL || record->is_union ||
+        record->field_count != object->initializer_count ||
+        object->union_selection_count != 0U ||
+        object->flexible_array_initializer_count != 0U)
+        return true;
+    for (index = 0U; index < record->field_count; ++index) {
+        const MinicRecordField *field = &record->fields[index];
+        if (field->is_bit_field || field->is_flexible_array ||
+            field->is_zero_length_array || field->element_count != 1U ||
+            minic_type_is_array(field->type) || minic_type_is_record(field->type))
+            return true;
+    }
+    return false;
+}
+
 bool minic_multi_emit_flat_record_global(FILE *out,
                                     const MinicC0Program *program,
                                     const MinicTargetInfo *target,
@@ -945,10 +966,8 @@ bool minic_multi_emit_simple_global(FILE *out, const MinicC0Program *program,
     if (minic_type_is_record(obj->type)) {
         const MinicRecord *record =
             minic_c0_program_record(program, obj->type.record_id);
-        const bool recursive = record != NULL &&
-            (record->is_union ||
-             record->field_count != obj->initializer_count ||
-             obj->union_selection_count != 0U);
+        const bool recursive = minic_multi_record_initializer_needs_recursive(
+            record, obj);
         if (record == NULL) return false;
         if (fprintf(out, "%s\n", obj->is_read_only
                         ? (obj->relocation_count != 0U
