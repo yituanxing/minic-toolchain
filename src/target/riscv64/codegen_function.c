@@ -18,6 +18,7 @@ bool minic_riscv64_write_c0_program_with_core_functions(const char *path,
                                                         const MinicCoreFunction *core_functions,
                                                         size_t core_function_count,
                                                         bool function_sections,
+                                                        bool position_independent,
                                                         MinicDiagnostic *diagnostic) {
     FILE *file;
     size_t global_index;
@@ -196,7 +197,8 @@ bool minic_riscv64_write_c0_program_with_core_functions(const char *path,
             success = minic_riscv64_function_symbol_from_function(function, &symbol);
             symbol.function_sections = function_sections;
             success = success && minic_riscv64_emit_core_function_for_program_with_symbol(
-                          file, program, core_function, &symbol);
+                          file, program, core_function, &symbol,
+                          position_independent);
             /* GNU constructor is a real ELF init action on RV64 as well:
              * retain its address as an init_array relocation, never discard. */
             if (success && function->is_constructor) {

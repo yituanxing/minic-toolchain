@@ -57,6 +57,10 @@ typedef struct MinicTargetInfo {
     MinicVariadicScalarReadKind variadic_scalar_read_kind;
     size_t variadic_linear_slot_bytes;
     MinicVariadicCopyKind variadic_copy_kind;
+    /* Per-translation-unit RV64 GNU PIC/PIE lowering selection.
+     * The canonical target descriptors default to static PC-relative.
+     * A CLI invocation copies the descriptor before setting this bit. */
+    bool position_independent;
 } MinicTargetInfo;
 
 extern const char *const minic_riscv64_argument_registers[8];

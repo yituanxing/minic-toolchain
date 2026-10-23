@@ -24,10 +24,10 @@ static bool emit_riscv64(const char *output_path, const MinicC0Program *program,
                         const MinicCoreFunction *functions,
                         size_t function_count, bool function_sections,
                         MinicDiagnostic *diagnostic) {
-    (void)target;
     return minic_riscv64_write_c0_program_with_core_functions(
         output_path, program, functions, function_count,
-        function_sections, diagnostic);
+        function_sections, target != NULL && target->position_independent,
+        diagnostic);
 }
 
 /* Explicit selection avoids accidental target-number indexing and fallback.

@@ -27,7 +27,8 @@ bool minic_riscv64_emit_core_function_for_program_with_symbol(
     FILE *file,
     const MinicC0Program *program,
     const MinicCoreFunction *function,
-    const MinicRiscv64FunctionSymbol *symbol);
+    const MinicRiscv64FunctionSymbol *symbol,
+    bool position_independent);
 
 static inline bool minic_riscv64_emit_core_function(FILE *file,
                                                      const MinicCoreFunction *function,

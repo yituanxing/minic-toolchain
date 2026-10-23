@@ -28,6 +28,7 @@ if timeout 900s env CROSS_COMPILE="$prefix" \
     BUSYBOX_ALLYES_MIXED_BULK=1 \
     BUSYBOX_ALLYES_CROSS_PREFIX="$prefix" \
     BUSYBOX_ALLYES_MINIC_TARGET="$target-linux" \
+    BUSYBOX_ALLYES_MINIC_PIC="$(if [ "$target" = riscv64 ]; then printf 1; else printf 0; fi)" \
     BUSYBOX_ALLYES_QEMU="$qemu" \
     BUSYBOX_ALLYES_SYSROOT="$sysroot" \
     python3 "$repo/tests/external/busybox/allyes_sweep.py" \

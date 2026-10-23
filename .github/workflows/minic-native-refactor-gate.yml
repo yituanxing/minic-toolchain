@@ -14,6 +14,7 @@ on:
       # Changes to the native ABI/oracle must execute the native gate too.
       - 'tests/compiler/c0/run-x86_64-native-m1.sh'
       - 'tests/compiler/c0/probe-rv64-extended-float-native.sh'
+      - 'tests/compiler/c0/probe-rv64-pic-glibc-got.sh'
   workflow_dispatch:
 
 concurrency:
@@ -46,6 +47,14 @@ jobs:
           sh -n tests/compiler/c0/probe-rv64-extended-float-native.sh
           MINIC_CC="$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc" \
             sh tests/compiler/c0/probe-rv64-extended-float-native.sh
+
+      - name: RV64 PCREL kernel and GOT glibc modes without APT
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sh -n tests/compiler/c0/probe-rv64-pic-glibc-got.sh
+          MINIC_CC="$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc" \
+            MINIC_PIC_ASM_ONLY=1 sh tests/compiler/c0/probe-rv64-pic-glibc-got.sh
 
       - name: Native x86-64 ABI and runtime smoke
         shell: bash

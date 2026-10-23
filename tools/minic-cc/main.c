@@ -6,7 +6,7 @@
 #include <string.h>
 
 static void minic_print_usage(FILE *stream, const char *program) {
-    (void)fprintf(stream, "usage: %s -S <preprocessed-input.i> [--target=riscv64-linux|x86_64-linux|aarch64-linux|loongarch64-linux] [-ffunction-sections|-fno-function-sections] -o <output.s>\n", program);
+    (void)fprintf(stream, "usage: %s -S <preprocessed-input.i> [--target=riscv64-linux|x86_64-linux|aarch64-linux|loongarch64-linux] [-ffunction-sections|-fno-function-sections] [-fPIE|-fPIC|-fno-pie] -o <output.s>\n", program);
 }
 
 int main(int argc, char **argv) {
@@ -16,6 +16,8 @@ int main(int argc, char **argv) {
     int index;
     int result;
     bool function_sections = false;
+    bool position_independent = false;
+    MinicTargetInfo selected_target;
     const char *target_name = "riscv64-linux";
     const MinicTargetInfo *target_info;
     bool target_given = false;
@@ -54,6 +56,16 @@ int main(int argc, char **argv) {
             function_sections = true;
         } else if (strcmp(argv[index], "-fno-function-sections") == 0) {
             function_sections = false;
+        } else if (strcmp(argv[index], "-fPIE") == 0 ||
+                   strcmp(argv[index], "-fpie") == 0 ||
+                   strcmp(argv[index], "-fPIC") == 0 ||
+                   strcmp(argv[index], "-fpic") == 0) {
+            position_independent = true;
+        } else if (strcmp(argv[index], "-fno-pie") == 0 ||
+                   strcmp(argv[index], "-fno-PIE") == 0 ||
+                   strcmp(argv[index], "-fno-pic") == 0 ||
+                   strcmp(argv[index], "-fno-PIC") == 0) {
+            position_independent = false;
         } else if (strcmp(argv[index], "--help") == 0 || strcmp(argv[index], "-h") == 0) {
             minic_print_usage(stdout, argv[0]);
             return 0;
@@ -74,8 +86,16 @@ int main(int argc, char **argv) {
         (void)fprintf(stderr, "%s: unsupported target: %s\n", argv[0], target_name);
         return 2;
     }
+    if (position_independent && target_info->architecture != MINIC_TARGET_ARCH_RISCV64) {
+        (void)fprintf(stderr, "%s: PIC lowering is not yet qualified for this target\n", argv[0]);
+        return 2;
+    }
+    /* Keep canonical shared TargetInfo descriptors immutable. Codegen mode
+     * is invocation-scoped and does not affect parsed language semantics. */
+    selected_target = *target_info;
+    selected_target.position_independent = position_independent;
     result = minic_compile_preprocessed_file_for_target(
-        input_path, output_path, target_info, function_sections, &diagnostic);
+        input_path, output_path, &selected_target, function_sections, &diagnostic);
     if (result != 0) {
         (void)fprintf(stderr,
                       "%s:%zu:%zu: error: %s\n",

@@ -35,7 +35,8 @@ static bool emit_instruction(FILE *file,
                              const MinicRiscv64CoreFrame *frame,
                              const char *symbol_name,
                              const MinicCoreInstruction *instruction,
-                             size_t instruction_id) {
+                             size_t instruction_id,
+                             bool position_independent) {
     size_t object_offset;
 
     /* All Core instruction IDs were admitted once before function entry;
@@ -242,23 +243,26 @@ static bool emit_instruction(FILE *file,
         if (instruction->value.block_id >= function->block_count ||
             fprintf(file, "  la t0, .L%s_core_bb%" PRIu32 "\n", symbol_name, instruction->value.block_id) < 0) return false;
         return minic_riscv64_frame_store_value(file, frame, instruction->result, "t0");
-    /* M196_LINUX_STATIC_PCREL_GLOBAL_ADDRESS: the Linux kernel is statically
-       linked and executes early global accesses before the MMU is enabled.
-       Use the explicit PC-relative pseudo-op so GAS cannot choose GOT form. */
+    /* Static Linux kernels need lla, not GOT, before the MMU is on.
+     * GNU/glibc PIE must instead resolve preemptible objects/functions via
+     * the GOT. Keep the C ABI decision here in RV64 Target emission. Scope
+     * .option pic with push/pop so user file/inline asm cannot leak modes. */
     case MINIC_CORE_INSTRUCTION_GLOBAL_ADDRESS:
         if (instruction->value.global_id >= function->global_count ||
-            fprintf(file, "  lla t0, %s\n", function->globals[instruction->value.global_id].name) <
-                0) {
+            fprintf(file,
+                    position_independent
+                        ? "  .option push\n  .option pic\n  la t0, %s\n  .option pop\n"
+                        : "  lla t0, %s\n",
+                    function->globals[instruction->value.global_id].name) < 0) {
             return false;
         }
         return minic_riscv64_frame_store_value(file, frame, instruction->result, "t0");
-    /* M197_LINUX_STATIC_PCREL_FUNCTION_ADDRESS: early static-kernel code may
-       take function addresses while MMU-off (for example set_satp_mode).
-       Keep those addresses PC-relative rather than GOT/high-half based. */
     case MINIC_CORE_INSTRUCTION_FUNCTION_ADDRESS:
         if (instruction->value.function_symbol_id >= function->function_symbol_count ||
             fprintf(file,
-                    "  lla t0, %s\n",
+                    position_independent
+                        ? "  .option push\n  .option pic\n  la t0, %s\n  .option pop\n"
+                        : "  lla t0, %s\n",
                     function->function_symbols[instruction->value.function_symbol_id].name) < 0) {
             return false;
         }
@@ -448,7 +452,8 @@ static bool emit_terminator(FILE *file,
 static bool emit_core_function_with_symbol(FILE *file,
                                                     const MinicC0Program *program,
                                                     const MinicCoreFunction *function,
-                                                    const MinicRiscv64FunctionSymbol *symbol) {
+                                                    const MinicRiscv64FunctionSymbol *symbol,
+                                                    bool position_independent) {
     MinicRiscv64CoreFrame frame;
     MinicRiscv64FunctionAbiPlan abi_plan = {0};
     const char *symbol_name;
@@ -615,7 +620,8 @@ static bool emit_core_function_with_symbol(FILE *file,
             instruction_id = block->instructions[instruction_index];
             if (instruction_id >= function->instruction_count ||
                 !emit_instruction(file, program, function, &frame, symbol_name,
-                                  &function->instructions[instruction_id], (size_t)instruction_id)) {
+                                  &function->instructions[instruction_id],
+                                  (size_t)instruction_id, position_independent)) {
                 return core_frame_fail(&frame);
             }
         }
@@ -689,14 +695,16 @@ static bool emit_core_function_with_symbol(FILE *file,
 
 bool minic_riscv64_emit_core_function_with_symbol(
     FILE *file, const MinicCoreFunction *function, const MinicRiscv64FunctionSymbol *symbol) {
-    return emit_core_function_with_symbol(file, NULL, function, symbol);
+    return emit_core_function_with_symbol(file, NULL, function, symbol, false);
 }
 
 bool minic_riscv64_emit_core_function_for_program_with_symbol(
     FILE *file,
     const MinicC0Program *program,
     const MinicCoreFunction *function,
-    const MinicRiscv64FunctionSymbol *symbol) {
+    const MinicRiscv64FunctionSymbol *symbol,
+    bool position_independent) {
     return program != NULL &&
-           emit_core_function_with_symbol(file, program, function, symbol);
+           emit_core_function_with_symbol(file, program, function, symbol,
+                                          position_independent);
 }
