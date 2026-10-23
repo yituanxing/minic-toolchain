@@ -260,6 +260,17 @@ bool minic_riscv_isa_lp64_integer_signature_supported(
     return true;
 }
 
+bool minic_riscv64_asm_audit_mode(void) {
+    const char *enabled = getenv("MINIC_RV64I_ASM_AUDIT");
+    return enabled != NULL && strcmp(enabled, "1") == 0;
+}
+
+bool minic_riscv64_asm_audit_marker(FILE *file, bool begin) {
+    if (!minic_riscv64_asm_audit_mode()) return true;
+    return file != NULL && fprintf(file, "# MINIC_RV64I_ASM_%s\\n",
+                                   begin ? "BEGIN" : "END") >= 0;
+}
+
 static bool base_i_opcode(const char *op) {
     static const char *const allowed[] = {
         "add", "addi", "addiw", "addw", "and", "andi", "auipc",
@@ -357,6 +368,8 @@ bool minic_riscv64_check_isa_assembly(const char *path,
     size_t allocated = 0U, lineno = 0U;
     ssize_t n;
     bool valid = true;
+    bool in_user_asm = false;
+    const bool provenance = minic_riscv64_asm_audit_mode();
     if (isa == NULL || !isa->strict_isa)
         return reject(reason, capacity, "strict RISC-V ISA profile required");
     in = fopen(path, "rb");
@@ -370,7 +383,26 @@ bool minic_riscv64_check_isa_assembly(const char *path,
         (void)n;
         ++lineno;
         while (isspace((unsigned char)*p)) ++p;
-        if (*p == '\0' || *p == '#' || *p == ';') continue;
+        if (provenance && strncmp(p, "# MINIC_RV64I_ASM_BEGIN", 25) == 0 &&
+            (p[25] == '\\n' || p[25] == '\\0')) {
+            if (in_user_asm) {
+                valid = reject(reason, capacity, "nested inline asm provenance markers");
+                break;
+            }
+            in_user_asm = true;
+            continue;
+        }
+        if (provenance && strncmp(p, "# MINIC_RV64I_ASM_END", 23) == 0 &&
+            (p[23] == '\\n' || p[23] == '\\0')) {
+            if (!in_user_asm) {
+                valid = reject(reason, capacity, "unpaired inline asm end marker");
+                break;
+            }
+            in_user_asm = false;
+            continue;
+        }
+        if (in_user_asm) continue;
+        if (*p == '\\0' || *p == '#' || *p == ';') continue;
         if (*p == '.') {
             if (escape_directive(p)) {
                 if (reason != NULL && capacity != 0U)
@@ -411,6 +443,8 @@ bool minic_riscv64_check_isa_assembly(const char *path,
             break;
         }
     }
+    if (in_user_asm)
+        valid = reject(reason, capacity, "unclosed inline asm provenance region");
     if (ferror(in))
         valid = reject(reason, capacity, "cannot read RISC-V assembly");
     free(line);
