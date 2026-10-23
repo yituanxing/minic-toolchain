@@ -9,6 +9,8 @@ on:
     branches: [main]
     paths:
       - '.github/workflows/minic-capability-recertify.yml'
+      # The strict 593/593 Makefile receipt gate is part of acceptance.
+      - 'Makefile'
       - 'src/target/x86_64/**'
       # Core materializes target-qualified GNU ASM contracts, while the
       # ISA-specific constraint classifier lives under target/x86_64.
