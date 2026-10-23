@@ -25,6 +25,21 @@ grep -q 'inline assembly is not yet ISA-qualified' "$work/strict.err"
 mkdir -p "$work/inputs"
 MINIC_RV64I_ASM_AUDIT=1 "$minic_cc" --target=riscv64-linux \
   -march=rv64i -mabi=lp64 -S "$work/probe.i" -o "$work/inputs/probe.s"
+python3 - "$work/inputs/probe.s" <<'PY'
+import importlib.util
+from pathlib import Path
+import sys
+spec = importlib.util.spec_from_file_location("origin_audit",
+    "tools/ci/audit-rv64i-asm-origin.py")
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+path = Path(sys.argv[1])
+fast, reference = module.inspect(path), module.inspect_reference(path)
+for key in ("compiler", "inline", "inline_regions", "marker_errors",
+            "unverified_directives", "compiler_non_i"):
+    assert fast[key] == reference[key], (key, fast[key], reference[key])
+print("RV64I_ORIGIN_FAST_REFERENCE=PASS")
+PY
 python3 tools/ci/audit-rv64i-asm-origin.py --root "$work/inputs" \
   --json-out "$work/valid.json" --require-markers \
   --fail-on-compiler-non-i --expected-files 1
