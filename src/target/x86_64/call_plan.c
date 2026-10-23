@@ -62,6 +62,19 @@ static bool x86_sysv_place(const MinicC0Program *program,
         loc->stack_index = cursor->stack_slots;
         loc->on_stack = true;
         cursor->stack_slots += 2U;
+    } else if (minic_type_is_int128_integer(type)) {
+        /* The scalar TI ABI must not be treated as a record or as one
+         * eightbyte. Both INTEGER registers are consumed atomically.
+         * Stack fallback is 16-byte aligned, unlike ordinary scalars. */
+        loc->kind = MINIC_X86_ARG_I128_TWO_GP;
+        if (cursor->gp_used <= 4U) {
+            cursor->gp_used += 2U;
+        } else {
+            loc->on_stack = true;
+            cursor->stack_slots += cursor->stack_slots & 1U;
+            loc->stack_index = cursor->stack_slots;
+            cursor->stack_slots += 2U;
+        }
     } else {
         if (!minic_x86_64_scalar_width(program, target, type, &bytes, &sign))
             return false;
