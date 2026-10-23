@@ -23,6 +23,12 @@ typedef struct MinicX86Frame {
     MinicX86ArgumentPlan incoming_arguments;
     size_t object_count;
     size_t frame_size;
+    /* Wide scalar operations use RDX as a scratch register. Snapshot the
+     * incoming SysV GP bank in the prologue before lowering any Core body.
+     * This keeps a later TI parameter alive across an earlier param's
+     * two-word Core load/store and general source evaluation. */
+    bool saves_incoming_gp;
+    size_t incoming_gp_save_offset;
     size_t object_base_alignment;
     bool objects_from_aligned_rsp;
     /* SysV x86-64 va_list: gp_offset / fp_offset / overflow / reg_save.
