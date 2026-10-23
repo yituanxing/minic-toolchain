@@ -92,11 +92,12 @@ type_is_valid(const MinicC0Program *program, const MinicTargetInfo *target, Mini
              type.base_kind == MINIC_TYPE_BASE_FLOAT32X ||
              type.base_kind == MINIC_TYPE_BASE_FLOAT64X) &&
             (target == NULL ||
-             (target->architecture != MINIC_TARGET_ARCH_X86_64 &&
+             (target->architecture != MINIC_TARGET_ARCH_RISCV64 &&
+              target->architecture != MINIC_TARGET_ARCH_X86_64 &&
               target->architecture != MINIC_TARGET_ARCH_AARCH64 &&
               target->architecture != MINIC_TARGET_ARCH_LOONGARCH64))) {
-            /* Preserves distinct glibc extended-FP declaration types.
-             * Acceptance here is NOT support for executing extended-FP
+            /* Preserves distinct glibc extended-FP declaration types on all
+             * four Linux targets. Acceptance is NOT support for executing extended-FP
              * arithmetic or crossing its ABI boundary. */
             return false;
         }

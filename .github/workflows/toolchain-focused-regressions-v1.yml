@@ -225,6 +225,11 @@ jobs:
           sh -n tests/external/busybox/probe-rv64-all-kbuild.sh
           sh -n tests/external/busybox/probe-four-backend-all-kbuild.sh
           python3 -m py_compile tests/external/busybox/mixed_bulk_kbuild.py
+          # One compact real RV64 glibc regression before all 581 BusyBox
+          # owners: never repeat an identical header parse error 575 times.
+          sh -n tests/compiler/c0/probe-rv64-extended-float-headers.sh
+          MINIC_CC="$GITHUB_WORKSPACE/build/toolchain-focused-t1-v2/bin/minic-cc" \
+            sh tests/compiler/c0/probe-rv64-extended-float-headers.sh
           MINIC_CC="$GITHUB_WORKSPACE/build/toolchain-focused-t1-v2/bin/minic-cc" \
             sh tests/external/busybox/probe-rv64-all-kbuild.sh
 

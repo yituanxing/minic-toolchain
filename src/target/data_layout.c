@@ -15,6 +15,10 @@ static const MinicDataLayout minic_rv64_data_layout = {
     .double_alignment = 8U,
     .long_double_size = 16U,
     .long_double_alignment = 16U,
+    /* RV64 Linux lp64d uses IEEE binary128 for long double and _Float128.
+     * These storage facts do not imply support for binary128 operations. */
+    .float128_size = 16U,
+    .float128_alignment = 16U,
 };
 
 /* Keep the x86-64 layout separate: size equality does not imply identical
@@ -356,9 +360,10 @@ static bool minic_data_layout_type_depth(const MinicDataLayout *layout,
         *alignment = layout->float128_alignment;
         return minic_data_layout_apply_explicit_alignment(type, alignment);
     }
-    /* The x86 TS 18661 variants have their own C type identities but
-     * storage layout matching the standard binary32/binary64/x87 formats
-     * on this target. RV64 verifier rejects these target-only types. */
+    /* TS 18661 variants retain distinct C type identities even if their
+     * storage matches binary32/binary64 or the target long-double format.
+     * RV64 uses IEEE binary128; x86-64 uses x87 for _Float64x. Execution
+     * and call ABI are not enabled by a size/alignment query. */
     if (type.base_kind == MINIC_TYPE_BASE_FLOAT32 ||
         type.base_kind == MINIC_TYPE_BASE_FLOAT64 ||
         type.base_kind == MINIC_TYPE_BASE_FLOAT32X ||
