@@ -148,6 +148,7 @@ ASM_EVENT = re.compile(
 def inspect(path: Path) -> dict:
     data = path.read_bytes()
     counts = {"compiler": Counter(), "inline": Counter()}
+    opcodes = {"compiler": Counter(), "inline": Counter()}
     findings: list[dict] = []
     in_asm = False
     origins = 0
@@ -178,6 +179,7 @@ def inspect(path: Path) -> dict:
                 record(pos, origin=region, kind="UNVERIFIED_DIRECTIVE", opcode=op)
             return
         kind = isa(op)
+        opcodes[region][op] += 1
         counts[region][kind] += 1
         if (region == "compiler" and kind != "I") or kind == "UNKNOWN":
             record(pos, origin=region, kind="NON_I_OR_UNKNOWN", opcode=op, isa=kind)
@@ -247,6 +249,8 @@ def inspect(path: Path) -> dict:
         file=str(path),
         compiler=dict(counts["compiler"]),
         inline=dict(counts["inline"]),
+        opcode_counts={region: dict(sorted(counter.items()))
+                       for region, counter in opcodes.items()},
         inline_regions=origins,
         marker_errors=marker_errors,
         unverified_directives=directives,
@@ -263,6 +267,8 @@ def main() -> int:
     p.add_argument("--expected-files", type=int)
     p.add_argument("--require-markers", action="store_true")
     p.add_argument("--fail-on-compiler-non-i", action="store_true")
+    p.add_argument("--opcode-tsv-out", type=Path,
+                   help="write sorted per-mnemonic counts, separated by origin")
     args = p.parse_args()
     paths = sorted(args.root.rglob("*.s"))
     if not paths:
@@ -270,9 +276,11 @@ def main() -> int:
         return 2
     rows = [inspect(path) for path in paths]
     totals = {"compiler": Counter(), "inline": Counter()}
+    opcode_totals = {"compiler": Counter(), "inline": Counter()}
     for row in rows:
         for origin in totals:
             totals[origin].update(row[origin])
+            opcode_totals[origin].update(row["opcode_counts"][origin])
     findings = [{**finding, "file": row["file"]}
                 for row in rows for finding in row["findings"]]
     selected = None
@@ -290,12 +298,26 @@ def main() -> int:
                    incomplete=incomplete, inline_regions=sum(row["inline_regions"] for row in rows),
                    compiler=dict(sorted(totals["compiler"].items())),
                    inline=dict(sorted(totals["inline"].items())),
+                   opcode_counts={region: dict(sorted(counter.items()))
+                                  for region, counter in opcode_totals.items()},
                    compiler_non_i=count_non_i, marker_errors=marker_errors,
                    unverified_directives=unverified,
                    files_with_compiler_non_i=sum(row["compiler_non_i"] > 0 for row in rows),
                    findings=sorted(findings, key=lambda x: (x["file"], x["line"]))[:200])
     args.json_out.parent.mkdir(parents=True, exist_ok=True)
     args.json_out.write_text(json.dumps({"summary": summary, "files": rows}, indent=2))
+    if args.opcode_tsv_out is not None:
+        args.opcode_tsv_out.parent.mkdir(parents=True, exist_ok=True)
+        with args.opcode_tsv_out.open("w") as sink:
+            sink.write("origin\topcode\tisa\tcount\\n")
+            for region in ("compiler", "inline"):
+                for opcode, n in sorted(opcode_totals[region].items(),
+                                        key=lambda row: (-row[1], row[0])):
+                    sink.write(f"{region}\t{opcode}\t{isa(opcode)}\t{n}\\n")
+    for region in ("compiler", "inline"):
+        ranking = opcode_totals[region].most_common(20)
+        print("RV64I_OPCODE_TOP origin={} {}".format(
+            region, " ".join(f"{op}:{count}" for op, count in ranking)))
     passed = (marker_errors == 0
               and (args.expected_files is None or len(paths) == args.expected_files)
               and (not args.require_markers or summary["inline_regions"] > 0)
