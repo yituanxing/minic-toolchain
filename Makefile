@@ -451,6 +451,7 @@ $(RV64I_RUNTIME_DIR)/softfp/%.o: $(RV64I_SOFTFP_SRC)/%.c $(wildcard $(RV64I_SOFT
 	@mkdir -p "$(dir $@)"
 	$(RISCV_RUNTIME_CC) -std=gnu11 -O2 -ffreestanding -fno-builtin \
 	  -fno-stack-protector -fno-lto -fno-pic -nostdinc \
+	  -I"$(RV64I_RUNTIME_SRC)" \
 	  -isystem "$(RV64I_SOFTFP_SRC)/freestanding-clang" \
 	  -isystem "$(shell $(RISCV_RUNTIME_CC) -print-file-name=include)" \
 	  -march=rv64i -mabi=lp64 -I"$(RV64I_SOFTFP_SRC)" -c "$<" -o "$@"

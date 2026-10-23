@@ -15,3 +15,9 @@ compatible GCC libgcc or LLVM compiler-rt runtime from the target toolchain.
 The optional archive also packages unmodified LLVM compiler-rt 19.1.7
 software-floating sources from ../llvm-compiler-rt-19.1.7 under their
 separate Apache/LLVM runtime license. It remains opt-in at final link.
+
+The unmodified `stdint-gcc.h` is also pinned from GCC 14.2.0
+`gcc/ginclude/stdint-gcc.h` under the same GPL-3.0-or-later / GCC
+Runtime Library Exception 3.1. `stdint.h` is a tiny local forwarding shim
+to select the upstream GCC constant-width definitions for the freestanding
+LLVM C library, and contains no arithmetic algorithms.

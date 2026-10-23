@@ -2,12 +2,16 @@
 
 Upstream source: https://github.com/llvm/llvm-project/tree/llvmorg-19.1.7/compiler-rt/lib/builtins
 Tag: `llvmorg-19.1.7`; the runtime C/.h/.inc sources in this directory are copied
-**unmodified** from that upstream tag. Four standard freestanding headers
-in `freestanding-clang/` are independently copied **unmodified** from
-`clang/lib/Headers/{float,limits,stdbool,stdint}.h` at the same LLVM tag.
-They avoid depending on cross-glibc LP64 multilib headers (Debian's default
-cross sysroot may have LP64D-only `gnu/stubs`). They are compilation
-headers, not private floating arithmetic implementations. The `LICENSE.TXT` is copied from
+**unmodified** from that upstream tag. The freestanding `float.h`, `limits.h` and `stdbool.h`
+headers under `freestanding-clang/` are independently copied **unmodified**
+from `clang/lib/Headers` at the same LLVM tag. The GCC target's standard
+`stdint.h` interface is instead provided by the pinned upstream GCC
+`stdint-gcc.h` under `../gcc-riscv-14.2.0/`, via a minimal forwarding
+header. GCC defines `__UINT64_C` correctly for LP64, whereas Clang's
+unhosted constant-suffix fallback can incorrectly make `UINT64_C(1)`
+a 32-bit constant under GCC, corrupting 64-bit IEEE-754 masks. All
+headers avoid dependence on a cross-glibc LP64 multilib that Debian's
+default cross sysroot may not include. The `LICENSE.TXT` is copied from
 `compiler-rt/LICENSE.TXT`: Apache-2.0 with LLVM exceptions.
 
 This is third-party compiler runtime code, not MiniC's own IEEE-754
