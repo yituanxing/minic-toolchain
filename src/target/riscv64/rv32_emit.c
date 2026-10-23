@@ -61,8 +61,8 @@ static bool rv32_frame_init(Rv32Frame *frame, const MinicC0Program *program,
         size_t size, align;
         if (!minic_data_layout_type(t->data_layout, program,
                                     obj->type, &size, &align) ||
-            obj->element_count > 1U &&
-              size > SIZE_MAX / obj->element_count) return false;
+            (obj->element_count > 1U &&
+             size > SIZE_MAX / obj->element_count)) return false;
         if (obj->element_count > 1U) size *= obj->element_count;
         if (obj->explicit_alignment > align) align = obj->explicit_alignment;
         if (align < 4U) align = 4U;
@@ -261,7 +261,8 @@ static bool rv32_emit_ins(FILE *out, const MinicCoreFunction *f,
                             "  srli t1, t1, 1\n"
                             "  bnez t1, .Lrv32_idx_%u\n"
                             "  %s t0, t0, t3\n",
-                       ins->result, ins->result, ins->result, ins->result,
+                       stride, ins->result, ins->result, ins->result,
+                       ins->result,
                        ins->value.pointer_offset.subtract ? "sub" : "add") >= 0 &&
                rv32_slot(out, fr, ins->result, "t0", false);
     }
