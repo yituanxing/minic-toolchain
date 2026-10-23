@@ -171,7 +171,7 @@ jobs:
       - name: Restore validated RISC-V package archives
         if: steps.owners.outputs.mode != 'four-backend'
         id: rv64_apt_cache
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: ~/.cache/minic-apt/archives
           key: rv64-apt-${{ runner.os }}-${{ runner.arch }}-noble-${{ hashFiles('tools/ci/ubuntu-24.04-packages.txt') }}
@@ -182,6 +182,16 @@ jobs:
         env:
           RV64_CACHE_HIT: ${{ steps.rv64_apt_cache.outputs.cache-hit }}
         run: bash tools/ci/focused-rv64-apt-cache-v1.sh
+
+      # Persist dependencies IMMEDIATELY after successful apt installation.
+      # A later failing compiler/BusyBox test must not discard the package
+      # cache. The old combined actions/cache step saves only on job success.
+      - name: Save validated RV64 package archives before compiler tests
+        if: steps.owners.outputs.mode != 'four-backend' && steps.rv64_apt_cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.cache/minic-apt/archives
+          key: rv64-apt-${{ runner.os }}-${{ runner.arch }}-noble-${{ hashFiles('tools/ci/ubuntu-24.04-packages.txt') }}
 
       - name: Compile Mini toolchain exactly once for three independent verdicts
         id: build

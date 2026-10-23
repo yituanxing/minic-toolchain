@@ -42,7 +42,17 @@ fi
 # Cold cache or missing dependencies: one bounded attempt only. The old
 # 360s apt install -> 300s apt update -> 480s apt install hid mirror stalls
 # for 14m and never executed a single compiler test.
-echo 'FOCUSED_APT=COLD_DOWNLOAD timeout_s=170 mirror=ubuntu-repositories'
+# GitHub's Azure mirror took over two minutes to transfer one 10MB
+# cpp-riscv64 package (#39893228873), exhausting our bounded download.
+# Keep the runner's pinned Ubuntu APT indexes and switch only the archive
+# transport to the canonical Ubuntu origin. Package signatures remain APT
+# verified. Avoid an expensive unconditional apt-get update.
+if grep -qs 'azure.archive.ubuntu.com/ubuntu' /etc/apt/sources.list.d/ubuntu.sources; then
+  sudo sed -i 's|http://azure.archive.ubuntu.com/ubuntu|http://archive.ubuntu.com/ubuntu|g' \
+    /etc/apt/sources.list.d/ubuntu.sources
+  echo 'FOCUSED_APT=MIRROR canonical_archive_ubuntu=1'
+fi
+echo 'FOCUSED_APT=COLD_DOWNLOAD timeout_s=170 mirror=ubuntu-canonical'
 packages=(gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu
           libc6-dev-riscv64-cross qemu-user)
 if ! timeout 170s sudo apt-get \

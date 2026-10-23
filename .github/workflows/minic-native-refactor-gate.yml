@@ -13,6 +13,7 @@ on:
       - 'tests/compiler/c0/check-minic-target-boundaries.sh'
       # Changes to the native ABI/oracle must execute the native gate too.
       - 'tests/compiler/c0/run-x86_64-native-m1.sh'
+      - 'tests/compiler/c0/probe-rv64-extended-float-native.sh'
   workflow_dispatch:
 
 concurrency:
@@ -38,6 +39,14 @@ jobs:
           make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/minic-native-backend all
           test -x build/minic-native-backend/bin/minic
           test -x build/minic-native-backend/bin/minic-cc
+      - name: RV64 extended-float declarations without cross-toolchain installation
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sh -n tests/compiler/c0/probe-rv64-extended-float-native.sh
+          MINIC_CC="$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc" \
+            sh tests/compiler/c0/probe-rv64-extended-float-native.sh
+
       - name: Native x86-64 ABI and runtime smoke
         shell: bash
         run: |
