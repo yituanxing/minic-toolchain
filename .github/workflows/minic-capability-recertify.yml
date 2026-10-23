@@ -10,6 +10,10 @@ on:
     paths:
       - '.github/workflows/minic-capability-recertify.yml'
       - 'src/target/x86_64/**'
+      # GNU x86 asm preflight lives in Core, but has zero other-target
+      # semantic effect; still require the full original BusyBox oracle.
+      - 'src/core/core_lower_asm_x86.c'
+      - 'src/core/core_lower_asm.c'
       # Original GNU BusyBox SELinux callback/type compatibility owners.
       - 'src/frontend/parser_statement.c'
       - 'src/frontend/parser_function_parameters.c'
