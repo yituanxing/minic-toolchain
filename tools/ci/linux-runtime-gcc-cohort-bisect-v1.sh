@@ -42,6 +42,23 @@ case "${COHORT_ACTION:-all}" in
   all|compile|verify) ;;
   *) echo "COHORT_ACTION=ERROR unknown_action=${COHORT_ACTION}" >&2; exit 64 ;;
 esac
+# GNU link/QEMU for the original default RV64 Linux already passed. The next
+# separate qualification compiles the ORIGINAL 2064 real Kbuild objects
+# through strict RV64I MiniC, but leaves authored kernel M/A/CSR assembly and
+# GNU binutils unchanged. Choose the mode from one explicit opt-in commit tag
+# inside the existing seven-shard cohort: no new workflows or CI branches.
+if [[ "${GITHUB_REF:-}" == refs/heads/main &&
+      ( "${COHORT_ACTION:-all}" == compile ||
+        "${COHORT_ACTION:-all}" == verify ) ]] &&
+   git -C "$repo" log -1 --format=%B "${GITHUB_SHA:-HEAD}" |
+     grep -Fq '[linux-rv64i-full2064]'; then
+  [[ "$cohort_scope" == SHARD_COMPILE_ONLY ||
+     ( "$cohort_scope" == FULL_C_UNIVERSE && "$n" == 2064 ) ]] || {
+    echo "RV64I_LINUX_MODE=REJECT scope=$cohort_scope objects=$n" >&2; exit 64;
+  }
+  export MINIC_KBUILD_RV64I_ORIGIN_AUDIT=1
+  echo "RV64I_LINUX_MODE=ENABLED action=${COHORT_ACTION:-all} objects=$n compiler_isa=rv64i compiler_abi=lp64 GNU_AS=original"
+fi
 # Re-certify current main against the exact historical seven partitions.
 # Cached GNU Kbuild regenerates only timestamp-derived init/version.o and
 # vmlinux.o. Enable the EXISTING narrowly scoped exemptions, never permit
