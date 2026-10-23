@@ -196,7 +196,7 @@ bool minic_riscv_isa_admit_core_instruction(
     if (getenv("MINIC_RV64I_CORE_REJECT_TRACE") != NULL)
         (void)fprintf(stderr,
             "RV64I_CORE_REJECT kind=%d base=%d sign=%d rank=%d "
-            "result=%" PRIu32 " span=%zu:%zu machine=%s\n",
+            "result=%u machine=%s\n",
             (int)instruction->kind, (int)instruction->type.base_kind,
             (int)instruction->type.integer_sign,
             (int)instruction->type.integer_rank,
