@@ -8,8 +8,32 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* AST rvalue dispatch owns source evaluation order, scalar transformations,
- * and the handoff into effectful Core lowering families. No target encoding. */
+/* A chain of numeric casts of literal integer 0 is exactly +0.0 for
+ * binary32/binary64. Use frontend AST provenance rather than guessing from
+ * Core SSA values (which can represent runtime-computed zeros).
+ * Never recurse into arithmetic, function calls or unary minus: -0.0 has a
+ * distinct IEEE bit pattern and side effects must not be elided. */
+static bool core_is_exact_positive_numeric_zero(
+    const MinicC0Program *program, const MinicExpression *expression,
+    unsigned depth) {
+    const MinicExpression *inner;
+    if (expression == NULL || program == NULL || depth >= 12U)
+        return false;
+    if (expression->kind == MINIC_EXPRESSION_INTEGER)
+        return minic_type_is_integer(expression->type) &&
+               expression->value.integer_value == 0;
+    if (expression->kind != MINIC_EXPRESSION_CONVERSION ||
+        (!minic_type_is_float(expression->type) &&
+         !minic_type_is_double(expression->type)))
+        return false;
+    inner = minic_c0_program_expression(
+        program, expression->value.unary.operand);
+    return inner != NULL &&
+           (minic_type_is_integer(inner->type) ||
+            minic_type_is_float(inner->type) ||
+            minic_type_is_double(inner->type)) &&
+           core_is_exact_positive_numeric_zero(program, inner, depth + 1U);
+}
 
 MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
                                              MinicExpressionId expression_id,
@@ -485,10 +509,9 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
          * manufacture an integer->double runtime dependency for a zero
          * initializer, then double->float it for float objects. This is a
          * language-level fold shared by all four target backends. */
-        if (minic_type_is_integer(source_type) &&
-            operand->kind == MINIC_EXPRESSION_INTEGER &&
-            operand->value.integer_value == 0 &&
-            (minic_type_is_double(target_type) || minic_type_is_float(target_type))) {
+        if ((minic_type_is_double(target_type) || minic_type_is_float(target_type)) &&
+            core_is_exact_positive_numeric_zero(
+                context->body->program, operand, 0U)) {
             (void)memset(&instruction, 0, sizeof(instruction));
             instruction.kind = MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT;
             instruction.span = expression->span;
