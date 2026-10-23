@@ -56,6 +56,25 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
             frame->incoming_arguments.locations == NULL)
             return false;
         location = &frame->incoming_arguments.locations[position];
+        if (minic_type_is_int128_integer(ins->type)) {
+            if (location->kind != MINIC_X86_ARG_I128_TWO_GP)
+                return false;
+            if (!location->on_stack) {
+                if (location->gp_index > 4U ||
+                    fprintf(out,
+                        "  movq %s, %%r10\n"
+                        "  movq %s, %%r11\n",
+                        regs[location->gp_index],
+                        regs[location->gp_index + 1U]) < 0)
+                    return false;
+            } else if (fprintf(out,
+                    "  movq %zu(%%rbp), %%r10\n"
+                    "  movq %zu(%%rbp), %%r11\n",
+                    16U + location->stack_index * 8U,
+                    24U + location->stack_index * 8U) < 0)
+                return false;
+            return x86_i128_store(out, frame, ins->result, "%r10", "%r11");
+        }
         if (minic_type_is_long_double(ins->type)) {
             if (location->kind != MINIC_X86_ARG_X87_MEMORY ||
                 fprintf(out, "  fldt %zu(%%rbp)\n",
