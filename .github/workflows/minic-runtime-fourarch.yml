@@ -67,6 +67,8 @@ jobs:
         if: always() && steps.reference.outcome != 'cancelled'
         id: minic
         shell: bash
+        env:
+          MINIC_RV64I_CORE_REJECT_TRACE: '1'
         run: |
           set -Eeuo pipefail
           python3 tools/runtime/build_runtime.py \
