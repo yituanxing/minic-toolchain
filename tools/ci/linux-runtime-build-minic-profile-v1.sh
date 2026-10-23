@@ -121,6 +121,30 @@ fi
 git diff --check
 make -j4 MODE=release CFLAGS=-Werror BUILD_DIR="$build_dir" \
   "$build_dir/bin/minic" "$build_dir/bin/minic-cc" >/dev/null
+
+# Full-current seven-shard Kbuild recertification needs to retain the
+# real Nouveau GNU-ICE fix: rejecting choose_expr(constant_p(dynamic))
+# would strand exactly 45 original Linux .i objects, while accepting an
+# arbitrary runtime condition would be a language-semantics regression.
+# Prove both positive and negative cases with this SAME patched MiniC.
+if git log -1 --format=%B | grep -Fq '[linux-runtime-gcc-sharded]'; then
+  ice_dir="$ev/current-main-ice-preflight"
+  mkdir -p "$ice_dir"
+  cc -std=gnu11 -fsyntax-only tests/compiler/c0/gnu_constant_p_ice_regression.c
+  cc -E -P -std=gnu11 -x c tests/compiler/c0/gnu_constant_p_ice_regression.c \
+    -o "$ice_dir/valid.i"
+  "$build_dir/bin/minic" -S "$ice_dir/valid.i" -o "$ice_dir/valid.s"
+  test -s "$ice_dir/valid.s"
+  cc -E -P -std=gnu11 -x c tests/compiler/c0/gnu_choose_dynamic_condition_reject.c \
+    -o "$ice_dir/invalid.i"
+  if "$build_dir/bin/minic" -S "$ice_dir/invalid.i" -o "$ice_dir/invalid.s" \
+       >"$ice_dir/invalid.stdout" 2>"$ice_dir/invalid.stderr"; then
+    echo 'LINUX_2064_GNU_ICE_PREFLIGHT=FAIL admitted_runtime_choose_expr' >&2
+    exit 9
+  fi
+  echo 'LINUX_2064_GNU_ICE_PREFLIGHT=PASS known_and_unknown_constant_p=1 runtime_choose_rejected=1'
+fi
+
 # Probe the exact Runtime-profile compiler before spending time producing
 # hundreds of Linux objects. The old unpatched C0 MiniC is NOT the tested
 # product here; this checks that a dead reference disappears while a dynamic
