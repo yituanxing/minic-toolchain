@@ -57,10 +57,10 @@ A `call __muldi3` assembler file can be ISA-correct while linking against
 an ABI-incompatible libgcc.a is not; never assume the host cross toolchain's
 default multilib is correct for `rv64i/lp64`.
 
-For deterministic **CI-only** linking, the regression suite vendors unchanged
+For deterministic optional runtime packaging and CI linking, the repository vendors unchanged
 GCC 14.2.0 RISC-V libgcc assembler sources `muldi3.S` and `div.S`, plus
 upstream assembly macros and full GPL-3.0 / GCC Runtime Library Exception
-3.1 license notices, under `tests/third_party/gcc-riscv-14.2.0/`. It builds
+3.1 license notices, under `third_party/gcc-riscv-14.2.0/`. The opt-in `make runtime-rv64i` target builds
 those third-party objects with `-march=rv64i -mabi=lp64` and never injects
 them into MiniC itself. A production toolchain may use a matching GCC
 libgcc or LLVM compiler-rt implementation instead.
@@ -85,3 +85,15 @@ Next prioritize verified RuntimeLibcall ABI coverage (64-bit arithmetic,
 checked overflow and 128-bit only when upstream builtin availability is
 confirmed), then full ABI configuration and RV32 ILP32. Do not develop more
 MiniC-private arithmetic libraries.
+
+## First-class optional archive
+
+`make runtime-rv64i RISCV_RUNTIME_CC=riscv64-linux-gnu-gcc` builds
+`build/debug/runtime/riscv64/rv64i-lp64/libminic-rt.a`. It is a **small
+external runtime subset**, not a complete GCC libgcc.a and not required by
+`make all`. `make check-rv64i-runtime-archive` checks the standard exported
+symbols. Production object linkage passes this archive **after** object files
+so the static linker extracts only referenced archive members. A caller may
+supply a full compatible libgcc or compiler-rt instead. For strict RV64I it
+must be built for `rv64i/lp64`, not borrowed from a default `rv64gc/lp64d`
+multilib. Licenses remain included in the `third_party` folder.

@@ -13,6 +13,16 @@ QEMU_RISCV64  ?= qemu-riscv64
 RISCV_OBJDUMP ?=
 REQUIRE_RISCV_RUNTIME ?= 0
 
+# Opt-in, pinned GCC libgcc 14.2.0 subset. No extra dependency for regular
+# MiniC builds. Archive extraction includes only referenced source members.
+RISCV_RUNTIME_CC ?= riscv64-linux-gnu-gcc
+RISCV_RUNTIME_AR ?= riscv64-linux-gnu-ar
+RISCV_RUNTIME_NM ?= riscv64-linux-gnu-nm
+RV64I_RUNTIME_SRC := third_party/gcc-riscv-14.2.0
+RV64I_RUNTIME_DIR := $(BUILD_DIR)/runtime/riscv64/rv64i-lp64
+RV64I_RUNTIME_ARCHIVE := $(RV64I_RUNTIME_DIR)/libminic-rt.a
+RV64I_RUNTIME_OBJECTS := $(RV64I_RUNTIME_DIR)/muldi3.o $(RV64I_RUNTIME_DIR)/div.o
+
 CPPFLAGS      ?=
 CFLAGS        ?=
 LDFLAGS       ?=
@@ -343,7 +353,7 @@ RV64_ABI_TEST_SOURCES := \
 RV64_ABI_TEST_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(RV64_ABI_TEST_SOURCES))
 RV64_ABI_TEST_BINARY  := $(BUILD_DIR)/tests/target/riscv64/abi-test
 
-.PHONY: all help prepare check check-fast check-four-backend-lua-frontier check-four-backend-lua-accept check-four-backend-zlib-frontier check-four-backend-zlib-accept check-target-selection-m0 check-four-backend-m39-lp64-bitops check-four-backend-m15-scalar-return check-four-backend-m14-shift check-four-backend-m13-narrow-arith check-four-backend-m12-bitwise check-four-backend-m11-index check-four-backend-m10-mod check-four-backend-m9-unsigned check-four-backend-m8-narrow check-four-backend-m7-frame check-four-backend-m6-address check-four-backend-m5-pointer check-four-backend-m4-global check-four-backend-m38-fp-varargs check-four-backend-m37-fp-arith check-four-backend-m36-lp64-mul check-four-backend-m35-ptr-to-lp64 check-four-backend-m34-fp-call-result check-four-backend-m33-pointer-less check-four-backend-m32-unreachable check-four-backend-m31-float-promote check-four-backend-m30-fp-call check-four-backend-m29-double-cmp check-four-backend-m28-int-double check-four-backend-m27-fp-parameter check-four-backend-m26-double-div check-four-backend-m25-double-transport check-four-backend-m24-indirect-call check-four-backend-m23-lp64-compare check-four-backend-m22-lp64-conv check-four-backend-m21-lp64-add check-four-backend-m20-lp64-abi check-four-backend-m19-ptr-compare check-four-backend-m18-varargs check-four-backend-m17-record check-four-backend-cjson-accept check-four-backend-cjson-frontier check-four-backend-tinyaes-accept check-four-backend-tinyaes-frontier check-four-backend-m3-call check-four-backend-m2-stack check-four-backend-m2 check-four-backend-m1 check-four-target-model-m0 check-x86_64-busybox-all-eligible check-x86_64-busybox-complex-five check-x86_64-busybox-host-link check-elf-constructors check-x86_64-one-gp-sysv check-x86_64-busybox-allyes-discovery check-x86_64-busybox-12 check-x86_64-sqlite-frontier check-x86_64-m1 check-x86_64-tinyaes check-x86_64-cjson check-x86_64-abi-elf check-x86_64-lua-frontier check-x86_64-zlib-frontier check-minias-a0 check-minipp-a0 check-minielf-reader-a0 check-mininm-a0 check-mininm-a1 check-miniobjcopy-a0 check-miniobjcopy-a1 check-minicstrip-a0 check-miniar-a0 check-miniar-a1 check-minild-a0 check-minild-a1 check-minild-a2 check-minild-a3 check-minild-a4 check-minild-a5 check-minild-a6 check-minild-script-a0 check-minild-script-a1 check-token-model check-lexer \
+.PHONY: runtime-rv64i check-rv64i-runtime-archive all help prepare check check-fast check-four-backend-lua-frontier check-four-backend-lua-accept check-four-backend-zlib-frontier check-four-backend-zlib-accept check-target-selection-m0 check-four-backend-m39-lp64-bitops check-four-backend-m15-scalar-return check-four-backend-m14-shift check-four-backend-m13-narrow-arith check-four-backend-m12-bitwise check-four-backend-m11-index check-four-backend-m10-mod check-four-backend-m9-unsigned check-four-backend-m8-narrow check-four-backend-m7-frame check-four-backend-m6-address check-four-backend-m5-pointer check-four-backend-m4-global check-four-backend-m38-fp-varargs check-four-backend-m37-fp-arith check-four-backend-m36-lp64-mul check-four-backend-m35-ptr-to-lp64 check-four-backend-m34-fp-call-result check-four-backend-m33-pointer-less check-four-backend-m32-unreachable check-four-backend-m31-float-promote check-four-backend-m30-fp-call check-four-backend-m29-double-cmp check-four-backend-m28-int-double check-four-backend-m27-fp-parameter check-four-backend-m26-double-div check-four-backend-m25-double-transport check-four-backend-m24-indirect-call check-four-backend-m23-lp64-compare check-four-backend-m22-lp64-conv check-four-backend-m21-lp64-add check-four-backend-m20-lp64-abi check-four-backend-m19-ptr-compare check-four-backend-m18-varargs check-four-backend-m17-record check-four-backend-cjson-accept check-four-backend-cjson-frontier check-four-backend-tinyaes-accept check-four-backend-tinyaes-frontier check-four-backend-m3-call check-four-backend-m2-stack check-four-backend-m2 check-four-backend-m1 check-four-target-model-m0 check-x86_64-busybox-all-eligible check-x86_64-busybox-complex-five check-x86_64-busybox-host-link check-elf-constructors check-x86_64-one-gp-sysv check-x86_64-busybox-allyes-discovery check-x86_64-busybox-12 check-x86_64-sqlite-frontier check-x86_64-m1 check-x86_64-tinyaes check-x86_64-cjson check-x86_64-abi-elf check-x86_64-lua-frontier check-x86_64-zlib-frontier check-minias-a0 check-minipp-a0 check-minielf-reader-a0 check-mininm-a0 check-mininm-a1 check-miniobjcopy-a0 check-miniobjcopy-a1 check-minicstrip-a0 check-miniar-a0 check-miniar-a1 check-minild-a0 check-minild-a1 check-minild-a2 check-minild-a3 check-minild-a4 check-minild-a5 check-minild-a6 check-minild-script-a0 check-minild-script-a1 check-token-model check-lexer \
 	check-type check-record check-type-alias check-ast-contract check-layout check-rv64-abi \
 	check-static-functions \
 	check-unsigned-declarations check-long-types check-for-loops check-unbounded-for-break \
@@ -417,6 +427,26 @@ help:
 		"  make print-config       Print the active toolchain configuration" \
 		"  make clean              Remove the active build directory" \
 		"  make distclean          Remove all generated build directories"
+
+# Real optional target runtime package. It is deliberately not a MiniC core
+# dependency and is not a replacement for the complete libgcc multilib.
+runtime-rv64i: $(RV64I_RUNTIME_ARCHIVE)
+
+$(RV64I_RUNTIME_DIR)/%.o: $(RV64I_RUNTIME_SRC)/%.S $(RV64I_RUNTIME_SRC)/riscv-asm.h
+	@mkdir -p "$(dir $@)"
+	$(RISCV_RUNTIME_CC) -march=rv64i -mabi=lp64 -I"$(RV64I_RUNTIME_SRC)" -c "$<" -o "$@"
+
+$(RV64I_RUNTIME_ARCHIVE): $(RV64I_RUNTIME_OBJECTS)
+	@mkdir -p "$(dir $@)"
+	$(RISCV_RUNTIME_AR) rcs "$@" $(RV64I_RUNTIME_OBJECTS)
+
+check-rv64i-runtime-archive: runtime-rv64i
+	@symbols="$$($(RISCV_RUNTIME_NM) -g --defined-only $(RV64I_RUNTIME_ARCHIVE))"; \
+	for name in __muldi3 __divdi3 __udivdi3 __moddi3 __umoddi3; do \
+	  printf '%s\n' "$$symbols" | awk '{print $$NF}' | grep -Fx "$$name" >/dev/null || { \
+	    echo "RV64I_RUNTIME_ARCHIVE=FAIL missing $$name" >&2; exit 1; }; \
+	done
+	@echo "RV64I_RUNTIME_ARCHIVE=PASS path=$(RV64I_RUNTIME_ARCHIVE) isa=rv64i abi=lp64 symbols=5"
 
 prepare:
 	@mkdir -p "$(BUILD_DIR)"

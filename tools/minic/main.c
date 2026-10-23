@@ -22,7 +22,9 @@ typedef enum MinicDriverMode {
 
 static void append_rv64_linux_musl_predefines(char **arguments,
                                                size_t *count,
-                                               bool hosted) {
+                                               bool hosted,
+                                               const char *march,
+                                               const char *mabi) {
     arguments[(*count)++] = "-D__STDC__=1";
     arguments[(*count)++] = "-D__STDC_VERSION__=201112L";
     /*
@@ -46,7 +48,15 @@ static void append_rv64_linux_musl_predefines(char **arguments,
     arguments[(*count)++] = "-D__riscv_xlen=64";
     arguments[(*count)++] = "-D__LP64__=1";
     arguments[(*count)++] = "-D_LP64=1";
-    arguments[(*count)++] = "-D__riscv_float_abi_double=1";
+    if (mabi != NULL && strcmp(mabi, "lp64") == 0) {
+        arguments[(*count)++] = "-D__riscv_float_abi_soft=1";
+    } else {
+        arguments[(*count)++] = "-D__riscv_float_abi_double=1";
+    }
+    if (march != NULL && strcmp(march, "rv64i") != 0) {
+        arguments[(*count)++] = "-D__riscv_mul=1";
+        arguments[(*count)++] = "-D__riscv_div=1";
+    }
     arguments[(*count)++] = "-D__ORDER_LITTLE_ENDIAN__=1234";
     arguments[(*count)++] = "-D__ORDER_BIG_ENDIAN__=4321";
     arguments[(*count)++] =
@@ -62,7 +72,7 @@ static void append_rv64_linux_musl_predefines(char **arguments,
 
 static void usage(FILE *out, const char *argv0) {
     fprintf(out,
-            "usage: %s [-S|-c] [--target=riscv64-linux|x86_64-linux] [-ffreestanding|-fhosted] [-ffunction-sections|-fno-function-sections] [-static] "
+            "usage: %s [-S|-c] [--target=riscv64-linux|x86_64-linux] [-march=rv64i|rv64im|rv64imafd] [-mabi=lp64|lp64d] [--rtlib=PATH (link only)] [-ffreestanding|-fhosted] [-ffunction-sections|-fno-function-sections] [-static] "
             "[-nostdlib] [-nostartfiles] [-nodefaultlibs] [-nostdinc] "
             "[--sysroot DIR] [-DNAME[=VALUE]] [-UNAME] [-IDIR] "
             "[-isystem DIR] [-include FILE] [-LDIR] [-lNAME] "
@@ -209,7 +219,9 @@ static int preprocess_c_to_file(const char *input,
                                 bool no_stdinc,
                                 const char *const *cpp_forward,
                                 size_t cpp_forward_count,
-                                char *cpp) {
+                                char *cpp,
+                                const char *march,
+                                const char *mabi) {
     char *include_dir = NULL;
     char *arguments[256];
     size_t count = 0U;
@@ -221,7 +233,7 @@ static int preprocess_c_to_file(const char *input,
     arguments[count++] = "-P";
     arguments[count++] = "-undef";
     arguments[count++] = "-nostdinc";
-    append_rv64_linux_musl_predefines(arguments, &count, hosted);
+    append_rv64_linux_musl_predefines(arguments, &count, hosted, march, mabi);
     /*
      * User include directories must shadow the driver's default sysroot
      * headers, matching GCC's -I-before-system search semantics.  MiniPP
@@ -259,7 +271,9 @@ static int compile_c_to_assembly(const char *input,
                                  const char *const *cpp_forward,
                                  size_t cpp_forward_count,
                                  char *cpp,
-                                 char *cc) {
+                                 char *cc,
+                                 const char *march,
+                                 const char *mabi) {
     char *temp_i = make_temp_path("/tmp/minic-driver-i-XXXXXX");
     int status = 1;
 
@@ -273,12 +287,26 @@ static int compile_c_to_assembly(const char *input,
                                   no_stdinc,
                                   cpp_forward,
                                   cpp_forward_count,
-                                  cpp);
+                                  cpp, march, mabi);
     if (status == 0) {
-        char *arguments[] = {
-            cc, "-S", temp_i, "-o", (char *)output,
-            function_sections ? "-ffunction-sections" : "-fno-function-sections", NULL
-        };
+        char *arguments[12];
+        size_t argument_count = 0U;
+        arguments[argument_count++] = cc;
+        arguments[argument_count++] = "-S";
+        arguments[argument_count++] = temp_i;
+        arguments[argument_count++] = "-o";
+        arguments[argument_count++] = (char *)output;
+        arguments[argument_count++] =
+            function_sections ? "-ffunction-sections" : "-fno-function-sections";
+        if (march != NULL) {
+            arguments[argument_count++] = "-march";
+            arguments[argument_count++] = (char *)march;
+        }
+        if (mabi != NULL) {
+            arguments[argument_count++] = "-mabi";
+            arguments[argument_count++] = (char *)mabi;
+        }
+        arguments[argument_count] = NULL;
         status = run_tool(arguments);
     }
 
@@ -304,7 +332,9 @@ static int compile_c_to_object(const char *input,
                                size_t cpp_forward_count,
                                char *cpp,
                                char *cc,
-                               char *as) {
+                               char *as,
+                               const char *march,
+                               const char *mabi) {
     char *temp_s = make_temp_path("/tmp/minic-driver-s-XXXXXX");
     int status = 1;
 
@@ -320,17 +350,25 @@ static int compile_c_to_object(const char *input,
                                    cpp_forward,
                                    cpp_forward_count,
                                    cpp,
-                                   cc);
+                                   cc, march, mabi);
     if (status == 0) {
-        char *arguments[] = {
-            as,
-            "-march=rv64gc",
-            "-mabi=lp64d",
-            "-o",
-            (char *)output,
-            temp_s,
-            NULL
-        };
+        char *arguments[8];
+        size_t argument_count = 0U;
+        /* User-facing driver uses the same ISA and ABI as minic-cc.
+         * The default existing rv64gc/lp64d pipeline is untouched. */
+        char *isa_option = march != NULL ?
+            (strcmp(march, "rv64i") == 0 ? "-march=rv64i" :
+             strcmp(march, "rv64im") == 0 ? "-march=rv64im" :
+                                            "-march=rv64imafd") : "-march=rv64gc";
+        char *abi_option = mabi != NULL && strcmp(mabi, "lp64") == 0 ?
+            "-mabi=lp64" : "-mabi=lp64d";
+        arguments[argument_count++] = as;
+        arguments[argument_count++] = isa_option;
+        arguments[argument_count++] = abi_option;
+        arguments[argument_count++] = "-o";
+        arguments[argument_count++] = (char *)output;
+        arguments[argument_count++] = temp_s;
+        arguments[argument_count] = NULL;
         status = run_tool(arguments);
     }
 
@@ -376,6 +414,9 @@ int main(int argc, char **argv) {
     bool function_sections = false;
     const char *target_name = "riscv64-linux";
     bool target_given = false;
+    const char *march = NULL;
+    const char *mabi = NULL;
+    const char *runtime_archive = NULL;
     char *cpp = NULL;
     char *cc = NULL;
     char *as = NULL;
@@ -413,6 +454,15 @@ int main(int argc, char **argv) {
             }
             target_name = argument + 9U;
             target_given = true;
+        } else if (strncmp(argument, "-march=", 7U) == 0) {
+            if (march != NULL || argument[7] == '\0') return 2;
+            march = argument + 7U;
+        } else if (strncmp(argument, "-mabi=", 6U) == 0) {
+            if (mabi != NULL || argument[6] == '\0') return 2;
+            mabi = argument + 6U;
+        } else if (strncmp(argument, "--rtlib=", 8U) == 0) {
+            if (runtime_archive != NULL || argument[8] == '\0') return 2;
+            runtime_archive = argument + 8U;
         } else if (strcmp(argument, "-ffreestanding") == 0) {
             hosted = false;
         } else if (strcmp(argument, "-fhosted") == 0) {
@@ -533,6 +583,38 @@ int main(int argc, char **argv) {
         }
         return 2;
     }
+    /* Be strict about the whole pipeline: a compiler accepting RV64I but
+     * the assembler silently using RV64GC would violate the target contract. */
+    if (march != NULL) {
+        const char *expected_abi;
+        if (strcmp(march, "rv64i") == 0 || strcmp(march, "rv64im") == 0) {
+            expected_abi = "lp64";
+        } else if (strcmp(march, "rv64imafd") == 0) {
+            expected_abi = "lp64d";
+        } else {
+            fprintf(stderr, "minic: unsupported-riscv-isa:%s\n", march);
+            return 2;
+        }
+        if (mabi != NULL && strcmp(mabi, expected_abi) != 0) {
+            fprintf(stderr, "minic: incompatible-riscv-isa-abi:%s/%s\n", march, mabi);
+            return 2;
+        }
+        mabi = expected_abi;
+    } else if (mabi != NULL && strcmp(mabi, "lp64d") != 0) {
+        fprintf(stderr, "minic: explicit-nondefault-abi-requires--march\n");
+        return 2;
+    }
+    if (runtime_archive != NULL) {
+        if (mode != MINIC_DRIVER_LINK || march == NULL ||
+            strcmp(march, "rv64i") != 0) {
+            fprintf(stderr, "minic: --rtlib-requires-rv64i-link-mode\n");
+            return 2;
+        }
+        if (access(runtime_archive, R_OK) != 0) {
+            fprintf(stderr, "minic: --rtlib-unreadable:%s\n", runtime_archive);
+            return 2;
+        }
+    }
     if (input_count == 0U || output == NULL) {
         usage(stderr, argv[0]);
         return 2;
@@ -566,11 +648,24 @@ int main(int argc, char **argv) {
     }
 
     if (mode == MINIC_DRIVER_ASSEMBLY) {
-        char *cc_arguments[] = {
-            cc, "-S", (char *)inputs[0], "-o", (char *)output,
-            function_sections ? "-ffunction-sections" : "-fno-function-sections", NULL
-        };
-
+        char *cc_arguments[12];
+        size_t argument_count = 0U;
+        cc_arguments[argument_count++] = cc;
+        cc_arguments[argument_count++] = "-S";
+        cc_arguments[argument_count++] = (char *)inputs[0];
+        cc_arguments[argument_count++] = "-o";
+        cc_arguments[argument_count++] = (char *)output;
+        cc_arguments[argument_count++] =
+            function_sections ? "-ffunction-sections" : "-fno-function-sections";
+        if (march != NULL) {
+            cc_arguments[argument_count++] = "-march";
+            cc_arguments[argument_count++] = (char *)march;
+        }
+        if (mabi != NULL) {
+            cc_arguments[argument_count++] = "-mabi";
+            cc_arguments[argument_count++] = (char *)mabi;
+        }
+        cc_arguments[argument_count] = NULL;
         status = run_tool(cc_arguments);
         goto done;
     }
@@ -586,7 +681,7 @@ int main(int argc, char **argv) {
                                      cpp_forward_count,
                                      cpp,
                                      cc,
-                                     as);
+                                     as, march, mabi);
         goto done;
     }
 
@@ -648,7 +743,7 @@ int main(int argc, char **argv) {
                                              cpp_forward_count,
                                              cpp,
                                              cc,
-                                             as);
+                                             as, march, mabi);
                 if (status != 0) {
                     fprintf(stderr,
                             "minic: input-failed:%s status=%d\n",
@@ -687,6 +782,10 @@ int main(int argc, char **argv) {
         if (library_option != NULL) {
             arguments[count++] = library_option;
         }
+        /* Static archives follow their referencing objects, so standard
+         * linker extraction pulls only needed third-party builtin members. */
+        if (runtime_archive != NULL)
+            arguments[count++] = (char *)runtime_archive;
         for (option_index = 0U; option_index < ld_forward_count; ++option_index) {
             arguments[count++] = (char *)ld_forward[option_index];
         }
@@ -694,7 +793,10 @@ int main(int argc, char **argv) {
             if (static_link) {
                 arguments[count++] = "--start-group";
                 arguments[count++] = "-lc";
-                arguments[count++] = "-lgcc";
+                /* Never silently link a default LP64D multilib runtime
+                 * into an explicitly requested RV64I/LP64 binary. */
+                if (march == NULL || strcmp(march, "rv64i") != 0)
+                    arguments[count++] = "-lgcc";
                 arguments[count++] = "--end-group";
             } else {
                 arguments[count++] = "-lc";

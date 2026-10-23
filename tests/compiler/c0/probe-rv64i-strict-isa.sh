@@ -136,14 +136,17 @@ test ! -e "$tmp/invalid-record-fpabi.s"
 
 # The GNU assembler is an independent legality oracle for each exact profile.
 if command -v riscv64-linux-gnu-gcc >/dev/null 2>&1; then
-  # GCC libgcc 14.2.0 upstream RISC-V runtime sources, pinned unchanged
-  # in tests/third_party (GPL-3.0 with GCC Runtime Library Exception 3.1).
-  # These are TEST LINK PROVIDERS only, not MiniC-owned arithmetic code.
-  runtime_src=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../third_party/gcc-riscv-14.2.0" && pwd)
-  for kind in muldi3 div; do
-    riscv64-linux-gnu-gcc -march=rv64i -mabi=lp64 \
-      -I "$runtime_src" -c "$runtime_src/$kind.S" -o "$tmp/libgcc-$kind.o"
-  done
+  # The same optional archived upstream runtime used by real MiniC links.
+  # Build it once with matching ISA and ABI, not as ad-hoc test objects.
+  repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)
+  runtime_build="$tmp/rtbuild"
+  make -s -C "$repo_root" BUILD_DIR="$runtime_build" \
+    RISCV_RUNTIME_CC=riscv64-linux-gnu-gcc \
+    RISCV_RUNTIME_AR=riscv64-linux-gnu-ar \
+    RISCV_RUNTIME_NM=riscv64-linux-gnu-nm \
+    check-rv64i-runtime-archive
+  runtime_lib="$runtime_build/runtime/riscv64/rv64i-lp64/libminic-rt.a"
+  test -s "$runtime_lib"
   for selection in "rv64i lp64 add" "rv64im lp64 mul" "rv64imafd lp64d float"; do
     read -r march mabi source <<<"$selection"
     riscv64-linux-gnu-gcc "-march=$march" "-mabi=$mabi" \
@@ -177,7 +180,7 @@ SRC
         if [[ "$compiler" == gnu ]]; then input="$tmp/gnu-$march.s"; fi
         riscv64-linux-gnu-gcc "-march=$march" "-mabi=$mabi" \
           -nostdlib -static -no-pie -Wl,-e,_start \
-          "$tmp/start.s" "$input" "$tmp/libgcc-muldi3.o" "$tmp/libgcc-div.o" \
+          "$tmp/start.s" "$input" "$runtime_lib" \
           -o "$tmp/$compiler-$march.elf"
         set +e
         qemu-riscv64 "$tmp/$compiler-$march.elf" \
@@ -191,6 +194,12 @@ SRC
         fi
       done
       cmp "$tmp/gnu-$march.out" "$tmp/minic-$march.out"
+      # A pure-I add must not drag in libgcc builtins merely because an
+      # archive was named on the final link command.
+      if [[ "$march" == rv64i ]] &&
+         riscv64-linux-gnu-nm -g "$tmp/minic-$march.elf" | grep -q __muldi3; then
+        echo "RV64_RUNTIME_ARCHIVE=FAIL unnecessary_builtin_extraction" >&2; exit 1
+      fi
     done
     # The linker, ELF attributes, actual assembly and QEMU execution are
     # all explicitly RV64I even for negative signed multiplication.
@@ -210,7 +219,7 @@ SRC
       riscv64-linux-gnu-gcc -march=rv64i -mabi=lp64 \
         -nostdlib -static -no-pie -Wl,-e,_start \
         "$tmp/softstart.s" "$tmp/$source.s" \
-          "$tmp/libgcc-muldi3.o" "$tmp/libgcc-div.o" -o "$tmp/software.elf"
+          "$runtime_lib" -o "$tmp/software.elf"
       set +e
       qemu-riscv64 "$tmp/software.elf" >"$tmp/soft.out" 2>"$tmp/soft.err"
       rc=$?
@@ -235,7 +244,7 @@ SRC
     riscv64-linux-gnu-gcc -march=rv64i -mabi=lp64 \
       -nostdlib -static -no-pie -Wl,-e,_start \
       "$tmp/arithstart.s" "$tmp/rv64i-fullarith.s" \
-      "$tmp/libgcc-muldi3.o" "$tmp/libgcc-div.o" -o "$tmp/rv64i-fullarith.elf"
+      "$runtime_lib" -o "$tmp/rv64i-fullarith.elf"
     set +e
     qemu-riscv64 "$tmp/rv64i-fullarith.elf" >"$tmp/fullarith.out" 2>"$tmp/fullarith.err"
     rc=$?
@@ -294,7 +303,7 @@ SRC
         riscv64-linux-gnu-gcc "-march=$march" -mabi=lp64 \
           -nostdlib -static -no-pie -Wl,-e,_start \
           "$tmp/divstart.s" "$source" \
-          "$tmp/libgcc-muldi3.o" "$tmp/libgcc-div.o" -o "$tmp/$profile.elf"
+          "$runtime_lib" -o "$tmp/$profile.elf"
         set +e
         qemu-riscv64 "$tmp/$profile.elf" >"$tmp/$profile.out" 2>"$tmp/$profile.err"
         rc=$?
@@ -306,7 +315,58 @@ SRC
         fi
       done
     done
-    echo 'RV64_DIVREM_QEMU=PASS cases=14 profiles=3 signed_unsigned_32_64=1 gcc_oracle=1 upstream_libgcc=1'
+    echo 'RV64_DIVREM_QEMU=PASS cases=14 profiles=3 signed_unsigned_32_64=1 gcc_oracle=1 upstream_libgcc_archive=1'
+    # End-to-end staged MiniC driver: ISA/ABI flags must reach the C
+    # frontend and assembler, and a caller-supplied runtime archive must
+    # be honored by MiniLD after its referencing objects.
+    minic_driver="$(dirname "$MINIC_CC")/minic"
+    if [[ -x "$minic_driver" ]]; then
+      "$minic_driver" -S -march=rv64i -mabi=lp64 \
+        "$tmp/mulonly.i" -o "$tmp/driver-mul.s"
+      grep -q 'call __muldi3' "$tmp/driver-mul.s"
+      if "$minic_driver" -S -march=rv64i -mabi=lp64d \
+           "$tmp/mulonly.i" -o "$tmp/driver-wrong.s" \
+           >"$tmp/driver-wrong.out" 2>"$tmp/driver-wrong.err"; then
+        echo 'RV64_DRIVER=FAIL ISA/ABI mismatch accepted' >&2; exit 1
+      fi
+      grep -q 'incompatible-riscv-isa-abi' "$tmp/driver-wrong.err"
+      cat >"$tmp/driver-mul.c" <<'SRC'
+#if defined(__riscv_float_abi_double) || !defined(__riscv_float_abi_soft)
+#error wrong_riscv_lp64_predefines
+#endif
+long evaluate(long a, long b) { return a * b; }
+SRC
+      "$minic_driver" -c -ffreestanding -nostdinc \
+        -march=rv64i -mabi=lp64 \
+        "$tmp/driver-mul.c" -o "$tmp/driver-mul.o"
+      cat >"$tmp/driver-start.s" <<'SRC'
+.section .text
+.globl _start
+_start:
+  li a0, 9
+  li a1, 4
+  call evaluate
+  li a7, 93
+  ecall
+SRC
+      riscv64-linux-gnu-gcc -march=rv64i -mabi=lp64 -c \
+        "$tmp/driver-start.s" -o "$tmp/driver-start.o"
+      "$minic_driver" -static -nostdlib -march=rv64i -mabi=lp64 \
+        "--rtlib=$runtime_lib" "$tmp/driver-start.o" "$tmp/driver-mul.o" \
+        -o "$tmp/driver-result.elf"
+      set +e
+      qemu-riscv64 "$tmp/driver-result.elf" >"$tmp/driver-result.out" \
+        2>"$tmp/driver-result.err"
+      rc=$?
+      set -e
+      if (( rc != 36 )); then
+        echo "RV64_DRIVER=FAIL linked runtime rc=$rc expected=36" >&2
+        cat "$tmp/driver-result.err" >&2
+        exit 1
+      fi
+      echo 'RV64_DRIVER_RT=PASS preprocess=lp64 compile=1 assemble=1 minild_archive=1 qemu=36'
+    fi
+
     echo 'RV64_ISA_QEMU=PASS profiles=rv64i,rv64im gnu_minic_exit_exact=1'
   fi
 fi
