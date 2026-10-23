@@ -32,6 +32,7 @@ typedef struct MinicRiscv64AbiCursor {
     size_t integer_register_count;
     size_t floating_register_count;
     size_t stack_slot_count;
+    bool lp64_soft_float; /* per-target, not a process global */
 } MinicRiscv64AbiCursor;
 
 typedef struct MinicRiscv64AbiArgumentLocation {
@@ -44,11 +45,17 @@ typedef struct MinicRiscv64AbiArgumentLocation {
     size_t stack_slot_count;
 } MinicRiscv64AbiArgumentLocation;
 
+bool minic_riscv64_classify_abi_value_profile(
+    const MinicC0Program *, MinicType, bool lp64_soft_float,
+    MinicRiscv64AbiValue *);
 bool minic_riscv64_classify_abi_value(const MinicC0Program *program,
                                       MinicType type,
                                       MinicRiscv64AbiValue *result);
 
 void minic_riscv64_abi_cursor_initialize(MinicRiscv64AbiCursor *cursor);
+bool minic_riscv64_abi_cursor_initialize_for_return_profile(
+    const MinicC0Program *, MinicType, bool lp64_soft_float,
+    MinicRiscv64AbiCursor *, MinicRiscv64AbiValue *);
 bool minic_riscv64_abi_cursor_initialize_for_return(const MinicC0Program *program,
                                                     MinicType return_type,
                                                     MinicRiscv64AbiCursor *cursor,
@@ -56,6 +63,9 @@ bool minic_riscv64_abi_cursor_initialize_for_return(const MinicC0Program *progra
 /* Shared RV64 named-prefix cursor validation for variadic functions. */
 bool minic_riscv64_abi_variadic_prefix_from_cursor(
     const MinicRiscv64AbiCursor *, size_t *, size_t *);
+bool minic_riscv64_abi_classify_value_profile(
+    const MinicC0Program *, MinicType, bool lp64_soft_float,
+    MinicRiscv64AbiValue *);
 bool minic_riscv64_abi_classify_value(const MinicC0Program *program,
                                       MinicType type,
                                       MinicRiscv64AbiValue *value);

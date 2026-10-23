@@ -61,9 +61,9 @@ static bool minic_riscv64_integer_aggregate_member_type(const MinicC0Program *pr
     return false;
 }
 
-bool minic_riscv64_classify_abi_value(const MinicC0Program *program,
-                                      MinicType type,
-                                      MinicRiscv64AbiValue *result) {
+bool minic_riscv64_classify_abi_value_profile(
+    const MinicC0Program *program, MinicType type, bool lp64_soft_float,
+    MinicRiscv64AbiValue *result) {
     size_t alignment;
     size_t size;
 
@@ -90,7 +90,9 @@ bool minic_riscv64_classify_abi_value(const MinicC0Program *program,
             result->kind = MINIC_RISCV64_ABI_VALUE_IGNORE;
             return true;
         }
-        if (minic_riscv64_integer_aggregate_member_type(program, type) && size <= 16U) {
+        if (size <= 16U &&
+            (lp64_soft_float ||
+             minic_riscv64_integer_aggregate_member_type(program, type))) {
             result->kind = MINIC_RISCV64_ABI_VALUE_AGGREGATE;
             result->register_chunks = (size + 7U) / 8U;
             return true;
@@ -117,6 +119,13 @@ bool minic_riscv64_classify_abi_value(const MinicC0Program *program,
     return false;
 }
 
+bool minic_riscv64_classify_abi_value(
+    const MinicC0Program *program, MinicType type,
+    MinicRiscv64AbiValue *result) {
+    return minic_riscv64_classify_abi_value_profile(
+        program, type, false, result);
+}
+
 #define MINIC_RISCV64_ABI_ARGUMENT_REGISTER_COUNT 8U
 
 void minic_riscv64_abi_cursor_initialize(MinicRiscv64AbiCursor *cursor) {
@@ -126,20 +135,23 @@ void minic_riscv64_abi_cursor_initialize(MinicRiscv64AbiCursor *cursor) {
     cursor->integer_register_count = 0U;
     cursor->floating_register_count = 0U;
     cursor->stack_slot_count = 0U;
+    cursor->lp64_soft_float = false;
 }
 
-bool minic_riscv64_abi_cursor_initialize_for_return(const MinicC0Program *program,
-                                                    MinicType return_type,
-                                                    MinicRiscv64AbiCursor *cursor,
-                                                    MinicRiscv64AbiValue *return_value) {
+bool minic_riscv64_abi_cursor_initialize_for_return_profile(
+    const MinicC0Program *program, MinicType return_type,
+    bool lp64_soft_float, MinicRiscv64AbiCursor *cursor,
+    MinicRiscv64AbiValue *return_value) {
     MinicRiscv64AbiCursor next;
     MinicRiscv64AbiValue result;
 
     if (cursor == NULL || return_value == NULL ||
-        !minic_riscv64_abi_classify_value(program, return_type, &result)) {
+        !minic_riscv64_abi_classify_value_profile(
+            program, return_type, lp64_soft_float, &result)) {
         return false;
     }
     minic_riscv64_abi_cursor_initialize(&next);
+    next.lp64_soft_float = lp64_soft_float;
     if (result.kind == MINIC_RISCV64_ABI_VALUE_INDIRECT) {
         if (!minic_type_is_record(return_type) || result.storage_size <= 16U) {
             return false;
@@ -149,6 +161,13 @@ bool minic_riscv64_abi_cursor_initialize_for_return(const MinicC0Program *progra
     *cursor = next;
     *return_value = result;
     return true;
+}
+
+bool minic_riscv64_abi_cursor_initialize_for_return(
+    const MinicC0Program *program, MinicType return_type,
+    MinicRiscv64AbiCursor *cursor, MinicRiscv64AbiValue *return_value) {
+    return minic_riscv64_abi_cursor_initialize_for_return_profile(
+        program, return_type, false, cursor, return_value);
 }
 
 bool minic_riscv64_abi_variadic_prefix_from_cursor(
@@ -163,10 +182,11 @@ bool minic_riscv64_abi_variadic_prefix_from_cursor(
     return true;
 }
 
-bool minic_riscv64_abi_classify_value(const MinicC0Program *program,
-                                      MinicType type,
-                                      MinicRiscv64AbiValue *value) {
-    if (!minic_riscv64_classify_abi_value(program, type, value)) {
+bool minic_riscv64_abi_classify_value_profile(
+    const MinicC0Program *program, MinicType type, bool lp64_soft_float,
+    MinicRiscv64AbiValue *value) {
+    if (!minic_riscv64_classify_abi_value_profile(
+            program, type, lp64_soft_float, value)) {
         return false;
     }
     if (value->kind == MINIC_RISCV64_ABI_VALUE_VOID ||
@@ -179,6 +199,13 @@ bool minic_riscv64_abi_classify_value(const MinicC0Program *program,
         value->slot_count = 1U;
     }
     return true;
+}
+
+bool minic_riscv64_abi_classify_value(
+    const MinicC0Program *program, MinicType type,
+    MinicRiscv64AbiValue *value) {
+    return minic_riscv64_abi_classify_value_profile(
+        program, type, false, value);
 }
 
 bool minic_riscv64_abi_place_argument(const MinicC0Program *program,
@@ -194,7 +221,8 @@ bool minic_riscv64_abi_place_argument(const MinicC0Program *program,
     if (cursor == NULL || location == NULL ||
         cursor->integer_register_count > MINIC_RISCV64_ABI_ARGUMENT_REGISTER_COUNT ||
         cursor->floating_register_count > MINIC_RISCV64_ABI_ARGUMENT_REGISTER_COUNT ||
-        !minic_riscv64_abi_classify_value(program, type, &result.value) ||
+        !minic_riscv64_abi_classify_value_profile(
+            program, type, cursor->lp64_soft_float, &result.value) ||
         result.value.kind == MINIC_RISCV64_ABI_VALUE_VOID) {
         return false;
     }
@@ -211,7 +239,8 @@ bool minic_riscv64_abi_place_argument(const MinicC0Program *program,
         *location = result;
         return true;
     }
-    if (is_fixed_parameter && result.value.kind == MINIC_RISCV64_ABI_VALUE_FLOAT) {
+    if (!cursor->lp64_soft_float && is_fixed_parameter &&
+        result.value.kind == MINIC_RISCV64_ABI_VALUE_FLOAT) {
         if (next.floating_register_count >= MINIC_RISCV64_ABI_ARGUMENT_REGISTER_COUNT) {
             return false;
         }

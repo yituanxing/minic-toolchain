@@ -13,6 +13,9 @@ typedef struct MinicRiscv64FunctionAbiPlan {
     size_t parameter_location_count;
     bool prepared;
 } MinicRiscv64FunctionAbiPlan;
+bool minic_riscv64_function_abi_plan_build_profile(
+    const MinicC0Program *, const MinicCoreFunction *,
+    MinicRiscv64FunctionAbiPlan *, bool lp64_soft_float);
 bool minic_riscv64_function_abi_plan_build(
     const MinicC0Program *, const MinicCoreFunction *,
     MinicRiscv64FunctionAbiPlan *);

@@ -4,17 +4,18 @@
 #include <string.h>
 /* Return-pointer reservation, float/int register cursors and split stack
  * locations are classified once and subsequently passed into the frame. */
-bool minic_riscv64_function_abi_plan_build(
+bool minic_riscv64_function_abi_plan_build_profile(
     const MinicC0Program *program, const MinicCoreFunction *fn,
-    MinicRiscv64FunctionAbiPlan *plan) {
+    MinicRiscv64FunctionAbiPlan *plan, bool lp64_soft_float) {
     MinicRiscv64AbiCursor cursor;
     size_t i;
     if (program == NULL || fn == NULL || plan == NULL ||
         plan->prepared || plan->parameter_locations != NULL ||
         (fn->parameter_count != 0U && fn->parameter_types == NULL) ||
         fn->parameter_count > SIZE_MAX / sizeof(*plan->parameter_locations) ||
-        !minic_riscv64_abi_cursor_initialize_for_return(
-             program, fn->return_type, &cursor, &plan->return_value))
+        !minic_riscv64_abi_cursor_initialize_for_return_profile(
+             program, fn->return_type, lp64_soft_float,
+             &cursor, &plan->return_value))
         return false;
     if (fn->parameter_count != 0U) {
         plan->parameter_locations = (MinicRiscv64AbiArgumentLocation *)calloc(
@@ -33,6 +34,11 @@ bool minic_riscv64_function_abi_plan_build(
     plan->parameter_location_count = fn->parameter_count;
     plan->prepared = true;
     return true;
+}
+bool minic_riscv64_function_abi_plan_build(
+    const MinicC0Program *program, const MinicCoreFunction *fn,
+    MinicRiscv64FunctionAbiPlan *plan) {
+    return minic_riscv64_function_abi_plan_build_profile(program, fn, plan, false);
 }
 void minic_riscv64_function_abi_plan_destroy(
     MinicRiscv64FunctionAbiPlan *plan) {
