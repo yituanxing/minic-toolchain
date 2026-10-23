@@ -219,8 +219,15 @@ jobs:
              ! grep -Eq '^(assembler/|tools/minic-as/|tests/assembler/)' "$paths"; then
             echo 'MINIAS_SCOPED_A0=SKIP no assembler owner changes'
           else
-            make MODE=release CFLAGS=-Werror \
-              BUILD_DIR=build/toolchain-focused-t1-v2 check-minias-a0
+            if ! make MODE=release CFLAGS=-Werror \
+              BUILD_DIR=build/toolchain-focused-t1-v2 check-minias-a0; then
+              # A0 currently exits silently on bare shell 'test' checks.
+              # Emit its exact failing command only on error, never on PASS.
+              MINIAS="$GITHUB_WORKSPACE/build/toolchain-focused-t1-v2/bin/minic-as" \
+                BUILD_DIR="$GITHUB_WORKSPACE/build/toolchain-focused-t1-v2" \
+                sh -x tests/assembler/run-a0.sh
+              exit 1
+            fi
             echo 'MINIAS_SCOPED_A0=PASS default=1 explicit_rv64i=1'
           fi
 
