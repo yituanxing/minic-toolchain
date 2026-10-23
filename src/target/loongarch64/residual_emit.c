@@ -290,9 +290,15 @@ bool minic_loongarch64_emit_residual_instruction(
                             reject_block, reject_ins, __LINE__);
                     { *needs_writeback = false; return true; }
                 }
-                if (cast.target_width < 8U &&
-                    !minic_loongarch64_emit_integer_normalize(out, cast.target_width,
-                                            cast.target_signed))
+                if (cast.target_boolean) {
+                    if (fputs("  or $t0, $t0, $t1\n"
+                              "  sltu $t0, $zero, $t0\n", out) == EOF)
+                        return minic_multi_direct_machine_reject(
+                            fn, "loongarch64", name, reject_stage,
+                            reject_block, reject_ins, __LINE__);
+                } else if (cast.target_width < 8U &&
+                           !minic_loongarch64_emit_integer_normalize(
+                               out, cast.target_width, cast.target_signed))
                     return minic_multi_direct_machine_reject(
                         fn, "loongarch64", name, reject_stage,
                         reject_block, reject_ins, __LINE__);
@@ -304,7 +310,15 @@ bool minic_loongarch64_emit_residual_instruction(
                 return minic_multi_direct_machine_reject(
                     fn, "loongarch64", name, reject_stage,
                     reject_block, reject_ins, __LINE__);
-            if (cast.target_width == 8U) {
+            if (cast.target_boolean) {
+                if ((cast.source_width < 4U &&
+                     !minic_loongarch64_emit_integer_normalize(
+                         out, cast.source_width, cast.source_signed)) ||
+                    fputs("  sltu $t0, $zero, $t0\n", out) == EOF)
+                    return minic_multi_direct_machine_reject(
+                        fn, "loongarch64", name, reject_stage,
+                        reject_block, reject_ins, __LINE__);
+            } else if (cast.target_width == 8U) {
                 if (cast.source_width != 8U &&
                     (!minic_loongarch64_emit_integer_normalize(
                         out, cast.source_width, cast.source_signed) ||

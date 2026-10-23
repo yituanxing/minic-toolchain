@@ -21,6 +21,7 @@ bool minic_multi_direct_integer_cast_plan(
     source = fn->values[plan->operand].type;
     plan->source_wide = minic_type_is_int128_integer(source);
     plan->target_wide = minic_type_is_int128_integer(ins->type);
+    plan->target_boolean = minic_type_is_bool_integer(ins->type);
     if (plan->source_wide) {
         if (!minic_lp64_frame_plan_wide_slot(
                 frame, plan->operand, &plan->source_wide_offset))

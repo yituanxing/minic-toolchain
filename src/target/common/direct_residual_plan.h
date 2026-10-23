@@ -11,6 +11,8 @@
 typedef struct MinicDirectIntegerCastPlan {
     MinicCoreValueId operand;
     bool source_wide, target_wide;
+    /* C conversion to _Bool tests all source bits, never truncates to 1 byte. */
+    bool target_boolean;
     size_t source_width, target_width;
     bool source_signed, target_signed;
     size_t source_wide_offset, target_wide_offset;

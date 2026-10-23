@@ -491,9 +491,17 @@ bool minic_aarch64_emit_residual_instruction(
                             reject_block, reject_ins, __LINE__);
                     { *needs_writeback = false; return true; }
                 }
-                if (cast.target_width < 8U &&
-                    !minic_aarch64_emit_integer_normalize(out, cast.target_width,
-                                            cast.target_signed))
+                /* A uint128 -> _Bool must inspect BOTH limbs. In
+                 * particular 0x80000000000000000000000000000000 is true. */
+                if (cast.target_boolean) {
+                    if (fputs("  orr x9, x9, x10\n"
+                              "  cmp x9, #0\n  cset w9, ne\n", out) == EOF)
+                        return minic_multi_direct_machine_reject(
+                            fn, "aarch64", name, reject_stage,
+                            reject_block, reject_ins, __LINE__);
+                } else if (cast.target_width < 8U &&
+                           !minic_aarch64_emit_integer_normalize(out,
+                               cast.target_width, cast.target_signed))
                     return minic_multi_direct_machine_reject(
                         fn, "aarch64", name, reject_stage,
                         reject_block, reject_ins, __LINE__);
@@ -506,7 +514,19 @@ bool minic_aarch64_emit_residual_instruction(
                 return minic_multi_direct_machine_reject(
                     fn, "aarch64", name, reject_stage,
                     reject_block, reject_ins, __LINE__);
-            if (cast.target_width == 8U) {
+            if (cast.target_boolean) {
+                /* Normalize source's declared width, then implement C _Bool
+                 * truth-value conversion rather than dropping high bits. */
+                if ((cast.source_width < 4U &&
+                     !minic_aarch64_emit_integer_normalize(
+                         out, cast.source_width, cast.source_signed)) ||
+                    fputs(cast.source_width == 8U
+                          ? "  cmp x9, #0\n  cset w9, ne\n"
+                          : "  cmp w9, #0\n  cset w9, ne\n", out) == EOF)
+                    return minic_multi_direct_machine_reject(
+                        fn, "aarch64", name, reject_stage,
+                        reject_block, reject_ins, __LINE__);
+            } else if (cast.target_width == 8U) {
                 if (cast.source_width != 8U &&
                     (!minic_aarch64_emit_integer_normalize(
                         out, cast.source_width, cast.source_signed) ||
