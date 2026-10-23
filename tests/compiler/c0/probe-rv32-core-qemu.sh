@@ -3,6 +3,8 @@
 # The same MiniC source remains fail-closed on unsupported wider ABI.
 set -Eeuo pipefail
 : "${MINIC_CC:?}"
+: "${MINIAS:=${MINIC_CC%/minic-cc}/minic-as}"
+test -x "$MINIAS"
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 cat >"$work/core.i" <<'SRC'
@@ -29,6 +31,10 @@ SRC
     -S "$work/core.i" -o "$work/core.s"
 riscv64-linux-gnu-gcc -march=rv32i -mabi=ilp32 -c \
     "$work/core.s" -o "$work/core.o"
+"$MINIAS" -march=rv32i -mabi=ilp32 \
+    -o "$work/core-native.o" "$work/core.s"
+riscv64-linux-gnu-readelf -h "$work/core-native.o" |
+  grep -q 'Class:.*ELF32'
 cat >"$work/start.s" <<'SRC'
 .text
 .globl _start
@@ -54,6 +60,13 @@ riscv64-linux-gnu-gcc -march=rv32i -mabi=ilp32 -c "$work/start.s" -o "$work/star
 riscv64-linux-gnu-ld -m elf32lriscv -static -e _start \
     -o "$work/prog.elf" "$work/start.o" "$work/core.o"
 qemu-riscv32 "$work/prog.elf"
+# Second independent assembly producer for identical MiniC/Core C program.
+# The GNU linker is retained as the oracle because generic MiniLD ELF32
+# program linking is not yet qualified (only compat-vDSO is certified).
+riscv64-linux-gnu-ld -m elf32lriscv -static -e _start \
+    -o "$work/prog-native.elf" "$work/start.o" "$work/core-native.o"
+qemu-riscv32 "$work/prog-native.elf"
+echo 'RV32_NATIVE_CHAIN=PASS minic_C=true minic_as_ELF32=true GNU_LD=true qemu_riscv32=true'
 riscv64-linux-gnu-readelf -h "$work/prog.elf" |
   grep -q 'Class:.*ELF32'
 # RV32 frontend must not claim multi-XLEN scalar arithmetic prematurely.
@@ -66,4 +79,4 @@ if "$MINIC_CC" --target=riscv32-linux -march=rv32i -mabi=ilp32 \
     exit 1
 fi
 grep -Eq 'rv32i:|not yet qualified' "$work/wide.err"
-echo 'RV32_CORE=PASS C_functions=5 ILP32=1 ELF32=1 QEMU=PASS GNU_AS_LD=PASS RV32I_Mless_mul=PASS wide_ABI=reject'
+echo 'RV32_CORE=PASS C_functions=5 ILP32=1 ELF32=1 QEMU=PASS GNU_AS=PASS MiniAS=PASS GNU_LD=PASS RV32I_Mless_mul=PASS wide_ABI=reject'
