@@ -62,3 +62,27 @@ The final emitted-instruction audit remains essential. Explicit source
 Core checks cannot see every helper, frame, call, register and assembler
 pseudo expansion. The default implicit RV64 kernel and self-host compiler
 retain their existing fast path, without these additional CFG/ISA checks.
+
+## First qualified RV64I native-software alternative: MUL low 64 bits
+
+RISC-V ISA feature selection now admits ordinary <=64-bit scalar integer
+multiplication under RV64I and lowers the selected operation to a bounded
+shift-add modulo 2^64 implementation in target/riscv64/multiply_emit.c.
+Hardware M and the original default output still use the original MUL
+instruction. Negative multipliers are shifted *logically*, guaranteeing
+termination after at most 64 iterations. The result is then normalized to
+the Core result type by the existing scalar conversion path. Local numeric
+assembly labels avoid mutable compiler-global state and repeated-label
+collisions.
+
+The same lowering supports pointer element scaling. Under RV64I, strides
+that are powers of two use one SLLI; non-power-of-two strides use the same
+software MUL lowering. The default kernel-facing RV64 emitter preserves its
+prior MUL sequences byte-for-byte. Explicit RV64IM keeps native MUL. Native
+division/remainder, 128-bit MUL and MUL-overflow still have explicit M
+requirements until separately verified software alternatives exist.
+
+Fast tests include RV64I strictly assembled source, unsigned/signed scalar
+multiply, zero/negative multiplier, power-of-two and odd-sized pointer
+scaling, GNU cross-assembler ISA checks, and QEMU process results, in
+addition to the unchanged legacy ISA/ABI negative coverage.

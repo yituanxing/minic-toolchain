@@ -15,6 +15,7 @@
 #include "target/riscv64/spill_layout.h"
 #include "target/riscv64/object_liveness.h"
 #include "target/riscv64/legalize.h"
+#include "target/riscv64/multiply_emit.h"
 #include "core/value_uses.h"
 #include "target/data_layout.h"
 
@@ -36,7 +37,8 @@ static bool emit_instruction(FILE *file,
                              const char *symbol_name,
                              const MinicCoreInstruction *instruction,
                              size_t instruction_id,
-                             bool position_independent) {
+                             bool position_independent,
+                             const MinicRiscvIsa *isa) {
     size_t object_offset;
 
     /* All Core instruction IDs were admitted once before function entry;
@@ -94,18 +96,30 @@ static bool emit_instruction(FILE *file,
     case MINIC_CORE_INSTRUCTION_INTEGER_CTZ:
     case MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO:
         return minic_riscv64_emit_scalar_instruction(
-            file, program, function, frame, symbol_name, instruction);
+            file, program, function, frame, symbol_name, instruction, isa);
     case MINIC_CORE_INSTRUCTION_POINTER_OFFSET:
         if (!minic_riscv64_frame_load_value(file, frame, instruction->value.pointer_offset.base, "t0") ||
             !minic_riscv64_frame_load_value(file, frame, instruction->value.pointer_offset.index, "t1")) {
             return false;
         }
-        if (instruction->value.pointer_offset.element_size != 1U &&
-            fprintf(file,
-                    "  li t2, %zu\n"
-                    "  mul t1, t1, t2\n",
-                    instruction->value.pointer_offset.element_size) < 0) {
-            return false;
+        if (instruction->value.pointer_offset.element_size != 1U) {
+            const size_t size = instruction->value.pointer_offset.element_size;
+            if (isa != NULL && isa->strict_isa &&
+                !minic_riscv_isa_has(isa, MINIC_RISCV_FEATURE_M)) {
+                if (minic_riscv64_power_of_two(size)) {
+                    if (fprintf(file, "  slli t1, t1, %u\n",
+                                minic_riscv64_log2_power_of_two(size)) < 0)
+                        return false;
+                } else if (fprintf(file, "  li t2, %zu\n", size) < 0 ||
+                           !minic_riscv64_emit_multiply64(
+                               file, isa, "t1", "t1", "t2", "t5", "t3")) {
+                    return false;
+                }
+            } else if (fprintf(file,
+                               "  li t2, %zu\n"
+                               "  mul t1, t1, t2\n", size) < 0) {
+                return false;
+            }
         }
         /* M75_POINTER_COMPOUND_ASSIGNMENT_VALUE: retain subtraction through
            the Core boundary so an unsigned index is scaled before `sub`. */
@@ -654,7 +668,7 @@ static bool emit_core_function_with_symbol(FILE *file,
             if (instruction_id >= function->instruction_count ||
                 !emit_instruction(file, program, function, &frame, symbol_name,
                                   &function->instructions[instruction_id],
-                                  (size_t)instruction_id, position_independent)) {
+                                  (size_t)instruction_id, position_independent, isa)) {
                 return core_frame_fail(&frame);
             }
         }

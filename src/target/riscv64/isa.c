@@ -73,24 +73,25 @@ bool minic_riscv_isa_admit_core_instruction(
     if (isa == NULL || !isa->strict_isa || instruction == NULL) return true;
     switch (instruction->kind) {
     case MINIC_CORE_INSTRUCTION_INTEGER_MULTIPLY:
+        /* Native MUL or qualified RV64I shift/add modulo-2^64 lowering.
+         * 128-bit multiplication still emits MULHU and requires M. */
+        if (!minic_type_is_int128_integer(instruction->type))
+            return true;
+        required = MINIC_RISCV_FEATURE_M;
+        machine = "mulhu";
+        extension = "M";
+        break;
     case MINIC_CORE_INSTRUCTION_INTEGER_DIVIDE:
     case MINIC_CORE_INSTRUCTION_INTEGER_REMAINDER:
         required = MINIC_RISCV_FEATURE_M;
-        machine = instruction->kind == MINIC_CORE_INSTRUCTION_INTEGER_MULTIPLY
-                      ? "mul" : instruction->kind == MINIC_CORE_INSTRUCTION_INTEGER_DIVIDE
-                          ? "div" : "rem";
+        machine = instruction->kind == MINIC_CORE_INSTRUCTION_INTEGER_DIVIDE
+                      ? "div" : "rem";
         extension = "M";
         break;
     case MINIC_CORE_INSTRUCTION_POINTER_OFFSET:
-        /* The current selected RV64 pointer scaling emits MUL for non-unit
-         * element size. Do not reject the semantic pointer instruction when
-         * it already has unit stride. */
-        if (instruction->value.pointer_offset.element_size != 1U) {
-            required = MINIC_RISCV_FEATURE_M;
-            machine = "mul";
-            extension = "M";
-        }
-        break;
+        /* RV64I pointer scaling now selects SLLI for power-of-two sizes or
+         * qualified software multiplication for odd record sizes. */
+        return true;
     case MINIC_CORE_INSTRUCTION_INTEGER_OVERFLOW:
         if (instruction->value.integer_overflow.operator_kind ==
             MINIC_CORE_INTEGER_OVERFLOW_MULTIPLY) {

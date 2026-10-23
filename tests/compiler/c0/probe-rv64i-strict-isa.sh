@@ -10,6 +10,9 @@ SRC
 cat >"$tmp/mul.i" <<'SRC'
 long evaluate(long a, long b) { return a * b + a / b - a % b; }
 SRC
+cat >"$tmp/mulonly.i" <<'SRC'
+long evaluate(long a, long b) { return a * b; }
+SRC
 cat >"$tmp/float.i" <<'SRC'
 double addf(double a, double b) { return a + b; }
 SRC
@@ -24,13 +27,21 @@ for selection in "rv64i lp64 add" "rv64im lp64 mul" "rv64imafd lp64d float"; do
   test -s "$tmp/$march.s"
 done
 
-# The final selected instruction matters: reject M/FP without feature support.
-if "$MINIC_CC" --target=riscv64-linux -march=rv64i -mabi=lp64 \
-    -S "$tmp/mul.i" -o "$tmp/invalid-mul.s" >"$tmp/mul.stdout" 2>"$tmp/mul.stderr"; then
-  echo 'RV64_ISA=FAIL rv64i_mul' >&2; exit 1
+# RV64I now lowers 64-bit multiply to proven shift/add instructions;
+# division and remainder still fail explicitly without M.
+"$MINIC_CC" --target=riscv64-linux -march=rv64i -mabi=lp64 \
+    -S "$tmp/mulonly.i" -o "$tmp/rv64i-mul.s"
+test -s "$tmp/rv64i-mul.s"
+grep -q '1:' "$tmp/rv64i-mul.s"
+if grep -Eq '^[[:space:]]*(mul|mulh|div|rem)[[:space:]]' "$tmp/rv64i-mul.s"; then
+  echo 'RV64_ISA=FAIL RV64I software multiply leaked M' >&2; exit 1
 fi
-grep -Eq "instruction '(mul|mulh|mulhu)' requires M" "$tmp/mul.stderr"
-test ! -e "$tmp/invalid-mul.s"
+if "$MINIC_CC" --target=riscv64-linux -march=rv64i -mabi=lp64 \
+    -S "$tmp/mul.i" -o "$tmp/invalid-div.s" >"$tmp/mul.stdout" 2>"$tmp/mul.stderr"; then
+  echo 'RV64_ISA=FAIL rv64i native divide admitted' >&2; exit 1
+fi
+grep -Eq "instruction '(div|rem)' requires M" "$tmp/mul.stderr"
+test ! -e "$tmp/invalid-div.s"
 for march in rv64i rv64im; do
   if "$MINIC_CC" --target=riscv64-linux "-march=$march" -mabi=lp64 \
       -S "$tmp/float.i" -o "$tmp/invalid-float.s" >"$tmp/fp.out" 2>"$tmp/fp.err"; then
@@ -67,13 +78,22 @@ test -s "$tmp/charptr.s"
 cat >"$tmp/longptr.i" <<'SRC'
 long *advance(long *p, long offset) { return p + offset; }
 SRC
-if "$MINIC_CC" --target=riscv64-linux -march=rv64i -mabi=lp64 \
-   -S "$tmp/longptr.i" -o "$tmp/invalid-pointer.s" \
-   >"$tmp/pointer.out" 2>"$tmp/pointer.err"; then
-  echo "RV64_ISA=FAIL rv64i admitted pointer scale needing M" >&2; exit 1
+"$MINIC_CC" --target=riscv64-linux -march=rv64i -mabi=lp64 \
+  -S "$tmp/longptr.i" -o "$tmp/longptr-i.s"
+grep -q 'slli t1, t1, 3' "$tmp/longptr-i.s"
+if grep -Eq '^[[:space:]]*mul[[:space:]]' "$tmp/longptr-i.s"; then
+  echo 'RV64_ISA=FAIL pointer scale emitted hardware M' >&2; exit 1
 fi
-grep -Eq "instruction '(mul|mulh)' requires M" "$tmp/pointer.err"
-test ! -e "$tmp/invalid-pointer.s"
+cat >"$tmp/oddptr.i" <<'SRC'
+struct Packed3 { char bytes[3]; };
+struct Packed3 *evaluate(struct Packed3 *p, long n) { return p + n; }
+SRC
+"$MINIC_CC" --target=riscv64-linux -march=rv64i -mabi=lp64 \
+  -S "$tmp/oddptr.i" -o "$tmp/oddptr-i.s"
+grep -q '1:' "$tmp/oddptr-i.s"
+if grep -Eq '^[[:space:]]*mul[[:space:]]' "$tmp/oddptr-i.s"; then
+  echo 'RV64_ISA=FAIL odd-size pointer scale emitted hardware M' >&2; exit 1
+fi
 "$MINIC_CC" --target=riscv64-linux -march=rv64im -mabi=lp64 \
   -S "$tmp/longptr.i" -o "$tmp/longptr-im.s"
 test -s "$tmp/longptr-im.s"
@@ -113,7 +133,12 @@ if command -v riscv64-linux-gnu-gcc >/dev/null 2>&1; then
       -c "$tmp/$march.s" -o "$tmp/$march.o"
     test -s "$tmp/$march.o"
   done
-  echo 'RV64_ISA_GNU_AS=PASS profiles=3'
+  for testasm in rv64i-mul longptr-i oddptr-i; do
+    riscv64-linux-gnu-gcc -march=rv64i -mabi=lp64 \
+      -c "$tmp/$testasm.s" -o "$tmp/$testasm.o"
+    test -s "$tmp/$testasm.o"
+  done
+  echo 'RV64_ISA_GNU_AS=PASS profiles=3 soft_multiply=1 pointer_scale_pow2=1 pointer_scale_odd=1'
   if command -v qemu-riscv64 >/dev/null 2>&1; then
     cat >"$tmp/start.s" <<'SRC'
 .section .text
@@ -149,7 +174,36 @@ SRC
       done
       cmp "$tmp/gnu-$march.out" "$tmp/minic-$march.out"
     done
+    # The linker, ELF attributes, actual assembly and QEMU execution are
+    # all explicitly RV64I even for negative signed multiplication.
+    for selection in "rv64i-mul 9 4 36" "rv64i-mul -7 11 179" \
+                     "rv64i-mul 0 -1 0" "oddptr-i 1000 7 253"; do
+      read -r source a b expected <<<"$selection"
+      cat >"$tmp/softstart.s" <<SRC
+.section .text
+.globl _start
+_start:
+  li a0, $a
+  li a1, $b
+  call evaluate
+  li a7, 93
+  ecall
+SRC
+      riscv64-linux-gnu-gcc -march=rv64i -mabi=lp64 \
+        -nostdlib -static -no-pie -Wl,-e,_start \
+        "$tmp/softstart.s" "$tmp/$source.s" -o "$tmp/software.elf"
+      set +e
+      qemu-riscv64 "$tmp/software.elf" >"$tmp/soft.out" 2>"$tmp/soft.err"
+      rc=$?
+      set -e
+      if (( rc != expected )); then
+        echo "RV64_SOFTMUL_QEMU=FAIL source=$source a=$a b=$b rc=$rc expected=$expected" >&2
+        cat "$tmp/soft.err" >&2
+        exit 1
+      fi
+    done
+    echo 'RV64_SOFTMUL_QEMU=PASS signed_negative=1 zero=1 odd_pointer=1'
     echo 'RV64_ISA_QEMU=PASS profiles=rv64i,rv64im gnu_minic_exit_exact=1'
   fi
 fi
-echo 'RV64_ISA_PROFILES=PASS rv64i_lp64=1 rv64im_lp64=1 rv64imafd_lp64d=1 rejected_isa_abi=1 default_byte_exact=1'
+echo 'RV64_ISA_PROFILES=PASS rv64i_lp64=1 rv64im_lp64=1 rv64imafd_lp64d=1 software_mul=1 pointer_scale=1 rejected_isa_abi=1 default_byte_exact=1'

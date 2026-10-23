@@ -5,6 +5,7 @@
 #include "target/riscv64/legalize.h"
 #include "target/common/direct_instruction_semantics.h"
 #include "target/riscv64/frame_access.h"
+#include "target/riscv64/multiply_emit.h"
 #include <inttypes.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -29,7 +30,8 @@ static bool emit_simple_integer_binary(
 bool minic_riscv64_emit_scalar_instruction(
     FILE *file, const MinicC0Program *program,
     const MinicCoreFunction *function, const MinicRiscv64CoreFrame *frame,
-    const char *symbol_name, const MinicCoreInstruction *instruction) {
+    const char *symbol_name, const MinicCoreInstruction *instruction,
+    const MinicRiscvIsa *isa) {
     if (file == NULL || function == NULL ||
         frame == NULL || symbol_name == NULL || instruction == NULL)
         return false;
@@ -76,7 +78,7 @@ bool minic_riscv64_emit_scalar_instruction(
         }
         if (!minic_riscv64_frame_load_value(file, frame, instruction->value.binary.left, "t0") ||
             !minic_riscv64_frame_load_value(file, frame, instruction->value.binary.right, "t1") ||
-            fprintf(file, "  mul t0, t0, t1\n") < 0 ||
+            !minic_riscv64_emit_multiply64(file, isa, "t0", "t0", "t1", "t2", "t3") ||
             !minic_riscv64_emit_integer_conversion_for_program(
                 file, program, instruction->type, "t0")) {
             return false;
