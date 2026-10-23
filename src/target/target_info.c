@@ -183,7 +183,7 @@ const MinicTargetInfo *minic_target_info_for_architecture(
             rv64_target.architecture = MINIC_TARGET_ARCH_RISCV64;
             rv64_target.riscv_isa.xlen = 64U;
             rv64_target.riscv_isa.abi = MINIC_RISCV_ABI_LP64D;
-            rv64_target.riscv_isa.strict_base_i = false;
+            rv64_target.riscv_isa.strict_isa = false;
             rv64_target.data_layout = minic_default_data_layout();
             rv64_target.integer_model = &minic_rv64_integer_model;
             rv64_target.wide_character_type = minic_type_unsigned_short();

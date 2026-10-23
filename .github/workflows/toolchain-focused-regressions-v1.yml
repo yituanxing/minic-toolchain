@@ -208,6 +208,14 @@ jobs:
       # Core or x86 global-layout refactors must run a native executable
       # contract, not merely compile the compiler and cross-check two new ISAs.
       # Reuse the existing broad x86 smoke rather than inventing another test.
+      - name: RV64 explicit ISA profiles GNU-AS and QEMU runtime differential
+        if: steps.owners.outputs.mode != 'four-backend'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          MINIC_CC="$GITHUB_WORKSPACE/build/toolchain-focused-t1-v2/bin/minic-cc" \
+            bash tests/compiler/c0/probe-rv64i-strict-isa.sh
+
       - name: Validate x86-64 native source-to-global-object ABI
         if: steps.owners.outputs.mode == 'all' && steps.build.outcome == 'success'
         shell: bash
