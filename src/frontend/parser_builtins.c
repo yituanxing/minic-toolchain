@@ -1260,9 +1260,10 @@ static bool normalize_overflow_integer_operand(MinicParser *parser,
     return minic_parser_add_expression(parser, &conversion, operand_id);
 }
 
-static bool parse_builtin_overflow(MinicParser *parser,
-                                   MinicOverflowOperator operator_kind,
-                                   MinicExpressionId *expression_id) {
+static bool parse_builtin_overflow_typed(MinicParser *parser,
+                                         MinicOverflowOperator operator_kind,
+                                         const MinicType *fixed_type,
+                                         MinicExpressionId *expression_id) {
     MinicExpression expression;
     const MinicExpression *left;
     const MinicExpression *right;
@@ -1300,6 +1301,19 @@ static bool parse_builtin_overflow(MinicParser *parser,
                            "result pointee");
         return false;
     }
+    /* Typed GNU overflow builtins operate in the named signed/unsigned
+     * integer type; do not accidentally route a wider operand through the
+     * arbitrary-precision generic builtin. Only the precisely typed operands
+     * are admitted until cross-width conversion is properly qualified. */
+    if (fixed_type != NULL &&
+        (!minic_type_equal(result_type, *fixed_type) ||
+         !minic_type_equal(left->type, *fixed_type) ||
+         !minic_type_equal(right->type, *fixed_type))) {
+        minic_parser_error(parser,
+                           "typed overflow builtin requires operands and result pointer "
+                           "of its exact integer type");
+        return false;
+    }
     {
         MinicSourcePosition result_end = result_pointer->span.end;
 
@@ -1321,6 +1335,52 @@ static bool parse_builtin_overflow(MinicParser *parser,
     expression.value.overflow.right = right_id;
     expression.value.overflow.result_pointer = result_pointer_id;
     return minic_parser_add_expression(parser, &expression, expression_id);
+}
+
+/* Generic overflow is infinite-precision; typed GNU variants use an exact
+ * target integer type. Both lower through the same Core overflow instruction. */
+static bool parse_builtin_overflow(MinicParser *parser,
+                                   MinicOverflowOperator operator_kind,
+                                   MinicExpressionId *expression_id) {
+    return parse_builtin_overflow_typed(parser, operator_kind, NULL, expression_id);
+}
+
+static bool parse_fixed_width_overflow(MinicParser *parser,
+                                       MinicExpressionId *expression_id,
+                                       bool *matched) {
+    static const char *const names[] = {
+        "__builtin_sadd_overflow", "__builtin_uadd_overflow",
+        "__builtin_saddl_overflow", "__builtin_uaddl_overflow",
+        "__builtin_saddll_overflow", "__builtin_uaddll_overflow",
+        "__builtin_ssub_overflow", "__builtin_usub_overflow",
+        "__builtin_ssubl_overflow", "__builtin_usubl_overflow",
+        "__builtin_ssubll_overflow", "__builtin_usubll_overflow",
+        "__builtin_smul_overflow", "__builtin_umul_overflow",
+        "__builtin_smull_overflow", "__builtin_umull_overflow",
+        "__builtin_smulll_overflow", "__builtin_umulll_overflow"
+    };
+    size_t i;
+    *matched = false;
+    for (i = 0U; i < sizeof(names) / sizeof(names[0]); ++i) {
+        MinicOverflowOperator kind;
+        MinicType type;
+        if (!minic_parser_current_identifier_lexeme_equals_cstr(parser, names[i]))
+            continue;
+        kind = i < 6U ? MINIC_OVERFLOW_ADD
+             : i < 12U ? MINIC_OVERFLOW_SUBTRACT
+             : MINIC_OVERFLOW_MULTIPLY;
+        switch (i % 6U) {
+        case 0U: type = minic_type_int(); break;
+        case 1U: type = minic_type_unsigned_int(); break;
+        case 2U: type = minic_type_long(); break;
+        case 3U: type = minic_type_unsigned_long(); break;
+        case 4U: type = minic_type_long_long(); break;
+        default: type = minic_type_unsigned_long_long(); break;
+        }
+        *matched = true;
+        return parse_builtin_overflow_typed(parser, kind, &type, expression_id);
+    }
+    return true;
 }
 
 static bool parse_builtin_va_list_target(MinicParser *parser,
@@ -1746,6 +1806,19 @@ bool minic_parser_try_builtin_primary_early(
         }
         *handled = true;
         return minic_parser_finish_value_expression(parser, primary_id, decay_array, expression_id);
+    }
+    {
+        bool fixed_overflow_handled = false;
+        if (!parse_fixed_width_overflow(parser, &primary_id,
+                                        &fixed_overflow_handled))
+            return false;
+        if (fixed_overflow_handled) {
+            if (!minic_parser_parse_postfix(parser, primary_id, &primary_id))
+                return false;
+            *handled = true;
+            return minic_parser_finish_value_expression(
+                parser, primary_id, decay_array, expression_id);
+        }
     }
     if (minic_parser_current_identifier_lexeme_equals_cstr(parser, "__builtin_add_overflow")) {
         if (!parse_builtin_overflow(parser, MINIC_OVERFLOW_ADD, &primary_id) ||
