@@ -32,6 +32,21 @@ grep -F 'rv32i2p1' "$work/attributes.txt"
 "$RISCV_OBJCOPY" -j .text -O binary "$work/native.o" "$work/native.bin"
 "$RISCV_OBJCOPY" -j .text -O binary "$work/reference.o" "$work/reference.bin"
 cmp "$work/native.bin" "$work/reference.bin"
+# Execute an actual freestanding RV32 Linux ELF32 binary: no compiler-runtime
+# or sysroot dependency, and this checks binutils' ELF32 input contract.
+cat >"$work/exit.s" <<'SRC'
+.text
+.globl _start
+_start:
+    addi a0, zero, 0
+    addi a7, zero, 93
+    ecall
+SRC
+"$MINIAS" -march=rv32i -mabi=ilp32 -o "$work/exit.o" "$work/exit.s"
+riscv64-linux-gnu-ld -m elf32lriscv -static -e _start \
+    -o "$work/exit.elf" "$work/exit.o"
+qemu-riscv32 "$work/exit.elf"
+echo 'RV32I_QEMU=PASS true_ELF32=1 linux_exit_syscall=0 no_libc=1'
 for bad in 'ld a0, 0(a1)' 'sd a0, 0(a1)' 'addiw a0, a0, 1' \
            'addw a0, a0, a1' 'slli a0, a1, 32' 'srli a0, a1, 40' \
            'mul a0, a1, a2' 'csrr a0, sstatus'; do

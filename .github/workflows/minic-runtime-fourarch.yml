@@ -52,6 +52,7 @@ on:
       - "src/target/target_info.h"
       - "tests/compiler/c0/check-four-target-model-m0.c"
       - "tests/compiler/c0/run-target-selection-m0.sh"
+      - "tests/compiler/c0/probe-rv32-target-gate.sh"
       - "tests/external/linux/stage2_kbuild_cc.sh"
       - "tests/compiler/c0/probe-rv64i-softfloat-runtime-qemu.sh"
       - "tests/compiler/c0/probe-runtime-typed-overflow.sh"
@@ -104,7 +105,9 @@ jobs:
         run: |
           set -Eeuo pipefail
           make MODE=release CFLAGS=-Werror BUILD_DIR=build/runtime-ci \
-            check-four-target-model-m0 check-target-selection-m0
+            check-four-target-model-m0
+          MINIC_CC="$GITHUB_WORKSPACE/build/runtime-ci/bin/minic-cc" \
+            sh tests/compiler/c0/probe-rv32-target-gate.sh
           MINIAS="$GITHUB_WORKSPACE/build/runtime-ci/bin/minic-as" \
             bash tests/assembler/probe-rv32i-elf32.sh
       - name: Reference compiler compile of identical runtime source set
