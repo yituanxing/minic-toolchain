@@ -324,8 +324,15 @@ static bool rv32_emit_ins(FILE *out, const MinicCoreFunction *f,
         callee = &f->callees[ins->value.call.callee_id];
         count = ins->value.call.argument_count;
         begin = ins->value.call.argument_begin;
-        if (callee->is_variadic || begin > f->call_argument_count ||
-            count > f->call_argument_count - begin) return false;
+        /* Soft-float ILP32 passes promoted integer/pointer variadics via
+         * the SAME integer a-register/stack sequence as fixed scalars.
+         * The existing per-argument rv32_scalar() gate still rejects all
+         * unqualified multi-XLEN and floating vararg ABI cases. Defining
+         * variadic functions (va_start/va_arg) is a separate target feature. */
+        if (begin > f->call_argument_count ||
+            count > f->call_argument_count - begin ||
+            (callee->is_variadic && count < callee->parameter_count))
+            return false;
         for (i = 0U; i < count; ++i) {
             const MinicCoreCallArgument *arg = &f->call_arguments[begin + i];
             if (arg->kind != MINIC_CORE_CALL_ARGUMENT_VALUE ||
@@ -399,6 +406,11 @@ static bool rv32_func(FILE *out, const MinicC0Program *program,
     char message[200];
     unsigned bits;
     bool sign;
+    if (def->is_variadic) {
+        rv32_diag(diag, "<rv32-abi>",
+                  "rv32i: defining variadic functions requires ILP32 va_list ABI");
+        return false;
+    }
     if (!minic_type_is_void(f->return_type) &&
         !rv32_scalar(f, f->return_type, &bits, &sign)) {
         rv32_diag(diag, "<rv32-abi>", "rv32i: return type exceeds one XLEN or is unqualified");

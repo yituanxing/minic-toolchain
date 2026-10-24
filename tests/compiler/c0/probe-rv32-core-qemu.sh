@@ -66,6 +66,10 @@ static struct Callback callback = { plus_five, 41 };
 int global_function_reloc_probe(void) {
     return callback.apply != 0 && callback.tag == 41;
 }
+extern int gcc_vargs(int first, ...);
+int call_varargs_11(void) {
+    return gcc_vargs(1,2,3,4,5,6,7,8,9,10,11);
+}
 SRC
 "$MINIC_CC" --target=riscv32-linux -march=rv32i -mabi=ilp32 \
     -S "$work/core.i" -o "$work/core.s"
@@ -163,6 +167,9 @@ _start:
     call global_function_reloc_probe
     li t0, 1
     bne a0, t0, fail
+    call call_varargs_11
+    li t0, 66
+    bne a0, t0, fail
     li a0, 0
     j exit
 fail:
@@ -172,17 +179,33 @@ exit:
     ecall
 SRC
 riscv64-linux-gnu-gcc -march=rv32i -mabi=ilp32 -c "$work/start.s" -o "$work/start.o"
+# This independent GNU C callee uses *real* RISC-V GCC va_start/va_arg
+# to consume register+stack arguments from the MiniC ILP32 call site.
+cat >"$work/varargs.c" <<'SRC'
+int gcc_vargs(int first, ...) {
+    __builtin_va_list cursor;
+    int total = first;
+    int i;
+    __builtin_va_start(cursor, first);
+    for (i = 0; i < 10; ++i)
+        total += __builtin_va_arg(cursor, int);
+    __builtin_va_end(cursor);
+    return total;
+}
+SRC
+riscv64-linux-gnu-gcc -march=rv32i -mabi=ilp32 -ffreestanding -O0 \
+    -c "$work/varargs.c" -o "$work/varargs.o"
 bash tests/compiler/c0/build-rv32-gcc-runtime.sh "$work"
 riscv64-linux-gnu-ld -m elf32lriscv -static -e _start \
     -o "$work/prog.elf" "$work/start.o" "$work/core.o" \
-    "$work/libgcc-mulsi3.o" "$work/libgcc-divsi3.o"
+    "$work/varargs.o" "$work/libgcc-mulsi3.o" "$work/libgcc-divsi3.o"
 # Exact GCC model is an independent oracle for the new ELF32 record+symbol
 # relocations. Keep GNU's linker/syscall startup/library identical.
 riscv64-linux-gnu-gcc -march=rv32i -mabi=ilp32 -ffreestanding \
     -x c -c "$work/core.i" -o "$work/core-gcc.o"
 riscv64-linux-gnu-ld -m elf32lriscv -static -e _start \
     -o "$work/prog-gcc.elf" "$work/start.o" "$work/core-gcc.o" \
-    "$work/libgcc-mulsi3.o" "$work/libgcc-divsi3.o"
+    "$work/varargs.o" "$work/libgcc-mulsi3.o" "$work/libgcc-divsi3.o"
 qemu-riscv32 "$work/prog-gcc.elf"
 set +e
 timeout 30s qemu-riscv32 -strace "$work/prog.elf" \
@@ -205,7 +228,7 @@ fi
 # program linking is not yet qualified (only compat-vDSO is certified).
 riscv64-linux-gnu-ld -m elf32lriscv -static -e _start \
     -o "$work/prog-native.elf" "$work/start.o" "$work/core-native.o" \
-    "$work/libgcc-mulsi3.o" "$work/libgcc-divsi3.o"
+    "$work/varargs.o" "$work/libgcc-mulsi3.o" "$work/libgcc-divsi3.o"
 qemu-riscv32 "$work/prog-native.elf"
 echo 'RV32_NATIVE_CHAIN=PASS minic_C=true minic_as_ELF32=true GNU_LD=true qemu_riscv32=true'
 riscv64-linux-gnu-readelf -h "$work/prog.elf" |
@@ -220,4 +243,4 @@ if "$MINIC_CC" --target=riscv32-linux -march=rv32i -mabi=ilp32 \
     exit 1
 fi
 grep -Eq 'rv32i:|not yet qualified' "$work/wide.err"
-echo 'RV32_CORE=PASS C_functions=19 ILP32=1 ELF32=1 QEMU=PASS GNU_AS=PASS MiniAS=PASS GNU_LD=PASS RV32I_libgcc_muldivmod=PASS wide_ABI=reject'
+echo 'RV32_CORE=PASS C_functions=20 ILP32=1 ELF32=1 QEMU=PASS GNU_AS=PASS MiniAS=PASS GNU_LD=PASS RV32I_libgcc_muldivmod=PASS variadic_integer_stack_ABI=PASS wide_ABI=reject'
