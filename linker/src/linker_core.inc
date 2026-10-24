@@ -808,6 +808,47 @@ static bool section_supported_for_merge(const MiniElfSection *section) {
     return true;
 }
 
+/* ELF processor-specific RISC-V attributes are a single 'A' format
+ * marker followed by length-delimited vendor subsections. Ordinary
+ * SHF_MERGE-style concatenation of complete input sections creates
+ * 'A vendor A vendor', which readelf cannot parse. Preserve each input
+ * vendor subsection (including unknown vendors) but emit 'A' only once.
+ * Validate all bounds before accepting a foreign .o or archive member.
+ * This is metadata, not executable data and not an ABI override. */
+#define MINILD_SHT_RISCV_ATTRIBUTES UINT32_C(0x70000003)
+static bool riscv_attributes_valid(const unsigned char *bytes, size_t size) {
+    size_t pos = 1U;
+
+    if (size < 7U || bytes[0] != (unsigned char)'A') {
+        return false;
+    }
+    while (pos < size) {
+        size_t vendor_end;
+        uint32_t length;
+        if (!range_ok(pos, 4U, size)) {
+            return false;
+        }
+        length = (uint32_t)bytes[pos] |
+                 ((uint32_t)bytes[pos + 1U] << 8U) |
+                 ((uint32_t)bytes[pos + 2U] << 16U) |
+                 ((uint32_t)bytes[pos + 3U] << 24U);
+        if (length < 6U || !range_ok(pos, (size_t)length, size)) {
+            return false;
+        }
+        vendor_end = pos + 4U;
+        while (vendor_end < pos + (size_t)length &&
+               bytes[vendor_end] != 0U) {
+            ++vendor_end;
+        }
+        if (vendor_end == pos + (size_t)length ||
+            vendor_end == pos + 4U) {
+            return false;
+        }
+        pos += (size_t)length;
+    }
+    return pos == size;
+}
+
 static bool process_input_data(MiniLdState *state,
                                const unsigned char *data,
                                size_t size,
@@ -918,6 +959,28 @@ static bool process_input_data(MiniLdState *state,
             goto done;
         }
         output = &state->sections[output_index];
+        if (input.type == MINILD_SHT_RISCV_ATTRIBUTES) {
+            /* Each input has its own format marker; the output must not.
+             * Keep the complete vendor records instead of dropping ISA
+             * facts, fabricating a target triple or using GNU output. */
+            if (strcmp(name, ".riscv.attributes") != 0 ||
+                input.flags != 0U ||
+                !minielf_section_data(&elf, i, &section_data,
+                                      &section_size) ||
+                !riscv_attributes_valid(section_data, section_size) ||
+                !section_append_data(
+                    output,
+                    section_data + (output->size == 0U ? 0U : 1U),
+                    section_size - (output->size == 0U ? 0U : 1U))) {
+                fprintf(state->diagnostics,
+                        "minic-ld: invalid-riscv-attributes:%s\n", path);
+                goto done;
+            }
+            section_map[i].output_section = output_index;
+            section_map[i].base = 0U;
+            section_map[i].mapped = true;
+            continue;
+        }
         if (!align_up_size(output->size, alignment, &base) ||
             !section_append_zero(output, base - output->size)) {
             fprintf(state->diagnostics,

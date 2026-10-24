@@ -105,9 +105,11 @@ def inspect(path: str) -> int:
     if match is None or int(match.group(1), 16) & 0xF:
         raise RuntimeError(f"{path}: ELF flags not soft-float, no-RVC, RV64I")
     attrs = run("riscv64-linux-gnu-readelf", "-A", path)
-    match = re.search(r'Tag_RISCV_arch:\s*"([^"]+)"', attrs)
-    if match is None or not re.fullmatch(r"rv64i[0-9]+p[0-9]+", match.group(1)):
-        raise RuntimeError(f"{path}: ISA attribute not strictly RV64I: {match}")
+    arch_tags = re.findall(r'Tag_RISCV_arch:\s*"([^"]+)"', attrs)
+    if not arch_tags or any(
+        re.fullmatch(r"rv64i[0-9]+p[0-9]+", tag) is None for tag in arch_tags
+    ):
+        raise RuntimeError(f"{path}: ISA attributes not all RV64I: {arch_tags}")
     dis = run("riscv64-linux-gnu-objdump", "-d", "-z", "-M", "no-aliases", path)
     instructions = 0
     for line in dis.splitlines():
