@@ -54,6 +54,18 @@ int sum12(int a,int b,int c,int d,int e,int f,int g,int h,
 }
 int call9(void) { return sum9(1,2,3,4,5,6,7,8,9); }
 int call12(void) { return sum12(1,2,3,4,5,6,7,8,9,10,11,12); }
+struct Record { unsigned char first; unsigned int *second; unsigned short third; };
+static unsigned int record_payload = 39;
+static struct Record rec = { 3, &record_payload, 5 };
+int record_init_probe(void) {
+    return rec.first + *rec.second + rec.third;
+}
+static int plus_five(int value) { return value + 5; }
+struct Callback { int (*apply)(int); unsigned tag; };
+static struct Callback callback = { plus_five, 41 };
+int global_function_reloc_probe(void) {
+    return callback.apply != 0 && callback.tag == 41;
+}
 SRC
 "$MINIC_CC" --target=riscv32-linux -march=rv32i -mabi=ilp32 \
     -S "$work/core.i" -o "$work/core.s"
@@ -136,6 +148,12 @@ _start:
     addi sp, sp, 16
     li t0, 78
     bne a0, t0, fail
+    call record_init_probe
+    li t0, 47
+    bne a0, t0, fail
+    call global_function_reloc_probe
+    li t0, 1
+    bne a0, t0, fail
     li a0, 0
     j exit
 fail:
@@ -170,4 +188,4 @@ if "$MINIC_CC" --target=riscv32-linux -march=rv32i -mabi=ilp32 \
     exit 1
 fi
 grep -Eq 'rv32i:|not yet qualified' "$work/wide.err"
-echo 'RV32_CORE=PASS C_functions=16 ILP32=1 ELF32=1 QEMU=PASS GNU_AS=PASS MiniAS=PASS GNU_LD=PASS RV32I_libgcc_muldivmod=PASS wide_ABI=reject'
+echo 'RV32_CORE=PASS C_functions=19 ILP32=1 ELF32=1 QEMU=PASS GNU_AS=PASS MiniAS=PASS GNU_LD=PASS RV32I_libgcc_muldivmod=PASS wide_ABI=reject'
