@@ -42,6 +42,18 @@ bridge="$root/tests/compiler/c0/rv32-linux-picolibc-syscalls.c"
   -c "$bridge" -o "$work/linux-syscalls.o"
 "$BARE_CC" "${target[@]}" "${libc[@]}" -c "$startup" -o "$work/start.o"
 
+# Picolibc's embedded linker script maps text at 0x80000000 and the
+# data segment separately at 0x80200000, with bare-metal TLS/stack
+# assumptions. GNU/Linux QEMU-user must use the Linux ELF32 layout:
+# link the *same* upstream Picolibc archives with GNU's Linux linker.
+picolibc=$("$BARE_CC" "${target[@]}" "${libc[@]}" -print-file-name=libc.a)
+picomath=$("$BARE_CC" "${target[@]}" "${libc[@]}" -print-file-name=libm.a)
+baregcc=$("$BARE_CC" "${target[@]}" -print-libgcc-file-name)
+for lib in "$picolibc" "$picomath" "$baregcc"; do
+  test -f "$lib" || { echo "RV32_CJSON_RUNTIME=FAIL missing_Picolibc_archive=$lib" >&2; exit 1; }
+done
+echo 'RV32_CJSON_LIBC=READY authentic_Picolibc=1 linux_ELF32_linker=1'
+
 for mode in reference minic-gnu-as minic-minias; do
   case "$mode" in
     reference)      obj="$work/cjson-reference.o" ;;
@@ -50,10 +62,10 @@ for mode in reference minic-gnu-as minic-minias; do
   esac
   # Picolibc is an upstream ABI-matched C library, not a collection of
   # test-only stubs or host LP64 glibc fallbacks.
-  "$BARE_CC" "${target[@]}" "${libc[@]}" -nostartfiles \
-    -Wl,-e,_start -Wl,--no-undefined \
+  riscv64-linux-gnu-ld -m elf32lriscv -static -e _start \
+    -o "$work/$mode.elf" \
     "$work/start.o" "$work/linux-syscalls.o" "$work/harness.o" \
-    "$obj" -lm -o "$work/$mode.elf"
+    "$obj" --start-group "$picomath" "$picolibc" "$baregcc" --end-group
   riscv64-linux-gnu-readelf -h "$work/$mode.elf" |
     grep -q 'Class:.*ELF32'
   set +e
