@@ -52,10 +52,10 @@ SRC
 bash tests/compiler/c0/build-rv32-gcc-runtime.sh "$work"
 riscv64-linux-gnu-ld -m elf32lriscv -static -e _start \
   -o "$work/aes-gcc.elf" "$work/start.o" "$work/aes-gcc.o" \
-  "$work/libgcc-mulsi3.o" "$work/libgcc-divsi3.o"
+  @"$work/rv32-runtime-objects.rsp"
 if ! riscv64-linux-gnu-ld -m elf32lriscv -static -e _start \
     -o "$work/aes.elf" "$work/start.o" "$work/aes.o" \
-    "$work/libgcc-mulsi3.o" "$work/libgcc-divsi3.o" \
+    @"$work/rv32-runtime-objects.rsp" \
     >"$work/ld.out" 2>"$work/ld.err"; then
   echo "RV32_TINYAES=BLOCKED stage=GNU_LD/runtime_libcalls original=true"
   sed -n '1,12p' "$work/ld.err"

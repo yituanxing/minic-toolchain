@@ -99,6 +99,16 @@ double double_chain(double value) { return double_copy(value); }
 long long wide_signed(int value) { return (long long)value; }
 long long wide_load(const long long *ptr) { return *ptr; }
 void wide_store(long long *ptr, long long value) { *ptr = value; }
+double df_add(double a, double b) { return a + b; }
+double df_sub(double a, double b) { return a - b; }
+double df_mul(double a, double b) { return a * b; }
+double df_div(double a, double b) { return a / b; }
+double df_neg(double a) { return -a; }
+int df_eq(double a, double b) { return a == b; }
+int df_lt(double a, double b) { return a < b; }
+int df_le(double a, double b) { return a <= b; }
+double df_from_int(int a) { return (double)a; }
+int df_to_int(double a) { return (int)a; }
 SRC
 "$MINIC_CC" --target=riscv32-linux -march=rv32i -mabi=ilp32 \
     -S "$work/core.i" -o "$work/core.s"
@@ -250,6 +260,74 @@ _start:
     li t0, 0xabcdef12
     bne t2, t0, fail
     li a0, 0
+    li a1, 0x40180000
+    li a2, 0
+    li a3, 0x40000000
+    call df_add
+    bnez a0, fail
+    li t0, 0x40200000
+    bne a1, t0, fail
+    li a0, 0
+    li a1, 0x40180000
+    li a2, 0
+    li a3, 0x40000000
+    call df_sub
+    bnez a0, fail
+    li t0, 0x40100000
+    bne a1, t0, fail
+    li a0, 0
+    li a1, 0x40180000
+    li a2, 0
+    li a3, 0x40000000
+    call df_mul
+    bnez a0, fail
+    li t0, 0x40280000
+    bne a1, t0, fail
+    li a0, 0
+    li a1, 0x40180000
+    li a2, 0
+    li a3, 0x40000000
+    call df_div
+    bnez a0, fail
+    li t0, 0x40080000
+    bne a1, t0, fail
+    li a0, 0
+    li a1, 0x40180000
+    call df_neg
+    bnez a0, fail
+    li t0, 0xc0180000
+    bne a1, t0, fail
+    li a0, 0
+    li a1, 0x40180000
+    li a2, 0
+    li a3, 0x40180000
+    call df_eq
+    li t0, 1
+    bne a0, t0, fail
+    li a0, 0
+    li a1, 0x40000000
+    li a2, 0
+    li a3, 0x40180000
+    call df_lt
+    li t0, 1
+    bne a0, t0, fail
+    li a0, 0
+    li a1, 0x40180000
+    li a2, 0
+    li a3, 0x40000000
+    call df_le
+    bnez a0, fail
+    li a0, -9
+    call df_from_int
+    bnez a0, fail
+    li t0, 0xc0220000
+    bne a1, t0, fail
+    li a0, 0
+    li a1, 0x40180000
+    call df_to_int
+    li t0, 6
+    bne a0, t0, fail
+    li a0, 0
     j exit
 fail:
     li a0, 1
@@ -316,16 +394,15 @@ qemu-riscv32 "$work/prog-native.elf"
 echo 'RV32_NATIVE_CHAIN=PASS minic_C=true minic_as_ELF32=true GNU_LD=true qemu_riscv32=true'
 riscv64-linux-gnu-readelf -h "$work/prog.elf" |
   grep -q 'Class:.*ELF32'
-# Plain 64-bit ABI transport is now real. Binary64 arithmetic still
-# requires a separately qualified pinned software-float library.
-cat >"$work/softfloat-not-yet.i" <<'SRC'
-double unqualified_add(double a, double b) { return a + b; }
+# Full 64-bit integer arithmetic still requires separate pair-ALU lowering.
+cat >"$work/ll-arith-not-yet.i" <<'SRC'
+long long unqualified_plus(long long a, long long b) { return a + b; }
 SRC
 if "$MINIC_CC" --target=riscv32-linux -march=rv32i -mabi=ilp32 \
-    -S "$work/softfloat-not-yet.i" -o "$work/not-yet.s" \
+    -S "$work/ll-arith-not-yet.i" -o "$work/not-yet.s" \
     2>"$work/not-yet.err"; then
-    echo 'RV32_CORE=FAIL unexpectedly emitted unqualified softfloat' >&2
+    echo 'RV32_CORE=FAIL unexpectedly emitted unsupported 64-bit ALU' >&2
     exit 1
 fi
 grep -Eq 'rv32i:|not yet qualified' "$work/not-yet.err"
-echo 'RV32_CORE=PASS C_functions=31 ILP32=1 ELF32=1 QEMU=PASS GNU_AS=PASS MiniAS=PASS GNU_LD=PASS RV32I_libgcc_muldivmod=PASS variadic_integer_stack_ABI=PASS two_XLEN_ABI=PASS softfloat_math=reject'
+echo 'RV32_CORE=PASS C_functions=41 ILP32=1 ELF32=1 QEMU=PASS GNU_AS=PASS MiniAS=PASS GNU_LD=PASS RV32I_libgcc_muldivmod=PASS variadic_integer_stack_ABI=PASS two_XLEN_ABI=PASS pinned_LLVM_softfloat=PASS'

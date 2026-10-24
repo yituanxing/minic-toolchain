@@ -445,6 +445,79 @@ static bool rv32_emit_ins(FILE *out, const MinicC0Program *program,
         return rv32_canon(out, f, ins->type, "t0") &&
                rv32_slot(out, fr, ins->result, "t0", false);
     }
+    /* All IEEE-754 arithmetic and comparisons are supplied by pinned LLVM
+     * compiler-rt 19.1.7, not reimplemented as target machine instructions.
+     * ILP32 soft-float ABI transfers each binary64 through a0/a1 and a2/a3. */
+    case MINIC_CORE_INSTRUCTION_DOUBLE_ADD:
+    case MINIC_CORE_INSTRUCTION_DOUBLE_SUBTRACT:
+    case MINIC_CORE_INSTRUCTION_DOUBLE_MULTIPLY:
+    case MINIC_CORE_INSTRUCTION_DOUBLE_DIVIDE:
+    case MINIC_CORE_INSTRUCTION_DOUBLE_EQUAL:
+    case MINIC_CORE_INSTRUCTION_DOUBLE_LESS:
+    case MINIC_CORE_INSTRUCTION_DOUBLE_LESS_EQUAL: {
+        const char *helper =
+            ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_ADD ? "__adddf3" :
+            ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_SUBTRACT ? "__subdf3" :
+            ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_MULTIPLY ? "__muldf3" :
+            ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_DIVIDE ? "__divdf3" :
+            ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_EQUAL ? "__eqdf2" :
+            "__ledf2";
+        if (ins->value.binary.left >= f->value_count ||
+            ins->value.binary.right >= f->value_count ||
+            !rv32_pair_slot(out, fr, ins->value.binary.left,
+                            "a0", "a1", true) ||
+            !rv32_pair_slot(out, fr, ins->value.binary.right,
+                            "a2", "a3", true) ||
+            fprintf(out, "  call %s\n", helper) < 0)
+            return false;
+        if (ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_EQUAL ||
+            ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_LESS ||
+            ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_LESS_EQUAL) {
+            /* __ledf2: -1 (<), 0 (==), 1 (>) or 1 (NaN).
+             * The predicates below therefore reject unordered comparisons. */
+            const char *test =
+                ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_EQUAL ?
+                "  seqz a0, a0\n" :
+                ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_LESS ?
+                "  slt a0, a0, zero\n" : "  slti a0, a0, 1\n";
+            return fprintf(out, "%s", test) >= 0 &&
+                   rv32_slot(out, fr, ins->result, "a0", false);
+        }
+        return rv32_pair_slot(out, fr, ins->result, "a0", "a1", false);
+    }
+    case MINIC_CORE_INSTRUCTION_DOUBLE_NEGATE:
+        return rv32_pair_slot(out, fr, ins->value.operand,
+                              "t0", "t1", true) &&
+               fprintf(out, "  li t2, 0x80000000\n  xor t1, t1, t2\n") >= 0 &&
+               rv32_pair_slot(out, fr, ins->result, "t0", "t1", false);
+    case MINIC_CORE_INSTRUCTION_INTEGER_TO_DOUBLE: {
+        MinicCoreValueId id = ins->value.operand;
+        if (id >= f->value_count ||
+            !rv32_scalar(f, f->values[id].type, &bits, &is_signed) ||
+            !rv32_slot(out, fr, id, "a0", true) ||
+            fprintf(out, "  call %s\n",
+                    is_signed ? "__floatsidf" : "__floatunsidf") < 0)
+            return false;
+        return rv32_pair_slot(out, fr, ins->result, "a0", "a1", false);
+    }
+    case MINIC_CORE_INSTRUCTION_DOUBLE_TO_INTEGER:
+        if (!rv32_scalar(f, ins->type, &bits, &is_signed) ||
+            !rv32_pair_slot(out, fr, ins->value.operand,
+                            "a0", "a1", true) ||
+            fprintf(out, "  call %s\n",
+                    is_signed ? "__fixdfsi" : "__fixunsdfsi") < 0)
+            return false;
+        return rv32_canon(out, f, ins->type, "a0") &&
+               rv32_slot(out, fr, ins->result, "a0", false);
+    case MINIC_CORE_INSTRUCTION_FLOAT_TO_DOUBLE:
+        return rv32_slot(out, fr, ins->value.operand, "a0", true) &&
+               fprintf(out, "  call __extendsfdf2\n") >= 0 &&
+               rv32_pair_slot(out, fr, ins->result, "a0", "a1", false);
+    case MINIC_CORE_INSTRUCTION_DOUBLE_TO_FLOAT:
+        return rv32_pair_slot(out, fr, ins->value.operand,
+                              "a0", "a1", true) &&
+               fprintf(out, "  call __truncdfsf2\n") >= 0 &&
+               rv32_slot(out, fr, ins->result, "a0", false);
     case MINIC_CORE_INSTRUCTION_INTEGER_NEGATE:
     case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_NOT:
     case MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO:
