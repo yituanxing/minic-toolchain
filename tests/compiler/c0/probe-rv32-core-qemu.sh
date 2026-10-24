@@ -67,8 +67,20 @@ int global_function_reloc_probe(void) {
     return callback.apply != 0 && callback.tag == 41;
 }
 extern int gcc_vargs(int first, ...);
+extern int gcc_vargs_wide(int first, ...);
+extern int gcc_vargs_edge(int first, ...);
+extern int gcc_vargs_double(int first, ...);
 int call_varargs_11(void) {
     return gcc_vargs(1,2,3,4,5,6,7,8,9,10,11);
+}
+int call_varargs_wide(void) {
+    return gcc_vargs_wide(3, 0x1122334455667788LL, 9, 10);
+}
+int call_varargs_edge(void) {
+    return gcc_vargs_edge(1,2,3,4,5,6,7, 0x1122334455667788LL, 9);
+}
+int call_varargs_double(void) {
+    return gcc_vargs_double(5, 6.5, 9);
 }
 struct CopyRecord { unsigned int x; unsigned char bytes[12]; int *pointer; };
 static int copy_payload = 63;
@@ -208,6 +220,15 @@ _start:
     bne a0, t0, fail
     call call_varargs_11
     li t0, 66
+    bne a0, t0, fail
+    call call_varargs_wide
+    li t0, 42
+    bne a0, t0, fail
+    call call_varargs_edge
+    li t0, 43
+    bne a0, t0, fail
+    call call_varargs_double
+    li t0, 44
     bne a0, t0, fail
     call record_copy_probe
     li t0, 79
@@ -353,6 +374,41 @@ int gcc_vargs(int first, ...) {
     __builtin_va_end(cursor);
     return total;
 }
+int gcc_vargs_wide(int first, ...) {
+    __builtin_va_list cursor;
+    long long value;
+    int a, b;
+    __builtin_va_start(cursor, first);
+    value = __builtin_va_arg(cursor, long long);
+    a = __builtin_va_arg(cursor, int);
+    b = __builtin_va_arg(cursor, int);
+    __builtin_va_end(cursor);
+    return first == 3 && value == 0x1122334455667788LL &&
+           a == 9 && b == 10 ? 42 : 2;
+}
+int gcc_vargs_edge(int first, ...) {
+    __builtin_va_list cursor;
+    int i, valid = first == 1;
+    long long value;
+    __builtin_va_start(cursor, first);
+    for (i = 2; i <= 7; ++i)
+        if (__builtin_va_arg(cursor, int) != i) valid = 0;
+    value = __builtin_va_arg(cursor, long long);
+    if (value != 0x1122334455667788LL) valid = 0;
+    if (__builtin_va_arg(cursor, int) != 9) valid = 0;
+    __builtin_va_end(cursor);
+    return valid ? 43 : 3;
+}
+int gcc_vargs_double(int first, ...) {
+    __builtin_va_list cursor;
+    double value;
+    int tail;
+    __builtin_va_start(cursor, first);
+    value = __builtin_va_arg(cursor, double);
+    tail = __builtin_va_arg(cursor, int);
+    __builtin_va_end(cursor);
+    return first == 5 && value == 6.5 && tail == 9 ? 44 : 4;
+}
 SRC
 riscv64-linux-gnu-gcc -march=rv32i -mabi=ilp32 -ffreestanding -O0 \
     -c "$work/varargs.c" -o "$work/varargs.o"
@@ -413,4 +469,4 @@ if "$MINIC_CC" --target=riscv32-linux -march=rv32i -mabi=ilp32 \
     exit 1
 fi
 grep -Eq 'rv32i:|not yet qualified' "$work/not-yet.err"
-echo 'RV32_CORE=PASS C_functions=41 ILP32=1 ELF32=1 QEMU=PASS GNU_AS=PASS MiniAS=PASS GNU_LD=PASS RV32I_libgcc_muldivmod=PASS variadic_integer_stack_ABI=PASS two_XLEN_ABI=PASS pinned_LLVM_softfloat=PASS'
+echo 'RV32_CORE=PASS C_functions=44 ILP32=1 ELF32=1 QEMU=PASS GNU_AS=PASS MiniAS=PASS GNU_LD=PASS RV32I_libgcc_muldivmod=PASS variadic_integer_stack_ABI=PASS two_XLEN_ABI=PASS pinned_LLVM_softfloat=PASS'
