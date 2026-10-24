@@ -14,6 +14,7 @@ on:
       - "tests/compiler/c0/rv32-linux-picolibc-syscalls.c"
       - "tests/external/cjson/**"
       - "tests/compiler/c0/probe-rv32-zlib-picolibc-qemu.sh"
+      - "tests/compiler/c0/probe-rv32-variadic-gcc-qemu.sh"
       - "tests/compiler/c0/rv32-linux-picolibc-posix.c"
       - "tests/compiler/c0/rv32-linux-picolibc-errno.c"
       - "tests/vendor/cjson/upstream/**"

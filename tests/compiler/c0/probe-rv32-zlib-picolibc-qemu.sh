@@ -48,6 +48,8 @@ done
 grep -qF "Checking for unistd.h... Yes." "$work/configure.log"
 mkdir "$work/obj"
 MINIC_CC="$MINIC_CC" bash tests/compiler/c0/check-rv32-opaque-tls-declarations.sh
+MINIC_CC="$MINIC_CC" MINIAS="$MINIAS" \
+  bash tests/compiler/c0/probe-rv32-variadic-gcc-qemu.sh
 MINIC_PASS=0
 REJECTS=0
 for source in "${sources[@]}"; do
