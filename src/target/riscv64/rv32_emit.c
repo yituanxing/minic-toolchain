@@ -84,10 +84,26 @@ static bool rv32_frame_init(Rv32Frame *frame, const MinicC0Program *program,
             size_t count = ins->kind == MINIC_CORE_INSTRUCTION_CALL ?
                 ins->value.call.argument_count :
                 ins->value.indirect_call.argument_count;
-            if (count > 8U) {
-                const size_t n = count - 8U;
-                if (n > max_stack_args) max_stack_args = n;
+            size_t cursor = 0U;
+            size_t begin = ins->kind == MINIC_CORE_INSTRUCTION_CALL ?
+                ins->value.call.argument_begin :
+                ins->value.indirect_call.argument_begin;
+            if (begin > f->call_argument_count ||
+                count > f->call_argument_count - begin) return false;
+            for (size_t a = 0U; a < count; ++a) {
+                const MinicCoreCallArgument *arg =
+                    &f->call_arguments[begin + a];
+                unsigned words;
+                if (arg->kind != MINIC_CORE_CALL_ARGUMENT_VALUE ||
+                    arg->value.value_id >= f->value_count ||
+                    !rv32_scalar_storage_words(
+                        f, f->values[arg->value.value_id].type, &words) ||
+                    cursor > (size_t)INT32_MAX / 4U - words)
+                    return false;
+                cursor += words;
             }
+            if (cursor > 8U && cursor - 8U > max_stack_args)
+                max_stack_args = cursor - 8U;
         }
     }
     if (max_stack_args > (size_t)INT32_MAX / 4U ||
@@ -179,7 +195,7 @@ static bool rv32_address(FILE *out, const char *reg, size_t off) {
 static bool rv32_scalar(const MinicCoreFunction *f, MinicType t,
                          unsigned *bits, bool *sign) {
     MinicType effective = t;
-    if (minic_type_is_pointer(t)) {
+    if (minic_type_is_pointer(t) || minic_type_is_float(t)) {
         *bits = 32U;
         *sign = false;
         return true;
@@ -232,6 +248,21 @@ static bool rv32_store_mem(FILE *out, const MinicCoreFunction *f,
     return fprintf(out, "  %s t1, 0(t0)\n",
                    bits <= 8U ? "sb" : bits <= 16U ? "sh" : "sw") >= 0;
 }
+static bool rv32_incoming_word(FILE *out, const Rv32Frame *fr,
+                               size_t word, const char *reg) {
+    if (word < 8U)
+        return fprintf(out, "  mv %s, a%zu\n", reg, word) >= 0;
+    return word - 8U <= (SIZE_MAX - fr->frame_size) / 4U &&
+           rv32_stack(out, "lw", reg,
+                      fr->frame_size + (word - 8U) * 4U);
+}
+static bool rv32_outgoing_word(FILE *out, const Rv32Frame *fr,
+                               size_t word, const char *reg) {
+    if (word < 8U)
+        return fprintf(out, "  mv a%zu, %s\n", word, reg) >= 0;
+    return word - 8U < fr->outgoing_size / 4U &&
+           rv32_stack(out, "sw", reg, (word - 8U) * 4U);
+}
 static bool rv32_load2(FILE *out, const Rv32Frame *fr,
                         const MinicCoreInstruction *ins) {
     return rv32_slot(out, fr, ins->value.binary.left, "t0", true) &&
@@ -244,30 +275,47 @@ static bool rv32_emit_scalar_call_arguments(
     FILE *out, const MinicCoreFunction *f, const Rv32Frame *fr,
     size_t begin, size_t count) {
     size_t i;
-    unsigned bits;
-    bool is_signed;
+    size_t cursor = 0U;
     if (begin > f->call_argument_count ||
-        count > f->call_argument_count - begin ||
-        count > 8U + fr->outgoing_size / 4U)
-        return false;
+        count > f->call_argument_count - begin) return false;
+    /* Stage all outgoing stack arguments before touching a0-a7. */
     for (i = 0U; i < count; ++i) {
         const MinicCoreCallArgument *arg = &f->call_arguments[begin + i];
+        unsigned words;
         if (arg->kind != MINIC_CORE_CALL_ARGUMENT_VALUE ||
             arg->value.value_id >= f->value_count ||
-            !rv32_scalar(f, f->values[arg->value.value_id].type,
-                         &bits, &is_signed))
-            return false;
-        if (i >= 8U &&
-            (!rv32_slot(out, fr, arg->value.value_id, "t0", true) ||
-             !rv32_stack(out, "sw", "t0", (i - 8U) * 4U)))
-            return false;
+            !rv32_scalar_storage_words(
+                f, f->values[arg->value.value_id].type, &words)) return false;
+        if (cursor >= 8U || (words == 2U && cursor + 1U >= 8U)) {
+            if (words == 2U) {
+                if (!rv32_pair_slot(out, fr, arg->value.value_id,
+                                    "t0", "t1", true)) return false;
+            } else if (!rv32_slot(out, fr, arg->value.value_id,
+                                   "t0", true)) return false;
+            if (cursor >= 8U &&
+                !rv32_outgoing_word(out, fr, cursor, "t0")) return false;
+            if (words == 2U && cursor + 1U >= 8U &&
+                !rv32_outgoing_word(out, fr, cursor + 1U, "t1"))
+                return false;
+        }
+        cursor += words;
     }
-    for (i = 0U; i < count && i < 8U; ++i) {
+    cursor = 0U;
+    for (i = 0U; i < count && cursor < 8U; ++i) {
         const MinicCoreCallArgument *arg = &f->call_arguments[begin + i];
-        char areg[8];
-        if (snprintf(areg, sizeof(areg), "a%zu", i) < 0 ||
-            !rv32_slot(out, fr, arg->value.value_id, areg, true))
+        unsigned words;
+        if (!rv32_scalar_storage_words(
+                f, f->values[arg->value.value_id].type, &words)) return false;
+        if (words == 2U) {
+            if (!rv32_pair_slot(out, fr, arg->value.value_id,
+                                "t0", "t1", true)) return false;
+        } else if (!rv32_slot(out, fr, arg->value.value_id,
+                               "t0", true)) return false;
+        if (!rv32_outgoing_word(out, fr, cursor, "t0")) return false;
+        if (words == 2U && cursor + 1U < 8U &&
+            !rv32_outgoing_word(out, fr, cursor + 1U, "t1"))
             return false;
+        cursor += words;
     }
     return true;
 }
@@ -282,24 +330,52 @@ static bool rv32_emit_ins(FILE *out, const MinicC0Program *program,
     bool is_signed;
     size_t idx;
     switch (ins->kind) {
-    case MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT:
+    case MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT: {
+        unsigned words;
+        if (!rv32_scalar_storage_words(f, ins->type, &words))
+            return false;
+        if (words == 2U) {
+            uint64_t raw = (uint64_t)ins->value.integer_value;
+            return fprintf(out, "  li t0, %" PRIu32 "\n  li t1, %" PRIu32 "\n",
+                           (uint32_t)raw, (uint32_t)(raw >> 32U)) >= 0 &&
+                   rv32_pair_slot(out, fr, ins->result, "t0", "t1", false);
+        }
         return rv32_scalar(f, ins->type, &bits, &is_signed) &&
-               fprintf(out, "  li t0, %" PRId64 "\n", ins->value.integer_value) >= 0 &&
+               fprintf(out, "  li t0, %" PRId64 "\n",
+                       ins->value.integer_value) >= 0 &&
                rv32_canon(out, f, ins->type, "t0") &&
                rv32_slot(out, fr, ins->result, "t0", false);
-    case MINIC_CORE_INSTRUCTION_PARAMETER:
+    }
+    case MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT: {
+        uint64_t raw = ins->value.floating_bits;
+        if (minic_type_is_double(ins->type)) {
+            return fprintf(out, "  li t0, %" PRIu32 "\n  li t1, %" PRIu32 "\n",
+                           (uint32_t)raw, (uint32_t)(raw >> 32U)) >= 0 &&
+                   rv32_pair_slot(out, fr, ins->result, "t0", "t1", false);
+        }
+        return minic_type_is_float(ins->type) &&
+               fprintf(out, "  li t0, %" PRIu32 "\n", (uint32_t)raw) >= 0 &&
+               rv32_slot(out, fr, ins->result, "t0", false);
+    }
+    case MINIC_CORE_INSTRUCTION_PARAMETER: {
+        size_t word = 0U;
+        unsigned words;
         idx = ins->value.parameter_index;
         if (idx >= f->parameter_count ||
-            !rv32_scalar(f, ins->type, &bits, &is_signed)) return false;
-        /* ILP32: a0..a7, then 4-byte stack slots at the caller's sp.
-         * Our fixed 16-byte-aligned frame shifted incoming sp by frame_size. */
-        if (idx < 8U) {
-            if (fprintf(out, "  mv t0, a%zu\n", idx) < 0) return false;
-        } else if (idx - 8U > (SIZE_MAX - fr->frame_size) / 4U ||
-                   !rv32_stack(out, "lw", "t0",
-                               fr->frame_size + (idx - 8U) * 4U)) return false;
+            !rv32_scalar_storage_words(f, ins->type, &words)) return false;
+        for (size_t j = 0U; j < idx; ++j) {
+            unsigned prior;
+            if (!rv32_scalar_storage_words(f, f->parameter_types[j], &prior))
+                return false;
+            word += prior;
+        }
+        if (!rv32_incoming_word(out, fr, word, "t0")) return false;
+        if (words == 2U)
+            return rv32_incoming_word(out, fr, word + 1U, "t1") &&
+                   rv32_pair_slot(out, fr, ins->result, "t0", "t1", false);
         return rv32_canon(out, f, ins->type, "t0") &&
                rv32_slot(out, fr, ins->result, "t0", false);
+    }
     case MINIC_CORE_INSTRUCTION_INTEGER_ADD: op = "add"; break;
     case MINIC_CORE_INSTRUCTION_INTEGER_SUBTRACT: op = "sub"; break;
     case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND: op = "and"; break;
@@ -344,10 +420,31 @@ static bool rv32_emit_ins(FILE *out, const MinicC0Program *program,
                rv32_slot(out, fr, ins->result, "a0", false);
     }
     case MINIC_CORE_INSTRUCTION_INTEGER_CONVERSION:
-    case MINIC_CORE_INSTRUCTION_SCALAR_BITCAST:
-        return rv32_slot(out, fr, ins->value.operand, "t0", true) &&
-               rv32_canon(out, f, ins->type, "t0") &&
+    case MINIC_CORE_INSTRUCTION_SCALAR_BITCAST: {
+        const MinicCoreValueId id = ins->value.operand;
+        unsigned from_words, to_words;
+        if (id >= f->value_count ||
+            !rv32_scalar_storage_words(f, f->values[id].type, &from_words) ||
+            !rv32_scalar_storage_words(f, ins->type, &to_words))
+            return false;
+        if (from_words == 2U) {
+            if (!rv32_pair_slot(out, fr, id, "t0", "t1", true)) return false;
+        } else if (!rv32_slot(out, fr, id, "t0", true)) return false;
+        if (to_words == 2U) {
+            if (from_words == 1U) {
+                if (ins->kind == MINIC_CORE_INSTRUCTION_SCALAR_BITCAST ||
+                    !rv32_scalar(f, f->values[id].type,
+                                 &bits, &is_signed) ||
+                    fprintf(out, is_signed ? "  srai t1, t0, 31\n" :
+                                          "  li t1, 0\n") < 0)
+                    return false;
+            }
+            return rv32_pair_slot(out, fr, ins->result,
+                                  "t0", "t1", false);
+        }
+        return rv32_canon(out, f, ins->type, "t0") &&
                rv32_slot(out, fr, ins->result, "t0", false);
+    }
     case MINIC_CORE_INSTRUCTION_INTEGER_NEGATE:
     case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_NOT:
     case MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO:
@@ -388,10 +485,23 @@ static bool rv32_emit_ins(FILE *out, const MinicC0Program *program,
                rv32_slot(out, fr, ins->result, "t0", false);
     }
     case MINIC_CORE_INSTRUCTION_LOAD:
+        if (rv32_scalar_storage_words(f, ins->type, &bits) && bits == 2U)
+            return rv32_slot(out, fr, ins->value.load.address, "t0", true) &&
+                   fprintf(out, "  lw t1, 0(t0)\n  lw t2, 4(t0)\n") >= 0 &&
+                   rv32_pair_slot(out, fr, ins->result,
+                                  "t1", "t2", false);
         return rv32_slot(out, fr, ins->value.load.address, "t0", true) &&
                rv32_load_mem(out, f, ins->type, "t1") &&
                rv32_slot(out, fr, ins->result, "t1", false);
     case MINIC_CORE_INSTRUCTION_STORE:
+        if (ins->value.store.stored_value < f->value_count &&
+            rv32_scalar_storage_words(
+                f, f->values[ins->value.store.stored_value].type, &bits) &&
+            bits == 2U)
+            return rv32_slot(out, fr, ins->value.store.address, "t0", true) &&
+                   rv32_pair_slot(out, fr, ins->value.store.stored_value,
+                                  "t1", "t2", true) &&
+                   fprintf(out, "  sw t1, 0(t0)\n  sw t2, 4(t0)\n") >= 0;
         return ins->value.store.stored_value < f->value_count &&
                rv32_slot(out, fr, ins->value.store.address, "t0", true) &&
                rv32_slot(out, fr, ins->value.store.stored_value, "t1", true) &&
@@ -456,8 +566,12 @@ static bool rv32_emit_ins(FILE *out, const MinicC0Program *program,
             return false;
         return fprintf(out, "  call %s\n", callee->name) >= 0 &&
                (ins->result == MINIC_CORE_VALUE_INVALID ||
-                (rv32_canon(out, f, ins->type, "a0") &&
-                 rv32_slot(out, fr, ins->result, "a0", false)));
+                (rv32_scalar_storage_words(f, ins->type, &bits) &&
+                 bits == 2U ?
+                 rv32_pair_slot(out, fr, ins->result,
+                                "a0", "a1", false) :
+                 (rv32_canon(out, f, ins->type, "a0") &&
+                  rv32_slot(out, fr, ins->result, "a0", false))));
     }
     case MINIC_CORE_INSTRUCTION_INDIRECT_CALL: {
         const MinicCoreCallSignature *signature;
@@ -478,8 +592,12 @@ static bool rv32_emit_ins(FILE *out, const MinicC0Program *program,
             fprintf(out, "  jalr ra, 0(t0)\n") < 0)
             return false;
         return ins->result == MINIC_CORE_VALUE_INVALID ||
-               (rv32_canon(out, f, ins->type, "a0") &&
-                rv32_slot(out, fr, ins->result, "a0", false));
+               (rv32_scalar_storage_words(f, ins->type, &bits) &&
+                bits == 2U ?
+                rv32_pair_slot(out, fr, ins->result,
+                               "a0", "a1", false) :
+                (rv32_canon(out, f, ins->type, "a0") &&
+                 rv32_slot(out, fr, ins->result, "a0", false)));
     }
     default:
         return false;
@@ -496,7 +614,14 @@ static bool rv32_term(FILE *out, const MinicCoreFunction *f,
     switch (term->kind) {
     case MINIC_CORE_TERMINATOR_RETURN:
         if (!minic_type_is_void(f->return_type)) {
-            if (!rv32_slot(out, fr, term->return_value, "a0", true)) return false;
+            unsigned words;
+            if (!rv32_scalar_storage_words(f, f->return_type, &words))
+                return false;
+            if (words == 2U) {
+                if (!rv32_pair_slot(out, fr, term->return_value,
+                                    "a0", "a1", true)) return false;
+            } else if (!rv32_slot(out, fr, term->return_value, "a0", true))
+                return false;
         }
         return fprintf(out, "  j .L%s_rv32_return\n", symbol) >= 0;
     case MINIC_CORE_TERMINATOR_BRANCH:
@@ -527,19 +652,18 @@ static bool rv32_func(FILE *out, const MinicC0Program *program,
     size_t i, j;
     char message[200];
     unsigned bits;
-    bool sign;
     if (def->is_variadic) {
         rv32_diag(diag, "<rv32-abi>",
                   "rv32i: defining variadic functions requires ILP32 va_list ABI");
         return false;
     }
     if (!minic_type_is_void(f->return_type) &&
-        !rv32_scalar(f, f->return_type, &bits, &sign)) {
+        !rv32_scalar_storage_words(f, f->return_type, &bits)) {
         rv32_diag(diag, "<rv32-abi>", "rv32i: return type exceeds one XLEN or is unqualified");
         return false;
     }
     for (i = 0U; i < f->parameter_count; ++i) {
-        if (!rv32_scalar(f, f->parameter_types[i], &bits, &sign)) {
+        if (!rv32_scalar_storage_words(f, f->parameter_types[i], &bits)) {
             rv32_diag(diag, "<rv32-abi>", "rv32i: non-scalar or multi-XLEN parameters require ABI lowering");
             return false;
         }
