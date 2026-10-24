@@ -13,6 +13,7 @@ _start:
      * before main; custom Linux entry must preserve that ownership. */
     call __libc_init_array
     call main
-    li a7, 93
-    ecall
+    /* The real Picolibc exit path flushes buffered stdout and runs
+     * registered finalizers before calling our Linux _exit syscall. */
+    call exit
 1:  j 1b

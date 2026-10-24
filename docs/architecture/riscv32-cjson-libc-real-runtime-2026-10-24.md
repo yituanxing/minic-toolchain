@@ -18,9 +18,13 @@ and OS-syscall adapter are linked into all executables. No source
 function is delegated from MiniC to GNU C.
 
 The Linux-specific glue is exactly process entry, `brk`-based
-`sbrk` and process exit. C library functionality remains upstream.
-All three QEMU ELF32 executions must exit zero and stdout/stderr
-must match. Failures fail the job and do not print acceptance.
+`sbrk`, Linux write(2) and process exit; the upstream libc owns
+stdio formatting, output buffers and shutdown flushing. C library functionality remains upstream.
+Both the unchanged existing `runtime_harness.c` and the original
+upstream `test.c` are compiled with the same independent GNU compiler.
+For each workload, all three QEMU ELF32 executions (GCC reference,
+MiniC + GNU AS, MiniC + MiniAS) must exit zero and stdout/stderr must
+match byte-for-byte. Failures fail the job and do not print acceptance.
 
 Historical RV32 cJSON compile/ELF32 gates remain intact until this
 independent runtime proof is green, after which the frontier can

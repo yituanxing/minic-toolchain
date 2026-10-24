@@ -38,6 +38,10 @@ bridge="$root/tests/compiler/c0/rv32-linux-picolibc-syscalls.c"
   -x c -c "$source" -o "$work/cjson-reference.o"
 "$BARE_CC" "${target[@]}" "${libc[@]}" -O0 -ffreestanding -fno-builtin \
   -I"$vendor" -c "$fixture" -o "$work/harness.o"
+upstream="$vendor/test.c"
+test "$(git hash-object "$upstream")" = 986fc6eb3e77fc29cca2980647c357bf1fe1b1fe
+"$BARE_CC" "${target[@]}" "${libc[@]}" -O0 -ffreestanding -fno-builtin \
+  -I"$vendor" -c "$upstream" -o "$work/upstream-test.o"
 "$BARE_CC" "${target[@]}" "${libc[@]}" -O0 -ffreestanding -fno-builtin \
   -c "$bridge" -o "$work/linux-syscalls.o"
 "$BARE_CC" "${target[@]}" "${libc[@]}" -c "$startup" -o "$work/start.o"
@@ -69,38 +73,44 @@ for lib in "$picolibc" "$picomath" "$baregcc"; do
 done
 echo 'RV32_CJSON_LIBC=READY authentic_Picolibc=1 linux_ELF32_linker=1'
 
-for mode in reference minic-gnu-as minic-minias; do
-  case "$mode" in
-    reference)      obj="$work/cjson-reference.o" ;;
-    minic-gnu-as)   obj="$work/cjson-gnu-as.o" ;;
-    minic-minias)   obj="$work/cjson-minias.o" ;;
+for workload in full_harness upstream_test; do
+  case "$workload" in
+    full_harness) program="$work/harness.o" ;;
+    upstream_test) program="$work/upstream-test.o" ;;
   esac
-  # Picolibc is an upstream ABI-matched C library, not a collection of
-  # test-only stubs or host LP64 glibc fallbacks.
-  riscv64-linux-gnu-ld -m elf32lriscv -static -e _start \
-    -o "$work/$mode.elf" \
-    "$work/start.o" "$work/linux-syscalls.o" "$work/harness.o" \
-    "$obj" --start-group "$picomath" "$picolibc" "$baregcc" --end-group
-  riscv64-linux-gnu-readelf -h "$work/$mode.elf" |
-    grep -q 'Class:.*ELF32'
-  set +e
-  timeout 60s qemu-riscv32 "$work/$mode.elf" \
-      >"$work/$mode.out" 2>"$work/$mode.err"
-  rc=$?
-  set -e
-  if (( rc != 0 )); then
-    echo "RV32_CJSON_RUNTIME=FAIL mode=$mode stage=qemu exit=$rc" >&2
-    head -n 15 "$work/$mode.err" >&2 || :
-    timeout 10s qemu-riscv32 -strace "$work/$mode.elf" \
-      2>&1 | tail -n 30 >&2 || :
-    riscv64-linux-gnu-readelf -l "$work/$mode.elf" |
-      tail -n 25 >&2 || :
-    exit 1
-  fi
-  echo "RV32_CJSON_RUNTIME_MODE=PASS mode=$mode QEMU=1 upstream_cJSON_1_7_19=1"
+  for mode in reference minic-gnu-as minic-minias; do
+    case "$mode" in
+      reference)      obj="$work/cjson-reference.o" ;;
+      minic-gnu-as)   obj="$work/cjson-gnu-as.o" ;;
+      minic-minias)   obj="$work/cjson-minias.o" ;;
+    esac
+    executable="$work/$workload-$mode.elf"
+    riscv64-linux-gnu-ld -m elf32lriscv -static -e _start \
+      -o "$executable" \
+      "$work/start.o" "$work/linux-syscalls.o" "$program" \
+      "$obj" --start-group "$picomath" "$picolibc" "$baregcc" --end-group
+    riscv64-linux-gnu-readelf -h "$executable" | grep -q 'Class:.*ELF32'
+    set +e
+    timeout 60s qemu-riscv32 "$executable" \
+        >"$work/$workload-$mode.out" 2>"$work/$workload-$mode.err"
+    rc=$?
+    set -e
+    if (( rc != 0 )); then
+      echo "RV32_CJSON_RUNTIME=FAIL workload=$workload mode=$mode exit=$rc" >&2
+      head -n 15 "$work/$workload-$mode.err" >&2 || :
+      timeout 10s qemu-riscv32 -strace "$executable" \
+        2>&1 | tail -n 30 >&2 || :
+      exit 1
+    fi
+    echo "RV32_CJSON_RUNTIME_MODE=PASS workload=$workload mode=$mode QEMU=1"
+  done
+  for mode in minic-gnu-as minic-minias; do
+    if ! cmp -s "$work/$workload-reference.out" "$work/$workload-$mode.out" ||
+       ! cmp -s "$work/$workload-reference.err" "$work/$workload-$mode.err"; then
+      echo "RV32_CJSON_RUNTIME=FAIL workload=$workload mode=$mode stage=byte_exact" >&2
+      diff -u "$work/$workload-reference.out" "$work/$workload-$mode.out" | head -n 55 >&2 || :
+      exit 1
+    fi
+  done
 done
-cmp -s "$work/reference.out" "$work/minic-gnu-as.out"
-cmp -s "$work/reference.out" "$work/minic-minias.out"
-cmp -s "$work/reference.err" "$work/minic-gnu-as.err"
-cmp -s "$work/reference.err" "$work/minic-minias.err"
-echo 'RV32_CJSON_RUNTIME=PASS original_upstream=1 MiniC_all_functions=1 GNU_C_reference=1 Picolibc_libc=1 GNU_AS=1 MiniAS=1 ELF32=1 QEMU=1 full_harness=1'
+echo 'RV32_CJSON_RUNTIME=PASS original_upstream=1 MiniC_all_functions=1 GNU_C_reference=1 Picolibc_libc=1 GNU_AS=1 MiniAS=1 ELF32=1 QEMU=1 full_harness=1 upstream_test_c=1 byte_exact=1'
