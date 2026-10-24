@@ -56,11 +56,18 @@ for mode in reference minic-gnu-as minic-minias; do
     "$obj" -lm -o "$work/$mode.elf"
   riscv64-linux-gnu-readelf -h "$work/$mode.elf" |
     grep -q 'Class:.*ELF32'
-  if ! timeout 60s qemu-riscv32 "$work/$mode.elf" \
-      >"$work/$mode.out" 2>"$work/$mode.err"; then
-    rc=$?
-    echo "RV32_CJSON_RUNTIME=FAIL mode=$mode stage=qemu" >&2
+  set +e
+  timeout 60s qemu-riscv32 "$work/$mode.elf" \
+      >"$work/$mode.out" 2>"$work/$mode.err"
+  rc=$?
+  set -e
+  if (( rc != 0 )); then
+    echo "RV32_CJSON_RUNTIME=FAIL mode=$mode stage=qemu exit=$rc" >&2
     head -n 15 "$work/$mode.err" >&2 || :
+    timeout 10s qemu-riscv32 -strace "$work/$mode.elf" \
+      2>&1 | tail -n 30 >&2 || :
+    riscv64-linux-gnu-readelf -l "$work/$mode.elf" |
+      tail -n 25 >&2 || :
     exit 1
   fi
   echo "RV32_CJSON_RUNTIME_MODE=PASS mode=$mode QEMU=1 upstream_cJSON_1_7_19=1"

@@ -9,6 +9,9 @@ _start:
     .option norelax
     la gp, __global_pointer$
     .option pop
+    /* Picolibc's hosted CRT invokes constructors and libc initialization
+     * before main; custom Linux entry must preserve that ownership. */
+    call __libc_init_array
     call main
     li a7, 93
     ecall
