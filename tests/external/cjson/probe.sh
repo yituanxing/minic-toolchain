@@ -141,14 +141,25 @@ cat >"$include/locale.h" <<'EOF'
 #endif
 EOF
 
+# The frozen preprocessing workflow is shared by both ILP32 and LP64.
+# Only target ABI flags differ. Existing RV64 source digests/line gates
+# retain their exact historical spelling by default.
+cjson_target_args=""
+if test "${MINIC_CJSON_TARGET_ABI:-}" = rv32ilp32; then
+    cjson_target_args="-march=rv32i -mabi=ilp32"
+fi
 "$riscv_cc" \
-    -E -P -nostdinc -std=c11 \
+    $cjson_target_args -E -P -nostdinc -std=c11 \
     -U__GNUC__ -U__GNUC_MINOR__ -U__GNUC_PATCHLEVEL__ \
     -I"$include" -I"$vendor" \
     "$vendor/cJSON.c" \
     -o "$preprocessed"
 
-verify_preprocessed_line 1 'typedef long unsigned int size_t;'
+if test "${MINIC_CJSON_TARGET_ABI:-}" = rv32ilp32; then
+    verify_preprocessed_line 1 'typedef unsigned int size_t;'
+else
+    verify_preprocessed_line 1 'typedef long unsigned int size_t;'
+fi
 verify_preprocessed_line 2 'size_t strlen(const char *string);'
 verify_preprocessed_line 3 'void *memcpy(void *destination, const void *source, size_t count);'
 verify_preprocessed_line 4 'void *memset(void *destination, int value, size_t count);'

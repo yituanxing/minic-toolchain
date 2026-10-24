@@ -59,6 +59,8 @@ on:
       - "src/target/riscv64/rv32_global_emit.h"
       - "tests/compiler/c0/probe-rv32-core-qemu.sh"
       - "tests/compiler/c0/probe-rv32-tinyaes-frontier.sh"
+      - "tests/compiler/c0/probe-rv32-cjson-frontier.sh"
+      - "tests/external/cjson/probe.sh"
       - "tests/compiler/c0/build-rv32-gcc-runtime.sh"
       - "third_party/gcc-riscv-14.2.0/div.S"
       - "third_party/gcc-riscv-14.2.0/muldi3.S"
@@ -136,6 +138,8 @@ jobs:
             bash tests/compiler/c0/probe-rv32-core-qemu.sh
           MINIC_CC="$GITHUB_WORKSPACE/build/runtime-ci/bin/minic-cc" \
             bash tests/compiler/c0/probe-rv32-tinyaes-frontier.sh
+          MINIC_CC="$GITHUB_WORKSPACE/build/runtime-ci/bin/minic-cc" \
+            bash tests/compiler/c0/probe-rv32-cjson-frontier.sh
       - name: Reference compiler compile of identical runtime source set
         id: reference
         shell: bash
