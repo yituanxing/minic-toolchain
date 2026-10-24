@@ -40,6 +40,8 @@ static bool rv32_plan_incoming(const MinicCoreFunction *function,
                                       &entry->location))
             return false;
     }
+    plan->named_gpr_words = cursor.register_words;
+    plan->named_stack_words = cursor.stack_words;
     return true;
 }
 

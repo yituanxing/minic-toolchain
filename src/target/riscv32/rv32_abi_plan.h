@@ -25,6 +25,8 @@ typedef struct Rv32CallAbiPlan {
 typedef struct Rv32FunctionAbiPlan {
     Rv32AbiWordLocation *parameters;
     size_t parameter_count;
+    size_t named_gpr_words;
+    size_t named_stack_words;
     Rv32CallAbiPlan *calls; /* indexed by MinicCoreInstructionId */
     size_t call_count;
     size_t max_outgoing_stack_words;

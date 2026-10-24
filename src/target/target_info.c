@@ -207,9 +207,10 @@ const MinicTargetInfo *minic_target_info_for_architecture(
             /* RV32 calls need their own ILP32 register-pair/frame lowering.
              * Never copy an LP64 cursor until that machine side is qualified. */
             rv32_target.variadic_scalar_read_kind =
-                MINIC_VARIADIC_SCALAR_READ_UNSUPPORTED;
+                MINIC_VARIADIC_SCALAR_READ_LINEAR_SLOT;
+            rv32_target.variadic_linear_slot_bytes = 4U;
             rv32_target.variadic_copy_kind =
-                MINIC_VARIADIC_COPY_UNSUPPORTED;
+                MINIC_VARIADIC_COPY_SCALAR_ASSIGNMENT;
         }
         return &rv32_target;
     }

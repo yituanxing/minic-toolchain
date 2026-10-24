@@ -46,6 +46,10 @@ MinicCoreLowerStatus minic_core_lower_vararg_scalar(
                                 &value_size,
                                 &value_alignment) ||
         value_size == 0U || value_size > 8U || value_alignment > 8U ||
+        (context->target->variadic_scalar_read_kind ==
+            MINIC_VARIADIC_SCALAR_READ_LINEAR_SLOT &&
+         context->target->variadic_linear_slot_bytes == 4U &&
+         (value_size > 4U || value_alignment > 4U)) ||
         !minic_type_pointer_to(expression->type, &value_pointer_type)) {
         return MINIC_CORE_LOWER_UNSUPPORTED;
     }

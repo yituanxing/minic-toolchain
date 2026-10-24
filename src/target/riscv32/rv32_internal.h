@@ -17,6 +17,9 @@ typedef struct Rv32Frame {
      * and avoids moving the Core SSA/local object frame during calls. */
     size_t outgoing_size;
     size_t frame_size;
+    bool is_variadic;
+    size_t varargs_size;
+    size_t varargs_offset;
     size_t *object_offsets;
     size_t *value_offsets;
     size_t object_count;
@@ -28,7 +31,7 @@ typedef struct Rv32Frame {
 
 /* Frame ownership: rv32_frame.c */
 bool rv32_frame_init(Rv32Frame *, const MinicC0Program *,
-                     const MinicCoreFunction *, const MinicTargetInfo *);
+                     const MinicCoreFunction *, const MinicTargetInfo *, bool);
 void rv32_frame_destroy(Rv32Frame *);
 bool rv32_stack(FILE *, const char *, const char *, size_t);
 bool rv32_slot(FILE *, const Rv32Frame *, MinicCoreValueId, const char *, bool);

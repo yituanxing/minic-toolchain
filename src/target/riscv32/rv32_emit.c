@@ -3,8 +3,8 @@
  * two-word scalar ABI and frame layout; those are not interchangeable with
  * RV64 LP64. Qualified: records, direct/indirect and variadic call sites,
  * IEEE binary64 via pinned compiler-rt, and GNU differential ELF32/QEMU.
- * Variadic callee definitions, 64-bit integer ALU and other unsupported
- * operations still fail closed until independently qualified. */
+ * Variadic callee definitions use the ILP32 psABI register-save area.
+ * Unqualified two-word va_arg operands continue to fail closed. */
 #include "target/riscv32/rv32_emit.h"
 #include "target/riscv32/rv32_internal.h"
 #include "target/common/core_call_view.h"
@@ -88,6 +88,17 @@ static bool rv32_emit_ins(FILE *out, const MinicC0Program *program,
         return rv32_emit_memory_instruction(out, program, target, f, fr, ins);
     case MINIC_CORE_INSTRUCTION_COMPILER_BARRIER:
         return true;
+    case MINIC_CORE_INSTRUCTION_VARIADIC_ARGUMENT_ADDRESS: {
+        size_t offset;
+        if (!fr->is_variadic || fr->abi.named_gpr_words > 8U ||
+            fr->abi.named_stack_words > (SIZE_MAX - fr->frame_size) / 4U)
+            return false;
+        offset = fr->varargs_size != 0U ?
+            fr->varargs_offset :
+            fr->frame_size + fr->abi.named_stack_words * 4U;
+        return rv32_address(out, "t0", offset) &&
+               rv32_slot(out, fr, ins->result, "t0", false);
+    }
     case MINIC_CORE_INSTRUCTION_CALL:
     case MINIC_CORE_INSTRUCTION_INDIRECT_CALL:
         return rv32_emit_call(out, f, fr, ins, id);
@@ -140,11 +151,6 @@ static bool rv32_func(FILE *out, const MinicC0Program *program,
     size_t i, j;
     char message[200];
     unsigned bits;
-    if (def->is_variadic) {
-        rv32_diag(diag, "<rv32-abi>",
-                  "rv32i: defining variadic functions requires ILP32 va_list ABI");
-        return false;
-    }
     if (!minic_type_is_void(f->return_type) &&
         !rv32_scalar_storage_words(f, f->return_type, &bits)) {
         rv32_diag(diag, "<rv32-abi>", "rv32i: return type exceeds one XLEN or is unqualified");
@@ -156,7 +162,7 @@ static bool rv32_func(FILE *out, const MinicC0Program *program,
             return false;
         }
     }
-    if (!rv32_frame_init(&fr, program, f, target)) {
+    if (!rv32_frame_init(&fr, program, f, target, def->is_variadic)) {
         rv32_diag(diag, "<rv32-frame>", "rv32i: cannot allocate an ILP32 Core frame");
         rv32_frame_destroy(&fr);
         return false;
@@ -166,6 +172,16 @@ static bool rv32_func(FILE *out, const MinicC0Program *program,
     if (!minic_riscv64_emit_function_symbol_begin(out, &sym) ||
         fprintf(out, "  li t0, %zu\n  sub sp, sp, t0\n", fr.frame_size) < 0 ||
         !rv32_stack(out, "sw", "ra", fr.outgoing_size)) goto done;
+    if (fr.is_variadic && fr.varargs_size != 0U) {
+        const size_t first = fr.abi.named_gpr_words;
+        for (i = first; i < 8U; ++i) {
+            char reg[4];
+            (void)snprintf(reg, sizeof(reg), "a%zu", i);
+            if (!rv32_stack(out, "sw", reg,
+                            fr.varargs_offset + (i - first) * 4U))
+                goto done;
+        }
+    }
     for (i = 0; i < f->block_count; ++i) {
         const MinicCoreBlock *block = &f->blocks[i];
         if (!block->has_terminator ||

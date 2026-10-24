@@ -15,7 +15,8 @@ static bool rv32_align(size_t value, size_t by, size_t *out) {
 
 /* A wide ILP32 operand remains ONE semantic Core SSA value. */
 bool rv32_frame_init(Rv32Frame *frame, const MinicC0Program *program,
-                            const MinicCoreFunction *f, const MinicTargetInfo *t) {
+                            const MinicCoreFunction *f, const MinicTargetInfo *t,
+                            bool is_variadic) {
     size_t next, i, max_stack_args;
     if (frame == NULL || program == NULL || f == NULL || t == NULL ||
         f->value_count > 100000U || f->object_count > 100000U)
@@ -25,6 +26,12 @@ bool rv32_frame_init(Rv32Frame *frame, const MinicC0Program *program,
     if (!rv32_function_abi_plan_build(f, &frame->abi))
         return false;
     max_stack_args = frame->abi.max_outgoing_stack_words;
+    frame->is_variadic = is_variadic;
+    if (frame->abi.named_gpr_words > 8U ||
+        frame->abi.named_stack_words > (size_t)INT32_MAX / 4U)
+        return false;
+    frame->varargs_size = is_variadic ?
+        (8U - frame->abi.named_gpr_words) * 4U : 0U;
     if (max_stack_args > (size_t)INT32_MAX / 4U ||
         !rv32_align(max_stack_args * 4U, 16U, &frame->outgoing_size) ||
         f->value_count > (SIZE_MAX - frame->outgoing_size - 4U) / 8U)
@@ -71,8 +78,13 @@ bool rv32_frame_init(Rv32Frame *frame, const MinicC0Program *program,
         frame->object_offsets[i] = next;
         next += size != 0U ? size : 1U;
     }
-    return rv32_align(next, 16U, &frame->frame_size) &&
-           frame->frame_size <= (size_t)INT32_MAX;
+    if (next > SIZE_MAX - frame->varargs_size ||
+        !rv32_align(next + frame->varargs_size, 16U, &frame->frame_size) ||
+        frame->frame_size > (size_t)INT32_MAX ||
+        frame->frame_size < frame->varargs_size)
+        return false;
+    frame->varargs_offset = frame->frame_size - frame->varargs_size;
+    return frame->varargs_offset >= next;
 }
 void rv32_frame_destroy(Rv32Frame *f) {
     if (f != NULL) {
