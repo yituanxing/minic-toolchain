@@ -65,7 +65,7 @@ _start:
     bne a0, t0, fail
     li a0, 1
     call table_probe
-    li t0, 44169
+    li t0, 44123
     bne a0, t0, fail
     li a0, 1
     call ptr_probe
