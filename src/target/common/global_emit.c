@@ -203,7 +203,9 @@ bool minic_multi_emit_zero_relocation_global(FILE *out, const MinicC0Program *pr
          !(minic_type_is_integer(obj->type) && storage_size == target->data_layout->pointer_size)))
         return false;
     width = target->data_layout->pointer_size;
-    if (width != 8U) return false;
+    /* The common DataLayout relocation walker supports both LP64 and
+     * ILP32: render a relocation at the active target pointer width. */
+    if (width != 4U && width != 8U) return false;
     for (i = 0U; i < obj->relocation_count; ++i) {
         const MinicGlobalRelocation *reloc = &obj->relocations[i];
         size_t offset;

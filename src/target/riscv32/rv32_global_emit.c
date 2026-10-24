@@ -93,10 +93,11 @@ bool minic_riscv32_emit_flat_global(FILE *out,
         if (arr == NULL) return false;
         scalar = arr->element_type;
     }
-    if ((!minic_type_is_integer(scalar) && !minic_type_is_pointer(scalar)) ||
+    if ((!minic_type_is_integer(scalar) && !minic_type_is_pointer(scalar) &&
+         !minic_type_is_float(scalar) && !minic_type_is_double(scalar)) ||
         !minic_data_layout_type(target->data_layout, program, scalar,
                                 &width, &scalar_alignment) ||
-        (width != 1U && width != 2U && width != 4U) ||
+        (width != 1U && width != 2U && width != 4U && width != 8U) ||
         bytes % width != 0U) return false;
     if (obj->explicit_alignment > alignment)
         alignment = obj->explicit_alignment;
@@ -110,7 +111,8 @@ bool minic_riscv32_emit_flat_global(FILE *out,
         return fprintf(out, "  .zero %zu\n.size %s, %zu\n",
                        bytes, obj->name, bytes) >= 0;
     }
-    directive = width == 1U ? ".byte" : width == 2U ? ".half" : ".word";
+    directive = width == 1U ? ".byte" : width == 2U ? ".half" :
+                width == 4U ? ".word" : ".8byte";
     for (i = 0U; i < obj->initializer_count; ++i) {
         uint64_t value = obj->initializer_values[i];
         if (width == 1U) value &= UINT64_C(255);

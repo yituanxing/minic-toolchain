@@ -229,8 +229,17 @@ bool minic_riscv32_write_core_program(const char *path,
     for (i = 0U; ok && i < program->global_object_count; ++i) {
         ok = minic_riscv32_emit_flat_global(
             file, program, target, &program->global_objects[i]);
-        if (!ok) rv32_diag(diagnostic, "<rv32-global>",
-                           "rv32i: unsupported global initializer or relocation");
+        if (!ok) {
+            char message[256];
+            const MinicGlobalObject *obj = &program->global_objects[i];
+            (void)snprintf(message, sizeof(message),
+                "rv32i: unsupported global initializer or relocation"
+                " object=%s values=%zu relocs=%zu zero=%u",
+                obj->name == NULL ? "<unnamed>" : obj->name,
+                obj->initializer_count, obj->relocation_count,
+                obj->is_zero_initialized ? 1U : 0U);
+            rv32_diag(diagnostic, "<rv32-global>", message);
+        }
     }
     if (ok && fprintf(file, ".text\n") < 0) ok = false;
     for (i = 0U; ok && i < function_count; ++i) {

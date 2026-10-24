@@ -56,11 +56,28 @@ for source in "${sources[@]}"; do
     REJECTS=$((REJECTS+1))
     echo "RV32_ZLIB_TU=BLOCKED source=$source stage=MiniC" >&2
     head -n 8 "$work/obj/$stem.minic.err" >&2
+    loc=$(sed -n "s/.*$stem\\.i:\\([0-9][0-9]*\\):.*/\\1/p" \
+            "$work/obj/$stem.minic.err" | head -n 1)
+    if [[ -n "$loc" ]]; then
+      first=$((loc > 5 ? loc-5 : 1))
+      last=$((loc+5))
+      nl -ba "$work/obj/$stem.i" | sed -n "${first},${last}p" >&2
+    fi
     continue
   fi
-  "$RISCV_CC" "${target[@]}" -x assembler -c \
-    "$work/obj/$stem.s" -o "$work/obj/$stem-gnu-as.o"
-  "$MINIAS" "${target[@]}" -o "$work/obj/$stem-minias.o" "$work/obj/$stem.s"
+  if ! "$RISCV_CC" "${target[@]}" -x assembler -c \
+      "$work/obj/$stem.s" -o "$work/obj/$stem-gnu-as.o" \
+      >"$work/obj/$stem.gas.out" 2>"$work/obj/$stem.gas.err"; then
+    echo "RV32_ZLIB_TU=FAIL source=$source stage=GNU_AS" >&2
+    head -n 12 "$work/obj/$stem.gas.err" >&2
+    exit 1
+  fi
+  if ! "$MINIAS" "${target[@]}" -o "$work/obj/$stem-minias.o" "$work/obj/$stem.s" \
+      >"$work/obj/$stem.as.out" 2>"$work/obj/$stem.as.err"; then
+    echo "RV32_ZLIB_TU=FAIL source=$source stage=MiniAS" >&2
+    head -n 12 "$work/obj/$stem.as.err" >&2
+    exit 1
+  fi
   MINIC_PASS=$((MINIC_PASS+1))
   echo "RV32_ZLIB_TU=PASS source=$source compiler=MiniC assemblers=GNU_AS,MiniAS"
 done
