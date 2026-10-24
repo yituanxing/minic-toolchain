@@ -19,8 +19,15 @@ static bool rv32_reloc(FILE *out, const MinicC0Program *program,
         target->architecture != MINIC_TARGET_ARCH_RISCV32 ||
         target->data_layout->pointer_size != 4U || width != 4U)
         return false;
-    if (reloc->target_kind == MINIC_GLOBAL_RELOCATION_LABEL)
-        return false;
+    /* GNU computed goto: same source-label identity as RV64.
+     * The Core block emitter supplies .Luser_<statement-id> aliases. */
+    if (reloc->target_kind == MINIC_GLOBAL_RELOCATION_LABEL) {
+        const MinicStatement *stmt =
+            minic_c0_program_statement(program, reloc->target_id);
+        return stmt != NULL && stmt->kind == MINIC_STATEMENT_LABEL &&
+               fprintf(out, "  .4byte .Luser_%zu\n",
+                       reloc->target_id) >= 0;
+    }
     name = minic_multi_global_relocation_target_name(program, reloc);
     if (name == NULL || name[0] == '\0' ||
         !minic_data_layout_global_relocation_target_addend(

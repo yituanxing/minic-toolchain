@@ -68,23 +68,56 @@ bool rv32_emit_fp_instruction(FILE *out, const MinicCoreFunction *f,
                rv32_pair_slot(out, fr, ins->result, "t0", "t1", false);
     case MINIC_CORE_INSTRUCTION_INTEGER_TO_DOUBLE: {
         MinicCoreValueId id = ins->value.operand;
+        MinicType effective;
+        unsigned words;
+        const char *helper;
         if (id >= f->value_count ||
-            !rv32_scalar(f, f->values[id].type, &bits, &is_signed) ||
-            !rv32_slot(out, fr, id, "a0", true) ||
-            fprintf(out, "  call %s\n",
-                    is_signed ? "__floatsidf" : "__floatunsidf") < 0)
+            !rv32_scalar_storage_words(f, f->values[id].type, &words))
             return false;
-        return rv32_pair_slot(out, fr, ins->result, "a0", "a1", false);
+        effective = f->values[id].type;
+        if (minic_type_is_enum(effective) &&
+            !minic_core_function_effective_integer_type(f, effective, &effective))
+            return false;
+        if (!minic_type_is_integer(effective)) return false;
+        if (words == 2U) {
+            is_signed = effective.integer_sign == MINIC_INTEGER_SIGN_SIGNED;
+            helper = is_signed ? "__floatdidf" : "__floatundidf";
+            if (!rv32_pair_slot(out, fr, id, "a0", "a1", true))
+                return false;
+        } else {
+            if (!rv32_scalar(f, f->values[id].type, &bits, &is_signed) ||
+                !rv32_slot(out, fr, id, "a0", true))
+                return false;
+            helper = is_signed ? "__floatsidf" : "__floatunsidf";
+        }
+        return fprintf(out, "  call %s\n", helper) >= 0 &&
+               rv32_pair_slot(out, fr, ins->result, "a0", "a1", false);
     }
-    case MINIC_CORE_INSTRUCTION_DOUBLE_TO_INTEGER:
-        if (!rv32_scalar(f, ins->type, &bits, &is_signed) ||
-            !rv32_pair_slot(out, fr, ins->value.operand,
-                            "a0", "a1", true) ||
-            fprintf(out, "  call %s\n",
-                    is_signed ? "__fixdfsi" : "__fixunsdfsi") < 0)
+    case MINIC_CORE_INSTRUCTION_DOUBLE_TO_INTEGER: {
+        MinicType effective = ins->type;
+        unsigned words;
+        const char *helper;
+        if (!rv32_scalar_storage_words(f, ins->type, &words) ||
+            (minic_type_is_enum(effective) &&
+             !minic_core_function_effective_integer_type(f, effective, &effective)) ||
+            !minic_type_is_integer(effective))
             return false;
-        return rv32_canon(out, f, ins->type, "a0") &&
-               rv32_slot(out, fr, ins->result, "a0", false);
+        if (words == 2U) {
+            is_signed = effective.integer_sign == MINIC_INTEGER_SIGN_SIGNED;
+            helper = is_signed ? "__fixdfdi" : "__fixunsdfdi";
+        } else {
+            if (!rv32_scalar(f, ins->type, &bits, &is_signed))
+                return false;
+            helper = is_signed ? "__fixdfsi" : "__fixunsdfsi";
+        }
+        if (!rv32_pair_slot(out, fr, ins->value.operand, "a0", "a1", true) ||
+            fprintf(out, "  call %s\n", helper) < 0)
+            return false;
+        return words == 2U ?
+            rv32_pair_slot(out, fr, ins->result, "a0", "a1", false) :
+            (rv32_canon(out, f, ins->type, "a0") &&
+             rv32_slot(out, fr, ins->result, "a0", false));
+    }
     case MINIC_CORE_INSTRUCTION_FLOAT_TO_DOUBLE:
         return rv32_slot(out, fr, ins->value.operand, "a0", true) &&
                fprintf(out, "  call __extendsfdf2\n") >= 0 &&

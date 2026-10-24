@@ -23,3 +23,7 @@ This starts as a strict acceptance gate, **not** a claim of Lua support.
 Only a green original interpreter QEMU differential qualifies it.
 Follow-up: original `luac.c` executable, bytecode binary differential
 and Lua execution of source/bytecode once initial interpreter qualifies.
+
+## Original Lua source census and machine feature batch
+
+The original 34-TU GCC/MiniC/QEMU frontier exposed 25 compilable TUs and nine unresolved. This batch addresses the real 2-XLEN integer/binary64 conversion path and a computed-goto VM table of 85 static source-label relocations. RV32 uses canonical __floatdidf/__floatundidf/__fixdfdi/__fixunsdfdi runtime calls, ELF32 .4byte local labels, Core BLOCK_ADDRESS, and INDIRECT_BRANCH, matching RV64 Core semantics. Remaining genuine GNU extern inline semantics and wide variadic reads are handled independently. No upstream source is rewritten.

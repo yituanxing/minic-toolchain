@@ -76,6 +76,11 @@ static bool rv32_emit_ins(FILE *out, const MinicC0Program *program,
     case MINIC_CORE_INSTRUCTION_FLOAT_TO_DOUBLE:
     case MINIC_CORE_INSTRUCTION_DOUBLE_TO_FLOAT:
         return rv32_emit_fp_instruction(out, f, fr, ins);
+    case MINIC_CORE_INSTRUCTION_BLOCK_ADDRESS:
+        return ins->value.block_id < f->block_count &&
+               fprintf(out, "  lla t0, .L%s_rv32_bb%u\n",
+                       symbol, (unsigned)ins->value.block_id) >= 0 &&
+               rv32_slot(out, fr, ins->result, "t0", false);
     case MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS:
     case MINIC_CORE_INSTRUCTION_FIELD_ADDRESS:
     case MINIC_CORE_INSTRUCTION_POINTER_OFFSET:
@@ -123,6 +128,9 @@ static bool rv32_term(FILE *out, const MinicCoreFunction *f,
                 return false;
         }
         return fprintf(out, "  j .L%s_rv32_return\n", symbol) >= 0;
+    case MINIC_CORE_TERMINATOR_INDIRECT_BRANCH:
+        return rv32_slot(out, fr, term->indirect_target, "t0", true) &&
+               fprintf(out, "  jalr zero, 0(t0)\n") >= 0;
     case MINIC_CORE_TERMINATOR_BRANCH:
         return term->branch_target < f->block_count &&
                fprintf(out, "  j .L%s_rv32_bb%u\n",
@@ -186,6 +194,10 @@ static bool rv32_func(FILE *out, const MinicC0Program *program,
         const MinicCoreBlock *block = &f->blocks[i];
         if (!block->has_terminator ||
             fprintf(out, ".L%s_rv32_bb%zu:\n", sym.symbol_name, i) < 0)
+            goto done;
+        if (!f->suppress_source_label_aliases &&
+            block->source_label_id != SIZE_MAX &&
+            fprintf(out, ".Luser_%zu:\n", block->source_label_id) < 0)
             goto done;
         for (j = 0U; j < block->instruction_count; ++j) {
             MinicCoreInstructionId id = block->instructions[j];
