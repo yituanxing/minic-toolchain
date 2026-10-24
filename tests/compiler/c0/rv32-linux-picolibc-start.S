@@ -9,6 +9,12 @@ _start:
     .option norelax
     la gp, __global_pointer$
     .option pop
+    /* Linux enters static ELF32 with tp unset. RISC-V's local-exec TLS
+     * accesses (including Picolibc errno) are relative to tp. Initialize
+     * the actual ELF PT_TLS image before any libc constructor or main(). */
+    mv a0, sp
+    call rv32_picolibc_tls_init
+    mv tp, a0
     /* Picolibc's hosted CRT invokes constructors and libc initialization
      * before main; custom Linux entry must preserve that ownership. */
     call __libc_init_array
