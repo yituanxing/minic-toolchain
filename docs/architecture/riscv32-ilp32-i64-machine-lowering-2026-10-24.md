@@ -12,25 +12,27 @@ scalar equality/zero, and dynamic left/logical-right/arithmetic-right
 shifts including 0/31/32/33/63 word-boundaries. The existing SSA
 value/frame layout and incoming/outgoing ABI Plan remain unchanged.
 
-For 64-bit multiply, emit only the compiler runtime ABI call
-`__muldi3`, supplied by **unaltered original LLVM compiler-rt
-19.1.7 muldi3.c** built by the established RV32 freestanding
-vendor archive. No duplicated long-multiply implementation exists in
-MiniC; other 32-bit multiply/divide paths continue to use the original
-GNU libgcc assembly. All generated instructions use RV32I base-I,
-with no implicit M/F/D requirements.
+MiniC now emits standard compiler runtime ABI calls for 64-bit
+multiply, signed and unsigned divide and remainder:
+`__muldi3`, `__divdi3`, `__udivdi3`,
+`__moddi3`, `__umoddi3`. Their original LLVM compiler-rt
+19.1.7 sources, including `udivmoddi4.c` and
+`int_div_impl.inc`, were fetched unchanged from upstream tag
+`llvmorg-19.1.7`. The original GNU libgcc assembly remains
+responsible for the 32-bit `SI` helper family.
 
-64-bit divide/remainder are still fail-closed: the vendored RISC-V
-GNU `div.S` is specifically a 32-bit helper when __riscv_xlen=32;
-silently calling it for 64-bit C would truncate. These require a
-pinned, independently validated two-word runtime provider before
-activation.
+There is no handwritten division/multiplication algorithm in MiniC,
+only ILP32 two-XLEN argument placement, runtime ABI symbol selection
+and result reception. The base-I instruction profile is preserved.
+A two-word shift *count* operand still fails closed to prevent
+silently truncating unsupported widths.
 
 The dedicated QEMU differential compiles the same source using
 GCC RV32I/ILP32 and MiniC, assembles MiniC .s through both GNU AS
 and MiniAS, links against exactly the same original vendor helpers
 and tests the full 64-bit results against an independently compiled
-GNU C driver on 8x8 diverse 64-bit bit patterns and shift boundaries.
+GNU C driver on 10x10 diverse 64-bit bit patterns, nonzero divisors, signed
+minimum, signed overflow exclusions, and seven shift boundaries.
 This is capability qualification, not proof all RV32 C constructs or
 the complete cJSON runtime have passed.
 

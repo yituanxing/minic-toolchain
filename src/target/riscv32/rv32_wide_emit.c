@@ -1,4 +1,5 @@
 #include "target/riscv32/rv32_internal.h"
+#include "target/riscv/instruction_select.h"
 #include <inttypes.h>
 #include <stdint.h>
 
@@ -166,15 +167,21 @@ bool rv32_emit_wide_integer(FILE *out, const MinicCoreFunction *f,
         return rv32_pair_slot(out, fr, ins->result, "t0", "t1", false);
     }
     case MINIC_CORE_INSTRUCTION_INTEGER_MULTIPLY:
-        /* Original LLVM compiler-rt 19.1.7 muldi3.c, not a second
-         * hand-written multiplication algorithm in MiniC. */
-        return rv32_is_wide_integer(f, ins->type) &&
-               wide_pair_operands(out, f, fr, ins) &&
-               fprintf(out,
+    case MINIC_CORE_INSTRUCTION_INTEGER_DIVIDE:
+    case MINIC_CORE_INSTRUCTION_INTEGER_REMAINDER: {
+        /* Pinned original LLVM compiler-rt DI arithmetic. We select the
+         * standard symbol and implement only the psABI register transfer. */
+        const char *helper = minic_riscv_integer_arithmetic_symbol(
+            kind, minic_type_is_unsigned_integer(ins->type), 64U);
+        if (helper == NULL || !rv32_is_wide_integer(f, ins->type) ||
+            !wide_pair_operands(out, f, fr, ins))
+            return false;
+        return fprintf(out,
                  "  mv a0, t0\n  mv a1, t1\n"
                  "  mv a2, t2\n  mv a3, t3\n"
-                 "  call __muldi3\n") >= 0 &&
+                 "  call %s\n", helper) >= 0 &&
                rv32_pair_slot(out, fr, ins->result, "a0", "a1", false);
+    }
     case MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_LEFT:
     case MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_RIGHT:
         return rv32_is_wide_integer(f, ins->type) &&

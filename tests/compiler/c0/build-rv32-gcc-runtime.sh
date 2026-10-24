@@ -12,7 +12,8 @@ mkdir -p "$out"
 "$cc" -march=rv32i -mabi=ilp32 -I"$vendor" -x assembler-with-cpp \
   -c "$vendor/div.S" -o "$out/libgcc-divsi3.o"
 objects=("$out/libgcc-mulsi3.o" "$out/libgcc-divsi3.o")
-for name in muldi3 clzsi2 clzdi2 fp_mode \
+for name in muldi3 udivmoddi4 divdi3 udivdi3 moddi3 umoddi3 \
+            clzsi2 clzdi2 fp_mode \
             adddf3 subdf3 muldf3 divdf3 comparedf2 \
             floatsidf floatunsidf fixdfsi fixunsdfsi \
             extendsfdf2 truncdfsf2; do

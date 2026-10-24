@@ -16,6 +16,10 @@ U w_and(U a,U b) { return a & b; }
 U w_or(U a,U b) { return a | b; }
 U w_xor(U a,U b) { return a ^ b; }
 U w_mul(U a,U b) { return a * b; }
+U w_udiv(U a,U b) { return a / b; }
+U w_umod(U a,U b) { return a % b; }
+I w_sdiv(I a,I b) { return a / b; }
+I w_smod(I a,I b) { return a % b; }
 U w_not(U a) { return ~a; }
 I w_neg(I a) { return -a; }
 U w_shl(U a,unsigned b) { return a << b; }
@@ -39,21 +43,24 @@ typedef unsigned long long U;
 typedef long long I;
 extern U w_add(U,U), w_sub(U,U), w_and(U,U), w_or(U,U), w_xor(U,U);
 extern U w_mul(U,U), w_not(U), w_shl(U,unsigned), w_shr(U,unsigned);
+extern U w_udiv(U,U), w_umod(U,U);
+extern I w_sdiv(I,I), w_smod(I,I);
 extern I w_neg(I), w_sar(I,unsigned);
 extern int w_eq(U,U), w_lt_u(U,U), w_lt_s(I,I), w_zero(U);
-static volatile U values[8] = {
+static volatile U values[10] = {
   0ULL, 1ULL, 0xffffffffULL, 0x100000000ULL,
   0x123456789abcdef0ULL, 0xaaaaaaaa55555555ULL,
-  0xfedcba9876543210ULL, 0xffffffffffffffffULL
+  0xfedcba9876543210ULL, 0xffffffffffffffffULL,
+  0x7fffffffffffffffULL, 0x8000000000000000ULL
 };
 static const unsigned shifts[7] = {0U,1U,7U,31U,32U,33U,63U};
 static int test(void) {
   unsigned i,j,k;
-  for (i=0;i<8U;++i) {
+  for (i=0;i<10U;++i) {
     U a=values[i];
     if (w_not(a)!=~a || w_neg((I)a)!=-(I)a || w_zero(a)!=(a==0))
       return 1;
-    for (j=0;j<8U;++j) {
+    for (j=0;j<10U;++j) {
       U b=values[j];
       if (w_add(a,b)!=a+b) return 2;
       if (w_sub(a,b)!=a-b) return 3;
@@ -63,6 +70,13 @@ static int test(void) {
       if (w_eq(a,b)!=(a==b)) return 6;
       if (w_lt_u(a,b)!=(a<b)) return 7;
       if (w_lt_s((I)a,(I)b)!=((I)a<(I)b)) return 8;
+      if (b != 0ULL) {
+        if (w_udiv(a,b)!=a/b || w_umod(a,b)!=a%b) return 12;
+        if (!(a==0x8000000000000000ULL &&
+              b==0xffffffffffffffffULL) &&
+            (w_sdiv((I)a,(I)b)!=((I)a/(I)b) ||
+             w_smod((I)a,(I)b)!=((I)a%(I)b))) return 13;
+      }
     }
     for (k=0;k<7U;++k) {
       unsigned sh=shifts[k];
@@ -107,4 +121,4 @@ for mode in gnu minic-gas minic-as; do
     exit 1
   fi
 done
-echo "RV32_I64_ALU=PASS expressions=1000 functions=15 ISA=rv32i ABI=ilp32 GNU_C=1 GNU_AS=1 MiniAS=1 QEMU=1 upstream_muldi3=1"
+echo "RV32_I64_ALU=PASS checks=1500 functions=19 ISA=rv32i ABI=ilp32 GNU_C=1 GNU_AS=1 MiniAS=1 QEMU=1 upstream_llvm_DI_arithmetic=1"
