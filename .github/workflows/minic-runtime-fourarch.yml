@@ -20,6 +20,7 @@ on:
       - "src/target/loongarch64/call_emit.c"
       - "src/target/aarch64/block_emit.c"
       - "src/target/loongarch64/block_emit.c"
+      - "src/target/riscv/**"
       - "src/target/riscv64/runtime_libcall.c"
       - "src/target/riscv64/scalar_emit.c"
       - "src/target/riscv64/isa.c"

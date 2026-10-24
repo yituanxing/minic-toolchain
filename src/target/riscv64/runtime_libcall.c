@@ -1,4 +1,5 @@
 #include "target/riscv64/runtime_libcall.h"
+#include "target/riscv/instruction_select.h"
 #include "frontend/type.h"
 
 #include <stdio.h>
@@ -49,24 +50,20 @@ const char *minic_riscv64_softfloat_binary_symbol(
         return NULL;
     switch (kind) {
     case MINIC_CORE_INSTRUCTION_FLOAT_ADD:
-        return minic_riscv_isa_has(isa, MINIC_RISCV_FEATURE_F) ? NULL : "__addsf3";
     case MINIC_CORE_INSTRUCTION_FLOAT_SUBTRACT:
-        return minic_riscv_isa_has(isa, MINIC_RISCV_FEATURE_F) ? NULL : "__subsf3";
     case MINIC_CORE_INSTRUCTION_FLOAT_MULTIPLY:
-        return minic_riscv_isa_has(isa, MINIC_RISCV_FEATURE_F) ? NULL : "__mulsf3";
     case MINIC_CORE_INSTRUCTION_FLOAT_DIVIDE:
-        return minic_riscv_isa_has(isa, MINIC_RISCV_FEATURE_F) ? NULL : "__divsf3";
+        if (minic_riscv_isa_has(isa, MINIC_RISCV_FEATURE_F)) return NULL;
+        break;
     case MINIC_CORE_INSTRUCTION_DOUBLE_ADD:
-        return minic_riscv_isa_has(isa, MINIC_RISCV_FEATURE_D) ? NULL : "__adddf3";
     case MINIC_CORE_INSTRUCTION_DOUBLE_SUBTRACT:
-        return minic_riscv_isa_has(isa, MINIC_RISCV_FEATURE_D) ? NULL : "__subdf3";
     case MINIC_CORE_INSTRUCTION_DOUBLE_MULTIPLY:
-        return minic_riscv_isa_has(isa, MINIC_RISCV_FEATURE_D) ? NULL : "__muldf3";
     case MINIC_CORE_INSTRUCTION_DOUBLE_DIVIDE:
-        return minic_riscv_isa_has(isa, MINIC_RISCV_FEATURE_D) ? NULL : "__divdf3";
-    default:
-        return NULL;
+        if (minic_riscv_isa_has(isa, MINIC_RISCV_FEATURE_D)) return NULL;
+        break;
+    default: return NULL;
     }
+    return minic_riscv_softfloat_arithmetic_symbol(kind);
 }
 
 bool minic_riscv64_needs_arithmetic_libcall(const MinicRiscvIsa *isa,

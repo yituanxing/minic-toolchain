@@ -1,15 +1,12 @@
-/* RISC-V XLEN=32 ILP32 initial Core consumer.
- * This is NOT an independent copy of the RV64 backend: Core, target data
- * layout, function symbol policy, architecture registry and the assembler
- * are all shared. ILP32's scalar ABI and frame arithmetic are deliberately
- * separated from the current LP64-only 8-byte frame owner until both widths
- * can be parameterized without regressing Linux's accepted frame allocation.
- *
- * First contract: 32-bit scalar values, local integer objects, memory,
- * Core CFG, direct calls (up to eight scalar arguments), and M-less multiply.
- * Reject wider scalars, records, varargs and unsupported opcodes fail-closed.
- */
+/* RV32I/ILP32 Core consumer. Core, DataLayout, symbol policy, RISC-V
+ * opcode selection and assembler are shared with RV64. ILP32 owns its
+ * two-word scalar ABI and frame layout; those are not interchangeable with
+ * RV64 LP64. Qualified: records, direct/indirect and variadic call sites,
+ * IEEE binary64 via pinned compiler-rt, and GNU differential ELF32/QEMU.
+ * Variadic callee definitions, 64-bit integer ALU and other unsupported
+ * operations still fail closed until independently qualified. */
 #include "target/riscv64/rv32_emit.h"
+#include "target/riscv/instruction_select.h"
 #include "target/riscv64/rv32_abi_cursor.h"
 #include "target/riscv64/function_symbol.h"
 #include "target/riscv64/rv32_global_emit.h"
@@ -397,24 +394,24 @@ static bool rv32_emit_ins(FILE *out, const MinicC0Program *program,
         return rv32_canon(out, f, ins->type, "t0") &&
                rv32_slot(out, fr, ins->result, "t0", false);
     }
-    case MINIC_CORE_INSTRUCTION_INTEGER_ADD: op = "add"; break;
-    case MINIC_CORE_INSTRUCTION_INTEGER_SUBTRACT: op = "sub"; break;
-    case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND: op = "and"; break;
-    case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_OR: op = "or"; break;
-    case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_XOR: op = "xor"; break;
-    case MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_LEFT: op = "sll"; break;
+    /* Core owns widths; both XLEN variants share base-I opcode names. */
+    case MINIC_CORE_INSTRUCTION_INTEGER_ADD:
+    case MINIC_CORE_INSTRUCTION_INTEGER_SUBTRACT:
+    case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND:
+    case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_OR:
+    case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_XOR:
+    case MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_LEFT:
+        op = minic_riscv_scalar_binary_opcode(ins->kind, false);
+        break;
     case MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_RIGHT:
-        if (ins->value.binary.left >= f->value_count) return false;
-        lhs = f->values[ins->value.binary.left].type;
-        if (!rv32_scalar(f, lhs, &bits, &is_signed)) return false;
-        op = is_signed ? "sra" : "srl"; break;
     case MINIC_CORE_INSTRUCTION_INTEGER_LESS:
     case MINIC_CORE_INSTRUCTION_POINTER_LESS:
         if (ins->value.binary.left >= f->value_count) return false;
         lhs = f->values[ins->value.binary.left].type;
         if (!rv32_scalar(f, lhs, &bits, &is_signed)) return false;
-        op = ins->kind == MINIC_CORE_INSTRUCTION_POINTER_LESS ||
-             !is_signed ? "sltu" : "slt";
+        op = minic_riscv_scalar_binary_opcode(
+            ins->kind, ins->kind == MINIC_CORE_INSTRUCTION_POINTER_LESS ||
+                           !is_signed);
         break;
     case MINIC_CORE_INSTRUCTION_SCALAR_EQUAL:
         return rv32_load2(out, fr, ins) &&
@@ -476,13 +473,11 @@ static bool rv32_emit_ins(FILE *out, const MinicC0Program *program,
     case MINIC_CORE_INSTRUCTION_DOUBLE_EQUAL:
     case MINIC_CORE_INSTRUCTION_DOUBLE_LESS:
     case MINIC_CORE_INSTRUCTION_DOUBLE_LESS_EQUAL: {
-        const char *helper =
-            ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_ADD ? "__adddf3" :
-            ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_SUBTRACT ? "__subdf3" :
-            ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_MULTIPLY ? "__muldf3" :
-            ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_DIVIDE ? "__divdf3" :
-            ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_EQUAL ? "__eqdf2" :
-            "__ledf2";
+        const char *helper = minic_riscv_softfloat_arithmetic_symbol(ins->kind);
+        /* Comparisons use their own psABI predicate convention. */
+        if (helper == NULL)
+            helper = ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_EQUAL ?
+                     "__eqdf2" : "__ledf2";
         if (ins->value.binary.left >= f->value_count ||
             ins->value.binary.right >= f->value_count ||
             !rv32_pair_slot(out, fr, ins->value.binary.left,
@@ -685,7 +680,7 @@ static bool rv32_emit_ins(FILE *out, const MinicC0Program *program,
     default:
         return false;
     }
-    return rv32_load2(out, fr, ins) &&
+    return op != NULL && rv32_load2(out, fr, ins) &&
            fprintf(out, "  %s t0, t0, t1\n", op) >= 0 &&
            rv32_canon(out, f, ins->type, "t0") &&
            rv32_slot(out, fr, ins->result, "t0", false);

@@ -26,6 +26,13 @@ int triangular(int n) {
 int caller(int a, int b) {
     return add(a,b) + mul(a,b) + absdiff(a,b);
 }
+/* Exercise shared RISC-V opcode selection with signed/unsigned operands. */
+unsigned rv32_bitwise(unsigned a, unsigned b) { return (a & b) | (a ^ b); }
+int rv32_shr_signed(int a, int s) { return a >> s; }
+unsigned rv32_shr_unsigned(unsigned a, unsigned s) { return a >> s; }
+int rv32_cmp_signed(int a, int b) { return a < b; }
+int rv32_cmp_unsigned(unsigned a, unsigned b) { return a < b; }
+unsigned rv32_shift_left(unsigned a, unsigned b) { return a << b; }
 static const unsigned char keybox[8] = { 0x63,0x7c,0x77,0x7b,0xf2,0x6b,0x6f,0xc5 };
 static const unsigned short halves[4] = { 0x0102,0xabcd,0x3e4d,0x0000 };
 static unsigned int counter = 17;
@@ -147,6 +154,35 @@ _start:
     li a1, 3
     call caller
     li t0, 30
+    bne a0, t0, fail
+    li a0, 10
+    li a1, 6
+    call rv32_bitwise
+    li t0, 14
+    bne a0, t0, fail
+    li a0, -8
+    li a1, 2
+    call rv32_shr_signed
+    li t0, -2
+    bne a0, t0, fail
+    li a0, 0x80000000
+    li a1, 31
+    call rv32_shr_unsigned
+    li t0, 1
+    bne a0, t0, fail
+    li a0, -1
+    li a1, 1
+    call rv32_cmp_signed
+    li t0, 1
+    bne a0, t0, fail
+    li a0, -1
+    li a1, 1
+    call rv32_cmp_unsigned
+    bnez a0, fail
+    li a0, 3
+    li a1, 4
+    call rv32_shift_left
+    li t0, 48
     bne a0, t0, fail
     li a0, 5
     call triangular
@@ -469,4 +505,4 @@ if "$MINIC_CC" --target=riscv32-linux -march=rv32i -mabi=ilp32 \
     exit 1
 fi
 grep -Eq 'rv32i:|not yet qualified' "$work/not-yet.err"
-echo 'RV32_CORE=PASS C_functions=44 ILP32=1 ELF32=1 QEMU=PASS GNU_AS=PASS MiniAS=PASS GNU_LD=PASS RV32I_libgcc_muldivmod=PASS variadic_integer_stack_ABI=PASS two_XLEN_ABI=PASS pinned_LLVM_softfloat=PASS'
+echo 'RV32_CORE=PASS C_functions=50 ILP32=1 ELF32=1 QEMU=PASS GNU_AS=PASS MiniAS=PASS GNU_LD=PASS RV32I_libgcc_muldivmod=PASS variadic_integer_stack_ABI=PASS two_XLEN_ABI=PASS pinned_LLVM_softfloat=PASS'

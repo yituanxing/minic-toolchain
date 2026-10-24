@@ -1,4 +1,5 @@
 #include "target/riscv64/scalar_emit.h"
+#include "target/riscv/instruction_select.h"
 #include "target/riscv64/fp_emit.h"
 #include "target/riscv64/overflow_emit.h"
 #include "target/riscv64/codegen_internal.h"
@@ -235,9 +236,14 @@ bool minic_riscv64_emit_scalar_instruction(
         }
         return minic_riscv64_frame_store_value(file, frame, instruction->result, "t0");
     case MINIC_CORE_INSTRUCTION_INTEGER_ADD:
-        return emit_simple_integer_binary(file, program, frame, instruction, "add");
     case MINIC_CORE_INSTRUCTION_INTEGER_SUBTRACT:
-        return emit_simple_integer_binary(file, program, frame, instruction, "sub");
+    case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND:
+    case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_XOR:
+    case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_OR:
+    case MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_LEFT:
+        return emit_simple_integer_binary(
+            file, program, frame, instruction,
+            minic_riscv_scalar_binary_opcode(instruction->kind, false));
     case MINIC_CORE_INSTRUCTION_INTEGER_MULTIPLY:
         if (minic_type_is_int128_integer(instruction->type)) {
             if (minic_riscv64_uses_arithmetic_libcall(isa))
@@ -302,14 +308,6 @@ bool minic_riscv64_emit_scalar_instruction(
         }
         return minic_riscv64_frame_store_value(file, frame, instruction->result, "t0");
     }
-    case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND:
-        return emit_simple_integer_binary(file, program, frame, instruction, "and");
-    case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_XOR:
-        return emit_simple_integer_binary(file, program, frame, instruction, "xor");
-    case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_OR:
-        return emit_simple_integer_binary(file, program, frame, instruction, "or");
-    case MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_LEFT:
-        return emit_simple_integer_binary(file, program, frame, instruction, "sll");
     case MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_RIGHT: {
         MinicType effective_type;
         const char *opcode;
@@ -361,7 +359,8 @@ bool minic_riscv64_emit_scalar_instruction(
             }
             return minic_riscv64_frame_store_int128(file, frame, instruction->result, "t0", "t1");
         }
-        opcode = minic_type_is_unsigned_integer(effective_type) ? "srl" : "sra";
+        opcode = minic_riscv_scalar_binary_opcode(
+            instruction->kind, minic_type_is_unsigned_integer(effective_type));
         if (!minic_riscv64_frame_load_value(file, frame, instruction->value.binary.left, "t0") ||
             !minic_riscv64_frame_load_value(file, frame, instruction->value.binary.right, "t1") ||
             fprintf(file, "  %s t0, t0, t1\n", opcode) < 0 ||
@@ -398,7 +397,8 @@ bool minic_riscv64_emit_scalar_instruction(
             !minic_core_function_effective_integer_type(function, operand_type, &effective_type)) {
             return false;
         }
-        opcode = minic_type_is_unsigned_integer(effective_type) ? "sltu" : "slt";
+        opcode = minic_riscv_scalar_binary_opcode(
+            instruction->kind, minic_type_is_unsigned_integer(effective_type));
         if (!minic_riscv64_frame_load_value(file, frame, instruction->value.binary.left, "t0") ||
             !minic_riscv64_frame_load_value(file, frame, instruction->value.binary.right, "t1") ||
             fprintf(file, "  %s t0, t0, t1\n", opcode) < 0) {
