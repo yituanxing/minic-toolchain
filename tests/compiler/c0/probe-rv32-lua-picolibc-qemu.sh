@@ -157,3 +157,93 @@ for mode in gnu-as minias; do
   }
 done
 echo 'RV32_LUA=PASS original_5_5_0=1 TUs=34 MiniC_only=1 Picolibc=1 GCC_reference=1 GNU_AS=1 MiniAS=1 ELF32=1 QEMU=1 interpreter=byte_exact'
+
+# The second original Lua 5.5.0 executable: unchanged luac.c.
+# Link exactly the 32 library TUs and luac.c with each compiler mode,
+# excluding lua.c so no fake main() or partial GNU object substitution.
+cat >"$work/bytecode_pressure.lua" <<'LUA'
+local record = setmetatable({x=13}, {
+  __index = function(_, k) if k == "y" then return 29 end end
+})
+local function f(n) return n + record.y end
+assert(f(record.x) == 42)
+local t = {10,3,2,6}; table.sort(t)
+assert(table.concat(t,",") == "2,3,6,10")
+local co = coroutine.create(function()
+  coroutine.yield(21)
+  return 42
+end)
+local ok, value = coroutine.resume(co)
+assert(ok and value == 21)
+ok,value = coroutine.resume(co)
+assert(ok and value == 42)
+print("LUAC_RV32", f(13), table.concat(t,","))
+LUA
+for mode in reference gnu-as minias; do
+  objects=()
+  for source in "${sources[@]}"; do
+    [[ "$source" == lua.c ]] && continue
+    stem="${source%.c}"
+    objects+=("$work/obj/$stem-$mode.o")
+  done
+  if ! riscv64-linux-gnu-ld -m elf32lriscv -static -e _start \
+      -o "$work/run/luac-$mode.elf" \
+      "$work/obj/rv32-linux-picolibc-start.o" \
+      "$work/obj/rv32-linux-picolibc-syscalls.o" \
+      "$work/obj/rv32-linux-picolibc-posix.o" \
+      "$work/obj/rv32-linux-picolibc-errno.o" \
+      "${objects[@]}" \
+      --start-group "$picomath" "$picolibc" "$baregcc" --end-group \
+      >"$work/run/luac-$mode.link.out" 2>"$work/run/luac-$mode.link.err"; then
+    echo "RV32_LUAC=FAIL stage=ELF32_link mode=$mode" >&2
+    head -n 40 "$work/run/luac-$mode.link.err" >&2
+    exit 1
+  fi
+  riscv64-linux-gnu-readelf -h "$work/run/luac-$mode.elf" |
+    grep -q 'Class:.*ELF32'
+  set +e
+  timeout 75s qemu-riscv32 "$work/run/luac-$mode.elf" \
+    -o "$work/run/$mode.luac" "$work/bytecode_pressure.lua" \
+    >"$work/run/luac-$mode.out" 2>"$work/run/luac-$mode.err"
+  rc=$?
+  set -e
+  if ((rc != 0)); then
+    echo "RV32_LUAC=FAIL stage=QEMU mode=$mode exit=$rc" >&2
+    head -n 24 "$work/run/luac-$mode.err" >&2
+    exit 1
+  fi
+  test -s "$work/run/$mode.luac"
+  echo "RV32_LUAC_BINARY=PASS mode=$mode bytes=$(wc -c < "$work/run/$mode.luac")"
+done
+for mode in gnu-as minias; do
+  if ! cmp -s "$work/run/reference.luac" "$work/run/$mode.luac"; then
+    echo "RV32_LUAC=FAIL stage=bytecode_differential mode=$mode" >&2
+    cmp -l "$work/run/reference.luac" "$work/run/$mode.luac" | head -n 12 >&2 || :
+    exit 1
+  fi
+done
+# Execute original source AND generated binary bytecode with the genuine
+# interpreter for each ABI/assembler route. No same-process injected Lua C API.
+for mode in reference gnu-as minias; do
+  for form in source bytecode; do
+    case "$form" in
+      source) input="$work/bytecode_pressure.lua" ;;
+      bytecode) input="$work/run/$mode.luac" ;;
+    esac
+    if ! timeout 75s qemu-riscv32 "$work/run/lua-$mode.elf" "$input" \
+        >"$work/run/$mode-$form.out" \
+        2>"$work/run/$mode-$form.err"; then
+      echo "RV32_LUAC=FAIL stage=bytecode_execution mode=$mode form=$form" >&2
+      head -n 20 "$work/run/$mode-$form.err" >&2
+      exit 1
+    fi
+    cmp -s "$work/run/reference-source.out" "$work/run/$mode-$form.out" ||
+      [[ "$mode" == reference && "$form" == source ]] || {
+        echo "RV32_LUAC=FAIL stage=output_differential mode=$mode form=$form" >&2
+        exit 1
+      }
+  done
+done
+test -s "$work/run/reference-source.out"
+echo 'RV32_LUAC=PASS original_upstream=1 MiniC_all_33_objects=1 GCC_oracle=1 GNU_AS=1 MiniAS=1 ELF32=1 QEMU=1 bytecode=byte_exact source_binary_execution=1'
+

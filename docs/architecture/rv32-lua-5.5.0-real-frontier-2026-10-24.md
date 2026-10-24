@@ -31,3 +31,7 @@ The original 34-TU GCC/MiniC/QEMU frontier exposed 25 compilable TUs and nine un
 ## Second 34-TU diagnostic batch
 
 The original Lua scan advanced 25/34 to 28/34 through RV32I 64-bit/binary64 arithmetic and local-label VM dispatch. This batch accepts original Picolibc GNU extern-inline ctype declarations WITHOUT emitting a strong duplicate symbol; its parsed body is checked for syntax, and the authentic Picolibc exported functions own the runtime symbols. RV32I long-long shifts now consume both 32-bit shift-count registers instead of silently truncating, including >=64 saturation. Lua's unmodified original 34 TUs and GCC QEMU reference remain the gate.
+
+## Verified interpreter and next luac gate
+
+The pristine RV32I/Picolibc Lua 5.5.0 34-TU compiler gate and original interpreter completed successfully at Actions run 40107335192: all 34 original Lua C translation units compiled entirely with MiniC and both GNU-AS/MiniAS, and the real Lua interpreter under QEMU produced output identical to a fully GCC-compiled reference. Additional Linux PICOLIBC integration included authentic renameat, times and the RV32 time64 clock_gettime syscall; no Lua library function was replaced. Following the interpreter milestone, extend acceptance to the original luac.c bytecode compiler as an independent second executable. Use all 33 MiniC objects excluding lua.c, verify Lua compiled bytecode byte-exact against GCC and execute source and binary bytecode with both Lua interpreters. This separate luac step is a gate, not a success claim until green.
