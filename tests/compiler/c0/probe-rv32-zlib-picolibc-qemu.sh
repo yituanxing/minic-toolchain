@@ -42,6 +42,7 @@ done
 (cd "$src" && CC=cc CFLAGS="-O0 -std=c11" ./configure) >"$work/configure.log" 2>&1
 grep -qF "Checking for unistd.h... Yes." "$work/configure.log"
 mkdir "$work/obj"
+MINIC_CC="$MINIC_CC" bash tests/compiler/c0/check-rv32-opaque-tls-declarations.sh
 MINIC_PASS=0
 REJECTS=0
 for source in "${sources[@]}"; do

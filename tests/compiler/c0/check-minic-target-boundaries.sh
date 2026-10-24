@@ -138,4 +138,7 @@ lacks src/target/riscv32/rv32_emit.c 'call __mulsi3'
 lacks src/target/riscv32/rv32_emit.c 'call __adddf3'
 lacks src/target/riscv32/rv32_emit.c 'minic_riscv_emit_record_copy_bytes('
 
+has src/frontend/parser_expression.c 'thread-local object access requires target TLS relocation'
+has src/target/riscv32/rv32_global_emit.c 'rv32_array_of_records('
+
 printf 'MINIC_BACKEND_BOUNDARY_CHECK=PASS\n'

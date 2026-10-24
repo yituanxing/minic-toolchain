@@ -559,6 +559,9 @@ typedef struct MinicGlobalObject {
     bool is_extern;
     bool is_tentative;
     bool is_block_scope_extern_only;
+    /* Syntax-only GNU extern TLS declarations are preserved; any value
+     * reference fails closed until the target supports TLS relocations. */
+    bool is_thread_local;
 } MinicGlobalObject;
 
 typedef struct MinicC0Program {

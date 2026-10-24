@@ -283,6 +283,11 @@ static bool parse_global_reference(MinicParser *parser,
         minic_parser_error(parser, "invalid global object reference");
         return false;
     }
+    if (object->is_thread_local) {
+        minic_parser_error(parser,
+            "thread-local object access requires target TLS relocation support");
+        return false;
+    }
     array_object = minic_type_is_array(object->type);
     if (!array_object && minic_type_is_record(object->type)) {
         if (parser->current.kind != MINIC_TOKEN_DOT && !allow_record_lvalue) {

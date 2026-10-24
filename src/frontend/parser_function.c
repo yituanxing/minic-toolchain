@@ -662,6 +662,7 @@ typedef struct MinicParsedDeclarationPrefix {
     bool is_extern;
     bool is_static;
     bool is_register;
+    bool is_thread_local;
     bool is_inline;
     bool is_noreturn;
 } MinicParsedDeclarationPrefix;
@@ -688,6 +689,16 @@ static bool parse_declaration_prefix(MinicParser *parser,
             if (!minic_parser_advance(parser)) {
                 return false;
             }
+            continue;
+        }
+        if (function_identifier_is(parser, "__thread") ||
+            function_identifier_is(parser, "_Thread_local")) {
+            if (prefix->is_thread_local) {
+                minic_parser_error(parser, "duplicate thread-local storage-class specifier");
+                return false;
+            }
+            prefix->is_thread_local = true;
+            if (!minic_parser_advance(parser)) return false;
             continue;
         }
         if (parser->current.kind == MINIC_TOKEN_KW_STATIC) {
@@ -778,6 +789,16 @@ static bool parse_post_type_declaration_specifiers(
             if (!minic_parser_advance(parser)) {
                 return false;
             }
+            continue;
+        }
+        if (function_identifier_is(parser, "__thread") ||
+            function_identifier_is(parser, "_Thread_local")) {
+            if (prefix->is_thread_local) {
+                minic_parser_error(parser, "duplicate thread-local storage-class specifier");
+                return false;
+            }
+            prefix->is_thread_local = true;
+            if (!minic_parser_advance(parser)) return false;
             continue;
         }
         if (parser->current.kind == MINIC_TOKEN_KW_STATIC) {
@@ -1065,6 +1086,13 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
     if (!minic_parser_parse_type_specifiers(parser, &base_type) ||
         !parse_post_type_declaration_specifiers(parser, &declaration_prefix) ||
         !minic_parser_collect_gnu_attribute_lists(parser, &deferred_attributes)) {
+        return false;
+    }
+    /* The front end accepts opaque extern TLS declarations found in
+     * original target libc headers, but cannot emit a TLS definition or
+     * pretend TLS memory access is ordinary GOT addressing. */
+    if (declaration_prefix.is_thread_local && !declaration_prefix.is_extern) {
+        minic_parser_error(parser, "thread-local storage definitions are not yet supported");
         return false;
     }
     is_extern_declaration = declaration_prefix.is_extern;
@@ -1460,6 +1488,20 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
             return false;
         }
         if (is_extern_declaration) {
+            MinicGlobalObjectId existing_id =
+                minic_parser_find_global_object_entity(parser, name_span);
+            const MinicGlobalObject *existing =
+                minic_c0_program_global_object(parser->program, existing_id);
+            if (existing != NULL &&
+                existing->is_thread_local != declaration_prefix.is_thread_local) {
+                minic_parser_error(parser, "conflicting TLS qualification on extern object");
+                return false;
+            }
+            if (declaration_prefix.is_thread_local &&
+                parser->current.kind != MINIC_TOKEN_SEMICOLON) {
+                minic_parser_error(parser, "GNU extern TLS supports declarations only");
+                return false;
+            }
             if (!minic_parser_parse_extern_global_after_head(parser,
                                                              base_type,
                                                              return_type,
@@ -1469,10 +1511,19 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
                                                              has_section,
                                                              object_explicit_alignment,
                                                              visibility,
-                                                             has_visibility)) {
+                                                             has_visibility) ||
+                !minic_parser_external_object_weak(parser, name_span, object_is_weak)) {
                 return false;
             }
-            return minic_parser_external_object_weak(parser, name_span, object_is_weak);
+            if (declaration_prefix.is_thread_local) {
+                MinicGlobalObjectId id =
+                    minic_parser_find_global_object_entity(parser, name_span);
+                if (id == MINIC_GLOBAL_OBJECT_INVALID ||
+                    id >= parser->program->global_object_count)
+                    return false;
+                parser->program->global_objects[id].is_thread_local = true;
+            }
+            return true;
         }
         if (!minic_parser_parse_gnu_object_attribute_lists_with_symbol_metadata(
                 parser,

@@ -52,6 +52,19 @@ static bool rv32_data_symbol(FILE *out, const MinicGlobalObject *obj,
     return fprintf(out, ".type %s, @object\n.balign %zu\n%s:\n",
                    obj->name, alignment, obj->name) >= 0;
 }
+/* A file-scope table of records is not a flat scalar array even if
+ * there are no relocations: zlib's fixed Huffman code arrays hold 1536
+ * initializer scalars and must go through the shared DataLayout walker. */
+static bool rv32_array_of_records(const MinicC0Program *program, MinicType type) {
+    while (minic_type_is_array(type)) {
+        const MinicArrayType *array =
+            minic_c0_program_array_type(program, type.array_type_id);
+        if (array == NULL) return false;
+        type = array->element_type;
+        if (minic_type_is_record(type)) return true;
+    }
+    return false;
+}
 bool minic_riscv32_emit_flat_global(FILE *out,
                                     const MinicC0Program *program,
                                     const MinicTargetInfo *target,
@@ -72,6 +85,7 @@ bool minic_riscv32_emit_flat_global(FILE *out,
      * canonical recursive DataLayout walker, including pointer-function
      * symbol fixups and ABI-specific field padding. */
     if ((minic_type_is_record(obj->type) ||
+         rv32_array_of_records(program, obj->type) ||
          obj->relocation_count != 0U ||
          obj->union_selection_count != 0U ||
          obj->flexible_array_initializer_count != 0U) &&
