@@ -12,6 +12,7 @@
 #include "target/riscv64/rv32_emit.h"
 #include "target/riscv64/function_symbol.h"
 #include "target/riscv64/rv32_global_emit.h"
+#include "target/riscv64/record_copy_bytes.h"
 #include "target/data_layout.h"
 #include <inttypes.h>
 #include <limits.h>
@@ -179,7 +180,9 @@ static bool rv32_load2(FILE *out, const Rv32Frame *fr,
     return rv32_slot(out, fr, ins->value.binary.left, "t0", true) &&
            rv32_slot(out, fr, ins->value.binary.right, "t1", true);
 }
-static bool rv32_emit_ins(FILE *out, const MinicCoreFunction *f,
+static bool rv32_emit_ins(FILE *out, const MinicC0Program *program,
+                          const MinicTargetInfo *target,
+                          const MinicCoreFunction *f,
                           const Rv32Frame *fr,
                           const MinicCoreInstruction *ins) {
     const char *op = NULL;
@@ -302,6 +305,37 @@ static bool rv32_emit_ins(FILE *out, const MinicCoreFunction *f,
                rv32_slot(out, fr, ins->value.store.address, "t0", true) &&
                rv32_slot(out, fr, ins->value.store.stored_value, "t1", true) &&
                rv32_store_mem(out, f, f->values[ins->value.store.stored_value].type);
+    case MINIC_CORE_INSTRUCTION_RECORD_COPY: {
+        size_t copy_size, alignment;
+        if (!minic_type_is_record(ins->type) ||
+            !minic_data_layout_type(target->data_layout, program, ins->type,
+                                    &copy_size, &alignment) ||
+            copy_size == 0U || copy_size > UINT32_MAX ||
+            !rv32_slot(out, fr, ins->value.record_copy.destination_address,
+                       "t0", true) ||
+            !rv32_slot(out, fr, ins->value.record_copy.source_address,
+                       "t1", true))
+            return false;
+        (void)alignment;
+        return minic_riscv_emit_record_copy_bytes(out, "t0", "t1", copy_size);
+    }
+    case MINIC_CORE_INSTRUCTION_RECORD_LOAD: {
+        const MinicCoreObjectId id =
+            ins->value.record_load.destination_object;
+        size_t copy_size, alignment;
+        if (id >= f->object_count ||
+            !minic_type_is_record(f->objects[id].type) ||
+            !minic_data_layout_type(target->data_layout, program,
+                                    f->objects[id].type,
+                                    &copy_size, &alignment) ||
+            copy_size == 0U || copy_size > UINT32_MAX ||
+            !rv32_slot(out, fr, ins->value.record_load.source_address,
+                       "t0", true) ||
+            !rv32_address(out, "t1", fr->object_offsets[id]))
+            return false;
+        (void)alignment;
+        return minic_riscv_emit_record_copy_bytes(out, "t1", "t0", copy_size);
+    }
     case MINIC_CORE_INSTRUCTION_GLOBAL_ADDRESS:
         return ins->value.global_id < f->global_count &&
                fprintf(out, "  lla t0, %s\n",
@@ -440,7 +474,8 @@ static bool rv32_func(FILE *out, const MinicC0Program *program,
         for (j = 0U; j < block->instruction_count; ++j) {
             MinicCoreInstructionId id = block->instructions[j];
             if (id >= f->instruction_count ||
-                !rv32_emit_ins(out, f, &fr, &f->instructions[id])) {
+                !rv32_emit_ins(out, program, target, f, &fr,
+                               &f->instructions[id])) {
                 (void)snprintf(message, sizeof(message),
                                "rv32i: unqualified Core instruction function=%.75s block=%zu id=%u kind=%u",
                                sym.symbol_name, i, (unsigned)id,

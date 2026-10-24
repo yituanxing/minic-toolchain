@@ -1,4 +1,5 @@
 #include "target/riscv64/memory_emit.h"
+#include "target/riscv64/record_copy_bytes.h"
 #include "target/riscv64/frame_access.h"
 #include "target/riscv64/codegen_internal.h"
 #include "target/riscv64/legalize.h"
@@ -31,38 +32,6 @@ static bool emit_field_address(FILE *file,
     return minic_riscv64_frame_store_value(file, frame, instruction->result, "t0");
 }
 
-/* Byte-exact forward copy. RECORD_LOAD and RECORD_COPY previously contained
- * independent copies of this 2048-byte loop with reversed register roles. */
-static bool emit_record_copy_bytes(FILE *file,
-                                   const char *destination_register,
-                                   const char *source_register,
-                                   size_t size) {
-    size_t copied = 0U;
-    if (file == NULL || destination_register == NULL || source_register == NULL)
-        return false;
-    while (copied < size) {
-        size_t chunk = size - copied;
-        size_t offset;
-        if (chunk > 2048U) chunk = 2048U;
-        for (offset = 0U; offset < chunk; ++offset) {
-            if (fprintf(file,
-                        "  lbu t2, %zu(%s)\n"
-                        "  sb t2, %zu(%s)\n",
-                        offset, source_register, offset, destination_register) < 0)
-                return false;
-        }
-        copied += chunk;
-        if (copied < size &&
-            fprintf(file,
-                    "  li t3, %zu\n"
-                    "  add %s, %s, t3\n"
-                    "  add %s, %s, t3\n",
-                    chunk, destination_register, destination_register,
-                    source_register, source_register) < 0)
-            return false;
-    }
-    return true;
-}
 
 bool minic_riscv64_emit_memory_instruction(
     FILE *file, const MinicC0Program *program,
@@ -137,7 +106,7 @@ bool minic_riscv64_emit_memory_instruction(
             return false;
         }
         {
-            if (!emit_record_copy_bytes(file, "t1", "t0", record_size))
+            if (!minic_riscv_emit_record_copy_bytes(file, "t1", "t0", record_size))
                 return false;
         }
         return true;
@@ -158,7 +127,7 @@ bool minic_riscv64_emit_memory_instruction(
             return false;
         }
         (void)alignment;
-        if (!emit_record_copy_bytes(file, "t0", "t1", copy_size))
+        if (!minic_riscv_emit_record_copy_bytes(file, "t0", "t1", copy_size))
             return false;
         return true;
     }
