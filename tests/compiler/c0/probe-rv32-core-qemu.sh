@@ -167,7 +167,30 @@ bash tests/compiler/c0/build-rv32-gcc-runtime.sh "$work"
 riscv64-linux-gnu-ld -m elf32lriscv -static -e _start \
     -o "$work/prog.elf" "$work/start.o" "$work/core.o" \
     "$work/libgcc-mulsi3.o" "$work/libgcc-divsi3.o"
-qemu-riscv32 "$work/prog.elf"
+# Exact GCC model is an independent oracle for the new ELF32 record+symbol
+# relocations. Keep GNU's linker/syscall startup/library identical.
+riscv64-linux-gnu-gcc -march=rv32i -mabi=ilp32 -ffreestanding \
+    -x c -c "$work/core.i" -o "$work/core-gcc.o"
+riscv64-linux-gnu-ld -m elf32lriscv -static -e _start \
+    -o "$work/prog-gcc.elf" "$work/start.o" "$work/core-gcc.o" \
+    "$work/libgcc-mulsi3.o" "$work/libgcc-divsi3.o"
+qemu-riscv32 "$work/prog-gcc.elf"
+set +e
+timeout 30s qemu-riscv32 -strace "$work/prog.elf" \
+    >"$work/minic.stdout" 2>"$work/minic.stderr"
+rv32_status=$?
+set -e
+if [[ "$rv32_status" != 0 ]]; then
+    echo "RV32_CORE=FAIL stage=GNU_AS_QEMU exit=$rv32_status" >&2
+    cat "$work/minic.stderr" >&2
+    riscv64-linux-gnu-nm -n "$work/prog.elf" |
+      grep -E 'rec|callback|record_payload|plus_five|start' >&2 || :
+    riscv64-linux-gnu-objdump -s -j .data "$work/prog.elf" |
+      tail -n 30 >&2 || :
+    riscv64-linux-gnu-objdump -d "$work/prog.elf" |
+      sed -n '/<record_init_probe>:/,/^$/p;/<global_function_reloc_probe>:/,/^$/p' >&2 || :
+    exit "$rv32_status"
+fi
 # Second independent assembly producer for identical MiniC/Core C program.
 # The GNU linker is retained as the oracle because generic MiniLD ELF32
 # program linking is not yet qualified (only compat-vDSO is certified).
