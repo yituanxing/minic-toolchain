@@ -127,6 +127,10 @@ int df_lt(double a, double b) { return a < b; }
 int df_le(double a, double b) { return a <= b; }
 double df_from_int(int a) { return (double)a; }
 int df_to_int(double a) { return (int)a; }
+unsigned long long shift_wide_count(unsigned long long a,
+                                    unsigned long long count) {
+    return a >> count;
+}
 SRC
 "$MINIC_CC" --target=riscv32-linux -march=rv32i -mabi=ilp32 \
     -S "$work/core.i" -o "$work/core.s"
@@ -384,6 +388,14 @@ _start:
     li t0, 6
     bne a0, t0, fail
     li a0, 0
+    li a1, 0x80000000
+    li a2, 33
+    li a3, 0
+    call shift_wide_count
+    li t0, 0x40000000
+    bne a0, t0, fail
+    bnez a1, fail
+    li a0, 0
     j exit
 fail:
     li a0, 1
@@ -493,16 +505,7 @@ qemu-riscv32 "$work/prog-native.elf"
 echo 'RV32_NATIVE_CHAIN=PASS minic_C=true minic_as_ELF32=true GNU_LD=true qemu_riscv32=true'
 riscv64-linux-gnu-readelf -h "$work/prog.elf" |
   grep -q 'Class:.*ELF32'
-# The full two-XLEN arithmetic family now passes independently. Until
-# full-width shift-count ABI is separately qualified, never truncate it.
-cat >"$work/ll-arith-not-yet.i" <<'SRC'
-long long unqualified_wide_shift(long long a, long long b) { return a << b; }
-SRC
-if "$MINIC_CC" --target=riscv32-linux -march=rv32i -mabi=ilp32 \
-    -S "$work/ll-arith-not-yet.i" -o "$work/not-yet.s" \
-    2>"$work/not-yet.err"; then
-    echo 'RV32_CORE=FAIL unexpectedly emitted unsupported wide shift count' >&2
-    exit 1
-fi
-grep -Eq 'rv32i:|not yet qualified' "$work/not-yet.err"
-echo 'RV32_CORE=PASS C_functions=50 ILP32=1 ELF32=1 QEMU=PASS GNU_AS=PASS MiniAS=PASS GNU_LD=PASS RV32I_libgcc_muldivmod=PASS variadic_integer_stack_ABI=PASS two_XLEN_ABI=PASS pinned_LLVM_softfloat=PASS'
+# A GCC-vs-MiniC compiled real 64-bit shift count is now in the
+# ELF32 startup checks above. The machine code must examine both XLENs.
+grep -q 'bnez t5, .Lshift_wide_count_wide_ge64_' "$work/core.s"
+echo 'RV32_CORE=PASS C_functions=51 ILP32=1 ELF32=1 QEMU=PASS GNU_AS=PASS MiniAS=PASS GNU_LD=PASS RV32I_libgcc_muldivmod=PASS variadic_integer_stack_ABI=PASS two_XLEN_ABI=PASS pinned_LLVM_softfloat=PASS'

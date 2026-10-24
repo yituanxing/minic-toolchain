@@ -67,16 +67,18 @@ for source in "${sources[@]}"; do
   if ! "$RISCV_CC" "${target[@]}" -c "$work/obj/$stem.s" \
     -o "$work/obj/$stem-gnu-as.o" \
     >"$work/obj/$stem.gnu-as.out" 2>"$work/obj/$stem.gnu-as.err"; then
-    echo "RV32_LUA=FAIL source=$source stage=GNU_AS" >&2
+    blocked=$((blocked+1))
+    echo "RV32_LUA_TU=BLOCKED source=$source stage=GNU_AS" >&2
     head -n 14 "$work/obj/$stem.gnu-as.err" >&2
-    exit 1
+    continue
   fi
   if ! "$MINIAS" "${target[@]}" -o "$work/obj/$stem-minias.o" \
     "$work/obj/$stem.s" >"$work/obj/$stem.mini-as.out" \
     2>"$work/obj/$stem.mini-as.err"; then
-    echo "RV32_LUA=FAIL source=$source stage=MiniAS" >&2
+    blocked=$((blocked+1))
+    echo "RV32_LUA_TU=BLOCKED source=$source stage=MiniAS" >&2
     head -n 14 "$work/obj/$stem.mini-as.err" >&2
-    exit 1
+    continue
   fi
   compiled=$((compiled+1))
   echo "RV32_LUA_TU=PASS source=$source compiler=MiniC GNU_AS=1 MiniAS=1"

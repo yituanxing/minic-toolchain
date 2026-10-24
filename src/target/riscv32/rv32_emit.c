@@ -127,20 +127,32 @@ static bool rv32_term(FILE *out, const MinicCoreFunction *f,
             } else if (!rv32_slot(out, fr, term->return_value, "a0", true))
                 return false;
         }
-        return fprintf(out, "  j .L%s_rv32_return\n", symbol) >= 0;
+        /* A real Lua VM frame can exceed the single-instruction JAL
+         * range. Use the normal PC-relative far-branch sequence for all
+         * function exits rather than requiring assembler relaxation. */
+        return fprintf(out,
+                       "  lla t6, .L%s_rv32_return\n"
+                       "  jalr zero, 0(t6)\n", symbol) >= 0;
     case MINIC_CORE_TERMINATOR_INDIRECT_BRANCH:
         return rv32_slot(out, fr, term->indirect_target, "t0", true) &&
                fprintf(out, "  jalr zero, 0(t0)\n") >= 0;
     case MINIC_CORE_TERMINATOR_BRANCH:
         return term->branch_target < f->block_count &&
-               fprintf(out, "  j .L%s_rv32_bb%u\n",
+               fprintf(out,
+                       "  lla t6, .L%s_rv32_bb%u\n"
+                       "  jalr zero, 0(t6)\n",
                        symbol, (unsigned)term->branch_target) >= 0;
     case MINIC_CORE_TERMINATOR_CONDITIONAL_BRANCH:
         return term->conditional.when_true < f->block_count &&
                term->conditional.when_false < f->block_count &&
                rv32_slot(out, fr, term->conditional.condition, "t0", true) &&
-               fprintf(out, "  bnez t0, .L%s_rv32_bb%u\n"
-                            "  j .L%s_rv32_bb%u\n",
+               fprintf(out,
+                       "  beqz t0, 1f\n"
+                       "  lla t6, .L%s_rv32_bb%u\n"
+                       "  jalr zero, 0(t6)\n"
+                       "1:\n"
+                       "  lla t6, .L%s_rv32_bb%u\n"
+                       "  jalr zero, 0(t6)\n",
                        symbol, (unsigned)term->conditional.when_true,
                        symbol, (unsigned)term->conditional.when_false) >= 0;
     case MINIC_CORE_TERMINATOR_UNREACHABLE:
