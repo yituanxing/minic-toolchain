@@ -440,6 +440,14 @@ static bool record_external_tentative_object(MinicParser *parser,
             minic_type_is_array(object_type) &&
             existing->type.array_type_id != object_type.array_type_id &&
             object_type.array_type_id + 1U == parser->program->array_type_count;
+        /* TLS linkage is part of the object declaration's ABI contract.
+         * A plain tentative definition must never silently coalesce with
+         * an earlier opaque extern __thread symbol. */
+        if (existing != NULL && existing->is_thread_local) {
+            minic_parser_error(parser,
+                "conflicting TLS qualification on tentative object definition");
+            return false;
+        }
         if (existing == NULL ||
             !minic_declaration_external_object_types_compatible(
                 parser->program, existing->type, object_type) ||
