@@ -6,6 +6,7 @@
  * Variadic callee definitions, 64-bit integer ALU and other unsupported
  * operations still fail closed until independently qualified. */
 #include "target/riscv64/rv32_emit.h"
+#include "target/common/core_call_view.h"
 #include "target/riscv/instruction_select.h"
 #include "target/riscv64/rv32_abi_cursor.h"
 #include "target/riscv64/function_symbol.h"
@@ -67,33 +68,6 @@ static bool rv32_scalar_storage_words(const MinicCoreFunction *f,
     default: return false;
     }
 }
-static bool rv32_call_info(const MinicCoreFunction *f,
-                           const MinicCoreInstruction *ins,
-                           size_t *begin, size_t *count,
-                           size_t *fixed, bool *variadic) {
-    if (!f || !ins || !begin || !count || !fixed || !variadic) return false;
-    if (ins->kind == MINIC_CORE_INSTRUCTION_CALL) {
-        const MinicCoreCallee *c;
-        if (ins->value.call.callee_id >= f->callee_count) return false;
-        c = &f->callees[ins->value.call.callee_id];
-        *begin = ins->value.call.argument_begin;
-        *count = ins->value.call.argument_count;
-        *fixed = c->parameter_count;
-        *variadic = c->is_variadic;
-    } else if (ins->kind == MINIC_CORE_INSTRUCTION_INDIRECT_CALL) {
-        const MinicCoreCallSignature *c;
-        if (ins->value.indirect_call.signature_id >= f->call_signature_count)
-            return false;
-        c = &f->call_signatures[ins->value.indirect_call.signature_id];
-        *begin = ins->value.indirect_call.argument_begin;
-        *count = ins->value.indirect_call.argument_count;
-        *fixed = c->parameter_count;
-        *variadic = c->is_variadic;
-    } else return false;
-    return *begin <= f->call_argument_count &&
-           *count <= f->call_argument_count - *begin &&
-           (!*variadic || *count >= *fixed);
-}
 static bool rv32_frame_init(Rv32Frame *frame, const MinicC0Program *program,
                             const MinicCoreFunction *f, const MinicTargetInfo *t) {
     size_t next, i, max_stack_args = 0U;
@@ -106,13 +80,12 @@ static bool rv32_frame_init(Rv32Frame *frame, const MinicC0Program *program,
         const MinicCoreInstruction *ins = &f->instructions[i];
         if (ins->kind == MINIC_CORE_INSTRUCTION_CALL ||
             ins->kind == MINIC_CORE_INSTRUCTION_INDIRECT_CALL) {
-            size_t begin, count, fixed;
-            bool variadic;
+            MinicCoreCallView view;
             MinicRiscv32AbiCursor cursor = {0U, 0U, false};
-            if (!rv32_call_info(f, ins, &begin, &count, &fixed, &variadic))
+            if (!minic_core_call_view_build(f, ins, &view))
                 return false;
-            for (size_t a = 0U; a < count; ++a) {
-                const MinicCoreCallArgument *arg = &f->call_arguments[begin + a];
+            for (size_t a = 0U; a < view.argument_count; ++a) {
+                const MinicCoreCallArgument *arg = &view.arguments[a];
                 unsigned words;
                 MinicRiscv32AbiPlacement loc;
                 if (arg->kind != MINIC_CORE_CALL_ARGUMENT_VALUE ||
@@ -120,7 +93,8 @@ static bool rv32_frame_init(Rv32Frame *frame, const MinicC0Program *program,
                     !rv32_scalar_storage_words(
                         f, f->values[arg->value.value_id].type, &words) ||
                     !minic_riscv32_abi_place(
-                        &cursor, words, variadic && a >= fixed, &loc))
+                        &cursor, words,
+                        view.is_variadic && a >= view.parameter_count, &loc))
                     return false;
             }
             if (cursor.stack_words > max_stack_args)
@@ -293,15 +267,13 @@ static bool rv32_load2(FILE *out, const Rv32Frame *fr,
  * Stack output is staged before touching a0-a7. */
 static bool rv32_emit_scalar_call_arguments(
     FILE *out, const MinicCoreFunction *f, const Rv32Frame *fr,
-    size_t begin, size_t count, size_t fixed, bool variadic) {
+    const MinicCoreCallView *view) {
     size_t pass, i;
-    if (begin > f->call_argument_count ||
-        count > f->call_argument_count - begin ||
-        (variadic && count < fixed)) return false;
+    if (view == NULL) return false;
     for (pass = 0U; pass < 2U; ++pass) {
         MinicRiscv32AbiCursor cursor = {0U, 0U, false};
-        for (i = 0U; i < count; ++i) {
-            const MinicCoreCallArgument *arg = &f->call_arguments[begin + i];
+        for (i = 0U; i < view->argument_count; ++i) {
+            const MinicCoreCallArgument *arg = &view->arguments[i];
             MinicRiscv32AbiPlacement loc;
             const char *reg[2] = {"t0", "t1"};
             unsigned words;
@@ -311,7 +283,8 @@ static bool rv32_emit_scalar_call_arguments(
                 !rv32_scalar_storage_words(
                     f, f->values[arg->value.value_id].type, &words) ||
                 !minic_riscv32_abi_place(
-                    &cursor, words, variadic && i >= fixed, &loc))
+                    &cursor, words,
+                    view->is_variadic && i >= view->parameter_count, &loc))
                 return false;
             if ((pass == 0U && loc.stack_count == 0U) ||
                 (pass == 1U && loc.register_count == 0U)) continue;
@@ -639,16 +612,13 @@ static bool rv32_emit_ins(FILE *out, const MinicC0Program *program,
     case MINIC_CORE_INSTRUCTION_COMPILER_BARRIER:
         return true;
     case MINIC_CORE_INSTRUCTION_CALL: {
-        const MinicCoreCallee *callee;
-        size_t begin, count, fixed;
-        bool variadic;
+        MinicCoreCallView view;
         if (ins->value.call.result_object != MINIC_CORE_OBJECT_INVALID ||
-            !rv32_call_info(f, ins, &begin, &count, &fixed, &variadic))
+            !minic_core_call_view_build(f, ins, &view) ||
+            view.callee == NULL || view.callee->name == NULL ||
+            !rv32_emit_scalar_call_arguments(out, f, fr, &view))
             return false;
-        callee = &f->callees[ins->value.call.callee_id];
-        if (!rv32_emit_scalar_call_arguments(
-                out, f, fr, begin, count, fixed, variadic)) return false;
-        return fprintf(out, "  call %s\n", callee->name) >= 0 &&
+        return fprintf(out, "  call %s\n", view.callee->name) >= 0 &&
                (ins->result == MINIC_CORE_VALUE_INVALID ||
                 (rv32_scalar_storage_words(f, ins->type, &bits) &&
                  bits == 2U ?
@@ -658,15 +628,11 @@ static bool rv32_emit_ins(FILE *out, const MinicC0Program *program,
                   rv32_slot(out, fr, ins->result, "a0", false))));
     }
     case MINIC_CORE_INSTRUCTION_INDIRECT_CALL: {
-        size_t begin, count, fixed;
-        bool variadic;
-        if (ins->value.indirect_call.callee >= f->value_count ||
-            !rv32_call_info(f, ins, &begin, &count, &fixed, &variadic))
-            return false;
-        if (!rv32_emit_scalar_call_arguments(
-                out, f, fr, begin, count, fixed, variadic) ||
-            !rv32_slot(out, fr, ins->value.indirect_call.callee,
-                       "t0", true) ||
+        MinicCoreCallView view;
+        if (!minic_core_call_view_build(f, ins, &view) ||
+            view.signature == NULL ||
+            !rv32_emit_scalar_call_arguments(out, f, fr, &view) ||
+            !rv32_slot(out, fr, view.function_pointer, "t0", true) ||
             fprintf(out, "  jalr ra, 0(t0)\n") < 0)
             return false;
         return ins->result == MINIC_CORE_VALUE_INVALID ||

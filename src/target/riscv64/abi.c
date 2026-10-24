@@ -1,4 +1,5 @@
 #include "target/riscv64/abi.h"
+#include "target/riscv/gpr_abi_cursor.h"
 
 const char *const minic_riscv64_abi_integer_argument_registers[8] = {
     "a0",
@@ -218,7 +219,9 @@ bool minic_riscv64_abi_place_argument(const MinicC0Program *program,
     MinicRiscv64AbiArgumentLocation result;
     MinicRiscv64AbiCursor next;
     size_t integer_slots;
-    size_t available_integer_registers;
+    bool requires_even_pair = false;
+    MinicRiscvGprAbiCursor gpr;
+    MinicRiscvGprAbiPlacement placed;
 
     if (cursor == NULL || location == NULL ||
         cursor->integer_register_count > MINIC_RISCV64_ABI_ARGUMENT_REGISTER_COUNT ||
@@ -259,35 +262,30 @@ bool minic_riscv64_abi_place_argument(const MinicC0Program *program,
          result.value.kind == MINIC_RISCV64_ABI_VALUE_WIDE_SCALAR)
             ? result.value.slot_count
             : 1U;
-    /* RISC-V psABI: unnamed varargs requiring 16-byte alignment use
-     * even-numbered register pairs; if no pair remains they are entirely
-     * stack-passed, and subsequent args must also use the stack. The
-     * named 2-XLEN arguments may split a7 + first stack slot instead. */
+    /* LP64 requires paired GPRs for 16-byte-aligned unnamed 2*XLEN.
+     * Named wide values retain a7/stack0 split; LP64D FP is handled above. */
     if (next.lp64_soft_float && !is_fixed_parameter &&
         integer_slots == 2U) {
         size_t size, alignment;
         if (!minic_data_layout_type(minic_default_data_layout(), program, type,
                                     &size, &alignment))
             return false;
-        if (alignment >= 16U) {
-            if ((next.integer_register_count & 1U) != 0U)
-                ++next.integer_register_count;
-            if (next.integer_register_count > 6U)
-                next.integer_register_count = 8U;
-        }
+        requires_even_pair = alignment >= 16U;
     }
-    available_integer_registers =
-        MINIC_RISCV64_ABI_ARGUMENT_REGISTER_COUNT - next.integer_register_count;
-    result.integer_register_begin = next.integer_register_count;
-    result.integer_register_count =
-        integer_slots < available_integer_registers ? integer_slots : available_integer_registers;
-    result.stack_slot_begin = next.stack_slot_count;
-    result.stack_slot_count = integer_slots - result.integer_register_count;
-    if (next.stack_slot_count > SIZE_MAX - result.stack_slot_count) {
+    gpr.register_words = next.integer_register_count;
+    gpr.stack_words = next.stack_slot_count;
+    gpr.variadic_stack_only = next.integer_register_count == 8U &&
+                              next.stack_slot_count != 0U;
+    if (!minic_riscv_gpr_abi_place(
+            &gpr, integer_slots, !is_fixed_parameter,
+            requires_even_pair, &placed))
         return false;
-    }
-    next.integer_register_count += result.integer_register_count;
-    next.stack_slot_count += result.stack_slot_count;
+    result.integer_register_begin = placed.register_begin;
+    result.integer_register_count = placed.register_count;
+    result.stack_slot_begin = placed.stack_begin;
+    result.stack_slot_count = placed.stack_count;
+    next.integer_register_count = gpr.register_words;
+    next.stack_slot_count = gpr.stack_words;
     *cursor = next;
     *location = result;
     return true;

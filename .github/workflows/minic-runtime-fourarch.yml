@@ -21,6 +21,10 @@ on:
       - "src/target/aarch64/block_emit.c"
       - "src/target/loongarch64/block_emit.c"
       - "src/target/riscv/**"
+      - "src/target/riscv64/abi.c"
+      - "src/target/riscv64/rv32_abi_cursor.c"
+      - "src/target/common/core_call_view.c"
+      - "tests/compiler/c0/check-riscv-gpr-abi.c"
       - "src/target/riscv64/runtime_libcall.c"
       - "src/target/riscv64/scalar_emit.c"
       - "src/target/riscv64/isa.c"
@@ -136,6 +140,10 @@ jobs:
           set -Eeuo pipefail
           make MODE=release CFLAGS=-Werror BUILD_DIR=build/runtime-ci \
             check-four-target-model-m0
+          cc -std=c11 -Wall -Wextra -Werror -pedantic -Isrc \
+            tests/compiler/c0/check-riscv-gpr-abi.c \
+            -o build/runtime-ci/tests/target/riscv-gpr-abi
+          build/runtime-ci/tests/target/riscv-gpr-abi
           MINIC_CC="$GITHUB_WORKSPACE/build/runtime-ci/bin/minic-cc" \
             sh tests/compiler/c0/probe-rv32-target-gate.sh
           MINIAS="$GITHUB_WORKSPACE/build/runtime-ci/bin/minic-as" \
