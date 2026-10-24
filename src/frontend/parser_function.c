@@ -68,7 +68,7 @@ static bool function_attribute_class_is_parse_only(MinicAttributeClass semantic_
            semantic_class == MINIC_ATTRIBUTE_CLASS_CONTROL_FLOW;
 }
 
-static bool function_attribute_list_has_used(const MinicParsedAttributeList *attributes) {
+static bool function_attribute_list_has_kind(const MinicParsedAttributeList *attributes, MinicAttributeKind kind) {
     size_t index;
 
     if (attributes == NULL) {
@@ -76,11 +76,15 @@ static bool function_attribute_list_has_used(const MinicParsedAttributeList *att
     }
     for (index = 0U; index < attributes->count; ++index) {
         const MinicAttributeDescriptor *descriptor = attributes->values[index].descriptor;
-        if (descriptor != NULL && descriptor->kind == MINIC_ATTRIBUTE_USED) {
+        if (descriptor != NULL && descriptor->kind == kind) {
             return true;
         }
     }
     return false;
+}
+
+static bool function_attribute_list_has_used(const MinicParsedAttributeList *attributes) {
+    return function_attribute_list_has_kind(attributes, MINIC_ATTRIBUTE_USED);
 }
 
 static bool function_attribute_argument_token(MinicParser *parser,
@@ -270,17 +274,11 @@ static bool consume_function_attribute(MinicParser *parser,
             minic_parser_error(parser, "%s", context->unsupported_message);
             return false;
         }
-        /* GNU inline changes C linkage/emission semantics. Static inline and
-         * non-extern inline definitions match MiniC's existing standalone emission
-         * model. Extern inline requires an inline-only body model, which is not yet
-         * represented, so keep that case fail-closed. */
+        /* GNU extern inline keeps external symbol ownership with libc:
+         * parse/validate the body, then retain only the declaration for
+         * Core machine emission to avoid a duplicate global definition. */
         if (!context->is_inline) {
             minic_parser_error(parser, "GNU gnu_inline requires an inline declaration");
-            return false;
-        }
-        if (context->is_extern) {
-            minic_parser_error(
-                parser, "GNU extern inline gnu_inline requires inline-only emission semantics");
             return false;
         }
         return true;
@@ -1027,6 +1025,7 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
     bool is_function_pointer_object;
     bool has_preparsed_function_parameters;
     bool is_inline;
+    bool is_gnu_extern_inline;
     bool is_noreturn;
     bool is_constructor;
     bool force_emit;
@@ -1053,6 +1052,7 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
     is_function_pointer_object = false;
     has_preparsed_function_parameters = false;
     is_inline = false;
+    is_gnu_extern_inline = false;
     is_noreturn = false;
     is_constructor = false;
     force_emit = false;
@@ -1613,6 +1613,11 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
         return false;
     }
 
+    is_gnu_extern_inline = is_inline && is_extern_declaration &&
+        (function_attribute_list_has_kind(
+            &deferred_attributes, MINIC_ATTRIBUTE_GNU_INLINE) ||
+         function_attribute_list_has_kind(
+            &declarator_attributes, MINIC_ATTRIBUTE_GNU_INLINE));
     function_id = minic_parser_find_function(parser, name_span);
     is_main = minic_parser_span_length(name_span) == 4U &&
               memcmp(parser->source + name_span.begin.offset, "main", 4U) == 0;
@@ -1887,6 +1892,15 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
     if (!minic_c0_program_finish_function(parser->program, function_id, local_count)) {
         minic_parser_error(parser, "invalid local range while finishing function");
         return false;
+    }
+    if (is_gnu_extern_inline) {
+        /* GNU extern inline provides a parse-validated inline-only body,
+         * not a strong definition: the existing external libc symbol
+         * remains the sole concrete implementation. */
+        MinicFunction *fn = &parser->program->functions[function_id];
+        fn->is_defined = false;
+        fn->body_block = MINIC_BLOCK_INVALID;
+        fn->local_count = 0U;
     }
     minic_parser_end_scope(parser);
     parser->current_function = MINIC_FUNCTION_INVALID;

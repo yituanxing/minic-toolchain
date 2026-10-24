@@ -36,17 +36,24 @@ static bool wide_shift(FILE *out, const MinicCoreFunction *f,
     const MinicCoreValueId right = ins->value.binary.right;
     bool right_shift = ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_RIGHT;
     bool signed_shift;
+    unsigned shift_words;
     if (symbol == NULL || left >= f->value_count ||
         right >= f->value_count ||
         !rv32_is_wide_integer(f, f->values[left].type) ||
-        rv32_is_wide_integer(f, f->values[right].type) ||
-        !minic_type_is_integer(f->values[right].type))
+        !minic_type_is_integer(f->values[right].type) ||
+        !rv32_scalar_storage_words(f, f->values[right].type, &shift_words))
         return false;
     signed_shift = right_shift &&
                    !minic_type_is_unsigned_integer(f->values[left].type);
-    if (!rv32_pair_slot(out, fr, left, "t0", "t1", true) ||
-        !rv32_slot(out, fr, right, "t2", true))
+    if (!rv32_pair_slot(out, fr, left, "t0", "t1", true))
         return false;
+    if (shift_words == 2U) {
+        if (!rv32_pair_slot(out, fr, right, "t2", "t5", true) ||
+            fprintf(out, "  bnez t5, .L%s_wide_ge64_%" PRIu32 "\n",
+                    symbol, ins->result) < 0) return false;
+    } else if (!rv32_slot(out, fr, right, "t2", true)) {
+        return false;
+    }
     /* Branch labels include the function symbol and unique SSA result.
      * RV32I register shifts mask to 5 bits: handle 0/32/64 boundaries
      * explicitly rather than accidentally turning shift-32 into shift-0. */
