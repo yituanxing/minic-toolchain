@@ -84,6 +84,14 @@ int record_load_probe(void) {
     struct CopyRecord out = in;
     return (int)out.x + *out.pointer;
 }
+int call_callback(int n) { return callback.apply(n) + 7; }
+struct Callback12 {
+    int (*apply)(int,int,int,int,int,int,int,int,int,int,int,int);
+};
+static struct Callback12 indirect12 = { sum12 };
+int call_indirect12(void) {
+    return indirect12.apply(1,2,3,4,5,6,7,8,9,10,11,12);
+}
 SRC
 "$MINIC_CC" --target=riscv32-linux -march=rv32i -mabi=ilp32 \
     -S "$work/core.i" -o "$work/core.s"
@@ -190,6 +198,13 @@ _start:
     call record_load_probe
     li t0, 70
     bne a0, t0, fail
+    li a0, 5
+    call call_callback
+    li t0, 17
+    bne a0, t0, fail
+    call call_indirect12
+    li t0, 78
+    bne a0, t0, fail
     li a0, 0
     j exit
 fail:
@@ -263,4 +278,4 @@ if "$MINIC_CC" --target=riscv32-linux -march=rv32i -mabi=ilp32 \
     exit 1
 fi
 grep -Eq 'rv32i:|not yet qualified' "$work/wide.err"
-echo 'RV32_CORE=PASS C_functions=22 ILP32=1 ELF32=1 QEMU=PASS GNU_AS=PASS MiniAS=PASS GNU_LD=PASS RV32I_libgcc_muldivmod=PASS variadic_integer_stack_ABI=PASS wide_ABI=reject'
+echo 'RV32_CORE=PASS C_functions=24 ILP32=1 ELF32=1 QEMU=PASS GNU_AS=PASS MiniAS=PASS GNU_LD=PASS RV32I_libgcc_muldivmod=PASS variadic_integer_stack_ABI=PASS wide_ABI=reject'

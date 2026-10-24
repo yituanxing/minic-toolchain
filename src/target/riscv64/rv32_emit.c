@@ -56,10 +56,15 @@ static bool rv32_frame_init(Rv32Frame *frame, const MinicC0Program *program,
      * ABI outgoing argument areas are allocated exactly once per function. */
     for (i = 0U; i < f->instruction_count; ++i) {
         const MinicCoreInstruction *ins = &f->instructions[i];
-        if (ins->kind == MINIC_CORE_INSTRUCTION_CALL &&
-            ins->value.call.argument_count > 8U) {
-            const size_t n = ins->value.call.argument_count - 8U;
-            if (n > max_stack_args) max_stack_args = n;
+        if (ins->kind == MINIC_CORE_INSTRUCTION_CALL ||
+            ins->kind == MINIC_CORE_INSTRUCTION_INDIRECT_CALL) {
+            size_t count = ins->kind == MINIC_CORE_INSTRUCTION_CALL ?
+                ins->value.call.argument_count :
+                ins->value.indirect_call.argument_count;
+            if (count > 8U) {
+                const size_t n = count - 8U;
+                if (n > max_stack_args) max_stack_args = n;
+            }
         }
     }
     if (max_stack_args > (size_t)INT32_MAX / 4U ||
@@ -179,6 +184,40 @@ static bool rv32_load2(FILE *out, const Rv32Frame *fr,
                         const MinicCoreInstruction *ins) {
     return rv32_slot(out, fr, ins->value.binary.left, "t0", true) &&
            rv32_slot(out, fr, ins->value.binary.right, "t1", true);
+}
+/* One scalar ILP32 marshal for direct calls, indirect calls, and integer
+ * variadics. Calling convention and outgoing frame location must not diverge
+ * across these paths. Both are validated against actual GCC/QEMU callers. */
+static bool rv32_emit_scalar_call_arguments(
+    FILE *out, const MinicCoreFunction *f, const Rv32Frame *fr,
+    size_t begin, size_t count) {
+    size_t i;
+    unsigned bits;
+    bool is_signed;
+    if (begin > f->call_argument_count ||
+        count > f->call_argument_count - begin ||
+        count > 8U + fr->outgoing_size / 4U)
+        return false;
+    for (i = 0U; i < count; ++i) {
+        const MinicCoreCallArgument *arg = &f->call_arguments[begin + i];
+        if (arg->kind != MINIC_CORE_CALL_ARGUMENT_VALUE ||
+            arg->value.value_id >= f->value_count ||
+            !rv32_scalar(f, f->values[arg->value.value_id].type,
+                         &bits, &is_signed))
+            return false;
+        if (i >= 8U &&
+            (!rv32_slot(out, fr, arg->value.value_id, "t0", true) ||
+             !rv32_stack(out, "sw", "t0", (i - 8U) * 4U)))
+            return false;
+    }
+    for (i = 0U; i < count && i < 8U; ++i) {
+        const MinicCoreCallArgument *arg = &f->call_arguments[begin + i];
+        char areg[8];
+        if (snprintf(areg, sizeof(areg), "a%zu", i) < 0 ||
+            !rv32_slot(out, fr, arg->value.value_id, areg, true))
+            return false;
+    }
+    return true;
 }
 static bool rv32_emit_ins(FILE *out, const MinicC0Program *program,
                           const MinicTargetInfo *target,
@@ -350,48 +389,45 @@ static bool rv32_emit_ins(FILE *out, const MinicC0Program *program,
         return true;
     case MINIC_CORE_INSTRUCTION_CALL: {
         const MinicCoreCallee *callee;
-        size_t begin, count, i;
         if (ins->value.call.callee_id >= f->callee_count ||
-            ins->value.call.argument_count > 8U + fr->outgoing_size / 4U ||
             ins->value.call.result_object != MINIC_CORE_OBJECT_INVALID)
             return false;
         callee = &f->callees[ins->value.call.callee_id];
-        count = ins->value.call.argument_count;
-        begin = ins->value.call.argument_begin;
-        /* Soft-float ILP32 passes promoted integer/pointer variadics via
-         * the SAME integer a-register/stack sequence as fixed scalars.
-         * The existing per-argument rv32_scalar() gate still rejects all
-         * unqualified multi-XLEN and floating vararg ABI cases. Defining
-         * variadic functions (va_start/va_arg) is a separate target feature. */
-        if (begin > f->call_argument_count ||
-            count > f->call_argument_count - begin ||
-            (callee->is_variadic && count < callee->parameter_count))
+        /* One-XLEN integer/pointer arguments use identical ILP32 register
+         * and stack slots for fixed and promoted variadic call sites. */
+        if (callee->is_variadic &&
+            ins->value.call.argument_count < callee->parameter_count)
             return false;
-        for (i = 0U; i < count; ++i) {
-            const MinicCoreCallArgument *arg = &f->call_arguments[begin + i];
-            if (arg->kind != MINIC_CORE_CALL_ARGUMENT_VALUE ||
-                arg->value.value_id >= f->value_count ||
-                !rv32_scalar(f, f->values[arg->value.value_id].type,
-                             &bits, &is_signed))
-                return false;
-            if (i >= 8U &&
-                (!rv32_slot(out, fr, arg->value.value_id, "t0", true) ||
-                 !rv32_stack(out, "sw", "t0", (i - 8U) * 4U)))
-                return false;
-        }
-        /* Install a-registers LAST. Their values remain intact up to call;
-         * all stack arguments are copied into our pre-reserved outgoing area. */
-        for (i = 0U; i < count && i < 8U; ++i) {
-            const MinicCoreCallArgument *arg = &f->call_arguments[begin + i];
-            char areg[8];
-            if (snprintf(areg, sizeof(areg), "a%zu", i) < 0 ||
-                !rv32_slot(out, fr, arg->value.value_id, areg, true))
-                return false;
-        }
+        if (!rv32_emit_scalar_call_arguments(
+                out, f, fr, ins->value.call.argument_begin,
+                ins->value.call.argument_count))
+            return false;
         return fprintf(out, "  call %s\n", callee->name) >= 0 &&
                (ins->result == MINIC_CORE_VALUE_INVALID ||
                 (rv32_canon(out, f, ins->type, "a0") &&
                  rv32_slot(out, fr, ins->result, "a0", false)));
+    }
+    case MINIC_CORE_INSTRUCTION_INDIRECT_CALL: {
+        const MinicCoreCallSignature *signature;
+        if (ins->value.indirect_call.signature_id >= f->call_signature_count ||
+            ins->value.indirect_call.callee >= f->value_count)
+            return false;
+        signature = &f->call_signatures[
+            ins->value.indirect_call.signature_id];
+        if (signature->is_variadic &&
+            ins->value.indirect_call.argument_count <
+                signature->parameter_count)
+            return false;
+        if (!rv32_emit_scalar_call_arguments(
+                out, f, fr, ins->value.indirect_call.argument_begin,
+                ins->value.indirect_call.argument_count) ||
+            !rv32_slot(out, fr, ins->value.indirect_call.callee,
+                       "t0", true) ||
+            fprintf(out, "  jalr ra, 0(t0)\n") < 0)
+            return false;
+        return ins->result == MINIC_CORE_VALUE_INVALID ||
+               (rv32_canon(out, f, ins->type, "a0") &&
+                rv32_slot(out, fr, ins->result, "a0", false));
     }
     default:
         return false;
