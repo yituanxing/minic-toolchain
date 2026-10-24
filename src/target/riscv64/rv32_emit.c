@@ -20,6 +20,10 @@
 #include <stdlib.h>
 
 typedef struct Rv32Frame {
+    /* Outgoing ILP32 stack arguments are pre-reserved at sp+0 on every call.
+     * This keeps sp 16-byte aligned, including nested GNU/LLVM library calls,
+     * and avoids moving the Core SSA/local object frame during calls. */
+    size_t outgoing_size;
     size_t frame_size;
     size_t *object_offsets;
     size_t object_count;
@@ -43,9 +47,23 @@ static bool rv32_align(size_t value, size_t by, size_t *out) {
 
 static bool rv32_frame_init(Rv32Frame *frame, const MinicC0Program *program,
                             const MinicCoreFunction *f, const MinicTargetInfo *t) {
-    size_t next, i;
+    size_t next, i, max_stack_args = 0U;
     if (frame == NULL || program == NULL || f == NULL || t == NULL ||
         f->value_count > 100000U || f->object_count > 100000U)
+        return false;
+    /* Scan the COMPLETE Core call set, not the frontend expression tree.
+     * ABI outgoing argument areas are allocated exactly once per function. */
+    for (i = 0U; i < f->instruction_count; ++i) {
+        const MinicCoreInstruction *ins = &f->instructions[i];
+        if (ins->kind == MINIC_CORE_INSTRUCTION_CALL &&
+            ins->value.call.argument_count > 8U) {
+            const size_t n = ins->value.call.argument_count - 8U;
+            if (n > max_stack_args) max_stack_args = n;
+        }
+    }
+    if (max_stack_args > (size_t)INT32_MAX / 4U ||
+        !rv32_align(max_stack_args * 4U, 16U, &frame->outgoing_size) ||
+        f->value_count > (SIZE_MAX - frame->outgoing_size - 4U) / 4U)
         return false;
     frame->object_offsets = NULL;
     frame->object_count = f->object_count;
@@ -56,7 +74,7 @@ static bool rv32_frame_init(Rv32Frame *frame, const MinicC0Program *program,
     }
     /* Slot zero saves ra even in a leaf; a stable ABI-oriented frame makes
      * lowering of calls and arithmetic runtime helpers deterministic. */
-    next = 4U + f->value_count * 4U;
+    next = frame->outgoing_size + 4U + f->value_count * 4U;
     for (i = 0; i < f->object_count; ++i) {
         const MinicCoreObject *obj = &f->objects[i];
         size_t size, align;
@@ -91,7 +109,8 @@ static bool rv32_stack(FILE *out, const char *op, const char *reg, size_t off) {
 static bool rv32_slot(FILE *out, const Rv32Frame *f,
                        MinicCoreValueId id, const char *reg, bool load) {
     return id != MINIC_CORE_VALUE_INVALID && (size_t)id < f->value_count &&
-           rv32_stack(out, load ? "lw" : "sw", reg, 4U + (size_t)id * 4U);
+           rv32_stack(out, load ? "lw" : "sw", reg,
+                      f->outgoing_size + 4U + (size_t)id * 4U);
 }
 static bool rv32_address(FILE *out, const char *reg, size_t off) {
     return off <= 2047U ?
@@ -176,10 +195,16 @@ static bool rv32_emit_ins(FILE *out, const MinicCoreFunction *f,
                rv32_slot(out, fr, ins->result, "t0", false);
     case MINIC_CORE_INSTRUCTION_PARAMETER:
         idx = ins->value.parameter_index;
-        return idx < 8U && idx < f->parameter_count &&
-               rv32_scalar(f, ins->type, &bits, &is_signed) &&
-               fprintf(out, "  mv t0, a%zu\n", idx) >= 0 &&
-               rv32_canon(out, f, ins->type, "t0") &&
+        if (idx >= f->parameter_count ||
+            !rv32_scalar(f, ins->type, &bits, &is_signed)) return false;
+        /* ILP32: a0..a7, then 4-byte stack slots at the caller's sp.
+         * Our fixed 16-byte-aligned frame shifted incoming sp by frame_size. */
+        if (idx < 8U) {
+            if (fprintf(out, "  mv t0, a%zu\n", idx) < 0) return false;
+        } else if (idx - 8U > (SIZE_MAX - fr->frame_size) / 4U ||
+                   !rv32_stack(out, "lw", "t0",
+                               fr->frame_size + (idx - 8U) * 4U)) return false;
+        return rv32_canon(out, f, ins->type, "t0") &&
                rv32_slot(out, fr, ins->result, "t0", false);
     case MINIC_CORE_INSTRUCTION_INTEGER_ADD: op = "add"; break;
     case MINIC_CORE_INSTRUCTION_INTEGER_SUBTRACT: op = "sub"; break;
@@ -293,7 +318,7 @@ static bool rv32_emit_ins(FILE *out, const MinicCoreFunction *f,
         const MinicCoreCallee *callee;
         size_t begin, count, i;
         if (ins->value.call.callee_id >= f->callee_count ||
-            ins->value.call.argument_count > 8U ||
+            ins->value.call.argument_count > 8U + fr->outgoing_size / 4U ||
             ins->value.call.result_object != MINIC_CORE_OBJECT_INVALID)
             return false;
         callee = &f->callees[ins->value.call.callee_id];
@@ -303,12 +328,22 @@ static bool rv32_emit_ins(FILE *out, const MinicCoreFunction *f,
             count > f->call_argument_count - begin) return false;
         for (i = 0U; i < count; ++i) {
             const MinicCoreCallArgument *arg = &f->call_arguments[begin + i];
-            char areg[8];
             if (arg->kind != MINIC_CORE_CALL_ARGUMENT_VALUE ||
                 arg->value.value_id >= f->value_count ||
-                snprintf(areg, sizeof(areg), "a%zu", i) < 0 ||
                 !rv32_scalar(f, f->values[arg->value.value_id].type,
-                             &bits, &is_signed) ||
+                             &bits, &is_signed))
+                return false;
+            if (i >= 8U &&
+                (!rv32_slot(out, fr, arg->value.value_id, "t0", true) ||
+                 !rv32_stack(out, "sw", "t0", (i - 8U) * 4U)))
+                return false;
+        }
+        /* Install a-registers LAST. Their values remain intact up to call;
+         * all stack arguments are copied into our pre-reserved outgoing area. */
+        for (i = 0U; i < count && i < 8U; ++i) {
+            const MinicCoreCallArgument *arg = &f->call_arguments[begin + i];
+            char areg[8];
+            if (snprintf(areg, sizeof(areg), "a%zu", i) < 0 ||
                 !rv32_slot(out, fr, arg->value.value_id, areg, true))
                 return false;
         }
@@ -369,10 +404,6 @@ static bool rv32_func(FILE *out, const MinicC0Program *program,
         rv32_diag(diag, "<rv32-abi>", "rv32i: return type exceeds one XLEN or is unqualified");
         return false;
     }
-    if (f->parameter_count > 8U) {
-        rv32_diag(diag, "<rv32-abi>", "rv32i: stack and split parameter ABI not yet qualified");
-        return false;
-    }
     for (i = 0U; i < f->parameter_count; ++i) {
         if (!rv32_scalar(f, f->parameter_types[i], &bits, &sign)) {
             rv32_diag(diag, "<rv32-abi>", "rv32i: non-scalar or multi-XLEN parameters require ABI lowering");
@@ -388,7 +419,7 @@ static bool rv32_func(FILE *out, const MinicC0Program *program,
     sym.function_sections = function_sections;
     if (!minic_riscv64_emit_function_symbol_begin(out, &sym) ||
         fprintf(out, "  li t0, %zu\n  sub sp, sp, t0\n", fr.frame_size) < 0 ||
-        !rv32_stack(out, "sw", "ra", 0U)) goto done;
+        !rv32_stack(out, "sw", "ra", fr.outgoing_size)) goto done;
     for (i = 0; i < f->block_count; ++i) {
         const MinicCoreBlock *block = &f->blocks[i];
         if (!block->has_terminator ||
@@ -413,9 +444,10 @@ static bool rv32_func(FILE *out, const MinicC0Program *program,
         }
     }
     ok = fprintf(out,
-        ".L%s_rv32_return:\n  lw ra, 0(sp)\n"
+        ".L%s_rv32_return:\n"
+        "  li t6, %zu\n  add t6, sp, t6\n  lw ra, 0(t6)\n"
         "  li t0, %zu\n  add sp, sp, t0\n  ret\n",
-        sym.symbol_name, fr.frame_size) >= 0 &&
+        sym.symbol_name, fr.outgoing_size, fr.frame_size) >= 0 &&
         minic_riscv64_emit_function_symbol_end(out, &sym);
 done:
     rv32_frame_destroy(&fr);

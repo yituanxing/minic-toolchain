@@ -45,6 +45,15 @@ int signed_div(int a, int b) { return a / b; }
 int signed_mod(int a, int b) { return a % b; }
 unsigned unsigned_div(unsigned a, unsigned b) { return a / b; }
 unsigned unsigned_mod(unsigned a, unsigned b) { return a % b; }
+int sum9(int a,int b,int c,int d,int e,int f,int g,int h,int i) {
+    return a+b+c+d+e+f+g+h+i;
+}
+int sum12(int a,int b,int c,int d,int e,int f,int g,int h,
+          int i,int j,int k,int l) {
+    return a+b+c+d+e+f+g+h+i+j+k+l;
+}
+int call9(void) { return sum9(1,2,3,4,5,6,7,8,9); }
+int call12(void) { return sum12(1,2,3,4,5,6,7,8,9,10,11,12); }
 SRC
 "$MINIC_CC" --target=riscv32-linux -march=rv32i -mabi=ilp32 \
     -S "$work/core.i" -o "$work/core.s"
@@ -99,6 +108,34 @@ _start:
     call unsigned_mod
     li t0, 2
     bne a0, t0, fail
+    call call9
+    li t0, 45
+    bne a0, t0, fail
+    call call12
+    li t0, 78
+    bne a0, t0, fail
+    # Independent caller exercises native ILP32 12-register/stack contract.
+    addi sp, sp, -16
+    li t0, 9
+    sw t0, 0(sp)
+    li t0, 10
+    sw t0, 4(sp)
+    li t0, 11
+    sw t0, 8(sp)
+    li t0, 12
+    sw t0, 12(sp)
+    li a0, 1
+    li a1, 2
+    li a2, 3
+    li a3, 4
+    li a4, 5
+    li a5, 6
+    li a6, 7
+    li a7, 8
+    call sum12
+    addi sp, sp, 16
+    li t0, 78
+    bne a0, t0, fail
     li a0, 0
     j exit
 fail:
@@ -133,4 +170,4 @@ if "$MINIC_CC" --target=riscv32-linux -march=rv32i -mabi=ilp32 \
     exit 1
 fi
 grep -Eq 'rv32i:|not yet qualified' "$work/wide.err"
-echo 'RV32_CORE=PASS C_functions=12 ILP32=1 ELF32=1 QEMU=PASS GNU_AS=PASS MiniAS=PASS GNU_LD=PASS RV32I_libgcc_muldivmod=PASS wide_ABI=reject'
+echo 'RV32_CORE=PASS C_functions=16 ILP32=1 ELF32=1 QEMU=PASS GNU_AS=PASS MiniAS=PASS GNU_LD=PASS RV32I_libgcc_muldivmod=PASS wide_ABI=reject'
