@@ -58,3 +58,7 @@ This validates the observed upstream programs and runtime paths;
 general 64-bit builtin `va_arg`, native MiniC TLS code generation,
 other zlib configurations and complete RV32 C language support are
 not yet claimed.
+
+## ILP32 doubleword variadics
+
+RV32 ABI names one pointer-shaped va_list. For original Lua luaO_pushvfstring the pointer is rounded up to eight bytes when consuming binary64 or long long; pointer bits are aligned with Core SSA (p+7)&~7 and typed memory load, and the pointer advances TWO 4-byte slots. This works both when named registers end at odd aN and at the overflow stack boundary. The existing independent GCC/MiniC-GNUAS/MiniC-MiniAS ELF32 QEMU fixture now validates genuine double and unsigned long long va_arg plus the initial int cases. There is no private libc algorithm or source edit.

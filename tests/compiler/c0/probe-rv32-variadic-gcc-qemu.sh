@@ -33,6 +33,30 @@ int vsum(int fixed, ...) {
     va_end(ap);
     return total;
 }
+int vwide(int fixed, ...) {
+    va_list ap;
+    unsigned long long big;
+    double dbl;
+    int tail;
+    va_start(ap, fixed);
+    big = va_arg(ap, unsigned long long);
+    dbl = va_arg(ap, double);
+    tail = va_arg(ap, int);
+    va_end(ap);
+    return fixed == 3 && big == 0x1122334455667788ULL &&
+           dbl == 6.5 && tail == 9 ? 47 : 0;
+}
+int vwide_spilled(int a,int b,int c,int d,int e,int f,int g, ...) {
+    va_list ap;
+    unsigned long long big;
+    int tail;
+    va_start(ap, g);
+    big = va_arg(ap, unsigned long long);
+    tail = va_arg(ap, int);
+    va_end(ap);
+    return a+b+c+d+e+f+g == 28 &&
+           big == 0x123456789abcdef0ULL && tail == 9 ? 48 : 0;
+}
 int vspilled(int a,int b,int c,int d,int e,int f,int g,int h, ...) {
     va_list ap;
     int x, y;
@@ -48,6 +72,8 @@ cat >"$work/driver.c" <<'SRC'
 extern int vformat(char *, const char *, ...);
 extern int vsum(int,...);
 extern int vspilled(int,int,int,int,int,int,int,int,...);
+extern int vwide(int,...);
+extern int vwide_spilled(int,int,int,int,int,int,int,...);
 int main(void) {
     char dst[180];
     if (vformat(dst,"%d %s %ld %u",37,"RV32",777777L,41U)!=17)
@@ -55,6 +81,9 @@ int main(void) {
     if (strcmp(dst,"37 RV32 777777 41")!=0) return 2;
     if (vsum(10,1,2,3,4,5,6,7,8,9)!=55) return 3;
     if (vspilled(1,2,3,4,5,6,7,8,9,10)!=55) return 4;
+    if (vwide(3,0x1122334455667788ULL,6.5,9)!=47) return 5;
+    if (vwide_spilled(1,2,3,4,5,6,7,
+                      0x123456789abcdef0ULL,9)!=48) return 6;
     return 0;
 }
 SRC
@@ -91,4 +120,4 @@ for mode in reference gnu-as minias; do
   fi
   echo "RV32_VARIADIC_MODE=PASS mode=$mode"
 done
-echo 'RV32_VARIADIC=PASS GCC=1 MiniC=1 GNU_AS=1 MiniAS=1 ELF32=1 QEMU=1 va_start=1 va_copy=1 va_arg_int=1 vsnprintf_forward=1 stack_overflow=1'
+echo 'RV32_VARIADIC=PASS GCC=1 MiniC=1 GNU_AS=1 MiniAS=1 ELF32=1 QEMU=1 va_start=1 va_copy=1 va_arg_int=1 va_arg_wide=1 va_arg_double=1 aligned_GPR_pair=1 aligned_stack_pair=1 vsnprintf_forward=1 stack_overflow=1'

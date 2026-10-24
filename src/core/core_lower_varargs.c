@@ -6,6 +6,65 @@
 
 /* GNU va_arg is one semantic cursor advance: actual register banks and
  * overflow stack placement remain the selected backend's responsibility. */
+
+/* A 2*XLEN RV32I va_arg needs an 8-byte-aligned cursor; this generic
+ * Core SSA alignment is selected by the target DataLayout, never
+ * hardcoded into the frontend or emulated inside a test runtime. */
+static MinicCoreLowerStatus linear_vararg_align8(
+    MinicCoreLowerContext *context, MinicSourceSpan span,
+    MinicCoreValueId cursor, MinicType cursor_type,
+    MinicCoreValueId *result) {
+    MinicCoreInstruction ins;
+    MinicCoreValueId bits, seven, rounded, mask, masked;
+    const MinicType word = minic_type_unsigned_int();
+    MinicCoreLowerStatus status;
+    if (context == NULL || result == NULL ||
+        core_data_layout(context)->pointer_size != 4U)
+        return MINIC_CORE_LOWER_UNSUPPORTED;
+    status = append_scalar_bitcast(context, span, word, cursor, &bits);
+    if (status != MINIC_CORE_LOWER_OK) return status;
+    (void)memset(&ins, 0, sizeof(ins));
+    ins.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
+    ins.span = span;
+    ins.type = word;
+    ins.result = MINIC_CORE_VALUE_INVALID;
+    ins.value.integer_value = 7;
+    if (!minic_core_function_append_value_instruction(
+            context->function, context->block_id, &ins, &seven))
+        return MINIC_CORE_LOWER_ERROR;
+    (void)memset(&ins, 0, sizeof(ins));
+    ins.kind = MINIC_CORE_INSTRUCTION_INTEGER_ADD;
+    ins.span = span;
+    ins.type = word;
+    ins.result = MINIC_CORE_VALUE_INVALID;
+    ins.value.binary.left = bits;
+    ins.value.binary.right = seven;
+    if (!minic_core_function_append_value_instruction(
+            context->function, context->block_id, &ins, &rounded))
+        return MINIC_CORE_LOWER_ERROR;
+    (void)memset(&ins, 0, sizeof(ins));
+    ins.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
+    ins.span = span;
+    ins.type = word;
+    ins.result = MINIC_CORE_VALUE_INVALID;
+    ins.value.integer_value = -8;
+    if (!minic_core_function_append_value_instruction(
+            context->function, context->block_id, &ins, &mask))
+        return MINIC_CORE_LOWER_ERROR;
+    (void)memset(&ins, 0, sizeof(ins));
+    ins.kind = MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND;
+    ins.span = span;
+    ins.type = word;
+    ins.result = MINIC_CORE_VALUE_INVALID;
+    ins.value.binary.left = rounded;
+    ins.value.binary.right = mask;
+    if (!minic_core_function_append_value_instruction(
+            context->function, context->block_id, &ins, &masked))
+        return MINIC_CORE_LOWER_ERROR;
+    return append_scalar_bitcast(
+        context, span, cursor_type, masked, result);
+}
+
 MinicCoreLowerStatus minic_core_lower_vararg_scalar(
     MinicCoreLowerContext *context, const MinicExpression *expression,
     MinicCoreValueId *value_id) {
@@ -49,7 +108,7 @@ MinicCoreLowerStatus minic_core_lower_vararg_scalar(
         (context->target->variadic_scalar_read_kind ==
             MINIC_VARIADIC_SCALAR_READ_LINEAR_SLOT &&
          context->target->variadic_linear_slot_bytes == 4U &&
-         (value_size > 4U || value_alignment > 4U)) ||
+         (value_size > 8U || value_alignment > 8U)) ||
         !minic_type_pointer_to(expression->type, &value_pointer_type)) {
         return MINIC_CORE_LOWER_UNSUPPORTED;
     }
@@ -93,6 +152,16 @@ MinicCoreLowerStatus minic_core_lower_vararg_scalar(
             context->function, context->block_id, &operation, &cursor_value)) {
         return MINIC_CORE_LOWER_ERROR;
     }
+    if (context->target->variadic_scalar_read_kind ==
+            MINIC_VARIADIC_SCALAR_READ_LINEAR_SLOT &&
+        context->target->variadic_linear_slot_bytes == 4U &&
+        value_alignment == 8U) {
+        MinicCoreValueId aligned;
+        status = linear_vararg_align8(
+            context, expression->span, cursor_value, cursor_type, &aligned);
+        if (status != MINIC_CORE_LOWER_OK) return status;
+        cursor_value = aligned;
+    }
     status = append_scalar_bitcast(
         context, expression->span, value_pointer_type, cursor_value, &value_address);
     if (status != MINIC_CORE_LOWER_OK) {
@@ -118,7 +187,9 @@ MinicCoreLowerStatus minic_core_lower_vararg_scalar(
     operation.span = expression->span;
     operation.type = minic_type_int();
     operation.result = MINIC_CORE_VALUE_INVALID;
-    operation.value.integer_value = 1;
+    operation.value.integer_value = (int64_t)((value_size +
+        context->target->variadic_linear_slot_bytes - 1U) /
+        context->target->variadic_linear_slot_bytes);
     if (!minic_core_function_append_value_instruction(
             context->function, context->block_id, &operation, &one)) {
         return MINIC_CORE_LOWER_ERROR;
