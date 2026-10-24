@@ -2,9 +2,31 @@
 
 ## Status / 状态
 
-cJSON 1.7.19 is the active second real-project workload after the frozen tiny-AES AES-128 ECB milestone. The unchanged pinned core is used as a reproducible compiler-frontier workload; MiniC does **not** yet claim complete cJSON build/runtime acceptance.
+## RV32I/ILP32 complete execution qualification — 2026-10-24
 
-cJSON 1.7.19 是冻结 tiny-AES AES-128 ECB 里程碑之后的第二个真实项目。未修改的固定核心用于可重复的编译器前沿验证；当前仍**不**宣称 MiniC 已完整构建并运行 cJSON。
+**Qualified independently from the historical RV64 frontier:** unmodified
+cJSON **1.7.19** compiles entirely with MiniC under RV32I/ILP32,
+assembles using GNU AS and MiniAS and passes both the existing full
+`runtime_harness.c` and the original upstream `test.c` under Linux
+QEMU-riscv32. All six ELF32 executions (GNU C reference plus two
+MiniC assembly paths for each workload) return zero and both MiniC
+programs match the GNU C reference byte-for-byte. The original
+GCC-provided RV32I compiler/runtime and authentic system Picolibc
+supply standard libc, malloc and formatting; only target Linux
+startup/OS syscall and console stream glue is local.
+
+Success evidence: workflow **MiniC RV32I cJSON Real Runtime** run
+[`40100015565`](https://github.com/yituanxing/minic-toolchain/actions/runs/40100015565),
+source commit `bec7a5645826b79da1160a9a1d61c6f1742a17a6`.
+The legacy fast `probe-rv32-cjson-frontier.sh` remains a compile/ELF32
+gate; full runtime is proven only by the separate dedicated CI job.
+This is **not** a claim of complete RV32 C99, all cJSON build options,
+or RV32 glibc support.
+
+
+cJSON 1.7.19 is the active second real-project workload after frozen tiny-AES AES-128 ECB. The historical RV64 frontier documented below is retained for provenance; the **RV32I/ILP32 full runtime and original upstream test acceptance is now independently qualified** as recorded above.
+
+cJSON 1.7.19 是冻结 tiny-AES 后的第二个真实项目。下面保留原有 RV64 前沿验证的历史记录；**RV32I/ILP32 已经通过完整运行时与上游 test.c 的独立验收**，具体证据见上方 CI。
 
 ## Upstream identity / 上游身份
 

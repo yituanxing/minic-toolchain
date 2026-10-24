@@ -37,4 +37,4 @@ if ! "$MINIAS" -march=rv32i -mabi=ilp32 \
 fi
 riscv64-linux-gnu-readelf -h "$work/cjson.o" |
   grep -q 'Class:.*ELF32'
-echo 'RV32_CJSON_ELF32=PASS original_upstream=1.7.19 full_runtime=NOT_YET_QUALIFIED'
+echo 'RV32_CJSON_ELF32=PASS original_upstream=1.7.19 full_runtime=INDEPENDENT_PICOLIBC_QEMU_JOB'

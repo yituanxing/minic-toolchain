@@ -36,3 +36,15 @@ integration points. The fixture implements the documented Picolibc
 `FDEV_SETUP_STREAM` console using genuine Linux write(2), with real
 stdio formatting still entirely inside Picolibc. This is a *stream
 device* binding, not an alternative C library implementation.
+
+## Verified outcome — 2026-10-24
+
+Run `40100015565` at `bec7a5645826b79da1160a9a1d61c6f1742a17a6`:
+`RV32_CJSON_RUNTIME=PASS original_upstream=1 MiniC_all_functions=1 GNU_C_reference=1 Picolibc_libc=1 GNU_AS=1 MiniAS=1 ELF32=1 QEMU=1 full_harness=1 upstream_test_c=1 byte_exact=1`.
+
+Six executions across two distinct original workloads, rather than
+only an object/ELF32 compilation gate. This confirms the MiniC backend
+can run the unchanged upstream library and test on RV32I/ILP32 with
+a production C runtime. The independent CI remains the authoritative
+gate for this capability; the faster mixed fourarch job still verifies
+only the compilation/assembly frontier for cJSON.

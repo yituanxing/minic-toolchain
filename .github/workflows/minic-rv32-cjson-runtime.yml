@@ -9,6 +9,7 @@ on:
       - "src/target/riscv32/**"
       - "src/target/riscv/**"
       - "tests/compiler/c0/probe-rv32-cjson-picolibc-qemu.sh"
+      - "tests/compiler/c0/probe-rv32-cjson-frontier.sh"
       - "tests/compiler/c0/rv32-linux-picolibc-start.S"
       - "tests/compiler/c0/rv32-linux-picolibc-syscalls.c"
       - "tests/external/cjson/**"

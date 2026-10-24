@@ -104,6 +104,11 @@ for workload in full_harness upstream_test; do
     fi
     echo "RV32_CJSON_RUNTIME_MODE=PASS workload=$workload mode=$mode QEMU=1"
   done
+  if [[ "$workload" == upstream_test ]]; then
+    test -s "$work/$workload-reference.out"
+    grep -q '^Version: 1\.7\.19' "$work/$workload-reference.out"
+    echo "RV32_CJSON_UPSTREAM_OUTPUT=PASS bytes=$(wc -c <"$work/$workload-reference.out")"
+  fi
   for mode in minic-gnu-as minic-minias; do
     if ! cmp -s "$work/$workload-reference.out" "$work/$workload-$mode.out" ||
        ! cmp -s "$work/$workload-reference.err" "$work/$workload-$mode.err"; then
