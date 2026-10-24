@@ -41,6 +41,10 @@ int ptr_probe(int n) {
     return buf[n];
 }
 int multiply_again(int x) { return x * 13; }
+int signed_div(int a, int b) { return a / b; }
+int signed_mod(int a, int b) { return a % b; }
+unsigned unsigned_div(unsigned a, unsigned b) { return a / b; }
+unsigned unsigned_mod(unsigned a, unsigned b) { return a % b; }
 SRC
 "$MINIC_CC" --target=riscv32-linux -march=rv32i -mabi=ilp32 \
     -S "$work/core.i" -o "$work/core.s"
@@ -75,6 +79,26 @@ _start:
     call multiply_again
     li t0, 39
     bne a0, t0, fail
+    li a0, -18
+    li a1, 5
+    call signed_div
+    li t0, -3
+    bne a0, t0, fail
+    li a0, -18
+    li a1, 5
+    call signed_mod
+    li t0, -3
+    bne a0, t0, fail
+    li a0, 1234
+    li a1, 7
+    call unsigned_div
+    li t0, 176
+    bne a0, t0, fail
+    li a0, 1234
+    li a1, 7
+    call unsigned_mod
+    li t0, 2
+    bne a0, t0, fail
     li a0, 0
     j exit
 fail:
@@ -84,14 +108,17 @@ exit:
     ecall
 SRC
 riscv64-linux-gnu-gcc -march=rv32i -mabi=ilp32 -c "$work/start.s" -o "$work/start.o"
+bash tests/compiler/c0/build-rv32-gcc-runtime.sh "$work"
 riscv64-linux-gnu-ld -m elf32lriscv -static -e _start \
-    -o "$work/prog.elf" "$work/start.o" "$work/core.o"
+    -o "$work/prog.elf" "$work/start.o" "$work/core.o" \
+    "$work/libgcc-mulsi3.o" "$work/libgcc-divsi3.o"
 qemu-riscv32 "$work/prog.elf"
 # Second independent assembly producer for identical MiniC/Core C program.
 # The GNU linker is retained as the oracle because generic MiniLD ELF32
 # program linking is not yet qualified (only compat-vDSO is certified).
 riscv64-linux-gnu-ld -m elf32lriscv -static -e _start \
-    -o "$work/prog-native.elf" "$work/start.o" "$work/core-native.o"
+    -o "$work/prog-native.elf" "$work/start.o" "$work/core-native.o" \
+    "$work/libgcc-mulsi3.o" "$work/libgcc-divsi3.o"
 qemu-riscv32 "$work/prog-native.elf"
 echo 'RV32_NATIVE_CHAIN=PASS minic_C=true minic_as_ELF32=true GNU_LD=true qemu_riscv32=true'
 riscv64-linux-gnu-readelf -h "$work/prog.elf" |
@@ -106,4 +133,4 @@ if "$MINIC_CC" --target=riscv32-linux -march=rv32i -mabi=ilp32 \
     exit 1
 fi
 grep -Eq 'rv32i:|not yet qualified' "$work/wide.err"
-echo 'RV32_CORE=PASS C_functions=8 ILP32=1 ELF32=1 QEMU=PASS GNU_AS=PASS MiniAS=PASS GNU_LD=PASS RV32I_Mless_mul=PASS wide_ABI=reject'
+echo 'RV32_CORE=PASS C_functions=12 ILP32=1 ELF32=1 QEMU=PASS GNU_AS=PASS MiniAS=PASS GNU_LD=PASS RV32I_libgcc_muldivmod=PASS wide_ABI=reject'

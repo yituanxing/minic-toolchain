@@ -161,7 +161,7 @@ static bool rv32_load2(FILE *out, const Rv32Frame *fr,
            rv32_slot(out, fr, ins->value.binary.right, "t1", true);
 }
 static bool rv32_emit_ins(FILE *out, const MinicCoreFunction *f,
-                          const Rv32Frame *fr, const char *symbol,
+                          const Rv32Frame *fr,
                           const MinicCoreInstruction *ins) {
     const char *op = NULL;
     MinicType lhs;
@@ -205,23 +205,25 @@ static bool rv32_emit_ins(FILE *out, const MinicCoreFunction *f,
                fprintf(out, "  xor t0, t0, t1\n  seqz t0, t0\n") >= 0 &&
                rv32_slot(out, fr, ins->result, "t0", false);
     case MINIC_CORE_INSTRUCTION_INTEGER_MULTIPLY:
-        /* RV32I has no M. Shift-add computes the low 32-bit product using
-         * only I opcodes; all C signed/unsigned low bits are identical. */
+    case MINIC_CORE_INSTRUCTION_INTEGER_DIVIDE:
+    case MINIC_CORE_INSTRUCTION_INTEGER_REMAINDER: {
+        /* Compiler target lowering only chooses an ABI-compatible libcall.
+         * Actual arithmetic lives in the pinned GNU libgcc 14.2.0 sources,
+         * not a second implementation in MiniC's instruction generator. */
+        const char *helper;
+        if (!rv32_scalar(f, ins->type, &bits, &is_signed))
+            return false;
+        helper = ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_MULTIPLY ?
+                 "__mulsi3" :
+                 ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_DIVIDE ?
+                 (is_signed ? "__divsi3" : "__udivsi3") :
+                 (is_signed ? "__modsi3" : "__umodsi3");
         return rv32_load2(out, fr, ins) &&
-               fprintf(out, "  li t2, 0\n"
-                            ".L%s_rv32_mul_%u:\n"
-                            "  andi t3, t1, 1\n"
-                            "  beqz t3, .L%s_rv32_mul_skip_%u\n"
-                            "  add t2, t2, t0\n"
-                            ".L%s_rv32_mul_skip_%u:\n"
-                            "  slli t0, t0, 1\n"
-                            "  srli t1, t1, 1\n"
-                            "  bnez t1, .L%s_rv32_mul_%u\n"
-                            "  mv t0, t2\n",
-                       symbol, ins->result, symbol, ins->result,
-                       symbol, ins->result, symbol, ins->result) >= 0 &&
-               rv32_canon(out, f, ins->type, "t0") &&
-               rv32_slot(out, fr, ins->result, "t0", false);
+               fprintf(out, "  mv a0, t0\n  mv a1, t1\n  call %s\n",
+                       helper) >= 0 &&
+               rv32_canon(out, f, ins->type, "a0") &&
+               rv32_slot(out, fr, ins->result, "a0", false);
+    }
     case MINIC_CORE_INSTRUCTION_INTEGER_CONVERSION:
     case MINIC_CORE_INSTRUCTION_SCALAR_BITCAST:
         return rv32_slot(out, fr, ins->value.operand, "t0", true) &&
@@ -250,21 +252,19 @@ static bool rv32_emit_ins(FILE *out, const MinicCoreFunction *f,
     case MINIC_CORE_INSTRUCTION_POINTER_OFFSET: {
         size_t stride = ins->value.pointer_offset.element_size;
         if (stride == 0U || stride > UINT32_MAX) return false;
+        if (!rv32_slot(out, fr, ins->value.pointer_offset.index, "t1", true))
+            return false;
+        if (stride != 1U) {
+            /* Keep negative indices and unsigned large indices correct
+             * modulo 2^XLEN; libgcc multiplies raw 32-bit bit patterns. */
+            if (fprintf(out,
+                        "  mv a0, t1\n  li a1, %zu\n  call __mulsi3\n"
+                        "  mv t1, a0\n", stride) < 0) return false;
+        }
+        /* The libcall is allowed to clobber all caller-saved registers,
+         * so reload the base only after multiplying the index. */
         return rv32_slot(out, fr, ins->value.pointer_offset.base, "t0", true) &&
-               rv32_slot(out, fr, ins->value.pointer_offset.index, "t1", true) &&
-               fprintf(out, "  li t2, %zu\n  li t3, 0\n"
-                            ".L%s_rv32_idx_%u:\n"
-                            "  andi t4, t1, 1\n"
-                            "  beqz t4, .L%s_rv32_idx_skip_%u\n"
-                            "  add t3, t3, t2\n"
-                            ".L%s_rv32_idx_skip_%u:\n"
-                            "  slli t2, t2, 1\n"
-                            "  srli t1, t1, 1\n"
-                            "  bnez t1, .L%s_rv32_idx_%u\n"
-                            "  %s t0, t0, t3\n",
-                       stride,
-                       symbol, ins->result, symbol, ins->result,
-                       symbol, ins->result, symbol, ins->result,
+               fprintf(out, "  %s t0, t0, t1\n",
                        ins->value.pointer_offset.subtract ? "sub" : "add") >= 0 &&
                rv32_slot(out, fr, ins->result, "t0", false);
     }
@@ -397,8 +397,7 @@ static bool rv32_func(FILE *out, const MinicC0Program *program,
         for (j = 0U; j < block->instruction_count; ++j) {
             MinicCoreInstructionId id = block->instructions[j];
             if (id >= f->instruction_count ||
-                !rv32_emit_ins(out, f, &fr, sym.symbol_name,
-                               &f->instructions[id])) {
+                !rv32_emit_ins(out, f, &fr, &f->instructions[id])) {
                 (void)snprintf(message, sizeof(message),
                                "rv32i: unqualified Core instruction function=%.75s block=%zu id=%u kind=%u",
                                sym.symbol_name, i, (unsigned)id,
