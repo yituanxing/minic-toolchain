@@ -4,6 +4,7 @@
 #include "frontend/ast.h"
 #include "minic/compiler.h"
 #include "target/target_info.h"
+#include "target/riscv32/rv32_abi_plan.h"
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdio.h>
@@ -20,6 +21,9 @@ typedef struct Rv32Frame {
     size_t *value_offsets;
     size_t object_count;
     size_t value_count;
+    /* ABI is planned before frame allocation; outgoing area size and every
+     * machine CALL consume this one verified immutable call layout. */
+    Rv32FunctionAbiPlan abi;
 } Rv32Frame;
 
 /* Frame ownership: rv32_frame.c */
@@ -55,5 +59,6 @@ bool rv32_emit_memory_instruction(FILE *, const MinicC0Program *,
 bool rv32_emit_parameter(FILE *, const MinicCoreFunction *,
                          const Rv32Frame *, const MinicCoreInstruction *);
 bool rv32_emit_call(FILE *, const MinicCoreFunction *,
-                    const Rv32Frame *, const MinicCoreInstruction *);
+                    const Rv32Frame *, const MinicCoreInstruction *,
+                    MinicCoreInstructionId);
 #endif

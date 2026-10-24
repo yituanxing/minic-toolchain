@@ -98,6 +98,8 @@ for file in src/target/riscv32/rv32_emit.c \
             src/target/riscv32/rv32_fp_emit.c \
             src/target/riscv32/rv32_memory_emit.c \
             src/target/riscv32/rv32_call.c \
+            src/target/riscv32/rv32_abi_plan.c \
+            src/target/riscv32/rv32_abi_plan.h \
             src/target/riscv32/rv32_internal.h \
             src/target/riscv/gpr_abi_cursor.h \
             src/target/riscv/record_copy_bytes.c; do
@@ -116,6 +118,15 @@ has src/target/riscv32/rv32_integer_emit.c 'minic_riscv_integer_arithmetic_symbo
 has src/target/riscv32/rv32_fp_emit.c 'minic_riscv_softfloat_arithmetic_symbol('
 has src/target/riscv32/rv32_memory_emit.c 'minic_riscv_emit_record_copy_bytes('
 has src/target/riscv32/rv32_call.c 'rv32_emit_parameter('
+has src/target/riscv32/rv32_abi_plan.c 'minic_core_call_view_build('
+has src/target/riscv32/rv32_abi_plan.c 'minic_riscv32_abi_place('
+has src/target/riscv32/rv32_frame.c 'rv32_function_abi_plan_build('
+has src/target/riscv32/rv32_frame.c 'max_outgoing_stack_words'
+has src/target/riscv32/rv32_call.c 'rv32_function_abi_call('
+lacks src/target/riscv32/rv32_frame.c 'minic_core_call_view_build('
+lacks src/target/riscv32/rv32_call.c 'minic_riscv32_abi_place('
+lacks src/target/riscv32/rv32_call.c 'minic_core_call_view_build('
+lacks src/target/riscv32/rv32_call.c 'for (size_t j = 0U; j < idx; ++j)'
 has src/target/riscv32/rv32_emit.c 'rv32_emit_integer_instruction('
 has src/target/riscv32/rv32_emit.c 'rv32_emit_fp_instruction('
 has src/target/riscv32/rv32_emit.c 'rv32_emit_memory_instruction('

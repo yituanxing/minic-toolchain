@@ -171,6 +171,7 @@ MINIC_SOURCES := \
 	src/target/riscv32/rv32_frame.c \
 	src/target/riscv32/rv32_scalar.c \
 	src/target/riscv32/rv32_call.c \
+	src/target/riscv32/rv32_abi_plan.c \
 	src/target/riscv32/rv32_abi_cursor.c \
 	src/target/riscv32/rv32_global_emit.c \
 	src/target/riscv64/abi.c \

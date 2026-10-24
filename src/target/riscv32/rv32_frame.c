@@ -1,6 +1,4 @@
 #include "target/riscv32/rv32_internal.h"
-#include "target/riscv32/rv32_abi_cursor.h"
-#include "target/common/core_call_view.h"
 #include "target/data_layout.h"
 #include <limits.h>
 #include <stdint.h>
@@ -18,37 +16,15 @@ static bool rv32_align(size_t value, size_t by, size_t *out) {
 /* A wide ILP32 operand remains ONE semantic Core SSA value. */
 bool rv32_frame_init(Rv32Frame *frame, const MinicC0Program *program,
                             const MinicCoreFunction *f, const MinicTargetInfo *t) {
-    size_t next, i, max_stack_args = 0U;
+    size_t next, i, max_stack_args;
     if (frame == NULL || program == NULL || f == NULL || t == NULL ||
         f->value_count > 100000U || f->object_count > 100000U)
         return false;
-    /* Scan the COMPLETE Core call set, not the frontend expression tree.
-     * ABI outgoing argument areas are allocated exactly once per function. */
-    for (i = 0U; i < f->instruction_count; ++i) {
-        const MinicCoreInstruction *ins = &f->instructions[i];
-        if (ins->kind == MINIC_CORE_INSTRUCTION_CALL ||
-            ins->kind == MINIC_CORE_INSTRUCTION_INDIRECT_CALL) {
-            MinicCoreCallView view;
-            MinicRiscv32AbiCursor cursor = {0U, 0U, false};
-            if (!minic_core_call_view_build(f, ins, &view))
-                return false;
-            for (size_t a = 0U; a < view.argument_count; ++a) {
-                const MinicCoreCallArgument *arg = &view.arguments[a];
-                unsigned words;
-                MinicRiscv32AbiPlacement loc;
-                if (arg->kind != MINIC_CORE_CALL_ARGUMENT_VALUE ||
-                    arg->value.value_id >= f->value_count ||
-                    !rv32_scalar_storage_words(
-                        f, f->values[arg->value.value_id].type, &words) ||
-                    !minic_riscv32_abi_place(
-                        &cursor, words,
-                        view.is_variadic && a >= view.parameter_count, &loc))
-                    return false;
-            }
-            if (cursor.stack_words > max_stack_args)
-                max_stack_args = cursor.stack_words;
-        }
-    }
+    /* The ABI plan is built once; frame and call emission consume exactly
+     * its precomputed stack bound and individual argument placements. */
+    if (!rv32_function_abi_plan_build(f, &frame->abi))
+        return false;
+    max_stack_args = frame->abi.max_outgoing_stack_words;
     if (max_stack_args > (size_t)INT32_MAX / 4U ||
         !rv32_align(max_stack_args * 4U, 16U, &frame->outgoing_size) ||
         f->value_count > (SIZE_MAX - frame->outgoing_size - 4U) / 8U)
@@ -104,6 +80,7 @@ void rv32_frame_destroy(Rv32Frame *f) {
         free(f->value_offsets);
         f->object_offsets = NULL;
         f->value_offsets = NULL;
+        rv32_function_abi_plan_destroy(&f->abi);
     }
 }
 /* t6 is reserved as the large-displacement scratch register. */
