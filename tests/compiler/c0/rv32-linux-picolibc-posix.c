@@ -109,21 +109,23 @@ int rename(const char *oldname, const char *newname) {
         38L, -100L, (long)oldname, -100L, (long)newname));
 }
 
-/* Kernel asm-generic gettimeofday on ILP32 uses 32-bit time words;
- * Picolibc may configure time_t/suseconds_t wider. Marshal each field
- * into Picolibc's real public structure to avoid ABI size aliasing. */
+/* RV32 Linux uses the time64 syscall family. The older 169
+ * gettimeofday is absent from QEMU's RV32 Linux ABI (ENOSYS).
+ * Implement Picolibc's ordinary gettimeofday API using the kernel's
+ * genuine clock_gettime64(403) CLOCK_REALTIME operation, with explicit
+ * 64-bit kernel timespec and portable timeval conversion. */
 int gettimeofday(struct timeval *tv, void *timezone) {
     struct {
-        int32_t seconds;
-        int32_t microseconds;
+        int64_t seconds;
+        int64_t nanoseconds;
     } native;
-    const long result = linux_result(linux_syscall2(
-        169L, tv == NULL ? 0L : (long)&native, (long)timezone));
+    long result;
+    (void)timezone;
+    if (tv == NULL) return 0;
+    result = linux_result(linux_syscall2(403L, 0L, (long)&native));
     if (result < 0) return -1;
-    if (tv != NULL) {
-        tv->tv_sec = (time_t)native.seconds;
-        tv->tv_usec = (suseconds_t)native.microseconds;
-    }
+    tv->tv_sec = (time_t)native.seconds;
+    tv->tv_usec = (suseconds_t)(native.nanoseconds / INT64_C(1000));
     return 0;
 }
 
