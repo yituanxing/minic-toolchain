@@ -4,6 +4,7 @@
  * Cross-built with external GCC RV32I/ILP32, never MiniC. */
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <sys/types.h>
 #include <unistd.h>
 static long linux_syscall1(long nr, long arg) {
@@ -12,6 +13,24 @@ static long linux_syscall1(long nr, long arg) {
     __asm__ volatile("ecall" : "+r"(a0) : "r"(a7) : "memory");
     return a0;
 }
+/* The Debian Picolibc tinystdio build leaves stdout/stdin/stderr as
+ * target-platform integration points. Supply the documented FILE
+ * callbacks backed by the Linux syscall adapter, not a substitute
+ * implementation of printf, snprintf or string formatting. */
+static int rv32_linux_console_put(char ch, FILE *file) {
+    (void)file;
+    return write(1, &ch, 1U) == 1 ? (unsigned char)ch : EOF;
+}
+static int rv32_linux_console_get(FILE *file) {
+    (void)file;
+    return EOF;
+}
+static FILE rv32_linux_console = FDEV_SETUP_STREAM(
+    rv32_linux_console_put, rv32_linux_console_get, NULL, _FDEV_SETUP_RW);
+FILE *const stdin = &rv32_linux_console;
+FILE *const stdout = &rv32_linux_console;
+FILE *const stderr = &rv32_linux_console;
+
 /* Picolibc's tinystdio and the original upstream test.c use a real
  * Linux write(2), not a test-only output simulator. */
 ssize_t write(int fd, const void *buffer, size_t length) {

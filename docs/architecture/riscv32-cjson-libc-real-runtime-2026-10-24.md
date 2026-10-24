@@ -29,3 +29,10 @@ match byte-for-byte. Failures fail the job and do not print acceptance.
 Historical RV32 cJSON compile/ELF32 gates remain intact until this
 independent runtime proof is green, after which the frontier can
 become a mandatory successful real-program gate.
+
+The upstream `test.c` exercises `printf`, and this package builds
+Picolibc with tinystdio's standard stream pointers left as platform
+integration points. The fixture implements the documented Picolibc
+`FDEV_SETUP_STREAM` console using genuine Linux write(2), with real
+stdio formatting still entirely inside Picolibc. This is a *stream
+device* binding, not an alternative C library implementation.
