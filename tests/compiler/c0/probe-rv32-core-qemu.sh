@@ -26,7 +26,6 @@ int triangular(int n) {
 int caller(int a, int b) {
     return add(a,b) + mul(a,b) + absdiff(a,b);
 }
-/* Exercise shared RISC-V opcode selection with signed/unsigned operands. */
 unsigned rv32_bitwise(unsigned a, unsigned b) { return (a & b) | (a ^ b); }
 int rv32_shr_signed(int a, int s) { return a >> s; }
 unsigned rv32_shr_unsigned(unsigned a, unsigned s) { return a >> s; }

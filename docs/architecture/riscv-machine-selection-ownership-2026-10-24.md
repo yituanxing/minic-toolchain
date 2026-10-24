@@ -53,3 +53,11 @@ Required CI: native MiniC, fourarch GNU/QEMU, RV32/GNU differential,
 RV64I seven-shard origin audit, relevant original BusyBox/Linux runtime
 gates. Existing MiniLD RISC-V attributes failure is separately owned and
 must not be mistaken for an RV32 machine-lowering regression.
+
+## CI feedback: frozen preprocessed inputs
+
+The regression harness writes an already-preprocessed `.i` source. It must
+contain valid preprocessing output, NOT freshly inserted C comments. The
+initial batch surfaced this input-format violation at `core.i:19` before
+code generation; remove only that harness comment. This is not an ISA or
+Core regression, and the six new real-function GNU/QEMU checks remain.
