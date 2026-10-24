@@ -55,6 +55,8 @@ on:
       - "tests/compiler/c0/probe-rv32-target-gate.sh"
       - "src/target/riscv64/rv32_emit.c"
       - "src/target/riscv64/rv32_emit.h"
+      - "src/target/riscv64/rv32_abi_cursor.c"
+      - "src/target/riscv64/rv32_abi_cursor.h"
       - "src/target/riscv64/rv32_global_emit.c"
       - "src/target/riscv64/rv32_global_emit.h"
       - "src/target/riscv64/record_copy_bytes.c"

@@ -10,6 +10,7 @@
  * Reject wider scalars, records, varargs and unsupported opcodes fail-closed.
  */
 #include "target/riscv64/rv32_emit.h"
+#include "target/riscv64/rv32_abi_cursor.h"
 #include "target/riscv64/function_symbol.h"
 #include "target/riscv64/rv32_global_emit.h"
 #include "target/riscv64/record_copy_bytes.h"
@@ -69,6 +70,33 @@ static bool rv32_scalar_storage_words(const MinicCoreFunction *f,
     default: return false;
     }
 }
+static bool rv32_call_info(const MinicCoreFunction *f,
+                           const MinicCoreInstruction *ins,
+                           size_t *begin, size_t *count,
+                           size_t *fixed, bool *variadic) {
+    if (!f || !ins || !begin || !count || !fixed || !variadic) return false;
+    if (ins->kind == MINIC_CORE_INSTRUCTION_CALL) {
+        const MinicCoreCallee *c;
+        if (ins->value.call.callee_id >= f->callee_count) return false;
+        c = &f->callees[ins->value.call.callee_id];
+        *begin = ins->value.call.argument_begin;
+        *count = ins->value.call.argument_count;
+        *fixed = c->parameter_count;
+        *variadic = c->is_variadic;
+    } else if (ins->kind == MINIC_CORE_INSTRUCTION_INDIRECT_CALL) {
+        const MinicCoreCallSignature *c;
+        if (ins->value.indirect_call.signature_id >= f->call_signature_count)
+            return false;
+        c = &f->call_signatures[ins->value.indirect_call.signature_id];
+        *begin = ins->value.indirect_call.argument_begin;
+        *count = ins->value.indirect_call.argument_count;
+        *fixed = c->parameter_count;
+        *variadic = c->is_variadic;
+    } else return false;
+    return *begin <= f->call_argument_count &&
+           *count <= f->call_argument_count - *begin &&
+           (!*variadic || *count >= *fixed);
+}
 static bool rv32_frame_init(Rv32Frame *frame, const MinicC0Program *program,
                             const MinicCoreFunction *f, const MinicTargetInfo *t) {
     size_t next, i, max_stack_args = 0U;
@@ -81,29 +109,25 @@ static bool rv32_frame_init(Rv32Frame *frame, const MinicC0Program *program,
         const MinicCoreInstruction *ins = &f->instructions[i];
         if (ins->kind == MINIC_CORE_INSTRUCTION_CALL ||
             ins->kind == MINIC_CORE_INSTRUCTION_INDIRECT_CALL) {
-            size_t count = ins->kind == MINIC_CORE_INSTRUCTION_CALL ?
-                ins->value.call.argument_count :
-                ins->value.indirect_call.argument_count;
-            size_t cursor = 0U;
-            size_t begin = ins->kind == MINIC_CORE_INSTRUCTION_CALL ?
-                ins->value.call.argument_begin :
-                ins->value.indirect_call.argument_begin;
-            if (begin > f->call_argument_count ||
-                count > f->call_argument_count - begin) return false;
+            size_t begin, count, fixed;
+            bool variadic;
+            MinicRiscv32AbiCursor cursor = {0U, 0U, false};
+            if (!rv32_call_info(f, ins, &begin, &count, &fixed, &variadic))
+                return false;
             for (size_t a = 0U; a < count; ++a) {
-                const MinicCoreCallArgument *arg =
-                    &f->call_arguments[begin + a];
+                const MinicCoreCallArgument *arg = &f->call_arguments[begin + a];
                 unsigned words;
+                MinicRiscv32AbiPlacement loc;
                 if (arg->kind != MINIC_CORE_CALL_ARGUMENT_VALUE ||
                     arg->value.value_id >= f->value_count ||
                     !rv32_scalar_storage_words(
                         f, f->values[arg->value.value_id].type, &words) ||
-                    cursor > (size_t)INT32_MAX / 4U - words)
+                    !minic_riscv32_abi_place(
+                        &cursor, words, variadic && a >= fixed, &loc))
                     return false;
-                cursor += words;
             }
-            if (cursor > 8U && cursor - 8U > max_stack_args)
-                max_stack_args = cursor - 8U;
+            if (cursor.stack_words > max_stack_args)
+                max_stack_args = cursor.stack_words;
         }
     }
     if (max_stack_args > (size_t)INT32_MAX / 4U ||
@@ -268,54 +292,51 @@ static bool rv32_load2(FILE *out, const Rv32Frame *fr,
     return rv32_slot(out, fr, ins->value.binary.left, "t0", true) &&
            rv32_slot(out, fr, ins->value.binary.right, "t1", true);
 }
-/* One scalar ILP32 marshal for direct calls, indirect calls, and integer
- * variadics. Calling convention and outgoing frame location must not diverge
- * across these paths. Both are validated against actual GCC/QEMU callers. */
+/* One target ABI algorithm serves both stack allocation and call emission.
+ * Stack output is staged before touching a0-a7. */
 static bool rv32_emit_scalar_call_arguments(
     FILE *out, const MinicCoreFunction *f, const Rv32Frame *fr,
-    size_t begin, size_t count) {
-    size_t i;
-    size_t cursor = 0U;
+    size_t begin, size_t count, size_t fixed, bool variadic) {
+    size_t pass, i;
     if (begin > f->call_argument_count ||
-        count > f->call_argument_count - begin) return false;
-    /* Stage all outgoing stack arguments before touching a0-a7. */
-    for (i = 0U; i < count; ++i) {
-        const MinicCoreCallArgument *arg = &f->call_arguments[begin + i];
-        unsigned words;
-        if (arg->kind != MINIC_CORE_CALL_ARGUMENT_VALUE ||
-            arg->value.value_id >= f->value_count ||
-            !rv32_scalar_storage_words(
-                f, f->values[arg->value.value_id].type, &words)) return false;
-        if (cursor >= 8U || (words == 2U && cursor + 1U >= 8U)) {
+        count > f->call_argument_count - begin ||
+        (variadic && count < fixed)) return false;
+    for (pass = 0U; pass < 2U; ++pass) {
+        MinicRiscv32AbiCursor cursor = {0U, 0U, false};
+        for (i = 0U; i < count; ++i) {
+            const MinicCoreCallArgument *arg = &f->call_arguments[begin + i];
+            MinicRiscv32AbiPlacement loc;
+            const char *reg[2] = {"t0", "t1"};
+            unsigned words;
+            size_t word;
+            if (arg->kind != MINIC_CORE_CALL_ARGUMENT_VALUE ||
+                arg->value.value_id >= f->value_count ||
+                !rv32_scalar_storage_words(
+                    f, f->values[arg->value.value_id].type, &words) ||
+                !minic_riscv32_abi_place(
+                    &cursor, words, variadic && i >= fixed, &loc))
+                return false;
+            if ((pass == 0U && loc.stack_count == 0U) ||
+                (pass == 1U && loc.register_count == 0U)) continue;
             if (words == 2U) {
                 if (!rv32_pair_slot(out, fr, arg->value.value_id,
-                                    "t0", "t1", true)) return false;
+                                    reg[0], reg[1], true)) return false;
             } else if (!rv32_slot(out, fr, arg->value.value_id,
-                                   "t0", true)) return false;
-            if (cursor >= 8U &&
-                !rv32_outgoing_word(out, fr, cursor, "t0")) return false;
-            if (words == 2U && cursor + 1U >= 8U &&
-                !rv32_outgoing_word(out, fr, cursor + 1U, "t1"))
-                return false;
+                                   reg[0], true)) return false;
+            for (word = 0U; word < words; ++word) {
+                if (word < loc.register_count) {
+                    if (pass == 1U &&
+                        !rv32_outgoing_word(out, fr,
+                                           loc.register_begin + word,
+                                           reg[word])) return false;
+                } else if (pass == 0U &&
+                           (loc.stack_begin + word - loc.register_count >=
+                                fr->outgoing_size / 4U ||
+                            !rv32_stack(out, "sw", reg[word],
+                                (loc.stack_begin + word - loc.register_count)
+                                * 4U))) return false;
+            }
         }
-        cursor += words;
-    }
-    cursor = 0U;
-    for (i = 0U; i < count && cursor < 8U; ++i) {
-        const MinicCoreCallArgument *arg = &f->call_arguments[begin + i];
-        unsigned words;
-        if (!rv32_scalar_storage_words(
-                f, f->values[arg->value.value_id].type, &words)) return false;
-        if (words == 2U) {
-            if (!rv32_pair_slot(out, fr, arg->value.value_id,
-                                "t0", "t1", true)) return false;
-        } else if (!rv32_slot(out, fr, arg->value.value_id,
-                               "t0", true)) return false;
-        if (!rv32_outgoing_word(out, fr, cursor, "t0")) return false;
-        if (words == 2U && cursor + 1U < 8U &&
-            !rv32_outgoing_word(out, fr, cursor + 1U, "t1"))
-            return false;
-        cursor += words;
     }
     return true;
 }
@@ -624,19 +645,14 @@ static bool rv32_emit_ins(FILE *out, const MinicC0Program *program,
         return true;
     case MINIC_CORE_INSTRUCTION_CALL: {
         const MinicCoreCallee *callee;
-        if (ins->value.call.callee_id >= f->callee_count ||
-            ins->value.call.result_object != MINIC_CORE_OBJECT_INVALID)
+        size_t begin, count, fixed;
+        bool variadic;
+        if (ins->value.call.result_object != MINIC_CORE_OBJECT_INVALID ||
+            !rv32_call_info(f, ins, &begin, &count, &fixed, &variadic))
             return false;
         callee = &f->callees[ins->value.call.callee_id];
-        /* One-XLEN integer/pointer arguments use identical ILP32 register
-         * and stack slots for fixed and promoted variadic call sites. */
-        if (callee->is_variadic &&
-            ins->value.call.argument_count < callee->parameter_count)
-            return false;
         if (!rv32_emit_scalar_call_arguments(
-                out, f, fr, ins->value.call.argument_begin,
-                ins->value.call.argument_count))
-            return false;
+                out, f, fr, begin, count, fixed, variadic)) return false;
         return fprintf(out, "  call %s\n", callee->name) >= 0 &&
                (ins->result == MINIC_CORE_VALUE_INVALID ||
                 (rv32_scalar_storage_words(f, ins->type, &bits) &&
@@ -647,19 +663,13 @@ static bool rv32_emit_ins(FILE *out, const MinicC0Program *program,
                   rv32_slot(out, fr, ins->result, "a0", false))));
     }
     case MINIC_CORE_INSTRUCTION_INDIRECT_CALL: {
-        const MinicCoreCallSignature *signature;
-        if (ins->value.indirect_call.signature_id >= f->call_signature_count ||
-            ins->value.indirect_call.callee >= f->value_count)
-            return false;
-        signature = &f->call_signatures[
-            ins->value.indirect_call.signature_id];
-        if (signature->is_variadic &&
-            ins->value.indirect_call.argument_count <
-                signature->parameter_count)
+        size_t begin, count, fixed;
+        bool variadic;
+        if (ins->value.indirect_call.callee >= f->value_count ||
+            !rv32_call_info(f, ins, &begin, &count, &fixed, &variadic))
             return false;
         if (!rv32_emit_scalar_call_arguments(
-                out, f, fr, ins->value.indirect_call.argument_begin,
-                ins->value.indirect_call.argument_count) ||
+                out, f, fr, begin, count, fixed, variadic) ||
             !rv32_slot(out, fr, ins->value.indirect_call.callee,
                        "t0", true) ||
             fprintf(out, "  jalr ra, 0(t0)\n") < 0)

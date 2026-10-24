@@ -165,6 +165,7 @@ MINIC_SOURCES := \
 	src/target/common/lp64_frame.c \
 	src/target/riscv64/isa.c \
 	src/target/riscv64/rv32_emit.c \
+	src/target/riscv64/rv32_abi_cursor.c \
 	src/target/riscv64/rv32_global_emit.c \
 	src/target/riscv64/abi.c \
 	src/target/riscv64/layout.c \
