@@ -1,0 +1,129 @@
+#!/usr/bin/env bash
+# Real upstream zlib v1.3.1 15/15 unchanged TUs, RV32I/ILP32.
+# Original test/example.c is the actual QEMU program. No compiler
+# fallback: all zlib library objects must come from MiniC for either
+# MiniAS or GNU AS. GNU C compiles the same source as independent oracle.
+set -Eeuo pipefail
+: "${MINIC_CC:?}"
+: "${MINIAS:=${MINIC_CC%/minic-cc}/minic-as}"
+: "${BARE_CC:=riscv64-unknown-elf-gcc}"
+: "${RISCV_CC:=riscv64-linux-gnu-gcc}"
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+root=$(git rev-parse --show-toplevel)
+target=(-march=rv32i -mabi=ilp32)
+libc=(-specs=picolibc.specs)
+commit=51b7f2abdade71cd9bb0e7a373ef2610ec6f9daf
+sources=(adler32.c compress.c crc32.c deflate.c gzclose.c gzlib.c gzread.c
+         gzwrite.c infback.c inffast.c inflate.c inftrees.c trees.c
+         uncompr.c zutil.c)
+for command in "$BARE_CC" "$RISCV_CC" qemu-riscv32 curl; do
+  command -v "$command" >/dev/null
+done
+curl -fsSL --retry 3 --retry-delay 2 --max-time 90 \
+  "https://codeload.github.com/madler/zlib/tar.gz/$commit" -o "$work/zlib.tar.gz"
+mkdir "$work/upstream"
+tar -xzf "$work/zlib.tar.gz" -C "$work/upstream" --strip-components=1
+src="$work/upstream"
+for pair in \
+  'zlib.h 8d4b932eaf6a0fbb8133b3ab49ba5ef587059fa0' \
+  'deflate.c 012ea8148e8d21cf515a9ff47d4af719d049b276' \
+  'zconf.h 62adc8d8431f2f9149ae0b1583915e21a28dd8b5' \
+  'test/example.c c3521dd5934f716bc7c33fe1c5fd4a361c985e76'; do
+  read -r name blob <<<"$pair"
+  if [[ $(git hash-object "$src/$name") != "$blob" ]]; then
+    echo "RV32_ZLIB=FAIL stage=upstream_integrity file=$name" >&2
+    exit 1
+  fi
+done
+# Existing zlib tests already qualify the original ./configure path.
+# Configure on the host for feature probes, then preprocess and compile
+# every resulting TU using the actual RV32I/ILP32 headers and ABI.
+(cd "$src" && CC=cc CFLAGS="-O0 -std=c11" ./configure) >"$work/configure.log" 2>&1
+grep -qF "Checking for unistd.h... Yes." "$work/configure.log"
+mkdir "$work/obj"
+MINIC_PASS=0
+REJECTS=0
+for source in "${sources[@]}"; do
+  stem="${source%.c}"
+  "$BARE_CC" "${target[@]}" "${libc[@]}" -E -P -std=c11 \
+    -I"$src" "$src/$source" -o "$work/obj/$stem.i"
+  "$BARE_CC" "${target[@]}" "${libc[@]}" -O0 -ffreestanding -fno-builtin \
+    -x c -c "$work/obj/$stem.i" -o "$work/obj/$stem-reference.o"
+  if ! "$MINIC_CC" --target=riscv32-linux "${target[@]}" -S \
+      "$work/obj/$stem.i" -o "$work/obj/$stem.s" \
+      >"$work/obj/$stem.minic.out" 2>"$work/obj/$stem.minic.err"; then
+    REJECTS=$((REJECTS+1))
+    echo "RV32_ZLIB_TU=BLOCKED source=$source stage=MiniC" >&2
+    head -n 8 "$work/obj/$stem.minic.err" >&2
+    continue
+  fi
+  "$RISCV_CC" "${target[@]}" -x assembler -c \
+    "$work/obj/$stem.s" -o "$work/obj/$stem-gnu-as.o"
+  "$MINIAS" "${target[@]}" -o "$work/obj/$stem-minias.o" "$work/obj/$stem.s"
+  MINIC_PASS=$((MINIC_PASS+1))
+  echo "RV32_ZLIB_TU=PASS source=$source compiler=MiniC assemblers=GNU_AS,MiniAS"
+done
+echo "RV32_ZLIB_TU_SUMMARY total=15 compiled=$MINIC_PASS blocked=$REJECTS"
+if (( REJECTS != 0 )); then
+  echo "RV32_ZLIB=BLOCKED stage=compiler compiled=$MINIC_PASS of=15" >&2
+  exit 1
+fi
+# Original full zlib example, without modifying zlib's own source or tests.
+"$BARE_CC" "${target[@]}" "${libc[@]}" -O0 -ffreestanding -fno-builtin \
+    -I"$src" -c "$src/test/example.c" -o "$work/obj/example.o"
+"$BARE_CC" "${target[@]}" "${libc[@]}" -O0 -ffreestanding -fno-builtin \
+    -c "$root/tests/compiler/c0/rv32-linux-picolibc-syscalls.c" \
+    -o "$work/obj/linux-syscalls.o"
+"$BARE_CC" "${target[@]}" "${libc[@]}" -O0 -ffreestanding -fno-builtin \
+    -c "$root/tests/compiler/c0/rv32-linux-picolibc-posix.c" \
+    -o "$work/obj/linux-posix.o"
+"$BARE_CC" "${target[@]}" "${libc[@]}" \
+    -c "$root/tests/compiler/c0/rv32-linux-picolibc-start.S" -o "$work/obj/start.o"
+picolibc=$(find /usr/lib/picolibc -type f -path '*/rv32i/ilp32/libc.a' -print -quit)
+picomath=$(find /usr/lib/picolibc -type f -path '*/rv32i/ilp32/libm.a' -print -quit)
+baregcc=$("$BARE_CC" "${target[@]}" -print-libgcc-file-name)
+for f in "$picolibc" "$picomath" "$baregcc"; do test -f "$f"; done
+mkdir "$work/run"
+for mode in reference gnu-as minias; do
+  libs=()
+  for source in "${sources[@]}"; do
+    stem="${source%.c}"
+    case "$mode" in
+      reference) name="$stem-reference.o" ;;
+      gnu-as) name="$stem-gnu-as.o" ;;
+      minias) name="$stem-minias.o" ;;
+    esac
+    libs+=("$work/obj/$name")
+  done
+  riscv64-linux-gnu-ld -m elf32lriscv -static -e _start \
+    -o "$work/run/zlib-$mode.elf" \
+    "$work/obj/start.o" "$work/obj/linux-syscalls.o" \
+    "$work/obj/linux-posix.o" "$work/obj/example.o" "${libs[@]}" \
+    --start-group "$picomath" "$picolibc" "$baregcc" --end-group
+  riscv64-linux-gnu-readelf -h "$work/run/zlib-$mode.elf" | grep -q 'Class:.*ELF32'
+  set +e
+  (cd "$work/run" && timeout 75s qemu-riscv32 "./zlib-$mode.elf") \
+    >"$work/run/$mode.out" 2>"$work/run/$mode.err"
+  rc=$?
+  set -e
+  if (( rc != 0 )); then
+    echo "RV32_ZLIB=FAIL stage=QEMU mode=$mode exit=$rc" >&2
+    head -n 30 "$work/run/$mode.err" >&2 || :
+    exit 1
+  fi
+  echo "RV32_ZLIB_EXAMPLE=PASS mode=$mode original_upstream=1 QEMU=1"
+done
+test -s "$work/run/reference.out"
+for mode in gnu-as minias; do
+  cmp -s "$work/run/reference.out" "$work/run/$mode.out" || {
+    echo "RV32_ZLIB=FAIL stage=stdout_diff mode=$mode" >&2
+    diff -u "$work/run/reference.out" "$work/run/$mode.out" | head -n 40 >&2 || :
+    exit 1
+  }
+  cmp -s "$work/run/reference.err" "$work/run/$mode.err" || {
+    echo "RV32_ZLIB=FAIL stage=stderr_diff mode=$mode" >&2
+    exit 1
+  }
+done
+echo 'RV32_ZLIB=PASS original_upstream=1 TUs=15 MiniC_only=1 GNU_C_oracle=1 GNU_AS=1 MiniAS=1 Picolibc=1 ELF32=1 QEMU=1 example=byte_exact'

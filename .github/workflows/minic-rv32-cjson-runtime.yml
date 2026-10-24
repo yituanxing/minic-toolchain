@@ -1,4 +1,4 @@
-name: MiniC RV32I cJSON Real Runtime
+name: MiniC RV32I Real Software Runtime
 
 on:
   push:
@@ -13,7 +13,10 @@ on:
       - "tests/compiler/c0/rv32-linux-picolibc-start.S"
       - "tests/compiler/c0/rv32-linux-picolibc-syscalls.c"
       - "tests/external/cjson/**"
+      - "tests/compiler/c0/probe-rv32-zlib-picolibc-qemu.sh"
+      - "tests/compiler/c0/rv32-linux-picolibc-posix.c"
       - "tests/vendor/cjson/upstream/**"
+      - "tests/external/zlib/**"
       - ".github/workflows/minic-rv32-cjson-runtime.yml"
       - "Makefile"
   workflow_dispatch:
@@ -55,3 +58,10 @@ jobs:
           MINIC_CC="$GITHUB_WORKSPACE/build/rv32cjson/bin/minic-cc" \
           MINIAS="$GITHUB_WORKSPACE/build/rv32cjson/bin/minic-as" \
             bash tests/compiler/c0/probe-rv32-cjson-picolibc-qemu.sh
+      - name: Upstream zlib all 15 TUs real QEMU differential
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          MINIC_CC="$GITHUB_WORKSPACE/build/rv32cjson/bin/minic-cc" \
+          MINIAS="$GITHUB_WORKSPACE/build/rv32cjson/bin/minic-as" \
+            bash tests/compiler/c0/probe-rv32-zlib-picolibc-qemu.sh
