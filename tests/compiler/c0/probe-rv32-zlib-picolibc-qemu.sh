@@ -139,6 +139,29 @@ for mode in reference gnu-as minias; do
   if (( rc != 0 )); then
     echo "RV32_ZLIB=FAIL stage=QEMU mode=$mode exit=$rc" >&2
     head -n 30 "$work/run/$mode.err" >&2 || :
+    echo "RV32_ZLIB=DIAG mode=$mode original_upstream_elf32=1" >&2
+    (cd "$work/run" && timeout 10s qemu-riscv32 -strace "./zlib-$mode.elf") \
+        2>&1 | tail -n 45 >&2 || :
+    echo "--- GNU symbols near entry and TLS" >&2
+    riscv64-linux-gnu-nm "$work/run/zlib-$mode.elf" | \
+       grep -E ' (main|_start|errno|__minic_picolibc_errno|__libc_init_array)
+  fi
+  echo "RV32_ZLIB_EXAMPLE=PASS mode=$mode original_upstream=1 QEMU=1"
+done
+test -s "$work/run/reference.out"
+for mode in gnu-as minias; do
+  cmp -s "$work/run/reference.out" "$work/run/$mode.out" || {
+    echo "RV32_ZLIB=FAIL stage=stdout_diff mode=$mode" >&2
+    diff -u "$work/run/reference.out" "$work/run/$mode.out" | head -n 40 >&2 || :
+    exit 1
+  }
+  cmp -s "$work/run/reference.err" "$work/run/$mode.err" || {
+    echo "RV32_ZLIB=FAIL stage=stderr_diff mode=$mode" >&2
+    exit 1
+  }
+done
+echo 'RV32_ZLIB=PASS original_upstream=1 TUs=15 MiniC_only=1 GNU_C_oracle=1 GNU_AS=1 MiniAS=1 Picolibc=1 ELF32=1 QEMU=1 example=byte_exact'
+ >&2 || :
     exit 1
   fi
   echo "RV32_ZLIB_EXAMPLE=PASS mode=$mode original_upstream=1 QEMU=1"
