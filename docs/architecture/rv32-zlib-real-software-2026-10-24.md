@@ -38,3 +38,15 @@ of the actual TLS errno object. No library source is patched, no errno
 is replaced by a fake global, and MiniC does not silently perform an
 incorrect non-TLS load. This is a declared runtime ABI adaptation, not
 proof MiniC supports general C TLS access.
+
+## Linux RV32 llseek correction
+
+The first original GCC zlib example QEMU run uncovered a *porting*
+error, not a MiniC code-generation regression. Linux RV32 syscall 62
+is `llseek(fd, offset_high, offset_low, result_ptr, whence)`, whereas
+LP64 uses the three-argument lseek form. Our initial platform bridge
+mistakenly passed only three arguments, yielding EINVAL and then an
+uninitialized Picolibc TLS errno access. The bridge now uses the
+correct five-register Linux compat ABI and returns the 64-bit result
+through a kernel output pointer, range-checking 32-bit off_t. The
+original zlib code and MiniC IR remain unchanged.
