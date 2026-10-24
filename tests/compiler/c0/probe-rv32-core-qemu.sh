@@ -92,6 +92,14 @@ static struct Callback12 indirect12 = { sum12 };
 int call_indirect12(void) {
     return indirect12.apply(1,2,3,4,5,6,7,8,9,10,11,12);
 }
+/* Same semantic SSA, two target-owned RV32 words; independent GNU C oracle. */
+long long wide_copy(long long value) { return value; }
+long long wide_chain(long long value) { return wide_copy(value); }
+double double_copy(double value) { return value; }
+double double_chain(double value) { return double_copy(value); }
+long long wide_signed(int value) { return (long long)value; }
+long long wide_load(const long long *ptr) { return *ptr; }
+void wide_store(long long *ptr, long long value) { *ptr = value; }
 SRC
 "$MINIC_CC" --target=riscv32-linux -march=rv32i -mabi=ilp32 \
     -S "$work/core.i" -o "$work/core.s"
@@ -205,6 +213,43 @@ _start:
     call call_indirect12
     li t0, 78
     bne a0, t0, fail
+    li a0, 0x89abcdef
+    li a1, 0x01234567
+    call wide_chain
+    li t0, 0x89abcdef
+    bne a0, t0, fail
+    li t0, 0x01234567
+    bne a1, t0, fail
+    li a0, 0x76543210
+    li a1, 0xfedcba98
+    call double_chain
+    li t0, 0x76543210
+    bne a0, t0, fail
+    li t0, 0xfedcba98
+    bne a1, t0, fail
+    li a0, -17
+    call wide_signed
+    li t0, -17
+    bne a0, t0, fail
+    li t0, -1
+    bne a1, t0, fail
+    la a0, wide_memory
+    call wide_load
+    li t0, 0x12345678
+    bne a0, t0, fail
+    li t0, 0x9abcdef0
+    bne a1, t0, fail
+    la a0, wide_memory
+    li a1, 0x34567890
+    li a2, 0xabcdef12
+    call wide_store
+    la t1, wide_memory
+    lw t2, 0(t1)
+    li t0, 0x34567890
+    bne t2, t0, fail
+    lw t2, 4(t1)
+    li t0, 0xabcdef12
+    bne t2, t0, fail
     li a0, 0
     j exit
 fail:
@@ -212,6 +257,10 @@ fail:
 exit:
     li a7, 93
     ecall
+.data
+.balign 8
+wide_memory:
+    .word 0x12345678,0x9abcdef0
 SRC
 riscv64-linux-gnu-gcc -march=rv32i -mabi=ilp32 -c "$work/start.s" -o "$work/start.o"
 # This independent GNU C callee uses *real* RISC-V GCC va_start/va_arg
@@ -268,14 +317,16 @@ qemu-riscv32 "$work/prog-native.elf"
 echo 'RV32_NATIVE_CHAIN=PASS minic_C=true minic_as_ELF32=true GNU_LD=true qemu_riscv32=true'
 riscv64-linux-gnu-readelf -h "$work/prog.elf" |
   grep -q 'Class:.*ELF32'
-# RV32 frontend must not claim multi-XLEN scalar arithmetic prematurely.
-cat >"$work/wide.i" <<'SRC'
-long long wide(long long x) { return x + 1; }
+# Plain 64-bit ABI transport is now real. Binary64 arithmetic still
+# requires a separately qualified pinned software-float library.
+cat >"$work/softfloat-not-yet.i" <<'SRC'
+double unqualified_add(double a, double b) { return a + b; }
 SRC
 if "$MINIC_CC" --target=riscv32-linux -march=rv32i -mabi=ilp32 \
-    -S "$work/wide.i" -o "$work/wide.s" 2>"$work/wide.err"; then
-    echo 'RV32_CORE=FAIL unexpectedly accepted wide return ABI' >&2
+    -S "$work/softfloat-not-yet.i" -o "$work/not-yet.s" \
+    2>"$work/not-yet.err"; then
+    echo 'RV32_CORE=FAIL unexpectedly emitted unqualified softfloat' >&2
     exit 1
 fi
-grep -Eq 'rv32i:|not yet qualified' "$work/wide.err"
-echo 'RV32_CORE=PASS C_functions=24 ILP32=1 ELF32=1 QEMU=PASS GNU_AS=PASS MiniAS=PASS GNU_LD=PASS RV32I_libgcc_muldivmod=PASS variadic_integer_stack_ABI=PASS wide_ABI=reject'
+grep -Eq 'rv32i:|not yet qualified' "$work/not-yet.err"
+echo 'RV32_CORE=PASS C_functions=31 ILP32=1 ELF32=1 QEMU=PASS GNU_AS=PASS MiniAS=PASS GNU_LD=PASS RV32I_libgcc_muldivmod=PASS variadic_integer_stack_ABI=PASS two_XLEN_ABI=PASS softfloat_math=reject'
