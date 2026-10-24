@@ -46,8 +46,23 @@ bridge="$root/tests/compiler/c0/rv32-linux-picolibc-syscalls.c"
 # data segment separately at 0x80200000, with bare-metal TLS/stack
 # assumptions. GNU/Linux QEMU-user must use the Linux ELF32 layout:
 # link the *same* upstream Picolibc archives with GNU's Linux linker.
-picolibc=$("$BARE_CC" "${target[@]}" "${libc[@]}" -print-file-name=libc.a)
-picomath=$("$BARE_CC" "${target[@]}" "${libc[@]}" -print-file-name=libm.a)
+# Debian's Picolibc package installs per-multilib archives outside
+# the GNU bare-metal compiler's default -print-file-name search paths.
+# Resolve the explicitly RV32I/ILP32 authentic distribution artifacts,
+# never an accidentally ABI-incompatible RV64 or glibc archive.
+find_picolibc_archive() {
+  local name="$1" file
+  file=$(find /usr/lib/picolibc -type f \
+      -path "*/rv32i/ilp32/$name" -print -quit 2>/dev/null || :)
+  if [[ ! -f "$file" ]]; then
+    echo "RV32_CJSON_LIBC=FAIL missing_Picolibc_RV32I_archive=$name" >&2
+    dpkg -L picolibc-riscv64-unknown-elf | grep '/rv32i/' | head -n 16 >&2 || :
+    return 1
+  fi
+  printf '%s\n' "$file"
+}
+picolibc=$(find_picolibc_archive libc.a)
+picomath=$(find_picolibc_archive libm.a)
 baregcc=$("$BARE_CC" "${target[@]}" -print-libgcc-file-name)
 for lib in "$picolibc" "$picomath" "$baregcc"; do
   test -f "$lib" || { echo "RV32_CJSON_RUNTIME=FAIL missing_Picolibc_archive=$lib" >&2; exit 1; }
