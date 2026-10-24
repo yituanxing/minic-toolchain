@@ -60,7 +60,9 @@ static int verify_rv32(void) {
         t->integer_model->semantic_width_bits[MINIC_INTEGER_RANK_LONG_LONG] != 64U ||
         t->integer_model->plain_char_sign != MINIC_INTEGER_SIGN_UNSIGNED ||
         t->word_integer_rank != MINIC_INTEGER_RANK_INT ||
-        t->variadic_scalar_read_kind != MINIC_VARIADIC_SCALAR_READ_UNSUPPORTED ||
+        t->variadic_scalar_read_kind != MINIC_VARIADIC_SCALAR_READ_LINEAR_SLOT ||
+        t->variadic_linear_slot_bytes != 4U ||
+        t->variadic_copy_kind != MINIC_VARIADIC_COPY_SCALAR_ASSIGNMENT ||
         !minic_target_info_integer_common(t, minic_type_unsigned_int(),
                                           minic_type_long(), &v) ||
         !minic_type_equal(v, minic_type_unsigned_long()) ||
