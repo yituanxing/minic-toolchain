@@ -7,12 +7,21 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <sys/types.h>
+#include <sys/time.h>
+#include <sys/times.h>
 #include <unistd.h>
 
 static long linux_syscall1(long nr, long first) {
     register long a0 __asm__("a0") = first;
     register long a7 __asm__("a7") = nr;
     __asm__ volatile("ecall" : "+r"(a0) : "r"(a7) : "memory");
+    return a0;
+}
+static long linux_syscall2(long nr, long first, long second) {
+    register long a0 __asm__("a0") = first;
+    register long a1 __asm__("a1") = second;
+    register long a7 __asm__("a7") = nr;
+    __asm__ volatile("ecall" : "+r"(a0) : "r"(a1), "r"(a7) : "memory");
     return a0;
 }
 static long linux_syscall3(long nr, long first, long second, long third) {
@@ -90,4 +99,47 @@ int open(const char *path, int flags, ...) {
 int unlink(const char *path) {
     return (int)linux_result(linux_syscall3(
         35L, -100L, (long)path, 0L));
+}
+
+/* The portable original Lua os library exercises rename(), clock()
+ * and time(), whose platform syscalls must be provided by a genuine
+ * Linux RV32I/Picolibc integration rather than fabricated C stubs. */
+int rename(const char *oldname, const char *newname) {
+    return (int)linux_result(linux_syscall4(
+        38L, -100L, (long)oldname, -100L, (long)newname));
+}
+
+/* Kernel asm-generic gettimeofday on ILP32 uses 32-bit time words;
+ * Picolibc may configure time_t/suseconds_t wider. Marshal each field
+ * into Picolibc's real public structure to avoid ABI size aliasing. */
+int gettimeofday(struct timeval *tv, void *timezone) {
+    struct {
+        int32_t seconds;
+        int32_t microseconds;
+    } native;
+    const long result = linux_result(linux_syscall2(
+        169L, tv == NULL ? 0L : (long)&native, (long)timezone));
+    if (result < 0) return -1;
+    if (tv != NULL) {
+        tv->tv_sec = (time_t)native.seconds;
+        tv->tv_usec = (suseconds_t)native.microseconds;
+    }
+    return 0;
+}
+
+/* Linux RV32 native tms contains four 32-bit clock_t fields.
+ * Picolibc's own clock_t may be wider than the kernel ABI. */
+clock_t times(struct tms *buffer) {
+    struct {
+        int32_t utime, stime, cutime, cstime;
+    } native;
+    const long result = linux_result(linux_syscall1(153L, (long)&native));
+    if (result < 0) return (clock_t)-1;
+    if (buffer != NULL) {
+        buffer->tms_utime = (clock_t)native.utime;
+        buffer->tms_stime = (clock_t)native.stime;
+        buffer->tms_cutime = (clock_t)native.cutime;
+        buffer->tms_cstime = (clock_t)native.cstime;
+    }
+    return (clock_t)result;
 }
