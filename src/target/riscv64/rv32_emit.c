@@ -11,6 +11,7 @@
  */
 #include "target/riscv64/rv32_emit.h"
 #include "target/riscv64/function_symbol.h"
+#include "target/riscv64/rv32_global_emit.h"
 #include "target/data_layout.h"
 #include <inttypes.h>
 #include <limits.h>
@@ -160,7 +161,7 @@ static bool rv32_load2(FILE *out, const Rv32Frame *fr,
            rv32_slot(out, fr, ins->value.binary.right, "t1", true);
 }
 static bool rv32_emit_ins(FILE *out, const MinicCoreFunction *f,
-                          const Rv32Frame *fr,
+                          const Rv32Frame *fr, const char *symbol,
                           const MinicCoreInstruction *ins) {
     const char *op = NULL;
     MinicType lhs;
@@ -208,17 +209,17 @@ static bool rv32_emit_ins(FILE *out, const MinicCoreFunction *f,
          * only I opcodes; all C signed/unsigned low bits are identical. */
         return rv32_load2(out, fr, ins) &&
                fprintf(out, "  li t2, 0\n"
-                            ".Lrv32_mul_%u:\n"
+                            ".L%s_rv32_mul_%u:\n"
                             "  andi t3, t1, 1\n"
-                            "  beqz t3, .Lrv32_mul_skip_%u\n"
+                            "  beqz t3, .L%s_rv32_mul_skip_%u\n"
                             "  add t2, t2, t0\n"
-                            ".Lrv32_mul_skip_%u:\n"
+                            ".L%s_rv32_mul_skip_%u:\n"
                             "  slli t0, t0, 1\n"
                             "  srli t1, t1, 1\n"
-                            "  bnez t1, .Lrv32_mul_%u\n"
+                            "  bnez t1, .L%s_rv32_mul_%u\n"
                             "  mv t0, t2\n",
-                       ins->result, ins->result, ins->result,
-                       ins->result) >= 0 &&
+                       symbol, ins->result, symbol, ins->result,
+                       symbol, ins->result, symbol, ins->result) >= 0 &&
                rv32_canon(out, f, ins->type, "t0") &&
                rv32_slot(out, fr, ins->result, "t0", false);
     case MINIC_CORE_INSTRUCTION_INTEGER_CONVERSION:
@@ -252,17 +253,18 @@ static bool rv32_emit_ins(FILE *out, const MinicCoreFunction *f,
         return rv32_slot(out, fr, ins->value.pointer_offset.base, "t0", true) &&
                rv32_slot(out, fr, ins->value.pointer_offset.index, "t1", true) &&
                fprintf(out, "  li t2, %zu\n  li t3, 0\n"
-                            ".Lrv32_idx_%u:\n"
+                            ".L%s_rv32_idx_%u:\n"
                             "  andi t4, t1, 1\n"
-                            "  beqz t4, .Lrv32_idx_skip_%u\n"
+                            "  beqz t4, .L%s_rv32_idx_skip_%u\n"
                             "  add t3, t3, t2\n"
-                            ".Lrv32_idx_skip_%u:\n"
+                            ".L%s_rv32_idx_skip_%u:\n"
                             "  slli t2, t2, 1\n"
                             "  srli t1, t1, 1\n"
-                            "  bnez t1, .Lrv32_idx_%u\n"
+                            "  bnez t1, .L%s_rv32_idx_%u\n"
                             "  %s t0, t0, t3\n",
-                       stride, ins->result, ins->result, ins->result,
-                       ins->result,
+                       stride,
+                       symbol, ins->result, symbol, ins->result,
+                       symbol, ins->result, symbol, ins->result,
                        ins->value.pointer_offset.subtract ? "sub" : "add") >= 0 &&
                rv32_slot(out, fr, ins->result, "t0", false);
     }
@@ -395,7 +397,8 @@ static bool rv32_func(FILE *out, const MinicC0Program *program,
         for (j = 0U; j < block->instruction_count; ++j) {
             MinicCoreInstructionId id = block->instructions[j];
             if (id >= f->instruction_count ||
-                !rv32_emit_ins(out, f, &fr, &f->instructions[id])) {
+                !rv32_emit_ins(out, f, &fr, sym.symbol_name,
+                               &f->instructions[id])) {
                 (void)snprintf(message, sizeof(message),
                                "rv32i: unqualified Core instruction function=%.75s block=%zu id=%u kind=%u",
                                sym.symbol_name, i, (unsigned)id,
@@ -434,9 +437,9 @@ bool minic_riscv32_write_core_program(const char *path,
         target->riscv_isa.abi != MINIC_RISCV_ABI_ILP32 ||
         function_count != program->function_count ||
         (function_count != 0U && functions == NULL) ||
-        program->global_object_count != 0U || program->file_asm_count != 0U) {
+        program->file_asm_count != 0U) {
         rv32_diag(diagnostic, "<rv32-abi>",
-                  "rv32i: scalar Core functions only; globals/inline ASM not yet qualified");
+                  "rv32i: unsupported file-scope inline ASM or invalid Core function map");
         return false;
     }
     file = fopen(path, "wb");
@@ -444,7 +447,14 @@ bool minic_riscv32_write_core_program(const char *path,
         rv32_diag(diagnostic, path, "rv32i: cannot open output file");
         return false;
     }
-    if (fprintf(file, ".option norvc\n.text\n") < 0) ok = false;
+    if (fprintf(file, ".option norvc\n") < 0) ok = false;
+    for (i = 0U; ok && i < program->global_object_count; ++i) {
+        ok = minic_riscv32_emit_flat_global(
+            file, program, target, &program->global_objects[i]);
+        if (!ok) rv32_diag(diagnostic, "<rv32-global>",
+                           "rv32i: unsupported global initializer or relocation");
+    }
+    if (ok && fprintf(file, ".text\n") < 0) ok = false;
     for (i = 0U; ok && i < function_count; ++i) {
         const MinicFunction *decl = &program->functions[i];
         if (decl->is_defined) {

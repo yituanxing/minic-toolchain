@@ -26,6 +26,21 @@ int triangular(int n) {
 int caller(int a, int b) {
     return add(a,b) + mul(a,b) + absdiff(a,b);
 }
+static const unsigned char keybox[8] = { 0x63,0x7c,0x77,0x7b,0xf2,0x6b,0x6f,0xc5 };
+static const unsigned short halves[4] = { 0x0102,0xabcd,0x3e4d,0x0000 };
+static unsigned int counter = 17;
+static unsigned char unwritten[9];
+int table_probe(int n) {
+    counter = counter + (unsigned int)n;
+    return keybox[n] + halves[1] + (int)counter + unwritten[n];
+}
+int ptr_probe(int n) {
+    unsigned char buf[8];
+    buf[0] = 3;
+    buf[1] = 7;
+    return buf[n];
+}
+int multiply_again(int x) { return x * 13; }
 SRC
 "$MINIC_CC" --target=riscv32-linux -march=rv32i -mabi=ilp32 \
     -S "$work/core.i" -o "$work/core.s"
@@ -47,6 +62,18 @@ _start:
     li a0, 5
     call triangular
     li t0, 15
+    bne a0, t0, fail
+    li a0, 1
+    call table_probe
+    li t0, 44169
+    bne a0, t0, fail
+    li a0, 1
+    call ptr_probe
+    li t0, 7
+    bne a0, t0, fail
+    li a0, 3
+    call multiply_again
+    li t0, 39
     bne a0, t0, fail
     li a0, 0
     j exit
@@ -79,4 +106,4 @@ if "$MINIC_CC" --target=riscv32-linux -march=rv32i -mabi=ilp32 \
     exit 1
 fi
 grep -Eq 'rv32i:|not yet qualified' "$work/wide.err"
-echo 'RV32_CORE=PASS C_functions=5 ILP32=1 ELF32=1 QEMU=PASS GNU_AS=PASS MiniAS=PASS GNU_LD=PASS RV32I_Mless_mul=PASS wide_ABI=reject'
+echo 'RV32_CORE=PASS C_functions=8 ILP32=1 ELF32=1 QEMU=PASS GNU_AS=PASS MiniAS=PASS GNU_LD=PASS RV32I_Mless_mul=PASS wide_ABI=reject'
