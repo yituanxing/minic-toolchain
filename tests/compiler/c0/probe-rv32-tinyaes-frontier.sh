@@ -28,6 +28,12 @@ if ! "$MINIC_CC" --target=riscv32-linux -march=rv32i -mabi=ilp32 \
 fi
 test -s "$work/aes.s"
 echo "RV32_TINYAES_COMPILE=PASS source=original_C compiler=MiniC"
+# Independent GNU C reference for THE SAME preprocessing result, ILP32 ABI,
+# linked with THE SAME pinned GNU libgcc 14.2.0 soft arithmetic provider.
+# A zero MiniC exit without a verified GNU result is not an acceptance.
+"$cc" "${flags[@]}" -std=c11 -O0 -ffreestanding -fno-builtin \
+  -x c -c "$work/aes.i" -o "$work/aes-gcc.o"
+test -s "$work/aes-gcc.o"
 if ! "$MINIAS" -march=rv32i -mabi=ilp32 \
     -o "$work/aes.o" "$work/aes.s" >"$work/as.out" 2>"$work/as.err"; then
   echo "RV32_TINYAES=BLOCKED stage=MiniAS/ELF32 original=true"
@@ -44,6 +50,9 @@ _start:
 SRC
 "$cc" "${flags[@]}" -x assembler -c "$work/start.s" -o "$work/start.o"
 bash tests/compiler/c0/build-rv32-gcc-runtime.sh "$work"
+riscv64-linux-gnu-ld -m elf32lriscv -static -e _start \
+  -o "$work/aes-gcc.elf" "$work/start.o" "$work/aes-gcc.o" \
+  "$work/libgcc-mulsi3.o" "$work/libgcc-divsi3.o"
 if ! riscv64-linux-gnu-ld -m elf32lriscv -static -e _start \
     -o "$work/aes.elf" "$work/start.o" "$work/aes.o" \
     "$work/libgcc-mulsi3.o" "$work/libgcc-divsi3.o" \
@@ -53,11 +62,17 @@ if ! riscv64-linux-gnu-ld -m elf32lriscv -static -e _start \
   exit 0
 fi
 set +e
-timeout 45s qemu-riscv32 "$work/aes.elf"
+timeout 45s qemu-riscv32 "$work/aes-gcc.elf" >"$work/gcc.out" 2>"$work/gcc.err"
+gcc_code=$?
+timeout 45s qemu-riscv32 "$work/aes.elf" >"$work/minic.out" 2>"$work/minic.err"
 code=$?
 set -e
-if [[ "$code" != 0 ]]; then
-  echo "RV32_TINYAES=FAIL stage=QEMU_vector_validation exit=$code" >&2
+if [[ "$gcc_code" != 0 || "$code" != 0 ]] ||
+   ! cmp -s "$work/gcc.out" "$work/minic.out" ||
+   ! cmp -s "$work/gcc.err" "$work/minic.err"; then
+  echo "RV32_TINYAES=FAIL stage=QEMU_differential gcc_exit=$gcc_code minic_exit=$code" >&2
+  sed -n '1,12p' "$work/minic.err" >&2
   exit 1
 fi
-echo "RV32_TINYAES=PASS original_AES128_ECB_vectors=true minic=1 minias=1 GNU_LD=1 QEMU=1"
+echo "RV32_TINYAES_GNU_REFERENCE=PASS original_AES128_ECB_vectors=true compiler=GCC xlen=32"
+echo "RV32_TINYAES=PASS original_AES128_ECB_vectors=true minic=1 minias=1 GNU_AS_reference=1 GNU_C_reference=1 GNU_LD=1 QEMU_byte_exact=1"
