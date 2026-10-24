@@ -493,9 +493,10 @@ qemu-riscv32 "$work/prog-native.elf"
 echo 'RV32_NATIVE_CHAIN=PASS minic_C=true minic_as_ELF32=true GNU_LD=true qemu_riscv32=true'
 riscv64-linux-gnu-readelf -h "$work/prog.elf" |
   grep -q 'Class:.*ELF32'
-# Full 64-bit integer arithmetic still requires separate pair-ALU lowering.
+# Original ILP32 wide arithmetic passes separately; division still requires
+# a qualified 64-bit original runtime and must fail rather than truncate.
 cat >"$work/ll-arith-not-yet.i" <<'SRC'
-long long unqualified_plus(long long a, long long b) { return a + b; }
+long long unqualified_divide(long long a, long long b) { return a / b; }
 SRC
 if "$MINIC_CC" --target=riscv32-linux -march=rv32i -mabi=ilp32 \
     -S "$work/ll-arith-not-yet.i" -o "$work/not-yet.s" \

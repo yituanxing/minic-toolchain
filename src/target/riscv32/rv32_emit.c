@@ -33,7 +33,8 @@ static bool rv32_emit_ins(FILE *out, const MinicC0Program *program,
                           const MinicCoreFunction *f,
                           const Rv32Frame *fr,
                           const MinicCoreInstruction *ins,
-                          MinicCoreInstructionId id) {
+                          MinicCoreInstructionId id,
+                          const char *symbol) {
     if (out == NULL || program == NULL || target == NULL ||
         f == NULL || fr == NULL || ins == NULL) return false;
     /* Core opcode ownership follows the machine-operation family, not
@@ -60,7 +61,7 @@ static bool rv32_emit_ins(FILE *out, const MinicC0Program *program,
     case MINIC_CORE_INSTRUCTION_INTEGER_NEGATE:
     case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_NOT:
     case MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO:
-        return rv32_emit_integer_instruction(out, f, fr, ins);
+        return rv32_emit_integer_instruction(out, f, fr, ins, symbol);
     case MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT:
     case MINIC_CORE_INSTRUCTION_DOUBLE_ADD:
     case MINIC_CORE_INSTRUCTION_DOUBLE_SUBTRACT:
@@ -174,7 +175,7 @@ static bool rv32_func(FILE *out, const MinicC0Program *program,
             MinicCoreInstructionId id = block->instructions[j];
             if (id >= f->instruction_count ||
                 !rv32_emit_ins(out, program, target, f, &fr,
-                               &f->instructions[id], id)) {
+                               &f->instructions[id], id, sym.symbol_name)) {
                 (void)snprintf(message, sizeof(message),
                                "rv32i: unqualified Core instruction function=%.75s block=%zu id=%u kind=%u",
                                sym.symbol_name, i, (unsigned)id,

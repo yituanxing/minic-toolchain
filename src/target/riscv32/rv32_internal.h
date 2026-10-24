@@ -48,7 +48,12 @@ bool rv32_load2(FILE *, const Rv32Frame *, const MinicCoreInstruction *);
 
 /* Typed machine family lowering; all transport stays behind Target. */
 bool rv32_emit_integer_instruction(FILE *, const MinicCoreFunction *,
-                                   const Rv32Frame *, const MinicCoreInstruction *);
+                                   const Rv32Frame *, const MinicCoreInstruction *,
+                                   const char *);
+bool rv32_is_wide_integer(const MinicCoreFunction *, MinicType);
+bool rv32_emit_wide_integer(FILE *, const MinicCoreFunction *,
+                            const Rv32Frame *, const MinicCoreInstruction *,
+                            const char *);
 bool rv32_emit_fp_instruction(FILE *, const MinicCoreFunction *,
                               const Rv32Frame *, const MinicCoreInstruction *);
 bool rv32_emit_memory_instruction(FILE *, const MinicC0Program *,

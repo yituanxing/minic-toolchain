@@ -7,12 +7,42 @@
  * RISC-V opcode and runtime symbol identities remain XLEN-parametric. */
 bool rv32_emit_integer_instruction(FILE *out, const MinicCoreFunction *f,
                                    const Rv32Frame *fr,
-                                   const MinicCoreInstruction *ins) {
+                                   const MinicCoreInstruction *ins,
+                                   const char *symbol) {
     const char *op = NULL;
     MinicType lhs;
     unsigned bits;
     bool is_signed;
     if (out == NULL || f == NULL || fr == NULL || ins == NULL) return false;
+    /* Keep Core's wide arithmetic/compare/shift lowering as one machine
+     * family; the scalar path must never truncate a 2*XLEN value. */
+    switch (ins->kind) {
+    case MINIC_CORE_INSTRUCTION_INTEGER_ADD:
+    case MINIC_CORE_INSTRUCTION_INTEGER_SUBTRACT:
+    case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND:
+    case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_OR:
+    case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_XOR:
+    case MINIC_CORE_INSTRUCTION_INTEGER_MULTIPLY:
+    case MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_LEFT:
+    case MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_RIGHT:
+    case MINIC_CORE_INSTRUCTION_INTEGER_NEGATE:
+    case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_NOT:
+        if (rv32_is_wide_integer(f, ins->type))
+            return rv32_emit_wide_integer(out, f, fr, ins, symbol);
+        break;
+    case MINIC_CORE_INSTRUCTION_INTEGER_LESS:
+    case MINIC_CORE_INSTRUCTION_SCALAR_EQUAL:
+        if (ins->value.binary.left < f->value_count &&
+            rv32_is_wide_integer(f, f->values[ins->value.binary.left].type))
+            return rv32_emit_wide_integer(out, f, fr, ins, symbol);
+        break;
+    case MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO:
+        if (ins->value.operand < f->value_count &&
+            rv32_is_wide_integer(f, f->values[ins->value.operand].type))
+            return rv32_emit_wide_integer(out, f, fr, ins, symbol);
+        break;
+    default: break;
+    }
     switch (ins->kind) {
     case MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT: {
         unsigned words;

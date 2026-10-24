@@ -61,6 +61,7 @@ on:
       - "tests/compiler/c0/probe-rv32-target-gate.sh"
       - "src/target/riscv64/memory_emit.c"
       - "tests/compiler/c0/probe-rv32-core-qemu.sh"
+      - "tests/compiler/c0/probe-rv32-wide-alu-qemu.sh"
       - "tests/compiler/c0/probe-rv32-tinyaes-frontier.sh"
       - "tests/compiler/c0/probe-rv32-cjson-frontier.sh"
       - "tests/external/cjson/probe.sh"
@@ -147,6 +148,8 @@ jobs:
             bash tests/assembler/probe-rv32i-elf32.sh
           MINIC_CC="$GITHUB_WORKSPACE/build/runtime-ci/bin/minic-cc" \
             bash tests/compiler/c0/probe-rv32-core-qemu.sh
+          MINIC_CC="$GITHUB_WORKSPACE/build/runtime-ci/bin/minic-cc" \
+            bash tests/compiler/c0/probe-rv32-wide-alu-qemu.sh
           MINIC_CC="$GITHUB_WORKSPACE/build/runtime-ci/bin/minic-cc" \
             bash tests/compiler/c0/probe-rv32-tinyaes-frontier.sh
           MINIC_CC="$GITHUB_WORKSPACE/build/runtime-ci/bin/minic-cc" \
