@@ -357,16 +357,24 @@ SRC
 riscv64-linux-gnu-gcc -march=rv32i -mabi=ilp32 -ffreestanding -O0 \
     -c "$work/varargs.c" -o "$work/varargs.o"
 bash tests/compiler/c0/build-rv32-gcc-runtime.sh "$work"
+# This runtime manifest is the single link closure for every independent
+# GNU/MiniAS/GNU-C ELF32 oracle. Listing only the historical two GNU
+# integer objects silently excluded the new compiler-rt binary64 helpers.
+mapfile -t rv32_runtime_objects < "$work/rv32-runtime-objects.rsp"
+test "${#rv32_runtime_objects[@]}" -ge 17
+for runtime_object in "${rv32_runtime_objects[@]}"; do
+    test -s "$runtime_object"
+done
 riscv64-linux-gnu-ld -m elf32lriscv -static -e _start \
     -o "$work/prog.elf" "$work/start.o" "$work/core.o" \
-    "$work/varargs.o" "$work/libgcc-mulsi3.o" "$work/libgcc-divsi3.o"
+    "$work/varargs.o" "${rv32_runtime_objects[@]}"
 # Exact GCC model is an independent oracle for the new ELF32 record+symbol
 # relocations. Keep GNU's linker/syscall startup/library identical.
 riscv64-linux-gnu-gcc -march=rv32i -mabi=ilp32 -ffreestanding \
     -x c -c "$work/core.i" -o "$work/core-gcc.o"
 riscv64-linux-gnu-ld -m elf32lriscv -static -e _start \
     -o "$work/prog-gcc.elf" "$work/start.o" "$work/core-gcc.o" \
-    "$work/varargs.o" "$work/libgcc-mulsi3.o" "$work/libgcc-divsi3.o"
+    "$work/varargs.o" "${rv32_runtime_objects[@]}"
 qemu-riscv32 "$work/prog-gcc.elf"
 set +e
 timeout 30s qemu-riscv32 -strace "$work/prog.elf" \
@@ -389,7 +397,7 @@ fi
 # program linking is not yet qualified (only compat-vDSO is certified).
 riscv64-linux-gnu-ld -m elf32lriscv -static -e _start \
     -o "$work/prog-native.elf" "$work/start.o" "$work/core-native.o" \
-    "$work/varargs.o" "$work/libgcc-mulsi3.o" "$work/libgcc-divsi3.o"
+    "$work/varargs.o" "${rv32_runtime_objects[@]}"
 qemu-riscv32 "$work/prog-native.elf"
 echo 'RV32_NATIVE_CHAIN=PASS minic_C=true minic_as_ELF32=true GNU_LD=true qemu_riscv32=true'
 riscv64-linux-gnu-readelf -h "$work/prog.elf" |
