@@ -162,3 +162,66 @@ for mode in gnu-as minias; do
   }
 done
 echo 'RV32_ZLIB=PASS original_upstream=1 TUs=15 MiniC_only=1 GNU_C_oracle=1 GNU_AS=1 MiniAS=1 Picolibc=1 ELF32=1 QEMU=1 example=byte_exact'
+
+# Second untouched upstream executable: 15 MiniC-built zlib TUs are reused
+# with original test/minigzip.c, compiled independently by GCC and MiniC.
+minigzip="$src/test/minigzip.c"
+test "$(git hash-object "$minigzip")" = 134e10e6c3e947a8e54501a1a256fb62c537cb87
+"$BARE_CC" "${target[@]}" "${libc[@]}" -E -P -std=c11 \
+    -I"$src" "$minigzip" -o "$work/obj/minigzip.i"
+"$BARE_CC" "${target[@]}" "${libc[@]}" -O0 -ffreestanding -fno-builtin \
+    -x c -c "$work/obj/minigzip.i" -o "$work/obj/minigzip-reference.o"
+if ! "$MINIC_CC" --target=riscv32-linux "${target[@]}" -S \
+    "$work/obj/minigzip.i" -o "$work/obj/minigzip.s" \
+    >"$work/obj/minigzip.minic.out" 2>"$work/obj/minigzip.minic.err"; then
+  echo 'RV32_MINIGZIP=BLOCKED stage=MiniC' >&2
+  head -n 24 "$work/obj/minigzip.minic.err" >&2
+  exit 1
+fi
+"$RISCV_CC" "${target[@]}" -c "$work/obj/minigzip.s" \
+    -o "$work/obj/minigzip-gnu-as.o"
+"$MINIAS" "${target[@]}" -o "$work/obj/minigzip-minias.o" \
+    "$work/obj/minigzip.s"
+echo 'RV32_MINIGZIP_COMPILE=PASS upstream_original=1 GCC=1 MiniC=1 GNU_AS=1 MiniAS=1'
+# A deterministic binary payload forces real gzip file operations,
+# not just help/version output or a fake compression test.
+python3 - "$work/minigzip-input.bin" <<'PY'
+import pathlib, sys
+pathlib.Path(sys.argv[1]).write_bytes(
+    bytes((i * 73 + (i >> 5) * 31) & 255 for i in range(32768))
+)
+PY
+for mode in reference gnu-as minias; do
+  libs=()
+  for source in "${sources[@]}"; do
+    stem="${source%.c}"
+    case "$mode" in
+      reference) name="$stem-reference.o" ;;
+      gnu-as) name="$stem-gnu-as.o" ;;
+      minias) name="$stem-minias.o" ;;
+    esac
+    libs+=("$work/obj/$name")
+  done
+  riscv64-linux-gnu-ld -m elf32lriscv -static -e _start \
+    -o "$work/run/minigzip-$mode.elf" \
+    "$work/obj/start.o" "$work/obj/linux-syscalls.o" \
+    "$work/obj/linux-posix.o" "$work/obj/linux-errno.o" \
+    "$work/obj/minigzip-$mode.o" "${libs[@]}" \
+    --start-group "$picomath" "$picolibc" "$baregcc" --end-group
+  mkdir -p "$work/run/$mode"
+  cp "$work/minigzip-input.bin" "$work/run/$mode/input.bin"
+  (cd "$work/run/$mode" &&
+    timeout 60s qemu-riscv32 "../minigzip-$mode.elf" input.bin)
+  test ! -e "$work/run/$mode/input.bin"
+  test -s "$work/run/$mode/input.bin.gz"
+  cp "$work/run/$mode/input.bin.gz" "$work/minigzip-$mode.gz"
+  (cd "$work/run/$mode" &&
+    timeout 60s qemu-riscv32 "../minigzip-$mode.elf" -d input.bin.gz)
+  cmp -s "$work/minigzip-input.bin" "$work/run/$mode/input.bin"
+  test ! -e "$work/run/$mode/input.bin.gz"
+  echo "RV32_MINIGZIP_MODE=PASS mode=$mode encode=1 decode=1 sha256=$(sha256sum "$work/run/$mode/input.bin" | cut -c1-20)"
+done
+cmp -s "$work/minigzip-reference.gz" "$work/minigzip-gnu-as.gz"
+cmp -s "$work/minigzip-reference.gz" "$work/minigzip-minias.gz"
+echo 'RV32_MINIGZIP=PASS original_upstream=1 unchanged_zlib_TUs=15 full_MiniC=1 GCC_oracle=1 GNU_AS=1 MiniAS=1 ELF32=1 QEMU=1 gzip_compress=1 gzip_decompress=1 gzip_bytes_equal=1 original_bytes_restored=1'
+
