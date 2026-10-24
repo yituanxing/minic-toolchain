@@ -10,8 +10,9 @@
 void rv32_function_abi_plan_destroy(Rv32FunctionAbiPlan *plan) {
     size_t i;
     if (plan == NULL) return;
-    for (i = 0U; i < plan->call_count; ++i)
-        free(plan->calls[i].arguments);
+    if (plan->calls != NULL)
+        for (i = 0U; i < plan->call_count; ++i)
+            free(plan->calls[i].arguments);
     free(plan->calls);
     free(plan->parameters);
     (void)memset(plan, 0, sizeof(*plan));
