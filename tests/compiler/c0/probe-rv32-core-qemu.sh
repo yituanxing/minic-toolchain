@@ -79,6 +79,15 @@ cat >"$work/start.s" <<'SRC'
 .text
 .globl _start
 _start:
+    # Standalone assembly without a libc crt1 MUST establish RISC-V gp.
+    # GNU ld relaxes both GNU C and MiniC references to .sdata globals
+    # into gp-relative loads/stores. With gp=0, both GCC and MiniC crash
+    # before returning, as independently confirmed in QEMU. The norelax
+    # bracket is the standard RISC-V crt0 pattern.
+    .option push
+    .option norelax
+    la gp, __global_pointer$
+    .option pop
     li a0, 6
     li a1, 3
     call caller
