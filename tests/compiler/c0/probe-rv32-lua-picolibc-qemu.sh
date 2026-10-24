@@ -210,6 +210,19 @@ for mode in reference gnu-as minias; do
   if ((rc != 0)); then
     echo "RV32_LUAC=FAIL stage=QEMU mode=$mode exit=$rc" >&2
     head -n 24 "$work/run/luac-$mode.err" >&2
+    # Preserve the original failure verdict. The first run to exercise
+    # on-disk Lua files may expose an ELF entry/libc syscall fault even
+    # in the independent GCC reference. Trace the SAME unmodified binary,
+    # arguments and file input instead of blaming MiniC or substituting C.
+    echo "RV32_LUAC_QEMU_STRACE_BEGIN mode=$mode" >&2
+    timeout 8s qemu-riscv32 -strace "$work/run/luac-$mode.elf" \
+      -o "$work/run/$mode.luac" "$work/bytecode_pressure.lua" \
+      >"$work/run/luac-$mode.trace.out" \
+      2>"$work/run/luac-$mode.trace.err" || :
+    tail -n 45 "$work/run/luac-$mode.trace.err" >&2
+    echo "RV32_LUAC_QEMU_STRACE_END mode=$mode" >&2
+    riscv64-linux-gnu-readelf -lW "$work/run/luac-$mode.elf" | \
+      grep -E '(^  TLS|^  LOAD)' >&2 || :
     exit 1
   fi
   test -s "$work/run/$mode.luac"
