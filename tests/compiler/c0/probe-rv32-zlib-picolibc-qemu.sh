@@ -13,6 +13,11 @@ trap 'rm -rf "$work"' EXIT
 root=$(git rev-parse --show-toplevel)
 target=(-march=rv32i -mabi=ilp32)
 libc=(-specs=picolibc.specs)
+# Picolibc's documented errno-function header mode preserves the
+# library's genuine thread-local errno storage. The function itself is
+# compiled by GCC to the correct ILP32 TLS access, never by MiniC.
+# Both MiniC and GCC see the EXACT same preprocessed upstream zlib.
+errno_header=(-D__PICOLIBC_ERRNO_FUNCTION=__minic_picolibc_errno)
 commit=51b7f2abdade71cd9bb0e7a373ef2610ec6f9daf
 sources=(adler32.c compress.c crc32.c deflate.c gzclose.c gzlib.c gzread.c
          gzwrite.c infback.c inffast.c inflate.c inftrees.c trees.c
@@ -47,8 +52,8 @@ MINIC_PASS=0
 REJECTS=0
 for source in "${sources[@]}"; do
   stem="${source%.c}"
-  "$BARE_CC" "${target[@]}" "${libc[@]}" -E -P -std=c11 \
-    -I"$src" "$src/$source" -o "$work/obj/$stem.i"
+  "$BARE_CC" "${target[@]}" "${libc[@]}" "${errno_header[@]}" \
+    -E -P -std=c11 -I"$src" "$src/$source" -o "$work/obj/$stem.i"
   "$BARE_CC" "${target[@]}" "${libc[@]}" -O0 -ffreestanding -fno-builtin \
     -x c -c "$work/obj/$stem.i" -o "$work/obj/$stem-reference.o"
   if ! "$MINIC_CC" --target=riscv32-linux "${target[@]}" -S \
@@ -96,6 +101,9 @@ fi
 "$BARE_CC" "${target[@]}" "${libc[@]}" -O0 -ffreestanding -fno-builtin \
     -c "$root/tests/compiler/c0/rv32-linux-picolibc-posix.c" \
     -o "$work/obj/linux-posix.o"
+"$BARE_CC" "${target[@]}" "${libc[@]}" -O0 -ffreestanding -fno-builtin \
+    -c "$root/tests/compiler/c0/rv32-linux-picolibc-errno.c" \
+    -o "$work/obj/linux-errno.o"
 "$BARE_CC" "${target[@]}" "${libc[@]}" \
     -c "$root/tests/compiler/c0/rv32-linux-picolibc-start.S" -o "$work/obj/start.o"
 picolibc=$(find /usr/lib/picolibc -type f -path '*/rv32i/ilp32/libc.a' -print -quit)
@@ -117,7 +125,8 @@ for mode in reference gnu-as minias; do
   riscv64-linux-gnu-ld -m elf32lriscv -static -e _start \
     -o "$work/run/zlib-$mode.elf" \
     "$work/obj/start.o" "$work/obj/linux-syscalls.o" \
-    "$work/obj/linux-posix.o" "$work/obj/example.o" "${libs[@]}" \
+    "$work/obj/linux-posix.o" "$work/obj/linux-errno.o" \
+    "$work/obj/example.o" "${libs[@]}" \
     --start-group "$picomath" "$picolibc" "$baregcc" --end-group
   riscv64-linux-gnu-readelf -h "$work/run/zlib-$mode.elf" | grep -q 'Class:.*ELF32'
   set +e

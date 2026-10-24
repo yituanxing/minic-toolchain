@@ -15,6 +15,7 @@ on:
       - "tests/external/cjson/**"
       - "tests/compiler/c0/probe-rv32-zlib-picolibc-qemu.sh"
       - "tests/compiler/c0/rv32-linux-picolibc-posix.c"
+      - "tests/compiler/c0/rv32-linux-picolibc-errno.c"
       - "tests/vendor/cjson/upstream/**"
       - "tests/external/zlib/**"
       - ".github/workflows/minic-rv32-cjson-runtime.yml"

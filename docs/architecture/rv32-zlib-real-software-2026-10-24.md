@@ -23,3 +23,18 @@ Existing fourarch and cJSON regressions must remain green.
 Potential subsequent acceptance: unmodified upstream minigzip and
 cross-gzip byte identity, only after this original upstream example
 is fully qualified.
+
+## Picolibc TLS errno interface
+
+The pinned Debian Picolibc headers expose either `extern __thread int errno`
+or the documented `__PICOLIBC_ERRNO_FUNCTION` API. MiniC already
+recognizes opaque extern TLS declarations but intentionally rejects TLS
+memory access until true TLS relocation lowering exists. zlib's gzread
+and gzwrite use errno on I/O error paths. This workload therefore
+selects the **actual Picolibc-supported errno-function ABI** at the
+GNU preprocessing stage for *both* GCC reference and MiniC, and uses
+one GCC-built `__minic_picolibc_errno()` wrapper returning the address
+of the actual TLS errno object. No library source is patched, no errno
+is replaced by a fake global, and MiniC does not silently perform an
+incorrect non-TLS load. This is a declared runtime ABI adaptation, not
+proof MiniC supports general C TLS access.
