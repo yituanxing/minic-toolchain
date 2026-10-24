@@ -90,4 +90,24 @@ if [[ -e src/core/core_lower_asm_x86.c ]]; then
   fail 'legacy x86-specific Core classifier must not return'
 fi
 
+# RV32 physical machine code lives under its own ILP32 target, not RV64.
+for file in src/target/riscv32/rv32_emit.c \
+            src/target/riscv32/rv32_frame.c \
+            src/target/riscv32/rv32_scalar.c \
+            src/target/riscv32/rv32_call.c \
+            src/target/riscv32/rv32_internal.h \
+            src/target/riscv/gpr_abi_cursor.h \
+            src/target/riscv/record_copy_bytes.c; do
+  exists "$file"
+done
+if compgen -G 'src/target/riscv64/rv32_*' >/dev/null; then
+  fail 'RV32 machine implementation was reintroduced under RV64'
+fi
+has src/target/riscv32/rv32_call.c 'minic_core_call_view_build('
+lacks src/target/riscv32/rv32_emit.c 'static bool rv32_frame_init('
+lacks src/target/riscv32/rv32_emit.c 'static bool rv32_emit_scalar_call_arguments('
+lacks src/target/riscv32/rv32_emit.c 'rv32_call_info('
+has src/target/riscv32/rv32_frame.c 'minic_riscv32_abi_place('
+has src/target/riscv32/rv32_scalar.c 'rv32_scalar_storage_words('
+
 printf 'MINIC_BACKEND_BOUNDARY_CHECK=PASS\n'

@@ -2,7 +2,7 @@
 
 #include "target/riscv64/codegen.h"
 #include "target/riscv64/layout.h"
-#include "target/riscv64/rv32_emit.h"
+#include "target/riscv32/rv32_emit.h"
 #include "target/x86_64/codegen.h"
 #include "target/x86_64/asm_contract.h"
 #include "target/aarch64/codegen.h"

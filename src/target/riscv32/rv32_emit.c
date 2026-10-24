@@ -5,31 +5,20 @@
  * IEEE binary64 via pinned compiler-rt, and GNU differential ELF32/QEMU.
  * Variadic callee definitions, 64-bit integer ALU and other unsupported
  * operations still fail closed until independently qualified. */
-#include "target/riscv64/rv32_emit.h"
+#include "target/riscv32/rv32_emit.h"
+#include "target/riscv32/rv32_internal.h"
 #include "target/common/core_call_view.h"
 #include "target/riscv/instruction_select.h"
-#include "target/riscv64/rv32_abi_cursor.h"
+#include "target/riscv32/rv32_abi_cursor.h"
 #include "target/riscv64/function_symbol.h"
-#include "target/riscv64/rv32_global_emit.h"
-#include "target/riscv64/record_copy_bytes.h"
+#include "target/riscv32/rv32_global_emit.h"
+#include "target/riscv/record_copy_bytes.h"
 #include "target/data_layout.h"
 #include <inttypes.h>
 #include <limits.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
-
-typedef struct Rv32Frame {
-    /* Outgoing ILP32 stack arguments are pre-reserved at sp+0 on every call.
-     * This keeps sp 16-byte aligned, including nested GNU/LLVM library calls,
-     * and avoids moving the Core SSA/local object frame during calls. */
-    size_t outgoing_size;
-    size_t frame_size;
-    size_t *object_offsets;
-    size_t *value_offsets;
-    size_t object_count;
-    size_t value_count;
-} Rv32Frame;
 
 static void rv32_diag(MinicDiagnostic *d, const char *path, const char *text) {
     if (d == NULL) return;
@@ -39,277 +28,6 @@ static void rv32_diag(MinicDiagnostic *d, const char *path, const char *text) {
     (void)snprintf(d->message, sizeof(d->message), "%s", text);
 }
 
-static bool rv32_align(size_t value, size_t by, size_t *out) {
-    if (by == 0U || (by & (by - 1U)) != 0U ||
-        value > SIZE_MAX - (by - 1U)) return false;
-    *out = (value + (by - 1U)) & ~(by - 1U);
-    return true;
-}
-
-/* A wide ILP32 operand remains ONE semantic Core SSA value. */
-static bool rv32_scalar_storage_words(const MinicCoreFunction *f,
-                                       MinicType ty, unsigned *words) {
-    MinicType effective = ty;
-    if (minic_type_is_double(ty)) { *words = 2U; return true; }
-    if (minic_type_is_float(ty) || minic_type_is_pointer(ty)) {
-        *words = 1U; return true;
-    }
-    if (minic_type_is_enum(ty) &&
-        !minic_core_function_effective_integer_type(f, ty, &effective))
-        return false;
-    if (!minic_type_is_integer(effective)) return false;
-    switch (effective.integer_rank) {
-    case MINIC_INTEGER_RANK_LONG_LONG: *words = 2U; return true;
-    case MINIC_INTEGER_RANK_BOOL:
-    case MINIC_INTEGER_RANK_CHAR:
-    case MINIC_INTEGER_RANK_SHORT:
-    case MINIC_INTEGER_RANK_INT:
-    case MINIC_INTEGER_RANK_LONG: *words = 1U; return true;
-    default: return false;
-    }
-}
-static bool rv32_frame_init(Rv32Frame *frame, const MinicC0Program *program,
-                            const MinicCoreFunction *f, const MinicTargetInfo *t) {
-    size_t next, i, max_stack_args = 0U;
-    if (frame == NULL || program == NULL || f == NULL || t == NULL ||
-        f->value_count > 100000U || f->object_count > 100000U)
-        return false;
-    /* Scan the COMPLETE Core call set, not the frontend expression tree.
-     * ABI outgoing argument areas are allocated exactly once per function. */
-    for (i = 0U; i < f->instruction_count; ++i) {
-        const MinicCoreInstruction *ins = &f->instructions[i];
-        if (ins->kind == MINIC_CORE_INSTRUCTION_CALL ||
-            ins->kind == MINIC_CORE_INSTRUCTION_INDIRECT_CALL) {
-            MinicCoreCallView view;
-            MinicRiscv32AbiCursor cursor = {0U, 0U, false};
-            if (!minic_core_call_view_build(f, ins, &view))
-                return false;
-            for (size_t a = 0U; a < view.argument_count; ++a) {
-                const MinicCoreCallArgument *arg = &view.arguments[a];
-                unsigned words;
-                MinicRiscv32AbiPlacement loc;
-                if (arg->kind != MINIC_CORE_CALL_ARGUMENT_VALUE ||
-                    arg->value.value_id >= f->value_count ||
-                    !rv32_scalar_storage_words(
-                        f, f->values[arg->value.value_id].type, &words) ||
-                    !minic_riscv32_abi_place(
-                        &cursor, words,
-                        view.is_variadic && a >= view.parameter_count, &loc))
-                    return false;
-            }
-            if (cursor.stack_words > max_stack_args)
-                max_stack_args = cursor.stack_words;
-        }
-    }
-    if (max_stack_args > (size_t)INT32_MAX / 4U ||
-        !rv32_align(max_stack_args * 4U, 16U, &frame->outgoing_size) ||
-        f->value_count > (SIZE_MAX - frame->outgoing_size - 4U) / 8U)
-        return false;
-    frame->object_offsets = NULL;
-    frame->value_offsets = NULL;
-    frame->object_count = f->object_count;
-    frame->value_count = f->value_count;
-    if (f->value_count != 0U) {
-        frame->value_offsets = calloc(f->value_count, sizeof(size_t));
-        if (frame->value_offsets == NULL) return false;
-    }
-    if (f->object_count != 0U) {
-        frame->object_offsets = calloc(f->object_count, sizeof(size_t));
-        if (frame->object_offsets == NULL) return false;
-    }
-    /* Slot zero saves ra even in a leaf; a stable ABI-oriented frame makes
-     * lowering of calls and arithmetic runtime helpers deterministic. */
-    next = frame->outgoing_size + 4U;
-    for (i = 0U; i < f->value_count; ++i) {
-        size_t size, alignment;
-        unsigned words;
-        if (!rv32_scalar_storage_words(f, f->values[i].type, &words) ||
-            !minic_data_layout_type(t->data_layout, program,
-                                    f->values[i].type, &size, &alignment) ||
-            size == 0U || size > 8U ||
-            !rv32_align(next, words == 2U ? 8U : 4U, &next) ||
-            next > SIZE_MAX - words * 4U) return false;
-        frame->value_offsets[i] = next;
-        next += words * 4U;
-    }
-    for (i = 0; i < f->object_count; ++i) {
-        const MinicCoreObject *obj = &f->objects[i];
-        size_t size, align;
-        if (!minic_data_layout_type(t->data_layout, program,
-                                    obj->type, &size, &align) ||
-            (obj->element_count > 1U &&
-             size > SIZE_MAX / obj->element_count)) return false;
-        if (obj->element_count > 1U) size *= obj->element_count;
-        if (obj->explicit_alignment > align) align = obj->explicit_alignment;
-        if (align < 4U) align = 4U;
-        if (!rv32_align(next, align, &next) || size > SIZE_MAX - next)
-            return false;
-        frame->object_offsets[i] = next;
-        next += size != 0U ? size : 1U;
-    }
-    return rv32_align(next, 16U, &frame->frame_size) &&
-           frame->frame_size <= (size_t)INT32_MAX;
-}
-static void rv32_frame_destroy(Rv32Frame *f) {
-    if (f != NULL) {
-        free(f->object_offsets);
-        free(f->value_offsets);
-        f->object_offsets = NULL;
-        f->value_offsets = NULL;
-    }
-}
-/* t6 is reserved as the large-displacement scratch register. */
-static bool rv32_stack(FILE *out, const char *op, const char *reg, size_t off) {
-    if (off <= 2047U)
-        return fprintf(out, "  %s %s, %zu(sp)\n", op, reg, off) >= 0;
-    return fprintf(out, "  li t6, %zu\n  add t6, sp, t6\n"
-                        "  %s %s, 0(t6)\n", off, op, reg) >= 0;
-}
-static bool rv32_slot(FILE *out, const Rv32Frame *f,
-                       MinicCoreValueId id, const char *reg, bool load) {
-    return id != MINIC_CORE_VALUE_INVALID && (size_t)id < f->value_count &&
-           rv32_stack(out, load ? "lw" : "sw", reg,
-                      f->value_offsets[id]);
-}
-/* Low-word first: RISC-V ELF32 and the little-endian ILP32 psABI. */
-static bool rv32_pair_slot(FILE *out, const Rv32Frame *f,
-                           MinicCoreValueId id,
-                           const char *low, const char *high, bool load) {
-    return id != MINIC_CORE_VALUE_INVALID && (size_t)id < f->value_count &&
-           rv32_stack(out, load ? "lw" : "sw", low,
-                      f->value_offsets[id]) &&
-           rv32_stack(out, load ? "lw" : "sw", high,
-                      f->value_offsets[id] + 4U);
-}
-static bool rv32_address(FILE *out, const char *reg, size_t off) {
-    return off <= 2047U ?
-        fprintf(out, "  addi %s, sp, %zu\n", reg, off) >= 0 :
-        fprintf(out, "  li %s, %zu\n  add %s, sp, %s\n",
-                reg, off, reg, reg) >= 0;
-}
-static bool rv32_scalar(const MinicCoreFunction *f, MinicType t,
-                         unsigned *bits, bool *sign) {
-    MinicType effective = t;
-    if (minic_type_is_pointer(t) || minic_type_is_float(t)) {
-        *bits = 32U;
-        *sign = false;
-        return true;
-    }
-    if (!minic_type_is_integer(t) ||
-        (minic_type_is_enum(t) &&
-          !minic_core_function_effective_integer_type(f, t, &effective)))
-        return false;
-    switch (effective.integer_rank) {
-    case MINIC_INTEGER_RANK_BOOL: *bits = 1U; break;
-    case MINIC_INTEGER_RANK_CHAR: *bits = 8U; break;
-    case MINIC_INTEGER_RANK_SHORT: *bits = 16U; break;
-    case MINIC_INTEGER_RANK_INT:
-    case MINIC_INTEGER_RANK_LONG: *bits = 32U; break;
-    default: return false;
-    }
-    *sign = effective.integer_sign == MINIC_INTEGER_SIGN_SIGNED &&
-            !effective.is_plain_char;
-    return true;
-}
-static bool rv32_canon(FILE *out, const MinicCoreFunction *f,
-                        MinicType t, const char *reg) {
-    unsigned bits;
-    bool is_signed;
-    if (!rv32_scalar(f, t, &bits, &is_signed)) return false;
-    if (bits == 32U) return true;
-    if (bits == 1U)
-        return fprintf(out, "  snez %s, %s\n", reg, reg) >= 0;
-    return fprintf(out, "  slli %s, %s, %u\n  %s %s, %s, %u\n",
-                   reg, reg, 32U - bits,
-                   is_signed ? "srai" : "srli",
-                   reg, reg, 32U - bits) >= 0;
-}
-static bool rv32_load_mem(FILE *out, const MinicCoreFunction *f,
-                           MinicType t, const char *dst) {
-    unsigned bits;
-    bool is_signed;
-    const char *op;
-    if (!rv32_scalar(f, t, &bits, &is_signed)) return false;
-    op = bits == 8U ? (is_signed ? "lb" : "lbu") :
-         bits == 16U ? (is_signed ? "lh" : "lhu") :
-         bits == 1U ? "lbu" : "lw";
-    return fprintf(out, "  %s %s, 0(t0)\n", op, dst) >= 0;
-}
-static bool rv32_store_mem(FILE *out, const MinicCoreFunction *f,
-                            MinicType t) {
-    unsigned bits;
-    bool is_signed;
-    if (!rv32_scalar(f, t, &bits, &is_signed)) return false;
-    return fprintf(out, "  %s t1, 0(t0)\n",
-                   bits <= 8U ? "sb" : bits <= 16U ? "sh" : "sw") >= 0;
-}
-static bool rv32_incoming_word(FILE *out, const Rv32Frame *fr,
-                               size_t word, const char *reg) {
-    if (word < 8U)
-        return fprintf(out, "  mv %s, a%zu\n", reg, word) >= 0;
-    return word - 8U <= (SIZE_MAX - fr->frame_size) / 4U &&
-           rv32_stack(out, "lw", reg,
-                      fr->frame_size + (word - 8U) * 4U);
-}
-static bool rv32_outgoing_word(FILE *out, const Rv32Frame *fr,
-                               size_t word, const char *reg) {
-    if (word < 8U)
-        return fprintf(out, "  mv a%zu, %s\n", word, reg) >= 0;
-    return word - 8U < fr->outgoing_size / 4U &&
-           rv32_stack(out, "sw", reg, (word - 8U) * 4U);
-}
-static bool rv32_load2(FILE *out, const Rv32Frame *fr,
-                        const MinicCoreInstruction *ins) {
-    return rv32_slot(out, fr, ins->value.binary.left, "t0", true) &&
-           rv32_slot(out, fr, ins->value.binary.right, "t1", true);
-}
-/* One target ABI algorithm serves both stack allocation and call emission.
- * Stack output is staged before touching a0-a7. */
-static bool rv32_emit_scalar_call_arguments(
-    FILE *out, const MinicCoreFunction *f, const Rv32Frame *fr,
-    const MinicCoreCallView *view) {
-    size_t pass, i;
-    if (view == NULL) return false;
-    for (pass = 0U; pass < 2U; ++pass) {
-        MinicRiscv32AbiCursor cursor = {0U, 0U, false};
-        for (i = 0U; i < view->argument_count; ++i) {
-            const MinicCoreCallArgument *arg = &view->arguments[i];
-            MinicRiscv32AbiPlacement loc;
-            const char *reg[2] = {"t0", "t1"};
-            unsigned words;
-            size_t word;
-            if (arg->kind != MINIC_CORE_CALL_ARGUMENT_VALUE ||
-                arg->value.value_id >= f->value_count ||
-                !rv32_scalar_storage_words(
-                    f, f->values[arg->value.value_id].type, &words) ||
-                !minic_riscv32_abi_place(
-                    &cursor, words,
-                    view->is_variadic && i >= view->parameter_count, &loc))
-                return false;
-            if ((pass == 0U && loc.stack_count == 0U) ||
-                (pass == 1U && loc.register_count == 0U)) continue;
-            if (words == 2U) {
-                if (!rv32_pair_slot(out, fr, arg->value.value_id,
-                                    reg[0], reg[1], true)) return false;
-            } else if (!rv32_slot(out, fr, arg->value.value_id,
-                                   reg[0], true)) return false;
-            for (word = 0U; word < words; ++word) {
-                if (word < loc.register_count) {
-                    if (pass == 1U &&
-                        !rv32_outgoing_word(out, fr,
-                                           loc.register_begin + word,
-                                           reg[word])) return false;
-                } else if (pass == 0U &&
-                           (loc.stack_begin + word - loc.register_count >=
-                                fr->outgoing_size / 4U ||
-                            !rv32_stack(out, "sw", reg[word],
-                                (loc.stack_begin + word - loc.register_count)
-                                * 4U))) return false;
-            }
-        }
-    }
-    return true;
-}
 static bool rv32_emit_ins(FILE *out, const MinicC0Program *program,
                           const MinicTargetInfo *target,
                           const MinicCoreFunction *f,
@@ -611,38 +329,9 @@ static bool rv32_emit_ins(FILE *out, const MinicC0Program *program,
                rv32_slot(out, fr, ins->result, "t0", false);
     case MINIC_CORE_INSTRUCTION_COMPILER_BARRIER:
         return true;
-    case MINIC_CORE_INSTRUCTION_CALL: {
-        MinicCoreCallView view;
-        if (ins->value.call.result_object != MINIC_CORE_OBJECT_INVALID ||
-            !minic_core_call_view_build(f, ins, &view) ||
-            view.callee == NULL || view.callee->name == NULL ||
-            !rv32_emit_scalar_call_arguments(out, f, fr, &view))
-            return false;
-        return fprintf(out, "  call %s\n", view.callee->name) >= 0 &&
-               (ins->result == MINIC_CORE_VALUE_INVALID ||
-                (rv32_scalar_storage_words(f, ins->type, &bits) &&
-                 bits == 2U ?
-                 rv32_pair_slot(out, fr, ins->result,
-                                "a0", "a1", false) :
-                 (rv32_canon(out, f, ins->type, "a0") &&
-                  rv32_slot(out, fr, ins->result, "a0", false))));
-    }
-    case MINIC_CORE_INSTRUCTION_INDIRECT_CALL: {
-        MinicCoreCallView view;
-        if (!minic_core_call_view_build(f, ins, &view) ||
-            view.signature == NULL ||
-            !rv32_emit_scalar_call_arguments(out, f, fr, &view) ||
-            !rv32_slot(out, fr, view.function_pointer, "t0", true) ||
-            fprintf(out, "  jalr ra, 0(t0)\n") < 0)
-            return false;
-        return ins->result == MINIC_CORE_VALUE_INVALID ||
-               (rv32_scalar_storage_words(f, ins->type, &bits) &&
-                bits == 2U ?
-                rv32_pair_slot(out, fr, ins->result,
-                               "a0", "a1", false) :
-                (rv32_canon(out, f, ins->type, "a0") &&
-                 rv32_slot(out, fr, ins->result, "a0", false)));
-    }
+    case MINIC_CORE_INSTRUCTION_CALL:
+    case MINIC_CORE_INSTRUCTION_INDIRECT_CALL:
+        return rv32_emit_call(out, f, fr, ins);
     default:
         return false;
     }

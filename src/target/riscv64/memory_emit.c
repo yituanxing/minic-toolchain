@@ -1,5 +1,5 @@
 #include "target/riscv64/memory_emit.h"
-#include "target/riscv64/record_copy_bytes.h"
+#include "target/riscv/record_copy_bytes.h"
 #include "target/riscv64/frame_access.h"
 #include "target/riscv64/codegen_internal.h"
 #include "target/riscv64/legalize.h"

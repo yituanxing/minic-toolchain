@@ -164,9 +164,12 @@ MINIC_SOURCES := \
 	src/target/common/lp64_scalar.c \
 	src/target/common/lp64_frame.c \
 	src/target/riscv64/isa.c \
-	src/target/riscv64/rv32_emit.c \
-	src/target/riscv64/rv32_abi_cursor.c \
-	src/target/riscv64/rv32_global_emit.c \
+	src/target/riscv32/rv32_emit.c \
+	src/target/riscv32/rv32_frame.c \
+	src/target/riscv32/rv32_scalar.c \
+	src/target/riscv32/rv32_call.c \
+	src/target/riscv32/rv32_abi_cursor.c \
+	src/target/riscv32/rv32_global_emit.c \
 	src/target/riscv64/abi.c \
 	src/target/riscv64/layout.c \
 	src/target/riscv64/codegen_support.c \
@@ -174,7 +177,7 @@ MINIC_SOURCES := \
 	src/target/riscv64/core_admission.c \
 	src/target/riscv64/function_abi_plan.c \
 	src/target/riscv64/memory_emit.c \
-	src/target/riscv64/record_copy_bytes.c \
+	src/target/riscv/record_copy_bytes.c \
 	src/target/riscv64/inline_asm_emit.c \
 	src/target/riscv64/call_emit.c \
 	src/target/riscv64/scalar_emit.c \

@@ -1,4 +1,4 @@
-#include "target/riscv64/record_copy_bytes.h"
+#include "target/riscv/record_copy_bytes.h"
 /* Byte-exact forward copy. RECORD_LOAD and RECORD_COPY previously contained
  * independent copies of this 2048-byte loop with reversed register roles. */
 bool minic_riscv_emit_record_copy_bytes(FILE *file,

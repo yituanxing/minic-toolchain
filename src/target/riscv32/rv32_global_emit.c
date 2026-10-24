@@ -1,4 +1,4 @@
-#include "target/riscv64/rv32_global_emit.h"
+#include "target/riscv32/rv32_global_emit.h"
 #include "target/data_layout.h"
 #include "target/common/global_emit.h"
 #include <inttypes.h>

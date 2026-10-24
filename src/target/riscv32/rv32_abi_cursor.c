@@ -1,4 +1,4 @@
-#include "target/riscv64/rv32_abi_cursor.h"
+#include "target/riscv32/rv32_abi_cursor.h"
 #include "target/riscv/gpr_abi_cursor.h"
 
 /* ILP32 policy: every unnamed 2-XLEN scalar requires an even pair.
