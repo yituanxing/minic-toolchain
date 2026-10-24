@@ -80,3 +80,37 @@ bool rv32_emit_call(FILE *out, const MinicCoreFunction *f,
     return rv32_canon(out, f, ins->type, "a0") &&
            rv32_slot(out, fr, ins->result, "a0", false);
 }
+
+/* Named ILP32 parameters use GPRs then XLEN-sized incoming stack words.
+ * Variadic definitions remain fail-closed until the ILP32 va_list ABI
+ * receiver has independent GCC differential coverage. */
+bool rv32_emit_parameter(FILE *out, const MinicCoreFunction *f,
+                         const Rv32Frame *fr,
+                         const MinicCoreInstruction *ins) {
+    size_t idx;
+    if (out == NULL || f == NULL || fr == NULL || ins == NULL ||
+        ins->kind != MINIC_CORE_INSTRUCTION_PARAMETER) return false;
+    switch (ins->kind) {
+    case MINIC_CORE_INSTRUCTION_PARAMETER: {
+        size_t word = 0U;
+        unsigned words;
+        idx = ins->value.parameter_index;
+        if (idx >= f->parameter_count ||
+            !rv32_scalar_storage_words(f, ins->type, &words)) return false;
+        for (size_t j = 0U; j < idx; ++j) {
+            unsigned prior;
+            if (!rv32_scalar_storage_words(f, f->parameter_types[j], &prior))
+                return false;
+            word += prior;
+        }
+        if (!rv32_incoming_word(out, fr, word, "t0")) return false;
+        if (words == 2U)
+            return rv32_incoming_word(out, fr, word + 1U, "t1") &&
+                   rv32_pair_slot(out, fr, ins->result, "t0", "t1", false);
+        return rv32_canon(out, f, ins->type, "t0") &&
+               rv32_slot(out, fr, ins->result, "t0", false);
+    }
+    default:
+        return false;
+    }
+}

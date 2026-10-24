@@ -25,6 +25,7 @@ on:
       - "src/target/riscv64/abi.c"
       - "src/target/common/core_call_view.c"
       - "tests/compiler/c0/check-riscv-gpr-abi.c"
+      - "tests/compiler/c0/check-riscv-machine-selection.c"
       - "src/target/riscv64/runtime_libcall.c"
       - "src/target/riscv64/scalar_emit.c"
       - "src/target/riscv64/isa.c"
@@ -136,6 +137,10 @@ jobs:
             tests/compiler/c0/check-riscv-gpr-abi.c \
             -o build/runtime-ci/tests/target/riscv-gpr-abi
           build/runtime-ci/tests/target/riscv-gpr-abi
+          cc -std=c11 -Wall -Wextra -Werror -pedantic -Iinclude -Isrc \
+            tests/compiler/c0/check-riscv-machine-selection.c \
+            -o build/runtime-ci/tests/target/riscv-machine-selection
+          build/runtime-ci/tests/target/riscv-machine-selection
           MINIC_CC="$GITHUB_WORKSPACE/build/runtime-ci/bin/minic-cc" \
             sh tests/compiler/c0/probe-rv32-target-gate.sh
           MINIAS="$GITHUB_WORKSPACE/build/runtime-ci/bin/minic-as" \

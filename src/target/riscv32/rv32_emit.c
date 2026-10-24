@@ -33,300 +33,57 @@ static bool rv32_emit_ins(FILE *out, const MinicC0Program *program,
                           const MinicCoreFunction *f,
                           const Rv32Frame *fr,
                           const MinicCoreInstruction *ins) {
-    const char *op = NULL;
-    MinicType lhs;
-    unsigned bits;
-    bool is_signed;
-    size_t idx;
+    if (out == NULL || program == NULL || target == NULL ||
+        f == NULL || fr == NULL || ins == NULL) return false;
+    /* Core opcode ownership follows the machine-operation family, not
+     * a second target-specific copy of the language semantics. */
     switch (ins->kind) {
-    case MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT: {
-        unsigned words;
-        if (!rv32_scalar_storage_words(f, ins->type, &words))
-            return false;
-        if (words == 2U) {
-            uint64_t raw = (uint64_t)ins->value.integer_value;
-            return fprintf(out, "  li t0, %" PRIu32 "\n  li t1, %" PRIu32 "\n",
-                           (uint32_t)raw, (uint32_t)(raw >> 32U)) >= 0 &&
-                   rv32_pair_slot(out, fr, ins->result, "t0", "t1", false);
-        }
-        return rv32_scalar(f, ins->type, &bits, &is_signed) &&
-               fprintf(out, "  li t0, %" PRId64 "\n",
-                       ins->value.integer_value) >= 0 &&
-               rv32_canon(out, f, ins->type, "t0") &&
-               rv32_slot(out, fr, ins->result, "t0", false);
-    }
-    case MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT: {
-        uint64_t raw = ins->value.floating_bits;
-        if (minic_type_is_double(ins->type)) {
-            return fprintf(out, "  li t0, %" PRIu32 "\n  li t1, %" PRIu32 "\n",
-                           (uint32_t)raw, (uint32_t)(raw >> 32U)) >= 0 &&
-                   rv32_pair_slot(out, fr, ins->result, "t0", "t1", false);
-        }
-        return minic_type_is_float(ins->type) &&
-               fprintf(out, "  li t0, %" PRIu32 "\n", (uint32_t)raw) >= 0 &&
-               rv32_slot(out, fr, ins->result, "t0", false);
-    }
-    case MINIC_CORE_INSTRUCTION_PARAMETER: {
-        size_t word = 0U;
-        unsigned words;
-        idx = ins->value.parameter_index;
-        if (idx >= f->parameter_count ||
-            !rv32_scalar_storage_words(f, ins->type, &words)) return false;
-        for (size_t j = 0U; j < idx; ++j) {
-            unsigned prior;
-            if (!rv32_scalar_storage_words(f, f->parameter_types[j], &prior))
-                return false;
-            word += prior;
-        }
-        if (!rv32_incoming_word(out, fr, word, "t0")) return false;
-        if (words == 2U)
-            return rv32_incoming_word(out, fr, word + 1U, "t1") &&
-                   rv32_pair_slot(out, fr, ins->result, "t0", "t1", false);
-        return rv32_canon(out, f, ins->type, "t0") &&
-               rv32_slot(out, fr, ins->result, "t0", false);
-    }
-    /* Core owns widths; both XLEN variants share base-I opcode names. */
+    case MINIC_CORE_INSTRUCTION_PARAMETER:
+        return rv32_emit_parameter(out, f, fr, ins);
+    case MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT:
     case MINIC_CORE_INSTRUCTION_INTEGER_ADD:
     case MINIC_CORE_INSTRUCTION_INTEGER_SUBTRACT:
+    case MINIC_CORE_INSTRUCTION_INTEGER_MULTIPLY:
+    case MINIC_CORE_INSTRUCTION_INTEGER_DIVIDE:
+    case MINIC_CORE_INSTRUCTION_INTEGER_REMAINDER:
     case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND:
     case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_OR:
     case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_XOR:
     case MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_LEFT:
-        op = minic_riscv_scalar_binary_opcode(ins->kind, false);
-        break;
     case MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_RIGHT:
     case MINIC_CORE_INSTRUCTION_INTEGER_LESS:
     case MINIC_CORE_INSTRUCTION_POINTER_LESS:
-        if (ins->value.binary.left >= f->value_count) return false;
-        lhs = f->values[ins->value.binary.left].type;
-        if (!rv32_scalar(f, lhs, &bits, &is_signed)) return false;
-        op = minic_riscv_scalar_binary_opcode(
-            ins->kind, ins->kind == MINIC_CORE_INSTRUCTION_POINTER_LESS ||
-                           !is_signed);
-        break;
     case MINIC_CORE_INSTRUCTION_SCALAR_EQUAL:
-        return rv32_load2(out, fr, ins) &&
-               fprintf(out, "  xor t0, t0, t1\n  seqz t0, t0\n") >= 0 &&
-               rv32_slot(out, fr, ins->result, "t0", false);
-    case MINIC_CORE_INSTRUCTION_INTEGER_MULTIPLY:
-    case MINIC_CORE_INSTRUCTION_INTEGER_DIVIDE:
-    case MINIC_CORE_INSTRUCTION_INTEGER_REMAINDER: {
-        /* Compiler target lowering only chooses an ABI-compatible libcall.
-         * Actual arithmetic lives in the pinned GNU libgcc 14.2.0 sources,
-         * not a second implementation in MiniC's instruction generator. */
-        const char *helper;
-        if (!rv32_scalar(f, ins->type, &bits, &is_signed))
-            return false;
-        helper = ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_MULTIPLY ?
-                 "__mulsi3" :
-                 ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_DIVIDE ?
-                 (is_signed ? "__divsi3" : "__udivsi3") :
-                 (is_signed ? "__modsi3" : "__umodsi3");
-        return rv32_load2(out, fr, ins) &&
-               fprintf(out, "  mv a0, t0\n  mv a1, t1\n  call %s\n",
-                       helper) >= 0 &&
-               rv32_canon(out, f, ins->type, "a0") &&
-               rv32_slot(out, fr, ins->result, "a0", false);
-    }
     case MINIC_CORE_INSTRUCTION_INTEGER_CONVERSION:
-    case MINIC_CORE_INSTRUCTION_SCALAR_BITCAST: {
-        const MinicCoreValueId id = ins->value.operand;
-        unsigned from_words, to_words;
-        if (id >= f->value_count ||
-            !rv32_scalar_storage_words(f, f->values[id].type, &from_words) ||
-            !rv32_scalar_storage_words(f, ins->type, &to_words))
-            return false;
-        if (from_words == 2U) {
-            if (!rv32_pair_slot(out, fr, id, "t0", "t1", true)) return false;
-        } else if (!rv32_slot(out, fr, id, "t0", true)) return false;
-        if (to_words == 2U) {
-            if (from_words == 1U) {
-                if (ins->kind == MINIC_CORE_INSTRUCTION_SCALAR_BITCAST ||
-                    !rv32_scalar(f, f->values[id].type,
-                                 &bits, &is_signed) ||
-                    fprintf(out, is_signed ? "  srai t1, t0, 31\n" :
-                                          "  li t1, 0\n") < 0)
-                    return false;
-            }
-            return rv32_pair_slot(out, fr, ins->result,
-                                  "t0", "t1", false);
-        }
-        return rv32_canon(out, f, ins->type, "t0") &&
-               rv32_slot(out, fr, ins->result, "t0", false);
-    }
-    /* All IEEE-754 arithmetic and comparisons are supplied by pinned LLVM
-     * compiler-rt 19.1.7, not reimplemented as target machine instructions.
-     * ILP32 soft-float ABI transfers each binary64 through a0/a1 and a2/a3. */
+    case MINIC_CORE_INSTRUCTION_SCALAR_BITCAST:
+    case MINIC_CORE_INSTRUCTION_INTEGER_NEGATE:
+    case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_NOT:
+    case MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO:
+        return rv32_emit_integer_instruction(out, f, fr, ins);
+    case MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT:
     case MINIC_CORE_INSTRUCTION_DOUBLE_ADD:
     case MINIC_CORE_INSTRUCTION_DOUBLE_SUBTRACT:
     case MINIC_CORE_INSTRUCTION_DOUBLE_MULTIPLY:
     case MINIC_CORE_INSTRUCTION_DOUBLE_DIVIDE:
     case MINIC_CORE_INSTRUCTION_DOUBLE_EQUAL:
     case MINIC_CORE_INSTRUCTION_DOUBLE_LESS:
-    case MINIC_CORE_INSTRUCTION_DOUBLE_LESS_EQUAL: {
-        const char *helper = minic_riscv_softfloat_arithmetic_symbol(ins->kind);
-        /* Comparisons use their own psABI predicate convention. */
-        if (helper == NULL)
-            helper = ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_EQUAL ?
-                     "__eqdf2" : "__ledf2";
-        if (ins->value.binary.left >= f->value_count ||
-            ins->value.binary.right >= f->value_count ||
-            !rv32_pair_slot(out, fr, ins->value.binary.left,
-                            "a0", "a1", true) ||
-            !rv32_pair_slot(out, fr, ins->value.binary.right,
-                            "a2", "a3", true) ||
-            fprintf(out, "  call %s\n", helper) < 0)
-            return false;
-        if (ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_EQUAL ||
-            ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_LESS ||
-            ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_LESS_EQUAL) {
-            /* __ledf2: -1 (<), 0 (==), 1 (>) or 1 (NaN).
-             * The predicates below therefore reject unordered comparisons. */
-            const char *test =
-                ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_EQUAL ?
-                "  seqz a0, a0\n" :
-                ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_LESS ?
-                "  slt a0, a0, zero\n" : "  slti a0, a0, 1\n";
-            return fprintf(out, "%s", test) >= 0 &&
-                   rv32_slot(out, fr, ins->result, "a0", false);
-        }
-        return rv32_pair_slot(out, fr, ins->result, "a0", "a1", false);
-    }
+    case MINIC_CORE_INSTRUCTION_DOUBLE_LESS_EQUAL:
     case MINIC_CORE_INSTRUCTION_DOUBLE_NEGATE:
-        return rv32_pair_slot(out, fr, ins->value.operand,
-                              "t0", "t1", true) &&
-               fprintf(out, "  li t2, 0x80000000\n  xor t1, t1, t2\n") >= 0 &&
-               rv32_pair_slot(out, fr, ins->result, "t0", "t1", false);
-    case MINIC_CORE_INSTRUCTION_INTEGER_TO_DOUBLE: {
-        MinicCoreValueId id = ins->value.operand;
-        if (id >= f->value_count ||
-            !rv32_scalar(f, f->values[id].type, &bits, &is_signed) ||
-            !rv32_slot(out, fr, id, "a0", true) ||
-            fprintf(out, "  call %s\n",
-                    is_signed ? "__floatsidf" : "__floatunsidf") < 0)
-            return false;
-        return rv32_pair_slot(out, fr, ins->result, "a0", "a1", false);
-    }
+    case MINIC_CORE_INSTRUCTION_INTEGER_TO_DOUBLE:
     case MINIC_CORE_INSTRUCTION_DOUBLE_TO_INTEGER:
-        if (!rv32_scalar(f, ins->type, &bits, &is_signed) ||
-            !rv32_pair_slot(out, fr, ins->value.operand,
-                            "a0", "a1", true) ||
-            fprintf(out, "  call %s\n",
-                    is_signed ? "__fixdfsi" : "__fixunsdfsi") < 0)
-            return false;
-        return rv32_canon(out, f, ins->type, "a0") &&
-               rv32_slot(out, fr, ins->result, "a0", false);
     case MINIC_CORE_INSTRUCTION_FLOAT_TO_DOUBLE:
-        return rv32_slot(out, fr, ins->value.operand, "a0", true) &&
-               fprintf(out, "  call __extendsfdf2\n") >= 0 &&
-               rv32_pair_slot(out, fr, ins->result, "a0", "a1", false);
     case MINIC_CORE_INSTRUCTION_DOUBLE_TO_FLOAT:
-        return rv32_pair_slot(out, fr, ins->value.operand,
-                              "a0", "a1", true) &&
-               fprintf(out, "  call __truncdfsf2\n") >= 0 &&
-               rv32_slot(out, fr, ins->result, "a0", false);
-    case MINIC_CORE_INSTRUCTION_INTEGER_NEGATE:
-    case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_NOT:
-    case MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO:
-        return rv32_slot(out, fr, ins->value.operand, "t0", true) &&
-               fprintf(out, ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_NEGATE ?
-                       "  neg t0, t0\n" :
-                       ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_NOT ?
-                       "  not t0, t0\n" : "  seqz t0, t0\n") >= 0 &&
-               rv32_canon(out, f, ins->type, "t0") &&
-               rv32_slot(out, fr, ins->result, "t0", false);
+        return rv32_emit_fp_instruction(out, f, fr, ins);
     case MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS:
-        return (size_t)ins->value.object_id < fr->object_count &&
-               rv32_address(out, "t0",
-                            fr->object_offsets[ins->value.object_id]) &&
-               rv32_slot(out, fr, ins->result, "t0", false);
     case MINIC_CORE_INSTRUCTION_FIELD_ADDRESS:
-        return rv32_slot(out, fr, ins->value.field_address.base, "t0", true) &&
-               fprintf(out, "  li t1, %zu\n  add t0, t0, t1\n",
-                       ins->value.field_address.byte_offset) >= 0 &&
-               rv32_slot(out, fr, ins->result, "t0", false);
-    case MINIC_CORE_INSTRUCTION_POINTER_OFFSET: {
-        size_t stride = ins->value.pointer_offset.element_size;
-        if (stride == 0U || stride > UINT32_MAX) return false;
-        if (!rv32_slot(out, fr, ins->value.pointer_offset.index, "t1", true))
-            return false;
-        if (stride != 1U) {
-            /* Keep negative indices and unsigned large indices correct
-             * modulo 2^XLEN; libgcc multiplies raw 32-bit bit patterns. */
-            if (fprintf(out,
-                        "  mv a0, t1\n  li a1, %zu\n  call __mulsi3\n"
-                        "  mv t1, a0\n", stride) < 0) return false;
-        }
-        /* The libcall is allowed to clobber all caller-saved registers,
-         * so reload the base only after multiplying the index. */
-        return rv32_slot(out, fr, ins->value.pointer_offset.base, "t0", true) &&
-               fprintf(out, "  %s t0, t0, t1\n",
-                       ins->value.pointer_offset.subtract ? "sub" : "add") >= 0 &&
-               rv32_slot(out, fr, ins->result, "t0", false);
-    }
+    case MINIC_CORE_INSTRUCTION_POINTER_OFFSET:
     case MINIC_CORE_INSTRUCTION_LOAD:
-        if (rv32_scalar_storage_words(f, ins->type, &bits) && bits == 2U)
-            return rv32_slot(out, fr, ins->value.load.address, "t0", true) &&
-                   fprintf(out, "  lw t1, 0(t0)\n  lw t2, 4(t0)\n") >= 0 &&
-                   rv32_pair_slot(out, fr, ins->result,
-                                  "t1", "t2", false);
-        return rv32_slot(out, fr, ins->value.load.address, "t0", true) &&
-               rv32_load_mem(out, f, ins->type, "t1") &&
-               rv32_slot(out, fr, ins->result, "t1", false);
     case MINIC_CORE_INSTRUCTION_STORE:
-        if (ins->value.store.stored_value < f->value_count &&
-            rv32_scalar_storage_words(
-                f, f->values[ins->value.store.stored_value].type, &bits) &&
-            bits == 2U)
-            return rv32_slot(out, fr, ins->value.store.address, "t0", true) &&
-                   rv32_pair_slot(out, fr, ins->value.store.stored_value,
-                                  "t1", "t2", true) &&
-                   fprintf(out, "  sw t1, 0(t0)\n  sw t2, 4(t0)\n") >= 0;
-        return ins->value.store.stored_value < f->value_count &&
-               rv32_slot(out, fr, ins->value.store.address, "t0", true) &&
-               rv32_slot(out, fr, ins->value.store.stored_value, "t1", true) &&
-               rv32_store_mem(out, f, f->values[ins->value.store.stored_value].type);
-    case MINIC_CORE_INSTRUCTION_RECORD_COPY: {
-        size_t copy_size, alignment;
-        if (!minic_type_is_record(ins->type) ||
-            !minic_data_layout_type(target->data_layout, program, ins->type,
-                                    &copy_size, &alignment) ||
-            copy_size == 0U || copy_size > UINT32_MAX ||
-            !rv32_slot(out, fr, ins->value.record_copy.destination_address,
-                       "t0", true) ||
-            !rv32_slot(out, fr, ins->value.record_copy.source_address,
-                       "t1", true))
-            return false;
-        (void)alignment;
-        return minic_riscv_emit_record_copy_bytes(out, "t0", "t1", copy_size);
-    }
-    case MINIC_CORE_INSTRUCTION_RECORD_LOAD: {
-        const MinicCoreObjectId id =
-            ins->value.record_load.destination_object;
-        size_t copy_size, alignment;
-        if (id >= f->object_count ||
-            !minic_type_is_record(f->objects[id].type) ||
-            !minic_data_layout_type(target->data_layout, program,
-                                    f->objects[id].type,
-                                    &copy_size, &alignment) ||
-            copy_size == 0U || copy_size > UINT32_MAX ||
-            !rv32_slot(out, fr, ins->value.record_load.source_address,
-                       "t0", true) ||
-            !rv32_address(out, "t1", fr->object_offsets[id]))
-            return false;
-        (void)alignment;
-        return minic_riscv_emit_record_copy_bytes(out, "t1", "t0", copy_size);
-    }
+    case MINIC_CORE_INSTRUCTION_RECORD_COPY:
+    case MINIC_CORE_INSTRUCTION_RECORD_LOAD:
     case MINIC_CORE_INSTRUCTION_GLOBAL_ADDRESS:
-        return ins->value.global_id < f->global_count &&
-               fprintf(out, "  lla t0, %s\n",
-                       f->globals[ins->value.global_id].name) >= 0 &&
-               rv32_slot(out, fr, ins->result, "t0", false);
     case MINIC_CORE_INSTRUCTION_FUNCTION_ADDRESS:
-        return ins->value.function_symbol_id < f->function_symbol_count &&
-               fprintf(out, "  lla t0, %s\n",
-                       f->function_symbols[ins->value.function_symbol_id].name) >= 0 &&
-               rv32_slot(out, fr, ins->result, "t0", false);
+        return rv32_emit_memory_instruction(out, program, target, f, fr, ins);
     case MINIC_CORE_INSTRUCTION_COMPILER_BARRIER:
         return true;
     case MINIC_CORE_INSTRUCTION_CALL:
@@ -335,10 +92,6 @@ static bool rv32_emit_ins(FILE *out, const MinicC0Program *program,
     default:
         return false;
     }
-    return op != NULL && rv32_load2(out, fr, ins) &&
-           fprintf(out, "  %s t0, t0, t1\n", op) >= 0 &&
-           rv32_canon(out, f, ins->type, "t0") &&
-           rv32_slot(out, fr, ins->result, "t0", false);
 }
 static bool rv32_term(FILE *out, const MinicCoreFunction *f,
                        const Rv32Frame *fr,

@@ -94,6 +94,9 @@ fi
 for file in src/target/riscv32/rv32_emit.c \
             src/target/riscv32/rv32_frame.c \
             src/target/riscv32/rv32_scalar.c \
+            src/target/riscv32/rv32_integer_emit.c \
+            src/target/riscv32/rv32_fp_emit.c \
+            src/target/riscv32/rv32_memory_emit.c \
             src/target/riscv32/rv32_call.c \
             src/target/riscv32/rv32_internal.h \
             src/target/riscv/gpr_abi_cursor.h \
@@ -109,5 +112,15 @@ lacks src/target/riscv32/rv32_emit.c 'static bool rv32_emit_scalar_call_argument
 lacks src/target/riscv32/rv32_emit.c 'rv32_call_info('
 has src/target/riscv32/rv32_frame.c 'minic_riscv32_abi_place('
 has src/target/riscv32/rv32_scalar.c 'rv32_scalar_storage_words('
+has src/target/riscv32/rv32_integer_emit.c 'minic_riscv_integer_arithmetic_symbol('
+has src/target/riscv32/rv32_fp_emit.c 'minic_riscv_softfloat_arithmetic_symbol('
+has src/target/riscv32/rv32_memory_emit.c 'minic_riscv_emit_record_copy_bytes('
+has src/target/riscv32/rv32_call.c 'rv32_emit_parameter('
+has src/target/riscv32/rv32_emit.c 'rv32_emit_integer_instruction('
+has src/target/riscv32/rv32_emit.c 'rv32_emit_fp_instruction('
+has src/target/riscv32/rv32_emit.c 'rv32_emit_memory_instruction('
+lacks src/target/riscv32/rv32_emit.c 'call __mulsi3'
+lacks src/target/riscv32/rv32_emit.c 'call __adddf3'
+lacks src/target/riscv32/rv32_emit.c 'minic_riscv_emit_record_copy_bytes('
 
 printf 'MINIC_BACKEND_BOUNDARY_CHECK=PASS\n'

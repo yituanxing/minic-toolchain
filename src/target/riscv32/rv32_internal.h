@@ -42,7 +42,18 @@ bool rv32_load_mem(FILE *, const MinicCoreFunction *, MinicType, const char *);
 bool rv32_store_mem(FILE *, const MinicCoreFunction *, MinicType);
 bool rv32_load2(FILE *, const Rv32Frame *, const MinicCoreInstruction *);
 
-/* Direct/indirect call argument marshalling and return: rv32_call.c */
+/* Typed machine family lowering; all transport stays behind Target. */
+bool rv32_emit_integer_instruction(FILE *, const MinicCoreFunction *,
+                                   const Rv32Frame *, const MinicCoreInstruction *);
+bool rv32_emit_fp_instruction(FILE *, const MinicCoreFunction *,
+                              const Rv32Frame *, const MinicCoreInstruction *);
+bool rv32_emit_memory_instruction(FILE *, const MinicC0Program *,
+                                  const MinicTargetInfo *, const MinicCoreFunction *,
+                                  const Rv32Frame *, const MinicCoreInstruction *);
+
+/* Parameters/direct/indirect ABI lowering: rv32_call.c */
+bool rv32_emit_parameter(FILE *, const MinicCoreFunction *,
+                         const Rv32Frame *, const MinicCoreInstruction *);
 bool rv32_emit_call(FILE *, const MinicCoreFunction *,
                     const Rv32Frame *, const MinicCoreInstruction *);
 #endif

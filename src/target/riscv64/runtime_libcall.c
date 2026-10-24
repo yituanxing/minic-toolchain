@@ -20,14 +20,24 @@ unsigned minic_riscv64_log2_power_of_two(size_t value) {
     return shift;
 }
 static const char *libcall_symbol(MinicRiscv64ArithmeticLibcall operation) {
+    MinicCoreInstructionKind kind;
+    bool is_unsigned = false;
     switch (operation) {
-    case MINIC_RISCV64_LIBCALL_MUL: return "__muldi3";
-    case MINIC_RISCV64_LIBCALL_SDIV: return "__divdi3";
-    case MINIC_RISCV64_LIBCALL_UDIV: return "__udivdi3";
-    case MINIC_RISCV64_LIBCALL_SMOD: return "__moddi3";
-    case MINIC_RISCV64_LIBCALL_UMOD: return "__umoddi3";
+    case MINIC_RISCV64_LIBCALL_MUL:
+        kind = MINIC_CORE_INSTRUCTION_INTEGER_MULTIPLY; break;
+    case MINIC_RISCV64_LIBCALL_SDIV:
+        kind = MINIC_CORE_INSTRUCTION_INTEGER_DIVIDE; break;
+    case MINIC_RISCV64_LIBCALL_UDIV:
+        kind = MINIC_CORE_INSTRUCTION_INTEGER_DIVIDE;
+        is_unsigned = true; break;
+    case MINIC_RISCV64_LIBCALL_SMOD:
+        kind = MINIC_CORE_INSTRUCTION_INTEGER_REMAINDER; break;
+    case MINIC_RISCV64_LIBCALL_UMOD:
+        kind = MINIC_CORE_INSTRUCTION_INTEGER_REMAINDER;
+        is_unsigned = true; break;
     default: return NULL;
     }
+    return minic_riscv_integer_arithmetic_symbol(kind, is_unsigned, 64U);
 }
 static const char *native_opcode(MinicRiscv64ArithmeticLibcall operation) {
     switch (operation) {

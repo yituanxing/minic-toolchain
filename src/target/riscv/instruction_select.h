@@ -44,4 +44,22 @@ static inline const char *minic_riscv_softfloat_arithmetic_symbol(
     default: return NULL;
     }
 }
+/* Symbol identity for GCC libgcc soft integer arithmetic, keyed by
+ * ISA register width. The consumer owns M-extension eligibility,
+ * operand canonicalization and psABI register/stack transport. */
+static inline const char *minic_riscv_integer_arithmetic_symbol(
+    MinicCoreInstructionKind kind, bool is_unsigned, unsigned xlen) {
+    if (xlen != 32U && xlen != 64U) return NULL;
+    switch (kind) {
+    case MINIC_CORE_INSTRUCTION_INTEGER_MULTIPLY:
+        return xlen == 32U ? "__mulsi3" : "__muldi3";
+    case MINIC_CORE_INSTRUCTION_INTEGER_DIVIDE:
+        if (is_unsigned) return xlen == 32U ? "__udivsi3" : "__udivdi3";
+        return xlen == 32U ? "__divsi3" : "__divdi3";
+    case MINIC_CORE_INSTRUCTION_INTEGER_REMAINDER:
+        if (is_unsigned) return xlen == 32U ? "__umodsi3" : "__umoddi3";
+        return xlen == 32U ? "__modsi3" : "__moddi3";
+    default: return NULL;
+    }
+}
 #endif

@@ -165,6 +165,9 @@ MINIC_SOURCES := \
 	src/target/common/lp64_frame.c \
 	src/target/riscv64/isa.c \
 	src/target/riscv32/rv32_emit.c \
+	src/target/riscv32/rv32_integer_emit.c \
+	src/target/riscv32/rv32_fp_emit.c \
+	src/target/riscv32/rv32_memory_emit.c \
 	src/target/riscv32/rv32_frame.c \
 	src/target/riscv32/rv32_scalar.c \
 	src/target/riscv32/rv32_call.c \
