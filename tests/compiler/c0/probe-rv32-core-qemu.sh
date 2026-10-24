@@ -92,7 +92,6 @@ static struct Callback12 indirect12 = { sum12 };
 int call_indirect12(void) {
     return indirect12.apply(1,2,3,4,5,6,7,8,9,10,11,12);
 }
-/* Same semantic SSA, two target-owned RV32 words; independent GNU C oracle. */
 long long wide_copy(long long value) { return value; }
 long long wide_chain(long long value) { return wide_copy(value); }
 double double_copy(double value) { return value; }
