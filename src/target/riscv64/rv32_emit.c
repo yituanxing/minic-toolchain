@@ -27,6 +27,7 @@ typedef struct Rv32Frame {
     size_t outgoing_size;
     size_t frame_size;
     size_t *object_offsets;
+    size_t *value_offsets;
     size_t object_count;
     size_t value_count;
 } Rv32Frame;
@@ -46,6 +47,28 @@ static bool rv32_align(size_t value, size_t by, size_t *out) {
     return true;
 }
 
+/* A wide ILP32 operand remains ONE semantic Core SSA value. */
+static bool rv32_scalar_storage_words(const MinicCoreFunction *f,
+                                       MinicType ty, unsigned *words) {
+    MinicType effective = ty;
+    if (minic_type_is_double(ty)) { *words = 2U; return true; }
+    if (minic_type_is_float(ty) || minic_type_is_pointer(ty)) {
+        *words = 1U; return true;
+    }
+    if (minic_type_is_enum(ty) &&
+        !minic_core_function_effective_integer_type(f, ty, &effective))
+        return false;
+    if (!minic_type_is_integer(effective)) return false;
+    switch (effective.integer_rank) {
+    case MINIC_INTEGER_RANK_LONG_LONG: *words = 2U; return true;
+    case MINIC_INTEGER_RANK_BOOL:
+    case MINIC_INTEGER_RANK_CHAR:
+    case MINIC_INTEGER_RANK_SHORT:
+    case MINIC_INTEGER_RANK_INT:
+    case MINIC_INTEGER_RANK_LONG: *words = 1U; return true;
+    default: return false;
+    }
+}
 static bool rv32_frame_init(Rv32Frame *frame, const MinicC0Program *program,
                             const MinicCoreFunction *f, const MinicTargetInfo *t) {
     size_t next, i, max_stack_args = 0U;
@@ -69,18 +92,35 @@ static bool rv32_frame_init(Rv32Frame *frame, const MinicC0Program *program,
     }
     if (max_stack_args > (size_t)INT32_MAX / 4U ||
         !rv32_align(max_stack_args * 4U, 16U, &frame->outgoing_size) ||
-        f->value_count > (SIZE_MAX - frame->outgoing_size - 4U) / 4U)
+        f->value_count > (SIZE_MAX - frame->outgoing_size - 4U) / 8U)
         return false;
     frame->object_offsets = NULL;
+    frame->value_offsets = NULL;
     frame->object_count = f->object_count;
     frame->value_count = f->value_count;
+    if (f->value_count != 0U) {
+        frame->value_offsets = calloc(f->value_count, sizeof(size_t));
+        if (frame->value_offsets == NULL) return false;
+    }
     if (f->object_count != 0U) {
         frame->object_offsets = calloc(f->object_count, sizeof(size_t));
         if (frame->object_offsets == NULL) return false;
     }
     /* Slot zero saves ra even in a leaf; a stable ABI-oriented frame makes
      * lowering of calls and arithmetic runtime helpers deterministic. */
-    next = frame->outgoing_size + 4U + f->value_count * 4U;
+    next = frame->outgoing_size + 4U;
+    for (i = 0U; i < f->value_count; ++i) {
+        size_t size, alignment;
+        unsigned words;
+        if (!rv32_scalar_storage_words(f, f->values[i].type, &words) ||
+            !minic_data_layout_type(t->data_layout, program,
+                                    f->values[i].type, &size, &alignment) ||
+            size == 0U || size > 8U ||
+            !rv32_align(next, words == 2U ? 8U : 4U, &next) ||
+            next > SIZE_MAX - words * 4U) return false;
+        frame->value_offsets[i] = next;
+        next += words * 4U;
+    }
     for (i = 0; i < f->object_count; ++i) {
         const MinicCoreObject *obj = &f->objects[i];
         size_t size, align;
@@ -102,7 +142,9 @@ static bool rv32_frame_init(Rv32Frame *frame, const MinicC0Program *program,
 static void rv32_frame_destroy(Rv32Frame *f) {
     if (f != NULL) {
         free(f->object_offsets);
+        free(f->value_offsets);
         f->object_offsets = NULL;
+        f->value_offsets = NULL;
     }
 }
 /* t6 is reserved as the large-displacement scratch register. */
@@ -116,7 +158,17 @@ static bool rv32_slot(FILE *out, const Rv32Frame *f,
                        MinicCoreValueId id, const char *reg, bool load) {
     return id != MINIC_CORE_VALUE_INVALID && (size_t)id < f->value_count &&
            rv32_stack(out, load ? "lw" : "sw", reg,
-                      f->outgoing_size + 4U + (size_t)id * 4U);
+                      f->value_offsets[id]);
+}
+/* Low-word first: RISC-V ELF32 and the little-endian ILP32 psABI. */
+static bool rv32_pair_slot(FILE *out, const Rv32Frame *f,
+                           MinicCoreValueId id,
+                           const char *low, const char *high, bool load) {
+    return id != MINIC_CORE_VALUE_INVALID && (size_t)id < f->value_count &&
+           rv32_stack(out, load ? "lw" : "sw", low,
+                      f->value_offsets[id]) &&
+           rv32_stack(out, load ? "lw" : "sw", high,
+                      f->value_offsets[id] + 4U);
 }
 static bool rv32_address(FILE *out, const char *reg, size_t off) {
     return off <= 2047U ?
