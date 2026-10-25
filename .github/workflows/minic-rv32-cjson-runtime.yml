@@ -16,6 +16,7 @@ on:
       - "tests/compiler/c0/probe-rv32-zlib-picolibc-qemu.sh"
       - "tests/compiler/c0/probe-rv32-lua-picolibc-qemu.sh"
       - "tests/compiler/c0/probe-rv32-zstd-picolibc-qemu.sh"
+      - "tests/compiler/c0/probe-rv32-musl-busybox-kbuild.sh"
       - "tests/external/lua/**"
       - "tests/compiler/c0/probe-rv32-variadic-gcc-qemu.sh"
       - "tests/compiler/c0/rv32-linux-picolibc-posix.c"
@@ -77,6 +78,13 @@ jobs:
           MINIC_CC="$GITHUB_WORKSPACE/build/rv32cjson/bin/minic-cc" \
           MINIAS="$GITHUB_WORKSPACE/build/rv32cjson/bin/minic-as" \
             bash tests/compiler/c0/probe-rv32-zstd-picolibc-qemu.sh
+      - name: DISCOVERY original RV32 Linux musl sysroot and pristine BusyBox Kbuild
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          MINIC_CC="$GITHUB_WORKSPACE/build/rv32cjson/bin/minic-cc" \
+            bash tests/compiler/c0/probe-rv32-musl-busybox-kbuild.sh
       - name: Original Lua 5.5.0 full 34-TU RV32I interpreter differential
         shell: bash
         run: |
