@@ -19,6 +19,8 @@ typedef struct Rv32Frame {
     size_t frame_size;
     /* Saved hidden sret pointer for record returns larger than 2*XLEN. */
     size_t sret_offset;
+    size_t saved_base_offset; /* caller's s0 in dynamic-frame functions */
+    bool has_dynamic_stack;
     bool is_variadic;
     size_t varargs_size;
     size_t varargs_offset;
@@ -36,10 +38,11 @@ bool rv32_frame_init(Rv32Frame *, const MinicC0Program *,
                      const MinicCoreFunction *, const MinicTargetInfo *, bool);
 void rv32_frame_destroy(Rv32Frame *);
 bool rv32_stack(FILE *, const char *, const char *, size_t);
+bool rv32_fixed_stack(FILE *, const Rv32Frame *, const char *, const char *, size_t);
 bool rv32_slot(FILE *, const Rv32Frame *, MinicCoreValueId, const char *, bool);
 bool rv32_pair_slot(FILE *, const Rv32Frame *, MinicCoreValueId,
                     const char *, const char *, bool);
-bool rv32_address(FILE *, const char *, size_t);
+bool rv32_address(FILE *, const Rv32Frame *, const char *, size_t);
 bool rv32_incoming_word(FILE *, const Rv32Frame *, size_t, const char *);
 bool rv32_outgoing_word(FILE *, const Rv32Frame *, size_t, const char *);
 

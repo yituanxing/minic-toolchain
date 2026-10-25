@@ -1,5 +1,6 @@
 #include "target/riscv32/rv32_internal.h"
 #include "target/data_layout.h"
+#include "target/common/core_function_facts.h"
 #include <limits.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -30,11 +31,15 @@ bool rv32_frame_init(Rv32Frame *frame, const MinicC0Program *program,
                             const MinicCoreFunction *f, const MinicTargetInfo *t,
                             bool is_variadic) {
     size_t next, i, max_stack_args;
+    MinicCoreFunctionFacts facts;
     if (frame == NULL || program == NULL || f == NULL || t == NULL ||
         f->value_count > 100000U || f->object_count > 100000U)
         return false;
     /* The ABI plan is built once; frame and call emission consume exactly
      * its precomputed stack bound and individual argument placements. */
+    if (!minic_core_function_facts_analyze(f, &facts))
+        return rv32_frame_reject("core_facts", 0U, minic_type_void());
+    frame->has_dynamic_stack = facts.uses_dynamic_stack_alloc;
     if (!rv32_function_abi_plan_build(program, t, f, &frame->abi))
         return rv32_frame_reject("abi_plan", 0U, minic_type_void());
     max_stack_args = frame->abi.max_outgoing_stack_words;
@@ -65,7 +70,11 @@ bool rv32_frame_init(Rv32Frame *frame, const MinicC0Program *program,
     if (frame->outgoing_size > SIZE_MAX - (frame->abi.indirect_return ? 8U : 4U))
         return rv32_frame_reject("sret_frame_overflow", 0U, f->return_type);
     frame->sret_offset = frame->outgoing_size + 4U;
-    next = frame->outgoing_size + (frame->abi.indirect_return ? 8U : 4U);
+    frame->saved_base_offset = frame->outgoing_size +
+                               (frame->abi.indirect_return ? 8U : 4U);
+    if (frame->has_dynamic_stack && frame->saved_base_offset > SIZE_MAX - 4U)
+        return rv32_frame_reject("saved_base", 0U, f->return_type);
+    next = frame->saved_base_offset + (frame->has_dynamic_stack ? 4U : 0U);
     for (i = 0U; i < f->value_count; ++i) {
         size_t size, alignment;
         unsigned words;
@@ -112,17 +121,27 @@ void rv32_frame_destroy(Rv32Frame *f) {
         rv32_function_abi_plan_destroy(&f->abi);
     }
 }
-/* t6 is reserved as the large-displacement scratch register. */
-bool rv32_stack(FILE *out, const char *op, const char *reg, size_t off) {
+/* Outgoing call words use moving sp. All fixed Core SSA/objects use s0
+ * when dynamic alloca changes sp. t6 owns large-displacement addressing. */
+static bool rv32_stack_at(FILE *out, const char *base, const char *op,
+                          const char *reg, size_t off) {
     if (off <= 2047U)
-        return fprintf(out, "  %s %s, %zu(sp)\n", op, reg, off) >= 0;
-    return fprintf(out, "  li t6, %zu\n  add t6, sp, t6\n"
-                        "  %s %s, 0(t6)\n", off, op, reg) >= 0;
+        return fprintf(out, "  %s %s, %zu(%s)\n", op, reg, off, base) >= 0;
+    return fprintf(out, "  li t6, %zu\n  add t6, %s, t6\n"
+                        "  %s %s, 0(t6)\n", off, base, op, reg) >= 0;
+}
+bool rv32_stack(FILE *out, const char *op, const char *reg, size_t off) {
+    return rv32_stack_at(out, "sp", op, reg, off);
+}
+bool rv32_fixed_stack(FILE *out, const Rv32Frame *fr,
+                      const char *op, const char *reg, size_t off) {
+    return fr != NULL && rv32_stack_at(
+        out, fr->has_dynamic_stack ? "s0" : "sp", op, reg, off);
 }
 bool rv32_slot(FILE *out, const Rv32Frame *f,
                        MinicCoreValueId id, const char *reg, bool load) {
     return id != MINIC_CORE_VALUE_INVALID && (size_t)id < f->value_count &&
-           rv32_stack(out, load ? "lw" : "sw", reg,
+           rv32_fixed_stack(out, f, load ? "lw" : "sw", reg,
                       f->value_offsets[id]);
 }
 /* Low-word first: RISC-V ELF32 and the little-endian ILP32 psABI. */
@@ -130,24 +149,28 @@ bool rv32_pair_slot(FILE *out, const Rv32Frame *f,
                            MinicCoreValueId id,
                            const char *low, const char *high, bool load) {
     return id != MINIC_CORE_VALUE_INVALID && (size_t)id < f->value_count &&
-           rv32_stack(out, load ? "lw" : "sw", low,
+           rv32_fixed_stack(out, f, load ? "lw" : "sw", low,
                       f->value_offsets[id]) &&
-           rv32_stack(out, load ? "lw" : "sw", high,
+           rv32_fixed_stack(out, f, load ? "lw" : "sw", high,
                       f->value_offsets[id] + 4U);
 }
-bool rv32_address(FILE *out, const char *reg, size_t off) {
+bool rv32_address(FILE *out, const Rv32Frame *fr,
+                  const char *reg, size_t off) {
+    const char *base;
+    if (fr == NULL) return false;
+    base = fr->has_dynamic_stack ? "s0" : "sp";
     return off <= 2047U ?
-        fprintf(out, "  addi %s, sp, %zu\n", reg, off) >= 0 :
-        fprintf(out, "  li %s, %zu\n  add %s, sp, %s\n",
-                reg, off, reg, reg) >= 0;
+        fprintf(out, "  addi %s, %s, %zu\n", reg, base, off) >= 0 :
+        fprintf(out, "  li %s, %zu\n  add %s, %s, %s\n",
+                reg, off, reg, base, reg) >= 0;
 }
 bool rv32_incoming_word(FILE *out, const Rv32Frame *fr,
                                size_t word, const char *reg) {
     if (word < 8U)
         return fprintf(out, "  mv %s, a%zu\n", reg, word) >= 0;
     return word - 8U <= (SIZE_MAX - fr->frame_size) / 4U &&
-           rv32_stack(out, "lw", reg,
-                      fr->frame_size + (word - 8U) * 4U);
+           rv32_fixed_stack(out, fr, "lw", reg,
+                             fr->frame_size + (word - 8U) * 4U);
 }
 bool rv32_outgoing_word(FILE *out, const Rv32Frame *fr,
                                size_t word, const char *reg) {

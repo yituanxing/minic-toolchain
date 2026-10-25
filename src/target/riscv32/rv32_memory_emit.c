@@ -17,7 +17,7 @@ bool rv32_emit_memory_instruction(FILE *out, const MinicC0Program *program,
     switch (ins->kind) {
     case MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS:
         return (size_t)ins->value.object_id < fr->object_count &&
-               rv32_address(out, "t0",
+               rv32_address(out, fr, "t0",
                             fr->object_offsets[ins->value.object_id]) &&
                rv32_slot(out, fr, ins->result, "t0", false);
     case MINIC_CORE_INSTRUCTION_FIELD_ADDRESS:
@@ -53,6 +53,37 @@ bool rv32_emit_memory_instruction(FILE *out, const MinicC0Program *program,
         return rv32_slot(out, fr, ins->value.load.address, "t0", true) &&
                rv32_load_mem(out, f, ins->type, "t1") &&
                rv32_slot(out, fr, ins->result, "t1", false);
+    case MINIC_CORE_INSTRUCTION_DYNAMIC_STACK_ALLOC: {
+        /* Fixed SSA and locals use s0. Each dynamic allocation leaves a
+         * fresh moving-sp ABI outgoing argument region below its data. */
+        const MinicCoreValueId count = ins->value.operand;
+        if (!fr->has_dynamic_stack || count >= f->value_count ||
+            ins->result >= f->value_count ||
+            !minic_type_is_pointer(ins->type) ||
+            !minic_type_equal(f->values[ins->result].type, ins->type) ||
+            !minic_type_equal(f->values[count].type, minic_type_unsigned_long()) ||
+            !rv32_slot(out, fr, count, "t0", true))
+            return false;
+        /* Both 16-byte rounding and outgoing-area addition check XLEN overflow. */
+        return fprintf(out,
+            "  mv t1, t0\n"
+            "  addi t0, t0, 15\n"
+            "  bltu t0, t1, 1f\n"
+            "  li t1, -16\n"
+            "  and t0, t0, t1\n"
+            "  li t1, %zu\n"
+            "  add t2, t0, t1\n"
+            "  bltu t2, t0, 1f\n"
+            "  sub sp, sp, t2\n"
+            "  li t0, %zu\n"
+            "  add t0, sp, t0\n"
+            "  j 2f\n"
+            "1:\n"
+            "  ebreak\n"
+            "2:\n",
+            fr->outgoing_size, fr->outgoing_size) >= 0 &&
+            rv32_slot(out, fr, ins->result, "t0", false);
+    }
     case MINIC_CORE_INSTRUCTION_STORE:
         if (ins->value.store.stored_value < f->value_count &&
             rv32_scalar_storage_words(
@@ -92,7 +123,7 @@ bool rv32_emit_memory_instruction(FILE *out, const MinicC0Program *program,
             copy_size == 0U || copy_size > UINT32_MAX ||
             !rv32_slot(out, fr, ins->value.record_load.source_address,
                        "t0", true) ||
-            !rv32_address(out, "t1", fr->object_offsets[id]))
+            !rv32_address(out, fr, "t1", fr->object_offsets[id]))
             return false;
         (void)alignment;
         return minic_riscv_emit_record_copy_bytes(out, "t1", "t0", copy_size);

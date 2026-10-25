@@ -90,6 +90,7 @@ static bool rv32_emit_ins(FILE *out, const MinicC0Program *program,
     case MINIC_CORE_INSTRUCTION_POINTER_OFFSET:
     case MINIC_CORE_INSTRUCTION_LOAD:
     case MINIC_CORE_INSTRUCTION_STORE:
+    case MINIC_CORE_INSTRUCTION_DYNAMIC_STACK_ALLOC:
     case MINIC_CORE_INSTRUCTION_RECORD_COPY:
     case MINIC_CORE_INSTRUCTION_RECORD_LOAD:
     case MINIC_CORE_INSTRUCTION_GLOBAL_ADDRESS:
@@ -105,7 +106,7 @@ static bool rv32_emit_ins(FILE *out, const MinicC0Program *program,
         offset = fr->varargs_size != 0U ?
             fr->varargs_offset :
             fr->frame_size + fr->abi.named_stack_words * 4U;
-        return rv32_address(out, "t0", offset) &&
+        return rv32_address(out, fr, "t0", offset) &&
                rv32_slot(out, fr, ins->result, "t0", false);
     }
     case MINIC_CORE_INSTRUCTION_CALL:
@@ -207,14 +208,17 @@ static bool rv32_func(FILE *out, const MinicC0Program *program,
         fprintf(out, "  li t0, %zu\n  sub sp, sp, t0\n", fr.frame_size) < 0 ||
         !rv32_stack(out, "sw", "ra", fr.outgoing_size) ||
         (fr.abi.indirect_return &&
-         !rv32_stack(out, "sw", "a0", fr.sret_offset))) goto done;
+         !rv32_stack(out, "sw", "a0", fr.sret_offset)) ||
+        (fr.has_dynamic_stack &&
+         (!rv32_stack(out, "sw", "s0", fr.saved_base_offset) ||
+          fprintf(out, "  mv s0, sp\n") < 0))) goto done;
     if (fr.is_variadic && fr.varargs_size != 0U) {
         const size_t first = fr.abi.named_gpr_words;
         for (i = first; i < 8U; ++i) {
             char reg[4];
             (void)snprintf(reg, sizeof(reg), "a%zu", i);
-            if (!rv32_stack(out, "sw", reg,
-                            fr.varargs_offset + (i - first) * 4U))
+            if (!rv32_fixed_stack(out, &fr, "sw", reg,
+                                   fr.varargs_offset + (i - first) * 4U))
                 goto done;
         }
     }
@@ -246,12 +250,18 @@ static bool rv32_func(FILE *out, const MinicC0Program *program,
             goto done;
         }
     }
-    ok = fprintf(out,
-        ".L%s_rv32_return:\n"
-        "  li t6, %zu\n  add t6, sp, t6\n  lw ra, 0(t6)\n"
-        "  li t0, %zu\n  add sp, sp, t0\n  ret\n",
-        sym.symbol_name, fr.outgoing_size, fr.frame_size) >= 0 &&
-        minic_riscv64_emit_function_symbol_end(out, &sym);
+    if (fprintf(out, ".L%s_rv32_return:\n", sym.symbol_name) < 0 ||
+        !rv32_fixed_stack(out, &fr, "lw", "ra", fr.outgoing_size))
+        goto done;
+    if (fr.has_dynamic_stack) {
+        ok = rv32_fixed_stack(out, &fr, "lw", "t1", fr.saved_base_offset) &&
+             fprintf(out, "  li t0, %zu\n  add sp, s0, t0\n"
+                          "  mv s0, t1\n  ret\n", fr.frame_size) >= 0;
+    } else {
+        ok = fprintf(out, "  li t0, %zu\n  add sp, sp, t0\n  ret\n",
+                     fr.frame_size) >= 0;
+    }
+    ok = ok && minic_riscv64_emit_function_symbol_end(out, &sym);
 done:
     rv32_frame_destroy(&fr);
     return ok;

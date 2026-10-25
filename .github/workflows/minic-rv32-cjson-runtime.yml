@@ -17,6 +17,7 @@ on:
       - "tests/compiler/c0/probe-rv32-lua-picolibc-qemu.sh"
       - "tests/compiler/c0/probe-rv32-zstd-picolibc-qemu.sh"
       - "tests/compiler/c0/probe-rv32-musl-busybox-kbuild.sh"
+      - "tests/compiler/c0/probe-rv32-dynamic-frame-qemu.sh"
       - "tests/external/lua/**"
       - "tests/compiler/c0/probe-rv32-variadic-gcc-qemu.sh"
       - "tests/compiler/c0/rv32-linux-picolibc-posix.c"
@@ -58,6 +59,13 @@ jobs:
         run: |
           set -Eeuo pipefail
           make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/rv32cjson all
+      - name: RV32 dynamic frame and 12-argument stack-call GCC/MiniC QEMU
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          MINIC_CC="$GITHUB_WORKSPACE/build/rv32cjson/bin/minic-cc" \
+          MINIAS="$GITHUB_WORKSPACE/build/rv32cjson/bin/minic-as" \
+            bash tests/compiler/c0/probe-rv32-dynamic-frame-qemu.sh
       - name: Upstream cJSON full GNU/MiniC QEMU differential
         shell: bash
         run: |

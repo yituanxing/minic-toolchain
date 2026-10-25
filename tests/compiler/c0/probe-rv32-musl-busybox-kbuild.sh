@@ -364,8 +364,13 @@ mapping=json.loads(pathlib.Path(sys.argv[1]).read_text())
 verified=0
 for dest,mini in mapping.items():
     a,b=pathlib.Path(dest),pathlib.Path(mini)
-    if a.is_file() and b.is_file() and hashlib.sha256(a.read_bytes()).digest()==hashlib.sha256(b.read_bytes()).digest():
+    actual=hashlib.sha256(a.read_bytes()).hexdigest() if a.is_file() else "MISSING"
+    expected=hashlib.sha256(b.read_bytes()).hexdigest() if b.is_file() else "MISSING"
+    if actual==expected and actual!="MISSING":
         verified+=1
+    else:
+        print("RV32_BUSYBOX_MIXED_SHA_MISMATCH owner=%s expected=%s actual=%s"%(
+              dest,expected,actual),flush=True)
 print("RV32_BUSYBOX_MIXED_SHA=DISCOVERY planned=%d verified=%d"%(
       len(mapping),verified),flush=True)
 if verified!=len(mapping):

@@ -20,8 +20,8 @@ bool rv32_emit_object_word(FILE *out, const Rv32Frame *fr,
     available = record_size - (size_t)word * 4U;
     chunk = available < 4U ? available : 4U;
     if (chunk == 4U)
-        return rv32_stack(out, "lw", reg, offset);
-    if (!rv32_address(out, "t2", offset) ||
+        return rv32_fixed_stack(out, fr, "lw", reg, offset);
+    if (!rv32_address(out, fr, "t2", offset) ||
         fprintf(out, "  li %s, 0\n", reg) < 0)
         return false;
     for (byte = 0U; byte < chunk; ++byte) {
@@ -70,7 +70,7 @@ static bool rv32_emit_scalar_call_arguments(
                 for (word = 0U; word < words; ++word) {
                     if (entry->indirect_record) {
                         if (word != 0U ||
-                            !rv32_address(out, reg[0],
+                            !rv32_address(out, fr, reg[0],
                                 fr->object_offsets[arg->value.object_id]))
                             return false;
                     } else if (!rv32_emit_object_word(
@@ -124,7 +124,7 @@ bool rv32_emit_call(FILE *out, const MinicCoreFunction *f,
          * Argument placement was already shifted past a0 by the same plan. */
         if (ins->kind != MINIC_CORE_INSTRUCTION_CALL ||
             ins->value.call.result_object >= fr->object_count ||
-            !rv32_address(out, "a0",
+            !rv32_address(out, fr, "a0",
                 fr->object_offsets[ins->value.call.result_object]))
             return false;
     }
@@ -152,10 +152,10 @@ bool rv32_emit_call(FILE *out, const MinicCoreFunction *f,
             size_t dest = fr->object_offsets[obj] + word * 4U;
             size_t byte;
             if (remaining >= 4U) {
-                if (!rv32_stack(out, "sw", reg, dest))
+                if (!rv32_fixed_stack(out, fr, "sw", reg, dest))
                     return false;
             } else {
-                if (!rv32_address(out, "t2", dest))
+                if (!rv32_address(out, fr, "t2", dest))
                     return false;
                 for (byte = 0U; byte < remaining; ++byte) {
                     if (fprintf(out,
@@ -206,7 +206,7 @@ bool rv32_emit_parameter_object(FILE *out, const MinicCoreFunction *f,
             ? loc->register_begin : 8U + loc->stack_begin;
         return entry->words == 1U &&
                rv32_incoming_word(out, fr, in, "t1") &&
-               rv32_address(out, "t0", fr->object_offsets[object_id]) &&
+               rv32_address(out, fr, "t0", fr->object_offsets[object_id]) &&
                minic_riscv_emit_record_copy_bytes(out, "t0", "t1", size);
     }
     for (word = 0U; word < entry->words; ++word) {
@@ -223,9 +223,9 @@ bool rv32_emit_parameter_object(FILE *out, const MinicCoreFunction *f,
         if (!rv32_incoming_word(out, fr, in, "t0"))
             return false;
         if (chunk == 4U) {
-            if (!rv32_stack(out, "sw", "t0", offset)) return false;
+            if (!rv32_fixed_stack(out, fr, "sw", "t0", offset)) return false;
         } else {
-            if (!rv32_address(out, "t2", offset)) return false;
+            if (!rv32_address(out, fr, "t2", offset)) return false;
             for (byte = 0U; byte < chunk; ++byte) {
                 if (fprintf(out,
                             "  srli t1, t0, %zu\n"
@@ -253,11 +253,11 @@ bool rv32_emit_record_return(FILE *out, const Rv32Frame *fr,
     id = term->return_object;
     if (id >= fr->object_count) return false;
     if (fr->abi.indirect_return) {
-        return rv32_stack(out, "lw", "t1", fr->sret_offset) &&
-               rv32_address(out, "t0", fr->object_offsets[id]) &&
+        return rv32_fixed_stack(out, fr, "lw", "t1", fr->sret_offset) &&
+               rv32_address(out, fr, "t0", fr->object_offsets[id]) &&
                minic_riscv_emit_record_copy_bytes(
                    out, "t1", "t0", fr->abi.record_return_size) &&
-               rv32_stack(out, "lw", "a0", fr->sret_offset) &&
+               rv32_fixed_stack(out, fr, "lw", "a0", fr->sret_offset) &&
                fprintf(out, "  lla t6, .L%s_rv32_return\n"
                             "  jalr zero, 0(t6)\n", symbol) >= 0;
     }
