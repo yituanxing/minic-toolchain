@@ -71,6 +71,140 @@ static bool rv32_emit_source_opaque_asm(
     return fprintf(out, "\n# MINIC_SOURCE_INLINE_ASM_END\n") >= 0;
 }
 
+/* The four legacy Core asm forms and the newer structured form use the
+ * same source-template substitution. Register assignment is a Target concern;
+ * Core owns the operand roles and the source owns every asm instruction.
+ * Missing/unknown operands must never leak into the GNU assembler. */
+static bool rv32_emit_source_template(
+    FILE *out, const MinicCoreInlineAsm *source,
+    const char *const bindings[10], const bool memory[10]) {
+    size_t i;
+    if (out == NULL || source == NULL || source->template_text == NULL ||
+        !source->is_volatile || source->is_goto ||
+        source->register_clobber_count != 0U ||
+        fprintf(out, "# MINIC_SOURCE_INLINE_ASM_BEGIN\n  ") < 0)
+        return false;
+    for (i = 0U; i < source->template_length; ++i) {
+        unsigned char ch = (unsigned char)source->template_text[i];
+        size_t index;
+        if (ch != '%') {
+            if (fputc(ch, out) == EOF) return false;
+            continue;
+        }
+        if (++i >= source->template_length) return false;
+        ch = (unsigned char)source->template_text[i];
+        if (ch == '%') {
+            if (fputc('%', out) == EOF) return false;
+            continue;
+        }
+        /* GNU %zN accepts a register for both nonzero and zero inputs.
+         * The caller always materializes the input before this point. */
+        if (ch == 'z') {
+            if (++i >= source->template_length) return false;
+            ch = (unsigned char)source->template_text[i];
+        }
+        if (ch < '0' || ch > '9') return false;
+        index = (size_t)(ch - '0');
+        if (bindings[index] == NULL ||
+            (memory[index] ? fprintf(out, "(%s)", bindings[index]) :
+                             fprintf(out, "%s", bindings[index])) < 0)
+            return false;
+    }
+    return fprintf(out, "\n# MINIC_SOURCE_INLINE_ASM_END\n") >= 0;
+}
+
+/* Core's early single-output / single-input forms survive integer-constant
+ * specialization (e.g. the real Linux arch_local_irq_save). All output and
+ * input values here must occupy exactly one ILP32 register. */
+static bool rv32_emit_source_legacy_asm(
+    FILE *out, const MinicCoreFunction *f, const Rv32Frame *fr,
+    const MinicCoreInstruction *ins) {
+    const MinicCoreInlineAsm *source;
+    const char *bindings[10] = {NULL};
+    bool memory[10] = {false};
+    MinicCoreInlineAsmId asm_id;
+    MinicCoreValueId input = MINIC_CORE_VALUE_INVALID;
+    MinicCoreValueId address = MINIC_CORE_VALUE_INVALID;
+    const char *output_reg = NULL;
+    unsigned bits;
+    bool is_signed;
+    size_t mem_index, output_index, scalar_index;
+    if (out == NULL || f == NULL || fr == NULL || ins == NULL)
+        return false;
+    switch (ins->kind) {
+    case MINIC_CORE_INSTRUCTION_REGISTER_OUTPUT_INLINE_ASM:
+        asm_id = ins->value.inline_asm_id;
+        bindings[0] = "t0";
+        output_reg = "t0";
+        break;
+    case MINIC_CORE_INSTRUCTION_REGISTER_OUTPUT_INPUT_INLINE_ASM:
+        asm_id = ins->value.register_output_input_inline_asm.inline_asm_id;
+        input = ins->value.register_output_input_inline_asm.operand;
+        bindings[0] = "t0";
+        bindings[1] = "t1";
+        output_reg = "t0";
+        break;
+    case MINIC_CORE_INSTRUCTION_MEMORY_READWRITE_SCALAR_INPUT_INLINE_ASM:
+        asm_id = ins->value.memory_readwrite_scalar_input_inline_asm.inline_asm_id;
+        address = ins->value.memory_readwrite_scalar_input_inline_asm.memory_address;
+        input = ins->value.memory_readwrite_scalar_input_inline_asm.operand;
+        mem_index = ins->value.memory_readwrite_scalar_input_inline_asm.memory_operand_index;
+        output_index = ins->value.memory_readwrite_scalar_input_inline_asm.register_output_operand_index;
+        scalar_index = ins->value.memory_readwrite_scalar_input_inline_asm.scalar_input_operand_index;
+        if (mem_index >= 10U || scalar_index >= 10U ||
+            mem_index == scalar_index ||
+            (output_index != SIZE_MAX &&
+             (output_index >= 10U || output_index == mem_index ||
+              output_index == scalar_index))) return false;
+        memory[mem_index] = true;
+        bindings[mem_index] = "t0";
+        bindings[scalar_index] = "t2";
+        if (output_index != SIZE_MAX) {
+            bindings[output_index] = "t1";
+            output_reg = "t1";
+        }
+        break;
+    case MINIC_CORE_INSTRUCTION_SCALAR_INPUT_INLINE_ASM:
+        asm_id = ins->value.scalar_input_inline_asm.inline_asm_id;
+        input = ins->value.scalar_input_inline_asm.operand;
+        bindings[0] = "t0";
+        break;
+    default:
+        return false;
+    }
+    if (asm_id >= f->inline_asm_count ||
+        (input != MINIC_CORE_VALUE_INVALID &&
+         (input >= f->value_count ||
+          (!minic_type_is_integer(f->values[input].type) &&
+           !minic_type_is_pointer(f->values[input].type)) ||
+          !rv32_scalar(f, f->values[input].type, &bits, &is_signed))) ||
+        (address != MINIC_CORE_VALUE_INVALID &&
+         (address >= f->value_count ||
+          !minic_type_is_pointer(f->values[address].type))) ||
+        (output_reg != NULL &&
+         (ins->result >= f->value_count ||
+          (!minic_type_is_integer(ins->type) &&
+           !minic_type_is_pointer(ins->type)) ||
+          !rv32_scalar(f, ins->type, &bits, &is_signed))) ||
+        (output_reg == NULL &&
+         (ins->result != MINIC_CORE_VALUE_INVALID ||
+          !minic_type_is_void(ins->type))))
+        return false;
+    source = &f->inline_asms[asm_id];
+    if ((address != MINIC_CORE_VALUE_INVALID &&
+         (!source->has_memory_clobber ||
+          !rv32_slot(out, fr, address, "t0", true))) ||
+        (input != MINIC_CORE_VALUE_INVALID &&
+         !rv32_slot(out, fr, input,
+                    address != MINIC_CORE_VALUE_INVALID ? "t2" :
+                    output_reg != NULL ? "t1" : "t0", true)) ||
+        !rv32_emit_source_template(out, source, bindings, memory))
+        return false;
+    return output_reg == NULL ||
+           (rv32_canon(out, f, ins->type, output_reg) &&
+            rv32_slot(out, fr, ins->result, output_reg, false));
+}
+
 /* Each Core operand owns one distinct caller-saved machine register.
  * t6 is reserved for large frame offsets by rv32_slot; a2 is reserved
  * for address-backed register operands and output writeback. Consequently
@@ -85,7 +219,8 @@ static bool rv32_emit_source_structured_asm(
         "t0", "t1", "t2", "t3", "t4", "t5", "a0", "a1"
     };
     bool seen[MINIC_CORE_STRUCTURED_INLINE_ASM_OPERAND_LIMIT] = {false};
-    bool memory[MINIC_CORE_STRUCTURED_INLINE_ASM_OPERAND_LIMIT] = {false};
+    bool memory[10] = {false};
+    const char *bindings[10] = {NULL};
     size_t n, i;
     if (out == NULL || f == NULL || fr == NULL || ins == NULL ||
         ins->kind != MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM ||
@@ -107,10 +242,21 @@ static bool rv32_emit_source_structured_asm(
             b->has_fixed_register_binding || b->value >= f->value_count)
             return false;
         seen[b->operand_index] = true;
+        bindings[b->operand_index] = regs[b->operand_index];
         switch (b->kind) {
         case MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT:
-            if (!rv32_scalar(f, f->values[b->value].type, &bits, &is_signed) ||
-                bits == 0U || bits > 32U)
+            if (!rv32_scalar(f, f->values[b->value].type, &bits, &is_signed)) {
+                unsigned words;
+                /* A GNU RV32 "rJ" input may be a 64-bit integer while the
+                 * source asm names only its low register (Linux's two 32-bit
+                 * user-access stores use %zN for each separately shifted
+                 * half). The ILP32 frame is low-word first; rv32_slot loads
+                 * exactly that register. Wide output/RMW stays rejected. */
+                if (!minic_type_is_integer(f->values[b->value].type) ||
+                    !rv32_scalar_storage_words(f, f->values[b->value].type, &words) ||
+                    words != 2U)
+                    return false;
+            } else if (bits == 0U || bits > 32U)
                 return false;
             break;
         case MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT:
@@ -160,35 +306,7 @@ static bool rv32_emit_source_structured_asm(
                 return false;
         }
     }
-    if (fprintf(out, "# MINIC_SOURCE_INLINE_ASM_BEGIN\n  ") < 0)
-        return false;
-    for (i = 0U; i < source->template_length; ++i) {
-        unsigned char ch = (unsigned char)source->template_text[i];
-        size_t index;
-        if (ch != '%') {
-            if (fputc(ch, out) == EOF) return false;
-            continue;
-        }
-        if (++i >= source->template_length) return false;
-        ch = (unsigned char)source->template_text[i];
-        if (ch == '%') {
-            if (fputc('%', out) == EOF) return false;
-            continue;
-        }
-        /* GNU %zN chooses zero for an immediate zero and a register otherwise.
-         * Always materializing the input in a distinct register is equivalent. */
-        if (ch == 'z') {
-            if (++i >= source->template_length) return false;
-            ch = (unsigned char)source->template_text[i];
-        }
-        if (ch < '0' || ch > '7') return false;
-        index = (size_t)(ch - '0');
-        if (index >= n ||
-            (memory[index] ? fprintf(out, "(%s)", regs[index]) :
-                             fprintf(out, "%s", regs[index])) < 0)
-            return false;
-    }
-    if (fprintf(out, "\n# MINIC_SOURCE_INLINE_ASM_END\n") < 0)
+    if (!rv32_emit_source_template(out, source, bindings, memory))
         return false;
     for (i = 0U; i < n; ++i) {
         const MinicCoreStructuredInlineAsmOperand *b =
@@ -300,6 +418,11 @@ static bool rv32_emit_ins(FILE *out, const MinicC0Program *program,
         return rv32_emit_memory_instruction(out, program, target, f, fr, ins);
     case MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM:
         return rv32_emit_source_opaque_asm(out, f, ins);
+    case MINIC_CORE_INSTRUCTION_REGISTER_OUTPUT_INLINE_ASM:
+    case MINIC_CORE_INSTRUCTION_REGISTER_OUTPUT_INPUT_INLINE_ASM:
+    case MINIC_CORE_INSTRUCTION_MEMORY_READWRITE_SCALAR_INPUT_INLINE_ASM:
+    case MINIC_CORE_INSTRUCTION_SCALAR_INPUT_INLINE_ASM:
+        return rv32_emit_source_legacy_asm(out, f, fr, ins);
     case MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM:
         return rv32_emit_source_structured_asm(out, f, fr, ins);
     case MINIC_CORE_INSTRUCTION_COMPILER_BARRIER:

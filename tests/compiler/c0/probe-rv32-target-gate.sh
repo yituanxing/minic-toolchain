@@ -225,4 +225,28 @@ grep -Fq 'addi t0, t0, 1' "$work/kernel-structured-atomic.s"
 grep -Fq 'sw t1, 0(a2)' "$work/kernel-structured-atomic.s"
 grep -Fq '# MINIC_SOURCE_INLINE_ASM_BEGIN' "$work/kernel-structured-atomic.s"
 echo 'RV32I_STRUCTURED_ATOMIC=PASS memory_RW=1 early_clobber=1 operand_z=1 register_RMW=1'
+cat > "$work/kernel-legacy-and-wide-asm.i" <<'SRC'
+static inline unsigned long rv32_irq_save_legacy(void) {
+    unsigned long flags = 2;
+    __asm__ __volatile__("csrrc %0, 0x100, %1"
+                         : "=r"(flags) : "rK"(flags) : "memory");
+    return flags;
+}
+unsigned long rv32_irq_save_entry(void) { return rv32_irq_save_legacy(); }
+int rv32_put_user_pair(unsigned int *ptr, unsigned long long value) {
+    unsigned long err = 0;
+    __asm__ __volatile__("sw %z3, %1\n\tsw %z4, %2"
+                         : "+r"(err), "=m"(ptr[0]), "=m"(ptr[1])
+                         : "rJ"(value), "rJ"(value >> 32) : "memory");
+    return (int)err;
+}
+SRC
+"$MINIC_CC" --target=riscv32-linux -march=rv32i -mabi=ilp32 \
+  -S "$work/kernel-legacy-and-wide-asm.i" -o "$work/kernel-legacy-and-wide-asm.s"
+grep -Fq 'csrrc t0, 0x100,' "$work/kernel-legacy-and-wide-asm.s"
+grep -Fq 'sw t3, (t1)' "$work/kernel-legacy-and-wide-asm.s"
+grep -Fq 'sw t4, (t2)' "$work/kernel-legacy-and-wide-asm.s"
+grep -Fq 'sw t0, 0(a2)' "$work/kernel-legacy-and-wide-asm.s"
+grep -Fq '# MINIC_SOURCE_INLINE_ASM_BEGIN' "$work/kernel-legacy-and-wide-asm.s"
+echo 'RV32I_LEGACY_WIDE_ASM=PASS CSR=1 two_u64_low_words=1 memory_outputs=2 register_RMW=1'
 echo 'RV32I_TARGET_GATE=PASS ILP32_registered=true incompatible_ISA_rejected=true basic_C_core_emitted=true'
