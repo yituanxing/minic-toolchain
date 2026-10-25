@@ -31,17 +31,19 @@ _start:
     bne a0, t0, failed
     li a0, 1
     la a1, success
-    li a2, success_end - success
+    la t0, success_end
+    sub a2, t0, a1
+    mv s0, a2
     li a7, 64
     ecall
-    li t0, success_end - success
-    bne a0, t0, failed
+    bne a0, s0, failed
 hold:
     j hold
 failed:
     li a0, 1
     la a1, failure
-    li a2, failure_end - failure
+    la t0, failure_end
+    sub a2, t0, a1
     li a7, 64
     ecall
     li a0, 10
