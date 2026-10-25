@@ -19,6 +19,13 @@ image=$(realpath "$RV32I_QEMU_IMAGE")
 work=$(realpath "$RV32I_QEMU_WORK")
 image_sha=$(sha256sum "$image" | cut -d' ' -f1)
 p1=${RV32I_QEMU_P1:-0}
+shell=${RV32I_QEMU_SHELL:-0}
+[[ "$shell" == 0 || "$shell" == 1 ]] || {
+  echo 'RV32I_QEMU=FAIL invalid_shell_mode' >&2; exit 2;
+}
+[[ "$shell" == 0 || "$p1" == 1 ]] || {
+  echo 'RV32I_QEMU=FAIL shell_requires_p1_runtime_initramfs' >&2; exit 2;
+}
 [[ "$p1" == 0 || "$p1" == 1 ]] || {
   echo 'RV32I_QEMU=FAIL invalid_p1_mode' >&2; exit 2;
 }
@@ -37,14 +44,33 @@ fi
 # Check PID1 before issuing the sole success marker. No libc, host executables,
 # pseudo-root filesystem, or RV64 ELF is allowed in this initramfs.
 if [[ "$p1" == 1 ]]; then
-  # Compile ONLY RV32 user-mode tester, never Linux. Reuse every byte of
-  # the exact 1741-MiniC-owner QEMU P0 Image and the proven large-Image DTB.
-  riscv64-linux-gnu-gcc -S -O1 -march=rv32i -mabi=ilp32 \
-    -nostdinc -nostdlib -ffreestanding -fno-builtin -fno-pic -fno-pie \
-    -fno-stack-protector -fno-tree-loop-distribute-patterns \
-    -fno-asynchronous-unwind-tables -fno-unwind-tables \
-    tests/external/linux/runtime_initramfs/rv32-p1-raw.c \
-    -o "$work/init.S"
+  # Only GNU-built freestanding userspace changes; the original, pinned
+  # 1741/1741 MiniC Linux C-object Image is never recompiled or relinked.
+  build_guest() {
+    local source="$1" target="$2"
+    riscv64-linux-gnu-gcc -S -O1 -march=rv32i -mabi=ilp32 \
+      -nostdinc -nostdlib -ffreestanding -fno-builtin -fno-pic -fno-pie \
+      -fno-stack-protector -fno-tree-loop-distribute-patterns \
+      -fno-asynchronous-unwind-tables -fno-unwind-tables \
+      "$source" -o "$work/$target.S"
+    riscv64-linux-gnu-as -march=rv32i -mabi=ilp32 \
+      "$work/$target.S" -o "$work/$target.o"
+    riscv64-linux-gnu-ld -m elf32lriscv -static -e _start \
+      "$work/$target.o" -o "$work/$target"
+    riscv64-linux-gnu-readelf -h "$work/$target" >"$work/$target-elf.txt"
+    for contract in 'Class:[[:space:]]+ELF32' \
+                    'Machine:[[:space:]]+RISC-V' \
+                    'Type:[[:space:]]+EXEC' \
+                    'Flags:[[:space:]]+0x0([[:space:]]|$)'; do
+      grep -Eq "$contract" "$work/$target-elf.txt" || {
+        echo "RV32I_GUEST_ELF=FAIL file=$target contract=$contract" >&2; exit 3;
+      }
+    done
+    echo "RV32I_GUEST_ELF=PASS file=$target ELF32=true ILP32=true RV32I=true"
+  }
+  build_guest tests/external/linux/runtime_initramfs/rv32-init-raw.c init
+  build_guest tests/external/linux/runtime_initramfs/rv32-p1-raw.c runtime-probe
+  build_guest tests/external/linux/runtime_initramfs/rv32-sh-raw.c sh
 else
 cat >"$work/init.S" <<'ASM'
     .section .text
@@ -83,12 +109,12 @@ failure:
     .ascii "RV32I_LINUX_PID1=FAIL syscall=getpid_or_write\n"
 failure_end:
 ASM
-fi
 riscv64-linux-gnu-as -march=rv32i -mabi=ilp32 \
   "$work/init.S" -o "$work/init.o"
 riscv64-linux-gnu-ld -m elf32lriscv -static -e _start \
   "$work/init.o" -o "$work/init"
 riscv64-linux-gnu-readelf -h "$work/init" >"$work/init-elf.txt"
+fi
 for contract in \
     'Class:[[:space:]]+ELF32' \
     'Machine:[[:space:]]+RISC-V' \
@@ -104,9 +130,14 @@ done
 # binutils 2.42 prints just "Flags: 0x0", without a textual ABI suffix.
 echo 'RV32I_QEMU_P0_INIT=PASS ELF32=1 riscv=1 ET_EXEC=1 e_flags=0x0 soft_float=1 no_RVC=1'
 
-mkdir -p "$work/guest/dev" "$work/guest/tmp"
+mkdir -p "$work/guest/dev" "$work/guest/tmp" "$work/guest/proc" \
+         "$work/guest/sys" "$work/guest/bin"
 chmod 1777 "$work/guest/tmp"
 install -m 755 "$work/init" "$work/guest/init"
+if [[ "$p1" == 1 ]]; then
+  install -m 755 "$work/runtime-probe" "$work/guest/bin/runtime-probe"
+  install -m 755 "$work/sh" "$work/guest/bin/sh"
+fi
 if [[ ! -e "$work/guest/dev/console" ]]; then
   sudo mknod -m 600 "$work/guest/dev/console" c 5 1
 fi
@@ -154,16 +185,33 @@ rv32i_timeout=${RV32I_QEMU_TIMEOUT_SECONDS:-45}
   echo 'RV32I_QEMU_P0=FAIL invalid_timeout_seconds' >&2
   exit 2
 }
-printf 'RV32I_QEMU_P0=START image_sha256=%s guest=rv32i/ilp32 pid1=ELF32 firmware=%s timeout=%ss\n' \
-  "$image_sha" "$bios" "$rv32i_timeout"
+printf 'RV32I_QEMU_P0=START image_sha256=%s guest=rv32i/ilp32 pid1=ELF32 firmware=%s timeout=%ss p1=%s shell=%s\n' \
+  "$image_sha" "$bios" "$rv32i_timeout" "$p1" "$shell"
+rdinit=/init
+append_p1=
+if [[ "$p1" == 1 ]]; then append_p1=' minic_runtime=p1'; fi
+if [[ "$shell" == 1 ]]; then rdinit=/bin/sh; append_p1=; fi
+qemu_args=(qemu-system-riscv32 -M virt -cpu max -m 512M -smp 1
+  -nographic -no-reboot -bios "$bios" -kernel "$image" -dtb "$dtb"
+  -device "loader,file=$work/initramfs.cpio.gz,addr=$initrd_addr,force-raw=on"
+  -append "console=ttyS0 earlycon=${RV32I_QEMU_EARLYCON:-sbi} loglevel=8 panic=-1 rdinit=$rdinit$append_p1")
 set +e
-timeout --signal=TERM "${rv32i_timeout}s" qemu-system-riscv32 \
-  -M virt -cpu max -m 512M -smp 1 -nographic -no-reboot \
-  -bios "$bios" -kernel "$image" -dtb "$dtb" \
-  -device "loader,file=$work/initramfs.cpio.gz,addr=$initrd_addr,force-raw=on" \
-  -append "console=ttyS0 earlycon=${RV32I_QEMU_EARLYCON:-sbi} loglevel=8 panic=-1 rdinit=/init" \
-  </dev/null >"$work/qemu-serial.log" 2>&1
-status=$?
+if [[ "$shell" == 1 ]]; then
+  # Like RV64 runtime_boot.sh shell profile: send actual commands over ttyS0.
+  # The first command arrives after the real kernel has initialized serial.
+  (
+    sleep "${RV32I_QEMU_SHELL_INPUT_DELAY_SECONDS:-13}"
+    printf '%s\n' 'mount -t proc proc /proc' 'echo PROC_CMDLINE_BEGIN' \
+      'cat /proc/cmdline' 'echo PROC_CMDLINE_END' \
+      'echo RDINIT_SH_OK' 'echo DONE_RDINIT' 'sync' 'poweroff -f'
+  ) | timeout --signal=TERM "${rv32i_timeout}s" "${qemu_args[@]}" \
+    >"$work/qemu-serial.log" 2>&1
+  status=$?
+else
+  timeout --signal=TERM "${rv32i_timeout}s" "${qemu_args[@]}" \
+    </dev/null >"$work/qemu-serial.log" 2>&1
+  status=$?
+fi
 set -e
 printf 'qemu_status=%s\nimage_sha256=%s\n' "$status" "$image_sha" \
   >"$work/provenance.txt"
@@ -204,7 +252,7 @@ fi
 for pattern in \
     'Linux version 6\.6\.143' \
     '(Run /init as init process|Starting init: /init)' \
-    "$(if [[ "$p1" == 1 ]]; then printf '%s' '^RUNTIME_V2_SYSCALL_BEGIN'; else printf '%s' '^RV32I_LINUX_PID1=PASS syscall=getpid,write elf=ELF32 abi=ilp32'; fi)"; do
+    "$(if [[ "$shell" == 1 ]]; then printf '%s' '^MINIC_LINUX_RUNTIME_SH_READY'; elif [[ "$p1" == 1 ]]; then printf '%s' '^RUNTIME_V2_SYSCALL_BEGIN'; else printf '%s' '^RV32I_LINUX_PID1=PASS syscall=getpid,write elf=ELF32 abi=ilp32'; fi)"; do
   if ! grep -Eq "$pattern" "$work/qemu-serial.log"; then
     echo "RV32I_QEMU_P0=FAIL missing=$pattern image=$image_sha" >&2
     tail -n 140 "$work/qemu-serial.log" >&2
@@ -222,11 +270,34 @@ if [[ "$p1" == 1 ]]; then
     echo "RV32I_QEMU_P1=FAIL missing_clean_powerdown image=$image_sha" >&2
     exit 1
   }
-  # Bind this RV32 test to exactly twelve official P1 syscall patterns.
-  # The official thirteenth P1 row (probe-exec) is NOT yet implemented here;
-  # it must remain a separately visible qualification gap.
-  mapfile -t manifest_p1 < <(awk -F '\t' '$1=="p1" && $2!="probe-exec"{print $3}' tests/external/linux/runtime_v2_checks.tsv)
-  [[ "${#manifest_p1[@]}" == 12 ]] || {
+  if [[ "$shell" == 1 ]]; then
+    for marker in MINIC_LINUX_RUNTIME_SH_READY PROC_CMDLINE_BEGIN \
+                  PROC_CMDLINE_END RDINIT_SH_OK DONE_RDINIT; do
+      grep -Fq "$marker" "$work/qemu-serial.log" || {
+        echo "RV32I_QEMU_SHELL=FAIL missing=$marker" >&2; exit 1;
+      }
+    done
+    grep -Eq 'Kernel command line:.*rdinit=/bin/sh' "$work/qemu-serial.log"
+    if grep -Fq 'RV32_SHELL_' "$work/qemu-serial.log"; then
+      echo "RV32I_QEMU_SHELL=FAIL invalid_shell_commands" >&2; exit 1;
+    fi
+    echo "RV32I_QEMU_SHELL=PASS image_sha256=$image_sha genuine_ELF32=true real_QEMU=true clean_powerdown=true"
+    exit 0
+  fi
+  # Use the SAME canonical manifest as RV64, including probe-exec.
+  for pattern in 'INIT_PROC_MOUNT=PASS' 'INIT_SYSFS_MOUNT=PASS' \
+                 'INIT_DEVTMPFS_MOUNT=PASS' 'INIT_CMDLINE_READ=PASS' \
+                 'INIT_TMPFS_MOUNT=PASS' 'INIT_TMPFS_RW=PASS' \
+                 'MINIC_LINUX_RUNTIME_INIT_END fail=0' \
+                 'USER_SHELL_OK' 'DONE_COMMANDS'; do
+    grep -Fq "$pattern" "$work/qemu-serial.log" || {
+      echo "RV32I_QEMU_P0=FAIL missing=$pattern" >&2; exit 1;
+    }
+  done
+  python3 tests/external/linux/runtime_v2_log_check.py \
+    --profile p1 --log "$work/qemu-serial.log"
+  mapfile -t manifest_p1 < <(awk -F '\t' '$1=="p1"{print $3}' tests/external/linux/runtime_v2_checks.tsv)
+  [[ "${#manifest_p1[@]}" == 13 ]] || {
     echo "RV32I_QEMU_P1=FAIL official_P1_manifest_size=${#manifest_p1[@]}" >&2; exit 1;
   }
   for pattern in "${manifest_p1[@]}"; do
@@ -249,7 +320,8 @@ if [[ "$p1" == 1 ]]; then
     }
   done
   grep -Fq 'RUNTIME_V2_SYSCALL_END pass=12 fail=0' "$work/qemu-serial.log"
-  grep -Fq 'RV32I_LINUX_P1=PASS syscalls=12 pid1=ELF32 ilp32=true' "$work/qemu-serial.log"
+  grep -Fq 'RV32I_LINUX_P1=PASS syscalls=12 child=ELF32 ilp32=true execve=true' "$work/qemu-serial.log"
+  grep -Fq 'INIT_RUNTIME_PROBE=PASS' "$work/qemu-serial.log"
   echo "RV32I_QEMU_P1=PASS image_sha256=$image_sha real_QEMU=rv32i original_Kbuild=true minic_C=1741/1741 syscalls=12/12"
 else
   echo "RV32I_QEMU_P0=PASS image_sha256=$image_sha guest=rv32i/ilp32 original_Kbuild=true PID1=1 syscalls=getpid,write QEMU_P1=NOT_RUN"
