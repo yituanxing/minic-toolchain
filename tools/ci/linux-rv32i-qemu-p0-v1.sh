@@ -149,6 +149,10 @@ printf 'qemu_status=%s\nimage_sha256=%s\n' "$status" "$image_sha" \
 if [[ "$status" != 124 ]]; then
   echo "RV32I_QEMU_P0=FAIL qemu_exit=$status expected_bounded_timeout=124" >&2
   tail -n 110 "$work/qemu-serial.log" >&2
+  if [[ "${RV32I_QEMU_SKIP_REPLAY:-0}" == 1 ]]; then
+    echo 'RV32I_QEMU_P0_DIAG=SKIP_REPLAY cohort_mode=true first_serial_retained=true' >&2
+    exit 1
+  fi
   # A pre-console shutdown must not be mistaken for a passing Linux boot.
   # Replay ONLY the same immutable Image, now with UART earlycon and QEMU's
   # CPU exception/guest-error trace, so the next fix targets real evidence.
