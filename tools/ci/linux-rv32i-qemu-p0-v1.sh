@@ -19,7 +19,14 @@ image=$(realpath "$RV32I_QEMU_IMAGE")
 work=$(realpath "$RV32I_QEMU_WORK")
 image_sha=$(sha256sum "$image" | cut -d' ' -f1)
 p1=${RV32I_QEMU_P1:-0}
+p2=${RV32I_QEMU_P2:-0}
 shell=${RV32I_QEMU_SHELL:-0}
+[[ "$p2" == 0 || "$p2" == 1 ]] || {
+  echo 'RV32I_QEMU_P2=FAIL invalid_p2_mode' >&2; exit 2;
+}
+[[ "$p2" == 0 || ( "$p1" == 1 && "$shell" == 0 && "${RV32I_QEMU_FAST:-0}" == 0 ) ]] || {
+  echo 'RV32I_QEMU_P2=FAIL requires_genuine_ELF32_userland_without_other_profiles' >&2; exit 2;
+}
 fast=${RV32I_QEMU_FAST:-0}
 [[ "$fast" == 0 || "$fast" == 1 ]] || {
   echo 'RV32I_QEMU=FAIL invalid_fast_mode' >&2; exit 2;
@@ -78,6 +85,9 @@ if [[ "$p1" == 1 ]]; then
   build_guest tests/external/linux/runtime_initramfs/rv32-init-raw.c init
   build_guest tests/external/linux/runtime_initramfs/rv32-p1-raw.c runtime-probe
   build_guest tests/external/linux/runtime_initramfs/rv32-sh-raw.c sh
+  if [[ "$p2" == 1 ]]; then
+    build_guest tests/external/linux/runtime_initramfs/rv32-p2-raw.c runtime-p2
+  fi
 else
 cat >"$work/init.S" <<'ASM'
     .section .text
@@ -144,6 +154,9 @@ install -m 755 "$work/init" "$work/guest/init"
 if [[ "$p1" == 1 ]]; then
   install -m 755 "$work/runtime-probe" "$work/guest/bin/runtime-probe"
   install -m 755 "$work/sh" "$work/guest/bin/sh"
+  if [[ "$p2" == 1 ]]; then
+    install -m 755 "$work/runtime-p2" "$work/guest/bin/runtime-p2"
+  fi
 fi
 if [[ ! -e "$work/guest/dev/console" ]]; then
   sudo mknod -m 600 "$work/guest/dev/console" c 5 1
@@ -196,7 +209,10 @@ printf 'RV32I_QEMU_P0=START image_sha256=%s guest=rv32i/ilp32 pid1=ELF32 firmwar
   "$image_sha" "$bios" "$rv32i_timeout" "$p1" "$shell"
 rdinit=/init
 append_p1=
-if [[ "$p1" == 1 && "$fast" != 1 ]]; then append_p1=' minic_runtime=p1'; fi
+if [[ "$p1" == 1 && "$fast" != 1 ]]; then
+  if [[ "$p2" == 1 ]]; then append_p1=' minic_runtime=p2'
+  else append_p1=' minic_runtime=p1'; fi
+fi
 if [[ "$shell" == 1 ]]; then rdinit=/bin/sh; append_p1=; fi
 qemu_args=(qemu-system-riscv32 -M virt -cpu max -m 512M -smp 1
   -nographic -no-reboot -bios "$bios" -kernel "$image" -dtb "$dtb"
@@ -272,14 +288,14 @@ fi
 for pattern in \
     'Linux version 6\.6\.143' \
     "$(if [[ "$shell" == 1 ]]; then printf '%s' '(Run /bin/sh as init process|Starting init: /bin/sh)'; else printf '%s' '(Run /init as init process|Starting init: /init)'; fi)" \
-    "$(if [[ "$shell" == 1 ]]; then printf '%s' '^MINIC_LINUX_RUNTIME_SH_READY'; elif [[ "$fast" == 1 ]]; then printf '%s' '^MINIC_LINUX_RUNTIME_INIT_BEGIN'; elif [[ "$p1" == 1 ]]; then printf '%s' '^RUNTIME_V2_SYSCALL_BEGIN'; else printf '%s' '^RV32I_LINUX_PID1=PASS syscall=getpid,write elf=ELF32 abi=ilp32'; fi)"; do
+    "$(if [[ "$shell" == 1 ]]; then printf '%s' '^MINIC_LINUX_RUNTIME_SH_READY'; elif [[ "$fast" == 1 ]]; then printf '%s' '^MINIC_LINUX_RUNTIME_INIT_BEGIN'; elif [[ "$p2" == 1 ]]; then printf '%s' '^RV32I_P2_BEGIN'; elif [[ "$p1" == 1 ]]; then printf '%s' '^RUNTIME_V2_SYSCALL_BEGIN'; else printf '%s' '^RV32I_LINUX_PID1=PASS syscall=getpid,write elf=ELF32 abi=ilp32'; fi)"; do
   if ! grep -Eq "$pattern" "$work/qemu-serial.log"; then
     echo "RV32I_QEMU_P0=FAIL missing=$pattern image=$image_sha" >&2
     tail -n 140 "$work/qemu-serial.log" >&2
     exit 1
   fi
 done
-if grep -Eiq '(Kernel panic|RV32I_LINUX_PID1=FAIL|RV32I_LINUX_P1=FAIL|RUNTIME_V2_SYSCALL_FAIL|Oops:|Unable to handle kernel|Insufficient stack space|(^|[^a-z])BUG:|soft lockup|workqueue lockup|Unknown symbol|invalid module format)' \
+if grep -Eiq '(Kernel panic|RV32I_LINUX_PID1=FAIL|RV32I_LINUX_P1=FAIL|RV32I_P2_FAIL|RV32I_P2_FRONTIER=FAIL|RUNTIME_V2_SYSCALL_FAIL|Oops:|Unable to handle kernel|Insufficient stack space|(^|[^a-z])BUG:|soft lockup|workqueue lockup|Unknown symbol|invalid module format)' \
     "$work/qemu-serial.log"; then
   echo "RV32I_QEMU_P0=FAIL guest_panic_or_pid1_failure image=$image_sha" >&2
   tail -n 110 "$work/qemu-serial.log" >&2
@@ -318,6 +334,29 @@ if [[ "$p1" == 1 ]]; then
       echo "RV32I_QEMU_SHELL=FAIL invalid_shell_commands" >&2; exit 1;
     fi
     echo "RV32I_QEMU_SHELL=PASS image_sha256=$image_sha genuine_ELF32=true real_QEMU=true clean_powerdown=true"
+    exit 0
+  fi
+  if [[ "$p2" == 1 ]]; then
+    # This is a SCOPED P2 frontier, not the complete 18-row historical P2
+    # or 145/203 P3 oracle. Optional missing kernel capabilities stay
+    # explicitly UNAVAILABLE. A supported-but-broken operation always FAILS.
+    for marker in 'INIT_PROC_MOUNT=PASS' 'INIT_SYSFS_MOUNT=PASS' \
+      'INIT_DEVTMPFS_MOUNT=PASS' 'INIT_CMDLINE_READ=PASS' \
+      'INIT_TMPFS_RW=PASS' 'RV32I_P2_CHILD=PASS' \
+      'RV32I_P2_PASS tmpfs-rename-rw' \
+      'RV32I_P2_PASS ipv4-udp-loopback' \
+      'RV32I_P2_PASS ipv4-tcp-loopback' \
+      'RV32I_P2_FRONTIER=PASS core=3 optional_capabilities_reported=true' \
+      'MINIC_LINUX_RUNTIME_INIT_END fail=0'; do
+      grep -Fq "$marker" "$work/qemu-serial.log" || {
+        echo "RV32I_QEMU_P2=FAIL missing=$marker" >&2
+        tail -n 120 "$work/qemu-serial.log" >&2
+        exit 1
+      }
+    done
+    python3 tests/external/linux/runtime_v2_log_check.py \
+      --profile p0 --log "$work/qemu-serial.log"
+    echo "RV32I_QEMU_P2_FRONTIER=PASS image_sha256=$image_sha real_QEMU=true original_GNU_Kbuild=true minic_C=1741/1741 p2_core=3 scope=NOT_FULL_P2"
     exit 0
   fi
   # Use the SAME canonical manifest as RV64, including probe-exec.
