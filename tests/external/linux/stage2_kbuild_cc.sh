@@ -249,6 +249,14 @@ elif [[ "$rv32i_origin_audit" == 1 ]]; then
     exit 2
   fi
   minic_target_args=(--target=riscv32-linux -march=rv32i -mabi=ilp32)
+  # The actual GCC Kbuild -fshort-wchar is a C type/ABI option, not ISA.
+  # Pass it through unchanged instead of altering the Linux header,
+  # preprocessing L"..." bytes, or overriding RV32's normal wchar model.
+  for arg in "${args[@]}"; do
+    case "$arg" in
+      -fshort-wchar|-fno-short-wchar) minic_target_args+=("$arg") ;;
+    esac
+  done
   [[ -z "$trace" ]] ||
     printf 'minic rv32i_origin_audit=1 isa=rv32i abi=ilp32 source=%q\n' "$preprocessed" >>"$trace"
 fi

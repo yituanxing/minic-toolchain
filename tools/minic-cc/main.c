@@ -6,7 +6,7 @@
 #include <string.h>
 
 static void minic_print_usage(FILE *stream, const char *program) {
-    (void)fprintf(stream, "usage: %s -S <preprocessed-input.i> [--target=riscv32-linux|riscv64-linux|x86_64-linux|aarch64-linux|loongarch64-linux] [-march=rv32i|rv64i|rv64im|rv64imafd] [-mabi=ilp32|lp64|lp64d] [-ffunction-sections|-fno-function-sections] [-fPIE|-fPIC|-fno-pie] -o <output.s>\n", program);
+    (void)fprintf(stream, "usage: %s -S <preprocessed-input.i> [--target=riscv32-linux|riscv64-linux|x86_64-linux|aarch64-linux|loongarch64-linux] [-march=rv32i|rv64i|rv64im|rv64imafd] [-mabi=ilp32|lp64|lp64d] [-ffunction-sections|-fno-function-sections] [-fPIE|-fPIC|-fno-pie] [-fshort-wchar|-fno-short-wchar] -o <output.s>\n", program);
 }
 
 int main(int argc, char **argv) {
@@ -17,6 +17,10 @@ int main(int argc, char **argv) {
     int result;
     bool function_sections = false;
     bool position_independent = false;
+    /* GCC's -fshort-wchar changes the type of L"..." and wchar_t ABI.
+     * Keep the standard per-target default unless explicitly overridden. */
+    bool short_wchar = false;
+    bool wide_char_override = false;
     MinicTargetInfo selected_target;
     const char *target_name = "riscv64-linux";
     const MinicTargetInfo *target_info;
@@ -66,6 +70,12 @@ int main(int argc, char **argv) {
         } else if (strcmp(argv[index], "-mabi") == 0) {
             if (mabi != NULL || index + 1 >= argc) return 2;
             mabi = argv[++index];
+        } else if (strcmp(argv[index], "-fshort-wchar") == 0) {
+            short_wchar = true;
+            wide_char_override = true;
+        } else if (strcmp(argv[index], "-fno-short-wchar") == 0) {
+            short_wchar = false;
+            wide_char_override = true;
         } else if (strcmp(argv[index], "-ffunction-sections") == 0) {
             function_sections = true;
         } else if (strcmp(argv[index], "-fno-function-sections") == 0) {
@@ -108,6 +118,12 @@ int main(int argc, char **argv) {
      * is invocation-scoped and does not affect parsed language semantics. */
     selected_target = *target_info;
     selected_target.position_independent = position_independent;
+    if (wide_char_override) {
+        /* Frontend expression/type lowering reads this invocation-scoped
+         * TargetInfo. Core and ABI consumers see one agreed width. */
+        selected_target.wide_character_type =
+            short_wchar ? minic_type_unsigned_short() : minic_type_int();
+    }
     if (march != NULL || mabi != NULL) {
         char reason[240];
         if (selected_target.architecture != MINIC_TARGET_ARCH_RISCV64 &&

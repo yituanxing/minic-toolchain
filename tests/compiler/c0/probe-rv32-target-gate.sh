@@ -63,4 +63,18 @@ if "$MINIC_CC" --target=riscv32-linux -march=rv32i -mabi=ilp32 \
 fi
 test ! -e "$work/kernel-invalid-frame.s"
 echo 'RV32I_CALL_FRAME=PASS return_address0=true frame_address0=true level1_rejected=true'
+cat > "$work/kernel-wchar.i" <<'SRC'
+unsigned long kernel_wide_literal_bytes(void) { return sizeof(L"A"); }
+SRC
+"$MINIC_CC" --target=riscv32-linux -march=rv32i -mabi=ilp32 \
+    -S "$work/kernel-wchar.i" -o "$work/kernel-wchar-default.s"
+"$MINIC_CC" --target=riscv32-linux -march=rv32i -mabi=ilp32 -fshort-wchar \
+    -S "$work/kernel-wchar.i" -o "$work/kernel-wchar-short.s"
+"$MINIC_CC" --target=riscv32-linux -march=rv32i -mabi=ilp32 \
+    -fshort-wchar -fno-short-wchar -S "$work/kernel-wchar.i" \
+    -o "$work/kernel-wchar-restored.s"
+grep -Fq 'li t0, 8' "$work/kernel-wchar-default.s"
+grep -Fq 'li t0, 4' "$work/kernel-wchar-short.s"
+grep -Fq 'li t0, 8' "$work/kernel-wchar-restored.s"
+echo 'RV32I_WCHAR_OPTION=PASS default=32 short_wchar=16 reset=32'
 echo 'RV32I_TARGET_GATE=PASS ILP32_registered=true incompatible_ISA_rejected=true basic_C_core_emitted=true'
