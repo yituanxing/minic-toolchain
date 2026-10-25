@@ -100,34 +100,17 @@ static bool emit_int128_pair_shift_left(
     FILE *file, const MinicRiscv64CoreFrame *frame,
     const MinicCoreFunction *function, const MinicCoreInstruction *instruction,
     const char *symbol_name) {
-    MinicCoreValueId left = instruction->value.binary.left;
-    MinicCoreValueId right = instruction->value.binary.right;
+    const MinicCoreValueId left = instruction->value.binary.left;
+    const MinicCoreValueId right = instruction->value.binary.right;
     if (left >= function->value_count || right >= function->value_count ||
         !minic_type_is_int128_integer(function->values[left].type) ||
         !minic_type_is_integer(function->values[right].type) ||
         minic_type_is_int128_integer(function->values[right].type) ||
         !minic_riscv64_frame_load_int128(file, frame, left, "t0", "t1") ||
         !minic_riscv64_frame_load_value(file, frame, right, "t2") ||
-        fprintf(file,
-                "  beqz t2, .L%s_core_i128_shl_done_%" PRIu32 "\n"
-                "  li t3, 64\n"
-                "  bgeu t2, t3, .L%s_core_i128_shl_ge64_%" PRIu32 "\n"
-                "  neg t3, t2\n"
-                "  srl t4, t0, t3\n"
-                "  sll t1, t1, t2\n"
-                "  or t1, t1, t4\n"
-                "  sll t0, t0, t2\n"
-                "  j .L%s_core_i128_shl_done_%" PRIu32 "\n"
-                ".L%s_core_i128_shl_ge64_%" PRIu32 ":\n"
-                "  addi t2, t2, -64\n"
-                "  sll t1, t0, t2\n"
-                "  li t0, 0\n"
-                ".L%s_core_i128_shl_done_%" PRIu32 ":\n",
-                symbol_name, instruction->result,
-                symbol_name, instruction->result,
-                symbol_name, instruction->result,
-                symbol_name, instruction->result,
-                symbol_name, instruction->result) < 0)
+        !minic_riscv_emit_word_pair_shift(
+            file, instruction->kind, false,
+            symbol_name, "core_i128_shl", instruction->result, 64U, false))
         return false;
     return minic_riscv64_frame_store_int128(
         file, frame, instruction->result, "t0", "t1");
@@ -294,36 +277,11 @@ bool minic_riscv64_emit_scalar_instruction(
                 !minic_riscv64_core_integer_type_is_signed(function, instruction->type, &is_signed) ||
                 !minic_riscv64_frame_load_int128(file, frame, left, "t0", "t1") ||
                 !minic_riscv64_frame_load_value(file, frame, right, "t2") ||
-                fprintf(file,
-                        "  beqz t2, .L%s_core_i128_shr_done_%" PRIu32 "\n"
-                        "  li t3, 64\n"
-                        "  bgeu t2, t3, .L%s_core_i128_shr_ge64_%" PRIu32 "\n"
-                        "  neg t3, t2\n"
-                        "  sll t4, t1, t3\n"
-                        "  srl t0, t0, t2\n"
-                        "  or t0, t0, t4\n"
-                        "  %s t1, t1, t2\n"
-                        "  j .L%s_core_i128_shr_done_%" PRIu32 "\n"
-                        ".L%s_core_i128_shr_ge64_%" PRIu32 ":\n"
-                        "  addi t2, t2, -64\n"
-                        "  %s t0, t1, t2\n"
-                        "  %s\n"
-                        ".L%s_core_i128_shr_done_%" PRIu32 ":\n",
-                        symbol_name,
-                        instruction->result,
-                        symbol_name,
-                        instruction->result,
-                        is_signed ? "sra" : "srl",
-                        symbol_name,
-                        instruction->result,
-                        symbol_name,
-                        instruction->result,
-                        is_signed ? "sra" : "srl",
-                        is_signed ? "  srai t1, t1, 63" : "  li t1, 0",
-                        symbol_name,
-                        instruction->result) < 0) {
+                !minic_riscv_emit_word_pair_shift(
+                    file, instruction->kind, is_signed,
+                    symbol_name, "core_i128_shr",
+                    instruction->result, 64U, false))
                 return false;
-            }
             return minic_riscv64_frame_store_int128(file, frame, instruction->result, "t0", "t1");
         }
         opcode = minic_riscv_scalar_binary_opcode(

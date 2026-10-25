@@ -49,68 +49,14 @@ static bool wide_shift(FILE *out, const MinicCoreFunction *f,
     if (!rv32_pair_slot(out, fr, left, "t0", "t1", true))
         return false;
     if (shift_words == 2U) {
-        if (!rv32_pair_slot(out, fr, right, "t2", "t5", true) ||
-            fprintf(out, "  bnez t5, .L%s_wide_ge64_%" PRIu32 "\n",
-                    symbol, ins->result) < 0) return false;
+        if (!rv32_pair_slot(out, fr, right, "t2", "t5", true))
+            return false;
     } else if (!rv32_slot(out, fr, right, "t2", true)) {
         return false;
     }
-    /* Branch labels include the function symbol and unique SSA result.
-     * RV32I register shifts mask to 5 bits: handle 0/32/64 boundaries
-     * explicitly rather than accidentally turning shift-32 into shift-0. */
-    if (fprintf(out,
-        "  beqz t2, .L%s_wide_done_%" PRIu32 "\n"
-        "  li t3, 64\n"
-        "  bgeu t2, t3, .L%s_wide_ge64_%" PRIu32 "\n"
-        "  li t3, 32\n"
-        "  bgeu t2, t3, .L%s_wide_ge32_%" PRIu32 "\n"
-        "  sub t3, t3, t2\n",
-        symbol, ins->result, symbol, ins->result,
-        symbol, ins->result) < 0)
-        return false;
-    if (!right_shift) {
-        if (fprintf(out,
-             "  srl t4, t0, t3\n"
-             "  sll t1, t1, t2\n"
-             "  or t1, t1, t4\n"
-             "  sll t0, t0, t2\n") < 0)
-            return false;
-    } else if (fprintf(out,
-             "  sll t4, t1, t3\n"
-             "  srl t0, t0, t2\n"
-             "  or t0, t0, t4\n"
-             "  %s t1, t1, t2\n",
-             signed_shift ? "sra" : "srl") < 0)
-        return false;
-    if (fprintf(out,
-        "  j .L%s_wide_done_%" PRIu32 "\n"
-        ".L%s_wide_ge32_%" PRIu32 ":\n"
-        "  addi t2, t2, -32\n",
-        symbol, ins->result, symbol, ins->result) < 0)
-        return false;
-    if (!right_shift) {
-        if (fprintf(out,
-            "  sll t1, t0, t2\n"
-            "  li t0, 0\n") < 0) return false;
-    } else if (fprintf(out,
-            "  %s t0, t1, t2\n"
-            "  %s\n",
-            signed_shift ? "sra" : "srl",
-            signed_shift ? "srai t1, t1, 31" : "li t1, 0") < 0)
-        return false;
-    if (fprintf(out,
-        "  j .L%s_wide_done_%" PRIu32 "\n"
-        ".L%s_wide_ge64_%" PRIu32 ":\n",
-        symbol, ins->result, symbol, ins->result) < 0)
-        return false;
-    if (signed_shift) {
-        if (fprintf(out,
-            "  srai t1, t1, 31\n"
-            "  mv t0, t1\n") < 0) return false;
-    } else if (fprintf(out, "  li t0, 0\n  li t1, 0\n") < 0)
-        return false;
-    if (fprintf(out, ".L%s_wide_done_%" PRIu32 ":\n",
-                symbol, ins->result) < 0)
+    if (!minic_riscv_emit_word_pair_shift(
+            out, ins->kind, signed_shift, symbol, "wide",
+            ins->result, 32U, shift_words == 2U))
         return false;
     return rv32_pair_slot(out, fr, ins->result, "t0", "t1", false);
 }

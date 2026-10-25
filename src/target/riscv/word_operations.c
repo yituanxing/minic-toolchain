@@ -45,6 +45,77 @@ bool minic_riscv_emit_word_pair_unary(FILE *out, MinicCoreInstructionKind kind) 
     }
 }
 
+bool minic_riscv_emit_word_pair_shift(FILE *out,
+                                     MinicCoreInstructionKind kind,
+                                     bool is_signed,
+                                     const char *symbol, const char *label_scope,
+                                     uint32_t result, unsigned xlen,
+                                     bool count_has_high_word) {
+    const bool right = kind == MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_RIGHT;
+    const char *right_op = is_signed ? "sra" : "srl";
+    if (out == NULL || symbol == NULL || label_scope == NULL ||
+        (kind != MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_LEFT && !right) ||
+        (xlen != 32U && xlen != 64U))
+        return false;
+    if (count_has_high_word &&
+        fprintf(out, "  bnez t5, .L%s_%s_ge%u_%" PRIu32 "\n",
+                symbol, label_scope, 2U * xlen, result) < 0)
+        return false;
+    if (fprintf(out,
+        "  beqz t2, .L%s_%s_done_%" PRIu32 "\n"
+        "  li t3, %u\n"
+        "  bgeu t2, t3, .L%s_%s_ge%u_%" PRIu32 "\n"
+        "  li t3, %u\n"
+        "  bgeu t2, t3, .L%s_%s_ge%u_%" PRIu32 "\n"
+        "  sub t3, t3, t2\n",
+        symbol, label_scope, result,
+        2U * xlen, symbol, label_scope, 2U * xlen, result,
+        xlen, symbol, label_scope, xlen, result) < 0)
+        return false;
+    if (!right) {
+        if (fprintf(out,
+            "  srl t4, t0, t3\n"
+            "  sll t1, t1, t2\n"
+            "  or t1, t1, t4\n"
+            "  sll t0, t0, t2\n") < 0) return false;
+    } else if (fprintf(out,
+            "  sll t4, t1, t3\n"
+            "  srl t0, t0, t2\n"
+            "  or t0, t0, t4\n"
+            "  %s t1, t1, t2\n", right_op) < 0)
+        return false;
+    if (fprintf(out,
+        "  j .L%s_%s_done_%" PRIu32 "\n"
+        ".L%s_%s_ge%u_%" PRIu32 ":\n"
+        "  addi t2, t2, -%u\n",
+        symbol, label_scope, result,
+        symbol, label_scope, xlen, result, xlen) < 0)
+        return false;
+    if (!right) {
+        if (fprintf(out, "  sll t1, t0, t2\n  li t0, 0\n") < 0)
+            return false;
+    } else if (fprintf(out,
+                       "  %s t0, t1, t2\n"
+                       "  %s\n", right_op,
+                       is_signed ? (xlen == 32U ? "srai t1, t1, 31" :
+                                                  "srai t1, t1, 63") :
+                                   "li t1, 0") < 0)
+        return false;
+    if (fprintf(out,
+        "  j .L%s_%s_done_%" PRIu32 "\n"
+        ".L%s_%s_ge%u_%" PRIu32 ":\n",
+        symbol, label_scope, result,
+        symbol, label_scope, 2U * xlen, result) < 0)
+        return false;
+    if (right && is_signed) {
+        if (fprintf(out, "  srai t1, t1, %u\n  mv t0, t1\n",
+                    xlen - 1U) < 0) return false;
+    } else if (fprintf(out, "  li t0, 0\n  li t1, 0\n") < 0)
+        return false;
+    return fprintf(out, ".L%s_%s_done_%" PRIu32 ":\n",
+                   symbol, label_scope, result) >= 0;
+}
+
 bool minic_riscv_emit_word_bitscan(FILE *out, MinicCoreInstructionKind kind,
                                   const char *symbol, const char *label_scope,
                                   uint32_t result, unsigned width, unsigned xlen) {

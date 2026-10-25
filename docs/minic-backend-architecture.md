@@ -179,3 +179,24 @@ without reworking the working Linux/Linux-ABI code paths.
 The native focused probe emits RV32I 64-bit and RV64I 128-bit source C
 and checks the actual assembler text. It complements, but does not replace,
 the existing real GNU/QEMU and Linux gates.
+
+## Second global read and wide-shift ownership
+
+At the refactor head, the audit again fetched all 302 MiniC production
+C/header files (compiler, frontend, Core, five targets, two MiniC tools and
+public entrypoint) before selecting the next deletion. This exposed three
+ownership constraints: driver predefines intentionally remain a **RV64-only
+driver pipeline**, canonical default RV64 layouts are confined to RV64
+consumers or legacy default API wrappers, and existing multiple target
+runtime/original-program receipts must be preserved. Do not claim the
+user-facing `minic` product driver supports every `minic-cc` backend.
+
+The source-level RV32 and RV64 two-limb shifts had independently reimplemented
+the same Base-I word-shift algorithm. After both full source routes were
+reviewed, the `riscv/word_operations.c` family implementation now handles
+XLEN-dependent 32/64/128 boundaries, preserving sign-fill and non-M machine
+instructions. RV32 still independently classifies shift-count storage and
+passes the high word when its count is 64-bit; RV64 continues to reject
+unqualified wide shift-count types. The focused compile probe tests the
+low/high-count labels on both targets; QEMU matrices remain authoritative
+for dynamic execution.

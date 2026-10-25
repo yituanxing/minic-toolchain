@@ -16,6 +16,10 @@ U pair_and(U a, U b) { return a & b; }
 U pair_or(U a, U b) { return a | b; }
 U pair_not(U a) { return ~a; }
 I pair_neg(I a) { return -a; }
+U pair_shl(U a, unsigned k) { return a << k; }
+U pair_shr(U a, unsigned k) { return a >> k; }
+I pair_sar(I a, unsigned k) { return a >> k; }
+U pair_shl_wide_count(U a, U k) { return a << k; }
 int bit_clz(U a) { return __builtin_clzll(a); }
 int bit_ctz(U a) { return __builtin_ctzll(a); }
 SRC
@@ -26,7 +30,8 @@ for pattern in \
   'sltu t5, t4, t0' 'sltu t5, t0, t2' \
   'snez t4, t0' 'not t0, t0' 'not t1, t1' \
   'xor t0, t0, t2' 'and t1, t1, t3' 'or t1, t1, t3' \
-  '_rv32_clz_loop_' '_rv32_ctz_loop_' 'add t1, t1, t4'; do
+  '_rv32_clz_loop_' '_rv32_ctz_loop_' 'add t1, t1, t4' \
+  '_wide_ge32_' '_wide_ge64_' 'bnez t5,'; do
   grep -Fq "$pattern" "$work/rv32.s" || {
     echo "RISCV_SHARED_WORD_OPS=FAIL rv32-missing:$pattern" >&2
     exit 1
@@ -43,6 +48,9 @@ U pair_and(U a, U b) { return a & b; }
 U pair_or(U a, U b) { return a | b; }
 U pair_not(U a) { return ~a; }
 I pair_neg(I a) { return -a; }
+U pair_shl(U a, unsigned k) { return a << k; }
+U pair_shr(U a, unsigned k) { return a >> k; }
+I pair_sar(I a, unsigned k) { return a >> k; }
 int bit_clz(unsigned long a) { return __builtin_clzl(a); }
 int bit_ctz(unsigned long a) { return __builtin_ctzl(a); }
 SRC
@@ -53,7 +61,9 @@ for pattern in \
   'sltu t5, t4, t0' 'sltu t5, t0, t2' \
   'snez t4, t0' 'not t0, t0' 'not t1, t1' \
   'xor t0, t0, t2' 'and t1, t1, t3' 'or t1, t1, t3' \
-  '_core_clz_loop_' '_core_ctz_loop_'; do
+  '_core_clz_loop_' '_core_ctz_loop_' \
+  '_core_i128_shl_ge64_' '_core_i128_shr_ge64_' \
+  '_core_i128_shl_ge128_' '_core_i128_shr_ge128_'; do
   grep -Fq "$pattern" "$work/rv64.s" || {
     echo "RISCV_SHARED_WORD_OPS=FAIL rv64-missing:$pattern" >&2
     exit 1
@@ -64,4 +74,4 @@ if grep -Eq '^[[:space:]]+(mul|mulw|div|rem|clz|ctz)[[:space:]]' \
   echo "RISCV_SHARED_WORD_OPS=FAIL unexpected non-I instruction" >&2
   exit 1
 fi
-echo 'RISCV_SHARED_WORD_OPS=PASS rv32=64bit-pair rv64=128bit-pair clz_ctz=xlen-based'
+echo 'RISCV_SHARED_WORD_OPS=PASS rv32=64bit-pair rv64=128bit-pair clz_ctz=xlen-based shifts=zero_1_limb_2limb_highcount'
