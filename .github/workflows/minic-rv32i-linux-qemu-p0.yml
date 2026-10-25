@@ -7,6 +7,8 @@ on:
       - .github/workflows/minic-rv32i-linux-qemu-p0.yml
       - tools/ci/linux-rv32i-qemu-p0-v1.sh
       - tests/external/linux/runtime_initramfs/rv32-p1-raw.c
+      - tests/external/linux/runtime_initramfs/rv32-init-raw.c
+      - tests/external/linux/runtime_initramfs/rv32-sh-raw.c
       - tools/ci/linux-rv32i-qemu-batch-isolate-v1.sh
   workflow_dispatch:
 
@@ -673,7 +675,7 @@ jobs:
               gcc-riscv64-linux-gnu cpio device-tree-compiler
           command -v qemu-system-riscv32
           command -v riscv64-linux-gnu-gcc
-      - name: Historical twelve P1 syscall families on twelve boots of one immutable Image
+      - name: Historical P0 mounts, P1 fork-exec-wait plus 12 syscall families on 12 immutable-Image boots
         shell: bash
         timeout-minutes: 13
         run: |
@@ -706,6 +708,20 @@ jobs:
           done
           test "$(grep -Fc $'\tPASS' build/rv32i-p1/p1-repeats.tsv)" -eq 12
           echo "RV32I_P1=PASS boots=12/12 syscalls=12/12 original_GNU_Kbuild=true minic_C=1741/1741 immutable_Image=$expected"
+      - name: Separate actual RV32I /bin/sh console lane on THE SAME Linux Image
+        shell: bash
+        timeout-minutes: 3
+        run: |
+          set -Eeuo pipefail
+          expected=972ad331163bad9a3c47e9125672a18cb485cef8ca53861d6040a647101efa95
+          test "$(sha256sum "$RV32I_P1_IMAGE" | cut -d' ' -f1)" = "$expected"
+          RV32I_QEMU_P1=1 \
+          RV32I_QEMU_SHELL=1 \
+          RV32I_QEMU_IMAGE="$RV32I_P1_IMAGE" \
+          RV32I_QEMU_WORK="$GITHUB_WORKSPACE/build/rv32i-p1/shell" \
+          RV32I_QEMU_TIMEOUT_SECONDS=55 \
+            bash tools/ci/linux-rv32i-qemu-p0-v1.sh
+          echo "RV32I_P0_SHELL=PASS actual_ELF32_binary=true same_Image=$expected clean_powerdown=true"
       - name: Retain exact ELF32 P1 syscall and first-fault evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -717,5 +733,9 @@ jobs:
             build/rv32i-p1/trials/*/qemu-serial.log
             build/rv32i-p1/trials/*/provenance.txt
             build/rv32i-p1/trials/*/init-elf.txt
+            build/rv32i-p1/trials/*/runtime-probe-elf.txt
+            build/rv32i-p1/shell/qemu-serial.log
+            build/rv32i-p1/shell/provenance.txt
+            build/rv32i-p1/shell/sh-elf.txt
           retention-days: 7
           if-no-files-found: warn
