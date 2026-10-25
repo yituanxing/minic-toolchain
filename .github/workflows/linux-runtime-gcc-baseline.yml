@@ -21,6 +21,10 @@ on:
       - 'src/core/**'
       - 'src/frontend/**'
       - 'src/target/riscv64/**'
+      # Same Linux workflow's opt-in RV32I entry must run on RV32 machine changes.
+      - 'src/target/riscv32/**'
+      - 'src/target/riscv/**'
+      - 'tests/compiler/c0/probe-rv32-target-gate.sh'
       - 'src/target/common/**'
       - 'src/target/backend*'
       - 'src/target/data_layout*'
