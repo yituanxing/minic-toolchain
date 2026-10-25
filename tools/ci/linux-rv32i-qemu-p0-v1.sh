@@ -87,6 +87,9 @@ if [[ "$p1" == 1 ]]; then
   build_guest tests/external/linux/runtime_initramfs/rv32-sh-raw.c sh
   if [[ "$p2" == 1 ]]; then
     build_guest tests/external/linux/runtime_initramfs/rv32-p2-raw.c runtime-p2
+    # Exact guest PC -> function proof, no host recompilation of the Image.
+    riscv64-linux-gnu-objdump -dr "$work/runtime-p2" >"$work/runtime-p2-disassembly.txt"
+    riscv64-linux-gnu-nm -n "$work/runtime-p2" >"$work/runtime-p2-symbols.txt"
   fi
 else
 cat >"$work/init.S" <<'ASM'
