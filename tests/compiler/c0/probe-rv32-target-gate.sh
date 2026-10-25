@@ -322,4 +322,31 @@ grep -Fxq '.weak blake2s_compress' "$work/kernel-weak-alias.s"
 grep -Fxq '.type blake2s_compress, @function' "$work/kernel-weak-alias.s"
 grep -Fxq '.set blake2s_compress, blake2s_compress_generic' "$work/kernel-weak-alias.s"
 echo 'RV32I_FUNCTION_ALIAS=PASS GNU_weak_alias=1 common_riscv_contract=1'
+cat > "$work/kernel-dead-callgraph.i" <<'SRC'
+extern int unresolved_kernel_backend(void);
+static int dead_after_goto(void) { return unresolved_kernel_backend(); }
+int live_kernel_entry(void) {
+    goto done;
+    return dead_after_goto();
+done:
+    return 11;
+}
+SRC
+for arch in riscv32 riscv64; do
+  if [ "$arch" = riscv32 ]; then
+    "$MINIC_CC" --target=riscv32-linux -march=rv32i -mabi=ilp32 \
+      -S "$work/kernel-dead-callgraph.i" -o "$work/kernel-dead-callgraph-32.s"
+    output="$work/kernel-dead-callgraph-32.s"
+  else
+    "$MINIC_CC" --target=riscv64-linux \
+      -S "$work/kernel-dead-callgraph.i" -o "$work/kernel-dead-callgraph-64.s"
+    output="$work/kernel-dead-callgraph-64.s"
+  fi
+  grep -Fq 'live_kernel_entry:' "$output"
+  if grep -Eq 'dead_after_goto:|call unresolved_kernel_backend' "$output"; then
+    echo "RV32I_CORE_CALLGRAPH=FAIL dead_function_emitted target=$arch" >&2
+    exit 1
+  fi
+done
+echo 'RV32I_CORE_CALLGRAPH=PASS rv32_rv64_emission_roots=real_Core_CFG'
 echo 'RV32I_TARGET_GATE=PASS ILP32_registered=true incompatible_ISA_rejected=true basic_C_core_emitted=true'

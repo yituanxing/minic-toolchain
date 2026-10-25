@@ -51,6 +51,9 @@ typedef struct MinicBackend {
     MinicBackendEmitProgram emit_program;
     /* Optional target contract for GNU multi-operand inline assembly. */
     MinicBackendQualifyInlineAsm qualify_inline_asm;
+    /* True only when the machine emitter omits unreachable Core blocks.
+     * Core call-graph pruning must use exactly the same emitted CFG roots. */
+    bool emit_reachable_core_blocks_only;
 } MinicBackend;
 
 /* Fail closed on unknown architecture. No default or host fallback. */

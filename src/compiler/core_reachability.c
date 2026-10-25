@@ -84,7 +84,8 @@ static bool minic_walk_reachable_core_edges(const MinicC0Program *program,
                                             const MinicCoreFunction *core,
                                             bool *function_reachable,
                                             MinicFunctionId *function_queue,
-                                            size_t *function_queue_count) {
+                                            size_t *function_queue_count,
+                                            bool emit_reachable_core_blocks_only) {
     bool *block_reachable = NULL;
     MinicCoreBlockId *block_queue = NULL;
     size_t block_queue_count = 0U;
@@ -105,27 +106,25 @@ static bool minic_walk_reachable_core_edges(const MinicC0Program *program,
     }
     block_reachable = (bool *)calloc(core->block_count, sizeof(*block_reachable));
     block_queue = (MinicCoreBlockId *)malloc(core->block_count * sizeof(*block_queue));
-    if (block_reachable == NULL || block_queue == NULL ||
-        !minic_enqueue_core_block(core->entry_block,
-                                 core->block_count,
-                                 block_reachable,
-                                 block_queue,
-                                 &block_queue_count)) {
+    if (block_reachable == NULL || block_queue == NULL) {
         goto done;
     }
-    /* Emission reachability must match the actual Core machine emitter.
-     * Every backend presently writes every Core basic block, including a
-     * statically unreachable block with a valid terminator. Calls and
-     * function addresses from those emitted blocks therefore create real
-     * ELF references. Looking only at the entry-CFG and source labels can
-     * delete the targets of emitted calls (including specialized inline
-     * clones and ordinary static helpers) and leave undefined symbols.
-     *
-     * Start from ALL emitted blocks. The existing worklist still validates
-     * all block edges and recursively walks each referenced function. This
-     * is conservative executable-symbol retention, not a way to ignore
-     * unsupported Core functions or invent replacement bodies. */
-    {
+    /* Match the selected target's actual ELF reference universe. The two
+     * RISC-V emitters filter Core blocks with the shared CFG root algorithm,
+     * including source labels. Other backends still write every block; keep
+     * their conservative all-block reference traversal unchanged. */
+    if (emit_reachable_core_blocks_only) {
+        size_t block_index;
+        if (!minic_core_function_mark_reachable_blocks(
+                core, block_reachable, core->block_count)) {
+            goto done;
+        }
+        for (block_index = 0U; block_index < core->block_count; ++block_index) {
+            if (block_reachable[block_index]) {
+                block_queue[block_queue_count++] = (MinicCoreBlockId)block_index;
+            }
+        }
+    } else {
         size_t root_block;
         for (root_block = 0U; root_block < core->block_count; ++root_block) {
             if (!minic_enqueue_core_block((MinicCoreBlockId)root_block,
@@ -350,7 +349,8 @@ static bool minic_inline_source_is_core_reachable_only(
 }
 
 bool minic_prune_inline_specializations_from_core(
-    MinicC0Program *program, const MinicCoreFunctionSet *set) {
+    MinicC0Program *program, const MinicCoreFunctionSet *set,
+    bool emit_reachable_core_blocks_only) {
     bool *reachable = NULL;
     bool *processed = NULL;
     bool *noncore_roots = NULL;
@@ -416,7 +416,8 @@ bool minic_prune_inline_specializations_from_core(
                                              &set->functions[caller_id],
                                              reachable,
                                              queue,
-                                             &queue_count)) {
+                                             &queue_count,
+                                             emit_reachable_core_blocks_only)) {
             goto done;
         }
     }

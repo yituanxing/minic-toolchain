@@ -340,7 +340,8 @@ int minic_compile_preprocessed_file_for_target(const char *input_path,
                                     success ? "end-ok" : "end-fail",
                                     program.function_count);
     }
-    if (success && !minic_prune_inline_specializations_from_core(&program, &core_set)) {
+    if (success && !minic_prune_inline_specializations_from_core(
+                       &program, &core_set, backend->emit_reachable_core_blocks_only)) {
         minic_set_diagnostic(diagnostic,
                              input_path,
                              1U,
