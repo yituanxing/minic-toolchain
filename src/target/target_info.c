@@ -618,7 +618,9 @@ bool minic_target_info_fixed_register_supported(const MinicTargetInfo *target,
 bool minic_target_info_local_fixed_register_supported(const MinicTargetInfo *target,
                                                       const char *name,
                                                       size_t name_length) {
-    if (target == NULL || target->architecture != MINIC_TARGET_ARCH_RISCV64 || name == NULL) {
+    if (target == NULL ||
+        (target->architecture != MINIC_TARGET_ARCH_RISCV64 &&
+         target->architecture != MINIC_TARGET_ARCH_RISCV32) || name == NULL) {
         return false;
     }
     return name_length == 2U && name[0] == 'a' && name[1] >= '0' && name[1] <= '7';
@@ -634,11 +636,12 @@ bool minic_target_info_inline_asm_register_clobber_supported(const MinicTargetIn
         return name_length == 2U &&
                (memcmp(name, "cc", 2U) == 0 || memcmp(name, "dx", 2U) == 0);
     if (target->architecture == MINIC_TARGET_ARCH_RISCV32) {
-        /* RV32's Core asm operands use t-registers first; a0..a7 are
-         * caller-saved clobber registers. The RV32 backend rejects any
-         * concrete asm operand overlapping a declared a-register clobber. */
-        return name_length == 2U && name[0] == 'a' &&
-               name[1] >= '0' && name[1] <= '7';
+        /* Admission is separate from allocation: an explicit t-register
+         * clobber must be respected by the RV32 source-asm register planner.
+         * RV32 caller-clobber sets match the base RISC-V integer ABI. */
+        return name_length == 2U &&
+               ((name[0] == 'a' && name[1] >= '0' && name[1] <= '7') ||
+                (name[0] == 't' && name[1] >= '0' && name[1] <= '6'));
     }
     if (target->architecture != MINIC_TARGET_ARCH_RISCV64) return false;
     /* TargetConstraint v1 keeps temporary registers available to the current

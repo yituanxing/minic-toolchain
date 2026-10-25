@@ -409,6 +409,16 @@ MinicCoreLowerStatus minic_core_lower_internal_record_materialized_address(
     if (expression == NULL || !minic_type_is_record(expression->type)) {
         return MINIC_CORE_LOWER_UNSUPPORTED;
     }
+    if (expression->kind == MINIC_EXPRESSION_CAST) {
+        const MinicExpressionId operand_id = expression->value.unary.operand;
+        const MinicExpression *operand = minic_c0_program_expression(
+            context->body->program, operand_id);
+        if (operand == NULL || !minic_type_is_record(operand->type) ||
+            operand->type.record_id != expression->type.record_id)
+            return MINIC_CORE_LOWER_UNSUPPORTED;
+        return minic_core_lower_internal_record_materialized_address(
+            context, operand_id, address_id);
+    }
     if (expression->kind == MINIC_EXPRESSION_STATEMENT) {
         const MinicBlock *statement_block;
         const MinicExpression *statement_result;

@@ -41,13 +41,21 @@ static bool rv32_source_arg_clobbers_safe(const MinicCoreInlineAsm *source,
         const MinicCoreInlineAsmRegisterClobber *entry =
             &source->register_clobbers[i];
         unsigned reg;
-        if (entry->name == NULL || entry->name_length != 2U ||
-            entry->name[0] != 'a' || entry->name[1] < '0' ||
+        if (entry->name == NULL || entry->name_length != 2U) return false;
+        if (entry->name[0] == 't' && entry->name[1] >= '0' &&
+            entry->name[1] <= '6') {
+            /* SIZE_MAX is the explicit callee-saved-input allocator policy.
+             * The normal t-register operand allocator cannot use this. */
+            if (structured_operands != SIZE_MAX) return false;
+            continue;
+        }
+        if (entry->name[0] != 'a' || entry->name[1] < '0' ||
             entry->name[1] > '7') return false;
         reg = (unsigned)(entry->name[1] - '0');
         /* Structured operands 6 and 7 are allocated to a0 and a1.
          * Legacy operands never use argument registers. */
-        if (reg < 2U && structured_operands > (size_t)(6U + reg))
+        if (structured_operands != SIZE_MAX && reg < 2U &&
+            structured_operands > (size_t)(6U + reg))
             return false;
     }
     return true;
@@ -129,11 +137,13 @@ static bool rv32_emit_source_opaque_asm(
  * Missing/unknown operands must never leak into the GNU assembler. */
 static bool rv32_emit_source_template(
     FILE *out, const MinicCoreInlineAsm *source,
-    const char *const bindings[10], const bool memory[10]) {
+    const char *const bindings[10], const bool memory[10],
+    bool saved_input_registers) {
     size_t i;
     if (out == NULL || source == NULL || source->template_text == NULL ||
         !source->is_volatile || source->is_goto ||
-        !rv32_source_arg_clobbers_safe(source, 0U) ||
+        !rv32_source_arg_clobbers_safe(source,
+                                      saved_input_registers ? SIZE_MAX : 0U) ||
         fprintf(out, "# MINIC_SOURCE_INLINE_ASM_BEGIN\n  ") < 0)
         return false;
     for (i = 0U; i < source->template_length; ++i) {
@@ -250,7 +260,7 @@ static bool rv32_emit_source_legacy_asm(
          !rv32_slot(out, fr, input,
                     address != MINIC_CORE_VALUE_INVALID ? "t2" :
                     output_reg != NULL ? "t1" : "t0", true)) ||
-        !rv32_emit_source_template(out, source, bindings, memory))
+        !rv32_emit_source_template(out, source, bindings, memory, false))
         return false;
     return output_reg == NULL ||
            (rv32_canon(out, f, ins->type, output_reg) &&
@@ -280,6 +290,136 @@ static bool rv32_emit_source_structured_asm(
         return false;
     source = &f->inline_asms[ins->value.structured_inline_asm.inline_asm_id];
     n = ins->value.structured_inline_asm.operand_count;
+    /* An asm that declares all scratch/argument registers clobbered (Linux
+     * IRQ stack-switch trampolines do this) requires stable input registers.
+     * s1/s2 are callee-saved by the invoked code; save the compiler's old
+     * values on its own 16-byte-aligned stack before executing source asm.
+     * The source promises to restore sp, exactly as required by GNU asm. */
+    {
+        bool has_t_clobber = false;
+        for (i = 0U; i < source->register_clobber_count; ++i) {
+            const MinicCoreInlineAsmRegisterClobber *c =
+                &source->register_clobbers[i];
+            if (c->name != NULL && c->name_length == 2U &&
+                c->name[0] == 't' && c->name[1] >= '0' && c->name[1] <= '6')
+                has_t_clobber = true;
+        }
+        if (has_t_clobber) {
+            const char *const saved_regs[] = {"s1", "s2"};
+            const char *const scratch_regs[] = {"t0", "t1"};
+            if (n == 0U || n > 2U || source->is_goto ||
+                !source->is_volatile || source->template_text == NULL ||
+                !rv32_source_arg_clobbers_safe(source, SIZE_MAX))
+                return false;
+            for (i = 0U; i < n; ++i) {
+                const MinicCoreStructuredInlineAsmOperand *b =
+                    &ins->value.structured_inline_asm.operands[i];
+                unsigned bits;
+                bool is_signed;
+                if (b->operand_index >= n || seen[b->operand_index] ||
+                    b->has_fixed_register_binding ||
+                    b->kind != MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT ||
+                    b->value >= f->value_count ||
+                    !rv32_scalar(f, f->values[b->value].type, &bits, &is_signed) ||
+                    bits != 32U ||
+                    !rv32_slot(out, fr, b->value,
+                               scratch_regs[b->operand_index], true))
+                    return false;
+                seen[b->operand_index] = true;
+                bindings[b->operand_index] = saved_regs[b->operand_index];
+            }
+            if (fprintf(out,
+                "  addi sp, sp, -16\n  sw s1, 0(sp)\n  sw s2, 4(sp)\n") < 0)
+                return false;
+            for (i = 0U; i < n; ++i)
+                if (fprintf(out, "  mv %s, %s\n", saved_regs[i], scratch_regs[i]) < 0)
+                    return false;
+            return rv32_emit_source_template(out, source, bindings,
+                                            memory, true) &&
+                   fprintf(out,
+                       "  lw s1, 0(sp)\n  lw s2, 4(sp)\n  addi sp, sp, 16\n") >= 0;
+        }
+    }
+    /* GNU local register variables are a declaration-to-inline-asm ABI,
+     * not long-lived allocations of a0..a7.  The shared Core binding ID
+     * identifies the required physical register, while each ordinary C
+     * value still lives in its owned ILP32 stack slot between asm sites.
+     * RISC-V SBI uses two read/write a-registers and six inputs. */
+    {
+        bool has_fixed = false;
+        bool register_used[8] = {false};
+        static const char *const abi_registers[8] = {
+            "a0", "a1", "a2", "a3", "a4", "a5", "a6", "a7"
+        };
+        for (i = 0U; i < n; ++i)
+            if (ins->value.structured_inline_asm.operands[i].has_fixed_register_binding)
+                has_fixed = true;
+        if (has_fixed) {
+            if (n == 0U || n > 8U || source->is_goto ||
+                !source->is_volatile || source->template_text == NULL ||
+                !rv32_source_arg_clobbers_safe(source, n))
+                return false;
+            for (i = 0U; i < n; ++i) {
+                const MinicCoreStructuredInlineAsmOperand *b =
+                    &ins->value.structured_inline_asm.operands[i];
+                const MinicCoreFixedRegisterBinding *fixed;
+                unsigned reg_index, bits;
+                bool is_signed;
+                MinicType pointee;
+                if (!b->has_fixed_register_binding ||
+                    b->fixed_register_binding_id >= f->fixed_register_binding_count ||
+                    b->operand_index >= n || seen[b->operand_index] ||
+                    b->value >= f->value_count)
+                    return false;
+                fixed = &f->fixed_register_bindings[b->fixed_register_binding_id];
+                if (!fixed->is_local || fixed->register_name == NULL ||
+                    fixed->register_name_length != 2U ||
+                    fixed->register_name[0] != 'a' ||
+                    fixed->register_name[1] < '0' ||
+                    fixed->register_name[1] > '7')
+                    return false;
+                reg_index = (unsigned)(fixed->register_name[1] - '0');
+                if (register_used[reg_index]) return false;
+                register_used[reg_index] = true;
+                seen[b->operand_index] = true;
+                bindings[b->operand_index] = abi_registers[reg_index];
+                if (b->kind == MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT) {
+                    if (!minic_type_equal(f->values[b->value].type, fixed->type) ||
+                        !rv32_scalar(f, fixed->type, &bits, &is_signed) ||
+                        bits != 32U ||
+                        !rv32_slot(out, fr, b->value, abi_registers[reg_index], true))
+                        return false;
+                } else if (b->kind == MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE ||
+                           b->kind == MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT) {
+                    if (!minic_type_pointee(f->values[b->value].type, &pointee) ||
+                        !minic_type_equal(pointee, fixed->type) ||
+                        !rv32_scalar(f, pointee, &bits, &is_signed) || bits != 32U)
+                        return false;
+                    if (b->kind == MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE &&
+                        (!rv32_slot(out, fr, b->value, "t0", true) ||
+                         fprintf(out, "  lw %s, 0(t0)\n",
+                                 abi_registers[reg_index]) < 0))
+                        return false;
+                } else {
+                    return false;
+                }
+            }
+            if (!rv32_emit_source_template(out, source, bindings, memory, false))
+                return false;
+            for (i = 0U; i < n; ++i) {
+                const MinicCoreStructuredInlineAsmOperand *b =
+                    &ins->value.structured_inline_asm.operands[i];
+                if (b->kind == MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE ||
+                    b->kind == MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT) {
+                    if (!rv32_slot(out, fr, b->value, "t0", true) ||
+                        fprintf(out, "  sw %s, 0(t0)\n",
+                                bindings[b->operand_index]) < 0)
+                        return false;
+                }
+            }
+            return true;
+        }
+    }
     if (n == 0U || n > MINIC_CORE_STRUCTURED_INLINE_ASM_OPERAND_LIMIT ||
         !source->is_volatile || source->template_text == NULL || source->is_goto ||
         !rv32_source_arg_clobbers_safe(source, n))
@@ -362,7 +502,7 @@ static bool rv32_emit_source_structured_asm(
                 return false;
         }
     }
-    if (!rv32_emit_source_template(out, source, bindings, memory))
+    if (!rv32_emit_source_template(out, source, bindings, memory, false))
         return false;
     for (i = 0U; i < n; ++i) {
         const MinicCoreStructuredInlineAsmOperand *b =
@@ -417,8 +557,11 @@ static bool rv32_emit_ins(FILE *out, const MinicC0Program *program,
         if (index >= f->fixed_register_binding_count) return false;
         binding = &f->fixed_register_bindings[index];
         if (binding->register_name == NULL ||
-            !minic_target_info_fixed_register_supported(
-                target, binding->register_name, binding->register_name_length) ||
+            !(minic_target_info_fixed_register_supported(
+                  target, binding->register_name, binding->register_name_length) ||
+              (binding->is_local &&
+               minic_target_info_local_fixed_register_supported(
+                   target, binding->register_name, binding->register_name_length))) ||
             !minic_type_equal(binding->type, ins->type) ||
             !rv32_scalar(f, ins->type, &bits, &is_signed) || bits != 32U)
             return false;

@@ -1583,11 +1583,23 @@ bool minic_c0_record_value_is_address_backed(const MinicC0Program *program,
             result_id = expression->value.unary.operand;
         } else if (expression->kind == MINIC_EXPRESSION_STATEMENT) {
             result_id = expression->value.statement_expression.result;
+        } else if (expression->kind == MINIC_EXPRESSION_CAST) {
+            /* A GNU cast to the identical record type does not create a
+             * different aggregate representation. Preserve its backing
+             * object so Core can keep using the shared record-copy seam. */
+            result_id = expression->value.unary.operand;
         } else {
             return false;
         }
         if (result_id == MINIC_EXPRESSION_INVALID || result_id >= expression_id) {
             return false;
+        }
+        if (expression->kind == MINIC_EXPRESSION_CAST) {
+            const MinicExpression *operand =
+                minic_c0_program_expression(program, result_id);
+            if (operand == NULL || !minic_type_is_record(operand->type) ||
+                operand->type.record_id != expression->type.record_id)
+                return false;
         }
         expression_id = result_id;
         remaining -= 1U;
@@ -1614,6 +1626,20 @@ static bool minic_c0_record_value_is_copy_source_bounded(const MinicC0Program *p
     if (expression->kind == MINIC_EXPRESSION_CALL ||
         expression->kind == MINIC_EXPRESSION_BUILTIN_VA_ARG) {
         return true;
+    }
+    if (expression->kind == MINIC_EXPRESSION_CAST ||
+        expression->kind == MINIC_EXPRESSION_STATEMENT) {
+        const MinicExpressionId source_id =
+            expression->kind == MINIC_EXPRESSION_CAST
+                ? expression->value.unary.operand
+                : expression->value.statement_expression.result;
+        const MinicExpression *source =
+            minic_c0_program_expression(program, source_id);
+        return source_id < expression_id && source != NULL &&
+               minic_type_is_record(source->type) &&
+               source->type.record_id == expression->type.record_id &&
+               minic_c0_record_value_is_copy_source_bounded(
+                   program, source_id, remaining - 1U);
     }
     if (expression->kind == MINIC_EXPRESSION_ASSIGNMENT) {
         const MinicExpression *left;
