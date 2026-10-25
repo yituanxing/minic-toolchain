@@ -113,4 +113,17 @@ grep -Fq '.section .init.setup' "$work/kernel-init-setup.s"
 grep -Fq '.4byte fixture_reset_name' "$work/kernel-init-setup.s"
 grep -Fq '.4byte fixture_reset_handler' "$work/kernel-init-setup.s"
 echo 'RV32I_GLOBAL_SETUP_RECORD=PASS explicit_section=1 two_relocations=1 shared_record_layout=1'
+cat > "$work/kernel-initcall-array.i" <<'SRC'
+int initcall_start, initcall_mid, initcall_end;
+static int *initcall_levels[] __attribute__((section(".init.data"))) = {
+    &initcall_start, &initcall_mid, &initcall_end
+};
+SRC
+"$MINIC_CC" --target=riscv32-linux -march=rv32i -mabi=ilp32 \
+    -S "$work/kernel-initcall-array.i" -o "$work/kernel-initcall-array.s"
+grep -Fq '.section .init.data' "$work/kernel-initcall-array.s"
+grep -Fq '.4byte initcall_start' "$work/kernel-initcall-array.s"
+grep -Fq '.4byte initcall_mid' "$work/kernel-initcall-array.s"
+grep -Fq '.4byte initcall_end' "$work/kernel-initcall-array.s"
+echo 'RV32I_GLOBAL_SECTION_ARRAY=PASS three_pointer_relocations=1 shared_array_layout=1'
 echo 'RV32I_TARGET_GATE=PASS ILP32_registered=true incompatible_ISA_rejected=true basic_C_core_emitted=true'
