@@ -326,7 +326,13 @@ static void mmap_test(void) {
     verdict("mmap-mprotect",ok);
 }
 __attribute__((noreturn,used)) void _start(void) {
-    if (SC0(SYS_GETPID)!=1) {say("RV32I_LINUX_P1=FAIL not_PID1\n");goto shutdown;}
+    /* The historical RV64 PID1 fork/exec/wait model executes the probe in
+     * a separate ELF32 address space, not inline in PID1. */
+    if (SC0(SYS_GETPID)<=1) {
+        say("RV32I_LINUX_P1=FAIL not_execve_child\n");
+        (void)SC1(SYS_EXIT,2);
+        for(;;)__asm__ volatile("nop");
+    }
     say("RUNTIME_V2_SYSCALL_BEGIN\n");
     eventfd_test();
     epoll_test();
@@ -342,11 +348,10 @@ __attribute__((noreturn,used)) void _start(void) {
     mmap_test();
     if (failed==0 && passed==12) {
         say("RUNTIME_V2_SYSCALL_END pass=12 fail=0\n");
-        say("RV32I_LINUX_P1=PASS syscalls=12 pid1=ELF32 ilp32=true\n");
+        say("RV32I_LINUX_P1=PASS syscalls=12 child=ELF32 ilp32=true execve=true\n");
     } else {
         say("RV32I_LINUX_P1=FAIL syscall_suite\n");
     }
-shutdown:
-    (void)SC4(SYS_REBOOT,0xfee1dead,0x28121969,0x4321fedc,0);
+    (void)SC1(SYS_EXIT,failed==0&&passed==12?0:1);
     for(;;) __asm__ volatile("nop" ::: "memory");
 }
