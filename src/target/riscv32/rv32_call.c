@@ -1,4 +1,5 @@
 #include "target/riscv32/rv32_internal.h"
+#include "target/riscv/record_copy_bytes.h"
 
 /* Load one little-endian ILP32 record word without reading past the
  * actual object extent. Each record Core argument is already a separate
@@ -16,8 +17,8 @@ static bool rv32_record_call_word(FILE *out, const Rv32Frame *fr,
     if (entry->indirect_record) {
         return word == 0U && rv32_address(out, reg, offset);
     }
-    if ((size_t)word > SIZE_MAX / 4U ||
-        (size_t)word * 4U >= entry->record_size ||
+    /* word < 2 by verified ILP32 plan: multiplication cannot overflow. */
+    if ((size_t)word * 4U >= entry->record_size ||
         offset > SIZE_MAX - (size_t)word * 4U)
         return false;
     offset += (size_t)word * 4U;

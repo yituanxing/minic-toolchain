@@ -2,6 +2,7 @@
 #define MINIC_TARGET_RISCV32_ABI_PLAN_H
 
 #include "target/common/core_call_view.h"
+#include "target/target_info.h"
 #include "target/riscv32/rv32_abi_cursor.h"
 #include <stdbool.h>
 #include <stddef.h>
