@@ -675,6 +675,20 @@ jobs:
               gcc-riscv64-linux-gnu cpio device-tree-compiler
           command -v qemu-system-riscv32
           command -v riscv64-linux-gnu-gcc
+      - name: Independent historical P0 9-check guest canary on unchanged RV32 Linux Image
+        shell: bash
+        timeout-minutes: 3
+        run: |
+          set -Eeuo pipefail
+          expected=972ad331163bad9a3c47e9125672a18cb485cef8ca53861d6040a647101efa95
+          test "$(sha256sum "$RV32I_P1_IMAGE" | cut -d' ' -f1)" = "$expected"
+          RV32I_QEMU_P1=1 \
+          RV32I_QEMU_FAST=1 \
+          RV32I_QEMU_IMAGE="$RV32I_P1_IMAGE" \
+          RV32I_QEMU_WORK="$GITHUB_WORKSPACE/build/rv32i-p1/fast" \
+          RV32I_QEMU_TIMEOUT_SECONDS=40 \
+            bash tools/ci/linux-rv32i-qemu-p0-v1.sh
+          echo "RV32I_P0_FULL=PASS official_manifest=true same_Image=$expected"
       - name: Historical P0 mounts, P1 fork-exec-wait plus 12 syscall families on 12 immutable-Image boots
         shell: bash
         timeout-minutes: 13
@@ -734,6 +748,8 @@ jobs:
             build/rv32i-p1/trials/*/provenance.txt
             build/rv32i-p1/trials/*/init-elf.txt
             build/rv32i-p1/trials/*/runtime-probe-elf.txt
+            build/rv32i-p1/fast/qemu-serial.log
+            build/rv32i-p1/fast/provenance.txt
             build/rv32i-p1/shell/qemu-serial.log
             build/rv32i-p1/shell/provenance.txt
             build/rv32i-p1/shell/sh-elf.txt
