@@ -241,9 +241,9 @@ jobs:
           retention-days: 7
 
 
-  # Parallel next-level bisection: seven independent certified GNU golden
-  # relink/QEMU runners, eight disjoint ~31-owner batches on each runner.
-  # No MiniC C compilation; every active ELF32 object is SHA-attested.
+  # 31 singleton replays from the ONE remaining failing ~31-object batch.
+  # Same certified GNU golden and seven-shard produced current MiniC objects.
+  # Eight runners * four GNU-linked real QEMU tests: no MiniC recompilation.
   rv32i-qemu-parallel-parts:
     if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[rv32-leaf]') || contains(github.event.head_commit.message, '[rv32-single]')
     runs-on: ubuntu-24.04
@@ -252,15 +252,14 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - {shard: 0, parent: '0', leaf: '0'}
-          - {shard: 0, parent: '0', leaf: '4'}
-          - {shard: 1, parent: '6', leaf: '1'}
-          - {shard: 1, parent: '6', leaf: '7'}
-          - {shard: 2, parent: '1', leaf: '1'}
-          - {shard: 3, parent: '4', leaf: '6'}
-          - {shard: 4, parent: '7', leaf: '2'}
-          - {shard: 5, parent: '3', leaf: '4'}
-          - {shard: 6, parent: '0', leaf: '0'}
+          - {shard: 4, parent: '6', leaf: '0'}
+          - {shard: 4, parent: '6', leaf: '1'}
+          - {shard: 4, parent: '6', leaf: '2'}
+          - {shard: 4, parent: '6', leaf: '3'}
+          - {shard: 4, parent: '6', leaf: '4'}
+          - {shard: 4, parent: '6', leaf: '5'}
+          - {shard: 4, parent: '6', leaf: '6'}
+          - {shard: 4, parent: '6', leaf: '7'}
     steps:
       - uses: actions/checkout@v4
       - name: Install pinned GNU RV32 build/link and real QEMU dependencies
