@@ -908,10 +908,18 @@ static bool terminator_is_valid(const MinicCoreFunction *function,
             return terminator->return_value == MINIC_CORE_VALUE_INVALID;
         }
         if (minic_type_is_record(function->return_type)) {
+            MinicType result_type;
+            /* Returning a const-qualified LOCAL record copies its value.
+             * C discards top-level qualifiers on the returned rvalue, not
+             * nested member or pointee qualifiers. The Core return object
+             * can still be the original const local; require exact record
+             * identity after removing only that top-level qualifier. */
             return terminator->return_value == MINIC_CORE_VALUE_INVALID &&
                    terminator->return_object < function->object_count &&
-                   minic_type_equal(function->objects[terminator->return_object].type,
-                                    function->return_type);
+                   minic_type_unqualified(
+                       function->objects[terminator->return_object].type,
+                       &result_type) &&
+                   minic_type_equal(result_type, function->return_type);
         }
         return terminator->return_value < function->value_count &&
                available_values[terminator->return_value] &&
