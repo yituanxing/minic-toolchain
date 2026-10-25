@@ -292,64 +292,10 @@ if [[ "$p1" == 1 ]]; then
       }
     done
     grep -Eq 'Kernel command line:.*rdinit=/bin/sh' "$work/qemu-serial.log"
-    # Serial TTY emits CRLF; normalize only for exact-result assertions.
-    # Keep the raw byte-exact guest UART log separately as original evidence.
+    # Serial TTY echoes INPUT. Do not mistake echoed input commands for
+    # executed shell output: require the actual command-result lines.
     tr -d '\r' <"$work/qemu-serial.log" >"$work/qemu-shell-normalized.log"
-    # Serial also echoes INPUT. Do not confuse the literal input commands
-    # ("echo X") with the executed guest output ("X").
-    grep -Eq '^console=ttyS0 .*rdinit=/bin/sh
-        echo "RV32I_QEMU_SHELL=FAIL no_executed_result=$line" >&2; exit 1;
-      }
-    done
-    if grep -Fq 'RV32_SHELL_' "$work/qemu-serial.log"; then
-      echo "RV32I_QEMU_SHELL=FAIL invalid_shell_commands" >&2; exit 1;
-    fi
-    echo "RV32I_QEMU_SHELL=PASS image_sha256=$image_sha genuine_ELF32=true real_QEMU=true clean_powerdown=true"
-    exit 0
-  fi
-  # Use the SAME canonical manifest as RV64, including probe-exec.
-  for pattern in 'INIT_PROC_MOUNT=PASS' 'INIT_SYSFS_MOUNT=PASS' \
-                 'INIT_DEVTMPFS_MOUNT=PASS' 'INIT_CMDLINE_READ=PASS' \
-                 'INIT_TMPFS_MOUNT=PASS' 'INIT_TMPFS_RW=PASS' \
-                 'MINIC_LINUX_RUNTIME_INIT_END fail=0' \
-                 'USER_SHELL_OK' 'DONE_COMMANDS'; do
-    grep -Fq "$pattern" "$work/qemu-serial.log" || {
-      echo "RV32I_QEMU_P0=FAIL missing=$pattern" >&2; exit 1;
-    }
-  done
-  python3 tests/external/linux/runtime_v2_log_check.py \
-    --profile p1 --log "$work/qemu-serial.log"
-  mapfile -t manifest_p1 < <(awk -F '\t' '$1=="p1"{print $3}' tests/external/linux/runtime_v2_checks.tsv)
-  [[ "${#manifest_p1[@]}" == 13 ]] || {
-    echo "RV32I_QEMU_P1=FAIL official_P1_manifest_size=${#manifest_p1[@]}" >&2; exit 1;
-  }
-  for pattern in "${manifest_p1[@]}"; do
-    grep -Eq "$pattern" "$work/qemu-serial.log" || {
-      echo "RV32I_QEMU_P1=FAIL official_manifest_missing=$pattern" >&2; exit 1;
-    }
-  done
-  [[ "$(grep -Ec '^RUNTIME_V2_SYSCALL_PASS ' "$work/qemu-serial.log")" == 12 ]] || {
-    echo "RV32I_QEMU_P1=FAIL required_exactly_12_pass_markers" >&2; exit 1;
-  }
-  # Match all 12 historical RV64 P1 families and final count in the SAME
-  # immutable-image boot; a timeout or incomplete log can never pass.
-  for name in eventfd-rw epoll-eventfd timerfd-read signalfd-read \
-              inotify-create socketpair-rw ipv6-tcp-loopback memfd-rw \
-              pidfd-open futex-wake io-uring-setup mmap-mprotect; do
-    grep -Fq "RUNTIME_V2_SYSCALL_PASS $name" "$work/qemu-serial.log" || {
-      echo "RV32I_QEMU_P1=FAIL missing=$name image=$image_sha" >&2
-      tail -n 100 "$work/qemu-serial.log" >&2
-      exit 1
-    }
-  done
-  grep -Fq 'RUNTIME_V2_SYSCALL_END pass=12 fail=0' "$work/qemu-serial.log"
-  grep -Fq 'RV32I_LINUX_P1=PASS syscalls=12 child=ELF32 ilp32=true execve=true' "$work/qemu-serial.log"
-  grep -Fq 'INIT_RUNTIME_PROBE=PASS' "$work/qemu-serial.log"
-  echo "RV32I_QEMU_P1=PASS image_sha256=$image_sha real_QEMU=rv32i original_Kbuild=true minic_C=1741/1741 syscalls=12/12"
-else
-  echo "RV32I_QEMU_P0=PASS image_sha256=$image_sha guest=rv32i/ilp32 original_Kbuild=true PID1=1 syscalls=getpid,write QEMU_P1=NOT_RUN"
-fi
- "$work/qemu-shell-normalized.log"
+    grep -Eq '^console=ttyS0 .*rdinit=/bin/sh$' "$work/qemu-shell-normalized.log"
     for line in PROC_CMDLINE_BEGIN PROC_CMDLINE_END RDINIT_SH_OK DONE_RDINIT; do
       grep -Fxq "$line" "$work/qemu-shell-normalized.log" || {
         echo "RV32I_QEMU_SHELL=FAIL no_executed_result=$line" >&2; exit 1;
