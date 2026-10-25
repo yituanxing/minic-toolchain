@@ -70,10 +70,11 @@ static int cmdline(void) {
     long fd=C4(SYS_OPENAT,AT_FDCWD,"/proc/cmdline",O_RDONLY,0);
     long n=bad(fd)?-1:C3(SYS_READ,fd,line,sizeof(line)-1);
     if(!bad(fd)) (void)C1(SYS_CLOSE,fd);
-    int ok=n>0 && has(line,(word)n,"rdinit=/init")
-         && has(line,(word)n,"minic_runtime=p1");
+    int ok=n>0 && has(line,(word)n,"rdinit=/init");
     check("INIT_CMDLINE_READ",ok);
-    return ok;
+    /* The independently booted P0/fast profile omits the P1 selector.
+     * It still checks the real procfs cmdline and all P0 functionality. */
+    return ok && has(line,(word)n,"minic_runtime=p1");
 }
 static int tmpfs_rw(void) {
     static const char sample[]="minic-linux-runtime-v2";
@@ -128,9 +129,9 @@ __attribute__((noreturn,used)) void _start(void){
     (void)mount_fs("proc","/proc","INIT_PROC_MOUNT");
     (void)mount_fs("sysfs","/sys","INIT_SYSFS_MOUNT");
     (void)mount_fs("devtmpfs","/dev","INIT_DEVTMPFS_MOUNT");
-    (void)cmdline();
+    int p1=cmdline();
     (void)tmpfs_rw();
-    (void)run_probe();
+    if(p1)(void)run_probe();
     if(fails==0) {
         say("USER_SHELL_OK\n");
         say("DONE_COMMANDS\n");
