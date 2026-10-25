@@ -35,7 +35,7 @@ bool rv32_frame_init(Rv32Frame *frame, const MinicC0Program *program,
         return false;
     /* The ABI plan is built once; frame and call emission consume exactly
      * its precomputed stack bound and individual argument placements. */
-    if (!rv32_function_abi_plan_build(f, &frame->abi))
+    if (!rv32_function_abi_plan_build(program, t, f, &frame->abi))
         return rv32_frame_reject("abi_plan", 0U, minic_type_void());
     max_stack_args = frame->abi.max_outgoing_stack_words;
     frame->is_variadic = is_variadic;

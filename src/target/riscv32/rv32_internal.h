@@ -66,6 +66,8 @@ bool rv32_emit_memory_instruction(FILE *, const MinicC0Program *,
 /* Parameters/direct/indirect ABI lowering: rv32_call.c */
 bool rv32_emit_parameter(FILE *, const MinicCoreFunction *,
                          const Rv32Frame *, const MinicCoreInstruction *);
+bool rv32_emit_parameter_object(FILE *, const MinicCoreFunction *,
+                                const Rv32Frame *, const MinicCoreInstruction *);
 bool rv32_emit_call(FILE *, const MinicCoreFunction *,
                     const Rv32Frame *, const MinicCoreInstruction *,
                     MinicCoreInstructionId);

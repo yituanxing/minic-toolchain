@@ -13,6 +13,10 @@
 typedef struct Rv32AbiWordLocation {
     MinicRiscv32AbiPlacement location;
     unsigned words;
+    /* For Core record objects: <=2 XLEN words by value, larger records
+     * by reference to a caller-owned snapshot per the soft ILP32 psABI. */
+    size_t record_size;
+    bool indirect_record;
 } Rv32AbiWordLocation;
 
 typedef struct Rv32CallAbiPlan {
@@ -32,7 +36,9 @@ typedef struct Rv32FunctionAbiPlan {
     size_t max_outgoing_stack_words;
 } Rv32FunctionAbiPlan;
 
-bool rv32_function_abi_plan_build(const MinicCoreFunction *,
+bool rv32_function_abi_plan_build(const MinicC0Program *,
+                                  const MinicTargetInfo *,
+                                  const MinicCoreFunction *,
                                   Rv32FunctionAbiPlan *);
 void rv32_function_abi_plan_destroy(Rv32FunctionAbiPlan *);
 

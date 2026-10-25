@@ -42,6 +42,8 @@ static bool rv32_emit_ins(FILE *out, const MinicC0Program *program,
     switch (ins->kind) {
     case MINIC_CORE_INSTRUCTION_PARAMETER:
         return rv32_emit_parameter(out, f, fr, ins);
+    case MINIC_CORE_INSTRUCTION_PARAMETER_OBJECT:
+        return rv32_emit_parameter_object(out, f, fr, ins);
     case MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT:
     case MINIC_CORE_INSTRUCTION_INTEGER_ADD:
     case MINIC_CORE_INSTRUCTION_INTEGER_SUBTRACT:
@@ -179,7 +181,8 @@ static bool rv32_func(FILE *out, const MinicC0Program *program,
         return false;
     }
     for (i = 0U; i < f->parameter_count; ++i) {
-        if (!rv32_scalar_storage_words(f, f->parameter_types[i], &bits)) {
+        if (!minic_type_is_record(f->parameter_types[i]) &&
+            !rv32_scalar_storage_words(f, f->parameter_types[i], &bits)) {
             rv32_diag(diag, "<rv32-abi>", "rv32i: non-scalar or multi-XLEN parameters require ABI lowering");
             return false;
         }
