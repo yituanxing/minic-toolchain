@@ -11,6 +11,11 @@ if [[ -n "${RV32I_TRIAGE_SHARD:-}" ]]; then
     echo 'RV32I_COHORT=FAIL invalid_shard_partition' >&2; exit 2;
   }
 fi
+if [[ -n "${RV32I_TRIAGE_PARENT_PART:-}" ]]; then
+  [[ -n "${RV32I_TRIAGE_SHARD:-}" && "$RV32I_TRIAGE_PARENT_PART" =~ ^[0-7]$ ]] || {
+    echo 'RV32I_COHORT=FAIL invalid_parent_partition' >&2; exit 2;
+  }
+fi
 
 root=$(realpath "$RV32I_TRIAGE_ROOT")
 src=$(realpath "$RV32I_TRIAGE_SOURCE")
@@ -130,17 +135,24 @@ mkdir -p "$root/subsets"
 if [[ -n "${RV32I_TRIAGE_SHARD:-}" ]]; then
   # Fixed stride within one certified 249/248-owner producer shard. Seven
   # independent runners each perform eight ~31-object QEMU trials in parallel.
-  python3 - "$shards/shard-$RV32I_TRIAGE_SHARD/full-objects.txt" "$root/subsets" "$RV32I_TRIAGE_SHARD" <<'PY_SPLIT'
+  python3 - "$shards/shard-$RV32I_TRIAGE_SHARD/full-objects.txt" "$root/subsets" "$RV32I_TRIAGE_SHARD" "${RV32I_TRIAGE_PARENT_PART:-all}" <<'PY_SPLIT'
 from pathlib import Path
 import sys
 src, dest, idx = Path(sys.argv[1]), Path(sys.argv[2]), int(sys.argv[3])
 names = [x for x in src.read_text().splitlines() if x and not x.startswith('#')]
 assert len(names) in (248, 249) and len(set(names)) == len(names)
+if sys.argv[4] != 'all':
+    parent = int(sys.argv[4])
+    assert 0 <= parent < 8
+    names = names[parent::8]
+    assert len(names) in (31, 32)
 for part in range(8):
     subset = names[part::8]
     assert subset
-    (dest / f'shard-{idx}-part-{part}.txt').write_text('\n'.join(subset)+'\n')
-    print(f'RV32I_SUBSHARD_PLAN=PASS shard={idx} part={part} objects={len(subset)}')
+    label = (f'shard-{idx}-part-{part}' if sys.argv[4] == 'all' else
+             f'shard-{idx}-part-{parent}-leaf-{part}')
+    (dest / f'{label}.txt').write_text('\n'.join(subset)+'\n')
+    print(f'RV32I_SUBSHARD_PLAN=PASS group={label} objects={len(subset)}')
 PY_SPLIT
   mapfile -t trial_files < <(find "$root/subsets" -type f -name '*.txt' | LC_ALL=C sort)
 else
