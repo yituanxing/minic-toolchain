@@ -88,6 +88,22 @@ bool minic_riscv32_emit_flat_global(FILE *out,
         return !obj->is_weak || obj->is_internal ||
                fprintf(out, ".weak %s\n", obj->name) >= 0;
     }
+    /* An explicitly empty GNU array (common in config-disabled Linux
+     * tables) is a defined ELF symbol of size zero. DataLayout still owns
+     * its extent: do not invent an element or reject the definition. */
+    if (obj->alias_target == MINIC_GLOBAL_OBJECT_INVALID &&
+        obj->initializer_count == 0U && obj->relocation_count == 0U &&
+        obj->union_selection_count == 0U &&
+        obj->flexible_array_initializer_count == 0U &&
+        minic_data_layout_global_object(target->data_layout, program, obj,
+                                        &bytes, &alignment) &&
+        bytes == 0U && alignment != 0U) {
+        if (obj->explicit_alignment > alignment)
+            alignment = obj->explicit_alignment;
+        return (alignment & (alignment - 1U)) == 0U &&
+               rv32_data_symbol(out, obj, alignment) &&
+               fprintf(out, ".size %s, 0\n", obj->name) >= 0;
+    }
     /* Linux exports weak, uninitialized protocol records as definitions.
      * The common flat serializer deliberately owns only strong symbols;
      * keep weak ELF binding here while reusing its DataLayout byte count.
@@ -138,11 +154,10 @@ bool minic_riscv32_emit_flat_global(FILE *out,
             return false;
         return fprintf(out, ".size %s, %zu\n", obj->name, bytes) >= 0;
     }
-    /* Real Linux __setup entries are records of pointers/scalars with
-     * .init.setup section ownership. Keep ABI layout/relocation locations in
-     * the common serializer; only the RV32 ELF32 relocation encoder and
-     * ELF section/symbol header are target-owned. */
-    if (obj->section_name != NULL &&
+    /* Explicit-section records and weak initialized definitions both need
+     * target-owned ELF binding, but the same shared DataLayout payload walk.
+     * This includes Linux __setup records and weak namespace initializers. */
+    if ((obj->section_name != NULL || obj->is_weak) &&
         (minic_type_is_record(obj->type) ||
          rv32_array_of_records(program, obj->type)) &&
         obj->alias_target == MINIC_GLOBAL_OBJECT_INVALID &&

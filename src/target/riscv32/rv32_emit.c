@@ -28,6 +28,31 @@ static void rv32_diag(MinicDiagnostic *d, const char *path, const char *text) {
     (void)snprintf(d->message, sizeof(d->message), "%s", text);
 }
 
+/* Preserve explicit source-asm a-register clobbers without manufacturing
+ * machine instructions. Core SSA lives in frame slots across asm; the
+ * structured target allocator must separately avoid clobbered operands. */
+static bool rv32_source_arg_clobbers_safe(const MinicCoreInlineAsm *source,
+                                         size_t structured_operands) {
+    size_t i;
+    if (source == NULL ||
+        (source->register_clobber_count != 0U &&
+         source->register_clobbers == NULL)) return false;
+    for (i = 0U; i < source->register_clobber_count; ++i) {
+        const MinicCoreInlineAsmRegisterClobber *entry =
+            &source->register_clobbers[i];
+        unsigned reg;
+        if (entry->name == NULL || entry->name_length != 2U ||
+            entry->name[0] != 'a' || entry->name[1] < '0' ||
+            entry->name[1] > '7') return false;
+        reg = (unsigned)(entry->name[1] - '0');
+        /* Structured operands 6 and 7 are allocated to a0 and a1.
+         * Legacy operands never use argument registers. */
+        if (reg < 2U && structured_operands > (size_t)(6U + reg))
+            return false;
+    }
+    return true;
+}
+
 /* GNU RISC-V inline asm is source-owned, not a MiniC machine-selected
  * opcode. Translate the Core-verified structured operand roles into ILP32
  * register and address transport; the source template owns its instructions.
@@ -51,7 +76,7 @@ static bool rv32_emit_source_opaque_asm(
         return false;
     source = &f->inline_asms[ins->value.inline_asm_id];
     if (!source->is_volatile || source->template_text == NULL ||
-        source->register_clobber_count != 0U)
+        !rv32_source_arg_clobbers_safe(source, 0U))
         return false;
     if (source->is_goto &&
         (symbol == NULL || symbol[0] == '\0' ||
@@ -108,7 +133,7 @@ static bool rv32_emit_source_template(
     size_t i;
     if (out == NULL || source == NULL || source->template_text == NULL ||
         !source->is_volatile || source->is_goto ||
-        source->register_clobber_count != 0U ||
+        !rv32_source_arg_clobbers_safe(source, 0U) ||
         fprintf(out, "# MINIC_SOURCE_INLINE_ASM_BEGIN\n  ") < 0)
         return false;
     for (i = 0U; i < source->template_length; ++i) {
@@ -257,7 +282,7 @@ static bool rv32_emit_source_structured_asm(
     n = ins->value.structured_inline_asm.operand_count;
     if (n == 0U || n > MINIC_CORE_STRUCTURED_INLINE_ASM_OPERAND_LIMIT ||
         !source->is_volatile || source->template_text == NULL || source->is_goto ||
-        source->register_clobber_count != 0U)
+        !rv32_source_arg_clobbers_safe(source, n))
         return false;
     for (i = 0U; i < n; ++i) {
         const MinicCoreStructuredInlineAsmOperand *b =

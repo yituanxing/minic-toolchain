@@ -41,13 +41,19 @@ static bool rv32_plan_shape(const MinicC0Program *program,
                              MinicType type, Rv32AbiWordLocation *entry) {
     size_t size, align;
     if (minic_type_is_record(type)) {
-        if (!minic_data_layout_type(target->data_layout, program, type,
-                                    &size, &align) ||
-            size == 0U || size > UINT32_MAX)
+        bool layout_ok = minic_data_layout_type(
+            target->data_layout, program, type, &size, &align);
+        if (getenv("MINIC_RV32_FRAME_TRACE") != NULL)
+            (void)fprintf(stderr,
+                "RV32_RECORD_ABI_SHAPE id=%zu layout=%u bytes=%zu align=%zu\n",
+                type.record_id, (unsigned)layout_ok,
+                layout_ok ? size : 0U, layout_ok ? align : 0U);
+        if (!layout_ok || size > UINT32_MAX)
             return false;
         (void)align;
         entry->record_size = size;
         entry->indirect_record = size > 8U;
+        /* GNU empty aggregates occupy no psABI register or stack word. */
         entry->words = size > 8U ? 1U : (unsigned)((size + 3U) / 4U);
         return true;
     }
@@ -86,6 +92,7 @@ static bool rv32_plan_incoming(const MinicC0Program *program,
         if (!rv32_plan_shape(program, target, function,
                               function->parameter_types[i], entry))
             return rv32_abi_reject("incoming_type", i, function->parameter_types[i]);
+        if (entry->words == 0U) continue;
         if (!minic_riscv32_abi_place(&cursor, entry->words, false,
                                       &entry->location))
             return rv32_abi_reject("incoming_place", i, function->parameter_types[i]);
@@ -135,11 +142,13 @@ static bool rv32_plan_call(const MinicC0Program *program,
         if (!minic_core_call_argument_actual_type(
                 function, &view.arguments[i], &type))
             return rv32_abi_reject("call_actual_type", i, minic_type_void());
-        if (minic_type_is_record(type) &&
-            (view.is_variadic && i >= view.parameter_count))
-            return rv32_abi_reject("variadic_record_unqualified", i, type);
+        /* Record varargs obey the very same ILP32 ABI shape and cursor as
+         * scalar varargs: <=2 XLEN words by value, larger via the caller's
+         * Core snapshot pointer. The variadic flag below makes the cursor
+         * apply psABI even-register alignment for two-word arguments. */
         if (!rv32_plan_shape(program, target, function, type, entry))
             return rv32_abi_reject("call_arg_type", i, type);
+        if (entry->words == 0U) continue;
         if (!minic_riscv32_abi_place(&cursor, entry->words,
                 view.is_variadic && i >= view.parameter_count,
                 &entry->location))

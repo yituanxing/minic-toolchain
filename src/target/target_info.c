@@ -633,6 +633,13 @@ bool minic_target_info_inline_asm_register_clobber_supported(const MinicTargetIn
     if (target->architecture == MINIC_TARGET_ARCH_X86_64)
         return name_length == 2U &&
                (memcmp(name, "cc", 2U) == 0 || memcmp(name, "dx", 2U) == 0);
+    if (target->architecture == MINIC_TARGET_ARCH_RISCV32) {
+        /* RV32's Core asm operands use t-registers first; a0..a7 are
+         * caller-saved clobber registers. The RV32 backend rejects any
+         * concrete asm operand overlapping a declared a-register clobber. */
+        return name_length == 2U && name[0] == 'a' &&
+               name[1] >= '0' && name[1] <= '7';
+    }
     if (target->architecture != MINIC_TARGET_ARCH_RISCV64) return false;
     /* TargetConstraint v1 keeps temporary registers available to the current
      * inline-asm operand allocator while also recognizing the RV64 argument

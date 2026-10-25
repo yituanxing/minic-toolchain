@@ -52,6 +52,9 @@ static bool rv32_emit_scalar_call_arguments(
             const char *reg[2] = {"t0", "t1"};
             const unsigned words = entry->words;
             size_t word;
+            if (words == 0U && entry->record_size == 0U &&
+                arg->kind == MINIC_CORE_CALL_ARGUMENT_OBJECT)
+                continue;
             if (words == 0U || words > 2U)
                 return false;
             if ((pass == 0U && loc.stack_count == 0U) ||
@@ -198,6 +201,7 @@ bool rv32_emit_parameter_object(FILE *out, const MinicCoreFunction *f,
     entry = &fr->abi.parameters[idx];
     loc = &entry->location;
     size = entry->record_size;
+    if (size == 0U && entry->words == 0U) return true;
     if (size == 0U || entry->words < 1U || entry->words > 2U ||
         entry->words != loc->register_count + loc->stack_count)
         return false;

@@ -27,7 +27,14 @@ bool rv32_emit_memory_instruction(FILE *out, const MinicC0Program *program,
                rv32_slot(out, fr, ins->result, "t0", false);
     case MINIC_CORE_INSTRUCTION_POINTER_OFFSET: {
         size_t stride = ins->value.pointer_offset.element_size;
-        if (stride == 0U || stride > UINT32_MAX) return false;
+        if (stride > UINT32_MAX) return false;
+        /* GNU permits pointer arithmetic over zero-sized record elements.
+         * Core has already evaluated the index and its side effects; the
+         * byte offset is identically zero for every index on ILP32. */
+        if (stride == 0U)
+            return rv32_slot(out, fr, ins->value.pointer_offset.base,
+                             "t0", true) &&
+                   rv32_slot(out, fr, ins->result, "t0", false);
         if (!rv32_slot(out, fr, ins->value.pointer_offset.index, "t1", true))
             return false;
         if (stride != 1U) {
@@ -102,7 +109,12 @@ bool rv32_emit_memory_instruction(FILE *out, const MinicC0Program *program,
         if (!minic_type_is_record(ins->type) ||
             !minic_data_layout_type(target->data_layout, program, ins->type,
                                     &copy_size, &alignment) ||
-            copy_size == 0U || copy_size > UINT32_MAX ||
+            copy_size > UINT32_MAX)
+            return false;
+        /* GNU C permits empty lockdep records. A zero-byte record copy is
+         * a genuine no-op, as in the shared RV64 record-copy helper. */
+        if (copy_size == 0U) return true;
+        if (
             !rv32_slot(out, fr, ins->value.record_copy.destination_address,
                        "t0", true) ||
             !rv32_slot(out, fr, ins->value.record_copy.source_address,
@@ -120,7 +132,10 @@ bool rv32_emit_memory_instruction(FILE *out, const MinicC0Program *program,
             !minic_data_layout_type(target->data_layout, program,
                                     f->objects[id].type,
                                     &copy_size, &alignment) ||
-            copy_size == 0U || copy_size > UINT32_MAX ||
+            copy_size > UINT32_MAX)
+            return false;
+        if (copy_size == 0U) return true;
+        if (
             !rv32_slot(out, fr, ins->value.record_load.source_address,
                        "t0", true) ||
             !rv32_address(out, fr, "t1", fr->object_offsets[id]))

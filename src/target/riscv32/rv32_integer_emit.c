@@ -72,6 +72,86 @@ static bool rv32_emit_mixed_checked_overflow(FILE *out,
            rv32_slot(out, fr, ins->result, "t4", false);
 }
 
+/* ILP32 long long remains one Core value transported in two 32-bit words.
+ * Carry/borrow and sign rules are computed across both words; 64-bit MUL
+ * and DIV use the same pinned original compiler-runtime symbols as the
+ * ordinary RV32I wide-integer lowering. */
+static bool rv32_emit_wide_checked_overflow(FILE *out,
+                                            const Rv32Frame *fr,
+                                            const MinicCoreInstruction *ins,
+                                            bool is_unsigned) {
+    const MinicCoreValueId lhs = ins->value.integer_overflow.left;
+    const MinicCoreValueId rhs = ins->value.integer_overflow.right;
+    const MinicCoreValueId address = ins->value.integer_overflow.result_address;
+    if (!rv32_pair_slot(out, fr, lhs, "t0", "t1", true) ||
+        !rv32_pair_slot(out, fr, rhs, "t2", "t3", true))
+        return false;
+    switch (ins->value.integer_overflow.operator_kind) {
+    case MINIC_CORE_INTEGER_OVERFLOW_ADD:
+        if (fprintf(out,
+            "  add t4, t0, t2\n  sltu t6, t4, t0\n"
+            "  add t5, t1, t3\n  sltu a0, t5, t1\n"
+            "  add t5, t5, t6\n  sltu a1, t5, t6\n"
+            "  or a0, a0, a1\n") < 0)
+            return false;
+        if (!is_unsigned &&
+            fprintf(out,
+                "  xor a0, t1, t3\n  xori a0, a0, -1\n"
+                "  xor a1, t1, t5\n  and a0, a0, a1\n"
+                "  srli a0, a0, 31\n") < 0)
+            return false;
+        break;
+    case MINIC_CORE_INTEGER_OVERFLOW_SUBTRACT:
+        if (fprintf(out,
+            "  sub t4, t0, t2\n  sltu t6, t0, t2\n"
+            "  sub t5, t1, t3\n  sltu a0, t1, t3\n"
+            "  sltu a1, t5, t6\n  sub t5, t5, t6\n"
+            "  or a0, a0, a1\n") < 0)
+            return false;
+        if (!is_unsigned &&
+            fprintf(out,
+                "  xor a0, t1, t3\n  xor a1, t1, t5\n"
+                "  and a0, a0, a1\n  srli a0, a0, 31\n") < 0)
+            return false;
+        break;
+    case MINIC_CORE_INTEGER_OVERFLOW_MULTIPLY:
+        if (fprintf(out,
+            "  mv a0, t0\n  mv a1, t1\n"
+            "  mv a2, t2\n  mv a3, t3\n"
+            "  call __muldi3\n"
+            "  mv t4, a0\n  mv t5, a1\n") < 0 ||
+            !rv32_slot(out, fr, address, "t0", true) ||
+            fprintf(out, "  sw t4, 0(t0)\n  sw t5, 4(t0)\n") < 0 ||
+            !rv32_pair_slot(out, fr, rhs, "t2", "t3", true) ||
+            fprintf(out, "  or t6, t2, t3\n  beqz t6, 1f\n") < 0 ||
+            !rv32_slot(out, fr, address, "t0", true) ||
+            fprintf(out,
+                "  lw a0, 0(t0)\n  lw a1, 4(t0)\n"
+                "  mv a2, t2\n  mv a3, t3\n  call %s\n",
+                is_unsigned ? "__udivdi3" : "__divdi3") < 0 ||
+            !rv32_pair_slot(out, fr, lhs, "t0", "t1", true) ||
+            fprintf(out,
+                "  xor a0, a0, t0\n  xor a1, a1, t1\n"
+                "  or a0, a0, a1\n  snez a0, a0\n") < 0)
+            return false;
+        if (!is_unsigned &&
+            (!rv32_pair_slot(out, fr, rhs, "t2", "t3", true) ||
+             fprintf(out,
+                 "  li t4, 0x80000000\n  bne t1, t4, 2f\n"
+                 "  bnez t0, 2f\n  li t4, -1\n"
+                 "  bne t2, t4, 2f\n  bne t3, t4, 2f\n"
+                 "  li a0, 1\n2:\n") < 0))
+            return false;
+        return fprintf(out, "  j 3f\n1:\n  li a0, 0\n3:\n") >= 0 &&
+               rv32_slot(out, fr, ins->result, "a0", false);
+    default:
+        return false;
+    }
+    return rv32_slot(out, fr, address, "t0", true) &&
+           fprintf(out, "  sw t4, 0(t0)\n  sw t5, 4(t0)\n") >= 0 &&
+           rv32_slot(out, fr, ins->result, "a0", false);
+}
+
 /* Checked arithmetic is a Core operation, not a Linux-specific intrinsic.
  * RV32I uses base-I carry/sign tests and the same GNU libgcc arithmetic
  * helpers already selected by ordinary RV32 scalar multiplication/division.
@@ -108,6 +188,9 @@ static bool rv32_emit_checked_overflow(FILE *out, const MinicCoreFunction *f,
                 (int)ins->value.integer_overflow.operator_kind);
         return false;
     }
+    if (rv32_is_wide_integer(f, result_type))
+        return rv32_emit_wide_checked_overflow(
+            out, fr, ins, minic_type_is_unsigned_integer(result_type));
     if (
         !rv32_scalar(f, result_type, &bits, &is_signed) ||
         bits < 8U || bits > 32U ||
