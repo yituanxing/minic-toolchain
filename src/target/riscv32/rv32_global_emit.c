@@ -120,17 +120,34 @@ bool minic_riscv32_emit_flat_global(FILE *out,
         (minic_type_is_record(obj->type) ||
          rv32_array_of_records(program, obj->type)) &&
         obj->alias_target == MINIC_GLOBAL_OBJECT_INVALID &&
-        !obj->is_tentative &&
         minic_data_layout_global_object(
             target->data_layout, program, obj, &bytes, &alignment) &&
-        bytes != 0U && alignment != 0U) {
+        alignment != 0U) {
         bool emitted;
         if (obj->explicit_alignment > alignment)
             alignment = obj->explicit_alignment;
         if ((alignment & (alignment - 1U)) != 0U ||
             !rv32_data_symbol(out, obj, alignment))
             return false;
-        if (minic_type_is_record(obj->type)) {
+        /* A section attribute does not make an uninitialized aggregate a
+         * recursive initializer. Linux's .data boot pageset and the usual
+         * .bss aggregates are bytewise zero, including nested records and
+         * their DataLayout padding. Keep explicit section ownership while
+         * using the same whole-object zero rule as the common serializer. */
+        if (bytes == 0U && obj->initializer_count == 0U &&
+            obj->relocation_count == 0U &&
+            obj->union_selection_count == 0U &&
+            obj->flexible_array_initializer_count == 0U) {
+            /* GNU permits zero-sized record definitions. Emit their section,
+             * alignment and ELF symbol, but no storage bytes. */
+            emitted = true;
+        } else if (obj->initializer_count == 0U && obj->relocation_count == 0U &&
+            obj->union_selection_count == 0U &&
+            obj->flexible_array_initializer_count == 0U) {
+            emitted = fprintf(out, "  .zero %zu\n", bytes) >= 0;
+        } else if (obj->is_tentative) {
+            return false;
+        } else if (minic_type_is_record(obj->type)) {
             const MinicRecord *record =
                 minic_c0_program_record(program, obj->type.record_id);
             if (record == NULL) return false;

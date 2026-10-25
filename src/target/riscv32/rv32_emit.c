@@ -40,18 +40,28 @@ static void rv32_diag(MinicDiagnostic *d, const char *path, const char *text) {
  * Follow the existing RV64 opaque-asm literal/escaped-percent semantics,
  * while refusing asm-goto which requires a separate CFG binding. */
 static bool rv32_emit_source_opaque_asm(
-    FILE *out, const MinicCoreFunction *f,
+    FILE *out, const MinicCoreFunction *f, const char *symbol,
     const MinicCoreInstruction *ins) {
     const MinicCoreInlineAsm *source;
     size_t i;
+    bool deferred_immediate;
     if (out == NULL || f == NULL || ins == NULL ||
         ins->kind != MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM ||
         ins->value.inline_asm_id >= f->inline_asm_count)
         return false;
     source = &f->inline_asms[ins->value.inline_asm_id];
-    if (!source->is_volatile || source->is_goto ||
-        source->template_text == NULL ||
+    if (!source->is_volatile || source->template_text == NULL ||
         source->register_clobber_count != 0U)
+        return false;
+    if (source->is_goto &&
+        (symbol == NULL || symbol[0] == '\0' ||
+         source->goto_target >= f->block_count))
+        return false;
+    deferred_immediate = source->is_goto &&
+                         source->source_inline_asm_id != SIZE_MAX;
+    if (deferred_immediate &&
+        fprintf(out, "  .extern __minic_deferred_asm_immediate_%zu_0\n",
+                source->source_inline_asm_id) < 0)
         return false;
     if (fprintf(out, "# MINIC_SOURCE_INLINE_ASM_BEGIN\n  ") < 0)
         return false;
@@ -63,6 +73,23 @@ static bool rv32_emit_source_opaque_asm(
                    source->template_text[i + 1U] == '%') {
             if (fputc('%', out) == EOF) return false;
             ++i;
+        } else if (deferred_immediate &&
+                   i + 1U < source->template_length &&
+                   source->template_text[i + 1U] == '0') {
+            if (fprintf(out, "__minic_deferred_asm_immediate_%zu_0",
+                        source->source_inline_asm_id) < 0) return false;
+            ++i;
+        } else if (source->is_goto && i + 2U < source->template_length &&
+                   source->template_text[i + 1U] == 'l' &&
+                   source->template_text[i + 2U] == '[') {
+            size_t end = i + 3U;
+            while (end < source->template_length &&
+                   source->template_text[end] != ']') ++end;
+            if (end >= source->template_length || end == i + 3U ||
+                fprintf(out, ".L%s_rv32_bb%u", symbol,
+                        (unsigned)source->goto_target) < 0)
+                return false;
+            i = end;
         } else {
             /* No unresolved percent substitutions may reach GNU assembler. */
             return false;
@@ -417,7 +444,7 @@ static bool rv32_emit_ins(FILE *out, const MinicC0Program *program,
     case MINIC_CORE_INSTRUCTION_FUNCTION_ADDRESS:
         return rv32_emit_memory_instruction(out, program, target, f, fr, ins);
     case MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM:
-        return rv32_emit_source_opaque_asm(out, f, ins);
+        return rv32_emit_source_opaque_asm(out, f, symbol, ins);
     case MINIC_CORE_INSTRUCTION_REGISTER_OUTPUT_INLINE_ASM:
     case MINIC_CORE_INSTRUCTION_REGISTER_OUTPUT_INPUT_INLINE_ASM:
     case MINIC_CORE_INSTRUCTION_MEMORY_READWRITE_SCALAR_INPUT_INLINE_ASM:

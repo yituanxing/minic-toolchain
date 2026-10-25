@@ -249,4 +249,43 @@ grep -Fq 'sw t4, (t2)' "$work/kernel-legacy-and-wide-asm.s"
 grep -Fq 'sw t0, 0(a2)' "$work/kernel-legacy-and-wide-asm.s"
 grep -Fq '# MINIC_SOURCE_INLINE_ASM_BEGIN' "$work/kernel-legacy-and-wide-asm.s"
 echo 'RV32I_LEGACY_WIDE_ASM=PASS CSR=1 two_u64_low_words=1 memory_outputs=2 register_RMW=1'
+cat > "$work/kernel-section-zero-aggregate.i" <<'SRC'
+struct boot_pageset_fixture { unsigned int count; unsigned long buckets[7]; };
+struct boot_zonestats_fixture { unsigned long counters[0]; };
+static struct boot_pageset_fixture test_boot_pageset
+    __attribute__((section(".data")));
+static struct boot_zonestats_fixture test_boot_zonestats
+    __attribute__((section(".data")));
+void *rv32_boot_pageset_address(void) { return &test_boot_pageset; }
+void *rv32_boot_zonestats_address(void) { return &test_boot_zonestats; }
+SRC
+"$MINIC_CC" --target=riscv32-linux -march=rv32i -mabi=ilp32 \
+  -S "$work/kernel-section-zero-aggregate.i" -o "$work/kernel-section-zero-aggregate.s"
+grep -Fq 'test_boot_pageset:' "$work/kernel-section-zero-aggregate.s"
+grep -Fq '.zero 32' "$work/kernel-section-zero-aggregate.s"
+grep -Fq 'test_boot_zonestats:' "$work/kernel-section-zero-aggregate.s"
+grep -Fq '.size test_boot_zonestats, 0' "$work/kernel-section-zero-aggregate.s"
+echo 'RV32I_SECTION_ZERO_AGGREGATE=PASS DataLayout_zero_record=1 zero_sized_record=1 original_section=1'
+cat > "$work/kernel-asm-goto.i" <<'SRC'
+int rv32_jump_owner(int test) {
+    if (test)
+        __asm__ __volatile__ goto (
+            ".option push\n\t.option norelax\n"
+            "1: nop\n\t"
+            ".pushsection __jump_table,\"aw\"\n\t"
+            ".long 1b - ., %l[enabled] - .\n\t"
+            ".word %[key]\n\t"
+            ".popsection\n\t.option pop"
+            : : [key] "i"(11) : : enabled);
+    return 0;
+enabled:
+    return 1;
+}
+SRC
+"$MINIC_CC" --target=riscv32-linux -march=rv32i -mabi=ilp32 \
+  -S "$work/kernel-asm-goto.i" -o "$work/kernel-asm-goto.s"
+grep -Fq '.pushsection __jump_table' "$work/kernel-asm-goto.s"
+grep -Eq '\.long 1b - \., \.Lrv32_jump_owner_rv32_bb[0-9]+ - \.' "$work/kernel-asm-goto.s"
+grep -Fq '# MINIC_SOURCE_INLINE_ASM_BEGIN' "$work/kernel-asm-goto.s"
+echo 'RV32I_ASM_GOTO=PASS Core_target_block=1 source_jump_table=1 original_template=1'
 echo 'RV32I_TARGET_GATE=PASS ILP32_registered=true incompatible_ISA_rejected=true basic_C_core_emitted=true'
