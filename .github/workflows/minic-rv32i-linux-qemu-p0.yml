@@ -63,10 +63,58 @@ jobs:
             -o Acquire::http::Timeout=30 -o DPkg::Lock::Timeout=60 \
             install -y --no-install-recommends \
               qemu-system-misc opensbi binutils-riscv64-linux-gnu \
-              cpio device-tree-compiler
+              gcc-riscv64-linux-gnu cpio device-tree-compiler
           command -v qemu-system-riscv32
           command -v riscv64-linux-gnu-as
           echo 'RV32I_QEMU_DEPS=PASS qemu=system-riscv32 firmware=OpenSBI as=GNU'
+
+      - name: Identify pinned GNU RV32 image cache without compiling Linux
+        id: golden
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          cfg=4c6c19f79741a8a31ec52ad57b1a6bc56b81dd6996cbf5e1bdc63f587d85244c
+          gcc=$(sha256sum "$(command -v riscv64-linux-gnu-gcc)" | cut -c1-16)
+          ld=$(sha256sum "$(command -v riscv64-linux-gnu-ld)" | cut -c1-16)
+          as=$(sha256sum "$(command -v riscv64-linux-gnu-as)" | cut -c1-16)
+          echo "key=linux-gnu-golden-rv32i-v1-6.6.143-$cfg-$gcc-$ld-$as" >>"$GITHUB_OUTPUT"
+      - name: Restore exact original GNU ELF32 Image control from existing cache
+        id: original
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            build/rv32i-linux-entry/out
+            build/rv32i-linux-entry/provenance
+          key: ${{ steps.golden.outputs.key }}
+      - name: Execute original GNU RV32 control through identical QEMU/PID1 script
+        if: steps.original.outputs.cache-hit == 'true'
+        shell: bash
+        timeout-minutes: 3
+        run: |
+          set -Eeuo pipefail
+          golden="$GITHUB_WORKSPACE/build/rv32i-linux-entry"
+          test -s "$golden/out/arch/riscv/boot/Image"
+          grep -Fxq 'elf_class=ELF32' "$golden/provenance/gcc-baseline.txt"
+          grep -Fxq 'isa=rv32i' "$golden/provenance/gcc-baseline.txt"
+          grep -Fxq 'abi=ilp32' "$golden/provenance/gcc-baseline.txt"
+          expected=$(sed -n 's/^image_sha256=//p' "$golden/provenance/gcc-baseline.txt")
+          test "$(sha256sum "$golden/out/arch/riscv/boot/Image" | cut -d' ' -f1)" = "$expected"
+          set +e
+          RV32I_QEMU_IMAGE="$golden/out/arch/riscv/boot/Image" \
+            RV32I_QEMU_WORK="$GITHUB_WORKSPACE/build/rv32i-qemu-p0/gnu-control" \
+            bash tools/ci/linux-rv32i-qemu-p0-v1.sh \
+            >"$GITHUB_WORKSPACE/build/rv32i-qemu-p0/gnu-control-step.log" 2>&1
+          status=$?
+          set -e
+          echo "RV32I_GNU_CONTROL=EXECUTED result=$status image_sha256=$expected same_original_Kconfig=true same_QEMU=true"
+          grep -E 'Linux version|Kernel panic|Oops:|RV32I_LINUX_PID1=' \
+            "$GITHUB_WORKSPACE/build/rv32i-qemu-p0/gnu-control/qemu-serial.log" || true
+          tail -n 35 "$GITHUB_WORKSPACE/build/rv32i-qemu-p0/gnu-control-step.log"
+      - name: Report missing exact GNU control distinctly
+        if: steps.original.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          echo 'RV32I_GNU_CONTROL=BLOCKED exact_cache_miss; no_recompile=true'
 
       - name: Boot unmodified RV32I Linux Image into genuine ELF32 PID1
         shell: bash
@@ -90,5 +138,8 @@ jobs:
             build/rv32i-qemu-p0/boot/virt-rv32-large-image.dtb
             build/rv32i-qemu-p0/boot/qemu-uart-serial.log
             build/rv32i-qemu-p0/boot/qemu-debug.log
+            build/rv32i-qemu-p0/gnu-control-step.log
+            build/rv32i-qemu-p0/gnu-control/qemu-serial.log
+            build/rv32i-qemu-p0/gnu-control/qemu-debug.log
           if-no-files-found: warn
           retention-days: 7
