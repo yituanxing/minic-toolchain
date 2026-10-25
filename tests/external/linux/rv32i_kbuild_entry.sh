@@ -179,6 +179,19 @@ if [[ "$mode" == union ]]; then
     --out "$out" --provenance "$prov" --minic "$MINIC_CC" \
     --assembler "$(command -v riscv64-linux-gnu-as)"
   (cd "$merged" && sha256sum --quiet -c minic-manifest.sha256)
+  # The receiver restores a GNU golden out/ tree from cache. Its generated
+  # VDSO offsets and other Kbuild prerequisites can be rebuilt on this fresh
+  # runner, invalidating C owners which include those headers. Complete the
+  # ORIGINAL GNU prepare graph *before* installing immutable MiniC objects;
+  # otherwise a subsequent `make Image` may silently recompile some owners
+  # with GNU even when KBUILD_NOCMDDEP disables command-line drift checks.
+  if ! make "${gnu_args[@]}" KBUILD_NOCMDDEP=1 -j4 prepare \
+      >"$merged/gnu-prepare.log" 2>&1; then
+    echo 'RV32I_UNION_PREPARE=FAIL original_GNU_Kbuild' >&2
+    tail -n 100 "$merged/gnu-prepare.log" >&2
+    exit 6
+  fi
+  echo 'RV32I_UNION_PREPARE=PASS original_GNU_Kbuild before_MiniC_object_install=true'
   while IFS= read -r line; do
     [[ "$line" != \#* && -n "$line" ]] || continue
     install -m 644 "$merged/minic/$line" "$out/$line"
@@ -275,20 +288,52 @@ for record in records:
 PY_RV32_LINK_INPUTS
     exit 6
   fi
+  verify_minic_union_objects() {
   python3 - "$out" "$merged" <<'PY_UNION'
 from pathlib import Path
 import hashlib
 import sys
 out, merged = map(Path, sys.argv[1:])
+drift = []
 for record in (merged / 'minic-manifest.sha256').read_text().splitlines():
     expected, rel = record.split('  ', 1)
     assert rel.startswith('minic/'), rel
     owner = rel[len('minic/'):]
     actual = hashlib.sha256((out / owner).read_bytes()).hexdigest()
     if actual != expected:
-        raise SystemExit(f'RV32I_UNION_OBJECTS=FAIL owner={owner} expected={expected} actual={actual}')
+        drift.append((owner, expected, actual))
+if drift:
+    with (merged / 'minic-owner-drift.tsv').open('w') as report:
+        report.write('owner\texpected\tactual\n')
+        for owner, expected, actual in drift:
+            report.write(f'{owner}\t{expected}\t{actual}\n')
+    print(f'RV32I_UNION_OBJECTS=FAIL mutated={len(drift)} inspected={len((merged / "minic-manifest.sha256").read_text().splitlines())}', file=sys.stderr)
+    for owner, expected, actual in drift[:32]:
+        print(f'RV32I_UNION_OWNER_DRIFT owner={owner} expected={expected} actual={actual}', file=sys.stderr)
+    raise SystemExit(7)
 print(f'RV32I_UNION_OBJECTS=PASS owners={len((merged / "minic-manifest.sha256").read_text().splitlines())} no_GNU_C_fallback=true')
 PY_UNION
+  }
+  if ! verify_minic_union_objects; then
+    # A final generated prerequisite may still materialize during Image.
+    # Reinstall the *same attested bytes*, rerun the *same original* Kbuild
+    # target once, and fail closed if any owner is replaced a second time.
+    # This is a bounded dependency-convergence pass, never a GNU C fallback.
+    echo 'RV32I_UNION_REFREEZE=RETRY original_GNU_Kbuild_once=true'
+    while IFS= read -r line; do
+      [[ "$line" != \#* && -n "$line" ]] || continue
+      install -m 644 "$merged/minic/$line" "$out/$line"
+    done <"$prov/full-c-objects.txt"
+    if ! make "${gnu_args[@]}" KBUILD_NOCMDDEP=1 -j4 \
+        --eval="vmlinux: KBUILD_VMLINUX_LIBS += $runtime_archive" \
+        Image >"$merged/minic-relink-retry.log" 2>&1; then
+      echo 'RV32I_UNION_REFREEZE=FAIL original_GNU_Kbuild' >&2
+      tail -n 100 "$merged/minic-relink-retry.log" >&2
+      exit 7
+    fi
+    verify_minic_union_objects
+    echo 'RV32I_UNION_REFREEZE=PASS certified_MiniC_objects_restored=true'
+  fi
   test -s "$out/arch/riscv/boot/Image"
   riscv64-linux-gnu-readelf -h "$out/vmlinux" >"$merged/minic-vmlinux-elf.txt"
   grep -Eq 'Class:[[:space:]]+ELF32' "$merged/minic-vmlinux-elf.txt"

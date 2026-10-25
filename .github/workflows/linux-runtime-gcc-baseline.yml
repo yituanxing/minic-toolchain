@@ -2352,7 +2352,10 @@ jobs:
           path: |
             build/rv32i-linux-entry/merged/minic-identity.txt
             build/rv32i-linux-entry/merged/minic-manifest.sha256
+            build/rv32i-linux-entry/merged/gnu-prepare.log
             build/rv32i-linux-entry/merged/minic-relink.log
+            build/rv32i-linux-entry/merged/minic-relink-retry.log
+            build/rv32i-linux-entry/merged/minic-owner-drift.tsv
             build/rv32i-linux-entry/merged/link-inputs/
             build/rv32i-linux-entry/merged/minic-vmlinux-elf.txt
             build/rv32i-linux-entry/merged/union-result.txt
