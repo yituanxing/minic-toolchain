@@ -170,4 +170,22 @@ grep -Fq '.pushsection __bug_table' "$work/kernel-opaque-asm.s"
 grep -Fq 'ebreak' "$work/kernel-opaque-asm.s"
 grep -Fq '# MINIC_SOURCE_INLINE_ASM_BEGIN' "$work/kernel-opaque-asm.s"
 echo 'RV32I_OPAQUE_BUG_TABLE=PASS source_asm=1 MiniC_RV32I_unmodified=1'
+cat > "$work/kernel-clzll.i" <<'SRC'
+int linux_clzll(unsigned long long value) {
+    return __builtin_clzll(value);
+}
+int linux_ctzll(unsigned long long value) {
+    return __builtin_ctzll(value);
+}
+SRC
+"$MINIC_CC" --target=riscv32-linux -march=rv32i -mabi=ilp32 \
+  -S "$work/kernel-clzll.i" -o "$work/kernel-clzll.s"
+grep -Fq '_rv32_clz64_high_' "$work/kernel-clzll.s"
+grep -Fq '_rv32_ctz64_start_' "$work/kernel-clzll.s"
+grep -Fq 'add t1, t1, t4' "$work/kernel-clzll.s"
+if grep -Eq '^[[:space:]]+(clz|ctz|clzw|ctzw|mul|mulw|div)[[:space:]]' "$work/kernel-clzll.s"; then
+  echo 'RV32I_CLZLL=FAIL extension_opcodes_leaked' >&2
+  exit 1
+fi
+echo 'RV32I_CLZLL=PASS two_word_64bit_I_only=1 zero_half_offset=1'
 echo 'RV32I_TARGET_GATE=PASS ILP32_registered=true incompatible_ISA_rejected=true basic_C_core_emitted=true'

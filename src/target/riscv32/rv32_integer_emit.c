@@ -138,13 +138,47 @@ bool rv32_emit_integer_instruction(FILE *out, const MinicCoreFunction *f,
         MinicCoreValueId input = ins->value.operand;
         unsigned width;
         bool signed_input;
+        bool wide;
         if (input >= f->value_count ||
             !minic_type_is_unsigned_integer(f->values[input].type) ||
-            !minic_type_equal(ins->type, minic_type_int()) ||
-            !rv32_scalar(f, f->values[input].type, &width, &signed_input) ||
-            signed_input || width < 8U || width > 32U ||
-            !rv32_slot(out, fr, input, "t0", true))
+            !minic_type_equal(ins->type, minic_type_int()))
             return false;
+        wide = rv32_is_wide_integer(f, f->values[input].type);
+        if (wide) {
+            /* Unsigned long long is two base-I XLEN words. Select the
+             * nonzero half, then reuse the 32-bit count loop verbatim.
+             * t4 owns the 0/32 half-offset; t0 the selected operand.
+             * Neither M nor Zbb instructions are required. */
+            if (!rv32_pair_slot(out, fr, input, "t0", "t3", true))
+                return false;
+            width = 32U;
+            if (ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_CLZ) {
+                if (fprintf(out,
+                    "  li t4, 0\n"
+                    "  bnez t3, .L%s_rv32_clz64_high_%" PRIu32 "\n"
+                    "  li t4, 32\n"
+                    "  j .L%s_rv32_clz64_start_%" PRIu32 "\n"
+                    ".L%s_rv32_clz64_high_%" PRIu32 ":\n"
+                    "  mv t0, t3\n"
+                    ".L%s_rv32_clz64_start_%" PRIu32 ":\n",
+                    symbol, ins->result, symbol, ins->result,
+                    symbol, ins->result, symbol, ins->result) < 0)
+                    return false;
+            } else {
+                if (fprintf(out,
+                    "  li t4, 0\n"
+                    "  bnez t0, .L%s_rv32_ctz64_start_%" PRIu32 "\n"
+                    "  li t4, 32\n"
+                    "  mv t0, t3\n"
+                    ".L%s_rv32_ctz64_start_%" PRIu32 ":\n",
+                    symbol, ins->result, symbol, ins->result) < 0)
+                    return false;
+            }
+        } else if (!rv32_scalar(f, f->values[input].type, &width, &signed_input) ||
+                   signed_input || width < 8U || width > 32U ||
+                   !rv32_slot(out, fr, input, "t0", true)) {
+            return false;
+        }
         if (ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_CLZ) {
             if (fprintf(out,
                     "  li t1, 0\n"
@@ -180,7 +214,9 @@ bool rv32_emit_integer_instruction(FILE *out, const MinicCoreFunction *f,
                     symbol, ins->result) < 0)
                 return false;
         }
-        return rv32_slot(out, fr, ins->result, "t1", false);
+        /* High- or low-half zero adds exactly one XLEN to the result. */
+        return (!wide || fprintf(out, "  add t1, t1, t4\n") >= 0) &&
+               rv32_slot(out, fr, ins->result, "t1", false);
     }
     case MINIC_CORE_INSTRUCTION_INTEGER_NEGATE:
     case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_NOT:
