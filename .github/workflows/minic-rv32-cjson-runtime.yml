@@ -1,6 +1,12 @@
 name: MiniC RV32I Real Software Runtime
 
 on:
+  pull_request:
+    paths:
+      - "src/target/riscv/**"
+      - "src/target/riscv32/**"
+      - "tests/compiler/c0/probe-riscv-shared-word-operations.sh"
+      - ".github/workflows/minic-rv32-cjson-runtime.yml"
   push:
     branches: [main]
     paths:

@@ -1,6 +1,13 @@
 name: MiniC Compiler Runtime - Four Architecture
 
 on:
+  pull_request:
+    paths:
+      - "src/target/riscv/**"
+      - "src/target/riscv32/**"
+      - "src/target/riscv64/**"
+      - "tests/compiler/c0/probe-riscv-shared-word-operations.sh"
+      - ".github/workflows/minic-runtime-fourarch.yml"
   push:
     branches: [main]
     paths:
