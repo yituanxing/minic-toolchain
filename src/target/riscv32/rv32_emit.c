@@ -185,6 +185,12 @@ static bool rv32_func(FILE *out, const MinicC0Program *program,
         }
     }
     if (!rv32_frame_init(&fr, program, f, target, def->is_variadic)) {
+        if (getenv("MINIC_RV32_FRAME_TRACE") != NULL)
+            (void)fprintf(stderr,
+                "RV32_FRAME_OWNER function=%s parameters=%zu values=%zu objects=%zu instructions=%zu\n",
+                def->name != NULL ? def->name : "<unnamed>",
+                f->parameter_count, f->value_count, f->object_count,
+                f->instruction_count);
         rv32_diag(diag, "<rv32-frame>", "rv32i: cannot allocate an ILP32 Core frame");
         rv32_frame_destroy(&fr);
         return false;

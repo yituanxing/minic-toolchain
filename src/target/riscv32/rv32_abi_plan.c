@@ -4,6 +4,19 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* Group ABI frontier reports in the same pristine upstream-source
+ * census. A diagnostic is emitted only for a real unsupported shape and
+ * only when the already existing acceptance script opts in. */
+static bool rv32_abi_reject(const char *stage, size_t index,
+                            MinicType type) {
+    if (getenv("MINIC_RV32_FRAME_TRACE") != NULL)
+        (void)fprintf(stderr,
+            "RV32_ABI_REJECT stage=%s index=%zu kind=%d depth=%u rank=%d\n",
+            stage, index, (int)type.base_kind,
+            (unsigned)type.pointer_depth, (int)type.integer_rank);
+    return false;
+}
+
 /* One psABI planner per Core function, used unchanged by physical frame
  * allocation, direct/indirect calls and callee parameter reception.
  * No target-unaware Core or frontend code knows about a0..a7 or ILP32. */
@@ -35,10 +48,11 @@ static bool rv32_plan_incoming(const MinicCoreFunction *function,
     for (i = 0U; i < plan->parameter_count; ++i) {
         Rv32AbiWordLocation *entry = &plan->parameters[i];
         if (!rv32_scalar_storage_words(function, function->parameter_types[i],
-                                       &entry->words) ||
-            !minic_riscv32_abi_place(&cursor, entry->words, false,
+                                       &entry->words))
+            return rv32_abi_reject("incoming_type", i, function->parameter_types[i]);
+        if (!minic_riscv32_abi_place(&cursor, entry->words, false,
                                       &entry->location))
-            return false;
+            return rv32_abi_reject("incoming_place", i, function->parameter_types[i]);
     }
     plan->named_gpr_words = cursor.register_words;
     plan->named_stack_words = cursor.stack_words;
@@ -64,12 +78,14 @@ static bool rv32_plan_call(const MinicCoreFunction *function,
         Rv32AbiWordLocation *entry = &call->arguments[i];
         MinicType type;
         if (!minic_core_call_argument_actual_type(
-                function, &view.arguments[i], &type) ||
-            !rv32_scalar_storage_words(function, type, &entry->words) ||
-            !minic_riscv32_abi_place(&cursor, entry->words,
+                function, &view.arguments[i], &type))
+            return rv32_abi_reject("call_actual_type", i, minic_type_void());
+        if (!rv32_scalar_storage_words(function, type, &entry->words))
+            return rv32_abi_reject("call_arg_type", i, type);
+        if (!minic_riscv32_abi_place(&cursor, entry->words,
                 view.is_variadic && i >= view.parameter_count,
                 &entry->location))
-            return false;
+            return rv32_abi_reject("call_place", i, type);
     }
     call->view = view;
     call->stack_words = cursor.stack_words;
@@ -100,8 +116,13 @@ bool rv32_function_abi_plan_build(const MinicCoreFunction *function,
         if (ins->kind != MINIC_CORE_INSTRUCTION_CALL &&
             ins->kind != MINIC_CORE_INSTRUCTION_INDIRECT_CALL)
             continue;
-        if (!rv32_plan_call(function, ins, call))
+        if (!rv32_plan_call(function, ins, call)) {
+            if (getenv("MINIC_RV32_FRAME_TRACE") != NULL)
+                (void)fprintf(stderr,
+                    "RV32_ABI_REJECT stage=call_plan instruction=%zu kind=%d\n",
+                    i, (int)ins->kind);
             goto failure;
+        }
         if (call->stack_words > plan->max_outgoing_stack_words)
             plan->max_outgoing_stack_words = call->stack_words;
     }

@@ -1002,9 +1002,17 @@ bool minic_multi_emit_simple_global(FILE *out, const MinicC0Program *program,
             minic_c0_program_array_type(program, obj->type.array_type_id);
         bool array_of_records;
         bool nested_record_array = false;
+        bool nested_relocatable_array;
         MinicType leaf;
         if (array == NULL) return false;
         array_of_records = minic_type_is_record(array->element_type);
+        /* A 2-D function-pointer dispatch table uses one aggregate
+         * relocation slot per leaf, not an outer-array element index.
+         * Zstd blockCompressor[4][10] has 40 values and 33 relocations.
+         * Never pass such a table to the flat one-dimensional walker. */
+        nested_relocatable_array =
+            minic_type_is_array(array->element_type) &&
+            obj->relocation_count != 0U;
         leaf = array->element_type;
         /* An array-of-arrays-of-records is one aggregate, not a flat
          * scalar array. Zstd's unchanged algoTime[16][2] has 64 scalar
@@ -1036,7 +1044,7 @@ bool minic_multi_emit_simple_global(FILE *out, const MinicC0Program *program,
                     ? minic_multi_emit_record_array_global(
                           out, program, target, obj, storage_size,
                           emit_relocation)
-                    : nested_record_array
+                    : nested_record_array || nested_relocatable_array
                     ? minic_multi_emit_recursive_aggregate_global(
                           out, program, target, obj, storage_size,
                           emit_relocation, NULL)
