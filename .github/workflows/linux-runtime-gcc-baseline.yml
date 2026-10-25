@@ -2353,6 +2353,10 @@ jobs:
           RV32I_LINUX_WORK="$GITHUB_WORKSPACE/build/rv32i-linux-entry" \
             bash tests/external/linux/rv32i_kbuild_entry.sh
 
+      # RV32 now reuses RV64's over-aligned CoreObject frame-base contract,
+      # including restoration of original entry sp for stack-passed ILP32
+      # parameters. Rebuild all 1741 genuine owners: old artifacts cannot
+      # establish whether this architectural correction fixes the full P0.
       - name: Boot THIS commit's newly linked 1741-object RV32 Linux in real QEMU
         if: contains(github.event.head_commit.message, '[linux-rv32i-kbuild]')
         timeout-minutes: 3
