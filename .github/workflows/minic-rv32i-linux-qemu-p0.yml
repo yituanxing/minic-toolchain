@@ -14,7 +14,7 @@ on:
 jobs:
   rv32i-linux-qemu-p0:
     runs-on: ubuntu-24.04
-    timeout-minutes: 22
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 
@@ -164,6 +164,38 @@ jobs:
           RV32I_QEMU_WORK="$GITHUB_WORKSPACE/build/rv32i-qemu-p0/boot" \
             bash tools/ci/linux-rv32i-qemu-p0-v1.sh
 
+      # The immutable MiniC Image fails with stack-end corruption.  Once the
+      # original GNU Image passes under the same QEMU/PID1 contract, actually
+      # relink and boot all seven 249-object-ish cohorts against GNU C owners.
+      # This reuses certified artifacts and never reruns seven producer builds.
+      - name: Restore pinned Linux source for cached seven-cohort fault isolation
+        if: failure() && steps.original.outputs.cache-hit == 'true'
+        uses: ./.github/actions/linux-runtime-restore-fixture
+        with:
+          fixture: source
+
+      - name: Download all seven immutable RV32 MiniC object cohorts
+        if: failure() && steps.original.outputs.cache-hit == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          repository: yituanxing/minic-toolchain
+          run-id: '40189397298'
+          pattern: shard-*
+          merge-multiple: false
+          github-token: ${{ github.token }}
+          path: build/rv32i-qemu-p0/shards
+
+      - name: Relink and QEMU-boot all seven GNU/MiniC cohorts in one job
+        if: failure() && steps.original.outputs.cache-hit == 'true'
+        shell: bash
+        timeout-minutes: 33
+        run: |
+          set -Eeuo pipefail
+          RV32I_TRIAGE_ROOT="$GITHUB_WORKSPACE/build/rv32i-qemu-p0" \
+          RV32I_TRIAGE_SOURCE="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0/linux-6.6.143" \
+          RV32I_TRIAGE_GOLDEN="$GITHUB_WORKSPACE/build/rv32i-linux-entry" \
+            bash tools/ci/linux-rv32i-qemu-batch-isolate-v1.sh
+
       - name: Preserve exact Image, ELF32 init and serial boot evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -181,6 +213,13 @@ jobs:
             build/rv32i-qemu-p0/gnu-control-step.log
             build/rv32i-qemu-p0/gnu-control/qemu-serial.log
             build/rv32i-qemu-p0/gnu-control/qemu-debug.log
+            build/rv32i-qemu-p0/cohort-results.tsv
+            build/rv32i-qemu-p0/gnu-prepare.log
+            build/rv32i-qemu-p0/gnu-reconcile.log
+            build/rv32i-qemu-p0/runtime-build.log
+            build/rv32i-qemu-p0/trials/*/link.log
+            build/rv32i-qemu-p0/trials/*/qemu-step.log
+            build/rv32i-qemu-p0/trials/*/qemu/qemu-serial.log
             build/rv32i-qemu-p0/frame-audit/*.symbols.txt
             build/rv32i-qemu-p0/frame-audit/*.disasm.txt
           if-no-files-found: warn
