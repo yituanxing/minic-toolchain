@@ -1890,17 +1890,26 @@ jobs:
         run: |
           sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 install -y --no-install-recommends gdb-multiarch
 
-      - name: Install original GNU RV32 Kbuild linker tools
+      - name: Install original GNU RV32 Kbuild linker and genuine QEMU tools
         if: contains(github.event.head_commit.message, '[linux-rv32i-kbuild]')
         timeout-minutes: 12
         shell: bash
         run: |
           set -Eeuo pipefail
-          timeout 270s sudo apt-get -o Acquire::Retries=2 \
+          for sources in /etc/apt/apt-mirrors.txt /etc/apt/sources.list.d/ubuntu.sources; do
+            if [[ -f "$sources" ]] && grep -q 'azure.archive.ubuntu.com' "$sources"; then
+              sudo sed -i 's#azure.archive.ubuntu.com#archive.ubuntu.com#g' "$sources"
+            fi
+          done
+          timeout 90s sudo apt-get -o Acquire::Retries=2 \
+            -o Acquire::http::Timeout=30 update -qq
+          timeout 480s sudo apt-get -o Acquire::Retries=2 \
             -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 \
             install -y --no-install-recommends \
             gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
-            bc bison flex libssl-dev libelf-dev make python3 file xz-utils
+            bc bison flex libssl-dev libelf-dev make python3 file xz-utils \
+            qemu-system-misc opensbi cpio device-tree-compiler
+          command -v qemu-system-riscv32
 
       - name: Download SHA-pinned real MiniC-generated earlycon assembly from P1-accepted run
         if: contains(github.event.head_commit.message, '[linux-minias-earlycon-frozen]')
@@ -2344,6 +2353,20 @@ jobs:
           RV32I_LINUX_WORK="$GITHUB_WORKSPACE/build/rv32i-linux-entry" \
             bash tests/external/linux/rv32i_kbuild_entry.sh
 
+      - name: Boot THIS commit's newly linked 1741-object RV32 Linux in real QEMU
+        if: contains(github.event.head_commit.message, '[linux-rv32i-kbuild]')
+        timeout-minutes: 3
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          image="$GITHUB_WORKSPACE/build/rv32i-linux-entry/out/arch/riscv/boot/Image"
+          test -s "$image"
+          RV32I_QEMU_IMAGE="$image" \
+          RV32I_QEMU_WORK="$GITHUB_WORKSPACE/build/rv32i-linux-entry/current-qemu-p0" \
+          RV32I_QEMU_TIMEOUT_SECONDS=25 \
+            bash tools/ci/linux-rv32i-qemu-p0-v1.sh
+          echo 'RV32I_FULL_MINIC_CURRENT_HEAD_QEMU_P0=PASS 1741/1741'
+
       - name: Preserve independently attested RV32 seven-shard full Image result
         if: always() && contains(github.event.head_commit.message, '[linux-rv32i-kbuild]')
         uses: actions/upload-artifact@v4
@@ -2366,6 +2389,10 @@ jobs:
             build/rv32i-linux-entry/merged/link-inputs/
             build/rv32i-linux-entry/merged/minic-vmlinux-elf.txt
             build/rv32i-linux-entry/merged/union-result.txt
+            build/rv32i-linux-entry/current-qemu-p0/qemu-serial.log
+            build/rv32i-linux-entry/current-qemu-p0/provenance.txt
+            build/rv32i-linux-entry/current-qemu-p0/qemu-uart-serial.log
+            build/rv32i-linux-entry/current-qemu-p0/qemu-debug.log
             build/rv32i-linux-entry/out/arch/riscv/boot/Image
           if-no-files-found: warn
           retention-days: 7

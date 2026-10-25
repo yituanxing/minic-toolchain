@@ -349,4 +349,34 @@ for arch in riscv32 riscv64; do
   fi
 done
 echo 'RV32I_CORE_CALLGRAPH=PASS rv32_rv64_emission_roots=real_Core_CFG'
+# Stress the same Core SSA last-use graph previously proven on RV64.
+# One long basic block must reuse dead ILP32 4/8-byte result slots; this is
+# a compiler regression, not a Linux-source workaround. A wide 64-bit value
+# must still occupy TWO XLEN words in every live spill.
+awk 'BEGIN {
+  printf "unsigned rv32_spill_chain(unsigned x) { return "
+  for (i=0; i<64; ++i) printf "("
+  printf "x"
+  for (i=0; i<64; ++i) printf " + %uu)",i+1
+  printf "; }\n"
+  printf "unsigned long long rv32_spill_wide(unsigned long long x) { return "
+  for (i=0; i<48; ++i) printf "("
+  printf "x"
+  for (i=0; i<48; ++i) printf " + %uULL)",i+1
+  printf "; }\n"
+}' > "$work/rv32-shared-spill.i"
+"$MINIC_CC" --target=riscv32-linux -march=rv32i -mabi=ilp32 \
+  -S "$work/rv32-shared-spill.i" -o "$work/rv32-shared-spill.s"
+for entry in rv32_spill_chain rv32_spill_wide; do
+  bytes=$(awk -v name="$entry:" '
+    $0==name {in_function=1;next}
+    in_function && $1=="li" && $2=="t0," {print $3;exit}
+  ' "$work/rv32-shared-spill.s")
+  case "$bytes" in ''|*[!0-9]*) echo "RV32I_CORE_SPILL=FAIL missing_frame entry=$entry bytes=$bytes" >&2; exit 1;; esac
+  if [ "$bytes" -gt 384 ]; then
+    echo "RV32I_CORE_SPILL=FAIL nonreused_SSA entry=$entry bytes=$bytes" >&2
+    exit 1
+  fi
+  echo "RV32I_CORE_SPILL=PASS entry=$entry frame_bytes=$bytes reuse=block_last_use"
+done
 echo 'RV32I_TARGET_GATE=PASS ILP32_registered=true incompatible_ISA_rejected=true basic_C_core_emitted=true'
