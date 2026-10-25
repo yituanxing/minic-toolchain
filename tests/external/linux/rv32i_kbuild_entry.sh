@@ -28,9 +28,10 @@ fi
 make "${gnu_args[@]}" defconfig >"$ev/defconfig.log" 2>&1
 "$src/scripts/config" --file "$out/.config" \
   -e NONPORTABLE -e ARCH_RV32I -d ARCH_RV64I \
-  -d RISCV_ISA_C -d FPU -d SMP
+  -d EFI -d RISCV_ISA_C -d FPU -d SMP
 make "${gnu_args[@]}" olddefconfig >"$ev/olddefconfig.log" 2>&1
-# This is a real original Kconfig audit, not a custom defconfig or kernel patch.
+# Linux 6.6 arch/riscv/Kconfig EFI explicitly "select RISCV_ISA_C". Disable EFI
+# in the original Kconfig or olddefconfig silently re-enables compressed C.\n# This is a real original Kconfig audit, not a custom defconfig or kernel patch.
 # Preserve the GENERATED config even when the next fail-closed check fires.
 cp "$out/.config" "$ev/generated-kconfig.txt"
 grep -E '^(CONFIG_(NONPORTABLE|ARCH_RV32I|ARCH_RV64I|32BIT|RISCV_ISA_C|FPU|SMP)=|# CONFIG_(ARCH_RV64I|RISCV_ISA_C|FPU|SMP) is not set)' "$out/.config" |
@@ -40,7 +41,7 @@ for setting in CONFIG_NONPORTABLE CONFIG_ARCH_RV32I CONFIG_32BIT; do
     echo "RV32I_LINUX=FAIL Kconfig_missing=$setting" >&2; exit 3;
   }
 done
-for setting in CONFIG_ARCH_RV64I CONFIG_RISCV_ISA_C CONFIG_FPU CONFIG_SMP; do
+for setting in CONFIG_ARCH_RV64I CONFIG_EFI CONFIG_RISCV_ISA_C CONFIG_FPU CONFIG_SMP; do
   grep -Fxq "# $setting is not set" "$out/.config" || {
     echo "RV32I_LINUX=FAIL Kconfig_wrong=$setting" >&2; exit 3;
   }
