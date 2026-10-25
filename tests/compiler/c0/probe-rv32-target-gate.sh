@@ -98,4 +98,19 @@ SRC
 grep -Fq '.section .discard.addressable' "$work/kernel-discard-section.s"
 grep -Fq '.4byte kernel_system_state' "$work/kernel-discard-section.s"
 echo 'RV32I_GLOBAL_SECTION_RELOC=PASS shared_DataLayout=1 section_addressable=1 ELF32_width=4'
+cat > "$work/kernel-init-setup.i" <<'SRC'
+const char fixture_reset_name[] = "reset_devices";
+int fixture_reset_handler(char *arg) { return arg != 0; }
+struct obs_kernel_param { const char *name; int (*run)(char *); int early; };
+static struct obs_kernel_param fixture_setup
+  __attribute__((used, section(".init.setup"))) = {
+    fixture_reset_name, fixture_reset_handler, 0
+};
+SRC
+"$MINIC_CC" --target=riscv32-linux -march=rv32i -mabi=ilp32 \
+    -S "$work/kernel-init-setup.i" -o "$work/kernel-init-setup.s"
+grep -Fq '.section .init.setup' "$work/kernel-init-setup.s"
+grep -Fq '.4byte fixture_reset_name' "$work/kernel-init-setup.s"
+grep -Fq '.4byte fixture_reset_handler' "$work/kernel-init-setup.s"
+echo 'RV32I_GLOBAL_SETUP_RECORD=PASS explicit_section=1 two_relocations=1 shared_record_layout=1'
 echo 'RV32I_TARGET_GATE=PASS ILP32_registered=true incompatible_ISA_rejected=true basic_C_core_emitted=true'

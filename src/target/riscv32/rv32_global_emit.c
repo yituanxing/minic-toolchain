@@ -112,6 +112,40 @@ bool minic_riscv32_emit_flat_global(FILE *out,
             return false;
         return fprintf(out, ".size %s, %zu\n", obj->name, bytes) >= 0;
     }
+    /* Real Linux __setup entries are records of pointers/scalars with
+     * .init.setup section ownership. Keep ABI layout/relocation locations in
+     * the common serializer; only the RV32 ELF32 relocation encoder and
+     * ELF section/symbol header are target-owned. */
+    if (obj->section_name != NULL &&
+        (minic_type_is_record(obj->type) ||
+         rv32_array_of_records(program, obj->type)) &&
+        obj->alias_target == MINIC_GLOBAL_OBJECT_INVALID &&
+        !obj->is_tentative &&
+        minic_data_layout_global_object(
+            target->data_layout, program, obj, &bytes, &alignment) &&
+        bytes != 0U && alignment != 0U) {
+        bool emitted;
+        if (obj->explicit_alignment > alignment)
+            alignment = obj->explicit_alignment;
+        if ((alignment & (alignment - 1U)) != 0U ||
+            !rv32_data_symbol(out, obj, alignment))
+            return false;
+        if (minic_type_is_record(obj->type)) {
+            const MinicRecord *record =
+                minic_c0_program_record(program, obj->type.record_id);
+            if (record == NULL) return false;
+            emitted = minic_multi_record_initializer_needs_recursive(record, obj)
+                ? minic_multi_emit_recursive_aggregate_global(
+                      out, program, target, obj, bytes, rv32_reloc, NULL)
+                : minic_multi_emit_flat_record_global(
+                      out, program, target, obj, bytes, rv32_reloc, NULL);
+        } else {
+            emitted = minic_multi_emit_record_array_global(
+                out, program, target, obj, bytes, rv32_reloc);
+        }
+        return emitted &&
+               fprintf(out, ".size %s, %zu\n", obj->name, bytes) >= 0;
+    }
     /* Shared global records and relocatable arrays are handled with the
      * canonical recursive DataLayout walker, including pointer-function
      * symbol fixups and ABI-specific field padding. */
