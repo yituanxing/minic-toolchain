@@ -14,7 +14,7 @@ on:
 # original GNU Kbuild ELF32 link, and binds the bytes with a fixed SHA.
 jobs:
   rv32i-linux-qemu-p0:
-    if: github.event_name == 'workflow_dispatch' || !contains(github.event.head_commit.message, '[rv32-leaf]')
+    if: github.event_name == 'workflow_dispatch' || !contains(github.event.head_commit.message, '[rv32-leaf]') && !contains(github.event.head_commit.message, '[rv32-single]')
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
@@ -245,20 +245,22 @@ jobs:
   # relink/QEMU runners, eight disjoint ~31-owner batches on each runner.
   # No MiniC C compilation; every active ELF32 object is SHA-attested.
   rv32i-qemu-parallel-parts:
-    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[rv32-partition]') || contains(github.event.head_commit.message, '[rv32-leaf]')
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[rv32-partition]') || contains(github.event.head_commit.message, '[rv32-leaf]') || contains(github.event.head_commit.message, '[rv32-single]')
     runs-on: ubuntu-24.04
     timeout-minutes: 28
     strategy:
       fail-fast: false
       matrix:
         include:
-          - {shard: 0, parent: '0'}
-          - {shard: 1, parent: '6'}
-          - {shard: 2, parent: '1'}
-          - {shard: 3, parent: '4'}
-          - {shard: 4, parent: '7'}
-          - {shard: 5, parent: '3'}
-          - {shard: 6, parent: '0'}
+          - {shard: 0, parent: '0', leaf: '0'}
+          - {shard: 0, parent: '0', leaf: '4'}
+          - {shard: 1, parent: '6', leaf: '1'}
+          - {shard: 1, parent: '6', leaf: '7'}
+          - {shard: 2, parent: '1', leaf: '1'}
+          - {shard: 3, parent: '4', leaf: '6'}
+          - {shard: 4, parent: '7', leaf: '2'}
+          - {shard: 5, parent: '3', leaf: '4'}
+          - {shard: 6, parent: '0', leaf: '0'}
     steps:
       - uses: actions/checkout@v4
       - name: Install pinned GNU RV32 build/link and real QEMU dependencies
@@ -309,7 +311,7 @@ jobs:
           repository: yituanxing/minic-toolchain
           run-id: '40189397298'
           name: shard-${{ matrix.shard }}
-          path: build/rv32i-qemu-parallel/shard-${{ matrix.shard }}/shards/shard-${{ matrix.shard }}
+          path: build/rv32i-qemu-parallel/shard-${{ matrix.shard }}-leaf-${{ matrix.leaf }}/shards/shard-${{ matrix.shard }}
           github-token: ${{ github.token }}
 
       - name: Eight disjoint GNU/MiniC ELF32 link-and-QEMU runtime trials
@@ -319,8 +321,9 @@ jobs:
           set -Eeuo pipefail
           test "${{ steps.original.outputs.cache-hit }}" = true
           RV32I_TRIAGE_SHARD=${{ matrix.shard }} \
-          RV32I_TRIAGE_PARENT_PART="${{ contains(github.event.head_commit.message, '[rv32-leaf]') && matrix.parent || '' }}" \
-          RV32I_TRIAGE_ROOT="$GITHUB_WORKSPACE/build/rv32i-qemu-parallel/shard-${{ matrix.shard }}" \
+          RV32I_TRIAGE_PARENT_PART="${{ (contains(github.event.head_commit.message, '[rv32-leaf]') || contains(github.event.head_commit.message, '[rv32-single]')) && matrix.parent || '' }}" \
+          RV32I_TRIAGE_LEAF_PART="${{ contains(github.event.head_commit.message, '[rv32-single]') && matrix.leaf || '' }}" \
+          RV32I_TRIAGE_ROOT="$GITHUB_WORKSPACE/build/rv32i-qemu-parallel/shard-${{ matrix.shard }}-leaf-${{ matrix.leaf }}" \
           RV32I_TRIAGE_SOURCE="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0/linux-6.6.143" \
           RV32I_TRIAGE_GOLDEN="$GITHUB_WORKSPACE/build/rv32i-linux-entry" \
             bash tools/ci/linux-rv32i-qemu-batch-isolate-v1.sh
@@ -329,14 +332,14 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: rv32i-qemu-parts-${{ matrix.shard }}-${{ github.sha }}
+          name: rv32i-qemu-parts-${{ matrix.shard }}-${{ matrix.leaf }}-${{ github.sha }}
           path: |
-            build/rv32i-qemu-parallel/shard-${{ matrix.shard }}/cohort-results.tsv
-            build/rv32i-qemu-parallel/shard-${{ matrix.shard }}/gnu-prepare.log
-            build/rv32i-qemu-parallel/shard-${{ matrix.shard }}/gnu-reconcile.log
-            build/rv32i-qemu-parallel/shard-${{ matrix.shard }}/runtime-build.log
-            build/rv32i-qemu-parallel/shard-${{ matrix.shard }}/trials/*/link.log
-            build/rv32i-qemu-parallel/shard-${{ matrix.shard }}/trials/*/qemu-step.log
-            build/rv32i-qemu-parallel/shard-${{ matrix.shard }}/trials/*/qemu/qemu-serial.log
+            build/rv32i-qemu-parallel/shard-${{ matrix.shard }}-leaf-${{ matrix.leaf }}/cohort-results.tsv
+            build/rv32i-qemu-parallel/shard-${{ matrix.shard }}-leaf-${{ matrix.leaf }}/gnu-prepare.log
+            build/rv32i-qemu-parallel/shard-${{ matrix.shard }}-leaf-${{ matrix.leaf }}/gnu-reconcile.log
+            build/rv32i-qemu-parallel/shard-${{ matrix.shard }}-leaf-${{ matrix.leaf }}/runtime-build.log
+            build/rv32i-qemu-parallel/shard-${{ matrix.shard }}-leaf-${{ matrix.leaf }}/trials/*/link.log
+            build/rv32i-qemu-parallel/shard-${{ matrix.shard }}-leaf-${{ matrix.leaf }}/trials/*/qemu-step.log
+            build/rv32i-qemu-parallel/shard-${{ matrix.shard }}-leaf-${{ matrix.leaf }}/trials/*/qemu/qemu-serial.log
           retention-days: 7
           if-no-files-found: warn

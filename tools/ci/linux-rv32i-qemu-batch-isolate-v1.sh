@@ -16,6 +16,11 @@ if [[ -n "${RV32I_TRIAGE_PARENT_PART:-}" ]]; then
     echo 'RV32I_COHORT=FAIL invalid_parent_partition' >&2; exit 2;
   }
 fi
+if [[ -n "${RV32I_TRIAGE_LEAF_PART:-}" ]]; then
+  [[ -n "${RV32I_TRIAGE_PARENT_PART:-}" && "$RV32I_TRIAGE_LEAF_PART" =~ ^[0-7]$ ]] || {
+    echo 'RV32I_COHORT=FAIL invalid_leaf_partition' >&2; exit 2;
+  }
+fi
 
 root=$(realpath "$RV32I_TRIAGE_ROOT")
 src=$(realpath "$RV32I_TRIAGE_SOURCE")
@@ -135,7 +140,7 @@ mkdir -p "$root/subsets"
 if [[ -n "${RV32I_TRIAGE_SHARD:-}" ]]; then
   # Fixed stride within one certified 249/248-owner producer shard. Seven
   # independent runners each perform eight ~31-object QEMU trials in parallel.
-  python3 - "$shards/shard-$RV32I_TRIAGE_SHARD/full-objects.txt" "$root/subsets" "$RV32I_TRIAGE_SHARD" "${RV32I_TRIAGE_PARENT_PART:-all}" <<'PY_SPLIT'
+  python3 - "$shards/shard-$RV32I_TRIAGE_SHARD/full-objects.txt" "$root/subsets" "$RV32I_TRIAGE_SHARD" "${RV32I_TRIAGE_PARENT_PART:-all}" "${RV32I_TRIAGE_LEAF_PART:-all}" <<'PY_SPLIT'
 from pathlib import Path
 import sys
 src, dest, idx = Path(sys.argv[1]), Path(sys.argv[2]), int(sys.argv[3])
@@ -146,10 +151,20 @@ if sys.argv[4] != 'all':
     assert 0 <= parent < 8
     names = names[parent::8]
     assert len(names) in (31, 32)
-for part in range(8):
-    subset = names[part::8]
+if sys.argv[5] != 'all':
+    leaf = int(sys.argv[5])
+    assert 0 <= leaf < 8
+    names = names[leaf::8]
+    assert 3 <= len(names) <= 4, (idx, parent, leaf, names)
+    plan_count = len(names)
+else:
+    plan_count = 8
+for part in range(plan_count):
+    subset = names[part::plan_count]
     assert subset
-    label = (f'shard-{idx}-part-{part}' if sys.argv[4] == 'all' else
+    label = (f'shard-{idx}-part-{parent}-leaf-{leaf}-owner-{part}'
+             if sys.argv[5] != 'all' else
+             f'shard-{idx}-part-{part}' if sys.argv[4] == 'all' else
              f'shard-{idx}-part-{parent}-leaf-{part}')
     (dest / f'{label}.txt').write_text('\n'.join(subset)+'\n')
     print(f'RV32I_SUBSHARD_PLAN=PASS group={label} objects={len(subset)}')
@@ -185,6 +200,9 @@ for active_file in "${trial_files[@]}"; do
     cp --reflink=auto "$shards/shard-$idx/minic/$owner" "$out/$owner"
     touch "$out/$owner"
     count=$((count+1))
+    if [[ -n "${RV32I_TRIAGE_LEAF_PART:-}" ]]; then
+      echo "RV32I_COHORT_OWNER group=$active_name owner=$owner"
+    fi
   done <"$active_file"
   previous_file=$active_file
   echo "RV32I_COHORT=START group=$active_name objects=$count original_GNU_Kbuild=true"
