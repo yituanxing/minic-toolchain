@@ -17,7 +17,7 @@ typedef unsigned long word;
 #define SYS_EPOLL_CTL 21
 #define SYS_EPOLL_PWAIT 22
 #define SYS_TIMERFD_CREATE 85
-#define SYS_TIMERFD_SETTIME 86
+#define SYS_TIMERFD_SETTIME64 411
 #define SYS_RT_SIGPROCMASK 135
 #define SYS_SIGNALFD4 74
 #define SYS_KILL 129
@@ -38,7 +38,7 @@ typedef unsigned long word;
 #define SYS_MEMFD_CREATE 279
 #define SYS_LSEEK 62
 #define SYS_PIDFD_OPEN 434
-#define SYS_FUTEX 98
+#define SYS_FUTEX_TIME64 422
 #define SYS_IO_URING_SETUP 425
 #define SYS_MMAP 222
 #define SYS_MPROTECT 226
@@ -99,6 +99,11 @@ static void say(const char *s) {
     word n=length(s);
     (void)SC3(SYS_WRITE,1,s,n);
 }
+static void stage(const char *name) {
+    say("RV32I_P1_STAGE=");
+    say(name);
+    say("\n");
+}
 static int passed;
 static int failed;
 static void verdict(const char *name, int ok) {
@@ -138,9 +143,11 @@ static void timerfd_test(void) {
     u64 expirations=0;
     zero(&t,sizeof(t));t.value.nsec=1000000;
     long fd=SC2(SYS_TIMERFD_CREATE,CLOCK_MONOTONIC,0);
-    int ok=!bad(fd) &&
-        SC4(SYS_TIMERFD_SETTIME,fd,0,&t,0)==0 &&
-        SC3(SYS_READ,fd,&expirations,8)==8 && expirations>0;
+    /* RV32 time32 timerfd_settime expects 32-bit timespec. The common
+     * asm-generic time64 syscall 411 matches kts exactly. */
+    long armed=bad(fd)?-1:SC4(SYS_TIMERFD_SETTIME64,fd,0,&t,0);
+    long read_n=armed==0?SC3(SYS_READ,fd,&expirations,8):-1;
+    int ok=!bad(fd) && armed==0 && read_n==8 && expirations>0;
     verdict("timerfd-read",ok);
     close_fd(fd);
 }
@@ -208,20 +215,30 @@ static void ipv6_test(void) {
     struct sock_addr6 addr;
     u32 addrlen=sizeof(addr);
     zero(&addr,sizeof(addr));addr.family=AF_INET6;addr.address[15]=1;
-    if (!loopback_up()) { verdict("ipv6-tcp-loopback",0); return; }
+    stage("ipv6-loopback-up");
+    if (!loopback_up()) { stage("ipv6-loopback-up-failed"); verdict("ipv6-tcp-loopback",0); return; }
+    stage("ipv6-listener-socket");
     long listener=SC3(SYS_SOCKET,AF_INET6,SOCK_STREAM,0);
     if (bad(listener)) {verdict("ipv6-tcp-loopback",0);return;}
-    if (SC3(SYS_BIND,listener,&addr,sizeof(addr))!=0 ||
-        SC3(SYS_GETSOCKNAME,listener,&addr,&addrlen)!=0 ||
-        SC2(SYS_LISTEN,listener,1)!=0) {
+    stage("ipv6-bind");
+    long binding=SC3(SYS_BIND,listener,&addr,sizeof(addr));
+    stage("ipv6-getsockname");
+    long naming=binding==0?SC3(SYS_GETSOCKNAME,listener,&addr,&addrlen):-1;
+    stage("ipv6-listen");
+    long listening=naming==0?SC2(SYS_LISTEN,listener,1):-1;
+    if (binding!=0 || naming!=0 || listening!=0) {
         close_fd(listener); verdict("ipv6-tcp-loopback",0);return;
     }
+    stage("ipv6-clone");
     long child=SC5(SYS_CLONE,SIGCHLD,0,0,0,0);
     if (child==0) {
+        stage("ipv6-child-socket");
         long fd=SC3(SYS_SOCKET,AF_INET6,SOCK_STREAM,0);
         char received=0;
-        int ok=!bad(fd) && SC3(SYS_CONNECT,fd,&addr,sizeof(addr))==0 &&
-               SC3(SYS_WRITE,fd,"V",1)==1 &&
+        stage("ipv6-child-connect");
+        int connected=!bad(fd) && SC3(SYS_CONNECT,fd,&addr,sizeof(addr))==0;
+        stage(connected?"ipv6-child-connected":"ipv6-child-connect-failed");
+        int ok=connected && SC3(SYS_WRITE,fd,"V",1)==1 &&
                SC3(SYS_READ,fd,&received,1)==1 && received=='6';
         close_fd(fd);
         (void)SC1(SYS_EXIT,ok?0:1);
@@ -230,6 +247,7 @@ static void ipv6_test(void) {
     if (bad(child)) {
         verdict("ipv6-tcp-loopback",0);close_fd(listener);return;
     }
+    stage("ipv6-parent-accept");
     long accepted=SC4(SYS_ACCEPT4,listener,0,0,0);
     char got=0;
     int ok=!bad(accepted) &&
@@ -238,14 +256,18 @@ static void ipv6_test(void) {
     close_fd(accepted);
     int status=0;
     ok=ok && SC4(SYS_WAIT4,child,&status,0,0)==child && status==0;
+    stage(ok?"ipv6-child-parent-success":"ipv6-child-parent-failed");
     verdict("ipv6-tcp-loopback",ok);
     close_fd(listener);
 }
 static void memfd_test(void) {
     long fd=SC2(SYS_MEMFD_CREATE,"rv32-p1",0);
     char got=0;
+    u64 position=~(u64)0;
+    /* RV32 syscall 62 is sys_llseek(fd, hi, lo, *result, whence), NOT
+     * RV64 sys_lseek(fd, offset, whence). */
     int ok=!bad(fd) && SC3(SYS_WRITE,fd,"M",1)==1 &&
-          SC3(SYS_LSEEK,fd,0,0)==0 &&
+          SC5(SYS_LSEEK,fd,0,0,&position,0)==0 && position==0 &&
           SC3(SYS_READ,fd,&got,1)==1 && got=='M';
     verdict("memfd-rw",ok);
     close_fd(fd);
@@ -258,7 +280,9 @@ static void pidfd_test(void) {
 }
 static void futex_test(void) {
     u32 futex=0;
-    long rv=syscall6(SYS_FUTEX,(long)&futex,1,1,0,0,0);
+    /* asm-generic RV32 uses time64 entry for futex when time32 is off;
+     * FUTEX_WAKE needs no timeout but still has an architecture ABI split. */
+    long rv=syscall6(SYS_FUTEX_TIME64,(long)&futex,1,1,0,0,0);
     verdict("futex-wake",!bad(rv));
 }
 static void io_uring_test(void) {
