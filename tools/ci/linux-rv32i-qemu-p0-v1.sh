@@ -128,10 +128,15 @@ test "$(fdtget -t x "$dtb" /chosen linux,initrd-start)" = "0 $start_hex"
 test "$(fdtget -t x "$dtb" /chosen linux,initrd-end)" = "0 $end_hex"
 echo "RV32I_QEMU_P0_DTB=PASS image_bytes=$image_bytes image_end=$image_end initrd_start=$start_hex initrd_end=$end_hex no_overlap=true"
 
-printf 'RV32I_QEMU_P0=START image_sha256=%s guest=rv32i/ilp32 pid1=ELF32 firmware=%s timeout=45s\n' \
-  "$image_sha" "$bios"
+rv32i_timeout=${RV32I_QEMU_TIMEOUT_SECONDS:-45}
+[[ "$rv32i_timeout" =~ ^[0-9]+$ ]] && (( rv32i_timeout >= 10 && rv32i_timeout <= 120 )) || {
+  echo 'RV32I_QEMU_P0=FAIL invalid_timeout_seconds' >&2
+  exit 2
+}
+printf 'RV32I_QEMU_P0=START image_sha256=%s guest=rv32i/ilp32 pid1=ELF32 firmware=%s timeout=%ss\n' \
+  "$image_sha" "$bios" "$rv32i_timeout"
 set +e
-timeout --signal=TERM 45s qemu-system-riscv32 \
+timeout --signal=TERM "${rv32i_timeout}s" qemu-system-riscv32 \
   -M virt -cpu max -m 512M -smp 1 -nographic -no-reboot \
   -bios "$bios" -kernel "$image" -dtb "$dtb" \
   -device "loader,file=$work/initramfs.cpio.gz,addr=$initrd_addr,force-raw=on" \
