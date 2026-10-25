@@ -2356,6 +2356,13 @@ jobs:
             build/rv32i-linux-entry/merged/minic-relink.log
             build/rv32i-linux-entry/merged/minic-relink-retry.log
             build/rv32i-linux-entry/merged/minic-owner-drift.tsv
+            build/rv32i-linux-entry/merged/generated-before.json
+            build/rv32i-linux-entry/merged/generated-after-first-link.json
+            build/rv32i-linux-entry/merged/header-affected-objects.txt
+            build/rv32i-linux-entry/merged/header-impact.log
+            build/rv32i-linux-entry/merged/header-replay.log
+            build/rv32i-linux-entry/merged/header-replay-hashes.sha256
+            build/rv32i-linux-entry/merged/owner-restored.txt
             build/rv32i-linux-entry/merged/link-inputs/
             build/rv32i-linux-entry/merged/minic-vmlinux-elf.txt
             build/rv32i-linux-entry/merged/union-result.txt

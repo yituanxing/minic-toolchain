@@ -192,6 +192,27 @@ if [[ "$mode" == union ]]; then
     exit 6
   fi
   echo 'RV32I_UNION_PREPARE=PASS original_GNU_Kbuild before_MiniC_object_install=true'
+  # Freeze exactly the same GNU .cmd dependency records that drove each
+  # certified shard. The first real relink can overwrite .cmd for a C owner;
+  # dynamic-header replay must not derive its preprocessor flags from that
+  # changed state. Reuse the already established RV64 Kbuild replay oracle.
+  python3 - "$out" "$prov/full-c-objects.txt" "$merged/gnu-cmd" <<'PY_FREEZE_GNU_CMDS'
+from pathlib import Path
+import shutil
+import sys
+out, listing, dest = map(Path, sys.argv[1:])
+owners = [x for x in listing.read_text().splitlines() if x and not x.startswith('#')]
+for owner in owners:
+    target = Path(owner)
+    path = target.parent / ('.' + target.name + '.cmd')
+    original = out / path
+    if original.is_symlink() or not original.is_file():
+        raise SystemExit(f'RV32I_GNU_CMD_FREEZE=FAIL owner={owner}')
+    frozen = dest / path
+    frozen.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(original, frozen)
+print(f'RV32I_GNU_CMD_FREEZE=PASS records={len(owners)}')
+PY_FREEZE_GNU_CMDS
   while IFS= read -r line; do
     [[ "$line" != \#* && -n "$line" ]] || continue
     install -m 644 "$merged/minic/$line" "$out/$line"
@@ -219,11 +240,17 @@ if [[ "$mode" == union ]]; then
   done
   echo "RV32I_SOFTARITH=PASS providers=GNU_libgcc_14.2.0,LLVM_compiler_rt_19.1.7 exact_isa=rv32i ABI=ilp32 archive_sha256=$(sha256sum "$runtime_archive" | cut -d' ' -f1)"
 
+  regen_guard="$GITHUB_WORKSPACE/tools/ci/linux-runtime-kbuild-regeneration-guard-v1.py"
+  python3 "$regen_guard" --mode snapshot --out "$out" \
+    --evidence "$merged/generated-before.json"
+
   # Keep the original GNU Kbuild linker, object universe, archive ordering,
   # and Linux make targets. Attach only the external software-arithmetic
   # provider at the existing vmlinux library seam (inside --start-group),
   # without replacing any Kbuild-generated KBUILD_VMLINUX_LIBS value.
-  # KBUILD_NOCMDDEP prevents GNU CC from overwriting certified MiniC objects.
+  # KBUILD_NOCMDDEP avoids command-line drift, but a real VDSO input change
+  # legitimately regenerates vdso-offsets.h and its dependent C TUs. The
+  # existing Linux regeneration guard reconciles those exact owners below.
   if ! make "${gnu_args[@]}" KBUILD_NOCMDDEP=1 -j4 \
       --eval="vmlinux: KBUILD_VMLINUX_LIBS += $runtime_archive" \
       Image >"$merged/minic-relink.log" 2>&1; then
@@ -288,17 +315,108 @@ for record in records:
 PY_RV32_LINK_INPUTS
     exit 6
   fi
-  verify_minic_union_objects() {
+  # Analyze the complete generated-input delta against all 1741 frozen
+  # original GNU .cmd dependency closures. Do not restore a stale MiniC
+  # object when a generated header's CONTENT changed: replay that owner
+  # through GNU -E -> the SAME MiniC -S -> original GNU AS first.
+  python3 "$regen_guard" --mode impact --out "$out" \
+    --evidence "$merged/generated-before.json" \
+    --golden-out "$merged/gnu-cmd" --selected "$prov/full-c-objects.txt" \
+    --affected-file "$merged/header-affected-objects.txt" \
+    | tee "$merged/header-impact.log"
+  python3 "$regen_guard" --mode snapshot --out "$out" \
+    --evidence "$merged/generated-after-first-link.json"
+  if [[ -s "$merged/header-affected-objects.txt" ]]; then
+    : >"$merged/header-replay-success.txt"
+    : >"$merged/header-replay-hashes.sha256"
+    MINIC_KBUILD_RV32I_ORIGIN_AUDIT=1 \
+      python3 "$regen_guard" --mode replay --out "$out" \
+        --golden-out "$merged/gnu-cmd" \
+        --selected "$merged/header-affected-objects.txt" \
+        --wrapper "$GITHUB_WORKSPACE/tests/external/linux/stage2_kbuild_cc.sh" \
+        --minic "$MINIC_CC" \
+        --success-trace "$merged/header-replay-success.txt" \
+        --digest-trace "$merged/header-replay-hashes.sha256" \
+        >"$merged/header-replay.log" 2>&1 || {
+          tail -n 90 "$merged/header-replay.log" >&2
+          exit 7
+        }
+    python3 "$GITHUB_WORKSPACE/tools/ci/linux-runtime-minic-route-audit-v1.py" \
+      --objects-file "$merged/header-affected-objects.txt" \
+      --success-trace "$merged/header-replay-success.txt" \
+      --object-digest-trace "$merged/header-replay-hashes.sha256" \
+      --candidates "$out"
+  fi
+
+  # Restore ONLY genuine GNU-rebuilt C owners that do NOT depend on changed
+  # generated headers; dynamic dependents above are already fresh MiniC.
+  # Prove each overwritten owner has a real `CC owner.o` in the link log.
+  # Reinstalling all 1741 would touch vdso/hwprobe.o and force VDSOLD to
+  # regenerate yet again on every retry (the previous CI failure).
+  python3 - "$out" "$merged" <<'PY_RECONCILE'
+from pathlib import Path
+import hashlib
+import os
+import re
+import shutil
+import sys
+out, merged = map(Path, sys.argv[1:])
+affected = set((merged / 'header-affected-objects.txt').read_text().splitlines())
+compiled = set(re.findall(r'^  CC\s+(\S+\.o)\s*$',
+                          (merged / 'minic-relink.log').read_text(), re.M))
+restored = []
+for line in (merged / 'minic-manifest.sha256').read_text().splitlines():
+    expected, relative = line.split('  ', 1)
+    name = relative.removeprefix('minic/')
+    if name in affected:
+        continue
+    target, candidate = out / name, merged / relative
+    if hashlib.sha256(target.read_bytes()).hexdigest() != expected:
+        if name not in compiled:
+            raise SystemExit(f'RV32I_UNION_RECONCILE=FAIL unexplained_C_owner={name}')
+        shutil.copy2(candidate, target)
+        os.utime(target, None)
+        restored.append(name)
+(merged / 'owner-restored.txt').write_text(''.join(x + '\n' for x in restored))
+print(f'RV32I_UNION_RECONCILE=PASS replay={len(affected)} restored={len(restored)} owners={len(compiled)}')
+PY_RECONCILE
+
+  if [[ -s "$merged/header-affected-objects.txt" || -s "$merged/owner-restored.txt" ]]; then
+    echo 'RV32I_UNION_LINK=RECONCILE original_GNU_Kbuild_second_link=true'
+    if ! make "${gnu_args[@]}" KBUILD_NOCMDDEP=1 -j4 \
+        --eval="vmlinux: KBUILD_VMLINUX_LIBS += $runtime_archive" \
+        Image >"$merged/minic-relink-retry.log" 2>&1; then
+      echo 'RV32I_UNION_RECONCILE=FAIL original_GNU_Kbuild_second_link' >&2
+      tail -n 100 "$merged/minic-relink-retry.log" >&2
+      exit 7
+    fi
+    python3 "$regen_guard" --mode stable --out "$out" \
+      --evidence "$merged/generated-after-first-link.json"
+  fi
+
+  # Check ALL original owners after the final link. A post-header MiniC
+  # replay legitimately has a NEW certified SHA; every other owner must
+  # remain byte-identical to its immutable seven-shard candidate.
   python3 - "$out" "$merged" <<'PY_UNION'
 from pathlib import Path
 import hashlib
 import sys
 out, merged = map(Path, sys.argv[1:])
+replay = {}
+for line in (merged / 'header-replay-hashes.sha256').read_text().splitlines() if (merged / 'header-replay-hashes.sha256').exists() else []:
+    digest, name = line.split('  ', 1)
+    if name in replay:
+        raise SystemExit(f'RV32I_UNION_OBJECTS=FAIL duplicate_replay={name}')
+    replay[name] = digest
+affected = set((merged / 'header-affected-objects.txt').read_text().splitlines())
+if set(replay) != affected:
+    raise SystemExit(f'RV32I_UNION_OBJECTS=FAIL replay_coverage={len(replay)} affected={len(affected)}')
 drift = []
 for record in (merged / 'minic-manifest.sha256').read_text().splitlines():
     expected, rel = record.split('  ', 1)
     assert rel.startswith('minic/'), rel
     owner = rel[len('minic/'):]
+    expected = replay.get(owner, expected)
     actual = hashlib.sha256((out / owner).read_bytes()).hexdigest()
     if actual != expected:
         drift.append((owner, expected, actual))
@@ -311,29 +429,8 @@ if drift:
     for owner, expected, actual in drift[:32]:
         print(f'RV32I_UNION_OWNER_DRIFT owner={owner} expected={expected} actual={actual}', file=sys.stderr)
     raise SystemExit(7)
-print(f'RV32I_UNION_OBJECTS=PASS owners={len((merged / "minic-manifest.sha256").read_text().splitlines())} no_GNU_C_fallback=true')
+print(f'RV32I_UNION_OBJECTS=PASS owners={len((merged / "minic-manifest.sha256").read_text().splitlines())} header_replayed={len(replay)} no_GNU_C_fallback=true')
 PY_UNION
-  }
-  if ! verify_minic_union_objects; then
-    # A final generated prerequisite may still materialize during Image.
-    # Reinstall the *same attested bytes*, rerun the *same original* Kbuild
-    # target once, and fail closed if any owner is replaced a second time.
-    # This is a bounded dependency-convergence pass, never a GNU C fallback.
-    echo 'RV32I_UNION_REFREEZE=RETRY original_GNU_Kbuild_once=true'
-    while IFS= read -r line; do
-      [[ "$line" != \#* && -n "$line" ]] || continue
-      install -m 644 "$merged/minic/$line" "$out/$line"
-    done <"$prov/full-c-objects.txt"
-    if ! make "${gnu_args[@]}" KBUILD_NOCMDDEP=1 -j4 \
-        --eval="vmlinux: KBUILD_VMLINUX_LIBS += $runtime_archive" \
-        Image >"$merged/minic-relink-retry.log" 2>&1; then
-      echo 'RV32I_UNION_REFREEZE=FAIL original_GNU_Kbuild' >&2
-      tail -n 100 "$merged/minic-relink-retry.log" >&2
-      exit 7
-    fi
-    verify_minic_union_objects
-    echo 'RV32I_UNION_REFREEZE=PASS certified_MiniC_objects_restored=true'
-  fi
   test -s "$out/arch/riscv/boot/Image"
   riscv64-linux-gnu-readelf -h "$out/vmlinux" >"$merged/minic-vmlinux-elf.txt"
   grep -Eq 'Class:[[:space:]]+ELF32' "$merged/minic-vmlinux-elf.txt"
