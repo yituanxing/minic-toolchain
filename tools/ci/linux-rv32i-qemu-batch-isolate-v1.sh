@@ -6,6 +6,14 @@ set -Eeuo pipefail
 : "${RV32I_TRIAGE_ROOT:?}"
 : "${RV32I_TRIAGE_SOURCE:?}"
 : "${RV32I_TRIAGE_GOLDEN:?}"
+if [[ "${RV32I_TRIAGE_PREFIX:-0}" != 0 && "${RV32I_TRIAGE_PREFIX:-0}" != 1 ]]; then
+  echo 'RV32I_COHORT=FAIL invalid_prefix_mode' >&2; exit 2
+fi
+if [[ "${RV32I_TRIAGE_PREFIX:-0}" == 1 &&
+      ( -n "${RV32I_TRIAGE_SHARD:-}" || -n "${RV32I_TRIAGE_PARENT_PART:-}" ||
+        -n "${RV32I_TRIAGE_LEAF_PART:-}" ) ]]; then
+  echo 'RV32I_COHORT=FAIL prefix_requires_full_seven_shards' >&2; exit 2
+fi
 if [[ -n "${RV32I_TRIAGE_SHARD:-}" ]]; then
   [[ "$RV32I_TRIAGE_SHARD" =~ ^[0-6]$ ]] || {
     echo 'RV32I_COHORT=FAIL invalid_shard_partition' >&2; exit 2;
@@ -179,9 +187,41 @@ PY_SPLIT
   mapfile -t trial_files < <(find "$root/subsets" -type f -name '*.txt' | LC_ALL=C sort)
 else
   trial_files=()
-  for idx in 0 1 2 3 4 5 6; do
-    trial_files+=("$shards/shard-$idx/full-objects.txt")
-  done
+  if [[ "${RV32I_TRIAGE_PREFIX:-0}" == 1 ]]; then
+    python3 - "$shards" "$root/subsets" <<'PY_PREFIX'
+from pathlib import Path
+import sys
+shards, dest = map(Path, sys.argv[1:])
+owner_lists = []
+for i in range(7):
+    names = (shards/f'shard-{i}'/'full-objects.txt').read_text().splitlines()
+    names = [n for n in names if n and not n.startswith('#')]
+    assert len(names) in (248,249)
+    owner_lists.append(names)
+all_names = set()
+for count in range(1,8):
+    names = [n for shard in owner_lists[:count] for n in shard]
+    assert len(names) == len(set(names))
+    assert all_names.issubset(set(names))
+    all_names = set(names)
+    path = dest/f'shard-0-prefix-{count}.txt'
+    path.write_text('\\n'.join(names)+'\\n')
+    print(f'RV32I_PREFIX_PLAN=PASS shards={count} objects={len(names)}')
+assert len(all_names) == 1741
+PY_PREFIX
+    mapfile -t trial_files < <(find "$root/subsets" -type f -name 'shard-0-prefix-*.txt' | LC_ALL=C sort)
+    declare -A rv32_owner_shard
+    for idx in 0 1 2 3 4 5 6; do
+      while IFS= read -r owner; do
+        [[ -z "$owner" || "${owner:0:1}" == '#' ]] && continue
+        rv32_owner_shard["$owner"]="$idx"
+      done < "$shards/shard-$idx/full-objects.txt"
+    done
+  else
+    for idx in 0 1 2 3 4 5 6; do
+      trial_files+=("$shards/shard-$idx/full-objects.txt")
+    done
+  fi
 fi
 previous_file=
 qemu_count=0
@@ -204,7 +244,11 @@ for active_file in "${trial_files[@]}"; do
   count=0
   while IFS= read -r owner; do
     [[ "$owner" == \#* || -z "$owner" ]] && continue
-    cp --reflink=auto "$shards/shard-$idx/minic/$owner" "$out/$owner"
+    candidate_shard=$idx
+    if [[ "${RV32I_TRIAGE_PREFIX:-0}" == 1 ]]; then
+      candidate_shard="${rv32_owner_shard[$owner]:?unattested_prefix_owner}"
+    fi
+    cp --reflink=auto "$shards/shard-$candidate_shard/minic/$owner" "$out/$owner"
     touch "$out/$owner"
     count=$((count+1))
     if [[ -n "${RV32I_TRIAGE_LEAF_PART:-}" ]]; then
@@ -222,20 +266,24 @@ for active_file in "${trial_files[@]}"; do
   fi
   # Kbuild sometimes recompiles a changed generated-header dependent owner.
   # Never call such a trial a MiniC-vs-GNU comparison without exact SHA.
-  if ! python3 - "$shards/shard-$idx" "$out" "$active_file" <<'PY_VERIFY'
+  if ! python3 - "$shards/shard-$idx" "$out" "$active_file" "$shards" "${RV32I_TRIAGE_PREFIX:-0}" <<'PY_VERIFY'
 from pathlib import Path
 import hashlib, sys
-shard, out, active = map(Path, sys.argv[1:])
+shard, out, active, shards = map(Path, sys.argv[1:5])
+prefix = sys.argv[5] == '1'
 names = set(x for x in active.read_text().splitlines() if x and not x.startswith('#'))
 seen = set()
-for line in (shard/'minic-manifest.sha256').read_text().splitlines():
-    expected, path = line.split('  ', 1)
-    name = path.removeprefix('minic/')
-    if name not in names:
-        continue
-    seen.add(name)
-    if hashlib.sha256((out/name).read_bytes()).hexdigest() != expected:
-        raise SystemExit(f'RV32I_COHORT_DRIFT=FAIL owner={name}')
+manifest_roots = [shards/f'shard-{i}' for i in range(7)] if prefix else [shard]
+for owner_shard in manifest_roots:
+    for line in (owner_shard/'minic-manifest.sha256').read_text().splitlines():
+        expected, path = line.split('  ', 1)
+        name = path.removeprefix('minic/')
+        if name not in names:
+            continue
+        assert name not in seen, name
+        seen.add(name)
+        if hashlib.sha256((out/name).read_bytes()).hexdigest() != expected:
+            raise SystemExit(f'RV32I_COHORT_DRIFT=FAIL owner={name}')
 assert seen == names, (len(seen), len(names))
 print('RV32I_COHORT_DRIFT=PASS exact_MiniC_cohort=true')
 PY_VERIFY
