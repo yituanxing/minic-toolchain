@@ -51,6 +51,8 @@ typedef struct MinicTargetInfo {
     const MinicDataLayout *data_layout;
     const MinicTargetIntegerModel *integer_model;
     MinicType wide_character_type;
+    /* C identity of libc size_t in canonical runtime builtin prototypes. */
+    MinicType libc_size_type;
     MinicIntegerRank word_integer_rank;
     bool gnu_sizeof_void_is_one;
     bool gnu_sizeof_function_is_one;

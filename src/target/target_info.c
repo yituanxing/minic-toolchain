@@ -201,6 +201,7 @@ const MinicTargetInfo *minic_target_info_for_architecture(
             rv32_target.data_layout = minic_riscv32_linux_data_layout();
             rv32_target.integer_model = &minic_rv32_integer_model;
             rv32_target.wide_character_type = minic_type_int();
+            rv32_target.libc_size_type = minic_type_unsigned_int();
             rv32_target.word_integer_rank = MINIC_INTEGER_RANK_INT;
             rv32_target.gnu_sizeof_void_is_one = true;
             rv32_target.gnu_sizeof_function_is_one = true;
@@ -223,6 +224,7 @@ const MinicTargetInfo *minic_target_info_for_architecture(
             rv64_target.data_layout = minic_default_data_layout();
             rv64_target.integer_model = &minic_rv64_integer_model;
             rv64_target.wide_character_type = minic_type_unsigned_short();
+            rv64_target.libc_size_type = minic_type_unsigned_long();
             rv64_target.word_integer_rank = MINIC_INTEGER_RANK_LONG;
             rv64_target.gnu_sizeof_void_is_one = true;
             rv64_target.gnu_sizeof_function_is_one = true;
@@ -240,6 +242,7 @@ const MinicTargetInfo *minic_target_info_for_architecture(
             x86_64_target.data_layout = minic_x86_64_linux_data_layout();
             x86_64_target.integer_model = &minic_x86_64_linux_integer_model;
             x86_64_target.wide_character_type = minic_type_int();
+            x86_64_target.libc_size_type = minic_type_unsigned_long();
             x86_64_target.word_integer_rank = MINIC_INTEGER_RANK_LONG;
             x86_64_target.gnu_sizeof_void_is_one = true;
             x86_64_target.gnu_sizeof_function_is_one = true;
@@ -257,6 +260,7 @@ const MinicTargetInfo *minic_target_info_for_architecture(
             aarch64_target.data_layout = minic_aarch64_linux_data_layout();
             aarch64_target.integer_model = &minic_aarch64_linux_integer_model;
             aarch64_target.wide_character_type = minic_type_unsigned_int();
+            aarch64_target.libc_size_type = minic_type_unsigned_long();
             aarch64_target.word_integer_rank = MINIC_INTEGER_RANK_LONG;
             aarch64_target.gnu_sizeof_void_is_one = true;
             aarch64_target.gnu_sizeof_function_is_one = true;
@@ -272,6 +276,7 @@ const MinicTargetInfo *minic_target_info_for_architecture(
             loongarch64_target.data_layout = minic_loongarch64_linux_data_layout();
             loongarch64_target.integer_model = &minic_loongarch64_linux_integer_model;
             loongarch64_target.wide_character_type = minic_type_int();
+            loongarch64_target.libc_size_type = minic_type_unsigned_long();
             loongarch64_target.word_integer_rank = MINIC_INTEGER_RANK_LONG;
             loongarch64_target.gnu_sizeof_void_is_one = true;
             loongarch64_target.gnu_sizeof_function_is_one = true;

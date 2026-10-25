@@ -64,3 +64,12 @@ int zstd_pointer_overflow_policy(int value) { return value; }
 
 __attribute__((no_sanitize("signed-integer-overflow")))
 int zstd_signed_overflow_policy(int value) { return value; }
+
+/* The original Zstd GNU prefix policy needs exact ELF visibility and
+ * explicit known pure metadata. */
+extern __attribute__((visibility("default"))) int zstd_visibility_decl(int);
+int zstd_visibility_decl(int value) { return value + 4; }
+extern __attribute__((pure)) int zstd_pure_decl(int);
+int zstd_pure_decl(int value) { return value + 5; }
+__attribute__((visibility("hidden")))
+int zstd_hidden_visibility_definition(int value) { return value - 5; }

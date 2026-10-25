@@ -31,6 +31,8 @@ typedef struct MinicFunctionAttributeContext {
     size_t *section_name_length;
     bool *has_section;
     bool *is_weak;
+    MinicSymbolVisibility *visibility;
+    bool *has_visibility;
     bool *is_noreturn;
     bool *force_emit;
     bool *is_constructor;
@@ -226,6 +228,46 @@ static bool consume_function_attribute(MinicParser *parser,
         return false;
     }
 
+    if (descriptor->kind == MINIC_ATTRIBUTE_VISIBILITY) {
+        MinicSourceSpan literal;
+        const char *value;
+        size_t len;
+        MinicSymbolVisibility selected;
+
+        if (context->visibility == NULL || context->has_visibility == NULL ||
+            !function_attribute_argument_token(
+                parser, attribute, MINIC_TOKEN_STRING_LITERAL, &literal) ||
+            minic_parser_span_length(literal) < 2U) {
+            minic_parser_error(parser, "GNU function visibility requires one string literal");
+            return false;
+        }
+        value = parser->source + literal.begin.offset + 1U;
+        len = minic_parser_span_length(literal) - 2U;
+        if (len == 7U && memcmp(value, "default", 7U) == 0) {
+            selected = MINIC_SYMBOL_VISIBILITY_DEFAULT;
+        } else if (len == 6U && memcmp(value, "hidden", 6U) == 0) {
+            selected = MINIC_SYMBOL_VISIBILITY_HIDDEN;
+        } else if (len == 9U && memcmp(value, "protected", 9U) == 0) {
+            selected = MINIC_SYMBOL_VISIBILITY_PROTECTED;
+        } else if (len == 8U && memcmp(value, "internal", 8U) == 0) {
+            selected = MINIC_SYMBOL_VISIBILITY_INTERNAL;
+        } else {
+            minic_parser_error(parser, "unsupported GNU function visibility value");
+            return false;
+        }
+        if (context->is_internal) {
+            minic_parser_error(parser, "GNU function visibility requires external linkage");
+            return false;
+        }
+        if (*context->has_visibility && *context->visibility != selected) {
+            minic_parser_error(parser, "conflicting GNU function visibility");
+            return false;
+        }
+        *context->visibility = selected;
+        *context->has_visibility = true;
+        return true;
+    }
+
     if (descriptor->kind == MINIC_ATTRIBUTE_COPY) {
         return resolve_function_copy_attribute(parser, attribute);
     }
@@ -346,6 +388,8 @@ static bool parse_function_attribute_lists(MinicParser *parser,
     context.section_name_length = NULL;
     context.has_section = NULL;
     context.is_weak = is_weak;
+    context.visibility = NULL;
+    context.has_visibility = NULL;
     context.is_noreturn = NULL;
     context.force_emit = NULL;
     context.is_constructor = NULL;
@@ -366,6 +410,8 @@ static bool apply_function_attribute_list(MinicParser *parser,
                                           size_t *section_name_length,
                                           bool *has_section,
                                           bool *is_weak,
+                                          MinicSymbolVisibility *visibility,
+                                          bool *has_visibility,
                                           bool *is_noreturn,
                                           bool *is_constructor,
                                           MinicFunctionId *alias_target,
@@ -386,6 +432,8 @@ static bool apply_function_attribute_list(MinicParser *parser,
     context.section_name_length = section_name_length;
     context.has_section = has_section;
     context.is_weak = is_weak;
+    context.visibility = visibility;
+    context.has_visibility = has_visibility;
     context.is_noreturn = is_noreturn;
     context.force_emit = NULL;
     context.is_constructor = is_constructor;
@@ -544,6 +592,8 @@ static bool parse_persistent_function_attributes(MinicParser *parser,
     context.section_name_length = section_name_length;
     context.has_section = has_section;
     context.is_weak = is_weak;
+    context.visibility = NULL;
+    context.has_visibility = NULL;
     context.is_noreturn = is_noreturn;
     context.force_emit = force_emit;
     context.is_constructor = is_constructor;
@@ -1328,6 +1378,8 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
                 &section_name_length,
                 &has_section,
                 &is_weak,
+                &visibility,
+                &has_visibility,
                 &is_noreturn,
                 NULL, /* function typed declarator is not startup hook */
                 NULL,
@@ -1635,6 +1687,8 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
             &section_name_length,
             &has_section,
             &is_weak,
+            &visibility,
+            &has_visibility,
             &is_noreturn,
             &is_constructor,
             &alias_target,

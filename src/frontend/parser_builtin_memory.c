@@ -75,7 +75,7 @@ static bool ensure_builtin_memory_callee(
     size_t index;
 
     if (parser == NULL || parser->program == NULL ||
-        spec == NULL || function_id == NULL) {
+        parser->target_info == NULL || spec == NULL || function_id == NULL) {
         return false;
     }
 
@@ -96,8 +96,9 @@ static bool ensure_builtin_memory_callee(
     parameter_types[0] = void_pointer_type;
     parameter_types[1] = spec->const_source
         ? const_void_pointer_type : minic_type_int();
-    /* sizeof/alignof returns unsigned long in MiniC's target-owned model. */
-    parameter_types[2] = minic_type_unsigned_long();
+    /* The canonical libc contract is exact target size_t (RV32 unsigned
+     * int vs LP64 unsigned long), not a frontend architecture switch. */
+    parameter_types[2] = parser->target_info->libc_size_type;
 
     parser->perf_builtin_mem_calls += 1U;
     for (index = 0U; index < parser->program->function_count; ++index) {

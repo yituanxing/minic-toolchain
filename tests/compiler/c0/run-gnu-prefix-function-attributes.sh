@@ -25,6 +25,10 @@ grep -F 'zstd_ubsan_policy:' "$assembly" >/dev/null
 grep -F 'zstd_ubsan_underscored_policy:' "$assembly" >/dev/null
 grep -F 'zstd_pointer_overflow_policy:' "$assembly" >/dev/null
 grep -F 'zstd_signed_overflow_policy:' "$assembly" >/dev/null
+grep -F 'zstd_visibility_decl:' "$assembly" >/dev/null
+grep -F 'zstd_pure_decl:' "$assembly" >/dev/null
+grep -F 'zstd_hidden_visibility_definition:' "$assembly" >/dev/null
+grep -F '.hidden zstd_hidden_visibility_definition' "$assembly" >/dev/null
 grep -F 'prefix_plain_spelling_identity:' "$assembly" >/dev/null
 grep -F '.globl externally_visible_decl' "$assembly" >/dev/null
 grep -F '.section .probe.externally-visible.text' "$assembly" >/dev/null
