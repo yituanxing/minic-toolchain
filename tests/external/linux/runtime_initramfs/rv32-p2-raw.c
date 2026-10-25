@@ -11,7 +11,7 @@ typedef unsigned long word;
 #define CLOSE 57
 #define OPENAT 56
 #define MKDIRAT 34
-#define RENAMEAT 38
+#define RENAMEAT2 276
 #define UNLINKAT 35
 #define MOUNT 40
 #define SOCKET 198
@@ -61,6 +61,9 @@ static int equal(const unsigned char*a,const unsigned char*b,word n){
  for(word i=0;i<n;i++)if(a[i]!=b[i])return 0;return 1;
 }
 static int core_ok=0,core_fail=0,extra_ok=0,extra_unavailable=0,extra_fail=0;
+static void stage(const char*name){
+ say("RV32I_P2_STAGE ");say(name);say("\n");
+}
 static void mark(const char*name,int status,int core){
  if(status==1){say("RV32I_P2_PASS ");say(name);say("\n");if(core)core_ok++;else extra_ok++;}
  else if(status==0){say("RV32I_P2_UNAVAILABLE ");say(name);say("\n");extra_unavailable++;}
@@ -83,22 +86,27 @@ static void set_loopback(struct sin4*a){
  zero(a,sizeof(*a));a->family=AF_INET;a->ip=0x0100007fU;
 }
 static void tmpfs_rename_test(void){
+ stage("tmpfs-open-rename-enter");
  const char*start="/tmp/rv32-p2-file",*renamed="/tmp/rv32-p2-renamed";
  long fd=S4(OPENAT,AT_FDCWD,start,O_CREAT|O_WRONLY|O_TRUNC,0600);
  int ok=!bad(fd)&&S3(WRITE,fd,"P2TEST",6)==6;
  closefd(fd);
- if(ok)ok=S4(RENAMEAT,AT_FDCWD,start,AT_FDCWD,renamed)==0;
+ if(ok)ok=S5(RENAMEAT2,AT_FDCWD,start,AT_FDCWD,renamed,0)==0;
  fd=S4(OPENAT,AT_FDCWD,renamed,0,0);
  char data[8];zero(data,sizeof(data));
  if(ok)ok=!bad(fd)&&S3(READ,fd,data,6)==6&&
                 equal((unsigned char*)data,(const unsigned char*)"P2TEST",6);
  closefd(fd);
  if(ok)ok=S3(UNLINKAT,AT_FDCWD,renamed,0)==0;
+ stage("tmpfs-open-rename-complete");
  mark("tmpfs-rename-rw",ok?1:-1,1);
 }
 static void ipv4_udp_test(void){
+ stage("udp-enter");
  struct sin4 addr;set_loopback(&addr);
+ stage("udp-before-loopback-up");
  if(!loopback_up()){mark("ipv4-udp-loopback",-1,1);return;}
+ stage("udp-after-loopback-up");
  long receiver=S3(SOCKET,AF_INET,SOCK_DGRAM,0);
  long sender=S3(SOCKET,AF_INET,SOCK_DGRAM,0);
  u32 alen=sizeof(addr);
@@ -115,6 +123,7 @@ static void ipv4_udp_test(void){
  mark("ipv4-udp-loopback",ok?1:-1,1);
 }
 static void ipv4_tcp_test(void){
+ stage("tcp-enter");
  struct sin4 addr;set_loopback(&addr);
  long listener=S3(SOCKET,AF_INET,SOCK_STREAM,0);
  u32 alen=sizeof(addr);
@@ -164,6 +173,7 @@ static int digest_test(const char*alg,const unsigned char*expect,word size){
  return ok?1:-1;
 }
 static void crypto_test(void){
+ stage("crypto-enter");
  static const unsigned char sha256[32]={
  0xba,0x78,0x16,0xbf,0x8f,0x01,0xcf,0xea,0x41,0x41,0x40,0xde,0x5d,0xae,0x22,0x23,
  0xb0,0x03,0x61,0xa3,0x96,0x17,0x7a,0x9c,0xb4,0x10,0xff,0x61,0xf2,0x00,0x15,0xad};
@@ -174,6 +184,7 @@ static void crypto_test(void){
  mark("afalg-sha3-256-abc",digest_test("sha3-256",sha3,32),0);
 }
 static void overlay_test(void){
+ stage("overlay-enter");
  /* A real overlay lower/read + upper copy-up and original lower integrity.
   * A missing overlay filesystem is an explicit UNSUPPORTED, not PASS. */
  const char*lo="/tmp/p2-lower",*up="/tmp/p2-upper",
