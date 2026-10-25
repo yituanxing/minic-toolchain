@@ -129,6 +129,59 @@ bool rv32_emit_integer_instruction(FILE *out, const MinicCoreFunction *f,
         return rv32_canon(out, f, ins->type, "t0") &&
                rv32_slot(out, fr, ins->result, "t0", false);
     }
+    /* RV32I provides no Zbb CLZ/CTZ. Preserve the target-neutral
+     * Core operation using strictly base-I integer instructions, with
+     * exactly the same 8/16/32-bit semantics as the RV64 O0 lowering.
+     * Two-XLEN operations still fail closed until separately qualified. */
+    case MINIC_CORE_INSTRUCTION_INTEGER_CLZ:
+    case MINIC_CORE_INSTRUCTION_INTEGER_CTZ: {
+        MinicCoreValueId input = ins->value.operand;
+        unsigned width;
+        bool signed_input;
+        if (input >= f->value_count ||
+            !minic_type_is_unsigned_integer(f->values[input].type) ||
+            !minic_type_equal(ins->type, minic_type_int()) ||
+            !rv32_scalar(f, f->values[input].type, &width, &signed_input) ||
+            signed_input || width < 8U || width > 32U ||
+            !rv32_slot(out, fr, input, "t0", true))
+            return false;
+        if (ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_CLZ) {
+            if (fprintf(out,
+                    "  li t1, 0\n"
+                    "  li t2, 1\n"
+                    "  slli t2, t2, %u\n"
+                    ".L%s_rv32_clz_loop_%" PRIu32 ":\n"
+                    "  and t3, t0, t2\n"
+                    "  bnez t3, .L%s_rv32_clz_done_%" PRIu32 "\n"
+                    "  addi t1, t1, 1\n"
+                    "  srli t2, t2, 1\n"
+                    "  bnez t2, .L%s_rv32_clz_loop_%" PRIu32 "\n"
+                    ".L%s_rv32_clz_done_%" PRIu32 ":\n",
+                    width - 1U, symbol, ins->result,
+                    symbol, ins->result, symbol, ins->result,
+                    symbol, ins->result) < 0)
+                return false;
+        } else {
+            if (fprintf(out,
+                    "  beqz t0, .L%s_rv32_ctz_zero_%" PRIu32 "\n"
+                    "  li t1, 0\n"
+                    ".L%s_rv32_ctz_loop_%" PRIu32 ":\n"
+                    "  andi t2, t0, 1\n"
+                    "  bnez t2, .L%s_rv32_ctz_done_%" PRIu32 "\n"
+                    "  addi t1, t1, 1\n"
+                    "  srli t0, t0, 1\n"
+                    "  j .L%s_rv32_ctz_loop_%" PRIu32 "\n"
+                    ".L%s_rv32_ctz_zero_%" PRIu32 ":\n"
+                    "  li t1, %u\n"
+                    ".L%s_rv32_ctz_done_%" PRIu32 ":\n",
+                    symbol, ins->result, symbol, ins->result,
+                    symbol, ins->result, symbol, ins->result,
+                    symbol, ins->result, width,
+                    symbol, ins->result) < 0)
+                return false;
+        }
+        return rv32_slot(out, fr, ins->result, "t1", false);
+    }
     case MINIC_CORE_INSTRUCTION_INTEGER_NEGATE:
     case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_NOT:
     case MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO:

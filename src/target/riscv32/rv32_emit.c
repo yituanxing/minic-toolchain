@@ -60,6 +60,8 @@ static bool rv32_emit_ins(FILE *out, const MinicC0Program *program,
     case MINIC_CORE_INSTRUCTION_SCALAR_BITCAST:
     case MINIC_CORE_INSTRUCTION_INTEGER_NEGATE:
     case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_NOT:
+    case MINIC_CORE_INSTRUCTION_INTEGER_CLZ:
+    case MINIC_CORE_INSTRUCTION_INTEGER_CTZ:
     case MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO:
         return rv32_emit_integer_instruction(out, f, fr, ins, symbol);
     case MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT:
