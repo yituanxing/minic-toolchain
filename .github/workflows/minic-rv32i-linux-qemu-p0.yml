@@ -765,6 +765,9 @@ jobs:
             build/rv32i-p1/p2/provenance.txt
             build/rv32i-p1/p2/init-elf.txt
             build/rv32i-p1/p2/runtime-p2-elf.txt
+            build/rv32i-p1/p2/runtime-p2
+            build/rv32i-p1/p2/runtime-p2-disassembly.txt
+            build/rv32i-p1/p2/runtime-p2-symbols.txt
             build/rv32i-p1/p1-repeats.tsv
             build/rv32i-p1/trials/*/step.log
             build/rv32i-p1/trials/*/qemu-serial.log
