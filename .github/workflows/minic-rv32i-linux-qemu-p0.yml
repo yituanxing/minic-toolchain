@@ -9,6 +9,7 @@ on:
       - tests/external/linux/runtime_initramfs/rv32-p1-raw.c
       - tests/external/linux/runtime_initramfs/rv32-init-raw.c
       - tests/external/linux/runtime_initramfs/rv32-sh-raw.c
+      - tests/external/linux/runtime_initramfs/rv32-p2-raw.c
       - tools/ci/linux-rv32i-qemu-batch-isolate-v1.sh
   workflow_dispatch:
 
@@ -17,7 +18,7 @@ on:
 # original GNU Kbuild ELF32 link, and binds the bytes with a fixed SHA.
 jobs:
   rv32i-linux-qemu-p0:
-    if: github.event_name == 'workflow_dispatch' || (!contains(github.event.head_commit.message, '[rv32-leaf]') && !contains(github.event.head_commit.message, '[rv32-single]') && !contains(github.event.head_commit.message, '[rv32-partition]') && !contains(github.event.head_commit.message, '[rv32-whole-shard]') && !contains(github.event.head_commit.message, '[rv32-prefix]') && !contains(github.event.head_commit.message, '[rv32-p1]'))
+    if: github.event_name == 'workflow_dispatch' || (!contains(github.event.head_commit.message, '[rv32-leaf]') && !contains(github.event.head_commit.message, '[rv32-single]') && !contains(github.event.head_commit.message, '[rv32-partition]') && !contains(github.event.head_commit.message, '[rv32-whole-shard]') && !contains(github.event.head_commit.message, '[rv32-prefix]') && !contains(github.event.head_commit.message, '[rv32-p1]') && !contains(github.event.head_commit.message, '[rv32-p2]'))
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
@@ -624,7 +625,7 @@ jobs:
   # certified 1741/1741 RV32I Image. No Linux compilation or relink, no new
   # MiniC object candidates, only a GNU-built freestanding ELF32 initramfs.
   rv32i-linux-qemu-p1:
-    if: github.event_name == 'push' && contains(github.event.head_commit.message, '[rv32-p1]')
+    if: github.event_name == 'push' && (contains(github.event.head_commit.message, '[rv32-p1]') || contains(github.event.head_commit.message, '[rv32-p2]'))
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
@@ -675,7 +676,23 @@ jobs:
               gcc-riscv64-linux-gnu cpio device-tree-compiler
           command -v qemu-system-riscv32
           command -v riscv64-linux-gnu-gcc
+      - name: Single real QEMU RV32 P2 scoped subsystem frontier (NO Linux rebuild)
+        if: contains(github.event.head_commit.message, '[rv32-p2]')
+        shell: bash
+        timeout-minutes: 3
+        run: |
+          set -Eeuo pipefail
+          expected=972ad331163bad9a3c47e9125672a18cb485cef8ca53861d6040a647101efa95
+          test "$(sha256sum "$RV32I_P1_IMAGE" | cut -d' ' -f1)" = "$expected"
+          RV32I_QEMU_P1=1 \
+          RV32I_QEMU_P2=1 \
+          RV32I_QEMU_IMAGE="$RV32I_P1_IMAGE" \
+          RV32I_QEMU_WORK="$GITHUB_WORKSPACE/build/rv32i-p1/p2" \
+          RV32I_QEMU_TIMEOUT_SECONDS=60 \
+            bash tools/ci/linux-rv32i-qemu-p0-v1.sh
+          echo "RV32I_P2_FRONTIER=PASS exact_Image=$expected scope=one_boot_subsystem_canaries_not_full_P2"
       - name: Independent historical P0 9-check guest canary on unchanged RV32 Linux Image
+        if: contains(github.event.head_commit.message, '[rv32-p1]')
         shell: bash
         timeout-minutes: 3
         run: |
@@ -690,6 +707,7 @@ jobs:
             bash tools/ci/linux-rv32i-qemu-p0-v1.sh
           echo "RV32I_P0_FULL=PASS official_manifest=true same_Image=$expected"
       - name: Separate actual RV32I /bin/sh console lane on THE SAME Linux Image
+        if: contains(github.event.head_commit.message, '[rv32-p1]')
         shell: bash
         timeout-minutes: 3
         run: |
@@ -704,6 +722,7 @@ jobs:
             bash tools/ci/linux-rv32i-qemu-p0-v1.sh
           echo "RV32I_P0_SHELL=PASS actual_ELF32_binary=true same_Image=$expected clean_powerdown=true"
       - name: Historical P0 mounts, P1 fork-exec-wait plus 12 syscall families on 12 immutable-Image boots
+        if: contains(github.event.head_commit.message, '[rv32-p1]')
         shell: bash
         timeout-minutes: 13
         run: |
@@ -742,6 +761,10 @@ jobs:
         with:
           name: rv32i-linux-p1-${{ github.sha }}
           path: |
+            build/rv32i-p1/p2/qemu-serial.log
+            build/rv32i-p1/p2/provenance.txt
+            build/rv32i-p1/p2/init-elf.txt
+            build/rv32i-p1/p2/runtime-p2-elf.txt
             build/rv32i-p1/p1-repeats.tsv
             build/rv32i-p1/trials/*/step.log
             build/rv32i-p1/trials/*/qemu-serial.log
