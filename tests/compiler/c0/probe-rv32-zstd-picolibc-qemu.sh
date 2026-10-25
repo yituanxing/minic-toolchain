@@ -56,11 +56,23 @@ for source in "${sources[@]}"; do
     head -n 25 "$work/obj/$stem.gcc.err" >&2
     exit 1
   fi
-  if ! MINIC_RV32_FRAME_TRACE=1 "$MINIC_CC" --target=riscv32-linux "${target[@]}" -S \
+  # Keep noisy Core instrumentation scoped to the sole unresolved
+  # original source owner, not the 25 already accepted C translation units.
+  trace_env=()
+  if [ "$name" = "compress/zstdmt_compress.c" ]; then
+    trace_env=(CORE_FAST_TRACE=1 CORE_M138_ERROR_TRACE=1 CORE_M136_STATEMENT_TRACE=1)
+  fi
+  if ! env MINIC_RV32_FRAME_TRACE=1 "${trace_env[@]}" \
+      "$MINIC_CC" --target=riscv32-linux "${target[@]}" -S \
       "$work/obj/$stem.i" -o "$work/obj/$stem.s" \
       >"$work/obj/$stem.minic.out" 2>"$work/obj/$stem.minic.err"; then
     echo "RV32_ZSTD_TU=BLOCKED stage=MiniC source=$name" >&2
     head -n 25 "$work/obj/$stem.minic.err" >&2
+    if [ "${#trace_env[@]}" -gt 0 ]; then
+      echo "RV32_ZSTD_CORE_FAILURE_OWNER source=$name"
+      grep -E 'CORE_FAST_TRACE|CORE_M13[6789]_|CORE_EXPR_STMT|CORE_ASM_DETAIL|CORE_LOWER_' \
+        "$work/obj/$stem.minic.err" | tail -n 100 || true
+    fi
     blocked=$((blocked + 1))
     continue
   fi
