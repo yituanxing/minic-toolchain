@@ -238,8 +238,12 @@ static void ipv6_test(void) {
         stage("ipv6-child-connect");
         int connected=!bad(fd) && SC3(SYS_CONNECT,fd,&addr,sizeof(addr))==0;
         stage(connected?"ipv6-child-connected":"ipv6-child-connect-failed");
-        int ok=connected && SC3(SYS_WRITE,fd,"V",1)==1 &&
-               SC3(SYS_READ,fd,&received,1)==1 && received=='6';
+        long written=connected?SC3(SYS_WRITE,fd,"V",1):-1;
+        stage(written==1?"ipv6-child-write-pass":"ipv6-child-write-fail");
+        long read_n=written==1?SC3(SYS_READ,fd,&received,1):-1;
+        stage(read_n==1?"ipv6-child-read-pass":"ipv6-child-read-fail");
+        int ok=connected && written==1 && read_n==1 && received=='6';
+        stage(ok?"ipv6-child-complete-pass":"ipv6-child-complete-fail");
         close_fd(fd);
         (void)SC1(SYS_EXIT,ok?0:1);
         for(;;) __asm__ volatile("nop");
@@ -249,13 +253,19 @@ static void ipv6_test(void) {
     }
     stage("ipv6-parent-accept");
     long accepted=SC4(SYS_ACCEPT4,listener,0,0,0);
+    stage(bad(accepted)?"ipv6-accept-fail":"ipv6-accept-pass");
     char got=0;
-    int ok=!bad(accepted) &&
-           SC3(SYS_READ,accepted,&got,1)==1 && got=='V' &&
-           SC3(SYS_WRITE,accepted,"6",1)==1;
+    long read_n=bad(accepted)?-1:SC3(SYS_READ,accepted,&got,1);
+    stage(read_n==1?"ipv6-parent-read-pass":"ipv6-parent-read-fail");
+    long written=read_n==1?SC3(SYS_WRITE,accepted,"6",1):-1;
+    stage(written==1?"ipv6-parent-write-pass":"ipv6-parent-write-fail");
     close_fd(accepted);
     int status=0;
-    ok=ok && SC4(SYS_WAIT4,child,&status,0,0)==child && status==0;
+    long waited=SC4(SYS_WAIT4,child,&status,0,0);
+    stage(waited==child?"ipv6-waitpid-pass":"ipv6-waitpid-fail");
+    stage(status==0?"ipv6-child-status-pass":"ipv6-child-status-fail");
+    int ok=!bad(accepted) && read_n==1 && got=='V' &&
+           written==1 && waited==child && status==0;
     stage(ok?"ipv6-child-parent-success":"ipv6-child-parent-failed");
     verdict("ipv6-tcp-loopback",ok);
     close_fd(listener);
