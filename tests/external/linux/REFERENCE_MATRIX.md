@@ -50,3 +50,15 @@ than replaying an older MiniPP output artifact or hiding a GNU-PP fallback.
 The existing seven-shard workflow is the actual execution surface. Commit
 message opt-in tags select its native producer and receiver without adding
 workflow files or changing any product C, assembler or preprocessor sources.
+
+## 2026-10-25 current-main exact-source Linux requalification
+
+The certified Linux 6.6.143 RV64 seven-shard / QEMU P1 workflow remains
+`.github/workflows/linux-runtime-gcc-baseline.yml`, with seven authentic
+Kbuild C-object producers, SHA-bound GNU golden provenance and the original
+Image / QEMU P1 receiver. To requalify a refactored compiler, select the
+existing current-main profile and force a real C-owner rebuild; historical
+cached objects and previous Linux PASS receipts are not current-source proof.
+Do not enable historical Python patch overlays or change kernel C/Kconfig.
+The opt-in commit initiating this run is an execution request, not a PASS;
+only its producer and receiver CI evidence can establish acceptance.
