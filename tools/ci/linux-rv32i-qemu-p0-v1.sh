@@ -251,7 +251,7 @@ elif [[ "$status" != 124 ]]; then
 fi
 for pattern in \
     'Linux version 6\.6\.143' \
-    '(Run /init as init process|Starting init: /init)' \
+    "$(if [[ "$shell" == 1 ]]; then printf '%s' '(Run /bin/sh as init process|Starting init: /bin/sh)'; else printf '%s' '(Run /init as init process|Starting init: /init)'; fi)" \
     "$(if [[ "$shell" == 1 ]]; then printf '%s' '^MINIC_LINUX_RUNTIME_SH_READY'; elif [[ "$p1" == 1 ]]; then printf '%s' '^RUNTIME_V2_SYSCALL_BEGIN'; else printf '%s' '^RV32I_LINUX_PID1=PASS syscall=getpid,write elf=ELF32 abi=ilp32'; fi)"; do
   if ! grep -Eq "$pattern" "$work/qemu-serial.log"; then
     echo "RV32I_QEMU_P0=FAIL missing=$pattern image=$image_sha" >&2
