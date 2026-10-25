@@ -17,6 +17,8 @@ typedef struct Rv32Frame {
      * and avoids moving the Core SSA/local object frame during calls. */
     size_t outgoing_size;
     size_t frame_size;
+    /* Saved hidden sret pointer for record returns larger than 2*XLEN. */
+    size_t sret_offset;
     bool is_variadic;
     size_t varargs_size;
     size_t varargs_offset;
@@ -68,6 +70,9 @@ bool rv32_emit_parameter(FILE *, const MinicCoreFunction *,
                          const Rv32Frame *, const MinicCoreInstruction *);
 bool rv32_emit_parameter_object(FILE *, const MinicCoreFunction *,
                                 const Rv32Frame *, const MinicCoreInstruction *);
+/* Shared tail-safe word packing for Core record OBJECT arguments/returns. */
+bool rv32_emit_object_word(FILE *, const Rv32Frame *, MinicCoreObjectId,
+                           size_t, unsigned, const char *);
 bool rv32_emit_call(FILE *, const MinicCoreFunction *,
                     const Rv32Frame *, const MinicCoreInstruction *,
                     MinicCoreInstructionId);

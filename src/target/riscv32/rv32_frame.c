@@ -62,7 +62,10 @@ bool rv32_frame_init(Rv32Frame *frame, const MinicC0Program *program,
     }
     /* Slot zero saves ra even in a leaf; a stable ABI-oriented frame makes
      * lowering of calls and arithmetic runtime helpers deterministic. */
-    next = frame->outgoing_size + 4U;
+    if (frame->outgoing_size > SIZE_MAX - (frame->abi.indirect_return ? 8U : 4U))
+        return rv32_frame_reject("sret_frame_overflow", 0U, f->return_type);
+    frame->sret_offset = frame->outgoing_size + 4U;
+    next = frame->outgoing_size + (frame->abi.indirect_return ? 8U : 4U);
     for (i = 0U; i < f->value_count; ++i) {
         size_t size, alignment;
         unsigned words;

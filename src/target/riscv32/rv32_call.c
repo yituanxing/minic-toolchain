@@ -4,25 +4,20 @@
 /* Load one little-endian ILP32 record word without reading past the
  * actual object extent. Each record Core argument is already a separate
  * snapshot object, so large by-reference calls retain C by-value semantics. */
-static bool rv32_record_call_word(FILE *out, const Rv32Frame *fr,
-                                  const MinicCoreCallArgument *arg,
-                                  const Rv32AbiWordLocation *entry,
-                                  unsigned word, const char *reg) {
+bool rv32_emit_object_word(FILE *out, const Rv32Frame *fr,
+                           MinicCoreObjectId object_id, size_t record_size,
+                           unsigned word, const char *reg) {
     size_t offset, available, chunk, byte;
-    if (out == NULL || fr == NULL || arg == NULL || entry == NULL ||
-        arg->kind != MINIC_CORE_CALL_ARGUMENT_OBJECT ||
-        arg->value.object_id >= fr->object_count || reg == NULL)
+    if (out == NULL || fr == NULL || object_id >= fr->object_count ||
+        reg == NULL || word >= 2U || record_size == 0U)
         return false;
-    offset = fr->object_offsets[arg->value.object_id];
-    if (entry->indirect_record) {
-        return word == 0U && rv32_address(out, reg, offset);
-    }
+    offset = fr->object_offsets[object_id];
     /* word < 2 by verified ILP32 plan: multiplication cannot overflow. */
-    if ((size_t)word * 4U >= entry->record_size ||
+    if ((size_t)word * 4U >= record_size ||
         offset > SIZE_MAX - (size_t)word * 4U)
         return false;
     offset += (size_t)word * 4U;
-    available = entry->record_size - (size_t)word * 4U;
+    available = record_size - (size_t)word * 4U;
     chunk = available < 4U ? available : 4U;
     if (chunk == 4U)
         return rv32_stack(out, "lw", reg, offset);
@@ -72,10 +67,19 @@ static bool rv32_emit_scalar_call_arguments(
                                        reg[0], true)) return false;
             } else if (arg->kind == MINIC_CORE_CALL_ARGUMENT_OBJECT &&
                        entry->record_size != 0U) {
-                for (word = 0U; word < words; ++word)
-                    if (!rv32_record_call_word(out, fr, arg, entry,
-                                              (unsigned)word, reg[word]))
+                for (word = 0U; word < words; ++word) {
+                    if (entry->indirect_record) {
+                        if (word != 0U ||
+                            !rv32_address(out, reg[0],
+                                fr->object_offsets[arg->value.object_id]))
+                            return false;
+                    } else if (!rv32_emit_object_word(
+                                   out, fr, arg->value.object_id,
+                                   entry->record_size, (unsigned)word,
+                                   reg[word])) {
                         return false;
+                    }
+                }
             } else {
                 return false;
             }
@@ -115,6 +119,15 @@ bool rv32_emit_call(FILE *out, const MinicCoreFunction *f,
     if (plan->stack_words > fr->outgoing_size / 4U ||
         !rv32_emit_scalar_call_arguments(out, f, fr, plan))
         return false;
+    if (plan->indirect_return) {
+        /* The receiver's Core result object is the ABI-hidden sret target.
+         * Argument placement was already shifted past a0 by the same plan. */
+        if (ins->kind != MINIC_CORE_INSTRUCTION_CALL ||
+            ins->value.call.result_object >= fr->object_count ||
+            !rv32_address(out, "a0",
+                fr->object_offsets[ins->value.call.result_object]))
+            return false;
+    }
     if (ins->kind == MINIC_CORE_INSTRUCTION_CALL) {
         if (view->callee == NULL || view->callee->name == NULL ||
             fprintf(out, "  call %s\n", view->callee->name) < 0)
@@ -124,6 +137,36 @@ bool rv32_emit_call(FILE *out, const MinicCoreFunction *f,
             !rv32_slot(out, fr, view->function_pointer, "t0", true) ||
             fprintf(out, "  jalr ra, 0(t0)\n") < 0)
             return false;
+    }
+    if (plan->record_return_size != 0U) {
+        size_t obj, word;
+        if (ins->kind != MINIC_CORE_INSTRUCTION_CALL ||
+            ins->value.call.result_object >= fr->object_count ||
+            ins->result != MINIC_CORE_VALUE_INVALID)
+            return false;
+        if (plan->indirect_return) return true;
+        obj = ins->value.call.result_object;
+        for (word = 0U; word < (plan->record_return_size + 3U) / 4U; ++word) {
+            const char *reg = word == 0U ? "a0" : "a1";
+            size_t remaining = plan->record_return_size - word * 4U;
+            size_t dest = fr->object_offsets[obj] + word * 4U;
+            size_t byte;
+            if (remaining >= 4U) {
+                if (!rv32_stack(out, "sw", reg, dest))
+                    return false;
+            } else {
+                if (!rv32_address(out, "t2", dest))
+                    return false;
+                for (byte = 0U; byte < remaining; ++byte) {
+                    if (fprintf(out,
+                                "  srli t1, %s, %zu\n"
+                                "  sb t1, %zu(t2)\n",
+                                reg, byte * 8U, byte) < 0)
+                        return false;
+                }
+            }
+        }
+        return true;
     }
     if (ins->result == MINIC_CORE_VALUE_INVALID) return true;
     if (!rv32_scalar_storage_words(f, ins->type, &words)) return false;

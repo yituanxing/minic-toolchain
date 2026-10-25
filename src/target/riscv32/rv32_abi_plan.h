@@ -24,6 +24,10 @@ typedef struct Rv32CallAbiPlan {
     MinicCoreCallView view;
     Rv32AbiWordLocation *arguments;
     size_t stack_words;
+    /* Record returns <=2*XLEN use a0/a1; larger ones use hidden a0 sret.
+     * Never confuse Core's result OBJECT with a scalar SSA return. */
+    size_t record_return_size;
+    bool indirect_return;
     bool prepared;
 } Rv32CallAbiPlan;
 
@@ -32,6 +36,8 @@ typedef struct Rv32FunctionAbiPlan {
     size_t parameter_count;
     size_t named_gpr_words;
     size_t named_stack_words;
+    size_t record_return_size;
+    bool indirect_return;
     Rv32CallAbiPlan *calls; /* indexed by MinicCoreInstructionId */
     size_t call_count;
     size_t max_outgoing_stack_words;

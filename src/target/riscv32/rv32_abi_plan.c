@@ -60,6 +60,17 @@ static bool rv32_plan_incoming(const MinicC0Program *program,
                               Rv32FunctionAbiPlan *plan) {
     MinicRiscv32AbiCursor cursor = {0U, 0U, false};
     size_t i;
+    Rv32AbiWordLocation result_shape = {0};
+    if (minic_type_is_record(function->return_type)) {
+        if (!rv32_plan_shape(program, target, function,
+                             function->return_type, &result_shape))
+            return false;
+        plan->record_return_size = result_shape.record_size;
+        plan->indirect_return = result_shape.indirect_record;
+        /* Hidden sret pointer occupies a0 before all named parameters. */
+        if (plan->indirect_return)
+            cursor.register_words = 1U;
+    }
     if (function->parameter_count != 0U &&
         function->parameter_types == NULL) return false;
     if (function->parameter_count > SIZE_MAX / sizeof(*plan->parameters))
@@ -91,12 +102,29 @@ static bool rv32_plan_call(const MinicC0Program *program,
                            Rv32CallAbiPlan *call) {
     MinicRiscv32AbiCursor cursor = {0U, 0U, false};
     MinicCoreCallView view;
+    Rv32AbiWordLocation result_shape = {0};
     size_t i;
     if (!minic_core_call_view_build(function, instruction, &view) ||
-        (instruction->kind == MINIC_CORE_INSTRUCTION_CALL &&
-         instruction->value.call.result_object != MINIC_CORE_OBJECT_INVALID) ||
         view.argument_count > SIZE_MAX / sizeof(*call->arguments))
         return false;
+    if (minic_type_is_record(view.return_type)) {
+        if (instruction->kind != MINIC_CORE_INSTRUCTION_CALL ||
+            instruction->value.call.result_object == MINIC_CORE_OBJECT_INVALID ||
+            instruction->value.call.result_object >= function->object_count ||
+            !minic_type_equal(
+                view.return_type,
+                function->objects[instruction->value.call.result_object].type) ||
+            !rv32_plan_shape(program, target, function, view.return_type,
+                             &result_shape))
+            return false;
+        call->record_return_size = result_shape.record_size;
+        call->indirect_return = result_shape.indirect_record;
+        if (call->indirect_return)
+            cursor.register_words = 1U;
+    } else if (instruction->kind == MINIC_CORE_INSTRUCTION_CALL &&
+               instruction->value.call.result_object != MINIC_CORE_OBJECT_INVALID) {
+        return false;
+    }
     if (view.argument_count != 0U) {
         call->arguments = calloc(view.argument_count, sizeof(*call->arguments));
         if (call->arguments == NULL) return false;
