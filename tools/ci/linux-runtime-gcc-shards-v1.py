@@ -54,17 +54,22 @@ def contract(*parts: str) -> str:
     return hashlib.sha256(("\n".join(parts) + "\n").encode()).hexdigest()
 
 
-def check_elf(ref: Path, candidate: Path, name: str) -> None:
+def check_elf(ref: Path, candidate: Path, name: str, elf_class: int = 64) -> None:
+    if elf_class not in (32, 64):
+        raise ValueError(f"unsupported RISC-V ELF class: {elf_class}")
+    expected_ident = b"\x7fELF" + (b"\x01" if elf_class == 32 else b"\x02") + b"\x01"
+    header_length = 52 if elf_class == 32 else 64
+    flags_offset = 36 if elf_class == 32 else 48
     for path in (ref, candidate):
         with path.open("rb") as file:
-            h = file.read(52)
-        if (len(h) != 52 or h[:6] != b"\x7fELF\x02\x01"
+            h = file.read(header_length)
+        if (len(h) != header_length or h[:6] != expected_ident
                 or struct.unpack_from("<H", h, 16)[0] != 1
                 or struct.unpack_from("<H", h, 18)[0] != 243):
-            raise ValueError(f"not ELF64 LE RISC-V ET_REL: {name}: {path}")
+            raise ValueError(f"not ELF{elf_class} LE RISC-V ET_REL: {name}: {path}")
         if path == ref:
-            flags = h[48:52]
-        elif h[48:52] != flags:
+            flags = h[flags_offset:flags_offset + 4]
+        elif h[flags_offset:flags_offset + 4] != flags:
             raise ValueError(f"RISC-V ABI flags mismatch: {name}")
 
 
@@ -146,7 +151,7 @@ def merge(args: argparse.Namespace) -> None:
             reference = args.out / name
             if golden.get(name) != sha(reference):
                 raise ValueError(f"GCC golden object changed: {name}")
-            check_elf(reference, candidate, name)
+            check_elf(reference, candidate, name, args.elf_class)
             if name in collected:
                 raise ValueError(f"duplicate object from shards: {name}")
             collected[name] = candidate
@@ -195,10 +200,11 @@ def self_test() -> None:
         raise AssertionError("accepted invalid shard index")
     print("GNU_MINIC_SHARD_SELFTEST=PASS partition=2064 members=7 unsafe=4")
     merge_self_test()
+    merge_self_test(32)
 
 
 
-def merge_self_test() -> None:
+def merge_self_test(elf_class: int = 64) -> None:
     """Exercise the real merge code with 1,200 synthetic RISC-V ET_REL objects."""
     from tempfile import TemporaryDirectory
     from types import SimpleNamespace
@@ -220,11 +226,12 @@ def merge_self_test() -> None:
         assembler = root / "assembler"
         minic.write_bytes(b"deterministic minic")
         assembler.write_bytes(b"deterministic GNU assembler")
-        hdr = bytearray(52)
-        hdr[:6] = b"\x7fELF\x02\x01"
+        hdr = bytearray(52 if elf_class == 32 else 64)
+        hdr[:6] = b"\x7fELF" + (b"\x01" if elf_class == 32 else b"\x02") + b"\x01"
         struct.pack_into("<H", hdr, 16, 1)
         struct.pack_into("<H", hdr, 18, 243)
-        hdr[48:52] = b"\x05\x00\x00\x00"
+        flags_offset = 36 if elf_class == 32 else 48
+        hdr[flags_offset:flags_offset + 4] = b"\x05\x00\x00\x00"
         names = [f"lib/t{i:04d}.o" for i in range(1200)]
         full = root / "full.txt"
         full.write_text("# self-test\n" + "\n".join(names) + "\n")
@@ -239,7 +246,8 @@ def merge_self_test() -> None:
             directory = shards / f"shard-{index}"
             directory.mkdir()
             subset = directory / "full-objects.txt"
-            split(SimpleNamespace(full=full, shard=index, count=7, output=subset))
+            split(SimpleNamespace(full=full, shard=index, count=7, output=subset,
+                                  balanced_plan=None))
             part = members(names, index, 7)
             manifest = []
             for name in part:
@@ -259,7 +267,8 @@ def merge_self_test() -> None:
                 f"COHORT_PRODUCE_ONLY=PASS objects={len(part)}\n")
         arguments = SimpleNamespace(full=full, shards=shards, evidence=ev,
                                     provenance=prov, out=out, minic=minic,
-                                    assembler=assembler)
+                                    assembler=assembler, elf_class=elf_class,
+                                    balanced_plan=None)
         merge(arguments)
         assert len((ev / "minic-manifest.sha256").read_text().splitlines()) == 1200
         tampered = shards / "shard-0/minic" / names[0]
@@ -272,7 +281,18 @@ def merge_self_test() -> None:
         else:
             raise AssertionError("merge accepted corrupted candidate object")
         assert not arguments.evidence.exists(), "failed merge created authenticated output"
-    print("GNU_MINIC_SHARD_MERGE_SELFTEST=PASS full=1200 shards=7 tamper=rejected")
+        tampered.write_bytes(tampered.read_bytes()[:-6])
+        # A 64-bit candidate in a 32-bit kernel, or vice versa, must be
+        # rejected even if its own SHA manifest is internally consistent.
+        arguments.evidence = root / "wrong-class"
+        arguments.elf_class = 64 if elf_class == 32 else 32
+        try:
+            merge(arguments)
+        except ValueError as exc:
+            assert "ELF" in str(exc), str(exc)
+        else:
+            raise AssertionError("merge accepted wrong ELF class")
+    print(f"GNU_MINIC_SHARD_MERGE_SELFTEST=PASS ELF{elf_class} full=1200 shards=7 tamper=rejected")
 
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__)
@@ -285,6 +305,7 @@ def main() -> int:
     split_p.add_argument("--balanced-plan", type=Path, default=None)
     merge_p = sub.add_parser("merge")
     merge_p.add_argument("--balanced-plan", type=Path, default=None)
+    merge_p.add_argument("--elf-class", type=int, choices=(32, 64), default=64)
     for name in ("full", "shards", "evidence", "provenance", "out", "minic", "assembler"):
         merge_p.add_argument("--" + name, type=Path, required=True)
     sub.add_parser("self-test")

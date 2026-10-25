@@ -1,25 +1,216 @@
 #!/usr/bin/env bash
 # RV32I entry into the ALREADY established Linux 6.6.143 Kbuild acceptance.
-# This qualifies the original GNU RV32 kernel build first, then exactly five
-# authentic Kbuild C owners via the existing GNU-E -> MiniC-S -> GNU-AS proxy.
-# NOT a seven-shard/full-MiniC/QEMU P1 certification until those gates run.
+# Golden mode freezes the original GNU RV32 Kbuild tree. Shard mode runs the
+# existing seven-way owner/manifest contract over the REAL ELF32 C universe.
+# The historical five-owner entry remains diagnostic-only.
 set -Eeuo pipefail
-: "${MINIC_CC:?required current-main MiniC}"
+mode=${RV32I_LINUX_MODE:-entry}
+case "$mode" in config|golden|shard|union|entry) ;; *) echo "RV32I_LINUX=FAIL invalid_mode=$mode" >&2; exit 2 ;; esac
+if [[ "$mode" == entry || "$mode" == shard || "$mode" == union ]]; then
+  : "${MINIC_CC:?required current-main MiniC}"
+fi
 : "${RV32I_LINUX_SOURCE:?required pinned original 6.6.143 source cache}"
 : "${RV32I_LINUX_WORK:?required isolated evidence dir}"
 src=$(realpath "$RV32I_LINUX_SOURCE")
 test -f "$src/Makefile"
-test -x "$MINIC_CC"
+if [[ "$mode" == entry || "$mode" == shard || "$mode" == union ]]; then test -x "$MINIC_CC"; fi
 mkdir -p "$RV32I_LINUX_WORK"
 out="$RV32I_LINUX_WORK/out"
 ev="$RV32I_LINUX_WORK/evidence"
-mkdir -p "$out" "$ev"
+prov="$RV32I_LINUX_WORK/provenance"
+mkdir -p "$out" "$ev" "$prov"
 cd "$RV32I_LINUX_WORK"
 export LC_ALL=C
 cross=riscv64-linux-gnu-
 gnu_args=(-C "$src" O="$out" ARCH=riscv CROSS_COMPILE="$cross")
 tools=(make riscv64-linux-gnu-gcc riscv64-linux-gnu-as riscv64-linux-gnu-ld riscv64-linux-gnu-readelf sha256sum)
 for tool in "${tools[@]}"; do command -v "$tool" >/dev/null; done
+if [[ "$mode" == shard ]]; then
+  : "${RV32I_SHARD:?required 0..6 shard index}"
+  [[ "$RV32I_SHARD" =~ ^[0-6]$ ]] || {
+    echo "RV32I_SHARD=FAIL invalid_index=$RV32I_SHARD" >&2; exit 2;
+  }
+  test -s "$prov/gcc-baseline.txt"
+  test -s "$prov/gcc-objects.sha256"
+  test -s "$prov/full-c-objects.txt"
+  test -s "$out/arch/riscv/boot/Image"
+  test -s "$out/.config"
+  cfg=$(sha256sum "$out/.config" | cut -d' ' -f1)
+  grep -Fxq "config_sha256=$cfg" "$prov/gcc-baseline.txt"
+  grep -Fxq "elf_class=ELF32" "$prov/gcc-baseline.txt"
+  grep -Fxq "image_sha256=$(sha256sum "$out/arch/riscv/boot/Image" | cut -d' ' -f1)" "$prov/gcc-baseline.txt"
+  (cd "$out" && sha256sum --quiet -c "$prov/gcc-objects.sha256") || {
+    echo 'RV32I_SHARD=FAIL GNU_golden_object_drift' >&2; exit 8;
+  }
+  shard="$RV32I_LINUX_WORK/shard-$RV32I_SHARD"
+  mkdir -p "$shard/minic"
+  python3 "$GITHUB_WORKSPACE/tools/ci/linux-runtime-gcc-shards-v1.py" split \
+    --full "$prov/full-c-objects.txt" --shard "$RV32I_SHARD" --count 7 \
+    --output "$shard/full-objects.txt"
+  mapfile -t owners < <(sed '/^#/d;/^$/d' "$shard/full-objects.txt")
+  compiler_sha=$(sha256sum "$MINIC_CC" | cut -d' ' -f1)
+  assembler_sha=$(sha256sum "$(command -v riscv64-linux-gnu-as)" | cut -d' ' -f1)
+  identity=$(printf '%s\n' "$cfg" \
+    "$(sha256sum "$out/arch/riscv/boot/Image" | cut -d' ' -f1)" \
+    "$compiler_sha" "$assembler_sha" \
+    "$(sha256sum "$prov/gcc-objects.sha256" | cut -d' ' -f1)" \
+    "$(sha256sum "$shard/full-objects.txt" | cut -d' ' -f1)" | sha256sum | cut -d' ' -f1)
+  if [[ -s "$shard/minic-identity.txt" && -s "$shard/minic-manifest.sha256" ]]; then
+    test "$(cat "$shard/minic-identity.txt")" = "$identity"
+    (cd "$shard" && sha256sum --quiet -c minic-manifest.sha256)
+    test "$(wc -l <"$shard/minic-manifest.sha256")" -eq "${#owners[@]}"
+    echo "RV32I_SHARD_CACHE=HIT shard=$RV32I_SHARD objects=${#owners[@]}"
+    exit 0
+  fi
+  : >"$shard/mini-success-objects.txt"
+  : >"$shard/mini-object-hashes.sha256"
+  : >"$shard/compile.log"
+  compile_rc=0
+  for owner in "${owners[@]}"; do
+    test -s "$out/$owner"
+    # Force Kbuild to route the selected C owner through MiniC, while GNU
+    # remains authoritative for every other part of the golden tree.
+    rm -f -- "$out/$owner"
+  done
+  MINIC="$MINIC_CC" REAL_CC=riscv64-linux-gnu-gcc \
+    MINIC_KBUILD_RV32I_ORIGIN_AUDIT=1 MINIC_PRESERVE_FAILURE_INPUTS=1 \
+    MINIC_KBUILD_SUCCESS_TRACE="$shard/mini-success-objects.txt" \
+    MINIC_KBUILD_OBJECT_HASH_TRACE="$shard/mini-object-hashes.sha256" \
+    make "${gnu_args[@]}" -j6 -k CC="$GITHUB_WORKSPACE/tests/external/linux/stage2_kbuild_cc.sh" \
+      "${owners[@]}" >"$shard/compile.log" 2>&1 || compile_rc=$?
+  : >"$shard/compile-blockers.txt"
+  for owner in "${owners[@]}"; do
+    if [[ -s "$out/$owner" ]]; then
+      mkdir -p "$shard/minic/$(dirname "$owner")"
+      cp -a "$out/$owner" "$shard/minic/$owner"
+    else
+      printf '%s\n' "$owner" >>"$shard/compile-blockers.txt"
+    fi
+  done
+  failed=$(wc -l <"$shard/compile-blockers.txt")
+  echo "RV32I_SHARD_SWEEP shard=$RV32I_SHARD attempted=${#owners[@]} failed=$failed make_rc=$compile_rc"
+  if ((failed != 0 || compile_rc != 0)); then
+    # Preserve the WHOLE -k frontier, including GNU dependency errors which
+    # have no MiniC .failed.i, rather than fixing only the first log tail.
+    grep -nEi 'fatal error:|error:|Error [0-9]+|undefined reference|recipe for target' \
+      "$shard/compile.log" >"$shard/make-diagnostics.txt" || true
+    printf 'object\tstate\tbytes\tsha256\n' >"$shard/failure-pool-index.tsv"
+    kept=0
+    kept_bytes=0
+    while IFS= read -r owner; do
+      frozen="$out/${owner%.o}.minic-stage2.failed.i"
+      stderr="$out/${owner%.o}.minic-stage2.failed.stderr"
+      if [[ -s "$frozen" ]]; then
+        bytes=$(stat -c %s "$frozen")
+        digest=$(sha256sum "$frozen" | cut -d' ' -f1)
+        if ((kept < 32 && kept_bytes + bytes <= 128 * 1024 * 1024)); then
+          path="$shard/failures/${owner%.o}"
+          mkdir -p "$(dirname "$path")"
+          cp -a "$frozen" "$path.failed.i"
+          [[ ! -f "$stderr" ]] || cp -a "$stderr" "$path.failed.stderr"
+          ((kept+=1))
+          ((kept_bytes+=bytes))
+          printf '%s\tKEPT\t%s\t%s\n' "$owner" "$bytes" "$digest" >>"$shard/failure-pool-index.tsv"
+        else
+          printf '%s\tOMITTED_CAP\t%s\t%s\n' "$owner" "$bytes" "$digest" >>"$shard/failure-pool-index.tsv"
+        fi
+      else
+        printf '%s\tNO_I\t0\t-\n' "$owner" >>"$shard/failure-pool-index.tsv"
+      fi
+    done <"$shard/compile-blockers.txt"
+    python3 - "$shard" <<'PY_FAILURE_GROUPS'
+from collections import defaultdict
+from pathlib import Path
+import re
+import sys
+
+shard = Path(sys.argv[1])
+classes = defaultdict(list)
+for obj in (shard / 'compile-blockers.txt').read_text().splitlines():
+    stderr = shard / 'failures' / (obj[:-2] + '.failed.stderr')
+    lines = stderr.read_text(errors='replace').splitlines() if stderr.is_file() else []
+    error = next((match.group(1).strip() for line in lines
+                  if (match := re.search(r'\b(?:fatal )?error\s*:\s*(.*)', line))), '')
+    # Group by error class, retain exact stderr per owner for diagnosis.
+    key = re.sub(r'\b\d+\b', '<N>', error)[:240] if error else 'unclassified/see-make-diagnostics'
+    classes[key].append(obj)
+with (shard / 'failure-classes.tsv').open('w') as out:
+    out.write('count\tfirst_owner\terror_class\n')
+    for error, owners in sorted(classes.items(), key=lambda item: (-len(item[1]), item[0])):
+        out.write(f'{len(owners)}\t{owners[0]}\t{error}\n')
+print(f'RV32I_SHARD_FAILURE_CLASSES=COLLECTED unique={len(classes)} all_failed={sum(map(len,classes.values()))}')
+PY_FAILURE_GROUPS
+    echo "RV32I_SHARD_BLOCKERS=COLLECTED shard=$RV32I_SHARD failed=$failed frozen=$kept make_errors=$(wc -l <"$shard/make-diagnostics.txt")"
+    exit 5
+  fi
+  python3 "$GITHUB_WORKSPACE/tools/ci/linux-runtime-minic-route-audit-v1.py" \
+    --objects-file "$shard/full-objects.txt" \
+    --success-trace "$shard/mini-success-objects.txt" \
+    --object-digest-trace "$shard/mini-object-hashes.sha256" --candidates "$out"
+  : >"$shard/minic-manifest.sha256"
+  for owner in "${owners[@]}"; do
+    riscv64-linux-gnu-readelf -h "$shard/minic/$owner" | grep -Eq 'Class:[[:space:]]+ELF32'
+    printf '%s  minic/%s\n' "$(sha256sum "$shard/minic/$owner" | cut -d' ' -f1)" "$owner" >>"$shard/minic-manifest.sha256"
+  done
+  printf '%s\n' "$identity" >"$shard/minic-identity.txt"
+  {
+    echo "COHORT_COMPILE=PASS objects=${#owners[@]}"
+    echo "COHORT_ABI=PASS objects=${#owners[@]}"
+    echo "COHORT_PRODUCE_ONLY=PASS objects=${#owners[@]}"
+  } >"$shard/cohort.log"
+  echo "RV32I_SHARD=PASS shard=$RV32I_SHARD objects=${#owners[@]} ELF32=1 SHA=1"
+  exit 0
+fi
+if [[ "$mode" == union ]]; then
+  # The same merge logic and seven immutable shard contracts used by RV64,
+  # parameterized for real ELF32 instead of substituting a five-owner smoke.
+  test -s "$prov/gcc-baseline.txt"
+  test -s "$prov/gcc-objects.sha256"
+  test -s "$prov/full-c-objects.txt"
+  test -s "$out/arch/riscv/boot/Image"
+  grep -Fxq 'elf_class=ELF32' "$prov/gcc-baseline.txt"
+  grep -Fxq 'isa=rv32i' "$prov/gcc-baseline.txt"
+  grep -Fxq 'abi=ilp32' "$prov/gcc-baseline.txt"
+  (cd "$out" && sha256sum --quiet -c "$prov/gcc-objects.sha256")
+  merged="$RV32I_LINUX_WORK/merged"
+  python3 "$GITHUB_WORKSPACE/tools/ci/linux-runtime-gcc-shards-v1.py" merge \
+    --elf-class 32 --full "$prov/full-c-objects.txt" \
+    --shards "$RV32I_LINUX_WORK" --evidence "$merged" \
+    --out "$out" --provenance "$prov" --minic "$MINIC_CC" \
+    --assembler "$(command -v riscv64-linux-gnu-as)"
+  (cd "$merged" && sha256sum --quiet -c minic-manifest.sha256)
+  while IFS= read -r line; do
+    [[ "$line" != \#* && -n "$line" ]] || continue
+    install -m 644 "$merged/minic/$line" "$out/$line"
+  done <"$prov/full-c-objects.txt"
+  # Exactly the original GNU Kbuild linker. KBUILD_NOCMDDEP only prevents
+  # GNU CC from silently overwriting unchanged MiniC object candidates.
+  if ! make "${gnu_args[@]}" KBUILD_NOCMDDEP=1 -j4 Image >"$merged/minic-relink.log" 2>&1; then
+    echo 'RV32I_UNION_LINK=FAIL original_GNU_Kbuild' >&2
+    tail -n 100 "$merged/minic-relink.log" >&2
+    exit 6
+  fi
+  python3 - "$out" "$merged" <<'PY_UNION'
+from pathlib import Path
+import hashlib
+import sys
+out, merged = map(Path, sys.argv[1:])
+for record in (merged / 'minic-manifest.sha256').read_text().splitlines():
+    expected, rel = record.split('  ', 1)
+    assert rel.startswith('minic/'), rel
+    owner = rel[len('minic/'):]
+    actual = hashlib.sha256((out / owner).read_bytes()).hexdigest()
+    if actual != expected:
+        raise SystemExit(f'RV32I_UNION_OBJECTS=FAIL owner={owner} expected={expected} actual={actual}')
+print(f'RV32I_UNION_OBJECTS=PASS owners={len((merged / "minic-manifest.sha256").read_text().splitlines())} no_GNU_C_fallback=true')
+PY_UNION
+  test -s "$out/arch/riscv/boot/Image"
+  riscv64-linux-gnu-readelf -h "$out/vmlinux" >"$merged/minic-vmlinux-elf.txt"
+  grep -Eq 'Class:[[:space:]]+ELF32' "$merged/minic-vmlinux-elf.txt"
+  printf 'RV32I_UNION_LINK=PASS ELF32=1 full_MiniC_C=true original_GNU_Kbuild=true image_sha256=%s QEMU_P1=NOT_RUN\n' \
+    "$(sha256sum "$out/arch/riscv/boot/Image" | cut -d' ' -f1)" | tee "$merged/union-result.txt"
+  exit 0
+fi
 actual_version=$(make "${gnu_args[@]}" -s kernelversion)
 if [[ "$actual_version" != 6.6.143 ]]; then
   echo "RV32I_LINUX=FAIL unexpected_kernel=$actual_version expected=6.6.143" >&2
@@ -52,9 +243,11 @@ for setting in CONFIG_ARCH_RV64I CONFIG_EFI CONFIG_RISCV_ISA_C CONFIG_FPU CONFIG
 done
 config_sha=$(sha256sum "$out/.config" | cut -d' ' -f1)
 printf 'RV32I_LINUX_CONFIG=PASS original=6.6.143 arch=ARCH_RV32I no_C=1 no_FPU=1 no_SMP=1 sha256=%s\n' "$config_sha"
+if [[ "$mode" == config ]]; then exit 0; fi
 # The UNMODIFIED upstream kernel intentionally selects rv32ima for atomic /
 # supervisor instructions. This is not the ISA used by MiniC's C emitter.
 echo 'RV32I_LINUX_ISA_CONTRACT=PASS MiniC_C=rv32i original_Kbuild_asm=rv32ima separate_owners=true'
+if [[ "$mode" == entry ]]; then
 # Quick REAL owner front-run: the same original GNU Kbuild C source and
 # existing MiniC Kbuild proxy, not a dummy fixture or a substitute for the
 # full source-owner/Image/QEMU gate. Catch actual C/ABI blockers before the
@@ -82,6 +275,7 @@ rm -f "$out/$preflight_owner"
 make "${gnu_args[@]}" "$preflight_owner" >"$ev/gnu-owner-restore.log" 2>&1
 test "$(sha256sum "$out/$preflight_owner" | cut -d' ' -f1)" = "$gnu_owner_sha"
 echo "RV32I_LINUX_MINIC_PRECHECK=PASS original_owner=$preflight_owner restored_GNU_object_sha=$gnu_owner_sha"
+fi
 # First establish the original GNU Image. A failure is a
 # GNU/Kconfig/toolchain baseline blocker, not a MiniC defect.
 # Stream a bounded, timestamped progress receipt without flooding the log.
@@ -110,6 +304,52 @@ grep -Eq 'Class:[[:space:]]+ELF32' "$ev/gnu-vmlinux-elf.txt"
 grep -Eq 'Machine:[[:space:]]+RISC-V' "$ev/gnu-vmlinux-elf.txt"
 gnu_sha=$(sha256sum "$gnu_image" | cut -d' ' -f1)
 printf 'RV32I_LINUX_GNU_BASELINE=PASS ELF32=1 original_Kbuild=1 Image_SHA=%s\n' "$gnu_sha"
+if [[ "$mode" == golden ]]; then
+  # The legacy GNU golden producer's complete ET_REL manifest, applied to
+  # this exact ELF32/Image rather than borrowing the incompatible RV64 pool.
+  python3 - "$out" "$prov/gcc-objects.sha256" <<'PY_GNU_OBJECTS'
+from pathlib import Path
+import hashlib
+import struct
+import sys
+out, dest = map(Path, sys.argv[1:])
+count = 0
+with dest.open("w", encoding="utf-8") as manifest:
+    for obj in sorted(out.rglob("*.o")):
+        with obj.open("rb") as f:
+            header = f.read(20)
+        if (len(header) < 20 or header[:6] != b"\x7fELF\x01\x01"
+                or struct.unpack_from("<H", header, 16)[0] != 1
+                or struct.unpack_from("<H", header, 18)[0] != 243):
+            continue
+        digest = hashlib.sha256(obj.read_bytes()).hexdigest()
+        manifest.write(f"{digest}  {obj.relative_to(out)}\n")
+        count += 1
+print(f"RV32I_GNU_OBJECT_POOL=PASS ELF32=1 total={count}")
+PY_GNU_OBJECTS
+  python3 "$GITHUB_WORKSPACE/tools/ci/linux-runtime-gcc-full-c-objects-v1.py" \
+    --out "$out" --manifest "$prov/gcc-objects.sha256" \
+    --output "$prov/full-c-objects.txt" \
+    --excluded "$prov/non-c-objects.tsv" --min-c-objects 1200
+  owner_count=$(sed '/^#/d;/^$/d' "$prov/full-c-objects.txt" | wc -l)
+  {
+    echo 'schema=linux-gnu-exact-config-v1'
+    echo 'linux_release=6.6.143'
+    echo 'linux_archive_sha256=dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932'
+    echo 'elf_class=ELF32'
+    echo 'isa=rv32i'
+    echo 'abi=ilp32'
+    echo "config_sha256=$config_sha"
+    echo "gcc_binary_sha256=$(sha256sum "$(command -v riscv64-linux-gnu-gcc)" | cut -d' ' -f1)"
+    echo "gnu_ld_binary_sha256=$(sha256sum "$(command -v riscv64-linux-gnu-ld)" | cut -d' ' -f1)"
+    echo "gnu_as_binary_sha256=$(sha256sum "$(command -v riscv64-linux-gnu-as)" | cut -d' ' -f1)"
+    echo "image_sha256=$gnu_sha"
+    echo "c_owner_count=$owner_count"
+    echo 'qemu_contract=not_run'
+  } >"$prov/gcc-baseline.txt"
+  echo "RV32I_GNU_GOLDEN=PASS full_c_owners=$owner_count config=$config_sha Image_SHA=$gnu_sha"
+  exit 0
+fi
 # Same real-Kbuild subset/receipt mechanism as the frozen RV64 2064.
 # Select independent kernel language/ABI owner classes; no custom dummy C.
 owners=(init/main.o kernel/fork.o mm/page_alloc.o lib/string.o arch/riscv/kernel/traps.o)
