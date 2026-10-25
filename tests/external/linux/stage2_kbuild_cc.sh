@@ -113,6 +113,15 @@ preserve_failure=${MINIC_PRESERVE_FAILURE_INPUTS:-0}
 failed_i=${base}.failed.i
 failed_stderr=${base}.failed.stderr
 
+# When Kbuild receives many individual goals in one parallel invocation,
+# recursive make can issue the same C owner twice. Serialize that owner's
+# GNU-E -> MiniC-S -> GNU-AS -> cleanup transaction, without slowing down
+# other C owners in the seven-way sweep. In particular, no second invocation
+# may truncate *.i while MiniC is still reading it or remove the first
+# invocation's intermediate in its EXIT trap.
+exec {minic_stage2_lock_fd}>"${base}.lock"
+flock -x "$minic_stage2_lock_fd"
+
 # Each invocation owns this target's failure evidence. Never reuse stale
 # failed inputs when a later run succeeds.
 if [[ "$preserve_failure" == 1 ]]; then

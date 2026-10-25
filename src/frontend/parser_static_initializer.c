@@ -2859,8 +2859,8 @@ static bool parse_static_record_array(MinicParser *parser,
         return false;
     }
     record = minic_c0_program_record(parser->program, element_type.record_id);
-    if (record == NULL || !record->is_complete || record->is_union) {
-        minic_parser_error(parser, "static record array requires a complete struct type");
+    if (record == NULL || !record->is_complete) {
+        minic_parser_error(parser, "static record array requires a complete record type");
         return false;
     }
     /* GNU empty structs are complete zero-size object types. Arrays of them

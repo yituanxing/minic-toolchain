@@ -44,10 +44,26 @@ static const struct relocation_row relocation_records[] = {
     {.target = &relocation_target, .op = {.lsm = "apparmor"}},
 };
 
+/* Linux lib/atomic64.c uses a static array of padded union lock slots and a
+   GNU range designator. A complete union is just as valid an array element
+   type as a complete struct, including in a constant initializer. */
+union padded_lock_slot {
+    struct {
+        int state;
+        int owner;
+    } lock;
+    char padding[64];
+};
+
+static union padded_lock_slot atomic_lock_slots[16] = {
+    [0 ... 15] = {.lock = {.state = 1, .owner = -1}},
+};
+
 int main(void) {
     return sparse_records[1].left == 11 && sparse_records[3].right == 32 &&
                    nested_records.limits[1].right == 22 && nested_records.limits[3].left == 41 &&
-                   fixed_records[2].right == 52
+                   fixed_records[2].right == 52 && atomic_lock_slots[0].lock.state == 1 &&
+                   atomic_lock_slots[15].lock.owner == -1
                ? 0
                : 1;
 }
