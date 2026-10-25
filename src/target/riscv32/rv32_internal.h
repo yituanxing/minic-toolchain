@@ -17,6 +17,10 @@ typedef struct Rv32Frame {
      * and avoids moving the Core SSA/local object frame during calls. */
     size_t outgoing_size;
     size_t frame_size;
+    /* RV64-aligned-frame contract mirrored with an ILP32 4-byte entry SP. */
+    bool has_dynamic_stack_alignment;
+    size_t stack_alignment;
+    size_t entry_sp_offset;
     /* Saved hidden sret pointer for record returns larger than 2*XLEN. */
     size_t sret_offset;
     size_t saved_base_offset; /* caller's s0 in dynamic-frame functions */

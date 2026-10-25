@@ -383,4 +383,24 @@ for entry in rv32_spill_chain rv32_spill_wide; do
   fi
   echo "RV32I_CORE_SPILL=PASS entry=$entry frame_bytes=$bytes reuse=block_last_use"
 done
+# RV64 already realigns stacks for over-aligned local Core objects. On RV32,
+# object offsets alone are insufficient: entry sp is only 16-byte-aligned.
+# Exercise the real ILP32 prologue/epilogue and stack-passed ninth argument.
+cat > "$work/rv32-overaligned-frame.i" <<'SRC'
+int rv32_overaligned_frame(int p0, int p1, int p2, int p3,
+                           int p4, int p5, int p6, int p7,
+                           int p8, int p9) {
+    char huge[7] __attribute__((aligned(64)));
+    huge[0] = (char)p9;
+    return (int)huge[0] + (int)((unsigned long)huge & 63u) + p8;
+}
+SRC
+"$MINIC_CC" --target=riscv32-linux -march=rv32i -mabi=ilp32 \
+    -S "$work/rv32-overaligned-frame.i" -o "$work/rv32-overaligned-frame.s"
+grep -q '^rv32_overaligned_frame:' "$work/rv32-overaligned-frame.s"
+grep -Fq 'li t1, -64' "$work/rv32-overaligned-frame.s"
+grep -Fq 'and sp, sp, t1' "$work/rv32-overaligned-frame.s"
+grep -Fq 'mv sp, t0' "$work/rv32-overaligned-frame.s"
+grep -Eq 'lw t6, [0-9]+\\(sp\\)' "$work/rv32-overaligned-frame.s"
+echo 'RV32I_OVERALIGNED_FRAME=PASS alignment=64 entry_sp_saved=true incoming_stack_args=true'
 echo 'RV32I_TARGET_GATE=PASS ILP32_registered=true incompatible_ISA_rejected=true basic_C_core_emitted=true'

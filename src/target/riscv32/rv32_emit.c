@@ -766,9 +766,20 @@ static bool rv32_func(FILE *out, const MinicC0Program *program,
     }
     if (!minic_riscv64_function_symbol_from_function(def, &sym)) goto done;
     sym.function_sections = function_sections;
-    if (!minic_riscv64_emit_function_symbol_begin(out, &sym) ||
-        fprintf(out, "  li t0, %zu\n  sub sp, sp, t0\n", fr.frame_size) < 0 ||
-        !rv32_stack(out, "sw", "ra", fr.outgoing_size) ||
+    if (!minic_riscv64_emit_function_symbol_begin(out, &sym)) goto done;
+    if (fr.has_dynamic_stack_alignment) {
+        /* Alignment beyond the psABI's 16 bytes must preserve entry sp.
+         * The frame itself remains 16-byte aligned at every call. */
+        if (fprintf(out,
+              "  mv t2, sp\n"
+              "  li t0, %zu\n  sub sp, sp, t0\n"
+              "  li t1, -%zu\n  and sp, sp, t1\n",
+              fr.frame_size, fr.stack_alignment) < 0 ||
+            !rv32_stack(out, "sw", "t2", fr.entry_sp_offset))
+            goto done;
+    } else if (fprintf(out, "  li t0, %zu\n  sub sp, sp, t0\n",
+                       fr.frame_size) < 0) goto done;
+    if (!rv32_stack(out, "sw", "ra", fr.outgoing_size) ||
         (fr.abi.indirect_return &&
          !rv32_stack(out, "sw", "a0", fr.sret_offset)) ||
         (fr.has_dynamic_stack &&
@@ -817,9 +828,17 @@ static bool rv32_func(FILE *out, const MinicC0Program *program,
         !rv32_fixed_stack(out, &fr, "lw", "ra", fr.outgoing_size))
         goto done;
     if (fr.has_dynamic_stack) {
-        ok = rv32_fixed_stack(out, &fr, "lw", "t1", fr.saved_base_offset) &&
-             fprintf(out, "  li t0, %zu\n  add sp, s0, t0\n"
-                          "  mv s0, t1\n  ret\n", fr.frame_size) >= 0;
+        ok = rv32_fixed_stack(out, &fr, "lw", "t1", fr.saved_base_offset);
+        if (ok && fr.has_dynamic_stack_alignment) {
+            ok = rv32_fixed_stack(out, &fr, "lw", "t2", fr.entry_sp_offset) &&
+                 fprintf(out, "  mv sp, t2\n  mv s0, t1\n  ret\n") >= 0;
+        } else if (ok) {
+            ok = fprintf(out, "  li t0, %zu\n  add sp, s0, t0\n"
+                               "  mv s0, t1\n  ret\n", fr.frame_size) >= 0;
+        }
+    } else if (fr.has_dynamic_stack_alignment) {
+        ok = rv32_fixed_stack(out, &fr, "lw", "t0", fr.entry_sp_offset) &&
+             fprintf(out, "  mv sp, t0\n  ret\n") >= 0;
     } else {
         ok = fprintf(out, "  li t0, %zu\n  add sp, sp, t0\n  ret\n",
                      fr.frame_size) >= 0;

@@ -3,9 +3,11 @@
 #include "target/common/core_function_facts.h"
 #include "target/common/core_spill_layout.h"
 #include "target/common/core_object_reuse.h"
+#include "target/common/core_object_storage.h"
 #include <limits.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <string.h>
 
 /* ILP32 frame planner and stack word transport. RV64's LP64-specific
  * dynamic-frame and 8-byte SSA slot assumptions are not imported. */
@@ -33,6 +35,7 @@ bool rv32_frame_init(Rv32Frame *frame, const MinicC0Program *program,
                             const MinicCoreFunction *f, const MinicTargetInfo *t,
                             bool is_variadic) {
     size_t next, i, max_stack_args, value_base, peak_bytes = 0U;
+    size_t maximum_object_alignment = 16U;
     MinicCoreFunctionFacts facts;
     if (frame == NULL || program == NULL || f == NULL || t == NULL ||
         f->value_count > 100000U || f->object_count > 100000U)
@@ -95,24 +98,21 @@ bool rv32_frame_init(Rv32Frame *frame, const MinicC0Program *program,
         }
         for (i = 0U; i < f->object_count; ++i) {
             const MinicCoreObject *obj = &f->objects[i];
+            MinicCoreObjectStorage storage;
             size_t size, align, slot, peak;
             bool reusable;
-            if (!minic_core_object_reuse_plan_get(
+            if (!minic_core_object_storage(program, t->data_layout, obj, &storage) ||
+                !minic_core_object_reuse_plan_get(
                     &reuse, (MinicCoreObjectId)i, &reusable, &slot, &peak) ||
                 peak != pool_slots) {
                 minic_core_object_reuse_plan_destroy(&reuse);
-                return rv32_frame_reject("core_object_lookup", i, obj->type);
+                return rv32_frame_reject("core_object_layout", i, obj->type);
             }
+            size = storage.extent;
+            align = storage.alignment;
+            if (align > maximum_object_alignment)
+                maximum_object_alignment = align;
             if (reusable) continue;
-            if (!minic_data_layout_type(t->data_layout, program,
-                                        obj->type, &size, &align) ||
-                (obj->element_count > 1U &&
-                 size > SIZE_MAX / obj->element_count)) {
-                minic_core_object_reuse_plan_destroy(&reuse);
-                return rv32_frame_reject("object_layout", i, obj->type);
-            }
-            if (obj->element_count > 1U) size *= obj->element_count;
-            if (obj->explicit_alignment > align) align = obj->explicit_alignment;
             if (align < 4U) align = 4U;
             if (!rv32_align(next, align, &next) || size > SIZE_MAX - next) {
                 minic_core_object_reuse_plan_destroy(&reuse);
@@ -164,6 +164,20 @@ bool rv32_frame_init(Rv32Frame *frame, const MinicC0Program *program,
     if (value_base > SIZE_MAX - peak_bytes)
         return rv32_frame_reject("spill_total", 0U, minic_type_void());
     next = value_base + peak_bytes;
+    /* RV64 already handled over-aligned Core locals: the incoming sp only
+     * guarantees 16-byte ABI alignment, even when object offsets align to
+     * 32 or 64. Align the real frame base and restore the ORIGINAL incoming
+     * sp; otherwise an aligned(64) C object silently violates its contract.
+     * The original incoming sp also anchors stack-passed named arguments. */
+    frame->stack_alignment = maximum_object_alignment;
+    frame->has_dynamic_stack_alignment = maximum_object_alignment > 16U;
+    frame->entry_sp_offset = 0U;
+    if (frame->has_dynamic_stack_alignment) {
+        if (!rv32_align(next, 4U, &frame->entry_sp_offset) ||
+            frame->entry_sp_offset > SIZE_MAX - 4U)
+            return rv32_frame_reject("entry_sp_slot", 0U, minic_type_void());
+        next = frame->entry_sp_offset + 4U;
+    }
     if (next > SIZE_MAX - frame->varargs_size ||
         !rv32_align(next + frame->varargs_size, 16U, &frame->frame_size) ||
         frame->frame_size > (size_t)INT32_MAX ||
@@ -228,6 +242,22 @@ bool rv32_incoming_word(FILE *out, const Rv32Frame *fr,
                                size_t word, const char *reg) {
     if (word < 8U)
         return fprintf(out, "  mv %s, a%zu\n", reg, word) >= 0;
+    /* Dynamic frame realignment means caller arguments are relative to
+     * the saved ENTRY sp, not the frame_size offset from aligned sp.
+     * Mirror RV64's entry_sp_offset transport for this ABI boundary. */
+    if (fr->has_dynamic_stack_alignment) {
+        size_t off;
+        if (word - 8U > SIZE_MAX / 4U || reg == NULL ||
+            strcmp(reg, "t5") == 0 || strcmp(reg, "t6") == 0 ||
+            !rv32_fixed_stack(out, fr, "lw", "t6", fr->entry_sp_offset))
+            return false;
+        off = (word - 8U) * 4U;
+        if (off <= 2047U)
+            return fprintf(out, "  lw %s, %zu(t6)\n", reg, off) >= 0;
+        return fprintf(out,
+                       "  li t5, %zu\n  add t5, t6, t5\n  lw %s, 0(t5)\n",
+                       off, reg) >= 0;
+    }
     return word - 8U <= (SIZE_MAX - fr->frame_size) / 4U &&
            rv32_fixed_stack(out, fr, "lw", reg,
                              fr->frame_size + (word - 8U) * 4U);
