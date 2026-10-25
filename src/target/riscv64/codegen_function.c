@@ -196,34 +196,7 @@ bool minic_riscv64_write_c0_program_with_core_functions(const char *path,
 
             symbol_name = minic_c0_function_symbol_name(function);
             if (function->alias_target != MINIC_FUNCTION_INVALID) {
-                const MinicFunction *target_function;
-                const char *target_name;
-                const char *visibility_directive;
-
-                target_function = minic_c0_program_function(program, function->alias_target);
-                target_name = minic_c0_function_symbol_name(target_function);
-                success = symbol_name != NULL && symbol_name[0] != '\0' &&
-                          target_function != NULL && target_function->is_defined &&
-                          target_name != NULL && target_name[0] != '\0';
-                if (success && !function->is_internal) {
-                    success = fprintf(file,
-                                      function->is_weak ? ".weak %s\n" : ".globl %s\n",
-                                      symbol_name) >= 0;
-                    if (success && function->visibility != MINIC_SYMBOL_VISIBILITY_DEFAULT) {
-                        visibility_directive =
-                            minic_riscv64_function_visibility_directive(function->visibility);
-                        success = visibility_directive != NULL &&
-                                  fprintf(file, "%s %s\n", visibility_directive, symbol_name) >= 0;
-                    }
-                }
-                if (success) {
-                    success = fprintf(file,
-                                      ".type %s, @function\n"
-                                      ".set %s, %s\n",
-                                      symbol_name,
-                                      symbol_name,
-                                      target_name) >= 0;
-                }
+                success = minic_riscv_emit_function_alias(file, program, function);
                 continue;
             }
             if (function->is_weak && !function->is_internal) {

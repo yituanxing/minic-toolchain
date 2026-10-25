@@ -310,4 +310,16 @@ if grep -Fq 'lr.d' "$work/kernel-sizeof-switch.s"; then
     exit 1
 fi
 echo 'RV32I_CORE_CFG=PASS shared_reachability=1 dead_RV64_source_asm_pruned=1'
+cat > "$work/kernel-weak-alias.i" <<'SRC'
+int blake2s_compress_generic(int value) { return value + 1; }
+int blake2s_compress(int value)
+    __attribute__((weak, alias("blake2s_compress_generic")));
+int rv32_alias_user(int value) { return blake2s_compress(value); }
+SRC
+"$MINIC_CC" --target=riscv32-linux -march=rv32i -mabi=ilp32 \
+  -S "$work/kernel-weak-alias.i" -o "$work/kernel-weak-alias.s"
+grep -Fxq '.weak blake2s_compress' "$work/kernel-weak-alias.s"
+grep -Fxq '.type blake2s_compress, @function' "$work/kernel-weak-alias.s"
+grep -Fxq '.set blake2s_compress, blake2s_compress_generic' "$work/kernel-weak-alias.s"
+echo 'RV32I_FUNCTION_ALIAS=PASS GNU_weak_alias=1 common_riscv_contract=1'
 echo 'RV32I_TARGET_GATE=PASS ILP32_registered=true incompatible_ISA_rejected=true basic_C_core_emitted=true'

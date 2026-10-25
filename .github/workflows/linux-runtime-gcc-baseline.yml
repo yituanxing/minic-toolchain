@@ -2353,6 +2353,7 @@ jobs:
             build/rv32i-linux-entry/merged/minic-identity.txt
             build/rv32i-linux-entry/merged/minic-manifest.sha256
             build/rv32i-linux-entry/merged/minic-relink.log
+            build/rv32i-linux-entry/merged/link-inputs/
             build/rv32i-linux-entry/merged/minic-vmlinux-elf.txt
             build/rv32i-linux-entry/merged/union-result.txt
             build/rv32i-linux-entry/out/arch/riscv/boot/Image

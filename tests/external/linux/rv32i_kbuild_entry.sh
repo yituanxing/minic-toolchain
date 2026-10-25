@@ -216,6 +216,63 @@ if [[ "$mode" == union ]]; then
       Image >"$merged/minic-relink.log" 2>&1; then
     echo 'RV32I_UNION_LINK=FAIL original_GNU_Kbuild' >&2
     tail -n 100 "$merged/minic-relink.log" >&2
+    # Preserve the ORIGINAL GNU Kbuild preprocessor flags for the precise
+    # MiniC owners named by the whole-Image linker. This is a diagnostic
+    # capture, never a compiler replacement, configuration override, or
+    # relink fallback. The existing .o.cmd records are written by Kbuild.
+    python3 - "$out" "$merged" <<'PY_RV32_LINK_INPUTS'
+from pathlib import Path
+import re
+import shlex
+import subprocess
+import sys
+
+out, merged = map(Path, sys.argv[1:])
+diagnostics = merged / 'link-inputs'
+diagnostics.mkdir(exist_ok=True)
+owners = ('mm/memory.o', 'drivers/base/regmap/regcache.o',
+          'lib/crypto/blake2s-generic.o')
+records = []
+for owner in owners:
+    obj = out / owner
+    cmd_file = obj.parent / ('.' + obj.name + '.cmd')
+    if not cmd_file.is_file():
+        records.append(f'{owner}: missing {cmd_file}')
+        continue
+    lines = cmd_file.read_text(errors='replace').splitlines()
+    command = None
+    for index, line in enumerate(lines):
+        if not (line.startswith(f'savedcmd_{owner} :=') or
+                line.startswith(f'cmd_{owner} :=')):
+            continue
+        command = line.partition(':=')[2].strip()
+        while command.endswith('\\') and index + 1 < len(lines):
+            index += 1
+            command = command[:-1] + lines[index].strip()
+        break
+    if command is None:
+        records.append(f'{owner}: Kbuild command not found')
+        continue
+    argv = shlex.split(command)
+    if '-c' not in argv or '-o' not in argv:
+        records.append(f'{owner}: Kbuild command is not a C compile')
+        continue
+    argv[argv.index('-c')] = '-E'
+    path = diagnostics / (owner.replace('/', '-')[:-2] + '.i')
+    argv[argv.index('-o') + 1] = str(path)
+    try:
+        result = subprocess.run(argv, cwd=out, text=True,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                timeout=100, check=False)
+        records.append(f'{owner}: preprocessor_rc={result.returncode} '
+                       f'bytes={path.stat().st_size if path.exists() else 0} '
+                       f'diagnostic={result.stderr[-1200:]}')
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        records.append(f'{owner}: {type(exc).__name__}: {exc}')
+(diagnostics / 'capture-summary.txt').write_text('\n'.join(records) + '\n')
+for record in records:
+    print('RV32I_LINK_INPUT ' + record[:300])
+PY_RV32_LINK_INPUTS
     exit 6
   fi
   python3 - "$out" "$merged" <<'PY_UNION'

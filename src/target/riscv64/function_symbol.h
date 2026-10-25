@@ -43,6 +43,46 @@ minic_riscv64_function_visibility_directive(MinicSymbolVisibility visibility) {
                                                              : NULL;
 }
 
+/* GNU function aliases have identical ELF semantics on RV32 and RV64.
+ * Keep the shared binding/type/visibility contract at the RISC-V symbol
+ * boundary so a target cannot silently omit a live weak alias. */
+static inline bool minic_riscv_emit_function_alias(FILE *file,
+                                                  const MinicC0Program *program,
+                                                  const MinicFunction *function) {
+    const MinicFunction *target;
+    const char *alias_name;
+    const char *target_name;
+    const char *visibility_directive;
+
+    if (file == NULL || program == NULL || function == NULL ||
+        function->alias_target == MINIC_FUNCTION_INVALID) {
+        return false;
+    }
+    target = minic_c0_program_function(program, function->alias_target);
+    alias_name = minic_c0_function_symbol_name(function);
+    target_name = minic_c0_function_symbol_name(target);
+    if (alias_name == NULL || alias_name[0] == '\0' || target == NULL ||
+        !target->is_defined || target_name == NULL || target_name[0] == '\0') {
+        return false;
+    }
+    if (!function->is_internal) {
+        if (fprintf(file, function->is_weak ? ".weak %s\n" : ".globl %s\n",
+                    alias_name) < 0) {
+            return false;
+        }
+        if (function->visibility != MINIC_SYMBOL_VISIBILITY_DEFAULT) {
+            visibility_directive =
+                minic_riscv64_function_visibility_directive(function->visibility);
+            if (visibility_directive == NULL ||
+                fprintf(file, "%s %s\n", visibility_directive, alias_name) < 0) {
+                return false;
+            }
+        }
+    }
+    return fprintf(file, ".type %s, @function\n.set %s, %s\n",
+                   alias_name, alias_name, target_name) >= 0;
+}
+
 static inline bool
 minic_riscv64_emit_function_symbol_begin(FILE *file, const MinicRiscv64FunctionSymbol *symbol) {
     const char *visibility_directive;

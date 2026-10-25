@@ -889,14 +889,18 @@ bool minic_riscv32_write_core_program(const char *path,
                  source_asm->length &&
              fprintf(file, "\n# MINIC_SOURCE_FILE_ASM_END\n") >= 0;
     }
-    /* Undefined weak functions are real ELF symbols, not ordinary strong
-     * references. A missing weak Zstd tracing hook must resolve to zero
-     * during GNU static linking (it is tested by the original caller).
-     * Defined weak functions are handled by the shared symbol emitter. */
+    /* GNU same-TU function aliases and undefined weak declarations use the
+     * same RISC-V ELF binding contract as RV64. Defined weak functions are
+     * handled by the shared symbol emitter. */
     for (i = 0U; ok && i < program->function_count; ++i) {
         const MinicFunction *decl = &program->functions[i];
         const char *name;
-        if (!decl->is_weak || decl->is_defined || decl->is_internal)
+        if (decl->is_defined) continue;
+        if (decl->alias_target != MINIC_FUNCTION_INVALID) {
+            ok = minic_riscv_emit_function_alias(file, program, decl);
+            continue;
+        }
+        if (!decl->is_weak || decl->is_internal)
             continue;
         name = minic_c0_function_symbol_name(decl);
         if (name == NULL || *name == '\0' ||
