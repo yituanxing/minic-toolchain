@@ -196,6 +196,8 @@ MINIC_SOURCES := \
 	src/target/common/core_spill_layout.c \
 	src/target/riscv64/object_liveness.c \
 	src/target/riscv64/object_intervals.c \
+	src/target/common/core_object_intervals.c \
+	src/target/common/core_object_reuse.c \
 	src/target/riscv64/record_snapshot.c \
 	src/target/riscv64/legalize.c \
 	src/target/riscv64/frame_requirements.c \

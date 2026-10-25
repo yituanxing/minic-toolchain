@@ -2,6 +2,7 @@
 #include "target/data_layout.h"
 #include "target/common/core_function_facts.h"
 #include "target/common/core_spill_layout.h"
+#include "target/common/core_object_reuse.h"
 #include <limits.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -78,21 +79,66 @@ bool rv32_frame_init(Rv32Frame *frame, const MinicC0Program *program,
     if (frame->has_dynamic_stack && frame->saved_base_offset > SIZE_MAX - 4U)
         return rv32_frame_reject("saved_base", 0U, f->return_type);
     next = frame->saved_base_offset + (frame->has_dynamic_stack ? 4U : 0U);
-    for (i = 0; i < f->object_count; ++i) {
-        const MinicCoreObject *obj = &f->objects[i];
-        size_t size, align;
-        if (!minic_data_layout_type(t->data_layout, program,
-                                    obj->type, &size, &align) ||
-            (obj->element_count > 1U &&
-             size > SIZE_MAX / obj->element_count))
-            return rv32_frame_reject("object_layout", i, obj->type);
-        if (obj->element_count > 1U) size *= obj->element_count;
-        if (obj->explicit_alignment > align) align = obj->explicit_alignment;
-        if (align < 4U) align = 4U;
-        if (!rv32_align(next, align, &next) || size > SIZE_MAX - next)
-            return rv32_frame_reject("object_offset", i, obj->type);
-        frame->object_offsets[i] = next;
-        next += size != 0U ? size : 1U;
+    /* Same proved per-CoreObject lifetime analysis used by RV64.
+     * RV32 deliberately disables cross-block sharing; its layout remains
+     * ILP32. A slot holds at most 8 bytes, including long long/double.
+     * Do not confuse conservative CoreObject lifetime with SSA spill reuse. */
+    {
+        MinicCoreObjectReusePlan reuse = {0};
+        size_t pool_slots = 0U, pool_base;
+        if (!minic_core_object_reuse_plan_build(
+                program, f, t->data_layout, 8U, false, &reuse) ||
+            !minic_core_object_reuse_plan_get(
+                &reuse, MINIC_CORE_OBJECT_INVALID, NULL, NULL, &pool_slots)) {
+            minic_core_object_reuse_plan_destroy(&reuse);
+            return rv32_frame_reject("core_object_plan", 0U, minic_type_void());
+        }
+        for (i = 0U; i < f->object_count; ++i) {
+            const MinicCoreObject *obj = &f->objects[i];
+            size_t size, align, slot, peak;
+            bool reusable;
+            if (!minic_core_object_reuse_plan_get(
+                    &reuse, (MinicCoreObjectId)i, &reusable, &slot, &peak) ||
+                peak != pool_slots) {
+                minic_core_object_reuse_plan_destroy(&reuse);
+                return rv32_frame_reject("core_object_lookup", i, obj->type);
+            }
+            if (reusable) continue;
+            if (!minic_data_layout_type(t->data_layout, program,
+                                        obj->type, &size, &align) ||
+                (obj->element_count > 1U &&
+                 size > SIZE_MAX / obj->element_count)) {
+                minic_core_object_reuse_plan_destroy(&reuse);
+                return rv32_frame_reject("object_layout", i, obj->type);
+            }
+            if (obj->element_count > 1U) size *= obj->element_count;
+            if (obj->explicit_alignment > align) align = obj->explicit_alignment;
+            if (align < 4U) align = 4U;
+            if (!rv32_align(next, align, &next) || size > SIZE_MAX - next) {
+                minic_core_object_reuse_plan_destroy(&reuse);
+                return rv32_frame_reject("object_offset", i, obj->type);
+            }
+            frame->object_offsets[i] = next;
+            next += size != 0U ? size : 1U;
+        }
+        if (!rv32_align(next, 8U, &pool_base) ||
+            pool_slots > (SIZE_MAX - pool_base) / 8U) {
+            minic_core_object_reuse_plan_destroy(&reuse);
+            return rv32_frame_reject("object_pool", 0U, minic_type_void());
+        }
+        next = pool_base + pool_slots * 8U;
+        for (i = 0U; i < f->object_count; ++i) {
+            size_t slot, peak;
+            bool reusable;
+            if (!minic_core_object_reuse_plan_get(
+                    &reuse, (MinicCoreObjectId)i, &reusable, &slot, &peak) ||
+                peak != pool_slots || (reusable && slot >= pool_slots)) {
+                minic_core_object_reuse_plan_destroy(&reuse);
+                return rv32_frame_reject("object_pool_slot", i, f->objects[i].type);
+            }
+            if (reusable) frame->object_offsets[i] = pool_base + 8U * slot;
+        }
+        minic_core_object_reuse_plan_destroy(&reuse);
     }
     /* Reuse RV64's safe block-local SSA lifetimes with ILP32 4-byte slots.
      * No cross-block CoreObject slot sharing: its earlier RV64 experiment

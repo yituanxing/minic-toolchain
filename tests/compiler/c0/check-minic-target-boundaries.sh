@@ -126,6 +126,10 @@ has src/target/riscv32/rv32_abi_plan.c 'minic_core_call_view_build('
 has src/target/riscv32/rv32_abi_plan.c 'minic_riscv32_abi_place('
 has src/target/riscv32/rv32_frame.c 'rv32_function_abi_plan_build('
 has src/target/riscv32/rv32_frame.c 'minic_core_block_reused_spill_layout('
+has src/target/riscv32/rv32_frame.c 'minic_core_object_reuse_plan_build('
+exists src/target/common/core_object_reuse.c
+exists src/target/common/core_object_intervals.c
+has src/target/riscv64/object_liveness.c 'minic_core_object_reuse_plan_build('
 has src/target/riscv64/spill_layout.c 'minic_core_block_reused_spill_layout('
 exists src/target/common/core_spill_layout.c
 exists src/target/common/core_spill_layout.h
