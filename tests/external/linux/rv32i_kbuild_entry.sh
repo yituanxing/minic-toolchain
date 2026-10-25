@@ -62,6 +62,22 @@ if [[ "$mode" == shard ]]; then
     echo "RV32I_SHARD_CACHE=HIT shard=$RV32I_SHARD objects=${#owners[@]}"
     exit 0
   fi
+  # A restored, byte-identical GNU golden can still have Kconfig's generated
+  # include/config/auto.conf.cmd considered stale after cache extraction.
+  # Linux's cc-version.sh identifies the *compiler* using the GCC predefines;
+  # our stage2 Kbuild C wrapper is only a C-object substitution, never the
+  # compiler used to regenerate Kconfig. Synchronize with genuine GNU first,
+  # before removing any golden owner objects or enabling the MiniC wrapper.
+  if ! make "${gnu_args[@]}" -j1 CC=riscv64-linux-gnu-gcc syncconfig \
+      >"$shard/gnu-kconfig-sync.log" 2>&1; then
+    tail -n 80 "$shard/gnu-kconfig-sync.log" >&2
+    echo "RV32I_SHARD=FAIL GNU_Kconfig_sync shard=$RV32I_SHARD" >&2
+    exit 7
+  fi
+  test "$(sha256sum "$out/.config" | cut -d' ' -f1)" = "$cfg" || {
+    echo "RV32I_SHARD=FAIL changed_GNU_golden_config shard=$RV32I_SHARD" >&2
+    exit 7
+  }
   : >"$shard/mini-success-objects.txt"
   : >"$shard/mini-object-hashes.sha256"
   : >"$shard/compile.log"
