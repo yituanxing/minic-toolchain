@@ -116,6 +116,46 @@ jobs:
         run: |
           echo 'RV32I_GNU_CONTROL=BLOCKED exact_cache_miss; no_recompile=true'
 
+      - name: Restore exact MiniC scheduler object shards without recompilation
+        uses: actions/download-artifact@v4
+        with:
+          repository: yituanxing/minic-toolchain
+          run-id: '40189397298'
+          pattern: shard-*
+          github-token: ${{ github.token }}
+          path: build/rv32i-qemu-p0/attested-shards
+          merge-multiple: false
+
+      - name: Audit MiniC scheduler, fork and memory code and stack prologues
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          evidence=build/rv32i-qemu-p0/frame-audit
+          mkdir -p "$evidence"
+          owners=(kernel/sched/core.o kernel/sched/fair.o
+                  kernel/sched/idle.o kernel/sched/rt.o
+                  kernel/fork.o init/main.o mm/page_alloc.o)
+          for owner in "${owners[@]}"; do
+            mapfile -t objects < <(find build/rv32i-qemu-p0/attested-shards \
+              -type f -path "*/minic/$owner" -print)
+            if [[ "${#objects[@]}" != 1 ]]; then
+              echo "RV32I_FRAME_AUDIT=FAIL owner=$owner matches=${#objects[@]}" >&2
+              exit 2
+            fi
+            object=${objects[0]}
+            name=${owner//\//_}
+            riscv64-linux-gnu-objdump -d "$object" >"$evidence/$name.disasm.txt"
+            riscv64-linux-gnu-nm -S --size-sort "$object" >"$evidence/$name.symbols.txt"
+            echo "RV32I_FRAME_OWNER=ATTESTED owner=$owner sha256=$(sha256sum "$object" | cut -d' ' -f1)"
+            echo "RV32I_FRAME_TOP owner=$owner"
+            tail -n 7 "$evidence/$name.symbols.txt"
+            if [[ "$owner" == kernel/sched/core.o ]]; then
+              sed -n '/<__schedule>:/,+25p' "$evidence/$name.disasm.txt"
+              sed -n '/<schedule_debug>:/,+25p' "$evidence/$name.disasm.txt"
+            fi
+          done
+          echo "RV32I_FRAME_AUDIT=PASS owners=${#owners[@]} no_compile=true source_run=40189397298"
+
       - name: Boot unmodified RV32I Linux Image into genuine ELF32 PID1
         shell: bash
         timeout-minutes: 3
@@ -141,5 +181,7 @@ jobs:
             build/rv32i-qemu-p0/gnu-control-step.log
             build/rv32i-qemu-p0/gnu-control/qemu-serial.log
             build/rv32i-qemu-p0/gnu-control/qemu-debug.log
+            build/rv32i-qemu-p0/frame-audit/*.symbols.txt
+            build/rv32i-qemu-p0/frame-audit/*.disasm.txt
           if-no-files-found: warn
           retention-days: 7
