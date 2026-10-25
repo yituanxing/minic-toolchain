@@ -20,6 +20,13 @@ work=$(realpath "$RV32I_QEMU_WORK")
 image_sha=$(sha256sum "$image" | cut -d' ' -f1)
 p1=${RV32I_QEMU_P1:-0}
 shell=${RV32I_QEMU_SHELL:-0}
+fast=${RV32I_QEMU_FAST:-0}
+[[ "$fast" == 0 || "$fast" == 1 ]] || {
+  echo 'RV32I_QEMU=FAIL invalid_fast_mode' >&2; exit 2;
+}
+[[ "$fast" == 0 || ( "$p1" == 1 && "$shell" == 0 ) ]] || {
+  echo 'RV32I_QEMU=FAIL fast_requires_separate_p1_userspace_without_shell' >&2; exit 2;
+}
 [[ "$shell" == 0 || "$shell" == 1 ]] || {
   echo 'RV32I_QEMU=FAIL invalid_shell_mode' >&2; exit 2;
 }
@@ -189,7 +196,7 @@ printf 'RV32I_QEMU_P0=START image_sha256=%s guest=rv32i/ilp32 pid1=ELF32 firmwar
   "$image_sha" "$bios" "$rv32i_timeout" "$p1" "$shell"
 rdinit=/init
 append_p1=
-if [[ "$p1" == 1 ]]; then append_p1=' minic_runtime=p1'; fi
+if [[ "$p1" == 1 && "$fast" != 1 ]]; then append_p1=' minic_runtime=p1'; fi
 if [[ "$shell" == 1 ]]; then rdinit=/bin/sh; append_p1=; fi
 qemu_args=(qemu-system-riscv32 -M virt -cpu max -m 512M -smp 1
   -nographic -no-reboot -bios "$bios" -kernel "$image" -dtb "$dtb"
@@ -252,7 +259,7 @@ fi
 for pattern in \
     'Linux version 6\.6\.143' \
     "$(if [[ "$shell" == 1 ]]; then printf '%s' '(Run /bin/sh as init process|Starting init: /bin/sh)'; else printf '%s' '(Run /init as init process|Starting init: /init)'; fi)" \
-    "$(if [[ "$shell" == 1 ]]; then printf '%s' '^MINIC_LINUX_RUNTIME_SH_READY'; elif [[ "$p1" == 1 ]]; then printf '%s' '^RUNTIME_V2_SYSCALL_BEGIN'; else printf '%s' '^RV32I_LINUX_PID1=PASS syscall=getpid,write elf=ELF32 abi=ilp32'; fi)"; do
+    "$(if [[ "$shell" == 1 ]]; then printf '%s' '^MINIC_LINUX_RUNTIME_SH_READY'; elif [[ "$fast" == 1 ]]; then printf '%s' '^MINIC_LINUX_RUNTIME_INIT_BEGIN'; elif [[ "$p1" == 1 ]]; then printf '%s' '^RUNTIME_V2_SYSCALL_BEGIN'; else printf '%s' '^RV32I_LINUX_PID1=PASS syscall=getpid,write elf=ELF32 abi=ilp32'; fi)"; do
   if ! grep -Eq "$pattern" "$work/qemu-serial.log"; then
     echo "RV32I_QEMU_P0=FAIL missing=$pattern image=$image_sha" >&2
     tail -n 140 "$work/qemu-serial.log" >&2
@@ -270,6 +277,13 @@ if [[ "$p1" == 1 ]]; then
     echo "RV32I_QEMU_P1=FAIL missing_clean_powerdown image=$image_sha" >&2
     exit 1
   }
+  if [[ "$fast" == 1 ]]; then
+    python3 tests/external/linux/runtime_v2_log_check.py \
+      --profile p0 --log "$work/qemu-serial.log"
+    grep -Fq 'MINIC_LINUX_RUNTIME_INIT_END fail=0' "$work/qemu-serial.log"
+    echo "RV32I_QEMU_P0=PASS profile=full_historical_fast image_sha256=$image_sha original_Kbuild=true proc_sys_dev_tmpfs=true clean_powerdown=true"
+    exit 0
+  fi
   if [[ "$shell" == 1 ]]; then
     for marker in MINIC_LINUX_RUNTIME_SH_READY PROC_CMDLINE_BEGIN \
                   PROC_CMDLINE_END RDINIT_SH_OK DONE_RDINIT; do
@@ -278,6 +292,14 @@ if [[ "$p1" == 1 ]]; then
       }
     done
     grep -Eq 'Kernel command line:.*rdinit=/bin/sh' "$work/qemu-serial.log"
+    # Serial TTY echoes INPUT. Do not mistake echoed input commands for
+    # executed shell output: require the actual command-result lines.
+    grep -Eq '^console=ttyS0 .*rdinit=/bin/sh' "$work/qemu-serial.log"
+    for line in PROC_CMDLINE_BEGIN PROC_CMDLINE_END RDINIT_SH_OK DONE_RDINIT; do
+      grep -Fxq "$line" "$work/qemu-serial.log" || {
+        echo "RV32I_QEMU_SHELL=FAIL no_executed_result=$line" >&2; exit 1;
+      }
+    done
     if grep -Fq 'RV32_SHELL_' "$work/qemu-serial.log"; then
       echo "RV32I_QEMU_SHELL=FAIL invalid_shell_commands" >&2; exit 1;
     fi
