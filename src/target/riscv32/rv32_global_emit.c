@@ -88,6 +88,30 @@ bool minic_riscv32_emit_flat_global(FILE *out,
         return !obj->is_weak || obj->is_internal ||
                fprintf(out, ".weak %s\n", obj->name) >= 0;
     }
+    /* Linux __ADDRESSABLE emits a pointer initialized by relocation into an
+     * explicit .discard.addressable ELF section. The already-certified
+     * common zero-relocation walker owns the storage layout/offset checks;
+     * RV32 owns only section flags and .4byte target symbol rendering.
+     * This is not a one-off Linux symbol special case. */
+    if (obj->section_name != NULL &&
+        obj->is_zero_initialized && obj->initializer_count == 0U &&
+        obj->relocation_count != 0U &&
+        obj->alias_target == MINIC_GLOBAL_OBJECT_INVALID &&
+        obj->union_selection_count == 0U &&
+        obj->flexible_array_initializer_count == 0U &&
+        minic_data_layout_global_object(
+            target->data_layout, program, obj, &bytes, &alignment) &&
+        bytes != 0U && alignment != 0U &&
+        (alignment & (alignment - 1U)) == 0U) {
+        if (obj->explicit_alignment > alignment)
+            alignment = obj->explicit_alignment;
+        if ((alignment & (alignment - 1U)) != 0U ||
+            !rv32_data_symbol(out, obj, alignment) ||
+            !minic_multi_emit_zero_relocation_global(
+                out, program, target, obj, bytes, rv32_reloc))
+            return false;
+        return fprintf(out, ".size %s, %zu\n", obj->name, bytes) >= 0;
+    }
     /* Shared global records and relocatable arrays are handled with the
      * canonical recursive DataLayout walker, including pointer-function
      * symbol fixups and ABI-specific field padding. */

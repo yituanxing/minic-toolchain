@@ -88,4 +88,14 @@ grep -Fq '.globl rv32_kernel_asm_origin' "$work/kernel-file-asm.s"
 grep -Fq '# MINIC_SOURCE_FILE_ASM_END' "$work/kernel-file-asm.s"
 grep -Fq 'li t0, 42' "$work/kernel-file-asm.s"
 echo 'RV32I_FILE_ASM=PASS preserved_original_asm=true compiler_C_strict_I=true'
+cat > "$work/kernel-discard-section.i" <<'SRC'
+int kernel_system_state;
+static int * __attribute__((used, section(".discard.addressable")))
+    kernel_addressable = &kernel_system_state;
+SRC
+"$MINIC_CC" --target=riscv32-linux -march=rv32i -mabi=ilp32 \
+    -S "$work/kernel-discard-section.i" -o "$work/kernel-discard-section.s"
+grep -Fq '.section .discard.addressable' "$work/kernel-discard-section.s"
+grep -Fq '.4byte kernel_system_state' "$work/kernel-discard-section.s"
+echo 'RV32I_GLOBAL_SECTION_RELOC=PASS shared_DataLayout=1 section_addressable=1 ELF32_width=4'
 echo 'RV32I_TARGET_GATE=PASS ILP32_registered=true incompatible_ISA_rejected=true basic_C_core_emitted=true'
