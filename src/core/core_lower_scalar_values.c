@@ -275,10 +275,28 @@ MinicCoreLowerStatus minic_core_lower_internal_lower_scalar_equality_operands(Mi
 
     status = lower_expression(context, left_id, &left_source);
     if (status != MINIC_CORE_LOWER_OK) {
+        if (getenv("MINIC_CORE_EXPR_FAILURE_TRACE") != NULL)
+            (void)fprintf(stderr,
+                "CORE_EXPR_FAIL owner=equality-left-lower function=%s status=%d "
+                "left_kind=%d op=%d id=%zu block=%u\n",
+                context->source_function != NULL ? context->source_function->name : "?",
+                (int)status, (int)left_expression->kind,
+                left_expression->kind == MINIC_EXPRESSION_UNARY
+                    ? (int)left_expression->value.unary.operator_kind : -1,
+                (size_t)left_id, (unsigned)context->block_id);
         return status;
     }
     if (left_source >= context->function->value_count ||
         !minic_type_equal(context->function->values[left_source].type, left_type)) {
+        if (getenv("MINIC_CORE_EXPR_FAILURE_TRACE") != NULL)
+            (void)fprintf(stderr,
+                "CORE_EXPR_FAIL owner=equality-left-type function=%s id=%zu "
+                "value=%u wanted_kind=%d actual_kind=%d\n",
+                context->source_function != NULL ? context->source_function->name : "?",
+                (size_t)left_id, (unsigned)left_source,
+                (int)left_type.base_kind,
+                left_source < context->function->value_count
+                    ? (int)context->function->values[left_source].type.base_kind : -1);
         return MINIC_CORE_LOWER_ERROR;
     }
     if (integer_comparison) {

@@ -142,7 +142,9 @@ def call_proxy(args):
                 env=({**os.environ, "MINIC_X86_CALL_TRACE": "1"}
                      if os.environ.get("BUSYBOX_ALLYES_MINIC_TARGET",
                                        "x86_64-linux") == "x86_64-linux"
-                     else os.environ))
+                     else ({**os.environ, "MINIC_CORE_EXPR_FAILURE_TRACE": "1"}
+                           if os.environ.get("BUSYBOX_ALLYES_MINIC_TARGET") == "riscv32-linux"
+                           else os.environ)))
         info["minic"] = mini.returncode
         # Two remaining x86 families (cpuid inline asm and SysV va_list)
         # need a bounded secondary run with Core diagnostics. This does

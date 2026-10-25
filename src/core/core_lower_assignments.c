@@ -246,6 +246,13 @@ MinicCoreLowerStatus minic_core_lower_scalar_update(MinicCoreLowerContext *conte
     }
     status = lower_address(context, expression->value.unary.operand, &address);
     if (status != MINIC_CORE_LOWER_OK) {
+        if (getenv("MINIC_CORE_EXPR_FAILURE_TRACE") != NULL)
+            (void)fprintf(stderr,
+                "CORE_EXPR_FAIL owner=update-address function=%s status=%d "
+                "operand_kind=%d unary_op=%d block=%u\n",
+                context->source_function != NULL ? context->source_function->name : "?",
+                (int)status, operand == NULL ? -1 : (int)operand->kind,
+                (int)expression->value.unary.operator_kind, (unsigned)context->block_id);
         return status;
     }
 

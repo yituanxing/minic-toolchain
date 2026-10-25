@@ -311,7 +311,7 @@ for p in sorted((report/"per-tu").glob("*/result.json")):
     if x.get("minic") != 0 and x.get("gcc")==0 and x.get("cpp")==0:
         lines=(p.parent/"minic.err").read_text(errors="replace").splitlines()
         print("RV32_BUSYBOX_MINIC_OWNER_DIAGNOSTIC source=%s"%x["source"],flush=True)
-        for line in lines[:8]:
+        for line in lines[:26]:
             print("  %s"%line[:400],flush=True)
 if rc or len(results)<50:
     sys.exit(1)
@@ -335,6 +335,9 @@ for p in sorted((report/"per-tu").glob("*/result.json")):
         if absolute in mapping or not candidate.is_file():
             raise SystemExit("duplicate or missing MiniC owner: "+str(absolute))
         mapping[str(absolute)]=str(candidate)
+        if absolute.name.startswith("tmp.") and absolute.name.endswith(".o"):
+            print("RV32_BUSYBOX_TEMP_OWNER source=%s object=%s"%
+                  (d["source"],absolute),flush=True)
 (report/"replacement.json").write_text(json.dumps(mapping,sort_keys=True))
 print("RV32_BUSYBOX_MIXED_PLAN=DISCOVERY MiniC_ready=%d GNU_fallback_count=unknown"%
       len(mapping),flush=True)

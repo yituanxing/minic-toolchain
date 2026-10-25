@@ -806,6 +806,16 @@ MinicCoreLowerStatus minic_core_lower_internal_lower_condition_branch(MinicCoreL
     }
     status = lower_expression(context, expression_id, &condition);
     if (status != MINIC_CORE_LOWER_OK) {
+        if (getenv("MINIC_CORE_EXPR_FAILURE_TRACE") != NULL)
+            (void)fprintf(stderr,
+                "CORE_EXPR_FAIL owner=condition function=%s status=%d "
+                "expression=%zu kind=%d op=%d block=%u span=%zu:%zu\n",
+                context->source_function != NULL ? context->source_function->name : "?",
+                (int)status, (size_t)expression_id, (int)expression->kind,
+                expression->kind == MINIC_EXPRESSION_BINARY
+                    ? (int)expression->value.binary.operator_kind : -1,
+                (unsigned)context->block_id,
+                expression->span.begin.line, expression->span.begin.column);
         return status;
     }
     if (condition >= context->function->value_count) {
