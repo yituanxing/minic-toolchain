@@ -297,6 +297,20 @@ bool minic_riscv32_write_core_program(const char *path,
             rv32_diag(diagnostic, "<rv32-global>", message);
         }
     }
+    /* Undefined weak functions are real ELF symbols, not ordinary strong
+     * references. A missing weak Zstd tracing hook must resolve to zero
+     * during GNU static linking (it is tested by the original caller).
+     * Defined weak functions are handled by the shared symbol emitter. */
+    for (i = 0U; ok && i < program->function_count; ++i) {
+        const MinicFunction *decl = &program->functions[i];
+        const char *name;
+        if (!decl->is_weak || decl->is_defined || decl->is_internal)
+            continue;
+        name = minic_c0_function_symbol_name(decl);
+        if (name == NULL || *name == '\0' ||
+            fprintf(file, ".weak %s\n", name) < 0)
+            ok = false;
+    }
     if (ok && fprintf(file, ".text\n") < 0) ok = false;
     for (i = 0U; ok && i < function_count; ++i) {
         const MinicFunction *decl = &program->functions[i];

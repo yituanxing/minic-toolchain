@@ -100,6 +100,17 @@ if ((blocked != 0)); then
   exit 1
 fi
 echo "RV32_ZSTD_CENSUS=PASS originals=${#sources[@]} GNU_C_fallback=0"
+# The real original source declares optional trace hooks as undefined
+# weak functions. Prove their ELF binding in MiniC-produced objects;
+# otherwise GNU LD would demand vendor instrumentation absent by design.
+if ! riscv64-linux-gnu-readelf -Ws "$work/obj/compress_zstd_compress-gnu-as.o" |
+     grep -E 'WEAK[[:space:]]+DEFAULT[[:space:]]+UND[[:space:]]+ZSTD_trace_compress_begin' >/dev/null; then
+  echo "RV32_ZSTD=FAIL stage=weak_undef_ELF_binding" >&2
+  riscv64-linux-gnu-readelf -Ws "$work/obj/compress_zstd_compress-gnu-as.o" |
+    grep -E 'ZSTD_trace_compress' >&2 || :
+  exit 1
+fi
+echo "RV32_ZSTD_WEAK_UNDEFINED=PASS hook=ZSTD_trace_compress_begin"
 # Harness uses only the genuine public libzstd API. Repeated inputs include
 # empty/small/large, repeating and high-entropy patterns. Byte-for-byte
 # stdout contains each complete compressed frame, not just a weak checksum.

@@ -113,19 +113,26 @@ static bool minic_walk_reachable_core_edges(const MinicC0Program *program,
                                  &block_queue_count)) {
         goto done;
     }
-    /* M180_CORE_LABEL_REENTRY_ROOTS: a source C label is a legal re-entry root
-     * for goto/asm-goto. Backend emission preserves such blocks, so final Core
-     * reachability must start from them as well or it can prune a specialization
-     * clone that is still called after label re-entry. */
+    /* Emission reachability must match the actual Core machine emitter.
+     * Every backend presently writes every Core basic block, including a
+     * statically unreachable block with a valid terminator. Calls and
+     * function addresses from those emitted blocks therefore create real
+     * ELF references. Looking only at the entry-CFG and source labels can
+     * delete the targets of emitted calls (including specialized inline
+     * clones and ordinary static helpers) and leave undefined symbols.
+     *
+     * Start from ALL emitted blocks. The existing worklist still validates
+     * all block edges and recursively walks each referenced function. This
+     * is conservative executable-symbol retention, not a way to ignore
+     * unsupported Core functions or invent replacement bodies. */
     {
         size_t root_block;
         for (root_block = 0U; root_block < core->block_count; ++root_block) {
-            if (core->blocks[root_block].source_label_id != SIZE_MAX &&
-                !minic_enqueue_core_block((MinicCoreBlockId)root_block,
-                                         core->block_count,
-                                         block_reachable,
-                                         block_queue,
-                                         &block_queue_count)) {
+            if (!minic_enqueue_core_block((MinicCoreBlockId)root_block,
+                                          core->block_count,
+                                          block_reachable,
+                                          block_queue,
+                                          &block_queue_count)) {
                 goto done;
             }
         }
