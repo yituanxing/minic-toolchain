@@ -6,6 +6,7 @@ on:
     paths:
       - .github/workflows/minic-rv32i-linux-qemu-p0.yml
       - tools/ci/linux-rv32i-qemu-p0-v1.sh
+      - tools/ci/linux-rv32i-qemu-batch-isolate-v1.sh
   workflow_dispatch:
 
 # This runtime gate must never recompile Linux or rerun the seven producer
@@ -229,6 +230,8 @@ jobs:
             build/rv32i-qemu-p0/gnu-reconcile.log
             build/rv32i-qemu-p0/runtime-build.log
             build/rv32i-qemu-p0/trials/*/link.log
+            build/rv32i-qemu-p0/trials/gnu-relink-control/qemu-step.log
+            build/rv32i-qemu-p0/trials/gnu-relink-control/qemu/qemu-serial.log
             build/rv32i-qemu-p0/trials/*/qemu-step.log
             build/rv32i-qemu-p0/trials/*/qemu/qemu-serial.log
             build/rv32i-qemu-p0/frame-audit/*.symbols.txt
