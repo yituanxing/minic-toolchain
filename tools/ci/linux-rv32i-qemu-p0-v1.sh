@@ -144,6 +144,23 @@ printf 'qemu_status=%s\nimage_sha256=%s\n' "$status" "$image_sha" \
 if [[ "$status" != 124 ]]; then
   echo "RV32I_QEMU_P0=FAIL qemu_exit=$status expected_bounded_timeout=124" >&2
   tail -n 110 "$work/qemu-serial.log" >&2
+  # A pre-console shutdown must not be mistaken for a passing Linux boot.
+  # Replay ONLY the same immutable Image, now with UART earlycon and QEMU's
+  # CPU exception/guest-error trace, so the next fix targets real evidence.
+  set +e
+  timeout --signal=TERM 20s qemu-system-riscv32 \
+    -M virt -cpu max -m 512M -smp 1 -nographic -no-reboot \
+    -bios "$bios" -kernel "$image" -dtb "$dtb" \
+    -device "loader,file=$work/initramfs.cpio.gz,addr=$initrd_addr,force-raw=on" \
+    -append 'console=ttyS0 earlycon=uart8250,mmio,0x10000000,115200n8 loglevel=8 panic=-1 rdinit=/init' \
+    -d int,cpu_reset,guest_errors -D "$work/qemu-debug.log" \
+    </dev/null >"$work/qemu-uart-serial.log" 2>&1
+  uart_status=$?
+  set -e
+  printf 'diagnostic_uart_qemu_status=%s\n' "$uart_status" >>"$work/provenance.txt"
+  echo "RV32I_QEMU_P0_DIAG uart_status=$uart_status exception_events=$(grep -c -E 'exception|riscv_cpu_do_interrupt|cpu_reset' "$work/qemu-debug.log" || true)" >&2
+  tail -n 100 "$work/qemu-uart-serial.log" >&2
+  tail -n 80 "$work/qemu-debug.log" >&2
   exit 1
 fi
 for pattern in \

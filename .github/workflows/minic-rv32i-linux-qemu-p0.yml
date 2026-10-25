@@ -88,5 +88,7 @@ jobs:
             build/rv32i-qemu-p0/boot/initramfs.cpio.gz
             build/rv32i-qemu-p0/boot/virt-dumpdtb.log
             build/rv32i-qemu-p0/boot/virt-rv32-large-image.dtb
+            build/rv32i-qemu-p0/boot/qemu-uart-serial.log
+            build/rv32i-qemu-p0/boot/qemu-debug.log
           if-no-files-found: warn
           retention-days: 7
