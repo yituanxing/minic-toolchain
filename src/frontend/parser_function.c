@@ -196,6 +196,25 @@ static bool consume_function_attribute(MinicParser *parser,
         return false;
     }
 
+    if (descriptor->kind == MINIC_ATTRIBUTE_NO_SANITIZE) {
+        MinicSourceSpan argument;
+        static const char undefined_sanitizer[] = "\"undefined\"";
+
+        /* Only the qualified GNU UBSan suppression is accepted. MiniC
+         * emits no sanitizer instrumentation so the effect is a no-op.
+         * Reject malformed/unrecognized arguments explicitly. */
+        if (!function_attribute_argument_token(
+                parser, attribute, MINIC_TOKEN_STRING_LITERAL, &argument) ||
+            minic_parser_span_length(argument) != sizeof(undefined_sanitizer) - 1U ||
+            memcmp(parser->source + argument.begin.offset,
+                   undefined_sanitizer, sizeof(undefined_sanitizer) - 1U) != 0) {
+            minic_parser_error(
+                parser, "GNU no_sanitize requires one supported string literal: undefined");
+            return false;
+        }
+        return true;
+    }
+
     if (descriptor->kind == MINIC_ATTRIBUTE_COPY) {
         return resolve_function_copy_attribute(parser, attribute);
     }

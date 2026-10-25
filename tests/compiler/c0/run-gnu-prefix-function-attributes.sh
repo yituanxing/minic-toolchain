@@ -21,6 +21,8 @@ grep -F 'prefix_external_identity:' "$assembly" >/dev/null
 grep -F '.globl prefix_external_identity' "$assembly" >/dev/null
 grep -F 'externally_visible_decl:' "$assembly" >/dev/null
 grep -F 'instrumentation_policy_aliases:' "$assembly" >/dev/null
+grep -F 'zstd_ubsan_policy:' "$assembly" >/dev/null
+grep -F 'zstd_ubsan_underscored_policy:' "$assembly" >/dev/null
 grep -F 'prefix_plain_spelling_identity:' "$assembly" >/dev/null
 grep -F '.globl externally_visible_decl' "$assembly" >/dev/null
 grep -F '.section .probe.externally-visible.text' "$assembly" >/dev/null
@@ -40,5 +42,18 @@ if "$minic" -S "$work/gnu_extern_inline_attribute.i" \
 fi
 grep -F 'GNU extern inline gnu_inline requires inline-only emission semantics' \
     "$work/gnu_extern_inline_attribute.err" >/dev/null
+
+cat >"$work/no-sanitize-invalid.i" <<'SRC'
+__attribute__((no_sanitize(123))) int reject_invalid_policy(int x) {
+    return x;
+}
+SRC
+if "$minic" -S "$work/no-sanitize-invalid.i" -o "$work/no-sanitize-invalid.s" \
+    >"$work/no-sanitize-invalid.out" 2>"$work/no-sanitize-invalid.err"; then
+    printf '%s\n' 'FAIL compiler/c0/gnu_prefix_function_attributes: invalid sanitizer argument accepted' >&2
+    exit 1
+fi
+grep -F 'GNU no_sanitize requires one supported string literal: undefined' \
+    "$work/no-sanitize-invalid.err" >/dev/null
 
 printf '%s\n' 'PASS compiler/c0/gnu_prefix_function_attributes prefix=1 metadata=unused,no-instrument,externally-visible function+object=1 reachability=parse-only public-linkage=preserved gnu-inline=static+bare+plain-spelling always-inline=underscored+plain-spelling extern-inline=fail-closed no-sanitize-address=parse-only no-stack-protector=parse-only'

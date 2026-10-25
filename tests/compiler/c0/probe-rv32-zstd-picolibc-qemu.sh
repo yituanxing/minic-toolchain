@@ -29,7 +29,9 @@ target=(-march=rv32i -mabi=ilp32)
 libc=(-specs=picolibc.specs)
 # Both compilers receive the same official portable configuration and
 # precisely the same GNU-preprocessed input. No vendor source modifications.
-defs=(-DZSTD_MULTITHREAD=0 -DZSTD_LEGACY_SUPPORT=0 -DZSTD_DISABLE_ASM)
+# Static libzstd uses absence of ZSTD_MULTITHREAD to disable pthread code.
+# Some upstream sources test #ifdef, not the numeric macro value.
+defs=(-DZSTD_LEGACY_SUPPORT=0 -DZSTD_DISABLE_ASM)
 includes=(-I"$src/lib" -I"$src/lib/common" -I"$src/lib/compress" -I"$src/lib/decompress")
 predefines=(-D__PICOLIBC_ERRNO_FUNCTION=__minic_picolibc_errno)
 mapfile -d '' sources < <(find "$src/lib/common" "$src/lib/compress" \
@@ -122,14 +124,14 @@ int main(void) {
                                       packed_size);
             if (ZSTD_isError(restored) || restored != n ||
                 memcmp(raw, unpacked, n) != 0) return 11;
-            if (printf("RV32_ZSTD_CASE input=%lu packed=%lu level=%d\\n",
+            if (printf("RV32_ZSTD_CASE input=%lu packed=%lu level=%d\n",
                        (unsigned long)n, (unsigned long)packed_size, level) < 0 ||
                 fflush(stdout) != 0) return 12;
             if (!emit_all(frame, packed_size)) return 13;
             ++cases;
         }
     }
-    if (printf("RV32_ZSTD_ROUNDTRIP=PASS cases=%u version=%u\\n",
+    if (printf("RV32_ZSTD_ROUNDTRIP=PASS cases=%u version=%u\n",
                cases, ZSTD_versionNumber()) < 0 || fflush(stdout) != 0)
         return 14;
     return cases == 18U && ZSTD_versionNumber() == 10507U ? 0 : 15;
