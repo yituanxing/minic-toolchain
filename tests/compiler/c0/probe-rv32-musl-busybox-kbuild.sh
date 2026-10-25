@@ -134,7 +134,9 @@ make -C "$work/busybox" O="$work/busybox-out" \
 python3 - "$work/busybox-out/.config" <<'PY'
 import sys
 p=sys.argv[1]
-names={"STATIC","ECHO","TRUE","FALSE","CAT","HEAD","WC"}
+# musl on 32-bit Linux has genuine 64-bit off_t. BusyBox's own
+# libbb.h explicitly requires CONFIG_LFS=y on that ABI.
+names={"STATIC","LFS","ECHO","TRUE","FALSE","CAT","HEAD","WC"}
 lines=open(p).readlines()
 for i,line in enumerate(lines):
     for name in names:
