@@ -14,7 +14,7 @@ on:
 # original GNU Kbuild ELF32 link, and binds the bytes with a fixed SHA.
 jobs:
   rv32i-linux-qemu-p0:
-    if: github.event_name == 'workflow_dispatch' || (!contains(github.event.head_commit.message, '[rv32-leaf]') && !contains(github.event.head_commit.message, '[rv32-single]') && !contains(github.event.head_commit.message, '[rv32-partition]') && !contains(github.event.head_commit.message, '[rv32-whole-shard]') && !contains(github.event.head_commit.message, '[rv32-prefix]'))
+    if: github.event_name == 'workflow_dispatch' || (!contains(github.event.head_commit.message, '[rv32-leaf]') && !contains(github.event.head_commit.message, '[rv32-single]') && !contains(github.event.head_commit.message, '[rv32-partition]') && !contains(github.event.head_commit.message, '[rv32-whole-shard]') && !contains(github.event.head_commit.message, '[rv32-prefix]') && !contains(github.event.head_commit.message, '[rv32-p1]'))
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
@@ -614,5 +614,107 @@ jobs:
             build/rv32i-qemu-prefix/trials/*/link.log
             build/rv32i-qemu-prefix/trials/*/qemu-step.log
             build/rv32i-qemu-prefix/trials/*/qemu/qemu-serial.log
+          retention-days: 7
+          if-no-files-found: warn
+
+# RV64 P1-compatible twelve-syscall family coverage on the exact previously
+  # certified 1741/1741 RV32I Image. No Linux compilation or relink, no new
+  # MiniC object candidates, only a GNU-built freestanding ELF32 initramfs.
+  rv32i-linux-qemu-p1:
+    if: github.event_name == 'push' && contains(github.event.head_commit.message, '[rv32-p1]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Recover exact P0-certified 1741-MiniC RV32I Linux Image
+        uses: actions/download-artifact@v4
+        with:
+          repository: yituanxing/minic-toolchain
+          run-id: '40201830661'
+          name: linux-rv32i-seven-shard-Image-a974c435c66fd363a1d0f48f058537cbf7e45185
+          path: build/rv32i-p1/pinned
+          github-token: ${{ github.token }}
+      - name: Attest unchanged real GNU Kbuild Image and MiniC C-owner set
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mapfile -t images < <(find build/rv32i-p1/pinned -type f -path '*/arch/riscv/boot/Image')
+          test "${#images[@]}" -eq 1
+          image="${images[0]}"
+          expected=972ad331163bad9a3c47e9125672a18cb485cef8ca53861d6040a647101efa95
+          actual=$(sha256sum "$image" | cut -d' ' -f1)
+          test "$actual" = "$expected" || {
+            echo "RV32I_P1_IMAGE=FAIL sha_mismatch expected=$expected actual=$actual" >&2
+            exit 1
+          }
+          mapfile -t manifests < <(find build/rv32i-p1/pinned -type f -name minic-manifest.sha256)
+          test "${#manifests[@]}" -eq 1
+          owners=$(wc -l < "${manifests[0]}")
+          test "$owners" -eq 1741 || {
+            echo "RV32I_P1_IMAGE=FAIL expected_1741_C_owners found=$owners" >&2; exit 1
+          }
+          echo "RV32I_P1_IMAGE=PASS sha=$actual C_owners=1741/1741 source_run=40201830661 original_GNU_Kbuild=true Linux_C_recompiles=0"
+          echo "RV32I_P1_IMAGE=$GITHUB_WORKSPACE/$image" >>"$GITHUB_ENV"
+      - name: Install RV32 genuine QEMU, OpenSBI and GNU user ELF32 toolchain
+        shell: bash
+        timeout-minutes: 12
+        run: |
+          set -Eeuo pipefail
+          for sources in /etc/apt/apt-mirrors.txt /etc/apt/sources.list.d/ubuntu.sources; do
+            if [[ -f "$sources" ]] && grep -q 'azure.archive.ubuntu.com' "$sources"; then
+              sudo sed -i 's#azure.archive.ubuntu.com#archive.ubuntu.com#g' "$sources"
+            fi
+          done
+          timeout 100s sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 update -qq
+          timeout 480s sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 \
+            install -y --no-install-recommends \
+              qemu-system-misc opensbi binutils-riscv64-linux-gnu \
+              gcc-riscv64-linux-gnu cpio device-tree-compiler
+          command -v qemu-system-riscv32
+          command -v riscv64-linux-gnu-gcc
+      - name: Historical twelve P1 syscall families on twelve boots of one immutable Image
+        shell: bash
+        timeout-minutes: 13
+        run: |
+          set -Eeuo pipefail
+          image="$RV32I_P1_IMAGE"
+          expected=972ad331163bad9a3c47e9125672a18cb485cef8ca53861d6040a647101efa95
+          mkdir -p build/rv32i-p1/trials
+          : >build/rv32i-p1/p1-repeats.tsv
+          printf 'attempt\timage_sha256\tverdict\n' >build/rv32i-p1/p1-repeats.tsv
+          for i in $(seq 1 12); do
+            test "$(sha256sum "$image" | cut -d' ' -f1)" = "$expected"
+            work="$GITHUB_WORKSPACE/build/rv32i-p1/trials/$i"
+            mkdir -p "$work"
+            echo "RV32I_P1_TRIAL=START attempt=$i/12 Image=$expected"
+            if RV32I_QEMU_P1=1 \
+               RV32I_QEMU_IMAGE="$image" \
+               RV32I_QEMU_WORK="$work" \
+               RV32I_QEMU_TIMEOUT_SECONDS=43 \
+               RV32I_QEMU_SKIP_REPLAY=1 \
+                 bash tools/ci/linux-rv32i-qemu-p0-v1.sh >"$work/step.log" 2>&1; then
+              printf '%s\t%s\tPASS\n' "$i" "$expected" >>build/rv32i-p1/p1-repeats.tsv
+              echo "RV32I_P1_TRIAL=PASS attempt=$i/12 syscalls=12/12 same_Image=true"
+            else
+              printf '%s\t%s\tFAIL\n' "$i" "$expected" >>build/rv32i-p1/p1-repeats.tsv
+              echo "RV32I_P1_TRIAL=FAIL attempt=$i/12" >&2
+              tail -n 110 "$work/step.log" >&2
+              tail -n 140 "$work/qemu-serial.log" >&2 || true
+              exit 1
+            fi
+          done
+          test "$(grep -Fc $'\tPASS' build/rv32i-p1/p1-repeats.tsv)" -eq 12
+          echo "RV32I_P1=PASS boots=12/12 syscalls=12/12 original_GNU_Kbuild=true minic_C=1741/1741 immutable_Image=$expected"
+      - name: Retain exact ELF32 P1 syscall and first-fault evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rv32i-linux-p1-${{ github.sha }}
+          path: |
+            build/rv32i-p1/p1-repeats.tsv
+            build/rv32i-p1/trials/*/step.log
+            build/rv32i-p1/trials/*/qemu-serial.log
+            build/rv32i-p1/trials/*/provenance.txt
+            build/rv32i-p1/trials/*/init-elf.txt
           retention-days: 7
           if-no-files-found: warn
