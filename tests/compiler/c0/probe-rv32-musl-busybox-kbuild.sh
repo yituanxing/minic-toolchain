@@ -326,23 +326,45 @@ python3 - "$report" "$shadow" <<'PY'
 import json, pathlib, sys
 report, out=pathlib.Path(sys.argv[1]),pathlib.Path(sys.argv[2])
 mapping={}
+total=0
+blocked=[]
+transient=[]
 for p in sorted((report/"per-tu").glob("*/result.json")):
     d=json.loads(p.read_text())
+    src_obj=pathlib.Path(d["object"])
+    absolute=(src_obj if src_obj.is_absolute() else out/src_obj).resolve()
+    source=pathlib.Path(d["source"])
+    # Genuine BusyBox trylink uses randomly named tmp.XXXX.c/obj generated
+    # in the O= build directory. Those transient GCC compiler probes are
+    # NOT persistent original applet/libbb C owners; do not require an
+    # obsolete tmp output from a previous Kbuild invocation to be replaced.
+    is_transient=(source.parent==pathlib.Path(".") and
+                  src_obj.parent==pathlib.Path(".") and
+                  source.name.startswith("tmp.") and source.suffix==".c" and
+                  src_obj.name==source.stem+".o" and
+                  absolute.parent==out.resolve())
+    if is_transient:
+        transient.append(d["source"])
+        print("RV32_BUSYBOX_TRANSIENT_TOOLCHAIN_PROBE=EXCLUDED source=%s object=%s"%
+              (d["source"],absolute),flush=True)
+        continue
+    total+=1
     if all(d.get(k)==0 for k in ("gcc","cpp","minic","assembler")):
-        src_obj=pathlib.Path(d["object"])
-        absolute=(src_obj if src_obj.is_absolute() else out/src_obj).resolve()
         candidate=(p.parent/"mini.o").resolve()
-        if absolute in mapping or not candidate.is_file():
+        if str(absolute) in mapping or not candidate.is_file():
             raise SystemExit("duplicate or missing MiniC owner: "+str(absolute))
         mapping[str(absolute)]=str(candidate)
-        if absolute.name.startswith("tmp.") and absolute.name.endswith(".o"):
-            print("RV32_BUSYBOX_TEMP_OWNER source=%s object=%s"%
-                  (d["source"],absolute),flush=True)
+    else:
+        blocked.append(d["source"])
 (report/"replacement.json").write_text(json.dumps(mapping,sort_keys=True))
-print("RV32_BUSYBOX_MIXED_PLAN=DISCOVERY MiniC_ready=%d GNU_fallback_count=unknown"%
-      len(mapping),flush=True)
+(report/"replacement-readiness.json").write_text(json.dumps(
+    {"original_real_C_owners":total,"minic_ready":len(mapping),
+     "blocked":blocked,"transient_toolchain_probes":transient},sort_keys=True))
+print("RV32_BUSYBOX_MIXED_PLAN=DISCOVERY real_C_owners=%d MiniC_ready=%d "
+      "GNU_fallback_real_C=%d transient_GNU_probes=%d"%
+      (total,len(mapping),len(blocked),len(transient)),flush=True)
 PY
-# Force native Kbuild to regenerate every C object, then reuse the
+# Force native Kbuild/ to regenerate every C object, then reuse the
 # established post-GNU-compile SHA-exact MiniC substitution path.
 # Never hand-build a bespoke object graph or alter vendor C/Kconfig.
 find "$shadow" -type f \( -name '*.o' -o -name '*.a' \) -delete
@@ -361,22 +383,31 @@ timeout 240s env \
   >"$work/mixed-build.log" 2>&1
 mixed_rc=$?
 set -e
-python3 - "$report/replacement.json" <<'PY'
+python3 - "$report/replacement.json" "$report" <<'PY'
 import hashlib,json,pathlib,sys
 mapping=json.loads(pathlib.Path(sys.argv[1]).read_text())
+events=pathlib.Path(sys.argv[2])/"combined-events"
 verified=0
+receipts=0
 for dest,mini in mapping.items():
     a,b=pathlib.Path(dest),pathlib.Path(mini)
     actual=hashlib.sha256(a.read_bytes()).hexdigest() if a.is_file() else "MISSING"
     expected=hashlib.sha256(b.read_bytes()).hexdigest() if b.is_file() else "MISSING"
+    event=events/(hashlib.sha256(dest.encode()).hexdigest()[:20]+".replace.txt")
+    text=event.read_text() if event.is_file() else ""
+    if text.startswith("KBUILD_REPLACE_OWNER=") and "mini_sha256="+expected+"\n" in text:
+        receipts+=1
+    else:
+        print("RV32_BUSYBOX_MIXED_RECEIPT_MISSING owner=%s expected=%s"%
+              (dest,expected),flush=True)
     if actual==expected and actual!="MISSING":
         verified+=1
     else:
-        print("RV32_BUSYBOX_MIXED_SHA_MISMATCH owner=%s expected=%s actual=%s"%(
-              dest,expected,actual),flush=True)
-print("RV32_BUSYBOX_MIXED_SHA=DISCOVERY planned=%d verified=%d"%(
-      len(mapping),verified),flush=True)
-if verified!=len(mapping):
+        print("RV32_BUSYBOX_MIXED_SHA_MISMATCH owner=%s expected=%s actual=%s"%
+              (dest,expected,actual),flush=True)
+print("RV32_BUSYBOX_MIXED_SHA=DISCOVERY planned=%d verified=%d receipts=%d"%
+      (len(mapping),verified,receipts),flush=True)
+if verified!=len(mapping) or receipts!=len(mapping):
     sys.exit(1)
 PY
 if [ "$mixed_rc" -ne 0 ] || [ ! -s "$shadow/busybox" ]; then
@@ -403,5 +434,24 @@ cmp "$work/head.expected" "$work/mixed.head.out"
 mixed_wc_count=$(timeout 20s "$QEMU_RV32" "$shadow/busybox" wc -l \
   <"$work/stdin.expected")
 test "$(printf '%s' "$mixed_wc_count" | tr -d '[:space:]')" = 3
-echo "RV32_BUSYBOX_MIXED=DISCOVERY real_MiniC_owners=SHA_verified QEMU_applets=6 GNU_C_fallback=YES full_MiniC=NO"
-echo "RV32_BUSYBOX_MINIC_ACCEPT=PENDING full_Kbuild_MiniC_C_owners=NO GNU_C_fallback_disallowed=1"
+python3 - "$report/replacement-readiness.json" <<'PY'
+import json,pathlib,sys
+readiness=json.loads(pathlib.Path(sys.argv[1]).read_text())
+real=readiness["original_real_C_owners"]
+ready=readiness["minic_ready"]
+blocked=readiness["blocked"]
+if ready!=real or blocked:
+    print("RV32_BUSYBOX_MIXED=DISCOVERY real_MiniC_owners=%d/%d "
+          "QEMU_applets=6 GNU_C_fallback_real_C=%d full_MiniC=NO"%
+          (ready,real,len(blocked)),flush=True)
+    print("RV32_BUSYBOX_MINIC_ACCEPT=PENDING original_real_C_owners=%d "
+          "MiniC_owners=%d GNU_C_fallback_disallowed=1"%(real,ready),flush=True)
+else:
+    print("RV32_BUSYBOX_MIXED=PASS genuine_Kbuild=1 real_MiniC_C_owners=%d/%d "
+          "exact_SHA=1 proxy_receipts=1 GNU_link=1 QEMU_applets=6 "
+          "GNU_C_fallback_real_C=0 transient_GNU_toolchain_probe=%d"%
+          (ready,real,len(readiness["transient_toolchain_probes"])),flush=True)
+    print("RV32_BUSYBOX_MINIC_ACCEPT=PASS original_real_C_owners=%d "
+          "all_C_owners_MiniC_GNU_AS=1 real_musl=1 ELF32=1 QEMU=6"%
+          real,flush=True)
+PY

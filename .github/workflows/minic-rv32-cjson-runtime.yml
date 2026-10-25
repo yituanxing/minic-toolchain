@@ -18,6 +18,7 @@ on:
       - "tests/compiler/c0/probe-rv32-zstd-picolibc-qemu.sh"
       - "tests/compiler/c0/probe-rv32-musl-busybox-kbuild.sh"
       - "tests/compiler/c0/probe-rv32-dynamic-frame-qemu.sh"
+      - "tests/compiler/c0/probe-core-volatile-update-qemu.sh"
       - "tests/external/lua/**"
       - "tests/compiler/c0/probe-rv32-variadic-gcc-qemu.sh"
       - "tests/compiler/c0/rv32-linux-picolibc-posix.c"
@@ -66,6 +67,13 @@ jobs:
           MINIC_CC="$GITHUB_WORKSPACE/build/rv32cjson/bin/minic-cc" \
           MINIAS="$GITHUB_WORKSPACE/build/rv32cjson/bin/minic-as" \
             bash tests/compiler/c0/probe-rv32-dynamic-frame-qemu.sh
+      - name: Core volatile pre/post scalar update x86/RV32 differential
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          MINIC_CC="$GITHUB_WORKSPACE/build/rv32cjson/bin/minic-cc" \
+          MINIAS="$GITHUB_WORKSPACE/build/rv32cjson/bin/minic-as" \
+            bash tests/compiler/c0/probe-core-volatile-update-qemu.sh
       - name: Upstream cJSON full GNU/MiniC QEMU differential
         shell: bash
         run: |

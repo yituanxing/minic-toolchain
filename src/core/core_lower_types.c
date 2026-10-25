@@ -157,6 +157,18 @@ bool core_scalar_expression_value_type(const MinicFunctionBodyView *body,
          expression->value.binary.operator_kind == MINIC_BINARY_SUBTRACT)) {
         return minic_type_unqualified(expression->type, value_type);
     }
+    /* A pre/post increment or decrement produces an unqualified scalar
+     * rvalue even when its destination is volatile. The load/store carry
+     * the volatile memory effects, not the resulting Core SSA value.
+     * This must agree with minic_core_lower_scalar_update for all four
+     * operators, irrespective of the target ABI. */
+    if (expression->kind == MINIC_EXPRESSION_UNARY &&
+        (expression->value.unary.operator_kind == MINIC_UNARY_POST_INCREMENT ||
+         expression->value.unary.operator_kind == MINIC_UNARY_POST_DECREMENT ||
+         expression->value.unary.operator_kind == MINIC_UNARY_PRE_INCREMENT ||
+         expression->value.unary.operator_kind == MINIC_UNARY_PRE_DECREMENT)) {
+        return minic_type_unqualified(expression->type, value_type);
+    }
     if (expression->value_category == MINIC_VALUE_LVALUE) {
         return minic_type_unqualified(expression->type, value_type);
     }
