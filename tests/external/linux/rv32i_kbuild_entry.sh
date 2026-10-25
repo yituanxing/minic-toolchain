@@ -331,6 +331,7 @@ PY_RV32_LINK_INPUTS
     : >"$merged/header-replay-hashes.sha256"
     MINIC_KBUILD_RV32I_ORIGIN_AUDIT=1 \
       python3 "$regen_guard" --mode replay --out "$out" \
+        --evidence "$merged/generated-before.json" \
         --golden-out "$merged/gnu-cmd" \
         --selected "$merged/header-affected-objects.txt" \
         --wrapper "$GITHUB_WORKSPACE/tests/external/linux/stage2_kbuild_cc.sh" \
