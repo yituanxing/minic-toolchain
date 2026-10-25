@@ -575,6 +575,11 @@ bool minic_core_function_append_effect_instruction(MinicCoreFunction *function,
 bool minic_core_function_set_terminator(MinicCoreFunction *function,
                                         MinicCoreBlockId block_id,
                                         const MinicCoreTerminator *terminator);
+/* Conservative CFG reachability shared by every target. Ordinary source
+ * labels are roots because indirect branches / function-level gotos may
+ * reenter them even when lexical control flow cannot. */
+bool minic_core_function_mark_reachable_blocks(const MinicCoreFunction *function,
+                                               bool *reachable, size_t capacity);
 bool minic_core_function_verify(const MinicCoreFunction *function);
 bool minic_core_function_dump(FILE *output, const MinicCoreFunction *function);
 

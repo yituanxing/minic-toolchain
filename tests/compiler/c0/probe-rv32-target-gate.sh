@@ -288,4 +288,26 @@ grep -Fq '.pushsection __jump_table' "$work/kernel-asm-goto.s"
 grep -Eq '\.long 1b - \., \.Lrv32_jump_owner_rv32_bb[0-9]+ - \.' "$work/kernel-asm-goto.s"
 grep -Fq '# MINIC_SOURCE_INLINE_ASM_BEGIN' "$work/kernel-asm-goto.s"
 echo 'RV32I_ASM_GOTO=PASS Core_target_block=1 source_jump_table=1 original_template=1'
+cat > "$work/kernel-sizeof-switch.i" <<'SRC'
+int rv32_source_asm_size_switch(void) {
+    switch (sizeof(unsigned long)) {
+    case 4:
+        __asm__ __volatile__("fence rw, rw");
+        return 4;
+    case 8:
+        __asm__ __volatile__("lr.d t0, (t1)");
+        return 8;
+    default:
+        return 0;
+    }
+}
+SRC
+"$MINIC_CC" --target=riscv32-linux -march=rv32i -mabi=ilp32 \
+  -S "$work/kernel-sizeof-switch.i" -o "$work/kernel-sizeof-switch.s"
+grep -Fq 'fence rw, rw' "$work/kernel-sizeof-switch.s"
+if grep -Fq 'lr.d' "$work/kernel-sizeof-switch.s"; then
+    echo 'RV32I_CORE_CFG=FAIL unreachable_RV64_asm_emitted' >&2
+    exit 1
+fi
+echo 'RV32I_CORE_CFG=PASS shared_reachability=1 dead_RV64_source_asm_pruned=1'
 echo 'RV32I_TARGET_GATE=PASS ILP32_registered=true incompatible_ISA_rejected=true basic_C_core_emitted=true'

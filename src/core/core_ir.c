@@ -4,6 +4,60 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* A target-independent conservative CFG filter. Keep source labels as
+ * additional roots: they may be reached through a computed goto, an asm-goto
+ * or a forward function-level goto even when their lexical switch/loop arm
+ * has no ordinary CFG predecessor. This is the proven RV64 reachability rule,
+ * now shared with RV32 before source-owned asm reaches an RV32 assembler. */
+bool minic_core_function_mark_reachable_blocks(const MinicCoreFunction *function,
+                                               bool *reachable, size_t capacity) {
+    MinicCoreBlockId *queue;
+    size_t begin = 0U, end = 0U, index;
+
+    if (function == NULL || reachable == NULL || function->block_count == 0U ||
+        capacity < function->block_count ||
+        function->entry_block >= function->block_count ||
+        function->block_count > SIZE_MAX / sizeof(*queue))
+        return false;
+    memset(reachable, 0, function->block_count * sizeof(*reachable));
+    queue = (MinicCoreBlockId *)malloc(function->block_count * sizeof(*queue));
+    if (queue == NULL) return false;
+#define MINIC_CORE_REACH_ENQUEUE(id_)                                           \
+    do {                                                                       \
+        MinicCoreBlockId next_ = (id_);                                        \
+        if (next_ >= function->block_count) { free(queue); return false; }     \
+        if (!reachable[next_]) { reachable[next_] = true; queue[end++] = next_; } \
+    } while (0)
+
+    MINIC_CORE_REACH_ENQUEUE(function->entry_block);
+    for (index = 0U; index < function->block_count; ++index)
+        if (function->blocks[index].source_label_id != SIZE_MAX)
+            MINIC_CORE_REACH_ENQUEUE((MinicCoreBlockId)index);
+    while (begin < end) {
+        const MinicCoreBlock *block = &function->blocks[queue[begin++]];
+        if (!block->has_terminator) { free(queue); return false; }
+        switch (block->terminator.kind) {
+        case MINIC_CORE_TERMINATOR_RETURN:
+        case MINIC_CORE_TERMINATOR_UNREACHABLE:
+        case MINIC_CORE_TERMINATOR_INDIRECT_BRANCH:
+            break;
+        case MINIC_CORE_TERMINATOR_BRANCH:
+            MINIC_CORE_REACH_ENQUEUE(block->terminator.branch_target);
+            break;
+        case MINIC_CORE_TERMINATOR_CONDITIONAL_BRANCH:
+            MINIC_CORE_REACH_ENQUEUE(block->terminator.conditional.when_true);
+            MINIC_CORE_REACH_ENQUEUE(block->terminator.conditional.when_false);
+            break;
+        default:
+            free(queue);
+            return false;
+        }
+    }
+#undef MINIC_CORE_REACH_ENQUEUE
+    free(queue);
+    return true;
+}
+
 /* M91_BUILTIN_UNREACHABLE_TERMINATOR */
 
 static bool grow_array(void **data, size_t *capacity, size_t count, size_t element_size) {

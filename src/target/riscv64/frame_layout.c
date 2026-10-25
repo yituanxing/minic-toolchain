@@ -489,70 +489,12 @@ minic_riscv64_core_frame_value_offset(const MinicRiscv64CoreFrame *frame, MinicC
 
 bool minic_riscv64_core_frame_mark_reachable_blocks(const MinicCoreFunction *function,
                                              MinicRiscv64CoreFrame *frame) {
-    MinicCoreBlockId *queue;
-    size_t queue_begin;
-    size_t queue_end;
-    size_t block_index;
-
-    if (function == NULL || frame == NULL || function->block_count == 0U ||
-        function->entry_block >= function->block_count ||
-        function->block_count > SIZE_MAX / sizeof(*queue)) {
+    if (function == NULL || frame == NULL || function->block_count == 0U)
         return false;
-    }
     frame->reachable_blocks =
         (bool *)calloc(function->block_count, sizeof(*frame->reachable_blocks));
-    queue = (MinicCoreBlockId *)malloc(function->block_count * sizeof(*queue));
-    if (frame->reachable_blocks == NULL || queue == NULL) {
-        free(queue);
-        return false;
-    }
-    queue_begin = 0U;
-    queue_end = 0U;
-#define MINIC_CORE_REACHABLE_ENQUEUE(block_id_)                                      \
-    do {                                                                             \
-        MinicCoreBlockId reach_id_ = (block_id_);                                    \
-        if (reach_id_ >= function->block_count) {                                    \
-            free(queue);                                                              \
-            return false;                                                             \
-        }                                                                             \
-        if (!frame->reachable_blocks[reach_id_]) {                                   \
-            frame->reachable_blocks[reach_id_] = true;                               \
-            queue[queue_end++] = reach_id_;                                           \
-        }                                                                             \
-    } while (0)
-
-    MINIC_CORE_REACHABLE_ENQUEUE(function->entry_block);
-    for (block_index = 0U; block_index < function->block_count; ++block_index) {
-        if (function->blocks[block_index].source_label_id != SIZE_MAX) {
-            MINIC_CORE_REACHABLE_ENQUEUE((MinicCoreBlockId)block_index);
-        }
-    }
-    while (queue_begin < queue_end) {
-        const MinicCoreBlock *block = &function->blocks[queue[queue_begin++]];
-
-        if (!block->has_terminator) {
-            free(queue);
-            return false;
-        }
-        switch (block->terminator.kind) {
-        case MINIC_CORE_TERMINATOR_RETURN:
-        case MINIC_CORE_TERMINATOR_UNREACHABLE:
-        case MINIC_CORE_TERMINATOR_INDIRECT_BRANCH:
-            break;
-        case MINIC_CORE_TERMINATOR_BRANCH:
-            MINIC_CORE_REACHABLE_ENQUEUE(block->terminator.branch_target);
-            break;
-        case MINIC_CORE_TERMINATOR_CONDITIONAL_BRANCH:
-            MINIC_CORE_REACHABLE_ENQUEUE(block->terminator.conditional.when_true);
-            MINIC_CORE_REACHABLE_ENQUEUE(block->terminator.conditional.when_false);
-            break;
-        default:
-            free(queue);
-            return false;
-        }
-    }
-#undef MINIC_CORE_REACHABLE_ENQUEUE
-    free(queue);
-    return true;
+    return frame->reachable_blocks != NULL &&
+           minic_core_function_mark_reachable_blocks(
+               function, frame->reachable_blocks, function->block_count);
 }
 

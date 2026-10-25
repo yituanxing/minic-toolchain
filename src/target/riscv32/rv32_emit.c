@@ -547,6 +547,7 @@ static bool rv32_func(FILE *out, const MinicC0Program *program,
                        bool function_sections, const MinicTargetInfo *target,
                        MinicDiagnostic *diag) {
     Rv32Frame fr = {0};
+    bool *reachable = NULL;
     MinicRiscv64FunctionSymbol sym;
     bool ok = false;
     size_t i, j;
@@ -576,6 +577,12 @@ static bool rv32_func(FILE *out, const MinicC0Program *program,
         rv32_frame_destroy(&fr);
         return false;
     }
+    reachable = (bool *)calloc(f->block_count, sizeof(*reachable));
+    if (reachable == NULL ||
+        !minic_core_function_mark_reachable_blocks(f, reachable, f->block_count)) {
+        rv32_diag(diag, "<rv32-core>", "rv32i: cannot classify Core CFG reachability");
+        goto done;
+    }
     if (!minic_riscv64_function_symbol_from_function(def, &sym)) goto done;
     sym.function_sections = function_sections;
     if (!minic_riscv64_emit_function_symbol_begin(out, &sym) ||
@@ -598,6 +605,7 @@ static bool rv32_func(FILE *out, const MinicC0Program *program,
     }
     for (i = 0; i < f->block_count; ++i) {
         const MinicCoreBlock *block = &f->blocks[i];
+        if (!reachable[i]) continue;
         if (!block->has_terminator ||
             fprintf(out, ".L%s_rv32_bb%zu:\n", sym.symbol_name, i) < 0)
             goto done;
@@ -637,6 +645,7 @@ static bool rv32_func(FILE *out, const MinicC0Program *program,
     }
     ok = ok && minic_riscv64_emit_function_symbol_end(out, &sym);
 done:
+    free(reachable);
     rv32_frame_destroy(&fr);
     return ok;
 }

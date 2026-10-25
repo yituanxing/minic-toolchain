@@ -146,23 +146,46 @@ import sys
 ev, out = map(Path, sys.argv[1:])
 owners = (ev / "owners.txt").read_text().splitlines()
 success = (ev / "minic-success.txt").read_text().splitlines()
-assert len(owners) == 5 and success == owners, (owners, success)
+assert len(owners) == 5, owners
+# Authentic Kbuild may rebuild C prerequisites (modpost's empty.o, VDSO
+# hwprobe.o) when CC changes for the first selected owner. They were also
+# compiled through MiniC, not GCC fallbacks. Audit their real receipts while
+# requiring the five requested owners exactly once and in selection order.
+selected = [owner for owner in success if owner in owners]
+assert selected == owners and len(set(success)) == len(success), (owners, success)
 hashes = (ev / "minic-objects.sha256").read_text().splitlines()
-assert len(hashes) == 5, hashes
-for owner, entry in zip(owners, hashes):
+assert len(hashes) == len(success), (success, hashes)
+for owner, entry in zip(success, hashes):
     expected, path = entry.split("  ", 1)
     assert path == owner, (owner, entry)
     assert hashlib.sha256((out / owner).read_bytes()).hexdigest() == expected
 route = (ev / "kbuild-route.log").read_text()
-assert route.count("minic rv32i_origin_audit=1 isa=rv32i abi=ilp32 ") == 5
-assert route.count("assemble input=") == 5
-print("RV32I_LINUX_MINIC=PASS original_Kbuild_owners=5/5 GNU_PP=1 MiniC_RV32I=1 GNU_AS=1 SHA=1 ELF32=1 no_C_fallback=1")
+assert route.count("minic rv32i_origin_audit=1 isa=rv32i abi=ilp32 ") == len(success)
+assert route.count("assemble input=") == len(success)
+print(f"RV32I_LINUX_MINIC=PASS original_Kbuild_owners=5/5 additional_Kbuild_C={len(success)-5} GNU_PP=1 MiniC_RV32I=1 GNU_AS=1 SHA=1 ELF32=1 no_C_fallback=1")
 PY
 # Reuse ORIGINAL GNU Kbuild link rather than creating an alternate linker.
-if ! make "${gnu_args[@]}" -j4 Image >"$ev/minic-relink.log" 2>&1; then
+# Linux 6.6's documented KBUILD_NOCMDDEP=1 suppresses only command-line
+# difference rebuilds. Without it, switching CC back from the MiniC proxy to
+# GNU silently recompiles the five MiniC objects with GCC before relinking.
+# Source and dependency timestamps still govern normal Kbuild prerequisites;
+# the object SHA audit below proves that the final Image kept MiniC objects.
+if ! make "${gnu_args[@]}" KBUILD_NOCMDDEP=1 -j4 Image >"$ev/minic-relink.log" 2>&1; then
   echo 'RV32I_LINUX_RELINK=BLOCKED genuine_Kbuild_5_owner_Image' >&2
   tail -n 90 "$ev/minic-relink.log" >&2
   exit 6
 fi
 test -s "$gnu_image"
-printf 'RV32I_LINUX_RELINK=PASS original_Kbuild=1 candidate_owners=5 Image_SHA=%s QEMU_P1=NOT_RUN full_MiniC=NOT_RUN\n' "$(sha256sum "$gnu_image" | cut -d' ' -f1)"
+python3 - "$ev" "$out" <<'PY'
+from pathlib import Path
+import hashlib
+import sys
+ev, out = map(Path, sys.argv[1:])
+receipts = (ev / "minic-objects.sha256").read_text().splitlines()
+for entry in receipts:
+    expected, owner = entry.split("  ", 1)
+    actual = hashlib.sha256((out / owner).read_bytes()).hexdigest()
+    assert actual == expected, (owner, expected, actual)
+print(f"RV32I_LINUX_RELINK_OBJECT_SHA=PASS MiniC_objects_preserved={len(receipts)} selected=5")
+PY
+printf 'RV32I_LINUX_RELINK=PASS original_Kbuild=1 candidate_owners=5 MiniC_object_SHA_preserved=1 Image_SHA=%s QEMU_P1=NOT_RUN full_MiniC=NOT_RUN\n' "$(sha256sum "$gnu_image" | cut -d' ' -f1)"
