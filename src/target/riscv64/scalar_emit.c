@@ -1,5 +1,6 @@
 #include "target/riscv64/scalar_emit.h"
 #include "target/riscv/instruction_select.h"
+#include "target/riscv/word_operations.h"
 #include "target/riscv64/fp_emit.h"
 #include "target/riscv64/overflow_emit.h"
 #include "target/riscv64/codegen_internal.h"
@@ -68,34 +69,15 @@ static bool emit_int128_runtime_call(
  * in the frame and in the LP64 ABI. Never truncate an i128 to t0. */
 static bool emit_int128_pair_binary(
     FILE *file, const MinicRiscv64CoreFrame *frame,
-    const MinicCoreFunction *function, const MinicCoreInstruction *instruction,
-    const char *opcode) {
+    const MinicCoreFunction *function, const MinicCoreInstruction *instruction) {
     MinicCoreValueId left = instruction->value.binary.left;
     MinicCoreValueId right = instruction->value.binary.right;
     if (left >= function->value_count || right >= function->value_count ||
         !minic_type_is_int128_integer(function->values[left].type) ||
         !minic_type_is_int128_integer(function->values[right].type) ||
         !minic_riscv64_frame_load_int128(file, frame, left, "t0", "t1") ||
-        !minic_riscv64_frame_load_int128(file, frame, right, "t2", "t3"))
-        return false;
-    if (instruction->kind == MINIC_CORE_INSTRUCTION_INTEGER_ADD) {
-        if (fprintf(file,
-                    "  add t4, t0, t2\n"
-                    "  sltu t5, t4, t0\n"
-                    "  add t1, t1, t3\n"
-                    "  add t1, t1, t5\n"
-                    "  mv t0, t4\n") < 0)
-            return false;
-    } else if (instruction->kind == MINIC_CORE_INSTRUCTION_INTEGER_SUBTRACT) {
-        if (fprintf(file,
-                    "  sltu t5, t0, t2\n"
-                    "  sub t0, t0, t2\n"
-                    "  sub t1, t1, t3\n"
-                    "  sub t1, t1, t5\n") < 0)
-            return false;
-    } else if (opcode == NULL ||
-               fprintf(file, "  %s t0, t0, t2\n  %s t1, t1, t3\n",
-                       opcode, opcode) < 0)
+        !minic_riscv64_frame_load_int128(file, frame, right, "t2", "t3") ||
+        !minic_riscv_emit_word_pair_binary(file, instruction->kind))
         return false;
     return minic_riscv64_frame_store_int128(
         file, frame, instruction->result, "t0", "t1");
@@ -107,19 +89,8 @@ static bool emit_int128_pair_unary(
     const MinicCoreValueId operand = instruction->value.operand;
     if (operand >= function->value_count ||
         !minic_type_is_int128_integer(function->values[operand].type) ||
-        !minic_riscv64_frame_load_int128(file, frame, operand, "t0", "t1"))
-        return false;
-    if (instruction->kind == MINIC_CORE_INSTRUCTION_INTEGER_NEGATE) {
-        if (fprintf(file,
-                    "  snez t4, t0\n"
-                    "  neg t0, t0\n"
-                    "  neg t1, t1\n"
-                    "  sub t1, t1, t4\n") < 0)
-            return false;
-    } else if (instruction->kind == MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_NOT) {
-        if (fprintf(file, "  not t0, t0\n  not t1, t1\n") < 0)
-            return false;
-    } else
+        !minic_riscv64_frame_load_int128(file, frame, operand, "t0", "t1") ||
+        !minic_riscv_emit_word_pair_unary(file, instruction->kind))
         return false;
     return minic_riscv64_frame_store_int128(
         file, frame, instruction->result, "t0", "t1");
@@ -187,11 +158,7 @@ bool minic_riscv64_emit_scalar_instruction(
         case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND:
         case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_XOR:
         case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_OR:
-            return emit_int128_pair_binary(
-                file, frame, function, instruction,
-                instruction->kind == MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND ? "and" :
-                instruction->kind == MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_XOR ? "xor" :
-                instruction->kind == MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_OR ? "or" : NULL);
+            return emit_int128_pair_binary(file, frame, function, instruction);
         case MINIC_CORE_INSTRUCTION_INTEGER_NEGATE:
         case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_NOT:
             return emit_int128_pair_unary(file, frame, function, instruction);
@@ -498,61 +465,17 @@ bool minic_riscv64_emit_scalar_instruction(
             return false;
         }
         return minic_riscv64_frame_store_value(file, frame, instruction->result, "t0");
-    case MINIC_CORE_INSTRUCTION_INTEGER_CLZ: {
-        unsigned int width;
-
-        if (!minic_multi_direct_integer_bitscan_shape(
-                program, minic_target_info_for_architecture(MINIC_TARGET_ARCH_RISCV64),
-                function, instruction, &width) ||
-            !minic_riscv64_frame_load_value(file, frame, instruction->value.operand, "t0") ||
-            fprintf(file,
-                    "  li t1, 0\n"
-                    "  li t2, 1\n"
-                    "  slli t2, t2, %u\n"
-                    ".L%s_core_clz_loop_%" PRIu32 ":\n"
-                    "  and t3, t0, t2\n"
-                    "  bnez t3, .L%s_core_clz_done_%" PRIu32 "\n"
-                    "  addi t1, t1, 1\n"
-                    "  srli t2, t2, 1\n"
-                    "  bnez t2, .L%s_core_clz_loop_%" PRIu32 "\n"
-                    ".L%s_core_clz_done_%" PRIu32 ":\n",
-                    width - 1U,
-                    symbol_name, instruction->result,
-                    symbol_name, instruction->result,
-                    symbol_name, instruction->result,
-                    symbol_name, instruction->result) < 0) {
-            return false;
-        }
-        return minic_riscv64_frame_store_value(file, frame, instruction->result, "t1");
-    }
+    case MINIC_CORE_INSTRUCTION_INTEGER_CLZ:
     case MINIC_CORE_INSTRUCTION_INTEGER_CTZ: {
         unsigned int width;
-
         if (!minic_multi_direct_integer_bitscan_shape(
                 program, minic_target_info_for_architecture(MINIC_TARGET_ARCH_RISCV64),
                 function, instruction, &width) ||
             !minic_riscv64_frame_load_value(file, frame, instruction->value.operand, "t0") ||
-            fprintf(file,
-                    "  beqz t0, .L%s_core_ctz_zero_%" PRIu32 "\n"
-                    "  li t1, 0\n"
-                    ".L%s_core_ctz_loop_%" PRIu32 ":\n"
-                    "  andi t2, t0, 1\n"
-                    "  bnez t2, .L%s_core_ctz_done_%" PRIu32 "\n"
-                    "  addi t1, t1, 1\n"
-                    "  srli t0, t0, 1\n"
-                    "  j .L%s_core_ctz_loop_%" PRIu32 "\n"
-                    ".L%s_core_ctz_zero_%" PRIu32 ":\n"
-                    "  li t1, %u\n"
-                    ".L%s_core_ctz_done_%" PRIu32 ":\n",
-                    symbol_name, instruction->result,
-                    symbol_name, instruction->result,
-                    symbol_name, instruction->result,
-                    symbol_name, instruction->result,
-                    symbol_name, instruction->result,
-                    width,
-                    symbol_name, instruction->result) < 0) {
+            !minic_riscv_emit_word_bitscan(
+                file, instruction->kind, symbol_name, "core",
+                instruction->result, width, 64U))
             return false;
-        }
         return minic_riscv64_frame_store_value(file, frame, instruction->result, "t1");
     }
     case MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO:

@@ -99,6 +99,20 @@ if [[ -e src/core/core_lower_asm_x86.c ]]; then
   fail 'legacy x86-specific Core classifier must not return'
 fi
 
+# The RISC-V family owns one XLEN-independent implementation of pair
+# add/sub/logic/unary and machine-word bit scans. Neither ISA may silently
+# grow a duplicate carry/borrow or CLZ/CTZ emitter.
+exists src/target/riscv/word_operations.c
+exists src/target/riscv/word_operations.h
+has src/target/riscv32/rv32_wide_emit.c 'minic_riscv_emit_word_pair_binary('
+has src/target/riscv32/rv32_wide_emit.c 'minic_riscv_emit_word_pair_unary('
+has src/target/riscv32/rv32_integer_emit.c 'minic_riscv_emit_word_bitscan('
+has src/target/riscv64/scalar_emit.c 'minic_riscv_emit_word_pair_binary('
+has src/target/riscv64/scalar_emit.c 'minic_riscv_emit_word_pair_unary('
+has src/target/riscv64/scalar_emit.c 'minic_riscv_emit_word_bitscan('
+lacks src/target/riscv32/rv32_wide_emit.c '  sltu t5, t4, t0'
+lacks src/target/riscv64/scalar_emit.c '  sltu t5, t4, t0'
+
 # RV32 physical machine code lives under its own ILP32 target, not RV64.
 for file in src/target/riscv32/rv32_emit.c \
             src/target/riscv32/rv32_frame.c \

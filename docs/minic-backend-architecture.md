@@ -163,3 +163,19 @@ The boundary gate rejects new `MINIC_TARGET_ARCH_` allowlists in the frontend.
 The native strict gate additionally runs the five-target descriptor contract.
 This is the first semantic-ownership pass; the RV32/RV64 machine legalization
 and product-driver predefined-macro unification remain separate follow-ups.
+
+## RISC-V family compiled-once word-operation legalization
+
+The RV32 two-word long-long and RV64 two-word int128 emitters now share
+`riscv/word_operations.c` for Base-I add/subtract carry/borrow, bitwise
+binary/unary instructions, and one-word CLZ/CTZ counting loops. Register
+preconditions are explicit (t0/t1 values, t2/t3 second argument, t4/t5
+scratch), and the callers still own frame loads/stores, ABI, signedness,
+integer normalization and wide half selection. The shared bit-scan helper
+accepts XLEN and checked bit width; it does not reinterpret a 64-bit RV32
+value as one 64-bit register. This removes two machine-algorithm duplicates
+without reworking the working Linux/Linux-ABI code paths.
+
+The native focused probe emits RV32I 64-bit and RV64I 128-bit source C
+and checks the actual assembler text. It complements, but does not replace,
+the existing real GNU/QEMU and Linux gates.

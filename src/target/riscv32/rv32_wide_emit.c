@@ -1,5 +1,6 @@
 #include "target/riscv32/rv32_internal.h"
 #include "target/riscv/instruction_select.h"
+#include "target/riscv/word_operations.h"
 #include <inttypes.h>
 #include <stdint.h>
 
@@ -129,28 +130,7 @@ bool rv32_emit_wide_integer(FILE *out, const MinicCoreFunction *f,
     case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_XOR:
         if (!rv32_is_wide_integer(f, ins->type) ||
             !wide_pair_operands(out, f, fr, ins)) return false;
-        if (kind == MINIC_CORE_INSTRUCTION_INTEGER_ADD) {
-            if (fprintf(out,
-                "  add t4, t0, t2\n"
-                "  sltu t5, t4, t0\n"
-                "  add t1, t1, t3\n"
-                "  add t1, t1, t5\n"
-                "  mv t0, t4\n") < 0) return false;
-        } else if (kind == MINIC_CORE_INSTRUCTION_INTEGER_SUBTRACT) {
-            if (fprintf(out,
-                "  sltu t5, t0, t2\n"
-                "  sub t0, t0, t2\n"
-                "  sub t1, t1, t3\n"
-                "  sub t1, t1, t5\n") < 0) return false;
-        } else {
-            const char *op = kind == MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND ?
-                             "and" : kind == MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_OR ?
-                             "or" : "xor";
-            if (fprintf(out,
-                "  %s t0, t0, t2\n"
-                "  %s t1, t1, t3\n", op, op) < 0)
-                return false;
-        }
+        if (!minic_riscv_emit_word_pair_binary(out, kind)) return false;
         return rv32_pair_slot(out, fr, ins->result, "t0", "t1", false);
     case MINIC_CORE_INSTRUCTION_INTEGER_NEGATE:
     case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_NOT: {
@@ -160,17 +140,7 @@ bool rv32_emit_wide_integer(FILE *out, const MinicCoreFunction *f,
             !rv32_is_wide_integer(f, f->values[id].type) ||
             !rv32_pair_slot(out, fr, id, "t0", "t1", true))
             return false;
-        if (kind == MINIC_CORE_INSTRUCTION_INTEGER_NEGATE) {
-            if (fprintf(out,
-                "  snez t2, t0\n"
-                "  neg t0, t0\n"
-                "  neg t1, t1\n"
-                "  sub t1, t1, t2\n") < 0)
-                return false;
-        } else if (fprintf(out,
-                           "  not t0, t0\n"
-                           "  not t1, t1\n") < 0)
-            return false;
+        if (!minic_riscv_emit_word_pair_unary(out, kind)) return false;
         return rv32_pair_slot(out, fr, ins->result, "t0", "t1", false);
     }
     case MINIC_CORE_INSTRUCTION_INTEGER_MULTIPLY:

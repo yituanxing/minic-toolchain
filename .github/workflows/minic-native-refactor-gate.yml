@@ -79,6 +79,13 @@ jobs:
           bash -n tests/compiler/c0/probe-rv64i-strict-isa.sh
           MINIC_CC="$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc" \
             bash tests/compiler/c0/probe-rv64i-strict-isa.sh
+      - name: RISC-V 32/64 shared word operation lowering
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          MINIC_CC="$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc" \
+            sh tests/compiler/c0/probe-riscv-shared-word-operations.sh
+
       - name: Native x86-64 ABI and runtime smoke
         shell: bash
         run: |

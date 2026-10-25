@@ -183,6 +183,7 @@ MINIC_SOURCES := \
 	src/target/riscv64/function_abi_plan.c \
 	src/target/riscv64/memory_emit.c \
 	src/target/riscv/record_copy_bytes.c \
+	src/target/riscv/word_operations.c \
 	src/target/riscv64/inline_asm_emit.c \
 	src/target/riscv64/call_emit.c \
 	src/target/riscv64/scalar_emit.c \
