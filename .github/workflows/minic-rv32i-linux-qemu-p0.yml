@@ -62,7 +62,8 @@ jobs:
           timeout 480s sudo apt-get -o Acquire::Retries=2 \
             -o Acquire::http::Timeout=30 -o DPkg::Lock::Timeout=60 \
             install -y --no-install-recommends \
-              qemu-system-misc opensbi binutils-riscv64-linux-gnu cpio
+              qemu-system-misc opensbi binutils-riscv64-linux-gnu \
+              cpio device-tree-compiler
           command -v qemu-system-riscv32
           command -v riscv64-linux-gnu-as
           echo 'RV32I_QEMU_DEPS=PASS qemu=system-riscv32 firmware=OpenSBI as=GNU'
@@ -85,5 +86,7 @@ jobs:
             build/rv32i-qemu-p0/boot/init-elf.txt
             build/rv32i-qemu-p0/boot/qemu-serial.log
             build/rv32i-qemu-p0/boot/initramfs.cpio.gz
+            build/rv32i-qemu-p0/boot/virt-dumpdtb.log
+            build/rv32i-qemu-p0/boot/virt-rv32-large-image.dtb
           if-no-files-found: warn
           retention-days: 7

@@ -9,7 +9,8 @@ set -Eeuo pipefail
 : "${RV32I_QEMU_WORK:?set an isolated boot evidence directory}"
 
 for cmd in qemu-system-riscv32 riscv64-linux-gnu-as riscv64-linux-gnu-ld \
-    riscv64-linux-gnu-readelf cpio sudo mknod gzip sha256sum timeout; do
+    riscv64-linux-gnu-readelf cpio sudo mknod gzip sha256sum timeout \
+    fdtput fdtget; do
   command -v "$cmd" >/dev/null || { echo "RV32I_QEMU_P0=BLOCKED missing=$cmd" >&2; exit 2; }
 done
 test -s "$RV32I_QEMU_IMAGE"
@@ -99,12 +100,41 @@ test -c "$work/guest/dev/null"
 ) | gzip -9n >"$work/initramfs.cpio.gz"
 test -s "$work/initramfs.cpio.gz"
 
+# Reuse the already certified RV64 large-Image QEMU 8.2 workaround:
+# -initrd defaults to Image load address + 128 MiB, which OVERLAPS this
+# genuine ~269 MiB RV32 Image. Keep the Image and initramfs bytes untouched;
+# encode a separate initrd region in QEMU's own /chosen DTB, and preload
+# precisely those bytes with QEMU's generic loader.
+dtb="$work/virt-rv32-large-image.dtb"
+qemu-system-riscv32 -M "virt,dumpdtb=$dtb" -cpu max -m 512M -smp 1 \
+  -nographic -no-reboot -bios "$bios" -kernel "$image" \
+  >"$work/virt-dumpdtb.log" 2>&1
+test -s "$dtb"
+fdtget -p "$dtb" /chosen >/dev/null 2>&1 || fdtput -c "$dtb" /chosen
+initrd_addr=0x98000000
+initrd_bytes=$(stat -c '%s' "$work/initramfs.cpio.gz")
+image_bytes=$(stat -c '%s' "$image")
+image_end=$((0x80400000 + image_bytes))
+initrd_end=$((initrd_addr + initrd_bytes))
+if (( image_end > initrd_addr || initrd_end >= 0xa0000000 )); then
+  echo "RV32I_QEMU_P0=FAIL memory_overlap image_end=$image_end initrd_addr=$initrd_addr initrd_end=$initrd_end" >&2
+  exit 3
+fi
+printf -v start_hex '%x' "$initrd_addr"
+printf -v end_hex '%x' "$initrd_end"
+fdtput -t x "$dtb" /chosen linux,initrd-start 0 "$start_hex"
+fdtput -t x "$dtb" /chosen linux,initrd-end 0 "$end_hex"
+test "$(fdtget -t x "$dtb" /chosen linux,initrd-start)" = "0 $start_hex"
+test "$(fdtget -t x "$dtb" /chosen linux,initrd-end)" = "0 $end_hex"
+echo "RV32I_QEMU_P0_DTB=PASS image_bytes=$image_bytes image_end=$image_end initrd_start=$start_hex initrd_end=$end_hex no_overlap=true"
+
 printf 'RV32I_QEMU_P0=START image_sha256=%s guest=rv32i/ilp32 pid1=ELF32 firmware=%s timeout=45s\n' \
   "$image_sha" "$bios"
 set +e
 timeout --signal=TERM 45s qemu-system-riscv32 \
   -M virt -cpu max -m 512M -smp 1 -nographic -no-reboot \
-  -bios "$bios" -kernel "$image" -initrd "$work/initramfs.cpio.gz" \
+  -bios "$bios" -kernel "$image" -dtb "$dtb" \
+  -device "loader,file=$work/initramfs.cpio.gz,addr=$initrd_addr,force-raw=on" \
   -append 'console=ttyS0 earlycon=sbi loglevel=8 panic=-1 rdinit=/init' \
   </dev/null >"$work/qemu-serial.log" 2>&1
 status=$?
