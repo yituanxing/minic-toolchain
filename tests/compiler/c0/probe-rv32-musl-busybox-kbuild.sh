@@ -202,6 +202,7 @@ chmod +x "$work/rv32-linux-musl-gcc"
 set +e
 timeout 240s make -C "$work/busybox" O="$work/busybox-out" -j4 \
     ARCH=riscv CC="$work/rv32-linux-musl-gcc" HOSTCC=cc \
+    STRIP=riscv64-linux-gnu-strip \
     busybox >"$work/busybox-build.log" 2>&1
 rc=$?
 set -e
@@ -216,4 +217,30 @@ if [ "$rc" -ne 0 ]; then
     exit 1
 fi
 test -s "$work/busybox-out/busybox"
-echo "RV32_BUSYBOX_GNU_KBUILD=PASS original=1.36.1 owners=$owners musl=1.2.5 ELF32=1"
+binary="$work/busybox-out/busybox"
+riscv64-linux-gnu-readelf -h "$binary" | grep -q 'Class:.*ELF32'
+riscv64-linux-gnu-readelf -h "$binary" | grep -q 'Machine:.*RISC-V'
+timeout 20s "$QEMU_RV32" "$binary" echo native-rv32-busybox \
+  >"$work/busybox-echo.out" 2>"$work/busybox-echo.err"
+printf 'native-rv32-busybox\n' >"$work/echo.expected"
+cmp "$work/echo.expected" "$work/busybox-echo.out"
+timeout 20s "$QEMU_RV32" "$binary" true
+set +e
+timeout 20s "$QEMU_RV32" "$binary" false
+false_rc=$?
+set -e
+test "$false_rc" -eq 1
+printf 'first\nsecond\nthird\n' >"$work/stdin.expected"
+timeout 20s "$QEMU_RV32" "$binary" cat \
+  <"$work/stdin.expected" >"$work/cat.out"
+cmp "$work/stdin.expected" "$work/cat.out"
+timeout 20s "$QEMU_RV32" "$binary" head -n 2 \
+  <"$work/stdin.expected" >"$work/head.out"
+printf 'first\nsecond\n' >"$work/head.expected"
+cmp "$work/head.expected" "$work/head.out"
+wc_count=$(timeout 20s "$QEMU_RV32" "$binary" wc -l \
+  <"$work/stdin.expected")
+test "$(printf '%s' "$wc_count" | tr -d '[:space:]')" = 3
+echo "RV32_BUSYBOX_GNU_KBUILD=PASS original=1.36.1 owners=$owners libc=musl1.2.5 ELF32=1"
+echo "RV32_BUSYBOX_GNU_QEMU=PASS original=1.36.1 applets=echo,true,false,cat,head,wc cases=6"
+echo "RV32_BUSYBOX_MINIC_ACCEPT=PENDING original_Kbuild_MiniC_C_owners=0 GNU_fallback_disallowed=1"
