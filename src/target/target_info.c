@@ -212,6 +212,10 @@ const MinicTargetInfo *minic_target_info_for_architecture(
             rv32_target.variadic_linear_slot_bytes = 4U;
             rv32_target.variadic_copy_kind =
                 MINIC_VARIADIC_COPY_SCALAR_ASSIGNMENT;
+            /* The ILP32 machine emitter always saves ra in its own frame.
+             * Only level zero is qualified; never expose caller unwinding. */
+            rv32_target.call_frame_return_address_level0 = true;
+            rv32_target.call_frame_frame_address_level0 = true;
         }
         return &rv32_target;
     }

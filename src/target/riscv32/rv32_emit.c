@@ -117,6 +117,24 @@ static bool rv32_emit_ins(FILE *out, const MinicC0Program *program,
         return rv32_emit_memory_instruction(out, program, target, f, fr, ins);
     case MINIC_CORE_INSTRUCTION_COMPILER_BARRIER:
         return true;
+    case MINIC_CORE_INSTRUCTION_CALL_FRAME_ADDRESS: {
+        /* RV64 and RV32 consume the same typed Core builtin.  RV32 owns
+         * the saved 32-bit ra slot, moving stack and frame-pointer policy.
+         * This is a base-I lw/mv operation, not an architecture-wide unwind. */
+        if (ins->value.call_frame_address.level != 0U ||
+            !minic_type_is_pointer(ins->type)) return false;
+        switch (ins->value.call_frame_address.kind) {
+        case MINIC_CORE_CALL_FRAME_ADDRESS_RETURN:
+            return rv32_fixed_stack(out, fr, "lw", "t0", fr->outgoing_size) &&
+                   rv32_slot(out, fr, ins->result, "t0", false);
+        case MINIC_CORE_CALL_FRAME_ADDRESS_FRAME:
+            return fprintf(out, "  mv t0, %s\n",
+                           fr->has_dynamic_stack ? "s0" : "sp") >= 0 &&
+                   rv32_slot(out, fr, ins->result, "t0", false);
+        default:
+            return false;
+        }
+    }
     case MINIC_CORE_INSTRUCTION_VARIADIC_ARGUMENT_ADDRESS: {
         size_t offset;
         if (!fr->is_variadic || fr->abi.named_gpr_words > 8U ||

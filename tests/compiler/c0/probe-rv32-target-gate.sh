@@ -44,4 +44,23 @@ if "$MINIC_CC" --target=riscv32-linux -march=rv32i -mabi=ilp32 \
 fi
 test ! -e "$work/unsafe-fixed.s"
 echo 'RV32I_FIXED_REGISTER=PASS tp_sp=Core_Target_RV32I bad_a0_rejected=1'
+cat > "$work/kernel-frame.i" <<'SRC'
+void *__raw_spin_lock_bh_origin(void) { return __builtin_return_address(0); }
+void *linux_frame_origin(void) { return __builtin_frame_address(0); }
+SRC
+"$MINIC_CC" --target=riscv32-linux -march=rv32i -mabi=ilp32 \
+  -S "$work/kernel-frame.i" -o "$work/kernel-frame.s"
+grep -Eq 'lw t0, [0-9]+\((s0|sp)\)' "$work/kernel-frame.s"
+grep -Eq 'mv t0, (s0|sp)' "$work/kernel-frame.s"
+cat > "$work/kernel-invalid-frame.i" <<'SRC'
+void *unqualified_caller(void) { return __builtin_return_address(1); }
+SRC
+if "$MINIC_CC" --target=riscv32-linux -march=rv32i -mabi=ilp32 \
+   -S "$work/kernel-invalid-frame.i" -o "$work/kernel-invalid-frame.s" \
+   2>"$work/kernel-invalid-frame.log"; then
+    echo 'RV32I_CALL_FRAME=FAIL accepted_nonzero_return_level' >&2
+    exit 1
+fi
+test ! -e "$work/kernel-invalid-frame.s"
+echo 'RV32I_CALL_FRAME=PASS return_address0=true frame_address0=true level1_rejected=true'
 echo 'RV32I_TARGET_GATE=PASS ILP32_registered=true incompatible_ISA_rejected=true basic_C_core_emitted=true'
