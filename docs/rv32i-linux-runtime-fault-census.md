@@ -74,3 +74,65 @@ Evidence URLs:
 - https://github.com/yituanxing/minic-toolchain/actions/runs/40193086148
 - https://github.com/yituanxing/minic-toolchain/actions/runs/40193582510
 - https://github.com/yituanxing/minic-toolchain/actions/runs/40194269014
+
+
+## 2026-10-25: RV64 implementation reuse and current-head requalification
+
+Implementation: commit `2c7640a71320dae5bf2213a2c9e9da21a62efc46`.
+The RV64 block-local SSA last-use spill allocator is now physically shared at
+`src/target/common/core_spill_layout.{c,h}` rather than cloned in RV32.
+RV64 retains its 8/16-byte spill layout, RV32 uses ILP32 DataLayout with
+4/8-byte machine spills; result slots never alias live instruction operands.
+RV32 still conservatively reserves CoreObject addresses, with unsafe
+cross-block object reuse disabled. No Linux source workaround or assembler/
+linker replacement was introduced.
+
+The unmodified GNU Kbuild + seven-shard MiniC producer at
+[Actions #40196351834](https://github.com/yituanxing/minic-toolchain/actions/runs/40196351834)
+successfully rebuilt **1741/1741** current-compiler RV32I/ILP32 C objects,
+SHA verified them, and linked the complete Linux ELF32 Image
+`42e50332eecc8604ac4d5d70e15335e1110fb22bba0c0556655952bd5bc24f9d`
+(244,413,872 bytes). This new Image STILL FAILED genuine QEMU P0 with
+`corrupted stack end detected inside scheduler` at roughly 0.28 seconds.
+The complete Linux kernel, P0, and P1 12/12 must **NOT** be called accepted.
+
+The previously certified nine isolated failing MiniC Linux objects were
+rebuilt using this shared spill algorithm and retested against the unchanged
+original GNU golden, original Kconfig and genuine QEMU. In
+[Actions #40196842463](https://github.com/yituanxing/minic-toolchain/actions/runs/40196842463),
+**35/35 one-object mixed-Image QEMU P0 trials PASS**, including all nine
+previously failing objects. All nine identical GNU relink controls PASS too.
+This establishes that the shared-lifetime correction removes the nine
+*individually reproducing* faults, NOT that the entire 1741-MiniC
+configuration boots or that no additional shared defects remain.
+
+| Linux C object | Historical maximum function frame | New maximum function frame |
+| --- | ---: | ---: |
+| `mm/gup.o` | 3,312 B | 528 B |
+| `fs/exec.o` | 3,248 B | 608 B |
+| `drivers/tty/serial/8250/8250_port.o` | 7,808 B | 1,232 B |
+| `fs/super.o` | 10,528 B | 1,728 B |
+| `lib/assoc_array.o` | 9,168 B | 1,232 B |
+| `drivers/regulator/core.o` | 6,496 B | 928 B |
+| `security/keys/keyring.o` | 3,648 B | 544 B |
+| `net/core/rtnetlink.o` | 22,320 B | 3,696 B |
+| `drivers/base/regmap/regmap.o` | 12,416 B | 1,424 B |
+
+These are maximum *single-function static prologue frame allocations*
+observed in the respective SHA-certified ELF32 object files, not total
+runtime stack use or a claim about every code path. RV64-style reuse reduces
+the footprint but full-kernel failure still requires another real differential.
+
+Current expansion: seven parallel runners × eight 31/32-owner MiniC/GNU
+relink and QEMU trials, running on the *new* current-compiler shard
+artifacts `shard-0..6` from producer `40196351834`. This
+partition sweep must classify all 56 groups and use exact original GNU
+relink controls before attributing any residual faults. Every triage job
+can exit SUCCESS despite recording actual failing kernels: interpret the
+`RV32I_COHORT=RESULT` records, not the job conclusion.
+
+New source evidence:
+- https://github.com/yituanxing/minic-toolchain/commit/2c7640a71320dae5bf2213a2c9e9da21a62efc46
+- https://github.com/yituanxing/minic-toolchain/actions/runs/40196351834
+- https://github.com/yituanxing/minic-toolchain/actions/runs/40196734258
+- https://github.com/yituanxing/minic-toolchain/actions/runs/40196842463
