@@ -31,7 +31,8 @@ make "${gnu_args[@]}" defconfig >"$ev/defconfig.log" 2>&1
   -d EFI -d RISCV_ISA_C -d FPU -d SMP -d VGA_CONSOLE
 make "${gnu_args[@]}" olddefconfig >"$ev/olddefconfig.log" 2>&1
 # Linux 6.6 arch/riscv/Kconfig EFI explicitly "select RISCV_ISA_C". Disable EFI
-# in the original Kconfig or olddefconfig silently re-enables compressed C.\n# Linux's VGA_CONSOLE defaults to y on RISC-V despite no screen_info owner.
+# in the original Kconfig or olddefconfig silently re-enables compressed C.
+# Linux's VGA_CONSOLE defaults to y on RISC-V despite no screen_info owner.
 # It would make the otherwise valid original GNU 32-bit Image fail final LD.
 # Select the headless serial-console target using original Kconfig options.
 # This is a real original Kconfig audit, not a custom defconfig or kernel patch.
@@ -54,8 +55,35 @@ printf 'RV32I_LINUX_CONFIG=PASS original=6.6.143 arch=ARCH_RV32I no_C=1 no_FPU=1
 # The UNMODIFIED upstream kernel intentionally selects rv32ima for atomic /
 # supervisor instructions. This is not the ISA used by MiniC's C emitter.
 echo 'RV32I_LINUX_ISA_CONTRACT=PASS MiniC_C=rv32i original_Kbuild_asm=rv32ima separate_owners=true'
-# First establish the original GNU build. A failure is a GNU/Kconfig/toolchain
-# baseline blocker, NEVER reclassified as a MiniC defect.
+# Quick REAL owner front-run: the same original GNU Kbuild C source and
+# existing MiniC Kbuild proxy, not a dummy fixture or a substitute for the
+# full source-owner/Image/QEMU gate. Catch actual C/ABI blockers before the
+# slow full GNU Image, then restore a byte-exact original GNU object.
+preflight_owner=init/main.o
+if ! make "${gnu_args[@]}" -j4 "$preflight_owner" >"$ev/gnu-owner-preflight.log" 2>&1; then
+  echo "RV32I_LINUX_GNU_PRECHECK=BLOCKED original_owner=$preflight_owner" >&2
+  tail -n 60 "$ev/gnu-owner-preflight.log" >&2
+  exit 4
+fi
+gnu_owner_sha=$(sha256sum "$out/$preflight_owner" | cut -d' ' -f1)
+rm -f "$out/$preflight_owner"
+if ! MINIC="$MINIC_CC" REAL_CC=riscv64-linux-gnu-gcc \
+      MINIC_KBUILD_RV32I_ORIGIN_AUDIT=1 MINIC_PRESERVE_FAILURE_INPUTS=1 \
+      MINIC_KBUILD_TRACE="$ev/fast-kbuild-route.log" \
+      make "${gnu_args[@]}" \
+        CC="$GITHUB_WORKSPACE/tests/external/linux/stage2_kbuild_cc.sh" \
+        "$preflight_owner" >"$ev/minic-owner-preflight.log" 2>&1; then
+  echo "RV32I_LINUX_MINIC_PRECHECK=BLOCKED authentic_Kbuild_owner=$preflight_owner" >&2
+  tail -n 80 "$ev/minic-owner-preflight.log" >&2
+  exit 5
+fi
+test -s "$out/$preflight_owner"
+rm -f "$out/$preflight_owner"
+make "${gnu_args[@]}" "$preflight_owner" >"$ev/gnu-owner-restore.log" 2>&1
+test "$(sha256sum "$out/$preflight_owner" | cut -d' ' -f1)" = "$gnu_owner_sha"
+echo "RV32I_LINUX_MINIC_PRECHECK=PASS original_owner=$preflight_owner restored_GNU_object_sha=$gnu_owner_sha"
+# First establish the original GNU Image. A failure is a
+# GNU/Kconfig/toolchain baseline blocker, not a MiniC defect.
 # Stream a bounded, timestamped progress receipt without flooding the log.
 # The complete original make output stays in gnu-image.log, not in GitHub logs.
 start_seconds=$SECONDS

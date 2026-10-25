@@ -595,10 +595,16 @@ bool minic_target_info_call_frame_address_supported(const MinicTargetInfo *targe
 bool minic_target_info_fixed_register_supported(const MinicTargetInfo *target,
                                                 const char *name,
                                                 size_t name_length) {
-    if (target == NULL || target->architecture != MINIC_TARGET_ARCH_RISCV64 || name == NULL) {
+    if (target == NULL || name == NULL ||
+        (target->architecture != MINIC_TARGET_ARCH_RISCV64 &&
+         target->architecture != MINIC_TARGET_ARCH_RISCV32)) {
         return false;
     }
-    /* The current RV64 backend uses most caller/scratch registers internally.
+    /* Both RISC-V backends reserve sp/tp architecturally. RV32 shares
+     * the SAME Core fixed-register value semantics as RV64, but has its own
+     * ILP32 machine load/store and frame contract; admit no scratch or ABI
+     * argument register binding without a dedicated target owner.
+     * The current RV64 backend uses most caller/scratch registers internally.
      * Only the architectural stack/thread registers observed in unchanged Linux
      * are safe fixed bindings until register allocation becomes target-aware. */
     return (name_length == 2U && memcmp(name, "tp", 2U) == 0) ||

@@ -44,6 +44,25 @@ static bool rv32_emit_ins(FILE *out, const MinicC0Program *program,
         return rv32_emit_parameter(out, f, fr, ins);
     case MINIC_CORE_INSTRUCTION_PARAMETER_OBJECT:
         return rv32_emit_parameter_object(out, f, fr, ins);
+    case MINIC_CORE_INSTRUCTION_FIXED_REGISTER_READ: {
+        const MinicCoreFixedRegisterBinding *binding;
+        unsigned bits;
+        bool is_signed;
+        size_t index = ins->value.fixed_register_binding_id;
+        if (index >= f->fixed_register_binding_count) return false;
+        binding = &f->fixed_register_bindings[index];
+        if (binding->register_name == NULL ||
+            !minic_target_info_fixed_register_supported(
+                target, binding->register_name, binding->register_name_length) ||
+            !minic_type_equal(binding->type, ins->type) ||
+            !rv32_scalar(f, ins->type, &bits, &is_signed) || bits != 32U)
+            return false;
+        /* Architectural tp/sp are read-only C register variables. Use
+         * RV32I mv (ADDI), then the existing ILP32 SSA value transport.
+         * No RV64-specific frame, ABI or physical-register code enters Core. */
+        return fprintf(out, "  mv t0, %s\n", binding->register_name) >= 0 &&
+               rv32_slot(out, fr, ins->result, "t0", false);
+    }
     case MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT:
     case MINIC_CORE_INSTRUCTION_INTEGER_ADD:
     case MINIC_CORE_INSTRUCTION_INTEGER_SUBTRACT:
