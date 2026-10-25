@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# DISCOVERY, not a BusyBox acceptance certificate.
-# Genuine native Linux musl 1.2.5 / RV32 ILP32 sysroot and pristine
-# BusyBox 1.36.1 Kconfig/Kbuild, no GCC C fallback or simulated syscall libc.
-# Only graduate after original GNU reference links AND MiniC all-owners
-# replace through the existing BusyBox Kbuild/sha/QEMU oracle.
+# Blocking acceptance of one fixed real BusyBox 1.36.1 Kconfig cohort,
+# NOT the upstream all-applets/allyesconfig distribution. Genuine native
+# musl 1.2.5 RV32 ILP32 sysroot, pristine original Kbuild, no replacement
+# C code and no final-object GCC fallback. Real C owners must be MiniC/GNU
+# AS-built, SHA/receipt verified and linked/run on QEMU with six applets.
+# Generated tmp.XXXX.c toolchain probes remain explicitly GNU-owned.
 set -Eeuo pipefail
 : "${MINIC_CC:?set MINIC_CC}"
 : "${BARE_CC:=riscv64-unknown-elf-gcc}"
@@ -405,7 +406,7 @@ for dest,mini in mapping.items():
     else:
         print("RV32_BUSYBOX_MIXED_SHA_MISMATCH owner=%s expected=%s actual=%s"%
               (dest,expected,actual),flush=True)
-print("RV32_BUSYBOX_MIXED_SHA=DISCOVERY planned=%d verified=%d receipts=%d"%
+print("RV32_BUSYBOX_MIXED_SHA=CHECK planned=%d verified=%d receipts=%d"%
       (len(mapping),verified,receipts),flush=True)
 if verified!=len(mapping) or receipts!=len(mapping):
     sys.exit(1)
@@ -444,8 +445,9 @@ if ready!=real or blocked:
     print("RV32_BUSYBOX_MIXED=DISCOVERY real_MiniC_owners=%d/%d "
           "QEMU_applets=6 GNU_C_fallback_real_C=%d full_MiniC=NO"%
           (ready,real,len(blocked)),flush=True)
-    print("RV32_BUSYBOX_MINIC_ACCEPT=PENDING original_real_C_owners=%d "
+    print("RV32_BUSYBOX_MINIC_ACCEPT=FAIL original_real_C_owners=%d "
           "MiniC_owners=%d GNU_C_fallback_disallowed=1"%(real,ready),flush=True)
+    sys.exit(1)
 else:
     print("RV32_BUSYBOX_MIXED=PASS genuine_Kbuild=1 real_MiniC_C_owners=%d/%d "
           "exact_SHA=1 proxy_receipts=1 GNU_link=1 QEMU_applets=6 "

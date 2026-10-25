@@ -95,8 +95,9 @@ jobs:
           MINIC_CC="$GITHUB_WORKSPACE/build/rv32cjson/bin/minic-cc" \
           MINIAS="$GITHUB_WORKSPACE/build/rv32cjson/bin/minic-as" \
             bash tests/compiler/c0/probe-rv32-zstd-picolibc-qemu.sh
-      - name: DISCOVERY original RV32 Linux musl sysroot and pristine BusyBox Kbuild
-        continue-on-error: true
+      - name: ACCEPTANCE genuine RV32 musl BusyBox Kbuild MiniC owners and QEMU
+        # Full 145/145 persistent C-owner SHA+receipt+GNU/QEMU acceptance is
+        # blocking. Transient GNU compiler-feature probes are not program owners.
         shell: bash
         run: |
           set -Eeuo pipefail

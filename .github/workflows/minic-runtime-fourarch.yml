@@ -4,6 +4,11 @@ on:
   push:
     branches: [main]
     paths:
+      # All Core semantics flow into every registered machine backend. A
+      # change to a previously unlisted Core owner must run the full runtime
+      # matrix instead of silently relying on an ancestor's green verdict.
+      - "src/core/**"
+      - ".github/workflows/minic-runtime-fourarch.yml"
       - "runtime/manifest.json"
       - "tools/runtime/**"
       - "third_party/llvm-compiler-rt-19.1.7/**"
