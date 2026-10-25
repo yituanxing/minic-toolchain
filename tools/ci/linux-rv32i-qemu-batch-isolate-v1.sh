@@ -6,6 +6,11 @@ set -Eeuo pipefail
 : "${RV32I_TRIAGE_ROOT:?}"
 : "${RV32I_TRIAGE_SOURCE:?}"
 : "${RV32I_TRIAGE_GOLDEN:?}"
+if [[ -n "${RV32I_TRIAGE_SHARD:-}" ]]; then
+  [[ "$RV32I_TRIAGE_SHARD" =~ ^[0-6]$ ]] || {
+    echo 'RV32I_COHORT=FAIL invalid_shard_partition' >&2; exit 2;
+  }
+fi
 
 root=$(realpath "$RV32I_TRIAGE_ROOT")
 src=$(realpath "$RV32I_TRIAGE_SOURCE")
@@ -29,13 +34,14 @@ test "$(sha256sum "$out/.config" | cut -d' ' -f1)" = \
 
 # Verify all 1741 owners against the exact seven shard inventories before
 # attempting one link.  Never infer membership from artifact ZIP ordering.
-python3 - "$prov/full-c-objects.txt" "$shards" "$out" <<'PY_AUDIT'
+python3 - "$prov/full-c-objects.txt" "$shards" "$out" "${RV32I_TRIAGE_SHARD:-all}" <<'PY_AUDIT'
 from pathlib import Path
 import hashlib, re, sys
 listing, root, out = Path(sys.argv[1]), Path(sys.argv[2]), Path(sys.argv[3])
 owners = [x for x in listing.read_text().splitlines() if x and not x.startswith('#')]
 assert len(owners) == 1741 and len(set(owners)) == len(owners), len(owners)
-for idx in range(7):
+selected = range(7) if sys.argv[4] == 'all' else [int(sys.argv[4])]
+for idx in selected:
     shard = root / f'shard-{idx}'
     names = [x for x in (shard / 'full-objects.txt').read_text().splitlines()
              if x and not x.startswith('#')]
@@ -51,7 +57,7 @@ for idx in range(7):
         assert candidate.is_file() and (out/name).is_file(), name
         assert hashlib.sha256(candidate.read_bytes()).hexdigest() == manifest[name], name
     print(f'RV32I_COHORT_AUDIT=PASS shard={idx} objects={len(names)} sha=true original_owner=true')
-print('RV32I_COHORT_AUDIT=PASS owners=1741 shards=7 duplicate=0')
+print(f'RV32I_COHORT_AUDIT=PASS original_owners=1741 selected_shards={len(selected)} duplicate=0')
 PY_AUDIT
 
 # Freeze pristine GNU C owners.  Make-generated headers and linking products
@@ -120,17 +126,46 @@ else
   exit 10
 fi
 
-previous=-1
+mkdir -p "$root/subsets"
+if [[ -n "${RV32I_TRIAGE_SHARD:-}" ]]; then
+  # Fixed stride within one certified 249/248-owner producer shard. Seven
+  # independent runners each perform eight ~31-object QEMU trials in parallel.
+  python3 - "$shards/shard-$RV32I_TRIAGE_SHARD/full-objects.txt" "$root/subsets" "$RV32I_TRIAGE_SHARD" <<'PY_SPLIT'
+from pathlib import Path
+import sys
+src, dest, idx = Path(sys.argv[1]), Path(sys.argv[2]), int(sys.argv[3])
+names = [x for x in src.read_text().splitlines() if x and not x.startswith('#')]
+assert len(names) in (248, 249) and len(set(names)) == len(names)
+for part in range(8):
+    subset = names[part::8]
+    assert subset
+    (dest / f'shard-{idx}-part-{part}.txt').write_text('\n'.join(subset)+'\n')
+    print(f'RV32I_SUBSHARD_PLAN=PASS shard={idx} part={part} objects={len(subset)}')
+PY_SPLIT
+  mapfile -t trial_files < <(find "$root/subsets" -type f -name '*.txt' | LC_ALL=C sort)
+else
+  trial_files=()
+  for idx in 0 1 2 3 4 5 6; do
+    trial_files+=("$shards/shard-$idx/full-objects.txt")
+  done
+fi
+previous_file=
 qemu_count=0
-for idx in 0 1 2 3 4 5 6; do
-  group="$root/trials/shard-$idx"
+for active_file in "${trial_files[@]}"; do
+  active_name=$(basename "$active_file" .txt)
+  if [[ "$active_name" == full-objects ]]; then
+    active_name=$(basename "$(dirname "$active_file")")
+  fi
+  idx=$(sed -n 's/^shard-\([0-6]\).*/\1/p' <<<"$active_name")
+  [[ "$idx" =~ ^[0-6]$ ]]
+  group="$root/trials/$active_name"
   mkdir -p "$group"
-  if ((previous >= 0)); then
+  if [[ -n "$previous_file" ]]; then
     while IFS= read -r owner; do
       [[ "$owner" == \#* || -z "$owner" ]] && continue
       cp --reflink=auto "$root/backup/$owner" "$out/$owner"
       touch "$out/$owner"
-    done <"$shards/shard-$previous/full-objects.txt"
+    done <"$previous_file"
   fi
   count=0
   while IFS= read -r owner; do
@@ -138,31 +173,37 @@ for idx in 0 1 2 3 4 5 6; do
     cp --reflink=auto "$shards/shard-$idx/minic/$owner" "$out/$owner"
     touch "$out/$owner"
     count=$((count+1))
-  done <"$shards/shard-$idx/full-objects.txt"
-  previous=$idx
-  echo "RV32I_COHORT=START group=$idx objects=$count original_GNU_Kbuild=true"
+  done <"$active_file"
+  previous_file=$active_file
+  echo "RV32I_COHORT=START group=$active_name objects=$count original_GNU_Kbuild=true"
   if ! make "${makeargs[@]}" -j4 \
       --eval="vmlinux: KBUILD_VMLINUX_LIBS += $lib" \
       Image >"$group/link.log" 2>&1; then
-    echo -e "shard-$idx\t$count\tFAIL\tNOT_RUN\t-\tlink_error" >>"$summary"
+    echo -e "$active_name\t$count\tFAIL\tNOT_RUN\t-\tlink_error" >>"$summary"
     tail -n 45 "$group/link.log" >&2
     continue
   fi
   # Kbuild sometimes recompiles a changed generated-header dependent owner.
   # Never call such a trial a MiniC-vs-GNU comparison without exact SHA.
-  if ! python3 - "$shards/shard-$idx" "$out" <<'PY_VERIFY'
+  if ! python3 - "$shards/shard-$idx" "$out" "$active_file" <<'PY_VERIFY'
 from pathlib import Path
 import hashlib, sys
-shard, out = map(Path, sys.argv[1:])
+shard, out, active = map(Path, sys.argv[1:])
+names = set(x for x in active.read_text().splitlines() if x and not x.startswith('#'))
+seen = set()
 for line in (shard/'minic-manifest.sha256').read_text().splitlines():
     expected, path = line.split('  ', 1)
     name = path.removeprefix('minic/')
+    if name not in names:
+        continue
+    seen.add(name)
     if hashlib.sha256((out/name).read_bytes()).hexdigest() != expected:
         raise SystemExit(f'RV32I_COHORT_DRIFT=FAIL owner={name}')
+assert seen == names, (len(seen), len(names))
 print('RV32I_COHORT_DRIFT=PASS exact_MiniC_cohort=true')
 PY_VERIFY
   then
-    echo -e "shard-$idx\t$count\tDRIFT\tNOT_RUN\t-\tKbuild_recompiled_candidate" >>"$summary"
+    echo -e "$active_name\t$count\tDRIFT\tNOT_RUN\t-\tKbuild_recompiled_candidate" >>"$summary"
     continue
   fi
   image="$out/arch/riscv/boot/Image"
@@ -180,14 +221,14 @@ PY_VERIFY
     "$group/qemu/qemu-serial.log" 2>/dev/null | sed 's/^[^]]*] //' || true)
   fault=${fault:-no_kernel_marker}
   fault=${fault//$'\t'/ }
-  echo -e "shard-$idx\t$count\tPASS\t$result\t$digest\t$fault" >>"$summary"
-  echo "RV32I_COHORT=RESULT group=$idx objects=$count qemu_p0=$result image_sha256=$digest first_fault=$fault"
+  echo -e "$active_name\t$count\tPASS\t$result\t$digest\t$fault" >>"$summary"
+  echo "RV32I_COHORT=RESULT group=$active_name objects=$count qemu_p0=$result image_sha256=$digest first_fault=$fault"
   if [[ "$result" == FAIL ]]; then
-    echo "RV32I_COHORT_DIAG=BEGIN group=$idx"
+    echo "RV32I_COHORT_DIAG=BEGIN group=$active_name"
     grep -E 'Linux version|Kernel panic|Oops:|RV32I_QEMU_P0=FAIL|RV32I_LINUX_PID1=|Unable to handle' \
       "$group/qemu-step.log" | tail -n 12 || true
     tail -n 12 "$group/qemu-step.log" || true
-    echo "RV32I_COHORT_DIAG=END group=$idx"
+    echo "RV32I_COHORT_DIAG=END group=$active_name"
   fi
 done
 
