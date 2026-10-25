@@ -105,10 +105,8 @@ static void ipv4_udp_test(void){
  int ok=!bad(receiver)&&!bad(sender)&&
      S3(BIND,receiver,&addr,sizeof(addr))==0 &&
      S3(GETSOCKNAME,receiver,&addr,&alen)==0 && alen==sizeof(addr);
- if(ok)ok=S5(SENDTO,sender,"UDP",3,0,&addr)==-22?0:1; /* overwritten below */
  if(ok){
    long sent=sc(SENDTO,sender,(long)"UDP",3,0,(long)&addr,sizeof(addr));
-   /* Second datagram is deliberate; read the exact three-byte payload. */
    char got[4]={0,0,0,0};
    long n=S3(RECVFROM,receiver,got,3);
    ok=sent==3&&n==3&&equal((unsigned char*)got,(const unsigned char*)"UDP",3);
