@@ -305,11 +305,11 @@ jobs:
         with:
           fixture: source
 
-      - name: Restore only this immutable original MiniC shard
+      - name: Restore THIS compiler revision's certified MiniC Linux shard
         uses: actions/download-artifact@v4
         with:
           repository: yituanxing/minic-toolchain
-          run-id: '40189397298'
+          run-id: '40196351834'
           name: shard-${{ matrix.shard }}
           path: build/rv32i-qemu-parallel/shard-${{ matrix.shard }}-leaf-${{ matrix.leaf }}/shards/shard-${{ matrix.shard }}
           github-token: ${{ github.token }}
