@@ -205,7 +205,7 @@ for count in range(1,8):
     assert all_names.issubset(set(names))
     all_names = set(names)
     path = dest/f'shard-0-prefix-{count}.txt'
-    path.write_text('\\n'.join(names)+'\\n')
+    path.write_text('\n'.join(names)+'\n')
     print(f'RV32I_PREFIX_PLAN=PASS shards={count} objects={len(names)}')
 assert len(all_names) == 1741
 PY_PREFIX
