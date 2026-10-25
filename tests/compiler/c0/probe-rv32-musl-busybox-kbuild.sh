@@ -298,13 +298,102 @@ for x in results:
         failed.append((x["source"],"GCC=%s CPP=%s MiniC=%s GNU_AS=%s"%(g,cpp,mini,asm)))
 print("RV32_BUSYBOX_MINIC_CENSUS=DISCOVERY original_Kbuild=1 "
       "GNU_owned=%d MiniC_GNU_AS_pass=%d GNU_blocked=%d CPP_blocked=%d "
-      "MiniC_blocked=%d GNU_AS_blocked=%d source_sha_checked=1 "
+      "MiniC_blocked=%d GNU_AS_blocked=%d pinned_source_verified=1 "
       "GNU_shadow_Kbuild_rc=%d MiniC_objects_substituted=0"%
       (len(results),tally["PASS"],tally["GNU"],tally["CPP"],
        tally["MiniC"],tally["GNU_AS"],rc),flush=True)
 for name,verdict in failed[:30]:
     print("RV32_BUSYBOX_MINIC_BLOCKER source=%s %s"%(name,verdict),flush=True)
+# Evidence must be actionable. Group exact MiniC diagnostics, instead
+# of requiring one new CI run per original Kbuild translation unit.
+for p in sorted((report/"per-tu").glob("*/result.json")):
+    x=json.loads(p.read_text())
+    if x.get("minic") != 0 and x.get("gcc")==0 and x.get("cpp")==0:
+        lines=(p.parent/"minic.err").read_text(errors="replace").splitlines()
+        print("RV32_BUSYBOX_MINIC_OWNER_DIAGNOSTIC source=%s"%x["source"],flush=True)
+        for line in lines[:8]:
+            print("  %s"%line[:400],flush=True)
 if rc or len(results)<50:
     sys.exit(1)
 PY
-echo "RV32_BUSYBOX_MINIC_ACCEPT=PENDING stage=shadow_census_not_object_replacement GNU_C_fallback_disallowed=1"
+
+# Bounded real mixed-owner A/B: replace only genuine C owners which passed
+# MiniC AND GNU AS in this exact, immutable Kbuild configuration. Leave
+# remaining genuine GCC owners untouched. This is diagnostic until 100%
+# replacement + SHA receipts + differential QEMU pass. Reuse the existing
+# BusyBox proxy's exact-object replacement map, not a new Kbuild parser.
+python3 - "$report" "$shadow" <<'PY'
+import json, pathlib, sys
+report, out=pathlib.Path(sys.argv[1]),pathlib.Path(sys.argv[2])
+mapping={}
+for p in sorted((report/"per-tu").glob("*/result.json")):
+    d=json.loads(p.read_text())
+    if all(d.get(k)==0 for k in ("gcc","cpp","minic","assembler")):
+        src_obj=pathlib.Path(d["object"])
+        absolute=(src_obj if src_obj.is_absolute() else out/src_obj).resolve()
+        candidate=(p.parent/"mini.o").resolve()
+        if absolute in mapping or not candidate.is_file():
+            raise SystemExit("duplicate or missing MiniC owner: "+str(absolute))
+        mapping[str(absolute)]=str(candidate)
+(report/"replacement.json").write_text(json.dumps(mapping,sort_keys=True))
+print("RV32_BUSYBOX_MIXED_PLAN=DISCOVERY MiniC_ready=%d GNU_fallback_count=unknown"%
+      len(mapping),flush=True)
+PY
+# Force native Kbuild to regenerate every C object, then reuse the
+# established post-GNU-compile SHA-exact MiniC substitution path.
+# Never hand-build a bespoke object graph or alter vendor C/Kconfig.
+find "$shadow" -type f \( -name '*.o' -o -name '*.a' \) -delete
+set +e
+timeout 240s env \
+  BUSYBOX_ALLYES_HOST_CC="$work/rv32-linux-musl-gcc" \
+  BUSYBOX_ALLYES_MINIC_CC="$MINIC_CC" \
+  BUSYBOX_ALLYES_MINIC_TARGET=riscv32-linux \
+  BUSYBOX_ALLYES_REPORT_ROOT="$report" \
+  BUSYBOX_ALLYES_REPLACE_MAP="$report/replacement.json" \
+  BUSYBOX_ALLYES_SKIP_SHADOW=1 \
+  make -C "$work/busybox" O="$shadow" -j4 \
+    ARCH=riscv HOSTCC=cc \
+    CC="python3 $repo/tests/external/busybox/allyes_sweep.py --proxy-cc" \
+    STRIP=riscv64-linux-gnu-strip busybox \
+  >"$work/mixed-build.log" 2>&1
+mixed_rc=$?
+set -e
+python3 - "$report/replacement.json" <<'PY'
+import hashlib,json,pathlib,sys
+mapping=json.loads(pathlib.Path(sys.argv[1]).read_text())
+verified=0
+for dest,mini in mapping.items():
+    a,b=pathlib.Path(dest),pathlib.Path(mini)
+    if a.is_file() and b.is_file() and hashlib.sha256(a.read_bytes()).digest()==hashlib.sha256(b.read_bytes()).digest():
+        verified+=1
+print("RV32_BUSYBOX_MIXED_SHA=DISCOVERY planned=%d verified=%d"%(
+      len(mapping),verified),flush=True)
+if verified!=len(mapping):
+    sys.exit(1)
+PY
+if [ "$mixed_rc" -ne 0 ] || [ ! -s "$shadow/busybox" ]; then
+  echo "RV32_BUSYBOX_MIXED=BLOCKED stage=GNU_link_after_real_MiniC_owner_replacement rc=$mixed_rc" >&2
+  grep -E 'error:|undefined reference|multiple definition|Error [0-9]+' \
+    "$work/mixed-build.log" | head -n 30 >&2 || true
+  exit 1
+fi
+timeout 20s "$QEMU_RV32" "$shadow/busybox" echo native-rv32-busybox \
+  >"$work/mixed.echo.out"
+cmp "$work/echo.expected" "$work/mixed.echo.out"
+timeout 20s "$QEMU_RV32" "$shadow/busybox" true
+set +e
+timeout 20s "$QEMU_RV32" "$shadow/busybox" false
+mixed_false_rc=$?
+set -e
+test "$mixed_false_rc" -eq 1
+timeout 20s "$QEMU_RV32" "$shadow/busybox" cat \
+  <"$work/stdin.expected" >"$work/mixed.cat.out"
+cmp "$work/stdin.expected" "$work/mixed.cat.out"
+timeout 20s "$QEMU_RV32" "$shadow/busybox" head -n 2 \
+  <"$work/stdin.expected" >"$work/mixed.head.out"
+cmp "$work/head.expected" "$work/mixed.head.out"
+mixed_wc_count=$(timeout 20s "$QEMU_RV32" "$shadow/busybox" wc -l \
+  <"$work/stdin.expected")
+test "$(printf '%s' "$mixed_wc_count" | tr -d '[:space:]')" = 3
+echo "RV32_BUSYBOX_MIXED=DISCOVERY real_MiniC_owners=SHA_verified QEMU_applets=6 GNU_C_fallback=YES full_MiniC=NO"
+echo "RV32_BUSYBOX_MINIC_ACCEPT=PENDING full_Kbuild_MiniC_C_owners=NO GNU_C_fallback_disallowed=1"
