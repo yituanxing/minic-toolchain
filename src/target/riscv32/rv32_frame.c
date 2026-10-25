@@ -1,6 +1,7 @@
 #include "target/riscv32/rv32_internal.h"
 #include "target/data_layout.h"
 #include "target/common/core_function_facts.h"
+#include "target/common/core_spill_layout.h"
 #include <limits.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -30,7 +31,7 @@ static bool rv32_align(size_t value, size_t by, size_t *out) {
 bool rv32_frame_init(Rv32Frame *frame, const MinicC0Program *program,
                             const MinicCoreFunction *f, const MinicTargetInfo *t,
                             bool is_variadic) {
-    size_t next, i, max_stack_args;
+    size_t next, i, max_stack_args, value_base, peak_bytes = 0U;
     MinicCoreFunctionFacts facts;
     if (frame == NULL || program == NULL || f == NULL || t == NULL ||
         f->value_count > 100000U || f->object_count > 100000U)
@@ -58,8 +59,10 @@ bool rv32_frame_init(Rv32Frame *frame, const MinicC0Program *program,
     frame->object_count = f->object_count;
     frame->value_count = f->value_count;
     if (f->value_count != 0U) {
-        frame->value_offsets = calloc(f->value_count, sizeof(size_t));
+        frame->value_offsets = malloc(f->value_count * sizeof(size_t));
         if (frame->value_offsets == NULL) return false;
+        for (i = 0U; i < f->value_count; ++i)
+            frame->value_offsets[i] = SIZE_MAX;
     }
     if (f->object_count != 0U) {
         frame->object_offsets = calloc(f->object_count, sizeof(size_t));
@@ -75,19 +78,6 @@ bool rv32_frame_init(Rv32Frame *frame, const MinicC0Program *program,
     if (frame->has_dynamic_stack && frame->saved_base_offset > SIZE_MAX - 4U)
         return rv32_frame_reject("saved_base", 0U, f->return_type);
     next = frame->saved_base_offset + (frame->has_dynamic_stack ? 4U : 0U);
-    for (i = 0U; i < f->value_count; ++i) {
-        size_t size, alignment;
-        unsigned words;
-        if (!rv32_scalar_storage_words(f, f->values[i].type, &words) ||
-            !minic_data_layout_type(t->data_layout, program,
-                                    f->values[i].type, &size, &alignment) ||
-            size == 0U || size > 8U ||
-            !rv32_align(next, words == 2U ? 8U : 4U, &next) ||
-            next > SIZE_MAX - words * 4U)
-            return rv32_frame_reject("value_slot", i, f->values[i].type);
-        frame->value_offsets[i] = next;
-        next += words * 4U;
-    }
     for (i = 0; i < f->object_count; ++i) {
         const MinicCoreObject *obj = &f->objects[i];
         size_t size, align;
@@ -104,6 +94,30 @@ bool rv32_frame_init(Rv32Frame *frame, const MinicC0Program *program,
         frame->object_offsets[i] = next;
         next += size != 0U ? size : 1U;
     }
+    /* Reuse RV64's safe block-local SSA lifetimes with ILP32 4-byte slots.
+     * No cross-block CoreObject slot sharing: its earlier RV64 experiment
+     * failed Linux P1, so objects retain conservative permanent addresses. */
+    if (!rv32_align(next, 8U, &value_base))
+        return rv32_frame_reject("spill_base", next, minic_type_void());
+    for (i = 0U; i < f->block_count; ++i) {
+        size_t block_peak = 0U;
+        if (!minic_core_block_reused_spill_layout(
+                program, f, &f->blocks[i], t->data_layout, 4U,
+                value_base, NULL, &block_peak))
+            return rv32_frame_reject("spill_peak", i, minic_type_void());
+        if (block_peak > peak_bytes) peak_bytes = block_peak;
+    }
+    for (i = 0U; i < f->block_count; ++i) {
+        size_t block_peak = 0U;
+        if (!minic_core_block_reused_spill_layout(
+                program, f, &f->blocks[i], t->data_layout, 4U,
+                value_base, frame->value_offsets, &block_peak) ||
+            block_peak > peak_bytes)
+            return rv32_frame_reject("spill_assign", i, minic_type_void());
+    }
+    if (value_base > SIZE_MAX - peak_bytes)
+        return rv32_frame_reject("spill_total", 0U, minic_type_void());
+    next = value_base + peak_bytes;
     if (next > SIZE_MAX - frame->varargs_size ||
         !rv32_align(next + frame->varargs_size, 16U, &frame->frame_size) ||
         frame->frame_size > (size_t)INT32_MAX ||
