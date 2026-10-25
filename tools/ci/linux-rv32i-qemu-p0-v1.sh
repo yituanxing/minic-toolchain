@@ -140,7 +140,7 @@ timeout --signal=TERM "${rv32i_timeout}s" qemu-system-riscv32 \
   -M virt -cpu max -m 512M -smp 1 -nographic -no-reboot \
   -bios "$bios" -kernel "$image" -dtb "$dtb" \
   -device "loader,file=$work/initramfs.cpio.gz,addr=$initrd_addr,force-raw=on" \
-  -append 'console=ttyS0 earlycon=sbi loglevel=8 panic=-1 rdinit=/init' \
+  -append "console=ttyS0 earlycon=${RV32I_QEMU_EARLYCON:-sbi} loglevel=8 panic=-1 rdinit=/init" \
   </dev/null >"$work/qemu-serial.log" 2>&1
 status=$?
 set -e
