@@ -82,15 +82,16 @@ bool rv32_frame_init(Rv32Frame *frame, const MinicC0Program *program,
     if (frame->has_dynamic_stack && frame->saved_base_offset > SIZE_MAX - 4U)
         return rv32_frame_reject("saved_base", 0U, f->return_type);
     next = frame->saved_base_offset + (frame->has_dynamic_stack ? 4U : 0U);
-    /* Same proved per-CoreObject lifetime analysis used by RV64.
-     * RV32 deliberately disables cross-block sharing; its layout remains
-     * ILP32. A slot holds at most 8 bytes, including long long/double.
-     * Do not confuse conservative CoreObject lifetime with SSA spill reuse. */
+    /* The already merged RV64 P1 first-write/escape/lifetime proof is
+     * target-independent and lives in common CoreObject analysis.
+     * Admit its safe cross-block reuse here too: ILP32 object extents and
+     * ABI frame offsets remain RV32-owned. Disqualify ambiguous uses inside
+     * the shared analyzer; never introduce a separate RV32 proof. */
     {
         MinicCoreObjectReusePlan reuse = {0};
         size_t pool_slots = 0U, pool_base;
         if (!minic_core_object_reuse_plan_build(
-                program, f, t->data_layout, 8U, false, &reuse) ||
+                program, f, t->data_layout, 8U, true, &reuse) ||
             !minic_core_object_reuse_plan_get(
                 &reuse, MINIC_CORE_OBJECT_INVALID, NULL, NULL, &pool_slots)) {
             minic_core_object_reuse_plan_destroy(&reuse);
@@ -140,9 +141,9 @@ bool rv32_frame_init(Rv32Frame *frame, const MinicC0Program *program,
         }
         minic_core_object_reuse_plan_destroy(&reuse);
     }
-    /* Reuse RV64's safe block-local SSA lifetimes with ILP32 4-byte slots.
-     * No cross-block CoreObject slot sharing: its earlier RV64 experiment
-     * failed Linux P1, so objects retain conservative permanent addresses. */
+    /* RV64-proven Core SSA last-use reuse is still block-local; ILP32
+     * values use 4-byte physical units. CoreObject cross-block eligibility
+     * is handled separately by the shared first-write safety proof above. */
     if (!rv32_align(next, 8U, &value_base))
         return rv32_frame_reject("spill_base", next, minic_type_void());
     for (i = 0U; i < f->block_count; ++i) {
