@@ -157,12 +157,34 @@ PY
 # GNU reference Kbuild with the exact musl headers, never Picolibc or
 # RV64 host glibc. The command-line driver is stable for all original
 # Kbuild C owners. Link closure is explicitly verified.
+# Kbuild controls the original C owners. The driver wrapper does not
+# replace any source or C object: it supplies the genuine native musl CRT
+# BEFORE Kbuild owners and libc/libgcc AFTER them on the link command.
+# BusyBox trylink passes EXTRA_LDFLAGS ahead of its entire object group,
+# so archives there become duplicate-owned startup/library objects.
+# libm is part of real upstream musl libc.a; bare GNU -lm is not installed.
 cat >"$work/rv32-linux-musl-gcc" <<EOF
 #!/usr/bin/env bash
-exec "$BARE_CC" -march=rv32i -mabi=ilp32 \
-  -nostdinc -isystem "$sysroot/usr/include" -isystem "$builtins" \
-  -I"$repo/tests/linker/fixtures/busybox-uapi" -fno-builtin \
-  "\$@"
+set -Eeuo pipefail
+args=( "\$@" )
+base=( "$BARE_CC" -march=rv32i -mabi=ilp32
+  -nostdinc -isystem "$sysroot/usr/include" -isystem "$builtins"
+  -I"$repo/tests/linker/fixtures/busybox-uapi" -fno-builtin )
+compile=0
+for item in "\${args[@]}"; do
+  case "\$item" in -c|-E|-S|-M|-MM) compile=1 ;; esac
+done
+if ((compile)); then
+  exec "\${base[@]}" "\${args[@]}"
+fi
+link_args=()
+for item in "\${args[@]}"; do
+  case "\$item" in -lm) ;; *) link_args+=( "\$item" ) ;; esac
+done
+exec "\${base[@]}" -nostdlib -static -Wl,-e,_start \
+  "$work/build/obj/crt/crt1.o" "$work/build/obj/crt/crti.o" \
+  "\${link_args[@]}" -Wl,--start-group "$work/build/lib/libc.a" \
+  "$libgcc" -Wl,--end-group "$work/build/obj/crt/crtn.o"
 EOF
 chmod +x "$work/rv32-linux-musl-gcc"
 # The original BusyBox linker defaults assume GCC drives a native GNU
@@ -171,9 +193,6 @@ chmod +x "$work/rv32-linux-musl-gcc"
 set +e
 timeout 240s make -C "$work/busybox" O="$work/busybox-out" -j4 \
     ARCH=riscv CC="$work/rv32-linux-musl-gcc" HOSTCC=cc \
-    EXTRA_LDFLAGS="-nostdlib -static -Wl,-e,_start \
-    $work/build/obj/crt/crt1.o $work/build/obj/crt/crti.o \
-    $work/build/lib/libc.a $libgcc $work/build/obj/crt/crtn.o" \
     busybox >"$work/busybox-build.log" 2>&1
 rc=$?
 set -e
