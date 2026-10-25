@@ -97,6 +97,31 @@ static int tmpfs_rw(void) {
     check("INIT_TMPFS_RW",ok);
     return ok;
 }
+/* Run P2 once in a newly execve'd genuine ELF32 child. This is a
+ * separate opt-in runtime frontier from the canonical P0/P1 oracle. */
+static int p2_requested(void) {
+    char line[1024];
+    long fd=C4(SYS_OPENAT,AT_FDCWD,"/proc/cmdline",O_RDONLY,0);
+    long n=bad(fd)?-1:C3(SYS_READ,fd,line,sizeof(line)-1);
+    if(!bad(fd))(void)C1(SYS_CLOSE,fd);
+    return n>0 && has(line,(word)n,"minic_runtime=p2");
+}
+static void run_p2(void) {
+    long child=C5(SYS_CLONE,SIGCHLD,0,0,0,0);
+    if(child==0) {
+        char *const args[]={"runtime-p2",0};
+        char *const env[]={"PATH=/bin",0};
+        (void)C3(SYS_EXECVE,"/bin/runtime-p2",args,env);
+        say("RV32I_P2_EXECVE=FAIL\n");
+        (void)C1(SYS_EXIT,127);
+        for(;;)__asm__ volatile("nop");
+    }
+    if(bad(child)){check("RV32I_P2_CHILD",0);return;}
+    u32 info[32];zero(info,sizeof(info));
+    long rv=C5(SYS_WAITID,1,child,info,4,0);
+    check("RV32I_P2_CHILD",rv==0&&info[2]==1&&
+          info[3]==(u32)child&&info[5]==0);
+}
 static int run_probe(void) {
     long child=C5(SYS_CLONE,SIGCHLD,0,0,0,0);
     if(child==0) {
@@ -130,8 +155,10 @@ __attribute__((noreturn,used)) void _start(void){
     (void)mount_fs("sysfs","/sys","INIT_SYSFS_MOUNT");
     (void)mount_fs("devtmpfs","/dev","INIT_DEVTMPFS_MOUNT");
     int p1=cmdline();
+    int p2=p2_requested();
     (void)tmpfs_rw();
     if(p1)(void)run_probe();
+    if(p2)run_p2();
     if(fails==0) {
         say("USER_SHELL_OK\n");
         say("DONE_COMMANDS\n");
