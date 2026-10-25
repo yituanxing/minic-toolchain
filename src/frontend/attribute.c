@@ -182,7 +182,7 @@ static const MinicAttributeDescriptor minic_attribute_descriptors[] = {
         0U,
         true,
     },
-    /* GCC's no_sanitize("undefined") disables UBSan instrumentation.
+    /* GCC's no_sanitize policy strings disable UBSan instrumentation.
      * MiniC does not emit UBSan checks; the known spelling is a
      * validated policy no-op, not an unrecognized attribute. */
     {

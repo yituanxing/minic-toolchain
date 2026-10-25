@@ -198,21 +198,32 @@ static bool consume_function_attribute(MinicParser *parser,
 
     if (descriptor->kind == MINIC_ATTRIBUTE_NO_SANITIZE) {
         MinicSourceSpan argument;
-        static const char undefined_sanitizer[] = "\"undefined\"";
+        /* Exact GCC/Clang UBSan control strings, including the forms used
+         * by upstream Zstandard. MiniC emits no sanitizer instrumentation;
+         * the subset is explicitly recognized, not silently discarded. */
+        static const char *const names[] = {
+            "\"undefined\"",
+            "\"pointer-overflow\"",
+            "\"signed-integer-overflow\""
+        };
+        size_t i;
+        size_t length;
 
-        /* Only the qualified GNU UBSan suppression is accepted. MiniC
-         * emits no sanitizer instrumentation so the effect is a no-op.
-         * Reject malformed/unrecognized arguments explicitly. */
         if (!function_attribute_argument_token(
-                parser, attribute, MINIC_TOKEN_STRING_LITERAL, &argument) ||
-            minic_parser_span_length(argument) != sizeof(undefined_sanitizer) - 1U ||
-            memcmp(parser->source + argument.begin.offset,
-                   undefined_sanitizer, sizeof(undefined_sanitizer) - 1U) != 0) {
-            minic_parser_error(
-                parser, "GNU no_sanitize requires one supported string literal: undefined");
+                parser, attribute, MINIC_TOKEN_STRING_LITERAL, &argument)) {
+            minic_parser_error(parser, "GNU no_sanitize requires one string literal");
             return false;
         }
-        return true;
+        length = minic_parser_span_length(argument);
+        for (i = 0U; i < sizeof(names) / sizeof(names[0]); ++i) {
+            if (length == strlen(names[i]) &&
+                memcmp(parser->source + argument.begin.offset,
+                       names[i], length) == 0) {
+                return true;
+            }
+        }
+        minic_parser_error(parser, "GNU no_sanitize unsupported sanitizer policy");
+        return false;
     }
 
     if (descriptor->kind == MINIC_ATTRIBUTE_COPY) {

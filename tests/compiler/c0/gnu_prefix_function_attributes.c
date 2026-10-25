@@ -57,3 +57,10 @@ int zstd_ubsan_policy(int value) { return value + 1; }
 
 __attribute__((__no_sanitize__("undefined")))
 int zstd_ubsan_underscored_policy(int value) { return value - 1; }
+
+/* The exact policy used by pinned upstream Zstd 1.5.7. */
+__attribute__((no_sanitize("pointer-overflow")))
+int zstd_pointer_overflow_policy(int value) { return value; }
+
+__attribute__((no_sanitize("signed-integer-overflow")))
+int zstd_signed_overflow_policy(int value) { return value; }

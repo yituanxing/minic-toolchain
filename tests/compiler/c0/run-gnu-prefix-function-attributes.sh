@@ -23,6 +23,8 @@ grep -F 'externally_visible_decl:' "$assembly" >/dev/null
 grep -F 'instrumentation_policy_aliases:' "$assembly" >/dev/null
 grep -F 'zstd_ubsan_policy:' "$assembly" >/dev/null
 grep -F 'zstd_ubsan_underscored_policy:' "$assembly" >/dev/null
+grep -F 'zstd_pointer_overflow_policy:' "$assembly" >/dev/null
+grep -F 'zstd_signed_overflow_policy:' "$assembly" >/dev/null
 grep -F 'prefix_plain_spelling_identity:' "$assembly" >/dev/null
 grep -F '.globl externally_visible_decl' "$assembly" >/dev/null
 grep -F '.section .probe.externally-visible.text' "$assembly" >/dev/null
@@ -53,7 +55,7 @@ if "$minic" -S "$work/no-sanitize-invalid.i" -o "$work/no-sanitize-invalid.s" \
     printf '%s\n' 'FAIL compiler/c0/gnu_prefix_function_attributes: invalid sanitizer argument accepted' >&2
     exit 1
 fi
-grep -F 'GNU no_sanitize requires one supported string literal: undefined' \
+grep -F 'GNU no_sanitize requires one string literal' \
     "$work/no-sanitize-invalid.err" >/dev/null
 
 printf '%s\n' 'PASS compiler/c0/gnu_prefix_function_attributes prefix=1 metadata=unused,no-instrument,externally-visible function+object=1 reachability=parse-only public-linkage=preserved gnu-inline=static+bare+plain-spelling always-inline=underscored+plain-spelling extern-inline=fail-closed no-sanitize-address=parse-only no-stack-protector=parse-only'

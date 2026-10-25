@@ -41,6 +41,7 @@ if ((${#sources[@]} < 15)); then
   exit 1
 fi
 mkdir -p "$work/obj" "$work/run"
+blocked=0
 for source in "${sources[@]}"; do
   name=${source#"$src/lib/"}
   stem=${name//\//_}
@@ -58,26 +59,34 @@ for source in "${sources[@]}"; do
   if ! "$MINIC_CC" --target=riscv32-linux "${target[@]}" -S \
       "$work/obj/$stem.i" -o "$work/obj/$stem.s" \
       >"$work/obj/$stem.minic.out" 2>"$work/obj/$stem.minic.err"; then
-    echo "RV32_ZSTD=FAIL stage=MiniC source=$name" >&2
+    echo "RV32_ZSTD_TU=BLOCKED stage=MiniC source=$name" >&2
     head -n 25 "$work/obj/$stem.minic.err" >&2
-    exit 1
+    blocked=$((blocked + 1))
+    continue
   fi
   if ! "$RISCV_CC" "${target[@]}" -c "$work/obj/$stem.s" \
       -o "$work/obj/$stem-gnu-as.o" \
       >"$work/obj/$stem.as.out" 2>"$work/obj/$stem.as.err"; then
-    echo "RV32_ZSTD=FAIL stage=GNU_AS source=$name" >&2
+    echo "RV32_ZSTD_TU=BLOCKED stage=GNU_AS source=$name" >&2
     head -n 25 "$work/obj/$stem.as.err" >&2
-    exit 1
+    blocked=$((blocked + 1))
+    continue
   fi
   if ! "$MINIAS" "${target[@]}" -o "$work/obj/$stem-minias.o" \
       "$work/obj/$stem.s" >"$work/obj/$stem.mini-as.out" \
       2>"$work/obj/$stem.mini-as.err"; then
-    echo "RV32_ZSTD=FAIL stage=MiniAS source=$name" >&2
+    echo "RV32_ZSTD_TU=BLOCKED stage=MiniAS source=$name" >&2
     head -n 25 "$work/obj/$stem.mini-as.err" >&2
-    exit 1
+    blocked=$((blocked + 1))
+    continue
   fi
   echo "RV32_ZSTD_TU=PASS source=$name GCC=1 MiniC=1 GNU_AS=1 MiniAS=1"
 done
+echo "RV32_ZSTD_CENSUS total=${#sources[@]} blocked=$blocked"
+if ((blocked != 0)); then
+  echo "RV32_ZSTD=BLOCKED genuine_original_TUs=${#sources[@]} blocked=$blocked" >&2
+  exit 1
+fi
 echo "RV32_ZSTD_CENSUS=PASS originals=${#sources[@]} GNU_C_fallback=0"
 # Harness uses only the genuine public libzstd API. Repeated inputs include
 # empty/small/large, repeating and high-entropy patterns. Byte-for-byte
