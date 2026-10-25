@@ -144,8 +144,10 @@ for i,line in enumerate(lines):
             lines[i]=f"CONFIG_{name}=y\n"
 open(p,"w").writelines(lines)
 PY
-make -C "$work/busybox" O="$work/busybox-out" \
-  HOSTCC=cc olddefconfig >"$work/olddefconfig.log" 2>&1 || {
+# BusyBox 1.36.1 Kconfig has 'oldconfig', not Linux's newer
+# 'olddefconfig' target. Answer optional defaults without modifying C.
+{ yes "" || :; } | timeout 90s make -C "$work/busybox" O="$work/busybox-out" \
+  HOSTCC=cc oldconfig >"$work/olddefconfig.log" 2>&1 || {
     echo "RV32_BUSYBOX=BLOCKED stage=olddefconfig" >&2
     tail -n 32 "$work/olddefconfig.log" >&2
     exit 1
