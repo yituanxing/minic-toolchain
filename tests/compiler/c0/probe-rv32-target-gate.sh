@@ -126,4 +126,27 @@ grep -Fq '.4byte initcall_start' "$work/kernel-initcall-array.s"
 grep -Fq '.4byte initcall_mid' "$work/kernel-initcall-array.s"
 grep -Fq '.4byte initcall_end' "$work/kernel-initcall-array.s"
 echo 'RV32I_GLOBAL_SECTION_ARRAY=PASS three_pointer_relocations=1 shared_array_layout=1'
+cat > "$work/kernel-csr-structured.i" <<'SRC'
+static inline unsigned long original_save_flags(void) {
+    unsigned long value;
+    __asm__ __volatile__("csrr %0, 0x100" : "=r"(value) : : "memory");
+    return value;
+}
+static inline unsigned long original_exchange(unsigned long value) {
+    unsigned long old;
+    __asm__ __volatile__("csrrc %0, 0x100, %1"
+                         : "=r"(old) : "r"(value) : "memory");
+    return old;
+}
+unsigned long original_kernel_flags(void) {
+    return original_exchange(original_save_flags());
+}
+SRC
+"$MINIC_CC" --target=riscv32-linux -march=rv32i -mabi=ilp32 \
+    -S "$work/kernel-csr-structured.i" -o "$work/kernel-csr-structured.s"
+grep -Fq 'csrr t0, 0x100' "$work/kernel-csr-structured.s"
+grep -Fq 'csrrc t0, 0x100, t1' "$work/kernel-csr-structured.s"
+grep -Fq 'sw t0, 0(t3)' "$work/kernel-csr-structured.s"
+grep -Fq '# MINIC_SOURCE_INLINE_ASM_BEGIN' "$work/kernel-csr-structured.s"
+echo 'RV32I_STRUCTURED_CSR=PASS output_input=1 pointer_writeback=1 kernel_asm_provenance=1'
 echo 'RV32I_TARGET_GATE=PASS ILP32_registered=true incompatible_ISA_rejected=true basic_C_core_emitted=true'
