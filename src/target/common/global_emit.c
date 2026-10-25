@@ -1001,10 +1001,27 @@ bool minic_multi_emit_simple_global(FILE *out, const MinicC0Program *program,
         const MinicArrayType *array =
             minic_c0_program_array_type(program, obj->type.array_type_id);
         bool array_of_records;
+        bool nested_record_array = false;
+        MinicType leaf;
         if (array == NULL) return false;
         array_of_records = minic_type_is_record(array->element_type);
-        if (obj->union_selection_count != 0U && !array_of_records) return false;
-        if (array_of_records || obj->relocation_count != 0U) {
+        leaf = array->element_type;
+        /* An array-of-arrays-of-records is one aggregate, not a flat
+         * scalar array. Zstd's unchanged algoTime[16][2] has 64 scalar
+         * slots across 32 structs. Use the already qualified recursive
+         * DataLayout walker for exact ILP32/LP64 field bytes and padding. */
+        while (minic_type_is_array(leaf)) {
+            const MinicArrayType *nested =
+                minic_c0_program_array_type(program, leaf.array_type_id);
+            if (nested == NULL) return false;
+            leaf = nested->element_type;
+            if (minic_type_is_record(leaf))
+                nested_record_array = true;
+        }
+        if (obj->union_selection_count != 0U &&
+            !array_of_records && !nested_record_array) return false;
+        if (array_of_records || nested_record_array ||
+            obj->relocation_count != 0U) {
             const char *section = obj->is_read_only
                 ? (obj->relocation_count != 0U
                    ? ".section .data.rel.ro" : ".section .rodata") : ".data";
@@ -1019,6 +1036,10 @@ bool minic_multi_emit_simple_global(FILE *out, const MinicC0Program *program,
                     ? minic_multi_emit_record_array_global(
                           out, program, target, obj, storage_size,
                           emit_relocation)
+                    : nested_record_array
+                    ? minic_multi_emit_recursive_aggregate_global(
+                          out, program, target, obj, storage_size,
+                          emit_relocation, NULL)
                     : minic_multi_emit_relocatable_scalar_array(
                           out, program, target, obj, storage_size,
                           emit_relocation, NULL)) ||

@@ -6,6 +6,18 @@
 
 /* ILP32 frame planner and stack word transport. RV64's LP64-specific
  * dynamic-frame and 8-byte SSA slot assumptions are not imported. */
+/* A failed real-world frame should identify the ownership boundary
+ * in the same grouped acceptance run, rather than spend a CI cycle per
+ * source file. This prints only on actual rejection when explicitly enabled. */
+static bool rv32_frame_reject(const char *stage, size_t index, MinicType type) {
+    if (getenv("MINIC_RV32_FRAME_TRACE") != NULL)
+        (void)fprintf(stderr,
+            "RV32_FRAME_REJECT stage=%s index=%zu kind=%d depth=%u rank=%d\n",
+            stage, index, (int)type.base_kind,
+            (unsigned)type.pointer_depth, (int)type.integer_rank);
+    return false;
+}
+
 static bool rv32_align(size_t value, size_t by, size_t *out) {
     if (by == 0U || (by & (by - 1U)) != 0U ||
         value > SIZE_MAX - (by - 1U)) return false;
@@ -24,7 +36,7 @@ bool rv32_frame_init(Rv32Frame *frame, const MinicC0Program *program,
     /* The ABI plan is built once; frame and call emission consume exactly
      * its precomputed stack bound and individual argument placements. */
     if (!rv32_function_abi_plan_build(f, &frame->abi))
-        return false;
+        return rv32_frame_reject("abi_plan", 0U, minic_type_void());
     max_stack_args = frame->abi.max_outgoing_stack_words;
     frame->is_variadic = is_variadic;
     if (frame->abi.named_gpr_words > 8U ||
@@ -59,7 +71,8 @@ bool rv32_frame_init(Rv32Frame *frame, const MinicC0Program *program,
                                     f->values[i].type, &size, &alignment) ||
             size == 0U || size > 8U ||
             !rv32_align(next, words == 2U ? 8U : 4U, &next) ||
-            next > SIZE_MAX - words * 4U) return false;
+            next > SIZE_MAX - words * 4U)
+            return rv32_frame_reject("value_slot", i, f->values[i].type);
         frame->value_offsets[i] = next;
         next += words * 4U;
     }
@@ -69,12 +82,13 @@ bool rv32_frame_init(Rv32Frame *frame, const MinicC0Program *program,
         if (!minic_data_layout_type(t->data_layout, program,
                                     obj->type, &size, &align) ||
             (obj->element_count > 1U &&
-             size > SIZE_MAX / obj->element_count)) return false;
+             size > SIZE_MAX / obj->element_count))
+            return rv32_frame_reject("object_layout", i, obj->type);
         if (obj->element_count > 1U) size *= obj->element_count;
         if (obj->explicit_alignment > align) align = obj->explicit_alignment;
         if (align < 4U) align = 4U;
         if (!rv32_align(next, align, &next) || size > SIZE_MAX - next)
-            return false;
+            return rv32_frame_reject("object_offset", i, obj->type);
         frame->object_offsets[i] = next;
         next += size != 0U ? size : 1U;
     }
@@ -82,7 +96,7 @@ bool rv32_frame_init(Rv32Frame *frame, const MinicC0Program *program,
         !rv32_align(next + frame->varargs_size, 16U, &frame->frame_size) ||
         frame->frame_size > (size_t)INT32_MAX ||
         frame->frame_size < frame->varargs_size)
-        return false;
+        return rv32_frame_reject("frame_size", next, minic_type_void());
     frame->varargs_offset = frame->frame_size - frame->varargs_size;
     return frame->varargs_offset >= next;
 }

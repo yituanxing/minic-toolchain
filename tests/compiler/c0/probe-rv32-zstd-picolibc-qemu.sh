@@ -56,7 +56,7 @@ for source in "${sources[@]}"; do
     head -n 25 "$work/obj/$stem.gcc.err" >&2
     exit 1
   fi
-  if ! "$MINIC_CC" --target=riscv32-linux "${target[@]}" -S \
+  if ! MINIC_RV32_FRAME_TRACE=1 "$MINIC_CC" --target=riscv32-linux "${target[@]}" -S \
       "$work/obj/$stem.i" -o "$work/obj/$stem.s" \
       >"$work/obj/$stem.minic.out" 2>"$work/obj/$stem.minic.err"; then
     echo "RV32_ZSTD_TU=BLOCKED stage=MiniC source=$name" >&2

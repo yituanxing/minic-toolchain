@@ -1301,6 +1301,21 @@ MinicCoreLowerStatus core_asm_try_empty_barrier_scalar_forms(
     *handled = false;
     MinicCoreInlineAsmId inline_asm_id;
     MinicCoreInstruction instruction;
+    /* GNU's nonvolatile asm("") with no operands, labels or clobbers
+     * contains no instructions, output values, or compiler barriers.
+     * The original upstream Zstd uses this exact ordering-only source
+     * form. Unlike a volatile or memory-clobber form there is no Core
+     * effect to represent. Never discard any asm with a live operand. */
+    if (!source->is_volatile && !source->is_goto &&
+        source->template_text != NULL && source->template_length == 0U &&
+        source->output_count == 0U && source->input_count == 0U &&
+        source->label_count == 0U && source->clobber_count == 0U &&
+        source->register_clobber_count == 0U &&
+        !source->has_memory_clobber) {
+        *handled = true;
+        return MINIC_CORE_LOWER_OK;
+    }
+
     /* M77_EMPTY_TIED_ASM_COPY: an empty, nonvolatile GNU asm with one
        register output tied to input 0 carries no target instruction semantics.
        It preserves the input register bit-pattern in the output. Model that
