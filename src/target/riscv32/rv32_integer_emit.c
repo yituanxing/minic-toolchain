@@ -19,6 +19,41 @@ static bool rv32_emit_mixed_checked_overflow(FILE *out,
     unsigned left_bits, right_bits, result_bits;
     bool left_signed, right_signed, result_signed;
     const char *store;
+    /* The kernel also uses __builtin_add_overflow(unsigned long long,
+     * unsigned int, unsigned int *).  The mathematical sum fits one
+     * zero-extended XLEN word exactly iff the high input word is zero and
+     * the low-word addition does not carry.  Keep this case independent of
+     * the two-narrow-operands path: rv32_scalar deliberately rejects a
+     * two-word input. */
+    if (ins->value.integer_overflow.operator_kind ==
+            MINIC_CORE_INTEGER_OVERFLOW_ADD &&
+        ((rv32_is_wide_integer(f, f->values[lhs].type) &&
+          minic_type_is_unsigned_integer(f->values[lhs].type) &&
+          rv32_scalar(f, f->values[rhs].type, &right_bits, &right_signed) &&
+          !right_signed && right_bits == 32U) ||
+         (rv32_is_wide_integer(f, f->values[rhs].type) &&
+          minic_type_is_unsigned_integer(f->values[rhs].type) &&
+          rv32_scalar(f, f->values[lhs].type, &left_bits, &left_signed) &&
+          !left_signed && left_bits == 32U)) &&
+        rv32_scalar(f, result_type, &result_bits, &result_signed) &&
+        !result_signed && result_bits == 32U) {
+        const bool wide_left =
+            rv32_is_wide_integer(f, f->values[lhs].type);
+        const MinicCoreValueId wide = wide_left ? lhs : rhs;
+        const MinicCoreValueId narrow = wide_left ? rhs : lhs;
+        return rv32_pair_slot(out, fr, wide, "t0", "t1", true) &&
+               rv32_slot(out, fr, narrow, "t2", true) &&
+               fprintf(out,
+                   "  add t3, t0, t2\n"
+                   "  sltu t4, t3, t0\n"
+                   "  or t4, t4, t1\n"
+                   "  snez t4, t4\n") >= 0 &&
+               rv32_slot(out, fr,
+                         ins->value.integer_overflow.result_address,
+                         "t0", true) &&
+               fprintf(out, "  sw t3, 0(t0)\n") >= 0 &&
+               rv32_slot(out, fr, ins->result, "t4", false);
+    }
     if (!rv32_scalar(f, f->values[lhs].type, &left_bits, &left_signed) ||
         !rv32_scalar(f, f->values[rhs].type, &right_bits, &right_signed) ||
         !rv32_scalar(f, result_type, &result_bits, &result_signed) ||

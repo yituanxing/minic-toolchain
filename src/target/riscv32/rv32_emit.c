@@ -287,7 +287,7 @@ static bool rv32_emit_source_structured_asm(
     for (i = 0U; i < n; ++i) {
         const MinicCoreStructuredInlineAsmOperand *b =
             &ins->value.structured_inline_asm.operands[i];
-        unsigned bits;
+        unsigned bits = 0U;
         bool is_signed;
         MinicType pointee;
         if (b->operand_index >= n || seen[b->operand_index] ||
@@ -314,8 +314,12 @@ static bool rv32_emit_source_structured_asm(
         case MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT:
         case MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE:
             if (!minic_type_pointee(f->values[b->value].type, &pointee) ||
-                !rv32_scalar(f, pointee, &bits, &is_signed) ||
-                (bits != 8U && bits != 16U && bits != 32U))
+                (!rv32_scalar(f, pointee, &bits, &is_signed) &&
+                 !(b->kind == MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT &&
+                   rv32_is_wide_integer(f, pointee))) ||
+                ((bits != 8U && bits != 16U && bits != 32U) &&
+                 !(b->kind == MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT &&
+                   rv32_is_wide_integer(f, pointee))))
                 return false;
             break;
         case MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT:
@@ -363,7 +367,7 @@ static bool rv32_emit_source_structured_asm(
     for (i = 0U; i < n; ++i) {
         const MinicCoreStructuredInlineAsmOperand *b =
             &ins->value.structured_inline_asm.operands[i];
-        unsigned bits;
+        unsigned bits = 0U;
         bool is_signed;
         MinicType pointee;
         const char *store;
@@ -371,11 +375,19 @@ static bool rv32_emit_source_structured_asm(
             b->kind != MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE)
             continue;
         if (!minic_type_pointee(f->values[b->value].type, &pointee) ||
-            !rv32_scalar(f, pointee, &bits, &is_signed))
+            (!rv32_scalar(f, pointee, &bits, &is_signed) &&
+             !rv32_is_wide_integer(f, pointee)))
             return false;
         store = bits == 8U ? "sb" : bits == 16U ? "sh" : "sw";
         if (!rv32_slot(out, fr, b->value, "a2", true) ||
             fprintf(out, "  %s %s, 0(a2)\n", store, regs[b->operand_index]) < 0)
+            return false;
+        /* GNU ILP32 permits a long-long register output; the source template
+         * can designate its low register via %N.  A template which only
+         * writes that low word leaves the upper register unspecified; choose
+         * zero as a stable value for the otherwise uninitialized half. */
+        if (rv32_is_wide_integer(f, pointee) &&
+            fprintf(out, "  sw zero, 4(a2)\n") < 0)
             return false;
     }
     return true;
