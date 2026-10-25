@@ -3311,3 +3311,57 @@ jobs:
             build/linux-runtime-gcc-cohort-v1/trials/earlycon_fixed_only/qemu-explicit-*/rdinit-init.log
           if-no-files-found: warn
           retention-days: 7
+
+  # This is an RV32I *entry gate*, not another Linux validation system.
+  # Reuses the exact Linux 6.6.143 source cache and the established
+  # stage2_kbuild_cc.sh GNU-E / MiniC-S / GNU-AS SHA receipt mechanism.
+  # RV64's seven-shard/Image/P1 jobs are not enabled by this tag.
+  rv32i-kbuild-entry:
+    if: github.event_name == 'push' && contains(github.event.head_commit.message, '[linux-rv32i-kbuild]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - name: Install original kernel build tools and RV32-capable GNU cross assembler
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 update -qq
+          sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 install -y --no-install-recommends \
+            gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
+            bc bison flex libssl-dev libelf-dev make python3 file xz-utils
+      - uses: ./.github/actions/linux-runtime-restore-fixture
+        with:
+          fixture: source
+      - name: Build exact-main strict RV32I MiniC once
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/rv32i-linux-tools \
+            build/rv32i-linux-tools/bin/minic-cc
+          bash tests/compiler/c0/probe-rv32-target-gate.sh
+        env:
+          MINIC_CC: build/rv32i-linux-tools/bin/minic-cc
+      - name: Genuine Linux 6.6.143 ARCH_RV32I GNU baseline and MiniC Kbuild owners
+        shell: bash
+        timeout-minutes: 65
+        run: |
+          set -Eeuo pipefail
+          MINIC_CC="$GITHUB_WORKSPACE/build/rv32i-linux-tools/bin/minic-cc" \
+          RV32I_LINUX_SOURCE="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0/linux-6.6.143" \
+          RV32I_LINUX_WORK="$GITHUB_WORKSPACE/build/rv32i-linux-entry" \
+            bash tests/external/linux/rv32i_kbuild_entry.sh
+      - name: Preserve original Linux / RV32I provenance and first blocker
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-rv32i-original-kbuild-${{ github.sha }}
+          path: |
+            build/rv32i-linux-entry/evidence/
+            build/rv32i-linux-entry/out/.config
+            build/rv32i-linux-entry/out/**/*.failed.i
+            build/rv32i-linux-entry/out/**/*.failed.stderr
+          retention-days: 7
+          if-no-files-found: warn

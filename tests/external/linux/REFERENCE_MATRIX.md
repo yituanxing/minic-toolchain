@@ -62,3 +62,21 @@ cached objects and previous Linux PASS receipts are not current-source proof.
 Do not enable historical Python patch overlays or change kernel C/Kconfig.
 The opt-in commit initiating this run is an execution request, not a PASS;
 only its producer and receiver CI evidence can establish acceptance.
+
+## RV32I original Linux 6.6.143 entry (2026-10-25)
+
+The existing `linux-runtime-gcc-baseline.yml` executes the RV32I entry only
+on explicit `[linux-rv32i-kbuild]` commits, without invoking RV64 full shards.
+The pin is the SAME original Linux 6.6.143 source cache and SHA as RV64.
+`ARCH_RV32I` must actually resolve with `NONPORTABLE=y`, ELF32 and ILP32.
+The upstream kernel deliberately uses rv32ima for atomic / privileged ASM,
+while MiniC-owned C machine instructions remain strictly RV32I. Do not call
+an entire Linux kernel "RV32I only"; a kernel with A assembly is not one.
+The existing `stage2_kbuild_cc.sh` proxy now makes this distinction explicit
+and retains the actual original GNU assembler flags, owner SHA and provenance.
+
+Required staged claims: original GNU Kbuild Image first, then exact real
+Kbuild C owners compiled by MiniC at `-march=rv32i -mabi=ilp32`,
+then original GNU Kbuild relink. Full seven-way MiniC C-owner coverage,
+kernel QEMU boot and P1 12/12 are NOT certified by this entry test and
+cannot be replaced by BusyBox, a dummy kernel or host QEMU-user tests.
