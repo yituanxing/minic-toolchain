@@ -2361,6 +2361,10 @@ jobs:
           set -Eeuo pipefail
           image="$GITHUB_WORKSPACE/build/rv32i-linux-entry/out/arch/riscv/boot/Image"
           test -s "$image"
+          # Regression after sharing the RV64 CoreObject lifetime analysis:
+          # the former one-object blocker lib/crypto/blake2s-generic.o only
+          # counts as fixed if this NEW 1741/1741 MiniC Image also boots.
+          echo "RV32I_CURRENT_MINIC_IMAGE_SHA256=$(sha256sum "$image" | cut -d' ' -f1)"
           RV32I_QEMU_IMAGE="$image" \
           RV32I_QEMU_WORK="$GITHUB_WORKSPACE/build/rv32i-linux-entry/current-qemu-p0" \
           RV32I_QEMU_TIMEOUT_SECONDS=25 \
