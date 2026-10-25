@@ -676,7 +676,7 @@ jobs:
               gcc-riscv64-linux-gnu cpio device-tree-compiler
           command -v qemu-system-riscv32
           command -v riscv64-linux-gnu-gcc
-      - name: Single real QEMU RV32 P2 scoped subsystem frontier (NO Linux rebuild)
+      - name: Single real RV32 P2 QEMU frontier with no-GP-relax freestanding ELF32 (NO Linux rebuild)
         if: contains(github.event.head_commit.message, '[rv32-p2]')
         shell: bash
         timeout-minutes: 3
