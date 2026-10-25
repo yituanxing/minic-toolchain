@@ -28,10 +28,13 @@ fi
 make "${gnu_args[@]}" defconfig >"$ev/defconfig.log" 2>&1
 "$src/scripts/config" --file "$out/.config" \
   -e NONPORTABLE -e ARCH_RV32I -d ARCH_RV64I \
-  -d EFI -d RISCV_ISA_C -d FPU -d SMP
+  -d EFI -d RISCV_ISA_C -d FPU -d SMP -d VGA_CONSOLE
 make "${gnu_args[@]}" olddefconfig >"$ev/olddefconfig.log" 2>&1
 # Linux 6.6 arch/riscv/Kconfig EFI explicitly "select RISCV_ISA_C". Disable EFI
-# in the original Kconfig or olddefconfig silently re-enables compressed C.\n# This is a real original Kconfig audit, not a custom defconfig or kernel patch.
+# in the original Kconfig or olddefconfig silently re-enables compressed C.\n# Linux's VGA_CONSOLE defaults to y on RISC-V despite no screen_info owner.
+# It would make the otherwise valid original GNU 32-bit Image fail final LD.
+# Select the headless serial-console target using original Kconfig options.
+# This is a real original Kconfig audit, not a custom defconfig or kernel patch.
 # Preserve the GENERATED config even when the next fail-closed check fires.
 cp "$out/.config" "$ev/generated-kconfig.txt"
 grep -E '^(CONFIG_(NONPORTABLE|ARCH_RV32I|ARCH_RV64I|32BIT|RISCV_ISA_C|FPU|SMP)=|# CONFIG_(ARCH_RV64I|RISCV_ISA_C|FPU|SMP) is not set)' "$out/.config" |
@@ -41,7 +44,7 @@ for setting in CONFIG_NONPORTABLE CONFIG_ARCH_RV32I CONFIG_32BIT; do
     echo "RV32I_LINUX=FAIL Kconfig_missing=$setting" >&2; exit 3;
   }
 done
-for setting in CONFIG_ARCH_RV64I CONFIG_EFI CONFIG_RISCV_ISA_C CONFIG_FPU CONFIG_SMP; do
+for setting in CONFIG_ARCH_RV64I CONFIG_EFI CONFIG_RISCV_ISA_C CONFIG_FPU CONFIG_SMP CONFIG_VGA_CONSOLE; do
   grep -Fxq "# $setting is not set" "$out/.config" || {
     echo "RV32I_LINUX=FAIL Kconfig_wrong=$setting" >&2; exit 3;
   }
@@ -53,7 +56,20 @@ printf 'RV32I_LINUX_CONFIG=PASS original=6.6.143 arch=ARCH_RV32I no_C=1 no_FPU=1
 echo 'RV32I_LINUX_ISA_CONTRACT=PASS MiniC_C=rv32i original_Kbuild_asm=rv32ima separate_owners=true'
 # First establish the original GNU build. A failure is a GNU/Kconfig/toolchain
 # baseline blocker, NEVER reclassified as a MiniC defect.
-if ! make "${gnu_args[@]}" -j4 Image >"$ev/gnu-image.log" 2>&1; then
+# Stream a bounded, timestamped progress receipt without flooding the log.
+# The complete original make output stays in gnu-image.log, not in GitHub logs.
+start_seconds=$SECONDS
+make "${gnu_args[@]}" -j4 Image >"$ev/gnu-image.log" 2>&1 &
+gnu_pid=$!
+while kill -0 "$gnu_pid" 2>/dev/null; do
+  sleep 20
+  kill -0 "$gnu_pid" 2>/dev/null || break
+  completed=$(grep -cE '^[[:space:]]+(CC|AS|AR|LD|HOSTCC|HOSTLD)[[:space:]]+' "$ev/gnu-image.log" || true)
+  current=$(tail -n 1 "$ev/gnu-image.log" | cut -c1-150)
+  printf 'RV32I_GNU_KBUILD_PROGRESS elapsed_seconds=%s compile_and_link_events=%s last=%q\n' \
+    "$((SECONDS-start_seconds))" "$completed" "$current"
+done
+if ! wait "$gnu_pid"; then
   echo 'RV32I_LINUX_GNU_BASELINE=BLOCKED original_Kbuild_Image_failed' >&2
   tail -n 90 "$ev/gnu-image.log" >&2
   exit 4
