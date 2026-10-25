@@ -87,6 +87,39 @@ riscv64-linux-gnu-ar rcsD "$root/runtime/rv32i-softarith.a" "${runtime_objects[@
 lib="$root/runtime/rv32i-softarith.a"
 echo "RV32I_COHORT_RUNTIME=PASS sha=$(sha256sum "$lib" | cut -d' ' -f1)"
 
+# CRITICAL DIFFERENTIAL CONTROL: six disjoint MiniC object groups previously
+# produced the same early stack-end panic.  Before blaming six unrelated C
+# owners, prove original GNU objects STILL boot after the very same Kbuild
+# --eval softarith library seam and relink path used by each mixed trial.
+control="$root/trials/gnu-relink-control"
+mkdir -p "$control"
+touch "$out/init/main.o"
+if ! make "${makeargs[@]}" -j4 \
+    --eval="vmlinux: KBUILD_VMLINUX_LIBS += $lib" \
+    Image >"$control/link.log" 2>&1; then
+  echo 'RV32I_GNU_RELINK_CONTROL=FAIL original_GNU_link_seam' >&2
+  tail -n 80 "$control/link.log" >&2
+  exit 10
+fi
+if [[ "$(sha256sum "$out/init/main.o" | cut -d' ' -f1)" != \
+      "$(sha256sum "$root/backup/init/main.o" | cut -d' ' -f1)" ]]; then
+  echo 'RV32I_GNU_RELINK_CONTROL=FAIL original_GNU_C_changed' >&2
+  exit 10
+fi
+if RV32I_QEMU_IMAGE="$out/arch/riscv/boot/Image" \
+    RV32I_QEMU_WORK="$control/qemu" RV32I_QEMU_TIMEOUT_SECONDS=20 \
+    RV32I_QEMU_SKIP_REPLAY=1 \
+    RV32I_QEMU_EARLYCON=uart8250,mmio,0x10000000,115200n8 \
+    bash tools/ci/linux-rv32i-qemu-p0-v1.sh >"$control/qemu-step.log" 2>&1; then
+  echo "RV32I_GNU_RELINK_CONTROL=PASS same_Kbuild_seam=true sha=$(sha256sum "$out/arch/riscv/boot/Image" | cut -d' ' -f1)"
+else
+  echo 'RV32I_GNU_RELINK_CONTROL=FAIL same_Kbuild_seam_runtime_failed; MiniC_cohort_verdicts_NOT_TRUSTED=true' >&2
+  grep -E 'Linux version|Kernel panic|Oops:|RV32I_QEMU_P0=|RV32I_LINUX_PID1=' \
+    "$control/qemu-step.log" | tail -n 30 >&2 || true
+  tail -n 45 "$control/qemu-step.log" >&2 || true
+  exit 10
+fi
+
 previous=-1
 qemu_count=0
 for idx in 0 1 2 3 4 5 6; do
