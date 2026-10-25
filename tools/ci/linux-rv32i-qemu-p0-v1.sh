@@ -69,7 +69,12 @@ if [[ "$p1" == 1 ]]; then
       "$source" -o "$work/$target.S"
     riscv64-linux-gnu-as -march=rv32i -mabi=ilp32 \
       "$work/$target.S" -o "$work/$target.o"
-    riscv64-linux-gnu-ld -m elf32lriscv -static -e _start \
+    # CRT-less _start intentionally has no GP initializer. GNU RISC-V
+    # linker relaxation may otherwise rewrite absolute BSS accesses to
+    # lw/sw offset(gp), where gp=0: we observed a real SIGSEGV at
+    # mark+0x8c on core_ok (-2031(gp)) in CI #40209961682.
+    # --no-relax is REQUIRED for this standalone freestanding guest.
+    riscv64-linux-gnu-ld --no-relax -m elf32lriscv -static -e _start \
       "$work/$target.o" -o "$work/$target"
     riscv64-linux-gnu-readelf -h "$work/$target" >"$work/$target-elf.txt"
     for contract in 'Class:[[:space:]]+ELF32' \
@@ -90,6 +95,10 @@ if [[ "$p1" == 1 ]]; then
     # Exact guest PC -> function proof, no host recompilation of the Image.
     riscv64-linux-gnu-objdump -dr "$work/runtime-p2" >"$work/runtime-p2-disassembly.txt"
     riscv64-linux-gnu-nm -n "$work/runtime-p2" >"$work/runtime-p2-symbols.txt"
+    if grep -Eq '[-0-9]+\(gp\)' "$work/runtime-p2-disassembly.txt"; then
+      echo 'RV32I_GUEST_P2=FAIL no_CRT_GP_register_was_uninitialized' >&2
+      exit 3
+    fi
   fi
 else
 cat >"$work/init.S" <<'ASM'
