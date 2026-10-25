@@ -29,7 +29,8 @@ static void rv32_diag(MinicDiagnostic *d, const char *path, const char *text) {
 }
 
 /* GNU RISC-V inline asm is source-owned, not a MiniC machine-selected
- * opcode. Translate only the Core verified *scalar register* operand contract.
+ * opcode. Translate the Core-verified structured operand roles into ILP32
+ * register and address transport; the source template owns its instructions.
  * The original Kbuild GNU assembler keeps upstream A/CSR/privileged ISA flags.
  * For example Linux arch_local_save_flags has "=r" and "memory" clobber;
  * no physical register clobber is implicitly assumed or shared with Core. */
@@ -70,12 +71,21 @@ static bool rv32_emit_source_opaque_asm(
     return fprintf(out, "\n# MINIC_SOURCE_INLINE_ASM_END\n") >= 0;
 }
 
+/* Each Core operand owns one distinct caller-saved machine register.
+ * t6 is reserved for large frame offsets by rv32_slot; a2 is reserved
+ * for address-backed register operands and output writeback. Consequently
+ * neither frame accesses nor early-clobber outputs alias a live asm operand.
+ * Fixed-register bindings and explicit register clobbers need a separate
+ * target allocation plan, and remain rejected until one is available. */
 static bool rv32_emit_source_structured_asm(
     FILE *out, const MinicCoreFunction *f, const Rv32Frame *fr,
     const MinicCoreInstruction *ins) {
     const MinicCoreInlineAsm *source;
-    const char *regs[] = {"t0", "t1", "t2"};
-    bool seen[3] = {false, false, false};
+    static const char *const regs[] = {
+        "t0", "t1", "t2", "t3", "t4", "t5", "a0", "a1"
+    };
+    bool seen[MINIC_CORE_STRUCTURED_INLINE_ASM_OPERAND_LIMIT] = {false};
+    bool memory[MINIC_CORE_STRUCTURED_INLINE_ASM_OPERAND_LIMIT] = {false};
     size_t n, i;
     if (out == NULL || f == NULL || fr == NULL || ins == NULL ||
         ins->kind != MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM ||
@@ -83,8 +93,8 @@ static bool rv32_emit_source_structured_asm(
         return false;
     source = &f->inline_asms[ins->value.structured_inline_asm.inline_asm_id];
     n = ins->value.structured_inline_asm.operand_count;
-    if (n == 0U || n > 3U || !source->is_volatile ||
-        source->template_text == NULL || source->is_goto ||
+    if (n == 0U || n > MINIC_CORE_STRUCTURED_INLINE_ASM_OPERAND_LIMIT ||
+        !source->is_volatile || source->template_text == NULL || source->is_goto ||
         source->register_clobber_count != 0U)
         return false;
     for (i = 0U; i < n; ++i) {
@@ -97,23 +107,59 @@ static bool rv32_emit_source_structured_asm(
             b->has_fixed_register_binding || b->value >= f->value_count)
             return false;
         seen[b->operand_index] = true;
-        if (b->kind == MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT) {
+        switch (b->kind) {
+        case MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT:
             if (!rv32_scalar(f, f->values[b->value].type, &bits, &is_signed) ||
-                bits != 32U ||
-                !rv32_slot(out, fr, b->value, regs[b->operand_index], true))
+                bits == 0U || bits > 32U)
                 return false;
-        } else if (b->kind == MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT) {
+            break;
+        case MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT:
+        case MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE:
             if (!minic_type_pointee(f->values[b->value].type, &pointee) ||
-                !rv32_scalar(f, pointee, &bits, &is_signed) || bits != 32U)
+                !rv32_scalar(f, pointee, &bits, &is_signed) ||
+                (bits != 8U && bits != 16U && bits != 32U))
                 return false;
-        } else {
-            /* Address-backed RMW, memory constraints and special registers
-             * require a separate target ABI contract; fail closed. */
+            break;
+        case MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT:
+        case MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT:
+        case MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE:
+            if (!minic_type_pointee(f->values[b->value].type, &pointee))
+                return false;
+            memory[b->operand_index] = true;
+            break;
+        default:
             return false;
         }
     }
     for (i = 0U; i < n; ++i)
         if (!seen[i]) return false;
+    /* Materialize all inputs before any source asm executes. Memory operands
+     * carry addresses, not snapshots of their contents; GNU +A atomic writes
+     * therefore remain source-owned and need no synthesized store. */
+    for (i = 0U; i < n; ++i) {
+        const MinicCoreStructuredInlineAsmOperand *b =
+            &ins->value.structured_inline_asm.operands[i];
+        const char *reg = regs[b->operand_index];
+        if (b->kind == MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT)
+            continue;
+        if (!rv32_slot(out, fr, b->value,
+                       b->kind == MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE
+                           ? "a2" : reg, true))
+            return false;
+        if (b->kind == MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE) {
+            unsigned bits;
+            bool is_signed;
+            MinicType pointee;
+            const char *load;
+            if (!minic_type_pointee(f->values[b->value].type, &pointee) ||
+                !rv32_scalar(f, pointee, &bits, &is_signed))
+                return false;
+            load = bits == 8U ? (is_signed ? "lb" : "lbu") :
+                   bits == 16U ? (is_signed ? "lh" : "lhu") : "lw";
+            if (fprintf(out, "  %s %s, 0(a2)\n", load, reg) < 0)
+                return false;
+        }
+    }
     if (fprintf(out, "# MINIC_SOURCE_INLINE_ASM_BEGIN\n  ") < 0)
         return false;
     for (i = 0U; i < source->template_length; ++i) {
@@ -129,11 +175,17 @@ static bool rv32_emit_source_structured_asm(
             if (fputc('%', out) == EOF) return false;
             continue;
         }
-        /* GNU %zN means zero-register for a proven immediate zero;
-         * no instruction in this contract currently needs it. */
-        if (ch < '0' || ch > '2') return false;
+        /* GNU %zN chooses zero for an immediate zero and a register otherwise.
+         * Always materializing the input in a distinct register is equivalent. */
+        if (ch == 'z') {
+            if (++i >= source->template_length) return false;
+            ch = (unsigned char)source->template_text[i];
+        }
+        if (ch < '0' || ch > '7') return false;
         index = (size_t)(ch - '0');
-        if (index >= n || fprintf(out, "%s", regs[index]) < 0)
+        if (index >= n ||
+            (memory[index] ? fprintf(out, "(%s)", regs[index]) :
+                             fprintf(out, "%s", regs[index])) < 0)
             return false;
     }
     if (fprintf(out, "\n# MINIC_SOURCE_INLINE_ASM_END\n") < 0)
@@ -141,10 +193,19 @@ static bool rv32_emit_source_structured_asm(
     for (i = 0U; i < n; ++i) {
         const MinicCoreStructuredInlineAsmOperand *b =
             &ins->value.structured_inline_asm.operands[i];
-        if (b->kind != MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT)
+        unsigned bits;
+        bool is_signed;
+        MinicType pointee;
+        const char *store;
+        if (b->kind != MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT &&
+            b->kind != MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE)
             continue;
-        if (!rv32_slot(out, fr, b->value, "t3", true) ||
-            fprintf(out, "  sw %s, 0(t3)\n", regs[b->operand_index]) < 0)
+        if (!minic_type_pointee(f->values[b->value].type, &pointee) ||
+            !rv32_scalar(f, pointee, &bits, &is_signed))
+            return false;
+        store = bits == 8U ? "sb" : bits == 16U ? "sh" : "sw";
+        if (!rv32_slot(out, fr, b->value, "a2", true) ||
+            fprintf(out, "  %s %s, 0(a2)\n", store, regs[b->operand_index]) < 0)
             return false;
     }
     return true;

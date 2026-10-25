@@ -146,7 +146,7 @@ SRC
     -S "$work/kernel-csr-structured.i" -o "$work/kernel-csr-structured.s"
 grep -Fq 'csrr t0, 0x100' "$work/kernel-csr-structured.s"
 grep -Fq 'csrrc t0, 0x100, t1' "$work/kernel-csr-structured.s"
-grep -Fq 'sw t0, 0(t3)' "$work/kernel-csr-structured.s"
+grep -Fq 'sw t0, 0(a2)' "$work/kernel-csr-structured.s"
 grep -Fq '# MINIC_SOURCE_INLINE_ASM_BEGIN' "$work/kernel-csr-structured.s"
 echo 'RV32I_STRUCTURED_CSR=PASS output_input=1 pointer_writeback=1 kernel_asm_provenance=1'
 cat > "$work/kernel-opaque-asm.i" <<'SRC'
@@ -188,4 +188,41 @@ if grep -Eq '^[[:space:]]+(clz|ctz|clzw|ctzw|mul|mulw|div)[[:space:]]' "$work/ke
   exit 1
 fi
 echo 'RV32I_CLZLL=PASS two_word_64bit_I_only=1 zero_half_offset=1'
+cat > "$work/kernel-structured-atomic.i" <<'SRC'
+unsigned int linux_amo_fetch_add(volatile unsigned int *ptr, unsigned int delta) {
+    unsigned int old;
+    __asm__ __volatile__("amoadd.w %1, %2, %0"
+                         : "+A"(*ptr), "=r"(old) : "r"(delta) : "memory");
+    return old;
+}
+void linux_amo_add(volatile unsigned int *ptr, unsigned int delta) {
+    __asm__ __volatile__("amoadd.w zero, %1, %0"
+                         : "+A"(*ptr) : "r"(delta) : "memory");
+}
+unsigned int linux_lrsc(volatile unsigned int *ptr, unsigned int desired) {
+    unsigned int old, scratch;
+    __asm__ __volatile__("0: lr.w %0, %2\n\t"
+                         "bne %0, %z3, 1f\n\t"
+                         "sc.w %1, %4, %2\n\t"
+                         "bnez %1, 0b\n1:"
+                         : "=&r"(old), "=&r"(scratch), "+A"(*ptr)
+                         : "rJ"(0), "r"(desired) : "memory");
+    return old;
+}
+unsigned int linux_register_rmw(unsigned int value) {
+    __asm__ __volatile__("addi %0, %0, 1" : "+r"(value) : : "memory");
+    return value;
+}
+SRC
+"$MINIC_CC" --target=riscv32-linux -march=rv32i -mabi=ilp32 \
+  -S "$work/kernel-structured-atomic.i" -o "$work/kernel-structured-atomic.s"
+grep -Fq 'amoadd.w t1, t2, (t0)' "$work/kernel-structured-atomic.s"
+grep -Fq 'amoadd.w zero, t1, (t0)' "$work/kernel-structured-atomic.s"
+grep -Fq 'lr.w t0, (t2)' "$work/kernel-structured-atomic.s"
+grep -Fq 'bne t0, t3, 1f' "$work/kernel-structured-atomic.s"
+grep -Fq 'sc.w t1, t4, (t2)' "$work/kernel-structured-atomic.s"
+grep -Fq 'addi t0, t0, 1' "$work/kernel-structured-atomic.s"
+grep -Fq 'sw t1, 0(a2)' "$work/kernel-structured-atomic.s"
+grep -Fq '# MINIC_SOURCE_INLINE_ASM_BEGIN' "$work/kernel-structured-atomic.s"
+echo 'RV32I_STRUCTURED_ATOMIC=PASS memory_RW=1 early_clobber=1 operand_z=1 register_RMW=1'
 echo 'RV32I_TARGET_GATE=PASS ILP32_registered=true incompatible_ISA_rejected=true basic_C_core_emitted=true'
