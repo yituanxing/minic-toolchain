@@ -204,10 +204,23 @@ qemu_args=(qemu-system-riscv32 -M virt -cpu max -m 512M -smp 1
   -append "console=ttyS0 earlycon=${RV32I_QEMU_EARLYCON:-sbi} loglevel=8 panic=-1 rdinit=$rdinit$append_p1")
 set +e
 if [[ "$shell" == 1 ]]; then
-  # Like RV64 runtime_boot.sh shell profile: send actual commands over ttyS0.
-  # The first command arrives after the real kernel has initialized serial.
+  # Like RV64 shell oracle, feed genuine commands over ttyS0. But RV32
+  # kernel boot can vary from 6 to >11 guest seconds, so a guessed fixed
+  # sleep races PID1, truncates early UART input and yields false failures.
+  # Wait for a REAL userspace-ready marker in the serial log, then submit.
   (
-    sleep "${RV32I_QEMU_SHELL_INPUT_DELAY_SECONDS:-13}"
+    ready=0
+    for attempt in $(seq 1 160); do
+      if grep -Fq 'MINIC_LINUX_RUNTIME_SH_READY' "$work/qemu-serial.log" 2>/dev/null; then
+        ready=1; break
+      fi
+      sleep 0.25
+    done
+    [[ "$ready" == 1 ]] || {
+      echo 'RV32I_QEMU_SHELL=FAIL no_real_userspace_ready_before_commands' >&2
+      exit 77
+    }
+    sleep 0.5
     printf '%s\n' 'mount -t proc proc /proc' 'echo PROC_CMDLINE_BEGIN' \
       'cat /proc/cmdline' 'echo PROC_CMDLINE_END' \
       'echo RDINIT_SH_OK' 'echo DONE_RDINIT' 'sync' 'poweroff -f'
