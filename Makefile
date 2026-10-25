@@ -146,6 +146,7 @@ MINIC_SOURCES := \
 	src/frontend/type.c \
 	src/target/data_layout.c \
 	src/target/target_info.c \
+	src/target/target_catalog.c \
 	src/target/backend.c \
 	src/target/backend_core_usage.c \
 	src/target/common/global_emit.c \
@@ -237,7 +238,8 @@ MINIC_SOURCES := \
 	tools/minic-cc/main.c
 MINIC_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(MINIC_SOURCES))
 MINIC_CC_BINARY := $(BUILD_DIR)/bin/minic-cc
-MINIC_DRIVER_OBJECTS := $(BUILD_DIR)/obj/tools/minic/main.o
+MINIC_DRIVER_OBJECTS := $(BUILD_DIR)/obj/tools/minic/main.o \
+	$(BUILD_DIR)/obj/src/target/target_catalog.o
 # The compiler boundary stays in minic-cc. minic is the user-facing staged
 # driver and preserves the historical -S preprocessed-input compatibility path.
 MINIC_BINARY  := $(BUILD_DIR)/bin/minic
@@ -352,6 +354,7 @@ AST_CONTRACT_TEST_SOURCES := \
 	src/frontend/type.c \
 	src/target/data_layout.c \
 	src/target/target_info.c \
+	src/target/target_catalog.c \
 	tests/frontend/ast_contract_test.c
 AST_CONTRACT_TEST_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(AST_CONTRACT_TEST_SOURCES))
 AST_CONTRACT_TEST_BINARY  := $(BUILD_DIR)/tests/frontend/ast-contract-test
@@ -361,6 +364,7 @@ LAYOUT_TEST_SOURCES := \
 	src/frontend/type.c \
 	src/target/data_layout.c \
 	src/target/target_info.c \
+	src/target/target_catalog.c \
 	src/target/riscv64/layout.c \
 	tests/target/riscv64/layout_test.c
 LAYOUT_TEST_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(LAYOUT_TEST_SOURCES))

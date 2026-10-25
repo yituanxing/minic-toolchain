@@ -127,6 +127,35 @@ static int verify_language_admission(void) {
     return puts("TARGET_LANGUAGE_ADMISSION=PASS five-targets") == EOF ? 1 : 0;
 }
 
+static int verify_registered_target_catalog(void) {
+    const MinicTargetCatalogEntry *targets;
+    size_t i, count;
+    unsigned int toolchain_count = 0U;
+    targets = minic_target_catalog_all(&count);
+    if (targets == NULL || count != 5U ||
+        minic_target_catalog_find("not-a-target") != NULL) return 1;
+    for (i = 0U; i < count; ++i) {
+        const MinicTargetCatalogEntry *entry =
+            minic_target_catalog_find(targets[i].name);
+        const MinicTargetInfo *info =
+            minic_target_info_from_name(targets[i].name);
+        if (entry != &targets[i] || info == NULL ||
+            info->architecture != entry->architecture ||
+            info->data_layout == NULL ||
+            !(entry->product_driver_stages &
+              MINIC_TARGET_STAGE_ASSEMBLY_FROM_PREPROCESSED_C))
+            return 1;
+        if (entry->product_driver_stages &
+            MINIC_TARGET_STAGE_STAGED_ASSEMBLER_AND_LINKER) {
+            if (entry->architecture != MINIC_TARGET_ARCH_RISCV64)
+                return 1;
+            ++toolchain_count;
+        }
+    }
+    if (toolchain_count != 1U) return 1;
+    return puts("TARGET_CATALOG=PASS five_backends=5 full_staged=rv64_only") == EOF;
+}
+
 int main(void) {
     const MinicTargetInfo *rv = minic_default_target_info();
     const MinicTargetInfo *x86 = minic_target_info_from_name("x86_64-linux");
@@ -142,7 +171,7 @@ int main(void) {
         (void)fprintf(stderr, "FAIL four independent target identities\n");
         return 1;
     }
-    if (verify_language_admission() != 0 || verify_rv32() != 0 ||
+    if (verify_registered_target_catalog() != 0 || verify_language_admission() != 0 || verify_rv32() != 0 ||
         verify_lp64("aarch64-linux", MINIC_TARGET_ARCH_AARCH64,
                     MINIC_INTEGER_SIGN_UNSIGNED, MINIC_INTEGER_RANK_INT,
                     MINIC_INTEGER_SIGN_UNSIGNED) != 0 ||

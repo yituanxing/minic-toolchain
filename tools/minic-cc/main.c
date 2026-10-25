@@ -1,12 +1,19 @@
 #include "minic/compiler.h"
 #include "target/target_info.h"
+#include "target/target_catalog.h"
 
 #include <stdbool.h>
 #include <stdio.h>
 #include <string.h>
 
 static void minic_print_usage(FILE *stream, const char *program) {
-    (void)fprintf(stream, "usage: %s -S <preprocessed-input.i> [--target=riscv32-linux|riscv64-linux|x86_64-linux|aarch64-linux|loongarch64-linux] [-march=rv32i|rv64i|rv64im|rv64imafd] [-mabi=ilp32|lp64|lp64d] [-ffunction-sections|-fno-function-sections] [-fPIE|-fPIC|-fno-pie] [-fshort-wchar|-fno-short-wchar] -o <output.s>\n", program);
+    const MinicTargetCatalogEntry *targets;
+    size_t count, i;
+    targets = minic_target_catalog_all(&count);
+    (void)fprintf(stream, "usage: %s -S <preprocessed-input.i> [--target=", program);
+    for (i = 0U; i < count; ++i)
+        (void)fprintf(stream, "%s%s", i == 0U ? "" : "|", targets[i].name);
+    (void)fprintf(stream, "] [-march=rv32i|rv64i|rv64im|rv64imafd] [-mabi=ilp32|lp64|lp64d] [-ffunction-sections|-fno-function-sections] [-fPIE|-fPIC|-fno-pie] [-fshort-wchar|-fno-short-wchar] -o <output.s>\n");
 }
 
 int main(int argc, char **argv) {

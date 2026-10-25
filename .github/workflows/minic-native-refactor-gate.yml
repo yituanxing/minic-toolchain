@@ -4,6 +4,9 @@ on:
   pull_request:
     paths:
       - 'src/target/**'
+      - 'tools/minic/**'
+      - 'tools/minic-cc/**'
+      - 'tests/compiler/c0/probe-minic-driver-target-catalog.sh'
       - 'src/core/**'
       - 'src/frontend/**'
       - 'Makefile'
@@ -15,6 +18,9 @@ on:
       - main
     paths:
       - 'src/target/**'
+      - 'tools/minic/**'
+      - 'tools/minic-cc/**'
+      - 'tests/compiler/c0/probe-minic-driver-target-catalog.sh'
       - 'src/core/**'
       - 'src/frontend/**'
       - 'Makefile'
@@ -50,6 +56,14 @@ jobs:
           make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/minic-native-backend all
           test -x build/minic-native-backend/bin/minic
           test -x build/minic-native-backend/bin/minic-cc
+      - name: Five-target staged Driver and compiler identity
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          MINIC="$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic" \
+          MINIC_CC="$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc" \
+            bash tests/compiler/c0/probe-minic-driver-target-catalog.sh
+
       - name: Five-target language/ABI identity contract
         shell: bash
         run: |

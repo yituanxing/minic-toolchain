@@ -74,6 +74,17 @@ for arch in aarch64 loongarch64; do
   fi
 done
 
+# A single catalog owns target spelling for driver, compiler and TargetInfo.
+# The product driver must not silently select RV64 AS/LD for other ISAs.
+exists src/target/target_catalog.c
+exists src/target/target_catalog.h
+has src/target/target_info.c 'minic_target_catalog_find(name)'
+has tools/minic/main.c 'minic_target_catalog_find(target_name)'
+has tools/minic-cc/main.c 'minic_target_catalog_all(&count)'
+has src/target/target_catalog.c 'MINIC_TARGET_STAGE_STAGED_ASSEMBLER_AND_LINKER'
+lacks tools/minic/main.c 'strcmp(target_name, "riscv64-linux")'
+lacks src/target/target_info.c 'strcmp(name, "riscv64-linux")'
+
 # The frontend may query C language capabilities, but it must never grow
 # another explicit CPU allowlist when an ISA is added.
 if grep -REq 'MINIC_TARGET_ARCH_' src/frontend; then

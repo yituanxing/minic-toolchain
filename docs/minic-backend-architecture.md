@@ -200,3 +200,19 @@ passes the high word when its count is 64-bit; RV64 continues to reject
 unqualified wide shift-count types. The focused compile probe tests the
 low/high-count labels on both targets; QEMU matrices remain authoritative
 for dynamic execution.
+
+## Target spelling and product pipeline registration
+
+Target architecture identities and canonical CLI spellings are now registered
+once in `target_catalog.c`. Both the standalone `minic` driver and the
+full `minic-cc` use this catalog; TargetInfo continues to own **all** C
+semantic widths, data layout, ABI and per-invocation RISC-V ISA facts.
+
+`minic --target=<one-of-five> -S preprocessed.i -o out.s` delegates
+directly to the five-backend compiler, preserving the exact machine result
+and function-section flags. This does **not** claim the other targets have
+MiniPP/MiniAS/MiniLD linking pipelines; `-c` and link mode remain RV64
+staged-toolchain-only and fail closed for all four other targets. Option
+validation for RV32I/ILP32 uses the unchanged compiler ISA resolver; RV64
+legacy profiles continue to be qualified by the established driver policy.
+The shared catalog deliberately does not introduce shadow type sizes.

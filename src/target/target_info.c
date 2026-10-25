@@ -301,26 +301,12 @@ const MinicTargetInfo *minic_default_target_info(void) {
     return minic_target_info_for_architecture(MINIC_TARGET_ARCH_RISCV64);
 }
 
+/* Target spellings are owned by one catalog shared with the staged driver.
+ * TargetInfo remains the authority for C widths, language facts and ABI. */
 const MinicTargetInfo *minic_target_info_from_name(const char *name) {
-    if (name == NULL) {
-        return NULL;
-    }
-    if (strcmp(name, "riscv32-linux") == 0) {
-        return minic_target_info_for_architecture(MINIC_TARGET_ARCH_RISCV32);
-    }
-    if (strcmp(name, "riscv64-linux") == 0) {
-        return minic_target_info_for_architecture(MINIC_TARGET_ARCH_RISCV64);
-    }
-    if (strcmp(name, "x86_64-linux") == 0) {
-        return minic_target_info_for_architecture(MINIC_TARGET_ARCH_X86_64);
-    }
-    if (strcmp(name, "aarch64-linux") == 0) {
-        return minic_target_info_for_architecture(MINIC_TARGET_ARCH_AARCH64);
-    }
-    if (strcmp(name, "loongarch64-linux") == 0) {
-        return minic_target_info_for_architecture(MINIC_TARGET_ARCH_LOONGARCH64);
-    }
-    return NULL;
+    const MinicTargetCatalogEntry *entry = minic_target_catalog_find(name);
+    return entry == NULL ? NULL :
+           minic_target_info_for_architecture(entry->architecture);
 }
 
 const MinicDataLayout *minic_target_info_data_layout(const MinicTargetInfo *target) {

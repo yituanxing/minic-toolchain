@@ -1,5 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
 
+#include "target/target_catalog.h"
+
 #include <errno.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -71,13 +73,20 @@ static void append_rv64_linux_musl_predefines(char **arguments,
 }
 
 static void usage(FILE *out, const char *argv0) {
-    fprintf(out,
-            "usage: %s [-S|-c] [--target=riscv64-linux|x86_64-linux] [-march=rv64i|rv64im|rv64imafd] [-mabi=lp64|lp64d] [--rtlib=PATH (link only)] [-ffreestanding|-fhosted] [-ffunction-sections|-fno-function-sections] [-static] "
+    const MinicTargetCatalogEntry *targets;
+    size_t count, i;
+    targets = minic_target_catalog_all(&count);
+    (void)fprintf(out, "usage: %s [-S|-c] [--target=", argv0);
+    for (i = 0U; i < count; ++i)
+        (void)fprintf(out, "%s%s", i == 0U ? "" : "|", targets[i].name);
+    (void)fprintf(out,
+            "] [-march=rv32i|rv64i|rv64im|rv64imafd] [-mabi=ilp32|lp64|lp64d] [--rtlib=PATH (link only)] [-ffreestanding|-fhosted] [-ffunction-sections|-fno-function-sections] [-static] "
             "[-nostdlib] [-nostartfiles] [-nodefaultlibs] [-nostdinc] "
             "[--sysroot DIR] [-DNAME[=VALUE]] [-UNAME] [-IDIR] "
             "[-isystem DIR] [-include FILE] [-LDIR] [-lNAME] "
-            "-o OUTPUT INPUT...\n",
-            argv0);
+            "-o OUTPUT INPUT...\n"
+            "  -S: all registered MiniC backends (preprocessed C input)\n"
+            "  -c/link: RV64 staged CPP/AS/LD pipeline only\n");
 }
 
 static char *duplicate_text(const char *text) {
@@ -413,6 +422,7 @@ int main(int argc, char **argv) {
     bool no_stdinc = false;
     bool function_sections = false;
     const char *target_name = "riscv64-linux";
+    const MinicTargetCatalogEntry *target_entry;
     bool target_given = false;
     const char *march = NULL;
     const char *mabi = NULL;
@@ -571,18 +581,22 @@ int main(int argc, char **argv) {
         }
     }
 
-    /* The staged driver still owns RV64 preprocessing, assembly and linking.
-     * Never run its RV64 pipeline for x86-64 while the native x86 backend and
-     * target-specific surrounding tools are not yet wired. */
-    if (strcmp(target_name, "riscv64-linux") != 0) {
-        if (strcmp(target_name, "x86_64-linux") == 0) {
-            fprintf(stderr, "minic: x86_64-linux driver pipeline is not implemented; "
-                            "minic-cc recognizes the target for frontend/Core validation\n");
-        } else {
-            fprintf(stderr, "minic: unsupported-target:%s\n", target_name);
-        }
+    target_entry = minic_target_catalog_find(target_name);
+    if (target_entry == NULL) {
+        fprintf(stderr, "minic: unsupported-target:%s\n", target_name);
         return 2;
     }
+    /* C -> GNU assembly may use all registered backends. The staged PP,
+     * assembler and linker remain exclusively RV64; reject unqualified
+     * -c/link *before* invoking any RV64 tool for a foreign target. */
+    if (mode != MINIC_DRIVER_ASSEMBLY &&
+        (target_entry->product_driver_stages &
+         MINIC_TARGET_STAGE_STAGED_ASSEMBLER_AND_LINKER) == 0U) {
+        fprintf(stderr, "minic: target-requires-minic-cc-or-external-assembler:%s\n",
+                target_name);
+        return 2;
+    }
+    if (target_entry->architecture == MINIC_TARGET_ARCH_RISCV64) {
     /* Be strict about the whole pipeline: a compiler accepting RV64I but
      * the assembler silently using RV64GC would violate the target contract. */
     if (march != NULL) {
@@ -603,6 +617,7 @@ int main(int argc, char **argv) {
     } else if (mabi != NULL && strcmp(mabi, "lp64d") != 0) {
         fprintf(stderr, "minic: explicit-nondefault-abi-requires--march\n");
         return 2;
+    }
     }
     if (runtime_archive != NULL) {
         if (mode != MINIC_DRIVER_LINK || march == NULL ||
@@ -648,7 +663,7 @@ int main(int argc, char **argv) {
     }
 
     if (mode == MINIC_DRIVER_ASSEMBLY) {
-        char *cc_arguments[12];
+        char *cc_arguments[14];
         size_t argument_count = 0U;
         cc_arguments[argument_count++] = cc;
         cc_arguments[argument_count++] = "-S";
@@ -657,6 +672,8 @@ int main(int argc, char **argv) {
         cc_arguments[argument_count++] = (char *)output;
         cc_arguments[argument_count++] =
             function_sections ? "-ffunction-sections" : "-fno-function-sections";
+        cc_arguments[argument_count++] = "--target";
+        cc_arguments[argument_count++] = (char *)target_name;
         if (march != NULL) {
             cc_arguments[argument_count++] = "-march";
             cc_arguments[argument_count++] = (char *)march;
