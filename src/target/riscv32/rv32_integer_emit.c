@@ -124,7 +124,7 @@ static bool rv32_emit_wide_checked_overflow(FILE *out,
     switch (ins->value.integer_overflow.operator_kind) {
     case MINIC_CORE_INTEGER_OVERFLOW_ADD:
         if (fprintf(out,
-            "  add t4, t0, t2\n  sltu t6, t4, t0\n"
+            "  add t4, t2, t0\n  sltu t6, t4, t0\n"
             "  add t5, t1, t3\n  sltu a0, t5, t1\n"
             "  add t5, t5, t6\n  sltu a1, t5, t6\n"
             "  or a0, a0, a1\n") < 0)

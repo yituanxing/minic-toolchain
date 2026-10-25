@@ -42,6 +42,13 @@ permissions:
   contents: read
   actions: read  # Same-repository exact historical Image artifact download
 
+# Immutable original GNU ELF32 oracle: pinned Linux 6.6.143 Kconfig digest
+# verified in run 40177835323 (1741 objects, Image and object SHA manifest).
+# A shard must restore THIS validated golden rather than generate a new,
+# subtly different config and silently compare incompatible object universes.
+env:
+  RV32I_GNU_GOLDEN_CONFIG_SHA256: 4c6c19f79741a8a31ec52ad57b1a6bc56b81dd6996cbf5e1bdc63f587d85244c
+
 # P1 calibration rerun after loopback bring-up.
 # Stage2 2064 rerun: guest ELF executable bit restored; single-runner B1 driver probe PASS.
 # SHA-certified Stage2 Linux 2064 opt-in after Stage2 500/500 identity pass.
@@ -1191,26 +1198,16 @@ jobs:
         with:
           fixture: source
 
-      # Seed GNU ELF32 once with [linux-rv32i-golden]. Ordinary diagnostic
-      # runs begin all seven shards immediately. Config mode does not build
-      # kernel objects; the immutable original GNU cache is mandatory.
-      - name: Derive the exact RV32 Kconfig for this independent shard
-        if: contains(github.event.head_commit.message, '[linux-rv32i-kbuild]')
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          RV32I_LINUX_MODE=config \
-          RV32I_LINUX_SOURCE="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0/linux-6.6.143" \
-          RV32I_LINUX_WORK="$GITHUB_WORKSPACE/build/rv32i-linux-entry" \
-            bash tests/external/linux/rv32i_kbuild_entry.sh
-
-      - name: Identify independent RV32 GNU golden from config and GNU binaries
+      # Historical GNU ELF32 golden is cached under its proven generated
+      # config hash. Do not regenerate config in a new runner: Linux Kconfig
+      # depends on the runner environment and can change the object universe.
+      - name: Identify pinned RV32 GNU golden from its historical config and GNU binaries
         if: contains(github.event.head_commit.message, '[linux-rv32i-kbuild]')
         id: rv32_gold_key
         shell: bash
         run: |
           set -Eeuo pipefail
-          cfg=$(sha256sum build/rv32i-linux-entry/out/.config | cut -d' ' -f1)
+          cfg="$RV32I_GNU_GOLDEN_CONFIG_SHA256"
           gcc=$(sha256sum "$(command -v riscv64-linux-gnu-gcc)" | cut -c1-16)
           ld=$(sha256sum "$(command -v riscv64-linux-gnu-ld)" | cut -c1-16)
           as=$(sha256sum "$(command -v riscv64-linux-gnu-as)" | cut -c1-16)
@@ -1964,23 +1961,13 @@ jobs:
         with:
           fixture: source
 
-      - name: Derive the RV32 config on the independent seven-shard receiver
-        if: contains(github.event.head_commit.message, '[linux-rv32i-kbuild]')
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          RV32I_LINUX_MODE=config \
-          RV32I_LINUX_SOURCE="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0/linux-6.6.143" \
-          RV32I_LINUX_WORK="$GITHUB_WORKSPACE/build/rv32i-linux-entry" \
-            bash tests/external/linux/rv32i_kbuild_entry.sh
-
       - name: Reconstruct exact RV32 golden cache identity
         if: contains(github.event.head_commit.message, '[linux-rv32i-kbuild]')
         id: rv32_gold_key
         shell: bash
         run: |
           set -Eeuo pipefail
-          cfg=$(sha256sum build/rv32i-linux-entry/out/.config | cut -d' ' -f1)
+          cfg="$RV32I_GNU_GOLDEN_CONFIG_SHA256"
           gcc=$(sha256sum "$(command -v riscv64-linux-gnu-gcc)" | cut -c1-16)
           ld=$(sha256sum "$(command -v riscv64-linux-gnu-ld)" | cut -c1-16)
           as=$(sha256sum "$(command -v riscv64-linux-gnu-as)" | cut -c1-16)
