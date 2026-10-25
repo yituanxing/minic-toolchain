@@ -149,4 +149,25 @@ grep -Fq 'csrrc t0, 0x100, t1' "$work/kernel-csr-structured.s"
 grep -Fq 'sw t0, 0(t3)' "$work/kernel-csr-structured.s"
 grep -Fq '# MINIC_SOURCE_INLINE_ASM_BEGIN' "$work/kernel-csr-structured.s"
 echo 'RV32I_STRUCTURED_CSR=PASS output_input=1 pointer_writeback=1 kernel_asm_provenance=1'
+cat > "$work/kernel-opaque-asm.i" <<'SRC'
+void rv32_warn_bugtable(void) {
+    __asm__ __volatile__ (
+        "1:\n\t"
+        "ebreak\n"
+        ".pushsection __bug_table,\"aw\"\n\t"
+        "2:\n\t"
+        ".word 1b\n\t"
+        ".word 1262\n\t"
+        ".half 1\n\t"
+        ".half 0\n\t"
+        ".org 2b + 12\n\t"
+        ".popsection");
+}
+SRC
+"$MINIC_CC" --target=riscv32-linux -march=rv32i -mabi=ilp32 \
+  -S "$work/kernel-opaque-asm.i" -o "$work/kernel-opaque-asm.s"
+grep -Fq '.pushsection __bug_table' "$work/kernel-opaque-asm.s"
+grep -Fq 'ebreak' "$work/kernel-opaque-asm.s"
+grep -Fq '# MINIC_SOURCE_INLINE_ASM_BEGIN' "$work/kernel-opaque-asm.s"
+echo 'RV32I_OPAQUE_BUG_TABLE=PASS source_asm=1 MiniC_RV32I_unmodified=1'
 echo 'RV32I_TARGET_GATE=PASS ILP32_registered=true incompatible_ISA_rejected=true basic_C_core_emitted=true'

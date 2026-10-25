@@ -33,6 +33,43 @@ static void rv32_diag(MinicDiagnostic *d, const char *path, const char *text) {
  * The original Kbuild GNU assembler keeps upstream A/CSR/privileged ISA flags.
  * For example Linux arch_local_save_flags has "=r" and "memory" clobber;
  * no physical register clobber is implicitly assumed or shared with Core. */
+/* Generic Core opaque-asm instruction: its GNU immediate operands have
+ * already been specialized before machine lowering. The backend must not
+ * interpret CSR/A/privileged source instructions as MiniC-produced RV32I.
+ * Follow the existing RV64 opaque-asm literal/escaped-percent semantics,
+ * while refusing asm-goto which requires a separate CFG binding. */
+static bool rv32_emit_source_opaque_asm(
+    FILE *out, const MinicCoreFunction *f,
+    const MinicCoreInstruction *ins) {
+    const MinicCoreInlineAsm *source;
+    size_t i;
+    if (out == NULL || f == NULL || ins == NULL ||
+        ins->kind != MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM ||
+        ins->value.inline_asm_id >= f->inline_asm_count)
+        return false;
+    source = &f->inline_asms[ins->value.inline_asm_id];
+    if (!source->is_volatile || source->is_goto ||
+        source->template_text == NULL ||
+        source->register_clobber_count != 0U)
+        return false;
+    if (fprintf(out, "# MINIC_SOURCE_INLINE_ASM_BEGIN\n  ") < 0)
+        return false;
+    for (i = 0U; i < source->template_length; ++i) {
+        unsigned char ch = (unsigned char)source->template_text[i];
+        if (ch != '%') {
+            if (fputc(ch, out) == EOF) return false;
+        } else if (i + 1U < source->template_length &&
+                   source->template_text[i + 1U] == '%') {
+            if (fputc('%', out) == EOF) return false;
+            ++i;
+        } else {
+            /* No unresolved percent substitutions may reach GNU assembler. */
+            return false;
+        }
+    }
+    return fprintf(out, "\n# MINIC_SOURCE_INLINE_ASM_END\n") >= 0;
+}
+
 static bool rv32_emit_source_structured_asm(
     FILE *out, const MinicCoreFunction *f, const Rv32Frame *fr,
     const MinicCoreInstruction *ins) {
@@ -200,6 +237,8 @@ static bool rv32_emit_ins(FILE *out, const MinicC0Program *program,
     case MINIC_CORE_INSTRUCTION_GLOBAL_ADDRESS:
     case MINIC_CORE_INSTRUCTION_FUNCTION_ADDRESS:
         return rv32_emit_memory_instruction(out, program, target, f, fr, ins);
+    case MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM:
+        return rv32_emit_source_opaque_asm(out, f, ins);
     case MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM:
         return rv32_emit_source_structured_asm(out, f, fr, ins);
     case MINIC_CORE_INSTRUCTION_COMPILER_BARRIER:
