@@ -136,6 +136,7 @@ PY_VERIFY
   digest=$(sha256sum "$image" | cut -d' ' -f1)
   if RV32I_QEMU_IMAGE="$image" RV32I_QEMU_WORK="$group/qemu" \
       RV32I_QEMU_TIMEOUT_SECONDS=20 RV32I_QEMU_SKIP_REPLAY=1 \
+      RV32I_QEMU_EARLYCON=uart8250,mmio,0x10000000,115200n8 \
       bash tools/ci/linux-rv32i-qemu-p0-v1.sh >"$group/qemu-step.log" 2>&1; then
     result=PASS
   else
@@ -148,6 +149,13 @@ PY_VERIFY
   fault=${fault//$'\t'/ }
   echo -e "shard-$idx\t$count\tPASS\t$result\t$digest\t$fault" >>"$summary"
   echo "RV32I_COHORT=RESULT group=$idx objects=$count qemu_p0=$result image_sha256=$digest first_fault=$fault"
+  if [[ "$result" == FAIL ]]; then
+    echo "RV32I_COHORT_DIAG=BEGIN group=$idx"
+    grep -E 'Linux version|Kernel panic|Oops:|RV32I_QEMU_P0=FAIL|RV32I_LINUX_PID1=|Unable to handle' \
+      "$group/qemu-step.log" | tail -n 12 || true
+    tail -n 12 "$group/qemu-step.log" || true
+    echo "RV32I_COHORT_DIAG=END group=$idx"
+  fi
 done
 
 echo 'RV32I_COHORT_BATCH=RESULTS'
