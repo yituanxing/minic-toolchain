@@ -17,6 +17,11 @@ mkdir -p "$RV32I_QEMU_WORK"
 image=$(realpath "$RV32I_QEMU_IMAGE")
 work=$(realpath "$RV32I_QEMU_WORK")
 image_sha=$(sha256sum "$image" | cut -d' ' -f1)
+bios=${RV32I_QEMU_BIOS:-/usr/lib/riscv32-linux-gnu/opensbi/generic/fw_dynamic.bin}
+if [[ ! -s "$bios" ]]; then
+  echo "RV32I_QEMU_P0=BLOCKED missing_RV32_OpenSBI=$bios" >&2
+  exit 2
+fi
 
 # The guest executes the real Linux RV32 syscalls (getpid=172, write=64).
 # Check PID1 before issuing the sole success marker. No libc, host executables,
@@ -94,12 +99,12 @@ test -c "$work/guest/dev/null"
 ) | gzip -9n >"$work/initramfs.cpio.gz"
 test -s "$work/initramfs.cpio.gz"
 
-printf 'RV32I_QEMU_P0=START image_sha256=%s guest=rv32i/ilp32 pid1=ELF32 timeout=45s\n' \
-  "$image_sha"
+printf 'RV32I_QEMU_P0=START image_sha256=%s guest=rv32i/ilp32 pid1=ELF32 firmware=%s timeout=45s\n' \
+  "$image_sha" "$bios"
 set +e
 timeout --signal=TERM 45s qemu-system-riscv32 \
   -M virt -cpu max -m 512M -smp 1 -nographic -no-reboot \
-  -bios default -kernel "$image" -initrd "$work/initramfs.cpio.gz" \
+  -bios "$bios" -kernel "$image" -initrd "$work/initramfs.cpio.gz" \
   -append 'console=ttyS0 earlycon=sbi loglevel=8 panic=-1 rdinit=/init' \
   </dev/null >"$work/qemu-serial.log" 2>&1
 status=$?
