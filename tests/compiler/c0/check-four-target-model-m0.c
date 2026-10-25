@@ -104,6 +104,14 @@ static int verify_language_admission(void) {
             (void)fprintf(stderr, "FAIL target language/varargs contract: %s\\n", names[i]);
             return 1;
         }
+        if (minic_target_info_header_attribute_supported(
+                t, "__aarch64_vector_pcs__",
+                sizeof("__aarch64_vector_pcs__") - 1U) != is_arm ||
+            minic_target_info_header_attribute_supported(
+                t, "__aarch64_vector_pcs__", 3U)) {
+            (void)fprintf(stderr, "FAIL target header attribute contract: %s\\n", names[i]);
+            return 1;
+        }
         has_vector = minic_target_info_named_builtin_type(
             t, "__SVBool_t", sizeof("__SVBool_t") - 1U, &vector_type);
         if (has_vector != is_arm ||

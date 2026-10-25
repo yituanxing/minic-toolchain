@@ -392,6 +392,19 @@ bool minic_target_info_named_builtin_type(const MinicTargetInfo *target,
     return false;
 }
 
+/* A glibc header-only PCS marker must not enable actual vector call ABI.
+ * Naming/target admission is centralized here, not in the C parser. */
+bool minic_target_info_header_attribute_supported(const MinicTargetInfo *target,
+                                                  const char *spelling,
+                                                  size_t length) {
+    static const char name[] = "__aarch64_vector_pcs__";
+    return target != NULL && spelling != NULL &&
+           (target->language_type_capabilities &
+            MINIC_TARGET_LANG_OPAQUE_VECTOR_HEADER_DECLARATIONS) != 0U &&
+           length == sizeof(name) - 1U &&
+           memcmp(spelling, name, length) == 0;
+}
+
 /* Only the x86 SysV cursor has a distinct internal identity today. Other
  * existing targets preserve their canonical sequential void-pointer model. */
 bool minic_target_info_builtin_va_list_type(const MinicTargetInfo *target,

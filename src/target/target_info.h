@@ -91,6 +91,9 @@ bool minic_target_info_language_type_supported(const MinicTargetInfo *target,
 bool minic_target_info_named_builtin_type(const MinicTargetInfo *target,
                                           const char *spelling, size_t length,
                                           MinicType *type);
+bool minic_target_info_header_attribute_supported(const MinicTargetInfo *target,
+                                                  const char *spelling,
+                                                  size_t length);
 bool minic_target_info_builtin_va_list_type(const MinicTargetInfo *target,
                                             MinicType *type);
 bool minic_target_info_variadic_state_copy_type_supported(
