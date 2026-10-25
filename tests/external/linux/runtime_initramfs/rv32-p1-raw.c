@@ -33,7 +33,7 @@ typedef unsigned long word;
 #define SYS_ACCEPT4 242
 #define SYS_CONNECT 203
 #define SYS_CLONE 220
-#define SYS_WAIT4 260
+#define SYS_WAITID 95
 #define SYS_IOCTL 29
 #define SYS_MEMFD_CREATE 279
 #define SYS_LSEEK 62
@@ -260,12 +260,21 @@ static void ipv6_test(void) {
     long written=read_n==1?SC3(SYS_WRITE,accepted,"6",1):-1;
     stage(written==1?"ipv6-parent-write-pass":"ipv6-parent-write-fail");
     close_fd(accepted);
-    int status=0;
-    long waited=SC4(SYS_WAIT4,child,&status,0,0);
-    stage(waited==child?"ipv6-waitpid-pass":"ipv6-waitpid-fail");
+    /* wait4(260) is an old time32 ABI and is not guaranteed on
+     * RV32 Linux with only modern compat-free 32-bit syscalls.
+     * waitid(95) provides the same fork/child-exit assertion without
+     * timeval/rusage compatibility.  siginfo_t is 128 bytes; RV32
+     * si_code at 8, si_pid at 12 and si_status at byte 20. */
+    u32 info[32];
+    zero(info,sizeof(info));
+    long waited=SC5(SYS_WAITID,1,child,info,4,0);
+    int status=(int)info[5];
+    stage(waited==0?"ipv6-waitid-pass":"ipv6-waitid-fail");
+    stage(info[2]==1?"ipv6-cld-exited-pass":"ipv6-cld-exited-fail");
     stage(status==0?"ipv6-child-status-pass":"ipv6-child-status-fail");
     int ok=!bad(accepted) && read_n==1 && got=='V' &&
-           written==1 && waited==child && status==0;
+           written==1 && waited==0 && info[2]==1 &&
+           info[3]==(u32)child && status==0;
     stage(ok?"ipv6-child-parent-success":"ipv6-child-parent-failed");
     verdict("ipv6-tcp-loopback",ok);
     close_fd(listener);
