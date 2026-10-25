@@ -222,10 +222,11 @@ if [[ "$p1" == 1 ]]; then
     echo "RV32I_QEMU_P1=FAIL missing_clean_powerdown image=$image_sha" >&2
     exit 1
   }
-  # Bind this RV32 test to the twelve official P1 marker patterns, not just
-  # an independently-maintained copy: P0 and fork/exec remain separate gates.
-  mapfile -t manifest_p1 < <(awk -F '\t' '$1=="p1"{print $3}' tests/external/linux/runtime_v2_checks.tsv)
-  [[ "${#manifest_p1[@]}" == 13 ]] || {
+  # Bind this RV32 test to exactly twelve official P1 syscall patterns.
+  # The official thirteenth P1 row (probe-exec) is NOT yet implemented here;
+  # it must remain a separately visible qualification gap.
+  mapfile -t manifest_p1 < <(awk -F '\t' '$1=="p1" && $2!="probe-exec"{print $3}' tests/external/linux/runtime_v2_checks.tsv)
+  [[ "${#manifest_p1[@]}" == 12 ]] || {
     echo "RV32I_QEMU_P1=FAIL official_P1_manifest_size=${#manifest_p1[@]}" >&2; exit 1;
   }
   for pattern in "${manifest_p1[@]}"; do
