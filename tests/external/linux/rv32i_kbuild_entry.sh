@@ -30,6 +30,11 @@ make "${gnu_args[@]}" defconfig >"$ev/defconfig.log" 2>&1
   -e NONPORTABLE -e ARCH_RV32I -d ARCH_RV64I \
   -d RISCV_ISA_C -d FPU -d SMP
 make "${gnu_args[@]}" olddefconfig >"$ev/olddefconfig.log" 2>&1
+# This is a real original Kconfig audit, not a custom defconfig or kernel patch.
+# Preserve the GENERATED config even when the next fail-closed check fires.
+cp "$out/.config" "$ev/generated-kconfig.txt"
+grep -E '^(CONFIG_(NONPORTABLE|ARCH_RV32I|ARCH_RV64I|32BIT|RISCV_ISA_C|FPU|SMP)=|# CONFIG_(ARCH_RV64I|RISCV_ISA_C|FPU|SMP) is not set)' "$out/.config" |
+  sed 's/^/RV32I_LINUX_ACTUAL_KCONFIG /'
 for setting in CONFIG_NONPORTABLE CONFIG_ARCH_RV32I CONFIG_32BIT; do
   grep -Fxq "$setting=y" "$out/.config" || {
     echo "RV32I_LINUX=FAIL Kconfig_missing=$setting" >&2; exit 3;
