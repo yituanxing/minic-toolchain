@@ -36,7 +36,10 @@ for name in linux asm asm-generic mtd; do
     cp -a "$uapi/$name" "$sysroot/usr/include/"
   fi
 done
-test -f "$sysroot/usr/include/linux/types.h"
+if [ ! -f "$sysroot/usr/include/linux/types.h" ]; then
+  echo "RV32_MUSL=BLOCKED stage=target_Linux_UAPI missing=$uapi/linux/types.h" >&2
+  exit 1
+fi
 (
   cd "$work/build"
   CC="$BARE_CC" AR=riscv64-unknown-elf-ar RANLIB=riscv64-unknown-elf-ranlib \
