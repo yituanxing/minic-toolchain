@@ -415,7 +415,6 @@ jobs:
           set -Eeuo pipefail
           test "${{ steps.original.outputs.cache-hit }}" = true
           RV32I_TRIAGE_SHARD=${{ matrix.shard }} \
-          # Pure shard mode: eight disjoint 31/32-C-object cohorts. \
           RV32I_TRIAGE_ROOT="$GITHUB_WORKSPACE/build/rv32i-qemu-sweep/shard-${{ matrix.shard }}" \
           RV32I_TRIAGE_SOURCE="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0/linux-6.6.143" \
           RV32I_TRIAGE_GOLDEN="$GITHUB_WORKSPACE/build/rv32i-linux-entry" \
