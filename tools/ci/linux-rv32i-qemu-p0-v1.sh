@@ -168,7 +168,9 @@ set -e
 printf 'qemu_status=%s\nimage_sha256=%s\n' "$status" "$image_sha" \
   >"$work/provenance.txt"
 if [[ "$p1" == 1 ]]; then
-  [[ "$status" == 0 || "$status" == 124 ]] || {
+  # The historical P0/P1 contract requires CLEAN guest powerdown, not an
+  # allowed timeout.  A guest that prints PASS and then hangs must FAIL.
+  [[ "$status" == 0 ]] || {
     echo "RV32I_QEMU_P1=FAIL qemu_exit=$status" >&2
     tail -n 110 "$work/qemu-serial.log" >&2
     exit 1
@@ -209,13 +211,31 @@ for pattern in \
     exit 1
   fi
 done
-if grep -Eq '(Kernel panic|RV32I_LINUX_PID1=FAIL|RV32I_LINUX_P1=FAIL|RUNTIME_V2_SYSCALL_FAIL|Oops:|Unable to handle kernel|Insufficient stack space)' \
+if grep -Eiq '(Kernel panic|RV32I_LINUX_PID1=FAIL|RV32I_LINUX_P1=FAIL|RUNTIME_V2_SYSCALL_FAIL|Oops:|Unable to handle kernel|Insufficient stack space|(^|[^a-z])BUG:|soft lockup|workqueue lockup|Unknown symbol|invalid module format)' \
     "$work/qemu-serial.log"; then
   echo "RV32I_QEMU_P0=FAIL guest_panic_or_pid1_failure image=$image_sha" >&2
   tail -n 110 "$work/qemu-serial.log" >&2
   exit 1
 fi
 if [[ "$p1" == 1 ]]; then
+  grep -Eq 'reboot: Power down' "$work/qemu-serial.log" || {
+    echo "RV32I_QEMU_P1=FAIL missing_clean_powerdown image=$image_sha" >&2
+    exit 1
+  }
+  # Bind this RV32 test to the twelve official P1 marker patterns, not just
+  # an independently-maintained copy: P0 and fork/exec remain separate gates.
+  mapfile -t manifest_p1 < <(awk -F '\t' '$1=="p1"{print $3}' tests/external/linux/runtime_v2_checks.tsv)
+  [[ "${#manifest_p1[@]}" == 13 ]] || {
+    echo "RV32I_QEMU_P1=FAIL official_P1_manifest_size=${#manifest_p1[@]}" >&2; exit 1;
+  }
+  for pattern in "${manifest_p1[@]}"; do
+    grep -Eq "$pattern" "$work/qemu-serial.log" || {
+      echo "RV32I_QEMU_P1=FAIL official_manifest_missing=$pattern" >&2; exit 1;
+    }
+  done
+  [[ "$(grep -Ec '^RUNTIME_V2_SYSCALL_PASS ' "$work/qemu-serial.log")" == 12 ]] || {
+    echo "RV32I_QEMU_P1=FAIL required_exactly_12_pass_markers" >&2; exit 1;
+  }
   # Match all 12 historical RV64 P1 families and final count in the SAME
   # immutable-image boot; a timeout or incomplete log can never pass.
   for name in eventfd-rw epoll-eventfd timerfd-read signalfd-read \
