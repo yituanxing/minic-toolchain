@@ -183,9 +183,37 @@ if [[ "$mode" == union ]]; then
     [[ "$line" != \#* && -n "$line" ]] || continue
     install -m 644 "$merged/minic/$line" "$out/$line"
   done <"$prov/full-c-objects.txt"
-  # Exactly the original GNU Kbuild linker. KBUILD_NOCMDDEP only prevents
-  # GNU CC from silently overwriting unchanged MiniC object candidates.
-  if ! make "${gnu_args[@]}" KBUILD_NOCMDDEP=1 -j4 Image >"$merged/minic-relink.log" 2>&1; then
+
+  # RV32I deliberately has no hardware M extension. The original Linux
+  # kernel is built with rv32ima, but MiniC's I-only C objects therefore
+  # reference libgcc's integer division/multiplication entry points. Reuse
+  # the project's already pinned, QEMU-validated GNU libgcc 14.2.0 and LLVM
+  # compiler-rt 19.1.7 provider sources. Build those once for exact RV32I /
+  # ILP32 using GNU, separately from Linux's 1741 MiniC C owners.
+  runtime="$merged/rv32i-softarith"
+  bash "$GITHUB_WORKSPACE/tests/compiler/c0/build-rv32-gcc-runtime.sh" "$runtime" \
+    >"$merged/rv32i-softarith-build.log" 2>&1
+  mapfile -t runtime_objects <"$runtime/rv32-runtime-objects.rsp"
+  test "${#runtime_objects[@]}" -ge 17
+  runtime_archive="$merged/rv32i-softarith.a"
+  riscv64-linux-gnu-ar rcsD "$runtime_archive" "${runtime_objects[@]}"
+  for provider in __mulsi3 __udivsi3 __umodsi3 __muldi3 __udivdi3 __umoddi3; do
+    riscv64-linux-gnu-nm -g --defined-only "$runtime_archive" |
+      grep -Eq "[[:space:]]${provider}$" || {
+        echo "RV32I_SOFTARITH=FAIL missing_upstream_provider=$provider" >&2
+        exit 6
+      }
+  done
+  echo "RV32I_SOFTARITH=PASS providers=GNU_libgcc_14.2.0,LLVM_compiler_rt_19.1.7 exact_isa=rv32i ABI=ilp32 archive_sha256=$(sha256sum "$runtime_archive" | cut -d' ' -f1)"
+
+  # Keep the original GNU Kbuild linker, object universe, archive ordering,
+  # and Linux make targets. Attach only the external software-arithmetic
+  # provider at the existing vmlinux library seam (inside --start-group),
+  # without replacing any Kbuild-generated KBUILD_VMLINUX_LIBS value.
+  # KBUILD_NOCMDDEP prevents GNU CC from overwriting certified MiniC objects.
+  if ! make "${gnu_args[@]}" KBUILD_NOCMDDEP=1 -j4 \
+      --eval="vmlinux: KBUILD_VMLINUX_LIBS += $runtime_archive" \
+      Image >"$merged/minic-relink.log" 2>&1; then
     echo 'RV32I_UNION_LINK=FAIL original_GNU_Kbuild' >&2
     tail -n 100 "$merged/minic-relink.log" >&2
     exit 6
