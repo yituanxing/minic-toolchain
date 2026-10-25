@@ -6,6 +6,7 @@ on:
     paths:
       - .github/workflows/minic-rv32i-linux-qemu-p0.yml
       - tools/ci/linux-rv32i-qemu-p0-v1.sh
+      - tests/external/linux/runtime_initramfs/rv32-p1-raw.c
       - tools/ci/linux-rv32i-qemu-batch-isolate-v1.sh
   workflow_dispatch:
 
