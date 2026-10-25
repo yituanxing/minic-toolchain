@@ -70,6 +70,8 @@ bool rv32_emit_parameter(FILE *, const MinicCoreFunction *,
                          const Rv32Frame *, const MinicCoreInstruction *);
 bool rv32_emit_parameter_object(FILE *, const MinicCoreFunction *,
                                 const Rv32Frame *, const MinicCoreInstruction *);
+bool rv32_emit_record_return(FILE *, const Rv32Frame *,
+                             const MinicCoreTerminator *, const char *);
 /* Shared tail-safe word packing for Core record OBJECT arguments/returns. */
 bool rv32_emit_object_word(FILE *, const Rv32Frame *, MinicCoreObjectId,
                            size_t, unsigned, const char *);

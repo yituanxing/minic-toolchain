@@ -121,30 +121,8 @@ static bool rv32_term(FILE *out, const MinicCoreFunction *f,
                        const char *symbol) {
     switch (term->kind) {
     case MINIC_CORE_TERMINATOR_RETURN:
-        if (fr->abi.record_return_size != 0U) {
-            MinicCoreObjectId id = term->return_object;
-            size_t word;
-            if (id >= fr->object_count)
-                return false;
-            if (fr->abi.indirect_return) {
-                return rv32_stack(out, "lw", "t1", fr->sret_offset) &&
-                       rv32_address(out, "t0", fr->object_offsets[id]) &&
-                       minic_riscv_emit_record_copy_bytes(
-                           out, "t1", "t0", fr->abi.record_return_size) &&
-                       rv32_stack(out, "lw", "a0", fr->sret_offset) &&
-                       fprintf(out, "  lla t6, .L%s_rv32_return\n"
-                                    "  jalr zero, 0(t6)\n", symbol) >= 0;
-            }
-            for (word = 0U; word < (fr->abi.record_return_size + 3U) / 4U; ++word) {
-                if (!rv32_emit_object_word(
-                        out, fr, id, fr->abi.record_return_size, (unsigned)word,
-                        word == 0U ? "a0" : "a1"))
-                    return false;
-            }
-            return fprintf(out,
-                           "  lla t6, .L%s_rv32_return\n"
-                           "  jalr zero, 0(t6)\n", symbol) >= 0;
-        }
+        if (fr->abi.record_return_size != 0U)
+            return rv32_emit_record_return(out, fr, term, symbol);
         if (!minic_type_is_void(f->return_type)) {
             unsigned words;
             if (!rv32_scalar_storage_words(f, f->return_type, &words))

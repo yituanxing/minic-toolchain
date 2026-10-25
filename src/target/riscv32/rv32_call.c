@@ -238,6 +238,40 @@ bool rv32_emit_parameter_object(FILE *out, const MinicCoreFunction *f,
     return true;
 }
 
+/* Record return ABI transport lives next to argument transport, not
+ * in the top-level machine-program orchestrator. The hidden sret pointer
+ * is saved by the frame prologue before any nested calls can clobber a0. */
+bool rv32_emit_record_return(FILE *out, const Rv32Frame *fr,
+                             const MinicCoreTerminator *term,
+                             const char *symbol) {
+    MinicCoreObjectId id;
+    size_t word;
+    if (out == NULL || fr == NULL || term == NULL || symbol == NULL ||
+        fr->abi.record_return_size == 0U ||
+        term->kind != MINIC_CORE_TERMINATOR_RETURN)
+        return false;
+    id = term->return_object;
+    if (id >= fr->object_count) return false;
+    if (fr->abi.indirect_return) {
+        return rv32_stack(out, "lw", "t1", fr->sret_offset) &&
+               rv32_address(out, "t0", fr->object_offsets[id]) &&
+               minic_riscv_emit_record_copy_bytes(
+                   out, "t1", "t0", fr->abi.record_return_size) &&
+               rv32_stack(out, "lw", "a0", fr->sret_offset) &&
+               fprintf(out, "  lla t6, .L%s_rv32_return\n"
+                            "  jalr zero, 0(t6)\n", symbol) >= 0;
+    }
+    for (word = 0U; word < (fr->abi.record_return_size + 3U) / 4U; ++word) {
+        if (!rv32_emit_object_word(
+                out, fr, id, fr->abi.record_return_size, (unsigned)word,
+                word == 0U ? "a0" : "a1"))
+            return false;
+    }
+    return fprintf(out,
+                   "  lla t6, .L%s_rv32_return\n"
+                   "  jalr zero, 0(t6)\n", symbol) >= 0;
+}
+
 /* Named ILP32 parameters use GPRs then XLEN-sized incoming stack words.
  * Variadic definitions remain fail-closed until the ILP32 va_list ABI
  * receiver has independent GCC differential coverage. */
