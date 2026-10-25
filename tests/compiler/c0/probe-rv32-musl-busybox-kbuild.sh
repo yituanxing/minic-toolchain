@@ -171,11 +171,20 @@ base=( "$BARE_CC" -march=rv32i -mabi=ilp32
   -nostdinc -isystem "$sysroot/usr/include" -isystem "$builtins"
   -I"$repo/tests/linker/fixtures/busybox-uapi" -fno-builtin )
 compile=0
+relocatable=0
 for item in "\${args[@]}"; do
-  case "\$item" in -c|-E|-S|-M|-MM) compile=1 ;; esac
+  case "\$item" in
+    -c|-E|-S|-M|-MM) compile=1 ;;
+    -r|-Wl,-r|-Wl,--relocatable) relocatable=1 ;;
+  esac
 done
 if ((compile)); then
   exec "\${base[@]}" "\${args[@]}"
+fi
+if ((relocatable)); then
+  # BusyBox Kbuild combines objects with ld -r. Injecting a CRT into
+  # this partial link would copy _start and libc into built-in.o.
+  exec "\${base[@]}" -nostdlib "\${args[@]}"
 fi
 link_args=()
 for item in "\${args[@]}"; do
