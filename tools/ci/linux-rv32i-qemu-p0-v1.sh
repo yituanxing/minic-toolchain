@@ -67,14 +67,16 @@ for contract in \
     'Class:[[:space:]]+ELF32' \
     'Machine:[[:space:]]+RISC-V' \
     'Type:[[:space:]]+EXEC' \
-    'Flags:.*soft-float ABI'; do
+    'Flags:[[:space:]]+0x0([[:space:]]|$)'; do
   if ! grep -Eq "$contract" "$work/init-elf.txt"; then
     echo "RV32I_QEMU_P0=FAIL invalid_init_elf expected=$contract" >&2
     sed -n '1,45p' "$work/init-elf.txt" >&2
     exit 3
   fi
 done
-echo 'RV32I_QEMU_P0_INIT=PASS ELF32=1 riscv=1 ET_EXEC=1 soft_float=1'
+# ELF RISC-V e_flags 0x0 means soft-float ABI and no RVC extension. GNU
+# binutils 2.42 prints just "Flags: 0x0", without a textual ABI suffix.
+echo 'RV32I_QEMU_P0_INIT=PASS ELF32=1 riscv=1 ET_EXEC=1 e_flags=0x0 soft_float=1 no_RVC=1'
 
 mkdir -p "$work/guest/dev"
 install -m 755 "$work/init" "$work/guest/init"
