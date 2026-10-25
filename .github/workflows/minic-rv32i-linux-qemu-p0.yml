@@ -14,7 +14,7 @@ on:
 # original GNU Kbuild ELF32 link, and binds the bytes with a fixed SHA.
 jobs:
   rv32i-linux-qemu-p0:
-    if: github.event_name == 'workflow_dispatch' || (!contains(github.event.head_commit.message, '[rv32-leaf]') && !contains(github.event.head_commit.message, '[rv32-single]') && !contains(github.event.head_commit.message, '[rv32-partition]'))
+    if: github.event_name == 'workflow_dispatch' || (!contains(github.event.head_commit.message, '[rv32-leaf]') && !contains(github.event.head_commit.message, '[rv32-single]') && !contains(github.event.head_commit.message, '[rv32-partition]') && !contains(github.event.head_commit.message, '[rv32-whole-shard]'))
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
@@ -432,5 +432,98 @@ jobs:
             build/rv32i-qemu-sweep/shard-${{ matrix.shard }}/trials/*/link.log
             build/rv32i-qemu-sweep/shard-${{ matrix.shard }}/trials/*/qemu-step.log
             build/rv32i-qemu-sweep/shard-${{ matrix.shard }}/trials/*/qemu/qemu-serial.log
+          retention-days: 7
+          if-no-files-found: warn
+
+  # Aggregate-layer differential after all 56 31-owner groups: test
+  # each *full* 248/249-owner compiler shard with genuine QEMU P0.
+  # No recompilation; original GNU Kbuild and SHA oracle stay unchanged.
+  rv32i-qemu-whole-shard:
+    if: github.event_name == 'push' && contains(github.event.head_commit.message, '[rv32-whole-shard]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 28
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pinned GNU RV32 build/link and real QEMU dependencies
+        shell: bash
+        timeout-minutes: 12
+        run: |
+          set -Eeuo pipefail
+          for sources in /etc/apt/apt-mirrors.txt /etc/apt/sources.list.d/ubuntu.sources; do
+            if [[ -f "$sources" ]] && grep -q 'azure.archive.ubuntu.com' "$sources"; then
+              sudo sed -i 's#azure.archive.ubuntu.com#archive.ubuntu.com#g' "$sources"
+            fi
+          done
+          timeout 100s sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 update -qq
+          timeout 480s sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 \
+            install -y --no-install-recommends \
+              gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu qemu-system-misc \
+              opensbi cpio device-tree-compiler bc bison flex libssl-dev libelf-dev
+
+      - name: Resolve exact certified ELF32 original GNU object cache
+        id: golden
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          cfg=4c6c19f79741a8a31ec52ad57b1a6bc56b81dd6996cbf5e1bdc63f587d85244c
+          gcc=$(sha256sum "$(command -v riscv64-linux-gnu-gcc)" | cut -c1-16)
+          ld=$(sha256sum "$(command -v riscv64-linux-gnu-ld)" | cut -c1-16)
+          as=$(sha256sum "$(command -v riscv64-linux-gnu-as)" | cut -c1-16)
+          echo "key=linux-gnu-golden-rv32i-v1-6.6.143-$cfg-$gcc-$ld-$as" >>"$GITHUB_OUTPUT"
+
+      - name: Restore exact GNU 1741-object tree, no rebuild
+        id: original
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            build/rv32i-linux-entry/out
+            build/rv32i-linux-entry/provenance
+          key: ${{ steps.golden.outputs.key }}
+          fail-on-cache-miss: true
+
+      - name: Restore pinned original Linux 6.6.143 source
+        uses: ./.github/actions/linux-runtime-restore-fixture
+        with:
+          fixture: source
+
+      - name: Restore current shared-object-lifetime shard for whole-shard runtime
+        uses: actions/download-artifact@v4
+        with:
+          repository: yituanxing/minic-toolchain
+          run-id: '40199299765'
+          name: shard-${{ matrix.shard }}
+          path: build/rv32i-qemu-whole/shard-${{ matrix.shard }}/shards/shard-${{ matrix.shard }}
+          github-token: ${{ github.token }}
+
+      - name: One entire 248/249-owner GNU/MiniC QEMU-P0 runtime differential
+        timeout-minutes: 18
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "${{ steps.original.outputs.cache-hit }}" = true
+          RV32I_TRIAGE_SHARD=${{ matrix.shard }} \
+          RV32I_TRIAGE_WHOLE_SHARD=1 \
+          RV32I_TRIAGE_ROOT="$GITHUB_WORKSPACE/build/rv32i-qemu-whole/shard-${{ matrix.shard }}" \
+          RV32I_TRIAGE_SOURCE="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0/linux-6.6.143" \
+          RV32I_TRIAGE_GOLDEN="$GITHUB_WORKSPACE/build/rv32i-linux-entry" \
+            bash tools/ci/linux-rv32i-qemu-batch-isolate-v1.sh
+
+      - name: Retain each tested cohort's exact runtime verdict and first fault
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rv32i-qemu-whole-${{ matrix.shard }}-${{ github.sha }}
+          path: |
+            build/rv32i-qemu-whole/shard-${{ matrix.shard }}/cohort-results.tsv
+            build/rv32i-qemu-whole/shard-${{ matrix.shard }}/gnu-prepare.log
+            build/rv32i-qemu-whole/shard-${{ matrix.shard }}/gnu-reconcile.log
+            build/rv32i-qemu-whole/shard-${{ matrix.shard }}/runtime-build.log
+            build/rv32i-qemu-whole/shard-${{ matrix.shard }}/trials/*/link.log
+            build/rv32i-qemu-whole/shard-${{ matrix.shard }}/trials/*/qemu-step.log
+            build/rv32i-qemu-whole/shard-${{ matrix.shard }}/trials/*/qemu/qemu-serial.log
           retention-days: 7
           if-no-files-found: warn

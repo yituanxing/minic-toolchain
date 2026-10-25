@@ -140,7 +140,7 @@ mkdir -p "$root/subsets"
 if [[ -n "${RV32I_TRIAGE_SHARD:-}" ]]; then
   # Fixed stride within one certified 249/248-owner producer shard. Seven
   # independent runners each perform eight ~31-object QEMU trials in parallel.
-  python3 - "$shards/shard-$RV32I_TRIAGE_SHARD/full-objects.txt" "$root/subsets" "$RV32I_TRIAGE_SHARD" "${RV32I_TRIAGE_PARENT_PART:-all}" "${RV32I_TRIAGE_LEAF_PART:-all}" <<'PY_SPLIT'
+  python3 - "$shards/shard-$RV32I_TRIAGE_SHARD/full-objects.txt" "$root/subsets" "$RV32I_TRIAGE_SHARD" "${RV32I_TRIAGE_PARENT_PART:-all}" "${RV32I_TRIAGE_LEAF_PART:-all}" "${RV32I_TRIAGE_WHOLE_SHARD:-0}" <<'PY_SPLIT'
 from pathlib import Path
 import sys
 src, dest, idx = Path(sys.argv[1]), Path(sys.argv[2]), int(sys.argv[3])
@@ -159,6 +159,13 @@ if sys.argv[5] != 'all':
     plan_count = len(names)
 else:
     plan_count = 8
+if sys.argv[6] == '1':
+    # Same original per-shard MiniC inventory; only split granularity
+    # changes. Baseline and ownership checks remain completely identical.
+    assert sys.argv[4] == 'all' and sys.argv[5] == 'all'
+    plan_count = 1
+else:
+    assert sys.argv[6] == '0'
 for part in range(plan_count):
     subset = names[part::plan_count]
     assert subset
