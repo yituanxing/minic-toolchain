@@ -3615,3 +3615,70 @@ jobs:
           retention-days: 7
           if-no-files-found: warn
           include-hidden-files: true
+
+  # QEMU-only continuation of the certified 1741/1741 RV32I Linux Image.
+  # The existing SHA-verified shards are not rebuilt here.
+  rv32i-qemu-runtime:
+    if: github.event_name == 'push' && contains(github.event.head_commit.message, '[linux-rv32i-qemu]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install actual 32-bit RISC-V system QEMU
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get -o Acquire::Retries=2 update -qq
+          sudo apt-get -o Acquire::Retries=2 install -y --no-install-recommends qemu-system-misc
+          command -v qemu-system-riscv32
+          qemu-system-riscv32 --version
+      - name: Restore certified MiniC ELF32 Linux Image without recompilation
+        uses: actions/download-artifact@v4
+        with:
+          repository: yituanxing/minic-toolchain
+          github-token: \${{ github.token }}
+          run-id: 40189397298
+          name: linux-rv32i-seven-shard-Image-1e24841d0d64e608da145ed0b4980185fe155bcf
+          path: build/rv32i-qemu
+      - name: Boot original RV32 Linux 6.6.143 in qemu-system-riscv32
+        shell: bash
+        timeout-minutes: 3
+        run: |
+          set -Eeuo pipefail
+          work="$GITHUB_WORKSPACE/build/rv32i-qemu"
+          image="$work/out/arch/riscv/boot/Image"
+          test -s "$image"
+          test "$(sha256sum "$image" | cut -d' ' -f1)" = c2e52427e6bc861216d0389e1d408d845b5606e2f67a8e23a805c11d29bfaf58
+          grep -Fq 'RV32I_UNION_LINK=PASS' "$work/merged/union-result.txt"
+          echo "RV32I_QEMU_IMAGE=VERIFIED source_run=40189397298 full_1741_MiniC_C=true ELF32=true no_rebuild=true"
+          set +e
+          timeout --signal=TERM 35 qemu-system-riscv32 \
+            -M virt -cpu max -m 512M -smp 1 -nographic -no-reboot \
+            -bios default -kernel "$image" \
+            -append 'console=ttyS0 earlycon=sbi loglevel=8 panic=-1' \
+            </dev/null >"$work/qemu-rv32-boot.log" 2>&1
+          rc=$?
+          set -e
+          echo "RV32I_QEMU_EXECUTED=TRUE status=$rc"
+          tail -n 120 "$work/qemu-rv32-boot.log"
+          if ! grep -Fq 'Linux version 6.6.143' "$work/qemu-rv32-boot.log"; then
+            echo 'RV32I_QEMU_KERNEL_ENTRY=FAIL no_linux_banner' >&2
+            exit 1
+          fi
+          echo 'RV32I_QEMU_KERNEL_ENTRY=PASS genuine_qemu_system_riscv32=true'
+          if grep -Eiq 'Kernel panic|Oops:|Unable to handle kernel' "$work/qemu-rv32-boot.log"; then
+            echo 'RV32I_QEMU_P0=FAIL kernel_panic_or_missing_init' >&2
+            exit 1
+          fi
+          echo 'RV32I_QEMU_P0=INCOMPLETE no_rv32_initramfs_yet'
+          exit 1
+      - name: Preserve exact RV32 QEMU failure frontier
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rv32i-qemu-boot-\${{ github.sha }}
+          path: |
+            build/rv32i-qemu/qemu-rv32-boot.log
+            build/rv32i-qemu/merged/union-result.txt
+          retention-days: 7
+          if-no-files-found: warn
