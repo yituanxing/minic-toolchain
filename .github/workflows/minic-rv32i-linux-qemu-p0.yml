@@ -1,0 +1,89 @@
+name: MiniC RV32I Linux immutable Image QEMU P0
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/minic-rv32i-linux-qemu-p0.yml
+      - tools/ci/linux-rv32i-qemu-p0-v1.sh
+  workflow_dispatch:
+
+# This runtime gate must never recompile Linux or rerun the seven producer
+# shards. It downloads the exact 1741/1741 MiniC Image that passed the
+# original GNU Kbuild ELF32 link, and binds the bytes with a fixed SHA.
+jobs:
+  rv32i-linux-qemu-p0:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 22
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Restore exact seven-shard MiniC ELF32 Linux Image
+        uses: actions/download-artifact@v4
+        with:
+          repository: yituanxing/minic-toolchain
+          run-id: '40189397298'
+          name: linux-rv32i-seven-shard-Image-1e24841d0d64e608da145ed0b4980185fe155bcf
+          github-token: ${{ github.token }}
+          path: build/rv32i-qemu-p0/source-artifact
+
+      - name: Require immutable Image SHA from certified 1741-object GNU link
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mapfile -t images < <(find build/rv32i-qemu-p0/source-artifact -type f -path '*/arch/riscv/boot/Image' -print)
+          if [[ "${#images[@]}" != 1 ]]; then
+            echo "RV32I_QEMU_IMAGE=FAIL expected_one_Image found=${#images[@]}" >&2
+            exit 1
+          fi
+          expected=c2e52427e6bc861216d0389e1d408d845b5606e2f67a8e23a805c11d29bfaf58
+          actual=$(sha256sum "${images[0]}" | cut -d' ' -f1)
+          test "$actual" = "$expected" || {
+            echo "RV32I_QEMU_IMAGE=FAIL expected=$expected actual=$actual" >&2
+            exit 1
+          }
+          printf 'RV32I_QEMU_IMAGE=PASS SHA=%s producer_run=40189397298 original_Kbuild=true MiniC_C=1741/1741\n' "$actual"
+          printf 'RV32I_QEMU_IMAGE=%s\n' "$GITHUB_WORKSPACE/${images[0]}" >>"$GITHUB_ENV"
+
+      - name: Install RV32 system QEMU and native GNU assembler
+        shell: bash
+        timeout-minutes: 12
+        run: |
+          set -Eeuo pipefail
+          # Runner mirror may stall on the qemu-system-misc package; keep the
+          # same bounded official-archive routing as the established receiver.
+          for sources in /etc/apt/apt-mirrors.txt /etc/apt/sources.list.d/ubuntu.sources; do
+            if [[ -f "$sources" ]] && grep -q 'azure.archive.ubuntu.com' "$sources"; then
+              sudo sed -i 's#azure.archive.ubuntu.com#archive.ubuntu.com#g' "$sources"
+            fi
+          done
+          timeout 100s sudo apt-get -o Acquire::Retries=2 \
+            -o Acquire::http::Timeout=30 update -qq
+          timeout 480s sudo apt-get -o Acquire::Retries=2 \
+            -o Acquire::http::Timeout=30 -o DPkg::Lock::Timeout=60 \
+            install -y --no-install-recommends \
+              qemu-system-misc opensbi binutils-riscv64-linux-gnu cpio
+          command -v qemu-system-riscv32
+          command -v riscv64-linux-gnu-as
+          echo 'RV32I_QEMU_DEPS=PASS qemu=system-riscv32 firmware=OpenSBI as=GNU'
+
+      - name: Boot unmodified RV32I Linux Image into genuine ELF32 PID1
+        shell: bash
+        timeout-minutes: 3
+        run: |
+          set -Eeuo pipefail
+          RV32I_QEMU_WORK="$GITHUB_WORKSPACE/build/rv32i-qemu-p0/boot" \
+            bash tools/ci/linux-rv32i-qemu-p0-v1.sh
+
+      - name: Preserve exact Image, ELF32 init and serial boot evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rv32i-linux-qemu-p0-${{ github.sha }}
+          path: |
+            build/rv32i-qemu-p0/boot/provenance.txt
+            build/rv32i-qemu-p0/boot/init-elf.txt
+            build/rv32i-qemu-p0/boot/qemu-serial.log
+            build/rv32i-qemu-p0/boot/initramfs.cpio.gz
+          if-no-files-found: warn
+          retention-days: 7
