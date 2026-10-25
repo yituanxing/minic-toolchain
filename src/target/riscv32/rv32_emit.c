@@ -317,8 +317,7 @@ bool minic_riscv32_write_core_program(const char *path,
         target->riscv_isa.xlen != 32U ||
         target->riscv_isa.abi != MINIC_RISCV_ABI_ILP32 ||
         function_count != program->function_count ||
-        (function_count != 0U && functions == NULL) ||
-        program->file_asm_count != 0U) {
+        (function_count != 0U && functions == NULL)) {
         rv32_diag(diagnostic, "<rv32-abi>",
                   "rv32i: unsupported file-scope inline ASM or invalid Core function map");
         return false;
@@ -343,6 +342,25 @@ bool minic_riscv32_write_core_program(const char *path,
                 obj->is_zero_initialized ? 1U : 0U);
             rv32_diag(diagnostic, "<rv32-global>", message);
         }
+    }
+    /* Preserve genuine GNU file-scope asm from the original source.
+     * The compiler-owned machine emitter remains strict RV32I. The native
+     * kernel is allowed to provide its own A/CSR/privileged operations, and
+     * the existing Kbuild GNU assembler retains its ORIGINAL march flags.
+     * Source-asm provenance markers prevent crediting those instructions
+     * as ISA operations selected by MiniC. */
+    if (ok && program->file_asm_count != 0U)
+        ok = fprintf(file, ".text\n") >= 0;
+    for (i = 0U; ok && i < program->file_asm_count; ++i) {
+        const MinicFileAsm *source_asm = &program->file_asms[i];
+        if (source_asm->text == NULL) {
+            ok = false;
+            break;
+        }
+        ok = fprintf(file, "# MINIC_SOURCE_FILE_ASM_BEGIN\n") >= 0 &&
+             fwrite(source_asm->text, 1U, source_asm->length, file) ==
+                 source_asm->length &&
+             fprintf(file, "\n# MINIC_SOURCE_FILE_ASM_END\n") >= 0;
     }
     /* Undefined weak functions are real ELF symbols, not ordinary strong
      * references. A missing weak Zstd tracing hook must resolve to zero

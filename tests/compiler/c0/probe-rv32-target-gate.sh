@@ -77,4 +77,15 @@ grep -Fq 'li t0, 8' "$work/kernel-wchar-default.s"
 grep -Fq 'li t0, 4' "$work/kernel-wchar-short.s"
 grep -Fq 'li t0, 8' "$work/kernel-wchar-restored.s"
 echo 'RV32I_WCHAR_OPTION=PASS default=32 short_wchar=16 reset=32'
+cat > "$work/kernel-file-asm.i" <<'SRC'
+__asm__(".globl rv32_kernel_asm_origin\nrv32_kernel_asm_origin:\n  ebreak");
+unsigned int ordinary_c_machine_code(void) { return 42U; }
+SRC
+"$MINIC_CC" --target=riscv32-linux -march=rv32i -mabi=ilp32 \
+    -S "$work/kernel-file-asm.i" -o "$work/kernel-file-asm.s"
+grep -Fq '# MINIC_SOURCE_FILE_ASM_BEGIN' "$work/kernel-file-asm.s"
+grep -Fq '.globl rv32_kernel_asm_origin' "$work/kernel-file-asm.s"
+grep -Fq '# MINIC_SOURCE_FILE_ASM_END' "$work/kernel-file-asm.s"
+grep -Fq 'li t0, 42' "$work/kernel-file-asm.s"
+echo 'RV32I_FILE_ASM=PASS preserved_original_asm=true compiler_C_strict_I=true'
 echo 'RV32I_TARGET_GATE=PASS ILP32_registered=true incompatible_ISA_rejected=true basic_C_core_emitted=true'
