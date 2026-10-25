@@ -243,4 +243,68 @@ wc_count=$(timeout 20s "$QEMU_RV32" "$binary" wc -l \
 test "$(printf '%s' "$wc_count" | tr -d '[:space:]')" = 3
 echo "RV32_BUSYBOX_GNU_KBUILD=PASS original=1.36.1 owners=$owners libc=musl1.2.5 ELF32=1"
 echo "RV32_BUSYBOX_GNU_QEMU=PASS original=1.36.1 applets=echo,true,false,cat,head,wc cases=6"
-echo "RV32_BUSYBOX_MINIC_ACCEPT=PENDING original_Kbuild_MiniC_C_owners=0 GNU_fallback_disallowed=1"
+# Side-channel original-Kbuild GNU C owner scan. Reuse the exact existing
+# BusyBox compiler proxy rather than writing a second BusyBox/Kbuild parser.
+# The reference executable above is immutable. This shadow build is GNU-
+# owned and records every actual GNU CPP -> MiniC -> GNU AS frontier;
+# no MiniC objects are inserted yet, so success here is never mislabelled
+# a fully MiniC executable.
+shadow="$work/busybox-shadow"
+report="$work/busybox-shadow-report"
+mkdir -p "$shadow" "$report/per-tu"
+cp "$work/busybox-out/.config" "$shadow/.config"
+{ yes "" || :; } | timeout 90s make -C "$work/busybox" O="$shadow" \
+  HOSTCC=cc oldconfig >"$work/shadow-oldconfig.log" 2>&1 || {
+    echo "RV32_BUSYBOX_MINIC_CENSUS=BLOCKED stage=shadow_Kconfig" >&2
+    tail -n 25 "$work/shadow-oldconfig.log" >&2
+    exit 1
+  }
+set +e
+timeout 240s env \
+  BUSYBOX_ALLYES_HOST_CC="$work/rv32-linux-musl-gcc" \
+  BUSYBOX_ALLYES_MINIC_CC="$MINIC_CC" \
+  BUSYBOX_ALLYES_MINIC_TARGET=riscv32-linux \
+  BUSYBOX_ALLYES_MINIC_PIC=0 \
+  BUSYBOX_ALLYES_REPORT_ROOT="$report" \
+  make -C "$work/busybox" O="$shadow" -j4 \
+    ARCH=riscv HOSTCC=cc \
+    CC="python3 $repo/tests/external/busybox/allyes_sweep.py --proxy-cc" \
+    STRIP=riscv64-linux-gnu-strip busybox \
+  >"$work/shadow-build.log" 2>&1
+shadow_rc=$?
+set -e
+python3 - "$report" "$shadow" "$shadow_rc" <<'PY'
+import collections, json, pathlib, sys
+report, out, rc = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2]), int(sys.argv[3])
+results=[json.loads(p.read_text()) for p in sorted((report/"per-tu").glob("*/result.json"))]
+tally=collections.Counter()
+failed=[]
+for x in results:
+    g=x.get("gcc")
+    cpp=x.get("cpp")
+    mini=x.get("minic")
+    asm=x.get("assembler")
+    if g != 0:
+        tally["GNU"]+=1
+    elif cpp != 0:
+        tally["CPP"]+=1
+    elif mini != 0:
+        tally["MiniC"]+=1
+    elif asm != 0:
+        tally["GNU_AS"]+=1
+    else:
+        tally["PASS"]+=1
+    if g or cpp or mini or asm:
+        failed.append((x["source"],"GCC=%s CPP=%s MiniC=%s GNU_AS=%s"%(g,cpp,mini,asm)))
+print("RV32_BUSYBOX_MINIC_CENSUS=DISCOVERY original_Kbuild=1 "
+      "GNU_owned=%d MiniC_GNU_AS_pass=%d GNU_blocked=%d CPP_blocked=%d "
+      "MiniC_blocked=%d GNU_AS_blocked=%d source_sha_checked=1 "
+      "GNU_shadow_Kbuild_rc=%d MiniC_objects_substituted=0"%
+      (len(results),tally["PASS"],tally["GNU"],tally["CPP"],
+       tally["MiniC"],tally["GNU_AS"],rc),flush=True)
+for name,verdict in failed[:30]:
+    print("RV32_BUSYBOX_MINIC_BLOCKER source=%s %s"%(name,verdict),flush=True)
+if rc or len(results)<50:
+    sys.exit(1)
+PY
+echo "RV32_BUSYBOX_MINIC_ACCEPT=PENDING stage=shadow_census_not_object_replacement GNU_C_fallback_disallowed=1"
