@@ -398,11 +398,11 @@ jobs:
         with:
           fixture: source
 
-      - name: Restore current shared-spill certified MiniC shard
+      - name: Restore current shared-object-lifetime certified MiniC shard
         uses: actions/download-artifact@v4
         with:
           repository: yituanxing/minic-toolchain
-          run-id: '40196351834'
+          run-id: '40199299765'
           name: shard-${{ matrix.shard }}
           path: build/rv32i-qemu-sweep/shard-${{ matrix.shard }}/shards/shard-${{ matrix.shard }}
           github-token: ${{ github.token }}
