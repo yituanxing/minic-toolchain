@@ -1128,8 +1128,7 @@ jobs:
   # Explicit, optional 7-runner producer for the same pure-GCC C universe.
   # Do not use this lane for everyday single-TU debugging.
   gcc-shards:
-    needs: rv32i-kbuild-entry
-    if: always() && github.event_name == 'push' && !contains(github.event.head_commit.message, '[linux-runtime-gcc-receiver-reuse]') && ((contains(github.event.head_commit.message, '[linux-rv32i-kbuild]') && needs.rv32i-kbuild-entry.result == 'success') || contains(github.event.head_commit.message, '[linux-perf-2064-ab]') || contains(github.event.head_commit.message, '[linux-runtime-gcc-sharded]') || contains(github.event.head_commit.message, '[linux-minias-seven-shards]') || (contains(github.event.head_commit.message, '[linux-minipp-seven-integration]') && !contains(github.event.head_commit.message, '[linux-minipp-seven-replay]')) || contains(github.event.head_commit.message, '[linux-minipp-native-rules-C]') || contains(github.event.head_commit.message, '[minic-bootstrap-stage2-linux2064]') || contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux2064]'))
+    if: github.event_name == 'push' && !contains(github.event.head_commit.message, '[linux-runtime-gcc-receiver-reuse]') && (contains(github.event.head_commit.message, '[linux-rv32i-kbuild]') || contains(github.event.head_commit.message, '[linux-perf-2064-ab]') || contains(github.event.head_commit.message, '[linux-runtime-gcc-sharded]') || contains(github.event.head_commit.message, '[linux-minias-seven-shards]') || (contains(github.event.head_commit.message, '[linux-minipp-seven-integration]') && !contains(github.event.head_commit.message, '[linux-minipp-seven-replay]')) || contains(github.event.head_commit.message, '[linux-minipp-native-rules-C]') || contains(github.event.head_commit.message, '[minic-bootstrap-stage2-linux2064]') || contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux2064]'))
     runs-on: ubuntu-24.04
     timeout-minutes: 75
     strategy:
@@ -1192,8 +1191,31 @@ jobs:
         with:
           fixture: source
 
-      # RV32's GNU golden is produced once by rv32i-kbuild-entry. The same
-      # seven workers below reuse it; none rebuilds the kernel from scratch.
+      # Seed GNU ELF32 once with [linux-rv32i-golden]. Ordinary diagnostic
+      # runs begin all seven shards immediately. Config mode does not build
+      # kernel objects; the immutable original GNU cache is mandatory.
+      - name: Derive the exact RV32 Kconfig for this independent shard
+        if: contains(github.event.head_commit.message, '[linux-rv32i-kbuild]')
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          RV32I_LINUX_MODE=config \
+          RV32I_LINUX_SOURCE="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0/linux-6.6.143" \
+          RV32I_LINUX_WORK="$GITHUB_WORKSPACE/build/rv32i-linux-entry" \
+            bash tests/external/linux/rv32i_kbuild_entry.sh
+
+      - name: Identify independent RV32 GNU golden from config and GNU binaries
+        if: contains(github.event.head_commit.message, '[linux-rv32i-kbuild]')
+        id: rv32_gold_key
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          cfg=$(sha256sum build/rv32i-linux-entry/out/.config | cut -d' ' -f1)
+          gcc=$(sha256sum "$(command -v riscv64-linux-gnu-gcc)" | cut -c1-16)
+          ld=$(sha256sum "$(command -v riscv64-linux-gnu-ld)" | cut -c1-16)
+          as=$(sha256sum "$(command -v riscv64-linux-gnu-as)" | cut -c1-16)
+          echo "key=linux-gnu-golden-rv32i-v1-6.6.143-$cfg-$gcc-$ld-$as" >>"$GITHUB_OUTPUT"
+
       - name: Restore exact RV32 GNU golden before partitioning
         if: contains(github.event.head_commit.message, '[linux-rv32i-kbuild]')
         uses: actions/cache/restore@v4
@@ -1201,7 +1223,7 @@ jobs:
           path: |
             build/rv32i-linux-entry/out
             build/rv32i-linux-entry/provenance
-          key: ${{ needs.rv32i-kbuild-entry.outputs.golden_key }}
+          key: ${{ steps.rv32_gold_key.outputs.key }}
           fail-on-cache-miss: true
 
       - name: Identify this seventh of the RV32 original GNU C universe
@@ -1221,7 +1243,7 @@ jobs:
           subset=$(sha256sum "$work/shard-${{ matrix.shard }}/full-objects.txt" | cut -d' ' -f1)
           gcc=$(sha256sum "$(command -v riscv64-linux-gnu-gcc)" | cut -d' ' -f1)
           as=$(sha256sum "$(command -v riscv64-linux-gnu-as)" | cut -d' ' -f1)
-          echo "key=gnu-minic-shard-rv32i-v1-${{ needs.rv32i-kbuild-entry.outputs.golden_key }}-$profile-$subset-$gcc-$as" >>"$GITHUB_OUTPUT"
+          echo "key=gnu-minic-shard-rv32i-v1-${{ steps.rv32_gold_key.outputs.key }}-$profile-$subset-$gcc-$as" >>"$GITHUB_OUTPUT"
 
       - name: Restore the exact RV32 MiniC shard candidate
         if: contains(github.event.head_commit.message, '[linux-rv32i-kbuild]')
@@ -1741,11 +1763,11 @@ jobs:
           retention-days: 3
 
   gcc-shard-verify:
-    needs: [gcc-shards, rv32i-kbuild-entry]
+    needs: [gcc-shards]
     # Use the SAME receiver job for exact immutable Image reboots. When the
     # seven producer jobs are skipped, always() prevents needs' implicit skip;
     # the ordinary full-shard path still requires a successful producer.
-    if: always() && github.event_name == 'push' && ((contains(github.event.head_commit.message, '[linux-rv32i-kbuild]') && needs.rv32i-kbuild-entry.result == 'success' && needs.gcc-shards.result == 'success') || (contains(github.event.head_commit.message, '[linux-runtime-gcc-sharded]') && (needs.gcc-shards.result == 'success' || (contains(github.event.head_commit.message, '[linux-runtime-gcc-receiver-reuse]') && needs.gcc-shards.result == 'skipped'))) || (contains(github.event.head_commit.message, '[linux-minipp-seven-integration]') && needs.gcc-shards.result == 'success') || (contains(github.event.head_commit.message, '[linux-minipp-seven-replay]') && needs.gcc-shards.result == 'skipped') || contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]') || contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]') || contains(github.event.head_commit.message, '[linux-runtime-stack-owners]') || contains(github.event.head_commit.message, '[linux-native-union-cached]') || contains(github.event.head_commit.message, '[linux-minild-cached-replay]') || contains(github.event.head_commit.message, '[linux-minild-reloc-cached-replay]') || contains(github.event.head_commit.message, '[linux-minild-purgatory-cached-replay]') || contains(github.event.head_commit.message, '[linux-minild-vdso64-cached-replay]') || contains(github.event.head_commit.message, '[linux-minild-vdso32-cached-replay]') || contains(github.event.head_commit.message, '[linux-minias-earlycon-frozen]') || (contains(github.event.head_commit.message, '[minic-bootstrap-stage2-linux2064]') || (contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux2064]') && needs.gcc-shards.result == 'success') && needs.gcc-shards.result == 'success'))
+    if: always() && github.event_name == 'push' && ((contains(github.event.head_commit.message, '[linux-rv32i-kbuild]') && needs.gcc-shards.result == 'success') || (contains(github.event.head_commit.message, '[linux-runtime-gcc-sharded]') && (needs.gcc-shards.result == 'success' || (contains(github.event.head_commit.message, '[linux-runtime-gcc-receiver-reuse]') && needs.gcc-shards.result == 'skipped'))) || (contains(github.event.head_commit.message, '[linux-minipp-seven-integration]') && needs.gcc-shards.result == 'success') || (contains(github.event.head_commit.message, '[linux-minipp-seven-replay]') && needs.gcc-shards.result == 'skipped') || contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]') || contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]') || contains(github.event.head_commit.message, '[linux-runtime-stack-owners]') || contains(github.event.head_commit.message, '[linux-native-union-cached]') || contains(github.event.head_commit.message, '[linux-minild-cached-replay]') || contains(github.event.head_commit.message, '[linux-minild-reloc-cached-replay]') || contains(github.event.head_commit.message, '[linux-minild-purgatory-cached-replay]') || contains(github.event.head_commit.message, '[linux-minild-vdso64-cached-replay]') || contains(github.event.head_commit.message, '[linux-minild-vdso32-cached-replay]') || contains(github.event.head_commit.message, '[linux-minias-earlycon-frozen]') || (contains(github.event.head_commit.message, '[minic-bootstrap-stage2-linux2064]') || (contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux2064]') && needs.gcc-shards.result == 'success') && needs.gcc-shards.result == 'success'))
     runs-on: ubuntu-24.04
     timeout-minutes: 95
     steps:
@@ -1942,6 +1964,28 @@ jobs:
         with:
           fixture: source
 
+      - name: Derive the RV32 config on the independent seven-shard receiver
+        if: contains(github.event.head_commit.message, '[linux-rv32i-kbuild]')
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          RV32I_LINUX_MODE=config \
+          RV32I_LINUX_SOURCE="$GITHUB_WORKSPACE/build/linux-expanded-kbuild-v0/linux-6.6.143" \
+          RV32I_LINUX_WORK="$GITHUB_WORKSPACE/build/rv32i-linux-entry" \
+            bash tests/external/linux/rv32i_kbuild_entry.sh
+
+      - name: Reconstruct exact RV32 golden cache identity
+        if: contains(github.event.head_commit.message, '[linux-rv32i-kbuild]')
+        id: rv32_gold_key
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          cfg=$(sha256sum build/rv32i-linux-entry/out/.config | cut -d' ' -f1)
+          gcc=$(sha256sum "$(command -v riscv64-linux-gnu-gcc)" | cut -c1-16)
+          ld=$(sha256sum "$(command -v riscv64-linux-gnu-ld)" | cut -c1-16)
+          as=$(sha256sum "$(command -v riscv64-linux-gnu-as)" | cut -c1-16)
+          echo "key=linux-gnu-golden-rv32i-v1-6.6.143-$cfg-$gcc-$ld-$as" >>"$GITHUB_OUTPUT"
+
       - name: Restore the exact RV32 GNU golden for full MiniC object union
         if: contains(github.event.head_commit.message, '[linux-rv32i-kbuild]')
         uses: actions/cache/restore@v4
@@ -1949,7 +1993,7 @@ jobs:
           path: |
             build/rv32i-linux-entry/out
             build/rv32i-linux-entry/provenance
-          key: ${{ needs.rv32i-kbuild-entry.outputs.golden_key }}
+          key: ${{ steps.rv32_gold_key.outputs.key }}
           fail-on-cache-miss: true
 
       - name: Probe exact Linux 64-bit vDSO shared GNU LD boundary against MiniLD
@@ -3484,7 +3528,7 @@ jobs:
   # as RV64. Seed ELF32 GNU golden once, cache it by original config and
   # GNU tool identity, then let the existing gcc-shards matrix consume it.
   rv32i-kbuild-entry:
-    if: github.event_name == 'push' && contains(github.event.head_commit.message, '[linux-rv32i-kbuild]')
+    if: github.event_name == 'push' && contains(github.event.head_commit.message, '[linux-rv32i-golden]')
     runs-on: ubuntu-24.04
     timeout-minutes: 75
     outputs:

@@ -392,6 +392,7 @@ static bool rv32_emit_ins(FILE *out, const MinicC0Program *program,
                rv32_slot(out, fr, ins->result, "t0", false);
     }
     case MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT:
+    case MINIC_CORE_INSTRUCTION_INTEGER_OVERFLOW:
     case MINIC_CORE_INSTRUCTION_INTEGER_ADD:
     case MINIC_CORE_INSTRUCTION_INTEGER_SUBTRACT:
     case MINIC_CORE_INSTRUCTION_INTEGER_MULTIPLY:

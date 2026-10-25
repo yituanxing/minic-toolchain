@@ -88,6 +88,32 @@ bool minic_riscv32_emit_flat_global(FILE *out,
         return !obj->is_weak || obj->is_internal ||
                fprintf(out, ".weak %s\n", obj->name) >= 0;
     }
+    /* Linux exports weak, uninitialized protocol records as definitions.
+     * The common flat serializer deliberately owns only strong symbols;
+     * keep weak ELF binding here while reusing its DataLayout byte count.
+     * This applies equally to weak zero arrays and scalar declarations. */
+    if (obj->is_weak && obj->section_name == NULL &&
+        obj->alias_target == MINIC_GLOBAL_OBJECT_INVALID &&
+        obj->initializer_count == 0U && obj->relocation_count == 0U &&
+        obj->union_selection_count == 0U &&
+        obj->flexible_array_initializer_count == 0U &&
+        minic_data_layout_global_object(target->data_layout, program, obj,
+                                        &bytes, &alignment) &&
+        alignment != 0U && (alignment & (alignment - 1U)) == 0U) {
+        if (obj->explicit_alignment > alignment)
+            alignment = obj->explicit_alignment;
+        if ((alignment & (alignment - 1U)) != 0U ||
+            fprintf(out, "%s\n.weak %s\n",
+                    obj->is_read_only ? ".section .rodata" : ".bss",
+                    obj->name) < 0 ||
+            !minic_multi_emit_elf_symbol_visibility(out, obj->visibility, obj->name) ||
+            fprintf(out, ".type %s,@object\n.balign %zu\n%s:\n"
+                         "  .zero %zu\n.size %s,%zu\n",
+                    obj->name, alignment, obj->name, bytes,
+                    obj->name, bytes) < 0)
+            return false;
+        return true;
+    }
     /* Linux __ADDRESSABLE emits a pointer initialized by relocation into an
      * explicit .discard.addressable ELF section. The already-certified
      * common zero-relocation walker owns the storage layout/offset checks;

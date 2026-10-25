@@ -2,6 +2,191 @@
 #include "target/riscv/instruction_select.h"
 #include <inttypes.h>
 #include <stdint.h>
+#include <stdlib.h>
+
+/* GCC __builtin_*_overflow computes in infinite signed precision and then
+ * checks whether the value fits the destination type. In particular,
+ * signed int + unsigned int -> signed int must not use ordinary C promotion.
+ * Two sign/zero-extended RV32 input words fit in an exact 64-bit scratch
+ * value for add/sub; multiplication uses the existing libgcc __muldi3. */
+static bool rv32_emit_mixed_checked_overflow(FILE *out,
+                                             const MinicCoreFunction *f,
+                                             const Rv32Frame *fr,
+                                             const MinicCoreInstruction *ins,
+                                             MinicType result_type) {
+    const MinicCoreValueId lhs = ins->value.integer_overflow.left;
+    const MinicCoreValueId rhs = ins->value.integer_overflow.right;
+    unsigned left_bits, right_bits, result_bits;
+    bool left_signed, right_signed, result_signed;
+    const char *store;
+    if (!rv32_scalar(f, f->values[lhs].type, &left_bits, &left_signed) ||
+        !rv32_scalar(f, f->values[rhs].type, &right_bits, &right_signed) ||
+        !rv32_scalar(f, result_type, &result_bits, &result_signed) ||
+        left_bits < 8U || right_bits < 8U || result_bits < 8U ||
+        left_bits > 32U || right_bits > 32U || result_bits > 32U ||
+        !rv32_slot(out, fr, lhs, "t0", true) ||
+        !rv32_slot(out, fr, rhs, "t1", true) ||
+        fprintf(out, left_signed ? "  srai t3, t0, 31\n" :
+                                   "  li t3, 0\n") < 0 ||
+        fprintf(out, right_signed ? "  srai t4, t1, 31\n" :
+                                    "  li t4, 0\n") < 0)
+        return false;
+    switch (ins->value.integer_overflow.operator_kind) {
+    case MINIC_CORE_INTEGER_OVERFLOW_ADD:
+        if (fprintf(out,
+            "  add t2, t0, t1\n  sltu t5, t2, t0\n"
+            "  add t3, t3, t4\n  add t3, t3, t5\n") < 0)
+            return false;
+        break;
+    case MINIC_CORE_INTEGER_OVERFLOW_SUBTRACT:
+        if (fprintf(out,
+            "  sub t2, t0, t1\n  sltu t5, t0, t1\n"
+            "  sub t3, t3, t4\n  sub t3, t3, t5\n") < 0)
+            return false;
+        break;
+    case MINIC_CORE_INTEGER_OVERFLOW_MULTIPLY:
+        if (fprintf(out,
+            "  mv a0, t0\n  mv a1, t3\n"
+            "  mv a2, t1\n  mv a3, t4\n"
+            "  call __muldi3\n  mv t2, a0\n  mv t3, a1\n") < 0)
+            return false;
+        break;
+    default:
+        return false;
+    }
+    /* Compare the full mathematical result to the two-word sign/zero
+     * extension of the value actually written to the destination. */
+    if (fprintf(out, "  mv t5, t2\n") < 0 ||
+        !rv32_canon(out, f, result_type, "t2") ||
+        fprintf(out,
+            "  xor t5, t5, t2\n"
+            "  %s\n"
+            "  xor t4, t4, t3\n"
+            "  or t4, t4, t5\n  snez t4, t4\n",
+            result_signed ? "srai t4, t2, 31" : "li t4, 0") < 0)
+        return false;
+    store = result_bits == 8U ? "sb" : result_bits == 16U ? "sh" : "sw";
+    return rv32_slot(out, fr, ins->value.integer_overflow.result_address,
+                     "t0", true) &&
+           fprintf(out, "  %s t2, 0(t0)\n", store) >= 0 &&
+           rv32_slot(out, fr, ins->result, "t4", false);
+}
+
+/* Checked arithmetic is a Core operation, not a Linux-specific intrinsic.
+ * RV32I uses base-I carry/sign tests and the same GNU libgcc arithmetic
+ * helpers already selected by ordinary RV32 scalar multiplication/division.
+ * Keep operands in their owned Core frame slots across every libcall. */
+static bool rv32_emit_checked_overflow(FILE *out, const MinicCoreFunction *f,
+                                       const Rv32Frame *fr,
+                                       const MinicCoreInstruction *ins) {
+    const MinicCoreValueId lhs = ins->value.integer_overflow.left;
+    const MinicCoreValueId rhs = ins->value.integer_overflow.right;
+    const MinicCoreValueId address = ins->value.integer_overflow.result_address;
+    MinicType result_type;
+    unsigned bits;
+    bool is_signed;
+    const char *store;
+    if (lhs >= f->value_count || rhs >= f->value_count ||
+        address >= f->value_count || ins->result >= f->value_count ||
+        !minic_type_equal(ins->type, minic_type_bool()) ||
+        !minic_type_pointee(f->values[address].type, &result_type))
+        return false;
+    if (!minic_type_equal(f->values[lhs].type, result_type) ||
+        !minic_type_equal(f->values[rhs].type, result_type)) {
+        if (rv32_scalar_storage_words(f, result_type, &bits) && bits == 1U &&
+            rv32_emit_mixed_checked_overflow(out, f, fr, ins, result_type))
+            return true;
+        if (getenv("MINIC_RV32_OVERFLOW_TRACE") != NULL)
+            (void)fprintf(stderr,
+                "RV32_OVERFLOW_TYPE lhs_rank=%d lhs_sign=%d rhs_rank=%d rhs_sign=%d result_rank=%d result_sign=%d operator=%d\n",
+                (int)f->values[lhs].type.integer_rank,
+                (int)f->values[lhs].type.integer_sign,
+                (int)f->values[rhs].type.integer_rank,
+                (int)f->values[rhs].type.integer_sign,
+                (int)result_type.integer_rank,
+                (int)result_type.integer_sign,
+                (int)ins->value.integer_overflow.operator_kind);
+        return false;
+    }
+    if (
+        !rv32_scalar(f, result_type, &bits, &is_signed) ||
+        bits < 8U || bits > 32U ||
+        !rv32_slot(out, fr, lhs, "t0", true) ||
+        !rv32_slot(out, fr, rhs, "t1", true))
+        return false;
+    store = bits == 8U ? "sb" : bits == 16U ? "sh" : "sw";
+    switch (ins->value.integer_overflow.operator_kind) {
+    case MINIC_CORE_INTEGER_OVERFLOW_ADD:
+        if (fprintf(out, "  add t2, t0, t1\n") < 0) return false;
+        if (bits == 32U) {
+            if (is_signed) {
+                if (fprintf(out,
+                    "  xor t4, t0, t1\n  xori t4, t4, -1\n"
+                    "  xor t5, t0, t2\n  and t4, t4, t5\n"
+                    "  srli t4, t4, 31\n") < 0) return false;
+            } else if (fprintf(out, "  sltu t4, t2, t0\n") < 0)
+                return false;
+        }
+        break;
+    case MINIC_CORE_INTEGER_OVERFLOW_SUBTRACT:
+        if (fprintf(out, "  sub t2, t0, t1\n") < 0) return false;
+        if (bits == 32U) {
+            if (is_signed) {
+                if (fprintf(out,
+                    "  xor t4, t0, t1\n  xor t5, t0, t2\n"
+                    "  and t4, t4, t5\n  srli t4, t4, 31\n") < 0)
+                    return false;
+            } else if (fprintf(out, "  sltu t4, t0, t1\n") < 0)
+                return false;
+        }
+        break;
+    case MINIC_CORE_INTEGER_OVERFLOW_MULTIPLY:
+        if (fprintf(out,
+            "  mv a0, t0\n  mv a1, t1\n  call __mulsi3\n"
+            "  mv t2, a0\n") < 0) return false;
+        if (bits == 32U) {
+            /* Preserve the wrapped result before a second libcall, then
+             * compare its quotient against the ORIGINAL frame operand.
+             * The signed INT_MIN/-1 division overflow needs its own flag. */
+            if (!rv32_slot(out, fr, address, "t0", true) ||
+                fprintf(out, "  sw t2, 0(t0)\n") < 0 ||
+                !rv32_slot(out, fr, rhs, "t1", true) ||
+                fprintf(out, "  beqz t1, 1f\n") < 0 ||
+                !rv32_slot(out, fr, address, "t0", true) ||
+                fprintf(out,
+                    "  lw t2, 0(t0)\n  mv a0, t2\n  mv a1, t1\n"
+                    "  call %s\n",
+                    is_signed ? "__divsi3" : "__udivsi3") < 0 ||
+                !rv32_slot(out, fr, lhs, "t0", true) ||
+                fprintf(out, "  xor t4, a0, t0\n  snez t4, t4\n") < 0)
+                return false;
+            if (is_signed &&
+                (!rv32_slot(out, fr, rhs, "t1", true) ||
+                 fprintf(out,
+                    "  li t2, -1\n  bne t1, t2, 2f\n"
+                    "  li t2, 0x80000000\n  bne t0, t2, 2f\n"
+                    "  li t4, 1\n2:\n") < 0))
+                return false;
+            return fprintf(out, "  j 3f\n1:\n  li t4, 0\n3:\n") >= 0 &&
+                   rv32_slot(out, fr, ins->result, "t4", false);
+        }
+        break;
+    default:
+        return false;
+    }
+    if (bits < 32U) {
+        /* Both narrow operands are canonicalized on load. Their sum,
+         * difference and product fit an exact 32-bit scratch result. */
+        if (fprintf(out, "  mv t3, t2\n") < 0 ||
+            !rv32_canon(out, f, result_type, "t3") ||
+            fprintf(out,
+                    "  xor t4, t2, t3\n  snez t4, t4\n"
+                    "  mv t2, t3\n") < 0) return false;
+    }
+    return rv32_slot(out, fr, address, "t0", true) &&
+           fprintf(out, "  %s t2, 0(t0)\n", store) >= 0 &&
+           rv32_slot(out, fr, ins->result, "t4", false);
+}
 
 /* RV32 integer machine selection and ILP32 normalization. Common
  * RISC-V opcode and runtime symbol identities remain XLEN-parametric. */
@@ -46,6 +231,8 @@ bool rv32_emit_integer_instruction(FILE *out, const MinicCoreFunction *f,
     default: break;
     }
     switch (ins->kind) {
+    case MINIC_CORE_INSTRUCTION_INTEGER_OVERFLOW:
+        return rv32_emit_checked_overflow(out, f, fr, ins);
     case MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT: {
         unsigned words;
         if (!rv32_scalar_storage_words(f, ins->type, &words))
