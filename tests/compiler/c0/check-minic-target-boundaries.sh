@@ -74,6 +74,15 @@ for arch in aarch64 loongarch64; do
   fi
 done
 
+# The frontend may query C language capabilities, but it must never grow
+# another explicit CPU allowlist when an ISA is added.
+if grep -REq 'MINIC_TARGET_ARCH_' src/frontend; then
+  fail 'frontend must query TargetInfo language features, not CPU names'
+fi
+has src/target/target_info.c 'minic_target_info_language_type_supported('
+has src/frontend/parser_type.c 'minic_target_info_named_builtin_type('
+has src/frontend/ast_verifier.c 'minic_target_info_language_type_supported('
+
 # New capabilities must extend the existing Backend/Target contract, not
 # introduce ISA switches into Core or duplicate GNU template qualification.
 for file in src/target/x86_64/asm_contract.c src/target/x86_64/asm_contract.h \

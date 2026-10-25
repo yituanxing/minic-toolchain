@@ -230,6 +230,7 @@ const MinicTargetInfo *minic_target_info_for_architecture(
             rv64_target.wide_character_type = minic_type_unsigned_short();
             rv64_target.libc_size_type = minic_type_unsigned_long();
             rv64_target.word_integer_rank = MINIC_INTEGER_RANK_LONG;
+            rv64_target.language_type_capabilities = MINIC_TARGET_LANG_EXTENDED_FLOAT_DECLARATIONS;
             rv64_target.gnu_sizeof_void_is_one = true;
             rv64_target.gnu_sizeof_function_is_one = true;
             rv64_target.variadic_scalar_read_kind = MINIC_VARIADIC_SCALAR_READ_LINEAR_SLOT;
@@ -248,6 +249,7 @@ const MinicTargetInfo *minic_target_info_for_architecture(
             x86_64_target.wide_character_type = minic_type_int();
             x86_64_target.libc_size_type = minic_type_unsigned_long();
             x86_64_target.word_integer_rank = MINIC_INTEGER_RANK_LONG;
+            x86_64_target.language_type_capabilities = MINIC_TARGET_LANG_EXTENDED_FLOAT_DECLARATIONS | MINIC_TARGET_LANG_ABI_STATE_VA_LIST_CURSOR;
             x86_64_target.gnu_sizeof_void_is_one = true;
             x86_64_target.gnu_sizeof_function_is_one = true;
             x86_64_target.variadic_scalar_read_kind = MINIC_VARIADIC_SCALAR_READ_ABI_CURSOR;
@@ -266,6 +268,7 @@ const MinicTargetInfo *minic_target_info_for_architecture(
             aarch64_target.wide_character_type = minic_type_unsigned_int();
             aarch64_target.libc_size_type = minic_type_unsigned_long();
             aarch64_target.word_integer_rank = MINIC_INTEGER_RANK_LONG;
+            aarch64_target.language_type_capabilities = MINIC_TARGET_LANG_EXTENDED_FLOAT_DECLARATIONS | MINIC_TARGET_LANG_OPAQUE_VECTOR_HEADER_DECLARATIONS;
             aarch64_target.gnu_sizeof_void_is_one = true;
             aarch64_target.gnu_sizeof_function_is_one = true;
             aarch64_target.variadic_scalar_read_kind = MINIC_VARIADIC_SCALAR_READ_ABI_CURSOR;
@@ -282,6 +285,7 @@ const MinicTargetInfo *minic_target_info_for_architecture(
             loongarch64_target.wide_character_type = minic_type_int();
             loongarch64_target.libc_size_type = minic_type_unsigned_long();
             loongarch64_target.word_integer_rank = MINIC_INTEGER_RANK_LONG;
+            loongarch64_target.language_type_capabilities = MINIC_TARGET_LANG_EXTENDED_FLOAT_DECLARATIONS;
             loongarch64_target.gnu_sizeof_void_is_one = true;
             loongarch64_target.gnu_sizeof_function_is_one = true;
             loongarch64_target.variadic_scalar_read_kind = MINIC_VARIADIC_SCALAR_READ_LINEAR_SLOT;
@@ -325,6 +329,80 @@ const MinicDataLayout *minic_target_info_data_layout(const MinicTargetInfo *targ
 
 const MinicTargetIntegerModel *minic_target_info_integer_model(const MinicTargetInfo *target) {
     return target == NULL ? NULL : target->integer_model;
+}
+
+
+/* The language admission gate is intentionally independent of the emitter.
+ * A declaration may be parsed while its arithmetic and ABI remain unsupported. */
+bool minic_target_info_language_type_supported(const MinicTargetInfo *target,
+                                               MinicTypeBaseKind kind) {
+    unsigned int required;
+    if (target == NULL) return false;
+    switch (kind) {
+    case MINIC_TYPE_BASE_FLOAT128:
+    case MINIC_TYPE_BASE_FLOAT32:
+    case MINIC_TYPE_BASE_FLOAT64:
+    case MINIC_TYPE_BASE_FLOAT32X:
+    case MINIC_TYPE_BASE_FLOAT64X:
+        required = MINIC_TARGET_LANG_EXTENDED_FLOAT_DECLARATIONS;
+        break;
+    case MINIC_TYPE_BASE_AARCH64_FLOAT32X4:
+    case MINIC_TYPE_BASE_AARCH64_FLOAT64X2:
+    case MINIC_TYPE_BASE_AARCH64_SVE_FLOAT32:
+    case MINIC_TYPE_BASE_AARCH64_SVE_FLOAT64:
+    case MINIC_TYPE_BASE_AARCH64_SVE_BOOL:
+        required = MINIC_TARGET_LANG_OPAQUE_VECTOR_HEADER_DECLARATIONS;
+        break;
+    case MINIC_TYPE_BASE_X86_VA_LIST_CURSOR:
+        required = MINIC_TARGET_LANG_ABI_STATE_VA_LIST_CURSOR;
+        break;
+    default:
+        return false;
+    }
+    return (target->language_type_capabilities & required) != 0U;
+}
+
+/* Opaque header-only identities are registered at the target boundary. No
+ * frontend CPU-name test or implicit vector layout follows from recognition. */
+bool minic_target_info_named_builtin_type(const MinicTargetInfo *target,
+                                          const char *spelling, size_t length,
+                                          MinicType *type) {
+    static const struct {
+        const char *spelling;
+        MinicTypeBaseKind kind;
+    } names[] = {
+        {"__Float32x4_t", MINIC_TYPE_BASE_AARCH64_FLOAT32X4},
+        {"__Float64x2_t", MINIC_TYPE_BASE_AARCH64_FLOAT64X2},
+        {"__SVFloat32_t", MINIC_TYPE_BASE_AARCH64_SVE_FLOAT32},
+        {"__SVFloat64_t", MINIC_TYPE_BASE_AARCH64_SVE_FLOAT64},
+        {"__SVBool_t", MINIC_TYPE_BASE_AARCH64_SVE_BOOL}
+    };
+    size_t index;
+    if (target == NULL || spelling == NULL) return false;
+    for (index = 0U; index < sizeof(names) / sizeof(names[0]); ++index) {
+        if (length == strlen(names[index].spelling) &&
+            memcmp(spelling, names[index].spelling, length) == 0 &&
+            minic_target_info_language_type_supported(target, names[index].kind)) {
+            if (type != NULL) {
+                *type = minic_type_aarch64_header_builtin(names[index].kind);
+            }
+            return true;
+        }
+    }
+    return false;
+}
+
+/* Only the x86 SysV cursor has a distinct internal identity today. Other
+ * existing targets preserve their canonical sequential void-pointer model. */
+bool minic_target_info_builtin_va_list_type(const MinicTargetInfo *target,
+                                            MinicType *type) {
+    if (type == NULL) return false;
+    if (minic_target_info_language_type_supported(
+            target, MINIC_TYPE_BASE_X86_VA_LIST_CURSOR)) {
+        *type = minic_type_x86_va_list_cursor();
+        return true;
+    }
+    return minic_type_pointer_to(minic_type_void(), type);
 }
 
 bool minic_target_info_plain_char_sign(const MinicTargetInfo *target, MinicIntegerSign *sign) {

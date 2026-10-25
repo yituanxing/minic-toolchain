@@ -1,6 +1,15 @@
 name: MiniC Native Strict Backend Gate
 
 on:
+  pull_request:
+    paths:
+      - 'src/target/**'
+      - 'src/core/**'
+      - 'src/frontend/**'
+      - 'Makefile'
+      - 'tests/compiler/c0/check-four-target-model-m0.c'
+      - 'tests/compiler/c0/check-minic-target-boundaries.sh'
+      - '.github/workflows/minic-native-refactor-gate.yml'
   push:
     branches:
       - main
@@ -41,6 +50,12 @@ jobs:
           make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/minic-native-backend all
           test -x build/minic-native-backend/bin/minic
           test -x build/minic-native-backend/bin/minic-cc
+      - name: Five-target language/ABI identity contract
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/minic-native-backend check-four-target-model-m0
+
       - name: RV64 extended-float declarations without cross-toolchain installation
         shell: bash
         run: |

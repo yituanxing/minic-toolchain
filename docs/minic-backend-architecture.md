@@ -146,3 +146,20 @@ The mandatory backend-boundary gate now rejects restoration of x86 Core
 architecture dispatch and ensures that template classification stays owned
 by the ISA. Extend the architecture's existing qualifier/emitter rather than
 adding another `core_asm_try_<ISA>` branch for each new Linux inline asm.
+
+## Target language admission ownership (five-backend pass)
+
+TargetInfo now owns the declaration-time type admission decisions previously
+duplicated by architecture allowlists in `parser_type.c` and `ast_verifier.c`.
+The frontend uses the same query for extended floating point identities, and
+TargetInfo owns header-only opaque vector names plus the builtin va_list cursor
+identity. RV32 continues to reject the extended floating declarations; x86-64
+retains its ABI-state cursor, and AArch64 alone recognizes its opaque NEON/SVE
+header spellings. No ABI marshaling, storage layout or arithmetic support is
+implied by accepting a declaration. The existing emission and Core lowering
+paths are intentionally unchanged.
+
+The boundary gate rejects new `MINIC_TARGET_ARCH_` allowlists in the frontend.
+The native strict gate additionally runs the five-target descriptor contract.
+This is the first semantic-ownership pass; the RV32/RV64 machine legalization
+and product-driver predefined-macro unification remain separate follow-ups.

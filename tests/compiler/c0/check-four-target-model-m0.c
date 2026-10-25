@@ -73,6 +73,52 @@ static int verify_rv32(void) {
     return puts("RV32_ILP32_MODEL=PASS xlen=32 ptr=4 long=4 longlong=8 signedness=qualified") == EOF ? 1 : 0;
 }
 
+/* Parser/verifier language admission and ABI cursor identity must agree on
+ * all five target descriptors. Declaration admission is not codegen support. */
+static int verify_language_admission(void) {
+    static const char *const names[] = {
+        "riscv32-linux", "riscv64-linux", "x86_64-linux",
+        "aarch64-linux", "loongarch64-linux"
+    };
+    size_t i;
+    for (i = 0U; i < sizeof(names) / sizeof(names[0]); ++i) {
+        const MinicTargetInfo *t = minic_target_info_from_name(names[i]);
+        MinicType va_type;
+        MinicType vector_type;
+        bool is_x86 = i == 2U;
+        bool is_arm = i == 3U;
+        bool has_extended_float = i != 0U;
+        bool has_vector;
+        if (t == NULL ||
+            minic_target_info_language_type_supported(
+                t, MINIC_TYPE_BASE_FLOAT128) != has_extended_float ||
+            minic_target_info_language_type_supported(
+                t, MINIC_TYPE_BASE_FLOAT32X) != has_extended_float ||
+            minic_target_info_language_type_supported(
+                t, MINIC_TYPE_BASE_AARCH64_SVE_BOOL) != is_arm ||
+            minic_target_info_language_type_supported(
+                t, MINIC_TYPE_BASE_X86_VA_LIST_CURSOR) != is_x86 ||
+            !minic_target_info_builtin_va_list_type(t, &va_type) ||
+            va_type.pointer_depth != 1U ||
+            (va_type.base_kind == MINIC_TYPE_BASE_X86_VA_LIST_CURSOR) != is_x86) {
+            (void)fprintf(stderr, "FAIL target language/varargs contract: %s\\n", names[i]);
+            return 1;
+        }
+        has_vector = minic_target_info_named_builtin_type(
+            t, "__SVBool_t", sizeof("__SVBool_t") - 1U, &vector_type);
+        if (has_vector != is_arm ||
+            (is_arm && vector_type.base_kind != MINIC_TYPE_BASE_AARCH64_SVE_BOOL) ||
+            minic_target_info_named_builtin_type(
+                t, "__SVBool_t", sizeof("__SVBool_t") - 2U, NULL) ||
+            minic_target_info_named_builtin_type(
+                t, "__not_a_builtin", sizeof("__not_a_builtin") - 1U, NULL)) {
+            (void)fprintf(stderr, "FAIL target opaque builtin contract: %s\\n", names[i]);
+            return 1;
+        }
+    }
+    return puts("TARGET_LANGUAGE_ADMISSION=PASS five-targets") == EOF ? 1 : 0;
+}
+
 int main(void) {
     const MinicTargetInfo *rv = minic_default_target_info();
     const MinicTargetInfo *x86 = minic_target_info_from_name("x86_64-linux");
@@ -88,7 +134,7 @@ int main(void) {
         (void)fprintf(stderr, "FAIL four independent target identities\n");
         return 1;
     }
-    if (verify_rv32() != 0 ||
+    if (verify_language_admission() != 0 || verify_rv32() != 0 ||
         verify_lp64("aarch64-linux", MINIC_TARGET_ARCH_AARCH64,
                     MINIC_INTEGER_SIGN_UNSIGNED, MINIC_INTEGER_RANK_INT,
                     MINIC_INTEGER_SIGN_UNSIGNED) != 0 ||
