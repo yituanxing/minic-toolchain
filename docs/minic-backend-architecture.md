@@ -254,13 +254,21 @@ for LLVM see Clang Command Line Argument Reference.
 
 ## RISC-V ISA/ABI explicit profile catalog
 
-Both the staged driver and compiler now read a single exact-profile catalog:
-`rv32i/ilp32`, `rv64i/lp64`, `rv64im/lp64`,
-`rv64imafd/lp64d`. The shared registration owns only **profile
-identity, XLEN and permitted ABI pairing**. The existing RISC-V machine
-legalizer alone maps these identities to feature masks and instruction
-admission, preserving machine ownership. No new `-march` spellings, float
-ABIs or optimizer cost models are silently accepted.
+Both the driver and compiler read one bounded ISA profile catalog:
+`rv32i`, `rv64i`, `rv64im`, `rv64imafd`, plus
+`rv64ima_zicsr_zifencei` and `rv64imac_zicsr_zifencei`. These latter
+two profiles admit source A/CSR/fence.i (and C) through `-S`, while
+compiler-owned assembly remains **Base-I**. They are deliberately rejected
+for the built-in `-c`/link chain until MiniAS has independently verified
+the extra encodings and ELF attributes.
+
+A profile distinguishes target-available `features` from the smaller
+compiler-selected `codegen_features`. The target may support M while MiniC
+still uses the original Base-I software-runtime implementation. ISA and ABI
+are independently checked: `rv64imafd/lp64` selects the qualified LP64
+soft-float path, while `rv64imafd/lp64d` retains hard-float emission.
+Unknown extension spellings stay fail-closed; no broad ISA grammar or
+Machine IR is introduced.
 
 The historical implicit RV64 target still uses its separately qualified
 `rv64gc/lp64d` assembler path. Replacing it with an explicit profile is
