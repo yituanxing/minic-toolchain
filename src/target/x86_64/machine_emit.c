@@ -16,7 +16,7 @@
 bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program,
                                  const MinicTargetInfo *target, const MinicCoreFunction *fn,
                                  const MinicX86Frame *frame, const MinicCoreInstruction *ins,
-                                 size_t function_id) {
+                                 size_t function_id, size_t instruction_id) {
     MinicCoreValueId left, right;
     size_t bytes;
     bool sign;
@@ -30,7 +30,7 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
     if (ins->kind == MINIC_CORE_INSTRUCTION_CALL ||
         ins->kind == MINIC_CORE_INSTRUCTION_INDIRECT_CALL)
         return minic_x86_64_emit_call_instruction(out, program, target, fn,
-                                                  frame, ins);
+                                                  frame, ins, instruction_id);
     switch (ins->kind) {
     case MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT:
         if (minic_type_is_int128_integer(ins->type)) {

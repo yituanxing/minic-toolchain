@@ -31,5 +31,5 @@ bool minic_x86_64_emit_structured_asm(
 bool minic_x86_64_emit_call_instruction(
     FILE *, const MinicC0Program *, const MinicTargetInfo *,
     const MinicCoreFunction *, const MinicX86Frame *,
-    const MinicCoreInstruction *);
+    const MinicCoreInstruction *, size_t instruction_id);
 #endif

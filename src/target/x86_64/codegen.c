@@ -118,7 +118,7 @@ static bool x86_emit_function(FILE *out, const MinicC0Program *program,
             const MinicCoreInstructionId id = block->instructions[k];
             if (id >= fn->instruction_count ||
                 !minic_x86_64_emit_core_instruction(out, program, target, fn, &frame,
-                                      &fn->instructions[id], function_id)) {
+                                      &fn->instructions[id], function_id, id)) {
                 char message[256];
                 (void)snprintf(message, sizeof(message),
                                "x86-64 Core instruction unsupported: function %s, kind %d",

@@ -23,6 +23,9 @@ typedef struct MinicX86Frame {
     MinicCoreObjectStoragePlan object_storage;
     bool borrows_object_storage;
     MinicX86ArgumentPlan incoming_arguments;
+    /* Borrowed for the duration of this function emission. SysV machine
+     * location planning remains x86-owned and consumes semantic CALL views. */
+    const MinicCoreCallIndex *semantic_calls;
     size_t object_count;
     size_t frame_size;
     /* Wide scalar operations use RDX as a scratch register. Snapshot the

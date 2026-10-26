@@ -15,7 +15,7 @@
 bool minic_x86_64_emit_core_instruction(
     FILE *, const MinicC0Program *, const MinicTargetInfo *,
     const MinicCoreFunction *, const MinicX86Frame *,
-    const MinicCoreInstruction *, size_t function_id);
+    const MinicCoreInstruction *, size_t function_id, size_t instruction_id);
 bool minic_x86_64_emit_core_terminator(
     FILE *, const MinicX86Frame *, const MinicCoreTerminator *,
     const MinicCoreFunction *, size_t function_id);

@@ -165,6 +165,7 @@ MINIC_SOURCES := \
 	src/target/common/lp64_aggregate.c \
 	src/target/common/lp64_scalar.c \
 	src/target/common/lp64_frame.c \
+	src/target/riscv/isa_resolve.c \
 	src/target/riscv64/isa.c \
 	src/target/riscv32/rv32_emit.c \
 	src/target/riscv32/rv32_integer_emit.c \

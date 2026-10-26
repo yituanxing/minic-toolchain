@@ -90,7 +90,11 @@ exists src/target/riscv/isa_features.h
 has src/target/riscv64/isa.h 'target/riscv/isa_features.h'
 has src/target/target_info.h 'target/riscv/isa_features.h'
 lacks src/target/target_info.h 'target/riscv64/isa.h'
-has tools/minic-cc/main.c 'target/riscv64/isa.h'
+exists src/target/riscv/isa_resolve.h
+exists src/target/riscv/isa_resolve.c
+has src/target/riscv/isa_resolve.c 'bool minic_riscv_isa_resolve('
+lacks src/target/riscv64/isa.c 'bool minic_riscv_isa_resolve('
+has tools/minic-cc/main.c 'target/riscv/isa_resolve.h'
 lacks src/target/riscv64/isa.h 'typedef enum MinicRiscvFeature'
 # The old, unused ABI admission functions were misleading duplicates of
 # the live target/ABI planner. They must not be restored.
@@ -354,6 +358,8 @@ has src/target/common/direct_call_preflight.c 'minic_core_call_index_get(semanti
 has src/target/common/core_call_view.c 'view.return_form = MINIC_CORE_CALL_RETURN_OBJECT'
 has src/target/common/core_call_view.c 'minic_core_call_view_argument_type(function, &view, i, &actual)'
 has src/target/x86_64/call_plan.c 'minic_core_call_view_argument_type(fn, view, i, &type)'
+has src/target/x86_64/frame.c 'frame->semantic_calls = facts->call_index'
+has src/target/x86_64/machine_call.c 'minic_core_call_index_get(frame->semantic_calls, instruction_id)'
 has src/target/riscv32/rv32_abi_plan.c 'minic_core_call_view_argument_type('
 has src/target/common/direct_call_plan.c 'minic_core_call_view_argument_type(fn, &view, j, &types[j])'
 has src/target/riscv64/call_emit.c 'call.return_form != MINIC_CORE_CALL_RETURN_OBJECT'

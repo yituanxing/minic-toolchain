@@ -30,6 +30,7 @@ bool minic_x86_64_frame_init_with_storage(const MinicC0Program *program,
     if (program == NULL || target == NULL || fn == NULL || facts == NULL || frame == NULL ||
         fn->value_count > (size_t)INT32_MAX / 8U) return false;
     (void)memset(frame, 0, sizeof(*frame));
+    frame->semantic_calls = facts->call_index;
     if (!minic_x86_64_plan_incoming_arguments(
             program, target, fn, &frame->incoming_arguments))
         return false;

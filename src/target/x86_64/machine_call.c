@@ -406,7 +406,8 @@ static bool x86_emit_x87_core_helper(FILE *out, const MinicCoreFunction *fn,
 bool minic_x86_64_emit_call_instruction(
     FILE *out, const MinicC0Program *program,
     const MinicTargetInfo *target, const MinicCoreFunction *fn,
-    const MinicX86Frame *frame, const MinicCoreInstruction *ins) {
+    const MinicX86Frame *frame, const MinicCoreInstruction *ins,
+    size_t instruction_id) {
     if (out == NULL || program == NULL || target == NULL ||
         fn == NULL || frame == NULL || ins == NULL) return false;
     switch (ins->kind) {
@@ -415,8 +416,16 @@ bool minic_x86_64_emit_call_instruction(
         const MinicCoreCallee *callee;
         size_t begin, count;
         size_t outgoing_bytes = 0U;
-        if (!minic_core_call_view_build(fn, ins, &call) ||
-            call.callee == NULL)
+        /* The shared function plan owns validation. Standalone machine
+         * emitters retain a checked fallback when not visitor-prepared. */
+        {
+            const MinicCoreCallView *cached = frame->semantic_calls != NULL
+                ? minic_core_call_index_get(frame->semantic_calls, instruction_id) : NULL;
+            if (frame->semantic_calls != NULL && cached == NULL) return false;
+            if (cached != NULL) call = *cached;
+            else if (!minic_core_call_view_build(fn, ins, &call)) return false;
+        }
+        if (call.callee == NULL)
             return false;
         callee = call.callee;
         begin = call.argument_begin;
@@ -503,8 +512,14 @@ bool minic_x86_64_emit_call_instruction(
         const MinicCoreValueId callee = ins->value.indirect_call.callee;
         const MinicCoreCallSignature *signature;
         size_t outgoing_bytes = 0U;
-        if (!minic_core_call_view_build(fn, ins, &call) ||
-            call.signature == NULL)
+        {
+            const MinicCoreCallView *cached = frame->semantic_calls != NULL
+                ? minic_core_call_index_get(frame->semantic_calls, instruction_id) : NULL;
+            if (frame->semantic_calls != NULL && cached == NULL) return false;
+            if (cached != NULL) call = *cached;
+            else if (!minic_core_call_view_build(fn, ins, &call)) return false;
+        }
+        if (call.signature == NULL)
             return false;
         signature = call.signature;
         if (!x86_emit_call_arguments(out, program, target, fn, frame,
