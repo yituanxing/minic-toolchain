@@ -147,7 +147,7 @@ static bool rv64_between(FILE *file, const MinicC0Program *program,
     (void)function_sections;
     (void)opaque;
     if (program->file_asm_count != 0U) {
-        if (fprintf(file, ".text\\n") < 0) return false;
+        if (fprintf(file, ".text\n") < 0) return false;
         for (i = 0U; i < program->file_asm_count; ++i) {
             const MinicFileAsm *source = &program->file_asms[i];
             if (!minic_riscv64_source_asm_marker_safe(source->text, source->length) ||
@@ -158,7 +158,7 @@ static bool rv64_between(FILE *file, const MinicC0Program *program,
                 return false;
         }
     }
-    return fprintf(file, ".text\\n") >= 0;
+    return fprintf(file, ".text\n") >= 0;
 }
 
 static bool rv64_finalize(const char *path, const MinicTargetInfo *target,
