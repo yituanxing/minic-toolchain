@@ -301,6 +301,20 @@ has src/target/common/direct_call_preflight.c 'minic_core_instruction_is_call(in
 has src/target/common/program_visit.h 'minic_program_visit_globals('
 has src/target/common/program_visit.h 'minic_program_visit_functions('
 has src/target/common/program_visit.h 'minic_program_visit_prepared_functions('
+# Actual five-target frame ownership, not another architecture-specific
+# Core storage calculator. The target still chooses ABI stack geometry.
+exists src/target/common/core_frame_layout.h
+has src/target/common/lp64_frame.c 'minic_core_object_storage_plan_build('
+has src/target/riscv32/rv32_frame.c 'minic_core_object_storage_plan_build('
+has src/target/riscv64/frame_layout.c 'minic_core_object_storage_plan_build('
+has src/target/x86_64/frame.c 'minic_core_object_storage_plan_build('
+has src/target/riscv32/rv32_frame.c 'minic_core_frame_reserve('
+has src/target/common/lp64_frame.c 'minic_core_frame_reserve('
+has src/target/riscv64/frame_layout.c 'minic_core_frame_align_up('
+has src/target/x86_64/frame.c 'minic_core_frame_align_up('
+lacks src/target/riscv32/rv32_frame.c 'minic_core_object_storage(program,'
+lacks src/target/common/lp64_frame.c 'minic_core_object_storage(program,'
+
 # The semantic CALL resolver is the single Core identity owner. psABI
 # GP/FP/stack placement remains x86/RV32/RV64/AArch64/LoongArch-owned.
 has src/target/common/core_call_view.c 'view.return_form = MINIC_CORE_CALL_RETURN_OBJECT'
@@ -367,5 +381,12 @@ cc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror \
   src/target/common/core_call_view.c src/frontend/type.c \
   -o "$work/core-call-probe"
 "$work/core-call-probe"
+
+# Prove checked alignment/reservation at overflow boundaries and no cursor
+# mutation on failure before running slow QEMU/runtime architecture gates.
+cc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror \
+  -Iinclude -Isrc tests/compiler/c0/probe-core-frame-layout.c \
+  -o "$work/frame-layout-probe"
+"$work/frame-layout-probe"
 
 printf 'MINIC_BACKEND_BOUNDARY_CHECK=PASS\n'

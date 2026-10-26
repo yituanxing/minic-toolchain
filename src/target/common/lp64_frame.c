@@ -1,5 +1,6 @@
 #include "target/common/lp64_frame.h"
 #include "target/common/core_object_storage.h"
+#include "target/common/core_frame_layout.h"
 #include <stdint.h>
 #include <stdlib.h>
 
@@ -16,6 +17,11 @@ bool minic_lp64_frame_plan_objects(
         (fn->object_count != 0U && fn->objects == NULL) ||
         plan->object_offsets != NULL || plan->wide_offsets != NULL)
         return false;
+    /* Shared one-time Core storage plan also serves x86 and RV64.
+     * The LP64 emitters keep their exact 8-byte slots and 1 MiB frame cap. */
+    if (!minic_core_object_storage_plan_build(
+            program, target->data_layout, fn, &plan->object_storage))
+        return false;
     if (fn->object_count != 0U) {
         plan->object_offsets =
             (size_t *)malloc(fn->object_count * sizeof(*plan->object_offsets));
@@ -24,21 +30,15 @@ bool minic_lp64_frame_plan_objects(
     plan->object_count = fn->object_count;
     plan->value_count = fn->value_count;
     pos = fn->value_count * 8U;
-    for (i = 0U; i < fn->object_count; ++i) {
-        MinicCoreObjectStorage storage;
-        size_t align, extent;
-        if (!minic_core_object_storage(program, target->data_layout,
-                                       &fn->objects[i], &storage))
+    for (i = 0U; i < plan->object_storage.count; ++i) {
+        const MinicCoreObjectStorage *storage = &plan->object_storage.objects[i];
+        const size_t align = storage->alignment;
+        const size_t extent = storage->extent;
+        if (align > 16U || extent > MINIC_LARGE_FRAME_MAX ||
+            !minic_core_frame_reserve(&pos, align, extent,
+                                      MINIC_LARGE_FRAME_MAX,
+                                      &plan->object_offsets[i]))
             return false;
-        align = storage.alignment;
-        extent = storage.extent;
-        if (align > 16U || extent > MINIC_LARGE_FRAME_MAX)
-            return false;
-        if (pos > MINIC_LARGE_FRAME_MAX - (align - 1U)) return false;
-        pos = (pos + align - 1U) & ~(align - 1U);
-        plan->object_offsets[i] = pos;
-        if (extent > MINIC_LARGE_FRAME_MAX - pos) return false;
-        pos += extent;
     }
     plan->object_end = pos;
     return true;
@@ -90,6 +90,7 @@ void minic_lp64_frame_plan_destroy(MinicLP64FramePlan *plan) {
     if (plan == NULL) return;
     free(plan->object_offsets);
     free(plan->wide_offsets);
+    minic_core_object_storage_plan_destroy(&plan->object_storage);
     *plan = (MinicLP64FramePlan){0};
 }
 
@@ -106,18 +107,19 @@ bool minic_lp64_finalize_direct_frame(
         (abi != MINIC_LP64_ABI_AAPCS64 &&
          abi != MINIC_LP64_ABI_LOONGARCH64_LP64D))
         return false;
-    save = (object_end + 7U) & ~(size_t)7U;
+    if (!minic_core_frame_align_up(object_end, 8U, &save)) return false;
     if (abi == MINIC_LP64_ABI_AAPCS64 && has_varargs) {
         if (va_base == NULL || save > MINIC_LARGE_FRAME_MAX - 240U)
             return false;
-        va = (save + 15U) & ~(size_t)15U;
+        if (!minic_core_frame_align_up(save, 16U, &va)) return false;
         save = va + 224U;
     }
     required = (has_calls ? 8U : 0U) + (dynamic_frame ? 8U : 0U);
     if (abi == MINIC_LP64_ABI_LOONGARCH64_LP64D && has_varargs)
         required += 64U;
     if (save > MINIC_LARGE_FRAME_MAX - required) return false;
-    frame = (save + required + 15U) & ~(size_t)15U;
+    if (!minic_core_frame_align_up(save + required, 16U, &frame))
+        return false;
     /* Expose the rejected size for the existing opt-in FRAME_CAP trace. */
     *frame_size = frame;
     if (frame > MINIC_LARGE_FRAME_MAX) return false;

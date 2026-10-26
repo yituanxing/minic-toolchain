@@ -2,6 +2,7 @@
 #define MINIC_TARGET_RISCV32_INTERNAL_H
 #include "core/core_ir.h"
 #include "target/common/core_function_facts.h"
+#include "target/common/core_object_storage.h"
 #include "frontend/ast.h"
 #include "minic/compiler.h"
 #include "target/target_info.h"
@@ -35,6 +36,7 @@ typedef struct Rv32Frame {
     size_t varargs_offset;
     size_t *object_offsets;
     size_t *value_offsets;
+    MinicCoreObjectStoragePlan object_storage;
     size_t object_count;
     size_t value_count;
     /* ABI is planned before frame allocation; outgoing area size and every

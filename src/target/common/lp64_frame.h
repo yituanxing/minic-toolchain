@@ -6,6 +6,7 @@
 
 #include "core/core_ir.h"
 #include "target/common/direct_lp64_abi.h"
+#include "target/common/core_object_storage.h"
 #include "frontend/ast.h"
 #include "target/target_info.h"
 #include <stdbool.h>
@@ -19,6 +20,7 @@ typedef struct MinicLP64FramePlan {
     size_t object_end, wide_base, wide_end;
     size_t *object_offsets;
     size_t *wide_offsets;
+    MinicCoreObjectStoragePlan object_storage;
 } MinicLP64FramePlan;
 
 bool minic_lp64_frame_plan_objects(

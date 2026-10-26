@@ -4,6 +4,7 @@
 #include "target/common/core_spill_layout.h"
 #include "target/common/core_object_reuse.h"
 #include "target/common/core_object_storage.h"
+#include "target/common/core_frame_layout.h"
 #include <limits.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -24,10 +25,8 @@ static bool rv32_frame_reject(const char *stage, size_t index, MinicType type) {
 }
 
 static bool rv32_align(size_t value, size_t by, size_t *out) {
-    if (by == 0U || (by & (by - 1U)) != 0U ||
-        value > SIZE_MAX - (by - 1U)) return false;
-    *out = (value + (by - 1U)) & ~(by - 1U);
-    return true;
+    return by != 0U && (by & (by - 1U)) == 0U &&
+           minic_core_frame_align_up(value, by, out);
 }
 
 /* A wide ILP32 operand remains ONE semantic Core SSA value. */
@@ -58,6 +57,10 @@ bool rv32_frame_init_prepared(Rv32Frame *frame, const MinicC0Program *program,
         return false;
     frame->object_offsets = NULL;
     frame->value_offsets = NULL;
+    frame->object_storage = (MinicCoreObjectStoragePlan){0};
+    if (!minic_core_object_storage_plan_build(
+            program, t->data_layout, f, &frame->object_storage))
+        return rv32_frame_reject("core_object_storage", 0U, minic_type_void());
     frame->object_count = f->object_count;
     frame->value_count = f->value_count;
     if (f->value_count != 0U) {
@@ -97,28 +100,28 @@ bool rv32_frame_init_prepared(Rv32Frame *frame, const MinicC0Program *program,
         }
         for (i = 0U; i < f->object_count; ++i) {
             const MinicCoreObject *obj = &f->objects[i];
-            MinicCoreObjectStorage storage;
+            const MinicCoreObjectStorage *storage =
+                &frame->object_storage.objects[i];
             size_t size, align, slot, peak;
             bool reusable;
-            if (!minic_core_object_storage(program, t->data_layout, obj, &storage) ||
-                !minic_core_object_reuse_plan_get(
+            if (!minic_core_object_reuse_plan_get(
                     &reuse, (MinicCoreObjectId)i, &reusable, &slot, &peak) ||
                 peak != pool_slots) {
                 minic_core_object_reuse_plan_destroy(&reuse);
                 return rv32_frame_reject("core_object_layout", i, obj->type);
             }
-            size = storage.extent;
-            align = storage.alignment;
+            size = storage->extent;
+            align = storage->alignment;
             if (align > maximum_object_alignment)
                 maximum_object_alignment = align;
             if (reusable) continue;
             if (align < 4U) align = 4U;
-            if (!rv32_align(next, align, &next) || size > SIZE_MAX - next) {
+            if (!minic_core_frame_reserve(
+                    &next, align, size != 0U ? size : 1U, SIZE_MAX,
+                    &frame->object_offsets[i])) {
                 minic_core_object_reuse_plan_destroy(&reuse);
                 return rv32_frame_reject("object_offset", i, obj->type);
             }
-            frame->object_offsets[i] = next;
-            next += size != 0U ? size : 1U;
         }
         if (!rv32_align(next, 8U, &pool_base) ||
             pool_slots > (SIZE_MAX - pool_base) / 8U) {
@@ -196,6 +199,7 @@ void rv32_frame_destroy(Rv32Frame *f) {
     if (f != NULL) {
         free(f->object_offsets);
         free(f->value_offsets);
+        minic_core_object_storage_plan_destroy(&f->object_storage);
         f->object_offsets = NULL;
         f->value_offsets = NULL;
         rv32_function_abi_plan_destroy(&f->abi);
