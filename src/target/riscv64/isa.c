@@ -130,14 +130,9 @@ bool minic_riscv_isa_admit_core_instruction(
         break;
     case MINIC_CORE_INSTRUCTION_INTEGER_LESS:
     case MINIC_CORE_INSTRUCTION_SCALAR_EQUAL:
-        if ((core_operand_is_i128(function, instruction->value.binary.left) ||
-             core_operand_is_i128(function, instruction->value.binary.right)) &&
-            minic_riscv_isa_has(isa, MINIC_RISCV_FEATURE_M)) {
-            /* Native M emitters already handle other 128-bit operations,
-             * but the existing comparison emitters do not lower pairs. */
-            return reject(reason, capacity,
-                          "__int128 comparison has no qualified two-limb lowering");
-        }
+        /* Adding M must never remove a C operation admitted on Base-I.
+         * A two-word compare has no native M instruction; strict profiles
+         * select the same compiler-rt pair comparison on I and IM. */
         break;
     case MINIC_CORE_INSTRUCTION_SCALAR_BITCAST:
         if (minic_type_is_int128_integer(instruction->type) ||

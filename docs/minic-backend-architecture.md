@@ -318,3 +318,15 @@ in a **planner unit test**, not exposed as a newly supported `-march`.
 Unrecognized extension combinations stay fail-closed while future M/C/Z
 optimizations can plug into this machine-level selection without changing
 C language acceptance or inline/file GNU assembler provenance.
+
+## Optional extension monotonicity: RV64I/IM wide comparisons
+
+The incremental machine capability model must be monotonic: exposing
+`M` can change the implementation of a C multiply, but must **not**
+remove C comparisons previously legal in pure I. Strict RV64I/LP64 and
+RV64IM/LP64 now use the same `__cmpti2`/`__ucmpti2` compiler-runtime
+fallback for two-word `__int128` less/equality operations. The saved-RA
+frame planner accounts for the call regardless of the M feature bit.
+This does not broaden inline/source GNU assembler policy, nor claim
+that the compiler emits a complete M implementation or supports all
+possible RISC-V extension spellings.

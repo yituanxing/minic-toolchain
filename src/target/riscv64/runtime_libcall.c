@@ -8,8 +8,11 @@
  * implementation-specific algorithm in MiniC. The non-strict and RV64IM
  * branches retain their exact existing single-instruction output. */
 bool minic_riscv64_uses_arithmetic_libcall(const MinicRiscvIsa *isa) {
-    return isa != NULL && isa->strict_isa &&
-           !minic_riscv_isa_has(isa, MINIC_RISCV_FEATURE_M);
+    MinicRiscvIntegerPlan plan;
+    return minic_riscv_plan_integer_arithmetic(
+               isa, MINIC_CORE_INSTRUCTION_INTEGER_MULTIPLY,
+               false, 64U, &plan) &&
+           plan.strategy == MINIC_RISCV_INTEGER_RUNTIME_LIBCALL;
 }
 bool minic_riscv64_power_of_two(size_t value) {
     return value != 0U && (value & (value - 1U)) == 0U;
@@ -90,20 +93,20 @@ bool minic_riscv64_needs_arithmetic_libcall(const MinicRiscvIsa *isa,
             (instruction->kind == MINIC_CORE_INSTRUCTION_INTEGER_DIVIDE ||
              instruction->kind == MINIC_CORE_INSTRUCTION_INTEGER_REMAINDER))
             return true;
+        /* Native M never helps a two-word comparison. Existing compiler-rt
+         * helpers are the Base-I fallback on both rv64i and rv64im; the
+         * frame must therefore reserve ra on either selected profile. */
+        if ((instruction->kind == MINIC_CORE_INSTRUCTION_INTEGER_LESS ||
+             instruction->kind == MINIC_CORE_INSTRUCTION_SCALAR_EQUAL) &&
+            instruction->value.binary.left < function->value_count &&
+            minic_type_is_int128_integer(
+                function->values[instruction->value.binary.left].type))
+            return true;
         if (!minic_riscv64_uses_arithmetic_libcall(isa)) continue;
         switch (instruction->kind) {
         case MINIC_CORE_INSTRUCTION_INTEGER_MULTIPLY:
             /* __multi3 is the 128-bit RV64 LP64 runtime entry point. */
             return true;
-        case MINIC_CORE_INSTRUCTION_INTEGER_LESS:
-        case MINIC_CORE_INSTRUCTION_SCALAR_EQUAL:
-            /* Soft-only two-limb integer comparisons use __cmpti2 or
-             * __ucmpti2; plain scalar comparisons do not need a call. */
-            if (instruction->value.binary.left < function->value_count &&
-                minic_type_is_int128_integer(
-                    function->values[instruction->value.binary.left].type))
-                return true;
-            break;
         case MINIC_CORE_INSTRUCTION_INTEGER_OVERFLOW:
             if (instruction->value.integer_overflow.operator_kind ==
                 MINIC_CORE_INTEGER_OVERFLOW_MULTIPLY) return true;

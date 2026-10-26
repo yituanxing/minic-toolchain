@@ -31,7 +31,8 @@ static bool emit_simple_integer_binary(
 
 /* RV64 LP64 passes TI integers as low/high XLEN register pairs.
  * Source operands are frame-owned, so incoming a0..a3 can be loaded
- * without destructive aliasing. This helper is only used without M.
+ * without destructive aliasing. It is the Base-I fallback even when
+ * an optional M extension exists but has no two-word compare opcode.
  * The frame planner must save ra for these runtime calls. */
 static bool emit_int128_runtime_call(
     FILE *file, const MinicRiscv64CoreFrame *frame,
@@ -296,7 +297,7 @@ bool minic_riscv64_emit_scalar_instruction(
         return minic_riscv64_frame_store_value(file, frame, instruction->result, "t0");
     }
     case MINIC_CORE_INSTRUCTION_INTEGER_LESS: {
-        if (minic_riscv64_uses_arithmetic_libcall(isa) &&
+        if (isa != NULL && isa->strict_isa &&
             instruction->value.binary.left < function->value_count &&
             minic_type_is_int128_integer(
                 function->values[instruction->value.binary.left].type)) {
@@ -344,7 +345,7 @@ bool minic_riscv64_emit_scalar_instruction(
         }
         return minic_riscv64_frame_store_value(file, frame, instruction->result, "t0");
     case MINIC_CORE_INSTRUCTION_SCALAR_EQUAL:
-        if (minic_riscv64_uses_arithmetic_libcall(isa) &&
+        if (isa != NULL && isa->strict_isa &&
             instruction->value.binary.left < function->value_count &&
             minic_type_is_int128_integer(
                 function->values[instruction->value.binary.left].type))

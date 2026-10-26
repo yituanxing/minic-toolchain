@@ -47,6 +47,26 @@ grep -q 'call __muldi3' "$tmp/rv64i-mul.s"
 if grep -Eq '^[[:space:]]*(mul|mulh|div|rem)[[:space:]]' "$tmp/rv64i-mul.s"; then
   echo 'RV64_ISA=FAIL RV64I software multiply leaked M' >&2; exit 1
 fi
+# Optional M cannot regress correctness of two-word C comparisons.
+# There is no native two-word M compare; the same Base-I runtime path works
+# for rv64i and rv64im. Only the compiler-owned output is audited here.
+cat >"$tmp/int128-cmp.i" <<'SRC'
+typedef __int128 s128;
+typedef unsigned __int128 u128;
+int signed_less(s128 a, s128 b) { return a < b; }
+int unsigned_less(u128 a, u128 b) { return a < b; }
+int equal_wide(u128 a, u128 b) { return a == b; }
+SRC
+for march in rv64i rv64im; do
+  "$MINIC_CC" --target=riscv64-linux "-march=$march" -mabi=lp64 \
+    -S "$tmp/int128-cmp.i" -o "$tmp/int128-cmp-$march.s"
+  grep -q 'call __cmpti2' "$tmp/int128-cmp-$march.s"
+  grep -q 'call __ucmpti2' "$tmp/int128-cmp-$march.s"
+  grep -Eq '[[:space:]]+sd ra,' "$tmp/int128-cmp-$march.s"
+  grep -Eq '[[:space:]]+ld ra,' "$tmp/int128-cmp-$march.s"
+done
+echo 'RV64_I128_COMPARISON_FALLBACK=PASS base_i=1 optional_m=1'
+
 # LP64 always permits floating-point C signatures. The ABI maps raw
 # float/double payload bits through a0-a7 and a0 return, never fa0/fa7.
 for march in rv64i rv64im; do
