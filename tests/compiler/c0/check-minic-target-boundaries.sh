@@ -306,8 +306,8 @@ has src/target/common/program_visit.h 'minic_program_visit_functions('
 has src/target/common/program_visit.h 'minic_program_visit_prepared_functions('
 # All five machine backends must borrow one visitor-owned per-function Core
 # object plan, not repeat layout scans. Each target keeps its own psABI frame.
-has src/target/common/core_function_plan.h 'minic_core_object_storage_plan_build('
-has src/target/common/core_function_plan.h 'minic_core_object_storage_plan_destroy(&plan->objects)'
+has src/target/common/core_function_plan.c 'minic_core_object_storage_plan_build('
+has src/target/common/core_function_plan.c 'minic_core_object_storage_plan_destroy(&plan->objects)'
 has src/target/x86_64/codegen.c 'minic_x86_64_frame_init_with_storage('
 has src/target/riscv32/rv32_emit.c 'rv32_frame_init_with_storage('
 has src/target/riscv64/codegen_function.c 'minic_riscv64_emit_core_function_for_program_with_symbol_with_storage('
@@ -347,8 +347,8 @@ lacks src/target/common/lp64_frame.c 'minic_core_object_storage(program,'
 # GP/FP/stack placement remains x86/RV32/RV64/AArch64/LoongArch-owned.
 # Five targets get one immutable CallIndex with visitor-managed lifetime.
 exists src/target/common/core_call_index.c
-has src/target/common/core_function_plan.h 'minic_core_call_index_build('
-has src/target/common/core_function_plan.h 'minic_core_call_index_destroy(&plan->calls)'
+has src/target/common/core_function_plan.c 'minic_core_call_index_build('
+has src/target/common/core_function_plan.c 'minic_core_call_index_destroy(&plan->calls)'
 has src/target/common/program_visit.h 'minic_core_function_plan_build('
 has src/target/common/program_visit.h 'minic_core_function_plan_destroy(&plan)'
 has src/target/riscv32/rv32_frame.c 'facts->call_index'
@@ -368,12 +368,13 @@ has src/target/riscv64/call_emit.c 'minic_core_call_index_get(frame->semantic_ca
 has src/target/common/core_function_facts.c 'facts->max_call_arity = arity'
 # Canonical verifier is shared, never independently rescanned per machine
 # backend if the prepared visitor already admitted the exact Core function.
-has src/target/common/core_function_plan.h 'minic_core_function_verify(function)'
-has src/target/common/core_function_plan.h 'plan->facts.verified_function = function'
+has src/target/common/core_function_plan.c 'minic_core_function_verify(function)'
+lacks src/compiler/compiler.c '!minic_core_function_verify(&set->functions[function_index])'
+has src/target/common/core_function_plan.c 'plan->facts.verified_function = function'
 has src/target/x86_64/codegen.c 'minic_core_function_facts_verified(facts, fn)'
 has src/target/common/direct_preflight.c 'minic_core_function_facts_verified(facts, fn)'
 has src/target/riscv64/core_admission.c 'minic_core_function_facts_verified(facts, function)'
-has src/target/common/core_function_plan.h 'minic_core_function_facts_analyze('
+has src/target/common/core_function_plan.c 'minic_core_function_facts_analyze('
 lacks src/target/common/lp64_frame.c 'bool minic_lp64_frame_plan_objects('
 lacks src/target/riscv64/frame_layout.c 'bool minic_riscv64_core_frame_initialize_prepared('
 lacks src/target/x86_64/frame.c 'minic_x86_64_frame_init_prepared('
@@ -418,6 +419,7 @@ trap 'rm -rf "$work"' EXIT
 cc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror \
   -Iinclude -Isrc tests/compiler/c0/probe-program-emit-transaction.c \
   src/target/common/core_function_facts.c \
+  src/target/common/core_function_plan.c \
   -o "$work/program-emit-probe"
 "$work/program-emit-probe" "$work/test-output.s"
 

@@ -103,10 +103,9 @@ static bool minic_validate_core_functions(const char *input_path,
             continue;
         }
         status = set->statuses[function_index];
-        if (status == MINIC_CORE_LOWER_OK &&
-            !minic_core_function_verify(&set->functions[function_index])) {
-            status = MINIC_CORE_LOWER_ERROR;
-        }
+        /* CoreLower already verified this successful function before
+         * publishing LOWER_OK. The Common FunctionPlan verifies again for
+         * standalone/output callers. Do not redundantly rescan it here. */
         if (status == MINIC_CORE_LOWER_OK) {
             continue;
         }
