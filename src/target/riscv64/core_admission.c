@@ -1,4 +1,5 @@
 #include "target/riscv64/core_admission.h"
+#include "target/common/core_instruction_family.h"
 #include "target/riscv64/core_codegen.h"
 #include "target/riscv64/legalize.h"
 #include "target/riscv64/abi.h"
@@ -31,45 +32,13 @@ static bool core_instruction_supported(const MinicC0Program *program,
     if (function == NULL || instruction == NULL) {
         return false;
     }
-    switch (instruction->kind) {
-    case MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT:
-    case MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT:
-    case MINIC_CORE_INSTRUCTION_FLOAT_ADD:
-    case MINIC_CORE_INSTRUCTION_FLOAT_SUBTRACT:
-    case MINIC_CORE_INSTRUCTION_FLOAT_MULTIPLY:
-    case MINIC_CORE_INSTRUCTION_FLOAT_DIVIDE:
-    case MINIC_CORE_INSTRUCTION_DOUBLE_ADD:
-    case MINIC_CORE_INSTRUCTION_DOUBLE_SUBTRACT:
-    case MINIC_CORE_INSTRUCTION_DOUBLE_MULTIPLY:
-    case MINIC_CORE_INSTRUCTION_DOUBLE_DIVIDE:
-    case MINIC_CORE_INSTRUCTION_DOUBLE_EQUAL:
-    case MINIC_CORE_INSTRUCTION_DOUBLE_LESS:
-    case MINIC_CORE_INSTRUCTION_DOUBLE_LESS_EQUAL:
-    case MINIC_CORE_INSTRUCTION_DOUBLE_NEGATE:
-    case MINIC_CORE_INSTRUCTION_INTEGER_ADD:
-    case MINIC_CORE_INSTRUCTION_INTEGER_SUBTRACT:
-    case MINIC_CORE_INSTRUCTION_INTEGER_MULTIPLY:
-    case MINIC_CORE_INSTRUCTION_INTEGER_DIVIDE:
-    case MINIC_CORE_INSTRUCTION_INTEGER_REMAINDER:
-    case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND:
-    case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_XOR:
-    case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_OR:
-    case MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_LEFT:
-    case MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_RIGHT:
-    case MINIC_CORE_INSTRUCTION_INTEGER_LESS:
-    case MINIC_CORE_INSTRUCTION_POINTER_LESS:
-    case MINIC_CORE_INSTRUCTION_SCALAR_EQUAL:
-    case MINIC_CORE_INSTRUCTION_INTEGER_CONVERSION:
-    case MINIC_CORE_INSTRUCTION_INTEGER_TO_DOUBLE:
-    case MINIC_CORE_INSTRUCTION_FLOAT_TO_DOUBLE:
-    case MINIC_CORE_INSTRUCTION_DOUBLE_TO_FLOAT:
-    case MINIC_CORE_INSTRUCTION_DOUBLE_TO_INTEGER:
-    case MINIC_CORE_INSTRUCTION_INTEGER_NEGATE:
-    case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_NOT:
-    case MINIC_CORE_INSTRUCTION_INTEGER_CLZ:
-    case MINIC_CORE_INSTRUCTION_INTEGER_CTZ:
-    case MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO:
+    /* A single Core semantic vocabulary for x86, RV32/RV64 and Direct
+     * LP64. This only admits Core shapes into further target checks, NOT
+     * a hardware opcode/extension (strict I remains target-owned). */
+    if (minic_core_instruction_is_integer_scalar(instruction->kind) ||
+        minic_core_instruction_is_floating_scalar(instruction->kind))
         return true;
+    switch (instruction->kind) {
     case MINIC_CORE_INSTRUCTION_CALL_FRAME_ADDRESS:
         return minic_riscv64_core_call_frame_address_supported(instruction);
     case MINIC_CORE_INSTRUCTION_DYNAMIC_STACK_ALLOC:

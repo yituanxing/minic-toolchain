@@ -1,5 +1,6 @@
 #include "target/common/direct_instruction_semantics.h"
 #include "core/core_ir.h"
+#include "target/common/core_instruction_family.h"
 #include "target/common/lp64_scalar.h"
 #include "target/data_layout.h"
 
@@ -234,8 +235,7 @@ bool minic_multi_direct_memory_machine_kind(MinicCoreInstructionKind kind) {
 }
 
 bool minic_multi_direct_abi_transfer_kind(MinicCoreInstructionKind kind) {
-    return kind == MINIC_CORE_INSTRUCTION_CALL ||
-           kind == MINIC_CORE_INSTRUCTION_INDIRECT_CALL ||
+    return minic_core_instruction_is_call(kind) ||
            kind == MINIC_CORE_INSTRUCTION_PARAMETER;
 }
 
@@ -264,55 +264,16 @@ bool minic_multi_direct_scalar_parameter_location(
 }
 
 bool minic_multi_direct_integer_machine_kind(MinicCoreInstructionKind kind) {
-    switch (kind) {
-    case MINIC_CORE_INSTRUCTION_INTEGER_OVERFLOW:
-    case MINIC_CORE_INSTRUCTION_INTEGER_CLZ:
-    case MINIC_CORE_INSTRUCTION_INTEGER_CTZ:
-    case MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_LEFT:
-    case MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_RIGHT:
-    case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_NOT:
-    case MINIC_CORE_INSTRUCTION_INTEGER_NEGATE:
-    case MINIC_CORE_INSTRUCTION_INTEGER_ADD:
-    case MINIC_CORE_INSTRUCTION_INTEGER_SUBTRACT:
-    case MINIC_CORE_INSTRUCTION_INTEGER_MULTIPLY:
-    case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND:
-    case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_XOR:
-    case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_OR:
-    case MINIC_CORE_INSTRUCTION_INTEGER_DIVIDE:
-    case MINIC_CORE_INSTRUCTION_INTEGER_REMAINDER:
-    case MINIC_CORE_INSTRUCTION_POINTER_LESS:
-    case MINIC_CORE_INSTRUCTION_INTEGER_LESS:
-    case MINIC_CORE_INSTRUCTION_SCALAR_EQUAL:
-    case MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO:
-        return true;
-    default:
-        return false;
-    }
+    /* Constants and conversions use distinct ABI/residual lowering in
+     * Direct LP64, unlike RV32/RV64 which use their scalar emitter. */
+    return kind == MINIC_CORE_INSTRUCTION_INTEGER_OVERFLOW ||
+           (kind != MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT &&
+            kind != MINIC_CORE_INSTRUCTION_INTEGER_CONVERSION &&
+            minic_core_instruction_is_integer_scalar(kind));
 }
 
 bool minic_multi_direct_fp_instruction_kind(MinicCoreInstructionKind kind) {
-    switch (kind) {
-    case MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT:
-    case MINIC_CORE_INSTRUCTION_DOUBLE_EQUAL:
-    case MINIC_CORE_INSTRUCTION_DOUBLE_LESS:
-    case MINIC_CORE_INSTRUCTION_DOUBLE_LESS_EQUAL:
-    case MINIC_CORE_INSTRUCTION_DOUBLE_ADD:
-    case MINIC_CORE_INSTRUCTION_DOUBLE_SUBTRACT:
-    case MINIC_CORE_INSTRUCTION_DOUBLE_MULTIPLY:
-    case MINIC_CORE_INSTRUCTION_DOUBLE_DIVIDE:
-    case MINIC_CORE_INSTRUCTION_DOUBLE_NEGATE:
-    case MINIC_CORE_INSTRUCTION_FLOAT_ADD:
-    case MINIC_CORE_INSTRUCTION_FLOAT_SUBTRACT:
-    case MINIC_CORE_INSTRUCTION_FLOAT_MULTIPLY:
-    case MINIC_CORE_INSTRUCTION_FLOAT_DIVIDE:
-    case MINIC_CORE_INSTRUCTION_FLOAT_TO_DOUBLE:
-    case MINIC_CORE_INSTRUCTION_DOUBLE_TO_FLOAT:
-    case MINIC_CORE_INSTRUCTION_INTEGER_TO_DOUBLE:
-    case MINIC_CORE_INSTRUCTION_DOUBLE_TO_INTEGER:
-        return true;
-    default:
-        return false;
-    }
+    return minic_core_instruction_is_floating_scalar(kind);
 }
 
 bool minic_multi_direct_floating_shape(

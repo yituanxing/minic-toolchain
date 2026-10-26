@@ -1,4 +1,5 @@
 #include "target/common/core_function_facts.h"
+#include "target/common/core_instruction_family.h"
 #include <string.h>
 
 /* All five backends consume the same once-per-definition semantic scan
@@ -13,15 +14,15 @@ bool minic_core_function_facts_analyze(
     memset(facts, 0, sizeof(*facts));
     for (index = 0U; index < function->instruction_count; ++index) {
         const MinicCoreInstruction *instruction = &function->instructions[index];
+        if (minic_core_instruction_is_call(instruction->kind)) {
+            if (instruction->kind == MINIC_CORE_INSTRUCTION_CALL)
+                ++facts->direct_call_count;
+            else
+                ++facts->indirect_call_count;
+            facts->needs_saved_return_address = true;
+            continue;
+        }
         switch (instruction->kind) {
-        case MINIC_CORE_INSTRUCTION_CALL:
-            ++facts->direct_call_count;
-            facts->needs_saved_return_address = true;
-            break;
-        case MINIC_CORE_INSTRUCTION_INDIRECT_CALL:
-            ++facts->indirect_call_count;
-            facts->needs_saved_return_address = true;
-            break;
         case MINIC_CORE_INSTRUCTION_CALL_FRAME_ADDRESS:
             if (instruction->value.call_frame_address.kind ==
                 MINIC_CORE_CALL_FRAME_ADDRESS_RETURN)

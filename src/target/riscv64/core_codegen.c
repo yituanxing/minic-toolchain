@@ -18,6 +18,7 @@
 #include "target/riscv64/runtime_libcall.h"
 #include "target/riscv/instruction_select.h"
 #include "core/value_uses.h"
+#include "target/common/core_instruction_family.h"
 #include "target/data_layout.h"
 
 #include <inttypes.h>
@@ -48,6 +49,14 @@ static bool emit_instruction(FILE *file,
         symbol_name == NULL || instruction == NULL) {
         return false;
     }
+    /* Core family ownership is common across five targets. The RV64
+     * machine scalar emitter still handles actual ISA/ABI legalization. */
+    if (minic_core_instruction_is_integer_scalar(instruction->kind) ||
+        minic_core_instruction_is_floating_scalar(instruction->kind) ||
+        instruction->kind == MINIC_CORE_INSTRUCTION_INTEGER_OVERFLOW ||
+        instruction->kind == MINIC_CORE_INSTRUCTION_SCALAR_BITCAST)
+        return minic_riscv64_emit_scalar_instruction(
+            file, program, function, frame, symbol_name, instruction, isa);
     switch (instruction->kind) {
     case MINIC_CORE_INSTRUCTION_VARIADIC_COPY:
         /* SysV 24-byte cursor copying is x86-only; RV64 keeps its linear
@@ -57,47 +66,6 @@ static bool emit_instruction(FILE *file,
     case MINIC_CORE_INSTRUCTION_ATOMIC_STORE:
     case MINIC_CORE_INSTRUCTION_ATOMIC_LOAD:
         return false;
-    case MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT:
-    case MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT:
-    case MINIC_CORE_INSTRUCTION_FLOAT_ADD:
-    case MINIC_CORE_INSTRUCTION_FLOAT_SUBTRACT:
-    case MINIC_CORE_INSTRUCTION_FLOAT_MULTIPLY:
-    case MINIC_CORE_INSTRUCTION_FLOAT_DIVIDE:
-    case MINIC_CORE_INSTRUCTION_DOUBLE_ADD:
-    case MINIC_CORE_INSTRUCTION_DOUBLE_SUBTRACT:
-    case MINIC_CORE_INSTRUCTION_DOUBLE_MULTIPLY:
-    case MINIC_CORE_INSTRUCTION_DOUBLE_DIVIDE:
-    case MINIC_CORE_INSTRUCTION_DOUBLE_EQUAL:
-    case MINIC_CORE_INSTRUCTION_DOUBLE_LESS:
-    case MINIC_CORE_INSTRUCTION_DOUBLE_LESS_EQUAL:
-    case MINIC_CORE_INSTRUCTION_INTEGER_ADD:
-    case MINIC_CORE_INSTRUCTION_INTEGER_SUBTRACT:
-    case MINIC_CORE_INSTRUCTION_INTEGER_MULTIPLY:
-    case MINIC_CORE_INSTRUCTION_INTEGER_DIVIDE:
-    case MINIC_CORE_INSTRUCTION_INTEGER_REMAINDER:
-    case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND:
-    case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_XOR:
-    case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_OR:
-    case MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_LEFT:
-    case MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_RIGHT:
-    case MINIC_CORE_INSTRUCTION_INTEGER_LESS:
-    case MINIC_CORE_INSTRUCTION_POINTER_LESS:
-    case MINIC_CORE_INSTRUCTION_SCALAR_EQUAL:
-    case MINIC_CORE_INSTRUCTION_INTEGER_OVERFLOW:
-    case MINIC_CORE_INSTRUCTION_INTEGER_CONVERSION:
-    case MINIC_CORE_INSTRUCTION_INTEGER_TO_DOUBLE:
-    case MINIC_CORE_INSTRUCTION_FLOAT_TO_DOUBLE:
-    case MINIC_CORE_INSTRUCTION_DOUBLE_TO_FLOAT:
-    case MINIC_CORE_INSTRUCTION_DOUBLE_TO_INTEGER:
-    case MINIC_CORE_INSTRUCTION_SCALAR_BITCAST:
-    case MINIC_CORE_INSTRUCTION_DOUBLE_NEGATE:
-    case MINIC_CORE_INSTRUCTION_INTEGER_NEGATE:
-    case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_NOT:
-    case MINIC_CORE_INSTRUCTION_INTEGER_CLZ:
-    case MINIC_CORE_INSTRUCTION_INTEGER_CTZ:
-    case MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO:
-        return minic_riscv64_emit_scalar_instruction(
-            file, program, function, frame, symbol_name, instruction, isa);
     case MINIC_CORE_INSTRUCTION_POINTER_OFFSET: {
         const size_t size = instruction->value.pointer_offset.element_size;
         MinicRiscvPointerScalePlan scale;

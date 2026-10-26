@@ -290,6 +290,14 @@ done
 # All five machine backends must use the same common object/function visitor
 # while retaining target-owned ABI, assembler output and source-ASM policy.
 exists src/target/common/program_visit.h
+# Shared Core opcode-family classification feeds RV32, RV64, x86/Direct
+# without claiming a universal machine ISA or ignoring target admission.
+exists src/target/common/core_instruction_family.h
+has src/target/riscv32/rv32_emit.c 'minic_core_instruction_is_integer_scalar(ins->kind)'
+has src/target/riscv64/core_admission.c 'minic_core_instruction_is_integer_scalar(instruction->kind)'
+has src/target/riscv64/core_codegen.c 'minic_core_instruction_is_floating_scalar(instruction->kind)'
+has src/target/common/direct_instruction_semantics.c 'minic_core_instruction_is_floating_scalar(kind)'
+has src/target/common/direct_call_preflight.c 'minic_core_instruction_is_call(ins->kind)'
 has src/target/common/program_visit.h 'minic_program_visit_globals('
 has src/target/common/program_visit.h 'minic_program_visit_functions('
 has src/target/common/program_visit.h 'minic_program_visit_prepared_functions('

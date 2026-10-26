@@ -1,5 +1,6 @@
 #include "target/common/direct_call_preflight.h"
 #include "target/common/core_call_view.h"
+#include "target/common/core_instruction_family.h"
 #include "target/common/lp64_aggregate.h"
 #include "target/common/lp64_scalar.h"
 #include <stdint.h>
@@ -27,8 +28,7 @@ bool minic_multi_direct_lp64_calls_preflight(
         MinicType return_type;
         size_t j, begin, count, parameter_count;
         bool is_variadic;
-        if (ins->kind != MINIC_CORE_INSTRUCTION_CALL &&
-            ins->kind != MINIC_CORE_INSTRUCTION_INDIRECT_CALL) continue;
+        if (!minic_core_instruction_is_call(ins->kind)) continue;
         *has_calls = true; /* Caller preserves the return-address register. */
         /* GNU div_t/ldiv_t and similar small integer-only aggregate
          * results travel in one or two GP registers. Core represents their
