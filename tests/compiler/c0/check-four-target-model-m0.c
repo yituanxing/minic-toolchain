@@ -162,7 +162,7 @@ static int verify_riscv_profile_catalog(void) {
     const MinicRiscvProfile *profiles;
     size_t n, i, j;
     profiles = minic_riscv_profile_all(&n);
-    if (profiles == NULL || n != 4U ||
+    if (profiles == NULL || n != 6U ||
         minic_riscv_profile_find("rv64gc") != NULL ||
         minic_riscv_profile_find("rv32im") != NULL ||
         minic_riscv_profile_find(NULL) != NULL)
@@ -173,13 +173,18 @@ static int verify_riscv_profile_catalog(void) {
             (p->xlen != 32U && p->xlen != 64U) ||
             ((p->xlen == 32U) != (p->kind == MINIC_RISCV_PROFILE_RV32I)) ||
             strcmp(p->mabi, p->xlen == 32U ? "ilp32" :
-                   p->kind == MINIC_RISCV_PROFILE_RV64IMAFD ? "lp64d" : "lp64") != 0)
+                   p->kind == MINIC_RISCV_PROFILE_RV64IMAFD ? "lp64d" : "lp64") != 0 ||
+            (p->codegen_features & ~p->features) != 0U ||
+            (p->xlen == 32U && p->features != 0U))
             return 1;
         for (j = i + 1U; j < n; ++j)
             if (strcmp(p->march, profiles[j].march) == 0)
                 return 1;
     }
-    return puts("RISCV_PROFILE_CATALOG=PASS four_explicit_profiles no_silent_extension") == EOF;
+    if (minic_riscv_profile_find("rv64ima_zicsr_zifencei") == NULL ||
+        minic_riscv_profile_find("rv64imac_zicsr_zifencei") == NULL)
+        return 1;
+    return puts("RISCV_PROFILE_CATALOG=PASS six_explicit_profiles Base_I_source_asm_supersets") == EOF;
 }
 
 static int verify_invocation_language_abi(void) {
@@ -239,6 +244,7 @@ static int verify_riscv_integer_strategy(void) {
         MinicRiscvIsa extended = base;
         MinicRiscvIntegerPlan plan;
         extended.features = MINIC_RISCV_FEATURE_M | MINIC_RISCV_FEATURE_C;
+        extended.codegen_features = MINIC_RISCV_FEATURE_M;
         for (op = 0U; op < sizeof(ops) / sizeof(ops[0]); ++op) {
             for (sign = 0U; sign < 2U; ++sign) {
                 const char *sym = minic_riscv_integer_arithmetic_symbol(
@@ -257,12 +263,14 @@ static int verify_riscv_integer_strategy(void) {
                     plan.symbol != NULL ||
                     strcmp(plan.opcode, expected_native[op][sign]) != 0)
                     return 1;
-                extended.features = MINIC_RISCV_FEATURE_C;
+                /* Target still supports M, but this invocation emits I. */
+                extended.codegen_features = 0U;
                 if (!minic_riscv_plan_integer_arithmetic(
                         &extended, ops[op], sign != 0U, base.xlen, &plan) ||
                     plan.strategy != MINIC_RISCV_INTEGER_RUNTIME_LIBCALL)
                     return 1;
                 extended.features = MINIC_RISCV_FEATURE_M | MINIC_RISCV_FEATURE_C;
+        extended.codegen_features = MINIC_RISCV_FEATURE_M;
             }
         }
         if (minic_riscv_plan_integer_arithmetic(

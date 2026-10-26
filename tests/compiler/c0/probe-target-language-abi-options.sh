@@ -100,7 +100,10 @@ for arch in riscv32-linux riscv64-linux x86_64-linux aarch64-linux loongarch64-l
   cmp "$work/last.s" "$work/last-driver.s"
 done
 for profile in 'rv32i ilp32 riscv32-linux' 'rv64i lp64 riscv64-linux' \
-  'rv64im lp64 riscv64-linux' 'rv64imafd lp64d riscv64-linux'; do
+  'rv64im lp64 riscv64-linux' 'rv64imafd lp64d riscv64-linux' \
+  'rv64imafd lp64 riscv64-linux' \
+  'rv64ima_zicsr_zifencei lp64 riscv64-linux' \
+  'rv64imac_zicsr_zifencei lp64 riscv64-linux'; do
   read -r march abi arch <<< "$profile"
   "$MINIC_CC" "--target=$arch" "-march=$march" "-mabi=$abi" \
     -S "$work/unsigned.i" -funsigned-char -o "$work/profile-cc.s"
@@ -109,7 +112,8 @@ for profile in 'rv32i ilp32 riscv32-linux' 'rv64i lp64 riscv64-linux' \
   cmp "$work/profile-cc.s" "$work/profile-driver.s"
 done
 for bad in 'rv32i lp64 riscv32-linux' 'rv64i lp64d riscv64-linux' \
-  'rv64im ilp32 riscv64-linux' 'rv64imafd lp64 riscv64-linux'; do
+  'rv64im ilp32 riscv64-linux' \
+  'rv64ima_zicsr_zifencei lp64d riscv64-linux'; do
   read -r march abi arch <<< "$bad"
   if "$MINIC_CC" "--target=$arch" "-march=$march" "-mabi=$abi" \
     -S "$work/unsigned.i" -o "$work/bad-abi.s" 2>"$work/bad-abi.err"; then

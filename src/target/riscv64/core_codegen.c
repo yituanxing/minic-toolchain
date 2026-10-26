@@ -105,7 +105,7 @@ static bool emit_instruction(FILE *file,
         if (instruction->value.pointer_offset.element_size != 1U) {
             const size_t size = instruction->value.pointer_offset.element_size;
             if (isa != NULL && isa->strict_isa &&
-                !minic_riscv_isa_has(isa, MINIC_RISCV_FEATURE_M)) {
+                !minic_riscv_codegen_has(isa, MINIC_RISCV_FEATURE_M)) {
                 if (minic_riscv64_power_of_two(size)) {
                     if (fprintf(file, "  slli t1, t1, %u\n",
                                 minic_riscv64_log2_power_of_two(size)) < 0)

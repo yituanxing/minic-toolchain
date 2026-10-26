@@ -73,7 +73,10 @@ static void append_rv64_linux_musl_predefines(char **arguments,
     } else {
         arguments[(*count)++] = "-D__riscv_float_abi_double=1";
     }
-    if (march != NULL && strcmp(march, "rv64i") != 0) {
+    /* CPP macros describe available hardware, not compiler codegen choices. */
+    if (march == NULL ||
+        (minic_riscv_profile_find(march) != NULL &&
+         (minic_riscv_profile_find(march)->features & MINIC_RISCV_FEATURE_M))) {
         arguments[(*count)++] = "-D__riscv_mul=1";
         arguments[(*count)++] = "-D__riscv_div=1";
     }
@@ -98,7 +101,7 @@ static void usage(FILE *out, const char *argv0) {
     for (i = 0U; i < count; ++i)
         (void)fprintf(out, "%s%s", i == 0U ? "" : "|", targets[i].name);
     (void)fprintf(out,
-            "] [-march=rv32i|rv64i|rv64im|rv64imafd] [-mabi=ilp32|lp64|lp64d] [-fsigned-char|-funsigned-char] [-fshort-wchar|-fno-short-wchar] [-fPIC|-fPIE (only -S)] [--rtlib=PATH (link only)] [-ffreestanding|-fhosted] [-ffunction-sections|-fno-function-sections] [-static] "
+            "] [-march=rv32i|rv64i|rv64im|rv64imafd|rv64ima_zicsr_zifencei|rv64imac_zicsr_zifencei] [-mabi=ilp32|lp64|lp64d] [-fsigned-char|-funsigned-char] [-fshort-wchar|-fno-short-wchar] [-fPIC|-fPIE (only -S)] [--rtlib=PATH (link only)] [-ffreestanding|-fhosted] [-ffunction-sections|-fno-function-sections] [-static] "
             "[-nostdlib] [-nostartfiles] [-nodefaultlibs] [-nostdinc] "
             "[--sysroot DIR] [-DNAME[=VALUE]] [-UNAME] [-IDIR] "
             "[-isystem DIR] [-include FILE] [-LDIR] [-lNAME] "
@@ -648,17 +651,24 @@ int main(int argc, char **argv) {
      * the assembler silently using RV64GC would violate the target contract. */
     if (march != NULL) {
         const MinicRiscvProfile *profile = minic_riscv_profile_find(march);
-        const char *expected_abi;
         if (profile == NULL || profile->xlen != 64U) {
             fprintf(stderr, "minic: unsupported-riscv-isa:%s\n", march);
             return 2;
         }
-        expected_abi = profile->mabi;
-        if (mabi != NULL && strcmp(mabi, expected_abi) != 0) {
+        if (mabi == NULL) mabi = profile->mabi;
+        if (strcmp(mabi, "lp64") != 0 &&
+            !(strcmp(mabi, "lp64d") == 0 &&
+              (profile->features & (MINIC_RISCV_FEATURE_F | MINIC_RISCV_FEATURE_D)) ==
+                  (MINIC_RISCV_FEATURE_F | MINIC_RISCV_FEATURE_D))) {
             fprintf(stderr, "minic: incompatible-riscv-isa-abi:%s/%s\n", march, mabi);
             return 2;
         }
-        mabi = expected_abi;
+        /* Unqualified built-in MiniAS ISA combinations are -S only. */
+        if (mode != MINIC_DRIVER_ASSEMBLY &&
+            !profile->staged_assembler_qualified) {
+            fprintf(stderr, "minic: extended-riscv-isa-requires--S-external-assembler:%s\n", march);
+            return 2;
+        }
     } else if (mabi != NULL && strcmp(mabi, "lp64d") != 0) {
         fprintf(stderr, "minic: explicit-nondefault-abi-requires--march\n");
         return 2;

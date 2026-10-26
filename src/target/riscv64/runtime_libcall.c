@@ -61,13 +61,13 @@ const char *minic_riscv64_softfloat_binary_symbol(
     case MINIC_CORE_INSTRUCTION_FLOAT_SUBTRACT:
     case MINIC_CORE_INSTRUCTION_FLOAT_MULTIPLY:
     case MINIC_CORE_INSTRUCTION_FLOAT_DIVIDE:
-        if (minic_riscv_isa_has(isa, MINIC_RISCV_FEATURE_F)) return NULL;
+        if (minic_riscv_codegen_has(isa, MINIC_RISCV_FEATURE_F)) return NULL;
         break;
     case MINIC_CORE_INSTRUCTION_DOUBLE_ADD:
     case MINIC_CORE_INSTRUCTION_DOUBLE_SUBTRACT:
     case MINIC_CORE_INSTRUCTION_DOUBLE_MULTIPLY:
     case MINIC_CORE_INSTRUCTION_DOUBLE_DIVIDE:
-        if (minic_riscv_isa_has(isa, MINIC_RISCV_FEATURE_D)) return NULL;
+        if (minic_riscv_codegen_has(isa, MINIC_RISCV_FEATURE_D)) return NULL;
         break;
     default: return NULL;
     }
