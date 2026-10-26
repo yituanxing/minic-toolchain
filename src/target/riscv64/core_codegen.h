@@ -3,6 +3,7 @@
 
 #include "core/core_ir.h"
 #include "target/common/core_function_facts.h"
+#include "target/common/core_object_storage.h"
 #include "target/riscv/function_symbol.h"
 #include "target/riscv64/isa.h"
 #include "minic/compiler.h"
@@ -26,6 +27,10 @@ bool minic_riscv64_core_function_can_emit_for_program(const MinicC0Program *prog
 
 bool minic_riscv64_emit_core_function_with_symbol(
     FILE *file, const MinicCoreFunction *function, const MinicRiscv64FunctionSymbol *symbol);
+bool minic_riscv64_emit_core_function_for_program_with_symbol_with_storage(
+    FILE *, const MinicC0Program *, const MinicCoreFunction *,
+    const MinicRiscv64FunctionSymbol *, const MinicCoreFunctionFacts *,
+    const MinicCoreObjectStoragePlan *, bool, const MinicRiscvIsa *, MinicDiagnostic *);
 bool minic_riscv64_emit_core_function_for_program_with_symbol_prepared(
     FILE *, const MinicC0Program *, const MinicCoreFunction *,
     const MinicRiscv64FunctionSymbol *, const MinicCoreFunctionFacts *,

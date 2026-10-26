@@ -19,6 +19,7 @@ typedef struct MinicRiscv64CoreFrame {
     size_t value_slot_count;
     size_t *object_offsets;
     MinicCoreObjectStoragePlan object_storage;
+    bool borrows_object_storage;
     MinicRiscv64ObjectReusePlan object_reuse;
     size_t *value_offsets;
     MinicRiscv64AbiArgumentLocation *parameter_locations;
@@ -56,6 +57,10 @@ bool minic_riscv64_core_frame_initialize(
     const MinicC0Program *, const MinicCoreFunction *, MinicRiscv64CoreFrame *);
 /* Consume a prevalidated ABI plan. This transfers ownership of parameter
  * locations to the frame; the input plan becomes empty on success. */
+bool minic_riscv64_core_frame_initialize_with_storage(
+    const MinicC0Program *, const MinicCoreFunction *,
+    MinicRiscv64CoreFrame *, MinicRiscv64FunctionAbiPlan *, bool, bool,
+    const MinicCoreFunctionFacts *, const MinicCoreObjectStoragePlan *);
 bool minic_riscv64_core_frame_initialize_with_facts(
     const MinicC0Program *, const MinicCoreFunction *,
     MinicRiscv64CoreFrame *, MinicRiscv64FunctionAbiPlan *, bool, bool,

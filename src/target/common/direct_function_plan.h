@@ -28,7 +28,8 @@ typedef struct MinicDirectLP64FunctionPlan {
 bool minic_multi_direct_lp64_function_plan_prepare(
     const MinicC0Program *, const MinicTargetInfo *,
     const MinicFunction *, const MinicCoreFunction *,
-    const MinicCoreFunctionFacts *, const char *architecture_name, MinicLP64DirectABI,
+    const MinicCoreFunctionFacts *,
+    const MinicCoreObjectStoragePlan *, const char *architecture_name, MinicLP64DirectABI,
     MinicDirectLP64IndirectRecord,
     MinicDirectLP64FunctionPlan *);
 void minic_multi_direct_lp64_function_plan_destroy(

@@ -30,9 +30,10 @@ static bool rv32_align(size_t value, size_t by, size_t *out) {
 }
 
 /* A wide ILP32 operand remains ONE semantic Core SSA value. */
-bool rv32_frame_init_prepared(Rv32Frame *frame, const MinicC0Program *program,
+bool rv32_frame_init_with_storage(Rv32Frame *frame, const MinicC0Program *program,
     const MinicCoreFunction *f, const MinicTargetInfo *t,
-    bool is_variadic, const MinicCoreFunctionFacts *facts) {
+    bool is_variadic, const MinicCoreFunctionFacts *facts,
+    const MinicCoreObjectStoragePlan *storage) {
     size_t next, i, max_stack_args, value_base, peak_bytes = 0U;
     size_t maximum_object_alignment = 16U;
     if (frame == NULL || program == NULL || f == NULL || t == NULL || facts == NULL ||
@@ -58,8 +59,15 @@ bool rv32_frame_init_prepared(Rv32Frame *frame, const MinicC0Program *program,
     frame->object_offsets = NULL;
     frame->value_offsets = NULL;
     frame->object_storage = (MinicCoreObjectStoragePlan){0};
-    if (!minic_core_object_storage_plan_build(
-            program, t->data_layout, f, &frame->object_storage))
+    frame->borrows_object_storage = false;
+    if (storage != NULL) {
+        if (storage->count != f->object_count ||
+            (storage->count != 0U && storage->objects == NULL))
+            return rv32_frame_reject("core_object_storage", 0U, minic_type_void());
+        frame->object_storage = *storage;
+        frame->borrows_object_storage = true;
+    } else if (!minic_core_object_storage_plan_build(
+                   program, t->data_layout, f, &frame->object_storage))
         return rv32_frame_reject("core_object_storage", 0U, minic_type_void());
     frame->object_count = f->object_count;
     frame->value_count = f->value_count;
@@ -100,7 +108,7 @@ bool rv32_frame_init_prepared(Rv32Frame *frame, const MinicC0Program *program,
         }
         for (i = 0U; i < f->object_count; ++i) {
             const MinicCoreObject *obj = &f->objects[i];
-            const MinicCoreObjectStorage *storage =
+            const MinicCoreObjectStorage *object_slot =
                 &frame->object_storage.objects[i];
             size_t size, align, slot, peak;
             bool reusable;
@@ -110,8 +118,8 @@ bool rv32_frame_init_prepared(Rv32Frame *frame, const MinicC0Program *program,
                 minic_core_object_reuse_plan_destroy(&reuse);
                 return rv32_frame_reject("core_object_layout", i, obj->type);
             }
-            size = storage->extent;
-            align = storage->alignment;
+            size = object_slot->extent;
+            align = object_slot->alignment;
             if (align > maximum_object_alignment)
                 maximum_object_alignment = align;
             if (reusable) continue;
@@ -188,6 +196,14 @@ bool rv32_frame_init_prepared(Rv32Frame *frame, const MinicC0Program *program,
     frame->varargs_offset = frame->frame_size - frame->varargs_size;
     return frame->varargs_offset >= next;
 }
+bool rv32_frame_init_prepared(Rv32Frame *frame,
+    const MinicC0Program *program, const MinicCoreFunction *f,
+    const MinicTargetInfo *t, bool is_variadic,
+    const MinicCoreFunctionFacts *facts) {
+    return rv32_frame_init_with_storage(
+        frame, program, f, t, is_variadic, facts, NULL);
+}
+
 bool rv32_frame_init(Rv32Frame *frame, const MinicC0Program *program,
     const MinicCoreFunction *f, const MinicTargetInfo *t, bool is_variadic) {
     MinicCoreFunctionFacts facts;
@@ -199,7 +215,8 @@ void rv32_frame_destroy(Rv32Frame *f) {
     if (f != NULL) {
         free(f->object_offsets);
         free(f->value_offsets);
-        minic_core_object_storage_plan_destroy(&f->object_storage);
+        if (!f->borrows_object_storage)
+            minic_core_object_storage_plan_destroy(&f->object_storage);
         f->object_offsets = NULL;
         f->value_offsets = NULL;
         rv32_function_abi_plan_destroy(&f->abi);

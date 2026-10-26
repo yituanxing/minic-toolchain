@@ -463,7 +463,8 @@ static bool emit_core_function_with_symbol(FILE *file,
                                                     bool position_independent,
                                                     const MinicRiscvIsa *isa,
                                                     MinicDiagnostic *diagnostic,
-                                                    const MinicCoreFunctionFacts *facts) {
+                                                    const MinicCoreFunctionFacts *facts,
+                                                    const MinicCoreObjectStoragePlan *storage) {
     MinicRiscv64CoreFrame frame;
     MinicRiscv64FunctionAbiPlan abi_plan = {0};
     MinicCoreFunctionFacts compatibility_facts;
@@ -521,10 +522,10 @@ static bool emit_core_function_with_symbol(FILE *file,
             focus == NULL || focus[0] == '\0' ||
             strcmp(focus, symbol_name) == 0;
         if (!minic_riscv64_asm_function_plan_build(function, &frame.asm_plan) ||
-            !minic_riscv64_core_frame_initialize_with_facts(
+            !minic_riscv64_core_frame_initialize_with_storage(
                 program, function, &frame,
                 program != NULL ? &abi_plan : NULL, crossblock_enabled,
-                minic_riscv64_needs_arithmetic_libcall(isa, function), facts)) {
+                minic_riscv64_needs_arithmetic_libcall(isa, function), facts, storage)) {
             minic_riscv64_function_abi_plan_destroy(&abi_plan);
             return core_frame_fail(&frame);
         }
@@ -749,7 +750,18 @@ static bool emit_core_function_with_symbol(FILE *file,
 bool minic_riscv64_emit_core_function_with_symbol(
     FILE *file, const MinicCoreFunction *function, const MinicRiscv64FunctionSymbol *symbol) {
     return emit_core_function_with_symbol(file, NULL, function, symbol, false,
-                                          NULL, NULL, NULL);
+                                          NULL, NULL, NULL, NULL);
+}
+
+bool minic_riscv64_emit_core_function_for_program_with_symbol_with_storage(
+    FILE *file, const MinicC0Program *program, const MinicCoreFunction *function,
+    const MinicRiscv64FunctionSymbol *symbol, const MinicCoreFunctionFacts *facts,
+    const MinicCoreObjectStoragePlan *storage, bool position_independent,
+    const MinicRiscvIsa *isa, MinicDiagnostic *diagnostic) {
+    return program != NULL && facts != NULL &&
+           emit_core_function_with_symbol(file, program, function, symbol,
+                                          position_independent, isa, diagnostic,
+                                          facts, storage);
 }
 
 bool minic_riscv64_emit_core_function_for_program_with_symbol_prepared(
@@ -757,9 +769,9 @@ bool minic_riscv64_emit_core_function_for_program_with_symbol_prepared(
     const MinicRiscv64FunctionSymbol *symbol, const MinicCoreFunctionFacts *facts,
     bool position_independent, const MinicRiscvIsa *isa,
     MinicDiagnostic *diagnostic) {
-    return program != NULL && facts != NULL &&
-           emit_core_function_with_symbol(file, program, function, symbol,
-                                          position_independent, isa, diagnostic, facts);
+    return minic_riscv64_emit_core_function_for_program_with_symbol_with_storage(
+        file, program, function, symbol, facts, NULL,
+        position_independent, isa, diagnostic);
 }
 
 bool minic_riscv64_emit_core_function_for_program_with_symbol(
@@ -774,5 +786,6 @@ bool minic_riscv64_emit_core_function_for_program_with_symbol(
     return program != NULL &&
            minic_core_function_facts_analyze(function, &facts) &&
            emit_core_function_with_symbol(file, program, function, symbol,
-                                          position_independent, isa, diagnostic, &facts);
+                                          position_independent, isa, diagnostic,
+                                          &facts, NULL);
 }

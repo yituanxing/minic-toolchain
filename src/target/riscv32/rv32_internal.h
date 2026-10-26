@@ -37,6 +37,7 @@ typedef struct Rv32Frame {
     size_t *object_offsets;
     size_t *value_offsets;
     MinicCoreObjectStoragePlan object_storage;
+    bool borrows_object_storage;
     size_t object_count;
     size_t value_count;
     /* ABI is planned before frame allocation; outgoing area size and every
@@ -45,6 +46,9 @@ typedef struct Rv32Frame {
 } Rv32Frame;
 
 /* Frame ownership: rv32_frame.c */
+bool rv32_frame_init_with_storage(Rv32Frame *, const MinicC0Program *,
+    const MinicCoreFunction *, const MinicTargetInfo *, bool,
+    const MinicCoreFunctionFacts *, const MinicCoreObjectStoragePlan *);
 bool rv32_frame_init_prepared(Rv32Frame *, const MinicC0Program *,
     const MinicCoreFunction *, const MinicTargetInfo *, bool,
     const MinicCoreFunctionFacts *);

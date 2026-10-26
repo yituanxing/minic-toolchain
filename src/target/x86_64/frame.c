@@ -22,9 +22,10 @@ bool minic_x86_64_align(size_t value, size_t alignment, size_t *out) {
 
 
 
-bool minic_x86_64_frame_init_prepared(const MinicC0Program *program,
+bool minic_x86_64_frame_init_with_storage(const MinicC0Program *program,
     const MinicTargetInfo *target, const MinicCoreFunction *fn,
-    const MinicCoreFunctionFacts *facts, MinicX86Frame *frame) {
+    const MinicCoreFunctionFacts *facts,
+    const MinicCoreObjectStoragePlan *storage, MinicX86Frame *frame) {
     size_t pos, i, value_bytes, maximum_alignment = 16U;
     if (program == NULL || target == NULL || fn == NULL || facts == NULL || frame == NULL ||
         fn->value_count > (size_t)INT32_MAX / 8U) return false;
@@ -32,8 +33,14 @@ bool minic_x86_64_frame_init_prepared(const MinicC0Program *program,
     if (!minic_x86_64_plan_incoming_arguments(
             program, target, fn, &frame->incoming_arguments))
         return false;
-    if (!minic_core_object_storage_plan_build(
-            program, target->data_layout, fn, &frame->object_storage))
+    if (storage != NULL) {
+        if (storage->count != fn->object_count ||
+            (storage->count != 0U && storage->objects == NULL))
+            return false;
+        frame->object_storage = *storage;
+        frame->borrows_object_storage = true;
+    } else if (!minic_core_object_storage_plan_build(
+                   program, target->data_layout, fn, &frame->object_storage))
         return false;
     frame->varargs_count = facts->variadic_address_count;
     frame->value_count = fn->value_count;
@@ -157,6 +164,13 @@ bool minic_x86_64_frame_init_prepared(const MinicC0Program *program,
            frame->frame_size <= (size_t)INT32_MAX;
 }
 
+bool minic_x86_64_frame_init_prepared(const MinicC0Program *program,
+    const MinicTargetInfo *target, const MinicCoreFunction *fn,
+    const MinicCoreFunctionFacts *facts, MinicX86Frame *frame) {
+    return minic_x86_64_frame_init_with_storage(
+        program, target, fn, facts, NULL, frame);
+}
+
 bool minic_x86_64_frame_init(const MinicC0Program *program,
     const MinicTargetInfo *target, const MinicCoreFunction *fn,
     MinicX86Frame *frame) {
@@ -170,7 +184,8 @@ void minic_x86_64_frame_destroy(MinicX86Frame *frame) {
     free(frame->value_offsets);
     free(frame->object_offsets);
     minic_x86_64_argument_plan_destroy(&frame->incoming_arguments);
-    minic_core_object_storage_plan_destroy(&frame->object_storage);
+    if (!frame->borrows_object_storage)
+        minic_core_object_storage_plan_destroy(&frame->object_storage);
     free(frame->varargs_results);
     (void)memset(frame, 0, sizeof(*frame));
 }

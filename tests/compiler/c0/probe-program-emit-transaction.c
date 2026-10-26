@@ -35,11 +35,13 @@ static bool between(FILE *out, const MinicC0Program *p,
 static bool function(FILE *out, const MinicC0Program *p,
                      const MinicTargetInfo *t, const MinicFunction *decl,
                      const MinicCoreFunction *f,
-                     const MinicCoreFunctionFacts *facts, size_t index,
+                     const MinicCoreFunctionFacts *facts,
+                     const MinicCoreObjectStoragePlan *storage, size_t index,
                      bool sections, void *opaque) {
     TestContext *ctx = opaque;
     (void)p; (void)t; (void)decl; (void)f; (void)sections;
-    if (index != 0U || facts == NULL ||
+    if (index != 0U || facts == NULL || storage == NULL ||
+        storage->count != 0U ||
         facts->direct_call_count != 1U ||
         facts->indirect_call_count != 1U ||
         facts->variadic_address_count != 1U ||
@@ -96,6 +98,7 @@ int main(int argc, char **argv) {
     ir.instruction_count = sizeof(instructions) / sizeof(instructions[0]);
     program.global_objects = &object;
     program.global_object_count = 1U;
+    target.data_layout = &(MinicDataLayout){0};
     program.functions = &declaration;
     program.function_count = 1U;
     for (stage = 0U; stage <= 5U; ++stage) {
@@ -135,4 +138,18 @@ int main(int argc, char **argv) {
     (void)remove(path);
     puts("MINIC_FIVE_TARGET_OUTPUT_TRANSACTION=PASS failures=5 rollback=5 census=1");
     return 0;
+}
+
+/* The host-native transaction probe has no type-layout dependency. For
+ * zero-object test functions, the real builder and this small test stub
+ * have identical success/cleanup semantics. Architecture runtime gates
+ * always link the production Core storage implementation. */
+bool minic_core_object_storage_plan_build(
+    const MinicC0Program *program, const MinicDataLayout *layout,
+    const MinicCoreFunction *fn, MinicCoreObjectStoragePlan *plan) {
+    return program != NULL && layout != NULL && fn != NULL && plan != NULL &&
+           fn->object_count == 0U && plan->objects == NULL;
+}
+void minic_core_object_storage_plan_destroy(MinicCoreObjectStoragePlan *plan) {
+    if (plan != NULL) *plan = (MinicCoreObjectStoragePlan){0};
 }

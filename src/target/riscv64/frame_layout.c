@@ -12,11 +12,12 @@
 #include <string.h>
 
 /* One RV64 owner of outgoing ABI, object reuse, spills and CFG planning. */
-bool minic_riscv64_core_frame_initialize_with_facts(
+bool minic_riscv64_core_frame_initialize_with_storage(
     const MinicC0Program *program, const MinicCoreFunction *function,
     MinicRiscv64CoreFrame *frame, MinicRiscv64FunctionAbiPlan *abi_plan,
     bool crossblock_enabled, bool force_save_return_address,
-    const MinicCoreFunctionFacts *facts) {
+    const MinicCoreFunctionFacts *facts,
+    const MinicCoreObjectStoragePlan *storage) {
     size_t object_index;
     size_t storage_size;
     size_t required_size;
@@ -35,10 +36,17 @@ bool minic_riscv64_core_frame_initialize_with_facts(
     frame->has_named_parameter_cursor = false;
     frame->value_slot_count = 0U;
     frame->object_storage = (MinicCoreObjectStoragePlan){0};
+    frame->borrows_object_storage = false;
     frame->object_reuse = (MinicRiscv64ObjectReusePlan){0};
-    if (!minic_core_object_storage_plan_build(
-            program, minic_default_data_layout(), function,
-            &frame->object_storage))
+    if (storage != NULL) {
+        if (storage->count != function->object_count ||
+            (storage->count != 0U && storage->objects == NULL))
+            return false;
+        frame->object_storage = *storage;
+        frame->borrows_object_storage = true;
+    } else if (!minic_core_object_storage_plan_build(
+                   program, minic_default_data_layout(), function,
+                   &frame->object_storage))
         return false;
     frame->has_dynamic_stack_alloc = facts->uses_dynamic_stack_alloc;
     frame->saved_frame_base_offset = 0U;
@@ -406,6 +414,16 @@ bool minic_riscv64_core_frame_initialize_with_facts(
     return true;
 }
 
+bool minic_riscv64_core_frame_initialize_with_facts(
+    const MinicC0Program *program, const MinicCoreFunction *function,
+    MinicRiscv64CoreFrame *frame, MinicRiscv64FunctionAbiPlan *abi_plan,
+    bool crossblock_enabled, bool force_save_return_address,
+    const MinicCoreFunctionFacts *facts) {
+    return minic_riscv64_core_frame_initialize_with_storage(
+        program, function, frame, abi_plan, crossblock_enabled,
+        force_save_return_address, facts, NULL);
+}
+
 bool minic_riscv64_core_frame_initialize_prepared(
     const MinicC0Program *program, const MinicCoreFunction *function,
     MinicRiscv64CoreFrame *frame, MinicRiscv64FunctionAbiPlan *abi_plan,
@@ -438,7 +456,8 @@ void minic_riscv64_core_frame_destroy(MinicRiscv64CoreFrame *frame) {
     frame->has_named_parameter_cursor = false;
     free(frame->object_offsets);
     frame->object_offsets = NULL;
-    minic_core_object_storage_plan_destroy(&frame->object_storage);
+    if (!frame->borrows_object_storage)
+        minic_core_object_storage_plan_destroy(&frame->object_storage);
     free(frame->reachable_blocks);
     frame->reachable_blocks = NULL;
 }

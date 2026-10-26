@@ -3,6 +3,7 @@
 
 #include "core/core_ir.h"
 #include "target/common/core_function_facts.h"
+#include "target/common/core_object_storage.h"
 #include "frontend/ast.h"
 #include "minic/compiler.h"
 #include "target/target_info.h"
@@ -17,7 +18,8 @@
 typedef bool (*MinicMultiDirectEmitFunction)(
     FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicFunction *decl, const MinicCoreFunction *fn,
-    const MinicCoreFunctionFacts *facts, size_t function_id,
+    const MinicCoreFunctionFacts *facts,
+    const MinicCoreObjectStoragePlan *storage, size_t function_id,
     bool function_sections);
 
 typedef struct MinicMultiDirectProgramConfig {
