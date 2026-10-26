@@ -536,31 +536,32 @@ static bool emit_core_call_scalar_result(
 static bool emit_core_call_arguments(
     FILE *file, const MinicC0Program *program,
     const MinicCoreFunction *function, const MinicRiscv64CoreFrame *frame,
-    size_t begin, size_t count, const MinicType *parameter_types,
-    size_t parameter_count, bool is_variadic, bool direct_call,
+    const MinicCoreCallView *call, bool direct_call,
     MinicRiscv64AbiCursor *cursor) {
     size_t argument_index;
     if (file == NULL || program == NULL || function == NULL || frame == NULL ||
-        cursor == NULL || begin > function->call_argument_count ||
-        count > function->call_argument_count - begin ||
-        (count != 0U && function->call_arguments == NULL))
+        cursor == NULL || call == NULL ||
+        call->argument_begin > function->call_argument_count ||
+        call->argument_count > function->call_argument_count - call->argument_begin ||
+        (call->argument_count != 0U && call->arguments == NULL) ||
+        call->parameter_count > call->argument_count ||
+        (call->parameter_count != 0U && call->parameter_types == NULL))
         return false;
-    for (argument_index = 0U; argument_index < count;
+    for (argument_index = 0U; argument_index < call->argument_count;
          ++argument_index) {
-        const MinicCoreCallArgument *argument = &function->call_arguments[
-            begin + argument_index];
+        const MinicCoreCallArgument *argument = &call->arguments[argument_index];
         MinicRiscv64AbiArgumentLocation location;
-        MinicType argument_type;
-        bool is_fixed_parameter;
-        if (!minic_riscv64_core_call_argument_type(
-                function, argument, parameter_types, parameter_count,
-                is_variadic, argument_index, &argument_type,
-                &is_fixed_parameter))
+        MinicType actual_type, argument_type;
+        const bool is_fixed_parameter =
+            argument_index < call->parameter_count;
+        if (!minic_core_call_view_argument_type(
+                function, call, argument_index, &actual_type))
             return false;
+        argument_type = is_fixed_parameter
+            ? call->parameter_types[argument_index] : actual_type;
         if (!minic_riscv64_abi_place_argument(
-                program, argument_type, is_fixed_parameter, cursor, &location)) {
+                program, argument_type, is_fixed_parameter, cursor, &location))
             return false;
-        }
         if (!emit_core_call_argument(
                 file, program, function, frame, argument, argument_type,
                 &location, is_fixed_parameter, direct_call))
@@ -617,9 +618,7 @@ bool minic_riscv64_emit_direct_call(FILE *file,
     }
     if (!emit_core_call_arguments(
             file, program, function, frame,
-            call.argument_begin, call.argument_count,
-            call.parameter_types, call.parameter_count,
-            call.is_variadic, true, &cursor))
+            &call, true, &cursor))
         return false;
     if (fprintf(file, "  call %s\n", callee->name) < 0) {
         return false;
@@ -706,9 +705,7 @@ bool minic_riscv64_emit_indirect_call(FILE *file,
     }
     if (!emit_core_call_arguments(
             file, program, function, frame,
-            call.argument_begin, call.argument_count,
-            call.parameter_types, call.parameter_count,
-            call.is_variadic, false, &cursor))
+            &call, false, &cursor))
         return false;
     if (!minic_riscv64_frame_load_value(file, frame, instruction->value.indirect_call.callee, "t0") ||
         fprintf(file, "  jalr ra, t0, 0\n") < 0) {

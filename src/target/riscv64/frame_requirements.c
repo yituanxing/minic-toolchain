@@ -41,36 +41,14 @@ bool minic_riscv64_core_variadic_fixed_prefix_profile(
         &cursor, integer_parameter_count, fixed_stack_slots);
 }
 
-/* M168_RV64_INDIRECT_CALL_STACK: reserve one fixed outgoing stack area
-   shared by direct and indirect calls.  The ABI cursor remains the single owner
-   of register/stack placement; Core keeps only VALUE/OBJECT arguments. */
-/* One semantic argument-type resolver feeds RV64 psABI sizing and both
- * machine call forms. A variadic OBJECT argument must really be a record;
- * Core never silently classifies an arbitrary object as a scalar. */
+/* The RV64 psABI parameter cursor is target-owned. CoreCallView supplies
+ * the same checked VALUE/OBJECT argument identities consumed by all five
+ * architectures, rather than another RV64-only type resolver. */
 bool minic_riscv64_core_variadic_fixed_prefix(
     const MinicC0Program *program, const MinicCoreFunction *function,
     size_t *integer_parameter_count, size_t *fixed_stack_slots) {
     return minic_riscv64_core_variadic_fixed_prefix_profile(
         program, function, false, integer_parameter_count, fixed_stack_slots);
-}
-bool minic_riscv64_core_call_argument_type(
-    const MinicCoreFunction *function,
-    const MinicCoreCallArgument *argument,
-    const MinicType *parameter_types, size_t parameter_count,
-    bool is_variadic, size_t argument_index,
-    MinicType *argument_type, bool *is_fixed_parameter) {
-    if (function == NULL || argument == NULL || argument_type == NULL ||
-        is_fixed_parameter == NULL)
-        return false;
-    *is_fixed_parameter = argument_index < parameter_count;
-    if (*is_fixed_parameter) {
-        if (parameter_types == NULL)
-            return false;
-        *argument_type = parameter_types[argument_index];
-        return true;
-    }
-    return is_variadic &&
-           minic_core_call_argument_actual_type(function, argument, argument_type);
 }
 
 /* Exactly one psABI outgoing-stack computation per semantic CALL view.
@@ -89,16 +67,19 @@ static bool rv64_call_stack_slots(
         return false;
     (void)return_value;
     for (argument_index = 0U; argument_index < call->argument_count; ++argument_index) {
-        const MinicCoreCallArgument *argument = &call->arguments[argument_index];
         MinicRiscv64AbiArgumentLocation location;
-        MinicType argument_type;
-        bool is_fixed_parameter;
-        if (!minic_riscv64_core_call_argument_type(
-                function, argument, call->parameter_types, call->parameter_count,
-                call->is_variadic, argument_index, &argument_type,
-                &is_fixed_parameter) ||
-            !minic_riscv64_abi_place_argument(
-                program, argument_type, is_fixed_parameter, &cursor, &location))
+        MinicType actual_type, placement_type;
+        const bool is_fixed_parameter =
+            argument_index < call->parameter_count;
+        if (!minic_core_call_view_argument_type(
+                function, call, argument_index, &actual_type))
+            return false;
+        /* The psABI classifies fixed formals by their declared type.
+         * Unnamed variadic arguments use their actual promoted Core type. */
+        placement_type = is_fixed_parameter
+            ? call->parameter_types[argument_index] : actual_type;
+        if (!minic_riscv64_abi_place_argument(
+                program, placement_type, is_fixed_parameter, &cursor, &location))
             return false;
     }
     if (cursor.stack_slot_count > *maximum_stack_slots)
