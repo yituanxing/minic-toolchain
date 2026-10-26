@@ -30,13 +30,14 @@ typedef struct MinicLP64ArgumentPlan {
 
 /* Persistent ABI placements sized by each actual call, not 64 padded args. */
 typedef struct MinicLP64PreparedCall {
+    size_t instruction_id; /* sorted Core CALL ID */
     size_t argument_count;
     size_t stack_bytes;
     MinicLP64ArgumentLocation arguments[];
 } MinicLP64PreparedCall;
 typedef struct MinicLP64CallPlanCache {
-    size_t instruction_count;
-    MinicLP64PreparedCall **by_instruction;
+    size_t call_count;
+    MinicLP64PreparedCall **sites; /* one pointer per actual CALL */
 } MinicLP64CallPlanCache;
 bool minic_lp64_plan_function_calls(
     const MinicC0Program *, const MinicTargetInfo *,

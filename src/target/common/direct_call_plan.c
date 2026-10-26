@@ -212,36 +212,58 @@ bool minic_lp64_plan_incoming_parameters(
         indirect_record, plan);
 }
 
-/* Compact, function-lifetime ABI call placements keyed by Core IDs.
- * One shared ABI classifier serves both LP64 ISA emitters. */
+/* One physical call-plan entry per actual Core CALL. The prepared Common
+ * call index supplies only real, ordered CALL sites. This cache is shared by
+ * AArch64 AAPCS64 and LoongArch64 LP64D; only their ABI classifier differs.
+ * Standalone callers without a Common index still use a checked linear
+ * fallback, but production work is O(CALL sites), not O(all instructions). */
 bool minic_lp64_plan_function_calls(
     const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicCoreCallIndex *semantic_calls,
     MinicLP64DirectABI abi, MinicDirectLP64IndirectRecord indirect_record,
     MinicLP64CallPlanCache *cache) {
-    size_t id;
+    size_t ordinal, id = 0U, calls = 0U, previous_id = SIZE_MAX;
     if (program == NULL || target == NULL || fn == NULL || cache == NULL ||
-        cache->by_instruction != NULL || cache->instruction_count != 0U ||
+        cache->sites != NULL || cache->call_count != 0U ||
         indirect_record == NULL ||
-        (fn->instruction_count != 0U && fn->instructions == NULL) ||
-        fn->instruction_count > SIZE_MAX / sizeof(*cache->by_instruction))
+        (fn->instruction_count != 0U && fn->instructions == NULL))
         return false;
-    if (fn->instruction_count == 0U) return true;
-    cache->by_instruction = (MinicLP64PreparedCall **)calloc(
-        fn->instruction_count, sizeof(*cache->by_instruction));
-    if (cache->by_instruction == NULL) return false;
-    cache->instruction_count = fn->instruction_count;
-    for (id = 0U; id < fn->instruction_count; ++id) {
-        const MinicCoreInstruction *ins = &fn->instructions[id];
+    if (semantic_calls != NULL) {
+        if (semantic_calls->count > fn->instruction_count ||
+            (semantic_calls->count != 0U && semantic_calls->sites == NULL))
+            return false;
+        calls = semantic_calls->count;
+    } else {
+        for (id = 0U; id < fn->instruction_count; ++id)
+            if (minic_core_instruction_is_call(fn->instructions[id].kind))
+                ++calls;
+    }
+    if (calls > SIZE_MAX / sizeof(*cache->sites))
+        return false;
+    if (calls == 0U) return true;
+    cache->sites = (MinicLP64PreparedCall **)calloc(calls, sizeof(*cache->sites));
+    if (cache->sites == NULL) return false;
+    cache->call_count = calls;
+    id = 0U;
+    for (ordinal = 0U; ordinal < calls; ++ordinal) {
+        const MinicCoreInstruction *ins;
+        const MinicCoreCallView *view = NULL;
         MinicLP64ArgumentPlan scratch;
         MinicLP64PreparedCall *site;
         size_t bytes;
-        if (ins->kind != MINIC_CORE_INSTRUCTION_CALL &&
-            ins->kind != MINIC_CORE_INSTRUCTION_INDIRECT_CALL)
-            continue;
-        const MinicCoreCallView *view = semantic_calls != NULL
-            ? minic_core_call_index_get(semantic_calls, id) : NULL;
-        if ((semantic_calls != NULL && view == NULL) ||
+        if (semantic_calls != NULL) {
+            id = semantic_calls->sites[ordinal].instruction_id;
+            view = &semantic_calls->sites[ordinal].view;
+        } else {
+            while (id < fn->instruction_count &&
+                   !minic_core_instruction_is_call(fn->instructions[id].kind))
+                ++id;
+        }
+        if (id >= fn->instruction_count ||
+            (previous_id != SIZE_MAX && id <= previous_id))
+            goto failed;
+        ins = &fn->instructions[id];
+        if (!minic_core_instruction_is_call(ins->kind) ||
             !minic_lp64_plan_direct_call(
                 program, target, fn, ins, view, abi, indirect_record, &scratch) ||
             scratch.argument_count >
@@ -251,12 +273,15 @@ bool minic_lp64_plan_function_calls(
             scratch.argument_count * sizeof(*site->arguments);
         site = (MinicLP64PreparedCall *)malloc(bytes);
         if (site == NULL) goto failed;
+        site->instruction_id = id;
         site->argument_count = scratch.argument_count;
         site->stack_bytes = scratch.stack_bytes;
         if (scratch.argument_count != 0U)
             memcpy(site->arguments, scratch.arguments,
                    scratch.argument_count * sizeof(*site->arguments));
-        cache->by_instruction[id] = site;
+        cache->sites[ordinal] = site;
+        previous_id = id;
+        if (semantic_calls == NULL) ++id;
     }
     return true;
 failed:
@@ -266,18 +291,29 @@ failed:
 
 const MinicLP64PreparedCall *minic_lp64_function_call_plan(
     const MinicLP64CallPlanCache *cache, size_t instruction_id) {
-    if (cache == NULL || instruction_id >= cache->instruction_count ||
-        cache->by_instruction == NULL)
+    size_t low = 0U, high;
+    if (cache == NULL || (cache->call_count != 0U && cache->sites == NULL))
         return NULL;
-    return cache->by_instruction[instruction_id];
+    high = cache->call_count;
+    while (low < high) {
+        size_t mid = low + (high - low) / 2U;
+        if (cache->sites[mid] == NULL) return NULL;
+        if (cache->sites[mid]->instruction_id < instruction_id)
+            low = mid + 1U;
+        else
+            high = mid;
+    }
+    return low < cache->call_count && cache->sites[low] != NULL &&
+           cache->sites[low]->instruction_id == instruction_id
+               ? cache->sites[low] : NULL;
 }
 
 void minic_lp64_call_plan_cache_destroy(MinicLP64CallPlanCache *cache) {
     size_t i;
     if (cache == NULL) return;
-    for (i = 0U; i < cache->instruction_count; ++i)
-        free(cache->by_instruction[i]);
-    free(cache->by_instruction);
-    cache->by_instruction = NULL;
-    cache->instruction_count = 0U;
+    for (i = 0U; i < cache->call_count; ++i)
+        free(cache->sites[i]);
+    free(cache->sites);
+    cache->sites = NULL;
+    cache->call_count = 0U;
 }

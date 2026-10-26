@@ -254,6 +254,12 @@ has src/target/riscv32/rv32_abi_plan.c 'rv32_abi_reject("incoming_return"'
 # heavyweight machine call plan for each non-CALL instruction again.
 has src/target/riscv32/rv32_abi_plan.c 'minic_core_instruction_is_call('
 has src/target/riscv32/rv32_abi_plan.c 'while (low < high)'
+has src/target/riscv32/rv32_abi_plan.c 'semantic_calls->sites[dense].instruction_id'
+has src/target/riscv64/frame_requirements.c 'semantic_calls->sites[i]'
+# The Direct LP64 pair must also use a compact real CALL site cache.
+lacks src/target/common/direct_call_plan.c 'cache->by_instruction'
+has src/target/common/direct_call_plan.c 'cache->sites[ordinal]'
+has src/target/common/direct_call_plan.c 'while (low < high)'
 lacks src/target/riscv32/rv32_abi_plan.c 'plan->call_count = function->instruction_count'
 has src/target/riscv32/rv32_abi_plan.h 'size_t instruction_id;'
 lacks src/target/riscv32/rv32_emit.c 'rv32_scalar_storage_words(f, f->return_type, &bits)'

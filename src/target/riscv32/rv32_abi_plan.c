@@ -176,9 +176,16 @@ bool rv32_function_abi_plan_build(const MinicC0Program *program,
         (function->instruction_count != 0U && function->instructions == NULL))
         return false;
     if (!rv32_plan_incoming(program, target, function, plan)) goto failure;
-    for (i = 0U; i < function->instruction_count; ++i)
-        if (minic_core_instruction_is_call(function->instructions[i].kind))
-            ++actual_calls;
+    if (semantic_calls != NULL) {
+        if (semantic_calls->count > function->instruction_count ||
+            (semantic_calls->count != 0U && semantic_calls->sites == NULL))
+            goto failure;
+        actual_calls = semantic_calls->count;
+    } else {
+        for (i = 0U; i < function->instruction_count; ++i)
+            if (minic_core_instruction_is_call(function->instructions[i].kind))
+                ++actual_calls;
+    }
     if (actual_calls > SIZE_MAX / sizeof(*plan->calls) ||
         (semantic_calls != NULL &&
          (semantic_calls->count != actual_calls ||
@@ -189,27 +196,42 @@ bool rv32_function_abi_plan_build(const MinicC0Program *program,
         plan->calls = calloc(actual_calls, sizeof(*plan->calls));
         if (plan->calls == NULL) goto failure;
     }
-    for (i = 0U; i < function->instruction_count; ++i) {
-        const MinicCoreInstruction *ins = &function->instructions[i];
+    /* When Common prepared CALL sites exist, visit only those sites.
+     * The standalone compatibility API keeps the original checked scan. */
+    i = 0U;
+    while (dense < actual_calls) {
+        const MinicCoreInstruction *ins;
         Rv32CallAbiPlan *call;
-        const MinicCoreCallView *view;
-        if (!minic_core_instruction_is_call(ins->kind)) continue;
-        if (dense >= actual_calls) goto failure;
+        const MinicCoreCallView *view = NULL;
+        size_t instruction_id;
+        if (semantic_calls != NULL) {
+            instruction_id = semantic_calls->sites[dense].instruction_id;
+            view = &semantic_calls->sites[dense].view;
+        } else {
+            while (i < function->instruction_count &&
+                   !minic_core_instruction_is_call(function->instructions[i].kind))
+                ++i;
+            instruction_id = i;
+        }
+        if (instruction_id >= function->instruction_count ||
+            (dense != 0U && instruction_id <=
+                plan->calls[dense - 1U].instruction_id))
+            goto failure;
+        ins = &function->instructions[instruction_id];
+        if (!minic_core_instruction_is_call(ins->kind)) goto failure;
         call = &plan->calls[dense];
-        call->instruction_id = i;
-        view = semantic_calls != NULL
-            ? minic_core_call_index_get(semantic_calls, i) : NULL;
-        if ((semantic_calls != NULL && view == NULL) ||
-            !rv32_plan_call(program, target, function, ins, view, call)) {
+        call->instruction_id = instruction_id;
+        if (!rv32_plan_call(program, target, function, ins, view, call)) {
             if (getenv("MINIC_RV32_FRAME_TRACE") != NULL)
                 (void)fprintf(stderr,
-                    "RV32_ABI_REJECT stage=call_plan instruction=%zu kind=%d\n",
-                    i, (int)ins->kind);
+                    "RV32_ABI_REJECT stage=call_plan instruction=%zu kind=%d\\n",
+                    instruction_id, (int)ins->kind);
             goto failure;
         }
         if (call->stack_words > plan->max_outgoing_stack_words)
             plan->max_outgoing_stack_words = call->stack_words;
         ++dense;
+        if (semantic_calls == NULL) i = instruction_id + 1U;
     }
     if (dense != actual_calls) goto failure;
     return true;
