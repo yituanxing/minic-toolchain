@@ -19,6 +19,14 @@ bool minic_core_function_facts_analyze(
                 ++facts->direct_call_count;
             else
                 ++facts->indirect_call_count;
+            {
+                const size_t arity =
+                    instruction->kind == MINIC_CORE_INSTRUCTION_CALL
+                        ? instruction->value.call.argument_count
+                        : instruction->value.indirect_call.argument_count;
+                if (arity > facts->max_call_arity)
+                    facts->max_call_arity = arity;
+            }
             facts->needs_saved_return_address = true;
             continue;
         }

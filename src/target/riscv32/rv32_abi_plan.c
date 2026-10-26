@@ -114,23 +114,14 @@ static bool rv32_plan_call(const MinicC0Program *program,
     if (!minic_core_call_view_build(function, instruction, &view) ||
         view.argument_count > SIZE_MAX / sizeof(*call->arguments))
         return false;
-    if (minic_type_is_record(view.return_type)) {
-        if (instruction->kind != MINIC_CORE_INSTRUCTION_CALL ||
-            instruction->value.call.result_object == MINIC_CORE_OBJECT_INVALID ||
-            instruction->value.call.result_object >= function->object_count ||
-            !minic_type_equal(
-                view.return_type,
-                function->objects[instruction->value.call.result_object].type) ||
-            !rv32_plan_shape(program, target, function, view.return_type,
+    if (view.return_form == MINIC_CORE_CALL_RETURN_OBJECT) {
+        if (!rv32_plan_shape(program, target, function, view.return_type,
                              &result_shape))
             return false;
         call->record_return_size = result_shape.record_size;
         call->indirect_return = result_shape.indirect_record;
         if (call->indirect_return)
             cursor.register_words = 1U;
-    } else if (instruction->kind == MINIC_CORE_INSTRUCTION_CALL &&
-               instruction->value.call.result_object != MINIC_CORE_OBJECT_INVALID) {
-        return false;
     }
     if (view.argument_count != 0U) {
         call->arguments = calloc(view.argument_count, sizeof(*call->arguments));
@@ -139,8 +130,8 @@ static bool rv32_plan_call(const MinicC0Program *program,
     for (i = 0U; i < view.argument_count; ++i) {
         Rv32AbiWordLocation *entry = &call->arguments[i];
         MinicType type;
-        if (!minic_core_call_argument_actual_type(
-                function, &view.arguments[i], &type))
+        if (!minic_core_call_view_argument_type(
+                function, &view, i, &type))
             return rv32_abi_reject("call_actual_type", i, minic_type_void());
         /* Record varargs obey the very same ILP32 ABI shape and cursor as
          * scalar varargs: <=2 XLEN words by value, larger via the caller's

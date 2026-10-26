@@ -10,6 +10,7 @@
 typedef struct MinicCoreFunctionFacts {
     size_t direct_call_count;
     size_t indirect_call_count;
+    size_t max_call_arity; /* max source arguments, not ABI stack slots */
     size_t variadic_address_count;
     bool needs_saved_return_address;
     bool uses_structured_inline_asm;

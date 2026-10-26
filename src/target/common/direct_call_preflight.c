@@ -69,6 +69,10 @@ bool minic_multi_direct_lp64_calls_preflight(
         }
         if (!minic_core_call_view_build(fn, ins, &call))
             return false;
+        /* Core/ABI-neutral return shape was already checked by the view. */
+        if (small_record_result &&
+            call.return_form != MINIC_CORE_CALL_RETURN_OBJECT)
+            return false;
         if (call.callee != NULL &&
             ((ins->value.call.result_object != MINIC_CORE_OBJECT_INVALID &&
               !small_record_result) ||
@@ -147,8 +151,9 @@ bool minic_multi_direct_lp64_calls_preflight(
                         j < parameter_count ? (int)parameter_types[j].base_kind : -1);
                 return false;
             }
-            actual = fn->values[arg->value.value_id].type;
-            if (!minic_lp64_valid_parameter_type(program, target, actual)) return false;
+            if (!minic_core_call_view_argument_type(fn, &call, j, &actual) ||
+                !minic_lp64_valid_parameter_type(program, target, actual))
+                return false;
             if (j < parameter_count) {
                 if (!minic_lp64_valid_parameter_type(program, target, parameter_types[j]) ||
                     !minic_type_equal(parameter_types[j], actual))

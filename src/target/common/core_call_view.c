@@ -52,10 +52,47 @@ bool minic_core_call_view_build(const MinicCoreFunction *function,
         view.parameter_count > count ||
         (!view.is_variadic && view.parameter_count != count))
         return false;
+    if (!minic_type_equal(view.return_type, instruction->type))
+        return false;
+    if (minic_type_is_void(instruction->type)) {
+        if (instruction->result != MINIC_CORE_VALUE_INVALID)
+            return false;
+        view.return_form = MINIC_CORE_CALL_RETURN_VOID;
+    } else if (minic_type_is_record(instruction->type)) {
+        if (instruction->kind != MINIC_CORE_INSTRUCTION_CALL ||
+            instruction->value.call.result_object >= function->object_count ||
+            function->objects == NULL ||
+            !minic_type_equal(
+                function->objects[instruction->value.call.result_object].type,
+                instruction->type) ||
+            instruction->result != MINIC_CORE_VALUE_INVALID)
+            return false;
+        view.return_form = MINIC_CORE_CALL_RETURN_OBJECT;
+    } else {
+        if (instruction->result >= function->value_count ||
+            function->values == NULL ||
+            !minic_type_equal(function->values[instruction->result].type,
+                              instruction->type))
+            return false;
+        view.return_form = MINIC_CORE_CALL_RETURN_VALUE;
+    }
+    if (instruction->kind == MINIC_CORE_INSTRUCTION_CALL &&
+        view.return_form != MINIC_CORE_CALL_RETURN_OBJECT &&
+        instruction->value.call.result_object != MINIC_CORE_OBJECT_INVALID)
+        return false;
     view.argument_begin = begin;
     view.argument_count = count;
     if (count != 0U)
         view.arguments = function->call_arguments + begin;
+    /* All backends reject malformed Core argument storage before machine
+     * placement; no machine ISA or psABI choice occurs during this check. */
+    {
+        size_t i;
+        MinicType actual;
+        for (i = 0U; i < count; ++i)
+            if (!minic_core_call_view_argument_type(function, &view, i, &actual))
+                return false;
+    }
     *result = view;
     return true;
 }
@@ -80,4 +117,29 @@ bool minic_core_call_argument_actual_type(const MinicCoreFunction *function,
         return minic_type_is_record(*type);
     }
     return false;
+}
+
+bool minic_core_call_view_argument_type(const MinicCoreFunction *function,
+                                        const MinicCoreCallView *view,
+                                        size_t index, MinicType *actual) {
+    const MinicCoreCallArgument *arg;
+    if (function == NULL || view == NULL || actual == NULL ||
+        index >= view->argument_count || view->arguments == NULL ||
+        view->parameter_count > view->argument_count ||
+        (view->parameter_count != 0U && view->parameter_types == NULL))
+        return false;
+    arg = &view->arguments[index];
+    if (!minic_core_call_argument_actual_type(function, arg, actual))
+        return false;
+    if (index < view->parameter_count) {
+        const MinicType expected = view->parameter_types[index];
+        /* Aggregate identity is a Core invariant. Scalar promotions and
+         * physical register/stack placement remain target-owned. */
+        if (minic_type_is_record(expected) != minic_type_is_record(*actual))
+            return false;
+        if (minic_type_is_record(expected) &&
+            !minic_type_equal(expected, *actual))
+            return false;
+    }
+    return true;
 }
