@@ -34,14 +34,9 @@ bool minic_x86_64_frame_init_with_storage(const MinicC0Program *program,
     if (!minic_x86_64_plan_incoming_arguments(
             program, target, fn, &frame->incoming_arguments))
         return false;
-    if (storage != NULL) {
-        if (storage->count != fn->object_count ||
-            (storage->count != 0U && storage->objects == NULL))
-            return false;
-        frame->object_storage = *storage;
-        frame->borrows_object_storage = true;
-    } else if (!minic_core_object_storage_plan_build(
-                   program, target->data_layout, fn, &frame->object_storage))
+    if (!minic_core_object_storage_plan_acquire(
+            program, target->data_layout, fn, storage,
+            &frame->object_storage, &frame->borrows_object_storage))
         return false;
     frame->varargs_count = facts->variadic_address_count;
     frame->value_count = fn->value_count;
@@ -170,8 +165,8 @@ void minic_x86_64_frame_destroy(MinicX86Frame *frame) {
     free(frame->value_offsets);
     free(frame->object_offsets);
     minic_x86_64_argument_plan_destroy(&frame->incoming_arguments);
-    if (!frame->borrows_object_storage)
-        minic_core_object_storage_plan_destroy(&frame->object_storage);
+    minic_core_object_storage_plan_release(
+        &frame->object_storage, frame->borrows_object_storage);
     free(frame->varargs_results);
     (void)memset(frame, 0, sizeof(*frame));
 }

@@ -39,15 +39,9 @@ bool minic_riscv64_core_frame_initialize_with_storage(
     frame->borrows_object_storage = false;
     frame->object_reuse = (MinicCoreObjectReusePlan){0};
     frame->semantic_calls = facts->call_index;
-    if (storage != NULL) {
-        if (storage->count != function->object_count ||
-            (storage->count != 0U && storage->objects == NULL))
-            return false;
-        frame->object_storage = *storage;
-        frame->borrows_object_storage = true;
-    } else if (!minic_core_object_storage_plan_build(
-                   program, minic_default_data_layout(), function,
-                   &frame->object_storage))
+    if (!minic_core_object_storage_plan_acquire(
+            program, minic_default_data_layout(), function, storage,
+            &frame->object_storage, &frame->borrows_object_storage))
         return false;
     frame->has_dynamic_stack_alloc = facts->uses_dynamic_stack_alloc;
     frame->saved_frame_base_offset = 0U;
@@ -432,8 +426,8 @@ void minic_riscv64_core_frame_destroy(MinicRiscv64CoreFrame *frame) {
     frame->has_named_parameter_cursor = false;
     free(frame->object_offsets);
     frame->object_offsets = NULL;
-    if (!frame->borrows_object_storage)
-        minic_core_object_storage_plan_destroy(&frame->object_storage);
+    minic_core_object_storage_plan_release(
+        &frame->object_storage, frame->borrows_object_storage);
     free(frame->reachable_blocks);
     frame->reachable_blocks = NULL;
 }

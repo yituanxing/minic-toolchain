@@ -54,3 +54,29 @@ void minic_core_object_storage_plan_destroy(MinicCoreObjectStoragePlan *plan) {
     free(plan->objects);
     (void)memset(plan, 0, sizeof(*plan));
 }
+
+/* Shared resource ownership for five machine backends. No target-specific
+ * memory addresses, register assignment, spill policy or stack direction. */
+bool minic_core_object_storage_plan_acquire(
+    const MinicC0Program *program, const MinicDataLayout *layout,
+    const MinicCoreFunction *fn, const MinicCoreObjectStoragePlan *shared,
+    MinicCoreObjectStoragePlan *result, bool *borrowed) {
+    if (fn == NULL || result == NULL || borrowed == NULL ||
+        result->objects != NULL || result->count != 0U) return false;
+    *borrowed = false;
+    if (shared != NULL) {
+        if (shared->count != fn->object_count ||
+            (shared->count != 0U && shared->objects == NULL)) return false;
+        *result = *shared;
+        *borrowed = true;
+        return true;
+    }
+    return minic_core_object_storage_plan_build(program, layout, fn, result);
+}
+
+void minic_core_object_storage_plan_release(
+    MinicCoreObjectStoragePlan *plan, bool borrowed) {
+    if (plan == NULL) return;
+    if (borrowed) *plan = (MinicCoreObjectStoragePlan){0};
+    else minic_core_object_storage_plan_destroy(plan);
+}

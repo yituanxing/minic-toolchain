@@ -384,6 +384,17 @@ has src/target/x86_64/codegen.c 'minic_core_function_facts_verified(facts, fn)'
 has src/target/common/direct_preflight.c 'minic_core_function_facts_verified(facts, fn)'
 has src/target/riscv64/core_admission.c 'minic_core_function_facts_verified(facts, function)'
 has src/target/common/core_function_plan.c 'minic_core_function_facts_analyze('
+# Borrow-or-own Common Core object layout is one lifecycle across all five
+# physical frame plans, not repeated pointer/cleanup logic per backend.
+has src/target/common/core_object_storage.c 'bool minic_core_object_storage_plan_acquire('
+has src/target/common/core_object_storage.c 'void minic_core_object_storage_plan_release('
+for frame in src/target/x86_64/frame.c src/target/riscv32/rv32_frame.c              src/target/riscv64/frame_layout.c src/target/common/lp64_frame.c; do
+  has "$frame" 'minic_core_object_storage_plan_acquire('
+  has "$frame" 'minic_core_object_storage_plan_release('
+  lacks "$frame" 'frame->object_storage = *storage;'
+  lacks "$frame" 'plan->object_storage = *shared;'
+done
+lacks src/target/common/direct_preflight.c 'term->branch_target >= fn->block_count'
 lacks src/target/common/lp64_frame.c 'bool minic_lp64_frame_plan_objects('
 lacks src/target/riscv64/frame_layout.c 'bool minic_riscv64_core_frame_initialize_prepared('
 lacks src/target/x86_64/frame.c 'minic_x86_64_frame_init_prepared('

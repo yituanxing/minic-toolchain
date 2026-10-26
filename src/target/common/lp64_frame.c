@@ -20,14 +20,9 @@ bool minic_lp64_frame_plan_objects_with_storage(
         return false;
     /* Shared one-time Core storage plan also serves x86 and RV64.
      * The LP64 emitters keep their exact 8-byte slots and 1 MiB frame cap. */
-    if (shared != NULL) {
-        if (shared->count != fn->object_count ||
-            (shared->count != 0U && shared->objects == NULL))
-            return false;
-        plan->object_storage = *shared;
-        plan->borrows_object_storage = true;
-    } else if (!minic_core_object_storage_plan_build(
-                   program, target->data_layout, fn, &plan->object_storage))
+    if (!minic_core_object_storage_plan_acquire(
+            program, target->data_layout, fn, shared,
+            &plan->object_storage, &plan->borrows_object_storage))
         return false;
     if (fn->object_count != 0U) {
         plan->object_offsets =
@@ -97,8 +92,8 @@ void minic_lp64_frame_plan_destroy(MinicLP64FramePlan *plan) {
     if (plan == NULL) return;
     free(plan->object_offsets);
     free(plan->wide_offsets);
-    if (!plan->borrows_object_storage)
-        minic_core_object_storage_plan_destroy(&plan->object_storage);
+    minic_core_object_storage_plan_release(
+        &plan->object_storage, plan->borrows_object_storage);
     *plan = (MinicLP64FramePlan){0};
 }
 
