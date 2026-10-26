@@ -131,22 +131,12 @@ bool minic_x86_64_plan_outgoing_arguments(
     plan->is_variadic = view->is_variadic;
     for (i = 0U; i < view->argument_count; ++i) {
         MinicType type;
-        const MinicCoreCallArgument *arg = &view->arguments[i];
-        if (arg->kind == MINIC_CORE_CALL_ARGUMENT_OBJECT) {
-            MinicCoreObjectId object = arg->value.object_id;
-            if (object >= fn->object_count ||
-                (i >= view->parameter_count && !view->is_variadic))
-                goto failed;
-            type = i < view->parameter_count
-                ? view->parameter_types[i] : fn->objects[object].type;
-            if (!minic_type_equal(fn->objects[object].type, type))
-                goto failed;
-        } else if (arg->kind == MINIC_CORE_CALL_ARGUMENT_VALUE) {
-            MinicCoreValueId value = arg->value.value_id;
-            if (value >= fn->value_count) goto failed;
-            type = i < view->parameter_count
-                ? view->parameter_types[i] : fn->values[value].type;
-        } else goto failed;
+        if (!minic_core_call_view_argument_type(fn, view, i, &type))
+            goto failed;
+        /* SysV placement intentionally uses the fixed declared type.
+         * Shared Core checks already enforce aggregate identity. */
+        if (i < view->parameter_count)
+            type = view->parameter_types[i];
         if (!x86_sysv_place(program, target, type, &cursor, &plan->locations[i]))
             goto failed;
     }

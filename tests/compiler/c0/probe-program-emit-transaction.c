@@ -45,7 +45,8 @@ static bool function(FILE *out, const MinicC0Program *p,
         facts->variadic_address_count != 1U ||
         !facts->needs_saved_return_address ||
         !facts->uses_structured_inline_asm ||
-        !facts->uses_dynamic_stack_alloc)
+        !facts->uses_dynamic_stack_alloc ||
+        facts->max_call_arity != 7U)
         return false;
     ++ctx->functions;
     return fputs("F\n", out) != EOF && ctx->fail_stage != 4U;
@@ -71,8 +72,8 @@ int main(int argc, char **argv) {
     MinicFunction declaration = {0};
     MinicCoreFunction ir = {0};
     MinicCoreInstruction instructions[6] = {
-        { .kind = MINIC_CORE_INSTRUCTION_CALL },
-        { .kind = MINIC_CORE_INSTRUCTION_INDIRECT_CALL },
+        { .kind = MINIC_CORE_INSTRUCTION_CALL, .value.call = { .argument_count = 7U } },
+        { .kind = MINIC_CORE_INSTRUCTION_INDIRECT_CALL, .value.indirect_call = { .argument_count = 3U } },
         { .kind = MINIC_CORE_INSTRUCTION_DYNAMIC_STACK_ALLOC },
         { .kind = MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM },
         { .kind = MINIC_CORE_INSTRUCTION_VARIADIC_ARGUMENT_ADDRESS },

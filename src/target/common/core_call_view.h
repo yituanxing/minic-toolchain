@@ -8,6 +8,13 @@
 /* Source/Core call facts, not an ABI classifier or machine call plan.
  * A single checked resolver feeds SysV, RV64, AAPCS64 and LP64D paths.
  * No register/stack or aggregate-passing decision belongs here. */
+typedef enum MinicCoreCallReturnForm {
+    MINIC_CORE_CALL_RETURN_VOID = 0,
+    MINIC_CORE_CALL_RETURN_VALUE,
+    MINIC_CORE_CALL_RETURN_OBJECT
+} MinicCoreCallReturnForm;
+
+/* Source result storage, NOT ABI return register classification. */
 typedef struct MinicCoreCallView {
     const MinicCoreCallee *callee;             /* direct, otherwise NULL */
     const MinicCoreCallSignature *signature;   /* indirect, otherwise NULL */
@@ -19,6 +26,7 @@ typedef struct MinicCoreCallView {
     size_t argument_count;
     size_t parameter_count;
     bool is_variadic;
+    MinicCoreCallReturnForm return_form;
 } MinicCoreCallView;
 
 /* Validates signature provenance, function-pointer type, argument extent,
@@ -33,5 +41,9 @@ bool minic_core_call_view_build(const MinicCoreFunction *,
 bool minic_core_call_argument_actual_type(const MinicCoreFunction *,
                                            const MinicCoreCallArgument *,
                                            MinicType *);
+/* Common checked argument/record identity, all five backend call planners. */
+bool minic_core_call_view_argument_type(const MinicCoreFunction *,
+                                        const MinicCoreCallView *, size_t,
+                                        MinicType *);
 
 #endif

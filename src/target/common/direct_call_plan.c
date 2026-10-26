@@ -188,8 +188,7 @@ bool minic_lp64_plan_direct_call(const MinicC0Program *program,
         return false;
     count = view.argument_count;
     for (j = 0U; j < count; ++j) {
-        const MinicCoreCallArgument *arg = &view.arguments[j];
-        if (!minic_core_call_argument_actual_type(fn, arg, &types[j]))
+        if (!minic_core_call_view_argument_type(fn, &view, j, &types[j]))
             return false;
     }
     return minic_lp64_plan_types(program, target, types, count,

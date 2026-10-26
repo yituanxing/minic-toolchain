@@ -301,6 +301,15 @@ has src/target/common/direct_call_preflight.c 'minic_core_instruction_is_call(in
 has src/target/common/program_visit.h 'minic_program_visit_globals('
 has src/target/common/program_visit.h 'minic_program_visit_functions('
 has src/target/common/program_visit.h 'minic_program_visit_prepared_functions('
+# The semantic CALL resolver is the single Core identity owner. psABI
+# GP/FP/stack placement remains x86/RV32/RV64/AArch64/LoongArch-owned.
+has src/target/common/core_call_view.c 'view.return_form = MINIC_CORE_CALL_RETURN_OBJECT'
+has src/target/common/core_call_view.c 'minic_core_call_view_argument_type(function, &view, i, &actual)'
+has src/target/x86_64/call_plan.c 'minic_core_call_view_argument_type(fn, view, i, &type)'
+has src/target/riscv32/rv32_abi_plan.c 'minic_core_call_view_argument_type('
+has src/target/common/direct_call_plan.c 'minic_core_call_view_argument_type(fn, &view, j, &types[j])'
+has src/target/riscv64/call_emit.c 'call.return_form != MINIC_CORE_CALL_RETURN_OBJECT'
+has src/target/common/core_function_facts.c 'facts->max_call_arity = arity'
 has src/target/common/program_visit.h 'minic_core_function_facts_analyze('
 has src/target/x86_64/codegen.c 'minic_x86_64_frame_init_prepared('
 has src/target/riscv32/rv32_emit.c 'rv32_frame_init_prepared('
@@ -350,5 +359,13 @@ cc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror \
 cc -std=c11 -Wall -Wextra -Wpedantic -Werror -Iinclude -Isrc \
   tests/compiler/c0/probe-core-instruction-family.c -o "$work/core-family-probe"
 "$work/core-family-probe"
+
+# Verify ABI-neutral scalar/record/void/indirect CALL metadata and reject
+# corrupt source Core values without any target toolchain or QEMU.
+cc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror \
+  -Iinclude -Isrc tests/compiler/c0/probe-core-call-semantics.c \
+  src/target/common/core_call_view.c src/frontend/type.c \
+  -o "$work/core-call-probe"
+"$work/core-call-probe"
 
 printf 'MINIC_BACKEND_BOUNDARY_CHECK=PASS\n'

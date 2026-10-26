@@ -594,6 +594,8 @@ bool minic_riscv64_emit_direct_call(FILE *file,
     }
     if (return_value.kind == MINIC_RISCV64_ABI_VALUE_INDIRECT) {
         size_t result_offset;
+        if (call.return_form != MINIC_CORE_CALL_RETURN_OBJECT)
+            return false;
 
         if (instruction->value.call.result_object >= function->object_count ||
             !minic_riscv64_core_frame_object_offset(
