@@ -101,6 +101,16 @@ lacks src/target/riscv64/isa.c 'abi_type_contains_float('
 has src/target/riscv/instruction_select.h 'minic_riscv_plan_integer_arithmetic('
 has src/target/riscv64/runtime_libcall.c 'minic_riscv_plan_integer_arithmetic('
 has src/target/riscv32/rv32_integer_emit.c 'minic_riscv_plan_integer_arithmetic('
+# R10: pointer-scale semantic classification is shared; target-specific
+# call/return-address mechanics remain in their own RV32/RV64 backends.
+has src/target/riscv/instruction_select.h 'minic_riscv_plan_pointer_scale('
+has src/target/riscv32/rv32_memory_emit.c 'minic_riscv_plan_pointer_scale('
+has src/target/riscv64/core_codegen.c 'minic_riscv_plan_pointer_scale('
+has src/target/riscv64/runtime_libcall.c 'minic_riscv_plan_pointer_scale('
+lacks src/target/riscv64/runtime_libcall.h 'minic_riscv64_power_of_two('
+lacks src/target/riscv64/runtime_libcall.c 'minic_riscv64_log2_power_of_two('
+lacks src/target/riscv64/core_codegen.c 'minic_riscv64_power_of_two('
+
 has src/target/riscv32/rv32_frame.c 'frame->isa = &t->riscv_isa'
 has src/target/riscv32/rv32_emit.c 'rv32_emit_integer_instruction('
 # RV32/RV64 share machine-neutral ELF symbol semantics at the common owner.
