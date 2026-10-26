@@ -14,14 +14,6 @@ bool minic_riscv64_uses_arithmetic_libcall(const MinicRiscvIsa *isa) {
                false, 64U, &plan) &&
            plan.strategy == MINIC_RISCV_INTEGER_RUNTIME_LIBCALL;
 }
-bool minic_riscv64_power_of_two(size_t value) {
-    return value != 0U && (value & (value - 1U)) == 0U;
-}
-unsigned minic_riscv64_log2_power_of_two(size_t value) {
-    unsigned shift = 0U;
-    while (value > 1U) { value >>= 1U; ++shift; }
-    return shift;
-}
 /* This is just the historical RV64 public operation classification. The
  * native M versus compiler-rt helper decision itself is shared with RV32. */
 static bool rv64_arithmetic_kind(MinicRiscv64ArithmeticLibcall operation,
@@ -114,11 +106,14 @@ bool minic_riscv64_needs_arithmetic_libcall(const MinicRiscvIsa *isa,
         case MINIC_CORE_INSTRUCTION_INTEGER_DIVIDE:
         case MINIC_CORE_INSTRUCTION_INTEGER_REMAINDER:
             return true;
-        case MINIC_CORE_INSTRUCTION_POINTER_OFFSET:
-            if (!minic_riscv64_power_of_two(
-                    instruction->value.pointer_offset.element_size))
+        case MINIC_CORE_INSTRUCTION_POINTER_OFFSET: {
+            MinicRiscvPointerScalePlan scale;
+            if (!minic_riscv_plan_pointer_scale(
+                    instruction->value.pointer_offset.element_size, &scale) ||
+                scale.kind == MINIC_RISCV_POINTER_SCALE_MULTIPLY)
                 return true;
             break;
+        }
         default: break;
         }
     }

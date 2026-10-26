@@ -27,6 +27,4 @@ bool minic_riscv64_uses_arithmetic_libcall(const MinicRiscvIsa *isa);
 bool minic_riscv64_emit_arithmetic_libcall(
     FILE *file, const MinicRiscvIsa *isa, MinicRiscv64ArithmeticLibcall operation,
     const char *destination, const char *left, const char *right);
-bool minic_riscv64_power_of_two(size_t value);
-unsigned minic_riscv64_log2_power_of_two(size_t value);
 #endif
