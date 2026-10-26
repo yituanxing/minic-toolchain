@@ -12,8 +12,6 @@
 #include "target/riscv64/frame_access.h"
 #include "target/riscv64/scalar_emit.h"
 #include "target/riscv64/frame_requirements.h"
-#include "target/riscv64/spill_layout.h"
-#include "target/riscv64/object_liveness.h"
 #include "target/riscv64/legalize.h"
 #include "target/riscv64/runtime_libcall.h"
 #include "target/riscv/instruction_select.h"
@@ -281,9 +279,9 @@ static bool emit_instruction(FILE *file,
     case MINIC_CORE_INSTRUCTION_COMPILER_BARRIER:
         return true;
     case MINIC_CORE_INSTRUCTION_CALL:
-        return minic_riscv64_emit_direct_call(file, program, function, frame, instruction);
+        return minic_riscv64_emit_direct_call(file, program, function, frame, instruction, instruction_id);
     case MINIC_CORE_INSTRUCTION_INDIRECT_CALL:
-        return minic_riscv64_emit_indirect_call(file, program, function, frame, instruction);
+        return minic_riscv64_emit_indirect_call(file, program, function, frame, instruction, instruction_id);
     case MINIC_CORE_INSTRUCTION_FIELD_ADDRESS:
         return minic_riscv64_emit_memory_instruction(file, program, function, frame, instruction);
     default:
@@ -498,7 +496,7 @@ static bool emit_core_function_with_symbol(FILE *file,
     if (!minic_riscv64_core_function_admit_profile(
             program, function, &abi_plan,
             isa != NULL && isa->strict_isa &&
-            isa->abi == MINIC_RISCV_ABI_LP64)) {
+            isa->abi == MINIC_RISCV_ABI_LP64, facts, storage)) {
         minic_riscv64_function_abi_plan_destroy(&abi_plan);
         return false;
     }
@@ -762,16 +760,6 @@ bool minic_riscv64_emit_core_function_for_program_with_symbol_with_storage(
            emit_core_function_with_symbol(file, program, function, symbol,
                                           position_independent, isa, diagnostic,
                                           facts, storage);
-}
-
-bool minic_riscv64_emit_core_function_for_program_with_symbol_prepared(
-    FILE *file, const MinicC0Program *program, const MinicCoreFunction *function,
-    const MinicRiscv64FunctionSymbol *symbol, const MinicCoreFunctionFacts *facts,
-    bool position_independent, const MinicRiscvIsa *isa,
-    MinicDiagnostic *diagnostic) {
-    return minic_riscv64_emit_core_function_for_program_with_symbol_with_storage(
-        file, program, function, symbol, facts, NULL,
-        position_independent, isa, diagnostic);
 }
 
 bool minic_riscv64_emit_core_function_for_program_with_symbol(

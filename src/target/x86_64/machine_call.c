@@ -163,20 +163,30 @@ static bool x86_emit_call_arguments_planned(
            fprintf(out, "  movb $%zu, %%al\n", plan->end.fp_used) >= 0;
 }
 
+/* Machine CALL emission consumes the one SysV plan built for its
+ * Common Core CALL identity; external standalone emission still works. */
 static bool x86_emit_call_arguments(
     FILE *out, const MinicC0Program *program,
     const MinicTargetInfo *target, const MinicCoreFunction *fn,
     const MinicX86Frame *frame, const MinicCoreCallView *call,
+    const MinicX86ArgumentPlan *cached_plan,
     size_t *allocated_stack_bytes) {
-    MinicX86ArgumentPlan plan = {0};
+    MinicX86ArgumentPlan fallback = {0};
+    const MinicX86ArgumentPlan *plan;
     bool ok;
-    if (allocated_stack_bytes == NULL || call == NULL ||
-        !minic_x86_64_plan_outgoing_arguments(
-            program, target, fn, call, &plan))
+    if (allocated_stack_bytes == NULL || call == NULL || frame == NULL)
         return false;
-    ok = x86_emit_call_arguments_planned(out, fn, frame, call, &plan);
-    if (ok) *allocated_stack_bytes = plan.stack_bytes;
-    minic_x86_64_argument_plan_destroy(&plan);
+    plan = cached_plan;
+    if (frame->semantic_calls != NULL && plan == NULL) return false;
+    if (plan == NULL) {
+        if (!minic_x86_64_plan_outgoing_arguments(
+                program, target, fn, call, &fallback))
+            return false;
+        plan = &fallback;
+    }
+    ok = x86_emit_call_arguments_planned(out, fn, frame, call, plan);
+    if (ok) *allocated_stack_bytes = plan->stack_bytes;
+    minic_x86_64_argument_plan_destroy(&fallback);
     return ok;
 }
 
@@ -403,20 +413,52 @@ static bool x86_emit_x87_core_helper(FILE *out, const MinicCoreFunction *fn,
 }
 
 
+/* The semantic CALL ordinal indexes the identical, verified ABI snapshot.
+ * Production resolves one sparse ID per call, not two binary searches.
+ * Standalone callers keep the existing checked view + ABI fallback. */
+static bool x86_resolve_call_view(
+    const MinicCoreFunction *fn, const MinicX86Frame *frame,
+    const MinicCoreInstruction *ins, size_t instruction_id,
+    MinicCoreCallView *view, const MinicX86ArgumentPlan **planned) {
+    size_t ordinal;
+    const MinicCoreCallView *semantic;
+    if (fn == NULL || frame == NULL || ins == NULL ||
+        view == NULL || planned == NULL)
+        return false;
+    *planned = NULL;
+    if (frame->semantic_calls == NULL)
+        return minic_core_call_view_build(fn, ins, view);
+    semantic = minic_core_call_index_find(
+        frame->semantic_calls, instruction_id, &ordinal);
+    if (semantic == NULL ||
+        frame->outgoing_call_plans.count != frame->semantic_calls->count ||
+        ordinal >= frame->outgoing_call_plans.count ||
+        frame->outgoing_call_plans.sites == NULL ||
+        frame->outgoing_call_plans.sites[ordinal].instruction_id != instruction_id)
+        return false;
+    *view = *semantic;
+    *planned = &frame->outgoing_call_plans.sites[ordinal].plan;
+    return true;
+}
+
 bool minic_x86_64_emit_call_instruction(
     FILE *out, const MinicC0Program *program,
     const MinicTargetInfo *target, const MinicCoreFunction *fn,
-    const MinicX86Frame *frame, const MinicCoreInstruction *ins) {
+    const MinicX86Frame *frame, const MinicCoreInstruction *ins,
+    size_t instruction_id) {
     if (out == NULL || program == NULL || target == NULL ||
         fn == NULL || frame == NULL || ins == NULL) return false;
     switch (ins->kind) {
     case MINIC_CORE_INSTRUCTION_CALL: {
         MinicCoreCallView call;
+        const MinicX86ArgumentPlan *cached_plan;
         const MinicCoreCallee *callee;
         size_t begin, count;
         size_t outgoing_bytes = 0U;
-        if (!minic_core_call_view_build(fn, ins, &call) ||
-            call.callee == NULL)
+        if (!x86_resolve_call_view(fn, frame, ins, instruction_id,
+                                   &call, &cached_plan))
+            return false;
+        if (call.callee == NULL)
             return false;
         callee = call.callee;
         begin = call.argument_begin;
@@ -453,7 +495,7 @@ bool minic_x86_64_emit_call_instruction(
             }
         }
         if (!x86_emit_call_arguments(out, program, target, fn, frame,
-                                     &call, &outgoing_bytes)) {
+                                     &call, cached_plan, &outgoing_bytes)) {
             if (getenv("MINIC_X86_CALL_TRACE") != NULL) {
                 size_t j;
                 (void)fprintf(stderr,
@@ -500,15 +542,18 @@ bool minic_x86_64_emit_call_instruction(
     }
     case MINIC_CORE_INSTRUCTION_INDIRECT_CALL: {
         MinicCoreCallView call;
+        const MinicX86ArgumentPlan *cached_plan;
         const MinicCoreValueId callee = ins->value.indirect_call.callee;
         const MinicCoreCallSignature *signature;
         size_t outgoing_bytes = 0U;
-        if (!minic_core_call_view_build(fn, ins, &call) ||
-            call.signature == NULL)
+        if (!x86_resolve_call_view(fn, frame, ins, instruction_id,
+                                   &call, &cached_plan))
+            return false;
+        if (call.signature == NULL)
             return false;
         signature = call.signature;
         if (!x86_emit_call_arguments(out, program, target, fn, frame,
-                                     &call, &outgoing_bytes) ||
+                                     &call, cached_plan, &outgoing_bytes) ||
             !x86_value_load(out, frame, callee, "%r11") ||
             fprintf(out, "  call *%%r11\n") < 0 ||
             (outgoing_bytes != 0U &&

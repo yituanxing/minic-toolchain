@@ -44,6 +44,87 @@ algorithm** (`direct_function_plan.c`), an instruction-family classifier
 machine instruction emitter. RV64 has its own ABI, object-lifetime model and
 inline-assembly behavior, so do not force it into an AAPCS64/LP64D-only API.
 
+### Unified SSA spill-slot geometry (this refactor)
+
+All five targets retain the same `MinicCoreValueId` semantic identities. Their
+machine frames now use two **Common-owned, policy-qualified** SSA placement
+engines, while targets still own the stack anchor, frame direction, save areas,
+varargs, strict ISA emission and calling convention:
+
+- `common/core_value_slots.{h,c}`: a shared, overflow-checked function-value
+  slot planner used by SysV x86-64 and both Direct LP64 emitters. SysV's
+  `LINEAR` policy preserves cumulative 8-byte/16-byte **end offsets** below
+  `rbp`. AAPCS64/LoongArch64's `WIDE_TAIL` policy preserves the fixed
+  8-byte-per-value Core prefix and a separate 16-byte **start-offset** sidecar
+  for int128 and long-double values. The ABI physical address interpretation
+  never enters Common.
+- `common/core_spill_layout.{h,c}`: RV32I and RV64 consume one Core function-wide spill pass (single visit per block), replacing the obsolete sequential peak/assignment sweeps. Both retain the already-proven
+  block-local last-use reuse strategy, with 4-byte and 8-byte units respectively.
+  This separate algorithm is a machine-frame optimization, not a duplicated
+  Core type checker.
+- `common/core_frame_layout.h`: a checked align/reserve primitive shared by
+  all stack planners. The Direct LP64 wide-tail alignment also uses it instead
+  of an extra hard-coded integer round-up.
+
+The frame bounds and generated per-value offsets are unchanged for existing
+backends. The new `probe-core-value-slots.c` checks scalar/wide layout,
+non-wide sentinel behavior, empty functions and transactional overflow failure.
+Runtime, psABI and strict RV32I/RV64I checks remain separate gates.
+
+### Canonical Core semantic families and full PR-head x86 certification
+
+A single exhaustive Core opcode-to-family table now supplies the semantic
+classification of all 68 operations to x86-64, RV32, RV64 and the Common
+Direct LP64 planner (AArch64/LoongArch64). It replaces target-local opcode
+category copies; Core verification stays solely in Common FunctionPlan.
+Machine support, ISA feature selection, register assignment, atomics,
+variadic ABI and ELF emitter policy remain exclusively target-owned.
+
+An exhaustive -Wswitch-enum -Werror compile and native probe reject
+uncategorized opcodes. The declaration-only traversal and the prepared
+definition traversal now use one visibility/reachability predicate.
+
+Tagging the PR [minic-full] runs fresh full x86 original BusyBox 593/593
+and six independent real-software acceptance jobs. This does not qualify
+RV32 original same-Image QEMU P1, RV64 P1 or fixed-point Stage3/Stage4.
+### Exact-head acceptance infrastructure
+
+The full x86 original source and seven-shard original RV32 kernel CI is
+PR-head gated by [minic-full], and checks out the real commit rather than
+GitHub's synthetic merge commit. RV32 producers select Ubuntu's signed public
+archive to avoid slow Azure apt mirrors. Four-backend paired A/B is also
+PR-head gated and compares frozen original tinyAES/cJSON sources against the
+pre-refactor compiler; the runner verifies the candidate checkout SHA. Only
+completed runs prove acceptance.
+
+### Retiring the per-object scan fallback
+
+The RV32/RV64 frame planner now invokes the Common interval index for every
+nonempty Core function, not only those above the old 8-object/100-instruction
+cutoff. The old repeated per-object and whole-function address-use fallback
+is removed. If optional index allocation fails, objects retain private stack
+storage; stack-slot reuse is never guessed and compilation can continue.
+The existing first-real-access-is-a-write check remains mandatory before
+cross-block sharing.
+
+The common RV32/RV64 SSA spill planner also caches each value's immutable
+DataLayout slot size across visits, while keeping the established last-use
+release policy, 4B/8B units, stack bounds and target frame semantics.
+
+### Single-pass Direct LP64 CALL admission and ABI planning
+
+AAPCS64 and LoongArch64 formerly traversed the same verified Common CALL
+index twice: once for return/argument preflight, again for ABI placement,
+re-resolving every Core CALL argument type. This refactor retires the separate
+`direct_call_preflight.{c,h}` owner and the redundant per-CALL adapter
+`minic_lp64_plan_direct_call`. The remaining Direct LP64 call planner now
+validates each semantic CALL and immediately classifies the same resolved
+argument-type vector under the chosen target psABI. Machine emission is
+unchanged. Its checked output preserves the exact rejected Core instruction
+and the old `call_preflight` versus `call_planning` failure stages. Standalone
+callers still build a checked Common CallIndex and production borrows its
+single prepared index. No second CALL index traversal is performed.
+
 ### Computations done once
 
 - SysV incoming arguments and outgoing calls receive a prepared set of

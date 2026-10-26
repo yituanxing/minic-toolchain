@@ -23,6 +23,10 @@ typedef struct MinicX86Frame {
     MinicCoreObjectStoragePlan object_storage;
     bool borrows_object_storage;
     MinicX86ArgumentPlan incoming_arguments;
+    MinicX86OutgoingCallPlans outgoing_call_plans;
+    /* Borrowed for the duration of this function emission. SysV machine
+     * location planning remains x86-owned and consumes semantic CALL views. */
+    const MinicCoreCallIndex *semantic_calls;
     size_t object_count;
     size_t frame_size;
     /* Wide scalar operations use RDX as a scratch register. Snapshot the
@@ -50,12 +54,6 @@ bool minic_x86_64_frame_init_with_storage(
     const MinicC0Program *, const MinicTargetInfo *, const MinicCoreFunction *,
     const MinicCoreFunctionFacts *, const MinicCoreObjectStoragePlan *,
     MinicX86Frame *);
-bool minic_x86_64_frame_init_prepared(const MinicC0Program *, const MinicTargetInfo *,
-    const MinicCoreFunction *, const MinicCoreFunctionFacts *, MinicX86Frame *);
-bool minic_x86_64_frame_init(const MinicC0Program *program,
-                             const MinicTargetInfo *target,
-                             const MinicCoreFunction *function,
-                             MinicX86Frame *frame);
 void minic_x86_64_frame_destroy(MinicX86Frame *frame);
 
 #endif

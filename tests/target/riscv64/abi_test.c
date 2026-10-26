@@ -1,5 +1,6 @@
 #include "frontend/ast.h"
 #include "target/riscv64/abi.h"
+#include "target/riscv64/function_abi_plan.h"
 
 #include <stdio.h>
 
@@ -209,9 +210,63 @@ static bool test_unsupported_argument_is_transactional(void) {
     return true;
 }
 
+/* Real function-plan admission: the owner must reject unsupported
+ * placements and roll back its allocation rather than relying on the
+ * downstream RV64 opcode verifier to discover them. */
+static bool test_function_abi_plan_qualification(void) {
+    MinicC0Program program;
+    MinicCoreFunction fn = {0};
+    MinicRiscv64FunctionAbiPlan plan = {0};
+    MinicType params[9];
+    MinicType long_fields[3];
+    MinicType record24;
+    size_t i;
+
+    minic_c0_program_initialize(&program);
+    fn.return_type = minic_type_void();
+    fn.parameter_types = params;
+    fn.parameter_count = 8U;
+    for (i = 0U; i < 9U; ++i) params[i] = minic_type_double();
+    CHECK(minic_riscv64_function_abi_plan_build_profile(&program, &fn, &plan, false));
+    CHECK(plan.prepared && plan.parameter_location_count == 8U);
+    CHECK(plan.parameter_locations[7].floating_register_begin == 7U);
+    CHECK(plan.parameter_locations[7].floating_register_count == 1U);
+    minic_riscv64_function_abi_plan_destroy(&plan);
+
+    /* LP64D has no ninth fixed floating argument placement in this
+     * qualified compiler profile. A failure must leave no stale plan. */
+    fn.parameter_count = 9U;
+    CHECK(!minic_riscv64_function_abi_plan_build_profile(&program, &fn, &plan, false));
+    CHECK(!plan.prepared && plan.parameter_locations == NULL);
+    CHECK(plan.parameter_location_count == 0U);
+
+    /* The same value is legal under soft-float LP64 as a GPR argument. */
+    fn.parameter_count = 1U;
+    CHECK(minic_riscv64_function_abi_plan_build_profile(&program, &fn, &plan, true));
+    CHECK(plan.named_parameter_cursor.lp64_soft_float);
+    CHECK(plan.parameter_locations[0].floating_register_count == 0U);
+    CHECK(plan.parameter_locations[0].integer_register_count == 1U);
+    minic_riscv64_function_abi_plan_destroy(&plan);
+
+    long_fields[0] = minic_type_long();
+    long_fields[1] = minic_type_long();
+    long_fields[2] = minic_type_long();
+    CHECK(add_record(&program, long_fields, 3U, &record24));
+    fn.return_type = record24;
+    fn.parameter_count = 1U;
+    params[0] = minic_type_long();
+    CHECK(minic_riscv64_function_abi_plan_build_profile(&program, &fn, &plan, false));
+    CHECK(plan.return_value.kind == MINIC_RISCV64_ABI_VALUE_INDIRECT);
+    CHECK(plan.parameter_locations[0].integer_register_begin == 1U);
+    minic_riscv64_function_abi_plan_destroy(&plan);
+    minic_c0_program_destroy(&program);
+    return true;
+}
+
 int main(void) {
     if (!test_value_classification() || !test_return_argument_cursor() ||
-        !test_argument_placement() || !test_unsupported_argument_is_transactional()) {
+        !test_argument_placement() || !test_unsupported_argument_is_transactional() ||
+        !test_function_abi_plan_qualification()) {
         return 1;
     }
     (void)puts("PASS rv64 abi classification+return-cursor+placement canonical owner");

@@ -540,6 +540,40 @@ bool minic_data_layout_global_object(const MinicDataLayout *layout,
     return true;
 }
 
+/* Translation-unit semantic layout admission. The old RV64-only AST walker
+ * was an extra copy of these canonical DataLayout queries, and did not
+ * contribute any slots to emitted Core functions. Apply identical checks
+ * uniformly before target emission, without modifying AST/Core objects. */
+MinicDataLayoutProgramCheck minic_data_layout_validate_program(
+    const MinicDataLayout *layout, const MinicC0Program *program) {
+    size_t record_index, object_index;
+    if (layout == NULL || program == NULL ||
+        (program->record_count != 0U && program->records == NULL) ||
+        (program->global_object_count != 0U && program->global_objects == NULL))
+        return MINIC_DATA_LAYOUT_PROGRAM_INVALID_INPUT;
+    for (record_index = 0U; record_index < program->record_count; ++record_index) {
+        const MinicRecord *record = &program->records[record_index];
+        size_t bytes, alignment, field_index;
+        if (!record->is_complete) continue;
+        if (!minic_data_layout_type(layout, program,
+                minic_type_record(record_index), &bytes, &alignment))
+            return MINIC_DATA_LAYOUT_PROGRAM_INVALID_RECORD;
+        for (field_index = 0U; field_index < record->field_count; ++field_index) {
+            size_t offset, bit_offset;
+            if (!minic_data_layout_record_field_layout(
+                    layout, program, record, field_index, &offset, &bit_offset))
+                return MINIC_DATA_LAYOUT_PROGRAM_INVALID_RECORD;
+        }
+    }
+    for (object_index = 0U; object_index < program->global_object_count; ++object_index) {
+        size_t bytes, alignment;
+        if (!minic_data_layout_global_object(layout, program,
+                &program->global_objects[object_index], &bytes, &alignment))
+            return MINIC_DATA_LAYOUT_PROGRAM_INVALID_GLOBAL;
+    }
+    return MINIC_DATA_LAYOUT_PROGRAM_OK;
+}
+
 bool minic_data_layout_record_field_alignment(const MinicDataLayout *layout,
                                               const MinicC0Program *program,
                                               const MinicRecord *record,

@@ -68,7 +68,7 @@ bool minic_multi_direct_parameter_object_location(
 
 /* A compiler barrier is an ordering constraint in the Core stream, not a
  * machine fence and not a produced SSA value. */
-bool minic_multi_direct_compiler_barrier_shape(const MinicCoreInstruction *ins) {
+static bool minic_multi_direct_compiler_barrier_shape(const MinicCoreInstruction *ins) {
     return ins != NULL &&
            ins->kind == MINIC_CORE_INSTRUCTION_COMPILER_BARRIER &&
            ins->result == MINIC_CORE_VALUE_INVALID &&
@@ -97,7 +97,7 @@ bool minic_multi_direct_wide_store_shape(
 /* One machine-independent result-shape gate for direct LP64 codegen.
  * AArch64 admits binary64 VA_ARG; LoongArch64 does not yet, so callers
  * select that documented ISA capability explicitly. */
-bool minic_multi_direct_result_slot_offset(
+static bool minic_multi_direct_result_slot_offset(
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
     bool allow_variadic_double_result, size_t *offset) {
     if (fn == NULL || ins == NULL || offset == NULL)
@@ -166,75 +166,11 @@ bool minic_multi_direct_result_slot_offset(
  * minic_multi_direct_floating_shape gate, never by opcode alone. */
 /* Complete Core integer, pointer-comparison and bit-operation machine
  * family shared by AAPCS64 and LP64D; instruction encodings remain ISA-owned. */
-/* One checked overflow operator/value/pointee contract for GNU overflow
- * builtins. These are shared Core semantics rather than native flags:
- * AArch64 uses NZCV, LoongArch64 constructs carry/overflow with integer ops. */
-bool minic_multi_direct_integer_overflow_shape(
-    const MinicC0Program *program, const MinicTargetInfo *target,
-    const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
-    size_t *width, bool *is_signed) {
-    MinicCoreValueId left, right, address;
-    MinicType value_type;
-    int op;
-    if (program == NULL || target == NULL || fn == NULL || ins == NULL ||
-        width == NULL || is_signed == NULL ||
-        ins->kind != MINIC_CORE_INSTRUCTION_INTEGER_OVERFLOW)
-        return false;
-    left = ins->value.integer_overflow.left;
-    right = ins->value.integer_overflow.right;
-    address = ins->value.integer_overflow.result_address;
-    op = ins->value.integer_overflow.operator_kind;
-    return left < fn->value_count && right < fn->value_count &&
-           address < fn->value_count &&
-           (op == MINIC_CORE_INTEGER_OVERFLOW_ADD ||
-            op == MINIC_CORE_INTEGER_OVERFLOW_SUBTRACT ||
-            op == MINIC_CORE_INTEGER_OVERFLOW_MULTIPLY) &&
-           minic_type_pointee(fn->values[address].type, &value_type) &&
-           minic_type_is_integer(value_type) &&
-           !minic_type_is_bool_integer(value_type) &&
-           !minic_type_is_const(value_type) &&
-           !minic_type_is_volatile(value_type) &&
-           minic_type_equal(value_type, fn->values[left].type) &&
-           minic_type_equal(value_type, fn->values[right].type) &&
-           minic_lp64_scalar_integer_width(
-               program, target, value_type, width, is_signed) &&
-           (*width == 4U || *width == 8U);
-}
-
-/* CLZ/CTZ are defined here for unsigned 8/16/32/64 Core operands.
- * The ISA owns masking or bitfield extraction and exact machine opcodes. */
-bool minic_multi_direct_integer_bitscan_shape(
-    const MinicC0Program *program, const MinicTargetInfo *target,
-    const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
-    unsigned int *width) {
-    MinicCoreValueId operand;
-    if (program == NULL || target == NULL || fn == NULL ||
-        ins == NULL || width == NULL ||
-        (ins->kind != MINIC_CORE_INSTRUCTION_INTEGER_CLZ &&
-         ins->kind != MINIC_CORE_INSTRUCTION_INTEGER_CTZ))
-        return false;
-    operand = ins->value.operand;
-    return operand < fn->value_count &&
-           minic_type_is_integer(ins->type) &&
-           minic_type_is_unsigned_integer(fn->values[operand].type) &&
-           minic_target_info_integer_width(
-               target, program, fn->values[operand].type, width) &&
-           (*width == 8U || *width == 16U ||
-            *width == 32U || *width == 64U);
-}
-
 /* The two ISA implementations consume the same Core call/parameter ABI
  * transfer family. Planning remains target-ABI-specific at the call site. */
 /* Common Core memory-effect family: ISA byte moves remain independent.
  * The relaxed-only atomic memory-order contract is checked separately. */
-bool minic_multi_direct_memory_machine_kind(MinicCoreInstructionKind kind) {
-    return kind == MINIC_CORE_INSTRUCTION_LOAD ||
-           kind == MINIC_CORE_INSTRUCTION_ATOMIC_LOAD ||
-           kind == MINIC_CORE_INSTRUCTION_STORE ||
-           kind == MINIC_CORE_INSTRUCTION_ATOMIC_STORE;
-}
-
-bool minic_multi_direct_abi_transfer_kind(MinicCoreInstructionKind kind) {
+static bool minic_multi_direct_abi_transfer_kind(MinicCoreInstructionKind kind) {
     return minic_core_instruction_is_call(kind) ||
            kind == MINIC_CORE_INSTRUCTION_PARAMETER;
 }
@@ -263,17 +199,13 @@ bool minic_multi_direct_scalar_parameter_location(
     return true;
 }
 
-bool minic_multi_direct_integer_machine_kind(MinicCoreInstructionKind kind) {
+static bool minic_multi_direct_integer_machine_kind(MinicCoreInstructionKind kind) {
     /* Constants and conversions use distinct ABI/residual lowering in
      * Direct LP64, unlike RV32/RV64 which use their scalar emitter. */
     return kind == MINIC_CORE_INSTRUCTION_INTEGER_OVERFLOW ||
            (kind != MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT &&
             kind != MINIC_CORE_INSTRUCTION_INTEGER_CONVERSION &&
             minic_core_instruction_is_integer_scalar(kind));
-}
-
-bool minic_multi_direct_fp_instruction_kind(MinicCoreInstructionKind kind) {
-    return minic_core_instruction_is_floating_scalar(kind);
 }
 
 bool minic_multi_direct_floating_shape(
@@ -723,7 +655,8 @@ bool minic_multi_direct_machine_instruction_shape(
         shape->family = MINIC_DIRECT_MACHINE_PARAMETER_OBJECT;
         return true;
     }
-    if (minic_multi_direct_memory_machine_kind(ins->kind)) {
+    if (minic_core_instruction_semantic_family(ins->kind) ==
+        MINIC_CORE_FAMILY_MEMORY) {
         shape->family = MINIC_DIRECT_MACHINE_MEMORY;
         return (ins->kind != MINIC_CORE_INSTRUCTION_LOAD &&
                 ins->kind != MINIC_CORE_INSTRUCTION_ATOMIC_LOAD) ||
@@ -734,7 +667,8 @@ bool minic_multi_direct_machine_instruction_shape(
     if (!minic_multi_direct_result_slot_offset(
             fn, ins, allow_variadic_double_result, &shape->result_offset))
         return false;
-    if (minic_multi_direct_fp_instruction_kind(ins->kind))
+    if (minic_core_instruction_semantic_family(ins->kind) ==
+        MINIC_CORE_FAMILY_FLOATING_SCALAR)
         shape->family = MINIC_DIRECT_MACHINE_FP;
     else if (minic_multi_direct_integer_machine_kind(ins->kind))
         shape->family = MINIC_DIRECT_MACHINE_INTEGER;

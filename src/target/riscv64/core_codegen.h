@@ -31,10 +31,6 @@ bool minic_riscv64_emit_core_function_for_program_with_symbol_with_storage(
     FILE *, const MinicC0Program *, const MinicCoreFunction *,
     const MinicRiscv64FunctionSymbol *, const MinicCoreFunctionFacts *,
     const MinicCoreObjectStoragePlan *, bool, const MinicRiscvIsa *, MinicDiagnostic *);
-bool minic_riscv64_emit_core_function_for_program_with_symbol_prepared(
-    FILE *, const MinicC0Program *, const MinicCoreFunction *,
-    const MinicRiscv64FunctionSymbol *, const MinicCoreFunctionFacts *,
-    bool, const MinicRiscvIsa *, MinicDiagnostic *);
 bool minic_riscv64_emit_core_function_for_program_with_symbol(
     FILE *file,
     const MinicC0Program *program,

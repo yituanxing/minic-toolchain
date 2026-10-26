@@ -46,4 +46,34 @@ bool minic_core_call_view_argument_type(const MinicCoreFunction *,
                                         const MinicCoreCallView *, size_t,
                                         MinicType *);
 
+/* Once-per-definition, machine-independent CALL semantic index. Only real
+ * CALL IDs are stored, in ascending order; no per-instruction pointer table.
+ * Each view borrows immutable Core IR. Target ABI placement remains separate. */
+typedef struct MinicCoreCallSite {
+    size_t instruction_id;
+    MinicCoreCallView view;
+} MinicCoreCallSite;
+typedef struct MinicCoreCallIndex {
+    MinicCoreCallSite *sites;
+    size_t count;
+} MinicCoreCallIndex;
+bool minic_core_call_index_build(const MinicCoreFunction *, size_t expected_calls,
+                                 MinicCoreCallIndex *);
+/* One semantic lookup yields the stable ordinal of every target ABI cache. */
+const MinicCoreCallView *minic_core_call_index_find(
+    const MinicCoreCallIndex *, size_t instruction_id, size_t *ordinal);
+void minic_core_call_index_destroy(MinicCoreCallIndex *);
+
+/* A single owner for production's borrowed semantic CALL index and the
+ * identical standalone fallback index. ABI caches never rescan Core or
+ * implement an independent sparse CALL lookup. */
+typedef struct MinicCoreCallIndexHandle {
+    MinicCoreCallIndex owned;
+    const MinicCoreCallIndex *index;
+} MinicCoreCallIndexHandle;
+bool minic_core_call_index_handle_prepare(
+    const MinicCoreFunction *, const MinicCoreCallIndex *,
+    MinicCoreCallIndexHandle *);
+void minic_core_call_index_handle_destroy(MinicCoreCallIndexHandle *);
+
 #endif

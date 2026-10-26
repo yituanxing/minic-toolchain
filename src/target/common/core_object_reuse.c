@@ -60,13 +60,9 @@ bool minic_core_object_reuse_plan_build(
                 return false;
             }
 
-            /* Building the index costs O(I); avoid it on small Core functions
-             * where a few legacy scans are usually cheaper.  Never fail
-             * compilation merely because the optional index is unavailable. */
-            if (function->object_count >= 8U &&
-                function->instruction_count >= 100U) {
-                minic_core_object_intervals_index(function, &plan->analysis);
-            }
+            /* One checked pass at every function size; failed optional
+             * indexing means private storage, never duplicate scans. */
+            minic_core_object_intervals_index(function, &plan->analysis);
             for (object_index = 0U; object_index < function->object_count; ++object_index) {
                 plan->slots[object_index] = SIZE_MAX;
                 if (object_index > UINT32_MAX ||

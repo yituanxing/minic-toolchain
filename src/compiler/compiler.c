@@ -12,6 +12,7 @@
 #include "frontend/function_body.h"
 #include "frontend/parser.h"
 #include "target/backend.h"
+#include "target/data_layout.h"
 #include "target/target_info.h"
 
 #include <errno.h>
@@ -102,10 +103,9 @@ static bool minic_validate_core_functions(const char *input_path,
             continue;
         }
         status = set->statuses[function_index];
-        if (status == MINIC_CORE_LOWER_OK &&
-            !minic_core_function_verify(&set->functions[function_index])) {
-            status = MINIC_CORE_LOWER_ERROR;
-        }
+        /* CoreLower already verified this successful function before
+         * publishing LOWER_OK. The Common FunctionPlan verifies again for
+         * standalone/output callers. Do not redundantly rescan it here. */
         if (status == MINIC_CORE_LOWER_OK) {
             continue;
         }
@@ -358,11 +358,20 @@ int minic_compile_preprocessed_file_for_target(const char *input_path,
                                     success ? "end-ok" : "end-fail",
                                     program.function_count);
     }
-    if (success && backend->prepare_program != NULL) {
+    if (success) {
+        MinicDataLayoutProgramCheck layout_status;
         minic_bootstrap_trace_stage(input_path, "layout", "begin", program.function_count);
-        success = backend->prepare_program(input_path, &program, target_info, diagnostic);
-        minic_bootstrap_trace_stage(input_path,
-                                    "layout",
+        layout_status = minic_data_layout_validate_program(target_info->data_layout, &program);
+        if (layout_status != MINIC_DATA_LAYOUT_PROGRAM_OK) {
+            const char *reason = layout_status == MINIC_DATA_LAYOUT_PROGRAM_INVALID_RECORD
+                ? "record size is invalid for the selected target"
+                : layout_status == MINIC_DATA_LAYOUT_PROGRAM_INVALID_GLOBAL
+                ? "global object size is invalid for the selected target"
+                : "cannot validate target data layout";
+            minic_set_diagnostic(diagnostic, input_path, 1U, 1U, reason);
+            success = false;
+        }
+        minic_bootstrap_trace_stage(input_path, "layout",
                                     success ? "end-ok" : "end-fail",
                                     program.function_count);
     }

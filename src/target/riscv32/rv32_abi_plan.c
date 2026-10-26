@@ -1,5 +1,6 @@
 #include "target/riscv32/rv32_abi_plan.h"
 #include "target/riscv32/rv32_internal.h"
+#include "target/common/core_instruction_family.h"
 #include "target/data_layout.h"
 #include <stdint.h>
 #include <stdlib.h>
@@ -29,6 +30,7 @@ void rv32_function_abi_plan_destroy(Rv32FunctionAbiPlan *plan) {
             free(plan->calls[i].arguments);
     free(plan->calls);
     free(plan->parameters);
+    minic_core_call_index_handle_destroy(&plan->semantic_calls);
     (void)memset(plan, 0, sizeof(*plan));
 }
 
@@ -67,15 +69,21 @@ static bool rv32_plan_incoming(const MinicC0Program *program,
     MinicRiscv32AbiCursor cursor = {0U, 0U, false};
     size_t i;
     Rv32AbiWordLocation result_shape = {0};
-    if (minic_type_is_record(function->return_type)) {
+    /* The ILP32 ABI planner is the sole return-type admission owner.
+     * Scalar and record definitions share the same checked shape used
+     * for incoming parameters and outgoing calls. Machine emission does
+     * not walk the signature again. */
+    if (!minic_type_is_void(function->return_type)) {
         if (!rv32_plan_shape(program, target, function,
                              function->return_type, &result_shape))
-            return false;
-        plan->record_return_size = result_shape.record_size;
-        plan->indirect_return = result_shape.indirect_record;
-        /* Hidden sret pointer occupies a0 before all named parameters. */
-        if (plan->indirect_return)
-            cursor.register_words = 1U;
+            return rv32_abi_reject("incoming_return", 0U, function->return_type);
+        if (minic_type_is_record(function->return_type)) {
+            plan->record_return_size = result_shape.record_size;
+            plan->indirect_return = result_shape.indirect_record;
+            /* Hidden sret pointer occupies a0 before all named parameters. */
+            if (plan->indirect_return)
+                cursor.register_words = 1U;
+        }
     }
     if (function->parameter_count != 0U &&
         function->parameter_types == NULL) return false;
@@ -106,12 +114,14 @@ static bool rv32_plan_call(const MinicC0Program *program,
                            const MinicTargetInfo *target,
                            const MinicCoreFunction *function,
                            const MinicCoreInstruction *instruction,
+                           const MinicCoreCallView *semantic_view,
                            Rv32CallAbiPlan *call) {
     MinicRiscv32AbiCursor cursor = {0U, 0U, false};
     MinicCoreCallView view;
     Rv32AbiWordLocation result_shape = {0};
     size_t i;
-    if (!minic_core_call_view_build(function, instruction, &view) ||
+    if (!(semantic_view != NULL ? (view = *semantic_view, true) :
+          minic_core_call_view_build(function, instruction, &view)) ||
         view.argument_count > SIZE_MAX / sizeof(*call->arguments))
         return false;
     if (view.return_form == MINIC_CORE_CALL_RETURN_OBJECT) {
@@ -151,41 +161,57 @@ static bool rv32_plan_call(const MinicC0Program *program,
     return true;
 }
 
+/* Sparse CALL ownership: Common owns the validated Core call index.
+ * ILP32 keeps one target ABI plan per CALL, not per Core instruction. */
 bool rv32_function_abi_plan_build(const MinicC0Program *program,
                                   const MinicTargetInfo *target,
                                   const MinicCoreFunction *function,
+                                  const MinicCoreCallIndex *semantic_calls,
                                   Rv32FunctionAbiPlan *plan) {
-    size_t i;
+    const MinicCoreCallIndex *calls;
+    size_t ordinal, previous_id = SIZE_MAX;
     if (program == NULL || target == NULL ||
         target->data_layout == NULL || function == NULL || plan == NULL ||
         plan->calls != NULL || plan->parameters != NULL ||
         plan->call_count != 0U || plan->parameter_count != 0U ||
         plan->max_outgoing_stack_words != 0U ||
-        (function->instruction_count != 0U &&
-         function->instructions == NULL) ||
-        function->instruction_count > SIZE_MAX / sizeof(*plan->calls))
+        plan->semantic_calls.index != NULL ||
+        (function->instruction_count != 0U && function->instructions == NULL))
         return false;
-    if (!rv32_plan_incoming(program, target, function, plan)) goto failure;
-    plan->call_count = function->instruction_count;
-    if (plan->call_count != 0U) {
-        plan->calls = calloc(plan->call_count, sizeof(*plan->calls));
+    if (!rv32_plan_incoming(program, target, function, plan) ||
+        !minic_core_call_index_handle_prepare(
+            function, semantic_calls, &plan->semantic_calls))
+        goto failure;
+    calls = plan->semantic_calls.index;
+    if (calls->count > SIZE_MAX / sizeof(*plan->calls))
+        goto failure;
+    plan->call_count = calls->count;
+    if (calls->count != 0U) {
+        plan->calls = calloc(calls->count, sizeof(*plan->calls));
         if (plan->calls == NULL) goto failure;
     }
-    for (i = 0U; i < plan->call_count; ++i) {
-        const MinicCoreInstruction *ins = &function->instructions[i];
-        Rv32CallAbiPlan *call = &plan->calls[i];
-        if (ins->kind != MINIC_CORE_INSTRUCTION_CALL &&
-            ins->kind != MINIC_CORE_INSTRUCTION_INDIRECT_CALL)
-            continue;
-        if (!rv32_plan_call(program, target, function, ins, call)) {
+    for (ordinal = 0U; ordinal < calls->count; ++ordinal) {
+        const size_t id = calls->sites[ordinal].instruction_id;
+        const MinicCoreInstruction *ins;
+        Rv32CallAbiPlan *call = &plan->calls[ordinal];
+        if (id >= function->instruction_count ||
+            (previous_id != SIZE_MAX && id <= previous_id))
+            goto failure;
+        ins = &function->instructions[id];
+        if (!minic_core_instruction_is_call(ins->kind))
+            goto failure;
+        call->instruction_id = id;
+        if (!rv32_plan_call(program, target, function, ins,
+                            &calls->sites[ordinal].view, call)) {
             if (getenv("MINIC_RV32_FRAME_TRACE") != NULL)
                 (void)fprintf(stderr,
                     "RV32_ABI_REJECT stage=call_plan instruction=%zu kind=%d\n",
-                    i, (int)ins->kind);
+                    id, (int)ins->kind);
             goto failure;
         }
         if (call->stack_words > plan->max_outgoing_stack_words)
             plan->max_outgoing_stack_words = call->stack_words;
+        previous_id = id;
     }
     return true;
 failure:
@@ -193,10 +219,21 @@ failure:
     return false;
 }
 
+/* Common is the ONLY sparse CALL lookup in both visitor and standalone
+ * ILP32. Physical register/stack placement remains owned by this plan. */
 const Rv32CallAbiPlan *rv32_function_abi_call(
     const Rv32FunctionAbiPlan *plan, MinicCoreInstructionId index) {
-    if (plan == NULL || (size_t)index >= plan->call_count ||
-        plan->calls == NULL || !plan->calls[index].prepared)
+    const MinicCoreCallIndex *calls;
+    size_t ordinal;
+    if (plan == NULL || plan->semantic_calls.index == NULL ||
+        (plan->call_count != 0U && plan->calls == NULL))
         return NULL;
-    return &plan->calls[index];
+    calls = plan->semantic_calls.index;
+    if (calls->count != plan->call_count ||
+        minic_core_call_index_find(calls, (size_t)index, &ordinal) == NULL ||
+        ordinal >= plan->call_count ||
+        plan->calls[ordinal].instruction_id != (size_t)index ||
+        !plan->calls[ordinal].prepared)
+        return NULL;
+    return &plan->calls[ordinal];
 }

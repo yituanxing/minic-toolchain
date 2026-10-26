@@ -13,25 +13,6 @@
    cross-block uses, records, arrays and over-aligned objects remain permanent.
    Candidate intervals are colored in 8-byte units and different basic blocks
    share the same pool because no candidate survives a block boundary. */
-typedef struct CoreTargetValueUseCount {
-    MinicCoreValueId target;
-    size_t count;
-} CoreTargetValueUseCount;
-
-static bool core_count_target_value_use(MinicCoreValueId value_id, void *opaque) {
-    CoreTargetValueUseCount *context = (CoreTargetValueUseCount *)opaque;
-    if (context == NULL) {
-        return false;
-    }
-    if (value_id == context->target) {
-        if (context->count == SIZE_MAX) {
-            return false;
-        }
-        ++context->count;
-    }
-    return true;
-}
-
 static bool core_scalar_object_note_position(CoreScalarObjectInterval *interval,
                                              size_t block_index,
                                              size_t position) {
@@ -186,18 +167,18 @@ static bool core_object_address_record_direct(
     return true;
 }
 
-/* Called once per sufficiently large function.  NULL means original scan. */
+/* One checked function-wide address-use index for every object count. */
 static bool core_object_address_build_use_index(
     const MinicCoreFunction *function, MinicCoreObjectIntervalAnalysis *analysis) {
     CoreObjectAddressUseBuild build;
     size_t block_index;
-    if (function == NULL || function->value_count == 0U ||
+    if (function == NULL ||
         function->value_count > SIZE_MAX / sizeof(*build.entries)) {
         return false;
     }
     build.count = function->value_count;
     build.entries = (CoreObjectAddressUse *)calloc(
-        build.count, sizeof(*build.entries));
+        build.count != 0U ? build.count : 1U, sizeof(*build.entries));
     if (build.entries == NULL) {
         return false;
     }
@@ -257,9 +238,9 @@ static bool core_object_interval_mark(
     return true;
 }
 
-/* This is an optional index: failure MUST return false and keep the original
- * scans available. In particular, allocation pressure must not make valid
- * compilation fail. */
+/* Indexing is optional, compilation is not. Allocation failure disables
+ * stack-slot reuse instead of restarting the obsolete O(objects * IR)
+ * compatibility scan or treating an unproven lifetime as reusable. */
 static bool core_object_interval_build_index(
     const MinicCoreFunction *function, MinicCoreObjectIntervalAnalysis *analysis) {
     CoreScalarObjectInterval *intervals;
@@ -271,9 +252,6 @@ static bool core_object_interval_build_index(
     if (function == NULL || analysis->address_use_index == NULL ||
         function->object_count == 0U ||
         function->object_count > SIZE_MAX / sizeof(*intervals)) {
-        return false;
-    }
-    if (getenv("MINIC_TEST_FORCE_CORE_OBJECT_INTERVAL_FALLBACK") != NULL) {
         return false;
     }
     object_count=function->object_count;
@@ -389,7 +367,6 @@ bool minic_core_object_interval(
     CoreScalarObjectInterval *interval) {
     size_t object_size;
     size_t object_alignment;
-    size_t block_index;
 
     if (program == NULL || function == NULL || layout == NULL ||
         (unit_bytes != 4U && unit_bytes != 8U) || interval == NULL ||
@@ -418,177 +395,11 @@ bool minic_core_object_interval(
         function->objects[object_id].explicit_alignment > unit_bytes) {
         return true;
     }
-    /* Preserve existing type/layout eligibility and P1 cross-block proof.
-       Indexed objects take the same first-access predicate as the old scan. */
-    if (analysis->interval_index != NULL) {
-        *interval = analysis->interval_index[object_id];
-        if (interval->reusable) {
-            interval->can_share_across_blocks =
-                core_scalar_object_first_access_defines(
-                    function, object_id, interval->block_index);
-        }
+    /* The function-wide indexed proof is the sole interval analysis path.
+     * Allocation or index failure forfeits sharing, never object storage. */
+    if (analysis == NULL || analysis->interval_index == NULL)
         return true;
-    }
-
-    /* Aggregate-only direct object uses must never be folded into the scalar
-       reuse pool even if malformed Core reaches this backend. */
-    for (block_index = 0U; block_index < function->block_count; ++block_index) {
-        const MinicCoreBlock *block = &function->blocks[block_index];
-        size_t position;
-
-        if (block->has_terminator &&
-            block->terminator.kind == MINIC_CORE_TERMINATOR_RETURN &&
-            block->terminator.return_object == object_id) {
-            interval->reusable = false;
-            return true;
-        }
-        for (position = 0U; position < block->instruction_count; ++position) {
-            MinicCoreInstructionId instruction_id = block->instructions[position];
-            const MinicCoreInstruction *instruction;
-            size_t argument_begin = 0U;
-            size_t argument_count = 0U;
-            size_t argument_index;
-
-            if (instruction_id >= function->instruction_count) {
-                return false;
-            }
-            instruction = &function->instructions[instruction_id];
-            if ((instruction->kind == MINIC_CORE_INSTRUCTION_RECORD_LOAD &&
-                 instruction->value.record_load.destination_object == object_id) ||
-                (instruction->kind == MINIC_CORE_INSTRUCTION_CALL &&
-                 instruction->value.call.result_object == object_id)) {
-                interval->reusable = false;
-                return true;
-            }
-            if (instruction->kind == MINIC_CORE_INSTRUCTION_CALL) {
-                argument_begin = instruction->value.call.argument_begin;
-                argument_count = instruction->value.call.argument_count;
-            } else if (instruction->kind == MINIC_CORE_INSTRUCTION_INDIRECT_CALL) {
-                argument_begin = instruction->value.indirect_call.argument_begin;
-                argument_count = instruction->value.indirect_call.argument_count;
-            }
-            if (argument_count != 0U) {
-                if (argument_begin > function->call_argument_count ||
-                    argument_count > function->call_argument_count - argument_begin) {
-                    return false;
-                }
-                for (argument_index = 0U; argument_index < argument_count; ++argument_index) {
-                    const MinicCoreCallArgument *argument =
-                        &function->call_arguments[argument_begin + argument_index];
-                    if (argument->kind == MINIC_CORE_CALL_ARGUMENT_OBJECT &&
-                        argument->value.object_id == object_id) {
-                        interval->reusable = false;
-                        return true;
-                    }
-                }
-            }
-        }
-    }
-
-    for (block_index = 0U; block_index < function->block_count; ++block_index) {
-        const MinicCoreBlock *block = &function->blocks[block_index];
-        size_t position;
-
-        for (position = 0U; position < block->instruction_count; ++position) {
-            MinicCoreInstructionId instruction_id = block->instructions[position];
-            const MinicCoreInstruction *instruction;
-
-            if (instruction_id >= function->instruction_count) {
-                return false;
-            }
-            instruction = &function->instructions[instruction_id];
-            if (instruction->kind == MINIC_CORE_INSTRUCTION_PARAMETER_OBJECT &&
-                instruction->value.parameter_object.object_id == object_id) {
-                if (!core_scalar_object_note_position(interval, block_index, position)) {
-                    interval->reusable = false;
-                    return true;
-                }
-            }
-            if (instruction->kind == MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS &&
-                instruction->value.object_id == object_id) {
-                MinicCoreValueId address_value = instruction->result;
-                CoreTargetValueUseCount total_uses;
-                size_t allowed_uses = 0U;
-                size_t use_block;
-
-                if (address_value == MINIC_CORE_VALUE_INVALID ||
-                    address_value >= function->value_count ||
-                    !core_scalar_object_note_position(interval, block_index, position)) {
-                    interval->reusable = false;
-                    return true;
-                }
-                if (analysis->address_use_index != NULL) {
-                    const CoreObjectAddressUse *use =
-                        &analysis->address_use_index[address_value];
-                    if (use->cross_block ||
-                        (use->direct != 0U &&
-                         (use->block != block_index ||
-                          !core_scalar_object_note_position(
-                              interval, block_index, use->first) ||
-                          !core_scalar_object_note_position(
-                              interval, block_index, use->last))) ||
-                        use->total != use->direct) {
-                        interval->reusable = false;
-                        return true;
-                    }
-                    continue;
-                }
-                /* Allocation or malformed-index fallback: original full scan. */
-                total_uses.target = address_value;
-                total_uses.count = 0U;
-                for (use_block = 0U; use_block < function->block_count; ++use_block) {
-                    const MinicCoreBlock *candidate_block = &function->blocks[use_block];
-                    size_t use_position;
-                    for (use_position = 0U;
-                         use_position < candidate_block->instruction_count;
-                         ++use_position) {
-                        MinicCoreInstructionId use_id = candidate_block->instructions[use_position];
-                        const MinicCoreInstruction *use_instruction;
-                        size_t direct_count = 0U;
-
-                        if (use_id >= function->instruction_count) {
-                            return false;
-                        }
-                        use_instruction = &function->instructions[use_id];
-                        if (!minic_core_visit_instruction_value_uses(function,
-                                                               use_instruction,
-                                                               core_count_target_value_use,
-                                                               &total_uses)) {
-                            return false;
-                        }
-                        if (use_instruction->kind == MINIC_CORE_INSTRUCTION_LOAD &&
-                            use_instruction->value.load.address == address_value) {
-                            ++direct_count;
-                        }
-                        if (use_instruction->kind == MINIC_CORE_INSTRUCTION_STORE &&
-                            use_instruction->value.store.address == address_value) {
-                            ++direct_count;
-                        }
-                        if (direct_count != 0U) {
-                            if (use_block != block_index ||
-                                allowed_uses > SIZE_MAX - direct_count ||
-                                !core_scalar_object_note_position(
-                                    interval, use_block, use_position)) {
-                                interval->reusable = false;
-                                return true;
-                            }
-                            allowed_uses += direct_count;
-                        }
-                    }
-                    if (candidate_block->has_terminator &&
-                        !minic_core_visit_terminator_value_uses(&candidate_block->terminator,
-                                                         core_count_target_value_use,
-                                                         &total_uses)) {
-                        return false;
-                    }
-                }
-                if (total_uses.count != allowed_uses) {
-                    interval->reusable = false;
-                    return true;
-                }
-            }
-        }
-    }
+    *interval = analysis->interval_index[object_id];
     if (interval->reusable) {
         interval->can_share_across_blocks =
             core_scalar_object_first_access_defines(
@@ -603,7 +414,7 @@ void minic_core_object_intervals_index(
     MinicCoreObjectIntervalAnalysis *analysis) {
     if (function == NULL || analysis == NULL ||
         analysis->address_use_index != NULL || analysis->interval_index != NULL ||
-        function->object_count < 8U || function->instruction_count < 100U)
+        function->object_count == 0U)
         return;
     if (core_object_address_build_use_index(function, analysis))
         (void)core_object_interval_build_index(function, analysis);

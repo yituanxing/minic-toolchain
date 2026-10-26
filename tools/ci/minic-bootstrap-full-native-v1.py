@@ -75,8 +75,8 @@ def inventory():
     spec.loader.exec_module(module)
     ccs = module.source_group((ROOT / "Makefile").read_text(), "MINIC_SOURCES")
     manifest = (ROOT / "tests/compiler/bootstrap/b0-sources.txt").read_text().splitlines()
-    if ccs != manifest or len(ccs) != 47:
-        raise RuntimeError("compiler source manifest is not current 47/47")
+    if not ccs or ccs != manifest or len(ccs) != len(set(ccs)):
+        raise RuntimeError("compiler source manifest differs from current Makefile")
     plan, others = module.source_plan(module.CANONICAL)
     source_lists = {"minic-cc": ccs}
     source_lists.update({tool: plan["#" + tool]["sources"] for tool in module.CANONICAL})

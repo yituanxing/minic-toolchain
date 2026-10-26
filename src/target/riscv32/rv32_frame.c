@@ -43,7 +43,7 @@ bool rv32_frame_init_with_storage(Rv32Frame *frame, const MinicC0Program *progra
     /* The ABI plan is built once; frame and call emission consume exactly
      * its precomputed stack bound and individual argument placements. */
     frame->has_dynamic_stack = facts->uses_dynamic_stack_alloc;
-    if (!rv32_function_abi_plan_build(program, t, f, &frame->abi))
+    if (!rv32_function_abi_plan_build(program, t, f, facts->call_index, &frame->abi))
         return rv32_frame_reject("abi_plan", 0U, minic_type_void());
     max_stack_args = frame->abi.max_outgoing_stack_words;
     frame->is_variadic = is_variadic;
@@ -60,14 +60,9 @@ bool rv32_frame_init_with_storage(Rv32Frame *frame, const MinicC0Program *progra
     frame->value_offsets = NULL;
     frame->object_storage = (MinicCoreObjectStoragePlan){0};
     frame->borrows_object_storage = false;
-    if (storage != NULL) {
-        if (storage->count != f->object_count ||
-            (storage->count != 0U && storage->objects == NULL))
-            return rv32_frame_reject("core_object_storage", 0U, minic_type_void());
-        frame->object_storage = *storage;
-        frame->borrows_object_storage = true;
-    } else if (!minic_core_object_storage_plan_build(
-                   program, t->data_layout, f, &frame->object_storage))
+    if (!minic_core_object_storage_plan_acquire(
+            program, t->data_layout, f, storage,
+            &frame->object_storage, &frame->borrows_object_storage))
         return rv32_frame_reject("core_object_storage", 0U, minic_type_void());
     frame->object_count = f->object_count;
     frame->value_count = f->value_count;
@@ -155,21 +150,13 @@ bool rv32_frame_init_with_storage(Rv32Frame *frame, const MinicC0Program *progra
      * is handled separately by the shared first-write safety proof above. */
     if (!rv32_align(next, 8U, &value_base))
         return rv32_frame_reject("spill_base", next, minic_type_void());
-    for (i = 0U; i < f->block_count; ++i) {
-        size_t block_peak = 0U;
-        if (!minic_core_block_reused_spill_layout(
-                program, f, &f->blocks[i], t->data_layout, 4U,
-                value_base, NULL, &block_peak))
-            return rv32_frame_reject("spill_peak", i, minic_type_void());
-        if (block_peak > peak_bytes) peak_bytes = block_peak;
-    }
-    for (i = 0U; i < f->block_count; ++i) {
-        size_t block_peak = 0U;
-        if (!minic_core_block_reused_spill_layout(
-                program, f, &f->blocks[i], t->data_layout, 4U,
-                value_base, frame->value_offsets, &block_peak) ||
-            block_peak > peak_bytes)
-            return rv32_frame_reject("spill_assign", i, minic_type_void());
+    {
+        size_t failed_block = SIZE_MAX;
+        if (!minic_core_function_reused_spill_layout(
+                program, f, t->data_layout, 4U, value_base,
+                frame->value_offsets, &peak_bytes, &failed_block))
+            return rv32_frame_reject("spill_layout", failed_block,
+                                     minic_type_void());
     }
     if (value_base > SIZE_MAX - peak_bytes)
         return rv32_frame_reject("spill_total", 0U, minic_type_void());
@@ -196,27 +183,12 @@ bool rv32_frame_init_with_storage(Rv32Frame *frame, const MinicC0Program *progra
     frame->varargs_offset = frame->frame_size - frame->varargs_size;
     return frame->varargs_offset >= next;
 }
-bool rv32_frame_init_prepared(Rv32Frame *frame,
-    const MinicC0Program *program, const MinicCoreFunction *f,
-    const MinicTargetInfo *t, bool is_variadic,
-    const MinicCoreFunctionFacts *facts) {
-    return rv32_frame_init_with_storage(
-        frame, program, f, t, is_variadic, facts, NULL);
-}
-
-bool rv32_frame_init(Rv32Frame *frame, const MinicC0Program *program,
-    const MinicCoreFunction *f, const MinicTargetInfo *t, bool is_variadic) {
-    MinicCoreFunctionFacts facts;
-    return minic_core_function_facts_analyze(f, &facts) &&
-           rv32_frame_init_prepared(frame, program, f, t, is_variadic, &facts);
-}
-
 void rv32_frame_destroy(Rv32Frame *f) {
     if (f != NULL) {
         free(f->object_offsets);
         free(f->value_offsets);
-        if (!f->borrows_object_storage)
-            minic_core_object_storage_plan_destroy(&f->object_storage);
+        minic_core_object_storage_plan_release(
+            &f->object_storage, f->borrows_object_storage);
         f->object_offsets = NULL;
         f->value_offsets = NULL;
         rv32_function_abi_plan_destroy(&f->abi);

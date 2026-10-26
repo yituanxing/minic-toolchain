@@ -2,6 +2,7 @@
 #define MINIC_TARGET_COMMON_DIRECT_PREFLIGHT_H
 
 #include "core/core_ir.h"
+#include "target/common/core_function_facts.h"
 #include "frontend/ast.h"
 #include "target/target_info.h"
 #include <stdbool.h>
@@ -12,7 +13,7 @@
 bool minic_multi_direct_lp64_function_preflight(
     const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicFunction *decl, const MinicCoreFunction *fn,
-    const char *arch, const char *name);
+    const MinicCoreFunctionFacts *facts, const char *arch, const char *name);
 
 /* Call only after function admission. On rejection, report the failing
  * Core block; all machine diagnostics stay with the caller's backend. */

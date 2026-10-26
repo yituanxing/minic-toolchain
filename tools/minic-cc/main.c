@@ -1,6 +1,6 @@
 #include "minic/compiler.h"
 #include "target/target_info.h"
-#include "target/riscv64/isa.h" /* compiler-only ISA resolver, not TargetInfo */
+#include "target/riscv/isa_resolve.h" /* shared 32/64-bit target ISA policy */
 #include "target/target_catalog.h"
 
 #include <stdbool.h>

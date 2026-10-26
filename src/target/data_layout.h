@@ -35,6 +35,18 @@ bool minic_data_layout_type(const MinicDataLayout *layout,
                             MinicType type,
                             size_t *size,
                             size_t *alignment);
+/* Machine-neutral validation of the complete C0 object and record layout.
+ * Physical frame allocation, value slots, and target ABI are NOT computed.
+ * This is the unique translation-unit layout admission for all five targets. */
+typedef enum MinicDataLayoutProgramCheck {
+    MINIC_DATA_LAYOUT_PROGRAM_OK = 0,
+    MINIC_DATA_LAYOUT_PROGRAM_INVALID_INPUT,
+    MINIC_DATA_LAYOUT_PROGRAM_INVALID_RECORD,
+    MINIC_DATA_LAYOUT_PROGRAM_INVALID_GLOBAL
+} MinicDataLayoutProgramCheck;
+MinicDataLayoutProgramCheck minic_data_layout_validate_program(
+    const MinicDataLayout *, const MinicC0Program *);
+
 bool minic_data_layout_global_object(const MinicDataLayout *layout,
                                      const MinicC0Program *program,
                                      const MinicGlobalObject *object,

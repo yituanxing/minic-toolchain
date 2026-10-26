@@ -1,6 +1,16 @@
 name: Linux Runtime GCC Baseline
 
 on:
+  pull_request:
+    paths:
+      - '.github/workflows/linux-runtime-gcc-baseline.yml'
+      - 'src/target/**'
+      - 'src/core/**'
+      - 'src/compiler/**'
+      - 'src/frontend/**'
+      - 'tests/external/linux/rv32i_kbuild_entry.sh'
+      - 'tools/ci/**'
+      - 'Makefile'
   push:
     branches:
       - "main"
@@ -61,7 +71,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Install RISC-V Linux runtime prerequisites
         run: |
@@ -262,7 +272,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Install GNU RISC-V toolchain and QEMU once
         run: |
@@ -1135,7 +1145,7 @@ jobs:
   # Explicit, optional 7-runner producer for the same pure-GCC C universe.
   # Do not use this lane for everyday single-TU debugging.
   gcc-shards:
-    if: github.event_name == 'push' && !contains(github.event.head_commit.message, '[linux-runtime-gcc-receiver-reuse]') && (contains(github.event.head_commit.message, '[linux-rv32i-kbuild]') || contains(github.event.head_commit.message, '[linux-perf-2064-ab]') || contains(github.event.head_commit.message, '[linux-runtime-gcc-sharded]') || contains(github.event.head_commit.message, '[linux-minias-seven-shards]') || (contains(github.event.head_commit.message, '[linux-minipp-seven-integration]') && !contains(github.event.head_commit.message, '[linux-minipp-seven-replay]')) || contains(github.event.head_commit.message, '[linux-minipp-native-rules-C]') || contains(github.event.head_commit.message, '[minic-bootstrap-stage2-linux2064]') || contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux2064]'))
+    if: github.event_name == 'push' && !contains(github.event.head_commit.message, '[linux-runtime-gcc-receiver-reuse]') && ((contains(github.event.head_commit.message, '[linux-rv32i-kbuild]') || (github.event_name == 'pull_request' && contains(github.event.pull_request.title, '[minic-full]'))) || contains(github.event.head_commit.message, '[linux-perf-2064-ab]') || contains(github.event.head_commit.message, '[linux-runtime-gcc-sharded]') || contains(github.event.head_commit.message, '[linux-minias-seven-shards]') || (contains(github.event.head_commit.message, '[linux-minipp-seven-integration]') && !contains(github.event.head_commit.message, '[linux-minipp-seven-replay]')) || contains(github.event.head_commit.message, '[linux-minipp-native-rules-C]') || contains(github.event.head_commit.message, '[minic-bootstrap-stage2-linux2064]') || contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux2064]')) || (github.event_name == 'pull_request' && contains(github.event.pull_request.title, '[minic-full]'))
     runs-on: ubuntu-24.04
     timeout-minutes: 75
     strategy:
@@ -1145,13 +1155,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Install pinned GNU RISC-V build tools
         timeout-minutes: 12
         shell: bash
         run: |
           set -Eeuo pipefail
+          # Use the signed Ubuntu public archive instead of throttled
+          # Azure mirrors on fresh runners (seven independent C shards).
+          for sources in /etc/apt/apt-mirrors.txt /etc/apt/sources.list.d/ubuntu.sources; do
+            if [[ -f "$sources" ]] && grep -q 'azure.archive.ubuntu.com' "$sources"; then
+              sudo sed -i 's#azure.archive.ubuntu.com#archive.ubuntu.com#g' "$sources"
+            fi
+          done
+          timeout 120s sudo apt-get -o Acquire::Retries=2 \
+            -o Acquire::http::Timeout=30 update -qq
           # Four of seven original Kbuild shards passed at the refactored
           # main SHA, but three workers remained indefinitely inside apt.
           # Bound transient Azure mirrors rather than consuming full
@@ -1175,7 +1194,7 @@ jobs:
           echo 'LINUX_2064_APT=PASS native_gnu_tools=1'
 
       - name: Identify certified exact-config GNU golden pool
-        if: "!contains(github.event.head_commit.message, '[linux-rv32i-kbuild]')"
+        if: "!(contains(github.event.head_commit.message, '[linux-rv32i-kbuild]') || (github.event_name == 'pull_request' && contains(github.event.pull_request.title, '[minic-full]')))"
         id: gnu
         shell: bash
         run: |
@@ -1186,7 +1205,7 @@ jobs:
           echo "key=linux-gnu-golden-v1-6.6.143-$config-$gcc_sig-$ld_sig" >>"$GITHUB_OUTPUT"
 
       - uses: actions/cache/restore@v4
-        if: "!contains(github.event.head_commit.message, '[linux-rv32i-kbuild]')"
+        if: "!(contains(github.event.head_commit.message, '[linux-rv32i-kbuild]') || (github.event_name == 'pull_request' && contains(github.event.pull_request.title, '[minic-full]')))"
         with:
           path: |
             build/linux-runtime-gcc/out
@@ -1202,7 +1221,7 @@ jobs:
       # config hash. Do not regenerate config in a new runner: Linux Kconfig
       # depends on the runner environment and can change the object universe.
       - name: Identify pinned RV32 GNU golden from its historical config and GNU binaries
-        if: contains(github.event.head_commit.message, '[linux-rv32i-kbuild]')
+        if: (contains(github.event.head_commit.message, '[linux-rv32i-kbuild]') || (github.event_name == 'pull_request' && contains(github.event.pull_request.title, '[minic-full]')))
         id: rv32_gold_key
         shell: bash
         run: |
@@ -1214,7 +1233,7 @@ jobs:
           echo "key=linux-gnu-golden-rv32i-v1-6.6.143-$cfg-$gcc-$ld-$as" >>"$GITHUB_OUTPUT"
 
       - name: Restore exact RV32 GNU golden before partitioning
-        if: contains(github.event.head_commit.message, '[linux-rv32i-kbuild]')
+        if: (contains(github.event.head_commit.message, '[linux-rv32i-kbuild]') || (github.event_name == 'pull_request' && contains(github.event.pull_request.title, '[minic-full]')))
         uses: actions/cache/restore@v4
         with:
           path: |
@@ -1224,7 +1243,7 @@ jobs:
           fail-on-cache-miss: true
 
       - name: Identify this seventh of the RV32 original GNU C universe
-        if: contains(github.event.head_commit.message, '[linux-rv32i-kbuild]')
+        if: (contains(github.event.head_commit.message, '[linux-rv32i-kbuild]') || (github.event_name == 'pull_request' && contains(github.event.pull_request.title, '[minic-full]')))
         id: rv32_candidate
         shell: bash
         run: |
@@ -1243,7 +1262,7 @@ jobs:
           echo "key=gnu-minic-shard-rv32i-v1-${{ steps.rv32_gold_key.outputs.key }}-$profile-$subset-$gcc-$as" >>"$GITHUB_OUTPUT"
 
       - name: Restore the exact RV32 MiniC shard candidate
-        if: contains(github.event.head_commit.message, '[linux-rv32i-kbuild]')
+        if: (contains(github.event.head_commit.message, '[linux-rv32i-kbuild]') || (github.event_name == 'pull_request' && contains(github.event.pull_request.title, '[minic-full]')))
         id: rv32_candidate_cache
         uses: actions/cache/restore@v4
         with:
@@ -1255,7 +1274,7 @@ jobs:
           key: ${{ steps.rv32_candidate.outputs.key }}
 
       - name: Sweep ALL authentic RV32 C owners assigned to this shard
-        if: contains(github.event.head_commit.message, '[linux-rv32i-kbuild]')
+        if: (contains(github.event.head_commit.message, '[linux-rv32i-kbuild]') || (github.event_name == 'pull_request' && contains(github.event.pull_request.title, '[minic-full]')))
         shell: bash
         timeout-minutes: 60
         run: |
@@ -1269,7 +1288,7 @@ jobs:
             bash tests/external/linux/rv32i_kbuild_entry.sh
 
       - name: Retain certified RV32 objects even if later link or QEMU fails
-        if: contains(github.event.head_commit.message, '[linux-rv32i-kbuild]') && steps.rv32_candidate_cache.outputs.cache-hit != 'true'
+        if: (contains(github.event.head_commit.message, '[linux-rv32i-kbuild]') || (github.event_name == 'pull_request' && contains(github.event.pull_request.title, '[minic-full]'))) && steps.rv32_candidate_cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: |
@@ -1280,7 +1299,7 @@ jobs:
           key: ${{ steps.rv32_candidate.outputs.key }}
 
       - name: Transfer RV32 candidate objects and SHA evidence
-        if: contains(github.event.head_commit.message, '[linux-rv32i-kbuild]')
+        if: (contains(github.event.head_commit.message, '[linux-rv32i-kbuild]') || (github.event_name == 'pull_request' && contains(github.event.pull_request.title, '[minic-full]')))
         uses: actions/upload-artifact@v4
         with:
           name: shard-${{ matrix.shard }}
@@ -1294,7 +1313,7 @@ jobs:
           if-no-files-found: error
 
       - name: Preserve every RV32 failed owner and bounded frozen .i inputs
-        if: failure() && contains(github.event.head_commit.message, '[linux-rv32i-kbuild]')
+        if: failure() && (contains(github.event.head_commit.message, '[linux-rv32i-kbuild]') || (github.event_name == 'pull_request' && contains(github.event.pull_request.title, '[minic-full]')))
         uses: actions/upload-artifact@v4
         with:
           name: debug-shard-${{ matrix.shard }}
@@ -1407,7 +1426,7 @@ jobs:
           if-no-files-found: warn
 
       - name: Derive identical full universe and this shard
-        if: "!contains(github.event.head_commit.message, '[linux-minias-seven-shards]') && !contains(github.event.head_commit.message, '[linux-rv32i-kbuild]')"
+        if: "!contains(github.event.head_commit.message, '[linux-minias-seven-shards]') && !(contains(github.event.head_commit.message, '[linux-rv32i-kbuild]') || (github.event_name == 'pull_request' && contains(github.event.pull_request.title, '[minic-full]')))"
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -1516,7 +1535,7 @@ jobs:
           if-no-files-found: warn
 
       - name: Identify immutable MiniC shard artifact
-        if: "!contains(github.event.head_commit.message, '[linux-minias-seven-shards]') && !contains(github.event.head_commit.message, '[linux-minipp-seven-integration]') && !contains(github.event.head_commit.message, '[linux-minipp-native-rules-C]') && !contains(github.event.head_commit.message, '[linux-rv32i-kbuild]')"
+        if: "!contains(github.event.head_commit.message, '[linux-minias-seven-shards]') && !contains(github.event.head_commit.message, '[linux-minipp-seven-integration]') && !contains(github.event.head_commit.message, '[linux-minipp-native-rules-C]') && !(contains(github.event.head_commit.message, '[linux-rv32i-kbuild]') || (github.event_name == 'pull_request' && contains(github.event.pull_request.title, '[minic-full]')))"
         id: candidate
         shell: bash
         run: |
@@ -1540,7 +1559,7 @@ jobs:
           echo "key=gnu-minic-shard-v1-eeb04f304ebfb97a1079c187dc0c2ea3cc61fc50a55aa3cc776237c16ab19bbe-$profile-$subset-$gcc-$assembler" >>"$GITHUB_OUTPUT"
 
       - name: Restore this shard's immutable candidate objects
-        if: "!contains(github.event.head_commit.message, '[linux-minias-seven-shards]') && !contains(github.event.head_commit.message, '[linux-minipp-seven-integration]') && !contains(github.event.head_commit.message, '[linux-minipp-native-rules-C]') && !contains(github.event.head_commit.message, '[linux-perf-2064-ab]') && !contains(github.event.head_commit.message, '[minic-fresh-full2064-metrics]') && !contains(github.event.head_commit.message, '[minic-bootstrap-stage2-linux2064]') && !contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux2064]') && !contains(github.event.head_commit.message, '[linux-rv32i-kbuild]')"
+        if: "!contains(github.event.head_commit.message, '[linux-minias-seven-shards]') && !contains(github.event.head_commit.message, '[linux-minipp-seven-integration]') && !contains(github.event.head_commit.message, '[linux-minipp-native-rules-C]') && !contains(github.event.head_commit.message, '[linux-perf-2064-ab]') && !contains(github.event.head_commit.message, '[minic-fresh-full2064-metrics]') && !contains(github.event.head_commit.message, '[minic-bootstrap-stage2-linux2064]') && !contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux2064]') && !(contains(github.event.head_commit.message, '[linux-rv32i-kbuild]') || (github.event_name == 'pull_request' && contains(github.event.pull_request.title, '[minic-full]')))"
         id: shard_cache
         uses: actions/cache/restore@v4
         with:
@@ -1571,7 +1590,7 @@ jobs:
           path: build/bootstrap-stage4-linux2064/artifact
 
       - name: Build MiniC and prove this exact shard
-        if: "!contains(github.event.head_commit.message, '[linux-minias-seven-shards]') && !contains(github.event.head_commit.message, '[linux-minipp-seven-integration]') && !contains(github.event.head_commit.message, '[linux-minipp-native-rules-C]') && !contains(github.event.head_commit.message, '[linux-rv32i-kbuild]')"
+        if: "!contains(github.event.head_commit.message, '[linux-minias-seven-shards]') && !contains(github.event.head_commit.message, '[linux-minipp-seven-integration]') && !contains(github.event.head_commit.message, '[linux-minipp-native-rules-C]') && !(contains(github.event.head_commit.message, '[linux-rv32i-kbuild]') || (github.event_name == 'pull_request' && contains(github.event.pull_request.title, '[minic-full]')))"
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -1665,7 +1684,7 @@ jobs:
             "$work/provenance" "$ev/full-objects.txt" "$ev"
 
       - name: Authenticate shard before cache or export
-        if: "!contains(github.event.head_commit.message, '[linux-minias-seven-shards]') && !contains(github.event.head_commit.message, '[linux-minipp-seven-integration]') && !contains(github.event.head_commit.message, '[linux-minipp-native-rules-C]') && !contains(github.event.head_commit.message, '[linux-rv32i-kbuild]')"
+        if: "!contains(github.event.head_commit.message, '[linux-minias-seven-shards]') && !contains(github.event.head_commit.message, '[linux-minipp-seven-integration]') && !contains(github.event.head_commit.message, '[linux-minipp-native-rules-C]') && !(contains(github.event.head_commit.message, '[linux-rv32i-kbuild]') || (github.event_name == 'pull_request' && contains(github.event.pull_request.title, '[minic-full]')))"
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -1701,7 +1720,7 @@ jobs:
           echo "BOOTSTRAP_STAGE4_SHARD=PASS index=${{ matrix.shard }} ownership=qemu_stage4_C_only"
 
       - name: Cache completed shard independently of later link failures
-        if: "!contains(github.event.head_commit.message, '[linux-minias-seven-shards]') && !contains(github.event.head_commit.message, '[linux-minipp-seven-integration]') && !contains(github.event.head_commit.message, '[linux-minipp-native-rules-C]') && !contains(github.event.head_commit.message, '[linux-perf-2064-ab]') && !contains(github.event.head_commit.message, '[minic-fresh-full2064-metrics]') && steps.shard_cache.outputs['cache-hit'] != 'true' && !contains(github.event.head_commit.message, '[minic-bootstrap-stage2-linux2064]') && !contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux2064]') && !contains(github.event.head_commit.message, '[linux-rv32i-kbuild]')"
+        if: "!contains(github.event.head_commit.message, '[linux-minias-seven-shards]') && !contains(github.event.head_commit.message, '[linux-minipp-seven-integration]') && !contains(github.event.head_commit.message, '[linux-minipp-native-rules-C]') && !contains(github.event.head_commit.message, '[linux-perf-2064-ab]') && !contains(github.event.head_commit.message, '[minic-fresh-full2064-metrics]') && steps.shard_cache.outputs['cache-hit'] != 'true' && !contains(github.event.head_commit.message, '[minic-bootstrap-stage2-linux2064]') && !contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux2064]') && !(contains(github.event.head_commit.message, '[linux-rv32i-kbuild]') || (github.event_name == 'pull_request' && contains(github.event.pull_request.title, '[minic-full]')))"
         uses: actions/cache/save@v4
         with:
           path: |
@@ -1711,7 +1730,7 @@ jobs:
           key: ${{ steps.candidate.outputs.key }}
 
       - name: Transfer only candidate objects and attestations
-        if: "!contains(github.event.head_commit.message, '[linux-minias-seven-shards]') && !contains(github.event.head_commit.message, '[linux-minipp-seven-integration]') && !contains(github.event.head_commit.message, '[linux-minipp-native-rules-C]') && !contains(github.event.head_commit.message, '[linux-perf-2064-ab]') && !contains(github.event.head_commit.message, '[linux-rv32i-kbuild]')"
+        if: "!contains(github.event.head_commit.message, '[linux-minias-seven-shards]') && !contains(github.event.head_commit.message, '[linux-minipp-seven-integration]') && !contains(github.event.head_commit.message, '[linux-minipp-native-rules-C]') && !contains(github.event.head_commit.message, '[linux-perf-2064-ab]') && !(contains(github.event.head_commit.message, '[linux-rv32i-kbuild]') || (github.event_name == 'pull_request' && contains(github.event.pull_request.title, '[minic-full]')))"
         uses: actions/upload-artifact@v4
         with:
           name: shard-${{ matrix.shard }}
@@ -1743,7 +1762,7 @@ jobs:
           retention-days: 7
 
       - name: Keep bounded failed-TU evidence
-        if: failure() && !contains(github.event.head_commit.message, '[linux-minias-seven-shards]') && !contains(github.event.head_commit.message, '[linux-minipp-seven-integration]') && !contains(github.event.head_commit.message, '[linux-minipp-native-rules-C]') && !contains(github.event.head_commit.message, '[linux-rv32i-kbuild]')
+        if: failure() && !contains(github.event.head_commit.message, '[linux-minias-seven-shards]') && !contains(github.event.head_commit.message, '[linux-minipp-seven-integration]') && !contains(github.event.head_commit.message, '[linux-minipp-native-rules-C]') && !(contains(github.event.head_commit.message, '[linux-rv32i-kbuild]') || (github.event_name == 'pull_request' && contains(github.event.pull_request.title, '[minic-full]')))
         uses: actions/upload-artifact@v4
         with:
           name: debug-shard-${{ matrix.shard }}
@@ -1764,13 +1783,13 @@ jobs:
     # Use the SAME receiver job for exact immutable Image reboots. When the
     # seven producer jobs are skipped, always() prevents needs' implicit skip;
     # the ordinary full-shard path still requires a successful producer.
-    if: always() && github.event_name == 'push' && ((contains(github.event.head_commit.message, '[linux-rv32i-kbuild]') && needs.gcc-shards.result == 'success') || (contains(github.event.head_commit.message, '[linux-runtime-gcc-sharded]') && (needs.gcc-shards.result == 'success' || (contains(github.event.head_commit.message, '[linux-runtime-gcc-receiver-reuse]') && needs.gcc-shards.result == 'skipped'))) || (contains(github.event.head_commit.message, '[linux-minipp-seven-integration]') && needs.gcc-shards.result == 'success') || (contains(github.event.head_commit.message, '[linux-minipp-seven-replay]') && needs.gcc-shards.result == 'skipped') || contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]') || contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]') || contains(github.event.head_commit.message, '[linux-runtime-stack-owners]') || contains(github.event.head_commit.message, '[linux-native-union-cached]') || contains(github.event.head_commit.message, '[linux-minild-cached-replay]') || contains(github.event.head_commit.message, '[linux-minild-reloc-cached-replay]') || contains(github.event.head_commit.message, '[linux-minild-purgatory-cached-replay]') || contains(github.event.head_commit.message, '[linux-minild-vdso64-cached-replay]') || contains(github.event.head_commit.message, '[linux-minild-vdso32-cached-replay]') || contains(github.event.head_commit.message, '[linux-minias-earlycon-frozen]') || (contains(github.event.head_commit.message, '[minic-bootstrap-stage2-linux2064]') || (contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux2064]') && needs.gcc-shards.result == 'success') && needs.gcc-shards.result == 'success'))
+    if: always() && github.event_name == 'push' && (((contains(github.event.head_commit.message, '[linux-rv32i-kbuild]') || (github.event_name == 'pull_request' && contains(github.event.pull_request.title, '[minic-full]'))) && needs.gcc-shards.result == 'success') || (contains(github.event.head_commit.message, '[linux-runtime-gcc-sharded]') && (needs.gcc-shards.result == 'success' || (contains(github.event.head_commit.message, '[linux-runtime-gcc-receiver-reuse]') && needs.gcc-shards.result == 'skipped'))) || (contains(github.event.head_commit.message, '[linux-minipp-seven-integration]') && needs.gcc-shards.result == 'success') || (contains(github.event.head_commit.message, '[linux-minipp-seven-replay]') && needs.gcc-shards.result == 'skipped') || contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]') || contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]') || contains(github.event.head_commit.message, '[linux-runtime-stack-owners]') || contains(github.event.head_commit.message, '[linux-native-union-cached]') || contains(github.event.head_commit.message, '[linux-minild-cached-replay]') || contains(github.event.head_commit.message, '[linux-minild-reloc-cached-replay]') || contains(github.event.head_commit.message, '[linux-minild-purgatory-cached-replay]') || contains(github.event.head_commit.message, '[linux-minild-vdso64-cached-replay]') || contains(github.event.head_commit.message, '[linux-minild-vdso32-cached-replay]') || contains(github.event.head_commit.message, '[linux-minias-earlycon-frozen]') || (contains(github.event.head_commit.message, '[minic-bootstrap-stage2-linux2064]') || (contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux2064]') && needs.gcc-shards.result == 'success') && needs.gcc-shards.result == 'success')) || (always() && (github.event_name == 'pull_request' && contains(github.event.pull_request.title, '[minic-full]')) && needs.gcc-shards.result == 'success')
     runs-on: ubuntu-24.04
     timeout-minutes: 95
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Install minimal pinned GNU binutils and GCC for P1 object-only audit
         if: contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]')
@@ -1792,7 +1811,7 @@ jobs:
         # 12-minute runner without progress. Cap each fetch and prefer the
         # same package set used by the seven successful producers.
         timeout-minutes: 12
-        if: "!contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]') && !contains(github.event.head_commit.message, '[linux-minias-earlycon-frozen]') && !contains(github.event.head_commit.message, '[linux-rv32i-kbuild]')"
+        if: "!contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]') && !contains(github.event.head_commit.message, '[linux-minias-earlycon-frozen]') && !(contains(github.event.head_commit.message, '[linux-rv32i-kbuild]') || (github.event_name == 'pull_request' && contains(github.event.pull_request.title, '[minic-full]')))"
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -1891,7 +1910,7 @@ jobs:
           sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 install -y --no-install-recommends gdb-multiarch
 
       - name: Install original GNU RV32 Kbuild linker and genuine QEMU tools
-        if: contains(github.event.head_commit.message, '[linux-rv32i-kbuild]')
+        if: (contains(github.event.head_commit.message, '[linux-rv32i-kbuild]') || (github.event_name == 'pull_request' && contains(github.event.pull_request.title, '[minic-full]')))
         timeout-minutes: 12
         shell: bash
         run: |
@@ -1946,7 +1965,7 @@ jobs:
           retention-days: 7
 
       - name: Restore identical certified GNU golden objects
-        if: "!contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]') && !contains(github.event.head_commit.message, '[linux-minias-earlycon-frozen]') && !contains(github.event.head_commit.message, '[linux-rv32i-kbuild]')"
+        if: "!contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]') && !contains(github.event.head_commit.message, '[linux-minias-earlycon-frozen]') && !(contains(github.event.head_commit.message, '[linux-rv32i-kbuild]') || (github.event_name == 'pull_request' && contains(github.event.pull_request.title, '[minic-full]')))"
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -1957,7 +1976,7 @@ jobs:
           echo "key=linux-gnu-golden-v1-6.6.143-$config-$gcc_sig-$ld_sig" >>"$GITHUB_ENV"
 
       - uses: actions/cache/restore@v4
-        if: "!contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]') && !contains(github.event.head_commit.message, '[linux-minias-earlycon-frozen]') && !contains(github.event.head_commit.message, '[linux-rv32i-kbuild]')"
+        if: "!contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]') && !contains(github.event.head_commit.message, '[linux-minias-earlycon-frozen]') && !(contains(github.event.head_commit.message, '[linux-rv32i-kbuild]') || (github.event_name == 'pull_request' && contains(github.event.pull_request.title, '[minic-full]')))"
         with:
           path: |
             build/linux-runtime-gcc/out
@@ -1971,7 +1990,7 @@ jobs:
           fixture: source
 
       - name: Reconstruct exact RV32 golden cache identity
-        if: contains(github.event.head_commit.message, '[linux-rv32i-kbuild]')
+        if: (contains(github.event.head_commit.message, '[linux-rv32i-kbuild]') || (github.event_name == 'pull_request' && contains(github.event.pull_request.title, '[minic-full]')))
         id: rv32_gold_key
         shell: bash
         run: |
@@ -1983,7 +2002,7 @@ jobs:
           echo "key=linux-gnu-golden-rv32i-v1-6.6.143-$cfg-$gcc-$ld-$as" >>"$GITHUB_OUTPUT"
 
       - name: Restore the exact RV32 GNU golden for full MiniC object union
-        if: contains(github.event.head_commit.message, '[linux-rv32i-kbuild]')
+        if: (contains(github.event.head_commit.message, '[linux-rv32i-kbuild]') || (github.event_name == 'pull_request' && contains(github.event.pull_request.title, '[minic-full]')))
         uses: actions/cache/restore@v4
         with:
           path: |
@@ -2129,7 +2148,7 @@ jobs:
           if-no-files-found: warn
 
       - name: Reconstruct complete GNU C manifest
-        if: "!contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]') && !contains(github.event.head_commit.message, '[linux-minias-earlycon-frozen]') && !contains(github.event.head_commit.message, '[linux-rv32i-kbuild]')"
+        if: "!contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]') && !contains(github.event.head_commit.message, '[linux-minias-earlycon-frozen]') && !(contains(github.event.head_commit.message, '[linux-rv32i-kbuild]') || (github.event_name == 'pull_request' && contains(github.event.pull_request.title, '[minic-full]')))"
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -2319,7 +2338,7 @@ jobs:
           fi
           echo "LINUX_RECEIVER_REUSE_SOURCE=PASS pinned_producer=$producer_sha expected_parent=$predecessor_sha compiler_sha_bound=true"
       - uses: actions/download-artifact@v4
-        if: "!contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]') && !contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]') && !contains(github.event.head_commit.message, '[linux-runtime-stack-owners]') && !contains(github.event.head_commit.message, '[linux-native-union-cached]') && !contains(github.event.head_commit.message, '[linux-minild-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-reloc-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-purgatory-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-vdso64-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-vdso32-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minias-earlycon-frozen]') && !contains(github.event.head_commit.message, '[linux-rv32i-kbuild]')"
+        if: "!contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]') && !contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]') && !contains(github.event.head_commit.message, '[linux-runtime-stack-owners]') && !contains(github.event.head_commit.message, '[linux-native-union-cached]') && !contains(github.event.head_commit.message, '[linux-minild-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-reloc-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-purgatory-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-vdso64-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-vdso32-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minias-earlycon-frozen]') && !(contains(github.event.head_commit.message, '[linux-rv32i-kbuild]') || (github.event_name == 'pull_request' && contains(github.event.pull_request.title, '[minic-full]')))"
         with:
           repository: ${{ github.repository }}
           github-token: ${{ github.token }}
@@ -2329,7 +2348,7 @@ jobs:
           merge-multiple: false
 
       - name: Download all seven RV32 candidate object shards unchanged
-        if: contains(github.event.head_commit.message, '[linux-rv32i-kbuild]')
+        if: (contains(github.event.head_commit.message, '[linux-rv32i-kbuild]') || (github.event_name == 'pull_request' && contains(github.event.pull_request.title, '[minic-full]')))
         uses: actions/download-artifact@v4
         with:
           repository: ${{ github.repository }}
@@ -2340,7 +2359,7 @@ jobs:
           merge-multiple: false
 
       - name: Verify seven RV32 ELF32 MiniC object shards and original GNU Image relink
-        if: contains(github.event.head_commit.message, '[linux-rv32i-kbuild]')
+        if: (contains(github.event.head_commit.message, '[linux-rv32i-kbuild]') || (github.event_name == 'pull_request' && contains(github.event.pull_request.title, '[minic-full]')))
         timeout-minutes: 55
         shell: bash
         run: |
@@ -2358,7 +2377,7 @@ jobs:
       # parameters. Rebuild all 1741 genuine owners: old artifacts cannot
       # establish whether this architectural correction fixes the full P0.
       - name: Boot THIS commit's newly linked 1741-object RV32 Linux in real QEMU
-        if: contains(github.event.head_commit.message, '[linux-rv32i-kbuild]')
+        if: (contains(github.event.head_commit.message, '[linux-rv32i-kbuild]') || (github.event_name == 'pull_request' && contains(github.event.pull_request.title, '[minic-full]')))
         timeout-minutes: 3
         shell: bash
         run: |
@@ -2378,7 +2397,7 @@ jobs:
       # R12: Use the newly produced seven-shard Image, not an older fixed
       # kernel. No C recompilation or GNU relink between shell and P1 boots.
       - name: Verify current MiniC RV32 Linux shell and P1 12/12 on same Image
-        if: contains(github.event.head_commit.message, '[linux-rv32i-kbuild]')
+        if: (contains(github.event.head_commit.message, '[linux-rv32i-kbuild]') || (github.event_name == 'pull_request' && contains(github.event.pull_request.title, '[minic-full]')))
         timeout-minutes: 25
         shell: bash
         run: |
@@ -2423,7 +2442,7 @@ jobs:
           echo "RV32I_CURRENT_HEAD_P1=PASS boots=12/12 syscalls=12/12 MiniC_C=1741/1741 original_Kbuild=true ELF32=true immutable_Image=$sha"
 
       - name: Preserve independently attested RV32 seven-shard full Image result
-        if: always() && contains(github.event.head_commit.message, '[linux-rv32i-kbuild]')
+        if: always() && (contains(github.event.head_commit.message, '[linux-rv32i-kbuild]') || (github.event_name == 'pull_request' && contains(github.event.pull_request.title, '[minic-full]')))
         uses: actions/upload-artifact@v4
         with:
           name: linux-rv32i-seven-shard-Image-${{ github.sha }}
@@ -2478,7 +2497,7 @@ jobs:
           path: build/bootstrap-stage4-linux2064/artifact
 
       - name: Build identical MiniC profile and verify exact shard union
-        if: "!contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]') && !contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]') && !contains(github.event.head_commit.message, '[linux-runtime-stack-owners]') && !contains(github.event.head_commit.message, '[linux-native-union-cached]') && !contains(github.event.head_commit.message, '[linux-minild-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-reloc-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-purgatory-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-vdso64-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-vdso32-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minias-earlycon-frozen]') && !contains(github.event.head_commit.message, '[linux-rv32i-kbuild]')"
+        if: "!contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]') && !contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]') && !contains(github.event.head_commit.message, '[linux-runtime-stack-owners]') && !contains(github.event.head_commit.message, '[linux-native-union-cached]') && !contains(github.event.head_commit.message, '[linux-minild-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-reloc-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-purgatory-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-vdso64-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-vdso32-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minias-earlycon-frozen]') && !(contains(github.event.head_commit.message, '[linux-rv32i-kbuild]') || (github.event_name == 'pull_request' && contains(github.event.pull_request.title, '[minic-full]')))"
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -2538,7 +2557,7 @@ jobs:
           echo "NATIVE_UNION_COMPILER=READY recompiled_C=0 sources=canonical_main native_shard_reuse=${{ contains(github.event.head_commit.message, '[linux-minipp-native-reuse]') && 'true' || 'false' }}"
 
       - name: Retain fully verified MiniC objects before link or runtime
-        if: "!contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]') && !contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]') && !contains(github.event.head_commit.message, '[linux-runtime-stack-owners]') && !contains(github.event.head_commit.message, '[linux-native-union-cached]') && !contains(github.event.head_commit.message, '[linux-minild-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-reloc-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-purgatory-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-vdso64-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-vdso32-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minias-earlycon-frozen]') && !contains(github.event.head_commit.message, '[minic-bootstrap-stage2-linux2064]') && !contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux2064]') && !contains(github.event.head_commit.message, '[linux-rv32i-kbuild]')"
+        if: "!contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]') && !contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]') && !contains(github.event.head_commit.message, '[linux-runtime-stack-owners]') && !contains(github.event.head_commit.message, '[linux-native-union-cached]') && !contains(github.event.head_commit.message, '[linux-minild-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-reloc-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-purgatory-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-vdso64-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-vdso32-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minias-earlycon-frozen]') && !contains(github.event.head_commit.message, '[minic-bootstrap-stage2-linux2064]') && !contains(github.event.head_commit.message, '[minic-bootstrap-stage4-linux2064]') && !(contains(github.event.head_commit.message, '[linux-rv32i-kbuild]') || (github.event_name == 'pull_request' && contains(github.event.pull_request.title, '[minic-full]')))"
         uses: actions/cache/save@v4
         with:
           path: |
@@ -3004,7 +3023,7 @@ jobs:
           echo "MINIAS_EARLYCON_FULL_PREPARE=PASS original_2064_SHA_cache_immutable=true"
 
       - name: GNU-only link and QEMU with NO MiniC recompilation
-        if: "!contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]') && !contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]') && !contains(github.event.head_commit.message, '[linux-runtime-p1-cfg-semantic-only]') && !contains(github.event.head_commit.message, '[linux-minild-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-reloc-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-purgatory-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-vdso64-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-vdso32-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minias-earlycon-frozen]') && (!contains(github.event.head_commit.message, '[linux-minias-corpus-scan]') || contains(github.event.head_commit.message, '[linux-minias-corpus-runtime]')) && !contains(github.event.head_commit.message, '[linux-rv32i-kbuild]')"
+        if: "!contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]') && !contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]') && !contains(github.event.head_commit.message, '[linux-runtime-p1-cfg-semantic-only]') && !contains(github.event.head_commit.message, '[linux-minild-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-reloc-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-purgatory-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-vdso64-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-vdso32-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minias-earlycon-frozen]') && (!contains(github.event.head_commit.message, '[linux-minias-corpus-scan]') || contains(github.event.head_commit.message, '[linux-minias-corpus-runtime]')) && !(contains(github.event.head_commit.message, '[linux-rv32i-kbuild]') || (github.event_name == 'pull_request' && contains(github.event.pull_request.title, '[minic-full]')))"
         shell: bash
         env:
           COHORT_MINIPP_DYNAMIC_HEADERS: ${{ contains(github.event.head_commit.message, '[linux-minipp-dynamic-headers]') && '1' || '0' }}
@@ -3305,7 +3324,7 @@ jobs:
           echo "BOOTSTRAP_STAGE4_LINUX2064=PASS compiler=Stage4 all_C_objects=2064/2064 original_GNU_link=true QEMU_P1=12/12"
 
       - name: Preserve aggregate link, QEMU and failure-frontier evidence
-        if: always() && !contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]') && !contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]') && !contains(github.event.head_commit.message, '[linux-minild-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-reloc-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-purgatory-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-vdso64-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-vdso32-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minias-earlycon-frozen]') && (!contains(github.event.head_commit.message, '[linux-minias-corpus-scan]') || contains(github.event.head_commit.message, '[linux-minias-corpus-runtime]')) && !contains(github.event.head_commit.message, '[linux-rv32i-kbuild]')
+        if: always() && !contains(github.event.head_commit.message, '[linux-runtime-large-image-qemu]') && !contains(github.event.head_commit.message, '[linux-runtime-p1-frame-audit]') && !contains(github.event.head_commit.message, '[linux-minild-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-reloc-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-purgatory-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-vdso64-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minild-vdso32-cached-replay]') && !contains(github.event.head_commit.message, '[linux-minias-earlycon-frozen]') && (!contains(github.event.head_commit.message, '[linux-minias-corpus-scan]') || contains(github.event.head_commit.message, '[linux-minias-corpus-runtime]')) && !(contains(github.event.head_commit.message, '[linux-rv32i-kbuild]') || (github.event_name == 'pull_request' && contains(github.event.pull_request.title, '[minic-full]')))
         uses: actions/upload-artifact@v4
         with:
           name: sharded-gnu-minic-QEMU-${{ github.sha }}
@@ -3409,7 +3428,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Install pinned RISC-V GNU tools and QEMU
         run: |
@@ -3621,7 +3640,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - name: Install original kernel build tools and RV32-capable GNU cross assembler
         shell: bash
         run: |

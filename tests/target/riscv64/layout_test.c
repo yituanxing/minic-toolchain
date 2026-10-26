@@ -1,7 +1,6 @@
 #include "frontend/ast.h"
 #include "frontend/type.h"
 #include "target/data_layout.h"
-#include "target/riscv64/layout.h"
 #include "target/target_info.h"
 
 #include <stdint.h>
@@ -15,16 +14,10 @@ static int fail(const char *message) {
 
 int main(void) {
     MinicC0Program program;
-    MinicBlockId block_id;
-    MinicFunctionId function_id;
-    MinicLocalId local_id;
     MinicRecordId record_id;
     MinicRecordId floating_record_id;
     MinicRecordId hooks_record_id;
-    MinicLocal local;
     MinicType byte_type;
-    MinicType pointer_type;
-    MinicType record_type;
     MinicType void_pointer_type;
     MinicType alloc_parameter_types[1];
     MinicType free_parameter_types[1];
@@ -32,8 +25,6 @@ int main(void) {
     MinicType free_function_type;
     MinicType alloc_pointer_type;
     MinicType free_pointer_type;
-    MinicDiagnostic diagnostic;
-    const MinicFunction *function;
     const MinicRecord *record;
     const MinicRecord *floating_record;
     const MinicRecord *hooks_record;
@@ -49,7 +40,6 @@ int main(void) {
     size_t function_pointer_alignment;
 
     minic_c0_program_initialize(&program);
-    (void)memset(&diagnostic, 0, sizeof(diagnostic));
     byte_type = minic_type_unsigned_char();
 
     {
@@ -202,15 +192,15 @@ int main(void) {
         }
     }
 
-    if (!minic_riscv64_type_layout(&program, byte_type, &byte_size, &byte_alignment) ||
+    if (!minic_data_layout_type(minic_default_data_layout(), &program, byte_type, &byte_size, &byte_alignment) ||
         byte_size != 1U || byte_alignment != 1U) {
         minic_c0_program_destroy(&program);
         return fail("unsigned-char scalar layout");
     }
 
-    if (!minic_riscv64_type_layout(&program, minic_type_long(), &long_size, &long_alignment) ||
+    if (!minic_data_layout_type(minic_default_data_layout(), &program, minic_type_long(), &long_size, &long_alignment) ||
         long_size != 8U || long_alignment != 8U ||
-        !minic_riscv64_type_layout(
+        !minic_data_layout_type(minic_default_data_layout(), 
             &program, minic_type_unsigned_long(), &long_size, &long_alignment) ||
         long_size != 8U || long_alignment != 8U) {
         minic_c0_program_destroy(&program);
@@ -219,13 +209,13 @@ int main(void) {
 
     if (!minic_type_is_float(minic_type_float()) || minic_type_is_double(minic_type_float()) ||
         minic_type_is_integer(minic_type_float()) ||
-        !minic_riscv64_type_layout(&program, minic_type_float(), &float_size, &float_alignment) ||
+        !minic_data_layout_type(minic_default_data_layout(), &program, minic_type_float(), &float_size, &float_alignment) ||
         float_size != 4U || float_alignment != 4U) {
         minic_c0_program_destroy(&program);
         return fail("RV64 float scalar identity and layout");
     }
 
-    if (!minic_riscv64_type_layout(
+    if (!minic_data_layout_type(minic_default_data_layout(), 
             &program, minic_type_double(), &double_size, &double_alignment) ||
         double_size != 8U || double_alignment != 8U) {
         minic_c0_program_destroy(&program);
@@ -244,7 +234,7 @@ int main(void) {
             &program, minic_type_void(), free_parameter_types, 1U, &free_function_type) ||
         !minic_type_pointer_to(alloc_function_type, &alloc_pointer_type) ||
         !minic_type_pointer_to(free_function_type, &free_pointer_type) ||
-        !minic_riscv64_type_layout(
+        !minic_data_layout_type(minic_default_data_layout(), 
             &program, alloc_pointer_type, &function_pointer_size, &function_pointer_alignment) ||
         function_pointer_size != 8U || function_pointer_alignment != 8U) {
         minic_c0_program_destroy(&program);
@@ -278,77 +268,11 @@ int main(void) {
         minic_c0_program_destroy(&program);
         return fail("construct record");
     }
-    record_type = minic_type_record(record_id);
-
-    if (!minic_c0_program_add_block(&program, &block_id)) {
+    if (minic_data_layout_validate_program(minic_default_data_layout(), &program) !=
+        MINIC_DATA_LAYOUT_PROGRAM_OK) {
         minic_c0_program_destroy(&program);
-        return fail("add block");
+        return fail("common translation-unit record/global layout validation");
     }
-
-    (void)memset(&local, 0, sizeof(local));
-    local.type = byte_type;
-    local.element_count = 1U;
-    if (!minic_c0_program_add_local(&program, &local, &local_id)) {
-        minic_c0_program_destroy(&program);
-        return fail("add byte scalar");
-    }
-
-    local.element_count = 3U;
-    if (!minic_c0_program_add_local(&program, &local, &local_id)) {
-        minic_c0_program_destroy(&program);
-        return fail("add byte array");
-    }
-
-    local.type = minic_type_int();
-    local.element_count = 1U;
-    if (!minic_c0_program_add_local(&program, &local, &local_id)) {
-        minic_c0_program_destroy(&program);
-        return fail("add int scalar");
-    }
-
-    local.element_count = 3U;
-    if (!minic_c0_program_add_local(&program, &local, &local_id)) {
-        minic_c0_program_destroy(&program);
-        return fail("add int array");
-    }
-
-    if (!minic_type_pointer_to(minic_type_int(), &pointer_type)) {
-        minic_c0_program_destroy(&program);
-        return fail("construct pointer type");
-    }
-    local.type = pointer_type;
-    local.element_count = 1U;
-    if (!minic_c0_program_add_local(&program, &local, &local_id)) {
-        minic_c0_program_destroy(&program);
-        return fail("add pointer scalar");
-    }
-
-    local.element_count = 2U;
-    if (!minic_c0_program_add_local(&program, &local, &local_id)) {
-        minic_c0_program_destroy(&program);
-        return fail("add pointer array");
-    }
-
-    local.type = minic_type_int();
-    local.element_count = 1U;
-    if (!minic_c0_program_add_local(&program, &local, &local_id)) {
-        minic_c0_program_destroy(&program);
-        return fail("add trailing int");
-    }
-
-    local.type = record_type;
-    local.element_count = 1U;
-    if (!minic_c0_program_add_local(&program, &local, &local_id)) {
-        minic_c0_program_destroy(&program);
-        return fail("add record local");
-    }
-
-    if (!minic_c0_program_add_function(&program, "sample", 6U, 0U, 8U, block_id, &function_id) ||
-        !minic_riscv64_layout_program("layout-test", &program, &diagnostic)) {
-        minic_c0_program_destroy(&program);
-        return fail("layout program");
-    }
-
     hooks_record = minic_c0_program_record(&program, hooks_record_id);
     {
         size_t size;
@@ -357,7 +281,7 @@ int main(void) {
         size_t offset1;
 
         if (hooks_record == NULL ||
-            !minic_riscv64_type_layout(
+            !minic_data_layout_type(minic_default_data_layout(), 
                 &program, minic_type_record(hooks_record_id), &size, &alignment) ||
             !minic_data_layout_record_field_offset(
                 minic_default_data_layout(), &program, hooks_record, 0U, &offset0) ||
@@ -378,7 +302,7 @@ int main(void) {
         size_t offset2;
 
         if (floating_record == NULL ||
-            !minic_riscv64_type_layout(
+            !minic_data_layout_type(minic_default_data_layout(), 
                 &program, minic_type_record(floating_record_id), &size, &alignment) ||
             !minic_data_layout_record_field_offset(
                 minic_default_data_layout(), &program, floating_record, 0U, &offset0) ||
@@ -401,7 +325,7 @@ int main(void) {
         size_t offset2;
 
         if (record == NULL ||
-            !minic_riscv64_type_layout(&program, minic_type_record(record_id), &size, &alignment) ||
+            !minic_data_layout_type(minic_default_data_layout(), &program, minic_type_record(record_id), &size, &alignment) ||
             !minic_data_layout_record_field_offset(
                 minic_default_data_layout(), &program, record, 0U, &offset0) ||
             !minic_data_layout_record_field_offset(
@@ -412,67 +336,6 @@ int main(void) {
             minic_c0_program_destroy(&program);
             return fail("record field layout");
         }
-    }
-
-    function = minic_c0_program_function(&program, function_id);
-    {
-        MinicRiscv64FunctionLayout function_layout;
-        size_t expected_offsets[8] = {0U, 1U, 4U, 8U, 24U, 32U, 48U, 52U};
-        size_t index;
-
-        minic_riscv64_function_layout_initialize(&function_layout);
-        if (function == NULL ||
-            !minic_riscv64_layout_function(
-                "layout-function", &program, function, &function_layout, &diagnostic) ||
-            function_layout.local_count != 8U || function_layout.local_storage_size != 76U) {
-            minic_riscv64_function_layout_destroy(&function_layout);
-            minic_c0_program_destroy(&program);
-            return fail("function side-state layout");
-        }
-        for (index = 0U; index < 8U; ++index) {
-            size_t offset;
-
-            if (!minic_riscv64_function_layout_local_offset(
-                    &function_layout, function, index, &offset) ||
-                offset != expected_offsets[index]) {
-                minic_riscv64_function_layout_destroy(&function_layout);
-                minic_c0_program_destroy(&program);
-                return fail("function side-state local offsets");
-            }
-        }
-        minic_riscv64_function_layout_destroy(&function_layout);
-    }
-    program.locals[1].element_count = 0U;
-    diagnostic.message[0] = '\0';
-    {
-        MinicRiscv64FunctionLayout invalid_layout;
-
-        minic_riscv64_function_layout_initialize(&invalid_layout);
-        if (minic_riscv64_layout_function(
-                "layout-zero", &program, function, &invalid_layout, &diagnostic) ||
-            strcmp(diagnostic.message, "local object size is invalid for the RV64 target") != 0) {
-            minic_riscv64_function_layout_destroy(&invalid_layout);
-            minic_c0_program_destroy(&program);
-            return fail("zero-element byte object accepted");
-        }
-        minic_riscv64_function_layout_destroy(&invalid_layout);
-    }
-
-    program.locals[1].element_count = 3U;
-    program.locals[3].element_count = SIZE_MAX;
-    diagnostic.message[0] = '\0';
-    {
-        MinicRiscv64FunctionLayout invalid_layout;
-
-        minic_riscv64_function_layout_initialize(&invalid_layout);
-        if (minic_riscv64_layout_function(
-                "layout-overflow", &program, function, &invalid_layout, &diagnostic) ||
-            strcmp(diagnostic.message, "local object size is invalid for the RV64 target") != 0) {
-            minic_riscv64_function_layout_destroy(&invalid_layout);
-            minic_c0_program_destroy(&program);
-            return fail("array size overflow accepted");
-        }
-        minic_riscv64_function_layout_destroy(&invalid_layout);
     }
 
     {
@@ -532,6 +395,22 @@ int main(void) {
         }
     }
 
+    /* Validate common TU admission without any old RV64 AST placement. */
+    {
+        MinicGlobalObject malformed = {0};
+        MinicC0Program invalid = program;
+        malformed.type = minic_type_int();
+        malformed.explicit_alignment = 3U;
+        invalid.global_objects = &malformed;
+        invalid.global_object_count = 1U;
+        if (minic_data_layout_validate_program(minic_default_data_layout(), &invalid) !=
+                MINIC_DATA_LAYOUT_PROGRAM_INVALID_GLOBAL ||
+            minic_data_layout_validate_program(NULL, &program) !=
+                MINIC_DATA_LAYOUT_PROGRAM_INVALID_INPUT) {
+            minic_c0_program_destroy(&program);
+            return fail("common TU data layout fail-closed contract");
+        }
+    }
     minic_c0_program_destroy(&program);
     (void)printf("PASS target/riscv64/layout\n");
     return 0;

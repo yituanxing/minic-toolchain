@@ -1,14 +1,25 @@
 #ifndef MINIC_TARGET_COMMON_CORE_INSTRUCTION_FAMILY_H
 #define MINIC_TARGET_COMMON_CORE_INSTRUCTION_FAMILY_H
-
 #include "core/core_ir.h"
 #include <stdbool.h>
 
-/* Canonical Core opcode semantics: NOT target instruction legality.
- * All five backends own their own ABI, 32/64-bit lowering, CPU feature
- * selection, registers and machine instruction emission. In particular,
- * the existence of multiplication here NEVER authorizes RISC-V M. */
-static inline bool minic_core_instruction_is_integer_scalar(
+/* Exhaustive Core semantic vocabulary. This is NOT a target ISA/ABI permission table. */
+typedef enum MinicCoreSemanticFamily {
+    MINIC_CORE_FAMILY_INVALID = 0,
+    MINIC_CORE_FAMILY_INTEGER_SCALAR,
+    MINIC_CORE_FAMILY_FLOATING_SCALAR,
+    MINIC_CORE_FAMILY_OVERFLOW,
+    MINIC_CORE_FAMILY_BITCAST,
+    MINIC_CORE_FAMILY_MEMORY,
+    MINIC_CORE_FAMILY_RECORD,
+    MINIC_CORE_FAMILY_ADDRESS,
+    MINIC_CORE_FAMILY_ABI,
+    MINIC_CORE_FAMILY_CALL,
+    MINIC_CORE_FAMILY_INLINE_ASM,
+    MINIC_CORE_FAMILY_BARRIER,
+} MinicCoreSemanticFamily;
+
+static inline MinicCoreSemanticFamily minic_core_instruction_semantic_family(
     MinicCoreInstructionKind kind) {
     switch (kind) {
     case MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT:
@@ -31,15 +42,7 @@ static inline bool minic_core_instruction_is_integer_scalar(
     case MINIC_CORE_INSTRUCTION_INTEGER_CLZ:
     case MINIC_CORE_INSTRUCTION_INTEGER_CTZ:
     case MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO:
-        return true;
-    default:
-        return false;
-    }
-}
-
-static inline bool minic_core_instruction_is_floating_scalar(
-    MinicCoreInstructionKind kind) {
-    switch (kind) {
+        return MINIC_CORE_FAMILY_INTEGER_SCALAR;
     case MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT:
     case MINIC_CORE_INSTRUCTION_FLOAT_ADD:
     case MINIC_CORE_INSTRUCTION_FLOAT_SUBTRACT:
@@ -57,19 +60,69 @@ static inline bool minic_core_instruction_is_floating_scalar(
     case MINIC_CORE_INSTRUCTION_DOUBLE_TO_FLOAT:
     case MINIC_CORE_INSTRUCTION_INTEGER_TO_DOUBLE:
     case MINIC_CORE_INSTRUCTION_DOUBLE_TO_INTEGER:
-        return true;
-    default:
-        return false;
+        return MINIC_CORE_FAMILY_FLOATING_SCALAR;
+    case MINIC_CORE_INSTRUCTION_INTEGER_OVERFLOW:
+        return MINIC_CORE_FAMILY_OVERFLOW;
+    case MINIC_CORE_INSTRUCTION_SCALAR_BITCAST:
+        return MINIC_CORE_FAMILY_BITCAST;
+    case MINIC_CORE_INSTRUCTION_LOAD:
+    case MINIC_CORE_INSTRUCTION_STORE:
+    case MINIC_CORE_INSTRUCTION_ATOMIC_LOAD:
+    case MINIC_CORE_INSTRUCTION_ATOMIC_STORE:
+        return MINIC_CORE_FAMILY_MEMORY;
+    case MINIC_CORE_INSTRUCTION_RECORD_LOAD:
+    case MINIC_CORE_INSTRUCTION_RECORD_COPY:
+        return MINIC_CORE_FAMILY_RECORD;
+    case MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS:
+    case MINIC_CORE_INSTRUCTION_GLOBAL_ADDRESS:
+    case MINIC_CORE_INSTRUCTION_FUNCTION_ADDRESS:
+    case MINIC_CORE_INSTRUCTION_BLOCK_ADDRESS:
+    case MINIC_CORE_INSTRUCTION_FIELD_ADDRESS:
+    case MINIC_CORE_INSTRUCTION_POINTER_OFFSET:
+    case MINIC_CORE_INSTRUCTION_DYNAMIC_STACK_ALLOC:
+        return MINIC_CORE_FAMILY_ADDRESS;
+    case MINIC_CORE_INSTRUCTION_PARAMETER:
+    case MINIC_CORE_INSTRUCTION_FIXED_REGISTER_READ:
+    case MINIC_CORE_INSTRUCTION_PARAMETER_OBJECT:
+    case MINIC_CORE_INSTRUCTION_CALL_FRAME_ADDRESS:
+    case MINIC_CORE_INSTRUCTION_VARIADIC_ARGUMENT_ADDRESS:
+    case MINIC_CORE_INSTRUCTION_VARIADIC_NEXT_SCALAR:
+    case MINIC_CORE_INSTRUCTION_VARIADIC_COPY:
+        return MINIC_CORE_FAMILY_ABI;
+    case MINIC_CORE_INSTRUCTION_CALL:
+    case MINIC_CORE_INSTRUCTION_INDIRECT_CALL:
+        return MINIC_CORE_FAMILY_CALL;
+    case MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM:
+    case MINIC_CORE_INSTRUCTION_REGISTER_OUTPUT_INLINE_ASM:
+    case MINIC_CORE_INSTRUCTION_REGISTER_OUTPUT_INPUT_INLINE_ASM:
+    case MINIC_CORE_INSTRUCTION_MEMORY_READWRITE_SCALAR_INPUT_INLINE_ASM:
+    case MINIC_CORE_INSTRUCTION_SCALAR_INPUT_INLINE_ASM:
+    case MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM:
+        return MINIC_CORE_FAMILY_INLINE_ASM;
+    case MINIC_CORE_INSTRUCTION_COMPILER_BARRIER:
+        return MINIC_CORE_FAMILY_BARRIER;
     }
+    return MINIC_CORE_FAMILY_INVALID;
 }
 
-/* Overflow is a multi-result machine operation, not a normal scalar
- * integer result. Bitcast, ISA atomics, structured asm and calls are
- * classified separately by consumers and retain target-specific checks. */
-static inline bool minic_core_instruction_is_call(
-    MinicCoreInstructionKind kind) {
-    return kind == MINIC_CORE_INSTRUCTION_CALL ||
-           kind == MINIC_CORE_INSTRUCTION_INDIRECT_CALL;
+static inline bool minic_core_instruction_is_integer_scalar(MinicCoreInstructionKind kind) {
+    return minic_core_instruction_semantic_family(kind) == MINIC_CORE_FAMILY_INTEGER_SCALAR;
+}
+
+static inline bool minic_core_instruction_is_floating_scalar(MinicCoreInstructionKind kind) {
+    return minic_core_instruction_semantic_family(kind) == MINIC_CORE_FAMILY_FLOATING_SCALAR;
+}
+
+static inline bool minic_core_instruction_is_call(MinicCoreInstructionKind kind) {
+    return minic_core_instruction_semantic_family(kind) == MINIC_CORE_FAMILY_CALL;
+}
+
+static inline bool minic_core_instruction_is_memory_access(MinicCoreInstructionKind kind) {
+    return minic_core_instruction_semantic_family(kind) == MINIC_CORE_FAMILY_MEMORY;
+}
+
+static inline bool minic_core_instruction_is_inline_asm(MinicCoreInstructionKind kind) {
+    return minic_core_instruction_semantic_family(kind) == MINIC_CORE_FAMILY_INLINE_ASM;
 }
 
 #endif

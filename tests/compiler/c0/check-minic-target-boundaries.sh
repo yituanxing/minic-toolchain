@@ -19,9 +19,7 @@ for file in \
   src/target/common/direct_function_plan.c \
   src/target/x86_64/call_plan.c \
   src/target/riscv64/core_admission.c \
-  src/target/riscv64/function_abi_plan.c \
-  src/target/riscv64/object_intervals.c \
-  src/target/riscv64/object_liveness.c; do
+  src/target/riscv64/function_abi_plan.c; do
   exists "$file"
 done
 
@@ -34,17 +32,55 @@ has src/target/x86_64/machine_call.c \
 has src/target/riscv64/core_codegen.c \
   'minic_riscv64_core_function_admit_profile('
 has src/target/riscv64/frame_layout.c \
-  'minic_riscv64_object_reuse_plan_build('
+  'minic_core_object_reuse_plan_build('
+# One Common interval index covers small and large Core functions.
+# Never resurrect per-object repeated scans on optional allocation failure.
+exists src/target/common/core_object_intervals.c
+has src/target/common/core_object_reuse.c \
+  'minic_core_object_intervals_index(function, &plan->analysis);'
+lacks src/target/common/core_object_reuse.c 'function->object_count >= 8U'
+lacks src/target/common/core_object_intervals.c 'CoreTargetValueUseCount'
+lacks src/target/common/core_object_intervals.c 'MINIC_TEST_FORCE_CORE_OBJECT_INTERVAL_FALLBACK'
+lacks src/target/common/core_object_intervals.c 'Allocation or malformed-index fallback'
+has src/target/common/core_spill_layout.c \
+  'cached_slot_sizes[value_id] = *slot_size;'
+
+# Exhaustive Common Core semantic vocabulary must be used by all five targets.
+exists src/target/common/core_instruction_family.h
+has src/target/common/core_instruction_family.h 'minic_core_instruction_semantic_family('
+for consumer in src/target/x86_64/machine_emit.c \
+                src/target/riscv32/rv32_emit.c \
+                src/target/riscv64/core_admission.c \
+                src/target/common/direct_instruction_semantics.c; do
+  has "$consumer" 'minic_core_instruction_semantic_family('
+done
+lacks src/target/common/direct_instruction_semantics.c 'minic_multi_direct_memory_machine_kind('
+has src/target/common/program_visit.h 'minic_program_function_selected('
+has src/target/common/core_function_plan.c 'minic_core_function_verify(function)'
+has src/target/riscv64/core_admission.c 'RV64 atomic ISA/memory-order lowering is not qualified yet.'
+
+# The RV64 ABI classification+placement plan, not its Core instruction
+# admission, owns return/argument admissibility and rejection rollback.
+has src/target/riscv64/function_abi_plan.c \
+  'minic_riscv64_function_abi_plan_qualified('
+lacks src/target/riscv64/core_admission.c 'return_value.kind =='
+lacks src/target/riscv64/core_admission.c 'location.value.kind =='
 
 lacks src/target/riscv64/core_codegen.c 'core_instruction_supported('
 lacks src/target/riscv64/core_codegen.c \
   'minic_riscv64_object_liveness_begin_function('
-lacks src/target/riscv64/object_liveness.c \
-  'core_scalar_object_reuse_cache'
-lacks src/target/riscv64/object_intervals.c \
-  'static CoreObjectAddressUse *core_object_address_use_index'
+for obsolete in object_intervals.c object_intervals.h object_liveness.c \
+                object_liveness.h spill_layout.c spill_layout.h; do
+  [[ ! -e "src/target/riscv64/$obsolete" ]] ||
+    fail "obsolete RV64 wrapper survived: $obsolete"
+done
 lacks src/target/x86_64/machine_emit.c \
   'minic_x86_64_incoming_cursor('
+# The mature x86 SysV backend shares the same prepared sparse CALL owner
+# used by RV32/RV64 and Direct LP64, without exporting its psABI to Core.
+has src/target/x86_64/frame.c 'minic_x86_64_outgoing_call_plans_prepare('
+has src/target/x86_64/machine_call.c 'x86_resolve_call_view('
+lacks src/target/x86_64/call_plan.c 'while (low < high)'
 
 for arch in aarch64 loongarch64; do
   block="src/target/$arch/block_emit.c"
@@ -91,7 +127,11 @@ exists src/target/riscv/isa_features.h
 has src/target/riscv64/isa.h 'target/riscv/isa_features.h'
 has src/target/target_info.h 'target/riscv/isa_features.h'
 lacks src/target/target_info.h 'target/riscv64/isa.h'
-has tools/minic-cc/main.c 'target/riscv64/isa.h'
+exists src/target/riscv/isa_resolve.h
+exists src/target/riscv/isa_resolve.c
+has src/target/riscv/isa_resolve.c 'bool minic_riscv_isa_resolve('
+lacks src/target/riscv64/isa.c 'bool minic_riscv_isa_resolve('
+has tools/minic-cc/main.c 'target/riscv/isa_resolve.h'
 lacks src/target/riscv64/isa.h 'typedef enum MinicRiscvFeature'
 # The old, unused ABI admission functions were misleading duplicates of
 # the live target/ABI planner. They must not be restored.
@@ -129,7 +169,7 @@ done
 
 # ISA/ABI profile names must be shared between native compiler and staged
 # product driver. Only machine legalization owns the actual feature bits.
-has src/target/riscv64/isa.c 'minic_riscv_profile_find(march)'
+has src/target/riscv/isa_resolve.c 'minic_riscv_profile_find(march)'
 has tools/minic/main.c 'minic_riscv_profile_find(march)'
 has src/target/target_catalog.c 'minic_riscv_profile_all('
 lacks tools/minic/main.c 'strcmp(march, "rv64im")'
@@ -232,20 +272,40 @@ has src/target/riscv32/rv32_call.c 'rv32_emit_parameter('
 has src/target/riscv32/rv32_abi_plan.c 'minic_core_call_view_build('
 has src/target/riscv32/rv32_abi_plan.c 'minic_riscv32_abi_place('
 has src/target/riscv32/rv32_frame.c 'rv32_function_abi_plan_build('
-has src/target/riscv32/rv32_frame.c 'minic_core_block_reused_spill_layout('
 has src/target/riscv32/rv32_frame.c 'minic_core_object_reuse_plan_build('
 exists src/target/common/core_object_reuse.c
 exists src/target/common/core_object_intervals.c
-has src/target/riscv64/object_liveness.c 'minic_core_object_reuse_plan_build('
-has src/target/riscv64/spill_layout.c 'minic_core_block_reused_spill_layout('
+has src/target/riscv64/frame_layout.c 'minic_core_object_reuse_plan_build('
 exists src/target/common/core_spill_layout.c
 exists src/target/common/core_spill_layout.h
+has src/target/riscv32/rv32_abi_plan.c 'rv32_abi_reject("incoming_return"'
+# RV32 shares the compact canonical CALL index. Never allocate one
+# heavyweight machine call plan for each non-CALL instruction again.
+has src/target/riscv32/rv32_abi_plan.c 'minic_core_instruction_is_call('
+lacks src/target/riscv32/rv32_abi_plan.c 'while (low < high)'
+has src/target/riscv32/rv32_abi_plan.c 'calls->sites[ordinal].instruction_id'
+has src/target/riscv64/frame_requirements.c 'calls->sites[ordinal]'
+# The fifth target no longer has a private Core VALUE/OBJECT type resolver:
+# CoreCallView checks real argument provenance and the RV64 psABI decides
+# fixed declared types versus unnamed promoted argument placement.
+has src/target/riscv64/frame_requirements.c 'minic_core_call_view_argument_type('
+has src/target/riscv64/call_emit.c 'minic_core_call_view_argument_type('
+lacks src/target/riscv64/frame_requirements.c 'bool minic_riscv64_core_call_argument_type('
+lacks src/target/riscv64/frame_requirements.h 'bool minic_riscv64_core_call_argument_type('
+# The Direct LP64 pair must also use a compact real CALL site cache.
+lacks src/target/common/direct_call_plan.c 'cache->by_instruction'
+has src/target/common/direct_call_plan.c 'cache->sites[ordinal]'
+has src/target/common/direct_call_plan.c 'target/common/core_instruction_family.h'
+lacks src/target/common/direct_call_plan.c 'while (low < high)'
+lacks src/target/riscv32/rv32_abi_plan.c 'plan->call_count = function->instruction_count'
+has src/target/riscv32/rv32_abi_plan.h 'size_t instruction_id;'
+lacks src/target/riscv32/rv32_emit.c 'rv32_scalar_storage_words(f, f->return_type, &bits)'
 has src/target/riscv32/rv32_frame.c 'varargs_offset'
 has src/target/riscv32/rv32_emit.c 'MINIC_CORE_INSTRUCTION_VARIADIC_ARGUMENT_ADDRESS'
 has src/target/target_info.c 'rv32_target.variadic_linear_slot_bytes = 4U'
 lacks src/target/riscv32/rv32_emit.c 'defining variadic functions requires ILP32 va_list ABI'
 has src/target/riscv32/rv32_frame.c 'max_outgoing_stack_words'
-has src/target/riscv32/rv32_frame.c 'minic_core_function_facts_analyze('
+lacks src/target/riscv32/rv32_frame.c 'minic_core_function_facts_analyze('
 has src/target/riscv32/rv32_frame.c 'rv32_fixed_stack('
 has src/target/riscv32/rv32_memory_emit.c 'MINIC_CORE_INSTRUCTION_DYNAMIC_STACK_ALLOC'
 has src/target/riscv32/rv32_emit.c 'fr.has_dynamic_stack'
@@ -293,36 +353,91 @@ exists src/target/common/program_visit.h
 # Shared Core opcode-family classification feeds RV32, RV64, x86/Direct
 # without claiming a universal machine ISA or ignoring target admission.
 exists src/target/common/core_instruction_family.h
-has src/target/riscv32/rv32_emit.c 'minic_core_instruction_is_integer_scalar(ins->kind)'
-has src/target/riscv64/core_admission.c 'minic_core_instruction_is_integer_scalar(instruction->kind)'
+# Common's public headers expose only true cross-unit dependencies.
+# RV64 frame borrows/owns the same semantic CALL index as all other targets.
+has src/target/riscv64/frame_layout.h 'MinicCoreCallIndexHandle call_index;'
+has src/target/riscv64/frame_layout.c 'minic_core_call_index_handle_prepare('
+has src/target/riscv64/frame_layout.c 'minic_core_call_index_handle_destroy('
+lacks src/target/riscv64/frame_layout.h 'standalone_calls'
+lacks src/target/riscv64/frame_layout.c 'minic_core_call_index_build('
+lacks src/target/common/direct_instruction_semantics.h 'minic_multi_direct_compiler_barrier_shape('
+lacks src/target/common/lp64_scalar.h 'minic_lp64_small_integer_width('
+lacks src/target/common/global_emit.h 'minic_multi_emit_record_bit_field_run('
+lacks src/target/common/global_emit.h 'minic_multi_recursive_shape_supported('
+lacks src/target/common/global_emit.h 'minic_multi_emit_flexible_record_global('
+
+exists src/target/common/core_numeric_shape.h
+# Three machine frame families now consume one policy-qualified Common
+# SSA slot planner: SysV cumulative 8/16, Direct LP64 wide sidecar, and
+# the earlier RV32/RV64 block-local last-use planner.
+exists src/target/common/core_value_slots.c
+exists src/target/common/core_value_slots.h
+has src/target/common/core_value_slots.c 'bool minic_core_value_slots_build('
+has src/target/x86_64/frame.c 'MINIC_CORE_VALUE_SLOT_LINEAR'
+has src/target/common/lp64_frame.c 'MINIC_CORE_VALUE_SLOT_WIDE_TAIL'
+lacks src/target/x86_64/frame.c 'value_bytes += slot;'
+lacks src/target/common/lp64_frame.c 'plan->wide_offsets[i] = pos;'
+exists src/target/common/core_numeric_shape.c
+has src/target/common/core_numeric_shape.c 'bool minic_core_integer_overflow_shape('
+has src/target/common/core_numeric_shape.c 'bool minic_core_integer_bitscan_shape('
+has src/target/x86_64/machine_emit.c 'minic_core_integer_bitscan_shape('
+has src/target/riscv64/scalar_emit.c 'minic_core_integer_bitscan_shape('
+has src/target/aarch64/integer_emit.c 'minic_core_integer_overflow_shape('
+has src/target/loongarch64/integer_emit.c 'minic_core_integer_overflow_shape('
+lacks src/target/common/direct_instruction_semantics.c 'minic_multi_direct_fp_instruction_kind('
+lacks src/target/common/direct_instruction_semantics.h 'minic_multi_direct_integer_overflow_shape('
+has src/target/riscv32/rv32_emit.c 'MINIC_CORE_FAMILY_INTEGER_SCALAR'
+has src/target/riscv64/core_admission.c 'MINIC_CORE_FAMILY_INTEGER_SCALAR'
 has src/target/riscv64/core_codegen.c 'minic_core_instruction_is_floating_scalar(instruction->kind)'
-has src/target/common/direct_instruction_semantics.c 'minic_core_instruction_is_floating_scalar(kind)'
-has src/target/common/direct_call_preflight.c 'minic_core_instruction_is_call(ins->kind)'
+has src/target/common/direct_instruction_semantics.c 'MINIC_CORE_FAMILY_FLOATING_SCALAR'
 has src/target/common/program_visit.h 'minic_program_visit_globals('
 has src/target/common/program_visit.h 'minic_program_visit_functions('
 has src/target/common/program_visit.h 'minic_program_visit_prepared_functions('
 # All five machine backends must borrow one visitor-owned per-function Core
 # object plan, not repeat layout scans. Each target keeps its own psABI frame.
-has src/target/common/program_visit.h 'minic_core_object_storage_plan_build('
-has src/target/common/program_visit.h 'minic_core_object_storage_plan_destroy(&objects)'
+has src/target/common/core_function_plan.c 'minic_core_object_storage_plan_build('
+has src/target/common/core_function_plan.c 'minic_core_object_storage_plan_destroy(&plan->objects)'
 has src/target/x86_64/codegen.c 'minic_x86_64_frame_init_with_storage('
 has src/target/riscv32/rv32_emit.c 'rv32_frame_init_with_storage('
 has src/target/riscv64/codegen_function.c 'minic_riscv64_emit_core_function_for_program_with_symbol_with_storage('
 has src/target/aarch64/codegen.c 'fn, facts, storage, "aarch64"'
 has src/target/loongarch64/codegen.c 'fn, facts, storage, "loongarch64"'
-has src/target/x86_64/frame.c 'frame->borrows_object_storage = true'
-has src/target/riscv32/rv32_frame.c 'frame->borrows_object_storage = true'
-has src/target/riscv64/frame_layout.c 'frame->borrows_object_storage = true'
-has src/target/common/lp64_frame.c 'plan->borrows_object_storage = true'
+# All four physical frame owners use the single Common borrowing contract.
+# Borrowed immutable entries must never be destroyed by target-local code.
+has src/target/common/core_object_storage.c '*result = *shared;'
+has src/target/common/core_object_storage.c '*borrowed = true;'
 
+# Unique program-wide DataLayout validation supersedes the obsolete
+# AST/RV64-only layout pass and requires no backend prepare callback.
+exists src/target/data_layout.c
+has src/compiler/compiler.c 'minic_data_layout_validate_program(target_info->data_layout, &program)'
+lacks src/compiler/compiler.c 'backend->prepare_program'
+lacks src/target/backend.h 'MinicBackendPrepareProgram'
+lacks src/target/riscv64/codegen_internal.h 'target/riscv64/layout.h'
+has src/target/data_layout.c 'MinicDataLayoutProgramCheck minic_data_layout_validate_program('
+for obsolete in src/target/riscv64/layout.c src/target/riscv64/layout.h; do
+  [[ ! -e "$obsolete" ]] || fail "old RV64 AST layout survived: $obsolete"
+done
 # Actual five-target frame ownership, not another architecture-specific
 # Core storage calculator. The target still chooses ABI stack geometry.
 exists src/target/common/core_frame_layout.h
-has src/target/common/lp64_frame.c 'minic_core_object_storage_plan_build('
-has src/target/riscv32/rv32_frame.c 'minic_core_object_storage_plan_build('
-has src/target/riscv64/frame_layout.c 'minic_core_object_storage_plan_build('
-has src/target/x86_64/frame.c 'minic_core_object_storage_plan_build('
+has src/target/common/core_object_storage.c 'return minic_core_object_storage_plan_build(program, layout, fn, result);'
 has src/target/riscv32/rv32_frame.c 'minic_core_frame_reserve('
+# Entire RISC-V Core SSA frame planning now uses one pass across blocks,
+# not a peak pass followed by an identical assignment re-traversal.
+# Common owns both the peak extent and all value-id offsets.
+has src/target/common/core_spill_layout.c 'bool minic_core_function_reused_spill_layout('
+has src/target/common/core_spill_layout.h 'bool minic_core_function_reused_spill_layout('
+lacks src/target/common/core_spill_layout.c 'minic_core_function_reused_spill_peak('
+lacks src/target/common/core_spill_layout.c 'minic_core_function_reused_spill_assign('
+has tests/compiler/c0/run-core-block-spill-reuse.sh 'output-rv32.s'
+has .github/workflows/minic-native-refactor-gate.yml 'Two-XLEN Common single-pass SSA spill regressions'
+for backend in src/target/riscv32/rv32_frame.c src/target/riscv64/frame_layout.c; do
+  has "$backend" 'minic_core_function_reused_spill_layout('
+  lacks "$backend" 'minic_core_function_reused_spill_peak('
+  lacks "$backend" 'minic_core_function_reused_spill_assign('
+  lacks "$backend" 'minic_core_block_reused_spill_layout('
+done
 has src/target/common/lp64_frame.c 'minic_core_frame_reserve('
 has src/target/riscv64/frame_layout.c 'minic_core_frame_align_up('
 has src/target/x86_64/frame.c 'minic_core_frame_align_up('
@@ -331,23 +446,142 @@ lacks src/target/common/lp64_frame.c 'minic_core_object_storage(program,'
 
 # The semantic CALL resolver is the single Core identity owner. psABI
 # GP/FP/stack placement remains x86/RV32/RV64/AArch64/LoongArch-owned.
+# Five targets get one immutable CallIndex with visitor-managed lifetime.
+exists src/target/common/core_call_index.c
+has src/target/common/core_function_plan.c 'minic_core_call_index_build('
+has src/target/common/core_function_plan.c 'minic_core_call_index_destroy(&plan->calls)'
+has src/target/common/program_visit.h 'minic_core_function_plan_build('
+has src/target/common/program_visit.h 'minic_core_function_plan_destroy(&plan)'
+has src/target/riscv32/rv32_frame.c 'facts->call_index'
+has src/target/riscv64/frame_layout.c 'facts->call_index'
+has src/target/common/direct_function_plan.c 'facts->call_index'
 has src/target/common/core_call_view.c 'view.return_form = MINIC_CORE_CALL_RETURN_OBJECT'
 has src/target/common/core_call_view.c 'minic_core_call_view_argument_type(function, &view, i, &actual)'
 has src/target/x86_64/call_plan.c 'minic_core_call_view_argument_type(fn, view, i, &type)'
+has src/target/x86_64/frame.c 'frame->semantic_calls = facts->call_index'
+has src/target/x86_64/machine_call.c 'minic_core_call_index_find('
 has src/target/riscv32/rv32_abi_plan.c 'minic_core_call_view_argument_type('
-has src/target/common/direct_call_plan.c 'minic_core_call_view_argument_type(fn, &view, j, &types[j])'
-has src/target/riscv64/call_emit.c 'call.return_form != MINIC_CORE_CALL_RETURN_OBJECT'
+has src/target/common/direct_call_plan.c 'minic_core_call_view_argument_type(fn, &call, j, &actual)'
+has src/target/riscv64/call_emit.c 'call->return_form != MINIC_CORE_CALL_RETURN_OBJECT'
+has src/target/riscv64/frame_layout.c 'frame->semantic_calls = frame->call_index.index'
+has src/target/riscv64/call_emit.c 'minic_core_call_index_find('
+has src/target/riscv64/core_admission.c 'semantic_calls->sites[call_site++].view'
+has src/target/riscv64/core_admission.c 'shape = &storage->objects[index]'
+has src/target/riscv64/core_admission.c 'minic_core_object_storage('
+has src/target/riscv64/core_codegen.c 'isa->abi == MINIC_RISCV_ABI_LP64, facts, storage)'
+lacks src/target/riscv64/core_admission.c 'static bool core_global_addressable_type('
+# Both production and standalone RV64 callers now have a prepared
+# Common CALL index + psABI plan. The original per-CALL machine
+# classifier, fallback view builder and cursor paths are dead and gone.
+has src/target/riscv64/call_emit.c '&planned->arguments[argument_index]'
+lacks src/target/riscv64/call_emit.c 'minic_riscv64_abi_place_argument('
+lacks src/target/riscv64/call_emit.c 'minic_core_call_view_build('
+lacks src/target/riscv64/call_emit.c 'minic_riscv64_abi_cursor_initialize_for_return_profile('
+has src/target/riscv64/legalize.c '(call = *semantic_view, true)'
+lacks src/target/riscv64/core_admission.c 'minic_type_is_pointer(instruction->type) && instruction->value.block_id'
+lacks src/target/riscv64/core_admission.c 'function->globals[instruction->value.global_id].name != NULL'
 has src/target/common/core_function_facts.c 'facts->max_call_arity = arity'
-has src/target/common/program_visit.h 'minic_core_function_facts_analyze('
-has src/target/x86_64/frame.c 'minic_x86_64_frame_init_prepared('
-has src/target/riscv32/rv32_frame.c 'rv32_frame_init_prepared('
-has src/target/riscv64/core_codegen.c 'minic_riscv64_emit_core_function_for_program_with_symbol_prepared('
+# Canonical verifier is shared, never independently rescanned per machine
+# backend if the prepared visitor already admitted the exact Core function.
+has src/target/common/core_function_plan.c 'minic_core_function_verify(function)'
+lacks src/compiler/compiler.c '!minic_core_function_verify(&set->functions[function_index])'
+has src/target/common/core_function_plan.c 'plan->facts.verified_function = function'
+has src/target/x86_64/codegen.c 'minic_core_function_facts_verified(facts, fn)'
+has src/target/common/direct_preflight.c 'minic_core_function_facts_verified(facts, fn)'
+has src/target/riscv64/core_admission.c 'minic_core_function_facts_verified(facts, function)'
+has src/target/common/core_function_plan.c 'minic_core_function_facts_analyze('
+# Borrow-or-own Common Core object layout is one lifecycle across all five
+# physical frame plans, not repeated pointer/cleanup logic per backend.
+has src/target/common/core_object_storage.c 'bool minic_core_object_storage_plan_acquire('
+has src/target/common/core_object_storage.c 'void minic_core_object_storage_plan_release('
+for frame in src/target/x86_64/frame.c src/target/riscv32/rv32_frame.c              src/target/riscv64/frame_layout.c src/target/common/lp64_frame.c; do
+  has "$frame" 'minic_core_object_storage_plan_acquire('
+  has "$frame" 'minic_core_object_storage_plan_release('
+  lacks "$frame" 'frame->object_storage = *storage;'
+  lacks "$frame" 'plan->object_storage = *shared;'
+done
+lacks src/target/common/direct_preflight.c 'term->branch_target >= fn->block_count'
+lacks src/target/common/lp64_frame.c 'bool minic_lp64_frame_plan_objects('
+lacks src/target/riscv64/frame_layout.c 'bool minic_riscv64_core_frame_initialize_prepared('
+lacks src/target/x86_64/frame.c 'minic_x86_64_frame_init_prepared('
+lacks src/target/riscv32/rv32_frame.c 'rv32_frame_init_prepared('
+lacks src/target/riscv64/core_codegen.c 'minic_riscv64_emit_core_function_for_program_with_symbol_prepared('
 has src/target/riscv64/frame_layout.c 'facts->needs_saved_return_address'
+# All five targets now preplan real ABI CALL placement once. RV64 directly
+# consumes the exact prepared psABI locations for machine CALL emission.
+has src/target/riscv64/frame_layout.c 'minic_riscv64_call_plan_cache_build('
+# RV64 standalone and production must converge on the one Common CALL index
+# and one target ABI plan; the obsolete standalone sizing walker is deleted.
+has src/target/riscv64/frame_layout.c 'minic_core_call_index_handle_prepare('
+has src/target/riscv64/frame_layout.c 'minic_core_call_index_handle_destroy(&frame->call_index)'
+lacks src/target/riscv64/frame_layout.c 'minic_riscv64_core_call_outgoing_stack_size_profile('
+lacks src/target/riscv64/frame_requirements.c 'minic_riscv64_core_call_outgoing_stack_size_profile('
+lacks src/target/riscv64/frame_requirements.h 'minic_riscv64_core_call_outgoing_stack_size('
+has src/target/riscv64/frame_layout.c 'outgoing_calls.maximum_stack_bytes'
+lacks src/target/riscv64/call_emit.c 'MinicRiscv64AbiCursor'
+has src/target/riscv64/call_emit.c 'rv64_resolve_prepared_call('
+has src/target/riscv64/frame_layout.c 'minic_riscv64_call_plan_cache_destroy('
+lacks src/target/riscv64/frame_requirements.c 'while (low < high)'
+# The RV64 named variadic prefix is qualified by the same immutable
+# incoming function psABI plan. Do not duplicate the entire argument
+# classifier in the old frame requirements compatibility wrapper.
+has src/target/riscv64/core_admission.c 'minic_riscv64_abi_variadic_prefix_from_cursor('
+has src/target/riscv64/core_admission.c '&abi_plan->named_parameter_cursor'
+lacks src/target/riscv64/frame_requirements.c 'minic_riscv64_core_variadic_fixed_prefix_profile('
+lacks src/target/riscv64/frame_requirements.h 'minic_riscv64_core_variadic_fixed_prefix('
 has src/target/riscv64/frame_layout.c 'facts->uses_structured_inline_asm'
 has src/target/riscv32/rv32_frame.c 'facts->uses_dynamic_stack_alloc'
 has src/target/x86_64/frame.c 'facts->variadic_address_count'
 has src/target/common/direct_function_profile.c 'facts->variadic_address_count'
 has src/target/common/direct_function_profile.c 'facts->uses_dynamic_stack_alloc'
+# Common CALL ordinal is the only sparse binary lookup for x86/RV64.
+has src/target/common/core_call_index.c 'minic_core_call_index_find('
+has src/target/common/core_call_index.c '*ordinal = low;'
+lacks src/target/common/core_call_view.h 'minic_core_call_index_get('
+lacks src/target/x86_64/call_plan.h 'minic_x86_64_outgoing_call_plan('
+lacks src/target/riscv64/frame_requirements.h 'minic_riscv64_call_plan_cache_get('
+lacks src/target/x86_64/machine_call.c 'minic_core_call_index_get('
+lacks src/target/riscv64/call_emit.c 'minic_core_call_index_get('
+has src/target/x86_64/machine_call.c '&frame->outgoing_call_plans.sites[ordinal].plan'
+has src/target/riscv64/call_emit.c 'frame->outgoing_calls.sites[ordinal]'
+lacks src/target/common/direct_instruction_semantics.h 'minic_multi_direct_memory_machine_kind('
+lacks src/target/common/direct_instruction_semantics.h 'minic_multi_direct_abi_transfer_kind('
+lacks src/target/common/direct_instruction_semantics.h 'minic_multi_direct_integer_machine_kind('
+# Read-only Common CALL snapshots are consumed in ordinal order by both
+# Direct LP64 ABIs and RV64 capability, never looked up repeatedly by ID.
+has src/target/riscv64/core_admission.c 'semantic_calls->sites[call_site++]'
+lacks src/target/riscv64/core_admission.c 'minic_core_call_index_get('
+# Prepared RV32 and Direct LP64 CALL machines borrow the Common sorted
+# semantic CALL index, leaving one canonical ordinal lookup for production.
+has src/target/riscv32/rv32_abi_plan.h 'MinicCoreCallIndexHandle semantic_calls;'
+has src/target/riscv32/rv32_abi_plan.c 'minic_core_call_index_find(calls,'
+has src/target/common/direct_call_plan.h 'MinicCoreCallIndexHandle semantic_calls;'
+has src/target/common/direct_call_plan.c 'minic_core_call_index_find(calls,'
+lacks src/target/common/direct_instruction_semantics.h 'minic_multi_direct_result_slot_offset('
+has src/target/common/direct_instruction_semantics.c 'static bool minic_multi_direct_result_slot_offset('
+# RV64 capability admission and direct LP64 CALL preflight must also
+# use the same Common semantic index in standalone and visitor modes.
+has src/target/riscv64/core_admission.c 'minic_core_call_index_handle_prepare('
+has src/target/riscv64/core_admission.c 'core_function_can_emit_with_index('
+# Standalone APIs never own an extra Core CALL algorithm or binary search.
+has src/target/common/core_call_index.c 'minic_core_call_index_handle_prepare('
+has src/target/common/core_call_index.c 'minic_core_call_index_handle_destroy('
+has src/target/riscv32/rv32_abi_plan.c 'minic_core_call_index_handle_prepare('
+has src/target/riscv32/rv32_abi_plan.c 'minic_core_call_index_handle_destroy('
+# Both Direct LP64 backends now admit and place ABI CALLs in a single
+# semantic index traversal; do not reinstate the redundant old walker.
+lacks Makefile 'src/target/common/direct_call_preflight.c'
+lacks tests/compiler/bootstrap/b0-sources.txt 'src/target/common/direct_call_preflight.c'
+has src/target/common/direct_call_plan.c 'static bool minic_lp64_admit_call('
+has src/target/common/direct_call_plan.c 'types[j] = actual;'
+lacks src/target/common/direct_call_plan.c 'minic_lp64_plan_direct_call('
+has src/target/common/direct_function_plan.c 'failed_preflight ? "call_preflight" : "call_planning"'
+has src/target/common/direct_call_plan.c 'minic_core_call_index_handle_prepare('
+has src/target/common/direct_call_plan.c 'minic_core_call_index_handle_destroy('
+lacks src/target/riscv32/rv32_abi_plan.c 'while (i < function->instruction_count'
+lacks src/target/common/direct_call_plan.c 'while (id < fn->instruction_count'
+# SysV VA cursors must match the prepared Common fact count exactly.
+has src/target/x86_64/frame.c 'if (count != frame->varargs_count) return false;'
 has src/target/common/direct_function_plan.c 'program, target, decl, fn, facts, abi, indirect_record,'
 has src/target/aarch64/codegen.c 'minic_multi_direct_lp64_function_plan_prepare('
 has src/target/loongarch64/codegen.c 'minic_multi_direct_lp64_function_plan_prepare('
@@ -378,9 +612,19 @@ lacks src/target/riscv32/rv32_emit.c 'for (i = 0U; ok && i < function_count; ++i
 # census continuation. Keep target GNU/QEMU checks in their own CI stages.
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
+# Unit test the borrow-or-own policy on the real linked Common implementation,
+# including standalone objects, exact pointer sharing, malformed plans,
+# and use-after-destroy prevention through zeroing the released alias.
+cc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror \
+  -Iinclude -Isrc tests/compiler/c0/probe-core-object-storage-ownership.c \
+  src/target/common/core_object_storage.c \
+  -o "$work/core-object-storage-ownership-probe"
+"$work/core-object-storage-ownership-probe"
+
 cc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror \
   -Iinclude -Isrc tests/compiler/c0/probe-program-emit-transaction.c \
   src/target/common/core_function_facts.c \
+  src/target/common/core_function_plan.c \
   -o "$work/program-emit-probe"
 "$work/program-emit-probe" "$work/test-output.s"
 
@@ -388,13 +632,24 @@ cc -std=c11 -Wall -Wextra -Wpedantic -Werror -Iinclude -Isrc \
   tests/compiler/c0/probe-core-instruction-family.c -o "$work/core-family-probe"
 "$work/core-family-probe"
 
+# The CoreCallIndex builder has its own true semantic probe below; the file
+# emission/rollback harness deliberately uses synthetic CALL metadata.
 # Verify ABI-neutral scalar/record/void/indirect CALL metadata and reject
 # corrupt source Core values without any target toolchain or QEMU.
 cc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror \
   -Iinclude -Isrc tests/compiler/c0/probe-core-call-semantics.c \
-  src/target/common/core_call_view.c src/frontend/type.c \
+  src/target/common/core_call_view.c \
+  src/target/common/core_call_index.c src/frontend/type.c \
   -o "$work/core-call-probe"
 "$work/core-call-probe"
+
+# Exercise the two historical SSA layouts in one true Common planner and
+# prove bounds/rollback before testing native machine frame and QEMU ABIs.
+cc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror \
+  -Iinclude -Isrc tests/compiler/c0/probe-core-value-slots.c \
+  src/target/common/core_value_slots.c src/frontend/type.c \
+  -o "$work/core-value-slots-probe"
+"$work/core-value-slots-probe"
 
 # Prove checked alignment/reservation at overflow boundaries and no cursor
 # mutation on failure before running slow QEMU/runtime architecture gates.

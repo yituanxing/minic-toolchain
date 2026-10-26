@@ -1,6 +1,6 @@
 #include "target/common/direct_function_plan.h"
 #include "target/common/direct_preflight.h"
-#include "target/common/direct_call_preflight.h"
+#include "target/common/core_frame_layout.h"
 
 #include <stdint.h>
 #include <stdio.h>
@@ -34,7 +34,7 @@ bool minic_multi_direct_lp64_function_plan_prepare(
         return false;
     name = minic_c0_function_symbol_name(decl);
     if (!minic_multi_direct_lp64_function_preflight(
-            program, target, decl, fn, architecture_name, name))
+            program, target, decl, fn, facts, architecture_name, name))
         return false;
     profile_result = minic_multi_direct_lp64_profile_function(
         program, target, decl, fn, facts, abi, indirect_record,
@@ -69,25 +69,27 @@ bool minic_multi_direct_lp64_function_plan_prepare(
     }
     object_end = plan->frame_plan.object_end;
     plan->failed_stage = "binary128_layout";
-    if (object_end > SIZE_MAX - 15U)
+    if (!minic_core_frame_align_up(object_end, 16U, &ld_base))
         return false;
-    ld_base = (object_end + 15U) & ~(size_t)15U;
     if (!minic_lp64_frame_plan_wide(fn, ld_base, &plan->frame_plan))
         return false;
     object_end = plan->frame_plan.wide_end;
 
-    plan->failed_stage = "call_preflight";
-    if (!minic_multi_direct_lp64_calls_preflight(
-            program, target, fn, architecture_name, name, indirect_record,
-            &plan->failed_instruction, &plan->has_calls))
-        return false;
-
-    plan->failed_stage = "call_planning";
-    plan->failed_instruction = SIZE_MAX;
-    if (plan->has_calls &&
-        !minic_lp64_plan_function_calls(program, target, fn, abi,
-                                       indirect_record, &plan->outgoing_calls))
-        return false;
+    /* One checked CALL traversal performs admission and ABI placement.
+     * Preserve exact failing-instruction and original diagnostic stages. */
+    {
+        bool failed_preflight = true;
+        plan->failed_stage = "call_preflight";
+        if (!minic_lp64_plan_function_calls(
+                program, target, fn, facts->call_index, abi,
+                indirect_record, architecture_name, name,
+                &plan->failed_instruction, &failed_preflight,
+                &plan->has_calls, &plan->outgoing_calls)) {
+            plan->failed_stage =
+                failed_preflight ? "call_preflight" : "call_planning";
+            return false;
+        }
+    }
 
     plan->failed_stage = "frame_finalization";
     plan->failed_instruction = SIZE_MAX;

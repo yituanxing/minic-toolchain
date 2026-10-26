@@ -1,6 +1,7 @@
 #include "target/x86_64/machine_internal.h"
 #include "target/common/core_call_view.h"
-#include "target/common/direct_instruction_semantics.h"
+#include "target/common/core_instruction_family.h"
+#include "target/common/core_numeric_shape.h"
 #include "target/x86_64/abi.h"
 #include "target/data_layout.h"
 #include <inttypes.h>
@@ -16,21 +17,22 @@
 bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program,
                                  const MinicTargetInfo *target, const MinicCoreFunction *fn,
                                  const MinicX86Frame *frame, const MinicCoreInstruction *ins,
-                                 size_t function_id) {
+                                 size_t function_id, size_t instruction_id) {
     MinicCoreValueId left, right;
     size_t bytes;
     bool sign;
     if (ins == NULL) return false;
     /* Machine-independent family categorization, native emission per ISA. */
-    if (minic_multi_direct_fp_instruction_kind(ins->kind))
+    if (minic_core_instruction_semantic_family(ins->kind) ==
+        MINIC_CORE_FAMILY_FLOATING_SCALAR)
         return minic_x86_64_emit_fp_instruction(out, program, target, fn,
                                                 frame, ins);
     if (ins->kind == MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM)
         return minic_x86_64_emit_structured_asm(out, program, target, fn, frame, ins);
-    if (ins->kind == MINIC_CORE_INSTRUCTION_CALL ||
-        ins->kind == MINIC_CORE_INSTRUCTION_INDIRECT_CALL)
+    if (minic_core_instruction_semantic_family(ins->kind) ==
+        MINIC_CORE_FAMILY_CALL)
         return minic_x86_64_emit_call_instruction(out, program, target, fn,
-                                                  frame, ins);
+                                                  frame, ins, instruction_id);
     switch (ins->kind) {
     case MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT:
         if (minic_type_is_int128_integer(ins->type)) {
@@ -456,7 +458,7 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
         size_t width;
         bool signed_result;
         const char *opcode = NULL, *flag = NULL;
-        if (!minic_multi_direct_integer_overflow_shape(
+        if (!minic_core_integer_overflow_shape(
                 program, target, fn, ins, &width, &signed_result))
             return false;
         switch (ins->value.integer_overflow.operator_kind) {
@@ -506,7 +508,7 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
         /* Baseline x86-64 BSR/BSF avoid BMI1/LZCNT feature assumptions.
          * The Core operand is the promoted unsigned integer type, not
          * necessarily 64 bits: clz(unsigned int) must return 31 for 1. */
-        if (!minic_multi_direct_integer_bitscan_shape(
+        if (!minic_core_integer_bitscan_shape(
                 program, target, fn, ins, &width) ||
             !x86_value_load(out, frame, operand, "%rax"))
             return false;

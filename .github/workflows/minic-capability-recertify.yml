@@ -5,6 +5,16 @@
 # AArch64/LoongArch64 original projects run in the single-build focused T1.
 name: MiniC Current Main x86-64 Real Software Acceptance
 on:
+  pull_request:
+    paths:
+      - '.github/workflows/minic-capability-recertify.yml'
+      - 'src/target/**'
+      - 'src/core/**'
+      - 'src/compiler/**'
+      - 'src/frontend/**'
+      - 'tools/minic/**'
+      - 'tools/minic-cc/**'
+      - 'Makefile'
   push:
     branches: [main]
     paths:
@@ -39,7 +49,7 @@ concurrency:
 
 jobs:
   x86-real-software:
-    if: github.event_name == 'workflow_dispatch' && (inputs.mode == 'all' || inputs.mode == 'software')
+    if: (github.event_name == 'workflow_dispatch' && (inputs.mode == 'all' || inputs.mode == 'software')) || (github.event_name == 'pull_request' && contains(github.event.pull_request.title, '[minic-full]'))
     name: x86-64 pinned AES/cJSON/zlib/Lua/SQLite/TinyCC
     runs-on: ubuntu-24.04
     timeout-minutes: 75
@@ -111,7 +121,7 @@ jobs:
           echo 'MINIC_X86_SOFTWARE_ALL=PASS projects=6 original_sources=1 GNU_differential=1'
 
   x86-busybox-frontier:
-    if: github.event_name == 'push' || inputs.mode == 'all' || inputs.mode == 'busybox'
+    if: github.event_name == 'push' || inputs.mode == 'all' || inputs.mode == 'busybox' || (github.event_name == 'pull_request' && contains(github.event.pull_request.title, '[minic-full]'))
     name: x86-64 original BusyBox 593/593 MiniC C owners (zero GNU C fallback)
     runs-on: ubuntu-24.04
     timeout-minutes: 75

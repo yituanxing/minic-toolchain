@@ -3,8 +3,8 @@
 #include "target/common/core_frame_layout.h"
 #include "target/riscv64/abi.h"
 #include "target/riscv64/frame_requirements.h"
-#include "target/riscv64/spill_layout.h"
-#include "target/riscv64/object_liveness.h"
+#include "target/common/core_spill_layout.h"
+#include "target/riscv64/record_snapshot.h"
 #include "target/data_layout.h"
 #include <stdint.h>
 #include <stdio.h>
@@ -37,25 +37,35 @@ bool minic_riscv64_core_frame_initialize_with_storage(
     frame->value_slot_count = 0U;
     frame->object_storage = (MinicCoreObjectStoragePlan){0};
     frame->borrows_object_storage = false;
-    frame->object_reuse = (MinicRiscv64ObjectReusePlan){0};
-    if (storage != NULL) {
-        if (storage->count != function->object_count ||
-            (storage->count != 0U && storage->objects == NULL))
-            return false;
-        frame->object_storage = *storage;
-        frame->borrows_object_storage = true;
-    } else if (!minic_core_object_storage_plan_build(
-                   program, minic_default_data_layout(), function,
-                   &frame->object_storage))
+    frame->object_reuse = (MinicCoreObjectReusePlan){0};
+    frame->semantic_calls = NULL;
+    frame->call_index = (MinicCoreCallIndexHandle){0};
+    frame->outgoing_calls = (MinicRiscv64CallPlanCache){0};
+    if (!minic_core_object_storage_plan_acquire(
+            program, minic_default_data_layout(), function, storage,
+            &frame->object_storage, &frame->borrows_object_storage))
         return false;
     frame->has_dynamic_stack_alloc = facts->uses_dynamic_stack_alloc;
     frame->saved_frame_base_offset = 0U;
-    if (!minic_riscv64_core_call_outgoing_stack_size_profile(
+    /* All five targets now use the same Common CALL-index ownership
+     * contract. RV64's standalone API owns its generated snapshot, while
+     * production borrows the visitor's exact immutable CALL index. Keep
+     * the historical facts-count consistency gate for standalone callers. */
+    if (facts->direct_call_count > SIZE_MAX - facts->indirect_call_count ||
+        !minic_core_call_index_handle_prepare(
+            function, facts->call_index, &frame->call_index))
+        return false;
+    frame->semantic_calls = frame->call_index.index;
+    if (facts->call_index == NULL &&
+        frame->semantic_calls->count !=
+            facts->direct_call_count + facts->indirect_call_count)
+        return false;
+    if (!minic_riscv64_call_plan_cache_build(
             program, function,
             abi_plan != NULL && abi_plan->named_parameter_cursor.lp64_soft_float,
-            &outgoing_argument_size)) {
+            frame->semantic_calls, &frame->outgoing_calls))
         return false;
-    }
+    outgoing_argument_size = frame->outgoing_calls.maximum_stack_bytes;
     frame->outgoing_argument_size = outgoing_argument_size;
     frame->dynamic_call_area_size = 0U;
     if (frame->has_dynamic_stack_alloc &&
@@ -64,9 +74,10 @@ bool minic_riscv64_core_frame_initialize_with_storage(
     }
     storage_size = outgoing_argument_size;
     maximum_object_alignment = 16U;
-    if (!minic_riscv64_object_reuse_plan_build(
-            program, function, crossblock_enabled, &frame->object_reuse) ||
-        !minic_riscv64_object_reuse_plan_get(
+    if (!minic_core_object_reuse_plan_build(
+            program, function, minic_default_data_layout(), 8U,
+            crossblock_enabled, &frame->object_reuse) ||
+        !minic_core_object_reuse_plan_get(
             &frame->object_reuse, MINIC_CORE_OBJECT_INVALID,
             NULL, NULL, &scalar_reuse_pool_slots)) {
         return false;
@@ -86,7 +97,7 @@ bool minic_riscv64_core_frame_initialize_with_storage(
             bool scalar_reusable;
             size_t scalar_slot;
             size_t scalar_peak;
-            if (!minic_riscv64_object_reuse_plan_get(
+            if (!minic_core_object_reuse_plan_get(
                                                  &frame->object_reuse,
                                                  (MinicCoreObjectId)object_index,
                                                  &scalar_reusable,
@@ -126,30 +137,26 @@ bool minic_riscv64_core_frame_initialize_with_storage(
     if (!minic_core_frame_align_up(storage_size, 8U, &frame->value_base_offset)) {
         return false;
     }
-    /* Core block-local last-use reuse: compute the maximum physical spill
-       extent needed by any one block. Distinct blocks still share the region. */
+    /* Plan all RV64 SSA offsets NOW, in the same single walk that determines
+     * frame size. The old late second traversal was identical wasted work.
+     * Target-specific psABI/spill base geometry remains unchanged. */
     {
-        size_t block_index;
         size_t maximum_block_bytes = 0U;
-
-        for (block_index = 0U; block_index < function->block_count; ++block_index) {
-            size_t block_bytes;
-            if (!minic_riscv64_block_reused_spill_layout(program,
-                                                function,
-                                                &function->blocks[block_index],
-                                                frame->value_base_offset,
-                                                NULL,
-                                                &block_bytes)) {
-                return false;
-            }
-            if (block_bytes > maximum_block_bytes) {
-                maximum_block_bytes = block_bytes;
-            }
-        }
-        if ((maximum_block_bytes & 7U) != 0U ||
-            maximum_block_bytes > SIZE_MAX - frame->value_base_offset) {
+        size_t i;
+        if (function->value_count > SIZE_MAX / sizeof(*frame->value_offsets))
             return false;
+        if (function->value_count != 0U) {
+            frame->value_offsets = malloc(function->value_count *
+                                          sizeof(*frame->value_offsets));
+            if (frame->value_offsets == NULL) return false;
+            for (i = 0U; i < function->value_count; ++i)
+                frame->value_offsets[i] = SIZE_MAX;
         }
+        if (!minic_core_function_reused_spill_layout(
+                program, function, minic_default_data_layout(), 8U,
+                frame->value_base_offset, frame->value_offsets,
+                &maximum_block_bytes, NULL))
+            return false;
         frame->value_slot_count = maximum_block_bytes / 8U;
         storage_size = frame->value_base_offset + maximum_block_bytes;
     }
@@ -296,7 +303,7 @@ bool minic_riscv64_core_frame_initialize_with_storage(
                 bool scalar_reusable;
                 size_t scalar_slot;
                 size_t scalar_peak;
-                if (!minic_riscv64_object_reuse_plan_get(
+                if (!minic_core_object_reuse_plan_get(
                                                      &frame->object_reuse,
                                                      (MinicCoreObjectId)cached_index,
                                                      &scalar_reusable,
@@ -356,51 +363,13 @@ bool minic_riscv64_core_frame_initialize_with_storage(
             cached_offset += object_size;
         }
     }
+    /* Fail closed on missing SSA definitions as before, without rescanning
+     * all basic blocks or reallocating the value-offset array. */
     if (function->value_count != 0U) {
-        size_t block_index;
         size_t value_index;
-
-        if (function->value_count > SIZE_MAX / sizeof(*frame->value_offsets)) {
-            free(frame->object_offsets);
-            frame->object_offsets = NULL;
-            return false;
-        }
-        frame->value_offsets =
-            (size_t *)malloc(function->value_count * sizeof(*frame->value_offsets));
-        if (frame->value_offsets == NULL) {
-            free(frame->object_offsets);
-            frame->object_offsets = NULL;
-            return false;
-        }
-        for (value_index = 0U; value_index < function->value_count; ++value_index) {
-            frame->value_offsets[value_index] = SIZE_MAX;
-        }
-
-        for (block_index = 0U; block_index < function->block_count; ++block_index) {
-            size_t block_bytes;
-            if (!minic_riscv64_block_reused_spill_layout(program,
-                                                function,
-                                                &function->blocks[block_index],
-                                                frame->value_base_offset,
-                                                frame->value_offsets,
-                                                &block_bytes) ||
-                block_bytes > frame->value_slot_count * 8U) {
-                free(frame->value_offsets);
-                frame->value_offsets = NULL;
-                free(frame->object_offsets);
-                frame->object_offsets = NULL;
+        for (value_index = 0U; value_index < function->value_count; ++value_index)
+            if (frame->value_offsets[value_index] == SIZE_MAX)
                 return false;
-            }
-        }
-        for (value_index = 0U; value_index < function->value_count; ++value_index) {
-            if (frame->value_offsets[value_index] == SIZE_MAX) {
-                free(frame->value_offsets);
-                frame->value_offsets = NULL;
-                free(frame->object_offsets);
-                frame->object_offsets = NULL;
-                return false;
-            }
-        }
     }
     if (getenv("MINIC_CORE_FRAME_TRACE") != NULL) {
         (void)fprintf(stderr,
@@ -414,40 +383,15 @@ bool minic_riscv64_core_frame_initialize_with_storage(
     return true;
 }
 
-bool minic_riscv64_core_frame_initialize_with_facts(
-    const MinicC0Program *program, const MinicCoreFunction *function,
-    MinicRiscv64CoreFrame *frame, MinicRiscv64FunctionAbiPlan *abi_plan,
-    bool crossblock_enabled, bool force_save_return_address,
-    const MinicCoreFunctionFacts *facts) {
-    return minic_riscv64_core_frame_initialize_with_storage(
-        program, function, frame, abi_plan, crossblock_enabled,
-        force_save_return_address, facts, NULL);
-}
-
-bool minic_riscv64_core_frame_initialize_prepared(
-    const MinicC0Program *program, const MinicCoreFunction *function,
-    MinicRiscv64CoreFrame *frame, MinicRiscv64FunctionAbiPlan *abi_plan,
-    bool crossblock_enabled, bool force_save_return_address) {
-    MinicCoreFunctionFacts facts;
-    return minic_core_function_facts_analyze(function, &facts) &&
-           minic_riscv64_core_frame_initialize_with_facts(
-               program, function, frame, abi_plan, crossblock_enabled,
-               force_save_return_address, &facts);
-}
-
-bool minic_riscv64_core_frame_initialize(
-    const MinicC0Program *program, const MinicCoreFunction *function,
-    MinicRiscv64CoreFrame *frame) {
-    return minic_riscv64_core_frame_initialize_prepared(
-        program, function, frame, NULL, true, false);
-}
-
 void minic_riscv64_core_frame_destroy(MinicRiscv64CoreFrame *frame) {
     if (frame == NULL) {
         return;
     }
     minic_riscv64_asm_function_plan_destroy(&frame->asm_plan);
-    minic_riscv64_object_reuse_plan_destroy(&frame->object_reuse);
+    minic_riscv64_call_plan_cache_destroy(&frame->outgoing_calls);
+    minic_core_call_index_handle_destroy(&frame->call_index);
+    frame->semantic_calls = NULL;
+    minic_core_object_reuse_plan_destroy(&frame->object_reuse);
     free(frame->value_offsets);
     frame->value_offsets = NULL;
     free(frame->parameter_locations);
@@ -456,8 +400,8 @@ void minic_riscv64_core_frame_destroy(MinicRiscv64CoreFrame *frame) {
     frame->has_named_parameter_cursor = false;
     free(frame->object_offsets);
     frame->object_offsets = NULL;
-    if (!frame->borrows_object_storage)
-        minic_core_object_storage_plan_destroy(&frame->object_storage);
+    minic_core_object_storage_plan_release(
+        &frame->object_storage, frame->borrows_object_storage);
     free(frame->reachable_blocks);
     frame->reachable_blocks = NULL;
 }

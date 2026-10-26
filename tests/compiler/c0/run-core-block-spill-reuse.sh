@@ -51,3 +51,13 @@ print(
 PY
 
 test -s "$work/output.s"
+
+# RV32I consumes the SAME Common SSA last-use single-pass planner
+# with ILP32-sized units. Compile without external assemblers or QEMU:
+# the resulting .s checks both new function-wide planning entry points.
+"$minic" --target=riscv32-linux -march=rv32i -mabi=ilp32 \
+  -S "$work/input.c" -o "$work/output-rv32.s" \
+  >"$work/rv32-stdout" 2>"$work/rv32-trace"
+test -s "$work/output-rv32.s"
+grep -Fq 'core_block_spill_reuse' "$work/output-rv32.s"
+printf 'PASS compiler/c0/core-block-spill-reuse-rv32i ILP32 common SSA layout\n'

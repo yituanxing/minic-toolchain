@@ -109,8 +109,100 @@ int main(void) {
     if ((rc = demand(minic_core_call_view_build(&fn, &call, &view) &&
                      view.signature == &signature &&
                      view.function_pointer == 1U, 15)) != 0) return rc;
+    /* The production visitor precomputes each CALL view once in a compact
+     * Core instruction ID-sorted index. Exercise sparse IDs and fail-closed
+     * corrupt semantic operands outside all psABI-dependent backends. */
+    {
+        MinicCoreCallIndex index = {0};
+        MinicCoreInstruction ordered[5] = {0};
+        MinicCoreCallee saved = callee;
+        signature.function_type_id = 3U;
+        ordered[1] = call;
+        ordered[4] = call;
+        ordered[4].kind = MINIC_CORE_INSTRUCTION_CALL;
+        ordered[4].value.call.callee_id = 0U;
+        ordered[4].value.call.argument_begin = 0U;
+        ordered[4].value.call.argument_count = 1U;
+        ordered[4].value.call.result_object = MINIC_CORE_OBJECT_INVALID;
+        callee = saved;
+        callee.return_type = scalar;
+        callee.parameter_types = &scalar;
+        callee.parameter_count = 1U;
+        fn.instructions = ordered;
+        fn.instruction_count = 5U;
+        size_t ordinal = SIZE_MAX;
+        const MinicCoreCallView *cached;
+        if (!minic_core_call_index_build(&fn, 2U, &index) ||
+            index.count != 2U ||
+            minic_core_call_index_find(&index, 0U, &ordinal) != NULL ||
+            minic_core_call_index_find(&index, 3U, &ordinal) != NULL ||
+            minic_core_call_index_find(&index, 1U, NULL) != NULL) {
+            minic_core_call_index_destroy(&index);
+            return 16;
+        }
+        cached = minic_core_call_index_find(&index, 1U, &ordinal);
+        if (cached == NULL || ordinal != 0U ||
+            cached->function_pointer != 1U) {
+            minic_core_call_index_destroy(&index);
+            return 16;
+        }
+        cached = minic_core_call_index_find(&index, 4U, &ordinal);
+        if (cached == NULL || ordinal != 1U ||
+            cached->callee != &callee) {
+            minic_core_call_index_destroy(&index);
+            return 16;
+        }
+        minic_core_call_index_destroy(&index);
+        if (index.count != 0U || index.sites != NULL) return 17;
+        ordered[1].value.indirect_call.signature_id = 9U;
+        if (minic_core_call_index_build(&fn, 2U, &index) ||
+            index.sites != NULL || index.count != 0U) return 18;
+        ordered[1] = call;
+        if (minic_core_call_index_build(&fn, 1U, &index)) return 19;
+        minic_core_call_index_destroy(&index);
+        /* Borrow production's exact index, or own the same shape when a
+         * standalone caller has no visitor. Both must share ONE lookup. */
+        {
+            MinicCoreCallIndexHandle owned = {0}, borrowed = {0};
+            MinicCoreCallIndex invalid = {0};
+            if (!minic_core_call_index_handle_prepare(&fn, NULL, &owned) ||
+                owned.index != &owned.owned || owned.owned.count != 2U ||
+                minic_core_call_index_find(owned.index, 4U, &ordinal) == NULL ||
+                ordinal != 1U ||
+                minic_core_call_index_handle_prepare(&fn, NULL, &owned))
+                return 21;
+            minic_core_call_index_handle_destroy(&owned);
+            if (owned.index != NULL || owned.owned.sites != NULL ||
+                owned.owned.count != 0U)
+                return 22;
+            if (!minic_core_call_index_build(&fn, 2U, &index) ||
+                !minic_core_call_index_handle_prepare(&fn, &index, &borrowed) ||
+                borrowed.index != &index || borrowed.owned.sites != NULL)
+                return 23;
+            minic_core_call_index_handle_destroy(&borrowed);
+            if (borrowed.index != NULL || index.count != 2U ||
+                minic_core_call_index_find(&index, 1U, &ordinal) == NULL)
+                return 24;
+            minic_core_call_index_destroy(&index);
+            invalid.count = 6U; /* more CALLs than instructions */
+            if (minic_core_call_index_handle_prepare(&fn, &invalid, &owned))
+                return 25;
+            ordered[1].value.indirect_call.signature_id = 9U;
+            if (minic_core_call_index_handle_prepare(&fn, NULL, &owned) ||
+                owned.index != NULL || owned.owned.sites != NULL ||
+                owned.owned.count != 0U)
+                return 26;
+            ordered[1] = call;
+            fn.instruction_count = 0U;
+            if (!minic_core_call_index_handle_prepare(&fn, NULL, &owned) ||
+                owned.index != &owned.owned || owned.owned.count != 0U)
+                return 27;
+            minic_core_call_index_handle_destroy(&owned);
+            fn.instruction_count = 5U;
+        }
+    }
     signature.function_type_id = 4U;
-    if (minic_core_call_view_build(&fn, &call, &view)) return 16;
+    if (minic_core_call_view_build(&fn, &call, &view)) return 20;
     puts("MINIC_FIVE_TARGET_CALL_SEMANTICS=PASS scalar_record_void_indirect malformed_reject=9");
     return 0;
 }

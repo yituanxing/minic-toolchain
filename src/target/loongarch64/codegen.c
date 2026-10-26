@@ -4,7 +4,6 @@
 #include "target/common/direct_program_emit.h"
 #include "target/common/direct_preflight.h"
 #include "target/common/direct_function_plan.h"
-#include "target/common/direct_call_preflight.h"
 #include "target/common/direct_call_plan.h"
 #include "target/common/lp64_scalar.h"
 #include "target/common/lp64_frame.h"

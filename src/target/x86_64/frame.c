@@ -1,6 +1,7 @@
 #include "target/x86_64/frame.h"
 #include "target/common/core_function_facts.h"
 #include "target/common/core_frame_layout.h"
+#include "target/common/core_value_slots.h"
 #include "target/x86_64/abi.h"
 #include "target/data_layout.h"
 
@@ -30,34 +31,27 @@ bool minic_x86_64_frame_init_with_storage(const MinicC0Program *program,
     if (program == NULL || target == NULL || fn == NULL || facts == NULL || frame == NULL ||
         fn->value_count > (size_t)INT32_MAX / 8U) return false;
     (void)memset(frame, 0, sizeof(*frame));
+    frame->semantic_calls = facts->call_index;
     if (!minic_x86_64_plan_incoming_arguments(
-            program, target, fn, &frame->incoming_arguments))
+            program, target, fn, &frame->incoming_arguments) ||
+        (facts->call_index != NULL &&
+         !minic_x86_64_outgoing_call_plans_prepare(
+             program, target, fn, facts->call_index,
+             &frame->outgoing_call_plans)))
         return false;
-    if (storage != NULL) {
-        if (storage->count != fn->object_count ||
-            (storage->count != 0U && storage->objects == NULL))
-            return false;
-        frame->object_storage = *storage;
-        frame->borrows_object_storage = true;
-    } else if (!minic_core_object_storage_plan_build(
-                   program, target->data_layout, fn, &frame->object_storage))
+    if (!minic_core_object_storage_plan_acquire(
+            program, target->data_layout, fn, storage,
+            &frame->object_storage, &frame->borrows_object_storage))
         return false;
     frame->varargs_count = facts->variadic_address_count;
     frame->value_count = fn->value_count;
     frame->object_count = fn->object_count;
-    value_bytes = 0U;
-    if (fn->value_count != 0U) {
-        frame->value_offsets = (size_t *)calloc(fn->value_count,
-                                                 sizeof(*frame->value_offsets));
-        if (frame->value_offsets == NULL) return false;
-    }
-    for (i = 0U; i < fn->value_count; ++i) {
-        size_t slot = (minic_type_is_int128_integer(fn->values[i].type) ||
-                       minic_type_is_long_double(fn->values[i].type)) ? 16U : 8U;
-        if (value_bytes > (size_t)INT32_MAX - slot) return false;
-        value_bytes += slot;
-        frame->value_offsets[i] = value_bytes;
-    }
+    /* Core owns per-value 8B/16B placement. SysV still decides that the
+     * resulting end offsets are addressed below rbp and capped at INT32_MAX. */
+    if (!minic_core_value_slots_build(
+            fn, MINIC_CORE_VALUE_SLOT_LINEAR, 0U, (size_t)INT32_MAX,
+            &frame->value_offsets, &value_bytes))
+        return false;
     /* Freeze the entire incoming GP register bank before any Core
      * instruction can use RDX as the high limb of a temporary. Otherwise
      * an early __int128 parameter may destroy a later GP parameter before
@@ -83,10 +77,15 @@ bool minic_x86_64_frame_init_with_storage(const MinicC0Program *program,
         for (i = 0U; i < fn->instruction_count; ++i) {
             const MinicCoreInstruction *ins = &fn->instructions[i];
             if (ins->kind == MINIC_CORE_INSTRUCTION_VARIADIC_ARGUMENT_ADDRESS) {
-                if (ins->result >= fn->value_count) return false;
+                /* A standalone frame caller may supply stale facts. Never
+                 * write past the Common-sized varargs result array or
+                 * silently leave surplus VA cursors uninitialized. */
+                if (count >= frame->varargs_count ||
+                    ins->result >= fn->value_count) return false;
                 frame->varargs_results[count++] = ins->result;
             }
         }
+        if (count != frame->varargs_count) return false;
         /* Variadic frame support currently admits only scalar named
          * parameters; reuse the already-classified SysV argument locations
          * instead of maintaining a second register-bank cursor. */
@@ -164,28 +163,14 @@ bool minic_x86_64_frame_init_with_storage(const MinicC0Program *program,
            frame->frame_size <= (size_t)INT32_MAX;
 }
 
-bool minic_x86_64_frame_init_prepared(const MinicC0Program *program,
-    const MinicTargetInfo *target, const MinicCoreFunction *fn,
-    const MinicCoreFunctionFacts *facts, MinicX86Frame *frame) {
-    return minic_x86_64_frame_init_with_storage(
-        program, target, fn, facts, NULL, frame);
-}
-
-bool minic_x86_64_frame_init(const MinicC0Program *program,
-    const MinicTargetInfo *target, const MinicCoreFunction *fn,
-    MinicX86Frame *frame) {
-    MinicCoreFunctionFacts facts;
-    return minic_core_function_facts_analyze(fn, &facts) &&
-           minic_x86_64_frame_init_prepared(program, target, fn, &facts, frame);
-}
-
 void minic_x86_64_frame_destroy(MinicX86Frame *frame) {
     if (frame == NULL) return;
     free(frame->value_offsets);
     free(frame->object_offsets);
     minic_x86_64_argument_plan_destroy(&frame->incoming_arguments);
-    if (!frame->borrows_object_storage)
-        minic_core_object_storage_plan_destroy(&frame->object_storage);
+    minic_x86_64_outgoing_call_plans_destroy(&frame->outgoing_call_plans);
+    minic_core_object_storage_plan_release(
+        &frame->object_storage, frame->borrows_object_storage);
     free(frame->varargs_results);
     (void)memset(frame, 0, sizeof(*frame));
 }

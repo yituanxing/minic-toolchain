@@ -4,8 +4,10 @@
 #include "frontend/ast.h"
 #include "target/riscv64/asm_plan.h"
 #include "target/riscv64/abi.h"
-#include "target/riscv64/object_liveness.h"
+#include "target/common/core_object_reuse.h"
+#include "target/riscv64/record_snapshot.h"
 #include "target/riscv64/function_abi_plan.h"
+#include "target/riscv64/frame_requirements.h"
 #include "target/common/core_object_storage.h"
 #include "target/common/core_function_facts.h"
 #include <stdbool.h>
@@ -20,7 +22,13 @@ typedef struct MinicRiscv64CoreFrame {
     size_t *object_offsets;
     MinicCoreObjectStoragePlan object_storage;
     bool borrows_object_storage;
-    MinicRiscv64ObjectReusePlan object_reuse;
+    MinicCoreObjectReusePlan object_reuse;
+    /* Borrowed from the Common Function Plan, never owned by RV64. */
+    const MinicCoreCallIndex *semantic_calls;
+    /* Common borrows prepared semantic CALLs or owns a standalone snapshot. */
+    MinicCoreCallIndexHandle call_index;
+    /* RV64-owned ABI location plan, prepared once from Common CALL views. */
+    MinicRiscv64CallPlanCache outgoing_calls;
     size_t *value_offsets;
     MinicRiscv64AbiArgumentLocation *parameter_locations;
     size_t parameter_location_count;
@@ -53,21 +61,12 @@ typedef struct MinicRiscv64CoreFrame {
     bool has_variadic_argument_address;
 } MinicRiscv64CoreFrame;
 
-bool minic_riscv64_core_frame_initialize(
-    const MinicC0Program *, const MinicCoreFunction *, MinicRiscv64CoreFrame *);
 /* Consume a prevalidated ABI plan. This transfers ownership of parameter
  * locations to the frame; the input plan becomes empty on success. */
 bool minic_riscv64_core_frame_initialize_with_storage(
     const MinicC0Program *, const MinicCoreFunction *,
     MinicRiscv64CoreFrame *, MinicRiscv64FunctionAbiPlan *, bool, bool,
     const MinicCoreFunctionFacts *, const MinicCoreObjectStoragePlan *);
-bool minic_riscv64_core_frame_initialize_with_facts(
-    const MinicC0Program *, const MinicCoreFunction *,
-    MinicRiscv64CoreFrame *, MinicRiscv64FunctionAbiPlan *, bool, bool,
-    const MinicCoreFunctionFacts *);
-bool minic_riscv64_core_frame_initialize_prepared(
-    const MinicC0Program *, const MinicCoreFunction *,
-    MinicRiscv64CoreFrame *, MinicRiscv64FunctionAbiPlan *, bool, bool);
 void minic_riscv64_core_frame_destroy(MinicRiscv64CoreFrame *);
 bool minic_riscv64_core_frame_parameter_location(
     const MinicRiscv64CoreFrame *, size_t, MinicRiscv64AbiArgumentLocation *);

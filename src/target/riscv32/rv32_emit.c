@@ -547,11 +547,13 @@ static bool rv32_emit_ins(FILE *out, const MinicC0Program *program,
         f == NULL || fr == NULL || ins == NULL) return false;
     /* Shared semantic dispatch, but the 32-bit emitter still decides
      * helper calls, ABI limb splitting and legal Base-I instructions. */
-    if (minic_core_instruction_is_integer_scalar(ins->kind) ||
-        ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_OVERFLOW ||
-        ins->kind == MINIC_CORE_INSTRUCTION_SCALAR_BITCAST)
+    const MinicCoreSemanticFamily family =
+        minic_core_instruction_semantic_family(ins->kind);
+    if (family == MINIC_CORE_FAMILY_INTEGER_SCALAR ||
+        family == MINIC_CORE_FAMILY_OVERFLOW ||
+        family == MINIC_CORE_FAMILY_BITCAST)
         return rv32_emit_integer_instruction(out, f, fr, ins, symbol);
-    if (minic_core_instruction_is_floating_scalar(ins->kind))
+    if (family == MINIC_CORE_FAMILY_FLOATING_SCALAR)
         return rv32_emit_fp_instruction(out, f, fr, ins);
     switch (ins->kind) {
     case MINIC_CORE_INSTRUCTION_PARAMETER:
@@ -707,20 +709,9 @@ static bool rv32_func(FILE *out, const MinicC0Program *program,
     bool ok = false;
     size_t i, j;
     char message[200];
-    unsigned bits;
-    if (!minic_type_is_void(f->return_type) &&
-        !minic_type_is_record(f->return_type) &&
-        !rv32_scalar_storage_words(f, f->return_type, &bits)) {
-        rv32_diag(diag, "<rv32-abi>", "rv32i: return type exceeds one XLEN or is unqualified");
-        return false;
-    }
-    for (i = 0U; i < f->parameter_count; ++i) {
-        if (!minic_type_is_record(f->parameter_types[i]) &&
-            !rv32_scalar_storage_words(f, f->parameter_types[i], &bits)) {
-            rv32_diag(diag, "<rv32-abi>", "rv32i: non-scalar or multi-XLEN parameters require ABI lowering");
-            return false;
-        }
-    }
+    /* RV32FunctionAbiPlan checks both return and parameter types once,
+     * before constructing the frame. Its placements are the sole ILP32
+     * authority for call, prologue and return emission. */
     if (!rv32_frame_init_with_storage(
             &fr, program, f, target, def->is_variadic, facts, storage)) {
         if (getenv("MINIC_RV32_FRAME_TRACE") != NULL)

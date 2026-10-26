@@ -9,10 +9,13 @@ on:
       - 'tests/compiler/c0/probe-minic-driver-target-catalog.sh'
       - 'tests/compiler/c0/probe-target-language-abi-options.sh'
       - 'src/core/**'
+      - 'src/compiler/**'
       - 'src/frontend/**'
+      - 'tests/target/riscv64/layout_test.c'
       - 'Makefile'
       - 'tests/compiler/c0/check-four-target-model-m0.c'
       - 'tests/compiler/c0/check-minic-target-boundaries.sh'
+      - 'tests/compiler/c0/probe-core-semantic-family.c'
       - '.github/workflows/minic-native-refactor-gate.yml'
   push:
     branches:
@@ -24,7 +27,9 @@ on:
       - 'tests/compiler/c0/probe-minic-driver-target-catalog.sh'
       - 'tests/compiler/c0/probe-target-language-abi-options.sh'
       - 'src/core/**'
+      - 'src/compiler/**'
       - 'src/frontend/**'
+      - 'tests/target/riscv64/layout_test.c'
       - 'Makefile'
       - '.github/workflows/minic-native-refactor-gate.yml'
       - 'tests/compiler/c0/check-minic-target-boundaries.sh'
@@ -51,6 +56,14 @@ jobs:
         run: |
           set -Eeuo pipefail
           bash tests/compiler/c0/check-minic-target-boundaries.sh
+      - name: Exhaustive Core opcode family and ISA separation
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          cc -std=c11 -O2 -Wall -Wextra -Wswitch-enum -Werror \
+            -Isrc -Iinclude tests/compiler/c0/probe-core-semantic-family.c \
+            -o "$RUNNER_TEMP/minic-core-semantic-family"
+          "$RUNNER_TEMP/minic-core-semantic-family"
       - name: Strictly compile all MiniC targets without apt or QEMU prerequisites
         shell: bash
         run: |
@@ -58,6 +71,26 @@ jobs:
           make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/minic-native-backend all
           test -x build/minic-native-backend/bin/minic
           test -x build/minic-native-backend/bin/minic-cc
+      - name: Canonical target DataLayout record/global layout regression
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/minic-native-backend check-layout
+
+      - name: Two-XLEN Common single-pass SSA spill regressions
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          MINIC="$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic" \
+          BUILD_DIR=build/minic-native-backend \
+            sh tests/compiler/c0/run-core-block-spill-reuse.sh
+
+      - name: RV64 ABI function-plan owner, hard/soft float and rollback
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/minic-native-backend check-rv64-abi
+
       - name: Five-target staged Driver and compiler identity
         shell: bash
         run: |

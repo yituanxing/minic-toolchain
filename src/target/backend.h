@@ -20,10 +20,6 @@
  * Backend callbacks currently emit directly to GNU assembly. Introducing
  * Machine IR must not require a new frontend target dispatch.
  */
-typedef bool (*MinicBackendPrepareProgram)(
-    const char *source_path, MinicC0Program *program,
-    const MinicTargetInfo *target, MinicDiagnostic *diagnostic);
-
 typedef bool (*MinicBackendEmitProgram)(
     const char *output_path, const MinicC0Program *program,
     const MinicTargetInfo *target, const MinicCoreFunction *functions,
@@ -43,9 +39,6 @@ typedef bool (*MinicBackendQualifyInlineAsm)(
 typedef struct MinicBackend {
     MinicTargetArchitecture architecture;
     const char *name;
-    /* Optional: legacy RV64 C0 layout before machine emission.
-     * A NULL callback means that the backend plans its own layout. */
-    MinicBackendPrepareProgram prepare_program;
     /* This is the only Core-to-machine handoff in the compile driver.
      * Today: direct GNU text. Future: lower, optimize and emit Machine IR. */
     MinicBackendEmitProgram emit_program;

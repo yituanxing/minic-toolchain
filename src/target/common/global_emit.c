@@ -4,6 +4,14 @@
 #include <stdint.h>
 #include <stdlib.h>
 
+/* Private recursive bitfield helper is needed before its first invocation.
+ * It is no longer an exported Common ABI endpoint. */
+static bool minic_multi_emit_record_bit_field_run(
+    FILE *file, const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicGlobalObject *object, const MinicRecord *record,
+    size_t field_limit, size_t type_size, size_t *field_index,
+    size_t *initializer_index, size_t *relocation_index, size_t *cursor);
+
 /* Formerly duplicated as static definitions in two target translation units.
  * Preserve the proven DataLayout walk byte-for-byte: aggregate/union slot
  * checks remain shared, relocation rendering remains target-owned. */
@@ -232,7 +240,7 @@ static bool minic_multi_emit_zero_bytes(FILE *file, size_t size) {
     return size == 0U || fprintf(file, "  .zero %zu\n", size) >= 0;
 }
 
-bool minic_multi_emit_record_bit_field_run(FILE *file,
+static bool minic_multi_emit_record_bit_field_run(FILE *file,
                                                     const MinicC0Program *program,
                                                     const MinicTargetInfo *target,
                                                     const MinicGlobalObject *object,
@@ -656,7 +664,7 @@ static bool minic_multi_recursive_shape_supported_at(
     return false;
 }
 
-bool minic_multi_recursive_shape_supported(
+static bool minic_multi_recursive_shape_supported(
     const MinicC0Program *program, MinicType type) {
     return minic_multi_recursive_shape_supported_at(program, type, 0U);
 }
@@ -734,7 +742,7 @@ bool minic_multi_emit_record_array_global(
  * extent comes from the complete GlobalObject DataLayout, not sizeof(record).
  * Preserve the public entry point for callers; there is no separate payload
  * traversal/relocation order to maintain. */
-bool minic_multi_emit_flexible_record_global(
+static bool minic_multi_emit_flexible_record_global(
     FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicGlobalObject *object, size_t storage_size,
     MinicMultiRelocEmitter emit_relocation) {

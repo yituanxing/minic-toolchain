@@ -1,6 +1,7 @@
 #include "target/common/lp64_frame.h"
 #include "target/common/core_object_storage.h"
 #include "target/common/core_frame_layout.h"
+#include "target/common/core_value_slots.h"
 #include <stdint.h>
 #include <stdlib.h>
 
@@ -20,14 +21,9 @@ bool minic_lp64_frame_plan_objects_with_storage(
         return false;
     /* Shared one-time Core storage plan also serves x86 and RV64.
      * The LP64 emitters keep their exact 8-byte slots and 1 MiB frame cap. */
-    if (shared != NULL) {
-        if (shared->count != fn->object_count ||
-            (shared->count != 0U && shared->objects == NULL))
-            return false;
-        plan->object_storage = *shared;
-        plan->borrows_object_storage = true;
-    } else if (!minic_core_object_storage_plan_build(
-                   program, target->data_layout, fn, &plan->object_storage))
+    if (!minic_core_object_storage_plan_acquire(
+            program, target->data_layout, fn, shared,
+            &plan->object_storage, &plan->borrows_object_storage))
         return false;
     if (fn->object_count != 0U) {
         plan->object_offsets =
@@ -51,35 +47,18 @@ bool minic_lp64_frame_plan_objects_with_storage(
     return true;
 }
 
-bool minic_lp64_frame_plan_objects(
-    const MinicC0Program *program, const MinicTargetInfo *target,
-    const MinicCoreFunction *fn, MinicLP64FramePlan *plan) {
-    return minic_lp64_frame_plan_objects_with_storage(
-        program, target, fn, NULL, plan);
-}
-
 bool minic_lp64_frame_plan_wide(
     const MinicCoreFunction *fn, size_t wide_base, MinicLP64FramePlan *plan) {
-    size_t i, pos = wide_base;
+    size_t end;
     if (fn == NULL || plan == NULL || fn->value_count != plan->value_count ||
         wide_base > MINIC_LARGE_FRAME_MAX || plan->wide_offsets != NULL ||
-        (fn->value_count != 0U && fn->values == NULL))
+        (fn->value_count != 0U && fn->values == NULL) ||
+        !minic_core_value_slots_build(
+            fn, MINIC_CORE_VALUE_SLOT_WIDE_TAIL, wide_base,
+            MINIC_LARGE_FRAME_MAX, &plan->wide_offsets, &end))
         return false;
-    if (fn->value_count != 0U) {
-        plan->wide_offsets =
-            (size_t *)malloc(fn->value_count * sizeof(*plan->wide_offsets));
-        if (plan->wide_offsets == NULL) return false;
-    }
-    for (i = 0U; i < fn->value_count; ++i) {
-        plan->wide_offsets[i] = SIZE_MAX;
-        if (!minic_type_is_long_double(fn->values[i].type) &&
-            !minic_type_is_int128_integer(fn->values[i].type)) continue;
-        if (pos > MINIC_LARGE_FRAME_MAX - 16U) return false;
-        plan->wide_offsets[i] = pos;
-        pos += 16U;
-    }
     plan->wide_base = wide_base;
-    plan->wide_end = pos;
+    plan->wide_end = end;
     return true;
 }
 
@@ -104,8 +83,8 @@ void minic_lp64_frame_plan_destroy(MinicLP64FramePlan *plan) {
     if (plan == NULL) return;
     free(plan->object_offsets);
     free(plan->wide_offsets);
-    if (!plan->borrows_object_storage)
-        minic_core_object_storage_plan_destroy(&plan->object_storage);
+    minic_core_object_storage_plan_release(
+        &plan->object_storage, plan->borrows_object_storage);
     *plan = (MinicLP64FramePlan){0};
 }
 

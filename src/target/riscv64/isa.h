@@ -8,9 +8,6 @@
 
 #include "target/riscv/isa_features.h"
 
-bool minic_riscv_isa_resolve(const char *march, const char *mabi,
-                             MinicRiscvIsa *isa, char *reason, size_t capacity);
-
 /* A small target-owned instruction-family selector. Call only for reachable
  * Core instructions, after frame/ABI planning and before emitting machine
  * bytes. Unknown auxiliary opcodes are still audited in the final assembler

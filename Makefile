@@ -154,16 +154,20 @@ MINIC_SOURCES := \
 	src/target/common/direct_preflight.c \
 	src/target/common/direct_function_profile.c \
 	src/target/common/direct_function_plan.c \
+	src/target/common/core_function_plan.c \
 	src/target/common/core_function_facts.c \
+	src/target/common/core_numeric_shape.c \
+	src/target/common/core_value_slots.c \
 	src/target/common/core_object_storage.c \
 	src/target/common/core_call_view.c \
-	src/target/common/direct_call_preflight.c \
+	src/target/common/core_call_index.c \
 	src/target/common/direct_call_plan.c \
 	src/target/common/direct_instruction_semantics.c \
 	src/target/common/direct_residual_plan.c \
 	src/target/common/lp64_aggregate.c \
 	src/target/common/lp64_scalar.c \
 	src/target/common/lp64_frame.c \
+	src/target/riscv/isa_resolve.c \
 	src/target/riscv64/isa.c \
 	src/target/riscv32/rv32_emit.c \
 	src/target/riscv32/rv32_integer_emit.c \
@@ -177,7 +181,6 @@ MINIC_SOURCES := \
 	src/target/riscv32/rv32_abi_cursor.c \
 	src/target/riscv32/rv32_global_emit.c \
 	src/target/riscv64/abi.c \
-	src/target/riscv64/layout.c \
 	src/target/riscv64/codegen_support.c \
 	src/target/riscv64/core_codegen.c \
 	src/target/riscv64/core_admission.c \
@@ -194,10 +197,7 @@ MINIC_SOURCES := \
 	src/target/riscv64/frame_layout.c \
 	src/target/riscv64/frame_access.c \
 	src/target/riscv64/asm_plan.c \
-	src/target/riscv64/spill_layout.c \
 	src/target/common/core_spill_layout.c \
-	src/target/riscv64/object_liveness.c \
-	src/target/riscv64/object_intervals.c \
 	src/target/common/core_object_intervals.c \
 	src/target/common/core_object_reuse.c \
 	src/target/riscv64/record_snapshot.c \
@@ -365,7 +365,6 @@ LAYOUT_TEST_SOURCES := \
 	src/target/data_layout.c \
 	src/target/target_info.c \
 	src/target/target_catalog.c \
-	src/target/riscv64/layout.c \
 	tests/target/riscv64/layout_test.c
 LAYOUT_TEST_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(LAYOUT_TEST_SOURCES))
 LAYOUT_TEST_BINARY  := $(BUILD_DIR)/tests/target/riscv64/layout-test
@@ -376,6 +375,7 @@ RV64_ABI_TEST_SOURCES := \
 	src/frontend/type.c \
 	src/target/data_layout.c \
 	src/target/riscv64/abi.c \
+	src/target/riscv64/function_abi_plan.c \
 	tests/target/riscv64/abi_test.c
 RV64_ABI_TEST_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(RV64_ABI_TEST_SOURCES))
 RV64_ABI_TEST_BINARY  := $(BUILD_DIR)/tests/target/riscv64/abi-test
