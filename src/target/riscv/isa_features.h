@@ -2,6 +2,7 @@
 #define MINIC_TARGET_RISCV_ISA_FEATURES_H
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 /* Shared RV32/RV64 machine capability, never GNU assembler policy.
