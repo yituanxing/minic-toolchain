@@ -3,6 +3,7 @@
 
 #include "core/core_ir.h"
 #include "target/common/core_function_facts.h"
+#include "target/common/core_object_storage.h"
 #include "target/riscv/function_symbol.h"
 #include "target/riscv64/isa.h"
 #include "minic/compiler.h"
