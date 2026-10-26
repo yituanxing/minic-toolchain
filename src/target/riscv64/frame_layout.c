@@ -37,7 +37,7 @@ bool minic_riscv64_core_frame_initialize_with_storage(
     frame->value_slot_count = 0U;
     frame->object_storage = (MinicCoreObjectStoragePlan){0};
     frame->borrows_object_storage = false;
-    frame->object_reuse = (MinicRiscv64ObjectReusePlan){0};
+    frame->object_reuse = (MinicCoreObjectReusePlan){0};
     if (storage != NULL) {
         if (storage->count != function->object_count ||
             (storage->count != 0U && storage->objects == NULL))
