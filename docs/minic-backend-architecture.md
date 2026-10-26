@@ -266,3 +266,34 @@ The historical implicit RV64 target still uses its separately qualified
 `rv64gc/lp64d` assembler path. Replacing it with an explicit profile is
 **not** part of this refactor, because the default ELF acceptance contract
 and the strict instruction audit have different scopes.
+
+## Source GNU ASM versus compiler-selected ISA: stable RV32/RV64 owner boundary
+
+A Linux kernel build may set a superset `-march` for the actual assembler
+because **source-owned** inline or file-scope ASM uses A/CSR/M/privileged/
+vendor extensions. MiniC's plain-C generator is still entitled to emit only
+its qualified Base-I path. The two demands must not be conflated:
+
+- **MiniC:** C semantics, target XLEN/data model, ABI, operand/clobber
+  substitution for supported inline asm shapes, and Base-I machine output.
+  The current qualified RV64 profiles can already optionally select native M
+  for certain operations, but it is an optimization/legalization decision
+  with the Base-I or runtime-call fallback retained.
+- **GNU AS (or later MiniAS):** parse instructions/directives from upstream
+  assembly and source asm, validate the assembler's full `-march` and
+  assembler-scoped options, encode and relocate instructions. MiniC should
+  not implement all extensions merely to preserve that source assembly.
+- **Driver/linker:** forward or resolve the correct ABI, output format and
+  assembler/linker flags. A correct `-mabi` affects C calling and object
+  layout; an assembler feature chosen solely to admit upstream asm need not
+  enable a codegen optimization inside MiniC.
+
+The former opt-in `MINIC_RV64I_ASM_AUDIT=1` diagnostic path now runs
+by default. The existing inline/file-asm emission writes nonexecuting
+source-origin comments around only user assembly templates. Strict RV64I
+emission checks compiler-owned instructions while leaving source asm and
+its directives to GNU AS; external ELF ISA/ABI checks remain separate. This
+removes false Core rejection for code whose assembler needs more extensions
+than MiniC's own Base-I producer. It does not claim unrestricted GCC inline
+asm constraints: unsupported operand forms still reject at the frontend/
+target transport boundary.

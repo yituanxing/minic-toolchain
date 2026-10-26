@@ -15,15 +15,11 @@ long test(long a, long b) {
     return c;
 }
 EOF
-# The normal strict profile MUST keep rejecting arbitrary inline asm.
-if "$minic_cc" --target=riscv64-linux -march=rv64i -mabi=lp64 \
-  -S "$work/probe.i" -o "$work/unqualified.s" >/dev/null 2>"$work/strict.err"; then
-    echo "RV64I_ORIGIN_PROBE=FAIL normal strict mode admitted user inline asm" >&2
-    exit 1
-fi
-grep -q 'inline assembly is not yet ISA-qualified' "$work/strict.err"
+# The default strict profile must accept source-owned M/A/CSR/Zifencei
+# assembly without pretending those were emitted by MiniC. The assembler
+# decides whether its own -march permits the source instructions.
 mkdir -p "$work/inputs"
-MINIC_RV64I_ASM_AUDIT=1 "$minic_cc" --target=riscv64-linux \
+"$minic_cc" --target=riscv64-linux \
   -march=rv64i -mabi=lp64 -S "$work/probe.i" -o "$work/inputs/probe.s"
 python3 - "$work/inputs/probe.s" <<'PY'
 import importlib.util
@@ -59,4 +55,4 @@ if python3 tools/ci/audit-rv64i-asm-origin.py --root "$work/inputs" \
     echo "RV64I_ORIGIN_PROBE=FAIL scanner missed compiler-origin MUL" >&2
     exit 1
 fi
-echo "RV64I_ORIGIN_PROBE=PASS asm_regions=4 compiler_code=rv64i fail_closed=1"
+echo "RV64I_ORIGIN_PROBE=PASS asm_regions=4 base_i_machine_owner=1 source_asm_passthrough=1 fail_closed=1"

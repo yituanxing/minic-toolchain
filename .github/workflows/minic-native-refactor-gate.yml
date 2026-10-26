@@ -110,6 +110,13 @@ jobs:
           MINIC_CC="$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc" \
             sh tests/compiler/c0/probe-riscv-shared-word-operations.sh
 
+      - name: Source-owned RISC-V GNU assembler passthrough vs compiler-owned Base-I
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          bash tests/compiler/c0/probe-rv64i-asm-origin.sh \
+            "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
+
       - name: Native x86-64 ABI and runtime smoke
         shell: bash
         run: |

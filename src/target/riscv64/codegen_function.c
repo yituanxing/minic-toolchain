@@ -37,36 +37,10 @@ bool minic_riscv64_write_c0_program_with_core_functions(const char *path,
         return false;
     }
 
-    /* Arbitrary GNU inline/file asm may encode instructions via raw data
-     * directives that a textual opcode audit cannot prove safe. Reject these
-     * in the initial strict RV64I profile until an ISA-aware asm contract is
-     * qualified. This has no impact on the legacy RV64 emission path. */
-    if (target != NULL && target->riscv_isa.strict_isa &&
-        !minic_riscv64_asm_audit_mode()) {
-        if (program->file_asm_count != 0U) {
-            minic_riscv64_set_diagnostic(
-                diagnostic, path, "rv64i: file-scope inline assembly is not qualified");
-            return false;
-        }
-        for (function_index = 0U; function_index < core_function_count; ++function_index) {
-            const MinicCoreFunction *f = &core_functions[function_index];
-            size_t i;
-            for (i = 0U; i < f->instruction_count; ++i) {
-                switch (f->instructions[i].kind) {
-                case MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM:
-                case MINIC_CORE_INSTRUCTION_REGISTER_OUTPUT_INLINE_ASM:
-                case MINIC_CORE_INSTRUCTION_REGISTER_OUTPUT_INPUT_INLINE_ASM:
-                case MINIC_CORE_INSTRUCTION_MEMORY_READWRITE_SCALAR_INPUT_INLINE_ASM:
-                case MINIC_CORE_INSTRUCTION_SCALAR_INPUT_INLINE_ASM:
-                case MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM:
-                    minic_riscv64_set_diagnostic(
-                        diagnostic, path, "rv64i: inline assembly is not yet ISA-qualified");
-                    return false;
-                default: break;
-                }
-            }
-        }
-    }
+    /* Source-origin GNU asm is validated for operand transport by Core,
+     * then forwarded to the assembler. ISA restrictions on compiler-emitted
+     * code must not reject an upstream Linux CSR/A/M/privileged asm template.
+     * The final RISC-V ISA audit only inspects code outside source markers. */
 
     /* LP64 uses two XLEN slots for C __int128 parameters and returns.
      * Unsupported 128-bit ARITHMETIC remains rejected by Core ISA
@@ -164,8 +138,8 @@ bool minic_riscv64_write_c0_program_with_core_functions(const char *path,
              ++file_asm_index) {
             success = minic_riscv64_asm_audit_marker(file, true) &&
                       minic_riscv64_emit_file_asm(file, &program->file_asms[file_asm_index]);
-            if (success && minic_riscv64_asm_audit_mode())
-                success = fputc('\n', file) != EOF;
+            /* Keep the end-marker on its own physical source line. */
+            if (success) success = fputc('\n', file) != EOF;
             if (success) success = minic_riscv64_asm_audit_marker(file, false);
         }
     }

@@ -304,13 +304,11 @@ bool minic_riscv_isa_lp64_integer_signature_supported(
     return true;
 }
 
-bool minic_riscv64_asm_audit_mode(void) {
-    const char *enabled = getenv("MINIC_RV64I_ASM_AUDIT");
-    return enabled != NULL && strcmp(enabled, "1") == 0;
-}
-
+/* Provenance is part of the ordinary assembly format, not an opt-in mode.
+ * Source-owned GNU asm is passed through after Core validates operand
+ * transport. RISC-V's compiler-emitted ISA is audited separately from it.
+ * Markers are nonexecuting assembler comments, preserving ELF content. */
 bool minic_riscv64_asm_audit_marker(FILE *file, bool begin) {
-    if (!minic_riscv64_asm_audit_mode()) return true;
     return file != NULL && fprintf(file, "# MINIC_RV64I_ASM_%s\n",
                                    begin ? "BEGIN" : "END") >= 0;
 }
@@ -393,8 +391,8 @@ static uint32_t required_features(const char *op, const char **description) {
 }
 
 /* .insn, macro and ISA-setting directives may bypass a normal -march
- * check; reject these for all explicit profiles. User-provided arbitrary
- * inline asm is already rejected before reaching this audit. */
+ * check when produced by MiniC. User-supplied directives inside a marked
+ * source region remain the assembler's responsibility. */
 static bool escape_directive(const char *p) {
     return strncmp(p, ".insn", 5) == 0 ||
            strncmp(p, ".macro", 6) == 0 ||
@@ -413,7 +411,6 @@ bool minic_riscv64_check_isa_assembly(const char *path,
     ssize_t n;
     bool valid = true;
     bool in_user_asm = false;
-    const bool provenance = minic_riscv64_asm_audit_mode();
     if (isa == NULL || !isa->strict_isa)
         return reject(reason, capacity, "strict RISC-V ISA profile required");
     in = fopen(path, "rb");
@@ -427,7 +424,7 @@ bool minic_riscv64_check_isa_assembly(const char *path,
         (void)n;
         ++lineno;
         while (isspace((unsigned char)*p)) ++p;
-        if (provenance && strncmp(p, "# MINIC_RV64I_ASM_BEGIN", 23) == 0 &&
+        if (strncmp(p, "# MINIC_RV64I_ASM_BEGIN", 23) == 0 &&
             (p[23] == '\n' || p[23] == '\0')) {
             if (in_user_asm) {
                 valid = reject(reason, capacity, "nested inline asm provenance markers");
@@ -436,7 +433,7 @@ bool minic_riscv64_check_isa_assembly(const char *path,
             in_user_asm = true;
             continue;
         }
-        if (provenance && strncmp(p, "# MINIC_RV64I_ASM_END", 21) == 0 &&
+        if (strncmp(p, "# MINIC_RV64I_ASM_END", 21) == 0 &&
             (p[21] == '\n' || p[21] == '\0')) {
             if (!in_user_asm) {
                 valid = reject(reason, capacity, "unpaired inline asm end marker");

@@ -127,6 +127,15 @@ if [[ -e src/core/core_lower_asm_x86.c ]]; then
   fail 'legacy x86-specific Core classifier must not return'
 fi
 
+# Compiler-owned RV64I instructions must be audited separately from the
+# GNU source asm that the original Linux Kbuild assembler is responsible for.
+has src/target/riscv64/isa.c 'if (in_user_asm) continue;'
+has src/target/riscv64/isa.c 'minic_riscv64_asm_audit_marker('
+has src/target/riscv64/codegen_function.c 'minic_riscv64_emit_file_asm('
+lacks src/target/riscv64/codegen_function.c 'inline assembly is not yet ISA-qualified'
+lacks src/target/riscv64/codegen_function.c 'file-scope inline assembly is not qualified'
+exists tests/compiler/c0/probe-rv64i-asm-origin.sh
+
 # The RISC-V family owns one XLEN-independent implementation of pair
 # add/sub/logic/unary and machine-word bit scans. Neither ISA may silently
 # grow a duplicate carry/borrow or CLZ/CTZ emitter.
