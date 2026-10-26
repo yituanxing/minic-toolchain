@@ -33,6 +33,18 @@ has src/target/riscv64/core_codegen.c \
   'minic_riscv64_core_function_admit_profile('
 has src/target/riscv64/frame_layout.c \
   'minic_core_object_reuse_plan_build('
+# One Common interval index covers small and large Core functions.
+# Never resurrect per-object repeated scans on optional allocation failure.
+exists src/target/common/core_object_intervals.c
+has src/target/common/core_object_reuse.c \
+  'minic_core_object_intervals_index(function, &plan->analysis);'
+lacks src/target/common/core_object_reuse.c 'function->object_count >= 8U'
+lacks src/target/common/core_object_intervals.c 'CoreTargetValueUseCount'
+lacks src/target/common/core_object_intervals.c 'MINIC_TEST_FORCE_CORE_OBJECT_INTERVAL_FALLBACK'
+lacks src/target/common/core_object_intervals.c 'Allocation or malformed-index fallback'
+has src/target/common/core_spill_layout.c \
+  'cached_slot_sizes[value_id] = *slot_size;'
+
 # The RV64 ABI classification+placement plan, not its Core instruction
 # admission, owns return/argument admissibility and rejection rollback.
 has src/target/riscv64/function_abi_plan.c \

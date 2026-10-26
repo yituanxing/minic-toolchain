@@ -19,13 +19,19 @@ static bool core_value_spill_slot_size(const MinicC0Program *program,
                                        const MinicDataLayout *layout,
                                        size_t unit_bytes,
                                        MinicCoreValueId value_id,
+                                       size_t *cached_slot_sizes,
                                        size_t *slot_size) {
     size_t value_size;
     size_t value_alignment;
 
     if (program == NULL || function == NULL || slot_size == NULL ||
-        value_id >= function->value_count ||
-        !minic_data_layout_type(layout,
+        cached_slot_sizes == NULL || value_id >= function->value_count)
+        return false;
+    if (cached_slot_sizes[value_id] != 0U) {
+        *slot_size = cached_slot_sizes[value_id];
+        return true;
+    }
+    if (!minic_data_layout_type(layout,
                                 program,
                                 function->values[value_id].type,
                                 &value_size,
@@ -35,6 +41,7 @@ static bool core_value_spill_slot_size(const MinicC0Program *program,
     }
     (void)value_alignment;
     *slot_size = value_size > unit_bytes ? 2U * unit_bytes : unit_bytes;
+    cached_slot_sizes[value_id] = *slot_size;
     return true;
 }
 
@@ -59,6 +66,7 @@ typedef struct CoreSpillConsumeContext {
     const MinicCoreFunction *function;
     const MinicDataLayout *layout;
     size_t unit_bytes;
+    size_t *cached_slot_sizes;
     size_t *remaining_uses;
     size_t *active_units;
     bool *occupied_units;
@@ -79,7 +87,8 @@ static bool core_spill_consume_use(MinicCoreValueId value_id, void *opaque) {
         context->active_units[value_id] == SIZE_MAX ||
         !core_value_spill_slot_size(
             context->program, context->function, context->layout,
-            context->unit_bytes, value_id, &slot_size) ||
+            context->unit_bytes, value_id, context->cached_slot_sizes,
+            &slot_size) ||
         (slot_size != context->unit_bytes &&
          slot_size != 2U * context->unit_bytes)) {
         return false;
@@ -130,10 +139,13 @@ static bool core_spill_find_units(const bool *occupied_units,
     return false;
 }
 
-/* A workspace spans the whole function. The old algorithm calloc/malloc'd
+/* The function workspace caches each immutable value's DataLayout slot size
+ * across all SSA reads/releases; do not repeat type-layout calculation.
+ * The old algorithm calloc/malloc'd
  * three arrays in every block (and walked all blocks twice); that dominated
  * small-block-heavy functions. Reset buffers in-place between blocks. */
 typedef struct CoreSpillWorkspace {
+    size_t *cached_slot_sizes;
     size_t *remaining_uses;
     size_t *active_units;
     bool *occupied_units;
@@ -179,7 +191,8 @@ static bool core_block_reused_spill_layout(const MinicC0Program *program,
         }
         if (instruction->result >= function->value_count ||
             !core_value_spill_slot_size(program, function, layout, unit_bytes,
-                                        instruction->result, &slot_size) ||
+                                        instruction->result,
+                                        workspace->cached_slot_sizes, &slot_size) ||
             (slot_size != unit_bytes && slot_size != 2U * unit_bytes) ||
             total_units > SIZE_MAX - slot_size / unit_bytes) {
             return false;
@@ -229,6 +242,7 @@ static bool core_block_reused_spill_layout(const MinicC0Program *program,
     consume_context.function = function;
     consume_context.layout = layout;
     consume_context.unit_bytes = unit_bytes;
+    consume_context.cached_slot_sizes = workspace->cached_slot_sizes;
     consume_context.remaining_uses = remaining_uses;
     consume_context.active_units = active_units;
     consume_context.occupied_units = occupied_units;
@@ -248,7 +262,8 @@ static bool core_block_reused_spill_layout(const MinicC0Program *program,
 
             if (result >= function->value_count || active_units[result] != SIZE_MAX ||
                 !core_value_spill_slot_size(program, function, layout, unit_bytes,
-                                            result, &slot_size) ||
+                                            result, workspace->cached_slot_sizes,
+                                            &slot_size) ||
                 (slot_size != unit_bytes && slot_size != 2U * unit_bytes)) {
                 goto done;
             }
@@ -287,7 +302,8 @@ static bool core_block_reused_spill_layout(const MinicC0Program *program,
             size_t i;
             if (start == SIZE_MAX ||
                 !core_value_spill_slot_size(program, function, layout, unit_bytes,
-                                            result, &slot_size) ||
+                                            result, workspace->cached_slot_sizes,
+                                            &slot_size) ||
                 (slot_size != unit_bytes && slot_size != 2U * unit_bytes)) {
                 goto done;
             }
@@ -338,13 +354,17 @@ bool minic_core_function_reused_spill_layout(
         return false;
 
     if (function->value_count != 0U && function->block_count != 0U) {
+        workspace.cached_slot_sizes =
+            (size_t *)calloc(function->value_count,
+                             sizeof(*workspace.cached_slot_sizes));
         workspace.remaining_uses =
             (size_t *)calloc(function->value_count,
                              sizeof(*workspace.remaining_uses));
         workspace.active_units =
             (size_t *)malloc(function->value_count *
                              sizeof(*workspace.active_units));
-        if (workspace.remaining_uses == NULL || workspace.active_units == NULL)
+        if (workspace.cached_slot_sizes == NULL ||
+            workspace.remaining_uses == NULL || workspace.active_units == NULL)
             goto done;
     }
     for (block_index = 0U; block_index < function->block_count; ++block_index) {
@@ -364,6 +384,7 @@ bool minic_core_function_reused_spill_layout(
     *peak_bytes = maximum;
     ok = true;
 done:
+    free(workspace.cached_slot_sizes);
     free(workspace.remaining_uses);
     free(workspace.active_units);
     free(workspace.occupied_units);

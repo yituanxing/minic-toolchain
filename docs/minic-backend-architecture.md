@@ -71,6 +71,20 @@ backends. The new `probe-core-value-slots.c` checks scalar/wide layout,
 non-wide sentinel behavior, empty functions and transactional overflow failure.
 Runtime, psABI and strict RV32I/RV64I checks remain separate gates.
 
+### Retiring the per-object scan fallback
+
+The RV32/RV64 frame planner now invokes the Common interval index for every
+nonempty Core function, not only those above the old 8-object/100-instruction
+cutoff. The old repeated per-object and whole-function address-use fallback
+is removed. If optional index allocation fails, objects retain private stack
+storage; stack-slot reuse is never guessed and compilation can continue.
+The existing first-real-access-is-a-write check remains mandatory before
+cross-block sharing.
+
+The common RV32/RV64 SSA spill planner also caches each value's immutable
+DataLayout slot size across visits, while keeping the established last-use
+release policy, 4B/8B units, stack bounds and target frame semantics.
+
 ### Single-pass Direct LP64 CALL admission and ABI planning
 
 AAPCS64 and LoongArch64 formerly traversed the same verified Common CALL
