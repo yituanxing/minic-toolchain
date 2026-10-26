@@ -2,6 +2,7 @@
 #define MINIC_TARGET_COMMON_DIRECT_PROGRAM_EMIT_H
 
 #include "core/core_ir.h"
+#include "target/common/core_function_facts.h"
 #include "frontend/ast.h"
 #include "minic/compiler.h"
 #include "target/target_info.h"
@@ -15,7 +16,8 @@
  * target-neutral object/function serialization loop. */
 typedef bool (*MinicMultiDirectEmitFunction)(
     FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
-    const MinicFunction *decl, const MinicCoreFunction *fn, size_t function_id,
+    const MinicFunction *decl, const MinicCoreFunction *fn,
+    const MinicCoreFunctionFacts *facts, size_t function_id,
     bool function_sections);
 
 typedef struct MinicMultiDirectProgramConfig {

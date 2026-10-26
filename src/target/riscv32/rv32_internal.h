@@ -1,6 +1,7 @@
 #ifndef MINIC_TARGET_RISCV32_INTERNAL_H
 #define MINIC_TARGET_RISCV32_INTERNAL_H
 #include "core/core_ir.h"
+#include "target/common/core_function_facts.h"
 #include "frontend/ast.h"
 #include "minic/compiler.h"
 #include "target/target_info.h"
@@ -42,6 +43,9 @@ typedef struct Rv32Frame {
 } Rv32Frame;
 
 /* Frame ownership: rv32_frame.c */
+bool rv32_frame_init_prepared(Rv32Frame *, const MinicC0Program *,
+    const MinicCoreFunction *, const MinicTargetInfo *, bool,
+    const MinicCoreFunctionFacts *);
 bool rv32_frame_init(Rv32Frame *, const MinicC0Program *,
                      const MinicCoreFunction *, const MinicTargetInfo *, bool);
 void rv32_frame_destroy(Rv32Frame *);

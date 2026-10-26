@@ -14,7 +14,7 @@
 bool minic_multi_direct_lp64_function_plan_prepare(
     const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicFunction *decl, const MinicCoreFunction *fn,
-    const char *architecture_name, MinicLP64DirectABI abi,
+    const MinicCoreFunctionFacts *facts, const char *architecture_name, MinicLP64DirectABI abi,
     MinicDirectLP64IndirectRecord indirect_record,
     MinicDirectLP64FunctionPlan *plan) {
     MinicDirectLP64FunctionProfile profile;
@@ -27,7 +27,7 @@ bool minic_multi_direct_lp64_function_plan_prepare(
     plan->failed_stage = "function_preflight";
     plan->failed_block = SIZE_MAX;
     plan->failed_instruction = SIZE_MAX;
-    if (program == NULL || target == NULL || decl == NULL || fn == NULL ||
+    if (program == NULL || target == NULL || decl == NULL || fn == NULL || facts == NULL ||
         architecture_name == NULL || indirect_record == NULL)
         return false;
     name = minic_c0_function_symbol_name(decl);
@@ -35,7 +35,7 @@ bool minic_multi_direct_lp64_function_plan_prepare(
             program, target, decl, fn, architecture_name, name))
         return false;
     profile_result = minic_multi_direct_lp64_profile_function(
-        program, target, decl, fn, abi, indirect_record,
+        program, target, decl, fn, facts, abi, indirect_record,
         &plan->incoming_plan, &profile);
     if (profile_result != MINIC_DIRECT_LP64_PROFILE_OK) {
         plan->failed_stage =

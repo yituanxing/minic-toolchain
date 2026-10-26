@@ -492,9 +492,11 @@ static bool emit_core_function_with_symbol(FILE *file,
                                                     const MinicRiscv64FunctionSymbol *symbol,
                                                     bool position_independent,
                                                     const MinicRiscvIsa *isa,
-                                                    MinicDiagnostic *diagnostic) {
+                                                    MinicDiagnostic *diagnostic,
+                                                    const MinicCoreFunctionFacts *facts) {
     MinicRiscv64CoreFrame frame;
     MinicRiscv64FunctionAbiPlan abi_plan = {0};
+    MinicCoreFunctionFacts compatibility_facts;
     const char *symbol_name;
     size_t block_index;
     bool bootstrap_trace;
@@ -502,6 +504,13 @@ static bool emit_core_function_with_symbol(FILE *file,
     if (file == NULL || symbol == NULL || symbol->symbol_name == NULL ||
         symbol->symbol_name[0] == '\0') {
         return false;
+    }
+    /* Legacy standalone Core emitters have no common TU visitor. Preserve
+     * their ABI/frame contract without asking production to rescan Core. */
+    if (facts == NULL) {
+        if (!minic_core_function_facts_analyze(function, &compatibility_facts))
+            return false;
+        facts = &compatibility_facts;
     }
     symbol_name = symbol->symbol_name;
     bootstrap_trace = getenv("MINIC_BOOTSTRAP_TRACE") != NULL;
@@ -542,10 +551,10 @@ static bool emit_core_function_with_symbol(FILE *file,
             focus == NULL || focus[0] == '\0' ||
             strcmp(focus, symbol_name) == 0;
         if (!minic_riscv64_asm_function_plan_build(function, &frame.asm_plan) ||
-            !minic_riscv64_core_frame_initialize_prepared(
+            !minic_riscv64_core_frame_initialize_with_facts(
                 program, function, &frame,
                 program != NULL ? &abi_plan : NULL, crossblock_enabled,
-                minic_riscv64_needs_arithmetic_libcall(isa, function))) {
+                minic_riscv64_needs_arithmetic_libcall(isa, function), facts)) {
             minic_riscv64_function_abi_plan_destroy(&abi_plan);
             return core_frame_fail(&frame);
         }
@@ -770,7 +779,17 @@ static bool emit_core_function_with_symbol(FILE *file,
 bool minic_riscv64_emit_core_function_with_symbol(
     FILE *file, const MinicCoreFunction *function, const MinicRiscv64FunctionSymbol *symbol) {
     return emit_core_function_with_symbol(file, NULL, function, symbol, false,
-                                          NULL, NULL);
+                                          NULL, NULL, NULL);
+}
+
+bool minic_riscv64_emit_core_function_for_program_with_symbol_prepared(
+    FILE *file, const MinicC0Program *program, const MinicCoreFunction *function,
+    const MinicRiscv64FunctionSymbol *symbol, const MinicCoreFunctionFacts *facts,
+    bool position_independent, const MinicRiscvIsa *isa,
+    MinicDiagnostic *diagnostic) {
+    return program != NULL && facts != NULL &&
+           emit_core_function_with_symbol(file, program, function, symbol,
+                                          position_independent, isa, diagnostic, facts);
 }
 
 bool minic_riscv64_emit_core_function_for_program_with_symbol(
@@ -781,7 +800,9 @@ bool minic_riscv64_emit_core_function_for_program_with_symbol(
     bool position_independent,
     const MinicRiscvIsa *isa,
     MinicDiagnostic *diagnostic) {
+    MinicCoreFunctionFacts facts;
     return program != NULL &&
+           minic_core_function_facts_analyze(function, &facts) &&
            emit_core_function_with_symbol(file, program, function, symbol,
-                                          position_independent, isa, diagnostic);
+                                          position_independent, isa, diagnostic, &facts);
 }

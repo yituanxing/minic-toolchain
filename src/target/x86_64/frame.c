@@ -26,13 +26,12 @@ bool minic_x86_64_align(size_t value, size_t alignment, size_t *out) {
 
 
 
-bool minic_x86_64_frame_init(const MinicC0Program *program, const MinicTargetInfo *target,
-                           const MinicCoreFunction *fn, MinicX86Frame *frame) {
+bool minic_x86_64_frame_init_prepared(const MinicC0Program *program,
+    const MinicTargetInfo *target, const MinicCoreFunction *fn,
+    const MinicCoreFunctionFacts *facts, MinicX86Frame *frame) {
     size_t pos, i, value_bytes, maximum_alignment = 16U;
-    MinicCoreFunctionFacts facts;
-    if (program == NULL || target == NULL || fn == NULL || frame == NULL ||
+    if (program == NULL || target == NULL || fn == NULL || facts == NULL || frame == NULL ||
         fn->value_count > (size_t)INT32_MAX / 8U) return false;
-    if (!minic_core_function_facts_analyze(fn, &facts)) return false;
     (void)memset(frame, 0, sizeof(*frame));
     if (!minic_x86_64_plan_incoming_arguments(
             program, target, fn, &frame->incoming_arguments))
@@ -40,7 +39,7 @@ bool minic_x86_64_frame_init(const MinicC0Program *program, const MinicTargetInf
     if (!minic_core_object_storage_plan_build(
             program, target->data_layout, fn, &frame->object_storage))
         return false;
-    frame->varargs_count = facts.variadic_address_count;
+    frame->varargs_count = facts->variadic_address_count;
     frame->value_count = fn->value_count;
     frame->object_count = fn->object_count;
     value_bytes = 0U;
@@ -160,6 +159,14 @@ bool minic_x86_64_frame_init(const MinicC0Program *program, const MinicTargetInf
     }
     return minic_x86_64_align(pos, 16U, &frame->frame_size) &&
            frame->frame_size <= (size_t)INT32_MAX;
+}
+
+bool minic_x86_64_frame_init(const MinicC0Program *program,
+    const MinicTargetInfo *target, const MinicCoreFunction *fn,
+    MinicX86Frame *frame) {
+    MinicCoreFunctionFacts facts;
+    return minic_core_function_facts_analyze(fn, &facts) &&
+           minic_x86_64_frame_init_prepared(program, target, fn, &facts, frame);
 }
 
 void minic_x86_64_frame_destroy(MinicX86Frame *frame) {

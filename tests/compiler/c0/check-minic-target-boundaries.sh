@@ -292,11 +292,25 @@ done
 exists src/target/common/program_visit.h
 has src/target/common/program_visit.h 'minic_program_visit_globals('
 has src/target/common/program_visit.h 'minic_program_visit_functions('
+has src/target/common/program_visit.h 'minic_program_visit_prepared_functions('
+has src/target/common/program_visit.h 'minic_core_function_facts_analyze('
+has src/target/x86_64/codegen.c 'minic_x86_64_frame_init_prepared('
+has src/target/riscv32/rv32_emit.c 'rv32_frame_init_prepared('
+has src/target/riscv64/codegen_function.c 'minic_riscv64_emit_core_function_for_program_with_symbol_prepared('
+has src/target/riscv64/frame_layout.c 'facts->needs_saved_return_address'
+has src/target/riscv64/frame_layout.c 'facts->uses_structured_inline_asm'
+has src/target/riscv32/rv32_frame.c 'facts->uses_dynamic_stack_alloc'
+has src/target/x86_64/frame.c 'facts->variadic_address_count'
+has src/target/common/direct_function_profile.c 'facts->variadic_address_count'
+has src/target/common/direct_function_profile.c 'facts->uses_dynamic_stack_alloc'
+has src/target/common/direct_function_plan.c 'program, target, decl, fn, facts, abi, indirect_record,'
+has src/target/aarch64/codegen.c 'minic_multi_direct_lp64_function_plan_prepare('
+has src/target/loongarch64/codegen.c 'minic_multi_direct_lp64_function_plan_prepare('
 # All five targets must own only target callbacks. File lifetime,
 # global/Core visit order and partial-output removal are ONE common transaction.
 exists src/target/common/program_emit.h
 has src/target/common/program_emit.h 'minic_program_visit_globals('
-has src/target/common/program_emit.h 'minic_program_visit_functions('
+has src/target/common/program_emit.h 'minic_program_visit_prepared_functions('
 has src/target/common/program_emit.h 'if (!ok) (void)remove(path);'
 has src/target/common/direct_program_emit.c 'minic_program_emit_write('
 for backend in x86_64 riscv32 riscv64; do
@@ -321,6 +335,7 @@ work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 cc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror \
   -Iinclude -Isrc tests/compiler/c0/probe-program-emit-transaction.c \
+  src/target/common/core_function_facts.c \
   -o "$work/program-emit-probe"
 "$work/program-emit-probe" "$work/test-output.s"
 

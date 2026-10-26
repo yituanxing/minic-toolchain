@@ -29,19 +29,19 @@ static bool align_up(size_t value, size_t alignment, size_t *result) {
     return true;
 }
 
-bool minic_riscv64_core_frame_initialize_prepared(
+bool minic_riscv64_core_frame_initialize_with_facts(
     const MinicC0Program *program, const MinicCoreFunction *function,
     MinicRiscv64CoreFrame *frame, MinicRiscv64FunctionAbiPlan *abi_plan,
-    bool crossblock_enabled, bool force_save_return_address) {
+    bool crossblock_enabled, bool force_save_return_address,
+    const MinicCoreFunctionFacts *facts) {
     size_t object_index;
     size_t storage_size;
     size_t required_size;
     size_t outgoing_argument_size;
     size_t maximum_object_alignment;
     size_t scalar_reuse_pool_slots;
-    MinicCoreFunctionFacts facts;
 
-    if (function == NULL || frame == NULL) {
+    if (function == NULL || frame == NULL || facts == NULL) {
         return false;
     }
     frame->object_offsets = NULL;
@@ -53,12 +53,11 @@ bool minic_riscv64_core_frame_initialize_prepared(
     frame->value_slot_count = 0U;
     frame->object_storage = (MinicCoreObjectStoragePlan){0};
     frame->object_reuse = (MinicRiscv64ObjectReusePlan){0};
-    if (!minic_core_function_facts_analyze(function, &facts) ||
-        !minic_core_object_storage_plan_build(
+    if (!minic_core_object_storage_plan_build(
             program, minic_default_data_layout(), function,
             &frame->object_storage))
         return false;
-    frame->has_dynamic_stack_alloc = facts.uses_dynamic_stack_alloc;
+    frame->has_dynamic_stack_alloc = facts->uses_dynamic_stack_alloc;
     frame->saved_frame_base_offset = 0U;
     if (!minic_riscv64_core_call_outgoing_stack_size_profile(
             program, function,
@@ -164,7 +163,7 @@ bool minic_riscv64_core_frame_initialize_prepared(
         storage_size = frame->value_base_offset + maximum_block_bytes;
     }
     frame->saves_return_address =
-        facts.needs_saved_return_address || force_save_return_address;
+        facts->needs_saved_return_address || force_save_return_address;
     frame->return_address_offset = 0U;
     if (frame->saves_return_address) {
         if (!align_up(storage_size, 8U, &frame->return_address_offset) ||
@@ -224,7 +223,7 @@ bool minic_riscv64_core_frame_initialize_prepared(
     }
 
     frame->preserves_structured_asm_callee_saved =
-        facts.uses_structured_inline_asm;
+        facts->uses_structured_inline_asm;
     /*
      * Structured inline asm may explicitly bind/clobber s0. Dynamic-stack
      * functions reserve s0 as the stable fixed-frame base, so keep the mixed
@@ -256,7 +255,7 @@ bool minic_riscv64_core_frame_initialize_prepared(
         storage_size = frame->entry_sp_offset + 8U;
     }
 
-    frame->has_variadic_argument_address = (facts.variadic_address_count != 0U);
+    frame->has_variadic_argument_address = (facts->variadic_address_count != 0U);
     frame->integer_parameter_count = 0U;
     frame->variadic_fixed_stack_slots = 0U;
     frame->varargs_size = 0U;
@@ -422,6 +421,17 @@ bool minic_riscv64_core_frame_initialize_prepared(
                       function->object_count);
     }
     return true;
+}
+
+bool minic_riscv64_core_frame_initialize_prepared(
+    const MinicC0Program *program, const MinicCoreFunction *function,
+    MinicRiscv64CoreFrame *frame, MinicRiscv64FunctionAbiPlan *abi_plan,
+    bool crossblock_enabled, bool force_save_return_address) {
+    MinicCoreFunctionFacts facts;
+    return minic_core_function_facts_analyze(function, &facts) &&
+           minic_riscv64_core_frame_initialize_with_facts(
+               program, function, frame, abi_plan, crossblock_enabled,
+               force_save_return_address, &facts);
 }
 
 bool minic_riscv64_core_frame_initialize(

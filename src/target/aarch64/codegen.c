@@ -154,14 +154,15 @@ static bool emit_function_body_with_plan(FILE *out,
 static bool emit_function(FILE *out, const MinicC0Program *program,
                           const MinicTargetInfo *target,
                           const MinicFunction *decl,
-                          const MinicCoreFunction *fn, size_t id,
+                          const MinicCoreFunction *fn,
+                          const MinicCoreFunctionFacts *facts, size_t id,
                           bool function_sections) {
     MinicDirectLP64FunctionPlan plan = {0};
     const char *name = minic_c0_function_symbol_name(decl);
     bool success = false;
     FILE *temporary = NULL;
     if (!minic_multi_direct_lp64_function_plan_prepare(
-            program, target, decl, fn, "aarch64",
+            program, target, decl, fn, facts, "aarch64",
             MINIC_LP64_ABI_AAPCS64, minic_aarch64_indirect_record, &plan)) {
         (void)minic_multi_direct_machine_reject(fn, "aarch64", name,
             plan.failed_stage, plan.failed_block,

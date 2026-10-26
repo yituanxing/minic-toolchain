@@ -83,11 +83,12 @@ static bool direct_visit_global(
 static bool direct_visit_function(
     FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicFunction *decl, const MinicCoreFunction *fn,
-    size_t index, bool function_sections, void *opaque) {
+    const MinicCoreFunctionFacts *facts, size_t index,
+    bool function_sections, void *opaque) {
     MinicDirectVisitContext *ctx = opaque;
     ++ctx->scanned_functions;
     if (ctx->config->emit_function(out, program, target, decl, fn,
-                                   index, function_sections))
+                                   facts, index, function_sections))
         return true;
     ++ctx->rejected_functions;
     if (getenv("MINIC_M1_TRACE") != NULL) {

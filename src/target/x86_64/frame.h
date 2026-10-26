@@ -5,6 +5,7 @@
 #include "frontend/ast.h"
 #include "target/target_info.h"
 #include "target/common/core_object_storage.h"
+#include "target/common/core_function_facts.h"
 #include "target/x86_64/call_plan.h"
 
 #include <stdbool.h>
@@ -44,6 +45,8 @@ typedef struct MinicX86Frame {
 } MinicX86Frame;
 
 bool minic_x86_64_align(size_t value, size_t alignment, size_t *out);
+bool minic_x86_64_frame_init_prepared(const MinicC0Program *, const MinicTargetInfo *,
+    const MinicCoreFunction *, const MinicCoreFunctionFacts *, MinicX86Frame *);
 bool minic_x86_64_frame_init(const MinicC0Program *program,
                              const MinicTargetInfo *target,
                              const MinicCoreFunction *function,

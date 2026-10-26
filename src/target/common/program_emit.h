@@ -19,7 +19,7 @@ typedef bool (*MinicProgramEmitFinalize)(
 
 typedef struct MinicProgramEmitConfig {
     MinicProgramVisitGlobal emit_global;
-    MinicProgramVisitFunction emit_function;
+    MinicProgramVisitPreparedFunction emit_function;
     MinicProgramEmitStage prefix; /* before globals: e.g. RV32 .option norvc */
     MinicProgramEmitStage between; /* file-scope asm / declaration bindings */
     const char *trailer;          /* optional target GNU-stack note */
@@ -54,7 +54,7 @@ static inline bool minic_program_emit_write(
         ok = config->between(out, program, target, functions, function_count,
                              function_sections, context);
     if (ok || config->continue_after_failure) {
-        functions_ok = minic_program_visit_functions(
+        functions_ok = minic_program_visit_prepared_functions(
             out, program, target, functions, function_count,
             function_sections, config->selection, config->continue_after_failure,
             config->emit_function, context);
