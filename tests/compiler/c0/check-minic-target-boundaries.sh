@@ -19,9 +19,7 @@ for file in \
   src/target/common/direct_function_plan.c \
   src/target/x86_64/call_plan.c \
   src/target/riscv64/core_admission.c \
-  src/target/riscv64/function_abi_plan.c \
-  src/target/riscv64/object_intervals.c \
-  src/target/riscv64/object_liveness.c; do
+  src/target/riscv64/function_abi_plan.c; do
   exists "$file"
 done
 
@@ -34,15 +32,16 @@ has src/target/x86_64/machine_call.c \
 has src/target/riscv64/core_codegen.c \
   'minic_riscv64_core_function_admit_profile('
 has src/target/riscv64/frame_layout.c \
-  'minic_riscv64_object_reuse_plan_build('
+  'minic_core_object_reuse_plan_build('
 
 lacks src/target/riscv64/core_codegen.c 'core_instruction_supported('
 lacks src/target/riscv64/core_codegen.c \
   'minic_riscv64_object_liveness_begin_function('
-lacks src/target/riscv64/object_liveness.c \
-  'core_scalar_object_reuse_cache'
-lacks src/target/riscv64/object_intervals.c \
-  'static CoreObjectAddressUse *core_object_address_use_index'
+for obsolete in object_intervals.c object_intervals.h object_liveness.c \
+                object_liveness.h spill_layout.c spill_layout.h; do
+  [[ ! -e "src/target/riscv64/$obsolete" ]] ||
+    fail "obsolete RV64 wrapper survived: $obsolete"
+done
 lacks src/target/x86_64/machine_emit.c \
   'minic_x86_64_incoming_cursor('
 
@@ -236,8 +235,8 @@ has src/target/riscv32/rv32_frame.c 'minic_core_block_reused_spill_layout('
 has src/target/riscv32/rv32_frame.c 'minic_core_object_reuse_plan_build('
 exists src/target/common/core_object_reuse.c
 exists src/target/common/core_object_intervals.c
-has src/target/riscv64/object_liveness.c 'minic_core_object_reuse_plan_build('
-has src/target/riscv64/spill_layout.c 'minic_core_block_reused_spill_layout('
+has src/target/riscv64/frame_layout.c 'minic_core_object_reuse_plan_build('
+has src/target/riscv64/frame_layout.c 'minic_core_block_reused_spill_layout('
 exists src/target/common/core_spill_layout.c
 exists src/target/common/core_spill_layout.h
 has src/target/riscv32/rv32_frame.c 'varargs_offset'
@@ -339,8 +338,10 @@ has src/target/common/direct_call_plan.c 'minic_core_call_view_argument_type(fn,
 has src/target/riscv64/call_emit.c 'call.return_form != MINIC_CORE_CALL_RETURN_OBJECT'
 has src/target/common/core_function_facts.c 'facts->max_call_arity = arity'
 has src/target/common/program_visit.h 'minic_core_function_facts_analyze('
-has src/target/x86_64/frame.c 'minic_x86_64_frame_init_prepared('
-has src/target/riscv32/rv32_frame.c 'rv32_frame_init_prepared('
+lacks src/target/common/lp64_frame.c 'bool minic_lp64_frame_plan_objects('
+lacks src/target/riscv64/frame_layout.c 'bool minic_riscv64_core_frame_initialize_prepared('
+lacks src/target/x86_64/frame.c 'minic_x86_64_frame_init_prepared('
+lacks src/target/riscv32/rv32_frame.c 'rv32_frame_init_prepared('
 has src/target/riscv64/core_codegen.c 'minic_riscv64_emit_core_function_for_program_with_symbol_prepared('
 has src/target/riscv64/frame_layout.c 'facts->needs_saved_return_address'
 has src/target/riscv64/frame_layout.c 'facts->uses_structured_inline_asm'

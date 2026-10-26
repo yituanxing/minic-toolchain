@@ -12,8 +12,6 @@
 #include "target/riscv64/frame_access.h"
 #include "target/riscv64/scalar_emit.h"
 #include "target/riscv64/frame_requirements.h"
-#include "target/riscv64/spill_layout.h"
-#include "target/riscv64/object_liveness.h"
 #include "target/riscv64/legalize.h"
 #include "target/riscv64/runtime_libcall.h"
 #include "target/riscv/instruction_select.h"

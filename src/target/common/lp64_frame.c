@@ -51,13 +51,6 @@ bool minic_lp64_frame_plan_objects_with_storage(
     return true;
 }
 
-bool minic_lp64_frame_plan_objects(
-    const MinicC0Program *program, const MinicTargetInfo *target,
-    const MinicCoreFunction *fn, MinicLP64FramePlan *plan) {
-    return minic_lp64_frame_plan_objects_with_storage(
-        program, target, fn, NULL, plan);
-}
-
 bool minic_lp64_frame_plan_wide(
     const MinicCoreFunction *fn, size_t wide_base, MinicLP64FramePlan *plan) {
     size_t i, pos = wide_base;

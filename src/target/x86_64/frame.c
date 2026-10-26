@@ -164,21 +164,6 @@ bool minic_x86_64_frame_init_with_storage(const MinicC0Program *program,
            frame->frame_size <= (size_t)INT32_MAX;
 }
 
-bool minic_x86_64_frame_init_prepared(const MinicC0Program *program,
-    const MinicTargetInfo *target, const MinicCoreFunction *fn,
-    const MinicCoreFunctionFacts *facts, MinicX86Frame *frame) {
-    return minic_x86_64_frame_init_with_storage(
-        program, target, fn, facts, NULL, frame);
-}
-
-bool minic_x86_64_frame_init(const MinicC0Program *program,
-    const MinicTargetInfo *target, const MinicCoreFunction *fn,
-    MinicX86Frame *frame) {
-    MinicCoreFunctionFacts facts;
-    return minic_core_function_facts_analyze(fn, &facts) &&
-           minic_x86_64_frame_init_prepared(program, target, fn, &facts, frame);
-}
-
 void minic_x86_64_frame_destroy(MinicX86Frame *frame) {
     if (frame == NULL) return;
     free(frame->value_offsets);

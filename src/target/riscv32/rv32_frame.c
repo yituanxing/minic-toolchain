@@ -196,21 +196,6 @@ bool rv32_frame_init_with_storage(Rv32Frame *frame, const MinicC0Program *progra
     frame->varargs_offset = frame->frame_size - frame->varargs_size;
     return frame->varargs_offset >= next;
 }
-bool rv32_frame_init_prepared(Rv32Frame *frame,
-    const MinicC0Program *program, const MinicCoreFunction *f,
-    const MinicTargetInfo *t, bool is_variadic,
-    const MinicCoreFunctionFacts *facts) {
-    return rv32_frame_init_with_storage(
-        frame, program, f, t, is_variadic, facts, NULL);
-}
-
-bool rv32_frame_init(Rv32Frame *frame, const MinicC0Program *program,
-    const MinicCoreFunction *f, const MinicTargetInfo *t, bool is_variadic) {
-    MinicCoreFunctionFacts facts;
-    return minic_core_function_facts_analyze(f, &facts) &&
-           rv32_frame_init_prepared(frame, program, f, t, is_variadic, &facts);
-}
-
 void rv32_frame_destroy(Rv32Frame *f) {
     if (f != NULL) {
         free(f->object_offsets);

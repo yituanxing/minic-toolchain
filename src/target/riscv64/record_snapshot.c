@@ -1,4 +1,4 @@
-#include "target/riscv64/object_liveness.h"
+#include "target/riscv64/record_snapshot.h"
 #include "target/riscv64/legalize.h"
 #include "core/value_uses.h"
 #include "target/data_layout.h"

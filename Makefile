@@ -194,10 +194,7 @@ MINIC_SOURCES := \
 	src/target/riscv64/frame_layout.c \
 	src/target/riscv64/frame_access.c \
 	src/target/riscv64/asm_plan.c \
-	src/target/riscv64/spill_layout.c \
 	src/target/common/core_spill_layout.c \
-	src/target/riscv64/object_liveness.c \
-	src/target/riscv64/object_intervals.c \
 	src/target/common/core_object_intervals.c \
 	src/target/common/core_object_reuse.c \
 	src/target/riscv64/record_snapshot.c \
