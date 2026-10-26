@@ -211,7 +211,16 @@ def main() -> int:
 
         total_lines = count_physical_lines(input_path)
         compile_started = time.monotonic()
-        command = [str(args.minic), "-S", str(input_path), "-o", str(asm_path)]
+        # This corpus was produced by genuine Linux 6.6.143 Kbuild.
+        # Its top-level Makefile sets -fshort-wchar and -funsigned-char,
+        # independently of GNU -march and -mabi. Preprocessing keeps the
+        # L"..." tokens, not their target wchar_t type. Replaying with
+        # MiniC's normal 32-bit wchar_t silently changes the C ABI and
+        # rejects EFI get_variable(efi_char16_t *) calls in 46 Linux TUs.
+        # Keep the real Kbuild language options rather than weakening the
+        # Frontend's legitimate incompatible-pointer diagnostic.
+        command = [str(args.minic), "-fshort-wchar", "-funsigned-char",
+                   "-S", str(input_path), "-o", str(asm_path)]
         environment = None
         if args.rv64i_origin_audit:
             command.extend(["-march=rv64i", "-mabi=lp64"])
@@ -399,6 +408,7 @@ def main() -> int:
         f"minic_jobs={args.jobs}",
         f"minic_cflags={json.dumps(args.minic_cflag)}",
         "",
+        "kbuild_language_abi=-fshort-wchar,-funsigned-char",
         "minic_failure_groups:",
     ]
     if groups:

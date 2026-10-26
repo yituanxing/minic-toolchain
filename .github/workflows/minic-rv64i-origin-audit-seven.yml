@@ -52,6 +52,9 @@ jobs:
           bash -n tests/compiler/c0/probe-rv64i-asm-origin.sh
           bash -n tests/compiler/c0/probe-rv64i-int128-libcalls.sh
           bash -n tests/compiler/c0/probe-rv64i-int128-pairs.sh
+          python3 -m py_compile tests/external/linux/corpus_replay.py
+          # This is part of Linux's ABI, not a MiniC default.
+          grep -Fq '"-fshort-wchar", "-funsigned-char"' tests/external/linux/corpus_replay.py
       - name: Compile MiniC and prove source-ASM provenance
         shell: bash
         run: |

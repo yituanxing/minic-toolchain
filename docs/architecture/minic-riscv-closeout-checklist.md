@@ -72,3 +72,5 @@
 - 2026-10-26：R07 静态审查发现：RV64 严格 ISA 分析直接相信可打印的来源注释边界，源码内联或文件级 ASM 若含相同标记会干扰审计。已在源 ASM 发射前统一拒绝内部预留标记，并新增 inline/file ASM 负例；普通来源 ASM 仍按原路径交给外部汇编器。此修复属于 MiniC 来源所有权，不改变 MiniAS。
 
 - 2026-10-26：复审 #652 的 3352 TUs exact-head 七片记录：3306 compiled，46 failures 全部为 indirect call 参数声明不匹配。首批失败上下文为 EFI 的 `get_var(L"SecureBoot", ...)`；原版 Linux Kbuild 显式使用 `-fshort-wchar` 和 `-funsigned-char`，但此前 `corpus_replay.py` 只传 `-march/-mabi`，导致原始 ABI 选项遗失。此次修正 replay C 选项复现、加入 EFI 间接调用正反例。MiniC 默认 RISC-V Linux `wchar_t` 保持标准 32 位，不放松合法的函数指针调用检查，也不改 MiniAS。需以此 exact HEAD 再次汇总 3352 条验收。
+
+- 2026-10-26（七分片根因复查）：HEAD `a710ccd` 的 3352 个 Linux TU 中 3306 编译通过、46 个全部报“indirect call argument type does not match declaration”；检索实际失败上下文发现所有错误均落于 EFI `get_var(L"SecureBoot", ...)`。核对 Linux v6.6.143 顶层 Makefile：KBUILD_CFLAGS 明确设置 `-fshort-wchar -funsigned-char`，但 `tests/external/linux/corpus_replay.py` 把预处理后的 .i 用 `-S -march=rv64i -mabi=lp64` 重放，丢了 Kbuild 的语言 ABI 选项。R02 把 RV64 默认 wchar 修正为正常 32-bit int 是正确的，不能回滚。已给 **Linux corpus replay** 恢复上述两个 Kbuild 语言选项，并加 EFI `efi_char16_t*` 间接调用正反例（16-bit 成功、32-bit 仍严格拒绝）。当前状态为 CODE_FIXED，需同 SHA 七分片验证后才能记 3352/3352。
