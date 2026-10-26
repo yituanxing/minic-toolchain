@@ -496,6 +496,7 @@ static bool emit_core_function_with_symbol(FILE *file,
                                                     const MinicCoreFunctionFacts *facts) {
     MinicRiscv64CoreFrame frame;
     MinicRiscv64FunctionAbiPlan abi_plan = {0};
+    MinicCoreFunctionFacts compatibility_facts;
     const char *symbol_name;
     size_t block_index;
     bool bootstrap_trace;
@@ -503,6 +504,13 @@ static bool emit_core_function_with_symbol(FILE *file,
     if (file == NULL || symbol == NULL || symbol->symbol_name == NULL ||
         symbol->symbol_name[0] == '\0') {
         return false;
+    }
+    /* Legacy standalone Core emitters have no common TU visitor. Preserve
+     * their ABI/frame contract without asking production to rescan Core. */
+    if (facts == NULL) {
+        if (!minic_core_function_facts_analyze(function, &compatibility_facts))
+            return false;
+        facts = &compatibility_facts;
     }
     symbol_name = symbol->symbol_name;
     bootstrap_trace = getenv("MINIC_BOOTSTRAP_TRACE") != NULL;
