@@ -3,6 +3,14 @@ name: MiniC Compiler Runtime - Four Architecture
 on:
   pull_request:
     paths:
+      # Every MiniC frontend/Core/backend/codegen owner affects at least
+      # one of the four native compiler-runtime target probes. Previously
+      # only RISC-V PRs entered this gate.
+      - "src/**"
+      - "include/minic/**"
+      - "tools/minic/**"
+      - "tools/minic-cc/**"
+      - "Makefile"
       - "src/target/riscv/**"
       - "src/target/riscv32/**"
       - "src/target/riscv64/**"
@@ -11,6 +19,13 @@ on:
   push:
     branches: [main]
     paths:
+      # Global MiniC semantic/runtime gate. Earlier enumerated push paths
+      # missed e.g. AArch64 fp_emit/memory_emit/asm_legalize and LoongArch
+      # frame/codegen; keep source wildcard as the single coverage invariant.
+      - "src/**"
+      - "include/minic/**"
+      - "tools/minic/**"
+      - "tools/minic-cc/**"
       # All Core semantics flow into every registered machine backend. A
       # change to a previously unlisted Core owner must run the full runtime
       # matrix instead of silently relying on an ancestor's green verdict.

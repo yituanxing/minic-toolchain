@@ -264,4 +264,26 @@ lacks src/target/riscv32/rv32_emit.c 'minic_riscv_emit_record_copy_bytes('
 has src/frontend/parser_expression.c 'thread-local object access requires target TLS relocation'
 has src/target/riscv32/rv32_global_emit.c 'rv32_array_of_records('
 
+# Full-source global coverage: a change to ANY frontend/IR/compiler/target
+# .c or .h must reach the four-runtime-target matrix, on PR and main.
+# Explicit historical owner lists alone previously missed target FP,
+# memory, frame, ABI and x86 machine family changes.
+for trigger in 'src/**' 'include/minic/**' 'tools/minic/**' \
+               'tools/minic-cc/**' 'Makefile'; do
+  count=$(grep -Fxc -- "      - \"$trigger\"" \
+          .github/workflows/minic-runtime-fourarch.yml || true)
+  [[ "$count" -ge 2 ]] || fail "four-arch PR/push missing trigger $trigger count=$count"
+done
+# Register placement must not leak from one machine into TargetInfo's
+# architecture-neutral C language ABI model. Production callers were zero.
+lacks src/target/target_info.h 'minic_riscv64_argument_registers'
+lacks src/target/target_info.c 'minic_riscv64_argument_registers'
+# Frontend and Core lower language semantics, never switch on CPU enums.
+if grep -REq 'MINIC_TARGET_ARCH_' src/frontend src/core; then
+  fail 'frontend/Core must not add machine architecture switches'
+fi
+for backend in riscv32 riscv64 x86_64 aarch64 loongarch64; do
+  has src/target/backend.c "MINIC_TARGET_ARCH_$(echo "$backend" | tr '[:lower:]' '[:upper:]')"
+done
+
 printf 'MINIC_BACKEND_BOUNDARY_CHECK=PASS\n'
