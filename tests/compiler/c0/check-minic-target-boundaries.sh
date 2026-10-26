@@ -385,14 +385,6 @@ has src/target/common/core_function_plan.c 'minic_core_function_facts_analyze('
 # physical frame plans, not repeated pointer/cleanup logic per backend.
 has src/target/common/core_object_storage.c 'bool minic_core_object_storage_plan_acquire('
 has src/target/common/core_object_storage.c 'void minic_core_object_storage_plan_release('
-# Unit test the borrow-or-own policy on the real linked Common implementation,
-# including standalone objects, exact pointer sharing, malformed plans,
-# and use-after-destroy prevention through zeroing the released alias.
-cc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror \
-  -Iinclude -Isrc tests/compiler/c0/probe-core-object-storage-ownership.c \
-  src/target/common/core_object_storage.c \
-  -o "$work/core-object-storage-ownership-probe"
-"$work/core-object-storage-ownership-probe"
 for frame in src/target/x86_64/frame.c src/target/riscv32/rv32_frame.c              src/target/riscv64/frame_layout.c src/target/common/lp64_frame.c; do
   has "$frame" 'minic_core_object_storage_plan_acquire('
   has "$frame" 'minic_core_object_storage_plan_release('
@@ -441,6 +433,15 @@ lacks src/target/riscv32/rv32_emit.c 'for (i = 0U; ok && i < function_count; ++i
 # census continuation. Keep target GNU/QEMU checks in their own CI stages.
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
+# Unit test the borrow-or-own policy on the real linked Common implementation,
+# including standalone objects, exact pointer sharing, malformed plans,
+# and use-after-destroy prevention through zeroing the released alias.
+cc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror \
+  -Iinclude -Isrc tests/compiler/c0/probe-core-object-storage-ownership.c \
+  src/target/common/core_object_storage.c \
+  -o "$work/core-object-storage-ownership-probe"
+"$work/core-object-storage-ownership-probe"
+
 cc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror \
   -Iinclude -Isrc tests/compiler/c0/probe-program-emit-transaction.c \
   src/target/common/core_function_facts.c \
