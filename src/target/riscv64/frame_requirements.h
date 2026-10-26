@@ -6,13 +6,7 @@
 #include "frontend/ast.h"
 #include <stdbool.h>
 #include <stddef.h>
-/* Read-only Core/psABI requirements; real spill and object-reuse
- * optimization continues in the mature RV64 function codegen. */
-bool minic_riscv64_core_variadic_fixed_prefix_profile(
-    const MinicC0Program *, const MinicCoreFunction *,
-    bool lp64_soft_float, size_t *, size_t *);
-bool minic_riscv64_core_variadic_fixed_prefix(const MinicC0Program *,
-                                               const MinicCoreFunction *, size_t *, size_t *);
+/* RV64-owned psABI CALL planning, with immutable Common CALL identities. */
 /* Common owns CALL identities. RV64 owns a single immutable per-call
  * psABI placement (including hidden return pointer and overflow stack).
  * The frame and machine emitter share this plan for the exact Core CALL. */

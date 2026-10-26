@@ -260,7 +260,7 @@ has src/target/riscv32/rv32_abi_plan.c 'rv32_abi_reject("incoming_return"'
 has src/target/riscv32/rv32_abi_plan.c 'minic_core_instruction_is_call('
 has src/target/riscv32/rv32_abi_plan.c 'while (low < high)'
 has src/target/riscv32/rv32_abi_plan.c 'semantic_calls->sites[dense].instruction_id'
-has src/target/riscv64/frame_requirements.c 'semantic_calls->sites[i]'
+has src/target/riscv64/frame_requirements.c 'calls->sites[ordinal]'
 # The fifth target no longer has a private Core VALUE/OBJECT type resolver:
 # CoreCallView checks real argument provenance and the RV64 psABI decides
 # fixed declared types versus unnamed promoted argument placement.
@@ -467,6 +467,13 @@ has src/target/riscv64/call_emit.c 'location = planned->arguments[argument_index
 has src/target/riscv64/call_emit.c 'minic_riscv64_call_plan_cache_get('
 has src/target/riscv64/frame_layout.c 'minic_riscv64_call_plan_cache_destroy('
 has src/target/riscv64/frame_requirements.c 'while (low < high)'
+# The RV64 named variadic prefix is qualified by the same immutable
+# incoming function psABI plan. Do not duplicate the entire argument
+# classifier in the old frame requirements compatibility wrapper.
+has src/target/riscv64/core_admission.c 'minic_riscv64_abi_variadic_prefix_from_cursor('
+has src/target/riscv64/core_admission.c '&abi_plan->named_parameter_cursor'
+lacks src/target/riscv64/frame_requirements.c 'minic_riscv64_core_variadic_fixed_prefix_profile('
+lacks src/target/riscv64/frame_requirements.h 'minic_riscv64_core_variadic_fixed_prefix('
 has src/target/riscv64/frame_layout.c 'facts->uses_structured_inline_asm'
 has src/target/riscv32/rv32_frame.c 'facts->uses_dynamic_stack_alloc'
 has src/target/x86_64/frame.c 'facts->variadic_address_count'

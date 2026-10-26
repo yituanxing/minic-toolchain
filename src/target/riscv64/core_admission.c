@@ -20,7 +20,8 @@
 static bool core_instruction_supported(const MinicC0Program *program,
                                        const MinicCoreFunction *function,
                                        const MinicCoreInstruction *instruction,
-                                       const MinicCoreCallView *semantic_view) {
+                                       const MinicCoreCallView *semantic_view,
+                                       const MinicRiscv64FunctionAbiPlan *abi_plan) {
     if (function == NULL || instruction == NULL) {
         return false;
     }
@@ -54,11 +55,13 @@ static bool core_instruction_supported(const MinicC0Program *program,
         size_t fixed_stack_slots;
         size_t integer_parameter_count;
 
-        /* Value ID and pointer result belong to Core verifier. The RV64
-         * variadic fixed-register/stack prefix remains target-owned. */
-        return program != NULL &&
-               minic_riscv64_core_variadic_fixed_prefix(
-                   program, function, &integer_parameter_count, &fixed_stack_slots);
+        /* Parameter locations have already been classified by the same
+         * qualified psABI plan used by incoming machine emission. Do not
+         * re-run the named prefix cursor for every va_start instruction. */
+        return program != NULL && abi_plan != NULL && abi_plan->prepared &&
+               minic_riscv64_abi_variadic_prefix_from_cursor(
+                   &abi_plan->named_parameter_cursor,
+                   &integer_parameter_count, &fixed_stack_slots);
     }
     case MINIC_CORE_INSTRUCTION_PARAMETER:
     case MINIC_CORE_INSTRUCTION_PARAMETER_OBJECT:
@@ -236,7 +239,7 @@ static bool core_function_can_emit(const MinicC0Program *program,
                     function, "call-index", index, (int)ins->kind);
             view = &semantic_calls->sites[call_site++].view;
         }
-        if (!core_instruction_supported(program, function, ins, view)) {
+        if (!core_instruction_supported(program, function, ins, view, abi_plan)) {
             return core_rv64_capability_reject(
                 function, "instruction", index, (int)ins->kind);
         }
