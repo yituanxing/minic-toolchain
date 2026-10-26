@@ -39,7 +39,13 @@ static bool function(FILE *out, const MinicC0Program *p,
                      bool sections, void *opaque) {
     TestContext *ctx = opaque;
     (void)p; (void)t; (void)decl; (void)f; (void)sections;
-    if (index != 0U || facts == NULL || facts->direct_call_count != 0U)
+    if (index != 0U || facts == NULL ||
+        facts->direct_call_count != 1U ||
+        facts->indirect_call_count != 1U ||
+        facts->variadic_address_count != 1U ||
+        !facts->needs_saved_return_address ||
+        !facts->uses_structured_inline_asm ||
+        !facts->uses_dynamic_stack_alloc)
         return false;
     ++ctx->functions;
     return fputs("F\n", out) != EOF && ctx->fail_stage != 4U;
@@ -64,6 +70,14 @@ int main(int argc, char **argv) {
     MinicGlobalObject object = {0};
     MinicFunction declaration = {0};
     MinicCoreFunction ir = {0};
+    MinicCoreInstruction instructions[6] = {
+        { .kind = MINIC_CORE_INSTRUCTION_CALL },
+        { .kind = MINIC_CORE_INSTRUCTION_INDIRECT_CALL },
+        { .kind = MINIC_CORE_INSTRUCTION_DYNAMIC_STACK_ALLOC },
+        { .kind = MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM },
+        { .kind = MINIC_CORE_INSTRUCTION_VARIADIC_ARGUMENT_ADDRESS },
+        { .kind = MINIC_CORE_INSTRUCTION_CALL_FRAME_ADDRESS }
+    };
     MinicC0Program program = {0};
     MinicTargetInfo target = {0};
     MinicProgramEmitConfig config = {
@@ -76,6 +90,9 @@ int main(int argc, char **argv) {
     if (argc != 2) return 2;
     path = argv[1];
     declaration.is_defined = true;
+    instructions[5].value.call_frame_address.kind = MINIC_CORE_CALL_FRAME_ADDRESS_RETURN;
+    ir.instructions = instructions;
+    ir.instruction_count = sizeof(instructions) / sizeof(instructions[0]);
     program.global_objects = &object;
     program.global_object_count = 1U;
     program.functions = &declaration;
