@@ -152,14 +152,11 @@ bool rv32_frame_init_with_storage(Rv32Frame *frame, const MinicC0Program *progra
         return rv32_frame_reject("spill_base", next, minic_type_void());
     {
         size_t failed_block = SIZE_MAX;
-        if (!minic_core_function_reused_spill_peak(
+        if (!minic_core_function_reused_spill_layout(
                 program, f, t->data_layout, 4U, value_base,
-                &peak_bytes, &failed_block))
-            return rv32_frame_reject("spill_peak", failed_block, minic_type_void());
-        if (!minic_core_function_reused_spill_assign(
-                program, f, t->data_layout, 4U, value_base,
-                peak_bytes, frame->value_offsets, &failed_block))
-            return rv32_frame_reject("spill_assign", failed_block, minic_type_void());
+                frame->value_offsets, &peak_bytes, &failed_block))
+            return rv32_frame_reject("spill_layout", failed_block,
+                                     minic_type_void());
     }
     if (value_base > SIZE_MAX - peak_bytes)
         return rv32_frame_reject("spill_total", 0U, minic_type_void());

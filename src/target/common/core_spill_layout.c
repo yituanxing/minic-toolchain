@@ -3,6 +3,7 @@
 #include "target/data_layout.h"
 #include <stdint.h>
 #include <stdlib.h>
+#include <string.h>
 /* RV64-proven per-block SSA last-use allocator shared by RV32 and RV64.
  * The physical stack geometry comes from the target DataLayout and XLEN. */
 /* IRQ_FRAME_REUSE_V0: Core SSA availability is reset at every basic-block
@@ -129,17 +130,28 @@ static bool core_spill_find_units(const bool *occupied_units,
     return false;
 }
 
-bool minic_core_block_reused_spill_layout(const MinicC0Program *program,
+/* A workspace spans the whole function. The old algorithm calloc/malloc'd
+ * three arrays in every block (and walked all blocks twice); that dominated
+ * small-block-heavy functions. Reset buffers in-place between blocks. */
+typedef struct CoreSpillWorkspace {
+    size_t *remaining_uses;
+    size_t *active_units;
+    bool *occupied_units;
+    size_t occupied_capacity;
+} CoreSpillWorkspace;
+
+static bool core_block_reused_spill_layout(const MinicC0Program *program,
                                            const MinicCoreFunction *function,
                                            const MinicCoreBlock *block,
                                            const MinicDataLayout *layout,
                                            size_t unit_bytes,
                                            size_t value_base_offset,
                                            size_t *value_offsets,
-                                           size_t *peak_bytes) {
-    size_t *remaining_uses = NULL;
-    size_t *active_units = NULL;
-    bool *occupied_units = NULL;
+                                           size_t *peak_bytes,
+                                           CoreSpillWorkspace *workspace) {
+    size_t *remaining_uses = workspace != NULL ? workspace->remaining_uses : NULL;
+    size_t *active_units = workspace != NULL ? workspace->active_units : NULL;
+    bool *occupied_units = workspace != NULL ? workspace->occupied_units : NULL;
     size_t total_units = 0U;
     size_t peak_units = 0U;
     size_t instruction_index;
@@ -148,7 +160,8 @@ bool minic_core_block_reused_spill_layout(const MinicC0Program *program,
     bool ok = false;
 
     if (program == NULL || function == NULL || block == NULL || layout == NULL ||
-        peak_bytes == NULL || (unit_bytes != 4U && unit_bytes != 8U) ||
+        peak_bytes == NULL || workspace == NULL ||
+        (unit_bytes != 4U && unit_bytes != 8U) ||
         value_base_offset % unit_bytes != 0U) {
         return false;
     }
@@ -177,16 +190,18 @@ bool minic_core_block_reused_spill_layout(const MinicC0Program *program,
         *peak_bytes = 0U;
         return true;
     }
-    if (function->value_count > SIZE_MAX / sizeof(*remaining_uses) ||
-        function->value_count > SIZE_MAX / sizeof(*active_units)) {
+    if (remaining_uses == NULL || active_units == NULL)
         return false;
+    if (total_units > workspace->occupied_capacity) {
+        bool *expanded = (bool *)realloc(workspace->occupied_units,
+                                        total_units * sizeof(*expanded));
+        if (expanded == NULL) return false;
+        workspace->occupied_units = expanded;
+        workspace->occupied_capacity = total_units;
     }
-    remaining_uses = (size_t *)calloc(function->value_count, sizeof(*remaining_uses));
-    active_units = (size_t *)malloc(function->value_count * sizeof(*active_units));
-    occupied_units = (bool *)calloc(total_units, sizeof(*occupied_units));
-    if (remaining_uses == NULL || active_units == NULL || occupied_units == NULL) {
-        goto done;
-    }
+    occupied_units = workspace->occupied_units;
+    (void)memset(remaining_uses, 0, function->value_count * sizeof(*remaining_uses));
+    (void)memset(occupied_units, 0, total_units * sizeof(*occupied_units));
     for (instruction_index = 0U; instruction_index < function->value_count;
          ++instruction_index) {
         active_units[instruction_index] = SIZE_MAX;
@@ -297,73 +312,60 @@ bool minic_core_block_reused_spill_layout(const MinicC0Program *program,
     ok = true;
 
 done:
-    free(occupied_units);
-    free(active_units);
-    free(remaining_uses);
     return ok;
 }
 
 
-/* The peak is the largest single basic block: distinct verified Core
- * blocks share the physical spill region. The result is a byte extent,
- * independent of XLEN or an ABI's call-save/prologue layout. */
-bool minic_core_function_reused_spill_peak(
+/* One function-wide SSA spill plan: each Core block is scanned once and
+ * a reusable scratch workspace amortizes all per-block allocations. RV32I
+ * and RV64 retain identical last-use rules, 4B/8B units, placement order
+ * and ABI-chosen stack base. The only public spill API is this one. */
+bool minic_core_function_reused_spill_layout(
     const MinicC0Program *program, const MinicCoreFunction *function,
     const MinicDataLayout *layout, size_t unit_bytes,
-    size_t value_base_offset, size_t *peak_bytes, size_t *failed_block) {
+    size_t value_base_offset, size_t *value_offsets,
+    size_t *peak_bytes, size_t *failed_block) {
+    CoreSpillWorkspace workspace = {0};
     size_t block_index, maximum = 0U;
+    bool ok = false;
     if (failed_block != NULL) *failed_block = SIZE_MAX;
     if (program == NULL || function == NULL || layout == NULL ||
         peak_bytes == NULL || (unit_bytes != 4U && unit_bytes != 8U) ||
         value_base_offset % unit_bytes != 0U ||
-        (function->block_count != 0U && function->blocks == NULL))
+        (function->value_count != 0U && value_offsets == NULL) ||
+        (function->block_count != 0U && function->blocks == NULL) ||
+        function->value_count > SIZE_MAX / sizeof(size_t))
         return false;
+
+    if (function->value_count != 0U && function->block_count != 0U) {
+        workspace.remaining_uses =
+            (size_t *)calloc(function->value_count,
+                             sizeof(*workspace.remaining_uses));
+        workspace.active_units =
+            (size_t *)malloc(function->value_count *
+                             sizeof(*workspace.active_units));
+        if (workspace.remaining_uses == NULL || workspace.active_units == NULL)
+            goto done;
+    }
     for (block_index = 0U; block_index < function->block_count; ++block_index) {
         size_t block_bytes;
-        if (!minic_core_block_reused_spill_layout(
+        if (!core_block_reused_spill_layout(
                 program, function, &function->blocks[block_index],
-                layout, unit_bytes, value_base_offset, NULL, &block_bytes)) {
+                layout, unit_bytes, value_base_offset, value_offsets,
+                &block_bytes, &workspace)) {
             if (failed_block != NULL) *failed_block = block_index;
-            return false;
+            goto done;
         }
         if (block_bytes > maximum) maximum = block_bytes;
     }
     if (maximum % unit_bytes != 0U ||
         maximum > SIZE_MAX - value_base_offset)
-        return false;
+        goto done;
     *peak_bytes = maximum;
-    return true;
-}
-
-/* Reuse the EXACT same block allocator from the peak pass. Targets own
- * allocated value_offsets and cleanup; this helper only fills entries,
- * rejects a block exceeding its precomputed bound, and preserves precise
- * failing block IDs for the existing target diagnostics. */
-bool minic_core_function_reused_spill_assign(
-    const MinicC0Program *program, const MinicCoreFunction *function,
-    const MinicDataLayout *layout, size_t unit_bytes,
-    size_t value_base_offset, size_t maximum_block_bytes,
-    size_t *value_offsets, size_t *failed_block) {
-    size_t block_index;
-    if (failed_block != NULL) *failed_block = SIZE_MAX;
-    if (program == NULL || function == NULL || layout == NULL ||
-        (unit_bytes != 4U && unit_bytes != 8U) ||
-        value_base_offset % unit_bytes != 0U ||
-        maximum_block_bytes % unit_bytes != 0U ||
-        maximum_block_bytes > SIZE_MAX - value_base_offset ||
-        (function->value_count != 0U && value_offsets == NULL) ||
-        (function->block_count != 0U && function->blocks == NULL))
-        return false;
-    for (block_index = 0U; block_index < function->block_count; ++block_index) {
-        size_t block_bytes;
-        if (!minic_core_block_reused_spill_layout(
-                program, function, &function->blocks[block_index],
-                layout, unit_bytes, value_base_offset,
-                value_offsets, &block_bytes) ||
-            block_bytes > maximum_block_bytes) {
-            if (failed_block != NULL) *failed_block = block_index;
-            return false;
-        }
-    }
-    return true;
+    ok = true;
+done:
+    free(workspace.remaining_uses);
+    free(workspace.active_units);
+    free(workspace.occupied_units);
+    return ok;
 }

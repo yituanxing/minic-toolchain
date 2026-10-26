@@ -137,13 +137,25 @@ bool minic_riscv64_core_frame_initialize_with_storage(
     if (!minic_core_frame_align_up(storage_size, 8U, &frame->value_base_offset)) {
         return false;
     }
-    /* Both RISC-V XLENs use one Core block-local SSA peak/layout walk.
-     * RV64 owns its 8-byte units and all psABI offsets. */
+    /* Plan all RV64 SSA offsets NOW, in the same single walk that determines
+     * frame size. The old late second traversal was identical wasted work.
+     * Target-specific psABI/spill base geometry remains unchanged. */
     {
         size_t maximum_block_bytes = 0U;
-        if (!minic_core_function_reused_spill_peak(
+        size_t i;
+        if (function->value_count > SIZE_MAX / sizeof(*frame->value_offsets))
+            return false;
+        if (function->value_count != 0U) {
+            frame->value_offsets = malloc(function->value_count *
+                                          sizeof(*frame->value_offsets));
+            if (frame->value_offsets == NULL) return false;
+            for (i = 0U; i < function->value_count; ++i)
+                frame->value_offsets[i] = SIZE_MAX;
+        }
+        if (!minic_core_function_reused_spill_layout(
                 program, function, minic_default_data_layout(), 8U,
-                frame->value_base_offset, &maximum_block_bytes, NULL))
+                frame->value_base_offset, frame->value_offsets,
+                &maximum_block_bytes, NULL))
             return false;
         frame->value_slot_count = maximum_block_bytes / 8U;
         storage_size = frame->value_base_offset + maximum_block_bytes;
@@ -351,44 +363,13 @@ bool minic_riscv64_core_frame_initialize_with_storage(
             cached_offset += object_size;
         }
     }
+    /* Fail closed on missing SSA definitions as before, without rescanning
+     * all basic blocks or reallocating the value-offset array. */
     if (function->value_count != 0U) {
         size_t value_index;
-
-        if (function->value_count > SIZE_MAX / sizeof(*frame->value_offsets)) {
-            free(frame->object_offsets);
-            frame->object_offsets = NULL;
-            return false;
-        }
-        frame->value_offsets =
-            (size_t *)malloc(function->value_count * sizeof(*frame->value_offsets));
-        if (frame->value_offsets == NULL) {
-            free(frame->object_offsets);
-            frame->object_offsets = NULL;
-            return false;
-        }
-        for (value_index = 0U; value_index < function->value_count; ++value_index) {
-            frame->value_offsets[value_index] = SIZE_MAX;
-        }
-
-        if (!minic_core_function_reused_spill_assign(
-                program, function, minic_default_data_layout(), 8U,
-                frame->value_base_offset, frame->value_slot_count * 8U,
-                frame->value_offsets, NULL)) {
-            free(frame->value_offsets);
-            frame->value_offsets = NULL;
-            free(frame->object_offsets);
-            frame->object_offsets = NULL;
-            return false;
-        }
-        for (value_index = 0U; value_index < function->value_count; ++value_index) {
-            if (frame->value_offsets[value_index] == SIZE_MAX) {
-                free(frame->value_offsets);
-                frame->value_offsets = NULL;
-                free(frame->object_offsets);
-                frame->object_offsets = NULL;
+        for (value_index = 0U; value_index < function->value_count; ++value_index)
+            if (frame->value_offsets[value_index] == SIZE_MAX)
                 return false;
-            }
-        }
     }
     if (getenv("MINIC_CORE_FRAME_TRACE") != NULL) {
         (void)fprintf(stderr,

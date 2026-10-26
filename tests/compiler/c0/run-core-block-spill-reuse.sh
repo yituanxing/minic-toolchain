@@ -52,7 +52,7 @@ PY
 
 test -s "$work/output.s"
 
-# RV32I consumes the SAME Common SSA last-use peak/assignment algorithms
+# RV32I consumes the SAME Common SSA last-use single-pass planner
 # with ILP32-sized units. Compile without external assemblers or QEMU:
 # the resulting .s checks both new function-wide planning entry points.
 "$minic" --target=riscv32-linux -march=rv32i -mabi=ilp32 \

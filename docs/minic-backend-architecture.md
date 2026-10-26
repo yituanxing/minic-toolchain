@@ -58,7 +58,7 @@ varargs, strict ISA emission and calling convention:
   8-byte-per-value Core prefix and a separate 16-byte **start-offset** sidecar
   for int128 and long-double values. The ABI physical address interpretation
   never enters Common.
-- `common/core_spill_layout.{h,c}`: RV32I and RV64 retain the already-proven
+- `common/core_spill_layout.{h,c}`: RV32I and RV64 consume one Core function-wide spill pass (single visit per block), replacing the obsolete sequential peak/assignment sweeps. Both retain the already-proven
   block-local last-use reuse strategy, with 4-byte and 8-byte units respectively.
   This separate algorithm is a machine-frame optimization, not a duplicated
   Core type checker.

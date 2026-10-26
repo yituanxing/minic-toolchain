@@ -246,12 +246,10 @@ has src/target/riscv32/rv32_call.c 'rv32_emit_parameter('
 has src/target/riscv32/rv32_abi_plan.c 'minic_core_call_view_build('
 has src/target/riscv32/rv32_abi_plan.c 'minic_riscv32_abi_place('
 has src/target/riscv32/rv32_frame.c 'rv32_function_abi_plan_build('
-has src/target/riscv32/rv32_frame.c 'minic_core_function_reused_spill_assign('
 has src/target/riscv32/rv32_frame.c 'minic_core_object_reuse_plan_build('
 exists src/target/common/core_object_reuse.c
 exists src/target/common/core_object_intervals.c
 has src/target/riscv64/frame_layout.c 'minic_core_object_reuse_plan_build('
-has src/target/riscv64/frame_layout.c 'minic_core_function_reused_spill_peak('
 exists src/target/common/core_spill_layout.c
 exists src/target/common/core_spill_layout.h
 has src/target/riscv32/rv32_abi_plan.c 'rv32_abi_reject("incoming_return"'
@@ -353,8 +351,6 @@ has src/target/x86_64/frame.c 'MINIC_CORE_VALUE_SLOT_LINEAR'
 has src/target/common/lp64_frame.c 'MINIC_CORE_VALUE_SLOT_WIDE_TAIL'
 lacks src/target/x86_64/frame.c 'value_bytes += slot;'
 lacks src/target/common/lp64_frame.c 'plan->wide_offsets[i] = pos;'
-has src/target/riscv32/rv32_frame.c 'minic_core_function_reused_spill_assign('
-has src/target/riscv64/frame_layout.c 'minic_core_function_reused_spill_assign('
 exists src/target/common/core_numeric_shape.c
 has src/target/common/core_numeric_shape.c 'bool minic_core_integer_overflow_shape('
 has src/target/common/core_numeric_shape.c 'bool minic_core_integer_bitscan_shape('
@@ -401,15 +397,19 @@ done
 exists src/target/common/core_frame_layout.h
 has src/target/common/core_object_storage.c 'return minic_core_object_storage_plan_build(program, layout, fn, result);'
 has src/target/riscv32/rv32_frame.c 'minic_core_frame_reserve('
-# RV32/RV64 no longer maintain duplicate function-level SSA peak/assign
-# passes; the exact Core last-use algorithm stays in one Common module.
-has src/target/common/core_spill_layout.c 'bool minic_core_function_reused_spill_peak('
-has src/target/common/core_spill_layout.c 'bool minic_core_function_reused_spill_assign('
+# Entire RISC-V Core SSA frame planning now uses one pass across blocks,
+# not a peak pass followed by an identical assignment re-traversal.
+# Common owns both the peak extent and all value-id offsets.
+has src/target/common/core_spill_layout.c 'bool minic_core_function_reused_spill_layout('
+has src/target/common/core_spill_layout.h 'bool minic_core_function_reused_spill_layout('
+lacks src/target/common/core_spill_layout.c 'minic_core_function_reused_spill_peak('
+lacks src/target/common/core_spill_layout.c 'minic_core_function_reused_spill_assign('
 has tests/compiler/c0/run-core-block-spill-reuse.sh 'output-rv32.s'
-has .github/workflows/minic-native-refactor-gate.yml 'Two-XLEN Common SSA spill peak and assignment regressions'
+has .github/workflows/minic-native-refactor-gate.yml 'Two-XLEN Common single-pass SSA spill regressions'
 for backend in src/target/riscv32/rv32_frame.c src/target/riscv64/frame_layout.c; do
-  has "$backend" 'minic_core_function_reused_spill_peak('
-  has "$backend" 'minic_core_function_reused_spill_assign('
+  has "$backend" 'minic_core_function_reused_spill_layout('
+  lacks "$backend" 'minic_core_function_reused_spill_peak('
+  lacks "$backend" 'minic_core_function_reused_spill_assign('
   lacks "$backend" 'minic_core_block_reused_spill_layout('
 done
 has src/target/common/lp64_frame.c 'minic_core_frame_reserve('

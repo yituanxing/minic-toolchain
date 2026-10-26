@@ -68,7 +68,7 @@ jobs:
           set -Eeuo pipefail
           make MODE=release CFLAGS=-Werror BUILD_DIR=build/minic-native-backend check-layout
 
-      - name: Two-XLEN Common SSA spill peak and assignment regressions
+      - name: Two-XLEN Common single-pass SSA spill regressions
         shell: bash
         run: |
           set -Eeuo pipefail
