@@ -573,18 +573,24 @@ bool minic_riscv64_emit_direct_call(FILE *file,
                       const MinicC0Program *program,
                       const MinicCoreFunction *function,
                       const MinicRiscv64CoreFrame *frame,
-                      const MinicCoreInstruction *instruction) {
+                      const MinicCoreInstruction *instruction,
+                      size_t instruction_id) {
     MinicCoreCallView call;
     const MinicCoreCallee *callee;
     MinicRiscv64AbiCursor cursor;
     MinicRiscv64AbiValue return_value;
     if (file == NULL || program == NULL || function == NULL || frame == NULL ||
         instruction == NULL || instruction->kind != MINIC_CORE_INSTRUCTION_CALL ||
-        !minic_riscv64_core_direct_call_supported(program, function, instruction) ||
-        !minic_core_call_view_build(function, instruction, &call) ||
-        call.callee == NULL) {
+        !minic_riscv64_core_direct_call_supported(program, function, instruction))
         return false;
+    {
+        const MinicCoreCallView *cached = frame->semantic_calls != NULL
+            ? minic_core_call_index_get(frame->semantic_calls, instruction_id) : NULL;
+        if (frame->semantic_calls != NULL && cached == NULL) return false;
+        if (cached != NULL) call = *cached;
+        else if (!minic_core_call_view_build(function, instruction, &call)) return false;
     }
+    if (call.callee == NULL) return false;
     callee = call.callee;
     if (!minic_riscv64_abi_cursor_initialize_for_return_profile(
             program, callee->return_type,
@@ -666,18 +672,24 @@ bool minic_riscv64_emit_indirect_call(FILE *file,
                                const MinicC0Program *program,
                                const MinicCoreFunction *function,
                                const MinicRiscv64CoreFrame *frame,
-                               const MinicCoreInstruction *instruction) {
+                               const MinicCoreInstruction *instruction,
+                               size_t instruction_id) {
     MinicCoreCallView call;
     const MinicCoreCallSignature *signature;
     MinicRiscv64AbiCursor cursor;
     MinicRiscv64AbiValue return_value;
     if (file == NULL || program == NULL || function == NULL || frame == NULL ||
         instruction == NULL || instruction->kind != MINIC_CORE_INSTRUCTION_INDIRECT_CALL ||
-        !minic_riscv64_core_indirect_call_supported(program, function, instruction) ||
-        !minic_core_call_view_build(function, instruction, &call) ||
-        call.signature == NULL) {
+        !minic_riscv64_core_indirect_call_supported(program, function, instruction))
         return false;
+    {
+        const MinicCoreCallView *cached = frame->semantic_calls != NULL
+            ? minic_core_call_index_get(frame->semantic_calls, instruction_id) : NULL;
+        if (frame->semantic_calls != NULL && cached == NULL) return false;
+        if (cached != NULL) call = *cached;
+        else if (!minic_core_call_view_build(function, instruction, &call)) return false;
     }
+    if (call.signature == NULL) return false;
     signature = call.signature;
     if (!minic_riscv64_abi_cursor_initialize_for_return_profile(
             program, signature->return_type,

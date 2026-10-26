@@ -279,9 +279,9 @@ static bool emit_instruction(FILE *file,
     case MINIC_CORE_INSTRUCTION_COMPILER_BARRIER:
         return true;
     case MINIC_CORE_INSTRUCTION_CALL:
-        return minic_riscv64_emit_direct_call(file, program, function, frame, instruction);
+        return minic_riscv64_emit_direct_call(file, program, function, frame, instruction, instruction_id);
     case MINIC_CORE_INSTRUCTION_INDIRECT_CALL:
-        return minic_riscv64_emit_indirect_call(file, program, function, frame, instruction);
+        return minic_riscv64_emit_indirect_call(file, program, function, frame, instruction, instruction_id);
     case MINIC_CORE_INSTRUCTION_FIELD_ADDRESS:
         return minic_riscv64_emit_memory_instruction(file, program, function, frame, instruction);
     default:

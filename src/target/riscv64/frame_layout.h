@@ -22,6 +22,8 @@ typedef struct MinicRiscv64CoreFrame {
     MinicCoreObjectStoragePlan object_storage;
     bool borrows_object_storage;
     MinicCoreObjectReusePlan object_reuse;
+    /* Borrowed from the Common Function Plan, never owned by RV64. */
+    const MinicCoreCallIndex *semantic_calls;
     size_t *value_offsets;
     MinicRiscv64AbiArgumentLocation *parameter_locations;
     size_t parameter_location_count;

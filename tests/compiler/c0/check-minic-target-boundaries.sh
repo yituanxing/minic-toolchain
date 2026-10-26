@@ -363,6 +363,8 @@ has src/target/x86_64/machine_call.c 'minic_core_call_index_get(frame->semantic_
 has src/target/riscv32/rv32_abi_plan.c 'minic_core_call_view_argument_type('
 has src/target/common/direct_call_plan.c 'minic_core_call_view_argument_type(fn, &view, j, &types[j])'
 has src/target/riscv64/call_emit.c 'call.return_form != MINIC_CORE_CALL_RETURN_OBJECT'
+has src/target/riscv64/frame_layout.c 'frame->semantic_calls = facts->call_index'
+has src/target/riscv64/call_emit.c 'minic_core_call_index_get(frame->semantic_calls, instruction_id)'
 has src/target/common/core_function_facts.c 'facts->max_call_arity = arity'
 has src/target/common/core_function_plan.h 'minic_core_function_facts_analyze('
 lacks src/target/common/lp64_frame.c 'bool minic_lp64_frame_plan_objects('

@@ -17,8 +17,8 @@ bool minic_riscv64_emit_incoming_parameter_object(
     const MinicRiscv64CoreFrame *, const MinicCoreInstruction *);
 bool minic_riscv64_emit_direct_call(
     FILE *, const MinicC0Program *, const MinicCoreFunction *,
-    const MinicRiscv64CoreFrame *, const MinicCoreInstruction *);
+    const MinicRiscv64CoreFrame *, const MinicCoreInstruction *, size_t instruction_id);
 bool minic_riscv64_emit_indirect_call(
     FILE *, const MinicC0Program *, const MinicCoreFunction *,
-    const MinicRiscv64CoreFrame *, const MinicCoreInstruction *);
+    const MinicRiscv64CoreFrame *, const MinicCoreInstruction *, size_t instruction_id);
 #endif
