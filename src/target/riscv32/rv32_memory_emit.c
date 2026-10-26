@@ -40,15 +40,20 @@ bool rv32_emit_memory_instruction(FILE *out, const MinicC0Program *program,
                    rv32_slot(out, fr, ins->result, "t0", false);
         if (!rv32_slot(out, fr, ins->value.pointer_offset.index, "t1", true))
             return false;
-        if (scale.kind != MINIC_RISCV_POINTER_SCALE_UNIT) {
-            /* Keep negative indices and unsigned large indices correct
-             * modulo 2^XLEN; libgcc multiplies raw 32-bit bit patterns. */
+        if (scale.kind == MINIC_RISCV_POINTER_SCALE_SHIFT) {
+            /* Multiplication modulo 2^32 is identical to an XLEN-local
+             * left shift for any signed or unsigned index bit pattern. */
+            if (fprintf(out, "  slli t1, t1, %u\n", scale.shift) < 0)
+                return false;
+        } else if (scale.kind == MINIC_RISCV_POINTER_SCALE_MULTIPLY) {
+            /* Odd/non-power-of-two strides still use the pinned GNU
+             * libgcc multiplication implementation, not MiniC arithmetic. */
             if (fprintf(out,
                         "  mv a0, t1\n  li a1, %zu\n  call __mulsi3\n"
                         "  mv t1, a0\n", stride) < 0) return false;
         }
-        /* The libcall is allowed to clobber all caller-saved registers,
-         * so reload the base only after multiplying the index. */
+        /* Load base after scaling: the libcall may clobber caller-saved
+         * registers. SHIFT and UNIT use the same safe frame-owned path. */
         return rv32_slot(out, fr, ins->value.pointer_offset.base, "t0", true) &&
                fprintf(out, "  %s t0, t0, t1\n",
                        ins->value.pointer_offset.subtract ? "sub" : "add") >= 0 &&

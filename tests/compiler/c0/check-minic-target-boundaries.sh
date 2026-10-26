@@ -105,6 +105,9 @@ has src/target/riscv32/rv32_integer_emit.c 'minic_riscv_plan_integer_arithmetic(
 # call/return-address mechanics remain in their own RV32/RV64 backends.
 has src/target/riscv/instruction_select.h 'minic_riscv_plan_pointer_scale('
 has src/target/riscv32/rv32_memory_emit.c 'minic_riscv_plan_pointer_scale('
+has src/target/riscv32/rv32_memory_emit.c 'MINIC_RISCV_POINTER_SCALE_SHIFT'
+has src/target/riscv32/rv32_memory_emit.c 'MINIC_RISCV_POINTER_SCALE_MULTIPLY'
+lacks src/target/riscv32/rv32_memory_emit.c 'if (stride != 1U)'
 has src/target/riscv64/core_codegen.c 'minic_riscv_plan_pointer_scale('
 has src/target/riscv64/runtime_libcall.c 'minic_riscv_plan_pointer_scale('
 lacks src/target/riscv64/runtime_libcall.h 'minic_riscv64_power_of_two('
