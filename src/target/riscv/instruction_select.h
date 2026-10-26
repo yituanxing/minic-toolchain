@@ -108,4 +108,41 @@ static inline bool minic_riscv_plan_integer_arithmetic(
     out->symbol = has_native ? NULL : runtime;
     return true;
 }
+/* R10: XLEN-neutral pointer stride classification. Instruction emission,
+ * the ABI and return-address preservation remain target-owned. Core has
+ * already evaluated index side effects for an empty GNU record stride. */
+typedef enum MinicRiscvPointerScaleKind {
+    MINIC_RISCV_POINTER_SCALE_ZERO = 0,
+    MINIC_RISCV_POINTER_SCALE_UNIT,
+    MINIC_RISCV_POINTER_SCALE_SHIFT,
+    MINIC_RISCV_POINTER_SCALE_MULTIPLY
+} MinicRiscvPointerScaleKind;
+
+typedef struct MinicRiscvPointerScalePlan {
+    MinicRiscvPointerScaleKind kind;
+    unsigned shift; /* only meaningful for SHIFT, zero otherwise */
+} MinicRiscvPointerScalePlan;
+
+static inline bool minic_riscv_plan_pointer_scale(
+    size_t stride, MinicRiscvPointerScalePlan *out) {
+    unsigned shift = 0U;
+    if (out == NULL) return false;
+    out->shift = 0U;
+    if (stride == 0U) {
+        out->kind = MINIC_RISCV_POINTER_SCALE_ZERO;
+    } else if (stride == 1U) {
+        out->kind = MINIC_RISCV_POINTER_SCALE_UNIT;
+    } else if ((stride & (stride - 1U)) != 0U) {
+        out->kind = MINIC_RISCV_POINTER_SCALE_MULTIPLY;
+    } else {
+        while (stride > 1U) {
+            stride >>= 1U;
+            ++shift;
+        }
+        out->kind = MINIC_RISCV_POINTER_SCALE_SHIFT;
+        out->shift = shift;
+    }
+    return true;
+}
+
 #endif

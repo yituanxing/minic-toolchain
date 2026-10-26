@@ -1,10 +1,18 @@
 /* ISA/ABI-free RISC-V machine selection contract for both XLEN widths. */
 #include "target/riscv/instruction_select.h"
 #include <stdio.h>
+#include <limits.h>
 #include <string.h>
 
 static int match(const char *got, const char *expected) {
     return got != NULL && strcmp(got, expected) == 0;
+}
+static bool pointer_scale(size_t stride,
+                          MinicRiscvPointerScaleKind kind,
+                          unsigned shift) {
+    MinicRiscvPointerScalePlan plan;
+    return minic_riscv_plan_pointer_scale(stride, &plan) &&
+           plan.kind == kind && plan.shift == shift;
 }
 int main(void) {
     const struct {
@@ -47,6 +55,17 @@ int main(void) {
     if (!match(minic_riscv_softfloat_arithmetic_symbol(
             MINIC_CORE_INSTRUCTION_DOUBLE_ADD), "__adddf3"))
         return 4;
+    if (!pointer_scale(0U, MINIC_RISCV_POINTER_SCALE_ZERO, 0U) ||
+        !pointer_scale(1U, MINIC_RISCV_POINTER_SCALE_UNIT, 0U) ||
+        !pointer_scale(2U, MINIC_RISCV_POINTER_SCALE_SHIFT, 1U) ||
+        !pointer_scale(8U, MINIC_RISCV_POINTER_SCALE_SHIFT, 3U) ||
+        !pointer_scale(3U, MINIC_RISCV_POINTER_SCALE_MULTIPLY, 0U) ||
+        !pointer_scale((size_t)-1, MINIC_RISCV_POINTER_SCALE_MULTIPLY, 0U) ||
+        !pointer_scale((size_t)1U << (sizeof(size_t) * CHAR_BIT - 1U),
+                       MINIC_RISCV_POINTER_SCALE_SHIFT,
+                       (unsigned)(sizeof(size_t) * CHAR_BIT - 1U)) ||
+        minic_riscv_plan_pointer_scale(0U, NULL))
+        return 5;
     puts("RISCV_MACHINE_SELECTION=PASS ilp32_libgcc=5 lp64_libgcc=5 shift_compare=4 softfloat=1");
     return 0;
 }

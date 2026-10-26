@@ -30,13 +30,13 @@
 | **R07** | CODE_FIXED（禁止来源汇编伪造审计标记，待 exact-head CI） | **内联/文件级源码 ASM 与编译器 ASM 的来源审计**。RV64 已有标记和扫描；RV32 有来源注释，但证明手段不同。 | 保持原有内联汇编约束和发射器，不要重写；让审计区分 compiler-origin 与 source-origin，静态审计必须拒绝被源码 marker/指令伪装绕过的情况，GNU AS/ELF 是最终裁判。 | 源码 `amoadd`、CSR、`fence.i` 不误判编译器违反 I；在 compiler 区域人为注入 M 必须失败；覆盖文件汇编、结构化 asm、asm goto、错误 clobber。 |
 | **R08** | CODE_FIXED（RV64 F/D 可用时也能选择 LP64；同 HEAD 验收中） | **ISA/ABI 仍是一张一对一 profile 表**，如 `rv64imafd/lp64` 被测试列为 invalid，而此配置符合 RISC-V ABI（硬件 F/D 可用、软浮点调用 ABI）。 | 在 MiniC 解析时分别确定 XLEN、扩展与调用 ABI，再根据实际 ABI 支持能力做检查；禁止把 `lp64d` 误按 `lp64` 发射。超出已实现的软浮点 ABI 部分可以明确拒绝，不能谎称通过。 | `rv64imafd/lp64` 对已具备 LP64 integer-only 的 C 用例可工作；浮点签名根据真实 ABI 支持状况验收；`rv64i/lp64d` 必须拒绝。 |
 | **R09** | CODE_FIXED（公共 ABI/ELF header 已归位；等 exact-head CI） | **RISC-V 共用代码仍放在 `riscv64` 命名空间**，如 `riscv64/function_symbol.h` 被 RV32 直接 include；`target_info.h` 也跨层依赖 `riscv64/isa.h`。 | 已证实共用的符号/ISA 事实移动到 `target/riscv/`；调用两端复用同一实现，删除旧路径，保留真正 RV32/64 ABI、寄存器和帧差异。 | 严格边界门禁、五目标构建，符号弱/别名/可见性、ILP32/LP64 差分；旧文件/重复实现真的消失。 |
-| **R10** | TODO（待量化） | **RV32/RV64 重复算法剩余盘点**：`rv32_integer_emit.c`、`rv32_memory_emit.c`、`rv64/scalar_emit.c`、`rv64/memory_emit.c`、`rv64/legalize.c`。 | 先按同一 Core 算法、不同 XLEN/寄存器/ABI 做成对审计；只合并算法/判定/辅助函数符号；不强制合并完整 Backend 或栈帧。每抽取一项立刻删除旧算法。 | 所有实际被触达的发射路径保持 GNU/QEMU 输出行为；公共算法无“旧路径+新包装”并存；性能不出现高代价重复预检。 |
+| **R10** | IN_PROGRESS（首批公共 pointer-stride 判定去重；其余成对盘点） | **RV32/RV64 重复算法剩余盘点**：`rv32_integer_emit.c`、`rv32_memory_emit.c`、`rv64/scalar_emit.c`、`rv64/memory_emit.c`、`rv64/legalize.c`。 | 先按同一 Core 算法、不同 XLEN/寄存器/ABI 做成对审计；只合并算法/判定/辅助函数符号；不强制合并完整 Backend 或栈帧。每抽取一项立刻删除旧算法。 | 所有实际被触达的发射路径保持 GNU/QEMU 输出行为；公共算法无“旧路径+新包装”并存；性能不出现高代价重复预检。 |
 
 ## P2 — 结束条件、交接 MiniAS
 
 | ID | 状态 | 工作 | 验收 |
 | --- | --- | --- | --- |
-| **R11** | TODO | 整理 `riscv64` 专属名字用于公共代码的命名、旧注释、过时实验开关；仅限本轮触达文件。 | `rg`/边界脚本不发现误导性公共依赖，旧函数/重复计算已删。 |
+| **R11** | IN_PROGRESS（修正 word_operations.h 注释所有权；其它旧命名待清理） | 整理 `riscv64` 专属名字用于公共代码的命名、旧注释、过时实验开关；仅限本轮触达文件。 | `rg`/边界脚本不发现误导性公共依赖，旧函数/重复计算已删。 |
 | **R12** | TODO | **MiniC 最终验收**：RV32I、RV64I、M 可选回退、原版 Linux 七分片、四架构不回退。 | 必须在**同一 exact HEAD**保留 CI/workflow URL 与机器结果；`-S` 的成功只证明生成汇编，不等于 ELF/QEMU/Linux 通过。 |
 | **R13** | DEFERRED | MiniAS 的 I/M/A/C/Z 编码、重定位、伪指令、压缩、ELF 属性/ABI 兼容性。 | **本清单只记录交接**，MiniAS 的实际开发留到 MiniC R12 通过后另外规划。 |
 
@@ -74,3 +74,5 @@
 - 2026-10-26：复审 #652 的 3352 TUs exact-head 七片记录：3306 compiled，46 failures 全部为 indirect call 参数声明不匹配。首批失败上下文为 EFI 的 `get_var(L"SecureBoot", ...)`；原版 Linux Kbuild 显式使用 `-fshort-wchar` 和 `-funsigned-char`，但此前 `corpus_replay.py` 只传 `-march/-mabi`，导致原始 ABI 选项遗失。此次修正 replay C 选项复现、加入 EFI 间接调用正反例。MiniC 默认 RISC-V Linux `wchar_t` 保持标准 32 位，不放松合法的函数指针调用检查，也不改 MiniAS。需以此 exact HEAD 再次汇总 3352 条验收。
 
 - 2026-10-26（七分片根因复查）：HEAD `a710ccd` 的 3352 个 Linux TU 中 3306 编译通过、46 个全部报“indirect call argument type does not match declaration”；检索实际失败上下文发现所有错误均落于 EFI `get_var(L"SecureBoot", ...)`。核对 Linux v6.6.143 顶层 Makefile：KBUILD_CFLAGS 明确设置 `-fshort-wchar -funsigned-char`，但 `tests/external/linux/corpus_replay.py` 把预处理后的 .i 用 `-S -march=rv64i -mabi=lp64` 重放，丢了 Kbuild 的语言 ABI 选项。R02 把 RV64 默认 wchar 修正为正常 32-bit int 是正确的，不能回滚。已给 **Linux corpus replay** 恢复上述两个 Kbuild 语言选项，并加 EFI `efi_char16_t*` 间接调用正反例（16-bit 成功、32-bit 仍严格拒绝）。当前状态为 CODE_FIXED，需同 SHA 七分片验证后才能记 3352/3352。
+
+- 2026-10-26（R10/R11 批次）：审计 RV32 的 `rv32_memory_emit.c` 和 RV64 的 `core_codegen.c`、`runtime_libcall.c`，将指针步长的 0/1/2^k/一般乘法分类放到现有 `riscv/instruction_select.h`，删除 RV64 私有的重复 power-of-two/log2 判定 API。各 XLEN 的机器调用、返回地址保存、寄存器/栈帧归属保持原样；修复 RV64 空 GNU record stride 错误走乘法/软件调用、无谓保存 `ra` 的成本。增加共享选择器 0、1、2^k、非 2^k、最高位、NULL 门禁；清理公共 word-operations 头部误放的 CLZ/shift 注释。R10/R11 尚未全关；必须以本批 exact-head 的 strict、四架构、RV32 软件与 RV64 Linux 七片 CI 作为运行证据。

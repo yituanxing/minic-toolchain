@@ -16,6 +16,7 @@
 #include "target/riscv64/object_liveness.h"
 #include "target/riscv64/legalize.h"
 #include "target/riscv64/runtime_libcall.h"
+#include "target/riscv/instruction_select.h"
 #include "core/value_uses.h"
 #include "target/data_layout.h"
 
@@ -97,18 +98,26 @@ static bool emit_instruction(FILE *file,
     case MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO:
         return minic_riscv64_emit_scalar_instruction(
             file, program, function, frame, symbol_name, instruction, isa);
-    case MINIC_CORE_INSTRUCTION_POINTER_OFFSET:
-        if (!minic_riscv64_frame_load_value(file, frame, instruction->value.pointer_offset.base, "t0") ||
-            !minic_riscv64_frame_load_value(file, frame, instruction->value.pointer_offset.index, "t1")) {
+    case MINIC_CORE_INSTRUCTION_POINTER_OFFSET: {
+        const size_t size = instruction->value.pointer_offset.element_size;
+        MinicRiscvPointerScalePlan scale;
+        if (!minic_riscv_plan_pointer_scale(size, &scale) ||
+            !minic_riscv64_frame_load_value(
+                file, frame, instruction->value.pointer_offset.base, "t0"))
             return false;
-        }
-        if (instruction->value.pointer_offset.element_size != 1U) {
-            const size_t size = instruction->value.pointer_offset.element_size;
+        /* GNU empty-record pointer arithmetic keeps its base. The index
+         * expression was already evaluated when constructing Core SSA. */
+        if (scale.kind == MINIC_RISCV_POINTER_SCALE_ZERO)
+            return minic_riscv64_frame_store_value(
+                file, frame, instruction->result, "t0");
+        if (!minic_riscv64_frame_load_value(
+                file, frame, instruction->value.pointer_offset.index, "t1"))
+            return false;
+        if (scale.kind != MINIC_RISCV_POINTER_SCALE_UNIT) {
             if (isa != NULL && isa->strict_isa &&
                 !minic_riscv_codegen_has(isa, MINIC_RISCV_FEATURE_M)) {
-                if (minic_riscv64_power_of_two(size)) {
-                    if (fprintf(file, "  slli t1, t1, %u\n",
-                                minic_riscv64_log2_power_of_two(size)) < 0)
+                if (scale.kind == MINIC_RISCV_POINTER_SCALE_SHIFT) {
+                    if (fprintf(file, "  slli t1, t1, %u\n", scale.shift) < 0)
                         return false;
                 } else if (fprintf(file, "  li t2, %zu\n", size) < 0 ||
                            !minic_riscv64_emit_arithmetic_libcall(
@@ -121,22 +130,21 @@ static bool emit_instruction(FILE *file,
                 return false;
             }
         }
-        /* A library call clobbers t0: reload the original base from its
-         * frame-owned Core value before the final pointer add/subtract. */
+        /* A runtime call clobbers t0. Reload the Core-owned base only for
+         * odd-stride Base-I multiplication, not zero/unit/shift paths. */
         if (minic_riscv64_uses_arithmetic_libcall(isa) &&
-            instruction->value.pointer_offset.element_size != 1U &&
-            !minic_riscv64_power_of_two(instruction->value.pointer_offset.element_size) &&
+            scale.kind == MINIC_RISCV_POINTER_SCALE_MULTIPLY &&
             !minic_riscv64_frame_load_value(
                 file, frame, instruction->value.pointer_offset.base, "t0"))
             return false;
         /* M75_POINTER_COMPOUND_ASSIGNMENT_VALUE: retain subtraction through
-           the Core boundary so an unsigned index is scaled before `sub`. */
-        if (fprintf(file,
-                    "  %s t0, t0, t1\n",
-                    instruction->value.pointer_offset.subtract ? "sub" : "add") < 0) {
+           Core so an unsigned index is scaled before `sub`. */
+        if (fprintf(file, "  %s t0, t0, t1\n",
+                    instruction->value.pointer_offset.subtract ? "sub" : "add") < 0)
             return false;
-        }
-        return minic_riscv64_frame_store_value(file, frame, instruction->result, "t0");
+        return minic_riscv64_frame_store_value(
+            file, frame, instruction->result, "t0");
+    }
     case MINIC_CORE_INSTRUCTION_FIXED_REGISTER_READ: {
         const MinicCoreFixedRegisterBinding *binding;
 

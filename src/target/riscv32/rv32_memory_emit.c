@@ -1,5 +1,6 @@
 #include "target/riscv32/rv32_internal.h"
 #include "target/riscv/record_copy_bytes.h"
+#include "target/riscv/instruction_select.h"
 #include "target/data_layout.h"
 #include <inttypes.h>
 #include <stdint.h>
@@ -27,17 +28,19 @@ bool rv32_emit_memory_instruction(FILE *out, const MinicC0Program *program,
                rv32_slot(out, fr, ins->result, "t0", false);
     case MINIC_CORE_INSTRUCTION_POINTER_OFFSET: {
         size_t stride = ins->value.pointer_offset.element_size;
-        if (stride > UINT32_MAX) return false;
+        MinicRiscvPointerScalePlan scale;
+        if (stride > UINT32_MAX ||
+            !minic_riscv_plan_pointer_scale(stride, &scale)) return false;
         /* GNU permits pointer arithmetic over zero-sized record elements.
          * Core has already evaluated the index and its side effects; the
          * byte offset is identically zero for every index on ILP32. */
-        if (stride == 0U)
+        if (scale.kind == MINIC_RISCV_POINTER_SCALE_ZERO)
             return rv32_slot(out, fr, ins->value.pointer_offset.base,
                              "t0", true) &&
                    rv32_slot(out, fr, ins->result, "t0", false);
         if (!rv32_slot(out, fr, ins->value.pointer_offset.index, "t1", true))
             return false;
-        if (stride != 1U) {
+        if (scale.kind != MINIC_RISCV_POINTER_SCALE_UNIT) {
             /* Keep negative indices and unsigned large indices correct
              * modulo 2^XLEN; libgcc multiplies raw 32-bit bit patterns. */
             if (fprintf(out,

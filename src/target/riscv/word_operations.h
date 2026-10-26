@@ -14,9 +14,6 @@
 bool minic_riscv_emit_word_pair_binary(FILE *out, MinicCoreInstructionKind kind);
 bool minic_riscv_emit_word_pair_unary(FILE *out, MinicCoreInstructionKind kind);
 
-/* CLZ/CTZ loop for a single machine word. Input t0; output t1; scratch
- * t2/t3. t4 is retained (RV32 64-bit half-selection offset). Both the
- * label namespace and XLEN are explicit. width may be narrower than XLEN. */
 /* Precondition: t0/t1 = value, t2 = count; for RV32 ILP32 two-word
  * counts t5 holds the upper count word when count_has_high_word is true.
  * Scratch t3/t4, never the source/ABI registers. Shift counts outside the
@@ -28,6 +25,8 @@ bool minic_riscv_emit_word_pair_shift(FILE *out,
                                      uint32_t result, unsigned xlen,
                                      bool count_has_high_word);
 
+/* CLZ/CTZ loop for a machine word. Input t0; output t1; scratch t2/t3.
+ * t4 is retained (RV32 two-word selection). width may be below XLEN. */
 bool minic_riscv_emit_word_bitscan(FILE *out, MinicCoreInstructionKind kind,
                                   const char *symbol, const char *label_scope,
                                   uint32_t result, unsigned width, unsigned xlen);
