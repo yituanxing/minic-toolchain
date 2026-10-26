@@ -17,16 +17,6 @@
 
 /* Canonical Core verification belongs to Common FunctionPlan. RV64 owns
  * target capability, psABI placements and strict machine ISA admission. */
-/* M74_GLOBAL_RECORD_ADDRESS / M155_EXTERN_VOID_SYMBOL_ADDRESS_OWNER:
-   RV64 global.addr must keep assembler-local `.L*` symbols PC-relative in
-   early position-independent code. Use `lla` only for `.L*` symbols; keep
-   global/extern symbols on `la`.  The pointee storage shape is irrelevant
-   until a later memory operation, even for declaration-only void symbols. */
-static bool core_global_addressable_type(MinicType type) {
-    return minic_riscv64_scalar_type(type) || minic_type_is_array(type) ||
-           minic_type_is_record(type) || minic_type_is_void(type);
-}
-
 static bool core_instruction_supported(const MinicC0Program *program,
                                        const MinicCoreFunction *function,
                                        const MinicCoreInstruction *instruction,
@@ -152,7 +142,8 @@ static bool core_function_can_emit(const MinicC0Program *program,
                                    const MinicCoreFunction *function,
                                    const MinicRiscv64FunctionAbiPlan *abi_plan,
                                    bool core_verified,
-                                   const MinicCoreCallIndex *semantic_calls) {
+                                   const MinicCoreCallIndex *semantic_calls,
+                                   const MinicCoreObjectStoragePlan *storage) {
     size_t index;
 
     if (function == NULL ||
@@ -249,34 +240,52 @@ static bool core_function_can_emit(const MinicC0Program *program,
             }
         }
     }
+    /* Common owns all object type size, element_count and explicit alignment
+     * calculations. In production borrow the exact Common FunctionPlan
+     * snapshot: no second DataLayout walk in RV64 capability admission.
+     * Standalone callers retain a checked Common helper, with the original
+     * null-program scalar-only compatibility path. */
+    if (storage != NULL &&
+        (storage->count != function->object_count ||
+         (storage->count != 0U && storage->objects == NULL)))
+        return core_rv64_capability_reject(function, "object-plan", 0U, -1);
     for (index = 0U; index < function->object_count; ++index) {
-        size_t object_size;
-        size_t object_alignment;
-        MinicType object_type;
-
-        object_type = function->objects[index].type;
-        if ((!minic_riscv64_scalar_type(object_type) && !minic_type_is_record(object_type) &&
-             !minic_type_is_array(object_type)) ||
-            !minic_data_layout_type(minic_default_data_layout(),
-                                    program,
-                                    object_type,
-                                    &object_size,
-                                    &object_alignment) ||
-            (object_size == 0U && !minic_type_is_record(object_type)) ||
-            object_alignment == 0U ||
-            (object_alignment & (object_alignment - 1U)) != 0U ||
-            (function->objects[index].explicit_alignment != 0U &&
-             (function->objects[index].explicit_alignment &
-              (function->objects[index].explicit_alignment - 1U)) != 0U)) {
+        const MinicType type = function->objects[index].type;
+        MinicCoreObjectStorage calculated = {0};
+        const MinicCoreObjectStorage *shape = NULL;
+        if (!minic_riscv64_scalar_type(type) &&
+            !minic_type_is_record(type) && !minic_type_is_array(type))
+            return core_rv64_capability_reject(function, "object-type", index, -1);
+        if (storage != NULL) {
+            shape = &storage->objects[index];
+        } else if (program != NULL) {
+            if (!minic_core_object_storage(
+                    program, minic_default_data_layout(),
+                    &function->objects[index], &calculated))
+                return core_rv64_capability_reject(function, "object-layout", index, -1);
+            shape = &calculated;
+        } else {
+            /* Legacy no-program API cannot resolve record layouts. */
+            size_t size, alignment;
+            if (!minic_data_layout_type(
+                    minic_default_data_layout(), NULL, type, &size, &alignment) ||
+                function->objects[index].element_count == 0U ||
+                size > SIZE_MAX / function->objects[index].element_count ||
+                (function->objects[index].explicit_alignment != 0U &&
+                 (function->objects[index].explicit_alignment &
+                  (function->objects[index].explicit_alignment - 1U)) != 0U))
+                return core_rv64_capability_reject(function, "legacy-object", index, -1);
+            calculated.extent = size * function->objects[index].element_count;
+            calculated.alignment = alignment;
+            shape = &calculated;
+        }
+        if ((shape->extent == 0U && !minic_type_is_record(type)) ||
+            shape->alignment == 0U ||
+            (shape->alignment & (shape->alignment - 1U)) != 0U)
             return core_rv64_capability_reject(function, "object", index, -1);
-        }
     }
-    for (index = 0U; index < function->global_count; ++index) {
-        if (function->globals[index].name == NULL || function->globals[index].name_length == 0U ||
-            !core_global_addressable_type(function->globals[index].type)) {
-            return core_rv64_capability_reject(function, "global", index, -1);
-        }
-    }
+    /* Core verifier already checks global name, type and symbol shape.
+     * Relocations and actual address emission remain machine-owned. */
     for (index = 0U; index < function->value_count; ++index) {
         if (!minic_riscv64_scalar_type(function->values[index].type)) {
             return core_rv64_capability_reject(function, "value", index, -1);
@@ -302,7 +311,8 @@ static bool core_function_can_emit(const MinicC0Program *program,
 bool minic_riscv64_core_function_admit_profile(
     const MinicC0Program *program, const MinicCoreFunction *function,
     MinicRiscv64FunctionAbiPlan *abi_plan, bool lp64_soft_float,
-    const MinicCoreFunctionFacts *facts) {
+    const MinicCoreFunctionFacts *facts,
+    const MinicCoreObjectStoragePlan *storage) {
     const bool core_verified =
         minic_core_function_facts_verified(facts, function) ||
         minic_core_function_verify(function);
@@ -315,16 +325,17 @@ bool minic_riscv64_core_function_admit_profile(
         return core_rv64_capability_reject(function, "function-abi", 0U, -1);
     return core_function_can_emit(
         program, function, abi_plan, core_verified,
-        minic_core_function_facts_verified(facts, function) ? facts->call_index : NULL);
+        minic_core_function_facts_verified(facts, function) ? facts->call_index : NULL,
+        storage);
 }
 bool minic_riscv64_core_function_admit(
     const MinicC0Program *program, const MinicCoreFunction *function,
     MinicRiscv64FunctionAbiPlan *abi_plan) {
     return minic_riscv64_core_function_admit_profile(
-        program, function, abi_plan, false, NULL);
+        program, function, abi_plan, false, NULL, NULL);
 }
 bool minic_riscv64_core_function_can_emit(const MinicCoreFunction *function) {
-    return core_function_can_emit(NULL, function, NULL, false, NULL);
+    return core_function_can_emit(NULL, function, NULL, false, NULL, NULL);
 }
 bool minic_riscv64_core_function_can_emit_for_program(
     const MinicC0Program *program, const MinicCoreFunction *function) {

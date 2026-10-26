@@ -589,12 +589,13 @@ bool minic_riscv64_emit_direct_call(FILE *file,
         if (cached != NULL) call = *cached;
         else if (!minic_core_call_view_build(function, instruction, &call)) return false;
     }
-    /* The RV64 ABI constraints remain checked here for standalone callers,
-     * but now borrow the same semantic view rather than rechecking its shape.
-     * Prepared production already admitted all instructions before output. */
+    /* Function admission already checked psABI legality for every call.
+     * Repeating the classifier while emitting each CALL is wasted work.
+     * Unprepared standalone emitters retain the checked psABI path. */
     if (call.callee == NULL ||
-        !minic_riscv64_core_direct_call_supported(
-            program, function, instruction, &call)) return false;
+        (frame->semantic_calls == NULL &&
+         !minic_riscv64_core_direct_call_supported(
+             program, function, instruction, &call))) return false;
     callee = call.callee;
     if (!minic_riscv64_abi_cursor_initialize_for_return_profile(
             program, callee->return_type,
@@ -693,8 +694,9 @@ bool minic_riscv64_emit_indirect_call(FILE *file,
         else if (!minic_core_call_view_build(function, instruction, &call)) return false;
     }
     if (call.signature == NULL ||
-        !minic_riscv64_core_indirect_call_supported(
-            program, function, instruction, &call)) return false;
+        (frame->semantic_calls == NULL &&
+         !minic_riscv64_core_indirect_call_supported(
+             program, function, instruction, &call))) return false;
     signature = call.signature;
     if (!minic_riscv64_abi_cursor_initialize_for_return_profile(
             program, signature->return_type,
