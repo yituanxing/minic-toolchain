@@ -1,8 +1,9 @@
 #include "target/common/core_function_facts.h"
 #include <string.h>
 
-/* x86-64, RV64, AArch64 and LoongArch64 share this source/Core scan.
- * The four target ABIs must independently classify and emit instructions. */
+/* All five backends consume the same once-per-definition semantic scan
+ * through program_visit_prepared_functions. Frame/call/register policies
+ * remain target-owned. Standalone compatibility callers may scan directly. */
 bool minic_core_function_facts_analyze(
     const MinicCoreFunction *function, MinicCoreFunctionFacts *facts) {
     size_t index;

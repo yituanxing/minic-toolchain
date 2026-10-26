@@ -2,6 +2,7 @@
 #define MINIC_TARGET_RISCV64_CORE_CODEGEN_H
 
 #include "core/core_ir.h"
+#include "target/common/core_function_facts.h"
 #include "target/riscv/function_symbol.h"
 #include "target/riscv64/isa.h"
 #include "minic/compiler.h"
@@ -25,6 +26,10 @@ bool minic_riscv64_core_function_can_emit_for_program(const MinicC0Program *prog
 
 bool minic_riscv64_emit_core_function_with_symbol(
     FILE *file, const MinicCoreFunction *function, const MinicRiscv64FunctionSymbol *symbol);
+bool minic_riscv64_emit_core_function_for_program_with_symbol_prepared(
+    FILE *, const MinicC0Program *, const MinicCoreFunction *,
+    const MinicRiscv64FunctionSymbol *, const MinicCoreFunctionFacts *,
+    bool, const MinicRiscvIsa *, MinicDiagnostic *);
 bool minic_riscv64_emit_core_function_for_program_with_symbol(
     FILE *file,
     const MinicC0Program *program,

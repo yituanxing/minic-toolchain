@@ -31,21 +31,18 @@ static bool rv32_align(size_t value, size_t by, size_t *out) {
 }
 
 /* A wide ILP32 operand remains ONE semantic Core SSA value. */
-bool rv32_frame_init(Rv32Frame *frame, const MinicC0Program *program,
-                            const MinicCoreFunction *f, const MinicTargetInfo *t,
-                            bool is_variadic) {
+bool rv32_frame_init_prepared(Rv32Frame *frame, const MinicC0Program *program,
+    const MinicCoreFunction *f, const MinicTargetInfo *t,
+    bool is_variadic, const MinicCoreFunctionFacts *facts) {
     size_t next, i, max_stack_args, value_base, peak_bytes = 0U;
     size_t maximum_object_alignment = 16U;
-    MinicCoreFunctionFacts facts;
-    if (frame == NULL || program == NULL || f == NULL || t == NULL ||
+    if (frame == NULL || program == NULL || f == NULL || t == NULL || facts == NULL ||
         f->value_count > 100000U || f->object_count > 100000U)
         return false;
     frame->isa = &t->riscv_isa;
     /* The ABI plan is built once; frame and call emission consume exactly
      * its precomputed stack bound and individual argument placements. */
-    if (!minic_core_function_facts_analyze(f, &facts))
-        return rv32_frame_reject("core_facts", 0U, minic_type_void());
-    frame->has_dynamic_stack = facts.uses_dynamic_stack_alloc;
+    frame->has_dynamic_stack = facts->uses_dynamic_stack_alloc;
     if (!rv32_function_abi_plan_build(program, t, f, &frame->abi))
         return rv32_frame_reject("abi_plan", 0U, minic_type_void());
     max_stack_args = frame->abi.max_outgoing_stack_words;
@@ -188,6 +185,13 @@ bool rv32_frame_init(Rv32Frame *frame, const MinicC0Program *program,
     frame->varargs_offset = frame->frame_size - frame->varargs_size;
     return frame->varargs_offset >= next;
 }
+bool rv32_frame_init(Rv32Frame *frame, const MinicC0Program *program,
+    const MinicCoreFunction *f, const MinicTargetInfo *t, bool is_variadic) {
+    MinicCoreFunctionFacts facts;
+    return minic_core_function_facts_analyze(f, &facts) &&
+           rv32_frame_init_prepared(frame, program, f, t, is_variadic, &facts);
+}
+
 void rv32_frame_destroy(Rv32Frame *f) {
     if (f != NULL) {
         free(f->object_offsets);

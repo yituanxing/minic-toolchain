@@ -2,6 +2,7 @@
 #define MINIC_TARGET_COMMON_DIRECT_FUNCTION_PROFILE_H
 
 #include "target/common/direct_call_plan.h"
+#include "target/common/core_function_facts.h"
 
 /* This profile is shared only by the two GNU/QEMU-validated direct LP64
  * emitters. It is not an RV64 or x86 SysV ABI contract. */
@@ -24,7 +25,7 @@ typedef enum MinicDirectLP64ProfileResult {
 MinicDirectLP64ProfileResult minic_multi_direct_lp64_profile_function(
     const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicFunction *decl, const MinicCoreFunction *fn,
-    MinicLP64DirectABI abi, MinicDirectLP64IndirectRecord indirect_record,
+    const MinicCoreFunctionFacts *facts, MinicLP64DirectABI abi, MinicDirectLP64IndirectRecord indirect_record,
     MinicLP64ArgumentPlan *incoming, MinicDirectLP64FunctionProfile *profile);
 
 #endif

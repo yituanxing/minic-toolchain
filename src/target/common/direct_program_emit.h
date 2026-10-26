@@ -2,6 +2,7 @@
 #define MINIC_TARGET_COMMON_DIRECT_PROGRAM_EMIT_H
 
 #include "core/core_ir.h"
+#include "target/common/core_function_facts.h"
 #include "frontend/ast.h"
 #include "minic/compiler.h"
 #include "target/target_info.h"

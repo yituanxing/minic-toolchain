@@ -7,6 +7,7 @@
 #include "target/riscv64/object_liveness.h"
 #include "target/riscv64/function_abi_plan.h"
 #include "target/common/core_object_storage.h"
+#include "target/common/core_function_facts.h"
 #include <stdbool.h>
 #include <stddef.h>
 
@@ -55,6 +56,10 @@ bool minic_riscv64_core_frame_initialize(
     const MinicC0Program *, const MinicCoreFunction *, MinicRiscv64CoreFrame *);
 /* Consume a prevalidated ABI plan. This transfers ownership of parameter
  * locations to the frame; the input plan becomes empty on success. */
+bool minic_riscv64_core_frame_initialize_with_facts(
+    const MinicC0Program *, const MinicCoreFunction *,
+    MinicRiscv64CoreFrame *, MinicRiscv64FunctionAbiPlan *, bool, bool,
+    const MinicCoreFunctionFacts *);
 bool minic_riscv64_core_frame_initialize_prepared(
     const MinicC0Program *, const MinicCoreFunction *,
     MinicRiscv64CoreFrame *, MinicRiscv64FunctionAbiPlan *, bool, bool);

@@ -2,6 +2,7 @@
 #define MINIC_TARGET_COMMON_PROGRAM_VISIT_H
 
 #include "core/core_ir.h"
+#include "target/common/core_function_facts.h"
 #include "frontend/ast.h"
 #include "target/target_info.h"
 #include <stdbool.h>
@@ -19,6 +20,15 @@ typedef bool (*MinicProgramVisitGlobal)(
 typedef bool (*MinicProgramVisitFunction)(
     FILE *, const MinicC0Program *, const MinicTargetInfo *,
     const MinicFunction *, const MinicCoreFunction *, size_t,
+    bool function_sections, void *);
+
+/* Every emitted Core definition has one ABI-neutral semantic-facts plan.
+ * Targets consume its call/variadic/dynamic stack facts without rescanning.
+ * Physical locations and ISA admission remain target responsibilities. */
+typedef bool (*MinicProgramVisitPreparedFunction)(
+    FILE *, const MinicC0Program *, const MinicTargetInfo *,
+    const MinicFunction *, const MinicCoreFunction *,
+    const MinicCoreFunctionFacts *, size_t,
     bool function_sections, void *);
 
 typedef enum MinicProgramFunctionSelection {
@@ -62,6 +72,42 @@ static inline bool minic_program_visit_functions(
         if (decl->is_defined && decl->is_internal && !decl->is_referenced)
             continue;
         if (!visit(out, program, target, decl, &functions[i], i,
+                   function_sections, context)) {
+            success = false;
+            if (!continue_after_failure) break;
+        }
+    }
+    return success;
+}
+
+/* The single production per-function preparation stage. No ABI assumptions,
+ * no target-specific opcode mapping, and no writable Core state. A NULL
+ * facts pointer denotes a non-definition (RV64 declaration pass). */
+static inline bool minic_program_visit_prepared_functions(
+    FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicCoreFunction *functions, size_t function_count,
+    bool function_sections, MinicProgramFunctionSelection selection,
+    bool continue_after_failure, MinicProgramVisitPreparedFunction visit,
+    void *context) {
+    size_t i;
+    bool success = true;
+    if (out == NULL || program == NULL || visit == NULL ||
+        function_count != program->function_count ||
+        (function_count != 0U && functions == NULL))
+        return false;
+    for (i = 0U; i < function_count; ++i) {
+        const MinicFunction *decl = &program->functions[i];
+        MinicCoreFunctionFacts facts = {0};
+        if (selection == MINIC_PROGRAM_FUNCTION_DECLARATIONS && decl->is_defined)
+            continue;
+        if (selection == MINIC_PROGRAM_FUNCTION_LIVE_DEFINITIONS && !decl->is_defined)
+            continue;
+        if (decl->is_defined && decl->is_internal && !decl->is_referenced)
+            continue;
+        if ((decl->is_defined &&
+             !minic_core_function_facts_analyze(&functions[i], &facts)) ||
+            !visit(out, program, target, decl, &functions[i],
+                   decl->is_defined ? &facts : NULL, i,
                    function_sections, context)) {
             success = false;
             if (!continue_after_failure) break;
