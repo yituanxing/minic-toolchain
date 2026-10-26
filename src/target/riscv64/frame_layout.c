@@ -132,31 +132,14 @@ bool minic_riscv64_core_frame_initialize_with_storage(
     if (!minic_core_frame_align_up(storage_size, 8U, &frame->value_base_offset)) {
         return false;
     }
-    /* Core block-local last-use reuse: compute the maximum physical spill
-       extent needed by any one block. Distinct blocks still share the region. */
+    /* Both RISC-V XLENs use one Core block-local SSA peak/layout walk.
+     * RV64 owns its 8-byte units and all psABI offsets. */
     {
-        size_t block_index;
         size_t maximum_block_bytes = 0U;
-
-        for (block_index = 0U; block_index < function->block_count; ++block_index) {
-            size_t block_bytes;
-            if (!minic_core_block_reused_spill_layout(program,
-                                                function,
-                                                &function->blocks[block_index],
-                      minic_default_data_layout(), 8U,
-                                                frame->value_base_offset,
-                                                NULL,
-                                                &block_bytes)) {
-                return false;
-            }
-            if (block_bytes > maximum_block_bytes) {
-                maximum_block_bytes = block_bytes;
-            }
-        }
-        if ((maximum_block_bytes & 7U) != 0U ||
-            maximum_block_bytes > SIZE_MAX - frame->value_base_offset) {
+        if (!minic_core_function_reused_spill_peak(
+                program, function, minic_default_data_layout(), 8U,
+                frame->value_base_offset, &maximum_block_bytes, NULL))
             return false;
-        }
         frame->value_slot_count = maximum_block_bytes / 8U;
         storage_size = frame->value_base_offset + maximum_block_bytes;
     }
@@ -364,7 +347,6 @@ bool minic_riscv64_core_frame_initialize_with_storage(
         }
     }
     if (function->value_count != 0U) {
-        size_t block_index;
         size_t value_index;
 
         if (function->value_count > SIZE_MAX / sizeof(*frame->value_offsets)) {
@@ -383,22 +365,15 @@ bool minic_riscv64_core_frame_initialize_with_storage(
             frame->value_offsets[value_index] = SIZE_MAX;
         }
 
-        for (block_index = 0U; block_index < function->block_count; ++block_index) {
-            size_t block_bytes;
-            if (!minic_core_block_reused_spill_layout(program,
-                                                function,
-                                                &function->blocks[block_index],
-                      minic_default_data_layout(), 8U,
-                                                frame->value_base_offset,
-                                                frame->value_offsets,
-                                                &block_bytes) ||
-                block_bytes > frame->value_slot_count * 8U) {
-                free(frame->value_offsets);
-                frame->value_offsets = NULL;
-                free(frame->object_offsets);
-                frame->object_offsets = NULL;
-                return false;
-            }
+        if (!minic_core_function_reused_spill_assign(
+                program, function, minic_default_data_layout(), 8U,
+                frame->value_base_offset, frame->value_slot_count * 8U,
+                frame->value_offsets, NULL)) {
+            free(frame->value_offsets);
+            frame->value_offsets = NULL;
+            free(frame->object_offsets);
+            frame->object_offsets = NULL;
+            return false;
         }
         for (value_index = 0U; value_index < function->value_count; ++value_index) {
             if (frame->value_offsets[value_index] == SIZE_MAX) {

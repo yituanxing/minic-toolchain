@@ -367,6 +367,15 @@ done
 exists src/target/common/core_frame_layout.h
 has src/target/common/core_object_storage.c 'return minic_core_object_storage_plan_build(program, layout, fn, result);'
 has src/target/riscv32/rv32_frame.c 'minic_core_frame_reserve('
+# RV32/RV64 no longer maintain duplicate function-level SSA peak/assign
+# passes; the exact Core last-use algorithm stays in one Common module.
+has src/target/common/core_spill_layout.c 'bool minic_core_function_reused_spill_peak('
+has src/target/common/core_spill_layout.c 'bool minic_core_function_reused_spill_assign('
+for backend in src/target/riscv32/rv32_frame.c src/target/riscv64/frame_layout.c; do
+  has "$backend" 'minic_core_function_reused_spill_peak('
+  has "$backend" 'minic_core_function_reused_spill_assign('
+  lacks "$backend" 'minic_core_block_reused_spill_layout('
+done
 has src/target/common/lp64_frame.c 'minic_core_frame_reserve('
 has src/target/riscv64/frame_layout.c 'minic_core_frame_align_up('
 has src/target/x86_64/frame.c 'minic_core_frame_align_up('

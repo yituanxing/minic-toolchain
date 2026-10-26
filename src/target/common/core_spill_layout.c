@@ -303,3 +303,67 @@ done:
     return ok;
 }
 
+
+/* The peak is the largest single basic block: distinct verified Core
+ * blocks share the physical spill region. The result is a byte extent,
+ * independent of XLEN or an ABI's call-save/prologue layout. */
+bool minic_core_function_reused_spill_peak(
+    const MinicC0Program *program, const MinicCoreFunction *function,
+    const MinicDataLayout *layout, size_t unit_bytes,
+    size_t value_base_offset, size_t *peak_bytes, size_t *failed_block) {
+    size_t block_index, maximum = 0U;
+    if (failed_block != NULL) *failed_block = SIZE_MAX;
+    if (program == NULL || function == NULL || layout == NULL ||
+        peak_bytes == NULL || (unit_bytes != 4U && unit_bytes != 8U) ||
+        value_base_offset % unit_bytes != 0U ||
+        (function->block_count != 0U && function->blocks == NULL))
+        return false;
+    for (block_index = 0U; block_index < function->block_count; ++block_index) {
+        size_t block_bytes;
+        if (!minic_core_block_reused_spill_layout(
+                program, function, &function->blocks[block_index],
+                layout, unit_bytes, value_base_offset, NULL, &block_bytes)) {
+            if (failed_block != NULL) *failed_block = block_index;
+            return false;
+        }
+        if (block_bytes > maximum) maximum = block_bytes;
+    }
+    if (maximum % unit_bytes != 0U ||
+        maximum > SIZE_MAX - value_base_offset)
+        return false;
+    *peak_bytes = maximum;
+    return true;
+}
+
+/* Reuse the EXACT same block allocator from the peak pass. Targets own
+ * allocated value_offsets and cleanup; this helper only fills entries,
+ * rejects a block exceeding its precomputed bound, and preserves precise
+ * failing block IDs for the existing target diagnostics. */
+bool minic_core_function_reused_spill_assign(
+    const MinicC0Program *program, const MinicCoreFunction *function,
+    const MinicDataLayout *layout, size_t unit_bytes,
+    size_t value_base_offset, size_t maximum_block_bytes,
+    size_t *value_offsets, size_t *failed_block) {
+    size_t block_index;
+    if (failed_block != NULL) *failed_block = SIZE_MAX;
+    if (program == NULL || function == NULL || layout == NULL ||
+        (unit_bytes != 4U && unit_bytes != 8U) ||
+        value_base_offset % unit_bytes != 0U ||
+        maximum_block_bytes % unit_bytes != 0U ||
+        maximum_block_bytes > SIZE_MAX - value_base_offset ||
+        (function->value_count != 0U && value_offsets == NULL) ||
+        (function->block_count != 0U && function->blocks == NULL))
+        return false;
+    for (block_index = 0U; block_index < function->block_count; ++block_index) {
+        size_t block_bytes;
+        if (!minic_core_block_reused_spill_layout(
+                program, function, &function->blocks[block_index],
+                layout, unit_bytes, value_base_offset,
+                value_offsets, &block_bytes) ||
+            block_bytes > maximum_block_bytes) {
+            if (failed_block != NULL) *failed_block = block_index;
+            return false;
+        }
+    }
+    return true;
+}

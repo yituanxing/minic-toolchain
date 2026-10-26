@@ -150,21 +150,16 @@ bool rv32_frame_init_with_storage(Rv32Frame *frame, const MinicC0Program *progra
      * is handled separately by the shared first-write safety proof above. */
     if (!rv32_align(next, 8U, &value_base))
         return rv32_frame_reject("spill_base", next, minic_type_void());
-    for (i = 0U; i < f->block_count; ++i) {
-        size_t block_peak = 0U;
-        if (!minic_core_block_reused_spill_layout(
-                program, f, &f->blocks[i], t->data_layout, 4U,
-                value_base, NULL, &block_peak))
-            return rv32_frame_reject("spill_peak", i, minic_type_void());
-        if (block_peak > peak_bytes) peak_bytes = block_peak;
-    }
-    for (i = 0U; i < f->block_count; ++i) {
-        size_t block_peak = 0U;
-        if (!minic_core_block_reused_spill_layout(
-                program, f, &f->blocks[i], t->data_layout, 4U,
-                value_base, frame->value_offsets, &block_peak) ||
-            block_peak > peak_bytes)
-            return rv32_frame_reject("spill_assign", i, minic_type_void());
+    {
+        size_t failed_block = SIZE_MAX;
+        if (!minic_core_function_reused_spill_peak(
+                program, f, t->data_layout, 4U, value_base,
+                &peak_bytes, &failed_block))
+            return rv32_frame_reject("spill_peak", failed_block, minic_type_void());
+        if (!minic_core_function_reused_spill_assign(
+                program, f, t->data_layout, 4U, value_base,
+                peak_bytes, frame->value_offsets, &failed_block))
+            return rv32_frame_reject("spill_assign", failed_block, minic_type_void());
     }
     if (value_base > SIZE_MAX - peak_bytes)
         return rv32_frame_reject("spill_total", 0U, minic_type_void());
