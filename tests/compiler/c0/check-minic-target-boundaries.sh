@@ -347,4 +347,8 @@ cc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror \
   -o "$work/program-emit-probe"
 "$work/program-emit-probe" "$work/test-output.s"
 
+cc -std=c11 -Wall -Wextra -Wpedantic -Werror -Iinclude -Isrc \
+  tests/compiler/c0/probe-core-instruction-family.c -o "$work/core-family-probe"
+"$work/core-family-probe"
+
 printf 'MINIC_BACKEND_BOUNDARY_CHECK=PASS\n'
