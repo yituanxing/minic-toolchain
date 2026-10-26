@@ -25,10 +25,10 @@
 
 | ID | 状态 | 问题/目标 | 修复策略 | 必须验证 |
 | --- | --- | --- | --- | --- |
-| **R05** | TODO（源码确认） | **目标允许 ISA 与实际 codegen ISA 仍耦合**。当前 `riscv/instruction_select.h` 已有单 XLEN 的 optional-M/软调用选择接口，是正确起点。 | 保留原入口，但将“机器允许 M”和“编译器本次**选用** M”解耦为轻量策略；未显式启用 codegen 优化时 I 路径始终可选。不新增 Machine IR/大量配置层。 | RV32I/RV64I 保持原本 Base-I，支持 M 的目标同时可强制 Base-I；在相同 ABI 下，开启可选扩展不减少已支持 Core 语义。 |
-| **R06** | TODO（源码确认） | **`-march` 限定为几个精确拼写**，例如 Linux 汇编所需 `rv64ima_zicsr_zifencei` 不能仅因 MiniC 不主动生成 A/CSR 就在 `-S` 前拒绝。 | 只在 MiniC 内整理目标 ISA 的解析和能力读取；保持 XLEN/ABI 的严格判断，不承诺 MiniC 生成目标允许的全部扩展。预定义宏如进入本批范围必须与机器事实一致；不要重写 MiniPP/AS/LD。 | `-march=rv64ima_zicsr_zifencei -mabi=lp64 -S` 成功且 compiler-origin 仍符合 I；错误 XLEN/ABI 失败；源码 A/CSR 模板通过来源追踪，最终交 GNU AS 检查。 |
+| **R05** | CODE_FIXED（已分离可用 ISA / codegen ISA；同 HEAD 验收中） | **目标允许 ISA 与实际 codegen ISA 仍耦合**。当前 `riscv/instruction_select.h` 已有单 XLEN 的 optional-M/软调用选择接口，是正确起点。 | 保留原入口，但将“机器允许 M”和“编译器本次**选用** M”解耦为轻量策略；未显式启用 codegen 优化时 I 路径始终可选。不新增 Machine IR/大量配置层。 | RV32I/RV64I 保持原本 Base-I，支持 M 的目标同时可强制 Base-I；在相同 ABI 下，开启可选扩展不减少已支持 Core 语义。 |
+| **R06** | CODE_FIXED（先支持 2 个明确来源汇编超集；其它待逐项核实） | **`-march` 限定为几个精确拼写**，例如 Linux 汇编所需 `rv64ima_zicsr_zifencei` 不能仅因 MiniC 不主动生成 A/CSR 就在 `-S` 前拒绝。 | 只在 MiniC 内整理目标 ISA 的解析和能力读取；保持 XLEN/ABI 的严格判断，不承诺 MiniC 生成目标允许的全部扩展。预定义宏如进入本批范围必须与机器事实一致；不要重写 MiniPP/AS/LD。 | `-march=rv64ima_zicsr_zifencei -mabi=lp64 -S` 成功且 compiler-origin 仍符合 I；错误 XLEN/ABI 失败；源码 A/CSR 模板通过来源追踪，最终交 GNU AS 检查。 |
 | **R07** | TODO（有基础，需加强） | **内联/文件级源码 ASM 与编译器 ASM 的来源审计**。RV64 已有标记和扫描；RV32 有来源注释，但证明手段不同。 | 保持原有内联汇编约束和发射器，不要重写；让审计区分 compiler-origin 与 source-origin，静态审计必须拒绝被源码 marker/指令伪装绕过的情况，GNU AS/ELF 是最终裁判。 | 源码 `amoadd`、CSR、`fence.i` 不误判编译器违反 I；在 compiler 区域人为注入 M 必须失败；覆盖文件汇编、结构化 asm、asm goto、错误 clobber。 |
-| **R08** | TODO（源码确认） | **ISA/ABI 仍是一张一对一 profile 表**，如 `rv64imafd/lp64` 被测试列为 invalid，而此配置符合 RISC-V ABI（硬件 F/D 可用、软浮点调用 ABI）。 | 在 MiniC 解析时分别确定 XLEN、扩展与调用 ABI，再根据实际 ABI 支持能力做检查；禁止把 `lp64d` 误按 `lp64` 发射。超出已实现的软浮点 ABI 部分可以明确拒绝，不能谎称通过。 | `rv64imafd/lp64` 对已具备 LP64 integer-only 的 C 用例可工作；浮点签名根据真实 ABI 支持状况验收；`rv64i/lp64d` 必须拒绝。 |
+| **R08** | CODE_FIXED（RV64 F/D 可用时也能选择 LP64；同 HEAD 验收中） | **ISA/ABI 仍是一张一对一 profile 表**，如 `rv64imafd/lp64` 被测试列为 invalid，而此配置符合 RISC-V ABI（硬件 F/D 可用、软浮点调用 ABI）。 | 在 MiniC 解析时分别确定 XLEN、扩展与调用 ABI，再根据实际 ABI 支持能力做检查；禁止把 `lp64d` 误按 `lp64` 发射。超出已实现的软浮点 ABI 部分可以明确拒绝，不能谎称通过。 | `rv64imafd/lp64` 对已具备 LP64 integer-only 的 C 用例可工作；浮点签名根据真实 ABI 支持状况验收；`rv64i/lp64d` 必须拒绝。 |
 | **R09** | TODO（代码所有权清理） | **RISC-V 共用代码仍放在 `riscv64` 命名空间**，如 `riscv64/function_symbol.h` 被 RV32 直接 include；`target_info.h` 也跨层依赖 `riscv64/isa.h`。 | 已证实共用的符号/ISA 事实移动到 `target/riscv/`；调用两端复用同一实现，删除旧路径，保留真正 RV32/64 ABI、寄存器和帧差异。 | 严格边界门禁、五目标构建，符号弱/别名/可见性、ILP32/LP64 差分；旧文件/重复实现真的消失。 |
 | **R10** | TODO（待量化） | **RV32/RV64 重复算法剩余盘点**：`rv32_integer_emit.c`、`rv32_memory_emit.c`、`rv64/scalar_emit.c`、`rv64/memory_emit.c`、`rv64/legalize.c`。 | 先按同一 Core 算法、不同 XLEN/寄存器/ABI 做成对审计；只合并算法/判定/辅助函数符号；不强制合并完整 Backend 或栈帧。每抽取一项立刻删除旧算法。 | 所有实际被触达的发射路径保持 GNU/QEMU 输出行为；公共算法无“旧路径+新包装”并存；性能不出现高代价重复预检。 |
 
@@ -62,3 +62,5 @@
 - 2026-10-26：依据 PR #651 静态代码审计建立清单。此前绿灯只属于之前对应的 exact HEAD。
 - 2026-10-26：R01 修复 RV32 机器符号判断并添加 signed/unsigned char 生成汇编门禁；R02 修复 RV64 Linux wchar_t 默认并更新选项、target-descriptor 测试和架构文档。状态标为 CODE_FIXED，等待对应 CI/GNU/QEMU 执行证据，不宣称 VERIFIED。
 - 2026-10-26：R03 检查到独立提交 `0e362e1` 已删除“开 M 禁用 i128 比较”的错误限制，并在函数帧预检中预留 libcall RA，标记 CODE_FIXED（仍待同 HEAD 真实运行）。R04 增加 RV32 binary32 加减乘除 soft-float ILP32 机器发射和四个 `__*sf3` C→S 门禁；真实运行差分仍未完成。
+
+- 2026-10-26：R05/R06/R08 已进入代码修复阶段：`MinicRiscvIsa` 拆分 `features`（目标允许指令）/`codegen_features`（MiniC 选用指令），两个 Linux `-march` 超集限定仅 `-S`、机器仍发射 Base-I；`rv64imafd` 可选 LP64/LP64D；预定义、Driver/CC 和严格 ISA 正反例同步。相关 exact-head CI 与外部 ELF/QEMU 结果必须分别核实，不能凭 `-S` 通过关单。
