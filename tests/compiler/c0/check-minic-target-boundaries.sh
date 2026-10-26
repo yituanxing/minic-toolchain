@@ -320,6 +320,8 @@ exists src/target/data_layout.c
 has src/compiler/compiler.c 'minic_data_layout_validate_program(target_info->data_layout, &program)'
 lacks src/compiler/compiler.c 'backend->prepare_program'
 lacks src/target/backend.h 'MinicBackendPrepareProgram'
+lacks src/target/riscv64/codegen_internal.h 'target/riscv64/layout.h'
+has src/target/data_layout.c 'MinicDataLayoutProgramCheck minic_data_layout_validate_program('
 for obsolete in src/target/riscv64/layout.c src/target/riscv64/layout.h; do
   [[ ! -e "$obsolete" ]] || fail "old RV64 AST layout survived: $obsolete"
 done

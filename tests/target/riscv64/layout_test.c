@@ -395,6 +395,22 @@ int main(void) {
         }
     }
 
+    /* Validate common TU admission without any old RV64 AST placement. */
+    {
+        MinicGlobalObject malformed = {0};
+        MinicC0Program invalid = program;
+        malformed.type = minic_type_int();
+        malformed.explicit_alignment = 3U;
+        invalid.global_objects = &malformed;
+        invalid.global_object_count = 1U;
+        if (minic_data_layout_validate_program(minic_default_data_layout(), &invalid) !=
+                MINIC_DATA_LAYOUT_PROGRAM_INVALID_GLOBAL ||
+            minic_data_layout_validate_program(NULL, &program) !=
+                MINIC_DATA_LAYOUT_PROGRAM_INVALID_INPUT) {
+            minic_c0_program_destroy(&program);
+            return fail("common TU data layout fail-closed contract");
+        }
+    }
     minic_c0_program_destroy(&program);
     (void)printf("PASS target/riscv64/layout\n");
     return 0;

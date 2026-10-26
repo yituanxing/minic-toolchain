@@ -9,7 +9,9 @@ on:
       - 'tests/compiler/c0/probe-minic-driver-target-catalog.sh'
       - 'tests/compiler/c0/probe-target-language-abi-options.sh'
       - 'src/core/**'
+      - 'src/compiler/**'
       - 'src/frontend/**'
+      - 'tests/target/riscv64/layout_test.c'
       - 'Makefile'
       - 'tests/compiler/c0/check-four-target-model-m0.c'
       - 'tests/compiler/c0/check-minic-target-boundaries.sh'
@@ -24,7 +26,9 @@ on:
       - 'tests/compiler/c0/probe-minic-driver-target-catalog.sh'
       - 'tests/compiler/c0/probe-target-language-abi-options.sh'
       - 'src/core/**'
+      - 'src/compiler/**'
       - 'src/frontend/**'
+      - 'tests/target/riscv64/layout_test.c'
       - 'Makefile'
       - '.github/workflows/minic-native-refactor-gate.yml'
       - 'tests/compiler/c0/check-minic-target-boundaries.sh'
@@ -58,6 +62,12 @@ jobs:
           make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/minic-native-backend all
           test -x build/minic-native-backend/bin/minic
           test -x build/minic-native-backend/bin/minic-cc
+      - name: Canonical target DataLayout record/global layout regression
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/minic-native-backend check-layout
+
       - name: Five-target staged Driver and compiler identity
         shell: bash
         run: |
