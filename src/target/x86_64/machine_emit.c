@@ -23,13 +23,14 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
     bool sign;
     if (ins == NULL) return false;
     /* Machine-independent family categorization, native emission per ISA. */
-    if (minic_core_instruction_is_floating_scalar(ins->kind))
+    if (minic_core_instruction_semantic_family(ins->kind) ==
+        MINIC_CORE_FAMILY_FLOATING_SCALAR)
         return minic_x86_64_emit_fp_instruction(out, program, target, fn,
                                                 frame, ins);
     if (ins->kind == MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM)
         return minic_x86_64_emit_structured_asm(out, program, target, fn, frame, ins);
-    if (ins->kind == MINIC_CORE_INSTRUCTION_CALL ||
-        ins->kind == MINIC_CORE_INSTRUCTION_INDIRECT_CALL)
+    if (minic_core_instruction_semantic_family(ins->kind) ==
+        MINIC_CORE_FAMILY_CALL)
         return minic_x86_64_emit_call_instruction(out, program, target, fn,
                                                   frame, ins, instruction_id);
     switch (ins->kind) {

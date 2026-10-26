@@ -71,6 +71,32 @@ backends. The new `probe-core-value-slots.c` checks scalar/wide layout,
 non-wide sentinel behavior, empty functions and transactional overflow failure.
 Runtime, psABI and strict RV32I/RV64I checks remain separate gates.
 
+### Canonical Core semantic families and full PR-head x86 certification
+
+A single exhaustive Core opcode-to-family table now supplies the semantic
+classification of all 68 operations to x86-64, RV32, RV64 and the Common
+Direct LP64 planner (AArch64/LoongArch64). It replaces target-local opcode
+category copies; Core verification stays solely in Common FunctionPlan.
+Machine support, ISA feature selection, register assignment, atomics,
+variadic ABI and ELF emitter policy remain exclusively target-owned.
+
+An exhaustive -Wswitch-enum -Werror compile and native probe reject
+uncategorized opcodes. The declaration-only traversal and the prepared
+definition traversal now use one visibility/reachability predicate.
+
+Tagging the PR [minic-full] runs fresh full x86 original BusyBox 593/593
+and six independent real-software acceptance jobs. This does not qualify
+RV32 original same-Image QEMU P1, RV64 P1 or fixed-point Stage3/Stage4.
+### Exact-head acceptance infrastructure
+
+The full x86 original source and seven-shard original RV32 kernel CI is
+PR-head gated by [minic-full], and checks out the real commit rather than
+GitHub's synthetic merge commit. RV32 producers select Ubuntu's signed public
+archive to avoid slow Azure apt mirrors. Four-backend paired A/B is also
+PR-head gated and compares frozen original tinyAES/cJSON sources against the
+pre-refactor compiler; the runner verifies the candidate checkout SHA. Only
+completed runs prove acceptance.
+
 ### Retiring the per-object scan fallback
 
 The RV32/RV64 frame planner now invokes the Common interval index for every

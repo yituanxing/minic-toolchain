@@ -1,6 +1,16 @@
 name: MiniC Four-Backend Refactor Paired Performance (Manual A/B)
 
 on:
+  pull_request:
+    paths:
+      - '.github/workflows/minic-refactor-paired-perf.yml'
+      - 'src/target/**'
+      - 'src/core/**'
+      - 'src/compiler/**'
+      - 'src/frontend/**'
+      - 'tools/minic/**'
+      - 'tools/minic-cc/**'
+      - 'Makefile'
   workflow_dispatch:
 
 permissions:
@@ -12,11 +22,13 @@ concurrency:
 
 jobs:
   paired-ab:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.title, '[minic-full]')
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 1
       - name: Retrieve fixed pre-refactor baseline
         shell: bash
@@ -28,7 +40,9 @@ jobs:
           git fetch --no-tags --depth=1 origin "$BASE_SHA"
           git worktree add --detach "$RUNNER_TEMP/minic-refactor-perf/baseline" "$BASE_SHA"
           test "$(git -C "$RUNNER_TEMP/minic-refactor-perf/baseline" rev-parse HEAD)" = "$BASE_SHA"
-          printf 'MINIC_PERF_AB_BASELINE=%s\nMINIC_PERF_AB_CANDIDATE=%s\n' "$BASE_SHA" "$GITHUB_SHA"
+          candidate=$(git rev-parse HEAD)
+          test "$candidate" = "${{ github.event.pull_request.head.sha || github.sha }}"
+          printf 'MINIC_PERF_AB_BASELINE=%s\nMINIC_PERF_AB_CANDIDATE=%s\n' "$BASE_SHA" "$candidate"
       - name: Build both MiniC binaries in separate source trees
         shell: bash
         run: |

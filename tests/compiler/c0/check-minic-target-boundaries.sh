@@ -45,6 +45,20 @@ lacks src/target/common/core_object_intervals.c 'Allocation or malformed-index f
 has src/target/common/core_spill_layout.c \
   'cached_slot_sizes[value_id] = *slot_size;'
 
+# Exhaustive Common Core semantic vocabulary must be used by all five targets.
+exists src/target/common/core_instruction_family.h
+has src/target/common/core_instruction_family.h 'minic_core_instruction_semantic_family('
+for consumer in src/target/x86_64/machine_emit.c \
+                src/target/riscv32/rv32_emit.c \
+                src/target/riscv64/core_admission.c \
+                src/target/common/direct_instruction_semantics.c; do
+  has "$consumer" 'minic_core_instruction_semantic_family('
+done
+lacks src/target/common/direct_instruction_semantics.c 'minic_multi_direct_memory_machine_kind('
+has src/target/common/program_visit.h 'minic_program_function_selected('
+has src/target/common/core_function_plan.c 'minic_core_function_verify(function)'
+has src/target/riscv64/core_admission.c 'RV64 atomic ISA/memory-order lowering is not qualified yet.'
+
 # The RV64 ABI classification+placement plan, not its Core instruction
 # admission, owns return/argument admissibility and rejection rollback.
 has src/target/riscv64/function_abi_plan.c \
@@ -372,10 +386,10 @@ has src/target/aarch64/integer_emit.c 'minic_core_integer_overflow_shape('
 has src/target/loongarch64/integer_emit.c 'minic_core_integer_overflow_shape('
 lacks src/target/common/direct_instruction_semantics.c 'minic_multi_direct_fp_instruction_kind('
 lacks src/target/common/direct_instruction_semantics.h 'minic_multi_direct_integer_overflow_shape('
-has src/target/riscv32/rv32_emit.c 'minic_core_instruction_is_integer_scalar(ins->kind)'
-has src/target/riscv64/core_admission.c 'minic_core_instruction_is_integer_scalar(instruction->kind)'
+has src/target/riscv32/rv32_emit.c 'MINIC_CORE_FAMILY_INTEGER_SCALAR'
+has src/target/riscv64/core_admission.c 'MINIC_CORE_FAMILY_INTEGER_SCALAR'
 has src/target/riscv64/core_codegen.c 'minic_core_instruction_is_floating_scalar(instruction->kind)'
-has src/target/common/direct_instruction_semantics.c 'minic_core_instruction_is_floating_scalar(ins->kind)'
+has src/target/common/direct_instruction_semantics.c 'MINIC_CORE_FAMILY_FLOATING_SCALAR'
 has src/target/common/program_visit.h 'minic_program_visit_globals('
 has src/target/common/program_visit.h 'minic_program_visit_functions('
 has src/target/common/program_visit.h 'minic_program_visit_prepared_functions('

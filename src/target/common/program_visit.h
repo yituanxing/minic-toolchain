@@ -37,6 +37,16 @@ typedef enum MinicProgramFunctionSelection {
     MINIC_PROGRAM_FUNCTION_LIVE_DEFINITIONS
 } MinicProgramFunctionSelection;
 
+/* The declaration-only and prepared-definition passes must share the same
+ * selection semantics, including unreachable static definitions. */
+static inline bool minic_program_function_selected(
+    const MinicFunction *decl, MinicProgramFunctionSelection selection) {
+    return decl != NULL &&
+        !(selection == MINIC_PROGRAM_FUNCTION_DECLARATIONS && decl->is_defined) &&
+        !(selection == MINIC_PROGRAM_FUNCTION_LIVE_DEFINITIONS && !decl->is_defined) &&
+        !(decl->is_defined && decl->is_internal && !decl->is_referenced);
+}
+
 static inline bool minic_program_visit_globals(
     FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
     MinicProgramVisitGlobal visit, void *context) {
@@ -63,13 +73,7 @@ static inline bool minic_program_visit_functions(
         return false;
     for (i = 0U; i < function_count; ++i) {
         const MinicFunction *decl = &program->functions[i];
-        if (selection == MINIC_PROGRAM_FUNCTION_DECLARATIONS &&
-            decl->is_defined)
-            continue;
-        if (selection == MINIC_PROGRAM_FUNCTION_LIVE_DEFINITIONS &&
-            !decl->is_defined)
-            continue;
-        if (decl->is_defined && decl->is_internal && !decl->is_referenced)
+        if (!minic_program_function_selected(decl, selection))
             continue;
         if (!visit(out, program, target, decl, &functions[i], i,
                    function_sections, context)) {
@@ -99,11 +103,7 @@ static inline bool minic_program_visit_prepared_functions(
         const MinicFunction *decl = &program->functions[i];
         MinicCoreFunctionPlan plan = {0};
         bool ready = true;
-        if (selection == MINIC_PROGRAM_FUNCTION_DECLARATIONS && decl->is_defined)
-            continue;
-        if (selection == MINIC_PROGRAM_FUNCTION_LIVE_DEFINITIONS && !decl->is_defined)
-            continue;
-        if (decl->is_defined && decl->is_internal && !decl->is_referenced)
+        if (!minic_program_function_selected(decl, selection))
             continue;
         /* One common, ABI-neutral function-plan owner. Target frames borrow
          * the immutable layout/semantic snapshot for this visitor call only.

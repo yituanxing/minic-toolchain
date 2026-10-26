@@ -170,13 +170,6 @@ static bool minic_multi_direct_result_slot_offset(
  * transfer family. Planning remains target-ABI-specific at the call site. */
 /* Common Core memory-effect family: ISA byte moves remain independent.
  * The relaxed-only atomic memory-order contract is checked separately. */
-static bool minic_multi_direct_memory_machine_kind(MinicCoreInstructionKind kind) {
-    return kind == MINIC_CORE_INSTRUCTION_LOAD ||
-           kind == MINIC_CORE_INSTRUCTION_ATOMIC_LOAD ||
-           kind == MINIC_CORE_INSTRUCTION_STORE ||
-           kind == MINIC_CORE_INSTRUCTION_ATOMIC_STORE;
-}
-
 static bool minic_multi_direct_abi_transfer_kind(MinicCoreInstructionKind kind) {
     return minic_core_instruction_is_call(kind) ||
            kind == MINIC_CORE_INSTRUCTION_PARAMETER;
@@ -662,7 +655,8 @@ bool minic_multi_direct_machine_instruction_shape(
         shape->family = MINIC_DIRECT_MACHINE_PARAMETER_OBJECT;
         return true;
     }
-    if (minic_multi_direct_memory_machine_kind(ins->kind)) {
+    if (minic_core_instruction_semantic_family(ins->kind) ==
+        MINIC_CORE_FAMILY_MEMORY) {
         shape->family = MINIC_DIRECT_MACHINE_MEMORY;
         return (ins->kind != MINIC_CORE_INSTRUCTION_LOAD &&
                 ins->kind != MINIC_CORE_INSTRUCTION_ATOMIC_LOAD) ||
@@ -673,7 +667,8 @@ bool minic_multi_direct_machine_instruction_shape(
     if (!minic_multi_direct_result_slot_offset(
             fn, ins, allow_variadic_double_result, &shape->result_offset))
         return false;
-    if (minic_core_instruction_is_floating_scalar(ins->kind))
+    if (minic_core_instruction_semantic_family(ins->kind) ==
+        MINIC_CORE_FAMILY_FLOATING_SCALAR)
         shape->family = MINIC_DIRECT_MACHINE_FP;
     else if (minic_multi_direct_integer_machine_kind(ins->kind))
         shape->family = MINIC_DIRECT_MACHINE_INTEGER;

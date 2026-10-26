@@ -547,11 +547,13 @@ static bool rv32_emit_ins(FILE *out, const MinicC0Program *program,
         f == NULL || fr == NULL || ins == NULL) return false;
     /* Shared semantic dispatch, but the 32-bit emitter still decides
      * helper calls, ABI limb splitting and legal Base-I instructions. */
-    if (minic_core_instruction_is_integer_scalar(ins->kind) ||
-        ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_OVERFLOW ||
-        ins->kind == MINIC_CORE_INSTRUCTION_SCALAR_BITCAST)
+    const MinicCoreSemanticFamily family =
+        minic_core_instruction_semantic_family(ins->kind);
+    if (family == MINIC_CORE_FAMILY_INTEGER_SCALAR ||
+        family == MINIC_CORE_FAMILY_OVERFLOW ||
+        family == MINIC_CORE_FAMILY_BITCAST)
         return rv32_emit_integer_instruction(out, f, fr, ins, symbol);
-    if (minic_core_instruction_is_floating_scalar(ins->kind))
+    if (family == MINIC_CORE_FAMILY_FLOATING_SCALAR)
         return rv32_emit_fp_instruction(out, f, fr, ins);
     switch (ins->kind) {
     case MINIC_CORE_INSTRUCTION_PARAMETER:

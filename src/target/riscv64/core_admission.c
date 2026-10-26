@@ -28,8 +28,10 @@ static bool core_instruction_supported(const MinicC0Program *program,
     /* A single Core semantic vocabulary for x86, RV32/RV64 and Direct
      * LP64. This only admits Core shapes into further target checks, NOT
      * a hardware opcode/extension (strict I remains target-owned). */
-    if (minic_core_instruction_is_integer_scalar(instruction->kind) ||
-        minic_core_instruction_is_floating_scalar(instruction->kind))
+    const MinicCoreSemanticFamily family =
+        minic_core_instruction_semantic_family(instruction->kind);
+    if (family == MINIC_CORE_FAMILY_INTEGER_SCALAR ||
+        family == MINIC_CORE_FAMILY_FLOATING_SCALAR)
         return true;
     switch (instruction->kind) {
     case MINIC_CORE_INSTRUCTION_CALL_FRAME_ADDRESS:

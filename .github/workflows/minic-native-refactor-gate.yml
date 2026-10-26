@@ -15,6 +15,7 @@ on:
       - 'Makefile'
       - 'tests/compiler/c0/check-four-target-model-m0.c'
       - 'tests/compiler/c0/check-minic-target-boundaries.sh'
+      - 'tests/compiler/c0/probe-core-semantic-family.c'
       - '.github/workflows/minic-native-refactor-gate.yml'
   push:
     branches:
@@ -55,6 +56,14 @@ jobs:
         run: |
           set -Eeuo pipefail
           bash tests/compiler/c0/check-minic-target-boundaries.sh
+      - name: Exhaustive Core opcode family and ISA separation
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          cc -std=c11 -O2 -Wall -Wextra -Wswitch-enum -Werror \
+            -Isrc -Iinclude tests/compiler/c0/probe-core-semantic-family.c \
+            -o "$RUNNER_TEMP/minic-core-semantic-family"
+          "$RUNNER_TEMP/minic-core-semantic-family"
       - name: Strictly compile all MiniC targets without apt or QEMU prerequisites
         shell: bash
         run: |
