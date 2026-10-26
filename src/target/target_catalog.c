@@ -35,3 +35,29 @@ const MinicTargetCatalogEntry *minic_target_catalog_find(const char *name) {
     }
     return NULL;
 }
+
+/* Accepted machine profiles, not every profile advertised by GCC/LLVM.
+ * The implicit historical RV64GC/LP64D default remains separate. */
+static const MinicRiscvProfile minic_riscv_profiles[] = {
+    {"rv32i", "ilp32", 32U, MINIC_RISCV_PROFILE_RV32I},
+    {"rv64i", "lp64", 64U, MINIC_RISCV_PROFILE_RV64I},
+    {"rv64im", "lp64", 64U, MINIC_RISCV_PROFILE_RV64IM},
+    {"rv64imafd", "lp64d", 64U, MINIC_RISCV_PROFILE_RV64IMAFD}
+};
+
+const MinicRiscvProfile *minic_riscv_profile_all(size_t *count) {
+    if (count != NULL)
+        *count = sizeof(minic_riscv_profiles) / sizeof(minic_riscv_profiles[0]);
+    return minic_riscv_profiles;
+}
+
+const MinicRiscvProfile *minic_riscv_profile_find(const char *march) {
+    size_t i, count;
+    const MinicRiscvProfile *profiles;
+    if (march == NULL) return NULL;
+    profiles = minic_riscv_profile_all(&count);
+    for (i = 0U; i < count; ++i) {
+        if (strcmp(march, profiles[i].march) == 0) return &profiles[i];
+    }
+    return NULL;
+}

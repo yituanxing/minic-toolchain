@@ -2,6 +2,7 @@
 #include "target/target_info.h"
 
 #include <stdio.h>
+#include <string.h>
 
 static int verify_lp64(const char *name,
                        MinicTargetArchitecture expected_arch,
@@ -156,6 +157,30 @@ static int verify_registered_target_catalog(void) {
     return puts("TARGET_CATALOG=PASS five_backends=5 full_staged=rv64_only") == EOF;
 }
 
+static int verify_riscv_profile_catalog(void) {
+    const MinicRiscvProfile *profiles;
+    size_t n, i, j;
+    profiles = minic_riscv_profile_all(&n);
+    if (profiles == NULL || n != 4U ||
+        minic_riscv_profile_find("rv64gc") != NULL ||
+        minic_riscv_profile_find("rv32im") != NULL ||
+        minic_riscv_profile_find(NULL) != NULL)
+        return 1;
+    for (i = 0U; i < n; ++i) {
+        const MinicRiscvProfile *p = &profiles[i];
+        if (p != minic_riscv_profile_find(p->march) ||
+            (p->xlen != 32U && p->xlen != 64U) ||
+            ((p->xlen == 32U) != (p->kind == MINIC_RISCV_PROFILE_RV32I)) ||
+            strcmp(p->mabi, p->xlen == 32U ? "ilp32" :
+                   p->kind == MINIC_RISCV_PROFILE_RV64IMAFD ? "lp64d" : "lp64") != 0)
+            return 1;
+        for (j = i + 1U; j < n; ++j)
+            if (strcmp(p->march, profiles[j].march) == 0)
+                return 1;
+    }
+    return puts("RISCV_PROFILE_CATALOG=PASS four_explicit_profiles no_silent_extension") == EOF;
+}
+
 static int verify_invocation_language_abi(void) {
     const MinicTargetCatalogEntry *entries;
     size_t i, count;
@@ -203,7 +228,8 @@ int main(void) {
         (void)fprintf(stderr, "FAIL four independent target identities\n");
         return 1;
     }
-    if (verify_registered_target_catalog() != 0 || verify_invocation_language_abi() != 0 || verify_language_admission() != 0 || verify_rv32() != 0 ||
+    if (verify_registered_target_catalog() != 0 || verify_riscv_profile_catalog() != 0 ||
+        verify_invocation_language_abi() != 0 || verify_language_admission() != 0 || verify_rv32() != 0 ||
         verify_lp64("aarch64-linux", MINIC_TARGET_ARCH_AARCH64,
                     MINIC_INTEGER_SIGN_UNSIGNED, MINIC_INTEGER_RANK_INT,
                     MINIC_INTEGER_SIGN_UNSIGNED) != 0 ||

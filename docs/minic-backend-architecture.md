@@ -251,3 +251,18 @@ qualification. The driver and the compiler reject options that could silently
 change code or ABI until their owners and validation are implemented.
 For the GCC taxonomy see GCC RISC-V Options and Code Generation Options;
 for LLVM see Clang Command Line Argument Reference.
+
+## RISC-V ISA/ABI explicit profile catalog
+
+Both the staged driver and compiler now read a single exact-profile catalog:
+`rv32i/ilp32`, `rv64i/lp64`, `rv64im/lp64`,
+`rv64imafd/lp64d`. The shared registration owns only **profile
+identity, XLEN and permitted ABI pairing**. The existing RISC-V machine
+legalizer alone maps these identities to feature masks and instruction
+admission, preserving machine ownership. No new `-march` spellings, float
+ABIs or optimizer cost models are silently accepted.
+
+The historical implicit RV64 target still uses its separately qualified
+`rv64gc/lp64d` assembler path. Replacing it with an explicit profile is
+**not** part of this refactor, because the default ELF acceptance contract
+and the strict instruction audit have different scopes.

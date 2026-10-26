@@ -1,5 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 #include "target/riscv64/isa.h"
+#include "target/target_catalog.h"
 #include "frontend/ast.h"
 #include "core/core_ir.h"
 
@@ -24,13 +25,15 @@ bool minic_riscv_isa_has(const MinicRiscvIsa *isa, uint32_t requirements) {
 bool minic_riscv_isa_resolve(const char *march, const char *mabi,
                              MinicRiscvIsa *isa, char *reason, size_t capacity) {
     MinicRiscvIsa resolved;
+    const MinicRiscvProfile *profile = minic_riscv_profile_find(march);
     if (isa == NULL || (isa->xlen != 64U && isa->xlen != 32U))
         return reject(reason, capacity, "unsupported RISC-V XLEN");
     if (isa->xlen == 32U) {
         /* RV32 is a separate ILP32 target. Do not reinterpret RV64 'I'
          * as a 32-bit code generation implementation. The backend must
          * independently qualify 32-bit instructions and ABI before output. */
-        if (march != NULL && strcmp(march, "rv32i") != 0)
+        if (march != NULL &&
+            (profile == NULL || profile->kind != MINIC_RISCV_PROFILE_RV32I))
             return reject(reason, capacity, "RV32 currently accepts rv32i only");
         if (mabi != NULL && strcmp(mabi, "ilp32") != 0)
             return reject(reason, capacity, "rv32i requires ilp32");
@@ -50,28 +53,31 @@ bool minic_riscv_isa_resolve(const char *march, const char *mabi,
     resolved = *isa;
     resolved.features = 0U;
     resolved.strict_isa = true;
-    if (strcmp(march, "rv64i") == 0) {
-        /* I: integer base, no multiply/divide, floating point or atomics. */
-        resolved.abi = MINIC_RISCV_ABI_LP64;
-    } else if (strcmp(march, "rv64im") == 0) {
-        resolved.features = MINIC_RISCV_FEATURE_M;
-        resolved.abi = MINIC_RISCV_ABI_LP64;
-    } else if (strcmp(march, "rv64imafd") == 0) {
-        resolved.features = MINIC_RISCV_FEATURE_M | MINIC_RISCV_FEATURE_A |
-                            MINIC_RISCV_FEATURE_F | MINIC_RISCV_FEATURE_D;
-        resolved.abi = MINIC_RISCV_ABI_LP64D;
-    } else {
+    if (profile == NULL || profile->xlen != 64U)
         return reject(reason, capacity,
                       "supported explicit -march: rv64i, rv64im, rv64imafd; "
                       "other ISA combinations are not yet qualified");
+    switch (profile->kind) {
+    case MINIC_RISCV_PROFILE_RV64I:
+        resolved.abi = MINIC_RISCV_ABI_LP64;
+        break;
+    case MINIC_RISCV_PROFILE_RV64IM:
+        resolved.features = MINIC_RISCV_FEATURE_M;
+        resolved.abi = MINIC_RISCV_ABI_LP64;
+        break;
+    case MINIC_RISCV_PROFILE_RV64IMAFD:
+        resolved.features = MINIC_RISCV_FEATURE_M | MINIC_RISCV_FEATURE_A |
+                            MINIC_RISCV_FEATURE_F | MINIC_RISCV_FEATURE_D;
+        resolved.abi = MINIC_RISCV_ABI_LP64D;
+        break;
+    default:
+        return reject(reason, capacity,
+                      "unqualified RISC-V profile (compiler)");
     }
-    if (mabi != NULL &&
-        ((resolved.abi == MINIC_RISCV_ABI_LP64 && strcmp(mabi, "lp64") != 0) ||
-         (resolved.abi == MINIC_RISCV_ABI_LP64D && strcmp(mabi, "lp64d") != 0))) {
+    if (mabi != NULL && strcmp(mabi, profile->mabi) != 0)
         return reject(reason, capacity,
                       "ISA and ABI mismatch: rv64i/rv64im require lp64, "
                       "rv64imafd requires lp64d");
-    }
     *isa = resolved;
     return true;
 }

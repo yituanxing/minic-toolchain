@@ -642,15 +642,13 @@ int main(int argc, char **argv) {
     /* Be strict about the whole pipeline: a compiler accepting RV64I but
      * the assembler silently using RV64GC would violate the target contract. */
     if (march != NULL) {
+        const MinicRiscvProfile *profile = minic_riscv_profile_find(march);
         const char *expected_abi;
-        if (strcmp(march, "rv64i") == 0 || strcmp(march, "rv64im") == 0) {
-            expected_abi = "lp64";
-        } else if (strcmp(march, "rv64imafd") == 0) {
-            expected_abi = "lp64d";
-        } else {
+        if (profile == NULL || profile->xlen != 64U) {
             fprintf(stderr, "minic: unsupported-riscv-isa:%s\n", march);
             return 2;
         }
+        expected_abi = profile->mabi;
         if (mabi != NULL && strcmp(mabi, expected_abi) != 0) {
             fprintf(stderr, "minic: incompatible-riscv-isa-abi:%s/%s\n", march, mabi);
             return 2;

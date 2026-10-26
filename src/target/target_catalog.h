@@ -30,4 +30,24 @@ typedef struct MinicTargetCatalogEntry {
 const MinicTargetCatalogEntry *minic_target_catalog_find(const char *name);
 const MinicTargetCatalogEntry *minic_target_catalog_all(size_t *count);
 
+/* One source of accepted RISC-V ISA/ABI pairs for the standalone driver,
+ * full compiler and tests. ISA feature bits remain owned by RISC-V machine
+ * legalization, never duplicated in the product driver. */
+typedef enum MinicRiscvProfileKind {
+    MINIC_RISCV_PROFILE_RV32I = 0,
+    MINIC_RISCV_PROFILE_RV64I,
+    MINIC_RISCV_PROFILE_RV64IM,
+    MINIC_RISCV_PROFILE_RV64IMAFD
+} MinicRiscvProfileKind;
+
+typedef struct MinicRiscvProfile {
+    const char *march;
+    const char *mabi;
+    unsigned int xlen;
+    MinicRiscvProfileKind kind;
+} MinicRiscvProfile;
+
+const MinicRiscvProfile *minic_riscv_profile_find(const char *march);
+const MinicRiscvProfile *minic_riscv_profile_all(size_t *count);
+
 #endif

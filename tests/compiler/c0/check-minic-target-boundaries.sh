@@ -84,6 +84,13 @@ has tools/minic/main.c 'language.relocation != NULL'
 lacks tools/minic-cc/main.c 'selected_target.wide_character_type ='
 exists tests/compiler/c0/probe-target-language-abi-options.sh
 
+# ISA/ABI profile names must be shared between native compiler and staged
+# product driver. Only machine legalization owns the actual feature bits.
+has src/target/riscv64/isa.c 'minic_riscv_profile_find(march)'
+has tools/minic/main.c 'minic_riscv_profile_find(march)'
+has src/target/target_catalog.c 'minic_riscv_profile_all('
+lacks tools/minic/main.c 'strcmp(march, "rv64im")'
+
 # A single catalog owns target spelling for driver, compiler and TargetInfo.
 # The product driver must not silently select RV64 AS/LD for other ISAs.
 exists src/target/target_catalog.c
