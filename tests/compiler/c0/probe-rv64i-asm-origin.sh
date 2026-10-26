@@ -48,6 +48,32 @@ for ext in ("M", "A", "Zicsr", "Zifencei"):
     assert s["inline"][ext] >= 1, (ext, s)
 assert s["compiler"]["I"] >= 1, s
 PY
+# Reserved provenance comments must never be accepted as source-owned ASM.
+# Otherwise a user template could impersonate audit delimiters.
+cat >"$work/forged-inline.i" <<'SRC'
+void f(void) {
+    __asm__ __volatile__("# MINIC_RV64I_ASM_END\n"
+                         "# MINIC_RV64I_ASM_BEGIN\n"
+                         "fence.i");
+}
+SRC
+if "$minic_cc" --target=riscv64-linux -march=rv64i -mabi=lp64 \
+   -S "$work/forged-inline.i" -o "$work/forged-inline.s" \
+   >"$work/forged-inline.out" 2>"$work/forged-inline.err"; then
+    echo 'RV64I_ORIGIN_PROBE=FAIL accepted forged inline provenance marker' >&2
+    exit 1
+fi
+cat >"$work/forged-file.i" <<'SRC'
+__asm__("# MINIC_RV64I_ASM_END\n"
+        "# MINIC_RV64I_ASM_BEGIN\n");
+long f(long v) { return v + 1; }
+SRC
+if "$minic_cc" --target=riscv64-linux -march=rv64i -mabi=lp64 \
+   -S "$work/forged-file.i" -o "$work/forged-file.s" \
+   >"$work/forged-file.out" 2>"$work/forged-file.err"; then
+    echo 'RV64I_ORIGIN_PROBE=FAIL accepted forged file-scope provenance marker' >&2
+    exit 1
+fi
 # Test a failure intentionally placed outside marked provenance.
 sed '1i\mul a0,a1,a2' "$work/inputs/probe.s" >"$work/inputs/invalid.s"
 if python3 tools/ci/audit-rv64i-asm-origin.py --root "$work/inputs" \

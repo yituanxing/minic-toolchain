@@ -295,6 +295,24 @@ bool minic_riscv_isa_lp64_integer_signature_supported(
  * Source-owned GNU asm is passed through after Core validates operand
  * transport. RISC-V's compiler-emitted ISA is audited separately from it.
  * Markers are nonexecuting assembler comments, preserving ELF content. */
+bool minic_riscv64_source_asm_marker_safe(const char *text, size_t length) {
+    static const char *const reserved[] = {
+        "# MINIC_RV64I_ASM_BEGIN", "# MINIC_RV64I_ASM_END"
+    };
+    size_t i, j;
+    if (text == NULL) return false;
+    /* Source-owned comments share the assembler namespace. Never permit
+     * them to spoof the exact delimiters that the machine audit trusts. */
+    for (j = 0U; j < sizeof(reserved) / sizeof(reserved[0]); ++j) {
+        size_t marker_length = strlen(reserved[j]);
+        if (length < marker_length) continue;
+        for (i = 0U; i <= length - marker_length; ++i)
+            if (memcmp(text + i, reserved[j], marker_length) == 0)
+                return false;
+    }
+    return true;
+}
+
 bool minic_riscv64_asm_audit_marker(FILE *file, bool begin) {
     return file != NULL && fprintf(file, "# MINIC_RV64I_ASM_%s\n",
                                    begin ? "BEGIN" : "END") >= 0;

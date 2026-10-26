@@ -1,5 +1,6 @@
 #include "target/riscv64/codegen.h"
 #include "target/riscv64/global_emit.h"
+#include "target/riscv64/isa.h"
 #include "target/common/global_emit.h"
 #include "target/riscv64/abi.h"
 #include "target/riscv64/codegen_internal.h"
@@ -321,7 +322,8 @@ static bool minic_riscv64_emit_recursive_array_values(
 }
 
 bool minic_riscv64_emit_file_asm(FILE *file, const MinicFileAsm *file_asm) {
-    if (file == NULL || file_asm == NULL || file_asm->text == NULL) {
+    if (file == NULL || file_asm == NULL ||
+        !minic_riscv64_source_asm_marker_safe(file_asm->text, file_asm->length)) {
         return false;
     }
     if (file_asm->length != 0U &&

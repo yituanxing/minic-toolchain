@@ -44,6 +44,11 @@ bool minic_riscv_isa_lp64_integer_signature_supported(
  * Base-I emitter. Origin audit does not certify a complete ELF/ISA. */
 bool minic_riscv64_asm_audit_marker(FILE *file, bool begin);
 
+/* Reserved provenance delimiters may be emitted only by MiniC, never by
+ * source-owned templates (including file-scope asm). Such templates are
+ * rejected before emission so user comments cannot impersonate provenance. */
+bool minic_riscv64_source_asm_marker_safe(const char *text, size_t length);
+
 /* End-to-end fail-closed instruction selection audit, over the actual
  * assembler text (including frame, helper and address emission). */
 bool minic_riscv64_check_isa_assembly(const char *path,
