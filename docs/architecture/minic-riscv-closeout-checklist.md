@@ -37,7 +37,7 @@
 | ID | 状态 | 工作 | 验收 |
 | --- | --- | --- | --- |
 | **R11** | IN_PROGRESS（修正 word_operations.h 注释所有权；其它旧命名待清理） | 整理 `riscv64` 专属名字用于公共代码的命名、旧注释、过时实验开关；仅限本轮触达文件。 | `rg`/边界脚本不发现误导性公共依赖，旧函数/重复计算已删。 |
-| **R12** | IN_PROGRESS（最新 main 的 RV32 P0=PASS；当前 Image P1 门禁已接入，待运行） | **MiniC 最终验收**：RV32I、RV64I、M 可选回退、原版 Linux 七分片、四架构不回退。 | 必须在**同一 exact HEAD**保留 CI/workflow URL 与机器结果；`-S` 的成功只证明生成汇编，不等于 ELF/QEMU/Linux 通过。 |
+| **R12** | IN_PROGRESS（RV32I exact-head P0、ELF32 shell、P1 12×12 均 PASS；RV64 current-head Linux P1 仍需独立验收） | **MiniC 最终验收**：RV32I、RV64I、M 可选回退、原版 Linux 七分片、四架构不回退。 | 必须在**同一 exact HEAD**保留 CI/workflow URL 与机器结果；`-S` 的成功只证明生成汇编，不等于 ELF/QEMU/Linux 通过。 |
 | **R13** | DEFERRED | MiniAS 的 I/M/A/C/Z 编码、重定位、伪指令、压缩、ELF 属性/ABI 兼容性。 | **本清单只记录交接**，MiniAS 的实际开发留到 MiniC R12 通过后另外规划。 |
 
 ## 现有实现：保留且复用
@@ -80,3 +80,5 @@
 - 2026-10-26（R04+R10 次批）：在原 RV32 strict-I 机器发射器中复用公共 `PointerScalePlan`：2^k 改用 `slli`、一般步长保留 `__mulsi3`，并让基址继续通过 frame-owned slot 安全重载（不复制机器算法、不引入 M）。原始 RV32 QEMU Core 双轨测试新增 4096/13 字节指针步长，四个 binary32 `__*sf3` 真实调用、IEEE -0/NaN；Pinned LLVM compiler-rt RV32 manifest 加入原版 `addsf3/subsf3/mulsf3/divsf3` 四个上游文件以补全 ELF32 运行时符号。只有同 HEAD 的 GNU/MiniAS 链接和 QEMU 通过才能将 R04 标记 VERIFIED；原 Linux 1741 与完整 P1 需分别重新生产完整 Image 验证。
 
 - 2026-10-26（R12 精确验收推进）：main `a381ca4` 的七分片 Linux GNU Kbuild 验收 #40266582808：七片全部通过、原版 Kbuild 1741/1741 纯 MiniC C owners、Image SHA256 `62de7addc93b31096c16afd8f834e183e074478a506cdc711852e4610267b79d`、真实 RV32 QEMU ELF32 PID1/P0 PASS。为了避免旧固定 Image 的 P1 冒充现用编译器能力，本批**只扩展现有** `gcc-shard-verify`：在当前 Image 的 P0 之后复用相同 Image 启动真实 ELF32 shell，并执行正式 P1 manifest 12 项 × 12 次启动；同一 Image SHA 和每轮日志通过，才可输出 `RV32I_CURRENT_HEAD_P1=PASS`。不得提前把 R12 改成 VERIFIED；RV64 真实内核 P1 亦需按其自己的目标 SHA 记证据。
+
+- 2026-10-26（R12 运行结果）：main `ea7f2b35894dc4195d403e93ecd24dae50ac9b49`，CI #40268099875，完整原始 GNU Linux 6.6.143 Kbuild RV32I：七分片 7/7、MiniC C 1741/1741、原始 GNU 链接 `Image` SHA256 `8282e0499576936ef89075bea875ec5eb7e5fab06365d6a7906eb113780ca638`，真实 QEMU ELF32 P0 PASS、原生 ELF32 shell PASS、P1 同一 Image 12 种 syscall × 12 次启动 PASS（`RV32I_CURRENT_HEAD_P1=PASS`）。这是真实的**当前编译器**新生产的 Image，而非以前硬编码的历史文件。RV64 Linux P1 不因 RV32 PASS 自动标记为本 HEAD 合格；R12 整体保持 IN_PROGRESS。

@@ -64,9 +64,6 @@ static const MinicTargetIntegerModel minic_loongarch64_linux_integer_model = {
                             [MINIC_INTEGER_RANK_INT128] = 128U},
 };
 
-const char *const minic_riscv64_argument_registers[8] = {
-    "a0", "a1", "a2", "a3", "a4", "a5", "a6", "a7"};
-
 static bool
 integer_type_with_rank(MinicIntegerSign sign, MinicIntegerRank rank, MinicType *result) {
     if (result == NULL) {

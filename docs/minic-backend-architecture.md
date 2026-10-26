@@ -1,7 +1,7 @@
-# MiniC four-backend architecture (2026-10)
+# MiniC five-target architecture (2026-10)
 
-This document describes the **implemented** MiniC interfaces on the
-`feature/four-backend-aarch64-loongarch64-m0` integration branch. It is not
+This document describes the **implemented** MiniC interfaces on
+the current `main` branch (x86-64, RV32I, RV64, AArch64, LoongArch64). It is not
 a promise of a universal Machine IR, LLVM-style allocator, or a rewrite of
 MiniAS/MiniLD/MiniPP. The current milestone ends when ownership and regression
 behavior are stable; performance improvements can follow independently.
@@ -29,13 +29,13 @@ because MiniC needs it.
 
 ## Actual per-architecture shape
 
-| Concern | x86-64 | RV64 | AArch64 / LoongArch64 |
-| --- | --- | --- | --- |
-| Admission | Core and local emitter checks | `core_admission.c` | common direct LP64 preflight + machine-family shape |
-| ABI | `call_plan.c` SysV 6-GP/8-SSE/x87 | `function_abi_plan.c`, psABI | `direct_call_plan.c` with AAPCS64 / LP64D policy |
-| Frame lifetime | `frame.c` | `frame_layout.c`, frame-owned object intervals | `lp64_frame.c`, `direct_function_plan.c` |
-| Scalar machine | `machine_emit.c`, `machine_fp.c`, `machine_call.c` | `scalar_emit.c`, `fp_emit.c`, `overflow_emit.c` | target `integer_emit.c`, `fp_emit.c`, `memory_emit.c`, `call_emit.c`, `residual_emit.c` |
-| Block / terminator | native machine emitter | `core_codegen.c` | `block_emit.c`: block iteration, family dispatch, GP spill, native terminator |
+| Concern | x86-64 | RV32I | RV64 | AArch64 / LoongArch64 |
+| --- | --- | --- | --- | --- |
+| Admission | Core and local emitter checks | `rv32_emit.c` and ILP32 planner | `core_admission.c` | common direct LP64 preflight + family shape |
+| ABI | `call_plan.c` SysV | `rv32_abi_plan.c` ILP32 | `function_abi_plan.c` LP64/LP64D | `direct_call_plan.c` AAPCS64 / LP64D |
+| Frame lifetime | `frame.c` | `rv32_frame.c` | `frame_layout.c`, object intervals | `lp64_frame.c`, `direct_function_plan.c` |
+| Scalar machine | `machine_emit.c`, `machine_fp.c` | `rv32_integer_emit.c`, `rv32_fp_emit.c` | `scalar_emit.c`, `fp_emit.c` | native `integer_emit.c`, `fp_emit.c`, `memory_emit.c`, `residual_emit.c` |
+| CFG / terminator | `machine_emit.c` | `rv32_emit.c` | `core_codegen.c` | `block_emit.c` |
 
 The two direct LP64 implementations **share the checked function preparation
 algorithm** (`direct_function_plan.c`), an instruction-family classifier
@@ -78,9 +78,11 @@ inline-assembly behavior, so do not force it into an AAPCS64/LP64D-only API.
 - A refactor is not done until its old duplicate calculation/ownership path
   is removed; moving the same function to a smaller file does not qualify.
 
-## Proposed fifth-architecture interface
+## Adding further architectures after RV32
 
-This is a **review checklist**, not a requirement to implement Machine IR:
+RV32 is already the fifth implemented target. The following is a review
+checklist for possible future targets or narrower 8/16/32-bit ABI profiles,
+not a requirement to implement Machine IR:
 
 1. Implement TargetInfo/DataLayout and prove integer widths, endianness,
    aggregates, alignment, and record padding against an external toolchain.

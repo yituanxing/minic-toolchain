@@ -87,8 +87,6 @@ bool minic_target_invocation_plain_char(MinicTargetInvocation *invocation,
 bool minic_target_invocation_short_wchar(MinicTargetInvocation *invocation,
                                          bool enabled);
 
-extern const char *const minic_riscv64_argument_registers[8];
-
 const MinicTargetInfo *minic_default_target_info(void);
 const MinicTargetInfo *minic_target_info_for_architecture(MinicTargetArchitecture architecture);
 const MinicTargetInfo *minic_target_info_from_name(const char *name);
