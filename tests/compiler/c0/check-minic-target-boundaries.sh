@@ -286,4 +286,27 @@ for backend in riscv32 riscv64 x86_64 aarch64 loongarch64; do
   has src/target/backend.c "MINIC_TARGET_ARCH_$(echo "$backend" | tr '[:lower:]' '[:upper:]')"
 done
 
+# Global program traversal is not an AArch64/LoongArch-only subsystem.
+# All five machine backends must use the same common object/function visitor
+# while retaining target-owned ABI, assembler output and source-ASM policy.
+exists src/target/common/program_visit.h
+has src/target/common/program_visit.h 'minic_program_visit_globals('
+has src/target/common/program_visit.h 'minic_program_visit_functions('
+has src/target/common/direct_program_emit.c 'minic_program_visit_globals('
+has src/target/common/direct_program_emit.c 'minic_program_visit_functions('
+for backend in x86_64 riscv32 riscv64; do
+  case "$backend" in
+    x86_64) owner=src/target/x86_64/codegen.c ;;
+    riscv32) owner=src/target/riscv32/rv32_emit.c ;;
+    riscv64) owner=src/target/riscv64/codegen_function.c ;;
+  esac
+  has "$owner" 'minic_program_visit_globals('
+  has "$owner" 'minic_program_visit_functions('
+done
+# The only live definition filter is the common Core semantic predicate.
+has src/target/common/program_visit.h 'decl->is_internal && !decl->is_referenced'
+lacks src/target/x86_64/codegen.c 'for (i = 0U; i < program->function_count && success; ++i)'
+lacks src/target/riscv64/codegen_function.c 'for (function_index = 0U;'
+lacks src/target/riscv32/rv32_emit.c 'for (i = 0U; ok && i < function_count; ++i)'
+
 printf 'MINIC_BACKEND_BOUNDARY_CHECK=PASS\n'

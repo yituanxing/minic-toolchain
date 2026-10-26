@@ -1,0 +1,73 @@
+#ifndef MINIC_TARGET_COMMON_PROGRAM_VISIT_H
+#define MINIC_TARGET_COMMON_PROGRAM_VISIT_H
+
+#include "core/core_ir.h"
+#include "frontend/ast.h"
+#include "target/target_info.h"
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdio.h>
+
+/* A single ISA/ABI-independent translation-unit traversal for all five MiniC
+ * targets. Only declaration filtering and visitation order live here.
+ * No frame offsets, registers, calling convention or assembler syntax.
+ * The visitor controls source-asm provenance, global symbols and diagnostics.
+ * Different targets may retain distinct ordering of external declarations. */
+typedef bool (*MinicProgramVisitGlobal)(
+    FILE *, const MinicC0Program *, const MinicTargetInfo *,
+    const MinicGlobalObject *, size_t, void *);
+typedef bool (*MinicProgramVisitFunction)(
+    FILE *, const MinicC0Program *, const MinicTargetInfo *,
+    const MinicFunction *, const MinicCoreFunction *, size_t,
+    bool function_sections, void *);
+
+typedef enum MinicProgramFunctionSelection {
+    MINIC_PROGRAM_FUNCTION_ALL,
+    MINIC_PROGRAM_FUNCTION_DECLARATIONS,
+    MINIC_PROGRAM_FUNCTION_LIVE_DEFINITIONS
+} MinicProgramFunctionSelection;
+
+static inline bool minic_program_visit_globals(
+    FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
+    MinicProgramVisitGlobal visit, void *context) {
+    size_t i;
+    if (out == NULL || program == NULL || visit == NULL) return false;
+    for (i = 0U; i < program->global_object_count; ++i)
+        if (!visit(out, program, target, &program->global_objects[i],
+                   i, context))
+            return false;
+    return true;
+}
+
+static inline bool minic_program_visit_functions(
+    FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicCoreFunction *functions, size_t function_count,
+    bool function_sections, MinicProgramFunctionSelection selection,
+    bool continue_after_failure, MinicProgramVisitFunction visit,
+    void *context) {
+    size_t i;
+    bool success = true;
+    if (out == NULL || program == NULL || visit == NULL ||
+        function_count != program->function_count ||
+        (function_count != 0U && functions == NULL))
+        return false;
+    for (i = 0U; i < function_count; ++i) {
+        const MinicFunction *decl = &program->functions[i];
+        if (selection == MINIC_PROGRAM_FUNCTION_DECLARATIONS &&
+            decl->is_defined)
+            continue;
+        if (selection == MINIC_PROGRAM_FUNCTION_LIVE_DEFINITIONS &&
+            !decl->is_defined)
+            continue;
+        if (decl->is_defined && decl->is_internal && !decl->is_referenced)
+            continue;
+        if (!visit(out, program, target, decl, &functions[i], i,
+                   function_sections, context)) {
+            success = false;
+            if (!continue_after_failure) break;
+        }
+    }
+    return success;
+}
+
+#endif

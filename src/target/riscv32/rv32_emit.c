@@ -13,6 +13,7 @@
 #include "target/riscv/function_symbol.h"
 #include "target/riscv32/rv32_global_emit.h"
 #include "target/riscv/record_copy_bytes.h"
+#include "target/common/program_visit.h"
 #include "target/data_layout.h"
 #include <inttypes.h>
 #include <limits.h>
@@ -853,6 +854,59 @@ done:
     rv32_frame_destroy(&fr);
     return ok;
 }
+/* Generic TU traversal lives in Target/common; ELF32 globals, declaration
+ * aliases, source asm and the physical ILP32 function ABI remain RV32-owned. */
+typedef struct Rv32ProgramContext {
+    MinicDiagnostic *diagnostic;
+} Rv32ProgramContext;
+
+static bool rv32_visit_global(
+    FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicGlobalObject *obj, size_t index, void *opaque) {
+    Rv32ProgramContext *ctx = opaque;
+    (void)index;
+    if (minic_riscv32_emit_flat_global(out, program, target, obj)) return true;
+    {
+        char message[256];
+        (void)snprintf(message, sizeof(message),
+            "rv32i: unsupported global initializer or relocation"
+            " object=%s values=%zu relocs=%zu zero=%u",
+            obj->name == NULL ? "<unnamed>" : obj->name,
+            obj->initializer_count, obj->relocation_count,
+            obj->is_zero_initialized ? 1U : 0U);
+        rv32_diag(ctx->diagnostic, "<rv32-global>", message);
+    }
+    return false;
+}
+
+static bool rv32_visit_declaration(
+    FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicFunction *decl, const MinicCoreFunction *fn,
+    size_t index, bool function_sections, void *opaque) {
+    const char *name;
+    (void)target;
+    (void)fn;
+    (void)index;
+    (void)function_sections;
+    (void)opaque;
+    if (decl->alias_target != MINIC_FUNCTION_INVALID)
+        return minic_riscv_emit_function_alias(out, program, decl);
+    if (!decl->is_weak || decl->is_internal) return true;
+    name = minic_c0_function_symbol_name(decl);
+    return name != NULL && *name != '\0' &&
+           fprintf(out, ".weak %s\n", name) >= 0;
+}
+
+static bool rv32_visit_function(
+    FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicFunction *decl, const MinicCoreFunction *fn,
+    size_t index, bool function_sections, void *opaque) {
+    Rv32ProgramContext *ctx = opaque;
+    (void)index;
+    return rv32_func(out, program, fn, decl, function_sections,
+                     target, ctx->diagnostic);
+}
+
 bool minic_riscv32_write_core_program(const char *path,
                                       const MinicC0Program *program,
                                       const MinicTargetInfo *target,
@@ -863,6 +917,7 @@ bool minic_riscv32_write_core_program(const char *path,
     FILE *file;
     bool ok = true;
     size_t i;
+    Rv32ProgramContext context = { diagnostic };
     if (path == NULL || program == NULL || target == NULL ||
         target->riscv_isa.xlen != 32U ||
         target->riscv_isa.abi != MINIC_RISCV_ABI_ILP32 ||
@@ -878,21 +933,9 @@ bool minic_riscv32_write_core_program(const char *path,
         return false;
     }
     if (fprintf(file, ".option norvc\n") < 0) ok = false;
-    for (i = 0U; ok && i < program->global_object_count; ++i) {
-        ok = minic_riscv32_emit_flat_global(
-            file, program, target, &program->global_objects[i]);
-        if (!ok) {
-            char message[256];
-            const MinicGlobalObject *obj = &program->global_objects[i];
-            (void)snprintf(message, sizeof(message),
-                "rv32i: unsupported global initializer or relocation"
-                " object=%s values=%zu relocs=%zu zero=%u",
-                obj->name == NULL ? "<unnamed>" : obj->name,
-                obj->initializer_count, obj->relocation_count,
-                obj->is_zero_initialized ? 1U : 0U);
-            rv32_diag(diagnostic, "<rv32-global>", message);
-        }
-    }
+    if (ok)
+        ok = minic_program_visit_globals(
+            file, program, target, rv32_visit_global, &context);
     /* Preserve genuine GNU file-scope asm from the original source.
      * The compiler-owned machine emitter remains strict RV32I. The native
      * kernel is allowed to provide its own A/CSR/privileged operations, and
@@ -915,30 +958,17 @@ bool minic_riscv32_write_core_program(const char *path,
     /* GNU same-TU function aliases and undefined weak declarations use the
      * same RISC-V ELF binding contract as RV64. Defined weak functions are
      * handled by the shared symbol emitter. */
-    for (i = 0U; ok && i < program->function_count; ++i) {
-        const MinicFunction *decl = &program->functions[i];
-        const char *name;
-        if (decl->is_defined) continue;
-        if (decl->alias_target != MINIC_FUNCTION_INVALID) {
-            ok = minic_riscv_emit_function_alias(file, program, decl);
-            continue;
-        }
-        if (!decl->is_weak || decl->is_internal)
-            continue;
-        name = minic_c0_function_symbol_name(decl);
-        if (name == NULL || *name == '\0' ||
-            fprintf(file, ".weak %s\n", name) < 0)
-            ok = false;
-    }
+    if (ok)
+        ok = minic_program_visit_functions(
+            file, program, target, functions, function_count, function_sections,
+            MINIC_PROGRAM_FUNCTION_DECLARATIONS, false,
+            rv32_visit_declaration, &context);
     if (ok && fprintf(file, ".text\n") < 0) ok = false;
-    for (i = 0U; ok && i < function_count; ++i) {
-        const MinicFunction *decl = &program->functions[i];
-        if (decl->is_defined) {
-            if (decl->is_internal && !decl->is_referenced) continue;
-            ok = rv32_func(file, program, &functions[i], decl,
-                           function_sections, target, diagnostic);
-        }
-    }
+    if (ok)
+        ok = minic_program_visit_functions(
+            file, program, target, functions, function_count, function_sections,
+            MINIC_PROGRAM_FUNCTION_LIVE_DEFINITIONS, false,
+            rv32_visit_function, &context);
     if (fclose(file) != 0) ok = false;
     if (!ok) {
         (void)remove(path);
