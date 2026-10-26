@@ -374,6 +374,7 @@ RV64_ABI_TEST_SOURCES := \
 	src/frontend/type.c \
 	src/target/data_layout.c \
 	src/target/riscv64/abi.c \
+	src/target/riscv64/function_abi_plan.c \
 	tests/target/riscv64/abi_test.c
 RV64_ABI_TEST_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(RV64_ABI_TEST_SOURCES))
 RV64_ABI_TEST_BINARY  := $(BUILD_DIR)/tests/target/riscv64/abi-test

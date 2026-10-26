@@ -2,6 +2,93 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+/* Return and named-argument legality have exactly one psABI owner.
+ * The Core verifier proves types and identities; this checked placement
+ * plan proves RV64 register/stack forms before admission or emission.
+ * Do not repeat its classification in core_admission.c. */
+static bool minic_riscv64_function_abi_plan_qualified(
+    const MinicCoreFunction *function,
+    const MinicRiscv64FunctionAbiPlan *abi_plan) {
+    size_t index;
+        MinicRiscv64AbiValue return_value;
+        if (abi_plan == NULL || !abi_plan->prepared ||
+            abi_plan->parameter_location_count != function->parameter_count) {
+            return false;
+        }
+        return_value = abi_plan->return_value;
+        if (return_value.kind == MINIC_RISCV64_ABI_VALUE_INVALID) {
+            return false;
+        }
+        if (return_value.kind == MINIC_RISCV64_ABI_VALUE_AGGREGATE) {
+            if (return_value.slot_count == 0U || return_value.slot_count > 2U) {
+                return false;
+            }
+        } else if (return_value.kind == MINIC_RISCV64_ABI_VALUE_INDIRECT) {
+            if (!minic_type_is_record(function->return_type) ||
+                return_value.storage_size <= 16U || return_value.slot_count != 1U) {
+                return false;
+            }
+        } else if (return_value.kind == MINIC_RISCV64_ABI_VALUE_WIDE_SCALAR) {
+            if ((!minic_type_is_long_double(function->return_type) &&
+                 !minic_type_is_int128_integer(function->return_type)) ||
+                return_value.storage_size != 16U || return_value.slot_count != 2U) {
+                return false;
+            }
+        } else if (return_value.kind != MINIC_RISCV64_ABI_VALUE_VOID &&
+                   return_value.kind != MINIC_RISCV64_ABI_VALUE_INTEGER &&
+                   !(return_value.kind == MINIC_RISCV64_ABI_VALUE_FLOAT &&
+                     (minic_type_is_float(function->return_type) ||
+                      minic_type_is_double(function->return_type)))) {
+            return false;
+        }
+        for (index = 0U; index < function->parameter_count; ++index) {
+            const MinicRiscv64AbiArgumentLocation location =
+                abi_plan->parameter_locations[index];
+            if (location.value.kind == MINIC_RISCV64_ABI_VALUE_INDIRECT) {
+                if (!minic_type_is_record(function->parameter_types[index]) ||
+                    location.value.storage_size == 0U || location.value.slot_count != 1U ||
+                    location.floating_register_count != 0U ||
+                    !((location.integer_register_count == 1U &&
+                       location.integer_register_begin < 8U &&
+                       location.stack_slot_count == 0U) ||
+                      (location.integer_register_count == 0U &&
+                       location.stack_slot_count == 1U))) {
+                    return false;
+                }
+            } else if (location.value.kind == MINIC_RISCV64_ABI_VALUE_FLOAT) {
+                bool soft = abi_plan->named_parameter_cursor.lp64_soft_float;
+                bool correct_location =
+                    soft ? (location.floating_register_count == 0U &&
+                            location.integer_register_count +
+                              location.stack_slot_count == 1U)
+                         : (location.floating_register_count == 1U &&
+                            location.floating_register_begin < 8U &&
+                            location.integer_register_count == 0U &&
+                            location.stack_slot_count == 0U);
+                if ((!minic_type_is_float(function->parameter_types[index]) &&
+                     !minic_type_is_double(function->parameter_types[index])) ||
+                    !correct_location) {
+                    return false;
+                }
+            } else if (location.value.kind == MINIC_RISCV64_ABI_VALUE_WIDE_SCALAR) {
+                if ((!minic_type_is_long_double(function->parameter_types[index]) &&
+                     !minic_type_is_int128_integer(function->parameter_types[index])) ||
+                    location.value.storage_size != 16U || location.value.slot_count != 2U ||
+                    location.floating_register_count != 0U ||
+                    location.integer_register_count + location.stack_slot_count != 2U ||
+                    location.integer_register_begin + location.integer_register_count > 8U) {
+                    return false;
+                }
+            } else if (location.value.kind != MINIC_RISCV64_ABI_VALUE_IGNORE &&
+                       location.value.kind != MINIC_RISCV64_ABI_VALUE_INTEGER &&
+                       (location.value.kind != MINIC_RISCV64_ABI_VALUE_AGGREGATE ||
+                        location.value.slot_count == 0U || location.value.slot_count > 2U)) {
+                return false;
+            }
+        }
+    return true;
+}
+
 /* Return-pointer reservation, float/int register cursors and split stack
  * locations are classified once and subsequently passed into the frame. */
 bool minic_riscv64_function_abi_plan_build_profile(
@@ -33,6 +120,10 @@ bool minic_riscv64_function_abi_plan_build_profile(
     plan->named_parameter_cursor = cursor;
     plan->parameter_location_count = fn->parameter_count;
     plan->prepared = true;
+    if (!minic_riscv64_function_abi_plan_qualified(fn, plan)) {
+        minic_riscv64_function_abi_plan_destroy(plan);
+        return false;
+    }
     return true;
 }
 bool minic_riscv64_function_abi_plan_build(

@@ -68,6 +68,12 @@ jobs:
           set -Eeuo pipefail
           make MODE=release CFLAGS=-Werror BUILD_DIR=build/minic-native-backend check-layout
 
+      - name: RV64 ABI function-plan owner, hard/soft float and rollback
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make MODE=release CFLAGS=-Werror BUILD_DIR=build/minic-native-backend check-rv64-abi
+
       - name: Five-target staged Driver and compiler identity
         shell: bash
         run: |

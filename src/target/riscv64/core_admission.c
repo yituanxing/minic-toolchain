@@ -160,85 +160,13 @@ static bool core_function_can_emit(const MinicC0Program *program,
                 return core_rv64_capability_reject(function, "legacy-parameter", index, -1);
             }
         }
-    } else {
-        MinicRiscv64AbiValue return_value;
-        if (abi_plan == NULL || !abi_plan->prepared ||
-            abi_plan->parameter_location_count != function->parameter_count) {
-            return core_rv64_capability_reject(function, "function-abi", 0U, -1);
-        }
-        return_value = abi_plan->return_value;
-        if (return_value.kind == MINIC_RISCV64_ABI_VALUE_INVALID) {
-            return core_rv64_capability_reject(function, "return-abi", 0U, -1);
-        }
-        if (return_value.kind == MINIC_RISCV64_ABI_VALUE_AGGREGATE) {
-            if (return_value.slot_count == 0U || return_value.slot_count > 2U) {
-                return core_rv64_capability_reject(function, "return-aggregate", 0U, -1);
-            }
-        } else if (return_value.kind == MINIC_RISCV64_ABI_VALUE_INDIRECT) {
-            if (!minic_type_is_record(function->return_type) ||
-                return_value.storage_size <= 16U || return_value.slot_count != 1U) {
-                return core_rv64_capability_reject(function, "return-indirect", 0U, -1);
-            }
-        } else if (return_value.kind == MINIC_RISCV64_ABI_VALUE_WIDE_SCALAR) {
-            if ((!minic_type_is_long_double(function->return_type) &&
-                 !minic_type_is_int128_integer(function->return_type)) ||
-                return_value.storage_size != 16U || return_value.slot_count != 2U) {
-                return core_rv64_capability_reject(
-                    function, "return-wide-scalar", 0U, -1);
-            }
-        } else if (return_value.kind != MINIC_RISCV64_ABI_VALUE_VOID &&
-                   return_value.kind != MINIC_RISCV64_ABI_VALUE_INTEGER &&
-                   !(return_value.kind == MINIC_RISCV64_ABI_VALUE_FLOAT &&
-                     (minic_type_is_float(function->return_type) ||
-                      minic_type_is_double(function->return_type)))) {
-            return core_rv64_capability_reject(function, "return-kind", 0U, -1);
-        }
-        for (index = 0U; index < function->parameter_count; ++index) {
-            const MinicRiscv64AbiArgumentLocation location =
-                abi_plan->parameter_locations[index];
-            if (location.value.kind == MINIC_RISCV64_ABI_VALUE_INDIRECT) {
-                if (!minic_type_is_record(function->parameter_types[index]) ||
-                    location.value.storage_size == 0U || location.value.slot_count != 1U ||
-                    location.floating_register_count != 0U ||
-                    !((location.integer_register_count == 1U &&
-                       location.integer_register_begin < 8U &&
-                       location.stack_slot_count == 0U) ||
-                      (location.integer_register_count == 0U &&
-                       location.stack_slot_count == 1U))) {
-                    return core_rv64_capability_reject(function, "parameter-indirect", index, -1);
-                }
-            } else if (location.value.kind == MINIC_RISCV64_ABI_VALUE_FLOAT) {
-                bool soft = abi_plan->named_parameter_cursor.lp64_soft_float;
-                bool correct_location =
-                    soft ? (location.floating_register_count == 0U &&
-                            location.integer_register_count +
-                              location.stack_slot_count == 1U)
-                         : (location.floating_register_count == 1U &&
-                            location.floating_register_begin < 8U &&
-                            location.integer_register_count == 0U &&
-                            location.stack_slot_count == 0U);
-                if ((!minic_type_is_float(function->parameter_types[index]) &&
-                     !minic_type_is_double(function->parameter_types[index])) ||
-                    !correct_location) {
-                    return core_rv64_capability_reject(function, "parameter-float", index, -1);
-                }
-            } else if (location.value.kind == MINIC_RISCV64_ABI_VALUE_WIDE_SCALAR) {
-                if ((!minic_type_is_long_double(function->parameter_types[index]) &&
-                     !minic_type_is_int128_integer(function->parameter_types[index])) ||
-                    location.value.storage_size != 16U || location.value.slot_count != 2U ||
-                    location.floating_register_count != 0U ||
-                    location.integer_register_count + location.stack_slot_count != 2U ||
-                    location.integer_register_begin + location.integer_register_count > 8U) {
-                    return core_rv64_capability_reject(
-                        function, "parameter-wide-scalar", index, -1);
-                }
-            } else if (location.value.kind != MINIC_RISCV64_ABI_VALUE_IGNORE &&
-                       location.value.kind != MINIC_RISCV64_ABI_VALUE_INTEGER &&
-                       (location.value.kind != MINIC_RISCV64_ABI_VALUE_AGGREGATE ||
-                        location.value.slot_count == 0U || location.value.slot_count > 2U)) {
-                return core_rv64_capability_reject(function, "parameter-kind", index, -1);
-            }
-        }
+    } else if (abi_plan == NULL || !abi_plan->prepared ||
+               abi_plan->parameter_location_count != function->parameter_count ||
+               (function->parameter_count != 0U &&
+                abi_plan->parameter_locations == NULL)) {
+        /* The function ABI planner owns *all* return/parameter capability
+         * checks. Do not second-guess its immutable, qualified placements. */
+        return core_rv64_capability_reject(function, "function-abi", 0U, -1);
     }
     /* Common owns all object type size, element_count and explicit alignment
      * calculations. In production borrow the exact Common FunctionPlan
