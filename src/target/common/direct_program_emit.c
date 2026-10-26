@@ -2,6 +2,7 @@
 
 #include "target/backend_core_usage.h"
 #include "target/common/global_emit.h"
+#include "target/common/program_visit.h"
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -40,17 +41,78 @@ bool minic_multi_direct_machine_reject(const MinicCoreFunction *fn, const char *
     return false;
 }
 
+/* This adapter retains the M1 diagnostic and census behavior while the
+ * program-wide walk is shared with x86/RV32/RV64. */
+typedef struct MinicDirectVisitContext {
+    const MinicMultiDirectProgramConfig *config;
+    size_t scanned_functions, rejected_functions;
+    bool census;
+} MinicDirectVisitContext;
+
+static bool direct_visit_global(
+    FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicGlobalObject *obj, size_t index, void *opaque) {
+    const MinicDirectVisitContext *ctx = opaque;
+    bool success = true;
+    (void)index;
+    if (!obj->is_extern)
+        success = minic_multi_emit_simple_global(
+            out, program, target, obj, minic_multi_emit_elf_relocation);
+    else if (obj->alias_target != MINIC_GLOBAL_OBJECT_INVALID)
+        success = false;
+    if (!success && getenv("MINIC_M1_TRACE") != NULL) {
+        const MinicArrayType *array = minic_type_is_array(obj->type)
+            ? minic_c0_program_array_type(program, obj->type.array_type_id) : NULL;
+        const MinicRecord *record = array != NULL &&
+            minic_type_is_record(array->element_type)
+            ? minic_c0_program_record(program, array->element_type.record_id) : NULL;
+        (void)fprintf(stderr,
+            "MINIC_M4_GLOBAL_FRONTIER arch=%s name=%s init=%zu reloc=%zu type_kind=%d element_kind=%d element_count=%zu fields=%zu\n",
+            ctx->config->architecture_name,
+            obj->name != NULL ? obj->name : "<unnamed>",
+            obj->initializer_count, obj->relocation_count,
+            (int)obj->type.base_kind,
+            array != NULL ? (int)array->element_type.base_kind : -1,
+            array != NULL ? array->element_count : 0U,
+            record != NULL ? record->field_count : 0U);
+    }
+    return success;
+}
+
+static bool direct_visit_function(
+    FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicFunction *decl, const MinicCoreFunction *fn,
+    size_t index, bool function_sections, void *opaque) {
+    MinicDirectVisitContext *ctx = opaque;
+    ++ctx->scanned_functions;
+    if (ctx->config->emit_function(out, program, target, decl, fn,
+                                   index, function_sections))
+        return true;
+    ++ctx->rejected_functions;
+    if (getenv("MINIC_M1_TRACE") != NULL) {
+        (void)fprintf(stderr,
+            "MINIC_M1_FRONTIER arch=%s function=%s "
+            "core_blocks=%zu core_objects=%zu parameters=%zu "
+            "values=%zu instructions=%zu\n",
+            ctx->config->architecture_name,
+            fn->name != NULL ? fn->name : "<unnamed>",
+            fn->block_count, fn->object_count, fn->parameter_count,
+            fn->value_count, fn->instruction_count);
+        if (!ctx->census) (void)minic_core_function_dump(stderr, fn);
+    }
+    return false;
+}
+
 bool minic_multi_direct_write_program(
     const char *path, const MinicC0Program *program,
     const MinicTargetInfo *target, const MinicCoreFunction *core_functions,
     size_t core_function_count, bool function_sections,
     const MinicMultiDirectProgramConfig *config,
     MinicDiagnostic *diagnostic) {
-    size_t i;
     FILE *out;
     bool success = true;
     const bool census = getenv("MINIC_BACKEND_CENSUS") != NULL;
-    size_t scanned_functions = 0U, rejected_functions = 0U;
+    MinicDirectVisitContext visits = { config, 0U, 0U, census };
 
     if (config == NULL || config->architecture_name == NULL ||
         config->display_name == NULL || config->gnu_stack_note == NULL ||
@@ -69,54 +131,16 @@ bool minic_multi_direct_write_program(
     if (out == NULL)
         return minic_multi_direct_fail(diagnostic, path, config->display_name,
                                        "cannot open GNU assembly output");
-    for (i = 0U; i < program->global_object_count && success; ++i) {
-        const MinicGlobalObject *obj = &program->global_objects[i];
-        if (!obj->is_extern)
-            success = minic_multi_emit_simple_global(
-                out, program, target, obj, minic_multi_emit_elf_relocation);
-        else if (obj->alias_target != MINIC_GLOBAL_OBJECT_INVALID)
-            success = false;
-        if (!success && getenv("MINIC_M1_TRACE") != NULL) {
-            const MinicArrayType *array = minic_type_is_array(obj->type)
-                ? minic_c0_program_array_type(program, obj->type.array_type_id) : NULL;
-            const MinicRecord *record = array != NULL &&
-                minic_type_is_record(array->element_type)
-                ? minic_c0_program_record(program, array->element_type.record_id) : NULL;
-            (void)fprintf(stderr,
-                "MINIC_M4_GLOBAL_FRONTIER arch=%s name=%s init=%zu reloc=%zu type_kind=%d element_kind=%d element_count=%zu fields=%zu\n",
-                config->architecture_name,
-                obj->name != NULL ? obj->name : "<unnamed>",
-                obj->initializer_count, obj->relocation_count,
-                (int)obj->type.base_kind,
-                array != NULL ? (int)array->element_type.base_kind : -1,
-                array != NULL ? array->element_count : 0U,
-                record != NULL ? record->field_count : 0U);
-        }
-    }
-    /* Full TU census may continue discovering rejects, but a failed
-     * function or global always discards the partial assembly file. */
-    for (i = 0U; i < program->function_count && (success || census); ++i) {
-        const MinicFunction *decl = &program->functions[i];
-        if (decl->is_defined && (!decl->is_internal || decl->is_referenced)) {
-            ++scanned_functions;
-            if (!config->emit_function(out, program, target, decl,
-                                       &core_functions[i], i, function_sections)) {
-                const MinicCoreFunction *fn = &core_functions[i];
-                ++rejected_functions;
-                success = false;
-                if (getenv("MINIC_M1_TRACE") != NULL) {
-                    (void)fprintf(stderr,
-                        "MINIC_M1_FRONTIER arch=%s function=%s "
-                        "core_blocks=%zu core_objects=%zu parameters=%zu "
-                        "values=%zu instructions=%zu\n",
-                        config->architecture_name,
-                        fn->name != NULL ? fn->name : "<unnamed>",
-                        fn->block_count, fn->object_count, fn->parameter_count,
-                        fn->value_count, fn->instruction_count);
-                    if (!census) (void)minic_core_function_dump(stderr, fn);
-                }
-            }
-        }
+    success = minic_program_visit_globals(
+        out, program, target, direct_visit_global, &visits);
+    /* An opt-in census still inspects all defined Core functions if a
+     * global failed, but the partial .s is always removed. */
+    if (success || census) {
+        const bool functions_ok = minic_program_visit_functions(
+            out, program, target, core_functions, core_function_count,
+            function_sections, MINIC_PROGRAM_FUNCTION_LIVE_DEFINITIONS,
+            census, direct_visit_function, &visits);
+        success = success && functions_ok;
     }
     if (census) {
         minic_backend_core_usage_dump(config->architecture_name,
@@ -124,7 +148,7 @@ bool minic_multi_direct_write_program(
                                       core_function_count);
         (void)fprintf(stderr,
             "MINIC_BACKEND_CENSUS arch=%s scanned=%zu rejected=%zu\n",
-            config->architecture_name, scanned_functions, rejected_functions);
+            config->architecture_name, visits.scanned_functions, visits.rejected_functions);
     }
     if (success && fputs(config->gnu_stack_note, out) == EOF)
         success = false;

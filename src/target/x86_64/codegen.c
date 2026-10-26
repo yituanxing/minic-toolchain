@@ -1,6 +1,7 @@
 #include "target/x86_64/codegen.h"
 #include "target/x86_64/machine_emit.h"
 #include "target/common/core_call_view.h"
+#include "target/common/program_visit.h"
 
 #include "target/data_layout.h"
 #include "target/x86_64/global_emit.h"
@@ -152,13 +153,61 @@ done:
     return success;
 }
 
+typedef struct MinicX86VisitContext {
+    MinicDiagnostic *diagnostic;
+    const char *path;
+} MinicX86VisitContext;
+
+static bool x86_visit_global(
+    FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicGlobalObject *obj, size_t index, void *opaque) {
+    const MinicX86VisitContext *ctx = opaque;
+    (void)index;
+    if (obj->is_extern) {
+        if (obj->alias_target != MINIC_GLOBAL_OBJECT_INVALID) {
+            x86_error(ctx->diagnostic, ctx->path,
+                      "x86-64 external global alias unsupported");
+            return false;
+        }
+        return true;
+    }
+    if (minic_x86_64_emit_global(out, program, target, obj)) return true;
+    {
+        char message[256];
+        (void)snprintf(message, sizeof(message),
+                       "x86-64 global initializer/relocation unsupported: %s "
+                       "(record=%d init=%zu reloc=%zu union=%zu zero=%d tentative=%d)",
+                       obj->name != NULL ? obj->name : "<unnamed>",
+                       (int)minic_type_is_record(obj->type),
+                       obj->initializer_count, obj->relocation_count,
+                       obj->union_selection_count,
+                       (int)obj->is_zero_initialized, (int)obj->is_tentative);
+        x86_error(ctx->diagnostic, ctx->path, message);
+    }
+    return false;
+}
+
+static bool x86_visit_function(
+    FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicFunction *decl, const MinicCoreFunction *fn,
+    size_t index, bool function_sections, void *opaque) {
+    const MinicX86VisitContext *ctx = opaque;
+    if (decl->alias_target != MINIC_FUNCTION_INVALID) {
+        x86_error(ctx->diagnostic, ctx->path,
+                  "x86-64 function alias not implemented yet");
+        return false;
+    }
+    return x86_emit_function(out, program, target, decl, fn, index,
+                             function_sections, ctx->diagnostic, ctx->path);
+}
+
 bool minic_x86_64_write_c0_program_with_core_functions(
     const char *path, const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *core_functions, size_t core_function_count,
     bool function_sections, MinicDiagnostic *diagnostic) {
     FILE *out;
-    size_t i;
     bool success = true;
+    const MinicX86VisitContext visits = { diagnostic, path };
     if (path == NULL || program == NULL || target == NULL ||
         target->architecture != MINIC_TARGET_ARCH_X86_64 ||
         (core_function_count != 0U && core_functions == NULL) ||
@@ -175,40 +224,13 @@ bool minic_x86_64_write_c0_program_with_core_functions(
         x86_error(diagnostic, path, "x86-64 cannot create assembly output");
         return false;
     }
-    for (i = 0U; i < program->global_object_count && success; ++i) {
-        const MinicGlobalObject *obj = &program->global_objects[i];
-        if (obj->is_extern) {
-            if (obj->alias_target != MINIC_GLOBAL_OBJECT_INVALID) {
-                x86_error(diagnostic, path, "x86-64 external global alias unsupported");
-                success = false;
-            }
-            continue;
-        }
-        success = minic_x86_64_emit_global(out, program, target, obj);
-        if (!success) {
-            char message[256];
-            (void)snprintf(message, sizeof(message),
-                           "x86-64 global initializer/relocation unsupported: %s "
-                           "(record=%d init=%zu reloc=%zu union=%zu zero=%d tentative=%d)",
-                           obj->name != NULL ? obj->name : "<unnamed>",
-                           (int)minic_type_is_record(obj->type),
-                           obj->initializer_count, obj->relocation_count,
-                           obj->union_selection_count,
-                           (int)obj->is_zero_initialized, (int)obj->is_tentative);
-            x86_error(diagnostic, path, message);
-        }
-    }
-    for (i = 0U; i < program->function_count && success; ++i) {
-        const MinicFunction *f = &program->functions[i];
-        if (!f->is_defined || (f->is_internal && !f->is_referenced)) continue;
-        if (f->alias_target != MINIC_FUNCTION_INVALID) {
-            x86_error(diagnostic, path, "x86-64 function alias not implemented yet");
-            success = false;
-        } else {
-            success = x86_emit_function(out, program, target, f, &core_functions[i],
-                                        i, function_sections, diagnostic, path);
-        }
-    }
+    success = minic_program_visit_globals(
+        out, program, target, x86_visit_global, (void *)&visits);
+    if (success)
+        success = minic_program_visit_functions(
+            out, program, target, core_functions, core_function_count,
+            function_sections, MINIC_PROGRAM_FUNCTION_LIVE_DEFINITIONS,
+            false, x86_visit_function, (void *)&visits);
     /* ELF/GNU-stack contract: emitted objects never request executable stack. */
     if (success && fprintf(out, ".section .note.GNU-stack,\"\",@progbits\n") < 0)
         success = false;
