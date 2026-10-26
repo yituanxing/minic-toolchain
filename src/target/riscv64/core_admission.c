@@ -132,6 +132,8 @@ static bool core_instruction_supported(const MinicC0Program *program,
         return minic_riscv64_core_field_address_supported(instruction, NULL);
     case MINIC_CORE_INSTRUCTION_SCALAR_BITCAST:
         return minic_riscv64_core_scalar_bitcast_supported(program, function, instruction);
+    default:
+        return false;
     }
     return false;
 }

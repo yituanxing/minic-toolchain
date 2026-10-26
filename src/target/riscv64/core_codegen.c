@@ -286,6 +286,8 @@ static bool emit_instruction(FILE *file,
         return minic_riscv64_emit_indirect_call(file, program, function, frame, instruction);
     case MINIC_CORE_INSTRUCTION_FIELD_ADDRESS:
         return minic_riscv64_emit_memory_instruction(file, program, function, frame, instruction);
+    default:
+        return false;
     }
     return false;
 }
