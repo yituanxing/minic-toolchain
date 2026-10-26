@@ -17,7 +17,7 @@
 | **R01** | CODE_FIXED（等待 exact-head 运行验证） | **RV32 `-fsigned-char` 的机器符号判断错误**。[`rv32_scalar.c`](../../src/target/riscv32/rv32_scalar.c) `rv32_scalar()` 把 `is_plain_char` 一概判成 unsigned，忽略 invocation 生效后的 `integer_sign`。 | 使用 **生效后的** `effective.integer_sign`，不因 `is_plain_char` 强制 unsigned；保留 `_Bool` 等特殊类型的原有规则；仅改 RV32 机器符号判断。 | `-fsigned-char`：`volatile char c=-1; c<0`、`(int)c`、指针取值；`-funsigned-char` 反向检查。RV32 GNU/QEMU 值比较，重新跑五目标选项门禁。 |
 | **R02** | CODE_FIXED（等待 exact-head 运行验证） | **RV64 Linux 默认 `wchar_t` 模型错误**。`target_info.c` 设为 `unsigned short`，当前选项脚本还把这个历史值当正确默认值。RISC-V **Linux psABI Appendix A** 指定所有 ILP32/LP64 `wchar_t` 为 **signed 4 字节、4 字节对齐**。 | 只将 RV64 Linux 默认改成 `int`，保留显式 `-fshort-wchar`→16 位及恢复目标默认的 `-fno-short-wchar`；同步修复依赖旧期望的测试，检查 CPP/头文件宏的对应关系。 | RV32/RV64 默认 `sizeof(wchar_t)==4`、`sizeof(L\"X\")==8`、`(wchar_t)-1<0`；显式 `-fshort-wchar` 为 16 位；与 GNU 预处理/运行差分；已有 Linux 与自举回归不退化。 |
 | **R03** | CODE_FIXED（独立提交 0e362e1；运行待验） | **RV64IM 的某些 `__int128` 比较反而比 RV64I 支持得少**。`riscv64/isa.c` 在 M 可用时拒绝两字比较，而 `scalar_emit.c` 中 Base-I 路径有 `__cmpti2/__ucmpti2`。另 `runtime_libcall.c` 按 `M` 全局判断是否有 libcall，可能漏掉保存 `ra`。 | 将 **“有 M”** 与 **“这一条 Core 指令选哪种算法”** 分开；先保持两字比较走可用软件调用，确保函数级 `ra` 保存检查根据实际选中 libcall，而不是仅看 `M`。先修退化，再考虑优化。 | 同一 `__int128` 有符号/无符号比较在 `rv64i/lp64` 和 `rv64im/lp64` 上都链接运行；比较边界、连环调用、返回地址保存；审计 I 分支不出 M。 |
-| **R04** | CODE_FIXED（新增 binary32 上游 runtime 和真实 ELF32 QEMU 反例；等待 exact-head CI） | **RV32 binary32 算术**：`rv32_emit.c` 的浮点分派没有 `FLOAT_ADD/SUBTRACT/MULTIPLY/DIVIDE`，`rv32_fp_emit.c` 也未见对应 `__*sf3` 分支。编译普通 `float a+b` 的实际 Core 路径需验证。 | 用现有 `riscv/instruction_select.h` 的 `__addsf3` 等符号查找；RV32I ILP32 使用整数寄存器位传递，不另写浮点算法，也不声称 F 扩展。仅补目标 machine lowering 缺口。 | 四个 binary32 运算、`NaN`、带符号零、有限边界；GNU+compiler-rt/libgcc+QEMU 差分。排除浮点常量折叠假阳性。 |
+| **R04** | VERIFIED（PR #654，RV32 原版 compiler-rt + GNU/MiniAS ELF32 QEMU，CI #40266292519） | **RV32 binary32 算术**：`rv32_emit.c` 的浮点分派没有 `FLOAT_ADD/SUBTRACT/MULTIPLY/DIVIDE`，`rv32_fp_emit.c` 也未见对应 `__*sf3` 分支。编译普通 `float a+b` 的实际 Core 路径需验证。 | 用现有 `riscv/instruction_select.h` 的 `__addsf3` 等符号查找；RV32I ILP32 使用整数寄存器位传递，不另写浮点算法，也不声称 F 扩展。仅补目标 machine lowering 缺口。 | 四个 binary32 运算、`NaN`、带符号零、有限边界；GNU+compiler-rt/libgcc+QEMU 差分。排除浮点常量折叠假阳性。 |
 
 标准：<https://docs.riscv.org/reference/abi/riscv-cc-linux-specific-abi.html>。
 
@@ -37,7 +37,7 @@
 | ID | 状态 | 工作 | 验收 |
 | --- | --- | --- | --- |
 | **R11** | IN_PROGRESS（修正 word_operations.h 注释所有权；其它旧命名待清理） | 整理 `riscv64` 专属名字用于公共代码的命名、旧注释、过时实验开关；仅限本轮触达文件。 | `rg`/边界脚本不发现误导性公共依赖，旧函数/重复计算已删。 |
-| **R12** | TODO | **MiniC 最终验收**：RV32I、RV64I、M 可选回退、原版 Linux 七分片、四架构不回退。 | 必须在**同一 exact HEAD**保留 CI/workflow URL 与机器结果；`-S` 的成功只证明生成汇编，不等于 ELF/QEMU/Linux 通过。 |
+| **R12** | IN_PROGRESS（最新 main 的 RV32 P0=PASS；当前 Image P1 门禁已接入，待运行） | **MiniC 最终验收**：RV32I、RV64I、M 可选回退、原版 Linux 七分片、四架构不回退。 | 必须在**同一 exact HEAD**保留 CI/workflow URL 与机器结果；`-S` 的成功只证明生成汇编，不等于 ELF/QEMU/Linux 通过。 |
 | **R13** | DEFERRED | MiniAS 的 I/M/A/C/Z 编码、重定位、伪指令、压缩、ELF 属性/ABI 兼容性。 | **本清单只记录交接**，MiniAS 的实际开发留到 MiniC R12 通过后另外规划。 |
 
 ## 现有实现：保留且复用
@@ -78,3 +78,5 @@
 - 2026-10-26（R10/R11 批次）：审计 RV32 的 `rv32_memory_emit.c` 和 RV64 的 `core_codegen.c`、`runtime_libcall.c`，将指针步长的 0/1/2^k/一般乘法分类放到现有 `riscv/instruction_select.h`，删除 RV64 私有的重复 power-of-two/log2 判定 API。各 XLEN 的机器调用、返回地址保存、寄存器/栈帧归属保持原样；修复 RV64 空 GNU record stride 错误走乘法/软件调用、无谓保存 `ra` 的成本。增加共享选择器 0、1、2^k、非 2^k、最高位、NULL 门禁；清理公共 word-operations 头部误放的 CLZ/shift 注释。R10/R11 尚未全关；必须以本批 exact-head 的 strict、四架构、RV32 软件与 RV64 Linux 七片 CI 作为运行证据。
 
 - 2026-10-26（R04+R10 次批）：在原 RV32 strict-I 机器发射器中复用公共 `PointerScalePlan`：2^k 改用 `slli`、一般步长保留 `__mulsi3`，并让基址继续通过 frame-owned slot 安全重载（不复制机器算法、不引入 M）。原始 RV32 QEMU Core 双轨测试新增 4096/13 字节指针步长，四个 binary32 `__*sf3` 真实调用、IEEE -0/NaN；Pinned LLVM compiler-rt RV32 manifest 加入原版 `addsf3/subsf3/mulsf3/divsf3` 四个上游文件以补全 ELF32 运行时符号。只有同 HEAD 的 GNU/MiniAS 链接和 QEMU 通过才能将 R04 标记 VERIFIED；原 Linux 1741 与完整 P1 需分别重新生产完整 Image 验证。
+
+- 2026-10-26（R12 精确验收推进）：main `a381ca4` 的七分片 Linux GNU Kbuild 验收 #40266582808：七片全部通过、原版 Kbuild 1741/1741 纯 MiniC C owners、Image SHA256 `62de7addc93b31096c16afd8f834e183e074478a506cdc711852e4610267b79d`、真实 RV32 QEMU ELF32 PID1/P0 PASS。为了避免旧固定 Image 的 P1 冒充现用编译器能力，本批**只扩展现有** `gcc-shard-verify`：在当前 Image 的 P0 之后复用相同 Image 启动真实 ELF32 shell，并执行正式 P1 manifest 12 项 × 12 次启动；同一 Image SHA 和每轮日志通过，才可输出 `RV32I_CURRENT_HEAD_P1=PASS`。不得提前把 R12 改成 VERIFIED；RV64 真实内核 P1 亦需按其自己的目标 SHA 记证据。

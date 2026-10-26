@@ -2375,6 +2375,53 @@ jobs:
             bash tools/ci/linux-rv32i-qemu-p0-v1.sh
           echo 'RV32I_FULL_MINIC_CURRENT_HEAD_QEMU_P0=PASS 1741/1741'
 
+      # R12: Use the newly produced seven-shard Image, not an older fixed
+      # kernel. No C recompilation or GNU relink between shell and P1 boots.
+      - name: Verify current MiniC RV32 Linux shell and P1 12/12 on same Image
+        if: contains(github.event.head_commit.message, '[linux-rv32i-kbuild]')
+        timeout-minutes: 25
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          image="$GITHUB_WORKSPACE/build/rv32i-linux-entry/out/arch/riscv/boot/Image"
+          test -s "$image"
+          sha=$(sha256sum "$image" | cut -d ' ' -f1)
+          dir="$GITHUB_WORKSPACE/build/rv32i-linux-entry/current-qemu-p1"
+          mkdir -p "$dir/trials"
+          printf 'attempt\timage_sha256\tverdict\n' > "$dir/p1-repeats.tsv"
+          printf 'commit=%s\nimage_sha256=%s\nproducer_run=%s\n' \
+            "$GITHUB_SHA" "$sha" "$GITHUB_RUN_ID" > "$dir/source-identity.txt"
+          # Verify a real ELF32 shell in this exact newly linked kernel.
+          RV32I_QEMU_P1=1 RV32I_QEMU_SHELL=1 \
+          RV32I_QEMU_IMAGE="$image" \
+          RV32I_QEMU_WORK="$dir/shell" \
+          RV32I_QEMU_TIMEOUT_SECONDS=45 \
+            bash tools/ci/linux-rv32i-qemu-p0-v1.sh
+          echo "RV32I_CURRENT_HEAD_SHELL=PASS image_sha256=$sha"
+          # Canonical P1 manifest: fork/exec/wait, 12 syscall families,
+          # clean powerdown, and one SHA-locked Image for all twelve boots.
+          for attempt in $(seq 1 12); do
+            work="$dir/trials/$attempt"
+            if RV32I_QEMU_P1=1 \
+               RV32I_QEMU_IMAGE="$image" \
+               RV32I_QEMU_WORK="$work" \
+               RV32I_QEMU_TIMEOUT_SECONDS=45 \
+                 bash tools/ci/linux-rv32i-qemu-p0-v1.sh; then
+              actual=$(sha256sum "$image" | cut -d ' ' -f1)
+              test "$actual" = "$sha"
+              printf '%s\t%s\tPASS\n' "$attempt" "$sha" >> "$dir/p1-repeats.tsv"
+              echo "RV32I_CURRENT_HEAD_P1_TRIAL=PASS attempt=$attempt/12 image_sha256=$sha syscalls=12/12"
+            else
+              printf '%s\t%s\tFAIL\n' "$attempt" "$sha" >> "$dir/p1-repeats.tsv"
+              echo "RV32I_CURRENT_HEAD_P1_TRIAL=FAIL attempt=$attempt/12 image_sha256=$sha" >&2
+              exit 1
+            fi
+          done
+          test "$(awk -F '\t' '$3=="PASS"{n++} END{print n+0}' "$dir/p1-repeats.tsv")" -eq 12
+          test "$(tail -n +2 "$dir/p1-repeats.tsv" | cut -f2 | sort -u | wc -l)" -eq 1
+          test "$(sha256sum "$image" | cut -d ' ' -f1)" = "$sha"
+          echo "RV32I_CURRENT_HEAD_P1=PASS boots=12/12 syscalls=12/12 MiniC_C=1741/1741 original_Kbuild=true ELF32=true immutable_Image=$sha"
+
       - name: Preserve independently attested RV32 seven-shard full Image result
         if: always() && contains(github.event.head_commit.message, '[linux-rv32i-kbuild]')
         uses: actions/upload-artifact@v4
@@ -2401,6 +2448,11 @@ jobs:
             build/rv32i-linux-entry/current-qemu-p0/provenance.txt
             build/rv32i-linux-entry/current-qemu-p0/qemu-uart-serial.log
             build/rv32i-linux-entry/current-qemu-p0/qemu-debug.log
+            build/rv32i-linux-entry/current-qemu-p1/source-identity.txt
+            build/rv32i-linux-entry/current-qemu-p1/p1-repeats.tsv
+            build/rv32i-linux-entry/current-qemu-p1/shell/qemu-serial.log
+            build/rv32i-linux-entry/current-qemu-p1/trials/*/qemu-serial.log
+            build/rv32i-linux-entry/current-qemu-p1/trials/*/provenance.txt
             build/rv32i-linux-entry/out/arch/riscv/boot/Image
           if-no-files-found: warn
           retention-days: 7
