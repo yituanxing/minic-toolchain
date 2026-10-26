@@ -48,7 +48,7 @@ static bool function(FILE *out, const MinicC0Program *p,
         !facts->needs_saved_return_address ||
         !facts->uses_structured_inline_asm ||
         !facts->uses_dynamic_stack_alloc ||
-        facts->max_call_arity != 7U)
+        facts->max_call_arity != 7U || facts->call_index == NULL)
         return false;
     ++ctx->functions;
     return fputs("F\n", out) != EOF && ctx->fail_stage != 4U;
@@ -152,4 +152,16 @@ bool minic_core_object_storage_plan_build(
 }
 void minic_core_object_storage_plan_destroy(MinicCoreObjectStoragePlan *plan) {
     if (plan != NULL) *plan = (MinicCoreObjectStoragePlan){0};
+}
+
+/* The transaction test deliberately uses synthetic, not semantically valid,
+ * CALL instructions to test rollback after failed output stages. Its host
+ * stub is isolated from the real separately tested semantic CALL index. */
+bool minic_core_call_index_build(const MinicCoreFunction *fn,
+                                 size_t expected, MinicCoreCallIndex *index) {
+    return fn != NULL && expected == 2U && index != NULL &&
+           index->sites == NULL && index->count == 0U;
+}
+void minic_core_call_index_destroy(MinicCoreCallIndex *index) {
+    if (index != NULL) *index = (MinicCoreCallIndex){0};
 }

@@ -407,11 +407,14 @@ cc -std=c11 -Wall -Wextra -Wpedantic -Werror -Iinclude -Isrc \
   tests/compiler/c0/probe-core-instruction-family.c -o "$work/core-family-probe"
 "$work/core-family-probe"
 
+# The CoreCallIndex builder has its own true semantic probe below; the file
+# emission/rollback harness deliberately uses synthetic CALL metadata.
 # Verify ABI-neutral scalar/record/void/indirect CALL metadata and reject
 # corrupt source Core values without any target toolchain or QEMU.
 cc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror \
   -Iinclude -Isrc tests/compiler/c0/probe-core-call-semantics.c \
-  src/target/common/core_call_view.c src/frontend/type.c \
+  src/target/common/core_call_view.c \
+  src/target/common/core_call_index.c src/frontend/type.c \
   -o "$work/core-call-probe"
 "$work/core-call-probe"
 
