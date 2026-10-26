@@ -429,6 +429,14 @@ has src/target/riscv32/rv32_frame.c 'facts->uses_dynamic_stack_alloc'
 has src/target/x86_64/frame.c 'facts->variadic_address_count'
 has src/target/common/direct_function_profile.c 'facts->variadic_address_count'
 has src/target/common/direct_function_profile.c 'facts->uses_dynamic_stack_alloc'
+# Read-only Common CALL snapshots are consumed in ordinal order by both
+# Direct LP64 ABIs and RV64 capability, never looked up repeatedly by ID.
+has src/target/common/direct_call_preflight.c 'semantic_calls->sites[ordinal]'
+lacks src/target/common/direct_call_preflight.c 'minic_core_call_index_get('
+has src/target/riscv64/core_admission.c 'semantic_calls->sites[call_site++]'
+lacks src/target/riscv64/core_admission.c 'minic_core_call_index_get('
+# SysV VA cursors must match the prepared Common fact count exactly.
+has src/target/x86_64/frame.c 'if (count != frame->varargs_count) return false;'
 has src/target/common/direct_function_plan.c 'program, target, decl, fn, facts, abi, indirect_record,'
 has src/target/aarch64/codegen.c 'minic_multi_direct_lp64_function_plan_prepare('
 has src/target/loongarch64/codegen.c 'minic_multi_direct_lp64_function_plan_prepare('

@@ -15,21 +15,49 @@ bool minic_multi_direct_lp64_calls_preflight(
     const char *arch, const char *name,
     MinicDirectLP64IndirectRecord indirect_record,
     size_t *failed_instruction, bool *has_calls) {
-    size_t i;
+    size_t ordinal, previous_id = SIZE_MAX;
+    size_t visits;
     if (program == NULL || target == NULL || fn == NULL || arch == NULL ||
         name == NULL || indirect_record == NULL ||
-        failed_instruction == NULL || has_calls == NULL) return false;
+        failed_instruction == NULL || has_calls == NULL ||
+        (fn->instruction_count != 0U && fn->instructions == NULL))
+        return false;
     *failed_instruction = SIZE_MAX;
     *has_calls = false;
-    for (i = 0U; i < fn->instruction_count; ++i) {
-        *failed_instruction = i;
-        const MinicCoreInstruction *ins = &fn->instructions[i];
+    if (semantic_calls != NULL &&
+        (semantic_calls->count > fn->instruction_count ||
+         (semantic_calls->count != 0U && semantic_calls->sites == NULL)))
+        return false;
+    /* Production Common already verified and indexed every CALL. Direct
+     * AAPCS64/LP64D only tests ABI capability: no second full Core walk.
+     * Standalone callers without prepared facts retain checked fallback. */
+    visits = semantic_calls != NULL
+        ? semantic_calls->count : fn->instruction_count;
+    for (ordinal = 0U; ordinal < visits; ++ordinal) {
+        const MinicCoreCallSite *site = semantic_calls != NULL
+            ? &semantic_calls->sites[ordinal] : NULL;
+        size_t i = site != NULL ? site->instruction_id : ordinal;
+        const MinicCoreInstruction *ins;
         MinicCoreCallView call;
         const MinicType *parameter_types;
         MinicType return_type;
         size_t j, begin, count, parameter_count;
         bool is_variadic;
-        if (!minic_core_instruction_is_call(ins->kind)) continue;
+        if (i >= fn->instruction_count ||
+            (site != NULL && previous_id != SIZE_MAX && i <= previous_id))
+            return false;
+        *failed_instruction = i;
+        ins = &fn->instructions[i];
+        if (!minic_core_instruction_is_call(ins->kind)) {
+            if (site != NULL) return false;
+            continue;
+        }
+        if (site != NULL) {
+            call = site->view;
+            previous_id = i;
+        } else if (!minic_core_call_view_build(fn, ins, &call)) {
+            return false;
+        }
         *has_calls = true; /* Caller preserves the return-address register. */
         /* GNU div_t/ldiv_t and similar small integer-only aggregate
          * results travel in one or two GP registers. Core represents their
@@ -67,13 +95,6 @@ bool minic_multi_direct_lp64_calls_preflight(
                     ins->result < fn->value_count &&
                     minic_type_equal(fn->values[ins->result].type, ins->type) ? 1 : 0);
             return false;
-        }
-        {
-            const MinicCoreCallView *cached = semantic_calls != NULL
-                ? minic_core_call_index_get(semantic_calls, i) : NULL;
-            if (semantic_calls != NULL && cached == NULL) return false;
-            if (cached != NULL) call = *cached;
-            else if (!minic_core_call_view_build(fn, ins, &call)) return false;
         }
         /* Core/ABI-neutral return shape was already checked by the view. */
         if (small_record_result &&

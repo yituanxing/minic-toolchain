@@ -144,7 +144,11 @@ static bool core_function_can_emit(const MinicC0Program *program,
                                    bool core_verified,
                                    const MinicCoreCallIndex *semantic_calls,
                                    const MinicCoreObjectStoragePlan *storage) {
-    size_t index;
+    size_t index, call_site = 0U;
+    if (semantic_calls != NULL &&
+        (function == NULL || semantic_calls->count > function->instruction_count ||
+         (semantic_calls->count != 0U && semantic_calls->sites == NULL)))
+        return core_rv64_capability_reject(function, "call-index", 0U, -1);
 
     if (function == NULL ||
         (!core_verified && !minic_core_function_verify(function))) {
@@ -223,16 +227,23 @@ static bool core_function_can_emit(const MinicC0Program *program,
         const MinicCoreInstruction *ins = &function->instructions[index];
         const MinicCoreCallView *view = NULL;
         if (semantic_calls != NULL && minic_core_instruction_is_call(ins->kind)) {
-            view = minic_core_call_index_get(semantic_calls, index);
-            if (view == NULL)
+            /* The Common index is ordered by instruction ID. Consume its
+             * immutable CALL views in lockstep with RV64's required ISA
+             * capability walk, without a binary search at each CALL. */
+            if (call_site >= semantic_calls->count ||
+                semantic_calls->sites[call_site].instruction_id != index)
                 return core_rv64_capability_reject(
                     function, "call-index", index, (int)ins->kind);
+            view = &semantic_calls->sites[call_site++].view;
         }
         if (!core_instruction_supported(program, function, ins, view)) {
             return core_rv64_capability_reject(
                 function, "instruction", index, (int)ins->kind);
         }
     }
+    if (semantic_calls != NULL && call_site != semantic_calls->count)
+        return core_rv64_capability_reject(function, "call-index-count",
+                                          call_site, -1);
     return true;
 }
 

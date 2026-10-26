@@ -83,10 +83,15 @@ bool minic_x86_64_frame_init_with_storage(const MinicC0Program *program,
         for (i = 0U; i < fn->instruction_count; ++i) {
             const MinicCoreInstruction *ins = &fn->instructions[i];
             if (ins->kind == MINIC_CORE_INSTRUCTION_VARIADIC_ARGUMENT_ADDRESS) {
-                if (ins->result >= fn->value_count) return false;
+                /* A standalone frame caller may supply stale facts. Never
+                 * write past the Common-sized varargs result array or
+                 * silently leave surplus VA cursors uninitialized. */
+                if (count >= frame->varargs_count ||
+                    ins->result >= fn->value_count) return false;
                 frame->varargs_results[count++] = ins->result;
             }
         }
+        if (count != frame->varargs_count) return false;
         /* Variadic frame support currently admits only scalar named
          * parameters; reuse the already-classified SysV argument locations
          * instead of maintaining a second register-bank cursor. */
