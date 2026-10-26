@@ -371,6 +371,8 @@ has src/target/riscv32/rv32_frame.c 'minic_core_frame_reserve('
 # passes; the exact Core last-use algorithm stays in one Common module.
 has src/target/common/core_spill_layout.c 'bool minic_core_function_reused_spill_peak('
 has src/target/common/core_spill_layout.c 'bool minic_core_function_reused_spill_assign('
+has tests/compiler/c0/run-core-block-spill-reuse.sh 'output-rv32.s'
+has .github/workflows/minic-native-refactor-gate.yml 'Two-XLEN Common SSA spill peak and assignment regressions'
 for backend in src/target/riscv32/rv32_frame.c src/target/riscv64/frame_layout.c; do
   has "$backend" 'minic_core_function_reused_spill_peak('
   has "$backend" 'minic_core_function_reused_spill_assign('

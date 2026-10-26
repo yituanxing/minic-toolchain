@@ -68,6 +68,14 @@ jobs:
           set -Eeuo pipefail
           make MODE=release CFLAGS=-Werror BUILD_DIR=build/minic-native-backend check-layout
 
+      - name: Two-XLEN Common SSA spill peak and assignment regressions
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          MINIC="$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic" \
+          BUILD_DIR=build/minic-native-backend \
+            sh tests/compiler/c0/run-core-block-spill-reuse.sh
+
       - name: RV64 ABI function-plan owner, hard/soft float and rollback
         shell: bash
         run: |
