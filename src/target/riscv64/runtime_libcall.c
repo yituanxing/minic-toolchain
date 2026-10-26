@@ -19,35 +19,30 @@ unsigned minic_riscv64_log2_power_of_two(size_t value) {
     while (value > 1U) { value >>= 1U; ++shift; }
     return shift;
 }
-static const char *libcall_symbol(MinicRiscv64ArithmeticLibcall operation) {
-    MinicCoreInstructionKind kind;
-    bool is_unsigned = false;
+/* This is just the historical RV64 public operation classification. The
+ * native M versus compiler-rt helper decision itself is shared with RV32. */
+static bool rv64_arithmetic_kind(MinicRiscv64ArithmeticLibcall operation,
+                                 MinicCoreInstructionKind *kind,
+                                 bool *is_unsigned) {
+    if (kind == NULL || is_unsigned == NULL) return false;
+    *is_unsigned = false;
     switch (operation) {
     case MINIC_RISCV64_LIBCALL_MUL:
-        kind = MINIC_CORE_INSTRUCTION_INTEGER_MULTIPLY; break;
+        *kind = MINIC_CORE_INSTRUCTION_INTEGER_MULTIPLY; break;
     case MINIC_RISCV64_LIBCALL_SDIV:
-        kind = MINIC_CORE_INSTRUCTION_INTEGER_DIVIDE; break;
+        *kind = MINIC_CORE_INSTRUCTION_INTEGER_DIVIDE; break;
     case MINIC_RISCV64_LIBCALL_UDIV:
-        kind = MINIC_CORE_INSTRUCTION_INTEGER_DIVIDE;
-        is_unsigned = true; break;
+        *kind = MINIC_CORE_INSTRUCTION_INTEGER_DIVIDE;
+        *is_unsigned = true; break;
     case MINIC_RISCV64_LIBCALL_SMOD:
-        kind = MINIC_CORE_INSTRUCTION_INTEGER_REMAINDER; break;
+        *kind = MINIC_CORE_INSTRUCTION_INTEGER_REMAINDER; break;
     case MINIC_RISCV64_LIBCALL_UMOD:
-        kind = MINIC_CORE_INSTRUCTION_INTEGER_REMAINDER;
-        is_unsigned = true; break;
-    default: return NULL;
+        *kind = MINIC_CORE_INSTRUCTION_INTEGER_REMAINDER;
+        *is_unsigned = true; break;
+    default:
+        return false;
     }
-    return minic_riscv_integer_arithmetic_symbol(kind, is_unsigned, 64U);
-}
-static const char *native_opcode(MinicRiscv64ArithmeticLibcall operation) {
-    switch (operation) {
-    case MINIC_RISCV64_LIBCALL_MUL: return "mul";
-    case MINIC_RISCV64_LIBCALL_SDIV: return "div";
-    case MINIC_RISCV64_LIBCALL_UDIV: return "divu";
-    case MINIC_RISCV64_LIBCALL_SMOD: return "rem";
-    case MINIC_RISCV64_LIBCALL_UMOD: return "remu";
-    default: return NULL;
-    }
+    return true;
 }
 /* GCC libgcc / compiler-rt standard SF/DF binary arithmetic helpers. The
  * RISC-V LP64 soft ABI passes the 32/64-bit payload in a0/a1, returning
@@ -129,22 +124,25 @@ bool minic_riscv64_needs_arithmetic_libcall(const MinicRiscvIsa *isa,
 bool minic_riscv64_emit_arithmetic_libcall(
     FILE *file, const MinicRiscvIsa *isa, MinicRiscv64ArithmeticLibcall operation,
     const char *destination, const char *left, const char *right) {
-    const char *symbol = libcall_symbol(operation);
-    const char *native = native_opcode(operation);
-    if (file == NULL || symbol == NULL || native == NULL || destination == NULL ||
-        left == NULL || right == NULL)
+    MinicCoreInstructionKind kind;
+    MinicRiscvIntegerPlan plan;
+    bool is_unsigned;
+    if (file == NULL || destination == NULL || left == NULL || right == NULL ||
+        !rv64_arithmetic_kind(operation, &kind, &is_unsigned) ||
+        !minic_riscv_plan_integer_arithmetic(
+            isa, kind, is_unsigned, 64U, &plan))
         return false;
-    if (!minic_riscv64_uses_arithmetic_libcall(isa))
+    if (plan.strategy == MINIC_RISCV_INTEGER_NATIVE_M)
         return fprintf(file, "  %s %s, %s, %s\n",
-                       native, destination, left, right) >= 0;
-
-    /* RV64 LP64 integer psABI: a0/a1 inputs, a0 result; caller-saved t*.
-     * Prologue must already save ra, even for a function with no Core CALL.
-     * The Core frame owns all live virtual values in stack slots. */
+                       plan.opcode, destination, left, right) >= 0;
+    if (plan.strategy != MINIC_RISCV_INTEGER_RUNTIME_LIBCALL)
+        return false;
+    /* LP64 register-call ABI remains owned by RV64, never by the selector.
+     * This invariant also retains the original saved-ra frame requirement. */
     return fprintf(file,
                    "  mv a0, %s\n"
                    "  mv a1, %s\n"
                    "  call %s\n"
                    "  mv %s, a0\n",
-                   left, right, symbol, destination) >= 0;
+                   left, right, plan.symbol, destination) >= 0;
 }

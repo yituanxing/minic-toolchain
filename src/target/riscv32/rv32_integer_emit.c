@@ -397,15 +397,22 @@ bool rv32_emit_integer_instruction(FILE *out, const MinicCoreFunction *f,
         /* Compiler target lowering only chooses an ABI-compatible libcall.
          * Actual arithmetic lives in the pinned GNU libgcc 14.2.0 sources,
          * not a second implementation in MiniC's instruction generator. */
-        const char *helper;
         if (!rv32_scalar(f, ins->type, &bits, &is_signed))
             return false;
-        helper = minic_riscv_integer_arithmetic_symbol(
-            ins->kind, !is_signed, 32U);
-        if (helper == NULL) return false;
+        MinicRiscvIntegerPlan plan;
+        if (!minic_riscv_plan_integer_arithmetic(
+                fr->isa, ins->kind, !is_signed, 32U, &plan))
+            return false;
+        if (plan.strategy == MINIC_RISCV_INTEGER_NATIVE_M)
+            return rv32_load2(out, fr, ins) &&
+                   fprintf(out, "  %s t0, t0, t1\n", plan.opcode) >= 0 &&
+                   rv32_canon(out, f, ins->type, "t0") &&
+                   rv32_slot(out, fr, ins->result, "t0", false);
+        if (plan.strategy != MINIC_RISCV_INTEGER_RUNTIME_LIBCALL)
+            return false;
         return rv32_load2(out, fr, ins) &&
                fprintf(out, "  mv a0, t0\n  mv a1, t1\n  call %s\n",
-                       helper) >= 0 &&
+                       plan.symbol) >= 0 &&
                rv32_canon(out, f, ins->type, "a0") &&
                rv32_slot(out, fr, ins->result, "a0", false);
     }

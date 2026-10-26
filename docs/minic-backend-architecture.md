@@ -297,3 +297,24 @@ removes false Core rejection for code whose assembler needs more extensions
 than MiniC's own Base-I producer. It does not claim unrestricted GCC inline
 asm constraints: unsupported operand forms still reject at the frontend/
 target transport boundary.
+
+## Unified RV32/RV64 optional-M scalar selection
+
+After reviewing the whole compiler and the two emitted ISA paths, the
+RISC-V feature/ABI state is declared in `riscv/isa_features.h` (not
+owned by a 64-bit machine emitter). The shared
+`minic_riscv_plan_integer_arithmetic` is a **small decision point**, not
+a new MIR: it accepts Core multiply/divide/remainder, XLEN and machine
+capability and chooses either `NATIVE_M` or `RUNTIME_LIBCALL` with an
+actual opcode/symbol. Both the RV32 integer emitter and the RV64 arithmetic
+helper now consume this one plan and retain their own register/stack/ABI
+transport, canonicalization and RA-liveness responsibilities.
+
+Explicit RV32I/ILP32 always uses base-I plus external standard runtime
+helpers, and RV64I/LP64 does the same. The qualified RV64IM native M path
+and historical RV64 default remain unchanged. C alone does not select
+any arithmetic replacement; a synthetic RV32M feature is exercised only
+in a **planner unit test**, not exposed as a newly supported `-march`.
+Unrecognized extension combinations stay fail-closed while future M/C/Z
+optimizations can plug into this machine-level selection without changing
+C language acceptance or inline/file GNU assembler provenance.

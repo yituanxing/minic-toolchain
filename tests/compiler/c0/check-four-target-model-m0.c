@@ -1,5 +1,6 @@
 /* M0 metadata-only ABI audit. No new target code is emitted here. */
 #include "target/target_info.h"
+#include "target/riscv/instruction_select.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -213,6 +214,67 @@ static int verify_invocation_language_abi(void) {
     return puts("TARGET_INVOCATION_ABI=PASS five_targets immutable_models signed_char short_wchar_restore") == EOF;
 }
 
+static int verify_riscv_integer_strategy(void) {
+    /* Only the machine selector sees optional M. The same typed Core
+     * operation remains compilable through a Base-I libcall on both XLENs.
+     * C/other extensions are irrelevant until a qualified emitter consumes
+     * them. The synthetic RV32M subtarget is a selector test only: the
+     * CLI does not yet claim RV32M machine/ABI certification. */
+    const MinicCoreInstructionKind ops[] = {
+        MINIC_CORE_INSTRUCTION_INTEGER_MULTIPLY,
+        MINIC_CORE_INSTRUCTION_INTEGER_DIVIDE,
+        MINIC_CORE_INSTRUCTION_INTEGER_REMAINDER
+    };
+    const char *expected_native[][2] = {
+        {"mul", "mul"}, {"div", "divu"}, {"rem", "remu"}
+    };
+    size_t x, op, sign;
+    for (x = 0U; x < 2U; ++x) {
+        MinicRiscvIsa base = {
+            .xlen = x == 0U ? 32U : 64U,
+            .abi = x == 0U ? MINIC_RISCV_ABI_ILP32 : MINIC_RISCV_ABI_LP64,
+            .features = 0U,
+            .strict_isa = true
+        };
+        MinicRiscvIsa extended = base;
+        MinicRiscvIntegerPlan plan;
+        extended.features = MINIC_RISCV_FEATURE_M | MINIC_RISCV_FEATURE_C;
+        for (op = 0U; op < sizeof(ops) / sizeof(ops[0]); ++op) {
+            for (sign = 0U; sign < 2U; ++sign) {
+                const char *sym = minic_riscv_integer_arithmetic_symbol(
+                    ops[op], sign != 0U, base.xlen);
+                if (sym == NULL ||
+                    !minic_riscv_plan_integer_arithmetic(
+                        &base, ops[op], sign != 0U, base.xlen, &plan) ||
+                    plan.strategy != MINIC_RISCV_INTEGER_RUNTIME_LIBCALL ||
+                    plan.opcode != NULL ||
+                    plan.symbol == NULL ||
+                    strcmp(plan.symbol, sym) != 0)
+                    return 1;
+                if (!minic_riscv_plan_integer_arithmetic(
+                        &extended, ops[op], sign != 0U, base.xlen, &plan) ||
+                    plan.strategy != MINIC_RISCV_INTEGER_NATIVE_M ||
+                    plan.symbol != NULL ||
+                    strcmp(plan.opcode, expected_native[op][sign]) != 0)
+                    return 1;
+                extended.features = MINIC_RISCV_FEATURE_C;
+                if (!minic_riscv_plan_integer_arithmetic(
+                        &extended, ops[op], sign != 0U, base.xlen, &plan) ||
+                    plan.strategy != MINIC_RISCV_INTEGER_RUNTIME_LIBCALL)
+                    return 1;
+                extended.features = MINIC_RISCV_FEATURE_M | MINIC_RISCV_FEATURE_C;
+            }
+        }
+        if (minic_riscv_plan_integer_arithmetic(
+                &base, ops[0], false, base.xlen == 32U ? 64U : 32U, &plan) ||
+            minic_riscv_plan_integer_arithmetic(
+                &base, MINIC_CORE_INSTRUCTION_INTEGER_ADD, false,
+                base.xlen, &plan))
+            return 1;
+    }
+    return puts("RISCV_BASE_I_STRATEGY=PASS rv32_rv64 M_optional C_ignored runtime_fallback") == EOF;
+}
+
 int main(void) {
     const MinicTargetInfo *rv = minic_default_target_info();
     const MinicTargetInfo *x86 = minic_target_info_from_name("x86_64-linux");
@@ -228,7 +290,7 @@ int main(void) {
         (void)fprintf(stderr, "FAIL four independent target identities\n");
         return 1;
     }
-    if (verify_registered_target_catalog() != 0 || verify_riscv_profile_catalog() != 0 ||
+    if (verify_riscv_integer_strategy() != 0 || verify_registered_target_catalog() != 0 || verify_riscv_profile_catalog() != 0 ||
         verify_invocation_language_abi() != 0 || verify_language_admission() != 0 || verify_rv32() != 0 ||
         verify_lp64("aarch64-linux", MINIC_TARGET_ARCH_AARCH64,
                     MINIC_INTEGER_SIGN_UNSIGNED, MINIC_INTEGER_RANK_INT,

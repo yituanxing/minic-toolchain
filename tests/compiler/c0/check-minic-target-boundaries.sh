@@ -84,6 +84,18 @@ has tools/minic/main.c 'language.relocation != NULL'
 lacks tools/minic-cc/main.c 'selected_target.wide_character_type ='
 exists tests/compiler/c0/probe-target-language-abi-options.sh
 
+# ISA capability is not C language validity. Both XLEN backends must
+# consume the same single-word arithmetic selector, and the original RV32
+# helper fallback is retained until an ISA extension is actually qualified.
+exists src/target/riscv/isa_features.h
+has src/target/riscv64/isa.h 'target/riscv/isa_features.h'
+lacks src/target/riscv64/isa.h 'typedef enum MinicRiscvFeature'
+has src/target/riscv/instruction_select.h 'minic_riscv_plan_integer_arithmetic('
+has src/target/riscv64/runtime_libcall.c 'minic_riscv_plan_integer_arithmetic('
+has src/target/riscv32/rv32_integer_emit.c 'minic_riscv_plan_integer_arithmetic('
+has src/target/riscv32/rv32_frame.c 'frame->isa = &t->riscv_isa'
+has src/target/riscv32/rv32_emit.c 'rv32_emit_integer_instruction('
+
 # ISA/ABI profile names must be shared between native compiler and staged
 # product driver. Only machine legalization owns the actual feature bits.
 has src/target/riscv64/isa.c 'minic_riscv_profile_find(march)'

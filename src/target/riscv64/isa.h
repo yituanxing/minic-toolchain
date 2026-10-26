@@ -6,32 +6,7 @@
 #include <stdint.h>
 #include <stdio.h>
 
-/* ISA extensions and the psABI are independent. The default RV64 legacy
- * profile remains untouched; explicit -march selects a strictly audited ISA.
- * This is invocation state, never a process-global "current architecture". */
-typedef enum MinicRiscvAbi {
-    MINIC_RISCV_ABI_INVALID = 0,
-    MINIC_RISCV_ABI_ILP32,
-    MINIC_RISCV_ABI_LP64,
-    MINIC_RISCV_ABI_LP64D
-} MinicRiscvAbi;
-
-typedef enum MinicRiscvFeature {
-    MINIC_RISCV_FEATURE_M = UINT32_C(1) << 0,
-    MINIC_RISCV_FEATURE_A = UINT32_C(1) << 1,
-    MINIC_RISCV_FEATURE_F = UINT32_C(1) << 2,
-    MINIC_RISCV_FEATURE_D = UINT32_C(1) << 3,
-    MINIC_RISCV_FEATURE_C = UINT32_C(1) << 4,
-    MINIC_RISCV_FEATURE_ZICSR = UINT32_C(1) << 5,
-    MINIC_RISCV_FEATURE_ZIFENCEI = UINT32_C(1) << 6
-} MinicRiscvFeature;
-
-typedef struct MinicRiscvIsa {
-    unsigned xlen;
-    MinicRiscvAbi abi;
-    uint32_t features;
-    bool strict_isa;
-} MinicRiscvIsa;
+#include "target/riscv/isa_features.h"
 
 bool minic_riscv_isa_resolve(const char *march, const char *mabi,
                              MinicRiscvIsa *isa, char *reason, size_t capacity);
