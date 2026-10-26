@@ -1375,3 +1375,9 @@ distclean:
 -include $(AST_CONTRACT_TEST_OBJECTS:.o=.d)
 -include $(LAYOUT_TEST_OBJECTS:.o=.d)
 -include $(RV64_ABI_TEST_OBJECTS:.o=.d)
+
+# Cross-target semantics/options smoke without the GNU QEMU toolchains.
+.PHONY: check-minic-target-abi-options
+check-minic-target-abi-options: $(MINIC_BINARY) $(MINIC_CC_BINARY)
+	MINIC="$(abspath $(MINIC_BINARY))" MINIC_CC="$(abspath $(MINIC_CC_BINARY))" \
+	bash tests/compiler/c0/probe-target-language-abi-options.sh

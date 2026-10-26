@@ -13,7 +13,7 @@ static void minic_print_usage(FILE *stream, const char *program) {
     (void)fprintf(stream, "usage: %s -S <preprocessed-input.i> [--target=", program);
     for (i = 0U; i < count; ++i)
         (void)fprintf(stream, "%s%s", i == 0U ? "" : "|", targets[i].name);
-    (void)fprintf(stream, "] [-march=rv32i|rv64i|rv64im|rv64imafd] [-mabi=ilp32|lp64|lp64d] [-ffunction-sections|-fno-function-sections] [-fPIE|-fPIC|-fno-pie] [-fshort-wchar|-fno-short-wchar] -o <output.s>\n");
+    (void)fprintf(stream, "] [-march=rv32i|rv64i|rv64im|rv64imafd] [-mabi=ilp32|lp64|lp64d] [-ffunction-sections|-fno-function-sections] [-fPIE|-fPIC|-fno-pie] [-fsigned-char|-funsigned-char] [-fshort-wchar|-fno-short-wchar] -o <output.s>\n");
 }
 
 int main(int argc, char **argv) {
@@ -28,6 +28,9 @@ int main(int argc, char **argv) {
      * Keep the standard per-target default unless explicitly overridden. */
     bool short_wchar = false;
     bool wide_char_override = false;
+    bool plain_char_override = false;
+    MinicIntegerSign plain_char_sign = MINIC_INTEGER_SIGN_NONE;
+    MinicTargetInvocation invocation;
     MinicTargetInfo selected_target;
     const char *target_name = "riscv64-linux";
     const MinicTargetInfo *target_info;
@@ -77,6 +80,16 @@ int main(int argc, char **argv) {
         } else if (strcmp(argv[index], "-mabi") == 0) {
             if (mabi != NULL || index + 1 >= argc) return 2;
             mabi = argv[++index];
+        } else if (strcmp(argv[index], "-fsigned-char") == 0) {
+            plain_char_override = true;
+            plain_char_sign = MINIC_INTEGER_SIGN_SIGNED;
+        } else if (strcmp(argv[index], "-funsigned-char") == 0 ||
+                   strcmp(argv[index], "-fno-signed-char") == 0) {
+            plain_char_override = true;
+            plain_char_sign = MINIC_INTEGER_SIGN_UNSIGNED;
+        } else if (strcmp(argv[index], "-fno-unsigned-char") == 0) {
+            plain_char_override = true;
+            plain_char_sign = MINIC_INTEGER_SIGN_SIGNED;
         } else if (strcmp(argv[index], "-fshort-wchar") == 0) {
             short_wchar = true;
             wide_char_override = true;
@@ -121,16 +134,18 @@ int main(int argc, char **argv) {
         (void)fprintf(stderr, "%s: PIC lowering is not yet qualified for this target\n", argv[0]);
         return 2;
     }
-    /* Keep canonical shared TargetInfo descriptors immutable. Codegen mode
-     * is invocation-scoped and does not affect parsed language semantics. */
-    selected_target = *target_info;
-    selected_target.position_independent = position_independent;
-    if (wide_char_override) {
-        /* Frontend expression/type lowering reads this invocation-scoped
-         * TargetInfo. Core and ABI consumers see one agreed width. */
-        selected_target.wide_character_type =
-            short_wchar ? minic_type_unsigned_short() : minic_type_int();
+    /* Both C language ABI and machine code generation settings are
+     * invocation-scoped. The canonical TargetInfo remains read-only. */
+    if (!minic_target_invocation_begin(&invocation, target_info) ||
+        (plain_char_override &&
+         !minic_target_invocation_plain_char(&invocation, plain_char_sign)) ||
+        (wide_char_override &&
+         !minic_target_invocation_short_wchar(&invocation, short_wchar))) {
+        (void)fprintf(stderr, "%s: invalid language ABI options\n", argv[0]);
+        return 2;
     }
+    selected_target = invocation.target;
+    selected_target.position_independent = position_independent;
     if (march != NULL || mabi != NULL) {
         char reason[240];
         if (selected_target.architecture != MINIC_TARGET_ARCH_RISCV64 &&

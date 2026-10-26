@@ -74,6 +74,16 @@ for arch in aarch64 loongarch64; do
   fi
 done
 
+# Invocation-specific language ABI flags must not mutate canonical models.
+has src/target/target_info.c 'minic_target_invocation_begin('
+has src/target/target_info.c 'minic_target_invocation_plain_char('
+has src/target/target_info.c 'minic_target_invocation_short_wchar('
+has tools/minic-cc/main.c 'minic_target_invocation_begin('
+has tools/minic/main.c 'minic_driver_plain_char_unsigned('
+has tools/minic/main.c 'language.relocation != NULL'
+lacks tools/minic-cc/main.c 'selected_target.wide_character_type ='
+exists tests/compiler/c0/probe-target-language-abi-options.sh
+
 # A single catalog owns target spelling for driver, compiler and TargetInfo.
 # The product driver must not silently select RV64 AS/LD for other ISAs.
 exists src/target/target_catalog.c

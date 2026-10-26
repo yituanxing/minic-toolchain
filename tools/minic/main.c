@@ -22,11 +22,27 @@ typedef enum MinicDriverMode {
     MINIC_DRIVER_ASSEMBLY
 } MinicDriverMode;
 
+/* Per-translation-unit ABI options are forwarded unchanged to minic-cc.
+ * The standalone driver must not invent another target language model. */
+typedef struct MinicDriverLanguageOptions {
+    const char *plain_char;
+    const char *wide_char;
+    const char *relocation;
+} MinicDriverLanguageOptions;
+
+static bool minic_driver_plain_char_unsigned(const MinicDriverLanguageOptions *o) {
+    return o->plain_char == NULL ||
+           strcmp(o->plain_char, "-funsigned-char") == 0 ||
+           strcmp(o->plain_char, "-fno-signed-char") == 0;
+}
+
+
 static void append_rv64_linux_musl_predefines(char **arguments,
                                                size_t *count,
                                                bool hosted,
                                                const char *march,
-                                               const char *mabi) {
+                                               const char *mabi,
+                                 const MinicDriverLanguageOptions *language) {
     arguments[(*count)++] = "-D__STDC__=1";
     arguments[(*count)++] = "-D__STDC_VERSION__=201112L";
     /*
@@ -48,6 +64,8 @@ static void append_rv64_linux_musl_predefines(char **arguments,
     arguments[(*count)++] = "-D__unix=1";
     arguments[(*count)++] = "-D__riscv=1";
     arguments[(*count)++] = "-D__riscv_xlen=64";
+    if (minic_driver_plain_char_unsigned(language))
+        arguments[(*count)++] = "-D__CHAR_UNSIGNED__=1";
     arguments[(*count)++] = "-D__LP64__=1";
     arguments[(*count)++] = "-D_LP64=1";
     if (mabi != NULL && strcmp(mabi, "lp64") == 0) {
@@ -80,7 +98,7 @@ static void usage(FILE *out, const char *argv0) {
     for (i = 0U; i < count; ++i)
         (void)fprintf(out, "%s%s", i == 0U ? "" : "|", targets[i].name);
     (void)fprintf(out,
-            "] [-march=rv32i|rv64i|rv64im|rv64imafd] [-mabi=ilp32|lp64|lp64d] [--rtlib=PATH (link only)] [-ffreestanding|-fhosted] [-ffunction-sections|-fno-function-sections] [-static] "
+            "] [-march=rv32i|rv64i|rv64im|rv64imafd] [-mabi=ilp32|lp64|lp64d] [-fsigned-char|-funsigned-char] [-fshort-wchar|-fno-short-wchar] [-fPIC|-fPIE (only -S)] [--rtlib=PATH (link only)] [-ffreestanding|-fhosted] [-ffunction-sections|-fno-function-sections] [-static] "
             "[-nostdlib] [-nostartfiles] [-nodefaultlibs] [-nostdinc] "
             "[--sysroot DIR] [-DNAME[=VALUE]] [-UNAME] [-IDIR] "
             "[-isystem DIR] [-include FILE] [-LDIR] [-lNAME] "
@@ -230,7 +248,8 @@ static int preprocess_c_to_file(const char *input,
                                 size_t cpp_forward_count,
                                 char *cpp,
                                 const char *march,
-                                const char *mabi) {
+                                const char *mabi,
+                                 const MinicDriverLanguageOptions *language) {
     char *include_dir = NULL;
     char *arguments[256];
     size_t count = 0U;
@@ -242,7 +261,8 @@ static int preprocess_c_to_file(const char *input,
     arguments[count++] = "-P";
     arguments[count++] = "-undef";
     arguments[count++] = "-nostdinc";
-    append_rv64_linux_musl_predefines(arguments, &count, hosted, march, mabi);
+    append_rv64_linux_musl_predefines(
+        arguments, &count, hosted, march, mabi, language);
     /*
      * User include directories must shadow the driver's default sysroot
      * headers, matching GCC's -I-before-system search semantics.  MiniPP
@@ -282,7 +302,8 @@ static int compile_c_to_assembly(const char *input,
                                  char *cpp,
                                  char *cc,
                                  const char *march,
-                                 const char *mabi) {
+                                 const char *mabi,
+                                 const MinicDriverLanguageOptions *language) {
     char *temp_i = make_temp_path("/tmp/minic-driver-i-XXXXXX");
     int status = 1;
 
@@ -296,9 +317,9 @@ static int compile_c_to_assembly(const char *input,
                                   no_stdinc,
                                   cpp_forward,
                                   cpp_forward_count,
-                                  cpp, march, mabi);
+                                  cpp, march, mabi, language);
     if (status == 0) {
-        char *arguments[12];
+        char *arguments[16];
         size_t argument_count = 0U;
         arguments[argument_count++] = cc;
         arguments[argument_count++] = "-S";
@@ -315,6 +336,10 @@ static int compile_c_to_assembly(const char *input,
             arguments[argument_count++] = "-mabi";
             arguments[argument_count++] = (char *)mabi;
         }
+        if (language->plain_char != NULL)
+            arguments[argument_count++] = (char *)language->plain_char;
+        if (language->wide_char != NULL)
+            arguments[argument_count++] = (char *)language->wide_char;
         arguments[argument_count] = NULL;
         status = run_tool(arguments);
     }
@@ -343,7 +368,8 @@ static int compile_c_to_object(const char *input,
                                char *cc,
                                char *as,
                                const char *march,
-                               const char *mabi) {
+                               const char *mabi,
+                                 const MinicDriverLanguageOptions *language) {
     char *temp_s = make_temp_path("/tmp/minic-driver-s-XXXXXX");
     int status = 1;
 
@@ -359,7 +385,7 @@ static int compile_c_to_object(const char *input,
                                    cpp_forward,
                                    cpp_forward_count,
                                    cpp,
-                                   cc, march, mabi);
+                                   cc, march, mabi, language);
     if (status == 0) {
         char *arguments[8];
         size_t argument_count = 0U;
@@ -427,6 +453,7 @@ int main(int argc, char **argv) {
     const char *march = NULL;
     const char *mabi = NULL;
     const char *runtime_archive = NULL;
+    MinicDriverLanguageOptions language = {0};
     char *cpp = NULL;
     char *cc = NULL;
     char *as = NULL;
@@ -479,6 +506,21 @@ int main(int argc, char **argv) {
             hosted = true;
         } else if (strcmp(argument, "-fno-builtin") == 0) {
             /* MiniC has no implicit builtin substitution yet. */
+        } else if (strcmp(argument, "-fsigned-char") == 0 ||
+                   strcmp(argument, "-funsigned-char") == 0 ||
+                   strcmp(argument, "-fno-signed-char") == 0 ||
+                   strcmp(argument, "-fno-unsigned-char") == 0) {
+            language.plain_char = argument;
+        } else if (strcmp(argument, "-fshort-wchar") == 0 ||
+                   strcmp(argument, "-fno-short-wchar") == 0) {
+            language.wide_char = argument;
+        } else if (strcmp(argument, "-fPIC") == 0 ||
+                   strcmp(argument, "-fpic") == 0 ||
+                   strcmp(argument, "-fPIE") == 0 ||
+                   strcmp(argument, "-fpie") == 0 ||
+                   strcmp(argument, "-fno-pie") == 0 ||
+                   strcmp(argument, "-fno-pic") == 0) {
+            language.relocation = argument;
         } else if (strcmp(argument, "-ffunction-sections") == 0) {
             function_sections = true;
         } else if (strcmp(argument, "-fno-function-sections") == 0) {
@@ -630,6 +672,10 @@ int main(int argc, char **argv) {
             return 2;
         }
     }
+    if (language.relocation != NULL && mode != MINIC_DRIVER_ASSEMBLY) {
+        fprintf(stderr, "minic: PIC/PIE requires -S (qualified backend-only)\n");
+        return 2;
+    }
     if (input_count == 0U || output == NULL) {
         usage(stderr, argv[0]);
         return 2;
@@ -663,7 +709,7 @@ int main(int argc, char **argv) {
     }
 
     if (mode == MINIC_DRIVER_ASSEMBLY) {
-        char *cc_arguments[14];
+        char *cc_arguments[18];
         size_t argument_count = 0U;
         cc_arguments[argument_count++] = cc;
         cc_arguments[argument_count++] = "-S";
@@ -682,6 +728,12 @@ int main(int argc, char **argv) {
             cc_arguments[argument_count++] = "-mabi";
             cc_arguments[argument_count++] = (char *)mabi;
         }
+        if (language.plain_char != NULL)
+            cc_arguments[argument_count++] = (char *)language.plain_char;
+        if (language.wide_char != NULL)
+            cc_arguments[argument_count++] = (char *)language.wide_char;
+        if (language.relocation != NULL)
+            cc_arguments[argument_count++] = (char *)language.relocation;
         cc_arguments[argument_count] = NULL;
         status = run_tool(cc_arguments);
         goto done;
@@ -698,7 +750,7 @@ int main(int argc, char **argv) {
                                      cpp_forward_count,
                                      cpp,
                                      cc,
-                                     as, march, mabi);
+                                     as, march, mabi, &language);
         goto done;
     }
 
@@ -760,7 +812,7 @@ int main(int argc, char **argv) {
                                              cpp_forward_count,
                                              cpp,
                                              cc,
-                                             as, march, mabi);
+                                             as, march, mabi, &language);
                 if (status != 0) {
                     fprintf(stderr,
                             "minic: input-failed:%s status=%d\n",

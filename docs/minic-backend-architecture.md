@@ -216,3 +216,38 @@ staged-toolchain-only and fail closed for all four other targets. Option
 validation for RV32I/ILP32 uses the unchanged compiler ISA resolver; RV64
 legacy profiles continue to be qualified by the established driver policy.
 The shared catalog deliberately does not introduce shadow type sizes.
+
+## Per-invocation target options: language ABI is not ISA
+
+A fresh `MinicTargetInvocation` copies the immutable target descriptor and
+its integer model for each translation unit. The `-fsigned-char`,
+`-funsigned-char`, `-fno-signed-char`, `-fno-unsigned-char` switches
+modify the invocation's plain-char signedness, which affects source semantics,
+literal arithmetic, integer promotion and the generated machine scalar
+normalization. It must never mutate global TargetInfo data. `-fshort-wchar`
+changes the wchar representation to unsigned 16-bit and
+`-fno-short-wchar` restores that **target's actual default**, not an
+assumed 32-bit int (RV64's existing default is 16-bit unsigned).
+The standalone `minic` driver forwards these switches to `minic-cc`
+even through its qualified RV64 CPP/AS/LD pipeline; RV64 CPP also tracks
+the effective plain-char `__CHAR_UNSIGNED__` predefine. PIC switches are
+forwarded on the supported preprocessed-C `-S` path only.
+
+GCC/Clang option ownership guidance:
+
+| Axis | Representative options | Effect and MiniC status |
+| --- | --- | --- |
+| Target C data model | target triple, ILP32/LP64, endian | ABI object sizes, alignment, pointer and long widths, predefined macros; five existing little-endian targets only |
+| ISA availability | `-march` / RISC-V extensions | Native emission and required soft libcalls; exact RV32I and RV64 profiles with final ISA audit |
+| Calling convention | `-mabi`, float ABI | Register/stack argument and return placement; never infer an ABI solely from an ISA name |
+| CPU tuning | `-mcpu`, `-mtune` | Scheduling/cost model, should **not** alter ABI; not implemented, reject |
+| Addressing | `-mcmodel`, `-fpic/-fPIC/-fpie/-fPIE`, `-mrelax` | Relocations, code model, GOT/PLT, ELF load model; RV64 PIC assembly qualified only, other modes not claimed |
+| C language ABI | `-fsigned-char`, `-funsigned-char`, `-fshort-wchar`, `-fshort-enums` | Char sign and promoted values, wchar size, enum layout; first two option families supported, short-enums not qualified |
+| C semantic/optimization assumptions | `-fwrapv`, `-fstrict-aliasing`, `-ffast-math`, `-O*` | Observable overflow, aliasing, FP and optimization behavior; no false compatibility: remain unimplemented |
+| Runtime/object contract | `-ffreestanding`, `-fno-builtin`, `-fcommon`, `-fvisibility`, TLS, stack protector, unwind flags | Header/runtime expectations, linkage, dynamic TLS and exception/security sequences; supported cases stay narrowly scoped |
+
+A frontend type being accepted never implies arithmetic lowering or ABI
+qualification. The driver and the compiler reject options that could silently
+change code or ABI until their owners and validation are implemented.
+For the GCC taxonomy see GCC RISC-V Options and Code Generation Options;
+for LLVM see Clang Command Line Argument Reference.

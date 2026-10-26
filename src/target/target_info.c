@@ -297,6 +297,42 @@ const MinicTargetInfo *minic_target_info_for_architecture(
     return NULL;
 }
 
+/* Target C language/ABI state is a translation-unit property, not a global
+ * CPU property. This owns the option semantics and preserves defaults when a
+ * -fno-* spelling is explicitly present. */
+bool minic_target_invocation_begin(MinicTargetInvocation *invocation,
+                                   const MinicTargetInfo *canonical) {
+    if (invocation == NULL || canonical == NULL ||
+        canonical->integer_model == NULL || canonical->data_layout == NULL)
+        return false;
+    invocation->target = *canonical;
+    invocation->integer_model = *canonical->integer_model;
+    invocation->target.integer_model = &invocation->integer_model;
+    invocation->default_wide_character_type = canonical->wide_character_type;
+    return true;
+}
+
+bool minic_target_invocation_plain_char(MinicTargetInvocation *invocation,
+                                        MinicIntegerSign sign) {
+    if (invocation == NULL ||
+        (sign != MINIC_INTEGER_SIGN_SIGNED &&
+         sign != MINIC_INTEGER_SIGN_UNSIGNED))
+        return false;
+    invocation->integer_model.plain_char_sign = sign;
+    return true;
+}
+
+bool minic_target_invocation_short_wchar(MinicTargetInvocation *invocation,
+                                         bool enabled) {
+    if (invocation == NULL) return false;
+    invocation->target.wide_character_type = enabled
+        ? minic_type_unsigned_short()
+        : invocation->default_wide_character_type;
+    /* -fno-short-wchar restores the canonical descriptor chosen by begin().
+     * A target that defaults to 16-bit wchar must not suddenly become int. */
+    return true;
+}
+
 const MinicTargetInfo *minic_default_target_info(void) {
     return minic_target_info_for_architecture(MINIC_TARGET_ARCH_RISCV64);
 }

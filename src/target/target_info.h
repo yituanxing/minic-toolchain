@@ -71,6 +71,22 @@ typedef struct MinicTargetInfo {
     MinicRiscvIsa riscv_isa;
 } MinicTargetInfo;
 
+/* Invocation-scoped language ABI overrides. Never mutate a canonical target
+ * descriptor or its shared integer_model: two compilations may use different
+ * -fsigned-char/-funsigned-char policies in the same process. */
+typedef struct MinicTargetInvocation {
+    MinicTargetInfo target;
+    MinicTargetIntegerModel integer_model;
+    MinicType default_wide_character_type;
+} MinicTargetInvocation;
+
+bool minic_target_invocation_begin(MinicTargetInvocation *invocation,
+                                   const MinicTargetInfo *canonical);
+bool minic_target_invocation_plain_char(MinicTargetInvocation *invocation,
+                                        MinicIntegerSign sign);
+bool minic_target_invocation_short_wchar(MinicTargetInvocation *invocation,
+                                         bool enabled);
+
 extern const char *const minic_riscv64_argument_registers[8];
 
 const MinicTargetInfo *minic_default_target_info(void);

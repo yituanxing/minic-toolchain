@@ -7,6 +7,7 @@ on:
       - 'tools/minic/**'
       - 'tools/minic-cc/**'
       - 'tests/compiler/c0/probe-minic-driver-target-catalog.sh'
+      - 'tests/compiler/c0/probe-target-language-abi-options.sh'
       - 'src/core/**'
       - 'src/frontend/**'
       - 'Makefile'
@@ -21,6 +22,7 @@ on:
       - 'tools/minic/**'
       - 'tools/minic-cc/**'
       - 'tests/compiler/c0/probe-minic-driver-target-catalog.sh'
+      - 'tests/compiler/c0/probe-target-language-abi-options.sh'
       - 'src/core/**'
       - 'src/frontend/**'
       - 'Makefile'
@@ -63,6 +65,14 @@ jobs:
           MINIC="$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic" \
           MINIC_CC="$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc" \
             bash tests/compiler/c0/probe-minic-driver-target-catalog.sh
+
+      - name: Five-target language ABI options, driver propagation and fail-closed modes
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          MINIC="$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic" \
+          MINIC_CC="$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc" \
+            bash tests/compiler/c0/probe-target-language-abi-options.sh
 
       - name: Five-target language/ABI identity contract
         shell: bash

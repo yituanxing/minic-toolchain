@@ -156,6 +156,38 @@ static int verify_registered_target_catalog(void) {
     return puts("TARGET_CATALOG=PASS five_backends=5 full_staged=rv64_only") == EOF;
 }
 
+static int verify_invocation_language_abi(void) {
+    const MinicTargetCatalogEntry *entries;
+    size_t i, count;
+    entries = minic_target_catalog_all(&count);
+    for (i = 0U; i < count; ++i) {
+        const MinicTargetInfo *canonical =
+            minic_target_info_from_name(entries[i].name);
+        MinicTargetInvocation invocation, second;
+        MinicIntegerSign original;
+        MinicType original_wchar;
+        if (canonical == NULL ||
+            !minic_target_info_plain_char_sign(canonical, &original) ||
+            !minic_target_info_wide_character_type(canonical, &original_wchar) ||
+            !minic_target_invocation_begin(&invocation, canonical) ||
+            !minic_target_invocation_begin(&second, canonical) ||
+            !minic_target_invocation_plain_char(
+                &invocation, original == MINIC_INTEGER_SIGN_SIGNED
+                    ? MINIC_INTEGER_SIGN_UNSIGNED : MINIC_INTEGER_SIGN_SIGNED) ||
+            !minic_target_invocation_short_wchar(&invocation, true) ||
+            invocation.target.integer_model != &invocation.integer_model ||
+            invocation.integer_model.plain_char_sign == original ||
+            second.integer_model.plain_char_sign != original ||
+            canonical->integer_model->plain_char_sign != original ||
+            !minic_type_equal(second.target.wide_character_type, original_wchar) ||
+            !minic_target_invocation_short_wchar(&invocation, false) ||
+            !minic_type_equal(invocation.target.wide_character_type, original_wchar))
+            return (void)fprintf(stderr,
+                "TARGET_INVOCATION_ABI=FAIL target:%s\n", entries[i].name), 1;
+    }
+    return puts("TARGET_INVOCATION_ABI=PASS five_targets immutable_models signed_char short_wchar_restore") == EOF;
+}
+
 int main(void) {
     const MinicTargetInfo *rv = minic_default_target_info();
     const MinicTargetInfo *x86 = minic_target_info_from_name("x86_64-linux");
@@ -171,7 +203,7 @@ int main(void) {
         (void)fprintf(stderr, "FAIL four independent target identities\n");
         return 1;
     }
-    if (verify_registered_target_catalog() != 0 || verify_language_admission() != 0 || verify_rv32() != 0 ||
+    if (verify_registered_target_catalog() != 0 || verify_invocation_language_abi() != 0 || verify_language_admission() != 0 || verify_rv32() != 0 ||
         verify_lp64("aarch64-linux", MINIC_TARGET_ARCH_AARCH64,
                     MINIC_INTEGER_SIGN_UNSIGNED, MINIC_INTEGER_RANK_INT,
                     MINIC_INTEGER_SIGN_UNSIGNED) != 0 ||
