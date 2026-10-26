@@ -223,56 +223,39 @@ bool minic_lp64_plan_function_calls(
     const MinicCoreFunction *fn, const MinicCoreCallIndex *semantic_calls,
     MinicLP64DirectABI abi, MinicDirectLP64IndirectRecord indirect_record,
     MinicLP64CallPlanCache *cache) {
-    size_t ordinal, id = 0U, calls = 0U, previous_id = SIZE_MAX;
+    const MinicCoreCallIndex *calls;
+    size_t ordinal, previous_id = SIZE_MAX;
     if (program == NULL || target == NULL || fn == NULL || cache == NULL ||
         cache->sites != NULL || cache->call_count != 0U ||
+        cache->semantic_calls.index != NULL ||
         indirect_record == NULL ||
-        (fn->instruction_count != 0U && fn->instructions == NULL))
+        !minic_core_call_index_handle_prepare(
+            fn, semantic_calls, &cache->semantic_calls))
         return false;
-    if (semantic_calls != NULL) {
-        if (semantic_calls->count > fn->instruction_count ||
-            (semantic_calls->count != 0U && semantic_calls->sites == NULL))
-            return false;
-        calls = semantic_calls->count;
-    } else {
-        for (id = 0U; id < fn->instruction_count; ++id)
-            if (minic_core_instruction_is_call(fn->instructions[id].kind))
-                ++calls;
-    }
-    if (calls > SIZE_MAX / sizeof(*cache->sites))
-        return false;
-    if (calls == 0U) return true;
-    cache->sites = (MinicLP64PreparedCall **)calloc(calls, sizeof(*cache->sites));
-    if (cache->sites == NULL) return false;
-    cache->call_count = calls;
-    id = 0U;
-    for (ordinal = 0U; ordinal < calls; ++ordinal) {
-        const MinicCoreInstruction *ins;
-        const MinicCoreCallView *view = NULL;
+    calls = cache->semantic_calls.index;
+    if (calls->count > SIZE_MAX / sizeof(*cache->sites))
+        goto failed;
+    if (calls->count == 0U) return true;
+    cache->sites = calloc(calls->count, sizeof(*cache->sites));
+    if (cache->sites == NULL) goto failed;
+    cache->call_count = calls->count;
+    for (ordinal = 0U; ordinal < calls->count; ++ordinal) {
+        const size_t id = calls->sites[ordinal].instruction_id;
         MinicLP64ArgumentPlan scratch;
         MinicLP64PreparedCall *site;
         size_t bytes;
-        if (semantic_calls != NULL) {
-            id = semantic_calls->sites[ordinal].instruction_id;
-            view = &semantic_calls->sites[ordinal].view;
-        } else {
-            while (id < fn->instruction_count &&
-                   !minic_core_instruction_is_call(fn->instructions[id].kind))
-                ++id;
-        }
         if (id >= fn->instruction_count ||
-            (previous_id != SIZE_MAX && id <= previous_id))
-            goto failed;
-        ins = &fn->instructions[id];
-        if (!minic_core_instruction_is_call(ins->kind) ||
+            (previous_id != SIZE_MAX && id <= previous_id) ||
+            !minic_core_instruction_is_call(fn->instructions[id].kind) ||
             !minic_lp64_plan_direct_call(
-                program, target, fn, ins, view, abi, indirect_record, &scratch) ||
+                program, target, fn, &fn->instructions[id],
+                &calls->sites[ordinal].view, abi, indirect_record, &scratch) ||
             scratch.argument_count >
                 (SIZE_MAX - sizeof(*site)) / sizeof(*site->arguments))
             goto failed;
         bytes = sizeof(*site) +
             scratch.argument_count * sizeof(*site->arguments);
-        site = (MinicLP64PreparedCall *)malloc(bytes);
+        site = malloc(bytes);
         if (site == NULL) goto failed;
         site->instruction_id = id;
         site->argument_count = scratch.argument_count;
@@ -282,9 +265,7 @@ bool minic_lp64_plan_function_calls(
                    scratch.argument_count * sizeof(*site->arguments));
         cache->sites[ordinal] = site;
         previous_id = id;
-        if (semantic_calls == NULL) ++id;
     }
-    cache->semantic_calls = semantic_calls;
     return true;
 failed:
     minic_lp64_call_plan_cache_destroy(cache);
@@ -293,32 +274,18 @@ failed:
 
 const MinicLP64PreparedCall *minic_lp64_function_call_plan(
     const MinicLP64CallPlanCache *cache, size_t instruction_id) {
-    size_t low = 0U, high;
-    if (cache == NULL || (cache->call_count != 0U && cache->sites == NULL))
+    const MinicCoreCallIndex *calls;
+    size_t ordinal;
+    if (cache == NULL || cache->semantic_calls.index == NULL ||
+        (cache->call_count != 0U && cache->sites == NULL))
         return NULL;
-    if (cache->semantic_calls != NULL) {
-        size_t ordinal;
-        if (cache->semantic_calls->count != cache->call_count ||
-            minic_core_call_index_find(cache->semantic_calls,
-                                       instruction_id, &ordinal) == NULL ||
-            ordinal >= cache->call_count || cache->sites[ordinal] == NULL ||
-            cache->sites[ordinal]->instruction_id != instruction_id)
-            return NULL;
-        return cache->sites[ordinal];
-    }
-    /* Standalone ABI planners still support a sorted local CALL cache. */
-    high = cache->call_count;
-    while (low < high) {
-        size_t mid = low + (high - low) / 2U;
-        if (cache->sites[mid] == NULL) return NULL;
-        if (cache->sites[mid]->instruction_id < instruction_id)
-            low = mid + 1U;
-        else
-            high = mid;
-    }
-    return low < cache->call_count && cache->sites[low] != NULL &&
-           cache->sites[low]->instruction_id == instruction_id
-               ? cache->sites[low] : NULL;
+    calls = cache->semantic_calls.index;
+    if (calls->count != cache->call_count ||
+        minic_core_call_index_find(calls, instruction_id, &ordinal) == NULL ||
+        ordinal >= cache->call_count || cache->sites[ordinal] == NULL ||
+        cache->sites[ordinal]->instruction_id != instruction_id)
+        return NULL;
+    return cache->sites[ordinal];
 }
 
 void minic_lp64_call_plan_cache_destroy(MinicLP64CallPlanCache *cache) {
@@ -327,6 +294,6 @@ void minic_lp64_call_plan_cache_destroy(MinicLP64CallPlanCache *cache) {
     for (i = 0U; i < cache->call_count; ++i)
         free(cache->sites[i]);
     free(cache->sites);
-    cache->sites = NULL;
-    cache->call_count = 0U;
+    minic_core_call_index_handle_destroy(&cache->semantic_calls);
+    (void)memset(cache, 0, sizeof(*cache));
 }

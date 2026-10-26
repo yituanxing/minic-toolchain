@@ -160,6 +160,46 @@ int main(void) {
         ordered[1] = call;
         if (minic_core_call_index_build(&fn, 1U, &index)) return 19;
         minic_core_call_index_destroy(&index);
+        /* Borrow production's exact index, or own the same shape when a
+         * standalone caller has no visitor. Both must share ONE lookup. */
+        {
+            MinicCoreCallIndexHandle owned = {0}, borrowed = {0};
+            MinicCoreCallIndex invalid = {0};
+            if (!minic_core_call_index_handle_prepare(&fn, NULL, &owned) ||
+                owned.index != &owned.owned || owned.owned.count != 2U ||
+                minic_core_call_index_find(owned.index, 4U, &ordinal) == NULL ||
+                ordinal != 1U ||
+                minic_core_call_index_handle_prepare(&fn, NULL, &owned))
+                return 21;
+            minic_core_call_index_handle_destroy(&owned);
+            if (owned.index != NULL || owned.owned.sites != NULL ||
+                owned.owned.count != 0U)
+                return 22;
+            if (!minic_core_call_index_build(&fn, 2U, &index) ||
+                !minic_core_call_index_handle_prepare(&fn, &index, &borrowed) ||
+                borrowed.index != &index || borrowed.owned.sites != NULL)
+                return 23;
+            minic_core_call_index_handle_destroy(&borrowed);
+            if (borrowed.index != NULL || index.count != 2U ||
+                minic_core_call_index_find(&index, 1U, &ordinal) == NULL)
+                return 24;
+            minic_core_call_index_destroy(&index);
+            invalid.count = 6U; /* more CALLs than instructions */
+            if (minic_core_call_index_handle_prepare(&fn, &invalid, &owned))
+                return 25;
+            ordered[1].value.indirect_call.signature_id = 9U;
+            if (minic_core_call_index_handle_prepare(&fn, NULL, &owned) ||
+                owned.index != NULL || owned.owned.sites != NULL ||
+                owned.owned.count != 0U)
+                return 26;
+            ordered[1] = call;
+            fn.instruction_count = 0U;
+            if (!minic_core_call_index_handle_prepare(&fn, NULL, &owned) ||
+                owned.index != &owned.owned || owned.owned.count != 0U)
+                return 27;
+            minic_core_call_index_handle_destroy(&owned);
+            fn.instruction_count = 5U;
+        }
     }
     signature.function_type_id = 4U;
     if (minic_core_call_view_build(&fn, &call, &view)) return 20;

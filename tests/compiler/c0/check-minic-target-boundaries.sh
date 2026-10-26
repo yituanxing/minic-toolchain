@@ -258,8 +258,8 @@ has src/target/riscv32/rv32_abi_plan.c 'rv32_abi_reject("incoming_return"'
 # RV32 shares the compact canonical CALL index. Never allocate one
 # heavyweight machine call plan for each non-CALL instruction again.
 has src/target/riscv32/rv32_abi_plan.c 'minic_core_instruction_is_call('
-has src/target/riscv32/rv32_abi_plan.c 'while (low < high)'
-has src/target/riscv32/rv32_abi_plan.c 'semantic_calls->sites[dense].instruction_id'
+lacks src/target/riscv32/rv32_abi_plan.c 'while (low < high)'
+has src/target/riscv32/rv32_abi_plan.c 'calls->sites[ordinal].instruction_id'
 has src/target/riscv64/frame_requirements.c 'calls->sites[ordinal]'
 # The fifth target no longer has a private Core VALUE/OBJECT type resolver:
 # CoreCallView checks real argument provenance and the RV64 psABI decides
@@ -272,7 +272,7 @@ lacks src/target/riscv64/frame_requirements.h 'bool minic_riscv64_core_call_argu
 lacks src/target/common/direct_call_plan.c 'cache->by_instruction'
 has src/target/common/direct_call_plan.c 'cache->sites[ordinal]'
 has src/target/common/direct_call_plan.c 'target/common/core_instruction_family.h'
-has src/target/common/direct_call_plan.c 'while (low < high)'
+lacks src/target/common/direct_call_plan.c 'while (low < high)'
 lacks src/target/riscv32/rv32_abi_plan.c 'plan->call_count = function->instruction_count'
 has src/target/riscv32/rv32_abi_plan.h 'size_t instruction_id;'
 lacks src/target/riscv32/rv32_emit.c 'rv32_scalar_storage_words(f, f->return_type, &bits)'
@@ -506,12 +506,21 @@ has src/target/riscv64/core_admission.c 'semantic_calls->sites[call_site++]'
 lacks src/target/riscv64/core_admission.c 'minic_core_call_index_get('
 # Prepared RV32 and Direct LP64 CALL machines borrow the Common sorted
 # semantic CALL index, leaving one canonical ordinal lookup for production.
-has src/target/riscv32/rv32_abi_plan.h 'const MinicCoreCallIndex *semantic_calls;'
-has src/target/riscv32/rv32_abi_plan.c 'minic_core_call_index_find(plan->semantic_calls,'
-has src/target/common/direct_call_plan.h 'const MinicCoreCallIndex *semantic_calls;'
-has src/target/common/direct_call_plan.c 'minic_core_call_index_find(cache->semantic_calls,'
+has src/target/riscv32/rv32_abi_plan.h 'MinicCoreCallIndexHandle semantic_calls;'
+has src/target/riscv32/rv32_abi_plan.c 'minic_core_call_index_find(calls,'
+has src/target/common/direct_call_plan.h 'MinicCoreCallIndexHandle semantic_calls;'
+has src/target/common/direct_call_plan.c 'minic_core_call_index_find(calls,'
 lacks src/target/common/direct_instruction_semantics.h 'minic_multi_direct_result_slot_offset('
 has src/target/common/direct_instruction_semantics.c 'static bool minic_multi_direct_result_slot_offset('
+# Standalone APIs never own an extra Core CALL algorithm or binary search.
+has src/target/common/core_call_index.c 'minic_core_call_index_handle_prepare('
+has src/target/common/core_call_index.c 'minic_core_call_index_handle_destroy('
+has src/target/riscv32/rv32_abi_plan.c 'minic_core_call_index_handle_prepare('
+has src/target/riscv32/rv32_abi_plan.c 'minic_core_call_index_handle_destroy('
+has src/target/common/direct_call_plan.c 'minic_core_call_index_handle_prepare('
+has src/target/common/direct_call_plan.c 'minic_core_call_index_handle_destroy('
+lacks src/target/riscv32/rv32_abi_plan.c 'while (i < function->instruction_count'
+lacks src/target/common/direct_call_plan.c 'while (id < fn->instruction_count'
 # SysV VA cursors must match the prepared Common fact count exactly.
 has src/target/x86_64/frame.c 'if (count != frame->varargs_count) return false;'
 has src/target/common/direct_function_plan.c 'program, target, decl, fn, facts, abi, indirect_record,'

@@ -30,6 +30,7 @@ void rv32_function_abi_plan_destroy(Rv32FunctionAbiPlan *plan) {
             free(plan->calls[i].arguments);
     free(plan->calls);
     free(plan->parameters);
+    minic_core_call_index_handle_destroy(&plan->semantic_calls);
     (void)memset(plan, 0, sizeof(*plan));
 }
 
@@ -167,108 +168,72 @@ bool rv32_function_abi_plan_build(const MinicC0Program *program,
                                   const MinicCoreFunction *function,
                                   const MinicCoreCallIndex *semantic_calls,
                                   Rv32FunctionAbiPlan *plan) {
-    size_t i, dense = 0U, actual_calls = 0U;
+    const MinicCoreCallIndex *calls;
+    size_t ordinal, previous_id = SIZE_MAX;
     if (program == NULL || target == NULL ||
         target->data_layout == NULL || function == NULL || plan == NULL ||
         plan->calls != NULL || plan->parameters != NULL ||
         plan->call_count != 0U || plan->parameter_count != 0U ||
         plan->max_outgoing_stack_words != 0U ||
+        plan->semantic_calls.index != NULL ||
         (function->instruction_count != 0U && function->instructions == NULL))
         return false;
-    if (!rv32_plan_incoming(program, target, function, plan)) goto failure;
-    if (semantic_calls != NULL) {
-        if (semantic_calls->count > function->instruction_count ||
-            (semantic_calls->count != 0U && semantic_calls->sites == NULL))
-            goto failure;
-        actual_calls = semantic_calls->count;
-    } else {
-        for (i = 0U; i < function->instruction_count; ++i)
-            if (minic_core_instruction_is_call(function->instructions[i].kind))
-                ++actual_calls;
-    }
-    if (actual_calls > SIZE_MAX / sizeof(*plan->calls) ||
-        (semantic_calls != NULL &&
-         (semantic_calls->count != actual_calls ||
-          (actual_calls != 0U && semantic_calls->sites == NULL))))
+    if (!rv32_plan_incoming(program, target, function, plan) ||
+        !minic_core_call_index_handle_prepare(
+            function, semantic_calls, &plan->semantic_calls))
         goto failure;
-    plan->call_count = actual_calls;
-    if (actual_calls != 0U) {
-        plan->calls = calloc(actual_calls, sizeof(*plan->calls));
+    calls = plan->semantic_calls.index;
+    if (calls->count > SIZE_MAX / sizeof(*plan->calls))
+        goto failure;
+    plan->call_count = calls->count;
+    if (calls->count != 0U) {
+        plan->calls = calloc(calls->count, sizeof(*plan->calls));
         if (plan->calls == NULL) goto failure;
     }
-    /* When Common prepared CALL sites exist, visit only those sites.
-     * The standalone compatibility API keeps the original checked scan. */
-    i = 0U;
-    while (dense < actual_calls) {
+    for (ordinal = 0U; ordinal < calls->count; ++ordinal) {
+        const size_t id = calls->sites[ordinal].instruction_id;
         const MinicCoreInstruction *ins;
-        Rv32CallAbiPlan *call;
-        const MinicCoreCallView *view = NULL;
-        size_t instruction_id;
-        if (semantic_calls != NULL) {
-            instruction_id = semantic_calls->sites[dense].instruction_id;
-            view = &semantic_calls->sites[dense].view;
-        } else {
-            while (i < function->instruction_count &&
-                   !minic_core_instruction_is_call(function->instructions[i].kind))
-                ++i;
-            instruction_id = i;
-        }
-        if (instruction_id >= function->instruction_count ||
-            (dense != 0U && instruction_id <=
-                plan->calls[dense - 1U].instruction_id))
+        Rv32CallAbiPlan *call = &plan->calls[ordinal];
+        if (id >= function->instruction_count ||
+            (previous_id != SIZE_MAX && id <= previous_id))
             goto failure;
-        ins = &function->instructions[instruction_id];
-        if (!minic_core_instruction_is_call(ins->kind)) goto failure;
-        call = &plan->calls[dense];
-        call->instruction_id = instruction_id;
-        if (!rv32_plan_call(program, target, function, ins, view, call)) {
+        ins = &function->instructions[id];
+        if (!minic_core_instruction_is_call(ins->kind))
+            goto failure;
+        call->instruction_id = id;
+        if (!rv32_plan_call(program, target, function, ins,
+                            &calls->sites[ordinal].view, call)) {
             if (getenv("MINIC_RV32_FRAME_TRACE") != NULL)
                 (void)fprintf(stderr,
                     "RV32_ABI_REJECT stage=call_plan instruction=%zu kind=%d\n",
-                    instruction_id, (int)ins->kind);
+                    id, (int)ins->kind);
             goto failure;
         }
         if (call->stack_words > plan->max_outgoing_stack_words)
             plan->max_outgoing_stack_words = call->stack_words;
-        ++dense;
-        if (semantic_calls == NULL) i = instruction_id + 1U;
+        previous_id = id;
     }
-    if (dense != actual_calls) goto failure;
-    plan->semantic_calls = semantic_calls;
     return true;
 failure:
     rv32_function_abi_plan_destroy(plan);
     return false;
 }
 
-/* Sorted instruction IDs give O(log CALL sites) lookup, without a costly
- * machine-plan slot for every non-CALL Core instruction. */
+/* Common is the ONLY sparse CALL lookup in both visitor and standalone
+ * ILP32. Physical register/stack placement remains owned by this plan. */
 const Rv32CallAbiPlan *rv32_function_abi_call(
     const Rv32FunctionAbiPlan *plan, MinicCoreInstructionId index) {
-    size_t low = 0U, high;
-    if (plan == NULL || (plan->call_count != 0U && plan->calls == NULL))
+    const MinicCoreCallIndex *calls;
+    size_t ordinal;
+    if (plan == NULL || plan->semantic_calls.index == NULL ||
+        (plan->call_count != 0U && plan->calls == NULL))
         return NULL;
-    if (plan->semantic_calls != NULL) {
-        size_t ordinal;
-        if (plan->semantic_calls->count != plan->call_count ||
-            minic_core_call_index_find(plan->semantic_calls,
-                                       (size_t)index, &ordinal) == NULL ||
-            ordinal >= plan->call_count ||
-            plan->calls[ordinal].instruction_id != (size_t)index ||
-            !plan->calls[ordinal].prepared)
-            return NULL;
-        return &plan->calls[ordinal];
-    }
-    /* Standalone ILP32 callers lacking a visitor retain sparse lookup. */
-    high = plan->call_count;
-    while (low < high) {
-        size_t mid = low + (high - low) / 2U;
-        if (plan->calls[mid].instruction_id < (size_t)index)
-            low = mid + 1U;
-        else
-            high = mid;
-    }
-    return low < plan->call_count &&
-           plan->calls[low].instruction_id == (size_t)index &&
-           plan->calls[low].prepared ? &plan->calls[low] : NULL;
+    calls = plan->semantic_calls.index;
+    if (calls->count != plan->call_count ||
+        minic_core_call_index_find(calls, (size_t)index, &ordinal) == NULL ||
+        ordinal >= plan->call_count ||
+        plan->calls[ordinal].instruction_id != (size_t)index ||
+        !plan->calls[ordinal].prepared)
+        return NULL;
+    return &plan->calls[ordinal];
 }

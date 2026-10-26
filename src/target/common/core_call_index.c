@@ -67,3 +67,37 @@ void minic_core_call_index_destroy(MinicCoreCallIndex *index) {
     free(index->sites);
     (void)memset(index, 0, sizeof(*index));
 }
+
+/* Production borrows the visitor-owned verified index without scanning.
+ * Standalone API callers construct precisely the same semantic index once.
+ * A successful empty function still has a non-NULL index for the lifetime
+ * of the handle, so all machine caches share the same lookup contract. */
+bool minic_core_call_index_handle_prepare(
+    const MinicCoreFunction *function, const MinicCoreCallIndex *borrowed,
+    MinicCoreCallIndexHandle *handle) {
+    size_t i, calls = 0U;
+    if (function == NULL || handle == NULL || handle->index != NULL ||
+        handle->owned.sites != NULL || handle->owned.count != 0U ||
+        (function->instruction_count != 0U && function->instructions == NULL))
+        return false;
+    if (borrowed != NULL) {
+        if (borrowed->count > function->instruction_count ||
+            (borrowed->count != 0U && borrowed->sites == NULL))
+            return false;
+        handle->index = borrowed;
+        return true;
+    }
+    for (i = 0U; i < function->instruction_count; ++i)
+        if (minic_core_instruction_is_call(function->instructions[i].kind))
+            ++calls;
+    if (!minic_core_call_index_build(function, calls, &handle->owned))
+        return false;
+    handle->index = &handle->owned;
+    return true;
+}
+
+void minic_core_call_index_handle_destroy(MinicCoreCallIndexHandle *handle) {
+    if (handle == NULL) return;
+    minic_core_call_index_destroy(&handle->owned);
+    handle->index = NULL;
+}

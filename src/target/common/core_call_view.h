@@ -64,4 +64,16 @@ const MinicCoreCallView *minic_core_call_index_find(
     const MinicCoreCallIndex *, size_t instruction_id, size_t *ordinal);
 void minic_core_call_index_destroy(MinicCoreCallIndex *);
 
+/* A single owner for production's borrowed semantic CALL index and the
+ * identical standalone fallback index. ABI caches never rescan Core or
+ * implement an independent sparse CALL lookup. */
+typedef struct MinicCoreCallIndexHandle {
+    MinicCoreCallIndex owned;
+    const MinicCoreCallIndex *index;
+} MinicCoreCallIndexHandle;
+bool minic_core_call_index_handle_prepare(
+    const MinicCoreFunction *, const MinicCoreCallIndex *,
+    MinicCoreCallIndexHandle *);
+void minic_core_call_index_handle_destroy(MinicCoreCallIndexHandle *);
+
 #endif

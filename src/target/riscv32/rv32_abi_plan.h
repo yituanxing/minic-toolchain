@@ -42,8 +42,8 @@ typedef struct Rv32FunctionAbiPlan {
     Rv32CallAbiPlan *calls; /* compact sorted by instruction_id */
     size_t call_count;
     size_t max_outgoing_stack_words;
-    /* Borrow Common's sorted semantic CALL identity during this frame. */
-    const MinicCoreCallIndex *semantic_calls;
+    /* One Common CALL index for borrowed and standalone ILP32 plans. */
+    MinicCoreCallIndexHandle semantic_calls;
 } Rv32FunctionAbiPlan;
 
 bool rv32_function_abi_plan_build(const MinicC0Program *,
