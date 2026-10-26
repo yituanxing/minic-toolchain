@@ -35,3 +35,5 @@ static inline bool minic_core_frame_reserve(
     *cursor = aligned + extent;
     return true;
 }
+
+#endif /* MINIC_TARGET_COMMON_CORE_FRAME_LAYOUT_H */
