@@ -391,12 +391,17 @@ static int compile_c_to_object(const char *input,
         size_t argument_count = 0U;
         /* User-facing driver uses the same ISA and ABI as minic-cc.
          * The default existing rv64gc/lp64d pipeline is untouched. */
-        char *isa_option = march != NULL ?
-            (strcmp(march, "rv64i") == 0 ? "-march=rv64i" :
-             strcmp(march, "rv64im") == 0 ? "-march=rv64im" :
-                                            "-march=rv64imafd") : "-march=rv64gc";
-        char *abi_option = mabi != NULL && strcmp(mabi, "lp64") == 0 ?
-            "-mabi=lp64" : "-mabi=lp64d";
+        char isa_option[64], abi_option[32];
+        int isa_size = snprintf(isa_option, sizeof(isa_option), "-march=%s",
+                                march != NULL ? march : "rv64gc");
+        int abi_size = snprintf(abi_option, sizeof(abi_option), "-mabi=%s",
+                                mabi != NULL ? mabi : "lp64d");
+        /* The profile was already validated by the shared catalog in main.
+         * The assembler receives exactly that pair, without an independent
+         * ternary map silently rewriting a future accepted ISA. */
+        if (isa_size < 0 || (size_t)isa_size >= sizeof(isa_option) ||
+            abi_size < 0 || (size_t)abi_size >= sizeof(abi_option))
+            return 1;
         arguments[argument_count++] = as;
         arguments[argument_count++] = isa_option;
         arguments[argument_count++] = abi_option;
