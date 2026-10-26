@@ -71,6 +71,20 @@ backends. The new `probe-core-value-slots.c` checks scalar/wide layout,
 non-wide sentinel behavior, empty functions and transactional overflow failure.
 Runtime, psABI and strict RV32I/RV64I checks remain separate gates.
 
+### Single-pass Direct LP64 CALL admission and ABI planning
+
+AAPCS64 and LoongArch64 formerly traversed the same verified Common CALL
+index twice: once for return/argument preflight, again for ABI placement,
+re-resolving every Core CALL argument type. This refactor retires the separate
+`direct_call_preflight.{c,h}` owner and the redundant per-CALL adapter
+`minic_lp64_plan_direct_call`. The remaining Direct LP64 call planner now
+validates each semantic CALL and immediately classifies the same resolved
+argument-type vector under the chosen target psABI. Machine emission is
+unchanged. Its checked output preserves the exact rejected Core instruction
+and the old `call_preflight` versus `call_planning` failure stages. Standalone
+callers still build a checked Common CallIndex and production borrows its
+single prepared index. No second CALL index traversal is performed.
+
 ### Computations done once
 
 - SysV incoming arguments and outgoing calls receive a prepared set of

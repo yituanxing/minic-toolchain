@@ -1,6 +1,5 @@
 #include "target/common/direct_function_plan.h"
 #include "target/common/direct_preflight.h"
-#include "target/common/direct_call_preflight.h"
 #include "target/common/core_frame_layout.h"
 
 #include <stdint.h>
@@ -76,19 +75,21 @@ bool minic_multi_direct_lp64_function_plan_prepare(
         return false;
     object_end = plan->frame_plan.wide_end;
 
-    plan->failed_stage = "call_preflight";
-    if (!minic_multi_direct_lp64_calls_preflight(
-            program, target, fn, facts->call_index,
-            architecture_name, name, indirect_record,
-            &plan->failed_instruction, &plan->has_calls))
-        return false;
-
-    plan->failed_stage = "call_planning";
-    plan->failed_instruction = SIZE_MAX;
-    if (plan->has_calls &&
-        !minic_lp64_plan_function_calls(program, target, fn, facts->call_index, abi,
-                                       indirect_record, &plan->outgoing_calls))
-        return false;
+    /* One checked CALL traversal performs admission and ABI placement.
+     * Preserve exact failing-instruction and original diagnostic stages. */
+    {
+        bool failed_preflight = true;
+        plan->failed_stage = "call_preflight";
+        if (!minic_lp64_plan_function_calls(
+                program, target, fn, facts->call_index, abi,
+                indirect_record, architecture_name, name,
+                &plan->failed_instruction, &failed_preflight,
+                &plan->has_calls, &plan->outgoing_calls)) {
+            plan->failed_stage =
+                failed_preflight ? "call_preflight" : "call_planning";
+            return false;
+        }
+    }
 
     plan->failed_stage = "frame_finalization";
     plan->failed_instruction = SIZE_MAX;

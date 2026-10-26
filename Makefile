@@ -161,7 +161,6 @@ MINIC_SOURCES := \
 	src/target/common/core_object_storage.c \
 	src/target/common/core_call_view.c \
 	src/target/common/core_call_index.c \
-	src/target/common/direct_call_preflight.c \
 	src/target/common/direct_call_plan.c \
 	src/target/common/direct_instruction_semantics.c \
 	src/target/common/direct_residual_plan.c \
