@@ -1,6 +1,7 @@
 #include "target/riscv64/codegen.h"
 #include "target/riscv64/global_emit.h"
 #include "target/common/global_emit.h"
+#include "target/common/program_visit.h"
 #include "target/riscv64/abi.h"
 #include "target/riscv64/codegen_internal.h"
 #include "target/riscv64/core_codegen.h"
@@ -14,6 +15,126 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* The five targets now use one program visitor. Keep RISC-V LP64 global
+ * relocations, GNU file-asm provenance, symbol syntax and ABI self-contained. */
+typedef struct Rv64ProgramContext {
+    const char *path;
+    MinicDiagnostic *diagnostic;
+} Rv64ProgramContext;
+
+static bool rv64_visit_global(
+    FILE *file, const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicGlobalObject *object, size_t index, void *opaque) {
+    Rv64ProgramContext *ctx = opaque;
+    (void)target;
+    if (object->is_extern) {
+        if (object->alias_target != MINIC_GLOBAL_OBJECT_INVALID) {
+            const MinicGlobalObject *target_object =
+                minic_c0_program_global_object(program, object->alias_target);
+            bool success = target_object != NULL && target_object != object &&
+                           !target_object->is_extern && !target_object->is_tentative &&
+                           minic_c0_types_compatible(
+                               program, object->type, target_object->type);
+            if (success && !object->is_internal) {
+                success = fprintf(file, object->is_weak ?
+                        ".weak %s\n" : ".globl %s\n", object->name) >= 0;
+                if (success &&
+                    object->visibility != MINIC_SYMBOL_VISIBILITY_DEFAULT) {
+                    const char *directive =
+                        minic_multi_elf_visibility_directive(object->visibility);
+                    success = directive != NULL &&
+                              fprintf(file, "%s %s\n", directive,
+                                      object->name) >= 0;
+                }
+            }
+            if (success) {
+                success = fprintf(file, ".type %s, @object\n.set %s, %s\n",
+                                  object->name, object->name,
+                                  target_object->name) >= 0;
+            }
+            return success;
+        }
+        return !object->is_weak || object->is_internal ||
+               fprintf(file, ".weak %s\n", object->name) >= 0;
+    }
+    if (minic_riscv64_emit_global_object(file, program, object)) return true;
+    {
+        char message[256];
+        const MinicGlobalRelocation *first =
+            object->relocation_count != 0U ? &object->relocations[0] : NULL;
+        (void)snprintf(message, sizeof(message),
+                       "cannot emit RISC-V global object '%s' (index=%zu init=%zu reloc=%zu "
+                       "union=%zu first-kind=%u first-slot=%zu)",
+                       object->name, index, object->initializer_count,
+                       object->relocation_count, object->union_selection_count,
+                       first != NULL ? (unsigned int)first->location_kind : 999U,
+                       first != NULL ? first->location_index : 0U);
+        minic_riscv64_set_diagnostic(ctx->diagnostic, ctx->path, message);
+    }
+    return false;
+}
+
+static bool rv64_visit_function(
+    FILE *file, const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicFunction *function, const MinicCoreFunction *core_function,
+    size_t index, bool function_sections, void *opaque) {
+    Rv64ProgramContext *ctx = opaque;
+    bool success = true;
+    if (getenv("MINIC_BOOTSTRAP_TRACE") != NULL && function->is_defined) {
+        const char *name = minic_c0_function_symbol_name(function);
+        (void)fprintf(stderr,
+            "MINIC_BOOTSTRAP_TRACE stage=codegen-function state=begin "
+            "index=%zu function=%s\n",
+            index, name != NULL ? name : "?");
+        (void)fflush(stderr);
+    }
+    if (!function->is_defined) {
+        const char *name = minic_c0_function_symbol_name(function);
+        if (function->alias_target != MINIC_FUNCTION_INVALID)
+            return minic_riscv_emit_function_alias(file, program, function);
+        if (function->is_weak && !function->is_internal)
+            return name != NULL && name[0] != '\0' &&
+                   fprintf(file, ".weak %s\n", name) >= 0;
+        return true;
+    }
+    {
+        MinicRiscv64FunctionSymbol symbol;
+        /* The machine emitter owns capability admission, not this visitor. */
+        success = minic_riscv64_function_symbol_from_function(function, &symbol);
+        symbol.function_sections = function_sections;
+        success = success && minic_riscv64_emit_core_function_for_program_with_symbol(
+                      file, program, core_function, &symbol,
+                      target != NULL && target->position_independent,
+                      target != NULL ? &target->riscv_isa : NULL,
+                      ctx->diagnostic);
+        if (success && function->is_constructor) {
+            const char *name = minic_c0_function_symbol_name(function);
+            success = name != NULL && name[0] != '\0' &&
+                      fprintf(file, ".section .init_array,\"aw\",@init_array\n"
+                                    ".p2align 3\n  .dword %s\n.text\n", name) >= 0;
+        }
+    }
+    if (getenv("MINIC_BOOTSTRAP_TRACE") != NULL) {
+        const char *name = minic_c0_function_symbol_name(function);
+        (void)fprintf(stderr,
+            "MINIC_BOOTSTRAP_TRACE stage=codegen-function state=end "
+            "index=%zu function=%s success=%d blocks=%zu instructions=%zu\n",
+            index, name != NULL ? name : "?", success ? 1 : 0,
+            core_function->block_count, core_function->instruction_count);
+        (void)fflush(stderr);
+    }
+    if (!success &&
+        ctx->diagnostic != NULL && ctx->diagnostic->message[0] == '\0') {
+        char message[256];
+        const char *name = minic_c0_function_symbol_name(function);
+        (void)snprintf(message, sizeof(message),
+                       "cannot emit RISC-V function '%s' (index=%zu)",
+                       name != NULL ? name : "<unnamed>", index);
+        minic_riscv64_set_diagnostic(ctx->diagnostic, ctx->path, message);
+    }
+    return success;
+}
+
 bool minic_riscv64_write_c0_program_with_core_functions(const char *path,
                                                         const MinicC0Program *program,
                                                         const MinicCoreFunction *core_functions,
@@ -22,8 +143,7 @@ bool minic_riscv64_write_c0_program_with_core_functions(const char *path,
                                                         const MinicTargetInfo *target,
                                                         MinicDiagnostic *diagnostic) {
     FILE *file;
-    size_t global_index;
-    size_t function_index;
+    Rv64ProgramContext context = { path, diagnostic };
     bool success;
 
     if (program == NULL) {
@@ -62,74 +182,8 @@ bool minic_riscv64_write_c0_program_with_core_functions(const char *path,
     }
 
     success = true;
-    for (global_index = 0U; success && global_index < program->global_object_count;
-         ++global_index) {
-        if (program->global_objects[global_index].is_extern) {
-            const MinicGlobalObject *object;
-
-            object = &program->global_objects[global_index];
-            if (object->alias_target != MINIC_GLOBAL_OBJECT_INVALID) {
-                const MinicGlobalObject *target_object;
-                const char *visibility_directive;
-
-                target_object = minic_c0_program_global_object(program, object->alias_target);
-                success = target_object != NULL && target_object != object &&
-                          !target_object->is_extern && !target_object->is_tentative &&
-                          minic_c0_types_compatible(program, object->type, target_object->type);
-                if (success && !object->is_internal) {
-                    success = fprintf(file,
-                                      object->is_weak ? ".weak %s\n" : ".globl %s\n",
-                                      object->name) >= 0;
-                    if (success && object->visibility != MINIC_SYMBOL_VISIBILITY_DEFAULT) {
-                        visibility_directive =
-                            minic_multi_elf_visibility_directive(object->visibility);
-                        success = visibility_directive != NULL &&
-                                  fprintf(file, "%s %s\n", visibility_directive, object->name) >= 0;
-                    }
-                }
-                if (success) {
-                    success = fprintf(file,
-                                      ".type %s, @object\n"
-                                      ".set %s, %s\n",
-                                      object->name,
-                                      object->name,
-                                      target_object->name) >= 0;
-                }
-                continue;
-            }
-            if (object->is_weak && !object->is_internal &&
-                fprintf(file, ".weak %s\n", object->name) < 0) {
-                success = false;
-            }
-            continue;
-        }
-        if (!minic_riscv64_emit_global_object(
-                file, program, &program->global_objects[global_index])) {
-            char message[256];
-            const MinicGlobalObject *object;
-
-            object = &program->global_objects[global_index];
-            {
-                const MinicGlobalRelocation *first_relocation;
-
-                first_relocation = object->relocation_count != 0U ? &object->relocations[0] : NULL;
-                (void)snprintf(
-                    message,
-                    sizeof(message),
-                    "cannot emit RISC-V global object '%s' (index=%zu init=%zu reloc=%zu "
-                    "union=%zu first-kind=%u first-slot=%zu)",
-                    object->name,
-                    global_index,
-                    object->initializer_count,
-                    object->relocation_count,
-                    object->union_selection_count,
-                    first_relocation != NULL ? (unsigned int)first_relocation->location_kind : 999U,
-                    first_relocation != NULL ? first_relocation->location_index : 0U);
-            }
-            minic_riscv64_set_diagnostic(diagnostic, path, message);
-            success = false;
-        }
-    }
+    success = minic_program_visit_globals(
+        file, program, target, rv64_visit_global, &context);
     if (success && program->file_asm_count != 0U) {
         size_t file_asm_index;
 
@@ -149,87 +203,11 @@ bool minic_riscv64_write_c0_program_with_core_functions(const char *path,
         success = fprintf(file, ".text\n") >= 0;
     }
 
-    for (function_index = 0U; success && function_index < program->function_count;
-         ++function_index) {
-        const MinicFunction *function;
-        const MinicCoreFunction *core_function;
-
-        function = &program->functions[function_index];
-        if (function->is_defined && function->is_internal && !function->is_referenced) {
-            continue;
-        }
-        if (getenv("MINIC_BOOTSTRAP_TRACE") != NULL && function->is_defined) {
-            const char *trace_symbol = minic_c0_function_symbol_name(function);
-            (void)fprintf(stderr,
-                          "MINIC_BOOTSTRAP_TRACE stage=codegen-function state=begin "
-                          "index=%zu function=%s\n",
-                          function_index,
-                          trace_symbol != NULL ? trace_symbol : "?");
-            (void)fflush(stderr);
-        }
-        if (!function->is_defined) {
-            const char *symbol_name;
-
-            symbol_name = minic_c0_function_symbol_name(function);
-            if (function->alias_target != MINIC_FUNCTION_INVALID) {
-                success = minic_riscv_emit_function_alias(file, program, function);
-                continue;
-            }
-            if (function->is_weak && !function->is_internal) {
-                success = symbol_name != NULL && symbol_name[0] != '\0' &&
-                          fprintf(file, ".weak %s\n", symbol_name) >= 0;
-            }
-            continue;
-        }
-        core_function = &core_functions[function_index];
-        {
-            MinicRiscv64FunctionSymbol symbol;
-
-            /* emit_core_function_for_program_with_symbol() owns the complete
-               capability check.  Do not preflight the same Core function here:
-               on self-hosted giant functions that duplicated verification was
-               a material part of codegen time and provided no extra safety. */
-            success = minic_riscv64_function_symbol_from_function(function, &symbol);
-            symbol.function_sections = function_sections;
-            success = success && minic_riscv64_emit_core_function_for_program_with_symbol(
-                          file, program, core_function, &symbol,
-                          target != NULL && target->position_independent,
-                          target != NULL ? &target->riscv_isa : NULL, diagnostic);
-            /* GNU constructor is a real ELF init action on RV64 as well:
-             * retain its address as an init_array relocation, never discard. */
-            if (success && function->is_constructor) {
-                const char *init_symbol = minic_c0_function_symbol_name(function);
-                success = init_symbol != NULL && init_symbol[0] != '\0' &&
-                          fprintf(file, ".section .init_array,\"aw\",@init_array\n"
-                                        ".p2align 3\n  .dword %s\n.text\n",
-                                  init_symbol) >= 0;
-            }
-        }
-        if (getenv("MINIC_BOOTSTRAP_TRACE") != NULL && function->is_defined) {
-            const char *trace_symbol = minic_c0_function_symbol_name(function);
-            (void)fprintf(stderr,
-                          "MINIC_BOOTSTRAP_TRACE stage=codegen-function state=end "
-                          "index=%zu function=%s success=%d blocks=%zu instructions=%zu\n",
-                          function_index,
-                          trace_symbol != NULL ? trace_symbol : "?",
-                          success ? 1 : 0,
-                          core_function != NULL ? core_function->block_count : 0U,
-                          core_function != NULL ? core_function->instruction_count : 0U);
-            (void)fflush(stderr);
-        }
-        if (!success && diagnostic != NULL && diagnostic->message[0] == '\0') {
-            char message[256];
-            const char *symbol_name;
-
-            symbol_name = minic_c0_function_symbol_name(function);
-            (void)snprintf(message,
-                           sizeof(message),
-                           "cannot emit RISC-V function '%s' (index=%zu)",
-                           symbol_name != NULL ? symbol_name : "<unnamed>",
-                           function_index);
-            minic_riscv64_set_diagnostic(diagnostic, path, message);
-        }
-    }
+    if (success)
+        success = minic_program_visit_functions(
+            file, program, target, core_functions, core_function_count,
+            function_sections, MINIC_PROGRAM_FUNCTION_ALL, false,
+            rv64_visit_function, &context);
 
     if (!success && (diagnostic == NULL || diagnostic->message[0] == '\0')) {
         minic_riscv64_set_diagnostic(diagnostic, path, "cannot write RISC-V assembly");
