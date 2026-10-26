@@ -10,7 +10,7 @@
 #include "target/common/core_call_view.h"
 #include "target/riscv/instruction_select.h"
 #include "target/riscv32/rv32_abi_cursor.h"
-#include "target/riscv64/function_symbol.h"
+#include "target/riscv/function_symbol.h"
 #include "target/riscv32/rv32_global_emit.h"
 #include "target/riscv/record_copy_bytes.h"
 #include "target/data_layout.h"

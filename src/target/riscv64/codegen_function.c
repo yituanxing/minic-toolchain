@@ -4,7 +4,7 @@
 #include "target/riscv64/abi.h"
 #include "target/riscv64/codegen_internal.h"
 #include "target/riscv64/core_codegen.h"
-#include "target/riscv64/function_symbol.h"
+#include "target/riscv/function_symbol.h"
 #include "target/data_layout.h"
 #include "target/riscv64/isa.h"
 
