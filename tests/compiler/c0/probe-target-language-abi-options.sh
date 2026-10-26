@@ -63,8 +63,8 @@ for arch in riscv32-linux riscv64-linux x86_64-linux aarch64-linux loongarch64-l
   "$MINIC" "--target=$arch" "${extra[@]}" -fno-short-wchar \
     -S "$normal" -o "$work/driver-default.s"
   cmp "$work/wchar-default.s" "$work/driver-default.s"
-  # RV32 machine emission must honor plain-char signedness, not merely
-  # accept the target option or agree with the driver frontend output.
+  # RV32 machine emission: verify Base-I softfloat calls and plain-char
+  # signedness, not merely frontend option acceptance.
   if [[ "$arch" == riscv32-linux ]]; then
     "$MINIC_CC" --target=riscv32-linux "${extra[@]}" \
       -S "$work/rv32-float.i" -o "$work/rv32-float.s"
@@ -74,7 +74,7 @@ for arch in riscv32-linux riscv64-linux x86_64-linux aarch64-linux loongarch64-l
         exit 1
       }
     done
-    if grep -Eq '^[[:space:]]+(fadd\\.s|fsub\\.s|fmul\\.s|fdiv\\.s)[[:space:]]' \
+    if grep -Eq '^[[:space:]]+(fadd\.s|fsub\.s|fmul\.s|fdiv\.s)[[:space:]]' \
          "$work/rv32-float.s"; then
       echo 'MINIC_TARGET_ABI_FLAGS=FAIL rv32i-emitted-F-instructions' >&2
       exit 1
