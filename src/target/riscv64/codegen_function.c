@@ -201,7 +201,7 @@ bool minic_riscv64_write_c0_program_with_core_functions(const char *path,
     success = minic_program_emit_write(
         path, program, target, core_functions, core_function_count,
         function_sections, &config, &context);
-    if (!success && diagnostic != NULL && diagnostic->message[0] == '\\0')
+    if (!success && diagnostic != NULL && diagnostic->message[0] == '\0')
         minic_riscv64_set_diagnostic(diagnostic, path, "cannot write RISC-V assembly");
     return success;
 }

@@ -970,7 +970,7 @@ bool minic_riscv32_write_core_program(const char *path,
     ok = minic_program_emit_write(
         path, program, target, functions, function_count,
         function_sections, &config, &context);
-    if (!ok && diagnostic != NULL && diagnostic->message[0] == '\\0')
+    if (!ok && diagnostic != NULL && diagnostic->message[0] == '\0')
         rv32_diag(diagnostic, path, "rv32i: emission failed");
     return ok;
 }

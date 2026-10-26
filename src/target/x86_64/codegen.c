@@ -227,7 +227,7 @@ bool minic_x86_64_write_c0_program_with_core_functions(
     success = minic_program_emit_write(
         path, program, target, core_functions, core_function_count,
         function_sections, &config, (void *)&visits);
-    if (!success && diagnostic != NULL && diagnostic->message[0] == '\\0')
+    if (!success && diagnostic != NULL && diagnostic->message[0] == '\0')
         x86_error(diagnostic, path, "x86-64 cannot emit assembly");
     return success;
 }
