@@ -89,6 +89,9 @@ exists tests/compiler/c0/probe-target-language-abi-options.sh
 # helper fallback is retained until an ISA extension is actually qualified.
 exists src/target/riscv/isa_features.h
 has src/target/riscv64/isa.h 'target/riscv/isa_features.h'
+has src/target/target_info.h 'target/riscv/isa_features.h'
+lacks src/target/target_info.h 'target/riscv64/isa.h'
+has tools/minic-cc/main.c 'target/riscv64/isa.h'
 lacks src/target/riscv64/isa.h 'typedef enum MinicRiscvFeature'
 has src/target/riscv/instruction_select.h 'minic_riscv_plan_integer_arithmetic('
 has src/target/riscv64/runtime_libcall.c 'minic_riscv_plan_integer_arithmetic('

@@ -2,7 +2,7 @@
 #define MINIC_TARGET_TARGET_INFO_H
 
 #include "target/data_layout.h"
-#include "target/riscv64/isa.h"
+#include "target/riscv/isa_features.h"
 #include "target/target_catalog.h"
 
 #include <stdbool.h>

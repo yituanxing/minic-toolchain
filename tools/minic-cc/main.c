@@ -1,5 +1,6 @@
 #include "minic/compiler.h"
 #include "target/target_info.h"
+#include "target/riscv64/isa.h" /* compiler-only ISA resolver, not TargetInfo */
 #include "target/target_catalog.h"
 
 #include <stdbool.h>
