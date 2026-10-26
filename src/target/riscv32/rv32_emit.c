@@ -918,7 +918,7 @@ static bool rv32_prefix(FILE *out, const MinicC0Program *program,
     (void)count;
     (void)function_sections;
     (void)opaque;
-    return fprintf(out, ".option norvc\\n") >= 0;
+    return fprintf(out, ".option norvc\n") >= 0;
 }
 
 static bool rv32_between(FILE *out, const MinicC0Program *program,
@@ -926,15 +926,15 @@ static bool rv32_between(FILE *out, const MinicC0Program *program,
                          const MinicCoreFunction *functions, size_t count,
                          bool function_sections, void *opaque) {
     size_t i;
-    if (program->file_asm_count != 0U && fprintf(out, ".text\\n") < 0)
+    if (program->file_asm_count != 0U && fprintf(out, ".text\n") < 0)
         return false;
     for (i = 0U; i < program->file_asm_count; ++i) {
         const MinicFileAsm *source_asm = &program->file_asms[i];
         if (source_asm->text == NULL ||
-            fprintf(out, "# MINIC_SOURCE_FILE_ASM_BEGIN\\n") < 0 ||
+            fprintf(out, "# MINIC_SOURCE_FILE_ASM_BEGIN\n") < 0 ||
             fwrite(source_asm->text, 1U, source_asm->length, out) !=
                 source_asm->length ||
-            fprintf(out, "\\n# MINIC_SOURCE_FILE_ASM_END\\n") < 0)
+            fprintf(out, "\n# MINIC_SOURCE_FILE_ASM_END\n") < 0)
             return false;
     }
     /* ELF32 alias/undefined-weak definitions precede live functions. */
@@ -942,7 +942,7 @@ static bool rv32_between(FILE *out, const MinicC0Program *program,
                out, program, target, functions, count, function_sections,
                MINIC_PROGRAM_FUNCTION_DECLARATIONS, false,
                rv32_visit_declaration, opaque) &&
-           fprintf(out, ".text\\n") >= 0;
+           fprintf(out, ".text\n") >= 0;
 }
 
 bool minic_riscv32_write_core_program(const char *path,

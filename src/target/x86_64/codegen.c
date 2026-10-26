@@ -208,7 +208,7 @@ bool minic_x86_64_write_c0_program_with_core_functions(
     bool function_sections, MinicDiagnostic *diagnostic) {
     static const MinicProgramEmitConfig config = {
         x86_visit_global, x86_visit_function, NULL, NULL,
-        ".section .note.GNU-stack,\\\"\\\",@progbits\\n", NULL,
+        ".section .note.GNU-stack,\"\",@progbits\n", NULL,
         MINIC_PROGRAM_FUNCTION_LIVE_DEFINITIONS, false
     };
     bool success;
