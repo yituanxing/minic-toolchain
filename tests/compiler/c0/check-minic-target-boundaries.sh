@@ -191,7 +191,7 @@ lacks src/target/riscv32/rv32_emit.c 'static bool rv32_emit_scalar_call_argument
 lacks src/target/riscv32/rv32_emit.c 'rv32_call_info('
 has src/target/riscv32/rv32_abi_plan.c 'minic_riscv32_abi_place('
 has src/target/riscv32/rv32_scalar.c 'rv32_scalar_storage_words('
-has src/target/riscv32/rv32_integer_emit.c 'minic_riscv_integer_arithmetic_symbol('
+has src/target/riscv/instruction_select.h 'minic_riscv_integer_arithmetic_symbol('
 has src/target/riscv32/rv32_integer_emit.c 'rv32_emit_wide_integer('
 has src/target/riscv32/rv32_wide_emit.c 'minic_riscv_integer_arithmetic_symbol('
 lacks src/target/riscv32/rv32_integer_emit.c '  add t4, t0, t2'
