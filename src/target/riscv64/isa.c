@@ -66,7 +66,7 @@ bool minic_riscv_isa_resolve(const char *march, const char *mabi,
     /* The LP64 integer-register FP ABI does not imply LP64D FP calling
      * convention. Retain the qualified soft-float arithmetic fallback. */
     if (resolved.abi == MINIC_RISCV_ABI_LP64)
-        resolved.codegen_features &= ~(MINIC_RISCV_FEATURE_F | MINIC_RISCV_FEATURE_D);
+        resolved.codegen_features &= ~(uint32_t)(MINIC_RISCV_FEATURE_F | MINIC_RISCV_FEATURE_D);
     if ((resolved.codegen_features & ~resolved.features) != 0U)
         return reject(reason, capacity, "compiler ISA exceeds target ISA");
     resolved.strict_isa = true;
