@@ -11,7 +11,7 @@ int main(void) {
     MinicCoreCallSignature signature = {0};
     MinicCoreCallArgument argument = {0};
     MinicCoreInstruction call = {0};
-    MinicCoreValue values[2] = {{0}};
+    MinicCoreValue values[2] = {{0}, {0}};
     MinicCoreObject object = {0};
     MinicCoreCallView view;
     MinicType actual, function_pointer, scalar = minic_type_int();
