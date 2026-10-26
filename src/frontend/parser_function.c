@@ -54,13 +54,11 @@ static bool aarch64_header_vector_return(MinicType type) {
 
 static bool glibc_header_vector_pcs_attribute(const MinicParser *parser,
                                                const MinicParsedAttribute *attr) {
-    const char *const name = "__aarch64_vector_pcs__";
-    const size_t n = sizeof("__aarch64_vector_pcs__") - 1U;
     return parser != NULL && attr != NULL && !attr->has_arguments &&
-           parser->target_info != NULL &&
-           parser->target_info->architecture == MINIC_TARGET_ARCH_AARCH64 &&
-           minic_parser_span_length(attr->name_span) == n &&
-           memcmp(parser->source + attr->name_span.begin.offset, name, n) == 0;
+           minic_target_info_header_attribute_supported(
+               parser->target_info,
+               parser->source + attr->name_span.begin.offset,
+               minic_parser_span_length(attr->name_span));
 }
 
 static bool function_attribute_class_is_parse_only(MinicAttributeClass semantic_class) {

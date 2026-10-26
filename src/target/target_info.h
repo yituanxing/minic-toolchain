@@ -2,19 +2,12 @@
 #define MINIC_TARGET_TARGET_INFO_H
 
 #include "target/data_layout.h"
-#include "target/riscv64/isa.h"
+#include "target/riscv/isa_features.h"
+#include "target/target_catalog.h"
 
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
-
-typedef enum MinicTargetArchitecture {
-    MINIC_TARGET_ARCH_RISCV64 = 0,
-    MINIC_TARGET_ARCH_X86_64,
-    MINIC_TARGET_ARCH_AARCH64,
-    MINIC_TARGET_ARCH_LOONGARCH64,
-    MINIC_TARGET_ARCH_RISCV32
-} MinicTargetArchitecture;
 
 /* Zero is invalid: a newly registered target must specify its cursor. */
 typedef enum MinicVariadicScalarReadKind {
@@ -46,6 +39,14 @@ typedef struct MinicTargetIntegerModel {
     unsigned int semantic_width_bits[MINIC_INTEGER_RANK_INT128 + 1];
 } MinicTargetIntegerModel;
 
+/* These admit C declaration identities only. They do not promise machine
+ * arithmetic, storage, varargs marshaling or call/return ABI support. */
+typedef enum MinicTargetLanguageCapability {
+    MINIC_TARGET_LANG_EXTENDED_FLOAT_DECLARATIONS = 1U << 0,
+    MINIC_TARGET_LANG_OPAQUE_VECTOR_HEADER_DECLARATIONS = 1U << 1,
+    MINIC_TARGET_LANG_ABI_STATE_VA_LIST_CURSOR = 1U << 2
+} MinicTargetLanguageCapability;
+
 typedef struct MinicTargetInfo {
     MinicTargetArchitecture architecture;
     const MinicDataLayout *data_layout;
@@ -54,6 +55,7 @@ typedef struct MinicTargetInfo {
     /* C identity of libc size_t in canonical runtime builtin prototypes. */
     MinicType libc_size_type;
     MinicIntegerRank word_integer_rank;
+    unsigned int language_type_capabilities;
     bool gnu_sizeof_void_is_one;
     bool gnu_sizeof_function_is_one;
     bool call_frame_return_address_level0;
@@ -69,6 +71,22 @@ typedef struct MinicTargetInfo {
     MinicRiscvIsa riscv_isa;
 } MinicTargetInfo;
 
+/* Invocation-scoped language ABI overrides. Never mutate a canonical target
+ * descriptor or its shared integer_model: two compilations may use different
+ * -fsigned-char/-funsigned-char policies in the same process. */
+typedef struct MinicTargetInvocation {
+    MinicTargetInfo target;
+    MinicTargetIntegerModel integer_model;
+    MinicType default_wide_character_type;
+} MinicTargetInvocation;
+
+bool minic_target_invocation_begin(MinicTargetInvocation *invocation,
+                                   const MinicTargetInfo *canonical);
+bool minic_target_invocation_plain_char(MinicTargetInvocation *invocation,
+                                        MinicIntegerSign sign);
+bool minic_target_invocation_short_wchar(MinicTargetInvocation *invocation,
+                                         bool enabled);
+
 extern const char *const minic_riscv64_argument_registers[8];
 
 const MinicTargetInfo *minic_default_target_info(void);
@@ -76,6 +94,17 @@ const MinicTargetInfo *minic_target_info_for_architecture(MinicTargetArchitectur
 const MinicTargetInfo *minic_target_info_from_name(const char *name);
 const MinicDataLayout *minic_target_info_data_layout(const MinicTargetInfo *target);
 const MinicTargetIntegerModel *minic_target_info_integer_model(const MinicTargetInfo *target);
+/* One admission policy shared by the parser and AST verifier. */
+bool minic_target_info_language_type_supported(const MinicTargetInfo *target,
+                                               MinicTypeBaseKind kind);
+bool minic_target_info_named_builtin_type(const MinicTargetInfo *target,
+                                          const char *spelling, size_t length,
+                                          MinicType *type);
+bool minic_target_info_header_attribute_supported(const MinicTargetInfo *target,
+                                                  const char *spelling,
+                                                  size_t length);
+bool minic_target_info_builtin_va_list_type(const MinicTargetInfo *target,
+                                            MinicType *type);
 bool minic_target_info_variadic_state_copy_type_supported(
     const MinicTargetInfo *, MinicType);
 bool minic_target_info_plain_char_sign(const MinicTargetInfo *target, MinicIntegerSign *sign);

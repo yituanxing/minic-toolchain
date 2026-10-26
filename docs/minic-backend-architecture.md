@@ -146,3 +146,195 @@ The mandatory backend-boundary gate now rejects restoration of x86 Core
 architecture dispatch and ensures that template classification stays owned
 by the ISA. Extend the architecture's existing qualifier/emitter rather than
 adding another `core_asm_try_<ISA>` branch for each new Linux inline asm.
+
+## Target language admission ownership (five-backend pass)
+
+TargetInfo now owns the declaration-time type admission decisions previously
+duplicated by architecture allowlists in `parser_type.c` and `ast_verifier.c`.
+The frontend uses the same query for extended floating point identities, and
+TargetInfo owns header-only opaque vector names plus the builtin va_list cursor
+identity. RV32 continues to reject the extended floating declarations; x86-64
+retains its ABI-state cursor, and AArch64 alone recognizes its opaque NEON/SVE
+header spellings. No ABI marshaling, storage layout or arithmetic support is
+implied by accepting a declaration. The existing emission and Core lowering
+paths are intentionally unchanged.
+
+The boundary gate rejects new `MINIC_TARGET_ARCH_` allowlists in the frontend.
+The native strict gate additionally runs the five-target descriptor contract.
+This is the first semantic-ownership pass; the RV32/RV64 machine legalization
+and product-driver predefined-macro unification remain separate follow-ups.
+
+## RISC-V family compiled-once word-operation legalization
+
+The RV32 two-word long-long and RV64 two-word int128 emitters now share
+`riscv/word_operations.c` for Base-I add/subtract carry/borrow, bitwise
+binary/unary instructions, and one-word CLZ/CTZ counting loops. Register
+preconditions are explicit (t0/t1 values, t2/t3 second argument, t4/t5
+scratch), and the callers still own frame loads/stores, ABI, signedness,
+integer normalization and wide half selection. The shared bit-scan helper
+accepts XLEN and checked bit width; it does not reinterpret a 64-bit RV32
+value as one 64-bit register. This removes two machine-algorithm duplicates
+without reworking the working Linux/Linux-ABI code paths.
+
+The native focused probe emits RV32I 64-bit and RV64I 128-bit source C
+and checks the actual assembler text. It complements, but does not replace,
+the existing real GNU/QEMU and Linux gates.
+
+## Second global read and wide-shift ownership
+
+At the refactor head, the audit again fetched all 302 MiniC production
+C/header files (compiler, frontend, Core, five targets, two MiniC tools and
+public entrypoint) before selecting the next deletion. This exposed three
+ownership constraints: driver predefines intentionally remain a **RV64-only
+driver pipeline**, canonical default RV64 layouts are confined to RV64
+consumers or legacy default API wrappers, and existing multiple target
+runtime/original-program receipts must be preserved. Do not claim the
+user-facing `minic` product driver supports every `minic-cc` backend.
+
+The source-level RV32 and RV64 two-limb shifts had independently reimplemented
+the same Base-I word-shift algorithm. After both full source routes were
+reviewed, the `riscv/word_operations.c` family implementation now handles
+XLEN-dependent 32/64/128 boundaries, preserving sign-fill and non-M machine
+instructions. RV32 still independently classifies shift-count storage and
+passes the high word when its count is 64-bit; RV64 continues to reject
+unqualified wide shift-count types. The focused compile probe tests the
+low/high-count labels on both targets; QEMU matrices remain authoritative
+for dynamic execution.
+
+## Target spelling and product pipeline registration
+
+Target architecture identities and canonical CLI spellings are now registered
+once in `target_catalog.c`. Both the standalone `minic` driver and the
+full `minic-cc` use this catalog; TargetInfo continues to own **all** C
+semantic widths, data layout, ABI and per-invocation RISC-V ISA facts.
+
+`minic --target=<one-of-five> -S preprocessed.i -o out.s` delegates
+directly to the five-backend compiler, preserving the exact machine result
+and function-section flags. This does **not** claim the other targets have
+MiniPP/MiniAS/MiniLD linking pipelines; `-c` and link mode remain RV64
+staged-toolchain-only and fail closed for all four other targets. Option
+validation for RV32I/ILP32 uses the unchanged compiler ISA resolver; RV64
+legacy profiles continue to be qualified by the established driver policy.
+The shared catalog deliberately does not introduce shadow type sizes.
+
+## Per-invocation target options: language ABI is not ISA
+
+A fresh `MinicTargetInvocation` copies the immutable target descriptor and
+its integer model for each translation unit. The `-fsigned-char`,
+`-funsigned-char`, `-fno-signed-char`, `-fno-unsigned-char` switches
+modify the invocation's plain-char signedness, which affects source semantics,
+literal arithmetic, integer promotion and the generated machine scalar
+normalization. It must never mutate global TargetInfo data. `-fshort-wchar`
+changes the wchar representation to unsigned 16-bit and
+`-fno-short-wchar` restores that **target's actual default**, not an
+assumed target-independent type (RV32/RV64 Linux defaults are now signed 32-bit wchar_t).
+The standalone `minic` driver forwards these switches to `minic-cc`
+even through its qualified RV64 CPP/AS/LD pipeline; RV64 CPP also tracks
+the effective plain-char `__CHAR_UNSIGNED__` predefine. PIC switches are
+forwarded on the supported preprocessed-C `-S` path only.
+
+GCC/Clang option ownership guidance:
+
+| Axis | Representative options | Effect and MiniC status |
+| --- | --- | --- |
+| Target C data model | target triple, ILP32/LP64, endian | ABI object sizes, alignment, pointer and long widths, predefined macros; five existing little-endian targets only |
+| ISA availability | `-march` / RISC-V extensions | Native emission and required soft libcalls; exact RV32I and RV64 profiles with final ISA audit |
+| Calling convention | `-mabi`, float ABI | Register/stack argument and return placement; never infer an ABI solely from an ISA name |
+| CPU tuning | `-mcpu`, `-mtune` | Scheduling/cost model, should **not** alter ABI; not implemented, reject |
+| Addressing | `-mcmodel`, `-fpic/-fPIC/-fpie/-fPIE`, `-mrelax` | Relocations, code model, GOT/PLT, ELF load model; RV64 PIC assembly qualified only, other modes not claimed |
+| C language ABI | `-fsigned-char`, `-funsigned-char`, `-fshort-wchar`, `-fshort-enums` | Char sign and promoted values, wchar size, enum layout; first two option families supported, short-enums not qualified |
+| C semantic/optimization assumptions | `-fwrapv`, `-fstrict-aliasing`, `-ffast-math`, `-O*` | Observable overflow, aliasing, FP and optimization behavior; no false compatibility: remain unimplemented |
+| Runtime/object contract | `-ffreestanding`, `-fno-builtin`, `-fcommon`, `-fvisibility`, TLS, stack protector, unwind flags | Header/runtime expectations, linkage, dynamic TLS and exception/security sequences; supported cases stay narrowly scoped |
+
+A frontend type being accepted never implies arithmetic lowering or ABI
+qualification. The driver and the compiler reject options that could silently
+change code or ABI until their owners and validation are implemented.
+For the GCC taxonomy see GCC RISC-V Options and Code Generation Options;
+for LLVM see Clang Command Line Argument Reference.
+
+## RISC-V ISA/ABI explicit profile catalog
+
+Both the driver and compiler read one bounded ISA profile catalog:
+`rv32i`, `rv64i`, `rv64im`, `rv64imafd`, plus
+`rv64ima_zicsr_zifencei` and `rv64imac_zicsr_zifencei`. These latter
+two profiles admit source A/CSR/fence.i (and C) through `-S`, while
+compiler-owned assembly remains **Base-I**. They are deliberately rejected
+for the built-in `-c`/link chain until MiniAS has independently verified
+the extra encodings and ELF attributes.
+
+A profile distinguishes target-available `features` from the smaller
+compiler-selected `codegen_features`. The target may support M while MiniC
+still uses the original Base-I software-runtime implementation. ISA and ABI
+are independently checked: `rv64imafd/lp64` selects the qualified LP64
+soft-float path, while `rv64imafd/lp64d` retains hard-float emission.
+Unknown extension spellings stay fail-closed; no broad ISA grammar or
+Machine IR is introduced.
+
+The historical implicit RV64 target still uses its separately qualified
+`rv64gc/lp64d` assembler path. Replacing it with an explicit profile is
+**not** part of this refactor, because the default ELF acceptance contract
+and the strict instruction audit have different scopes.
+
+## Source GNU ASM versus compiler-selected ISA: stable RV32/RV64 owner boundary
+
+A Linux kernel build may set a superset `-march` for the actual assembler
+because **source-owned** inline or file-scope ASM uses A/CSR/M/privileged/
+vendor extensions. MiniC's plain-C generator is still entitled to emit only
+its qualified Base-I path. The two demands must not be conflated:
+
+- **MiniC:** C semantics, target XLEN/data model, ABI, operand/clobber
+  substitution for supported inline asm shapes, and Base-I machine output.
+  The current qualified RV64 profiles can already optionally select native M
+  for certain operations, but it is an optimization/legalization decision
+  with the Base-I or runtime-call fallback retained.
+- **GNU AS (or later MiniAS):** parse instructions/directives from upstream
+  assembly and source asm, validate the assembler's full `-march` and
+  assembler-scoped options, encode and relocate instructions. MiniC should
+  not implement all extensions merely to preserve that source assembly.
+- **Driver/linker:** forward or resolve the correct ABI, output format and
+  assembler/linker flags. A correct `-mabi` affects C calling and object
+  layout; an assembler feature chosen solely to admit upstream asm need not
+  enable a codegen optimization inside MiniC.
+
+The former opt-in `MINIC_RV64I_ASM_AUDIT=1` diagnostic path now runs
+by default. The existing inline/file-asm emission writes nonexecuting
+source-origin comments around only user assembly templates. Strict RV64I
+emission checks compiler-owned instructions while leaving source asm and
+its directives to GNU AS; external ELF ISA/ABI checks remain separate. This
+removes false Core rejection for code whose assembler needs more extensions
+than MiniC's own Base-I producer. It does not claim unrestricted GCC inline
+asm constraints: unsupported operand forms still reject at the frontend/
+target transport boundary.
+
+## Unified RV32/RV64 optional-M scalar selection
+
+After reviewing the whole compiler and the two emitted ISA paths, the
+RISC-V feature/ABI state is declared in `riscv/isa_features.h` (not
+owned by a 64-bit machine emitter). The shared
+`minic_riscv_plan_integer_arithmetic` is a **small decision point**, not
+a new MIR: it accepts Core multiply/divide/remainder, XLEN and machine
+capability and chooses either `NATIVE_M` or `RUNTIME_LIBCALL` with an
+actual opcode/symbol. Both the RV32 integer emitter and the RV64 arithmetic
+helper now consume this one plan and retain their own register/stack/ABI
+transport, canonicalization and RA-liveness responsibilities.
+
+Explicit RV32I/ILP32 always uses base-I plus external standard runtime
+helpers, and RV64I/LP64 does the same. The qualified RV64IM native M path
+and historical RV64 default remain unchanged. C alone does not select
+any arithmetic replacement; a synthetic RV32M feature is exercised only
+in a **planner unit test**, not exposed as a newly supported `-march`.
+Unrecognized extension combinations stay fail-closed while future M/C/Z
+optimizations can plug into this machine-level selection without changing
+C language acceptance or inline/file GNU assembler provenance.
+
+## Optional extension monotonicity: RV64I/IM wide comparisons
+
+The incremental machine capability model must be monotonic: exposing
+`M` can change the implementation of a C multiply, but must **not**
+remove C comparisons previously legal in pure I. Strict RV64I/LP64 and
+RV64IM/LP64 now use the same `__cmpti2`/`__ucmpti2` compiler-runtime
+fallback for two-word `__int128` less/equality operations. The saved-RA
+frame planner accounts for the call regardless of the M feature bit.
+This does not broaden inline/source GNU assembler policy, nor claim
+that the compiler emits a complete M implementation or supports all
+possible RISC-V extension spellings.

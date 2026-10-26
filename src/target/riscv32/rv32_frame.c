@@ -40,6 +40,7 @@ bool rv32_frame_init(Rv32Frame *frame, const MinicC0Program *program,
     if (frame == NULL || program == NULL || f == NULL || t == NULL ||
         f->value_count > 100000U || f->object_count > 100000U)
         return false;
+    frame->isa = &t->riscv_isa;
     /* The ABI plan is built once; frame and call emission consume exactly
      * its precomputed stack bound and individual argument placements. */
     if (!minic_core_function_facts_analyze(f, &facts))

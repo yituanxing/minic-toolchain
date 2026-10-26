@@ -1,5 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 #include "target/riscv64/isa.h"
+#include "target/target_catalog.h"
 #include "frontend/ast.h"
 #include "core/core_ir.h"
 
@@ -18,26 +19,24 @@ bool minic_riscv_isa_has(const MinicRiscvIsa *isa, uint32_t requirements) {
     return isa != NULL && (isa->features & requirements) == requirements;
 }
 
-/* Small, exact, independently verifiable profiles. Do not parse a large
- * -march grammar and silently accept unsupported extensions. Other ISAs
- * remain completely unaffected, as does the original implicit RV64 target. */
+/* Target ISA availability, codegen choices and psABI are independent.
+ * Unknown ISA spellings fail closed; source-asm supersets remain Base-I. */
 bool minic_riscv_isa_resolve(const char *march, const char *mabi,
                              MinicRiscvIsa *isa, char *reason, size_t capacity) {
     MinicRiscvIsa resolved;
+    const MinicRiscvProfile *profile = minic_riscv_profile_find(march);
     if (isa == NULL || (isa->xlen != 64U && isa->xlen != 32U))
         return reject(reason, capacity, "unsupported RISC-V XLEN");
     if (isa->xlen == 32U) {
-        /* RV32 is a separate ILP32 target. Do not reinterpret RV64 'I'
-         * as a 32-bit code generation implementation. The backend must
-         * independently qualify 32-bit instructions and ABI before output. */
-        if (march != NULL && strcmp(march, "rv32i") != 0)
+        if (march != NULL &&
+            (profile == NULL || profile->kind != MINIC_RISCV_PROFILE_RV32I))
             return reject(reason, capacity, "RV32 currently accepts rv32i only");
         if (mabi != NULL && strcmp(mabi, "ilp32") != 0)
             return reject(reason, capacity, "rv32i requires ilp32");
         resolved = *isa;
-        resolved.xlen = 32U;
         resolved.abi = MINIC_RISCV_ABI_ILP32;
         resolved.features = 0U;
+        resolved.codegen_features = 0U;
         resolved.strict_isa = true;
         *isa = resolved;
         return true;
@@ -47,31 +46,30 @@ bool minic_riscv_isa_resolve(const char *march, const char *mabi,
         return reject(reason, capacity,
                       "explicit -march is required for non-default RISC-V ABI");
     }
-    resolved = *isa;
-    resolved.features = 0U;
-    resolved.strict_isa = true;
-    if (strcmp(march, "rv64i") == 0) {
-        /* I: integer base, no multiply/divide, floating point or atomics. */
-        resolved.abi = MINIC_RISCV_ABI_LP64;
-    } else if (strcmp(march, "rv64im") == 0) {
-        resolved.features = MINIC_RISCV_FEATURE_M;
-        resolved.abi = MINIC_RISCV_ABI_LP64;
-    } else if (strcmp(march, "rv64imafd") == 0) {
-        resolved.features = MINIC_RISCV_FEATURE_M | MINIC_RISCV_FEATURE_A |
-                            MINIC_RISCV_FEATURE_F | MINIC_RISCV_FEATURE_D;
-        resolved.abi = MINIC_RISCV_ABI_LP64D;
-    } else {
+    if (profile == NULL || profile->xlen != 64U)
         return reject(reason, capacity,
-                      "supported explicit -march: rv64i, rv64im, rv64imafd; "
+                      "supported explicit -march: rv64i, rv64im, rv64imafd, "
+                      "rv64ima_zicsr_zifencei, rv64imac_zicsr_zifencei; "
                       "other ISA combinations are not yet qualified");
-    }
-    if (mabi != NULL &&
-        ((resolved.abi == MINIC_RISCV_ABI_LP64 && strcmp(mabi, "lp64") != 0) ||
-         (resolved.abi == MINIC_RISCV_ABI_LP64D && strcmp(mabi, "lp64d") != 0))) {
+    if (mabi == NULL) mabi = profile->mabi;
+    if (strcmp(mabi, "lp64") != 0 &&
+        !(strcmp(mabi, "lp64d") == 0 &&
+          (profile->features & (MINIC_RISCV_FEATURE_F | MINIC_RISCV_FEATURE_D)) ==
+              (MINIC_RISCV_FEATURE_F | MINIC_RISCV_FEATURE_D)))
         return reject(reason, capacity,
-                      "ISA and ABI mismatch: rv64i/rv64im require lp64, "
-                      "rv64imafd requires lp64d");
-    }
+                      "ISA and ABI mismatch: lp64d requires F/D");
+    resolved = *isa;
+    resolved.abi = strcmp(mabi, "lp64d") == 0 ?
+                   MINIC_RISCV_ABI_LP64D : MINIC_RISCV_ABI_LP64;
+    resolved.features = profile->features;
+    resolved.codegen_features = profile->codegen_features;
+    /* The LP64 integer-register FP ABI does not imply LP64D FP calling
+     * convention. Retain the qualified soft-float arithmetic fallback. */
+    if (resolved.abi == MINIC_RISCV_ABI_LP64)
+        resolved.codegen_features &= ~(uint32_t)(MINIC_RISCV_FEATURE_F | MINIC_RISCV_FEATURE_D);
+    if ((resolved.codegen_features & ~resolved.features) != 0U)
+        return reject(reason, capacity, "compiler ISA exceeds target ISA");
+    resolved.strict_isa = true;
     *isa = resolved;
     return true;
 }
@@ -124,14 +122,9 @@ bool minic_riscv_isa_admit_core_instruction(
         break;
     case MINIC_CORE_INSTRUCTION_INTEGER_LESS:
     case MINIC_CORE_INSTRUCTION_SCALAR_EQUAL:
-        if ((core_operand_is_i128(function, instruction->value.binary.left) ||
-             core_operand_is_i128(function, instruction->value.binary.right)) &&
-            minic_riscv_isa_has(isa, MINIC_RISCV_FEATURE_M)) {
-            /* Native M emitters already handle other 128-bit operations,
-             * but the existing comparison emitters do not lower pairs. */
-            return reject(reason, capacity,
-                          "__int128 comparison has no qualified two-limb lowering");
-        }
+        /* Adding M must never remove a C operation admitted on Base-I.
+         * A two-word compare has no native M instruction; strict profiles
+         * select the same compiler-rt pair comparison on I and IM. */
         break;
     case MINIC_CORE_INSTRUCTION_SCALAR_BITCAST:
         if (minic_type_is_int128_integer(instruction->type) ||
@@ -146,7 +139,7 @@ bool minic_riscv_isa_admit_core_instruction(
         /* <=64-bit RV64I uses __muldi3; 128-bit uses upstream
          * compiler-rt __multi3 with integer-register LP64 calling ABI. */
         if (!minic_type_is_int128_integer(instruction->type) ||
-            !minic_riscv_isa_has(isa, MINIC_RISCV_FEATURE_M))
+            !minic_riscv_codegen_has(isa, MINIC_RISCV_FEATURE_M))
             return true;
         required = MINIC_RISCV_FEATURE_M;
         machine = "mulhu";
@@ -171,7 +164,7 @@ bool minic_riscv_isa_admit_core_instruction(
     case MINIC_CORE_INSTRUCTION_FLOAT_DIVIDE:
         /* In LP64 with no F extension, the target-owned lowering uses
          * libgcc's __{add,sub,mul,div}sf3 soft-float interface. */
-        if (!minic_riscv_isa_has(isa, MINIC_RISCV_FEATURE_F) &&
+        if (!minic_riscv_codegen_has(isa, MINIC_RISCV_FEATURE_F) &&
             isa->abi == MINIC_RISCV_ABI_LP64)
             return true;
         required = MINIC_RISCV_FEATURE_F;
@@ -183,7 +176,7 @@ bool minic_riscv_isa_admit_core_instruction(
     case MINIC_CORE_INSTRUCTION_DOUBLE_MULTIPLY:
     case MINIC_CORE_INSTRUCTION_DOUBLE_DIVIDE:
         /* Exactly the corresponding __*df3 library call, not F/D code. */
-        if (!minic_riscv_isa_has(
+        if (!minic_riscv_codegen_has(
                 isa, MINIC_RISCV_FEATURE_F | MINIC_RISCV_FEATURE_D) &&
             isa->abi == MINIC_RISCV_ABI_LP64)
             return true;
@@ -205,7 +198,7 @@ bool minic_riscv_isa_admit_core_instruction(
         break;
     default: break;
     }
-    if (required == 0U || minic_riscv_isa_has(isa, required)) return true;
+    if (required == 0U || minic_riscv_codegen_has(isa, required)) return true;
     /* Distinguish the exact failing Core opcode, not merely the FP ISA
      * family used as a diagnostic placeholder. This is useful when a
      * compiler-rt translation unit contains many inline helper functions. */
@@ -298,13 +291,11 @@ bool minic_riscv_isa_lp64_integer_signature_supported(
     return true;
 }
 
-bool minic_riscv64_asm_audit_mode(void) {
-    const char *enabled = getenv("MINIC_RV64I_ASM_AUDIT");
-    return enabled != NULL && strcmp(enabled, "1") == 0;
-}
-
+/* Provenance is part of the ordinary assembly format, not an opt-in mode.
+ * Source-owned GNU asm is passed through after Core validates operand
+ * transport. RISC-V's compiler-emitted ISA is audited separately from it.
+ * Markers are nonexecuting assembler comments, preserving ELF content. */
 bool minic_riscv64_asm_audit_marker(FILE *file, bool begin) {
-    if (!minic_riscv64_asm_audit_mode()) return true;
     return file != NULL && fprintf(file, "# MINIC_RV64I_ASM_%s\n",
                                    begin ? "BEGIN" : "END") >= 0;
 }
@@ -387,8 +378,8 @@ static uint32_t required_features(const char *op, const char **description) {
 }
 
 /* .insn, macro and ISA-setting directives may bypass a normal -march
- * check; reject these for all explicit profiles. User-provided arbitrary
- * inline asm is already rejected before reaching this audit. */
+ * check when produced by MiniC. User-supplied directives inside a marked
+ * source region remain the assembler's responsibility. */
 static bool escape_directive(const char *p) {
     return strncmp(p, ".insn", 5) == 0 ||
            strncmp(p, ".macro", 6) == 0 ||
@@ -407,7 +398,6 @@ bool minic_riscv64_check_isa_assembly(const char *path,
     ssize_t n;
     bool valid = true;
     bool in_user_asm = false;
-    const bool provenance = minic_riscv64_asm_audit_mode();
     if (isa == NULL || !isa->strict_isa)
         return reject(reason, capacity, "strict RISC-V ISA profile required");
     in = fopen(path, "rb");
@@ -421,7 +411,7 @@ bool minic_riscv64_check_isa_assembly(const char *path,
         (void)n;
         ++lineno;
         while (isspace((unsigned char)*p)) ++p;
-        if (provenance && strncmp(p, "# MINIC_RV64I_ASM_BEGIN", 23) == 0 &&
+        if (strncmp(p, "# MINIC_RV64I_ASM_BEGIN", 23) == 0 &&
             (p[23] == '\n' || p[23] == '\0')) {
             if (in_user_asm) {
                 valid = reject(reason, capacity, "nested inline asm provenance markers");
@@ -430,7 +420,7 @@ bool minic_riscv64_check_isa_assembly(const char *path,
             in_user_asm = true;
             continue;
         }
-        if (provenance && strncmp(p, "# MINIC_RV64I_ASM_END", 21) == 0 &&
+        if (strncmp(p, "# MINIC_RV64I_ASM_END", 21) == 0 &&
             (p[21] == '\n' || p[21] == '\0')) {
             if (!in_user_asm) {
                 valid = reject(reason, capacity, "unpaired inline asm end marker");
@@ -471,12 +461,12 @@ bool minic_riscv64_check_isa_assembly(const char *path,
         op[length] = '\0';
         if (length == 0U) continue;
         needed = required_features(op, &requirement);
-        if (needed == UINT32_MAX || !minic_riscv_isa_has(isa, needed)) {
+        if (needed == UINT32_MAX || !minic_riscv_codegen_has(isa, needed)) {
             if (reason != NULL && capacity != 0U)
                 (void)snprintf(reason, capacity,
                                "RISC-V ISA line %zu: instruction '%s' requires %s; "
-                               "selected features 0x%x; software lowering not qualified",
-                               lineno, op, requirement, (unsigned)isa->features);
+                               "compiler features 0x%x; software lowering not qualified",
+                               lineno, op, requirement, (unsigned)isa->codegen_features);
             valid = false;
             break;
         }

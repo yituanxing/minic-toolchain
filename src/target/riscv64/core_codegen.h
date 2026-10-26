@@ -2,7 +2,7 @@
 #define MINIC_TARGET_RISCV64_CORE_CODEGEN_H
 
 #include "core/core_ir.h"
-#include "target/riscv64/function_symbol.h"
+#include "target/riscv/function_symbol.h"
 #include "target/riscv64/isa.h"
 #include "minic/compiler.h"
 

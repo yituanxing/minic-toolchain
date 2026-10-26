@@ -91,11 +91,7 @@ type_is_valid(const MinicC0Program *program, const MinicTargetInfo *target, Mini
              type.base_kind == MINIC_TYPE_BASE_FLOAT64 ||
              type.base_kind == MINIC_TYPE_BASE_FLOAT32X ||
              type.base_kind == MINIC_TYPE_BASE_FLOAT64X) &&
-            (target == NULL ||
-             (target->architecture != MINIC_TARGET_ARCH_RISCV64 &&
-              target->architecture != MINIC_TARGET_ARCH_X86_64 &&
-              target->architecture != MINIC_TARGET_ARCH_AARCH64 &&
-              target->architecture != MINIC_TARGET_ARCH_LOONGARCH64))) {
+            !minic_target_info_language_type_supported(target, type.base_kind)) {
             /* Preserves distinct glibc extended-FP declaration types on all
              * four Linux targets. Acceptance is NOT support for executing extended-FP
              * arithmetic or crossing its ABI boundary. */
@@ -114,8 +110,7 @@ type_is_valid(const MinicC0Program *program, const MinicTargetInfo *target, Mini
         /* Header-level GCC vector builtin identity, not a scalar alias.
          * Accept C typedef declarations, but do not claim vector ABI,
          * alignment, sizeof, passing or machine operation support. */
-        return target != NULL &&
-               target->architecture == MINIC_TARGET_ARCH_AARCH64 &&
+        return minic_target_info_language_type_supported(target, type.base_kind) &&
                type.record_id == MINIC_RECORD_INVALID &&
                type.array_type_id == MINIC_ARRAY_TYPE_INVALID &&
                type.function_type_id == MINIC_FUNCTION_TYPE_INVALID &&
@@ -126,7 +121,7 @@ type_is_valid(const MinicC0Program *program, const MinicTargetInfo *target, Mini
         /* Builtin va_list is represented internally by a pointer-sized
          * cursor proxy. Its address can also appear as T** in Core STORE,
          * so validate each pointer depth, but reject a bare pseudo-scalar. */
-        return target != NULL && target->architecture == MINIC_TARGET_ARCH_X86_64 &&
+        return minic_target_info_language_type_supported(target, type.base_kind) &&
                type.pointer_depth >= 1U &&
                type.record_id == MINIC_RECORD_INVALID &&
                type.array_type_id == MINIC_ARRAY_TYPE_INVALID &&

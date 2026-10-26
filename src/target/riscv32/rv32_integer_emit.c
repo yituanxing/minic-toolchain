@@ -1,5 +1,6 @@
 #include "target/riscv32/rv32_internal.h"
 #include "target/riscv/instruction_select.h"
+#include "target/riscv/word_operations.h"
 #include <inttypes.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -396,15 +397,22 @@ bool rv32_emit_integer_instruction(FILE *out, const MinicCoreFunction *f,
         /* Compiler target lowering only chooses an ABI-compatible libcall.
          * Actual arithmetic lives in the pinned GNU libgcc 14.2.0 sources,
          * not a second implementation in MiniC's instruction generator. */
-        const char *helper;
         if (!rv32_scalar(f, ins->type, &bits, &is_signed))
             return false;
-        helper = minic_riscv_integer_arithmetic_symbol(
-            ins->kind, !is_signed, 32U);
-        if (helper == NULL) return false;
+        MinicRiscvIntegerPlan plan;
+        if (!minic_riscv_plan_integer_arithmetic(
+                fr->isa, ins->kind, !is_signed, 32U, &plan))
+            return false;
+        if (plan.strategy == MINIC_RISCV_INTEGER_NATIVE_M)
+            return rv32_load2(out, fr, ins) &&
+                   fprintf(out, "  %s t0, t0, t1\n", plan.opcode) >= 0 &&
+                   rv32_canon(out, f, ins->type, "t0") &&
+                   rv32_slot(out, fr, ins->result, "t0", false);
+        if (plan.strategy != MINIC_RISCV_INTEGER_RUNTIME_LIBCALL)
+            return false;
         return rv32_load2(out, fr, ins) &&
                fprintf(out, "  mv a0, t0\n  mv a1, t1\n  call %s\n",
-                       helper) >= 0 &&
+                       plan.symbol) >= 0 &&
                rv32_canon(out, f, ins->type, "a0") &&
                rv32_slot(out, fr, ins->result, "a0", false);
     }
@@ -484,41 +492,10 @@ bool rv32_emit_integer_instruction(FILE *out, const MinicCoreFunction *f,
                    !rv32_slot(out, fr, input, "t0", true)) {
             return false;
         }
-        if (ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_CLZ) {
-            if (fprintf(out,
-                    "  li t1, 0\n"
-                    "  li t2, 1\n"
-                    "  slli t2, t2, %u\n"
-                    ".L%s_rv32_clz_loop_%" PRIu32 ":\n"
-                    "  and t3, t0, t2\n"
-                    "  bnez t3, .L%s_rv32_clz_done_%" PRIu32 "\n"
-                    "  addi t1, t1, 1\n"
-                    "  srli t2, t2, 1\n"
-                    "  bnez t2, .L%s_rv32_clz_loop_%" PRIu32 "\n"
-                    ".L%s_rv32_clz_done_%" PRIu32 ":\n",
-                    width - 1U, symbol, ins->result,
-                    symbol, ins->result, symbol, ins->result,
-                    symbol, ins->result) < 0)
-                return false;
-        } else {
-            if (fprintf(out,
-                    "  beqz t0, .L%s_rv32_ctz_zero_%" PRIu32 "\n"
-                    "  li t1, 0\n"
-                    ".L%s_rv32_ctz_loop_%" PRIu32 ":\n"
-                    "  andi t2, t0, 1\n"
-                    "  bnez t2, .L%s_rv32_ctz_done_%" PRIu32 "\n"
-                    "  addi t1, t1, 1\n"
-                    "  srli t0, t0, 1\n"
-                    "  j .L%s_rv32_ctz_loop_%" PRIu32 "\n"
-                    ".L%s_rv32_ctz_zero_%" PRIu32 ":\n"
-                    "  li t1, %u\n"
-                    ".L%s_rv32_ctz_done_%" PRIu32 ":\n",
-                    symbol, ins->result, symbol, ins->result,
-                    symbol, ins->result, symbol, ins->result,
-                    symbol, ins->result, width,
-                    symbol, ins->result) < 0)
-                return false;
-        }
+        if (!minic_riscv_emit_word_bitscan(
+                out, ins->kind, symbol, "rv32",
+                ins->result, width, 32U))
+            return false;
         /* High- or low-half zero adds exactly one XLEN to the result. */
         return (!wide || fprintf(out, "  add t1, t1, t4\n") >= 0) &&
                rv32_slot(out, fr, ins->result, "t1", false);

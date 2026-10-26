@@ -44,8 +44,9 @@ bool rv32_scalar(const MinicCoreFunction *f, MinicType t,
     case MINIC_INTEGER_RANK_LONG: *bits = 32U; break;
     default: return false;
     }
-    *sign = effective.integer_sign == MINIC_INTEGER_SIGN_SIGNED &&
-            !effective.is_plain_char;
+    /* Plain char already carries the invocation's effective signedness.
+     * Rejecting is_plain_char here silently breaks -fsigned-char loads. */
+    *sign = effective.integer_sign == MINIC_INTEGER_SIGN_SIGNED;
     return true;
 }
 bool rv32_canon(FILE *out, const MinicCoreFunction *f,

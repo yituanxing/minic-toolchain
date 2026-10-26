@@ -1,7 +1,9 @@
 /* M0 metadata-only ABI audit. No new target code is emitted here. */
 #include "target/target_info.h"
+#include "target/riscv/instruction_select.h"
 
 #include <stdio.h>
+#include <string.h>
 
 static int verify_lp64(const char *name,
                        MinicTargetArchitecture expected_arch,
@@ -73,6 +75,214 @@ static int verify_rv32(void) {
     return puts("RV32_ILP32_MODEL=PASS xlen=32 ptr=4 long=4 longlong=8 signedness=qualified") == EOF ? 1 : 0;
 }
 
+/* Parser/verifier language admission and ABI cursor identity must agree on
+ * all five target descriptors. Declaration admission is not codegen support. */
+static int verify_language_admission(void) {
+    static const char *const names[] = {
+        "riscv32-linux", "riscv64-linux", "x86_64-linux",
+        "aarch64-linux", "loongarch64-linux"
+    };
+    size_t i;
+    for (i = 0U; i < sizeof(names) / sizeof(names[0]); ++i) {
+        const MinicTargetInfo *t = minic_target_info_from_name(names[i]);
+        MinicType va_type;
+        MinicType vector_type;
+        bool is_x86 = i == 2U;
+        bool is_arm = i == 3U;
+        bool has_extended_float = i != 0U;
+        bool has_vector;
+        if (t == NULL ||
+            minic_target_info_language_type_supported(
+                t, MINIC_TYPE_BASE_FLOAT128) != has_extended_float ||
+            minic_target_info_language_type_supported(
+                t, MINIC_TYPE_BASE_FLOAT32X) != has_extended_float ||
+            minic_target_info_language_type_supported(
+                t, MINIC_TYPE_BASE_AARCH64_SVE_BOOL) != is_arm ||
+            minic_target_info_language_type_supported(
+                t, MINIC_TYPE_BASE_X86_VA_LIST_CURSOR) != is_x86 ||
+            !minic_target_info_builtin_va_list_type(t, &va_type) ||
+            va_type.pointer_depth != 1U ||
+            (va_type.base_kind == MINIC_TYPE_BASE_X86_VA_LIST_CURSOR) != is_x86) {
+            (void)fprintf(stderr, "FAIL target language/varargs contract: %s\\n", names[i]);
+            return 1;
+        }
+        if (minic_target_info_header_attribute_supported(
+                t, "__aarch64_vector_pcs__",
+                sizeof("__aarch64_vector_pcs__") - 1U) != is_arm ||
+            minic_target_info_header_attribute_supported(
+                t, "__aarch64_vector_pcs__", 3U)) {
+            (void)fprintf(stderr, "FAIL target header attribute contract: %s\\n", names[i]);
+            return 1;
+        }
+        has_vector = minic_target_info_named_builtin_type(
+            t, "__SVBool_t", sizeof("__SVBool_t") - 1U, &vector_type);
+        if (has_vector != is_arm ||
+            (is_arm && vector_type.base_kind != MINIC_TYPE_BASE_AARCH64_SVE_BOOL) ||
+            minic_target_info_named_builtin_type(
+                t, "__SVBool_t", sizeof("__SVBool_t") - 2U, NULL) ||
+            minic_target_info_named_builtin_type(
+                t, "__not_a_builtin", sizeof("__not_a_builtin") - 1U, NULL)) {
+            (void)fprintf(stderr, "FAIL target opaque builtin contract: %s\\n", names[i]);
+            return 1;
+        }
+    }
+    return puts("TARGET_LANGUAGE_ADMISSION=PASS five-targets") == EOF ? 1 : 0;
+}
+
+static int verify_registered_target_catalog(void) {
+    const MinicTargetCatalogEntry *targets;
+    size_t i, count;
+    unsigned int toolchain_count = 0U;
+    targets = minic_target_catalog_all(&count);
+    if (targets == NULL || count != 5U ||
+        minic_target_catalog_find("not-a-target") != NULL) return 1;
+    for (i = 0U; i < count; ++i) {
+        const MinicTargetCatalogEntry *entry =
+            minic_target_catalog_find(targets[i].name);
+        const MinicTargetInfo *info =
+            minic_target_info_from_name(targets[i].name);
+        if (entry != &targets[i] || info == NULL ||
+            info->architecture != entry->architecture ||
+            info->data_layout == NULL ||
+            !(entry->product_driver_stages &
+              MINIC_TARGET_STAGE_ASSEMBLY_FROM_PREPROCESSED_C))
+            return 1;
+        if (entry->product_driver_stages &
+            MINIC_TARGET_STAGE_STAGED_ASSEMBLER_AND_LINKER) {
+            if (entry->architecture != MINIC_TARGET_ARCH_RISCV64)
+                return 1;
+            ++toolchain_count;
+        }
+    }
+    if (toolchain_count != 1U) return 1;
+    return puts("TARGET_CATALOG=PASS five_backends=5 full_staged=rv64_only") == EOF;
+}
+
+static int verify_riscv_profile_catalog(void) {
+    const MinicRiscvProfile *profiles;
+    size_t n, i, j;
+    profiles = minic_riscv_profile_all(&n);
+    if (profiles == NULL || n != 6U ||
+        minic_riscv_profile_find("rv64gc") != NULL ||
+        minic_riscv_profile_find("rv32im") != NULL ||
+        minic_riscv_profile_find(NULL) != NULL)
+        return 1;
+    for (i = 0U; i < n; ++i) {
+        const MinicRiscvProfile *p = &profiles[i];
+        if (p != minic_riscv_profile_find(p->march) ||
+            (p->xlen != 32U && p->xlen != 64U) ||
+            ((p->xlen == 32U) != (p->kind == MINIC_RISCV_PROFILE_RV32I)) ||
+            strcmp(p->mabi, p->xlen == 32U ? "ilp32" :
+                   p->kind == MINIC_RISCV_PROFILE_RV64IMAFD ? "lp64d" : "lp64") != 0 ||
+            (p->codegen_features & ~p->features) != 0U ||
+            (p->xlen == 32U && p->features != 0U))
+            return 1;
+        for (j = i + 1U; j < n; ++j)
+            if (strcmp(p->march, profiles[j].march) == 0)
+                return 1;
+    }
+    if (minic_riscv_profile_find("rv64ima_zicsr_zifencei") == NULL ||
+        minic_riscv_profile_find("rv64imac_zicsr_zifencei") == NULL)
+        return 1;
+    return puts("RISCV_PROFILE_CATALOG=PASS six_explicit_profiles Base_I_source_asm_supersets") == EOF;
+}
+
+static int verify_invocation_language_abi(void) {
+    const MinicTargetCatalogEntry *entries;
+    size_t i, count;
+    entries = minic_target_catalog_all(&count);
+    for (i = 0U; i < count; ++i) {
+        const MinicTargetInfo *canonical =
+            minic_target_info_from_name(entries[i].name);
+        MinicTargetInvocation invocation, second;
+        MinicIntegerSign original;
+        MinicType original_wchar;
+        if (canonical == NULL ||
+            !minic_target_info_plain_char_sign(canonical, &original) ||
+            !minic_target_info_wide_character_type(canonical, &original_wchar) ||
+            !minic_target_invocation_begin(&invocation, canonical) ||
+            !minic_target_invocation_begin(&second, canonical) ||
+            !minic_target_invocation_plain_char(
+                &invocation, original == MINIC_INTEGER_SIGN_SIGNED
+                    ? MINIC_INTEGER_SIGN_UNSIGNED : MINIC_INTEGER_SIGN_SIGNED) ||
+            !minic_target_invocation_short_wchar(&invocation, true) ||
+            invocation.target.integer_model != &invocation.integer_model ||
+            invocation.integer_model.plain_char_sign == original ||
+            second.integer_model.plain_char_sign != original ||
+            canonical->integer_model->plain_char_sign != original ||
+            !minic_type_equal(second.target.wide_character_type, original_wchar) ||
+            !minic_target_invocation_short_wchar(&invocation, false) ||
+            !minic_type_equal(invocation.target.wide_character_type, original_wchar))
+            return (void)fprintf(stderr,
+                "TARGET_INVOCATION_ABI=FAIL target:%s\n", entries[i].name), 1;
+    }
+    return puts("TARGET_INVOCATION_ABI=PASS five_targets immutable_models signed_char short_wchar_restore") == EOF;
+}
+
+static int verify_riscv_integer_strategy(void) {
+    /* Only the machine selector sees optional M. The same typed Core
+     * operation remains compilable through a Base-I libcall on both XLENs.
+     * C/other extensions are irrelevant until a qualified emitter consumes
+     * them. The synthetic RV32M subtarget is a selector test only: the
+     * CLI does not yet claim RV32M machine/ABI certification. */
+    const MinicCoreInstructionKind ops[] = {
+        MINIC_CORE_INSTRUCTION_INTEGER_MULTIPLY,
+        MINIC_CORE_INSTRUCTION_INTEGER_DIVIDE,
+        MINIC_CORE_INSTRUCTION_INTEGER_REMAINDER
+    };
+    const char *expected_native[][2] = {
+        {"mul", "mul"}, {"div", "divu"}, {"rem", "remu"}
+    };
+    size_t x, op, sign;
+    for (x = 0U; x < 2U; ++x) {
+        MinicRiscvIsa base = {
+            .xlen = x == 0U ? 32U : 64U,
+            .abi = x == 0U ? MINIC_RISCV_ABI_ILP32 : MINIC_RISCV_ABI_LP64,
+            .features = 0U,
+            .strict_isa = true
+        };
+        MinicRiscvIsa extended = base;
+        MinicRiscvIntegerPlan plan;
+        extended.features = MINIC_RISCV_FEATURE_M | MINIC_RISCV_FEATURE_C;
+        extended.codegen_features = MINIC_RISCV_FEATURE_M;
+        for (op = 0U; op < sizeof(ops) / sizeof(ops[0]); ++op) {
+            for (sign = 0U; sign < 2U; ++sign) {
+                const char *sym = minic_riscv_integer_arithmetic_symbol(
+                    ops[op], sign != 0U, base.xlen);
+                if (sym == NULL ||
+                    !minic_riscv_plan_integer_arithmetic(
+                        &base, ops[op], sign != 0U, base.xlen, &plan) ||
+                    plan.strategy != MINIC_RISCV_INTEGER_RUNTIME_LIBCALL ||
+                    plan.opcode != NULL ||
+                    plan.symbol == NULL ||
+                    strcmp(plan.symbol, sym) != 0)
+                    return 1;
+                if (!minic_riscv_plan_integer_arithmetic(
+                        &extended, ops[op], sign != 0U, base.xlen, &plan) ||
+                    plan.strategy != MINIC_RISCV_INTEGER_NATIVE_M ||
+                    plan.symbol != NULL ||
+                    strcmp(plan.opcode, expected_native[op][sign]) != 0)
+                    return 1;
+                /* Target still supports M, but this invocation emits I. */
+                extended.codegen_features = 0U;
+                if (!minic_riscv_plan_integer_arithmetic(
+                        &extended, ops[op], sign != 0U, base.xlen, &plan) ||
+                    plan.strategy != MINIC_RISCV_INTEGER_RUNTIME_LIBCALL)
+                    return 1;
+                extended.features = MINIC_RISCV_FEATURE_M | MINIC_RISCV_FEATURE_C;
+        extended.codegen_features = MINIC_RISCV_FEATURE_M;
+            }
+        }
+        if (minic_riscv_plan_integer_arithmetic(
+                &base, ops[0], false, base.xlen == 32U ? 64U : 32U, &plan) ||
+            minic_riscv_plan_integer_arithmetic(
+                &base, MINIC_CORE_INSTRUCTION_INTEGER_ADD, false,
+                base.xlen, &plan))
+            return 1;
+    }
+    return puts("RISCV_BASE_I_STRATEGY=PASS rv32_rv64 M_optional C_ignored runtime_fallback") == EOF;
+}
+
 int main(void) {
     const MinicTargetInfo *rv = minic_default_target_info();
     const MinicTargetInfo *x86 = minic_target_info_from_name("x86_64-linux");
@@ -88,7 +298,11 @@ int main(void) {
         (void)fprintf(stderr, "FAIL four independent target identities\n");
         return 1;
     }
-    if (verify_rv32() != 0 ||
+    if (verify_riscv_integer_strategy() != 0 || verify_registered_target_catalog() != 0 || verify_riscv_profile_catalog() != 0 ||
+        verify_lp64("riscv64-linux", MINIC_TARGET_ARCH_RISCV64,
+                    MINIC_INTEGER_SIGN_UNSIGNED, MINIC_INTEGER_RANK_INT,
+                    MINIC_INTEGER_SIGN_SIGNED) != 0 ||
+        verify_invocation_language_abi() != 0 || verify_language_admission() != 0 || verify_rv32() != 0 ||
         verify_lp64("aarch64-linux", MINIC_TARGET_ARCH_AARCH64,
                     MINIC_INTEGER_SIGN_UNSIGNED, MINIC_INTEGER_RANK_INT,
                     MINIC_INTEGER_SIGN_UNSIGNED) != 0 ||

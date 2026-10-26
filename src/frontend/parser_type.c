@@ -50,30 +50,18 @@ static bool minic_parser_gnu_int128_name(const MinicParser *parser,
     return false;
 }
 
-/* AArch64 glibc includes GCC builtin NEON/SVE typedefs in otherwise
- * scalar headers. Keep their C identities opaque and distinct: accepting
- * the TYPE SPELLING does not enable vector layout, storage or execution. */
-static bool minic_parser_aarch64_header_builtin(const MinicParser *parser,
-                                                MinicToken token,
-                                                MinicType *out_type) {
-    MinicTypeBaseKind base;
+/* Target-owned named builtin spellings keep CPU identities out of the parser.
+ * Recognition is independent of storage, operations and ABI admission. */
+static bool minic_parser_target_header_builtin(const MinicParser *parser,
+                                               MinicToken token,
+                                               MinicType *out_type) {
     if (parser == NULL || parser->target_info == NULL ||
-        parser->target_info->architecture != MINIC_TARGET_ARCH_AARCH64 ||
         token.kind != MINIC_TOKEN_IDENTIFIER) return false;
-    if (minic_parser_token_text_equals(parser, token, "__Float32x4_t"))
-        base = MINIC_TYPE_BASE_AARCH64_FLOAT32X4;
-    else if (minic_parser_token_text_equals(parser, token, "__Float64x2_t"))
-        base = MINIC_TYPE_BASE_AARCH64_FLOAT64X2;
-    else if (minic_parser_token_text_equals(parser, token, "__SVFloat32_t"))
-        base = MINIC_TYPE_BASE_AARCH64_SVE_FLOAT32;
-    else if (minic_parser_token_text_equals(parser, token, "__SVFloat64_t"))
-        base = MINIC_TYPE_BASE_AARCH64_SVE_FLOAT64;
-    else if (minic_parser_token_text_equals(parser, token, "__SVBool_t"))
-        base = MINIC_TYPE_BASE_AARCH64_SVE_BOOL;
-    else return false;
-    if (out_type != NULL)
-        *out_type = minic_type_aarch64_header_builtin(base);
-    return true;
+    return minic_target_info_named_builtin_type(
+        parser->target_info,
+        parser->source + token.span.begin.offset,
+        token.span.end.offset - token.span.begin.offset,
+        out_type);
 }
 
 bool minic_parser_token_starts_type_name(const MinicParser *parser, MinicToken token) {
@@ -102,14 +90,11 @@ bool minic_parser_token_starts_type_name(const MinicParser *parser, MinicToken t
             return false;
         }
         if (minic_parser_token_is_gnu_typeof(parser, token) ||
-            minic_parser_aarch64_header_builtin(parser, token, NULL)) {
+            minic_parser_target_header_builtin(parser, token, NULL)) {
             return true;
         }
-        if (parser->target_info != NULL &&
-            (parser->target_info->architecture == MINIC_TARGET_ARCH_RISCV64 ||
-             parser->target_info->architecture == MINIC_TARGET_ARCH_X86_64 ||
-             parser->target_info->architecture == MINIC_TARGET_ARCH_AARCH64 ||
-             parser->target_info->architecture == MINIC_TARGET_ARCH_LOONGARCH64) &&
+        if (minic_target_info_language_type_supported(
+                parser->target_info, MINIC_TYPE_BASE_FLOAT128) &&
             (minic_parser_token_text_equals(parser, token, "_Float128") ||
              minic_parser_token_text_equals(parser, token, "_Float32") ||
              minic_parser_token_text_equals(parser, token, "_Float64") ||
@@ -586,11 +571,8 @@ bool minic_parser_parse_type_specifiers(MinicParser *parser, MinicType *type) {
          * Retain DISTINCT C type identities: recognizing source declarations
          * and sizeof does NOT enable FP operations or calling conventions.
          * Those must remain subject to target-specific legalization. */
-        if (parser->target_info == NULL ||
-            (parser->target_info->architecture != MINIC_TARGET_ARCH_RISCV64 &&
-             parser->target_info->architecture != MINIC_TARGET_ARCH_X86_64 &&
-             parser->target_info->architecture != MINIC_TARGET_ARCH_AARCH64 &&
-             parser->target_info->architecture != MINIC_TARGET_ARCH_LOONGARCH64)) {
+        if (!minic_target_info_language_type_supported(
+                parser->target_info, MINIC_TYPE_BASE_FLOAT128)) {
             minic_parser_error(parser, "extended float type is unsupported on this target");
             return false;
         }
@@ -605,17 +587,15 @@ bool minic_parser_parse_type_specifiers(MinicParser *parser, MinicType *type) {
         else
             parsed_type = minic_type_float128();
         if (!minic_parser_advance(parser)) return false;
-    } else if (minic_parser_aarch64_header_builtin(
+    } else if (minic_parser_target_header_builtin(
                    parser, parser->current, &parsed_type)) {
         if (!minic_parser_advance(parser)) return false;
     } else if (minic_parser_identifier_is(parser, "__builtin_va_list")) {
         /* RV64 keeps the validated sequential pointer model. On x86-64
          * the pointer-based internal cursor is not the actual SysV array
          * type: retain a distinguishable identity for fail-closed queries. */
-        if (parser->target_info != NULL &&
-            parser->target_info->architecture == MINIC_TARGET_ARCH_X86_64) {
-            parsed_type = minic_type_x86_va_list_cursor();
-        } else if (!minic_type_pointer_to(minic_type_void(), &parsed_type)) {
+        if (!minic_target_info_builtin_va_list_type(
+                parser->target_info, &parsed_type)) {
             minic_parser_error(parser, "cannot build __builtin_va_list type");
             return false;
         }

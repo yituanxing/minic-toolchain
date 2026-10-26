@@ -47,6 +47,26 @@ grep -q 'call __muldi3' "$tmp/rv64i-mul.s"
 if grep -Eq '^[[:space:]]*(mul|mulh|div|rem)[[:space:]]' "$tmp/rv64i-mul.s"; then
   echo 'RV64_ISA=FAIL RV64I software multiply leaked M' >&2; exit 1
 fi
+# Optional M cannot regress correctness of two-word C comparisons.
+# There is no native two-word M compare; the same Base-I runtime path works
+# for rv64i and rv64im. Only the compiler-owned output is audited here.
+cat >"$tmp/int128-cmp.i" <<'SRC'
+typedef __int128 s128;
+typedef unsigned __int128 u128;
+int signed_less(s128 a, s128 b) { return a < b; }
+int unsigned_less(u128 a, u128 b) { return a < b; }
+int equal_wide(u128 a, u128 b) { return a == b; }
+SRC
+for march in rv64i rv64im; do
+  "$MINIC_CC" --target=riscv64-linux "-march=$march" -mabi=lp64 \
+    -S "$tmp/int128-cmp.i" -o "$tmp/int128-cmp-$march.s"
+  grep -q 'call __cmpti2' "$tmp/int128-cmp-$march.s"
+  grep -q 'call __ucmpti2' "$tmp/int128-cmp-$march.s"
+  grep -Eq '[[:space:]]+sd ra,' "$tmp/int128-cmp-$march.s"
+  grep -Eq '[[:space:]]+ld ra,' "$tmp/int128-cmp-$march.s"
+done
+echo 'RV64_I128_COMPARISON_FALLBACK=PASS base_i=1 optional_m=1'
+
 # LP64 always permits floating-point C signatures. The ABI maps raw
 # float/double payload bits through a0-a7 and a0 return, never fa0/fa7.
 for march in rv64i rv64im; do
@@ -57,7 +77,16 @@ for march in rv64i rv64im; do
     echo "RV64_LP64_ABI=FAIL $march leaked floating registers" >&2; exit 1
   fi
 done
-for selection in "rv64i lp64d" "rv64im lp64d" "rv64imafd lp64"; do
+# The target ISA may contain F/D while the ABI remains integer-register LP64.
+# This must use the qualified software FP libcall rather than LP64D lowering.
+"$MINIC_CC" --target=riscv64-linux -march=rv64imafd -mabi=lp64 \
+  -S "$tmp/float.i" -o "$tmp/rv64imafd-lp64-softfp.s"
+grep -q 'call __adddf3' "$tmp/rv64imafd-lp64-softfp.s"
+if grep -Eq '^[[:space:]]*(fadd|fmv|fcvt|fsub|fmul|fdiv)\.' \
+   "$tmp/rv64imafd-lp64-softfp.s"; then
+  echo 'RV64_LP64_ABI=FAIL unqualified F/D use for LP64' >&2; exit 1
+fi
+for selection in "rv64i lp64d" "rv64im lp64d"; do
   read -r march mabi <<<"$selection"
   if "$MINIC_CC" --target=riscv64-linux "-march=$march" "-mabi=$mabi" \
       -S "$tmp/add.i" -o "$tmp/invalid-abi.s" >"$tmp/abi.out" 2>"$tmp/abi.err"; then
@@ -72,6 +101,22 @@ for unqualified in rv64gc rv64imac rv32i rv64imaf; do
   fi
   grep -q 'supported explicit -march' "$tmp/bad.err"
 done
+
+# The assembler can admit A/CSR/C while MiniC still emits Base-I.
+# Check compiler-owned arithmetic, not just whether -S returned success.
+for march in rv64ima_zicsr_zifencei rv64imac_zicsr_zifencei; do
+  "$MINIC_CC" --target=riscv64-linux "-march=$march" -mabi=lp64 \
+    -S "$tmp/mul.i" -o "$tmp/baseline-$march.s"
+  for symbol in __muldi3 __divdi3 __moddi3; do
+    grep -q "call $symbol" "$tmp/baseline-$march.s"
+  done
+  if grep -Eq '^[[:space:]]*(mul|mulw|div|divu|rem|remu)[[:space:]]' \
+    "$tmp/baseline-$march.s"; then
+    echo "RV64_ISA=FAIL unselected M machine opcode in $march" >&2
+    exit 1
+  fi
+done
+echo 'RV64_ISA_SOURCE_SUPERSET=PASS assembler_features_not_codegen_features'
 
 # ISA selection is made over reachable blocks, including implicit pointer
 # scaling and overflow helpers, not merely the literal C multiply operator.
@@ -655,4 +700,4 @@ SRC
     echo 'RV64_ISA_QEMU=PASS profiles=rv64i,rv64im gnu_minic_exit_exact=1'
   fi
 fi
-echo 'RV64_ISA_PROFILES=PASS rv64i_lp64=1 rv64im_lp64=1 rv64imafd_lp64d=1 runtime_libcalls=5 pointer_scale=1 rejected_isa_abi=1 default_byte_exact=1'
+echo 'RV64_ISA_PROFILES=PASS rv64i_lp64=1 rv64im_lp64=1 rv64imafd_lp64d=1 rv64imafd_lp64_softfp=1 runtime_libcalls=5 pointer_scale=1 rejected_isa_abi=1 default_byte_exact=1'

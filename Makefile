@@ -146,6 +146,7 @@ MINIC_SOURCES := \
 	src/frontend/type.c \
 	src/target/data_layout.c \
 	src/target/target_info.c \
+	src/target/target_catalog.c \
 	src/target/backend.c \
 	src/target/backend_core_usage.c \
 	src/target/common/global_emit.c \
@@ -183,6 +184,7 @@ MINIC_SOURCES := \
 	src/target/riscv64/function_abi_plan.c \
 	src/target/riscv64/memory_emit.c \
 	src/target/riscv/record_copy_bytes.c \
+	src/target/riscv/word_operations.c \
 	src/target/riscv64/inline_asm_emit.c \
 	src/target/riscv64/call_emit.c \
 	src/target/riscv64/scalar_emit.c \
@@ -236,7 +238,8 @@ MINIC_SOURCES := \
 	tools/minic-cc/main.c
 MINIC_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(MINIC_SOURCES))
 MINIC_CC_BINARY := $(BUILD_DIR)/bin/minic-cc
-MINIC_DRIVER_OBJECTS := $(BUILD_DIR)/obj/tools/minic/main.o
+MINIC_DRIVER_OBJECTS := $(BUILD_DIR)/obj/tools/minic/main.o \
+	$(BUILD_DIR)/obj/src/target/target_catalog.o
 # The compiler boundary stays in minic-cc. minic is the user-facing staged
 # driver and preserves the historical -S preprocessed-input compatibility path.
 MINIC_BINARY  := $(BUILD_DIR)/bin/minic
@@ -351,6 +354,7 @@ AST_CONTRACT_TEST_SOURCES := \
 	src/frontend/type.c \
 	src/target/data_layout.c \
 	src/target/target_info.c \
+	src/target/target_catalog.c \
 	tests/frontend/ast_contract_test.c
 AST_CONTRACT_TEST_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(AST_CONTRACT_TEST_SOURCES))
 AST_CONTRACT_TEST_BINARY  := $(BUILD_DIR)/tests/frontend/ast-contract-test
@@ -360,6 +364,7 @@ LAYOUT_TEST_SOURCES := \
 	src/frontend/type.c \
 	src/target/data_layout.c \
 	src/target/target_info.c \
+	src/target/target_catalog.c \
 	src/target/riscv64/layout.c \
 	tests/target/riscv64/layout_test.c
 LAYOUT_TEST_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(LAYOUT_TEST_SOURCES))
@@ -1370,3 +1375,9 @@ distclean:
 -include $(AST_CONTRACT_TEST_OBJECTS:.o=.d)
 -include $(LAYOUT_TEST_OBJECTS:.o=.d)
 -include $(RV64_ABI_TEST_OBJECTS:.o=.d)
+
+# Cross-target semantics/options smoke without the GNU QEMU toolchains.
+.PHONY: check-minic-target-abi-options
+check-minic-target-abi-options: $(MINIC_BINARY) $(MINIC_CC_BINARY)
+	MINIC="$(abspath $(MINIC_BINARY))" MINIC_CC="$(abspath $(MINIC_CC_BINARY))" \
+	bash tests/compiler/c0/probe-target-language-abi-options.sh

@@ -10,7 +10,7 @@
 #include "target/common/core_call_view.h"
 #include "target/riscv/instruction_select.h"
 #include "target/riscv32/rv32_abi_cursor.h"
-#include "target/riscv64/function_symbol.h"
+#include "target/riscv/function_symbol.h"
 #include "target/riscv32/rv32_global_emit.h"
 #include "target/riscv/record_copy_bytes.h"
 #include "target/data_layout.h"
@@ -595,6 +595,10 @@ static bool rv32_emit_ins(FILE *out, const MinicC0Program *program,
     case MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO:
         return rv32_emit_integer_instruction(out, f, fr, ins, symbol);
     case MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT:
+    case MINIC_CORE_INSTRUCTION_FLOAT_ADD:
+    case MINIC_CORE_INSTRUCTION_FLOAT_SUBTRACT:
+    case MINIC_CORE_INSTRUCTION_FLOAT_MULTIPLY:
+    case MINIC_CORE_INSTRUCTION_FLOAT_DIVIDE:
     case MINIC_CORE_INSTRUCTION_DOUBLE_ADD:
     case MINIC_CORE_INSTRUCTION_DOUBLE_SUBTRACT:
     case MINIC_CORE_INSTRUCTION_DOUBLE_MULTIPLY:

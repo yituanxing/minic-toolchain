@@ -23,6 +23,26 @@ bool rv32_emit_fp_instruction(FILE *out, const MinicCoreFunction *f,
                fprintf(out, "  li t0, %" PRIu32 "\n", (uint32_t)raw) >= 0 &&
                rv32_slot(out, fr, ins->result, "t0", false);
     }
+    /* Single-precision soft-float uses one ILP32 integer argument register
+     * per operand (a0/a1), and returns the raw IEEE-754 bits in a0.
+     * MiniC neither emits F instructions nor reimplements arithmetic. */
+    case MINIC_CORE_INSTRUCTION_FLOAT_ADD:
+    case MINIC_CORE_INSTRUCTION_FLOAT_SUBTRACT:
+    case MINIC_CORE_INSTRUCTION_FLOAT_MULTIPLY:
+    case MINIC_CORE_INSTRUCTION_FLOAT_DIVIDE: {
+        const char *helper = minic_riscv_softfloat_arithmetic_symbol(ins->kind);
+        MinicCoreValueId left = ins->value.binary.left;
+        MinicCoreValueId right = ins->value.binary.right;
+        if (helper == NULL || !minic_type_is_float(ins->type) ||
+            left >= f->value_count || right >= f->value_count ||
+            !minic_type_is_float(f->values[left].type) ||
+            !minic_type_is_float(f->values[right].type) ||
+            !rv32_slot(out, fr, left, "a0", true) ||
+            !rv32_slot(out, fr, right, "a1", true) ||
+            fprintf(out, "  call %s\n", helper) < 0)
+            return false;
+        return rv32_slot(out, fr, ins->result, "a0", false);
+    }
     /* All IEEE-754 arithmetic and comparisons are supplied by pinned LLVM
      * compiler-rt 19.1.7, not reimplemented as target machine instructions.
      * ILP32 soft-float ABI transfers each binary64 through a0/a1 and a2/a3. */

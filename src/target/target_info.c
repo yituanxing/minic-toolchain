@@ -227,9 +227,12 @@ const MinicTargetInfo *minic_target_info_for_architecture(
             rv64_target.riscv_isa.strict_isa = false;
             rv64_target.data_layout = minic_default_data_layout();
             rv64_target.integer_model = &minic_rv64_integer_model;
-            rv64_target.wide_character_type = minic_type_unsigned_short();
+            /* RISC-V Linux psABI: wchar_t is signed 32-bit on ILP32 and LP64.
+             * -fshort-wchar remains a per-invocation 16-bit override. */
+            rv64_target.wide_character_type = minic_type_int();
             rv64_target.libc_size_type = minic_type_unsigned_long();
             rv64_target.word_integer_rank = MINIC_INTEGER_RANK_LONG;
+            rv64_target.language_type_capabilities = MINIC_TARGET_LANG_EXTENDED_FLOAT_DECLARATIONS;
             rv64_target.gnu_sizeof_void_is_one = true;
             rv64_target.gnu_sizeof_function_is_one = true;
             rv64_target.variadic_scalar_read_kind = MINIC_VARIADIC_SCALAR_READ_LINEAR_SLOT;
@@ -248,6 +251,7 @@ const MinicTargetInfo *minic_target_info_for_architecture(
             x86_64_target.wide_character_type = minic_type_int();
             x86_64_target.libc_size_type = minic_type_unsigned_long();
             x86_64_target.word_integer_rank = MINIC_INTEGER_RANK_LONG;
+            x86_64_target.language_type_capabilities = MINIC_TARGET_LANG_EXTENDED_FLOAT_DECLARATIONS | MINIC_TARGET_LANG_ABI_STATE_VA_LIST_CURSOR;
             x86_64_target.gnu_sizeof_void_is_one = true;
             x86_64_target.gnu_sizeof_function_is_one = true;
             x86_64_target.variadic_scalar_read_kind = MINIC_VARIADIC_SCALAR_READ_ABI_CURSOR;
@@ -266,6 +270,7 @@ const MinicTargetInfo *minic_target_info_for_architecture(
             aarch64_target.wide_character_type = minic_type_unsigned_int();
             aarch64_target.libc_size_type = minic_type_unsigned_long();
             aarch64_target.word_integer_rank = MINIC_INTEGER_RANK_LONG;
+            aarch64_target.language_type_capabilities = MINIC_TARGET_LANG_EXTENDED_FLOAT_DECLARATIONS | MINIC_TARGET_LANG_OPAQUE_VECTOR_HEADER_DECLARATIONS;
             aarch64_target.gnu_sizeof_void_is_one = true;
             aarch64_target.gnu_sizeof_function_is_one = true;
             aarch64_target.variadic_scalar_read_kind = MINIC_VARIADIC_SCALAR_READ_ABI_CURSOR;
@@ -282,6 +287,7 @@ const MinicTargetInfo *minic_target_info_for_architecture(
             loongarch64_target.wide_character_type = minic_type_int();
             loongarch64_target.libc_size_type = minic_type_unsigned_long();
             loongarch64_target.word_integer_rank = MINIC_INTEGER_RANK_LONG;
+            loongarch64_target.language_type_capabilities = MINIC_TARGET_LANG_EXTENDED_FLOAT_DECLARATIONS;
             loongarch64_target.gnu_sizeof_void_is_one = true;
             loongarch64_target.gnu_sizeof_function_is_one = true;
             loongarch64_target.variadic_scalar_read_kind = MINIC_VARIADIC_SCALAR_READ_LINEAR_SLOT;
@@ -293,30 +299,52 @@ const MinicTargetInfo *minic_target_info_for_architecture(
     return NULL;
 }
 
+/* Target C language/ABI state is a translation-unit property, not a global
+ * CPU property. This owns the option semantics and preserves defaults when a
+ * -fno-* spelling is explicitly present. */
+bool minic_target_invocation_begin(MinicTargetInvocation *invocation,
+                                   const MinicTargetInfo *canonical) {
+    if (invocation == NULL || canonical == NULL ||
+        canonical->integer_model == NULL || canonical->data_layout == NULL)
+        return false;
+    invocation->target = *canonical;
+    invocation->integer_model = *canonical->integer_model;
+    invocation->target.integer_model = &invocation->integer_model;
+    invocation->default_wide_character_type = canonical->wide_character_type;
+    return true;
+}
+
+bool minic_target_invocation_plain_char(MinicTargetInvocation *invocation,
+                                        MinicIntegerSign sign) {
+    if (invocation == NULL ||
+        (sign != MINIC_INTEGER_SIGN_SIGNED &&
+         sign != MINIC_INTEGER_SIGN_UNSIGNED))
+        return false;
+    invocation->integer_model.plain_char_sign = sign;
+    return true;
+}
+
+bool minic_target_invocation_short_wchar(MinicTargetInvocation *invocation,
+                                         bool enabled) {
+    if (invocation == NULL) return false;
+    invocation->target.wide_character_type = enabled
+        ? minic_type_unsigned_short()
+        : invocation->default_wide_character_type;
+    /* -fno-short-wchar restores the canonical descriptor chosen by begin().
+     * A target that defaults to 16-bit wchar must not suddenly become int. */
+    return true;
+}
+
 const MinicTargetInfo *minic_default_target_info(void) {
     return minic_target_info_for_architecture(MINIC_TARGET_ARCH_RISCV64);
 }
 
+/* Target spellings are owned by one catalog shared with the staged driver.
+ * TargetInfo remains the authority for C widths, language facts and ABI. */
 const MinicTargetInfo *minic_target_info_from_name(const char *name) {
-    if (name == NULL) {
-        return NULL;
-    }
-    if (strcmp(name, "riscv32-linux") == 0) {
-        return minic_target_info_for_architecture(MINIC_TARGET_ARCH_RISCV32);
-    }
-    if (strcmp(name, "riscv64-linux") == 0) {
-        return minic_target_info_for_architecture(MINIC_TARGET_ARCH_RISCV64);
-    }
-    if (strcmp(name, "x86_64-linux") == 0) {
-        return minic_target_info_for_architecture(MINIC_TARGET_ARCH_X86_64);
-    }
-    if (strcmp(name, "aarch64-linux") == 0) {
-        return minic_target_info_for_architecture(MINIC_TARGET_ARCH_AARCH64);
-    }
-    if (strcmp(name, "loongarch64-linux") == 0) {
-        return minic_target_info_for_architecture(MINIC_TARGET_ARCH_LOONGARCH64);
-    }
-    return NULL;
+    const MinicTargetCatalogEntry *entry = minic_target_catalog_find(name);
+    return entry == NULL ? NULL :
+           minic_target_info_for_architecture(entry->architecture);
 }
 
 const MinicDataLayout *minic_target_info_data_layout(const MinicTargetInfo *target) {
@@ -325,6 +353,93 @@ const MinicDataLayout *minic_target_info_data_layout(const MinicTargetInfo *targ
 
 const MinicTargetIntegerModel *minic_target_info_integer_model(const MinicTargetInfo *target) {
     return target == NULL ? NULL : target->integer_model;
+}
+
+
+/* The language admission gate is intentionally independent of the emitter.
+ * A declaration may be parsed while its arithmetic and ABI remain unsupported. */
+bool minic_target_info_language_type_supported(const MinicTargetInfo *target,
+                                               MinicTypeBaseKind kind) {
+    unsigned int required;
+    if (target == NULL) return false;
+    switch (kind) {
+    case MINIC_TYPE_BASE_FLOAT128:
+    case MINIC_TYPE_BASE_FLOAT32:
+    case MINIC_TYPE_BASE_FLOAT64:
+    case MINIC_TYPE_BASE_FLOAT32X:
+    case MINIC_TYPE_BASE_FLOAT64X:
+        required = MINIC_TARGET_LANG_EXTENDED_FLOAT_DECLARATIONS;
+        break;
+    case MINIC_TYPE_BASE_AARCH64_FLOAT32X4:
+    case MINIC_TYPE_BASE_AARCH64_FLOAT64X2:
+    case MINIC_TYPE_BASE_AARCH64_SVE_FLOAT32:
+    case MINIC_TYPE_BASE_AARCH64_SVE_FLOAT64:
+    case MINIC_TYPE_BASE_AARCH64_SVE_BOOL:
+        required = MINIC_TARGET_LANG_OPAQUE_VECTOR_HEADER_DECLARATIONS;
+        break;
+    case MINIC_TYPE_BASE_X86_VA_LIST_CURSOR:
+        required = MINIC_TARGET_LANG_ABI_STATE_VA_LIST_CURSOR;
+        break;
+    default:
+        return false;
+    }
+    return (target->language_type_capabilities & required) != 0U;
+}
+
+/* Opaque header-only identities are registered at the target boundary. No
+ * frontend CPU-name test or implicit vector layout follows from recognition. */
+bool minic_target_info_named_builtin_type(const MinicTargetInfo *target,
+                                          const char *spelling, size_t length,
+                                          MinicType *type) {
+    static const struct {
+        const char *spelling;
+        MinicTypeBaseKind kind;
+    } names[] = {
+        {"__Float32x4_t", MINIC_TYPE_BASE_AARCH64_FLOAT32X4},
+        {"__Float64x2_t", MINIC_TYPE_BASE_AARCH64_FLOAT64X2},
+        {"__SVFloat32_t", MINIC_TYPE_BASE_AARCH64_SVE_FLOAT32},
+        {"__SVFloat64_t", MINIC_TYPE_BASE_AARCH64_SVE_FLOAT64},
+        {"__SVBool_t", MINIC_TYPE_BASE_AARCH64_SVE_BOOL}
+    };
+    size_t index;
+    if (target == NULL || spelling == NULL) return false;
+    for (index = 0U; index < sizeof(names) / sizeof(names[0]); ++index) {
+        if (length == strlen(names[index].spelling) &&
+            memcmp(spelling, names[index].spelling, length) == 0 &&
+            minic_target_info_language_type_supported(target, names[index].kind)) {
+            if (type != NULL) {
+                *type = minic_type_aarch64_header_builtin(names[index].kind);
+            }
+            return true;
+        }
+    }
+    return false;
+}
+
+/* A glibc header-only PCS marker must not enable actual vector call ABI.
+ * Naming/target admission is centralized here, not in the C parser. */
+bool minic_target_info_header_attribute_supported(const MinicTargetInfo *target,
+                                                  const char *spelling,
+                                                  size_t length) {
+    static const char name[] = "__aarch64_vector_pcs__";
+    return target != NULL && spelling != NULL &&
+           (target->language_type_capabilities &
+            MINIC_TARGET_LANG_OPAQUE_VECTOR_HEADER_DECLARATIONS) != 0U &&
+           length == sizeof(name) - 1U &&
+           memcmp(spelling, name, length) == 0;
+}
+
+/* Only the x86 SysV cursor has a distinct internal identity today. Other
+ * existing targets preserve their canonical sequential void-pointer model. */
+bool minic_target_info_builtin_va_list_type(const MinicTargetInfo *target,
+                                            MinicType *type) {
+    if (type == NULL) return false;
+    if (minic_target_info_language_type_supported(
+            target, MINIC_TYPE_BASE_X86_VA_LIST_CURSOR)) {
+        *type = minic_type_x86_va_list_cursor();
+        return true;
+    }
+    return minic_type_pointer_to(minic_type_void(), type);
 }
 
 bool minic_target_info_plain_char_sign(const MinicTargetInfo *target, MinicIntegerSign *sign) {

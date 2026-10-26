@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Classify MiniC RV64I codegen vs source-owned GNU inline/file assembly.
 
-The experimental producer is:
-  MINIC_RV64I_ASM_AUDIT=1 minic -S -march=rv64i -mabi=lp64 ...
+The ordinary producer is:
+  minic-cc -S --target=riscv64-linux -march=rv64i -mabi=lp64 ...
 
-Only MiniC-created provenance markers bracket the *user assembly template*.
+MiniC-created provenance markers bracket only the *user assembly template*.
 Compiler-generated operand loads, spills, frame code and libcalls remain
 outside the regions and must be RV64I. This is a textual regression gate,
 not proof that unknown GAS directives expand to legal final machine words.

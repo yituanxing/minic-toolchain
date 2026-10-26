@@ -1,5 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
 
+#include "target/target_catalog.h"
+
 #include <errno.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -20,11 +22,27 @@ typedef enum MinicDriverMode {
     MINIC_DRIVER_ASSEMBLY
 } MinicDriverMode;
 
+/* Per-translation-unit ABI options are forwarded unchanged to minic-cc.
+ * The standalone driver must not invent another target language model. */
+typedef struct MinicDriverLanguageOptions {
+    const char *plain_char;
+    const char *wide_char;
+    const char *relocation;
+} MinicDriverLanguageOptions;
+
+static bool minic_driver_plain_char_unsigned(const MinicDriverLanguageOptions *o) {
+    return o->plain_char == NULL ||
+           strcmp(o->plain_char, "-funsigned-char") == 0 ||
+           strcmp(o->plain_char, "-fno-signed-char") == 0;
+}
+
+
 static void append_rv64_linux_musl_predefines(char **arguments,
                                                size_t *count,
                                                bool hosted,
                                                const char *march,
-                                               const char *mabi) {
+                                               const char *mabi,
+                                 const MinicDriverLanguageOptions *language) {
     arguments[(*count)++] = "-D__STDC__=1";
     arguments[(*count)++] = "-D__STDC_VERSION__=201112L";
     /*
@@ -46,6 +64,8 @@ static void append_rv64_linux_musl_predefines(char **arguments,
     arguments[(*count)++] = "-D__unix=1";
     arguments[(*count)++] = "-D__riscv=1";
     arguments[(*count)++] = "-D__riscv_xlen=64";
+    if (minic_driver_plain_char_unsigned(language))
+        arguments[(*count)++] = "-D__CHAR_UNSIGNED__=1";
     arguments[(*count)++] = "-D__LP64__=1";
     arguments[(*count)++] = "-D_LP64=1";
     if (mabi != NULL && strcmp(mabi, "lp64") == 0) {
@@ -53,7 +73,10 @@ static void append_rv64_linux_musl_predefines(char **arguments,
     } else {
         arguments[(*count)++] = "-D__riscv_float_abi_double=1";
     }
-    if (march != NULL && strcmp(march, "rv64i") != 0) {
+    /* CPP macros describe available hardware, not compiler codegen choices. */
+    if (march == NULL ||
+        (minic_riscv_profile_find(march) != NULL &&
+         (minic_riscv_profile_find(march)->features & MINIC_RISCV_FEATURE_M))) {
         arguments[(*count)++] = "-D__riscv_mul=1";
         arguments[(*count)++] = "-D__riscv_div=1";
     }
@@ -71,13 +94,20 @@ static void append_rv64_linux_musl_predefines(char **arguments,
 }
 
 static void usage(FILE *out, const char *argv0) {
-    fprintf(out,
-            "usage: %s [-S|-c] [--target=riscv64-linux|x86_64-linux] [-march=rv64i|rv64im|rv64imafd] [-mabi=lp64|lp64d] [--rtlib=PATH (link only)] [-ffreestanding|-fhosted] [-ffunction-sections|-fno-function-sections] [-static] "
+    const MinicTargetCatalogEntry *targets;
+    size_t count, i;
+    targets = minic_target_catalog_all(&count);
+    (void)fprintf(out, "usage: %s [-S|-c] [--target=", argv0);
+    for (i = 0U; i < count; ++i)
+        (void)fprintf(out, "%s%s", i == 0U ? "" : "|", targets[i].name);
+    (void)fprintf(out,
+            "] [-march=rv32i|rv64i|rv64im|rv64imafd|rv64ima_zicsr_zifencei|rv64imac_zicsr_zifencei] [-mabi=ilp32|lp64|lp64d] [-fsigned-char|-funsigned-char] [-fshort-wchar|-fno-short-wchar] [-fPIC|-fPIE (only -S)] [--rtlib=PATH (link only)] [-ffreestanding|-fhosted] [-ffunction-sections|-fno-function-sections] [-static] "
             "[-nostdlib] [-nostartfiles] [-nodefaultlibs] [-nostdinc] "
             "[--sysroot DIR] [-DNAME[=VALUE]] [-UNAME] [-IDIR] "
             "[-isystem DIR] [-include FILE] [-LDIR] [-lNAME] "
-            "-o OUTPUT INPUT...\n",
-            argv0);
+            "-o OUTPUT INPUT...\n"
+            "  -S: all registered MiniC backends (preprocessed C input)\n"
+            "  -c/link: RV64 staged CPP/AS/LD pipeline only\n");
 }
 
 static char *duplicate_text(const char *text) {
@@ -221,7 +251,8 @@ static int preprocess_c_to_file(const char *input,
                                 size_t cpp_forward_count,
                                 char *cpp,
                                 const char *march,
-                                const char *mabi) {
+                                const char *mabi,
+                                 const MinicDriverLanguageOptions *language) {
     char *include_dir = NULL;
     char *arguments[256];
     size_t count = 0U;
@@ -233,7 +264,8 @@ static int preprocess_c_to_file(const char *input,
     arguments[count++] = "-P";
     arguments[count++] = "-undef";
     arguments[count++] = "-nostdinc";
-    append_rv64_linux_musl_predefines(arguments, &count, hosted, march, mabi);
+    append_rv64_linux_musl_predefines(
+        arguments, &count, hosted, march, mabi, language);
     /*
      * User include directories must shadow the driver's default sysroot
      * headers, matching GCC's -I-before-system search semantics.  MiniPP
@@ -273,7 +305,8 @@ static int compile_c_to_assembly(const char *input,
                                  char *cpp,
                                  char *cc,
                                  const char *march,
-                                 const char *mabi) {
+                                 const char *mabi,
+                                 const MinicDriverLanguageOptions *language) {
     char *temp_i = make_temp_path("/tmp/minic-driver-i-XXXXXX");
     int status = 1;
 
@@ -287,9 +320,9 @@ static int compile_c_to_assembly(const char *input,
                                   no_stdinc,
                                   cpp_forward,
                                   cpp_forward_count,
-                                  cpp, march, mabi);
+                                  cpp, march, mabi, language);
     if (status == 0) {
-        char *arguments[12];
+        char *arguments[16];
         size_t argument_count = 0U;
         arguments[argument_count++] = cc;
         arguments[argument_count++] = "-S";
@@ -306,6 +339,10 @@ static int compile_c_to_assembly(const char *input,
             arguments[argument_count++] = "-mabi";
             arguments[argument_count++] = (char *)mabi;
         }
+        if (language->plain_char != NULL)
+            arguments[argument_count++] = (char *)language->plain_char;
+        if (language->wide_char != NULL)
+            arguments[argument_count++] = (char *)language->wide_char;
         arguments[argument_count] = NULL;
         status = run_tool(arguments);
     }
@@ -334,7 +371,8 @@ static int compile_c_to_object(const char *input,
                                char *cc,
                                char *as,
                                const char *march,
-                               const char *mabi) {
+                               const char *mabi,
+                                 const MinicDriverLanguageOptions *language) {
     char *temp_s = make_temp_path("/tmp/minic-driver-s-XXXXXX");
     int status = 1;
 
@@ -350,18 +388,23 @@ static int compile_c_to_object(const char *input,
                                    cpp_forward,
                                    cpp_forward_count,
                                    cpp,
-                                   cc, march, mabi);
+                                   cc, march, mabi, language);
     if (status == 0) {
         char *arguments[8];
         size_t argument_count = 0U;
         /* User-facing driver uses the same ISA and ABI as minic-cc.
          * The default existing rv64gc/lp64d pipeline is untouched. */
-        char *isa_option = march != NULL ?
-            (strcmp(march, "rv64i") == 0 ? "-march=rv64i" :
-             strcmp(march, "rv64im") == 0 ? "-march=rv64im" :
-                                            "-march=rv64imafd") : "-march=rv64gc";
-        char *abi_option = mabi != NULL && strcmp(mabi, "lp64") == 0 ?
-            "-mabi=lp64" : "-mabi=lp64d";
+        char isa_option[64], abi_option[32];
+        int isa_size = snprintf(isa_option, sizeof(isa_option), "-march=%s",
+                                march != NULL ? march : "rv64gc");
+        int abi_size = snprintf(abi_option, sizeof(abi_option), "-mabi=%s",
+                                mabi != NULL ? mabi : "lp64d");
+        /* The profile was already validated by the shared catalog in main.
+         * The assembler receives exactly that pair, without an independent
+         * ternary map silently rewriting a future accepted ISA. */
+        if (isa_size < 0 || (size_t)isa_size >= sizeof(isa_option) ||
+            abi_size < 0 || (size_t)abi_size >= sizeof(abi_option))
+            return 1;
         arguments[argument_count++] = as;
         arguments[argument_count++] = isa_option;
         arguments[argument_count++] = abi_option;
@@ -413,10 +456,12 @@ int main(int argc, char **argv) {
     bool no_stdinc = false;
     bool function_sections = false;
     const char *target_name = "riscv64-linux";
+    const MinicTargetCatalogEntry *target_entry;
     bool target_given = false;
     const char *march = NULL;
     const char *mabi = NULL;
     const char *runtime_archive = NULL;
+    MinicDriverLanguageOptions language = {0};
     char *cpp = NULL;
     char *cc = NULL;
     char *as = NULL;
@@ -469,6 +514,21 @@ int main(int argc, char **argv) {
             hosted = true;
         } else if (strcmp(argument, "-fno-builtin") == 0) {
             /* MiniC has no implicit builtin substitution yet. */
+        } else if (strcmp(argument, "-fsigned-char") == 0 ||
+                   strcmp(argument, "-funsigned-char") == 0 ||
+                   strcmp(argument, "-fno-signed-char") == 0 ||
+                   strcmp(argument, "-fno-unsigned-char") == 0) {
+            language.plain_char = argument;
+        } else if (strcmp(argument, "-fshort-wchar") == 0 ||
+                   strcmp(argument, "-fno-short-wchar") == 0) {
+            language.wide_char = argument;
+        } else if (strcmp(argument, "-fPIC") == 0 ||
+                   strcmp(argument, "-fpic") == 0 ||
+                   strcmp(argument, "-fPIE") == 0 ||
+                   strcmp(argument, "-fpie") == 0 ||
+                   strcmp(argument, "-fno-pie") == 0 ||
+                   strcmp(argument, "-fno-pic") == 0) {
+            language.relocation = argument;
         } else if (strcmp(argument, "-ffunction-sections") == 0) {
             function_sections = true;
         } else if (strcmp(argument, "-fno-function-sections") == 0) {
@@ -571,38 +631,48 @@ int main(int argc, char **argv) {
         }
     }
 
-    /* The staged driver still owns RV64 preprocessing, assembly and linking.
-     * Never run its RV64 pipeline for x86-64 while the native x86 backend and
-     * target-specific surrounding tools are not yet wired. */
-    if (strcmp(target_name, "riscv64-linux") != 0) {
-        if (strcmp(target_name, "x86_64-linux") == 0) {
-            fprintf(stderr, "minic: x86_64-linux driver pipeline is not implemented; "
-                            "minic-cc recognizes the target for frontend/Core validation\n");
-        } else {
-            fprintf(stderr, "minic: unsupported-target:%s\n", target_name);
-        }
+    target_entry = minic_target_catalog_find(target_name);
+    if (target_entry == NULL) {
+        fprintf(stderr, "minic: unsupported-target:%s\n", target_name);
         return 2;
     }
+    /* C -> GNU assembly may use all registered backends. The staged PP,
+     * assembler and linker remain exclusively RV64; reject unqualified
+     * -c/link *before* invoking any RV64 tool for a foreign target. */
+    if (mode != MINIC_DRIVER_ASSEMBLY &&
+        (target_entry->product_driver_stages &
+         MINIC_TARGET_STAGE_STAGED_ASSEMBLER_AND_LINKER) == 0U) {
+        fprintf(stderr, "minic: target-requires-minic-cc-or-external-assembler:%s\n",
+                target_name);
+        return 2;
+    }
+    if (target_entry->architecture == MINIC_TARGET_ARCH_RISCV64) {
     /* Be strict about the whole pipeline: a compiler accepting RV64I but
      * the assembler silently using RV64GC would violate the target contract. */
     if (march != NULL) {
-        const char *expected_abi;
-        if (strcmp(march, "rv64i") == 0 || strcmp(march, "rv64im") == 0) {
-            expected_abi = "lp64";
-        } else if (strcmp(march, "rv64imafd") == 0) {
-            expected_abi = "lp64d";
-        } else {
+        const MinicRiscvProfile *profile = minic_riscv_profile_find(march);
+        if (profile == NULL || profile->xlen != 64U) {
             fprintf(stderr, "minic: unsupported-riscv-isa:%s\n", march);
             return 2;
         }
-        if (mabi != NULL && strcmp(mabi, expected_abi) != 0) {
+        if (mabi == NULL) mabi = profile->mabi;
+        if (strcmp(mabi, "lp64") != 0 &&
+            !(strcmp(mabi, "lp64d") == 0 &&
+              (profile->features & (MINIC_RISCV_FEATURE_F | MINIC_RISCV_FEATURE_D)) ==
+                  (MINIC_RISCV_FEATURE_F | MINIC_RISCV_FEATURE_D))) {
             fprintf(stderr, "minic: incompatible-riscv-isa-abi:%s/%s\n", march, mabi);
             return 2;
         }
-        mabi = expected_abi;
+        /* Unqualified built-in MiniAS ISA combinations are -S only. */
+        if (mode != MINIC_DRIVER_ASSEMBLY &&
+            !profile->staged_assembler_qualified) {
+            fprintf(stderr, "minic: extended-riscv-isa-requires--S-external-assembler:%s\n", march);
+            return 2;
+        }
     } else if (mabi != NULL && strcmp(mabi, "lp64d") != 0) {
         fprintf(stderr, "minic: explicit-nondefault-abi-requires--march\n");
         return 2;
+    }
     }
     if (runtime_archive != NULL) {
         if (mode != MINIC_DRIVER_LINK || march == NULL ||
@@ -614,6 +684,10 @@ int main(int argc, char **argv) {
             fprintf(stderr, "minic: --rtlib-unreadable:%s\n", runtime_archive);
             return 2;
         }
+    }
+    if (language.relocation != NULL && mode != MINIC_DRIVER_ASSEMBLY) {
+        fprintf(stderr, "minic: PIC/PIE requires -S (qualified backend-only)\n");
+        return 2;
     }
     if (input_count == 0U || output == NULL) {
         usage(stderr, argv[0]);
@@ -648,7 +722,7 @@ int main(int argc, char **argv) {
     }
 
     if (mode == MINIC_DRIVER_ASSEMBLY) {
-        char *cc_arguments[12];
+        char *cc_arguments[18];
         size_t argument_count = 0U;
         cc_arguments[argument_count++] = cc;
         cc_arguments[argument_count++] = "-S";
@@ -657,6 +731,8 @@ int main(int argc, char **argv) {
         cc_arguments[argument_count++] = (char *)output;
         cc_arguments[argument_count++] =
             function_sections ? "-ffunction-sections" : "-fno-function-sections";
+        cc_arguments[argument_count++] = "--target";
+        cc_arguments[argument_count++] = (char *)target_name;
         if (march != NULL) {
             cc_arguments[argument_count++] = "-march";
             cc_arguments[argument_count++] = (char *)march;
@@ -665,6 +741,12 @@ int main(int argc, char **argv) {
             cc_arguments[argument_count++] = "-mabi";
             cc_arguments[argument_count++] = (char *)mabi;
         }
+        if (language.plain_char != NULL)
+            cc_arguments[argument_count++] = (char *)language.plain_char;
+        if (language.wide_char != NULL)
+            cc_arguments[argument_count++] = (char *)language.wide_char;
+        if (language.relocation != NULL)
+            cc_arguments[argument_count++] = (char *)language.relocation;
         cc_arguments[argument_count] = NULL;
         status = run_tool(cc_arguments);
         goto done;
@@ -681,7 +763,7 @@ int main(int argc, char **argv) {
                                      cpp_forward_count,
                                      cpp,
                                      cc,
-                                     as, march, mabi);
+                                     as, march, mabi, &language);
         goto done;
     }
 
@@ -743,7 +825,7 @@ int main(int argc, char **argv) {
                                              cpp_forward_count,
                                              cpp,
                                              cc,
-                                             as, march, mabi);
+                                             as, march, mabi, &language);
                 if (status != 0) {
                     fprintf(stderr,
                             "minic: input-failed:%s status=%d\n",

@@ -1,5 +1,6 @@
 #include "target/riscv32/rv32_internal.h"
 #include "target/riscv/instruction_select.h"
+#include "target/riscv/word_operations.h"
 #include <inttypes.h>
 #include <stdint.h>
 
@@ -48,68 +49,14 @@ static bool wide_shift(FILE *out, const MinicCoreFunction *f,
     if (!rv32_pair_slot(out, fr, left, "t0", "t1", true))
         return false;
     if (shift_words == 2U) {
-        if (!rv32_pair_slot(out, fr, right, "t2", "t5", true) ||
-            fprintf(out, "  bnez t5, .L%s_wide_ge64_%" PRIu32 "\n",
-                    symbol, ins->result) < 0) return false;
+        if (!rv32_pair_slot(out, fr, right, "t2", "t5", true))
+            return false;
     } else if (!rv32_slot(out, fr, right, "t2", true)) {
         return false;
     }
-    /* Branch labels include the function symbol and unique SSA result.
-     * RV32I register shifts mask to 5 bits: handle 0/32/64 boundaries
-     * explicitly rather than accidentally turning shift-32 into shift-0. */
-    if (fprintf(out,
-        "  beqz t2, .L%s_wide_done_%" PRIu32 "\n"
-        "  li t3, 64\n"
-        "  bgeu t2, t3, .L%s_wide_ge64_%" PRIu32 "\n"
-        "  li t3, 32\n"
-        "  bgeu t2, t3, .L%s_wide_ge32_%" PRIu32 "\n"
-        "  sub t3, t3, t2\n",
-        symbol, ins->result, symbol, ins->result,
-        symbol, ins->result) < 0)
-        return false;
-    if (!right_shift) {
-        if (fprintf(out,
-             "  srl t4, t0, t3\n"
-             "  sll t1, t1, t2\n"
-             "  or t1, t1, t4\n"
-             "  sll t0, t0, t2\n") < 0)
-            return false;
-    } else if (fprintf(out,
-             "  sll t4, t1, t3\n"
-             "  srl t0, t0, t2\n"
-             "  or t0, t0, t4\n"
-             "  %s t1, t1, t2\n",
-             signed_shift ? "sra" : "srl") < 0)
-        return false;
-    if (fprintf(out,
-        "  j .L%s_wide_done_%" PRIu32 "\n"
-        ".L%s_wide_ge32_%" PRIu32 ":\n"
-        "  addi t2, t2, -32\n",
-        symbol, ins->result, symbol, ins->result) < 0)
-        return false;
-    if (!right_shift) {
-        if (fprintf(out,
-            "  sll t1, t0, t2\n"
-            "  li t0, 0\n") < 0) return false;
-    } else if (fprintf(out,
-            "  %s t0, t1, t2\n"
-            "  %s\n",
-            signed_shift ? "sra" : "srl",
-            signed_shift ? "srai t1, t1, 31" : "li t1, 0") < 0)
-        return false;
-    if (fprintf(out,
-        "  j .L%s_wide_done_%" PRIu32 "\n"
-        ".L%s_wide_ge64_%" PRIu32 ":\n",
-        symbol, ins->result, symbol, ins->result) < 0)
-        return false;
-    if (signed_shift) {
-        if (fprintf(out,
-            "  srai t1, t1, 31\n"
-            "  mv t0, t1\n") < 0) return false;
-    } else if (fprintf(out, "  li t0, 0\n  li t1, 0\n") < 0)
-        return false;
-    if (fprintf(out, ".L%s_wide_done_%" PRIu32 ":\n",
-                symbol, ins->result) < 0)
+    if (!minic_riscv_emit_word_pair_shift(
+            out, ins->kind, signed_shift, symbol, "wide",
+            ins->result, 32U, shift_words == 2U))
         return false;
     return rv32_pair_slot(out, fr, ins->result, "t0", "t1", false);
 }
@@ -129,28 +76,7 @@ bool rv32_emit_wide_integer(FILE *out, const MinicCoreFunction *f,
     case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_XOR:
         if (!rv32_is_wide_integer(f, ins->type) ||
             !wide_pair_operands(out, f, fr, ins)) return false;
-        if (kind == MINIC_CORE_INSTRUCTION_INTEGER_ADD) {
-            if (fprintf(out,
-                "  add t4, t0, t2\n"
-                "  sltu t5, t4, t0\n"
-                "  add t1, t1, t3\n"
-                "  add t1, t1, t5\n"
-                "  mv t0, t4\n") < 0) return false;
-        } else if (kind == MINIC_CORE_INSTRUCTION_INTEGER_SUBTRACT) {
-            if (fprintf(out,
-                "  sltu t5, t0, t2\n"
-                "  sub t0, t0, t2\n"
-                "  sub t1, t1, t3\n"
-                "  sub t1, t1, t5\n") < 0) return false;
-        } else {
-            const char *op = kind == MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND ?
-                             "and" : kind == MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_OR ?
-                             "or" : "xor";
-            if (fprintf(out,
-                "  %s t0, t0, t2\n"
-                "  %s t1, t1, t3\n", op, op) < 0)
-                return false;
-        }
+        if (!minic_riscv_emit_word_pair_binary(out, kind)) return false;
         return rv32_pair_slot(out, fr, ins->result, "t0", "t1", false);
     case MINIC_CORE_INSTRUCTION_INTEGER_NEGATE:
     case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_NOT: {
@@ -160,17 +86,7 @@ bool rv32_emit_wide_integer(FILE *out, const MinicCoreFunction *f,
             !rv32_is_wide_integer(f, f->values[id].type) ||
             !rv32_pair_slot(out, fr, id, "t0", "t1", true))
             return false;
-        if (kind == MINIC_CORE_INSTRUCTION_INTEGER_NEGATE) {
-            if (fprintf(out,
-                "  snez t2, t0\n"
-                "  neg t0, t0\n"
-                "  neg t1, t1\n"
-                "  sub t1, t1, t2\n") < 0)
-                return false;
-        } else if (fprintf(out,
-                           "  not t0, t0\n"
-                           "  not t1, t1\n") < 0)
-            return false;
+        if (!minic_riscv_emit_word_pair_unary(out, kind)) return false;
         return rv32_pair_slot(out, fr, ins->result, "t0", "t1", false);
     }
     case MINIC_CORE_INSTRUCTION_INTEGER_MULTIPLY:
