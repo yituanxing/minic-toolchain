@@ -132,7 +132,7 @@ done
 
 # ISA/ABI profile names must be shared between native compiler and staged
 # product driver. Only machine legalization owns the actual feature bits.
-has src/target/riscv64/isa.c 'minic_riscv_profile_find(march)'
+has src/target/riscv/isa_resolve.c 'minic_riscv_profile_find(march)'
 has tools/minic/main.c 'minic_riscv_profile_find(march)'
 has src/target/target_catalog.c 'minic_riscv_profile_all('
 lacks tools/minic/main.c 'strcmp(march, "rv64im")'
