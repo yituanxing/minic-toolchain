@@ -130,13 +130,25 @@ int main(void) {
         callee.parameter_count = 1U;
         fn.instructions = ordered;
         fn.instruction_count = 5U;
+        size_t ordinal = SIZE_MAX;
+        const MinicCoreCallView *cached;
         if (!minic_core_call_index_build(&fn, 2U, &index) ||
             index.count != 2U ||
-            minic_core_call_index_get(&index, 0U) != NULL ||
-            minic_core_call_index_get(&index, 3U) != NULL ||
-            minic_core_call_index_get(&index, 1U) == NULL ||
-            minic_core_call_index_get(&index, 4U) == NULL ||
-            minic_core_call_index_get(&index, 1U)->function_pointer != 1U) {
+            minic_core_call_index_find(&index, 0U, &ordinal) != NULL ||
+            minic_core_call_index_find(&index, 3U, &ordinal) != NULL ||
+            minic_core_call_index_find(&index, 1U, NULL) != NULL) {
+            minic_core_call_index_destroy(&index);
+            return 16;
+        }
+        cached = minic_core_call_index_find(&index, 1U, &ordinal);
+        if (cached == NULL || ordinal != 0U ||
+            cached->function_pointer != 1U) {
+            minic_core_call_index_destroy(&index);
+            return 16;
+        }
+        cached = minic_core_call_index_find(&index, 4U, &ordinal);
+        if (cached == NULL || ordinal != 1U ||
+            cached->callee != &callee) {
             minic_core_call_index_destroy(&index);
             return 16;
         }
