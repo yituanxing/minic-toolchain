@@ -11,7 +11,7 @@ int main(void) {
     MinicCoreCallSignature signature = {0};
     MinicCoreCallArgument argument = {0};
     MinicCoreInstruction call = {0};
-    MinicCoreValue values[2] = {{0}, {0}};
+    MinicCoreValue values[2];
     MinicCoreObject object = {0};
     MinicCoreCallView view;
     MinicType actual, function_pointer, scalar = minic_type_int();
@@ -19,6 +19,7 @@ int main(void) {
     int rc;
     if (!minic_type_pointer_to(minic_type_function(3U), &function_pointer))
         return 2;
+    (void)memset(values, 0, sizeof(values));
     values[0].type = scalar;
     values[1].type = function_pointer;
     object.type = record;
