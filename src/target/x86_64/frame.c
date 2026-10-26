@@ -1,6 +1,7 @@
 #include "target/x86_64/frame.h"
 #include "target/common/core_function_facts.h"
 #include "target/common/core_frame_layout.h"
+#include "target/common/core_value_slots.h"
 #include "target/x86_64/abi.h"
 #include "target/data_layout.h"
 
@@ -45,19 +46,12 @@ bool minic_x86_64_frame_init_with_storage(const MinicC0Program *program,
     frame->varargs_count = facts->variadic_address_count;
     frame->value_count = fn->value_count;
     frame->object_count = fn->object_count;
-    value_bytes = 0U;
-    if (fn->value_count != 0U) {
-        frame->value_offsets = (size_t *)calloc(fn->value_count,
-                                                 sizeof(*frame->value_offsets));
-        if (frame->value_offsets == NULL) return false;
-    }
-    for (i = 0U; i < fn->value_count; ++i) {
-        size_t slot = (minic_type_is_int128_integer(fn->values[i].type) ||
-                       minic_type_is_long_double(fn->values[i].type)) ? 16U : 8U;
-        if (value_bytes > (size_t)INT32_MAX - slot) return false;
-        value_bytes += slot;
-        frame->value_offsets[i] = value_bytes;
-    }
+    /* Core owns per-value 8B/16B placement. SysV still decides that the
+     * resulting end offsets are addressed below rbp and capped at INT32_MAX. */
+    if (!minic_core_value_slots_build(
+            fn, MINIC_CORE_VALUE_SLOT_LINEAR, 0U, (size_t)INT32_MAX,
+            &frame->value_offsets, &value_bytes))
+        return false;
     /* Freeze the entire incoming GP register bank before any Core
      * instruction can use RDX as the high limb of a temporary. Otherwise
      * an early __int128 parameter may destroy a later GP parameter before

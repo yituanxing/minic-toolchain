@@ -1,6 +1,7 @@
 #include "target/common/lp64_frame.h"
 #include "target/common/core_object_storage.h"
 #include "target/common/core_frame_layout.h"
+#include "target/common/core_value_slots.h"
 #include <stdint.h>
 #include <stdlib.h>
 
@@ -48,26 +49,16 @@ bool minic_lp64_frame_plan_objects_with_storage(
 
 bool minic_lp64_frame_plan_wide(
     const MinicCoreFunction *fn, size_t wide_base, MinicLP64FramePlan *plan) {
-    size_t i, pos = wide_base;
+    size_t end;
     if (fn == NULL || plan == NULL || fn->value_count != plan->value_count ||
         wide_base > MINIC_LARGE_FRAME_MAX || plan->wide_offsets != NULL ||
-        (fn->value_count != 0U && fn->values == NULL))
+        (fn->value_count != 0U && fn->values == NULL) ||
+        !minic_core_value_slots_build(
+            fn, MINIC_CORE_VALUE_SLOT_WIDE_TAIL, wide_base,
+            MINIC_LARGE_FRAME_MAX, &plan->wide_offsets, &end))
         return false;
-    if (fn->value_count != 0U) {
-        plan->wide_offsets =
-            (size_t *)malloc(fn->value_count * sizeof(*plan->wide_offsets));
-        if (plan->wide_offsets == NULL) return false;
-    }
-    for (i = 0U; i < fn->value_count; ++i) {
-        plan->wide_offsets[i] = SIZE_MAX;
-        if (!minic_type_is_long_double(fn->values[i].type) &&
-            !minic_type_is_int128_integer(fn->values[i].type)) continue;
-        if (pos > MINIC_LARGE_FRAME_MAX - 16U) return false;
-        plan->wide_offsets[i] = pos;
-        pos += 16U;
-    }
     plan->wide_base = wide_base;
-    plan->wide_end = pos;
+    plan->wide_end = end;
     return true;
 }
 

@@ -44,6 +44,33 @@ algorithm** (`direct_function_plan.c`), an instruction-family classifier
 machine instruction emitter. RV64 has its own ABI, object-lifetime model and
 inline-assembly behavior, so do not force it into an AAPCS64/LP64D-only API.
 
+### Unified SSA spill-slot geometry (this refactor)
+
+All five targets retain the same `MinicCoreValueId` semantic identities. Their
+machine frames now use two **Common-owned, policy-qualified** SSA placement
+engines, while targets still own the stack anchor, frame direction, save areas,
+varargs, strict ISA emission and calling convention:
+
+- `common/core_value_slots.{h,c}`: a shared, overflow-checked function-value
+  slot planner used by SysV x86-64 and both Direct LP64 emitters. SysV's
+  `LINEAR` policy preserves cumulative 8-byte/16-byte **end offsets** below
+  `rbp`. AAPCS64/LoongArch64's `WIDE_TAIL` policy preserves the fixed
+  8-byte-per-value Core prefix and a separate 16-byte **start-offset** sidecar
+  for int128 and long-double values. The ABI physical address interpretation
+  never enters Common.
+- `common/core_spill_layout.{h,c}`: RV32I and RV64 retain the already-proven
+  block-local last-use reuse strategy, with 4-byte and 8-byte units respectively.
+  This separate algorithm is a machine-frame optimization, not a duplicated
+  Core type checker.
+- `common/core_frame_layout.h`: a checked align/reserve primitive shared by
+  all stack planners. The Direct LP64 wide-tail alignment also uses it instead
+  of an extra hard-coded integer round-up.
+
+The frame bounds and generated per-value offsets are unchanged for existing
+backends. The new `probe-core-value-slots.c` checks scalar/wide layout,
+non-wide sentinel behavior, empty functions and transactional overflow failure.
+Runtime, psABI and strict RV32I/RV64I checks remain separate gates.
+
 ### Computations done once
 
 - SysV incoming arguments and outgoing calls receive a prepared set of

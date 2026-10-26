@@ -1,6 +1,7 @@
 #include "target/common/direct_function_plan.h"
 #include "target/common/direct_preflight.h"
 #include "target/common/direct_call_preflight.h"
+#include "target/common/core_frame_layout.h"
 
 #include <stdint.h>
 #include <stdio.h>
@@ -69,9 +70,8 @@ bool minic_multi_direct_lp64_function_plan_prepare(
     }
     object_end = plan->frame_plan.object_end;
     plan->failed_stage = "binary128_layout";
-    if (object_end > SIZE_MAX - 15U)
+    if (!minic_core_frame_align_up(object_end, 16U, &ld_base))
         return false;
-    ld_base = (object_end + 15U) & ~(size_t)15U;
     if (!minic_lp64_frame_plan_wide(fn, ld_base, &plan->frame_plan))
         return false;
     object_end = plan->frame_plan.wide_end;

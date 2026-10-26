@@ -330,6 +330,18 @@ exists src/target/common/program_visit.h
 # without claiming a universal machine ISA or ignoring target admission.
 exists src/target/common/core_instruction_family.h
 exists src/target/common/core_numeric_shape.h
+# Three machine frame families now consume one policy-qualified Common
+# SSA slot planner: SysV cumulative 8/16, Direct LP64 wide sidecar, and
+# the earlier RV32/RV64 block-local last-use planner.
+exists src/target/common/core_value_slots.c
+exists src/target/common/core_value_slots.h
+has src/target/common/core_value_slots.c 'bool minic_core_value_slots_build('
+has src/target/x86_64/frame.c 'MINIC_CORE_VALUE_SLOT_LINEAR'
+has src/target/common/lp64_frame.c 'MINIC_CORE_VALUE_SLOT_WIDE_TAIL'
+lacks src/target/x86_64/frame.c 'value_bytes += slot;'
+lacks src/target/common/lp64_frame.c 'plan->wide_offsets[i] = pos;'
+has src/target/riscv32/rv32_frame.c 'minic_core_function_reused_spill_assign('
+has src/target/riscv64/frame_layout.c 'minic_core_function_reused_spill_assign('
 exists src/target/common/core_numeric_shape.c
 has src/target/common/core_numeric_shape.c 'bool minic_core_integer_overflow_shape('
 has src/target/common/core_numeric_shape.c 'bool minic_core_integer_bitscan_shape('
@@ -591,6 +603,14 @@ cc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror \
   src/target/common/core_call_index.c src/frontend/type.c \
   -o "$work/core-call-probe"
 "$work/core-call-probe"
+
+# Exercise the two historical SSA layouts in one true Common planner and
+# prove bounds/rollback before testing native machine frame and QEMU ABIs.
+cc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror \
+  -Iinclude -Isrc tests/compiler/c0/probe-core-value-slots.c \
+  src/target/common/core_value_slots.c src/frontend/type.c \
+  -o "$work/core-value-slots-probe"
+"$work/core-value-slots-probe"
 
 # Prove checked alignment/reservation at overflow boundaries and no cursor
 # mutation on failure before running slow QEMU/runtime architecture gates.
