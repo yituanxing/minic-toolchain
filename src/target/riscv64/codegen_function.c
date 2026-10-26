@@ -153,7 +153,7 @@ static bool rv64_between(FILE *file, const MinicC0Program *program,
             if (!minic_riscv64_source_asm_marker_safe(source->text, source->length) ||
                 !minic_riscv64_asm_audit_marker(file, true) ||
                 !minic_riscv64_emit_file_asm(file, source) ||
-                fputc('\\n', file) == EOF ||
+                fputc('\n', file) == EOF ||
                 !minic_riscv64_asm_audit_marker(file, false))
                 return false;
         }
