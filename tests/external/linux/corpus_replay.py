@@ -26,6 +26,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--limit", type=int, default=0)
     parser.add_argument("--sample-count", type=int, default=0)
     parser.add_argument("--indices", default="")
+    parser.add_argument("--minic-cflag", action="append", default=[],
+                        metavar="FLAG",
+                        help="repeatable original producer C/ABI flag, e.g. "
+                             "--minic-cflag=-fshort-wchar")
     parser.add_argument("--rv64i-origin-audit", action="store_true",
                         help="opt-in RV64I codegen with user asm preserved and tagged")
     return parser.parse_args()
@@ -207,11 +211,17 @@ def main() -> int:
 
         total_lines = count_physical_lines(input_path)
         compile_started = time.monotonic()
+        # C-language ABI flags are not preserved in preprocessed .i files.
+        # Pass the original Kbuild flags explicitly through --minic-cflag,
+        # rather than making them unconditional for every corpus replay.
         command = [str(args.minic), "-S", str(input_path), "-o", str(asm_path)]
         environment = None
         if args.rv64i_origin_audit:
             command.extend(["-march=rv64i", "-mabi=lp64"])
             environment = dict(os.environ, MINIC_RV64I_ASM_AUDIT="1")
+        # Frozen preprocessed C alone cannot encode the original language ABI.
+        # Linux Kbuild uses -fshort-wchar; EFI get_var expects UTF-16 strings.
+        command.extend(args.minic_cflag)
         proc = subprocess.run(
             command,
             env=environment,
@@ -390,6 +400,7 @@ def main() -> int:
         f"fail={counts['FAIL']}",
         f"preprocess_missing={counts['PREPROCESS_MISSING']}",
         f"minic_jobs={args.jobs}",
+        f"minic_cflags={json.dumps(args.minic_cflag)}",
         "",
         "minic_failure_groups:",
     ]

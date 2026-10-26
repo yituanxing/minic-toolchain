@@ -32,6 +32,44 @@ cat >"$work/wchar32.i" <<'SRC'
 _Static_assert(sizeof(L"X") == 8, "two 32-bit wchar units");
 int model(void) { return sizeof(L"X"); }
 SRC
+# GNU Linux 6.6 Kbuild universally sets -fshort-wchar because EFI uses
+# 16-bit efi_char16_t; an L"..." expression is *not* rewritten by the
+# preprocessor. The MiniC replay must carry the original Kbuild flag.
+cat >"$work/efi-getvar.i" <<'SRC'
+typedef unsigned short efi_char16_t;
+typedef struct { unsigned int data; } efi_guid_t;
+typedef unsigned long (*efi_get_var_t)(efi_char16_t *,
+                                       const efi_guid_t *, void *,
+                                       unsigned long *, void *);
+unsigned long secure_boot(efi_get_var_t get_var) {
+    unsigned long size = 1;
+    return get_var(L"SecureBoot", &(efi_guid_t){ 0 }, 0, &size, 0);
+}
+SRC
+# Linux KBUILD_CFLAGS sets -fshort-wchar: a frozen .i alone omits this
+# source-language ABI choice, which EFI indirect calls require.
+cat >"$work/efi-get-variable.i" <<'SRC'
+typedef unsigned short efi_char16_t;
+typedef unsigned long (*efi_get_variable_t)(efi_char16_t *);
+static efi_get_variable_t get_var;
+unsigned long read_secure_boot(void) {
+    return get_var(L"SecureBoot");
+}
+SRC
+"$MINIC_CC" --target=riscv64-linux -march=rv64i -mabi=lp64 \
+  -fshort-wchar -S "$work/efi-get-variable.i" -o "$work/efi-cc.s"
+"$MINIC" --target=riscv64-linux -march=rv64i -mabi=lp64 \
+  -fshort-wchar -S "$work/efi-get-variable.i" -o "$work/efi-driver.s"
+cmp "$work/efi-cc.s" "$work/efi-driver.s"
+if "$MINIC_CC" --target=riscv64-linux -march=rv64i -mabi=lp64 \
+  -fno-short-wchar -S "$work/efi-get-variable.i" -o "$work/efi-bad.s" \
+  2>"$work/efi-bad.err"; then
+  echo 'MINIC_TARGET_ABI_FLAGS=FAIL: EFI UTF-16 accepted under wchar32' >&2
+  exit 1
+fi
+grep -Fq 'indirect call argument type does not match declaration' "$work/efi-bad.err"
+test ! -e "$work/efi-bad.s"
+
 for arch in riscv32-linux riscv64-linux x86_64-linux aarch64-linux loongarch64-linux; do
   extra=()
   case "$arch" in
@@ -91,6 +129,25 @@ for arch in riscv32-linux riscv64-linux x86_64-linux aarch64-linux loongarch64-l
       echo 'MINIC_TARGET_ABI_FLAGS=FAIL rv32-unsigned-char-machine-missing-lbu' >&2
       exit 1
     }
+  fi
+  if [[ "$arch" == riscv64-linux ]]; then
+    "$MINIC_CC" "--target=$arch" "${extra[@]}" -fshort-wchar \
+      -S "$work/efi-getvar.i" -o "$work/efi-short-cc.s"
+    "$MINIC" "--target=$arch" "${extra[@]}" -fshort-wchar \
+      -S "$work/efi-getvar.i" -o "$work/efi-short-driver.s"
+    cmp "$work/efi-short-cc.s" "$work/efi-short-driver.s"
+    # Without Kbuild's override the Linux EFI call is truly incompatible.
+    # Rejecting it is correct; hiding the problem with a permissive
+    # function-pointer conversion would create the wrong ABI.
+    if "$MINIC_CC" "--target=$arch" "${extra[@]}" -fno-short-wchar \
+        -S "$work/efi-getvar.i" -o "$work/efi-invalid.s" \
+        >"$work/efi-invalid.out" 2>"$work/efi-invalid.err"; then
+      echo 'MINIC_TARGET_ABI_FLAGS=FAIL EFI 32-bit wchar accepted without Kbuild flag' >&2
+      exit 1
+    fi
+    grep -Fq 'indirect call argument type does not match declaration' \
+      "$work/efi-invalid.err"
+    echo 'MINIC_LINUX_EFI_CHAR16=PASS short_wchar=16 default_wchar=32'
   fi
   # Last lexical option wins, as in GCC/Clang.
   "$MINIC_CC" "--target=$arch" "${extra[@]}" \

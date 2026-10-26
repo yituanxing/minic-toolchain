@@ -136,8 +136,10 @@ bool minic_riscv64_write_c0_program_with_core_functions(const char *path,
         success = fprintf(file, ".text\n") >= 0;
         for (file_asm_index = 0U; success && file_asm_index < program->file_asm_count;
              ++file_asm_index) {
-            success = minic_riscv64_asm_audit_marker(file, true) &&
-                      minic_riscv64_emit_file_asm(file, &program->file_asms[file_asm_index]);
+            const MinicFileAsm *source = &program->file_asms[file_asm_index];
+            success = minic_riscv64_source_asm_marker_safe(source->text, source->length) &&
+                      minic_riscv64_asm_audit_marker(file, true) &&
+                      minic_riscv64_emit_file_asm(file, source);
             /* Keep the end-marker on its own physical source line. */
             if (success) success = fputc('\n', file) != EOF;
             if (success) success = minic_riscv64_asm_audit_marker(file, false);

@@ -808,7 +808,13 @@ static bool emit_structured_inline_asm(FILE *file,
 
 bool minic_riscv64_inline_asm_instruction_supported(
     const MinicCoreFunction *function, const MinicCoreInstruction *instruction) {
-    if (function == NULL || instruction == NULL) return false;
+    if (function == NULL || instruction == NULL ||
+        function->inline_asms == NULL ||
+        instruction->value.inline_asm_id >= function->inline_asm_count ||
+        !minic_riscv64_source_asm_marker_safe(
+            function->inline_asms[instruction->value.inline_asm_id].template_text,
+            function->inline_asms[instruction->value.inline_asm_id].template_length))
+        return false;
     switch (instruction->kind) {
     case MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM:
         return core_opaque_inline_asm_supported(function, instruction);
@@ -830,7 +836,8 @@ bool minic_riscv64_emit_inline_asm_instruction(
     const MinicCoreFunction *function, const MinicRiscv64CoreFrame *frame,
     const char *symbol_name, const MinicCoreInstruction *instruction,
     size_t instruction_id) {
-    if (file == NULL || function == NULL || frame == NULL || instruction == NULL)
+    if (file == NULL || function == NULL || frame == NULL || instruction == NULL ||
+        !minic_riscv64_inline_asm_instruction_supported(function, instruction))
         return false;
     switch (instruction->kind) {
     case MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM:

@@ -1,6 +1,16 @@
 name: MiniC RV64I Origin Audit (7 frozen Linux shards)
 
 on:
+  # Exact-head regression on the follow-up PR. Seven expensive shards are
+  # opted in only when the PR title carries [rv64i-seven].
+  pull_request:
+    paths:
+      - '.github/workflows/minic-rv64i-origin-audit-seven.yml'
+      - 'src/target/riscv/**'
+      - 'src/target/riscv64/**'
+      - 'tests/compiler/c0/probe-rv64i-asm-origin.sh'
+      - 'tests/external/linux/corpus_replay.py'
+      - 'tools/ci/audit-rv64i-asm-origin.py'
   push:
     branches: [main]
     paths:
@@ -8,6 +18,7 @@ on:
       - 'tools/ci/audit-rv64i-asm-origin.py'
       - 'tools/ci/summarize-rv64i-seven-v1.py'
       - 'tests/compiler/c0/probe-rv64i-asm-origin.sh'
+      - 'tests/external/linux/corpus_replay.py'
       - 'tests/compiler/c0/probe-rv64i-int128-libcalls.sh'
       - 'tests/compiler/c0/probe-rv64i-int128-pairs.sh'
       - 'src/frontend/parser_builtins.c'
@@ -16,7 +27,6 @@ on:
       - 'src/target/riscv64/isa.c'
       - 'third_party/llvm-compiler-rt-19.1.7/**'
       - 'Makefile'
-      - 'tests/external/linux/corpus_replay.py'
   workflow_dispatch:
 
 permissions:
@@ -32,12 +42,21 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Source and evidence must be tied to the true PR head, not GitHub's
+          # temporary synthetic merge commit.
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - name: Static audit checker validation
         run: |
           python3 -m py_compile tools/ci/audit-rv64i-asm-origin.py tools/ci/summarize-rv64i-seven-v1.py tests/external/linux/corpus_replay.py
           bash -n tests/compiler/c0/probe-rv64i-asm-origin.sh
           bash -n tests/compiler/c0/probe-rv64i-int128-libcalls.sh
           bash -n tests/compiler/c0/probe-rv64i-int128-pairs.sh
+          python3 -m py_compile tests/external/linux/corpus_replay.py
+          # The original Kbuild language flags must be supplied explicitly;
+          # changing MiniC's default wchar_t would regress other C programs.
+          grep -Fq -- '--minic-cflag=-fshort-wchar' .github/workflows/minic-rv64i-origin-audit-seven.yml
+          grep -Fq -- '--minic-cflag=-funsigned-char' .github/workflows/minic-rv64i-origin-audit-seven.yml
       - name: Compile MiniC and prove source-ASM provenance
         shell: bash
         run: |
@@ -60,7 +79,11 @@ jobs:
 
   linux-shard:
     # Seven full shards run only by explicit dispatch or tagged push.
-    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[rv64i-seven]')
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      contains(github.event.head_commit.message, '[rv64i-seven]') ||
+      (github.event_name == 'pull_request' &&
+       contains(github.event.pull_request.title, '[rv64i-seven]'))
     needs: smoke
     runs-on: ubuntu-24.04
     timeout-minutes: 120
@@ -105,6 +128,10 @@ jobs:
             limit: 352
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Source and evidence must be tied to the true PR head, not GitHub's
+          # temporary synthetic merge commit.
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - name: Restore exact Linux 6.6.143 preprocessed corpus
         id: corpus
         uses: actions/cache/restore@v4
@@ -210,7 +237,9 @@ jobs:
             --corpus "$GITHUB_WORKSPACE/build/${{ matrix.corpus_dir }}" \
             --work "$work" --jobs 4 \
             --offset 0 --limit ${{ matrix.limit }} \
-            --sample-count 0 --rv64i-origin-audit
+            --sample-count 0 --rv64i-origin-audit \
+            --minic-cflag=-fshort-wchar \
+            --minic-cflag=-funsigned-char
           replay_rc=$?
           set -e
           echo "RV64I_ORIGIN_REPLAY_EXIT=$replay_rc shard=$label"
@@ -272,11 +301,19 @@ jobs:
           fi
 
   audit-summary:
-    if: always() && (github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[rv64i-seven]'))
+    if: >-
+      always() && (github.event_name == 'workflow_dispatch' ||
+      contains(github.event.head_commit.message, '[rv64i-seven]') ||
+      (github.event_name == 'pull_request' &&
+       contains(github.event.pull_request.title, '[rv64i-seven]')))
     needs: [linux-shard]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Source and evidence must be tied to the true PR head, not GitHub's
+          # temporary synthetic merge commit.
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - name: Download all seven evidence artifacts
         uses: actions/download-artifact@v4
         with:
