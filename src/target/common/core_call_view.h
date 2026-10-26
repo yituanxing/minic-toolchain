@@ -59,8 +59,9 @@ typedef struct MinicCoreCallIndex {
 } MinicCoreCallIndex;
 bool minic_core_call_index_build(const MinicCoreFunction *, size_t expected_calls,
                                  MinicCoreCallIndex *);
-const MinicCoreCallView *minic_core_call_index_get(
-    const MinicCoreCallIndex *, size_t instruction_id);
+/* One semantic lookup yields the stable ordinal of every target ABI cache. */
+const MinicCoreCallView *minic_core_call_index_find(
+    const MinicCoreCallIndex *, size_t instruction_id, size_t *ordinal);
 void minic_core_call_index_destroy(MinicCoreCallIndex *);
 
 #endif

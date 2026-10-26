@@ -41,10 +41,12 @@ bool minic_core_call_index_build(const MinicCoreFunction *function,
 
 /* Binary lookup avoids a pointer-sized entry for every non-CALL opcode;
  * most Linux functions have few call sites and many non-CALL instructions. */
-const MinicCoreCallView *minic_core_call_index_get(
-    const MinicCoreCallIndex *index, size_t instruction_id) {
+const MinicCoreCallView *minic_core_call_index_find(
+    const MinicCoreCallIndex *index, size_t instruction_id,
+    size_t *ordinal) {
     size_t low = 0U, high;
-    if (index == NULL || (index->count != 0U && index->sites == NULL))
+    if (ordinal == NULL || index == NULL ||
+        (index->count != 0U && index->sites == NULL))
         return NULL;
     high = index->count;
     while (low < high) {
@@ -53,8 +55,11 @@ const MinicCoreCallView *minic_core_call_index_get(
         if (id < instruction_id) low = mid + 1U;
         else high = mid;
     }
-    return low < index->count && index->sites[low].instruction_id == instruction_id
-        ? &index->sites[low].view : NULL;
+    if (low >= index->count ||
+        index->sites[low].instruction_id != instruction_id)
+        return NULL;
+    *ordinal = low;
+    return &index->sites[low].view;
 }
 
 void minic_core_call_index_destroy(MinicCoreCallIndex *index) {

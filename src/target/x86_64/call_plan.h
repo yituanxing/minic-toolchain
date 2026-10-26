@@ -55,7 +55,5 @@ bool minic_x86_64_outgoing_call_plans_prepare(
     const MinicC0Program *, const MinicTargetInfo *,
     const MinicCoreFunction *, const MinicCoreCallIndex *,
     MinicX86OutgoingCallPlans *);
-const MinicX86ArgumentPlan *minic_x86_64_outgoing_call_plan(
-    const MinicX86OutgoingCallPlans *, size_t instruction_id);
 void minic_x86_64_outgoing_call_plans_destroy(MinicX86OutgoingCallPlans *);
 #endif

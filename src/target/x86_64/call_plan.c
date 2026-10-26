@@ -198,20 +198,6 @@ fail:
     minic_x86_64_outgoing_call_plans_destroy(result);
     return false;
 }
-const MinicX86ArgumentPlan *minic_x86_64_outgoing_call_plan(
-    const MinicX86OutgoingCallPlans *cache, size_t id) {
-    size_t low = 0U, high;
-    if (cache == NULL || (cache->count != 0U && cache->sites == NULL))
-        return NULL;
-    high = cache->count;
-    while (low < high) {
-        size_t mid = low + (high - low) / 2U;
-        if (cache->sites[mid].instruction_id < id) low = mid + 1U;
-        else high = mid;
-    }
-    return low < cache->count && cache->sites[low].instruction_id == id
-        ? &cache->sites[low].plan : NULL;
-}
 void minic_x86_64_outgoing_call_plans_destroy(MinicX86OutgoingCallPlans *cache) {
     size_t i;
     if (cache == NULL) return;

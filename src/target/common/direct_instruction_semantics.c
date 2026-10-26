@@ -170,14 +170,14 @@ bool minic_multi_direct_result_slot_offset(
  * transfer family. Planning remains target-ABI-specific at the call site. */
 /* Common Core memory-effect family: ISA byte moves remain independent.
  * The relaxed-only atomic memory-order contract is checked separately. */
-bool minic_multi_direct_memory_machine_kind(MinicCoreInstructionKind kind) {
+static bool minic_multi_direct_memory_machine_kind(MinicCoreInstructionKind kind) {
     return kind == MINIC_CORE_INSTRUCTION_LOAD ||
            kind == MINIC_CORE_INSTRUCTION_ATOMIC_LOAD ||
            kind == MINIC_CORE_INSTRUCTION_STORE ||
            kind == MINIC_CORE_INSTRUCTION_ATOMIC_STORE;
 }
 
-bool minic_multi_direct_abi_transfer_kind(MinicCoreInstructionKind kind) {
+static bool minic_multi_direct_abi_transfer_kind(MinicCoreInstructionKind kind) {
     return minic_core_instruction_is_call(kind) ||
            kind == MINIC_CORE_INSTRUCTION_PARAMETER;
 }
@@ -206,7 +206,7 @@ bool minic_multi_direct_scalar_parameter_location(
     return true;
 }
 
-bool minic_multi_direct_integer_machine_kind(MinicCoreInstructionKind kind) {
+static bool minic_multi_direct_integer_machine_kind(MinicCoreInstructionKind kind) {
     /* Constants and conversions use distinct ABI/residual lowering in
      * Direct LP64, unlike RV32/RV64 which use their scalar emitter. */
     return kind == MINIC_CORE_INSTRUCTION_INTEGER_OVERFLOW ||

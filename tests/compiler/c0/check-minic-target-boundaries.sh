@@ -53,8 +53,8 @@ lacks src/target/x86_64/machine_emit.c \
 # The mature x86 SysV backend shares the same prepared sparse CALL owner
 # used by RV32/RV64 and Direct LP64, without exporting its psABI to Core.
 has src/target/x86_64/frame.c 'minic_x86_64_outgoing_call_plans_prepare('
-has src/target/x86_64/machine_call.c 'minic_x86_64_outgoing_call_plan('
-has src/target/x86_64/call_plan.c 'while (low < high)'
+has src/target/x86_64/machine_call.c 'x86_resolve_call_view('
+lacks src/target/x86_64/call_plan.c 'while (low < high)'
 
 for arch in aarch64 loongarch64; do
   block="src/target/$arch/block_emit.c"
@@ -410,12 +410,12 @@ has src/target/common/core_call_view.c 'view.return_form = MINIC_CORE_CALL_RETUR
 has src/target/common/core_call_view.c 'minic_core_call_view_argument_type(function, &view, i, &actual)'
 has src/target/x86_64/call_plan.c 'minic_core_call_view_argument_type(fn, view, i, &type)'
 has src/target/x86_64/frame.c 'frame->semantic_calls = facts->call_index'
-has src/target/x86_64/machine_call.c 'minic_core_call_index_get(frame->semantic_calls, instruction_id)'
+has src/target/x86_64/machine_call.c 'minic_core_call_index_find('
 has src/target/riscv32/rv32_abi_plan.c 'minic_core_call_view_argument_type('
 has src/target/common/direct_call_plan.c 'minic_core_call_view_argument_type(fn, &view, j, &types[j])'
 has src/target/riscv64/call_emit.c 'call->return_form != MINIC_CORE_CALL_RETURN_OBJECT'
 has src/target/riscv64/frame_layout.c 'frame->semantic_calls = facts->call_index'
-has src/target/riscv64/call_emit.c 'minic_core_call_index_get(frame->semantic_calls, instruction_id)'
+has src/target/riscv64/call_emit.c 'minic_core_call_index_find('
 has src/target/riscv64/core_admission.c 'semantic_calls->sites[call_site++].view'
 has src/target/riscv64/core_admission.c 'shape = &storage->objects[index]'
 has src/target/riscv64/core_admission.c 'minic_core_object_storage('
@@ -470,9 +470,9 @@ lacks src/target/riscv64/frame_requirements.c 'minic_riscv64_core_call_outgoing_
 lacks src/target/riscv64/frame_requirements.h 'minic_riscv64_core_call_outgoing_stack_size('
 has src/target/riscv64/frame_layout.c 'outgoing_calls.maximum_stack_bytes'
 lacks src/target/riscv64/call_emit.c 'MinicRiscv64AbiCursor'
-has src/target/riscv64/call_emit.c 'minic_riscv64_call_plan_cache_get('
+has src/target/riscv64/call_emit.c 'rv64_resolve_prepared_call('
 has src/target/riscv64/frame_layout.c 'minic_riscv64_call_plan_cache_destroy('
-has src/target/riscv64/frame_requirements.c 'while (low < high)'
+lacks src/target/riscv64/frame_requirements.c 'while (low < high)'
 # The RV64 named variadic prefix is qualified by the same immutable
 # incoming function psABI plan. Do not duplicate the entire argument
 # classifier in the old frame requirements compatibility wrapper.
@@ -485,6 +485,19 @@ has src/target/riscv32/rv32_frame.c 'facts->uses_dynamic_stack_alloc'
 has src/target/x86_64/frame.c 'facts->variadic_address_count'
 has src/target/common/direct_function_profile.c 'facts->variadic_address_count'
 has src/target/common/direct_function_profile.c 'facts->uses_dynamic_stack_alloc'
+# Common CALL ordinal is the only sparse binary lookup for x86/RV64.
+has src/target/common/core_call_index.c 'minic_core_call_index_find('
+has src/target/common/core_call_index.c '*ordinal = low;'
+lacks src/target/common/core_call_view.h 'minic_core_call_index_get('
+lacks src/target/x86_64/call_plan.h 'minic_x86_64_outgoing_call_plan('
+lacks src/target/riscv64/frame_requirements.h 'minic_riscv64_call_plan_cache_get('
+lacks src/target/x86_64/machine_call.c 'minic_core_call_index_get('
+lacks src/target/riscv64/call_emit.c 'minic_core_call_index_get('
+has src/target/x86_64/machine_call.c '&frame->outgoing_call_plans.sites[ordinal].plan'
+has src/target/riscv64/call_emit.c 'frame->outgoing_calls.sites[ordinal]'
+lacks src/target/common/direct_instruction_semantics.h 'minic_multi_direct_memory_machine_kind('
+lacks src/target/common/direct_instruction_semantics.h 'minic_multi_direct_abi_transfer_kind('
+lacks src/target/common/direct_instruction_semantics.h 'minic_multi_direct_integer_machine_kind('
 # Read-only Common CALL snapshots are consumed in ordinal order by both
 # Direct LP64 ABIs and RV64 capability, never looked up repeatedly by ID.
 has src/target/common/direct_call_preflight.c 'semantic_calls->sites[ordinal]'

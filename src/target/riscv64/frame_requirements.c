@@ -75,27 +75,6 @@ fail:
     return false;
 }
 
-/* Machine emit uses O(log CALL sites) lookup; there is no per-Core-opcode
- * pointer table. The plan's location arrays remain frame-lifetime owned. */
-const MinicRiscv64PreparedCall *minic_riscv64_call_plan_cache_get(
-    const MinicRiscv64CallPlanCache *cache, size_t instruction_id) {
-    size_t low = 0U, high;
-    if (cache == NULL || (cache->count != 0U && cache->sites == NULL))
-        return NULL;
-    high = cache->count;
-    while (low < high) {
-        size_t mid = low + (high - low) / 2U;
-        if (cache->sites[mid] == NULL) return NULL;
-        if (cache->sites[mid]->instruction_id < instruction_id)
-            low = mid + 1U;
-        else
-            high = mid;
-    }
-    return low < cache->count && cache->sites[low] != NULL &&
-           cache->sites[low]->instruction_id == instruction_id
-        ? cache->sites[low] : NULL;
-}
-
 void minic_riscv64_call_plan_cache_destroy(MinicRiscv64CallPlanCache *cache) {
     size_t i;
     if (cache == NULL) return;

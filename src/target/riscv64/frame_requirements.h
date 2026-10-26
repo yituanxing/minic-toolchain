@@ -24,8 +24,6 @@ typedef struct MinicRiscv64CallPlanCache {
 bool minic_riscv64_call_plan_cache_build(
     const MinicC0Program *, const MinicCoreFunction *, bool lp64_soft_float,
     const MinicCoreCallIndex *, MinicRiscv64CallPlanCache *);
-const MinicRiscv64PreparedCall *minic_riscv64_call_plan_cache_get(
-    const MinicRiscv64CallPlanCache *, size_t instruction_id);
 void minic_riscv64_call_plan_cache_destroy(MinicRiscv64CallPlanCache *);
 
 #endif

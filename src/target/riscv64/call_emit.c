@@ -566,6 +566,30 @@ static bool emit_core_call_arguments(
     return true;
 }
 
+/* The exact Common semantic CALL ordinal also indexes the RV64 psABI
+ * locations built from that SAME ordered index. A single checked binary
+ * lookup replaces two independent machine/emitter searches per CALL. */
+static bool rv64_resolve_prepared_call(
+    const MinicRiscv64CoreFrame *frame, size_t instruction_id,
+    const MinicCoreCallView **view,
+    const MinicRiscv64PreparedCall **planned) {
+    size_t ordinal;
+    if (frame == NULL || view == NULL || planned == NULL ||
+        frame->semantic_calls == NULL)
+        return false;
+    *view = minic_core_call_index_find(
+        frame->semantic_calls, instruction_id, &ordinal);
+    if (*view == NULL ||
+        frame->outgoing_calls.count != frame->semantic_calls->count ||
+        ordinal >= frame->outgoing_calls.count ||
+        frame->outgoing_calls.sites == NULL ||
+        frame->outgoing_calls.sites[ordinal] == NULL ||
+        frame->outgoing_calls.sites[ordinal]->instruction_id != instruction_id)
+        return false;
+    *planned = frame->outgoing_calls.sites[ordinal];
+    return true;
+}
+
 bool minic_riscv64_emit_direct_call(FILE *file,
                       const MinicC0Program *program,
                       const MinicCoreFunction *function,
@@ -579,9 +603,8 @@ bool minic_riscv64_emit_direct_call(FILE *file,
     if (file == NULL || program == NULL || function == NULL || frame == NULL ||
         instruction == NULL || instruction->kind != MINIC_CORE_INSTRUCTION_CALL)
         return false;
-    call = minic_core_call_index_get(frame->semantic_calls, instruction_id);
-    planned = minic_riscv64_call_plan_cache_get(
-        &frame->outgoing_calls, instruction_id);
+    if (!rv64_resolve_prepared_call(frame, instruction_id, &call, &planned))
+        return false;
     if (call == NULL || planned == NULL || call->callee == NULL ||
         planned->argument_count != call->argument_count)
         return false;
@@ -667,9 +690,8 @@ bool minic_riscv64_emit_indirect_call(FILE *file,
     if (file == NULL || program == NULL || function == NULL || frame == NULL ||
         instruction == NULL || instruction->kind != MINIC_CORE_INSTRUCTION_INDIRECT_CALL)
         return false;
-    call = minic_core_call_index_get(frame->semantic_calls, instruction_id);
-    planned = minic_riscv64_call_plan_cache_get(
-        &frame->outgoing_calls, instruction_id);
+    if (!rv64_resolve_prepared_call(frame, instruction_id, &call, &planned))
+        return false;
     if (call == NULL || planned == NULL || call->signature == NULL ||
         planned->argument_count != call->argument_count)
         return false;
