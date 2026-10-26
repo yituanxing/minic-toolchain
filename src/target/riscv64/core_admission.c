@@ -29,7 +29,8 @@ static bool core_global_addressable_type(MinicType type) {
 
 static bool core_instruction_supported(const MinicC0Program *program,
                                        const MinicCoreFunction *function,
-                                       const MinicCoreInstruction *instruction) {
+                                       const MinicCoreInstruction *instruction,
+                                       const MinicCoreCallView *semantic_view) {
     if (function == NULL || instruction == NULL) {
         return false;
     }
@@ -43,12 +44,9 @@ static bool core_instruction_supported(const MinicC0Program *program,
     case MINIC_CORE_INSTRUCTION_CALL_FRAME_ADDRESS:
         return minic_riscv64_core_call_frame_address_supported(instruction);
     case MINIC_CORE_INSTRUCTION_DYNAMIC_STACK_ALLOC:
-        return instruction->result < function->value_count &&
-               instruction->value.operand < function->value_count &&
-               minic_type_is_pointer(instruction->type) &&
-               minic_type_equal(function->values[instruction->result].type, instruction->type) &&
-               minic_type_equal(function->values[instruction->value.operand].type,
-                                minic_type_unsigned_long());
+        /* Pointer result and unsigned-long operand were checked by the
+         * canonical Core verifier before entering target admission. */
+        return true;
     case MINIC_CORE_INSTRUCTION_ATOMIC_LOAD:
     case MINIC_CORE_INSTRUCTION_ATOMIC_STORE:
         /* RV64 atomic ISA/memory-order lowering is not qualified yet.
@@ -66,9 +64,9 @@ static bool core_instruction_supported(const MinicC0Program *program,
         size_t fixed_stack_slots;
         size_t integer_parameter_count;
 
-        return program != NULL && instruction->result < function->value_count &&
-               minic_type_equal(function->values[instruction->result].type, instruction->type) &&
-               minic_type_is_pointer(instruction->type) &&
+        /* Value ID and pointer result belong to Core verifier. The RV64
+         * variadic fixed-register/stack prefix remains target-owned. */
+        return program != NULL &&
                minic_riscv64_core_variadic_fixed_prefix(
                    program, function, &integer_parameter_count, &fixed_stack_slots);
     }
@@ -92,22 +90,12 @@ static bool core_instruction_supported(const MinicC0Program *program,
                binding->register_name_length != 0U && minic_riscv64_scalar_type(binding->type) &&
                minic_type_equal(binding->type, instruction->type);
     }
-    /* M64_LOCAL_LABEL_BLOCK_ADDRESS: RV64 spells the Core block label. */
+    /* Core already proved block bounds, global/function symbol identity,
+     * and exact pointer result types. No RV64 ISA feature is involved. */
     case MINIC_CORE_INSTRUCTION_BLOCK_ADDRESS:
-        return minic_type_is_pointer(instruction->type) && instruction->value.block_id < function->block_count;
     case MINIC_CORE_INSTRUCTION_GLOBAL_ADDRESS:
-        return instruction->value.global_id < function->global_count &&
-               function->globals[instruction->value.global_id].name != NULL &&
-               function->globals[instruction->value.global_id].name_length != 0U;
-    case MINIC_CORE_INSTRUCTION_FUNCTION_ADDRESS: {
-        MinicType function_type;
-        MinicCoreFunctionSymbolId symbol_id = instruction->value.function_symbol_id;
-        return symbol_id < function->function_symbol_count &&
-               function->function_symbols[symbol_id].name != NULL &&
-               function->function_symbols[symbol_id].name_length != 0U &&
-               minic_type_pointee(instruction->type, &function_type) &&
-               minic_type_is_function(function_type);
-    }
+    case MINIC_CORE_INSTRUCTION_FUNCTION_ADDRESS:
+        return true;
     case MINIC_CORE_INSTRUCTION_INTEGER_OVERFLOW: {
         MinicType result_type;
         size_t result_size;
@@ -126,9 +114,11 @@ static bool core_instruction_supported(const MinicC0Program *program,
     case MINIC_CORE_INSTRUCTION_COMPILER_BARRIER:
         return true;
     case MINIC_CORE_INSTRUCTION_CALL:
-        return minic_riscv64_core_direct_call_supported(program, function, instruction);
+        return minic_riscv64_core_direct_call_supported(
+            program, function, instruction, semantic_view);
     case MINIC_CORE_INSTRUCTION_INDIRECT_CALL:
-        return minic_riscv64_core_indirect_call_supported(program, function, instruction);
+        return minic_riscv64_core_indirect_call_supported(
+            program, function, instruction, semantic_view);
     case MINIC_CORE_INSTRUCTION_FIELD_ADDRESS:
         return minic_riscv64_core_field_address_supported(instruction, NULL);
     case MINIC_CORE_INSTRUCTION_SCALAR_BITCAST:
@@ -161,7 +151,8 @@ static bool core_rv64_capability_reject(const MinicCoreFunction *function,
 static bool core_function_can_emit(const MinicC0Program *program,
                                    const MinicCoreFunction *function,
                                    const MinicRiscv64FunctionAbiPlan *abi_plan,
-                                   bool core_verified) {
+                                   bool core_verified,
+                                   const MinicCoreCallIndex *semantic_calls) {
     size_t index;
 
     if (function == NULL ||
@@ -292,9 +283,17 @@ static bool core_function_can_emit(const MinicC0Program *program,
         }
     }
     for (index = 0U; index < function->instruction_count; ++index) {
-        if (!core_instruction_supported(program, function, &function->instructions[index])) {
+        const MinicCoreInstruction *ins = &function->instructions[index];
+        const MinicCoreCallView *view = NULL;
+        if (semantic_calls != NULL && minic_core_instruction_is_call(ins->kind)) {
+            view = minic_core_call_index_get(semantic_calls, index);
+            if (view == NULL)
+                return core_rv64_capability_reject(
+                    function, "call-index", index, (int)ins->kind);
+        }
+        if (!core_instruction_supported(program, function, ins, view)) {
             return core_rv64_capability_reject(
-                function, "instruction", index, (int)function->instructions[index].kind);
+                function, "instruction", index, (int)ins->kind);
         }
     }
     return true;
@@ -314,7 +313,9 @@ bool minic_riscv64_core_function_admit_profile(
          !minic_riscv64_function_abi_plan_build_profile(
              program, function, abi_plan, lp64_soft_float)))
         return core_rv64_capability_reject(function, "function-abi", 0U, -1);
-    return core_function_can_emit(program, function, abi_plan, core_verified);
+    return core_function_can_emit(
+        program, function, abi_plan, core_verified,
+        minic_core_function_facts_verified(facts, function) ? facts->call_index : NULL);
 }
 bool minic_riscv64_core_function_admit(
     const MinicC0Program *program, const MinicCoreFunction *function,
@@ -323,7 +324,7 @@ bool minic_riscv64_core_function_admit(
         program, function, abi_plan, false, NULL);
 }
 bool minic_riscv64_core_function_can_emit(const MinicCoreFunction *function) {
-    return core_function_can_emit(NULL, function, NULL, false);
+    return core_function_can_emit(NULL, function, NULL, false, NULL);
 }
 bool minic_riscv64_core_function_can_emit_for_program(
     const MinicC0Program *program, const MinicCoreFunction *function) {

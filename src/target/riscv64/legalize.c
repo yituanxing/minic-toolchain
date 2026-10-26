@@ -319,14 +319,18 @@ bool minic_riscv64_core_integer_overflow_supported(const MinicC0Program *program
 
 bool minic_riscv64_core_direct_call_supported(const MinicC0Program *program,
                                        const MinicCoreFunction *function,
-                                       const MinicCoreInstruction *instruction) {
+                                       const MinicCoreInstruction *instruction,
+                                       const MinicCoreCallView *semantic_view) {
     MinicCoreCallView call;
     const MinicCoreCallee *callee;
     MinicRiscv64AbiCursor cursor;
     MinicRiscv64AbiValue return_value;
     size_t argument_index;
 
-    if (!minic_core_call_view_build(function, instruction, &call) ||
+    /* The already-admitted Common FunctionPlan supplies an immutable
+     * semantic view. A standalone caller still builds a checked view once. */
+    if (!(semantic_view != NULL ? (call = *semantic_view, true) :
+          minic_core_call_view_build(function, instruction, &call)) ||
         call.callee == NULL)
         return false;
     callee = call.callee;
@@ -514,14 +518,16 @@ bool minic_riscv64_core_direct_call_supported(const MinicC0Program *program,
    same register-only RV64 ABI classifier used by direct calls. */
 bool minic_riscv64_core_indirect_call_supported(const MinicC0Program *program,
                                          const MinicCoreFunction *function,
-                                         const MinicCoreInstruction *instruction) {
+                                         const MinicCoreInstruction *instruction,
+                                         const MinicCoreCallView *semantic_view) {
     MinicCoreCallView call;
     const MinicCoreCallSignature *signature;
     MinicRiscv64AbiCursor cursor;
     MinicRiscv64AbiValue return_value;
     size_t argument_index;
 
-    if (!minic_core_call_view_build(function, instruction, &call) ||
+    if (!(semantic_view != NULL ? (call = *semantic_view, true) :
+          minic_core_call_view_build(function, instruction, &call)) ||
         call.signature == NULL)
         return false;
     signature = call.signature;

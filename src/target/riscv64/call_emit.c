@@ -580,8 +580,7 @@ bool minic_riscv64_emit_direct_call(FILE *file,
     MinicRiscv64AbiCursor cursor;
     MinicRiscv64AbiValue return_value;
     if (file == NULL || program == NULL || function == NULL || frame == NULL ||
-        instruction == NULL || instruction->kind != MINIC_CORE_INSTRUCTION_CALL ||
-        !minic_riscv64_core_direct_call_supported(program, function, instruction))
+        instruction == NULL || instruction->kind != MINIC_CORE_INSTRUCTION_CALL)
         return false;
     {
         const MinicCoreCallView *cached = frame->semantic_calls != NULL
@@ -590,7 +589,12 @@ bool minic_riscv64_emit_direct_call(FILE *file,
         if (cached != NULL) call = *cached;
         else if (!minic_core_call_view_build(function, instruction, &call)) return false;
     }
-    if (call.callee == NULL) return false;
+    /* The RV64 ABI constraints remain checked here for standalone callers,
+     * but now borrow the same semantic view rather than rechecking its shape.
+     * Prepared production already admitted all instructions before output. */
+    if (call.callee == NULL ||
+        !minic_riscv64_core_direct_call_supported(
+            program, function, instruction, &call)) return false;
     callee = call.callee;
     if (!minic_riscv64_abi_cursor_initialize_for_return_profile(
             program, callee->return_type,
@@ -679,8 +683,7 @@ bool minic_riscv64_emit_indirect_call(FILE *file,
     MinicRiscv64AbiCursor cursor;
     MinicRiscv64AbiValue return_value;
     if (file == NULL || program == NULL || function == NULL || frame == NULL ||
-        instruction == NULL || instruction->kind != MINIC_CORE_INSTRUCTION_INDIRECT_CALL ||
-        !minic_riscv64_core_indirect_call_supported(program, function, instruction))
+        instruction == NULL || instruction->kind != MINIC_CORE_INSTRUCTION_INDIRECT_CALL)
         return false;
     {
         const MinicCoreCallView *cached = frame->semantic_calls != NULL
@@ -689,7 +692,9 @@ bool minic_riscv64_emit_indirect_call(FILE *file,
         if (cached != NULL) call = *cached;
         else if (!minic_core_call_view_build(function, instruction, &call)) return false;
     }
-    if (call.signature == NULL) return false;
+    if (call.signature == NULL ||
+        !minic_riscv64_core_indirect_call_supported(
+            program, function, instruction, &call)) return false;
     signature = call.signature;
     if (!minic_riscv64_abi_cursor_initialize_for_return_profile(
             program, signature->return_type,

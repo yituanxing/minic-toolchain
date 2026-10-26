@@ -365,6 +365,10 @@ has src/target/common/direct_call_plan.c 'minic_core_call_view_argument_type(fn,
 has src/target/riscv64/call_emit.c 'call.return_form != MINIC_CORE_CALL_RETURN_OBJECT'
 has src/target/riscv64/frame_layout.c 'frame->semantic_calls = facts->call_index'
 has src/target/riscv64/call_emit.c 'minic_core_call_index_get(frame->semantic_calls, instruction_id)'
+has src/target/riscv64/core_admission.c 'minic_core_call_index_get(semantic_calls, index)'
+has src/target/riscv64/legalize.c '(call = *semantic_view, true)'
+lacks src/target/riscv64/core_admission.c 'minic_type_is_pointer(instruction->type) && instruction->value.block_id'
+lacks src/target/riscv64/core_admission.c 'function->globals[instruction->value.global_id].name != NULL'
 has src/target/common/core_function_facts.c 'facts->max_call_arity = arity'
 # Canonical verifier is shared, never independently rescanned per machine
 # backend if the prepared visitor already admitted the exact Core function.
