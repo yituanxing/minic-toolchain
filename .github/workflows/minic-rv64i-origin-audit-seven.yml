@@ -9,6 +9,7 @@ on:
       - 'src/target/riscv/**'
       - 'src/target/riscv64/**'
       - 'tests/compiler/c0/probe-rv64i-asm-origin.sh'
+      - 'tests/external/linux/corpus_replay.py'
       - 'tools/ci/audit-rv64i-asm-origin.py'
   push:
     branches: [main]
@@ -17,6 +18,7 @@ on:
       - 'tools/ci/audit-rv64i-asm-origin.py'
       - 'tools/ci/summarize-rv64i-seven-v1.py'
       - 'tests/compiler/c0/probe-rv64i-asm-origin.sh'
+      - 'tests/external/linux/corpus_replay.py'
       - 'tests/compiler/c0/probe-rv64i-int128-libcalls.sh'
       - 'tests/compiler/c0/probe-rv64i-int128-pairs.sh'
       - 'src/frontend/parser_builtins.c'
@@ -25,7 +27,6 @@ on:
       - 'src/target/riscv64/isa.c'
       - 'third_party/llvm-compiler-rt-19.1.7/**'
       - 'Makefile'
-      - 'tests/external/linux/corpus_replay.py'
   workflow_dispatch:
 
 permissions:
@@ -231,7 +232,9 @@ jobs:
             --corpus "$GITHUB_WORKSPACE/build/${{ matrix.corpus_dir }}" \
             --work "$work" --jobs 4 \
             --offset 0 --limit ${{ matrix.limit }} \
-            --sample-count 0 --rv64i-origin-audit
+            --sample-count 0 --rv64i-origin-audit \
+            --minic-cflag=-fshort-wchar \
+            --minic-cflag=-funsigned-char
           replay_rc=$?
           set -e
           echo "RV64I_ORIGIN_REPLAY_EXIT=$replay_rc shard=$label"

@@ -70,3 +70,5 @@
 - 2026-10-26：R09 完成 MiniC 公共头文件的所有权清理：通用 `TargetInfo` 仅依赖 `riscv/isa_features.h`；RV32/RV64 共用 ELF function-symbol 实现已移至 `riscv/function_symbol.h`，旧 `riscv64/function_symbol.h` 删除且四处生产 include 已更新；新增边界门禁检查旧实现不再恢复。待当前 HEAD CI 后再标 VERIFIED。
 
 - 2026-10-26：R07 静态审查发现：RV64 严格 ISA 分析直接相信可打印的来源注释边界，源码内联或文件级 ASM 若含相同标记会干扰审计。已在源 ASM 发射前统一拒绝内部预留标记，并新增 inline/file ASM 负例；普通来源 ASM 仍按原路径交给外部汇编器。此修复属于 MiniC 来源所有权，不改变 MiniAS。
+
+- 2026-10-26：复审 #652 的 3352 TUs exact-head 七片记录：3306 compiled，46 failures 全部为 indirect call 参数声明不匹配。首批失败上下文为 EFI 的 `get_var(L"SecureBoot", ...)`；原版 Linux Kbuild 显式使用 `-fshort-wchar` 和 `-funsigned-char`，但此前 `corpus_replay.py` 只传 `-march/-mabi`，导致原始 ABI 选项遗失。此次修正 replay C 选项复现、加入 EFI 间接调用正反例。MiniC 默认 RISC-V Linux `wchar_t` 保持标准 32 位，不放松合法的函数指针调用检查，也不改 MiniAS。需以此 exact HEAD 再次汇总 3352 条验收。
