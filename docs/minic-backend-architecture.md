@@ -227,7 +227,7 @@ literal arithmetic, integer promotion and the generated machine scalar
 normalization. It must never mutate global TargetInfo data. `-fshort-wchar`
 changes the wchar representation to unsigned 16-bit and
 `-fno-short-wchar` restores that **target's actual default**, not an
-assumed 32-bit int (RV64's existing default is 16-bit unsigned).
+assumed target-independent type (RV32/RV64 Linux defaults are now signed 32-bit wchar_t).
 The standalone `minic` driver forwards these switches to `minic-cc`
 even through its qualified RV64 CPP/AS/LD pipeline; RV64 CPP also tracks
 the effective plain-char `__CHAR_UNSIGNED__` predefine. PIC switches are

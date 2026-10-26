@@ -291,6 +291,9 @@ int main(void) {
         return 1;
     }
     if (verify_riscv_integer_strategy() != 0 || verify_registered_target_catalog() != 0 || verify_riscv_profile_catalog() != 0 ||
+        verify_lp64("riscv64-linux", MINIC_TARGET_ARCH_RISCV64,
+                    MINIC_INTEGER_SIGN_UNSIGNED, MINIC_INTEGER_RANK_INT,
+                    MINIC_INTEGER_SIGN_SIGNED) != 0 ||
         verify_invocation_language_abi() != 0 || verify_language_admission() != 0 || verify_rv32() != 0 ||
         verify_lp64("aarch64-linux", MINIC_TARGET_ARCH_AARCH64,
                     MINIC_INTEGER_SIGN_UNSIGNED, MINIC_INTEGER_RANK_INT,

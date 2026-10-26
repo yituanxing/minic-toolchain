@@ -227,7 +227,9 @@ const MinicTargetInfo *minic_target_info_for_architecture(
             rv64_target.riscv_isa.strict_isa = false;
             rv64_target.data_layout = minic_default_data_layout();
             rv64_target.integer_model = &minic_rv64_integer_model;
-            rv64_target.wide_character_type = minic_type_unsigned_short();
+            /* RISC-V Linux psABI: wchar_t is signed 32-bit on ILP32 and LP64.
+             * -fshort-wchar remains a per-invocation 16-bit override. */
+            rv64_target.wide_character_type = minic_type_int();
             rv64_target.libc_size_type = minic_type_unsigned_long();
             rv64_target.word_integer_rank = MINIC_INTEGER_RANK_LONG;
             rv64_target.language_type_capabilities = MINIC_TARGET_LANG_EXTENDED_FLOAT_DECLARATIONS;

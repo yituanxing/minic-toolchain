@@ -14,6 +14,10 @@ cat >"$work/unsigned.i" <<'SRC'
 _Static_assert((char)-1 > 0, "unsigned plain char");
 int model(void) { char x = -1; return x; }
 SRC
+cat >"$work/volatile-char.i" <<'SRC'
+volatile char value;
+int model(void) { return value; }
+SRC
 cat >"$work/wchar16.i" <<'SRC'
 _Static_assert(sizeof(L"X") == 4, "two 16-bit wchar units");
 int model(void) { return sizeof(L"X"); }
@@ -48,12 +52,27 @@ for arch in riscv32-linux riscv64-linux x86_64-linux aarch64-linux loongarch64-l
     -S "$work/wchar16.i" -o "$work/driver16.s"
   cmp "$work/wchar16.s" "$work/driver16.s"
   normal="$work/wchar32.i"
-  [[ "$arch" == riscv64-linux ]] && normal="$work/wchar16.i"
   "$MINIC_CC" "--target=$arch" "${extra[@]}" -fno-short-wchar \
     -S "$normal" -o "$work/wchar-default.s"
   "$MINIC" "--target=$arch" "${extra[@]}" -fno-short-wchar \
     -S "$normal" -o "$work/driver-default.s"
   cmp "$work/wchar-default.s" "$work/driver-default.s"
+  # RV32 machine emission must honor plain-char signedness, not merely
+  # accept the target option or agree with the driver frontend output.
+  if [[ "$arch" == riscv32-linux ]]; then
+    "$MINIC_CC" --target=riscv32-linux "${extra[@]}" -fsigned-char \
+      -S "$work/volatile-char.i" -o "$work/rv32-signed-machine.s"
+    "$MINIC_CC" --target=riscv32-linux "${extra[@]}" -funsigned-char \
+      -S "$work/volatile-char.i" -o "$work/rv32-unsigned-machine.s"
+    grep -Eq '^[[:space:]]+lb[[:space:]]' "$work/rv32-signed-machine.s" || {
+      echo 'MINIC_TARGET_ABI_FLAGS=FAIL rv32-signed-char-machine-missing-lb' >&2
+      exit 1
+    }
+    grep -Eq '^[[:space:]]+lbu[[:space:]]' "$work/rv32-unsigned-machine.s" || {
+      echo 'MINIC_TARGET_ABI_FLAGS=FAIL rv32-unsigned-char-machine-missing-lbu' >&2
+      exit 1
+    }
+  fi
   # Last lexical option wins, as in GCC/Clang.
   "$MINIC_CC" "--target=$arch" "${extra[@]}" \
     -fsigned-char -funsigned-char -S "$work/unsigned.i" -o "$work/last.s"

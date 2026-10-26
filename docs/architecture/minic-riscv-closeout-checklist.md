@@ -14,8 +14,8 @@
 
 | ID | 状态 | 问题及源码证据 | 修复策略（最小范围） | 必须验证 |
 | --- | --- | --- | --- | --- |
-| **R01** | TODO（源码确认） | **RV32 `-fsigned-char` 的机器符号判断错误**。[`rv32_scalar.c`](../../src/target/riscv32/rv32_scalar.c) `rv32_scalar()` 把 `is_plain_char` 一概判成 unsigned，忽略 invocation 生效后的 `integer_sign`。 | 使用 **生效后的** `effective.integer_sign`，不因 `is_plain_char` 强制 unsigned；保留 `_Bool` 等特殊类型的原有规则；仅改 RV32 机器符号判断。 | `-fsigned-char`：`volatile char c=-1; c<0`、`(int)c`、指针取值；`-funsigned-char` 反向检查。RV32 GNU/QEMU 值比较，重新跑五目标选项门禁。 |
-| **R02** | TODO（标准+源码确认） | **RV64 Linux 默认 `wchar_t` 模型错误**。`target_info.c` 设为 `unsigned short`，当前选项脚本还把这个历史值当正确默认值。RISC-V **Linux psABI Appendix A** 指定所有 ILP32/LP64 `wchar_t` 为 **signed 4 字节、4 字节对齐**。 | 只将 RV64 Linux 默认改成 `int`，保留显式 `-fshort-wchar`→16 位及恢复目标默认的 `-fno-short-wchar`；同步修复依赖旧期望的测试，检查 CPP/头文件宏的对应关系。 | RV32/RV64 默认 `sizeof(wchar_t)==4`、`sizeof(L\"X\")==8`、`(wchar_t)-1<0`；显式 `-fshort-wchar` 为 16 位；与 GNU 预处理/运行差分；已有 Linux 与自举回归不退化。 |
+| **R01** | CODE_FIXED（等待 exact-head 运行验证） | **RV32 `-fsigned-char` 的机器符号判断错误**。[`rv32_scalar.c`](../../src/target/riscv32/rv32_scalar.c) `rv32_scalar()` 把 `is_plain_char` 一概判成 unsigned，忽略 invocation 生效后的 `integer_sign`。 | 使用 **生效后的** `effective.integer_sign`，不因 `is_plain_char` 强制 unsigned；保留 `_Bool` 等特殊类型的原有规则；仅改 RV32 机器符号判断。 | `-fsigned-char`：`volatile char c=-1; c<0`、`(int)c`、指针取值；`-funsigned-char` 反向检查。RV32 GNU/QEMU 值比较，重新跑五目标选项门禁。 |
+| **R02** | CODE_FIXED（等待 exact-head 运行验证） | **RV64 Linux 默认 `wchar_t` 模型错误**。`target_info.c` 设为 `unsigned short`，当前选项脚本还把这个历史值当正确默认值。RISC-V **Linux psABI Appendix A** 指定所有 ILP32/LP64 `wchar_t` 为 **signed 4 字节、4 字节对齐**。 | 只将 RV64 Linux 默认改成 `int`，保留显式 `-fshort-wchar`→16 位及恢复目标默认的 `-fno-short-wchar`；同步修复依赖旧期望的测试，检查 CPP/头文件宏的对应关系。 | RV32/RV64 默认 `sizeof(wchar_t)==4`、`sizeof(L\"X\")==8`、`(wchar_t)-1<0`；显式 `-fshort-wchar` 为 16 位；与 GNU 预处理/运行差分；已有 Linux 与自举回归不退化。 |
 | **R03** | TODO（源码确认，运行待复现） | **RV64IM 的某些 `__int128` 比较反而比 RV64I 支持得少**。`riscv64/isa.c` 在 M 可用时拒绝两字比较，而 `scalar_emit.c` 中 Base-I 路径有 `__cmpti2/__ucmpti2`。另 `runtime_libcall.c` 按 `M` 全局判断是否有 libcall，可能漏掉保存 `ra`。 | 将 **“有 M”** 与 **“这一条 Core 指令选哪种算法”** 分开；先保持两字比较走可用软件调用，确保函数级 `ra` 保存检查根据实际选中 libcall，而不是仅看 `M`。先修退化，再考虑优化。 | 同一 `__int128` 有符号/无符号比较在 `rv64i/lp64` 和 `rv64im/lp64` 上都链接运行；比较边界、连环调用、返回地址保存；审计 I 分支不出 M。 |
 | **R04** | TODO（发射覆盖缺口待运行复现） | **RV32 binary32 算术**：`rv32_emit.c` 的浮点分派没有 `FLOAT_ADD/SUBTRACT/MULTIPLY/DIVIDE`，`rv32_fp_emit.c` 也未见对应 `__*sf3` 分支。编译普通 `float a+b` 的实际 Core 路径需验证。 | 用现有 `riscv/instruction_select.h` 的 `__addsf3` 等符号查找；RV32I ILP32 使用整数寄存器位传递，不另写浮点算法，也不声称 F 扩展。仅补目标 machine lowering 缺口。 | 四个 binary32 运算、`NaN`、带符号零、有限边界；GNU+compiler-rt/libgcc+QEMU 差分。排除浮点常量折叠假阳性。 |
 
@@ -59,4 +59,5 @@
 
 ### 变更记录
 
-- 2026-10-26：依据 PR #651 静态代码审计建立清单。所有缺陷初始标为 TODO，之前绿灯只属于之前对应的 exact HEAD；未据此宣称上述问题已经运行复现或修复。
+- 2026-10-26：依据 PR #651 静态代码审计建立清单。此前绿灯只属于之前对应的 exact HEAD。
+- 2026-10-26：R01 修复 RV32 机器符号判断并添加 signed/unsigned char 生成汇编门禁；R02 修复 RV64 Linux wchar_t 默认并更新选项、target-descriptor 测试和架构文档。状态标为 CODE_FIXED，等待本次 HEAD 对应 CI/GNU/QEMU 的执行证据，不宣称 VERIFIED。
