@@ -250,6 +250,12 @@ has src/target/riscv64/frame_layout.c 'minic_core_block_reused_spill_layout('
 exists src/target/common/core_spill_layout.c
 exists src/target/common/core_spill_layout.h
 has src/target/riscv32/rv32_abi_plan.c 'rv32_abi_reject("incoming_return"'
+# RV32 shares the compact canonical CALL index. Never allocate one
+# heavyweight machine call plan for each non-CALL instruction again.
+has src/target/riscv32/rv32_abi_plan.c 'minic_core_instruction_is_call('
+has src/target/riscv32/rv32_abi_plan.c 'while (low < high)'
+lacks src/target/riscv32/rv32_abi_plan.c 'plan->call_count = function->instruction_count'
+has src/target/riscv32/rv32_abi_plan.h 'size_t instruction_id;'
 lacks src/target/riscv32/rv32_emit.c 'rv32_scalar_storage_words(f, f->return_type, &bits)'
 has src/target/riscv32/rv32_frame.c 'varargs_offset'
 has src/target/riscv32/rv32_emit.c 'MINIC_CORE_INSTRUCTION_VARIADIC_ARGUMENT_ADDRESS'

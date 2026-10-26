@@ -21,6 +21,7 @@ typedef struct Rv32AbiWordLocation {
 } Rv32AbiWordLocation;
 
 typedef struct Rv32CallAbiPlan {
+    size_t instruction_id; /* ordered sparse Core CALL ID */
     MinicCoreCallView view;
     Rv32AbiWordLocation *arguments;
     size_t stack_words;
@@ -38,7 +39,7 @@ typedef struct Rv32FunctionAbiPlan {
     size_t named_stack_words;
     size_t record_return_size;
     bool indirect_return;
-    Rv32CallAbiPlan *calls; /* indexed by MinicCoreInstructionId */
+    Rv32CallAbiPlan *calls; /* compact sorted by instruction_id */
     size_t call_count;
     size_t max_outgoing_stack_words;
 } Rv32FunctionAbiPlan;

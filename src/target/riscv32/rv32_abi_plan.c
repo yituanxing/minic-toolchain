@@ -1,5 +1,6 @@
 #include "target/riscv32/rv32_abi_plan.h"
 #include "target/riscv32/rv32_internal.h"
+#include "target/common/core_instruction_family.h"
 #include "target/data_layout.h"
 #include <stdint.h>
 #include <stdlib.h>
@@ -159,34 +160,44 @@ static bool rv32_plan_call(const MinicC0Program *program,
     return true;
 }
 
+/* Sparse CALL ownership: Common owns the validated Core call index.
+ * ILP32 keeps one target ABI plan per CALL, not per Core instruction. */
 bool rv32_function_abi_plan_build(const MinicC0Program *program,
                                   const MinicTargetInfo *target,
                                   const MinicCoreFunction *function,
                                   const MinicCoreCallIndex *semantic_calls,
                                   Rv32FunctionAbiPlan *plan) {
-    size_t i;
+    size_t i, dense = 0U, actual_calls = 0U;
     if (program == NULL || target == NULL ||
         target->data_layout == NULL || function == NULL || plan == NULL ||
         plan->calls != NULL || plan->parameters != NULL ||
         plan->call_count != 0U || plan->parameter_count != 0U ||
         plan->max_outgoing_stack_words != 0U ||
-        (function->instruction_count != 0U &&
-         function->instructions == NULL) ||
-        function->instruction_count > SIZE_MAX / sizeof(*plan->calls))
+        (function->instruction_count != 0U && function->instructions == NULL))
         return false;
     if (!rv32_plan_incoming(program, target, function, plan)) goto failure;
-    plan->call_count = function->instruction_count;
-    if (plan->call_count != 0U) {
-        plan->calls = calloc(plan->call_count, sizeof(*plan->calls));
+    for (i = 0U; i < function->instruction_count; ++i)
+        if (minic_core_instruction_is_call(function->instructions[i].kind))
+            ++actual_calls;
+    if (actual_calls > SIZE_MAX / sizeof(*plan->calls) ||
+        (semantic_calls != NULL &&
+         (semantic_calls->count != actual_calls ||
+          (actual_calls != 0U && semantic_calls->sites == NULL))))
+        goto failure;
+    plan->call_count = actual_calls;
+    if (actual_calls != 0U) {
+        plan->calls = calloc(actual_calls, sizeof(*plan->calls));
         if (plan->calls == NULL) goto failure;
     }
-    for (i = 0U; i < plan->call_count; ++i) {
+    for (i = 0U; i < function->instruction_count; ++i) {
         const MinicCoreInstruction *ins = &function->instructions[i];
-        Rv32CallAbiPlan *call = &plan->calls[i];
-        if (ins->kind != MINIC_CORE_INSTRUCTION_CALL &&
-            ins->kind != MINIC_CORE_INSTRUCTION_INDIRECT_CALL)
-            continue;
-        const MinicCoreCallView *view = semantic_calls != NULL
+        Rv32CallAbiPlan *call;
+        const MinicCoreCallView *view;
+        if (!minic_core_instruction_is_call(ins->kind)) continue;
+        if (dense >= actual_calls) goto failure;
+        call = &plan->calls[dense];
+        call->instruction_id = i;
+        view = semantic_calls != NULL
             ? minic_core_call_index_get(semantic_calls, i) : NULL;
         if ((semantic_calls != NULL && view == NULL) ||
             !rv32_plan_call(program, target, function, ins, view, call)) {
@@ -198,17 +209,31 @@ bool rv32_function_abi_plan_build(const MinicC0Program *program,
         }
         if (call->stack_words > plan->max_outgoing_stack_words)
             plan->max_outgoing_stack_words = call->stack_words;
+        ++dense;
     }
+    if (dense != actual_calls) goto failure;
     return true;
 failure:
     rv32_function_abi_plan_destroy(plan);
     return false;
 }
 
+/* Sorted instruction IDs give O(log CALL sites) lookup, without a costly
+ * machine-plan slot for every non-CALL Core instruction. */
 const Rv32CallAbiPlan *rv32_function_abi_call(
     const Rv32FunctionAbiPlan *plan, MinicCoreInstructionId index) {
-    if (plan == NULL || (size_t)index >= plan->call_count ||
-        plan->calls == NULL || !plan->calls[index].prepared)
+    size_t low = 0U, high;
+    if (plan == NULL || (plan->call_count != 0U && plan->calls == NULL))
         return NULL;
-    return &plan->calls[index];
+    high = plan->call_count;
+    while (low < high) {
+        size_t mid = low + (high - low) / 2U;
+        if (plan->calls[mid].instruction_id < (size_t)index)
+            low = mid + 1U;
+        else
+            high = mid;
+    }
+    return low < plan->call_count &&
+           plan->calls[low].instruction_id == (size_t)index &&
+           plan->calls[low].prepared ? &plan->calls[low] : NULL;
 }
