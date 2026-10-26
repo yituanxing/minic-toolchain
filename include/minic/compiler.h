@@ -29,11 +29,12 @@ int minic_compile_preprocessed_file(const char *input_path,
  * true (-ffunction-sections) gives each function an input section. */
 struct MinicTargetInfo;
 
-/* Target-aware C-to-assembly entry point. RV64 and x86-64 have independent
- * code generators; target parsing, DataLayout and Core lowering share the
- * selected MinicTargetInfo. Unsupported combinations reject explicitly,
- * never silently emitting assembly for a different target.
- * GNU assembly, linking and runtime are separate validation stages. */
+/* Target-aware C-to-assembly entry point. All five targets share
+ * Frontend/Core lowering and one checked assembly-output transaction.
+ * Machine code, ISA capability and actual calling convention remain
+ * target-owned; function/ABI planning is being unified separately.
+ * Unsupported combinations reject explicitly, never silently falling back
+ * to host code. Assembly, linking and runtime remain distinct gates. */
 int minic_compile_preprocessed_file_for_target(const char *input_path,
                                                const char *output_path,
                                                const struct MinicTargetInfo *target_info,

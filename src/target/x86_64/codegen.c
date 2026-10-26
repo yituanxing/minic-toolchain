@@ -2,6 +2,7 @@
 #include "target/x86_64/machine_emit.h"
 #include "target/common/core_call_view.h"
 #include "target/common/program_visit.h"
+#include "target/common/program_emit.h"
 
 #include "target/data_layout.h"
 #include "target/x86_64/global_emit.h"
@@ -205,8 +206,12 @@ bool minic_x86_64_write_c0_program_with_core_functions(
     const char *path, const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *core_functions, size_t core_function_count,
     bool function_sections, MinicDiagnostic *diagnostic) {
-    FILE *out;
-    bool success = true;
+    static const MinicProgramEmitConfig config = {
+        x86_visit_global, x86_visit_function, NULL, NULL,
+        ".section .note.GNU-stack,\"\",@progbits\n", NULL,
+        MINIC_PROGRAM_FUNCTION_LIVE_DEFINITIONS, false
+    };
+    bool success;
     const MinicX86VisitContext visits = { diagnostic, path };
     if (path == NULL || program == NULL || target == NULL ||
         target->architecture != MINIC_TARGET_ARCH_X86_64 ||
@@ -219,22 +224,10 @@ bool minic_x86_64_write_c0_program_with_core_functions(
         x86_error(diagnostic, path, "x86-64 file-scope asm not implemented yet");
         return false;
     }
-    out = fopen(path, "wb");
-    if (out == NULL) {
-        x86_error(diagnostic, path, "x86-64 cannot create assembly output");
-        return false;
-    }
-    success = minic_program_visit_globals(
-        out, program, target, x86_visit_global, (void *)&visits);
-    if (success)
-        success = minic_program_visit_functions(
-            out, program, target, core_functions, core_function_count,
-            function_sections, MINIC_PROGRAM_FUNCTION_LIVE_DEFINITIONS,
-            false, x86_visit_function, (void *)&visits);
-    /* ELF/GNU-stack contract: emitted objects never request executable stack. */
-    if (success && fprintf(out, ".section .note.GNU-stack,\"\",@progbits\n") < 0)
-        success = false;
-    if (fclose(out) != 0) success = false;
-    if (!success) (void)remove(path);
+    success = minic_program_emit_write(
+        path, program, target, core_functions, core_function_count,
+        function_sections, &config, (void *)&visits);
+    if (!success && diagnostic != NULL && diagnostic->message[0] == '\0')
+        x86_error(diagnostic, path, "x86-64 cannot emit assembly");
     return success;
 }

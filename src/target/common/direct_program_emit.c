@@ -3,6 +3,7 @@
 #include "target/backend_core_usage.h"
 #include "target/common/global_emit.h"
 #include "target/common/program_visit.h"
+#include "target/common/program_emit.h"
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -103,14 +104,21 @@ static bool direct_visit_function(
     return false;
 }
 
+static bool direct_finalize(const char *path, const MinicTargetInfo *target,
+                            void *opaque) {
+    const MinicDirectVisitContext *ctx = opaque;
+    (void)target;
+    return ctx->config->finalize_output == NULL ||
+           ctx->config->finalize_output(path);
+}
+
 bool minic_multi_direct_write_program(
     const char *path, const MinicC0Program *program,
     const MinicTargetInfo *target, const MinicCoreFunction *core_functions,
     size_t core_function_count, bool function_sections,
     const MinicMultiDirectProgramConfig *config,
     MinicDiagnostic *diagnostic) {
-    FILE *out;
-    bool success = true;
+    bool success;
     const bool census = getenv("MINIC_BACKEND_CENSUS") != NULL;
     MinicDirectVisitContext visits = { config, 0U, 0U, census };
 
@@ -127,40 +135,27 @@ bool minic_multi_direct_write_program(
     if (program->file_asm_count != 0U)
         return minic_multi_direct_fail(diagnostic, path, config->display_name,
                                        "file asm not supported");
-    out = fopen(path, "wb");
-    if (out == NULL)
-        return minic_multi_direct_fail(diagnostic, path, config->display_name,
-                                       "cannot open GNU assembly output");
-    success = minic_program_visit_globals(
-        out, program, target, direct_visit_global, &visits);
-    /* An opt-in census still inspects all defined Core functions if a
-     * global failed, but the partial .s is always removed. */
-    if (success || census) {
-        const bool functions_ok = minic_program_visit_functions(
-            out, program, target, core_functions, core_function_count,
-            function_sections, MINIC_PROGRAM_FUNCTION_LIVE_DEFINITIONS,
-            census, direct_visit_function, &visits);
-        success = success && functions_ok;
+    {
+        const MinicProgramEmitConfig emit = {
+            direct_visit_global, direct_visit_function,
+            NULL, NULL, config->gnu_stack_note, direct_finalize,
+            MINIC_PROGRAM_FUNCTION_LIVE_DEFINITIONS, census
+        };
+        success = minic_program_emit_write(
+            path, program, target, core_functions, core_function_count,
+            function_sections, &emit, &visits);
     }
     if (census) {
         minic_backend_core_usage_dump(config->architecture_name,
                                       program, target, core_functions,
                                       core_function_count);
         (void)fprintf(stderr,
-            "MINIC_BACKEND_CENSUS arch=%s scanned=%zu rejected=%zu\n",
-            config->architecture_name, visits.scanned_functions, visits.rejected_functions);
+            "MINIC_BACKEND_CENSUS arch=%s scanned=%zu rejected=%zu\\n",
+            config->architecture_name, visits.scanned_functions,
+            visits.rejected_functions);
     }
-    if (success && fputs(config->gnu_stack_note, out) == EOF)
-        success = false;
-    if (fclose(out) != 0) success = false;
-    if (success && config->finalize_output != NULL &&
-        !config->finalize_output(path))
-        success = false;
-    if (!success) {
-        (void)remove(path);
-        return minic_multi_direct_fail(
-            diagnostic, path, config->display_name,
-            "Core instruction/ABI not yet supported by M1 emitter");
-    }
+    if (!success)
+        return minic_multi_direct_fail(diagnostic, path, config->display_name,
+                                       "Core instruction/ABI not yet supported by M1 emitter");
     return true;
 }
