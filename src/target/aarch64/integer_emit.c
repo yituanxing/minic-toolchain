@@ -1,6 +1,7 @@
 #include "target/aarch64/integer_emit.h"
 #include "target/aarch64/scalar_normalize.h"
 #include "target/common/direct_instruction_semantics.h"
+#include "target/common/core_numeric_shape.h"
 #include "target/common/lp64_scalar.h"
 #include <stdio.h>
 
@@ -179,7 +180,7 @@ bool minic_aarch64_emit_integer_instruction(
             const MinicCoreValueId address = ins->value.integer_overflow.result_address;
             size_t width;
             bool is_signed;
-            if (!minic_multi_direct_integer_overflow_shape(
+            if (!minic_core_integer_overflow_shape(
                     program, target, fn, ins, &width, &is_signed))
                 return false;
             const bool wide = width == 8U;
@@ -234,7 +235,7 @@ bool minic_aarch64_emit_integer_instruction(
         case MINIC_CORE_INSTRUCTION_INTEGER_CTZ: {
             const MinicCoreValueId operand = ins->value.operand;
             unsigned int width;
-            if (!minic_multi_direct_integer_bitscan_shape(
+            if (!minic_core_integer_bitscan_shape(
                     program, target, fn, ins, &width) ||
                 fprintf(out, width == 64U
                            ? "  ldr x9, [sp, #%zu]\n"

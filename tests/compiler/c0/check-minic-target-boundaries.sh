@@ -329,10 +329,20 @@ exists src/target/common/program_visit.h
 # Shared Core opcode-family classification feeds RV32, RV64, x86/Direct
 # without claiming a universal machine ISA or ignoring target admission.
 exists src/target/common/core_instruction_family.h
+exists src/target/common/core_numeric_shape.h
+exists src/target/common/core_numeric_shape.c
+has src/target/common/core_numeric_shape.c 'bool minic_core_integer_overflow_shape('
+has src/target/common/core_numeric_shape.c 'bool minic_core_integer_bitscan_shape('
+has src/target/x86_64/machine_emit.c 'minic_core_integer_bitscan_shape('
+has src/target/riscv64/scalar_emit.c 'minic_core_integer_bitscan_shape('
+has src/target/aarch64/integer_emit.c 'minic_core_integer_overflow_shape('
+has src/target/loongarch64/integer_emit.c 'minic_core_integer_overflow_shape('
+lacks src/target/common/direct_instruction_semantics.c 'minic_multi_direct_fp_instruction_kind('
+lacks src/target/common/direct_instruction_semantics.h 'minic_multi_direct_integer_overflow_shape('
 has src/target/riscv32/rv32_emit.c 'minic_core_instruction_is_integer_scalar(ins->kind)'
 has src/target/riscv64/core_admission.c 'minic_core_instruction_is_integer_scalar(instruction->kind)'
 has src/target/riscv64/core_codegen.c 'minic_core_instruction_is_floating_scalar(instruction->kind)'
-has src/target/common/direct_instruction_semantics.c 'minic_core_instruction_is_floating_scalar(kind)'
+has src/target/common/direct_instruction_semantics.c 'minic_core_instruction_is_floating_scalar(ins->kind)'
 has src/target/common/direct_call_preflight.c 'minic_core_instruction_is_call(ins->kind)'
 has src/target/common/program_visit.h 'minic_program_visit_globals('
 has src/target/common/program_visit.h 'minic_program_visit_functions('

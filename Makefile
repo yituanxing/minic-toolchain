@@ -156,6 +156,7 @@ MINIC_SOURCES := \
 	src/target/common/direct_function_plan.c \
 	src/target/common/core_function_plan.c \
 	src/target/common/core_function_facts.c \
+	src/target/common/core_numeric_shape.c \
 	src/target/common/core_object_storage.c \
 	src/target/common/core_call_view.c \
 	src/target/common/core_call_index.c \

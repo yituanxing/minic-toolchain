@@ -2,7 +2,7 @@
 #include "target/riscv64/codegen_internal.h"
 #include "target/riscv64/frame_access.h"
 #include "target/riscv64/runtime_libcall.h"
-#include "target/common/direct_instruction_semantics.h"
+#include "target/common/core_instruction_family.h"
 #include <inttypes.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -80,7 +80,7 @@ bool minic_riscv64_emit_fp_instruction(
     const MinicCoreInstruction *instruction, const MinicRiscvIsa *isa) {
     if (file == NULL || function == NULL || frame == NULL ||
         instruction == NULL ||
-        !minic_multi_direct_fp_instruction_kind(instruction->kind))
+        !minic_core_instruction_is_floating_scalar(instruction->kind))
         return false;
     switch (instruction->kind) {
     case MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT:

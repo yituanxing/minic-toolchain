@@ -5,7 +5,8 @@
 #include "target/riscv64/overflow_emit.h"
 #include "target/riscv64/codegen_internal.h"
 #include "target/riscv64/legalize.h"
-#include "target/common/direct_instruction_semantics.h"
+#include "target/common/core_instruction_family.h"
+#include "target/common/core_numeric_shape.h"
 #include "target/riscv64/frame_access.h"
 #include "target/riscv64/runtime_libcall.h"
 #include <inttypes.h>
@@ -127,7 +128,7 @@ bool minic_riscv64_emit_scalar_instruction(
         return false;
     /* The four ISA backends agree on the semantic FP family.
      * RV64 keeps its own fmv/fcvt and floating register sequences. */
-    if (minic_multi_direct_fp_instruction_kind(instruction->kind))
+    if (minic_core_instruction_is_floating_scalar(instruction->kind))
         return minic_riscv64_emit_fp_instruction(
             file, program, function, frame, instruction, isa);
     if (instruction->kind == MINIC_CORE_INSTRUCTION_INTEGER_OVERFLOW)
@@ -427,7 +428,7 @@ bool minic_riscv64_emit_scalar_instruction(
     case MINIC_CORE_INSTRUCTION_INTEGER_CLZ:
     case MINIC_CORE_INSTRUCTION_INTEGER_CTZ: {
         unsigned int width;
-        if (!minic_multi_direct_integer_bitscan_shape(
+        if (!minic_core_integer_bitscan_shape(
                 program, minic_target_info_for_architecture(MINIC_TARGET_ARCH_RISCV64),
                 function, instruction, &width) ||
             !minic_riscv64_frame_load_value(file, frame, instruction->value.operand, "t0") ||

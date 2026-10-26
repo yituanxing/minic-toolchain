@@ -1,6 +1,7 @@
 #include "target/loongarch64/integer_emit.h"
 #include "target/loongarch64/scalar_normalize.h"
 #include "target/common/direct_instruction_semantics.h"
+#include "target/common/core_numeric_shape.h"
 #include "target/common/lp64_scalar.h"
 #include "target/loongarch64/frame_emit.h"
 #include <stdio.h>
@@ -194,7 +195,7 @@ bool minic_loongarch64_emit_integer_instruction(
             const MinicCoreValueId address = ins->value.integer_overflow.result_address;
             size_t width;
             bool is_signed;
-            if (!minic_multi_direct_integer_overflow_shape(
+            if (!minic_core_integer_overflow_shape(
                     program, target, fn, ins, &width, &is_signed))
                 return false;
             const int op = ins->value.integer_overflow.operator_kind;
@@ -267,7 +268,7 @@ bool minic_loongarch64_emit_integer_instruction(
         case MINIC_CORE_INSTRUCTION_INTEGER_CTZ: {
             const MinicCoreValueId operand = ins->value.operand;
             unsigned int width;
-            if (!minic_multi_direct_integer_bitscan_shape(
+            if (!minic_core_integer_bitscan_shape(
                     program, target, fn, ins, &width) ||
                 !emit_sp_mem(out, width == 64U ? "ld.d" : "ld.w",
                              "$t0", (size_t)operand * 8U))
