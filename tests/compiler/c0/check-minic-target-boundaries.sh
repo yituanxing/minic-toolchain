@@ -292,16 +292,22 @@ done
 exists src/target/common/program_visit.h
 has src/target/common/program_visit.h 'minic_program_visit_globals('
 has src/target/common/program_visit.h 'minic_program_visit_functions('
-has src/target/common/direct_program_emit.c 'minic_program_visit_globals('
-has src/target/common/direct_program_emit.c 'minic_program_visit_functions('
+# All five targets must own only target callbacks. File lifetime,
+# global/Core visit order and partial-output removal are ONE common transaction.
+exists src/target/common/program_emit.h
+has src/target/common/program_emit.h 'minic_program_visit_globals('
+has src/target/common/program_emit.h 'minic_program_visit_functions('
+has src/target/common/program_emit.h 'if (!ok) (void)remove(path);'
+has src/target/common/direct_program_emit.c 'minic_program_emit_write('
 for backend in x86_64 riscv32 riscv64; do
   case "$backend" in
     x86_64) owner=src/target/x86_64/codegen.c ;;
     riscv32) owner=src/target/riscv32/rv32_emit.c ;;
     riscv64) owner=src/target/riscv64/codegen_function.c ;;
   esac
-  has "$owner" 'minic_program_visit_globals('
-  has "$owner" 'minic_program_visit_functions('
+  has "$owner" 'minic_program_emit_write('
+  lacks "$owner" 'fopen(path, "wb")'
+  lacks "$owner" '(void)remove(path)'
 done
 # The only live definition filter is the common Core semantic predicate.
 has src/target/common/program_visit.h 'decl->is_internal && !decl->is_referenced'

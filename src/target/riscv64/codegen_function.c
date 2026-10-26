@@ -2,6 +2,7 @@
 #include "target/riscv64/global_emit.h"
 #include "target/common/global_emit.h"
 #include "target/common/program_visit.h"
+#include "target/common/program_emit.h"
 #include "target/riscv64/abi.h"
 #include "target/riscv64/codegen_internal.h"
 #include "target/riscv64/core_codegen.h"
@@ -135,6 +136,43 @@ static bool rv64_visit_function(
     return success;
 }
 
+static bool rv64_between(FILE *file, const MinicC0Program *program,
+                         const MinicTargetInfo *target,
+                         const MinicCoreFunction *functions, size_t count,
+                         bool function_sections, void *opaque) {
+    size_t i;
+    (void)target;
+    (void)functions;
+    (void)count;
+    (void)function_sections;
+    (void)opaque;
+    if (program->file_asm_count != 0U) {
+        if (fprintf(file, ".text\\n") < 0) return false;
+        for (i = 0U; i < program->file_asm_count; ++i) {
+            const MinicFileAsm *source = &program->file_asms[i];
+            if (!minic_riscv64_source_asm_marker_safe(source->text, source->length) ||
+                !minic_riscv64_asm_audit_marker(file, true) ||
+                !minic_riscv64_emit_file_asm(file, source) ||
+                fputc('\\n', file) == EOF ||
+                !minic_riscv64_asm_audit_marker(file, false))
+                return false;
+        }
+    }
+    return fprintf(file, ".text\\n") >= 0;
+}
+
+static bool rv64_finalize(const char *path, const MinicTargetInfo *target,
+                          void *opaque) {
+    Rv64ProgramContext *ctx = opaque;
+    char isa_error[240];
+    if (target == NULL || !target->riscv_isa.strict_isa) return true;
+    if (minic_riscv64_check_isa_assembly(
+            path, &target->riscv_isa, isa_error, sizeof(isa_error)))
+        return true;
+    minic_riscv64_set_diagnostic(ctx->diagnostic, path, isa_error);
+    return false;
+}
+
 bool minic_riscv64_write_c0_program_with_core_functions(const char *path,
                                                         const MinicC0Program *program,
                                                         const MinicCoreFunction *core_functions,
@@ -142,91 +180,28 @@ bool minic_riscv64_write_c0_program_with_core_functions(const char *path,
                                                         bool function_sections,
                                                         const MinicTargetInfo *target,
                                                         MinicDiagnostic *diagnostic) {
-    FILE *file;
+    static const MinicProgramEmitConfig config = {
+        rv64_visit_global, rv64_visit_function, NULL, rv64_between,
+        NULL, rv64_finalize, MINIC_PROGRAM_FUNCTION_ALL, false
+    };
     Rv64ProgramContext context = { path, diagnostic };
     bool success;
-
-    if (program == NULL) {
-        minic_riscv64_set_diagnostic(diagnostic, path, "program is required");
+    if (program == NULL || target == NULL || path == NULL) {
+        minic_riscv64_set_diagnostic(diagnostic, path, "program/target/path is required");
         return false;
     }
     if (core_function_count != program->function_count ||
         (core_function_count != 0U && core_functions == NULL)) {
-        minic_riscv64_set_diagnostic(
-            diagnostic, path, "Core function map does not match program functions");
+        minic_riscv64_set_diagnostic(diagnostic, path,
+            "Core function map does not match program functions");
         return false;
     }
-
-    /* Source-origin GNU asm is validated for operand transport by Core,
-     * then forwarded to the assembler. ISA restrictions on compiler-emitted
-     * code must not reject an upstream Linux CSR/A/M/privileged asm template.
-     * The final RISC-V ISA audit only inspects code outside source markers. */
-
-    /* LP64 uses two XLEN slots for C __int128 parameters and returns.
-     * Unsupported 128-bit ARITHMETIC remains rejected by Core ISA
-     * legalization, rather than rejecting otherwise ABI-valid prototypes. */
-
-    /* Full LP64 integer-register psABI: float/double arguments and returns
-     * travel in GPRs, and records use XLEN-word chunks/indirect storage.
-     * Distinguish this psABI from the separate software-arithmetic library.
-     * 128-bit non-qualified arithmetic remains separately diagnosed by the
-     * instruction legalizer rather than restricting valid ABI signatures. */
-
-    file = fopen(path, "wb");
-    if (file == NULL) {
-        char message[256];
-
-        (void)snprintf(message, sizeof(message), "cannot open output: %s", strerror(errno));
-        minic_riscv64_set_diagnostic(diagnostic, path, message);
-        return false;
-    }
-
-    success = true;
-    success = minic_program_visit_globals(
-        file, program, target, rv64_visit_global, &context);
-    if (success && program->file_asm_count != 0U) {
-        size_t file_asm_index;
-
-        success = fprintf(file, ".text\n") >= 0;
-        for (file_asm_index = 0U; success && file_asm_index < program->file_asm_count;
-             ++file_asm_index) {
-            const MinicFileAsm *source = &program->file_asms[file_asm_index];
-            success = minic_riscv64_source_asm_marker_safe(source->text, source->length) &&
-                      minic_riscv64_asm_audit_marker(file, true) &&
-                      minic_riscv64_emit_file_asm(file, source);
-            /* Keep the end-marker on its own physical source line. */
-            if (success) success = fputc('\n', file) != EOF;
-            if (success) success = minic_riscv64_asm_audit_marker(file, false);
-        }
-    }
-    if (success) {
-        success = fprintf(file, ".text\n") >= 0;
-    }
-
-    if (success)
-        success = minic_program_visit_functions(
-            file, program, target, core_functions, core_function_count,
-            function_sections, MINIC_PROGRAM_FUNCTION_ALL, false,
-            rv64_visit_function, &context);
-
-    if (!success && (diagnostic == NULL || diagnostic->message[0] == '\0')) {
+    /* GNU source-asm provenance and strict-I audits remain target-owned.
+     * The common transaction removes partial output in ALL ISA profiles. */
+    success = minic_program_emit_write(
+        path, program, target, core_functions, core_function_count,
+        function_sections, &config, &context);
+    if (!success && diagnostic != NULL && diagnostic->message[0] == '\\0')
         minic_riscv64_set_diagnostic(diagnostic, path, "cannot write RISC-V assembly");
-    }
-    if (fclose(file) != 0 && success) {
-        minic_riscv64_set_diagnostic(diagnostic, path, "cannot close RISC-V assembly output");
-        success = false;
-    }
-    /* Strict RV64I audits ACTUAL machine output from every emission family.
-     * Legacy RV64 Linux/selfhost output has zero additional work. */
-    if (success && target != NULL && target->riscv_isa.strict_isa) {
-        char isa_error[240];
-        if (!minic_riscv64_check_isa_assembly(path, &target->riscv_isa, isa_error, sizeof(isa_error))) {
-            minic_riscv64_set_diagnostic(diagnostic, path, isa_error);
-            (void)remove(path);
-            return false;
-        }
-    }
-    if (!success && target != NULL && target->riscv_isa.strict_isa)
-        (void)remove(path);
     return success;
 }

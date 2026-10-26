@@ -14,6 +14,7 @@
 #include "target/riscv32/rv32_global_emit.h"
 #include "target/riscv/record_copy_bytes.h"
 #include "target/common/program_visit.h"
+#include "target/common/program_emit.h"
 #include "target/data_layout.h"
 #include <inttypes.h>
 #include <limits.h>
@@ -907,6 +908,43 @@ static bool rv32_visit_function(
                      target, ctx->diagnostic);
 }
 
+static bool rv32_prefix(FILE *out, const MinicC0Program *program,
+                        const MinicTargetInfo *target,
+                        const MinicCoreFunction *functions, size_t count,
+                        bool function_sections, void *opaque) {
+    (void)program;
+    (void)target;
+    (void)functions;
+    (void)count;
+    (void)function_sections;
+    (void)opaque;
+    return fprintf(out, ".option norvc\\n") >= 0;
+}
+
+static bool rv32_between(FILE *out, const MinicC0Program *program,
+                         const MinicTargetInfo *target,
+                         const MinicCoreFunction *functions, size_t count,
+                         bool function_sections, void *opaque) {
+    size_t i;
+    if (program->file_asm_count != 0U && fprintf(out, ".text\\n") < 0)
+        return false;
+    for (i = 0U; i < program->file_asm_count; ++i) {
+        const MinicFileAsm *source_asm = &program->file_asms[i];
+        if (source_asm->text == NULL ||
+            fprintf(out, "# MINIC_SOURCE_FILE_ASM_BEGIN\\n") < 0 ||
+            fwrite(source_asm->text, 1U, source_asm->length, out) !=
+                source_asm->length ||
+            fprintf(out, "\\n# MINIC_SOURCE_FILE_ASM_END\\n") < 0)
+            return false;
+    }
+    /* ELF32 alias/undefined-weak definitions precede live functions. */
+    return minic_program_visit_functions(
+               out, program, target, functions, count, function_sections,
+               MINIC_PROGRAM_FUNCTION_DECLARATIONS, false,
+               rv32_visit_declaration, opaque) &&
+           fprintf(out, ".text\\n") >= 0;
+}
+
 bool minic_riscv32_write_core_program(const char *path,
                                       const MinicC0Program *program,
                                       const MinicTargetInfo *target,
@@ -914,9 +952,11 @@ bool minic_riscv32_write_core_program(const char *path,
                                       size_t function_count,
                                       bool function_sections,
                                       MinicDiagnostic *diagnostic) {
-    FILE *file;
-    bool ok = true;
-    size_t i;
+    static const MinicProgramEmitConfig config = {
+        rv32_visit_global, rv32_visit_function, rv32_prefix, rv32_between,
+        NULL, NULL, MINIC_PROGRAM_FUNCTION_LIVE_DEFINITIONS, false
+    };
+    bool ok;
     Rv32ProgramContext context = { diagnostic };
     if (path == NULL || program == NULL || target == NULL ||
         target->riscv_isa.xlen != 32U ||
@@ -927,53 +967,10 @@ bool minic_riscv32_write_core_program(const char *path,
                   "rv32i: unsupported file-scope inline ASM or invalid Core function map");
         return false;
     }
-    file = fopen(path, "wb");
-    if (file == NULL) {
-        rv32_diag(diagnostic, path, "rv32i: cannot open output file");
-        return false;
-    }
-    if (fprintf(file, ".option norvc\n") < 0) ok = false;
-    if (ok)
-        ok = minic_program_visit_globals(
-            file, program, target, rv32_visit_global, &context);
-    /* Preserve genuine GNU file-scope asm from the original source.
-     * The compiler-owned machine emitter remains strict RV32I. The native
-     * kernel is allowed to provide its own A/CSR/privileged operations, and
-     * the existing Kbuild GNU assembler retains its ORIGINAL march flags.
-     * Source-asm provenance markers prevent crediting those instructions
-     * as ISA operations selected by MiniC. */
-    if (ok && program->file_asm_count != 0U)
-        ok = fprintf(file, ".text\n") >= 0;
-    for (i = 0U; ok && i < program->file_asm_count; ++i) {
-        const MinicFileAsm *source_asm = &program->file_asms[i];
-        if (source_asm->text == NULL) {
-            ok = false;
-            break;
-        }
-        ok = fprintf(file, "# MINIC_SOURCE_FILE_ASM_BEGIN\n") >= 0 &&
-             fwrite(source_asm->text, 1U, source_asm->length, file) ==
-                 source_asm->length &&
-             fprintf(file, "\n# MINIC_SOURCE_FILE_ASM_END\n") >= 0;
-    }
-    /* GNU same-TU function aliases and undefined weak declarations use the
-     * same RISC-V ELF binding contract as RV64. Defined weak functions are
-     * handled by the shared symbol emitter. */
-    if (ok)
-        ok = minic_program_visit_functions(
-            file, program, target, functions, function_count, function_sections,
-            MINIC_PROGRAM_FUNCTION_DECLARATIONS, false,
-            rv32_visit_declaration, &context);
-    if (ok && fprintf(file, ".text\n") < 0) ok = false;
-    if (ok)
-        ok = minic_program_visit_functions(
-            file, program, target, functions, function_count, function_sections,
-            MINIC_PROGRAM_FUNCTION_LIVE_DEFINITIONS, false,
-            rv32_visit_function, &context);
-    if (fclose(file) != 0) ok = false;
-    if (!ok) {
-        (void)remove(path);
-        if (diagnostic != NULL && diagnostic->message[0] == '\0')
-            rv32_diag(diagnostic, path, "rv32i: emission failed");
-    }
+    ok = minic_program_emit_write(
+        path, program, target, functions, function_count,
+        function_sections, &config, &context);
+    if (!ok && diagnostic != NULL && diagnostic->message[0] == '\\0')
+        rv32_diag(diagnostic, path, "rv32i: emission failed");
     return ok;
 }
