@@ -224,7 +224,7 @@ bool rv32_function_abi_plan_build(const MinicC0Program *program,
         if (!rv32_plan_call(program, target, function, ins, view, call)) {
             if (getenv("MINIC_RV32_FRAME_TRACE") != NULL)
                 (void)fprintf(stderr,
-                    "RV32_ABI_REJECT stage=call_plan instruction=%zu kind=%d\\n",
+                    "RV32_ABI_REJECT stage=call_plan instruction=%zu kind=%d\n",
                     instruction_id, (int)ins->kind);
             goto failure;
         }

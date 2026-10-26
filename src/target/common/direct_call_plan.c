@@ -1,5 +1,6 @@
 #include "target/common/direct_call_plan.h"
 #include "target/common/core_call_view.h"
+#include "target/common/core_instruction_family.h"
 #include "target/common/lp64_aggregate.h"
 #include <stdint.h>
 #include <stdlib.h>

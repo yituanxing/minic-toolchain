@@ -259,6 +259,7 @@ has src/target/riscv64/frame_requirements.c 'semantic_calls->sites[i]'
 # The Direct LP64 pair must also use a compact real CALL site cache.
 lacks src/target/common/direct_call_plan.c 'cache->by_instruction'
 has src/target/common/direct_call_plan.c 'cache->sites[ordinal]'
+has src/target/common/direct_call_plan.c 'target/common/core_instruction_family.h'
 has src/target/common/direct_call_plan.c 'while (low < high)'
 lacks src/target/riscv32/rv32_abi_plan.c 'plan->call_count = function->instruction_count'
 has src/target/riscv32/rv32_abi_plan.h 'size_t instruction_id;'
