@@ -3,7 +3,7 @@
 
 #include "frontend/ast.h"
 #include "minic/compiler.h"
-#include "target/riscv64/layout.h"
+#include "target/data_layout.h"
 
 #include <stddef.h>
 #include <stdio.h>
