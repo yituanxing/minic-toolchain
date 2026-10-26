@@ -469,7 +469,7 @@ lacks src/target/riscv64/frame_layout.c 'minic_riscv64_core_call_outgoing_stack_
 lacks src/target/riscv64/frame_requirements.c 'minic_riscv64_core_call_outgoing_stack_size_profile('
 lacks src/target/riscv64/frame_requirements.h 'minic_riscv64_core_call_outgoing_stack_size('
 has src/target/riscv64/frame_layout.c 'outgoing_calls.maximum_stack_bytes'
-has src/target/riscv64/call_emit.c 'location = planned->arguments[argument_index];'
+lacks src/target/riscv64/call_emit.c 'MinicRiscv64AbiCursor'
 has src/target/riscv64/call_emit.c 'minic_riscv64_call_plan_cache_get('
 has src/target/riscv64/frame_layout.c 'minic_riscv64_call_plan_cache_destroy('
 has src/target/riscv64/frame_requirements.c 'while (low < high)'
