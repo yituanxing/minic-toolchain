@@ -77,7 +77,16 @@ for march in rv64i rv64im; do
     echo "RV64_LP64_ABI=FAIL $march leaked floating registers" >&2; exit 1
   fi
 done
-for selection in "rv64i lp64d" "rv64im lp64d" "rv64imafd lp64"; do
+# The target ISA may contain F/D while the ABI remains integer-register LP64.
+# This must use the qualified software FP libcall rather than LP64D lowering.
+"$MINIC_CC" --target=riscv64-linux -march=rv64imafd -mabi=lp64 \
+  -S "$tmp/float.i" -o "$tmp/rv64imafd-lp64-softfp.s"
+grep -q 'call __adddf3' "$tmp/rv64imafd-lp64-softfp.s"
+if grep -Eq '^[[:space:]]*(fadd|fmv|fcvt|fsub|fmul|fdiv)\.' \
+   "$tmp/rv64imafd-lp64-softfp.s"; then
+  echo 'RV64_LP64_ABI=FAIL unqualified F/D use for LP64' >&2; exit 1
+fi
+for selection in "rv64i lp64d" "rv64im lp64d"; do
   read -r march mabi <<<"$selection"
   if "$MINIC_CC" --target=riscv64-linux "-march=$march" "-mabi=$mabi" \
       -S "$tmp/add.i" -o "$tmp/invalid-abi.s" >"$tmp/abi.out" 2>"$tmp/abi.err"; then
@@ -675,4 +684,4 @@ SRC
     echo 'RV64_ISA_QEMU=PASS profiles=rv64i,rv64im gnu_minic_exit_exact=1'
   fi
 fi
-echo 'RV64_ISA_PROFILES=PASS rv64i_lp64=1 rv64im_lp64=1 rv64imafd_lp64d=1 runtime_libcalls=5 pointer_scale=1 rejected_isa_abi=1 default_byte_exact=1'
+echo 'RV64_ISA_PROFILES=PASS rv64i_lp64=1 rv64im_lp64=1 rv64imafd_lp64d=1 rv64imafd_lp64_softfp=1 runtime_libcalls=5 pointer_scale=1 rejected_isa_abi=1 default_byte_exact=1'
