@@ -141,22 +141,15 @@ static bool core_rv64_capability_reject(const MinicCoreFunction *function,
     return false;
 }
 
-static bool core_function_can_emit(const MinicC0Program *program,
+static bool core_function_can_emit_with_index(
+                                   const MinicC0Program *program,
                                    const MinicCoreFunction *function,
                                    const MinicRiscv64FunctionAbiPlan *abi_plan,
-                                   bool core_verified,
                                    const MinicCoreCallIndex *semantic_calls,
                                    const MinicCoreObjectStoragePlan *storage) {
     size_t index, call_site = 0U;
-    if (semantic_calls != NULL &&
-        (function == NULL || semantic_calls->count > function->instruction_count ||
-         (semantic_calls->count != 0U && semantic_calls->sites == NULL)))
-        return core_rv64_capability_reject(function, "call-index", 0U, -1);
-
-    if (function == NULL ||
-        (!core_verified && !minic_core_function_verify(function))) {
-        return core_rv64_capability_reject(function, "verify", 0U, -1);
-    }
+    /* Only the verified immutable function and Common's sorted CALL views
+     * reach this routine. ABI and ISA capability remain RV64-owned. */
     if (program == NULL) {
         if (!minic_type_is_void(function->return_type) &&
             !minic_riscv64_scalar_type(function->return_type)) {
@@ -229,7 +222,7 @@ static bool core_function_can_emit(const MinicC0Program *program,
     for (index = 0U; index < function->instruction_count; ++index) {
         const MinicCoreInstruction *ins = &function->instructions[index];
         const MinicCoreCallView *view = NULL;
-        if (semantic_calls != NULL && minic_core_instruction_is_call(ins->kind)) {
+        if (minic_core_instruction_is_call(ins->kind)) {
             /* The Common index is ordered by instruction ID. Consume its
              * immutable CALL views in lockstep with RV64's required ISA
              * capability walk, without a binary search at each CALL. */
@@ -244,10 +237,31 @@ static bool core_function_can_emit(const MinicC0Program *program,
                 function, "instruction", index, (int)ins->kind);
         }
     }
-    if (semantic_calls != NULL && call_site != semantic_calls->count)
+    if (call_site != semantic_calls->count)
         return core_rv64_capability_reject(function, "call-index-count",
                                           call_site, -1);
     return true;
+}
+
+/* The production visitor lends its prepared index. Standalone Core
+ * admission builds the identical Common semantic index, not a second
+ * RV64-only CALL scan/shape resolver. */
+static bool core_function_can_emit(
+    const MinicC0Program *program, const MinicCoreFunction *function,
+    const MinicRiscv64FunctionAbiPlan *abi_plan, bool core_verified,
+    const MinicCoreCallIndex *semantic_calls,
+    const MinicCoreObjectStoragePlan *storage) {
+    MinicCoreCallIndexHandle calls = {0};
+    bool ok;
+    if (function == NULL ||
+        (!core_verified && !minic_core_function_verify(function)))
+        return core_rv64_capability_reject(function, "verify", 0U, -1);
+    if (!minic_core_call_index_handle_prepare(function, semantic_calls, &calls))
+        return core_rv64_capability_reject(function, "call-index", 0U, -1);
+    ok = core_function_can_emit_with_index(
+        program, function, abi_plan, calls.index, storage);
+    minic_core_call_index_handle_destroy(&calls);
+    return ok;
 }
 
 bool minic_riscv64_core_function_admit_profile(

@@ -512,6 +512,14 @@ has src/target/common/direct_call_plan.h 'MinicCoreCallIndexHandle semantic_call
 has src/target/common/direct_call_plan.c 'minic_core_call_index_find(calls,'
 lacks src/target/common/direct_instruction_semantics.h 'minic_multi_direct_result_slot_offset('
 has src/target/common/direct_instruction_semantics.c 'static bool minic_multi_direct_result_slot_offset('
+# RV64 capability admission and direct LP64 CALL preflight must also
+# use the same Common semantic index in standalone and visitor modes.
+has src/target/riscv64/core_admission.c 'minic_core_call_index_handle_prepare('
+has src/target/riscv64/core_admission.c 'core_function_can_emit_with_index('
+has src/target/common/direct_call_preflight.c 'minic_core_call_index_handle_prepare('
+has src/target/common/direct_call_preflight.c 'direct_lp64_calls_preflight_with_index('
+lacks src/target/common/direct_call_preflight.c 'minic_core_call_view_build(fn, ins, &call)'
+lacks src/target/common/direct_call_preflight.c 'visits = semantic_calls != NULL'
 # Standalone APIs never own an extra Core CALL algorithm or binary search.
 has src/target/common/core_call_index.c 'minic_core_call_index_handle_prepare('
 has src/target/common/core_call_index.c 'minic_core_call_index_handle_destroy('

@@ -9,34 +9,26 @@
 
 /* Shared call semantics and admission, not a universal target ABI.
  * Register/stack assignment and ISA emission are still target-owned. */
-bool minic_multi_direct_lp64_calls_preflight(
+static bool direct_lp64_calls_preflight_with_index(
     const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicCoreCallIndex *semantic_calls,
     const char *arch, const char *name,
     MinicDirectLP64IndirectRecord indirect_record,
     size_t *failed_instruction, bool *has_calls) {
     size_t ordinal, previous_id = SIZE_MAX;
-    size_t visits;
     if (program == NULL || target == NULL || fn == NULL || arch == NULL ||
         name == NULL || indirect_record == NULL ||
         failed_instruction == NULL || has_calls == NULL ||
+        semantic_calls == NULL ||
+        semantic_calls->count > fn->instruction_count ||
+        (semantic_calls->count != 0U && semantic_calls->sites == NULL) ||
         (fn->instruction_count != 0U && fn->instructions == NULL))
         return false;
     *failed_instruction = SIZE_MAX;
     *has_calls = false;
-    if (semantic_calls != NULL &&
-        (semantic_calls->count > fn->instruction_count ||
-         (semantic_calls->count != 0U && semantic_calls->sites == NULL)))
-        return false;
-    /* Production Common already verified and indexed every CALL. Direct
-     * AAPCS64/LP64D only tests ABI capability: no second full Core walk.
-     * Standalone callers without prepared facts retain checked fallback. */
-    visits = semantic_calls != NULL
-        ? semantic_calls->count : fn->instruction_count;
-    for (ordinal = 0U; ordinal < visits; ++ordinal) {
-        const MinicCoreCallSite *site = semantic_calls != NULL
-            ? &semantic_calls->sites[ordinal] : NULL;
-        size_t i = site != NULL ? site->instruction_id : ordinal;
+    for (ordinal = 0U; ordinal < semantic_calls->count; ++ordinal) {
+        const MinicCoreCallSite *site = &semantic_calls->sites[ordinal];
+        const size_t i = site->instruction_id;
         const MinicCoreInstruction *ins;
         MinicCoreCallView call;
         const MinicType *parameter_types;
@@ -44,20 +36,14 @@ bool minic_multi_direct_lp64_calls_preflight(
         size_t j, begin, count, parameter_count;
         bool is_variadic;
         if (i >= fn->instruction_count ||
-            (site != NULL && previous_id != SIZE_MAX && i <= previous_id))
+            (previous_id != SIZE_MAX && i <= previous_id))
             return false;
         *failed_instruction = i;
         ins = &fn->instructions[i];
-        if (!minic_core_instruction_is_call(ins->kind)) {
-            if (site != NULL) return false;
-            continue;
-        }
-        if (site != NULL) {
-            call = site->view;
-            previous_id = i;
-        } else if (!minic_core_call_view_build(fn, ins, &call)) {
+        if (!minic_core_instruction_is_call(ins->kind))
             return false;
-        }
+        call = site->view;
+        previous_id = i;
         *has_calls = true; /* Caller preserves the return-address register. */
         /* GNU div_t/ldiv_t and similar small integer-only aggregate
          * results travel in one or two GP registers. Core represents their
@@ -200,4 +186,27 @@ bool minic_multi_direct_lp64_calls_preflight(
         }
     }
     return true;
+}
+
+/* The standalone and prepared paths use exactly one Common CALL semantic
+ * index, not separate linear Core walkers with independent shape checks.
+ * The handle owns only a missing standalone index, never visitor state. */
+bool minic_multi_direct_lp64_calls_preflight(
+    const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicCoreFunction *fn, const MinicCoreCallIndex *semantic_calls,
+    const char *arch, const char *name,
+    MinicDirectLP64IndirectRecord indirect_record,
+    size_t *failed_instruction, bool *has_calls) {
+    MinicCoreCallIndexHandle handle = {0};
+    bool success;
+    if (program == NULL || target == NULL || fn == NULL ||
+        arch == NULL || name == NULL || indirect_record == NULL ||
+        failed_instruction == NULL || has_calls == NULL ||
+        !minic_core_call_index_handle_prepare(fn, semantic_calls, &handle))
+        return false;
+    success = direct_lp64_calls_preflight_with_index(
+        program, target, fn, handle.index, arch, name,
+        indirect_record, failed_instruction, has_calls);
+    minic_core_call_index_handle_destroy(&handle);
+    return success;
 }
