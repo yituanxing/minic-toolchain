@@ -315,4 +315,13 @@ lacks src/target/x86_64/codegen.c 'for (i = 0U; i < program->function_count && s
 lacks src/target/riscv64/codegen_function.c 'for (function_index = 0U;'
 lacks src/target/riscv32/rv32_emit.c 'for (i = 0U; ok && i < function_count; ++i)'
 
+# A native executable verifies success, five failure edges, cleanup and
+# census continuation. Keep target GNU/QEMU checks in their own CI stages.
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+cc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror \
+  -Iinclude -Isrc tests/compiler/c0/probe-program-emit-transaction.c \
+  -o "$work/program-emit-probe"
+"$work/program-emit-probe" "$work/test-output.s"
+
 printf 'MINIC_BACKEND_BOUNDARY_CHECK=PASS\n'
