@@ -37,7 +37,10 @@ static inline bool minic_core_function_plan_build(
         target->data_layout == NULL || function == NULL || plan->prepared ||
         plan->calls.sites != NULL || plan->objects.objects != NULL)
         return false;
-    if (!minic_core_function_facts_analyze(function, &plan->facts) ||
+    /* The sole backend-boundary canonical Core verification; every physical
+     * target then performs only its own capability and ABI checks. */
+    if (!minic_core_function_verify(function) ||
+        !minic_core_function_facts_analyze(function, &plan->facts) ||
         plan->facts.direct_call_count >
             SIZE_MAX - plan->facts.indirect_call_count ||
         !minic_core_call_index_build(
@@ -49,6 +52,7 @@ static inline bool minic_core_function_plan_build(
         return false;
     }
     plan->facts.call_index = &plan->calls;
+    plan->facts.verified_function = function;
     plan->prepared = true;
     return true;
 }

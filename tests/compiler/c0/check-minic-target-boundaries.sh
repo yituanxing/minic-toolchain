@@ -366,6 +366,13 @@ has src/target/riscv64/call_emit.c 'call.return_form != MINIC_CORE_CALL_RETURN_O
 has src/target/riscv64/frame_layout.c 'frame->semantic_calls = facts->call_index'
 has src/target/riscv64/call_emit.c 'minic_core_call_index_get(frame->semantic_calls, instruction_id)'
 has src/target/common/core_function_facts.c 'facts->max_call_arity = arity'
+# Canonical verifier is shared, never independently rescanned per machine
+# backend if the prepared visitor already admitted the exact Core function.
+has src/target/common/core_function_plan.h 'minic_core_function_verify(function)'
+has src/target/common/core_function_plan.h 'plan->facts.verified_function = function'
+has src/target/x86_64/codegen.c 'minic_core_function_facts_verified(facts, fn)'
+has src/target/common/direct_preflight.c 'minic_core_function_facts_verified(facts, fn)'
+has src/target/riscv64/core_admission.c 'minic_core_function_facts_verified(facts, function)'
 has src/target/common/core_function_plan.h 'minic_core_function_facts_analyze('
 lacks src/target/common/lp64_frame.c 'bool minic_lp64_frame_plan_objects('
 lacks src/target/riscv64/frame_layout.c 'bool minic_riscv64_core_frame_initialize_prepared('

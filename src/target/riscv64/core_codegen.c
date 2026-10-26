@@ -496,7 +496,7 @@ static bool emit_core_function_with_symbol(FILE *file,
     if (!minic_riscv64_core_function_admit_profile(
             program, function, &abi_plan,
             isa != NULL && isa->strict_isa &&
-            isa->abi == MINIC_RISCV_ABI_LP64)) {
+            isa->abi == MINIC_RISCV_ABI_LP64, facts)) {
         minic_riscv64_function_abi_plan_destroy(&abi_plan);
         return false;
     }

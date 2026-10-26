@@ -48,7 +48,8 @@ static bool function(FILE *out, const MinicC0Program *p,
         !facts->needs_saved_return_address ||
         !facts->uses_structured_inline_asm ||
         !facts->uses_dynamic_stack_alloc ||
-        facts->max_call_arity != 7U || facts->call_index == NULL)
+        facts->max_call_arity != 7U || facts->call_index == NULL ||
+        facts->verified_function != f)
         return false;
     ++ctx->functions;
     return fputs("F\n", out) != EOF && ctx->fail_stage != 4U;
@@ -164,4 +165,12 @@ bool minic_core_call_index_build(const MinicCoreFunction *fn,
 }
 void minic_core_call_index_destroy(MinicCoreCallIndex *index) {
     if (index != NULL) *index = (MinicCoreCallIndex){0};
+}
+
+/* The transaction test uses intentionally synthetic CALL operands. Its
+ * standalone verifier stub tests output lifetime without linking the real
+ * Core verifier, which is covered by product compiler regression gates. */
+bool minic_core_function_verify(const MinicCoreFunction *fn) {
+    return fn != NULL && fn->instruction_count == 6U &&
+           fn->instructions != NULL;
 }

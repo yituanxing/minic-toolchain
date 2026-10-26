@@ -15,7 +15,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* RV64 Core admission: full verification once, before machine output. */
+/* Canonical Core verification belongs to Common FunctionPlan. RV64 owns
+ * target capability, psABI placements and strict machine ISA admission. */
 /* M74_GLOBAL_RECORD_ADDRESS / M155_EXTERN_VOID_SYMBOL_ADDRESS_OWNER:
    RV64 global.addr must keep assembler-local `.L*` symbols PC-relative in
    early position-independent code. Use `lla` only for `.L*` symbols; keep
@@ -159,10 +160,12 @@ static bool core_rv64_capability_reject(const MinicCoreFunction *function,
 
 static bool core_function_can_emit(const MinicC0Program *program,
                                    const MinicCoreFunction *function,
-                                   const MinicRiscv64FunctionAbiPlan *abi_plan) {
+                                   const MinicRiscv64FunctionAbiPlan *abi_plan,
+                                   bool core_verified) {
     size_t index;
 
-    if (function == NULL || !minic_core_function_verify(function)) {
+    if (function == NULL ||
+        (!core_verified && !minic_core_function_verify(function))) {
         return core_rv64_capability_reject(function, "verify", 0U, -1);
     }
     if (program == NULL) {
@@ -299,24 +302,28 @@ static bool core_function_can_emit(const MinicC0Program *program,
 
 bool minic_riscv64_core_function_admit_profile(
     const MinicC0Program *program, const MinicCoreFunction *function,
-    MinicRiscv64FunctionAbiPlan *abi_plan, bool lp64_soft_float) {
-    if (function == NULL || !minic_core_function_verify(function))
+    MinicRiscv64FunctionAbiPlan *abi_plan, bool lp64_soft_float,
+    const MinicCoreFunctionFacts *facts) {
+    const bool core_verified =
+        minic_core_function_facts_verified(facts, function) ||
+        minic_core_function_verify(function);
+    if (!core_verified)
         return core_rv64_capability_reject(function, "verify", 0U, -1);
     if (program != NULL &&
         (abi_plan == NULL ||
          !minic_riscv64_function_abi_plan_build_profile(
              program, function, abi_plan, lp64_soft_float)))
         return core_rv64_capability_reject(function, "function-abi", 0U, -1);
-    return core_function_can_emit(program, function, abi_plan);
+    return core_function_can_emit(program, function, abi_plan, core_verified);
 }
 bool minic_riscv64_core_function_admit(
     const MinicC0Program *program, const MinicCoreFunction *function,
     MinicRiscv64FunctionAbiPlan *abi_plan) {
     return minic_riscv64_core_function_admit_profile(
-        program, function, abi_plan, false);
+        program, function, abi_plan, false, NULL);
 }
 bool minic_riscv64_core_function_can_emit(const MinicCoreFunction *function) {
-    return core_function_can_emit(NULL, function, NULL);
+    return core_function_can_emit(NULL, function, NULL, false);
 }
 bool minic_riscv64_core_function_can_emit_for_program(
     const MinicC0Program *program, const MinicCoreFunction *function) {

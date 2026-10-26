@@ -37,7 +37,9 @@ static bool x86_emit_function(FILE *out, const MinicC0Program *program,
     bool success = false;
     {
         const bool named = name != NULL && name[0] != '\0';
-        const bool verified = named && minic_core_function_verify(fn);
+        const bool verified = named &&
+            (minic_core_function_facts_verified(facts, fn) ||
+             minic_core_function_verify(fn));
         const bool planned = verified &&
             minic_x86_64_frame_init_with_storage(
                 program, target, fn, facts, storage, &frame);

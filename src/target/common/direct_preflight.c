@@ -13,11 +13,14 @@
 bool minic_multi_direct_lp64_function_preflight(
     const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicFunction *decl, const MinicCoreFunction *fn,
-    const char *arch, const char *name) {
+    const MinicCoreFunctionFacts *facts, const char *arch, const char *name) {
+    bool verified;
     if (program == NULL || target == NULL || decl == NULL || fn == NULL ||
         arch == NULL) return false;
+    verified = minic_core_function_facts_verified(facts, fn) ||
+               minic_core_function_verify(fn);
     if (name == NULL || name[0] == '\0' ||
-        !minic_core_function_verify(fn) ||
+        !verified ||
         decl->is_weak ||
         (decl->visibility != MINIC_SYMBOL_VISIBILITY_DEFAULT &&
          minic_multi_elf_visibility_directive(decl->visibility) == NULL) ||
@@ -38,7 +41,7 @@ bool minic_multi_direct_lp64_function_preflight(
                               fn->parameter_count, (unsigned int)fn->entry_block,
                               fn->inline_asm_count,
                               minic_lp64_valid_return_type(program, target, fn->return_type) ? 1 : 0,
-                              minic_core_function_verify(fn) ? 1 : 0,
+                              verified ? 1 : 0,
                               decl->is_constructor ? 1 : 0, decl->is_weak ? 1 : 0,
                               (int)decl->visibility,
                               decl->section_name != NULL ? 1 : 0);

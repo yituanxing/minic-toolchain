@@ -34,7 +34,7 @@ bool minic_multi_direct_lp64_function_plan_prepare(
         return false;
     name = minic_c0_function_symbol_name(decl);
     if (!minic_multi_direct_lp64_function_preflight(
-            program, target, decl, fn, architecture_name, name))
+            program, target, decl, fn, facts, architecture_name, name))
         return false;
     profile_result = minic_multi_direct_lp64_profile_function(
         program, target, decl, fn, facts, abi, indirect_record,
