@@ -8,6 +8,7 @@
 #include "target/riscv32/rv32_emit.h"
 #include "target/riscv32/rv32_internal.h"
 #include "target/common/core_call_view.h"
+#include "target/common/core_instruction_family.h"
 #include "target/riscv/instruction_select.h"
 #include "target/riscv32/rv32_abi_cursor.h"
 #include "target/riscv/function_symbol.h"
@@ -544,8 +545,14 @@ static bool rv32_emit_ins(FILE *out, const MinicC0Program *program,
                           const char *symbol) {
     if (out == NULL || program == NULL || target == NULL ||
         f == NULL || fr == NULL || ins == NULL) return false;
-    /* Core opcode ownership follows the machine-operation family, not
-     * a second target-specific copy of the language semantics. */
+    /* Shared semantic dispatch, but the 32-bit emitter still decides
+     * helper calls, ABI limb splitting and legal Base-I instructions. */
+    if (minic_core_instruction_is_integer_scalar(ins->kind) ||
+        ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_OVERFLOW ||
+        ins->kind == MINIC_CORE_INSTRUCTION_SCALAR_BITCAST)
+        return rv32_emit_integer_instruction(out, f, fr, ins, symbol);
+    if (minic_core_instruction_is_floating_scalar(ins->kind))
+        return rv32_emit_fp_instruction(out, f, fr, ins);
     switch (ins->kind) {
     case MINIC_CORE_INSTRUCTION_PARAMETER:
         return rv32_emit_parameter(out, f, fr, ins);
@@ -573,47 +580,6 @@ static bool rv32_emit_ins(FILE *out, const MinicC0Program *program,
         return fprintf(out, "  mv t0, %s\n", binding->register_name) >= 0 &&
                rv32_slot(out, fr, ins->result, "t0", false);
     }
-    case MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT:
-    case MINIC_CORE_INSTRUCTION_INTEGER_OVERFLOW:
-    case MINIC_CORE_INSTRUCTION_INTEGER_ADD:
-    case MINIC_CORE_INSTRUCTION_INTEGER_SUBTRACT:
-    case MINIC_CORE_INSTRUCTION_INTEGER_MULTIPLY:
-    case MINIC_CORE_INSTRUCTION_INTEGER_DIVIDE:
-    case MINIC_CORE_INSTRUCTION_INTEGER_REMAINDER:
-    case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND:
-    case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_OR:
-    case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_XOR:
-    case MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_LEFT:
-    case MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_RIGHT:
-    case MINIC_CORE_INSTRUCTION_INTEGER_LESS:
-    case MINIC_CORE_INSTRUCTION_POINTER_LESS:
-    case MINIC_CORE_INSTRUCTION_SCALAR_EQUAL:
-    case MINIC_CORE_INSTRUCTION_INTEGER_CONVERSION:
-    case MINIC_CORE_INSTRUCTION_SCALAR_BITCAST:
-    case MINIC_CORE_INSTRUCTION_INTEGER_NEGATE:
-    case MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_NOT:
-    case MINIC_CORE_INSTRUCTION_INTEGER_CLZ:
-    case MINIC_CORE_INSTRUCTION_INTEGER_CTZ:
-    case MINIC_CORE_INSTRUCTION_SCALAR_IS_ZERO:
-        return rv32_emit_integer_instruction(out, f, fr, ins, symbol);
-    case MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT:
-    case MINIC_CORE_INSTRUCTION_FLOAT_ADD:
-    case MINIC_CORE_INSTRUCTION_FLOAT_SUBTRACT:
-    case MINIC_CORE_INSTRUCTION_FLOAT_MULTIPLY:
-    case MINIC_CORE_INSTRUCTION_FLOAT_DIVIDE:
-    case MINIC_CORE_INSTRUCTION_DOUBLE_ADD:
-    case MINIC_CORE_INSTRUCTION_DOUBLE_SUBTRACT:
-    case MINIC_CORE_INSTRUCTION_DOUBLE_MULTIPLY:
-    case MINIC_CORE_INSTRUCTION_DOUBLE_DIVIDE:
-    case MINIC_CORE_INSTRUCTION_DOUBLE_EQUAL:
-    case MINIC_CORE_INSTRUCTION_DOUBLE_LESS:
-    case MINIC_CORE_INSTRUCTION_DOUBLE_LESS_EQUAL:
-    case MINIC_CORE_INSTRUCTION_DOUBLE_NEGATE:
-    case MINIC_CORE_INSTRUCTION_INTEGER_TO_DOUBLE:
-    case MINIC_CORE_INSTRUCTION_DOUBLE_TO_INTEGER:
-    case MINIC_CORE_INSTRUCTION_FLOAT_TO_DOUBLE:
-    case MINIC_CORE_INSTRUCTION_DOUBLE_TO_FLOAT:
-        return rv32_emit_fp_instruction(out, f, fr, ins);
     case MINIC_CORE_INSTRUCTION_BLOCK_ADDRESS:
         return ins->value.block_id < f->block_count &&
                fprintf(out, "  lla t0, .L%s_rv32_bb%u\n",
