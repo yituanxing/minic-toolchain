@@ -2,8 +2,7 @@
 #define MINIC_TARGET_COMMON_PROGRAM_VISIT_H
 
 #include "core/core_ir.h"
-#include "target/common/core_function_facts.h"
-#include "target/common/core_object_storage.h"
+#include "target/common/core_function_plan.h"
 #include "frontend/ast.h"
 #include "target/target_info.h"
 #include <stdbool.h>
@@ -98,9 +97,7 @@ static inline bool minic_program_visit_prepared_functions(
         return false;
     for (i = 0U; i < function_count; ++i) {
         const MinicFunction *decl = &program->functions[i];
-        MinicCoreFunctionFacts facts = {0};
-        MinicCoreObjectStoragePlan objects = {0};
-        MinicCoreCallIndex calls = {0};
+        MinicCoreFunctionPlan plan = {0};
         bool ready = true;
         if (selection == MINIC_PROGRAM_FUNCTION_DECLARATIONS && decl->is_defined)
             continue;
@@ -108,25 +105,18 @@ static inline bool minic_program_visit_prepared_functions(
             continue;
         if (decl->is_defined && decl->is_internal && !decl->is_referenced)
             continue;
-        /* Both Core facts and object type layout are one common function
-         * preparation stage. The visitor owns storage until emission returns;
-         * backend frames borrow this immutable snapshot and never free it. */
-        if (decl->is_defined) {
-            ready = minic_core_function_facts_analyze(&functions[i], &facts) &&
-                    minic_core_call_index_build(
-                        &functions[i], facts.direct_call_count +
-                        facts.indirect_call_count, &calls) &&
-                    minic_core_object_storage_plan_build(
-                        program, target->data_layout, &functions[i], &objects);
-            if (ready) facts.call_index = &calls;
-        }
+        /* One common, ABI-neutral function-plan owner. Target frames borrow
+         * the immutable layout/semantic snapshot for this visitor call only.
+         * No physical ABI state escapes into the Core definition. */
+        if (decl->is_defined)
+            ready = minic_core_function_plan_build(
+                program, target, &functions[i], &plan);
         if (ready)
             ready = visit(out, program, target, decl, &functions[i],
-                          decl->is_defined ? &facts : NULL,
-                          decl->is_defined ? &objects : NULL, i,
+                          decl->is_defined ? &plan.facts : NULL,
+                          decl->is_defined ? &plan.objects : NULL, i,
                           function_sections, context);
-        minic_core_object_storage_plan_destroy(&objects);
-        minic_core_call_index_destroy(&calls);
+        minic_core_function_plan_destroy(&plan);
         if (!ready) {
             success = false;
             if (!continue_after_failure) break;
