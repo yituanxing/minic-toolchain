@@ -102,6 +102,22 @@ for unqualified in rv64gc rv64imac rv32i rv64imaf; do
   grep -q 'supported explicit -march' "$tmp/bad.err"
 done
 
+# The assembler can admit A/CSR/C while MiniC still emits Base-I.
+# Check compiler-owned arithmetic, not just whether -S returned success.
+for march in rv64ima_zicsr_zifencei rv64imac_zicsr_zifencei; do
+  "$MINIC_CC" --target=riscv64-linux "-march=$march" -mabi=lp64 \
+    -S "$tmp/mul.i" -o "$tmp/baseline-$march.s"
+  for symbol in __muldi3 __divdi3 __moddi3; do
+    grep -q "call $symbol" "$tmp/baseline-$march.s"
+  done
+  if grep -Eq '^[[:space:]]*(mul|mulw|div|divu|rem|remu)[[:space:]]' \
+    "$tmp/baseline-$march.s"; then
+    echo "RV64_ISA=FAIL unselected M machine opcode in $march" >&2
+    exit 1
+  fi
+done
+echo 'RV64_ISA_SOURCE_SUPERSET=PASS assembler_features_not_codegen_features'
+
 # ISA selection is made over reachable blocks, including implicit pointer
 # scaling and overflow helpers, not merely the literal C multiply operator.
 cat >"$tmp/charptr.i" <<'SRC'
