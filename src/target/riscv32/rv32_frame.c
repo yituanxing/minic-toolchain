@@ -108,7 +108,7 @@ bool rv32_frame_init_with_storage(Rv32Frame *frame, const MinicC0Program *progra
         }
         for (i = 0U; i < f->object_count; ++i) {
             const MinicCoreObject *obj = &f->objects[i];
-            const MinicCoreObjectStorage *storage =
+            const MinicCoreObjectStorage *object_slot =
                 &frame->object_storage.objects[i];
             size_t size, align, slot, peak;
             bool reusable;
@@ -118,8 +118,8 @@ bool rv32_frame_init_with_storage(Rv32Frame *frame, const MinicC0Program *progra
                 minic_core_object_reuse_plan_destroy(&reuse);
                 return rv32_frame_reject("core_object_layout", i, obj->type);
             }
-            size = storage->extent;
-            align = storage->alignment;
+            size = object_slot->extent;
+            align = object_slot->alignment;
             if (align > maximum_object_alignment)
                 maximum_object_alignment = align;
             if (reusable) continue;
