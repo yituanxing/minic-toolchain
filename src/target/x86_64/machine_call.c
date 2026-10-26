@@ -163,20 +163,31 @@ static bool x86_emit_call_arguments_planned(
            fprintf(out, "  movb $%zu, %%al\n", plan->end.fp_used) >= 0;
 }
 
+/* Machine CALL emission consumes the one SysV plan built for its
+ * Common Core CALL identity; external standalone emission still works. */
 static bool x86_emit_call_arguments(
     FILE *out, const MinicC0Program *program,
     const MinicTargetInfo *target, const MinicCoreFunction *fn,
     const MinicX86Frame *frame, const MinicCoreCallView *call,
-    size_t *allocated_stack_bytes) {
-    MinicX86ArgumentPlan plan = {0};
+    size_t instruction_id, size_t *allocated_stack_bytes) {
+    MinicX86ArgumentPlan fallback = {0};
+    const MinicX86ArgumentPlan *plan;
     bool ok;
-    if (allocated_stack_bytes == NULL || call == NULL ||
-        !minic_x86_64_plan_outgoing_arguments(
-            program, target, fn, call, &plan))
+    if (allocated_stack_bytes == NULL || call == NULL || frame == NULL)
         return false;
-    ok = x86_emit_call_arguments_planned(out, fn, frame, call, &plan);
-    if (ok) *allocated_stack_bytes = plan.stack_bytes;
-    minic_x86_64_argument_plan_destroy(&plan);
+    plan = frame->semantic_calls != NULL
+        ? minic_x86_64_outgoing_call_plan(
+              &frame->outgoing_call_plans, instruction_id) : NULL;
+    if (frame->semantic_calls != NULL && plan == NULL) return false;
+    if (plan == NULL) {
+        if (!minic_x86_64_plan_outgoing_arguments(
+                program, target, fn, call, &fallback))
+            return false;
+        plan = &fallback;
+    }
+    ok = x86_emit_call_arguments_planned(out, fn, frame, call, plan);
+    if (ok) *allocated_stack_bytes = plan->stack_bytes;
+    minic_x86_64_argument_plan_destroy(&fallback);
     return ok;
 }
 
@@ -462,7 +473,7 @@ bool minic_x86_64_emit_call_instruction(
             }
         }
         if (!x86_emit_call_arguments(out, program, target, fn, frame,
-                                     &call, &outgoing_bytes)) {
+                                     &call, instruction_id, &outgoing_bytes)) {
             if (getenv("MINIC_X86_CALL_TRACE") != NULL) {
                 size_t j;
                 (void)fprintf(stderr,
@@ -523,7 +534,7 @@ bool minic_x86_64_emit_call_instruction(
             return false;
         signature = call.signature;
         if (!x86_emit_call_arguments(out, program, target, fn, frame,
-                                     &call, &outgoing_bytes) ||
+                                     &call, instruction_id, &outgoing_bytes) ||
             !x86_value_load(out, frame, callee, "%r11") ||
             fprintf(out, "  call *%%r11\n") < 0 ||
             (outgoing_bytes != 0U &&

@@ -23,6 +23,7 @@ typedef struct MinicX86Frame {
     MinicCoreObjectStoragePlan object_storage;
     bool borrows_object_storage;
     MinicX86ArgumentPlan incoming_arguments;
+    MinicX86OutgoingCallPlans outgoing_call_plans;
     /* Borrowed for the duration of this function emission. SysV machine
      * location planning remains x86-owned and consumes semantic CALL views. */
     const MinicCoreCallIndex *semantic_calls;

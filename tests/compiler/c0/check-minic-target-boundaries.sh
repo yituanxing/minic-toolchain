@@ -50,6 +50,11 @@ for obsolete in object_intervals.c object_intervals.h object_liveness.c \
 done
 lacks src/target/x86_64/machine_emit.c \
   'minic_x86_64_incoming_cursor('
+# The mature x86 SysV backend shares the same prepared sparse CALL owner
+# used by RV32/RV64 and Direct LP64, without exporting its psABI to Core.
+has src/target/x86_64/frame.c 'minic_x86_64_outgoing_call_plans_prepare('
+has src/target/x86_64/machine_call.c 'minic_x86_64_outgoing_call_plan('
+has src/target/x86_64/call_plan.c 'while (low < high)'
 
 for arch in aarch64 loongarch64; do
   block="src/target/$arch/block_emit.c"

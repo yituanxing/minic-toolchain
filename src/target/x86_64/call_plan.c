@@ -156,3 +156,67 @@ void minic_x86_64_argument_plan_destroy(MinicX86ArgumentPlan *plan) {
     free(plan->locations);
     (void)memset(plan, 0, sizeof(*plan));
 }
+
+/* The Common visitor supplies validated CALL views. SysV owns only the
+ * register/stack ABI planning, performed once per call rather than in
+ * the machine instruction emitter. Standalone emitters retain fallback. */
+bool minic_x86_64_outgoing_call_plans_prepare(
+    const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicCoreFunction *fn, const MinicCoreCallIndex *calls,
+    MinicX86OutgoingCallPlans *result) {
+    size_t i, previous = SIZE_MAX;
+    if (program == NULL || target == NULL || fn == NULL || calls == NULL ||
+        result == NULL || result->sites != NULL || result->count != 0U ||
+        calls->count > fn->instruction_count ||
+        (calls->count != 0U && calls->sites == NULL) ||
+        (fn->instruction_count != 0U && fn->instructions == NULL) ||
+        calls->count > SIZE_MAX / sizeof(*result->sites))
+        return false;
+    if (calls->count == 0U) return true;
+    result->sites = calloc(calls->count, sizeof(*result->sites));
+    if (result->sites == NULL) return false;
+    result->count = calls->count;
+    for (i = 0U; i < calls->count; ++i) {
+        size_t id = calls->sites[i].instruction_id;
+        const MinicCoreInstruction *ins;
+        if (id >= fn->instruction_count ||
+            (previous != SIZE_MAX && id <= previous))
+            goto fail;
+        ins = &fn->instructions[id];
+        if (ins->kind != MINIC_CORE_INSTRUCTION_CALL &&
+            ins->kind != MINIC_CORE_INSTRUCTION_INDIRECT_CALL)
+            goto fail;
+        result->sites[i].instruction_id = id;
+        if (!minic_x86_64_plan_outgoing_arguments(
+                program, target, fn, &calls->sites[i].view,
+                &result->sites[i].plan))
+            goto fail;
+        previous = id;
+    }
+    return true;
+fail:
+    minic_x86_64_outgoing_call_plans_destroy(result);
+    return false;
+}
+const MinicX86ArgumentPlan *minic_x86_64_outgoing_call_plan(
+    const MinicX86OutgoingCallPlans *cache, size_t id) {
+    size_t low = 0U, high;
+    if (cache == NULL || (cache->count != 0U && cache->sites == NULL))
+        return NULL;
+    high = cache->count;
+    while (low < high) {
+        size_t mid = low + (high - low) / 2U;
+        if (cache->sites[mid].instruction_id < id) low = mid + 1U;
+        else high = mid;
+    }
+    return low < cache->count && cache->sites[low].instruction_id == id
+        ? &cache->sites[low].plan : NULL;
+}
+void minic_x86_64_outgoing_call_plans_destroy(MinicX86OutgoingCallPlans *cache) {
+    size_t i;
+    if (cache == NULL) return;
+    for (i = 0U; i < cache->count; ++i)
+        minic_x86_64_argument_plan_destroy(&cache->sites[i].plan);
+    free(cache->sites);
+    (void)memset(cache, 0, sizeof(*cache));
+}

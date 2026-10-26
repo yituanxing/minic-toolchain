@@ -33,6 +33,15 @@ typedef struct MinicX86ArgumentPlan {
     MinicX86ArgCursor end;
     bool is_variadic;
 } MinicX86ArgumentPlan;
+/* Sparse SysV outgoing ABI locations, ordered by Common Core CALL ID. */
+typedef struct MinicX86OutgoingCallSite {
+    size_t instruction_id;
+    MinicX86ArgumentPlan plan;
+} MinicX86OutgoingCallSite;
+typedef struct MinicX86OutgoingCallPlans {
+    MinicX86OutgoingCallSite *sites;
+    size_t count;
+} MinicX86OutgoingCallPlans;
 
 bool minic_x86_64_plan_incoming_arguments(
     const MinicC0Program *, const MinicTargetInfo *,
@@ -42,4 +51,11 @@ bool minic_x86_64_plan_outgoing_arguments(
     const MinicCoreFunction *, const MinicCoreCallView *,
     MinicX86ArgumentPlan *);
 void minic_x86_64_argument_plan_destroy(MinicX86ArgumentPlan *);
+bool minic_x86_64_outgoing_call_plans_prepare(
+    const MinicC0Program *, const MinicTargetInfo *,
+    const MinicCoreFunction *, const MinicCoreCallIndex *,
+    MinicX86OutgoingCallPlans *);
+const MinicX86ArgumentPlan *minic_x86_64_outgoing_call_plan(
+    const MinicX86OutgoingCallPlans *, size_t instruction_id);
+void minic_x86_64_outgoing_call_plans_destroy(MinicX86OutgoingCallPlans *);
 #endif

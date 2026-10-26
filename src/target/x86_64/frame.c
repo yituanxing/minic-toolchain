@@ -32,7 +32,11 @@ bool minic_x86_64_frame_init_with_storage(const MinicC0Program *program,
     (void)memset(frame, 0, sizeof(*frame));
     frame->semantic_calls = facts->call_index;
     if (!minic_x86_64_plan_incoming_arguments(
-            program, target, fn, &frame->incoming_arguments))
+            program, target, fn, &frame->incoming_arguments) ||
+        (facts->call_index != NULL &&
+         !minic_x86_64_outgoing_call_plans_prepare(
+             program, target, fn, facts->call_index,
+             &frame->outgoing_call_plans)))
         return false;
     if (!minic_core_object_storage_plan_acquire(
             program, target->data_layout, fn, storage,
@@ -165,6 +169,7 @@ void minic_x86_64_frame_destroy(MinicX86Frame *frame) {
     free(frame->value_offsets);
     free(frame->object_offsets);
     minic_x86_64_argument_plan_destroy(&frame->incoming_arguments);
+    minic_x86_64_outgoing_call_plans_destroy(&frame->outgoing_call_plans);
     minic_core_object_storage_plan_release(
         &frame->object_storage, frame->borrows_object_storage);
     free(frame->varargs_results);
