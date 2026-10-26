@@ -1,5 +1,6 @@
 #include "target/x86_64/frame.h"
 #include "target/common/core_function_facts.h"
+#include "target/common/core_frame_layout.h"
 #include "target/x86_64/abi.h"
 #include "target/data_layout.h"
 
@@ -11,12 +12,7 @@
 /* Exact x86 frame layout, moved out of assembly emission without changing
  * address arithmetic, 16+ aligned objects or SysV variadic save area. */
 bool minic_x86_64_align(size_t value, size_t alignment, size_t *out) {
-    size_t padding;
-    if (out == NULL || alignment == 0U) return false;
-    padding = (alignment - value % alignment) % alignment;
-    if (value > SIZE_MAX - padding) return false;
-    *out = value + padding;
-    return true;
+    return minic_core_frame_align_up(value, alignment, out);
 }
 
 

@@ -1,5 +1,6 @@
 #include "target/riscv64/frame_layout.h"
 #include "target/common/core_function_facts.h"
+#include "target/common/core_frame_layout.h"
 #include "target/riscv64/abi.h"
 #include "target/riscv64/frame_requirements.h"
 #include "target/riscv64/spill_layout.h"
@@ -11,24 +12,6 @@
 #include <string.h>
 
 /* One RV64 owner of outgoing ABI, object reuse, spills and CFG planning. */
-static bool align_up(size_t value, size_t alignment, size_t *result) {
-    size_t remainder;
-
-    if (result == NULL || alignment == 0U) {
-        return false;
-    }
-    remainder = value % alignment;
-    if (remainder == 0U) {
-        *result = value;
-        return true;
-    }
-    if (value > SIZE_MAX - (alignment - remainder)) {
-        return false;
-    }
-    *result = value + (alignment - remainder);
-    return true;
-}
-
 bool minic_riscv64_core_frame_initialize_with_facts(
     const MinicC0Program *program, const MinicCoreFunction *function,
     MinicRiscv64CoreFrame *frame, MinicRiscv64FunctionAbiPlan *abi_plan,
@@ -68,7 +51,7 @@ bool minic_riscv64_core_frame_initialize_with_facts(
     frame->outgoing_argument_size = outgoing_argument_size;
     frame->dynamic_call_area_size = 0U;
     if (frame->has_dynamic_stack_alloc &&
-        !align_up(outgoing_argument_size, 16U, &frame->dynamic_call_area_size)) {
+        !minic_core_frame_align_up(outgoing_argument_size, 16U, &frame->dynamic_call_area_size)) {
         return false;
     }
     storage_size = outgoing_argument_size;
@@ -121,18 +104,18 @@ bool minic_riscv64_core_frame_initialize_with_facts(
                 continue;
             }
         }
-        if (!align_up(storage_size, object_alignment, &storage_size) ||
+        if (!minic_core_frame_align_up(storage_size, object_alignment, &storage_size) ||
             storage_size > SIZE_MAX - object_size) {
             return false;
         }
         storage_size += object_size;
     }
-    if (!align_up(storage_size, 8U, &storage_size) ||
+    if (!minic_core_frame_align_up(storage_size, 8U, &storage_size) ||
         scalar_reuse_pool_slots > (SIZE_MAX - storage_size) / 8U) {
         return false;
     }
     storage_size += scalar_reuse_pool_slots * 8U;
-    if (!align_up(storage_size, 8U, &frame->value_base_offset)) {
+    if (!minic_core_frame_align_up(storage_size, 8U, &frame->value_base_offset)) {
         return false;
     }
     /* Core block-local last-use reuse: compute the maximum physical spill
@@ -166,7 +149,7 @@ bool minic_riscv64_core_frame_initialize_with_facts(
         facts->needs_saved_return_address || force_save_return_address;
     frame->return_address_offset = 0U;
     if (frame->saves_return_address) {
-        if (!align_up(storage_size, 8U, &frame->return_address_offset) ||
+        if (!minic_core_frame_align_up(storage_size, 8U, &frame->return_address_offset) ||
             frame->return_address_offset > SIZE_MAX - 8U) {
             return false;
         }
@@ -205,7 +188,7 @@ bool minic_riscv64_core_frame_initialize_with_facts(
         if (return_value.kind == MINIC_RISCV64_ABI_VALUE_INDIRECT) {
             if (!minic_type_is_record(function->return_type) ||
                 return_value.storage_size <= 16U || return_value.slot_count != 1U ||
-                !align_up(storage_size, 8U, &frame->hidden_result_pointer_offset) ||
+                !minic_core_frame_align_up(storage_size, 8U, &frame->hidden_result_pointer_offset) ||
                 frame->hidden_result_pointer_offset > SIZE_MAX - 8U) {
                 return false;
             }
@@ -215,7 +198,7 @@ bool minic_riscv64_core_frame_initialize_with_facts(
     }
 
     if (frame->has_dynamic_stack_alloc) {
-        if (!align_up(storage_size, 8U, &frame->saved_frame_base_offset) ||
+        if (!minic_core_frame_align_up(storage_size, 8U, &frame->saved_frame_base_offset) ||
             frame->saved_frame_base_offset > SIZE_MAX - 8U) {
             return false;
         }
@@ -237,7 +220,7 @@ bool minic_riscv64_core_frame_initialize_with_facts(
         size_t saved_count =
             minic_riscv64_asm_callee_saved_mask_count(frame->asm_plan.callee_saved_mask);
         size_t saved_bytes = saved_count * 8U;
-        if (!align_up(storage_size, 8U, &frame->structured_asm_callee_saved_offset) ||
+        if (!minic_core_frame_align_up(storage_size, 8U, &frame->structured_asm_callee_saved_offset) ||
             frame->structured_asm_callee_saved_offset > SIZE_MAX - saved_bytes) {
             return false;
         }
@@ -248,7 +231,7 @@ bool minic_riscv64_core_frame_initialize_with_facts(
     frame->has_dynamic_stack_alignment = maximum_object_alignment > 16U;
     frame->entry_sp_offset = 0U;
     if (frame->has_dynamic_stack_alignment) {
-        if (!align_up(storage_size, 8U, &frame->entry_sp_offset) ||
+        if (!minic_core_frame_align_up(storage_size, 8U, &frame->entry_sp_offset) ||
             frame->entry_sp_offset > SIZE_MAX - 8U) {
             return false;
         }
@@ -273,7 +256,7 @@ bool minic_riscv64_core_frame_initialize_with_facts(
         return false;
     }
     required_size = storage_size + frame->varargs_size;
-    if (!align_up(required_size, 16U, &frame->frame_size) ||
+    if (!minic_core_frame_align_up(required_size, 16U, &frame->frame_size) ||
         frame->frame_size < frame->varargs_size) {
         return false;
     }
@@ -351,7 +334,7 @@ bool minic_riscv64_core_frame_initialize_with_facts(
                     continue;
                 }
             }
-            if (!align_up(cached_offset, object_alignment, &cached_offset)) {
+            if (!minic_core_frame_align_up(cached_offset, object_alignment, &cached_offset)) {
                 free(frame->object_offsets);
                 frame->object_offsets = NULL;
                 return false;
