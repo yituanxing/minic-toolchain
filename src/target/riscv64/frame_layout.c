@@ -38,8 +38,8 @@ bool minic_riscv64_core_frame_initialize_with_storage(
     frame->object_storage = (MinicCoreObjectStoragePlan){0};
     frame->borrows_object_storage = false;
     frame->object_reuse = (MinicCoreObjectReusePlan){0};
-    frame->semantic_calls = facts->call_index;
-    frame->standalone_calls = (MinicCoreCallIndex){0};
+    frame->semantic_calls = NULL;
+    frame->call_index = (MinicCoreCallIndexHandle){0};
     frame->outgoing_calls = (MinicRiscv64CallPlanCache){0};
     if (!minic_core_object_storage_plan_acquire(
             program, minic_default_data_layout(), function, storage,
@@ -47,17 +47,19 @@ bool minic_riscv64_core_frame_initialize_with_storage(
         return false;
     frame->has_dynamic_stack_alloc = facts->uses_dynamic_stack_alloc;
     frame->saved_frame_base_offset = 0U;
-    /* One CALL ABI planner for production and standalone emitters. Legacy
-     * callers build an owned Common CALL index rather than maintaining an
-     * independent, twice-executed outgoing stack classifier. */
-    if (frame->semantic_calls == NULL) {
-        if (facts->direct_call_count > SIZE_MAX - facts->indirect_call_count ||
-            !minic_core_call_index_build(
-                function, facts->direct_call_count + facts->indirect_call_count,
-                &frame->standalone_calls))
-            return false;
-        frame->semantic_calls = &frame->standalone_calls;
-    }
+    /* All five targets now use the same Common CALL-index ownership
+     * contract. RV64's standalone API owns its generated snapshot, while
+     * production borrows the visitor's exact immutable CALL index. Keep
+     * the historical facts-count consistency gate for standalone callers. */
+    if (facts->direct_call_count > SIZE_MAX - facts->indirect_call_count ||
+        !minic_core_call_index_handle_prepare(
+            function, facts->call_index, &frame->call_index))
+        return false;
+    frame->semantic_calls = frame->call_index.index;
+    if (facts->call_index == NULL &&
+        frame->semantic_calls->count !=
+            facts->direct_call_count + facts->indirect_call_count)
+        return false;
     if (!minic_riscv64_call_plan_cache_build(
             program, function,
             abi_plan != NULL && abi_plan->named_parameter_cursor.lp64_soft_float,
@@ -406,7 +408,7 @@ void minic_riscv64_core_frame_destroy(MinicRiscv64CoreFrame *frame) {
     }
     minic_riscv64_asm_function_plan_destroy(&frame->asm_plan);
     minic_riscv64_call_plan_cache_destroy(&frame->outgoing_calls);
-    minic_core_call_index_destroy(&frame->standalone_calls);
+    minic_core_call_index_handle_destroy(&frame->call_index);
     frame->semantic_calls = NULL;
     minic_core_object_reuse_plan_destroy(&frame->object_reuse);
     free(frame->value_offsets);

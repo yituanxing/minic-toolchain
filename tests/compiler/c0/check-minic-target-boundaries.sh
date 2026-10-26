@@ -329,6 +329,19 @@ exists src/target/common/program_visit.h
 # Shared Core opcode-family classification feeds RV32, RV64, x86/Direct
 # without claiming a universal machine ISA or ignoring target admission.
 exists src/target/common/core_instruction_family.h
+# Common's public headers expose only true cross-unit dependencies.
+# RV64 frame borrows/owns the same semantic CALL index as all other targets.
+has src/target/riscv64/frame_layout.h 'MinicCoreCallIndexHandle call_index;'
+has src/target/riscv64/frame_layout.c 'minic_core_call_index_handle_prepare('
+has src/target/riscv64/frame_layout.c 'minic_core_call_index_handle_destroy('
+lacks src/target/riscv64/frame_layout.h 'standalone_calls'
+lacks src/target/riscv64/frame_layout.c 'minic_core_call_index_build('
+lacks src/target/common/direct_instruction_semantics.h 'minic_multi_direct_compiler_barrier_shape('
+lacks src/target/common/lp64_scalar.h 'minic_lp64_small_integer_width('
+lacks src/target/common/global_emit.h 'minic_multi_emit_record_bit_field_run('
+lacks src/target/common/global_emit.h 'minic_multi_recursive_shape_supported('
+lacks src/target/common/global_emit.h 'minic_multi_emit_flexible_record_global('
+
 exists src/target/common/core_numeric_shape.h
 # Three machine frame families now consume one policy-qualified Common
 # SSA slot planner: SysV cumulative 8/16, Direct LP64 wide sidecar, and

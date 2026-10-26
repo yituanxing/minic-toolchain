@@ -68,7 +68,7 @@ bool minic_multi_direct_parameter_object_location(
 
 /* A compiler barrier is an ordering constraint in the Core stream, not a
  * machine fence and not a produced SSA value. */
-bool minic_multi_direct_compiler_barrier_shape(const MinicCoreInstruction *ins) {
+static bool minic_multi_direct_compiler_barrier_shape(const MinicCoreInstruction *ins) {
     return ins != NULL &&
            ins->kind == MINIC_CORE_INSTRUCTION_COMPILER_BARRIER &&
            ins->result == MINIC_CORE_VALUE_INVALID &&

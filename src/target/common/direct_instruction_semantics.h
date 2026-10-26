@@ -18,9 +18,9 @@ bool minic_multi_direct_parameter_object_location(
     const MinicLP64FramePlan *frame_plan,
     const MinicLP64ArgumentLocation **location, size_t *object_offset);
 
-/* Effect-only compiler barriers and wide (128-bit) stores share Core IR
- * shape admission. ISA-specific bytes/register transfer remain target-owned. */
-bool minic_multi_direct_compiler_barrier_shape(const MinicCoreInstruction *ins);
+/* Wide (128-bit) stores share Core IR shape admission; ISA-specific
+ * bytes/register transfer remain target-owned. Compiler barriers are private
+ * to the Common machine-family classifier. */
 bool minic_multi_direct_wide_store_shape(
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
     const MinicLP64FramePlan *frame_plan, size_t *value_offset);

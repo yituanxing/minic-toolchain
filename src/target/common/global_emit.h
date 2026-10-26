@@ -41,13 +41,6 @@ bool minic_multi_emit_zero_relocation_global(
  * serialize without RV64's special bitfield/flexible-array paths. */
 /* Shared ELF bitfield packing, including explicit zero-width barriers,
  * stored as data bytes by the common recursive GlobalObject layout. */
-bool minic_multi_emit_record_bit_field_run(
-    FILE *file, const MinicC0Program *program, const MinicTargetInfo *target,
-    const MinicGlobalObject *object, const MinicRecord *record,
-    size_t field_limit, size_t type_size, size_t *field_index,
-    size_t *initializer_index, size_t *relocation_index, size_t *cursor);
-bool minic_multi_recursive_shape_supported(
-    const MinicC0Program *program, MinicType type);
 bool minic_multi_emit_recursive_aggregate_global(
     FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicGlobalObject *object, size_t storage_size,
@@ -61,12 +54,6 @@ bool minic_multi_emit_record_array_global(
     FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicGlobalObject *object, size_t storage_size,
     MinicMultiRelocEmitter emit_relocation);
-bool minic_multi_emit_flexible_record_global(
-    FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
-    const MinicGlobalObject *object, size_t storage_size,
-    MinicMultiRelocEmitter emit_relocation);
-
-
 /* GNU/ELF globals shared by AArch64 and LoongArch64. */
 bool minic_multi_emit_simple_global(
     FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,

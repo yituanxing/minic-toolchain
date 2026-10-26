@@ -10,7 +10,7 @@ bool minic_lp64_valid_int_or_bool(MinicType type) {
     return minic_lp64_valid_int(type) || minic_type_equal(type, minic_type_bool());
 }
 
-bool minic_lp64_small_integer_width(const MinicC0Program *program,
+static bool minic_lp64_small_integer_width(const MinicC0Program *program,
                                 const MinicTargetInfo *target, MinicType type,
                                 size_t *width, bool *sign) {
     unsigned int bits;

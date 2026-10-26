@@ -8,7 +8,6 @@
  * register assignment and lowering stay target-owned. */
 bool minic_lp64_valid_int(MinicType type);
 bool minic_lp64_valid_int_or_bool(MinicType type);
-bool minic_lp64_small_integer_width(const MinicC0Program *, const MinicTargetInfo *, MinicType, size_t *, bool *);
 bool minic_lp64_scalar_integer_width(const MinicC0Program *, const MinicTargetInfo *, MinicType, size_t *, bool *);
 bool minic_lp64_register64_type(const MinicC0Program *, const MinicTargetInfo *, MinicType);
 bool minic_lp64_valid_parameter_type(const MinicC0Program *, const MinicTargetInfo *, MinicType);
