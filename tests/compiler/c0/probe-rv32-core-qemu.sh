@@ -131,8 +131,6 @@ unsigned long long shift_wide_count(unsigned long long a,
                                     unsigned long long count) {
     return a >> count;
 }
-/* Two independent pointer-scale families: 4096 => Base-I slli, 13 =>
- * pinned libgcc __mulsi3. Neither path may depend on an M instruction. */
 struct Rv32LargeStride { unsigned char payload[4096]; };
 static struct Rv32LargeStride large_strides[3];
 int rv32_stride_pow2(unsigned index) {
@@ -145,8 +143,6 @@ int rv32_stride_odd(unsigned index) {
     odd_strides[index].payload[5] = (unsigned char)(20U + index);
     return (int)odd_strides[index].payload[5];
 }
-/* Execute actual binary32 arithmetic with the soft-float ILP32 a0/a1
- * calling convention. The startup oracle checks IEEE raw bits. */
 float sf_add(float a, float b) { return a + b; }
 float sf_sub(float a, float b) { return a - b; }
 float sf_mul(float a, float b) { return a * b; }
