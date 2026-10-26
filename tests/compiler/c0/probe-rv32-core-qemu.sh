@@ -131,6 +131,22 @@ unsigned long long shift_wide_count(unsigned long long a,
                                     unsigned long long count) {
     return a >> count;
 }
+struct Rv32LargeStride { unsigned char payload[4096]; };
+static struct Rv32LargeStride large_strides[3];
+int rv32_stride_pow2(unsigned index) {
+    large_strides[index].payload[17] = (unsigned char)(40U + index);
+    return (int)large_strides[index].payload[17];
+}
+struct Rv32OddStride { unsigned char payload[13]; };
+static struct Rv32OddStride odd_strides[3];
+int rv32_stride_odd(unsigned index) {
+    odd_strides[index].payload[5] = (unsigned char)(20U + index);
+    return (int)odd_strides[index].payload[5];
+}
+float sf_add(float a, float b) { return a + b; }
+float sf_sub(float a, float b) { return a - b; }
+float sf_mul(float a, float b) { return a * b; }
+float sf_div(float a, float b) { return a / b; }
 SRC
 "$MINIC_CC" --target=riscv32-linux -march=rv32i -mabi=ilp32 \
     -S "$work/core.i" -o "$work/core.s"
@@ -395,6 +411,53 @@ _start:
     li t0, 0x40000000
     bne a0, t0, fail
     bnez a1, fail
+    # XLEN-local shift, 4096-byte stride: index 2 -> 42.
+    li a0, 2
+    call rv32_stride_pow2
+    li t0, 42
+    bne a0, t0, fail
+    # Software libgcc multiplication, 13-byte stride: index 2 -> 22.
+    li a0, 2
+    call rv32_stride_odd
+    li t0, 22
+    bne a0, t0, fail
+    # Single-precision binary32 / soft-float integer register ABI.
+    li a0, 0x3fc00000  # 1.5f
+    li a1, 0x40200000  # 2.5f
+    call sf_add
+    li t0, 0x40800000  # 4.0f
+    bne a0, t0, fail
+    li a0, 0x3fc00000
+    li a1, 0x40200000
+    call sf_sub
+    li t0, 0xbf800000  # -1.0f
+    bne a0, t0, fail
+    li a0, 0x3fc00000
+    li a1, 0x40200000
+    call sf_mul
+    li t0, 0x40700000  # 3.75f
+    bne a0, t0, fail
+    li a0, 0x40c00000  # 6.0f
+    li a1, 0x40000000  # 2.0f
+    call sf_div
+    li t0, 0x40400000  # 3.0f
+    bne a0, t0, fail
+    # Preserve a signed -0 from -0 / +2.
+    li a0, 0x80000000
+    li a1, 0x40000000
+    call sf_div
+    li t0, 0x80000000
+    bne a0, t0, fail
+    # Zero over zero must be a NaN, not finite or infinity.
+    li a0, 0
+    li a1, 0
+    call sf_div
+    li t0, 0x7f800000
+    and t1, a0, t0
+    bne t1, t0, fail
+    not t0, t0
+    and t1, a0, t0
+    beqz t1, fail
     li a0, 0
     j exit
 fail:
@@ -505,7 +568,14 @@ qemu-riscv32 "$work/prog-native.elf"
 echo 'RV32_NATIVE_CHAIN=PASS minic_C=true minic_as_ELF32=true GNU_LD=true qemu_riscv32=true'
 riscv64-linux-gnu-readelf -h "$work/prog.elf" |
   grep -q 'Class:.*ELF32'
-# A GCC-vs-MiniC compiled real 64-bit shift count is now in the
-# ELF32 startup checks above. The machine code must examine both XLENs.
+# The 64-bit shift count checks both XLENs. The new 4096-byte
+# pointer multiplication must use a Base-I shift, not M or a libcall.
 grep -q 'bnez t5, .Lshift_wide_count_wide_ge64_' "$work/core.s"
-echo 'RV32_CORE=PASS C_functions=51 ILP32=1 ELF32=1 QEMU=PASS GNU_AS=PASS MiniAS=PASS GNU_LD=PASS RV32I_libgcc_muldivmod=PASS variadic_integer_stack_ABI=PASS two_XLEN_ABI=PASS pinned_LLVM_softfloat=PASS'
+grep -Fq 'slli t1, t1, 12' "$work/core.s"
+grep -Fq 'call __mulsi3' "$work/core.s"
+for symbol in __addsf3 __subsf3 __mulsf3 __divsf3; do
+    grep -Fq "call $symbol" "$work/core.s" || {
+        echo "RV32_SF32=FAIL no_machine_call=$symbol" >&2; exit 1;
+    }
+done
+echo 'RV32_CORE=PASS GNU_AS=PASS MiniAS=PASS QEMU=PASS ILP32=1 ELF32=1 pointer_pow2_shift=1 pointer_odd_libgcc=1 softfloat_binary32=4 ieee_signed_zero_nan=1'
