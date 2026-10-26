@@ -2,6 +2,7 @@
 #define MINIC_TARGET_COMMON_DIRECT_CALL_PREFLIGHT_H
 
 #include "core/core_ir.h"
+#include "target/common/core_call_view.h"
 #include "frontend/ast.h"
 #include "target/target_info.h"
 #include <stdbool.h>
@@ -19,7 +20,8 @@ typedef bool (*MinicDirectLP64IndirectRecord)(
  * Machine diagnostics and return-address preservation remain target-owned. */
 bool minic_multi_direct_lp64_calls_preflight(
     const MinicC0Program *program, const MinicTargetInfo *target,
-    const MinicCoreFunction *fn, const char *arch, const char *name,
+    const MinicCoreFunction *fn, const MinicCoreCallIndex *semantic_calls,
+    const char *arch, const char *name,
     MinicDirectLP64IndirectRecord indirect_record,
     size_t *failed_instruction, bool *has_calls);
 

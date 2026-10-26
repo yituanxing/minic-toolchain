@@ -78,7 +78,8 @@ bool minic_multi_direct_lp64_function_plan_prepare(
 
     plan->failed_stage = "call_preflight";
     if (!minic_multi_direct_lp64_calls_preflight(
-            program, target, fn, architecture_name, name, indirect_record,
+            program, target, fn, facts->call_index,
+            architecture_name, name, indirect_record,
             &plan->failed_instruction, &plan->has_calls))
         return false;
 

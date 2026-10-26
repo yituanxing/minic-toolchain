@@ -11,7 +11,8 @@
  * Register/stack assignment and ISA emission are still target-owned. */
 bool minic_multi_direct_lp64_calls_preflight(
     const MinicC0Program *program, const MinicTargetInfo *target,
-    const MinicCoreFunction *fn, const char *arch, const char *name,
+    const MinicCoreFunction *fn, const MinicCoreCallIndex *semantic_calls,
+    const char *arch, const char *name,
     MinicDirectLP64IndirectRecord indirect_record,
     size_t *failed_instruction, bool *has_calls) {
     size_t i;
@@ -67,8 +68,13 @@ bool minic_multi_direct_lp64_calls_preflight(
                     minic_type_equal(fn->values[ins->result].type, ins->type) ? 1 : 0);
             return false;
         }
-        if (!minic_core_call_view_build(fn, ins, &call))
-            return false;
+        {
+            const MinicCoreCallView *cached = semantic_calls != NULL
+                ? minic_core_call_index_get(semantic_calls, i) : NULL;
+            if (semantic_calls != NULL && cached == NULL) return false;
+            if (cached != NULL) call = *cached;
+            else if (!minic_core_call_view_build(fn, ins, &call)) return false;
+        }
         /* Core/ABI-neutral return shape was already checked by the view. */
         if (small_record_result &&
             call.return_form != MINIC_CORE_CALL_RETURN_OBJECT)
