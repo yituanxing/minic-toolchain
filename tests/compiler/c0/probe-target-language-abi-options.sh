@@ -18,6 +18,12 @@ cat >"$work/volatile-char.i" <<'SRC'
 volatile char value;
 int model(void) { return value; }
 SRC
+cat >"$work/rv32-float.i" <<'SRC'
+float add(float x, float y) { return x + y; }
+float subtract(float x, float y) { return x - y; }
+float multiply(float x, float y) { return x * y; }
+float divide(float x, float y) { return x / y; }
+SRC
 cat >"$work/wchar16.i" <<'SRC'
 _Static_assert(sizeof(L"X") == 4, "two 16-bit wchar units");
 int model(void) { return sizeof(L"X"); }
@@ -60,6 +66,19 @@ for arch in riscv32-linux riscv64-linux x86_64-linux aarch64-linux loongarch64-l
   # RV32 machine emission must honor plain-char signedness, not merely
   # accept the target option or agree with the driver frontend output.
   if [[ "$arch" == riscv32-linux ]]; then
+    "$MINIC_CC" --target=riscv32-linux "${extra[@]}" \
+      -S "$work/rv32-float.i" -o "$work/rv32-float.s"
+    for sf_helper in __addsf3 __subsf3 __mulsf3 __divsf3; do
+      grep -Fq "call $sf_helper" "$work/rv32-float.s" || {
+        echo "MINIC_TARGET_ABI_FLAGS=FAIL rv32-softfloat-helper:$sf_helper" >&2
+        exit 1
+      }
+    done
+    if grep -Eq '^[[:space:]]+(fadd\\.s|fsub\\.s|fmul\\.s|fdiv\\.s)[[:space:]]' \
+         "$work/rv32-float.s"; then
+      echo 'MINIC_TARGET_ABI_FLAGS=FAIL rv32i-emitted-F-instructions' >&2
+      exit 1
+    fi
     "$MINIC_CC" --target=riscv32-linux "${extra[@]}" -fsigned-char \
       -S "$work/volatile-char.i" -o "$work/rv32-signed-machine.s"
     "$MINIC_CC" --target=riscv32-linux "${extra[@]}" -funsigned-char \
