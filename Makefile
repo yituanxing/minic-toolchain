@@ -177,7 +177,6 @@ MINIC_SOURCES := \
 	src/target/riscv32/rv32_abi_cursor.c \
 	src/target/riscv32/rv32_global_emit.c \
 	src/target/riscv64/abi.c \
-	src/target/riscv64/layout.c \
 	src/target/riscv64/codegen_support.c \
 	src/target/riscv64/core_codegen.c \
 	src/target/riscv64/core_admission.c \
@@ -362,7 +361,6 @@ LAYOUT_TEST_SOURCES := \
 	src/target/data_layout.c \
 	src/target/target_info.c \
 	src/target/target_catalog.c \
-	src/target/riscv64/layout.c \
 	tests/target/riscv64/layout_test.c
 LAYOUT_TEST_OBJECTS := $(patsubst %.c,$(BUILD_DIR)/obj/%.o,$(LAYOUT_TEST_SOURCES))
 LAYOUT_TEST_BINARY  := $(BUILD_DIR)/tests/target/riscv64/layout-test

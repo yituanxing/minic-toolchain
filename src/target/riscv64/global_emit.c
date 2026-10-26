@@ -54,7 +54,7 @@ static bool minic_riscv64_emit_typed_bits(FILE *file,
     if (file == NULL || program == NULL ||
         (!minic_type_is_integer(type) && !minic_type_is_pointer(type) &&
          !minic_type_is_float(type) && !minic_type_is_double(type)) ||
-        !minic_riscv64_type_layout(program, type, &width, &alignment) ||
+        !minic_data_layout_type(minic_default_data_layout(), program, type, &width, &alignment) ||
         (width != 1U && width != 2U && width != 4U && width != 8U)) {
         return false;
     }
@@ -121,7 +121,7 @@ static bool minic_riscv64_global_scalar_type(const MinicC0Program *program,
     }
     if ((!minic_type_is_integer(type) && !minic_type_is_pointer(type) &&
          !minic_type_is_float(type) && !minic_type_is_double(type)) ||
-        !minic_riscv64_type_layout(program, type, scalar_width, &alignment) ||
+        !minic_data_layout_type(minic_default_data_layout(), program, type, scalar_width, &alignment) ||
         (*scalar_width != 1U && *scalar_width != 2U && *scalar_width != 4U &&
          *scalar_width != 8U)) {
         return false;

@@ -314,6 +314,15 @@ has src/target/riscv32/rv32_frame.c 'frame->borrows_object_storage = true'
 has src/target/riscv64/frame_layout.c 'frame->borrows_object_storage = true'
 has src/target/common/lp64_frame.c 'plan->borrows_object_storage = true'
 
+# Unique program-wide DataLayout validation supersedes the obsolete
+# AST/RV64-only layout pass and requires no backend prepare callback.
+exists src/target/data_layout.c
+has src/compiler/compiler.c 'minic_data_layout_validate_program(target_info->data_layout, &program)'
+lacks src/compiler/compiler.c 'backend->prepare_program'
+lacks src/target/backend.h 'MinicBackendPrepareProgram'
+for obsolete in src/target/riscv64/layout.c src/target/riscv64/layout.h; do
+  [[ ! -e "$obsolete" ]] || fail "old RV64 AST layout survived: $obsolete"
+done
 # Actual five-target frame ownership, not another architecture-specific
 # Core storage calculator. The target still chooses ABI stack geometry.
 exists src/target/common/core_frame_layout.h
