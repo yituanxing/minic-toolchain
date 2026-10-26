@@ -97,7 +97,7 @@ bool minic_multi_direct_wide_store_shape(
 /* One machine-independent result-shape gate for direct LP64 codegen.
  * AArch64 admits binary64 VA_ARG; LoongArch64 does not yet, so callers
  * select that documented ISA capability explicitly. */
-bool minic_multi_direct_result_slot_offset(
+static bool minic_multi_direct_result_slot_offset(
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
     bool allow_variadic_double_result, size_t *offset) {
     if (fn == NULL || ins == NULL || offset == NULL)

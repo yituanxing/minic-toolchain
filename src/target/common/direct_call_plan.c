@@ -284,6 +284,7 @@ bool minic_lp64_plan_function_calls(
         previous_id = id;
         if (semantic_calls == NULL) ++id;
     }
+    cache->semantic_calls = semantic_calls;
     return true;
 failed:
     minic_lp64_call_plan_cache_destroy(cache);
@@ -295,6 +296,17 @@ const MinicLP64PreparedCall *minic_lp64_function_call_plan(
     size_t low = 0U, high;
     if (cache == NULL || (cache->call_count != 0U && cache->sites == NULL))
         return NULL;
+    if (cache->semantic_calls != NULL) {
+        size_t ordinal;
+        if (cache->semantic_calls->count != cache->call_count ||
+            minic_core_call_index_find(cache->semantic_calls,
+                                       instruction_id, &ordinal) == NULL ||
+            ordinal >= cache->call_count || cache->sites[ordinal] == NULL ||
+            cache->sites[ordinal]->instruction_id != instruction_id)
+            return NULL;
+        return cache->sites[ordinal];
+    }
+    /* Standalone ABI planners still support a sorted local CALL cache. */
     high = cache->call_count;
     while (low < high) {
         size_t mid = low + (high - low) / 2U;

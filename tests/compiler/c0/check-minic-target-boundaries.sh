@@ -504,6 +504,14 @@ has src/target/common/direct_call_preflight.c 'semantic_calls->sites[ordinal]'
 lacks src/target/common/direct_call_preflight.c 'minic_core_call_index_get('
 has src/target/riscv64/core_admission.c 'semantic_calls->sites[call_site++]'
 lacks src/target/riscv64/core_admission.c 'minic_core_call_index_get('
+# Prepared RV32 and Direct LP64 CALL machines borrow the Common sorted
+# semantic CALL index, leaving one canonical ordinal lookup for production.
+has src/target/riscv32/rv32_abi_plan.h 'const MinicCoreCallIndex *semantic_calls;'
+has src/target/riscv32/rv32_abi_plan.c 'minic_core_call_index_find(plan->semantic_calls,'
+has src/target/common/direct_call_plan.h 'const MinicCoreCallIndex *semantic_calls;'
+has src/target/common/direct_call_plan.c 'minic_core_call_index_find(cache->semantic_calls,'
+lacks src/target/common/direct_instruction_semantics.h 'minic_multi_direct_result_slot_offset('
+has src/target/common/direct_instruction_semantics.c 'static bool minic_multi_direct_result_slot_offset('
 # SysV VA cursors must match the prepared Common fact count exactly.
 has src/target/x86_64/frame.c 'if (count != frame->varargs_count) return false;'
 has src/target/common/direct_function_plan.c 'program, target, decl, fn, facts, abi, indirect_record,'

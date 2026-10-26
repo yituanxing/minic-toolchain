@@ -25,12 +25,6 @@ bool minic_multi_direct_wide_store_shape(
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
     const MinicLP64FramePlan *frame_plan, size_t *value_offset);
 
-/* Source/Core instruction-value admission shared by AAPCS64 and LP64D.
- * The bool preserves the one documented double-varargs ISA difference. */
-bool minic_multi_direct_result_slot_offset(
-    const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
-    bool allow_variadic_double_result, size_t *offset);
-
 /* IEEE source operands, destination type and scalar integer-conversion
  * width/sign form a Core semantic contract shared by AArch64 and LoongArch64.
  * The two ISA emitters still choose register sequences, rounding operations,

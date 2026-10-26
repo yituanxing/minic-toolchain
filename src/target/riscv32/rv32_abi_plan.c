@@ -234,6 +234,7 @@ bool rv32_function_abi_plan_build(const MinicC0Program *program,
         if (semantic_calls == NULL) i = instruction_id + 1U;
     }
     if (dense != actual_calls) goto failure;
+    plan->semantic_calls = semantic_calls;
     return true;
 failure:
     rv32_function_abi_plan_destroy(plan);
@@ -247,6 +248,18 @@ const Rv32CallAbiPlan *rv32_function_abi_call(
     size_t low = 0U, high;
     if (plan == NULL || (plan->call_count != 0U && plan->calls == NULL))
         return NULL;
+    if (plan->semantic_calls != NULL) {
+        size_t ordinal;
+        if (plan->semantic_calls->count != plan->call_count ||
+            minic_core_call_index_find(plan->semantic_calls,
+                                       (size_t)index, &ordinal) == NULL ||
+            ordinal >= plan->call_count ||
+            plan->calls[ordinal].instruction_id != (size_t)index ||
+            !plan->calls[ordinal].prepared)
+            return NULL;
+        return &plan->calls[ordinal];
+    }
+    /* Standalone ILP32 callers lacking a visitor retain sparse lookup. */
     high = plan->call_count;
     while (low < high) {
         size_t mid = low + (high - low) / 2U;
