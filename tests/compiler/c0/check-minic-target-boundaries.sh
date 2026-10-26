@@ -249,6 +249,8 @@ has src/target/riscv64/frame_layout.c 'minic_core_object_reuse_plan_build('
 has src/target/riscv64/frame_layout.c 'minic_core_block_reused_spill_layout('
 exists src/target/common/core_spill_layout.c
 exists src/target/common/core_spill_layout.h
+has src/target/riscv32/rv32_abi_plan.c 'rv32_abi_reject("incoming_return"'
+lacks src/target/riscv32/rv32_emit.c 'rv32_scalar_storage_words(f, f->return_type, &bits)'
 has src/target/riscv32/rv32_frame.c 'varargs_offset'
 has src/target/riscv32/rv32_emit.c 'MINIC_CORE_INSTRUCTION_VARIADIC_ARGUMENT_ADDRESS'
 has src/target/target_info.c 'rv32_target.variadic_linear_slot_bytes = 4U'

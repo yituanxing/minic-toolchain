@@ -67,15 +67,21 @@ static bool rv32_plan_incoming(const MinicC0Program *program,
     MinicRiscv32AbiCursor cursor = {0U, 0U, false};
     size_t i;
     Rv32AbiWordLocation result_shape = {0};
-    if (minic_type_is_record(function->return_type)) {
+    /* The ILP32 ABI planner is the sole return-type admission owner.
+     * Scalar and record definitions share the same checked shape used
+     * for incoming parameters and outgoing calls. Machine emission does
+     * not walk the signature again. */
+    if (!minic_type_is_void(function->return_type)) {
         if (!rv32_plan_shape(program, target, function,
                              function->return_type, &result_shape))
-            return false;
-        plan->record_return_size = result_shape.record_size;
-        plan->indirect_return = result_shape.indirect_record;
-        /* Hidden sret pointer occupies a0 before all named parameters. */
-        if (plan->indirect_return)
-            cursor.register_words = 1U;
+            return rv32_abi_reject("incoming_return", 0U, function->return_type);
+        if (minic_type_is_record(function->return_type)) {
+            plan->record_return_size = result_shape.record_size;
+            plan->indirect_return = result_shape.indirect_record;
+            /* Hidden sret pointer occupies a0 before all named parameters. */
+            if (plan->indirect_return)
+                cursor.register_words = 1U;
+        }
     }
     if (function->parameter_count != 0U &&
         function->parameter_types == NULL) return false;
