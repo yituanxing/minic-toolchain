@@ -10,7 +10,6 @@
 
 bool minic_riscv_isa_resolve(const char *march, const char *mabi,
                              MinicRiscvIsa *isa, char *reason, size_t capacity);
-bool minic_riscv_isa_has(const MinicRiscvIsa *isa, uint32_t requirements);
 
 /* A small target-owned instruction-family selector. Call only for reachable
  * Core instructions, after frame/ABI planning and before emitting machine
@@ -21,21 +20,6 @@ bool minic_riscv_isa_has(const MinicRiscvIsa *isa, uint32_t requirements);
 bool minic_riscv_isa_admit_core_instruction(
     const MinicRiscvIsa *isa, const MinicCoreFunction *function,
     const MinicCoreInstruction *instruction, char *reason, size_t capacity);
-
-/* LP64 soft-float calls cannot silently use the old LP64D floating register
- * ABI, even when a C function only copies a float without FP arithmetic.
- * Inspect nested record/array argument and return types too. */
-bool minic_riscv_isa_soft_float_signature_supported(
-    const MinicRiscvIsa *isa, const MinicC0Program *program,
-    const MinicFunction *function);
-
-/* Deliberately narrow first LP64 ABI guarantee. Only scalar one-XLEN
- * integer, enum and pointer arguments/results (or void result); no
- * aggregates, soft-float signatures, 128-bit or variadic calls. Applies
- * equally to direct declarations and Core direct/indirect call signatures. */
-bool minic_riscv_isa_lp64_integer_signature_supported(
-    MinicType return_type, const MinicType *parameter_types,
-    size_t parameter_count, bool is_variadic);
 
 /* Source-owned inline/file asm is always provenance tagged (comment-only).
  * MiniC-generated machine instructions are audited independently against

@@ -1,6 +1,15 @@
 name: MiniC RV64I Origin Audit (7 frozen Linux shards)
 
 on:
+  # Exact-head regression on the follow-up PR. Seven expensive shards are
+  # opted in only when the PR title carries [rv64i-seven].
+  pull_request:
+    paths:
+      - '.github/workflows/minic-rv64i-origin-audit-seven.yml'
+      - 'src/target/riscv/**'
+      - 'src/target/riscv64/**'
+      - 'tests/compiler/c0/probe-rv64i-asm-origin.sh'
+      - 'tools/ci/audit-rv64i-asm-origin.py'
   push:
     branches: [main]
     paths:
@@ -32,6 +41,10 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Source and evidence must be tied to the true PR head, not GitHub's
+          # temporary synthetic merge commit.
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - name: Static audit checker validation
         run: |
           python3 -m py_compile tools/ci/audit-rv64i-asm-origin.py tools/ci/summarize-rv64i-seven-v1.py tests/external/linux/corpus_replay.py
@@ -60,7 +73,11 @@ jobs:
 
   linux-shard:
     # Seven full shards run only by explicit dispatch or tagged push.
-    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[rv64i-seven]')
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      contains(github.event.head_commit.message, '[rv64i-seven]') ||
+      (github.event_name == 'pull_request' &&
+       contains(github.event.pull_request.title, '[rv64i-seven]'))
     needs: smoke
     runs-on: ubuntu-24.04
     timeout-minutes: 120
@@ -105,6 +122,10 @@ jobs:
             limit: 352
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Source and evidence must be tied to the true PR head, not GitHub's
+          # temporary synthetic merge commit.
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - name: Restore exact Linux 6.6.143 preprocessed corpus
         id: corpus
         uses: actions/cache/restore@v4
@@ -272,11 +293,19 @@ jobs:
           fi
 
   audit-summary:
-    if: always() && (github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[rv64i-seven]'))
+    if: >-
+      always() && (github.event_name == 'workflow_dispatch' ||
+      contains(github.event.head_commit.message, '[rv64i-seven]') ||
+      (github.event_name == 'pull_request' &&
+       contains(github.event.pull_request.title, '[rv64i-seven]')))
     needs: [linux-shard]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Source and evidence must be tied to the true PR head, not GitHub's
+          # temporary synthetic merge commit.
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - name: Download all seven evidence artifacts
         uses: actions/download-artifact@v4
         with:

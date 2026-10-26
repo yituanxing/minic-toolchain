@@ -15,10 +15,6 @@ static bool reject(char *why, size_t cap, const char *message) {
     return false;
 }
 
-bool minic_riscv_isa_has(const MinicRiscvIsa *isa, uint32_t requirements) {
-    return isa != NULL && (isa->features & requirements) == requirements;
-}
-
 /* Target ISA availability, codegen choices and psABI are independent.
  * Unknown ISA spellings fail closed; source-asm supersets remain Base-I. */
 bool minic_riscv_isa_resolve(const char *march, const char *mabi,
@@ -219,76 +215,6 @@ bool minic_riscv_isa_admit_core_instruction(
                        "hardware lowering and software lowering is not qualified",
                        machine, extension);
     return false;
-}
-
-static bool abi_type_contains_float(const MinicC0Program *program,
-                                    MinicType type, unsigned depth) {
-    size_t i;
-    if (type.pointer_depth != 0U) return false;
-    if (depth > 32U) return true;
-    switch (type.base_kind) {
-    case MINIC_TYPE_BASE_FLOAT:
-    case MINIC_TYPE_BASE_DOUBLE:
-    case MINIC_TYPE_BASE_LONG_DOUBLE:
-    case MINIC_TYPE_BASE_FLOAT128:
-    case MINIC_TYPE_BASE_FLOAT32:
-    case MINIC_TYPE_BASE_FLOAT64:
-    case MINIC_TYPE_BASE_FLOAT32X:
-    case MINIC_TYPE_BASE_FLOAT64X:
-        return true;
-    case MINIC_TYPE_BASE_RECORD: {
-        const MinicRecord *record = minic_c0_program_record(program, type.record_id);
-        if (record == NULL || !record->is_complete) return true;
-        for (i = 0U; i < record->field_count; ++i)
-            if (abi_type_contains_float(program, record->fields[i].type, depth + 1U))
-                return true;
-        return false;
-    }
-    case MINIC_TYPE_BASE_ARRAY: {
-        const MinicArrayType *array = minic_c0_program_array_type(program, type.array_type_id);
-        return array == NULL || abi_type_contains_float(program, array->element_type, depth + 1U);
-    }
-    default: return false;
-    }
-}
-
-bool minic_riscv_isa_soft_float_signature_supported(
-    const MinicRiscvIsa *isa, const MinicC0Program *program,
-    const MinicFunction *function) {
-    size_t i;
-    if (isa == NULL || !isa->strict_isa || isa->abi != MINIC_RISCV_ABI_LP64)
-        return true;
-    if (program == NULL || function == NULL ||
-        abi_type_contains_float(program, function->return_type, 0U))
-        return false;
-    for (i = 0U; i < function->parameter_count; ++i)
-        if (abi_type_contains_float(program, function->parameter_types[i], 0U))
-            return false;
-    return true;
-}
-
-/* Initial explicit LP64 ABI subset: one integer argument/return slot for
- * int/long/enum/pointer, or void return. Do NOT confuse "LP64 integer
- * calling convention" with "only C integer types": the full psABI also
- * defines floating values in integer registers, but MiniC's existing ABI
- * emitter has not qualified those shapes yet. */
-static bool lp64_single_integer_slot(MinicType type, bool allow_void) {
-    return (allow_void && minic_type_is_void(type)) ||
-           minic_type_is_pointer(type) ||
-           (minic_type_is_integer(type) && !minic_type_is_int128_integer(type));
-}
-bool minic_riscv_isa_lp64_integer_signature_supported(
-    MinicType return_type, const MinicType *parameter_types,
-    size_t parameter_count, bool is_variadic) {
-    size_t i;
-    if (is_variadic ||
-        !lp64_single_integer_slot(return_type, true) ||
-        (parameter_count != 0U && parameter_types == NULL))
-        return false;
-    for (i = 0U; i < parameter_count; ++i)
-        if (!lp64_single_integer_slot(parameter_types[i], false))
-            return false;
-    return true;
 }
 
 /* Provenance is part of the ordinary assembly format, not an opt-in mode.

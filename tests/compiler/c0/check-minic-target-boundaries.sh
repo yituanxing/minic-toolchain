@@ -93,6 +93,11 @@ has src/target/target_info.h 'target/riscv/isa_features.h'
 lacks src/target/target_info.h 'target/riscv64/isa.h'
 has tools/minic-cc/main.c 'target/riscv64/isa.h'
 lacks src/target/riscv64/isa.h 'typedef enum MinicRiscvFeature'
+# The old, unused ABI admission functions were misleading duplicates of
+# the live target/ABI planner. They must not be restored.
+lacks src/target/riscv64/isa.h 'minic_riscv_isa_has('
+lacks src/target/riscv64/isa.h 'minic_riscv_isa_lp64_integer_signature_supported('
+lacks src/target/riscv64/isa.c 'abi_type_contains_float('
 has src/target/riscv/instruction_select.h 'minic_riscv_plan_integer_arithmetic('
 has src/target/riscv64/runtime_libcall.c 'minic_riscv_plan_integer_arithmetic('
 has src/target/riscv32/rv32_integer_emit.c 'minic_riscv_plan_integer_arithmetic('

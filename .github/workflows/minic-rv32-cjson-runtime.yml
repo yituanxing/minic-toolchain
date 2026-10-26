@@ -5,6 +5,8 @@ on:
     paths:
       - "src/target/riscv/**"
       - "src/target/riscv32/**"
+      - "src/target/riscv64/isa.c"
+      - "src/target/riscv64/isa.h"
       - "tests/compiler/c0/probe-riscv-shared-word-operations.sh"
       - ".github/workflows/minic-rv32-cjson-runtime.yml"
   push:
@@ -13,6 +15,8 @@ on:
       - "src/core/**"
       - "src/frontend/**"
       - "src/target/riscv32/**"
+      - "src/target/riscv64/isa.c"
+      - "src/target/riscv64/isa.h"
       - "src/target/riscv/**"
       - "tests/compiler/c0/probe-rv32-cjson-picolibc-qemu.sh"
       - "tests/compiler/c0/probe-rv32-cjson-frontier.sh"
