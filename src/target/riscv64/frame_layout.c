@@ -39,16 +39,26 @@ bool minic_riscv64_core_frame_initialize_with_storage(
     frame->borrows_object_storage = false;
     frame->object_reuse = (MinicCoreObjectReusePlan){0};
     frame->semantic_calls = facts->call_index;
+    frame->outgoing_calls = (MinicRiscv64CallPlanCache){0};
     if (!minic_core_object_storage_plan_acquire(
             program, minic_default_data_layout(), function, storage,
             &frame->object_storage, &frame->borrows_object_storage))
         return false;
     frame->has_dynamic_stack_alloc = facts->uses_dynamic_stack_alloc;
     frame->saved_frame_base_offset = 0U;
-    if (!minic_riscv64_core_call_outgoing_stack_size_profile(
-            program, function,
-            abi_plan != NULL && abi_plan->named_parameter_cursor.lp64_soft_float,
-            facts->call_index, &outgoing_argument_size)) {
+    if (facts->call_index != NULL) {
+        if (!minic_riscv64_call_plan_cache_build(
+                program, function,
+                abi_plan != NULL && abi_plan->named_parameter_cursor.lp64_soft_float,
+                facts->call_index, &frame->outgoing_calls))
+            return false;
+        outgoing_argument_size = frame->outgoing_calls.maximum_stack_bytes;
+    } else if (!minic_riscv64_core_call_outgoing_stack_size_profile(
+                   program, function,
+                   abi_plan != NULL && abi_plan->named_parameter_cursor.lp64_soft_float,
+                   NULL, &outgoing_argument_size)) {
+        /* Legacy callers without a prepared Common CALL index retain
+         * their checked sizing path; production never reclassifies CALLs. */
         return false;
     }
     frame->outgoing_argument_size = outgoing_argument_size;
@@ -417,6 +427,7 @@ void minic_riscv64_core_frame_destroy(MinicRiscv64CoreFrame *frame) {
         return;
     }
     minic_riscv64_asm_function_plan_destroy(&frame->asm_plan);
+    minic_riscv64_call_plan_cache_destroy(&frame->outgoing_calls);
     minic_core_object_reuse_plan_destroy(&frame->object_reuse);
     free(frame->value_offsets);
     frame->value_offsets = NULL;

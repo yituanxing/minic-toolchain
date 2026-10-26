@@ -536,8 +536,8 @@ static bool emit_core_call_scalar_result(
 static bool emit_core_call_arguments(
     FILE *file, const MinicC0Program *program,
     const MinicCoreFunction *function, const MinicRiscv64CoreFrame *frame,
-    const MinicCoreCallView *call, bool direct_call,
-    MinicRiscv64AbiCursor *cursor) {
+    const MinicCoreCallView *call, const MinicRiscv64PreparedCall *planned,
+    bool direct_call, MinicRiscv64AbiCursor *cursor) {
     size_t argument_index;
     if (file == NULL || program == NULL || function == NULL || frame == NULL ||
         cursor == NULL || call == NULL ||
@@ -545,7 +545,8 @@ static bool emit_core_call_arguments(
         call->argument_count > function->call_argument_count - call->argument_begin ||
         (call->argument_count != 0U && call->arguments == NULL) ||
         call->parameter_count > call->argument_count ||
-        (call->parameter_count != 0U && call->parameter_types == NULL))
+        (call->parameter_count != 0U && call->parameter_types == NULL) ||
+        (planned != NULL && planned->argument_count != call->argument_count))
         return false;
     for (argument_index = 0U; argument_index < call->argument_count;
          ++argument_index) {
@@ -559,9 +560,13 @@ static bool emit_core_call_arguments(
             return false;
         argument_type = is_fixed_parameter
             ? call->parameter_types[argument_index] : actual_type;
-        if (!minic_riscv64_abi_place_argument(
-                program, argument_type, is_fixed_parameter, cursor, &location))
+        if (planned != NULL) {
+            location = planned->arguments[argument_index];
+        } else if (!minic_riscv64_abi_place_argument(
+                       program, argument_type, is_fixed_parameter,
+                       cursor, &location)) {
             return false;
+        }
         if (!emit_core_call_argument(
                 file, program, function, frame, argument, argument_type,
                 &location, is_fixed_parameter, direct_call))
@@ -578,8 +583,9 @@ bool minic_riscv64_emit_direct_call(FILE *file,
                       size_t instruction_id) {
     MinicCoreCallView call;
     const MinicCoreCallee *callee;
-    MinicRiscv64AbiCursor cursor;
+    MinicRiscv64AbiCursor cursor = {0};
     MinicRiscv64AbiValue return_value;
+    const MinicRiscv64PreparedCall *planned;
     if (file == NULL || program == NULL || function == NULL || frame == NULL ||
         instruction == NULL || instruction->kind != MINIC_CORE_INSTRUCTION_CALL)
         return false;
@@ -598,10 +604,16 @@ bool minic_riscv64_emit_direct_call(FILE *file,
          !minic_riscv64_core_direct_call_supported(
              program, function, instruction, &call))) return false;
     callee = call.callee;
-    if (!minic_riscv64_abi_cursor_initialize_for_return_profile(
-            program, callee->return_type,
-            frame->named_parameter_cursor.lp64_soft_float,
-            &cursor, &return_value)) {
+    planned = frame->semantic_calls != NULL
+        ? minic_riscv64_call_plan_cache_get(&frame->outgoing_calls, instruction_id)
+        : NULL;
+    if (frame->semantic_calls != NULL && planned == NULL) return false;
+    if (planned != NULL) {
+        return_value = planned->return_value;
+    } else if (!minic_riscv64_abi_cursor_initialize_for_return_profile(
+                   program, callee->return_type,
+                   frame->named_parameter_cursor.lp64_soft_float,
+                   &cursor, &return_value)) {
         return false;
     }
     if (return_value.kind == MINIC_RISCV64_ABI_VALUE_INDIRECT) {
@@ -618,7 +630,7 @@ bool minic_riscv64_emit_direct_call(FILE *file,
     }
     if (!emit_core_call_arguments(
             file, program, function, frame,
-            &call, true, &cursor))
+            &call, planned, true, &cursor))
         return false;
     if (fprintf(file, "  call %s\n", callee->name) < 0) {
         return false;
@@ -680,8 +692,9 @@ bool minic_riscv64_emit_indirect_call(FILE *file,
                                size_t instruction_id) {
     MinicCoreCallView call;
     const MinicCoreCallSignature *signature;
-    MinicRiscv64AbiCursor cursor;
+    MinicRiscv64AbiCursor cursor = {0};
     MinicRiscv64AbiValue return_value;
+    const MinicRiscv64PreparedCall *planned;
     if (file == NULL || program == NULL || function == NULL || frame == NULL ||
         instruction == NULL || instruction->kind != MINIC_CORE_INSTRUCTION_INDIRECT_CALL)
         return false;
@@ -697,15 +710,21 @@ bool minic_riscv64_emit_indirect_call(FILE *file,
          !minic_riscv64_core_indirect_call_supported(
              program, function, instruction, &call))) return false;
     signature = call.signature;
-    if (!minic_riscv64_abi_cursor_initialize_for_return_profile(
-            program, signature->return_type,
-            frame->named_parameter_cursor.lp64_soft_float,
-            &cursor, &return_value)) {
+    planned = frame->semantic_calls != NULL
+        ? minic_riscv64_call_plan_cache_get(&frame->outgoing_calls, instruction_id)
+        : NULL;
+    if (frame->semantic_calls != NULL && planned == NULL) return false;
+    if (planned != NULL) {
+        return_value = planned->return_value;
+    } else if (!minic_riscv64_abi_cursor_initialize_for_return_profile(
+                   program, signature->return_type,
+                   frame->named_parameter_cursor.lp64_soft_float,
+                   &cursor, &return_value)) {
         return false;
     }
     if (!emit_core_call_arguments(
             file, program, function, frame,
-            &call, false, &cursor))
+            &call, planned, false, &cursor))
         return false;
     if (!minic_riscv64_frame_load_value(file, frame, instruction->value.indirect_call.callee, "t0") ||
         fprintf(file, "  jalr ra, t0, 0\n") < 0) {

@@ -7,6 +7,7 @@
 #include "target/common/core_object_reuse.h"
 #include "target/riscv64/record_snapshot.h"
 #include "target/riscv64/function_abi_plan.h"
+#include "target/riscv64/frame_requirements.h"
 #include "target/common/core_object_storage.h"
 #include "target/common/core_function_facts.h"
 #include <stdbool.h>
@@ -24,6 +25,8 @@ typedef struct MinicRiscv64CoreFrame {
     MinicCoreObjectReusePlan object_reuse;
     /* Borrowed from the Common Function Plan, never owned by RV64. */
     const MinicCoreCallIndex *semantic_calls;
+    /* RV64-owned ABI location plan, prepared once from Common CALL views. */
+    MinicRiscv64CallPlanCache outgoing_calls;
     size_t *value_offsets;
     MinicRiscv64AbiArgumentLocation *parameter_locations;
     size_t parameter_location_count;
