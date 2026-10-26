@@ -28,8 +28,9 @@ static bool wide_pair_operands(FILE *out, const MinicCoreFunction *f,
            rv32_pair_slot(out, fr, right, "t2", "t3", true);
 }
 
-/* C permits any integer type for the shift count. A double-word count
- * is not yet qualified; narrow counts are used without truncation. */
+/* C permits any integer type for the shift count. The shared
+ * pair-shift emitter handles ILP32 one-word and two-word counts (t2/t5),
+ * including a nonzero upper half. */
 static bool wide_shift(FILE *out, const MinicCoreFunction *f,
                        const Rv32Frame *fr, const MinicCoreInstruction *ins,
                        const char *symbol) {

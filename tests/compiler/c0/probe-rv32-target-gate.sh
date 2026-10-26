@@ -1,6 +1,6 @@
 #!/bin/sh
-# RV32 target selection is real, but only the semantic model is qualified.
-# Prevent accidentally running the RV64 emitter for ILP32 C code.
+# RV32 ILP32 is qualified through Core, native GNU/MiniAS ELF32 and QEMU.
+# This focused gate rejects accidentally selecting the RV64 emitter.
 set -eu
 : "${MINIC_CC:?MINIC_CC path required}"
 work=$(mktemp -d)
