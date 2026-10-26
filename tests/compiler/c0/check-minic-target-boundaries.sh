@@ -313,10 +313,10 @@ has src/target/riscv32/rv32_emit.c 'rv32_frame_init_with_storage('
 has src/target/riscv64/codegen_function.c 'minic_riscv64_emit_core_function_for_program_with_symbol_with_storage('
 has src/target/aarch64/codegen.c 'fn, facts, storage, "aarch64"'
 has src/target/loongarch64/codegen.c 'fn, facts, storage, "loongarch64"'
-has src/target/x86_64/frame.c 'frame->borrows_object_storage = true'
-has src/target/riscv32/rv32_frame.c 'frame->borrows_object_storage = true'
-has src/target/riscv64/frame_layout.c 'frame->borrows_object_storage = true'
-has src/target/common/lp64_frame.c 'plan->borrows_object_storage = true'
+# All four physical frame owners use the single Common borrowing contract.
+# Borrowed immutable entries must never be destroyed by target-local code.
+has src/target/common/core_object_storage.c '*result = *shared;'
+has src/target/common/core_object_storage.c '*borrowed = true;'
 
 # Unique program-wide DataLayout validation supersedes the obsolete
 # AST/RV64-only layout pass and requires no backend prepare callback.
@@ -332,10 +332,7 @@ done
 # Actual five-target frame ownership, not another architecture-specific
 # Core storage calculator. The target still chooses ABI stack geometry.
 exists src/target/common/core_frame_layout.h
-has src/target/common/lp64_frame.c 'minic_core_object_storage_plan_build('
-has src/target/riscv32/rv32_frame.c 'minic_core_object_storage_plan_build('
-has src/target/riscv64/frame_layout.c 'minic_core_object_storage_plan_build('
-has src/target/x86_64/frame.c 'minic_core_object_storage_plan_build('
+has src/target/common/core_object_storage.c 'return minic_core_object_storage_plan_build(program, layout, fn, result);'
 has src/target/riscv32/rv32_frame.c 'minic_core_frame_reserve('
 has src/target/common/lp64_frame.c 'minic_core_frame_reserve('
 has src/target/riscv64/frame_layout.c 'minic_core_frame_align_up('
@@ -388,6 +385,14 @@ has src/target/common/core_function_plan.c 'minic_core_function_facts_analyze('
 # physical frame plans, not repeated pointer/cleanup logic per backend.
 has src/target/common/core_object_storage.c 'bool minic_core_object_storage_plan_acquire('
 has src/target/common/core_object_storage.c 'void minic_core_object_storage_plan_release('
+# Unit test the borrow-or-own policy on the real linked Common implementation,
+# including standalone objects, exact pointer sharing, malformed plans,
+# and use-after-destroy prevention through zeroing the released alias.
+cc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror \
+  -Iinclude -Isrc tests/compiler/c0/probe-core-object-storage-ownership.c \
+  src/target/common/core_object_storage.c \
+  -o "$work/core-object-storage-ownership-probe"
+"$work/core-object-storage-ownership-probe"
 for frame in src/target/x86_64/frame.c src/target/riscv32/rv32_frame.c              src/target/riscv64/frame_layout.c src/target/common/lp64_frame.c; do
   has "$frame" 'minic_core_object_storage_plan_acquire('
   has "$frame" 'minic_core_object_storage_plan_release('
