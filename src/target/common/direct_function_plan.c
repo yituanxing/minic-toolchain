@@ -85,7 +85,7 @@ bool minic_multi_direct_lp64_function_plan_prepare(
     plan->failed_stage = "call_planning";
     plan->failed_instruction = SIZE_MAX;
     if (plan->has_calls &&
-        !minic_lp64_plan_function_calls(program, target, fn, abi,
+        !minic_lp64_plan_function_calls(program, target, fn, facts->call_index, abi,
                                        indirect_record, &plan->outgoing_calls))
         return false;
 

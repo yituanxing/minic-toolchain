@@ -46,7 +46,7 @@ typedef struct Rv32FunctionAbiPlan {
 bool rv32_function_abi_plan_build(const MinicC0Program *,
                                   const MinicTargetInfo *,
                                   const MinicCoreFunction *,
-                                  Rv32FunctionAbiPlan *);
+                                  const MinicCoreCallIndex *, Rv32FunctionAbiPlan *);
 void rv32_function_abi_plan_destroy(Rv32FunctionAbiPlan *);
 
 /* A missing, non-call or out-of-range instruction always fails closed. */

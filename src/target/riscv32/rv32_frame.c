@@ -43,7 +43,7 @@ bool rv32_frame_init_with_storage(Rv32Frame *frame, const MinicC0Program *progra
     /* The ABI plan is built once; frame and call emission consume exactly
      * its precomputed stack bound and individual argument placements. */
     frame->has_dynamic_stack = facts->uses_dynamic_stack_alloc;
-    if (!rv32_function_abi_plan_build(program, t, f, &frame->abi))
+    if (!rv32_function_abi_plan_build(program, t, f, facts->call_index, &frame->abi))
         return rv32_frame_reject("abi_plan", 0U, minic_type_void());
     max_stack_args = frame->abi.max_outgoing_stack_words;
     frame->is_variadic = is_variadic;

@@ -1,6 +1,7 @@
 #ifndef MINIC_TARGET_RISCV64_FRAME_REQUIREMENTS_H
 #define MINIC_TARGET_RISCV64_FRAME_REQUIREMENTS_H
 #include "core/core_ir.h"
+#include "target/common/core_call_view.h"
 #include "frontend/ast.h"
 #include <stdbool.h>
 #include <stddef.h>
@@ -21,7 +22,7 @@ bool minic_riscv64_core_call_argument_type(
     MinicType *argument_type, bool *is_fixed_parameter);
 bool minic_riscv64_core_call_outgoing_stack_size_profile(
     const MinicC0Program *, const MinicCoreFunction *,
-    bool lp64_soft_float, size_t *);
+    bool lp64_soft_float, const MinicCoreCallIndex *, size_t *);
 bool minic_riscv64_core_call_outgoing_stack_size(const MinicC0Program *,
                                                  const MinicCoreFunction *, size_t *);
 #endif

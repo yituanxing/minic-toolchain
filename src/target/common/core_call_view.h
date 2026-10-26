@@ -46,4 +46,21 @@ bool minic_core_call_view_argument_type(const MinicCoreFunction *,
                                         const MinicCoreCallView *, size_t,
                                         MinicType *);
 
+/* Once-per-definition, machine-independent CALL semantic index. Only real
+ * CALL IDs are stored, in ascending order; no per-instruction pointer table.
+ * Each view borrows immutable Core IR. Target ABI placement remains separate. */
+typedef struct MinicCoreCallSite {
+    size_t instruction_id;
+    MinicCoreCallView view;
+} MinicCoreCallSite;
+typedef struct MinicCoreCallIndex {
+    MinicCoreCallSite *sites;
+    size_t count;
+} MinicCoreCallIndex;
+bool minic_core_call_index_build(const MinicCoreFunction *, size_t expected_calls,
+                                 MinicCoreCallIndex *);
+const MinicCoreCallView *minic_core_call_index_get(
+    const MinicCoreCallIndex *, size_t instruction_id);
+void minic_core_call_index_destroy(MinicCoreCallIndex *);
+
 #endif

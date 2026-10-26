@@ -341,6 +341,13 @@ lacks src/target/common/lp64_frame.c 'minic_core_object_storage(program,'
 
 # The semantic CALL resolver is the single Core identity owner. psABI
 # GP/FP/stack placement remains x86/RV32/RV64/AArch64/LoongArch-owned.
+# Five targets get one immutable CallIndex with visitor-managed lifetime.
+exists src/target/common/core_call_index.c
+has src/target/common/program_visit.h 'minic_core_call_index_build('
+has src/target/common/program_visit.h 'minic_core_call_index_destroy(&calls)'
+has src/target/riscv32/rv32_frame.c 'facts->call_index'
+has src/target/riscv64/frame_layout.c 'facts->call_index'
+has src/target/common/direct_function_plan.c 'facts->call_index'
 has src/target/common/core_call_view.c 'view.return_form = MINIC_CORE_CALL_RETURN_OBJECT'
 has src/target/common/core_call_view.c 'minic_core_call_view_argument_type(function, &view, i, &actual)'
 has src/target/x86_64/call_plan.c 'minic_core_call_view_argument_type(fn, view, i, &type)'

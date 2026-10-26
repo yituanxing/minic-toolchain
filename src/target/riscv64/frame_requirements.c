@@ -74,7 +74,8 @@ bool minic_riscv64_core_call_argument_type(
 
 bool minic_riscv64_core_call_outgoing_stack_size_profile(
     const MinicC0Program *program, const MinicCoreFunction *function,
-    bool lp64_soft_float, size_t *result) {
+    bool lp64_soft_float, const MinicCoreCallIndex *semantic_calls,
+    size_t *result) {
     size_t instruction_index;
     size_t maximum_stack_slots;
 
@@ -93,8 +94,13 @@ bool minic_riscv64_core_call_outgoing_stack_size_profile(
         if (instruction->kind != MINIC_CORE_INSTRUCTION_CALL &&
             instruction->kind != MINIC_CORE_INSTRUCTION_INDIRECT_CALL)
             continue;
-        if (!minic_core_call_view_build(function, instruction, &call))
-            return false;
+        {
+            const MinicCoreCallView *cached = semantic_calls != NULL
+                ? minic_core_call_index_get(semantic_calls, instruction_index) : NULL;
+            if (semantic_calls != NULL && cached == NULL) return false;
+            if (cached != NULL) call = *cached;
+            else if (!minic_core_call_view_build(function, instruction, &call)) return false;
+        }
 
         if (!minic_riscv64_abi_cursor_initialize_for_return_profile(
                 program, call.return_type, lp64_soft_float,
@@ -132,6 +138,6 @@ bool minic_riscv64_core_call_outgoing_stack_size(
     const MinicC0Program *program, const MinicCoreFunction *function,
     size_t *result) {
     return minic_riscv64_core_call_outgoing_stack_size_profile(
-        program, function, false, result);
+        program, function, false, NULL, result);
 }
 

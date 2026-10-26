@@ -53,7 +53,7 @@ bool minic_riscv64_core_frame_initialize_with_storage(
     if (!minic_riscv64_core_call_outgoing_stack_size_profile(
             program, function,
             abi_plan != NULL && abi_plan->named_parameter_cursor.lp64_soft_float,
-            &outgoing_argument_size)) {
+            facts->call_index, &outgoing_argument_size)) {
         return false;
     }
     frame->outgoing_argument_size = outgoing_argument_size;

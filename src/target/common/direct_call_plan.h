@@ -40,7 +40,7 @@ typedef struct MinicLP64CallPlanCache {
 } MinicLP64CallPlanCache;
 bool minic_lp64_plan_function_calls(
     const MinicC0Program *, const MinicTargetInfo *,
-    const MinicCoreFunction *, MinicLP64DirectABI,
+    const MinicCoreFunction *, const MinicCoreCallIndex *, MinicLP64DirectABI,
     MinicDirectLP64IndirectRecord, MinicLP64CallPlanCache *);
 const MinicLP64PreparedCall *minic_lp64_function_call_plan(
     const MinicLP64CallPlanCache *, size_t instruction_id);
@@ -51,7 +51,8 @@ void minic_lp64_call_plan_cache_destroy(MinicLP64CallPlanCache *);
  * unnamed variadic GP promotion and binary128 even-register alignment. */
 bool minic_lp64_plan_direct_call(const MinicC0Program *program,
     const MinicTargetInfo *target, const MinicCoreFunction *fn,
-    const MinicCoreInstruction *call, MinicLP64DirectABI abi,
+    const MinicCoreInstruction *call, const MinicCoreCallView *semantic_view,
+    MinicLP64DirectABI abi,
     MinicDirectLP64IndirectRecord indirect_record,
     MinicLP64ArgumentPlan *plan);
 

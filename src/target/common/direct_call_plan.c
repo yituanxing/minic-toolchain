@@ -177,13 +177,15 @@ static bool minic_lp64_plan_types(
  * codegen; location assignment is performed exactly once per boundary. */
 bool minic_lp64_plan_direct_call(const MinicC0Program *program,
     const MinicTargetInfo *target, const MinicCoreFunction *fn,
-    const MinicCoreInstruction *call, MinicLP64DirectABI abi,
+    const MinicCoreInstruction *call, const MinicCoreCallView *semantic_view,
+    MinicLP64DirectABI abi,
     MinicDirectLP64IndirectRecord indirect_record,
     MinicLP64ArgumentPlan *plan) {
     MinicType types[MINIC_DIRECT_LP64_MAX_CALL_ARGUMENTS];
     MinicCoreCallView view;
     size_t count, j;
-    if (!minic_core_call_view_build(fn, call, &view) ||
+    if (!(semantic_view != NULL ? (view = *semantic_view, true) :
+          minic_core_call_view_build(fn, call, &view)) ||
         view.argument_count > MINIC_DIRECT_LP64_MAX_CALL_ARGUMENTS)
         return false;
     count = view.argument_count;
@@ -214,8 +216,8 @@ bool minic_lp64_plan_incoming_parameters(
  * One shared ABI classifier serves both LP64 ISA emitters. */
 bool minic_lp64_plan_function_calls(
     const MinicC0Program *program, const MinicTargetInfo *target,
-    const MinicCoreFunction *fn, MinicLP64DirectABI abi,
-    MinicDirectLP64IndirectRecord indirect_record,
+    const MinicCoreFunction *fn, const MinicCoreCallIndex *semantic_calls,
+    MinicLP64DirectABI abi, MinicDirectLP64IndirectRecord indirect_record,
     MinicLP64CallPlanCache *cache) {
     size_t id;
     if (program == NULL || target == NULL || fn == NULL || cache == NULL ||
@@ -237,8 +239,11 @@ bool minic_lp64_plan_function_calls(
         if (ins->kind != MINIC_CORE_INSTRUCTION_CALL &&
             ins->kind != MINIC_CORE_INSTRUCTION_INDIRECT_CALL)
             continue;
-        if (!minic_lp64_plan_direct_call(
-                program, target, fn, ins, abi, indirect_record, &scratch) ||
+        const MinicCoreCallView *view = semantic_calls != NULL
+            ? minic_core_call_index_get(semantic_calls, id) : NULL;
+        if ((semantic_calls != NULL && view == NULL) ||
+            !minic_lp64_plan_direct_call(
+                program, target, fn, ins, view, abi, indirect_record, &scratch) ||
             scratch.argument_count >
                 (SIZE_MAX - sizeof(*site)) / sizeof(*site->arguments))
             goto failed;

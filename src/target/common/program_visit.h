@@ -100,6 +100,7 @@ static inline bool minic_program_visit_prepared_functions(
         const MinicFunction *decl = &program->functions[i];
         MinicCoreFunctionFacts facts = {0};
         MinicCoreObjectStoragePlan objects = {0};
+        MinicCoreCallIndex calls = {0};
         bool ready = true;
         if (selection == MINIC_PROGRAM_FUNCTION_DECLARATIONS && decl->is_defined)
             continue;
@@ -110,16 +111,22 @@ static inline bool minic_program_visit_prepared_functions(
         /* Both Core facts and object type layout are one common function
          * preparation stage. The visitor owns storage until emission returns;
          * backend frames borrow this immutable snapshot and never free it. */
-        if (decl->is_defined)
+        if (decl->is_defined) {
             ready = minic_core_function_facts_analyze(&functions[i], &facts) &&
+                    minic_core_call_index_build(
+                        &functions[i], facts.direct_call_count +
+                        facts.indirect_call_count, &calls) &&
                     minic_core_object_storage_plan_build(
                         program, target->data_layout, &functions[i], &objects);
+            if (ready) facts.call_index = &calls;
+        }
         if (ready)
             ready = visit(out, program, target, decl, &functions[i],
                           decl->is_defined ? &facts : NULL,
                           decl->is_defined ? &objects : NULL, i,
                           function_sections, context);
         minic_core_object_storage_plan_destroy(&objects);
+        minic_core_call_index_destroy(&calls);
         if (!ready) {
             success = false;
             if (!continue_after_failure) break;

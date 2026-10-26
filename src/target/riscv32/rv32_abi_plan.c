@@ -106,12 +106,14 @@ static bool rv32_plan_call(const MinicC0Program *program,
                            const MinicTargetInfo *target,
                            const MinicCoreFunction *function,
                            const MinicCoreInstruction *instruction,
+                           const MinicCoreCallView *semantic_view,
                            Rv32CallAbiPlan *call) {
     MinicRiscv32AbiCursor cursor = {0U, 0U, false};
     MinicCoreCallView view;
     Rv32AbiWordLocation result_shape = {0};
     size_t i;
-    if (!minic_core_call_view_build(function, instruction, &view) ||
+    if (!(semantic_view != NULL ? (view = *semantic_view, true) :
+          minic_core_call_view_build(function, instruction, &view)) ||
         view.argument_count > SIZE_MAX / sizeof(*call->arguments))
         return false;
     if (view.return_form == MINIC_CORE_CALL_RETURN_OBJECT) {
@@ -154,6 +156,7 @@ static bool rv32_plan_call(const MinicC0Program *program,
 bool rv32_function_abi_plan_build(const MinicC0Program *program,
                                   const MinicTargetInfo *target,
                                   const MinicCoreFunction *function,
+                                  const MinicCoreCallIndex *semantic_calls,
                                   Rv32FunctionAbiPlan *plan) {
     size_t i;
     if (program == NULL || target == NULL ||
@@ -177,7 +180,10 @@ bool rv32_function_abi_plan_build(const MinicC0Program *program,
         if (ins->kind != MINIC_CORE_INSTRUCTION_CALL &&
             ins->kind != MINIC_CORE_INSTRUCTION_INDIRECT_CALL)
             continue;
-        if (!rv32_plan_call(program, target, function, ins, call)) {
+        const MinicCoreCallView *view = semantic_calls != NULL
+            ? minic_core_call_index_get(semantic_calls, i) : NULL;
+        if ((semantic_calls != NULL && view == NULL) ||
+            !rv32_plan_call(program, target, function, ins, view, call)) {
             if (getenv("MINIC_RV32_FRAME_TRACE") != NULL)
                 (void)fprintf(stderr,
                     "RV32_ABI_REJECT stage=call_plan instruction=%zu kind=%d\n",
