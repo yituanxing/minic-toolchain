@@ -98,6 +98,16 @@ has src/target/riscv64/runtime_libcall.c 'minic_riscv_plan_integer_arithmetic('
 has src/target/riscv32/rv32_integer_emit.c 'minic_riscv_plan_integer_arithmetic('
 has src/target/riscv32/rv32_frame.c 'frame->isa = &t->riscv_isa'
 has src/target/riscv32/rv32_emit.c 'rv32_emit_integer_instruction('
+# RV32/RV64 share machine-neutral ELF symbol semantics at the common owner.
+exists src/target/riscv/function_symbol.h
+[[ ! -e src/target/riscv64/function_symbol.h ]] || fail 'duplicate old RV64 symbol owner'
+for user in src/target/riscv32/rv32_emit.c \
+            src/target/riscv64/global_emit.c \
+            src/target/riscv64/codegen_function.c \
+            src/target/riscv64/core_codegen.h; do
+  has "$user" 'target/riscv/function_symbol.h'
+  lacks "$user" 'target/riscv64/function_symbol.h'
+done
 
 # ISA/ABI profile names must be shared between native compiler and staged
 # product driver. Only machine legalization owns the actual feature bits.
