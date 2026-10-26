@@ -101,8 +101,7 @@ static inline bool minic_riscv_plan_integer_arithmetic(
     }
     runtime = minic_riscv_integer_arithmetic_symbol(kind, is_unsigned, xlen);
     if (runtime == NULL) return false;
-    has_native = isa == NULL || !isa->strict_isa ||
-        (isa->features & MINIC_RISCV_FEATURE_M) != 0U;
+    has_native = isa == NULL || minic_riscv_codegen_has(isa, MINIC_RISCV_FEATURE_M);
     out->strategy = has_native ? MINIC_RISCV_INTEGER_NATIVE_M :
                                   MINIC_RISCV_INTEGER_RUNTIME_LIBCALL;
     out->opcode = has_native ? native : NULL;

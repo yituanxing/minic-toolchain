@@ -19,9 +19,8 @@ bool minic_riscv_isa_has(const MinicRiscvIsa *isa, uint32_t requirements) {
     return isa != NULL && (isa->features & requirements) == requirements;
 }
 
-/* Small, exact, independently verifiable profiles. Do not parse a large
- * -march grammar and silently accept unsupported extensions. Other ISAs
- * remain completely unaffected, as does the original implicit RV64 target. */
+/* Target ISA availability, codegen choices and psABI are independent.
+ * Unknown ISA spellings fail closed; source-asm supersets remain Base-I. */
 bool minic_riscv_isa_resolve(const char *march, const char *mabi,
                              MinicRiscvIsa *isa, char *reason, size_t capacity) {
     MinicRiscvIsa resolved;
@@ -29,18 +28,15 @@ bool minic_riscv_isa_resolve(const char *march, const char *mabi,
     if (isa == NULL || (isa->xlen != 64U && isa->xlen != 32U))
         return reject(reason, capacity, "unsupported RISC-V XLEN");
     if (isa->xlen == 32U) {
-        /* RV32 is a separate ILP32 target. Do not reinterpret RV64 'I'
-         * as a 32-bit code generation implementation. The backend must
-         * independently qualify 32-bit instructions and ABI before output. */
         if (march != NULL &&
             (profile == NULL || profile->kind != MINIC_RISCV_PROFILE_RV32I))
             return reject(reason, capacity, "RV32 currently accepts rv32i only");
         if (mabi != NULL && strcmp(mabi, "ilp32") != 0)
             return reject(reason, capacity, "rv32i requires ilp32");
         resolved = *isa;
-        resolved.xlen = 32U;
         resolved.abi = MINIC_RISCV_ABI_ILP32;
         resolved.features = 0U;
+        resolved.codegen_features = 0U;
         resolved.strict_isa = true;
         *isa = resolved;
         return true;
@@ -50,34 +46,30 @@ bool minic_riscv_isa_resolve(const char *march, const char *mabi,
         return reject(reason, capacity,
                       "explicit -march is required for non-default RISC-V ABI");
     }
-    resolved = *isa;
-    resolved.features = 0U;
-    resolved.strict_isa = true;
     if (profile == NULL || profile->xlen != 64U)
         return reject(reason, capacity,
-                      "supported explicit -march: rv64i, rv64im, rv64imafd; "
+                      "supported explicit -march: rv64i, rv64im, rv64imafd, "
+                      "rv64ima_zicsr_zifencei, rv64imac_zicsr_zifencei; "
                       "other ISA combinations are not yet qualified");
-    switch (profile->kind) {
-    case MINIC_RISCV_PROFILE_RV64I:
-        resolved.abi = MINIC_RISCV_ABI_LP64;
-        break;
-    case MINIC_RISCV_PROFILE_RV64IM:
-        resolved.features = MINIC_RISCV_FEATURE_M;
-        resolved.abi = MINIC_RISCV_ABI_LP64;
-        break;
-    case MINIC_RISCV_PROFILE_RV64IMAFD:
-        resolved.features = MINIC_RISCV_FEATURE_M | MINIC_RISCV_FEATURE_A |
-                            MINIC_RISCV_FEATURE_F | MINIC_RISCV_FEATURE_D;
-        resolved.abi = MINIC_RISCV_ABI_LP64D;
-        break;
-    default:
+    if (mabi == NULL) mabi = profile->mabi;
+    if (strcmp(mabi, "lp64") != 0 &&
+        !(strcmp(mabi, "lp64d") == 0 &&
+          (profile->features & (MINIC_RISCV_FEATURE_F | MINIC_RISCV_FEATURE_D)) ==
+              (MINIC_RISCV_FEATURE_F | MINIC_RISCV_FEATURE_D)))
         return reject(reason, capacity,
-                      "unqualified RISC-V profile (compiler)");
-    }
-    if (mabi != NULL && strcmp(mabi, profile->mabi) != 0)
-        return reject(reason, capacity,
-                      "ISA and ABI mismatch: rv64i/rv64im require lp64, "
-                      "rv64imafd requires lp64d");
+                      "ISA and ABI mismatch: lp64d requires F/D");
+    resolved = *isa;
+    resolved.abi = strcmp(mabi, "lp64d") == 0 ?
+                   MINIC_RISCV_ABI_LP64D : MINIC_RISCV_ABI_LP64;
+    resolved.features = profile->features;
+    resolved.codegen_features = profile->codegen_features;
+    /* The LP64 integer-register FP ABI does not imply LP64D FP calling
+     * convention. Retain the qualified soft-float arithmetic fallback. */
+    if (resolved.abi == MINIC_RISCV_ABI_LP64)
+        resolved.codegen_features &= ~(MINIC_RISCV_FEATURE_F | MINIC_RISCV_FEATURE_D);
+    if ((resolved.codegen_features & ~resolved.features) != 0U)
+        return reject(reason, capacity, "compiler ISA exceeds target ISA");
+    resolved.strict_isa = true;
     *isa = resolved;
     return true;
 }
@@ -147,7 +139,7 @@ bool minic_riscv_isa_admit_core_instruction(
         /* <=64-bit RV64I uses __muldi3; 128-bit uses upstream
          * compiler-rt __multi3 with integer-register LP64 calling ABI. */
         if (!minic_type_is_int128_integer(instruction->type) ||
-            !minic_riscv_isa_has(isa, MINIC_RISCV_FEATURE_M))
+            !minic_riscv_codegen_has(isa, MINIC_RISCV_FEATURE_M))
             return true;
         required = MINIC_RISCV_FEATURE_M;
         machine = "mulhu";
@@ -172,7 +164,7 @@ bool minic_riscv_isa_admit_core_instruction(
     case MINIC_CORE_INSTRUCTION_FLOAT_DIVIDE:
         /* In LP64 with no F extension, the target-owned lowering uses
          * libgcc's __{add,sub,mul,div}sf3 soft-float interface. */
-        if (!minic_riscv_isa_has(isa, MINIC_RISCV_FEATURE_F) &&
+        if (!minic_riscv_codegen_has(isa, MINIC_RISCV_FEATURE_F) &&
             isa->abi == MINIC_RISCV_ABI_LP64)
             return true;
         required = MINIC_RISCV_FEATURE_F;
@@ -184,7 +176,7 @@ bool minic_riscv_isa_admit_core_instruction(
     case MINIC_CORE_INSTRUCTION_DOUBLE_MULTIPLY:
     case MINIC_CORE_INSTRUCTION_DOUBLE_DIVIDE:
         /* Exactly the corresponding __*df3 library call, not F/D code. */
-        if (!minic_riscv_isa_has(
+        if (!minic_riscv_codegen_has(
                 isa, MINIC_RISCV_FEATURE_F | MINIC_RISCV_FEATURE_D) &&
             isa->abi == MINIC_RISCV_ABI_LP64)
             return true;
@@ -206,7 +198,7 @@ bool minic_riscv_isa_admit_core_instruction(
         break;
     default: break;
     }
-    if (required == 0U || minic_riscv_isa_has(isa, required)) return true;
+    if (required == 0U || minic_riscv_codegen_has(isa, required)) return true;
     /* Distinguish the exact failing Core opcode, not merely the FP ISA
      * family used as a diagnostic placeholder. This is useful when a
      * compiler-rt translation unit contains many inline helper functions. */
@@ -469,12 +461,12 @@ bool minic_riscv64_check_isa_assembly(const char *path,
         op[length] = '\0';
         if (length == 0U) continue;
         needed = required_features(op, &requirement);
-        if (needed == UINT32_MAX || !minic_riscv_isa_has(isa, needed)) {
+        if (needed == UINT32_MAX || !minic_riscv_codegen_has(isa, needed)) {
             if (reason != NULL && capacity != 0U)
                 (void)snprintf(reason, capacity,
                                "RISC-V ISA line %zu: instruction '%s' requires %s; "
-                               "selected features 0x%x; software lowering not qualified",
-                               lineno, op, requirement, (unsigned)isa->features);
+                               "compiler features 0x%x; software lowering not qualified",
+                               lineno, op, requirement, (unsigned)isa->codegen_features);
             valid = false;
             break;
         }

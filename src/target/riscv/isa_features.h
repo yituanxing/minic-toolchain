@@ -31,9 +31,15 @@ typedef enum MinicRiscvFeature {
 typedef struct MinicRiscvIsa {
     unsigned xlen;
     MinicRiscvAbi abi;
-    uint32_t features;
+    uint32_t features;         /* target/assembler available extensions */
+    uint32_t codegen_features; /* MiniC-selected subset: Base-I fallback */
     bool strict_isa;
 } MinicRiscvIsa;
 
+static inline bool minic_riscv_codegen_has(const MinicRiscvIsa *isa,
+                                            uint32_t requirements) {
+    return isa != NULL && (!isa->strict_isa ||
+           (isa->codegen_features & requirements) == requirements);
+}
 
 #endif

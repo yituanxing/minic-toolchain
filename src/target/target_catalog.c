@@ -36,14 +36,34 @@ const MinicTargetCatalogEntry *minic_target_catalog_find(const char *name) {
     return NULL;
 }
 
-/* Accepted machine profiles, not every profile advertised by GCC/LLVM.
- * The implicit historical RV64GC/LP64D default remains separate. */
+/* Exact qualified ISA spellings only. Extended -S source-asm profiles do
+ * not imply built-in MiniAS/LD support. Legacy implicit RV64GC is separate. */
+#define M MINIC_RISCV_FEATURE_M
+#define A MINIC_RISCV_FEATURE_A
+#define F MINIC_RISCV_FEATURE_F
+#define D MINIC_RISCV_FEATURE_D
+#define C MINIC_RISCV_FEATURE_C
+#define CSR MINIC_RISCV_FEATURE_ZICSR
+#define FI MINIC_RISCV_FEATURE_ZIFENCEI
 static const MinicRiscvProfile minic_riscv_profiles[] = {
-    {"rv32i", "ilp32", 32U, MINIC_RISCV_PROFILE_RV32I},
-    {"rv64i", "lp64", 64U, MINIC_RISCV_PROFILE_RV64I},
-    {"rv64im", "lp64", 64U, MINIC_RISCV_PROFILE_RV64IM},
-    {"rv64imafd", "lp64d", 64U, MINIC_RISCV_PROFILE_RV64IMAFD}
+    {"rv32i", "ilp32", 32U, MINIC_RISCV_PROFILE_RV32I, 0U, 0U, false},
+    {"rv64i", "lp64", 64U, MINIC_RISCV_PROFILE_RV64I, 0U, 0U, true},
+    {"rv64im", "lp64", 64U, MINIC_RISCV_PROFILE_RV64IM, M, M, true},
+    {"rv64imafd", "lp64d", 64U, MINIC_RISCV_PROFILE_RV64IMAFD,
+     M | A | F | D, M | F | D, true},
+    /* Source A/CSR/fence.i (and optional C) goes to GNU AS; compiler stays I. */
+    {"rv64ima_zicsr_zifencei", "lp64", 64U, MINIC_RISCV_PROFILE_RV64IM,
+     M | A | CSR | FI, 0U, false},
+    {"rv64imac_zicsr_zifencei", "lp64", 64U, MINIC_RISCV_PROFILE_RV64IM,
+     M | A | C | CSR | FI, 0U, false}
 };
+#undef M
+#undef A
+#undef F
+#undef D
+#undef C
+#undef CSR
+#undef FI
 
 const MinicRiscvProfile *minic_riscv_profile_all(size_t *count) {
     if (count != NULL)

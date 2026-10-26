@@ -3,6 +3,7 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+#include "target/riscv/isa_features.h"
 
 /* The architecture identifier and spelling catalog is independent of C
  * types, Core IR, ABI layout and machine code. The standalone product driver
@@ -45,6 +46,9 @@ typedef struct MinicRiscvProfile {
     const char *mabi;
     unsigned int xlen;
     MinicRiscvProfileKind kind;
+    uint32_t features;
+    uint32_t codegen_features;
+    bool staged_assembler_qualified;
 } MinicRiscvProfile;
 
 const MinicRiscvProfile *minic_riscv_profile_find(const char *march);
