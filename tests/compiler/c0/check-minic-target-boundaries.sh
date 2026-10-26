@@ -450,11 +450,18 @@ lacks src/target/common/lp64_frame.c 'bool minic_lp64_frame_plan_objects('
 lacks src/target/riscv64/frame_layout.c 'bool minic_riscv64_core_frame_initialize_prepared('
 lacks src/target/x86_64/frame.c 'minic_x86_64_frame_init_prepared('
 lacks src/target/riscv32/rv32_frame.c 'rv32_frame_init_prepared('
-has src/target/riscv64/core_codegen.c 'minic_riscv64_emit_core_function_for_program_with_symbol_prepared('
+lacks src/target/riscv64/core_codegen.c 'minic_riscv64_emit_core_function_for_program_with_symbol_prepared('
 has src/target/riscv64/frame_layout.c 'facts->needs_saved_return_address'
 # All five targets now preplan real ABI CALL placement once. RV64 directly
 # consumes the exact prepared psABI locations for machine CALL emission.
 has src/target/riscv64/frame_layout.c 'minic_riscv64_call_plan_cache_build('
+# RV64 standalone and production must converge on the one Common CALL index
+# and one target ABI plan; the obsolete standalone sizing walker is deleted.
+has src/target/riscv64/frame_layout.c 'minic_core_call_index_build('
+has src/target/riscv64/frame_layout.c 'minic_core_call_index_destroy(&frame->standalone_calls)'
+lacks src/target/riscv64/frame_layout.c 'minic_riscv64_core_call_outgoing_stack_size_profile('
+lacks src/target/riscv64/frame_requirements.c 'minic_riscv64_core_call_outgoing_stack_size_profile('
+lacks src/target/riscv64/frame_requirements.h 'minic_riscv64_core_call_outgoing_stack_size('
 has src/target/riscv64/frame_layout.c 'outgoing_calls.maximum_stack_bytes'
 has src/target/riscv64/call_emit.c 'location = planned->arguments[argument_index];'
 has src/target/riscv64/call_emit.c 'minic_riscv64_call_plan_cache_get('

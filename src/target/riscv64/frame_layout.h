@@ -25,6 +25,9 @@ typedef struct MinicRiscv64CoreFrame {
     MinicCoreObjectReusePlan object_reuse;
     /* Borrowed from the Common Function Plan, never owned by RV64. */
     const MinicCoreCallIndex *semantic_calls;
+    /* Standalone emitters without the visitor own this fallback CALL index;
+     * production frames only borrow the visitor's Common CALL snapshot. */
+    MinicCoreCallIndex standalone_calls;
     /* RV64-owned ABI location plan, prepared once from Common CALL views. */
     MinicRiscv64CallPlanCache outgoing_calls;
     size_t *value_offsets;

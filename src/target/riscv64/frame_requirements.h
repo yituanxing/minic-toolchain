@@ -34,9 +34,4 @@ const MinicRiscv64PreparedCall *minic_riscv64_call_plan_cache_get(
     const MinicRiscv64CallPlanCache *, size_t instruction_id);
 void minic_riscv64_call_plan_cache_destroy(MinicRiscv64CallPlanCache *);
 
-bool minic_riscv64_core_call_outgoing_stack_size_profile(
-    const MinicC0Program *, const MinicCoreFunction *,
-    bool lp64_soft_float, const MinicCoreCallIndex *, size_t *);
-bool minic_riscv64_core_call_outgoing_stack_size(const MinicC0Program *,
-                                                 const MinicCoreFunction *, size_t *);
 #endif

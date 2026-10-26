@@ -762,16 +762,6 @@ bool minic_riscv64_emit_core_function_for_program_with_symbol_with_storage(
                                           facts, storage);
 }
 
-bool minic_riscv64_emit_core_function_for_program_with_symbol_prepared(
-    FILE *file, const MinicC0Program *program, const MinicCoreFunction *function,
-    const MinicRiscv64FunctionSymbol *symbol, const MinicCoreFunctionFacts *facts,
-    bool position_independent, const MinicRiscvIsa *isa,
-    MinicDiagnostic *diagnostic) {
-    return minic_riscv64_emit_core_function_for_program_with_symbol_with_storage(
-        file, program, function, symbol, facts, NULL,
-        position_independent, isa, diagnostic);
-}
-
 bool minic_riscv64_emit_core_function_for_program_with_symbol(
     FILE *file,
     const MinicC0Program *program,
