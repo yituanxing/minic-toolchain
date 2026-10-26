@@ -244,7 +244,7 @@ has src/target/riscv32/rv32_emit.c 'MINIC_CORE_INSTRUCTION_VARIADIC_ARGUMENT_ADD
 has src/target/target_info.c 'rv32_target.variadic_linear_slot_bytes = 4U'
 lacks src/target/riscv32/rv32_emit.c 'defining variadic functions requires ILP32 va_list ABI'
 has src/target/riscv32/rv32_frame.c 'max_outgoing_stack_words'
-has src/target/riscv32/rv32_frame.c 'minic_core_function_facts_analyze('
+lacks src/target/riscv32/rv32_frame.c 'minic_core_function_facts_analyze('
 has src/target/riscv32/rv32_frame.c 'rv32_fixed_stack('
 has src/target/riscv32/rv32_memory_emit.c 'MINIC_CORE_INSTRUCTION_DYNAMIC_STACK_ALLOC'
 has src/target/riscv32/rv32_emit.c 'fr.has_dynamic_stack'
