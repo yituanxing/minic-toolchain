@@ -301,6 +301,20 @@ has src/target/common/direct_call_preflight.c 'minic_core_instruction_is_call(in
 has src/target/common/program_visit.h 'minic_program_visit_globals('
 has src/target/common/program_visit.h 'minic_program_visit_functions('
 has src/target/common/program_visit.h 'minic_program_visit_prepared_functions('
+# All five machine backends must borrow one visitor-owned per-function Core
+# object plan, not repeat layout scans. Each target keeps its own psABI frame.
+has src/target/common/program_visit.h 'minic_core_object_storage_plan_build('
+has src/target/common/program_visit.h 'minic_core_object_storage_plan_destroy(&objects)'
+has src/target/x86_64/codegen.c 'minic_x86_64_frame_init_with_storage('
+has src/target/riscv32/rv32_emit.c 'rv32_frame_init_with_storage('
+has src/target/riscv64/codegen_function.c 'minic_riscv64_emit_core_function_for_program_with_symbol_with_storage('
+has src/target/aarch64/codegen.c 'fn, facts, storage, "aarch64"'
+has src/target/loongarch64/codegen.c 'fn, facts, storage, "loongarch64"'
+has src/target/x86_64/frame.c 'frame->borrows_object_storage = true'
+has src/target/riscv32/rv32_frame.c 'frame->borrows_object_storage = true'
+has src/target/riscv64/frame_layout.c 'frame->borrows_object_storage = true'
+has src/target/common/lp64_frame.c 'plan->borrows_object_storage = true'
+
 # Actual five-target frame ownership, not another architecture-specific
 # Core storage calculator. The target still chooses ABI stack geometry.
 exists src/target/common/core_frame_layout.h

@@ -28,6 +28,7 @@ static void x86_error(MinicDiagnostic *diag, const char *path, const char *messa
 static bool x86_emit_function(FILE *out, const MinicC0Program *program,
                               const MinicTargetInfo *target, const MinicFunction *declaration,
                               const MinicCoreFunction *fn, const MinicCoreFunctionFacts *facts,
+                              const MinicCoreObjectStoragePlan *storage,
                               size_t function_id, bool function_sections, MinicDiagnostic *diag, const char *path) {
     MinicX86Frame frame = {0};
     const char *name = minic_c0_function_symbol_name(declaration);
@@ -38,7 +39,8 @@ static bool x86_emit_function(FILE *out, const MinicC0Program *program,
         const bool named = name != NULL && name[0] != '\0';
         const bool verified = named && minic_core_function_verify(fn);
         const bool planned = verified &&
-            minic_x86_64_frame_init_prepared(program, target, fn, facts, &frame);
+            minic_x86_64_frame_init_with_storage(
+                program, target, fn, facts, storage, &frame);
         if (!planned) {
             if (getenv("MINIC_M1_TRACE") != NULL) {
                 (void)fprintf(stderr,
@@ -191,7 +193,8 @@ static bool x86_visit_global(
 static bool x86_visit_function(
     FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicFunction *decl, const MinicCoreFunction *fn,
-    const MinicCoreFunctionFacts *facts, size_t index,
+    const MinicCoreFunctionFacts *facts,
+    const MinicCoreObjectStoragePlan *storage, size_t index,
     bool function_sections, void *opaque) {
     const MinicX86VisitContext *ctx = opaque;
     if (decl->alias_target != MINIC_FUNCTION_INVALID) {
@@ -199,7 +202,7 @@ static bool x86_visit_function(
                   "x86-64 function alias not implemented yet");
         return false;
     }
-    return x86_emit_function(out, program, target, decl, fn, facts, index,
+    return x86_emit_function(out, program, target, decl, fn, facts, storage, index,
                              function_sections, ctx->diagnostic, ctx->path);
 }
 

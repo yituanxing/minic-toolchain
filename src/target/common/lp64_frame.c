@@ -8,9 +8,10 @@
  * Identical offsets/guards to the historical per-access scans, but O(N)
  * once per function and O(1) on the emission hot path. */
 
-bool minic_lp64_frame_plan_objects(
+bool minic_lp64_frame_plan_objects_with_storage(
     const MinicC0Program *program, const MinicTargetInfo *target,
-    const MinicCoreFunction *fn, MinicLP64FramePlan *plan) {
+    const MinicCoreFunction *fn, const MinicCoreObjectStoragePlan *shared,
+    MinicLP64FramePlan *plan) {
     size_t pos, i;
     if (program == NULL || target == NULL || fn == NULL || plan == NULL ||
         fn->value_count > 32768U || fn->object_count > 8192U ||
@@ -19,8 +20,14 @@ bool minic_lp64_frame_plan_objects(
         return false;
     /* Shared one-time Core storage plan also serves x86 and RV64.
      * The LP64 emitters keep their exact 8-byte slots and 1 MiB frame cap. */
-    if (!minic_core_object_storage_plan_build(
-            program, target->data_layout, fn, &plan->object_storage))
+    if (shared != NULL) {
+        if (shared->count != fn->object_count ||
+            (shared->count != 0U && shared->objects == NULL))
+            return false;
+        plan->object_storage = *shared;
+        plan->borrows_object_storage = true;
+    } else if (!minic_core_object_storage_plan_build(
+                   program, target->data_layout, fn, &plan->object_storage))
         return false;
     if (fn->object_count != 0U) {
         plan->object_offsets =
@@ -42,6 +49,13 @@ bool minic_lp64_frame_plan_objects(
     }
     plan->object_end = pos;
     return true;
+}
+
+bool minic_lp64_frame_plan_objects(
+    const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicCoreFunction *fn, MinicLP64FramePlan *plan) {
+    return minic_lp64_frame_plan_objects_with_storage(
+        program, target, fn, NULL, plan);
 }
 
 bool minic_lp64_frame_plan_wide(
@@ -90,7 +104,8 @@ void minic_lp64_frame_plan_destroy(MinicLP64FramePlan *plan) {
     if (plan == NULL) return;
     free(plan->object_offsets);
     free(plan->wide_offsets);
-    minic_core_object_storage_plan_destroy(&plan->object_storage);
+    if (!plan->borrows_object_storage)
+        minic_core_object_storage_plan_destroy(&plan->object_storage);
     *plan = (MinicLP64FramePlan){0};
 }
 

@@ -78,7 +78,8 @@ static bool rv64_visit_global(
 static bool rv64_visit_function(
     FILE *file, const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicFunction *function, const MinicCoreFunction *core_function,
-    const MinicCoreFunctionFacts *facts, size_t index,
+    const MinicCoreFunctionFacts *facts,
+    const MinicCoreObjectStoragePlan *storage, size_t index,
     bool function_sections, void *opaque) {
     Rv64ProgramContext *ctx = opaque;
     bool success = true;
@@ -104,8 +105,8 @@ static bool rv64_visit_function(
         /* The machine emitter owns capability admission, not this visitor. */
         success = minic_riscv64_function_symbol_from_function(function, &symbol);
         symbol.function_sections = function_sections;
-        success = success && minic_riscv64_emit_core_function_for_program_with_symbol_prepared(
-                      file, program, core_function, &symbol, facts,
+        success = success && minic_riscv64_emit_core_function_for_program_with_symbol_with_storage(
+                      file, program, core_function, &symbol, facts, storage,
                       target != NULL && target->position_independent,
                       target != NULL ? &target->riscv_isa : NULL,
                       ctx->diagnostic);

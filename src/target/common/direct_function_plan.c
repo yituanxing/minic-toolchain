@@ -14,7 +14,9 @@
 bool minic_multi_direct_lp64_function_plan_prepare(
     const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicFunction *decl, const MinicCoreFunction *fn,
-    const MinicCoreFunctionFacts *facts, const char *architecture_name, MinicLP64DirectABI abi,
+    const MinicCoreFunctionFacts *facts,
+    const MinicCoreObjectStoragePlan *storage,
+    const char *architecture_name, MinicLP64DirectABI abi,
     MinicDirectLP64IndirectRecord indirect_record,
     MinicDirectLP64FunctionPlan *plan) {
     MinicDirectLP64FunctionProfile profile;
@@ -57,8 +59,8 @@ bool minic_multi_direct_lp64_function_plan_prepare(
 
     plan->failed_stage = "frame_layout";
     plan->failed_block = SIZE_MAX;
-    if (!minic_lp64_frame_plan_objects(
-            program, target, fn, &plan->frame_plan)) {
+    if (!minic_lp64_frame_plan_objects_with_storage(
+            program, target, fn, storage, &plan->frame_plan)) {
         if (getenv("MINIC_M1_TRACE") != NULL)
             (void)fprintf(stderr,
                 "MINIC_M8_FRAME_REJECT arch=%s function=%s values=%zu objects=%zu\n",

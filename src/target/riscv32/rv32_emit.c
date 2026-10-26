@@ -699,6 +699,7 @@ static bool rv32_func(FILE *out, const MinicC0Program *program,
                        const MinicCoreFunction *f, const MinicFunction *def,
                        bool function_sections, const MinicTargetInfo *target,
                        const MinicCoreFunctionFacts *facts,
+                       const MinicCoreObjectStoragePlan *storage,
                        MinicDiagnostic *diag) {
     Rv32Frame fr = {0};
     bool *reachable = NULL;
@@ -720,7 +721,8 @@ static bool rv32_func(FILE *out, const MinicC0Program *program,
             return false;
         }
     }
-    if (!rv32_frame_init_prepared(&fr, program, f, target, def->is_variadic, facts)) {
+    if (!rv32_frame_init_with_storage(
+            &fr, program, f, target, def->is_variadic, facts, storage)) {
         if (getenv("MINIC_RV32_FRAME_TRACE") != NULL)
             (void)fprintf(stderr,
                 "RV32_FRAME_OWNER function=%s parameters=%zu values=%zu objects=%zu instructions=%zu\n",
@@ -868,12 +870,13 @@ static bool rv32_visit_declaration(
 static bool rv32_visit_function(
     FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicFunction *decl, const MinicCoreFunction *fn,
-    const MinicCoreFunctionFacts *facts, size_t index,
+    const MinicCoreFunctionFacts *facts,
+    const MinicCoreObjectStoragePlan *storage, size_t index,
     bool function_sections, void *opaque) {
     Rv32ProgramContext *ctx = opaque;
     (void)index;
     return rv32_func(out, program, fn, decl, function_sections,
-                     target, facts, ctx->diagnostic);
+                     target, facts, storage, ctx->diagnostic);
 }
 
 static bool rv32_prefix(FILE *out, const MinicC0Program *program,

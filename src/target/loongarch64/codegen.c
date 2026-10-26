@@ -144,13 +144,14 @@ static bool emit_function(FILE *out, const MinicC0Program *program,
                           const MinicTargetInfo *target,
                           const MinicFunction *decl,
                           const MinicCoreFunction *fn,
-                          const MinicCoreFunctionFacts *facts, size_t id,
+                          const MinicCoreFunctionFacts *facts,
+                          const MinicCoreObjectStoragePlan *storage, size_t id,
                           bool function_sections) {
     MinicDirectLP64FunctionPlan plan = {0};
     const char *name = minic_c0_function_symbol_name(decl);
     bool success;
     if (!minic_multi_direct_lp64_function_plan_prepare(
-            program, target, decl, fn, facts, "loongarch64",
+            program, target, decl, fn, facts, storage, "loongarch64",
             MINIC_LP64_ABI_LOONGARCH64_LP64D,
             minic_multi_indirect_record, &plan)) {
         (void)minic_multi_direct_machine_reject(fn, "loongarch64", name,

@@ -3,6 +3,7 @@
 
 #include "core/core_ir.h"
 #include "target/common/core_function_facts.h"
+#include "target/common/core_object_storage.h"
 #include "frontend/ast.h"
 #include "target/target_info.h"
 #include <stdbool.h>
@@ -28,8 +29,8 @@ typedef bool (*MinicProgramVisitFunction)(
 typedef bool (*MinicProgramVisitPreparedFunction)(
     FILE *, const MinicC0Program *, const MinicTargetInfo *,
     const MinicFunction *, const MinicCoreFunction *,
-    const MinicCoreFunctionFacts *, size_t,
-    bool function_sections, void *);
+    const MinicCoreFunctionFacts *, const MinicCoreObjectStoragePlan *,
+    size_t, bool function_sections, void *);
 
 typedef enum MinicProgramFunctionSelection {
     MINIC_PROGRAM_FUNCTION_ALL,
@@ -91,24 +92,35 @@ static inline bool minic_program_visit_prepared_functions(
     void *context) {
     size_t i;
     bool success = true;
-    if (out == NULL || program == NULL || visit == NULL ||
+    if (out == NULL || program == NULL || visit == NULL || target == NULL ||
         function_count != program->function_count ||
         (function_count != 0U && functions == NULL))
         return false;
     for (i = 0U; i < function_count; ++i) {
         const MinicFunction *decl = &program->functions[i];
         MinicCoreFunctionFacts facts = {0};
+        MinicCoreObjectStoragePlan objects = {0};
+        bool ready = true;
         if (selection == MINIC_PROGRAM_FUNCTION_DECLARATIONS && decl->is_defined)
             continue;
         if (selection == MINIC_PROGRAM_FUNCTION_LIVE_DEFINITIONS && !decl->is_defined)
             continue;
         if (decl->is_defined && decl->is_internal && !decl->is_referenced)
             continue;
-        if ((decl->is_defined &&
-             !minic_core_function_facts_analyze(&functions[i], &facts)) ||
-            !visit(out, program, target, decl, &functions[i],
-                   decl->is_defined ? &facts : NULL, i,
-                   function_sections, context)) {
+        /* Both Core facts and object type layout are one common function
+         * preparation stage. The visitor owns storage until emission returns;
+         * backend frames borrow this immutable snapshot and never free it. */
+        if (decl->is_defined)
+            ready = minic_core_function_facts_analyze(&functions[i], &facts) &&
+                    minic_core_object_storage_plan_build(
+                        program, target->data_layout, &functions[i], &objects);
+        if (ready)
+            ready = visit(out, program, target, decl, &functions[i],
+                          decl->is_defined ? &facts : NULL,
+                          decl->is_defined ? &objects : NULL, i,
+                          function_sections, context);
+        minic_core_object_storage_plan_destroy(&objects);
+        if (!ready) {
             success = false;
             if (!continue_after_failure) break;
         }

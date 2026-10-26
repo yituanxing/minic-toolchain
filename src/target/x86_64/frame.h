@@ -21,6 +21,7 @@ typedef struct MinicX86Frame {
     size_t *value_offsets;
     size_t *object_offsets;
     MinicCoreObjectStoragePlan object_storage;
+    bool borrows_object_storage;
     MinicX86ArgumentPlan incoming_arguments;
     size_t object_count;
     size_t frame_size;
@@ -45,6 +46,10 @@ typedef struct MinicX86Frame {
 } MinicX86Frame;
 
 bool minic_x86_64_align(size_t value, size_t alignment, size_t *out);
+bool minic_x86_64_frame_init_with_storage(
+    const MinicC0Program *, const MinicTargetInfo *, const MinicCoreFunction *,
+    const MinicCoreFunctionFacts *, const MinicCoreObjectStoragePlan *,
+    MinicX86Frame *);
 bool minic_x86_64_frame_init_prepared(const MinicC0Program *, const MinicTargetInfo *,
     const MinicCoreFunction *, const MinicCoreFunctionFacts *, MinicX86Frame *);
 bool minic_x86_64_frame_init(const MinicC0Program *program,
