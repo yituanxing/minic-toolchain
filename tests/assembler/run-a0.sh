@@ -1961,4 +1961,79 @@ for rv32_bad in 'slli a0, a1, 32' 'srli a0, a1, 63' \
 done
 echo 'MINIAS_RV_MCINST_MEASURE=PASS typed_fixed_4B=1 RV32_shamt_rejections=3'
 
+
+# Production MCInst now covers compressed c.li, fixed supervisor/control,
+# integer aliases, fence and jalr addressing forms; no duplicate legacy
+# encoder remains. Verify actual GNU machine bytes, not shell-only markers.
+cat >"$work/riscv-mcinst-remaining.s" <<'EOF_RV_REMAINING'
+.option norvc
+.text
+.globl rv_remaining_typed
+rv_remaining_typed:
+    nop
+    mv a0, a1
+    jr t0
+    snez a2, a1
+    seqz a3, a2
+    neg a4, a3
+    negw a5, a4
+    not a6, a5
+    frcsr t0
+    fscsr t1
+    jalr ra, 12(a1)
+    jalr a0
+    jalr a1, a2, 0
+    sfence.vma
+    sfence.vma t0, t1
+    fence
+    fence r, w
+    wfi
+    ecall
+    ebreak
+    sret
+    fence.i
+    ret
+EOF_RV_REMAINING
+"$MINIAS" -march=rv64gc -mabi=lp64d \
+    -o "$work/riscv-mcinst-remaining.o" "$work/riscv-mcinst-remaining.s"
+cat >"$work/riscv-mcinst-compressed.s" <<'EOF_RV_C16'
+.text
+.globl rv_c16
+rv_c16:
+    c.li a0, 7
+    c.li s4, -13
+    c.li a1, 0
+EOF_RV_C16
+"$MINIAS" -march=rv64gc -mabi=lp64d \
+    -o "$work/riscv-mcinst-compressed.o" "$work/riscv-mcinst-compressed.s"
+if command -v riscv64-linux-gnu-as >/dev/null 2>&1 &&
+   command -v riscv64-linux-gnu-objcopy >/dev/null 2>&1; then
+    for kind in remaining compressed; do
+        riscv64-linux-gnu-as -march=rv64gc -mabi=lp64d \
+            -o "$work/riscv-mcinst-$kind.gnu.o" "$work/riscv-mcinst-$kind.s"
+        riscv64-linux-gnu-objcopy -j .text -O binary \
+            "$work/riscv-mcinst-$kind.o" "$work/riscv-mcinst-$kind.bin"
+        riscv64-linux-gnu-objcopy -j .text -O binary \
+            "$work/riscv-mcinst-$kind.gnu.o" "$work/riscv-mcinst-$kind.gnu.bin"
+        cmp "$work/riscv-mcinst-$kind.bin" "$work/riscv-mcinst-$kind.gnu.bin"
+    done
+    echo 'MINIAS_RV_MCINST_ALIASES=PASS GNU_AS_fixed_and_C16_equal=1'
+else
+    echo 'MINIAS_RV_MCINST_ALIASES=PASS GNU_AS=SKIP(toolchain-unavailable)'
+fi
+for invalid in 'c.li x0, 1' 'c.li a0, 32' 'jalr ra, 4096(a1)' \
+               'jalr a0, a1, -2049' 'mv a0' 'sfence.vma x32, a0' \
+               'fence r' 'fscsr x32'; do
+    printf '.text\n%s\n' "$invalid" >"$work/riscv-mcinst-remaining-bad.s"
+    if "$MINIAS" -march=rv64gc -mabi=lp64d \
+        -o "$work/riscv-mcinst-remaining-bad.o" \
+        "$work/riscv-mcinst-remaining-bad.s" \
+        >"$work/riscv-mcinst-remaining-bad.out" \
+        2>"$work/riscv-mcinst-remaining-bad.err"; then
+        echo "MiniAS incorrectly accepted typed operand: $invalid" >&2
+        exit 1
+    fi
+done
+echo 'MINIAS_RV_MCINST_ALIASES_NEGATIVE=PASS bad_operands=8'
+
 echo "MINIAS_A0=PASS objects=30 abi_flags=3 format=ELF64-RISCV-ET_REL relocations=23 strings=2 pseudos=17 previous=3 subsection=2 numeric_labels=18 ecall=1 isa_next=13 csr_amo=8 sfence_vma=3 fence_i=1 vsetvl=1 vsetvli=1 vmv_v_i=4 rept=2 nested_rept=1 irp=4 section_stack=1 org=3 local_difference=1 lr_sc=2 inline_labels=2 branch_pseudos=8 extern=1 symbol_minus_dot=4 symbol_difference=1 absolute32=1 jal=2 jal_subsection=1 high_numeric_labels=2 u64_data=3 raw_insn=4 set_alias=3 move=1 numeric_zero=1 immediate_product=2 shift_immediate=1 incbin=1 align_expr=1 native_expr=6 native_zbb_tail_memexpr=1 native_jalr_symbol_load=1 native_forward_short=1 native_mixed_macro=1 native_divided_difference=1 native_symbol_addend_expr=1 native_add_sub_immediate=1 native_cfi_boundary=1 native_gas_forms=1 native_set_size=1 native_macro_comma=1 native_macro_quotes=1 pic_la_got=1 sext_w=1 macro=4 conditional=1"

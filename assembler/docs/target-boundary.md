@@ -33,14 +33,18 @@ Explicit -march=rv32i/rv64i retains existing fail-closed machine-code checks.
    operations, conversions and memory operands, vector unit-stride/config,
    atomics (AMO, LR/SC) and CSR aliases, with FPR/vector register operand
    classes. Their duplicate legacy byte emitters have been deleted.
-   Remaining mixed pseudos, privileged and auxiliary instructions retain the
-   legacy path until separately verified. A consolidated GNU GAS byte oracle
-   checks F/D/A/V/Zicsr on a single rv64gcv object.
-   For typed fixed-width families, the target measures four bytes without
-   rerunning its legacy operand parser: the MCInst build step validates and
-   decodes operands once. Strict RV32I/RV64I still executes its exhaustive
-   machine-level checks, and symbolic/multiword pseudos retain explicit
-   legacy measurement. RV32 shift widths are validated at the typed parser.
+   The third batch migrates compressed c.li, pseudo-register operations
+   (ret/nop/mv/jr/snez/seqz/neg/negw/not), jalr addressing variants, frcsr/fscsr,
+   sfence.vma, fence/fence.i, supervisor/system instructions, pause and wfi.
+   Their previous text-driven emitters are deleted. Matching GNU GAS byte
+   comparisons cover both fixed 32-bit encodings and compressed c.li.
+   Almost all redundant legacy fixed-opcode measurement branches are removed;
+   target measurement defers fixed-size operand validation to MCInst on both
+   strict-I and default profiles. Strict RV32I/RV64I *still* executes its
+   exhaustive post-encoding machine-word check. Multiword li/call/tail/la,
+   relocatable symbolic GPR load/store and .insn retain their legacy
+   measurement/encoding until represented as typed fragments. RV32 shift
+   widths are validated at the typed parser.
    Vector register classes are distinguished from integer/FP registers.
    Comment stripping is target-configurable and .option
    dispatch belongs to the RISC-V target; common parser still owns GNU-style

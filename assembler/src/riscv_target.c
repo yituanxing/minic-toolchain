@@ -302,10 +302,15 @@ static bool riscv_measure(const MiniAs *as, const char *op, const char *args,
         (void)snprintf(reason, cap, "riscv32e-invalid-register:%s", op);
         return false;
     }
-    if (as->strict_i_xlen == 0U && minias_riscv_is_typed_fixed(op)) {
-        /* The MCInst parser (called by add_stmt) validates operands once.
-         * This ISA opcode has a fixed four-byte encoding and its size is
-         * independent of GNU textual operand spelling. */
+    if (strcmp(op, "c.li") == 0) {
+        /* Two-byte fixed C-format instruction, parsed by target MCInst. */
+        *size = 2U;
+        return true;
+    }
+    if (minias_riscv_is_typed_fixed(op)) {
+        /* The MCInst parser validates operands once. Strict-I additionally
+         * runs its exhaustive post-encoding machine word verifier, so no
+         * second textual operand decoder is necessary for any XLEN. */
         *size = 4U;
         return true;
     }
