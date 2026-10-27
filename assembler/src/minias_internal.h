@@ -227,6 +227,12 @@ typedef struct MiniAsTargetOps {
 } MiniAsTargetOps;
 
 const MiniAsTargetOps *minias_target_riscv(void);
+const MiniAsTargetOps *minias_target_aarch64(void);
+
+/* Internal multi-target driver (legacy public API remains RISC-V). */
+int minias_assemble_with_target(const char *, const char *,
+                                const MiniAsTargetOps *, bool, uint32_t,
+                                unsigned, FILE *);
 
 bool minias_riscv_measure(unsigned strict_i_xlen,
                           const char *op,

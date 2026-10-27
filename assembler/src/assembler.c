@@ -659,7 +659,7 @@ static bool add_stmt(MiniAs *as,
     return true;
 }
 
-static void strip_comment(char *line, char prefix) {
+static void strip_comment(char *line, const MiniAsTargetOps *target) {
     char quote = '\0';
     bool escaped = false;
     char *p;
@@ -683,7 +683,8 @@ static void strip_comment(char *line, char prefix) {
             quote = *p;
             continue;
         }
-        if (*p == prefix) {
+        if ((target->comment_prefix == '/' && *p == '/' && p[1] == '/') ||
+            (target->comment_prefix != '/' && *p == target->comment_prefix)) {
             *p = '\0';
             return;
         }
@@ -3204,7 +3205,7 @@ static int classify_macro_line(const MiniAs *as, const char *text,
     if (copy == NULL) {
         return -1;
     }
-    strip_comment(copy, as->target->comment_prefix);
+    strip_comment(copy, as->target);
     trimmed = minias_trim(copy);
     if (strncmp(trimmed, ".macro", 6U) == 0 &&
         (trimmed[6] == '\0' || isspace((unsigned char)trimmed[6]))) {
@@ -3860,7 +3861,7 @@ static int classify_repeat_line(const MiniAs *as, const char *text,
     if (copy == NULL) {
         return -1;
     }
-    strip_comment(copy, as->target->comment_prefix);
+    strip_comment(copy, as->target);
     trimmed = minias_trim(copy);
 
     if (strncmp(trimmed, ".rept", 5U) == 0 &&
@@ -3930,7 +3931,7 @@ static bool process_source_line(MiniAs *as, const char *source, size_t line) {
         minias_set_error(as, "out-of-memory:source-line");
         return false;
     }
-    strip_comment(copy, as->target->comment_prefix);
+    strip_comment(copy, as->target);
     cursor = copy;
     while (cursor != NULL) {
         char *semicolon = find_statement_separator(cursor);
@@ -4639,12 +4640,13 @@ bool minias_emit_sections(MiniAs *as) {
 }
 
 
-int minias_assemble_file_target_isa(const char *input_path,
-                                    const char *output_path,
-                                    bool elf32,
-                                    uint32_t elf_flags,
-                                    unsigned strict_i_xlen,
-                                    FILE *diagnostic) {
+int minias_assemble_with_target(const char *input_path,
+                                const char *output_path,
+                                const MiniAsTargetOps *target,
+                                bool elf32,
+                                uint32_t elf_flags,
+                                unsigned strict_i_xlen,
+                                FILE *diagnostic) {
     size_t *long_branch_ids = NULL;
     size_t long_branch_count = 0U;
     size_t long_branch_capacity = 0U;
@@ -4656,6 +4658,7 @@ int minias_assemble_file_target_isa(const char *input_path,
         bool added_long_branches = false;
 
         minias_init(&as);
+        as.target = target;
         as.elf_flags = elf_flags;
         as.strict_rv64i = strict_i_xlen != 0U;
         as.strict_i_xlen = strict_i_xlen;
@@ -4691,6 +4694,17 @@ int minias_assemble_file_target_isa(const char *input_path,
     }
     free(long_branch_ids);
     return rc;
+}
+
+int minias_assemble_file_target_isa(const char *input_path,
+                                    const char *output_path,
+                                    bool elf32,
+                                    uint32_t elf_flags,
+                                    unsigned strict_i_xlen,
+                                    FILE *diagnostic) {
+    return minias_assemble_with_target(input_path, output_path,
+                                       minias_target_riscv(), elf32,
+                                       elf_flags, strict_i_xlen, diagnostic);
 }
 
 /* Historical API stays permissive: only explicit -march=rv64i activates

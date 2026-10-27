@@ -35,3 +35,22 @@ jobs:
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
             bash tests/assembler/probe-rv32i-elf32.sh
+
+
+  aarch64-vertical:
+    name: AArch64 native instruction, relocation, real LD and QEMU
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install GNU AArch64 assembler, linker and QEMU
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            binutils-aarch64-linux-gnu qemu-user
+      - name: Build MiniAS on exact head
+        run: make -j2 MODE=release build/release/bin/minic-as
+      - name: Test independent AArch64 backend through shared ELF engine
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-aarch64-elf64.sh

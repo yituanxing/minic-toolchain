@@ -25,7 +25,8 @@ Explicit -march=rv32i/rv64i retains existing fail-closed machine-code checks.
 5. Complete .option arch/rvc/relax semantics instead of ignored legacy modes.
 6. Complete DWARF CFI .eh_frame generation; boundary tags currently do not
    emit unwind information.
-7. Add a non-RISC-V backend vertical slice, real GNU LD and ISA/ABI tests.
+7. Expand the new AArch64 vertical-slice backend into a usable GNU-compatible
+   target, with full target ISA/ABI parsing, registers and relocation coverage.
 8. Verify exact-head A0, RV32I/RV64I, Linux corpus, object oracle and P1 boot
    before merging. Prior green CI is not proof for a new head.
 

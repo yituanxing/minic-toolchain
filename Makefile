@@ -255,6 +255,7 @@ MINIAS_INCLUDES := -Iassembler/src $(MINIELF_INCLUDES)
 MINIAS_SOURCES := \
 	assembler/src/assembler.c \
 	assembler/src/riscv_target.c \
+	assembler/src/aarch64_target.c \
 	assembler/src/riscv_profile.c \
 	assembler/src/expression.c \
 	assembler/src/riscv_encode.c \
