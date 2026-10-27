@@ -86,6 +86,15 @@ has src/frontend/parser_function.c 'parser_resolve_pending_function_aliases('
 has src/frontend/ast_verifier.c 'minic_target_info_function_alias_abi_compatible('
 lacks src/frontend/parser_function.c 'MINIC_TARGET_ARCH_LOONGARCH64'
 
+# Only a finite x86 ISA grammar can feed raw GNU template substitution.
+# A valid opcode prefix plus arbitrary trailing text is NOT a contract.
+cc -std=c11 -Wall -Wextra -Wpedantic -Werror -ffunction-sections \
+  -fdata-sections -Wl,--gc-sections -Iinclude -Isrc \
+  tests/compiler/c0/probe-x86-matched-asm-template.c \
+  src/target/x86_64/asm_contract.c \
+  -o "$work/x86-matched-asm-template-probe"
+"$work/x86-matched-asm-template-probe"
+
 # The Common block cursor selects the identical lexical Core order across
 # all five backends; only machine instruction/terminator handlers are private.
 exists src/target/common/core_block_walk.h
