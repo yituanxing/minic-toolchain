@@ -952,9 +952,14 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
             break;
         }
         case A64_MC_EXTEND_W:
-            code=(inst->encoding?UINT32_C(0xd3407c00):
-                                  UINT32_C(0x93407c00)) |
-                 (inst->operands[1].reg<<5U) | inst->operands[0].reg;
+            /* GNU GAS canonicalizes UXTW Xd,Wn as MOV Wd,Wn
+             * (ORR Wd,WZR,Wn). UBFM Xd,Xn,#0,#31 is equivalent but not
+             * byte-identical; keep the actual assembler oracle stable. */
+            code=inst->encoding ?
+                 (UINT32_C(0x2a0003e0) |
+                  (inst->operands[1].reg<<16U) | inst->operands[0].reg):
+                 (UINT32_C(0x93407c00) |
+                  (inst->operands[1].reg<<5U) | inst->operands[0].reg);
             break;
         case A64_MC_REV: {
             bool wide=inst->operands[0].register_64;
