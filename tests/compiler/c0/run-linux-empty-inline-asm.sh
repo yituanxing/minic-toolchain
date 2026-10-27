@@ -25,6 +25,34 @@ int main(void) {
   return (int)buf[0] + (bpf_fentry_test7(p) == 42 ? 42 : 1);
 }
 SRC
+# Localized L1 differentiators: do not attribute a whole-function Core
+# lowering failure to the inline asm until a no-asm, no-cast control passes.
+cat > "$work/no-asm-cast.i" <<'SRC'
+struct test_t { struct test_t *next; };
+int f(struct test_t *arg) { return (long)arg; }
+SRC
+cat > "$work/asm-return-constant.i" <<'SRC'
+struct test_t { struct test_t *next; };
+int f(struct test_t *arg) { asm volatile("" : "+r"(arg)); return 42; }
+SRC
+cat > "$work/asm-return-pointer.i" <<'SRC'
+struct test_t { struct test_t *next; };
+int f(struct test_t *arg) { asm volatile("" : "+r"(arg)); return (long)arg; }
+SRC
+cat > "$work/asm-nonvolatile.i" <<'SRC'
+struct test_t { struct test_t *next; };
+int f(struct test_t *arg) { asm("" : "+r"(arg)); return 42; }
+SRC
+for target in riscv32-linux riscv64-linux x86_64-linux aarch64-linux loongarch64-linux; do
+  for name in no-asm-cast asm-return-constant asm-return-pointer asm-nonvolatile; do
+    if MINIC_ASM_BATCH_TRACE=1 "$MINIC_CC" --target="$target" -S           "$work/$name.i" -o "$work/$target-$name.s"           >"$work/$target-$name.out" 2>"$work/$target-$name.err"; then
+      echo "MINIC_LINUX_EMPTY_ASM_L1 target=$target probe=$name status=PASS"
+    else
+      echo "MINIC_LINUX_EMPTY_ASM_L1 target=$target probe=$name status=FAIL"
+      cat "$work/$target-$name.err"
+    fi
+  done
+done
 for target in riscv32-linux riscv64-linux x86_64-linux aarch64-linux loongarch64-linux; do
   "$MINIC_CC" --target="$target" -S "$work/empty.i" -o "$work/$target.s"
   test -s "$work/$target.s"
