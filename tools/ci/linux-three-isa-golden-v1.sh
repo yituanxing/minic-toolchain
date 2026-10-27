@@ -70,4 +70,11 @@ test -s "$out/$image" || {
 python3 tools/ci/linux-three-isa-golden-v1.py \
   --target "$target" --out "$out" --image "$image" --evidence "$evidence" \
   --min-c-objects 1000
+# Freeze the canonical GNU -E -P output ONCE with the exact .o.cmd flags.
+# This 7-worker producer is independent of the MiniC candidate revision.
+# Seven per-target MiniC shard runners can reuse these .i via Actions cache.
+python3 tools/ci/linux-three-isa-freeze-i-v1.py freeze \
+  --target "$target" --gcc "$gcc" --out "$out" \
+  --evidence "$evidence" --frozen "$work/frozen" --workers 7
 echo "MINIC_LINUX_THREE_DISCOVERY=GNU_BUILD_ONLY target=$target GNU_elf_link=1 QEMU=NOT_RUN MiniC=NOT_RUN"
+echo "MINIC_LINUX_THREE_I=FROZEN target=$target shards=7 cache_reusable=1"
