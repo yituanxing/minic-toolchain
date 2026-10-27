@@ -71,7 +71,7 @@ entry_x:
     pushq $0
     pushq $4096
     movb $0, 7(%rsp)
-    /* Forward/backward native rel8 and out-of-range rel32 are GNU-oracled. */
+    # Forward/backward native rel8 and out-of-range rel32 are GNU-oracled.
 .Lback_x86:
     jne .Lshort_x86
     nop

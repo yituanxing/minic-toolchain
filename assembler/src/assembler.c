@@ -4918,17 +4918,35 @@ int minias_assemble_config(const char *input_path,
                     }
                     fragment = &as.stmts[id];
                     grown = fragment->size;
-                    if (as.target->expanded_instruction_size == NULL ||
-                        (fragment->size == 4U &&
-                         (!as.target->expanded_instruction_size(
-                              fragment->op, fragment->size, &grown) ||
-                          grown <= fragment->size))) {
-                        minias_set_error(&as, "invalid-target-fragment-growth:%s",
+                    if (as.target->expanded_instruction_size == NULL) {
+                        minias_set_error(&as, "missing-target-fragment-growth:%s",
                                          fragment->op);
                         parsed = false;
                         break;
                     }
-                    if (fragment->size == 4U) fragment->size = grown;
+                    /* Every target reports its OWN initial instruction size:
+                     * RISC-V grows 4->8; x86 grows 2->5/6. Never silently
+                     * assume the common fragment must start at 4 bytes. */
+                    if (as.target->expanded_instruction_size(
+                            fragment->op, fragment->size, &grown)) {
+                        if (grown <= fragment->size) {
+                            minias_set_error(&as, "invalid-target-fragment-growth:%s",
+                                             fragment->op);
+                            parsed = false;
+                            break;
+                        }
+                        fragment->size = grown;
+                    } else {
+                        uint32_t needed = fragment->size;
+                        if (as.target->relax_instruction == NULL ||
+                            !as.target->relax_instruction(&as, fragment, &needed) ||
+                            needed > fragment->size) {
+                            minias_set_error(&as, "unrelaxed-target-fragment:%s",
+                                             fragment->op);
+                            parsed = false;
+                            break;
+                        }
+                    }
                 }
                 if (!parsed || !minias_relayout_fragments(&as) ||
                     !collect_out_of_range_branches(&as, &long_branch_ids,
