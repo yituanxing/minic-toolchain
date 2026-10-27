@@ -3406,6 +3406,7 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
         }
         if (data_width(as, op) != 0U || strcmp(op, ".zero") == 0 ||
             strcmp(op, ".space") == 0 || strcmp(op, ".skip") == 0 ||
+            strcmp(op, ".uleb128") == 0 || strcmp(op, ".sleb128") == 0 ||
             strcmp(op, ".asciz") == 0 ||
             strcmp(op, ".string") == 0 || strcmp(op, ".ascii") == 0 ||
             strcmp(op, ".incbin") == 0 ||
