@@ -64,3 +64,17 @@ and aggregates only those 14 result sets. The aggregator accepts explicit
 target selections while retaining exact source, unique owner, coverage,
 and manifest/config consistency checks. This run is diagnostic and neither
 ELF semantic acceptance nor Linux P1.
+
+## Scanning accuracy and next failure-family batch (2026-10-27)
+
+For the original full-input GNU Kbuild parity census, a MiniAS return code
+of 0 is now only `ASSEMBLED_UNVERIFIED` if the produced file is **real ELF64
+little-endian ET_REL with the expected target e_machine**; success without
+an ELF object is an infrastructure error, not a false positive.
+
+Per-file original diagnostics remain intact, while the aggregator also emits
+architecture-specific mnemonic families, e.g. `unsupported-x86_64-operand:movq`
+or `unsupported-loongarch64-operands:pcalau12i`, collapsing offset/index/
+register spellings only for Pareto analysis (never for correctness decisions).
+An opt-in SHA-pinned `2x7` run is triggered after this grouped change,
+reusing all C-produced assembly unmodified and without another Linux build.

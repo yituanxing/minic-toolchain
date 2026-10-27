@@ -228,6 +228,21 @@ def bound_minias_address_space() -> None:
     resource.setrlimit(resource.RLIMIT_AS, (budget, budget))
 
 
+def first_blocker_family(reason: str) -> str:
+    """Group identical target ISA deficits regardless of operand spellings.
+
+    x86/Loong source strings can contain symbol names, index registers and
+    offsets; counting those as separate root causes obscures a real
+    architecture-level issue. Preserve full diagnostics in each record.
+    """
+    m = re.match(
+        r"^(unsupported-x86_64-operand|unsupported-loongarch64-operands|"
+        r"bad-aarch64-operands|unsupported-directive):([^:\s]+)", reason)
+    if m:
+        return m.group(1) + ":" + m.group(2)
+    return reason.split(":line=", 1)[0][:120]
+
+
 def scan(a: argparse.Namespace) -> None:
     p = pathlib.Path(a.archive)
     manifest, manifest_sha, selected = checked_shard(p, a.target, a.shard)
@@ -268,7 +283,10 @@ def scan(a: argparse.Namespace) -> None:
             except OSError as e:
                 rc, diag = 127, "process-start-error:" + str(e)
             if rc == 0 and output.is_file() and output.stat().st_size:
-                state, reason = "ASSEMBLED_UNVERIFIED", "-"
+                if is_target_object(output, ARCH[a.target][0]):
+                    state, reason = "ASSEMBLED_UNVERIFIED", "-"
+                else:
+                    state, reason = "INFRA_ERROR", "success-wrong-ELF-target"
             elif rc == 0:
                 state, reason = "INFRA_ERROR", "success-no-object"
             else:
@@ -277,7 +295,11 @@ def scan(a: argparse.Namespace) -> None:
                 first = re.sub(r":line=\d+", ":line=N", first)
                 reason = first.replace("minic-as: ", "")[:180]
             rows.append({"index": index, "owner": r["owner"], "status": state,
-                         "first_blocker": reason, "exit_code": rc,
+                         "first_blocker": reason,
+                         "first_blocker_family": (first_blocker_family(reason)
+                                                  if state == "CANDIDATE_FAIL"
+                                                  else "-"),
+                         "exit_code": rc,
                          "diagnostic": diag[:2000]})
     status = Counter(r["status"] for r in rows)
     result = {
@@ -343,6 +365,9 @@ def aggregate(a: argparse.Namespace) -> None:
             directive_counts.update(d.get("directives", {}))
         causes = Counter(r["first_blocker"] for r in rows
                          if r["status"] == "CANDIDATE_FAIL")
+        families = Counter(r.get("first_blocker_family",
+                                  first_blocker_family(r["first_blocker"]))
+                           for r in rows if r["status"] == "CANDIDATE_FAIL")
         if statuses["INFRA_ERROR"]:
             raise ValueError("infrastructure failure: " + target)
         summary[target] = {"target": target, "config_sha256": cfgs.pop(),
@@ -350,6 +375,7 @@ def aggregate(a: argparse.Namespace) -> None:
                            "full_kbuild": fulls.pop(), "total": total,
                            "status": dict(statuses),
                            "first_blockers": dict(causes.most_common()),
+                           "first_blocker_families": dict(families.most_common()),
                            "mnemonics": dict(mnemonic_counts.most_common()),
                            "directives": dict(directive_counts.most_common())}
         print(f"MINIAS_LINUX_S_ARCH target={target} total={total} "
@@ -358,6 +384,8 @@ def aggregate(a: argparse.Namespace) -> None:
               f"full_kbuild={summary[target]['full_kbuild']}")
         for cause, count in causes.most_common(15):
             print(f"MINIAS_LINUX_S_BLOCKER target={target} n={count} cause={cause}")
+        for family, count in families.most_common(30):
+            print(f"MINIAS_LINUX_S_FAMILY target={target} n={count} cause={family}")
         for name, count in mnemonic_counts.most_common(30):
             print(f"MINIAS_LINUX_S_ISA target={target} mnemonic={name} uses={count}")
         for name, count in directive_counts.most_common(15):
