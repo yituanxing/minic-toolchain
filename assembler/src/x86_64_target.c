@@ -75,7 +75,6 @@ static bool x64_parse_base_memory(const char *text, MiniAsMCMemory *out) {
         unsigned space=0U;
         const char *operand;
         MiniAsSymbolExpr expr;
-        bool symbolic=false;
         if(strncmp(text,"%fs:",4U)==0)space=1U;
         else if(strncmp(text,"%gs:",4U)==0)space=2U;
         else return false;
