@@ -8,7 +8,7 @@
 
 /* A first, fail-closed GNU AT&T SysV x86-64 target. All common expression,
  * symbol, section, fragment, and ELF handling lives outside this file. */
-enum { X64_ZERO = 1, X64_REG_BINARY, X64_STACK, X64_MOV_IMM32, X64_ENDBR64, X64_ALU_IMM };
+enum { X64_ZERO = 1, X64_REG_BINARY, X64_STACK, X64_MOV_IMM32, X64_ENDBR64, X64_ALU_IMM, X64_MOV_MEMORY };
 
 static bool x64_register(const char *text, unsigned *reg, bool *wide) {
     static const char *const names64[16] = {
@@ -44,6 +44,51 @@ static bool x64_args2(const char *args, char a[48], char b[48]) {
     memcpy(a,args,n); a[n]='\0';
     memcpy(b,comma,m); b[m]='\0';
     return true;
+}
+
+
+/* GNU AT&T disp(%base) form. This first memory subset deliberately rejects
+ * RIP-symbol PC relocation, scaled index and symbolic displacements until
+ * their complete target-specific fixups exist. */
+static bool x64_parse_base_memory(const char *text, MiniAsMCMemory *out) {
+    const char *open = strchr(text, '(');
+    const char *close;
+    char regbuf[48], dispbuf[48], *end;
+    size_t reglen, displen;
+    unsigned base;
+    bool wide;
+    long long displacement = 0;
+    if (!open) return false;
+    close = strchr(open, ')');
+    if (!close || close[1] != '\0' || strchr(open, ','))
+        return false;
+    reglen = (size_t)(close - open - 1);
+    displen = (size_t)(open - text);
+    if (!reglen || reglen >= sizeof(regbuf) || displen >= sizeof(dispbuf))
+        return false;
+    memcpy(regbuf, open + 1, reglen); regbuf[reglen] = '\0';
+    if (!x64_register(regbuf, &base, &wide) || !wide)
+        return false;
+    if (displen != 0U) {
+        memcpy(dispbuf, text, displen); dispbuf[displen] = '\0';
+        errno=0; displacement=strtoll(dispbuf,&end,0);
+        if (errno || end==dispbuf || *end ||
+            displacement<INT32_MIN || displacement>INT32_MAX)
+            return false;
+    }
+    memset(out, 0, sizeof(*out));
+    out->has_base=true;out->base=base;out->scale=1U;
+    out->displacement=(int64_t)displacement;
+    return true;
+}
+
+static unsigned x64_disp_bytes(const MiniAsMCMemory *mem) {
+    if (mem->displacement==0 && (mem->base & 7U)!=5U) return 0U;
+    return mem->displacement>=-128 && mem->displacement<=127 ? 1U : 4U;
+}
+
+static bool x64_is_mem_candidate(const char *text) {
+    return strchr(text, '(') != NULL;
 }
 
 static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
@@ -131,6 +176,36 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
             goto done;
         }
     }
+    /* Retain memory addressing as one typed operand through layout,
+     * encoding, and eventual ELF fixup. No source-string re-splitting. */
+    if ((!strcmp(s->op,"movq") || !strcmp(s->op,"movl")) &&
+        x64_args2(s->args,src,dst)) {
+        MiniAsMCMemory parsed;
+        unsigned r;
+        bool wide, memory_source;
+        if (x64_register(src,&r,&wide) &&
+            x64_parse_base_memory(dst,&parsed)) {
+            memory_source=false;
+        } else if (x64_parse_base_memory(src,&parsed) &&
+                   x64_register(dst,&r,&wide)) {
+            memory_source=true;
+        } else goto invalid;
+        if (wide != (s->op[3]=='q')) goto invalid;
+        m->operands[1].memory=malloc(sizeof(parsed));
+        if (!m->operands[1].memory) {
+            minias_set_error(as,"out-of-memory:x86_64-mc-memory");
+            free(m);return false;
+        }
+        *m->operands[1].memory=parsed;
+        m->opcode=X64_MOV_MEMORY; m->count=2U;
+        m->encoding=memory_source?0x8bU:0x89U;
+        m->operands[0].kind=MINIAS_MC_REGISTER;
+        m->operands[0].reg=r;
+        m->operands[0].register_64=wide;
+        m->operands[1].kind=MINIAS_MC_MEMORY;
+        goto done;
+    }
+invalid:
     minias_set_error(as,"unsupported-x86_64-operand:%s:%s:line=%zu",
                      s->op,s->args,s->line);
     free(m);return false;
@@ -144,6 +219,14 @@ static bool x64_measure(MiniAs *as,const MiniAsStmt *s,uint32_t *size) {
     switch(m->opcode) {
         case X64_ZERO: *size=(uint32_t)m->operands[0].immediate;return true;
         case X64_ENDBR64: *size=4U;return true;
+        case X64_MOV_MEMORY: {
+            const MiniAsMCMemory *mem=m->operands[1].memory;
+            *size=(m->operands[0].register_64 ||
+                   m->operands[0].reg>=8U || mem->base>=8U?1U:0U) +
+                  2U + ((mem->base&7U)==4U?1U:0U) +
+                  x64_disp_bytes(mem);
+            return true;
+        }
         case X64_ALU_IMM: {
             int32_t imm=(int32_t)(uint32_t)m->operands[1].immediate;
             *size=(m->operands[0].register_64 || m->operands[0].reg>=8U?1U:0U) +
@@ -173,6 +256,25 @@ static bool x64_encode(MiniAs *as,const MiniAsStmt *s) {
         case X64_ENDBR64: {
             unsigned i;
             for(i=0U;i<4U;++i)code[n++]=(unsigned char)(m->encoding>>(8U*i));
+            break;
+        }
+        case X64_MOV_MEMORY: {
+            const MiniAsMCMemory *mem=m->operands[1].memory;
+            unsigned low_base=mem->base&7U;
+            unsigned bytes=x64_disp_bytes(mem);
+            unsigned mod=bytes==0U?0U:bytes==1U?1U:2U;
+            unsigned i;
+            uint32_t disp=(uint32_t)mem->displacement;
+            r=m->operands[0].reg;
+            if (m->operands[0].register_64 || r>=8U || mem->base>=8U)
+                code[n++]=(unsigned char)(0x40U |
+                    (m->operands[0].register_64?8U:0U) |
+                    ((r>>3U)<<2U) | (mem->base>>3U));
+            code[n++]=(unsigned char)m->encoding;
+            code[n++]=(unsigned char)((mod<<6U)|((r&7U)<<3U)|low_base);
+            if (low_base==4U) code[n++]=0x24U; /* no index, SIB base rsp/r12 */
+            for (i=0U;i<bytes;++i)
+                code[n++]=(unsigned char)(disp>>(8U*i));
             break;
         }
         case X64_ALU_IMM: {

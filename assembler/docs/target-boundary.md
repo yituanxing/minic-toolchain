@@ -233,3 +233,23 @@ serialization, nor architecture-specific duplicate copies were modified.
 The Kbuild per-child scanner now enforces 2GiB virtual memory and emits
 per-25-file progress records, so VM shutdowns can be distinguished from
 actual MiniAS instruction problems before repeating any full 3x7 campaign.
+
+## Shared typed memory operand and x86 GNU addressing oracle
+
+The frozen Linux SHA-bound error distribution after the first four targets
+showed x86 assembly blocked at **MOVQ (1289 owners) and MOVL (265 owners)**,
+principally due missing memory operand syntax. Instead of extracting x86
+ModRM knowledge into Common or reparsing raw text at encoding, the common
+typed `MiniAsMCOperand` gains an optional pointer to a generic
+base/index/scale/displacement `MiniAsMCMemory` (via a C11 union with
+the existing symbol pointer, avoiding a per-integer memory increase).
+Common owns destruction of typed memory and its optional symbol.
+
+The x86 target implements a validated GNU AT&T numeric disp(%base)
+subset of MOVL/MOVQ, with REX, ModRM, mandatory RSP/R12 SIB,
+RBP/R13 zero displacement, disp8/disp32 selection and strict
+register-width/overflow validation. The GNU-as byte oracle covers
+positive and negative addressing cases including high registers.
+Symbolic relocation and index/scale remain explicitly unsupported; no
+silently ignored expression is accepted. The LoongArch and AArch64
+backends need no modifications to reuse the generic operand schema.

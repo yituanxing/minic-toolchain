@@ -117,13 +117,27 @@ typedef struct MiniAsSymbolExpr {
 typedef enum MiniAsMCOperandKind {
     MINIAS_MC_REGISTER,
     MINIAS_MC_IMMEDIATE,
-    MINIAS_MC_SYMBOL
+    MINIAS_MC_SYMBOL,
+    MINIAS_MC_MEMORY
 } MiniAsMCOperandKind;
 typedef enum MiniAsMCRegisterClass {
     MINIAS_MC_REG_GPR = 0,
     MINIAS_MC_REG_FPR,
     MINIAS_MC_REG_VECTOR
 } MiniAsMCRegisterClass;
+/* Target-neutral typed base/index/scale/displacement addressing.
+ * Symbol expression is optional; relocation details remain target-owned.
+ * Store a pointer only for memory operands, not in every integer operand. */
+typedef struct MiniAsMCMemory {
+    bool has_base;
+    unsigned base;
+    bool has_index;
+    unsigned index;
+    unsigned scale;
+    int64_t displacement;
+    MiniAsSymbolExpr *symbol;
+} MiniAsMCMemory;
+
 typedef struct MiniAsMCOperand {
     MiniAsMCOperandKind kind;
     unsigned reg;
@@ -132,7 +146,10 @@ typedef struct MiniAsMCOperand {
     uint64_t immediate;
     /* Symbol names are allocated only for symbol operands. Integer-heavy
      * source files must not pay 256 bytes per register/immediate operand. */
-    MiniAsSymbolExpr *symbol;
+    union {
+        MiniAsSymbolExpr *symbol;
+        MiniAsMCMemory *memory;
+    };
 } MiniAsMCOperand;
 typedef struct MiniAsMCInst {
     unsigned opcode;
