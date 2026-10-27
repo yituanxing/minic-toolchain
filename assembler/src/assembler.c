@@ -697,6 +697,44 @@ static bool add_stmt(MiniAs *as,
     return true;
 }
 
+/* Strip GAS C-style block comments before macro/rept classification
+ * and statement tokenization. Preserve exact columns and newlines, and
+ * never interpret block markers inside quoted strings or line comments.
+ * State persists across FILE reads and is shared by nested body readers;
+ * no per-ISA comment lexer and no silent unterminated comment acceptance. */
+static void strip_gnu_c_comments(MiniAs *as, char *line) {
+    char quote='\0';
+    bool escaped=false;
+    size_t i;
+    for(i=0U;line[i]!='\0';++i) {
+        if(as->c_comment_active) {
+            if(line[i]=='*' && line[i+1U]=='/') {
+                line[i++]=' ';line[i]=' ';
+                as->c_comment_active=false;
+            }else if(line[i]!='\n' && line[i]!='\r')line[i]=' ';
+            continue;
+        }
+        if(escaped){escaped=false;continue;}
+        if(quote) {
+            if(line[i]=='\\')escaped=true;
+            else if(line[i]==quote)quote='\0';
+            continue;
+        }
+        if(line[i]=='"' || line[i]=='\'') {
+            quote=line[i];continue;
+        }
+        if((as->target->comment_prefix=='/' &&
+            line[i]=='/' && line[i+1U]=='/') ||
+           (as->target->comment_prefix!='/' &&
+            line[i]==as->target->comment_prefix))
+            return;
+        if(line[i]=='/' && line[i+1U]=='*') {
+            as->c_comment_active=true;
+            line[i++]=' ';line[i]=' ';
+        }
+    }
+}
+
 static void strip_comment(char *line, const MiniAsTargetOps *target) {
     char quote = '\0';
     bool escaped = false;
@@ -4233,6 +4271,7 @@ static bool read_macro_block(MiniAs *as,
         size_t len;
 
         ++*line_no;
+        strip_gnu_c_comments(as,linebuf);
         len = strlen(linebuf);
         if (len == sizeof(linebuf) - 1U && linebuf[len - 1U] != '\n') {
             minias_set_error(as, "line-too-long:line=%zu", *line_no);
@@ -4757,6 +4796,7 @@ static bool read_repeat_block(MiniAs *as,
         int kind;
 
         ++*line_no;
+        strip_gnu_c_comments(as,linebuf);
         len = strlen(linebuf);
         if (len == sizeof(linebuf) - 1U && linebuf[len - 1U] != '\n') {
             minias_set_error(as, "line-too-long:line=%zu", *line_no);
@@ -4817,12 +4857,14 @@ bool minias_parse_file(MiniAs *as, const char *path) {
         minias_set_error(as, "input-open:%s", path);
         return false;
     }
+    as->c_comment_active=false;
     while (fgets(linebuf, sizeof(linebuf), file) != NULL) {
         size_t len;
         char argument[256];
         int kind;
 
         ++line_no;
+        strip_gnu_c_comments(as,linebuf);
         len = strlen(linebuf);
         if (len == sizeof(linebuf) - 1U && linebuf[len - 1U] != '\n') {
             minias_set_error(as, "line-too-long:line=%zu", line_no);
@@ -4941,6 +4983,11 @@ bool minias_parse_file(MiniAs *as, const char *path) {
     }
     if (ferror(file)) {
         minias_set_error(as, "input-read:%s", path);
+        fclose(file);
+        return false;
+    }
+    if(as->c_comment_active) {
+        minias_set_error(as,"unterminated-gnu-block-comment");
         fclose(file);
         return false;
     }

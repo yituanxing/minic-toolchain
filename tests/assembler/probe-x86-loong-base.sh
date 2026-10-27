@@ -15,7 +15,10 @@ cat > "$work/x86.s" <<'ASM_X'
 .type entry_x,@function
 entry_x:
     nop
-    endbr64
+    /* GCC inline asm condition code comments are no instructions. */
+    /* A real multi-line GAS comment:
+       next line remains part of the comment. */
+    endbr64 /* register-state commentary */
     cs
     nop
     rep
@@ -208,6 +211,7 @@ unresolved_x86:
     lock
     addl $1, (%rdi)
 .data
+    .ascii "/*preserve literal*/"
 .globl common_space_test
 common_space_test:
     .quad ext_object64
