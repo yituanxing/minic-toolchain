@@ -257,6 +257,13 @@ entry_la:
 .Lgcc_anchor_start:
     nop
 .Lgcc_anchor_after_nop = .
+    li.w $r4, -14
+    bytepick.w $r24, $r26, $r24, 2
+    bytepick.d $r20, $r15, $r20, 1
+    iocsrwr.w $r12, $r13
+    iocsrrd.w $r12, $r13
+    movgr2fcsr $fcsr0, $r12
+    movfr2gr.d $r5, $f30
     add.d $a0, $a0, $a1
     addi.d $sp, $sp, -16
     st.d $ra, $sp, 8
@@ -513,7 +520,12 @@ for reloc in R_LARCH_ADD32 R_LARCH_SUB32 R_LARCH_ADD64 R_LARCH_SUB64; do
 done
 echo 'MINIAS_LARCH_SYMBOL_DIFF=PASS ELF_ADD_SUB_32_64'
 
-for bad in 'ldptr.d $a0, $sp, 3' \
+for bad in 'li.w $r4, -2049' \
+           'bytepick.w $r1,$r2,$r3,4' \
+           'bytepick.d $r1,$r2,$r3,8' \
+           'movgr2fcsr $fcsr4,$r12' \
+           'movfr2gr.d $r5,$f32' \
+           'ldptr.d $a0, $sp, 3' \
            'stptr.w $a0, $sp, 32768' \
            'ldptr.d $a1, $sp, -32772' \
            'andi $a0, $a1, -1' \

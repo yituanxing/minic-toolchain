@@ -45,6 +45,14 @@ static bool la_reg(const char *s,unsigned *r) {
     }
     return false;
 }
+static bool la_special_reg(const char *s,const char *prefix,
+                           unsigned maximum,unsigned *reg) {
+    char *end;unsigned long val;size_t len=strlen(prefix);
+    if(strncmp(s,prefix,len)!=0 || !isdigit((unsigned char)s[len]))return false;
+    errno=0;val=strtoul(s+len,&end,10);
+    if(errno || *end || val>maximum)return false;
+    *reg=(unsigned)val;return true;
+}
 static bool la_split(const char *args,char t[4][192],unsigned *n) {
     const char *p=args,*start=args;unsigned c=0;
     for(;;++p) {
@@ -282,7 +290,9 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
         {"rdtimel.w",UINT32_C(0x00006000)},
         {"rdtimeh.w",UINT32_C(0x00006400)},
         {"rdtime.d",UINT32_C(0x00006800)},
-        {"cpucfg",UINT32_C(0x00006c00)}
+        {"cpucfg",UINT32_C(0x00006c00)},
+        {"iocsrrd.w",UINT32_C(0x06480800)},
+        {"iocsrwr.w",UINT32_C(0x06481800)}
     };
     /* GNU atomic opcodes r0:5,r10:5,r5:5: the second assembly
      * operand occupies rk/bit10; the third is the memory base rj/bit5.
@@ -327,6 +337,31 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
     }
     if(!la_split(s->args,t,&n))goto fail;
     if(la_branch_instruction(as,m,s->op,t,n)) goto done;
+    if(n==2U && !strcmp(s->op,"movgr2fcsr") &&
+       la_special_reg(t[0],"$fcsr",3U,&rd) && la_reg(t[1],&rj)) {
+        m->count=2U;m->encoding=UINT32_C(0x0114c000)|(rj<<5U)|rd;
+        goto done;
+    }
+    if(n==2U && !strcmp(s->op,"movfr2gr.d") &&
+       la_reg(t[0],&rd) &&
+       la_special_reg(t[1],"$f",31U,&rj)) {
+        m->count=2U;m->encoding=UINT32_C(0x0114b800)|(rj<<5U)|rd;
+        goto done;
+    }
+    if(n==2U && !strcmp(s->op,"li.w") && la_reg(t[0],&rd)) {
+        int64_t value;
+        if(minias_eval_i64_expression(t[1],&value) &&
+           value>=-2048 && value<=2047) {
+            m->count=2U;
+            m->encoding=UINT32_C(0x02800000) |
+                (((uint32_t)value&UINT32_C(0xfff))<<10U)|rd;
+            m->operands[0].kind=MINIAS_MC_REGISTER;
+            m->operands[0].reg=rd;
+            m->operands[1].kind=MINIAS_MC_IMMEDIATE;
+            m->operands[1].immediate=(uint64_t)value;
+            goto done;
+        }
+    }
     /* All four are GNU LA64 unsigned-15-bit immediate instructions. */
     if(n==1U) {
         static const struct {const char *op;uint32_t word;} direct[]={
@@ -375,6 +410,23 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
                     m->operands[3].immediate=lsb;
                     goto done;
                 }
+        }
+    }
+    if(n==4U && la_reg(t[0],&rd) && la_reg(t[1],&rj) &&
+       la_reg(t[2],&rk) &&
+       (!strcmp(s->op,"bytepick.w") || !strcmp(s->op,"bytepick.d"))) {
+        uint64_t offset;bool wide=!strcmp(s->op,"bytepick.d");
+        if(minias_eval_u64_expression(t[3],&offset) &&
+           offset<(wide?8U:4U)) {
+            m->count=4U;
+            m->encoding=(wide?UINT32_C(0x000c0000):UINT32_C(0x00080000)) |
+                        ((uint32_t)offset<<15U)|(rk<<10U)|(rj<<5U)|rd;
+            m->operands[0].kind=MINIAS_MC_REGISTER;m->operands[0].reg=rd;
+            m->operands[1].kind=MINIAS_MC_REGISTER;m->operands[1].reg=rj;
+            m->operands[2].kind=MINIAS_MC_REGISTER;m->operands[2].reg=rk;
+            m->operands[3].kind=MINIAS_MC_IMMEDIATE;
+            m->operands[3].immediate=offset;
+            goto done;
         }
     }
     /* GNU LA opcode tables: sa2 lives in bits 16:15 and the source
