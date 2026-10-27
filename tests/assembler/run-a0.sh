@@ -1485,4 +1485,55 @@ if test "$exec_alignment" != 4; then
 fi
 echo "MINIAS_EXEC_SUBSECTION_ALIGN=PASS section=.text.main align=$exec_alignment"
 
+
+# Validate ISA/ABI and ELFCLASS together. Previous CLI allowed -mabi to
+# silently override RV32/RV64 output class and claimed unsupported float ABIs.
+cat >"$work/profile-target.s" <<'EOF_PROFILE'
+.text
+.globl profile_target
+profile_target:
+    ret
+EOF_PROFILE
+for opts in 'rv32imac lp64' 'rv64gc ilp32' 'rv64gc lp64q' \
+            'rv64i lp64f' 'rv64garbage lp64' 'rv32e ilp32'; do
+    set -- $opts
+    if "$MINIAS" "-march=$1" "-mabi=$2" -o "$work/profile-bad.o" \
+        "$work/profile-target.s" >/dev/null 2>"$work/profile-bad.err"; then
+        echo "MiniAS accepted invalid ISA/ABI: $opts" >&2
+        exit 1
+    fi
+done
+"$MINIAS" -march=rv64gc -mabi=lp64d -o "$work/profile-64.o" "$work/profile-target.s"
+"$MINIAS" -mabi=ilp32 -march=rv32imac -o "$work/profile-32.o" "$work/profile-target.s"
+readelf -h "$work/profile-64.o" | grep -q 'Class:.*ELF64'
+readelf -h "$work/profile-32.o" | grep -q 'Class:.*ELF32'
+echo 'MINIAS_ISA_ABI_PROFILE=PASS negative=6 positive=2'
+
+# Macro-expanded instructions share their original source line number.
+# Relaxing one branch must not also enlarge a different invocation.
+cat >"$work/relax-identity.s" <<'EOF_RELAX'
+.text
+.macro test_branch dest
+    beq a0, a1, \dest
+.endm
+.globl relax_identity
+relax_identity:
+    test_branch far_away
+    test_branch nearby
+.globl after_branches
+after_branches:
+nearby:
+    .space 8192
+far_away:
+    ret
+EOF_RELAX
+"$MINIAS" -o "$work/relax-identity.o" "$work/relax-identity.s"
+after_value="$(readelf -sW "$work/relax-identity.o" |
+    awk '$NF == "after_branches" {print $2}')"
+test "$after_value" = '000000000000000c' || {
+    echo "MiniAS branch relaxation wrongly keyed by source line: $after_value" >&2
+    exit 1
+}
+echo 'MINIAS_RELAX_STATEMENT_ID=PASS macro_instructions=2 expanded=1'
+
 echo "MINIAS_A0=PASS objects=30 abi_flags=3 format=ELF64-RISCV-ET_REL relocations=23 strings=2 pseudos=17 previous=3 subsection=2 numeric_labels=18 ecall=1 isa_next=13 csr_amo=8 sfence_vma=3 fence_i=1 vsetvl=1 vsetvli=1 vmv_v_i=4 rept=2 nested_rept=1 irp=4 section_stack=1 org=3 local_difference=1 lr_sc=2 inline_labels=2 branch_pseudos=8 extern=1 symbol_minus_dot=4 symbol_difference=1 absolute32=1 jal=2 jal_subsection=1 high_numeric_labels=2 u64_data=3 raw_insn=4 set_alias=3 move=1 numeric_zero=1 immediate_product=2 shift_immediate=1 incbin=1 align_expr=1 native_expr=6 native_zbb_tail_memexpr=1 native_jalr_symbol_load=1 native_forward_short=1 native_mixed_macro=1 native_divided_difference=1 native_symbol_addend_expr=1 native_add_sub_immediate=1 native_cfi_boundary=1 native_gas_forms=1 native_set_size=1 native_macro_comma=1 native_macro_quotes=1 pic_la_got=1 sext_w=1 macro=4 conditional=1"

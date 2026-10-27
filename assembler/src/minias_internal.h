@@ -24,22 +24,6 @@
 #define MINIAS_STV_HIDDEN 2U
 #define MINIAS_STV_PROTECTED 3U
 
-#define MINIAS_R_RISCV_32 1U
-#define MINIAS_R_RISCV_64 2U
-#define MINIAS_R_RISCV_JAL 17U
-#define MINIAS_R_RISCV_CALL_PLT 19U
-#define MINIAS_R_RISCV_GOT_HI20 20U
-#define MINIAS_R_RISCV_PCREL_HI20 23U
-#define MINIAS_R_RISCV_PCREL_LO12_I 24U
-#define MINIAS_R_RISCV_PCREL_LO12_S 25U
-#define MINIAS_R_RISCV_ADD16 34U
-#define MINIAS_R_RISCV_ADD32 35U
-#define MINIAS_R_RISCV_ADD64 36U
-#define MINIAS_R_RISCV_SUB16 38U
-#define MINIAS_R_RISCV_SUB32 39U
-#define MINIAS_R_RISCV_SUB64 40U
-#define MINIAS_R_RISCV_RELAX 51U
-
 #define MINIAS_SECTION_UNDEF (-1)
 #define MINIAS_SECTION_ABS (-2)
 #define MINIAS_MAX_ERROR 256U
@@ -134,10 +118,12 @@ typedef struct MiniAsStmt {
     uint32_t size;
     uint64_t align;
     /* Effective .option pic/nopic at the precise instruction site. */
-    bool pic_enabled;
+    /* Opaque target state captured at the exact instruction site. */
+    uint32_t target_options;
 } MiniAsStmt;
 
 typedef struct MiniAs {
+    const struct MiniAsTargetOps *target;
     MiniAsSection *sections;
     size_t section_count;
     size_t section_capacity;
@@ -171,15 +157,15 @@ typedef struct MiniAs {
     size_t macro_expansion_counter;
     size_t macro_expansion_depth;
     bool conditional_active;
-    bool pic_enabled;
-    bool pic_option_stack[64];
-    size_t pic_option_depth;
+    uint32_t target_options;
+    uint32_t target_option_stack[64];
+    size_t target_option_depth;
     bool cfi_active;
     bool cfi_signal_frame;
     uint32_t elf_flags;
     bool strict_rv64i; /* legacy strict directive gating, both XLENs */
     unsigned strict_i_xlen; /* 0=legacy, 32=RV32I, 64=RV64I */
-    const size_t *forced_long_branch_lines;
+    const size_t *forced_long_branch_ids;
     size_t forced_long_branch_count;
     int current_section;
     uint32_t current_subsection;
@@ -214,6 +200,33 @@ bool minias_section_append_zero(MiniAs *as, int section_index, size_t size);
 void minias_set_error(MiniAs *as, const char *format, ...);
 char *minias_strdup(const char *text);
 char *minias_trim(char *text);
+
+typedef enum MiniAsRelocKind {
+    MINIAS_RELOC_ABS, MINIAS_RELOC_ADD, MINIAS_RELOC_SUB
+} MiniAsRelocKind;
+
+typedef struct MiniAsObjectAttribute {
+    const char *name;
+    uint32_t type;
+    const unsigned char *data;
+    size_t size;
+} MiniAsObjectAttribute;
+
+typedef struct MiniAsTargetOps {
+    char comment_prefix;
+    uint16_t elf_machine;
+    bool (*parse_target_directive)(MiniAs *, const char *, const char *, size_t, bool *);
+    void (*object_attributes)(const MiniAs *, unsigned char, MiniAsObjectAttribute *);
+    const char *name;
+    bool (*measure)(const MiniAs *, const char *, const char *, uint32_t *, char *, size_t);
+    bool (*encode)(MiniAs *, const MiniAsStmt *);
+    bool (*is_conditional_branch)(const char *);
+    bool (*append_code_alignment)(MiniAs *, int, size_t);
+    uint32_t (*relocation_type)(unsigned, MiniAsRelocKind);
+    bool (*validate_output)(MiniAs *);
+} MiniAsTargetOps;
+
+const MiniAsTargetOps *minias_target_riscv(void);
 
 bool minias_riscv_measure(unsigned strict_i_xlen,
                           const char *op,

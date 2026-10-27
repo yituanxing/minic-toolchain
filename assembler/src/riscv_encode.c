@@ -1,4 +1,5 @@
 #include "minias_internal.h"
+#include "riscv_target.h"
 
 #include <ctype.h>
 #include <errno.h>
@@ -2055,7 +2056,7 @@ bool minias_riscv_encode(MiniAs *as, const MiniAsStmt *stmt) {
          * the GOT is unavailable during RISC-V early boot. In explicit
          * PIC mode an undefined external can use GOT_HI20, but only when
          * no nonzero addend is requested by the source. */
-        use_got = stmt->pic_enabled &&
+        use_got = (stmt->target_options & MINIAS_RISCV_OPTION_PIC) != 0U &&
                   strcmp(stmt->op, "la") == 0 && expr.addend == 0 &&
                   (target_symbol == NULL || !target_symbol->defined);
 

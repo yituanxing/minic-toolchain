@@ -47,25 +47,6 @@ static size_t emitted_symbol_count(const MiniAs *as) {
     return count;
 }
 
-/* Standard SHT_RISCV_ATTRIBUTES / Tag_RISCV_arch encoding for
- * explicitly qualified RV64I/LP64. A + vendor-length + "riscv" + Tag_File
- * + file-length + ULEB(Tag_arch=5) + NUL-terminated ISA string.
- * The profile is exact rv64i2p1, and thus never advertises extensions the
- * strict-I encoder refuses. Emit nothing for the historical default. */
-static const unsigned char rv32i_ilp32_attributes[] = {
-    0x41, 0x19, 0x00, 0x00, 0x00,
-    'r', 'i', 's', 'c', 'v', 0x00,
-    0x01, 0x0f, 0x00, 0x00, 0x00,
-    0x05, 'r', 'v', '3', '2', 'i', '2', 'p', '1', 0x00
-};
-static const unsigned char rv64i_lp64_attributes[] = {
-    0x41, 0x19, 0x00, 0x00, 0x00,
-    'r', 'i', 's', 'c', 'v', 0x00,
-    0x01, 0x0f, 0x00, 0x00, 0x00,
-    0x05, 'r', 'v', '6', '4', 'i', '2', 'p', '1', 0x00
-};
-#define MINIAS_SHT_RISCV_ATTRIBUTES UINT32_C(0x70000003)
-
 static bool minias_write_elf(MiniAs *as,
                              const char *path,
                              unsigned char elf_class) {
@@ -80,24 +61,24 @@ static bool minias_write_elf(MiniAs *as,
     size_t output_symbol_count = 0U;
     size_t expected_symbol_count;
     size_t section_count;
-    bool strict_arch_attribute;
+    MiniAsObjectAttribute attribute;
+    bool emit_attribute;
     size_t i;
     FILE *file = NULL;
     bool ok = false;
 
     expected_symbol_count = emitted_symbol_count(as);
-    strict_arch_attribute = (as->strict_i_xlen == 32U && elf_class == ELFCLASS32) ||
-                            (as->strict_i_xlen == 64U && elf_class == ELFCLASS64);
-    if (strict_arch_attribute &&
-        minias_find_section(as, ".riscv.attributes") >= 0) {
-        minias_set_error(as, "rv64i-duplicate-arch-attribute-section");
+    as->target->object_attributes(as, elf_class, &attribute);
+    emit_attribute = attribute.name != NULL;
+    if (emit_attribute && minias_find_section(as, attribute.name) >= 0) {
+        minias_set_error(as, "duplicate-target-attribute-section:%s", attribute.name);
         return false;
     }
     if (as->section_count == SIZE_MAX) {
         minias_set_error(as, "too-many-elf-sections");
         return false;
     }
-    section_count = as->section_count + (strict_arch_attribute ? 1U : 0U);
+    section_count = as->section_count + (emit_attribute ? 1U : 0U);
     sections = calloc(section_count == 0U ? 1U : section_count,
                       sizeof(*sections));
     symbols = calloc(expected_symbol_count == 0U ? 1U : expected_symbol_count,
@@ -128,17 +109,15 @@ static bool minias_write_elf(MiniAs *as,
         output->size = input->size;
     }
 
-    if (strict_arch_attribute) {
+    if (emit_attribute) {
         MiniElfWriteSection *attr = &sections[as->section_count];
-        attr->name = ".riscv.attributes";
-        attr->type = MINIAS_SHT_RISCV_ATTRIBUTES;
+        attr->name = attribute.name;
+        attr->type = attribute.type;
         attr->flags = 0U;
         attr->alignment = 1U;
         attr->entry_size = 0U;
-        attr->data = as->strict_i_xlen == 32U ?
-            rv32i_ilp32_attributes : rv64i_lp64_attributes;
-        attr->size = as->strict_i_xlen == 32U ?
-            sizeof(rv32i_ilp32_attributes) : sizeof(rv64i_lp64_attributes);
+        attr->data = attribute.data;
+        attr->size = attribute.size;
     }
 
     for (i = 0U; i < as->symbol_count; ++i) {
@@ -208,7 +187,7 @@ static bool minias_write_elf(MiniAs *as,
     memset(&spec, 0, sizeof(spec));
     spec.elf_class = elf_class;
     spec.data_encoding = ELFDATA2LSB;
-    spec.machine = EM_RISCV;
+    spec.machine = as->target->elf_machine;
     spec.flags = as->elf_flags;
     spec.sections = sections;
     spec.section_count = section_count;

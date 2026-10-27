@@ -19,6 +19,9 @@ assembly text
   -> ELF64 ET_REL writer
 ```
 
+See [the target boundary migration contract](docs/target-boundary.md) for
+implemented ISA/ABI behavior and remaining architecture work.
+
 The C implementation is split by ownership:
 
 - `assembler.c`: statement parsing, sections, symbols and the two-pass driver.

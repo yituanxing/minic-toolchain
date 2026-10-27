@@ -22,6 +22,9 @@ static bool grow_array(void **ptr, size_t *capacity, size_t elem_size, size_t ne
         }
         next *= 2U;
     }
+    if (elem_size == 0U || next > SIZE_MAX / elem_size) {
+        return false;
+    }
     p = realloc(*ptr, next * elem_size);
     if (p == NULL) {
         return false;
@@ -547,40 +550,9 @@ bool minias_section_append_zero(MiniAs *as, int section_index, size_t size) {
     return true;
 }
 
-/* GNU as fills RISC-V executable .align/.p2align/.balign gaps with
- * executable NOPs, never zero halfwords.  In arch/riscv/lib/strcmp.S the
- * .p2align 3 immediately precedes the aligned Zbb fast path: emitting
- * 0x0000 (C.UNIMP) here traps during early Linux boot even though all ELF
- * sections, exported symbols and relocations pass the basic oracle.
- *
- * Preserve the existing .org zero-fill semantics and data alignment. */
-static bool minias_section_append_code_alignment(MiniAs *as,
-                                                 int section_index,
-                                                 size_t size) {
-    static const unsigned char nop32[] = {0x13U, 0x00U, 0x00U, 0x00U};
-    static const unsigned char nop16[] = {0x01U, 0x00U};
-
-    if ((size & 1U) != 0U) {
-        /* A raw byte in .text (e.g. embedded alternatives/data) can leave
-         * an odd-sized alignment gap. No sequence of 16/32-bit RISC-V NOP
-         * encodings fills an odd byte count; retain the previous zero-byte
-         * fill for this non-instruction-shaped case, as GNU as does. */
-        return minias_section_append_zero(as, section_index, size);
-    }
-    while (size >= sizeof(nop32)) {
-        if (!minias_section_append(as, section_index, nop32, sizeof(nop32))) {
-            return false;
-        }
-        size -= sizeof(nop32);
-    }
-    if (size == sizeof(nop16)) {
-        return minias_section_append(as, section_index, nop16, sizeof(nop16));
-    }
-    return true;
-}
-
 void minias_init(MiniAs *as) {
     memset(as, 0, sizeof(*as));
+    as->target = minias_target_riscv();
     (void)minias_ensure_section(as,
                                 ".text",
                                 MINIAS_SHT_PROGBITS,
@@ -678,7 +650,7 @@ static bool add_stmt(MiniAs *as,
     }
     st->size = size;
     st->align = align;
-    st->pic_enabled = as->pic_enabled;
+    st->target_options = as->target_options;
     if (st->op == NULL || st->args == NULL) {
         minias_set_error(as, "out-of-memory:stmt-text");
         return false;
@@ -687,7 +659,7 @@ static bool add_stmt(MiniAs *as,
     return true;
 }
 
-static void strip_comment(char *line) {
+static void strip_comment(char *line, char prefix) {
     char quote = '\0';
     bool escaped = false;
     char *p;
@@ -711,7 +683,7 @@ static void strip_comment(char *line) {
             quote = *p;
             continue;
         }
-        if (*p == '#') {
+        if (*p == prefix) {
             *p = '\0';
             return;
         }
@@ -2201,28 +2173,14 @@ static bool add_data_stmt(MiniAs *as, const char *op, char *args, size_t line) {
     return advance_current_location(as, bytes);
 }
 
-static uint32_t add_relocation_type_for_width(unsigned int width) {
-    return width == 2U ? MINIAS_R_RISCV_ADD16
-           : width == 4U ? MINIAS_R_RISCV_ADD32
-           : width == 8U ? MINIAS_R_RISCV_ADD64
-                         : 0U;
-}
-
-static uint32_t sub_relocation_type_for_width(unsigned int width) {
-    return width == 2U ? MINIAS_R_RISCV_SUB16
-           : width == 4U ? MINIAS_R_RISCV_SUB32
-           : width == 8U ? MINIAS_R_RISCV_SUB64
-                         : 0U;
-}
-
 static bool emit_symbol_minus_dot(MiniAs *as,
                                   const MiniAsStmt *stmt,
                                   unsigned int width,
                                   uint64_t relocation_offset,
                                   const MiniAsSymbolExpr *expr) {
     MiniAsSymbol *target = minias_get_symbol(as, expr->name, false);
-    uint32_t add_type = add_relocation_type_for_width(width);
-    uint32_t sub_type = sub_relocation_type_for_width(width);
+    uint32_t add_type = as->target->relocation_type(width, MINIAS_RELOC_ADD);
+    uint32_t sub_type = as->target->relocation_type(width, MINIAS_RELOC_SUB);
 
     if (target != NULL && target->defined && target->section == stmt->section) {
         int64_t difference =
@@ -2328,8 +2286,8 @@ static bool emit_symbol_difference(MiniAs *as,
                                    const MiniAsSymbolExpr *rhs_expr) {
     MiniAsSymbol *lhs = minias_get_symbol(as, lhs_expr->name, false);
     MiniAsSymbol *rhs = minias_get_symbol(as, rhs_expr->name, false);
-    uint32_t add_type = add_relocation_type_for_width(width);
-    uint32_t sub_type = sub_relocation_type_for_width(width);
+    uint32_t add_type = as->target->relocation_type(width, MINIAS_RELOC_ADD);
+    uint32_t sub_type = as->target->relocation_type(width, MINIAS_RELOC_SUB);
 
     if (lhs != NULL && rhs != NULL && lhs->defined && rhs->defined &&
         lhs->section == rhs->section && lhs->section == stmt->section &&
@@ -2517,7 +2475,7 @@ static bool emit_data_stmt(MiniAs *as, const MiniAsStmt *stmt) {
                         return false;
                     }
                     relocation_type =
-                        width == 4U ? MINIAS_R_RISCV_32 : MINIAS_R_RISCV_64;
+                        as->target->relocation_type(width, MINIAS_RELOC_ABS);
                     if (!minias_section_append_zero(as, stmt->section, width) ||
                         !minias_add_relocation(as,
                                               stmt->section,
@@ -2833,22 +2791,12 @@ static bool define_label(MiniAs *as, char *label, size_t line) {
     return true;
 }
 
-static bool is_conditional_branch_op(const char *op) {
-    return strcmp(op, "beq") == 0 || strcmp(op, "bne") == 0 ||
-           strcmp(op, "blt") == 0 || strcmp(op, "bge") == 0 ||
-           strcmp(op, "bltu") == 0 || strcmp(op, "bgeu") == 0 ||
-           strcmp(op, "beqz") == 0 || strcmp(op, "bnez") == 0 ||
-           strcmp(op, "bltz") == 0 || strcmp(op, "bgez") == 0 ||
-           strcmp(op, "bgtz") == 0 || strcmp(op, "blez") == 0 ||
-           strcmp(op, "bgt") == 0 || strcmp(op, "ble") == 0 ||
-           strcmp(op, "bgtu") == 0 || strcmp(op, "bleu") == 0;
-}
-
-static bool force_long_branch_for_line(const MiniAs *as, size_t line) {
+/* Statement ordinal is stable across re-layout; macro source lines are not. */
+static bool force_long_branch_for_stmt(const MiniAs *as, size_t statement_id) {
     size_t i;
 
     for (i = 0U; i < as->forced_long_branch_count; ++i) {
-        if (as->forced_long_branch_lines[i] == line) {
+        if (as->forced_long_branch_ids[i] == statement_id) {
             return true;
         }
     }
@@ -2874,7 +2822,7 @@ static bool collect_out_of_range_branches(MiniAs *as,
         bool known = false;
 
         if (stmt->kind != MINIAS_STMT_INSN || stmt->size != 4U ||
-            !is_conditional_branch_op(stmt->op)) {
+            !as->target->is_conditional_branch(stmt->op)) {
             continue;
         }
         comma = strrchr(stmt->args, ',');
@@ -2902,7 +2850,7 @@ static bool collect_out_of_range_branches(MiniAs *as,
             continue;
         }
         for (j = 0U; j < *count; ++j) {
-            if ((*lines)[j] == stmt->line) {
+            if ((*lines)[j] == i) {
                 known = true;
                 break;
             }
@@ -2917,7 +2865,7 @@ static bool collect_out_of_range_branches(MiniAs *as,
             minias_set_error(as, "out-of-memory:branch-relaxation");
             return false;
         }
-        (*lines)[(*count)++] = stmt->line;
+        (*lines)[(*count)++] = i;
         *added = true;
     }
     return true;
@@ -2999,10 +2947,12 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
         }
     }
 
-    if (as->strict_rv64i && strcmp(op, ".insn") == 0) {
-        /* .insn is a raw-byte escape hatch; do not treat it as ISA-proof. */
-        minias_set_error(as, "unsupported-isa-escape:.insn:line=%zu", line);
-        return false;
+    if (op[0] == '.') {
+        bool handled = false;
+        if (!as->target->parse_target_directive(as, op, args, line, &handled)) {
+            return false;
+        }
+        if (handled) return true;
     }
     if (op[0] == '.' && strcmp(op, ".insn") != 0) {
         /*
@@ -3128,51 +3078,6 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
         if (strcmp(op, ".popsection") == 0) {
             return pop_section(as, line);
         }
-        if (strcmp(op, ".option") == 0) {
-            if (as->strict_rv64i &&
-                strcmp(args, "pic") != 0 && strcmp(args, "nopic") != 0 &&
-                strcmp(args, "push") != 0 && strcmp(args, "pop") != 0 &&
-                strcmp(args, "norvc") != 0 && strcmp(args, "norelax") != 0 &&
-                strcmp(args, "relax") != 0) {
-                minias_set_error(as,
-                                 "unsupported-isa-option:%s:line=%zu",
-                                 args, line);
-                return false;
-            }
-            /*
-             * RISC-V GNU as starts in NOPIC mode. Its 'la' pseudo op is
-             * PC-relative unless the effective source explicitly enables
-             * .option pic. Discarding this mode silently turned Linux's
-             * early-boot address calculations into GOT loads before a GOT
-             * can be initialized. Capture state when each stmt is parsed,
-             * not at final emission.
-             */
-            if (strcmp(args, "pic") == 0) {
-                as->pic_enabled = true;
-            } else if (strcmp(args, "nopic") == 0) {
-                as->pic_enabled = false;
-            } else if (strcmp(args, "push") == 0) {
-                if (as->pic_option_depth >=
-                    sizeof(as->pic_option_stack) /
-                        sizeof(as->pic_option_stack[0])) {
-                    minias_set_error(as, "option-stack-overflow:line=%zu", line);
-                    return false;
-                }
-                as->pic_option_stack[as->pic_option_depth++] =
-                    as->pic_enabled;
-            } else if (strcmp(args, "pop") == 0) {
-                if (as->pic_option_depth == 0U) {
-                    minias_set_error(as, "option-stack-underflow:line=%zu", line);
-                    return false;
-                }
-                as->pic_enabled =
-                    as->pic_option_stack[--as->pic_option_depth];
-            }
-            /* Existing benign options (rvc, relax, arch, etc.) retain
-             * their prior behavior; do not incorrectly advertise that
-             * full GNU option-mode semantics have been implemented. */
-            return true;
-        }
         if (strcmp(op, ".file") == 0 ||
             strcmp(op, ".ident") == 0 || strcmp(op, ".altmacro") == 0 ||
             strcmp(op, ".noaltmacro") == 0 || strcmp(op, ".end") == 0) {
@@ -3238,7 +3143,7 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
         if (!rewrite_numeric_local_refs(as, args, &rewritten_args, line)) {
             return false;
         }
-        if (!minias_riscv_measure(as->strict_i_xlen,
+        if (!as->target->measure(as,
                                   op,
                                   rewritten_args,
                                   &size,
@@ -3248,8 +3153,8 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
             free(rewritten_args);
             return false;
         }
-        if (size == 4U && is_conditional_branch_op(op) &&
-            force_long_branch_for_line(as, line)) {
+        if (size == 4U && as->target->is_conditional_branch(op) &&
+            force_long_branch_for_stmt(as, as->stmt_count)) {
             size = 8U;
         }
         ok = add_stmt(as,
@@ -3285,7 +3190,7 @@ enum {
     MINIAS_MACRO_END = 2
 };
 
-static int classify_macro_line(const char *text,
+static int classify_macro_line(const MiniAs *as, const char *text,
                                char *argument,
                                size_t argument_size) {
     char *copy = minias_strdup(text);
@@ -3299,7 +3204,7 @@ static int classify_macro_line(const char *text,
     if (copy == NULL) {
         return -1;
     }
-    strip_comment(copy);
+    strip_comment(copy, as->target->comment_prefix);
     trimmed = minias_trim(copy);
     if (strncmp(trimmed, ".macro", 6U) == 0 &&
         (trimmed[6] == '\0' || isspace((unsigned char)trimmed[6]))) {
@@ -3886,7 +3791,7 @@ static bool read_macro_block(MiniAs *as,
             destroy_source_lines(lines, count);
             return false;
         }
-        kind = classify_macro_line(linebuf, argument, sizeof(argument));
+        kind = classify_macro_line(as, linebuf, argument, sizeof(argument));
         if (kind < 0) {
             minias_set_error(as, "out-of-memory:macro-classify");
             destroy_source_lines(lines, count);
@@ -3940,7 +3845,7 @@ static void destroy_source_lines(MiniAsSourceLine *lines, size_t count) {
     free(lines);
 }
 
-static int classify_repeat_line(const char *text,
+static int classify_repeat_line(const MiniAs *as, const char *text,
                                 char *argument,
                                 size_t argument_size) {
     char *copy;
@@ -3955,7 +3860,7 @@ static int classify_repeat_line(const char *text,
     if (copy == NULL) {
         return -1;
     }
-    strip_comment(copy);
+    strip_comment(copy, as->target->comment_prefix);
     trimmed = minias_trim(copy);
 
     if (strncmp(trimmed, ".rept", 5U) == 0 &&
@@ -4025,7 +3930,7 @@ static bool process_source_line(MiniAs *as, const char *source, size_t line) {
         minias_set_error(as, "out-of-memory:source-line");
         return false;
     }
-    strip_comment(copy);
+    strip_comment(copy, as->target->comment_prefix);
     cursor = copy;
     while (cursor != NULL) {
         char *semicolon = find_statement_separator(cursor);
@@ -4253,7 +4158,7 @@ static bool process_source_range(MiniAs *as,
     while (i < end) {
         char macro_argument[1024];
         int macro_kind =
-            classify_macro_line(lines[i].text,
+            classify_macro_line(as, lines[i].text,
                                 macro_argument,
                                 sizeof(macro_argument));
         char argument[256];
@@ -4276,7 +4181,7 @@ static bool process_source_range(MiniAs *as,
             while (j < end && depth != 0U) {
                 char nested_argument[1024];
                 int nested_kind =
-                    classify_macro_line(lines[j].text,
+                    classify_macro_line(as, lines[j].text,
                                         nested_argument,
                                         sizeof(nested_argument));
                 if (nested_kind < 0) {
@@ -4309,7 +4214,7 @@ static bool process_source_range(MiniAs *as,
             continue;
         }
 
-        kind = classify_repeat_line(lines[i].text,
+        kind = classify_repeat_line(as, lines[i].text,
                                         argument,
                                         sizeof(argument));
         if (kind < 0) {
@@ -4329,7 +4234,7 @@ static bool process_source_range(MiniAs *as,
             while (j < end && depth != 0U) {
                 char nested_argument[256];
                 int nested_kind =
-                    classify_repeat_line(lines[j].text,
+                    classify_repeat_line(as, lines[j].text,
                                          nested_argument,
                                          sizeof(nested_argument));
                 if (nested_kind < 0) {
@@ -4410,7 +4315,7 @@ static bool read_repeat_block(MiniAs *as,
             destroy_source_lines(lines, count);
             return false;
         }
-        kind = classify_repeat_line(linebuf, argument, sizeof(argument));
+        kind = classify_repeat_line(as, linebuf, argument, sizeof(argument));
         if (kind < 0) {
             minias_set_error(as, "out-of-memory:repeat-classify");
             destroy_source_lines(lines, count);
@@ -4480,7 +4385,7 @@ bool minias_parse_file(MiniAs *as, const char *path) {
         {
             char macro_argument[1024];
             int macro_kind =
-                classify_macro_line(linebuf,
+                classify_macro_line(as, linebuf,
                                     macro_argument,
                                     sizeof(macro_argument));
             if (macro_kind < 0) {
@@ -4522,7 +4427,7 @@ bool minias_parse_file(MiniAs *as, const char *path) {
             }
         }
 
-        kind = classify_repeat_line(linebuf, argument, sizeof(argument));
+        kind = classify_repeat_line(as, linebuf, argument, sizeof(argument));
         if (kind < 0) {
             minias_set_error(as, "out-of-memory:repeat-classify");
             fclose(file);
@@ -4672,7 +4577,7 @@ bool minias_emit_sections(MiniAs *as) {
             bool exec_align = (section->flags & MINIAS_SHF_EXECINSTR) != 0U &&
                               strcmp(stmt->op, ".org") != 0;
             if (!(exec_align
-                      ? minias_section_append_code_alignment(as, stmt->section,
+                      ? as->target->append_code_alignment(as, stmt->section,
                                                               stmt->size)
                       : minias_section_append_zero(as, stmt->section, stmt->size))) {
                 if (as->error[0] == '\0') {
@@ -4696,7 +4601,7 @@ bool minias_emit_sections(MiniAs *as) {
                 free(refs);
                 return false;
             }
-        } else if (!minias_riscv_encode(as, stmt)) {
+        } else if (!as->target->encode(as, stmt)) {
             if (as->error[0] == '\0') {
                 minias_set_error(as,
                                  "encode-failed:%s:%s:line=%zu",
@@ -4734,104 +4639,13 @@ bool minias_emit_sections(MiniAs *as) {
 }
 
 
-/* Validate raw 32-bit encodings AFTER macro/ISA pseudo expansion, section
- * padding and relocation placeholders. This protects all emission families,
- * including a newly added pseudo unknown to a handwritten opcode allowlist.
- * For strict-I executable sections, no raw .word/.insn/.org data is allowed:
- * every 4-byte word must be a real base-I instruction.
- *
- * This intentionally differs from the default legacy MiniAS input mode,
- * which supports RISC-V extension instructions and raw kernel assembly. */
-static bool strict_base_i_word(uint32_t w, unsigned xlen) {
-    uint32_t op = w & 127U;
-    uint32_t f3 = (w >> 12U) & 7U;
-    uint32_t f7 = (w >> 25U) & 127U;
-
-    if ((w & 3U) != 3U) return false;
-    switch (op) {
-    case 0x17U: /* AUIPC */
-    case 0x37U: /* LUI */
-    case 0x6fU: /* JAL */
-        return true;
-    case 0x67U: /* JALR */
-        return f3 == 0U;
-    case 0x63U: /* branch */
-        return f3 == 0U || f3 == 1U || f3 >= 4U;
-    case 0x03U: /* RV32 LB/LH/LW/LBU/LHU; RV64 adds LD/LWU */
-        return f3 <= 2U || f3 == 4U || f3 == 5U ||
-               (xlen == 64U && (f3 == 3U || f3 == 6U));
-    case 0x23U: /* RV32 SB/SH/SW; RV64 adds SD */
-        return f3 <= (xlen == 32U ? 2U : 3U);
-    case 0x13U: /* immediate, RV32 has only five shamt bits */
-        if (f3 == 1U)
-            return xlen == 32U ? (w >> 25U) == 0U : (w >> 26U) == 0U;
-        if (f3 == 5U)
-            return xlen == 32U ?
-                ((w >> 25U) == 0U || (w >> 25U) == 32U) :
-                ((w >> 26U) == 0U || (w >> 26U) == 16U);
-        return f3 != 1U && f3 != 5U;
-    case 0x1bU: /* RV64-only word-immediate */
-        if (xlen != 64U) return false;
-        if (f3 == 0U) return true;
-        if (f3 == 1U) return f7 == 0U;
-        if (f3 == 5U) return f7 == 0U || f7 == 32U;
-        return false;
-    case 0x33U: /* register ALU, excluding M */
-        return f7 == 0U || (f7 == 32U && (f3 == 0U || f3 == 5U));
-    case 0x3bU: /* RV64 word ALU, excluding M */
-        if (xlen != 64U) return false;
-        return (f7 == 0U && (f3 == 0U || f3 == 1U || f3 == 5U)) ||
-               (f7 == 32U && (f3 == 0U || f3 == 5U));
-    case 0x0fU: /* FENCE only, no FENCE.I/Ztso */
-        /* PAUSE is encoded as a reserved FENCE hint (Zihintpause);
-         * it is not an instruction of the explicit base-I profile. */
-        return f3 == 0U && (w >> 28U) == 0U &&
-               w != UINT32_C(0x0100000f);
-    case 0x73U: /* ECALL, EBREAK only, no Zicsr or privileged ops */
-        return w == UINT32_C(0x00000073) || w == UINT32_C(0x00100073);
-    default:
-        return false;
-    }
-}
-
-static bool strict_base_i_check_sections(MiniAs *as) {
-    size_t i;
-    if (as->strict_i_xlen == 0U) return true;
-    if (as->strict_i_xlen != 32U && as->strict_i_xlen != 64U) {
-        minias_set_error(as, "unsupported-strict-riscv-xlen");
-        return false;
-    }
-    for (i = 0U; i < as->section_count; ++i) {
-        const MiniAsSection *section = &as->sections[i];
-        size_t offset;
-        if ((section->flags & MINIAS_SHF_EXECINSTR) == 0U) continue;
-        if (section->size % 4U != 0U) {
-            minias_set_error(as, "rv%ui-unaligned-executable-section:%s",
-                             as->strict_i_xlen, section->name);
-            return false;
-        }
-        for (offset = 0U; offset < section->size; offset += 4U) {
-            const unsigned char *p = section->data + offset;
-            uint32_t w = (uint32_t)p[0] | ((uint32_t)p[1] << 8U) |
-                         ((uint32_t)p[2] << 16U) | ((uint32_t)p[3] << 24U);
-            if (!strict_base_i_word(w, as->strict_i_xlen)) {
-                minias_set_error(as,
-                                 "rv%ui-unsupported-machine-encoding:%s:offset=%zu:word=%08x",
-                                 as->strict_i_xlen, section->name, offset, (unsigned)w);
-                return false;
-            }
-        }
-    }
-    return true;
-}
-
 int minias_assemble_file_target_isa(const char *input_path,
                                     const char *output_path,
                                     bool elf32,
                                     uint32_t elf_flags,
                                     unsigned strict_i_xlen,
                                     FILE *diagnostic) {
-    size_t *long_branch_lines = NULL;
+    size_t *long_branch_ids = NULL;
     size_t long_branch_count = 0U;
     size_t long_branch_capacity = 0U;
     int rc = 1;
@@ -4845,12 +4659,12 @@ int minias_assemble_file_target_isa(const char *input_path,
         as.elf_flags = elf_flags;
         as.strict_rv64i = strict_i_xlen != 0U;
         as.strict_i_xlen = strict_i_xlen;
-        as.forced_long_branch_lines = long_branch_lines;
+        as.forced_long_branch_ids = long_branch_ids;
         as.forced_long_branch_count = long_branch_count;
         parsed = as.error[0] == '\0' && minias_parse_file(&as, input_path);
         if (parsed &&
             !collect_out_of_range_branches(&as,
-                                           &long_branch_lines,
+                                           &long_branch_ids,
                                            &long_branch_count,
                                            &long_branch_capacity,
                                            &added_long_branches)) {
@@ -4862,7 +4676,7 @@ int minias_assemble_file_target_isa(const char *input_path,
         }
         if (parsed && as.error[0] == '\0' &&
             minias_emit_sections(&as) &&
-            strict_base_i_check_sections(&as) &&
+            as.target->validate_output(&as) &&
             (elf32 ? minias_write_elf32(&as, output_path)
                    : minias_write_elf64(&as, output_path))) {
             rc = 0;
@@ -4875,7 +4689,7 @@ int minias_assemble_file_target_isa(const char *input_path,
         minias_destroy(&as);
         break;
     }
-    free(long_branch_lines);
+    free(long_branch_ids);
     return rc;
 }
 

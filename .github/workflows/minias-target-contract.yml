@@ -1,0 +1,37 @@
+name: MiniAS Target ISA ABI Contract
+
+on:
+  pull_request:
+    paths:
+      - 'assembler/**'
+      - 'tools/minic-as/**'
+      - 'tests/assembler/**'
+      - 'Makefile'
+      - '.github/workflows/minias-target-contract.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native-a0-rv32i:
+    name: Native A0, strict RV32I, GNU parity, ELF32 real link
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install RISC-V GNU assembler/linker and QEMU user runner
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            binutils-riscv64-linux-gnu gcc-riscv64-linux-gnu qemu-user
+      - name: Build MiniAS from this exact PR head
+        run: |
+          make -j2 MODE=release build/release/bin/minic-as
+          test -x build/release/bin/minic-as
+      - name: Run complete A0 including ISA/ABI and macro relaxation regressions
+        run: make MODE=release check-minias-a0
+      - name: Run strict RV32I GNU byte oracle and real ELF32/QEMU smoke
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-rv32i-elf32.sh
