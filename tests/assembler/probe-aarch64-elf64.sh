@@ -27,7 +27,7 @@ _start:
     hint 25
     hint #0
     hint #127
-    # Linux BTI macro expands HINT with an absolute .equ symbol.
+    // Linux BTI macro expands HINT with an absolute .equ symbol.
     .equ .L__bti_targets_c, 34
     .equ .L__bti_targets_j, 36
     .equ .L__bti_targets_jc, 38
