@@ -78,3 +78,31 @@ implementation is duplicated in this producer.
   sources have not changed. Existing per-target code and legacy code remain
   byte-identical. GCC/Kbuild reference and MiniAS are always compared using
   their shared immutable assembly source.
+
+## Batch 3: exact GNU producer cache reuse, not three wasteful rebuilds
+
+The first true Linux build produced **4,140 AArch64 C/.S inputs (4,080+60)**
+at config `f865fdfb8ccaa5aa9580e0d5bea7a48c6382d37224f751c6ec37969bbafe174f`
+and **2,742 LoongArch64 inputs (2,723+19)** at config
+`457d95d9e03620d3f437dfca63bb93c867c30a92649e8705f36ed66d013441ca`.
+Both original producer builds passed `vmlinux` and exported complete
+seven-way archive families in immutable run `40458021612`. Each receiver
+now restores these exact artifacts and verifies every `.s` and `.cmd`
+digest and the archived manifest against pinned independent SHA:
+AArch64 `e2d034013185b214763c9fa42aef3f3eb4e9d96e276f8678717c1f9d675969cf`,
+LoongArch64 `203ed9df2cb4408cd8d0ee48b5de9f2a6444d115e8cdca649cf70995d6fc7017`.
+
+x86 original Linux `defconfig` `5a50dea34d0a1793c6a8320c15f11b695f1c71fe7b4fbb89bc514f2660ddad65`
+produced 2,605, then 2,760 partial files. Complete Linux build was blocked
+first by 2,046 GCC13 `-Werror=address` warnings and then just one
+`-Werror=tautological-compare` in `alternative.c`. The third campaign
+changes ONLY diagnostic fatality `KCFLAGS=-save-temps=obj -Wno-error`,
+retaining the Kconfig SHA, target ABI/ISA and file-by-file `.cmd`
+provenance; this is a new explicit producer variant, not a claim of identical
+original compiler command bytes.
+
+The workflow requires the AArch64/LoongArch64 artifact checks before it
+runs their seven MiniAS consumer shards. It will fail closed on expired,
+unmatched, or missing frozen artifacts rather than silently recompiling.
+Census outputs now include per-ISA frequent instructions/directives, and all
+21 results remain an incomplete-capability discovery, not P1 or ELF parity.

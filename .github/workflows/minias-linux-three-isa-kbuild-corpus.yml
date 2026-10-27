@@ -12,6 +12,7 @@ on:
 
 permissions:
   contents: read
+  actions: read  # immutable same-repository original producer archives
 
 jobs:
   producer:
@@ -24,6 +25,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install original GNU Kbuild toolchains (no MiniC fallback)
+        if: matrix.target == 'x86_64'
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -37,6 +39,7 @@ jobs:
           esac
           sudo apt-get install -y --no-install-recommends "${common[@]}" "${extra[@]}"
       - name: Build real Linux 6.6.143 under one immutable per-target config
+        if: matrix.target == 'x86_64'
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -62,15 +65,13 @@ jobs:
           # and captures .s from the EXACT C and native .S Kbuild commands.
           # This is ORIGINAL-config generation, not the restricted-ISA lane.
           set +e
-          # Original Linux 6.6.143 x86 defconfig under GCC13 produces
-          # thousands of -Werror=address diagnostics (i915/DRM): a compiler
-          # diagnostic mismatch, not a failed MiniAS instruction. Suppress
-          # only this diagnostic's fatality; retain ALL ISA/ABI/config and
-          # save-temps flags. GNU and MiniAS consume the same frozen .s.
-          extra_cflags=''
-          if test "${{ matrix.target }}" = x86_64; then
-            extra_cflags='-Wno-error=address'
-          fi
+          # Linux 6.6.143's CONFIG_WERROR on GCC13 produces non-semantic
+          # -Werror=address (~2,000 diagnostics) and a second independent
+          # -Werror=tautological-compare. Do NOT fix warnings one-at-a-time
+          # via source patches. -Wno-error changes only diagnostic fatality,
+          # never target ISA or ABI. The exact override and .cmd are frozen
+          # and GNU and MiniAS consume the SAME generated .s.
+          extra_cflags='-Wno-error'
           make -k -C "$src" O="$output" CC="$compiler" -j4 \
             KCFLAGS="-save-temps=obj $extra_cflags" KAFLAGS='-save-temps=obj' vmlinux \
             >"$work/kbuild.log" 2>&1
@@ -86,6 +87,62 @@ jobs:
             --target '${{ matrix.target }}' --out "$output" \
             --compiler "$compiler" --compiler-path "$(command -v "$compiler")" \
             --build-exit "$rc" --dest "$work/frozen"
+
+      # Do NOT rebuild successful original-config AArch64 and LoongArch64
+      # Linux source. They were proven full vmlinux on GNU in run 40458021612.
+      # A separate x86 warnings-only change must not trigger an expensive
+      # second target rebuild or mutate the original .s identity.
+      - name: Restore exact original GNU AArch64/LoongArch64 seven-way S
+        if: matrix.target != 'x86_64'
+        uses: actions/download-artifact@v4
+        with:
+          repository: ${{ github.repository }}
+          run-id: '40458021612'
+          github-token: ${{ github.token }}
+          pattern: minias-linux-kbuild-${{ matrix.target }}-shard*
+          path: build/minias-cached-target-s
+          merge-multiple: true
+      - name: Verify every cached S/CMD SHA and immutable manifest identity
+        if: matrix.target != 'x86_64'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          target='${{ matrix.target }}'
+          dest="build/minias-linux-kbuild/$target/frozen"
+          mkdir -p "$dest"
+          for id in 0 1 2 3 4 5 6; do
+            test -s "build/minias-cached-target-s/shard-$id.tar.gz"
+            mv "build/minias-cached-target-s/shard-$id.tar.gz" "$dest/"
+          done
+          python3 - "$target" "$dest" <<'PY_CACHED'
+          import hashlib, importlib.util, json, pathlib, sys
+          target, root = sys.argv[1], pathlib.Path(sys.argv[2])
+          pins = {
+              "aarch64": "e2d034013185b214763c9fa42aef3f3eb4e9d96e276f8678717c1f9d675969cf",
+              "loongarch64": "203ed9df2cb4408cd8d0ee48b5de9f2a6444d115e8cdca649cf70995d6fc7017",
+          }
+          spec = importlib.util.spec_from_file_location(
+              "kbuild_s", "tools/ci/minias-linux-kbuild-seven-v1.py")
+          tool = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(tool)
+          manifest = None
+          for shard in range(7):
+              candidate, digest, members = tool.checked_shard(
+                  root / f"shard-{shard}.tar.gz", target, shard)
+              assert digest == pins[target], (target, shard, digest)
+              assert len(members) > 0
+              if manifest is not None:
+                  assert manifest == candidate
+              manifest = candidate
+          assert manifest["full_kbuild"] and manifest["build_exit"] == 0
+          assert manifest["target"] == target
+          (root / "manifest.json").write_text(
+              json.dumps(manifest, sort_keys=True, indent=2) + "\n")
+          (root / "config.sha256").write_text(manifest["config_sha256"] + "\n")
+          print(f"MINIAS_S_GNU_CACHE_REUSE=PASS target={target} owners={manifest['total']} "
+                f"original_run=40458021612 manifest_sha256={pins[target]} "
+                f"source_config={manifest['config_sha256']} producer_recompiled=0")
+          PY_CACHED
       - uses: actions/upload-artifact@v4
         with:
           name: minias-linux-kbuild-${{ matrix.target }}-shard0
