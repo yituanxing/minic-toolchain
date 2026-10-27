@@ -20,6 +20,8 @@ on:
       - 'tests/compiler/c0/run-gnu-inline-asm-operands.sh'
       - 'tests/compiler/c0/gnu_fixed_register_bindings.c'
       - 'tests/compiler/c0/run-gnu-fixed-register-bindings.sh'
+      - 'tests/compiler/c0/run-block-extern-incomplete.sh'
+      - 'tests/compiler/c0/block-extern-incomplete.c'
       - 'tests/compiler/c0/probe-rv32-frame-access.c'
       - 'tests/compiler/c0/probe-core-semantic-family.c'
       - 'tests/compiler/c0/probe-core-block-walk.c'
@@ -48,6 +50,8 @@ on:
       - 'tests/compiler/c0/run-gnu-inline-asm-operands.sh'
       - 'tests/compiler/c0/gnu_fixed_register_bindings.c'
       - 'tests/compiler/c0/run-gnu-fixed-register-bindings.sh'
+      - 'tests/compiler/c0/run-block-extern-incomplete.sh'
+      - 'tests/compiler/c0/block-extern-incomplete.c'
       - 'tests/compiler/c0/probe-rv32-frame-access.c'
       # Changes to the native ABI/oracle must execute the native gate too.
       - 'tests/compiler/c0/run-x86_64-native-m1.sh'
@@ -97,6 +101,9 @@ jobs:
           MINIC="$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic" \
           BUILD_DIR=build/minic-native-backend \
             sh tests/compiler/c0/run-gnu-fixed-register-bindings.sh
+          MINIC="$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic" \
+          BUILD_DIR=build/minic-native-backend \
+            sh tests/compiler/c0/run-block-extern-incomplete.sh
           # L1 only: the entire GNU inline-asm operand suite is an RV64
           # backend/assembler campaign with unrelated prerequisites. The
           # changed parser diagnostic gets its own focused negative proof.

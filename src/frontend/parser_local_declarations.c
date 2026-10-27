@@ -1083,7 +1083,13 @@ bool minic_parser_local_decl_extern(MinicParser *parser) {
 
     if (!minic_parser_parse_gnu_prefix_function_attributes(parser, false, false) ||
         !minic_parser_expect(parser, MINIC_TOKEN_KW_EXTERN, "expected keyword 'extern'") ||
-        !minic_parser_parse_type_name(parser, &return_type) ||
+        /* C permits block-scope extern declarations of incomplete record
+         * objects: extern struct user_namespace init_user_ns;
+         * This owns NO storage and only its address can be consumed until
+         * the record is completed. The shared complete-object validator
+         * remains required for ordinary local definitions, initialized
+         * locals, and record-by-value operations. Do not relax that API. */
+        !minic_parser_parse_type_name_preserving_incomplete(parser, &return_type) ||
         !minic_parser_parse_gnu_function_attributes(parser)) {
         return false;
     }
