@@ -739,7 +739,7 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
                      val>=-128 && val<=127?0x83U:0x81U):
                     (!strcmp(s->op,"movb")?0xc6U:
                      !strcmp(s->op,"testb")?0xf6U:
-                     !strncmp(s->op,"test",4U)?0xf7U:0xc7U))) |
+                     !strncmp(s->op,"test",4U)?0xf7U:0xc7U)) |
                     (suffix=='w'?0x400U:0U);
                 goto done;
             }
