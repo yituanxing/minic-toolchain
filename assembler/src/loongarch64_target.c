@@ -639,6 +639,30 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
                     goto done;
                 }
     }
+    /* LASX vector shifts share the LSX typed unsigned count and register
+     * bitfield layout but retain separate ISA encoding and XR register class. */
+    if(n==3U && la_special_reg(t[0],"$xr",31U,&rd) &&
+       la_special_reg(t[1],"$xr",31U,&rj)) {
+        static const struct {const char *name;uint32_t code;unsigned max;} v[]={
+            {"xvslli.b",UINT32_C(0x772c2000),7U},
+            {"xvslli.h",UINT32_C(0x772c4000),15U},
+            {"xvslli.w",UINT32_C(0x772c8000),31U},
+            {"xvslli.d",UINT32_C(0x772d0000),63U},
+            {"xvsrli.b",UINT32_C(0x77302000),7U},
+            {"xvsrli.h",UINT32_C(0x77304000),15U},
+            {"xvsrli.w",UINT32_C(0x77308000),31U},
+            {"xvsrli.d",UINT32_C(0x77310000),63U}
+        };
+        uint64_t amount;
+        if(minias_eval_u64_expression(t[2],&amount))
+            for(i=0U;i<sizeof(v)/sizeof(v[0]);++i)
+                if(!strcmp(s->op,v[i].name) && amount<=v[i].max) {
+                    m->count=3U;
+                    m->encoding=v[i].code|
+                        ((uint32_t)amount<<10U)|(rj<<5U)|rd;
+                    goto done;
+                }
+    }
     /* LSX lane extract to GPR: r0/v5/u10 immediate, widths set index cap.
      * The vector register is not a GPR and GNU requires index in range. */
     if(n==3U && la_reg(t[0],&rd) &&

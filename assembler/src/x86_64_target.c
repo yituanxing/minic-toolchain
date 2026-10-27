@@ -537,11 +537,18 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
         /* MOVZX source byte/word and independent destination width. */
         if((!strcmp(s->op,"movzbl") || !strcmp(s->op,"movzbq") ||
             !strcmp(s->op,"movzwl") || !strcmp(s->op,"movzwq")) &&
-           ((s->op[4]=='b' && x64_register8(src,&first)) ||
+           ((s->op[4]=='b' && (x64_register8(src,&first) ||
+                               x64_high_register8(src,&first))) ||
             (s->op[4]=='w' && x64_register16(src,&first))) &&
            x64_register(dst,&second,&wd) && wd==(s->op[5]=='q')) {
+            bool legacy_high=s->op[4]=='b' &&
+                (!strcmp(src,"%ah") || !strcmp(src,"%ch") ||
+                 !strcmp(src,"%dh") || !strcmp(src,"%bh"));
+            /* GNU AH/CH/DH/BH require no REX, even on a WIDE destination. */
+            if(legacy_high && (second>=8U || wd))goto invalid;
             m->opcode=X64_MOVZX_REG;m->count=2U;
-            m->encoding=s->op[4]=='b'?0xb6U:0xb7U;
+            m->encoding=(s->op[4]=='b'?0xb6U:0xb7U)|
+                        (legacy_high?0x800U:0U);
             m->operands[0].kind=MINIAS_MC_REGISTER;
             m->operands[0].reg=first;
             m->operands[1].kind=MINIAS_MC_REGISTER;
@@ -1168,7 +1175,8 @@ static bool x64_measure(MiniAs *as,const MiniAsStmt *s,uint32_t *size) {
                    ((m->encoding&0x200U) && m->operands[0].reg>=4U)?1U:0U);
             return true;
         case X64_MOVZX_REG:
-            *size=3U+((m->encoding==0xb6U && m->operands[0].reg>=4U) ||
+            *size=3U+((!(m->encoding&0x800U) &&
+                         (m->encoding==0xb6U && m->operands[0].reg>=4U)) ||
                        m->operands[0].reg>=8U || m->operands[1].reg>=8U ||
                        m->operands[1].register_64?1U:0U);return true;
         case X64_SHIFT_IMM:
@@ -1358,12 +1366,13 @@ static bool x64_encode(MiniAs *as,const MiniAsStmt *s) {
             break;
         case X64_MOVZX_REG:
             r=m->operands[0].reg;d=m->operands[1].reg;
-            if((m->encoding==0xb6U && r>=4U) || r>=8U || d>=8U ||
+            if((!(m->encoding&0x800U) && (m->encoding&0xffU)==0xb6U &&
+                r>=4U) || r>=8U || d>=8U ||
                m->operands[1].register_64)
                 code[n++]=(unsigned char)(0x40U|
                     (m->operands[1].register_64?8U:0U)|
                     ((d>>3U)<<2U)|(r>>3U));
-            code[n++]=0x0fU;code[n++]=(unsigned char)m->encoding;
+            code[n++]=0x0fU;code[n++]=(unsigned char)(m->encoding&0xffU);
             code[n++]=(unsigned char)(0xc0U|((d&7U)<<3U)|(r&7U));
             break;
         case X64_SHIFT_IMM:

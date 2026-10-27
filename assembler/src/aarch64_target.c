@@ -155,6 +155,8 @@ enum {
     A64_MC_STP,
     A64_MC_LDP,
     A64_MC_BITMASK_IMM,
+    A64_MC_TST_REG,
+    A64_MC_BIC_REG,
     A64_MC_EXTEND_W,
     A64_MC_REV,
     A64_MC_ACQUIRE_RELEASE,
@@ -271,6 +273,29 @@ static bool parse_a64_mem(const char *text, unsigned *base, int64_t *offset,
     return true;
 }
 
+/* Enumerate exact A64 rotated/replicated logical-immediate bitfields:
+ * one Target grammar supports AND/ORR/EOR/ANDS/TST, not Core patches. */
+static bool a64_mask_bits(uint64_t value,bool wide,uint32_t *enc) {
+    unsigned width=wide?64U:32U,e,n,r;
+    if(!wide && (value>>32U))return false;
+    for(e=2U;e<=width;e*=2U) {
+        uint64_t mask=e==64U?UINT64_MAX:(UINT64_C(1)<<e)-1U;
+        for(n=1U;n<e;++n) {
+            uint64_t run=(UINT64_C(1)<<n)-1U;
+            for(r=0U;r<e;++r) {
+                uint64_t part=r?((run>>r)|(run<<(e-r)))&mask:run;
+                uint64_t full=0U;unsigned k;
+                for(k=0U;k<width;k+=e)full|=part<<k;
+                if(full==value) {
+                    unsigned imms=((0U-2U*e)|(n-1U))&63U;
+                    *enc=((e==64U?1U:0U)<<12U)|(r<<6U)|imms;
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
+}
 /* Parsed target-owned instruction family. Complete AArch64 still requires
  * ADRP/GOT, conditional branches, shifts, and relocation fixup bitfields. */
 static bool parse_integer_family(MiniAsMCInst *inst,
@@ -364,6 +389,26 @@ static bool parse_integer_family(MiniAsMCInst *inst,
         put_reg(&inst->operands[1],base,true);
         return true;
     }
+    if(!strcmp(op,"tst") && n==2U) {
+        uint64_t bits;uint32_t fields;
+        if(!parse_a64_reg(t[0],&rn,&wn,&spn) || spn)return false;
+        if(parse_a64_reg(t[1],&rm,&wm,&spm)) {
+            if(spm || wn!=wm)return false;
+            inst->opcode=A64_MC_TST_REG;inst->count=2U;
+            put_reg(&inst->operands[0],rn,wn);
+            put_reg(&inst->operands[1],rm,wn);
+            return true;
+        }
+        if(!minias_eval_u64_expression(t[1][0]=='#'?t[1]+1:t[1],
+                                        &bits) ||
+           !a64_mask_bits(bits,wn,&fields))return false;
+        inst->opcode=A64_MC_BITMASK_IMM;inst->count=3U;
+        inst->encoding=UINT32_C(0x72000000);
+        put_reg(&inst->operands[0],31U,wn);
+        put_reg(&inst->operands[1],rn,wn);
+        put_immediate(&inst->operands[2],fields);
+        return true;
+    }
     if (strcmp(op, "mov") == 0 && n == 2U) {
         if (!parse_a64_reg(t[0], &rd, &wd, &spd) ||
             !parse_a64_reg(t[1], &rn, &wn, &spn) || wd != wn)
@@ -383,7 +428,8 @@ static bool parse_integer_family(MiniAsMCInst *inst,
     if ((strcmp(op, "add") == 0 || strcmp(op, "sub") == 0 ||
          strcmp(op, "adds") == 0 || strcmp(op, "subs") == 0 ||
          strcmp(op, "and") == 0 || strcmp(op, "orr") == 0 ||
-         strcmp(op, "eor") == 0) && n == 3U) {
+         strcmp(op, "eor") == 0 || strcmp(op, "ands") == 0 ||
+         strcmp(op, "bic") == 0) && n == 3U) {
         if (!parse_a64_reg(t[0], &rd, &wd, &spd) ||
             !parse_a64_reg(t[1], &rn, &wn, &spn) || wd != wn)
             return false;
@@ -394,7 +440,10 @@ static bool parse_integer_family(MiniAsMCInst *inst,
                    strcmp(op, "adds") == 0 ? A64_MC_ADDS_REG :
                    strcmp(op, "subs") == 0 ? A64_MC_SUBS_REG :
                    strcmp(op, "and") == 0 ? A64_MC_AND_REG :
-                   strcmp(op, "orr") == 0 ? A64_MC_ORR_REG : A64_MC_EOR_REG;
+                   strcmp(op, "orr") == 0 ? A64_MC_ORR_REG :
+                   strcmp(op, "ands") == 0 ? A64_MC_TST_REG :
+                   strcmp(op, "bic") == 0 ? A64_MC_BIC_REG :
+                                             A64_MC_EOR_REG;
             put_reg(&inst->operands[2], rm, wm);
         } else if ((strcmp(op, "add") == 0 || strcmp(op, "sub") == 0 ||
                     strcmp(op, "adds") == 0 || strcmp(op, "subs") == 0) &&
@@ -407,18 +456,19 @@ static bool parse_integer_family(MiniAsMCInst *inst,
                    strcmp(op, "sub") == 0 ? A64_MC_SUB_IMM :
                    strcmp(op, "adds") == 0 ? A64_MC_ADDS_IMM : A64_MC_SUBS_IMM;
             put_immediate(&inst->operands[2], imm);
-        } else if (!strcmp(op,"and") &&
-                   parse_signed_number(t[2],&imm) && imm>0) {
-            /* The contiguous low-bit mask subset has exact A64 logical
-             * immediate N:immr:imms encoding. A noncontiguous mask or
-             * all-ones word is NOT this instruction family. */
-            uint64_t bits=(uint64_t)imm;
-            unsigned bit_count=0U;
-            while(bits&1U){++bit_count;bits>>=1U;}
-            if(bits!=0U || bit_count==0U ||
-               bit_count>=(wd?64U:32U) || spd || spn)return false;
+        } else if((!strcmp(op,"and") || !strcmp(op,"orr") ||
+                   !strcmp(op,"eor") || !strcmp(op,"ands")) &&
+                  !spd && !spn) {
+            uint64_t bits;uint32_t fields;
+            if(!minias_eval_u64_expression(t[2][0]=='#'?t[2]+1:t[2],
+                                            &bits) ||
+               !a64_mask_bits(bits,wd,&fields))return false;
             kind=A64_MC_BITMASK_IMM;
-            put_immediate(&inst->operands[2],(int64_t)bit_count);
+            inst->encoding=!strcmp(op,"and")?UINT32_C(0x12000000):
+                           !strcmp(op,"orr")?UINT32_C(0x32000000):
+                           !strcmp(op,"eor")?UINT32_C(0x52000000):
+                                              UINT32_C(0x72000000);
+            put_immediate(&inst->operands[2],fields);
         } else return false;
         inst->opcode = kind;
         inst->count = 3U;
@@ -1147,10 +1197,24 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
         }
         case A64_MC_BITMASK_IMM: {
             bool wide=inst->operands[0].register_64;
-            unsigned ones=(unsigned)inst->operands[2].immediate;
-            code=(wide?UINT32_C(0x92400000):UINT32_C(0x12000000)) |
-                 ((ones-1U)<<10U) | (inst->operands[1].reg<<5U) |
-                 inst->operands[0].reg;
+            uint32_t f=(uint32_t)inst->operands[2].immediate;
+            code=inst->encoding|(wide?UINT32_C(0x80000000):0U)|
+                 ((f&UINT32_C(0x1000))<<10U)|
+                 (((f>>6U)&63U)<<16U)|((f&63U)<<10U)|
+                 (inst->operands[1].reg<<5U)|inst->operands[0].reg;
+            break;
+        }
+        case A64_MC_TST_REG:
+        case A64_MC_BIC_REG: {
+            bool wide=inst->operands[0].register_64;
+            bool test=inst->opcode==A64_MC_TST_REG;
+            bool alias=test && inst->count==2U;
+            unsigned rd=alias?31U:inst->operands[0].reg;
+            unsigned rn=alias?inst->operands[0].reg:inst->operands[1].reg;
+            unsigned rm=alias?inst->operands[1].reg:inst->operands[2].reg;
+            code=(test?UINT32_C(0x6a000000):UINT32_C(0x0a200000))|
+                 (wide?UINT32_C(0x80000000):0U)|
+                 (rm<<16U)|(rn<<5U)|rd;
             break;
         }
         case A64_MC_EXTEND_W:

@@ -63,6 +63,20 @@ external_probe:
     cmp x1, #8192
     and w1, w1, #255
     and w3, w3, #65535
+    and w0, w1, #0xaaaaaaaa
+    and x1, x2, #0x00ff00ff00ff00ff
+    orr w3, w4, #4
+    orr x5, x6, #0x8000000000000000
+    eor w7, w8, #0x33333333
+    eor x9, x10, #0x5555555555555555
+    ands w11, w12, #0x1f
+    tst w3, #255
+    tst x4, #0x00ff00ff00ff00ff
+    tst w1, w2
+    tst x3, x4
+    bic w5, w6, w7
+    bic x8, x9, x10
+    ands x11, x12, x13
     and x4, x4, #255
     and x5, x5, #4294967295
     sxtw x0, w0
@@ -309,6 +323,9 @@ for bad_source in 'ldxr x0, [x1,#4]' 'stxr x0, x1, [x2]' \
                   '.inst 0x100000000' \
                   'cmn x0, #-1' 'cmn w0, #4097' \
                   'and w0, w0, #0xffffffff' 'and w0, w0, #0' \
+                  'orr w0, w1, #0' 'eor x0, x1, #0xffffffffffffffff' \
+                  'tst w0, #0' 'tst w0, x1' \
+                  'bic w0, x1, w2' \
                   'and x0, w0, #255' 'sxtw w0, w0' \
                   'uxtw x0, x0' 'rev w1, x2' \
                   'ldar w0, [x0, #4]' 'stlr x0, [w0]' \
