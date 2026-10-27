@@ -609,7 +609,7 @@ grep -q '0x43' "$work/la-header.txt"
 for bad in 'testq $4294967296, %rax' \
            'testw $65536, %ax' \
            'testl %rax, %eax' \
-           'add %gs:this_cpu_off(%rip), %ax' \
+           'add %gs:this_cpu_off(%rip), (%rax)' \
            'mulq %eax' \
            'divl %rax' \
            'cmpxchgq %eax, (%rdi)' \
