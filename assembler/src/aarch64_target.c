@@ -110,6 +110,7 @@ enum {
     A64_MC_HINT,
     A64_MC_CSEL_ALIAS,
     A64_MC_COND_SELECT,
+    A64_MC_COND_COMPARE,
     A64_MC_MRS,
     A64_MC_MSR,
     A64_MC_BARRIER,
@@ -687,7 +688,10 @@ static bool a64_system_register(const char *name,uint32_t *mrs,uint32_t *msr) {
     static const struct {const char *name;uint32_t read,write;} table[]={
         {"sp_el0",UINT32_C(0xd5384100),UINT32_C(0xd5184100)},
         {"tpidr_el0",UINT32_C(0xd53bd040),UINT32_C(0xd51bd040)},
-        {"tpidrro_el0",UINT32_C(0xd53bd060),0U}
+        {"tpidrro_el0",UINT32_C(0xd53bd060),0U},
+        /* Kernel EL1 registers, GNU ARM system-register encodings. */
+        {"tpidr_el1",UINT32_C(0xd538d080),UINT32_C(0xd518d080)},
+        {"daif",UINT32_C(0xd53b4220),UINT32_C(0xd51b4220)}
     };
     size_t i;
     for(i=0U;i<sizeof(table)/sizeof(table[0]);++i)
@@ -776,6 +780,42 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
     }
     if(a64_parse_lse(as,inst,op,args)) {
         /* LSE grammar is owned by one target decoder. */
+    } else if(!strcmp(op,"ccmp") || !strcmp(op,"ccmn")) {
+        char tok[4][96];
+        unsigned n,rn,rm,cc;
+        bool wide,otherwide,sp;
+        int64_t imm,nzcv;
+        bool literal;
+        if(!split_operands(args,tok,&n) || n!=4U ||
+           !parse_a64_reg(tok[0],&rn,&wide,&sp) || sp ||
+           !parse_signed_number(tok[2],&nzcv) || nzcv<0 || nzcv>15 ||
+           !a64_condition_code(tok[3],&cc)) {
+            minias_set_error(as,"bad-aarch64-conditional-compare:%s:line=%zu",
+                             args,stmt->line);
+            free(inst);return false;
+        }
+        literal=parse_signed_number(tok[1],&imm);
+        if(literal && (imm<0 || imm>31)) {
+            minias_set_error(as,"bad-aarch64-ccmp-immediate:%s:line=%zu",
+                             tok[1],stmt->line);
+            free(inst);return false;
+        }
+        if(!literal && (!parse_a64_reg(tok[1],&rm,&otherwide,&sp) ||
+                        sp || otherwide!=wide)) {
+            minias_set_error(as,"bad-aarch64-ccmp-register:%s:line=%zu",
+                             tok[1],stmt->line);
+            free(inst);return false;
+        }
+        inst->opcode=A64_MC_COND_COMPARE;inst->count=4U;
+        inst->encoding=(!strcmp(op,"ccmp")?UINT32_C(0x7a400000):
+                                         UINT32_C(0x3a400000))|
+                       (wide?UINT32_C(0x80000000):0U)|
+                       (literal?UINT32_C(0x800):0U);
+        put_reg(&inst->operands[0],rn,wide);
+        if(literal)put_immediate(&inst->operands[1],imm);
+        else put_reg(&inst->operands[1],rm,wide);
+        put_immediate(&inst->operands[2],nzcv);
+        put_immediate(&inst->operands[3],cc);
     } else if(!strcmp(op,"csel") || !strcmp(op,"csinc") ||
               !strcmp(op,"csinv") || !strcmp(op,"csneg")) {
         char tok[4][96];
@@ -901,6 +941,15 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
                       |(shift<<2U);
         put_reg(&inst->operands[0],rd,wide);
         put_immediate(&inst->operands[1],(int64_t)imm16);
+    } else if((!strcmp(op,"yield") || !strcmp(op,"wfe") ||
+               !strcmp(op,"wfi") || !strcmp(op,"sev") ||
+               !strcmp(op,"sevl")) && !*args) {
+        /* Architectural HINT aliases use the exact same typed MCInst. */
+        unsigned hint=!strcmp(op,"yield")?1U:
+                      !strcmp(op,"wfe")?2U:!strcmp(op,"wfi")?3U:
+                      !strcmp(op,"sev")?4U:5U;
+        inst->opcode=A64_MC_HINT;inst->count=1U;
+        put_immediate(&inst->operands[0],hint);
     } else if (!strcmp(op,"hint")) {
         int64_t hint;
         if(!parse_signed_number(args,&hint) || hint<0 || hint>127) {
@@ -1075,6 +1124,17 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
         return false;
     }
     switch (inst->opcode) {
+        case A64_MC_COND_COMPARE: {
+            unsigned rn=inst->operands[0].reg;
+            unsigned operand2=inst->operands[1].kind==MINIAS_MC_IMMEDIATE?
+                         (unsigned)inst->operands[1].immediate:
+                         inst->operands[1].reg;
+            unsigned nzcv=(unsigned)inst->operands[2].immediate;
+            unsigned cond=(unsigned)inst->operands[3].immediate;
+            code=inst->encoding|(operand2<<16U)|(cond<<12U)|
+                 (rn<<5U)|nzcv;
+            break;
+        }
         case A64_MC_COND_SELECT: {
             unsigned rd=inst->operands[0].reg;
             unsigned rn=inst->operands[1].reg;

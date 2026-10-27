@@ -688,6 +688,32 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
                     goto done;
                 }
     }
+    /* LASX XR-to-GPR lane extraction is the 256-bit variant of LSX
+     * VPICKVE2GR, retaining the same typed lane format with 2x lane count.
+     * No Common ISA knowledge or private fixups required. */
+    if(n==3U && la_reg(t[0],&rd) &&
+       la_special_reg(t[1],"$xr",31U,&rj)) {
+        static const struct {const char *name;uint32_t opcode;unsigned max;} pick[]={
+            {"xvpickve2gr.b", UINT32_C(0x76ef8000),31U},
+            {"xvpickve2gr.h", UINT32_C(0x76efc000),15U},
+            {"xvpickve2gr.w", UINT32_C(0x76efe000),7U},
+            {"xvpickve2gr.d", UINT32_C(0x76eff000),3U},
+            {"xvpickve2gr.bu",UINT32_C(0x76f38000),31U},
+            {"xvpickve2gr.hu",UINT32_C(0x76f3c000),15U},
+            {"xvpickve2gr.wu",UINT32_C(0x76f3e000),7U},
+            {"xvpickve2gr.du",UINT32_C(0x76f3f000),3U}
+        };
+        uint64_t lane;
+        if(minias_eval_u64_expression(t[2],&lane))
+            for(i=0U;i<sizeof(pick)/sizeof(pick[0]);++i)
+                if(!strcmp(s->op,pick[i].name) &&
+                   lane<=pick[i].max) {
+                    m->count=3U;
+                    m->encoding=pick[i].opcode|
+                        ((uint32_t)lane<<10U)|(rj<<5U)|rd;
+                    goto done;
+                }
+    }
     /* GNU LoongArch LASX replicate lane-zero group (XR0/XR5) and LSX
      * GPR-to-lane injection (V0/R5/u10). No second vector encoder: both
      * flow through existing target-owned 32-bit typed MCInst words. */

@@ -40,6 +40,15 @@ external_probe:
     mrs x0, sp_el0
     mrs x2, sp_el0
     mrs x7, tpidr_el0
+    mrs x0, tpidr_el1
+    msr tpidr_el1, x1
+    mrs x2, daif
+    msr daif, x3
+    yield
+    wfe
+    wfi
+    sev
+    sevl
     mrs x11, tpidrro_el0
     msr sp_el0, x2
     dmb oshst
@@ -59,6 +68,13 @@ external_probe:
     csinc w5, w6, w7, cs
     csinv x8, x9, x10, lt
     csneg x11, x12, x13, mi
+    // CCMP/CCMN register and immediate forms (NZCV + condition bits).
+    ccmp x1, #0, #4, ne
+    ccmp w2, w3, #7, eq
+    ccmn x4, #31, #15, mi
+    ccmn w5, w6, #2, gt
+    ccmp x7, x8, #0, ls
+    ccmn w9, #15, #12, cs
     cmn x0, x1
     cmp x1, #8192
     and w1, w1, #255
@@ -329,6 +345,12 @@ for bad_source in 'ldxr x0, [x1,#4]' 'stxr x0, x1, [x2]' \
                   'csinc x0, x1, x2, bad' \
                   'mrs w0, sp_el0' 'msr tpidrro_el0, x0' \
                   'mrs x0, fake_el0' 'dmb #16' 'dmb invalid' \
+                  'ccmp x0, w1, #1, eq' \
+                  'ccmp x0, #32, #1, eq' \
+                  'ccmp x0, #1, #16, eq' \
+                  'ccmn x0, #1, #1, bogus' \
+                  'mrs w0, tpidr_el1' 'msr daif, w0' \
+                  'yield #1' \
                   'dsb #16' 'dsb bogus' 'isb ish' 'isb #16' \
                   'prfm pstl4strm, [x2]' 'prfm pstl1strm, [w2]' \
                   '.inst 0x100000000' \

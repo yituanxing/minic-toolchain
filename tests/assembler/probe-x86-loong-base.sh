@@ -99,6 +99,18 @@ entry_x:
     btcq %r11, 16(%r12)
     xaddl %eax, (%rdi)
     xaddq %r13, 8(%rsp)
+    # All x86 width variants use the existing 0x86/0x87 typed memory encoder.
+    xchgl %eax, 24(%rbx)
+    xchgl 32(%r12), %r10d
+    xchgq %r13, 8(%rsp)
+    xchgw %dx, 6(%rbp)
+    xchgb %al, 4(%rdi)
+    inb %dx, %al
+    inw %dx, %ax
+    inl %dx, %eax
+    outb %al, %dx
+    outw %ax, %dx
+    outl %eax, %dx
     testq %r8, 16(%rsp)
     testl 8(%r12), %eax
     movq %r8, 16(%r10,%r11,8)
@@ -645,6 +657,12 @@ entry_la:
     xvslti.h $xr3, $xr31, -16
     xvslti.w $xr4, $xr5, 15
     xvslti.d $xr8, $xr7, -1
+    xvpickve2gr.d $r17, $xr31, 0
+    xvpickve2gr.d $a0, $xr3, 3
+    xvpickve2gr.w $a1, $xr4, 7
+    xvpickve2gr.b $a2, $xr5, 31
+    xvpickve2gr.hu $a3, $xr6, 15
+    xvpickve2gr.du $a4, $xr7, 3
     vpickve2gr.d $r13, $vr0, 1
     vpickve2gr.b $a0, $vr31, 15
     vpickve2gr.wu $a1, $vr2, 3
@@ -704,6 +722,8 @@ grep -q '0x43' "$work/la-header.txt"
 
 for bad in 'movq __per_cpu_offset(%rdi),%rax' \
            'adcl %rax,%eax' \
+           'inb %eax,%al' \
+           'outw %al,%dx' \
            'sbbb %rax,%r8b' \
            'sbbb $256,%r8b' \
            'pushq %eax' \
@@ -983,6 +1003,8 @@ for bad in 'li.w $r4, -2049' \
            'addu16i.d $a0, $a1, 32768' \
            'addu16i.d $a0, $a1, -32769' \
            'xvslti.b $xr0, $xr1, 16' \
+           'xvpickve2gr.d $r1, $xr0, 4' \
+           'xvpickve2gr.b $r1, $xr0, 32' \
            'xvslli.b $xr0, $xr1, 8' \
            'xvreplve0.q $xr0, $vr1' \
            'vinsgr2vr.d $vr0, $r2, 2' \

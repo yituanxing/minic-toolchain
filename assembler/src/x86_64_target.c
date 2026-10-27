@@ -328,6 +328,7 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
     } regmem[] = {
         {"movq",0x89,0x8b,true},{"movl",0x89,0x8b,false},
         {"cmpq",0x39,0x3b,true},{"cmpl",0x39,0x3b,false},
+        {"xchgq",0x87,0x87,true},{"xchgl",0x87,0x87,false},
         {"testq",0x85,0x85,true},{"testl",0x85,0x85,false},
         {"addq",0x01,0x03,true},{"addl",0x01,0x03,false},
         {"adcq",0x11,0x13,true},{"adcl",0x11,0x13,false},
@@ -356,7 +357,9 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
         {"subb",0x28U,0x2aU,false},{"andb",0x20U,0x22U,false},
         {"adcb",0x10U,0x12U,false},{"sbbb",0x18U,0x1aU,false},
         {"orb",0x08U,0x0aU,false},{"xorb",0x30U,0x32U,false},
+        {"xchgb",0x86U,0x86U,false},
         {"movw",0x89U,0x8bU,false},{"cmpw",0x39U,0x3bU,false},
+        {"xchgw",0x87U,0x87U,false},
         {"testw",0x85U,0x85U,false},{"addw",0x01U,0x03U,false},
         {"subw",0x29U,0x2bU,false},{"andw",0x21U,0x23U,false},
         {"adcw",0x11U,0x13U,false},{"sbbw",0x19U,0x1bU,false},
@@ -449,6 +452,27 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
         m->operands[1].register_64=!word && imul_wd;
         m->operands[2].kind=MINIAS_MC_IMMEDIATE;
         m->operands[2].immediate=bits;
+        goto done;
+    }
+    /* GNU IN/OUT port I/O through DX has an implicit accumulator.
+     * Encode as a validated fixed-size target instruction, not as a
+     * permissive pseudo-op or a new Common machine-code owner. */
+    if(!strcmp(s->op,"inb") || !strcmp(s->op,"inw") ||
+       !strcmp(s->op,"inl") || !strcmp(s->op,"outb") ||
+       !strcmp(s->op,"outw") || !strcmp(s->op,"outl")) {
+        char from[48],to[48];
+        bool input=s->op[0]=='i';
+        char width=s->op[2];
+        const char *acc=width=='b'?"%al":width=='w'?"%ax":"%eax";
+        if(!x64_args2(s->args,from,to) ||
+           strcmp(input?from:to,"%dx") ||
+           strcmp(input?to:from,acc))goto invalid;
+        m->opcode=X64_ZERO;
+        m->encoding=width=='w'?UINT32_C(0x66):0U;
+        m->encoding|=(input?(width=='b'?UINT32_C(0xec):UINT32_C(0xed)):
+                            (width=='b'?UINT32_C(0xee):UINT32_C(0xef)))
+                     <<(width=='w'?8U:0U);
+        m->operands[0].immediate=width=='w'?2U:1U;
         goto done;
     }
     /* Group-3 NOT/NEG and Group-5 INC/DEC, shared typed ModR/M
