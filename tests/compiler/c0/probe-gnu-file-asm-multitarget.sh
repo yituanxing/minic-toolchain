@@ -154,6 +154,8 @@ SRC
             -o "$work/dbar-$invalid.s" >"$work/dbar-$invalid.out" \
             2>"$work/dbar-$invalid.err"; then
             echo "FAIL LoongArch unsafe dbar template admission $invalid" >&2
+            sed -n '1,85p' "$work/dbar-$invalid.s" >&2 || true
+            cat "$work/dbar-$invalid.err" >&2 || true
             exit 1
         fi
     done
