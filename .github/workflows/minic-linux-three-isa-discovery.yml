@@ -1,0 +1,72 @@
+name: MiniC Linux three-ISA GNU golden discovery (build-only)
+on:
+  pull_request:
+    # Opt-in by a narrow new GNU discovery change; not a full kernel rebuild
+    # on every subsequent MiniC source edit.
+    paths:
+      - '.github/workflows/minic-linux-three-isa-discovery.yml'
+      - 'tools/ci/linux-three-isa-golden-v1.sh'
+      - 'tools/ci/linux-three-isa-golden-v1.py'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: linux-three-gnu-discovery-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  self-test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate one shared C-owner census for all three ELF targets
+        run: |
+          set -Eeuo pipefail
+          bash -n tools/ci/linux-three-isa-golden-v1.sh
+          python3 -m py_compile tools/ci/linux-three-isa-golden-v1.py
+          python3 tools/ci/linux-three-isa-golden-v1.py --self-test
+  original-gnu:
+    needs: self-test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [x86_64, aarch64, loongarch64]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install native Kbuild dependencies and the selected GNU target
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          for sources in /etc/apt/apt-mirrors.txt /etc/apt/sources.list.d/ubuntu.sources; do
+            if [[ -f "$sources" ]]; then
+              sudo sed -i 's#azure.archive.ubuntu.com#archive.ubuntu.com#g' "$sources"
+            fi
+          done
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 update
+          sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+            build-essential bc bison flex libelf-dev libssl-dev cpio curl xz-utils python3
+          case "${{ matrix.target }}" in
+            x86_64) ;;
+            aarch64)
+              sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+                gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu ;;
+            loongarch64)
+              sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+                gcc-13-loongarch64-linux-gnu binutils-loongarch64-linux-gnu ;;
+          esac
+      - name: GNU original Linux 6.6.143 Kconfig, link and real C-owner census
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          bash tools/ci/linux-three-isa-golden-v1.sh \
+            "${{ matrix.target }}" "$RUNNER_TEMP/minic-linux-${{ matrix.target }}"
+      - name: Preserve original GNU baseline, failures and exact-source metadata
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-three-gnu-${{ matrix.target }}-${{ github.sha }}
+          path: ${{ runner.temp }}/minic-linux-${{ matrix.target }}/evidence/
+          if-no-files-found: warn
+          retention-days: 14
