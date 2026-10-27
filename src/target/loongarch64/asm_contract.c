@@ -4,6 +4,18 @@
 #include <stdio.h>
 #include <string.h>
 
+/* Native ISA reservation; rejected CSR/AMO shapes cannot bypass through
+ * generic scalar Core inline assembly. */
+bool minic_loongarch64_requires_qualified_input_asm(const MinicInlineAsm *src) {
+    static const char *const reserved[] = {
+        "dbar", "amand_db.w", "amor_db.w", "amxor_db.w", "amadd_db.w",
+        "amand_db.d", "amor_db.d", "amxor_db.d", "amadd_db.d",
+        "csrrd", "csrxchg"
+    };
+    return minic_backend_inline_asm_prefix_matches(
+        src, reserved, sizeof(reserved) / sizeof(reserved[0]));
+}
+
 /* A legal LoongArch DBAR barrier is a hardware ordering operation, NOT a
  * compiler-only barrier. The original GNU I-constraint accepts a constant
  * unsigned 12-bit hint; hardware semantics are encoded by that hint.

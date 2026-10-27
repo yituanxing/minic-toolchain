@@ -36,6 +36,9 @@ typedef struct MinicTargetInlineAsmContract {
 typedef bool (*MinicBackendQualifyInlineAsm)(
     const MinicC0Program *, const MinicInlineAsm *, MinicTargetInlineAsmContract *);
 
+/* A target reserves its own input-bearing GNU machine template families.
+ * Generic Core knows neither machine opcodes nor physical constraints. */
+typedef bool (*MinicBackendRequiresQualifiedInputAsm)(const MinicInlineAsm *);
 typedef struct MinicBackend {
     MinicTargetArchitecture architecture;
     const char *name;
@@ -50,8 +53,7 @@ typedef struct MinicBackend {
     /* Target-owned GNU-asm opcode families whose operand constraints must
      * be qualified by the real machine backend BEFORE generic Core lowering.
      * Raw no-operand GNU source asm remains a separate assembly contract. */
-    const char *const *qualified_input_mnemonics;
-    size_t qualified_input_mnemonic_count;
+    MinicBackendRequiresQualifiedInputAsm requires_qualified_input_asm;
 } MinicBackend;
 
 /* Fail closed on unknown architecture. No default or host fallback. */
@@ -61,6 +63,10 @@ const MinicBackend *minic_backend_for_target(const MinicTargetInfo *target);
 bool minic_backend_qualify_inline_asm(
     const MinicBackend *, const MinicC0Program *, const MinicInlineAsm *,
     MinicTargetInlineAsmContract *);
+
+/* Common lexical prefix test only; the target owns the ISA inventory. */
+bool minic_backend_inline_asm_prefix_matches(
+    const MinicInlineAsm *, const char *const *, size_t);
 
 /* A negative target qualification is authoritative for input-bearing
  * reserved ISA templates: generic Core scalar/opaque lowering must not

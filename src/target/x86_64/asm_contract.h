@@ -1,6 +1,7 @@
 #ifndef MINIC_TARGET_X86_64_ASM_CONTRACT_H
 #define MINIC_TARGET_X86_64_ASM_CONTRACT_H
 #include "target/backend.h"
+bool minic_x86_64_requires_qualified_input_asm(const MinicInlineAsm *);
 
 /* Register allocation, GNU constraints and native instruction templates
  * belong to x86. The shared compiler sees only Core operand roles. */

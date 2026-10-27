@@ -150,6 +150,33 @@ static const Aarch64AtomicOperation aarch64_atomic_operations[] = {
     {"add", "add", "Ir", "Ir", "Ir"},
     {"sub", "sub", "Jr", "Jr", "Jr"}
 };
+/* Reserve source atomic prefixes from exactly the same typed operation
+ * catalog used for source qualification and physical LL/SC emission. */
+bool minic_aarch64_requires_qualified_input_asm(const MinicInlineAsm *src) {
+    static const char *const fixed[] = {
+        "brk", "stlrb", "stlrh", "stlr", "msr", "bic", ".if"
+    };
+    char prefix[64];
+    const char *const single[] = {prefix};
+    size_t width, fetch, op;
+    if (minic_backend_inline_asm_prefix_matches(
+            src, fixed, sizeof(fixed) / sizeof(fixed[0])))
+        return true;
+    for (width = 0U; width < 2U; ++width)
+        for (fetch = 0U; fetch < 2U; ++fetch)
+            for (op = 0U; op < sizeof(aarch64_atomic_operations) /
+                                  sizeof(aarch64_atomic_operations[0]); ++op) {
+                const int n = snprintf(prefix, sizeof(prefix),
+                    "// atomic%s%s_%s", width ? "64" : "",
+                    fetch ? "_fetch" : "", aarch64_atomic_operations[op].name);
+                if (n <= 0 || (size_t)n >= sizeof(prefix))
+                    return false;
+                if (minic_backend_inline_asm_prefix_matches(src, single, 1U))
+                    return true;
+            }
+    return false;
+}
+
 static const char *const aarch64_atomic_mode_suffix[] = {
     "", "_relaxed", "_acquire", "_release"
 };

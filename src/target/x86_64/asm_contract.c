@@ -3,6 +3,13 @@
 
 /* Target-owned GNU register/constraint admission: no Core lowering state,
  * no SSA mutation. Additional x86 forms extend this owner, not core_lower. */
+/* Keep the GS per-CPU source reserved, without capturing ordinary MOV. */
+bool minic_x86_64_requires_qualified_input_asm(const MinicInlineAsm *src) {
+    static const char *const reserved[] = {"movq %%gs:"};
+    return minic_backend_inline_asm_prefix_matches(
+        src, reserved, sizeof(reserved) / sizeof(reserved[0]));
+}
+
 static bool target_constraint_is(const MinicInlineAsmOperand *op, const char *s) {
     const size_t n = s ? strlen(s) : 0U;
     return op && s && op->constraint_text && op->constraint_length == n &&
