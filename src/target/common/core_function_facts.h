@@ -34,6 +34,13 @@ static inline bool minic_core_function_facts_verified(
            facts->verified_function == function;
 }
 
+/* Prepared visitor collects va_start result IDs during the same facts scan.
+ * Caller owns *variadic_results, initially NULL. Standalone facts-only
+ * clients require no allocation and keep the old API. */
+bool minic_core_function_facts_analyze_collect(
+    const MinicCoreFunction *, MinicCoreFunctionFacts *,
+    MinicCoreValueId **variadic_results);
+
 /* Single checked walk; returns false if Core instruction backing is absent. */
 bool minic_core_function_facts_analyze(
     const MinicCoreFunction *, MinicCoreFunctionFacts *);

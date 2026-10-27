@@ -1,15 +1,18 @@
 #include "target/common/core_function_facts.h"
 #include "target/common/core_instruction_family.h"
+#include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
 
-/* All five backends consume the same once-per-definition semantic scan
- * through program_visit_prepared_functions. Frame/call/register policies
- * remain target-owned. Standalone compatibility callers may scan directly. */
-bool minic_core_function_facts_analyze(
-    const MinicCoreFunction *function, MinicCoreFunctionFacts *facts) {
-    size_t index;
+/* One Core scan both computes semantic facts and, for the prepared visitor,
+ * collects va_start results. Standalone consumers remain allocation-free. */
+bool minic_core_function_facts_analyze_collect(
+    const MinicCoreFunction *function, MinicCoreFunctionFacts *facts,
+    MinicCoreValueId **variadic_results) {
+    size_t index, capacity = 0U;
     if (function == NULL || facts == NULL ||
-        (function->instruction_count != 0U && function->instructions == NULL))
+        (function->instruction_count != 0U && function->instructions == NULL) ||
+        (variadic_results != NULL && *variadic_results != NULL))
         return false;
     memset(facts, 0, sizeof(*facts));
     for (index = 0U; index < function->instruction_count; ++index) {
@@ -43,11 +46,39 @@ bool minic_core_function_facts_analyze(
             facts->uses_dynamic_stack_alloc = true;
             break;
         case MINIC_CORE_INSTRUCTION_VARIADIC_ARGUMENT_ADDRESS:
+            if (variadic_results != NULL) {
+                const size_t n = facts->variadic_address_count;
+                if (n == capacity) {
+                    size_t next;
+                    MinicCoreValueId *grown;
+                    if (capacity > (SIZE_MAX / sizeof(**variadic_results)) / 2U)
+                        goto failed;
+                    next = capacity == 0U ? 1U : capacity * 2U;
+                    grown = realloc(*variadic_results,
+                                    next * sizeof(**variadic_results));
+                    if (grown == NULL) goto failed;
+                    *variadic_results = grown;
+                    capacity = next;
+                }
+                (*variadic_results)[n] = instruction->result;
+            }
             ++facts->variadic_address_count;
             break;
         default:
             break;
         }
     }
+    if (variadic_results != NULL)
+        facts->variadic_address_results = *variadic_results;
     return true;
+failed:
+    free(*variadic_results);
+    *variadic_results = NULL;
+    memset(facts, 0, sizeof(*facts));
+    return false;
+}
+
+bool minic_core_function_facts_analyze(
+    const MinicCoreFunction *function, MinicCoreFunctionFacts *facts) {
+    return minic_core_function_facts_analyze_collect(function, facts, NULL);
 }

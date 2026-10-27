@@ -7,6 +7,7 @@
 #include "target/aarch64/fp_emit.h"
 #include "target/common/core_block_walk.h"
 #include "target/common/direct_instruction_semantics.h"
+#include "target/common/direct_machine_dispatch.h"
 #include "target/common/direct_residual_plan.h"
 #include "target/common/lp64_aggregate.h"
 #include "target/common/lp64_scalar.h"
@@ -225,176 +226,68 @@ static bool aarch64_emit_gp_result(
                                "  str w9, [sp, #%zu]\n", offset) >= 0;
 }
 
-bool minic_aarch64_emit_core_blocks(FILE *out, const MinicDirectLP64BlockContext *ctx) {
-    const MinicC0Program *program;
-    const MinicTargetInfo *target;
-    const MinicCoreFunction *fn;
-    const MinicLP64FramePlan *frame_plan;
-    const MinicLP64ArgumentPlan *incoming_plan;
-    const char *name, *reject_stage;
-    const MinicCoreBlock *block;
-    MinicCoreBlockWalk block_walk = {0};
-    size_t id, frame, save_offset, i, block_id;
-    size_t reject_block = SIZE_MAX, reject_ins = SIZE_MAX;
-    bool has_direct_calls, dynamic_frame;
-    if (out == NULL || ctx == NULL || ctx->program == NULL ||
-        ctx->target == NULL || ctx->fn == NULL || ctx->frame_plan == NULL ||
-        ctx->incoming_plan == NULL || ctx->name == NULL) return false;
-    program = ctx->program;
-    target = ctx->target;
-    fn = ctx->fn;
-    frame_plan = ctx->frame_plan;
-    incoming_plan = ctx->incoming_plan;
-    name = ctx->name;
-    id = ctx->id;
-    frame = ctx->frame;
-    save_offset = ctx->save_offset;
-    has_direct_calls = ctx->has_direct_calls;
-    dynamic_frame = ctx->dynamic_frame;
-    reject_stage = "machine_emit";
-    minic_core_block_walk_begin(&block_walk, fn, NULL);
-    while (minic_core_block_walk_next(&block_walk, &block_id, &block)) {
-        reject_block = block_id;
-        reject_ins = SIZE_MAX;
-        reject_stage = "machine_emit";
-        if (fprintf(out, ".Lmini_arm_f%zu_b%zu:\n", id, block_id) < 0 ||
-            (block->source_label_id != SIZE_MAX &&
-             !fn->suppress_source_label_aliases &&
-             fprintf(out, ".Luser_%zu:\n", block->source_label_id) < 0))
-            return minic_multi_direct_machine_reject(fn, "aarch64", name, reject_stage,
-                                    reject_block, reject_ins, __LINE__);
-        for (i = 0U; i < block->instruction_count; ++i) {
-        MinicCoreInstructionId ins_id = 0U;
-        const MinicCoreInstruction *ins = NULL;
-        size_t offset;
-        MinicDirectMachineInstructionShape shape;
-        if (!minic_core_block_instruction_at(fn, block, i, &ins_id, &ins))
-            return minic_multi_direct_machine_reject(fn, "aarch64", name, reject_stage,
-                                    reject_block, reject_ins, __LINE__);
-        reject_ins = (size_t)ins_id;
-        if (!minic_multi_direct_machine_instruction_shape(
-                fn, ins, true, &shape))
-            return minic_multi_direct_machine_reject(
-                fn, "aarch64", name, reject_stage,
-                reject_block, reject_ins, __LINE__);
-        offset = shape.result_offset;
-        /* A Core compiler barrier is an effect-only ordering constraint
-         * (GNU empty asm with a memory clobber), not a hardware fence and
-         * never an SSA value. Like the existing x86/RV64 backends, preserve
-         * source instruction order and emit no machine instruction. The
-         * previous result-slot gate rejected this valid Core kind in the
-         * original BusyBox test/gzip/netstat/top applets on both ISAs. */
-        if (shape.family == MINIC_DIRECT_MACHINE_COMPILER_BARRIER)
-            continue;
-        /* M23: copy the *exact* target-sized aggregate bytes between Core
-         * addresses, preserving padding and nested hooks (no re-layout).
-         * An effect-only record copy has no SSA result slot. */
-        if (shape.family == MINIC_DIRECT_MACHINE_RECORD_COPY) {
-            if (!minic_aarch64_emit_record_copy(out, program, target, fn, ins))
-                return minic_multi_direct_machine_reject(fn, "aarch64", name,
-                    reject_stage, reject_block, reject_ins, __LINE__);
-            continue;
-        }
-        if (shape.family == MINIC_DIRECT_MACHINE_PARAMETER_OBJECT) {
-            if (!minic_aarch64_emit_parameter_object(out, fn, ins,
-                    incoming_plan, frame_plan, frame))
-                return minic_multi_direct_machine_reject(fn, "aarch64", name,
-                    reject_stage, reject_block, reject_ins, __LINE__);
-            continue;
-        }
-        /* Preserve both halves of volatile/nonvolatile int128 stores.
-         * Unlike atomic stores this is two plain 64-bit memory writes. */
-        /* Memory effects precede the ordinary SSA gate: stores are effect
-         * only, loads either produce a scalar GP value or a wide slot. */
-        if (shape.family == MINIC_DIRECT_MACHINE_MEMORY) {
-            bool needs_gp_store = false;
-            if (!minic_aarch64_emit_memory_instruction(
-                    out, program, target, fn, ins, frame_plan, &needs_gp_store))
-                return minic_multi_direct_machine_reject(
-                    fn, "aarch64", name, reject_stage, reject_block, reject_ins, __LINE__);
-            if (needs_gp_store && !aarch64_emit_gp_result(
-                    out, program, target, ins, offset, true))
-                return minic_multi_direct_machine_reject(
-                    fn, "aarch64", name, reject_stage,
-                    reject_block, reject_ins, __LINE__);
-            continue;
-        }
-        /* The Core result slot and family have already been admitted by
-         * minic_multi_direct_machine_instruction_shape(). */
-        /* The native FP instruction family is a single target-owned
-         * emission unit; Core semantics are shared, machine opcodes are not.
-         * GP-producing comparisons/conversions reuse normal writeback. */
-        if (shape.family == MINIC_DIRECT_MACHINE_FP) {
-            bool needs_gp_store = false;
-            if (!minic_aarch64_emit_fp_instruction(
-                    out, program, target, fn, ins, offset,
-                    frame_plan, &needs_gp_store))
-                return minic_multi_direct_machine_reject(
-                    fn, "aarch64", name, reject_stage, reject_block,
-                    reject_ins, __LINE__);
-            if (needs_gp_store && !aarch64_emit_gp_result(
-                    out, program, target, ins, offset, true))
-                return minic_multi_direct_machine_reject(
-                    fn, "aarch64", name, reject_stage,
-                    reject_block, reject_ins, __LINE__);
-            continue;
-        }
-        /* Integer and pointer ALU is a complete native instruction family.
-         * Shared Core widths/shapes; ISA-dependent flags and bit arithmetic. */
-        if (shape.family == MINIC_DIRECT_MACHINE_INTEGER) {
-            bool needs_gp_store = false;
-            if (!minic_aarch64_emit_integer_instruction(
-                    out, program, target, fn, ins, frame_plan, &needs_gp_store))
-                return minic_multi_direct_machine_reject(
-                    fn, "aarch64", name, reject_stage, reject_block,
-                    reject_ins, __LINE__);
-            if (needs_gp_store && !aarch64_emit_gp_result(
-                    out, program, target, ins, offset, false))
-                return minic_multi_direct_machine_reject(
-                    fn, "aarch64", name, reject_stage,
-                    reject_block, reject_ins, __LINE__);
-            continue;
-        }
-        /* Calls and callee ingress form a single ABI transfer family.
-         * The native emitter consumes the common argument location plan. */
-        if (shape.family == MINIC_DIRECT_MACHINE_ABI) {
-            bool needs_gp_store = false;
-            if (!minic_aarch64_emit_abi_instruction(
-                    out, ctx, ins, offset, &needs_gp_store))
-                return minic_multi_direct_machine_reject(
-                    fn, "aarch64", name, reject_stage, reject_block,
-                    reject_ins, __LINE__);
-            if (needs_gp_store && !aarch64_emit_gp_result(
-                    out, program, target, ins, offset, true))
-                return minic_multi_direct_machine_reject(
-                    fn, "aarch64", name, reject_stage,
-                    reject_block, reject_ins, __LINE__);
-            continue;
-        }
-        {
-            bool needs_writeback = false;
-            if (!minic_aarch64_emit_residual_instruction(out, ctx, ins_id, block_id,
-                    offset, &needs_writeback))
-                return minic_multi_direct_machine_reject(
-                    fn, "aarch64", name, reject_stage,
-                    reject_block, reject_ins, __LINE__);
-            if (!needs_writeback)
-                continue;
-        }
-        if (!aarch64_emit_gp_result(out, program, target, ins, offset, true))
-            return minic_multi_direct_machine_reject(
-                fn, "aarch64", name, reject_stage,
-                reject_block, reject_ins, __LINE__);
+/* Shared Common dispatcher owns Core order, machine family routing and
+ * writeback policy; AAPCS64 still owns every native opcode/ABI transfer. */
+static bool aarch64_machine_emit_family(
+    FILE *out, const MinicDirectLP64BlockContext *ctx,
+    const MinicCoreInstruction *ins, MinicCoreInstructionId ins_id,
+    size_t block_id, const MinicDirectMachineInstructionShape *shape,
+    bool *needs_gp_store) {
+    const MinicC0Program *program = ctx->program;
+    const MinicTargetInfo *target = ctx->target;
+    const MinicCoreFunction *fn = ctx->fn;
+    if (shape == NULL || needs_gp_store == NULL) return false;
+    *needs_gp_store = false;
+    switch (shape->family) {
+    case MINIC_DIRECT_MACHINE_RECORD_COPY:
+        return minic_aarch64_emit_record_copy(out, program, target, fn, ins);
+    case MINIC_DIRECT_MACHINE_PARAMETER_OBJECT:
+        return minic_aarch64_emit_parameter_object(out, fn, ins,
+            ctx->incoming_plan, ctx->frame_plan, ctx->frame);
+    case MINIC_DIRECT_MACHINE_MEMORY:
+        return minic_aarch64_emit_memory_instruction(
+            out, program, target, fn, ins, ctx->frame_plan, needs_gp_store);
+    case MINIC_DIRECT_MACHINE_FP:
+        return minic_aarch64_emit_fp_instruction(
+            out, program, target, fn, ins, shape->result_offset,
+            ctx->frame_plan, needs_gp_store);
+    case MINIC_DIRECT_MACHINE_INTEGER:
+        return minic_aarch64_emit_integer_instruction(
+            out, program, target, fn, ins, ctx->frame_plan, needs_gp_store);
+    case MINIC_DIRECT_MACHINE_ABI:
+        return minic_aarch64_emit_abi_instruction(
+            out, ctx, ins, shape->result_offset, needs_gp_store);
+    case MINIC_DIRECT_MACHINE_RESIDUAL:
+        return minic_aarch64_emit_residual_instruction(
+            out, ctx, ins_id, block_id, shape->result_offset, needs_gp_store);
+    case MINIC_DIRECT_MACHINE_COMPILER_BARRIER:
+    default:
+        return false; /* The common visitor consumes compiler barriers. */
     }
-        /* Branches use the function's own local ELF labels; x9 is a
-         * scratch register and w0 is only defined along return paths. */
-        reject_stage = "terminator_emit";
-        reject_ins = SIZE_MAX;
-        if (!minic_aarch64_emit_terminator(out, program, target, fn, block,
-                id, block_id, frame_plan, frame, save_offset,
-                has_direct_calls, dynamic_frame))
-            return minic_multi_direct_machine_reject(fn, "aarch64", name,
-                reject_stage, reject_block, reject_ins, __LINE__);
-    }
-    return true;
+}
+
+static bool aarch64_machine_store_gp(
+    FILE *out, const MinicDirectLP64BlockContext *ctx,
+    const MinicCoreInstruction *ins, size_t offset, bool include_double) {
+    return aarch64_emit_gp_result(
+        out, ctx->program, ctx->target, ins, offset, include_double);
+}
+
+static bool aarch64_machine_emit_terminator(
+    FILE *out, const MinicDirectLP64BlockContext *ctx,
+    const MinicCoreBlock *block, size_t block_id) {
+    return minic_aarch64_emit_terminator(out, ctx->program, ctx->target, ctx->fn,
+        block, ctx->id, block_id, ctx->frame_plan, ctx->frame,
+        ctx->save_offset, ctx->has_direct_calls, ctx->dynamic_frame);
+}
+
+bool minic_aarch64_emit_core_blocks(
+    FILE *out, const MinicDirectLP64BlockContext *ctx) {
+    static const MinicDirectMachineDispatch dispatch = {
+        "aarch64", "mini_arm", true,
+        aarch64_machine_emit_family,
+        aarch64_machine_store_gp,
+        aarch64_machine_emit_terminator
+    };
+    return minic_multi_direct_machine_dispatch(out, ctx, &dispatch);
 }

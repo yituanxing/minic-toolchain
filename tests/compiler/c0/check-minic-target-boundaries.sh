@@ -64,13 +64,26 @@ has src/target/riscv64/core_admission.c 'RV64 atomic ISA/memory-order lowering i
 exists src/target/common/core_block_walk.h
 for consumer in src/target/x86_64/codegen.c \
                 src/target/riscv32/rv32_emit.c \
-                src/target/riscv64/core_codegen.c \
-                src/target/aarch64/block_emit.c \
-                src/target/loongarch64/block_emit.c; do
+                src/target/riscv64/core_codegen.c; do
   has "$consumer" 'minic_core_block_walk_next('
   has "$consumer" 'minic_core_block_instruction_at('
 done
-has src/target/common/core_function_plan.c 'plan->facts.variadic_address_results = plan->variadic_results;'
+# Direct LP64 machine dispatch now has one Common owner: each ISA supplies
+# only native family callbacks, GP transport and terminal instructions.
+exists src/target/common/direct_machine_dispatch.h
+has src/target/common/direct_machine_dispatch.h 'minic_core_block_walk_next('
+has src/target/common/direct_machine_dispatch.h 'minic_core_block_instruction_at('
+has src/target/common/direct_machine_dispatch.h 'minic_multi_direct_machine_instruction_shape('
+has src/target/common/direct_machine_dispatch.h 'shape.family != MINIC_DIRECT_MACHINE_INTEGER'
+for arch in aarch64 loongarch64; do
+  block="src/target/$arch/block_emit.c"
+  has "$block" 'minic_multi_direct_machine_dispatch('
+  has "$block" "static bool ${arch}_machine_emit_family("
+  lacks "$block" 'minic_core_block_walk_next('
+done
+has src/target/common/core_function_facts.c 'facts->variadic_address_results = *variadic_results;'
+has src/target/common/core_function_plan.c 'minic_core_function_facts_analyze_collect('
+lacks src/target/common/core_function_plan.c 'for (i = 0U; i < function->instruction_count;'
 has src/target/x86_64/frame.c 'facts->variadic_address_results[i]'
 has src/target/common/program_emit.h 'descriptor = mkstemp(temporary);'
 has src/target/common/program_emit.h 'rename(temporary, path)'
@@ -105,7 +118,7 @@ for arch in aarch64 loongarch64; do
   residual="src/target/$arch/residual_emit.c"
   header="src/target/$arch/residual_emit.h"
   for file in "$block" "$residual" "$header"; do exists "$file"; done
-  has "$block" 'minic_multi_direct_machine_instruction_shape('
+  has "$block" 'minic_multi_direct_machine_dispatch('
   has "$block" "minic_${arch}_emit_residual_instruction("
   scalar="src/target/$arch/scalar_normalize.c"
   exists "$scalar"
@@ -507,7 +520,7 @@ has src/target/common/core_function_plan.c 'plan->facts.verified_function = func
 has src/target/x86_64/codegen.c 'minic_core_function_facts_verified(facts, fn)'
 has src/target/common/direct_preflight.c 'minic_core_function_facts_verified(facts, fn)'
 has src/target/riscv64/core_admission.c 'minic_core_function_facts_verified(facts, function)'
-has src/target/common/core_function_plan.c 'minic_core_function_facts_analyze('
+has src/target/common/core_function_plan.c 'minic_core_function_facts_analyze_collect('
 # Borrow-or-own Common Core object layout is one lifecycle across all five
 # physical frame plans, not repeated pointer/cleanup logic per backend.
 has src/target/common/core_object_storage.c 'bool minic_core_object_storage_plan_acquire('
@@ -653,6 +666,22 @@ cc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror \
   -Iinclude -Isrc tests/compiler/c0/probe-core-block-walk.c \
   -o "$work/core-block-walk-probe"
 "$work/core-block-walk-probe"
+
+# One host-native exercise of the real two-target Common machine dispatcher.
+# Prove block and source-label order, barrier elision, GP writeback policy,
+# and instruction/terminator failure ownership without emulated ISA binaries.
+cc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror \
+  -Iinclude -Isrc tests/compiler/c0/probe-direct-lp64-dispatch.c \
+  -o "$work/direct-lp64-dispatch-probe"
+"$work/direct-lp64-dispatch-probe"
+
+# One-pass shared CALL/va_start semantic facts with zero-allocation
+# standalone compatibility API, and an explicit owned-result lifecycle.
+cc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror \
+  -Iinclude -Isrc tests/compiler/c0/probe-core-facts-one-pass.c \
+  src/target/common/core_function_facts.c \
+  -o "$work/core-facts-single-pass-probe"
+"$work/core-facts-single-pass-probe"
 
 cc -std=c11 -Wall -Wextra -Wpedantic -Werror -Iinclude -Isrc \
   tests/compiler/c0/probe-core-instruction-family.c -o "$work/core-family-probe"

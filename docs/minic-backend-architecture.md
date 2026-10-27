@@ -454,3 +454,37 @@ frame planner accounts for the call regardless of the M feature bit.
 This does not broaden inline/source GNU assembler policy, nor claim
 that the compiler emits a complete M implementation or supports all
 possible RISC-V extension spellings.
+
+## Two-target Direct LP64 machine-dispatch single owner
+
+AArch64 and LoongArch64 no longer carry byte-for-byte copies of the Core
+block loop and machine-family switch. `target/common/direct_machine_dispatch.h`
+owns **only** lexical Core traversal, source-label ordering, common
+instruction-shape admission, compiler-barrier elision, dispatch by semantic
+machine family and whether a completed instruction needs a GP writeback.
+Its immutable `MinicDirectLP64BlockContext` is borrowed for each callback.
+
+The two targets provide native family callbacks (record, incoming parameter,
+load/store, FP, integer, call ABI and residual), ISA-specific GP result
+register/stack transfer and terminators. Thus AAPCS64 and LP64D have one
+**control-flow dispatcher**, not a fictitious universal calling convention
+or opcode emitter. A new target can enhance this adapter with hooks rather
+than copying the old 150-line machine-family switch.
+
+The standalone `probe-direct-lp64-dispatch.c` exercises both successful
+family/writeback traversal and failure on native emit, GP writeback,
+terminator and Core shape, preserving exact block and instruction diagnostics.
+Strict compilation, native four-target acceptance, x86 upstream BusyBox,
+RV32 upstream software, RV64I Linux frozen shards and paired A/B are the
+separate exact-head correctness/performance gates.
+
+### One-pass Common semantic facts and va_start indexing
+
+The Common FunctionPlan formerly analyzed Core instructions once for facts,
+then scanned again for variadic sites. Prepared emitters now call
+`minic_core_function_facts_analyze_collect`, which builds the compact
+va_start result list as part of the **same** instruction traversal. The
+visitor owns any lazily grown result array and destroys it with the function
+plan. Standalone `minic_core_function_facts_analyze` remains allocation-free;
+no target-owned Core rescan or ABI-specific site assumptions are introduced.
+The standalone probe covers multi-site order, calls and ownership.
