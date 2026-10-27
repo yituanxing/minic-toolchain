@@ -56,6 +56,41 @@ static bool x64_register8(const char *text,unsigned *reg) {
     return false;
 }
 
+/* Legacy AH/CH/DH/BH occupy ModR/M register IDs 4..7 *without* REX.
+ * Keep this classification distinct from SPL/BPL/SIL/DIL in target ISA. */
+static bool x64_high_register8(const char *name,unsigned *reg) {
+    static const char *const high[]={"%ah","%ch","%dh","%bh"};
+    unsigned i;
+    for(i=0U;i<4U;++i)
+        if(!strcmp(name,high[i])){*reg=4U+i;return true;}
+    return false;
+}
+
+/* One target ISA descriptor for implicit-one, immediate and CL-count shifts;
+ * never duplicate width-specific shift tables or Core emission logic. */
+static bool x64_shift_descriptor(const char *op,unsigned *group,
+                                 unsigned *bits) {
+    size_t length=strlen(op);
+    if(length<2U)return false;
+    *bits=op[length-1U]=='b'?8U:op[length-1U]=='w'?16U:
+          op[length-1U]=='l'?32U:op[length-1U]=='q'?64U:0U;
+    if(!*bits)return false;
+    if(length==4U && (!strncmp(op,"sal",3U) ||
+                      !strncmp(op,"shl",3U))) *group=4U;
+    else if(length==4U && !strncmp(op,"shr",3U))*group=5U;
+    else if(length==4U && !strncmp(op,"sar",3U))*group=7U;
+    else if(length==4U && !strncmp(op,"rol",3U))*group=0U;
+    else if(length==4U && !strncmp(op,"ror",3U))*group=1U;
+    else return false;
+    return true;
+}
+static bool x64_shift_register(const char *s,unsigned bits,unsigned *reg) {
+    bool wide=false;
+    if(bits==8U)return x64_register8(s,reg);
+    if(bits==16U)return x64_register16(s,reg);
+    return x64_register(s,reg,&wide) && wide==(bits==64U);
+}
+
 /* One ISA-owned condition-code table shared by CMOV and Jcc aliases. */
 static bool x64_cond_code(const char *suffix, unsigned *cc) {
     static const struct {const char *name;unsigned cc;} names[]={
@@ -228,6 +263,12 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
         {"leave",{0xc9},1}, {"leaveq",{0xc9},1},
         {"syscall",{0x0f,0x05},2}, {"int3",{0xcc},1},
         {"ud2",{0x0f,0x0b},2}, {"hlt",{0xf4},1},
+        {"cli",{0xfa},1},{"sti",{0xfb},1},
+        {"cld",{0xfc},1},{"std",{0xfd},1},
+        {"stac",{0x0f,0x01,0xcb},3},
+        {"clac",{0x0f,0x01,0xca},3},
+        {"cpuid",{0x0f,0xa2},2},
+        {"rdtsc",{0x0f,0x31},2},{"rdtscp",{0x0f,0x01,0xf9},3},
         {"pause",{0xf3,0x90},2},
         {"cltq",{0x48,0x98},2},{"cqto",{0x48,0x99},2},
         {"lock",{0xf0},1},
@@ -371,28 +412,21 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
             goto invalid;
         }
     }
-    /* GNU group-2 implicit count=1 shifts, e.g. SHRL %eax.
-     * Reuse the existing typed immediate-one form / D1 encoding; no
-     * independent measure or emitter path. */
+    /* GNU implicit-count-one shift/rotate now resolves through the SAME
+     * descriptor and machine-length paths as explicit immediate/CL. */
     {
-        static const struct {const char *op;unsigned group;bool wide;} one[]={
-            {"sall",4U,false},{"salq",4U,true},
-            {"shll",4U,false},{"shlq",4U,true},
-            {"shrl",5U,false},{"shrq",5U,true},
-            {"sarl",7U,false},{"sarq",7U,true}
-        };
-        if(x64_register(s->args,&rd,&wd)) {
-            for(i=0U;i<sizeof(one)/sizeof(one[0]);++i)
-                if(!strcmp(s->op,one[i].op) && wd==one[i].wide) {
-                    m->opcode=X64_SHIFT_IMM;m->encoding=one[i].group;
-                    m->count=2U;
-                    m->operands[0].kind=MINIAS_MC_REGISTER;
-                    m->operands[0].reg=rd;
-                    m->operands[0].register_64=wd;
-                    m->operands[1].kind=MINIAS_MC_IMMEDIATE;
-                    m->operands[1].immediate=1U;
-                    goto done;
-                }
+        unsigned group,bits;
+        if(x64_shift_descriptor(s->op,&group,&bits) &&
+           x64_shift_register(s->args,bits,&rd)) {
+            m->opcode=X64_SHIFT_IMM;m->encoding=group|
+                (bits==8U?0x200U:bits==16U?0x400U:0U);
+            m->count=2U;
+            m->operands[0].kind=MINIAS_MC_REGISTER;
+            m->operands[0].reg=rd;
+            m->operands[0].register_64=bits==64U;
+            m->operands[1].kind=MINIAS_MC_IMMEDIATE;
+            m->operands[1].immediate=1U;
+            goto done;
         }
     }
     /* Byte ALU variants and sign-extending MOV all remain target local. */
@@ -446,36 +480,35 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
             m->operands[1].register_64=wd;
             goto done;
         }
-        if((src[0]=='$' || !strcmp(src,"%cl")) && x64_register(dst,&second,&wd)) {
-            static const struct {const char *op;unsigned group;bool wide;} shifts[]={
-                {"sall",4U,false},{"salq",4U,true},
-                {"shll",4U,false},{"shlq",4U,true},
-                {"shrl",5U,false},{"shrq",5U,true},
-                {"sarl",7U,false},{"sarq",7U,true}
-            };
+        if(src[0]=='$' || !strcmp(src,"%cl")) {
+            unsigned group,bits;
             uint64_t count=0U;
-            if((!strcmp(src,"%cl") ||
-                (minias_eval_u64_expression(src+1,&count) && count<=255U)))
-                for(i=0U;i<sizeof(shifts)/sizeof(shifts[0]);++i)
-                    if(!strcmp(s->op,shifts[i].op) && wd==shifts[i].wide) {
-                        m->opcode=!strcmp(src,"%cl")?
-                            X64_SHIFT_CL:X64_SHIFT_IMM;
-                        m->count=2U;
-                        m->encoding=shifts[i].group;
-                        m->operands[0].kind=MINIAS_MC_REGISTER;
-                        m->operands[0].reg=second;
-                        m->operands[0].register_64=wd;
-                        m->operands[1].kind=MINIAS_MC_IMMEDIATE;
-                        m->operands[1].immediate=count;
-                        goto done;
-                    }
+            if(x64_shift_descriptor(s->op,&group,&bits) &&
+               x64_shift_register(dst,bits,&second) &&
+               (!strcmp(src,"%cl") ||
+                (minias_eval_u64_expression(src+1,&count) &&
+                 count<=255U))) {
+                m->opcode=!strcmp(src,"%cl")?
+                    X64_SHIFT_CL:X64_SHIFT_IMM;
+                m->count=2U;
+                m->encoding=group|(bits==8U?0x200U:
+                                   bits==16U?0x400U:0U);
+                m->operands[0].kind=MINIAS_MC_REGISTER;
+                m->operands[0].reg=second;
+                m->operands[0].register_64=bits==64U;
+                m->operands[1].kind=MINIAS_MC_IMMEDIATE;
+                m->operands[1].immediate=count;
+                goto done;
+            }
         }
-        if(!strcmp(s->op,"testb") && src[0]=='$' &&
-           x64_register8(dst,&second)) {
+        if(!strcmp(s->op,"testb") && src[0]=='$') {
             uint64_t bits;
-            if(minias_eval_u64_expression(src+1,&bits) &&
+            bool high=x64_high_register8(dst,&second);
+            if((high || x64_register8(dst,&second)) &&
+               minias_eval_u64_expression(src+1,&bits) &&
                (bits<=255U || bits>=UINT64_MAX-127U)) {
                 m->opcode=X64_TEST8_IMM;m->count=2U;
+                m->encoding=high?0x800U:0U;
                 m->operands[0].kind=MINIAS_MC_REGISTER;
                 m->operands[0].reg=second;
                 m->operands[1].kind=MINIAS_MC_IMMEDIATE;
@@ -897,19 +930,25 @@ static bool x64_measure(MiniAs *as,const MiniAsStmt *s,uint32_t *size) {
             *size=2U+(m->operands[0].register_64 ||
                        m->operands[0].reg>=8U?1U:0U);return true;
         case X64_SHIFT_CL:
-            *size=2U+(m->operands[0].register_64 ||
-                       m->operands[0].reg>=8U?1U:0U);return true;
+            *size=2U+((m->encoding&0x400U)?1U:0U)+
+                  (m->operands[0].register_64 ||
+                   m->operands[0].reg>=8U ||
+                   ((m->encoding&0x200U) && m->operands[0].reg>=4U)?1U:0U);
+            return true;
         case X64_MOVZX_REG:
             *size=3U+((m->encoding==0xb6U && m->operands[0].reg>=4U) ||
                        m->operands[0].reg>=8U || m->operands[1].reg>=8U ||
                        m->operands[1].register_64?1U:0U);return true;
         case X64_SHIFT_IMM:
-            *size=(m->operands[0].register_64 ||
-                   m->operands[0].reg>=8U?1U:0U)+
+            *size=((m->encoding&0x400U)?1U:0U)+
+                  (m->operands[0].register_64 ||
+                   m->operands[0].reg>=8U ||
+                   ((m->encoding&0x200U) && m->operands[0].reg>=4U)?1U:0U)+
                   (m->operands[1].immediate==1U?2U:3U);return true;
         case X64_TEST8_IMM:
             *size=m->operands[0].reg==0U?2U:
-                  (3U+(m->operands[0].reg>=4U?1U:0U));return true;
+                  (3U+(m->operands[0].reg>=4U &&
+                       !(m->encoding&0x800U)?1U:0U));return true;
         case X64_PUSH_IMM: {
             int32_t imm=(int32_t)(uint32_t)m->operands[0].immediate;
             *size=imm>=-128 && imm<=127?2U:5U;return true;
@@ -1050,10 +1089,12 @@ static bool x64_encode(MiniAs *as,const MiniAsStmt *s) {
             break;
         case X64_SHIFT_CL:
             r=m->operands[0].reg;
-            if(m->operands[0].register_64 || r>=8U)
+            if(m->encoding&0x400U)code[n++]=0x66U;
+            if(m->operands[0].register_64 || r>=8U ||
+               ((m->encoding&0x200U) && r>=4U))
                 code[n++]=(unsigned char)(0x40U|
                     (m->operands[0].register_64?8U:0U)|(r>>3U));
-            code[n++]=0xd3U;
+            code[n++]=(m->encoding&0x200U)?0xd2U:0xd3U;
             code[n++]=(unsigned char)(0xc0U|((m->encoding&7U)<<3U)|(r&7U));
             break;
         case X64_MOVZX_REG:
@@ -1068,10 +1109,14 @@ static bool x64_encode(MiniAs *as,const MiniAsStmt *s) {
             break;
         case X64_SHIFT_IMM:
             r=m->operands[0].reg;
-            if(m->operands[0].register_64 || r>=8U)
+            if(m->encoding&0x400U)code[n++]=0x66U;
+            if(m->operands[0].register_64 || r>=8U ||
+               ((m->encoding&0x200U) && r>=4U))
                 code[n++]=(unsigned char)(0x40U|
                     (m->operands[0].register_64?8U:0U)|(r>>3U));
-            code[n++]=m->operands[1].immediate==1U?0xd1U:0xc1U;
+            code[n++]=(m->encoding&0x200U)?
+                (m->operands[1].immediate==1U?0xd0U:0xc0U):
+                (m->operands[1].immediate==1U?0xd1U:0xc1U);
             code[n++]=(unsigned char)(0xc0U|((m->encoding&7U)<<3U)|(r&7U));
             if(m->operands[1].immediate!=1U)
                 code[n++]=(unsigned char)m->operands[1].immediate;
@@ -1080,7 +1125,8 @@ static bool x64_encode(MiniAs *as,const MiniAsStmt *s) {
             r=m->operands[0].reg;
             if(r==0U) code[n++]=0xa8U;
             else {
-                if(r>=4U)code[n++]=(unsigned char)(0x40U|(r>>3U));
+                if(r>=4U && !(m->encoding&0x800U))
+                    code[n++]=(unsigned char)(0x40U|(r>>3U));
                 code[n++]=0xf6U;
                 code[n++]=(unsigned char)(0xc0U|(r&7U));
             }

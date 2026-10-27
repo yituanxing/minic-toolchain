@@ -448,3 +448,17 @@ other targets reject unverified default alignment rules. GNU `readelf -Ws`
 parity checks guard section index, binding, size, alignment and local BSS.
 No new ELF backend or target-specific symbol table. The forward-dependent
 `.skip` issue still requires a separate correct layout solution.
+
+
+## x86 Group-2 ISA descriptor audit
+
+The old implementation duplicated shift mnemonic/width lists for GNU's
+implicit-one and two-operand forms, and only supported 32/64-bit sizes.
+One x86 target-local descriptor now maps SAL/SHL/SHR/SAR/ROL/ROR across
+8/16/32/64 widths to the existing shift MCInst, with one measure and
+one emit path handling D0/D1/D2/D3/C0/C1, 66 override and REX.
+Legacy AH/CH/DH/BH are **not** SPL/BPL/SIL/DIL: TESTB immediate uses a
+separate target-local no-REX classification, while unimplemented high-byte
+forms remain explicitly rejected. GNU exact bytes test both positive and
+negative forms. Common, RV, A64, LoongArch and ELF serialization do not
+change. These additions do not claim complete GNU Linux object parity.

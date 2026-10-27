@@ -110,6 +110,28 @@ entry_x:
     jns .Lshort_x86
     shlq %cl, %rax
     sarq %cl, %r9
+    # Shared width descriptor: shifts and rotates 8/16/32/64.
+    shrb $4, %al
+    shrb %cl, %sil
+    shrw %ax
+    shlw %r9w
+    rolw $8, %ax
+    rolw $8, %dx
+    rorw %cl, %r12w
+    rolb %dl
+    shrl $1, %r12d
+    testb $1, %ah
+    testb $2, %ch
+    testb $255, %dh
+    cli
+    sti
+    cld
+    std
+    stac
+    clac
+    cpuid
+    rdtsc
+    rdtscp
     .value 0x1234
     movzbl %al, %eax
     movzbl %r8b, %r10d
@@ -520,7 +542,12 @@ cmp "$work/la-gnu.bin" "$work/la-mini.bin"
 grep -q 'LoongArch' "$work/la-header.txt"
 grep -q '0x43' "$work/la-header.txt"
 
-for bad in 'movq $abs_mem_immediate, abs_mem_addr(%rip)' \
+for bad in 'shrb $256, %al' \
+           'shrw $256, %ax' \
+           'shrb %cl, %ax' \
+           'rolw %ah' \
+           'testb $256, %ah' \
+           'movq $abs_mem_immediate, abs_mem_addr(%rip)' \
            'movw $65536, (%rax)' \
            'andw $-32769, (%rax)' \
            'cmpb $256, %al' \
