@@ -293,6 +293,52 @@ static void riscv_object_attributes(const MiniAs *as, unsigned char elf_class,
     }
 }
 
+/* Only the target knows RISC-V B-immediate widths and its inverse-
+ * branch + JAL fallback. The common layout never inspects mnemonics or
+ * rewrites machine opcodes. */
+static bool riscv_expanded_size(const char *op, uint32_t measured,
+                                uint32_t *expanded) {
+    if (measured != 4U || !is_conditional_branch_op(op)) return false;
+    *expanded = 8U;
+    return true;
+}
+
+static bool riscv_relax_instruction(MiniAs *as, const MiniAsStmt *stmt,
+                                    uint32_t *expanded) {
+    const char *comma, *target_text;
+    MiniAsSymbolExpr expr;
+    const MiniAsSymbol *symbol;
+    int64_t displacement;
+    *expanded = stmt->size;
+    if (stmt->size != 4U || !is_conditional_branch_op(stmt->op))
+        return true;
+    comma = strrchr(stmt->args, ',');
+    if (comma == NULL) return true;
+    target_text = comma + 1;
+    while (*target_text == ' ' || *target_text == '\t') ++target_text;
+    if (!minias_parse_symbol_addend(target_text, &expr)) return true;
+    symbol = minias_get_symbol(as, expr.name, false);
+    if (symbol == NULL || !symbol->defined ||
+        symbol->section != stmt->section ||
+        symbol->value > (uint64_t)INT64_MAX ||
+        stmt->offset > (uint64_t)INT64_MAX) return true;
+
+    /* Subtract first, then add the symbolic addend with explicit overflow
+     * checks. The old expression evaluated (value + addend) before
+     * subtraction and could trigger signed overflow for valid offsets. */
+    displacement = (int64_t)symbol->value - (int64_t)stmt->offset;
+    if ((expr.addend > 0 && displacement > INT64_MAX - expr.addend) ||
+        (expr.addend < 0 && displacement < INT64_MIN - expr.addend)) {
+        minias_set_error(as, "riscv-relaxation-offset-overflow:%s:line=%zu",
+                         stmt->op, stmt->line);
+        return false;
+    }
+    displacement += expr.addend;
+    if ((displacement % 2) == 0 &&
+        (displacement < -4096 || displacement > 4094)) *expanded = 8U;
+    return true;
+}
+
 static const MiniAsTargetOps riscv_ops = {
     .comment_prefix = '#',
     .elf_machine = 243U, /* EM_RISCV */
