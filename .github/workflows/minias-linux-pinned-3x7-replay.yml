@@ -1,6 +1,8 @@
 name: MiniAS Immutable Linux 3x7 GNU Kbuild S Replay
 
 # Frozen original Linux 6.6.143 inputs. Discovery, NOT P1/parity.
+# Opt-in GNU original AArch64 seven-shard contract after the Target HINT
+# 0..127 encoding batch. This does NOT re-run upstream GCC or claim ELF parity.
 on:
   workflow_dispatch:
   push:
