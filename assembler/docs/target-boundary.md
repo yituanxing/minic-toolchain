@@ -304,3 +304,25 @@ and MUST be added as a target-specific fixup** before real Linux acceptance.
 The GNU LoongArch assembler byte matrix includes signed minima/maxima,
 all new immediate families and invalid shift/unsigned/range cases.
 ELF, Common IR, CFI and other target encoders remain unchanged.
+
+## Real Linux critical-path relocation batch (2026-10-27)
+
+The previous pattern (implement one numeric instruction, rerun seven complete
+GNU-Linux shards, gain only 2 files) was structurally inefficient. The next
+batch addresses three high-volume shared ISA requirements in one target:
+
+- `%pc_hi20(sym+addend)` -> R_LARCH_PCALA_HI20 71 and
+  `%pc_lo12(sym+addend)` -> R_LARCH_PCALA_LO12 72.
+- B/BL (R_LARCH_B26 66); BEQZ/BNEZ (R_LARCH_B21 65);
+  BEQ/BNE/BLT/BGE/BLTU/BGEU (R_LARCH_B16 64), with aligned
+  same-section branch resolution and out-of-range checks.
+- Common SymbolExpr, fixup allocator, ELF RELA writer reused verbatim:
+  the LoongArch Target only declares accepted encodings and numeric
+  ELF relocation identity; its decode stores typed MCInst operands.
+
+The GNU oracle now compares target .text bytes plus explicit ELF relocation
+families, and rejects unimplemented GOT/TLS modifiers. It is not yet full
+Linux machine/relocation parity: GNU may emit additional relaxation
+relocations and not all LoongArch forms are parsed. The next campaign should
+first pass this exact-source GNU unit oracle, then rerun only the existing
+seven LoongArch frozen shards, with no kernel/producer rebuild.

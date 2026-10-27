@@ -139,6 +139,40 @@ for bad in 'movq %rax, (%eax)' \
         exit 1
     fi
 done
+# Original LoongArch GCC / Linux symbolic code model, GNU object as oracle.
+cat >"$work/la-reloc.s" <<'LA_RELOC'
+.text
+.globl reloc_entry
+.type reloc_entry,@function
+reloc_entry:
+    pcalau12i $a0, %pc_hi20(_external_data)
+    addi.d $a0, $a0, %pc_lo12(_external_data)
+    ld.d $a1, $a0, %pc_lo12(_external_data)
+    b _external_branch
+    bl _external_call
+    beqz $a0, _external_branch
+    bnez $a1, _external_branch
+    beq $a0, $a1, _external_branch
+    bne $a0, $a1, _external_branch
+    blt $a0, $a1, _external_branch
+    bge $a0, $a1, _external_branch
+    bltu $a0, $a1, _external_branch
+    bgeu $a0, $a1, _external_branch
+.size reloc_entry, .-reloc_entry
+LA_RELOC
+"$MINIAS" --target=loongarch64 -march=loongarch64 -mabi=lp64d \
+    -o "$work/rel-mini.o" "$work/la-reloc.s"
+"$LOONGAS" -mabi=lp64d -o "$work/rel-gnu.o" "$work/la-reloc.s"
+"$LOONGCOPY" -j .text -O binary "$work/rel-mini.o" "$work/rel-mini.bin"
+"$LOONGCOPY" -j .text -O binary "$work/rel-gnu.o" "$work/rel-gnu.bin"
+cmp "$work/rel-mini.bin" "$work/rel-gnu.bin"
+"$LOONGREADELF" -Wr "$work/rel-mini.o" >"$work/rel-mini.txt"
+"$LOONGREADELF" -Wr "$work/rel-gnu.o" >"$work/rel-gnu.txt"
+for kind in R_LARCH_PCALA_HI20 R_LARCH_PCALA_LO12 R_LARCH_B16 R_LARCH_B21 R_LARCH_B26; do
+    grep -q "$kind" "$work/rel-mini.txt"
+    grep -q "$kind" "$work/rel-gnu.txt"
+done
+echo 'MINIAS_LARCH_RELOC_ORACLE=PASS text_bytes=equal required_ELF_reloc_families=5'
 for bad in 'ldptr.d $a0, $sp, 3' \
            'stptr.w $a0, $sp, 32768' \
            'ldptr.d $a1, $sp, -32772' \
@@ -166,10 +200,12 @@ for target in x86_64 loongarch64; do
     fi
     rm -f "$work/invalid.o"
 done
-printf '.text\nbl _unknown\n' > "$work/unimplemented.s"
+# Unsupported GOT/TLS relocation modifiers must NOT accidentally be treated
+# as numeric PCALA relocations.
+printf '.text\npcalau12i $a0, %%got_pc_hi20(unknown)\n' > "$work/unimplemented.s"
 if "$MINIAS" --target=loongarch64 -o "$work/invalid.o" "$work/unimplemented.s" \
         >/dev/null 2>"$work/invalid.err"; then
-    echo 'Unimplemented branch/fixup silently accepted' >&2
+    echo 'Unimplemented GOT/fixup silently accepted' >&2
     exit 1
 fi
 echo 'MINIAS_TWO_TARGET_ORACLE=PASS x86_GNU_bytes=equal loong_GNU_bytes=equal ELF_machine=correct lp64d_v1=0x43 CET_endbr64=1 ALU_imm8_imm32=1 x86_ModRM_SIB_disp=1 x86_test_cmp_alu_memory=1 x86_scaled_index_SIB=1 LA_jr=1 LA_scaled_ptr14=1 LA_imm12_shift_upper20=1 invalid=reject'
