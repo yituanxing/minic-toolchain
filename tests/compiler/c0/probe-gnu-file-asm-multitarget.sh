@@ -608,7 +608,7 @@ SRC
 typedef unsigned long u64;
 void *linux_uaccess_mask_ptr(const void *p) {
     void *safe;
-    __asm__ __volatile__("bic %0, %1, %2"
+    __asm__ __volatile__("\tbic\t%0, %1, %2\\n"
                          : "=r"(safe) : "r"(p), "i"(((1UL) << (55))));
     return safe;
 }
@@ -635,7 +635,7 @@ SRC
         case "$invalid" in
             wrong_mask) mask='((1UL) << 54)'; input=i; instruction='bic %0, %1, %2'; clobber='' ;;
             register_constraint) mask='((1UL) << 55)'; input=r; instruction='bic %0, %1, %2'; clobber='' ;;
-            hidden_svc) mask='((1UL) << 55)'; input=i; instruction='bic %0, %1, %2; svc #0'; clobber='' ;;
+            hidden_svc) mask='((1UL) << 55)'; input=i; instruction='bic %0, %1, %2\\n svc #0'; clobber='' ;;
             memory_clobber) mask='((1UL) << 55)'; input=i; instruction='bic %0, %1, %2'; clobber=': "memory"' ;;
         esac
         cat > "$work/aarch64-uaccess-bic-bad-$invalid.i" <<SRC
