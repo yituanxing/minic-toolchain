@@ -134,13 +134,11 @@ bool minic_multi_direct_write_program(
         core_function_count != program->function_count)
         return minic_multi_direct_fail(diagnostic, path, config->display_name,
                                        "invalid Core or target configuration");
-    if (program->file_asm_count != 0U)
-        return minic_multi_direct_fail(diagnostic, path, config->display_name,
-                                       "file asm not supported");
     {
         const MinicProgramEmitConfig emit = {
             direct_visit_global, direct_visit_function,
-            NULL, NULL, config->gnu_stack_note, direct_finalize,
+            NULL, minic_program_emit_source_file_asm_stage,
+            config->gnu_stack_note, direct_finalize,
             MINIC_PROGRAM_FUNCTION_LIVE_DEFINITIONS, census
         };
         success = minic_program_emit_write(
