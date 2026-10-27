@@ -6,6 +6,8 @@
  * belong to x86. The shared compiler sees only Core operand roles. */
 bool minic_x86_64_qualify_inline_asm(
     const MinicC0Program *, const MinicInlineAsm *, MinicTargetInlineAsmContract *);
+/* Qualified x86 per-cpu stable GS segment read, exact GNU p input. */
+bool minic_x86_64_asm_percpu_stable_template(const char *, size_t);
 bool minic_x86_64_asm_mulacc_template(const char *, size_t);
 bool minic_x86_64_asm_muldiv_template(const char *, size_t);
 /* The Linux __ffs / __fls 64-bit GNU bit-scan family is ISA-owned.
