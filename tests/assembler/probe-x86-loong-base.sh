@@ -323,6 +323,14 @@ entry_la:
     movcf2gr $r15, $fcc7
     vslti.b $vr12, $vr4, 0
     vslti.d $vr12, $vr4, -16
+    vshuf.b $vr4, $vr22, $vr22, $vr4
+    vbitsel.v $vr0, $vr1, $vr2, $vr3
+    xvshuf.b $xr0, $xr2, $xr3, $xr4
+    xvbitsel.v $xr4, $xr1, $xr2, $xr0
+    movgr2cf $fcc0, $r14
+    movgr2cf $fcc7, $r15
+    xvori.b $xr2, $xr0, 0
+    xvxori.b $xr8, $xr9, 255
     la.pcrel $r12, example_percpu
     la.pcrel $r13, sample_kernel_sp
     movfcsr2gr $r13, $fcsr0
@@ -666,6 +674,10 @@ for bad in 'li.w $r4, -2049' \
            'movgr2fr.d $f32, $r13' \
            'rotr.w $r1, $r2, 6' \
            'tlbrd $r1' \
+           'vshuf.b $vr0, $vr1, $vr2, $xr3' \
+           'xvshuf.b $xr0, $xr1, $xr2, $vr3' \
+           'movgr2cf $fcc8, $r14' \
+           'xvori.b $xr0, $xr1, 256' \
            'vsrli.b $vr1, $vr2, 8' \
            'xvxor.v $xr32, $xr0, $xr1' \
            'movcf2gr $r1, $fcc8' \

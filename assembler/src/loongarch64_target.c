@@ -630,6 +630,32 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
         m->operands[1].reg=rj;
         goto done;
     }
+    if(n==2U && !strcmp(s->op,"movgr2cf") &&
+       la_special_reg(t[0],"$fcc",7U,&rd) &&
+       la_reg(t[1],&rj)) {
+        m->count=2U;
+        m->encoding=UINT32_C(0x0114d800)|(rj<<5U)|rd;
+        goto done;
+    }
+    /* LASX unsigned 8-bit immediate logical family, X-vector separate. */
+    if(n==3U && la_special_reg(t[0],"$xr",31U,&rd) &&
+       la_special_reg(t[1],"$xr",31U,&rj)) {
+        static const struct {const char *name;uint32_t opcode;} masks[]={
+            {"xvandi.b",UINT32_C(0x77d00000)},
+            {"xvori.b",UINT32_C(0x77d40000)},
+            {"xvxori.b",UINT32_C(0x77d80000)},
+            {"xvnori.b",UINT32_C(0x77dc0000)}
+        };
+        uint64_t imm;
+        if(minias_eval_u64_expression(t[2],&imm) && imm<=255U)
+            for(i=0U;i<sizeof(masks)/sizeof(masks[0]);++i)
+                if(!strcmp(s->op,masks[i].name)) {
+                    m->count=3U;
+                    m->encoding=masks[i].opcode |
+                        ((uint32_t)imm<<10U)|(rj<<5U)|rd;
+                    goto done;
+                }
+    }
     if(n==3U && !strcmp(s->op,"invtlb") &&
        la_reg(t[1],&rj) && la_reg(t[2],&rk)) {
         uint64_t operation;
@@ -686,6 +712,34 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
                     m->operands[0].immediate=v;
                     goto done;
                 }
+        }
+    }
+    /* Genuine four-vector operand format v0/v5/v10/v15; not a
+     * generic three-register shortcut. GNU VSHUF.B and vector BITSEL. */
+    if(n==4U && la_special_reg(t[0],"$vr",31U,&rd) &&
+       la_special_reg(t[1],"$vr",31U,&rj) &&
+       la_special_reg(t[2],"$vr",31U,&rk)) {
+        unsigned fourth;
+        if(la_special_reg(t[3],"$vr",31U,&fourth) &&
+           (!strcmp(s->op,"vshuf.b") || !strcmp(s->op,"vbitsel.v"))) {
+            m->count=4U;
+            m->encoding=(!strcmp(s->op,"vshuf.b") ?
+                        UINT32_C(0x0d500000):UINT32_C(0x0d100000)) |
+                         (fourth<<15U)|(rk<<10U)|(rj<<5U)|rd;
+            goto done;
+        }
+    }
+    if(n==4U && la_special_reg(t[0],"$xr",31U,&rd) &&
+       la_special_reg(t[1],"$xr",31U,&rj) &&
+       la_special_reg(t[2],"$xr",31U,&rk)) {
+        unsigned fourth;
+        if(la_special_reg(t[3],"$xr",31U,&fourth) &&
+           (!strcmp(s->op,"xvshuf.b") || !strcmp(s->op,"xvbitsel.v"))) {
+            m->count=4U;
+            m->encoding=(!strcmp(s->op,"xvshuf.b") ?
+                        UINT32_C(0x0d600000):UINT32_C(0x0d200000)) |
+                         (fourth<<15U)|(rk<<10U)|(rj<<5U)|rd;
+            goto done;
         }
     }
     if(n==4U && la_reg(t[0],&rd) && la_reg(t[1],&rj)) {
