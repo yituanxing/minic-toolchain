@@ -785,6 +785,14 @@ bool minic_target_info_inline_asm_register_clobber_supported(const MinicTargetIn
                ((name[0] == 'a' && name[1] >= '0' && name[1] <= '7') ||
                 (name[0] == 't' && name[1] >= '0' && name[1] <= '6'));
     }
+    if (target->architecture == MINIC_TARGET_ARCH_LOONGARCH64) {
+        /* LoongArch LP64D names t0..t8 as caller-saved scratch registers.
+         * This is syntax admission only. Core and the LoongArch emitter
+         * must still qualify the actual operand, template, and clobber
+         * combination before emitting an instruction. */
+        return name_length == 2U && name[0] == 't' &&
+               name[1] >= '0' && name[1] <= '8';
+    }
     if (target->architecture != MINIC_TARGET_ARCH_RISCV64) return false;
     /* TargetConstraint v1 keeps temporary registers available to the current
      * inline-asm operand allocator while also recognizing the RV64 argument
@@ -801,17 +809,29 @@ bool minic_target_info_inline_asm_immediate_constraint_supported(const MinicTarg
                                                                  size_t constraint_length,
                                                                  int64_t value) {
     if (target == NULL || constraint == NULL || constraint_length != 1U ||
-        constraint[0] != 'I' || value < -2048 || value > 2047) {
+        constraint[0] != 'I') {
         return false;
     }
-    /* GCC defines constraint I as signed 12-bit arithmetic immediate for
-     * BOTH RISC-V XLENs and LoongArch. Keep one range validator while the
-     * TargetInfo describes which ISAs actually own this spelling.
-     * AArch64/x86 use different I semantics; do not admit them accidentally.
-     * Parsing is NOT permission for unqualified Backend asm emission. */
-    return target->architecture == MINIC_TARGET_ARCH_RISCV64 ||
-           target->architecture == MINIC_TARGET_ARCH_RISCV32 ||
-           target->architecture == MINIC_TARGET_ARCH_LOONGARCH64;
+    switch (target->architecture) {
+    case MINIC_TARGET_ARCH_RISCV32:
+    case MINIC_TARGET_ARCH_RISCV64:
+    case MINIC_TARGET_ARCH_LOONGARCH64:
+        /* GCC: signed 12-bit immediate. */
+        return value >= -2048 && value <= 2047;
+    case MINIC_TARGET_ARCH_AARCH64:
+        /* AArch64 GCC: add/sub immediate encodes an unsigned imm12,
+         * optionally left-shifted 12. This admits Linux's "brk %0"
+         * operand 0x401 without borrowing RISC-V's signed range.
+         * A positive constraint result is not permission to emit an
+         * arbitrary inline-asm template: the target backend qualifies it. */
+        return (value >= 0 && value <= 4095) ||
+               (value >= 4096 && value <= 0xfff000 &&
+                (value & 4095) == 0);
+    default:
+        /* x86 I has a distinct shift-count range, and its backend has
+         * no qualified GNU I lowering path yet. Fail closed. */
+        return false;
+    }
 }
 
 /* The ABI owns the state-cursor representation; Core never tests an ISA.

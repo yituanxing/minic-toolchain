@@ -338,32 +338,40 @@ static int verify_fixed_register_target_contract(void) {
     return 0;
 }
 
-/* GCC RISC-V and LoongArch share signed-12 immediate I. An ISA's
- * argument parser must not invent a machine-independent I meaning:
- * x86-64 and AArch64 retain their own not-yet-qualified alternatives. */
+/* An identical GNU constraint letter is not an identical ISA predicate:
+ * RISC-V and LoongArch use signed imm12; AArch64 uses unsigned imm12 with
+ * optional left shift 12. Parser admission does not qualify ASM templates. */
 static int verify_gnu_asm_immediate_target_contract(void) {
-    static const char *names[] = {
+    static const char *const names[] = {
         "riscv32-linux", "riscv64-linux", "x86_64-linux",
         "aarch64-linux", "loongarch64-linux"
     };
     size_t i;
     for (i = 0U; i < sizeof(names) / sizeof(names[0]); ++i) {
         const MinicTargetInfo *target = minic_target_info_from_name(names[i]);
-        const bool supported = (i == 0U || i == 1U || i == 4U);
+        const bool signed12 = (i == 0U || i == 1U || i == 4U);
+        const bool arm = i == 3U;
         if (target == NULL ||
-            minic_target_info_inline_asm_immediate_constraint_supported(target, "I", 1U, -2048) != supported ||
-            minic_target_info_inline_asm_immediate_constraint_supported(target, "I", 1U, 0) != supported ||
-            minic_target_info_inline_asm_immediate_constraint_supported(target, "I", 1U, 18) != supported ||
-            minic_target_info_inline_asm_immediate_constraint_supported(target, "I", 1U, 2047) != supported ||
+            minic_target_info_inline_asm_immediate_constraint_supported(target, "I", 1U, -2048) != signed12 ||
+            minic_target_info_inline_asm_immediate_constraint_supported(target, "I", 1U, 0) != (signed12 || arm) ||
+            minic_target_info_inline_asm_immediate_constraint_supported(target, "I", 1U, 0x401) != (signed12 || arm) ||
+            minic_target_info_inline_asm_immediate_constraint_supported(target, "I", 1U, 2047) != (signed12 || arm) ||
             minic_target_info_inline_asm_immediate_constraint_supported(target, "I", 1U, -2049) ||
-            minic_target_info_inline_asm_immediate_constraint_supported(target, "I", 1U, 2048) ||
+            minic_target_info_inline_asm_immediate_constraint_supported(target, "I", 1U, 2048) != arm ||
+            minic_target_info_inline_asm_immediate_constraint_supported(target, "I", 1U, 4095) != arm ||
+            minic_target_info_inline_asm_immediate_constraint_supported(target, "I", 1U, 4096) != arm ||
+            minic_target_info_inline_asm_immediate_constraint_supported(target, "I", 1U, 0xfff000) != arm ||
+            minic_target_info_inline_asm_immediate_constraint_supported(target, "I", 1U, 0x100001) ||
+            minic_target_info_inline_asm_immediate_constraint_supported(target, "I", 1U, 0x1000000) ||
             minic_target_info_inline_asm_immediate_constraint_supported(target, "K", 1U, 18) ||
-            minic_target_info_inline_asm_immediate_constraint_supported(target, "II", 2U, 18)) {
+            minic_target_info_inline_asm_immediate_constraint_supported(target, "II", 2U, 18) ||
+            minic_target_info_inline_asm_register_clobber_supported(target, "t0", 2U) !=
+                (i == 0U || i == 1U || i == 4U)) {
             (void)fprintf(stderr, "GNU_ASM_IMMEDIATE_TARGET=FAIL target=%s\n", names[i]);
             return 1;
         }
     }
-    (void)puts("GNU_ASM_IMMEDIATE_TARGET=PASS rv32_rv64_loongarch signed12 boundaries x86_arm_fail_closed");
+    (void)puts("GNU_ASM_IMMEDIATE_TARGET=PASS signed12_rv_loong arm_unsigned12_opt_shift x86_fail_closed");
     return 0;
 }
 
