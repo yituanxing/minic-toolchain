@@ -442,7 +442,12 @@ MinicCoreLowerStatus core_asm_try_structured_roles_and_asm_goto(
        Core values, objects, or instructions behind. Only after every operand
        role and the numeric template are proven do we materialize operands. */
     if (source->is_volatile && !source->is_goto && source->template_text != NULL &&
-        source->label_count == 0U &&
+        /* A zero-byte GNU template must use the existing empty effect
+         * semantics, not StructuredInlineAsm (Core verifier and machine
+         * emitters correctly require a real hardware instruction).
+         * This is the common source of Linux BPF empty volatile +r
+         * lowering failures: early general dispatch captured the form. */
+        source->template_length != 0U && source->label_count == 0U &&
         source->output_count <= MINIC_CORE_STRUCTURED_INLINE_ASM_OPERAND_LIMIT &&
         source->input_count <= MINIC_CORE_STRUCTURED_INLINE_ASM_OPERAND_LIMIT - source->output_count &&
         source->output_count + source->input_count != 0U &&
