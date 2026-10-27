@@ -1181,6 +1181,18 @@ minic_core_lower_switch(MinicCoreLowerContext *context, const MinicStatement *st
                 for (k = first; k < limit; ++k) {
                     if (core_switch_dead_prefix_has_reentry(
                             context, body->statements[k], 0U)) {
+                        if (getenv("MINIC_SWITCH_TRACE") &&
+                            context->source_function &&
+                            strcmp(context->source_function->name,
+                                   "suffix_after_return") == 0) {
+                            const MinicStatement *blocked =
+                                minic_c0_program_statement(
+                                    context->body->program, body->statements[k]);
+                            fprintf(stderr,
+                                    "MINIC_SWITCH_TRACE stage=suffix-block later=%zu k=%zu kind=%d id=%u\n",
+                                    later, k, blocked ? (int)blocked->kind : -1,
+                                    (unsigned)body->statements[k]);
+                        }
                         safe = false;
                         break;
                     }
