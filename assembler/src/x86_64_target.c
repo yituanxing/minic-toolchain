@@ -200,7 +200,7 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
         {"xorq",0x31,0x33,true},{"xorl",0x31,0x33,false},
         {"leaq",0,0x8d,true},{"leal",0,0x8d,false}
     };
-    MiniAsMCInst *m=calloc(1U,sizeof(*m)+2U*sizeof(MiniAsMCOperand));
+    MiniAsMCInst *m=calloc(1U,sizeof(*m)+3U*sizeof(MiniAsMCOperand));
     unsigned i, rs, rd;
     bool ws, wd;
     char src[48],dst[48];
