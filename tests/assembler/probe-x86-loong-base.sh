@@ -92,11 +92,13 @@ readelf -Wr "$work/x86-gnu.o" >"$work/x86-gnu-rel.txt"
 grep -q R_X86_64_PLT32 "$work/x86-gnu-rel.txt"
 grep -q R_X86_64_PC32 "$work/x86-gnu-rel.txt"
 # GNU and MiniAS must agree on every relocation type, offset, addend.
-readelf -Wr "$work/x86-mini.o" | grep R_X86_64_ |
-    sed -E 's/^[[:space:]]*[0-9a-f]+[[:space:]]+[0-9a-f]+[[:space:]]+//' >"$work/x86-mini-kinds.txt"
-readelf -Wr "$work/x86-gnu.o" | grep R_X86_64_ |
-    sed -E 's/^[[:space:]]*[0-9a-f]+[[:space:]]+[0-9a-f]+[[:space:]]+//' >"$work/x86-gnu-kinds.txt"
-cmp "$work/x86-mini-kinds.txt" "$work/x86-gnu-kinds.txt"
+# GNU GAS and MiniELF may serialize RELA entries in different orders.
+# Compare exact relocation offset, type, symbol, and addend after sorting.
+readelf -Wr "$work/x86-mini.o" | awk '$3 ~ /^R_X86_64_/ {print $1,$3,$5,$6,$7}' |
+    LC_ALL=C sort >"$work/x86-mini-kinds.txt"
+readelf -Wr "$work/x86-gnu.o" | awk '$3 ~ /^R_X86_64_/ {print $1,$3,$5,$6,$7}' |
+    LC_ALL=C sort >"$work/x86-gnu-kinds.txt"
+diff -u "$work/x86-gnu-kinds.txt" "$work/x86-mini-kinds.txt"
 
 cat > "$work/la.s" <<'ASM_LA'
 .text
