@@ -16,6 +16,24 @@ cat > "$work/x86.s" <<'ASM_X'
 entry_x:
     nop
     endbr64
+    cs
+    nop
+    rep
+    nop
+    repz
+    nop
+    repne
+    nop
+    data16
+    nop
+    rex.W
+    nop
+    call *%rax
+    callq *%r11
+    jmp *%r10
+    jmpq *%r13
+    push %r12
+    pop %r12
     pushq %rbp
     movq %rsp,%rbp
     movl $42,%eax
@@ -388,6 +406,8 @@ for bad in 'movq %rax, (%eax)' \
            'cmpb $256, (%rax)' \
            'movq %rax, (,%rsp,8)' \
            'cmove %r8, %eax' \
+           'call *%eax' \
+           'jmp *%ecx' \
            'shrq %dl, %rax' \
            'movl %ds:pcpu_hot(%rip), %eax' \
            'movq %gs:bogus(%r8,%r9,5), %rax'; do

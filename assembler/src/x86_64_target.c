@@ -8,7 +8,7 @@
 
 /* A first, fail-closed GNU AT&T SysV x86-64 target. All common expression,
  * symbol, section, fragment, and ELF handling lives outside this file. */
-enum { X64_ZERO = 1, X64_REG_BINARY, X64_STACK, X64_MOV_IMM32, X64_ENDBR64, X64_ALU_IMM, X64_REG_MEMORY, X64_BRANCH, X64_IMM_MEMORY, X64_MOVQ_IMMREG, X64_MOVABS_IMMREG, X64_SETCC, X64_BINARY8, X64_MOVSLQ, X64_MOVZX8, X64_SHIFT_IMM, X64_TEST8_IMM, X64_PUSH_IMM, X64_CMOV_REG, X64_SHIFT_CL, X64_UNARY };
+enum { X64_ZERO = 1, X64_REG_BINARY, X64_STACK, X64_MOV_IMM32, X64_ENDBR64, X64_ALU_IMM, X64_REG_MEMORY, X64_BRANCH, X64_IMM_MEMORY, X64_MOVQ_IMMREG, X64_MOVABS_IMMREG, X64_SETCC, X64_BINARY8, X64_MOVSLQ, X64_MOVZX8, X64_SHIFT_IMM, X64_TEST8_IMM, X64_PUSH_IMM, X64_CMOV_REG, X64_SHIFT_CL, X64_UNARY, X64_INDIRECT_REG };
 
 static bool x64_register(const char *text, unsigned *reg, bool *wide) {
     static const char *const names64[16] = {
@@ -218,6 +218,13 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
         {"pause",{0xf3,0x90},2},
         {"cltq",{0x48,0x98},2},{"cqto",{0x48,0x99},2},
         {"lock",{0xf0},1},
+        /* GNU Linux .s uses standalone segment/repeat/operand prefixes.
+         * They are 1-byte instruction fragments, NOT pseudo section state. */
+        {"cs",{0x2e},1},{"ds",{0x3e},1},{"es",{0x26},1},
+        {"ss",{0x36},1},{"fs",{0x64},1},{"gs",{0x65},1},
+        {"rep",{0xf3},1},{"repe",{0xf3},1},{"repz",{0xf3},1},
+        {"repne",{0xf2},1},{"repnz",{0xf2},1},
+        {"data16",{0x66},1},{"addr32",{0x67},1},{"rex.W",{0x48},1},
         {"pushf",{0x9c},1},{"pushfq",{0x9c},1},
         {"popf",{0x9d},1},{"popfq",{0x9d},1},
         {"rep stosq",{0xf3,0x48,0xab},3},
@@ -510,10 +517,23 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
             goto done;
         }
     }
-    if ((!strcmp(s->op,"pushq") || !strcmp(s->op,"popq")) &&
+    if ((!strcmp(s->op,"call") || !strcmp(s->op,"callq") ||
+         !strcmp(s->op,"jmp") || !strcmp(s->op,"jmpq")) &&
+        s->args[0]=='*' &&
+        x64_register(s->args+1,&rs,&ws) && ws) {
+        m->opcode=X64_INDIRECT_REG;m->count=1U;
+        m->operands[0].kind=MINIAS_MC_REGISTER;
+        m->operands[0].reg=rs;m->operands[0].register_64=true;
+        m->encoding=(!strcmp(s->op,"call")||!strcmp(s->op,"callq"))?
+                    2U:4U;
+        goto done;
+    }
+    if ((!strcmp(s->op,"pushq") || !strcmp(s->op,"popq") ||
+         !strcmp(s->op,"push") || !strcmp(s->op,"pop")) &&
         x64_register(s->args,&rs,&ws) && ws) {
         m->opcode=X64_STACK;m->count=1U;m->operands[0].reg=rs;
-        m->encoding=!strcmp(s->op,"pushq")?0x50U:0x58U;goto done;
+        m->encoding=(!strcmp(s->op,"pushq") ||
+                     !strcmp(s->op,"push"))?0x50U:0x58U;goto done;
     }
     if (!strcmp(s->op,"movl") && x64_args2(s->args,src,dst) &&
         src[0]=='$' && x64_register(dst,&rd,&wd) && !wd) {
@@ -778,6 +798,8 @@ static bool x64_measure(MiniAs *as,const MiniAsStmt *s,uint32_t *size) {
             return true;
         }
         case X64_STACK: *size=(m->operands[0].reg>=8U)?2U:1U;return true;
+        case X64_INDIRECT_REG:
+            *size=m->operands[0].reg>=8U?3U:2U;return true;
         case X64_MOV_IMM32: *size=(m->operands[0].reg>=8U)?6U:5U;return true;
         case X64_REG_BINARY:
             *size=(m->operands[0].register_64 ||
@@ -1103,6 +1125,12 @@ static bool x64_encode(MiniAs *as,const MiniAsStmt *s) {
                 code[n++]=(unsigned char)((uint32_t)imm>>(8U*i));
             break;
         }
+        case X64_INDIRECT_REG:
+            r=m->operands[0].reg;
+            if(r>=8U)code[n++]=0x41U;
+            code[n++]=0xffU;
+            code[n++]=(unsigned char)(0xc0U|((m->encoding&7U)<<3U)|(r&7U));
+            break;
         case X64_STACK:
             r=m->operands[0].reg;
             if (r>=8U) code[n++]=0x41;
