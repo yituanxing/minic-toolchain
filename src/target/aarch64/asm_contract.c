@@ -1,4 +1,5 @@
 #include "target/aarch64/asm_contract.h"
+#include "frontend/const_eval.h"
 #include <string.h>
 /* Linux 6.6 array_index_mask_nospec: compare two unsigned LP64 words,
  * consume NZCV immediately with SBC, store the all-zero/all-one mask. */
@@ -454,12 +455,18 @@ bool minic_aarch64_qualify_inline_asm(
             program, src->inputs[0].expression);
         const MinicExpression *mask = minic_c0_program_expression(
             program, src->inputs[1].expression);
+        MinicConstValue constant;
+        const MinicTargetInfo *target = minic_target_info_for_architecture(
+            MINIC_TARGET_ARCH_AARCH64);
         if (out && arg && mask &&
             out->value_category == MINIC_VALUE_LVALUE &&
             !minic_type_is_const(out->type) &&
             minic_type_is_pointer(out->type) &&
             minic_type_is_pointer(arg->type) &&
-            minic_type_is_integer(mask->type)) {
+            minic_type_is_integer(mask->type) &&
+            minic_const_eval_integer(program, target,
+                                    src->inputs[1].expression, &constant) &&
+            constant.bits == (UINT64_C(1) << 55)) {
             contract->operand_count = 3U;
             contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
             contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
