@@ -167,14 +167,9 @@ static bool parse_gnu_inline_asm_input(MinicParser *parser, MinicInlineAsmId inl
             !minic_target_info_inline_asm_immediate_constraint_supported(
                 parser->target_info, constraint, constraint_length, immediate_value)) {
             free(constraint);
-            if (parser->target_info != NULL &&
-                parser->target_info->architecture == MINIC_TARGET_ARCH_AARCH64) {
-                minic_parser_error(parser,
-                    "GNU asm 'I' input requires an AArch64 unsigned imm12 (optional shift 12)");
-            } else {
-                minic_parser_error(parser,
-                    "GNU asm 'I' input requires a signed 12-bit integer constant");
-            }
+            minic_parser_error(
+                parser, "%s",
+                minic_target_info_inline_asm_immediate_constraint_diagnostic(parser->target_info));
             return false;
         }
         (void)memset(&folded, 0, sizeof(folded));

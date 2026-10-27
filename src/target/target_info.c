@@ -834,6 +834,14 @@ bool minic_target_info_inline_asm_immediate_constraint_supported(const MinicTarg
     }
 }
 
+const char *minic_target_info_inline_asm_immediate_constraint_diagnostic(
+    const MinicTargetInfo *target) {
+    if (target != NULL && target->architecture == MINIC_TARGET_ARCH_AARCH64) {
+        return "GNU asm 'I' input requires an AArch64 unsigned imm12 (optional shift 12)";
+    }
+    return "GNU asm 'I' input requires a signed 12-bit integer constant";
+}
+
 /* The ABI owns the state-cursor representation; Core never tests an ISA.
  * Other structured cursor ABIs must explicitly implement their own policy. */
 bool minic_target_info_variadic_state_copy_type_supported(
