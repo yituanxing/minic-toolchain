@@ -683,7 +683,10 @@ static const char *core_inline_asm_specialized_symbolic_name(
         minic_const_value_as_int64(
             context->body->program, context->target, &constant, &value) &&
         (!core_inline_asm_constraint_is(operand, "rK") ||
-         (value >= 0 && value <= 31))) {
+         (value >= 0 && value <= 31)) &&
+        (!core_inline_asm_constraint_is(operand, "I") ||
+         minic_target_info_inline_asm_immediate_constraint_supported(
+             context->target, "I", 1U, value))) {
         int written;
 
         written = snprintf(integer_text, integer_capacity, "%" PRId64, value);
@@ -703,7 +706,9 @@ static const char *core_inline_asm_specialized_symbolic_name(
             length_out)) {
         return true;
     }
-    if (core_inline_asm_constraint_is(operand, "rK")) {
+    if (core_inline_asm_constraint_is(operand, "rK") ||
+        core_inline_asm_constraint_is(operand, "I")) {
+        /* GNU I is numeric ISA data, never a relocatable address. */
         return false;
     }
     symbol = core_inline_asm_symbolic_immediate_name(

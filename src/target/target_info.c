@@ -834,6 +834,15 @@ bool minic_target_info_inline_asm_immediate_constraint_supported(const MinicTarg
     }
 }
 
+bool minic_target_info_inline_asm_immediate_may_defer(const MinicTargetInfo *target) {
+    /* GNU inline constant operands are often formal-parameter expressions
+     * until __always_inline__ specialization. Neither acceptance nor emitted
+     * ISA is implied here; Core must resolve the immediate or reject. */
+    return target != NULL &&
+           (target->architecture == MINIC_TARGET_ARCH_LOONGARCH64 ||
+            target->architecture == MINIC_TARGET_ARCH_AARCH64);
+}
+
 const char *minic_target_info_inline_asm_immediate_constraint_diagnostic(
     const MinicTargetInfo *target) {
     if (target != NULL && target->architecture == MINIC_TARGET_ARCH_AARCH64) {

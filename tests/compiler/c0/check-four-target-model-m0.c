@@ -352,6 +352,7 @@ static int verify_gnu_asm_immediate_target_contract(void) {
         const bool signed12 = (i == 0U || i == 1U || i == 4U);
         const bool arm = i == 3U;
         if (target == NULL ||
+            minic_target_info_inline_asm_immediate_may_defer(target) != (arm || i == 4U) ||
             minic_target_info_inline_asm_immediate_constraint_supported(target, "I", 1U, -2048) != signed12 ||
             minic_target_info_inline_asm_immediate_constraint_supported(target, "I", 1U, 0) != (signed12 || arm) ||
             minic_target_info_inline_asm_immediate_constraint_supported(target, "I", 1U, 0x401) != (signed12 || arm) ||

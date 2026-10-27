@@ -158,31 +158,48 @@ static bool parse_gnu_inline_asm_input(MinicParser *parser, MinicInlineAsmId inl
         MinicExpression folded;
         MinicSourceSpan operand_span;
         int64_t immediate_value;
+        bool is_constant;
 
         operand_span = operand_expression->span;
-        if (!minic_const_eval_integer(
-                parser->program, parser->target_info, operand_id, &constant) ||
-            !minic_const_value_as_int64(
-                parser->program, parser->target_info, &constant, &immediate_value) ||
-            !minic_target_info_inline_asm_immediate_constraint_supported(
-                parser->target_info, constraint, constraint_length, immediate_value)) {
+        is_constant = minic_const_eval_integer(
+            parser->program, parser->target_info, operand_id, &constant) &&
+            minic_const_value_as_int64(
+                parser->program, parser->target_info, &constant, &immediate_value);
+        if (is_constant) {
+            /* Even in an inline helper, a known but illegal immediate must
+             * not be accepted as deferred target assembly. */
+            if (!minic_target_info_inline_asm_immediate_constraint_supported(
+                    parser->target_info, constraint, constraint_length, immediate_value)) {
+                free(constraint);
+                minic_parser_error(
+                    parser, "%s",
+                    minic_target_info_inline_asm_immediate_constraint_diagnostic(
+                        parser->target_info));
+                return false;
+            }
+            (void)memset(&folded, 0, sizeof(folded));
+            folded.kind = MINIC_EXPRESSION_INTEGER;
+            folded.span = operand_span;
+            folded.type = constant.type;
+            folded.value_category = MINIC_VALUE_RVALUE;
+            folded.value.integer_value = immediate_value;
+            if (!minic_parser_add_expression(parser, &folded, &operand_id)) {
+                free(constraint);
+                minic_parser_error(parser, "cannot store GNU asm immediate operand");
+                return false;
+            }
+        } else if (!minic_target_info_inline_asm_immediate_may_defer(parser->target_info)) {
             free(constraint);
             minic_parser_error(
                 parser, "%s",
-                minic_target_info_inline_asm_immediate_constraint_diagnostic(parser->target_info));
+                minic_target_info_inline_asm_immediate_constraint_diagnostic(
+                    parser->target_info));
             return false;
         }
-        (void)memset(&folded, 0, sizeof(folded));
-        folded.kind = MINIC_EXPRESSION_INTEGER;
-        folded.span = operand_span;
-        folded.type = constant.type;
-        folded.value_category = MINIC_VALUE_RVALUE;
-        folded.value.integer_value = immediate_value;
-        if (!minic_parser_add_expression(parser, &folded, &operand_id)) {
-            free(constraint);
-            minic_parser_error(parser, "cannot store GNU asm immediate operand");
-            return false;
-        }
+        /* For a GNU always-inline function, a target I-constraint may become
+         * an integer constant only after caller specialization. Retain that
+         * expression. Core must validate the *actual* ISA range after facts
+         * and inlining; an unresolved I is never silently emitted. */
     }
     if (!minic_c0_program_add_inline_asm_input(parser->program,
                                                inline_asm_id,
