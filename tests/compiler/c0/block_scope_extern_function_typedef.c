@@ -4,7 +4,7 @@
 typedef void (ttbr_replace_func)(unsigned long);
 typedef unsigned long (read_counter_func)(void);
 
-static unsigned long select_replacer(unsigned long value) {
+unsigned long select_replacer(unsigned long value) {
     extern ttbr_replace_func idmap_cpu_replace_ttbr1;
     extern read_counter_func read_counter;
     ttbr_replace_func *replace = idmap_cpu_replace_ttbr1;
