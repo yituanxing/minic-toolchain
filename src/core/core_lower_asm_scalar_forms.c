@@ -1409,7 +1409,16 @@ MinicCoreLowerStatus core_asm_try_empty_barrier_scalar_forms(
             if (local == NULL) {
                 { *handled = true; return MINIC_CORE_LOWER_ERROR; }
             }
-            if (!local->is_array && !local->is_register_storage &&
+            if (!local->is_array &&
+                /* GNU local register storage is valid for empty +r. The
+                 * compiler must reject only explicit physical hard-register
+                 * bindings here; no instruction can alter an ordinary C
+                 * register variable in an empty template. Keep +rm's
+                 * original storage restrictions unchanged. */
+                (!local->is_register_storage ||
+                 (core_inline_asm_constraint_is(output, "+r") &&
+                  minic_c0_program_local_fixed_register_binding(
+                      context->body->program, output_expression->value.local_id) == NULL)) &&
                 minic_type_equal(local->type, output_expression->type) &&
                 !minic_type_is_const(local->type) && !minic_type_is_volatile(local->type)) {
                 /* A nonvolatile empty read/write has no physical machine
