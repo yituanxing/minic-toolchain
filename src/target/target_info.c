@@ -736,13 +736,15 @@ bool minic_target_info_fixed_register_supported(const MinicTargetInfo *target,
      * automatically qualified. */
     if (target->architecture == MINIC_TARGET_ARCH_AARCH64)
         return name_length == 2U && memcmp(name, "sp", 2U) == 0;
-    /* Original GNU Linux LoongArch global register variables use dollar-
-     * prefixed architectural TP/SP. Admit ONLY live reads of those reserved
-     * registers, not machine scratch aliases or writes. */
+    /* Original Linux 6.6.143's LoongArch global variables bind TP, SP and
+     * $r21 (per-CPU offset). Kernel ABI reserves r21, so it is safe to READ
+     * these architectural registers as live Core values. Never admit writes
+     * or caller/scratch bindings here. */
     if (target->architecture == MINIC_TARGET_ARCH_LOONGARCH64)
-        return name_length == 3U &&
-               (memcmp(name, "$tp", 3U) == 0 ||
-                memcmp(name, "$sp", 3U) == 0);
+        return (name_length == 3U &&
+                (memcmp(name, "$tp", 3U) == 0 ||
+                 memcmp(name, "$sp", 3U) == 0)) ||
+               (name_length == 4U && memcmp(name, "$r21", 4U) == 0);
     if (target->architecture != MINIC_TARGET_ARCH_RISCV64 &&
         target->architecture != MINIC_TARGET_ARCH_RISCV32) return false;
     /* Both RISC-V backends reserve sp/tp architecturally. RV32 shares
@@ -759,11 +761,23 @@ bool minic_target_info_fixed_register_supported(const MinicTargetInfo *target,
 bool minic_target_info_local_fixed_register_supported(const MinicTargetInfo *target,
                                                       const char *name,
                                                       size_t name_length) {
-    if (target == NULL ||
-        (target->architecture != MINIC_TARGET_ARCH_RISCV64 &&
-         target->architecture != MINIC_TARGET_ARCH_RISCV32) || name == NULL) {
-        return false;
+    if (target == NULL || name == NULL) return false;
+    if (target->architecture == MINIC_TARGET_ARCH_LOONGARCH64) {
+        /* These are the ONLY hard-register local names in the original
+         * 994-file GNU Linux 6.6.143 Kbuild source census. Local bindings
+         * are C object declarations, not unconditional machine operands.
+         * Structured GNU asm must independently qualify the physical
+         * binding/constraint/clobber; the Loong machine emitter currently
+         * rejects unqualified asm instead of silently discarding a binding.
+         * In particular, ordinary t1..t8 scratch locals are NOT admitted. */
+        return (name_length == 2U &&
+                ((name[0] == 't' && name[1] == '0') ||
+                 (name[0] == 'a' &&
+                  (name[1] == '0' || name[1] == '1' || name[1] == '7'))));
     }
+    if (target->architecture != MINIC_TARGET_ARCH_RISCV64 &&
+        target->architecture != MINIC_TARGET_ARCH_RISCV32)
+        return false;
     return name_length == 2U && name[0] == 'a' && name[1] >= '0' && name[1] <= '7';
 }
 

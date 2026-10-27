@@ -68,14 +68,20 @@ bool minic_loongarch64_emit_residual_instruction(
             if (dynamic_frame ||
                 !minic_multi_direct_fixed_register_read_shape(
                     program, target, fn, ins, &binding) ||
-                binding->register_name_length != 3U)
+                (binding->register_name_length != 3U &&
+                 binding->register_name_length != 4U))
                 return minic_multi_direct_machine_reject(
                     fn, "loongarch64", name, "fixed_register_read",
                     reject_block, reject_ins, __LINE__);
-            if (memcmp(binding->register_name, "$tp", 3U) == 0)
+            if (binding->register_name_length == 3U &&
+                memcmp(binding->register_name, "$tp", 3U) == 0)
                 physical = "$tp";
-            else if (memcmp(binding->register_name, "$sp", 3U) == 0)
+            else if (binding->register_name_length == 3U &&
+                     memcmp(binding->register_name, "$sp", 3U) == 0)
                 physical = "$sp";
+            else if (binding->register_name_length == 4U &&
+                     memcmp(binding->register_name, "$r21", 4U) == 0)
+                physical = "$r21";
             else
                 return minic_multi_direct_machine_reject(
                     fn, "loongarch64", name, "fixed_register_read",

@@ -1,0 +1,1 @@
+2026-10-27 LoongArch 994 owner census: original GNU kernel local t0/a0/a1/a7 + global $r21 admission, exact-head MiniC unchanged .i inputs. Four-architecture native/QEMU contracts and strict-ABI negatives must remain passing. Diagnose next first-error groups without claiming complete GNU AS/link/P1.\n

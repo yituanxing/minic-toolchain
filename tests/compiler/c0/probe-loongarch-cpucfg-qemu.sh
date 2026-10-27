@@ -68,6 +68,80 @@ rc=$?
 set -e
 test "$rc" -eq 42 || { echo "LoongArch fixed TP/SP QEMU failed: $rc" >&2; exit 1; }
 printf '%s\n' 'LOONGARCH_FIXED_TP_SP_GNU_QEMU=PASS live_tp=1 live_sp=1 shared_core=1'
+# In original Linux 6.6.143 the per-CPU offset is a global register
+# variable on the architecturally reserved $r21. Its live value is compared
+# against a GNU-compiled independent C reference; do not substitute a global
+# ELF object or hardcode zero.
+cat > "$work/r21.i" <<'EOF'
+register unsigned long minic_percpu_offset asm("$r21");
+unsigned long minic_read_percpu(void) { return minic_percpu_offset; }
+EOF
+cat > "$work/r21-driver.c" <<'EOF'
+register unsigned long oracle_percpu asm("$r21");
+extern unsigned long minic_read_percpu(void);
+int main(void) { return minic_read_percpu() == oracle_percpu ? 42 : 1; }
+EOF
+"$cc" --target=loongarch64-linux -S "$work/r21.i" -o "$work/r21.s"
+grep -F '  move $t0, $r21' "$work/r21.s" >/dev/null
+"$gcc" -static "$work/r21-driver.c" -x assembler "$work/r21.s" \
+    -o "$work/r21.elf"
+set +e
+"$qemu" "$work/r21.elf"
+rc=$?
+set -e
+test "$rc" -eq 42 || { echo "LoongArch live r21 QEMU failed: $rc" >&2; exit 1; }
+# Local register variables that GCC uses for extended-asm input carriers must
+# remain syntactically admissible without inventing a new Core opcode. Their
+# normal C value flow still follows Common Core SSA; actual asm register
+# binding requires separate machine proof and is NOT implicitly accepted.
+cat > "$work/local-regs.i" <<'EOF'
+unsigned long minic_local_regs(unsigned long x) {
+    register unsigned long t asm("t0") = x + 1UL;
+    register unsigned long a asm("a0") = t + 2UL;
+    register unsigned long b asm("a1") = a + 3UL;
+    register unsigned long c asm("a7") = b + 4UL;
+    return c;
+}
+EOF
+cat > "$work/local-driver.c" <<'EOF'
+extern unsigned long minic_local_regs(unsigned long);
+int main(void) { return minic_local_regs(32UL) == 42UL ? 42 : 1; }
+EOF
+"$cc" --target=loongarch64-linux -S "$work/local-regs.i" -o "$work/local-regs.s"
+"$gcc" -static "$work/local-driver.c" -x assembler "$work/local-regs.s" \
+    -o "$work/local-regs.elf"
+"$gcc" -static -x c "$work/local-regs.i" "$work/local-driver.c" \
+    -o "$work/local-regs.gnu.elf"
+for mode in local-regs local-regs.gnu; do
+    set +e
+    "$qemu" "$work/$mode.elf"
+    rc=$?
+    set -e
+    test "$rc" -eq 42 || { echo "LoongArch local hardreg $mode returned $rc" >&2; exit 1; }
+done
+cat > "$work/invalid-local.i" <<'EOF'
+unsigned long bad(unsigned long x) {
+    register unsigned long unsupported asm("t1") = x;
+    return unsupported;
+}
+EOF
+if "$cc" --target=loongarch64-linux -S "$work/invalid-local.i" \
+    -o "$work/invalid-local.s" >"$work/invalid-local.log" 2>&1; then
+    echo 'LoongArch unqualified scratch local was incorrectly admitted' >&2
+    exit 1
+fi
+grep -F 'local fixed register binding is not supported' "$work/invalid-local.log" >/dev/null
+cat > "$work/invalid-global.i" <<'EOF'
+register unsigned long unsupported asm("$r20");
+unsigned long bad(void) { return unsupported; }
+EOF
+if "$cc" --target=loongarch64-linux -S "$work/invalid-global.i" \
+    -o "$work/invalid-global.s" >"$work/invalid-global.log" 2>&1; then
+    echo 'LoongArch unqualified global register was incorrectly admitted' >&2
+    exit 1
+fi
+grep -F 'fixed register binding is not supported' "$work/invalid-global.log" >/dev/null
+printf '%s\n' 'LOONGARCH_LINUX_FIXED_HARDREG_GNU_QEMU=PASS global_r21=1 four_local_names=1 rejected_others=1'
 cat > "$work/invalid-fixed.i" <<'EOF'
 register unsigned long invalid_machine_binding asm("$a0");
 unsigned long bad(void) { return invalid_machine_binding; }
