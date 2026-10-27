@@ -19,7 +19,9 @@ cat >"$work/vertical.s" <<'SRC'
 .globl _start
 .type _start, @function
 _start:
+#APP
     nop // AArch64 inline comment
+#NO_APP
     mov x0, #0
     bl after_call
     b exit_code
@@ -70,6 +72,9 @@ mc_operand_probe:
 .globl function_pointer
 function_pointer:
     .quad after_call
+    .hword 0x1234
+    .xword 0x1122334455667788
+    .xword after_call
 SRC
 "$MINIAS" --target=aarch64 -march=armv8-a -mabi=lp64 \
     -o "$work/mini.o" "$work/vertical.s"
@@ -79,6 +84,9 @@ SRC
 "$AARCH64_OBJCOPY" -j .text -O binary "$work/mini.o" "$work/mini-text.bin"
 "$AARCH64_OBJCOPY" -j .text -O binary "$work/gnu.o" "$work/gnu-text.bin"
 cmp "$work/mini-text.bin" "$work/gnu-text.bin"
+"$AARCH64_OBJCOPY" -j .data -O binary "$work/mini.o" "$work/mini-data.bin"
+"$AARCH64_OBJCOPY" -j .data -O binary "$work/gnu.o" "$work/gnu-data.bin"
+cmp "$work/mini-data.bin" "$work/gnu-data.bin"
 typed_a64_size="$("$AARCH64_READELF" -Ws "$work/mini.o" |
     awk '$NF == "mc_operand_probe" { print $3 }')"
 test "$typed_a64_size" = "8"

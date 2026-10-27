@@ -1768,7 +1768,7 @@ static unsigned int data_width(const char *op) {
         return 1U;
     }
     if (strcmp(op, ".half") == 0 || strcmp(op, ".short") == 0 ||
-        strcmp(op, ".value") == 0 ||
+        strcmp(op, ".hword") == 0 || strcmp(op, ".value") == 0 ||
         strcmp(op, ".2byte") == 0) {
         return 2U;
     }
@@ -1777,7 +1777,7 @@ static unsigned int data_width(const char *op) {
         return 4U;
     }
     if (strcmp(op, ".dword") == 0 || strcmp(op, ".quad") == 0 ||
-        strcmp(op, ".8byte") == 0) {
+        strcmp(op, ".xword") == 0 || strcmp(op, ".8byte") == 0) {
         return 8U;
     }
     return 0U;
@@ -3089,6 +3089,11 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
     /* GNU's preprocessed native .S contains CPP source line markers.
      * This form is common to all architectures; AArch64 also uses '#'
      * in real instruction immediates, so only strict # N "file" is metadata. */
+    /* GNU GCC/Clang inline-assembler boundaries are exact standalone
+     * source markers. AArch64 uses # for immediate operands, so do not
+     * treat arbitrary #foo or #number as a comment. */
+    if (strcmp(text, "#APP") == 0 || strcmp(text, "#NO_APP") == 0 ||
+        strcmp(text, "#NOAPP") == 0) return true;
     if (text[0] == '#' && isspace((unsigned char)text[1])) {
         const char *marker = text + 2;
         while (isspace((unsigned char)*marker)) ++marker;
