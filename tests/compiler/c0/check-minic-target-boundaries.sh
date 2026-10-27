@@ -80,6 +80,14 @@ has src/target/common/direct_program_emit.c 'ctx->config->elf_object_type'
 lacks src/target/common/direct_program_emit.c 'MINIC_TARGET_ARCH_AARCH64'
 has src/target/aarch64/codegen.c '"%function", "%object"'
 has src/target/aarch64/asm_contract.c 'aarch64_barrier_template('
+# Genuine Linux privileged alternative patch metadata and GNU/Q operand
+# ownership remain target-local. Common Core knows only output/memory input
+# operand roles and must never fake a TPIDR register load or patch table.
+has src/target/aarch64/asm_contract.c 'aarch64_linux_percpu_alternative_template('
+has src/target/aarch64/asm_contract.c '.pushsection .altinstructions'
+has src/target/backend.c '"bic", ".if"'
+lacks src/core/core_lower_asm_target.c 'tpidr_el1'
+lacks src/core/core_lower_asm_target.c '.altinstructions'
 has src/target/backend.c 'minic_loongarch64_qualify_inline_asm'
 has src/target/loongarch64/residual_emit.c 'minic_loongarch64_emit_qualified_structured_asm'
 has src/target/loongarch64/asm_contract.c 'loongarch64_dbar_hint'
