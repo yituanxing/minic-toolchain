@@ -89,10 +89,10 @@ jobs:
           set -Eeuo pipefail
           MINIC="$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic" \
           BUILD_DIR=build/minic-native-backend \
-            sh -x tests/compiler/c0/run-gnu-prefix-function-attributes.sh
+            sh tests/compiler/c0/run-gnu-prefix-function-attributes.sh
           MINIC="$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic" \
           BUILD_DIR=build/minic-native-backend \
-            sh -x tests/compiler/c0/run-gnu-inline-asm-operands.sh
+            sh tests/compiler/c0/run-gnu-inline-asm-operands.sh
 
       - name: Canonical target DataLayout record/global layout regression
         shell: bash

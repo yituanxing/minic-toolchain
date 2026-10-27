@@ -32,7 +32,7 @@ grep -F 'zstd_visibility_decl:' "$assembly" >/dev/null
 grep -F 'zstd_pure_decl:' "$assembly" >/dev/null
 grep -F 'zstd_hidden_visibility_definition:' "$assembly" >/dev/null
 grep -F '.hidden zstd_hidden_visibility_definition' "$assembly" >/dev/null
-grep -F 'prefix_plain_spelling_identity:' "$assembly" >/dev/null
+grep -F 'call_prefix_plain_spelling_identity:' "$assembly" >/dev/null
 grep -F '.globl externally_visible_decl' "$assembly" >/dev/null
 grep -F '.section .probe.externally-visible.text' "$assembly" >/dev/null
 grep -F 'externally_visible_object' "$assembly" >/dev/null
