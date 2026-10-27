@@ -250,7 +250,8 @@ static bool x64_parse_base_memory(const char *text, MiniAsMCMemory *out) {
 }
 
 static unsigned x64_disp_bytes(const MiniAsMCMemory *mem) {
-    if (mem->pc_relative || mem->address_space || !mem->has_base)return 4U;
+    /* Segment overrides prefix an address, not its ModR/M/SIB mode. */
+    if (mem->pc_relative || !mem->has_base)return 4U;
     if (mem->displacement==0 && (mem->base & 7U)!=5U) return 0U;
     return mem->displacement>=-128 && mem->displacement<=127 ? 1U : 4U;
 }
@@ -724,6 +725,29 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
                     2U:4U;
         goto done;
     }
+    /* Register-indirect and memory-indirect CALL/JMP share the Group-5
+     * ISA semantics. The latter uses the existing typed memory, PC32
+     * fixup, segment override and SIB encoder; no new Core path. */
+    if ((!strcmp(s->op,"call") || !strcmp(s->op,"callq") ||
+         !strcmp(s->op,"jmp") || !strcmp(s->op,"jmpq")) &&
+        s->args[0]=='*' && x64_is_mem_candidate(s->args+1)) {
+        MiniAsMCMemory parsed;
+        if (!x64_parse_base_memory(s->args+1,&parsed))goto invalid;
+        m->operands[1].memory=malloc(sizeof(parsed));
+        if (!m->operands[1].memory) {
+            free(parsed.symbol);free(m);
+            minias_set_error(as,"out-of-memory:x86-indirect-memory");
+            return false;
+        }
+        *m->operands[1].memory=parsed;
+        m->opcode=X64_REG_MEMORY;m->count=2U;
+        m->encoding=0xffU;
+        m->operands[0].kind=MINIAS_MC_REGISTER;
+        m->operands[0].reg=(!strcmp(s->op,"call") ||
+                            !strcmp(s->op,"callq"))?2U:4U;
+        m->operands[1].kind=MINIAS_MC_MEMORY;
+        goto done;
+    }
     if ((!strcmp(s->op,"pushq") || !strcmp(s->op,"popq") ||
          !strcmp(s->op,"push") || !strcmp(s->op,"pop")) &&
         x64_register(s->args,&rs,&ws) && ws) {
@@ -1148,8 +1172,9 @@ static bool x64_measure(MiniAs *as,const MiniAsStmt *s,uint32_t *size) {
                    ((m->encoding&0x200U) && m->operands[0].reg>=4U) ||
                    mem->base>=8U ||
                    (mem->has_index && mem->index>=8U)?1U:0U) +
-                  2U + (((mem->address_space && !mem->pc_relative) ||
-                          mem->has_index || (mem->base&7U)==4U)?1U:0U) +
+                  2U + ((!mem->pc_relative &&
+                          (!mem->has_base || mem->has_index ||
+                           (mem->base&7U)==4U))?1U:0U) +
                   x64_disp_bytes(mem);
             return true;
         }
@@ -1432,13 +1457,13 @@ static bool x64_encode(MiniAs *as,const MiniAsStmt *s) {
             /* Width markers 0x200/0x400 do not imply the 0F escape. */
             if(m->encoding&0x100U)code[n++]=0x0fU;
             code[n++]=(unsigned char)m->encoding;
-            code[n++]=(unsigned char)((((mem->pc_relative || mem->address_space)?0U:mod)<<6U)|
+            code[n++]=(unsigned char)((((mem->pc_relative || !mem->has_base)?0U:mod)<<6U)|
                 ((r&7U)<<3U)|
                 (mem->pc_relative?5U:
-                 mem->address_space?4U:mem->has_index?4U:low_base));
-            if(mem->address_space && !mem->pc_relative) {
-                code[n++]=0x25U; /* SIB: no base/index, signed disp32 */
-            } else if (!mem->pc_relative && (mem->has_index || low_base==4U)) {
+                 (!mem->has_base || mem->has_index || low_base==4U)?
+                     4U:low_base));
+            if (!mem->pc_relative &&
+                (!mem->has_base || mem->has_index || low_base==4U)) {
                 unsigned sib_scale=mem->scale==8U?3U:
                                    mem->scale==4U?2U:
                                    mem->scale==2U?1U:0U;
