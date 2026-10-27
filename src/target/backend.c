@@ -31,7 +31,7 @@ static bool emit_riscv64(const char *output_path, const MinicC0Program *program,
  * x86 MOV templates that are independently admitted by other contracts. */
 static const char *const x86_64_qualified_inputs[] = {"movq %%gs:"};
 static const char *const aarch64_qualified_inputs[] = {
-    "brk", "stlrb", "stlrh", "stlr", "msr",
+    "brk", "stlrb", "stlrh", "stlr", "msr", "bic",
     /* Linux LL/SC macros begin with a source comment: reserve their exact
      * opening signature so a rejected operand/hidden instruction can never
      * fall through to unqualified generic Core ASM. Other source comments
