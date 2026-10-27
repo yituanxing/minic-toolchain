@@ -56,9 +56,24 @@ MinicCoreLowerStatus core_asm_try_target_register_contract(
     }
     /* The observable output makes even a GNU nonvolatile CPUID semantically
      * effectful. Conservatively do not optimize or discard it. */
-    if (!minic_core_function_add_opaque_inline_asm(
-            ctx->function, normalized, length, true,
-            source->has_memory_clobber, &id)) {
+    /* A target-qualified +Q/+ZB memory RMW is a hardware side effect even
+     * when GNU lists no explicit "memory" clobber. The existing Core verifier
+     * requires its memory-readwrite effect to be represented explicitly;
+     * derive that property from the TARGET-QUALIFIED operand role, not from
+     * an architecture-specific template string or new Core opcode. */
+    {
+        bool memory_effect = source->has_memory_clobber;
+        for (i = 0U; i < contract.operand_count; ++i)
+            if (contract.kinds[i] ==
+                MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE)
+                memory_effect = true;
+        if (!minic_core_function_add_opaque_inline_asm(
+                ctx->function, normalized, length, true,
+                memory_effect, &id)) {
+            free(normalized);
+            return MINIC_CORE_LOWER_ERROR;
+        }
+    }
         free(normalized);
         return MINIC_CORE_LOWER_ERROR;
     }
