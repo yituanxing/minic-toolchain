@@ -1,6 +1,8 @@
 name: MiniAS Immutable Linux 3x7 GNU Kbuild S Replay
 
 # Frozen original Linux 6.6.143 inputs. Discovery, NOT P1/parity.
+# Re-measure AArch64 target post-LSE + cross-section PREL32 + PRFM/.inst
+# against all 4140 frozen original GNU Kbuild .s, seven shards one head.
 # AArch64 only: 7 frozen shards after real LSE extension gating/atomics.
 # Do not infer GNU parity or P1 from successful discovery jobs.
 # Grouped exact-head Oct27 scan after A64 bitmask/REV/LDAR and x86 BT/XADD,
