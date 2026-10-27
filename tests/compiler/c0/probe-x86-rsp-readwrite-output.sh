@@ -81,5 +81,43 @@ if "$cc" --target=x86_64-linux -S "$work/saved-clobbers.i" \
 fi
 grep -F 'unsupported GNU asm register clobber for target' \
     "$work/saved-clobbers.log" >/dev/null
+# Original Linux x86/Loong GNU "m" inputs may be whole C records:
+# *src is a record lvalue, not a scalar register. Admit the SOURCE operand
+# through one shared Frontend predicate; keep both ISA emitters fail-closed
+# until their physical addresses and assembly effects are qualified.
+cat > "$work/record-memory.i" <<'EOF'
+struct payload { unsigned char data[16]; };
+void memcpy_like(struct payload *src) {
+    asm volatile("nop" : : "m"(*src) : "memory");
+}
+EOF
+cc -c -std=gnu11 -x c "$work/record-memory.i" \
+    -o "$work/reference-record.o"
+for target in x86_64 loongarch64; do
+    if "$cc" --target="$target"-linux -S "$work/record-memory.i" \
+        -o "$work/record-$target.s" >"$work/record-$target.log" 2>&1; then
+        echo "FAIL: unqualified $target record memory machine ASM accepted" >&2
+        exit 1
+    fi
+    if grep -F 'GNU asm input operand currently requires an integer or pointer' \
+        "$work/record-$target.log" >/dev/null; then
+        echo "FAIL: original $target GNU memory record source rejected" >&2
+        exit 1
+    fi
+done
+cat >"$work/invalid-register-aggregate.i" <<'EOF'
+struct payload { unsigned char data[16]; };
+void bad(struct payload *src) {
+    asm volatile("nop" : : "r"(*src) : "memory");
+}
+EOF
+if "$cc" --target=x86_64-linux -S "$work/invalid-register-aggregate.i" \
+    -o "$work/invalid-register-aggregate.s" >"$work/invalid-register-aggregate.log" 2>&1; then
+    echo 'FAIL: unqualified aggregate-by-register GNU ASM accepted' >&2
+    exit 1
+fi
+grep -F 'GNU asm input operand currently requires an integer or pointer' \
+    "$work/invalid-register-aggregate.log" >/dev/null
+echo 'GNU_RECORD_MEMORY_INPUT=PASS original_GCC=1 x86_loong_source=2 unqualified_machine_rejected=2 register_aggregate_rejected=1'
 echo 'X86_GNU_CALLER_CLOBBERS=PASS original_GCC=1 caller_names=10 saved_rejected=1 machine_fail_closed=1'
 echo 'X86_GNU_RSP_TIED_OUTPUT=PASS source_grammar=1 machine_rejected=1 direct_C_write_rejected=1 output_writeonly_rejected=1 cross_target_rejected=1'

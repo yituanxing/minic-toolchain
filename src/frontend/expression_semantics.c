@@ -1,5 +1,28 @@
 #include "frontend/expression_semantics.h"
 
+bool minic_c0_inline_asm_input_value_supported(
+    const MinicExpression *expression, const char *constraint, size_t length) {
+    if (expression == NULL || constraint == NULL || length == 0U)
+        return false;
+    /* Preserve all previously admitted scalar source operands, independent
+     * of actual ISA register allocation. */
+    if (minic_type_is_integer(expression->type) ||
+        minic_type_is_pointer(expression->type))
+        return true;
+    /* GNU "m" denotes an addressable C storage operand. This includes
+     * record/array values (Linux x86 and Loong memcpy fragments) that
+     * must not be forced into an integer register or fabricated as a
+     * pointer value. The Core/machine must later prove the real address,
+     * side effects and instruction template before producing assembly. */
+    return length == 1U && constraint[0] == 'm' &&
+           expression->value_category == MINIC_VALUE_LVALUE &&
+           (minic_type_is_record(expression->type) ||
+            minic_type_is_array(expression->type) ||
+            minic_type_is_float(expression->type) ||
+            minic_type_is_double(expression->type) ||
+            minic_type_is_long_double(expression->type));
+}
+
 bool minic_c0_inline_asm_output_value_supported(
     const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicExpression *expression, const char *constraint, size_t length) {

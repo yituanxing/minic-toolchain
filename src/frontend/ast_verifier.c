@@ -1108,7 +1108,9 @@ static bool verify_statement(const MinicC0Program *program,
             operand_expression = minic_c0_program_expression(program, operand->expression);
             if (operand->constraint_text == NULL || operand->constraint_length == 0U ||
                 ((operand->name == NULL) != (operand->name_length == 0U)) ||
-                operand_expression == NULL ||
+                !minic_c0_inline_asm_input_value_supported(
+                    operand_expression, operand->constraint_text,
+                    operand->constraint_length) ||
                 operand->access != MINIC_INLINE_ASM_OPERAND_READ_ONLY) {
                 return false;
             }
