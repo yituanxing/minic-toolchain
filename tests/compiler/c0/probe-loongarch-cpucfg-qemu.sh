@@ -5,8 +5,8 @@ set -Eeuo pipefail
 cc=${1:?MiniC compiler required}
 gcc=loongarch64-linux-gnu-gcc-13
 qemu=qemu-loongarch64
-command -v "$gcc" >/dev/null
-command -v "$qemu" >/dev/null
+command -v "$gcc" >/dev/null || { echo "missing GNU LoongArch C oracle: $gcc" >&2; exit 1; }
+command -v "$qemu" >/dev/null || { echo "missing LoongArch QEMU: $qemu" >&2; exit 1; }
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 cat > "$work/original.i" <<'EOF'
