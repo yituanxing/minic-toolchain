@@ -47,6 +47,39 @@ MinicCoreLowerStatus minic_core_lower_assignment_pair(MinicCoreLowerContext *con
     if (target == NULL || target->value_category != MINIC_VALUE_LVALUE) {
         return MINIC_CORE_LOWER_ERROR;
     }
+    if (target->kind == MINIC_EXPRESSION_FIXED_REGISTER) {
+        const MinicFixedRegisterBinding *binding;
+        MinicCoreInstruction effect;
+        size_t core_binding_id;
+        binding = minic_c0_program_fixed_register_binding(
+            context->body->program, target->value.fixed_register_binding_id);
+        if (binding == NULL || binding->is_local ||
+            !minic_target_info_fixed_register_write_supported(
+                context->target, binding->register_name, binding->register_name_length) ||
+            !minic_type_unqualified(target->type, &stored_type) ||
+            !core_memory_scalar_type(stored_type) ||
+            !minic_type_equal(binding->type, stored_type))
+            return MINIC_CORE_LOWER_UNSUPPORTED;
+        status = minic_core_lower_internal_lower_scalar_assignment_value(
+            context, stored_type, source_id, &stored_value);
+        if (status != MINIC_CORE_LOWER_OK)
+            return status;
+        if (!core_import_fixed_register_binding(
+                context, target->value.fixed_register_binding_id, &core_binding_id))
+            return MINIC_CORE_LOWER_ERROR;
+        (void)memset(&effect, 0, sizeof(effect));
+        effect.kind = MINIC_CORE_INSTRUCTION_FIXED_REGISTER_WRITE;
+        effect.span = span;
+        effect.type = minic_type_void();
+        effect.result = MINIC_CORE_VALUE_INVALID;
+        effect.value.fixed_register_write.binding_id = core_binding_id;
+        effect.value.fixed_register_write.source = stored_value;
+        if (!minic_core_function_append_effect_instruction(
+                context->function, context->block_id, &effect))
+            return MINIC_CORE_LOWER_ERROR;
+        if (result_value != NULL) *result_value = stored_value;
+        return MINIC_CORE_LOWER_OK;
+    }
     {
         bool matched;
         status = minic_core_lower_try_bit_field_assignment(

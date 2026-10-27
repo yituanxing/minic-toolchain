@@ -682,6 +682,16 @@ bool minic_multi_direct_machine_instruction_shape(
         shape->family = MINIC_DIRECT_MACHINE_RESIDUAL;
         return true;
     }
+    if (ins->kind == MINIC_CORE_INSTRUCTION_FIXED_REGISTER_WRITE) {
+        if (ins->result != MINIC_CORE_VALUE_INVALID ||
+            !minic_type_is_void(ins->type) ||
+            ins->value.fixed_register_write.binding_id >=
+                fn->fixed_register_binding_count ||
+            ins->value.fixed_register_write.source >= fn->value_count)
+            return false;
+        shape->family = MINIC_DIRECT_MACHINE_RESIDUAL;
+        return true;
+    }
     if (ins->kind == MINIC_CORE_INSTRUCTION_RECORD_COPY) {
         shape->family = MINIC_DIRECT_MACHINE_RECORD_COPY;
         return true;

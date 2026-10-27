@@ -57,6 +57,34 @@ bool minic_loongarch64_emit_residual_instruction(
     dynamic_frame = ctx->dynamic_frame;
     *needs_writeback = true;
         switch (ins->kind) {
+        case MINIC_CORE_INSTRUCTION_FIXED_REGISTER_WRITE: {
+            const size_t binding_id = ins->value.fixed_register_write.binding_id;
+            const MinicCoreValueId source = ins->value.fixed_register_write.source;
+            const MinicCoreFixedRegisterBinding *binding;
+            /* Linux r21 is reserved for the per-CPU offset; transfer the
+             * complete LP64 SSA value to that real register, never a global. */
+            if (dynamic_frame || binding_id >= fn->fixed_register_binding_count ||
+                source >= fn->value_count ||
+                !minic_type_is_void(ins->type) ||
+                ins->result != MINIC_CORE_VALUE_INVALID ||
+                !minic_type_equal(fn->values[source].type,
+                                  minic_type_unsigned_long()))
+                return minic_multi_direct_machine_reject(
+                    fn, "loongarch64", name, "fixed_register_write",
+                    reject_block, reject_ins, __LINE__);
+            binding = &fn->fixed_register_bindings[binding_id];
+            if (binding->is_local ||
+                !minic_target_info_fixed_register_write_supported(
+                    target, binding->register_name, binding->register_name_length) ||
+                !minic_type_equal(binding->type, fn->values[source].type) ||
+                !emit_sp_mem(out, "ld.d", "$t0", (size_t)source * 8U) ||
+                fputs("  move $r21, $t0\n", out) == EOF)
+                return minic_multi_direct_machine_reject(
+                    fn, "loongarch64", name, "fixed_register_write",
+                    reject_block, reject_ins, __LINE__);
+            *needs_writeback = false;
+            return true;
+        }
         case MINIC_CORE_INSTRUCTION_FIXED_REGISTER_READ: {
             const MinicCoreFixedRegisterBinding *binding;
             const char *physical;

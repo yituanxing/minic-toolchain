@@ -324,6 +324,22 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
                minic_type_equal(function->fixed_register_bindings[binding_id].type,
                                 instruction->type);
     }
+    case MINIC_CORE_INSTRUCTION_FIXED_REGISTER_WRITE: {
+        const size_t id = instruction->value.fixed_register_write.binding_id;
+        const MinicCoreValueId source = instruction->value.fixed_register_write.source;
+        const MinicCoreFixedRegisterBinding *binding;
+        if (instruction->result != MINIC_CORE_VALUE_INVALID ||
+            !minic_type_is_void(instruction->type) ||
+            id >= function->fixed_register_binding_count ||
+            source >= function->value_count || !available_values[source])
+            return false;
+        binding = &function->fixed_register_bindings[id];
+        return !binding->is_local && binding->register_name != NULL &&
+               binding->register_name_length != 0U &&
+               minic_type_equal(binding->type, function->values[source].type) &&
+               (minic_type_is_integer(binding->type) ||
+                minic_type_is_pointer(binding->type));
+    }
     case MINIC_CORE_INSTRUCTION_PARAMETER_OBJECT: {
         MinicCoreObjectId object_id;
         MinicType object_value_type;

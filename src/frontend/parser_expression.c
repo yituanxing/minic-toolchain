@@ -325,7 +325,10 @@ static bool parse_fixed_register_reference(MinicParser *parser,
     expression.kind = MINIC_EXPRESSION_FIXED_REGISTER;
     expression.span = name_span;
     expression.type = binding->type;
-    expression.value_category = MINIC_VALUE_RVALUE;
+    expression.value_category =
+        minic_target_info_fixed_register_write_supported(
+            parser->target_info, binding->register_name, binding->register_name_length)
+            ? MINIC_VALUE_LVALUE : MINIC_VALUE_RVALUE;
     expression.value.fixed_register_binding_id = binding_id;
     if (!minic_parser_add_expression(parser, &expression, &base_id)) {
         return false;

@@ -140,7 +140,10 @@ typedef enum MinicCoreInstructionKind {
     /* va_copy is a value copy of the target's ABI cursor state, NOT
      * assignment of the frontend's pointer-shaped va_list proxy.
      * Both Core operands are pointer SSA values; target copies its real tag. */
-    MINIC_CORE_INSTRUCTION_VARIADIC_COPY
+    MINIC_CORE_INSTRUCTION_VARIADIC_COPY,
+    /* Target-neutral effect, register destination identity plus SSA source.
+     * Append after frozen enum values to preserve established IR numbering. */
+    MINIC_CORE_INSTRUCTION_FIXED_REGISTER_WRITE
 } MinicCoreInstructionKind;
 
 /* M91_BUILTIN_UNREACHABLE_TERMINATOR: unreachable is a CFG fact, not a
@@ -320,6 +323,10 @@ typedef struct MinicCoreInstruction {
         MinicCoreValueId operand;
         size_t parameter_index;
         size_t fixed_register_binding_id;
+        struct {
+            size_t binding_id;
+            MinicCoreValueId source;
+        } fixed_register_write;
         struct {
             MinicCoreCallFrameAddressKind kind;
             unsigned int level;

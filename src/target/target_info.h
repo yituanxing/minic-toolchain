@@ -152,6 +152,10 @@ bool minic_target_info_integer_literal_type(const MinicTargetInfo *target,
                                             unsigned int long_count,
                                             uint64_t value,
                                             MinicType *result);
+/* Named register writes are target-described separately from reads;
+ * no global SP/TP/RSP mutation may enter the machine emitter. */
+bool minic_target_info_fixed_register_write_supported(
+    const MinicTargetInfo *, const char *, size_t);
 bool minic_target_info_fixed_register_supported(const MinicTargetInfo *target,
                                                 const char *name,
                                                 size_t name_length);

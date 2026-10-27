@@ -443,7 +443,10 @@ static bool verify_expression(const MinicC0Program *program,
         binding = minic_c0_program_fixed_register_binding(
             program, expression->value.fixed_register_binding_id);
         return target != NULL && binding != NULL &&
-               expression->value_category == MINIC_VALUE_RVALUE &&
+               expression->value_category ==
+                   (minic_target_info_fixed_register_write_supported(
+                        target, binding->register_name, binding->register_name_length)
+                        ? MINIC_VALUE_LVALUE : MINIC_VALUE_RVALUE) &&
                minic_type_equal(expression->type, binding->type) &&
                (minic_type_is_integer(expression->type) ||
                 minic_type_is_pointer(expression->type)) &&

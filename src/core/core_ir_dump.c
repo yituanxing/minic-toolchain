@@ -285,6 +285,11 @@ static bool dump_instruction(FILE *output,
                        "  %%%" PRIu32 " = fixed.register.read binding=%zu\n",
                        instruction->result,
                        instruction->value.fixed_register_binding_id) >= 0;
+    case MINIC_CORE_INSTRUCTION_FIXED_REGISTER_WRITE:
+        return fprintf(output,
+                       "  fixed.register.write binding=%zu, %%" PRIu32 "\n",
+                       instruction->value.fixed_register_write.binding_id,
+                       instruction->value.fixed_register_write.source) >= 0;
     case MINIC_CORE_INSTRUCTION_PARAMETER_OBJECT:
         return fprintf(output,
                        "  parameter.object %zu, %%o%" PRIu32 "\n",

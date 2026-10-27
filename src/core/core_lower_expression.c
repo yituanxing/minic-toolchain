@@ -137,6 +137,38 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
             context, expression, value_id, &handled);
         if (handled || status != MINIC_CORE_LOWER_OK) return status;
     }
+    /* A writable machine register is a C lvalue but has NO memory address.
+     * Its reads retain the single existing typed Core register-read owner. */
+    if (expression->kind == MINIC_EXPRESSION_FIXED_REGISTER) {
+        const MinicFixedRegisterBinding *binding;
+        size_t core_binding_id;
+
+        binding = minic_c0_program_fixed_register_binding(
+            context->body->program, expression->value.fixed_register_binding_id);
+        if (binding == NULL || binding->register_name == NULL ||
+            binding->register_name_length == 0U) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        if (!core_memory_scalar_type(binding->type) ||
+            !minic_type_equal(binding->type, expression->type)) {
+            return MINIC_CORE_LOWER_UNSUPPORTED;
+        }
+        if (!core_import_fixed_register_binding(context,
+                                                expression->value.fixed_register_binding_id,
+                                                &core_binding_id)) {
+            return MINIC_CORE_LOWER_ERROR;
+        }
+        (void)memset(&instruction, 0, sizeof(instruction));
+        instruction.kind = MINIC_CORE_INSTRUCTION_FIXED_REGISTER_READ;
+        instruction.span = expression->span;
+        instruction.type = expression->type;
+        instruction.result = MINIC_CORE_VALUE_INVALID;
+        instruction.value.fixed_register_binding_id = core_binding_id;
+        return minic_core_function_append_value_instruction(
+                   context->function, context->block_id, &instruction, value_id)
+                   ? MINIC_CORE_LOWER_OK
+                   : MINIC_CORE_LOWER_ERROR;
+    }
     if (expression->value_category == MINIC_VALUE_LVALUE &&
         core_memory_scalar_type(expression->type)) {
         MinicCoreValueId address_id;
@@ -388,36 +420,6 @@ MinicCoreLowerStatus lower_expression(MinicCoreLowerContext *context,
             return minic_core_lower_indirect_call(context, expression, value_id);
         }
         return minic_core_lower_direct_call(context, expression, value_id);
-    }
-    if (expression->kind == MINIC_EXPRESSION_FIXED_REGISTER) {
-        const MinicFixedRegisterBinding *binding;
-        size_t core_binding_id;
-
-        binding = minic_c0_program_fixed_register_binding(
-            context->body->program, expression->value.fixed_register_binding_id);
-        if (binding == NULL || binding->register_name == NULL ||
-            binding->register_name_length == 0U) {
-            return MINIC_CORE_LOWER_ERROR;
-        }
-        if (!core_memory_scalar_type(binding->type) ||
-            !minic_type_equal(binding->type, expression->type)) {
-            return MINIC_CORE_LOWER_UNSUPPORTED;
-        }
-        if (!core_import_fixed_register_binding(context,
-                                                expression->value.fixed_register_binding_id,
-                                                &core_binding_id)) {
-            return MINIC_CORE_LOWER_ERROR;
-        }
-        (void)memset(&instruction, 0, sizeof(instruction));
-        instruction.kind = MINIC_CORE_INSTRUCTION_FIXED_REGISTER_READ;
-        instruction.span = expression->span;
-        instruction.type = expression->type;
-        instruction.result = MINIC_CORE_VALUE_INVALID;
-        instruction.value.fixed_register_binding_id = core_binding_id;
-        return minic_core_function_append_value_instruction(
-                   context->function, context->block_id, &instruction, value_id)
-                   ? MINIC_CORE_LOWER_OK
-                   : MINIC_CORE_LOWER_ERROR;
     }
     if (expression->kind == MINIC_EXPRESSION_UNARY &&
         (expression->value.unary.operator_kind == MINIC_UNARY_POST_INCREMENT ||

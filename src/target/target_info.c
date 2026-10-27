@@ -758,6 +758,15 @@ bool minic_target_info_fixed_register_supported(const MinicTargetInfo *target,
            (name_length == 2U && memcmp(name, "sp", 2U) == 0);
 }
 
+bool minic_target_info_fixed_register_write_supported(
+    const MinicTargetInfo *target, const char *name, size_t length) {
+    /* Original LoongArch Linux set_my_cpu_offset() writes only reserved r21.
+     * All other architectural registers are read-only until separately proven. */
+    return target != NULL && name != NULL &&
+           target->architecture == MINIC_TARGET_ARCH_LOONGARCH64 &&
+           length == 4U && memcmp(name, "$r21", 4U) == 0;
+}
+
 bool minic_target_info_local_fixed_register_supported(const MinicTargetInfo *target,
                                                       const char *name,
                                                       size_t name_length) {

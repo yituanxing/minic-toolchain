@@ -90,6 +90,37 @@ set +e
 rc=$?
 set -e
 test "$rc" -eq 42 || { echo "LoongArch live r21 QEMU failed: $rc" >&2; exit 1; }
+# A genuine global-register assignment has machine side effects, not a C
+# memory store. A GNU-compiled driver saves/observes/restores the live r21.
+cat > "$work/write-r21.i" <<'EOF'
+register unsigned long minic_percpu_write asm("$r21");
+void minic_write_percpu(unsigned long value) { minic_percpu_write = value; }
+EOF
+cat > "$work/write-r21-driver.c" <<'EOF'
+extern void minic_write_percpu(unsigned long);
+int main(void) {
+    unsigned long before, after;
+    __asm__ volatile("move %0, $r21" : "=r"(before));
+    minic_write_percpu(0x12345678UL);
+    __asm__ volatile("move %0, $r21" : "=r"(after));
+    __asm__ volatile("move $r21, %0" :: "r"(before));
+    return after == 0x12345678UL ? 42 : 1;
+}
+EOF
+"$cc" --target=loongarch64-linux -S "$work/write-r21.i" -o "$work/write-r21.s"
+grep -F '  move $r21, $t0' "$work/write-r21.s" >/dev/null
+"$gcc" -static "$work/write-r21-driver.c" -x assembler "$work/write-r21.s" \
+    -o "$work/write-r21.elf"
+"$gcc" -static "$work/write-r21-driver.c" -x c "$work/write-r21.i" \
+    -o "$work/write-r21.gnu.elf"
+for mode in write-r21 write-r21.gnu; do
+    set +e
+    "$qemu" "$work/$mode.elf"
+    rc=$?
+    set -e
+    test "$rc" -eq 42 || { echo "LoongArch r21 $mode returned $rc" >&2; exit 1; }
+done
+echo 'LOONGARCH_LINUX_R21_WRITE_GNU_QEMU=PASS hardware_write=1 save_restore=1'
 # Local register variables that GCC uses for extended-asm input carriers must
 # remain syntactically admissible without inventing a new Core opcode. Their
 # normal C value flow still follows Common Core SSA; actual asm register

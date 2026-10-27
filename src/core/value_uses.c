@@ -89,6 +89,9 @@ bool minic_core_visit_instruction_value_uses(const MinicCoreFunction *function,
     case MINIC_CORE_INSTRUCTION_VARIADIC_NEXT_SCALAR:
         return core_visit_value_use(instruction->value.operand, visitor, context);
 
+    case MINIC_CORE_INSTRUCTION_FIXED_REGISTER_WRITE:
+        return core_visit_value_use(
+            instruction->value.fixed_register_write.source, visitor, context);
     case MINIC_CORE_INSTRUCTION_FIELD_ADDRESS:
         return core_visit_value_use(instruction->value.field_address.base, visitor, context);
     case MINIC_CORE_INSTRUCTION_POINTER_OFFSET:
