@@ -66,10 +66,23 @@ def census(out: Path, target: str, image: str, evidence: Path, minimum: int,
     kernel = out / path
     if not kernel.is_file() or kernel.stat().st_size == 0:
         raise ValueError("missing actual GNU-linked kernel: " + str(kernel))
-    objects = sorted(
-        o for o in out.rglob("*.o") if o.is_file()
+    # The host compiler has the same ELF e_machine as the x86_64 target.
+    # ELF class/machine alone cannot identify Linux *target* C owners.
+    # Kbuild's tools/ and scripts/ object domains are host executables'
+    # build products; arch/*/tools likewise contains host build helpers.
+    # Keep these visible in a separate attested list, not silently counted
+    # among target MiniC C translation units.
+    def is_host_object(obj: Path) -> bool:
+        parts = obj.relative_to(out).parts
+        return (bool(parts) and parts[0] in ("tools", "scripts")
+                or len(parts) >= 3 and parts[0] == "arch" and
+                parts[2] == "tools")
+    candidates = sorted(o for o in out.rglob("*.o") if o.is_file())
+    host_objects = [o for o in candidates if is_host_object(o)]
+    objects = [
+        o for o in candidates if not is_host_object(o)
         and target_object(o, MACHINES[target])
-    )
+    ]
     if not objects:
         raise ValueError("no matching GNU Linux target ELF relocatables")
     # Preserve excluded ELF32 boot objects as a separate explicit scope.
@@ -83,6 +96,9 @@ def census(out: Path, target: str, image: str, evidence: Path, minimum: int,
                     if magic == b"\x7fELF\x01\x01":
                         boot32.append(o.relative_to(out).as_posix())
     evidence.mkdir(parents=True, exist_ok=True)
+    (evidence / "separate-host-build-objects.txt").write_text(
+        "# GNU Kbuild host helper objects, never MiniC kernel C owners\n"
+        + "".join(o.relative_to(out).as_posix() + "\n" for o in host_objects))
     (evidence / "separate-x86-elf32-boot-domain.txt").write_text(
         "# x86 early boot ELF32; not x86_64 MiniC certified C owners\n"
         + "".join(name + "\n" for name in boot32))
@@ -116,6 +132,8 @@ def census(out: Path, target: str, image: str, evidence: Path, minimum: int,
         "config_sha256": sha(config),
         "gnu_target_objects": len(objects), "gnu_c_owners": len(owners),
         "excluded_non_c_objects": len(excluded),
+        "separate_host_build_objects": len(host_objects),
+        "separate_host_manifest_sha256": sha(evidence / "separate-host-build-objects.txt"),
         "separate_x86_early_boot_elf32_objects": len(boot32),
         "scope": "ELF64_MAIN_TARGET_C_ONLY_NOT_X86_EARLY_BOOT_ELF32",
         "owner_manifest_sha256": sha(evidence / "full-c-owners.txt"),
@@ -199,6 +217,14 @@ def self_test() -> None:
             struct.pack_into("<H", hdr, 16, 1)
             struct.pack_into("<H", hdr, 18, 183 if machine != 183 else 62)
             host.write_bytes(hdr)
+            for name in ("tools/objtool/check.o", "arch/test/tools/host.o"):
+                helper = out / name
+                helper.parent.mkdir(parents=True, exist_ok=True)
+                hdr = bytearray(64)
+                hdr[0:6] = b"\x7fELF\x02\x01"
+                struct.pack_into("<H", hdr, 16, 1)
+                struct.pack_into("<H", hdr, 18, machine)
+                helper.write_bytes(hdr)
             if target == "x86_64":
                 for name in ("arch/x86/boot/regs.o",
                              "arch/x86/realmode/rm/wakeup_asm.o"):
@@ -211,6 +237,7 @@ def self_test() -> None:
                 2 if target == "x86_64" else 0)
             assert result["gnu_c_owners"] == 2
             assert result["gnu_target_objects"] == 2
+            assert result["separate_host_build_objects"] == 3
             assert result["verdict"] == "GNU_BUILD_ONLY_NOT_QEMU_CERTIFIED_NOT_MINIC"
             tamper = out / "lib/b.o"
             tamper.write_bytes(tamper.read_bytes() + b"TAMPER")
@@ -233,7 +260,7 @@ def self_test() -> None:
         else:
             raise AssertionError("accepted missing common Kconfig feature")
         print("MINIC_LINUX_THREE_GNU_SELFTEST=PASS targets=3 "
-              "host_excluded=1 early_boot_domains=2 shared_kconfig_fail_closed=1 "
+              "host_excluded=3 early_boot_domains=2 shared_kconfig_fail_closed=1 "
               "sha_tamper_rejected=1 no_false_qemu=1")
 
 def main() -> int:
