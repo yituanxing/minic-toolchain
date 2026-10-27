@@ -382,7 +382,7 @@ SRC
         for mode in full relaxed acquire release; do
             case "$mode" in
                 full) suffix=''; load=ldxr; store=stlxr
-                      barrier=' dmb ish\\n'; clobber=': "memory"' ;;
+                      barrier=' dmb ish\n'; clobber=': "memory"' ;;
                 relaxed) suffix='_relaxed'; load=ldxr; store=stxr
                          barrier=''; clobber='' ;;
                 acquire) suffix='_acquire'; load=ldaxr; store=stxr
