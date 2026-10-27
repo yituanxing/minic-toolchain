@@ -6,6 +6,31 @@
 
 #include <stdint.h>
 
+bool minic_multi_direct_fixed_register_read_shape(
+    const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
+    const MinicCoreFixedRegisterBinding **binding_out) {
+    const MinicCoreFixedRegisterBinding *binding;
+    const size_t index = ins != NULL ? ins->value.fixed_register_binding_id : 0U;
+    if (!program || !target || !fn || !ins || !binding_out ||
+        ins->kind != MINIC_CORE_INSTRUCTION_FIXED_REGISTER_READ ||
+        ins->result >= fn->value_count ||
+        index >= fn->fixed_register_binding_count ||
+        fn->fixed_register_bindings == NULL)
+        return false;
+    binding = &fn->fixed_register_bindings[index];
+    if (binding->is_local || !binding->register_name ||
+        binding->register_name_length == 0U ||
+        !minic_target_info_fixed_register_supported(
+            target, binding->register_name, binding->register_name_length) ||
+        !minic_type_equal(binding->type, ins->type) ||
+        !minic_type_equal(fn->values[ins->result].type, ins->type) ||
+        !minic_lp64_register64_type(program, target, ins->type))
+        return false;
+    *binding_out = binding;
+    return true;
+}
+
 bool minic_multi_direct_record_copy_extent(
     const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,

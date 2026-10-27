@@ -18,6 +18,16 @@ bool minic_multi_direct_parameter_object_location(
     const MinicLP64FramePlan *frame_plan,
     const MinicLP64ArgumentLocation **location, size_t *object_offset);
 
+/* Machine-agnostic contract for the already-existing Core fixed-register
+ * SSA read. TargetInfo admits only named architectural registers actually
+ * owned by a machine emitter; this validates binding provenance and LP64
+ * scalar shape, never picks a register or emits a machine instruction.
+ * x86-64 and AArch64 both call this same validator. */
+bool minic_multi_direct_fixed_register_read_shape(
+    const MinicC0Program *, const MinicTargetInfo *,
+    const MinicCoreFunction *, const MinicCoreInstruction *,
+    const MinicCoreFixedRegisterBinding **binding);
+
 /* Wide (128-bit) stores share Core IR shape admission; ISA-specific
  * bytes/register transfer remain target-owned. Compiler barriers are private
  * to the Common machine-family classifier. */

@@ -297,9 +297,10 @@ static int verify_fixed_register_target_contract(void) {
         const MinicTargetInfo *t = minic_target_info_from_name(names[i]);
         bool riscv = i <= 1U;
         bool x86 = i == 2U;
+        bool arm64 = i == 3U;
         if (!t ||
             minic_target_info_fixed_register_supported(t, "rsp", 3U) != x86 ||
-            minic_target_info_fixed_register_supported(t, "sp", 2U) != riscv ||
+            minic_target_info_fixed_register_supported(t, "sp", 2U) != (riscv || arm64) ||
             minic_target_info_fixed_register_supported(t, "tp", 2U) != riscv ||
             minic_target_info_fixed_register_supported(t, "r15", 3U) ||
             minic_target_info_fixed_register_supported(t, "rbp", 3U) ||
@@ -308,7 +309,7 @@ static int verify_fixed_register_target_contract(void) {
             return 1;
         }
     }
-    (void)puts("FIXED_REGISTER_TARGET=PASS rv_sp_tp x86_rsp_live others_fail_closed");
+    (void)puts("FIXED_REGISTER_TARGET=PASS rv_sp_tp x86_rsp_live aarch64_sp_live other_GPRs_fail_closed");
     return 0;
 }
 

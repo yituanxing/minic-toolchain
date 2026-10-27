@@ -724,6 +724,13 @@ bool minic_target_info_fixed_register_supported(const MinicTargetInfo *target,
      * an independent assignment and preservation contract. */
     if (target->architecture == MINIC_TARGET_ARCH_X86_64)
         return name_length == 3U && memcmp(name, "rsp", 3U) == 0;
+    /* Original GNU Linux AArch64 also defines current_stack_pointer as a
+     * file-scope register asm("sp").  AArch64 now consumes the same shared
+     * Core fixed-register-read contract as x86, but emits its own SP opcode
+     * and preserves the AAPCS64 frame.  x18/x19 and other GPRs are not
+     * automatically qualified. */
+    if (target->architecture == MINIC_TARGET_ARCH_AARCH64)
+        return name_length == 2U && memcmp(name, "sp", 2U) == 0;
     if (target->architecture != MINIC_TARGET_ARCH_RISCV64 &&
         target->architecture != MINIC_TARGET_ARCH_RISCV32) return false;
     /* Both RISC-V backends reserve sp/tp architecturally. RV32 shares

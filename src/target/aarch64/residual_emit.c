@@ -88,6 +88,25 @@ bool minic_aarch64_emit_residual_instruction(
         case MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM:
             *needs_writeback = false;
             return minic_aarch64_emit_qualified_structured_asm(out, ctx, ins);
+        case MINIC_CORE_INSTRUCTION_FIXED_REGISTER_READ: {
+            const MinicCoreFixedRegisterBinding *binding;
+            /* Do NOT virtualize the stack pointer into an ELF global.  The
+             * original Linux current_stack_pointer is the LIVE AAPCS64 sp.
+             * The Core SSA destination is written by the existing common
+             * direct-machine GP result dispatcher, exactly like the x86
+             * equivalent. Dynamic-alloca frame relocation is deliberately
+             * not qualified by this first machine owner. */
+            if (dynamic_frame ||
+                !minic_multi_direct_fixed_register_read_shape(
+                    program, target, fn, ins, &binding) ||
+                binding->register_name_length != 2U ||
+                memcmp(binding->register_name, "sp", 2U) != 0 ||
+                fputs("  mov x9, sp\n", out) == EOF)
+                return minic_multi_direct_machine_reject(
+                    fn, "aarch64", name, "fixed_register_read",
+                    reject_block, reject_ins, __LINE__);
+            break;
+        }
         case MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT: {
             size_t width = 0U;
             bool sign = false;

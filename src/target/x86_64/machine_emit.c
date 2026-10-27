@@ -2,6 +2,7 @@
 #include "target/common/core_call_view.h"
 #include "target/common/core_instruction_family.h"
 #include "target/common/core_numeric_shape.h"
+#include "target/common/direct_instruction_semantics.h"
 #include "target/x86_64/abi.h"
 #include "target/data_layout.h"
 #include <inttypes.h>
@@ -122,24 +123,14 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
     }
     case MINIC_CORE_INSTRUCTION_FIXED_REGISTER_READ: {
         const MinicCoreFixedRegisterBinding *binding;
-        MinicType type;
-        const size_t index = ins->value.fixed_register_binding_id;
-        if (index >= fn->fixed_register_binding_count ||
-            ins->result >= fn->value_count) return false;
-        binding = &fn->fixed_register_bindings[index];
-        if (binding->is_local || !binding->register_name ||
-            !minic_target_info_fixed_register_supported(
-                target, binding->register_name, binding->register_name_length) ||
-            !minic_type_equal(binding->type, ins->type) ||
-            !minic_type_equal(fn->values[ins->result].type, ins->type) ||
-            !minic_type_unqualified(ins->type, &type) ||
-            (!minic_type_is_integer(type) && !minic_type_is_pointer(type)) ||
-            !minic_x86_64_scalar_width(program, target, type, &bytes, &sign) ||
-            bytes != 8U) return false;
-        /* Read the actual current rsp AFTER the function prologue and any
-         * dynamic stack adjustment. Materialize via the already verified
-         * Core SSA slot so no special stack-pointer semantics enter Core.
-         * mov doesn't change flags or rsp; no register allocator changes. */
+        /* One Core binding/type/SSA validator is shared with AArch64.
+         * x86 owns only its ABI-specific live RSP move and frame store.
+         * Unknown fixed registers remain rejected in TargetInfo. */
+        if (!minic_multi_direct_fixed_register_read_shape(
+                program, target, fn, ins, &binding) ||
+            binding->register_name_length != 3U ||
+            memcmp(binding->register_name, "rsp", 3U) != 0)
+            return false;
         return fprintf(out, "  movq %%rsp, %%rax\n") >= 0 &&
                x86_value_store(out, frame, ins->result);
     }

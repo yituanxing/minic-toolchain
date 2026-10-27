@@ -315,6 +315,7 @@ jobs:
           "$cc" --target=aarch64-linux -S "$source" -o build/aarch64-nzcv/minic.s
           grep -F '  cmp x10, x11' build/aarch64-nzcv/minic.s
           grep -F '  sbc x9, xzr, xzr' build/aarch64-nzcv/minic.s
+          grep -F '  mov x9, sp' build/aarch64-nzcv/minic.s
           aarch64-linux-gnu-gcc -static -x assembler build/aarch64-nzcv/minic.s \
             -o build/aarch64-nzcv/minic.elf
           set +e
@@ -322,7 +323,7 @@ jobs:
           actual=$?
           set -e
           test "$actual" -eq 42
-          echo 'AARCH64_NZCV_ASM_GNU_QEMU=PASS original_C=1 compiler_abi=1 exit=42'
+          echo 'AARCH64_NZCV_ASM_GNU_QEMU=PASS original_C=1 live_sp=1 compiler_abi=1 exit=42'
           # An unrelated instruction or operand policy cannot be admitted
           # merely because AArch64 recognizes the cc/NZCV clobber token.
           sed 's/sbc %0, xzr, xzr/sbc %0, xzr, xzr; nop/' "$source" \
