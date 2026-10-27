@@ -7,6 +7,41 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* Both LP64 direct machines may now consume independently qualified Core
+ * structured ASM effects. This common preflight gate rejects legacy opaque,
+ * asm-goto and partially lowered forms; the selected machine *still* proves
+ * the exact instruction template, physical clobbers and output ABI.
+ * Keep a bounded one-to-one map so an unreferenced ASM source cannot vanish. */
+static bool direct_lp64_only_structured_asm(const MinicCoreFunction *fn) {
+    bool used[256] = {false};
+    size_t i, count = 0U;
+    if (!fn) return false;
+    if (fn->inline_asm_count == 0U) return true;
+    if (fn->inline_asm_count > 256U || fn->inline_asms == NULL)
+        return false;
+    for (i = 0U; i < fn->instruction_count; ++i) {
+        const MinicCoreInstruction *ins = &fn->instructions[i];
+        if (ins->kind == MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM) {
+            const size_t id = ins->value.structured_inline_asm.inline_asm_id;
+            if (id >= fn->inline_asm_count || used[id] ||
+                fn->inline_asms[id].is_goto ||
+                fn->inline_asms[id].template_text == NULL ||
+                ins->result != MINIC_CORE_VALUE_INVALID ||
+                !minic_type_is_void(ins->type))
+                return false;
+            used[id] = true;
+            ++count;
+        } else if (ins->kind == MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM ||
+                   ins->kind == MINIC_CORE_INSTRUCTION_REGISTER_OUTPUT_INLINE_ASM ||
+                   ins->kind == MINIC_CORE_INSTRUCTION_REGISTER_OUTPUT_INPUT_INLINE_ASM ||
+                   ins->kind == MINIC_CORE_INSTRUCTION_MEMORY_READWRITE_SCALAR_INPUT_INLINE_ASM ||
+                   ins->kind == MINIC_CORE_INSTRUCTION_SCALAR_INPUT_INLINE_ASM) {
+            return false;
+        }
+    }
+    return count == fn->inline_asm_count;
+}
+
 /* Both new direct LP64 ISA emitters had byte-equivalent admission policy.
  * Reject unsupported Core shapes before generating partial GNU assembly.
  * Caller owns target ABI, registers, frame and any failure diagnostics. */
@@ -27,7 +62,8 @@ bool minic_multi_direct_lp64_function_preflight(
         decl->section_name != NULL || decl->alias_target != MINIC_FUNCTION_INVALID ||
         !minic_lp64_valid_return_type(program, target, fn->return_type) ||
         fn->block_count > 2048U ||
-        fn->inline_asm_count != 0U || fn->parameter_count > 16U ||
+        !direct_lp64_only_structured_asm(fn) ||
+        fn->parameter_count > 16U ||
         fn->value_count > 32768U || fn->object_count > 8192U)
         {
             if (getenv("MINIC_BACKEND_CENSUS") != NULL)

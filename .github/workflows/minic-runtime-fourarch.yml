@@ -323,6 +323,18 @@ jobs:
           set -e
           test "$actual" -eq 42
           echo 'AARCH64_NZCV_ASM_GNU_QEMU=PASS original_C=1 compiler_abi=1 exit=42'
+          # An unrelated instruction or operand policy cannot be admitted
+          # merely because AArch64 recognizes the cc/NZCV clobber token.
+          sed 's/sbc %0, xzr, xzr/sbc %0, xzr, xzr; nop/' "$source" \
+            > build/aarch64-nzcv/unknown.i
+          if "$cc" --target=aarch64-linux -S build/aarch64-nzcv/unknown.i \
+                -o build/aarch64-nzcv/unknown.s \
+                >build/aarch64-nzcv/unknown.stdout \
+                2>build/aarch64-nzcv/unknown.stderr; then
+            echo 'FAIL: unqualified AArch64 ASM instruction admitted' >&2
+            exit 1
+          fi
+          echo 'AARCH64_NZCV_ASM_UNQUALIFIED=REJECTED'
 
       - name: QEMU execute upstream runtime with native ABI on new LP64 targets
         if: matrix.target == 'aarch64' || matrix.target == 'loongarch64'
