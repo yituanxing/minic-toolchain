@@ -1,4 +1,5 @@
 #include "core/core_lower_asm_internal.h"
+#include "frontend/const_eval.h"
 #include "target/backend.h"
 #include <stdlib.h>
 #include <string.h>
@@ -40,9 +41,35 @@ MinicCoreLowerStatus core_asm_try_target_register_contract(
         MinicCoreLowerStatus status;
         bind->operand_index = i;
         bind->kind = contract.kinds[i];
-        if (bind->kind == MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT)
-            status = lower_expression(ctx, op->expression, &bind->value);
-        else if (bind->kind == MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT ||
+        if (bind->kind == MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT) {
+            const MinicExpression *expr = minic_c0_program_expression(
+                ctx->body->program, op->expression);
+            MinicConstValue folded;
+            /* Target GNU immediate operands can be full integer constant
+             * expressions (Linux uaccess bit55 uses 1UL << 55), not only
+             * a literal token. Keep C constexpr evaluation wholly in
+             * Common Core, emitting the SAME typed constant value as the
+             * normal expression path. The machine backend still verifies
+             * the actual Core definition and exact ISA encoding. This
+             * rule is generic for all target-qualified scalar inputs. */
+            if (expr && minic_type_is_integer(expr->type) &&
+                minic_const_eval_integer(
+                    ctx->body->program, ctx->target,
+                    op->expression, &folded)) {
+                MinicCoreInstruction constant_ins;
+                (void)memset(&constant_ins, 0, sizeof(constant_ins));
+                constant_ins.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
+                constant_ins.span = expr->span;
+                constant_ins.type = expr->type;
+                constant_ins.result = MINIC_CORE_VALUE_INVALID;
+                constant_ins.value.integer_value = (int64_t)folded.bits;
+                status = minic_core_function_append_value_instruction(
+                    ctx->function, ctx->block_id, &constant_ins, &bind->value)
+                    ? MINIC_CORE_LOWER_OK : MINIC_CORE_LOWER_ERROR;
+            } else {
+                status = lower_expression(ctx, op->expression, &bind->value);
+            }
+        } else if (bind->kind == MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT ||
                  bind->kind == MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT ||
                  bind->kind == MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT ||
                  bind->kind == MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE ||
