@@ -1076,6 +1076,14 @@ static bool x64_profile(const char *march,const char *mabi,
 
 static bool x64_validate(MiniAs *as) {(void)as;return true;}
 static uint32_t x64_reloc(MiniAsFixupKind kind,unsigned width) {
+    /* Common .long/.quad and CFI anchors use semantic ABS, never a
+     * target-private duplicate relocation kind. GNU ELF64 LP64 uses
+     * R_X86_64_32 (zero extending) versus R_X86_64_32S (signed). */
+    if(kind==MINIAS_FIXUP_ABS) {
+        if(width==8U)return 1U;    /* R_X86_64_64 */
+        if(width==4U)return 10U;   /* R_X86_64_32 */
+        return 0U;
+    }
     if(kind==MINIAS_FIXUP_X64_ABS64)
         return width==8U?1U:0U; /* R_X86_64_64 */
     if(width!=4U)return 0U;

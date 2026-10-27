@@ -162,6 +162,8 @@ unresolved_x86:
 .data
 .globl common_space_test
 common_space_test:
+    .quad ext_object64
+    .long ext_object32
     .skip 8, 0x5a
     .space 5, 0x33
     .zero 3
@@ -195,6 +197,8 @@ grep -q R_X86_64_32S "$work/x86-rel.txt"
 grep -q R_X86_64_32S "$work/x86-gnu-rel.txt"
 grep -q R_X86_64_64 "$work/x86-rel.txt"
 grep -q R_X86_64_64 "$work/x86-gnu-rel.txt"
+grep -q R_X86_64_32 "$work/x86-rel.txt"
+grep -q R_X86_64_32 "$work/x86-gnu-rel.txt"
 # GNU and MiniAS must agree on every relocation type, offset, addend.
 # GNU GAS and MiniELF may serialize RELA entries in different orders.
 # Compare exact relocation offset, type, symbol, and addend after sorting.
