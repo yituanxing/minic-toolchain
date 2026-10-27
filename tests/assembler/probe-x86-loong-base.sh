@@ -78,6 +78,21 @@ unresolved_x86:
     movq %gs:pcpu_hot, %rax
     movq %rax, %gs:pcpu_hot
     movl %fs:12, %eax
+    leaq 16(%rdi,%rsi,4), %rax
+    leaq ext_global(%rip), %rdx
+    movq $0, %rax
+    movq $-5, %r8
+    movq $0, (%rsp)
+    movq $-1, 8(%r12)
+    movl $0, 4(%rsp)
+    addq $1, (%rax)
+    cmpq $0, (%rbx)
+    subq $4096, 8(%rbp)
+    andl $15, (%r8)
+    orq $2, (%r9)
+    xorq $255, (%rax)
+    testq $2, 8(%rdi)
+    movq $ext_global, %rsi
 ASM_X
 if ! "$MINIAS" --target=x86_64 -march=x86-64 -mabi=sysv -o "$work/x86-mini.o" "$work/x86.s" >"$work/x86.stdout" 2>"$work/x86.stderr"; then
     echo 'MINIAS_X86_PARSE_OR_ENCODE_FAIL' >&2
@@ -230,7 +245,10 @@ for bad in 'movq %rax, (%eax)' \
            'movq ext_global(%rip,%rax,2), %r9' \
            'movq %rax, ext_global(%rbp)' \
            'movq %gs:4294967296, %rax' \
-           'movq %fs:pcpu_hot(%rax), %rax'; do
+           'movq %fs:pcpu_hot(%rax), %rax' \
+           'movq $4294967296, %r8' \
+           'cmpq $4294967296, (%rax)' \
+           'leaq %rax, (%rsp)'; do
     printf '.text\n%s\n' "$bad" >"$work/invalid-mem.s"
     if "$MINIAS" --target=x86_64 -o "$work/bad-mem.o" \
          "$work/invalid-mem.s" >/dev/null 2>"$work/invalid.err"; then
