@@ -1035,6 +1035,19 @@ bool minias_riscv_is_typed_fixed(const char *op) {
             rv_mc_table[i].family != RV_MC_LOAD &&
             rv_mc_table[i].family != RV_MC_STORE) return true;
     }
+    /* All of these aliases/system instructions have one 32-bit word and
+     * their typed parser validates the operand form after layout sizing. */
+    if (strcmp(op,"ret")==0 || strcmp(op,"nop")==0 ||
+        strcmp(op,"mv")==0 || strcmp(op,"move")==0 ||
+        strcmp(op,"jr")==0 || strcmp(op,"snez")==0 ||
+        strcmp(op,"seqz")==0 || strcmp(op,"neg")==0 ||
+        strcmp(op,"negw")==0 || strcmp(op,"not")==0 ||
+        strcmp(op,"frcsr")==0 || strcmp(op,"fscsr")==0 ||
+        strcmp(op,"jalr")==0 || strcmp(op,"sfence.vma")==0 ||
+        strcmp(op,"sret")==0 || strcmp(op,"ecall")==0 ||
+        strcmp(op,"ebreak")==0 || strcmp(op,"wfi")==0 ||
+        strcmp(op,"pause")==0 || strcmp(op,"fence.i")==0 ||
+        strcmp(op,"fence")==0) return true;
     if (is_fp_binary_single(op) || is_fp_binary_double(op) ||
         is_fp_compare_double(op) || is_fp_convert(op) ||
         strcmp(op, "fsgnjn.d") == 0 ||
