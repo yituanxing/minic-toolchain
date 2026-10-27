@@ -1,5 +1,25 @@
 #include "frontend/expression_semantics.h"
 
+bool minic_c0_inline_asm_output_value_supported(
+    const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicExpression *expression, const char *constraint, size_t length) {
+    const MinicFixedRegisterBinding *binding;
+    if (expression == NULL || constraint == NULL || length == 0U)
+        return false;
+    if (expression->value_category == MINIC_VALUE_LVALUE)
+        return true;
+    if (program == NULL || target == NULL ||
+        expression->value_category != MINIC_VALUE_RVALUE ||
+        expression->kind != MINIC_EXPRESSION_FIXED_REGISTER)
+        return false;
+    binding = minic_c0_program_fixed_register_binding(
+        program, expression->value.fixed_register_binding_id);
+    return binding != NULL &&
+           minic_target_info_inline_asm_readwrite_hardreg_supported(
+               target, binding->register_name, binding->register_name_length,
+               constraint, length, expression->type);
+}
+
 bool minic_c0_pointer_arithmetic_element_size(const MinicC0Program *program,
                                               const MinicDataLayout *layout,
                                               MinicType pointer_type,

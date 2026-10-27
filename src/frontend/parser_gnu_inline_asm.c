@@ -1,4 +1,5 @@
 #include "frontend/parser_gnu_inline_asm.h"
+#include "frontend/expression_semantics.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -92,28 +93,12 @@ static bool parse_gnu_inline_asm_output(MinicParser *parser, MinicInlineAsmId in
         return false;
     }
     operand_expression = minic_c0_program_expression(parser->program, operand_id);
-    if (operand_expression == NULL) {
+    if (!minic_c0_inline_asm_output_value_supported(
+            parser->program, parser->target_info, operand_expression,
+            constraint, constraint_length)) {
         free(constraint);
         minic_parser_error(parser, "GNU asm output operand requires an lvalue");
         return false;
-    }
-    if (operand_expression->value_category != MINIC_VALUE_LVALUE) {
-        const MinicFixedRegisterBinding *binding =
-            operand_expression->kind == MINIC_EXPRESSION_FIXED_REGISTER
-                ? minic_c0_program_fixed_register_binding(
-                      parser->program,
-                      operand_expression->value.fixed_register_binding_id)
-                : NULL;
-        if (binding == NULL ||
-            operand_expression->value_category != MINIC_VALUE_RVALUE ||
-            !minic_target_info_inline_asm_readwrite_hardreg_supported(
-                parser->target_info, binding->register_name,
-                binding->register_name_length, constraint, constraint_length,
-                operand_expression->type)) {
-            free(constraint);
-            minic_parser_error(parser, "GNU asm output operand requires an lvalue");
-            return false;
-        }
     }
     if (!minic_c0_program_add_inline_asm_output(parser->program,
                                                 inline_asm_id,

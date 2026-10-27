@@ -5,6 +5,14 @@
 #include "target/data_layout.h"
 #include "target/target_info.h"
 
+/* Exactly one Frontend semantic owner for GNU output lvalues.
+ * C assignment and source ASM tied hard-register outputs have distinct
+ * permissions. Parser and AST verifier MUST both consume this same rule.
+ * TargetInfo owns any target-specific register/constraint description. */
+bool minic_c0_inline_asm_output_value_supported(
+    const MinicC0Program *, const MinicTargetInfo *,
+    const MinicExpression *, const char *constraint, size_t constraint_length);
+
 bool minic_c0_integer_assignment_value_type(const MinicC0Program *program,
                                             MinicType target_type,
                                             MinicExpressionId source_expression_id,
