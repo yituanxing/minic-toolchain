@@ -697,6 +697,12 @@ static const char *core_inline_asm_specialized_symbolic_name(
         *length_out = (size_t)written;
         return true;
     }
+    /* Constraint I cannot accept an address even through transitive
+     * symbolic specialization. Guard BEFORE the symbolic fast path; only a
+     * target-qualified numeric value above may satisfy it. */
+    if (core_inline_asm_constraint_is(operand, "I")) {
+        return false;
+    }
     if (core_inline_asm_specialized_symbolic_text(
             context,
             operand->expression,
