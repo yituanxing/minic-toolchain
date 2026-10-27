@@ -267,7 +267,9 @@ bool minic_loongarch64_emit_abi_instruction(
                             call_plan->arguments[k].gp_first != k ||
                             call_plan->arguments[k].gp_registers != 1U ||
                             call_plan->arguments[k].fp_registers != 0U ||
-                            call_plan->arguments[k].stack_first != 0U)
+                            /* Register-only slots have the sentinel, not
+                             * stack index zero. Do not reject valid GPR ABI. */
+                            call_plan->arguments[k].stack_first != SIZE_MAX)
                             return false;
                     }
                     if (immediate_index != SIZE_MAX) {
