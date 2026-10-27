@@ -101,9 +101,14 @@ bool minic_target_info_named_builtin_type(const MinicTargetInfo *target,
 /* Target-specific GCC unary builtins are described here without making
  * Frontend or Core switch on an architecture. Machine encoding stays owned
  * by the target CALL emitter, with an internal unspellable callee name. */
-bool minic_target_info_machine_builtin_unary(
+/* Machine-builtin ABI schema. No frontend ISA switch or invented Core opcode.
+ * The same descriptor is rechecked by the final machine CALL emitter.
+ * immediate_index is SIZE_MAX when all operands occupy ordinary ABI GPRs. */
+bool minic_target_info_machine_builtin_signature(
     const MinicTargetInfo *target, const char *spelling, size_t length,
-    const char **internal_callee, MinicType *result, MinicType *argument);
+    char *callee, size_t callee_capacity, MinicType *result,
+    MinicType arguments[3], size_t *argument_count,
+    const char **mnemonic, size_t *immediate_index);
 bool minic_target_info_header_attribute_supported(const MinicTargetInfo *target,
                                                   const char *spelling,
                                                   size_t length);

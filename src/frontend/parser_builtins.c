@@ -1936,14 +1936,15 @@ bool minic_parser_try_builtin_primary_early(
     return true;
 }
 
-/* Target builtin expressions borrow the ordinary typed CALL + CoreCallView
- * pipeline. No target-specific expression/IR opcode, no fake libc symbol and
- * no source rewrite. Only the target's machine call owner may emit a matching
- * reserved callee; function-pointer use never enters this direct-only path. */
-static bool parse_target_builtin_unary(
+/* Architecture-specific builtins reuse one typed CALL AST and CoreCallView.
+ * Frontend is intentionally oblivious to the ISA/opcode/immediate rule; the
+ * shared TargetInfo schema is the only admission source. */
+static bool parse_target_builtin(
     MinicParser *parser, MinicExpressionId *expression_id, bool *handled) {
-    const char *internal_name;
-    MinicType result_type, argument_type;
+    char internal_name[128];
+    const char *mnemonic;
+    MinicType result_type, parameter_types[3];
+    size_t parameter_count, immediate_index;
     MinicFunctionId function_id = MINIC_FUNCTION_INVALID;
     const MinicFunction *callee;
     MinicExpression expression;
@@ -1955,26 +1956,34 @@ static bool parse_target_builtin_unary(
     if (parser->current.kind != MINIC_TOKEN_IDENTIFIER)
         return true;
     name_length = minic_parser_span_length(parser->current.span);
-    if (!minic_target_info_machine_builtin_unary(
+    if (!minic_target_info_machine_builtin_signature(
             parser->target_info,
             parser->source + parser->current.span.begin.offset, name_length,
-            &internal_name, &result_type, &argument_type))
+            internal_name, sizeof(internal_name), &result_type,
+            parameter_types, &parameter_count, &mnemonic, &immediate_index))
         return true;
+    (void)mnemonic;
+    (void)immediate_index;
     *handled = true;
     for (i = 0U; i < parser->program->function_count; ++i) {
         const MinicFunction *candidate =
             minic_c0_program_function(parser->program, i);
+        size_t p;
         if (candidate == NULL || candidate->name == NULL ||
             candidate->name_length != strlen(internal_name) ||
             memcmp(candidate->name, internal_name, candidate->name_length) != 0)
             continue;
         if (candidate->is_defined || candidate->is_variadic ||
-            candidate->parameter_count != 1U ||
-            !minic_type_equal(candidate->return_type, result_type) ||
-            !minic_type_equal(candidate->parameter_types[0], argument_type)) {
+            candidate->parameter_count != parameter_count ||
+            !minic_type_equal(candidate->return_type, result_type)) {
             minic_parser_error(parser, "target builtin reserved callee conflict");
             return false;
         }
+        for (p = 0U; p < parameter_count; ++p)
+            if (!minic_type_equal(candidate->parameter_types[p], parameter_types[p])) {
+                minic_parser_error(parser, "target builtin reserved signature conflict");
+                return false;
+            }
         function_id = i;
         break;
     }
@@ -1983,7 +1992,8 @@ static bool parse_target_builtin_unary(
              parser->program, internal_name, strlen(internal_name),
              parser->program->local_count, 0U, MINIC_BLOCK_INVALID, &function_id) ||
          !minic_c0_program_set_function_signature(
-             parser->program, function_id, result_type, &argument_type, 1U))) {
+             parser->program, function_id, result_type,
+             parameter_types, parameter_count))) {
         minic_parser_error(parser, "cannot declare target machine builtin");
         return false;
     }
@@ -2020,7 +2030,7 @@ bool minic_parser_try_builtin_primary_late(
     if (parser == NULL || expression_id == NULL || handled == NULL)
         return false;
     *handled = false;
-    if (!parse_target_builtin_unary(parser, &primary_id, handled))
+    if (!parse_target_builtin(parser, &primary_id, handled))
         return false;
     if (*handled) {
         if (!minic_parser_parse_postfix(parser, primary_id, &primary_id))

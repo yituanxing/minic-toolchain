@@ -804,23 +804,112 @@ bool minic_target_info_inline_asm_register_clobber_supported(const MinicTargetIn
                                  (name[0] == 'a' && name[1] >= '0' && name[1] <= '7'));
 }
 
-/* Syntax/ABI descriptor only. No backend machine instruction is admitted by
- * this declaration: the LoongArch CALL emitter must also verify the exact
- * signature, one-GPR placement and direct-only call before emitting CPUCFG.
- * New targets add descriptions here, not branches in Frontend/Core. */
-bool minic_target_info_machine_builtin_unary(
+/* GCC LoongArch <larchintrin.h> family: independently checked builtin
+ * signatures, privilege effects and CSR constant operands. This table is
+ * description only, NOT an instruction passthrough or a Core ISA branch.
+ * There is exactly one semantic registry shared by parsing and emission. */
+typedef enum MinicMachineBuiltinScalar {
+    MINIC_MACHINE_BUILTIN_VOID = 0,
+    MINIC_MACHINE_BUILTIN_CHAR,
+    MINIC_MACHINE_BUILTIN_SHORT,
+    MINIC_MACHINE_BUILTIN_INT,
+    MINIC_MACHINE_BUILTIN_LONG,
+    MINIC_MACHINE_BUILTIN_UCHAR,
+    MINIC_MACHINE_BUILTIN_USHORT,
+    MINIC_MACHINE_BUILTIN_UINT,
+    MINIC_MACHINE_BUILTIN_ULONG
+} MinicMachineBuiltinScalar;
+
+typedef struct MinicMachineBuiltinDesc {
+    const char *suffix;
+    const char *mnemonic;
+    MinicMachineBuiltinScalar result;
+    size_t argc;
+    MinicMachineBuiltinScalar arg[3];
+    size_t immediate_index;
+} MinicMachineBuiltinDesc;
+
+static MinicType minic_machine_builtin_type(MinicMachineBuiltinScalar scalar) {
+    switch (scalar) {
+    case MINIC_MACHINE_BUILTIN_CHAR: return minic_type_char();
+    case MINIC_MACHINE_BUILTIN_SHORT: return minic_type_short();
+    case MINIC_MACHINE_BUILTIN_INT: return minic_type_int();
+    case MINIC_MACHINE_BUILTIN_LONG: return minic_type_long();
+    case MINIC_MACHINE_BUILTIN_UCHAR: return minic_type_unsigned_char();
+    case MINIC_MACHINE_BUILTIN_USHORT: return minic_type_unsigned_short();
+    case MINIC_MACHINE_BUILTIN_UINT: return minic_type_unsigned_int();
+    case MINIC_MACHINE_BUILTIN_ULONG: return minic_type_unsigned_long();
+    default: return minic_type_void();
+    }
+}
+
+static const MinicMachineBuiltinDesc minic_loong_machine_builtins[] = {
+    {"cpucfg", "cpucfg", MINIC_MACHINE_BUILTIN_UINT, 1U, {MINIC_MACHINE_BUILTIN_UINT, MINIC_MACHINE_BUILTIN_VOID, MINIC_MACHINE_BUILTIN_VOID}, SIZE_MAX},
+    {"asrtle_d", "asrtle.d", MINIC_MACHINE_BUILTIN_VOID, 2U, {MINIC_MACHINE_BUILTIN_LONG, MINIC_MACHINE_BUILTIN_LONG, MINIC_MACHINE_BUILTIN_VOID}, SIZE_MAX},
+    {"asrtgt_d", "asrtgt.d", MINIC_MACHINE_BUILTIN_VOID, 2U, {MINIC_MACHINE_BUILTIN_LONG, MINIC_MACHINE_BUILTIN_LONG, MINIC_MACHINE_BUILTIN_VOID}, SIZE_MAX},
+    {"crc_w_b_w", "crc.w.b.w", MINIC_MACHINE_BUILTIN_INT, 2U, {MINIC_MACHINE_BUILTIN_CHAR, MINIC_MACHINE_BUILTIN_INT, MINIC_MACHINE_BUILTIN_VOID}, SIZE_MAX},
+    {"crc_w_h_w", "crc.w.h.w", MINIC_MACHINE_BUILTIN_INT, 2U, {MINIC_MACHINE_BUILTIN_SHORT, MINIC_MACHINE_BUILTIN_INT, MINIC_MACHINE_BUILTIN_VOID}, SIZE_MAX},
+    {"crc_w_w_w", "crc.w.w.w", MINIC_MACHINE_BUILTIN_INT, 2U, {MINIC_MACHINE_BUILTIN_INT, MINIC_MACHINE_BUILTIN_INT, MINIC_MACHINE_BUILTIN_VOID}, SIZE_MAX},
+    {"crc_w_d_w", "crc.w.d.w", MINIC_MACHINE_BUILTIN_INT, 2U, {MINIC_MACHINE_BUILTIN_LONG, MINIC_MACHINE_BUILTIN_INT, MINIC_MACHINE_BUILTIN_VOID}, SIZE_MAX},
+    {"crcc_w_b_w", "crcc.w.b.w", MINIC_MACHINE_BUILTIN_INT, 2U, {MINIC_MACHINE_BUILTIN_CHAR, MINIC_MACHINE_BUILTIN_INT, MINIC_MACHINE_BUILTIN_VOID}, SIZE_MAX},
+    {"crcc_w_h_w", "crcc.w.h.w", MINIC_MACHINE_BUILTIN_INT, 2U, {MINIC_MACHINE_BUILTIN_SHORT, MINIC_MACHINE_BUILTIN_INT, MINIC_MACHINE_BUILTIN_VOID}, SIZE_MAX},
+    {"crcc_w_w_w", "crcc.w.w.w", MINIC_MACHINE_BUILTIN_INT, 2U, {MINIC_MACHINE_BUILTIN_INT, MINIC_MACHINE_BUILTIN_INT, MINIC_MACHINE_BUILTIN_VOID}, SIZE_MAX},
+    {"crcc_w_d_w", "crcc.w.d.w", MINIC_MACHINE_BUILTIN_INT, 2U, {MINIC_MACHINE_BUILTIN_LONG, MINIC_MACHINE_BUILTIN_INT, MINIC_MACHINE_BUILTIN_VOID}, SIZE_MAX},
+    {"iocsrrd_b", "iocsrrd.b", MINIC_MACHINE_BUILTIN_UCHAR, 1U, {MINIC_MACHINE_BUILTIN_UINT, MINIC_MACHINE_BUILTIN_VOID, MINIC_MACHINE_BUILTIN_VOID}, SIZE_MAX},
+    {"iocsrrd_h", "iocsrrd.h", MINIC_MACHINE_BUILTIN_USHORT, 1U, {MINIC_MACHINE_BUILTIN_UINT, MINIC_MACHINE_BUILTIN_VOID, MINIC_MACHINE_BUILTIN_VOID}, SIZE_MAX},
+    {"iocsrrd_w", "iocsrrd.w", MINIC_MACHINE_BUILTIN_UINT, 1U, {MINIC_MACHINE_BUILTIN_UINT, MINIC_MACHINE_BUILTIN_VOID, MINIC_MACHINE_BUILTIN_VOID}, SIZE_MAX},
+    {"iocsrrd_d", "iocsrrd.d", MINIC_MACHINE_BUILTIN_ULONG, 1U, {MINIC_MACHINE_BUILTIN_UINT, MINIC_MACHINE_BUILTIN_VOID, MINIC_MACHINE_BUILTIN_VOID}, SIZE_MAX},
+    {"iocsrwr_b", "iocsrwr.b", MINIC_MACHINE_BUILTIN_VOID, 2U, {MINIC_MACHINE_BUILTIN_UCHAR, MINIC_MACHINE_BUILTIN_UINT, MINIC_MACHINE_BUILTIN_VOID}, SIZE_MAX},
+    {"iocsrwr_h", "iocsrwr.h", MINIC_MACHINE_BUILTIN_VOID, 2U, {MINIC_MACHINE_BUILTIN_USHORT, MINIC_MACHINE_BUILTIN_UINT, MINIC_MACHINE_BUILTIN_VOID}, SIZE_MAX},
+    {"iocsrwr_w", "iocsrwr.w", MINIC_MACHINE_BUILTIN_VOID, 2U, {MINIC_MACHINE_BUILTIN_UINT, MINIC_MACHINE_BUILTIN_UINT, MINIC_MACHINE_BUILTIN_VOID}, SIZE_MAX},
+    {"iocsrwr_d", "iocsrwr.d", MINIC_MACHINE_BUILTIN_VOID, 2U, {MINIC_MACHINE_BUILTIN_ULONG, MINIC_MACHINE_BUILTIN_UINT, MINIC_MACHINE_BUILTIN_VOID}, SIZE_MAX},
+    {"csrrd_w", "csrrd", MINIC_MACHINE_BUILTIN_UINT, 1U, {MINIC_MACHINE_BUILTIN_UINT, MINIC_MACHINE_BUILTIN_VOID, MINIC_MACHINE_BUILTIN_VOID}, 0U},
+    {"csrrd_d", "csrrd", MINIC_MACHINE_BUILTIN_ULONG, 1U, {MINIC_MACHINE_BUILTIN_UINT, MINIC_MACHINE_BUILTIN_VOID, MINIC_MACHINE_BUILTIN_VOID}, 0U},
+    {"csrwr_w", "csrwr", MINIC_MACHINE_BUILTIN_UINT, 2U, {MINIC_MACHINE_BUILTIN_UINT, MINIC_MACHINE_BUILTIN_UINT, MINIC_MACHINE_BUILTIN_VOID}, 1U},
+    {"csrwr_d", "csrwr", MINIC_MACHINE_BUILTIN_ULONG, 2U, {MINIC_MACHINE_BUILTIN_ULONG, MINIC_MACHINE_BUILTIN_UINT, MINIC_MACHINE_BUILTIN_VOID}, 1U},
+    {"csrxchg_w", "csrxchg", MINIC_MACHINE_BUILTIN_UINT, 3U, {MINIC_MACHINE_BUILTIN_UINT, MINIC_MACHINE_BUILTIN_UINT, MINIC_MACHINE_BUILTIN_UINT}, 2U},
+    {"csrxchg_d", "csrxchg", MINIC_MACHINE_BUILTIN_ULONG, 3U, {MINIC_MACHINE_BUILTIN_ULONG, MINIC_MACHINE_BUILTIN_ULONG, MINIC_MACHINE_BUILTIN_UINT}, 2U},
+};
+
+bool minic_target_info_machine_builtin_signature(
     const MinicTargetInfo *target, const char *spelling, size_t length,
-    const char **internal_callee, MinicType *result, MinicType *argument) {
-    static const char gnu_cpucfg[] = "__builtin_loongarch_cpucfg";
-    if (target == NULL || spelling == NULL || internal_callee == NULL ||
-        result == NULL || argument == NULL)
+    char *callee, size_t callee_capacity, MinicType *result,
+    MinicType arguments[3], size_t *argument_count,
+    const char **mnemonic, size_t *immediate_index) {
+    static const char gnu_prefix[] = "__builtin_loongarch_";
+    static const char internal_prefix[] = "__minic_target_builtin_loongarch_";
+    const MinicMachineBuiltinDesc *descriptor;
+    size_t i, suffix_length, prefix_length;
+    if (target == NULL || target->architecture != MINIC_TARGET_ARCH_LOONGARCH64 ||
+        spelling == NULL || result == NULL || arguments == NULL ||
+        argument_count == NULL || mnemonic == NULL || immediate_index == NULL ||
+        callee == NULL || callee_capacity == 0U ||
+        length <= sizeof(gnu_prefix) - 1U ||
+        memcmp(spelling, gnu_prefix, sizeof(gnu_prefix) - 1U) != 0)
         return false;
-    if (target->architecture == MINIC_TARGET_ARCH_LOONGARCH64 &&
-        length == sizeof(gnu_cpucfg) - 1U &&
-        memcmp(spelling, gnu_cpucfg, sizeof(gnu_cpucfg) - 1U) == 0) {
-        *internal_callee = "__minic_target_builtin_loongarch_cpucfg";
-        *result = minic_type_unsigned_int();
-        *argument = minic_type_unsigned_int();
+    suffix_length = length - (sizeof(gnu_prefix) - 1U);
+    prefix_length = sizeof(internal_prefix) - 1U;
+    if (suffix_length > SIZE_MAX - prefix_length ||
+        prefix_length + suffix_length >= callee_capacity)
+        return false;
+    for (i = 0U;
+         i < sizeof(minic_loong_machine_builtins) / sizeof(minic_loong_machine_builtins[0]);
+         ++i) {
+        size_t j;
+        descriptor = &minic_loong_machine_builtins[i];
+        if (strlen(descriptor->suffix) != suffix_length ||
+            memcmp(spelling + sizeof(gnu_prefix) - 1U,
+                   descriptor->suffix, suffix_length) != 0)
+            continue;
+        (void)memcpy(callee, internal_prefix, prefix_length);
+        (void)memcpy(callee + prefix_length, descriptor->suffix, suffix_length);
+        callee[prefix_length + suffix_length] = '\0';
+        *result = minic_machine_builtin_type(descriptor->result);
+        for (j = 0U; j < descriptor->argc; ++j)
+            arguments[j] = minic_machine_builtin_type(descriptor->arg[j]);
+        *argument_count = descriptor->argc;
+        *mnemonic = descriptor->mnemonic;
+        *immediate_index = descriptor->immediate_index;
         return true;
     }
     return false;

@@ -7,6 +7,8 @@
 #include "target/common/lp64_aggregate.h"
 #include "target/loongarch64/frame_emit.h"
 #include <stdio.h>
+#include <stdint.h>
+#include <inttypes.h>
 #include <string.h>
 
 /* Outgoing locations use raw SP; dynamic frame slots use the s0 base. */
@@ -35,6 +37,37 @@ static bool emit_lp64_record_chunk_argument(FILE *out, size_t offset,
     if (in_reg)
         return fprintf(out, "  or $a%zu, $t0, $zero\n", gp) >= 0;
     return minic_loongarch64_emit_sp_mem(out, "st.d", "$t0", stack_slot * 8U);
+}
+
+/* Resolve only immutable integer-constant SSA operands. CSR numbers must
+ * be known at compilation time; never treat a dynamic GPR as CSR index. */
+static bool loongarch_builtin_immediate_value(
+    const MinicCoreFunction *fn, MinicCoreValueId value, uint64_t *out) {
+    unsigned depth;
+    if (fn == NULL || out == NULL || value >= fn->value_count)
+        return false;
+    for (depth = 0U; depth < 5U; ++depth) {
+        size_t i;
+        bool found = false;
+        for (i = 0U; i < fn->instruction_count; ++i) {
+            const MinicCoreInstruction *ins = &fn->instructions[i];
+            if (ins->result != value)
+                continue;
+            if (ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT) {
+                *out = (uint64_t)ins->value.integer_value;
+                return true;
+            }
+            if (ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_CONVERSION &&
+                ins->value.operand < fn->value_count) {
+                value = ins->value.operand;
+                found = true;
+            }
+            break;
+        }
+        if (!found)
+            return false;
+    }
+    return false;
 }
 
 /* Outgoing calls and incoming named parameters share the same ABI plan
@@ -188,26 +221,86 @@ bool minic_loongarch64_emit_abi_instruction(
             } else {
                 const MinicCoreCallee *callee =
                     &fn->callees[ins->value.call.callee_id];
-                /* GCC __builtin_loongarch_cpucfg is a unary uint32 ->
-                 * uint32 hardware operation, not an external function.
-                 * The shared LP64 CALL planner already put the argument in
-                 * a0. Qualify that placement and the physical result before
-                 * emitting; never permit indirect calls or arbitrary names. */
+                /* Revalidate the complete semantic ABI and exact ISA
+                 * mnemonic against the SAME TargetInfo table as Frontend.
+                 * No arbitrary GNU asm is forwarded through a raw template. */
+                static const char internal_prefix[] =
+                    "__minic_target_builtin_loongarch_";
+                static const char gnu_prefix[] = "__builtin_loongarch_";
                 if (callee->name != NULL &&
-                    strcmp(callee->name,
-                           "__minic_target_builtin_loongarch_cpucfg") == 0) {
-                    if (count != 1U || stack_bytes != 0U ||
-                        !minic_type_equal(ins->type, minic_type_unsigned_int()) ||
-                        call_plan->arguments[0].gp_first != 0U ||
-                        call_plan->arguments[0].gp_registers != 1U ||
-                        call_plan->arguments[0].fp_registers != 0U ||
-                        fn->call_arguments[begin].kind !=
-                            MINIC_CORE_CALL_ARGUMENT_VALUE ||
-                        !minic_type_equal(
-                            fn->values[fn->call_arguments[begin].value.value_id].type,
-                            minic_type_unsigned_int()) ||
-                        fputs("  cpucfg $a0, $a0\n", out) == EOF)
+                    strncmp(callee->name, internal_prefix,
+                            sizeof(internal_prefix) - 1U) == 0) {
+                    char builtin_name[128], validated_name[128];
+                    const char *mnemonic = NULL;
+                    MinicType result_type, argument_types[3];
+                    size_t argc = 0U, immediate_index = SIZE_MAX;
+                    size_t k;
+                    uint64_t imm = 0U;
+                    size_t suffix_length =
+                        strlen(callee->name + sizeof(internal_prefix) - 1U);
+                    if (sizeof(gnu_prefix) - 1U + suffix_length >=
+                        sizeof(builtin_name))
                         return false;
+                    (void)memcpy(builtin_name, gnu_prefix,
+                                 sizeof(gnu_prefix) - 1U);
+                    (void)memcpy(builtin_name + sizeof(gnu_prefix) - 1U,
+                                 callee->name + sizeof(internal_prefix) - 1U,
+                                 suffix_length + 1U);
+                    if (!minic_target_info_machine_builtin_signature(
+                            target, builtin_name, strlen(builtin_name),
+                            validated_name, sizeof(validated_name),
+                            &result_type, argument_types, &argc,
+                            &mnemonic, &immediate_index) ||
+                        strcmp(validated_name, callee->name) != 0 ||
+                        !minic_type_equal(ins->type, result_type) ||
+                        count != argc || count > 3U ||
+                        stack_bytes != 0U || mnemonic == NULL)
+                        return false;
+                    for (k = 0U; k < count; ++k) {
+                        const MinicCoreCallArgument *arg =
+                            &fn->call_arguments[begin + k];
+                        if (arg->kind != MINIC_CORE_CALL_ARGUMENT_VALUE ||
+                            arg->value.value_id >= fn->value_count ||
+                            !minic_type_equal(
+                                fn->values[arg->value.value_id].type,
+                                argument_types[k]) ||
+                            call_plan->arguments[k].gp_first != k ||
+                            call_plan->arguments[k].gp_registers != 1U ||
+                            call_plan->arguments[k].fp_registers != 0U ||
+                            call_plan->arguments[k].stack_first != 0U)
+                            return false;
+                    }
+                    if (immediate_index != SIZE_MAX) {
+                        if (immediate_index >= count ||
+                            !loongarch_builtin_immediate_value(
+                                fn, fn->call_arguments[
+                                    begin + immediate_index].value.value_id, &imm) ||
+                            imm > 16383U)
+                            return false;
+                    }
+                    if (immediate_index != SIZE_MAX) {
+                        if (count == 1U) {
+                            if (fprintf(out, "  %s $a0, %" PRIu64 "\n",
+                                        mnemonic, imm) < 0) return false;
+                        } else if (count == 2U) {
+                            if (fprintf(out, "  %s $a0, %" PRIu64 "\n",
+                                        mnemonic, imm) < 0) return false;
+                        } else if (fprintf(out, "  %s $a0, $a1, %" PRIu64 "\n",
+                                           mnemonic, imm) < 0) return false;
+                    } else if (count == 1U) {
+                        if (fprintf(out, "  %s $a0, $a0\n", mnemonic) < 0)
+                            return false;
+                    } else if (count == 2U &&
+                               (strncmp(mnemonic, "crc.", 4U) == 0 ||
+                                strncmp(mnemonic, "crcc.", 5U) == 0)) {
+                        if (fprintf(out, "  %s $a0, $a0, $a1\n", mnemonic) < 0)
+                            return false;
+                    } else if (count == 2U) {
+                        if (fprintf(out, "  %s $a0, $a1\n", mnemonic) < 0)
+                            return false;
+                    } else {
+                        return false;
+                    }
                 } else if (fprintf(out, "  bl %s\n", callee->name) < 0) {
                     return false;
                 }
