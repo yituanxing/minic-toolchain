@@ -1,5 +1,7 @@
 name: MiniAS Affected Target Seven-Way Linux ISA Frontier
 
+# Exact GNU original Kbuild shard corpus replay after grouped support for GCC's
+# location-assignment '.L2 = .' through the Common fragment-anchor path.
 # After a batch of target-local encoding changes, rerun only affected
 # x86-64 and LoongArch64 on the SAME frozen original Linux GNU Kbuild inputs.
 on:
