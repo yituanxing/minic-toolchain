@@ -16,6 +16,8 @@ mkdir -p "$work"
 
 test -s "$assembly"
 grep -F 'prefix_attribute_identity:' "$assembly" >/dev/null
+grep -F 'minic_probe_const_underscored:' "$assembly" >/dev/null
+grep -F 'minic_probe_const_plain:' "$assembly" >/dev/null
 grep -F 'linux_noinstr_plain:' "$assembly" >/dev/null
 grep -F 'linux_noinstr_underscored:' "$assembly" >/dev/null
 grep -F 'linux_artificial_calls:' "$assembly" >/dev/null
@@ -59,6 +61,10 @@ int shared_artificial_under(int value) { return value - 2; }
 int shared_metadata_use(int value) {
     return shared_artificial(value) + shared_artificial_under(value);
 }
+/* Real original GNU Linux ABI prototypes and C qualifier aliases. */
+extern void *memcpy(void *__to, __const__ void *__from, unsigned long __n);
+int shared_const_qualified(__const__ int *p) { return *p; }
+int shared_const_plain(__const int *p) { return *p; }
 SRC
 for target in riscv32-linux riscv64-linux x86_64-linux aarch64-linux loongarch64-linux; do
     "$minic" --target="$target" -S "$work/gnu-shared-metadata.i" \
@@ -66,6 +72,8 @@ for target in riscv32-linux riscv64-linux x86_64-linux aarch64-linux loongarch64
     test -s "$work/gnu-prefix-$target.s"
     grep -F 'shared_noinstr:' "$work/gnu-prefix-$target.s" >/dev/null
     grep -F 'shared_metadata_use:' "$work/gnu-prefix-$target.s" >/dev/null
+    grep -F 'shared_const_qualified:' "$work/gnu-prefix-$target.s" >/dev/null
+    grep -F 'shared_const_plain:' "$work/gnu-prefix-$target.s" >/dev/null
 done
 
 "$host_cc" -E -P -std=gnu11 -x c "$root/tests/compiler/c0/gnu_extern_inline_attribute.c" \
@@ -95,4 +103,4 @@ fi
 grep -F 'GNU no_sanitize requires one string literal' \
     "$work/no-sanitize-invalid.err" >/dev/null
 
-printf '%s\n' 'PASS compiler/c0/gnu_prefix_function_attributes five_target_language_policy=1 prefix=1 metadata=unused,no-instrument,artificial,externally-visible function+object=1 reachability=parse-only public-linkage=preserved gnu-inline=static+bare+plain-spelling always-inline=underscored+plain-spelling extern-inline=fail-closed no-sanitize-address=parse-only no-stack-protector=parse-only'
+printf '%s\n' 'PASS compiler/c0/gnu_prefix_function_attributes five_target_language_policy=1 gnu_const_aliases=5_targets prefix=1 metadata=unused,no-instrument,artificial,externally-visible function+object=1 reachability=parse-only public-linkage=preserved gnu-inline=static+bare+plain-spelling always-inline=underscored+plain-spelling extern-inline=fail-closed no-sanitize-address=parse-only no-stack-protector=parse-only'

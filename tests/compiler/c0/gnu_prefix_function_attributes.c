@@ -1,3 +1,9 @@
+/* Real GNU kernel libc prototypes use __const__ and __const.
+ * These qualify C types and cannot be target-specific expressions. */
+extern void *minic_probe_memcpy(void *dst, __const__ void *src, unsigned long len);
+int minic_probe_const_underscored(const __const__ int *p) { return *p; }
+int minic_probe_const_plain(const __const int *p) { return *p; }
+
 /* Linux no_instrument_function has both spellings; GCC artificial only
  * changes debug-inline call-site attribution, not code or call ABI. */
 __attribute__((no_instrument_function))
