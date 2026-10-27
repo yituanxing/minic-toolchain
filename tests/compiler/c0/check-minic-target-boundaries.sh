@@ -31,6 +31,13 @@ has src/target/x86_64/machine_call.c \
   'minic_x86_64_plan_outgoing_arguments('
 has src/target/riscv64/core_codegen.c \
   'minic_riscv64_core_function_admit_profile('
+# RV32 fixed-arity psABI placement must follow the declared parameter, not
+# the expression's potentially narrower actual type (RV64/x86 already do).
+has src/target/riscv32/rv32_abi_plan.c 'type = i < view.parameter_count ? view.parameter_types[i] : actual;'
+has src/target/riscv32/rv32_abi_plan.c 'call_fixed_type'
+has src/target/riscv32/rv32_frame.c 'off == SIZE_MAX'
+has src/target/riscv32/rv32_frame.c 'strcmp(reg, "t6") == 0'
+
 has src/target/riscv64/frame_layout.c \
   'minic_core_object_reuse_plan_build('
 # One Common interval index covers small and large Core functions.
@@ -714,6 +721,16 @@ cc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror \
   src/target/common/core_call_index.c src/frontend/type.c \
   -o "$work/core-call-probe"
 "$work/core-call-probe"
+
+# Real RV32 ILP32 physical access safety. Function-section GC links only
+# the production stack transport helpers, without a GNU cross toolchain.
+# All malformed Core slots and scratch register aliases must fail closed.
+cc -std=c11 -Wall -Wextra -Wpedantic -Werror \
+  -ffunction-sections -fdata-sections -Wl,--gc-sections \
+  -Iinclude -Isrc tests/compiler/c0/probe-rv32-frame-access.c \
+  src/target/riscv32/rv32_frame.c \
+  -o "$work/rv32-frame-access-probe"
+"$work/rv32-frame-access-probe"
 
 # Exercise the two historical SSA layouts in one true Common planner and
 # prove bounds/rollback before testing native machine frame and QEMU ABIs.

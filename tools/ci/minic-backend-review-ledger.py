@@ -53,14 +53,18 @@ def main():
                      or len(rec.get("blob", "")) != 40)
     stale = sorted(p for p in present & known
                    if blob(p) != reviewed[p]["blob"])
+    stale_set = set(stale)
     state = {}
     for p in sorted(present):
-        depth = reviewed[p]["review_depth"] if p in reviewed else "new"
+        # A completed old source review cannot certify a different blob.
+        # Do not count changed "full" files as still fully reviewed.
+        depth = (reviewed[p]["review_depth"] if p in reviewed and
+                 p not in stale_set else "new")
         key = p.split("/")[2]
         d = state.setdefault(key, dict(total=0, full=0, targeted=0,
                                       pending=0, changed=0))
         d["total"] += 1
-        if p in stale:
+        if p in stale_set:
             d["changed"] += 1
         if depth == "full":
             d["full"] += 1
@@ -79,6 +83,9 @@ def main():
             "stale": stale, "invalid": invalid,
         }, sort_keys=True))
     if args.changed:
+        for p in stale:
+            if reviewed[p]["review_depth"] == "full":
+                print("MINIC_REVIEW_STALE_FULL", p)
         for p in manifest["next_deep_review"]:
             if p in present and (p in stale or
                                   reviewed[p]["review_depth"] != "full"):

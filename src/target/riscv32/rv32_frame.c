@@ -198,6 +198,17 @@ void rv32_frame_destroy(Rv32Frame *f) {
  * when dynamic alloca changes sp. t6 owns large-displacement addressing. */
 static bool rv32_stack_at(FILE *out, const char *base, const char *op,
                           const char *reg, size_t off) {
+    if (out == NULL || base == NULL || op == NULL || reg == NULL ||
+        off > (size_t)INT32_MAX)
+        return false;
+    /* t6 is the large-displacement address scratch. Storing t6 through
+     * t6 would overwrite the original payload before sw; refuse rather
+     * than silently generate corrupt machine code. Loads into t6 remain
+     * valid, since its old value is not an input. */
+    if (off > 2047U && strcmp(reg, "t6") == 0 &&
+        (strcmp(op, "sw") == 0 || strcmp(op, "sb") == 0 ||
+         strcmp(op, "sh") == 0))
+        return false;
     if (off <= 2047U)
         return fprintf(out, "  %s %s, %zu(%s)\n", op, reg, off, base) >= 0;
     return fprintf(out, "  li t6, %zu\n  add t6, %s, t6\n"
@@ -211,21 +222,36 @@ bool rv32_fixed_stack(FILE *out, const Rv32Frame *fr,
     return fr != NULL && rv32_stack_at(
         out, fr->has_dynamic_stack ? "s0" : "sp", op, reg, off);
 }
+/* A valid Core ID is not itself proof of an allocated machine slot.
+ * Uninitialized entries use SIZE_MAX, and must never be printed as an
+ * immediate or wrapped by the two-word access below. */
 bool rv32_slot(FILE *out, const Rv32Frame *f,
                        MinicCoreValueId id, const char *reg, bool load) {
-    return id != MINIC_CORE_VALUE_INVALID && (size_t)id < f->value_count &&
-           rv32_fixed_stack(out, f, load ? "lw" : "sw", reg,
-                      f->value_offsets[id]);
+    size_t off;
+    if (out == NULL || f == NULL || reg == NULL ||
+        f->value_offsets == NULL || id == MINIC_CORE_VALUE_INVALID ||
+        (size_t)id >= f->value_count)
+        return false;
+    off = f->value_offsets[id];
+    return off != SIZE_MAX && off <= (size_t)INT32_MAX &&
+           off <= f->frame_size && f->frame_size - off >= 4U &&
+           rv32_fixed_stack(out, f, load ? "lw" : "sw", reg, off);
 }
 /* Low-word first: RISC-V ELF32 and the little-endian ILP32 psABI. */
 bool rv32_pair_slot(FILE *out, const Rv32Frame *f,
                            MinicCoreValueId id,
                            const char *low, const char *high, bool load) {
-    return id != MINIC_CORE_VALUE_INVALID && (size_t)id < f->value_count &&
-           rv32_fixed_stack(out, f, load ? "lw" : "sw", low,
-                      f->value_offsets[id]) &&
-           rv32_fixed_stack(out, f, load ? "lw" : "sw", high,
-                      f->value_offsets[id] + 4U);
+    size_t off;
+    if (out == NULL || f == NULL || low == NULL || high == NULL ||
+        f->value_offsets == NULL || id == MINIC_CORE_VALUE_INVALID ||
+        (size_t)id >= f->value_count)
+        return false;
+    off = f->value_offsets[id];
+    if (off == SIZE_MAX || off > (size_t)INT32_MAX - 4U ||
+        off > f->frame_size || f->frame_size - off < 8U)
+        return false;
+    return rv32_fixed_stack(out, f, load ? "lw" : "sw", low, off) &&
+           rv32_fixed_stack(out, f, load ? "lw" : "sw", high, off + 4U);
 }
 bool rv32_address(FILE *out, const Rv32Frame *fr,
                   const char *reg, size_t off) {
@@ -239,6 +265,7 @@ bool rv32_address(FILE *out, const Rv32Frame *fr,
 }
 bool rv32_incoming_word(FILE *out, const Rv32Frame *fr,
                                size_t word, const char *reg) {
+    if (out == NULL || fr == NULL || reg == NULL) return false;
     if (word < 8U)
         return fprintf(out, "  mv %s, a%zu\n", reg, word) >= 0;
     /* Dynamic frame realignment means caller arguments are relative to
@@ -263,6 +290,7 @@ bool rv32_incoming_word(FILE *out, const Rv32Frame *fr,
 }
 bool rv32_outgoing_word(FILE *out, const Rv32Frame *fr,
                                size_t word, const char *reg) {
+    if (out == NULL || fr == NULL || reg == NULL) return false;
     if (word < 8U)
         return fprintf(out, "  mv a%zu, %s\n", word, reg) >= 0;
     return word - 8U < fr->outgoing_size / 4U &&

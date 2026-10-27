@@ -36,3 +36,15 @@
 2. P1：RV64 2064/2064 新 HEAD 完整 GNU Linux Image/P1 对照；与 RV32 的已经确认证据并列保存。
 3. P1：AArch64/LoongArch 的动态栈、long double/int128、large frame、varargs 与真实 GNU/QEMU 做专项差分；这些并非只看源代码就能宣称完整正确。
 4. P2：R10 只继续抽离确有同一机器中立算法的重复计算；不要重写 x86、AArch64、LoongArch 机器发射器。R11 过时文档/未使用的目标名字按编译与 CI 证据逐步删除。
+
+## 2026-10-27 incremental follow-up (base main a2c88e13)
+
+Scope: cross-checked the 2026-10-26 source-wide audit, merged PRs #665/#666/#668/#669, and the fingerprinted review ledger. The unchanged Frontend, Core CFG, LP64 function dispatcher and Common object planner are not re-reviewed without source drift. Full source was read for RV32 physical frame and call ABI planners and RV64 physical frame. Parts of x86/RV64/AArch64/LoongArch CALL emitters were inspected selectively, not certified fully read.
+
+**P1 confirmed: RV32 prototype-vs-actual ABI classification.** rv32_plan_call previously used the expression's actual Core value type for fixed prototype arguments, unlike RV64 and x86 which use the declared signature. This can reserve the wrong GP/stack word count for width-mismatched fixed arguments. The correction selects formal for fixed and actual for variadics, and rejects unconverted fixed scalar mismatches rather than silently emitting the wrong ABI. This may expose incorrect upstream Core conversions; exact-head upstream/QEMU evidence is required before merging.
+
+**P2 confirmed: malformed RV32 machine frame accesses.** Slot helpers admitted a valid Core ID with the SIZE_MAX unallocated offset sentinel and wide access could wrap offset +4. A large-offset store using t6 as both scratch address register and source would silently corrupt that source. Corrective machine guards reject absent/unallocated/out-of-frame 4- and 8-byte slots, preserve all existing valid calls, and refuse self-aliasing large stores; a native negative probe exercises actual RV32 frame helpers.
+
+**Reviewed without change:** RV64 physical frame size and second offset placement walk still implement separate target-specific psABI geometry, not a proven redundant Common semantic scan. Keep RV32 ILP32, RV64 LP64, x86 SysV, AAPCS64 and LoongArch64 LP64D physical call mechanics independent. Priority for remaining deep inspection moves to five call emitters; ledger tracks source revisions and review depth without claiming inventory means full review.
+
+**Open:** RV64 latest-head original Linux Image/QEMU P1, versus the narrower seven frozen C shards; AArch64/LoongArch dynamic frame, varargs and FP QEMU differential; potential quadratic first-fit spill search, which needs a profile before algorithm replacement. None should be marked resolved by a broad PASS badge alone.

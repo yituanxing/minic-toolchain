@@ -139,10 +139,18 @@ static bool rv32_plan_call(const MinicC0Program *program,
     }
     for (i = 0U; i < view.argument_count; ++i) {
         Rv32AbiWordLocation *entry = &call->arguments[i];
-        MinicType type;
+        MinicType actual, type;
         if (!minic_core_call_view_argument_type(
-                function, &view, i, &type))
+                function, &view, i, &actual))
             return rv32_abi_reject("call_actual_type", i, minic_type_void());
+        /* psABI placement of fixed parameters belongs to the *declared*
+         * prototype, not the C expression's pre-conversion type. RV64,
+         * x86 SysV and Direct LP64 already use this distinction. If an
+         * explicit Core conversion is absent, do not silently marshal a
+         * 1-word value as a 2-word formal (or vice versa). */
+        type = i < view.parameter_count ? view.parameter_types[i] : actual;
+        if (i < view.parameter_count && !minic_type_equal(type, actual))
+            return rv32_abi_reject("call_fixed_type", i, type);
         /* Record varargs obey the very same ILP32 ABI shape and cursor as
          * scalar varargs: <=2 XLEN words by value, larger via the caller's
          * Core snapshot pointer. The variadic flag below makes the cursor
