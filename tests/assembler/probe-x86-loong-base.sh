@@ -38,6 +38,10 @@ entry_x:
     # Group-5 indirect memory transfers must not masquerade as PLT32.
     call *%gs:40
     call *ext_global(%rip)
+    # GNU AT&T absolute symbols use SIB base=101 and R_X86_64_32S,
+    # not RIP-relative PC32 and not a signed32 immediate.
+    call *handler_ptr
+    jmp *exit_ptr
     jmp *8(%r12,%r13,4)
     jmp *%fs:4(%rbx)
     push %r12
@@ -61,6 +65,10 @@ entry_x:
     movl %gs:pcpu_hot+8(%rip), %r9d
     # Segment is only a prefix: preserve base/index/scale/disp ModR/M.
     movq %gs:8(%rdi), %rax
+    movq abs64_slot, %rax
+    movl %eax, abs32_slot
+    cmpb $1, flag_abs
+    movq 1234, %rax
     movl %fs:16(%r12,%r13,4), %r9d
     movb %al, %gs:1(%rbp)
     cmpb $1, %gs:16(%rax)
@@ -971,5 +979,5 @@ GNU_FILL
 "$LOONGCOPY" -j .data -O binary "$work/la-fill-gnu.o" "$work/la-fill-gnu.bin"
 cmp "$work/la-fill-mini.bin" "$work/la-fill-gnu.bin"
 echo 'MINIAS_COMMON_FILL=PASS GNU_LA64_data_bytes=equal'
-echo 'MINIAS_X86_SEGMENTED_INDIRECT=PASS GNU_AS_text_and_relocations segment_base_index_abs_rip=true indirect_memory_call_jmp=true'
+echo 'MINIAS_X86_SEGMENTED_INDIRECT=PASS GNU_AS_text_and_relocations segment_base_index_abs_rip=true indirect_memory_call_jmp=true absolute_symbol32S=true'
 echo 'MINIAS_TWO_TARGET_ORACLE=PASS x86_GNU_bytes=equal loong_GNU_bytes=equal ELF_machine=correct lp64d_v1=0x43 CET_endbr64=1 ALU_imm8_imm32=1 x86_ModRM_SIB_disp=1 x86_test_cmp_alu_memory=1 x86_scaled_index_SIB=1 LA_jr=1 LA_scaled_ptr14=1 LA_imm12_shift_upper20=1 invalid=reject'
