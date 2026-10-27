@@ -853,14 +853,15 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
         unsigned bits=!strcmp(s->op,"testw")?16U:
                       !strcmp(s->op,"testl")?32U:64U;
         uint64_t imm;
-        bool wd=false;
+        bool width64=false;
         bool matched=bits==16U?x64_register16(dst,&rd):
-                     x64_register(dst,&rd,&wd) && wd==(bits==64U);
+                     x64_register(dst,&rd,&width64) &&
+                     width64==(bits==64U);
         if(matched && minias_eval_u64_expression(src+1,&imm) &&
            (bits==16U?
             ((int64_t)imm>=-32768 && (int64_t)imm<=65535):
             bits==32U?
-            (imm<=UINT32_MAX || (int64_t)imm>=INT32_MIN && (int64_t)imm<0):
+            (imm<=UINT32_MAX || ((int64_t)imm>=INT32_MIN && (int64_t)imm<0)):
             (int64_t)imm>=INT32_MIN && (int64_t)imm<=INT32_MAX)) {
             m->opcode=X64_TEST_IMM_REG;m->count=2U;
             m->encoding=bits==16U?0x400U:0U;
