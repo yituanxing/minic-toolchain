@@ -1884,7 +1884,6 @@ bool minias_riscv_encode(MiniAs *as, const MiniAsStmt *stmt) {
     int rs1;
     int rs2;
     int64_t immediate;
-    uint32_t value = 0U;
     uint32_t funct3;
 
     if (strcmp(stmt->op, "sfence.vma") == 0) {
