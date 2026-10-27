@@ -1,6 +1,7 @@
 name: MiniAS Immutable Linux 3x7 GNU Kbuild S Replay
 
 # Frozen original Linux 6.6.143 inputs. Discovery, NOT P1/parity.
+# LoongArch focused exact-head seven shards after GNU IOCSR/TLB/CFI/conditional batch.
 # Re-measure AArch64 target post-LSE + cross-section PREL32 + PRFM/.inst
 # against all 4140 frozen original GNU Kbuild .s, seven shards one head.
 # AArch64 only: 7 frozen shards after real LSE extension gating/atomics.
@@ -36,13 +37,13 @@ jobs:
   shard:
     # Opt-in large grouped corpus only. Target fixes normally run unit GNU
     # parity; explicit batch marker or workflow_dispatch scans all 21 shards.
-    if: github.event_name == 'workflow_dispatch' || (contains(github.event.head_commit.message, '[minias-replay-3x7]') || contains(github.event.head_commit.message, '[minias-replay-aarch-7]'))
+    if: github.event_name == 'workflow_dispatch' || (contains(github.event.head_commit.message, '[minias-replay-3x7]') || contains(github.event.head_commit.message, '[minias-replay-aarch-7]') || contains(github.event.head_commit.message, '[minias-replay-loong-7]'))
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     strategy:
       fail-fast: false
       matrix:
-        target: ${{ fromJSON(contains(github.event.head_commit.message, '[minias-replay-aarch-7]') && '["aarch64"]' || '["x86_64","aarch64","loongarch64"]') }}
+        target: ${{ fromJSON(contains(github.event.head_commit.message, '[minias-replay-aarch-7]') && '["aarch64"]' || contains(github.event.head_commit.message, '[minias-replay-loong-7]') && '["loongarch64"]' || '["x86_64","aarch64","loongarch64"]') }}
         shard: [0, 1, 2, 3, 4, 5, 6]
     steps:
       - uses: actions/checkout@v4
@@ -101,10 +102,10 @@ jobs:
         with:
           pattern: minias-linux-replay-*
           path: build/minias-linux-replay-collected
-      - name: Require exactly 21 owned shards and disjoint architecture pools
+      - name: Require all selected 7-way shards, with disjoint architecture pools
         run: |
           python3 tools/ci/minias-linux-kbuild-seven-v1.py aggregate \
-            --targets "${{ contains(github.event.head_commit.message, '[minias-replay-aarch-7]') && 'aarch64' || 'x86_64,aarch64,loongarch64' }}" \
+            --targets "${{ contains(github.event.head_commit.message, '[minias-replay-aarch-7]') && 'aarch64' || contains(github.event.head_commit.message, '[minias-replay-loong-7]') && 'loongarch64' || 'x86_64,aarch64,loongarch64' }}" \
             --results build/minias-linux-replay-collected \
             --dest build/minias-linux-replay-summary.json
       - uses: actions/upload-artifact@v4
