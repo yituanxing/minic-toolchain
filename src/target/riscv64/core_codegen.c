@@ -16,6 +16,7 @@
 #include "target/riscv64/runtime_libcall.h"
 #include "target/riscv/instruction_select.h"
 #include "core/value_uses.h"
+#include "target/common/core_block_walk.h"
 #include "target/common/core_instruction_family.h"
 #include "target/data_layout.h"
 
@@ -457,7 +458,7 @@ static bool emit_terminator(FILE *file,
 static bool emit_core_function_with_symbol(FILE *file,
                                                     const MinicC0Program *program,
                                                     const MinicCoreFunction *function,
-                                                    const MinicRiscv64FunctionSymbol *symbol,
+                                                    const MinicRiscvFunctionSymbol *symbol,
                                                     bool position_independent,
                                                     const MinicRiscvIsa *isa,
                                                     MinicDiagnostic *diagnostic,
@@ -468,6 +469,7 @@ static bool emit_core_function_with_symbol(FILE *file,
     MinicCoreFunctionFacts compatibility_facts;
     const char *symbol_name;
     size_t block_index;
+    MinicCoreBlockWalk machine_blocks = {0};
     bool bootstrap_trace;
 
     if (file == NULL || symbol == NULL || symbol->symbol_name == NULL ||
@@ -573,7 +575,7 @@ static bool emit_core_function_with_symbol(FILE *file,
                       frame.value_count);
         (void)fflush(stderr);
     }
-    if (!minic_riscv64_emit_function_symbol_begin(file, symbol)) {
+    if (!minic_riscv_emit_function_symbol_begin(file, symbol)) {
         return core_frame_fail(&frame);
     }
     if (frame.has_dynamic_stack_alignment) {
@@ -638,8 +640,10 @@ static bool emit_core_function_with_symbol(FILE *file,
     if (!emit_far_jump_to_block(file, symbol_name, function->entry_block)) {
         return core_frame_fail(&frame);
     }
-    for (block_index = 0U; block_index < function->block_count; ++block_index) {
-        const MinicCoreBlock *block;
+    minic_core_block_walk_begin(&machine_blocks, function, frame.reachable_blocks);
+    {
+    const MinicCoreBlock *block;
+    while (minic_core_block_walk_next(&machine_blocks, &block_index, &block)) {
         size_t instruction_index;
 
         if (bootstrap_trace &&
@@ -653,10 +657,6 @@ static bool emit_core_function_with_symbol(FILE *file,
                           function->block_count);
             (void)fflush(stderr);
         }
-        block = &function->blocks[block_index];
-        if (frame.reachable_blocks != NULL && !frame.reachable_blocks[block_index]) {
-            continue;
-        }
         if (!emit_block_label(file, symbol_name, (MinicCoreBlockId)block_index)) {
             return core_frame_fail(&frame);
         }
@@ -667,13 +667,12 @@ static bool emit_core_function_with_symbol(FILE *file,
         }
         for (instruction_index = 0U; instruction_index < block->instruction_count;
              ++instruction_index) {
-            MinicCoreInstructionId instruction_id;
-
-            instruction_id = block->instructions[instruction_index];
-            if (instruction_id >= function->instruction_count ||
+            MinicCoreInstructionId instruction_id = 0U;
+            const MinicCoreInstruction *ins = NULL;
+            if (!minic_core_block_instruction_at(function, block, instruction_index,
+                                                 &instruction_id, &ins) ||
                 !emit_instruction(file, program, function, &frame, symbol_name,
-                                  &function->instructions[instruction_id],
-                                  (size_t)instruction_id, position_independent, isa)) {
+                                  ins, (size_t)instruction_id, position_independent, isa)) {
                 return core_frame_fail(&frame);
             }
         }
@@ -681,6 +680,7 @@ static bool emit_core_function_with_symbol(FILE *file,
             !emit_terminator(file, program, function, &frame, symbol_name, &block->terminator)) {
             return core_frame_fail(&frame);
         }
+    }
     }
     if (fprintf(file, ".L%s_core_return:\n", symbol_name) < 0) {
         return core_frame_fail(&frame);
@@ -738,7 +738,7 @@ static bool emit_core_function_with_symbol(FILE *file,
         return core_frame_fail(&frame);
     }
     if (fprintf(file, "  ret\n") < 0 ||
-        !minic_riscv64_emit_function_symbol_end(file, symbol)) {
+        !minic_riscv_emit_function_symbol_end(file, symbol)) {
         return core_frame_fail(&frame);
     }
     minic_riscv64_core_frame_destroy(&frame);
@@ -746,14 +746,14 @@ static bool emit_core_function_with_symbol(FILE *file,
 }
 
 bool minic_riscv64_emit_core_function_with_symbol(
-    FILE *file, const MinicCoreFunction *function, const MinicRiscv64FunctionSymbol *symbol) {
+    FILE *file, const MinicCoreFunction *function, const MinicRiscvFunctionSymbol *symbol) {
     return emit_core_function_with_symbol(file, NULL, function, symbol, false,
                                           NULL, NULL, NULL, NULL);
 }
 
 bool minic_riscv64_emit_core_function_for_program_with_symbol_with_storage(
     FILE *file, const MinicC0Program *program, const MinicCoreFunction *function,
-    const MinicRiscv64FunctionSymbol *symbol, const MinicCoreFunctionFacts *facts,
+    const MinicRiscvFunctionSymbol *symbol, const MinicCoreFunctionFacts *facts,
     const MinicCoreObjectStoragePlan *storage, bool position_independent,
     const MinicRiscvIsa *isa, MinicDiagnostic *diagnostic) {
     return program != NULL && facts != NULL &&
@@ -766,7 +766,7 @@ bool minic_riscv64_emit_core_function_for_program_with_symbol(
     FILE *file,
     const MinicC0Program *program,
     const MinicCoreFunction *function,
-    const MinicRiscv64FunctionSymbol *symbol,
+    const MinicRiscvFunctionSymbol *symbol,
     bool position_independent,
     const MinicRiscvIsa *isa,
     MinicDiagnostic *diagnostic) {

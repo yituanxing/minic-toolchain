@@ -18,6 +18,8 @@ typedef struct MinicCoreFunctionFacts {
     /* Successful canonical verifier proof for this immutable definition. */
     const MinicCoreFunction *verified_function;
     size_t variadic_address_count;
+    /* Visitor-owned checked va_start result slots; NULL for standalone facts. */
+    const MinicCoreValueId *variadic_address_results;
     bool needs_saved_return_address;
     bool uses_structured_inline_asm;
     bool uses_dynamic_stack_alloc;

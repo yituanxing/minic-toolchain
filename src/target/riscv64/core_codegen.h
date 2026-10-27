@@ -19,23 +19,23 @@
  * Core values and objects receive backend-owned frame slots; no physical
  * register or stack offset is written back into Core IR. Function
  * linkage/visibility/section/assembler-name policy is target-owned metadata
- * carried separately from Core IR through MinicRiscv64FunctionSymbol.
+ * carried separately from Core IR through MinicRiscvFunctionSymbol.
  */
 bool minic_riscv64_core_function_can_emit(const MinicCoreFunction *function);
 bool minic_riscv64_core_function_can_emit_for_program(const MinicC0Program *program,
                                                        const MinicCoreFunction *function);
 
 bool minic_riscv64_emit_core_function_with_symbol(
-    FILE *file, const MinicCoreFunction *function, const MinicRiscv64FunctionSymbol *symbol);
+    FILE *file, const MinicCoreFunction *function, const MinicRiscvFunctionSymbol *symbol);
 bool minic_riscv64_emit_core_function_for_program_with_symbol_with_storage(
     FILE *, const MinicC0Program *, const MinicCoreFunction *,
-    const MinicRiscv64FunctionSymbol *, const MinicCoreFunctionFacts *,
+    const MinicRiscvFunctionSymbol *, const MinicCoreFunctionFacts *,
     const MinicCoreObjectStoragePlan *, bool, const MinicRiscvIsa *, MinicDiagnostic *);
 bool minic_riscv64_emit_core_function_for_program_with_symbol(
     FILE *file,
     const MinicC0Program *program,
     const MinicCoreFunction *function,
-    const MinicRiscv64FunctionSymbol *symbol,
+    const MinicRiscvFunctionSymbol *symbol,
     bool position_independent,
     const MinicRiscvIsa *isa,
     MinicDiagnostic *diagnostic);
@@ -43,7 +43,7 @@ bool minic_riscv64_emit_core_function_for_program_with_symbol(
 static inline bool minic_riscv64_emit_core_function(FILE *file,
                                                      const MinicCoreFunction *function,
                                                      const char *symbol_name) {
-    MinicRiscv64FunctionSymbol symbol;
+    MinicRiscvFunctionSymbol symbol;
 
     symbol.symbol_name = symbol_name;
     symbol.section_name = NULL;

@@ -5,6 +5,7 @@
 #include "target/aarch64/call_emit.h"
 #include "target/aarch64/integer_emit.h"
 #include "target/aarch64/fp_emit.h"
+#include "target/common/core_block_walk.h"
 #include "target/common/direct_instruction_semantics.h"
 #include "target/common/direct_residual_plan.h"
 #include "target/common/lp64_aggregate.h"
@@ -232,7 +233,8 @@ bool minic_aarch64_emit_core_blocks(FILE *out, const MinicDirectLP64BlockContext
     const MinicLP64ArgumentPlan *incoming_plan;
     const char *name, *reject_stage;
     const MinicCoreBlock *block;
-    size_t id, frame, save_offset, i;
+    MinicCoreBlockWalk block_walk = {0};
+    size_t id, frame, save_offset, i, block_id;
     size_t reject_block = SIZE_MAX, reject_ins = SIZE_MAX;
     bool has_direct_calls, dynamic_frame;
     if (out == NULL || ctx == NULL || ctx->program == NULL ||
@@ -250,11 +252,11 @@ bool minic_aarch64_emit_core_blocks(FILE *out, const MinicDirectLP64BlockContext
     has_direct_calls = ctx->has_direct_calls;
     dynamic_frame = ctx->dynamic_frame;
     reject_stage = "machine_emit";
-    for (size_t block_id = 0U; block_id < fn->block_count; ++block_id) {
+    minic_core_block_walk_begin(&block_walk, fn, NULL);
+    while (minic_core_block_walk_next(&block_walk, &block_id, &block)) {
         reject_block = block_id;
         reject_ins = SIZE_MAX;
         reject_stage = "machine_emit";
-        block = &fn->blocks[block_id];
         if (fprintf(out, ".Lmini_arm_f%zu_b%zu:\n", id, block_id) < 0 ||
             (block->source_label_id != SIZE_MAX &&
              !fn->suppress_source_label_aliases &&
@@ -262,13 +264,13 @@ bool minic_aarch64_emit_core_blocks(FILE *out, const MinicDirectLP64BlockContext
             return minic_multi_direct_machine_reject(fn, "aarch64", name, reject_stage,
                                     reject_block, reject_ins, __LINE__);
         for (i = 0U; i < block->instruction_count; ++i) {
-        MinicCoreInstructionId ins_id = block->instructions[i];
-        const MinicCoreInstruction *ins;
+        MinicCoreInstructionId ins_id = 0U;
+        const MinicCoreInstruction *ins = NULL;
         size_t offset;
         MinicDirectMachineInstructionShape shape;
-        if (ins_id >= fn->instruction_count) return minic_multi_direct_machine_reject(fn, "aarch64", name, reject_stage,
+        if (!minic_core_block_instruction_at(fn, block, i, &ins_id, &ins))
+            return minic_multi_direct_machine_reject(fn, "aarch64", name, reject_stage,
                                     reject_block, reject_ins, __LINE__);
-        ins = &fn->instructions[ins_id];
         reject_ins = (size_t)ins_id;
         if (!minic_multi_direct_machine_instruction_shape(
                 fn, ins, true, &shape))

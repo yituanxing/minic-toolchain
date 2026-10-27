@@ -19,6 +19,7 @@ typedef struct MinicCoreFunctionPlan {
     MinicCoreFunctionFacts facts;
     MinicCoreCallIndex calls;
     MinicCoreObjectStoragePlan objects;
+    MinicCoreValueId *variadic_results;
     bool prepared;
 } MinicCoreFunctionPlan;
 

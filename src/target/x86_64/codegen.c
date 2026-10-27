@@ -1,6 +1,7 @@
 #include "target/x86_64/codegen.h"
 #include "target/x86_64/machine_emit.h"
 #include "target/common/core_call_view.h"
+#include "target/common/core_block_walk.h"
 #include "target/common/program_visit.h"
 #include "target/common/program_emit.h"
 
@@ -34,6 +35,7 @@ static bool x86_emit_function(FILE *out, const MinicC0Program *program,
     const char *name = minic_c0_function_symbol_name(declaration);
     const char *vis;
     size_t block_index;
+    MinicCoreBlockWalk walk = {0};
     bool success = false;
     {
         const bool named = name != NULL && name[0] != '\0';
@@ -110,17 +112,20 @@ static bool x86_emit_function(FILE *out, const MinicC0Program *program,
     }
     if (fprintf(out, "  jmp .Lmini_x86_f%zu_b%u\n",
                 function_id, (unsigned int)fn->entry_block) < 0) goto done;
-    for (block_index = 0U; block_index < fn->block_count; ++block_index) {
-        const MinicCoreBlock *block = &fn->blocks[block_index];
+    minic_core_block_walk_begin(&walk, fn, NULL);
+    {
+    const MinicCoreBlock *block;
+    while (minic_core_block_walk_next(&walk, &block_index, &block)) {
         size_t k;
         if (fprintf(out, ".Lmini_x86_f%zu_b%zu:\n", function_id, block_index) < 0) goto done;
         if (block->source_label_id != SIZE_MAX && !fn->suppress_source_label_aliases &&
             fprintf(out, ".Luser_%zu:\n", block->source_label_id) < 0) goto done;
         for (k = 0U; k < block->instruction_count; ++k) {
-            const MinicCoreInstructionId id = block->instructions[k];
-            if (id >= fn->instruction_count ||
+            MinicCoreInstructionId id = 0U;
+            const MinicCoreInstruction *ins = NULL;
+            if (!minic_core_block_instruction_at(fn, block, k, &id, &ins) ||
                 !minic_x86_64_emit_core_instruction(out, program, target, fn, &frame,
-                                      &fn->instructions[id], function_id, id)) {
+                                      ins, function_id, id)) {
                 char message[256];
                 (void)snprintf(message, sizeof(message),
                                "x86-64 Core instruction unsupported: function %s, kind %d",
@@ -144,6 +149,7 @@ static bool x86_emit_function(FILE *out, const MinicC0Program *program,
             x86_error(diag, path, message);
             goto done;
         }
+    }
     }
     if (fprintf(out, ".Lmini_x86_f%zu_ret:\n  leave\n  ret\n"
                      ".size %s,.-%s\n", function_id, name, name) < 0) goto done;

@@ -45,6 +45,8 @@ static bool function(FILE *out, const MinicC0Program *p,
         facts->direct_call_count != 1U ||
         facts->indirect_call_count != 1U ||
         facts->variadic_address_count != 1U ||
+        facts->variadic_address_results == NULL ||
+        facts->variadic_address_results[0] != 0U ||
         !facts->needs_saved_return_address ||
         !facts->uses_structured_inline_asm ||
         !facts->uses_dynamic_stack_alloc ||
@@ -62,6 +64,7 @@ static bool finalize(const char *path, const MinicTargetInfo *t,
     size_t bytes;
     (void)t;
     ++ctx->finalizations;
+    if (strstr(path, ".minic-") == NULL) return false;
     in = fopen(path, "rb");
     if (in == NULL) return false;
     bytes = fread(data, 1U, sizeof(data) - 1U, in);
@@ -137,7 +140,39 @@ int main(int argc, char **argv) {
         }
     }
     (void)remove(path);
-    puts("MINIC_FIVE_TARGET_OUTPUT_TRANSACTION=PASS failures=5 rollback=5 census=1");
+    /* Errors at every stage must leave the previous successful output
+     * untouched; this distinguishes atomic replacement from unlink rollback. */
+    config.continue_after_failure = false;
+    for (stage = 1U; stage <= 5U; ++stage) {
+        FILE *original = fopen(path, "wb");
+        FILE *existing;
+        char data[32] = {0};
+        size_t n;
+        if (original == NULL || fputs("ORIGINAL\n", original) == EOF ||
+            fclose(original) != 0) return 30;
+        (void)memset(&ctx, 0, sizeof(ctx));
+        ctx.fail_stage = stage;
+        if (minic_program_emit_write(path, &program, &target, &ir, 1U,
+                                      false, &config, &ctx)) return 31;
+        existing = fopen(path, "rb");
+        if (existing == NULL) return 32;
+        n = fread(data, 1U, sizeof(data) - 1U, existing);
+        if (fclose(existing) != 0 || n != strlen("ORIGINAL\n") ||
+            strcmp(data, "ORIGINAL\n") != 0) return 33;
+    }
+    (void)memset(&ctx, 0, sizeof(ctx));
+    if (!minic_program_emit_write(path, &program, &target, &ir, 1U,
+                                  false, &config, &ctx)) return 34;
+    {
+        FILE *in = fopen(path, "rb");
+        char data[64] = {0};
+        if (in == NULL || fread(data, 1U, sizeof(data) - 1U, in) !=
+                          strlen("P\nG\nB\nF\nT\n") ||
+            fclose(in) != 0 || strcmp(data, "P\nG\nB\nF\nT\n") != 0)
+            return 35;
+    }
+    (void)remove(path);
+    puts("MINIC_FIVE_TARGET_OUTPUT_TRANSACTION=PASS failures=5 rollback=5 census=1 atomic_preserve=5");
     return 0;
 }
 

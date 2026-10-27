@@ -97,6 +97,39 @@ PR-head gated and compares frozen original tinyAES/cJSON sources against the
 pre-refactor compiler; the runner verifies the candidate checkout SHA. Only
 completed runs prove acceptance.
 
+### Final common-machine-visit and ABI boundary audit
+
+Five target machine emitters now consume exactly one Common Core block cursor
+(`common/core_block_walk.h`) for lexical block ordering, target-chosen
+reachability filters and bounds-checked immutable instruction views. The
+machine label, prologue, terminator, register, ISA and psABI handling remains
+physically target-owned: it is not correct to share x86 SysV and AAPCS64 frame
+arithmetic or LoongArch and RV32 instructions. This also replaces five
+separately maintained block and instruction address access patterns.
+
+There are **two necessary levels of planning**, not three independent Common
+pipelines: `core_function_plan` is the once-per-definition five-target owner
+of verified Core/facts/calls/objects, while `direct_function_plan` is an
+AAPCS64/LoongArch LP64D-only **downstream physical ABI** planner. Its
+preflight/record/varargs/CALL placement are *not* authoritative for x86/RV32
+or RV64. Adding a new Core language shape must start with Common facts and
+verification; new machine policy goes to a target or an explicitly shared
+ABI family, never to a second target-local Core verifier.
+
+The common visitor additionally snapshots va_start result slots for x86,
+removing its production full-instruction rescan (standalone frame APIs retain
+their checked compatibility fallback). The five-target output transaction
+creates an exclusive temporary assembly file **in the output directory**,
+verifies close and target legalization, then atomically renames it into place.
+On any emission, legalization or rename failure the existing destination
+remains unchanged, not merely removed. The standalone transaction probe
+checks preservation at all five failure stages, including finalization.
+
+RISC-V common function-symbol declarations, visibility and ELF directives use
+`MinicRiscvFunctionSymbol` and `minic_riscv_*symbol*` names. No RV32 code
+references a misleading RV64 symbol-class name. This renaming is symbol-policy
+only; RV64 psABI/strict ISA and RV32 ILP32 remain unmodified.
+
 ### Retiring the per-object scan fallback
 
 The RV32/RV64 frame planner now invokes the Common interval index for every

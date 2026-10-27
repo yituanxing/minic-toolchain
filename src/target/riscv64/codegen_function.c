@@ -101,9 +101,9 @@ static bool rv64_visit_function(
         return true;
     }
     {
-        MinicRiscv64FunctionSymbol symbol;
+        MinicRiscvFunctionSymbol symbol;
         /* The machine emitter owns capability admission, not this visitor. */
-        success = minic_riscv64_function_symbol_from_function(function, &symbol);
+        success = minic_riscv_function_symbol_from_function(function, &symbol);
         symbol.function_sections = function_sections;
         success = success && minic_riscv64_emit_core_function_for_program_with_symbol_with_storage(
                       file, program, core_function, &symbol, facts, storage,

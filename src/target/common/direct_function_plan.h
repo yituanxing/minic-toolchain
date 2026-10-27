@@ -4,7 +4,10 @@
 #include "target/common/direct_function_profile.h"
 #include "target/common/lp64_frame.h"
 
-/* The common seven-stage preparation dataflow for AAPCS64 and LP64D.
+/* The downstream physical ABI preparation dataflow for AAPCS64 and LP64D.
+ * Common CoreFunctionPlan has already verified and indexed the Core once;
+ * this specialized ABI family computes only supported LP64 call/frame data.
+ * SysV x86 and RISC-V ILP32/LP64 deliberately use other target ABI plans.
  * No target instructions, machine register assignments or universal psABI
  * live here: every target still supplies its ABI classifier and emitter. */
 typedef struct MinicDirectLP64FunctionPlan {
