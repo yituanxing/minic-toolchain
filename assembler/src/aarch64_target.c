@@ -1339,10 +1339,10 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
         case A64_MC_HINT: {
             uint32_t hint;
             if(inst->operands[0].kind==MINIAS_MC_SYMBOL) {
-                const MiniAsSymbolExpr *expr=inst->operands[0].symbol;
-                MiniAsSymbol *symbol=expr?
-                    minias_get_symbol(as,expr->name,false):NULL;
-                int64_t addend=expr?expr->addend:0;
+                const MiniAsSymbolExpr *hint_expr=inst->operands[0].symbol;
+                MiniAsSymbol *symbol=hint_expr?
+                    minias_get_symbol(as,hint_expr->name,false):NULL;
+                int64_t addend=hint_expr?hint_expr->addend:0;
                 if(!symbol || !symbol->defined ||
                    symbol->section!=MINIAS_SECTION_ABS ||
                    symbol->value>127U ||
@@ -1350,7 +1350,7 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
                    addend>127-(int64_t)symbol->value) {
                     minias_set_error(as,
                         "invalid-aarch64-absolute-hint:%s:line=%zu",
-                        s->args,s->line);
+                        stmt->args,stmt->line);
                     return false;
                 }
                 hint=(uint32_t)((int64_t)symbol->value+addend);
