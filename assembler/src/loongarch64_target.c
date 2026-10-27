@@ -363,7 +363,7 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
        (!strcmp(s->op,"movgr2fr.d") || !strcmp(s->op,"movgr2fr.w"))) {
         m->count=2U;
         m->encoding=(!strcmp(s->op,"movgr2fr.d") ?
-                    UINT32_C(0x0114a800):UINT32_C(0x0114a000)) |
+                    UINT32_C(0x0114a800):UINT32_C(0x0114a400)) |
                     (rj<<5U)|rd;
         m->operands[0].kind=MINIAS_MC_REGISTER;
         m->operands[0].reg=rd;
