@@ -122,7 +122,7 @@ bool minic_aarch64_emit_qualified_structured_asm(
         const char *reg = aarch64_linux_mrs_register(
             info->template_text, info->template_length);
         MinicType pointee;
-        if (reg == NULL || info->is_volatile || info->is_goto ||
+        if (reg == NULL || info->is_goto ||
             info->has_memory_clobber || info->register_clobber_count != 0U ||
             operand == NULL || operand[0].operand_index != 0U ||
             operand[0].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT ||
