@@ -154,7 +154,10 @@ static const Aarch64AtomicOperation aarch64_atomic_operations[] = {
  * catalog used for source qualification and physical LL/SC emission. */
 bool minic_aarch64_requires_qualified_input_asm(const MinicInlineAsm *src) {
     static const char *const fixed[] = {
-        "brk", "stlrb", "stlrh", "stlr", "msr", "bic", ".if", "prfm"
+        "brk", "stlrb", "stlrh", "stlr", "msr", "bic", ".if",
+        /* Original Linux CMPXCHG begins with PRFM and named operands;
+         * rejected constraints/modes must not escape into generic Core. */
+        "prfm", "prfm"
     };
     char prefix[64];
     const char *const single[] = {prefix};
