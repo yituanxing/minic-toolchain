@@ -179,7 +179,8 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
     /* Retain memory addressing as one typed operand through layout,
      * encoding, and eventual ELF fixup. No source-string re-splitting. */
     if ((!strcmp(s->op,"movq") || !strcmp(s->op,"movl")) &&
-        x64_args2(s->args,src,dst)) {
+        x64_args2(s->args,src,dst) &&
+        (x64_is_mem_candidate(src) || x64_is_mem_candidate(dst))) {
         MiniAsMCMemory parsed;
         unsigned r;
         bool wide, memory_source;
