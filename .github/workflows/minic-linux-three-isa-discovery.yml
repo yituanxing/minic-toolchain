@@ -6,6 +6,7 @@ on:
     paths:
       - '.github/workflows/minic-linux-three-isa-discovery.yml'
       - 'tools/ci/linux-three-isa-golden-v1.sh'
+      - 'tools/ci/linux-three-isa-common.config'
       - 'tools/ci/linux-three-isa-golden-v1.py'
       - 'tools/ci/linux-three-isa-freeze-i-v1.py'
       - 'tools/ci/linux-three-isa-seven-probe-v1.py'
@@ -105,13 +106,13 @@ jobs:
           path: |
             ${{ runner.temp }}/minic-linux-${{ matrix.target }}/evidence
             ${{ runner.temp }}/minic-linux-${{ matrix.target }}/frozen
-          key: linux66-gnu-i-${{ matrix.target }}-v1-${{ hashFiles('tools/ci/linux-three-isa-golden-v1.sh','tools/ci/linux-three-isa-golden-v1.py','tools/ci/linux-three-isa-freeze-i-v1.py','tools/ci/linux-runtime-gcc-full-c-objects-v1.py') }}-${{ steps.gnu-version.outputs.value }}
+          key: linux66-gnu-i-${{ matrix.target }}-common-v2-${{ hashFiles('tools/ci/linux-three-isa-common.config','tools/ci/linux-three-isa-golden-v1.sh','tools/ci/linux-three-isa-golden-v1.py','tools/ci/linux-three-isa-freeze-i-v1.py','tools/ci/linux-runtime-gcc-full-c-objects-v1.py') }}-${{ steps.gnu-version.outputs.value }}
       - name: GNU original Linux 6.6.143 Kbuild + GNU -E .i only on cache miss
         if: steps.gnu-cache.outputs.cache-hit != 'true'
         shell: bash
         run: |
           set -Eeuo pipefail
-          bash tools/ci/linux-three-isa-golden-v1.sh \
+          MINIC_LINUX_CONFIG_PROFILE=common bash tools/ci/linux-three-isa-golden-v1.sh \
             "${{ matrix.target }}" "$RUNNER_TEMP/minic-linux-${{ matrix.target }}"
       - name: Verify SHA-bound frozen GNU .i corpus on fresh and cached results
         shell: bash

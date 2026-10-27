@@ -19,7 +19,7 @@ def identity(e,target,gcc):
     if j["target"]!=target or j["verdict"]!="GNU_BUILD_ONLY_NOT_QEMU_CERTIFIED_NOT_MINIC":raise ValueError("not original GNU")
     trip=subprocess.check_output([gcc,"-dumpmachine"],text=True).strip()
     if not trip.startswith({"x86_64":"x86_64","aarch64":"aarch64","loongarch64":"loongarch64"}[target]):raise ValueError("GNU target mismatch")
-    return dict(target=target,config=j["config_sha256"],image=j["kernel_sha256"],
+    return dict(target=target,profile=j.get("config_profile","broad"),config=j["config_sha256"],image=j["kernel_sha256"],
                 source=(e/"linux-source.sha256").read_text().split()[0],
                 objects=digest(e/"full-c-owners.txt"),gnu=trip,
                 version=subprocess.check_output([gcc,"-dumpfullversion"],text=True).strip())

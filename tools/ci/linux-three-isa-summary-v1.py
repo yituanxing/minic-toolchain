@@ -40,7 +40,9 @@ def main():
         manifest = receipt.get("frozen_manifest_sha256")
         binary = receipt.get("compiler_sha256")
         identity = receipt.get("frozen_identity")
-        if (type(full) is not int or full < 1000
+        profile = identity.get("profile") if isinstance(identity, dict) else None
+        floor = 200 if profile == "common" else 1000
+        if (type(full) is not int or full < floor or profile not in ("common", "broad")
                 or not isinstance(identity, dict) or identity.get("target") != target
                 or not isinstance(manifest, str) or not SHA256.fullmatch(manifest)
                 or not isinstance(binary, str) or not SHA256.fullmatch(binary)):

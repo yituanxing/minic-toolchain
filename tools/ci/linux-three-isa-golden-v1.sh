@@ -50,18 +50,49 @@ esac
 printf '%s\n' \
   "source=linux-6.6.143" "target=$target" "arch=$arch" \
   "gnu_cc=$gcc" "gnu_triplet=$gcc_target" "cross_prefix=$cross" \
-  "kconfig=$config" "build_target=$build_target" "image=$image" \
+  "vendor_defconfig_reference=$config" "build_target=$build_target" "image=$image" \
+  "profile=${MINIC_LINUX_CONFIG_PROFILE:-common}" \
   "verdict=GNU_BUILD_ONLY_NOT_QEMU_CERTIFIED_NOT_MINIC" \
   >"$evidence/build-contract.txt"
 export KBUILD_BUILD_USER=minic KBUILD_BUILD_HOST=minic-ci
 export KBUILD_BUILD_TIMESTAMP='Thu Jan  1 00:00:00 UTC 1970'
-# Preserve the original GNU Kbuild: never compile even one C owner via MiniC
-# while establishing the golden baseline.
-make -C "$src" O="$out" ARCH="$arch" CROSS_COMPILE="$cross" CC="$gcc" \
-  "$config" 2>&1 | tee "$evidence/kconfig.log"
+# Use ONE shared feature profile for the cross-ISA first pass. Kconfig
+# necessarily resolves arch-only symbols per target; compare common symbols
+# by their exact effective values instead of requiring identical raw .config.
+profile=${MINIC_LINUX_CONFIG_PROFILE:-common}
+minimum=1000
+case "$profile" in
+  common)
+    common_config="$PWD/tools/ci/linux-three-isa-common.config"
+    [[ -s "$common_config" ]] || {
+      echo "MINIC_LINUX_KCONFIG=FAIL missing common config=$common_config" >&2
+      exit 2
+    }
+    printf '%s\n' "shared_policy_sha256=$(sha256sum "$common_config" | cut -d' ' -f1)" >>"$evidence/build-contract.txt"
+    minimum=200
+    config=allnoconfig
+    # Kernel-supported miniconfig semantics; do not hand-edit Kconfig symbols.
+    make -C "$src" O="$out" ARCH="$arch" CROSS_COMPILE="$cross" CC="$gcc" \
+      KCONFIG_ALLCONFIG="$common_config" allnoconfig 2>&1 | tee "$evidence/kconfig.log"
+    ;;
+  broad)
+    # Optional original vendor defconfig as a later breadth/stress campaign.
+    make -C "$src" O="$out" ARCH="$arch" CROSS_COMPILE="$cross" CC="$gcc" \
+      "$config" 2>&1 | tee "$evidence/kconfig.log"
+    ;;
+  *)
+    echo "MINIC_LINUX_KCONFIG=FAIL unknown profile=$profile" >&2
+    exit 64
+    ;;
+esac
 make -C "$src" O="$out" ARCH="$arch" CROSS_COMPILE="$cross" CC="$gcc" \
   olddefconfig 2>&1 | tee -a "$evidence/kconfig.log"
 sha256sum "$out/.config" >"$evidence/config.sha256"
+if [[ "$profile" == common ]]; then
+  python3 tools/ci/linux-three-isa-golden-v1.py \
+    --verify-common-config --common-config "$common_config" \
+    --effective-config "$out/.config" --evidence "$evidence"
+fi
 make -C "$src" O="$out" ARCH="$arch" CROSS_COMPILE="$cross" CC="$gcc" \
   -j4 "$build_target" 2>&1 | tee "$evidence/gnu-kbuild.log"
 test -s "$out/$image" || {
@@ -69,7 +100,7 @@ test -s "$out/$image" || {
 }
 python3 tools/ci/linux-three-isa-golden-v1.py \
   --target "$target" --out "$out" --image "$image" --evidence "$evidence" \
-  --min-c-objects 1000
+  --min-c-objects "$minimum" --config-profile "$profile"
 # Freeze the canonical GNU -E -P output ONCE with the exact .o.cmd flags.
 # This 7-worker producer is independent of the MiniC candidate revision.
 # Seven per-target MiniC shard runners can reuse these .i via Actions cache.

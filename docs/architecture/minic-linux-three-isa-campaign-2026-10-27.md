@@ -12,8 +12,21 @@ never leak as `if (arch == ...)` into Frontend/Core algorithms.
 
 ## Stage 0 / what the NEW opt-in workflow proves
 `minic-linux-three-isa-discovery.yml` uses one GNU build script for all 3
-targets, pinned upstream Linux 6.6.143 SHA, independent original GNU Kconfigs
-and fresh builds. A shared Python wrapper DERIVES actual GCC C owners from
+targets, pinned upstream Linux 6.6.143 SHA, and **ONE common, versioned Kconfig
+feature policy** (`tools/ci/linux-three-isa-common.config`) applied to GNU
+`make KCONFIG_ALLCONFIG=... allnoconfig` on all three architectures.
+This is the default **first-stage comparable C/IR discovery baseline**, not
+three dissimilar vendor `defconfig` stress tests. Linux still resolves
+arch-only CPU/ABI/boot/platform dependencies separately. The script validates
+every requested shared feature against each effective `.config` and saves a
+profile SHA and resolution receipt; silently dropped shared features FAIL.
+The original vendor `defconfig` is opt-in `MINIC_LINUX_CONFIG_PROFILE=broad`
+for a later extended real-software stress run and must never be compared as
+equivalent work units to the common profile. Both profiles freeze source,
+toolchain, target Kconfig SHA and complete original GNU C-owner manifests,
+with honest scope labels.
+
+A shared Python wrapper DERIVES actual GCC C owners from
 the existing canonical `.o.cmd` verifier and matches target ELF machine.
 It emits `discovery.json`, `full-c-owners.txt`, source/config/GCC metadata,
 original object SHA manifest and exclusions, or fails closed.
@@ -25,7 +38,10 @@ run in matching QEMU with a frozen initramfs before it becomes an accepted
 golden; LoongArch's EFI/firmware setup is distinct.
 
 ## Next grouped execution, not one-error-at-a-time
-1. Freeze each target's genuine GNU QEMU booted image and `.config`.
+1. First freeze the three **same-feature common** GNU builds and their
+   resulting arch-resolved `.config` manifests; record all residual
+   Kconfig and C-owner differences. Separately certify each ISA's original
+   GNU/QEMU boot image; the common first-stage C corpus alone is not boot proof.
 2. Produce SHA-bound `.i` for each `.cmd` C owner and 7-way per-target
    whole-source census (`make -k`) with one compiler revision. Collect
    ALL errors, grouped by root cause and target intersection.
@@ -42,3 +58,14 @@ golden; LoongArch's EFI/firmware setup is distinct.
 Existing #674 exact-head strict, 4-ISA runtime, RV32 software, x86 BusyBox,
 RV64 origin smoke and GNU baseline CI passed. The historical `2064` Linux
 Image/P1 is not the new three-architecture qualification.
+
+## Scope and architecture rule
+
+Do **not** demand byte-identical `.config` across mutually exclusive
+`CONFIG_X86_64`, `CONFIG_ARM64`, and `CONFIG_LOONGARCH`; demand one shared
+feature policy and independent Kconfig dependency resolution with explicit
+per-target attestation. Do not normalize C-owner counts, since build output
+still includes legitimate ISA-specific files. A broader config is a **second
+workload**, not the first comparable baseline. Reuse existing Kbuild,
+C-owner selection, GNU preprocessing, frozen-input replay, and shard manifest
+contracts instead of copying an architecture-specific compilation engine.

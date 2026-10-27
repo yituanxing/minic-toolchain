@@ -47,15 +47,17 @@ def target_object(path: Path, expected_machine: int) -> bool:
     if hdr[4:6] != b"\x02\x01":
         if (expected_machine == MACHINES["x86_64"]
                 and hdr[4:6] == b"\x01\x01"
-                and "/arch/x86/boot/" in path.as_posix()):
+                and ("/arch/x86/boot/" in path.as_posix()
+                     or "/arch/x86/realmode/" in path.as_posix())):
             return False
         raise ValueError("unexpected target ELF class/data: " + str(path))
     machine = struct.unpack_from("<H", hdr, 18)[0]
     kind = struct.unpack_from("<H", hdr, 16)[0]
     return kind == 1 and machine == expected_machine
 
-def census(out: Path, target: str, image: str, evidence: Path, minimum: int) -> dict:
-    if target not in MACHINES or minimum < 1:
+def census(out: Path, target: str, image: str, evidence: Path, minimum: int,
+           config_profile: str = "broad") -> dict:
+    if target not in MACHINES or minimum < 1 or config_profile not in ("common", "broad"):
         raise ValueError("unsupported target or invalid minimum")
     out = out.resolve(strict=True)
     path = Path(image)
@@ -73,12 +75,13 @@ def census(out: Path, target: str, image: str, evidence: Path, minimum: int) -> 
     # Preserve excluded ELF32 boot objects as a separate explicit scope.
     boot32 = []
     if target == "x86_64":
-        for o in sorted((out / "arch/x86/boot").rglob("*.o")):
-            if o.is_file() and not o.is_symlink():
-                with o.open("rb") as stream:
-                    magic = stream.read(6)
-                if magic == b"\x7fELF\x01\x01":
-                    boot32.append(o.relative_to(out).as_posix())
+        for domain in ("arch/x86/boot", "arch/x86/realmode"):
+            for o in sorted((out / domain).rglob("*.o")):
+                if o.is_file() and not o.is_symlink():
+                    with o.open("rb") as stream:
+                        magic = stream.read(6)
+                    if magic == b"\x7fELF\x01\x01":
+                        boot32.append(o.relative_to(out).as_posix())
     evidence.mkdir(parents=True, exist_ok=True)
     (evidence / "separate-x86-elf32-boot-domain.txt").write_text(
         "# x86 early boot ELF32; not x86_64 MiniC certified C owners\n"
@@ -108,6 +111,7 @@ def census(out: Path, target: str, image: str, evidence: Path, minimum: int) -> 
         "schema": "minic-linux-three-isa-gnu-build-v1",
         "verdict": "GNU_BUILD_ONLY_NOT_QEMU_CERTIFIED_NOT_MINIC",
         "target": target, "elf_machine": MACHINES[target],
+        "config_profile": config_profile,
         "kernel": image, "kernel_sha256": sha(kernel),
         "config_sha256": sha(config),
         "gnu_target_objects": len(objects), "gnu_c_owners": len(owners),
@@ -121,6 +125,53 @@ def census(out: Path, target: str, image: str, evidence: Path, minimum: int) -> 
           f"original_C_owners={len(owners)} GNU_objects={len(objects)} "
           "QEMU_certified=0 MiniC_C_owners=0")
     return report
+
+def check_common_config(shared: Path, effective: Path, evidence: Path) -> dict:
+    """Compare one Kconfig miniconfig to each target's actual resolved .config."""
+    expected = {}
+    for raw in shared.read_text().splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = line.split("=", 1)
+        if (len(parts) != 2 or not parts[0].startswith("CONFIG_")
+                or parts[1] not in ("y", "m", "n") or parts[0] in expected):
+            raise ValueError("invalid common Kconfig feature: " + line)
+        expected[parts[0]] = parts[1]
+    if not expected or expected.get("CONFIG_64BIT") != "y":
+        raise ValueError("shared Linux config must anchor 64-bit targets")
+    active = {}
+    for raw in effective.read_text().splitlines():
+        if raw.startswith("CONFIG_") and "=" in raw:
+            key, value = raw.split("=", 1)
+            active[key] = value
+        elif raw.startswith("# CONFIG_") and raw.endswith(" is not set"):
+            key = raw[len("# "): -len(" is not set")]
+            active[key] = "n"
+    rejected = {
+        key: {"requested": value, "effective": active.get(key, "n")}
+        for key, value in expected.items() if active.get(key, "n") != value
+    }
+    report = {
+        "schema": "minic-three-isa-common-kconfig-v1",
+        "profile": "common",
+        "shared_sha256": sha(shared),
+        "effective_sha256": sha(effective),
+        "requested_features": expected,
+        "unsatisfied": rejected,
+        "parity": "FAIL" if rejected else "PASS",
+    }
+    evidence.mkdir(parents=True, exist_ok=True)
+    (evidence / "common-kconfig-contract.json").write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n")
+    if rejected:
+        raise ValueError("cross-ISA common Kconfig feature mismatch: " +
+                         ", ".join(rejected))
+    print("MINIC_LINUX_COMMON_KCONFIG=PASS features=" + str(len(expected)) +
+          " requested_sha256=" + report["shared_sha256"] +
+          " effective_sha256=" + report["effective_sha256"])
+    return report
+
 
 def self_test() -> None:
     with tempfile.TemporaryDirectory() as temp:
@@ -149,13 +200,15 @@ def self_test() -> None:
             struct.pack_into("<H", hdr, 18, 183 if machine != 183 else 62)
             host.write_bytes(hdr)
             if target == "x86_64":
-                boot = out / "arch/x86/boot/regs.o"
-                boot.parent.mkdir(parents=True)
-                boot.write_bytes(b"\x7fELF\x01\x01" + bytes(64))
+                for name in ("arch/x86/boot/regs.o",
+                             "arch/x86/realmode/rm/wakeup_asm.o"):
+                    boot = out / name
+                    boot.parent.mkdir(parents=True)
+                    boot.write_bytes(b"\x7fELF\x01\x01" + bytes(64))
             ev = base / target / "evidence"
             result = census(out, target, "vmlinux", ev, minimum=2)
             assert result["separate_x86_early_boot_elf32_objects"] == (
-                1 if target == "x86_64" else 0)
+                2 if target == "x86_64" else 0)
             assert result["gnu_c_owners"] == 2
             assert result["gnu_target_objects"] == 2
             assert result["verdict"] == "GNU_BUILD_ONLY_NOT_QEMU_CERTIFIED_NOT_MINIC"
@@ -167,12 +220,29 @@ def self_test() -> None:
                 assert "hash mismatch" in str(exc)
             else:
                 raise AssertionError("accepted tampered GNU object")
+        shared = base / "common.config"
+        actual = base / "effective.config"
+        shared.write_text("CONFIG_64BIT=y\nCONFIG_BLOCK=y\n")
+        actual.write_text("CONFIG_64BIT=y\nCONFIG_BLOCK=y\n")
+        assert check_common_config(shared, actual, base / "profile")["parity"] == "PASS"
+        actual.write_text("CONFIG_64BIT=y\n# CONFIG_BLOCK is not set\n")
+        try:
+            check_common_config(shared, actual, base / "profile")
+        except ValueError as exc:
+            assert "CONFIG_BLOCK" in str(exc)
+        else:
+            raise AssertionError("accepted missing common Kconfig feature")
         print("MINIC_LINUX_THREE_GNU_SELFTEST=PASS targets=3 "
-              "host_excluded=1 sha_tamper_rejected=1 no_false_qemu=1")
+              "host_excluded=1 early_boot_domains=2 shared_kconfig_fail_closed=1 "
+              "sha_tamper_rejected=1 no_false_qemu=1")
 
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--self-test", action="store_true")
+    p.add_argument("--verify-common-config", action="store_true")
+    p.add_argument("--common-config", type=Path)
+    p.add_argument("--effective-config", type=Path)
+    p.add_argument("--config-profile", choices=("common", "broad"), default="broad")
     p.add_argument("--out", type=Path)
     p.add_argument("--target", choices=tuple(MACHINES))
     p.add_argument("--image")
@@ -182,12 +252,16 @@ def main() -> int:
     try:
         if args.self_test:
             self_test()
+        elif args.verify_common_config:
+            if args.common_config is None or args.effective_config is None or args.evidence is None:
+                p.error("common Kconfig verification requires three path inputs")
+            check_common_config(args.common_config, args.effective_config, args.evidence)
         elif (args.out is None or args.target is None
               or args.image is None or args.evidence is None):
             p.error("--out, --target, --image and --evidence required")
         else:
             census(args.out, args.target, args.image, args.evidence,
-                   args.min_c_objects)
+                   args.min_c_objects, args.config_profile)
         return 0
     except (OSError, ValueError, AssertionError) as exc:
         print(f"MINIC_LINUX_THREE_GNU=FAIL {exc}", file=sys.stderr)
