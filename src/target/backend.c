@@ -38,7 +38,8 @@ static const char *const aarch64_qualified_inputs[] = {
 };
 static const char *const loongarch64_qualified_inputs[] = {
     "dbar", "amand_db.w", "amor_db.w", "amxor_db.w", "amadd_db.w",
-    "amand_db.d", "amor_db.d", "amxor_db.d", "amadd_db.d"
+    "amand_db.d", "amor_db.d", "amxor_db.d", "amadd_db.d",
+    "csrrd", "csrxchg"
 };
 static const MinicBackend riscv64_backend = {
     MINIC_TARGET_ARCH_RISCV64, "riscv64", emit_riscv64, NULL, true, NULL, 0U
