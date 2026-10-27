@@ -29,6 +29,16 @@
       "review_depth": "inventory",
       "ci_touched_in": []
     },
+    "src/target/aarch64/asm_contract.c": {
+      "blob": "9d0233212c7dc04aa66941a50ac841da9e7cb12b",
+      "review_depth": "targeted",
+      "ci_touched_in": []
+    },
+    "src/target/aarch64/asm_contract.h": {
+      "blob": "226d9f799bc29206ea266ffc6822bf03a7ab2b82",
+      "review_depth": "targeted",
+      "ci_touched_in": []
+    },
     "src/target/aarch64/asm_legalize.c": {
       "blob": "af0aecfacc2c7ec73db3c8de694a91c7b2ba6bf3",
       "review_depth": "inventory",
