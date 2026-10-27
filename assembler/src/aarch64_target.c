@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#define A64_FEATURE_LSE UINT32_C(0x10000000) /* target_options feature bit */
 
 /*
  * First non-RISC-V MiniAS vertical slice.
@@ -154,7 +155,8 @@ enum {
     A64_MC_BITMASK_IMM,
     A64_MC_EXTEND_W,
     A64_MC_REV,
-    A64_MC_ACQUIRE_RELEASE
+    A64_MC_ACQUIRE_RELEASE,
+    A64_MC_LSE
 };
 
 /* GNU AArch64 operands split on TOP-LEVEL commas, not commas within
@@ -582,6 +584,50 @@ static bool a64_barrier_option(const char *name,unsigned *imm) {
     return false;
 }
 
+/* Target-scoped ARMv8.1 LSE ISA family; no Common or ELF encoding clone.
+ * Enforce directive opt-in and typed W/X source, destination and X base.
+ * CAS has a distinct acquire/release encoding; ST aliases return to ZR. */
+static bool a64_parse_lse(MiniAs *as,MiniAsMCInst *inst,
+                          const char *op,const char *args) {
+    static const struct {const char *name;unsigned kind;bool store;} ops[]={
+        {"cas",0U,false},{"ldadd",1U,false},{"ldclr",2U,false},
+        {"ldset",3U,false},{"swp",4U,false},
+        {"stadd",1U,true},{"stclr",2U,true},{"stset",3U,true}
+    };
+    char tok[4][96];
+    unsigned i,n,rs,rt=31U,rn,mode,group=0U;
+    bool wide,wr,sp;
+    int64_t off;
+    const char *suffix=NULL;
+    for(i=0U;i<sizeof(ops)/sizeof(ops[0]);++i) {
+        size_t plen=strlen(ops[i].name);
+        if(strncmp(op,ops[i].name,plen)==0) {
+            group=i;suffix=op+plen;break;
+        }
+    }
+    if(suffix==NULL || !(*suffix=='\0' ||
+       !strcmp(suffix,"a") || !strcmp(suffix,"l") ||
+       !strcmp(suffix,"al")) ||
+       (ops[group].store && *suffix && strcmp(suffix,"l")) ||
+       (as->target_options&A64_FEATURE_LSE)==0U)return false;
+    if(!split_operands(args,tok,&n) ||
+       n!=(ops[group].store?2U:3U) ||
+       !parse_a64_reg(tok[0],&rs,&wide,&sp) || sp ||
+       (!ops[group].store &&
+        (!parse_a64_reg(tok[1],&rt,&wr,&sp) || sp || wr!=wide)) ||
+       !parse_a64_mem(tok[n-1U],&rn,&off,&mode) ||
+       off!=0 || mode!=0U)return false;
+    inst->opcode=A64_MC_LSE;inst->count=3U;
+    inst->encoding=ops[group].kind |
+      (ops[group].store?0x10U:0U) |
+      ((strchr(suffix,'a')!=NULL)?0x20U:0U) |
+      ((strchr(suffix,'l')!=NULL)?0x40U:0U);
+    put_reg(&inst->operands[0],rs,wide);
+    put_reg(&inst->operands[1],rt,wide);
+    put_reg(&inst->operands[2],rn,true);
+    return true;
+}
+
 static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
     MiniAsMCInst *inst = calloc(1U, sizeof(*inst) +
                                 4U * sizeof(MiniAsMCOperand));
@@ -595,7 +641,9 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
         minias_set_error(as, "out-of-memory:aarch64-mcinst");
         return false;
     }
-    if(!strcmp(op,"cset") || !strcmp(op,"csetm") ||
+    if(a64_parse_lse(as,inst,op,args)) {
+        /* LSE grammar is owned by one target decoder. */
+    } else if(!strcmp(op,"cset") || !strcmp(op,"csetm") ||
        !strcmp(op,"cinc")) {
         char parts[4][96];
         unsigned n,rd,rn=31U,cond;
@@ -943,6 +991,28 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
                 ((uint32_t)inst->operands[0].immediate << 5U);
             break;
 
+        case A64_MC_LSE: {
+            unsigned kind=inst->encoding&15U;
+            bool acquire=(inst->encoding&0x20U)!=0U;
+            bool release=(inst->encoding&0x40U)!=0U;
+            bool wide=inst->operands[0].register_64;
+            uint32_t base;
+            if(kind==0U) {
+                base=wide?UINT32_C(0xc8a07c00):UINT32_C(0x88a07c00);
+                if(acquire)base|=UINT32_C(0x00400000);
+                if(release)base|=UINT32_C(0x00008000);
+            }else {
+                base=wide?UINT32_C(0xf8200000):UINT32_C(0xb8200000);
+                if(acquire)base|=UINT32_C(0x00800000);
+                if(release)base|=UINT32_C(0x00400000);
+                base|=kind==2U?UINT32_C(0x1000):
+                      kind==3U?UINT32_C(0x3000):
+                      kind==4U?UINT32_C(0x8000):0U;
+            }
+            code=base|(inst->operands[0].reg<<16U)|
+                 (inst->operands[2].reg<<5U)|inst->operands[1].reg;
+            break;
+        }
         case A64_MC_BITMASK_IMM: {
             bool wide=inst->operands[0].register_64;
             unsigned ones=(unsigned)inst->operands[2].immediate;
@@ -1178,6 +1248,18 @@ static bool directive(MiniAs *as, const char *op, const char *args,
         if (strcmp(args, "armv8-a") != 0) {
             minias_set_error(as, "unsupported-aarch64-architecture:%s:line=%zu",
                              args, line);
+            return false;
+        }
+        as->target_options &= ~A64_FEATURE_LSE;
+        return true;
+    }
+    if(!strcmp(op,".arch_extension")) {
+        *handled=true;
+        if(!strcmp(args,"lse"))as->target_options |= A64_FEATURE_LSE;
+        else if(!strcmp(args,"nolse"))as->target_options &= ~A64_FEATURE_LSE;
+        else {
+            minias_set_error(as,"unsupported-aarch64-extension:%s:line=%zu",
+                             args,line);
             return false;
         }
         return true;

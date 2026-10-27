@@ -57,6 +57,20 @@ external_probe:
     uxtw x1, w1
     rev w2, w3
     rev x5, x6
+    .arch_extension lse
+    cas w0, w1, [x2]
+    casal x3, x4, [x5]
+    ldadd w0, w1, [x2]
+    ldaddal x2, x3, [x4]
+    ldclrl w0, w1, [x2]
+    ldsetal x0, x1, [x2]
+    swp w0, w1, [x2]
+    swpal x2, x3, [x4]
+    stadd x0, [x2]
+    staddl w0, [x2]
+    stset x1, [x2]
+    stclrl w0, [x2]
+    .arch_extension nolse
     ldar w0, [x0]
     ldar x1, [x2]
     stlr w7, [x8]
@@ -398,6 +412,31 @@ for needle in 'source.c' ' 10 ' ' 12 '; do
 done
 "$AARCH64_READELF" -Wr "$work/line-mini.o" | grep -q R_AARCH64_ABS64
 echo 'MINIAS_COMMON_DWARF_DEBUG_LINE=PASS real_address_fixup=1 file_line_rows=2'
+# Validate LSE ISA extension is a real typed feature gate.
+cat >"$work/lse-disabled.s" <<'LSE_DISABLED'
+.arch armv8-a
+.text
+cas w0, w1, [x2]
+LSE_DISABLED
+if "$MINIAS" --target=aarch64 -o "$work/lse-disabled.o" "$work/lse-disabled.s" >/dev/null 2>&1; then
+    echo "LSE without .arch_extension unexpectedly accepted" >&2
+    exit 1
+fi
+cat >"$work/lse-enabled.s" <<'LSE_ENABLED'
+.arch armv8-a
+.arch_extension lse
+.text
+cas w0, w1, [x2]
+.arch_extension nolse
+ldar w0,[x2]
+LSE_ENABLED
+"$MINIAS" --target=aarch64 -o "$work/lse-mini.o" "$work/lse-enabled.s"
+"$AARCH64_AS" -o "$work/lse-gnu.o" "$work/lse-enabled.s"
+"$AARCH64_OBJCOPY" -j .text -O binary "$work/lse-mini.o" "$work/lse-mini.bin"
+"$AARCH64_OBJCOPY" -j .text -O binary "$work/lse-gnu.o" "$work/lse-gnu.bin"
+cmp "$work/lse-mini.bin" "$work/lse-gnu.bin"
+echo 'MINIAS_AARCH64_LSE=PASS GNU_BYTES=equal enabled_gate=1 disabled_gate=1'
+
 
 
 # GNU optional fill/max-skip common fragment semantics. Unlike a parse-only
