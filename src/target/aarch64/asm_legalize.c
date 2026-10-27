@@ -1,4 +1,5 @@
 #include "target/aarch64/asm_legalize.h"
+#include "target/common/direct_call_plan.h"
 #include <inttypes.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -90,7 +91,12 @@ bool minic_aarch64_copy_dynamic_frame_asm(FILE *out, FILE *input) {
         } else if (anchored && sscanf(line, "  sub sp, sp, #%zu", &value) == 1) {
             /* Only the bounded outgoing call argument area uses sub #imm.
              * Dynamic allocations use sub sp, sp, x10, never an immediate. */
-            if (spill != 0U || value == 0U || value > 512U) return false;
+            /* Common admits 64 arguments of up to two eightbyte slots.
+             * AAPCS64's 60 spilled TI pairs require 960 outgoing bytes;
+             * the old 512-byte bound rejected valid dynamic-frame calls. */
+            if (spill != 0U || value == 0U ||
+                value > MINIC_DIRECT_LP64_MAX_CALL_ARGUMENTS * 2U * 8U)
+                return false;
             spill = value;
         } else if (anchored && sscanf(line, "  add sp, sp, #%zu", &value) == 1) {
             if (spill != value) return false;

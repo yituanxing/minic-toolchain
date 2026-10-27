@@ -139,3 +139,26 @@ cross-ISA register-bank merge, no attempt to advertise x86 ABI-state or
 AAPCS64 struct `va_list` as a trivial scalar cursor, and no full Linux
 build on every local correctness edit. Aggregate/FP/variadic fallbacks must
 continue to fail closed when not physically supported.
+
+## 2026-10-27 five-target CALL review, AArch64 960-byte dynamic wide-spill
+
+Read all five target CALL emitters at their current source fingerprints
+(`aarch64/call_emit.c`, `loongarch64/call_emit.c`, `riscv32/rv32_call.c`,
+`riscv64/call_emit.c`, `x86_64/machine_call.c`) against Common CallView,
+ABI cursors and frame ownership. The ledger now records full-file source
+inspection for these five, not formal ABI correctness proof.
+
+**Confirmed AArch64 production rejection:** Common AAPCS64 permits 64
+`unsigned __int128` arguments. Four fit even GPR pairs; the remaining
+60 pairs require 960 stack bytes. `minic_aarch64_copy_dynamic_frame_asm`
+incorrectly capped a dynamic-frame CALL's immediate stack spill at 512
+bytes and rejected this otherwise-legal shape. Bound it by the same
+Common call cap (64 * 2 * 8 = 1024), without altering psABI planning.
+The existing four-backend dynamic stack GNU/QEMU script gains an
+AArch64-only 64-TI argument fixture with `alloca` data live across
+CALL and a separately GNU-built ABI callee; original two fixtures stay
+unchanged. Exact-new-head GNU/QEMU PASS is required before closure.
+
+Still open: five-target wider ABI edge differentials, RV64 latest-head
+original Linux 2064/2064 Image+same-Image P1, and Stage3/Stage4
+current-source self-hosting. This batch does not touch MiniAS/MiniLD.

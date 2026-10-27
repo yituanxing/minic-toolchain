@@ -10,13 +10,13 @@
     672,
     673
   ],
-  "audit_in_progress": "Finalization: fail-closed AArch64 va_copy pointer alias, PR/main RV32/RV64 owner routing, and targeted correctness probes. Exact-head CI/real Linux acceptance not yet certified.",
+  "audit_in_progress": "Five CALL emitters source-reviewed with ABI/planner context; AArch64 dynamic 960-byte outgoing wide-spill cap corrected and GNU/QEMU stress added. Exact-head CI pending. RV64 Linux 2064 Image/P1 and current-head self-hosting remain open.",
   "next_deep_review": [
-    "src/target/aarch64/call_emit.c",
-    "src/target/loongarch64/call_emit.c",
-    "src/target/riscv32/rv32_call.c",
-    "src/target/riscv64/call_emit.c",
-    "src/target/x86_64/machine_call.c"
+    "src/target/aarch64/asm_legalize.c",
+    "src/target/loongarch64/frame_emit.c",
+    "src/target/x86_64/machine_emit.c",
+    "src/target/riscv64/legalize.c",
+    "src/target/riscv32/rv32_frame.c"
   ],
   "files": {
     "src/target/aarch64/abi.c": {
@@ -54,8 +54,9 @@
     },
     "src/target/aarch64/call_emit.c": {
       "blob": "39fd15493433d376a5af79c50aab4703fca96496",
-      "review_depth": "targeted",
-      "ci_touched_in": []
+      "review_depth": "full",
+      "ci_touched_in": [],
+      "note": "2026-10-27: read complete CALL emitter with CoreCallView and target psABI planning context. Production QEMU differential remains separate acceptance evidence."
     },
     "src/target/aarch64/call_emit.h": {
       "blob": "f5ff26bb982ffccf8a006d50d16c7bc5d2c6cd8a",
@@ -505,8 +506,9 @@
     },
     "src/target/loongarch64/call_emit.c": {
       "blob": "6beb2add109e74d8db86c30e65fed1b286970329",
-      "review_depth": "targeted",
-      "ci_touched_in": []
+      "review_depth": "full",
+      "ci_touched_in": [],
+      "note": "2026-10-27: read complete CALL emitter with CoreCallView and target psABI planning context. Production QEMU differential remains separate acceptance evidence."
     },
     "src/target/loongarch64/call_emit.h": {
       "blob": "4a7e526eb3746a3034ecd982795005e7c100de15",
@@ -672,8 +674,9 @@
     },
     "src/target/riscv32/rv32_call.c": {
       "blob": "a6bf957bc1427889e89796da6c1c72de61330956",
-      "review_depth": "inventory",
-      "ci_touched_in": []
+      "review_depth": "full",
+      "ci_touched_in": [],
+      "note": "2026-10-27: read complete CALL emitter with CoreCallView and target psABI planning context. Production QEMU differential remains separate acceptance evidence."
     },
     "src/target/riscv32/rv32_emit.c": {
       "blob": "f06fbbe8ec2163434f82bcc8a9700a2c2ab06b38",
@@ -761,11 +764,12 @@
     },
     "src/target/riscv64/call_emit.c": {
       "blob": "9cb464124897f2beb53b4664c2c01747205802c1",
-      "review_depth": "targeted",
+      "review_depth": "full",
       "ci_touched_in": [
         665
       ],
-      "audit_note": "Verified direct/indirect control paths and return ABI. New wide return helper shared for both; full CALL marshalling review remains pending."
+      "audit_note": "Verified direct/indirect control paths and return ABI. New wide return helper shared for both; full CALL marshalling review remains pending.",
+      "note": "2026-10-27: read complete CALL emitter with CoreCallView and target psABI planning context. Production QEMU differential remains separate acceptance evidence."
     },
     "src/target/riscv64/call_emit.h": {
       "blob": "de1fa4065b4f7542363a942b37a9b86b8411521e",
@@ -1098,10 +1102,11 @@
     },
     "src/target/x86_64/machine_call.c": {
       "blob": "d8520d10c3da140b317c0a576aecf7ef3c1dad5a",
-      "review_depth": "targeted",
+      "review_depth": "full",
       "ci_touched_in": [
         665
-      ]
+      ],
+      "note": "2026-10-27: read complete CALL emitter with CoreCallView and target psABI planning context. Production QEMU differential remains separate acceptance evidence."
     },
     "src/target/x86_64/machine_emit.c": {
       "blob": "e64c88c6da88972f4fcffc6546fae457166f811b",
