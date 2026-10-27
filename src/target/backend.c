@@ -27,7 +27,15 @@ static bool emit_riscv64(const char *output_path, const MinicC0Program *program,
  * consume GNU operands with machine-specific encodings/constraints. When the
  * target callback declines, Core must not let a generic scalar-input
  * lowering silently admit a different constraint or dangerous suffix. */
-static const char *const aarch64_qualified_inputs[] = {"brk", "stlrb", "stlrh", "stlr"};
+static const char *const aarch64_qualified_inputs[] = {
+    "brk", "stlrb", "stlrh", "stlr",
+    /* Linux LL/SC macros begin with a source comment: reserve their exact
+     * opening signature so a rejected operand/hidden instruction can never
+     * fall through to unqualified generic Core ASM. Other source comments
+     * and all zero-input raw GAS remain unaffected. */
+    "// atomic_and", "// atomic_or", "// atomic_xor",
+    "// atomic64_and", "// atomic64_or", "// atomic64_xor"
+};
 static const char *const loongarch64_qualified_inputs[] = {
     "dbar", "amand_db.w", "amor_db.w", "amxor_db.w", "amadd_db.w",
     "amand_db.d", "amor_db.d", "amxor_db.d", "amadd_db.d"
