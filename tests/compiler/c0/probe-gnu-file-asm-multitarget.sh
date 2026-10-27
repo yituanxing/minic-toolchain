@@ -263,7 +263,7 @@ int main(void) {
     aor64(0x06, &b);
     axor64(0x05, &b);
     aadd64(10, &b);
-    return a.counter == 0x39 && b.counter == 0x39 ? 0 : 1;
+    return a.counter == 0x3d && b.counter == 0x3d ? 0 : 1;
 }
 SRC
     "$cross_cc" -O0 -x c "$work/atomic-kernel.i" -o "$work/atomic-kernel.gnu.elf"
@@ -271,7 +271,7 @@ SRC
         -o "$work/atomic-kernel.minic.s"
     for mnemonic in amand_db.w amor_db.w amxor_db.w amadd_db.w \
                     amand_db.d amor_db.d amxor_db.d amadd_db.d; do
-        grep -Fq "$mnemonic \\$zero, \\$t0, \\$t1" "$work/atomic-kernel.minic.s"
+        grep -Fq "$mnemonic \$zero, \$t0, \$t1" "$work/atomic-kernel.minic.s"
     done
     "$cross_cc" -x assembler "$work/atomic-kernel.minic.s" \
         -o "$work/atomic-kernel.minic.elf"
