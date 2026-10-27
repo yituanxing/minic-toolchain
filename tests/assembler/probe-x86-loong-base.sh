@@ -113,6 +113,15 @@ entry_x:
     .value 0x1234
     movzbl %al, %eax
     movzbl %r8b, %r10d
+    movzbl 8(%rsp,%r10,2), %r9d
+    movzbl ext_global(%rip), %r8d
+    movzbq %r12b, %r13
+    movzwl %ax, %eax
+    movzwl (%rsp,%r12,4), %r8d
+    movzwq %r14w, %r15
+    movzwq 8(%r12), %r11
+    movslq 16(%r13,%r14,4), %r9
+    movslq ext_global(%rip), %rax
     sbbl %eax, %r10d
     sbbq %r8, %r9
     sbbl $-1, %eax
@@ -449,7 +458,12 @@ cmp "$work/la-gnu.bin" "$work/la-mini.bin"
 grep -q 'LoongArch' "$work/la-header.txt"
 grep -q '0x43' "$work/la-header.txt"
 
-for bad in 'movq %rax, (%eax)' \
+for bad in 'movzbl %ax, %eax' \
+           'movzwl %al, %eax' \
+           'movzbq %al, %eax' \
+           'movzwl (%rsp), %rax' \
+           'movslq %rax, %r8' \
+           'movq %rax, (%eax)' \
            'movl 4294967296(%rax), %eax' \
            'movq %rax, (%rax,%rsp,2)' \
            'movq %rax, (%rax,%eax,4)' \
