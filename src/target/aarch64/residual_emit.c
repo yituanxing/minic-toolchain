@@ -88,6 +88,33 @@ bool minic_aarch64_emit_residual_instruction(
         case MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM:
             *needs_writeback = false;
             return minic_aarch64_emit_qualified_structured_asm(out, ctx, ins);
+        case MINIC_CORE_INSTRUCTION_CALL_FRAME_ADDRESS: {
+            /* Same typed Core builtin as RV32/RV64, but the AAPCS64
+             * machine owns x30 and the saved-LR frame offset.  A call inside
+             * this function replaces live x30, so non-leaf must fetch the
+             * ENTRY return PC from its saved slot. Never counterfeit an
+             * unwind of another frame. */
+            if (dynamic_frame || ins->result >= fn->value_count ||
+                ins->value.call_frame_address.level != 0U ||
+                ins->value.call_frame_address.kind !=
+                    MINIC_CORE_CALL_FRAME_ADDRESS_RETURN ||
+                !minic_type_is_pointer(ins->type) ||
+                !minic_type_equal(fn->values[ins->result].type, ins->type) ||
+                (ctx->has_direct_calls &&
+                 (ctx->save_offset > 32760U ||
+                  (ctx->save_offset & 7U) != 0U)))
+                return minic_multi_direct_machine_reject(
+                    fn, "aarch64", name, "call_frame_return_address",
+                    reject_block, reject_ins, __LINE__);
+            if (ctx->has_direct_calls) {
+                if (fprintf(out, "  ldr x9, [sp, #%zu]\n",
+                            ctx->save_offset) < 0)
+                    return false;
+            } else if (fputs("  mov x9, x30\n", out) == EOF) {
+                return false;
+            }
+            break;
+        }
         case MINIC_CORE_INSTRUCTION_FIXED_REGISTER_READ: {
             const MinicCoreFixedRegisterBinding *binding;
             /* Do NOT virtualize the stack pointer into an ELF global.  The

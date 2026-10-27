@@ -287,6 +287,31 @@ static int verify_riscv_integer_strategy(void) {
  * RISC-V sp/tp and x86 rsp are live machine values. No AArch64/LoongArch
  * register binding is admitted until their backend owns the corresponding
  * Core FIXED_REGISTER_READ lowering and preservation contract. */
+static int verify_aarch64_return_address_level_zero(void) {
+    const MinicTargetInfo *aarch =
+        minic_target_info_from_name("aarch64-linux");
+    const MinicTargetInfo *x86 =
+        minic_target_info_from_name("x86_64-linux");
+    const MinicTargetInfo *loong =
+        minic_target_info_from_name("loongarch64-linux");
+    if (!aarch || !x86 || !loong ||
+        !minic_target_info_call_frame_address_supported(
+            aarch, MINIC_CALL_FRAME_ADDRESS_RETURN, 0U) ||
+        minic_target_info_call_frame_address_supported(
+            aarch, MINIC_CALL_FRAME_ADDRESS_RETURN, 1U) ||
+        minic_target_info_call_frame_address_supported(
+            aarch, MINIC_CALL_FRAME_ADDRESS_FRAME, 0U) ||
+        minic_target_info_call_frame_address_supported(
+            x86, MINIC_CALL_FRAME_ADDRESS_RETURN, 0U) ||
+        minic_target_info_call_frame_address_supported(
+            loong, MINIC_CALL_FRAME_ADDRESS_RETURN, 0U)) {
+        (void)fprintf(stderr, "AARCH64_CALL_FRAME=FAIL\n");
+        return 1;
+    }
+    (void)puts("AARCH64_CALL_FRAME=PASS return_level0 saved_x30 nonleaf frame_unsupported");
+    return 0;
+}
+
 static int verify_fixed_register_target_contract(void) {
     static const char *names[] = {
         "riscv32-linux", "riscv64-linux", "x86_64-linux",
@@ -368,7 +393,8 @@ int main(void) {
         (void)fprintf(stderr, "FAIL AAPCS64 va_copy must fail closed, x86 ABI-state independent\n");
         return 1;
     }
-    if (verify_fixed_register_target_contract() != 0 ||
+    if (verify_aarch64_return_address_level_zero() != 0 ||
+        verify_fixed_register_target_contract() != 0 ||
         verify_gnu_asm_immediate_target_contract() != 0 ||
         verify_riscv_integer_strategy() != 0 || verify_registered_target_catalog() != 0 || verify_riscv_profile_catalog() != 0 ||
         verify_lp64("riscv64-linux", MINIC_TARGET_ARCH_RISCV64,

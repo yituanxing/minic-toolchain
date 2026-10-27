@@ -278,6 +278,11 @@ const MinicTargetInfo *minic_target_info_for_architecture(
              * corrupts independent iteration. Reject this operation until
              * a distinct AArch64 record-copy/storage contract is proved. */
             aarch64_target.variadic_copy_kind = MINIC_VARIADIC_COPY_UNSUPPORTED;
+            /* AAPCS64 saves x30 (LR) in the existing frame whenever calls
+             * may overwrite it; otherwise leaf x30 is the live return PC.
+             * Enable only RETURN level 0.  GCC FRAME builtin and unwinding
+             * levels remain unsupported without x29 frame-chain ownership. */
+            aarch64_target.call_frame_return_address_level0 = true;
         }
         return &aarch64_target;
     }

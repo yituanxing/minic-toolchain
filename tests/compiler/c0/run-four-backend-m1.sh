@@ -1712,6 +1712,7 @@ for target in aarch64 loongarch64; do
         grep -F '  cmp x10, x11' "$w/aarch_nospec.mini.s" >/dev/null
         grep -F '  sbc x9, xzr, xzr' "$w/aarch_nospec.mini.s" >/dev/null
         grep -F '  mov x9, sp' "$w/aarch_nospec.mini.s" >/dev/null
+        grep -F '  ldr x9, [sp, #' "$w/aarch_nospec.mini.s" >/dev/null
         "$gcc" -static -x assembler "$w/aarch_nospec.mini.s" \
             -o "$w/aarch_nospec.mini.elf"
         check_qemu_exit "$qemu" "$w/aarch_nospec.mini.elf" 42

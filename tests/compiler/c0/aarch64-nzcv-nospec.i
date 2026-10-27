@@ -14,6 +14,15 @@ static unsigned long read_live_sp(void) {
         return 1UL;
     return local;
 }
+__attribute__((noinline))
+static unsigned long inner_return_clobber(unsigned long value) {
+    return value + 1UL;
+}
+__attribute__((noinline))
+static void *read_saved_return_address(void) {
+    if (inner_return_clobber(41UL) != 42UL) return (void *)0;
+    return __builtin_return_address(0);
+}
 int main(void) {
     if (array_index_mask_nospec(3UL, 4UL) != ~0UL) return 1;
     if (array_index_mask_nospec(4UL, 4UL) != 0UL) return 2;
@@ -21,5 +30,8 @@ int main(void) {
     if (array_index_mask_nospec(0UL, 0UL) != 0UL) return 4;
     if (array_index_mask_nospec(0UL, 1UL) != ~0UL) return 5;
     if (read_live_sp() != 21UL) return 6;
+    void *first = read_saved_return_address();
+    void *second = read_saved_return_address();
+    if (!first || !second || first == second) return 7;
     return 42;
 }
