@@ -1,15 +1,16 @@
 {
   "schema": 1,
-  "baseline_commit": "5fea20f9f96450ff025041e1a2ba8c0203ff7012",
+  "baseline_commit": "cdc04f5d453a11406f8377c190e87be8a9e391e9",
   "policy": "blob fingerprint tracks unchanged source. CI coverage means tested changes only, not full source inspection; changed blobs automatically reopen.",
   "audit_merged": [
     665,
     666,
     668,
     669,
-    672
+    672,
+    673
   ],
-  "audit_in_progress": "PR #673 current batch (GNU/QEMU smoke first rejected wider CALL in RV64 capability gate); extended target ABI classifier and shared direct/indirect wide argument/return admission; exact-head CI pending.",
+  "audit_in_progress": "Finalization: fail-closed AArch64 va_copy pointer alias, PR/main RV32/RV64 owner routing, and targeted correctness probes. Exact-head CI/real Linux acceptance not yet certified.",
   "next_deep_review": [
     "src/target/aarch64/call_emit.c",
     "src/target/loongarch64/call_emit.c",
@@ -1008,9 +1009,10 @@
       "ci_touched_in": []
     },
     "src/target/target_info.c": {
-      "blob": "12e7cb673ac94690aa3cdd2fd5d6ba030f2a84b0",
-      "review_depth": "inventory",
-      "ci_touched_in": []
+      "blob": "2df2ddc1b2696de2bcebbebeacb98eefb92c78c7",
+      "review_depth": "targeted",
+      "ci_touched_in": [],
+      "note": "2026-10-27: AArch64 ABI-state va_copy cannot be scalar pointer assignment; fail-closed pending independent 32-byte state storage and real GNU/QEMU differential."
     },
     "src/target/target_info.h": {
       "blob": "31bfafc424c1bd2e5281358a69b797842db37aec",

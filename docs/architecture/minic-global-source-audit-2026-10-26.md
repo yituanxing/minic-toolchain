@@ -97,3 +97,45 @@ This is a concrete example of why reading **admission + ABI planning +
 machine emission together** exposed a missing capability that code
 emitter-only review missed. Exact-head GNU/QEMU remains the acceptance
 gate; do not mark complete before its successful rerun.
+
+## 2026-10-27 MiniC finalization gate (parent main cdc04f5d)
+
+**Scope and separation:** the MiniC target/core/frontend/compiler source inventory was
+re-read at the current main head, but an all-file scan is **not** a semantic
+proof of all five emitters. Previous unchanged-blob full and targeted reviews
+retain their separate fingerprints. This batch does not touch MiniAS/MiniLD.
+
+**P1 — AArch64 variadic-copy correctness:** AAPCS64 `va_list` is a mutable
+32-byte five-field cursor. MiniC's current `__builtin_va_list` proxy is a
+pointer and `MINIC_VARIADIC_COPY_SCALAR_ASSIGNMENT` copied that pointer,
+so `va_copy` would alias the original mutable ABI-state cursor instead of
+making an independent copy. Until an AArch64-specific state-record lifetime
+and copy implementation is qualified, `va_copy` **must reject**. The
+native strict target-ABI script now verifies an AArch64 source use fails
+without a partial output; the separate descriptor contract pins the
+unsupported ABI-copy policy, without altering the proven scalar
+RV32/RV64 or x86 ABI-state paths. This is a *miscompile prevention*, **not**
+a claim that AArch64 `va_copy` now works.
+
+**P1 — CI source-owner coverage:** align the existing RV32 real-software
+and RV64 strict origin smoke PR/main path routing with the shared Frontend,
+Core, Compiler, TargetInfo, DataLayout, Target Common, public entrypoints
+and both MiniC driver owners. The seven expensive RV64 Linux shards remain
+opt-in under their existing title guard; no new workflow was added. The
+native architecture boundary checker now verifies both event lists for both
+workflows, so missing a future shared owner fails the regular native gate.
+
+**Exact-head acceptance required:** strict native (+ negative va_copy case),
+four-architecture compiler runtime, RV32 original software QEMU probe,
+RV64 GNU/QEMU wide-CALL and source-ASM smoke, and x86 source acceptance.
+The 2026-10-27 parent main had a green focused-t1 job #40441859868;
+that success **does not** certify the new change until its own PR head runs.
+RV64 original Linux 2064/2064 GNU Image + same-Image QEMU P1 remains a
+separate closing receipt. The RV32 1741/1741 historical Image/P1 belongs
+to its recorded SHA and cannot be silently reused as a new HEAD receipt.
+
+**Deliberate non-goals for architectural closure:** no new Machine IR, no
+cross-ISA register-bank merge, no attempt to advertise x86 ABI-state or
+AAPCS64 struct `va_list` as a trivial scalar cursor, and no full Linux
+build on every local correctness edit. Aggregate/FP/variadic fallbacks must
+continue to fail closed when not physically supported.

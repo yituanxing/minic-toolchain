@@ -389,6 +389,32 @@ for trigger in 'src/**' 'include/minic/**' 'tools/minic/**' \
           .github/workflows/minic-runtime-fourarch.yml || true)
   [[ "$count" -ge 2 ]] || fail "four-arch PR/push missing trigger $trigger count=$count"
 done
+# PR and main ownership symmetry for both architecture-specific regressions.
+# Keep this apt-free: the runner already has Python, not necessarily PyYAML.
+python3 - <<'PY'
+from pathlib import Path
+owners = {
+    'src/frontend/**', 'src/core/**', 'src/compiler/**',
+    'src/target/common/**', 'src/target/target_info*',
+    'src/target/data_layout*', 'include/minic/**',
+    'tools/minic/**', 'tools/minic-cc/**',
+}
+for name in ('minic-rv32-cjson-runtime.yml', 'minic-rv64i-origin-audit-seven.yml'):
+    source = (Path('.github/workflows') / name).read_text()
+    for event, stop in (('pull_request', 'push'), ('push', 'workflow_dispatch')):
+        parts = source.split('  ' + event + ':\n', 1)
+        if len(parts) != 2:
+            raise SystemExit(f'MINIC_CI_OWNER=FAIL {name} event={event}')
+        section = parts[1].split('  ' + stop + ':\n', 1)[0]
+        paths = {line.strip()[2:].strip().strip("'\"")
+                 for line in section.splitlines()
+                 if line.strip().startswith('- ')}
+        missing = sorted(owners - paths)
+        if missing:
+            raise SystemExit(f'MINIC_CI_OWNER=FAIL {name} event={event} missing={missing}')
+print('MINIC_CI_OWNER=PASS rv32_rv64_shared_source_PR_and_main')
+PY
+
 # Register placement must not leak from one machine into TargetInfo's
 # architecture-neutral C language ABI model. Production callers were zero.
 lacks src/target/target_info.h 'minic_riscv64_argument_registers'

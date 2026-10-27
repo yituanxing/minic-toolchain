@@ -272,7 +272,12 @@ const MinicTargetInfo *minic_target_info_for_architecture(
             aarch64_target.gnu_sizeof_function_is_one = true;
             aarch64_target.variadic_scalar_read_kind = MINIC_VARIADIC_SCALAR_READ_ABI_CURSOR;
             aarch64_target.variadic_linear_slot_bytes = 0U;
-            aarch64_target.variadic_copy_kind = MINIC_VARIADIC_COPY_SCALAR_ASSIGNMENT;
+            /* AAPCS64 va_list is a mutable 32-byte ABI-state record, while
+             * MiniC currently models __builtin_va_list as a pointer proxy.
+             * A scalar va_copy merely aliases the same 32-byte cursor and
+             * corrupts independent iteration. Reject this operation until
+             * a distinct AArch64 record-copy/storage contract is proved. */
+            aarch64_target.variadic_copy_kind = MINIC_VARIADIC_COPY_UNSUPPORTED;
         }
         return &aarch64_target;
     }

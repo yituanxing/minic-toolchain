@@ -298,6 +298,17 @@ int main(void) {
         (void)fprintf(stderr, "FAIL four independent target identities\n");
         return 1;
     }
+    /* AAPCS64's record cursor cannot be safely copied through the temporary
+     * pointer representation. Reject until an independent ABI state copy is
+     * implemented; x86 remains the only qualified ABI-state copy here. */
+    if (arm->variadic_scalar_read_kind != MINIC_VARIADIC_SCALAR_READ_ABI_CURSOR ||
+        arm->variadic_copy_kind != MINIC_VARIADIC_COPY_UNSUPPORTED ||
+        x86->variadic_copy_kind != MINIC_VARIADIC_COPY_ABI_STATE ||
+        rv->variadic_copy_kind != MINIC_VARIADIC_COPY_SCALAR_ASSIGNMENT ||
+        loong->variadic_copy_kind != MINIC_VARIADIC_COPY_SCALAR_ASSIGNMENT) {
+        (void)fprintf(stderr, "FAIL AAPCS64 va_copy must fail closed, x86 ABI-state independent\n");
+        return 1;
+    }
     if (verify_riscv_integer_strategy() != 0 || verify_registered_target_catalog() != 0 || verify_riscv_profile_catalog() != 0 ||
         verify_lp64("riscv64-linux", MINIC_TARGET_ARCH_RISCV64,
                     MINIC_INTEGER_SIGN_UNSIGNED, MINIC_INTEGER_RANK_INT,
