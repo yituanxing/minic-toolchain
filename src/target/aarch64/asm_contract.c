@@ -941,6 +941,7 @@ bool minic_aarch64_emit_qualified_structured_asm(
             width == 8U ? "x" : "w",
             width == 8U ? "x" : "w",
             width == 8U ? "x" : "w",
+            width == 8U ? "x" : "w",
             st[mode], width == 8U ? "x" : "w",
             mode == 3U ? "  dmb ish\n" : "",
             (size_t)ops[1].value * 8U,
