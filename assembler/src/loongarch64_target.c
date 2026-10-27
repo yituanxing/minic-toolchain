@@ -694,12 +694,12 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
     if(n==3U && la_reg(t[0],&rd) &&
        la_special_reg(t[1],"$xr",31U,&rj)) {
         static const struct {const char *name;uint32_t opcode;unsigned max;} pick[]={
-            {"xvpickve2gr.b", UINT32_C(0x76ef8000),31U},
-            {"xvpickve2gr.h", UINT32_C(0x76efc000),15U},
+            {"xvpickve2gr.b", UINT32_C(0x76ef8000),15U},
+            {"xvpickve2gr.h", UINT32_C(0x76efc000),7U},
             {"xvpickve2gr.w", UINT32_C(0x76efe000),7U},
             {"xvpickve2gr.d", UINT32_C(0x76eff000),3U},
-            {"xvpickve2gr.bu",UINT32_C(0x76f38000),31U},
-            {"xvpickve2gr.hu",UINT32_C(0x76f3c000),15U},
+            {"xvpickve2gr.bu",UINT32_C(0x76f38000),15U},
+            {"xvpickve2gr.hu",UINT32_C(0x76f3c000),7U},
             {"xvpickve2gr.wu",UINT32_C(0x76f3e000),7U},
             {"xvpickve2gr.du",UINT32_C(0x76f3f000),3U}
         };
