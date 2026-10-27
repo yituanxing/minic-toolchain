@@ -134,8 +134,11 @@ def shard(a):
 
 def aggregate(a):
     files = sorted(Path(a.results).rglob("results.json"))
-    if len(files) != 21: raise ValueError(f"incomplete shard artifacts {len(files)}/21")
-    by_target = {t: {} for t in TARGETS}
+    selected = (a.target,) if a.target else TARGETS
+    expected = len(selected) * N
+    if len(files) != expected:
+        raise ValueError(f"incomplete shard artifacts {len(files)}/{expected}")
+    by_target = {t: {} for t in selected}
     for f in files:
         x = json.loads(f.read_text())
         t, n = x["target"], x["shard"]
@@ -171,8 +174,8 @@ def aggregate(a):
         for cause, count in causes.most_common(20):
             print(f"MINIAS_DISCOVERY_BLOCKER target={target} n={count} cause={cause}")
     save(a.out, {"version": 1, "architectures": summary})
-    print("MINIAS_DISCOVERY=COMPLETE targets=3 shards=21 "
-          "GNU_ORACLE=NOT_TESTED LINUX_P1=NOT_TESTED")
+    print(f"MINIAS_DISCOVERY=COMPLETE targets={len(selected)} "
+          f"shards={expected} GNU_ORACLE=NOT_TESTED LINUX_P1=NOT_TESTED")
 
 def main():
     p = argparse.ArgumentParser()
@@ -190,6 +193,7 @@ def main():
     run.add_argument("--out", required=True)
     agg = sub.add_parser("aggregate")
     agg.add_argument("--results", required=True)
+    agg.add_argument("--target", choices=TARGETS)
     agg.add_argument("--out", required=True)
     a = p.parse_args()
     try:

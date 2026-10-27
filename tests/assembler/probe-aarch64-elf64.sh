@@ -12,6 +12,7 @@ trap 'rm -rf "$work"' EXIT
 # One real AArch64 instruction stream, ISA-specific immediate syntax,
 # an external call relocation, a local jump and generic data relocations.
 cat >"$work/vertical.s" <<'SRC'
+.arch armv8-a
 .text
 .globl _start
 .type _start, @function
@@ -76,6 +77,14 @@ for option in '-march=rv64gc' '-mabi=ilp32' '-march=armv9-a'; do
         exit 1
     fi
 done
+printf '.arch armv9-a\n.text\nnop\n' >"$work/unsupported-arch.s"
+if "$MINIAS" --target=aarch64 -o "$work/unsupported-arch.o" \
+    "$work/unsupported-arch.s" >"$work/unsupported-arch.out" \
+    2>"$work/unsupported-arch.err"; then
+    echo 'AARCH64_VSLICE=FAIL accepted unsupported .arch feature' >&2
+    exit 1
+fi
+grep -q 'unsupported-aarch64-architecture' "$work/unsupported-arch.err"
 printf '.text\nadd x0, x0, #1\n' >"$work/unsupported.s"
 if "$MINIAS" --target=aarch64 -o "$work/unsupported.o" \
     "$work/unsupported.s" >"$work/bad.stdout" 2>"$work/bad.stderr"; then

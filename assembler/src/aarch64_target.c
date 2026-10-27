@@ -251,8 +251,18 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
 
 static bool directive(MiniAs *as, const char *op, const char *args,
                       size_t line, bool *handled) {
-    (void)args;
     *handled = false;
+    /* GCC emits .arch armv8-a before its first A64 instruction. Verify the
+     * exact declared ISA here; never silently accept a richer architecture. */
+    if (strcmp(op, ".arch") == 0) {
+        *handled = true;
+        if (strcmp(args, "armv8-a") != 0) {
+            minias_set_error(as, "unsupported-aarch64-architecture:%s:line=%zu",
+                             args, line);
+            return false;
+        }
+        return true;
+    }
     if (strcmp(op, ".insn") == 0 || strcmp(op, ".option") == 0) {
         minias_set_error(as, "unsupported-aarch64-directive:%s:line=%zu",
                          op, line);

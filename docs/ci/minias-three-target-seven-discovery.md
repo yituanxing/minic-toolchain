@@ -24,3 +24,13 @@
 - Target-specific errors remain separated; only proven common Expression/Fragment/Fixup/Relaxation mechanisms will be promoted to Common.
 - This bounded compiler-C-test census is only a fast lane. Linux whole-image GNU baseline, frozen full corpus and semantic GNU-as comparison remain separate milestones.
 - Next development batch: inspect real blocker counts, implement related target capabilities together, and rerun targeted affected shards before L3/L4.
+
+## First exact-head discovery result (head 553d0718)
+
+- Workflow run 40453774777: 3 producers and all 21 consumer shards completed.
+- x86_64 baseline: 70 C->S READY; MiniAS 0 ASSEMBLED_UNVERIFIED / 70 candidate failures, first blocker unsupported-target.
+- aarch64 baseline: 46 READY and 24 distinct C->S producer failures; MiniAS 0/46, first blocker unsupported-directive .arch.
+- loongarch64 baseline: 44 READY and 26 producer failures; MiniAS 0/44, first blocker unsupported-target.
+- All outputs are discovery failures; workflow success means complete evidence, NOT supported assembly or GNU equivalence.
+- Fast-lane follow-up: add validated AArch64 .arch armv8-a (reject armv9), then use pinned run 40453774777 artifact to replay only seven AArch64 shards. No regeneration of any C or frozen assembly, no redundant 21-job rerun.
+- Source architecture after this batch remains target-bound: the .arch directive is implemented only in AArch64 target, and the generic shard aggregator adds optional target filtering without encoding architecture semantics.
