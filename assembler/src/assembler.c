@@ -4508,6 +4508,8 @@ static bool expand_macro_invocation(MiniAs *as,
     char *copy = minias_strdup(args);
     char *tokens[64];
     const char *values[64];
+    bool assigned[64]={false};
+    size_t positional=0U;
     size_t supplied;
     MiniAsSourceLine *expanded = NULL;
     size_t i;
@@ -4528,20 +4530,49 @@ static bool expand_macro_invocation(MiniAs *as,
         free(copy);
         return false;
     }
-    for (i = 0U; i < macro->param_count; ++i) {
-        if (i < supplied) {
-            values[i] = strip_macro_argument_quotes(tokens[i]);
-        } else if (macro->params[i].default_value != NULL) {
-            values[i] = macro->params[i].default_value;
-        } else if (macro->params[i].required) {
-            minias_set_error(as, "missing-macro-argument:%s:%s:line=%zu",
-                             macro->name, macro->params[i].name, line);
-            free(copy);
-            return false;
-        } else {
-            values[i] = "";
+    /* GNU GAS named macro arguments can appear in any order:
+     * .macro SAVE_ALL reg=0 docfi=0 / SAVE_ALL docfi=1,reg=7.
+     * Do not substitute the literal string "docfi=1" for \\docfi,
+     * since that silently changes .if 1 to .if docfi=1.
+     * Positional and keyword argument binding share this Common owner. */
+    for(i=0U;i<macro->param_count;++i)
+        values[i]=macro->params[i].default_value ?
+                  macro->params[i].default_value:"";
+    for(i=0U;i<supplied;++i) {
+        char *token=tokens[i],*equal=strchr(token,'=');
+        size_t index;
+        if(equal && equal!=token) {
+            bool matched=false;
+            *equal='\0';
+            for(index=0U;index<macro->param_count;++index)
+                if(!strcmp(token,macro->params[index].name)) {
+                    matched=true;break;
+                }
+            if(!matched || assigned[index]) {
+                minias_set_error(as,"bad-macro-keyword:%s:%s:line=%zu",
+                                 macro->name,token,line);
+                free(copy);return false;
+            }
+            values[index]=strip_macro_argument_quotes(equal+1U);
+        }else {
+            while(positional<macro->param_count && assigned[positional])
+                ++positional;
+            if(positional>=macro->param_count) {
+                minias_set_error(as,"too-many-macro-arguments:%s:line=%zu",
+                                 macro->name,line);
+                free(copy);return false;
+            }
+            index=positional++;
+            values[index]=strip_macro_argument_quotes(token);
         }
+        assigned[index]=true;
     }
+    for(i=0U;i<macro->param_count;++i)
+        if(!assigned[i] && macro->params[i].required) {
+            minias_set_error(as,"missing-macro-argument:%s:%s:line=%zu",
+                             macro->name,macro->params[i].name,line);
+            free(copy);return false;
+        }
     if (as->macro_expansion_depth >= 64U) {
         minias_set_error(as, "macro-expansion-depth:%s:line=%zu",
                          macro->name, line);

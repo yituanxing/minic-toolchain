@@ -770,6 +770,26 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
                     goto done;
                 }
     }
+    /* GNU LASX XR lane injection: vector x0, scalar r5, lane u10.
+     * Distinct from LSX VR injections, but same existing typed raw
+     * MCInst and common ELF encoder. GNU loongarch-opc.c is authoritative
+     * for both .w/.d opcode words and legal lane ranges. */
+    if(n==3U && la_special_reg(t[0],"$xr",31U,&rd) &&
+       la_reg(t[1],&rj)) {
+        static const struct {const char *name;uint32_t base;unsigned max;} inject[]={
+            {"xvinsgr2vr.w",UINT32_C(0x76ebc000),7U},
+            {"xvinsgr2vr.d",UINT32_C(0x76ebe000),3U}
+        };
+        uint64_t lane;
+        if(minias_eval_u64_expression(t[2],&lane))
+            for(i=0U;i<sizeof(inject)/sizeof(inject[0]);++i)
+                if(!strcmp(s->op,inject[i].name) && lane<=inject[i].max) {
+                    m->count=3U;
+                    m->encoding=inject[i].base|
+                        ((uint32_t)lane<<10U)|(rj<<5U)|rd;
+                    goto done;
+                }
+    }
     /* FCC-to-GPR: condition register is u3 in r5, GPR is r0. */
     if(n==2U && !strcmp(s->op,"movcf2gr") &&
        la_reg(t[0],&rd) &&

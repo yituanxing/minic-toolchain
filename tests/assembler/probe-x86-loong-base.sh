@@ -697,6 +697,9 @@ entry_la:
     xvreplve0.q $xr22, $xr22
     xvreplve0.w $xr3, $xr4
     xvreplve0.b $xr5, $xr6
+    xvinsgr2vr.d $xr31, $r17, 0
+    xvinsgr2vr.d $xr8, $a1, 3
+    xvinsgr2vr.w $xr9, $a2, 7
     vinsgr2vr.d $vr0, $r13, 1
     vinsgr2vr.w $vr1, $r14, 3
     vinsgr2vr.h $vr2, $r15, 7
@@ -1070,6 +1073,9 @@ for bad in 'li.w $r4, -2049' \
            'xvslli.b $xr0, $xr1, 8' \
            'xvreplve0.q $xr0, $vr1' \
            'vinsgr2vr.d $vr0, $r2, 2' \
+           'xvinsgr2vr.d $xr0, $r2, 4' \
+           'xvinsgr2vr.w $xr0, $r2, 8' \
+           'xvinsgr2vr.d $vr0, $r2, 1' \
            'vinsgr2vr.h $vr0, $r2, 8' \
            'xvsrli.d $xr0, $xr1, 64' \
            'xvslti.d $xr0, $xr1, -17' \
@@ -1174,6 +1180,42 @@ for target in x86_64 loongarch64; do
         exit 1
     fi
 done
+# GNU GAS named arguments are not literal macro values.  Test ordered,
+# reordered and mixed positional/keyword forms on both backends.
+cat >"$work/gnu-named-macro.s" <<'GAS_MACRO'
+.data
+.macro gm_one reg=1 docfi=0
+  .if \docfi
+    .byte 0xaa
+  .else
+    .byte 0xbb
+  .endif
+  .byte \reg
+.endm
+gm_one docfi=1,reg=7
+gm_one reg=8,docfi=0
+gm_one 9,docfi=1
+gm_one
+GAS_MACRO
+"$MINIAS" --target=x86_64 -o "$work/x86-macro-mini.o" "$work/gnu-named-macro.s"
+as --64 -o "$work/x86-macro-gnu.o" "$work/gnu-named-macro.s"
+objcopy -j .data -O binary "$work/x86-macro-mini.o" "$work/x86-macro-mini.bin"
+objcopy -j .data -O binary "$work/x86-macro-gnu.o" "$work/x86-macro-gnu.bin"
+cmp "$work/x86-macro-mini.bin" "$work/x86-macro-gnu.bin"
+"$MINIAS" --target=loongarch64 -mabi=lp64d -o "$work/la-macro-mini.o" "$work/gnu-named-macro.s"
+"$LOONGAS" -mabi=lp64d -o "$work/la-macro-gnu.o" "$work/gnu-named-macro.s"
+"$LOONGCOPY" -j .data -O binary "$work/la-macro-mini.o" "$work/la-macro-mini.bin"
+"$LOONGCOPY" -j .data -O binary "$work/la-macro-gnu.o" "$work/la-macro-gnu.bin"
+cmp "$work/la-macro-mini.bin" "$work/la-macro-gnu.bin"
+for bad in 'gm_one docfi=1,docfi=0' 'gm_one unknown=1'; do
+    printf '.data\n.macro gm_one reg=0 docfi=0\n.byte \\docfi\n.endm\n%s\n' "$bad" >"$work/gnu-macro-invalid.s"
+    if "$MINIAS" --target=loongarch64 -o "$work/macro-invalid.o" \
+        "$work/gnu-macro-invalid.s" >/dev/null 2>"$work/macro-invalid.err"; then
+        echo "illegal GNU GAS keyword argument accepted: $bad" >&2
+        exit 1
+    fi
+done
+echo 'MINIAS_COMMON_MACRO_NAMED=PASS x86_LA_GNU_data_bytes=equal keyword_and_positional=true'
 echo 'MINIAS_COMMON_DEFERRED=PASS x86_LA64_GNU_bytes=equal forward_subsection_fill_skip=true unresolved=reject'
 echo 'MINIAS_COMMON_FILL=PASS GNU_LA64_data_bytes=equal'
 # GNU-preprocessed C unsigned suffixes and full-uint64 .quad expressions:
