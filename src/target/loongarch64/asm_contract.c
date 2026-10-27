@@ -106,12 +106,102 @@ static bool loong_atomic_qualified_source(
     return true;
 }
 
+/* Linux irqflags.h uses only CSR_CRMD (CSR index zero): a true EL1
+ * privileged operation, never an ordinary C load, barrier or passthrough.
+ * Match exact GNU named operands and normalized numeric Core templates.
+ * The two forms share the existing Core address/scalar constant roles. */
+static unsigned int loong_csr_template(const char *text, size_t length) {
+    static const char *const forms[] = {
+        "csrrd%[val],%[reg]", "csrrd%0,%1",
+        "csrxchg%[val],%[mask],%[reg]", "csrxchg%0,%1,%2"
+    };
+    char compact[96];
+    size_t i, n = 0U;
+    if (!text || length == 0U || length >= sizeof(compact)) return 0U;
+    for (i = 0U; i < length; ++i) {
+        char c = text[i];
+        if (c == ';') return 0U;
+        if (c == ' ' || c == '\t' || c == '\n' || c == '\r') continue;
+        if (n + 1U >= sizeof(compact)) return 0U;
+        compact[n++] = c;
+    }
+    compact[n] = '\0';
+    for (i = 0U; i < sizeof(forms) / sizeof(forms[0]); ++i)
+        if (strcmp(compact, forms[i]) == 0) return i < 2U ? 1U : 2U;
+    return 0U;
+}
+static bool loong_csr_word_type(MinicType type) {
+    MinicType plain;
+    return minic_type_unqualified(type, &plain) &&
+           minic_type_equal(plain, minic_type_unsigned_int());
+}
+static bool loong_csr_output_type(MinicType type, size_t *width) {
+    MinicType plain;
+    if (!width || !minic_type_unqualified(type, &plain)) return false;
+    if (minic_type_equal(plain, minic_type_unsigned_int())) {
+        *width = 4U; return true;
+    }
+    if (minic_type_equal(plain, minic_type_unsigned_long())) {
+        *width = 8U; return true;
+    }
+    return false;
+}
+static bool loong_csr_constraint(const MinicInlineAsmOperand *op, const char *word) {
+    const size_t n = strlen(word);
+    return op && op->constraint_text && op->constraint_length == n &&
+           memcmp(op->constraint_text, word, n) == 0;
+}
+static bool loong_csr_immediate_zero(const MinicC0Program *program,
+                                      const MinicInlineAsmOperand *op) {
+    const MinicExpression *e;
+    if (!op || !loong_csr_constraint(op, "i")) return false;
+    e = minic_c0_program_expression(program, op->expression);
+    return e && e->kind == MINIC_EXPRESSION_INTEGER &&
+           e->value.integer_value == 0;
+}
+static bool loong_csr_qualified_source(
+    const MinicC0Program *program, const MinicInlineAsm *src,
+    MinicTargetInlineAsmContract *contract) {
+    unsigned int form;
+    const MinicExpression *dst, *mask;
+    size_t width = 0U;
+    if (!program || !src || !contract || !src->is_volatile || src->is_goto ||
+        !src->outputs || !src->inputs ||
+        src->output_count != 1U || src->label_count != 0U ||
+        !src->has_memory_clobber || src->clobber_count != 1U ||
+        src->register_clobber_count != 0U) return false;
+    form = loong_csr_template(src->template_text, src->template_length);
+    if (!form || src->input_count != (form == 1U ? 1U : 2U) ||
+        !loong_csr_constraint(&src->outputs[0], form == 1U ? "=r" : "+r") ||
+        !loong_csr_immediate_zero(program, &src->inputs[form == 1U ? 0U : 1U]))
+        return false;
+    dst = minic_c0_program_expression(program, src->outputs[0].expression);
+    if (!dst || dst->value_category != MINIC_VALUE_LVALUE ||
+        minic_type_is_const(dst->type) ||
+        !loong_csr_output_type(dst->type, &width) ||
+        (form == 1U && width != 4U)) return false;
+    if (form == 2U) {
+        if (!loong_csr_constraint(&src->inputs[0], "r")) return false;
+        mask = minic_c0_program_expression(program, src->inputs[0].expression);
+        if (!mask || !loong_csr_word_type(mask->type)) return false;
+    }
+    contract->operand_count = form == 1U ? 2U : 3U;
+    contract->kinds[0] = form == 1U ?
+        MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT :
+        MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE;
+    if (form == 2U)
+        contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    contract->kinds[contract->operand_count - 1U] =
+        MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    return true;
+}
 bool minic_loongarch64_qualify_inline_asm(
     const MinicC0Program *program, const MinicInlineAsm *src,
     MinicTargetInlineAsmContract *contract) {
     const MinicInlineAsmOperand *op;
     const MinicExpression *expr;
-    if (loong_atomic_qualified_source(program, src, contract))
+    if (loong_atomic_qualified_source(program, src, contract) ||
+        loong_csr_qualified_source(program, src, contract))
         return true;
     if (program == NULL || src == NULL || contract == NULL ||
         !src->is_volatile || src->is_goto || src->output_count != 0U ||
@@ -171,6 +261,64 @@ static bool minic_loongarch64_emit_amo(
                    atom->instruction) >= 0;
 }
 
+static bool minic_loongarch64_emit_csr(
+    FILE *out, const MinicDirectLP64BlockContext *ctx,
+    const MinicCoreInstruction *ins, const MinicCoreInlineAsm *info) {
+    const MinicCoreFunction *fn = ctx->fn;
+    const MinicCoreStructuredInlineAsmOperand *b =
+        ins->value.structured_inline_asm.operands;
+    const unsigned int form = loong_csr_template(
+        info->template_text, info->template_length);
+    size_t width = 0U;
+    MinicType pointee;
+    const MinicCoreInstruction *imm;
+    MinicCoreInstructionId def;
+    size_t imm_index, i;
+    if (!form || !info->is_volatile || info->is_goto ||
+        !info->has_memory_clobber || info->register_clobber_count ||
+        ins->value.structured_inline_asm.operand_count !=
+            (form == 1U ? 2U : 3U)) return false;
+    for (i = 0U; i < ins->value.structured_inline_asm.operand_count; ++i)
+        if (b[i].operand_index != i || b[i].value >= fn->value_count ||
+            b[i].early_clobber || b[i].has_fixed_register_binding ||
+            b[i].value > MINIC_LARGE_FRAME_MAX / 8U)
+            return false;
+    if (b[0].kind != (form == 1U ?
+            MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT :
+            MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE) ||
+        !minic_type_pointee(fn->values[b[0].value].type, &pointee) ||
+        !loong_csr_output_type(pointee, &width) ||
+        (form == 1U && width != 4U)) return false;
+    imm_index = form == 1U ? 1U : 2U;
+    if (b[imm_index].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT)
+        return false;
+    def = fn->values[b[imm_index].value].definition;
+    if (def >= fn->instruction_count) return false;
+    imm = &fn->instructions[def];
+    if (imm->kind != MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT ||
+        imm->result != b[imm_index].value || imm->value.integer_value != 0)
+        return false;
+    if (form == 2U && (b[1].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT ||
+        !loong_csr_word_type(fn->values[b[1].value].type))) return false;
+    /* $t1 carries the saved/restored CRMD bits. For CSR XCHG only the
+     * hardware mask ($t0) selects IE; save former bits back to the C lvalue.
+     * User-mode QEMU cannot execute privileged CSR operations. */
+    if (!minic_loongarch64_emit_frame_mem(
+            out, "ld.d", "$t2", (size_t)b[0].value * 8U,
+            ctx->dynamic_frame)) return false;
+    if (form == 2U &&
+        (!minic_loongarch64_emit_frame_mem(
+             out, "ld.w", "$t0", (size_t)b[1].value * 8U,
+             ctx->dynamic_frame) ||
+         fprintf(out, "  %s $t1, $t2, 0\n"
+                      "  csrxchg $t1, $t0, 0\n",
+                 width == 8U ? "ld.d" : "ld.w") < 0))
+        return false;
+    if (form == 1U && fputs("  csrrd $t1, 0\n", out) == EOF)
+        return false;
+    return fprintf(out, "  %s $t1, $t2, 0\n",
+        width == 8U ? "st.d" : "st.w") >= 0;
+}
 bool minic_loongarch64_emit_qualified_structured_asm(
     FILE *out, const MinicDirectLP64BlockContext *ctx,
     const MinicCoreInstruction *ins) {
@@ -182,6 +330,8 @@ bool minic_loongarch64_emit_qualified_structured_asm(
         ins->value.structured_inline_asm.inline_asm_id >= ctx->fn->inline_asm_count)
         return false;
     info = &ctx->fn->inline_asms[ins->value.structured_inline_asm.inline_asm_id];
+    if (loong_csr_template(info->template_text, info->template_length))
+        return minic_loongarch64_emit_csr(out, ctx, ins, info);
     if (ins->value.structured_inline_asm.operand_count == 2U)
         return minic_loongarch64_emit_amo(out, ctx, ins, info);
     return minic_loongarch64_emit_dbar(out, ctx, ins);
