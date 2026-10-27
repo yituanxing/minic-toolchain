@@ -509,6 +509,25 @@ static bool eval_builtin_unary(const MinicC0Program *program,
     case MINIC_BUILTIN_UNARY_ISDIGIT:
         count = bits >= UINT64_C(48) && bits <= UINT64_C(57) ? 1U : 0U;
         break;
+    case MINIC_BUILTIN_UNARY_BSWAP16:
+    case MINIC_BUILTIN_UNARY_BSWAP32:
+    case MINIC_BUILTIN_UNARY_BSWAP64: {
+        /* Fold the same pure typed GNU operation in all five targets.
+         * The operand must already have passed recursive ICE evaluation;
+         * dynamic expressions never reach the switch case. No machine ISA. */
+        const unsigned int bytes =
+            operator_kind == MINIC_BUILTIN_UNARY_BSWAP16 ? 2U :
+            operator_kind == MINIC_BUILTIN_UNARY_BSWAP32 ? 4U : 8U;
+        unsigned int index;
+        if (width != bytes * 8U ||
+            !minic_type_equal(expression->type, operand.type))
+            return false;
+        for (index = 0U; index < bytes; ++index) {
+            count = (count << 8U) | (bits & UINT64_C(255));
+            bits >>= 8U;
+        }
+        break;
+    }
     default:
         return false;
     }
