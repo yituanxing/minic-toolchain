@@ -48,6 +48,18 @@ external_probe:
     movk w4, #43981, lsl #16
     br x10
     blr x11
+.globl addr64_probe
+addr64_probe:
+    adrp x0, external_data
+    add x0, x0, :lo12:external_data
+    ldr x1, [x0, :lo12:external_data]
+    ldr w2, [x0, :lo12:external_data]
+    str x1, [x0, :lo12:external_data]
+    str w2, [x0, :lo12:external_data]
+    ldrb w3, [x0, :lo12:external_data]
+    strb w3, [x0, :lo12:external_data]
+    ldrh w4, [x0, :lo12:external_data]
+    strh w4, [x0, :lo12:external_data]
 .globl mc_operand_probe
 .type mc_operand_probe, @function
 mc_operand_probe:
@@ -78,6 +90,12 @@ echo 'MINIAS_AARCH64_PARSED_LAYOUT=PASS typed_4B=2 symbol_size=8'
 "$AARCH64_READELF" -Wr "$work/gnu.o" | grep -q 'R_AARCH64_CONDBR19'
 "$AARCH64_READELF" -Wr "$work/mini.o" | grep -q 'R_AARCH64_TSTBR14'
 "$AARCH64_READELF" -Wr "$work/gnu.o" | grep -q 'R_AARCH64_TSTBR14'
+for reloc in R_AARCH64_ADR_PREL_PG_HI21 R_AARCH64_ADD_ABS_LO12_NC \
+    R_AARCH64_LDST8_ABS_LO12_NC R_AARCH64_LDST16_ABS_LO12_NC \
+    R_AARCH64_LDST32_ABS_LO12_NC R_AARCH64_LDST64_ABS_LO12_NC; do
+    "$AARCH64_READELF" -Wr "$work/mini.o" | grep -q "$reloc"
+    "$AARCH64_READELF" -Wr "$work/gnu.o" | grep -q "$reloc"
+done
 cat >"$work/external.s" <<'EXTERNAL'
 .text
 .globl external_function
@@ -86,6 +104,10 @@ external_function:
 .globl external_branch
 external_branch:
     ret
+.data
+.globl external_data
+external_data:
+    .quad 0
 EXTERNAL
 "$AARCH64_AS" -o "$work/external.o" "$work/external.s"
 "$AARCH64_LD" -static -e _start -o "$work/mini.elf" "$work/mini.o" "$work/external.o"
@@ -166,7 +188,11 @@ for bad_source in 'ret x31' 'mov x2, #65536' 'b external_function + 2' \
                   'tbnz x0, #64, external_function' \
                   'b.invalid external_function' \
                   'movk w0, #1, lsl #32' \
-                  'br w0'; do
+                  'br w0' \
+                  'adrp w0, external_data' \
+                  'add x0, x0, :lo12:' \
+                  'ldr x0, [w1, :lo12:external_data]' \
+                  'ldrb x0, [x1, :lo12:external_data]'; do
     printf '.text\n%s\n' "$bad_source" >"$work/invalid-mcinst.s"
     if "$MINIAS" --target=aarch64 -o "$work/invalid-mcinst.o" \
         "$work/invalid-mcinst.s" >"$work/invalid-mcinst.out" \

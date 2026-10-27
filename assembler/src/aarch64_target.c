@@ -19,6 +19,12 @@
 enum {
     AARCH64_R_ABS64 = 257U,
     AARCH64_R_ABS32 = 258U,
+    AARCH64_R_ADR_PREL_PG_HI21 = 275U,
+    AARCH64_R_ADD_ABS_LO12_NC = 277U,
+    AARCH64_R_LDST8_ABS_LO12_NC = 278U,
+    AARCH64_R_LDST16_ABS_LO12_NC = 284U,
+    AARCH64_R_LDST32_ABS_LO12_NC = 285U,
+    AARCH64_R_LDST64_ABS_LO12_NC = 286U,
     AARCH64_R_TSTBR14 = 279U,
     AARCH64_R_CONDBR19 = 280U,
     AARCH64_R_JUMP26 = 282U,
@@ -112,6 +118,9 @@ enum {
     A64_MC_WIDE_IMM,
     A64_MC_BR,
     A64_MC_BLR,
+    A64_MC_ADRP,
+    A64_MC_ADD_LO12,
+    A64_MC_LDST_LO12,
     A64_MC_MOV_REG,
     A64_MC_ADD_REG,
     A64_MC_SUB_REG,
@@ -388,6 +397,83 @@ static bool a64_attach_expr(MiniAsMCInst *inst,unsigned slot,
     return true;
 }
 
+/* GNU AArch64 :lo12: addends are ELF relocation operands, NOT integer
+ * immediates. Keep ownership in SymbolExpr/MCInst and shared ELF RELA. */
+static bool a64_lo12_expr(const char *text,MiniAsSymbolExpr *expr) {
+    return strncmp(text,":lo12:",6U)==0 &&
+           minias_parse_symbol_addend(text+6U,expr);
+}
+
+static bool a64_parse_relocated(MiniAsMCInst *inst,
+                                const char *op,const char *args) {
+    char tok[4][96];
+    unsigned n,rd,rn,unit=0U;
+    bool wd,wn,spd,spn;
+    MiniAsSymbolExpr expr;
+    if(!split_operands(args,tok,&n))return false;
+    if(!strcmp(op,"adrp") && n==2U &&
+       parse_a64_reg(tok[0],&rd,&wd,&spd) && wd && !spd &&
+       minias_parse_symbol_addend(tok[1],&expr) &&
+       a64_attach_expr(inst,1U,&expr)) {
+        inst->opcode=A64_MC_ADRP;inst->count=2U;
+        put_reg(&inst->operands[0],rd,true);
+        return true;
+    }
+    if(!strcmp(op,"add") && n==3U &&
+       parse_a64_reg(tok[0],&rd,&wd,&spd) &&
+       parse_a64_reg(tok[1],&rn,&wn,&spn) && wd==wn &&
+       !(rd==31U&&!spd) && !(rn==31U&&!spn) &&
+       a64_lo12_expr(tok[2],&expr) &&
+       a64_attach_expr(inst,2U,&expr)) {
+        inst->opcode=A64_MC_ADD_LO12;inst->count=3U;
+        put_reg(&inst->operands[0],rd,wd);
+        put_reg(&inst->operands[1],rn,wn);
+        return true;
+    }
+    if(n!=2U || !parse_a64_reg(tok[0],&rd,&wd,&spd) || spd)
+        return false;
+    if(strcmp(op,"ldr")!=0 && strcmp(op,"str")!=0 &&
+       strcmp(op,"ldrb")!=0 && strcmp(op,"strb")!=0 &&
+       strcmp(op,"ldrh")!=0 && strcmp(op,"strh")!=0)
+        return false;
+    {
+        size_t sz=strlen(tok[1]);
+        char inner[96],*comma,*b;
+        unsigned regnum;
+        if(sz<4U || tok[1][0]!='[' || tok[1][sz-1U]!=']' ||
+           sz-2U>=sizeof(inner))return false;
+        memcpy(inner,tok[1]+1U,sz-2U);inner[sz-2U]='\0';
+        comma=strchr(inner,',');
+        if(!comma)return false;
+        *comma++='\0';
+        if(!parse_a64_reg(minias_trim(inner),&regnum,&wn,&spn) || !wn)
+            return false;
+        b=minias_trim(comma);
+        if(!a64_lo12_expr(b,&expr) ||
+           !a64_attach_expr(inst,2U,&expr))return false;
+        rn=regnum;
+    }
+    unit=op[3]=='b'?1U:op[3]=='h'?2U:wd?8U:4U;
+    if((unit==1U||unit==2U) && wd) {
+        free(inst->operands[2].symbol);
+        inst->operands[2].symbol=NULL;
+        return false;
+    }
+    inst->opcode=A64_MC_LDST_LO12;
+    inst->count=3U;
+    put_reg(&inst->operands[0],rd,wd);
+    put_reg(&inst->operands[1],rn,true);
+    inst->encoding=strcmp(op,"ldr")==0 ?
+        (wd?UINT32_C(0xf9400000):UINT32_C(0xb9400000)):
+        strcmp(op,"str")==0 ?
+        (wd?UINT32_C(0xf9000000):UINT32_C(0xb9000000)):
+        strcmp(op,"ldrb")==0?UINT32_C(0x39400000):
+        strcmp(op,"strb")==0?UINT32_C(0x39000000):
+        strcmp(op,"ldrh")==0?UINT32_C(0x79400000):
+                              UINT32_C(0x79000000);
+    return true;
+}
+
 static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
     MiniAsMCInst *inst = calloc(1U, sizeof(*inst) +
                                 4U * sizeof(MiniAsMCOperand));
@@ -535,6 +621,8 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
             }
             inst->opcode=A64_MC_BCOND;inst->count=1U;
             inst->encoding=cond;
+        } else if (a64_parse_relocated(inst,op,args)) {
+            /* ADRP/LO12 relocation is typed and target-owned. */
         } else if (parse_integer_family(inst,op,args)) {
             /* Reuse existing typed register and memory IR. */
         } else {
@@ -571,6 +659,33 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
         case A64_MC_RET:
             code = inst->count == 0U ? UINT32_C(0xd65f03c0) :
                 UINT32_C(0xd65f0000) | (inst->operands[0].reg << 5U);
+            break;
+        case A64_MC_ADRP:
+            code=UINT32_C(0x90000000)|inst->operands[0].reg;
+            expr=inst->operands[1].symbol;
+            fixup=MINIAS_FIXUP_A64_ADRP_HI21;
+            break;
+        case A64_MC_ADD_LO12:
+            code=(inst->operands[0].register_64?
+                  UINT32_C(0x91000000):UINT32_C(0x11000000))|
+                 (inst->operands[1].reg<<5U)|inst->operands[0].reg;
+            expr=inst->operands[2].symbol;
+            fixup=MINIAS_FIXUP_A64_ADD_LO12;
+            break;
+        case A64_MC_LDST_LO12:
+            code=inst->encoding|(inst->operands[1].reg<<5U)|
+                 inst->operands[0].reg;
+            expr=inst->operands[2].symbol;
+            fixup=inst->encoding==UINT32_C(0x39400000) ||
+                  inst->encoding==UINT32_C(0x39000000) ?
+                      MINIAS_FIXUP_A64_LDST8_LO12 :
+                  inst->encoding==UINT32_C(0x79400000) ||
+                  inst->encoding==UINT32_C(0x79000000) ?
+                      MINIAS_FIXUP_A64_LDST16_LO12 :
+                  inst->encoding==UINT32_C(0xf9400000) ||
+                  inst->encoding==UINT32_C(0xf9000000) ?
+                      MINIAS_FIXUP_A64_LDST64_LO12 :
+                      MINIAS_FIXUP_A64_LDST32_LO12;
             break;
         case A64_MC_BR:
         case A64_MC_BLR:
@@ -825,6 +940,18 @@ static uint32_t aarch64_fixup_relocation_type(MiniAsFixupKind kind,
             return width == 4U ? AARCH64_R_CONDBR19 : 0U;
         case MINIAS_FIXUP_A64_TSTBR14:
             return width == 4U ? AARCH64_R_TSTBR14 : 0U;
+        case MINIAS_FIXUP_A64_ADRP_HI21:
+            return width == 4U ? AARCH64_R_ADR_PREL_PG_HI21 : 0U;
+        case MINIAS_FIXUP_A64_ADD_LO12:
+            return width == 4U ? AARCH64_R_ADD_ABS_LO12_NC : 0U;
+        case MINIAS_FIXUP_A64_LDST8_LO12:
+            return width == 4U ? AARCH64_R_LDST8_ABS_LO12_NC : 0U;
+        case MINIAS_FIXUP_A64_LDST16_LO12:
+            return width == 4U ? AARCH64_R_LDST16_ABS_LO12_NC : 0U;
+        case MINIAS_FIXUP_A64_LDST32_LO12:
+            return width == 4U ? AARCH64_R_LDST32_ABS_LO12_NC : 0U;
+        case MINIAS_FIXUP_A64_LDST64_LO12:
+            return width == 4U ? AARCH64_R_LDST64_ABS_LO12_NC : 0U;
         default: return 0U;
     }
 }
