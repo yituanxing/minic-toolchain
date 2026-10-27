@@ -89,7 +89,7 @@ static bool emit_frontend_functions(FILE *file, const MinicC0Program *program) {
         MinicFunctionBodyView body;
         MinicCoreFunction core;
         MinicCoreLowerStatus status;
-        MinicRiscv64FunctionSymbol symbol;
+        MinicRiscvFunctionSymbol symbol;
         bool success;
 
         function = minic_c0_program_function(program, function_index);
@@ -106,7 +106,7 @@ static bool emit_frontend_functions(FILE *file, const MinicC0Program *program) {
         status = minic_core_lower_function(&body, minic_default_target_info(), &core);
         success = status == MINIC_CORE_LOWER_OK && minic_core_function_verify(&core) &&
                   minic_riscv64_core_function_can_emit_for_program(program, &core) &&
-                  minic_riscv64_function_symbol_from_function(function, &symbol);
+                  minic_riscv_function_symbol_from_function(function, &symbol);
         if (success) {
             success = minic_riscv64_emit_core_function_for_program_with_symbol(
                 file, program, &core, &symbol);

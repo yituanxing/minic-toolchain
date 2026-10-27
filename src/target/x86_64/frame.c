@@ -74,12 +74,19 @@ bool minic_x86_64_frame_init_with_storage(const MinicC0Program *program,
             (frame->varargs_results = (MinicCoreValueId *)calloc(
                  frame->varargs_count, sizeof(*frame->varargs_results))) == NULL)
             return false;
-        for (i = 0U; i < fn->instruction_count; ++i) {
-            const MinicCoreInstruction *ins = &fn->instructions[i];
-            if (ins->kind == MINIC_CORE_INSTRUCTION_VARIADIC_ARGUMENT_ADDRESS) {
-                /* A standalone frame caller may supply stale facts. Never
-                 * write past the Common-sized varargs result array or
-                 * silently leave surplus VA cursors uninitialized. */
+        if (facts->variadic_address_results != NULL) {
+            /* Borrow once-checked Common semantic result IDs in production. */
+            for (i = 0U; i < frame->varargs_count; ++i) {
+                const MinicCoreValueId result = facts->variadic_address_results[i];
+                if (result >= fn->value_count) return false;
+                frame->varargs_results[count++] = result;
+            }
+        } else {
+            /* Standalone frame clients have no visitor-owned site index. */
+            for (i = 0U; i < fn->instruction_count; ++i) {
+                const MinicCoreInstruction *ins = &fn->instructions[i];
+                if (ins->kind != MINIC_CORE_INSTRUCTION_VARIADIC_ARGUMENT_ADDRESS)
+                    continue;
                 if (count >= frame->varargs_count ||
                     ins->result >= fn->value_count) return false;
                 frame->varargs_results[count++] = ins->result;

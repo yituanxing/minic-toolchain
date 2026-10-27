@@ -59,6 +59,24 @@ has src/target/common/program_visit.h 'minic_program_function_selected('
 has src/target/common/core_function_plan.c 'minic_core_function_verify(function)'
 has src/target/riscv64/core_admission.c 'RV64 atomic ISA/memory-order lowering is not qualified yet.'
 
+# The Common block cursor selects the identical lexical Core order across
+# all five backends; only machine instruction/terminator handlers are private.
+exists src/target/common/core_block_walk.h
+for consumer in src/target/x86_64/codegen.c \
+                src/target/riscv32/rv32_emit.c \
+                src/target/riscv64/core_codegen.c \
+                src/target/aarch64/block_emit.c \
+                src/target/loongarch64/block_emit.c; do
+  has "$consumer" 'minic_core_block_walk_next('
+  has "$consumer" 'minic_core_block_instruction_at('
+done
+has src/target/common/core_function_plan.c 'plan->facts.variadic_address_results = plan->variadic_results;'
+has src/target/x86_64/frame.c 'facts->variadic_address_results[i]'
+has src/target/common/program_emit.h 'descriptor = mkstemp(temporary);'
+has src/target/common/program_emit.h 'rename(temporary, path)'
+lacks src/target/riscv/function_symbol.h 'MinicRiscv64FunctionSymbol'
+has src/target/riscv/function_symbol.h 'MinicRiscvFunctionSymbol'
+
 # The RV64 ABI classification+placement plan, not its Core instruction
 # admission, owns return/argument admissibility and rejection rollback.
 has src/target/riscv64/function_abi_plan.c \
@@ -590,7 +608,8 @@ has src/target/loongarch64/codegen.c 'minic_multi_direct_lp64_function_plan_prep
 exists src/target/common/program_emit.h
 has src/target/common/program_emit.h 'minic_program_visit_globals('
 has src/target/common/program_emit.h 'minic_program_visit_prepared_functions('
-has src/target/common/program_emit.h 'if (!ok) (void)remove(path);'
+has src/target/common/program_emit.h 'if (!ok) (void)remove(temporary);'
+lacks src/target/common/program_emit.h 'out = fopen(path, "wb");'
 has src/target/common/direct_program_emit.c 'minic_program_emit_write('
 for backend in x86_64 riscv32 riscv64; do
   case "$backend" in
@@ -627,6 +646,13 @@ cc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror \
   src/target/common/core_function_plan.c \
   -o "$work/program-emit-probe"
 "$work/program-emit-probe" "$work/test-output.s"
+
+# Check the real shared CFG cursor on an all-block and RV32/RV64-style
+# reachable subset before any ISA-dependent assembly emission.
+cc -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror \
+  -Iinclude -Isrc tests/compiler/c0/probe-core-block-walk.c \
+  -o "$work/core-block-walk-probe"
+"$work/core-block-walk-probe"
 
 cc -std=c11 -Wall -Wextra -Wpedantic -Werror -Iinclude -Isrc \
   tests/compiler/c0/probe-core-instruction-family.c -o "$work/core-family-probe"

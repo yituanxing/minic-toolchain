@@ -16,6 +16,8 @@ on:
       - 'tests/compiler/c0/check-four-target-model-m0.c'
       - 'tests/compiler/c0/check-minic-target-boundaries.sh'
       - 'tests/compiler/c0/probe-core-semantic-family.c'
+      - 'tests/compiler/c0/probe-core-block-walk.c'
+      - 'tests/compiler/c0/probe-program-emit-transaction.c'
       - '.github/workflows/minic-native-refactor-gate.yml'
   push:
     branches:

@@ -8,6 +8,7 @@
 #include "target/riscv32/rv32_emit.h"
 #include "target/riscv32/rv32_internal.h"
 #include "target/common/core_call_view.h"
+#include "target/common/core_block_walk.h"
 #include "target/common/core_instruction_family.h"
 #include "target/riscv/instruction_select.h"
 #include "target/riscv32/rv32_abi_cursor.h"
@@ -705,7 +706,9 @@ static bool rv32_func(FILE *out, const MinicC0Program *program,
                        MinicDiagnostic *diag) {
     Rv32Frame fr = {0};
     bool *reachable = NULL;
-    MinicRiscv64FunctionSymbol sym;
+    MinicCoreBlockWalk walk = {0};
+    const MinicCoreBlock *block = NULL;
+    MinicRiscvFunctionSymbol sym;
     bool ok = false;
     size_t i, j;
     char message[200];
@@ -730,9 +733,9 @@ static bool rv32_func(FILE *out, const MinicC0Program *program,
         rv32_diag(diag, "<rv32-core>", "rv32i: cannot classify Core CFG reachability");
         goto done;
     }
-    if (!minic_riscv64_function_symbol_from_function(def, &sym)) goto done;
+    if (!minic_riscv_function_symbol_from_function(def, &sym)) goto done;
     sym.function_sections = function_sections;
-    if (!minic_riscv64_emit_function_symbol_begin(out, &sym)) goto done;
+    if (!minic_riscv_emit_function_symbol_begin(out, &sym)) goto done;
     if (fr.has_dynamic_stack_alignment) {
         /* Alignment beyond the psABI's 16 bytes must preserve entry sp.
          * The frame itself remains 16-byte aligned at every call. */
@@ -761,9 +764,8 @@ static bool rv32_func(FILE *out, const MinicC0Program *program,
                 goto done;
         }
     }
-    for (i = 0; i < f->block_count; ++i) {
-        const MinicCoreBlock *block = &f->blocks[i];
-        if (!reachable[i]) continue;
+    minic_core_block_walk_begin(&walk, f, reachable);
+    while (minic_core_block_walk_next(&walk, &i, &block)) {
         if (!block->has_terminator ||
             fprintf(out, ".L%s_rv32_bb%zu:\n", sym.symbol_name, i) < 0)
             goto done;
@@ -772,10 +774,11 @@ static bool rv32_func(FILE *out, const MinicC0Program *program,
             fprintf(out, ".Luser_%zu:\n", block->source_label_id) < 0)
             goto done;
         for (j = 0U; j < block->instruction_count; ++j) {
-            MinicCoreInstructionId id = block->instructions[j];
-            if (id >= f->instruction_count ||
+            MinicCoreInstructionId id = 0U;
+            const MinicCoreInstruction *ins = NULL;
+            if (!minic_core_block_instruction_at(f, block, j, &id, &ins) ||
                 !rv32_emit_ins(out, program, target, f, &fr,
-                               &f->instructions[id], id, sym.symbol_name)) {
+                               ins, id, sym.symbol_name)) {
                 (void)snprintf(message, sizeof(message),
                                "rv32i: unqualified Core instruction function=%.75s block=%zu id=%u kind=%u",
                                sym.symbol_name, i, (unsigned)id,
@@ -809,7 +812,7 @@ static bool rv32_func(FILE *out, const MinicC0Program *program,
         ok = fprintf(out, "  li t0, %zu\n  add sp, sp, t0\n  ret\n",
                      fr.frame_size) >= 0;
     }
-    ok = ok && minic_riscv64_emit_function_symbol_end(out, &sym);
+    ok = ok && minic_riscv_emit_function_symbol_end(out, &sym);
 done:
     free(reachable);
     rv32_frame_destroy(&fr);

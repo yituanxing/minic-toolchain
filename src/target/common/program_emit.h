@@ -2,9 +2,18 @@
 #define MINIC_TARGET_COMMON_PROGRAM_EMIT_H
 
 #include "target/common/program_visit.h"
+#include <stdint.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+
+/* POSIX functions may be hidden by strict C11 header feature macros.
+ * Repeated compatible declarations work in GNU/POSIX host toolchains. */
+extern int mkstemp(char *);
+extern FILE *fdopen(int, const char *);
 
 /* One output transaction and one global/Core walk for ALL five targets.
  * Core declarations/definitions and cleanup are common; ABI, source-ASM
@@ -34,6 +43,9 @@ static inline bool minic_program_emit_write(
     size_t function_count, bool function_sections,
     const MinicProgramEmitConfig *config, void *context) {
     FILE *out;
+    char *temporary;
+    size_t path_length;
+    int descriptor;
     bool ok;
     bool functions_ok;
     if (path == NULL || program == NULL || target == NULL ||
@@ -42,8 +54,25 @@ static inline bool minic_program_emit_write(
         function_count != program->function_count ||
         (function_count != 0U && functions == NULL))
         return false;
-    out = fopen(path, "wb");
-    if (out == NULL) return false;
+    /* Stage next to the destination, without touching the last good .s.
+     * Both output and ISA finalizers operate on this private file. Only a
+     * successful close/finalization may atomically replace the public path. */
+    path_length = strlen(path);
+    if (path_length > SIZE_MAX - sizeof(".minic-XXXXXX")) return false;
+    temporary = malloc(path_length + sizeof(".minic-XXXXXX"));
+    if (temporary == NULL) return false;
+    memcpy(temporary, path, path_length);
+    memcpy(temporary + path_length, ".minic-XXXXXX",
+           sizeof(".minic-XXXXXX"));
+    descriptor = mkstemp(temporary);
+    if (descriptor < 0) { free(temporary); return false; }
+    out = fdopen(descriptor, "wb");
+    if (out == NULL) {
+        (void)close(descriptor);
+        (void)remove(temporary);
+        free(temporary);
+        return false;
+    }
     ok = config->prefix == NULL ||
          config->prefix(out, program, target, functions, function_count,
                         function_sections, context);
@@ -66,8 +95,11 @@ static inline bool minic_program_emit_write(
      * or leave a partial output after an unsuccessful machine emission. */
     if (fclose(out) != 0) ok = false;
     if (ok && config->finalize != NULL)
-        ok = config->finalize(path, target, context);
-    if (!ok) (void)remove(path);
+        ok = config->finalize(temporary, target, context);
+    if (ok && rename(temporary, path) != 0)
+        ok = false;
+    if (!ok) (void)remove(temporary);
+    free(temporary);
     return ok;
 }
 
