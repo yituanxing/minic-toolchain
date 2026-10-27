@@ -70,14 +70,17 @@ done
 
 "$host_cc" -E -P -std=gnu11 -x c "$root/tests/compiler/c0/gnu_extern_inline_attribute.c" \
     -o "$work/gnu_extern_inline_attribute.i"
-if "$minic" -S "$work/gnu_extern_inline_attribute.i" \
+"$minic" -S "$work/gnu_extern_inline_attribute.i" \
     -o "$work/gnu_extern_inline_attribute.s" \
-    >"$work/gnu_extern_inline_attribute.out" 2>"$work/gnu_extern_inline_attribute.err"; then
-    printf '%s\n' 'FAIL compiler/c0/gnu_prefix_function_attributes: extern inline gnu_inline unexpectedly emitted a standalone definition' >&2
+    >"$work/gnu_extern_inline_attribute.out" 2>"$work/gnu_extern_inline_attribute.err"
+test -s "$work/gnu_extern_inline_attribute.s"
+# The existing shared parser now supports true GNU extern inline: a body
+# is syntax-checked but must not become a second externally strong symbol.
+# The old test demanded a compiler failure even for valid implementation.
+if grep -F 'prefix_extern_inline_identity:' "$work/gnu_extern_inline_attribute.s" >/dev/null; then
+    printf '%s\n' 'FAIL compiler/c0/gnu_prefix_function_attributes: GNU extern inline produced a strong definition' >&2
     exit 1
 fi
-grep -F 'GNU extern inline gnu_inline requires inline-only emission semantics' \
-    "$work/gnu_extern_inline_attribute.err" >/dev/null
 
 cat >"$work/no-sanitize-invalid.i" <<'SRC'
 __attribute__((no_sanitize(123))) int reject_invalid_policy(int x) {
