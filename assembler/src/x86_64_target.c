@@ -403,24 +403,22 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
             {"andq",4U},{"andl",4U},{"subq",5U},{"subl",5U},
             {"xorq",6U},{"xorl",6U},{"cmpq",7U},{"cmpl",7U}
         };
-        uint64_t bits;
+        uint64_t bits=0U;
         int64_t val;
         unsigned group=0U;
         bool has_group=false,wide=s->op[strlen(s->op)-1U]=='q';
         MiniAsSymbolExpr sym;
         bool is_sym=false;
+        bool numeric;
         for(i=0U;i<sizeof(groups)/sizeof(groups[0]);++i)
             if(!strcmp(s->op,groups[i].op)){
                 group=groups[i].group;has_group=true;break;
             }
-        if(!minias_eval_u64_expression(src+1,&bits)) {
-            if(!strcmp(s->op,"movq") &&
-               minias_parse_symbol_addend(src+1,&sym)) {
-                is_sym=true;bits=0U;
-            }else bits=UINT64_MAX;
-        }
+        numeric=minias_eval_u64_expression(src+1,&bits);
+        if(!numeric && !strcmp(s->op,"movq") &&
+           minias_parse_symbol_addend(src+1,&sym))is_sym=true;
         val=(int64_t)bits;
-        if((val>=INT32_MIN && val<=INT32_MAX) || is_sym) {
+        if((numeric && val>=INT32_MIN && val<=INT32_MAX) || is_sym) {
             if(!strcmp(s->op,"movq") &&
                x64_register(dst,&rd,&wd) && wd) {
                 m->opcode=X64_MOVQ_IMMREG;m->count=2U;
