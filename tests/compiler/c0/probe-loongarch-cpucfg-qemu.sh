@@ -166,25 +166,27 @@ set +e
 rc=$?
 set -e
 test "$rc" -eq 42 || { echo "LoongArch return-PC GNU/QEMU failed: $rc" >&2; exit 1; }
-# Valid LoongArch physical clobbers must pass SOURCE grammar but may not
-# turn the currently unqualified vDSO syscall into arbitrary machine code.
-cat > "$work/clobber-only.i" <<'EOF'
-void unqualified(void) {
-    __asm__ volatile("syscall 0" ::: "$t0", "$t1", "$t2",
-                     "$t3", "$t4", "$t5", "$t6", "$t7", "$t8", "memory");
+# Original GNU LoongArch kernel uses '$t0'..'$t8' scratch clobbers.
+# This must pass source grammar, but fail at MACHINE admission for unknown
+# templates; the compiler may never silently pass through arbitrary ISA.
+cat > "$work/unsupported-machine.i" <<'EOF'
+void unqualified_machine(void) {
+    asm volatile("syscall 0" ::: "$t0", "$t1", "$t2", "$t3",
+                 "$t4", "$t5", "$t6", "$t7", "$t8", "memory");
 }
 EOF
-if "$cc" --target=loongarch64-linux -S "$work/clobber-only.i" \
-    -o "$work/clobber-only.s" >"$work/clobber-only.log" 2>&1; then
-    echo 'Unqualified GNU syscall accepted without machine contract' >&2
+if "$cc" --target=loongarch64-linux -S "$work/unsupported-machine.i" \
+    -o "$work/unsupported-machine.s" >"$work/unsupported-machine.log" 2>&1; then
+    echo 'Unqualified LoongArch syscall was incorrectly emitted' >&2
     exit 1
 fi
 if grep -F 'unsupported GNU asm register clobber for target' \
-    "$work/clobber-only.log" >/dev/null; then
-    echo 'Valid GNU $t0..$t8 clobber syntax rejected by parser' >&2
+    "$work/unsupported-machine.log" >/dev/null; then
+    echo 'Original LoongArch dollar clobber syntax was rejected' >&2
     exit 1
 fi
-echo 'LOONGARCH_GNU_CLOBBER_GRAMMAR=PASS aliases=9 unqualified_syscall=REJECTED'
+echo 'LOONGARCH_GNU_DOLLAR_CLOBBERS=PASS nine_names=1 unqualified_machine_rejected=1'
+
 # The backend MUST reject frames beyond depth zero. The nonzero level is
 # deliberately not supported by our ABI descriptor, even if GCC accepts it.
 cat > "$work/invalid-return-pc.i" <<'EOF'
