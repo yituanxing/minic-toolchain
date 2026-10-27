@@ -229,6 +229,23 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
         m->opcode=X64_ENDBR64;m->encoding=UINT32_C(0xfa1e0ff3);
         m->count=0U;goto done;
     }
+    /* GNU GAS spells REP STOSQ/MOVSQ as opcode + operand, not a single
+     * whitespace-bearing mnemonic. The prefix and operation stay one
+     * retained instruction fragment for exact-size section layout. */
+    if(!strcmp(s->op,"rep") || !strcmp(s->op,"repz")) {
+        if(!strcmp(s->args,"stosq")) {
+            m->opcode=X64_ZERO;m->encoding=UINT32_C(0xab48f3);
+            m->operands[0].immediate=3U;goto done;
+        }
+        if(!strcmp(s->args,"movsq")) {
+            m->opcode=X64_ZERO;m->encoding=UINT32_C(0xa548f3);
+            m->operands[0].immediate=3U;goto done;
+        }
+        if(!strcmp(s->args,"stosb")) {
+            m->opcode=X64_ZERO;m->encoding=UINT32_C(0xaaf3);
+            m->operands[0].immediate=2U;goto done;
+        }
+    }
     for(i=0U;i<sizeof(zeros)/sizeof(zeros[0]);++i) {
         if (!strcmp(s->op,zeros[i].op) && !*s->args) {
             m->opcode=X64_ZERO; m->count=0U;

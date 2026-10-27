@@ -108,6 +108,12 @@ unresolved_x86:
     rep movsq
     lock
     addl $1, (%rdi)
+.data
+.globl common_space_test
+common_space_test:
+    .skip 8, 0x5a
+    .space 5, 0x33
+    .zero 3
 ASM_X
 if ! "$MINIAS" --target=x86_64 -march=x86-64 -mabi=sysv -o "$work/x86-mini.o" "$work/x86.s" >"$work/x86.stdout" 2>"$work/x86.stderr"; then
     echo 'MINIAS_X86_PARSE_OR_ENCODE_FAIL' >&2
@@ -118,6 +124,9 @@ as --64 -o "$work/x86-gnu.o" "$work/x86.s"
 objcopy -j .text -O binary "$work/x86-gnu.o" "$work/x86-gnu.bin"
 objcopy -j .text -O binary "$work/x86-mini.o" "$work/x86-mini.bin"
 cmp "$work/x86-mini.bin" "$work/x86-gnu.bin"
+objcopy -j .data -O binary "$work/x86-mini.o" "$work/x86-mini-data.bin"
+objcopy -j .data -O binary "$work/x86-gnu.o" "$work/x86-gnu-data.bin"
+cmp "$work/x86-mini-data.bin" "$work/x86-gnu-data.bin"
 readelf -h "$work/x86-mini.o" | grep -q 'Advanced Micro Devices X86-64'
 readelf -Wr "$work/x86-mini.o" >"$work/x86-rel.txt"
 grep -q R_X86_64_PLT32 "$work/x86-rel.txt"

@@ -2122,6 +2122,41 @@ static bool measure_incbin(MiniAs *as,
     return true;
 }
 
+/* GAS .skip/.space/.zero share count[,fill] semantics.
+ * Parse the optional fill once through the existing numeric grammar;
+ * unsupported relocatable fills remain errors rather than fake zero bytes. */
+static bool parse_common_space(const char *args,uint64_t *count,
+                               uint8_t *fill) {
+    char *copy=minias_strdup(args),*comma;
+    uint64_t number,byte=0U;
+    bool valid;
+    if(!copy)return false;
+    comma=strchr(copy,',');
+    if(comma) {
+        *comma++='\0';
+        if(strchr(comma,',')!=NULL ||
+           !minias_eval_u64_expression(minias_trim(comma),&byte) ||
+           byte>255U) {free(copy);return false;}
+    }
+    valid=minias_eval_u64_expression(minias_trim(copy),&number);
+    free(copy);
+    if(!valid)return false;
+    *count=number;*fill=(uint8_t)byte;
+    return true;
+}
+
+static bool emit_common_space(MiniAs *as,int section,size_t total,uint8_t fill) {
+    unsigned char bytes[256];
+    if(fill==0U)return minias_section_append_zero(as,section,total);
+    memset(bytes,(int)fill,sizeof(bytes));
+    while(total!=0U) {
+        size_t chunk=total<sizeof(bytes)?total:sizeof(bytes);
+        if(!minias_section_append(as,section,bytes,chunk))return false;
+        total-=chunk;
+    }
+    return true;
+}
+
 static bool add_data_stmt(MiniAs *as, const char *op, char *args, size_t line) {
     uint64_t count = 0U;
     uint64_t bytes;
@@ -2145,8 +2180,10 @@ static bool add_data_stmt(MiniAs *as, const char *op, char *args, size_t line) {
         }
         free(decoded);
         bytes = (uint64_t)decoded_size;
-    } else if (strcmp(op, ".zero") == 0 || strcmp(op, ".space") == 0) {
-        if (!parse_u64(minias_trim(args), &count)) {
+    } else if (strcmp(op, ".zero") == 0 || strcmp(op, ".space") == 0 ||
+               strcmp(op, ".skip") == 0) {
+        uint8_t fill;
+        if (!parse_common_space(args,&count,&fill)) {
             minias_set_error(as, "unsupported-expression:%s:line=%zu", op, line);
             return false;
         }
@@ -2438,8 +2475,16 @@ static bool emit_data_stmt(MiniAs *as, const MiniAsStmt *stmt) {
         free(decoded);
         return ok;
     }
-    if (strcmp(stmt->op, ".zero") == 0 || strcmp(stmt->op, ".space") == 0) {
-        return minias_section_append_zero(as, stmt->section, stmt->size);
+    if (strcmp(stmt->op, ".zero") == 0 || strcmp(stmt->op, ".space") == 0 ||
+        strcmp(stmt->op, ".skip") == 0) {
+        uint64_t count;
+        uint8_t fill;
+        if(!parse_common_space(stmt->args,&count,&fill) ||
+           count!=stmt->size) {
+            minias_set_error(as,"invalid-space-emit:line=%zu",stmt->line);
+            return false;
+        }
+        return emit_common_space(as,stmt->section,stmt->size,fill);
     }
 
     copy = minias_strdup(stmt->args);
@@ -3121,7 +3166,8 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
     }
     if ((strcmp(op, ".align") == 0 || strcmp(op, ".balign") == 0 ||
          strcmp(op, ".p2align") == 0 || strcmp(op, ".space") == 0 ||
-         strcmp(op, ".zero") == 0) && strchr(args, '.') != NULL) {
+         strcmp(op, ".skip") == 0 || strcmp(op, ".zero") == 0) &&
+        strchr(args, '.') != NULL) {
         as->layout_sensitive = true;
     }
     if (op[0] == '.') {
@@ -3286,7 +3332,8 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
             return ok;
         }
         if (data_width(op) != 0U || strcmp(op, ".zero") == 0 ||
-            strcmp(op, ".space") == 0 || strcmp(op, ".asciz") == 0 ||
+            strcmp(op, ".space") == 0 || strcmp(op, ".skip") == 0 ||
+            strcmp(op, ".asciz") == 0 ||
             strcmp(op, ".string") == 0 || strcmp(op, ".ascii") == 0 ||
             strcmp(op, ".incbin") == 0) {
             char *rewritten_args = NULL;
