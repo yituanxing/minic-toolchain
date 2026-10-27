@@ -29,6 +29,10 @@ entry_x:
     movq -8(%rbp), %r9
     movl %r9d, 8(%r12)
     movl 8(%r12), %r10d
+    movl %gs:pcpu_hot+12(%rip), %eax
+    movq %gs:this_cpu_off(%rip), %rbx
+    movq %fs:my_tls_qword(%rip), %r10
+    movl %gs:pcpu_hot+8(%rip), %r9d
     movl %eax, (%rdi)
     movq (%rsp), %rax
     movq %rax, 128(%rsp)
@@ -367,7 +371,9 @@ for bad in 'movq %rax, (%eax)' \
            'cmpb $256, (%rax)' \
            'movq %rax, (,%rsp,8)' \
            'cmove %r8, %eax' \
-           'shrq %dl, %rax'; do
+           'shrq %dl, %rax' \
+           'movl %ds:pcpu_hot(%rip), %eax' \
+           'movq %gs:bogus(%r8,%r9,5), %rax'; do
     printf '.text\n%s\n' "$bad" >"$work/invalid-mem.s"
     if "$MINIAS" --target=x86_64 -o "$work/bad-mem.o" \
          "$work/invalid-mem.s" >/dev/null 2>"$work/invalid.err"; then

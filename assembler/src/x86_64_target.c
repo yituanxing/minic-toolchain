@@ -94,7 +94,8 @@ static bool x64_args2(const char *args, char a[48], char b[48]) {
  * SymbolExpr remains typed all the way into the existing common ELF fixup.
  * The PC-relative addressing mode is target-owned (ModR/M rm=101). */
 static bool x64_parse_base_memory(const char *text, MiniAsMCMemory *out) {
-    const char *open=strchr(text,'('), *close, *p;
+    const char *open,*close,*p;
+    unsigned segment_space=0U;
     char regs[3][48], dispbuf[48], *end;
     size_t dlen;
     unsigned count=0U, base=0U, index=0U;
@@ -102,14 +103,17 @@ static bool x64_parse_base_memory(const char *text, MiniAsMCMemory *out) {
     bool wide, symbolic=false, pc_relative=false;
     MiniAsSymbolExpr symbolic_expr;
     long long displacement=0;
+    if(strncmp(text,"%fs:",4U)==0)segment_space=1U;
+    else if(strncmp(text,"%gs:",4U)==0)segment_space=2U;
+    if(segment_space)text+=4U;
+    open=strchr(text,'(');
     if (!open) {
         unsigned space=0U;
         const char *operand;
         MiniAsSymbolExpr expr;
-        if(strncmp(text,"%fs:",4U)==0)space=1U;
-        else if(strncmp(text,"%gs:",4U)==0)space=2U;
-        else return false;
-        operand=text+4U;
+        space=segment_space;
+        if(!space)return false;
+        operand=text;
         if(!*operand)return false;
         errno=0;displacement=strtoll(operand,&end,0);
         if(errno || end==operand || *end ||
@@ -181,6 +185,7 @@ static bool x64_parse_base_memory(const char *text, MiniAsMCMemory *out) {
     memset(out,0,sizeof(*out));
     out->has_base=!pc_relative && regs[0][0]!='\0';
     out->pc_relative=pc_relative;
+    out->address_space=segment_space;
     out->base=base;out->has_index=(count>=2U);
     out->index=index;out->scale=(unsigned)scale;
     out->displacement=(int64_t)displacement;
@@ -759,8 +764,8 @@ static bool x64_measure(MiniAs *as,const MiniAsStmt *s,uint32_t *size) {
             *size=extra+(mem->address_space?1U:0U) + (m->operands[0].register_64 ||
                    m->operands[0].reg>=8U || mem->base>=8U ||
                    (mem->has_index && mem->index>=8U)?1U:0U) +
-                  2U + ((mem->address_space || mem->has_index ||
-                          (mem->base&7U)==4U)?1U:0U) +
+                  2U + (((mem->address_space && !mem->pc_relative) ||
+                          mem->has_index || (mem->base&7U)==4U)?1U:0U) +
                   x64_disp_bytes(mem);
             return true;
         }
@@ -991,9 +996,9 @@ static bool x64_encode(MiniAs *as,const MiniAsStmt *s) {
             code[n++]=(unsigned char)m->encoding;
             code[n++]=(unsigned char)((((mem->pc_relative || mem->address_space)?0U:mod)<<6U)|
                 ((r&7U)<<3U)|
-                (mem->address_space?4U:
-                 mem->pc_relative?5U:mem->has_index?4U:low_base));
-            if(mem->address_space) {
+                (mem->pc_relative?5U:
+                 mem->address_space?4U:mem->has_index?4U:low_base));
+            if(mem->address_space && !mem->pc_relative) {
                 code[n++]=0x25U; /* SIB: no base/index, signed disp32 */
             } else if (!mem->pc_relative && (mem->has_index || low_base==4U)) {
                 unsigned sib_scale=mem->scale==8U?3U:
@@ -1003,7 +1008,8 @@ static bool x64_encode(MiniAs *as,const MiniAsStmt *s) {
                     ((mem->has_index?mem->index&7U:4U)<<3U) |
                     (mem->has_base?low_base:5U));
             }
-            if(mem->address_space && mem->symbol!=NULL) {
+            if(mem->address_space && !mem->pc_relative &&
+               mem->symbol!=NULL) {
                 size_t relocation_at=n;
                 for(i=0U;i<4U;++i)code[n++]=0U;
                 for(i=0U;i<extra;++i)
