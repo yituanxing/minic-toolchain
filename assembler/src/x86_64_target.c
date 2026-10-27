@@ -493,6 +493,12 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
         for(i=0U;i<sizeof(branches)/sizeof(branches[0]);++i) {
             MiniAsSymbolExpr expr;
             if(strcmp(s->op,branches[i].op)!=0)continue;
+            /* Register-indirect CALL/JMP are FF /2 and /4, not PLT32
+             * symbolic branches. Dispatch them to the MCInst group-5
+             * register parser below rather than rejecting '*' here. */
+            if(s->args[0]=='*' &&
+               (!strcmp(s->op,"call") || !strcmp(s->op,"callq") ||
+                !strcmp(s->op,"jmp") || !strcmp(s->op,"jmpq")))continue;
             if(!minias_parse_symbol_addend(s->args,&expr) ||
                expr.addend<INT64_MIN+4)goto invalid;
             m->operands[0].symbol=malloc(sizeof(expr));

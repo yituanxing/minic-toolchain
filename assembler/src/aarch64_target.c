@@ -665,7 +665,9 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
         inst->operands[1].immediate = imm;
     } else if (!strcmp(op,"mov") &&
                split_two(args,first,sizeof(first),second,sizeof(second)) &&
-               parse_register(first,&reg,&reg64)) {
+               parse_register(first,&reg,&reg64) &&
+               (second[0]=='-' ||
+                (second[0]=='#' && second[1]=='-'))) {
         int64_t value;
         if(!parse_signed_number(second,&value) ||
            value>=0 || value<INT64_C(-65536)) {
