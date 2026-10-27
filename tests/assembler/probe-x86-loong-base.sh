@@ -35,6 +35,11 @@ entry_x:
     callq *%r11
     jmp *%r10
     jmpq *%r13
+    # Group-5 indirect memory transfers must not masquerade as PLT32.
+    call *%gs:40
+    call *ext_global(%rip)
+    jmp *8(%r12,%r13,4)
+    jmp *%fs:4(%rbx)
     push %r12
     pop %r12
     pushq %rbp
@@ -54,6 +59,12 @@ entry_x:
     movq %gs:this_cpu_off(%rip), %rbx
     movq %fs:my_tls_qword(%rip), %r10
     movl %gs:pcpu_hot+8(%rip), %r9d
+    # Segment is only a prefix: preserve base/index/scale/disp ModR/M.
+    movq %gs:8(%rdi), %rax
+    movl %fs:16(%r12,%r13,4), %r9d
+    movb %al, %gs:1(%rbp)
+    cmpb $1, %gs:16(%rax)
+    movw %fs:24(,%r8,4), %r10w
     movl %eax, (%rdi)
     movq (%rsp), %rax
     movq %rax, 128(%rsp)
@@ -695,6 +706,8 @@ for bad in 'movq __per_cpu_offset(%rdi),%rax' \
            'cmove %r8, %eax' \
            'call *%eax' \
            'jmp *%ecx' \
+           'call *%gs:(%rax,%rsp,4)' \
+           'jmp *%fs:(%r12,%eax,4)' \
            'shrq %dl, %rax' \
            'shrl %rax' \
            'btq %eax, (%rdi)' \
@@ -958,4 +971,5 @@ GNU_FILL
 "$LOONGCOPY" -j .data -O binary "$work/la-fill-gnu.o" "$work/la-fill-gnu.bin"
 cmp "$work/la-fill-mini.bin" "$work/la-fill-gnu.bin"
 echo 'MINIAS_COMMON_FILL=PASS GNU_LA64_data_bytes=equal'
+echo 'MINIAS_X86_SEGMENTED_INDIRECT=PASS GNU_AS_text_and_relocations segment_base_index_abs_rip=true indirect_memory_call_jmp=true'
 echo 'MINIAS_TWO_TARGET_ORACLE=PASS x86_GNU_bytes=equal loong_GNU_bytes=equal ELF_machine=correct lp64d_v1=0x43 CET_endbr64=1 ALU_imm8_imm32=1 x86_ModRM_SIB_disp=1 x86_test_cmp_alu_memory=1 x86_scaled_index_SIB=1 LA_jr=1 LA_scaled_ptr14=1 LA_imm12_shift_upper20=1 invalid=reject'
