@@ -1227,7 +1227,8 @@ static uint32_t x64_reloc(MiniAsFixupKind kind,unsigned width) {
     if(kind==MINIAS_FIXUP_X64_ABS64)
         return width==8U?1U:0U; /* R_X86_64_64 */
     if(width!=4U)return 0U;
-    if(kind==MINIAS_FIXUP_X64_PC32)return 2U;  /* R_X86_64_PC32 */
+    if(kind==MINIAS_FIXUP_X64_PC32 || kind==MINIAS_FIXUP_PREL32)
+        return 2U;  /* R_X86_64_PC32 */
     if(kind==MINIAS_FIXUP_X64_PLT32)return 4U; /* R_X86_64_PLT32 */
     if(kind==MINIAS_FIXUP_X64_ABS32S)return 11U; /* R_X86_64_32S */
     return 0U;
@@ -1241,6 +1242,6 @@ static const MiniAsTargetOps ops={
     .append_code_alignment=x64_code_align,
     .fixup_relocation_type=x64_reloc,.validate_output=x64_validate,
     .word_directive_width=2U,.align_directive_bytes=true,
-    .dot_relative_fixup=MINIAS_FIXUP_X64_PC32
+    .dot_relative_fixup=MINIAS_FIXUP_PREL32
 };
 const MiniAsTargetOps *minias_target_x86_64(void){return &ops;}

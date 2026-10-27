@@ -20,6 +20,7 @@
 enum {
     AARCH64_R_ABS64 = 257U,
     AARCH64_R_ABS32 = 258U,
+    AARCH64_R_PREL32 = 261U,
     AARCH64_R_ADR_PREL_PG_HI21 = 275U,
     AARCH64_R_ADD_ABS_LO12_NC = 277U,
     AARCH64_R_LDST8_ABS_LO12_NC = 278U,
@@ -1292,6 +1293,8 @@ static uint32_t aarch64_fixup_relocation_type(MiniAsFixupKind kind,
         case MINIAS_FIXUP_ABS:
             return width == 4U ? AARCH64_R_ABS32 :
                    width == 8U ? AARCH64_R_ABS64 : 0U;
+        case MINIAS_FIXUP_PREL32:
+            return width == 4U ? AARCH64_R_PREL32 : 0U;
         case MINIAS_FIXUP_A64_CALL26:
             return width == 4U ? AARCH64_R_CALL26 : 0U;
         case MINIAS_FIXUP_A64_JUMP26:
@@ -1364,6 +1367,7 @@ static const MiniAsTargetOps ops = {
     .append_code_alignment = code_alignment,
     .fixup_relocation_type = aarch64_fixup_relocation_type,
     .validate_output = validate,
+    .dot_relative_fixup = MINIAS_FIXUP_PREL32,
     .cfi_code_align = 4U,
     .cfi_data_align = -8,
     .cfi_return_reg = 30U,

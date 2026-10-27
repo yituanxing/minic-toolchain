@@ -139,6 +139,12 @@ function_pointer:
     .hword 0x1234
     .xword 0x1122334455667788
     .xword after_call
+.section ".initcall6.init", "a"
+.global initcall_slot
+initcall_slot:
+    .long after_call - .
+    .long external_function - .
+.previous
 SRC
 "$MINIAS" --target=aarch64 -march=armv8-a -mabi=lp64 \
     -o "$work/mini.o" "$work/vertical.s"
@@ -412,6 +418,13 @@ for needle in 'source.c' ' 10 ' ' 12 '; do
 done
 "$AARCH64_READELF" -Wr "$work/line-mini.o" | grep -q R_AARCH64_ABS64
 echo 'MINIAS_COMMON_DWARF_DEBUG_LINE=PASS real_address_fixup=1 file_line_rows=2'
+"$AARCH64_READELF" -Wr "$work/mini.o" | grep -q 'R_AARCH64_PREL32'
+"$AARCH64_READELF" -Wr "$work/gnu.o" | grep -q 'R_AARCH64_PREL32'
+"$AARCH64_READELF" -Wr "$work/mini.o" | grep -q 'external_function'
+"$AARCH64_OBJCOPY" -j .initcall6.init -O binary "$work/mini.o" "$work/prel-mini.bin"
+"$AARCH64_OBJCOPY" -j .initcall6.init -O binary "$work/gnu.o" "$work/prel-gnu.bin"
+cmp "$work/prel-mini.bin" "$work/prel-gnu.bin"
+echo 'MINIAS_COMMON_DOT_PREL32=PASS aarch64_cross_section_initcall=1 target_relocation=261'
 # Validate LSE ISA extension is a real typed feature gate.
 cat >"$work/lse-disabled.s" <<'LSE_DISABLED'
 .arch armv8-a

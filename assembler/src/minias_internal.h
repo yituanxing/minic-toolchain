@@ -83,6 +83,7 @@ typedef enum MiniAsStmtKind {
 typedef enum MiniAsFixupKind {
     MINIAS_FIXUP_NONE = 0,
     MINIAS_FIXUP_ABS,
+    MINIAS_FIXUP_PREL32, /* common S+A-P .long data expression */
     MINIAS_FIXUP_ADD,
     MINIAS_FIXUP_SUB,
     MINIAS_FIXUP_RV_CALL_PLT,
