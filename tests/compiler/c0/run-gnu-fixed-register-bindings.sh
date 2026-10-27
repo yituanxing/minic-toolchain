@@ -40,13 +40,26 @@ cat > "$work/x86-gcc-fixed-register.i" <<'SRC'
 register unsigned long current_stack_pointer asm("rsp");
 unsigned long get_current_stack_pointer(void) { return current_stack_pointer; }
 SRC
-# Parsing GNU asm("rsp") is not machine qualification. Existing x86
-# backend does not own this fixed-register binding yet: fail safely.
-if "$minic" --target=x86_64-linux -S "$work/x86-gcc-fixed-register.i" \
-    -o "$work/x86-gcc-fixed-register.s" \
-    >"$work/x86.stdout" 2>"$work/x86.stderr"; then
-    printf '%s\n' 'FAIL compiler/c0/gnu_fixed_register_bindings: unqualified x86 rsp binding emitted' >&2
+# x86 backend now consumes the same Core FIXED_REGISTER_READ instruction
+# with an ABI-owned live %rsp value, not an ELF symbol. Native GNU assemble
+# and real stack-frame execution are additionally checked by x86-native-m1.
+"$minic" --target=x86_64-linux -S "$work/x86-gcc-fixed-register.i" \
+    -o "$work/x86-gcc-fixed-register.s"
+grep -F '  movq %rsp, %rax' "$work/x86-gcc-fixed-register.s" >/dev/null
+if grep -F 'current_stack_pointer@' "$work/x86-gcc-fixed-register.s" >/dev/null; then
+    printf '%s\n' 'FAIL compiler/c0/gnu_fixed_register_bindings: x86 rsp treated as external symbol' >&2
     exit 1
 fi
-grep -F 'fixed register binding is not supported by this target' "$work/x86.stderr" >/dev/null
-printf '%s\n' 'PASS compiler/c0/gnu_fixed_register_bindings source_asm_aliases=3 RV64=sp,tp x86_rsp=fail_closed'
+cat > "$work/x86-unqualified-register.i" <<'SRC'
+register unsigned long unsupported_register asm("r15");
+unsigned long read_unqualified_register(void) { return unsupported_register; }
+SRC
+if "$minic" --target=x86_64-linux -S "$work/x86-unqualified-register.i" \
+    -o "$work/x86-unqualified-register.s" \
+    >"$work/x86-negative.out" 2>"$work/x86-negative.err"; then
+    printf '%s\n' 'FAIL compiler/c0/gnu_fixed_register_bindings: unsupported x86 r15 accepted' >&2
+    exit 1
+fi
+grep -F 'fixed register binding is not supported by this target' \
+    "$work/x86-negative.err" >/dev/null
+printf '%s\n' 'PASS compiler/c0/gnu_fixed_register_bindings source_asm_aliases=3 RV64=sp,tp x86_rsp=live SSA+machine r15=fail_closed'
