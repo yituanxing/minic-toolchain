@@ -1,0 +1,340 @@
+#!/usr/bin/env python3
+"""Freeze *actual* Linux Kbuild -save-temps=obj assembly in seven SHA-bound shards.
+
+The native Kbuild .config, command (.cmd), object and produced .s belong to
+the SAME build, not an unrelated C test or a different architecture/config.
+A producer that fails Kbuild still exports an explicitly INCOMPLETE corpus;
+it can discover syntax, but cannot certify the complete Linux input universe.
+"""
+from __future__ import annotations
+
+import argparse
+from collections import Counter
+import hashlib
+import io
+import json
+import pathlib
+import re
+import struct
+import subprocess
+import sys
+import tarfile
+
+ARCH = {"x86_64": (62, "x86_64"), "aarch64": (183, "arm64"),
+        "loongarch64": (258, "loongarch")}
+LINUX_ARCHIVE_SHA256 = "dace1f8dc9c0dbf5df14f47e3229cd62c298e83049681731ef229f2ba7592932"
+SHARDS = 7
+
+
+def sha(path: pathlib.Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def is_target_object(path: pathlib.Path, machine: int) -> bool:
+    with path.open("rb") as f:
+        header = f.read(20)
+    return (len(header) == 20 and header[:6] == b"\x7fELF\x02\x01" and
+            struct.unpack_from("<HH", header, 16) == (1, machine))
+
+
+def kind_of_command(first: str) -> str:
+    # Kbuild's first command is the only authority: never count dependencies
+    # listed below it as C input or claim that a host object was target C.
+    matches = re.findall(r"(?:^|\s)(?:\S*/)?\S+\.(c|S)(?=\s|$)", first)
+    return {"c": "C", "S": "native_S"}.get(matches[-1], "OTHER") if matches else "OTHER"
+
+
+def export(a: argparse.Namespace) -> None:
+    out = pathlib.Path(a.out).resolve()
+    dest = pathlib.Path(a.dest).resolve()
+    config = out / ".config"
+    if not config.is_file():
+        raise ValueError("real Kbuild .config missing")
+    if dest.exists() and any(dest.iterdir()):
+        raise ValueError("refusing to overwrite frozen corpus")
+    machine, karch = ARCH[a.target]
+    records = []
+    mismatches = Counter()
+    all_objects = sorted(out.rglob("*.o"))
+    for obj in all_objects:
+        if not is_target_object(obj, machine):
+            continue
+        rel = obj.relative_to(out)
+        if rel.parts[0] in ("scripts", "tools"):
+            # Host-built scripts can be ELF64 x86_64, but aren't target TUs.
+            continue
+        cmd = obj.with_name("." + obj.name + ".cmd")
+        if not cmd.is_file():
+            mismatches["target_o_without_cmd"] += 1
+            continue
+        cmd_text = cmd.read_text(errors="replace")
+        first = cmd_text.split("\nsource_", 1)[0].split("\ndeps_", 1)[0]
+        if "-D__KERNEL__" not in first:
+            mismatches["not_KBUILD_target_command"] += 1
+            continue
+        asm = obj.with_suffix(".s")
+        if not asm.is_file() or not asm.stat().st_size:
+            mismatches["target_o_without_saved_s"] += 1
+            continue
+        kind = kind_of_command(first)
+        if kind == "OTHER":
+            mismatches["unrecognized_target_command"] += 1
+        rel_s = asm.relative_to(out).as_posix()
+        rel_cmd = cmd.relative_to(out).as_posix()
+        records.append({
+            "owner": rel.as_posix(),
+            "s": rel_s, "cmd": rel_cmd,
+            "kind": kind, "s_sha256": sha(asm),
+            "cmd_sha256": sha(cmd), "gnu_object_sha256": sha(obj)
+        })
+    if not records:
+        raise ValueError("no target-linked Kbuild C/.S assembly pairs")
+    if len({r["owner"] for r in records}) != len(records):
+        raise ValueError("duplicate .o owner")
+    cfg = sha(config)
+    machine_name = subprocess.run(
+        [a.compiler, "-dumpmachine"], capture_output=True, text=True, check=True
+    ).stdout.strip()
+    compiler_version = subprocess.run(
+        [a.compiler, "-dumpfullversion"], capture_output=True, text=True, check=True
+    ).stdout.strip()
+    image = out / "vmlinux"
+    complete = a.build_exit == 0 and image.is_file() and image.stat().st_size != 0
+    identity = {
+        "schema": "minias-linux-kbuild-s-seven-v1",
+        "linux_version": "6.6.143",
+        "linux_archive_sha256": LINUX_ARCHIVE_SHA256,
+        "target": a.target, "kbuild_arch": karch,
+        "config_sha256": cfg, "compiler_command": a.compiler,
+        "compiler_triple": machine_name, "compiler_version": compiler_version,
+        "compiler_sha256": sha(pathlib.Path(a.compiler_path).resolve()),
+        "compiler_executable": str(pathlib.Path(a.compiler_path).resolve()),
+        "kcflags": "-save-temps=obj", "kaflags": "-save-temps=obj",
+        "build_goal": "vmlinux", "build_exit": a.build_exit,
+        "full_kbuild": complete, "vmlinux_sha256": sha(image) if complete else None,
+        "unpaired": dict(mismatches),
+        "total": len(records),
+        "kind_counts": dict(Counter(r["kind"] for r in records)),
+        "sources": records,
+    }
+    payload = (json.dumps(identity, sort_keys=True, indent=2) + "\n").encode()
+    dest.mkdir(parents=True, exist_ok=True)
+    (dest / "manifest.json").write_bytes(payload)
+    (dest / "config.sha256").write_text(cfg + "\n")
+    for shard in range(SHARDS):
+        members = [r for i, r in enumerate(records) if i % SHARDS == shard]
+        if not members:
+            raise ValueError("too few real objects for seven shards")
+        with tarfile.open(dest / f"shard-{shard}.tar.gz", "w:gz",
+                          compresslevel=5) as tar:
+            m = tarfile.TarInfo("manifest.json")
+            m.size = len(payload)
+            m.mode = 0o644
+            tar.addfile(m, io.BytesIO(payload))
+            for r in members:
+                for attr, prefix in (("s", "asm"), ("cmd", "cmd")):
+                    rel = pathlib.PurePosixPath(r[attr])
+                    if rel.is_absolute() or ".." in rel.parts:
+                        raise ValueError("path escape in Kbuild manifest")
+                    tar.add(out / pathlib.Path(*rel.parts),
+                            arcname=f"{prefix}/{rel.as_posix()}", recursive=False)
+    print(f"MINIAS_LINUX_S_FREEZE target={a.target} total={len(records)} "
+          f"C={identity['kind_counts'].get('C', 0)} "
+          f"native_S={identity['kind_counts'].get('native_S', 0)} "
+          f"other={identity['kind_counts'].get('OTHER', 0)} "
+          f"config={cfg} full_kbuild={complete} "
+          f"build_exit={a.build_exit} unpaired={dict(mismatches)}", flush=True)
+
+
+def safe_tar_members(tar: tarfile.TarFile) -> dict[str, tarfile.TarInfo]:
+    members = {}
+    for member in tar:
+        p = pathlib.PurePosixPath(member.name)
+        if not member.isfile() or p.is_absolute() or ".." in p.parts:
+            raise ValueError("unsafe tar member")
+        if member.name in members:
+            raise ValueError("duplicate tar member")
+        members[member.name] = member
+    return members
+
+
+def checked_shard(path: pathlib.Path, target: str, shard: int):
+    with tarfile.open(path) as tar:
+        members = safe_tar_members(tar)
+        if "manifest.json" not in members:
+            raise ValueError("missing frozen manifest")
+        manifest_bytes = tar.extractfile(members["manifest.json"]).read()
+        manifest = json.loads(manifest_bytes)
+        if manifest.get("schema") != "minias-linux-kbuild-s-seven-v1":
+            raise ValueError("wrong corpus schema")
+        if manifest.get("target") != target:
+            raise ValueError("wrong target identity")
+        if manifest.get("linux_archive_sha256") != LINUX_ARCHIVE_SHA256:
+            raise ValueError("Linux tarball provenance mismatch")
+        src = manifest["sources"]
+        if len(src) != manifest["total"] or len({r["owner"] for r in src}) != len(src):
+            raise ValueError("not a complete Kbuild owner inventory")
+        selected = [r for i, r in enumerate(src) if i % SHARDS == shard]
+        expected = {"manifest.json"}
+        for r in selected:
+            expected |= {"asm/" + r["s"], "cmd/" + r["cmd"]}
+        if set(members) != expected:
+            raise ValueError("incomplete/extra frozen shard files")
+        for r in selected:
+            for prefix, field, hash_field in [
+                ("asm/", "s", "s_sha256"), ("cmd/", "cmd", "cmd_sha256")
+            ]:
+                value = tar.extractfile(members[prefix + r[field]]).read()
+                if hashlib.sha256(value).hexdigest() != r[hash_field]:
+                    raise ValueError("frozen Kbuild input digest mismatch")
+        return manifest, hashlib.sha256(manifest_bytes).hexdigest(), selected
+
+
+def scan(a: argparse.Namespace) -> None:
+    p = pathlib.Path(a.archive)
+    manifest, manifest_sha, selected = checked_shard(p, a.target, a.shard)
+    destination = pathlib.Path(a.dest)
+    if destination.exists() and any(destination.iterdir()):
+        raise ValueError("refusing previous scan results")
+    destination.mkdir(parents=True)
+    rows = []
+    # Download/extract only one seven-way shard. Kbuild and GCC are NOT rerun.
+    with tarfile.open(p) as tar:
+        members = safe_tar_members(tar)
+        for index, r in enumerate(manifest["sources"]):
+            if index % SHARDS != a.shard: continue
+            inp = destination / "inputs" / r["s"]
+            inp.parent.mkdir(parents=True, exist_ok=True)
+            inp.write_bytes(tar.extractfile(members["asm/" + r["s"]]).read())
+            output = destination / "objects" / r["owner"]
+            output.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                run = subprocess.run(
+                    [a.minias, "--target=" + a.target, "-o", str(output), str(inp)],
+                    capture_output=True, text=True, timeout=45
+                )
+                rc, diag = run.returncode, (run.stderr or run.stdout).strip()
+            except subprocess.TimeoutExpired:
+                rc, diag = 124, "process-timeout"
+            except OSError as e:
+                rc, diag = 127, "process-start-error:" + str(e)
+            if rc == 0 and output.is_file() and output.stat().st_size:
+                state, reason = "ASSEMBLED_UNVERIFIED", "-"
+            elif rc == 0:
+                state, reason = "INFRA_ERROR", "success-no-object"
+            else:
+                state = "CANDIDATE_FAIL"
+                first = (diag.splitlines() or ["no-diagnostic"])[0]
+                first = re.sub(r":line=\d+", ":line=N", first)
+                reason = first.replace("minic-as: ", "")[:180]
+            rows.append({"index": index, "owner": r["owner"], "status": state,
+                         "first_blocker": reason, "exit_code": rc,
+                         "diagnostic": diag[:2000]})
+    status = Counter(r["status"] for r in rows)
+    result = {
+        "schema": "minias-kbuild-shard-result-v1", "target": a.target,
+        "shard": a.shard, "manifest_sha256": manifest_sha,
+        "config_sha256": manifest["config_sha256"],
+        "full_kbuild": manifest["full_kbuild"],
+        "expected_total": manifest["total"], "records": rows
+    }
+    (destination / "results.json").write_text(json.dumps(result, indent=2) + "\n")
+    print(f"MINIAS_LINUX_S_SHARD target={a.target} shard={a.shard} "
+          f"scanned={len(rows)} assembled_unverified={status['ASSEMBLED_UNVERIFIED']} "
+          f"candidate_fail={status['CANDIDATE_FAIL']} "
+          f"infra_error={status['INFRA_ERROR']}", flush=True)
+    if status["INFRA_ERROR"]:
+        raise ValueError("cannot accept false-success assembler outputs")
+
+
+def aggregate(a: argparse.Namespace) -> None:
+    paths = sorted(pathlib.Path(a.results).rglob("results.json"))
+    if len(paths) != 21:
+        raise ValueError(f"missing/duplicate result sets {len(paths)}/21")
+    data = {t: {} for t in ARCH}
+    for p in paths:
+        doc = json.loads(p.read_text())
+        t, shard = doc.get("target"), doc.get("shard")
+        if doc.get("schema") != "minias-kbuild-shard-result-v1":
+            raise ValueError("wrong result schema")
+        if t not in data or not isinstance(shard, int) or not 0 <= shard < SHARDS:
+            raise ValueError("invalid result target/shard")
+        if shard in data[t]: raise ValueError("duplicated result shard")
+        data[t][shard] = doc
+    summary = {}
+    for target, seven in data.items():
+        if set(seven) != set(range(SHARDS)):
+            raise ValueError("incomplete target seven-shard set")
+        ids = {doc["manifest_sha256"] for doc in seven.values()}
+        cfgs = {doc["config_sha256"] for doc in seven.values()}
+        totals = {doc["expected_total"] for doc in seven.values()}
+        fulls = {doc["full_kbuild"] for doc in seven.values()}
+        if any(len(v) != 1 for v in (ids, cfgs, totals, fulls)):
+            raise ValueError("mixed Kbuild/config/corpus identity")
+        total = totals.pop()
+        rows = [r for i in range(SHARDS) for r in seven[i]["records"]]
+        if sorted(r["index"] for r in rows) != list(range(total)):
+            raise ValueError("incomplete target owner union")
+        if len({r["owner"] for r in rows}) != total:
+            raise ValueError("duplicated target owner")
+        if any(r["index"] % SHARDS != n for n in range(SHARDS)
+               for r in seven[n]["records"]):
+            raise ValueError("wrong shard owner membership")
+        statuses = Counter(r["status"] for r in rows)
+        causes = Counter(r["first_blocker"] for r in rows
+                         if r["status"] == "CANDIDATE_FAIL")
+        if statuses["INFRA_ERROR"]:
+            raise ValueError("infrastructure failure: " + target)
+        summary[target] = {"target": target, "config_sha256": cfgs.pop(),
+                           "manifest_sha256": ids.pop(),
+                           "full_kbuild": fulls.pop(), "total": total,
+                           "status": dict(statuses),
+                           "first_blockers": dict(causes.most_common())}
+        print(f"MINIAS_LINUX_S_ARCH target={target} total={total} "
+              f"assembled_unverified={statuses['ASSEMBLED_UNVERIFIED']} "
+              f"candidate_fail={statuses['CANDIDATE_FAIL']} "
+              f"full_kbuild={summary[target]['full_kbuild']}")
+        for cause, count in causes.most_common(15):
+            print(f"MINIAS_LINUX_S_BLOCKER target={target} n={count} cause={cause}")
+    dest = pathlib.Path(a.dest)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(json.dumps({"schema": "minias-linux-3x7-kbuild-v1",
+                                "targets": summary}, sort_keys=True, indent=2) + "\n")
+    print("MINIAS_LINUX_S_DISCOVERY=COMPLETE targets=3 shards=21 "
+          "GNU_ORACLE=NOT_TESTED P1=NOT_TESTED", flush=True)
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    modes = parser.add_subparsers(dest="action", required=True)
+    exp = modes.add_parser("export")
+    exp.add_argument("--target", choices=ARCH, required=True)
+    exp.add_argument("--out", required=True)
+    exp.add_argument("--dest", required=True)
+    exp.add_argument("--compiler", required=True)
+    exp.add_argument("--compiler-path", required=True)
+    exp.add_argument("--build-exit", type=int, required=True)
+    run = modes.add_parser("scan")
+    run.add_argument("--target", choices=ARCH, required=True)
+    run.add_argument("--shard", type=int, choices=range(SHARDS), required=True)
+    run.add_argument("--archive", required=True)
+    run.add_argument("--minias", required=True)
+    run.add_argument("--dest", required=True)
+    agg = modes.add_parser("aggregate")
+    agg.add_argument("--results", required=True)
+    agg.add_argument("--dest", required=True)
+    a = parser.parse_args()
+    try:
+        {"export": export, "scan": scan, "aggregate": aggregate}[a.action](a)
+        return 0
+    except (ValueError, KeyError, OSError, tarfile.TarError, subprocess.CalledProcessError) as e:
+        print(f"MINIAS_LINUX_S_INFRA_ERROR={e}", file=sys.stderr)
+        return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())
