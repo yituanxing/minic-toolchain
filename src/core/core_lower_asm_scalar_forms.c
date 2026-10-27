@@ -1426,17 +1426,19 @@ MinicCoreLowerStatus core_asm_try_empty_barrier_scalar_forms(
                  * Preserve that explicitly; do not silently discard it or
                  * invent a register write in the ABI-specific emitter. */
                 if (source->is_volatile) {
-                    if (!minic_core_function_add_opaque_inline_asm(
-                            context->function, source->template_text, 0U,
-                            true, false, &inline_asm_id)) {
-                        { *handled = true; return MINIC_CORE_LOWER_ERROR; }
-                    }
+                    /* Empty +r cannot change the C value: no hardware
+                     * instructions execute. Yet the volatile qualifier is
+                     * observable to the optimizer. Use the existing common
+                     * compiler-only ordering effect, also consumed by all
+                     * five machine emitters. Treating it as a memory barrier
+                     * is deliberately more conservative than GNU's lack
+                     * of a memory clobber, not less. An opaque machine-ASM
+                     * opcode would spuriously require ISA-specific emitters. */
                     (void)memset(&instruction, 0, sizeof(instruction));
-                    instruction.kind = MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM;
+                    instruction.kind = MINIC_CORE_INSTRUCTION_COMPILER_BARRIER;
                     instruction.span = statement->span;
                     instruction.type = minic_type_void();
                     instruction.result = MINIC_CORE_VALUE_INVALID;
-                    instruction.value.inline_asm_id = inline_asm_id;
                     { *handled = true; return minic_core_function_append_effect_instruction(
                         context->function, context->block_id, &instruction)
                         ? MINIC_CORE_LOWER_OK : MINIC_CORE_LOWER_ERROR; }
