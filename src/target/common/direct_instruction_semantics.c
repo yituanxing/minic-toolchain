@@ -6,6 +6,49 @@
 
 #include <stdint.h>
 
+bool minic_multi_direct_call_frame_return_level0_shape(
+    const MinicCoreFunction *fn, const MinicCoreInstruction *ins) {
+    MinicType pointee;
+    return fn != NULL && ins != NULL &&
+           ins->kind == MINIC_CORE_INSTRUCTION_CALL_FRAME_ADDRESS &&
+           ins->result < fn->value_count &&
+           ins->value.call_frame_address.level == 0U &&
+           ins->value.call_frame_address.kind ==
+               MINIC_CORE_CALL_FRAME_ADDRESS_RETURN &&
+           minic_type_pointee(ins->type, &pointee) &&
+           minic_type_is_void(pointee) &&
+           minic_type_equal(fn->values[ins->result].type, ins->type);
+}
+
+bool minic_multi_direct_fixed_register_write_shape(
+    const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
+    const MinicCoreFixedRegisterBinding **binding_out) {
+    const MinicCoreFixedRegisterBinding *binding;
+    const size_t index = ins != NULL
+        ? ins->value.fixed_register_write.binding_id : SIZE_MAX;
+    const MinicCoreValueId source = ins != NULL
+        ? ins->value.fixed_register_write.source : MINIC_CORE_VALUE_INVALID;
+    if (program == NULL || target == NULL || fn == NULL || ins == NULL ||
+        binding_out == NULL ||
+        ins->kind != MINIC_CORE_INSTRUCTION_FIXED_REGISTER_WRITE ||
+        ins->result != MINIC_CORE_VALUE_INVALID ||
+        !minic_type_is_void(ins->type) ||
+        index >= fn->fixed_register_binding_count ||
+        fn->fixed_register_bindings == NULL || source >= fn->value_count)
+        return false;
+    binding = &fn->fixed_register_bindings[index];
+    if (binding->is_local || binding->register_name == NULL ||
+        binding->register_name_length == 0U ||
+        !minic_target_info_fixed_register_write_supported(
+            target, binding->register_name, binding->register_name_length) ||
+        !minic_type_equal(binding->type, fn->values[source].type) ||
+        !minic_lp64_register64_type(program, target, binding->type))
+        return false;
+    *binding_out = binding;
+    return true;
+}
+
 bool minic_multi_direct_fixed_register_read_shape(
     const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,

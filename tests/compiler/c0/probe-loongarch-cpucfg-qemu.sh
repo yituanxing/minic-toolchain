@@ -90,6 +90,93 @@ set +e
 rc=$?
 set -e
 test "$rc" -eq 42 || { echo "LoongArch live r21 QEMU failed: $rc" >&2; exit 1; }
+# GNU LoongArch Linux 6.6.143 uses __builtin_return_address(0) for
+# preempt/softirq call-site provenance across both leaf and non-leaf C.
+# The oracle calls through JIRL and compares the exact post-call PC, not
+# merely nonzero or a nearby text address. The static GNU binary exercises
+# the MiniC-produced machine code under real LoongArch user-mode QEMU.
+cat > "$work/return-pc.i" <<'EOF'
+void nested_effect(void);
+unsigned long minic_return_pc_leaf(void) {
+    return (unsigned long)__builtin_return_address(0);
+}
+unsigned long minic_return_pc_nonleaf(void) {
+    nested_effect();
+    return (unsigned long)__builtin_return_address(0);
+}
+EOF
+cat > "$work/return-pc-driver.c" <<'EOF'
+extern unsigned long minic_return_pc_leaf(void);
+extern unsigned long minic_return_pc_nonleaf(void);
+extern unsigned long gnu_return_pc_leaf(void);
+extern unsigned long gnu_return_pc_nonleaf(void);
+extern unsigned long oracle_return_pc(unsigned long (*)(void));
+volatile unsigned long nested_counter;
+void nested_effect(void) { nested_counter += 1UL; }
+int main(void) {
+    if (oracle_return_pc(minic_return_pc_leaf) != 0UL ||
+        oracle_return_pc(minic_return_pc_nonleaf) != 0UL ||
+        oracle_return_pc(gnu_return_pc_leaf) != 0UL ||
+        oracle_return_pc(gnu_return_pc_nonleaf) != 0UL ||
+        nested_counter != 2UL)
+        return 1;
+    return 42;
+}
+EOF
+cat > "$work/return-pc-gnu.c" <<'EOF'
+void nested_effect(void);
+unsigned long gnu_return_pc_leaf(void) {
+    return (unsigned long)__builtin_return_address(0);
+}
+unsigned long gnu_return_pc_nonleaf(void) {
+    nested_effect();
+    return (unsigned long)__builtin_return_address(0);
+}
+EOF
+cat > "$work/return-pc-oracle.s" <<'EOF'
+.text
+.p2align 2
+.globl oracle_return_pc
+.type oracle_return_pc,@function
+oracle_return_pc:
+  addi.d $sp, $sp, -32
+  st.d $ra, $sp, 24
+  st.d $a0, $sp, 16
+  la.local $t0, 1f
+  st.d $t0, $sp, 8
+  ld.d $t1, $sp, 16
+  jirl $ra, $t1, 0
+1:
+  ld.d $t0, $sp, 8
+  xor $a0, $a0, $t0
+  ld.d $ra, $sp, 24
+  addi.d $sp, $sp, 32
+  ret
+.size oracle_return_pc, .-oracle_return_pc
+EOF
+"$cc" --target=loongarch64-linux -S "$work/return-pc.i" -o "$work/return-pc.s"
+grep -F '  move $t0, $ra' "$work/return-pc.s" >/dev/null
+grep -F '  st.d $ra,' "$work/return-pc.s" >/dev/null
+grep -F '  ld.d $t0,' "$work/return-pc.s" >/dev/null
+"$gcc" -static -O0 "$work/return-pc-driver.c" "$work/return-pc-gnu.c" \
+    -x assembler "$work/return-pc-oracle.s" "$work/return-pc.s" \
+    -o "$work/return-pc.elf"
+set +e
+"$qemu" "$work/return-pc.elf"
+rc=$?
+set -e
+test "$rc" -eq 42 || { echo "LoongArch return-PC GNU/QEMU failed: $rc" >&2; exit 1; }
+# The backend MUST reject frames beyond depth zero. The nonzero level is
+# deliberately not supported by our ABI descriptor, even if GCC accepts it.
+cat > "$work/invalid-return-pc.i" <<'EOF'
+void *illegal(void) { return __builtin_return_address(1); }
+EOF
+if "$cc" --target=loongarch64-linux -S "$work/invalid-return-pc.i" \
+    -o "$work/invalid-return-pc.s" >"$work/invalid-return-pc.log" 2>&1; then
+    echo 'LoongArch illegal caller-frame unwind admitted' >&2
+    exit 1
+fi
+echo 'LOONGARCH_RETURN_PC_GNU_QEMU=PASS leaf=1 nonleaf=1 exact_call_pc=1 depth1_rejected=1'
 # A genuine global-register assignment has machine side effects, not a C
 # memory store. A GNU-compiled driver saves/observes/restores the live r21.
 cat > "$work/write-r21.i" <<'EOF'

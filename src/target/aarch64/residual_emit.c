@@ -94,12 +94,8 @@ bool minic_aarch64_emit_residual_instruction(
              * this function replaces live x30, so non-leaf must fetch the
              * ENTRY return PC from its saved slot. Never counterfeit an
              * unwind of another frame. */
-            if (dynamic_frame || ins->result >= fn->value_count ||
-                ins->value.call_frame_address.level != 0U ||
-                ins->value.call_frame_address.kind !=
-                    MINIC_CORE_CALL_FRAME_ADDRESS_RETURN ||
-                !minic_type_is_pointer(ins->type) ||
-                !minic_type_equal(fn->values[ins->result].type, ins->type) ||
+            if (dynamic_frame ||
+                !minic_multi_direct_call_frame_return_level0_shape(fn, ins) ||
                 (ctx->has_direct_calls &&
                  (ctx->save_offset > 32760U ||
                   (ctx->save_offset & 7U) != 0U)))

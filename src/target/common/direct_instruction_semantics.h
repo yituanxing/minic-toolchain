@@ -23,6 +23,20 @@ bool minic_multi_direct_parameter_object_location(
  * owned by a machine emitter; this validates binding provenance and LP64
  * scalar shape, never picks a register or emits a machine instruction.
  * x86-64 and AArch64 both call this same validator. */
+/* Shared Core meaning for ELF-ABI return address level 0, reused by both
+ * AAPCS64 and LoongArch64 without duplicating source or Core logic.
+ * The machine emitter still decides live LR/ra versus its frame spill. */
+bool minic_multi_direct_call_frame_return_level0_shape(
+    const MinicCoreFunction *, const MinicCoreInstruction *);
+
+/* Shared fixed-register write provenance/SSA/type admission. The native
+ * machine is still responsible for choosing register bytes and forbidding
+ * unsupported physical-register aliases. */
+bool minic_multi_direct_fixed_register_write_shape(
+    const MinicC0Program *, const MinicTargetInfo *,
+    const MinicCoreFunction *, const MinicCoreInstruction *,
+    const MinicCoreFixedRegisterBinding **);
+
 bool minic_multi_direct_fixed_register_read_shape(
     const MinicC0Program *, const MinicTargetInfo *,
     const MinicCoreFunction *, const MinicCoreInstruction *,

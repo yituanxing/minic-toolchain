@@ -57,26 +57,36 @@ bool minic_loongarch64_emit_residual_instruction(
     dynamic_frame = ctx->dynamic_frame;
     *needs_writeback = true;
         switch (ins->kind) {
+        case MINIC_CORE_INSTRUCTION_CALL_FRAME_ADDRESS:
+            /* The SHARED semantic guard validates pointer provenance and
+             * forbids unwinding higher frames. The native LP64D machine
+             * reads the live entry ra in leaf functions or the ABI-owned
+             * saved copy after any CALL. Never return a local stack slot
+             * address in place of the real caller's instruction pointer. */
+            if (dynamic_frame ||
+                !minic_multi_direct_call_frame_return_level0_shape(fn, ins))
+                return minic_multi_direct_machine_reject(
+                    fn, "loongarch64", name, "call_frame_return_address",
+                    reject_block, reject_ins, __LINE__);
+            if (ctx->has_direct_calls) {
+                if (!emit_sp_mem(out, "ld.d", "$t0", ctx->save_offset))
+                    return false;
+            } else if (fputs("  move $t0, $ra\n", out) == EOF) {
+                return false;
+            }
+            break;
         case MINIC_CORE_INSTRUCTION_FIXED_REGISTER_WRITE: {
-            const size_t binding_id = ins->value.fixed_register_write.binding_id;
             const MinicCoreValueId source = ins->value.fixed_register_write.source;
             const MinicCoreFixedRegisterBinding *binding;
-            /* Linux r21 is reserved for the per-CPU offset; transfer the
-             * complete LP64 SSA value to that real register, never a global. */
-            if (dynamic_frame || binding_id >= fn->fixed_register_binding_count ||
-                source >= fn->value_count ||
-                !minic_type_is_void(ins->type) ||
-                ins->result != MINIC_CORE_VALUE_INVALID ||
-                !minic_type_equal(fn->values[source].type,
-                                  minic_type_unsigned_long()))
-                return minic_multi_direct_machine_reject(
-                    fn, "loongarch64", name, "fixed_register_write",
-                    reject_block, reject_ins, __LINE__);
-            binding = &fn->fixed_register_bindings[binding_id];
-            if (binding->is_local ||
-                !minic_target_info_fixed_register_write_supported(
-                    target, binding->register_name, binding->register_name_length) ||
-                !minic_type_equal(binding->type, fn->values[source].type) ||
+            /* Shared semantic verifier proves the ABI binding+SSA. The
+             * target requalifies exact LoongArch hardware state, and writes
+             * the per-CPU register without masquerading as a C store. */
+            if (dynamic_frame ||
+                !minic_multi_direct_fixed_register_write_shape(
+                    program, target, fn, ins, &binding) ||
+                binding->register_name_length != 4U ||
+                memcmp(binding->register_name, "$r21", 4U) != 0 ||
+                !minic_type_equal(binding->type, minic_type_unsigned_long()) ||
                 !emit_sp_mem(out, "ld.d", "$t0", (size_t)source * 8U) ||
                 fputs("  move $r21, $t0\n", out) == EOF)
                 return minic_multi_direct_machine_reject(

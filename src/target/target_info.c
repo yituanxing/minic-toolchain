@@ -300,6 +300,12 @@ const MinicTargetInfo *minic_target_info_for_architecture(
             loongarch64_target.variadic_scalar_read_kind = MINIC_VARIADIC_SCALAR_READ_LINEAR_SLOT;
             loongarch64_target.variadic_linear_slot_bytes = 8U;
             loongarch64_target.variadic_copy_kind = MINIC_VARIADIC_COPY_SCALAR_ASSIGNMENT;
+            /* GNU __builtin_return_address(0) reads the ENTRY ra. This is
+             * independent of whether the function later issues direct or
+             * indirect calls: the shared LP64 CALL plan saves ra at entry
+             * whenever it can be clobbered. No level>0 unwind or frame
+             * address is implied by this capability. */
+            loongarch64_target.call_frame_return_address_level0 = true;
         }
         return &loongarch64_target;
     }
