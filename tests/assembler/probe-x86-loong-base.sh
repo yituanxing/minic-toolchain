@@ -504,6 +504,65 @@ for kind in R_LARCH_PCALA_HI20 R_LARCH_PCALA_LO12 R_LARCH_B16 R_LARCH_B21 R_LARC
     grep -q "$kind" "$work/rel-mini.txt"
     grep -q "$kind" "$work/rel-gnu.txt"
 done
+
+# Loong psABI uses CFA stack register r3, link register r1 and -8 data
+# alignment. Verify actual GNU DWARF debug-frame records, not no-op parsing.
+cat >"$work/la-cfi.s" <<'LA_CFI'
+.cfi_sections .debug_frame
+.text
+.globl la_cfi_entry
+la_cfi_entry:
+    .cfi_startproc
+    addi.d $sp, $sp, -16
+    .cfi_def_cfa_offset 16
+    st.d $ra, $sp, 8
+    .cfi_offset 1, -8
+    ld.d $ra, $sp, 8
+    .cfi_restore 1
+    addi.d $sp, $sp, 16
+    .cfi_def_cfa_offset 0
+    ret
+    .cfi_endproc
+LA_CFI
+"$MINIAS" --target=loongarch64 -o "$work/la-cfi-mini.o" "$work/la-cfi.s"
+"$LOONGAS" -mabi=lp64d -o "$work/la-cfi-gnu.o" "$work/la-cfi.s"
+"$LOONGCOPY" -j .text -O binary "$work/la-cfi-mini.o" "$work/la-cfi-mini.bin"
+"$LOONGCOPY" -j .text -O binary "$work/la-cfi-gnu.o" "$work/la-cfi-gnu.bin"
+cmp "$work/la-cfi-mini.bin" "$work/la-cfi-gnu.bin"
+"$LOONGREADELF" --debug-dump=frames "$work/la-cfi-mini.o" >"$work/la-cfi-mini.frame"
+"$LOONGREADELF" --debug-dump=frames "$work/la-cfi-gnu.o" >"$work/la-cfi-gnu.frame"
+for marker in CIE FDE 'DW_CFA_def_cfa_offset: 16' 'DW_CFA_offset: r1'; do
+    grep -q "$marker" "$work/la-cfi-mini.frame"
+    grep -q "$marker" "$work/la-cfi-gnu.frame"
+done
+"$LOONGREADELF" -Wr "$work/la-cfi-mini.o" | grep -q R_LARCH_64
+echo 'MINIAS_LARCH_DWARF_CFI=PASS cfa_stack_r3=1 link_r1=1 real_FDE=1'
+
+# Absolute symbol arithmetic, GNU '=' conditional alias and comparisons.
+cat >"$work/la-if.s" <<'LA_IF'
+.text
+.equ docfi, 0
+.if docfi == 0
+    nop
+.endif
+.if (7 << 1) > 10
+    ret
+.else
+    break 1
+.endif
+.if docfi != 0
+    break 2
+.else
+    nop
+.endif
+LA_IF
+"$MINIAS" --target=loongarch64 -o "$work/la-if-mini.o" "$work/la-if.s"
+"$LOONGAS" -mabi=lp64d -o "$work/la-if-gnu.o" "$work/la-if.s"
+"$LOONGCOPY" -j .text -O binary "$work/la-if-mini.o" "$work/la-if-mini.bin"
+"$LOONGCOPY" -j .text -O binary "$work/la-if-gnu.o" "$work/la-if-gnu.bin"
+cmp "$work/la-if-mini.bin" "$work/la-if-gnu.bin"
+echo 'MINIAS_COMMON_ABSOLUTE_IF=PASS symbol_equals_compare_shift'
+
 echo 'MINIAS_LARCH_RELOC_ORACLE=PASS text_bytes=equal required_ELF_reloc_families=5'
 # Same-section forward/backward LoongArch branches must use the
 # original RV-proven symbol-layout resolver rather than producing a redundant

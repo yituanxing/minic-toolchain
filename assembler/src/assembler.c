@@ -1887,84 +1887,73 @@ static char *strip_outer_parens(char *text) {
     }
 }
 
-static bool parse_if_operand(const char *text, const char **end_out, int64_t *value_out) {
-    char *end = NULL;
-    long long value;
-
-    while (*text == ' ' || *text == '\t') {
-        ++text;
+/* GAS conditional expressions share the Common absolute arithmetic and
+ * symbol resolver. A separate numeric-only parser rejected macro constants
+ * such as .if docfi=0 and prematurely fragmented Linux target assembly.
+ * Operators are recognized only at top-level, never in shifts or parens. */
+static bool evaluate_if_expression(MiniAs *as,const char *text,bool *result) {
+    char *copy,*p,*lhs,*rhs=NULL;
+    const char *compare=NULL;
+    char op='\0';
+    unsigned depth=0U;
+    unsigned width=0U;
+    int64_t left,right;
+    if(!text || !result)return false;
+    copy=minias_strdup(text);
+    if(!copy)return false;
+    lhs=minias_trim(copy);
+    for(p=lhs;*p;++p) {
+        if(*p=='('){++depth;continue;}
+        if(*p==')') {
+            if(depth==0U){free(copy);return false;}
+            --depth;continue;
+        }
+        if(depth)continue;
+        if((p[0]=='<' && p[1]=='<') ||
+           (p[0]=='>' && p[1]=='>')) {++p;continue;}
+        if((p[0]=='=' && p[1]=='=') ||
+           (p[0]=='!' && p[1]=='=') ||
+           (p[0]=='<' && p[1]=='=') ||
+           (p[0]=='>' && p[1]=='=')) {
+            compare=p;width=2U;break;
+        }
+        if(*p=='=' || *p=='<' || *p=='>') {
+            compare=p;width=1U;break;
+        }
     }
-    errno = 0;
-    value = strtoll(text, &end, 0);
-    if (errno != 0 || end == text) {
-        return false;
-    }
-    *end_out = end;
-    *value_out = (int64_t)value;
-    return true;
-}
-
-static bool evaluate_if_expression(const char *text, bool *result) {
-    const char *p;
-    int64_t lhs;
-    int64_t rhs;
-    char op[3] = {0};
-    size_t op_len = 0U;
-
-    if (text == NULL || result == NULL ||
-        !parse_if_operand(text, &p, &lhs)) {
-        return false;
-    }
-    while (*p == ' ' || *p == '\t') {
-        ++p;
-    }
-    if (*p == '\0') {
-        *result = lhs != 0;
-        return true;
-    }
-    if ((p[0] == '=' && p[1] == '=') || (p[0] == '!' && p[1] == '=') ||
-        (p[0] == '<' && p[1] == '=') || (p[0] == '>' && p[1] == '=')) {
-        op[0] = p[0];
-        op[1] = p[1];
-        op_len = 2U;
-    } else if (*p == '<' || *p == '>') {
-        op[0] = *p;
-        op_len = 1U;
+    if(depth!=0U){free(copy);return false;}
+    if(compare) {
+        p=(char *)compare;
+        rhs=p+width;
+        op=*p;
+        *p='\0';
+        lhs=minias_trim(lhs);rhs=minias_trim(rhs);
+        if(*lhs=='\0' || *rhs=='\0' ||
+           !evaluate_absolute_expression(as,lhs,&left) ||
+           !evaluate_absolute_expression(as,rhs,&right)) {
+            free(copy);return false;
+        }
+        switch(op) {
+            case '=':*result=left==right;break;
+            case '!':*result=left!=right;break;
+            case '<':*result=width==2U?left<=right:left<right;break;
+            case '>':*result=width==2U?left>=right:left>right;break;
+            default:free(copy);return false;
+        }
     } else {
-        return false;
+        if(!evaluate_absolute_expression(as,lhs,&left)) {
+            free(copy);return false;
+        }
+        *result=left!=0;
     }
-    p += op_len;
-    if (!parse_if_operand(p, &p, &rhs)) {
-        return false;
-    }
-    while (*p == ' ' || *p == '\t') {
-        ++p;
-    }
-    if (*p != '\0') {
-        return false;
-    }
-
-    if (strcmp(op, "==") == 0) {
-        *result = lhs == rhs;
-    } else if (strcmp(op, "!=") == 0) {
-        *result = lhs != rhs;
-    } else if (strcmp(op, "<=") == 0) {
-        *result = lhs <= rhs;
-    } else if (strcmp(op, ">=") == 0) {
-        *result = lhs >= rhs;
-    } else if (strcmp(op, "<") == 0) {
-        *result = lhs < rhs;
-    } else {
-        *result = lhs > rhs;
-    }
-    return true;
+    free(copy);return true;
 }
 
 static bool push_conditional(MiniAs *as, const char *args, size_t line) {
     MiniAsConditional *conditional;
     bool condition_true;
 
-    if (!evaluate_if_expression(args, &condition_true)) {
+    if (!evaluate_if_expression(as, args, &condition_true)) {
         minias_set_error(as, "unsupported-expression:.if:%s:line=%zu", args, line);
         return false;
     }

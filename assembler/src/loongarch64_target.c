@@ -902,6 +902,11 @@ static const MiniAsTargetOps ops={
     .resolve_profile=la_profile,.parse_mcinst=la_parse,
     .measure_mcinst=la_measure,.encode=la_encode,
     .append_code_alignment=la_align,.fixup_relocation_type=la_reloc,
-    .validate_output=la_validate
+    .validate_output=la_validate,
+    .cfi_code_align=4U,
+    .cfi_data_align=-8,
+    .cfi_return_reg=1U,
+    .cfi_stack_reg=3U,
+    .cfi_address_size=8U
 };
 const MiniAsTargetOps *minias_target_loongarch64(void){return &ops;}
