@@ -122,6 +122,31 @@ static bool aarch64_stlr_type(MinicType type, size_t width) {
            (width == 8U && (plain.integer_rank == MINIC_INTEGER_RANK_LONG ||
                             plain.integer_rank == MINIC_INTEGER_RANK_LONG_LONG));
 }
+/* Original arm64 Linux 6.6 LL/SC atomic_{and,or,xor} and atomic64_
+ * exactly as emitted from atomic_ll_sc.h; no generic instruction-string
+ * passthrough. The six admitted templates have no hidden instruction slots. */
+static unsigned int aarch64_llsc_op(const char *text, size_t len) {
+    static const char *const forms[] = {
+        "//atomic_andprfmpstl1strm,%21:ldxr%w0,%2and%w0,%w0,%w3stxr%w1,%w0,%2cbnz%w1,1b",
+        "//atomic_orprfmpstl1strm,%21:ldxr%w0,%2orr%w0,%w0,%w3stxr%w1,%w0,%2cbnz%w1,1b",
+        "//atomic_xorprfmpstl1strm,%21:ldxr%w0,%2eor%w0,%w0,%w3stxr%w1,%w0,%2cbnz%w1,1b",
+        "//atomic64_andprfmpstl1strm,%21:ldxr%0,%2and%0,%0,%3stxr%w1,%0,%2cbnz%w1,1b",
+        "//atomic64_orprfmpstl1strm,%21:ldxr%0,%2orr%0,%0,%3stxr%w1,%0,%2cbnz%w1,1b",
+        "//atomic64_xorprfmpstl1strm,%21:ldxr%0,%2eor%0,%0,%3stxr%w1,%0,%2cbnz%w1,1b"
+    };
+    char compact[192]; size_t i, n = 0U;
+    if (!text || !len || len >= sizeof(compact)) return 0U;
+    for (i = 0U; i < len; ++i) {
+        if (text[i] == ' ' || text[i] == '\t' ||
+            text[i] == '\n' || text[i] == '\r') continue;
+        if (n + 1U >= sizeof(compact)) return 0U;
+        compact[n++] = text[i];
+    }
+    compact[n] = '\0';
+    for (i = 0U; i < sizeof(forms) / sizeof(forms[0]); ++i)
+        if (strcmp(forms[i], compact) == 0) return (unsigned int)(i + 1U);
+    return 0U;
+}
 static bool constraint(const MinicInlineAsmOperand *op, const char *word) {
     size_t n = strlen(word);
     return op && op->constraint_text && op->constraint_length == n &&
@@ -178,6 +203,39 @@ bool minic_aarch64_qualify_inline_asm(
             contract->operand_count = 2U;
             contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT;
             contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+            return true;
+        }
+    }
+    if (program && src && contract && src->is_volatile && !src->is_goto &&
+        src->output_count == 3U && src->input_count == 1U &&
+        src->outputs && src->inputs && src->label_count == 0U &&
+        src->clobber_count == 0U && src->register_clobber_count == 0U &&
+        !src->has_memory_clobber &&
+        constraint(&src->outputs[0], "=&r") &&
+        constraint(&src->outputs[1], "=&r") &&
+        constraint(&src->outputs[2], "+Q") &&
+        constraint(&src->inputs[0], "Lr")) {
+        const unsigned int op = aarch64_llsc_op(
+            src->template_text, src->template_length);
+        const size_t width = op > 3U ? 8U : 4U;
+        bool accepted = op != 0U;
+        for (i = 0U; i < 4U && accepted; ++i) {
+            const MinicInlineAsmOperand *operand = i < 3U ?
+                &src->outputs[i] : &src->inputs[0];
+            const MinicExpression *arg =
+                minic_c0_program_expression(program, operand->expression);
+            if (!arg ||
+                (i < 3U && (arg->value_category != MINIC_VALUE_LVALUE ||
+                            minic_type_is_const(arg->type))) ||
+                !aarch64_stlr_type(arg->type, i == 1U ? 8U : width))
+                accepted = false;
+        }
+        if (accepted) {
+            contract->operand_count = 4U;
+            contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
+            contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
+            contract->kinds[2] = MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE;
+            contract->kinds[3] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
             return true;
         }
     }
@@ -331,6 +389,64 @@ bool minic_aarch64_emit_qualified_structured_asm(
                             "  %s\n",
                        (size_t)b[0].value * 8U,
                        (size_t)b[1].value * 8U, op[width]) >= 0;
+    }
+    if (ins->value.structured_inline_asm.operand_count == 4U) {
+        static const char *const alu[] = {"and", "orr", "eor"};
+        const unsigned int form = aarch64_llsc_op(
+            info->template_text, info->template_length);
+        const size_t width = form > 3U ? 8U : 4U;
+        MinicType pointee;
+        if (!form || !info->is_volatile || info->is_goto ||
+            !info->has_memory_clobber || info->register_clobber_count)
+            return false;
+        b = ins->value.structured_inline_asm.operands;
+        for (i = 0U; i < 4U; ++i) {
+            if (b[i].operand_index != i || b[i].early_clobber ||
+                b[i].has_fixed_register_binding ||
+                b[i].value >= fn->value_count ||
+                b[i].value > 4095U / 8U ||
+                b[i].kind != (i == 3U ?
+                    MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT :
+                    i == 2U ? MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE :
+                    MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT))
+                return false;
+            if (i == 3U) {
+                if (!aarch64_stlr_type(fn->values[b[i].value].type, width))
+                    return false;
+            } else {
+                if (!minic_type_pointee(fn->values[b[i].value].type, &pointee) ||
+                    !aarch64_stlr_type(pointee, i == 1U ? 8U : width))
+                    return false;
+            }
+        }
+        /* Exact Linux atomic LL/SC loop with real hardware RMW effects.
+         * Result and status outputs write their Core address-backed C locals;
+         * memory operand is updated by STXR, not a fabricated ordinary store.
+         * x9..x13 are AAPCS64 caller-saved scratch; numeric GAS label is local. */
+        return fprintf(out,
+            "  ldr x10, [sp, #%zu]\n"
+            "  ldr x11, [sp, #%zu]\n"
+            "  prfm pstl1strm, [x10]\n"
+            "1:\n"
+            "  ldxr %s9, [x10]\n"
+            "  %s %s9, %s9, %s11\n"
+            "  stxr w12, %s9, [x10]\n"
+            "  cbnz w12, 1b\n"
+            "  ldr x13, [sp, #%zu]\n"
+            "  str %s9, [x13]\n"
+            "  ldr x13, [sp, #%zu]\n"
+            "  str x12, [x13]\n",
+            (size_t)b[2].value * 8U,
+            (size_t)b[3].value * 8U,
+            width == 8U ? "x" : "w",
+            alu[(form - 1U) % 3U],
+            width == 8U ? "x" : "w",
+            width == 8U ? "x" : "w",
+            width == 8U ? "x" : "w",
+            width == 8U ? "x" : "w",
+            (size_t)b[0].value * 8U,
+            width == 8U ? "x" : "w",
+            (size_t)b[1].value * 8U) >= 0;
     }
     if (ins->value.structured_inline_asm.operand_count != 3U)
         return false;
