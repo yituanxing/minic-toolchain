@@ -272,4 +272,34 @@ for directive in '.cfi_sections .eh_frame' '.cfi_startproc simple'              
 done
 echo 'MINIAS_AARCH64_DWARF_DEBUG_FRAME=PASS actual_CIE_FDE=1 relocation=1 state_ops=1'
 
+
+# Precise GNU data bytes are the oracle for common variable-width LEB
+# directives, AArch aliases and exact APP/NO_APP boundaries.
+cat >"$work/common-data.s" <<'GNU_DATA'
+.arch armv8-a
+.text
+.globl data_source_entry
+data_source_entry:
+#APP
+    nop
+#NO_APP
+    ret
+.data
+    .xword 0x123456789
+    .hword 0x1234
+    .uleb128 0
+    .uleb128 127
+    .uleb128 624485
+    .sleb128 -624485
+    .sleb128 -1
+GNU_DATA
+"$MINIAS" --target=aarch64 -o "$work/data-mini.o" "$work/common-data.s"
+"$AARCH64_AS" -o "$work/data-gnu.o" "$work/common-data.s"
+for section in .text .data; do
+    "$AARCH64_OBJCOPY" -j "$section" -O binary "$work/data-mini.o" "$work/data-mini.bin"
+    "$AARCH64_OBJCOPY" -j "$section" -O binary "$work/data-gnu.o" "$work/data-gnu.bin"
+    cmp "$work/data-mini.bin" "$work/data-gnu.bin"
+done
+echo 'MINIAS_COMMON_LEB_GNU=PASS uleb_sleb=byte_exact hword_xword=byte_exact app_no_app=correct'
+
 echo 'MINIAS_AARCH64_VSLICE=PASS ELF64=1 gnu_bytes=equal relocation_call26_jump26_abs64=1 ld=pass qemu=exit0'
