@@ -120,4 +120,32 @@ grep -F 'GNU asm input operand currently requires an integer or pointer' \
     "$work/invalid-register-aggregate.log" >/dev/null
 echo 'GNU_RECORD_MEMORY_INPUT=PASS original_GCC=1 x86_loong_source=2 unqualified_machine_rejected=2 register_aggregate_rejected=1'
 echo 'X86_GNU_CALLER_CLOBBERS=PASS original_GCC=1 caller_names=10 saved_rejected=1 machine_fail_closed=1'
+# GCC's official x86 'I' constraint means a shift count 0..31, NOT
+# signed imm12. Verify original GNU source and fail-closed MiniC machine.
+cat >"$work/gnu-shift-31.i" <<'EOF'
+void x86_shift_count_31(void) { asm volatile("nop" : : "I"(31)); }
+EOF
+cc -c -std=gnu11 -x c "$work/gnu-shift-31.i" -o "$work/gnu-shift-31.o"
+if "$cc" --target=x86_64-linux -S "$work/gnu-shift-31.i" \
+    -o "$work/gnu-shift-31.s" >"$work/gnu-shift-31.log" 2>&1; then
+    echo 'FAIL: unqualified x86 machine ASM with I input accepted' >&2
+    exit 1
+fi
+if grep -F "GNU asm 'I' input requires" "$work/gnu-shift-31.log" >/dev/null; then
+    echo 'FAIL: x86 valid GNU shift count 31 rejected during parsing' >&2
+    exit 1
+fi
+for number in 32 -1 2047; do
+    cat >"$work/invalid-shift.i" <<EOF
+void bad(void) { asm volatile("nop" : : "I"($number)); }
+EOF
+    if "$cc" --target=x86_64-linux -S "$work/invalid-shift.i" \
+        -o "$work/invalid-shift.s" >"$work/invalid-shift.log" 2>&1; then
+        echo "FAIL: invalid x86 shift count $number accepted" >&2
+        exit 1
+    fi
+    grep -F "GNU asm 'I' input requires an x86 shift count 0..31" \
+        "$work/invalid-shift.log" >/dev/null
+done
+echo 'X86_GNU_I_CONSTRAINT=PASS x86_0_31_only=1 full_machine_unqualified_rejected=1 negatives=3'
 echo 'X86_GNU_RSP_TIED_OUTPUT=PASS source_grammar=1 machine_rejected=1 direct_C_write_rejected=1 output_writeonly_rejected=1 cross_target_rejected=1'

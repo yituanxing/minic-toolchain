@@ -1003,9 +1003,13 @@ bool minic_target_info_inline_asm_immediate_constraint_supported(const MinicTarg
         return (value >= 0 && value <= 4095) ||
                (value >= 4096 && value <= 0xfff000 &&
                 (value & 4095) == 0);
+    case MINIC_TARGET_ARCH_X86_64:
+        /* GCC config/i386/constraints.md: I is the immediate 0..31
+         * (32-bit shifts), not the signed imm12 of RISC-V/LoongArch.
+         * Parsing an ISA-specific constant does not authorize generating
+         * an unqualified machine ASM template: Core and x86 recheck. */
+        return value >= 0 && value <= 31;
     default:
-        /* x86 I has a distinct shift-count range, and its backend has
-         * no qualified GNU I lowering path yet. Fail closed. */
         return false;
     }
 }
@@ -1016,13 +1020,17 @@ bool minic_target_info_inline_asm_immediate_may_defer(const MinicTargetInfo *tar
      * ISA is implied here; Core must resolve the immediate or reject. */
     return target != NULL &&
            (target->architecture == MINIC_TARGET_ARCH_LOONGARCH64 ||
-            target->architecture == MINIC_TARGET_ARCH_AARCH64);
+            target->architecture == MINIC_TARGET_ARCH_AARCH64 ||
+            target->architecture == MINIC_TARGET_ARCH_X86_64);
 }
 
 const char *minic_target_info_inline_asm_immediate_constraint_diagnostic(
     const MinicTargetInfo *target) {
     if (target != NULL && target->architecture == MINIC_TARGET_ARCH_AARCH64) {
         return "GNU asm 'I' input requires an AArch64 unsigned imm12 (optional shift 12)";
+    }
+    if (target != NULL && target->architecture == MINIC_TARGET_ARCH_X86_64) {
+        return "GNU asm 'I' input requires an x86 shift count 0..31";
     }
     return "GNU asm 'I' input requires a signed 12-bit integer constant";
 }
