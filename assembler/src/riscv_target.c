@@ -302,6 +302,13 @@ static bool riscv_measure(const MiniAs *as, const char *op, const char *args,
         (void)snprintf(reason, cap, "riscv32e-invalid-register:%s", op);
         return false;
     }
+    if (as->strict_i_xlen == 0U && minias_riscv_is_typed_fixed(op)) {
+        /* The MCInst parser (called by add_stmt) validates operands once.
+         * This ISA opcode has a fixed four-byte encoding and its size is
+         * independent of GNU textual operand spelling. */
+        *size = 4U;
+        return true;
+    }
     return minias_riscv_measure(as->strict_i_xlen, op, args, size, reason, cap);
 }
 

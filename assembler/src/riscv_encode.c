@@ -1242,6 +1242,46 @@ static const RvMCDesc rv_mc_table[] = {
 };
 #undef RVD
 
+
+/* A fixed-width typed instruction has no layout dependence on its operand
+ * text. Its target parser validates operand shape after the 4-byte size is
+ * assigned: this avoids decoding the same registers/immediates once during
+ * measurement and again when creating MCInst.
+ *
+ * The non-typed pseudo expansions, symbolic GPR loads/stores and strict-I
+ * machine-word verifier continue through the complete legacy measurement
+ * path until their fragment sizing is also represented in the typed IR. */
+bool minias_riscv_is_typed_fixed(const char *op) {
+    size_t i;
+    bool is_store;
+    uint32_t width;
+    bool is_lr;
+    uint32_t ordering, funct5;
+    for (i = 0U; i < sizeof(rv_mc_table) / sizeof(rv_mc_table[0]); ++i) {
+        if (strcmp(op, rv_mc_table[i].name) == 0 &&
+            rv_mc_table[i].family != RV_MC_LOAD &&
+            rv_mc_table[i].family != RV_MC_STORE) return true;
+    }
+    if (is_fp_binary_single(op) || is_fp_binary_double(op) ||
+        is_fp_compare_double(op) || is_fp_convert(op) ||
+        strcmp(op, "fsgnjn.d") == 0 ||
+        strcmp(op, "fmv.x.d") == 0 ||
+        strcmp(op, "fmv.x.w") == 0 ||
+        strcmp(op, "fmv.d.x") == 0 ||
+        strcmp(op, "fmv.w.x") == 0 ||
+        strcmp(op, "fld") == 0 || strcmp(op, "flw") == 0 ||
+        strcmp(op, "fsd") == 0 || strcmp(op, "fsw") == 0 ||
+        decode_vector_unit_stride(op, &is_store, &width) ||
+        strcmp(op, "vmv.v.i") == 0 ||
+        strcmp(op, "vsetvli") == 0 || strcmp(op, "vsetvl") == 0 ||
+        decode_lr_sc_mnemonic(op, &is_lr, &width, &ordering) ||
+        decode_amo_mnemonic(op, &funct5, &width, &ordering) ||
+        strcmp(op, "csrr") == 0 || strcmp(op, "csrrw") == 0 ||
+        strcmp(op, "csrrc") == 0 || strcmp(op, "csrw") == 0 ||
+        strcmp(op, "csrs") == 0 || strcmp(op, "csrc") == 0) return true;
+    return false;
+}
+
 static void rv_set_reg(MiniAsMCOperand *op, int num) {
     op->kind = MINIAS_MC_REGISTER;
     op->reg = (unsigned)num;
@@ -1276,6 +1316,13 @@ static bool rv_mc_word(MiniAs *as, MiniAsStmt *stmt,
     return true;
 }
 
+static bool rv_mc_vector_word(MiniAs *as, MiniAsStmt *stmt,
+                               uint32_t base, int vd, int rs1) {
+    if (!rv_mc_word(as, stmt, base, vd, rs1, 0)) return false;
+    stmt->mcinst->operands[0].reg_class = MINIAS_MC_REG_VECTOR;
+    return true;
+}
+
 static bool rv_parse_vector_mc(MiniAs *as, MiniAsStmt *stmt,
                                char operands[][128], size_t count,
                                bool *handled) {
@@ -1291,18 +1338,19 @@ static bool rv_parse_vector_mc(MiniAs *as, MiniAsStmt *stmt,
             (vd = vector_reg_number(operands[0])) < 0 ||
             !parse_mem(operands[1], &off, base) || off != 0 ||
             (rs1 = reg_number(base)) < 0) goto invalid;
-        return rv_mc_word(as, stmt, ((count == 2U ? 1U : 0U) << 25U) |
-                          (width << 12U) | (store ? 0x27U : 0x07U),
-                          vd, rs1, 0);
+        return rv_mc_vector_word(as, stmt, ((count == 2U ? 1U : 0U) << 25U) |
+                                 (width << 12U) |
+                                 (store ? 0x27U : 0x07U),
+                                 vd, rs1);
     }
     if (strcmp(stmt->op, "vmv.v.i") == 0) {
         if (count != 2U ||
             (vd = vector_reg_number(operands[0])) < 0 ||
             !parse_i64(operands[1], &off) || off < -16 || off > 15)
             goto invalid;
-        return rv_mc_word(as, stmt, (0x17U << 26U) | (1U << 25U) |
-                          (((uint32_t)off & 31U) << 15U) |
-                          (3U << 12U) | 0x57U, vd, 0, 0);
+        return rv_mc_vector_word(as, stmt, (0x17U << 26U) | (1U << 25U) |
+                                 (((uint32_t)off & 31U) << 15U) |
+                                 (3U << 12U) | 0x57U, vd, 0);
     }
     if (strcmp(stmt->op, "vsetvli") == 0) {
         uint32_t vtype;
@@ -1634,7 +1682,8 @@ bool minias_riscv_parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
                           strcmp(op,"sll")==0 || strcmp(op,"srl")==0 ||
                           strcmp(op,"sra")==0);
             if (shift) {
-                int max = ((encoding & 0x7fU) == 0x1bU) ? 31 : 63;
+                int max = ((encoding & 0x7fU) == 0x1bU ||
+                           as->target_xlen == 32U) ? 31 : 63;
                 if (imm < 0 || imm > max) goto invalid;
             } else if ((strcmp(op, "orc.b") != 0) &&
                        (strcmp(op, "rev8") != 0) &&

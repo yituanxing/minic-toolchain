@@ -36,6 +36,12 @@ Explicit -march=rv32i/rv64i retains existing fail-closed machine-code checks.
    Remaining mixed pseudos, privileged and auxiliary instructions retain the
    legacy path until separately verified. A consolidated GNU GAS byte oracle
    checks F/D/A/V/Zicsr on a single rv64gcv object.
+   For typed fixed-width families, the target measures four bytes without
+   rerunning its legacy operand parser: the MCInst build step validates and
+   decodes operands once. Strict RV32I/RV64I still executes its exhaustive
+   machine-level checks, and symbolic/multiword pseudos retain explicit
+   legacy measurement. RV32 shift widths are validated at the typed parser.
+   Vector register classes are distinguished from integer/FP registers.
    Comment stripping is target-configurable and .option
    dispatch belongs to the RISC-V target; common parser still owns GNU-style
    statement grammar. Raw executable data/.org ISA guards are now target-owned,

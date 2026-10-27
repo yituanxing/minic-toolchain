@@ -1943,4 +1943,20 @@ else
     echo 'MINIAS_RV_MCINST_EXT=PASS GNU_AS_FD_A_V_CSR_equal=SKIP(toolchain-unavailable)'
 fi
 
+
+# Typed RISC-V instructions now bypass the second legacy operand decode
+# during layout measurement, so XLEN-specific checks must remain in
+# the typed operand parser. Explicit RV32IM shifts cannot use 6-bit shamt.
+for rv32_bad in 'slli a0, a1, 32' 'srli a0, a1, 63' \
+                'srai a0, a1, 35'; do
+    printf '.text\n%s\n' "$rv32_bad" >"$work/rv-typed-xlenshift.s"
+    if "$MINIAS" -march=rv32im -mabi=ilp32 \
+        -o "$work/rv-typed-xlenshift.o" "$work/rv-typed-xlenshift.s" \
+        >"$work/rv-typed-xlenshift.out" 2>"$work/rv-typed-xlenshift.err"; then
+        echo "MiniAS accepted RV32 shift above 31: $rv32_bad" >&2
+        exit 1
+    fi
+done
+echo 'MINIAS_RV_MCINST_MEASURE=PASS typed_fixed_4B=1 RV32_shamt_rejections=3'
+
 echo "MINIAS_A0=PASS objects=30 abi_flags=3 format=ELF64-RISCV-ET_REL relocations=23 strings=2 pseudos=17 previous=3 subsection=2 numeric_labels=18 ecall=1 isa_next=13 csr_amo=8 sfence_vma=3 fence_i=1 vsetvl=1 vsetvli=1 vmv_v_i=4 rept=2 nested_rept=1 irp=4 section_stack=1 org=3 local_difference=1 lr_sc=2 inline_labels=2 branch_pseudos=8 extern=1 symbol_minus_dot=4 symbol_difference=1 absolute32=1 jal=2 jal_subsection=1 high_numeric_labels=2 u64_data=3 raw_insn=4 set_alias=3 move=1 numeric_zero=1 immediate_product=2 shift_immediate=1 incbin=1 align_expr=1 native_expr=6 native_zbb_tail_memexpr=1 native_jalr_symbol_load=1 native_forward_short=1 native_mixed_macro=1 native_divided_difference=1 native_symbol_addend_expr=1 native_add_sub_immediate=1 native_cfi_boundary=1 native_gas_forms=1 native_set_size=1 native_macro_comma=1 native_macro_quotes=1 pic_la_got=1 sext_w=1 macro=4 conditional=1"
