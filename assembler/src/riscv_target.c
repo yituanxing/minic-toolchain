@@ -314,7 +314,9 @@ static bool riscv_measure(const MiniAs *as, const char *op, const char *args,
         *size = 4U;
         return true;
     }
-    return minias_riscv_measure(as->strict_i_xlen, op, args, size, reason, cap);
+    /* XLEN, not the optional strict-base-I validator flag, determines
+     * RV32 li materialization width even on rv32im/rv32gc profiles. */
+    return minias_riscv_measure(as->target_xlen, op, args, size, reason, cap);
 }
 
 

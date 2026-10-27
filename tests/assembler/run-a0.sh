@@ -2096,4 +2096,85 @@ for invalid in 'ld a0, 2048(a1)' 'sd a0, -2049(a1)' \
 done
 echo 'MINIAS_RV_MCINST_MEMORY_RANGE=PASS GPR_offset_and_register=4'
 
+
+# Variable-length LI and PIC/NOPIC multiword address pseudos must be emitted
+# from the persisted MCInst, not reparsed from source in the backend. Validate
+# actual ELF relocation kinds/addends plus GNU AS machine-code equality.
+cat >"$work/riscv-multi-mcinst.s" <<'EOF_RV_MULTI'
+.option norelax
+.text
+.globl typed_multi
+typed_multi:
+    li a0, 2047
+    li a1, -2048
+    li a2, 2048
+    li a3, 0x12345678
+    call external_function
+    tail external_function
+    lla a4, external_data + 8
+.option pic
+    la a5, external_data
+.option nopic
+    la a6, external_data + 4
+    ret
+EOF_RV_MULTI
+"$MINIAS" -o "$work/riscv-multi-mcinst.o" "$work/riscv-multi-mcinst.s"
+readelf -Wr "$work/riscv-multi-mcinst.o" >"$work/riscv-multi-mcinst.reloc"
+test "$(grep -c 'R_RISCV_CALL_PLT' "$work/riscv-multi-mcinst.reloc")" -eq 2
+test "$(grep -c 'R_RISCV_PCREL_HI20' "$work/riscv-multi-mcinst.reloc")" -eq 2
+test "$(grep -c 'R_RISCV_GOT_HI20' "$work/riscv-multi-mcinst.reloc")" -eq 1
+test "$(grep -c 'R_RISCV_PCREL_LO12_I' "$work/riscv-multi-mcinst.reloc")" -eq 3
+if command -v riscv64-linux-gnu-as >/dev/null 2>&1 &&
+   command -v riscv64-linux-gnu-objcopy >/dev/null 2>&1; then
+    riscv64-linux-gnu-as -march=rv64im -mabi=lp64 \
+        -o "$work/riscv-multi-mcinst.gnu.o" "$work/riscv-multi-mcinst.s"
+    riscv64-linux-gnu-objcopy -j .text -O binary \
+        "$work/riscv-multi-mcinst.o" "$work/riscv-multi-mcinst.bin"
+    riscv64-linux-gnu-objcopy -j .text -O binary \
+        "$work/riscv-multi-mcinst.gnu.o" "$work/riscv-multi-mcinst.gnu.bin"
+    cmp "$work/riscv-multi-mcinst.bin" "$work/riscv-multi-mcinst.gnu.bin"
+    echo 'MINIAS_RV_MULTI_MCINST=PASS GNU_AS_bytes_equal=1 reloc_CALL_GOT_PCREL=8'
+else
+    echo 'MINIAS_RV_MULTI_MCINST=PASS GNU_AS=SKIP(toolchain-unavailable) reloc=8'
+fi
+cat >"$work/riscv-multi-rv32.s" <<'EOF_RV_MULTI_32'
+.text
+.globl rv32_multi
+rv32_multi:
+    li a0, 0x80000000
+    li a1, -2147483648
+    li a2, 0x7fffffff
+    ret
+EOF_RV_MULTI_32
+"$MINIAS" -march=rv32im -mabi=ilp32 \
+    -o "$work/riscv-multi-rv32.o" "$work/riscv-multi-rv32.s"
+if command -v riscv64-linux-gnu-as >/dev/null 2>&1 &&
+   command -v riscv64-linux-gnu-objcopy >/dev/null 2>&1; then
+    riscv64-linux-gnu-as -march=rv32im -mabi=ilp32 \
+        -o "$work/riscv-multi-rv32.gnu.o" "$work/riscv-multi-rv32.s"
+    riscv64-linux-gnu-objcopy -j .text -O binary \
+        "$work/riscv-multi-rv32.o" "$work/riscv-multi-rv32.bin"
+    riscv64-linux-gnu-objcopy -j .text -O binary \
+        "$work/riscv-multi-rv32.gnu.o" "$work/riscv-multi-rv32.gnu.bin"
+    cmp "$work/riscv-multi-rv32.bin" "$work/riscv-multi-rv32.gnu.bin"
+fi
+for invalid in 'li a0' 'li x32, 1' 'li a0, bad_symbol' \
+               'call' 'tail a0, external_function' \
+               'lla x32, external_data' 'la a0'; do
+    printf '.text\n%s\n' "$invalid" >"$work/riscv-multi-bad.s"
+    if "$MINIAS" -o "$work/riscv-multi-bad.o" "$work/riscv-multi-bad.s" \
+        >"$work/riscv-multi-bad.out" 2>"$work/riscv-multi-bad.err"; then
+        echo "MiniAS accepted invalid variable pseudo MCInst: $invalid" >&2
+        exit 1
+    fi
+done
+printf '.text\nli a0, 0x100000000\n' >"$work/riscv-multi-rv32-overflow.s"
+if "$MINIAS" -march=rv32im -mabi=ilp32 \
+    -o "$work/riscv-multi-rv32-overflow.o" \
+    "$work/riscv-multi-rv32-overflow.s" >/dev/null 2>&1; then
+    echo 'MiniAS accepted out-of-width RV32IM li' >&2
+    exit 1
+fi
+echo 'MINIAS_RV_MULTI_MCINST_NEGATIVE=PASS invalid_operands=7 rv32_overflow=1'
+
 echo "MINIAS_A0=PASS objects=30 abi_flags=3 format=ELF64-RISCV-ET_REL relocations=23 strings=2 pseudos=17 previous=3 subsection=2 numeric_labels=18 ecall=1 isa_next=13 csr_amo=8 sfence_vma=3 fence_i=1 vsetvl=1 vsetvli=1 vmv_v_i=4 rept=2 nested_rept=1 irp=4 section_stack=1 org=3 local_difference=1 lr_sc=2 inline_labels=2 branch_pseudos=8 extern=1 symbol_minus_dot=4 symbol_difference=1 absolute32=1 jal=2 jal_subsection=1 high_numeric_labels=2 u64_data=3 raw_insn=4 set_alias=3 move=1 numeric_zero=1 immediate_product=2 shift_immediate=1 incbin=1 align_expr=1 native_expr=6 native_zbb_tail_memexpr=1 native_jalr_symbol_load=1 native_forward_short=1 native_mixed_macro=1 native_divided_difference=1 native_symbol_addend_expr=1 native_add_sub_immediate=1 native_cfi_boundary=1 native_gas_forms=1 native_set_size=1 native_macro_comma=1 native_macro_quotes=1 pic_la_got=1 sext_w=1 macro=4 conditional=1"

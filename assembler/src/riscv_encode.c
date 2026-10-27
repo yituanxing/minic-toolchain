@@ -622,17 +622,6 @@ static bool append_u32(MiniAs *as, int section, uint32_t value) {
     return minias_section_append(as, section, bytes, sizeof(bytes));
 }
 
-static bool require_reg(MiniAs *as, const MiniAsStmt *stmt, const char *text, int *out) {
-    int value = reg_number(text);
-
-    if (value < 0) {
-        minias_set_error(as, "bad-register:%s:line=%zu", text, stmt->line);
-        return false;
-    }
-    *out = value;
-    return true;
-}
-
 static bool parse_vsetvli_vtype(char operands[][128],
                                   size_t count,
                                   uint32_t *vtypei) {
@@ -1196,6 +1185,75 @@ oom:
     return false;
 }
 
+
+/* GNU multiword pseudos retain one layout-sized fragment, but their
+ * registers, bit-patterns and symbolic expressions are parsed only once.
+ * The serializer must never re-split their original source strings. */
+static bool rv_parse_multi_mc(MiniAs *as, MiniAsStmt *stmt,
+                              char ops[][128], size_t n, bool *handled) {
+    const char *op = stmt->op;
+    MiniAsMCInst *m;
+    MiniAsSymbolExpr expr;
+    uint64_t bits = 0U;
+    bool fits = false;
+    int64_t signed_value = 0;
+    int rd = -1;
+    unsigned family, slots;
+    *handled = true;
+    if (strcmp(op, "li") == 0) {
+        if (n != 2U || (rd = reg_number(ops[0])) < 0 ||
+            !parse_li_bits(ops[1], &bits, &fits, &signed_value))
+            goto invalid;
+        family = RV_MC_LI;
+        slots = 3U;
+    } else if (strcmp(op, "call") == 0 || strcmp(op, "tail") == 0) {
+        if (n != 1U || !parse_call_target(ops[0], &expr)) goto invalid;
+        family = strcmp(op, "call") == 0 ? RV_MC_CALL : RV_MC_TAIL;
+        slots = 1U;
+    } else if (strcmp(op, "lla") == 0 || strcmp(op, "la") == 0) {
+        if (n != 2U || (rd = reg_number(ops[0])) < 0 ||
+            !minias_parse_symbol_addend(ops[1], &expr)) goto invalid;
+        family = RV_MC_LA;
+        slots = 2U;
+    } else {
+        *handled = false;
+        return true;
+    }
+    m = calloc(1U, sizeof(*m) + slots * sizeof(*m->operands));
+    if (m == NULL) {
+        minias_set_error(as, "out-of-memory:riscv-multi-mcinst");
+        return false;
+    }
+    m->opcode = family;
+    m->count = slots;
+    if (family == RV_MC_LI) {
+        m->encoding = fits ? 1U : 0U;
+        rv_set_reg(&m->operands[0], rd);
+        rv_set_imm(&m->operands[1], (int64_t)bits);
+        rv_set_imm(&m->operands[2], signed_value);
+    } else {
+        unsigned symbol_index = family == RV_MC_LA ? 1U : 0U;
+        if (family == RV_MC_LA) {
+            rv_set_reg(&m->operands[0], rd);
+            m->encoding = strcmp(op, "la") == 0 ? 1U : 0U;
+        }
+        m->operands[symbol_index].symbol = malloc(sizeof(expr));
+        if (m->operands[symbol_index].symbol == NULL) {
+            free(m);
+            minias_set_error(as, "out-of-memory:riscv-multi-symbol");
+            return false;
+        }
+        *m->operands[symbol_index].symbol = expr;
+        m->operands[symbol_index].kind = MINIAS_MC_SYMBOL;
+    }
+    stmt->mcinst = m;
+    return true;
+invalid:
+    minias_set_error(as, "bad-riscv-pseudo-mcinst:%s:%s:line=%zu",
+                     op, stmt->args, stmt->line);
+    return false;
+}
+
 static bool rv_parse_vector_mc(MiniAs *as, MiniAsStmt *stmt,
                                char operands[][128], size_t count,
                                bool *handled) {
@@ -1494,6 +1552,8 @@ bool minias_riscv_parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
         count = split_operands(stmt->args, operands, 8U);
         if (!rv_parse_simple_mc(as, stmt, operands, count, &handled) ||
             handled) return as->error[0] == '\0';
+        if (!rv_parse_multi_mc(as, stmt, operands, count, &handled) ||
+            handled) return as->error[0] == '\0';
         if (!rv_parse_vector_mc(as, stmt, operands, count, &handled) ||
             handled) return as->error[0] == '\0';
         if (!rv_parse_atomic_mc(as, stmt, operands, count, &handled) ||
@@ -1704,8 +1764,146 @@ oom:
     return false;
 }
 
+
+/* Typed variable-size RISC-V fragments: exactly one symbol/number parse
+ * happened at statement creation. Layout owns size; this routine writes
+ * the same byte stream, relocations and PIC GOT selection as the proven
+ * legacy pseudo expander, without reopening the instruction text. */
+static bool rv_encode_multi_mc(MiniAs *as, const MiniAsStmt *stmt) {
+    const MiniAsMCInst *m = stmt->mcinst;
+    if (m->opcode == RV_MC_LI) {
+        uint64_t bits = m->operands[1].immediate;
+        int64_t signed_value = (int64_t)m->operands[2].immediate;
+        bool fits_signed32 = m->encoding != 0U;
+        int rd = (int)m->operands[0].reg;
+        if (as->target_xlen == 32U) {
+            int64_t rv32_value, hi, lo;
+            if (!rv32_li_value(bits, &rv32_value)) {
+                minias_set_error(as, "rv32i-li-overflows-32-bits:line=%zu",
+                                 stmt->line);
+                return false;
+            }
+            if (rv32_value >= -2048 && rv32_value <= 2047)
+                return append_u32(as, stmt->section,
+                                  enc_i(0x13U, rd, 0U, 0, rv32_value));
+            hi = (rv32_value + INT64_C(2048)) >> 12;
+            lo = rv32_value - hi * INT64_C(4096);
+            if (!append_u32(as, stmt->section,
+                            0x37U | ((uint32_t)rd << 7U) |
+                            (((uint32_t)hi & UINT32_C(0xfffff)) << 12U)))
+                return false;
+            return lo == 0 || append_u32(as, stmt->section,
+                                         enc_i(0x13U, rd, 0U, rd, lo));
+        }
+        if (fits_signed32) {
+            int64_t hi, lo;
+            if (signed_value >= -2048 && signed_value <= 2047)
+                return append_u32(as, stmt->section,
+                                  enc_i(0x13U, rd, 0U, 0, signed_value));
+            hi = (signed_value + INT64_C(2048)) >> 12;
+            lo = signed_value - hi * INT64_C(4096);
+            if (!append_u32(as, stmt->section,
+                            0x37U | ((uint32_t)rd << 7U) |
+                            (((uint32_t)hi & UINT32_C(0xfffff)) << 12U)))
+                return false;
+            return append_u32(as, stmt->section,
+                              enc_i(0x1bU, rd, 0U, rd, lo));
+        }
+        {
+            int index = 7, i;
+            uint64_t top;
+            while (index > 0 &&
+                   ((bits >> ((unsigned)index * 8U)) & UINT64_C(0xff)) == 0U)
+                --index;
+            top = (bits >> ((unsigned)index * 8U)) & UINT64_C(0xff);
+            if (!append_u32(as, stmt->section,
+                            enc_i(0x13U, rd, 0U, 0, (int64_t)top)))
+                return false;
+            for (i = index - 1; i >= 0; --i) {
+                uint64_t byte = (bits >> ((unsigned)i * 8U)) & UINT64_C(0xff);
+                if (!append_u32(as, stmt->section,
+                                enc_i(0x13U, rd, 1U, rd, 8)))
+                    return false;
+                if (byte != 0U &&
+                    !append_u32(as, stmt->section,
+                                enc_i(0x13U, rd, 0U, rd, (int64_t)byte)))
+                    return false;
+            }
+            return true;
+        }
+    }
+
+    if (m->opcode == RV_MC_CALL || m->opcode == RV_MC_TAIL) {
+        const MiniAsSymbolExpr *expr = m->operands[0].symbol;
+        if (expr == NULL) {
+            minias_set_error(as, "internal:riscv-call-symbol-missing");
+            return false;
+        }
+        if (m->opcode == RV_MC_CALL) {
+            if (!append_u32(as, stmt->section, 0x00000097U) ||
+                !append_u32(as, stmt->section,
+                            enc_i(0x67U, 1, 0U, 1, 0))) return false;
+        } else {
+            if (!append_u32(as, stmt->section, 0x00000317U) ||
+                !append_u32(as, stmt->section,
+                            enc_i(0x67U, 0, 0U, 6, 0))) return false;
+        }
+        return minias_add_fixup(as, stmt->section, stmt->offset,
+                                MINIAS_FIXUP_RV_CALL_PLT, 4U,
+                                expr->name, expr->addend);
+    }
+
+    if (m->opcode == RV_MC_LA) {
+        const MiniAsSymbolExpr *expr = m->operands[1].symbol;
+        MiniAsSymbol *anchor, *target;
+        char name[96];
+        int rd = (int)m->operands[0].reg;
+        bool use_got;
+        if (expr == NULL) {
+            minias_set_error(as, "internal:riscv-la-symbol-missing");
+            return false;
+        }
+        target = minias_get_symbol(as, expr->name, false);
+        /* Linux early boot: NOPIC is default; PIC external la may use a
+         * GOT reference only if the source did not request an addend. */
+        use_got = (stmt->target_options & MINIAS_RISCV_OPTION_PIC) != 0U &&
+                  m->encoding != 0U && expr->addend == 0 &&
+                  (target == NULL || !target->defined);
+        (void)snprintf(name, sizeof(name), ".Lminias_pcrel_%zu",
+                       ++as->pcrel_anchor_counter);
+        anchor = minias_get_symbol(as, name, true);
+        if (anchor == NULL) return false;
+        anchor->defined = true;
+        anchor->section = stmt->section;
+        anchor->subsection = stmt->subsection;
+        anchor->value = stmt->offset;
+        anchor->bind = MINIAS_STB_LOCAL;
+
+        if (!append_u32(as, stmt->section,
+                        0x17U | ((uint32_t)rd << 7U))) return false;
+        if (use_got) {
+            if (!append_u32(as, stmt->section,
+                            enc_i(0x03U, rd, 3U, rd, 0))) return false;
+        } else if (!append_u32(as, stmt->section,
+                               enc_i(0x13U, rd, 0U, rd, 0))) return false;
+        return minias_add_fixup(as, stmt->section, stmt->offset,
+                                use_got ? MINIAS_FIXUP_RV_GOT_HI20 :
+                                          MINIAS_FIXUP_RV_PCREL_HI20,
+                                4U, expr->name, expr->addend) &&
+               minias_add_fixup(as, stmt->section, stmt->offset + 4U,
+                                MINIAS_FIXUP_RV_PCREL_LO12_I, 4U, name, 0);
+    }
+
+    minias_set_error(as, "internal:unknown-riscv-multi-mcinst:%u",
+                     m->opcode);
+    return false;
+}
+
 static bool rv_encode_mcinst(MiniAs *as, const MiniAsStmt *stmt) {
     const MiniAsMCInst *m=stmt->mcinst;
+    if (m->opcode == RV_MC_LI || m->opcode == RV_MC_CALL ||
+        m->opcode == RV_MC_TAIL || m->opcode == RV_MC_LA)
+        return rv_encode_multi_mc(as, stmt);
     int rd=(int)m->operands[0].reg,rs1=0,rs2=0;
     int64_t imm=0,distance;
     uint32_t base=m->encoding,code=0U;
@@ -1837,216 +2035,19 @@ static bool rv_encode_mcinst(MiniAs *as, const MiniAsStmt *stmt) {
 }
 
 bool minias_riscv_encode(MiniAs *as, const MiniAsStmt *stmt) {
-    if (stmt->mcinst != NULL) return rv_encode_mcinst(as,stmt);
-    char operands[8][128];
-    size_t count = split_operands(stmt->args, operands, 8U);
+    if (stmt->mcinst != NULL) return rv_encode_mcinst(as, stmt);
+    /* Raw ISA escape is deliberately target-owned, not a generic opcode.
+     * The selected strict-I profile still verifies the final machine word. */
     if (strcmp(stmt->op, ".insn") == 0) {
-        uint32_t raw_word;
-        if (!parse_raw_insn_directive(stmt->args, &raw_word)) {
+        uint32_t word;
+        if (!parse_raw_insn_directive(stmt->args, &word)) {
             minias_set_error(as, "bad-operands:.insn:%s:line=%zu",
-                             stmt->args,
-                             stmt->line);
+                             stmt->args, stmt->line);
             return false;
         }
-        return append_u32(as, stmt->section, raw_word);
+        return append_u32(as, stmt->section, word);
     }
-    int rd;
-
-    if (strcmp(stmt->op, "li") == 0) {
-        uint64_t bits;
-        bool fits_signed32;
-        int64_t signed_value;
-
-        if (count != 2U || !require_reg(as, stmt, operands[0], &rd) ||
-            !parse_li_bits(operands[1], &bits, &fits_signed32, &signed_value)) {
-            return false;
-        }
-        if (as->strict_i_xlen == 32U) {
-            int64_t rv32_value;
-            int64_t hi;
-            int64_t lo;
-            if (!rv32_li_value(bits, &rv32_value)) {
-                minias_set_error(as, "rv32i-li-overflows-32-bits:line=%zu",
-                                 stmt->line);
-                return false;
-            }
-            if (rv32_value >= -2048 && rv32_value <= 2047)
-                return append_u32(as, stmt->section,
-                                  enc_i(0x13U, rd, 0U, 0, rv32_value));
-            hi = (rv32_value + INT64_C(2048)) >> 12;
-            lo = rv32_value - hi * INT64_C(4096);
-            if (!append_u32(as, stmt->section,
-                            0x37U | ((uint32_t)rd << 7U) |
-                            (((uint32_t)hi & UINT32_C(0xfffff)) << 12U)))
-                return false;
-            return lo == 0 || append_u32(
-                as, stmt->section, enc_i(0x13U, rd, 0U, rd, lo));
-        }
-        if (fits_signed32) {
-            int64_t hi;
-            int64_t lo;
-
-            if (signed_value >= -2048 && signed_value <= 2047) {
-                return append_u32(as,
-                                  stmt->section,
-                                  enc_i(0x13U, rd, 0U, 0, signed_value));
-            }
-            hi = (signed_value + 0x800) >> 12;
-            lo = signed_value - (hi << 12);
-            if (!append_u32(as,
-                            stmt->section,
-                            0x37U | ((uint32_t)rd << 7U) |
-                                (((uint32_t)hi & 0xfffffU) << 12U))) {
-                return false;
-            }
-            return append_u32(as,
-                              stmt->section,
-                              enc_i(0x1bU, rd, 0U, rd, lo));
-        }
-        {
-            int byte_index = 7;
-            int i;
-            uint64_t top;
-
-            while (byte_index > 0 &&
-                   ((bits >> ((unsigned int)byte_index * 8U)) &
-                    UINT64_C(0xff)) == 0U) {
-                --byte_index;
-            }
-            top = (bits >> ((unsigned int)byte_index * 8U)) & UINT64_C(0xff);
-            if (!append_u32(as,
-                            stmt->section,
-                            enc_i(0x13U, rd, 0U, 0, (int64_t)top))) {
-                return false;
-            }
-            for (i = byte_index - 1; i >= 0; --i) {
-                uint64_t byte =
-                    (bits >> ((unsigned int)i * 8U)) & UINT64_C(0xff);
-
-                if (!append_u32(as,
-                                stmt->section,
-                                enc_i(0x13U, rd, 1U, rd, 8))) {
-                    return false;
-                }
-                if (byte != 0U &&
-                    !append_u32(as,
-                                stmt->section,
-                                enc_i(0x13U, rd, 0U, rd, (int64_t)byte))) {
-                    return false;
-                }
-            }
-            return true;
-        }
-    }
-    if (strcmp(stmt->op, "call") == 0) {
-        MiniAsSymbolExpr expr;
-
-        if (count != 1U || !parse_call_target(operands[0], &expr)) {
-            minias_set_error(as,
-                             "unsupported-expression:%s:line=%zu",
-                             stmt->args,
-                             stmt->line);
-            return false;
-        }
-        if (!append_u32(as, stmt->section, 0x00000097U) ||
-            !append_u32(as, stmt->section, enc_i(0x67U, 1, 0U, 1, 0))) {
-            return false;
-        }
-        return minias_add_fixup(as,
-                                     stmt->section,
-                                     stmt->offset,
-                                     MINIAS_FIXUP_RV_CALL_PLT,
-                                     4U,
-                                     expr.name,
-                                     expr.addend);
-    }
-    if (strcmp(stmt->op, "tail") == 0) {
-        MiniAsSymbolExpr expr;
-
-        if (count != 1U || !parse_call_target(operands[0], &expr)) {
-            minias_set_error(as,
-                             "unsupported-expression:%s:line=%zu",
-                             stmt->args,
-                             stmt->line);
-            return false;
-        }
-        if (!append_u32(as, stmt->section, 0x00000317U) ||
-            !append_u32(as, stmt->section, enc_i(0x67U, 0, 0U, 6, 0))) {
-            return false;
-        }
-        return minias_add_fixup(as,
-                                     stmt->section,
-                                     stmt->offset,
-                                     MINIAS_FIXUP_RV_CALL_PLT,
-                                     4U,
-                                     expr.name,
-                                     expr.addend);
-    }
-
-    if (strcmp(stmt->op, "lla") == 0 || strcmp(stmt->op, "la") == 0) {
-        MiniAsSymbolExpr expr;
-        MiniAsSymbol *anchor;
-        MiniAsSymbol *target_symbol;
-        char anchor_name[96];
-        bool use_got;
-
-        if (count != 2U || !require_reg(as, stmt, operands[0], &rd) ||
-            !minias_parse_symbol_addend(operands[1], &expr)) {
-            minias_set_error(as, "unsupported-expression:%s:line=%zu", stmt->args, stmt->line);
-            return false;
-        }
-        target_symbol = minias_get_symbol(as, expr.name, false);
-        /* GNU as defaults to NOPIC. The .option pic/nopic directive is
-         * scoped and saved per statement. A bare 'la external_symbol' in
-         * the Linux kernel must use PCREL_HI20 + ADDI, not GOT_HI20 + LD:
-         * the GOT is unavailable during RISC-V early boot. In explicit
-         * PIC mode an undefined external can use GOT_HI20, but only when
-         * no nonzero addend is requested by the source. */
-        use_got = (stmt->target_options & MINIAS_RISCV_OPTION_PIC) != 0U &&
-                  strcmp(stmt->op, "la") == 0 && expr.addend == 0 &&
-                  (target_symbol == NULL || !target_symbol->defined);
-
-        (void)snprintf(anchor_name,
-                       sizeof(anchor_name),
-                       ".Lminias_pcrel_%zu",
-                       ++as->pcrel_anchor_counter);
-        anchor = minias_get_symbol(as, anchor_name, true);
-        if (anchor == NULL) {
-            return false;
-        }
-        anchor->defined = true;
-        anchor->section = stmt->section;
-        anchor->value = stmt->offset;
-        anchor->bind = MINIAS_STB_LOCAL;
-
-        if (!append_u32(as, stmt->section, 0x17U | ((uint32_t)rd << 7U))) {
-            return false;
-        }
-        if (use_got) {
-            if (!append_u32(as, stmt->section, enc_i(0x03U, rd, 3U, rd, 0))) {
-                return false;
-            }
-        } else if (!append_u32(as, stmt->section, enc_i(0x13U, rd, 0U, rd, 0))) {
-            return false;
-        }
-
-        return minias_add_fixup(as,
-                                     stmt->section,
-                                     stmt->offset,
-                                     use_got ? MINIAS_FIXUP_RV_GOT_HI20
-                                             : MINIAS_FIXUP_RV_PCREL_HI20,
-                                     4U,
-                                     expr.name,
-                                     expr.addend) &&
-               minias_add_fixup(as,
-                                     stmt->section,
-                                     stmt->offset + 4U,
-                                     MINIAS_FIXUP_RV_PCREL_LO12_I,
-                                     4U,
-                                     anchor_name,
-                                     0);
-    }
-
-    minias_set_error(as, "unsupported-instruction:%s:line=%zu", stmt->op, stmt->line);
+    minias_set_error(as, "unsupported-instruction:%s:line=%zu",
+                     stmt->op, stmt->line);
     return false;
 }

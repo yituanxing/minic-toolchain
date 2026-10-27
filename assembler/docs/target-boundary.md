@@ -48,9 +48,16 @@ Explicit -march=rv32i/rv64i retains existing fail-closed machine-code checks.
    fixups without reparsing operand text. The old ~6 KB duplicate GPR
    memory emitter is deleted. Ordinary signed memory offsets now get
    12-bit range checking at the target operand boundary.
-   Multiword li/call/tail/la and raw .insn retain their legacy measurement
-   and encoding until their deferred target fragments are completed. RV32
-   shift widths are validated at the typed parser.
+   Variable-size `li`, `call`, `tail`, `la` and `lla` now parse
+   into persistent, typed MCInst (registers, exact unsigned 64-bit constant,
+   and symbolic addends), and only their target-owned layout-size oracle
+   remains; the entire duplicate text-parsing/emission tail is removed.
+   The typed encoder retains PIC/NOPIC GOT versus PCREL decisions and
+   emits CALL_PLT, GOT_HI20, PCREL_HI20 and LO12_I fixups. RV32 LI width
+   is determined by the actual target XLEN on every profile, including
+   RV32IM—not merely by enabling the strict-I validator. Raw `.insn` is
+   now the only remaining non-MCInst RISC-V instruction emission escape.
+   RV32 shift widths are validated at the typed parser.
    Vector register classes are distinguished from integer/FP registers.
    Comment stripping is target-configurable and .option
    dispatch belongs to the RISC-V target; common parser still owns GNU-style
