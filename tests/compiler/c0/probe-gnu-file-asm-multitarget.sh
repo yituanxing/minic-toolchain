@@ -335,6 +335,68 @@ SRC
     qemu-loongarch64 -L /usr/loongarch64-linux-gnu "$work/dbar-max.elf"
     echo 'MINIC_LOONGARCH64_DBAR_GNU_QEMU=PASS tested=2 rejected=3'
 
+    # Original arch/loongarch/include/asm/irqflags.h uses privileged CRMD CSR.
+    # GNU and MiniC must generate *real* csrrd/csrxchg machine instructions.
+    # Privileged instructions cannot run in QEMU-user: object/GAS comparison
+    # is the oracle here; every negative template must fail at -S.
+    cat > "$work/loong-irq-csr.i" <<'SRC'
+typedef unsigned int u32;
+u32 read_flags(void) {
+    u32 flags;
+    __asm__ __volatile__("csrrd %[val], %[reg]\n\t"
+                         : [val] "=r"(flags)
+                         : [reg] "i"(0) : "memory");
+    return flags;
+}
+u32 save_flags(void) {
+    u32 flags = 0;
+    register u32 mask asm("t0") = 4;
+    __asm__ __volatile__("csrxchg %[val], %[mask], %[reg]\n\t"
+                         : [val] "+r"(flags)
+                         : [mask] "r"(mask), [reg] "i"(0) : "memory");
+    return flags;
+}
+void restore_flags(unsigned long f) {
+    register u32 mask asm("t0") = 4;
+    __asm__ __volatile__("csrxchg %[val], %[mask], %[reg]\n\t"
+                         : [val] "+r"(f)
+                         : [mask] "r"(mask), [reg] "i"(0) : "memory");
+}
+int main(void) { return 0; }
+SRC
+    "$cross_cc" -c -x c "$work/loong-irq-csr.i" -o "$work/loong-irq-csr.gnu.o"
+    "$MINIC_CC" --target=loongarch64-linux -S "$work/loong-irq-csr.i" \
+        -o "$work/loong-irq-csr.minic.s"
+    grep -Fq 'csrrd $t1, 0' "$work/loong-irq-csr.minic.s"
+    grep -Fq 'csrxchg $t1, $t0, 0' "$work/loong-irq-csr.minic.s"
+    "$cross_cc" -c -x assembler "$work/loong-irq-csr.minic.s" \
+        -o "$work/loong-irq-csr.minic.o"
+    for flavor in gnu minic; do
+        loongarch64-linux-gnu-objdump -d "$work/loong-irq-csr.$flavor.o" |
+            grep -q 'csrxchg'
+        loongarch64-linux-gnu-objdump -d "$work/loong-irq-csr.$flavor.o" |
+            grep -q 'csrrd'
+    done
+    for invalid in csr-index register-constraint opcode-suffix nonconstant; do
+        case "$invalid" in
+            csr-index) asm='__asm__ __volatile__("csrrd %[val], %[reg]" : [val] "=r"(flags) : [reg] "i"(1) : "memory");';;
+            register-constraint) asm='__asm__ __volatile__("csrrd %[val], %[reg]" : [val] "=m"(flags) : [reg] "i"(0) : "memory");';;
+            opcode-suffix) asm='__asm__ __volatile__("csrrd %[val], %[reg]; syscall 0" : [val] "=r"(flags) : [reg] "i"(0) : "memory");';;
+            nonconstant) asm='__asm__ __volatile__("csrrd %[val], %[reg]" : [val] "=r"(flags) : [reg] "i"(n) : "memory");';;
+        esac
+        printf 'int main(int n) { unsigned int flags=0; %s return (int)flags; }\n' \
+            "$asm" > "$work/loong-csr-bad-$invalid.i"
+        if "$MINIC_CC" --target=loongarch64-linux -S \
+            "$work/loong-csr-bad-$invalid.i" \
+            -o "$work/loong-csr-bad-$invalid.s" \
+            >"$work/loong-csr-bad-$invalid.out" \
+            2>"$work/loong-csr-bad-$invalid.err"; then
+            echo "FAIL unsafe Loong CRMD CSR accepted: $invalid" >&2
+            exit 1
+        fi
+    done
+    echo 'MINIC_LOONGARCH64_LINUX_CSR_CRMD_GNU_AS=PASS operations=2 negative=4 privileged_only=1'
+
     # Exact original upstream Linux atomic.h +ZB/r store-only hardware AMO
     # family. One Common Core structured memory-RMW+scalar-input pipeline,
     # target-owned LP64D machine emission and independent GNU/QEMU oracle.
