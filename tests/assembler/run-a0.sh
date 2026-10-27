@@ -1683,4 +1683,61 @@ for bad in 'addi a7, a0, 1' 'addi x16, x1, 1' 'addi s2, s0, 1'; do
 done
 echo 'MINIAS_ISA_XLEN_RV32E=PASS rv32im_m=1 rv64_ops_blocked=3 rv32e_registers_blocked=3'
 
+
+# Relaxation is now in-place for stable fragment sources: instruction growth
+# must re-evaluate .size end anchors and .p2align padding without a reparse.
+cat >"$work/fragment-inplace.s" <<'EOF_FRAG'
+.text
+.globl fragment_inplace
+.type fragment_inplace, @function
+fragment_inplace:
+    beq a0, a1, far_fragment
+    nop
+.size fragment_inplace, .-fragment_inplace
+.p2align 4
+.globl fragment_aligned
+fragment_aligned:
+    nop
+.space 5000
+far_fragment:
+    ret
+EOF_FRAG
+MINIAS_TRACE_RELAYOUT=1 "$MINIAS" -o "$work/fragment-inplace.o" \
+    "$work/fragment-inplace.s" 2>"$work/fragment-inplace.trace"
+grep -q '^minias-fragment-relayout:inplace-passes=' \
+    "$work/fragment-inplace.trace" || {
+    echo 'MiniAS failed to use persistent in-place fragment layout' >&2
+    cat "$work/fragment-inplace.trace" >&2
+    exit 1
+}
+frag_size="$(readelf -sW "$work/fragment-inplace.o" |
+    awk '$NF == "fragment_inplace" { print $3 }')"
+frag_align="$(readelf -sW "$work/fragment-inplace.o" |
+    awk '$NF == "fragment_aligned" { print $2 }')"
+test "$frag_size" = '12' && test "$frag_align" = '0000000000000010' || {
+    echo "MiniAS fragment .size/.p2align shifted: size=$frag_size align=$frag_align" >&2
+    exit 1
+}
+echo 'MINIAS_FRAGMENT_INPLACE=PASS branch_growth=4 size=12 aligned_offset=16'
+
+# Source with position-dependent .org must keep the full-reparse fallback.
+cat >"$work/fragment-org-fallback.s" <<'EOF_FRAG_ORG'
+.text
+.globl fragment_org_fallback
+fragment_org_fallback:
+    beq a0, a1, far_org
+.org 32
+.space 5000
+far_org:
+    ret
+EOF_FRAG_ORG
+MINIAS_TRACE_RELAYOUT=1 "$MINIAS" -o "$work/fragment-org-fallback.o" \
+    "$work/fragment-org-fallback.s" 2>"$work/fragment-org-fallback.trace"
+if grep -q 'minias-fragment-relayout:inplace-passes=' \
+    "$work/fragment-org-fallback.trace"; then
+    echo 'MiniAS performed unsafe in-place .org relaxation' >&2
+    exit 1
+fi
+echo 'MINIAS_FRAGMENT_REPARSE_GUARD=PASS position_dependent_org=1'
+
 echo "MINIAS_A0=PASS objects=30 abi_flags=3 format=ELF64-RISCV-ET_REL relocations=23 strings=2 pseudos=17 previous=3 subsection=2 numeric_labels=18 ecall=1 isa_next=13 csr_amo=8 sfence_vma=3 fence_i=1 vsetvl=1 vsetvli=1 vmv_v_i=4 rept=2 nested_rept=1 irp=4 section_stack=1 org=3 local_difference=1 lr_sc=2 inline_labels=2 branch_pseudos=8 extern=1 symbol_minus_dot=4 symbol_difference=1 absolute32=1 jal=2 jal_subsection=1 high_numeric_labels=2 u64_data=3 raw_insn=4 set_alias=3 move=1 numeric_zero=1 immediate_product=2 shift_immediate=1 incbin=1 align_expr=1 native_expr=6 native_zbb_tail_memexpr=1 native_jalr_symbol_load=1 native_forward_short=1 native_mixed_macro=1 native_divided_difference=1 native_symbol_addend_expr=1 native_add_sub_immediate=1 native_cfi_boundary=1 native_gas_forms=1 native_set_size=1 native_macro_comma=1 native_macro_quotes=1 pic_la_got=1 sext_w=1 macro=4 conditional=1"

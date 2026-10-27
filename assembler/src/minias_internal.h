@@ -65,6 +65,13 @@ typedef struct MiniAsSymbol {
     size_t alias_target_index;
     int64_t alias_addend;
     size_t alias_line;
+    /* Location anchors in the parsed fragment stream. Repeated labels and
+     * macro expansions must not use source-line numbers as identities. */
+    bool has_fragment_anchor;
+    size_t fragment_anchor;
+    bool has_size_end_anchor;
+    size_t size_end_anchor;
+    uint64_t size_end_value;
 } MiniAsSymbol;
 
 typedef enum MiniAsStmtKind {
@@ -157,6 +164,7 @@ typedef struct MiniAs {
     size_t macro_expansion_counter;
     size_t macro_expansion_depth;
     bool conditional_active;
+    bool layout_sensitive; /* conservative full-reparse fallback */
     uint32_t target_options;
     uint32_t target_option_stack[64];
     size_t target_option_depth;

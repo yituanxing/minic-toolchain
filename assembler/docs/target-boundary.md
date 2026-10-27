@@ -17,10 +17,13 @@ Explicit -march=rv32i/rv64i retains existing fail-closed machine-code checks.
 1. Implement typed MCInst and target-specific source lexing/directive parsing;
    comment stripping is target-configurable and .option dispatch is owned by the
    RISC-V target; the common parser still owns GNU-style statement grammar.
-2. Replace whole-source statement-size reparsing with persistent MCFragments
-   and typed fixups. The common layout now invokes a target relaxation hook
-   (including range checks and expansion sizes), retaining stable statement
-   ordinals through macro/repeat re-layout.
+2. The common core now has persistent parsed instruction/data/alignment
+   fragments with stable statement identities, target-driven size growth,
+   and in-place branch relaxation for position-independent source. Label,
+   .size and .p2align anchors are updated without reopening the input.
+   Position-dependent .set/.equ/.org/.if conservatively use the historical
+   reparsing fallback. The remaining work is a general typed deferred
+   expression/fixup system that removes this fallback altogether.
 3. Unify symbol-aware absolute expression grammar with the now-shared
    constant/addend evaluator and properly separate Fixup from ELF Relocation.
 4. Explicit -march now checks M/A/F/D/C/V/Zicsr/Zifencei/Zbb opcode

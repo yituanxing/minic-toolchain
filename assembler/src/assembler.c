@@ -1098,6 +1098,8 @@ static bool parse_size(MiniAs *as, char *args, size_t line) {
             return false;
         }
         symbol->size = here - symbol->value;
+        symbol->has_size_end_anchor = true;
+        symbol->size_end_anchor = as->stmt_count;
     }
     return true;
 }
@@ -2791,6 +2793,8 @@ static bool define_label(MiniAs *as, char *label, size_t line) {
     symbol->defined = true;
     symbol->section = as->current_section;
     symbol->subsection = as->current_subsection;
+    symbol->has_fragment_anchor = true;
+    symbol->fragment_anchor = as->stmt_count;
     if (!current_location(as, &symbol->value)) {
         symbol->defined = false;
         return false;
@@ -2812,6 +2816,145 @@ static bool force_long_branch_for_stmt(const MiniAs *as, size_t statement_id) {
 
 /* Layout iteration owns fragment identity and growth bookkeeping. Only
  * target backends know the instruction's displacement range and expansion. */
+
+/* Persistent fragment layout: parsed statements are the fragments. Re-layout
+ * only their offsets and sizes, preserve expanded macro identities, and
+ * relocate label/.size anchors without reopening or reparsing the source.
+ *
+ * Sources containing position-dependent conditionals, .org, .set or .equ
+ * retain the conservative reparsing path until these directives acquire
+ * typed deferred-expression fragments. */
+static bool minias_relayout_fragments(MiniAs *as) {
+    size_t n = as->stmt_count, nsym = as->symbol_count;
+    size_t *start_head = NULL, *end_head = NULL;
+    size_t *start_next = NULL, *end_next = NULL;
+    size_t i;
+    bool ok = false;
+
+    if (n == SIZE_MAX || n + 1U > SIZE_MAX / sizeof(size_t) ||
+        (nsym != 0U && nsym > SIZE_MAX / sizeof(size_t))) {
+        minias_set_error(as, "fragment-anchor-overflow");
+        return false;
+    }
+    start_head = malloc((n + 1U) * sizeof(size_t));
+    end_head = malloc((n + 1U) * sizeof(size_t));
+    start_next = malloc((nsym == 0U ? 1U : nsym) * sizeof(size_t));
+    end_next = malloc((nsym == 0U ? 1U : nsym) * sizeof(size_t));
+    if (start_head == NULL || end_head == NULL ||
+        start_next == NULL || end_next == NULL) {
+        minias_set_error(as, "out-of-memory:fragment-anchors");
+        goto done;
+    }
+    for (i = 0U; i <= n; ++i) {
+        start_head[i] = SIZE_MAX;
+        end_head[i] = SIZE_MAX;
+    }
+    for (i = 0U; i < as->subsection_count; ++i)
+        as->subsections[i].size = 0U;
+
+    for (i = 0U; i < nsym; ++i) {
+        MiniAsSymbol *sym = &as->symbols[i];
+        if (sym->has_fragment_anchor && sym->defined && sym->section >= 0) {
+            size_t anchor = sym->fragment_anchor;
+            if (anchor > n) {
+                minias_set_error(as, "internal:fragment-symbol-anchor:%s",
+                                 sym->name);
+                goto done;
+            }
+            start_next[i] = start_head[anchor];
+            start_head[anchor] = i;
+        }
+        if (sym->has_size_end_anchor) {
+            size_t anchor = sym->size_end_anchor;
+            if (anchor > n) {
+                minias_set_error(as, "internal:fragment-size-anchor:%s",
+                                 sym->name);
+                goto done;
+            }
+            end_next[i] = end_head[anchor];
+            end_head[anchor] = i;
+        }
+    }
+
+    for (i = 0U; i <= n; ++i) {
+        size_t index;
+        for (index = start_head[i]; index != SIZE_MAX;
+             index = start_next[index]) {
+            MiniAsSymbol *sym = &as->symbols[index];
+            MiniAsSubsection *sub =
+                find_subsection(as, sym->section, sym->subsection);
+            if (sub == NULL) {
+                minias_set_error(as, "internal:fragment-symbol-subsection:%s",
+                                 sym->name);
+                goto done;
+            }
+            sym->value = sub->size;
+        }
+        for (index = end_head[i]; index != SIZE_MAX;
+             index = end_next[index]) {
+            MiniAsSymbol *sym = &as->symbols[index];
+            MiniAsSubsection *sub =
+                find_subsection(as, sym->section, sym->subsection);
+            if (sub == NULL) {
+                minias_set_error(as, "internal:fragment-size-subsection:%s",
+                                 sym->name);
+                goto done;
+            }
+            sym->size_end_value = sub->size;
+        }
+        if (i < n) {
+            MiniAsStmt *stmt = &as->stmts[i];
+            MiniAsSubsection *sub =
+                find_subsection(as, stmt->section, stmt->subsection);
+            if (sub == NULL) {
+                minias_set_error(as, "internal:fragment-subsection");
+                goto done;
+            }
+            stmt->offset = sub->size;
+            if (stmt->kind == MINIAS_STMT_ALIGN &&
+                strcmp(stmt->op, ".org") != 0) {
+                uint64_t align = stmt->align;
+                uint64_t pad;
+                if (align == 0U || (align & (align - 1U)) != 0U) {
+                    minias_set_error(as, "bad-fragment-alignment");
+                    goto done;
+                }
+                pad = (align - (sub->size & (align - 1U))) & (align - 1U);
+                if (pad > UINT32_MAX) {
+                    minias_set_error(as, "fragment-alignment-overflow");
+                    goto done;
+                }
+                stmt->size = (uint32_t)pad;
+            }
+            if ((uint64_t)stmt->size > UINT64_MAX - sub->size) {
+                minias_set_error(as, "fragment-size-overflow");
+                goto done;
+            }
+            sub->size += stmt->size;
+        }
+    }
+
+    for (i = 0U; i < nsym; ++i) {
+        MiniAsSymbol *sym = &as->symbols[i];
+        if (sym->has_size_end_anchor) {
+            if (!sym->has_fragment_anchor ||
+                sym->size_end_value < sym->value) {
+                minias_set_error(as, "fragment-size-location-mismatch:%s",
+                                 sym->name);
+                goto done;
+            }
+            sym->size = sym->size_end_value - sym->value;
+        }
+    }
+    ok = finalize_subsection_layout(as);
+done:
+    free(start_head);
+    free(end_head);
+    free(start_next);
+    free(end_next);
+    return ok;
+}
+
 static bool collect_out_of_range_branches(MiniAs *as,
                                           size_t **ids,
                                           size_t *count,
@@ -2870,6 +3013,9 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
 
     if (strncmp(text, ".if", 3U) == 0 &&
         (text[3] == '\0' || isspace((unsigned char)text[3]))) {
+        /* .if may inspect '.', local symbol values and derived absolute
+         * symbols; only reparsing fully reproduces that control flow. */
+        as->layout_sensitive = true;
         return push_conditional(as, minias_trim(text + 3), line);
     }
     if (strcmp(text, ".else") == 0) {
@@ -2926,6 +3072,15 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
         }
     }
 
+    if (strcmp(op, ".set") == 0 || strcmp(op, ".equ") == 0 ||
+        strcmp(op, ".org") == 0) {
+        as->layout_sensitive = true;
+    }
+    if ((strcmp(op, ".align") == 0 || strcmp(op, ".balign") == 0 ||
+         strcmp(op, ".p2align") == 0 || strcmp(op, ".space") == 0 ||
+         strcmp(op, ".zero") == 0) && strchr(args, '.') != NULL) {
+        as->layout_sensitive = true;
+    }
     if (op[0] == '.') {
         bool handled = false;
         if (!as->target->parse_target_directive(as, op, args, line, &handled)) {
@@ -4666,6 +4821,53 @@ int minias_assemble_config(const char *input_path,
                                            &long_branch_capacity,
                                            &added_long_branches)) {
             parsed = false;
+        }
+        if (parsed && added_long_branches && !as.layout_sensitive) {
+            size_t passes = 0U;
+            do {
+                size_t j;
+                for (j = 0U; j < long_branch_count; ++j) {
+                    size_t id = long_branch_ids[j];
+                    MiniAsStmt *fragment;
+                    uint32_t grown;
+                    if (id >= as.stmt_count) {
+                        minias_set_error(&as, "internal:relaxation-fragment-id");
+                        parsed = false;
+                        break;
+                    }
+                    fragment = &as.stmts[id];
+                    grown = fragment->size;
+                    if (as.target->expanded_instruction_size == NULL ||
+                        (fragment->size == 4U &&
+                         (!as.target->expanded_instruction_size(
+                              fragment->op, fragment->size, &grown) ||
+                          grown <= fragment->size))) {
+                        minias_set_error(&as, "invalid-target-fragment-growth:%s",
+                                         fragment->op);
+                        parsed = false;
+                        break;
+                    }
+                    if (fragment->size == 4U) fragment->size = grown;
+                }
+                if (!parsed || !minias_relayout_fragments(&as) ||
+                    !collect_out_of_range_branches(&as, &long_branch_ids,
+                                                    &long_branch_count,
+                                                    &long_branch_capacity,
+                                                    &added_long_branches)) {
+                    parsed = false;
+                    break;
+                }
+                if (++passes > as.stmt_count + 1U) {
+                    minias_set_error(&as, "fragment-relaxation-nonconvergent");
+                    parsed = false;
+                    break;
+                }
+            } while (added_long_branches);
+            if (parsed && diagnostic != NULL &&
+                getenv("MINIAS_TRACE_RELAYOUT") != NULL) {
+                fprintf(diagnostic,
+                        "minias-fragment-relayout:inplace-passes=%zu\n", passes);
+            }
         }
         if (parsed && added_long_branches) {
             minias_destroy(&as);
