@@ -49,6 +49,12 @@ external_probe:
     cmn w1, #4096
     cmn x0, x1
     cmp x1, #8192
+    beq after_call
+    bne after_call
+    bhi after_call
+    bhs after_call
+    blt after_call
+    bge after_call
     cset w0, eq
     cset x11, gt
     csetm x10, ne

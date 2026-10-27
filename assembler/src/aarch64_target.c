@@ -392,8 +392,13 @@ static bool a64_condition_code(const char *suffix,unsigned *condition) {
     return false;
 }
 static bool a64_branch_condition(const char *op,unsigned *condition) {
-    return strncmp(op,"b.",2U)==0 &&
-           a64_condition_code(op+2U,condition);
+    /* GNU AArch64 accepts both B.EQ and BEQ (and B.HI/BHI etc.).
+     * The shared condition table owns aliases for CSET/CSEL and branches;
+     * do not create a second AArch condition grammar. */
+    if(!strncmp(op,"b.",2U))
+        return a64_condition_code(op+2U,condition);
+    return op[0]=='b' && op[1]!='\0' &&
+           a64_condition_code(op+1U,condition);
 }
 
 static bool a64_attach_expr(MiniAsMCInst *inst,unsigned slot,
