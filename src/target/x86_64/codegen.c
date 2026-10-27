@@ -219,7 +219,8 @@ bool minic_x86_64_write_c0_program_with_core_functions(
     const MinicCoreFunction *core_functions, size_t core_function_count,
     bool function_sections, MinicDiagnostic *diagnostic) {
     static const MinicProgramEmitConfig config = {
-        x86_visit_global, x86_visit_function, NULL, NULL,
+        x86_visit_global, x86_visit_function, NULL,
+        minic_program_emit_source_file_asm_stage,
         ".section .note.GNU-stack,\"\",@progbits\n", NULL,
         MINIC_PROGRAM_FUNCTION_LIVE_DEFINITIONS, false
     };
@@ -230,10 +231,6 @@ bool minic_x86_64_write_c0_program_with_core_functions(
         (core_function_count != 0U && core_functions == NULL) ||
         core_function_count != program->function_count) {
         x86_error(diagnostic, path, "x86-64 invalid program or target");
-        return false;
-    }
-    if (program->file_asm_count != 0U) {
-        x86_error(diagnostic, path, "x86-64 file-scope asm not implemented yet");
         return false;
     }
     success = minic_program_emit_write(
