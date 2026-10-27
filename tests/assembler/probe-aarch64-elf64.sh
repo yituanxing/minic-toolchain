@@ -133,7 +133,13 @@ SRC
 "$AARCH64_READELF" -h "$work/mini.o" | grep -q 'Class:.*ELF64'
 "$AARCH64_OBJCOPY" -j .text -O binary "$work/mini.o" "$work/mini-text.bin"
 "$AARCH64_OBJCOPY" -j .text -O binary "$work/gnu.o" "$work/gnu-text.bin"
-cmp "$work/mini-text.bin" "$work/gnu-text.bin"
+if ! cmp "$work/mini-text.bin" "$work/gnu-text.bin"; then
+    echo "A64 GNU text mismatch: MiniAS bytes near first offender" >&2
+    od -An -tx1 -v -j 88 -N 80 "$work/mini-text.bin" >&2
+    echo "A64 GNU text mismatch: GNU bytes same range" >&2
+    od -An -tx1 -v -j 88 -N 80 "$work/gnu-text.bin" >&2
+    exit 1
+fi
 "$AARCH64_OBJCOPY" -j .data -O binary "$work/mini.o" "$work/mini-data.bin"
 "$AARCH64_OBJCOPY" -j .data -O binary "$work/gnu.o" "$work/gnu-data.bin"
 cmp "$work/mini-data.bin" "$work/gnu-data.bin"

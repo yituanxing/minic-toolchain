@@ -333,6 +333,30 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
             goto invalid;
         }
     }
+    /* GNU group-2 implicit count=1 shifts, e.g. SHRL %eax.
+     * Reuse the existing typed immediate-one form / D1 encoding; no
+     * independent measure or emitter path. */
+    {
+        static const struct {const char *op;unsigned group;bool wide;} one[]={
+            {"sall",4U,false},{"salq",4U,true},
+            {"shll",4U,false},{"shlq",4U,true},
+            {"shrl",5U,false},{"shrq",5U,true},
+            {"sarl",7U,false},{"sarq",7U,true}
+        };
+        if(x64_register(s->args,&rd,&wd)) {
+            for(i=0U;i<sizeof(one)/sizeof(one[0]);++i)
+                if(!strcmp(s->op,one[i].op) && wd==one[i].wide) {
+                    m->opcode=X64_SHIFT_IMM;m->encoding=one[i].group;
+                    m->count=2U;
+                    m->operands[0].kind=MINIAS_MC_REGISTER;
+                    m->operands[0].reg=rd;
+                    m->operands[0].register_64=wd;
+                    m->operands[1].kind=MINIAS_MC_IMMEDIATE;
+                    m->operands[1].immediate=1U;
+                    goto done;
+                }
+        }
+    }
     /* Byte ALU variants and sign-extending MOV all remain target local. */
     if(x64_args2(s->args,src,dst)) {
         static const struct {const char *op;uint32_t opcode;} byteop[]={

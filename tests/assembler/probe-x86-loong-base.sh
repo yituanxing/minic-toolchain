@@ -107,6 +107,11 @@ entry_x:
     sbbl %eax, %r10d
     sbbq %r8, %r9
     sbbl $-1, %eax
+    shrl %eax
+    shrq %r8
+    sarq %r9
+    shll %r10d
+    salq %rdx
     shrl $1, %ecx
     shrq $3, %r8
     salq $4, %rax
@@ -416,6 +421,7 @@ for bad in 'movq %rax, (%eax)' \
            'call *%eax' \
            'jmp *%ecx' \
            'shrq %dl, %rax' \
+           'shrl %rax' \
            'movl %ds:pcpu_hot(%rip), %eax' \
            'movq %gs:bogus(%r8,%r9,5), %rax'; do
     printf '.text\n%s\n' "$bad" >"$work/invalid-mem.s"
