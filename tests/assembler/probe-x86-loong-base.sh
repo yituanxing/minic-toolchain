@@ -294,6 +294,16 @@ entry_la:
     tlbsrch
     tlbfill
     li.w $r12, 16384
+    li.w $r28, (1 << 14) / 8
+    movfcsr2gr $r13, $fcsr0
+    movfcsr2gr $r14, $fcsr2
+    invtlb 1, $zero, $zero
+    invtlb 31, $r12, $r13
+    vld $vr22, $r27, 0
+    vld $vr0, $r5, 0
+    vst $vr22, $r27, -2048
+    xvld $xr12, $r14, 2047
+    xvst $xr31, $r3, 16
     movgr2fcsr $fcsr0, $r12
     movfr2gr.d $r5, $f30
     add.d $a0, $a0, $a1
@@ -621,6 +631,11 @@ for bad in 'li.w $r4, -2049' \
            'movgr2fr.d $f32, $r13' \
            'rotr.w $r1, $r2, 6' \
            'tlbrd $r1' \
+           'invtlb 32, $r0, $r0' \
+           'vld $vr32, $r5, 0' \
+           'vst $vr0, $r5, 2048' \
+           'xvld $xr0, $f1, 0' \
+           'movfcsr2gr $r1, $fcsr4' \
            'bytepick.w $r1,$r2,$r3,4' \
            'bytepick.d $r1,$r2,$r3,8' \
            'movgr2fcsr $fcsr4,$r12' \

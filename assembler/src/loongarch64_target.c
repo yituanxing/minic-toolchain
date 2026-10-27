@@ -371,6 +371,17 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
         m->operands[1].reg=rj;
         goto done;
     }
+    if(n==2U && !strcmp(s->op,"movfcsr2gr") &&
+       la_reg(t[0],&rd) &&
+       la_special_reg(t[1],"$fcsr",3U,&rj)) {
+        m->count=2U;
+        m->encoding=UINT32_C(0x0114c800)|(rj<<5U)|rd;
+        m->operands[0].kind=MINIAS_MC_REGISTER;
+        m->operands[0].reg=rd;
+        m->operands[1].kind=MINIAS_MC_REGISTER;
+        m->operands[1].reg=rj;
+        goto done;
+    }
     if(n==2U && !strcmp(s->op,"movgr2fcsr") &&
        la_special_reg(t[0],"$fcsr",3U,&rd) && la_reg(t[1],&rj)) {
         m->count=2U;m->encoding=UINT32_C(0x0114c000)|(rj<<5U)|rd;
@@ -408,6 +419,72 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
             m->operands[0].reg=rd;
             m->operands[1].kind=MINIAS_MC_IMMEDIATE;
             m->operands[1].immediate=(uint64_t)value;
+            goto done;
+        }
+    }
+    /* GNU LI.W for 0x800..0xfff is a single ORI from $zero. Explicit
+     * 4KB-aligned large values use LU12I.W above; no variable-sized
+     * multi-instruction pseudoinstructions are guessed here. */
+    if(n==2U && !strcmp(s->op,"li.w") && la_reg(t[0],&rd)) {
+        int64_t v;
+        if(minias_eval_i64_expression(t[1],&v) && v>=2048 && v<=4095) {
+            m->count=2U;
+            m->encoding=UINT32_C(0x03800000) |
+                ((uint32_t)v<<10U)|rd;
+            m->operands[0].kind=MINIAS_MC_REGISTER;
+            m->operands[0].reg=rd;
+            m->operands[1].kind=MINIAS_MC_IMMEDIATE;
+            m->operands[1].immediate=(uint64_t)v;
+            goto done;
+        }
+    }
+    /* GNU LSX/LASX vector loads/stores use a 12-bit signed byte offset,
+     * base GPR rj and independent vector register vd in r0's slot. The
+     * assembler may encode these GNU inline-asm extensions even while the
+     * compiler's active emission subset remains scalar; ISA capabilities
+     * are distinct from generated-code instruction selection. */
+    if(n==3U && la_reg(t[1],&rj)) {
+        static const struct {const char *name,*prefix;uint32_t base;} vec[]={
+            {"vld","$vr",UINT32_C(0x2c000000)},
+            {"vst","$vr",UINT32_C(0x2c400000)},
+            {"xvld","$xr",UINT32_C(0x2c800000)},
+            {"xvst","$xr",UINT32_C(0x2cc00000)}
+        };
+        int64_t off;
+        if(minias_eval_i64_expression(t[2],&off) &&
+           off>=-2048 && off<=2047) {
+            for(i=0U;i<sizeof(vec)/sizeof(vec[0]);++i)
+                if(!strcmp(s->op,vec[i].name) &&
+                   la_special_reg(t[0],vec[i].prefix,31U,&rd)) {
+                    m->count=3U;
+                    m->encoding=vec[i].base |
+                        (((uint32_t)off&UINT32_C(0xfff))<<10U) |
+                        (rj<<5U)|rd;
+                    m->operands[0].kind=MINIAS_MC_REGISTER;
+                    m->operands[0].reg=rd;
+                    m->operands[1].kind=MINIAS_MC_REGISTER;
+                    m->operands[1].reg=rj;
+                    m->operands[2].kind=MINIAS_MC_IMMEDIATE;
+                    m->operands[2].immediate=(uint64_t)off;
+                    goto done;
+                }
+        }
+    }
+    /* GNU privileged INVTLB u5, rj, rk, with r0/i0 as operation code.
+     * Existing Common MCInst emission and architecture ELF ownership. */
+    if(n==3U && !strcmp(s->op,"invtlb") &&
+       la_reg(t[1],&rj) && la_reg(t[2],&rk)) {
+        uint64_t operation;
+        if(minias_eval_u64_expression(t[0],&operation) && operation<=31U) {
+            m->count=3U;
+            m->encoding=UINT32_C(0x06498000) |
+                        (rk<<10U)|(rj<<5U)|(uint32_t)operation;
+            m->operands[0].kind=MINIAS_MC_IMMEDIATE;
+            m->operands[0].immediate=operation;
+            m->operands[1].kind=MINIAS_MC_REGISTER;
+            m->operands[1].reg=rj;
+            m->operands[2].kind=MINIAS_MC_REGISTER;
+            m->operands[2].reg=rk;
             goto done;
         }
     }
