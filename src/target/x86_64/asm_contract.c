@@ -9,6 +9,51 @@ static bool target_constraint_is(const MinicInlineAsmOperand *op, const char *s)
            memcmp(op->constraint_text, s, n) == 0;
 }
 
+/* Original x86 Linux this_cpu_read_stable_8 is a nonvolatile GNU p
+ * address computation followed by a REAL GS-segment hardware read.
+ * Only the literal 64-bit instruction / two exact operands are admitted.
+ * A Core address SSA value represents P[var]; x86 still owns the GS ISA. */
+bool minic_x86_64_asm_percpu_stable_template(const char *s, size_t length) {
+    static const char *const forms[] = {
+        "movq%%gs:%P[var],%[val]", "movq%%gs:%P1,%0"
+    };
+    char compact[96]; size_t i, n = 0U;
+    if (!s || length == 0U || length >= sizeof(compact)) return false;
+    for (i = 0U; i < length; ++i) {
+        const char c = s[i];
+        if (c == ';' || c == '\r' || c == '\n') return false;
+        if (c == ' ' || c == '\t') continue;
+        if (n + 1U >= sizeof(compact)) return false;
+        compact[n++] = c;
+    }
+    compact[n] = '\0';
+    for (i = 0U; i < sizeof(forms) / sizeof(forms[0]); ++i)
+        if (strcmp(forms[i], compact) == 0) return true;
+    return false;
+}
+static bool x86_percpu_source(const MinicC0Program *program,
+                              const MinicInlineAsm *src) {
+    const MinicExpression *out, *in;
+    MinicType type;
+    if (!program || !src || src->is_goto || src->is_volatile ||
+        src->output_count != 1U || src->input_count != 1U ||
+        !src->outputs || !src->inputs ||
+        src->clobber_count != 0U || src->register_clobber_count != 0U ||
+        src->has_memory_clobber || src->label_count != 0U ||
+        !minic_x86_64_asm_percpu_stable_template(
+            src->template_text, src->template_length) ||
+        !target_constraint_is(&src->outputs[0], "=r") ||
+        !target_constraint_is(&src->inputs[0], "p"))
+        return false;
+    out = minic_c0_program_expression(program, src->outputs[0].expression);
+    in = minic_c0_program_expression(program, src->inputs[0].expression);
+    return out && in && out->value_category == MINIC_VALUE_LVALUE &&
+           !minic_type_is_const(out->type) &&
+           minic_type_unqualified(out->type, &type) &&
+           (minic_type_equal(type, minic_type_unsigned_long_long()) ||
+            minic_type_equal(type, minic_type_unsigned_long())) &&
+           minic_type_is_pointer(in->type);
+}
 static bool c_is(const MinicInlineAsmOperand *op, const char *s) {
     return target_constraint_is(op, s);
 }
@@ -301,7 +346,14 @@ bool minic_x86_64_qualify_inline_asm(
     MinicTargetInlineAsmContract *contract) {
     bool is_mulacc = false, is_muldiv = false;
     size_t i, count;
-    if (!contract || !qualified(program, source, &is_mulacc, &is_muldiv)) return false;
+    if (!contract) return false;
+    if (x86_percpu_source(program, source)) {
+        contract->operand_count = 2U;
+        contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
+        contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+        return true;
+    }
+    if (!qualified(program, source, &is_mulacc, &is_muldiv)) return false;
     (void)is_muldiv; /* all four mul/div operand roles are scalar/register */
     count = source->output_count + source->input_count;
     if (count > MINIC_CORE_STRUCTURED_INLINE_ASM_OPERAND_LIMIT) return false;
