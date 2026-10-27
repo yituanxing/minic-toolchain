@@ -116,8 +116,10 @@ static bool la_branch_instruction(MiniAs *as, MiniAsMCInst *m,
         /* Loong B21: high 5 bits in [4:0], low 16 in [25:10].
          * B16: 16 bits in [25:10]; B26: high 10 in [9:0]. */
         m->encoding=b->base |
-            (count>=2U?rj:0U) |
-            (count==3U?(rd<<5U):0U);
+            /* GNU LoongArch field layout: rj in bits 9:5; rd in bits
+             * 4:0 (B16). B21 reuses low bits 4:0 for high displacement. */
+            (count>=2U?(rj<<5U):0U) |
+            (count==3U?rd:0U);
         return true;
     }
     return false;
