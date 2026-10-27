@@ -78,3 +78,13 @@ or `unsupported-loongarch64-operands:pcalau12i`, collapsing offset/index/
 register spellings only for Pareto analysis (never for correctness decisions).
 An opt-in SHA-pinned `2x7` run is triggered after this grouped change,
 reusing all C-produced assembly unmodified and without another Linux build.
+
+## LoongArch-only seven-shard exact-head incremental census
+
+One target-local opcode batch must not automatically rescan an unrelated
+architecture. The existing frozen-GNU Kbuild replay now accepts the explicit
+`[minias-replay-loong-7]` trailer to select **only 7 LoongArch64 shards**
+and `aggregate --targets loongarch64`; `[minias-replay-2x7]` keeps
+the two-target 14-shard mode for shared changes. Both modes pin the
+unchanged Linux 6.6.143 GNU config/compiler/assembly manifest. The
+automatic workflow does not start on normal one-line code pushes.

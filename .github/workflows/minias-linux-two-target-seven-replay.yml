@@ -1,4 +1,4 @@
-name: MiniAS Two Target Seven-Way Linux ISA Frontier
+name: MiniAS Affected Target Seven-Way Linux ISA Frontier
 
 # After a batch of target-local encoding changes, rerun only affected
 # x86-64 and LoongArch64 on the SAME frozen original Linux GNU Kbuild inputs.
@@ -20,13 +20,13 @@ jobs:
   shard:
     # Explicit grouped-campaign request; don't run 14 shards on every
     # one-line target fix. Workflow dispatch is the manual alternative.
-    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[minias-replay-2x7]')
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[minias-replay-2x7]') || contains(github.event.head_commit.message, '[minias-replay-loong-7]')
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     strategy:
       fail-fast: false
       matrix:
-        target: [x86_64, loongarch64]
+        target: ${{ fromJSON(contains(github.event.head_commit.message, '[minias-replay-loong-7]') && '["loongarch64"]' || '["x86_64","loongarch64"]') }}
         shard: [0, 1, 2, 3, 4, 5, 6]
     steps:
       - uses: actions/checkout@v4
@@ -88,7 +88,7 @@ jobs:
       - name: Validate all 14 distinct owners and target-only Pareto
         run: |
           python3 tools/ci/minias-linux-kbuild-seven-v1.py aggregate \
-            --targets x86_64,loongarch64 \
+            --targets "${{ contains(github.event.head_commit.message, '[minias-replay-loong-7]') && 'loongarch64' || 'x86_64,loongarch64' }}" \
             --results build/minias-pareto-collected \
             --dest build/minias-pareto-summary.json
       - uses: actions/upload-artifact@v4
