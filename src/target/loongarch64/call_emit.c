@@ -7,6 +7,7 @@
 #include "target/common/lp64_aggregate.h"
 #include "target/loongarch64/frame_emit.h"
 #include <stdio.h>
+#include <string.h>
 
 /* Outgoing locations use raw SP; dynamic frame slots use the s0 base. */
 #define emit_sp_mem(_out, _op, _reg, _offset) \
@@ -187,8 +188,29 @@ bool minic_loongarch64_emit_abi_instruction(
             } else {
                 const MinicCoreCallee *callee =
                     &fn->callees[ins->value.call.callee_id];
-                if (fprintf(out, "  bl %s\n", callee->name) < 0)
+                /* GCC __builtin_loongarch_cpucfg is a unary uint32 ->
+                 * uint32 hardware operation, not an external function.
+                 * The shared LP64 CALL planner already put the argument in
+                 * a0. Qualify that placement and the physical result before
+                 * emitting; never permit indirect calls or arbitrary names. */
+                if (callee->name != NULL &&
+                    strcmp(callee->name,
+                           "__minic_target_builtin_loongarch_cpucfg") == 0) {
+                    if (count != 1U || stack_bytes != 0U ||
+                        !minic_type_equal(ins->type, minic_type_unsigned_int()) ||
+                        call_plan->arguments[0].gp_first != 0U ||
+                        call_plan->arguments[0].gp_registers != 1U ||
+                        call_plan->arguments[0].fp_registers != 0U ||
+                        fn->call_arguments[begin].kind !=
+                            MINIC_CORE_CALL_ARGUMENT_VALUE ||
+                        !minic_type_equal(
+                            fn->values[fn->call_arguments[begin].value.value_id].type,
+                            minic_type_unsigned_int()) ||
+                        fputs("  cpucfg $a0, $a0\n", out) == EOF)
+                        return false;
+                } else if (fprintf(out, "  bl %s\n", callee->name) < 0) {
                     return false;
+                }
             }
             if (stack_bytes != 0U && !minic_loongarch64_emit_sp_adjust(out, stack_bytes, true))
                 return false;

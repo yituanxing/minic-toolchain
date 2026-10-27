@@ -1371,7 +1371,9 @@ static bool parse_primary(MinicParser *parser, MinicExpressionId *expression_id,
                 }
             }
         }
-        minic_parser_error(parser, "use of undeclared local");
+        minic_parser_error(parser, "use of undeclared local '%.*s'",
+                           (int)minic_parser_span_length(name_span),
+                           parser->source + name_span.begin.offset);
         return false;
     }
     if (parser->current.kind == MINIC_TOKEN_LPAREN) {

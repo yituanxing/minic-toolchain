@@ -338,6 +338,13 @@ jobs:
           fi
           echo 'AARCH64_NZCV_ASM_UNQUALIFIED=REJECTED'
 
+      - name: LoongArch original GNU CPUCFG builtin vs MiniC physical instruction
+        if: matrix.target == 'loongarch64'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          bash tests/compiler/c0/probe-loongarch-cpucfg-qemu.sh \
+            "$GITHUB_WORKSPACE/build/runtime-ci/bin/minic-cc"
       - name: QEMU execute upstream runtime with native ABI on new LP64 targets
         if: matrix.target == 'aarch64' || matrix.target == 'loongarch64'
         shell: bash

@@ -1936,6 +1936,83 @@ bool minic_parser_try_builtin_primary_early(
     return true;
 }
 
+/* Target builtin expressions borrow the ordinary typed CALL + CoreCallView
+ * pipeline. No target-specific expression/IR opcode, no fake libc symbol and
+ * no source rewrite. Only the target's machine call owner may emit a matching
+ * reserved callee; function-pointer use never enters this direct-only path. */
+static bool parse_target_builtin_unary(
+    MinicParser *parser, MinicExpressionId *expression_id, bool *handled) {
+    const char *internal_name;
+    MinicType result_type, argument_type;
+    MinicFunctionId function_id = MINIC_FUNCTION_INVALID;
+    const MinicFunction *callee;
+    MinicExpression expression;
+    MinicSourcePosition begin, end;
+    size_t i, name_length;
+    if (parser == NULL || expression_id == NULL || handled == NULL)
+        return false;
+    *handled = false;
+    if (parser->current.kind != MINIC_TOKEN_IDENTIFIER)
+        return true;
+    name_length = minic_parser_span_length(parser->current.span);
+    if (!minic_target_info_machine_builtin_unary(
+            parser->target_info,
+            parser->source + parser->current.span.begin.offset, name_length,
+            &internal_name, &result_type, &argument_type))
+        return true;
+    *handled = true;
+    for (i = 0U; i < parser->program->function_count; ++i) {
+        const MinicFunction *candidate =
+            minic_c0_program_function(parser->program, i);
+        if (candidate == NULL || candidate->name == NULL ||
+            candidate->name_length != strlen(internal_name) ||
+            memcmp(candidate->name, internal_name, candidate->name_length) != 0)
+            continue;
+        if (candidate->is_defined || candidate->is_variadic ||
+            candidate->parameter_count != 1U ||
+            !minic_type_equal(candidate->return_type, result_type) ||
+            !minic_type_equal(candidate->parameter_types[0], argument_type)) {
+            minic_parser_error(parser, "target builtin reserved callee conflict");
+            return false;
+        }
+        function_id = i;
+        break;
+    }
+    if (function_id == MINIC_FUNCTION_INVALID &&
+        (!minic_c0_program_add_function(
+             parser->program, internal_name, strlen(internal_name),
+             parser->program->local_count, 0U, MINIC_BLOCK_INVALID, &function_id) ||
+         !minic_c0_program_set_function_signature(
+             parser->program, function_id, result_type, &argument_type, 1U))) {
+        minic_parser_error(parser, "cannot declare target machine builtin");
+        return false;
+    }
+    begin = parser->current.span.begin;
+    if (!minic_parser_advance(parser) ||
+        !minic_parser_expect(parser, MINIC_TOKEN_LPAREN,
+                             "expected '(' after target machine builtin"))
+        return false;
+    callee = minic_c0_program_function(parser->program, function_id);
+    if (callee == NULL || !minic_c0_program_set_function_referenced(
+            parser->program, function_id, true)) {
+        minic_parser_error(parser, "invalid target builtin callee");
+        return false;
+    }
+    (void)memset(&expression, 0, sizeof(expression));
+    expression.kind = MINIC_EXPRESSION_CALL;
+    expression.span.begin = begin;
+    expression.type = result_type;
+    expression.value_category = MINIC_VALUE_RVALUE;
+    expression.value.call.function_id = function_id;
+    if (!minic_parser_expression_parse_call_arguments(parser, &expression, callee))
+        return false;
+    end = parser->current.span.end;
+    if (!minic_parser_advance(parser))
+        return false;
+    expression.span.end = end;
+    return minic_parser_add_expression(parser, &expression, expression_id);
+}
+
 bool minic_parser_try_builtin_primary_late(
     MinicParser *parser, MinicExpressionId *expression_id,
     bool decay_array, bool *handled) {
@@ -1943,6 +2020,14 @@ bool minic_parser_try_builtin_primary_late(
     if (parser == NULL || expression_id == NULL || handled == NULL)
         return false;
     *handled = false;
+    if (!parse_target_builtin_unary(parser, &primary_id, handled))
+        return false;
+    if (*handled) {
+        if (!minic_parser_parse_postfix(parser, primary_id, &primary_id))
+            return false;
+        return minic_parser_finish_value_expression(
+            parser, primary_id, decay_array, expression_id);
+    }
 
     if (minic_parser_current_identifier_lexeme_equals_cstr(parser, "__atomic_load_n")) {
         if (!parse_builtin_atomic_load(parser, &primary_id) ||

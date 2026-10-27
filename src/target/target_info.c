@@ -804,6 +804,28 @@ bool minic_target_info_inline_asm_register_clobber_supported(const MinicTargetIn
                                  (name[0] == 'a' && name[1] >= '0' && name[1] <= '7'));
 }
 
+/* Syntax/ABI descriptor only. No backend machine instruction is admitted by
+ * this declaration: the LoongArch CALL emitter must also verify the exact
+ * signature, one-GPR placement and direct-only call before emitting CPUCFG.
+ * New targets add descriptions here, not branches in Frontend/Core. */
+bool minic_target_info_machine_builtin_unary(
+    const MinicTargetInfo *target, const char *spelling, size_t length,
+    const char **internal_callee, MinicType *result, MinicType *argument) {
+    static const char gnu_cpucfg[] = "__builtin_loongarch_cpucfg";
+    if (target == NULL || spelling == NULL || internal_callee == NULL ||
+        result == NULL || argument == NULL)
+        return false;
+    if (target->architecture == MINIC_TARGET_ARCH_LOONGARCH64 &&
+        length == sizeof(gnu_cpucfg) - 1U &&
+        memcmp(spelling, gnu_cpucfg, sizeof(gnu_cpucfg) - 1U) == 0) {
+        *internal_callee = "__minic_target_builtin_loongarch_cpucfg";
+        *result = minic_type_unsigned_int();
+        *argument = minic_type_unsigned_int();
+        return true;
+    }
+    return false;
+}
+
 bool minic_target_info_inline_asm_immediate_constraint_supported(const MinicTargetInfo *target,
                                                                  const char *constraint,
                                                                  size_t constraint_length,

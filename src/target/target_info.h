@@ -98,6 +98,12 @@ bool minic_target_info_language_type_supported(const MinicTargetInfo *target,
 bool minic_target_info_named_builtin_type(const MinicTargetInfo *target,
                                           const char *spelling, size_t length,
                                           MinicType *type);
+/* Target-specific GCC unary builtins are described here without making
+ * Frontend or Core switch on an architecture. Machine encoding stays owned
+ * by the target CALL emitter, with an internal unspellable callee name. */
+bool minic_target_info_machine_builtin_unary(
+    const MinicTargetInfo *target, const char *spelling, size_t length,
+    const char **internal_callee, MinicType *result, MinicType *argument);
 bool minic_target_info_header_attribute_supported(const MinicTargetInfo *target,
                                                   const char *spelling,
                                                   size_t length);
