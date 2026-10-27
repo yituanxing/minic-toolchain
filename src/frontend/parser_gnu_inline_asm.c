@@ -336,8 +336,14 @@ bool minic_parser_gnu_inline_asm_statement(MinicParser *parser) {
                 has_memory_clobber = true;
             } else if (!minic_target_info_inline_asm_register_clobber_supported(
                            parser->target_info, clobber, clobber_length)) {
+                /* Fail closed, but identify the actual physical register or
+                 * special token. Previously 771 three-ISA Linux failures all
+                 * collapsed to one un-actionable identical diagnostic. No
+                 * target register admission is broadened by this change. */
+                minic_parser_error(parser,
+                                   "unsupported GNU asm register clobber for target: %.*s",
+                                   (int)clobber_length, clobber);
                 free(clobber);
-                minic_parser_error(parser, "unsupported GNU asm register clobber for target");
                 return false;
             } else if (!minic_c0_program_add_inline_asm_register_clobber(
                            parser->program, inline_asm_id, clobber, clobber_length)) {

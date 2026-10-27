@@ -142,8 +142,25 @@ static const MinicAttributeDescriptor minic_attribute_descriptors[] = {
         0U,
         true,
     },
+    /* GNU's two canonical spellings are one semantic policy: no implicit
+     * -finstrument-functions hooks. MiniC emits no such hooks, so this is
+     * safely parse-only for all target backends, not an ABI exception. */
+    MINIC_ATTRIBUTE_ENTRY("no_instrument_function",
+                          MINIC_ATTRIBUTE_NO_INSTRUMENT_FUNCTION,
+                          MINIC_ATTRIBUTE_CLASS_OPTIMIZATION,
+                          MINIC_ATTRIBUTE_TARGET_FUNCTION),
     MINIC_ATTRIBUTE_ENTRY("__no_instrument_function__",
                           MINIC_ATTRIBUTE_NO_INSTRUMENT_FUNCTION,
+                          MINIC_ATTRIBUTE_CLASS_OPTIMIZATION,
+                          MINIC_ATTRIBUTE_TARGET_FUNCTION),
+    /* GCC artificial changes only inline-debug attribution. MiniC does not
+     * generate debug call-site attribution, so preserve existing symbols. */
+    MINIC_ATTRIBUTE_ENTRY("artificial",
+                          MINIC_ATTRIBUTE_ARTIFICIAL,
+                          MINIC_ATTRIBUTE_CLASS_INFORMATIONAL,
+                          MINIC_ATTRIBUTE_TARGET_FUNCTION),
+    MINIC_ATTRIBUTE_ENTRY("__artificial__",
+                          MINIC_ATTRIBUTE_ARTIFICIAL,
                           MINIC_ATTRIBUTE_CLASS_INFORMATIONAL,
                           MINIC_ATTRIBUTE_TARGET_FUNCTION),
     {

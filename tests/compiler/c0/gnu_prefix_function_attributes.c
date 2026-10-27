@@ -1,3 +1,21 @@
+/* Linux no_instrument_function has both spellings; GCC artificial only
+ * changes debug-inline call-site attribution, not code or call ABI. */
+__attribute__((no_instrument_function))
+int linux_noinstr_plain(int value) { return value + 1; }
+
+__attribute__((__no_instrument_function__))
+int linux_noinstr_underscored(int value) { return value - 1; }
+
+static inline __attribute__((artificial))
+int linux_artificial_plain(int value) { return value + 2; }
+
+static inline __attribute__((__artificial__))
+int linux_artificial_underscored(int value) { return value - 2; }
+
+int linux_artificial_calls(int value) {
+    return linux_artificial_plain(value) + linux_artificial_underscored(value);
+}
+
 static inline __attribute__((__gnu_inline__)) __attribute__((__unused__))
     __attribute__((__no_instrument_function__)) __attribute__((__always_inline__)) const int *
 prefix_attribute_identity(const int *value)
