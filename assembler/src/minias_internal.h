@@ -283,6 +283,10 @@ typedef struct MiniAsTargetOps {
     const char *name;
     bool (*measure)(const MiniAs *, const char *, const char *, uint32_t *, char *, size_t);
     bool (*parse_mcinst)(MiniAs *, MiniAsStmt *);
+    /* If present, the core parses operands once before asking the target
+     * to measure its persisted instruction. The caller owns relaxation and
+     * fragment placement; no target is allowed to update section offsets. */
+    bool (*measure_mcinst)(MiniAs *, const MiniAsStmt *, uint32_t *);
     bool (*encode)(MiniAs *, const MiniAsStmt *);
     /* Layout owns iteration; each target owns encoding alternatives and
      * target-specific range checks. Return the next encoding size. */
@@ -314,12 +318,7 @@ int minias_assemble_with_target(const char *, const char *,
                                 const MiniAsTargetOps *, bool, uint32_t,
                                 unsigned, FILE *);
 
-bool minias_riscv_measure(unsigned strict_i_xlen,
-                          const char *op,
-                          const char *args,
-                          uint32_t *size,
-                          char *reason,
-                          size_t reason_size);
+bool minias_riscv_measure_mcinst(MiniAs *, const MiniAsStmt *, uint32_t *);
 bool minias_riscv_parse_mcinst(MiniAs *as, MiniAsStmt *stmt);
 bool minias_riscv_encode(MiniAs *as, const MiniAsStmt *stmt);
 

@@ -808,115 +808,57 @@ static bool parse_call_target(const char *text, MiniAsSymbolExpr *expr) {
     return minias_parse_symbol_addend(normalized, expr);
 }
 
-bool minias_riscv_measure(unsigned strict_i_xlen,
-                          const char *op,
-                          const char *args,
-                          uint32_t *size,
-                          char *reason,
-                          size_t reason_size) {
-    char operands[8][128];
-    size_t count = split_operands(args, operands, 8U);
-
-    if (strcmp(op, "lb") == 0 || strcmp(op, "lbu") == 0 ||
-        strcmp(op, "lh") == 0 || strcmp(op, "lhu") == 0 ||
-        strcmp(op, "lw") == 0 || strcmp(op, "lwu") == 0 ||
-        strcmp(op, "ld") == 0) {
-        MiniAsSymbolExpr expr;
-        if (count == 2U && reg_number(operands[0]) >= 0 &&
-            minias_parse_symbol_addend(operands[1], &expr)) {
+/* Measure the actual persisted target instruction. The layout driver
+ * invokes this once after operand parsing and before placement. Neither
+ * symbol spelling nor source-level expression grammar is revisited. */
+bool minias_riscv_measure_mcinst(MiniAs *as, const MiniAsStmt *stmt,
+                                 uint32_t *size) {
+    const MiniAsMCInst *m = stmt->mcinst;
+    if (m == NULL) {
+        minias_set_error(as, "unsupported-instruction:%s:line=%zu",
+                         stmt->op, stmt->line);
+        return false;
+    }
+    switch (m->opcode) {
+        case RV_MC_C16:
+            *size = 2U;
+            return true;
+        case RV_MC_SYMBOL_LOAD:
+        case RV_MC_SYMBOL_STORE:
+        case RV_MC_CALL:
+        case RV_MC_TAIL:
+        case RV_MC_LA:
             *size = 8U;
             return true;
-        }
-    }
-
-    if (strcmp(op, "sb") == 0 || strcmp(op, "sh") == 0 ||
-        strcmp(op, "sw") == 0 || strcmp(op, "sd") == 0) {
-        MiniAsSymbolExpr expr;
-        if (count == 3U && reg_number(operands[0]) >= 0 &&
-            minias_parse_symbol_addend(operands[1], &expr) &&
-            reg_number(operands[2]) >= 0) {
-            *size = 8U;
-            return true;
-        }
-    }
-
-    if (strcmp(op, "li") == 0) {
-        uint64_t bits;
-        bool fits_signed32;
-        int64_t signed_value;
-
-        if (count != 2U ||
-            !parse_li_bits(operands[1], &bits, &fits_signed32, &signed_value)) {
-            (void)snprintf(reason,
-                           reason_size,
-                           "unsupported-expression:%s",
-                           count >= 2U ? operands[1] : args);
-            return false;
-        }
-        if (strict_i_xlen == 32U) {
-            int64_t rv32_value;
-            int64_t high;
-            int64_t low;
-            if (!rv32_li_value(bits, &rv32_value)) {
-                (void)snprintf(reason, reason_size,
-                               "rv32i-li-overflows-32-bits:%s", operands[1]);
-                return false;
+        case RV_MC_LI: {
+            uint64_t bits = m->operands[1].immediate;
+            const int64_t signed_value = (int64_t)m->operands[2].immediate;
+            const bool fits_signed32 = m->encoding != 0U;
+            if (as->target_xlen == 32U) {
+                int64_t value, hi, lo;
+                if (!rv32_li_value(bits, &value)) {
+                    minias_set_error(as,
+                                     "rv32i-li-overflows-32-bits:line=%zu",
+                                     stmt->line);
+                    return false;
+                }
+                hi = (value + INT64_C(2048)) >> 12;
+                lo = value - hi * INT64_C(4096);
+                *size = (value >= -2048 && value <= 2047) ||
+                        lo == 0 ? 4U : 8U;
+            } else if (fits_signed32) {
+                *size = signed_value >= -2048 && signed_value <= 2047 ?
+                        4U : 8U;
+            } else {
+                *size = li64_materialized_size(bits);
             }
-            high = (rv32_value + INT64_C(2048)) >> 12;
-            low = rv32_value - high * INT64_C(4096);
-            *size = (rv32_value >= -2048 && rv32_value <= 2047) ||
-                    low == 0 ? 4U : 8U;
-        } else if (fits_signed32) {
-            *size = signed_value >= -2048 && signed_value <= 2047 ? 4U : 8U;
-        } else {
-            *size = li64_materialized_size(bits);
+            return true;
         }
-        return true;
+        default:
+            *size = 4U;
+            return true;
     }
-    if (strcmp(op, "lla") == 0 || strcmp(op, "la") == 0) {
-        MiniAsSymbolExpr expr;
-        if (count != 2U || reg_number(operands[0]) < 0 ||
-            !minias_parse_symbol_addend(operands[1], &expr)) {
-            (void)snprintf(reason, reason_size, "unsupported-expression:%s", args);
-            return false;
-        }
-        *size = 8U;
-        return true;
-    }
-    if (strcmp(op, "call") == 0) {
-        MiniAsSymbolExpr expr;
-        if (count != 1U || !parse_call_target(operands[0], &expr)) {
-            (void)snprintf(reason, reason_size, "unsupported-expression:%s", args);
-            return false;
-        }
-        *size = 8U;
-        return true;
-    }
-    if (strcmp(op, "tail") == 0) {
-        MiniAsSymbolExpr expr;
-        if (count != 1U || !parse_call_target(operands[0], &expr)) {
-            (void)snprintf(reason, reason_size, "unsupported-expression:%s", args);
-            return false;
-        }
-        *size = 8U;
-        return true;
-    }
-
-    /* Symbolic integer load/store expands to two words above; ordinary
-     * GPR memory operands are single words, parsed into MCInst later. */
-    if (strcmp(op,"lb")==0 || strcmp(op,"lh")==0 ||
-        strcmp(op,"lw")==0 || strcmp(op,"ld")==0 ||
-        strcmp(op,"lbu")==0 || strcmp(op,"lhu")==0 ||
-        strcmp(op,"lwu")==0 || strcmp(op,"sb")==0 ||
-        strcmp(op,"sh")==0 || strcmp(op,"sw")==0 ||
-        strcmp(op,"sd")==0) {
-        *size=4U;
-        return true;
-    }
-    (void)snprintf(reason, reason_size, "unsupported-instruction:%s", op);
-    return false;
 }
-
 
 /* RISC-V's first production MCInst family: fixed-width integer ALU,
  * memory, control transfer and selected ISA extensions. The descriptors
@@ -983,50 +925,6 @@ static const RvMCDesc rv_mc_table[] = {
  * The non-typed pseudo expansions, symbolic GPR loads/stores and strict-I
  * machine-word verifier continue through the complete legacy measurement
  * path until their fragment sizing is also represented in the typed IR. */
-bool minias_riscv_is_typed_fixed(const char *op) {
-    size_t i;
-    bool is_store;
-    uint32_t width;
-    bool is_lr;
-    uint32_t ordering, funct5;
-    for (i = 0U; i < sizeof(rv_mc_table) / sizeof(rv_mc_table[0]); ++i) {
-        if (strcmp(op, rv_mc_table[i].name) == 0 &&
-            rv_mc_table[i].family != RV_MC_LOAD &&
-            rv_mc_table[i].family != RV_MC_STORE) return true;
-    }
-    /* All of these aliases/system instructions have one 32-bit word and
-     * their typed parser validates the operand form after layout sizing. */
-    if (strcmp(op,"ret")==0 || strcmp(op,"nop")==0 ||
-        strcmp(op,"mv")==0 || strcmp(op,"move")==0 ||
-        strcmp(op,"jr")==0 || strcmp(op,"snez")==0 ||
-        strcmp(op,"seqz")==0 || strcmp(op,"neg")==0 ||
-        strcmp(op,"negw")==0 || strcmp(op,"not")==0 ||
-        strcmp(op,"frcsr")==0 || strcmp(op,"fscsr")==0 ||
-        strcmp(op,"jalr")==0 || strcmp(op,"sfence.vma")==0 ||
-        strcmp(op,"sret")==0 || strcmp(op,"ecall")==0 ||
-        strcmp(op,"ebreak")==0 || strcmp(op,"wfi")==0 ||
-        strcmp(op,"pause")==0 || strcmp(op,"fence.i")==0 ||
-        strcmp(op,"fence")==0) return true;
-    if (is_fp_binary_single(op) || is_fp_binary_double(op) ||
-        is_fp_compare_double(op) || is_fp_convert(op) ||
-        strcmp(op, "fsgnjn.d") == 0 ||
-        strcmp(op, "fmv.x.d") == 0 ||
-        strcmp(op, "fmv.x.w") == 0 ||
-        strcmp(op, "fmv.d.x") == 0 ||
-        strcmp(op, "fmv.w.x") == 0 ||
-        strcmp(op, "fld") == 0 || strcmp(op, "flw") == 0 ||
-        strcmp(op, "fsd") == 0 || strcmp(op, "fsw") == 0 ||
-        decode_vector_unit_stride(op, &is_store, &width) ||
-        strcmp(op, "vmv.v.i") == 0 ||
-        strcmp(op, "vsetvli") == 0 || strcmp(op, "vsetvl") == 0 ||
-        decode_lr_sc_mnemonic(op, &is_lr, &width, &ordering) ||
-        decode_amo_mnemonic(op, &funct5, &width, &ordering) ||
-        strcmp(op, "csrr") == 0 || strcmp(op, "csrrw") == 0 ||
-        strcmp(op, "csrrc") == 0 || strcmp(op, "csrw") == 0 ||
-        strcmp(op, "csrs") == 0 || strcmp(op, "csrc") == 0) return true;
-    return false;
-}
-
 static void rv_set_reg(MiniAsMCOperand *op, int num) {
     op->kind = MINIAS_MC_REGISTER;
     op->reg = (unsigned)num;

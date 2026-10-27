@@ -2212,4 +2212,46 @@ for invalid in '.insn r 0x33, 0, 0, x32, a1, a2' \
 done
 echo 'MINIAS_RV_RAW_MCINST_NEGATIVE=PASS invalid_raw=2'
 
+
+# Persisted MCInst must determine its own fragment length *before* section
+# layout. This simultaneously covers 4B/8B LI, 8B symbolic memory, local
+# branch addressing, ELF symbol .size, and real GNU GAS byte identity.
+cat >"$work/riscv-parsed-fragment-size.s" <<'EOF_PARSED_SIZE'
+.option norvc
+.text
+.globl rv_parsed_fragment_size
+.type rv_parsed_fragment_size,@function
+rv_parsed_fragment_size:
+    li a0, -2048
+    li a1, 2048
+    li a2, 0x12345678
+    lw a3, external_data
+    beq a0, a1, .Ltyped_size_end
+.Ltyped_size_end:
+    ret
+.size rv_parsed_fragment_size, .-rv_parsed_fragment_size
+EOF_PARSED_SIZE
+"$MINIAS" -o "$work/riscv-parsed-fragment-size.o" \
+    "$work/riscv-parsed-fragment-size.s"
+typed_size="$(readelf -Ws "$work/riscv-parsed-fragment-size.o" |
+    awk '$NF == "rv_parsed_fragment_size" { print $3 }')"
+test "$typed_size" = "36"
+if command -v riscv64-linux-gnu-as >/dev/null 2>&1 &&
+   command -v riscv64-linux-gnu-objcopy >/dev/null 2>&1; then
+    riscv64-linux-gnu-as -march=rv64i -mabi=lp64 \
+        -o "$work/riscv-parsed-fragment-size.gnu.o" \
+        "$work/riscv-parsed-fragment-size.s"
+    riscv64-linux-gnu-objcopy -j .text -O binary \
+        "$work/riscv-parsed-fragment-size.o" \
+        "$work/riscv-parsed-fragment-size.bin"
+    riscv64-linux-gnu-objcopy -j .text -O binary \
+        "$work/riscv-parsed-fragment-size.gnu.o" \
+        "$work/riscv-parsed-fragment-size.gnu.bin"
+    cmp "$work/riscv-parsed-fragment-size.bin" \
+        "$work/riscv-parsed-fragment-size.gnu.bin"
+    echo 'MINIAS_RV_PARSED_LAYOUT=PASS GNU_AS_bytes_equal=1 symbol_size=36'
+else
+    echo 'MINIAS_RV_PARSED_LAYOUT=PASS GNU_AS=SKIP(toolchain-unavailable) symbol_size=36'
+fi
+
 echo "MINIAS_A0=PASS objects=30 abi_flags=3 format=ELF64-RISCV-ET_REL relocations=23 strings=2 pseudos=17 previous=3 subsection=2 numeric_labels=18 ecall=1 isa_next=13 csr_amo=8 sfence_vma=3 fence_i=1 vsetvl=1 vsetvli=1 vmv_v_i=4 rept=2 nested_rept=1 irp=4 section_stack=1 org=3 local_difference=1 lr_sc=2 inline_labels=2 branch_pseudos=8 extern=1 symbol_minus_dot=4 symbol_difference=1 absolute32=1 jal=2 jal_subsection=1 high_numeric_labels=2 u64_data=3 raw_insn=4 set_alias=3 move=1 numeric_zero=1 immediate_product=2 shift_immediate=1 incbin=1 align_expr=1 native_expr=6 native_zbb_tail_memexpr=1 native_jalr_symbol_load=1 native_forward_short=1 native_mixed_macro=1 native_divided_difference=1 native_symbol_addend_expr=1 native_add_sub_immediate=1 native_cfi_boundary=1 native_gas_forms=1 native_set_size=1 native_macro_comma=1 native_macro_quotes=1 pic_la_got=1 sext_w=1 macro=4 conditional=1"

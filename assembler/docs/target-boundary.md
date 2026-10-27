@@ -59,11 +59,17 @@ Explicit -march=rv32i/rv64i retains existing fail-closed machine-code checks.
    R/I `.insn` escape now parses exactly once into a target-owned typed
    MCInst machine word. The obsolete conditional fallback decoder is
    removed entirely: **all remaining RISC-V instruction emission consumes
-   MCInst**. Multiword LI/CALL/TAIL/LA and symbolic loads/stores still use
-   target-owned legacy *measurement* to determine their total fragment size;
-   replacing those duplicate size parsers with deferred fragment sizing is
-   the next architectural task. RV32 shift widths are validated at the
-   typed parser.
+   MCInst**. This batch also eliminates the **last duplicate RISC-V
+   textual operand measurement grammar**. The core now installs the parsed
+   instruction first, then queries a target-owned `measure_mcinst` hook
+   before placing its fragment. 2B compressed, 4B regular, 8B symbolic
+   memory/CALL/LA and variable-size 32/64-bit LI measurements derive
+   directly from the stored MCInst. The old RISC-V text-based measure
+   function and duplicate opcode classifier are deleted. The generic
+   AArch64 vertical slice retains its proven existing measure path until
+   it too supports this hook. Strict ISA feature checks still precede
+   parsing, and target branch relaxation still follows measurement.
+   RV32 shift widths are validated at the typed parser.
    Vector register classes are distinguished from integer/FP registers.
    Comment stripping is target-configurable and .option
    dispatch belongs to the RISC-V target; common parser still owns GNU-style

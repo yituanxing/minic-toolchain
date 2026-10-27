@@ -3,10 +3,6 @@
 
 #include <stdbool.h>
 
-/* Fixed-width typed target instructions need no duplicate operand parse
- * during the legacy measure pass. Non-typed pseudos retain precise sizing. */
-bool minias_riscv_is_typed_fixed(const char *op);
-
 #define MINIAS_RISCV_OPTION_PIC 1U
 
 /* Shared target-owned MC opcode families: used by parser, encoder and

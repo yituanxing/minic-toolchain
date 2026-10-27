@@ -3282,22 +3282,35 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
 
     {
         char *rewritten_args = NULL;
+        const bool parsed_size = as->target->measure_mcinst != NULL;
+        const size_t statement_id = as->stmt_count;
         bool ok;
-
-        if (!rewrite_numeric_local_refs(as, args, &rewritten_args, line)) {
+        if (!rewrite_numeric_local_refs(as, args, &rewritten_args, line))
             return false;
-        }
-        if (!as->target->measure(as,
-                                  op,
-                                  rewritten_args,
-                                  &size,
-                                  reason,
-                                  sizeof(reason))) {
+        /* Feature/ABI validation happens before the target parser. Targets
+         * with a typed size hook do not inspect textual operands a second
+         * time: their legacy measure hook simply validates ISA policy. */
+        if (!as->target->measure(as, op, rewritten_args, &size,
+                                  reason, sizeof(reason))) {
             minias_set_error(as, "%s:line=%zu", reason, line);
             free(rewritten_args);
             return false;
         }
-        if (force_long_branch_for_stmt(as, as->stmt_count)) {
+        if (parsed_size) {
+            /* Install exactly one owned MCInst at the current fragment
+             * address. Its target-driven size is assigned before updating
+             * layout or applying the forced branch-relaxation decision. */
+            ok = add_stmt(as, MINIAS_STMT_INSN, op, rewritten_args,
+                          line, 0U, 1U);
+            if (ok)
+                ok = as->target->measure_mcinst(
+                    as, &as->stmts[statement_id], &size);
+            if (!ok) {
+                free(rewritten_args);
+                return false;
+            }
+        }
+        if (force_long_branch_for_stmt(as, statement_id)) {
             uint32_t grown = 0U;
             if (as->target->expanded_instruction_size == NULL ||
                 !as->target->expanded_instruction_size(op, size, &grown) ||
@@ -3309,17 +3322,17 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
             }
             size = grown;
         }
-        ok = add_stmt(as,
-                      MINIAS_STMT_INSN,
-                      op,
-                      rewritten_args,
-                      line,
-                      size,
-                      1U);
-        free(rewritten_args);
-        if (!ok) {
-            return false;
+        if (parsed_size) {
+            as->stmts[statement_id].size = size;
+        } else {
+            ok = add_stmt(as, MINIAS_STMT_INSN, op, rewritten_args,
+                          line, size, 1U);
+            if (!ok) {
+                free(rewritten_args);
+                return false;
+            }
         }
+        free(rewritten_args);
     }
     return advance_current_location(as, size);
 }

@@ -291,6 +291,8 @@ static bool riscv_validate_selected_isa(const MiniAs *as, const char *op,
 }
 static bool riscv_measure(const MiniAs *as, const char *op, const char *args,
                           uint32_t *size, char *reason, size_t cap) {
+    /* Machine feature checks must precede MCInst parsing, but operand
+     * decoding and sizing are exclusively the target MCInst hooks. */
     if (!riscv_validate_selected_isa(as, op, reason, cap)) return false;
     if (as->isa_explicit && as->target_xlen == 32U &&
         is_rv64_only_opcode(op)) {
@@ -302,27 +304,8 @@ static bool riscv_measure(const MiniAs *as, const char *op, const char *args,
         (void)snprintf(reason, cap, "riscv32e-invalid-register:%s", op);
         return false;
     }
-    if (strcmp(op, "c.li") == 0) {
-        /* Two-byte fixed C-format instruction, parsed by target MCInst. */
-        *size = 2U;
-        return true;
-    }
-    if (strcmp(op, ".insn") == 0) {
-        /* ISA-specific raw format validation happens once in parse_mcinst,
-         * not again when measuring and emitting the machine word. */
-        *size = 4U;
-        return true;
-    }
-    if (minias_riscv_is_typed_fixed(op)) {
-        /* The MCInst parser validates operands once. Strict-I additionally
-         * runs its exhaustive post-encoding machine word verifier, so no
-         * second textual operand decoder is necessary for any XLEN. */
-        *size = 4U;
-        return true;
-    }
-    /* XLEN, not the optional strict-base-I validator flag, determines
-     * RV32 li materialization width even on rv32im/rv32gc profiles. */
-    return minias_riscv_measure(as->target_xlen, op, args, size, reason, cap);
+    *size = 0U; /* Measured from the persisted parsed fragment. */
+    return true;
 }
 
 
@@ -479,6 +462,7 @@ static const MiniAsTargetOps riscv_ops = {
     .name = "riscv",
     .measure = riscv_measure,
     .parse_mcinst = minias_riscv_parse_mcinst,
+    .measure_mcinst = minias_riscv_measure_mcinst,
     .encode = minias_riscv_encode,
     .relax_instruction = riscv_relax_instruction,
     .expanded_instruction_size = riscv_expanded_size,
