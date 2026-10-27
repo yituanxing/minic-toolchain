@@ -15,6 +15,7 @@ import io
 import json
 import pathlib
 import re
+import resource
 import struct
 import subprocess
 import sys
@@ -220,6 +221,13 @@ def assembly_census(text: str) -> tuple[Counter, Counter]:
     return instructions, directives
 
 
+def bound_minias_address_space() -> None:
+    # Hard cap EACH assembler subprocess (not the GNU producer nor Python).
+    # Prevent a pathological .s from tearing down the entire Linux runner.
+    budget = 2 * 1024 * 1024 * 1024
+    resource.setrlimit(resource.RLIMIT_AS, (budget, budget))
+
+
 def scan(a: argparse.Namespace) -> None:
     p = pathlib.Path(a.archive)
     manifest, manifest_sha, selected = checked_shard(p, a.target, a.shard)
@@ -244,10 +252,15 @@ def scan(a: argparse.Namespace) -> None:
             directives.update(dirs)
             output = destination / "objects" / r["owner"]
             output.parent.mkdir(parents=True, exist_ok=True)
+            if len(rows) % 25 == 0:
+                print(f"MINIAS_LINUX_S_PROGRESS target={a.target} "
+                      f"shard={a.shard} owner={r['owner']} "
+                      f"done={len(rows)}/{len(selected)}", flush=True)
             try:
                 run = subprocess.run(
                     [a.minias, "--target=" + a.target, "-o", str(output), str(inp)],
-                    capture_output=True, text=True, timeout=45
+                    capture_output=True, text=True, timeout=45,
+                    preexec_fn=bound_minias_address_space
                 )
                 rc, diag = run.returncode, (run.stderr or run.stdout).strip()
             except subprocess.TimeoutExpired:

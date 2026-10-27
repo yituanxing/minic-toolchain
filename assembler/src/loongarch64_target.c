@@ -15,7 +15,7 @@ static bool la_reg(const char *s,unsigned *r) {
         {"a4",8U},{"a5",9U},{"a6",10U},{"a7",11U},
         {"t0",12U},{"t1",13U},{"t2",14U},{"t3",15U},
         {"t4",16U},{"t5",17U},{"t6",18U},{"t7",19U},
-        {"t8",20U},{"u0",21U},{"fp",22U},{"s9",31U}
+        {"t8",20U},{"u0",21U},{"fp",22U}
     };
     unsigned i;char *end;unsigned long val;
     if(*s!='$')return false;
@@ -72,6 +72,13 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
         if(!strcmp(s->op,"ret")){m->encoding=UINT32_C(0x4c000020);goto done;}
     }
     if(!la_split(s->args,t,&n))goto fail;
+    /* LoongArch jr register == jirl $zero,$reg,0.  No relocation. */
+    if(!strcmp(s->op,"jr") && n==1U && la_reg(t[0],&rj)) {
+        m->count=1U;
+        m->operands[0].kind=MINIAS_MC_REGISTER;
+        m->operands[0].reg=rj;
+        m->encoding=UINT32_C(0x4c000000)|(rj<<5U);goto done;
+    }
     if(!strcmp(s->op,"move") && n==2U &&
         la_reg(t[0],&rd) && la_reg(t[1],&rj)) {
         m->count=2U;m->encoding=UINT32_C(0x00150000) |

@@ -13,10 +13,15 @@ cat > "$work/x86.s" <<'ASM_X'
 .type entry_x,@function
 entry_x:
     nop
+    endbr64
     pushq %rbp
     movq %rsp,%rbp
     movl $42,%eax
     xorl %ecx,%ecx
+    addq $16, %rsp
+    subq $8, %rsp
+    addl $4096, %r8d
+    subl $-129, %r9d
     addq %r8,%r9
     subq %rax,%rcx
     cmpq %rbp,%rsp
@@ -46,6 +51,7 @@ entry_la:
     or $a0, $a0, $a1
     xor $a0, $a0, $a1
     move $a0, $a1
+    jr $r12
     ret
 .size entry_la, .-entry_la
 ASM_LA
@@ -75,4 +81,4 @@ if "$MINIAS" --target=loongarch64 -o "$work/invalid.o" "$work/unimplemented.s" \
     echo 'Unimplemented branch/fixup silently accepted' >&2
     exit 1
 fi
-echo 'MINIAS_TWO_TARGET_ORACLE=PASS x86_GNU_bytes=equal loong_GNU_bytes=equal ELF_machine=correct lp64d_v1=0x43 invalid=reject'
+echo 'MINIAS_TWO_TARGET_ORACLE=PASS x86_GNU_bytes=equal loong_GNU_bytes=equal ELF_machine=correct lp64d_v1=0x43 CET_endbr64=1 ALU_imm8_imm32=1 LA_jr=1 invalid=reject'

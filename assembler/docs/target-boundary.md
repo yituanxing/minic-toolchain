@@ -215,3 +215,21 @@ relocation, validation, code-alignment hooks remain mandatory.
 This is a **single shared API correction** rather than copied per-target
 dummy methods or an architecture-specific `if (x86)` workaround. The
 regression gate checks GNU machine-code/ELF parity for BOTH new targets.
+
+## Real complete Linux first-blocker Pareto: target-only ISA batch
+
+x86 Linux GNU `.s` now contains 2,763 complete Kbuild inputs.
+Real frozen shard evidence showed **314/394** files in one shard blocked
+at Intel CET `endbr64`. The x86 Target now recognizes its 4-byte
+encoding and canonical sign-extended group-1 ADD/SUB immediate (imm8/imm32)
+on 32/64-bit GPRs. LoongArch64 Linux samples are blocked at the register
+`jr` pseudo in roughly dozens of objects per shard, now mapped to
+`jirl $zero,$reg,0`. Unknown LoongArch relocations (e.g. PCALA)
+and AArch64 CFI remain explicitly unsupported.
+
+The GNU assembler differential matrix includes CET endbr64, immediate
+ALU forms and LoongArch jr. Neither common instruction dispatch, ELF
+serialization, nor architecture-specific duplicate copies were modified.
+The Kbuild per-child scanner now enforces 2GiB virtual memory and emits
+per-25-file progress records, so VM shutdowns can be distinguished from
+actual MiniAS instruction problems before repeating any full 3x7 campaign.

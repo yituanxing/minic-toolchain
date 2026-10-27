@@ -8,7 +8,7 @@
 
 /* A first, fail-closed GNU AT&T SysV x86-64 target. All common expression,
  * symbol, section, fragment, and ELF handling lives outside this file. */
-enum { X64_ZERO = 1, X64_REG_BINARY, X64_STACK, X64_MOV_IMM32 };
+enum { X64_ZERO = 1, X64_REG_BINARY, X64_STACK, X64_MOV_IMM32, X64_ENDBR64, X64_ALU_IMM };
 
 static bool x64_register(const char *text, unsigned *reg, bool *wide) {
     static const char *const names64[16] = {
@@ -67,6 +67,10 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
     bool ws, wd;
     char src[48],dst[48];
     if (!m) {minias_set_error(as,"out-of-memory:x86_64-mcinst");return false;}
+    if (!strcmp(s->op,"endbr64") && !*s->args) {
+        m->opcode=X64_ENDBR64;m->encoding=UINT32_C(0xfa1e0ff3);
+        m->count=0U;goto done;
+    }
     for(i=0U;i<sizeof(zeros)/sizeof(zeros[0]);++i) {
         if (!strcmp(s->op,zeros[i].op) && !*s->args) {
             m->opcode=X64_ZERO; m->count=0U;
@@ -103,6 +107,30 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
             goto done;
         }
     }
+    /* Group-1 ALU immediate form: GNU -S emits ADD/SUB $imm,%reg
+     * frequently in Linux.  Sign-extended imm8 is canonical if it fits;
+     * otherwise imm32; full memory ModR/M remains a separate target task. */
+    if ((!strcmp(s->op,"addq") || !strcmp(s->op,"addl") ||
+         !strcmp(s->op,"subq") || !strcmp(s->op,"subl")) &&
+        x64_args2(s->args,src,dst) && src[0]=='$' &&
+        x64_register(dst,&rd,&wd) &&
+        wd==(s->op[strlen(s->op)-1U]=='q')) {
+        char *end;
+        long long num;
+        errno=0;
+        num=strtoll(src+1,&end,0);
+        if (!errno && end!=src+1 && !*end &&
+            num>=INT32_MIN && num<=INT32_MAX) {
+            m->opcode=X64_ALU_IMM;m->count=2U;
+            m->encoding=s->op[0]=='s'?5U:0U;
+            m->operands[0].kind=MINIAS_MC_REGISTER;
+            m->operands[0].register_64=wd;
+            m->operands[0].reg=rd;
+            m->operands[1].kind=MINIAS_MC_IMMEDIATE;
+            m->operands[1].immediate=(uint32_t)num;
+            goto done;
+        }
+    }
     minias_set_error(as,"unsupported-x86_64-operand:%s:%s:line=%zu",
                      s->op,s->args,s->line);
     free(m);return false;
@@ -115,6 +143,13 @@ static bool x64_measure(MiniAs *as,const MiniAsStmt *s,uint32_t *size) {
     if (!m) {minias_set_error(as,"missing-x86_64-mcinst");return false;}
     switch(m->opcode) {
         case X64_ZERO: *size=(uint32_t)m->operands[0].immediate;return true;
+        case X64_ENDBR64: *size=4U;return true;
+        case X64_ALU_IMM: {
+            int32_t imm=(int32_t)(uint32_t)m->operands[1].immediate;
+            *size=(m->operands[0].register_64 || m->operands[0].reg>=8U?1U:0U) +
+                  (imm>=-128 && imm<=127?3U:6U);
+            return true;
+        }
         case X64_STACK: *size=(m->operands[0].reg>=8U)?2U:1U;return true;
         case X64_MOV_IMM32: *size=(m->operands[0].reg>=8U)?6U:5U;return true;
         case X64_REG_BINARY:
@@ -133,6 +168,25 @@ static bool x64_encode(MiniAs *as,const MiniAsStmt *s) {
         case X64_ZERO: {
             unsigned i;for(i=0U;i<(unsigned)m->operands[0].immediate;++i)
                 code[n++]=(unsigned char)(m->encoding>>(8U*i));
+            break;
+        }
+        case X64_ENDBR64: {
+            unsigned i;
+            for(i=0U;i<4U;++i)code[n++]=(unsigned char)(m->encoding>>(8U*i));
+            break;
+        }
+        case X64_ALU_IMM: {
+            unsigned i;
+            int32_t imm=(int32_t)(uint32_t)m->operands[1].immediate;
+            bool short_imm=imm>=-128 && imm<=127;
+            r=m->operands[0].reg;
+            if(m->operands[0].register_64 || r>=8U)
+                code[n++]=(unsigned char)(0x40U |
+                    (m->operands[0].register_64?8U:0U) | (r>>3U));
+            code[n++]=short_imm?0x83U:0x81U;
+            code[n++]=(unsigned char)(0xc0U | ((m->encoding&7U)<<3U) | (r&7U));
+            for(i=0U;i<(short_imm?1U:4U);++i)
+                code[n++]=(unsigned char)((uint32_t)imm>>(8U*i));
             break;
         }
         case X64_STACK:
