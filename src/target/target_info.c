@@ -716,11 +716,16 @@ bool minic_target_info_call_frame_address_supported(const MinicTargetInfo *targe
 bool minic_target_info_fixed_register_supported(const MinicTargetInfo *target,
                                                 const char *name,
                                                 size_t name_length) {
-    if (target == NULL || name == NULL ||
-        (target->architecture != MINIC_TARGET_ARCH_RISCV64 &&
-         target->architecture != MINIC_TARGET_ARCH_RISCV32)) {
-        return false;
-    }
+    if (target == NULL || name == NULL) return false;
+    /* Linux x86's current_stack_pointer is a read of the LIVE rsp, not
+     * a load from an ELF object and not an alias for rbp. The machine
+     * emitter now owns the matching fixed-register Core instruction.
+     * Do not allow rbp, scratch, or arbitrary SysV registers without
+     * an independent assignment and preservation contract. */
+    if (target->architecture == MINIC_TARGET_ARCH_X86_64)
+        return name_length == 3U && memcmp(name, "rsp", 3U) == 0;
+    if (target->architecture != MINIC_TARGET_ARCH_RISCV64 &&
+        target->architecture != MINIC_TARGET_ARCH_RISCV32) return false;
     /* Both RISC-V backends reserve sp/tp architecturally. RV32 shares
      * the SAME Core fixed-register value semantics as RV64, but has its own
      * ILP32 machine load/store and frame contract; admit no scratch or ABI

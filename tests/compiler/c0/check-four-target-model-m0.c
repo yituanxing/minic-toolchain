@@ -283,6 +283,35 @@ static int verify_riscv_integer_strategy(void) {
     return puts("RISCV_BASE_I_STRATEGY=PASS rv32_rv64 M_optional C_ignored runtime_fallback") == EOF;
 }
 
+/* Distinguish target ISA ABI ownership from GNU fixed-register grammar.
+ * RISC-V sp/tp and x86 rsp are live machine values. No AArch64/LoongArch
+ * register binding is admitted until their backend owns the corresponding
+ * Core FIXED_REGISTER_READ lowering and preservation contract. */
+static int verify_fixed_register_target_contract(void) {
+    static const char *names[] = {
+        "riscv32-linux", "riscv64-linux", "x86_64-linux",
+        "aarch64-linux", "loongarch64-linux"
+    };
+    size_t i;
+    for (i = 0U; i < sizeof(names) / sizeof(names[0]); ++i) {
+        const MinicTargetInfo *t = minic_target_info_from_name(names[i]);
+        bool riscv = i <= 1U;
+        bool x86 = i == 2U;
+        if (!t ||
+            minic_target_info_fixed_register_supported(t, "rsp", 3U) != x86 ||
+            minic_target_info_fixed_register_supported(t, "sp", 2U) != riscv ||
+            minic_target_info_fixed_register_supported(t, "tp", 2U) != riscv ||
+            minic_target_info_fixed_register_supported(t, "r15", 3U) ||
+            minic_target_info_fixed_register_supported(t, "rbp", 3U) ||
+            minic_target_info_fixed_register_supported(t, "rsp", 2U)) {
+            (void)fprintf(stderr, "FIXED_REGISTER_TARGET=FAIL %s\n", names[i]);
+            return 1;
+        }
+    }
+    (void)puts("FIXED_REGISTER_TARGET=PASS rv_sp_tp x86_rsp_live others_fail_closed");
+    return 0;
+}
+
 /* GCC RISC-V and LoongArch share signed-12 immediate I. An ISA's
  * argument parser must not invent a machine-independent I meaning:
  * x86-64 and AArch64 retain their own not-yet-qualified alternatives. */
@@ -338,7 +367,8 @@ int main(void) {
         (void)fprintf(stderr, "FAIL AAPCS64 va_copy must fail closed, x86 ABI-state independent\n");
         return 1;
     }
-    if (verify_gnu_asm_immediate_target_contract() != 0 ||
+    if (verify_fixed_register_target_contract() != 0 ||
+        verify_gnu_asm_immediate_target_contract() != 0 ||
         verify_riscv_integer_strategy() != 0 || verify_registered_target_catalog() != 0 || verify_riscv_profile_catalog() != 0 ||
         verify_lp64("riscv64-linux", MINIC_TARGET_ARCH_RISCV64,
                     MINIC_INTEGER_SIGN_UNSIGNED, MINIC_INTEGER_RANK_INT,

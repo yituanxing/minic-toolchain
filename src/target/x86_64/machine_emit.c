@@ -120,6 +120,29 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
         }
         return x86_value_store(out, frame, ins->result);
     }
+    case MINIC_CORE_INSTRUCTION_FIXED_REGISTER_READ: {
+        const MinicCoreFixedRegisterBinding *binding;
+        MinicType type;
+        const size_t index = ins->value.fixed_register_binding_id;
+        if (index >= fn->fixed_register_binding_count ||
+            ins->result >= fn->value_count) return false;
+        binding = &fn->fixed_register_bindings[index];
+        if (binding->is_local || !binding->register_name ||
+            !minic_target_info_fixed_register_supported(
+                target, binding->register_name, binding->register_name_length) ||
+            !minic_type_equal(binding->type, ins->type) ||
+            !minic_type_equal(fn->values[ins->result].type, ins->type) ||
+            !minic_type_unqualified(ins->type, &type) ||
+            (!minic_type_is_integer(type) && !minic_type_is_pointer(type)) ||
+            !minic_x86_64_scalar_width(program, target, type, &bytes, &sign) ||
+            bytes != 8U) return false;
+        /* Read the actual current rsp AFTER the function prologue and any
+         * dynamic stack adjustment. Materialize via the already verified
+         * Core SSA slot so no special stack-pointer semantics enter Core.
+         * mov doesn't change flags or rsp; no register allocator changes. */
+        return fprintf(out, "  movq %%rsp, %%rax\n") >= 0 &&
+               x86_value_store(out, frame, ins->result);
+    }
     case MINIC_CORE_INSTRUCTION_PARAMETER_OBJECT: {
         static const char *const regs[] = {
             "%rdi", "%rsi", "%rdx", "%rcx", "%r8", "%r9"};

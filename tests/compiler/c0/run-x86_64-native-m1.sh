@@ -33,6 +33,44 @@ int main(void) { return 42; }
 EOF
 check_exit return42 42
 
+# Original Linux x86-64: register unsigned long current_stack_pointer
+# asm("rsp"). GCC binds the *live stack pointer*, after the callee's prologue,
+# rather than materializing an ELF global or substituting the saved rbp.
+# Verify real GNU assembly and execute natively against an actual local.
+cat > "$tempdir/x86_rsp_live.i" <<'EOF'
+register unsigned long current_stack_pointer asm("rsp");
+int main(void) {
+    volatile unsigned long stack_local = 42UL;
+    unsigned long rsp_snapshot = current_stack_pointer;
+    unsigned long object_address = (unsigned long)&stack_local;
+    if (rsp_snapshot == 0UL || rsp_snapshot > object_address)
+        return 1;
+    if (object_address - rsp_snapshot > 4096UL)
+        return 2;
+    if ((rsp_snapshot & 15UL) != 0UL)
+        return 3;
+    return (int)stack_local;
+}
+EOF
+check_exit x86_rsp_live 42
+grep -F '  movq %rsp, %rax' "$tempdir/x86_rsp_live.s" >/dev/null
+if grep -F 'current_stack_pointer@' "$tempdir/x86_rsp_live.s" >/dev/null; then
+    echo 'FAIL: x86 rsp binding lowered as a global symbol' >&2
+    exit 1
+fi
+cat > "$tempdir/x86_rsp_unqualified.i" <<'EOF'
+register unsigned long unqualified_reg asm("r15");
+unsigned long probe(void) { return unqualified_reg; }
+EOF
+if "$MINIC_CC" --target=x86_64-linux -S "$tempdir/x86_rsp_unqualified.i" \
+    -o "$tempdir/x86_rsp_unqualified.s" >"$tempdir/x86_rsp_unqualified.out" \
+    2>"$tempdir/x86_rsp_unqualified.err"; then
+    echo 'FAIL: x86 unqualified r15 binding accepted' >&2
+    exit 1
+fi
+grep -F 'fixed register binding is not supported by this target' \
+    "$tempdir/x86_rsp_unqualified.err" >/dev/null
+
 # BusyBox allyesconfig + libselinux: a GNU deprecated typedef is an
 # informational type attribute, not a different object/argument layout.
 # Check both x86 runtime and RV64 parsing; retain diagnostic-only behavior.
