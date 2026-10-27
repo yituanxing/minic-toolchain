@@ -145,7 +145,10 @@ SRC
           constraint) asm='__asm__ __volatile__("dbar %0" : : "r"(18) : "memory");' ;;
           nonconstant) asm='__asm__ __volatile__("dbar %0" : : "I"(v) : "memory");' ;;
         esac
-        printf 'void invalid(int v) { %s }\nint main(void) { invalid(18); return 0; }\n' \
+        # Exercise the unsupported assembly in the public live entry.
+        # A source-only -S build may intentionally elide unreferenced
+        # helper definitions; that must not produce a false negative here.
+        printf 'int main(int v) { %s return 0; }\n' \
             "$asm" > "$work/dbar-$invalid.i"
         if "$MINIC_CC" --target=loongarch64-linux -S "$work/dbar-$invalid.i" \
             -o "$work/dbar-$invalid.s" >"$work/dbar-$invalid.out" \
