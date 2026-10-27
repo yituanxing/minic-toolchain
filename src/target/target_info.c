@@ -764,6 +764,20 @@ bool minic_target_info_fixed_register_supported(const MinicTargetInfo *target,
            (name_length == 2U && memcmp(name, "sp", 2U) == 0);
 }
 
+bool minic_target_info_inline_asm_readwrite_hardreg_supported(
+    const MinicTargetInfo *target, const char *reg, size_t reg_length,
+    const char *constraint, size_t length, MinicType operand_type) {
+    /* Original Linux 6.6 x86 current_stack_pointer asm("rsp") is a
+     * GNU extended-asm tied +r operand. C assignment to RSP is NOT
+     * permitted and Core must separately validate the whole machine
+     * template, physical stack effects, registers and clobber set. */
+    return target != NULL && reg != NULL && constraint != NULL &&
+           target->architecture == MINIC_TARGET_ARCH_X86_64 &&
+           reg_length == 3U && memcmp(reg, "rsp", 3U) == 0 &&
+           length == 2U && memcmp(constraint, "+r", 2U) == 0 &&
+           minic_type_equal(operand_type, minic_type_unsigned_long());
+}
+
 bool minic_target_info_fixed_register_write_supported(
     const MinicTargetInfo *target, const char *name, size_t length) {
     /* Original LoongArch Linux set_my_cpu_offset() writes only reserved r21.

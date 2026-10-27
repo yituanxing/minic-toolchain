@@ -1093,7 +1093,19 @@ static bool verify_statement(const MinicC0Program *program,
             if (operand->constraint_text == NULL || operand->constraint_length == 0U ||
                 ((operand->name == NULL) != (operand->name_length == 0U)) ||
                 operand_expression == NULL ||
-                operand_expression->value_category != MINIC_VALUE_LVALUE ||
+                (operand_expression->value_category != MINIC_VALUE_LVALUE &&
+                 !(operand_expression->value_category == MINIC_VALUE_RVALUE &&
+                   operand_expression->kind == MINIC_EXPRESSION_FIXED_REGISTER &&
+                   minic_c0_program_fixed_register_binding(
+                       program, operand_expression->value.fixed_register_binding_id) != NULL &&
+                   minic_target_info_inline_asm_readwrite_hardreg_supported(
+                       target_info,
+                       minic_c0_program_fixed_register_binding(
+                           program, operand_expression->value.fixed_register_binding_id)->register_name,
+                       minic_c0_program_fixed_register_binding(
+                           program, operand_expression->value.fixed_register_binding_id)->register_name_length,
+                       operand->constraint_text, operand->constraint_length,
+                       operand_expression->type))) ||
                 (operand->access != MINIC_INLINE_ASM_OPERAND_WRITE_ONLY &&
                  operand->access != MINIC_INLINE_ASM_OPERAND_READ_WRITE)) {
                 return false;

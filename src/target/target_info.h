@@ -154,6 +154,11 @@ bool minic_target_info_integer_literal_type(const MinicTargetInfo *target,
                                             MinicType *result);
 /* Named register writes are target-described separately from reads;
  * no global SP/TP/RSP mutation may enter the machine emitter. */
+/* GNU output operand grammar is not C lvalue mutability and is not
+ * target-machine ASM qualification. Targets describe the exact exceptions. */
+bool minic_target_info_inline_asm_readwrite_hardreg_supported(
+    const MinicTargetInfo *, const char *, size_t,
+    const char *, size_t, MinicType);
 bool minic_target_info_fixed_register_write_supported(
     const MinicTargetInfo *, const char *, size_t);
 bool minic_target_info_fixed_register_supported(const MinicTargetInfo *target,

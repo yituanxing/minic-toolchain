@@ -224,6 +224,7 @@ jobs:
         run: |
           bash tests/compiler/c0/probe-runtime-typed-overflow.sh
           bash tests/compiler/c0/probe-runtime-isnan.sh
+          bash tests/compiler/c0/probe-x86-rsp-readwrite-output.sh             "$GITHUB_WORKSPACE/build/runtime-ci/bin/minic-cc"
       - name: Audit real Kbuild MiniC strict-I and original kernel inline ASM
         if: matrix.target == 'riscv64'
         shell: bash
