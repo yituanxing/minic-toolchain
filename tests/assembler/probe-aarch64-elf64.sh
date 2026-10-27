@@ -53,6 +53,12 @@ external_probe:
     isb #15
     cmn x0, #4096
     cmn w1, #4096
+    // GNU normal conditional select/negate family, not CSET pseudo aliases.
+    csel w0, w1, wzr, eq
+    csel x2, x3, x4, ne
+    csinc w5, w6, w7, cs
+    csinv x8, x9, x10, lt
+    csneg x11, x12, x13, mi
     cmn x0, x1
     cmp x1, #8192
     and w1, w1, #255
@@ -293,6 +299,9 @@ for bad_source in 'ldxr x0, [x1,#4]' 'stxr x0, x1, [x2]' \
                   'subs x0, w0, x1' 'adds x0, x1, #4097' \
                   'cset sp, eq' 'cinc w0, x1, eq' \
                   'cset x0, bogus' \
+                  'csel x0, w1, x2, eq' \
+                  'csel sp, x1, x2, eq' \
+                  'csinc x0, x1, x2, bad' \
                   'mrs w0, sp_el0' 'msr tpidrro_el0, x0' \
                   'mrs x0, fake_el0' 'dmb #16' 'dmb invalid' \
                   'dsb #16' 'dsb bogus' 'isb ish' 'isb #16' \

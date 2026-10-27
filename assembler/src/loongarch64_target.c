@@ -618,6 +618,52 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
                     }
         }
     }
+    /* LASX signed vector immediate compare: same typed si5/register
+     * field model as LSX but distinct ISA opcodes and XR register class. */
+    if(n==3U && la_special_reg(t[0],"$xr",31U,&rd) &&
+       la_special_reg(t[1],"$xr",31U,&rj)) {
+        static const struct {const char *name;uint32_t base;} cv[]={
+            {"xvslti.b",UINT32_C(0x76860000)},
+            {"xvslti.h",UINT32_C(0x76868000)},
+            {"xvslti.w",UINT32_C(0x76870000)},
+            {"xvslti.d",UINT32_C(0x76878000)}
+        };
+        int64_t imm;
+        if(minias_eval_i64_expression(t[2],&imm) &&
+           imm>=-16 && imm<=15)
+            for(i=0U;i<sizeof(cv)/sizeof(cv[0]);++i)
+                if(!strcmp(s->op,cv[i].name)) {
+                    m->count=3U;
+                    m->encoding=cv[i].base |
+                        (((uint32_t)imm&31U)<<10U)|(rj<<5U)|rd;
+                    goto done;
+                }
+    }
+    /* LSX lane extract to GPR: r0/v5/u10 immediate, widths set index cap.
+     * The vector register is not a GPR and GNU requires index in range. */
+    if(n==3U && la_reg(t[0],&rd) &&
+       la_special_reg(t[1],"$vr",31U,&rj)) {
+        static const struct {const char *name;uint32_t base;unsigned max;} pick[]={
+            {"vpickve2gr.b",UINT32_C(0x72ef8000),15U},
+            {"vpickve2gr.h",UINT32_C(0x72efc000),7U},
+            {"vpickve2gr.w",UINT32_C(0x72efe000),3U},
+            {"vpickve2gr.d",UINT32_C(0x72eff000),1U},
+            {"vpickve2gr.bu",UINT32_C(0x72f38000),15U},
+            {"vpickve2gr.hu",UINT32_C(0x72f3c000),7U},
+            {"vpickve2gr.wu",UINT32_C(0x72f3e000),3U},
+            {"vpickve2gr.du",UINT32_C(0x72f3f000),1U}
+        };
+        uint64_t lane;
+        if(minias_eval_u64_expression(t[2],&lane))
+            for(i=0U;i<sizeof(pick)/sizeof(pick[0]);++i)
+                if(!strcmp(s->op,pick[i].name) &&
+                   lane<=pick[i].max) {
+                    m->count=3U;
+                    m->encoding=pick[i].base |
+                        ((uint32_t)lane<<10U)|(rj<<5U)|rd;
+                    goto done;
+                }
+    }
     /* FCC-to-GPR: condition register is u3 in r5, GPR is r0. */
     if(n==2U && !strcmp(s->op,"movcf2gr") &&
        la_reg(t[0],&rd) &&

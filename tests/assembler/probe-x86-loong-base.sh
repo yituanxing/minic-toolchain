@@ -164,6 +164,12 @@ entry_x:
     wbinvd
     invd
     mull %eax
+    imull %edx, %eax
+    imulq %r8, %r9
+    imulw %cx, %dx
+    imulq 8(%r12), %r9
+    imull (%rax), %r10d
+    imulw 4(%r13), %r8w
     mulq %r14
     imulq %rax
     divl %edx
@@ -608,6 +614,14 @@ entry_la:
     ctz.d $a1, $a0
     bitrev.d $a0, $a1
     div.du $a0, $a1, $a2
+    xvslti.b $xr6, $xr2, 0
+    xvslti.h $xr3, $xr31, -16
+    xvslti.w $xr4, $xr5, 15
+    xvslti.d $xr8, $xr7, -1
+    vpickve2gr.d $r13, $vr0, 1
+    vpickve2gr.b $a0, $vr31, 15
+    vpickve2gr.wu $a1, $vr2, 3
+    vpickve2gr.hu $a2, $vr3, 7
     div.wu $a0, $a1, $a2
     mulh.du $a0, $a1, $a2
     ll.w $a0, $sp, -4
@@ -674,6 +688,8 @@ for bad in 'movq __per_cpu_offset(%rdi),%rax' \
            'testl %rax, %eax' \
            'add %gs:this_cpu_off(%rip), (%rax)' \
            'mulq %eax' \
+           'imull %rax,%eax' \
+           'imulq %edx,%rax' \
            'divl %rax' \
            'cmpxchgq %eax, (%rdi)' \
            'bsfq %rax, %eax' \
@@ -934,6 +950,10 @@ for bad in 'li.w $r4, -2049' \
            'slli.w $a0, $a1, 32' \
            'addu16i.d $a0, $a1, 32768' \
            'addu16i.d $a0, $a1, -32769' \
+           'xvslti.b $xr0, $xr1, 16' \
+           'xvslti.d $xr0, $xr1, -17' \
+           'vpickve2gr.d $r1, $vr0, 2' \
+           'vpickve2gr.wu $a0, $vr2, 4' \
            'srli.d $a0, $a1, 64' \
            'lu12i.w $a0, 524288' \
            'pcalau12i $a0, -524289' \

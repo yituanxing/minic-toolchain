@@ -344,6 +344,7 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
         {"btcq",0xbb,0,true},{"btcl",0xbb,0,false},
         {"xaddq",0xc1,0,true},{"xaddl",0xc1,0,false},
         {"cmpxchgq",0xb1,0,true},{"cmpxchgl",0xb1,0,false},
+        {"imulq",0,0x1afU,true},{"imull",0,0x1afU,false},
         /* Existing typed memory ModR/M encoder owns REX/SIB/PC32 for
          * 0F B6/B7 zero-extension and 63 sign-extension. */
         {"movzbl",0,0x1b6U,false},{"movzbq",0,0x1b6U,true},
@@ -359,6 +360,7 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
         {"testw",0x85U,0x85U,false},{"addw",0x01U,0x03U,false},
         {"subw",0x29U,0x2bU,false},{"andw",0x21U,0x23U,false},
         {"adcw",0x11U,0x13U,false},{"sbbw",0x19U,0x1bU,false},
+        {"imulw",0,0x1afU,false},
         {"orw",0x09U,0x0bU,false},{"xorw",0x31U,0x33U,false}
     };
     MiniAsMCInst *m=calloc(1U,sizeof(*m)+3U*sizeof(MiniAsMCOperand));
@@ -591,6 +593,26 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
             m->operands[0].kind=MINIAS_MC_REGISTER;
             m->operands[0].reg=first;
             m->operands[0].register_64=wd;
+            m->operands[1].kind=MINIAS_MC_REGISTER;
+            m->operands[1].reg=second;
+            goto done;
+        }
+        /* GNU two-register IMUL: 0F AF /r with destination in ModR/M.reg.
+         * Do not create a second ALU operand encoder. */
+        if((!strcmp(s->op,"imul") || !strcmp(s->op,"imull") ||
+            !strcmp(s->op,"imulq") || !strcmp(s->op,"imulw")) &&
+           (( !strcmp(s->op,"imulw") &&
+              x64_register16(src,&first) && x64_register16(dst,&second)) ||
+            (strcmp(s->op,"imulw") && x64_register(src,&first,&ws) &&
+             x64_register(dst,&second,&wd) && ws==wd &&
+             (!strcmp(s->op,"imul") ||
+              wd==(!strcmp(s->op,"imulq")))))) {
+            m->opcode=X64_REG_BINARY;m->count=2U;
+            m->encoding=UINT32_C(0x9af) |
+                (!strcmp(s->op,"imulw")?UINT32_C(0x400):0U);
+            m->operands[0].kind=MINIAS_MC_REGISTER;
+            m->operands[0].reg=first;
+            m->operands[0].register_64=!strcmp(s->op,"imulw")?false:ws;
             m->operands[1].kind=MINIAS_MC_REGISTER;
             m->operands[1].reg=second;
             goto done;
@@ -1070,7 +1092,9 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
                 if((!strcmp(s->op,"leaq")||!strcmp(s->op,"leal") ||
                     !strcmp(s->op,"movzbl") || !strcmp(s->op,"movzbq") ||
                     !strcmp(s->op,"movzwl") || !strcmp(s->op,"movzwq") ||
-                    !strcmp(s->op,"movslq")) && !memory_source)continue;
+                    !strcmp(s->op,"movslq") ||
+                    !strcmp(s->op,"imulq") || !strcmp(s->op,"imull") ||
+                    !strcmp(s->op,"imulw")) && !memory_source)continue;
                 chosen=memory_source?&regmem[i].rm_src:&regmem[i].rm_dest;
                 break;
             }
