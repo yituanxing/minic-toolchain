@@ -105,6 +105,7 @@ static bool append_word(MiniAs *as, int section, uint32_t word) {
  * never re-splits source operand strings or reparses reloc expressions. */
 enum {
     A64_MC_NOP = 1,
+    A64_MC_HINT,
     A64_MC_RET,
     A64_MC_MOVZ,
     A64_MC_SVC,
@@ -518,6 +519,16 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
                       |(shift<<2U);
         put_reg(&inst->operands[0],rd,wide);
         put_immediate(&inst->operands[1],(int64_t)imm16);
+    } else if (!strcmp(op,"hint")) {
+        int64_t hint;
+        if(!parse_signed_number(args,&hint) || hint<0 || hint>127) {
+            minias_set_error(as,"bad-aarch64-hint:%s:line=%zu",
+                             args,stmt->line);
+            free(inst);return false;
+        }
+        inst->opcode=A64_MC_HINT;
+        inst->count=1U;
+        put_immediate(&inst->operands[0],hint);
     } else if (strcmp(op, "nop") == 0 && *args == '\0') {
         inst->opcode = A64_MC_NOP;
     } else if (strcmp(op, "ret") == 0 && *args == '\0') {
@@ -653,6 +664,12 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
         return false;
     }
     switch (inst->opcode) {
+        case A64_MC_HINT:
+            /* A64 HINT imm7, including the architectural HINT #25
+             * instruction used throughout Linux entry code. */
+            code=UINT32_C(0xd503201f) |
+                 ((uint32_t)inst->operands[0].immediate<<5U);
+            break;
         case A64_MC_NOP:
             code = UINT32_C(0xd503201f);
             break;

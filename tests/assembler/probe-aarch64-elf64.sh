@@ -23,6 +23,10 @@ _start:
     nop // AArch64 inline comment
 #NO_APP
     mov x0, #0
+    hint #25
+    hint 25
+    hint #0
+    hint #127
     bl after_call
     b exit_code
 after_call:
@@ -191,7 +195,8 @@ if "$MINIAS" --target=aarch64 -o "$work/unsupported.o" \
     exit 1
 fi
 # MCInst must be validated while parsing, independent of later emit/ELF.
-for bad_source in 'ret x31' 'mov x2, #65536' 'b external_function + 2' \
+for bad_source in 'hint #-1' 'hint #128' 'hint #18446744073709551616' \
+                  'hint bad' 'ret x31' 'mov x2, #65536' 'b external_function + 2' \
                   'cbz sp, external_function' 'cbnz x0, external_function+2' \
                   'tbz w0, #32, external_function' \
                   'tbnz x0, #64, external_function' \
