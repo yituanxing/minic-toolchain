@@ -17,6 +17,8 @@ extern long gnu_gp10(long,long,long,long,long,long,long,long,long,long);
 extern long gnu_record(struct Pair,long);
 extern double gnu_double(double,double);
 extern long gnu_call_into_minic(void);
+extern unsigned __int128 gnu_wide(unsigned long);
+extern long double gnu_binary128(void);
 long minic_incoming_gp10(long a,long b,long c,long d,long e,
                          long f,long g,long h,long i,long j) {
     return a+b+c+d+e+f+g+h+i+j;
@@ -37,21 +39,42 @@ int rv64_transfer_entry(void) {
     double (*fp)(double,double);
     long direct, indirect, record_direct, record_indirect;
     double direct_fp, indirect_fp;
+    unsigned __int128 direct_wide, indirect_wide;
+    long double direct_ld, indirect_ld;
+    unsigned __int128 (*wide_fp)(unsigned long);
+    long double (*ld_fp)(void);
+    const unsigned char *direct_ld_bytes, *indirect_ld_bytes;
+    unsigned int byte;
+    int ld_equal = 1;
     value.tag = 13UL;
     value.count = 17U;
     value.flags = 5U;
     gp = gnu_gp10;
     record = gnu_record;
     fp = gnu_double;
+    wide_fp = gnu_wide;
+    ld_fp = gnu_binary128;
     direct = gnu_gp10(1,2,3,4,5,6,7,8,9,10);
     indirect = gp(1,2,3,4,5,6,7,8,9,10);
     record_direct = gnu_record(value,7);
     record_indirect = record(value,7);
     direct_fp = gnu_double(1.25,2.25);
     indirect_fp = fp(1.25,2.25);
+    direct_wide = gnu_wide(0x12345678UL);
+    indirect_wide = wide_fp(0x12345678UL);
+    direct_ld = gnu_binary128();
+    indirect_ld = ld_fp();
+    direct_ld_bytes = (const unsigned char *)&direct_ld;
+    indirect_ld_bytes = (const unsigned char *)&indirect_ld;
+    for (byte = 0U; byte < sizeof(long double); ++byte)
+        if (direct_ld_bytes[byte] != indirect_ld_bytes[byte]) ld_equal = 0;
     return direct == 55 && indirect == 55 &&
            record_direct == 42 && record_indirect == 42 &&
            direct_fp == 3.5 && indirect_fp == 3.5 &&
+           direct_wide == indirect_wide &&
+           (unsigned long)indirect_wide == 0x12345689UL &&
+           (unsigned long)(indirect_wide >> 64) == 0x12345678UL &&
+           ld_equal &&
            gnu_call_into_minic() == 55 &&
            gnu_call_into_minic_mixed() == 44 &&
            gnu_call_into_minic_floats() == 1 ? 42 : 1;
@@ -68,6 +91,10 @@ long gnu_record(struct Pair p,long extra) {
     return (long)p.tag + (long)p.count + (long)p.flags + extra;
 }
 double gnu_double(double a,double b) { return a+b; }
+unsigned __int128 gnu_wide(unsigned long seed) {
+    return ((unsigned __int128)seed << 64) | (seed + 17UL);
+}
+long double gnu_binary128(void) { return 3.125L; }
 extern long minic_incoming_gp10(long,long,long,long,long,long,long,long,long,long);
 long gnu_call_into_minic(void) {
     return minic_incoming_gp10(1,2,3,4,5,6,7,8,9,10);
@@ -93,9 +120,12 @@ _start:
     li a7, 93
     ecall
 ASM
-"$RISCV_CC" -fno-pie -fno-pic -O0 -c "$w/provider.c" -o "$w/provider.o"
+"$RISCV_CC" -fno-pie -fno-pic -O0 -fno-stack-protector -c "$w/provider.c" -o "$w/provider.o"
 "$RISCV_CC" -fno-pie -fno-pic -c "$w/start.s" -o "$w/start.o"
-"$RISCV_CC" -fno-pie -fno-pic -O0 -c "$w/client.c" -o "$w/gnu-client.o"
+"$RISCV_CC" -fno-pie -fno-pic -O0 -fno-stack-protector -c "$w/client.c" -o "$w/gnu-client.o"
+# The frozen static _start/ld fixture has no libc or libssp. Ubuntu's cross
+# compiler may default to stack-protector-strong (especially with byte arrays),
+# so explicitly omit that independent GNU runtime dependency for both clients.
 # MiniC -S consumes preprocessed C; feed both compilers the same semantics.
 "$RISCV_CC" -E -P -x c "$w/client.c" -o "$w/client.i"
 "$MINIC" -S "$w/client.i" -o "$w/mini-client.s"
@@ -115,4 +145,4 @@ for owner in gnu mini; do
 done
 cmp "$w/gnu.out" "$w/mini.out"
 cmp "$w/gnu.err" "$w/mini.err"
-echo "RV64_CORE_CALL_TRANSFER=PASS direct=1 indirect=1 gp10_stack=1 record2=1 fp64=1 incoming_gnu=1 incoming_mixed_record=1 incoming_fp3=1 GNU_QEMU_diff=1"
+echo "RV64_CORE_CALL_TRANSFER=PASS direct=1 indirect=1 gp10_stack=1 record2=1 fp64=1 indirect_i128_return=1 indirect_binary128_return=1 incoming_gnu=1 incoming_mixed_record=1 incoming_fp3=1 GNU_QEMU_diff=1"

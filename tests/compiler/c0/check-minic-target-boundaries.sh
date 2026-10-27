@@ -575,6 +575,16 @@ lacks src/target/riscv64/frame_requirements.h 'minic_riscv64_core_call_outgoing_
 has src/target/riscv64/frame_layout.c 'outgoing_calls.maximum_stack_bytes'
 lacks src/target/riscv64/call_emit.c 'MinicRiscv64AbiCursor'
 has src/target/riscv64/call_emit.c 'rv64_resolve_prepared_call('
+# RV64 direct and indirect 128-bit returns must share the two-GPR store;
+# a regression to the 64-bit scalar result silently loses a1.
+has src/target/riscv64/call_emit.c 'static bool emit_core_call_wide_result('
+has src/target/riscv64/legalize.c 'static bool rv64_wide_call_argument_supported('
+has src/target/riscv64/legalize.c 'return_value.kind == MINIC_RISCV64_ABI_VALUE_WIDE_SCALAR'
+has src/target/riscv64/abi.c 'minic_type_is_int128_integer(type)) && size == 16U'
+lacks src/target/riscv64/abi.c '(lp64_soft_float && minic_type_is_int128_integer(type))'
+if [[ "$(grep -Fc 'return emit_core_call_wide_result(' src/target/riscv64/call_emit.c)" != 2 ]]; then
+  fail 'RV64 direct and indirect CALL no longer share dual-word return'
+fi
 has src/target/riscv64/frame_layout.c 'minic_riscv64_call_plan_cache_destroy('
 lacks src/target/riscv64/frame_requirements.c 'while (low < high)'
 # The RV64 named variadic prefix is qualified by the same immutable

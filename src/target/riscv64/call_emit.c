@@ -531,6 +531,25 @@ static bool emit_core_call_scalar_result(
     return minic_riscv64_frame_store_value(file, frame, instruction->result, "a0");
 }
 
+/* RV64 psABI returns both 128-bit integers and binary128 long doubles
+ * in a0/a1. The same physical return applies to direct and indirect CALL.
+ * Never send an indirect wide result through the 64-bit scalar store: that
+ * truncates the high XLEN word and can corrupt a following SSA slot. */
+static bool emit_core_call_wide_result(
+    FILE *file, const MinicRiscv64CoreFrame *frame,
+    const MinicCoreInstruction *instruction,
+    const MinicRiscv64AbiValue *return_value) {
+    if (file == NULL || frame == NULL || instruction == NULL ||
+        return_value == NULL ||
+        (!minic_type_is_long_double(instruction->type) &&
+         !minic_type_is_int128_integer(instruction->type)) ||
+        return_value->kind != MINIC_RISCV64_ABI_VALUE_WIDE_SCALAR ||
+        return_value->storage_size != 16U || return_value->slot_count != 2U)
+        return false;
+    return minic_riscv64_frame_store_int128(
+        file, frame, instruction->result, "a0", "a1");
+}
+
 /* One already-qualified RV64 psABI plan provides every CALL argument's
  * register/stack location. Machine emission does no second argument
  * classification, and both direct/indirect forms use the same transport. */
@@ -669,11 +688,9 @@ bool minic_riscv64_emit_direct_call(FILE *file,
         return true;
     }
     if (minic_type_is_long_double(instruction->type) ||
-        minic_type_is_int128_integer(instruction->type)) {
-        return return_value.kind == MINIC_RISCV64_ABI_VALUE_WIDE_SCALAR &&
-               return_value.storage_size == 16U && return_value.slot_count == 2U &&
-               minic_riscv64_frame_store_int128(file, frame, instruction->result, "a0", "a1");
-    }
+        minic_type_is_int128_integer(instruction->type))
+        return emit_core_call_wide_result(
+            file, frame, instruction, &return_value);
     return emit_core_call_scalar_result(
         file, program, frame, instruction, &return_value);
 }
@@ -707,6 +724,10 @@ bool minic_riscv64_emit_indirect_call(FILE *file,
     if (minic_type_is_void(instruction->type)) {
         return true;
     }
+    if (minic_type_is_long_double(instruction->type) ||
+        minic_type_is_int128_integer(instruction->type))
+        return emit_core_call_wide_result(
+            file, frame, instruction, &return_value);
     return emit_core_call_scalar_result(
         file, program, frame, instruction, &return_value);
 }

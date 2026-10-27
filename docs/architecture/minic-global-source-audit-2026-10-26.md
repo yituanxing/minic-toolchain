@@ -48,3 +48,52 @@ Scope: cross-checked the 2026-10-26 source-wide audit, merged PRs #665/#666/#668
 **Reviewed without change:** RV64 physical frame size and second offset placement walk still implement separate target-specific psABI geometry, not a proven redundant Common semantic scan. Keep RV32 ILP32, RV64 LP64, x86 SysV, AAPCS64 and LoongArch64 LP64D physical call mechanics independent. Priority for remaining deep inspection moves to five call emitters; ledger tracks source revisions and review depth without claiming inventory means full review.
 
 **Open:** RV64 latest-head original Linux Image/QEMU P1, versus the narrower seven frozen C shards; AArch64/LoongArch dynamic frame, varargs and FP QEMU differential; potential quadratic first-fit spill search, which needs a profile before algorithm replacement. None should be marked resolved by a broad PASS badge alone.
+
+## 2026-10-27 RV64 CALL continuation (base main 5fea20f9)
+
+**Concrete wide-return defect (P1):** the RV64 direct-call machine writer
+already stored `long double` (binary128) and `__int128` from the two
+psABI GPR return words `a0/a1`, but the indirect-call writer used the
+single-word `emit_core_call_scalar_result` after `jalr`. With a function
+pointer returning 16 bytes, the high half of the result was lost. Both
+paths now call the same checked target-owned wide-return helper. This is
+machine ABI transport, **not** a new Common Core instruction family.
+
+The existing GNU/MiniC RV64 client/provider/QEMU differential
+`tests/compiler/c0/run-rv64-core-call-transfer.sh` is extended with
+*actual function-pointer returns* of 128-bit integer and binary128.
+The preexisting RV64 origin smoke CI triggers it at the exact PR head;
+the 7 expensive Linux shards remain opt-in by the existing PR title
+gate. A C compiler build or static grep is not accepted as execution
+proof; record the GNU/QEMU result before merge.
+
+AArch64/LoongArch64 already have separate native handling for wide
+returns. x86 handles `__int128` via RAX/RDX and x87 `long double`
+independently. No cross-ISA "universal return register" was introduced.
+
+### Failure-driven admission audit (same batch; original GNU/QEMU test)
+
+The first exact-PR-head differential failed *before assembly*:
+`cannot emit RISC-V function 'rv64_transfer_entry'`. This was not a QEMU
+failure and not evidence that the new two-register return transfer was
+wrong. Global inspection of `riscv64/legalize.c` and `riscv64/abi.c`
+found two additional **independent structural gates** rejecting the
+previously intended capability:
+
+1. The direct CALL legality check only accepted long double as a
+   WIDE_SCALAR return, while indirect CALL legality disallowed
+   WIDE_SCALAR return/arguments entirely. Machine code already had
+   two-word arguments and now has two-word returns. One checked
+   `rv64_wide_call_argument_supported` function is shared across direct
+   and indirect legality, and both accept int128/binary128 returns with
+   full 16-byte ABI qualification.
+2. ABI value classification mistakenly treated `__int128` as 2*XLEN
+   **only with LP64 soft-float**. Both LP64 and LP64D pass 128-bit
+   integer in the same two GPR/stack words; the FP ABI changes scalar
+   float registers, not integer storage width. The classifier and
+   native ABI cursor assertions now reflect this.
+
+This is a concrete example of why reading **admission + ABI planning +
+machine emission together** exposed a missing capability that code
+emitter-only review missed. Exact-head GNU/QEMU remains the acceptance
+gate; do not mark complete before its successful rerun.

@@ -107,9 +107,12 @@ bool minic_riscv64_classify_abi_value_profile(
         result->register_chunks = 1U;
         return true;
     }
+    /* __int128 always occupies two XLEN words under both LP64 and LP64D.
+     * The hard/soft FLOAT ABI selects FPRs for float/double, not the size
+     * of an integer. The old soft-float-only condition silently reduced
+     * hard-float __int128 CALL returns/arguments to a single a-register. */
     if ((minic_type_is_long_double(type) ||
-         (lp64_soft_float && minic_type_is_int128_integer(type))) &&
-        size == 16U) {
+         minic_type_is_int128_integer(type)) && size == 16U) {
         result->kind = MINIC_RISCV64_ABI_VALUE_WIDE_SCALAR;
         result->register_chunks = 2U;
         return true;
