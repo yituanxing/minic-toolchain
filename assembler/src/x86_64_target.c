@@ -407,8 +407,8 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
         const char *comma=strchr(s->args,',');
         char immtext[48],from[48],to[48];
         size_t length;
-        unsigned src,dst;
-        bool ws=false,wd=false;
+        unsigned imul_src,imul_dst;
+        bool imul_ws=false,imul_wd=false;
         bool word=!strcmp(s->op,"imulw");
         uint64_t bits;
         if(!comma)goto invalid;
@@ -431,22 +431,22 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
                !strcmp(s->op,"imulq")?INT32_MAX:UINT32_MAX))
             goto invalid;
         if(word) {
-            if(!x64_register16(from,&src) ||
-               !x64_register16(to,&dst))goto invalid;
+            if(!x64_register16(from,&imul_src) ||
+               !x64_register16(to,&imul_dst))goto invalid;
         }else {
-            if(!x64_register(from,&src,&ws) ||
-               !x64_register(to,&dst,&wd) || ws!=wd ||
-               (!strcmp(s->op,"imulq") && !ws) ||
-               (!strcmp(s->op,"imull") && ws))goto invalid;
+            if(!x64_register(from,&imul_src,&imul_ws) ||
+               !x64_register(to,&imul_dst,&imul_wd) || imul_ws!=imul_wd ||
+               (!strcmp(s->op,"imulq") && !imul_ws) ||
+               (!strcmp(s->op,"imull") && imul_ws))goto invalid;
         }
         m->opcode=X64_IMUL_IMM;m->count=3U;
         m->encoding=word?UINT32_C(0x400):0U;
         m->operands[0].kind=MINIAS_MC_REGISTER;
-        m->operands[0].reg=src;
-        m->operands[0].register_64=!word && ws;
+        m->operands[0].reg=imul_src;
+        m->operands[0].register_64=!word && imul_ws;
         m->operands[1].kind=MINIAS_MC_REGISTER;
-        m->operands[1].reg=dst;
-        m->operands[1].register_64=!word && wd;
+        m->operands[1].reg=imul_dst;
+        m->operands[1].register_64=!word && imul_wd;
         m->operands[2].kind=MINIAS_MC_IMMEDIATE;
         m->operands[2].immediate=bits;
         goto done;
