@@ -505,3 +505,21 @@ no condition decoding and no architecture-specific relocation rewrite.
 Both suffix-free GNU AT&T widths and explicit w/l/q are guarded by the
 register's actual class. GNU byte and relocation comparison rejects wrong
 operand direction. This is an ISA expansion, not a new backend pipeline.
+
+
+## x86 GNU per-CPU absolute indexed SIB and ISA blocker convergence
+
+The Linux GNU `symbol(,%index,8)` form is NOT RIP-relative. It uses an
+absolute disp32 SIB displacement with R_X86_64_32S, and is now recorded in
+the **same** typed MCMemory/SymbolExpr operand used by the RV-proven Common
+fixup/ELF pipeline. The x86 encoder emits a *typed* ABS32S fixup at the
+actual encoded displacement offset instead of silently dropping the symbol.
+Real GNU AS machine bytes and specific `__per_cpu_offset` relocation counts
+are required gates. PUSH/POP r/m64 also reuse existing ModR/M without a
+spurious REX.W, while GNU Group-1 ADC, legacy DH immediate and fixed
+CLTD/SFENCE/MFENCE/LFENCE instructions are target-only ISA extensions.
+No new public target interface, Common ISA switch or duplicate ELF writer.
+
+GNU forward-dependent `.skip` and cross-section symbol differences remain
+blocked pending correct deferred expression/ELF relocation contracts; we
+must not make unresolved expressions "work" by fabricating a zero size.

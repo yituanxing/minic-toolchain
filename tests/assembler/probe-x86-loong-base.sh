@@ -185,6 +185,20 @@ entry_x:
     bswap %edx
     bswapl %r10d
     bswapq %r13
+    # Real GNU x86-64 per-CPU indexed absolute disp32 uses 32S, not PC32.
+    movq __per_cpu_offset(,%rax,8),%rax
+    addq __per_cpu_offset(,%rdx,8),%rax
+    pushq -8(%r10)
+    popq -8(%r10)
+    orb $1,%dh
+    andb $2,%dh
+    adcl $0,%eax
+    adcq %r9,%r10
+    adcq (%r12),%r11
+    cltd
+    sfence
+    mfence
+    lfence
     .value 0x1234
     movzbl %al, %eax
     movzbl %r8b, %r10d
@@ -407,6 +421,8 @@ grep -q R_X86_64_PLT32 "$work/x86-gnu-rel.txt"
 grep -q R_X86_64_PC32 "$work/x86-gnu-rel.txt"
 grep -q R_X86_64_32S "$work/x86-rel.txt"
 grep -q R_X86_64_32S "$work/x86-gnu-rel.txt"
+test "$(grep -c 'R_X86_64_32S.*__per_cpu_offset' "$work/x86-rel.txt")" -eq 2
+test "$(grep -c 'R_X86_64_32S.*__per_cpu_offset' "$work/x86-gnu-rel.txt")" -eq 2
 test "$(grep -c 'R_X86_64_32S.*abs_mem_immediate' "$work/x86-rel.txt")" -eq 2
 test "$(grep -c 'R_X86_64_32S.*abs_mem_immediate' "$work/x86-gnu-rel.txt")" -eq 2
 grep -q R_X86_64_64 "$work/x86-rel.txt"
@@ -615,7 +631,10 @@ cmp "$work/la-gnu.bin" "$work/la-mini.bin"
 grep -q 'LoongArch' "$work/la-header.txt"
 grep -q '0x43' "$work/la-header.txt"
 
-for bad in 'cmove %rax, (%rdi)' \
+for bad in 'movq __per_cpu_offset(%rdi),%rax' \
+           'adcl %rax,%eax' \
+           'pushq %eax' \
+           'cmove %rax, (%rdi)' \
            'bsfq %rax, (%rdi)' \
            'cmovb %al, %al' \
            'testq $4294967296, %rax' \

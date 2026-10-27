@@ -238,7 +238,10 @@ static bool x64_parse_base_memory(const char *text, MiniAsMCMemory *out) {
     out->index=index;out->scale=(unsigned)scale;
     out->displacement=(int64_t)displacement;
     if(symbolic) {
-        if(!pc_relative)return false;
+        /* GNU absolute indexed disp32 uses R_X86_64_32S, not PC32.
+         * Plain sym(%base) remains unsupported without a valid ABI form. */
+        if(!pc_relative &&
+           !(count>=2U && regs[0][0]=='\0' && !segment_space))return false;
         out->symbol=malloc(sizeof(symbolic_expr));
         if(!out->symbol)return false;
         *out->symbol=symbolic_expr;
@@ -270,6 +273,8 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
         {"cpuid",{0x0f,0xa2},2},
         {"rdtsc",{0x0f,0x31},2},{"rdtscp",{0x0f,0x01,0xf9},3},
         {"rdmsr",{0x0f,0x32},2},{"wrmsr",{0x0f,0x30},2},
+        {"cltd",{0x99},1},{"sfence",{0x0f,0xae,0xf8},3},
+        {"lfence",{0x0f,0xae,0xe8},3},{"mfence",{0x0f,0xae,0xf0},3},
         {"swapgs",{0x0f,0x01,0xf8},3},
         {"wbinvd",{0x0f,0x09},2},{"invd",{0x0f,0x08},2},
         {"pause",{0xf3,0x90},2},
@@ -291,6 +296,7 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
     static const struct {const char *op; unsigned opcode; bool wide;} binary[]={
         {"movq",0x89,true}, {"movl",0x89,false},
         {"addq",0x01,true}, {"addl",0x01,false},
+        {"adcq",0x11,true},{"adcl",0x11,false},
         {"subq",0x29,true}, {"subl",0x29,false},
         {"sbbq",0x19,true}, {"sbbl",0x19,false},
         {"xorq",0x31,true}, {"xorl",0x31,false},
@@ -298,7 +304,7 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
         {"orq",0x09,true},  {"orl",0x09,false},
         {"cmpq",0x39,true},{"cmpl",0x39,false},
         {"testq",0x85,true},{"testl",0x85,false},
-        {"movw",0x89,false},{"addw",0x01,false},
+        {"movw",0x89,false},{"addw",0x01,false},{"adcw",0x11,false},
         {"subw",0x29,false},{"sbbw",0x19,false},
         {"xorw",0x31,false},{"andw",0x21,false},
         {"orw",0x09,false},{"cmpw",0x39,false},
@@ -321,6 +327,7 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
         {"cmpq",0x39,0x3b,true},{"cmpl",0x39,0x3b,false},
         {"testq",0x85,0x85,true},{"testl",0x85,0x85,false},
         {"addq",0x01,0x03,true},{"addl",0x01,0x03,false},
+        {"adcq",0x11,0x13,true},{"adcl",0x11,0x13,false},
         {"subq",0x29,0x2b,true},{"subl",0x29,0x2b,false},
         {"sbbq",0x19,0x1b,true},{"sbbl",0x19,0x1b,false},
         {"andq",0x21,0x23,true},{"andl",0x21,0x23,false},
@@ -343,10 +350,12 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
         {"movb",0x88U,0x8aU,false},{"cmpb",0x38U,0x3aU,false},
         {"testb",0x84U,0x84U,false},{"addb",0x00U,0x02U,false},
         {"subb",0x28U,0x2aU,false},{"andb",0x20U,0x22U,false},
+        {"adcb",0x10U,0x12U,false},
         {"orb",0x08U,0x0aU,false},{"xorb",0x30U,0x32U,false},
         {"movw",0x89U,0x8bU,false},{"cmpw",0x39U,0x3bU,false},
         {"testw",0x85U,0x85U,false},{"addw",0x01U,0x03U,false},
         {"subw",0x29U,0x2bU,false},{"andw",0x21U,0x23U,false},
+        {"adcw",0x11U,0x13U,false},
         {"orw",0x09U,0x0bU,false},{"xorw",0x31U,0x33U,false}
     };
     MiniAsMCInst *m=calloc(1U,sizeof(*m)+3U*sizeof(MiniAsMCOperand));
@@ -442,6 +451,26 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
         m->operands[0].register_64=wd;
         goto done;
     }
+    /* Native long-mode PUSH/POP memory forms reuse typed ModR/M/SIB.
+     * FF /6 and 8F /0 imply 64-bit width: emitting REX.W is incorrect. */
+    if((!strcmp(s->op,"pushq") || !strcmp(s->op,"popq")) &&
+       x64_is_mem_candidate(s->args)) {
+        MiniAsMCMemory parsed;
+        if(!x64_parse_base_memory(s->args,&parsed))goto invalid;
+        m->operands[1].memory=malloc(sizeof(parsed));
+        if(!m->operands[1].memory) {
+            minias_set_error(as,"out-of-memory:x86-stack-memory");
+            free(parsed.symbol);free(m);return false;
+        }
+        *m->operands[1].memory=parsed;
+        m->opcode=X64_REG_MEMORY;m->count=2U;
+        m->encoding=!strcmp(s->op,"pushq")?0xffU:0x8fU;
+        m->operands[0].kind=MINIAS_MC_REGISTER;
+        m->operands[0].reg=!strcmp(s->op,"pushq")?6U:0U;
+        m->operands[0].register_64=false;
+        m->operands[1].kind=MINIAS_MC_MEMORY;
+        goto done;
+    }
     /* GNU implicit-count-one shift/rotate now resolves through the SAME
      * descriptor and machine-length paths as explicit immediate/CL. */
     {
@@ -462,7 +491,7 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
     /* Byte ALU variants and sign-extending MOV all remain target local. */
     if(x64_args2(s->args,src,dst)) {
         static const struct {const char *op;uint32_t opcode;} byteop[]={
-            {"movb",0x88U},{"addb",0x00U},{"orb",0x08U},
+            {"movb",0x88U},{"addb",0x00U},{"adcb",0x10U},{"orb",0x08U},
             {"andb",0x20U},{"subb",0x28U},{"xorb",0x30U},
             {"cmpb",0x38U},{"testb",0x84U}
         };
@@ -522,7 +551,8 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
                     X64_SHIFT_CL:X64_SHIFT_IMM;
                 m->count=2U;
                 m->encoding=group|(bits==8U?0x200U:
-                                   bits==16U?0x400U:0U);
+                                   bits==16U?0x400U:0U)|
+                            (legacy_high8?0x800U:0U);
                 m->operands[0].kind=MINIAS_MC_REGISTER;
                 m->operands[0].reg=second;
                 m->operands[0].register_64=bits==64U;
@@ -748,13 +778,14 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
      * memory and registers. Keep the same typed memory/ModR/M engine. */
     if(x64_args2(s->args,src,dst) && src[0]=='$') {
         static const struct {const char *op;unsigned group;} groups[]={
-            {"addq",0U},{"addl",0U},{"orq",1U},{"orl",1U},
+            {"addq",0U},{"addl",0U},{"adcq",2U},{"adcl",2U},
+            {"orq",1U},{"orl",1U},
             {"andq",4U},{"andl",4U},{"subq",5U},{"subl",5U},
             {"sbbq",3U},{"sbbl",3U},
             {"xorq",6U},{"xorl",6U},{"cmpq",7U},{"cmpl",7U},
-            {"addb",0U},{"orb",1U},{"andb",4U},{"subb",5U},
+            {"addb",0U},{"adcb",2U},{"orb",1U},{"andb",4U},{"subb",5U},
             {"xorb",6U},{"cmpb",7U},
-            {"addw",0U},{"orw",1U},{"sbbw",3U},{"andw",4U},
+            {"addw",0U},{"adcw",2U},{"orw",1U},{"sbbw",3U},{"andw",4U},
             {"subw",5U},{"xorw",6U},{"cmpw",7U}
         };
         uint64_t bits=0U;
@@ -886,7 +917,7 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
      * the existing MCInst length/emit phases own the real byte count. */
     if(x64_args2(s->args,src,dst) && src[0]=='$') {
         static const struct {const char *name;unsigned group;} groups[]={
-            {"add",0U},{"or",1U},{"sbb",3U},{"and",4U},
+            {"add",0U},{"or",1U},{"adc",2U},{"sbb",3U},{"and",4U},
             {"sub",5U},{"xor",6U},{"cmp",7U}
         };
         size_t len=strlen(s->op);
@@ -894,14 +925,16 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
         unsigned bits=width=='b'?8U:width=='w'?16U:
                       width=='l'?32U:width=='q'?64U:0U;
         unsigned reg=0U,group=0U;
-        bool matched=false,wide=false;
+        bool matched=false,wide=false,legacy_high8=false;
         uint64_t imm;
         if(bits && minias_eval_u64_expression(src+1,&imm) &&
            ((bits==8U && (int64_t)imm>=-128 && (int64_t)imm<=255) ||
             (bits==16U && (int64_t)imm>=-32768 && (int64_t)imm<=65535) ||
             (bits>=32U && (int64_t)imm>=INT32_MIN &&
                            (int64_t)imm<=INT32_MAX)) &&
-           ((bits==8U && x64_register8(dst,&reg)) ||
+           ((bits==8U &&
+             ((legacy_high8=x64_high_register8(dst,&reg)) ||
+              x64_register8(dst,&reg))) ||
             (bits==16U && x64_register16(dst,&reg)) ||
             (bits>=32U && x64_register(dst,&reg,&wide) &&
              wide==(bits==64U)))) {
@@ -1133,7 +1166,8 @@ static bool x64_measure(MiniAs *as,const MiniAsStmt *s,uint32_t *size) {
                  (short_imm?3U:6U);
             *size=(word?1U:0U)+
                   (m->operands[0].register_64 || m->operands[0].reg>=8U ||
-                   (byte && m->operands[0].reg>=4U)?1U:0U)+base;
+                   (byte && m->operands[0].reg>=4U &&
+                    !(m->encoding&0x800U))?1U:0U)+base;
             return true;
         }
         case X64_STACK: *size=(m->operands[0].reg>=8U)?2U:1U;return true;
@@ -1423,6 +1457,22 @@ static bool x64_encode(MiniAs *as,const MiniAsStmt *s) {
                             MINIAS_FIXUP_X64_ABS32S,4U,
                             mem->symbol->name,mem->symbol->addend);
             }
+            if(!mem->pc_relative && !mem->has_base &&
+               !mem->address_space && mem->has_index &&
+               mem->symbol!=NULL) {
+                size_t relocation_at=n;
+                for(i=0U;i<4U;++i)code[n++]=0U;
+                for(i=0U;i<extra;++i)
+                    code[n++]=(unsigned char)(immediate>>(8U*i));
+                if(n!=s->size) {
+                    minias_set_error(as,"invalid-x86-abs-indexed-layout");
+                    return false;
+                }
+                if(!minias_section_append(as,s->section,code,n))return false;
+                return minias_add_fixup(as,s->section,
+                    s->offset+relocation_at,MINIAS_FIXUP_X64_ABS32S,4U,
+                    mem->symbol->name,mem->symbol->addend);
+            }
             if(mem->pc_relative && mem->symbol!=NULL) {
                 MiniAsSymbol *sym=minias_get_symbol(as,mem->symbol->name,false);
                 bool local=sym!=NULL && sym->defined && sym->section==s->section;
@@ -1516,7 +1566,8 @@ static bool x64_encode(MiniAs *as,const MiniAsStmt *s) {
             r=m->operands[0].reg;
             accumulator=r==0U && (byte || (word && !short_imm));
             if(word)code[n++]=0x66U;
-            if(m->operands[0].register_64 || r>=8U || (byte && r>=4U))
+            if(m->operands[0].register_64 || r>=8U ||
+               (byte && r>=4U && !(m->encoding&0x800U)))
                 code[n++]=(unsigned char)(0x40U |
                     (m->operands[0].register_64?8U:0U) | (r>>3U));
             if(accumulator) {
