@@ -122,6 +122,12 @@ bool minic_target_info_wide_character_type(const MinicTargetInfo *target, MinicT
 bool minic_target_info_word_integer_type(const MinicTargetInfo *target,
                                          MinicIntegerSign sign,
                                          MinicType *type);
+/* GNU same-TU function aliases may use a target-approved, word-register
+ * compatible alias ABI even when source prototypes intentionally differ.
+ * The predicate is shared by parse finalization and the AST verifier. */
+bool minic_target_info_function_alias_abi_compatible(
+    const MinicTargetInfo *target, const MinicC0Program *program,
+    const MinicFunction *alias, const MinicFunction *owner);
 bool minic_target_info_sizeof_type(const MinicTargetInfo *target,
                                    const MinicC0Program *program,
                                    MinicType type,

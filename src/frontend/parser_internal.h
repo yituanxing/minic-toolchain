@@ -82,6 +82,14 @@ typedef struct MinicParserSwitchContext {
     bool has_default;
 } MinicParserSwitchContext;
 
+/* One translation-unit owned symbol-fixup table. A GNU function alias can
+ * name a definition that appears later in the same preprocessed C source;
+ * do not fabricate a prototype or defer resolution into a machine backend. */
+typedef struct MinicParserPendingFunctionAlias {
+    MinicFunctionId alias_id;
+    MinicSourceSpan symbol_literal;
+} MinicParserPendingFunctionAlias;
+
 typedef struct MinicParser {
     const char *path;
     const char *source;
@@ -110,6 +118,9 @@ typedef struct MinicParser {
     /* Allocated on the first actual switch. Lexer-only speculative Parser
        snapshots borrow the table; only the top-level Parser owns it. */
     MinicParserSwitchContext *switch_contexts;
+    MinicParserPendingFunctionAlias *pending_function_aliases;
+    size_t pending_function_alias_count;
+    size_t pending_function_alias_capacity;
 
     bool label_context_initialized;
     MinicFunctionId label_context_function;

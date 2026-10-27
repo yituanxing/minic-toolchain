@@ -500,6 +500,50 @@ bool minic_target_info_word_integer_type(const MinicTargetInfo *target,
     return integer_type_with_rank(sign, target->word_integer_rank, type);
 }
 
+/* For LoongArch's Linux syscall `sys_* -> __se_sys_*` aliases the public
+ * ABI names typed ints/pointers while the sanitizer entry receives one
+ * 64-bit word per argument. ABI transport is the identical GPR slot, NOT a
+ * C type cast. Never admit floating/aggregate, 128-bit, variadic, or
+ * mismatched return signatures using this special admission. */
+static bool minic_loongarch64_syscall_alias_word_pair(
+    const MinicTargetInfo *target, const MinicC0Program *program,
+    MinicType call_type, MinicType definition_type) {
+    size_t call_size, definition_size;
+    if (target == NULL || target->architecture != MINIC_TARGET_ARCH_LOONGARCH64 ||
+        program == NULL ||
+        (!minic_type_is_integer(call_type) && !minic_type_is_pointer(call_type)) ||
+        !minic_type_is_integer(definition_type) ||
+        !minic_target_info_sizeof_type(target, program, call_type, &call_size) ||
+        !minic_target_info_sizeof_type(target, program, definition_type, &definition_size))
+        return false;
+    /* The sanitizer must receive full-width integer ABI words; allowing an
+     * arbitrary 32-bit callee could truncate an address or signed input. */
+    return call_size != 0U && call_size <= 8U && definition_size == 8U;
+}
+
+bool minic_target_info_function_alias_abi_compatible(
+    const MinicTargetInfo *target, const MinicC0Program *program,
+    const MinicFunction *alias, const MinicFunction *owner) {
+    size_t i;
+    if (target == NULL || program == NULL || alias == NULL || owner == NULL ||
+        alias->parameter_count != owner->parameter_count ||
+        alias->is_variadic != owner->is_variadic ||
+        !minic_c0_types_compatible(
+            program, alias->return_type, owner->return_type))
+        return false;
+    for (i = 0U; i < alias->parameter_count; ++i) {
+        if (minic_c0_types_compatible(
+                program, alias->parameter_types[i], owner->parameter_types[i]))
+            continue;
+        if (alias->is_variadic || alias->is_internal || owner->is_internal ||
+            !minic_loongarch64_syscall_alias_word_pair(
+                target, program, alias->parameter_types[i],
+                owner->parameter_types[i]))
+            return false;
+    }
+    return true;
+}
+
 bool minic_target_info_sizeof_type(const MinicTargetInfo *target,
                                    const MinicC0Program *program,
                                    MinicType type,

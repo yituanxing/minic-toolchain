@@ -36,7 +36,7 @@ typedef struct MinicFunctionAttributeContext {
     bool *is_noreturn;
     bool *force_emit;
     bool *is_constructor;
-    MinicFunctionId *alias_target;
+    MinicSourceSpan *alias_symbol_literal;
     const char *unsupported_message;
 } MinicFunctionAttributeContext;
 
@@ -136,41 +136,126 @@ static bool resolve_function_copy_attribute(MinicParser *parser,
     return true;
 }
 
-static bool resolve_function_alias_attribute(MinicParser *parser,
-                                             const MinicParsedAttribute *attribute,
-                                             MinicFunctionId *target_id) {
-    MinicSourceSpan literal_span;
-    const char *target_name;
-    size_t target_length;
-    size_t function_index;
-
-    if (target_id == NULL ||
+/* Parse the symbol spelling now; resolve only after the entire TU exists.
+ * Linux syscall wrappers declare GNU aliases before __se_sys_* definitions.
+ * A literal is just a symbol lookup key, never an implicit declaration. */
+static bool resolve_function_alias_attribute(
+    MinicParser *parser, const MinicParsedAttribute *attribute,
+    MinicSourceSpan *symbol_literal) {
+    MinicSourceSpan literal;
+    const char *name;
+    size_t length;
+    if (symbol_literal == NULL ||
         !function_attribute_argument_token(
-            parser, attribute, MINIC_TOKEN_STRING_LITERAL, &literal_span) ||
-        literal_span.end.offset <= literal_span.begin.offset + 1U) {
+            parser, attribute, MINIC_TOKEN_STRING_LITERAL, &literal) ||
+        literal.end.offset <= literal.begin.offset + 2U) {
         minic_parser_error(parser, "GNU alias requires one string literal target");
         return false;
     }
-    target_name = parser->source + literal_span.begin.offset + 1U;
-    target_length = literal_span.end.offset - literal_span.begin.offset - 2U;
-    if (target_length == 0U || memchr(target_name, '\\', target_length) != NULL) {
+    name = parser->source + literal.begin.offset + 1U;
+    length = literal.end.offset - literal.begin.offset - 2U;
+    if (length == 0U || memchr(name, '\\', length) != NULL) {
         minic_parser_error(parser, "escaped or empty GNU alias targets are not supported");
         return false;
     }
-    for (function_index = 0U; function_index < parser->program->function_count; ++function_index) {
-        const MinicFunction *candidate;
-        const char *symbol_name;
+    *symbol_literal = literal;
+    return true;
+}
 
-        candidate = minic_c0_program_function(parser->program, function_index);
-        symbol_name = minic_c0_function_symbol_name(candidate);
-        if (candidate != NULL && symbol_name != NULL && strlen(symbol_name) == target_length &&
-            memcmp(symbol_name, target_name, target_length) == 0) {
-            *target_id = function_index;
-            return true;
+static bool parser_alias_literal_equal(
+    const MinicParser *parser, MinicSourceSpan left, MinicSourceSpan right) {
+    size_t a, b;
+    if (parser == NULL ||
+        left.end.offset < left.begin.offset + 2U ||
+        right.end.offset < right.begin.offset + 2U)
+        return false;
+    a = left.end.offset - left.begin.offset - 2U;
+    b = right.end.offset - right.begin.offset - 2U;
+    return a == b &&
+           memcmp(parser->source + left.begin.offset + 1U,
+                  parser->source + right.begin.offset + 1U, a) == 0;
+}
+
+static bool parser_append_pending_function_alias(
+    MinicParser *parser, MinicFunctionId id, MinicSourceSpan literal) {
+    size_t i;
+    MinicParserPendingFunctionAlias *next;
+    size_t capacity;
+    if (parser == NULL || id == MINIC_FUNCTION_INVALID ||
+        literal.end.offset <= literal.begin.offset + 2U)
+        return false;
+    for (i = 0U; i < parser->pending_function_alias_count; ++i) {
+        const MinicParserPendingFunctionAlias *old =
+            &parser->pending_function_aliases[i];
+        if (old->alias_id == id)
+            return parser_alias_literal_equal(parser, old->symbol_literal, literal);
+    }
+    if (parser->pending_function_alias_count == parser->pending_function_alias_capacity) {
+        capacity = parser->pending_function_alias_capacity == 0U
+            ? 8U : parser->pending_function_alias_capacity * 2U;
+        if (capacity < parser->pending_function_alias_capacity ||
+            capacity > SIZE_MAX / sizeof(*next))
+            return false;
+        next = realloc(parser->pending_function_aliases, capacity * sizeof(*next));
+        if (next == NULL)
+            return false;
+        parser->pending_function_aliases = next;
+        parser->pending_function_alias_capacity = capacity;
+    }
+    parser->pending_function_aliases[parser->pending_function_alias_count].alias_id = id;
+    parser->pending_function_aliases[parser->pending_function_alias_count].symbol_literal = literal;
+    ++parser->pending_function_alias_count;
+    return true;
+}
+
+static bool parser_resolve_pending_function_aliases(MinicParser *parser) {
+    size_t i;
+    if (parser == NULL || parser->target_info == NULL || parser->program == NULL)
+        return false;
+    for (i = 0U; i < parser->pending_function_alias_count; ++i) {
+        const MinicParserPendingFunctionAlias *pending =
+            &parser->pending_function_aliases[i];
+        const MinicFunction *alias =
+            minic_c0_program_function(parser->program, pending->alias_id);
+        MinicFunctionId target_id = MINIC_FUNCTION_INVALID;
+        const MinicFunction *target;
+        size_t k, length;
+        const char *name;
+        length = pending->symbol_literal.end.offset -
+                 pending->symbol_literal.begin.offset - 2U;
+        name = parser->source + pending->symbol_literal.begin.offset + 1U;
+        for (k = 0U; k < parser->program->function_count; ++k) {
+            const MinicFunction *candidate =
+                minic_c0_program_function(parser->program, k);
+            const char *symbol = minic_c0_function_symbol_name(candidate);
+            if (symbol != NULL && strlen(symbol) == length &&
+                memcmp(symbol, name, length) == 0) {
+                /* Ambiguous machine symbol names must not resolve
+                 * according to source declaration order. */
+                if (target_id != MINIC_FUNCTION_INVALID && target_id != k) {
+                    minic_parser_error(parser, "ambiguous GNU alias symbol target");
+                    return false;
+                }
+                target_id = k;
+            }
+        }
+        if (target_id == MINIC_FUNCTION_INVALID) {
+            minic_parser_error(
+                parser, "GNU alias target must be declared in this translation unit");
+            return false;
+        }
+        target = minic_c0_program_function(parser->program, target_id);
+        if (alias == NULL || target == NULL ||
+            !minic_target_info_function_alias_abi_compatible(
+                parser->target_info, parser->program, alias, target) ||
+            !minic_c0_program_set_function_alias(
+                parser->program, pending->alias_id, target_id)) {
+            minic_parser_error(parser,
+                "GNU function alias requires a defined same-TU target with matching signature");
+            return false;
         }
     }
-    minic_parser_error(parser, "GNU alias target must be declared in this translation unit");
-    return false;
+    return true;
 }
 
 static bool consume_function_attribute(MinicParser *parser,
@@ -271,21 +356,20 @@ static bool consume_function_attribute(MinicParser *parser,
     }
 
     if (descriptor->kind == MINIC_ATTRIBUTE_ALIAS) {
-        MinicFunctionId target_id;
-
-        if (context->alias_target == NULL ||
-            !resolve_function_alias_attribute(parser, attribute, &target_id)) {
-            if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+        MinicSourceSpan symbol_literal;
+        if (context->alias_symbol_literal == NULL ||
+            !resolve_function_alias_attribute(parser, attribute, &symbol_literal)) {
+            if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0')
                 minic_parser_error(parser, "GNU alias requires a function declaration entity");
-            }
             return false;
         }
-        if (*context->alias_target != MINIC_FUNCTION_INVALID &&
-            *context->alias_target != target_id) {
+        if (context->alias_symbol_literal->end.offset != 0U &&
+            !parser_alias_literal_equal(
+                parser, *context->alias_symbol_literal, symbol_literal)) {
             minic_parser_error(parser, "conflicting GNU function alias attributes");
             return false;
         }
-        *context->alias_target = target_id;
+        *context->alias_symbol_literal = symbol_literal;
         return true;
     }
 
@@ -391,7 +475,7 @@ static bool parse_function_attribute_lists(MinicParser *parser,
     context.is_noreturn = NULL;
     context.force_emit = NULL;
     context.is_constructor = NULL;
-    context.alias_target = NULL;
+    context.alias_symbol_literal = NULL;
     context.unsupported_message = unsupported_message;
     return minic_parser_parse_gnu_attribute_lists(parser, consume_function_attribute, &context);
 }
@@ -412,7 +496,7 @@ static bool apply_function_attribute_list(MinicParser *parser,
                                           bool *has_visibility,
                                           bool *is_noreturn,
                                           bool *is_constructor,
-                                          MinicFunctionId *alias_target,
+                                          MinicSourceSpan *alias_symbol_literal,
                                           const char *unsupported_message) {
     MinicFunctionAttributeContext context;
     size_t index;
@@ -435,7 +519,7 @@ static bool apply_function_attribute_list(MinicParser *parser,
     context.is_noreturn = is_noreturn;
     context.force_emit = NULL;
     context.is_constructor = is_constructor;
-    context.alias_target = alias_target;
+    context.alias_symbol_literal = alias_symbol_literal;
     context.unsupported_message = unsupported_message;
     for (index = 0U; index < attributes->count; ++index) {
         if (!consume_function_attribute(parser, &attributes->values[index], &context)) {
@@ -578,7 +662,7 @@ static bool parse_persistent_function_attributes(MinicParser *parser,
                                                  bool *is_noreturn,
                                                  bool *force_emit,
                                                  bool *is_constructor,
-                                                 MinicFunctionId *alias_target) {
+                                                 MinicSourceSpan *alias_symbol_literal) {
     MinicFunctionAttributeContext context;
 
     context.allow_gnu_inline = false;
@@ -595,7 +679,7 @@ static bool parse_persistent_function_attributes(MinicParser *parser,
     context.is_noreturn = is_noreturn;
     context.force_emit = force_emit;
     context.is_constructor = is_constructor;
-    context.alias_target = alias_target;
+    context.alias_symbol_literal = alias_symbol_literal;
     context.unsupported_message =
         "unsupported GNU function attribute; ABI/layout-affecting and unknown attributes must be "
         "implemented explicitly";
@@ -1005,9 +1089,8 @@ static bool finish_function_declaration_entity(MinicParser *parser,
                                                size_t section_name_length,
                                                bool has_section,
                                                bool force_emit,
-                                               MinicFunctionId alias_target) {
+                                               MinicSourceSpan alias_symbol_literal) {
     MinicFunctionId function_id;
-    const MinicFunction *alias_function;
 
     if (parser == NULL || parser->current.kind != MINIC_TOKEN_SEMICOLON ||
         !record_function_declaration_entity(parser,
@@ -1038,15 +1121,12 @@ static bool finish_function_declaration_entity(MinicParser *parser,
         minic_parser_error(parser, "cannot persist GNU used function metadata");
         return false;
     }
-    if (alias_target != MINIC_FUNCTION_INVALID) {
-        alias_function = minic_c0_program_function(parser->program, alias_target);
-        if (alias_function == NULL || has_section ||
-            !minic_parser_function_signature_matches(
-                alias_function, return_type, parameter_types, parameter_count, is_variadic) ||
-            !minic_c0_program_set_function_alias(parser->program, function_id, alias_target)) {
+    if (alias_symbol_literal.end.offset != 0U) {
+        if (has_section ||
+            !parser_append_pending_function_alias(
+                parser, function_id, alias_symbol_literal)) {
             minic_parser_error(
-                parser,
-                "GNU function alias requires a defined same-TU target with matching signature");
+                parser, "conflicting or invalid GNU function alias declaration");
             return false;
         }
     }
@@ -1093,7 +1173,7 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
     MinicSymbolVisibility visibility;
     bool has_visibility;
     bool object_is_weak;
-    MinicFunctionId alias_target;
+    MinicSourceSpan alias_symbol_literal;
 
     body_block = MINIC_BLOCK_INVALID;
     parameter_count = 0U;
@@ -1120,7 +1200,7 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
     visibility = MINIC_SYMBOL_VISIBILITY_DEFAULT;
     has_visibility = false;
     object_is_weak = false;
-    alias_target = MINIC_FUNCTION_INVALID;
+    (void)memset(&alias_symbol_literal, 0, sizeof(alias_symbol_literal));
     (void)memset(assembler_name, 0, sizeof(assembler_name));
     (void)memset(section_name, 0, sizeof(section_name));
     (void)memset(parameter_name_spans, 0, sizeof(parameter_name_spans));
@@ -1660,7 +1740,7 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
             &has_visibility,
             &is_noreturn,
             &is_constructor,
-            &alias_target,
+            &alias_symbol_literal,
             "unsupported GNU prefix function attribute; semantic and ABI-affecting attributes must "
             "be implemented explicitly")) {
         return false;
@@ -1705,7 +1785,7 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
                                               &is_noreturn,
                                               &force_emit,
                                               &is_constructor,
-                                              &alias_target)) {
+                                              &alias_symbol_literal)) {
         return false;
     }
     if (function_id != MINIC_FUNCTION_INVALID) {
@@ -1746,9 +1826,9 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
                                                   section_name_length,
                                                   has_section,
                                                   force_emit,
-                                                  alias_target);
+                                                  alias_symbol_literal);
     }
-    if (alias_target != MINIC_FUNCTION_INVALID) {
+    if (alias_symbol_literal.end.offset != 0U) {
         minic_parser_error(parser, "GNU alias applies to declarations, not function definitions");
         return false;
     }
@@ -2233,6 +2313,8 @@ bool minic_parse_c0_program_for_target(const char *path,
             success = parse_function(&parser, false);
         }
     }
+    if (success && !parser_resolve_pending_function_aliases(&parser))
+        success = false;
     if (success && !finalize_tentative_incomplete_arrays(program)) {
         minic_parser_error(&parser, "cannot complete tentative incomplete array definition");
         success = false;
@@ -2272,6 +2354,8 @@ bool minic_parse_c0_program_for_target(const char *path,
     minic_parser_destroy_enum_constants(&parser);
     free(parser.switch_contexts);
     parser.switch_contexts = NULL;
+    free(parser.pending_function_aliases);
+    parser.pending_function_aliases = NULL;
     return success;
 }
 

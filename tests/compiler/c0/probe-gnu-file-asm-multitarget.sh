@@ -45,5 +45,40 @@ for name in original.gnu original.minic; do
     readelf -Ws "$work/$name.o" | grep -Fq 'minic_source_weak_alias'
     readelf -Ws "$work/$name.o" | grep -Fq 'minic_source_global_alias'
 done
+# Original Linux syscall wrappers have deliberately different argument C
+# types, but LoongArch64 passes each via a 64-bit integer argument register.
+# Verify a forward symbol alias and a genuinely executed ABI boundary.
+if [ "$target" = loongarch64 ]; then
+    cat > "$work/syscall-alias.i" <<'SRC'
+extern long sys_entry(unsigned int id, const char *ptr)
+    __attribute__((alias("__se_sys_entry")));
+long __se_sys_entry(long id, long ptr) {
+    return id + (ptr != 0);
+}
+int main(void) { return sys_entry(41U, (const char *) 1) == 42 ? 0 : 1; }
+SRC
+    "$cross_cc" -Wno-attribute-alias -x c "$work/syscall-alias.i" \
+        -o "$work/syscall.gnu.elf"
+    "$MINIC_CC" --target=loongarch64-linux -S "$work/syscall-alias.i" \
+        -o "$work/syscall.minic.s"
+    grep -Fq '.set sys_entry, __se_sys_entry' "$work/syscall.minic.s"
+    "$cross_cc" -x assembler "$work/syscall.minic.s" \
+        -o "$work/syscall.minic.elf"
+    qemu-loongarch64 -L /usr/loongarch64-linux-gnu "$work/syscall.gnu.elf"
+    qemu-loongarch64 -L /usr/loongarch64-linux-gnu "$work/syscall.minic.elf"
+    cat > "$work/invalid-alias.i" <<'SRC'
+extern long float_abi(float x) __attribute__((alias("word_abi")));
+long word_abi(long x) { return x; }
+SRC
+    if "$MINIC_CC" --target=loongarch64-linux -S "$work/invalid-alias.i" \
+        -o "$work/invalid-alias.s" >"$work/invalid-alias.out" \
+        2>"$work/invalid-alias.err"; then
+        echo 'FAIL LoongArch floating-point ABI alias incorrectly accepted' >&2
+        exit 1
+    fi
+    grep -Fq 'GNU function alias requires' "$work/invalid-alias.err"
+    echo 'MINIC_LOONGARCH64_FORWARD_SYSCALL_ALIAS_GNU_QEMU=PASS'
+fi
+
 # Architecture-specific machine syntax is still owned by real GNU AS.
 echo "MINIC_FILE_ASM_GNU_AS=PASS target=$target original_gnu=1 original_bytes=1 sections=1 function_aliases=2 object_alias=1"

@@ -1393,27 +1393,6 @@ static unsigned char *minic_verify_build_array_owners(const MinicC0Program *prog
     return owned;
 }
 
-static bool function_alias_signature_matches(const MinicC0Program *program,
-                                             const MinicFunction *alias,
-                                             const MinicFunction *target) {
-    size_t parameter_index;
-
-    if (program == NULL || alias == NULL || target == NULL ||
-        alias->parameter_count != target->parameter_count ||
-        alias->is_variadic != target->is_variadic ||
-        !minic_c0_types_compatible(program, alias->return_type, target->return_type)) {
-        return false;
-    }
-    for (parameter_index = 0U; parameter_index < alias->parameter_count; ++parameter_index) {
-        if (!minic_c0_types_compatible(program,
-                                       alias->parameter_types[parameter_index],
-                                       target->parameter_types[parameter_index])) {
-            return false;
-        }
-    }
-    return true;
-}
-
 static bool function_alias_section_matches(const MinicFunction *alias,
                                            const MinicFunction *target) {
     if (alias == NULL || target == NULL) {
@@ -1709,7 +1688,8 @@ bool minic_c0_program_verify_target_detailed(const MinicC0Program *program,
             if (alias_target_function == NULL || !alias_target_function->is_defined ||
                 function->is_defined ||
                 !function_alias_section_matches(function, alias_target_function) ||
-                !function_alias_signature_matches(program, function, alias_target_function)) {
+                !minic_target_info_function_alias_abi_compatible(
+                    target, program, function, alias_target_function)) {
                 MINIC_AST_VERIFY_FAIL(minic_c0_ast_verify_stage_default_reason(stage));
             }
         }
