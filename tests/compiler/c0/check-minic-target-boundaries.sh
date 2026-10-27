@@ -66,6 +66,26 @@ has src/target/common/program_visit.h 'minic_program_function_selected('
 has src/target/common/core_function_plan.c 'minic_core_function_verify(function)'
 has src/target/riscv64/core_admission.c 'RV64 atomic ISA/memory-order lowering is not qualified yet.'
 
+# Five architectures must share one ELF alias behavior; target-specific
+# assembler spelling belongs to the target configuration and must not leak
+# architecture conditionals back into the common program visitor.
+exists src/target/common/elf_alias_emit.h
+has src/target/common/elf_alias_emit.h 'minic_multi_elf_emit_alias('
+has src/target/common/elf_alias_emit.h 'minic_multi_elf_emit_object_alias('
+has src/target/riscv/function_symbol.h 'minic_multi_elf_emit_alias('
+has src/target/riscv64/codegen_function.c 'minic_multi_elf_emit_object_alias('
+has src/target/x86_64/codegen.c 'minic_multi_elf_emit_object_alias('
+has src/target/common/direct_program_emit.c 'ctx->config->elf_function_type'
+has src/target/common/direct_program_emit.c 'ctx->config->elf_object_type'
+lacks src/target/common/direct_program_emit.c 'MINIC_TARGET_ARCH_AARCH64'
+has src/target/aarch64/codegen.c '"%function", "%object"'
+has src/target/loongarch64/codegen.c '"@function", "@object"'
+# A front-end GNU alias is bound once after the entire TU, never by a
+# per-architecture parser special case or a fabricated declaration.
+has src/frontend/parser_function.c 'parser_resolve_pending_function_aliases('
+has src/frontend/ast_verifier.c 'minic_target_info_function_alias_abi_compatible('
+lacks src/frontend/parser_function.c 'MINIC_TARGET_ARCH_LOONGARCH64'
+
 # The Common block cursor selects the identical lexical Core order across
 # all five backends; only machine instruction/terminator handlers are private.
 exists src/target/common/core_block_walk.h

@@ -2,6 +2,7 @@
 #define MINIC_TARGET_RISCV_FUNCTION_SYMBOL_H
 
 #include "frontend/ast.h"
+#include "target/common/elf_alias_emit.h"
 
 #include <stdbool.h>
 #include <stdio.h>
@@ -43,44 +44,22 @@ minic_riscv_function_visibility_directive(MinicSymbolVisibility visibility) {
                                                              : NULL;
 }
 
-/* GNU function aliases have identical ELF semantics on RV32 and RV64.
- * Keep the shared binding/type/visibility contract at the RISC-V symbol
- * boundary so a target cannot silently omit a live weak alias. */
-static inline bool minic_riscv_emit_function_alias(FILE *file,
-                                                  const MinicC0Program *program,
-                                                  const MinicFunction *function) {
-    const MinicFunction *target;
-    const char *alias_name;
-    const char *target_name;
-    const char *visibility_directive;
-
+/* RISC-V shares the exact GNU ELF alias semantics with x86/Direct LP64.
+ * Keep the ABI and ISA emission owned by the target; this is symbol
+ * metadata only, no new machine instruction or object format. */
+static inline bool minic_riscv_emit_function_alias(
+    FILE *file, const MinicC0Program *program,
+    const MinicFunction *function) {
+    const MinicFunction *owner;
     if (file == NULL || program == NULL || function == NULL ||
-        function->alias_target == MINIC_FUNCTION_INVALID) {
+        function->alias_target == MINIC_FUNCTION_INVALID)
         return false;
-    }
-    target = minic_c0_program_function(program, function->alias_target);
-    alias_name = minic_c0_function_symbol_name(function);
-    target_name = minic_c0_function_symbol_name(target);
-    if (alias_name == NULL || alias_name[0] == '\0' || target == NULL ||
-        !target->is_defined || target_name == NULL || target_name[0] == '\0') {
-        return false;
-    }
-    if (!function->is_internal) {
-        if (fprintf(file, function->is_weak ? ".weak %s\n" : ".globl %s\n",
-                    alias_name) < 0) {
-            return false;
-        }
-        if (function->visibility != MINIC_SYMBOL_VISIBILITY_DEFAULT) {
-            visibility_directive =
-                minic_riscv_function_visibility_directive(function->visibility);
-            if (visibility_directive == NULL ||
-                fprintf(file, "%s %s\n", visibility_directive, alias_name) < 0) {
-                return false;
-            }
-        }
-    }
-    return fprintf(file, ".type %s, @function\n.set %s, %s\n",
-                   alias_name, alias_name, target_name) >= 0;
+    owner = minic_c0_program_function(program, function->alias_target);
+    return owner != NULL && owner->is_defined &&
+           minic_multi_elf_emit_alias(
+               file, minic_c0_function_symbol_name(function),
+               minic_c0_function_symbol_name(owner), function->is_internal,
+               function->is_weak, function->visibility, "@function");
 }
 
 static inline bool

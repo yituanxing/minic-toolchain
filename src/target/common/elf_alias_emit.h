@@ -35,7 +35,7 @@ static inline bool minic_multi_elf_emit_alias(
     if (!internal &&
         fprintf(out, weak ? ".weak %s\n" : ".globl %s\n", alias_name) < 0)
         return false;
-    if (directive != NULL &&
+    if (!internal && directive != NULL &&
         fprintf(out, "%s %s\n", directive, alias_name) < 0)
         return false;
     return fprintf(out, ".type %s, %s\n.set %s, %s\n",
