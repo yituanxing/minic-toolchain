@@ -1449,11 +1449,54 @@ static bool parse_absolute_shift(MiniAsAbsoluteExpressionParser *parser,
     return true;
 }
 
+/* GNU GAS absolute comparisons produce -1 for true and 0 for false.
+ * These are arithmetic expression operators, not only .if directives.
+ * In particular Linux hand-written .fill uses -((symA-symB)>0).
+ * Build comparison precedence once in Common, leaving Target expression
+ * syntax and deferred symbol fixups independent. */
+static bool parse_absolute_relational(MiniAsAbsoluteExpressionParser *parser,
+                                      int64_t *value) {
+    int64_t lhs;
+    if(!parse_absolute_shift(parser,&lhs))return false;
+    for(;;) {
+        bool lt,gt,inclusive;
+        int64_t rhs;
+        skip_absolute_expression_space(parser);
+        if((parser->cursor[0]!='<' && parser->cursor[0]!='>') ||
+           parser->cursor[1]==parser->cursor[0])break;
+        lt=parser->cursor[0]=='<';gt=!lt;
+        inclusive=parser->cursor[1]=='=';
+        parser->cursor+=inclusive?2U:1U;
+        if(!parse_absolute_shift(parser,&rhs))return false;
+        lhs=((lt && (inclusive?lhs<=rhs:lhs<rhs)) ||
+             (gt && (inclusive?lhs>=rhs:lhs>rhs)))?-1:0;
+    }
+    *value=lhs;return true;
+}
+
+static bool parse_absolute_equality(MiniAsAbsoluteExpressionParser *parser,
+                                    int64_t *value) {
+    int64_t lhs;
+    if(!parse_absolute_relational(parser,&lhs))return false;
+    for(;;) {
+        bool different;
+        int64_t rhs;
+        skip_absolute_expression_space(parser);
+        if(strncmp(parser->cursor,"==",2U)==0)different=false;
+        else if(strncmp(parser->cursor,"!=",2U)==0)different=true;
+        else break;
+        parser->cursor+=2U;
+        if(!parse_absolute_relational(parser,&rhs))return false;
+        lhs=((lhs!=rhs)==different)?-1:0;
+    }
+    *value=lhs;return true;
+}
+
 static bool parse_absolute_and(MiniAsAbsoluteExpressionParser *parser,
                                int64_t *value) {
     int64_t result;
 
-    if (!parse_absolute_shift(parser, &result)) {
+    if (!parse_absolute_equality(parser, &result)) {
         return false;
     }
     for (;;) {
@@ -1464,7 +1507,7 @@ static bool parse_absolute_and(MiniAsAbsoluteExpressionParser *parser,
             break;
         }
         ++parser->cursor;
-        if (!parse_absolute_shift(parser, &rhs)) {
+        if (!parse_absolute_equality(parser, &rhs)) {
             return false;
         }
         result &= rhs;

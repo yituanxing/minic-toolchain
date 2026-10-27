@@ -1128,6 +1128,14 @@ cat > "$work/gnu-fill.s" <<'GNU_FILL'
     .fill 2,8,0x01020304
     .fill 0,1,0
     .byte 0x78
+    # Real GAS expression precedence and GNU truth=-1, not C truth=1.
+.Lbool_begin:
+    .byte 0x0b, 0x16
+.Lbool_after:
+    .byte 0x21
+.Lbool_end:
+    .fill -(((.Lbool_after-.Lbool_begin)-(.Lbool_end-.Lbool_after))>0),1,0x5a
+    .fill -((3>=2)==-1),1,0x6c
 GNU_FILL
 "$MINIAS" --target=loongarch64 -o "$work/la-fill-mini.o" "$work/gnu-fill.s"
 "$LOONGAS" -mabi=lp64d -o "$work/la-fill-gnu.o" "$work/gnu-fill.s"
