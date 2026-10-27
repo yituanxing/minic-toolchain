@@ -419,7 +419,7 @@ static bool riscv_relax_instruction(MiniAs *as, const MiniAsStmt *stmt,
     if (stmt->size != 4U || !is_conditional_branch_op(stmt->op))
         return true;
     if (stmt->mcinst != NULL && stmt->mcinst->opcode == RV_MC_BRANCH) {
-        expr = stmt->mcinst->operands[2].symbol;
+        expr = *stmt->mcinst->operands[2].symbol;
     } else {
         /* Legacy relaxation path for opcode families not yet migrated. */
         comma = strrchr(stmt->args, ',');

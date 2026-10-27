@@ -124,7 +124,9 @@ typedef struct MiniAsMCOperand {
     unsigned reg;
     bool register_64;
     uint64_t immediate;
-    MiniAsSymbolExpr symbol;
+    /* Symbol names are allocated only for symbol operands. Integer-heavy
+     * source files must not pay 256 bytes per register/immediate operand. */
+    MiniAsSymbolExpr *symbol;
 } MiniAsMCOperand;
 typedef struct MiniAsMCInst {
     unsigned opcode;

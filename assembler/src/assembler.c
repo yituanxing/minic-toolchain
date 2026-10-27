@@ -605,7 +605,14 @@ void minias_destroy(MiniAs *as) {
     for (i = 0U; i < as->stmt_count; ++i) {
         free(as->stmts[i].op);
         free(as->stmts[i].args);
-        free(as->stmts[i].mcinst);
+        if (as->stmts[i].mcinst != NULL) {
+            MiniAsMCInst *mc = as->stmts[i].mcinst;
+            size_t k;
+            for (k = 0U; k < mc->count; ++k)
+                if (mc->operands[k].kind == MINIAS_MC_SYMBOL)
+                    free(mc->operands[k].symbol);
+            free(mc);
+        }
     }
     free(as->stmts);
     free(as->fixups);

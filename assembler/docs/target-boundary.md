@@ -24,8 +24,13 @@ Explicit -march=rv32i/rv64i retains existing fail-closed machine-code checks.
    dword memory operands, B-type local and long branches and symbolic JAL.
    ISA M and RV64 word arithmetic share the same tables; GNU compatibility
    aliases (such as add/sub immediate forms) remain supported.
-   Remaining FP/vector/CSR/atomics and multiword pseudos use the legacy
-   string-based decoder until their separate oracle-covered migration.
+   The obsolete fixed-width integer/branch/JAL decoding branches were
+   removed (hundreds of redundant lines); legacy symbolic memory expansion
+   remains until matching relocation-aware fragments replace it. MCInst
+   operands allocate symbol-expression storage only for symbolic operands:
+   register/immediate-heavy input no longer pays the former 256-byte symbol
+   buffer per operand. Remaining FP/vector/CSR/atomics and multiword pseudos
+   use the legacy string-based decoder until their own oracle-covered migration.
    Comment stripping is target-configurable and .option
    dispatch belongs to the RISC-V target; common parser still owns GNU-style
    statement grammar. Raw executable data/.org ISA guards are now target-owned,

@@ -144,18 +144,30 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
         inst->count = 1U;
         inst->operands[0].kind = MINIAS_MC_IMMEDIATE;
         inst->operands[0].immediate = imm;
-    } else if ((strcmp(op, "b") == 0 || strcmp(op, "bl") == 0) &&
-               minias_parse_symbol_addend(
-                   args, &inst->operands[0].symbol)) {
-        inst->opcode = strcmp(op, "bl") == 0 ? A64_MC_BL : A64_MC_B;
-        inst->count = 1U;
-        inst->operands[0].kind = MINIAS_MC_SYMBOL;
-        if ((inst->operands[0].symbol.addend & 3) != 0) {
+    } else if (strcmp(op, "b") == 0 || strcmp(op, "bl") == 0) {
+        MiniAsSymbolExpr expr;
+        if (!minias_parse_symbol_addend(args, &expr)) {
+            minias_set_error(as, "bad-aarch64-branch-target:%s:line=%zu",
+                             args, stmt->line);
+            free(inst);
+            return false;
+        }
+        if ((expr.addend & 3) != 0) {
             minias_set_error(as, "bad-aarch64-branch-addend:%s:line=%zu",
                              args, stmt->line);
             free(inst);
             return false;
         }
+        inst->operands[0].symbol = malloc(sizeof(expr));
+        if (inst->operands[0].symbol == NULL) {
+            minias_set_error(as, "out-of-memory:aarch64-symbol-mcinst");
+            free(inst);
+            return false;
+        }
+        *inst->operands[0].symbol = expr;
+        inst->opcode = strcmp(op, "bl") == 0 ? A64_MC_BL : A64_MC_B;
+        inst->count = 1U;
+        inst->operands[0].kind = MINIAS_MC_SYMBOL;
     } else {
         minias_set_error(as, "bad-aarch64-operands:%s:%s:line=%zu",
                          op, args, stmt->line);
@@ -197,7 +209,7 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
         case A64_MC_BL: {
             const MiniAsSymbol *target;
             int64_t distance;
-            expr = &inst->operands[0].symbol;
+            expr = inst->operands[0].symbol;
             code = inst->opcode == A64_MC_BL ?
                 UINT32_C(0x94000000) : UINT32_C(0x14000000);
             fixup = inst->opcode == A64_MC_BL ?
