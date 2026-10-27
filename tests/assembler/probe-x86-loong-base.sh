@@ -167,7 +167,7 @@ common_space_test:
     .skip 8, 0x5a
     .space 5, 0x33
     .zero 3
-    /* GNU x86 SysV: .word is TWO bytes, unlike A64/RISC-V .word. */
+    # GNU x86 SysV: .word is TWO bytes, unlike A64/RISC-V .word.
     .align 16
     .word 0x1234
 ASM_X
