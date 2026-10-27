@@ -770,6 +770,110 @@ SRC
     done
     echo 'MINIC_AARCH64_LINUX_PERCPU_ALTERNATIVE_GNU_AS=PASS real_frozen=1 patchtable=12B relocations=2 feature=47 negative=6 privileged_only=1'
 
+    # Exact Linux cmpxchg 32/64 × relaxed/acquire/release/full, both
+    # success and mismatch old-value behavior. Actual GNU+MiniC GAS/QEMU.
+    : > "$work/aarch64-cmpxchg.i"
+    for bits in 32 64; do
+        if [ "$bits" = 32 ]; then
+            typ='unsigned int'; oldval='%w[oldval]'; tmp='%w[tmp]'
+            oldparam='%w[old]'; newparam='%w[new]'; constraint=Kr
+        else
+            typ='unsigned long'; oldval='%[oldval]'; tmp='%[tmp]'
+            oldparam='%[old]'; newparam='%[new]'; constraint=Lr
+        fi
+        for mode in relaxed acquire release full; do
+            case "$mode" in
+                relaxed) ld=ldxr; st=stxr; barrier=''; clobber='' ;;
+                acquire) ld=ldaxr; st=stxr; barrier=''; clobber=': "memory"' ;;
+                release) ld=ldxr; st=stlxr; barrier=''; clobber=': "memory"' ;;
+                full) ld=ldxr; st=stlxr; barrier=' dmb ish\n'; clobber=': "memory"' ;;
+            esac
+            symbol=$(printf 'cmpxchg_%s_%s' "$bits" "$mode")
+            cat >> "$work/aarch64-cmpxchg.i" <<SRC
+$typ $symbol(volatile void *p, unsigned long expected, $typ replacement) {
+    unsigned long status;
+    $typ observed;
+    __asm__ __volatile__(" prfm pstl1strm, %[v]\\n"
+                         "1: $ld $oldval, %[v]\\n"
+                         " eor $tmp, $oldval, $oldparam\\n"
+                         " cbnz $tmp, 2f\\n"
+                         " $st %w[tmp], $newparam, %[v]\\n"
+                         " cbnz %w[tmp], 1b\\n"
+                         "$barrier" "2:"
+                         : [tmp] "=&r"(status), [oldval] "=&r"(observed),
+                           [v] "+Q"(*($typ *)p)
+                         : [old] "$constraint"(expected), [new] "r"(replacement)
+                         $clobber);
+    return observed;
+}
+SRC
+        done
+    done
+    cat >> "$work/aarch64-cmpxchg.i" <<'SRC'
+int main(void) {
+    unsigned int a=1; unsigned long b=1;
+    unsigned int a0=cmpxchg_32_relaxed(&a,1,2);
+    unsigned int a1=cmpxchg_32_acquire(&a,2,4);
+    unsigned int a2=cmpxchg_32_release(&a,0,9);
+    unsigned int a3=cmpxchg_32_full(&a,4,8);
+    unsigned long b0=cmpxchg_64_relaxed(&b,1,2);
+    unsigned long b1=cmpxchg_64_acquire(&b,2,4);
+    unsigned long b2=cmpxchg_64_release(&b,0,9);
+    unsigned long b3=cmpxchg_64_full(&b,4,8);
+    return a==8 && b==8 &&
+           a0==1 && a1==2 && a2==4 && a3==4 &&
+           b0==1 && b1==2 && b2==4 && b3==4 ? 0 : 1;
+}
+SRC
+    "$cross_cc" -O0 -x c "$work/aarch64-cmpxchg.i" \
+        -o "$work/aarch64-cmpxchg.gnu.elf"
+    "$MINIC_CC" --target=aarch64-linux -S "$work/aarch64-cmpxchg.i" \
+        -o "$work/aarch64-cmpxchg.minic.s"
+    for op in 'ldxr w9' 'ldaxr w9' 'ldxr x9' 'ldaxr x9' \
+              'stxr w13' 'stlxr w13' 'cbnz w13, 2f' 'dmb ish'; do
+        grep -Fq "$op" "$work/aarch64-cmpxchg.minic.s"
+    done
+    "$cross_cc" -x assembler "$work/aarch64-cmpxchg.minic.s" \
+        -o "$work/aarch64-cmpxchg.minic.elf"
+    for flavor in gnu minic; do
+        qemu-aarch64 -L /usr/aarch64-linux-gnu \
+            "$work/aarch64-cmpxchg.$flavor.elf"
+    done
+    for bad in old_constraint register_output changed_alu extra_opcode no_clobber; do
+        c=Kr; out='=&r'; alu=eor; injected=''; clobber=': "memory"'
+        case "$bad" in
+            old_constraint) c=r ;;
+            register_output) out='=r' ;;
+            changed_alu) alu=orr ;;
+            extra_opcode) injected='; svc #0' ;;
+            no_clobber) clobber='' ;;
+        esac
+        cat > "$work/aarch64-cmpxchg-bad-$bad.i" <<SRC
+void bad(volatile unsigned int *p, unsigned long expected, unsigned int replacement) {
+    unsigned long status; unsigned int observed;
+    __asm__ __volatile__(" prfm pstl1strm, %[v]\\n"
+        "1: ldxr %w[oldval], %[v]\\n"
+        " $alu %w[tmp], %w[oldval], %w[old]\\n"
+        " cbnz %w[tmp], 2f\\n"
+        " stlxr %w[tmp], %w[new], %[v]\\n"
+        " cbnz %w[tmp], 1b\\n"
+        " dmb ish\\n2:$injected"
+        : [tmp] "$out"(status), [oldval] "=&r"(observed), [v] "+Q"(*p)
+        : [old] "$c"(expected), [new] "r"(replacement) $clobber);
+}
+SRC
+        if "$MINIC_CC" --target=aarch64-linux -S \
+            "$work/aarch64-cmpxchg-bad-$bad.i" \
+            -o "$work/aarch64-cmpxchg-bad-$bad.s" \
+            >"$work/aarch64-cmpxchg-bad-$bad.out" \
+            2>"$work/aarch64-cmpxchg-bad-$bad.err"; then
+            echo "FAIL AArch64 CMPXCHG invalid template admitted: $bad" >&2
+            exit 1
+        fi
+    done
+    echo 'MINIC_AARCH64_LINUX_CMPXCHG_GNU_QEMU=PASS eight_modes=8 mismatch=1 negative=5'
+
+
 
 fi
 

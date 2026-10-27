@@ -154,7 +154,7 @@ static const Aarch64AtomicOperation aarch64_atomic_operations[] = {
  * catalog used for source qualification and physical LL/SC emission. */
 bool minic_aarch64_requires_qualified_input_asm(const MinicInlineAsm *src) {
     static const char *const fixed[] = {
-        "brk", "stlrb", "stlrh", "stlr", "msr", "bic", ".if"
+        "brk", "stlrb", "stlrh", "stlr", "msr", "bic", ".if", "prfm"
     };
     char prefix[64];
     const char *const single[] = {prefix};
@@ -257,6 +257,55 @@ static bool aarch64_atomic_form(const char *text, size_t len, bool fetch,
  * .altinstructions metadata is consumed by Linux at boot to patch MRS
  * TPIDR_EL1 to TPIDR_EL2 when feature 47 is available. Preserve the exact
  * section, relocations, relative label offsets and instruction sizes. */
+/* Original Linux 6.6.143 __ll_sc__cmpxchg_case_* uses real hardware
+ * LDXR/LDAXR + EOR + conditional STXR/STLXR. GNU source contains named
+ * %[oldval] etc; Core normalizes them to positional %1 etc. Match BOTH
+ * forms to exactly one AArch64 ordering/width contract; no raw passthrough. */
+static unsigned int aarch64_linux_cmpxchg_form(
+    const char *text, size_t length, bool numeric) {
+    static const char *const loads[] = {"ldxr", "ldaxr", "ldxr", "ldxr"};
+    static const char *const stores[] = {"stxr", "stxr", "stlxr", "stlxr"};
+    char compact[256], expected[256];
+    size_t i, n = 0U, word, mode;
+    if (!text || !length || length >= sizeof(compact)) return 0U;
+    for (i = 0U; i < length; ++i) {
+        const char c = text[i];
+        if (c == ' ' || c == '\t' || c == '\r' || c == '\n') continue;
+        if (n + 1U >= sizeof(compact)) return 0U;
+        compact[n++] = c;
+    }
+    compact[n] = '\0';
+    for (word = 0U; word < 2U; ++word) {
+        const char *mem = numeric ? "%2" : "%[v]";
+        const char *oldval = numeric ?
+            (word ? "%1" : "%w1") :
+            (word ? "%[oldval]" : "%w[oldval]");
+        const char *tmp = numeric ?
+            (word ? "%0" : "%w0") :
+            (word ? "%[tmp]" : "%w[tmp]");
+        const char *status = numeric ? "%w0" : "%w[tmp]";
+        const char *old = numeric ?
+            (word ? "%3" : "%w3") :
+            (word ? "%[old]" : "%w[old]");
+        const char *newval = numeric ?
+            (word ? "%4" : "%w4") :
+            (word ? "%[new]" : "%w[new]");
+        for (mode = 0U; mode < 4U; ++mode) {
+            const int count = snprintf(expected, sizeof(expected),
+                "prfmpstl1strm,%s1:%s%s,%s"
+                "eor%s,%s,%scbnz%s,2f"
+                "%s%s,%s,%scbnz%s,1b%s2:",
+                mem, loads[mode], oldval, mem,
+                tmp, oldval, old, tmp,
+                stores[mode], status, newval, mem,
+                status, mode == 3U ? "dmbish" : "");
+            if (count > 0 && (size_t)count < sizeof(expected) &&
+                strcmp(compact, expected) == 0)
+                return (unsigned int)(word * 4U + mode + 1U);
+        }
+    }
+    return 0U;
+}
 static bool aarch64_linux_percpu_alternative_template(
     const char *text, size_t length) {
     static const char exact[] =
@@ -399,6 +448,46 @@ bool minic_aarch64_qualify_inline_asm(
             contract->operand_count = 2U;
             contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT;
             contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+            return true;
+        }
+    }
+    /* CMPXCHG reuses 5 Core roles: tmp old-value output, observed output,
+     * +Q memory, old expected, new replacement. The target alone owns the
+     * LL/SC instructions, widths, GPR constraints and ordering. */
+    if (program && src && contract && src->is_volatile && !src->is_goto &&
+        src->outputs && src->inputs && src->output_count == 3U &&
+        src->input_count == 2U && src->label_count == 0U &&
+        src->register_clobber_count == 0U &&
+        constraint(&src->outputs[0], "=&r") &&
+        constraint(&src->outputs[1], "=&r") &&
+        constraint(&src->outputs[2], "+Q") &&
+        constraint(&src->inputs[1], "r")) {
+        const unsigned int form = aarch64_linux_cmpxchg_form(
+            src->template_text, src->template_length, false);
+        const size_t width = form > 4U ? 8U : 4U;
+        const unsigned int mode = form ? (form - 1U) % 4U : 0U;
+        bool accepted = form != 0U &&
+            src->clobber_count == (mode == 0U ? 0U : 1U) &&
+            src->has_memory_clobber == (mode != 0U) &&
+            constraint(&src->inputs[0], width == 8U ? "Lr" : "Kr");
+        for (i = 0U; i < 5U && accepted; ++i) {
+            const MinicInlineAsmOperand *op = i < 3U ?
+                &src->outputs[i] : &src->inputs[i - 3U];
+            const MinicExpression *e =
+                minic_c0_program_expression(program, op->expression);
+            if (!e || (i < 3U &&
+                (e->value_category != MINIC_VALUE_LVALUE ||
+                 minic_type_is_const(e->type))) ||
+                !aarch64_stlr_type(e->type, i == 0U || i == 3U ? 8U : width))
+                accepted = false;
+        }
+        if (accepted) {
+            contract->operand_count = 5U;
+            contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
+            contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
+            contract->kinds[2] = MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE;
+            contract->kinds[3] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+            contract->kinds[4] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
             return true;
         }
     }
@@ -788,6 +877,75 @@ bool minic_aarch64_emit_qualified_structured_asm(
                             "  %s\n",
                        (size_t)b[0].value * 8U,
                        (size_t)b[1].value * 8U, op[width]) >= 0;
+    }
+    if (ins->value.structured_inline_asm.operand_count == 5U &&
+        aarch64_linux_cmpxchg_form(
+            info->template_text, info->template_length, true)) {
+        static const char *const ld[] = {"ldxr", "ldaxr", "ldxr", "ldxr"};
+        static const char *const st[] = {"stxr", "stxr", "stlxr", "stlxr"};
+        const MinicCoreStructuredInlineAsmOperand *ops =
+            ins->value.structured_inline_asm.operands;
+        const unsigned int form = aarch64_linux_cmpxchg_form(
+            info->template_text, info->template_length, true);
+        const size_t width = form > 4U ? 8U : 4U;
+        const unsigned int mode = (form - 1U) % 4U;
+        MinicType pointee;
+        if (!info->is_volatile || info->is_goto ||
+            !info->has_memory_clobber || info->register_clobber_count)
+            return false;
+        for (i = 0U; i < 5U; ++i) {
+            const size_t expected_width = i == 0U || i == 3U ? 8U : width;
+            if (ops[i].operand_index != i || ops[i].early_clobber ||
+                ops[i].has_fixed_register_binding ||
+                ops[i].value >= fn->value_count ||
+                ops[i].value > 4095U / 8U ||
+                ops[i].kind != (i < 2U ?
+                    MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT :
+                    i == 2U ? MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE :
+                    MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT))
+                return false;
+            if (i < 3U) {
+                if (!minic_type_pointee(fn->values[ops[i].value].type,
+                                        &pointee) ||
+                    !aarch64_stlr_type(pointee, expected_width))
+                    return false;
+            } else if (!aarch64_stlr_type(
+                    fn->values[ops[i].value].type, expected_width)) {
+                return false;
+            }
+        }
+        /* Mismatch returns OLD without writing memory; a matching value
+         * may be stored only via STXR, which is retried on hardware failure.
+         * x9 old, x11 expected, x12 new, x13 compare / STXR status. */
+        return fprintf(out,
+            "  ldr x10, [sp, #%zu]\n"
+            "  ldr x11, [sp, #%zu]\n"
+            "  ldr x12, [sp, #%zu]\n"
+            "  prfm pstl1strm, [x10]\n"
+            "1:\n"
+            "  %s %s9, [x10]\n"
+            "  eor %s13, %s9, %s11\n"
+            "  cbnz %s13, 2f\n"
+            "  %s w13, %s12, [x10]\n"
+            "  cbnz w13, 1b\n"
+            "%s"
+            "2:\n"
+            "  ldr x14, [sp, #%zu]\n"
+            "  str %s9, [x14]\n"
+            "  ldr x14, [sp, #%zu]\n"
+            "  str x13, [x14]\n",
+            (size_t)ops[2].value * 8U,
+            (size_t)ops[3].value * 8U,
+            (size_t)ops[4].value * 8U,
+            ld[mode], width == 8U ? "x" : "w",
+            width == 8U ? "x" : "w",
+            width == 8U ? "x" : "w",
+            width == 8U ? "x" : "w",
+            st[mode], width == 8U ? "x" : "w",
+            mode == 3U ? "  dmb ish\n" : "",
+            (size_t)ops[1].value * 8U,
+            width == 8U ? "x" : "w",
+            (size_t)ops[0].value * 8U) >= 0;
     }
     if (ins->value.structured_inline_asm.operand_count == 5U) {
         Aarch64AtomicForm atomic;
