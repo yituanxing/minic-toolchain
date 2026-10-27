@@ -253,10 +253,11 @@ for bad_source in 'brk #65536' 'mov w0, -65537' \
                   'cset x0, bogus' \
                   'mrs w0, sp_el0' 'msr tpidrro_el0, x0' \
                   'mrs x0, fake_el0' 'dmb #16' 'dmb invalid' \
-                  'cmn x0, #-1' 'cmn w0, #4097' 'and w0, w0, #256' 'and w0, w0, #0xffffffff'
-                  'and x0, w0, #255' 'sxtw w0, w0'
-                  'uxtw x0, x0' 'rev w1, x2'
-                  'ldar w0, [x0, #4]' 'stlr x0, [w0]'
+                  'cmn x0, #-1' 'cmn w0, #4097' \
+                  'and w0, w0, #0xffffffff' 'and w0, w0, #0' \
+                  'and x0, w0, #255' 'sxtw w0, w0' \
+                  'uxtw x0, x0' 'rev w1, x2' \
+                  'ldar w0, [x0, #4]' 'stlr x0, [w0]' \
                   'cmp x0, #16777216' \
                   'hint #-1' 'hint #128' 'hint #18446744073709551616' \
                   'hint bad' 'ret x31' 'mov x2, #65536' 'b external_function + 2' \
