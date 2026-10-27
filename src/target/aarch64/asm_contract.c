@@ -575,7 +575,7 @@ bool minic_aarch64_emit_qualified_structured_asm(
             info->template_text, info->template_length);
         const size_t width = form > 16U ? 8U : 4U;
         const unsigned int mode = form ? (form - 1U) % 4U : 0U;
-        const unsigned int op = form ? ((form - 1U) % 16U) / 4U : 0U;
+        const unsigned int logic_op = form ? ((form - 1U) % 16U) / 4U : 0U;
         static const char *const alu[] = {"and", "orr", "eor", "bic"};
         static const char *const ld[] = {"ldxr", "ldxr", "ldaxr", "ldxr"};
         static const char *const st[] = {"stlxr", "stxr", "stxr", "stlxr"};
@@ -632,7 +632,7 @@ bool minic_aarch64_emit_qualified_structured_asm(
             (size_t)ops[3].value * 8U,
             (size_t)ops[4].value * 8U,
             ld[mode], width == 8U ? "x" : "w",
-            alu[op], width == 8U ? "x" : "w",
+            alu[logic_op], width == 8U ? "x" : "w",
             width == 8U ? "x" : "w",
             width == 8U ? "x" : "w",
             st[mode], width == 8U ? "x" : "w",
