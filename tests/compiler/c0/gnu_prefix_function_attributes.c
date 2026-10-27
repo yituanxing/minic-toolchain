@@ -63,7 +63,9 @@ void instrumentation_policy_aliases(void)
 }
 
 static inline __attribute__((gnu_inline)) __attribute__((always_inline))
-size_t prefix_plain_spelling_identity(size_t value)
+/* Standalone .i regression: no libc typedefs are injected by GNU -E -P.
+ * This fixture tests GNU attribute spelling, not external stddef.h owners. */
+unsigned long prefix_plain_spelling_identity(unsigned long value)
 {
     return value;
 }
