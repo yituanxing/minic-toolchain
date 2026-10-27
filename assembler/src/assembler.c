@@ -3290,9 +3290,16 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
         /* Feature/ABI validation happens before the target parser. Targets
          * with a typed size hook do not inspect textual operands a second
          * time: their legacy measure hook simply validates ISA policy. */
-        if (!as->target->measure(as, op, rewritten_args, &size,
-                                  reason, sizeof(reason))) {
+        if (as->target->measure != NULL &&
+            !as->target->measure(as, op, rewritten_args, &size,
+                                 reason, sizeof(reason))) {
             minias_set_error(as, "%s:line=%zu", reason, line);
+            free(rewritten_args);
+            return false;
+        }
+        if (!parsed_size && as->target->measure == NULL) {
+            minias_set_error(as, "target-missing-instruction-measure:%s",
+                             op);
             free(rewritten_args);
             return false;
         }

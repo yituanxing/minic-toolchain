@@ -65,10 +65,13 @@ Explicit -march=rv32i/rv64i retains existing fail-closed machine-code checks.
    before placing its fragment. 2B compressed, 4B regular, 8B symbolic
    memory/CALL/LA and variable-size 32/64-bit LI measurements derive
    directly from the stored MCInst. The old RISC-V text-based measure
-   function and duplicate opcode classifier are deleted. The generic
-   AArch64 vertical slice retains its proven existing measure path until
-   it too supports this hook. Strict ISA feature checks still precede
-   parsing, and target branch relaxation still follows measurement.
+   function and duplicate opcode classifier are deleted. The AArch64
+   vertical slice now uses the same **parse-then-measure MCInst hook**,
+   removing its duplicate mnemonic allowlist. It measures fixed 4B
+   instructions from parsed MCInst, checked against GNU AS and ELF .size.
+   The common measurement hook is now optional for targets supporting
+   parse-then-measure; RISC-V ISA checks still precede parsing, and
+   branch relaxation still follows fragment measurement.
    RV32 shift widths are validated at the typed parser.
    Vector register classes are distinguished from integer/FP registers.
    Comment stripping is target-configurable and .option

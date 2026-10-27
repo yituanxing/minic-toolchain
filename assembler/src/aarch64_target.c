@@ -70,18 +70,17 @@ static bool split_two(const char *args, char *first, size_t cap1,
     return true;
 }
 
-static bool measure(const MiniAs *as, const char *op, const char *args,
-                    uint32_t *size, char *reason, size_t cap) {
-    (void)as;
-    (void)args;
-    if (strcmp(op, "nop") == 0 || strcmp(op, "ret") == 0 ||
-        strcmp(op, "mov") == 0 || strcmp(op, "svc") == 0 ||
-        strcmp(op, "b") == 0 || strcmp(op, "bl") == 0) {
-        *size = 4U;
-        return true;
+/* AArch64 is fixed 4B. Measurement consumes the parsed MCInst just as
+ * the RISC-V variable-length backend does; no duplicate mnemonic allowlist
+ * or operand parsing is necessary before the instruction fragment exists. */
+static bool aarch64_measure_mcinst(MiniAs *as, const MiniAsStmt *stmt,
+                                   uint32_t *size) {
+    if (stmt->mcinst == NULL) {
+        minias_set_error(as, "missing-aarch64-mcinst:line=%zu", stmt->line);
+        return false;
     }
-    (void)snprintf(reason, cap, "unsupported-aarch64-instruction:%s", op);
-    return false;
+    *size = 4U;
+    return true;
 }
 
 static bool append_word(MiniAs *as, int section, uint32_t word) {
@@ -316,8 +315,8 @@ static const MiniAsTargetOps ops = {
     .parse_target_directive = directive,
     .object_attributes = attributes,
     .name = "aarch64",
-    .measure = measure,
     .parse_mcinst = parse_mcinst,
+    .measure_mcinst = aarch64_measure_mcinst,
     .encode = encode,
     .append_code_alignment = code_alignment,
     .fixup_relocation_type = aarch64_fixup_relocation_type,

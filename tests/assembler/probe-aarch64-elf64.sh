@@ -29,9 +29,12 @@ exit_code:
 external_probe:
     bl external_function
     b external_branch
+.globl mc_operand_probe
+.type mc_operand_probe, @function
 mc_operand_probe:
     mov w3, #1234
     ret x9
+.size mc_operand_probe, .-mc_operand_probe
 .data
 .globl function_pointer
 function_pointer:
@@ -45,6 +48,10 @@ SRC
 "$AARCH64_OBJCOPY" -j .text -O binary "$work/mini.o" "$work/mini-text.bin"
 "$AARCH64_OBJCOPY" -j .text -O binary "$work/gnu.o" "$work/gnu-text.bin"
 cmp "$work/mini-text.bin" "$work/gnu-text.bin"
+typed_a64_size="$("$AARCH64_READELF" -Ws "$work/mini.o" |
+    awk '$NF == "mc_operand_probe" { print $3 }')"
+test "$typed_a64_size" = "8"
+echo 'MINIAS_AARCH64_PARSED_LAYOUT=PASS typed_4B=2 symbol_size=8'
 "$AARCH64_READELF" -Wr "$work/mini.o" | grep -q 'R_AARCH64_CALL26'
 "$AARCH64_READELF" -Wr "$work/mini.o" | grep -q 'R_AARCH64_JUMP26'
 "$AARCH64_READELF" -Wr "$work/mini.o" | grep -q 'R_AARCH64_ABS64'
