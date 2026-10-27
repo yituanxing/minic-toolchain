@@ -163,3 +163,20 @@ No Common instruction family, Section, Symbol, Fragment or ELF code was changed.
 This target still intentionally lacks ADRP/GOT, conditional branches,
 shifts, extend/bitfield and full CFI. New ISA implementations must add
 AArch64 MCInst cases rather than duplicate the common layout/ELF pipeline.
+
+## GCC RV64I native C→S evidence and attributes (2026-10-27)
+
+The true GNU GCC `-S -march=rv64i -mabi=lp64` input includes
+`.attribute arch`, `.attribute stack_align` and
+`.attribute unaligned_access`, in addition to integer opcodes.
+The prior assembler rejected `.attribute` before it ever reached the
+strict-I instruction encoder. These directives now have a target-owned
+strict parser: the declared ISA must equal the normalized selected
+`-march`; numeric tag 4/6 values are emitted into the target ELF
+`.riscv.attributes` subsection (length fields updated), duplicates
+with conflicting values fail closed, and unknown tags reject.
+
+This is not permission for the compiler or `asm` to generate M/CSR opcodes
+under RV64I: handwritten extension instructions still go through the
+same strict target machine-ISA gate. Common ELF owns serialized sections,
+while RISC-V owns contents of its architecture attributes.

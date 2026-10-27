@@ -5,6 +5,7 @@
 #include <ctype.h>
 #include <stdint.h>
 #include <string.h>
+#include <stdlib.h>
 
 static bool is_conditional_branch_op(const char *op) {
     return strcmp(op, "beq") == 0 || strcmp(op, "bne") == 0 ||
@@ -338,9 +339,145 @@ static bool riscv_validate_common_directive(MiniAs *as, const char *op,
     return true;
 }
 
+
+/* RISC-V attributes are owned by the ISA target, never by generic ELF.
+ * Existing explicit -march provides an ELF attribute subsection containing
+ * a single Tag_File+Tag_RISCV_arch. GNU GCC emits stack_align (4) and
+ * unaligned_access (6); preserve those numeric attributes exactly and reject
+ * conflicting/unsupported attributes instead of silently ignoring them. */
+static bool riscv_set_numeric_attribute(MiniAs *as, unsigned tag,
+                                        unsigned value, size_t line) {
+    unsigned char *buf = as->target_attributes;
+    size_t n = as->target_attributes_size;
+    size_t arch, pos;
+    uint32_t subsection_size, file_size;
+    unsigned i;
+    if (value > 127U || n < 18U || buf[0] != 'A' ||
+        memcmp(buf + 5, "riscv", 6U) != 0 || buf[11] != 1U) {
+        minias_set_error(as, "riscv-attribute-layout-unavailable:line=%zu", line);
+        return false;
+    }
+    arch = buf[16] == 4U ? 18U : 16U;
+    if (arch >= n || buf[arch] != 5U) {
+        minias_set_error(as, "riscv-attribute-arch-missing:line=%zu", line);
+        return false;
+    }
+    pos = arch + 1U;
+    while (pos < n && buf[pos] != 0U) ++pos;
+    if (pos >= n) {
+        minias_set_error(as, "riscv-attribute-arch-unterminated:line=%zu", line);
+        return false;
+    }
+    ++pos;
+    if (tag == 4U && buf[16] == 4U) {
+        if (buf[17] != (unsigned char)value) goto conflict;
+        return true;
+    }
+    if (tag == 6U && pos + 2U <= n && buf[pos] == 6U) {
+        if (buf[pos + 1U] != (unsigned char)value) goto conflict;
+        return true;
+    }
+    if (n + 2U > sizeof(as->target_attributes)) {
+        minias_set_error(as, "riscv-attribute-overflow:line=%zu", line);
+        return false;
+    }
+    if (tag == 4U) {
+        memmove(buf + 18, buf + 16, n - 16U);
+        buf[16] = 4U;
+        buf[17] = (unsigned char)value;
+    } else if (tag == 6U) {
+        if (pos != n) {
+            minias_set_error(as, "riscv-attribute-unexpected-tail:line=%zu", line);
+            return false;
+        }
+        buf[n] = 6U;
+        buf[n + 1U] = (unsigned char)value;
+    } else {
+        minias_set_error(as, "unsupported-riscv-attribute-tag:%u:line=%zu",
+                         tag, line);
+        return false;
+    }
+    n += 2U;
+    as->target_attributes_size = n;
+    subsection_size = (uint32_t)(n - 1U);
+    file_size = (uint32_t)(n - 11U);
+    for (i = 0U; i < 4U; ++i) {
+        buf[1U + i] = (unsigned char)(subsection_size >> (8U * i));
+        buf[12U + i] = (unsigned char)(file_size >> (8U * i));
+    }
+    return true;
+conflict:
+    minias_set_error(as, "conflicting-riscv-attribute:%u:line=%zu", tag, line);
+    return false;
+}
+
+static bool riscv_assemble_attribute(MiniAs *as, const char *args, size_t line) {
+    const char *comma = strchr(args, ',');
+    char key[48], value[320], *end;
+    const char *front, *back;
+    size_t len;
+    unsigned long number;
+    unsigned char *attr = as->target_attributes;
+    size_t n = as->target_attributes_size;
+    size_t arch, start, finish;
+    if (comma == NULL) goto invalid;
+    front = args;
+    while (isspace((unsigned char)*front)) ++front;
+    len = (size_t)(comma - front);
+    while (len && isspace((unsigned char)front[len - 1U])) --len;
+    if (!len || len >= sizeof(key)) goto invalid;
+    memcpy(key, front, len);
+    key[len] = '\0';
+    back = comma + 1;
+    while (isspace((unsigned char)*back)) ++back;
+    len = strlen(back);
+    while (len && isspace((unsigned char)back[len - 1U])) --len;
+    if (!len || len >= sizeof(value)) goto invalid;
+    memcpy(value, back, len);
+    value[len] = '\0';
+
+    if (strcmp(key, "arch") == 0 || strcmp(key, "5") == 0) {
+        const char *declared = value;
+        if (value[0] == '"' && len >= 2U && value[len - 1U] == '"') {
+            value[len - 1U] = '\0';
+            declared = value + 1;
+        }
+        if (n < 18U || attr[0] != 'A') goto invalid;
+        arch = attr[16] == 4U ? 18U : 16U;
+        if (arch >= n || attr[arch] != 5U) goto invalid;
+        start = arch + 1U;
+        finish = start;
+        while (finish < n && attr[finish] != 0U) ++finish;
+        if (finish >= n) goto invalid;
+        if (strlen(declared) != finish - start ||
+            memcmp(attr + start, declared, finish - start) != 0) {
+            minias_set_error(as, "riscv-attribute-isa-conflict:%s:line=%zu",
+                             declared, line);
+            return false;
+        }
+        return true;
+    }
+    if (strcmp(key, "stack_align") != 0 && strcmp(key, "4") != 0 &&
+        strcmp(key, "unaligned_access") != 0 && strcmp(key, "6") != 0)
+        goto invalid;
+    number = strtoul(value, &end, 0);
+    if (end == value || *end != '\0' || number > 127U)
+        goto invalid;
+    return riscv_set_numeric_attribute(
+        as, (strcmp(key, "stack_align") == 0 || strcmp(key, "4") == 0) ? 4U : 6U,
+        (unsigned)number, line);
+invalid:
+    minias_set_error(as, "unsupported-riscv-attribute:%s:line=%zu", args, line);
+    return false;
+}
+
 static bool riscv_target_directive(MiniAs *as, const char *op,
                                    const char *args, size_t line, bool *handled) {
     *handled = false;
+    if (strcmp(op, ".attribute") == 0) {
+        *handled = true;
+        return riscv_assemble_attribute(as, args, line);
+    }
     if (as->strict_rv64i && strcmp(op, ".insn") == 0) {
         minias_set_error(as, "unsupported-isa-escape:.insn:line=%zu", line);
         return false;

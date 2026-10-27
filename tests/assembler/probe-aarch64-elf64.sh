@@ -131,7 +131,7 @@ if "$MINIAS" --target=aarch64 -o "$work/unsupported-arch.o" \
     exit 1
 fi
 grep -q 'unsupported-aarch64-architecture' "$work/unsupported-arch.err"
-printf '.text\nadd x0, x0, #1\n' >"$work/unsupported.s"
+printf '.text\nfadd d0, d0, d1\n' >"$work/unsupported.s"
 if "$MINIAS" --target=aarch64 -o "$work/unsupported.o" \
     "$work/unsupported.s" >"$work/bad.stdout" 2>"$work/bad.stderr"; then
     echo 'AARCH64_VSLICE=FAIL accepted unsupported instruction' >&2
