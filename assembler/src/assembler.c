@@ -4647,6 +4647,7 @@ int minias_assemble_config(const char *input_path,
                           config->isa_explicit;
         as.strict_i_xlen = config->strict_i_xlen;
         as.isa_explicit = config->isa_explicit;
+        as.target_xlen = config->elf32 ? 32U : 64U;
         as.isa_features = config->isa_features;
         as.target_attributes_size = config->target_attributes_size;
         if (as.target_attributes_size > sizeof(as.target_attributes)) {

@@ -164,6 +164,7 @@ typedef struct MiniAs {
     bool cfi_signal_frame;
     uint32_t elf_flags;
     bool isa_explicit;
+    unsigned target_xlen;
     uint64_t isa_features;
     unsigned char target_attributes[512];
     size_t target_attributes_size;

@@ -2,6 +2,7 @@
 #include "riscv_target.h"
 #include "riscv_profile.h"
 #include <stdio.h>
+#include <ctype.h>
 #include <stdint.h>
 #include <string.h>
 
@@ -203,10 +204,60 @@ static uint64_t riscv_required_features(const char *op) {
         return UINT64_MAX;
     return 0U;
 }
+static bool is_rv64_only_opcode(const char *op) {
+    static const char *const names[] = {
+        "ld", "sd", "lwu", "addiw", "slliw", "srliw", "sraiw",
+        "addw", "subw", "sllw", "srlw", "sraw",
+        "mulw", "divw", "divuw", "remw", "remuw", "sext.w", "negw"
+    };
+    size_t i;
+    for (i = 0U; i < sizeof(names) / sizeof(names[0]); ++i)
+        if (strcmp(names[i], op) == 0) return true;
+    return false;
+}
+
+/* RV32E only has integer registers x0..x15. This conservative source-level
+ * operand guard is kept until fully typed target operands can replace it.
+ * Reject all names for absent ABI registers, not just numeric x16..x31. */
+static bool rv32e_operands_valid(const char *args) {
+    const char *p = args;
+    while (*p != '\0') {
+        char token[48];
+        size_t len = 0U;
+        unsigned number = 0U;
+        while (*p != '\0' && !isalnum((unsigned char)*p) && *p != '_') ++p;
+        while (*p != '\0' && (isalnum((unsigned char)*p) || *p == '_')) {
+            if (len + 1U < sizeof(token)) token[len++] = *p;
+            ++p;
+        }
+        token[len] = '\0';
+        if (len == 0U) continue;
+        if (token[0] == 'x' && len > 1U) {
+            size_t j;
+            for (j = 1U; j < len; ++j) {
+                if (token[j] < '0' || token[j] > '9') break;
+                number = number * 10U + (unsigned)(token[j] - '0');
+            }
+            if (j == len && number >= 16U) return false;
+        }
+        if ((len == 2U && token[0] == 'a' &&
+             token[1] >= '6' && token[1] <= '7') ||
+            (len == 2U && token[0] == 't' &&
+             token[1] >= '3' && token[1] <= '6') ||
+            (token[0] == 's' &&
+             ((len == 2U && token[1] >= '2' && token[1] <= '9') ||
+              (len == 3U && token[1] == '1' &&
+               (token[2] == '0' || token[2] == '1'))))) return false;
+    }
+    return true;
+}
+
 static bool riscv_validate_selected_isa(const MiniAs *as, const char *op,
                                         char *reason, size_t cap) {
     uint64_t bits;
-    if (!as->isa_explicit) return true;
+    /* Strict base-I retains the exhaustive post-encoding word validator,
+     * including its established machine-encoding error diagnostics. */
+    if (!as->isa_explicit || as->strict_i_xlen != 0U) return true;
     if (strcmp(op, ".insn") == 0) {
         (void)snprintf(reason, cap, "unsupported-isa-escape:.insn");
         return false;
@@ -226,6 +277,16 @@ static bool riscv_validate_selected_isa(const MiniAs *as, const char *op,
 static bool riscv_measure(const MiniAs *as, const char *op, const char *args,
                           uint32_t *size, char *reason, size_t cap) {
     if (!riscv_validate_selected_isa(as, op, reason, cap)) return false;
+    if (as->isa_explicit && as->target_xlen == 32U &&
+        is_rv64_only_opcode(op)) {
+        (void)snprintf(reason, cap, "riscv32-unsupported-opcode:%s", op);
+        return false;
+    }
+    if (as->isa_explicit && (as->isa_features & RISCV_ISA_E) &&
+        !rv32e_operands_valid(args)) {
+        (void)snprintf(reason, cap, "riscv32e-invalid-register:%s", op);
+        return false;
+    }
     return minias_riscv_measure(as->strict_i_xlen, op, args, size, reason, cap);
 }
 

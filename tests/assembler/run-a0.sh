@@ -1649,4 +1649,37 @@ if "$MINIAS" -march=rv64im -o "$work/isa-raw.o" \
 fi
 echo 'MINIAS_ISA_FEATURES=PASS RV64IM_RV64GC=1 ELF_ATTRIBUTES=2 negative=13'
 
+
+# Even with M enabled, RV32 must never emit RV64 instructions. RV32E must
+# reject all absent integer registers through both number and ABI spelling.
+cat >"$work/isa-rv32im-legal.s" <<'EOF_RV32M'
+.text
+.globl rv32m
+rv32m:
+    mul a0, a1, a2
+    ret
+EOF_RV32M
+"$MINIAS" -march=rv32im -mabi=ilp32 \
+    -o "$work/isa-rv32im-legal.o" "$work/isa-rv32im-legal.s"
+readelf -A "$work/isa-rv32im-legal.o" | grep -q 'rv32i2p1_m2p0'
+for bad in 'ld a0, 0(a1)' 'addiw a0, a1, 1' 'mulw a0, a1, a2'; do
+    printf '.text\n%s\n' "$bad" >"$work/isa-rv32im-bad.s"
+    if "$MINIAS" -march=rv32im -mabi=ilp32 \
+        -o "$work/isa-rv32im-bad.o" "$work/isa-rv32im-bad.s" \
+        >"$work/isa-rv32im-bad.out" 2>"$work/isa-rv32im-bad.err"; then
+        echo "MiniAS accepted RV64 opcode in RV32IM: $bad" >&2
+        exit 1
+    fi
+done
+for bad in 'addi a7, a0, 1' 'addi x16, x1, 1' 'addi s2, s0, 1'; do
+    printf '.text\n%s\n' "$bad" >"$work/isa-e-bad.s"
+    if "$MINIAS" -march=rv32e -mabi=ilp32e \
+        -o "$work/isa-e-bad.o" "$work/isa-e-bad.s" \
+        >"$work/isa-e-bad.out" 2>"$work/isa-e-bad.err"; then
+        echo "MiniAS accepted register absent from RV32E: $bad" >&2
+        exit 1
+    fi
+done
+echo 'MINIAS_ISA_XLEN_RV32E=PASS rv32im_m=1 rv64_ops_blocked=3 rv32e_registers_blocked=3'
+
 echo "MINIAS_A0=PASS objects=30 abi_flags=3 format=ELF64-RISCV-ET_REL relocations=23 strings=2 pseudos=17 previous=3 subsection=2 numeric_labels=18 ecall=1 isa_next=13 csr_amo=8 sfence_vma=3 fence_i=1 vsetvl=1 vsetvli=1 vmv_v_i=4 rept=2 nested_rept=1 irp=4 section_stack=1 org=3 local_difference=1 lr_sc=2 inline_labels=2 branch_pseudos=8 extern=1 symbol_minus_dot=4 symbol_difference=1 absolute32=1 jal=2 jal_subsection=1 high_numeric_labels=2 u64_data=3 raw_insn=4 set_alias=3 move=1 numeric_zero=1 immediate_product=2 shift_immediate=1 incbin=1 align_expr=1 native_expr=6 native_zbb_tail_memexpr=1 native_jalr_symbol_load=1 native_forward_short=1 native_mixed_macro=1 native_divided_difference=1 native_symbol_addend_expr=1 native_add_sub_immediate=1 native_cfi_boundary=1 native_gas_forms=1 native_set_size=1 native_macro_comma=1 native_macro_quotes=1 pic_la_got=1 sext_w=1 macro=4 conditional=1"
