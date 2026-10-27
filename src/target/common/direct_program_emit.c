@@ -2,6 +2,7 @@
 
 #include "target/backend_core_usage.h"
 #include "target/common/global_emit.h"
+#include "target/common/elf_alias_emit.h"
 #include "target/common/program_visit.h"
 #include "target/common/program_emit.h"
 #include <stdint.h>
@@ -60,7 +61,10 @@ static bool direct_visit_global(
         success = minic_multi_emit_simple_global(
             out, program, target, obj, minic_multi_emit_elf_relocation);
     else if (obj->alias_target != MINIC_GLOBAL_OBJECT_INVALID)
-        success = false;
+        success = minic_multi_elf_emit_object_alias(
+            out, program, obj,
+            ctx->config->architecture == MINIC_TARGET_ARCH_AARCH64
+                ? "%object" : "@object");
     if (!success && getenv("MINIC_M1_TRACE") != NULL) {
         const MinicArrayType *array = minic_type_is_array(obj->type)
             ? minic_c0_program_array_type(program, obj->type.array_type_id) : NULL;
@@ -106,6 +110,22 @@ static bool direct_visit_function(
     return false;
 }
 
+static bool direct_between(
+    FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicCoreFunction *functions, size_t function_count,
+    bool function_sections, void *opaque) {
+    const MinicDirectVisitContext *ctx = opaque;
+    const char *type_name;
+    if (ctx == NULL || ctx->config == NULL)
+        return false;
+    type_name = ctx->config->architecture == MINIC_TARGET_ARCH_AARCH64
+        ? "%function" : "@function";
+    return minic_program_emit_source_file_asm_stage(
+               out, program, target, functions, function_count,
+               function_sections, opaque) &&
+           minic_multi_elf_emit_function_aliases(out, program, type_name);
+}
+
 static bool direct_finalize(const char *path, const MinicTargetInfo *target,
                             void *opaque) {
     const MinicDirectVisitContext *ctx = opaque;
@@ -137,7 +157,7 @@ bool minic_multi_direct_write_program(
     {
         const MinicProgramEmitConfig emit = {
             direct_visit_global, direct_visit_function,
-            NULL, minic_program_emit_source_file_asm_stage,
+            NULL, direct_between,
             config->gnu_stack_note, direct_finalize,
             MINIC_PROGRAM_FUNCTION_LIVE_DEFINITIONS, census
         };

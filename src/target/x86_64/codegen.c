@@ -4,6 +4,7 @@
 #include "target/common/core_block_walk.h"
 #include "target/common/program_visit.h"
 #include "target/common/program_emit.h"
+#include "target/common/elf_alias_emit.h"
 
 #include "target/data_layout.h"
 #include "target/x86_64/global_emit.h"
@@ -175,11 +176,9 @@ static bool x86_visit_global(
     const MinicX86VisitContext *ctx = opaque;
     (void)index;
     if (obj->is_extern) {
-        if (obj->alias_target != MINIC_GLOBAL_OBJECT_INVALID) {
-            x86_error(ctx->diagnostic, ctx->path,
-                      "x86-64 external global alias unsupported");
-            return false;
-        }
+        if (obj->alias_target != MINIC_GLOBAL_OBJECT_INVALID)
+            return minic_multi_elf_emit_object_alias(
+                out, program, obj, "@object");
         return true;
     }
     if (minic_x86_64_emit_global(out, program, target, obj)) return true;
@@ -214,13 +213,23 @@ static bool x86_visit_function(
                              function_sections, ctx->diagnostic, ctx->path);
 }
 
+static bool x86_between(
+    FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicCoreFunction *functions, size_t function_count,
+    bool function_sections, void *context) {
+    return minic_program_emit_source_file_asm_stage(
+               out, program, target, functions, function_count,
+               function_sections, context) &&
+           minic_multi_elf_emit_function_aliases(out, program, "@function");
+}
+
 bool minic_x86_64_write_c0_program_with_core_functions(
     const char *path, const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *core_functions, size_t core_function_count,
     bool function_sections, MinicDiagnostic *diagnostic) {
     static const MinicProgramEmitConfig config = {
         x86_visit_global, x86_visit_function, NULL,
-        minic_program_emit_source_file_asm_stage,
+        x86_between,
         ".section .note.GNU-stack,\"\",@progbits\n", NULL,
         MINIC_PROGRAM_FUNCTION_LIVE_DEFINITIONS, false
     };
