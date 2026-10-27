@@ -158,7 +158,8 @@ enum {
     A64_MC_REV,
     A64_MC_ACQUIRE_RELEASE,
     A64_MC_LSE,
-    A64_MC_PRFM
+    A64_MC_PRFM,
+    A64_MC_EXCLUSIVE
 };
 
 /* GNU AArch64 operands split on TOP-LEVEL commas, not commas within
@@ -282,6 +283,28 @@ static bool parse_integer_family(MiniAsMCInst *inst,
     if (!split_operands(args, t, &n)) return false;
     /* Common GNU Linux bit/byte-swap and acquire/release families.
      * All operands are typed once; no instruction-name checks in encode. */
+    if ((!strcmp(op,"ldxr") || !strcmp(op,"ldaxr")) && n==2U) {
+        if(!parse_a64_reg(t[0],&rd,&wd,&spd) || spd ||
+           !parse_a64_mem(t[1],&base,&imm,&mode) ||
+           imm!=0 || mode!=0U)return false;
+        inst->opcode=A64_MC_EXCLUSIVE;inst->count=2U;
+        inst->encoding=!strcmp(op,"ldaxr")?1U:0U;
+        put_reg(&inst->operands[0],rd,wd);
+        put_reg(&inst->operands[1],base,true);
+        return true;
+    }
+    if ((!strcmp(op,"stxr") || !strcmp(op,"stlxr")) && n==3U) {
+        if(!parse_a64_reg(t[0],&rd,&wd,&spd) || wd || spd ||
+           !parse_a64_reg(t[1],&rn,&wn,&spn) || spn ||
+           !parse_a64_mem(t[2],&base,&imm,&mode) ||
+           imm!=0 || mode!=0U)return false;
+        inst->opcode=A64_MC_EXCLUSIVE;inst->count=3U;
+        inst->encoding=!strcmp(op,"stlxr")?3U:2U;
+        put_reg(&inst->operands[0],rd,false);
+        put_reg(&inst->operands[1],rn,wn);
+        put_reg(&inst->operands[2],base,true);
+        return true;
+    }
     if(!strcmp(op,"prfm") && n==2U) {
         unsigned hint=0U,unit=0U;
         if(t[0][0]=='#' || (t[0][0]>='0'&&t[0][0]<='9')) {
@@ -506,6 +529,8 @@ static bool a64_attach_expr(MiniAsMCInst *inst,unsigned slot,
 /* GNU AArch64 :lo12: addends are ELF relocation operands, NOT integer
  * immediates. Keep ownership in SymbolExpr/MCInst and shared ELF RELA. */
 static bool a64_lo12_expr(const char *text,MiniAsSymbolExpr *expr) {
+    /* GCC also spells the relocation as #:lo12:NAME. */
+    if(*text=='#')++text;
     return strncmp(text,":lo12:",6U)==0 &&
            minias_parse_symbol_addend(text+6U,expr);
 }
@@ -1023,6 +1048,22 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
                 ((uint32_t)inst->operands[0].immediate << 5U);
             break;
 
+        case A64_MC_EXCLUSIVE: {
+            unsigned kind=inst->encoding;
+            if(kind<2U) {
+                bool wide=inst->operands[0].register_64;
+                code=(wide?UINT32_C(0xc85f7c00):UINT32_C(0x885f7c00)) |
+                     ((kind&1U)?UINT32_C(0x8000):0U) |
+                     (inst->operands[1].reg<<5U) | inst->operands[0].reg;
+            }else {
+                bool wide=inst->operands[1].register_64;
+                code=(wide?UINT32_C(0xc8007c00):UINT32_C(0x88007c00)) |
+                     ((kind&1U)?UINT32_C(0x8000):0U) |
+                     (inst->operands[0].reg<<16U) |
+                     (inst->operands[2].reg<<5U) | inst->operands[1].reg;
+            }
+            break;
+        }
         case A64_MC_PRFM:
             code=UINT32_C(0xf9800000) |
                  ((uint32_t)inst->operands[2].immediate<<10U) |

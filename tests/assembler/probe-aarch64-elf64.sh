@@ -75,6 +75,14 @@ external_probe:
     prfm plil2strm, [x4, #24]
     .inst 0xd503201f, 0xd65f03c0
     .arch_extension nolse
+    ldxr w0, [x2]
+    ldxr x1, [x2]
+    ldaxr w3, [x4]
+    ldaxr x5, [x6]
+    stxr w7, w8, [x9]
+    stxr w10, x11, [x12]
+    stlxr w13, w14, [x15]
+    stlxr w16, x17, [x18]
     ldar w0, [x0]
     ldar x1, [x2]
     stlr w7, [x8]
@@ -123,6 +131,8 @@ addr64_probe:
     adrp x0, external_data
     add x0, x0, :lo12:external_data
     ldr x1, [x0, :lo12:external_data]
+    ldr x5, [x4, #:lo12:external_data]
+    str w6, [x7, #:lo12:external_data+4]
     ldr w2, [x0, :lo12:external_data]
     str x1, [x0, :lo12:external_data]
     str w2, [x0, :lo12:external_data]
@@ -271,7 +281,9 @@ if "$MINIAS" --target=aarch64 -o "$work/unsupported.o" \
     exit 1
 fi
 # MCInst must be validated while parsing, independent of later emit/ELF.
-for bad_source in 'brk #65536' 'mov w0, -65537' \
+for bad_source in 'ldxr x0, [x1,#4]' 'stxr x0, x1, [x2]' \
+                  'stlxr w0, w1, [x2,#4]' \
+                  'brk #65536' 'mov w0, -65537' \
                   'subs x0, w0, x1' 'adds x0, x1, #4097' \
                   'cset sp, eq' 'cinc w0, x1, eq' \
                   'cset x0, bogus' \
