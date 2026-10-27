@@ -155,13 +155,19 @@ static unsigned int aarch64_llsc_op(const char *text, size_t len) {
 /* Real AArch64 privileged DAIF interrupt-mask MRS/MSR pair from the
  * exact Linux sysreg/irqflags.h macros. Do not execute under user QEMU.
  * Only GNU GAS/objdump may inspect the encoded privileged instruction. */
-/* The actual Linux 6.6 atomic{,64}_fetch_or{,_relaxed,_acquire,_release}
+/* The actual Linux 6.6 atomic{,64}_fetch_{and,or,xor,andnot} with ordering variants
  * contract has five GNU operands: old, new, store-status, +Q memory and
  * Kr/Lr value. The AArch64 ISA adapter owns the exact LL/SC opcode, acquire
  * and release suffixes and full-barrier ordering, not Common Core. */
-static unsigned int aarch64_fetch_or_form(const char *text, size_t len) {
+static unsigned int aarch64_fetch_logic_form(const char *text, size_t len) {
     static const char *const suffix[4] = {
         "", "_relaxed", "_acquire", "_release"
+    };
+    static const char *const operation[4] = {
+        "and", "or", "xor", "andnot"
+    };
+    static const char *const alu[4] = {
+        "and", "orr", "eor", "bic"
     };
     static const char *const ld[4] = {
         "ldxr", "ldxr", "ldaxr", "ldxr"
@@ -170,7 +176,7 @@ static unsigned int aarch64_fetch_or_form(const char *text, size_t len) {
         "stlxr", "stxr", "stxr", "stlxr"
     };
     char compact[240], expected[240];
-    size_t i, n = 0U, bitness, mode;
+    size_t i, n = 0U, bitness, mode, op;
     if (!text || !len || len >= sizeof(compact)) return 0U;
     for (i = 0U; i < len; ++i) {
         const char c = text[i];
@@ -183,21 +189,23 @@ static unsigned int aarch64_fetch_or_form(const char *text, size_t len) {
         const char *old = bitness ? "%0" : "%w0";
         const char *new_value = bitness ? "%1" : "%w1";
         const char *arg = bitness ? "%4" : "%w4";
-        for (mode = 0U; mode < 4U; ++mode) {
-            const int written = snprintf(
-                expected, sizeof(expected),
-                "//atomic%s_fetch_or%s"
-                "prfmpstl1strm,%%3"
-                "1:%s%s,%%3"
-                "orr%s,%s,%s"
-                "%s%%w2,%s,%%3"
-                "cbnz%%w2,1b%s",
-                bitness ? "64" : "", suffix[mode],
-                ld[mode], old, new_value, old, arg,
-                st[mode], new_value, mode == 0U ? "dmbish" : "");
-            if (written > 0 && (size_t)written < sizeof(expected) &&
-                strcmp(compact, expected) == 0)
-                return (unsigned int)(bitness * 4U + mode + 1U);
+        for (op = 0U; op < 4U; ++op) {
+            for (mode = 0U; mode < 4U; ++mode) {
+                const int written = snprintf(
+                    expected, sizeof(expected),
+                    "//atomic%s_fetch_%s%s"
+                    "prfmpstl1strm,%%3"
+                    "1:%s%s,%%3"
+                    "%s%s,%s,%s"
+                    "%s%%w2,%s,%%3"
+                    "cbnz%%w2,1b%s",
+                    bitness ? "64" : "", operation[op], suffix[mode],
+                    ld[mode], old, alu[op], new_value, old, arg,
+                    st[mode], new_value, mode == 0U ? "dmbish" : "");
+                if (written > 0 && (size_t)written < sizeof(expected) &&
+                    strcmp(compact, expected) == 0)
+                    return (unsigned int)(bitness * 16U + op * 4U + mode + 1U);
+            }
         }
     }
     return 0U;
@@ -319,14 +327,16 @@ bool minic_aarch64_qualify_inline_asm(
         constraint(&src->outputs[1], "=&r") &&
         constraint(&src->outputs[2], "=&r") &&
         constraint(&src->outputs[3], "+Q")) {
-        const unsigned int form = aarch64_fetch_or_form(
+        const unsigned int form = aarch64_fetch_logic_form(
             src->template_text, src->template_length);
-        const size_t width = form > 4U ? 8U : 4U;
+        const size_t width = form > 16U ? 8U : 4U;
         const unsigned int mode = form ? (form - 1U) % 4U : 0U;
+        const unsigned int op = form ? ((form - 1U) % 16U) / 4U : 0U;
         bool eligible = form != 0U &&
             src->clobber_count == (mode == 1U ? 0U : 1U) &&
             src->has_memory_clobber == (mode != 1U) &&
-            constraint(&src->inputs[0], width == 8U ? "Lr" : "Kr");
+            constraint(&src->inputs[0],
+                       op == 3U ? "r" : width == 8U ? "Lr" : "Kr");
         for (i = 0U; i < 5U && eligible; ++i) {
             const MinicInlineAsmOperand *operand = i < 4U ?
                 &src->outputs[i] : &src->inputs[0];
@@ -561,10 +571,12 @@ bool minic_aarch64_emit_qualified_structured_asm(
                        (size_t)b[1].value * 8U, op[width]) >= 0;
     }
     if (ins->value.structured_inline_asm.operand_count == 5U) {
-        const unsigned int form = aarch64_fetch_or_form(
+        const unsigned int form = aarch64_fetch_logic_form(
             info->template_text, info->template_length);
-        const size_t width = form > 4U ? 8U : 4U;
+        const size_t width = form > 16U ? 8U : 4U;
         const unsigned int mode = form ? (form - 1U) % 4U : 0U;
+        const unsigned int op = form ? ((form - 1U) % 16U) / 4U : 0U;
+        static const char *const alu[] = {"and", "orr", "eor", "bic"};
         static const char *const ld[] = {"ldxr", "ldxr", "ldaxr", "ldxr"};
         static const char *const st[] = {"stlxr", "stxr", "stxr", "stlxr"};
         const MinicCoreStructuredInlineAsmOperand *ops =
@@ -607,7 +619,7 @@ bool minic_aarch64_emit_qualified_structured_asm(
             "  prfm pstl1strm, [x10]\n"
             "1:\n"
             "  %s %s9, [x10]\n"
-            "  orr %s13, %s9, %s11\n"
+            "  %s %s13, %s9, %s11\n"
             "  %s w12, %s13, [x10]\n"
             "  cbnz w12, 1b\n"
             "%s"
@@ -620,7 +632,7 @@ bool minic_aarch64_emit_qualified_structured_asm(
             (size_t)ops[3].value * 8U,
             (size_t)ops[4].value * 8U,
             ld[mode], width == 8U ? "x" : "w",
-            width == 8U ? "x" : "w",
+            alu[op], width == 8U ? "x" : "w",
             width == 8U ? "x" : "w",
             width == 8U ? "x" : "w",
             st[mode], width == 8U ? "x" : "w",
