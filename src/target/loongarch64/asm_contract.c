@@ -43,7 +43,7 @@ bool minic_loongarch64_qualify_inline_asm(
         return false;
     expr = minic_c0_program_expression(program, op->expression);
     if (expr == NULL || expr->kind != MINIC_EXPRESSION_INTEGER ||
-        !minic_loongarch64_dbar_hint(expr->value.integer_value))
+        !loongarch64_dbar_hint(expr->value.integer_value))
         return false;
     contract->operand_count = 1U;
     contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
