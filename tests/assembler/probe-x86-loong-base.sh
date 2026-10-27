@@ -295,6 +295,9 @@ entry_la:
     tlbfill
     li.w $r12, 16384
     li.w $r28, (1 << 14) / 8
+    li.w $r13, 0x1020
+    li.d $r15, 16384
+    li.d $r2, ~16383
     vxor.v $vr4, $vr4, $vr8
     vxor.v $vr0, $vr0, $vr4
     vori.b $vr4, $vr0, 0

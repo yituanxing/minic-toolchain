@@ -15,6 +15,7 @@ typedef enum {
     LA_MC_PCALA_HI20,
     LA_MC_PCALA_LO12,
     LA_MC_PCREL_PSEUDO,
+    LA_MC_LI32_PAIR,
     LA_MC_BRANCH16,
     LA_MC_BRANCH21,
     LA_MC_BRANCH26
@@ -405,13 +406,26 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
         m->count=2U;m->encoding=UINT32_C(0x0114b800)|(rj<<5U)|rd;
         goto done;
     }
-    if(n==2U && !strcmp(s->op,"li.w") && la_reg(t[0],&rd)) {
+    if(n==2U && (!strcmp(s->op,"li.w") || !strcmp(s->op,"li.d")) &&
+       la_reg(t[0],&rd)) {
         int64_t value;
         if(minias_eval_i64_expression(t[1],&value) &&
            value>=-2048 && value<=2047) {
             m->count=2U;
             m->encoding=UINT32_C(0x02800000) |
                 (((uint32_t)value&UINT32_C(0xfff))<<10U)|rd;
+            m->operands[0].kind=MINIAS_MC_REGISTER;
+            m->operands[0].reg=rd;
+            m->operands[1].kind=MINIAS_MC_IMMEDIATE;
+            m->operands[1].immediate=(uint64_t)value;
+            goto done;
+        }
+        if(!strcmp(s->op,"li.w") &&
+           minias_eval_i64_expression(t[1],&value) &&
+           value>=4096 && value<=INT32_MAX &&
+           value%4096!=0) {
+            m->opcode=LA_MC_LI32_PAIR;
+            m->count=2U;
             m->operands[0].kind=MINIAS_MC_REGISTER;
             m->operands[0].reg=rd;
             m->operands[1].kind=MINIAS_MC_IMMEDIATE;
@@ -909,7 +923,8 @@ done:
 }
 static bool la_measure(MiniAs *as,const MiniAsStmt *s,uint32_t *size) {
     if(!s->mcinst){minias_set_error(as,"missing-la-mcinst");return false;}
-    *size=s->mcinst->opcode==LA_MC_PCREL_PSEUDO?8U:4U;
+    *size=(s->mcinst->opcode==LA_MC_PCREL_PSEUDO ||
+           s->mcinst->opcode==LA_MC_LI32_PAIR)?8U:4U;
     return true;
 }
 static bool la_encode(MiniAs *as,const MiniAsStmt *s) {
@@ -921,6 +936,20 @@ static bool la_encode(MiniAs *as,const MiniAsStmt *s) {
     const MiniAsSymbolExpr *expr=NULL;
     if(!m){minias_set_error(as,"missing-la-mcinst");return false;}
     code=m->encoding;
+    if(m->opcode==LA_MC_LI32_PAIR) {
+        const uint32_t v=(uint32_t)m->operands[1].immediate;
+        const unsigned rd=m->operands[0].reg;
+        const uint32_t hi=UINT32_C(0x14000000)|((v>>12U)<<5U)|rd;
+        const uint32_t lo=UINT32_C(0x03800000)|
+            ((v&UINT32_C(0xfff))<<10U)|(rd<<5U)|rd;
+        unsigned char pair[8];
+        if(s->size!=8U){minias_set_error(as,"invalid-la-li32-layout");return false;}
+        for(i=0U;i<4U;++i){
+            pair[i]=(unsigned char)(hi>>(i*8U));
+            pair[i+4U]=(unsigned char)(lo>>(i*8U));
+        }
+        return minias_section_append(as,s->section,pair,sizeof(pair));
+    }
     if(m->opcode==LA_MC_PCREL_PSEUDO) {
         const MiniAsSymbolExpr *symbol=m->operands[1].symbol;
         unsigned rd=m->operands[0].reg;
