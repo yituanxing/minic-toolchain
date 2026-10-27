@@ -972,11 +972,11 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
                     }
             }
             if (val>=0 && val<=63L) {
-                for(i=0U;i<sizeof(vector_shifts)/sizeof(vector_shifts[0]);++i)
-                    if(!strcmp(s->op,vector_shifts[i].name) &&
-                        (unsigned long)val < (1UL<<vector_shifts[i].bits)) {
+                for(i=0U;i<sizeof(shifts)/sizeof(shifts[0]);++i)
+                    if(!strcmp(s->op,shifts[i].name) &&
+                        (unsigned long)val < (1UL<<shifts[i].bits)) {
                         m->count=3U;
-                        m->encoding=vector_shifts[i].code |
+                        m->encoding=shifts[i].code |
                             ((uint32_t)val<<10U) | (rj<<5U) | rd;
                         goto done;
                     }
