@@ -45,6 +45,25 @@ for name in original.gnu original.minic; do
     readelf -Ws "$work/$name.o" | grep -Fq 'minic_source_weak_alias'
     readelf -Ws "$work/$name.o" | grep -Fq 'minic_source_global_alias'
 done
+# The relaxed word-register alias contract belongs only to LoongArch64,
+# never to x86-64 SysV or AAPCS64. All mismatched cross-family machine
+# function aliases must fail closed on these targets.
+if [ "$target" != loongarch64 ]; then
+    cat > "$work/word-register-mismatch.i" <<'SRC'
+extern long sys_entry(unsigned int id, const char *ptr)
+    __attribute__((alias("__se_sys_entry")));
+long __se_sys_entry(long id, long ptr) { return id + (ptr != 0); }
+SRC
+    if "$MINIC_CC" --target="$target-linux" -S "$work/word-register-mismatch.i" \
+        -o "$work/word-register-mismatch.s" >"$work/word-register-mismatch.out" \
+        2>"$work/word-register-mismatch.err"; then
+        echo "FAIL unexpected $target wide alias ABI admission" >&2
+        exit 1
+    fi
+    grep -Fq 'GNU function alias requires' "$work/word-register-mismatch.err"
+    echo "MINIC_ELF_ALIAS_ABI_OTHER_TARGET_REJECT=PASS target=$target"
+fi
+
 # Original Linux syscall wrappers have deliberately different argument C
 # types, but LoongArch64 passes each via a 64-bit integer argument register.
 # Verify a forward symbol alias and a genuinely executed ABI boundary.
