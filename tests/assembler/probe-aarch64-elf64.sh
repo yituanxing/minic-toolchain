@@ -68,6 +68,52 @@ EXTERNAL
 "$AARCH64_AS" -o "$work/external.o" "$work/external.s"
 "$AARCH64_LD" -static -e _start -o "$work/mini.elf" "$work/mini.o" "$work/external.o"
 "$QEMU_AARCH64" "$work/mini.elf"
+# Type-and-size sensitive AArch64 integer/memory matrix: compare with GNU AS
+# rather than trusting constants or treating successful ELF output as enough.
+cat >"$work/integer-matrix.s" <<'A64_INT'
+.arch armv8-a
+.text
+.globl integer_matrix
+integer_matrix:
+    mov x0, x1
+    mov x29, sp
+    mov sp, x29
+    mov x2, 51711
+    add x0, x0, x2
+    add sp, sp, #16
+    sub w2, w2, #1
+    cmp x0, x1
+    cmp w0, #5
+    and x0, x0, x2
+    orr w0, w1, w2
+    eor x0, x0, x1
+    ldr x2, [x0, #8]
+    ldr w2, [sp, #12]
+    str w1, [sp, #16]
+    ldrb w1, [x0]
+    strb w1, [x0, #1]
+    ldrh w1, [x0, #2]
+    strh w1, [x0, #4]
+    stp x29, x30, [sp, -16]!
+    ldp x29, x30, [sp], 16
+    ret
+A64_INT
+"$MINIAS" --target=aarch64 -march=armv8-a -mabi=lp64 -o "$work/int-mini.o" "$work/integer-matrix.s"
+"$AARCH64_AS" -march=armv8-a -o "$work/int-gnu.o" "$work/integer-matrix.s"
+"$AARCH64_OBJCOPY" -j .text -O binary "$work/int-mini.o" "$work/int-mini.bin"
+"$AARCH64_OBJCOPY" -j .text -O binary "$work/int-gnu.o" "$work/int-gnu.bin"
+cmp "$work/int-mini.bin" "$work/int-gnu.bin"
+for bad in 'add x0, w0, x1' 'cmp x0, #4096' 'ldr x0, [x1, -8]' \
+           'stp x29, x30, [sp, -520]!' 'mov x0, #65536'; do
+    printf '.arch armv8-a\n.text\n%s\n' "$bad" >"$work/bad-integer.s"
+    if "$MINIAS" --target=aarch64 -o "$work/bad-integer.o" \
+         "$work/bad-integer.s" >/dev/null 2>"$work/bad-integer.err"; then
+        echo "MiniAS unexpectedly accepted invalid AArch64 integer operand: $bad" >&2
+        exit 1
+    fi
+done
+echo 'MINIAS_AARCH64_INTEGER_MATRIX=PASS gnu_text_bytes=equal instruction_families=11 strict_invalid=5'
+
 # Invalid ISA/ABI and unsupported instructions must fail, not silently be
 # assembled as RISC-V bytes or advertise a false ELF machine.
 for option in '-march=rv64gc' '-mabi=ilp32' '-march=armv9-a'; do

@@ -39,10 +39,11 @@ static bool parse_register(const char *text, unsigned *reg, bool *is_64) {
 static bool parse_imm16(const char *text, unsigned *result) {
     char *end;
     unsigned long value;
-    if (*text != '#') return false;
+    /* GCC's AArch64 -S commonly omits '#' on MOVZ integer immediates. */
+    if (*text == '#') ++text;
     errno = 0;
-    value = strtoul(text + 1, &end, 0);
-    if (errno != 0 || end == text + 1 || *end != '\0' || value > 65535U)
+    value = strtoul(text, &end, 0);
+    if (errno != 0 || end == text || *end != '\0' || value > 65535U)
         return false;
     *result = (unsigned)value;
     return true;
@@ -100,12 +101,259 @@ enum {
     A64_MC_MOVZ,
     A64_MC_SVC,
     A64_MC_B,
-    A64_MC_BL
+    A64_MC_BL,
+    A64_MC_MOV_REG,
+    A64_MC_ADD_REG,
+    A64_MC_SUB_REG,
+    A64_MC_AND_REG,
+    A64_MC_ORR_REG,
+    A64_MC_EOR_REG,
+    A64_MC_ADD_IMM,
+    A64_MC_SUB_IMM,
+    A64_MC_CMP_REG,
+    A64_MC_CMP_IMM,
+    A64_MC_LDR,
+    A64_MC_STR,
+    A64_MC_LDRB,
+    A64_MC_STRB,
+    A64_MC_LDRH,
+    A64_MC_STRH,
+    A64_MC_STP,
+    A64_MC_LDP
 };
+
+/* GNU AArch64 operands split on TOP-LEVEL commas, not commas within
+ * [xN,#offset]. Unlike copying a generic tokenizer into every target,
+ * this helper is strictly A64 addressing grammar. */
+static bool split_operands(const char *args, char out[4][96], unsigned *n) {
+    unsigned depth = 0U, count = 0U;
+    const char *start = args, *p = args;
+    for (;;) {
+        char ch = *p;
+        if (ch == '[') ++depth;
+        if (ch == ']') {
+            if (!depth) return false;
+            --depth;
+        }
+        if ((ch == ',' && depth == 0U) || ch == '\0') {
+            size_t len = (size_t)(p - start);
+            while (len && isspace((unsigned char)*start)) { ++start; --len; }
+            while (len && isspace((unsigned char)start[len - 1U])) --len;
+            if (!len || len >= sizeof(out[0]) || count == 4U || depth)
+                return false;
+            memcpy(out[count], start, len);
+            out[count][len] = '\0';
+            ++count;
+            if (ch == '\0') break;
+            start = p + 1;
+        }
+        if (ch == '\0') break;
+        ++p;
+    }
+    *n = count;
+    return true;
+}
+
+static bool parse_a64_reg(const char *text, unsigned *number, bool *is64,
+                          bool *is_sp) {
+    *is_sp = false;
+    if (strcmp(text, "sp") == 0 || strcmp(text, "wsp") == 0) {
+        *number = 31U;
+        *is64 = text[0] == 's';
+        *is_sp = true;
+        return true;
+    }
+    if (strcmp(text, "xzr") == 0 || strcmp(text, "wzr") == 0) {
+        *number = 31U;
+        *is64 = text[0] == 'x';
+        return true;
+    }
+    return parse_register(text, number, is64);
+}
+
+static bool parse_signed_number(const char *text, int64_t *out) {
+    char *end;
+    long long value;
+    if (*text == '#') ++text;
+    if (!*text) return false;
+    errno = 0;
+    value = strtoll(text, &end, 0);
+    if (errno || end == text || *end) return false;
+    *out = (int64_t)value;
+    return true;
+}
+
+static void put_reg(MiniAsMCOperand *dst, unsigned number, bool reg64) {
+    dst->kind = MINIAS_MC_REGISTER;
+    dst->reg = number;
+    dst->register_64 = reg64;
+}
+
+static void put_immediate(MiniAsMCOperand *dst, int64_t value) {
+    dst->kind = MINIAS_MC_IMMEDIATE;
+    dst->immediate = (uint64_t)value;
+}
+
+/* Only unsigned-scaled load/store forms; do not alias negative offsets,
+ * register-indexed modes or other A64 memory encodings silently. */
+static bool parse_a64_mem(const char *text, unsigned *base, int64_t *offset,
+                          unsigned *mode) {
+    char inside[96], *comma, *regtext;
+    size_t size = strlen(text);
+    bool is64, issp;
+    if (size < 3U || text[0] != '[') return false;
+    *mode = 0U;
+    if (text[size - 1U] == '!') {
+        *mode = 1U;
+        --size;
+    }
+    if (text[size - 1U] != ']' || size - 2U >= sizeof(inside)) return false;
+    memcpy(inside, text + 1, size - 2U);
+    inside[size - 2U] = '\0';
+    comma = strchr(inside, ',');
+    if (comma) *comma++ = '\0';
+    regtext = inside;
+    while (isspace((unsigned char)*regtext)) ++regtext;
+    size = strlen(regtext);
+    while (size && isspace((unsigned char)regtext[size - 1U]))
+        regtext[--size] = '\0';
+    if (!parse_a64_reg(regtext, base, &is64, &issp) || !is64)
+        return false;
+    *offset = 0;
+    if (comma) {
+        while (isspace((unsigned char)*comma)) ++comma;
+        size = strlen(comma);
+        while (size && isspace((unsigned char)comma[size - 1U]))
+            comma[--size] = '\0';
+        if (!parse_signed_number(comma, offset)) return false;
+    }
+    return true;
+}
+
+/* Parsed target-owned instruction family. Complete AArch64 still requires
+ * ADRP/GOT, conditional branches, shifts, and relocation fixup bitfields. */
+static bool parse_integer_family(MiniAsMCInst *inst,
+                                 const char *op, const char *args) {
+    char t[4][96];
+    unsigned n = 0U, rd, rn, rm, base, mode;
+    bool wd, wn, wm, spd, spn, spm;
+    int64_t imm;
+    unsigned kind = 0U;
+
+    if (!split_operands(args, t, &n)) return false;
+    if (strcmp(op, "mov") == 0 && n == 2U) {
+        if (!parse_a64_reg(t[0], &rd, &wd, &spd) ||
+            !parse_a64_reg(t[1], &rn, &wn, &spn) || wd != wn)
+            return false;
+        /* SP form aliases ADD #0. Register form aliases ORR with ZR. */
+        if (spd || spn) {
+            if ((rd == 31U && !spd) || (rn == 31U && !spn))
+                return false;
+        }
+        inst->opcode = A64_MC_MOV_REG;
+        inst->count = 2U;
+        put_reg(&inst->operands[0], rd, wd);
+        put_reg(&inst->operands[1], rn, wn);
+        inst->encoding = (spd || spn) ? 1U : 0U;
+        return true;
+    }
+    if ((strcmp(op, "add") == 0 || strcmp(op, "sub") == 0 ||
+         strcmp(op, "and") == 0 || strcmp(op, "orr") == 0 ||
+         strcmp(op, "eor") == 0) && n == 3U) {
+        if (!parse_a64_reg(t[0], &rd, &wd, &spd) ||
+            !parse_a64_reg(t[1], &rn, &wn, &spn) || wd != wn)
+            return false;
+        if (parse_a64_reg(t[2], &rm, &wm, &spm)) {
+            if (wd != wm || spd || spn || spm) return false;
+            kind = strcmp(op, "add") == 0 ? A64_MC_ADD_REG :
+                   strcmp(op, "sub") == 0 ? A64_MC_SUB_REG :
+                   strcmp(op, "and") == 0 ? A64_MC_AND_REG :
+                   strcmp(op, "orr") == 0 ? A64_MC_ORR_REG : A64_MC_EOR_REG;
+            put_reg(&inst->operands[2], rm, wm);
+        } else if ((strcmp(op, "add") == 0 || strcmp(op, "sub") == 0) &&
+                   parse_signed_number(t[2], &imm) &&
+                   imm >= 0 && imm <= 4095) {
+            if ((rd == 31U && !spd) || (rn == 31U && !spn))
+                return false;
+            kind = strcmp(op, "add") == 0 ? A64_MC_ADD_IMM : A64_MC_SUB_IMM;
+            put_immediate(&inst->operands[2], imm);
+        } else return false;
+        inst->opcode = kind;
+        inst->count = 3U;
+        put_reg(&inst->operands[0], rd, wd);
+        put_reg(&inst->operands[1], rn, wn);
+        return true;
+    }
+    if (strcmp(op, "cmp") == 0 && n == 2U) {
+        if (!parse_a64_reg(t[0], &rn, &wn, &spn)) return false;
+        if (parse_a64_reg(t[1], &rm, &wm, &spm)) {
+            if (wn != wm || spn || spm) return false;
+            kind = A64_MC_CMP_REG;
+            put_reg(&inst->operands[1], rm, wm);
+        } else if (parse_signed_number(t[1], &imm) &&
+                   imm >= 0 && imm <= 4095) {
+            kind = A64_MC_CMP_IMM;
+            put_immediate(&inst->operands[1], imm);
+        } else return false;
+        inst->opcode = kind;
+        inst->count = 2U;
+        put_reg(&inst->operands[0], rn, wn);
+        return true;
+    }
+
+    if ((strcmp(op, "ldr") == 0 || strcmp(op, "str") == 0 ||
+         strcmp(op, "ldrb") == 0 || strcmp(op, "strb") == 0 ||
+         strcmp(op, "ldrh") == 0 || strcmp(op, "strh") == 0) && n == 2U) {
+        unsigned unit;
+        if (!parse_a64_reg(t[0], &rd, &wd, &spd) || spd ||
+            !parse_a64_mem(t[1], &base, &imm, &mode) || mode != 0U)
+            return false;
+        unit = op[3] == 'b' ? 1U : op[3] == 'h' ? 2U : wd ? 8U : 4U;
+        if ((unit == 1U || unit == 2U) && wd) return false;
+        if (imm < 0 || imm % (int64_t)unit != 0 || imm / (int64_t)unit > 4095)
+            return false;
+        inst->opcode = strcmp(op, "ldr") == 0 ? A64_MC_LDR :
+                       strcmp(op, "str") == 0 ? A64_MC_STR :
+                       strcmp(op, "ldrb") == 0 ? A64_MC_LDRB :
+                       strcmp(op, "strb") == 0 ? A64_MC_STRB :
+                       strcmp(op, "ldrh") == 0 ? A64_MC_LDRH : A64_MC_STRH;
+        inst->count = 3U;
+        put_reg(&inst->operands[0], rd, wd);
+        put_reg(&inst->operands[1], base, true);
+        put_immediate(&inst->operands[2], imm / (int64_t)unit);
+        return true;
+    }
+    if ((strcmp(op, "stp") == 0 || strcmp(op, "ldp") == 0) &&
+        (n == 3U || n == 4U)) {
+        if (!parse_a64_reg(t[0], &rd, &wd, &spd) || spd ||
+            !parse_a64_reg(t[1], &rn, &wn, &spn) || spn || wd != wn ||
+            !parse_a64_mem(t[2], &base, &imm, &mode))
+            return false;
+        if (n == 4U) {
+            if (mode != 0U || imm != 0 ||
+                !parse_signed_number(t[3], &imm)) return false;
+            mode = 2U;
+        }
+        if (imm % (wd ? 8 : 4) != 0 ||
+            imm < -(int64_t)(wd ? 512 : 256) ||
+            imm > (int64_t)(wd ? 504 : 252))
+            return false;
+        inst->opcode = strcmp(op, "stp") == 0 ? A64_MC_STP : A64_MC_LDP;
+        inst->encoding = mode;
+        inst->count = 4U;
+        put_reg(&inst->operands[0], rd, wd);
+        put_reg(&inst->operands[1], rn, wn);
+        put_reg(&inst->operands[2], base, true);
+        put_immediate(&inst->operands[3], imm / (wd ? 8 : 4));
+        return true;
+    }
+    return false;
+}
+
 
 static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
     MiniAsMCInst *inst = calloc(1U, sizeof(*inst) +
-                                2U * sizeof(MiniAsMCOperand));
+                                4U * sizeof(MiniAsMCOperand));
     unsigned reg, imm;
     bool reg64;
     char first[80], second[80];
@@ -167,6 +415,8 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
         inst->opcode = strcmp(op, "bl") == 0 ? A64_MC_BL : A64_MC_B;
         inst->count = 1U;
         inst->operands[0].kind = MINIAS_MC_SYMBOL;
+    } else if (parse_integer_family(inst, op, args)) {
+        /* The AArch64 integer/memory family is parsed into typed operands. */
     } else {
         minias_set_error(as, "bad-aarch64-operands:%s:%s:line=%zu",
                          op, args, stmt->line);
@@ -204,6 +454,98 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
             code = UINT32_C(0xd4000001) |
                 ((uint32_t)inst->operands[0].immediate << 5U);
             break;
+
+        case A64_MC_MOV_REG: {
+            unsigned rd = inst->operands[0].reg;
+            unsigned rm = inst->operands[1].reg;
+            bool sf = inst->operands[0].register_64;
+            code = inst->encoding ?
+                (sf ? UINT32_C(0x91000000) : UINT32_C(0x11000000)) |
+                    (rm << 5U) | rd :
+                (sf ? UINT32_C(0xaa0003e0) : UINT32_C(0x2a0003e0)) |
+                    (rm << 16U) | rd;
+            break;
+        }
+        case A64_MC_ADD_REG:
+        case A64_MC_SUB_REG:
+        case A64_MC_AND_REG:
+        case A64_MC_ORR_REG:
+        case A64_MC_EOR_REG: {
+            bool sf = inst->operands[0].register_64;
+            unsigned rd = inst->operands[0].reg;
+            unsigned rn = inst->operands[1].reg;
+            unsigned rm = inst->operands[2].reg;
+            uint32_t base =
+                inst->opcode == A64_MC_ADD_REG ? UINT32_C(0x0b000000) :
+                inst->opcode == A64_MC_SUB_REG ? UINT32_C(0x4b000000) :
+                inst->opcode == A64_MC_AND_REG ? UINT32_C(0x0a000000) :
+                inst->opcode == A64_MC_ORR_REG ? UINT32_C(0x2a000000) :
+                                                 UINT32_C(0x4a000000);
+            code = base | (sf ? UINT32_C(0x80000000) : 0U) |
+                   (rm << 16U) | (rn << 5U) | rd;
+            break;
+        }
+        case A64_MC_ADD_IMM:
+        case A64_MC_SUB_IMM: {
+            bool sf = inst->operands[0].register_64;
+            unsigned rd = inst->operands[0].reg;
+            unsigned rn = inst->operands[1].reg;
+            unsigned imm = (unsigned)inst->operands[2].immediate;
+            code = (inst->opcode == A64_MC_ADD_IMM ?
+                    UINT32_C(0x11000000) : UINT32_C(0x51000000)) |
+                   (sf ? UINT32_C(0x80000000) : 0U) |
+                   (imm << 10U) | (rn << 5U) | rd;
+            break;
+        }
+        case A64_MC_CMP_REG: {
+            bool sf = inst->operands[0].register_64;
+            code = UINT32_C(0x6b00001f) |
+                   (sf ? UINT32_C(0x80000000) : 0U) |
+                   (inst->operands[1].reg << 16U) |
+                   (inst->operands[0].reg << 5U);
+            break;
+        }
+        case A64_MC_CMP_IMM: {
+            bool sf = inst->operands[0].register_64;
+            code = UINT32_C(0x7100001f) |
+                   (sf ? UINT32_C(0x80000000) : 0U) |
+                   ((uint32_t)inst->operands[1].immediate << 10U) |
+                   (inst->operands[0].reg << 5U);
+            break;
+        }
+        case A64_MC_LDR:
+        case A64_MC_STR:
+        case A64_MC_LDRB:
+        case A64_MC_STRB:
+        case A64_MC_LDRH:
+        case A64_MC_STRH: {
+            bool sf = inst->operands[0].register_64;
+            uint32_t base =
+                inst->opcode == A64_MC_LDR ? (sf ? UINT32_C(0xf9400000) : UINT32_C(0xb9400000)) :
+                inst->opcode == A64_MC_STR ? (sf ? UINT32_C(0xf9000000) : UINT32_C(0xb9000000)) :
+                inst->opcode == A64_MC_LDRB ? UINT32_C(0x39400000) :
+                inst->opcode == A64_MC_STRB ? UINT32_C(0x39000000) :
+                inst->opcode == A64_MC_LDRH ? UINT32_C(0x79400000) :
+                                              UINT32_C(0x79000000);
+            code = base | ((uint32_t)inst->operands[2].immediate << 10U) |
+                   (inst->operands[1].reg << 5U) | inst->operands[0].reg;
+            break;
+        }
+        case A64_MC_STP:
+        case A64_MC_LDP: {
+            bool sf = inst->operands[0].register_64;
+            uint32_t base = inst->opcode == A64_MC_STP ?
+                (inst->encoding == 1U ? UINT32_C(0x29800000) :
+                 inst->encoding == 2U ? UINT32_C(0x28800000) : UINT32_C(0x29000000)) :
+                (inst->encoding == 1U ? UINT32_C(0x29c00000) :
+                 inst->encoding == 2U ? UINT32_C(0x28c00000) : UINT32_C(0x29400000));
+            if (sf) base |= UINT32_C(0x80000000);
+            code = base |
+                   (((uint32_t)inst->operands[3].immediate & 127U) << 15U) |
+                   (inst->operands[1].reg << 10U) |
+                   (inst->operands[2].reg << 5U) | inst->operands[0].reg;
+            break;
+        }
         case A64_MC_B:
         case A64_MC_BL: {
             const MiniAsSymbol *target;

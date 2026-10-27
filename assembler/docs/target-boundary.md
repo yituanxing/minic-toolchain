@@ -147,3 +147,19 @@ The target-specific fields still resident in `MiniAs`, the shared
 rules and CFI remain separate architecture work. Follow-up multi-target
 corpus discovery must keep failure cohorts target-specific and only elevate
 reproducibly common mechanisms to the shared architecture.
+
+## AArch64 integer-target expansion (2026-10-27)
+
+The first grouped AArch64 compiler-output barrier is implemented inside the
+existing Target-owned typed MCInst parser and encoder, **not** through
+source-text re-parsing at emit time: MOV register/MOVZ immediate, ADD/SUB
+register or immediate, CMP, integer AND/ORR/EOR, scaled unsigned-offset
+LDR/STR byte/halfword/word/doubleword, and signed STP/LDP pair memory
+pre-/post-/offset. GNU AArch64 assembler byte equality is required on
+the grouped instruction matrix. Invalid register widths, unmapped addressing
+modes, signed-scale violations and unsupported options fail closed.
+
+No Common instruction family, Section, Symbol, Fragment or ELF code was changed.
+This target still intentionally lacks ADRP/GOT, conditional branches,
+shifts, extend/bitfield and full CFI. New ISA implementations must add
+AArch64 MCInst cases rather than duplicate the common layout/ELF pipeline.
