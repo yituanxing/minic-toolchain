@@ -113,6 +113,21 @@ static bool la_branch_instruction(MiniAs *as, MiniAsMCInst *m,
     MiniAsSymbolExpr expr;
     /* GAS pseudo comparisons reuse the existing B16 encoding and its
      * Common RV-style SymbolExpr/ELF fixup. Do not duplicate a branch ISA. */
+    if(count==2U &&
+       (!strcmp(op,"bltz") || !strcmp(op,"bgtz") ||
+        !strcmp(op,"bgez") || !strcmp(op,"blez"))) {
+        /* GNU psABI BxxZ aliases share the one existing typed B16,
+         * relocation and local-branch encode path, not a second encoder. */
+        bool zero_first=!strcmp(op,"bgtz") || !strcmp(op,"blez");
+        if(!minias_parse_symbol_addend(t[1],&expr))return false;
+        memcpy(t[2],t[1],strlen(t[1])+1U);
+        if(zero_first) {
+            memcpy(t[1],t[0],strlen(t[0])+1U);
+            memcpy(t[0],"$zero",6U);
+        } else memcpy(t[1],"$zero",6U);
+        base_op=(!strcmp(op,"bltz") || !strcmp(op,"bgtz"))?"blt":"bge";
+        count=3U;
+    }
     if(!strcmp(op,"bgtu")) {base_op="bltu";swap=true;}
     else if(!strcmp(op,"bleu")) {base_op="bgeu";swap=true;}
     else if(!strcmp(op,"bgt")) {base_op="blt";swap=true;}
@@ -263,7 +278,11 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
         {"bitrev.w",UINT32_C(0x00005000)},
         {"bitrev.d",UINT32_C(0x00005400)},
         {"ext.w.h",UINT32_C(0x00005800)},
-        {"ext.w.b",UINT32_C(0x00005c00)}
+        {"ext.w.b",UINT32_C(0x00005c00)},
+        {"rdtimel.w",UINT32_C(0x00006000)},
+        {"rdtimeh.w",UINT32_C(0x00006400)},
+        {"rdtime.d",UINT32_C(0x00006800)},
+        {"cpucfg",UINT32_C(0x00006c00)}
     };
     /* GNU atomic opcodes r0:5,r10:5,r5:5: the second assembly
      * operand occupies rk/bit10; the third is the memory base rj/bit5.
@@ -314,7 +333,8 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
             {"break",UINT32_C(0x002a0000)},
             {"syscall",UINT32_C(0x002b0000)},
             {"dbar",UINT32_C(0x38720000)},
-            {"ibar",UINT32_C(0x38728000)}
+            {"ibar",UINT32_C(0x38728000)},
+            {"idle",UINT32_C(0x06488000)}
         };
         uint64_t v;
         if(minias_eval_u64_expression(t[0],&v) && v<=32767U) {
@@ -491,6 +511,36 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
         la_reg(t[0],&rd) && la_reg(t[1],&rj)) {
         m->count=2U;m->encoding=UINT32_C(0x00150000) |
             (rj<<5U)|rd;goto done;
+    }
+    /* LoongArch PREFETCH has a u5 cache hint, a base register and either
+     * a signed 12-bit displacement or an index register. Both variants
+     * use the exact GNU opcodes and shared typed MCInst/ELF pipeline. */
+    if(n==3U && (!strcmp(s->op,"preld") || !strcmp(s->op,"preldx"))) {
+        uint64_t hint;
+        int64_t displacement;
+        if(!minias_eval_u64_expression(t[0],&hint) || hint>31U ||
+           !la_reg(t[1],&rj))goto fail;
+        if(!strcmp(s->op,"preld")) {
+            if(!minias_eval_i64_expression(t[2],&displacement) ||
+               displacement<-2048 || displacement>2047)goto fail;
+            m->encoding=UINT32_C(0x2ac00000) |
+                (((uint32_t)displacement&UINT32_C(0xfff))<<10U) |
+                (rj<<5U)|(uint32_t)hint;
+            m->operands[2].kind=MINIAS_MC_IMMEDIATE;
+            m->operands[2].immediate=(uint64_t)displacement;
+        }else {
+            if(!la_reg(t[2],&rk))goto fail;
+            m->encoding=UINT32_C(0x382c0000) |
+                (rk<<10U)|(rj<<5U)|(uint32_t)hint;
+            m->operands[2].kind=MINIAS_MC_REGISTER;
+            m->operands[2].reg=rk;
+        }
+        m->count=3U;
+        m->operands[0].kind=MINIAS_MC_IMMEDIATE;
+        m->operands[0].immediate=hint;
+        m->operands[1].kind=MINIAS_MC_REGISTER;
+        m->operands[1].reg=rj;
+        goto done;
     }
     if((n!=3U && n!=4U) ||
        !la_reg(t[0],&rd) || !la_reg(t[1],&rj)) goto fail;

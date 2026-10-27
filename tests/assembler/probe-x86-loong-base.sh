@@ -334,6 +334,21 @@ entry_la:
     bstrpick.w $a1, $a0, 7, 0
     bstrins.d $a2, $a3, 63, 1
     bstrins.w $a3, $a2, 30, 2
+    bltz $r13, .Lla_extra
+    bgtz $r13, .Lla_extra
+    bgez $r13, .Lla_extra
+    blez $r13, .Lla_extra
+    preld 0, $r23, 0
+    preld 8, $r12, -2048
+    preld 31, $r13, 2047
+    preldx 0, $r12, $r13
+    rdtime.d $r13, $r12
+    rdtimel.w $r12, $r13
+    rdtimeh.w $r12, $r13
+    cpucfg $r12, $r13
+    idle 0
+    idle 32767
+.Lla_extra:
     ret
 .size entry_la, .-entry_la
 ASM_LA
