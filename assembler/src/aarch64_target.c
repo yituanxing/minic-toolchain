@@ -1004,6 +1004,12 @@ static const MiniAsTargetOps ops = {
     .append_code_alignment = code_alignment,
     .fixup_relocation_type = aarch64_fixup_relocation_type,
     .validate_output = validate,
+    .cfi_code_align = 4U,
+    .cfi_data_align = -8,
+    .cfi_return_reg = 30U,
+    .cfi_stack_reg = 31U,
+    .cfi_address_size = 8U,
+    .cfi_negate_ra_opcode = 0x2dU,
 };
 const MiniAsTargetOps *minias_target_aarch64(void) {
     return &ops;

@@ -254,6 +254,7 @@ MINIELF_REL_OBJECTS := $(MINIELF_READER_OBJECT) $(MINIELF_REL_WRITER_OBJECT)
 MINIAS_INCLUDES := -Iassembler/src $(MINIELF_INCLUDES)
 MINIAS_SOURCES := \
 	assembler/src/assembler.c \
+	assembler/src/cfi.c \
 	assembler/src/riscv_target.c \
 	assembler/src/aarch64_target.c \
 	assembler/src/x86_64_target.c \

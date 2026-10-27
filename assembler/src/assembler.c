@@ -642,6 +642,8 @@ void minias_destroy(MiniAs *as) {
         free(as->macros[i].body_lines);
     }
     free(as->macros);
+    free(as->cfi_procs);
+    free(as->cfi_ops);
     memset(as, 0, sizeof(*as));
 }
 
@@ -3186,6 +3188,9 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
             return false;
     }
     if (op[0] == '.' && strcmp(op, ".insn") != 0) {
+        if (strcmp(op, ".cfi_sections") == 0 ||
+            (as->cfi_debug_frame && strncmp(op, ".cfi_", 5U) == 0))
+            return minias_cfi_directive(as, op, args, line);
         /*
          * Native Linux VDSO sources use only the procedure-boundary CFI
          * surface at this stage.  Track and validate its state now; actual
@@ -4859,7 +4864,7 @@ bool minias_emit_sections(MiniAs *as) {
             }
         }
     }
-    return true;
+    return minias_cfi_emit(as);
 }
 
 

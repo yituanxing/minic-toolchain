@@ -216,4 +216,52 @@ printf '.text\n.globl raw_a64\nraw_a64:\n.word 0xd503201f\n' \
 cmp "$work/aarch64-raw.bin" "$work/aarch64-raw-gnu.bin"
 echo 'MINIAS_AARCH64_MCINST=PASS typed_reg64_reg32_imm16_symbol=1 invalid_operands=3 target_raw_data=1'
 
+# DWARF debug_frame must contain a real CIE/FDE and parsed state,
+# not merely accept .cfi directives while silently deleting unwind data.
+cat >"$work/cfi-debug.s" <<'A64_CFI'
+.arch armv8-a
+.text
+.globl cfi_one
+.type cfi_one, %function
+.cfi_sections .debug_frame
+cfi_one:
+    .cfi_startproc
+    stp x29, x30, [sp, -16]!
+    .cfi_def_cfa_offset 16
+    .cfi_offset 29, -16
+    .cfi_offset 30, -8
+    .cfi_remember_state
+    .cfi_window_save
+    nop
+    .cfi_restore_state
+    ldp x29, x30, [sp], 16
+    .cfi_restore 29
+    .cfi_restore 30
+    .cfi_def_cfa_offset 0
+    ret
+    .cfi_endproc
+.size cfi_one, .-cfi_one
+A64_CFI
+"$MINIAS" --target=aarch64 -o "$work/cfi-mini.o" "$work/cfi-debug.s"
+"$AARCH64_AS" -o "$work/cfi-gnu.o" "$work/cfi-debug.s"
+"$AARCH64_OBJCOPY" -j .text -O binary "$work/cfi-mini.o" "$work/cfi-mini.bin"
+"$AARCH64_OBJCOPY" -j .text -O binary "$work/cfi-gnu.o" "$work/cfi-gnu.bin"
+cmp "$work/cfi-mini.bin" "$work/cfi-gnu.bin"
+"$AARCH64_READELF" --debug-dump=frames "$work/cfi-mini.o" >"$work/cfi-mini.frame"
+"$AARCH64_READELF" --debug-dump=frames "$work/cfi-gnu.o" >"$work/cfi-gnu.frame"
+for marker in 'CIE' 'FDE' 'DW_CFA_def_cfa_offset: 16'               'DW_CFA_offset: r29' 'DW_CFA_restore: r29'; do
+    grep -q "$marker" "$work/cfi-mini.frame"
+    grep -q "$marker" "$work/cfi-gnu.frame"
+done
+"$AARCH64_READELF" -Wr "$work/cfi-mini.o" | grep -q 'R_AARCH64_ABS64'
+"$AARCH64_READELF" -Wr "$work/cfi-gnu.o" | grep -q 'R_AARCH64_ABS64'
+for directive in '.cfi_sections .eh_frame' '.cfi_startproc simple'                  '.cfi_unsupported 1'; do
+    printf '.arch armv8-a\n.text\n.cfi_sections .debug_frame\n%s\n' "$directive"         >"$work/cfi-reject.s"
+    if "$MINIAS" --target=aarch64 -o "$work/cfi-reject.o"        "$work/cfi-reject.s" >/dev/null 2>&1; then
+        echo "CFI invalid input accepted: $directive" >&2
+        exit 1
+    fi
+done
+echo 'MINIAS_AARCH64_DWARF_DEBUG_FRAME=PASS actual_CIE_FDE=1 relocation=1 state_ops=1'
+
 echo 'MINIAS_AARCH64_VSLICE=PASS ELF64=1 gnu_bytes=equal relocation_call26_jump26_abs64=1 ld=pass qemu=exit0'

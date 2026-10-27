@@ -218,6 +218,23 @@ typedef struct MiniAsStmt {
     MiniAsMCInst *mcinst; /* allocated by target parser, freed by core */
 } MiniAsStmt;
 
+/* Common deferred DWARF .debug_frame CFI fragments. Target psABI owns register
+ * identities and alignment; Common owns symbolic anchors and serialization. */
+typedef struct MiniAsCfiOp {
+    size_t symbol_index;
+    unsigned kind;
+    unsigned reg;
+    int64_t value;
+} MiniAsCfiOp;
+
+typedef struct MiniAsCfiProc {
+    size_t begin_symbol;
+    size_t end_symbol;
+    size_t first_op;
+    size_t op_count;
+    unsigned state_depth;
+} MiniAsCfiProc;
+
 typedef struct MiniAs {
     const struct MiniAsTargetOps *target;
     MiniAsSection *sections;
@@ -259,6 +276,14 @@ typedef struct MiniAs {
     size_t target_option_depth;
     bool cfi_active;
     bool cfi_signal_frame;
+    bool cfi_debug_frame;
+    MiniAsCfiProc *cfi_procs;
+    size_t cfi_proc_count;
+    size_t cfi_proc_capacity;
+    MiniAsCfiOp *cfi_ops;
+    size_t cfi_op_count;
+    size_t cfi_op_capacity;
+    size_t cfi_anchor_counter;
     uint32_t elf_flags;
     bool isa_explicit;
     unsigned target_xlen;
@@ -281,6 +306,9 @@ void minias_destroy(MiniAs *as);
 bool minias_parse_file(MiniAs *as, const char *path);
 bool minias_emit_sections(MiniAs *as);
 bool minias_write_elf64(MiniAs *as, const char *path);
+bool minias_cfi_directive(MiniAs *as, const char *op,
+                          const char *args, size_t line);
+bool minias_cfi_emit(MiniAs *as);
 bool minias_write_elf32(MiniAs *as, const char *path);
 
 int minias_find_section(const MiniAs *as, const char *name);
@@ -342,6 +370,13 @@ typedef struct MiniAsTargetOps {
     bool (*append_code_alignment)(MiniAs *, int, size_t);
     uint32_t (*fixup_relocation_type)(MiniAsFixupKind, unsigned);
     bool (*validate_output)(MiniAs *);
+    /* Target-owned DWARF CFI ABI (zero => not yet available). */
+    unsigned cfi_code_align;
+    int cfi_data_align;
+    unsigned cfi_return_reg;
+    unsigned cfi_stack_reg;
+    unsigned cfi_address_size;
+    unsigned cfi_negate_ra_opcode;
 } MiniAsTargetOps;
 
 const MiniAsTargetOps *minias_target_riscv(void);
