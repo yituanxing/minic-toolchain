@@ -229,6 +229,7 @@ jobs:
           bash tests/compiler/c0/probe-x86-bit-scan-native.sh "$GITHUB_WORKSPACE/build/runtime-ci/bin/minic-cc"
           bash tests/compiler/c0/probe-gnu-bswap-case-ice.sh             "$GITHUB_WORKSPACE/build/runtime-ci/bin/minic-cc"
           bash tests/compiler/c0/probe-gnu-asm-names.sh "$GITHUB_WORKSPACE/build/runtime-ci/bin/minic-cc" x86_64
+          bash tests/compiler/c0/probe-native-local-hardreg-declarations.sh             "$GITHUB_WORKSPACE/build/runtime-ci/bin/minic-cc" x86_64
       - name: GNU ASM register-name adjacent strings under QEMU RV64
         if: matrix.target == 'riscv64'
         shell: bash
@@ -241,6 +242,11 @@ jobs:
           set -Eeuo pipefail
           bash tests/compiler/c0/probe-rv64i-kbuild-abi.sh \
             "$GITHUB_WORKSPACE/build/runtime-ci/bin/minic"
+      - name: GNU original local fixed-register declarations under real AArch64 QEMU
+        if: matrix.target == 'aarch64'
+        shell: bash
+        run: |
+          bash tests/compiler/c0/probe-native-local-hardreg-declarations.sh             "$GITHUB_WORKSPACE/build/runtime-ci/bin/minic-cc" aarch64
       - name: QEMU differential verify 16 RV64I i128 ABI operations
         if: always() && matrix.target == 'riscv64'
         shell: bash

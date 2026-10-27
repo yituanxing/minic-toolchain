@@ -808,6 +808,35 @@ bool minic_target_info_local_fixed_register_supported(const MinicTargetInfo *tar
                  (name[0] == 'a' &&
                   (name[1] == '0' || name[1] == '1' || name[1] == '7'))));
     }
+    if (target->architecture == MINIC_TARGET_ARCH_X86_64) {
+        /* Source GNU local-register variables are not register
+         * reservations. Their only guaranteed machine effect is when
+         * referenced as qualified GNU extended-ASM operands. Reuse the
+         * existing SysV caller-clobber register grammar, excluding cc,
+         * while the x86 machine ASM owner independently checks physical
+         * constraints before emission. Callee-saved registers stay blocked
+         * until the backend explicitly proves save/restore preservation. */
+        return !(name_length == 2U && memcmp(name, "cc", 2U) == 0) &&
+               minic_target_info_inline_asm_register_clobber_supported(
+                   target, name, name_length);
+    }
+    if (target->architecture == MINIC_TARGET_ARCH_AARCH64) {
+        /* AAPCS64 x0..x17 are the integer argument and caller-scratch
+         * GPR names used by original GNU Linux C (e.g. syscall x8).
+         * Keep platform-reserved x18, stack pointer, and callee-saved
+         * x19..x29 excluded until machine ownership is certified. */
+        unsigned int number;
+        if (name_length < 2U || name_length > 3U || name[0] != 'x' ||
+            name[1] < '0' || name[1] > '9')
+            return false;
+        number = (unsigned int)(name[1] - '0');
+        if (name_length == 3U) {
+            if (name[2] < '0' || name[2] > '9')
+                return false;
+            number = number * 10U + (unsigned int)(name[2] - '0');
+        }
+        return number <= 17U;
+    }
     if (target->architecture != MINIC_TARGET_ARCH_RISCV64 &&
         target->architecture != MINIC_TARGET_ARCH_RISCV32)
         return false;
