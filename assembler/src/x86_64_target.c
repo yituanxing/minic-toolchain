@@ -64,7 +64,7 @@ static bool x64_args2(const char *args, char a[48], char b[48]) {
 static bool x64_parse_base_memory(const char *text, MiniAsMCMemory *out) {
     const char *open=strchr(text,'('), *close, *p;
     char regs[3][48], dispbuf[48], *end;
-    size_t length, dlen;
+    size_t dlen;
     unsigned count=0U, base=0U, index=0U;
     unsigned long scale=1UL;
     bool wide;
