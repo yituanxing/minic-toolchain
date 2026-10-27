@@ -684,8 +684,19 @@ int main(void) { return 0; }
 SRC
     "$cross_cc" -O0 -c -x c "$work/aarch64-percpu-alternative.i" \
         -o "$work/aarch64-percpu-alternative.gnu.o"
-    "$MINIC_CC" --target=aarch64-linux -S "$work/aarch64-percpu-alternative.i" \
+    # Scope machine-reject diagnostics to this exact original Linux
+    # blocker; a previous -S success wrote a fail-closed .error directive
+    # that only GNU GAS discovered. Inspect it before attempting GAS.
+    MINIC_M1_TRACE=1 "$MINIC_CC" --target=aarch64-linux -S \
+        "$work/aarch64-percpu-alternative.i" \
         -o "$work/aarch64-percpu-alternative.minic.s"
+    if grep -Eq '^[[:space:]]*\.error[[:space:]]' \
+        "$work/aarch64-percpu-alternative.minic.s"; then
+        grep -E '^[[:space:]]*\.error[[:space:]]' \
+            "$work/aarch64-percpu-alternative.minic.s" >&2
+        echo 'FAIL authentic Linux AArch64 alternative backend rejected Core' >&2
+        exit 1
+    fi
     for instruction in 'mrs x9, tpidr_el1' 'mrs x9, tpidr_el2' \
                        '.pushsection .altinstructions' '.hword 47' \
                        '.org . - (664b-663b) + (662b-661b)'; do
