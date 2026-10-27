@@ -71,6 +71,22 @@ entry_x:
     pushq $0
     pushq $4096
     movb $0, 7(%rsp)
+    /* Forward/backward native rel8 and out-of-range rel32 are GNU-oracled. */
+.Lback_x86:
+    jne .Lshort_x86
+    nop
+.Lshort_x86:
+    jnb .Lback_x86
+    jmp .Lafter_x86
+    .space 200, 0x90
+.Lafter_x86:
+    jnb .Lback_x86
+    /* This .org would be backwards if an in-range JMP were forced rel32. */
+.Lorg_x86:
+    jmp .Lend_org_x86
+    .org .Lorg_x86+12
+.Lend_org_x86:
+    nop
     popq %rbp
     ret
 .size entry_x, .-entry_x

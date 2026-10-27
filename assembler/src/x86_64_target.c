@@ -633,7 +633,10 @@ static bool x64_measure(MiniAs *as,const MiniAsStmt *s,uint32_t *size) {
             int32_t imm=(int32_t)(uint32_t)m->operands[0].immediate;
             *size=imm>=-128 && imm<=127?2U:5U;return true;
         }
-        case X64_BRANCH: *size=m->encoding>=0x100U?6U:5U;return true;
+        case X64_BRANCH:
+            /* Start JMP/Jcc at GNU's shortest encoding; target relaxation
+             * promotes external/out-of-range edges before final emission. */
+            *size=m->encoding==0xe8U?5U:2U;return true;
         case X64_IMM_MEMORY:
         case X64_REG_MEMORY: {
             const MiniAsMCMemory *mem=m->operands[1].memory;
@@ -663,6 +666,42 @@ static bool x64_measure(MiniAs *as,const MiniAsStmt *s,uint32_t *size) {
             return true;
         default: minias_set_error(as,"unknown-x86_64-mcinst");return false;
     }
+}
+
+/* Use the proven Common growth/forced-fragment framework, not an x86
+ * duplicate of section layout. Out-of-range local and external edges
+ * grow from 2 to rel32 before any bytes or fixups are emitted. */
+static bool x64_relax_instruction(MiniAs *as,const MiniAsStmt *s,uint32_t *next) {
+    const MiniAsMCInst *m=s->mcinst;
+    const MiniAsSymbolExpr *expr;
+    MiniAsSymbol *sym;
+    uint32_t large;
+    int64_t distance;
+    if(!m || m->opcode!=X64_BRANCH)return false;
+    *next=s->size;
+    if(m->encoding==0xe8U || s->size!=2U)return true;
+    large=m->encoding>=0x100U?6U:5U;
+    expr=m->operands[0].symbol;
+    sym=minias_get_symbol(as,expr->name,false);
+    if(!sym || !sym->defined || sym->section!=s->section ||
+       sym->value>INT64_MAX || s->offset>(uint64_t)INT64_MAX-2U) {
+        *next=large;return true;
+    }
+    distance=(int64_t)sym->value-(int64_t)(s->offset+2U);
+    if((expr->addend>0 && distance>INT64_MAX-expr->addend) ||
+       (expr->addend<0 && distance<INT64_MIN-expr->addend)) {
+        *next=large;return true;
+    }
+    distance+=expr->addend;
+    if(distance<-128 || distance>127)*next=large;
+    return true;
+}
+
+static bool x64_expanded_instruction_size(const char *op,uint32_t current,
+                                           uint32_t *size) {
+    if(current!=2U || op[0]!='j')return false;
+    *size=(!strcmp(op,"jmp") || !strcmp(op,"jmpq"))?5U:6U;
+    return true;
 }
 
 static bool x64_encode(MiniAs *as,const MiniAsStmt *s) {
@@ -738,21 +777,32 @@ static bool x64_encode(MiniAs *as,const MiniAsStmt *s) {
         case X64_BRANCH: {
             const MiniAsSymbolExpr *expr=m->operands[0].symbol;
             MiniAsSymbol *sym=minias_get_symbol(as,expr->name,false);
-            /* GNU GAS treats undefined direct control transfers,
-             * including conditional jumps, as PLT32. PC32 belongs
-             * to memory references, not a guessed Jcc exception. */
             MiniAsFixupKind kind=MINIAS_FIXUP_X64_PLT32;
-            size_t width=m->encoding>=0x100U?6U:5U;
+            size_t width=s->size;
             int64_t displacement=0;
             bool local=sym!=NULL && sym->defined && sym->section==s->section;
             unsigned i;
-            if(m->encoding>=0x100U)code[n++]=0x0fU;
-            code[n++]=(unsigned char)m->encoding;
+            if(width!=2U && width!=(m->encoding>=0x100U?6U:5U)) {
+                minias_set_error(as,"x86-branch-invalid-layout:line=%zu",s->line);
+                return false;
+            }
+            if(width==2U && (!local || m->encoding==0xe8U)) {
+                minias_set_error(as,"x86-branch-unrelaxed:line=%zu",s->line);
+                return false;
+            }
+            if(width==2U) {
+                code[n++]=(unsigned char)(m->encoding>=0x100U?
+                    0x70U|(m->encoding&15U):0xebU);
+            }else {
+                if(m->encoding>=0x100U)code[n++]=0x0fU;
+                code[n++]=(unsigned char)m->encoding;
+            }
             if(local) {
                 int64_t distance;
                 if(sym->value>INT64_MAX || s->offset>INT64_MAX ||
-                   s->offset>INT64_MAX-width) {
-                    minias_set_error(as,"x86-branch-address-overflow");return false;
+                   (uint64_t)width>(uint64_t)INT64_MAX-s->offset) {
+                    minias_set_error(as,"x86-branch-address-overflow");
+                    return false;
                 }
                 distance=(int64_t)sym->value-((int64_t)s->offset+(int64_t)width);
                 if((expr->addend>0 && distance>INT64_MAX-expr->addend) ||
@@ -760,13 +810,16 @@ static bool x64_encode(MiniAs *as,const MiniAsStmt *s) {
                     minias_set_error(as,"x86-branch-addend-overflow");return false;
                 }
                 distance+=expr->addend;
-                if(distance<INT32_MIN || distance>INT32_MAX) {
-                    minias_set_error(as,"x86-branch-rel32-range:line=%zu",s->line);
+                if((width==2U && (distance<-128 || distance>127)) ||
+                   (width!=2U && (distance<INT32_MIN || distance>INT32_MAX))) {
+                    minias_set_error(as,"x86-branch-displacement-range:line=%zu",
+                                     s->line);
                     return false;
                 }
                 displacement=distance;
             }
-            for(i=0U;i<4U;++i) code[n++]=(unsigned char)((uint32_t)displacement>>(8U*i));
+            for(i=0U;i<(width==2U?1U:4U);++i)
+                code[n++]=(unsigned char)((uint32_t)displacement>>(8U*i));
             if(!minias_section_append(as,s->section,code,n))return false;
             if(local)return true;
             return minias_add_fixup(as,s->section,s->offset+width-4U,kind,
@@ -959,6 +1012,8 @@ static const MiniAsTargetOps ops={
     .name="x86_64",.comment_prefix='#',.elf_machine=62U,
     .resolve_profile=x64_profile,.parse_mcinst=x64_parse,
     .measure_mcinst=x64_measure,.encode=x64_encode,
+    .relax_instruction=x64_relax_instruction,
+    .expanded_instruction_size=x64_expanded_instruction_size,
     .append_code_alignment=x64_code_align,
     .fixup_relocation_type=x64_reloc,.validate_output=x64_validate
 };
