@@ -160,9 +160,10 @@ static bool x64_parse_base_memory(const char *text, MiniAsMCMemory *out) {
         const char *operand;
         MiniAsSymbolExpr expr;
         space=segment_space;
-        if(!space)return false;
         operand=text;
-        if(!*operand)return false;
+        /* AT&T absolute disp32 and absolute-symbol memory are legal
+         * without FS/GS. Keep them distinct from RIP-relative addressing. */
+        if(!*operand || *operand=='%' || *operand=='$')return false;
         errno=0;displacement=strtoll(operand,&end,0);
         if(errno || end==operand || *end ||
            displacement<INT32_MIN || displacement>INT32_MAX) {
@@ -258,7 +259,8 @@ static unsigned x64_disp_bytes(const MiniAsMCMemory *mem) {
 
 static bool x64_is_mem_candidate(const char *text) {
     return strchr(text, '(') != NULL ||
-           strncmp(text,"%gs:",4U)==0 || strncmp(text,"%fs:",4U)==0;
+           strncmp(text,"%gs:",4U)==0 || strncmp(text,"%fs:",4U)==0 ||
+           (*text && *text!='%' && *text!='$');
 }
 
 static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
@@ -1471,7 +1473,7 @@ static bool x64_encode(MiniAs *as,const MiniAsStmt *s) {
                     ((mem->has_index?mem->index&7U:4U)<<3U) |
                     (mem->has_base?low_base:5U));
             }
-            if(mem->address_space && !mem->pc_relative &&
+            if(!mem->has_base && !mem->pc_relative &&
                mem->symbol!=NULL) {
                 size_t relocation_at=n;
                 for(i=0U;i<4U;++i)code[n++]=0U;
