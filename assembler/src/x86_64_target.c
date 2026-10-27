@@ -462,7 +462,8 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
        !strcmp(s->op,"outw") || !strcmp(s->op,"outl")) {
         char from[48],to[48];
         bool input=s->op[0]=='i';
-        char width=s->op[2];
+        /* INB/INW/INL and OUTB/OUTW/OUTL differ in mnemonic length. */
+        char width=s->op[strlen(s->op)-1U];
         const char *acc=width=='b'?"%al":width=='w'?"%ax":"%eax";
         if(!x64_args2(s->args,from,to) ||
            strcmp(input?from:to,"%dx") ||
