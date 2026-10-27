@@ -283,11 +283,11 @@ static int verify_riscv_integer_strategy(void) {
     return puts("RISCV_BASE_I_STRATEGY=PASS rv32_rv64 M_optional C_ignored runtime_fallback") == EOF;
 }
 
-/* Distinguish target ISA ABI ownership from GNU fixed-register grammar.
- * RISC-V sp/tp and x86 rsp are live machine values. No AArch64/LoongArch
- * register binding is admitted until their backend owns the corresponding
- * Core FIXED_REGISTER_READ lowering and preservation contract. */
-static int verify_aarch64_return_address_level_zero(void) {
+/* CALL_FRAME_ADDRESS remains one typed Core operation. Independent target
+ * capabilities allow level-zero RETURN on AArch64 and LoongArch64 only after
+ * their machine emitters have proved saved-vs-live LR/ra under GNU/QEMU.
+ * No arbitrary unwinding, frame-address or x86 capability is inferred. */
+static int verify_lp64_return_address_level_zero(void) {
     const MinicTargetInfo *aarch =
         minic_target_info_from_name("aarch64-linux");
     const MinicTargetInfo *x86 =
@@ -303,12 +303,16 @@ static int verify_aarch64_return_address_level_zero(void) {
             aarch, MINIC_CALL_FRAME_ADDRESS_FRAME, 0U) ||
         minic_target_info_call_frame_address_supported(
             x86, MINIC_CALL_FRAME_ADDRESS_RETURN, 0U) ||
+        !minic_target_info_call_frame_address_supported(
+            loong, MINIC_CALL_FRAME_ADDRESS_RETURN, 0U) ||
         minic_target_info_call_frame_address_supported(
-            loong, MINIC_CALL_FRAME_ADDRESS_RETURN, 0U)) {
-        (void)fprintf(stderr, "AARCH64_CALL_FRAME=FAIL\n");
+            loong, MINIC_CALL_FRAME_ADDRESS_RETURN, 1U) ||
+        minic_target_info_call_frame_address_supported(
+            loong, MINIC_CALL_FRAME_ADDRESS_FRAME, 0U)) {
+        (void)fprintf(stderr, "LP64_CALL_FRAME=FAIL\n");
         return 1;
     }
-    (void)puts("AARCH64_CALL_FRAME=PASS return_level0 saved_x30 nonleaf frame_unsupported");
+    (void)puts("LP64_CALL_FRAME=PASS aarch64_x30 loongarch64_ra level0_only independent_frame_abi");
     return 0;
 }
 
@@ -402,7 +406,7 @@ int main(void) {
         (void)fprintf(stderr, "FAIL AAPCS64 va_copy must fail closed, x86 ABI-state independent\n");
         return 1;
     }
-    if (verify_aarch64_return_address_level_zero() != 0 ||
+    if (verify_lp64_return_address_level_zero() != 0 ||
         verify_fixed_register_target_contract() != 0 ||
         verify_gnu_asm_immediate_target_contract() != 0 ||
         verify_riscv_integer_strategy() != 0 || verify_registered_target_catalog() != 0 || verify_riscv_profile_catalog() != 0 ||
