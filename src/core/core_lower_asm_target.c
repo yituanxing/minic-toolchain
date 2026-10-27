@@ -74,9 +74,6 @@ MinicCoreLowerStatus core_asm_try_target_register_contract(
             return MINIC_CORE_LOWER_ERROR;
         }
     }
-        free(normalized);
-        return MINIC_CORE_LOWER_ERROR;
-    }
     free(normalized);
     for (i = 0U; i < source->register_clobber_count; ++i) {
         const MinicInlineAsmRegisterClobber *c = &source->register_clobbers[i];
