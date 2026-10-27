@@ -20,13 +20,13 @@ jobs:
   shard:
     # Opt-in large grouped corpus only. Target fixes normally run unit GNU
     # parity; explicit batch marker or workflow_dispatch scans all 21 shards.
-    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[minias-replay-3x7]')
+    if: github.event_name == 'workflow_dispatch' || (contains(github.event.head_commit.message, '[minias-replay-3x7]') || contains(github.event.head_commit.message, '[minias-replay-aarch-7]'))
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     strategy:
       fail-fast: false
       matrix:
-        target: [x86_64, aarch64, loongarch64]
+        target: ${{ fromJSON(contains(github.event.head_commit.message, '[minias-replay-aarch-7]') && '["aarch64"]' || '["x86_64","aarch64","loongarch64"]') }}
         shard: [0, 1, 2, 3, 4, 5, 6]
     steps:
       - uses: actions/checkout@v4
@@ -88,6 +88,7 @@ jobs:
       - name: Require exactly 21 owned shards and disjoint architecture pools
         run: |
           python3 tools/ci/minias-linux-kbuild-seven-v1.py aggregate \
+            --targets "${{ contains(github.event.head_commit.message, '[minias-replay-aarch-7]') && 'aarch64' || 'x86_64,aarch64,loongarch64' }}" \
             --results build/minias-linux-replay-collected \
             --dest build/minias-linux-replay-summary.json
       - uses: actions/upload-artifact@v4
