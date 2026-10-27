@@ -97,6 +97,33 @@ SRC
     fi
     grep -Fq 'GNU function alias requires' "$work/invalid-alias.err"
     echo 'MINIC_LOONGARCH64_FORWARD_SYSCALL_ALIAS_GNU_QEMU=PASS'
+    cat > "$work/dbar.i" <<'SRC'
+static void release_barrier(void) {
+    __asm__ __volatile__("dbar %0 " : : "I"(0x12) : "memory");
+}
+int main(void) { release_barrier(); return 0; }
+SRC
+    "$cross_cc" -x c "$work/dbar.i" -o "$work/dbar.gnu.elf"
+    "$MINIC_CC" --target=loongarch64-linux -S "$work/dbar.i" -o "$work/dbar.minic.s"
+    grep -Fq 'dbar 18' "$work/dbar.minic.s"
+    "$cross_cc" -x assembler "$work/dbar.minic.s" -o "$work/dbar.minic.elf"
+    qemu-loongarch64 -L /usr/loongarch64-linux-gnu "$work/dbar.gnu.elf"
+    qemu-loongarch64 -L /usr/loongarch64-linux-gnu "$work/dbar.minic.elf"
+    for invalid in suffix constraint nonconstant; do
+        case "$invalid" in
+          suffix) asm='__asm__ __volatile__("dbar %0; syscall" : : "I"(18) : "memory");' ;;
+          constraint) asm='__asm__ __volatile__("dbar %0" : : "r"(18) : "memory");' ;;
+          nonconstant) asm='__asm__ __volatile__("dbar %0" : : "I"(v) : "memory");' ;;
+        esac
+        printf 'void invalid(int v) { %s }\n' "$asm" > "$work/dbar-$invalid.i"
+        if "$MINIC_CC" --target=loongarch64-linux -S "$work/dbar-$invalid.i" \
+            -o "$work/dbar-$invalid.s" >"$work/dbar-$invalid.out" \
+            2>"$work/dbar-$invalid.err"; then
+            echo "FAIL LoongArch unsafe dbar template admission $invalid" >&2
+            exit 1
+        fi
+    done
+    echo 'MINIC_LOONGARCH64_DBAR_GNU_QEMU=PASS tested=1 rejected=3'
 fi
 
 # Architecture-specific machine syntax is still owned by real GNU AS.

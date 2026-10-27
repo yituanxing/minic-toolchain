@@ -7,6 +7,7 @@
 #include "target/aarch64/codegen.h"
 #include "target/aarch64/asm_contract.h"
 #include "target/loongarch64/codegen.h"
+#include "target/loongarch64/asm_contract.h"
 #include <string.h>
 
 static bool emit_riscv64(const char *output_path, const MinicC0Program *program,
@@ -40,7 +41,8 @@ static const MinicBackend aarch64_backend = {
 };
 static const MinicBackend loongarch64_backend = {
     MINIC_TARGET_ARCH_LOONGARCH64, "loongarch64",
-    minic_loongarch64_write_c0_program_with_core_functions, NULL, false
+    minic_loongarch64_write_c0_program_with_core_functions,
+    minic_loongarch64_qualify_inline_asm, false
 };
 
 const MinicBackend *minic_backend_for_target(const MinicTargetInfo *target) {

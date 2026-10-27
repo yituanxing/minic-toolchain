@@ -79,6 +79,9 @@ has src/target/common/direct_program_emit.c 'ctx->config->elf_function_type'
 has src/target/common/direct_program_emit.c 'ctx->config->elf_object_type'
 lacks src/target/common/direct_program_emit.c 'MINIC_TARGET_ARCH_AARCH64'
 has src/target/aarch64/codegen.c '"%function", "%object"'
+has src/target/backend.c 'minic_loongarch64_qualify_inline_asm'
+has src/target/loongarch64/residual_emit.c 'minic_loongarch64_emit_dbar'
+has src/target/loongarch64/asm_contract.c 'loongarch64_dbar_hint'
 has src/target/loongarch64/codegen.c '"@function", "@object"'
 # A front-end GNU alias is bound once after the entire TU, never by a
 # per-architecture parser special case or a fabricated declaration.

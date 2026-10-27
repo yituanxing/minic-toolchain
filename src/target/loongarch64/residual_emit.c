@@ -1,4 +1,5 @@
 #include "target/loongarch64/residual_emit.h"
+#include "target/loongarch64/asm_contract.h"
 #include "target/loongarch64/scalar_normalize.h"
 #include "target/common/direct_residual_plan.h"
 #include "target/common/direct_instruction_semantics.h"
@@ -57,6 +58,13 @@ bool minic_loongarch64_emit_residual_instruction(
     dynamic_frame = ctx->dynamic_frame;
     *needs_writeback = true;
         switch (ins->kind) {
+        case MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM:
+            if (!minic_loongarch64_emit_dbar(out, ctx, ins))
+                return minic_multi_direct_machine_reject(
+                    fn, "loongarch64", name, "qualified_dbar",
+                    reject_block, reject_ins, __LINE__);
+            *needs_writeback = false;
+            return true;
         case MINIC_CORE_INSTRUCTION_CALL_FRAME_ADDRESS:
             /* The SHARED semantic guard validates pointer provenance and
              * forbids unwinding higher frames. The native LP64D machine
