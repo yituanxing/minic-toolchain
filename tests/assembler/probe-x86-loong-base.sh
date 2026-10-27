@@ -93,6 +93,21 @@ unresolved_x86:
     xorq $255, (%rax)
     testq $2, 8(%rdi)
     movq $ext_global, %rsi
+    setne %al
+    sete %sil
+    setg %r9b
+    testb %al, %al
+    xorb %r8b, %r9b
+    cmpb %dil, %spl
+    movslq %edi, %rdi
+    movslq %r9d, %r12
+    pause
+    cltq
+    cqto
+    rep stosq
+    rep movsq
+    lock
+    addl $1, (%rdi)
 ASM_X
 if ! "$MINIAS" --target=x86_64 -march=x86-64 -mabi=sysv -o "$work/x86-mini.o" "$work/x86.s" >"$work/x86.stdout" 2>"$work/x86.stderr"; then
     echo 'MINIAS_X86_PARSE_OR_ENCODE_FAIL' >&2
@@ -248,7 +263,10 @@ for bad in 'movq %rax, (%eax)' \
            'movq %fs:pcpu_hot(%rax), %rax' \
            'movq $4294967296, %r8' \
            'cmpq $4294967296, (%rax)' \
-           'leaq %rax, (%rsp)'; do
+           'leaq %rax, (%rsp)' \
+           'setne %ah' \
+           'movslq %rdi, %r8' \
+           'testb %ah, %r8b'; do
     printf '.text\n%s\n' "$bad" >"$work/invalid-mem.s"
     if "$MINIAS" --target=x86_64 -o "$work/bad-mem.o" \
          "$work/invalid-mem.s" >/dev/null 2>"$work/invalid.err"; then

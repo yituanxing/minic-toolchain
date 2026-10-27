@@ -8,7 +8,7 @@
 
 /* A first, fail-closed GNU AT&T SysV x86-64 target. All common expression,
  * symbol, section, fragment, and ELF handling lives outside this file. */
-enum { X64_ZERO = 1, X64_REG_BINARY, X64_STACK, X64_MOV_IMM32, X64_ENDBR64, X64_ALU_IMM, X64_REG_MEMORY, X64_BRANCH, X64_IMM_MEMORY, X64_MOVQ_IMMREG };
+enum { X64_ZERO = 1, X64_REG_BINARY, X64_STACK, X64_MOV_IMM32, X64_ENDBR64, X64_ALU_IMM, X64_REG_MEMORY, X64_BRANCH, X64_IMM_MEMORY, X64_MOVQ_IMMREG, X64_SETCC, X64_BINARY8, X64_MOVSLQ };
 
 static bool x64_register(const char *text, unsigned *reg, bool *wide) {
     static const char *const names64[16] = {
@@ -26,6 +26,20 @@ static bool x64_register(const char *text, unsigned *reg, bool *wide) {
         if (strcmp(text, names64[i]) == 0) { *reg=i; *wide=true; return true; }
         if (strcmp(text, names32[i]) == 0) { *reg=i; *wide=false; return true; }
     }
+    return false;
+}
+
+/* GNU low-byte registers; high AH/CH/DH/BH require no-REX grammar and
+ * are deliberately excluded until that separate legacy encoding is added. */
+static bool x64_register8(const char *text,unsigned *reg) {
+    static const char *const low8[16]={
+        "al","cl","dl","bl","spl","bpl","sil","dil",
+        "r8b","r9b","r10b","r11b","r12b","r13b","r14b","r15b"
+    };
+    unsigned i;
+    if(*text!='%')return false;
+    for(i=0U;i<16U;++i)
+        if(strcmp(text+1,low8[i])==0){*reg=i;return true;}
     return false;
 }
 
@@ -173,7 +187,13 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
         {"nop",{0x90},1}, {"ret",{0xc3},1}, {"retq",{0xc3},1},
         {"leave",{0xc9},1}, {"leaveq",{0xc9},1},
         {"syscall",{0x0f,0x05},2}, {"int3",{0xcc},1},
-        {"ud2",{0x0f,0x0b},2}, {"hlt",{0xf4},1}
+        {"ud2",{0x0f,0x0b},2}, {"hlt",{0xf4},1},
+        {"pause",{0xf3,0x90},2},
+        {"cltq",{0x48,0x98},2},{"cqto",{0x48,0x99},2},
+        {"lock",{0xf0},1},
+        {"rep stosq",{0xf3,0x48,0xab},3},
+        {"rep movsq",{0xf3,0x48,0xa5},3},
+        {"rep stosb",{0xf3,0xaa},2}
     };
     static const struct {const char *op; unsigned char opcode; bool wide;} binary[]={
         {"movq",0x89,true}, {"movl",0x89,false},
@@ -216,6 +236,62 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
                 (unsigned)zeros[i].bytes[1]<<8U |
                 (unsigned)zeros[i].bytes[2]<<16U;
             m->operands[0].immediate=zeros[i].size;goto done;
+        }
+    }
+    /* Byte ALU variants and sign-extending MOV all remain target local. */
+    if(x64_args2(s->args,src,dst)) {
+        static const struct {const char *op;uint32_t opcode;} byteop[]={
+            {"movb",0x88U},{"addb",0x00U},{"orb",0x08U},
+            {"andb",0x20U},{"subb",0x28U},{"xorb",0x30U},
+            {"cmpb",0x38U},{"testb",0x84U}
+        };
+        unsigned first,second;
+        if(x64_register8(src,&first) && x64_register8(dst,&second)) {
+            for(i=0U;i<sizeof(byteop)/sizeof(byteop[0]);++i)
+                if(strcmp(s->op,byteop[i].op)==0) {
+                    m->opcode=X64_BINARY8;m->count=2U;
+                    m->encoding=byteop[i].opcode;
+                    m->operands[0].kind=MINIAS_MC_REGISTER;
+                    m->operands[0].reg=first;
+                    m->operands[1].kind=MINIAS_MC_REGISTER;
+                    m->operands[1].reg=second;
+                    goto done;
+                }
+        }
+        if(!strcmp(s->op,"movslq") &&
+           x64_register(src,&first,&ws) && !ws &&
+           x64_register(dst,&second,&wd) && wd) {
+            m->opcode=X64_MOVSLQ;m->count=2U;
+            m->operands[0].kind=MINIAS_MC_REGISTER;
+            m->operands[1].kind=MINIAS_MC_REGISTER;
+            m->operands[0].reg=first;m->operands[1].reg=second;
+            goto done;
+        }
+    }
+    {
+        static const struct {const char *op;unsigned second_byte;} setcc[]={
+            {"seto",0x90U},{"setno",0x91U},
+            {"setb",0x92U},{"setc",0x92U},{"setnae",0x92U},
+            {"setae",0x93U},{"setnc",0x93U},{"setnb",0x93U},
+            {"sete",0x94U},{"setz",0x94U},
+            {"setne",0x95U},{"setnz",0x95U},
+            {"setbe",0x96U},{"setna",0x96U},
+            {"seta",0x97U},{"setnbe",0x97U},
+            {"sets",0x98U},{"setns",0x99U},
+            {"setp",0x9aU},{"setpe",0x9aU},
+            {"setnp",0x9bU},{"setpo",0x9bU},
+            {"setl",0x9cU},{"setnge",0x9cU},
+            {"setge",0x9dU},{"setnl",0x9dU},
+            {"setle",0x9eU},{"setng",0x9eU},
+            {"setg",0x9fU},{"setnle",0x9fU}
+        };
+        for(i=0U;i<sizeof(setcc)/sizeof(setcc[0]);++i) {
+            if(strcmp(s->op,setcc[i].op)==0 && x64_register8(s->args,&rd)) {
+                m->opcode=X64_SETCC;m->count=1U;
+                m->operands[0].kind=MINIAS_MC_REGISTER;
+                m->operands[0].reg=rd;m->encoding=setcc[i].second_byte;
+                goto done;
+            }
         }
     }
     for(i=0U;i<sizeof(binary)/sizeof(binary[0]);++i) {
@@ -429,6 +505,12 @@ static bool x64_measure(MiniAs *as,const MiniAsStmt *s,uint32_t *size) {
     switch(m->opcode) {
         case X64_ZERO: *size=(uint32_t)m->operands[0].immediate;return true;
         case X64_ENDBR64: *size=4U;return true;
+        case X64_SETCC:
+            *size=3U+(m->operands[0].reg>=4U?1U:0U);return true;
+        case X64_BINARY8:
+            *size=2U+(m->operands[0].reg>=4U||
+                       m->operands[1].reg>=4U?1U:0U);return true;
+        case X64_MOVSLQ: *size=3U;return true;
         case X64_BRANCH: *size=m->encoding>=0x100U?6U:5U;return true;
         case X64_IMM_MEMORY:
         case X64_REG_MEMORY: {
@@ -475,6 +557,25 @@ static bool x64_encode(MiniAs *as,const MiniAsStmt *s) {
             for(i=0U;i<4U;++i)code[n++]=(unsigned char)(m->encoding>>(8U*i));
             break;
         }
+        case X64_SETCC:
+            r=m->operands[0].reg;
+            if(r>=4U)code[n++]=(unsigned char)(0x40U|(r>>3U));
+            code[n++]=0x0fU;code[n++]=(unsigned char)m->encoding;
+            code[n++]=(unsigned char)(0xc0U|(r&7U));
+            break;
+        case X64_BINARY8:
+            r=m->operands[0].reg;d=m->operands[1].reg;
+            if(r>=4U||d>=4U)
+                code[n++]=(unsigned char)(0x40U|((r>>3U)<<2U)|(d>>3U));
+            code[n++]=(unsigned char)m->encoding;
+            code[n++]=(unsigned char)(0xc0U|((r&7U)<<3U)|(d&7U));
+            break;
+        case X64_MOVSLQ:
+            r=m->operands[0].reg;d=m->operands[1].reg;
+            code[n++]=(unsigned char)(0x48U|((d>>3U)<<2U)|(r>>3U));
+            code[n++]=0x63U;
+            code[n++]=(unsigned char)(0xc0U|((d&7U)<<3U)|(r&7U));
+            break;
         case X64_BRANCH: {
             const MiniAsSymbolExpr *expr=m->operands[0].symbol;
             MiniAsSymbol *sym=minias_get_symbol(as,expr->name,false);
