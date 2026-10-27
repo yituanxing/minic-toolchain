@@ -32,8 +32,6 @@ int reentry(int early) {
     }
     return result;
 }
-/* Function-level named goto INTO a pre-case prefix can reach case 1,
- * despite an unrelated constant switch selector dispatching to case 8. */
 int reentry_prefix(int early) {
     int result = 0;
     if (early) goto PREFIX;
