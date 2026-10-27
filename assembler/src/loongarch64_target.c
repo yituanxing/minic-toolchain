@@ -53,11 +53,27 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
         {"add.w",UINT32_C(0x00100000)},{"sub.w",UINT32_C(0x00110000)},
         {"and",UINT32_C(0x00148000)},{"or",UINT32_C(0x00150000)},
         {"xor",UINT32_C(0x00158000)},{"slt",UINT32_C(0x00120000)},
-        {"sltu",UINT32_C(0x00128000)}
+        {"sltu",UINT32_C(0x00128000)},
+        {"maskeqz",UINT32_C(0x00130000)},
+        {"masknez",UINT32_C(0x00138000)},
+        {"nor",UINT32_C(0x00140000)},
+        {"orn",UINT32_C(0x00160000)},
+        {"andn",UINT32_C(0x00168000)},
+        {"sll.w",UINT32_C(0x00170000)},
+        {"srl.w",UINT32_C(0x00178000)},
+        {"sra.w",UINT32_C(0x00180000)},
+        {"sll.d",UINT32_C(0x00188000)},
+        {"srl.d",UINT32_C(0x00190000)},
+        {"sra.d",UINT32_C(0x00198000)},
+        {"mul.w",UINT32_C(0x001c0000)},
+        {"mul.d",UINT32_C(0x001d8000)}
     };
     static const struct {const char *name;uint32_t code;} imm12[]={
         {"addi.d",UINT32_C(0x02c00000)},
         {"addi.w",UINT32_C(0x02800000)},
+        {"slti",UINT32_C(0x02000000)},
+        {"sltui",UINT32_C(0x02400000)},
+        {"lu52i.d",UINT32_C(0x03000000)},
         {"ld.d",UINT32_C(0x28c00000)},
         {"st.d",UINT32_C(0x29c00000)},
         {"ld.w",UINT32_C(0x28800000)},
@@ -78,6 +94,31 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
         {"ldptr.d",UINT32_C(0x26000000)},
         {"stptr.d",UINT32_C(0x27000000)}
     };
+    static const struct {const char *name;uint32_t code;} unsigned12[]={
+        {"andi",UINT32_C(0x03400000)},
+        {"ori",UINT32_C(0x03800000)},
+        {"xori",UINT32_C(0x03c00000)}
+    };
+    static const struct {
+        const char *name;uint32_t code;unsigned bits;
+    } shifts[]={
+        {"slli.w",UINT32_C(0x00408000),5U},
+        {"slli.d",UINT32_C(0x00410000),6U},
+        {"srli.w",UINT32_C(0x00448000),5U},
+        {"srli.d",UINT32_C(0x00450000),6U},
+        {"srai.w",UINT32_C(0x00488000),5U},
+        {"srai.d",UINT32_C(0x00490000),6U},
+        {"rotri.w",UINT32_C(0x004c8000),5U},
+        {"rotri.d",UINT32_C(0x004d0000),6U}
+    };
+    static const struct {const char *name;uint32_t code;} upper20[]={
+        {"lu12i.w",UINT32_C(0x14000000)},
+        {"lu32i.d",UINT32_C(0x16000000)},
+        {"pcaddi",UINT32_C(0x18000000)},
+        {"pcalau12i",UINT32_C(0x1a000000)},
+        {"pcaddu12i",UINT32_C(0x1c000000)},
+        {"pcaddu18i",UINT32_C(0x1e000000)}
+    };
     MiniAsMCInst *m=calloc(1U,sizeof(*m)+3U*sizeof(MiniAsMCOperand));
     char t[3][48],*end;unsigned n,i,rd,rj,rk;
     long val;
@@ -93,6 +134,24 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
         m->operands[0].kind=MINIAS_MC_REGISTER;
         m->operands[0].reg=rj;
         m->encoding=UINT32_C(0x4c000000)|(rj<<5U);goto done;
+    }
+    if (n==2U && la_reg(t[0],&rd)) {
+        long upper;
+        errno=0;upper=strtol(t[1],&end,0);
+        if (!errno && end!=t[1] && !*end &&
+            upper>=-524288L && upper<=524287L) {
+            for(i=0U;i<sizeof(upper20)/sizeof(upper20[0]);++i)
+                if(!strcmp(s->op,upper20[i].name)) {
+                    m->count=2U;
+                    m->operands[0].kind=MINIAS_MC_REGISTER;
+                    m->operands[0].reg=rd;
+                    m->operands[1].kind=MINIAS_MC_IMMEDIATE;
+                    m->operands[1].immediate=(uint64_t)(int64_t)upper;
+                    m->encoding=upper20[i].code |
+                        ((((uint32_t)upper)&UINT32_C(0xfffff))<<5U) | rd;
+                    goto done;
+                }
+        }
     }
     if(!strcmp(s->op,"move") && n==2U &&
         la_reg(t[0],&rd) && la_reg(t[1],&rj)) {
@@ -115,6 +174,25 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
                         m->count=3U;m->encoding=imm12[i].code |
                             (((uint32_t)val & UINT32_C(0xfff))<<10U) |
                             (rj<<5U)|rd;goto done;
+                    }
+            }
+            if (val>=0 && val<=4095L) {
+                for(i=0U;i<sizeof(unsigned12)/sizeof(unsigned12[0]);++i)
+                    if(!strcmp(s->op,unsigned12[i].name)) {
+                        m->count=3U;
+                        m->encoding=unsigned12[i].code |
+                            ((uint32_t)val<<10U) | (rj<<5U) | rd;
+                        goto done;
+                    }
+            }
+            if (val>=0 && val<=63L) {
+                for(i=0U;i<sizeof(shifts)/sizeof(shifts[0]);++i)
+                    if(!strcmp(s->op,shifts[i].name) &&
+                        (unsigned long)val < (1UL<<shifts[i].bits)) {
+                        m->count=3U;
+                        m->encoding=shifts[i].code |
+                            ((uint32_t)val<<10U) | (rj<<5U) | rd;
+                        goto done;
                     }
             }
             if (val>=-32768L && val<=32764L && val%4L==0L) {

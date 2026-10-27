@@ -288,3 +288,19 @@ CMP/TEST/ALU, including high register/scale boundaries and invalid index,
 scale and overflow cases. Trigger the 2x7 affected-ISA Linux census only
 when a grouped target batch adds `[minias-replay-2x7]` to its commit
 message, or on manual dispatch. No recompiled GCC objects.
+
+## LoongArch64 GNU-defined integer opcode families
+
+Genuine original LoongArch Linux first blockers now show `pcalau12i`
+830 owners, `andi` 100, `slli.w` 86, `lu12i.w` 131, plus
+`masknez` and other base integer forms. Target-owned instruction tables
+now describe signed-12, unsigned-12, signed-20 upper immediates,
+5-/6-bit shift amounts, common integer register shifts and multiplication.
+Range validation is specific to each immediate field, not shared generic
+integer overflow logic. `pcalau12i` numeric immediates are encoded as
+the GNU 20-bit form, but **symbolic %pc_hi20 relocations remain unsupported
+and MUST be added as a target-specific fixup** before real Linux acceptance.
+
+The GNU LoongArch assembler byte matrix includes signed minima/maxima,
+all new immediate families and invalid shift/unsigned/range cases.
+ELF, Common IR, CFI and other target encoders remain unchanged.

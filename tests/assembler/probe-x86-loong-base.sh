@@ -85,6 +85,28 @@ entry_la:
     st.h $a2, $sp, 14
     ld.hu $a3, $sp, 14
     ld.wu $a4, $sp, 8
+    slti $a0, $a1, -2048
+    sltui $a1, $a0, 2047
+    andi $a0, $a1, 4095
+    ori $a0, $a1, 1024
+    xori $a0, $a1, 255
+    slli.w $a0, $a1, 31
+    slli.d $a1, $a0, 63
+    srli.w $a0, $a1, 17
+    srli.d $a1, $a0, 42
+    srai.w $a0, $a1, 31
+    srai.d $a0, $a1, 63
+    rotri.w $a0, $a1, 13
+    rotri.d $a0, $a1, 35
+    lu12i.w $a0, -524288
+    lu32i.d $a0, 524287
+    pcalau12i $a1, 1
+    pcaddu12i $a1, -2
+    maskeqz $a0, $a1, $a2
+    masknez $a0, $a1, $a2
+    sll.d $a0, $a1, $a2
+    sra.w $a1, $a0, $a2
+    mul.d $a0, $a1, $a2
     sub.d $a0, $a0, $a1
     and $a0, $a0, $a1
     or $a0, $a0, $a1
@@ -119,7 +141,13 @@ for bad in 'movq %rax, (%eax)' \
 done
 for bad in 'ldptr.d $a0, $sp, 3' \
            'stptr.w $a0, $sp, 32768' \
-           'ldptr.d $a1, $sp, -32772'; do
+           'ldptr.d $a1, $sp, -32772' \
+           'andi $a0, $a1, -1' \
+           'ori $a0, $a1, 4096' \
+           'slli.w $a0, $a1, 32' \
+           'srli.d $a0, $a1, 64' \
+           'lu12i.w $a0, 524288' \
+           'pcalau12i $a0, -524289'; do
     printf '.text\n%s\n' "$bad" >"$work/invalid-la-ptr.s"
     if "$MINIAS" --target=loongarch64 -o "$work/bad-ptr.o" \
          "$work/invalid-la-ptr.s" >/dev/null 2>"$work/invalid.err"; then
@@ -144,4 +172,4 @@ if "$MINIAS" --target=loongarch64 -o "$work/invalid.o" "$work/unimplemented.s" \
     echo 'Unimplemented branch/fixup silently accepted' >&2
     exit 1
 fi
-echo 'MINIAS_TWO_TARGET_ORACLE=PASS x86_GNU_bytes=equal loong_GNU_bytes=equal ELF_machine=correct lp64d_v1=0x43 CET_endbr64=1 ALU_imm8_imm32=1 x86_ModRM_SIB_disp=1 x86_test_cmp_alu_memory=1 x86_scaled_index_SIB=1 LA_jr=1 LA_scaled_ptr14=1 invalid=reject'
+echo 'MINIAS_TWO_TARGET_ORACLE=PASS x86_GNU_bytes=equal loong_GNU_bytes=equal ELF_machine=correct lp64d_v1=0x43 CET_endbr64=1 ALU_imm8_imm32=1 x86_ModRM_SIB_disp=1 x86_test_cmp_alu_memory=1 x86_scaled_index_SIB=1 LA_jr=1 LA_scaled_ptr14=1 LA_imm12_shift_upper20=1 invalid=reject'
