@@ -8,7 +8,7 @@
 
 /* A first, fail-closed GNU AT&T SysV x86-64 target. All common expression,
  * symbol, section, fragment, and ELF handling lives outside this file. */
-enum { X64_ZERO = 1, X64_REG_BINARY, X64_STACK, X64_MOV_IMM32, X64_ENDBR64, X64_ALU_IMM, X64_REG_MEMORY, X64_BRANCH, X64_IMM_MEMORY, X64_MOVQ_IMMREG, X64_SETCC, X64_BINARY8, X64_MOVSLQ };
+enum { X64_ZERO = 1, X64_REG_BINARY, X64_STACK, X64_MOV_IMM32, X64_ENDBR64, X64_ALU_IMM, X64_REG_MEMORY, X64_BRANCH, X64_IMM_MEMORY, X64_MOVQ_IMMREG, X64_MOVABS_IMMREG, X64_SETCC, X64_BINARY8, X64_MOVSLQ };
 
 static bool x64_register(const char *text, unsigned *reg, bool *wide) {
     static const char *const names64[16] = {
@@ -366,6 +366,35 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
             goto done;
         }
     }
+    /* GNU encodes MOVABS (and MOVQ imm64 outside signed32 range) through
+     * REX.W B8+r imm64. Keep ABS64 symbol relocation distinct from the
+     * GNU sign-extending C7 /0 imm32 form. */
+    if(x64_args2(s->args,src,dst) && src[0]=='$' &&
+       (!strcmp(s->op,"movabsq") || !strcmp(s->op,"movq")) &&
+       x64_register(dst,&rd,&wd) && wd) {
+        uint64_t bits;
+        MiniAsSymbolExpr expr;
+        bool numeric=minias_eval_u64_expression(src+1,&bits);
+        bool symbolic=!numeric && !strcmp(s->op,"movabsq") &&
+            minias_parse_symbol_addend(src+1,&expr);
+        if((numeric && (!strcmp(s->op,"movabsq") ||
+           (int64_t)bits<INT32_MIN || (int64_t)bits>INT32_MAX)) ||
+           symbolic) {
+            m->opcode=X64_MOVABS_IMMREG;m->count=2U;
+            m->operands[0].kind=MINIAS_MC_REGISTER;
+            m->operands[0].reg=rd;m->operands[0].register_64=true;
+            m->operands[1].kind=symbolic?MINIAS_MC_SYMBOL:MINIAS_MC_IMMEDIATE;
+            if(symbolic) {
+                m->operands[1].symbol=malloc(sizeof(expr));
+                if(!m->operands[1].symbol){
+                    minias_set_error(as,"out-of-memory:x86-movabs-symbol");
+                    free(m);return false;
+                }
+                *m->operands[1].symbol=expr;
+            }else m->operands[1].immediate=bits;
+            goto done;
+        }
+    }
     /* GNU Linux compiler source uses C7, 81, 83 and F7 immediates against
      * memory and registers. Keep the same typed memory/ModR/M engine. */
     if(x64_args2(s->args,src,dst) && src[0]=='$') {
@@ -543,6 +572,7 @@ static bool x64_measure(MiniAs *as,const MiniAsStmt *s,uint32_t *size) {
             return true;
         }
         case X64_MOVQ_IMMREG: *size=7U;return true;
+        case X64_MOVABS_IMMREG: *size=10U;return true;
         case X64_ALU_IMM: {
             int32_t imm=(int32_t)(uint32_t)m->operands[1].immediate;
             *size=(m->operands[0].register_64 || m->operands[0].reg>=8U?1U:0U) +
@@ -716,6 +746,21 @@ static bool x64_encode(MiniAs *as,const MiniAsStmt *s) {
                 code[n++]=(unsigned char)(immediate>>(8U*i));
             break;
         }
+        case X64_MOVABS_IMMREG: {
+            const MiniAsMCOperand *value=&m->operands[1];
+            unsigned i;
+            r=m->operands[0].reg;
+            code[n++]=(unsigned char)(0x48U|(r>>3U));
+            code[n++]=(unsigned char)(0xb8U|(r&7U));
+            for(i=0U;i<8U;++i)
+                code[n++]=(unsigned char)((value->kind==MINIAS_MC_SYMBOL?
+                    UINT64_C(0):value->immediate)>>(8U*i));
+            if(!minias_section_append(as,s->section,code,n))return false;
+            if(value->kind!=MINIAS_MC_SYMBOL)return true;
+            return minias_add_fixup(as,s->section,s->offset+2U,
+                MINIAS_FIXUP_X64_ABS64,8U,
+                value->symbol->name,value->symbol->addend);
+        }
         case X64_MOVQ_IMMREG: {
             const MiniAsMCOperand *src=&m->operands[1];
             unsigned i;
@@ -790,6 +835,8 @@ static bool x64_profile(const char *march,const char *mabi,
 
 static bool x64_validate(MiniAs *as) {(void)as;return true;}
 static uint32_t x64_reloc(MiniAsFixupKind kind,unsigned width) {
+    if(kind==MINIAS_FIXUP_X64_ABS64)
+        return width==8U?1U:0U; /* R_X86_64_64 */
     if(width!=4U)return 0U;
     if(kind==MINIAS_FIXUP_X64_PC32)return 2U;  /* R_X86_64_PC32 */
     if(kind==MINIAS_FIXUP_X64_PLT32)return 4U; /* R_X86_64_PLT32 */

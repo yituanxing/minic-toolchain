@@ -93,6 +93,9 @@ unresolved_x86:
     xorq $255, (%rax)
     testq $2, 8(%rdi)
     movq $ext_global, %rsi
+    movq $4294967296, %rax
+    movabsq $0x1122334455667788, %r8
+    movabsq $ext_global, %r9
     setne %al
     sete %sil
     setg %r9b
@@ -136,6 +139,8 @@ grep -q R_X86_64_PLT32 "$work/x86-gnu-rel.txt"
 grep -q R_X86_64_PC32 "$work/x86-gnu-rel.txt"
 grep -q R_X86_64_32S "$work/x86-rel.txt"
 grep -q R_X86_64_32S "$work/x86-gnu-rel.txt"
+grep -q R_X86_64_64 "$work/x86-rel.txt"
+grep -q R_X86_64_64 "$work/x86-gnu-rel.txt"
 # GNU and MiniAS must agree on every relocation type, offset, addend.
 # GNU GAS and MiniELF may serialize RELA entries in different orders.
 # Compare exact relocation offset, type, symbol, and addend after sorting.
@@ -275,7 +280,8 @@ for bad in 'movq %rax, (%eax)' \
            'leaq %rax, (%rsp)' \
            'setne %ah' \
            'movslq %rdi, %r8' \
-           'testb %ah, %r8b'; do
+           'testb %ah, %r8b' \
+           'movabsq $ext_global, (%rax)'; do
     printf '.text\n%s\n' "$bad" >"$work/invalid-mem.s"
     if "$MINIAS" --target=x86_64 -o "$work/bad-mem.o" \
          "$work/invalid-mem.s" >/dev/null 2>"$work/invalid.err"; then
