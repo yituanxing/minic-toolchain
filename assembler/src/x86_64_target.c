@@ -1116,7 +1116,8 @@ static bool x64_encode(MiniAs *as,const MiniAsStmt *s) {
                     ((r>>3U)<<2U) |
                     ((mem->has_index?mem->index>>3U:0U)<<1U) |
                     (mem->base>>3U));
-            if(m->encoding>=0x100U)code[n++]=0x0fU;
+            /* Width markers 0x200/0x400 do not imply the 0F escape. */
+            if(m->encoding&0x100U)code[n++]=0x0fU;
             code[n++]=(unsigned char)m->encoding;
             code[n++]=(unsigned char)((((mem->pc_relative || mem->address_space)?0U:mod)<<6U)|
                 ((r&7U)<<3U)|
