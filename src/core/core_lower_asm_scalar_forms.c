@@ -1382,7 +1382,7 @@ MinicCoreLowerStatus core_asm_try_empty_barrier_scalar_forms(
      * target instruction executes, a nonvolatile scalar local is unchanged;
      * only ordinary local C lvalues without physical hardreg bindings can
      * use this target-neutral no-op. Reuse the established +rm rule. */
-    if (!source->is_volatile && !source->is_goto && source->template_text != NULL &&
+    if (!source->is_goto && source->template_text != NULL &&
         source->template_length == 0U && source->outputs != NULL && source->output_count == 1U &&
         source->input_count == 0U && source->label_count == 0U && source->clobber_count == 0U &&
         source->register_clobber_count == 0U && !source->has_memory_clobber) {
@@ -1412,6 +1412,26 @@ MinicCoreLowerStatus core_asm_try_empty_barrier_scalar_forms(
             if (!local->is_array && !local->is_register_storage &&
                 minic_type_equal(local->type, output_expression->type) &&
                 !minic_type_is_const(local->type) && !minic_type_is_volatile(local->type)) {
+                /* A nonvolatile empty read/write has no physical machine
+                 * mutation, but GNU volatile requires a sequencing effect.
+                 * Preserve that explicitly; do not silently discard it or
+                 * invent a register write in the ABI-specific emitter. */
+                if (source->is_volatile) {
+                    if (!minic_core_function_add_opaque_inline_asm(
+                            context->function, source->template_text, 0U,
+                            true, false, &inline_asm_id)) {
+                        { *handled = true; return MINIC_CORE_LOWER_ERROR; }
+                    }
+                    (void)memset(&instruction, 0, sizeof(instruction));
+                    instruction.kind = MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM;
+                    instruction.span = statement->span;
+                    instruction.type = minic_type_void();
+                    instruction.result = MINIC_CORE_VALUE_INVALID;
+                    instruction.value.inline_asm_id = inline_asm_id;
+                    { *handled = true; return minic_core_function_append_effect_instruction(
+                        context->function, context->block_id, &instruction)
+                        ? MINIC_CORE_LOWER_OK : MINIC_CORE_LOWER_ERROR; }
+                }
                 { *handled = true; return MINIC_CORE_LOWER_OK; }
             }
         }
