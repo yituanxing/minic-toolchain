@@ -19,7 +19,37 @@ concurrency:
   group: three-linux-i-${{ github.ref }}
   cancel-in-progress: true
 jobs:
+  # The PR contains this workflow, so GitHub's PR-wide path filter matches
+  # EVERY subsequent compiler-source commit. A tiny exact-HEAD gate restores
+  # the intended opt-in boundary: ordinary L1/L2 fixes do not rebuild three
+  # full GNU kernels or spawn 21 shards. Bump the campaign trigger only at a
+  # cumulative acceptance boundary, or use workflow_dispatch explicitly.
+  campaign-gate:
+    runs-on: ubuntu-24.04
+    outputs:
+      run: ${{ steps.decide.outputs.run }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 2
+      - name: Gate expensive GNU Linux source census on exact commit intent
+        id: decide
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          active=false
+          if [[ "${{ github.event_name }}" == workflow_dispatch ]]; then
+            active=true
+          elif git rev-parse --verify HEAD^ >/dev/null 2>&1 &&
+               ! git diff --quiet HEAD^ HEAD -- tools/ci/linux-three-isa-trigger.txt; then
+            active=true
+          fi
+          echo "run=$active" >> "$GITHUB_OUTPUT"
+          echo "THREE_ISA_CENSUS_GATE=$active head=$(git rev-parse HEAD)"
   self-test:
+    needs: campaign-gate
+    if: needs.campaign-gate.outputs.run == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
