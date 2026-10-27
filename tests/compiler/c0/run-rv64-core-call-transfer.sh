@@ -120,9 +120,12 @@ _start:
     li a7, 93
     ecall
 ASM
-"$RISCV_CC" -fno-pie -fno-pic -O0 -c "$w/provider.c" -o "$w/provider.o"
+"$RISCV_CC" -fno-pie -fno-pic -O0 -fno-stack-protector -c "$w/provider.c" -o "$w/provider.o"
 "$RISCV_CC" -fno-pie -fno-pic -c "$w/start.s" -o "$w/start.o"
-"$RISCV_CC" -fno-pie -fno-pic -O0 -c "$w/client.c" -o "$w/gnu-client.o"
+"$RISCV_CC" -fno-pie -fno-pic -O0 -fno-stack-protector -c "$w/client.c" -o "$w/gnu-client.o"
+# The frozen static _start/ld fixture has no libc or libssp. Ubuntu's cross
+# compiler may default to stack-protector-strong (especially with byte arrays),
+# so explicitly omit that independent GNU runtime dependency for both clients.
 # MiniC -S consumes preprocessed C; feed both compilers the same semantics.
 "$RISCV_CC" -E -P -x c "$w/client.c" -o "$w/client.i"
 "$MINIC" -S "$w/client.i" -o "$w/mini-client.s"
