@@ -1,6 +1,10 @@
 name: MiniAS Immutable Linux 3x7 GNU Kbuild S Replay
 
 # Frozen original Linux 6.6.143 inputs. Discovery, NOT P1/parity.
+# Oct 27 batch acceptance: Common .fill, LoongArch timer/prefetch/branch
+# aliases, AArch64 BRK/SUBS/ADDS/MOVN and x86 prefixes/indirect transfers.
+# Record all 21 frozen GNU .s shards on this exact commit; a discovery
+# SUCCESS is NOT an ELF parity or Linux P1 SUCCESS.
 # Full cross-target frozen input replay after Common symbol-local delta and GNU alignment batch; only original corpus is reused.
 # Grouped final scan after Common data/fixup/align + AArch CSET/CMN + x86 FS/GS RIP.
 # Exact-head opt-in after Common GNU fill/maxskip, arithmetic .skip, and AArch64 MRS/CMN batches.
