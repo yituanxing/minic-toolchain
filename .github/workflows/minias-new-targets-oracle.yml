@@ -1,0 +1,35 @@
+name: MiniAS x86-64 and LoongArch64 Integer GNU Oracle
+
+on:
+  pull_request:
+    paths:
+      - 'assembler/src/x86_64_target.c'
+      - 'assembler/src/loongarch64_target.c'
+      - 'assembler/src/target_registry.c'
+      - 'assembler/src/minias_internal.h'
+      - 'tests/assembler/probe-x86-loong-base.sh'
+      - '.github/workflows/minias-new-targets-oracle.yml'
+      - 'Makefile'
+  workflow_dispatch:
+permissions:
+  contents: read
+
+jobs:
+  integer-gnu-differential:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install real LoongArch GNU assembler
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends binutils-loongarch64-linux-gnu
+      - name: Build exact-head MiniAS and all four target backends
+        run: make -j2 MODE=release CFLAGS=-Werror build/release/bin/minic-as
+      - name: GNU AS byte equality, ELF ABI, and ISA error gates
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+          LOONGAS=loongarch64-linux-gnu-as \
+          LOONGCOPY=loongarch64-linux-gnu-objcopy \
+          LOONGREADELF=loongarch64-linux-gnu-readelf \
+            bash tests/assembler/probe-x86-loong-base.sh
