@@ -128,6 +128,19 @@ external_probe:
     udiv x3, x4, x5
     sdiv w6, w7, w8
     sdiv x9, x10, x11
+    // One typed UBFM/SBFM/BFM field model, tested W/X + GNU alias semantics.
+    ubfx w0, w1, #2, #8
+    ubfx x2, x3, #23, #32
+    ubfiz w4, w5, #4, #12
+    ubfiz x6, x7, #48, #16
+    sbfx w8, w9, #10, #5
+    sbfx x10, x11, #1, #60
+    sbfiz w12, w13, #0, #32
+    sbfiz x14, x15, #32, #32
+    bfi w16, w17, #8, #12
+    bfi x18, x19, #32, #16
+    bfxil w20, w21, #3, #9
+    bfxil x22, x23, #20, #40
     ccmp x0, xzr, #15, eq
     ccmp x1, #0, #4, ne
     ccmp w2, w3, #7, eq
@@ -443,6 +456,14 @@ for bad_source in 'ldxr x0, [x1,#4]' 'stxr x0, x1, [x2]' \
                   'udiv x0, w1, x2' \
                   'sdiv w0, x1, w2' \
                   'udiv sp, x1, x2' \
+                  'ubfx w0, w1, #32, #1' \
+                  'ubfx w0, w1, #31, #2' \
+                  'ubfx x0, x1, #0, #0' \
+                  'ubfiz x0, x1, #48, #17' \
+                  'sbfx x0, w1, #1, #2' \
+                  'bfi w0, sp, #1, #2' \
+                  'bfxil x0, x1, #1, #64' \
+                  'sbfiz x0, x1, #-1, #8' \
                   'yield #1' \
                   'hint #.Lnever_defined' \
                   '.equ .Lbad_hint,128; hint #.Lbad_hint' \

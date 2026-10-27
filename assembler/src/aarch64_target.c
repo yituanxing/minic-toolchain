@@ -212,6 +212,7 @@ enum {
     A64_MC_STP,
     A64_MC_LDP,
     A64_MC_BITMASK_IMM,
+    A64_MC_BITFIELD,
     A64_MC_TST_REG,
     A64_MC_BIC_REG,
     A64_MC_EXTEND_W,
@@ -934,6 +935,48 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
         put_reg(&inst->operands[0],alu_rd,alu_wide);
         put_reg(&inst->operands[1],alu_rn,alu_wide);
         put_reg(&inst->operands[2],alu_rm,alu_mwide);
+    } else if(!strcmp(op,"ubfx") || !strcmp(op,"ubfiz") ||
+              !strcmp(op,"sbfx") || !strcmp(op,"sbfiz") ||
+              !strcmp(op,"bfi")  || !strcmp(op,"bfxil")) {
+        /* One ISA-owned UBFM/SBFM/BFM bitfield selector for GNU aliases:
+         * extracts use imms=lsb+width-1, insertions wrap immr modulo
+         * XLEN and use imms=width-1. No Common parser or ELF fork. */
+        char bit_tok[4][96];
+        unsigned bit_n,bit_rd,bit_rn,reg_bits;
+        bool bit_wide,bit_source_wide,bit_sp;
+        int64_t lsb,width;
+        bool insertion=!strcmp(op,"ubfiz") || !strcmp(op,"sbfiz") ||
+                       !strcmp(op,"bfi");
+        uint32_t base=!strcmp(op,"ubfx") || !strcmp(op,"ubfiz")?
+                      UINT32_C(0x53000000):
+                      !strcmp(op,"sbfx") || !strcmp(op,"sbfiz")?
+                      UINT32_C(0x13000000):UINT32_C(0x33000000);
+        if(!split_operands(args,bit_tok,&bit_n) || bit_n!=4U ||
+           !parse_a64_reg(bit_tok[0],&bit_rd,&bit_wide,&bit_sp) ||
+           bit_sp ||
+           !parse_a64_reg(bit_tok[1],&bit_rn,&bit_source_wide,&bit_sp) ||
+           bit_sp || bit_wide!=bit_source_wide ||
+           !parse_signed_number(bit_tok[2],&lsb) ||
+           !parse_signed_number(bit_tok[3],&width)) {
+            minias_set_error(as,"bad-aarch64-bitfield-operands:%s:line=%zu",
+                             args,stmt->line);
+            free(inst);return false;
+        }
+        reg_bits=bit_wide?64U:32U;
+        if(lsb<0 || lsb>=(int64_t)reg_bits ||
+           width<1 || width>(int64_t)reg_bits-lsb) {
+            minias_set_error(as,"bad-aarch64-bitfield-range:%s:line=%zu",
+                             args,stmt->line);
+            free(inst);return false;
+        }
+        inst->opcode=A64_MC_BITFIELD;inst->count=4U;
+        inst->encoding=base;
+        put_reg(&inst->operands[0],bit_rd,bit_wide);
+        put_reg(&inst->operands[1],bit_rn,bit_source_wide);
+        put_immediate(&inst->operands[2],
+                      insertion?((int64_t)reg_bits-lsb)%(int64_t)reg_bits:lsb);
+        put_immediate(&inst->operands[3],
+                      insertion?width-1:lsb+width-1);
     } else if(!strcmp(op,"lsl") || !strcmp(op,"lsr")) {
         char tok[4][96];
         unsigned n,rd,rn,rm;
@@ -1346,6 +1389,16 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
         return false;
     }
     switch (inst->opcode) {
+        case A64_MC_BITFIELD: {
+            unsigned bit_rd=inst->operands[0].reg;
+            unsigned bit_rn=inst->operands[1].reg;
+            uint32_t immr=(uint32_t)inst->operands[2].immediate;
+            uint32_t imms=(uint32_t)inst->operands[3].immediate;
+            code=inst->encoding|
+                 (inst->operands[0].register_64?UINT32_C(0x80400000):0U)|
+                 (immr<<16U)|(imms<<10U)|(bit_rn<<5U)|bit_rd;
+            break;
+        }
         case A64_MC_ARITH_ALIAS: {
             unsigned alu_rd=inst->operands[0].reg;
             unsigned alu_rn=inst->operands[1].reg;
