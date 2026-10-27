@@ -25,7 +25,8 @@ static const char *aarch64_linux_mrs_register(const char *text, size_t len) {
     static const struct { const char *text; const char *reg; } allowed[] = {
         {"mrs%0,sp_el0", "sp_el0"},
         {"mrs%0,tpidr_el1", "tpidr_el1"},
-        {"mrs%0,tpidr_el2", "tpidr_el2"}
+        {"mrs%0,tpidr_el2", "tpidr_el2"},
+        {"mrs%0,daif", "daif"}
     };
     if (text == NULL || len >= sizeof(normalized))
         return NULL;
@@ -147,6 +148,23 @@ static unsigned int aarch64_llsc_op(const char *text, size_t len) {
         if (strcmp(forms[i], compact) == 0) return (unsigned int)(i + 1U);
     return 0U;
 }
+/* Real AArch64 privileged DAIF interrupt-mask MRS/MSR pair from the
+ * exact Linux sysreg/irqflags.h macros. Do not execute under user QEMU.
+ * Only GNU GAS/objdump may inspect the encoded privileged instruction. */
+static bool aarch64_daif_msr_template(const char *text, size_t len) {
+    static const char expected[] = "msrdaif,%x0";
+    char compact[64]; size_t i, n = 0U;
+    if (!text || !len || len >= sizeof(compact)) return false;
+    for (i = 0U; i < len; ++i) {
+        const char c = text[i];
+        if (c == '\r' || c == '\n' || c == ';') return false;
+        if (c == ' ' || c == '\t') continue;
+        if (n + 1U >= sizeof(compact)) return false;
+        compact[n++] = c;
+    }
+    compact[n] = '\0';
+    return strcmp(compact, expected) == 0;
+}
 static bool constraint(const MinicInlineAsmOperand *op, const char *word) {
     size_t n = strlen(word);
     return op && op->constraint_text && op->constraint_length == n &&
@@ -239,6 +257,39 @@ bool minic_aarch64_qualify_inline_asm(
             return true;
         }
     }
+    if (program && src && contract && src->is_volatile && !src->is_goto &&
+        src->output_count == 0U && src->input_count == 1U && src->inputs &&
+        src->clobber_count == 0U && src->register_clobber_count == 0U &&
+        !src->has_memory_clobber && src->label_count == 0U &&
+        aarch64_daif_msr_template(src->template_text, src->template_length) &&
+        constraint(&src->inputs[0], "rZ")) {
+        expr = minic_c0_program_expression(program, src->inputs[0].expression);
+        if (expr && minic_type_unqualified(expr->type, &plain) &&
+            minic_type_equal(plain, minic_type_unsigned_long())) {
+            contract->operand_count = 1U;
+            contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+            return true;
+        }
+    }
+    if (program && src && contract && src->is_volatile &&
+        !src->is_goto && src->outputs && src->output_count == 1U &&
+        src->input_count == 0U && src->clobber_count == 0U &&
+        src->register_clobber_count == 0U && !src->has_memory_clobber &&
+        src->label_count == 0U &&
+        aarch64_linux_mrs_register(src->template_text, src->template_length) &&
+        strcmp(aarch64_linux_mrs_register(
+                   src->template_text, src->template_length), "daif") == 0 &&
+        constraint(&src->outputs[0], "=r")) {
+        expr = minic_c0_program_expression(program, src->outputs[0].expression);
+        if (expr && expr->value_category == MINIC_VALUE_LVALUE &&
+            !minic_type_is_const(expr->type) &&
+            minic_type_unqualified(expr->type, &plain) &&
+            minic_type_equal(plain, minic_type_unsigned_long())) {
+            contract->operand_count = 1U;
+            contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
+            return true;
+        }
+    }
     if (program && src && contract &&
         !src->is_goto && !src->is_volatile &&
         src->outputs && src->output_count == 1U &&
@@ -315,6 +366,22 @@ bool minic_aarch64_emit_qualified_structured_asm(
         const char *reg = aarch64_linux_mrs_register(
             info->template_text, info->template_length);
         MinicType pointee;
+        if (operand != NULL &&
+            operand[0].kind == MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT &&
+            aarch64_daif_msr_template(info->template_text, info->template_length)) {
+            if (!info->is_volatile || info->is_goto ||
+                info->has_memory_clobber || info->register_clobber_count ||
+                operand[0].operand_index != 0U ||
+                operand[0].has_fixed_register_binding || operand[0].early_clobber ||
+                operand[0].value >= fn->value_count ||
+                operand[0].value > 4095U / 8U ||
+                !minic_type_equal(fn->values[operand[0].value].type,
+                                  minic_type_unsigned_long()))
+                return false;
+            return fprintf(out, "  ldr x9, [sp, #%zu]\n"
+                                "  msr daif, x9\n",
+                           (size_t)operand[0].value * 8U) >= 0;
+        }
         if (operand != NULL &&
             operand[0].kind == MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT) {
             const MinicCoreInstruction *definition;
