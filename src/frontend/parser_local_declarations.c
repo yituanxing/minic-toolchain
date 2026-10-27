@@ -926,7 +926,7 @@ bool minic_parser_local_decl_auto_type(MinicParser *parser) {
 
 static bool parse_block_scope_function_declaration_after_head(
     MinicParser *parser, MinicType return_type, MinicSourceSpan name_span) {
-    MinicType parameter_types[16];
+    MinicType parameter_types[MINIC_MAX_FUNCTION_PARAMETERS];
     MinicFunctionId function_id;
     const MinicFunction *existing_function;
     size_t parameter_count;
@@ -1100,34 +1100,56 @@ bool minic_parser_local_decl_extern(MinicParser *parser) {
         return false;
     }
 
-    if (parser->current.kind != MINIC_TOKEN_LPAREN) {
-        for (;;) {
-            if (!declare_block_scope_extern_object_declarator(parser, return_type, name_span)) {
-                return false;
-            }
-            if (parser->current.kind != MINIC_TOKEN_COMMA) {
-                break;
-            }
-            if (!minic_parser_advance(parser) ||
-                !minic_parser_parse_direct_declarator_name(parser, &name_span)) {
-                if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
-                    minic_parser_error(parser,
-                                       "expected block-scope extern object declarator name");
-                }
-                return false;
-            }
+    if (minic_type_is_function(return_type)) {
+        /* A function typedef remains a function declaration at block scope,
+         * even without a parameter suffix:
+         *   typedef void (replace_t)(unsigned long);
+         *   extern replace_t idmap_cpu_replace_ttbr1;
+         * Reuse the exact existing function entity/signature path; it is
+         * never an extern *object* with function-typed storage. */
+        const MinicFunctionType *signature =
+            minic_c0_program_function_type(parser->program, return_type.function_type_id);
+        size_t index;
+        if (signature == NULL || signature->parameter_count > MINIC_MAX_FUNCTION_PARAMETERS ||
+            parser->current.kind != MINIC_TOKEN_SEMICOLON) {
+            minic_parser_error(parser, "invalid block-scope function-typed extern declarator");
+            return false;
         }
-        return minic_parser_expect(parser,
-                                   MINIC_TOKEN_SEMICOLON,
-                                   "expected ';' after block-scope extern object declaration");
-    }
-
-    if (!minic_parser_expect(parser, MINIC_TOKEN_LPAREN, "expected '('") ||
-        !minic_parser_parse_parameter_list(
-            parser, NULL, parameter_types, &parameter_count, false, &is_variadic) ||
-        !minic_parser_expect(parser, MINIC_TOKEN_RPAREN, "expected ')'") ||
-        !minic_parser_parse_gnu_function_attributes(parser)) {
-        return false;
+        parameter_count = signature->parameter_count;
+        is_variadic = signature->is_variadic;
+        for (index = 0U; index < parameter_count; ++index) {
+            parameter_types[index] = signature->parameter_types[index];
+        }
+        return_type = signature->return_type;
+    } else {
+        if (parser->current.kind != MINIC_TOKEN_LPAREN) {
+            for (;;) {
+                if (!declare_block_scope_extern_object_declarator(parser, return_type, name_span)) {
+                    return false;
+                }
+                if (parser->current.kind != MINIC_TOKEN_COMMA) {
+                    break;
+                }
+                if (!minic_parser_advance(parser) ||
+                    !minic_parser_parse_direct_declarator_name(parser, &name_span)) {
+                    if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
+                        minic_parser_error(parser,
+                                           "expected block-scope extern object declarator name");
+                    }
+                    return false;
+                }
+            }
+            return minic_parser_expect(parser,
+                                       MINIC_TOKEN_SEMICOLON,
+                                       "expected ';' after block-scope extern object declaration");
+        }
+        if (!minic_parser_expect(parser, MINIC_TOKEN_LPAREN, "expected '('") ||
+            !minic_parser_parse_parameter_list(
+                parser, NULL, parameter_types, &parameter_count, false, &is_variadic) ||
+            !minic_parser_expect(parser, MINIC_TOKEN_RPAREN, "expected ')'") ||
+            !minic_parser_parse_gnu_function_attributes(parser)) {
+            return false;
+        }
     }
     if (parser->current.kind != MINIC_TOKEN_SEMICOLON) {
         minic_parser_error(
