@@ -46,7 +46,7 @@ static const struct MinicLoongAtomicTemplate {
     {"amadd_db.d$zero,%1,%0", "amadd_db.d", 8U}
 };
 static const struct MinicLoongAtomicTemplate *loong_atomic_template(
-    const char *text, size_t length) {
+    const char *text, size_t length, bool fetch_old_value) {
     char compact[96];
     size_t i, used = 0U;
     if (text == NULL || length == 0U || length >= sizeof(compact))
@@ -59,9 +59,17 @@ static const struct MinicLoongAtomicTemplate *loong_atomic_template(
         compact[used++] = c;
     }
     compact[used] = '\0';
-    for (i = 0U; i < sizeof(loong_atomic) / sizeof(loong_atomic[0]); ++i)
-        if (strcmp(compact, loong_atomic[i].text) == 0)
+    for (i = 0U; i < sizeof(loong_atomic) / sizeof(loong_atomic[0]); ++i) {
+        char expected[64];
+        if (fetch_old_value) {
+            const int count = snprintf(expected, sizeof(expected),
+                                       "%s%%1,%%2,%%0", loong_atomic[i].instruction);
+            if (count <= 0 || (size_t)count >= sizeof(expected)) return NULL;
+            if (strcmp(compact, expected) == 0) return &loong_atomic[i];
+        } else if (strcmp(compact, loong_atomic[i].text) == 0) {
             return &loong_atomic[i];
+        }
+    }
     return NULL;
 }
 static bool loong_atomic_scalar_type(MinicType type, size_t width) {
@@ -88,7 +96,7 @@ static bool loong_atomic_qualified_source(
         src->label_count != 0U || src->register_clobber_count != 0U ||
         !src->has_memory_clobber || src->clobber_count != 1U)
         return false;
-    atom = loong_atomic_template(src->template_text, src->template_length);
+    atom = loong_atomic_template(src->template_text, src->template_length, false);
     if (atom == NULL || src->outputs[0].access != MINIC_INLINE_ASM_OPERAND_READ_WRITE ||
         src->inputs[0].access != MINIC_INLINE_ASM_OPERAND_READ_ONLY ||
         src->outputs[0].constraint_length != 3U ||
@@ -201,12 +209,58 @@ static bool loong_csr_qualified_source(
         MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     return true;
 }
+/* Linux arch_atomic{,64}_fetch_{and,or,xor,add}_relaxed:
+ * GNU +ZB memory RMW, =&r old-value output, r input. The SAME hardware
+ * AMO template table owns both store-only ($zero) and fetch old-value forms.
+ * Core already transports 3 typed roles, so no new Core instruction. */
+static bool loong_atomic_fetch_qualified_source(
+    const MinicC0Program *program, const MinicInlineAsm *src,
+    MinicTargetInlineAsmContract *contract) {
+    const struct MinicLoongAtomicTemplate *atom;
+    const MinicExpression *memory, *output, *arg;
+    if (!program || !src || !contract || !src->is_volatile || src->is_goto ||
+        !src->outputs || !src->inputs || src->output_count != 2U ||
+        src->input_count != 1U || src->label_count != 0U ||
+        src->clobber_count != 1U || src->register_clobber_count != 0U ||
+        !src->has_memory_clobber ||
+        src->outputs[0].access != MINIC_INLINE_ASM_OPERAND_READ_WRITE ||
+        src->outputs[1].access != MINIC_INLINE_ASM_OPERAND_WRITE_ONLY ||
+        src->inputs[0].access != MINIC_INLINE_ASM_OPERAND_READ_ONLY ||
+        !src->outputs[0].constraint_text ||
+        src->outputs[0].constraint_length != 3U ||
+        memcmp(src->outputs[0].constraint_text, "+ZB", 3U) != 0 ||
+        !src->outputs[1].constraint_text ||
+        src->outputs[1].constraint_length != 3U ||
+        memcmp(src->outputs[1].constraint_text, "=&r", 3U) != 0 ||
+        !src->inputs[0].constraint_text ||
+        src->inputs[0].constraint_length != 1U ||
+        src->inputs[0].constraint_text[0] != 'r') return false;
+    atom = loong_atomic_template(src->template_text, src->template_length, true);
+    if (!atom) return false;
+    memory = minic_c0_program_expression(program, src->outputs[0].expression);
+    output = minic_c0_program_expression(program, src->outputs[1].expression);
+    arg = minic_c0_program_expression(program, src->inputs[0].expression);
+    if (!memory || !output || !arg ||
+        memory->value_category != MINIC_VALUE_LVALUE ||
+        output->value_category != MINIC_VALUE_LVALUE ||
+        minic_type_is_const(memory->type) || minic_type_is_const(output->type) ||
+        !loong_atomic_scalar_type(memory->type, atom->width) ||
+        !loong_atomic_scalar_type(output->type, atom->width) ||
+        !loong_atomic_scalar_type(arg->type, atom->width)) return false;
+    contract->operand_count = 3U;
+    contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE;
+    contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
+    contract->kinds[2] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    return true;
+}
+
 bool minic_loongarch64_qualify_inline_asm(
     const MinicC0Program *program, const MinicInlineAsm *src,
     MinicTargetInlineAsmContract *contract) {
     const MinicInlineAsmOperand *op;
     const MinicExpression *expr;
     if (loong_atomic_qualified_source(program, src, contract) ||
+        loong_atomic_fetch_qualified_source(program, src, contract) ||
         loong_csr_qualified_source(program, src, contract))
         return true;
     if (program == NULL || src == NULL || contract == NULL ||
@@ -243,7 +297,7 @@ static bool minic_loongarch64_emit_amo(
         info->register_clobber_count != 0U ||
         !info->has_memory_clobber)
         return false;
-    atom = loong_atomic_template(info->template_text, info->template_length);
+    atom = loong_atomic_template(info->template_text, info->template_length, false);
     if (atom == NULL || b[0].operand_index != 0U ||
         b[1].operand_index != 1U ||
         b[0].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE ||
@@ -325,6 +379,53 @@ static bool minic_loongarch64_emit_csr(
     return fprintf(out, "  %s $t1, $t2, 0\n",
         width == 8U ? "st.d" : "st.w") >= 0;
 }
+/* Result register of LoongArch AMO is the OLD pre-update memory value.
+ * No CAS emulation, ordinary Core load/store, or guessed ISA permission. */
+static bool minic_loongarch64_emit_amo_fetch(
+    FILE *out, const MinicDirectLP64BlockContext *ctx,
+    const MinicCoreInstruction *ins, const MinicCoreInlineAsm *info) {
+    const struct MinicLoongAtomicTemplate *atom;
+    const MinicCoreFunction *fn = ctx->fn;
+    const MinicCoreStructuredInlineAsmOperand *b =
+        ins->value.structured_inline_asm.operands;
+    MinicType memory_type, output_type;
+    if (ins->value.structured_inline_asm.operand_count != 3U ||
+        !info->is_volatile || info->is_goto || !info->has_memory_clobber ||
+        info->register_clobber_count != 0U) return false;
+    atom = loong_atomic_template(info->template_text, info->template_length, true);
+    if (!atom) return false;
+    if (b[0].operand_index != 0U || b[1].operand_index != 1U ||
+        b[2].operand_index != 2U ||
+        b[0].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE ||
+        b[1].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT ||
+        b[2].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT ||
+        b[0].early_clobber || b[1].early_clobber || b[2].early_clobber ||
+        b[0].has_fixed_register_binding || b[1].has_fixed_register_binding ||
+        b[2].has_fixed_register_binding ||
+        b[0].value >= fn->value_count || b[1].value >= fn->value_count ||
+        b[2].value >= fn->value_count ||
+        !minic_type_pointee(fn->values[b[0].value].type, &memory_type) ||
+        !minic_type_pointee(fn->values[b[1].value].type, &output_type) ||
+        !loong_atomic_scalar_type(memory_type, atom->width) ||
+        !loong_atomic_scalar_type(output_type, atom->width) ||
+        !loong_atomic_scalar_type(fn->values[b[2].value].type, atom->width))
+        return false;
+    /* Target frame access uses $t3 scratch for large offsets. $t2 remains
+     * stable across later frame accesses and holds hardware AMO old-value. */
+    return minic_loongarch64_emit_frame_mem(
+               out, "ld.d", "$t1", (size_t)b[0].value * 8U,
+               ctx->dynamic_frame) &&
+           minic_loongarch64_emit_frame_mem(
+               out, atom->width == 8U ? "ld.d" : "ld.w", "$t0",
+               (size_t)b[2].value * 8U, ctx->dynamic_frame) &&
+           fprintf(out, "  %s $t2, $t0, $t1\n", atom->instruction) >= 0 &&
+           minic_loongarch64_emit_frame_mem(
+               out, "ld.d", "$t1", (size_t)b[1].value * 8U,
+               ctx->dynamic_frame) &&
+           fprintf(out, "  %s $t2, $t1, 0\n",
+                   atom->width == 8U ? "st.d" : "st.w") >= 0;
+}
+
 bool minic_loongarch64_emit_qualified_structured_asm(
     FILE *out, const MinicDirectLP64BlockContext *ctx,
     const MinicCoreInstruction *ins) {
@@ -338,6 +439,8 @@ bool minic_loongarch64_emit_qualified_structured_asm(
     info = &ctx->fn->inline_asms[ins->value.structured_inline_asm.inline_asm_id];
     if (loong_csr_template(info->template_text, info->template_length))
         return minic_loongarch64_emit_csr(out, ctx, ins, info);
+    if (ins->value.structured_inline_asm.operand_count == 3U)
+        return minic_loongarch64_emit_amo_fetch(out, ctx, ins, info);
     if (ins->value.structured_inline_asm.operand_count == 2U)
         return minic_loongarch64_emit_amo(out, ctx, ins, info);
     return minic_loongarch64_emit_dbar(out, ctx, ins);
