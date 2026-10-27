@@ -404,6 +404,20 @@ jobs:
             "${{ matrix.target }}" \
             "$GITHUB_WORKSPACE/build/runtime-verdict/reference/${{ matrix.target }}/libminic-rt.a" \
             "$GITHUB_WORKSPACE/build/runtime-verdict/minic/${{ matrix.target }}/libminic-rt.a"
+      - name: GNU source file-scope ASM through real target assembler
+        if: matrix.target == 'x86_64' || matrix.target == 'aarch64' || matrix.target == 'loongarch64'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          case "${{ matrix.target }}" in
+            x86_64) target_cc=gcc ;;
+            aarch64) target_cc=aarch64-linux-gnu-gcc ;;
+            loongarch64) target_cc=loongarch64-linux-gnu-gcc-13 ;;
+          esac
+          MINIC_CC="$GITHUB_WORKSPACE/build/runtime-ci/bin/minic-cc" \
+            bash tests/compiler/c0/probe-gnu-file-asm-multitarget.sh \
+              "${{ matrix.target }}" "$target_cc"
+
       - name: Save both target and reference reports, object diagnostics and .s
         if: always()
         uses: actions/upload-artifact@v4
