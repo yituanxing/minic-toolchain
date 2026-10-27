@@ -8,7 +8,7 @@
 
 /* A first, fail-closed GNU AT&T SysV x86-64 target. All common expression,
  * symbol, section, fragment, and ELF handling lives outside this file. */
-enum { X64_ZERO = 1, X64_REG_BINARY, X64_STACK, X64_MOV_IMM32, X64_ENDBR64, X64_ALU_IMM, X64_REG_MEMORY, X64_BRANCH, X64_IMM_MEMORY, X64_MOVQ_IMMREG, X64_MOVABS_IMMREG, X64_SETCC, X64_BINARY8, X64_MOVSLQ, X64_MOVZX_REG, X64_SHIFT_IMM, X64_TEST8_IMM, X64_PUSH_IMM, X64_CMOV_REG, X64_SHIFT_CL, X64_UNARY, X64_INDIRECT_REG, X64_BSWAP, X64_TEST_IMM_REG, X64_IMUL_IMM };
+enum { X64_ZERO = 1, X64_REG_BINARY, X64_STACK, X64_MOV_IMM32, X64_ENDBR64, X64_ALU_IMM, X64_REG_MEMORY, X64_BRANCH, X64_IMM_MEMORY, X64_MOVQ_IMMREG, X64_MOVABS_IMMREG, X64_SETCC, X64_BINARY8, X64_MOVSLQ, X64_MOVZX_REG, X64_SHIFT_IMM, X64_TEST8_IMM, X64_PUSH_IMM, X64_CMOV_REG, X64_SHIFT_CL, X64_UNARY, X64_INDIRECT_REG, X64_BSWAP, X64_TEST_IMM_REG, X64_IMUL_IMM, X64_BIT_IMMREG };
 
 static bool x64_register(const char *text, unsigned *reg, bool *wide) {
     static const char *const names64[16] = {
@@ -347,6 +347,7 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
         {"btcq",0xbb,0,true},{"btcl",0xbb,0,false},
         {"xaddq",0xc1,0,true},{"xaddl",0xc1,0,false},
         {"cmpxchgq",0xb1,0,true},{"cmpxchgl",0xb1,0,false},
+        {"popcntq",0,0x1b8U,true},{"popcntl",0,0x1b8U,false},
         {"imulq",0,0x1afU,true},{"imull",0,0x1afU,false},
         /* Existing typed memory ModR/M encoder owns REX/SIB/PC32 for
          * 0F B6/B7 zero-extension and 63 sign-extension. */
@@ -756,6 +757,20 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
             m->operands[1].reg=second;
             goto done;
         }
+        /* F3 0F B8 /r with existing reversed ModR/M register encoding. */
+        if((!strcmp(s->op,"popcntl") || !strcmp(s->op,"popcntq")) &&
+           x64_register(src,&first,&ws) &&
+           x64_register(dst,&second,&wd) && ws==wd &&
+           wd==(!strcmp(s->op,"popcntq"))) {
+            m->opcode=X64_REG_BINARY;m->count=2U;
+            m->encoding=UINT32_C(0x2000)|UINT32_C(0x900)|UINT32_C(0xb8);
+            m->operands[0].kind=MINIAS_MC_REGISTER;
+            m->operands[0].reg=first;
+            m->operands[0].register_64=wd;
+            m->operands[1].kind=MINIAS_MC_REGISTER;
+            m->operands[1].reg=second;
+            goto done;
+        }
         if(x64_register8(src,&first) && x64_register8(dst,&second)) {
             for(i=0U;i<sizeof(byteop)/sizeof(byteop[0]);++i)
                 if(strcmp(s->op,byteop[i].op)==0) {
@@ -958,6 +973,52 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
                 *m->operands[1].symbol=expr;
             }else m->operands[1].immediate=bits;
             goto done;
+        }
+    }
+    /* 0F BA /4../7 ib; reuse typed ModR/M/SIB and ELF Fixup machinery. */
+    if(x64_args2(s->args,src,dst) && src[0]=='$') {
+        static const struct {const char *name;unsigned group;bool wide;} forms[]={
+            {"btl",4U,false},{"btq",4U,true},
+            {"btsl",5U,false},{"btsq",5U,true},
+            {"btrl",6U,false},{"btrq",6U,true},
+            {"btcl",7U,false},{"btcq",7U,true}
+        };
+        for(i=0U;i<sizeof(forms)/sizeof(forms[0]);++i) {
+            uint64_t immediate;
+            if(strcmp(s->op,forms[i].name))continue;
+            if(!minias_eval_u64_expression(src+1,&immediate) ||
+               immediate>255U)goto invalid;
+            if(x64_register(dst,&rd,&wd) && wd==forms[i].wide) {
+                m->opcode=X64_BIT_IMMREG;m->count=2U;
+                m->encoding=forms[i].group;
+                m->operands[0].kind=MINIAS_MC_REGISTER;
+                m->operands[0].reg=rd;
+                m->operands[0].register_64=wd;
+                m->operands[1].kind=MINIAS_MC_IMMEDIATE;
+                m->operands[1].immediate=immediate;
+                goto done;
+            }
+            if(x64_is_mem_candidate(dst)) {
+                MiniAsMCMemory mem;
+                if(!x64_parse_base_memory(dst,&mem))goto invalid;
+                m->operands[1].memory=malloc(sizeof(mem));
+                if(!m->operands[1].memory) {
+                    free(mem.symbol);free(m);
+                    minias_set_error(as,"out-of-memory:x86-bit-imm");
+                    return false;
+                }
+                *m->operands[1].memory=mem;
+                m->opcode=X64_IMM_MEMORY;m->count=3U;
+                m->encoding=UINT32_C(0x1ba);
+                m->operands[0].kind=MINIAS_MC_REGISTER;
+                m->operands[0].reg=forms[i].group;
+                m->operands[0].register_64=forms[i].wide;
+                m->operands[1].kind=MINIAS_MC_MEMORY;
+                m->operands[2].kind=MINIAS_MC_IMMEDIATE;
+                m->operands[2].immediate=immediate;
+                goto done;
+            }
+            goto invalid;
         }
     }
     /* GNU Linux compiler source uses C7, 81, 83 and F7 immediates against
@@ -1251,6 +1312,7 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
         m->encoding=*chosen |
             ((!strncmp(s->op,"bt",2U) || !strncmp(s->op,"xadd",4U) ||
               !strncmp(s->op,"cmpxchg",7U)) ? 0x100U : 0U) |
+            (!strncmp(s->op,"popcnt",6U)?UINT32_C(0x2000):0U) |
             (reg_bits==8U?0x200U:reg_bits==16U?0x400U:0U);
         m->operands[0].kind=MINIAS_MC_REGISTER;
         m->operands[0].reg=r;
@@ -1331,6 +1393,10 @@ static bool x64_measure(MiniAs *as,const MiniAsStmt *s,uint32_t *size) {
             *size=(word?1U:0U)+(rex?1U:0U)+2U+bytes;
             return true;
         }
+        case X64_BIT_IMMREG:
+            *size=4U+(m->operands[0].register_64 ||
+                       m->operands[0].reg>=8U?1U:0U);
+            return true;
         case X64_PUSH_IMM: {
             int32_t imm=(int32_t)(uint32_t)m->operands[0].immediate;
             *size=imm>=-128 && imm<=127?2U:5U;return true;
@@ -1345,8 +1411,9 @@ static bool x64_measure(MiniAs *as,const MiniAsStmt *s,uint32_t *size) {
             unsigned base=m->encoding&UINT32_C(0xff);
             unsigned extra=m->opcode==X64_IMM_MEMORY?
                 (base==0x83U || base==0xc6U || base==0x80U ||
-                 base==0xf6U?1U:(m->encoding&0x400U)?2U:4U):0U;
+                 base==0xf6U || base==0xbaU?1U:(m->encoding&0x400U)?2U:4U):0U;
             *size=extra+((m->encoding&0x100U)?1U:0U) +
+                   ((m->encoding&0x2000U)?1U:0U) +
                   ((m->encoding&0x400U)?1U:0U) +
                   (mem->address_space?1U:0U) + (m->operands[0].register_64 ||
                    m->operands[0].reg>=8U ||
@@ -1381,7 +1448,8 @@ static bool x64_measure(MiniAs *as,const MiniAsStmt *s,uint32_t *size) {
             *size=m->operands[0].reg>=8U?3U:2U;return true;
         case X64_MOV_IMM32: *size=(m->operands[0].reg>=8U)?6U:5U;return true;
         case X64_REG_BINARY:
-            *size=((m->encoding&0x400U)?1U:0U)+
+            *size=((m->encoding&0x2000U)?1U:0U)+
+                   ((m->encoding&0x400U)?1U:0U)+
                   ((m->encoding&0x100U)?1U:0U)+
                   ((m->operands[0].register_64 ||
                    m->operands[0].reg>=8U || m->operands[1].reg>=8U)?3U:2U);
@@ -1561,6 +1629,16 @@ static bool x64_encode(MiniAs *as,const MiniAsStmt *s) {
                 code[n++]=(unsigned char)(m->operands[2].immediate>>(8U*j));
             break;
         }
+        case X64_BIT_IMMREG:
+            r=m->operands[0].reg;
+            if(m->operands[0].register_64 || r>=8U)
+                code[n++]=(unsigned char)(0x40U |
+                    (m->operands[0].register_64?8U:0U)|(r>>3U));
+            code[n++]=0x0fU;code[n++]=0xbaU;
+            code[n++]=(unsigned char)(0xc0U|
+                ((m->encoding&7U)<<3U)|(r&7U));
+            code[n++]=(unsigned char)m->operands[1].immediate;
+            break;
         case X64_PUSH_IMM: {
             int32_t imm=(int32_t)(uint32_t)m->operands[0].immediate;
             unsigned i;
@@ -1633,7 +1711,7 @@ static bool x64_encode(MiniAs *as,const MiniAsStmt *s) {
             unsigned base=m->encoding&UINT32_C(0xff);
             unsigned extra=m->opcode==X64_IMM_MEMORY?
                 (base==0x83U || base==0xc6U || base==0x80U ||
-                 base==0xf6U?1U:(m->encoding&0x400U)?2U:4U):0U;
+                 base==0xf6U || base==0xbaU?1U:(m->encoding&0x400U)?2U:4U):0U;
             uint32_t immediate=extra?
                 (uint32_t)m->operands[2].immediate:0U;
             unsigned low_base=mem->base&7U;
@@ -1645,6 +1723,7 @@ static bool x64_encode(MiniAs *as,const MiniAsStmt *s) {
             if(mem->address_space)
                 code[n++]=(unsigned char)(mem->address_space==1U?0x64U:0x65U);
             if(m->encoding&0x400U)code[n++]=0x66U;
+            if(m->encoding&0x2000U)code[n++]=0xf3U;
             r=m->operands[0].reg;
             if (m->operands[0].register_64 || r>=8U ||
                 ((m->encoding&0x200U) && r>=4U) ||
@@ -1817,6 +1896,7 @@ static bool x64_encode(MiniAs *as,const MiniAsStmt *s) {
         case X64_REG_BINARY:
             r=m->operands[0].reg;d=m->operands[1].reg;
             if(m->encoding&0x400U)code[n++]=0x66U;
+            if(m->encoding&0x2000U)code[n++]=0xf3U;
             if (m->operands[0].register_64 || r>=8U || d>=8U)
                 code[n++]=(unsigned char)(0x40U |
                     (m->operands[0].register_64?8U:0U) |

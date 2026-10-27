@@ -123,6 +123,11 @@ external_probe:
     smull x2, w3, w4
     umulh x5, x6, x7
     smulh x8, x9, x10
+    // Signed/unsigned W/X division, same typed three-register family.
+    udiv w0, w1, w2
+    udiv x3, x4, x5
+    sdiv w6, w7, w8
+    sdiv x9, x10, x11
     ccmp x0, xzr, #15, eq
     ccmp x1, #0, #4, ne
     ccmp w2, w3, #7, eq
@@ -435,6 +440,9 @@ for bad_source in 'ldxr x0, [x1,#4]' 'stxr x0, x1, [x2]' \
                   'smull w0, w1, w2' \
                   'umulh x0, w1, x2' \
                   'mul w0, w1, x2' \
+                  'udiv x0, w1, x2' \
+                  'sdiv w0, x1, w2' \
+                  'udiv sp, x1, x2' \
                   'yield #1' \
                   'hint #.Lnever_defined' \
                   '.equ .Lbad_hint,128; hint #.Lbad_hint' \

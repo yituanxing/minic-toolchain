@@ -116,6 +116,17 @@ entry_x:
     cmpq %rax, 8(%r12)
     cmpq 8(%r12), %rax
     cmpl %r9d, -8(%rbp)
+    # GNU bit-imm with ModR/M register, SIB memory, RIP-relative relocation.
+    btq $43, %rax
+    btsq $0, (%rbx)
+    btrl $127, 8(%r12)
+    btcl $1, ext_global(%rip)
+    btsq $15, __cpu_online_mask(%rip)
+    # Mandatory F3 register and memory POPCNT must equal GNU byte stream.
+    popcntq %rax, %r8
+    popcntl %eax, %ecx
+    popcntq 8(%rsp), %r9
+    popcntl ext_global(%rip), %r10d
     btq %rax, __cpu_online_mask(%rip)
     btsq %r9, __cpu_online_mask(%rip)
     btrl %r10d, 8(%rsp)
@@ -794,7 +805,13 @@ cmp "$work/la-gnu.bin" "$work/la-mini.bin"
 grep -q 'LoongArch' "$work/la-header.txt"
 grep -q '0x43' "$work/la-header.txt"
 
-for bad in 'adcl %rax,%eax' \
+for bad in            'popcntq %eax,%rax' \
+           'popcntl %rax,%eax' \
+           'popcntq %rax,(%rsi)' \
+           'btsq $256,%rax' \
+           'btq $-1,%rax' \
+           'btrq $256,(%rax)' \
+           'adcl %rax,%eax' \
            'negb %eax' \
            'negw %eax' \
            'divw %rax' \

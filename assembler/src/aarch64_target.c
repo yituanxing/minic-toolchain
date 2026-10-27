@@ -873,7 +873,8 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
               !strcmp(op,"sbc") || !strcmp(op,"sbcs") ||
               !strcmp(op,"mul") || !strcmp(op,"mneg") ||
               !strcmp(op,"umull") || !strcmp(op,"smull") ||
-              !strcmp(op,"umulh") || !strcmp(op,"smulh")) {
+              !strcmp(op,"umulh") || !strcmp(op,"smulh") ||
+              !strcmp(op,"udiv") || !strcmp(op,"sdiv")) {
         /* GNU A64 three-operand data-processing family. NEG/NGC are
          * SUB/SBC with Rn=ZR; MUL/MNEG/MULL are multiply-add aliases
          * with Ra=ZR. Shared typed operands and one target encoder. */
@@ -892,7 +893,9 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
             {"umull",UINT32_C(0x9ba07c00),false,true,false},
             {"smull",UINT32_C(0x9b207c00),false,true,false},
             {"umulh",UINT32_C(0x9bc07c00),false,false,true},
-            {"smulh",UINT32_C(0x9b407c00),false,false,true}
+            {"smulh",UINT32_C(0x9b407c00),false,false,true},
+            {"udiv",UINT32_C(0x1ac00800),false,false,false},
+            {"sdiv",UINT32_C(0x1ac00c00),false,false,false}
         };
         char alu_tok[4][96];unsigned alu_n,alu_rd,alu_rn=31U,alu_rm,alu_k;
         bool alu_wide,alu_nwide=false,alu_mwide,alu_sp;
