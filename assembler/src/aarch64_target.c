@@ -290,9 +290,12 @@ static bool parse_integer_family(MiniAsMCInst *inst,
             hint=(unsigned)imm;
         }else {
             const char *suffix=t[0]+5U;
+            /* A64 PRFM <prfop>: type PLD=0b00, PLI=0b01,
+             * PST=0b10 in op[4:3]. Each unit step is 8, not a
+             * mnemonic-order ordinal. GNU byte oracle catches this. */
             if(!strncmp(t[0],"pldl",4U))unit=0U;
-            else if(!strncmp(t[0],"pstl",4U))unit=1U;
-            else if(!strncmp(t[0],"plil",4U))unit=2U;
+            else if(!strncmp(t[0],"plil",4U))unit=1U;
+            else if(!strncmp(t[0],"pstl",4U))unit=2U;
             else return false;
             if(strlen(t[0])<6U || t[0][4]<'1' || t[0][4]>'3')
                 return false;
