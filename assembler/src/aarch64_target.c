@@ -150,7 +150,11 @@ enum {
     A64_MC_LDRH,
     A64_MC_STRH,
     A64_MC_STP,
-    A64_MC_LDP
+    A64_MC_LDP,
+    A64_MC_BITMASK_IMM,
+    A64_MC_EXTEND_W,
+    A64_MC_REV,
+    A64_MC_ACQUIRE_RELEASE
 };
 
 /* GNU AArch64 operands split on TOP-LEVEL commas, not commas within
@@ -272,6 +276,36 @@ static bool parse_integer_family(MiniAsMCInst *inst,
     unsigned kind = 0U;
 
     if (!split_operands(args, t, &n)) return false;
+    /* Common GNU Linux bit/byte-swap and acquire/release families.
+     * All operands are typed once; no instruction-name checks in encode. */
+    if ((!strcmp(op,"sxtw") || !strcmp(op,"uxtw")) && n==2U) {
+        if(!parse_a64_reg(t[0],&rd,&wd,&spd) || !wd || spd ||
+           !parse_a64_reg(t[1],&rn,&wn,&spn) || wn || spn)return false;
+        inst->opcode=A64_MC_EXTEND_W;inst->count=2U;
+        inst->encoding=!strcmp(op,"sxtw")?0U:1U;
+        put_reg(&inst->operands[0],rd,true);
+        put_reg(&inst->operands[1],rn,false);
+        return true;
+    }
+    if(!strcmp(op,"rev") && n==2U) {
+        if(!parse_a64_reg(t[0],&rd,&wd,&spd) || spd ||
+           !parse_a64_reg(t[1],&rn,&wn,&spn) || spn || wd!=wn)
+            return false;
+        inst->opcode=A64_MC_REV;inst->count=2U;
+        put_reg(&inst->operands[0],rd,wd);
+        put_reg(&inst->operands[1],rn,wn);
+        return true;
+    }
+    if((!strcmp(op,"ldar") || !strcmp(op,"stlr")) && n==2U) {
+        if(!parse_a64_reg(t[0],&rd,&wd,&spd) || spd ||
+           !parse_a64_mem(t[1],&base,&imm,&mode) ||
+           imm!=0 || mode!=0U)return false;
+        inst->opcode=A64_MC_ACQUIRE_RELEASE;inst->count=2U;
+        inst->encoding=!strcmp(op,"ldar")?1U:0U;
+        put_reg(&inst->operands[0],rd,wd);
+        put_reg(&inst->operands[1],base,true);
+        return true;
+    }
     if (strcmp(op, "mov") == 0 && n == 2U) {
         if (!parse_a64_reg(t[0], &rd, &wd, &spd) ||
             !parse_a64_reg(t[1], &rn, &wn, &spn) || wd != wn)
@@ -315,6 +349,18 @@ static bool parse_integer_family(MiniAsMCInst *inst,
                    strcmp(op, "sub") == 0 ? A64_MC_SUB_IMM :
                    strcmp(op, "adds") == 0 ? A64_MC_ADDS_IMM : A64_MC_SUBS_IMM;
             put_immediate(&inst->operands[2], imm);
+        } else if (!strcmp(op,"and") &&
+                   parse_signed_number(t[2],&imm) && imm>0) {
+            /* The contiguous low-bit mask subset has exact A64 logical
+             * immediate N:immr:imms encoding. A noncontiguous mask or
+             * all-ones word is NOT this instruction family. */
+            uint64_t bits=(uint64_t)imm;
+            unsigned bit_count=0U;
+            while(bits&1U){++bit_count;bits>>=1U;}
+            if(bits!=0U || bit_count==0U ||
+               bit_count>=(wd?64U:32U) || spd || spn)return false;
+            kind=A64_MC_BITMASK_IMM;
+            put_immediate(&inst->operands[2],(int64_t)bit_count);
         } else return false;
         inst->opcode = kind;
         inst->count = 3U;
@@ -897,6 +943,34 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
                 ((uint32_t)inst->operands[0].immediate << 5U);
             break;
 
+        case A64_MC_BITMASK_IMM: {
+            bool wide=inst->operands[0].register_64;
+            unsigned ones=(unsigned)inst->operands[2].immediate;
+            code=(wide?UINT32_C(0x92400000):UINT32_C(0x12000000)) |
+                 ((ones-1U)<<10U) | (inst->operands[1].reg<<5U) |
+                 inst->operands[0].reg;
+            break;
+        }
+        case A64_MC_EXTEND_W:
+            code=(inst->encoding?UINT32_C(0xd3407c00):
+                                  UINT32_C(0x93407c00)) |
+                 (inst->operands[1].reg<<5U) | inst->operands[0].reg;
+            break;
+        case A64_MC_REV: {
+            bool wide=inst->operands[0].register_64;
+            code=(wide?UINT32_C(0xdac00c00):UINT32_C(0x5ac00800)) |
+                 (inst->operands[1].reg<<5U) | inst->operands[0].reg;
+            break;
+        }
+        case A64_MC_ACQUIRE_RELEASE: {
+            bool wide=inst->operands[0].register_64;
+            uint32_t opcode=inst->encoding?
+                (wide?UINT32_C(0xc8dffc00):UINT32_C(0x88dffc00)):
+                (wide?UINT32_C(0xc89ffc00):UINT32_C(0x889ffc00));
+            code=opcode | (inst->operands[1].reg<<5U) |
+                 inst->operands[0].reg;
+            break;
+        }
         case A64_MC_MOV_REG: {
             unsigned rd = inst->operands[0].reg;
             unsigned rm = inst->operands[1].reg;

@@ -49,6 +49,18 @@ external_probe:
     cmn w1, #4096
     cmn x0, x1
     cmp x1, #8192
+    and w1, w1, #255
+    and w3, w3, #65535
+    and x4, x4, #255
+    and x5, x5, #4294967295
+    sxtw x0, w0
+    uxtw x1, w1
+    rev w2, w3
+    rev x5, x6
+    ldar w0, [x0]
+    ldar x1, [x2]
+    stlr w7, [x8]
+    stlr x9, [x10]
     brk #0x800
     brk #65535
     mov w0, -22
@@ -235,7 +247,11 @@ for bad_source in 'brk #65536' 'mov w0, -65537' \
                   'cset x0, bogus' \
                   'mrs w0, sp_el0' 'msr tpidrro_el0, x0' \
                   'mrs x0, fake_el0' 'dmb #16' 'dmb invalid' \
-                  'cmn x0, #-1' 'cmn w0, #4097' 'cmp x0, #16777216' \
+                  'cmn x0, #-1' 'cmn w0, #4097' 'and w0, w0, #256' 'and w0, w0, #0xffffffff'
+                  'and x0, w0, #255' 'sxtw w0, w0'
+                  'uxtw x0, x0' 'rev w1, x2'
+                  'ldar w0, [x0, #4]' 'stlr x0, [w0]'
+                  'cmp x0, #16777216' \
                   'hint #-1' 'hint #128' 'hint #18446744073709551616' \
                   'hint bad' 'ret x31' 'mov x2, #65536' 'b external_function + 2' \
                   'cbz sp, external_function' 'cbnz x0, external_function+2' \
