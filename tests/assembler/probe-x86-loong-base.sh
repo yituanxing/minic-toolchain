@@ -134,6 +134,21 @@ entry_x:
     cmpw %r9w, 2(%r10)
     testw (%r12), %r11w
     subw %si, (%r15)
+    testw %ax, %ax
+    testw %r9w, %r10w
+    movw %r10w, %r11w
+    andw %cx, %dx
+    cmpw %di, %si
+    cmpb $1, %al
+    cmpb $2, %dl
+    cmpb $255, %r9b
+    xorb $-1, %sil
+    andw $-4096, %ax
+    andw $-1, %r9w
+    cmpw $255, %ax
+    cmpw $1, %ax
+    addw $500, %r9w
+    addq $17, %r12
     sbbl %eax, %r10d
     sbbq %r8, %r9
     sbbl $-1, %eax
@@ -478,7 +493,11 @@ cmp "$work/la-gnu.bin" "$work/la-mini.bin"
 grep -q 'LoongArch' "$work/la-header.txt"
 grep -q '0x43' "$work/la-header.txt"
 
-for bad in 'movb %eax, (%rax)' \
+for bad in 'cmpb $256, %al' \
+           'andw $65536, %ax' \
+           'xorw %rax, %ax' \
+           'testw %al, %ax' \
+           'movb %eax, (%rax)' \
            'movw %eax, (%rax)' \
            'cmpb %rax, (%rax)' \
            'movzbl %ax, %eax' \
