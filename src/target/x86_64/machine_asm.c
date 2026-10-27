@@ -209,15 +209,19 @@ bool minic_x86_64_emit_structured_asm(
     bindings = ins->value.structured_inline_asm.operands;
     if (!info->template_text)
         return false;
-    /* A pure GNU asm bit-scan need not be volatile. Its original
-     * register-only Core operand roles are independently requalified. */
-    if (ins->value.structured_inline_asm.operand_count == 2U)
+    /* Preserve the pre-existing memory-clobber family (including its
+     * valid two-operand dec_mod shape). Only DISJOINT no-clobber,
+     * register-output two-operand templates enter the BSF/BSR selector.
+     * This dispatch is by semantic contract, never operand count alone. */
+    if (info->has_memory_clobber)
+        return info->is_volatile &&
+               emit_memory_clobber_matched(
+                   out, program, target, fn, frame, ins, info);
+    if (ins->value.structured_inline_asm.operand_count == 2U &&
+        info->register_clobber_count == 0U)
         return emit_bit_scan_u64(out, program, target, fn, frame, ins, info);
     if (!info->is_volatile)
         return false;
-    if (info->has_memory_clobber)
-        return emit_memory_clobber_matched(
-            out, program, target, fn, frame, ins, info);
     if (ins->value.structured_inline_asm.operand_count == 4U)
         return emit_muldiv_u64(out, program, target, fn, frame, ins, info);
     if (ins->value.structured_inline_asm.operand_count != 8U)
