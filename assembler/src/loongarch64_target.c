@@ -583,7 +583,7 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
             {"vslti.d",UINT32_C(0x72878000)}
         };
         static const struct {const char *name;uint32_t opcode;
-                             unsigned max_shift;} shifts[]={
+                             unsigned max_shift;} vector_shifts[]={
             {"vslli.b",UINT32_C(0x732c2000),7U},
             {"vslli.h",UINT32_C(0x732c4000),15U},
             {"vslli.w",UINT32_C(0x732c8000),31U},
@@ -608,11 +608,11 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
                         goto done;
                     }
             if(imm>=0)
-                for(i=0U;i<sizeof(shifts)/sizeof(shifts[0]);++i)
-                    if(!strcmp(s->op,shifts[i].name) &&
-                       (uint64_t)imm<=shifts[i].max_shift) {
+                for(i=0U;i<sizeof(vector_shifts)/sizeof(vector_shifts[0]);++i)
+                    if(!strcmp(s->op,vector_shifts[i].name) &&
+                       (uint64_t)imm<=vector_shifts[i].max_shift) {
                         m->count=3U;
-                        m->encoding=shifts[i].opcode|
+                        m->encoding=vector_shifts[i].opcode|
                             ((uint32_t)imm<<10U)|(rj<<5U)|rd;
                         goto done;
                     }
@@ -972,11 +972,11 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
                     }
             }
             if (val>=0 && val<=63L) {
-                for(i=0U;i<sizeof(shifts)/sizeof(shifts[0]);++i)
-                    if(!strcmp(s->op,shifts[i].name) &&
-                        (unsigned long)val < (1UL<<shifts[i].bits)) {
+                for(i=0U;i<sizeof(vector_shifts)/sizeof(vector_shifts[0]);++i)
+                    if(!strcmp(s->op,vector_shifts[i].name) &&
+                        (unsigned long)val < (1UL<<vector_shifts[i].bits)) {
                         m->count=3U;
-                        m->encoding=shifts[i].code |
+                        m->encoding=vector_shifts[i].code |
                             ((uint32_t)val<<10U) | (rj<<5U) | rd;
                         goto done;
                     }
