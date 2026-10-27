@@ -15,9 +15,14 @@ Explicit -march=rv32i/rv64i retains existing fail-closed machine-code checks.
 
 ## Still required before claiming multi-target architecture complete
 
-1. Implement typed MCInst and target-specific source lexing/directive parsing;
-   comment stripping is target-configurable and .option dispatch is owned by the
-   RISC-V target; the common parser still owns GNU-style statement grammar.
+1. AArch64 now parses register/immediate/symbol operands into a typed
+   MCInst exactly once at fragment creation; encode consumes MCInst instead
+   of re-splitting source text. Common core owns MCInst lifecycle, and the
+   target supplies parse_mcinst. The larger RISC-V encoder still uses legacy
+   operand strings and must be migrated in grouped opcode families before
+   retiring that path. Comment stripping is target-configurable and .option
+   dispatch belongs to the RISC-V target; common parser still owns GNU-style
+   statement grammar.
 2. The common core now has persistent parsed instruction/data/alignment
    fragments with stable statement identities, target-driven size growth,
    and in-place branch relaxation for position-independent source. Label,

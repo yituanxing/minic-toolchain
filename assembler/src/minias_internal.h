@@ -111,6 +111,27 @@ typedef struct MiniAsSymbolExpr {
     int64_t addend;
 } MiniAsSymbolExpr;
 
+/* MCInst stores target-parsed instruction operands, decoupled from source
+ * text. Targets may migrate to it incrementally without changing the
+ * common section/symbol/fragment lifecycle. */
+typedef enum MiniAsMCOperandKind {
+    MINIAS_MC_REGISTER,
+    MINIAS_MC_IMMEDIATE,
+    MINIAS_MC_SYMBOL
+} MiniAsMCOperandKind;
+typedef struct MiniAsMCOperand {
+    MiniAsMCOperandKind kind;
+    unsigned reg;
+    bool register_64;
+    uint64_t immediate;
+    MiniAsSymbolExpr symbol;
+} MiniAsMCOperand;
+typedef struct MiniAsMCInst {
+    unsigned opcode;
+    unsigned count;
+    MiniAsMCOperand operands[2];
+} MiniAsMCInst;
+
 typedef struct MiniAsConditional {
     bool parent_active;
     bool condition_true;
@@ -145,6 +166,7 @@ typedef struct MiniAsStmt {
     /* Effective .option pic/nopic at the precise instruction site. */
     /* Opaque target state captured at the exact instruction site. */
     uint32_t target_options;
+    MiniAsMCInst *mcinst; /* allocated by target parser, freed by core */
 } MiniAsStmt;
 
 typedef struct MiniAs {
@@ -248,6 +270,7 @@ typedef struct MiniAsTargetOps {
     void (*object_attributes)(const MiniAs *, unsigned char, MiniAsObjectAttribute *);
     const char *name;
     bool (*measure)(const MiniAs *, const char *, const char *, uint32_t *, char *, size_t);
+    bool (*parse_mcinst)(MiniAs *, MiniAsStmt *);
     bool (*encode)(MiniAs *, const MiniAsStmt *);
     /* Layout owns iteration; each target owns encoding alternatives and
      * target-specific range checks. Return the next encoding size. */

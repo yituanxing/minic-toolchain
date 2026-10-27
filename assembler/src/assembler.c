@@ -605,6 +605,7 @@ void minias_destroy(MiniAs *as) {
     for (i = 0U; i < as->stmt_count; ++i) {
         free(as->stmts[i].op);
         free(as->stmts[i].args);
+        free(as->stmts[i].mcinst);
     }
     free(as->stmts);
     free(as->fixups);
@@ -669,6 +670,10 @@ static bool add_stmt(MiniAs *as,
         return false;
     }
     ++as->stmt_count;
+    if (kind == MINIAS_STMT_INSN &&
+        as->target->parse_mcinst != NULL &&
+        !as->target->parse_mcinst(as, st))
+        return false;
     return true;
 }
 
@@ -2483,7 +2488,6 @@ static bool emit_data_stmt(MiniAs *as, const MiniAsStmt *stmt) {
                         return false;
                     }
                 } else {
-                    uint32_t relocation_type;
                     if ((width != 4U && width != 8U) ||
                         !minias_parse_symbol_addend(trimmed, &expr)) {
                         minias_set_error(as,
@@ -2494,8 +2498,6 @@ static bool emit_data_stmt(MiniAs *as, const MiniAsStmt *stmt) {
                         free(copy);
                         return false;
                     }
-                    relocation_type =
-                        as->target->fixup_relocation_type(MINIAS_FIXUP_ABS, width);
                     if (!minias_section_append_zero(as, stmt->section, width) ||
                         !minias_add_fixup(as,
                                               stmt->section,

@@ -29,6 +29,9 @@ exit_code:
 external_probe:
     bl external_function
     b external_branch
+mc_operand_probe:
+    mov w3, #1234
+    ret x9
 .data
 .globl function_pointer
 function_pointer:
@@ -72,4 +75,16 @@ if "$MINIAS" --target=aarch64 -o "$work/unsupported.o" \
     echo 'AARCH64_VSLICE=FAIL accepted unsupported instruction' >&2
     exit 1
 fi
+# MCInst must be validated while parsing, independent of later emit/ELF.
+for bad_source in 'ret x31' 'mov x2, #65536' 'b external_function + 2'; do
+    printf '.text\n%s\n' "$bad_source" >"$work/invalid-mcinst.s"
+    if "$MINIAS" --target=aarch64 -o "$work/invalid-mcinst.o" \
+        "$work/invalid-mcinst.s" >"$work/invalid-mcinst.out" \
+        2>"$work/invalid-mcinst.err"; then
+        echo "MiniAS accepted invalid AArch64 MCInst: $bad_source" >&2
+        exit 1
+    fi
+done
+echo 'MINIAS_AARCH64_MCINST=PASS typed_reg64_reg32_imm16_symbol=1 invalid_operands=3'
+
 echo 'MINIAS_AARCH64_VSLICE=PASS ELF64=1 gnu_bytes=equal relocation_call26_jump26_abs64=1 ld=pass qemu=exit0'
