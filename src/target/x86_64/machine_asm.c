@@ -78,7 +78,7 @@ static bool emit_bit_scan_u64(
     MinicType output_type;
     size_t width;
     if (!out || !program || !target || !fn || !frame || !ins || !info ||
-        info->register_clobber_count != 0U || info->clobber_count != 0U ||
+        info->register_clobber_count != 0U ||
         info->has_memory_clobber || info->is_goto ||
         ins->value.structured_inline_asm.operand_count != 2U ||
         b == NULL ||
