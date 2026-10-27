@@ -222,11 +222,6 @@ static void attributes(const MiniAs *as, unsigned char elf_class,
     memset(out, 0, sizeof(*out));
 }
 
-static bool no_conditional_branch(const char *op) {
-    (void)op;
-    return false;
-}
-
 static const MiniAsTargetOps ops = {
     .comment_prefix = '/', /* //, not #; AArch64 #42 is an immediate. */
     .elf_machine = 183U, /* EM_AARCH64 */
@@ -235,7 +230,6 @@ static const MiniAsTargetOps ops = {
     .name = "aarch64",
     .measure = measure,
     .encode = encode,
-    .is_conditional_branch = no_conditional_branch,
     .append_code_alignment = code_alignment,
     .relocation_type = relocation_type,
     .validate_output = validate,

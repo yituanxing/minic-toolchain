@@ -221,7 +221,10 @@ typedef struct MiniAsTargetOps {
     const char *name;
     bool (*measure)(const MiniAs *, const char *, const char *, uint32_t *, char *, size_t);
     bool (*encode)(MiniAs *, const MiniAsStmt *);
-    bool (*is_conditional_branch)(const char *);
+    /* Layout owns iteration; each target owns encoding alternatives and
+     * target-specific range checks. Return the next encoding size. */
+    bool (*relax_instruction)(MiniAs *, const MiniAsStmt *, uint32_t *);
+    bool (*expanded_instruction_size)(const char *, uint32_t, uint32_t *);
     bool (*append_code_alignment)(MiniAs *, int, size_t);
     uint32_t (*relocation_type)(unsigned, MiniAsRelocKind);
     bool (*validate_output)(MiniAs *);

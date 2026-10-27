@@ -469,6 +469,12 @@ bool minias_add_relocation(MiniAs *as,
     MiniAsReloc *reloc;
     size_t symbol_index;
 
+    /* R_*_NONE (0) is not a valid encoding for a requested symbolic
+     * fixup. Reject unsupported target/width pairs before writing ELF. */
+    if (type == 0U) {
+        minias_set_error(as, "unsupported-target-relocation:%s", symbol_name);
+        return false;
+    }
     symbol = minias_get_symbol(as, symbol_name, true);
     if (symbol == NULL) {
         return false;
@@ -2804,69 +2810,41 @@ static bool force_long_branch_for_stmt(const MiniAs *as, size_t statement_id) {
     return false;
 }
 
+/* Layout iteration owns fragment identity and growth bookkeeping. Only
+ * target backends know the instruction's displacement range and expansion. */
 static bool collect_out_of_range_branches(MiniAs *as,
-                                          size_t **lines,
+                                          size_t **ids,
                                           size_t *count,
                                           size_t *capacity,
                                           bool *added) {
     size_t i;
-
     *added = false;
+    if (as->target->relax_instruction == NULL) return true;
     for (i = 0U; i < as->stmt_count; ++i) {
-        MiniAsStmt *stmt = &as->stmts[i];
-        const char *comma;
-        const char *target_text;
-        MiniAsSymbolExpr expr;
-        MiniAsSymbol *symbol;
-        int64_t displacement;
+        const MiniAsStmt *stmt = &as->stmts[i];
+        uint32_t expanded = stmt->size;
         size_t j;
         bool known = false;
-
-        if (stmt->kind != MINIAS_STMT_INSN || stmt->size != 4U ||
-            !as->target->is_conditional_branch(stmt->op)) {
+        if (stmt->kind != MINIAS_STMT_INSN ||
+            !as->target->relax_instruction(as, stmt, &expanded)) {
+            if (as->error[0] != '\0') return false;
             continue;
         }
-        comma = strrchr(stmt->args, ',');
-        if (comma == NULL) {
-            continue;
-        }
-        target_text = comma + 1;
-        while (*target_text == ' ' || *target_text == '\t') {
-            ++target_text;
-        }
-        if (!minias_parse_symbol_addend(target_text, &expr)) {
-            continue;
-        }
-        symbol = minias_get_symbol(as, expr.name, false);
-        if (symbol == NULL || !symbol->defined ||
-            symbol->section != stmt->section ||
-            symbol->value > (uint64_t)INT64_MAX ||
-            stmt->offset > (uint64_t)INT64_MAX) {
-            continue;
-        }
-        displacement = (int64_t)symbol->value + expr.addend -
-                       (int64_t)stmt->offset;
-        if ((displacement & 1) != 0 ||
-            (displacement >= -4096 && displacement <= 4094)) {
-            continue;
+        if (expanded <= stmt->size) continue;
+        if (as->target->expanded_instruction_size == NULL) {
+            minias_set_error(as, "target-relaxation-size-unavailable:%s",
+                             stmt->op);
+            return false;
         }
         for (j = 0U; j < *count; ++j) {
-            if ((*lines)[j] == i) {
-                known = true;
-                break;
-            }
+            if ((*ids)[j] == i) { known = true; break; }
         }
-        if (known) {
-            continue;
-        }
-        if (!grow_array((void **)lines,
-                        capacity,
-                        sizeof(**lines),
-                        *count + 1U)) {
+        if (known) continue;
+        if (!grow_array((void **)ids, capacity, sizeof(**ids), *count + 1U)) {
             minias_set_error(as, "out-of-memory:branch-relaxation");
             return false;
         }
-        (*lines)[(*count)++] = i;
+        (*ids)[(*count)++] = i;
         *added = true;
     }
     return true;
@@ -3154,9 +3132,17 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
             free(rewritten_args);
             return false;
         }
-        if (size == 4U && as->target->is_conditional_branch(op) &&
-            force_long_branch_for_stmt(as, as->stmt_count)) {
-            size = 8U;
+        if (force_long_branch_for_stmt(as, as->stmt_count)) {
+            uint32_t grown = 0U;
+            if (as->target->expanded_instruction_size == NULL ||
+                !as->target->expanded_instruction_size(op, size, &grown) ||
+                grown <= size) {
+                minias_set_error(as, "invalid-target-relaxation:%s:line=%zu",
+                                 op, line);
+                free(rewritten_args);
+                return false;
+            }
+            size = grown;
         }
         ok = add_stmt(as,
                       MINIAS_STMT_INSN,
