@@ -452,7 +452,6 @@ SRC
     # target-owned LP64D machine emission and independent GNU/QEMU oracle.
     cat > "$work/atomic-kernel.i" <<'SRC'
 struct atomic32 { int counter; };
-/* Original atomic64_t uses typedef __s64 = signed long long. */
 struct atomic64 { long long counter; };
 static void aand32(int n, struct atomic32 *p) {
     __asm__ __volatile__("amand_db.w $zero, %1, %0\n"
