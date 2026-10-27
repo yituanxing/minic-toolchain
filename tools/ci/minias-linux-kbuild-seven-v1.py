@@ -299,9 +299,14 @@ def scan(a: argparse.Namespace) -> None:
 
 def aggregate(a: argparse.Namespace) -> None:
     paths = sorted(pathlib.Path(a.results).rglob("results.json"))
-    if len(paths) != 21:
-        raise ValueError(f"missing/duplicate result sets {len(paths)}/21")
-    data = {t: {} for t in ARCH}
+    selected = tuple(a.targets.split(",")) if a.targets else tuple(ARCH)
+    if not selected or len(set(selected)) != len(selected) or any(
+            target not in ARCH for target in selected):
+        raise ValueError("invalid aggregate architecture selection")
+    expected = len(selected) * SHARDS
+    if len(paths) != expected:
+        raise ValueError(f"missing/duplicate result sets {len(paths)}/{expected}")
+    data = {t: {} for t in selected}
     for p in paths:
         doc = json.loads(p.read_text())
         t, shard = doc.get("target"), doc.get("shard")
@@ -361,8 +366,9 @@ def aggregate(a: argparse.Namespace) -> None:
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_text(json.dumps({"schema": "minias-linux-3x7-kbuild-v1",
                                 "targets": summary}, sort_keys=True, indent=2) + "\n")
-    print("MINIAS_LINUX_S_DISCOVERY=COMPLETE targets=3 shards=21 "
-          "GNU_ORACLE=NOT_TESTED P1=NOT_TESTED", flush=True)
+    print(f"MINIAS_LINUX_S_DISCOVERY=COMPLETE targets={len(selected)} "
+          f"shards={expected} GNU_ORACLE=NOT_TESTED P1=NOT_TESTED",
+          flush=True)
 
 
 def main() -> int:
@@ -383,6 +389,8 @@ def main() -> int:
     run.add_argument("--dest", required=True)
     agg = modes.add_parser("aggregate")
     agg.add_argument("--results", required=True)
+    agg.add_argument("--targets",
+                     help="Comma-separated target selection; defaults to all three")
     agg.add_argument("--dest", required=True)
     a = parser.parse_args()
     try:

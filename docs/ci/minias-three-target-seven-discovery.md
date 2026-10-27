@@ -50,3 +50,17 @@ The Common parser now recognizes strict `# N "file"` provenance markers
 from GNU-preprocessed native .S, without weakening AArch64 immediate
 syntax or suppressing actual ISA errors. CFI/.eh_frame remains a semantic
 implementation obligation, not a directive to ignore.
+
+## Efficient post-target-change Linux recheck (2026-10-27)
+
+After adding x86 CET endbr64, x86 group-1 immediate arithmetic and
+LoongArch JR, the 3x7 original Linux attempt was almost complete but
+x86 shard-3 twice received an external runner shutdown (exit 143), not a
+MiniAS diagnostic. A child-only 2 GiB RLIMIT_AS and 25-owner progress
+markers now bound work without relaxing ISA. Rather than recompiling GNU
+Linux or rerunning unaffected AArch64 CFI blockers, a **2 ISA × 7 shard**
+replay reuses SHA-pinned original x86 and LoongArch Kbuild .s/.cmd,
+and aggregates only those 14 result sets. The aggregator accepts explicit
+target selections while retaining exact source, unique owner, coverage,
+and manifest/config consistency checks. This run is diagnostic and neither
+ELF semantic acceptance nor Linux P1.
