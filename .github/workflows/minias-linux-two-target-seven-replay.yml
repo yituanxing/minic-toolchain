@@ -8,6 +8,8 @@ on:
     branches: [refactor/minias-target-isa-abi-core]
     paths:
       - '.github/workflows/minias-linux-two-target-seven-replay.yml'
+      - 'assembler/src/x86_64_target.c'
+      - 'assembler/src/loongarch64_target.c'
 
 permissions:
   contents: read
@@ -15,6 +17,9 @@ permissions:
 
 jobs:
   shard:
+    # Explicit grouped-campaign request; don't run 14 shards on every
+    # one-line target fix. Workflow dispatch is the manual alternative.
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[minias-replay-2x7]')
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     strategy:

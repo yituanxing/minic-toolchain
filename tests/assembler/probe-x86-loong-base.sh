@@ -42,6 +42,13 @@ entry_x:
     cmpl %r9d, -8(%rbp)
     testq %r8, 16(%rsp)
     testl 8(%r12), %eax
+    movq %r8, 16(%r10,%r11,8)
+    movl -128(%rbp,%rdx,2), %r8d
+    movq 1024(%r12,%r13,4), %r9
+    cmpq %r9, (%r14,%rbx,1)
+    testq 8(%rsp,%r11,4), %r9
+    xorl (%r12,%r8,2), %r10d
+    movq (%r9,%r12,8), %rax
     addq %r9, 16(%r12)
     addl 8(%r12), %eax
     subq (%rdi), %r9
@@ -98,7 +105,11 @@ grep -q '0x43' "$work/la-header.txt"
 
 for bad in 'movq %rax, (%eax)' \
            'movl 4294967296(%rax), %eax' \
-           'movq %rax, (%rax,%rcx,2)'; do
+           'movq %rax, (%rax,%rsp,2)' \
+           'movq %rax, (%rax,%eax,4)' \
+           'movq %rax, (%rax,%rcx,3)' \
+           'movq %rax, (%rax,%rcx,16)' \
+           'movq %rax, (%rax,%rcx,2,7)'; do
     printf '.text\n%s\n' "$bad" >"$work/invalid-mem.s"
     if "$MINIAS" --target=x86_64 -o "$work/bad-mem.o" \
          "$work/invalid-mem.s" >/dev/null 2>"$work/invalid.err"; then
@@ -133,4 +144,4 @@ if "$MINIAS" --target=loongarch64 -o "$work/invalid.o" "$work/unimplemented.s" \
     echo 'Unimplemented branch/fixup silently accepted' >&2
     exit 1
 fi
-echo 'MINIAS_TWO_TARGET_ORACLE=PASS x86_GNU_bytes=equal loong_GNU_bytes=equal ELF_machine=correct lp64d_v1=0x43 CET_endbr64=1 ALU_imm8_imm32=1 x86_ModRM_SIB_disp=1 x86_test_cmp_alu_memory=1 LA_jr=1 LA_scaled_ptr14=1 invalid=reject'
+echo 'MINIAS_TWO_TARGET_ORACLE=PASS x86_GNU_bytes=equal loong_GNU_bytes=equal ELF_machine=correct lp64d_v1=0x43 CET_endbr64=1 ALU_imm8_imm32=1 x86_ModRM_SIB_disp=1 x86_test_cmp_alu_memory=1 x86_scaled_index_SIB=1 LA_jr=1 LA_scaled_ptr14=1 invalid=reject'

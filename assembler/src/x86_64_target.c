@@ -30,54 +30,88 @@ static bool x64_register(const char *text, unsigned *reg, bool *wide) {
 }
 
 static bool x64_args2(const char *args, char a[48], char b[48]) {
-    const char *comma = strchr(args, ',');
+    /* AT&T memory forms can contain commas inside SIB parentheses.
+     * Split operands once at top-level, not once per comma token. */
+    const char *p, *comma = NULL, *right;
+    unsigned depth = 0U;
     size_t n, m;
-    if (!comma || strchr(comma+1, ',')) return false;
-    n = (size_t)(comma - args);
-    while (n && isspace((unsigned char)args[n-1])) --n;
+    for (p=args; *p; ++p) {
+        if (*p=='(') ++depth;
+        else if (*p==')') {
+            if (!depth) return false;
+            --depth;
+        } else if (*p==',' && depth==0U) {
+            if (comma) return false;
+            comma=p;
+        }
+    }
+    if (depth || !comma) return false;
+    n=(size_t)(comma-args);
+    while (n && isspace((unsigned char)args[n-1U])) --n;
     while (n && isspace((unsigned char)*args)) {++args;--n;}
-    comma++;
-    while (isspace((unsigned char)*comma)) ++comma;
-    m = strlen(comma);
-    while (m && isspace((unsigned char)comma[m-1])) --m;
-    if (!n || !m || n>=48 || m>=48) return false;
-    memcpy(a,args,n); a[n]='\0';
-    memcpy(b,comma,m); b[m]='\0';
+    right=comma+1;
+    while (isspace((unsigned char)*right)) ++right;
+    m=strlen(right);
+    while (m && isspace((unsigned char)right[m-1U])) --m;
+    if (!n || !m || n>=48U || m>=48U) return false;
+    memcpy(a,args,n);a[n]='\0';
+    memcpy(b,right,m);b[m]='\0';
     return true;
 }
 
-
-/* GNU AT&T disp(%base) form. This first memory subset deliberately rejects
- * RIP-symbol PC relocation, scaled index and symbolic displacements until
- * their complete target-specific fixups exist. */
+/* GNU AT&T disp(%base[, %index[, scale]]) numeric memory surface.
+ * Keep symbol/relocation-bearing forms explicitly unsupported. */
 static bool x64_parse_base_memory(const char *text, MiniAsMCMemory *out) {
-    const char *open = strchr(text, '(');
-    const char *close;
-    char regbuf[48], dispbuf[48], *end;
-    size_t reglen, displen;
-    unsigned base;
+    const char *open=strchr(text,'('), *close, *p;
+    char regs[3][48], dispbuf[48], *end;
+    size_t length, dlen;
+    unsigned count=0U, base=0U, index=0U;
+    unsigned long scale=1UL;
     bool wide;
-    long long displacement = 0;
+    long long displacement=0;
     if (!open) return false;
-    close = strchr(open, ')');
-    if (!close || close[1] != '\0' || strchr(open, ','))
-        return false;
-    reglen = (size_t)(close - open - 1);
-    displen = (size_t)(open - text);
-    if (!reglen || reglen >= sizeof(regbuf) || displen >= sizeof(dispbuf))
-        return false;
-    memcpy(regbuf, open + 1, reglen); regbuf[reglen] = '\0';
-    if (!x64_register(regbuf, &base, &wide) || !wide)
-        return false;
-    if (displen != 0U) {
-        memcpy(dispbuf, text, displen); dispbuf[displen] = '\0';
-        errno=0; displacement=strtoll(dispbuf,&end,0);
+    close=strchr(open+1,')');
+    if (!close || close[1]!='\0') return false;
+    dlen=(size_t)(open-text);
+    if (dlen>=sizeof(dispbuf)) return false;
+    if (dlen) {
+        memcpy(dispbuf,text,dlen);dispbuf[dlen]='\0';
+        errno=0;displacement=strtoll(dispbuf,&end,0);
         if (errno || end==dispbuf || *end ||
             displacement<INT32_MIN || displacement>INT32_MAX)
             return false;
     }
-    memset(out, 0, sizeof(*out));
-    out->has_base=true;out->base=base;out->scale=1U;
+    p=open+1;
+    while (p<close) {
+        const char *start=p;
+        size_t n;
+        while (p<close && *p!=',') ++p;
+        n=(size_t)(p-start);
+        while (n && isspace((unsigned char)*start)) {++start;--n;}
+        while (n && isspace((unsigned char)start[n-1U])) --n;
+        if (!n || n>=sizeof(regs[0]) || count==3U) return false;
+        memcpy(regs[count],start,n);regs[count][n]='\0';
+        ++count;
+        if (p<close) ++p;
+    }
+    if (count<1U || !x64_register(regs[0],&base,&wide) || !wide)
+        return false;
+    if (count>=2U) {
+        if (!x64_register(regs[1],&index,&wide) || !wide ||
+            index==4U) /* %rsp is unencodable as SIB index. */
+            return false;
+    }
+    if (count==3U) {
+        errno=0;scale=strtoul(regs[2],&end,0);
+        if (errno || end==regs[2] || *end ||
+            (scale!=1UL && scale!=2UL &&
+             scale!=4UL && scale!=8UL))
+            return false;
+    }
+    memset(out,0,sizeof(*out));
+    out->has_base=true;out->base=base;
+    out->has_index=(count>=2U);
+    out->index=index;out->scale=(unsigned)scale;
     out->displacement=(int64_t)displacement;
     return true;
 }
@@ -246,7 +280,7 @@ static bool x64_measure(MiniAs *as,const MiniAsStmt *s,uint32_t *size) {
             const MiniAsMCMemory *mem=m->operands[1].memory;
             *size=(m->operands[0].register_64 ||
                    m->operands[0].reg>=8U || mem->base>=8U?1U:0U) +
-                  2U + ((mem->base&7U)==4U?1U:0U) +
+                  2U + ((mem->has_index || (mem->base&7U)==4U)?1U:0U) +
                   x64_disp_bytes(mem);
             return true;
         }
@@ -289,13 +323,23 @@ static bool x64_encode(MiniAs *as,const MiniAsStmt *s) {
             unsigned i;
             uint32_t disp=(uint32_t)mem->displacement;
             r=m->operands[0].reg;
-            if (m->operands[0].register_64 || r>=8U || mem->base>=8U)
+            if (m->operands[0].register_64 || r>=8U || mem->base>=8U ||
+                (mem->has_index && mem->index>=8U))
                 code[n++]=(unsigned char)(0x40U |
                     (m->operands[0].register_64?8U:0U) |
-                    ((r>>3U)<<2U) | (mem->base>>3U));
+                    ((r>>3U)<<2U) |
+                    ((mem->has_index?mem->index>>3U:0U)<<1U) |
+                    (mem->base>>3U));
             code[n++]=(unsigned char)m->encoding;
-            code[n++]=(unsigned char)((mod<<6U)|((r&7U)<<3U)|low_base);
-            if (low_base==4U) code[n++]=0x24U; /* no index, SIB base rsp/r12 */
+            code[n++]=(unsigned char)((mod<<6U)|((r&7U)<<3U)|
+                (mem->has_index?4U:low_base));
+            if (mem->has_index || low_base==4U) {
+                unsigned sib_scale=mem->scale==8U?3U:
+                                   mem->scale==4U?2U:
+                                   mem->scale==2U?1U:0U;
+                code[n++]=(unsigned char)((sib_scale<<6U) |
+                    ((mem->has_index?mem->index&7U:4U)<<3U) | low_base);
+            }
             for (i=0U;i<bytes;++i)
                 code[n++]=(unsigned char)(disp>>(8U*i));
             break;

@@ -273,3 +273,18 @@ for both architectures on the same S source.
 This batch intentionally avoids fake `pcalau12i` relocs, skipping CFI, and
 independently cloned ELF algorithms. The existing 2x7 **frozen** GNU Linux
 corpora are the next affected-only error census; no new Linux C compilation.
+
+## x86 scaled index as typed target addressing
+
+The same shared `MiniAsMCMemory` (base/index/scale/displacement) now drives
+GNU AT&T `disp(%base,%index,scale)`, including 1/2/4/8 index scales,
+REX.X/B extensions, mandatory SIB for RSP/R12 base, and RBP/R13
+displacement edge cases. Top-level operand splitting is target-specific
+because x86 addressing parentheses contain commas. Symbol relocations,
+index-without-base and other incomplete forms fail closed.
+
+The exact GNU parity matrix covers indexed register loads/stores and
+CMP/TEST/ALU, including high register/scale boundaries and invalid index,
+scale and overflow cases. Trigger the 2x7 affected-ISA Linux census only
+when a grouped target batch adds `[minias-replay-2x7]` to its commit
+message, or on manual dispatch. No recompiled GCC objects.
