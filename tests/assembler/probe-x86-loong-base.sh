@@ -529,8 +529,9 @@ grep -q R_X86_64_PLT32 "$work/x86-gnu-rel.txt"
 grep -q R_X86_64_PC32 "$work/x86-gnu-rel.txt"
 grep -q R_X86_64_32S "$work/x86-rel.txt"
 grep -q R_X86_64_32S "$work/x86-gnu-rel.txt"
-test "$(grep -c 'R_X86_64_32S.*__per_cpu_offset' "$work/x86-rel.txt")" -eq 2
-test "$(grep -c 'R_X86_64_32S.*__per_cpu_offset' "$work/x86-gnu-rel.txt")" -eq 2
+# GNU byte-oracle gained one real base+symbol relocation.
+test "$(grep -c 'R_X86_64_32S.*__per_cpu_offset' "$work/x86-rel.txt")" -eq 3
+test "$(grep -c 'R_X86_64_32S.*__per_cpu_offset' "$work/x86-gnu-rel.txt")" -eq 3
 test "$(grep -c 'R_X86_64_32S.*abs_mem_immediate' "$work/x86-rel.txt")" -eq 2
 test "$(grep -c 'R_X86_64_32S.*abs_mem_immediate' "$work/x86-gnu-rel.txt")" -eq 2
 grep -q R_X86_64_64 "$work/x86-rel.txt"
