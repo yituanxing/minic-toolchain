@@ -675,9 +675,18 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
         }
         inst->opcode=A64_MC_WIDE_IMM;
         inst->count=2U;
-        inst->encoding=2U; /* MOVN: NOT(imm16) */
+        /* GNU canonicalizes W32 #-65536 as MOVZ #0xffff,LSL #16.
+         * MOVN #0xffff is equivalent but the original GCC .s byte oracle
+         * requires exact canonical GAS output, not just equal semantics. */
+        if(!reg64 && value==INT64_C(-65536)) {
+            inst->encoding=4U; /* MOVZ shift 16 */
+            put_immediate(&inst->operands[1],UINT64_C(0xffff));
+        }else {
+            inst->encoding=2U; /* MOVN: NOT(imm16) */
+            put_immediate(&inst->operands[1],
+                          (~(uint64_t)value)&UINT64_C(0xffff));
+        }
         put_reg(&inst->operands[0],reg,reg64);
-        put_immediate(&inst->operands[1],(~(uint64_t)value)&UINT64_C(0xffff));
     } else if (strcmp(op, "brk") == 0 && parse_imm16(args,&imm)) {
         inst->opcode=A64_MC_BRK;inst->count=1U;
         put_immediate(&inst->operands[0],(int64_t)imm);
