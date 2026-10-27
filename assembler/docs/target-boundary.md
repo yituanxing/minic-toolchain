@@ -180,3 +180,23 @@ This is not permission for the compiler or `asm` to generate M/CSR opcodes
 under RV64I: handwritten extension instructions still go through the
 same strict target machine-ISA gate. Common ELF owns serialized sections,
 while RISC-V owns contents of its architecture attributes.
+
+## First x86-64 and LoongArch64 Target implementations
+
+Two additional targets are registered without changing Common parsing,
+Expression, MCInst/Fragment layout, sections, symbol binding or ELF serializer.
+They both use the same lifecycle hooks previously exercised by RISC-V and
+AArch64. These first targets are **strict integer vertical slices**, not
+claims of Linux/GNU full ISA support. x86-64 currently supports selected
+GNU AT&T integer register-to-register operations, register stack operations,
+a few 0-operand system instructions and 32-bit register mov immediates.
+LoongArch64 uses the GNU binutils LA64 opcode table for integer
+register-register (ADD/SUB/AND/OR/XOR/SLT) and signed-12 ADDI/LD/ST,
+NOP, RET, MOV aliases. The target owns its 4-byte NOP alignment.
+
+ELF machines are EM_X86_64=62 and EM_LOONGARCH=258. The LoongArch
+psABI encodes LP64S/LP64F/LP64D in low three e_flags bits (1/2/3)
+plus ABI-v1 version bits (0x40), not generic ELF assumptions.
+Unknown ISA, ABI, encodings or relocations fail closed. No general x86
+ModR/M memory operand grammar or LoongArch relocations have been
+invented in Common; those are explicit remaining per-target obligations.

@@ -4,7 +4,7 @@
 #include <string.h>
 
 static void usage(FILE *out, const char *name) {
-    fprintf(out, "usage: %s [--target=riscv|aarch64] "
+    fprintf(out, "usage: %s [--target=riscv|aarch64|x86_64|loongarch64] "
             "[-march=ISA] [-mabi=ABI] -o OUTPUT INPUT.s\n", name);
 }
 

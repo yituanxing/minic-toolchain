@@ -7,7 +7,9 @@
 const MiniAsTargetOps *minias_find_target(const char *name) {
     const MiniAsTargetOps *const targets[] = {
         minias_target_riscv(),
-        minias_target_aarch64()
+        minias_target_aarch64(),
+        minias_target_x86_64(),
+        minias_target_loongarch64()
     };
     size_t i;
 

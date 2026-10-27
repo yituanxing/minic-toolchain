@@ -305,6 +305,8 @@ typedef struct MiniAsTargetOps {
 
 const MiniAsTargetOps *minias_target_riscv(void);
 const MiniAsTargetOps *minias_target_aarch64(void);
+const MiniAsTargetOps *minias_target_x86_64(void);
+const MiniAsTargetOps *minias_target_loongarch64(void);
 const MiniAsTargetOps *minias_find_target(const char *name);
 
 typedef struct MiniAsAssemblyConfig {
