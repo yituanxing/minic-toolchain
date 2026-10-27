@@ -126,6 +126,9 @@ entry_x:
     xchgl %eax, 24(%rbx)
     xchgl %eax, ext_global(%rip)
     # GNU base+symbol disp32S; no RIP-relative alias or dummy addend.
+    movq ext_global(%rax), %r9
+    movq %rax, ext_global(%rbp)
+    movq %fs:pcpu_hot(%rax), %rax
     movq __per_cpu_offset(%rdi), %rax
     movq kmalloc_caches+48(%rax), %rdi
     movq pcpu_hot+32(%r12), %r10
@@ -831,11 +834,8 @@ for bad in 'adcl %rax,%eax' \
            'movq %rax, (%rax,%rcx,3)' \
            'movq %rax, (%rax,%rcx,16)' \
            'movq %rax, (%rax,%rcx,2,7)' \
-           'movq ext_global(%rax), %r9' \
            'movq ext_global(%rip,%rax,2), %r9' \
-           'movq %rax, ext_global(%rbp)' \
            'movq %gs:4294967296, %rax' \
-           'movq %fs:pcpu_hot(%rax), %rax' \
            'movq $18446744073709551616, %r8' \
            'cmpq $4294967296, (%rax)' \
            'leaq %rax, (%rsp)' \
