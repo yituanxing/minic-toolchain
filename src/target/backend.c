@@ -38,7 +38,10 @@ static const char *const aarch64_qualified_inputs[] = {
      * and all zero-input raw GAS remain unaffected. */
     "// atomic_and", "// atomic_or", "// atomic_xor", "// atomic_andnot",
     "// atomic64_and", "// atomic64_or", "// atomic64_xor",
-    "// atomic64_andnot", "// atomic_fetch_or", "// atomic64_fetch_or"
+    "// atomic64_andnot",
+    "// atomic_fetch_and", "// atomic_fetch_or", "// atomic_fetch_xor",
+    "// atomic_fetch_andnot", "// atomic64_fetch_and", "// atomic64_fetch_or",
+    "// atomic64_fetch_xor", "// atomic64_fetch_andnot"
 };
 static const char *const loongarch64_qualified_inputs[] = {
     "dbar", "amand_db.w", "amor_db.w", "amxor_db.w", "amadd_db.w",
@@ -122,7 +125,14 @@ bool minic_backend_requires_qualified_input_asm(
             continue;
         if (start + len == n || p[start + len] == ' ' ||
             p[start + len] == '\t' || p[start + len] == '\r' ||
-            p[start + len] == '\n' || p[start + len] == '%')
+            p[start + len] == '\n' || p[start + len] == '%' ||
+            /* Linux atomics start with a GNU source comment and append
+             * _relaxed/_acquire/_release. Reserve the WHOLE family on the
+             * target side even if its exact mode fails ISA qualification.
+             * A normal machine mnemonic is not a comment and must retain
+             * its stricter exact token boundary. */
+            (len >= 2U && mnemonic[0] == '/' && mnemonic[1] == '/' &&
+             p[start + len] == '_'))
             return true;
     }
     return false;
