@@ -584,14 +584,6 @@ static uint32_t enc_i(uint32_t opcode, int rd, uint32_t funct3, int rs1, int64_t
            ((uint32_t)rs1 << 15U) | (((uint32_t)imm & 0xfffU) << 20U);
 }
 
-static uint32_t enc_s(uint32_t funct3, int rs1, int rs2, int64_t imm) {
-    uint32_t value = (uint32_t)imm & 0xfffU;
-
-    return 0x23U | ((value & 0x1fU) << 7U) | (funct3 << 12U) |
-           ((uint32_t)rs1 << 15U) | ((uint32_t)rs2 << 20U) |
-           (((value >> 5U) & 0x7fU) << 25U);
-}
-
 static uint32_t enc_b(uint32_t funct3, int rs1, int rs2, int64_t off) {
     uint32_t value = (uint32_t)off & 0x1fffU;
 
