@@ -163,6 +163,10 @@ typedef struct MiniAs {
     bool cfi_active;
     bool cfi_signal_frame;
     uint32_t elf_flags;
+    bool isa_explicit;
+    uint64_t isa_features;
+    unsigned char target_attributes[512];
+    size_t target_attributes_size;
     bool strict_rv64i; /* legacy strict directive gating, both XLENs */
     unsigned strict_i_xlen; /* 0=legacy, 32=RV32I, 64=RV64I */
     const size_t *forced_long_branch_ids;
@@ -232,6 +236,19 @@ typedef struct MiniAsTargetOps {
 
 const MiniAsTargetOps *minias_target_riscv(void);
 const MiniAsTargetOps *minias_target_aarch64(void);
+
+typedef struct MiniAsAssemblyConfig {
+    const MiniAsTargetOps *target;
+    bool elf32;
+    uint32_t elf_flags;
+    unsigned strict_i_xlen;
+    bool isa_explicit;
+    uint64_t isa_features;
+    unsigned char target_attributes[512];
+    size_t target_attributes_size;
+} MiniAsAssemblyConfig;
+int minias_assemble_config(const char *, const char *,
+                           const MiniAsAssemblyConfig *, FILE *);
 
 /* Internal multi-target driver (legacy public API remains RISC-V). */
 int minias_assemble_with_target(const char *, const char *,

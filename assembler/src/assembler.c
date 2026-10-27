@@ -4626,13 +4626,10 @@ bool minias_emit_sections(MiniAs *as) {
 }
 
 
-int minias_assemble_with_target(const char *input_path,
-                                const char *output_path,
-                                const MiniAsTargetOps *target,
-                                bool elf32,
-                                uint32_t elf_flags,
-                                unsigned strict_i_xlen,
-                                FILE *diagnostic) {
+int minias_assemble_config(const char *input_path,
+                           const char *output_path,
+                           const MiniAsAssemblyConfig *config,
+                           FILE *diagnostic) {
     size_t *long_branch_ids = NULL;
     size_t long_branch_count = 0U;
     size_t long_branch_capacity = 0U;
@@ -4644,10 +4641,20 @@ int minias_assemble_with_target(const char *input_path,
         bool added_long_branches = false;
 
         minias_init(&as);
-        as.target = target;
-        as.elf_flags = elf_flags;
-        as.strict_rv64i = strict_i_xlen != 0U;
-        as.strict_i_xlen = strict_i_xlen;
+        as.target = config->target;
+        as.elf_flags = config->elf_flags;
+        as.strict_rv64i = config->strict_i_xlen != 0U ||
+                          config->isa_explicit;
+        as.strict_i_xlen = config->strict_i_xlen;
+        as.isa_explicit = config->isa_explicit;
+        as.isa_features = config->isa_features;
+        as.target_attributes_size = config->target_attributes_size;
+        if (as.target_attributes_size > sizeof(as.target_attributes)) {
+            minias_set_error(&as, "target-attribute-too-large");
+        } else if (as.target_attributes_size != 0U) {
+            memcpy(as.target_attributes, config->target_attributes,
+                   as.target_attributes_size);
+        }
         as.forced_long_branch_ids = long_branch_ids;
         as.forced_long_branch_count = long_branch_count;
         parsed = as.error[0] == '\0' && minias_parse_file(&as, input_path);
@@ -4666,7 +4673,7 @@ int minias_assemble_with_target(const char *input_path,
         if (parsed && as.error[0] == '\0' &&
             minias_emit_sections(&as) &&
             as.target->validate_output(&as) &&
-            (elf32 ? minias_write_elf32(&as, output_path)
+            (config->elf32 ? minias_write_elf32(&as, output_path)
                    : minias_write_elf64(&as, output_path))) {
             rc = 0;
         }
@@ -4680,6 +4687,22 @@ int minias_assemble_with_target(const char *input_path,
     }
     free(long_branch_ids);
     return rc;
+}
+
+int minias_assemble_with_target(const char *input_path,
+                                const char *output_path,
+                                const MiniAsTargetOps *target,
+                                bool elf32,
+                                uint32_t elf_flags,
+                                unsigned strict_i_xlen,
+                                FILE *diagnostic) {
+    MiniAsAssemblyConfig config;
+    memset(&config, 0, sizeof(config));
+    config.target = target;
+    config.elf32 = elf32;
+    config.elf_flags = elf_flags;
+    config.strict_i_xlen = strict_i_xlen;
+    return minias_assemble_config(input_path, output_path, &config, diagnostic);
 }
 
 int minias_assemble_file_target_isa(const char *input_path,

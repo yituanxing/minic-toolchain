@@ -1,100 +1,170 @@
 #include "riscv_profile.h"
-#include <ctype.h>
 #include <stdio.h>
 #include <string.h>
 
-/* RISC-V ELF psABI e_flags. ISA selection and ABI are not independent. */
 enum {
     EF_RVC = 1U, EF_FLOAT_MASK = 6U, EF_FLOAT_SINGLE = 2U,
     EF_FLOAT_DOUBLE = 4U, EF_FLOAT_QUAD = 6U, EF_RVE = 8U
 };
-typedef struct RiscvIsa {
-    unsigned xlen;
-    bool e, f, d, q, c, strict_i;
-} RiscvIsa;
+
 static bool reject(char *error, size_t cap, const char *reason,
                    const char *value) {
     if (cap != 0U) (void)snprintf(error, cap, "%s:%s", reason, value);
     return false;
 }
-/* This parser validates ELF class and ABI requirements for established ISA
- * spellings. It is NOT the final ISA extension/version/dependency validator;
- * non-I instruction encoding retains the legacy permissive policy. */
-static bool read_isa(const char *s, RiscvIsa *isa,
-                     char *error, size_t cap) {
-    const char *p;
-    memset(isa, 0, sizeof(*isa));
-    if (strncmp(s, "rv32", 4U) == 0) isa->xlen = 32U;
-    else if (strncmp(s, "rv64", 4U) == 0) isa->xlen = 64U;
-    else return reject(error, cap, "unsupported-arch", s);
-    p = s + 4U;
-    if (*p != 'i' && *p != 'e' && *p != 'g')
-        return reject(error, cap, "invalid-riscv-march", s);
-    isa->e = *p == 'e';
-    isa->f = isa->d = *p == 'g';
-    ++p;
-    for (; *p != '\0' && *p != '_'; ++p) {
-        if (isdigit((unsigned char)*p) || *p == 'p') continue;
-        if (strchr("mafdqclbjtvnh", *p) == NULL)
-            return reject(error, cap, "invalid-riscv-march", s);
-        if (*p == 'f') isa->f = true;
-        if (*p == 'd') isa->d = true;
-        if (*p == 'q') isa->q = true;
-        if (*p == 'c') isa->c = true;
+
+/* Target-owned RISC-V ELF attributes, with explicitly selected ISA only.
+ * The vendor subsection length excludes the leading A format byte. */
+static bool create_attribute(MiniAsRiscvProfile *out, const char *isa) {
+    size_t n = strlen(isa), total = 18U + n;
+    size_t i;
+    unsigned char *buf = out->arch_attribute;
+    if (total > sizeof(out->arch_attribute)) return false;
+    memset(buf, 0, total);
+    buf[0] = 'A';
+    for (i = 0U; i < 4U; ++i) {
+        buf[1U + i] = (unsigned char)((total - 1U) >> (8U * i));
+        buf[12U + i] = (unsigned char)((total - 11U) >> (8U * i));
     }
-    while (*p == '_') {
-        const char *begin = ++p;
-        if (*p != 'z' && *p != 's' && *p != 'x')
-            return reject(error, cap, "invalid-riscv-march", s);
-        for (; *p != '\0' && *p != '_'; ++p) {
-            if (!islower((unsigned char)*p) &&
-                !isdigit((unsigned char)*p))
-                return reject(error, cap, "invalid-riscv-march", s);
-        }
-        if (p - begin < 2)
-            return reject(error, cap, "invalid-riscv-march", s);
-    }
-    isa->strict_i = strcmp(s, isa->xlen == 32U ? "rv32i" : "rv64i") == 0;
+    memcpy(buf + 5U, "riscv", 6U);
+    buf[11] = 1U; /* Tag_File */
+    buf[16] = 5U; /* Tag_RISCV_arch */
+    memcpy(buf + 17U, isa, n + 1U);
+    out->arch_attribute_size = total;
     return true;
 }
+
+static bool append_isa(char *buf, size_t cap, size_t *len,
+                       const char *feature) {
+    size_t n = strlen(feature);
+    if (*len > cap || n + 1U > cap - *len) return false;
+    memcpy(buf + *len, feature, n + 1U);
+    *len += n;
+    return true;
+}
+
+static bool parse_isa(const char *arch, MiniAsRiscvProfile *out,
+                      char *error, size_t cap) {
+    uint64_t features = 0U;
+    const char *p;
+    unsigned xlen;
+    size_t i, used;
+    char normalized[512];
+    struct Ext { uint64_t bit; const char *name; };
+    static const struct Ext order[] = {
+        {RISCV_ISA_M, "_m2p0"}, {RISCV_ISA_A, "_a2p1"},
+        {RISCV_ISA_F, "_f2p2"}, {RISCV_ISA_D, "_d2p2"},
+        {RISCV_ISA_Q, "_q2p2"}, {RISCV_ISA_C, "_c2p0"},
+        {RISCV_ISA_V, "_v1p0"}, {RISCV_ISA_ZICSR, "_zicsr2p0"},
+        {RISCV_ISA_ZIFENCEI, "_zifencei2p0"},
+        {RISCV_ISA_ZBB, "_zbb1p0"}
+    };
+    if (strncmp(arch, "rv32", 4U) == 0) xlen = 32U;
+    else if (strncmp(arch, "rv64", 4U) == 0) xlen = 64U;
+    else return reject(error, cap, "unsupported-arch", arch);
+    p = arch + 4U;
+    if (*p == 'i') features = RISCV_ISA_I;
+    else if (*p == 'e' && xlen == 32U) features = RISCV_ISA_E;
+    else if (*p == 'g') {
+        features = RISCV_ISA_I | RISCV_ISA_M | RISCV_ISA_A |
+                   RISCV_ISA_F | RISCV_ISA_D |
+                   RISCV_ISA_ZICSR | RISCV_ISA_ZIFENCEI;
+    } else return reject(error, cap, "unsupported-riscv-base", arch);
+    ++p;
+    while (*p != '\0' && *p != '_') {
+        uint64_t ext = 0U;
+        switch (*p) {
+            case 'm': ext = RISCV_ISA_M; break;
+            case 'a': ext = RISCV_ISA_A; break;
+            case 'f': ext = RISCV_ISA_F; break;
+            case 'd': ext = RISCV_ISA_D; break;
+            case 'q': ext = RISCV_ISA_Q; break;
+            case 'c': ext = RISCV_ISA_C; break;
+            case 'v': ext = RISCV_ISA_V; break;
+            default: return reject(error, cap, "unqualified-riscv-extension", arch);
+        }
+        if ((features & ext) != 0U)
+            return reject(error, cap, "duplicate-riscv-extension", arch);
+        features |= ext;
+        ++p;
+    }
+    while (*p == '_') {
+        const char *start = ++p;
+        size_t n;
+        uint64_t ext;
+        while (*p != '\0' && *p != '_') ++p;
+        n = (size_t)(p - start);
+        if (n == 5U && strncmp(start, "zicsr", 5U) == 0)
+            ext = RISCV_ISA_ZICSR;
+        else if (n == 8U && strncmp(start, "zifencei", 8U) == 0)
+            ext = RISCV_ISA_ZIFENCEI;
+        else if (n == 3U && strncmp(start, "zbb", 3U) == 0)
+            ext = RISCV_ISA_ZBB;
+        else return reject(error, cap, "unqualified-riscv-extension", arch);
+        if ((features & ext) != 0U)
+            return reject(error, cap, "duplicate-riscv-extension", arch);
+        features |= ext;
+    }
+    if ((features & RISCV_ISA_D) && !(features & RISCV_ISA_F))
+        return reject(error, cap, "riscv-d-requires-f", arch);
+    if ((features & RISCV_ISA_Q) && !(features & RISCV_ISA_D))
+        return reject(error, cap, "riscv-q-requires-d", arch);
+    if ((features & RISCV_ISA_E) &&
+        (features & (RISCV_ISA_F | RISCV_ISA_D | RISCV_ISA_Q | RISCV_ISA_V)))
+        return reject(error, cap, "unsupported-riscv-e-extension-combination", arch);
+
+    out->elf32 = xlen == 32U;
+    out->features = features;
+    out->explicit_isa = true;
+    out->strict_i_xlen = features == RISCV_ISA_I ? xlen : 0U;
+    if ((features & RISCV_ISA_C) != 0U) out->elf_flags |= EF_RVC;
+    used = (size_t)snprintf(normalized, sizeof(normalized), "rv%u%s",
+                           xlen, (features & RISCV_ISA_E) ? "e2p0" : "i2p1");
+    if (used >= sizeof(normalized))
+        return reject(error, cap, "riscv-arch-too-long", arch);
+    for (i = 0U; i < sizeof(order) / sizeof(order[0]); ++i)
+        if ((features & order[i].bit) != 0U &&
+            !append_isa(normalized, sizeof(normalized),
+                        &used, order[i].name))
+            return reject(error, cap, "riscv-arch-too-long", arch);
+    if (!create_attribute(out, normalized))
+        return reject(error, cap, "riscv-arch-too-long", arch);
+    return true;
+}
+
 bool minias_riscv_resolve_profile(const char *march, const char *mabi,
                                   MiniAsRiscvProfile *out,
                                   char *error, size_t cap) {
-    RiscvIsa isa;
-    unsigned abi_xlen = 0U, abi_float = 0U;
-    bool abi_e = false;
+    unsigned xlen = 0U, float_abi = 0U;
+    bool eabi = false;
     memset(out, 0, sizeof(*out));
-    memset(&isa, 0, sizeof(isa));
     if (cap != 0U) error[0] = '\0';
-    if (march != NULL) {
-        if (!read_isa(march, &isa, error, cap)) return false;
-        out->elf32 = isa.xlen == 32U;
-        out->strict_i_xlen = isa.strict_i ? isa.xlen : 0U;
-        if (isa.c) out->elf_flags |= EF_RVC;
-    }
+    if (march != NULL && !parse_isa(march, out, error, cap)) return false;
     if (mabi != NULL) {
         const char *suffix;
         if (strncmp(mabi, "ilp32", 5U) == 0) {
-            abi_xlen = 32U; suffix = mabi + 5U;
+            xlen = 32U; suffix = mabi + 5U;
         } else if (strncmp(mabi, "lp64", 4U) == 0) {
-            abi_xlen = 64U; suffix = mabi + 4U;
+            xlen = 64U; suffix = mabi + 4U;
         } else return reject(error, cap, "unsupported-abi", mabi);
-        if (*suffix == '\0') abi_float = 0U;
-        else if (strcmp(suffix, "f") == 0) abi_float = EF_FLOAT_SINGLE;
-        else if (strcmp(suffix, "d") == 0) abi_float = EF_FLOAT_DOUBLE;
-        else if (strcmp(suffix, "q") == 0 && abi_xlen == 64U)
-            abi_float = EF_FLOAT_QUAD;
-        else if (strcmp(suffix, "e") == 0 && abi_xlen == 32U) abi_e = true;
+        if (*suffix == '\0') float_abi = 0U;
+        else if (strcmp(suffix, "f") == 0) float_abi = EF_FLOAT_SINGLE;
+        else if (strcmp(suffix, "d") == 0) float_abi = EF_FLOAT_DOUBLE;
+        else if (strcmp(suffix, "q") == 0) float_abi = EF_FLOAT_QUAD;
+        else if (strcmp(suffix, "e") == 0 && xlen == 32U) eabi = true;
         else return reject(error, cap, "unsupported-abi", mabi);
         if (march != NULL &&
-            (isa.xlen != abi_xlen || isa.e != abi_e ||
-             (abi_float >= EF_FLOAT_SINGLE && !isa.f) ||
-             (abi_float >= EF_FLOAT_DOUBLE && !isa.d) ||
-             (abi_float == EF_FLOAT_QUAD && !isa.q)))
+            (out->elf32 != (xlen == 32U) ||
+             (((out->features & RISCV_ISA_E) != 0U) != eabi) ||
+             (float_abi >= EF_FLOAT_SINGLE && !(out->features & RISCV_ISA_F)) ||
+             (float_abi >= EF_FLOAT_DOUBLE && !(out->features & RISCV_ISA_D)) ||
+             (float_abi == EF_FLOAT_QUAD && !(out->features & RISCV_ISA_Q))))
             return reject(error, cap, "incompatible-riscv-isa-abi", mabi);
-        out->elf32 = abi_xlen == 32U;
+        out->elf32 = xlen == 32U;
         out->elf_flags &= ~(uint32_t)(EF_FLOAT_MASK | EF_RVE);
-        out->elf_flags |= abi_float | (abi_e ? EF_RVE : 0U);
+        out->elf_flags |= float_abi | (eabi ? EF_RVE : 0U);
+    } else if (march != NULL && (out->features & RISCV_ISA_E)) {
+        out->elf_flags |= EF_RVE;
     }
     return true;
 }

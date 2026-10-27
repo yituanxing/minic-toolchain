@@ -1592,4 +1592,61 @@ test "$multi_offset" = '0000000000000018' || {
 }
 echo 'MINIAS_RELAX_TARGET_HOOK=PASS long=3 short=1 macro_rept=3'
 
+
+# Explicit RISC-V ISA profiles must constrain opcode families and advertise
+# an ELF arch attribute matching the selected -march, not just set e_flags.
+cat >"$work/isa-qualified.s" <<'EOF_ISA_QUAL'
+.text
+.globl isa_qualified
+isa_qualified:
+    mul a0, a1, a2
+    ret
+EOF_ISA_QUAL
+"$MINIAS" -march=rv64im -mabi=lp64 -o "$work/isa-m.o" "$work/isa-qualified.s"
+readelf -A "$work/isa-m.o" | grep -q 'Tag_RISCV_arch: "rv64i2p1_m2p0"'
+for opts in 'rv64i mul a0,a1,a2' 'rv64im csrr a0,mstatus' \
+            'rv64im orc.b a0,a1' 'rv64im c.li a0,1' \
+            'rv64im fence.i' 'rv64i vsetvl a0,a1,a2'; do
+    set -- $opts
+    printf '.text\n%s %s\n' "$2" "$3" >"$work/isa-negative.s"
+    if "$MINIAS" "-march=$1" -mabi=lp64 -o "$work/isa-negative.o" \
+        "$work/isa-negative.s" >/dev/null 2>"$work/isa-negative.err"; then
+        echo "MiniAS accepted forbidden ISA opcode: $opts" >&2
+        exit 1
+    fi
+done
+for arch in rv64id rv64iq rv64gfoo rv64i_zmadeup rv64i_zbb1p0; do
+    if "$MINIAS" "-march=$arch" -mabi=lp64 \
+        -o "$work/isa-bad-profile.o" "$work/isa-qualified.s" \
+        >/dev/null 2>"$work/isa-bad-profile.err"; then
+        echo "MiniAS silently accepted unqualified ISA string: $arch" >&2
+        exit 1
+    fi
+done
+cat >"$work/isa-gc.s" <<'EOF_GC'
+.text
+.globl gc
+gc:
+    fadd.d fa0, fa1, fa2
+    c.li a0, 1
+    ret
+EOF_GC
+"$MINIAS" -march=rv64gc -mabi=lp64d -o "$work/isa-gc.o" "$work/isa-gc.s"
+readelf -h "$work/isa-gc.o" | grep -q 'Flags:.*0x5'
+readelf -A "$work/isa-gc.o" |
+    grep -q 'Tag_RISCV_arch: "rv64i2p1_m2p0_a2p1_f2p2_d2p2_c2p0_zicsr2p0_zifencei2p0"'
+printf '.option arch, +m\n.text\nmul a0, a1, a2\n' >"$work/isa-option.s"
+if "$MINIAS" -march=rv64i -o "$work/isa-option.o" \
+    "$work/isa-option.s" 2>"$work/isa-option.err"; then
+    echo 'MiniAS ignored .option arch under explicit ISA selection' >&2
+    exit 1
+fi
+printf '.text\n.word 0x02050533\n' >"$work/isa-raw.s"
+if "$MINIAS" -march=rv64im -o "$work/isa-raw.o" \
+    "$work/isa-raw.s" 2>"$work/isa-raw.err"; then
+    echo 'MiniAS permitted raw executable ISA escape under explicit -march' >&2
+    exit 1
+fi
+echo 'MINIAS_ISA_FEATURES=PASS RV64IM_RV64GC=1 ELF_ATTRIBUTES=2 negative=13'
+
 echo "MINIAS_A0=PASS objects=30 abi_flags=3 format=ELF64-RISCV-ET_REL relocations=23 strings=2 pseudos=17 previous=3 subsection=2 numeric_labels=18 ecall=1 isa_next=13 csr_amo=8 sfence_vma=3 fence_i=1 vsetvl=1 vsetvli=1 vmv_v_i=4 rept=2 nested_rept=1 irp=4 section_stack=1 org=3 local_difference=1 lr_sc=2 inline_labels=2 branch_pseudos=8 extern=1 symbol_minus_dot=4 symbol_difference=1 absolute32=1 jal=2 jal_subsection=1 high_numeric_labels=2 u64_data=3 raw_insn=4 set_alias=3 move=1 numeric_zero=1 immediate_product=2 shift_immediate=1 incbin=1 align_expr=1 native_expr=6 native_zbb_tail_memexpr=1 native_jalr_symbol_load=1 native_forward_short=1 native_mixed_macro=1 native_divided_difference=1 native_symbol_addend_expr=1 native_add_sub_immediate=1 native_cfi_boundary=1 native_gas_forms=1 native_set_size=1 native_macro_comma=1 native_macro_quotes=1 pic_la_got=1 sext_w=1 macro=4 conditional=1"

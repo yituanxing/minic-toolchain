@@ -1,5 +1,7 @@
 #include "minias_internal.h"
 #include "riscv_target.h"
+#include "riscv_profile.h"
+#include <stdio.h>
 #include <stdint.h>
 #include <string.h>
 
@@ -155,8 +157,75 @@ static bool strict_base_i_check_sections(MiniAs *as) {
 }
 
 
+
+/* The selected ISA is enforced at the target boundary, not in the common
+ * assembler. No -march preserves the historical Linux assembler behavior. */
+static uint64_t riscv_required_features(const char *op) {
+    static const char *const m_ops[] = {
+        "mul", "mulh", "mulhu", "mulhsu", "mulw", "div", "divu",
+        "divw", "divuw", "rem", "remu", "remw", "remuw"
+    };
+    size_t i;
+    for (i = 0U; i < sizeof(m_ops) / sizeof(m_ops[0]); ++i)
+        if (strcmp(op, m_ops[i]) == 0) return RISCV_ISA_M;
+    if (strncmp(op, "amo", 3U) == 0 ||
+        strncmp(op, "lr.", 3U) == 0 ||
+        strncmp(op, "sc.", 3U) == 0) return RISCV_ISA_A;
+    if (strncmp(op, "c.", 2U) == 0) return RISCV_ISA_C;
+    if (strncmp(op, "vset", 4U) == 0 ||
+        strncmp(op, "vle", 3U) == 0 ||
+        strncmp(op, "vse", 3U) == 0 ||
+        strncmp(op, "vmv.", 4U) == 0) return RISCV_ISA_V;
+    if (strcmp(op, "orc.b") == 0 || strcmp(op, "rev8") == 0 ||
+        strcmp(op, "ctz") == 0) return RISCV_ISA_ZBB;
+    if (strncmp(op, "csr", 3U) == 0) return RISCV_ISA_ZICSR;
+    if (strcmp(op, "fence.i") == 0) return RISCV_ISA_ZIFENCEI;
+    if (strcmp(op, "frcsr") == 0 || strcmp(op, "fscsr") == 0)
+        return RISCV_ISA_F | RISCV_ISA_ZICSR;
+    if (strcmp(op, "fld") == 0 || strcmp(op, "fsd") == 0 ||
+        (op[0] == 'f' && strstr(op, ".d") != NULL))
+        return RISCV_ISA_D;
+    if (strcmp(op, "flw") == 0 || strcmp(op, "fsw") == 0 ||
+        (op[0] == 'f' && (strncmp(op, "fadd", 4U) == 0 ||
+         strncmp(op, "fsub", 4U) == 0 ||
+         strncmp(op, "fmul", 4U) == 0 ||
+         strncmp(op, "fdiv", 4U) == 0 ||
+         strncmp(op, "fmv.", 4U) == 0 ||
+         strncmp(op, "fsgnj", 5U) == 0 ||
+         strncmp(op, "fcvt", 4U) == 0 ||
+         strncmp(op, "feq", 3U) == 0 ||
+         strncmp(op, "flt", 3U) == 0 ||
+         strncmp(op, "fle", 3U) == 0))) return RISCV_ISA_F;
+    /* These unprivileged ISA profiles cannot assert implementation of
+     * privileged or otherwise unmodelled extension families. */
+    if (strcmp(op, "sret") == 0 || strcmp(op, "sfence.vma") == 0 ||
+        strcmp(op, "wfi") == 0 || strcmp(op, "pause") == 0)
+        return UINT64_MAX;
+    return 0U;
+}
+static bool riscv_validate_selected_isa(const MiniAs *as, const char *op,
+                                        char *reason, size_t cap) {
+    uint64_t bits;
+    if (!as->isa_explicit) return true;
+    if (strcmp(op, ".insn") == 0) {
+        (void)snprintf(reason, cap, "unsupported-isa-escape:.insn");
+        return false;
+    }
+    bits = riscv_required_features(op);
+    if (((as->target_options & 2U) != 0U) && (bits & RISCV_ISA_C)) {
+        (void)snprintf(reason, cap, "disabled-riscv-compressed:%s", op);
+        return false;
+    }
+    if (bits == UINT64_MAX || (bits != 0U &&
+        (as->isa_features & bits) != bits)) {
+        (void)snprintf(reason, cap, "unsupported-isa-feature:%s", op);
+        return false;
+    }
+    return true;
+}
 static bool riscv_measure(const MiniAs *as, const char *op, const char *args,
                           uint32_t *size, char *reason, size_t cap) {
+    if (!riscv_validate_selected_isa(as, op, reason, cap)) return false;
     return minias_riscv_measure(as->strict_i_xlen, op, args, size, reason, cap);
 }
 
@@ -169,6 +238,13 @@ static bool riscv_target_directive(MiniAs *as, const char *op,
     }
     if (strcmp(op, ".option") != 0) return true;
     *handled = true;
+    if (as->isa_explicit &&
+        strcmp(args, "pic") != 0 && strcmp(args, "nopic") != 0 &&
+        strcmp(args, "push") != 0 && strcmp(args, "pop") != 0 &&
+        strcmp(args, "norvc") != 0) {
+        minias_set_error(as, "unsupported-isa-option:%s:line=%zu", args, line);
+        return false;
+    }
     if (as->strict_rv64i &&
         strcmp(args, "pic") != 0 && strcmp(args, "nopic") != 0 &&
         strcmp(args, "push") != 0 && strcmp(args, "pop") != 0 &&
@@ -183,6 +259,8 @@ static bool riscv_target_directive(MiniAs *as, const char *op,
         as->target_options |= MINIAS_RISCV_OPTION_PIC;
     } else if (strcmp(args, "nopic") == 0) {
         as->target_options &= ~(uint32_t)MINIAS_RISCV_OPTION_PIC;
+    } else if (strcmp(args, "norvc") == 0) {
+        as->target_options |= 2U; /* Disable explicit C instructions. */
     } else if (strcmp(args, "push") == 0) {
         if (as->target_option_depth >=
             sizeof(as->target_option_stack) /
@@ -201,87 +279,18 @@ static bool riscv_target_directive(MiniAs *as, const char *op,
     return true;
 }
 
-/* Target-owned RISC-V architecture attributes. Generic ELF writer does
- * not interpret Tag_RISCV_arch or machine-specific SHT values. */
-/* Standard SHT_RISCV_ATTRIBUTES / Tag_RISCV_arch encoding for
- * explicitly qualified RV64I/LP64. A + vendor-length + "riscv" + Tag_File
- * + file-length + ULEB(Tag_arch=5) + NUL-terminated ISA string.
- * The profile is exact rv64i2p1, and thus never advertises extensions the
- * strict-I encoder refuses. Emit nothing for the historical default. */
-static const unsigned char rv32i_ilp32_attributes[] = {
-    0x41, 0x19, 0x00, 0x00, 0x00,
-    'r', 'i', 's', 'c', 'v', 0x00,
-    0x01, 0x0f, 0x00, 0x00, 0x00,
-    0x05, 'r', 'v', '3', '2', 'i', '2', 'p', '1', 0x00
-};
-static const unsigned char rv64i_lp64_attributes[] = {
-    0x41, 0x19, 0x00, 0x00, 0x00,
-    'r', 'i', 's', 'c', 'v', 0x00,
-    0x01, 0x0f, 0x00, 0x00, 0x00,
-    0x05, 'r', 'v', '6', '4', 'i', '2', 'p', '1', 0x00
-};
-#define MINIAS_SHT_RISCV_ATTRIBUTES UINT32_C(0x70000003)
-
-
+/* A selected ISA supplies Tag_RISCV_arch. No -march leaves legacy
+ * permissive behavior, so do not invent an ELF ISA attribute. */
 static void riscv_object_attributes(const MiniAs *as, unsigned char elf_class,
                                     MiniAsObjectAttribute *out) {
+    (void)elf_class;
     memset(out, 0, sizeof(*out));
-    if ((as->strict_i_xlen == 32U && elf_class == 1U) ||
-        (as->strict_i_xlen == 64U && elf_class == 2U)) {
+    if (as->target_attributes_size != 0U) {
         out->name = ".riscv.attributes";
-        out->type = MINIAS_SHT_RISCV_ATTRIBUTES;
-        out->data = as->strict_i_xlen == 32U ?
-                    rv32i_ilp32_attributes : rv64i_lp64_attributes;
-        out->size = as->strict_i_xlen == 32U ?
-                    sizeof(rv32i_ilp32_attributes) :
-                    sizeof(rv64i_lp64_attributes);
+        out->type = UINT32_C(0x70000003);
+        out->data = as->target_attributes;
+        out->size = as->target_attributes_size;
     }
-}
-
-/* Only the target knows RISC-V B-immediate widths and its inverse-
- * branch + JAL fallback. The common layout never inspects mnemonics or
- * rewrites machine opcodes. */
-static bool riscv_expanded_size(const char *op, uint32_t measured,
-                                uint32_t *expanded) {
-    if (measured != 4U || !is_conditional_branch_op(op)) return false;
-    *expanded = 8U;
-    return true;
-}
-
-static bool riscv_relax_instruction(MiniAs *as, const MiniAsStmt *stmt,
-                                    uint32_t *expanded) {
-    const char *comma, *target_text;
-    MiniAsSymbolExpr expr;
-    const MiniAsSymbol *symbol;
-    int64_t displacement;
-    *expanded = stmt->size;
-    if (stmt->size != 4U || !is_conditional_branch_op(stmt->op))
-        return true;
-    comma = strrchr(stmt->args, ',');
-    if (comma == NULL) return true;
-    target_text = comma + 1;
-    while (*target_text == ' ' || *target_text == '\t') ++target_text;
-    if (!minias_parse_symbol_addend(target_text, &expr)) return true;
-    symbol = minias_get_symbol(as, expr.name, false);
-    if (symbol == NULL || !symbol->defined ||
-        symbol->section != stmt->section ||
-        symbol->value > (uint64_t)INT64_MAX ||
-        stmt->offset > (uint64_t)INT64_MAX) return true;
-
-    /* Subtract first, then add the symbolic addend with explicit overflow
-     * checks. The old expression evaluated (value + addend) before
-     * subtraction and could trigger signed overflow for valid offsets. */
-    displacement = (int64_t)symbol->value - (int64_t)stmt->offset;
-    if ((expr.addend > 0 && displacement > INT64_MAX - expr.addend) ||
-        (expr.addend < 0 && displacement < INT64_MIN - expr.addend)) {
-        minias_set_error(as, "riscv-relaxation-offset-overflow:%s:line=%zu",
-                         stmt->op, stmt->line);
-        return false;
-    }
-    displacement += expr.addend;
-    if ((displacement % 2) == 0 &&
-        (displacement < -4096 || displacement > 4094)) *expanded = 8U;
-    return true;
 }
 
 static const MiniAsTargetOps riscv_ops = {

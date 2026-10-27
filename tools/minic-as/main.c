@@ -62,7 +62,18 @@ int main(int argc, char **argv) {
         return 2;
     }
     backend = minias_target_riscv();
-    return minias_assemble_with_target(input, output, backend, profile.elf32,
-                                       profile.elf_flags,
-                                       profile.strict_i_xlen, stderr);
+    {
+        MiniAsAssemblyConfig config;
+        memset(&config, 0, sizeof(config));
+        config.target = backend;
+        config.elf32 = profile.elf32;
+        config.elf_flags = profile.elf_flags;
+        config.strict_i_xlen = profile.strict_i_xlen;
+        config.isa_explicit = profile.explicit_isa;
+        config.isa_features = profile.features;
+        config.target_attributes_size = profile.arch_attribute_size;
+        memcpy(config.target_attributes, profile.arch_attribute,
+               profile.arch_attribute_size);
+        return minias_assemble_config(input, output, &config, stderr);
+    }
 }

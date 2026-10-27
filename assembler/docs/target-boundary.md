@@ -23,8 +23,11 @@ Explicit -march=rv32i/rv64i retains existing fail-closed machine-code checks.
    ordinals through macro/repeat re-layout.
 3. Unify symbol-aware absolute expression grammar with the now-shared
    constant/addend evaluator and properly separate Fixup from ELF Relocation.
-4. Extend target-owned ELF attributes to truthful non-I profiles, including
-   ISA changes inside .option regions (currently strict I only).
+4. Explicit -march now checks M/A/F/D/C/V/Zicsr/Zifencei/Zbb opcode
+   families and emits canonical Tag_RISCV_arch. Finish machine-word-wide
+   validation, full ISA version/dependency grammar and target option-region
+   semantics. For selected -march, unsupported .option arch/rvc/relax
+   must fail rather than silently changing the declared ELF architecture.
 5. Complete .option arch/rvc/relax semantics instead of ignored legacy modes.
 6. Complete DWARF CFI .eh_frame generation; boundary tags currently do not
    emit unwind information.
