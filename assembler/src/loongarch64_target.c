@@ -713,6 +713,25 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
                     goto done;
                 }
     }
+    /* LASX XVPERMI W/D/Q all share the existing typed XR/XR/u8
+     * fields, with GNU binutils ISA opcode ownership kept in Target. */
+    if(n==3U && la_special_reg(t[0],"$xr",31U,&rd) &&
+       la_special_reg(t[1],"$xr",31U,&rj)) {
+        static const struct {const char *op;uint32_t opcode;} perms[]={
+            {"xvpermi.w",UINT32_C(0x77e40000)},
+            {"xvpermi.d",UINT32_C(0x77e80000)},
+            {"xvpermi.q",UINT32_C(0x77ec0000)}
+        };
+        uint64_t bits;
+        if(minias_eval_u64_expression(t[2],&bits) && bits<=255U)
+            for(i=0U;i<sizeof(perms)/sizeof(perms[0]);++i)
+                if(!strcmp(s->op,perms[i].op)) {
+                    m->count=3U;
+                    m->encoding=perms[i].opcode|
+                        ((uint32_t)bits<<10U)|(rj<<5U)|rd;
+                    goto done;
+                }
+    }
     /* GNU LoongArch LASX replicate lane-zero group (XR0/XR5) and LSX
      * GPR-to-lane injection (V0/R5/u10). No second vector encoder: both
      * flow through existing target-owned 32-bit typed MCInst words. */

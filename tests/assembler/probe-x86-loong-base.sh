@@ -102,6 +102,9 @@ entry_x:
     # All x86 width variants use the existing 0x86/0x87 typed memory encoder.
     xchgl %eax, 24(%rbx)
     xchgl %eax, ext_global(%rip)
+    setne 4(%rsp)
+    sete ext_global(%rip)
+    setg %fs:8(%r13)
     xchgl 32(%r12), %r10d
     xchgq %r13, 8(%rsp)
     xchgw %dx, 6(%rbp)
@@ -658,6 +661,9 @@ entry_la:
     xvslti.h $xr3, $xr31, -16
     xvslti.w $xr4, $xr5, 15
     xvslti.d $xr8, $xr7, -1
+    xvpermi.q $xr0, $xr31, 0x2
+    xvpermi.w $xr1, $xr2, 0xff
+    xvpermi.d $xr3, $xr4, 0
     xvpickve2gr.d $r17, $xr31, 0
     xvpickve2gr.d $a0, $xr3, 3
     xvpickve2gr.w $a1, $xr4, 7
@@ -1003,6 +1009,8 @@ for bad in 'li.w $r4, -2049' \
            'addu16i.d $a0, $a1, 32768' \
            'addu16i.d $a0, $a1, -32769' \
            'xvslti.b $xr0, $xr1, 16' \
+           'xvpermi.q $xr0, $xr1, 256' \
+           'xvpermi.d $xr0, $vr1, 2' \
            'xvpickve2gr.d $r1, $xr0, 4' \
            'xvpickve2gr.w $r1, $xr0, 8' \
            'xvpickve2gr.b $r1, $xr0, 1' \

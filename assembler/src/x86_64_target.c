@@ -454,6 +454,28 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
         m->operands[2].immediate=bits;
         goto done;
     }
+    /* SETcc r/m8: ISA-owned condition with existing typed memory,
+     * ModR/M /0, segment, SIB and ELF PC32 fixup. */
+    if(!strncmp(s->op,"set",3U) && x64_is_mem_candidate(s->args)) {
+        unsigned cc;
+        MiniAsMCMemory mem;
+        if(x64_cond_code(s->op+3U,&cc) &&
+           x64_parse_base_memory(s->args,&mem)) {
+            m->operands[1].memory=malloc(sizeof(mem));
+            if(!m->operands[1].memory) {
+                free(mem.symbol);free(m);
+                minias_set_error(as,"out-of-memory:x86-setcc-mem");
+                return false;
+            }
+            *m->operands[1].memory=mem;
+            m->opcode=X64_REG_MEMORY;m->count=2U;
+            m->encoding=UINT32_C(0x300)|UINT32_C(0x90)|cc;
+            m->operands[0].kind=MINIAS_MC_REGISTER;
+            m->operands[0].reg=0U;
+            m->operands[1].kind=MINIAS_MC_MEMORY;
+            goto done;
+        }
+    }
     /* GNU IN/OUT port I/O through DX has an implicit accumulator.
      * Encode as a validated fixed-size target instruction, not as a
      * permissive pseudo-op or a new Common machine-code owner. */

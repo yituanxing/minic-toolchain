@@ -111,6 +111,7 @@ enum {
     A64_MC_CSEL_ALIAS,
     A64_MC_COND_SELECT,
     A64_MC_COND_COMPARE,
+    A64_MC_SHIFT,
     A64_MC_MRS,
     A64_MC_MSR,
     A64_MC_BARRIER,
@@ -691,6 +692,7 @@ static bool a64_system_register(const char *name,uint32_t *mrs,uint32_t *msr) {
         {"tpidrro_el0",UINT32_C(0xd53bd060),0U},
         /* Kernel EL1 registers, GNU ARM system-register encodings. */
         {"tpidr_el1",UINT32_C(0xd538d080),UINT32_C(0xd518d080)},
+        {"tpidr_el2",UINT32_C(0xd53cd040),UINT32_C(0xd51cd040)},
         {"daif",UINT32_C(0xd53b4220),UINT32_C(0xd51b4220)}
     };
     size_t i;
@@ -780,6 +782,40 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
     }
     if(a64_parse_lse(as,inst,op,args)) {
         /* LSE grammar is owned by one target decoder. */
+    } else if(!strcmp(op,"lsl") || !strcmp(op,"lsr")) {
+        char tok[4][96];
+        unsigned n,rd,rn,rm;
+        bool wide,sourcewide,shiftwide,sp;
+        int64_t amount;
+        bool right=!strcmp(op,"lsr");
+        if(!split_operands(args,tok,&n) || n!=3U ||
+           !parse_a64_reg(tok[0],&rd,&wide,&sp) || sp ||
+           !parse_a64_reg(tok[1],&rn,&sourcewide,&sp) || sp ||
+           wide!=sourcewide) {
+            minias_set_error(as,"bad-aarch64-shift:%s:line=%zu",args,stmt->line);
+            free(inst);return false;
+        }
+        inst->opcode=A64_MC_SHIFT;inst->count=3U;
+        inst->encoding=right?1U:0U;
+        put_reg(&inst->operands[0],rd,wide);
+        put_reg(&inst->operands[1],rn,wide);
+        if(parse_a64_reg(tok[2],&rm,&shiftwide,&sp)) {
+            if(sp || shiftwide!=wide) {
+                minias_set_error(as,"bad-aarch64-shift-width:%s:line=%zu",
+                                 args,stmt->line);
+                free(inst);return false;
+            }
+            inst->encoding|=UINT32_C(0x100);
+            put_reg(&inst->operands[2],rm,wide);
+        }else {
+            if(!parse_signed_number(tok[2],&amount) ||
+               amount<0 || amount>=(wide?64:32)) {
+                minias_set_error(as,"bad-aarch64-shift-immediate:%s:line=%zu",
+                                 args,stmt->line);
+                free(inst);return false;
+            }
+            put_immediate(&inst->operands[2],amount);
+        }
     } else if(!strcmp(op,"ccmp") || !strcmp(op,"ccmn")) {
         char tok[4][96];
         unsigned n,rn,rm,cc;
@@ -1124,6 +1160,26 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
         return false;
     }
     switch (inst->opcode) {
+        case A64_MC_SHIFT: {
+            unsigned rd=inst->operands[0].reg;
+            unsigned rn=inst->operands[1].reg;
+            bool wide=inst->operands[0].register_64;
+            bool right=(inst->encoding&1U)!=0U;
+            if(inst->encoding&UINT32_C(0x100)) {
+                unsigned rm=inst->operands[2].reg;
+                code=(right?UINT32_C(0x1ac02400):UINT32_C(0x1ac02000))|
+                     (wide?UINT32_C(0x80000000):0U)|
+                     (rm<<16U)|(rn<<5U)|rd;
+            }else {
+                unsigned shift=(unsigned)inst->operands[2].immediate;
+                unsigned width=wide?64U:32U;
+                unsigned immr=right?shift:(width-shift)%width;
+                unsigned imms=right?width-1U:width-1U-shift;
+                code=(wide?UINT32_C(0xd3400000):UINT32_C(0x53000000))|
+                     (immr<<16U)|(imms<<10U)|(rn<<5U)|rd;
+            }
+            break;
+        }
         case A64_MC_COND_COMPARE: {
             unsigned rn=inst->operands[0].reg;
             unsigned operand2=inst->operands[1].kind==MINIAS_MC_IMMEDIATE?
