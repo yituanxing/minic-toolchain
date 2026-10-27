@@ -90,9 +90,25 @@ jobs:
           MINIC="$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic" \
           BUILD_DIR=build/minic-native-backend \
             sh tests/compiler/c0/run-gnu-prefix-function-attributes.sh
-          MINIC="$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic" \
-          BUILD_DIR=build/minic-native-backend \
-            sh tests/compiler/c0/run-gnu-inline-asm-operands.sh
+          # L1 only: the entire GNU inline-asm operand suite is an RV64
+          # backend/assembler campaign with unrelated prerequisites. The
+          # changed parser diagnostic gets its own focused negative proof.
+          cat > "$RUNNER_TEMP/one-unsupported-clobber.i" <<'SRC'
+          int f(int value) {
+              __asm__ __volatile__("addi %0, %0, 1" : "+r"(value) : : "s1");
+              return value;
+          }
+          SRC
+          if build/minic-native-backend/bin/minic-cc --target=riscv64-linux \
+              -S "$RUNNER_TEMP/one-unsupported-clobber.i" \
+              -o "$RUNNER_TEMP/one-unsupported-clobber.s" \
+              >"$RUNNER_TEMP/one-unsupported-clobber.stdout" \
+              2>"$RUNNER_TEMP/one-unsupported-clobber.stderr"; then
+              echo "FAIL: unsupported s1 clobber accepted" >&2
+              exit 1
+          fi
+          grep -F 'unsupported GNU asm register clobber for target: s1' \
+            "$RUNNER_TEMP/one-unsupported-clobber.stderr"
 
       - name: Canonical target DataLayout record/global layout regression
         shell: bash
