@@ -29,8 +29,13 @@ Explicit -march=rv32i/rv64i retains existing fail-closed machine-code checks.
    remains until matching relocation-aware fragments replace it. MCInst
    operands allocate symbol-expression storage only for symbolic operands:
    register/immediate-heavy input no longer pays the former 256-byte symbol
-   buffer per operand. Remaining FP/vector/CSR/atomics and multiword pseudos
-   use the legacy string-based decoder until their own oracle-covered migration.
+   buffer per operand. The second grouped migration now also covers FP F/D
+   operations, conversions and memory operands, vector unit-stride/config,
+   atomics (AMO, LR/SC) and CSR aliases, with FPR/vector register operand
+   classes. Their duplicate legacy byte emitters have been deleted.
+   Remaining mixed pseudos, privileged and auxiliary instructions retain the
+   legacy path until separately verified. A consolidated GNU GAS byte oracle
+   checks F/D/A/V/Zicsr on a single rv64gcv object.
    Comment stripping is target-configurable and .option
    dispatch belongs to the RISC-V target; common parser still owns GNU-style
    statement grammar. Raw executable data/.org ISA guards are now target-owned,

@@ -1876,4 +1876,71 @@ for rv_bad in 'add a0, a1' 'addi a0, a1' 'addi a0, a1, 4096' \
 done
 echo 'MINIAS_RV_MCINST_NEGATIVE=PASS bad_register_imm_branch_memory=7'
 
+
+# One consolidated typed MCInst sweep over F/D, V, A and Zicsr. GNU AS
+# bytes must agree for machine instructions; the test never substitutes
+# a hand-written expected encoding or counts "PR opened" as a validation.
+cat >"$work/riscv-fp-atomic-vector-mcinst.s" <<'EOF_RV_EXT_MC'
+.option norvc
+.text
+.globl riscv_fp_atomic_vector_mcinst
+riscv_fp_atomic_vector_mcinst:
+    fadd.s ft0, ft1, ft2
+    fsub.s ft3, ft4, ft5, rtz
+    fmul.d fa0, fa1, fa2
+    fdiv.d fa3, fa4, fa5, rne
+    fsgnjn.d ft0, ft1, ft2
+    feq.d a0, fa0, fa1
+    flt.d a1, fa1, fa2
+    fle.d a2, fa2, fa3
+    fmv.x.w a0, ft0
+    fmv.w.x ft0, a0
+    fmv.x.d a1, fa0
+    fmv.d.x fa0, a1
+    fcvt.d.w fa0, a0
+    fcvt.w.d a0, fa0, rtz
+    fcvt.d.s fa0, ft0
+    fcvt.s.d ft0, fa0
+    flw ft0, 4(a0)
+    fld ft1, 8(a0)
+    fsw ft0, 12(a0)
+    fsd ft1, 16(a0)
+    amoadd.w a0, a1, (a2)
+    amoswap.d a0, a1, (a2)
+    lr.w t0, (a0)
+    sc.w.rl t0, t1, (a0)
+    csrr t0, mstatus
+    csrrw t0, mstatus, t1
+    csrrc t0, mstatus, t1
+    csrw mstatus, t0
+    csrs mstatus, t0
+    csrc mstatus, t0
+    vsetvli t0, zero, e8, m1, ta, ma
+    vsetvl t0, a0, a1
+    vmv.v.i v1, 7
+    vle8.v v1, (a0)
+    vse16.v v2, (a1), v0.t
+    ret
+EOF_RV_EXT_MC
+"$MINIAS" -march=rv64gcv -mabi=lp64d \
+    -o "$work/riscv-fp-atomic-vector-mcinst.o" \
+    "$work/riscv-fp-atomic-vector-mcinst.s"
+if command -v riscv64-linux-gnu-as >/dev/null 2>&1 &&
+   command -v riscv64-linux-gnu-objcopy >/dev/null 2>&1; then
+    riscv64-linux-gnu-as -march=rv64gcv -mabi=lp64d \
+        -o "$work/riscv-fp-atomic-vector-mcinst.gnu.o" \
+        "$work/riscv-fp-atomic-vector-mcinst.s"
+    riscv64-linux-gnu-objcopy -j .text -O binary \
+        "$work/riscv-fp-atomic-vector-mcinst.o" \
+        "$work/riscv-fp-atomic-vector-mcinst.bin"
+    riscv64-linux-gnu-objcopy -j .text -O binary \
+        "$work/riscv-fp-atomic-vector-mcinst.gnu.o" \
+        "$work/riscv-fp-atomic-vector-mcinst.gnu.bin"
+    cmp "$work/riscv-fp-atomic-vector-mcinst.bin" \
+        "$work/riscv-fp-atomic-vector-mcinst.gnu.bin"
+    echo 'MINIAS_RV_MCINST_EXT=PASS GNU_AS_FD_A_V_CSR_equal=1'
+else
+    echo 'MINIAS_RV_MCINST_EXT=PASS GNU_AS_FD_A_V_CSR_equal=SKIP(toolchain-unavailable)'
+fi
+
 echo "MINIAS_A0=PASS objects=30 abi_flags=3 format=ELF64-RISCV-ET_REL relocations=23 strings=2 pseudos=17 previous=3 subsection=2 numeric_labels=18 ecall=1 isa_next=13 csr_amo=8 sfence_vma=3 fence_i=1 vsetvl=1 vsetvli=1 vmv_v_i=4 rept=2 nested_rept=1 irp=4 section_stack=1 org=3 local_difference=1 lr_sc=2 inline_labels=2 branch_pseudos=8 extern=1 symbol_minus_dot=4 symbol_difference=1 absolute32=1 jal=2 jal_subsection=1 high_numeric_labels=2 u64_data=3 raw_insn=4 set_alias=3 move=1 numeric_zero=1 immediate_product=2 shift_immediate=1 incbin=1 align_expr=1 native_expr=6 native_zbb_tail_memexpr=1 native_jalr_symbol_load=1 native_forward_short=1 native_mixed_macro=1 native_divided_difference=1 native_symbol_addend_expr=1 native_add_sub_immediate=1 native_cfi_boundary=1 native_gas_forms=1 native_set_size=1 native_macro_comma=1 native_macro_quotes=1 pic_la_got=1 sext_w=1 macro=4 conditional=1"

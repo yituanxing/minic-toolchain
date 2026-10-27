@@ -1254,6 +1254,301 @@ static void rv_set_imm(MiniAsMCOperand *op, int64_t num) {
 /* Only this target knows operand shape; all GNU aliases stay in the
  * front-end parser, while encoder uses canonical rd/rs1/rs2/symbol fields.
  * Other opcode families intentionally remain on the legacy proven path. */
+
+/* All of these instructions are one machine word. Parse target operands
+ * once and retain individual architectural registers in MCInst; preserve
+ * CSR numbers, vector vtype, and memory/AMO width in the opcode template.
+ * No source string is accessed by the final instruction writer. */
+static bool rv_mc_word(MiniAs *as, MiniAsStmt *stmt,
+                       uint32_t skeleton, int rd, int rs1, int rs2) {
+    MiniAsMCInst *m = calloc(1U, sizeof(*m) + 3U * sizeof(*m->operands));
+    if (m == NULL) {
+        minias_set_error(as, "out-of-memory:riscv-word-mcinst");
+        return false;
+    }
+    m->opcode = RV_MC_WORD;
+    m->encoding = skeleton;
+    m->count = 3U;
+    rv_set_reg(&m->operands[0], rd);
+    rv_set_reg(&m->operands[1], rs1);
+    rv_set_reg(&m->operands[2], rs2);
+    stmt->mcinst = m;
+    return true;
+}
+
+static bool rv_parse_vector_mc(MiniAs *as, MiniAsStmt *stmt,
+                               char operands[][128], size_t count,
+                               bool *handled) {
+    bool store;
+    uint32_t width;
+    int vd, rs1, rs2;
+    char base[128];
+    int64_t off;
+    *handled = true;
+    if (decode_vector_unit_stride(stmt->op, &store, &width)) {
+        if ((count != 2U && count != 3U) ||
+            (count == 3U && strcmp(operands[2], "v0.t") != 0) ||
+            (vd = vector_reg_number(operands[0])) < 0 ||
+            !parse_mem(operands[1], &off, base) || off != 0 ||
+            (rs1 = reg_number(base)) < 0) goto invalid;
+        return rv_mc_word(as, stmt, ((count == 2U ? 1U : 0U) << 25U) |
+                          (width << 12U) | (store ? 0x27U : 0x07U),
+                          vd, rs1, 0);
+    }
+    if (strcmp(stmt->op, "vmv.v.i") == 0) {
+        if (count != 2U ||
+            (vd = vector_reg_number(operands[0])) < 0 ||
+            !parse_i64(operands[1], &off) || off < -16 || off > 15)
+            goto invalid;
+        return rv_mc_word(as, stmt, (0x17U << 26U) | (1U << 25U) |
+                          (((uint32_t)off & 31U) << 15U) |
+                          (3U << 12U) | 0x57U, vd, 0, 0);
+    }
+    if (strcmp(stmt->op, "vsetvli") == 0) {
+        uint32_t vtype;
+        if ((count != 5U && count != 6U) ||
+            (vd = reg_number(operands[0])) < 0 ||
+            (rs1 = reg_number(operands[1])) < 0 ||
+            !parse_vsetvli_vtype(operands, count, &vtype)) goto invalid;
+        return rv_mc_word(as, stmt,
+                          (vtype << 20U) | (7U << 12U) | 0x57U,
+                          vd, rs1, 0);
+    }
+    if (strcmp(stmt->op, "vsetvl") == 0) {
+        if (count != 3U || (vd = reg_number(operands[0])) < 0 ||
+            (rs1 = reg_number(operands[1])) < 0 ||
+            (rs2 = reg_number(operands[2])) < 0) goto invalid;
+        return rv_mc_word(as, stmt, (0x40U << 25U) | (7U << 12U) | 0x57U,
+                          vd, rs1, rs2);
+    }
+    *handled = false;
+    return true;
+invalid:
+    minias_set_error(as, "bad-vector-mcinst:%s:%s:line=%zu",
+                     stmt->op, stmt->args, stmt->line);
+    return false;
+}
+
+static bool rv_parse_atomic_mc(MiniAs *as, MiniAsStmt *stmt,
+                               char operands[][128], size_t count,
+                               bool *handled) {
+    bool lr = false, recognized;
+    uint32_t width, ordering, funct5;
+    int rd, rs1, rs2;
+    char base[128];
+    int64_t off;
+    recognized = decode_lr_sc_mnemonic(stmt->op, &lr, &width, &ordering);
+    if (recognized) funct5 = lr ? 2U : 3U;
+    else recognized = decode_amo_mnemonic(stmt->op,
+                                          &funct5, &width, &ordering);
+    *handled = recognized;
+    if (!recognized) return true;
+    if ((rd = count != 0U ? reg_number(operands[0]) : -1) < 0)
+        goto invalid;
+    if (lr) {
+        if (count != 2U || !parse_mem(operands[1], &off, base) ||
+            off != 0 || (rs1 = reg_number(base)) < 0) goto invalid;
+        rs2 = 0;
+    } else {
+        if (count != 3U || (rs2 = reg_number(operands[1])) < 0 ||
+            !parse_mem(operands[2], &off, base) ||
+            off != 0 || (rs1 = reg_number(base)) < 0) goto invalid;
+    }
+    return rv_mc_word(as, stmt, 0x2fU | (width << 12U) | ordering |
+                      (funct5 << 27U), rd, rs1, rs2);
+invalid:
+    minias_set_error(as, "bad-atomic-mcinst:%s:%s:line=%zu",
+                     stmt->op, stmt->args, stmt->line);
+    return false;
+}
+
+static bool rv_parse_csr_mc(MiniAs *as, MiniAsStmt *stmt,
+                            char operands[][128], size_t count,
+                            bool *handled) {
+    const char *name = stmt->op;
+    uint32_t csr, funct3;
+    int rd = 0, rs1 = 0;
+    int64_t zimm;
+    const char *source;
+    bool csr_read = strcmp(name, "csrr") == 0;
+    bool csr_full = strcmp(name, "csrrw") == 0 ||
+                    strcmp(name, "csrrc") == 0;
+    bool csr_alias = strcmp(name, "csrw") == 0 ||
+                     strcmp(name, "csrs") == 0 ||
+                     strcmp(name, "csrc") == 0;
+    *handled = csr_read || csr_full || csr_alias;
+    if (!*handled) return true;
+
+    if (csr_read) {
+        if (count != 2U || (rd = reg_number(operands[0])) < 0 ||
+            !parse_csr(operands[1], &csr)) goto invalid;
+        funct3 = 2U;
+        return rv_mc_word(as, stmt, 0x73U | (funct3 << 12U) |
+                          (csr << 20U), rd, 0, 0);
+    }
+    if (csr_full) {
+        if (count != 3U || (rd = reg_number(operands[0])) < 0 ||
+            !parse_csr(operands[1], &csr)) goto invalid;
+        source = operands[2];
+        funct3 = strcmp(name, "csrrw") == 0 ? 1U : 3U;
+    } else {
+        if (count != 2U || !parse_csr(operands[0], &csr)) goto invalid;
+        source = operands[1];
+        funct3 = strcmp(name, "csrw") == 0 ? 1U :
+                 strcmp(name, "csrs") == 0 ? 2U : 3U;
+    }
+    if (parse_i64(source, &zimm)) {
+        if (zimm < 0 || zimm > 31) goto invalid;
+        funct3 |= 4U;
+        rs1 = (int)zimm;
+    } else {
+        rs1 = reg_number(source);
+        if (rs1 < 0) goto invalid;
+    }
+    return rv_mc_word(as, stmt, 0x73U | (funct3 << 12U) |
+                      (csr << 20U), rd, rs1, 0);
+invalid:
+    minias_set_error(as, "bad-csr-mcinst:%s:%s:line=%zu",
+                     stmt->op, stmt->args, stmt->line);
+    return false;
+}
+
+
+static bool rv_mc_fp_word(MiniAs *as, MiniAsStmt *stmt,
+                          uint32_t base, int rd, int rs1, int rs2,
+                          unsigned fpr_mask) {
+    unsigned i;
+    if (!rv_mc_word(as, stmt, base, rd, rs1, rs2)) return false;
+    for (i = 0U; i < 3U; ++i)
+        if ((fpr_mask & (1U << i)) != 0U)
+            stmt->mcinst->operands[i].reg_class = MINIAS_MC_REG_FPR;
+    return true;
+}
+
+static bool rv_parse_fp_mc(MiniAs *as, MiniAsStmt *stmt,
+                            char operands[][128], size_t count,
+                            bool *handled) {
+    const char *op = stmt->op;
+    uint32_t base = 0U, rm = 7U;
+    int rd = -1, rs1 = -1, rs2 = 0;
+    unsigned classes = 7U;
+    char memory_base[128];
+    int64_t offset;
+    bool store;
+    *handled = false;
+
+    if (is_fp_binary_single(op) || is_fp_binary_double(op)) {
+        *handled = true;
+        if (count != 3U && count != 4U) goto invalid;
+        rd = float_reg_number(operands[0]);
+        rs1 = float_reg_number(operands[1]);
+        rs2 = float_reg_number(operands[2]);
+        if (count == 4U && !parse_fp_rounding_mode(operands[3], &rm))
+            goto invalid;
+        if (strcmp(op, "fadd.s") == 0) base = 0x00000053U;
+        else if (strcmp(op, "fsub.s") == 0) base = 0x08000053U;
+        else if (strcmp(op, "fmul.s") == 0) base = 0x10000053U;
+        else if (strcmp(op, "fdiv.s") == 0) base = 0x18000053U;
+        else if (strcmp(op, "fadd.d") == 0) base = 0x02000053U;
+        else if (strcmp(op, "fsub.d") == 0) base = 0x0a000053U;
+        else if (strcmp(op, "fmul.d") == 0) base = 0x12000053U;
+        else base = 0x1a000053U;
+        base |= rm << 12U;
+    } else if (strcmp(op, "fsgnjn.d") == 0) {
+        *handled = true;
+        if (count != 3U) goto invalid;
+        rd = float_reg_number(operands[0]);
+        rs1 = float_reg_number(operands[1]);
+        rs2 = float_reg_number(operands[2]);
+        base = 0x22001053U;
+    } else if (is_fp_compare_double(op)) {
+        *handled = true;
+        if (count != 3U) goto invalid;
+        rd = reg_number(operands[0]);
+        rs1 = float_reg_number(operands[1]);
+        rs2 = float_reg_number(operands[2]);
+        classes = 6U; /* integer result, two FP sources */
+        base = strcmp(op, "feq.d") == 0 ? 0xa2002053U :
+               strcmp(op, "flt.d") == 0 ? 0xa2001053U : 0xa2000053U;
+    } else if (strcmp(op, "fmv.x.d") == 0 ||
+               strcmp(op, "fmv.x.w") == 0) {
+        *handled = true;
+        if (count != 2U) goto invalid;
+        rd = reg_number(operands[0]);
+        rs1 = float_reg_number(operands[1]);
+        classes = 2U;
+        base = strcmp(op, "fmv.x.d") == 0 ? 0xe2000053U : 0xe0000053U;
+    } else if (strcmp(op, "fmv.d.x") == 0 ||
+               strcmp(op, "fmv.w.x") == 0) {
+        *handled = true;
+        if (count != 2U) goto invalid;
+        rd = float_reg_number(operands[0]);
+        rs1 = reg_number(operands[1]);
+        classes = 1U;
+        base = strcmp(op, "fmv.d.x") == 0 ? 0xf2000053U : 0xf0000053U;
+    } else if (is_fp_convert(op)) {
+        *handled = true;
+        if (count != 2U && count != 3U) goto invalid;
+        if (strcmp(op, "fcvt.d.w") == 0) {base=0xd2000053U;rm=0U;}
+        else if (strcmp(op, "fcvt.d.wu") == 0) {base=0xd2100053U;rm=0U;}
+        else if (strcmp(op, "fcvt.d.l") == 0) {base=0xd2200053U;rm=7U;}
+        else if (strcmp(op, "fcvt.d.lu") == 0) {base=0xd2300053U;rm=7U;}
+        else if (strcmp(op, "fcvt.w.d") == 0) {base=0xc2000053U;rm=7U;}
+        else if (strcmp(op, "fcvt.wu.d") == 0) {base=0xc2100053U;rm=7U;}
+        else if (strcmp(op, "fcvt.l.d") == 0) {base=0xc2200053U;rm=7U;}
+        else if (strcmp(op, "fcvt.lu.d") == 0) {base=0xc2300053U;rm=7U;}
+        else if (strcmp(op, "fcvt.d.s") == 0) {base=0x42000053U;rm=0U;}
+        else {base=0x40100053U;rm=7U;}
+        if (count == 3U && !parse_fp_rounding_mode(operands[2], &rm))
+            goto invalid;
+        if (fp_convert_int_to_double(op)) {
+            rd=float_reg_number(operands[0]);
+            rs1=reg_number(operands[1]);
+            classes=1U;
+        } else if (fp_convert_double_to_int(op)) {
+            rd=reg_number(operands[0]);
+            rs1=float_reg_number(operands[1]);
+            classes=2U;
+        } else {
+            rd=float_reg_number(operands[0]);
+            rs1=float_reg_number(operands[1]);
+            classes=3U;
+        }
+        base |= rm << 12U;
+    } else if (strcmp(op, "fld") == 0 || strcmp(op, "flw") == 0 ||
+               strcmp(op, "fsd") == 0 || strcmp(op, "fsw") == 0) {
+        MiniAsMCInst *m;
+        *handled=true;
+        store = strcmp(op, "fsd") == 0 || strcmp(op, "fsw") == 0;
+        if (count != 2U || (rd = float_reg_number(operands[0])) < 0 ||
+            !parse_mem(operands[1], &offset, memory_base) ||
+            (rs1 = reg_number(memory_base)) < 0 ||
+            offset < -2048 || offset > 2047) goto invalid;
+        m=calloc(1U,sizeof(*m)+3U*sizeof(*m->operands));
+        if (m==NULL) {
+            minias_set_error(as,"out-of-memory:riscv-fp-memory");
+            return false;
+        }
+        m->opcode=store ? RV_MC_STORE : RV_MC_LOAD;
+        m->encoding=(store ? 0x27U : 0x07U) |
+                    ((strcmp(op,"fld")==0 || strcmp(op,"fsd")==0
+                     ? 3U : 2U) << 12U);
+        m->count=3U;
+        rv_set_reg(&m->operands[0],rd);
+        m->operands[0].reg_class=MINIAS_MC_REG_FPR;
+        rv_set_reg(&m->operands[1],rs1);
+        rv_set_imm(&m->operands[2],offset);
+        stmt->mcinst=m;
+        return true;
+    } else return true;
+
+    if (rd < 0 || rs1 < 0 || rs2 < 0) goto invalid;
+    return rv_mc_fp_word(as,stmt,base,rd,rs1,rs2,classes);
+invalid:
+    minias_set_error(as,"bad-fp-mcinst:%s:%s:line=%zu",
+                     op,stmt->args,stmt->line);
+    return false;
+}
 bool minias_riscv_parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
     const RvMCDesc *desc = NULL;
     char operands[8][128];
@@ -1273,7 +1568,19 @@ bool minias_riscv_parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
             break;
         }
     }
-    if (desc == NULL) return true;
+    if (desc == NULL) {
+        bool handled;
+        count = split_operands(stmt->args, operands, 8U);
+        if (!rv_parse_vector_mc(as, stmt, operands, count, &handled) ||
+            handled) return as->error[0] == '\0';
+        if (!rv_parse_atomic_mc(as, stmt, operands, count, &handled) ||
+            handled) return as->error[0] == '\0';
+        if (!rv_parse_csr_mc(as, stmt, operands, count, &handled) ||
+            handled) return as->error[0] == '\0';
+        if (!rv_parse_fp_mc(as, stmt, operands, count, &handled) ||
+            handled) return as->error[0] == '\0';
+        return true;
+    }
     family = desc->family;
     encoding = desc->base;
     count = split_operands(stmt->args, operands, 8U);
@@ -1456,7 +1763,10 @@ static bool rv_encode_mcinst(MiniAs *as, const MiniAsStmt *stmt) {
         rs2=(int)m->operands[2].reg;
     if (m->count > 2U && m->operands[2].kind==MINIAS_MC_IMMEDIATE)
         imm=(int64_t)m->operands[2].immediate;
-    if (m->opcode==RV_MC_R)
+    if (m->opcode == RV_MC_WORD)
+        code = base | ((uint32_t)rd << 7U) |
+               ((uint32_t)rs1 << 15U) | ((uint32_t)rs2 << 20U);
+    else if (m->opcode==RV_MC_R)
         code=enc_r(base&0x7fU,rd,(base>>12U)&7U,rs1,rs2,base>>25U);
     else if(m->opcode==RV_MC_I || m->opcode==RV_MC_LOAD) {
         if(m->opcode==RV_MC_I && m->count==2U)
@@ -1576,333 +1886,6 @@ bool minias_riscv_encode(MiniAs *as, const MiniAsStmt *stmt) {
     int64_t immediate;
     uint32_t value = 0U;
     uint32_t funct3;
-
-    {
-        bool vector_store;
-        uint32_t vector_width;
-        if (decode_vector_unit_stride(stmt->op, &vector_store, &vector_width)) {
-            int vector_reg;
-            char base[128];
-            bool masked;
-            uint32_t vm;
-
-            if ((count != 2U && count != 3U) ||
-                (count == 3U && strcmp(operands[2], "v0.t") != 0)) {
-                minias_set_error(as,
-                                 "bad-operands:%s:%s:line=%zu",
-                                 stmt->op,
-                                 stmt->args,
-                                 stmt->line);
-                return false;
-            }
-            vector_reg = vector_reg_number(operands[0]);
-            if (vector_reg < 0 || !parse_mem(operands[1], &immediate, base) ||
-                immediate != 0 || !require_reg(as, stmt, base, &rs1)) {
-                minias_set_error(as,
-                                 "bad-operands:%s:%s:line=%zu",
-                                 stmt->op,
-                                 stmt->args,
-                                 stmt->line);
-                return false;
-            }
-            masked = count == 3U;
-            vm = masked ? 0U : 1U;
-            value = (vm << 25U) | ((uint32_t)rs1 << 15U) |
-                    (vector_width << 12U) | ((uint32_t)vector_reg << 7U) |
-                    (vector_store ? 0x27U : 0x07U);
-            return append_u32(as, stmt->section, value);
-        }
-    }
-
-    if (strcmp(stmt->op, "vmv.v.i") == 0) {
-        int vector_reg;
-        if (count != 2U) {
-            minias_set_error(as, "bad-operands:vmv.v.i:%s:line=%zu",
-                             stmt->args,
-                             stmt->line);
-            return false;
-        }
-        vector_reg = vector_reg_number(operands[0]);
-        if (vector_reg < 0 ||
-            !require_imm(as, stmt, operands[1], &immediate) ||
-            immediate < -16 || immediate > 15) {
-            minias_set_error(as, "bad-operands:vmv.v.i:%s:line=%zu",
-                             stmt->args,
-                             stmt->line);
-            return false;
-        }
-        value = (0x17U << 26U) | (1U << 25U) |
-                (((uint32_t)immediate & 0x1fU) << 15U) |
-                (3U << 12U) | ((uint32_t)vector_reg << 7U) | 0x57U;
-        return append_u32(as, stmt->section, value);
-    }
-
-    if (strcmp(stmt->op, "vsetvli") == 0) {
-        uint32_t vtypei;
-        if (!require_reg(as, stmt, operands[0], &rd) ||
-            !require_reg(as, stmt, operands[1], &rs1) ||
-            !parse_vsetvli_vtype(operands, count, &vtypei)) {
-            minias_set_error(as, "bad-operands:vsetvli:%s:line=%zu",
-                             stmt->args,
-                             stmt->line);
-            return false;
-        }
-        value = (vtypei << 20U) | ((uint32_t)rs1 << 15U) |
-                (7U << 12U) | ((uint32_t)rd << 7U) | 0x57U;
-        return append_u32(as, stmt->section, value);
-    }
-
-    if (strcmp(stmt->op, "vsetvl") == 0) {
-        if (count != 3U ||
-            !require_reg(as, stmt, operands[0], &rd) ||
-            !require_reg(as, stmt, operands[1], &rs1) ||
-            !require_reg(as, stmt, operands[2], &rs2)) {
-            return false;
-        }
-        return append_u32(as,
-                          stmt->section,
-                          enc_r(0x57U, rd, 7U, rs1, rs2, 0x40U));
-    }
-    if (is_fp_binary_single(stmt->op)) {
-        uint32_t base;
-        uint32_t rm = 7U;
-        int fd;
-        int fs1;
-        int fs2;
-
-        if ((count != 3U && count != 4U) ||
-            (fd = float_reg_number(operands[0])) < 0 ||
-            (fs1 = float_reg_number(operands[1])) < 0 ||
-            (fs2 = float_reg_number(operands[2])) < 0 ||
-            (count == 4U && !parse_fp_rounding_mode(operands[3], &rm))) {
-            minias_set_error(as, "bad-operands:%s:%s:line=%zu",
-                             stmt->op, stmt->args, stmt->line);
-            return false;
-        }
-        base = strcmp(stmt->op, "fadd.s") == 0 ? 0x00000053U
-               : strcmp(stmt->op, "fsub.s") == 0 ? 0x08000053U
-               : strcmp(stmt->op, "fmul.s") == 0 ? 0x10000053U
-                                                  : 0x18000053U;
-        return append_u32(as,
-                          stmt->section,
-                          base | ((uint32_t)fd << 7U) | (rm << 12U) |
-                              ((uint32_t)fs1 << 15U) |
-                              ((uint32_t)fs2 << 20U));
-    }
-
-    if (is_fp_binary_double(stmt->op)) {
-        uint32_t base;
-        uint32_t rm = 7U;
-        int fd;
-        int fs1;
-        int fs2;
-
-        if ((count != 3U && count != 4U) ||
-            (fd = float_reg_number(operands[0])) < 0 ||
-            (fs1 = float_reg_number(operands[1])) < 0 ||
-            (fs2 = float_reg_number(operands[2])) < 0 ||
-            (count == 4U && !parse_fp_rounding_mode(operands[3], &rm))) {
-            minias_set_error(as, "bad-operands:%s:%s:line=%zu",
-                             stmt->op, stmt->args, stmt->line);
-            return false;
-        }
-        base = strcmp(stmt->op, "fadd.d") == 0 ? 0x02000053U
-               : strcmp(stmt->op, "fsub.d") == 0 ? 0x0a000053U
-               : strcmp(stmt->op, "fmul.d") == 0 ? 0x12000053U
-                                                  : 0x1a000053U;
-        return append_u32(as,
-                          stmt->section,
-                          base | ((uint32_t)fd << 7U) | (rm << 12U) |
-                              ((uint32_t)fs1 << 15U) |
-                              ((uint32_t)fs2 << 20U));
-    }
-
-    if (strcmp(stmt->op, "fsgnjn.d") == 0) {
-        int fd;
-        int fs1;
-        int fs2;
-
-        if (count != 3U || (fd = float_reg_number(operands[0])) < 0 ||
-            (fs1 = float_reg_number(operands[1])) < 0 ||
-            (fs2 = float_reg_number(operands[2])) < 0) {
-            minias_set_error(as, "bad-operands:fsgnjn.d:%s:line=%zu",
-                             stmt->args, stmt->line);
-            return false;
-        }
-        return append_u32(as,
-                          stmt->section,
-                          0x22001053U | ((uint32_t)fd << 7U) |
-                              ((uint32_t)fs1 << 15U) |
-                              ((uint32_t)fs2 << 20U));
-    }
-
-    if (is_fp_compare_double(stmt->op)) {
-        uint32_t base;
-        int dest;
-        int fs1;
-        int fs2;
-
-        if (count != 3U || !require_reg(as, stmt, operands[0], &dest) ||
-            (fs1 = float_reg_number(operands[1])) < 0 ||
-            (fs2 = float_reg_number(operands[2])) < 0) {
-            minias_set_error(as, "bad-operands:%s:%s:line=%zu",
-                             stmt->op, stmt->args, stmt->line);
-            return false;
-        }
-        base = strcmp(stmt->op, "feq.d") == 0 ? 0xa2002053U
-               : strcmp(stmt->op, "flt.d") == 0 ? 0xa2001053U
-                                                 : 0xa2000053U;
-        return append_u32(as,
-                          stmt->section,
-                          base | ((uint32_t)dest << 7U) |
-                              ((uint32_t)fs1 << 15U) |
-                              ((uint32_t)fs2 << 20U));
-    }
-
-    if (strcmp(stmt->op, "fmv.x.d") == 0 ||
-        strcmp(stmt->op, "fmv.x.w") == 0) {
-        uint32_t base = strcmp(stmt->op, "fmv.x.d") == 0
-                            ? 0xe2000053U
-                            : 0xe0000053U;
-        int dest;
-        int source;
-
-        if (count != 2U || !require_reg(as, stmt, operands[0], &dest) ||
-            (source = float_reg_number(operands[1])) < 0) {
-            minias_set_error(as, "bad-operands:%s:%s:line=%zu",
-                             stmt->op, stmt->args, stmt->line);
-            return false;
-        }
-        return append_u32(as,
-                          stmt->section,
-                          base | ((uint32_t)dest << 7U) |
-                              ((uint32_t)source << 15U));
-    }
-
-    if (strcmp(stmt->op, "fmv.d.x") == 0 ||
-        strcmp(stmt->op, "fmv.w.x") == 0) {
-        uint32_t base = strcmp(stmt->op, "fmv.d.x") == 0
-                            ? 0xf2000053U
-                            : 0xf0000053U;
-        int dest;
-        int source;
-
-        if (count != 2U || (dest = float_reg_number(operands[0])) < 0 ||
-            !require_reg(as, stmt, operands[1], &source)) {
-            minias_set_error(as, "bad-operands:%s:%s:line=%zu",
-                             stmt->op, stmt->args, stmt->line);
-            return false;
-        }
-        return append_u32(as,
-                          stmt->section,
-                          base | ((uint32_t)dest << 7U) |
-                              ((uint32_t)source << 15U));
-    }
-
-    if (is_fp_convert(stmt->op)) {
-        uint32_t base;
-        uint32_t rm;
-        int dest;
-        int source;
-
-        if (count != 2U && count != 3U) {
-            minias_set_error(as, "bad-operands:%s:%s:line=%zu",
-                             stmt->op, stmt->args, stmt->line);
-            return false;
-        }
-
-        if (strcmp(stmt->op, "fcvt.d.w") == 0) {
-            base = 0xd2000053U;
-            rm = 0U;
-        } else if (strcmp(stmt->op, "fcvt.d.wu") == 0) {
-            base = 0xd2100053U;
-            rm = 0U;
-        } else if (strcmp(stmt->op, "fcvt.d.l") == 0) {
-            base = 0xd2200053U;
-            rm = 7U;
-        } else if (strcmp(stmt->op, "fcvt.d.lu") == 0) {
-            base = 0xd2300053U;
-            rm = 7U;
-        } else if (strcmp(stmt->op, "fcvt.w.d") == 0) {
-            base = 0xc2000053U;
-            rm = 7U;
-        } else if (strcmp(stmt->op, "fcvt.wu.d") == 0) {
-            base = 0xc2100053U;
-            rm = 7U;
-        } else if (strcmp(stmt->op, "fcvt.l.d") == 0) {
-            base = 0xc2200053U;
-            rm = 7U;
-        } else if (strcmp(stmt->op, "fcvt.lu.d") == 0) {
-            base = 0xc2300053U;
-            rm = 7U;
-        } else if (strcmp(stmt->op, "fcvt.d.s") == 0) {
-            base = 0x42000053U;
-            rm = 0U;
-        } else {
-            base = 0x40100053U;
-            rm = 7U;
-        }
-        if (count == 3U && !parse_fp_rounding_mode(operands[2], &rm)) {
-            minias_set_error(as, "bad-rounding-mode:%s:line=%zu",
-                             operands[2], stmt->line);
-            return false;
-        }
-
-        if (fp_convert_int_to_double(stmt->op)) {
-            dest = float_reg_number(operands[0]);
-            if (dest < 0 || !require_reg(as, stmt, operands[1], &source)) {
-                return false;
-            }
-        } else if (fp_convert_double_to_int(stmt->op)) {
-            if (!require_reg(as, stmt, operands[0], &dest) ||
-                (source = float_reg_number(operands[1])) < 0) {
-                return false;
-            }
-        } else {
-            dest = float_reg_number(operands[0]);
-            source = float_reg_number(operands[1]);
-            if (dest < 0 || source < 0) {
-                minias_set_error(as, "bad-operands:%s:%s:line=%zu",
-                                 stmt->op, stmt->args, stmt->line);
-                return false;
-            }
-        }
-
-        return append_u32(as,
-                          stmt->section,
-                          base | ((uint32_t)dest << 7U) | (rm << 12U) |
-                              ((uint32_t)source << 15U));
-    }
-
-    if (strcmp(stmt->op, "fld") == 0 || strcmp(stmt->op, "flw") == 0 ||
-        strcmp(stmt->op, "fsd") == 0 || strcmp(stmt->op, "fsw") == 0) {
-        int freg;
-        char base[128];
-        int64_t offset;
-        uint32_t width;
-
-        if (count != 2U || (freg = float_reg_number(operands[0])) < 0 ||
-            !parse_mem(operands[1], &offset, base) ||
-            !require_reg(as, stmt, base, &rs1) ||
-            offset < -2048 || offset > 2047) {
-            minias_set_error(as, "bad-operands:%s:%s:line=%zu",
-                             stmt->op,
-                             stmt->args,
-                             stmt->line);
-            return false;
-        }
-        width = (strcmp(stmt->op, "fld") == 0 || strcmp(stmt->op, "fsd") == 0)
-                    ? 3U
-                    : 2U;
-        if (stmt->op[1] == 'l') {
-            return append_u32(as,
-                              stmt->section,
-                              enc_i(0x07U, freg, width, rs1, offset));
-        }
-        return append_u32(as,
-                          stmt->section,
-                          enc_s(width, rs1, freg, offset));
-    }
 
     if (strcmp(stmt->op, "sfence.vma") == 0) {
         rs1 = 0;
@@ -2198,72 +2181,6 @@ bool minias_riscv_encode(MiniAs *as, const MiniAsStmt *stmt) {
         }
         return append_u32(as, stmt->section, 0x10500073U);
     }
-    {
-        bool is_lr;
-        uint32_t atomic_width;
-        uint32_t atomic_ordering;
-        if (decode_lr_sc_mnemonic(stmt->op,
-                                  &is_lr,
-                                  &atomic_width,
-                                  &atomic_ordering)) {
-            char base[128];
-            int64_t offset;
-            uint32_t funct5 = is_lr ? 0x02U : 0x03U;
-
-            if (is_lr) {
-                if (count != 2U || !require_reg(as, stmt, operands[0], &rd) ||
-                    !parse_mem(operands[1], &offset, base) || offset != 0 ||
-                    !require_reg(as, stmt, base, &rs1)) {
-                    minias_set_error(as, "bad-%s:line=%zu", stmt->op, stmt->line);
-                    return false;
-                }
-                rs2 = 0;
-            } else {
-                if (count != 3U || !require_reg(as, stmt, operands[0], &rd) ||
-                    !require_reg(as, stmt, operands[1], &rs2) ||
-                    !parse_mem(operands[2], &offset, base) || offset != 0 ||
-                    !require_reg(as, stmt, base, &rs1)) {
-                    minias_set_error(as, "bad-%s:line=%zu", stmt->op, stmt->line);
-                    return false;
-                }
-            }
-            return append_u32(as,
-                              stmt->section,
-                              0x2fU | ((uint32_t)rd << 7U) |
-                                  (atomic_width << 12U) |
-                                  ((uint32_t)rs1 << 15U) |
-                                  ((uint32_t)rs2 << 20U) |
-                                  atomic_ordering | (funct5 << 27U));
-        }
-    }
-
-    {
-        uint32_t amo_funct5;
-        uint32_t amo_width;
-        uint32_t amo_ordering;
-        if (decode_amo_mnemonic(stmt->op,
-                                &amo_funct5,
-                                &amo_width,
-                                &amo_ordering)) {
-            char base[128];
-            int64_t offset;
-
-            if (count != 3U || !require_reg(as, stmt, operands[0], &rd) ||
-                !require_reg(as, stmt, operands[1], &rs2) ||
-                !parse_mem(operands[2], &offset, base) || offset != 0 ||
-                !require_reg(as, stmt, base, &rs1)) {
-                minias_set_error(as, "bad-%s:line=%zu", stmt->op, stmt->line);
-                return false;
-            }
-            return append_u32(as,
-                              stmt->section,
-                              0x2fU | ((uint32_t)rd << 7U) |
-                                  (amo_width << 12U) |
-                                  ((uint32_t)rs1 << 15U) |
-                                  ((uint32_t)rs2 << 20U) |
-                                  amo_ordering | (amo_funct5 << 27U));
-        }
-    }
     if (strcmp(stmt->op, "sret") == 0) {
         if (count != 0U) {
             minias_set_error(as, "operand-count:sret:line=%zu", stmt->line);
@@ -2284,156 +2201,6 @@ bool minias_riscv_encode(MiniAs *as, const MiniAsStmt *stmt) {
             return false;
         }
         return append_u32(as, stmt->section, 0x00100073U);
-    }
-    if (strcmp(stmt->op, "csrr") == 0) {
-        uint32_t csr;
-
-        if (count != 2U || !require_reg(as, stmt, operands[0], &rd) ||
-            !parse_csr(operands[1], &csr)) {
-            minias_set_error(as, "bad-csrr:line=%zu", stmt->line);
-            return false;
-        }
-        return append_u32(as,
-                          stmt->section,
-                          0x73U | ((uint32_t)rd << 7U) | (2U << 12U) |
-                              (csr << 20U));
-    }
-    if (strcmp(stmt->op, "csrrw") == 0) {
-        uint32_t csr;
-        int64_t zimm;
-
-        if (count != 3U || !require_reg(as, stmt, operands[0], &rd) ||
-            !parse_csr(operands[1], &csr)) {
-            minias_set_error(as, "bad-csrrw:line=%zu", stmt->line);
-            return false;
-        }
-        if (parse_i64(operands[2], &zimm)) {
-            if (zimm < 0 || zimm > 31) {
-                minias_set_error(as, "bad-csrrw-zimm:line=%zu", stmt->line);
-                return false;
-            }
-            return append_u32(as,
-                              stmt->section,
-                              0x73U | ((uint32_t)rd << 7U) | (5U << 12U) |
-                                  ((uint32_t)zimm << 15U) | (csr << 20U));
-        }
-        if (!require_reg(as, stmt, operands[2], &rs1)) {
-            minias_set_error(as, "bad-csrrw:line=%zu", stmt->line);
-            return false;
-        }
-        return append_u32(as,
-                          stmt->section,
-                          0x73U | ((uint32_t)rd << 7U) | (1U << 12U) |
-                              ((uint32_t)rs1 << 15U) | (csr << 20U));
-    }
-    if (strcmp(stmt->op, "csrrc") == 0) {
-        uint32_t csr;
-        int64_t zimm;
-
-        if (count != 3U || !require_reg(as, stmt, operands[0], &rd) ||
-            !parse_csr(operands[1], &csr)) {
-            minias_set_error(as, "bad-csrrc:line=%zu", stmt->line);
-            return false;
-        }
-        if (parse_i64(operands[2], &zimm)) {
-            if (zimm < 0 || zimm > 31) {
-                minias_set_error(as, "bad-csrrc-zimm:line=%zu", stmt->line);
-                return false;
-            }
-            return append_u32(as,
-                              stmt->section,
-                              0x73U | ((uint32_t)rd << 7U) | (7U << 12U) |
-                                  ((uint32_t)zimm << 15U) | (csr << 20U));
-        }
-        if (!require_reg(as, stmt, operands[2], &rs1)) {
-            minias_set_error(as, "bad-csrrc:line=%zu", stmt->line);
-            return false;
-        }
-        return append_u32(as,
-                          stmt->section,
-                          0x73U | ((uint32_t)rd << 7U) | (3U << 12U) |
-                              ((uint32_t)rs1 << 15U) | (csr << 20U));
-    }
-    if (strcmp(stmt->op, "csrw") == 0) {
-        uint32_t csr;
-        int64_t zimm;
-
-        if (count != 2U || !parse_csr(operands[0], &csr)) {
-            minias_set_error(as, "bad-csrw:line=%zu", stmt->line);
-            return false;
-        }
-        if (parse_i64(operands[1], &zimm)) {
-            if (zimm < 0 || zimm > 31) {
-                minias_set_error(as, "bad-csrw-zimm:line=%zu", stmt->line);
-                return false;
-            }
-            return append_u32(as,
-                              stmt->section,
-                              0x73U | (5U << 12U) |
-                                  ((uint32_t)zimm << 15U) | (csr << 20U));
-        }
-        if (!require_reg(as, stmt, operands[1], &rs1)) {
-            minias_set_error(as, "bad-csrw:line=%zu", stmt->line);
-            return false;
-        }
-        return append_u32(as,
-                          stmt->section,
-                          0x73U | (1U << 12U) |
-                              ((uint32_t)rs1 << 15U) | (csr << 20U));
-    }
-    if (strcmp(stmt->op, "csrs") == 0) {
-        uint32_t csr;
-        int64_t zimm;
-
-        if (count != 2U || !parse_csr(operands[0], &csr)) {
-            minias_set_error(as, "bad-csrs:line=%zu", stmt->line);
-            return false;
-        }
-        if (parse_i64(operands[1], &zimm)) {
-            if (zimm < 0 || zimm > 31) {
-                minias_set_error(as, "bad-csrs-zimm:line=%zu", stmt->line);
-                return false;
-            }
-            return append_u32(as,
-                              stmt->section,
-                              0x73U | (6U << 12U) |
-                                  ((uint32_t)zimm << 15U) | (csr << 20U));
-        }
-        if (!require_reg(as, stmt, operands[1], &rs1)) {
-            minias_set_error(as, "bad-csrs:line=%zu", stmt->line);
-            return false;
-        }
-        return append_u32(as,
-                          stmt->section,
-                          0x73U | (2U << 12U) |
-                              ((uint32_t)rs1 << 15U) | (csr << 20U));
-    }
-    if (strcmp(stmt->op, "csrc") == 0) {
-        uint32_t csr;
-        int64_t zimm;
-
-        if (count != 2U || !parse_csr(operands[0], &csr)) {
-            minias_set_error(as, "bad-csrc:line=%zu", stmt->line);
-            return false;
-        }
-        if (parse_i64(operands[1], &zimm)) {
-            if (zimm < 0 || zimm > 31) {
-                minias_set_error(as, "bad-csrc-zimm:line=%zu", stmt->line);
-                return false;
-            }
-            return append_u32(as,
-                              stmt->section,
-                              0x73U | (7U << 12U) |
-                                  ((uint32_t)zimm << 15U) | (csr << 20U));
-        }
-        if (!require_reg(as, stmt, operands[1], &rs1)) {
-            minias_set_error(as, "bad-csrc:line=%zu", stmt->line);
-            return false;
-        }
-        return append_u32(as,
-                          stmt->section,
-                          0x73U | (3U << 12U) |
-                              ((uint32_t)rs1 << 15U) | (csr << 20U));
     }
     if (strcmp(stmt->op, "fence.i") == 0) {
         if (count != 0U) {

@@ -119,9 +119,15 @@ typedef enum MiniAsMCOperandKind {
     MINIAS_MC_IMMEDIATE,
     MINIAS_MC_SYMBOL
 } MiniAsMCOperandKind;
+typedef enum MiniAsMCRegisterClass {
+    MINIAS_MC_REG_GPR = 0,
+    MINIAS_MC_REG_FPR,
+    MINIAS_MC_REG_VECTOR
+} MiniAsMCRegisterClass;
 typedef struct MiniAsMCOperand {
     MiniAsMCOperandKind kind;
     unsigned reg;
+    MiniAsMCRegisterClass reg_class;
     bool register_64;
     uint64_t immediate;
     /* Symbol names are allocated only for symbol operands. Integer-heavy
