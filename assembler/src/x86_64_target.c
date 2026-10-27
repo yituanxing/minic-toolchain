@@ -665,7 +665,9 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
             {"sbbq",3U},{"sbbl",3U},
             {"xorq",6U},{"xorl",6U},{"cmpq",7U},{"cmpl",7U},
             {"addb",0U},{"orb",1U},{"andb",4U},{"subb",5U},
-            {"xorb",6U},{"cmpb",7U}
+            {"xorb",6U},{"cmpb",7U},
+            {"addw",0U},{"orw",1U},{"sbbw",3U},{"andw",4U},
+            {"subw",5U},{"xorw",6U},{"cmpw",7U}
         };
         uint64_t bits=0U;
         int64_t val;
@@ -682,7 +684,13 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
         if(!numeric && !strcmp(s->op,"movq") &&
            minias_parse_symbol_addend(src+1,&sym))is_sym=true;
         val=(int64_t)bits;
-        if((numeric && val>=INT32_MIN && val<=INT32_MAX) || is_sym) {
+        {
+            char suffix=s->op[strlen(s->op)-1U];
+            bool in_range=numeric &&
+                (suffix=='b'?(val>=-128 && val<=255):
+                 suffix=='w'?(val>=-32768 && val<=65535):
+                 val>=INT32_MIN && val<=INT32_MAX);
+        if(in_range || is_sym) {
             if(!strcmp(s->op,"movq") &&
                x64_register(dst,&rd,&wd) && wd) {
                 m->opcode=X64_MOVQ_IMMREG;m->count=2U;
@@ -704,9 +712,10 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
             }
             if(!is_sym && x64_is_mem_candidate(dst) &&
                (has_group || !strcmp(s->op,"movq") ||
-                !strcmp(s->op,"movl") || !strcmp(s->op,"movb") ||
-                !strcmp(s->op,"testq") ||
-                !strcmp(s->op,"testl") || !strcmp(s->op,"testb"))) {
+                !strcmp(s->op,"movl") || !strcmp(s->op,"movw") ||
+                !strcmp(s->op,"movb") || !strcmp(s->op,"testq") ||
+                !strcmp(s->op,"testl") || !strcmp(s->op,"testw") ||
+                !strcmp(s->op,"testb"))) {
                 MiniAsMCMemory parsed;
                 if(s->op[strlen(s->op)-1U]=='b' &&
                    (val < -128 || val > 255))goto invalid;
@@ -725,15 +734,16 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
                 m->operands[1].kind=MINIAS_MC_MEMORY;
                 m->operands[2].kind=MINIAS_MC_IMMEDIATE;
                 m->operands[2].immediate=bits;
-                m->encoding=has_group ?
-                    (s->op[strlen(s->op)-1U]=='b'?0x80U:
+                m->encoding=(has_group ?
+                    (suffix=='b'?0x80U:
                      val>=-128 && val<=127?0x83U:0x81U):
                     (!strcmp(s->op,"movb")?0xc6U:
-                    (!strcmp(s->op,"testb")?0xf6U:
-                    (!strcmp(s->op,"testq")||!strcmp(s->op,"testl")?
-                     0xf7U:0xc7U)));
+                     !strcmp(s->op,"testb")?0xf6U:
+                     !strncmp(s->op,"test",4U)?0xf7U:0xc7U))) |
+                    (suffix=='w'?0x400U:0U);
                 goto done;
             }
+        }
         }
     }
     /* One typed Group-1 ALU register-immediate path across 8/16/32/64.
@@ -893,8 +903,10 @@ static bool x64_measure(MiniAs *as,const MiniAsStmt *s,uint32_t *size) {
         case X64_IMM_MEMORY:
         case X64_REG_MEMORY: {
             const MiniAsMCMemory *mem=m->operands[1].memory;
+            unsigned base=m->encoding&UINT32_C(0xff);
             unsigned extra=m->opcode==X64_IMM_MEMORY?
-                (m->encoding==0x83U || m->encoding==0xc6U || m->encoding==0x80U || m->encoding==0xf6U?1U:4U):0U;
+                (base==0x83U || base==0xc6U || base==0x80U ||
+                 base==0xf6U?1U:(m->encoding&0x400U)?2U:4U):0U;
             *size=extra+((m->encoding&0x100U)?1U:0U) +
                   ((m->encoding&0x400U)?1U:0U) +
                   (mem->address_space?1U:0U) + (m->operands[0].register_64 ||
@@ -1125,8 +1137,10 @@ static bool x64_encode(MiniAs *as,const MiniAsStmt *s) {
         case X64_IMM_MEMORY:
         case X64_REG_MEMORY: {
             const MiniAsMCMemory *mem=m->operands[1].memory;
+            unsigned base=m->encoding&UINT32_C(0xff);
             unsigned extra=m->opcode==X64_IMM_MEMORY?
-                (m->encoding==0x83U || m->encoding==0xc6U || m->encoding==0x80U || m->encoding==0xf6U?1U:4U):0U;
+                (base==0x83U || base==0xc6U || base==0x80U ||
+                 base==0xf6U?1U:(m->encoding&0x400U)?2U:4U):0U;
             uint32_t immediate=extra?
                 (uint32_t)m->operands[2].immediate:0U;
             unsigned low_base=mem->base&7U;
