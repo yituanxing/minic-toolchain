@@ -15,6 +15,9 @@ on:
       - "src/target/riscv32/**"
       - "src/target/riscv64/**"
       - "tests/compiler/c0/probe-riscv-shared-word-operations.sh"
+      - "tests/compiler/c0/probe-four-backend-dynamic-stack.sh"
+      - "tests/compiler/c0/dynamic_stack_wide_spill.c"
+      - "tests/compiler/c0/dynamic_stack_wide_spill_helper.c"
       - ".github/workflows/minic-runtime-fourarch.yml"
   push:
     branches: [main]
@@ -73,6 +76,9 @@ on:
       - "tests/compiler/c0/probe-x86-int128-runtime-abi.sh"
       - "tests/compiler/c0/probe-x86-compiler-rt-native.sh"
       - "tests/compiler/c0/probe-lp64-compiler-rt-qemu.sh"
+      - "tests/compiler/c0/probe-four-backend-dynamic-stack.sh"
+      - "tests/compiler/c0/dynamic_stack_wide_spill.c"
+      - "tests/compiler/c0/dynamic_stack_wide_spill_helper.c"
       - "tests/compiler/c0/probe-runtime-isnan.sh"
       - "tests/compiler/c0/probe-rv64i-int128-pairs-qemu.sh"
       - "tests/compiler/c0/probe-rv64i-kbuild-abi.sh"
@@ -141,9 +147,13 @@ jobs:
           if [[ "${{ matrix.target }}" == riscv64 ]]; then
             sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
               gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu qemu-user
-          elif [[ "${{ matrix.target }}" == aarch64 ||                   "${{ matrix.target }}" == loongarch64 ]]; then
-            # LLVM/LLD target all ISAs; QEMU executes freestanding ELF with
-            # no target sysroot, GNU toolchain or libc download.
+          elif [[ "${{ matrix.target }}" == aarch64 ]]; then
+            # Exact-head AAPCS64 GNU/QEMU CALL ABI differential now owns the
+            # 960-byte wide-argument / dynamic alloca stress fixture.
+            sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+              gcc-aarch64-linux-gnu lld qemu-user
+          elif [[ "${{ matrix.target }}" == loongarch64 ]]; then
+            # The existing LoongArch runtime uses freestanding LLVM/LLD/QEMU.
             sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
               lld qemu-user
           fi
@@ -277,6 +287,15 @@ jobs:
           set -Eeuo pipefail
           bash tests/compiler/c0/probe-x86-compiler-rt-native.sh \
             "$GITHUB_WORKSPACE/build/runtime-verdict/minic/x86_64/libminic-rt.a"
+      - name: AAPCS64 exact-head GNU/QEMU dynamic wide CALL ABI
+        if: matrix.target == 'aarch64'
+        shell: bash
+        env:
+          MINIC_CC: ${{ github.workspace }}/build/runtime-ci/bin/minic-cc
+        run: |
+          set -Eeuo pipefail
+          sh tests/compiler/c0/probe-four-backend-dynamic-stack.sh \
+            aarch64 aarch64-linux-gnu-gcc qemu-aarch64 /usr/aarch64-linux-gnu
       - name: QEMU execute upstream runtime with native ABI on new LP64 targets
         if: matrix.target == 'aarch64' || matrix.target == 'loongarch64'
         shell: bash
