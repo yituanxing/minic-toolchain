@@ -44,10 +44,49 @@ int reentry_prefix(int early) {
     }
     return result;
 }
+int suffix_after_break(void) {
+    int result = 42;
+    switch (sizeof(char)) {
+    case 1: break;
+    case 2: __asm__ __volatile__("minic_unsupported_dead_hw" : : "r"(result)); break;
+    case 4: __asm__ __volatile__("minic_unsupported_dead_hw" : : "r"(result)); break;
+    default: result = 9; break;
+    }
+    return result;
+}
+int suffix_after_return(void) {
+    switch (sizeof(char)) {
+    case 1: return 42;
+    case 2: __asm__ __volatile__("minic_unsupported_dead_hw"); return 43;
+    default: return 44;
+    }
+}
+int suffix_reentry(int early) {
+    int result = 42;
+    if (early) goto AFTER;
+    switch (sizeof(char)) {
+    case 1: break;
+    case 2: AFTER: result = 43; break;
+    default: result = 44; break;
+    }
+    return result;
+}
+int suffix_conditional(int early) {
+    switch (sizeof(char)) {
+    case 1: if (early) break;
+    case 2: return 43;
+    default: return 44;
+    }
+    return 42;
+}
 int main(void) {
     return constant_size() == 42 && reentry(1) == 43 &&
            reentry(0) == 42 && reentry_prefix(1) == 41 &&
-           reentry_prefix(0) == 42 ? 0 : 1;
+           reentry_prefix(0) == 42 &&
+           suffix_after_break() == 42 && suffix_after_return() == 42 &&
+           suffix_reentry(0) == 42 && suffix_reentry(1) == 43 &&
+           suffix_conditional(0) == 43 && suffix_conditional(1) == 42
+               ? 0 : 1;
 }
 SRC
 for target in riscv32-linux riscv64-linux x86_64-linux aarch64-linux loongarch64-linux; do
@@ -80,4 +119,4 @@ if "$MINIC_CC" --target=x86_64-linux -S "$work/dynamic-switch.i" \
     echo 'FAIL dynamic switch pruned executable unknown GNU asm' >&2
     exit 1
 fi
-echo 'MINIC_CORE_CONSTANT_SWITCH_DEAD_SOURCE=PASS five_targets=5 external_goto=4 dynamic_negative=1'
+echo 'MINIC_CORE_CONSTANT_SWITCH_DEAD_SOURCE=PASS five_targets=5 external_goto=6 suffix_break=1 suffix_return=1 conditional_fallthrough=1 dynamic_negative=1'
