@@ -92,6 +92,48 @@ SRC
         fi
     done
     echo 'MINIC_AARCH64_HARDWARE_FENCES_GNU_QEMU=PASS'
+
+    # Original arm64 BUG() emits brk %0 with AArch64 GNU 'I'(0x401).
+    # Assemble both implementations and compare the actual BRK immediate;
+    # the guarded branch is never taken by QEMU-user (BRK is a trap).
+    cat > "$work/aarch64-brk.i" <<'SRC'
+int break_if(int enabled) {
+    if (enabled) __asm__ __volatile__("brk %0" : : "I"(0x401));
+    return 42;
+}
+int main(void) { return break_if(0) == 42 ? 0 : 1; }
+SRC
+    "$cross_cc" -x c "$work/aarch64-brk.i" -o "$work/aarch64-brk.gnu.elf"
+    "$MINIC_CC" --target=aarch64-linux -S "$work/aarch64-brk.i" \
+        -o "$work/aarch64-brk.minic.s"
+    grep -Fq 'brk #1025' "$work/aarch64-brk.minic.s"
+    "$cross_cc" -x assembler "$work/aarch64-brk.minic.s" \
+        -o "$work/aarch64-brk.minic.elf"
+    for flavor in gnu minic; do
+        aarch64-linux-gnu-objdump -d "$work/aarch64-brk.$flavor.elf" |
+            grep -Eq 'brk[[:space:]]+#0x401'
+        qemu-aarch64 -L /usr/aarch64-linux-gnu "$work/aarch64-brk.$flavor.elf"
+    done
+    for invalid in suffix wrong_constraint shifted nonconstant; do
+        case "$invalid" in
+            suffix) asm='__asm__ __volatile__("brk %0; svc #0" : : "I"(1025));' ;;
+            wrong_constraint) asm='__asm__ __volatile__("brk %0" : : "r"(1025));' ;;
+            shifted) asm='__asm__ __volatile__("brk %0" : : "I"(4096));' ;;
+            nonconstant) asm='__asm__ __volatile__("brk %0" : : "I"(n));' ;;
+        esac
+        printf 'int main(int n) { %s return 0; }\n' "$asm" \
+            >"$work/aarch64-brk-invalid-$invalid.i"
+        if "$MINIC_CC" --target=aarch64-linux -S \
+            "$work/aarch64-brk-invalid-$invalid.i" \
+            -o "$work/aarch64-brk-invalid-$invalid.s" \
+            >"$work/aarch64-brk-invalid-$invalid.out" \
+            2>"$work/aarch64-brk-invalid-$invalid.err"; then
+            echo "FAIL unsafe AArch64 BRK template admitted: $invalid" >&2
+            exit 1
+        fi
+        test ! -e "$work/aarch64-brk-invalid-$invalid.s"
+    done
+    echo 'MINIC_AARCH64_LINUX_BRK_GNU_AS_QEMU=PASS imm=0x401 negative=4'
 fi
 
 # Original Linux syscall wrappers have deliberately different argument C

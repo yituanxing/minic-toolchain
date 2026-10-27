@@ -71,6 +71,28 @@ static const char *aarch64_barrier_template(const char *text, size_t len) {
             return allowed[i];
     return NULL;
 }
+/* Linux BRK BUG trap: the AArch64 GNU I constraint is an add/sub
+ * immediate class, but BRK itself takes an imm16. Admit the exact
+ * brk %0 template with a literal in the intersection (0..4095).
+ * Never treat a GNU constraint as permission to pass through arbitrary ASM. */
+static bool aarch64_linux_brk_template(const char *text, size_t length) {
+    static const char exact[] = "brk%0";
+    char compact[32];
+    size_t i, n = 0U;
+    if (text == NULL || length == 0U || length >= sizeof(compact)) return false;
+    for (i = 0U; i < length; ++i) {
+        char c = text[i];
+        if (c == '\r' || c == '\n') return false;
+        if (c == ' ' || c == '\t') continue;
+        if (n + 1U >= sizeof(compact)) return false;
+        compact[n++] = c;
+    }
+    compact[n] = '\0';
+    return strcmp(compact, exact) == 0;
+}
+static bool aarch64_linux_brk_value(int64_t value) {
+    return value >= 0 && value <= 4095;
+}
 static bool constraint(const MinicInlineAsmOperand *op, const char *word) {
     size_t n = strlen(word);
     return op && op->constraint_text && op->constraint_length == n &&
@@ -89,6 +111,20 @@ bool minic_aarch64_qualify_inline_asm(
         aarch64_barrier_template(src->template_text, src->template_length)) {
         contract->operand_count = 0U;
         return true;
+    }
+    if (program && src && contract && !src->is_goto &&
+        src->output_count == 0U && src->input_count == 1U && src->inputs &&
+        src->clobber_count == 0U && src->register_clobber_count == 0U &&
+        !src->has_memory_clobber && src->label_count == 0U &&
+        aarch64_linux_brk_template(src->template_text, src->template_length) &&
+        constraint(&src->inputs[0], "I")) {
+        expr = minic_c0_program_expression(program, src->inputs[0].expression);
+        if (expr && expr->kind == MINIC_EXPRESSION_INTEGER &&
+            aarch64_linux_brk_value(expr->value.integer_value)) {
+            contract->operand_count = 1U;
+            contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+            return true;
+        }
     }
     if (program && src && contract &&
         !src->is_goto && !src->is_volatile &&
@@ -166,6 +202,32 @@ bool minic_aarch64_emit_qualified_structured_asm(
         const char *reg = aarch64_linux_mrs_register(
             info->template_text, info->template_length);
         MinicType pointee;
+        if (operand != NULL &&
+            operand[0].kind == MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT) {
+            const MinicCoreInstruction *definition;
+            MinicCoreInstructionId def_id;
+            int64_t imm;
+            if (!aarch64_linux_brk_template(
+                    info->template_text, info->template_length) ||
+                info->is_goto || info->has_memory_clobber ||
+                info->register_clobber_count != 0U ||
+                operand[0].operand_index != 0U ||
+                operand[0].has_fixed_register_binding ||
+                operand[0].early_clobber ||
+                operand[0].value >= fn->value_count)
+                return false;
+            def_id = fn->values[operand[0].value].definition;
+            if (def_id >= fn->instruction_count) return false;
+            definition = &fn->instructions[def_id];
+            if (definition->kind != MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT ||
+                definition->result != operand[0].value)
+                return false;
+            imm = definition->value.integer_value;
+            if (!aarch64_linux_brk_value(imm)) return false;
+            /* Never execute this in QEMU-user validation: the original
+             * Linux BUG instruction intentionally enters a trap. */
+            return fprintf(out, "  brk #%lld\n", (long long)imm) >= 0;
+        }
         if (reg == NULL || info->is_goto ||
             info->has_memory_clobber || info->register_clobber_count != 0U ||
             operand == NULL || operand[0].operand_index != 0U ||
