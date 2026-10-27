@@ -37,6 +37,40 @@ typedef struct MinicProgramEmitConfig {
     bool continue_after_failure; /* opt-in census; never retain partial .s */
 } MinicProgramEmitConfig;
 
+/* GNU basic file-scope asm is source-owned text, not generated machine
+ * instruction selection. Emit the original bytes once between globals and
+ * functions for targets with a GNU assembler. Never treat embedded NUL as
+ * a truncation boundary, and restore .text after arbitrary source sections. */
+static inline bool minic_program_emit_source_file_asm(
+    FILE *out, const MinicC0Program *program) {
+    size_t i;
+    if (out == NULL || program == NULL) return false;
+    if (program->file_asm_count == 0U) return true;
+    if (fputs(".text\n", out) == EOF) return false;
+    for (i = 0U; i < program->file_asm_count; ++i) {
+        const MinicFileAsm *source = &program->file_asms[i];
+        if (source->text == NULL ||
+            memchr(source->text, '\0', source->length) != NULL ||
+            (source->length != 0U &&
+             fwrite(source->text, 1U, source->length, out) != source->length) ||
+            fputc('\n', out) == EOF)
+            return false;
+    }
+    return fputs(".text\n", out) != EOF;
+}
+
+static inline bool minic_program_emit_source_file_asm_stage(
+    FILE *out, const MinicC0Program *program,
+    const MinicTargetInfo *target, const MinicCoreFunction *functions,
+    size_t function_count, bool function_sections, void *context) {
+    (void)target;
+    (void)functions;
+    (void)function_count;
+    (void)function_sections;
+    (void)context;
+    return minic_program_emit_source_file_asm(out, program);
+}
+
 static inline bool minic_program_emit_write(
     const char *path, const MinicC0Program *program,
     const MinicTargetInfo *target, const MinicCoreFunction *functions,
