@@ -15,6 +15,7 @@ on:
       - 'Makefile'
       - 'tests/compiler/c0/check-four-target-model-m0.c'
       - 'tests/compiler/c0/check-minic-target-boundaries.sh'
+      - 'tests/compiler/c0/probe-rv32-frame-access.c'
       - 'tests/compiler/c0/probe-core-semantic-family.c'
       - 'tests/compiler/c0/probe-core-block-walk.c'
       - 'tests/compiler/c0/probe-direct-lp64-dispatch.c'
@@ -37,6 +38,7 @@ on:
       - 'Makefile'
       - '.github/workflows/minic-native-refactor-gate.yml'
       - 'tests/compiler/c0/check-minic-target-boundaries.sh'
+      - 'tests/compiler/c0/probe-rv32-frame-access.c'
       # Changes to the native ABI/oracle must execute the native gate too.
       - 'tests/compiler/c0/run-x86_64-native-m1.sh'
       - 'tests/compiler/c0/probe-rv64-extended-float-native.sh'

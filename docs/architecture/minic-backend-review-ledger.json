@@ -1,16 +1,15 @@
 {
   "schema": 1,
-  "baseline_commit": "e6cdbb9cfba0e522b2437f46260b5ef00dba419a",
+  "baseline_commit": "a2c88e134cc438eb1c1ccf0c480cee283b32a2bc",
   "policy": "blob fingerprint tracks unchanged source. CI coverage means tested changes only, not full source inspection; changed blobs automatically reopen.",
   "audit_merged": [
     665,
     666,
-    668
+    668,
+    669
   ],
-  "audit_in_progress": "Direct LP64 ELF/FunctionPlan/output lifetime now co-owned by Common DirectFunctionEmitter, AArch64 and LoongArch64 retain native prologue/hooks; PR unmerged; do not treat CI before exact-head as validated.",
+  "audit_in_progress": "RV32 ABI fixed prototype type/checked ILP32 frame access and previously untouched RV64 frame code reviewed on main a2c88e134cc4. Code fix pending exact-head validation.",
   "next_deep_review": [
-    "src/target/riscv32/rv32_frame.c",
-    "src/target/riscv64/frame_layout.c",
     "src/target/aarch64/call_emit.c",
     "src/target/loongarch64/call_emit.c",
     "src/target/riscv32/rv32_call.c",
@@ -655,11 +654,12 @@
       "ci_touched_in": []
     },
     "src/target/riscv32/rv32_abi_plan.c": {
-      "blob": "7d8751707b2c25f11592e96baecf8f6f6f00a98d",
+      "blob": "34c97e9b6d219af67988f6a145b782b29381e1fd",
       "review_depth": "full",
       "ci_touched_in": [
         665
-      ]
+      ],
+      "audit_note": "Full ILP32 incoming/outgoing ABI planner and Common Core CallView/formal conversion check."
     },
     "src/target/riscv32/rv32_abi_plan.h": {
       "blob": "d0b231ed7b81f5b9d36f225ae50c44a73baf63f4",
@@ -692,11 +692,12 @@
       "ci_touched_in": []
     },
     "src/target/riscv32/rv32_frame.c": {
-      "blob": "f438d624d1b6712922205a9ce3fa1ea42daa26d1",
-      "review_depth": "targeted",
+      "blob": "bff95a3da592b66606183cbcee2f702ad0cdd304",
+      "review_depth": "full",
       "ci_touched_in": [
         665
-      ]
+      ],
+      "audit_note": "Read full RV32 frame + transport, checked public invalid sentinels and machine register scratch."
     },
     "src/target/riscv32/rv32_global_emit.c": {
       "blob": "c04ac35dd55ef9036b717dd844ea975595a0bd2c",
@@ -847,10 +848,11 @@
     },
     "src/target/riscv64/frame_layout.c": {
       "blob": "02ddc3eef7b3c023cf2b2c7c20cd8a4db5706628",
-      "review_depth": "targeted",
+      "review_depth": "full",
       "ci_touched_in": [
         665
-      ]
+      ],
+      "audit_note": "Full RV64 physical frame planning; consumes Common object storage/call-index/spill plan. Potential redundant second object walk is tied to physical offsets; no premature rewrite."
     },
     "src/target/riscv64/frame_layout.h": {
       "blob": "afea3177035e4e9a0efb450b93853ab170769374",
