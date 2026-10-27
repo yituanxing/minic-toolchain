@@ -29,7 +29,13 @@ for fixture in $fixtures; do
   elif [ "$fixture" = dynamic_stack_wide_spill ]; then
     helper="$repo/tests/compiler/c0/dynamic_stack_wide_spill_helper.c"
   fi
-  if ! timeout 40s "$MINIC_CC" --target="$target-linux" -S "$source" \
+  # minic-cc consumes preprocessed translation units. GNU -E -P removes
+  # comments/directives and matches the original C seen by cross-GCC.
+  if ! "$gcc" -E -P -std=gnu11 "$source" -o "$work/$fixture.i"; then
+    echo "FOUR_BACKEND_DYNAMIC_STACK=FAIL target=$target fixture=$fixture stage=GNU_PREPROCESS" >&2
+    exit 1
+  fi
+  if ! timeout 40s "$MINIC_CC" --target="$target-linux" -S "$work/$fixture.i" \
         -o "$mini_asm" >"$work/$fixture.mini.out" 2>"$work/$fixture.mini.err" ||
      ! test -s "$mini_asm"; then
     echo "FOUR_BACKEND_DYNAMIC_STACK=FAIL target=$target fixture=$fixture stage=MiniC" >&2
