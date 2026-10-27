@@ -384,4 +384,27 @@ for sect in .text .data; do
 done
 echo 'MINIAS_COMMON_GNU_ALIGN=PASS optional_fill_maxskip=gnu_byte_equal'
 
+# Local symbol differences are absolute even in a different output
+# section. GNU's .byte/.long/.quad are checked from the same source.
+cat >"$work/local-diff.s" <<'A64_DIFF'
+.arch armv8-a
+.text
+.Ldelta_start:
+    nop
+.Ldelta_end:
+    nop
+.data
+.local delta_fields
+delta_fields:
+    .byte .Ldelta_end-.Ldelta_start
+    .long .Ldelta_end-.Ldelta_start
+    .quad .Ldelta_end-.Ldelta_start
+A64_DIFF
+"$MINIAS" --target=aarch64 -o "$work/diff-mini.o" "$work/local-diff.s"
+"$AARCH64_AS" -o "$work/diff-gnu.o" "$work/local-diff.s"
+"$AARCH64_OBJCOPY" -j .data -O binary "$work/diff-mini.o" "$work/diff-mini.bin"
+"$AARCH64_OBJCOPY" -j .data -O binary "$work/diff-gnu.o" "$work/diff-gnu.bin"
+cmp "$work/diff-mini.bin" "$work/diff-gnu.bin"
+echo 'MINIAS_COMMON_SYMBOL_DIFF=PASS local_cross_section_byte_long_quad=gnu_equal'
+
 echo 'MINIAS_AARCH64_VSLICE=PASS ELF64=1 gnu_bytes=equal relocation_call26_jump26_abs64=1 ld=pass qemu=exit0'

@@ -2292,8 +2292,9 @@ static bool add_data_stmt(MiniAs *as, const char *op, char *args, size_t line) {
                      (parse_symbol_minus_dot(trimmed, &expr) ||
                       parse_symbol_minus_dot_divisor(trimmed,
                                                      &expr,
-                                                     &divisor) ||
-                      parse_symbol_difference(trimmed, &expr, &rhs_expr)));
+                                                     &divisor))) ||
+                    ((width == 1U || width == 2U || width == 4U || width == 8U) &&
+                     parse_symbol_difference(trimmed, &expr, &rhs_expr));
 
                 if (!supported) {
                     minias_set_error(as,
@@ -2451,7 +2452,9 @@ static bool emit_symbol_difference(MiniAs *as,
     uint32_t sub_type = as->target->fixup_relocation_type(MINIAS_FIXUP_SUB, width);
 
     if (lhs != NULL && rhs != NULL && lhs->defined && rhs->defined &&
-        lhs->section == rhs->section && lhs->section == stmt->section &&
+        /* Same-section local differences remain absolute even when
+         * the DATA fragment containing the field is in another section. */
+        lhs->section == rhs->section &&
         lhs->bind == MINIAS_STB_LOCAL && rhs->bind == MINIAS_STB_LOCAL &&
         strncmp(lhs->name, ".L", 2U) == 0 && strncmp(rhs->name, ".L", 2U) == 0) {
         int64_t difference =
@@ -2633,7 +2636,8 @@ static bool emit_data_stmt(MiniAs *as, const MiniAsStmt *stmt) {
                         free(copy);
                         return false;
                     }
-                } else if ((width == 2U || width == 4U || width == 8U) &&
+                } else if ((width == 1U || width == 2U || width == 4U ||
+                            width == 8U) &&
                            parse_symbol_difference(trimmed, &expr, &rhs_expr)) {
                     if (!emit_symbol_difference(as,
                                                 stmt,
