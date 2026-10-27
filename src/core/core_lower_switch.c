@@ -679,6 +679,8 @@ minic_core_lower_switch(MinicCoreLowerContext *context, const MinicStatement *st
     size_t first_pre_case_index;
     size_t pre_case_label_count;
     size_t source_index;
+    size_t constant_entry_label;
+    bool prune_constant_prefix;
     bool all_segments_terminate;
     bool segment_breaks[MINIC_CORE_SWITCH_LABEL_LIMIT];
     bool segment_terminates[MINIC_CORE_SWITCH_LABEL_LIMIT];
@@ -743,6 +745,8 @@ minic_core_lower_switch(MinicCoreLowerContext *context, const MinicStatement *st
         }
     }
 
+    constant_entry_label = SIZE_MAX;
+    prune_constant_prefix = false;
     case_count = 0U;
     default_label = SIZE_MAX;
     first_case_label = SIZE_MAX;
@@ -913,12 +917,38 @@ minic_core_lower_switch(MinicCoreLowerContext *context, const MinicStatement *st
                 dispatch_target = constant_target == SIZE_MAX
                                       ? default_target
                                       : labels[constant_target].body_block;
+                /* C fallthrough only goes forward; retain selected label
+                 * for a safe shared CFG reachability preflight below. */
+                constant_entry_label = constant_target;
             }
         }
     }
     status = minic_core_lower_internal_set_branch(context, context->block_id, statement->span, dispatch_target);
     if (status != MINIC_CORE_LOWER_OK) {
         return status;
+    }
+
+    /* A constant switch has one real source entry. Prior case segments
+     * cannot be reached by ordinary forward fallthrough. Skip their C
+     * lowering only if NO named label anywhere in the dead prefix has an
+     * external goto/asm-goto/label-address reentry; otherwise keep the
+     * original CFG, including every side effect. This is target-neutral. */
+    if (constant_entry_label != SIZE_MAX && constant_entry_label != 0U) {
+        size_t label_index;
+        prune_constant_prefix = true;
+        for (label_index = 0U; label_index < constant_entry_label &&
+                               prune_constant_prefix; ++label_index) {
+            const size_t first = labels[label_index].source_index + 1U;
+            const size_t last = labels[label_index + 1U].source_index;
+            size_t k;
+            for (k = first; k < last; ++k) {
+                if (core_switch_dead_prefix_has_reentry(
+                        context, body->statements[k], 0U)) {
+                    prune_constant_prefix = false;
+                    break;
+                }
+            }
+        }
     }
 
     if (case_count != 0U) {
@@ -1016,6 +1046,24 @@ minic_core_lower_switch(MinicCoreLowerContext *context, const MinicStatement *st
         size_t scan;
         MinicCoreBlockId saved_break_target;
         bool segment_terminated;
+
+        if (prune_constant_prefix && source_index < constant_entry_label) {
+            MinicCoreTerminator unreachable;
+            (void)memset(&unreachable, 0, sizeof(unreachable));
+            unreachable.kind = MINIC_CORE_TERMINATOR_UNREACHABLE;
+            unreachable.span = labels[source_index].statement->span;
+            unreachable.return_value = MINIC_CORE_VALUE_INVALID;
+            unreachable.return_object = MINIC_CORE_OBJECT_INVALID;
+            /* Constant source entry bypasses these C segments, but each
+             * block still has a valid Core terminator. No machine code
+             * may represent dead GNU assembly or accidental effects. */
+            if (!minic_core_function_set_terminator(
+                    context->function, labels[source_index].body_block,
+                    &unreachable)) return MINIC_CORE_LOWER_ERROR;
+            segment_terminates[source_index] = true;
+            segment_breaks[source_index] = false;
+            continue;
+        }
 
         segment_begin = labels[source_index].source_index + 1U;
         segment_end = source_index + 1U < label_count ? labels[source_index + 1U].source_index
