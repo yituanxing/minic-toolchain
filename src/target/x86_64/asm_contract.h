@@ -8,5 +8,9 @@ bool minic_x86_64_qualify_inline_asm(
     const MinicC0Program *, const MinicInlineAsm *, MinicTargetInlineAsmContract *);
 bool minic_x86_64_asm_mulacc_template(const char *, size_t);
 bool minic_x86_64_asm_muldiv_template(const char *, size_t);
+/* The Linux __ffs / __fls 64-bit GNU bit-scan family is ISA-owned.
+ * No raw arbitrary-template passthrough or global ASM Core opcode. */
+bool minic_x86_64_asm_bit_scan_template(
+    const char *text, size_t length, bool *is_reverse);
 bool minic_x86_64_asm_matched_template(const char *, size_t, size_t);
 #endif

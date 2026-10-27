@@ -55,6 +55,36 @@ bool minic_x86_64_asm_muldiv_template(const char *text, size_t length) {
     return strcmp(normalized, expected) == 0;
 }
 
+/* Exact x86 Linux word-sized GNU BSF/BSR spelling. The REP prefix on
+ * Linux __ffs is deliberate: it becomes TZCNT where available, and
+ * preserves BSF bit-index semantics for nonzero inputs on older CPUs.
+ * An all-zero input has no defined output; callers must not depend on it. */
+bool minic_x86_64_asm_bit_scan_template(
+    const char *text, size_t length, bool *is_reverse) {
+    char normalized[64];
+    size_t i, used = 0U;
+    if (text == NULL || is_reverse == NULL || length >= sizeof(normalized))
+        return false;
+    for (i = 0U; i < length; ++i) {
+        const char c = text[i];
+        if (c == ' ' || c == '\t' || c == '\r' || c == '\n')
+            continue;
+        if (used + 1U >= sizeof(normalized))
+            return false;
+        normalized[used++] = c;
+    }
+    normalized[used] = '\0';
+    if (strcmp(normalized, "rep;bsf%1,%0") == 0) {
+        *is_reverse = false;
+        return true;
+    }
+    if (strcmp(normalized, "bsr%1,%0") == 0) {
+        *is_reverse = true;
+        return true;
+    }
+    return false;
+}
+
 /* The GNU =r + matched-digit family owns only explicit register operands.
  * No hidden target machine registers, jumps, labels, function calls or
  * directives. Every template instruction is made of a conservative x86
@@ -106,6 +136,7 @@ static bool qualified(const MinicC0Program *program,
     static const char *const mul_in[5] = {"0","1","2","a","m"};
     size_t i, n;
     bool generic = false;
+    bool bit_scan = false, reverse = false;
     MinicType normalized;
     if (!program || !src || !src->template_text || !src->outputs ||
         !src->inputs || src->is_goto || src->label_count != 0U ||
@@ -147,6 +178,18 @@ static bool qualified(const MinicC0Program *program,
                c_is(&src->inputs[1], "rm") &&
                c_is(&src->inputs[2], "rm")) {
         *is_muldiv = true;
+    } else if (src->output_count == 1U && src->input_count == 1U &&
+               !src->is_goto && src->label_count == 0U &&
+               !src->has_memory_clobber &&
+               src->clobber_count == 0U && src->register_clobber_count == 0U &&
+               minic_x86_64_asm_bit_scan_template(
+                   src->template_text, src->template_length, &reverse) &&
+               c_is(&src->outputs[0], "=r") &&
+               (c_is(&src->inputs[0], "r") || c_is(&src->inputs[0], "rm"))) {
+        /* The Core retains one typed output lvalue and a scalar SSA input.
+         * Both word operands use the target's native 64-bit unsigned long.
+         * Does not admit x86 32-bit BSF or matched third operands. */
+        bit_scan = true;
     } else if (src->is_volatile && src->has_memory_clobber &&
                src->clobber_count == 1U &&
                src->register_clobber_count == 0U &&
@@ -174,7 +217,8 @@ static bool qualified(const MinicC0Program *program,
         const MinicExpression *expr =
             minic_c0_program_expression(program, op->expression);
         const MinicType target_type =
-            *is_mulacc ? minic_type_unsigned_long() : minic_type_unsigned_int();
+            (*is_mulacc || bit_scan)
+                ? minic_type_unsigned_long() : minic_type_unsigned_int();
         if (!expr || !minic_type_unqualified(expr->type, &normalized) ||
             (*is_muldiv
                 ? (!minic_type_equal(normalized, minic_type_unsigned_long()) &&

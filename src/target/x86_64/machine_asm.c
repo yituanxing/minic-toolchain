@@ -64,6 +64,46 @@ static bool emit_matched_register_template(
  * Exact GNU "=a"/"a"/"rm"/"rm"/"rdx" operand ownership is checked again
  * against Core binding roles. No hidden register allocator policy escapes
  * the x86 machine emitter and the output still lands in its SSA lvalue. */
+/* Core's structured ASM describes output address + scalar input, not
+ * an instruction string to be forwarded. The machine rechecks the entire
+ * x86 64-bit shape, chooses physical caller-scratch R10/R11/RAX, and emits
+ * only verified nonzero-word BSF/BSR semantics. */
+static bool emit_bit_scan_u64(
+    FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicCoreFunction *fn, const MinicX86Frame *frame,
+    const MinicCoreInstruction *ins, const MinicCoreInlineAsm *info) {
+    const MinicCoreStructuredInlineAsmOperand *b =
+        ins->value.structured_inline_asm.operands;
+    bool reverse = false, signed_result;
+    MinicType output_type;
+    size_t width;
+    if (!out || !program || !target || !fn || !frame || !ins || !info ||
+        info->register_clobber_count != 0U || info->clobber_count != 0U ||
+        info->has_memory_clobber || info->is_goto ||
+        ins->value.structured_inline_asm.operand_count != 2U ||
+        b == NULL ||
+        !minic_x86_64_asm_bit_scan_template(
+            info->template_text, info->template_length, &reverse) ||
+        b[0].operand_index != 0U || b[1].operand_index != 1U ||
+        b[0].has_fixed_register_binding || b[1].has_fixed_register_binding ||
+        b[0].early_clobber || b[1].early_clobber ||
+        b[0].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT ||
+        b[1].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT ||
+        b[0].value >= fn->value_count || b[1].value >= fn->value_count ||
+        !minic_type_pointee(fn->values[b[0].value].type, &output_type) ||
+        !minic_type_equal(output_type, minic_type_unsigned_long()) ||
+        !minic_type_equal(fn->values[b[1].value].type, minic_type_unsigned_long()) ||
+        !minic_x86_64_scalar_width(
+            program, target, output_type, &width, &signed_result) ||
+        width != 8U)
+        return false;
+    return x86_value_load(out, frame, b[1].value, "%r10") &&
+           fputs(reverse ? "  bsrq %r10, %rax\n" :
+                          "  rep; bsfq %r10, %rax\n", out) != EOF &&
+           x86_value_load(out, frame, b[0].value, "%r11") &&
+           fputs("  movq %rax, (%r11)\n", out) != EOF;
+}
+
 static bool emit_muldiv_u64(
     FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicX86Frame *frame,
@@ -167,7 +207,13 @@ bool minic_x86_64_emit_structured_asm(
         return false;
     info = &fn->inline_asms[ins->value.structured_inline_asm.inline_asm_id];
     bindings = ins->value.structured_inline_asm.operands;
-    if (!info->template_text || !info->is_volatile)
+    if (!info->template_text)
+        return false;
+    /* A pure GNU asm bit-scan need not be volatile. Its original
+     * register-only Core operand roles are independently requalified. */
+    if (ins->value.structured_inline_asm.operand_count == 2U)
+        return emit_bit_scan_u64(out, program, target, fn, frame, ins, info);
+    if (!info->is_volatile)
         return false;
     if (info->has_memory_clobber)
         return emit_memory_clobber_matched(

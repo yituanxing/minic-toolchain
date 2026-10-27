@@ -226,6 +226,7 @@ jobs:
           bash tests/compiler/c0/probe-runtime-isnan.sh
           bash tests/compiler/c0/probe-x86-rsp-readwrite-output.sh             "$GITHUB_WORKSPACE/build/runtime-ci/bin/minic-cc"
           bash tests/compiler/c0/probe-x86-return-frame-pc-native.sh "$GITHUB_WORKSPACE/build/runtime-ci/bin/minic-cc"
+          bash tests/compiler/c0/probe-x86-bit-scan-native.sh "$GITHUB_WORKSPACE/build/runtime-ci/bin/minic-cc"
           bash tests/compiler/c0/probe-gnu-bswap-case-ice.sh             "$GITHUB_WORKSPACE/build/runtime-ci/bin/minic-cc"
       - name: Audit real Kbuild MiniC strict-I and original kernel inline ASM
         if: matrix.target == 'riscv64'
