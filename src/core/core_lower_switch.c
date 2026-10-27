@@ -933,7 +933,11 @@ minic_core_lower_switch(MinicCoreLowerContext *context, const MinicStatement *st
      * lowering only if NO named label anywhere in the dead prefix has an
      * external goto/asm-goto/label-address reentry; otherwise keep the
      * original CFG, including every side effect. This is target-neutral. */
-    if (constant_entry_label != SIZE_MAX && constant_entry_label != 0U) {
+    /* An externally entered PRE-CASE named label may fall through into
+     * case 0 regardless of constant switch dispatch: retain the entire
+     * source prefix when such a reentry exists. */
+    if (pre_case_label_count == 0U &&
+        constant_entry_label != SIZE_MAX && constant_entry_label != 0U) {
         size_t label_index;
         prune_constant_prefix = true;
         for (label_index = 0U; label_index < constant_entry_label &&
