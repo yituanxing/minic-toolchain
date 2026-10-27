@@ -95,7 +95,8 @@ grep -q R_X86_64_PC32 "$work/x86-rel.txt"
 readelf -Wr "$work/x86-gnu.o" >"$work/x86-gnu-rel.txt"
 grep -q R_X86_64_PLT32 "$work/x86-gnu-rel.txt"
 grep -q R_X86_64_PC32 "$work/x86-gnu-rel.txt"
-grep -q R_X86_64_32S "$work/x86-mini-rel.txt"
+grep -q R_X86_64_32S "$work/x86-rel.txt"
+grep -q R_X86_64_32S "$work/x86-gnu-rel.txt"
 # GNU and MiniAS must agree on every relocation type, offset, addend.
 # GNU GAS and MiniELF may serialize RELA entries in different orders.
 # Compare exact relocation offset, type, symbol, and addend after sorting.
