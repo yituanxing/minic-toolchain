@@ -93,6 +93,35 @@ static bool aarch64_linux_brk_template(const char *text, size_t length) {
 static bool aarch64_linux_brk_value(int64_t value) {
     return value >= 0 && value <= 4095;
 }
+/* Real Linux arm64 store-release GNU ASM: release ordering is hardware. */
+static size_t aarch64_stlr_width(const char *s, size_t len) {
+    static const char *const form[] = {
+        NULL, "stlrb%w1,%0", "stlrh%w1,%0", NULL,
+        "stlr%w1,%0", NULL, NULL, NULL, "stlr%x1,%0"
+    };
+    char norm[64]; size_t i, n = 0U;
+    if (!s || !len || len >= sizeof(norm)) return 0U;
+    for (i = 0U; i < len; ++i) {
+        if (s[i] == '\n' || s[i] == '\r' || s[i] == ';') return 0U;
+        if (s[i] == ' ' || s[i] == '\t') continue;
+        if (n + 1U >= sizeof(norm)) return 0U;
+        norm[n++] = s[i];
+    }
+    norm[n] = '\0';
+    for (i = 1U; i <= 8U; ++i)
+        if (form[i] && strcmp(norm, form[i]) == 0) return i;
+    return 0U;
+}
+static bool aarch64_stlr_type(MinicType type, size_t width) {
+    MinicType plain;
+    if (!minic_type_unqualified(type, &plain) ||
+        plain.base_kind != MINIC_TYPE_BASE_INT) return false;
+    return (width == 1U && plain.integer_rank == MINIC_INTEGER_RANK_CHAR) ||
+           (width == 2U && plain.integer_rank == MINIC_INTEGER_RANK_SHORT) ||
+           (width == 4U && plain.integer_rank == MINIC_INTEGER_RANK_INT) ||
+           (width == 8U && (plain.integer_rank == MINIC_INTEGER_RANK_LONG ||
+                            plain.integer_rank == MINIC_INTEGER_RANK_LONG_LONG));
+}
 static bool constraint(const MinicInlineAsmOperand *op, const char *word) {
     size_t n = strlen(word);
     return op && op->constraint_text && op->constraint_length == n &&
@@ -123,6 +152,32 @@ bool minic_aarch64_qualify_inline_asm(
             aarch64_linux_brk_value(expr->value.integer_value)) {
             contract->operand_count = 1U;
             contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+            return true;
+        }
+    }
+    /* Existing Core roles: =Q address, rZ scalar input. ISA ownership stays
+     * in this AArch64 callback, not in Frontend or generic Core scanning. */
+    if (program && src && contract && src->is_volatile && !src->is_goto &&
+        src->outputs && src->inputs && src->output_count == 1U &&
+        src->input_count == 1U && src->clobber_count == 1U &&
+        src->has_memory_clobber && src->register_clobber_count == 0U &&
+        src->label_count == 0U &&
+        constraint(&src->outputs[0], "=Q") &&
+        constraint(&src->inputs[0], "rZ")) {
+        const size_t width = aarch64_stlr_width(
+            src->template_text, src->template_length);
+        const MinicExpression *dst = minic_c0_program_expression(
+            program, src->outputs[0].expression);
+        const MinicExpression *value = minic_c0_program_expression(
+            program, src->inputs[0].expression);
+        if (width && dst && value &&
+            dst->value_category == MINIC_VALUE_LVALUE &&
+            !minic_type_is_const(dst->type) &&
+            aarch64_stlr_type(dst->type, width) &&
+            aarch64_stlr_type(value->type, width)) {
+            contract->operand_count = 2U;
+            contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT;
+            contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
             return true;
         }
     }
@@ -245,6 +300,38 @@ bool minic_aarch64_emit_qualified_structured_asm(
                             "  ldr x10, [sp, #%zu]\n"
                             "  str x9, [x10]\n",
                        reg, (size_t)operand[0].value * 8U) >= 0;
+    }
+    if (ins->value.structured_inline_asm.operand_count == 2U) {
+        const MinicCoreStructuredInlineAsmOperand *b =
+            ins->value.structured_inline_asm.operands;
+        static const char *const op[] = {
+            NULL, "stlrb w9, [x10]", "stlrh w9, [x10]", NULL,
+            "stlr w9, [x10]", NULL, NULL, NULL, "stlr x9, [x10]"
+        };
+        const size_t width = aarch64_stlr_width(
+            info->template_text, info->template_length);
+        MinicType pointee;
+        if (!width || !info->is_volatile || info->is_goto ||
+            !info->has_memory_clobber || info->register_clobber_count ||
+            b[0].operand_index != 0U ||
+            b[0].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT ||
+            b[0].has_fixed_register_binding || b[0].early_clobber ||
+            b[1].operand_index != 1U ||
+            b[1].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT ||
+            b[1].has_fixed_register_binding || b[1].early_clobber ||
+            b[0].value >= fn->value_count || b[1].value >= fn->value_count ||
+            b[0].value > 4095U / 8U || b[1].value > 4095U / 8U ||
+            !minic_type_pointee(fn->values[b[0].value].type, &pointee) ||
+            !aarch64_stlr_type(pointee, width) ||
+            !aarch64_stlr_type(fn->values[b[1].value].type, width))
+            return false;
+        /* LP64 Core SSA slots SP-relative; x9/x10 are AAPCS64 caller-saved.
+         * STLR/B/H provides release ordering, never a compiler barrier. */
+        return fprintf(out, "  ldr x10, [sp, #%zu]\n"
+                            "  ldr x9, [sp, #%zu]\n"
+                            "  %s\n",
+                       (size_t)b[0].value * 8U,
+                       (size_t)b[1].value * 8U, op[width]) >= 0;
     }
     if (ins->value.structured_inline_asm.operand_count != 3U)
         return false;
