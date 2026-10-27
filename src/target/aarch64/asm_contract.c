@@ -215,6 +215,35 @@ static unsigned int aarch64_fetch_logic_form(const char *text, size_t len) {
  * __uaccess_mask_ptr() removes bit 55 using a true AArch64 BIC logical
  * immediate. It is not a compiler-only barrier, pointer cast or C AND.
  * GNU source I is a *value* immediate, never a GPR input. */
+/* Original Linux 6.6.143 __kern_my_cpu_offset() uses the GNU AArch64
+ * ALTERNATIVE patch table. This is NOT equivalent to a single MRS: its
+ * .altinstructions metadata is consumed by Linux at boot to patch MRS
+ * TPIDR_EL1 to TPIDR_EL2 when feature 47 is available. Preserve the exact
+ * section, relocations, relative label offsets and instruction sizes. */
+static bool aarch64_linux_percpu_alternative_template(
+    const char *text, size_t length) {
+    static const char exact[] =
+        ".if1==1661:mrs%0,tpidr_el1662:"
+        ".pushsection.altinstructions,\"a\""
+        ".word661b-..word663f-..hword47"
+        ".byte662b-661b.byte664f-663f"
+        ".popsection.subsection1663:mrs%0,tpidr_el2664:"
+        ".org.-(664b-663b)+(662b-661b)"
+        ".org.-(662b-661b)+(664b-663b)"
+        ".previous.endif";
+    char normalized[512];
+    size_t i, n = 0U;
+    if (!text || !length || length >= sizeof(normalized)) return false;
+    for (i = 0U; i < length; ++i) {
+        const char ch = text[i];
+        if (ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n')
+            continue;
+        if (n + 1U >= sizeof(normalized)) return false;
+        normalized[n++] = ch;
+    }
+    normalized[n] = '\0';
+    return strcmp(normalized, exact) == 0;
+}
 static bool aarch64_linux_uaccess_bic_template(
     const char *text, size_t length) {
     static const char expected[] = "bic%0,%1,%2";
@@ -279,6 +308,34 @@ bool minic_aarch64_qualify_inline_asm(
             aarch64_linux_brk_value(expr->value.integer_value)) {
             contract->operand_count = 1U;
             contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+            return true;
+        }
+    }
+    if (program && src && contract && !src->is_volatile &&
+        !src->is_goto && src->outputs && src->inputs &&
+        src->output_count == 1U && src->input_count == 1U &&
+        src->clobber_count == 0U && src->register_clobber_count == 0U &&
+        !src->has_memory_clobber && src->label_count == 0U &&
+        aarch64_linux_percpu_alternative_template(
+            src->template_text, src->template_length) &&
+        constraint(&src->outputs[0], "=r") &&
+        constraint(&src->inputs[0], "Q")) {
+        const MinicExpression *dst = minic_c0_program_expression(
+            program, src->outputs[0].expression);
+        const MinicExpression *dependency = minic_c0_program_expression(
+            program, src->inputs[0].expression);
+        MinicType plain_dst, plain_dependency;
+        if (dst && dependency &&
+            dst->value_category == MINIC_VALUE_LVALUE &&
+            dependency->value_category == MINIC_VALUE_LVALUE &&
+            !minic_type_is_const(dst->type) &&
+            minic_type_unqualified(dst->type, &plain_dst) &&
+            minic_type_unqualified(dependency->type, &plain_dependency) &&
+            minic_type_equal(plain_dst, minic_type_unsigned_long()) &&
+            minic_type_equal(plain_dependency, minic_type_unsigned_long())) {
+            contract->operand_count = 2U;
+            contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
+            contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT;
             return true;
         }
     }
@@ -598,6 +655,61 @@ bool minic_aarch64_emit_qualified_structured_asm(
                             "  ldr x10, [sp, #%zu]\n"
                             "  str x9, [x10]\n",
                        reg, (size_t)operand[0].value * 8U) >= 0;
+    }
+    if (ins->value.structured_inline_asm.operand_count == 2U &&
+        aarch64_linux_percpu_alternative_template(
+            info->template_text, info->template_length)) {
+        const MinicCoreStructuredInlineAsmOperand *operands =
+            ins->value.structured_inline_asm.operands;
+        MinicType out_type, dependency;
+        if (info->is_volatile || info->is_goto ||
+            info->has_memory_clobber || info->register_clobber_count)
+            return false;
+        for (i = 0U; i < 2U; ++i)
+            if (operands[i].operand_index != i ||
+                operands[i].kind != (i == 0U ?
+                    MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT :
+                    MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT) ||
+                operands[i].has_fixed_register_binding ||
+                operands[i].early_clobber ||
+                operands[i].value >= fn->value_count ||
+                operands[i].value > 4095U / 8U)
+                return false;
+        if (!minic_type_pointee(fn->values[operands[0].value].type,
+                                &out_type) ||
+            !minic_type_pointee(fn->values[operands[1].value].type,
+                                &dependency) ||
+            !minic_type_equal(out_type, minic_type_unsigned_long()) ||
+            !minic_type_is_integer(dependency))
+            return false;
+        /* One original 4-byte instruction at 661, one replacement at 663.
+         * Relative relocations live in .altinstructions (12-byte entry):
+         * first 2×rel32, feature=47 (u16), old/new lengths (u8 each).
+         * Preserve original GNU .subsection 1 and dual .org size contracts.
+         * x9 is AAPCS64 scratch and receives the finally selected MRS. */
+        return fprintf(out,
+            "  .if 1 == 1\n"
+            "661:\n"
+            "  mrs x9, tpidr_el1\n"
+            "662:\n"
+            "  .pushsection .altinstructions,\"a\"\n"
+            "  .word 661b - .\n"
+            "  .word 663f - .\n"
+            "  .hword 47\n"
+            "  .byte 662b - 661b\n"
+            "  .byte 664f - 663f\n"
+            "  .popsection\n"
+            "  .subsection 1\n"
+            "663:\n"
+            "  mrs x9, tpidr_el2\n"
+            "664:\n"
+            "  .org . - (664b-663b) + (662b-661b)\n"
+            "  .org . - (662b-661b) + (664b-663b)\n"
+            "  .previous\n"
+            "  .endif\n"
+            "  ldr x10, [sp, #%zu]\n"
+            "  str x9, [x10]\n",
+            (size_t)operands[0].value * 8U) >= 0;
     }
     if (ins->value.structured_inline_asm.operand_count == 2U) {
         b = ins->value.structured_inline_asm.operands;
