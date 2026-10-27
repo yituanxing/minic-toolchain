@@ -148,10 +148,12 @@ jobs:
             sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
               gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu qemu-user
           elif [[ "${{ matrix.target }}" == aarch64 ]]; then
-            # Exact-head AAPCS64 GNU/QEMU CALL ABI differential now owns the
+            # Exact-head AAPCS64 GNU/QEMU CALL ABI differential owns the
             # 960-byte wide-argument / dynamic alloca stress fixture.
+            # --no-install-recommends otherwise omits Scrt1.o/crti.o:
+            # install the cross libc development startup files explicitly.
             sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
-              gcc-aarch64-linux-gnu lld qemu-user
+              gcc-aarch64-linux-gnu libc6-dev-arm64-cross lld qemu-user
           elif [[ "${{ matrix.target }}" == loongarch64 ]]; then
             # The existing LoongArch runtime uses freestanding LLVM/LLD/QEMU.
             sudo apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
