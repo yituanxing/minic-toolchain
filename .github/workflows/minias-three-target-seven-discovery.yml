@@ -1,0 +1,103 @@
+name: MiniAS Three Target Seven Shard Discovery
+
+# Capability census only. It is NOT a successful GNU object comparison.
+on:
+  workflow_dispatch:
+  push:
+    branches: [refactor/minias-target-isa-abi-core]
+    paths:
+      - 'tools/ci/minias-three-target-seven-v1.py'
+      - '.github/workflows/minias-three-target-seven-discovery.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  prepare:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[minias-discovery-3x7]')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [x86_64, aarch64, loongarch64]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install cross GNU compiler
+        if: matrix.target == 'aarch64'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gcc-aarch64-linux-gnu
+      - name: Produce frozen real compiler assembly and record C/S hashes
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          case '${{ matrix.target }}' in
+            x86_64) compiler=gcc ;;
+            aarch64) compiler=aarch64-linux-gnu-gcc ;;
+            loongarch64) compiler=clang ;; # Annotated LLVM producer, not GNU.
+            *) exit 2 ;;
+          esac
+          python3 tools/ci/minias-three-target-seven-v1.py prepare \
+            --target '${{ matrix.target }}' \
+            --compiler "$compiler" --source-root tests/compiler/c0 \
+            --out 'build/minias-3x7-corpus/${{ matrix.target }}'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: minias-3x7-corpus-${{ matrix.target }}
+          path: build/minias-3x7-corpus/${{ matrix.target }}/
+          if-no-files-found: error
+          retention-days: 14
+
+  shard:
+    needs: prepare
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [x86_64, aarch64, loongarch64]
+        shard: [0, 1, 2, 3, 4, 5, 6]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: minias-3x7-corpus-${{ matrix.target }}
+          path: build/minias-3x7-input
+      - name: Build MiniAS from exact checked out head
+        run: make -j2 MODE=release CFLAGS=-Werror build/release/bin/minic-as
+      - name: Collect ALL shard first blockers without early failure
+        run: |
+          python3 tools/ci/minias-three-target-seven-v1.py shard \
+            --target '${{ matrix.target }}' --shard '${{ matrix.shard }}' \
+            --corpus build/minias-3x7-input \
+            --minias "$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            --out 'build/minias-3x7-results/${{ matrix.target }}-${{ matrix.shard }}'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: minias-3x7-result-${{ matrix.target }}-${{ matrix.shard }}
+          path: build/minias-3x7-results/${{ matrix.target }}-${{ matrix.shard }}/results.json
+          if-no-files-found: error
+          retention-days: 14
+
+  aggregate:
+    needs: shard
+    if: always() && needs.shard.result == 'success'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: minias-3x7-result-*
+          path: build/minias-3x7-collection
+      - name: Require 21 distinct shards and report three independent Pareto pools
+        run: |
+          python3 tools/ci/minias-three-target-seven-v1.py aggregate \
+            --results build/minias-3x7-collection \
+            --out build/minias-3x7-summary.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: minias-3x7-independent-blockers
+          path: build/minias-3x7-summary.json
+          retention-days: 14
+          if-no-files-found: error
