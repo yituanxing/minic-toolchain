@@ -302,8 +302,7 @@ bool minic_aarch64_emit_qualified_structured_asm(
                        reg, (size_t)operand[0].value * 8U) >= 0;
     }
     if (ins->value.structured_inline_asm.operand_count == 2U) {
-        const MinicCoreStructuredInlineAsmOperand *b =
-            ins->value.structured_inline_asm.operands;
+        b = ins->value.structured_inline_asm.operands;
         static const char *const op[] = {
             NULL, "stlrb w9, [x10]", "stlrh w9, [x10]", NULL,
             "stlr w9, [x10]", NULL, NULL, NULL, "stlr x9, [x10]"
