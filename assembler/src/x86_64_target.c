@@ -612,8 +612,16 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
         }
     }
     for(i=0U;i<sizeof(binary)/sizeof(binary[0]);++i) {
-        bool is_word=s->op[strlen(s->op)-1U]=='w';
-        if(strcmp(s->op,binary[i].op) || !x64_args2(s->args,src,dst))continue;
+        size_t name_len=strlen(s->op);
+        size_t form_len=strlen(binary[i].op);
+        bool is_word=binary[i].op[form_len-1U]=='w';
+        bool exact=!strcmp(s->op,binary[i].op);
+        bool inferred=form_len==name_len+1U &&
+            !strncmp(s->op,binary[i].op,name_len) &&
+            (binary[i].op[form_len-1U]=='w' ||
+             binary[i].op[form_len-1U]=='l' ||
+             binary[i].op[form_len-1U]=='q');
+        if((!exact && !inferred) || !x64_args2(s->args,src,dst))continue;
         if(is_word) {
             if(!x64_register16(src,&rs) || !x64_register16(dst,&rd))continue;
             ws=false;wd=false;
