@@ -2227,6 +2227,38 @@ static bool minias_leb_bytes(MiniAs *as,const char *op,const char *text,
     }
 }
 
+/* Repeat a literal little-endian element: GNU .fill repeat[,size[,value]].
+ * All targets use Common DATA fragments; no target-specific section writer. */
+static bool parse_common_fill(MiniAs *as,const char *args,
+                              uint64_t *repeat,unsigned *size,
+                              uint64_t *bits) {
+    char *copy=minias_strdup(args),*cursor,*parts[3]={NULL,NULL,NULL};
+    unsigned i=0U;
+    int64_t n,step=1,value=0;
+    bool ok=false;
+    if(!copy)return false;
+    cursor=copy;
+    for(;;) {
+        char *comma=strchr(cursor,',');
+        if(i>=3U)goto done;
+        if(comma)*comma='\0';
+        parts[i++]=minias_trim(cursor);
+        if(!*parts[i-1U])goto done;
+        if(!comma)break;
+        cursor=comma+1U;
+    }
+    if(!evaluate_absolute_expression(as,parts[0],&n) || n<0)goto done;
+    if(i>1U && (!evaluate_absolute_expression(as,parts[1],&step) ||
+                step<0 || step>8))goto done;
+    if(i>2U && !evaluate_absolute_expression(as,parts[2],&value))goto done;
+    *repeat=(uint64_t)n;
+    *size=(unsigned)step;
+    *bits=(uint64_t)value;
+    ok=true;
+done:
+    free(copy);return ok;
+}
+
 static bool add_data_stmt(MiniAs *as, const char *op, char *args, size_t line) {
     uint64_t count = 0U;
     uint64_t bytes;
@@ -2234,7 +2266,16 @@ static bool add_data_stmt(MiniAs *as, const char *op, char *args, size_t line) {
     char *copy = NULL;
     char *cursor;
 
-    if (strcmp(op,".uleb128")==0 || strcmp(op,".sleb128")==0) {
+    if (!strcmp(op,".fill")) {
+        unsigned elem;
+        uint64_t repeats,value;
+        if(!parse_common_fill(as,args,&repeats,&elem,&value) ||
+           (elem!=0U && repeats>UINT32_MAX/elem)) {
+            minias_set_error(as,"unsupported-fill-expression:%s:line=%zu",
+                             args,line);return false;
+        }
+        bytes=repeats*elem;
+    } else if (strcmp(op,".uleb128")==0 || strcmp(op,".sleb128")==0) {
         unsigned char coded[10];
         size_t len=0U;
         if(!minias_leb_bytes(as,op,args,coded,&len)) {
@@ -2503,6 +2544,23 @@ static bool emit_data_stmt(MiniAs *as, const MiniAsStmt *stmt) {
     char *copy;
     char *cursor;
 
+    if(!strcmp(stmt->op,".fill")) {
+        uint64_t repeat,value,i,j;
+        unsigned width_bytes;
+        unsigned char element[8];
+        if(!parse_common_fill(as,stmt->args,&repeat,&width_bytes,&value) ||
+           (width_bytes!=0U && repeat>UINT32_MAX/width_bytes) ||
+           repeat*width_bytes!=stmt->size) {
+            minias_set_error(as,"fill-layout-changed:line=%zu",stmt->line);
+            return false;
+        }
+        for(j=0U;j<width_bytes;++j)
+            element[j]=(unsigned char)(value>>(8U*j));
+        for(i=0U;i<repeat;++i)
+            if(!minias_section_append(as,stmt->section,element,width_bytes))
+                return false;
+        return true;
+    }
     if(strcmp(stmt->op,".uleb128")==0 ||
        strcmp(stmt->op,".sleb128")==0) {
         unsigned char coded[10];
@@ -3494,7 +3552,8 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
             free(rewritten_args);
             return ok;
         }
-        if (data_width(as, op) != 0U || strcmp(op, ".zero") == 0 ||
+        if (data_width(as, op) != 0U || strcmp(op, ".fill") == 0 ||
+            strcmp(op, ".zero") == 0 ||
             strcmp(op, ".space") == 0 || strcmp(op, ".skip") == 0 ||
             strcmp(op, ".uleb128") == 0 || strcmp(op, ".sleb128") == 0 ||
             strcmp(op, ".asciz") == 0 ||

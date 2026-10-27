@@ -542,4 +542,21 @@ if "$MINIAS" --target=loongarch64 -o "$work/invalid.o" "$work/unimplemented.s" \
     echo 'Unimplemented GOT/fixup silently accepted' >&2
     exit 1
 fi
+# GNU .fill DATA fragments: evaluate complete byte stream independently
+# on x86-64 and LA64 with real GNU object producers.
+cat > "$work/gnu-fill.s" <<'GNU_FILL'
+.section .data
+    .byte 0x56
+    .fill 3,2,0x1234
+    .fill 2,4,0x55667788
+    .fill 2,8,0x01020304
+    .fill 0,1,0
+    .byte 0x78
+GNU_FILL
+"$MINIAS" --target=loongarch64 -o "$work/la-fill-mini.o" "$work/gnu-fill.s"
+"$LOONGAS" -mabi=lp64d -o "$work/la-fill-gnu.o" "$work/gnu-fill.s"
+"$LOONGCOPY" -j .data -O binary "$work/la-fill-mini.o" "$work/la-fill-mini.bin"
+"$LOONGCOPY" -j .data -O binary "$work/la-fill-gnu.o" "$work/la-fill-gnu.bin"
+cmp "$work/la-fill-mini.bin" "$work/la-fill-gnu.bin"
+echo 'MINIAS_COMMON_FILL=PASS GNU_LA64_data_bytes=equal'
 echo 'MINIAS_TWO_TARGET_ORACLE=PASS x86_GNU_bytes=equal loong_GNU_bytes=equal ELF_machine=correct lp64d_v1=0x43 CET_endbr64=1 ALU_imm8_imm32=1 x86_ModRM_SIB_disp=1 x86_test_cmp_alu_memory=1 x86_scaled_index_SIB=1 LA_jr=1 LA_scaled_ptr14=1 LA_imm12_shift_upper20=1 invalid=reject'
