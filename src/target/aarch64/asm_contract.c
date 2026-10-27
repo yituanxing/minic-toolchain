@@ -223,8 +223,12 @@ static bool aarch64_linux_uaccess_bic_template(
     if (!text || length == 0U || length >= sizeof(normalized)) return false;
     for (i = 0U; i < length; ++i) {
         const char c = text[i];
-        if (c == '\r' || c == '\n' || c == ';') return false;
-        if (c == ' ' || c == '\t') continue;
+        /* Original Linux embeds a trailing GNU newline and a leading
+         * tab. Exact-token normalization strips whitespace, including
+         * line breaks; an appended executable suffix still differs from
+         * "bic%0,%1,%2" and is rejected, never passed through. */
+        if (c == ';') return false;
+        if (c == ' ' || c == '\t' || c == '\r' || c == '\n') continue;
         if (n + 1U >= sizeof(normalized)) return false;
         normalized[n++] = c;
     }
