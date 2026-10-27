@@ -2208,9 +2208,7 @@ static bool add_data_stmt(MiniAs *as, const char *op, char *args, size_t line) {
             return false;
         }
         bytes=len;
-    } else if (strcmp(op, ".incbin") == 0 ||
-            strcmp(op, ".uleb128") == 0 ||
-            strcmp(op, ".sleb128") == 0) {
+    } else if (strcmp(op, ".incbin") == 0) {
         if (!measure_incbin(as, args, line, &bytes)) {
             return false;
         }
@@ -3410,7 +3408,9 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
             strcmp(op, ".space") == 0 || strcmp(op, ".skip") == 0 ||
             strcmp(op, ".asciz") == 0 ||
             strcmp(op, ".string") == 0 || strcmp(op, ".ascii") == 0 ||
-            strcmp(op, ".incbin") == 0) {
+            strcmp(op, ".incbin") == 0 ||
+            strcmp(op, ".uleb128") == 0 ||
+            strcmp(op, ".sleb128") == 0) {
             char *rewritten_args = NULL;
             bool ok;
 
