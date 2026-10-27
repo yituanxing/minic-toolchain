@@ -124,96 +124,102 @@ static bool aarch64_stlr_type(MinicType type, size_t width) {
            (width == 8U && (plain.integer_rank == MINIC_INTEGER_RANK_LONG ||
                             plain.integer_rank == MINIC_INTEGER_RANK_LONG_LONG));
 }
-/* Original arm64 Linux 6.6 LL/SC atomic_{and,or,xor} and atomic64_
- * exactly as emitted from atomic_ll_sc.h; no generic instruction-string
- * passthrough. The six admitted templates have no hidden instruction slots. */
-static unsigned int aarch64_llsc_op(const char *text, size_t len) {
-    static const char *const forms[] = {
-        "//atomic_andprfmpstl1strm,%21:ldxr%w0,%2and%w0,%w0,%w3stxr%w1,%w0,%2cbnz%w1,1b",
-        "//atomic_orprfmpstl1strm,%21:ldxr%w0,%2orr%w0,%w0,%w3stxr%w1,%w0,%2cbnz%w1,1b",
-        "//atomic_xorprfmpstl1strm,%21:ldxr%w0,%2eor%w0,%w0,%w3stxr%w1,%w0,%2cbnz%w1,1b",
-        "//atomic64_andprfmpstl1strm,%21:ldxr%0,%2and%0,%0,%3stxr%w1,%0,%2cbnz%w1,1b",
-        "//atomic64_orprfmpstl1strm,%21:ldxr%0,%2orr%0,%0,%3stxr%w1,%0,%2cbnz%w1,1b",
-        "//atomic64_xorprfmpstl1strm,%21:ldxr%0,%2eor%0,%0,%3stxr%w1,%0,%2cbnz%w1,1b",
-        /* GNU atomic{,64}_andnot: BIC(register) needs ordinary r input,
-         * NOT the AArch64 L-immediate-or-register alternative. */
-        "//atomic_andnotprfmpstl1strm,%21:ldxr%w0,%2bic%w0,%w0,%w3stxr%w1,%w0,%2cbnz%w1,1b",
-        "//atomic64_andnotprfmpstl1strm,%21:ldxr%0,%2bic%0,%0,%3stxr%w1,%0,%2cbnz%w1,1b",
-        "//atomic_addprfmpstl1strm,%21:ldxr%w0,%2add%w0,%w0,%w3stxr%w1,%w0,%2cbnz%w1,1b",
-        "//atomic64_addprfmpstl1strm,%21:ldxr%0,%2add%0,%0,%3stxr%w1,%0,%2cbnz%w1,1b",
-        "//atomic_subprfmpstl1strm,%21:ldxr%w0,%2sub%w0,%w0,%w3stxr%w1,%w0,%2cbnz%w1,1b",
-        "//atomic64_subprfmpstl1strm,%21:ldxr%0,%2sub%0,%0,%3stxr%w1,%0,%2cbnz%w1,1b"
-    };
-    char compact[192]; size_t i, n = 0U;
-    if (!text || !len || len >= sizeof(compact)) return 0U;
-    for (i = 0U; i < len; ++i) {
-        if (text[i] == ' ' || text[i] == '\t' ||
-            text[i] == '\n' || text[i] == '\r') continue;
-        if (n + 1U >= sizeof(compact)) return 0U;
-        compact[n++] = text[i];
-    }
-    compact[n] = '\0';
-    for (i = 0U; i < sizeof(forms) / sizeof(forms[0]); ++i)
-        if (strcmp(forms[i], compact) == 0) return (unsigned int)(i + 1U);
-    return 0U;
-}
-/* Real AArch64 privileged DAIF interrupt-mask MRS/MSR pair from the
- * exact Linux sysreg/irqflags.h macros. Do not execute under user QEMU.
- * Only GNU GAS/objdump may inspect the encoded privileged instruction. */
-/* The actual Linux 6.6 atomic{,64}_fetch_{and,or,xor,andnot} with ordering variants
- * contract has five GNU operands: old, new, store-status, +Q memory and
- * Kr/Lr value. The AArch64 ISA adapter owns the exact LL/SC opcode, acquire
- * and release suffixes and full-barrier ordering, not Common Core. */
-static unsigned int aarch64_fetch_logic_form(const char *text, size_t len) {
-    static const char *const suffix[4] = {
-        "", "_relaxed", "_acquire", "_release"
-    };
-    static const char *const operation[6] = {
-        "and", "or", "xor", "andnot", "add", "sub"
-    };
-    static const char *const alu[6] = {
-        "and", "orr", "eor", "bic", "add", "sub"
-    };
-    static const char *const ld[4] = {
-        "ldxr", "ldxr", "ldaxr", "ldxr"
-    };
-    static const char *const st[4] = {
-        "stlxr", "stxr", "stxr", "stlxr"
-    };
+/* One typed AArch64 ISA descriptor for source qualification AND machine
+ * emission. No ordinal op IDs, width thresholds or duplicated ALU tables:
+ * new Linux atomics extend this target-owned operation/mode inventory only.
+ * Common Core keeps exactly the existing structured operand roles. */
+typedef struct {
+    const char *name;
+    const char *alu;
+    const char *rmw_constraint;
+    const char *fetch32_constraint;
+    const char *fetch64_constraint;
+} Aarch64AtomicOperation;
+
+typedef struct {
+    const Aarch64AtomicOperation *op;
+    size_t width;
+    unsigned int mode; /* 0=full, 1=relaxed, 2=acquire, 3=release */
+} Aarch64AtomicForm;
+
+static const Aarch64AtomicOperation aarch64_atomic_operations[] = {
+    {"and", "and", "Lr", "Kr", "Lr"},
+    {"or", "orr", "Lr", "Kr", "Lr"},
+    {"xor", "eor", "Lr", "Kr", "Lr"},
+    {"andnot", "bic", "r", "r", "r"},
+    {"add", "add", "Ir", "Ir", "Ir"},
+    {"sub", "sub", "Jr", "Jr", "Jr"}
+};
+static const char *const aarch64_atomic_mode_suffix[] = {
+    "", "_relaxed", "_acquire", "_release"
+};
+static const char *const aarch64_atomic_load[] = {
+    "ldxr", "ldxr", "ldaxr", "ldxr"
+};
+static const char *const aarch64_atomic_store[] = {
+    "stlxr", "stxr", "stxr", "stlxr"
+};
+
+/* Match the entire original GNU Linux template, not a mnemonic prefix.
+ * No partial acceptance, arbitrary replacement opcode or opaque ASM
+ * passthrough. Both source and Core machine recheck use this single owner. */
+static bool aarch64_atomic_form(const char *text, size_t len, bool fetch,
+                                Aarch64AtomicForm *result) {
     char compact[240], expected[240];
-    size_t i, n = 0U, bitness, mode, op;
-    if (!text || !len || len >= sizeof(compact)) return 0U;
+    size_t i, n = 0U, width_index, op_index, mode;
+    if (!text || !len || !result || len >= sizeof(compact)) return false;
     for (i = 0U; i < len; ++i) {
         const char c = text[i];
         if (c == ' ' || c == '\t' || c == '\r' || c == '\n') continue;
-        if (n + 1U >= sizeof(compact)) return 0U;
+        if (n + 1U >= sizeof(compact)) return false;
         compact[n++] = c;
     }
     compact[n] = '\0';
-    for (bitness = 0U; bitness < 2U; ++bitness) {
-        const char *old = bitness ? "%0" : "%w0";
-        const char *new_value = bitness ? "%1" : "%w1";
-        const char *arg = bitness ? "%4" : "%w4";
-        for (op = 0U; op < 6U; ++op) {
-            for (mode = 0U; mode < 4U; ++mode) {
-                const int written = snprintf(
-                    expected, sizeof(expected),
-                    "//atomic%s_fetch_%s%s"
-                    "prfmpstl1strm,%%3"
-                    "1:%s%s,%%3"
-                    "%s%s,%s,%s"
-                    "%s%%w2,%s,%%3"
-                    "cbnz%%w2,1b%s",
-                    bitness ? "64" : "", operation[op], suffix[mode],
-                    ld[mode], old, alu[op], new_value, old, arg,
-                    st[mode], new_value, mode == 0U ? "dmbish" : "");
+    for (width_index = 0U; width_index < 2U; ++width_index) {
+        const char *word0 = width_index ? "%0" : "%w0";
+        const char *word1 = width_index ? "%1" : "%w1";
+        const char *word3 = width_index ? "%3" : "%w3";
+        const char *word4 = width_index ? "%4" : "%w4";
+        for (op_index = 0U;
+             op_index < sizeof(aarch64_atomic_operations) /
+                            sizeof(aarch64_atomic_operations[0]); ++op_index) {
+            const Aarch64AtomicOperation *op = &aarch64_atomic_operations[op_index];
+            for (mode = 0U; mode < (fetch ? 4U : 1U); ++mode) {
+                const int written = fetch ?
+                    snprintf(expected, sizeof(expected),
+                        "//atomic%s_fetch_%s%s"
+                        "prfmpstl1strm,%%3"
+                        "1:%s%s,%%3"
+                        "%s%s,%s,%s"
+                        "%s%%w2,%s,%%3"
+                        "cbnz%%w2,1b%s",
+                        width_index ? "64" : "", op->name,
+                        aarch64_atomic_mode_suffix[mode],
+                        aarch64_atomic_load[mode], word0,
+                        op->alu, word1, word0, word4,
+                        aarch64_atomic_store[mode], word1,
+                        mode == 0U ? "dmbish" : "") :
+                    snprintf(expected, sizeof(expected),
+                        "//atomic%s_%s"
+                        "prfmpstl1strm,%%2"
+                        "1:ldxr%s,%%2"
+                        "%s%s,%s,%s"
+                        "stxr%%w1,%s,%%2"
+                        "cbnz%%w1,1b",
+                        width_index ? "64" : "", op->name,
+                        word0, op->alu, word0, word0,
+                        word3, word0);
                 if (written > 0 && (size_t)written < sizeof(expected) &&
-                    strcmp(compact, expected) == 0)
-                    return (unsigned int)(bitness * 24U + op * 4U + mode + 1U);
+                    strcmp(compact, expected) == 0) {
+                    result->op = op;
+                    result->width = width_index ? 8U : 4U;
+                    result->mode = (unsigned int)mode;
+                    return true;
+                }
             }
         }
     }
-    return 0U;
+    return false;
 }
 /* Original Linux arch/arm64/include/asm/uaccess.h:
  * __uaccess_mask_ptr() removes bit 55 using a true AArch64 BIC logical
@@ -381,15 +387,12 @@ bool minic_aarch64_qualify_inline_asm(
          constraint(&src->inputs[0], "r") ||
          constraint(&src->inputs[0], "Ir") ||
          constraint(&src->inputs[0], "Jr"))) {
-        const unsigned int op = aarch64_llsc_op(
-            src->template_text, src->template_length);
-        const size_t width = (op >= 4U && op <= 6U) || op == 8U ||
-                             op == 10U || op == 12U ? 8U : 4U;
-        bool accepted = op != 0U &&
-            ((op >= 11U && constraint(&src->inputs[0], "Jr")) ||
-             (op >= 9U && op <= 10U && constraint(&src->inputs[0], "Ir")) ||
-             (op >= 7U && op <= 8U && constraint(&src->inputs[0], "r")) ||
-             (op <= 6U && constraint(&src->inputs[0], "Lr")));
+        Aarch64AtomicForm atomic;
+        bool accepted = aarch64_atomic_form(
+            src->template_text, src->template_length, false, &atomic);
+        const size_t width = accepted ? atomic.width : 0U;
+        accepted = accepted &&
+            constraint(&src->inputs[0], atomic.op->rmw_constraint);
         for (i = 0U; i < 4U && accepted; ++i) {
             const MinicInlineAsmOperand *operand = i < 3U ?
                 &src->outputs[i] : &src->inputs[0];
@@ -418,17 +421,17 @@ bool minic_aarch64_qualify_inline_asm(
         constraint(&src->outputs[1], "=&r") &&
         constraint(&src->outputs[2], "=&r") &&
         constraint(&src->outputs[3], "+Q")) {
-        const unsigned int form = aarch64_fetch_logic_form(
-            src->template_text, src->template_length);
-        const size_t width = form > 24U ? 8U : 4U;
-        const unsigned int mode = form ? (form - 1U) % 4U : 0U;
-        const unsigned int op = form ? ((form - 1U) % 24U) / 4U : 0U;
-        bool eligible = form != 0U &&
+        Aarch64AtomicForm atomic;
+        bool eligible = aarch64_atomic_form(
+            src->template_text, src->template_length, true, &atomic);
+        const size_t width = eligible ? atomic.width : 0U;
+        const unsigned int mode = eligible ? atomic.mode : 0U;
+        eligible = eligible &&
             src->clobber_count == (mode == 1U ? 0U : 1U) &&
             src->has_memory_clobber == (mode != 1U) &&
             constraint(&src->inputs[0],
-                       op == 3U ? "r" : op == 4U ? "Ir" :
-                       op == 5U ? "Jr" : width == 8U ? "Lr" : "Kr");
+                       width == 8U ? atomic.op->fetch64_constraint :
+                                     atomic.op->fetch32_constraint);
         for (i = 0U; i < 5U && eligible; ++i) {
             const MinicInlineAsmOperand *operand = i < 4U ?
                 &src->outputs[i] : &src->inputs[0];
@@ -760,14 +763,11 @@ bool minic_aarch64_emit_qualified_structured_asm(
                        (size_t)b[1].value * 8U, op[width]) >= 0;
     }
     if (ins->value.structured_inline_asm.operand_count == 5U) {
-        const unsigned int form = aarch64_fetch_logic_form(
-            info->template_text, info->template_length);
-        const size_t width = form > 24U ? 8U : 4U;
-        const unsigned int mode = form ? (form - 1U) % 4U : 0U;
-        const unsigned int logic_op = form ? ((form - 1U) % 24U) / 4U : 0U;
-        static const char *const alu[] = {"and", "orr", "eor", "bic", "add", "sub"};
-        static const char *const ld[] = {"ldxr", "ldxr", "ldaxr", "ldxr"};
-        static const char *const st[] = {"stlxr", "stxr", "stxr", "stlxr"};
+        Aarch64AtomicForm atomic;
+        const bool valid_form = aarch64_atomic_form(
+            info->template_text, info->template_length, true, &atomic);
+        const size_t width = valid_form ? atomic.width : 0U;
+        const unsigned int mode = valid_form ? atomic.mode : 0U;
         const MinicCoreStructuredInlineAsmOperand *ops =
             ins->value.structured_inline_asm.operands;
         MinicType pointee;
@@ -775,7 +775,7 @@ bool minic_aarch64_emit_qualified_structured_asm(
          * including GNU's syntactically unclobbered _relaxed variant.
          * Exact source clobber shape was validated by the target callback,
          * whereas the normalized Core effect must remain conservative. */
-        if (!form || !info->is_volatile || info->is_goto ||
+        if (!valid_form || !info->is_volatile || info->is_goto ||
             info->register_clobber_count || !info->has_memory_clobber)
             return false;
         for (i = 0U; i < 5U; ++i) {
@@ -820,24 +820,23 @@ bool minic_aarch64_emit_qualified_structured_asm(
             "  str x12, [x14]\n",
             (size_t)ops[3].value * 8U,
             (size_t)ops[4].value * 8U,
-            ld[mode], width == 8U ? "x" : "w",
-            alu[logic_op], width == 8U ? "x" : "w",
+            aarch64_atomic_load[mode], width == 8U ? "x" : "w",
+            atomic.op->alu, width == 8U ? "x" : "w",
             width == 8U ? "x" : "w",
             width == 8U ? "x" : "w",
-            st[mode], width == 8U ? "x" : "w",
+            aarch64_atomic_store[mode], width == 8U ? "x" : "w",
             mode == 0U ? "  dmb ish\n" : "",
             (size_t)ops[0].value * 8U, width == 8U ? "x" : "w",
             (size_t)ops[1].value * 8U, width == 8U ? "x" : "w",
             (size_t)ops[2].value * 8U) >= 0;
     }
     if (ins->value.structured_inline_asm.operand_count == 4U) {
-        static const char *const alu[] = {"and", "orr", "eor"};
-        const unsigned int form = aarch64_llsc_op(
-            info->template_text, info->template_length);
-        const size_t width = (form >= 4U && form <= 6U) || form == 8U ||
-                             form == 10U || form == 12U ? 8U : 4U;
+        Aarch64AtomicForm atomic;
+        const bool valid_form = aarch64_atomic_form(
+            info->template_text, info->template_length, false, &atomic);
+        const size_t width = valid_form ? atomic.width : 0U;
         MinicType pointee;
-        if (!form || !info->is_volatile || info->is_goto ||
+        if (!valid_form || !info->is_volatile || info->is_goto ||
             !info->has_memory_clobber || info->register_clobber_count)
             return false;
         b = ins->value.structured_inline_asm.operands;
@@ -880,8 +879,7 @@ bool minic_aarch64_emit_qualified_structured_asm(
             (size_t)b[2].value * 8U,
             (size_t)b[3].value * 8U,
             width == 8U ? "x" : "w",
-            form >= 11U ? "sub" : form >= 9U ? "add" :
-            form >= 7U ? "bic" : alu[(form - 1U) % 3U],
+            atomic.op->alu,
             width == 8U ? "x" : "w",
             width == 8U ? "x" : "w",
             width == 8U ? "x" : "w",
