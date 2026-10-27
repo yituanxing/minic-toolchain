@@ -1994,8 +1994,10 @@ rv_remaining_typed:
     fence.i
     ret
 EOF_RV_REMAINING
-"$MINIAS" -march=rv64gc -mabi=lp64d \
-    -o "$work/riscv-mcinst-remaining.o" "$work/riscv-mcinst-remaining.s"
+# Selected unprivileged -march correctly rejects sfence.vma/sret/wfi;
+# default Linux assembly mode accepts privileged machine instructions.
+"$MINIAS" -o "$work/riscv-mcinst-remaining.o" \
+    "$work/riscv-mcinst-remaining.s"
 cat >"$work/riscv-mcinst-compressed.s" <<'EOF_RV_C16'
 .text
 .globl rv_c16
@@ -2025,8 +2027,7 @@ for invalid in 'c.li x0, 1' 'c.li a0, 32' 'jalr ra, 4096(a1)' \
                'jalr a0, a1, -2049' 'mv a0' 'sfence.vma x32, a0' \
                'fence r' 'fscsr x32'; do
     printf '.text\n%s\n' "$invalid" >"$work/riscv-mcinst-remaining-bad.s"
-    if "$MINIAS" -march=rv64gc -mabi=lp64d \
-        -o "$work/riscv-mcinst-remaining-bad.o" \
+    if "$MINIAS" -o "$work/riscv-mcinst-remaining-bad.o" \
         "$work/riscv-mcinst-remaining-bad.s" \
         >"$work/riscv-mcinst-remaining-bad.out" \
         2>"$work/riscv-mcinst-remaining-bad.err"; then
