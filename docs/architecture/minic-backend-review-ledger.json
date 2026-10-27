@@ -1,0 +1,1130 @@
+{
+  "schema": 1,
+  "baseline_commit": "e6cdbb9cfba0e522b2437f46260b5ef00dba419a",
+  "policy": "blob fingerprint tracks unchanged source. CI coverage means tested changes only, not full source inspection; changed blobs automatically reopen.",
+  "audit_merged": [
+    665,
+    666,
+    668
+  ],
+  "audit_in_progress": "Direct LP64 ELF/FunctionPlan/output lifetime now co-owned by Common DirectFunctionEmitter, AArch64 and LoongArch64 retain native prologue/hooks; PR unmerged; do not treat CI before exact-head as validated.",
+  "next_deep_review": [
+    "src/target/riscv32/rv32_frame.c",
+    "src/target/riscv64/frame_layout.c",
+    "src/target/aarch64/call_emit.c",
+    "src/target/loongarch64/call_emit.c",
+    "src/target/riscv32/rv32_call.c",
+    "src/target/riscv64/call_emit.c",
+    "src/target/x86_64/machine_call.c"
+  ],
+  "files": {
+    "src/target/aarch64/abi.c": {
+      "blob": "8abd26abf58b767cbe205a7b00a5fba4c5f1f616",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/aarch64/abi.h": {
+      "blob": "323c57e9e15432ecfaca746afc8efc1426c1597e",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/aarch64/asm_legalize.c": {
+      "blob": "af0aecfacc2c7ec73db3c8de694a91c7b2ba6bf3",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/aarch64/asm_legalize.h": {
+      "blob": "62461e302864f703df77af9eeb1e00114a6965d6",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/aarch64/block_emit.c": {
+      "blob": "2463a165be14ea5b0699b83d2c6754bf39c8be47",
+      "review_depth": "full",
+      "ci_touched_in": [
+        666,
+        668
+      ]
+    },
+    "src/target/aarch64/block_emit.h": {
+      "blob": "982a675d5f9e378cfc3a28b86e43b80b9ad331f9",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/aarch64/call_emit.c": {
+      "blob": "39fd15493433d376a5af79c50aab4703fca96496",
+      "review_depth": "targeted",
+      "ci_touched_in": []
+    },
+    "src/target/aarch64/call_emit.h": {
+      "blob": "f5ff26bb982ffccf8a006d50d16c7bc5d2c6cd8a",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/aarch64/codegen.c": {
+      "blob": "143a02fe2cd688f3e3bf7c9aa1e1f5bca2b09053",
+      "review_depth": "full",
+      "ci_touched_in": [
+        665
+      ]
+    },
+    "src/target/aarch64/codegen.h": {
+      "blob": "5a460c8a36ea5b796f7f7564399f8f757aa6297d",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/aarch64/fp_emit.c": {
+      "blob": "4ac7bae7753624d5c9538e4554a6797f8d46fd24",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/aarch64/fp_emit.h": {
+      "blob": "36ef03ccd8d0613d45b1cce126fb432879cb3073",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/aarch64/integer_emit.c": {
+      "blob": "b81a48be50885b096877a4121cf08837292e7837",
+      "review_depth": "targeted",
+      "ci_touched_in": [
+        665
+      ]
+    },
+    "src/target/aarch64/integer_emit.h": {
+      "blob": "26ef81ab2c377112497f82cc98e9b8e3ca5a111b",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/aarch64/memory_emit.c": {
+      "blob": "e1f1f15f3c5f85b9fdd9868c214ac2bbf51ea5dc",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/aarch64/memory_emit.h": {
+      "blob": "82056090993396c990185ece739fb3bcc0699bbe",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/aarch64/residual_emit.c": {
+      "blob": "b4d8ee90e83bb7a48c1fab7df66369e66b52b2f3",
+      "review_depth": "targeted",
+      "ci_touched_in": []
+    },
+    "src/target/aarch64/residual_emit.h": {
+      "blob": "7c439c0fe9442df9d2841df0fe13276d3e1f0208",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/aarch64/scalar_normalize.c": {
+      "blob": "0da1616fc301bcb55c6b79cdf51372fb9bad0a3e",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/aarch64/scalar_normalize.h": {
+      "blob": "57811a1ffa134c1b1f17b8d63126c7845898fd59",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/backend_core_usage.c": {
+      "blob": "0e367f71c3f126cee4dbfbd5cc0cbb6eb0609af1",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/backend_core_usage.h": {
+      "blob": "24e2e6a7159196a271a46cd4dcce1a0c5bb07202",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/backend.c": {
+      "blob": "846f41bec2995996ecd83849e80f1cec2b79548d",
+      "review_depth": "inventory",
+      "ci_touched_in": [
+        665
+      ]
+    },
+    "src/target/backend.h": {
+      "blob": "b624937418515e594b1426d3f322358834412e46",
+      "review_depth": "inventory",
+      "ci_touched_in": [
+        665
+      ]
+    },
+    "src/target/common/core_block_walk.h": {
+      "blob": "30dd44ed6ca87dac76f782b9256b4fe2a428a76d",
+      "review_depth": "inventory",
+      "ci_touched_in": [
+        666
+      ]
+    },
+    "src/target/common/core_call_index.c": {
+      "blob": "564f5f30671b63fb84039991a52a971cf35df4d0",
+      "review_depth": "targeted",
+      "ci_touched_in": [
+        665
+      ]
+    },
+    "src/target/common/core_call_view.c": {
+      "blob": "6f9b7bec084b5ba55a3ef8250d3c0519c4bb4bdb",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/common/core_call_view.h": {
+      "blob": "871e1b387ce7f671e59546199e40ebfc638570d0",
+      "review_depth": "inventory",
+      "ci_touched_in": [
+        665
+      ]
+    },
+    "src/target/common/core_frame_layout.h": {
+      "blob": "80fb7bda6b79f426aafba0ee5fb0f0eb1599bbe7",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/common/core_function_facts.c": {
+      "blob": "79f31a46b24744fc55dfe14645e9d4330b6c0298",
+      "review_depth": "full",
+      "ci_touched_in": [
+        668
+      ]
+    },
+    "src/target/common/core_function_facts.h": {
+      "blob": "8af34dc5e58b278737892e285ba541f7698005dc",
+      "review_depth": "inventory",
+      "ci_touched_in": [
+        665,
+        666,
+        668
+      ]
+    },
+    "src/target/common/core_function_plan.c": {
+      "blob": "c46aa0374c1f12901178a582481b0bc083273676",
+      "review_depth": "full",
+      "ci_touched_in": [
+        665,
+        666,
+        668
+      ]
+    },
+    "src/target/common/core_function_plan.h": {
+      "blob": "5ac64d4f00f11bd4f91c9d4ba6686c209784a892",
+      "review_depth": "inventory",
+      "ci_touched_in": [
+        665,
+        666
+      ]
+    },
+    "src/target/common/core_instruction_family.h": {
+      "blob": "c525c75e8c473ff226f680b9f312b799c919ff81",
+      "review_depth": "inventory",
+      "ci_touched_in": [
+        665
+      ]
+    },
+    "src/target/common/core_numeric_shape.c": {
+      "blob": "53d8000f7fa186987e823b08409ff1e4ec11d515",
+      "review_depth": "inventory",
+      "ci_touched_in": [
+        665
+      ]
+    },
+    "src/target/common/core_numeric_shape.h": {
+      "blob": "94966bf1ee4c6c93640cab031e9d4f15bd74eb48",
+      "review_depth": "inventory",
+      "ci_touched_in": [
+        665
+      ]
+    },
+    "src/target/common/core_object_intervals.c": {
+      "blob": "95df561d14ae59b40575f5de86f828f0747fdb63",
+      "review_depth": "inventory",
+      "ci_touched_in": [
+        665
+      ]
+    },
+    "src/target/common/core_object_intervals.h": {
+      "blob": "afb2e4bac8077f0ee86517b778907c1f518581cc",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/common/core_object_reuse.c": {
+      "blob": "83cbcca4259340427af266a8c942991be1a089f5",
+      "review_depth": "inventory",
+      "ci_touched_in": [
+        665
+      ]
+    },
+    "src/target/common/core_object_reuse.h": {
+      "blob": "1d25a98a1e9d3bd61e0b55b6c298d150f8bfab1d",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/common/core_object_storage.c": {
+      "blob": "df52ca59a47ff29a31753af821f1c9fdab434bce",
+      "review_depth": "targeted",
+      "ci_touched_in": [
+        665
+      ]
+    },
+    "src/target/common/core_object_storage.h": {
+      "blob": "e47ddbb09960b59ef4091d630ff7c6bca9bf5fbe",
+      "review_depth": "inventory",
+      "ci_touched_in": [
+        665
+      ]
+    },
+    "src/target/common/core_spill_layout.c": {
+      "blob": "22705c292d0c8af1584be710d2f2c6d10f1f7bf9",
+      "review_depth": "inventory",
+      "ci_touched_in": [
+        665
+      ]
+    },
+    "src/target/common/core_spill_layout.h": {
+      "blob": "0a82d4e9621ab5323c3e28886f443aa71873b83a",
+      "review_depth": "inventory",
+      "ci_touched_in": [
+        665
+      ]
+    },
+    "src/target/common/core_value_slots.c": {
+      "blob": "0f5c4b8f786cdfb1ea019290308a65f48d00830e",
+      "review_depth": "inventory",
+      "ci_touched_in": [
+        665
+      ]
+    },
+    "src/target/common/core_value_slots.h": {
+      "blob": "c207a0fc9d65b965fd2a2876329b06a535574c73",
+      "review_depth": "inventory",
+      "ci_touched_in": [
+        665
+      ]
+    },
+    "src/target/common/direct_block_context.h": {
+      "blob": "41c543cdae810f52ca00b8fd25aa70544c0878a2",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/common/direct_call_plan.c": {
+      "blob": "2e2f00ab1b0e1c2939d34bed41a82d2121d2e8eb",
+      "review_depth": "full",
+      "ci_touched_in": [
+        665
+      ]
+    },
+    "src/target/common/direct_call_plan.h": {
+      "blob": "efa52cc5ab001970c3b92a052bdb1a8ae5448bb3",
+      "review_depth": "full",
+      "ci_touched_in": [
+        665
+      ]
+    },
+    "src/target/common/direct_function_emit.h": {
+      "blob": "f8eca8c9b0b3bc0d0791ae273387bd60fbae9f15",
+      "review_depth": "full",
+      "ci_touched_in": [],
+      "note": "new Common native orchestration, architecture callbacks retained"
+    },
+    "src/target/common/direct_function_plan.c": {
+      "blob": "3355eed21822b43a0354182ac8e953927f18640c",
+      "review_depth": "full",
+      "ci_touched_in": [
+        665
+      ]
+    },
+    "src/target/common/direct_function_plan.h": {
+      "blob": "ad2583cb35771e4ce6c4061a83cd781081bd5cf2",
+      "review_depth": "full",
+      "ci_touched_in": [
+        666
+      ]
+    },
+    "src/target/common/direct_function_profile.c": {
+      "blob": "5eadd81174a9be0a166952f8ef3e07770111a728",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/common/direct_function_profile.h": {
+      "blob": "80dccd9f98a9d176b932dc70e0e7a7c2b0232bc1",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/common/direct_instruction_semantics.c": {
+      "blob": "600b96b95eb9a954d78581b9e29233a68aba4ee3",
+      "review_depth": "targeted",
+      "ci_touched_in": [
+        665
+      ]
+    },
+    "src/target/common/direct_instruction_semantics.h": {
+      "blob": "87dc2a39a0bf27a63fc6a4b6f4fd6f88e159f94d",
+      "review_depth": "inventory",
+      "ci_touched_in": [
+        665
+      ]
+    },
+    "src/target/common/direct_lp64_abi.h": {
+      "blob": "4ba6b2e3f7c3d4c3de99e720a9d405177bea92ab",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/common/direct_machine_dispatch.h": {
+      "blob": "ff68b92ec37b4c73a2e541c4f3ffcd1cc61f9c04",
+      "review_depth": "full",
+      "ci_touched_in": [
+        668
+      ]
+    },
+    "src/target/common/direct_preflight.c": {
+      "blob": "651a06be89e11d0c7d63e4213fb24bd551d1b7c0",
+      "review_depth": "targeted",
+      "ci_touched_in": [
+        665
+      ]
+    },
+    "src/target/common/direct_preflight.h": {
+      "blob": "3a2f2ea256d39fe0ca7c835c1d2b8456be3e16a4",
+      "review_depth": "inventory",
+      "ci_touched_in": [
+        665
+      ]
+    },
+    "src/target/common/direct_program_emit.c": {
+      "blob": "0b3d1170327922a306516328769deca83a028d80",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/common/direct_program_emit.h": {
+      "blob": "583dca0888c3603274c62e949ef3631b8847d39c",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/common/direct_residual_plan.c": {
+      "blob": "3cd4c15b1f9dfbf6d92b4c5d905c67da0c285685",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/common/direct_residual_plan.h": {
+      "blob": "7a9ca01f6500e8d73faea4764794929459f32abf",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/common/global_emit.c": {
+      "blob": "3b96609b8971c1ee80b0b186cf0e05ae0491df63",
+      "review_depth": "inventory",
+      "ci_touched_in": [
+        665
+      ]
+    },
+    "src/target/common/global_emit.h": {
+      "blob": "32f019a888ac0261ea5e28c3b4515bad13a6bdcc",
+      "review_depth": "inventory",
+      "ci_touched_in": [
+        665
+      ]
+    },
+    "src/target/common/lp64_aggregate.c": {
+      "blob": "60e369f815ee81ef41a7f1ba16a7a7d873b4723a",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/common/lp64_aggregate.h": {
+      "blob": "7e17a1b0e12bf9f29005ce715c5c4223a8beff3e",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/common/lp64_frame.c": {
+      "blob": "4975f538460acb0cbdc429a043aab45b0fd984e3",
+      "review_depth": "inventory",
+      "ci_touched_in": [
+        665
+      ]
+    },
+    "src/target/common/lp64_frame.h": {
+      "blob": "fd8a283e9ac1953e1edd8598216fee9425a56f9b",
+      "review_depth": "inventory",
+      "ci_touched_in": [
+        665
+      ]
+    },
+    "src/target/common/lp64_scalar.c": {
+      "blob": "f03a110a9fb9d0b4422a1d2b099e5d1f99142679",
+      "review_depth": "inventory",
+      "ci_touched_in": [
+        665
+      ]
+    },
+    "src/target/common/lp64_scalar.h": {
+      "blob": "2460670945c2764a8e31e4955a75675454fb75d9",
+      "review_depth": "inventory",
+      "ci_touched_in": [
+        665
+      ]
+    },
+    "src/target/common/program_emit.h": {
+      "blob": "492717f6c9d0f4c8cd0fa9cf1d8bfa8415429ad1",
+      "review_depth": "inventory",
+      "ci_touched_in": [
+        666
+      ]
+    },
+    "src/target/common/program_visit.h": {
+      "blob": "2ce7150b5c30e0ed7b556bd319e886238cb78f9b",
+      "review_depth": "inventory",
+      "ci_touched_in": [
+        665
+      ]
+    },
+    "src/target/data_layout.c": {
+      "blob": "eb03c0dc74e239765eb474fc4ecfebdb1d84a278",
+      "review_depth": "inventory",
+      "ci_touched_in": [
+        665
+      ]
+    },
+    "src/target/data_layout.h": {
+      "blob": "af1af32c1f1538cdd5d8fed81cd0bbe13eeec0ad",
+      "review_depth": "inventory",
+      "ci_touched_in": [
+        665
+      ]
+    },
+    "src/target/loongarch64/block_emit.c": {
+      "blob": "2e25e9ceb5581dcf2a65ad077cd9b5cab090f99b",
+      "review_depth": "full",
+      "ci_touched_in": [
+        666,
+        668
+      ]
+    },
+    "src/target/loongarch64/block_emit.h": {
+      "blob": "377d7712dbe14b03e25ddab99eaf19cbf91571dd",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/loongarch64/call_emit.c": {
+      "blob": "6beb2add109e74d8db86c30e65fed1b286970329",
+      "review_depth": "targeted",
+      "ci_touched_in": []
+    },
+    "src/target/loongarch64/call_emit.h": {
+      "blob": "4a7e526eb3746a3034ecd982795005e7c100de15",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/loongarch64/codegen.c": {
+      "blob": "23b6067cb6227cfc867b73da1094f82d1e86c579",
+      "review_depth": "full",
+      "ci_touched_in": [
+        665
+      ]
+    },
+    "src/target/loongarch64/codegen.h": {
+      "blob": "e4572bebf15ed14dc0f5db185405f5c37274d25c",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/loongarch64/fp_emit.c": {
+      "blob": "a0cb1be69b2fbb2258e60b7e9c352f4695124436",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/loongarch64/fp_emit.h": {
+      "blob": "a26ec174eee829c2f8317e85889b4d5c3469ffbb",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/loongarch64/frame_emit.c": {
+      "blob": "da0919f322051075f543657b8decb8d3120ffdac",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/loongarch64/frame_emit.h": {
+      "blob": "b869686f4bd3943e7171efc8ccf646f874b3c429",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/loongarch64/integer_emit.c": {
+      "blob": "a3cde75ce02f9cb9ad4abf52989014b12e23dbc2",
+      "review_depth": "targeted",
+      "ci_touched_in": [
+        665
+      ]
+    },
+    "src/target/loongarch64/integer_emit.h": {
+      "blob": "ffa44011ec175dbccbc7d135879f5a4b0b73bb6a",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/loongarch64/memory_emit.c": {
+      "blob": "a1e62dd4cedfeb66da78815016c1097c9da2f8e7",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/loongarch64/memory_emit.h": {
+      "blob": "37c960800ac8239315c1dc302fe8ca9e5193e093",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/loongarch64/residual_emit.c": {
+      "blob": "8e97841497c85dc611c309f4022ce9865c92147c",
+      "review_depth": "targeted",
+      "ci_touched_in": []
+    },
+    "src/target/loongarch64/residual_emit.h": {
+      "blob": "d43f60a7ae8879e2a8afc84e0788e8a39bfc666b",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/loongarch64/scalar_normalize.c": {
+      "blob": "7dab59f085aa8dd5f9a9bb802817bb6c306415b9",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/loongarch64/scalar_normalize.h": {
+      "blob": "94d742baefbba718b1f496f95da3dd1d94583221",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/riscv/function_symbol.h": {
+      "blob": "a5dc789030efa18c0e1a231bfee73d3ad9c78824",
+      "review_depth": "inventory",
+      "ci_touched_in": [
+        666
+      ]
+    },
+    "src/target/riscv/gpr_abi_cursor.h": {
+      "blob": "d98dc36e7866622c7523da8a3dd4db40eb7f299f",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/riscv/instruction_select.h": {
+      "blob": "e2d0f254cbc60d0f02e1b0840255a773b89c517b",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/riscv/isa_features.h": {
+      "blob": "db4042710b20ea06f834a99b34329df32ef9fada",
+      "review_depth": "inventory",
+      "ci_touched_in": [
+        665
+      ]
+    },
+    "src/target/riscv/isa_resolve.c": {
+      "blob": "c93ec35f5b0aaea3702f57355f147a8af52dbd62",
+      "review_depth": "inventory",
+      "ci_touched_in": [
+        665
+      ]
+    },
+    "src/target/riscv/isa_resolve.h": {
+      "blob": "d13725745586dfa31fb0f26903199a8b50c6c7a3",
+      "review_depth": "inventory",
+      "ci_touched_in": [
+        665
+      ]
+    },
+    "src/target/riscv/record_copy_bytes.c": {
+      "blob": "5bf8fd643814bb7cb68ab012fc2b29663e821651",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/riscv/record_copy_bytes.h": {
+      "blob": "da5d0745a180b485e153d3811a71f7f8973028cf",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/riscv/word_operations.c": {
+      "blob": "0a60a585c911c308ab68a98ee7f36e5222612db1",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/riscv/word_operations.h": {
+      "blob": "02422f12d108bf524be22c0fbb25a0b0388793ab",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/riscv32/rv32_abi_cursor.c": {
+      "blob": "755c7a2aad645c5e1b6abe614f1d0991ea910a81",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/riscv32/rv32_abi_cursor.h": {
+      "blob": "bf5573b6062a2a64404e677bbb7046a702a839b9",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/riscv32/rv32_abi_plan.c": {
+      "blob": "7d8751707b2c25f11592e96baecf8f6f6f00a98d",
+      "review_depth": "full",
+      "ci_touched_in": [
+        665
+      ]
+    },
+    "src/target/riscv32/rv32_abi_plan.h": {
+      "blob": "d0b231ed7b81f5b9d36f225ae50c44a73baf63f4",
+      "review_depth": "inventory",
+      "ci_touched_in": [
+        665
+      ]
+    },
+    "src/target/riscv32/rv32_call.c": {
+      "blob": "a6bf957bc1427889e89796da6c1c72de61330956",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/riscv32/rv32_emit.c": {
+      "blob": "f06fbbe8ec2163434f82bcc8a9700a2c2ab06b38",
+      "review_depth": "targeted",
+      "ci_touched_in": [
+        665,
+        666
+      ]
+    },
+    "src/target/riscv32/rv32_emit.h": {
+      "blob": "c39261f1081541a175b6a491d77da0143d262f1f",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/riscv32/rv32_fp_emit.c": {
+      "blob": "dba2f30ab83226d10c8fa280f93a1ff4f8aa2fcf",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/riscv32/rv32_frame.c": {
+      "blob": "f438d624d1b6712922205a9ce3fa1ea42daa26d1",
+      "review_depth": "targeted",
+      "ci_touched_in": [
+        665
+      ]
+    },
+    "src/target/riscv32/rv32_global_emit.c": {
+      "blob": "c04ac35dd55ef9036b717dd844ea975595a0bd2c",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/riscv32/rv32_global_emit.h": {
+      "blob": "308140622b786660be4d5fcec7af90538b3552be",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/riscv32/rv32_integer_emit.c": {
+      "blob": "a1f985573f83d7706edf54acc4c3444c74534ca9",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/riscv32/rv32_internal.h": {
+      "blob": "638b356106e0116014d1652e400b1cb97e65f017",
+      "review_depth": "inventory",
+      "ci_touched_in": [
+        665
+      ]
+    },
+    "src/target/riscv32/rv32_memory_emit.c": {
+      "blob": "74d8faa74774ce2841cf7d493ed170f89e60164e",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/riscv32/rv32_scalar.c": {
+      "blob": "f06b14ad0753435b21ad23a286c332a6d67de09a",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/riscv32/rv32_wide_emit.c": {
+      "blob": "d3b0b502b00c5dea2e97303f31744d064e2f2d40",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/riscv64/abi.c": {
+      "blob": "0ab9a52ab9920d625b9ca93e9b6bd15755eba8fa",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/riscv64/abi.h": {
+      "blob": "d30333b32d3aa9ef18ce1c24fea7ec6b65f77793",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/riscv64/asm_plan.c": {
+      "blob": "52b68a7429cbd8f0674580fd25796fd958340039",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/riscv64/asm_plan.h": {
+      "blob": "7853cc3a6283c1666c0aac089228869c795fcd66",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/riscv64/call_emit.c": {
+      "blob": "7a9780b7b1a9cf3acbcb3dbb7c207a8e083fe68f",
+      "review_depth": "targeted",
+      "ci_touched_in": [
+        665
+      ]
+    },
+    "src/target/riscv64/call_emit.h": {
+      "blob": "de1fa4065b4f7542363a942b37a9b86b8411521e",
+      "review_depth": "inventory",
+      "ci_touched_in": [
+        665
+      ]
+    },
+    "src/target/riscv64/codegen_function.c": {
+      "blob": "56e992c8cc9f3117a5d33c822aeea3e1d9153c62",
+      "review_depth": "inventory",
+      "ci_touched_in": [
+        666
+      ]
+    },
+    "src/target/riscv64/codegen_internal.h": {
+      "blob": "080211d520b70fa6d54e86cf22954ba1285575f3",
+      "review_depth": "inventory",
+      "ci_touched_in": [
+        665
+      ]
+    },
+    "src/target/riscv64/codegen_support.c": {
+      "blob": "e5781ec3b131844a66ccf5fc064cff72af1ad04e",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/riscv64/codegen.h": {
+      "blob": "b926f331cea2b6660ea3de9fd9da4b82f14218fa",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/riscv64/core_admission.c": {
+      "blob": "3d0d19950e5027e51da395e334fbe32b4588abf4",
+      "review_depth": "targeted",
+      "ci_touched_in": [
+        665
+      ]
+    },
+    "src/target/riscv64/core_admission.h": {
+      "blob": "9c978e0d1adcaa554968dd03e9b4976ea94873e6",
+      "review_depth": "inventory",
+      "ci_touched_in": [
+        665
+      ]
+    },
+    "src/target/riscv64/core_codegen.c": {
+      "blob": "5215e53276f407595882ca60b570805d2b6c2148",
+      "review_depth": "targeted",
+      "ci_touched_in": [
+        665,
+        666
+      ]
+    },
+    "src/target/riscv64/core_codegen.h": {
+      "blob": "59f5b71a75def311e3acc9b121cb1c72e42d2fd3",
+      "review_depth": "inventory",
+      "ci_touched_in": [
+        665,
+        666
+      ]
+    },
+    "src/target/riscv64/fp_emit.c": {
+      "blob": "f3ae57fd71db6f202b5381dd96de7c0c42496858",
+      "review_depth": "inventory",
+      "ci_touched_in": [
+        665
+      ]
+    },
+    "src/target/riscv64/fp_emit.h": {
+      "blob": "6fb2f0d4dfe0d1427784f1db55253aa9270144ae",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/riscv64/frame_access.c": {
+      "blob": "9f861a0ce1f35699524970c9bbf2f4b20ae35a7a",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/riscv64/frame_access.h": {
+      "blob": "a52d55214938a41a4e58446a3bcf4eaaa8177c59",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/riscv64/frame_layout.c": {
+      "blob": "02ddc3eef7b3c023cf2b2c7c20cd8a4db5706628",
+      "review_depth": "targeted",
+      "ci_touched_in": [
+        665
+      ]
+    },
+    "src/target/riscv64/frame_layout.h": {
+      "blob": "afea3177035e4e9a0efb450b93853ab170769374",
+      "review_depth": "inventory",
+      "ci_touched_in": [
+        665
+      ]
+    },
+    "src/target/riscv64/frame_requirements.c": {
+      "blob": "8bd077167415e184cdb8d7fcb6d94a89665f6f8d",
+      "review_depth": "inventory",
+      "ci_touched_in": [
+        665
+      ]
+    },
+    "src/target/riscv64/frame_requirements.h": {
+      "blob": "d990e7de7ecaebf394b0764349760f17ab977f03",
+      "review_depth": "inventory",
+      "ci_touched_in": [
+        665
+      ]
+    },
+    "src/target/riscv64/function_abi_plan.c": {
+      "blob": "c86b9445da9e3af4d5c2b799138b8bb735cf552d",
+      "review_depth": "full",
+      "ci_touched_in": [
+        665
+      ]
+    },
+    "src/target/riscv64/function_abi_plan.h": {
+      "blob": "63a9b7dc7019f705cbcabe82fd7fbaf20fa9bf2e",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/riscv64/global_emit.c": {
+      "blob": "2e7eb4ca87cac8ae33a65e82881e5a7213c62ad2",
+      "review_depth": "inventory",
+      "ci_touched_in": [
+        665
+      ]
+    },
+    "src/target/riscv64/global_emit.h": {
+      "blob": "bc0db4cf515e2e64137773dbe161d53b9edec168",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/riscv64/inline_asm_emit.c": {
+      "blob": "acbf536b5a1ea35d4de9faf026e31ff94841d8b2",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/riscv64/inline_asm_emit.h": {
+      "blob": "9e579eac37a9a1c46aa78d89bde4c0a224877b36",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/riscv64/isa.c": {
+      "blob": "f21a21120f796ef22370f053c749a50c62090c85",
+      "review_depth": "inventory",
+      "ci_touched_in": [
+        665
+      ]
+    },
+    "src/target/riscv64/isa.h": {
+      "blob": "c78245a416f3fa33b908be8b22c886879bcf521c",
+      "review_depth": "inventory",
+      "ci_touched_in": [
+        665
+      ]
+    },
+    "src/target/riscv64/legalize.c": {
+      "blob": "cb5835a2f98057ca52af5d477af80ef67200e3e3",
+      "review_depth": "inventory",
+      "ci_touched_in": [
+        665
+      ]
+    },
+    "src/target/riscv64/legalize.h": {
+      "blob": "21d6c0ab9a73f8af80caa116fa8390b0e7dea433",
+      "review_depth": "inventory",
+      "ci_touched_in": [
+        665
+      ]
+    },
+    "src/target/riscv64/memory_emit.c": {
+      "blob": "a5dfe3efafc39ea7664e7219478f3c60190a7d1d",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/riscv64/memory_emit.h": {
+      "blob": "1596cf7a51dd8b9a55bfe434e420dbd5812e1db7",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/riscv64/overflow_emit.c": {
+      "blob": "6bafc9e19ee9ced01e2365a57c5b653d227faf8a",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/riscv64/overflow_emit.h": {
+      "blob": "aea00eff1aedb88513a39d043dc5f785d8df679e",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/riscv64/record_snapshot.c": {
+      "blob": "37b09bca198c6c4e3ee4665df8b8cd66be2113d6",
+      "review_depth": "inventory",
+      "ci_touched_in": [
+        665
+      ]
+    },
+    "src/target/riscv64/record_snapshot.h": {
+      "blob": "bc74b4aaf3c67d7676219f5f9752bb90213a0836",
+      "review_depth": "inventory",
+      "ci_touched_in": [
+        665
+      ]
+    },
+    "src/target/riscv64/runtime_libcall.c": {
+      "blob": "e3d1babc7f04ddac6fa9df6c211f12a74ed1d0ed",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/riscv64/runtime_libcall.h": {
+      "blob": "f2f6c99f9258ff7d485a360682c6f0a163d5b819",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/riscv64/scalar_emit.c": {
+      "blob": "5582db65174aefa099684653e294544458734891",
+      "review_depth": "inventory",
+      "ci_touched_in": [
+        665
+      ]
+    },
+    "src/target/riscv64/scalar_emit.h": {
+      "blob": "b6fb38c678ead65c29d8eb96db24bbf6a44b5ca3",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/target_catalog.c": {
+      "blob": "d888db09bf59f4e3b5509d28d4decd9dad78827d",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/target_catalog.h": {
+      "blob": "3b7fef23999f86e32f2d47d864e5ca8fa10bccbe",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/target_info.c": {
+      "blob": "12e7cb673ac94690aa3cdd2fd5d6ba030f2a84b0",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/target_info.h": {
+      "blob": "31bfafc424c1bd2e5281358a69b797842db37aec",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/x86_64/abi.c": {
+      "blob": "b90720113332b21038d7113450b5bcfc8d6281ef",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/x86_64/abi.h": {
+      "blob": "7c4049277c969fd4a2d082cc368ae5cb143d655b",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/x86_64/asm_contract.c": {
+      "blob": "1419a62231ffaeef53762731eb2f61e5af1f6dcb",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/x86_64/asm_contract.h": {
+      "blob": "4415b188ef25e10d2ef04bf219d402bc57ab206d",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/x86_64/call_plan.c": {
+      "blob": "6f877e194899e98f4a86b2bfbf08efcc15462875",
+      "review_depth": "full",
+      "ci_touched_in": [
+        665
+      ]
+    },
+    "src/target/x86_64/call_plan.h": {
+      "blob": "032c747404c9b5251204717c46192caaaa6d9263",
+      "review_depth": "inventory",
+      "ci_touched_in": [
+        665
+      ]
+    },
+    "src/target/x86_64/codegen.c": {
+      "blob": "38c0706ee8bdf53fec2a5df9e1db6c29e2be3fbf",
+      "review_depth": "targeted",
+      "ci_touched_in": [
+        665,
+        666
+      ]
+    },
+    "src/target/x86_64/codegen.h": {
+      "blob": "8c6874da8255d05196da1b68f2696093ee32f73a",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/x86_64/frame.c": {
+      "blob": "21776b007858ae9e463f9b784993ff66df284ab9",
+      "review_depth": "full",
+      "ci_touched_in": [
+        665,
+        666
+      ]
+    },
+    "src/target/x86_64/frame.h": {
+      "blob": "5aedff42d70c9735c646c08a387ed41f2768126f",
+      "review_depth": "inventory",
+      "ci_touched_in": [
+        665
+      ]
+    },
+    "src/target/x86_64/global_emit.c": {
+      "blob": "3a12e627044fb3f76ac00a5263e959e7e789e0dc",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/x86_64/global_emit.h": {
+      "blob": "95e027939f586714f5772026b1a630c7f83106eb",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/x86_64/machine_asm.c": {
+      "blob": "81ceba591cd378019c61cba64f8d065a84d81ac0",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/x86_64/machine_call.c": {
+      "blob": "d8520d10c3da140b317c0a576aecf7ef3c1dad5a",
+      "review_depth": "targeted",
+      "ci_touched_in": [
+        665
+      ]
+    },
+    "src/target/x86_64/machine_emit.c": {
+      "blob": "e64c88c6da88972f4fcffc6546fae457166f811b",
+      "review_depth": "inventory",
+      "ci_touched_in": [
+        665
+      ]
+    },
+    "src/target/x86_64/machine_emit.h": {
+      "blob": "38fb06e5ecd5689fdc269ced44fa6fad97d9b0a4",
+      "review_depth": "inventory",
+      "ci_touched_in": [
+        665
+      ]
+    },
+    "src/target/x86_64/machine_fp.c": {
+      "blob": "6440e5ef5fc7472aca91aa9075c56d25b0230df7",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
+    "src/target/x86_64/machine_internal.h": {
+      "blob": "a15b2a200218b1314bdf0c985bcd8169478afbf2",
+      "review_depth": "inventory",
+      "ci_touched_in": [
+        665
+      ]
+    },
+    "src/target/x86_64/machine_support.c": {
+      "blob": "eac267258cbce8bb3e8fbc44e6fe8fe141f1c98d",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    }
+  }
+}
