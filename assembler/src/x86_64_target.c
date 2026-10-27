@@ -71,7 +71,32 @@ static bool x64_parse_base_memory(const char *text, MiniAsMCMemory *out) {
     bool wide, symbolic=false, pc_relative=false;
     MiniAsSymbolExpr symbolic_expr;
     long long displacement=0;
-    if (!open) return false;
+    if (!open) {
+        unsigned space=0U;
+        const char *operand;
+        MiniAsSymbolExpr expr;
+        bool symbolic=false;
+        if(strncmp(text,"%fs:",4U)==0)space=1U;
+        else if(strncmp(text,"%gs:",4U)==0)space=2U;
+        else return false;
+        operand=text+4U;
+        if(!*operand)return false;
+        errno=0;displacement=strtoll(operand,&end,0);
+        if(errno || end==operand || *end ||
+           displacement<INT32_MIN || displacement>INT32_MAX) {
+            if(!minias_parse_symbol_addend(operand,&expr))return false;
+            symbolic=true;displacement=0;
+        }
+        memset(out,0,sizeof(*out));
+        out->scale=1U;out->address_space=space;
+        out->displacement=(int64_t)displacement;
+        if(symbolic) {
+            out->symbol=malloc(sizeof(expr));
+            if(!out->symbol)return false;
+            *out->symbol=expr;
+        }
+        return true;
+    }
     close=strchr(open+1,')');
     if (!close || close[1]!='\0') return false;
     dlen=(size_t)(open-text);
@@ -134,13 +159,14 @@ static bool x64_parse_base_memory(const char *text, MiniAsMCMemory *out) {
 }
 
 static unsigned x64_disp_bytes(const MiniAsMCMemory *mem) {
-    if (mem->pc_relative)return 4U;
+    if (mem->pc_relative || mem->address_space)return 4U;
     if (mem->displacement==0 && (mem->base & 7U)!=5U) return 0U;
     return mem->displacement>=-128 && mem->displacement<=127 ? 1U : 4U;
 }
 
 static bool x64_is_mem_candidate(const char *text) {
-    return strchr(text, '(') != NULL;
+    return strchr(text, '(') != NULL ||
+           strncmp(text,"%gs:",4U)==0 || strncmp(text,"%fs:",4U)==0;
 }
 
 static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
@@ -325,10 +351,11 @@ static bool x64_measure(MiniAs *as,const MiniAsStmt *s,uint32_t *size) {
         case X64_BRANCH: *size=m->encoding>=0x100U?6U:5U;return true;
         case X64_REG_MEMORY: {
             const MiniAsMCMemory *mem=m->operands[1].memory;
-            *size=(m->operands[0].register_64 ||
+            *size=(mem->address_space?1U:0U) + (m->operands[0].register_64 ||
                    m->operands[0].reg>=8U || mem->base>=8U ||
                    (mem->has_index && mem->index>=8U)?1U:0U) +
-                  2U + ((mem->has_index || (mem->base&7U)==4U)?1U:0U) +
+                  2U + ((mem->address_space || mem->has_index ||
+                          (mem->base&7U)==4U)?1U:0U) +
                   x64_disp_bytes(mem);
             return true;
         }
@@ -350,7 +377,7 @@ static bool x64_measure(MiniAs *as,const MiniAsStmt *s,uint32_t *size) {
 
 static bool x64_encode(MiniAs *as,const MiniAsStmt *s) {
     const MiniAsMCInst *m=s->mcinst;
-    unsigned char code[8];size_t n=0;unsigned r,d;
+    unsigned char code[16];size_t n=0;unsigned r,d;
     if (!m) {minias_set_error(as,"missing-x86_64-mcinst");return false;}
     switch(m->opcode) {
         case X64_ZERO: {
@@ -407,6 +434,8 @@ static bool x64_encode(MiniAs *as,const MiniAsStmt *s) {
             unsigned mod=bytes==0U?0U:bytes==1U?1U:2U;
             unsigned i;
             uint32_t disp=(uint32_t)mem->displacement;
+            if(mem->address_space)
+                code[n++]=(unsigned char)(mem->address_space==1U?0x64U:0x65U);
             r=m->operands[0].reg;
             if (m->operands[0].register_64 || r>=8U || mem->base>=8U ||
                 (mem->has_index && mem->index>=8U))
@@ -418,13 +447,23 @@ static bool x64_encode(MiniAs *as,const MiniAsStmt *s) {
             code[n++]=(unsigned char)m->encoding;
             code[n++]=(unsigned char)(((mem->pc_relative?0U:mod)<<6U)|
                 ((r&7U)<<3U)|
-                (mem->pc_relative?5U:mem->has_index?4U:low_base));
-            if (!mem->pc_relative && (mem->has_index || low_base==4U)) {
+                (mem->address_space?4U:
+                 mem->pc_relative?5U:mem->has_index?4U:low_base));
+            if(mem->address_space) {
+                code[n++]=0x25U; /* SIB: no base/index, signed disp32 */
+            } else if (!mem->pc_relative && (mem->has_index || low_base==4U)) {
                 unsigned sib_scale=mem->scale==8U?3U:
                                    mem->scale==4U?2U:
                                    mem->scale==2U?1U:0U;
                 code[n++]=(unsigned char)((sib_scale<<6U) |
                     ((mem->has_index?mem->index&7U:4U)<<3U) | low_base);
+            }
+            if(mem->address_space && mem->symbol!=NULL) {
+                for(i=0U;i<4U;++i)code[n++]=0U;
+                if(!minias_section_append(as,s->section,code,n))return false;
+                return minias_add_fixup(as,s->section,s->offset+n-4U,
+                            MINIAS_FIXUP_X64_ABS32S,4U,
+                            mem->symbol->name,mem->symbol->addend);
             }
             if(mem->pc_relative && mem->symbol!=NULL) {
                 MiniAsSymbol *sym=minias_get_symbol(as,mem->symbol->name,false);
@@ -521,6 +560,7 @@ static uint32_t x64_reloc(MiniAsFixupKind kind,unsigned width) {
     if(width!=4U)return 0U;
     if(kind==MINIAS_FIXUP_X64_PC32)return 2U;  /* R_X86_64_PC32 */
     if(kind==MINIAS_FIXUP_X64_PLT32)return 4U; /* R_X86_64_PLT32 */
+    if(kind==MINIAS_FIXUP_X64_ABS32S)return 11U; /* R_X86_64_32S */
     return 0U;
 }
 static const MiniAsTargetOps ops={

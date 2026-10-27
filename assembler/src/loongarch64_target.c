@@ -44,14 +44,14 @@ static bool la_reg(const char *s,unsigned *r) {
     }
     return false;
 }
-static bool la_split(const char *args,char t[3][192],unsigned *n) {
+static bool la_split(const char *args,char t[4][192],unsigned *n) {
     const char *p=args,*start=args;unsigned c=0;
     for(;;++p) {
         if(*p!=',' && *p!='\0')continue;
         size_t length=(size_t)(p-start);
         while(length && isspace((unsigned char)*start)){++start;--length;}
         while(length && isspace((unsigned char)start[length-1U]))--length;
-        if(!length || length>=192 || c>=3)return false;
+        if(!length || length>=192 || c>=4)return false;
         memcpy(t[c],start,length);t[c++][length]='\0';
         if(!*p)break;
         start=p+1;
@@ -90,7 +90,7 @@ static bool la_symbol_operand(MiniAs *as, MiniAsMCInst *m, unsigned slot,
 }
 
 static bool la_branch_instruction(MiniAs *as, MiniAsMCInst *m,
-                                  const char *op, char t[3][192],
+                                  const char *op, char t[4][192],
                                   unsigned count) {
     struct BranchKind {const char *name;unsigned operands;uint32_t base;
                        LaMCOpcode opcode;};
@@ -209,8 +209,8 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
         {"pcaddu12i",UINT32_C(0x1c000000)},
         {"pcaddu18i",UINT32_C(0x1e000000)}
     };
-    MiniAsMCInst *m=calloc(1U,sizeof(*m)+3U*sizeof(MiniAsMCOperand));
-    char t[3][192],*end;unsigned n,i,rd,rj,rk;
+    MiniAsMCInst *m=calloc(1U,sizeof(*m)+4U*sizeof(MiniAsMCOperand));
+    char t[4][192],*end;unsigned n,i,rd,rj,rk;
     long val;
     if(!m){minias_set_error(as,"out-of-memory:loongarch64-mcinst");return false;}
     if(!*s->args) {
@@ -219,6 +219,55 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
     }
     if(!la_split(s->args,t,&n))goto fail;
     if(la_branch_instruction(as,m,s->op,t,n)) goto done;
+    /* All four are GNU LA64 unsigned-15-bit immediate instructions. */
+    if(n==1U) {
+        static const struct {const char *op;uint32_t word;} direct[]={
+            {"break",UINT32_C(0x002a0000)},
+            {"syscall",UINT32_C(0x002b0000)},
+            {"dbar",UINT32_C(0x38720000)},
+            {"ibar",UINT32_C(0x38728000)}
+        };
+        uint64_t v;
+        if(minias_eval_u64_expression(t[0],&v) && v<=32767U) {
+            for(i=0U;i<sizeof(direct)/sizeof(direct[0]);++i)
+                if(strcmp(s->op,direct[i].op)==0) {
+                    m->count=1U;m->encoding=direct[i].word|(uint32_t)v;
+                    m->operands[0].kind=MINIAS_MC_IMMEDIATE;
+                    m->operands[0].immediate=v;
+                    goto done;
+                }
+        }
+    }
+    if(n==4U && la_reg(t[0],&rd) && la_reg(t[1],&rj)) {
+        static const struct {const char *op;uint32_t base;unsigned bits;} bitfield[]={
+            {"bstrins.w",UINT32_C(0x00600000),5U},
+            {"bstrpick.w",UINT32_C(0x00608000),5U},
+            {"bstrins.d",UINT32_C(0x00800000),6U},
+            {"bstrpick.d",UINT32_C(0x00c00000),6U}
+        };
+        uint64_t msb,lsb;
+        if(minias_eval_u64_expression(t[2],&msb) &&
+           minias_eval_u64_expression(t[3],&lsb)) {
+            for(i=0U;i<sizeof(bitfield)/sizeof(bitfield[0]);++i)
+                if(strcmp(s->op,bitfield[i].op)==0 &&
+                   msb<(UINT64_C(1)<<bitfield[i].bits) &&
+                   lsb<=msb) {
+                    m->count=4U;
+                    m->encoding=bitfield[i].base |
+                        ((uint32_t)msb<<16U)|((uint32_t)lsb<<10U) |
+                        (rj<<5U)|rd;
+                    m->operands[0].kind=MINIAS_MC_REGISTER;
+                    m->operands[0].reg=rd;
+                    m->operands[1].kind=MINIAS_MC_REGISTER;
+                    m->operands[1].reg=rj;
+                    m->operands[2].kind=MINIAS_MC_IMMEDIATE;
+                    m->operands[2].immediate=msb;
+                    m->operands[3].kind=MINIAS_MC_IMMEDIATE;
+                    m->operands[3].immediate=lsb;
+                    goto done;
+                }
+        }
+    }
     /* LoongArch jr register == jirl $zero,$reg,0.  No relocation. */
     if(!strcmp(s->op,"jr") && n==1U && la_reg(t[0],&rj)) {
         m->count=1U;

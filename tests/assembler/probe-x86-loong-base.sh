@@ -74,6 +74,10 @@ unresolved_x86:
     movq ext_global(%rip), %rax
     movl %r8d, ext_global+8(%rip)
     cmpq ext_global(%rip), %r9
+    movq %gs:40, %rax
+    movq %gs:pcpu_hot, %rax
+    movq %rax, %gs:pcpu_hot
+    movl %fs:12, %eax
 ASM_X
 if ! "$MINIAS" --target=x86_64 -march=x86-64 -mabi=sysv -o "$work/x86-mini.o" "$work/x86.s" >"$work/x86.stdout" 2>"$work/x86.stderr"; then
     echo 'MINIAS_X86_PARSE_OR_ENCODE_FAIL' >&2
@@ -91,6 +95,7 @@ grep -q R_X86_64_PC32 "$work/x86-rel.txt"
 readelf -Wr "$work/x86-gnu.o" >"$work/x86-gnu-rel.txt"
 grep -q R_X86_64_PLT32 "$work/x86-gnu-rel.txt"
 grep -q R_X86_64_PC32 "$work/x86-gnu-rel.txt"
+grep -q R_X86_64_32S "$work/x86-mini-rel.txt"
 # GNU and MiniAS must agree on every relocation type, offset, addend.
 # GNU GAS and MiniELF may serialize RELA entries in different orders.
 # Compare exact relocation offset, type, symbol, and addend after sorting.
@@ -150,6 +155,15 @@ entry_la:
     jirl $a0, $a1, 4
     jirl $zero, $ra, -131072
     jirl $ra, $a0, 131068
+    break 1
+    break 32767
+    syscall 0
+    dbar 18
+    ibar 16
+    bstrpick.d $a0, $a1, 31, 0
+    bstrpick.w $a1, $a0, 7, 0
+    bstrins.d $a2, $a3, 63, 1
+    bstrins.w $a3, $a2, 30, 2
     ret
 .size entry_la, .-entry_la
 ASM_LA
@@ -171,7 +185,9 @@ for bad in 'movq %rax, (%eax)' \
            'movq %rax, (%rax,%rcx,2,7)' \
            'movq ext_global(%rax), %r9' \
            'movq ext_global(%rip,%rax,2), %r9' \
-           'movq %rax, ext_global(%rbp)'; do
+           'movq %rax, ext_global(%rbp)' \
+           'movq %gs:4294967296, %rax' \
+           'movq %fs:pcpu_hot(%rax), %rax'; do
     printf '.text\n%s\n' "$bad" >"$work/invalid-mem.s"
     if "$MINIAS" --target=x86_64 -o "$work/bad-mem.o" \
          "$work/invalid-mem.s" >/dev/null 2>"$work/invalid.err"; then
@@ -259,7 +275,11 @@ for bad in 'ldptr.d $a0, $sp, 3' \
            'pcalau12i $a0, -524289' \
            'jirl $a0, $a1, 3' \
            'jirl $a0, $a1, 131072' \
-           'jirl $a0, $a1, -131076'; do
+           'jirl $a0, $a1, -131076' \
+           'break -1' \
+           'dbar 32768' \
+           'bstrpick.w $a0, $a1, 32, 1' \
+           'bstrpick.d $a0, $a1, 2, 3'; do
     printf '.text\n%s\n' "$bad" >"$work/invalid-la-ptr.s"
     if "$MINIAS" --target=loongarch64 -o "$work/bad-ptr.o" \
          "$work/invalid-la-ptr.s" >/dev/null 2>"$work/invalid.err"; then

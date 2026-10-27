@@ -96,6 +96,7 @@ typedef enum MiniAsFixupKind {
     MINIAS_FIXUP_A64_CONDBR19,
     MINIAS_FIXUP_X64_PC32,
     MINIAS_FIXUP_X64_PLT32,
+    MINIAS_FIXUP_X64_ABS32S,
     /* ELF numeric relocation types are target-owned; Common stores only
      * semantic fixup identities and SymbolExpr. */
     MINIAS_FIXUP_LARCH_PCALA_HI20,
@@ -141,6 +142,7 @@ typedef enum MiniAsMCRegisterClass {
 typedef struct MiniAsMCMemory {
     bool has_base;
     bool pc_relative; /* target-specific PC-relative encoding, not implicit ABS */
+    unsigned address_space; /* optional target-owned segment/space selector */
     unsigned base;
     bool has_index;
     unsigned index;
