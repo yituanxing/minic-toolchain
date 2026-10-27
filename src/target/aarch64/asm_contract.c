@@ -357,7 +357,12 @@ bool minic_aarch64_qualify_inline_asm(
         constraint(&src->inputs[0], "rZ")) {
         expr = minic_c0_program_expression(program, src->inputs[0].expression);
         if (expr && minic_type_unqualified(expr->type, &plain) &&
-            minic_type_equal(plain, minic_type_unsigned_long())) {
+            /* The *original* Linux sysreg.h write_sysreg() materializes
+             * u64 (__u64 = unsigned long long), whereas the interrupt
+             * caller's flags and AAPCS64 GPR are unsigned long/64-bit.
+             * They have equal machine width, not identical C type. */
+            (minic_type_equal(plain, minic_type_unsigned_long()) ||
+             minic_type_equal(plain, minic_type_unsigned_long_long()))) {
             contract->operand_count = 1U;
             contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
             return true;
@@ -471,8 +476,10 @@ bool minic_aarch64_emit_qualified_structured_asm(
                 operand[0].has_fixed_register_binding || operand[0].early_clobber ||
                 operand[0].value >= fn->value_count ||
                 operand[0].value > 4095U / 8U ||
-                !minic_type_equal(fn->values[operand[0].value].type,
-                                  minic_type_unsigned_long()))
+                (!minic_type_equal(fn->values[operand[0].value].type,
+                                   minic_type_unsigned_long()) &&
+                 !minic_type_equal(fn->values[operand[0].value].type,
+                                   minic_type_unsigned_long_long())))
                 return false;
             return fprintf(out, "  ldr x9, [sp, #%zu]\n"
                                 "  msr daif, x9\n",
