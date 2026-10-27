@@ -1607,9 +1607,10 @@ readelf -A "$work/isa-m.o" | grep -q 'Tag_RISCV_arch: "rv64i2p1_m2p0"'
 for opts in 'rv64i mul a0,a1,a2' 'rv64im csrr a0,mstatus' \
             'rv64im orc.b a0,a1' 'rv64im c.li a0,1' \
             'rv64im fence.i' 'rv64i vsetvl a0,a1,a2'; do
-    set -- $opts
-    printf '.text\n%s %s\n' "$2" "$3" >"$work/isa-negative.s"
-    if "$MINIAS" "-march=$1" -mabi=lp64 -o "$work/isa-negative.o" \
+    isa_arch=${opts%% *}
+    isa_instruction=${opts#* }
+    printf '.text\n%s\n' "$isa_instruction" >"$work/isa-negative.s"
+    if "$MINIAS" "-march=$isa_arch" -mabi=lp64 -o "$work/isa-negative.o" \
         "$work/isa-negative.s" >/dev/null 2>"$work/isa-negative.err"; then
         echo "MiniAS accepted forbidden ISA opcode: $opts" >&2
         exit 1
