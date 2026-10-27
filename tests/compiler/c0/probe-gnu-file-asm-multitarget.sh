@@ -185,6 +185,52 @@ SRC
     done
     echo 'MINIC_AARCH64_LINUX_BRK_GNU_AS_QEMU=PASS imm=0x401 negative=4'
 
+    # Real Linux 6.6 irqflags.h DAIF privileged MRS/MSR hardware boundary.
+    # Assemble and inspect objects; never execute privileged ops in QEMU-user.
+    cat > "$work/aarch64-daif.i" <<'SRC'
+unsigned long linux_read_daif(void) {
+    unsigned long flags;
+    __asm__ __volatile__("mrs %0, daif" : "=r"(flags));
+    return flags;
+}
+void linux_restore_daif(unsigned long flags) {
+    __asm__ __volatile__("msr daif, %x0" : : "rZ"(flags));
+}
+int main(void) { return 0; }
+SRC
+    "$cross_cc" -c -x c "$work/aarch64-daif.i" -o "$work/aarch64-daif.gnu.o"
+    "$MINIC_CC" --target=aarch64-linux -S "$work/aarch64-daif.i" \
+        -o "$work/aarch64-daif.minic.s"
+    grep -Fq 'mrs x9, daif' "$work/aarch64-daif.minic.s"
+    grep -Fq 'msr daif, x9' "$work/aarch64-daif.minic.s"
+    "$cross_cc" -c -x assembler "$work/aarch64-daif.minic.s" \
+        -o "$work/aarch64-daif.minic.o"
+    for flavor in gnu minic; do
+        aarch64-linux-gnu-objdump -d "$work/aarch64-daif.$flavor.o" |
+            grep -Eq 'mrs[[:space:]].*daif'
+        aarch64-linux-gnu-objdump -d "$work/aarch64-daif.$flavor.o" |
+            grep -Eq 'msr[[:space:]]+daif'
+    done
+    for invalid in wrong_input hidden_svc wrong_reg pointer_input; do
+        case "$invalid" in
+          wrong_input) asm='__asm__ __volatile__("msr daif, %x0" : : "r"(v));' ;;
+          hidden_svc) asm='__asm__ __volatile__("msr daif, %x0; svc #0" : : "rZ"(v));' ;;
+          wrong_reg) asm='__asm__ __volatile__("msr spsel, %x0" : : "rZ"(v));' ;;
+          pointer_input) asm='__asm__ __volatile__("msr daif, %x0" : : "rZ"(&v));' ;;
+        esac
+        printf 'int main(void) { unsigned long v = 0; %s return 0; }\n' \
+            "$asm" > "$work/aarch64-daif-invalid-$invalid.i"
+        if "$MINIC_CC" --target=aarch64-linux -S \
+            "$work/aarch64-daif-invalid-$invalid.i" \
+            -o "$work/aarch64-daif-invalid-$invalid.s" \
+            >"$work/aarch64-daif-invalid-$invalid.out" \
+            2>"$work/aarch64-daif-invalid-$invalid.err"; then
+            echo "FAIL unsafe arm64 DAIF system register accepted: $invalid" >&2
+            exit 1
+        fi
+    done
+    echo 'MINIC_AARCH64_LINUX_DAIF_GNU_AS=PASS operations=2 negative=4 privileged_only=1'
+
     # Original Linux 6.6 arm64 __smp_store_release, all four hardware widths.
     cat > "$work/aarch64-stlr.i" <<'SRC'
 typedef unsigned char u8; typedef unsigned short u16;
