@@ -220,6 +220,34 @@ for kind in R_LARCH_PCALA_HI20 R_LARCH_PCALA_LO12 R_LARCH_B16 R_LARCH_B21 R_LARC
     grep -q "$kind" "$work/rel-gnu.txt"
 done
 echo 'MINIAS_LARCH_RELOC_ORACLE=PASS text_bytes=equal required_ELF_reloc_families=5'
+# Same-section forward/backward LoongArch branches must use the
+# original RV-proven symbol-layout resolver rather than producing a redundant
+# external ELF RELA or guessing a GNU relaxation.
+cat >"$work/la-local.s" <<'LA_LOCAL'
+.text
+.globl local_entry
+.type local_entry,@function
+local_entry:
+.Lback:
+    nop
+    beqz $a0, .Lforward
+    b .Lforward
+    beq $a0, $a1, .Lback
+.Lforward:
+    bnez $a1, .Lback
+    ret
+.size local_entry, .-local_entry
+LA_LOCAL
+"$MINIAS" --target=loongarch64 -march=loongarch64 -mabi=lp64d \
+    -o "$work/la-local-mini.o" "$work/la-local.s"
+"$LOONGAS" -mabi=lp64d -o "$work/la-local-gnu.o" "$work/la-local.s"
+"$LOONGCOPY" -j .text -O binary "$work/la-local-mini.o" "$work/la-local-mini.bin"
+"$LOONGCOPY" -j .text -O binary "$work/la-local-gnu.o" "$work/la-local-gnu.bin"
+cmp "$work/la-local-mini.bin" "$work/la-local-gnu.bin"
+# The GNU assembler may retain R_LARCH_MARK_LA/relax bookkeeping; the
+# machine-level code and defined local labels must still be identical.
+echo 'MINIAS_LARCH_LOCAL_BRANCH_ORACLE=PASS same_section_forward_backward_bytes=equal'
+
 for bad in 'ldptr.d $a0, $sp, 3' \
            'stptr.w $a0, $sp, 32768' \
            'ldptr.d $a1, $sp, -32772' \

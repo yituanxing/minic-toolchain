@@ -351,3 +351,17 @@ new targets yet: those stronger RV capabilities remain target-specific
 requirements, and GNU AArch64/x86/LoongArch Linux acceptance is not
 asserted. New architectures must continue adding capabilities to a
 stable shared pipeline instead of copying RV's implementation blindly.
+
+## LoongArch branch / GNU oracle + 7 frozen shard verification (2026-10-27)
+
+In addition to external-symbol B16/B21/B26 RELA agreement, exercise
+same-section **forward/backward local label** displacement against GNU
+machine bytes. The LoongArch parser reuses the mature RV pattern:
+SymbolExpr at parse -> MCInst target opcode -> layout-resolved same-section
+immediate or common Fixup -> Target relocation number -> common ELF writer.
+This gate prevents falsely treating all labels as external unresolved symbols.
+The exact-head grouped change requests **only seven cached LoongArch Linux
+shards** via [minias-replay-loong-7], not three GNU Linux recompiles nor 21
+full scans. The workflow watches its GNU oracle test script so this requested
+batch actually runs. Remaining major blocker families must be measured from
+the new exact-head aggregate, not inferred from earlier counts.
