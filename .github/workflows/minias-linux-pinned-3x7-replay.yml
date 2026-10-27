@@ -1,6 +1,8 @@
 name: MiniAS Immutable Linux 3x7 GNU Kbuild S Replay
 
 # Frozen original Linux 6.6.143 inputs. Discovery, NOT P1/parity.
+# Grouped exact-head Oct27 scan after A64 bitmask/REV/LDAR and x86 BT/XADD,
+# GNU C block comment lexer and x86 implicit shifts; frozen sources unchanged.
 # Oct 27 batch acceptance: Common .fill, LoongArch timer/prefetch/branch
 # aliases, AArch64 BRK/SUBS/ADDS/MOVN and x86 prefixes/indirect transfers.
 # Record all 21 frozen GNU .s shards on this exact commit; a discovery
