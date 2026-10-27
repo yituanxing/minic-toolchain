@@ -14,6 +14,7 @@ typedef enum {
     LA_MC_RAW = 0,
     LA_MC_PCALA_HI20,
     LA_MC_PCALA_LO12,
+    LA_MC_PCREL_PSEUDO,
     LA_MC_BRANCH16,
     LA_MC_BRANCH21,
     LA_MC_BRANCH26
@@ -358,6 +359,17 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
     }
     if(!la_split(s->args,t,&n))goto fail;
     if(la_branch_instruction(as,m,s->op,t,n)) goto done;
+    if(n==2U && !strcmp(s->op,"la.pcrel") && la_reg(t[0],&rd)) {
+        MiniAsSymbolExpr expr;
+        if(!minias_parse_symbol_addend(t[1],&expr) ||
+           !la_symbol_operand(as,m,1U,&expr))goto fail;
+        m->opcode=LA_MC_PCREL_PSEUDO;
+        m->count=2U;
+        m->encoding=UINT32_C(0x1a000000)|rd;
+        m->operands[0].kind=MINIAS_MC_REGISTER;
+        m->operands[0].reg=rd;
+        goto done;
+    }
     if(n==2U && la_special_reg(t[0],"$f",31U,&rd) &&
        la_reg(t[1],&rj) &&
        (!strcmp(s->op,"movgr2fr.d") || !strcmp(s->op,"movgr2fr.w"))) {
@@ -843,7 +855,8 @@ done:
 }
 static bool la_measure(MiniAs *as,const MiniAsStmt *s,uint32_t *size) {
     if(!s->mcinst){minias_set_error(as,"missing-la-mcinst");return false;}
-    *size=4U;return true;
+    *size=s->mcinst->opcode==LA_MC_PCREL_PSEUDO?8U:4U;
+    return true;
 }
 static bool la_encode(MiniAs *as,const MiniAsStmt *s) {
     unsigned char bytes[4];
@@ -854,6 +867,28 @@ static bool la_encode(MiniAs *as,const MiniAsStmt *s) {
     const MiniAsSymbolExpr *expr=NULL;
     if(!m){minias_set_error(as,"missing-la-mcinst");return false;}
     code=m->encoding;
+    if(m->opcode==LA_MC_PCREL_PSEUDO) {
+        const MiniAsSymbolExpr *symbol=m->operands[1].symbol;
+        unsigned rd=m->operands[0].reg;
+        uint32_t first=UINT32_C(0x1a000000)|rd;
+        uint32_t second=UINT32_C(0x02c00000)|(rd<<5U)|rd;
+        unsigned char pair[8];
+        if(!symbol || s->size!=8U) {
+            minias_set_error(as,"invalid-la-pcrel-layout:line=%zu",s->line);
+            return false;
+        }
+        for(i=0U;i<4U;++i) {
+            pair[i]=(unsigned char)(first>>(8U*i));
+            pair[4U+i]=(unsigned char)(second>>(8U*i));
+        }
+        return minias_section_append(as,s->section,pair,sizeof(pair)) &&
+            minias_add_fixup(as,s->section,s->offset,
+                             MINIAS_FIXUP_LARCH_PCALA_HI20,4U,
+                             symbol->name,symbol->addend) &&
+            minias_add_fixup(as,s->section,s->offset+4U,
+                             MINIAS_FIXUP_LARCH_PCALA_LO12,4U,
+                             symbol->name,symbol->addend);
+    }
     switch(m->opcode) {
         case LA_MC_PCALA_HI20:
         case LA_MC_PCALA_LO12:
