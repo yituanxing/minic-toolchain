@@ -409,6 +409,7 @@ typedef struct MiniAsTargetOps {
     unsigned cfi_negate_ra_opcode;
     /* GNU assembler directive dialect belongs to TargetInfo, not Common. */
     unsigned word_directive_width; /* zero: 4, x86 GNU .word: 2 */
+    unsigned inst_directive_width; /* optional raw target ISA .inst datum */
     bool align_directive_bytes;   /* x86 GNU .align: bytes, RISC-V/A64: power 2 */
     MiniAsFixupKind dot_relative_fixup; /* zero or target PC-relative fixup */
 } MiniAsTargetOps;

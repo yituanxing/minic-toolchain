@@ -70,6 +70,10 @@ external_probe:
     staddl w0, [x2]
     stset x1, [x2]
     stclrl w0, [x2]
+    prfm pstl1strm, [x2]
+    prfm pldl1keep, [x3, #16]
+    prfm plil2strm, [x4, #24]
+    .inst 0xd503201f, 0xd65f03c0
     .arch_extension nolse
     ldar w0, [x0]
     ldar x1, [x2]
@@ -273,6 +277,8 @@ for bad_source in 'brk #65536' 'mov w0, -65537' \
                   'cset x0, bogus' \
                   'mrs w0, sp_el0' 'msr tpidrro_el0, x0' \
                   'mrs x0, fake_el0' 'dmb #16' 'dmb invalid' \
+                  'prfm pstl4strm, [x2]' 'prfm pstl1strm, [w2]' \
+                  '.inst 0x100000000' \
                   'cmn x0, #-1' 'cmn w0, #4097' \
                   'and w0, w0, #0xffffffff' 'and w0, w0, #0' \
                   'and x0, w0, #255' 'sxtw w0, w0' \

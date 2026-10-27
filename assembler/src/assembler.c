@@ -1840,6 +1840,7 @@ static unsigned int data_width(const MiniAs *as, const char *op) {
         strcmp(op, ".2byte") == 0) {
         return 2U;
     }
+    if (!strcmp(op,".inst")) return as->target->inst_directive_width;
     if (strcmp(op, ".word") == 0)
         return as->target->word_directive_width == 0U ?
             4U : as->target->word_directive_width;

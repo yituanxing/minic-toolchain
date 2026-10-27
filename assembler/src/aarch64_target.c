@@ -157,7 +157,8 @@ enum {
     A64_MC_EXTEND_W,
     A64_MC_REV,
     A64_MC_ACQUIRE_RELEASE,
-    A64_MC_LSE
+    A64_MC_LSE,
+    A64_MC_PRFM
 };
 
 /* GNU AArch64 operands split on TOP-LEVEL commas, not commas within
@@ -281,6 +282,33 @@ static bool parse_integer_family(MiniAsMCInst *inst,
     if (!split_operands(args, t, &n)) return false;
     /* Common GNU Linux bit/byte-swap and acquire/release families.
      * All operands are typed once; no instruction-name checks in encode. */
+    if(!strcmp(op,"prfm") && n==2U) {
+        unsigned hint=0U,unit=0U;
+        if(t[0][0]=='#' || (t[0][0]>='0'&&t[0][0]<='9')) {
+            if(!parse_signed_number(t[0],&imm) || imm<0 || imm>31)
+                return false;
+            hint=(unsigned)imm;
+        }else {
+            const char *suffix=t[0]+5U;
+            if(!strncmp(t[0],"pldl",4U))unit=0U;
+            else if(!strncmp(t[0],"pstl",4U))unit=1U;
+            else if(!strncmp(t[0],"plil",4U))unit=2U;
+            else return false;
+            if(strlen(t[0])<6U || t[0][4]<'1' || t[0][4]>'3')
+                return false;
+            hint=unit*8U+2U*(unsigned)(t[0][4]-'1');
+            if(!strcmp(suffix,"strm"))++hint;
+            else if(strcmp(suffix,"keep"))return false;
+        }
+        if(!parse_a64_mem(t[1],&base,&imm,&mode) ||
+           mode!=0U || imm<0 || imm%8!=0 || imm/8>4095)
+            return false;
+        inst->opcode=A64_MC_PRFM;inst->count=3U;
+        put_immediate(&inst->operands[0],(int64_t)hint);
+        put_reg(&inst->operands[1],base,true);
+        put_immediate(&inst->operands[2],imm/8);
+        return true;
+    }
     if ((!strcmp(op,"sxtw") || !strcmp(op,"uxtw")) && n==2U) {
         if(!parse_a64_reg(t[0],&rd,&wd,&spd) || !wd || spd ||
            !parse_a64_reg(t[1],&rn,&wn,&spn) || wn || spn)return false;
@@ -992,6 +1020,12 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
                 ((uint32_t)inst->operands[0].immediate << 5U);
             break;
 
+        case A64_MC_PRFM:
+            code=UINT32_C(0xf9800000) |
+                 ((uint32_t)inst->operands[2].immediate<<10U) |
+                 (inst->operands[1].reg<<5U) |
+                 (uint32_t)inst->operands[0].immediate;
+            break;
         case A64_MC_LSE: {
             unsigned kind=inst->encoding&15U;
             bool acquire=(inst->encoding&0x20U)!=0U;
@@ -1265,6 +1299,23 @@ static bool directive(MiniAs *as, const char *op, const char *args,
         }
         return true;
     }
+    if(!strcmp(op,".inst")) {
+        char entries[4][96];unsigned count,i;
+        uint64_t value;
+        if(!split_operands(args,entries,&count)) {
+            minias_set_error(as,"invalid-aarch64-inst-list:line=%zu",line);
+            return false;
+        }
+        for(i=0U;i<count;++i)
+            if(!minias_eval_u64_expression(entries[i],&value) ||
+               value>UINT32_MAX) {
+                minias_set_error(as,"invalid-aarch64-inst-word:%s:line=%zu",
+                                 entries[i],line);
+                return false;
+            }
+        /* Common .inst typed raw-data fragment keeps ELF/section ownership. */
+        return true;
+    }
     if (strcmp(op, ".insn") == 0 || strcmp(op, ".option") == 0) {
         minias_set_error(as, "unsupported-aarch64-directive:%s:line=%zu",
                          op, line);
@@ -1368,6 +1419,7 @@ static const MiniAsTargetOps ops = {
     .fixup_relocation_type = aarch64_fixup_relocation_type,
     .validate_output = validate,
     .dot_relative_fixup = MINIAS_FIXUP_PREL32,
+    .inst_directive_width = 4U,
     .cfi_code_align = 4U,
     .cfi_data_align = -8,
     .cfi_return_reg = 30U,
