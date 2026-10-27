@@ -444,7 +444,7 @@ static bool x64_encode(MiniAs *as,const MiniAsStmt *s) {
                     ((mem->has_index?mem->index>>3U:0U)<<1U) |
                     (mem->base>>3U));
             code[n++]=(unsigned char)m->encoding;
-            code[n++]=(unsigned char)(((mem->pc_relative?0U:mod)<<6U)|
+            code[n++]=(unsigned char)((((mem->pc_relative || mem->address_space)?0U:mod)<<6U)|
                 ((r&7U)<<3U)|
                 (mem->address_space?4U:
                  mem->pc_relative?5U:mem->has_index?4U:low_base));
