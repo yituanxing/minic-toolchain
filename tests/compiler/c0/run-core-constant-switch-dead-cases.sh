@@ -32,9 +32,24 @@ int reentry(int early) {
     }
     return result;
 }
+/* Function-level named goto INTO a pre-case prefix can reach case 1,
+ * despite an unrelated constant switch selector dispatching to case 8. */
+int reentry_prefix(int early) {
+    int result = 0;
+    if (early) goto PREFIX;
+    switch (sizeof(void *)) {
+    PREFIX: result = 40;
+    case 1: result += 1; break;
+    case 4: result = 42; break;
+    case 8: result = 42; break;
+    default: result = 99; break;
+    }
+    return result;
+}
 int main(void) {
     return constant_size() == 42 && reentry(1) == 43 &&
-           reentry(0) == 42 ? 0 : 1;
+           reentry(0) == 42 && reentry_prefix(1) == 41 &&
+           reentry_prefix(0) == 42 ? 0 : 1;
 }
 SRC
 for target in riscv32-linux riscv64-linux x86_64-linux aarch64-linux loongarch64-linux; do
@@ -67,4 +82,4 @@ if "$MINIC_CC" --target=x86_64-linux -S "$work/dynamic-switch.i" \
     echo 'FAIL dynamic switch pruned executable unknown GNU asm' >&2
     exit 1
 fi
-echo 'MINIC_CORE_CONSTANT_SWITCH_DEAD_SOURCE=PASS five_targets=5 external_goto=2 dynamic_negative=1'
+echo 'MINIC_CORE_CONSTANT_SWITCH_DEAD_SOURCE=PASS five_targets=5 external_goto=4 dynamic_negative=1'
