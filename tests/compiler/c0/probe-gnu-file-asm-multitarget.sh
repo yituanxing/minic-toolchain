@@ -196,6 +196,9 @@ unsigned long linux_read_daif(void) {
 void linux_restore_daif(unsigned long flags) {
     __asm__ __volatile__("msr daif, %x0" : : "rZ"(flags));
 }
+void linux_restore_daif_real_linux_u64(unsigned long long value) {
+    __asm__ __volatile__("msr daif, %x0" : : "rZ"(value));
+}
 int main(void) { return 0; }
 SRC
     "$cross_cc" -c -x c "$work/aarch64-daif.i" -o "$work/aarch64-daif.gnu.o"
@@ -211,12 +214,13 @@ SRC
         aarch64-linux-gnu-objdump -d "$work/aarch64-daif.$flavor.o" |
             grep -Eq 'msr[[:space:]]+daif'
     done
-    for invalid in wrong_input hidden_svc wrong_reg pointer_input; do
+    for invalid in wrong_input hidden_svc wrong_reg pointer_input wrong_width; do
         case "$invalid" in
           wrong_input) asm='__asm__ __volatile__("msr daif, %x0" : : "r"(v));' ;;
           hidden_svc) asm='__asm__ __volatile__("msr daif, %x0; svc #0" : : "rZ"(v));' ;;
           wrong_reg) asm='__asm__ __volatile__("msr spsel, %x0" : : "rZ"(v));' ;;
           pointer_input) asm='__asm__ __volatile__("msr daif, %x0" : : "rZ"(&v));' ;;
+          wrong_width) asm='__asm__ __volatile__("msr daif, %x0" : : "rZ"((unsigned int)v));' ;;
         esac
         printf 'int main(void) { unsigned long v = 0; %s return 0; }\n' \
             "$asm" > "$work/aarch64-daif-invalid-$invalid.i"
@@ -229,7 +233,7 @@ SRC
             exit 1
         fi
     done
-    echo 'MINIC_AARCH64_LINUX_DAIF_GNU_AS=PASS operations=2 negative=4 privileged_only=1'
+    echo 'MINIC_AARCH64_LINUX_DAIF_GNU_AS=PASS operations=3 negative=5 original_u64=1 privileged_only=1'
 
     # Original Linux 6.6 arm64 __smp_store_release, all four hardware widths.
     cat > "$work/aarch64-stlr.i" <<'SRC'
