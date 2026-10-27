@@ -104,6 +104,55 @@ static bool emit_bit_scan_u64(
            fputs("  movq %rax, (%r11)\n", out) != EOF;
 }
 
+/* The only owner of this x86 hardware side effect: CMP sets CF, SBB
+ * consumes it immediately to create the branchless speculative mask.
+ * Core transports typed SSA values, never a pretend boolean mask. */
+static bool emit_nospec_mask(
+    FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicCoreFunction *fn, const MinicX86Frame *frame,
+    const MinicCoreInstruction *ins, const MinicCoreInlineAsm *info) {
+    const MinicCoreStructuredInlineAsmOperand *b =
+        ins->value.structured_inline_asm.operands;
+    MinicType output_type;
+    size_t width, index_width, output_width, i;
+    bool sign, index_signed;
+    if (!out || !program || !target || !fn || !frame || !ins || !info ||
+        ins->value.structured_inline_asm.operand_count != 3U ||
+        !b || !info->is_volatile || info->is_goto || info->has_memory_clobber ||
+        info->register_clobber_count != 1U || !info->register_clobbers ||
+        !clobber_is(&info->register_clobbers[0], "cc") ||
+        !minic_x86_64_asm_nospec_template(info->template_text, info->template_length))
+        return false;
+    for (i = 0U; i < 3U; ++i)
+        if (b[i].operand_index != i || b[i].value >= fn->value_count ||
+            b[i].has_fixed_register_binding || b[i].early_clobber ||
+            b[i].kind != (i == 0U ?
+                MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT :
+                MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT))
+            return false;
+    if (!minic_type_pointee(fn->values[b[0].value].type, &output_type) ||
+        !minic_type_equal(output_type, minic_type_unsigned_long()) ||
+        !minic_x86_64_scalar_width(
+            program, target, output_type, &output_width, &sign) ||
+        output_width != 8U ||
+        !minic_x86_64_scalar_width(
+            program, target, fn->values[b[1].value].type, &width, &sign) ||
+        !minic_x86_64_scalar_width(
+            program, target, fn->values[b[2].value].type,
+            &index_width, &index_signed) ||
+        width != index_width || (width != 4U && width != 8U))
+        return false;
+    if (!x86_value_load(out, frame, b[1].value, "%r10") ||
+        !x86_value_load(out, frame, b[2].value, "%r11"))
+        return false;
+    if (fputs(width == 8U ? "  cmpq %r10, %r11\n" :
+                              "  cmpl %r10d, %r11d\n", out) == EOF ||
+        fputs("  sbbq %r8, %r8\n", out) == EOF ||
+        !x86_value_load(out, frame, b[0].value, "%r9"))
+        return false;
+    return fputs("  movq %r8, (%r9)\n", out) != EOF;
+}
+
 /* A GNU p argument holds the address of the per-cpu field, not the
  * field's contents. GS base is added by x86 hardware on the actual load.
  * The caller's normal C result lvalue is written only after the GS read;
@@ -264,6 +313,8 @@ bool minic_x86_64_emit_structured_asm(
                 out, program, target, fn, frame, ins, info);
         return emit_bit_scan_u64(out, program, target, fn, frame, ins, info);
     }
+    if (ins->value.structured_inline_asm.operand_count == 3U)
+        return emit_nospec_mask(out, program, target, fn, frame, ins, info);
     if (!info->is_volatile)
         return false;
     if (ins->value.structured_inline_asm.operand_count == 4U)

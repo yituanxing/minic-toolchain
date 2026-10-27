@@ -7,6 +7,8 @@ bool minic_x86_64_requires_qualified_input_asm(const MinicInlineAsm *);
  * belong to x86. The shared compiler sees only Core operand roles. */
 bool minic_x86_64_qualify_inline_asm(
     const MinicC0Program *, const MinicInlineAsm *, MinicTargetInlineAsmContract *);
+/* Original Linux barrier.h CMP/SBB mask, strictly qualified. */
+bool minic_x86_64_asm_nospec_template(const char *, size_t);
 /* Qualified x86 per-cpu stable GS segment read, exact GNU p input. */
 bool minic_x86_64_asm_percpu_stable_template(const char *, size_t);
 bool minic_x86_64_asm_mulacc_template(const char *, size_t);

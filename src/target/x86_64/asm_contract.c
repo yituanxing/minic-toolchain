@@ -5,9 +5,25 @@
  * no SSA mutation. Additional x86 forms extend this owner, not core_lower. */
 /* Keep the GS per-CPU source reserved, without capturing ordinary MOV. */
 bool minic_x86_64_requires_qualified_input_asm(const MinicInlineAsm *src) {
-    static const char *const reserved[] = {"movq %%gs:"};
+    static const char *const reserved[] = {"movq %%gs:", "cmp"};
     return minic_backend_inline_asm_prefix_matches(
         src, reserved, sizeof(reserved) / sizeof(reserved[0]));
+}
+
+/* Exact original Linux cmp/sbb two-instruction target ISA shape. */
+bool minic_x86_64_asm_nospec_template(const char *text, size_t len) {
+    static const char exact[] = "cmp%1,%2;sbb%0,%0";
+    char compact[96];
+    size_t i, n = 0U;
+    if (!text || !len || len >= sizeof(compact)) return false;
+    for (i = 0U; i < len; ++i) {
+        const char ch = text[i];
+        if (ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n') continue;
+        if (n + 1U >= sizeof(compact)) return false;
+        compact[n++] = ch;
+    }
+    compact[n] = '\0';
+    return strcmp(compact, exact) == 0;
 }
 
 static bool target_constraint_is(const MinicInlineAsmOperand *op, const char *s) {
@@ -70,6 +86,41 @@ static bool clobber_is(const MinicInlineAsmRegisterClobber *op, const char *s) {
 }
 /* Whitespace is irrelevant for these four specific instructions, whose
  * operand constraints and exact instruction sequence are checked together. */
+/* Only integer operands of the same real x86 width; never silently
+ * convert a user-supplied operand or drop the hardware condition flags. */
+static bool x86_nospec_source(const MinicC0Program *program,
+                              const MinicInlineAsm *src) {
+    const MinicExpression *out, *size, *index;
+    MinicType out_type, size_type, index_type;
+    if (!program || !src || !src->outputs || !src->inputs ||
+        !src->is_volatile || src->is_goto || src->label_count ||
+        src->output_count != 1U || src->input_count != 2U ||
+        src->clobber_count != 1U || src->register_clobber_count != 1U ||
+        !src->register_clobbers || src->has_memory_clobber ||
+        !clobber_is(&src->register_clobbers[0], "cc") ||
+        !minic_x86_64_asm_nospec_template(src->template_text, src->template_length) ||
+        !c_is(&src->outputs[0], "=r") ||
+        !(c_is(&src->inputs[0], "g") || c_is(&src->inputs[0], "rm") ||
+          c_is(&src->inputs[0], "r")) ||
+        !c_is(&src->inputs[1], "r"))
+        return false;
+    out = minic_c0_program_expression(program, src->outputs[0].expression);
+    size = minic_c0_program_expression(program, src->inputs[0].expression);
+    index = minic_c0_program_expression(program, src->inputs[1].expression);
+    return out && size && index &&
+        out->value_category == MINIC_VALUE_LVALUE &&
+        !minic_type_is_const(out->type) &&
+        minic_type_unqualified(out->type, &out_type) &&
+        minic_type_equal(out_type, minic_type_unsigned_long()) &&
+        minic_type_unqualified(size->type, &size_type) &&
+        minic_type_unqualified(index->type, &index_type) &&
+        minic_type_equal(size_type, index_type) &&
+        size_type.base_kind == MINIC_TYPE_BASE_INT &&
+        (size_type.integer_rank == MINIC_INTEGER_RANK_INT ||
+         size_type.integer_rank == MINIC_INTEGER_RANK_LONG ||
+         size_type.integer_rank == MINIC_INTEGER_RANK_LONG_LONG);
+}
+
 bool minic_x86_64_asm_mulacc_template(const char *template_text,
                                        size_t template_length) {
     static const char expected[] = "mulq%7addq%%rax,%0adcq%%rdx,%1adcq$0,%2";
@@ -354,6 +405,13 @@ bool minic_x86_64_qualify_inline_asm(
     bool is_mulacc = false, is_muldiv = false;
     size_t i, count;
     if (!contract) return false;
+    if (x86_nospec_source(program, source)) {
+        contract->operand_count = 3U;
+        contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
+        contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+        contract->kinds[2] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+        return true;
+    }
     if (x86_percpu_source(program, source)) {
         contract->operand_count = 2U;
         contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
