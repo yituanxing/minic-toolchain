@@ -181,7 +181,11 @@ common_space_test:
     .long ext_object32
     .skip 8, 0x5a
     .space 5, 0x33
+    .skip (2+3)*2, (0x30+3)
     .zero 3
+.local local_probe
+local_probe:
+    .byte 0x7f
     # GNU x86 SysV: .word is TWO bytes, unlike A64/RISC-V .word.
     .align 16
     .word 0x1234

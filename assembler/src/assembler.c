@@ -2160,23 +2160,28 @@ static bool measure_incbin(MiniAs *as,
 /* GAS .skip/.space/.zero share count[,fill] semantics.
  * Parse the optional fill once through the existing numeric grammar;
  * unsupported relocatable fills remain errors rather than fake zero bytes. */
-static bool parse_common_space(const char *args,uint64_t *count,
+/* Shared GAS .skip/.space/.zero expression grammar: evaluate absolute
+ * arithmetic and already-resolved local differences via the existing
+ * Common parser. Do not fabricate sizes for forward/relocatable symbols. */
+static bool parse_common_space(MiniAs *as,const char *args,uint64_t *count,
                                uint8_t *fill) {
     char *copy=minias_strdup(args),*comma;
-    uint64_t number,byte=0U;
-    bool valid;
+    int64_t amount,byte=0;
+    bool ok;
     if(!copy)return false;
     comma=strchr(copy,',');
-    if(comma) {
+    if(comma){
         *comma++='\0';
-        if(strchr(comma,',')!=NULL ||
-           !minias_eval_u64_expression(minias_trim(comma),&byte) ||
-           byte>255U) {free(copy);return false;}
+        if(strchr(comma,',') ||
+           !evaluate_absolute_expression(as,minias_trim(comma),&byte) ||
+           byte<-128 || byte>255){free(copy);return false;}
     }
-    valid=minias_eval_u64_expression(minias_trim(copy),&number);
+    ok=evaluate_absolute_expression(as,minias_trim(copy),&amount) &&
+       amount>=0;
     free(copy);
-    if(!valid)return false;
-    *count=number;*fill=(uint8_t)byte;
+    if(!ok)return false;
+    *count=(uint64_t)amount;
+    *fill=(uint8_t)byte;
     return true;
 }
 
@@ -2256,7 +2261,7 @@ static bool add_data_stmt(MiniAs *as, const char *op, char *args, size_t line) {
     } else if (strcmp(op, ".zero") == 0 || strcmp(op, ".space") == 0 ||
                strcmp(op, ".skip") == 0) {
         uint8_t fill;
-        if (!parse_common_space(args,&count,&fill)) {
+        if (!parse_common_space(as,args,&count,&fill)) {
             minias_set_error(as, "unsupported-expression:%s:line=%zu", op, line);
             return false;
         }
@@ -2573,7 +2578,7 @@ static bool emit_data_stmt(MiniAs *as, const MiniAsStmt *stmt) {
         strcmp(stmt->op, ".skip") == 0) {
         uint64_t count;
         uint8_t fill;
-        if(!parse_common_space(stmt->args,&count,&fill) ||
+        if(!parse_common_space(as,stmt->args,&count,&fill) ||
            count!=stmt->size) {
             minias_set_error(as,"invalid-space-emit:line=%zu",stmt->line);
             return false;
@@ -3349,6 +3354,9 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
         }
         if (strcmp(op, ".globl") == 0 || strcmp(op, ".global") == 0) {
             return handle_symbol_list(as, args, MINIAS_STB_GLOBAL, true, 0U, false);
+        }
+        if (strcmp(op, ".local") == 0) {
+            return handle_symbol_list(as,args,MINIAS_STB_LOCAL,true,0U,false);
         }
         if (strcmp(op, ".weak") == 0) {
             return handle_symbol_list(as, args, MINIAS_STB_WEAK, true, 0U, false);
