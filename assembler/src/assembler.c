@@ -2396,6 +2396,30 @@ done:
     free(copy);return ok;
 }
 
+/* Size expressions with only numeric tokens are stable first-pass
+ * fragments and must not disable the in-place relaxation fast path.
+ * Symbolic names, location counter '.' and unresolved numeric syntax
+ * enter the shared deferred solver. Scan tokens, not raw alphabetic
+ * characters: 0xffULL is a number, not a forward symbol. */
+static bool common_data_has_symbolic_token(const char *p) {
+    while(*p) {
+        if(isdigit((unsigned char)*p)) {
+            char *end;
+            errno=0;
+            (void)strtoull(p,&end,0);
+            if(end!=p) {
+                p=end;
+                while(*p=='u' || *p=='U' || *p=='l' || *p=='L')++p;
+                continue;
+            }
+        }
+        if(isalpha((unsigned char)*p) || *p=='_' || *p=='.' ||
+           *p=='$')return true;
+        ++p;
+    }
+    return false;
+}
+
 static bool add_data_stmt(MiniAs *as, const char *op, char *args, size_t line) {
     uint64_t count = 0U;
     uint64_t bytes;
@@ -2407,9 +2431,10 @@ static bool add_data_stmt(MiniAs *as, const char *op, char *args, size_t line) {
     if (!strcmp(op,".fill")) {
         unsigned elem=0U;
         uint64_t repeats=0U,value=0U;
-        delayed=true;
+        delayed=common_data_has_symbolic_token(args);
         if(!parse_common_fill(as,args,&repeats,&elem,&value) ||
            (elem!=0U && repeats>UINT32_MAX/elem)) {
+            delayed=true;
             /* Forward labels and subsection values have not received
              * their final layout yet. Keep this as a real data fragment
              * with provisional size 0, never as an ignored directive.
@@ -2443,8 +2468,9 @@ static bool add_data_stmt(MiniAs *as, const char *op, char *args, size_t line) {
     } else if (strcmp(op, ".zero") == 0 || strcmp(op, ".space") == 0 ||
                strcmp(op, ".skip") == 0) {
         uint8_t fill=0U;
-        delayed=true;
+        delayed=common_data_has_symbolic_token(args);
         if (!parse_common_space(as,args,&count,&fill)) {
+            delayed=true;
             /* .skip/.space also permits forward absolute label differences.
              * A zero-length provisional fragment is resolved and verified
              * after all symbols have been placed. */
