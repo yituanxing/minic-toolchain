@@ -1,5 +1,3 @@
-/* Original Linux 6.6.143 AArch64 array_index_mask_nospec statement.
- * Minimal TU for exactly qualified NZCV cmp/sbc, GNU AS and QEMU. */
 unsigned long array_index_mask_nospec(unsigned long idx, unsigned long sz) {
     unsigned long mask;
     asm volatile("cmp %1, %2\n\tsbc %0, xzr, xzr\n"
