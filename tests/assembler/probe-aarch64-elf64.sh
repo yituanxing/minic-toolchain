@@ -32,6 +32,9 @@ exit_code:
 external_probe:
     bl external_function
     b external_branch
+    cbz x0, external_branch
+    cbnz w1, external_branch
+    cbz xzr, after_call
 .globl mc_operand_probe
 .type mc_operand_probe, @function
 mc_operand_probe:
@@ -58,6 +61,8 @@ echo 'MINIAS_AARCH64_PARSED_LAYOUT=PASS typed_4B=2 symbol_size=8'
 "$AARCH64_READELF" -Wr "$work/mini.o" | grep -q 'R_AARCH64_CALL26'
 "$AARCH64_READELF" -Wr "$work/mini.o" | grep -q 'R_AARCH64_JUMP26'
 "$AARCH64_READELF" -Wr "$work/mini.o" | grep -q 'R_AARCH64_ABS64'
+"$AARCH64_READELF" -Wr "$work/mini.o" | grep -q 'R_AARCH64_CONDBR19'
+"$AARCH64_READELF" -Wr "$work/gnu.o" | grep -q 'R_AARCH64_CONDBR19'
 cat >"$work/external.s" <<'EXTERNAL'
 .text
 .globl external_function
@@ -140,7 +145,8 @@ if "$MINIAS" --target=aarch64 -o "$work/unsupported.o" \
     exit 1
 fi
 # MCInst must be validated while parsing, independent of later emit/ELF.
-for bad_source in 'ret x31' 'mov x2, #65536' 'b external_function + 2'; do
+for bad_source in 'ret x31' 'mov x2, #65536' 'b external_function + 2' \
+                  'cbz sp, external_function' 'cbnz x0, external_function+2'; do
     printf '.text\n%s\n' "$bad_source" >"$work/invalid-mcinst.s"
     if "$MINIAS" --target=aarch64 -o "$work/invalid-mcinst.o" \
         "$work/invalid-mcinst.s" >"$work/invalid-mcinst.out" \

@@ -19,6 +19,7 @@
 enum {
     AARCH64_R_ABS64 = 257U,
     AARCH64_R_ABS32 = 258U,
+    AARCH64_R_CONDBR19 = 280U,
     AARCH64_R_JUMP26 = 282U,
     AARCH64_R_CALL26 = 283U
 };
@@ -102,6 +103,8 @@ enum {
     A64_MC_SVC,
     A64_MC_B,
     A64_MC_BL,
+    A64_MC_CBZ,
+    A64_MC_CBNZ,
     A64_MC_MOV_REG,
     A64_MC_ADD_REG,
     A64_MC_SUB_REG,
@@ -415,6 +418,27 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
         inst->opcode = strcmp(op, "bl") == 0 ? A64_MC_BL : A64_MC_B;
         inst->count = 1U;
         inst->operands[0].kind = MINIAS_MC_SYMBOL;
+    } else if (strcmp(op, "cbz") == 0 || strcmp(op, "cbnz") == 0) {
+        MiniAsSymbolExpr expr;
+        bool is_sp;
+        if (!split_two(args, first, sizeof(first), second, sizeof(second)) ||
+            !parse_a64_reg(first, &reg, &reg64, &is_sp) || is_sp ||
+            !minias_parse_symbol_addend(second, &expr) ||
+            (expr.addend & 3) != 0) {
+            minias_set_error(as,"bad-aarch64-condbranch:%s:line=%zu",
+                             args,stmt->line);
+            free(inst);return false;
+        }
+        inst->operands[1].symbol=malloc(sizeof(expr));
+        if(!inst->operands[1].symbol) {
+            minias_set_error(as,"out-of-memory:aarch64-condbranch-symbol");
+            free(inst);return false;
+        }
+        *inst->operands[1].symbol=expr;
+        inst->opcode=strcmp(op,"cbz")==0?A64_MC_CBZ:A64_MC_CBNZ;
+        inst->count=2U;
+        put_reg(&inst->operands[0],reg,reg64);
+        inst->operands[1].kind=MINIAS_MC_SYMBOL;
     } else if (parse_integer_family(inst, op, args)) {
         /* The AArch64 integer/memory family is parsed into typed operands. */
     } else {
@@ -546,15 +570,25 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
                    (inst->operands[2].reg << 5U) | inst->operands[0].reg;
             break;
         }
+        case A64_MC_CBZ:
+        case A64_MC_CBNZ:
         case A64_MC_B:
         case A64_MC_BL: {
             const MiniAsSymbol *target;
             int64_t distance;
-            expr = inst->operands[0].symbol;
-            code = inst->opcode == A64_MC_BL ?
-                UINT32_C(0x94000000) : UINT32_C(0x14000000);
-            fixup = inst->opcode == A64_MC_BL ?
-                MINIAS_FIXUP_A64_CALL26 : MINIAS_FIXUP_A64_JUMP26;
+            bool conditional=inst->opcode==A64_MC_CBZ ||
+                             inst->opcode==A64_MC_CBNZ;
+            expr = inst->operands[conditional?1U:0U].symbol;
+            code = conditional ?
+                (inst->opcode==A64_MC_CBZ ?
+                 UINT32_C(0x34000000) : UINT32_C(0x35000000)) |
+                    (inst->operands[0].register_64?UINT32_C(0x80000000):0U) |
+                    inst->operands[0].reg :
+                inst->opcode == A64_MC_BL ?
+                    UINT32_C(0x94000000) : UINT32_C(0x14000000);
+            fixup = conditional ? MINIAS_FIXUP_A64_CONDBR19 :
+                inst->opcode == A64_MC_BL ?
+                    MINIAS_FIXUP_A64_CALL26 : MINIAS_FIXUP_A64_JUMP26;
             target = minias_get_symbol(as, expr->name, false);
             if (target == NULL || !target->defined ||
                 target->section != stmt->section) break;
@@ -570,13 +604,15 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
             }
             distance += expr->addend;
             if ((distance & 3) != 0 ||
-                distance < -INT64_C(134217728) ||
-                distance > INT64_C(134217724)) {
+                distance < (conditional ? -INT64_C(1048576) : -INT64_C(134217728)) ||
+                distance > (conditional ? INT64_C(1048572) : INT64_C(134217724))) {
                 minias_set_error(as, "aarch64-branch-out-of-range:%s:line=%zu",
                                  stmt->args, stmt->line);
                 return false;
             }
-            code |= (uint32_t)(distance / 4) & UINT32_C(0x03ffffff);
+            code |= conditional ?
+                (((uint32_t)(distance / 4) & UINT32_C(0x7ffff)) << 5U) :
+                ((uint32_t)(distance / 4) & UINT32_C(0x03ffffff));
             fixup = MINIAS_FIXUP_NONE;
             break;
         }
@@ -637,6 +673,8 @@ static uint32_t aarch64_fixup_relocation_type(MiniAsFixupKind kind,
             return width == 4U ? AARCH64_R_CALL26 : 0U;
         case MINIAS_FIXUP_A64_JUMP26:
             return width == 4U ? AARCH64_R_JUMP26 : 0U;
+        case MINIAS_FIXUP_A64_CONDBR19:
+            return width == 4U ? AARCH64_R_CONDBR19 : 0U;
         default: return 0U;
     }
 }

@@ -93,6 +93,9 @@ typedef enum MiniAsFixupKind {
     MINIAS_FIXUP_RV_JAL,
     MINIAS_FIXUP_A64_CALL26,
     MINIAS_FIXUP_A64_JUMP26,
+    MINIAS_FIXUP_A64_CONDBR19,
+    MINIAS_FIXUP_X64_PC32,
+    MINIAS_FIXUP_X64_PLT32,
     /* ELF numeric relocation types are target-owned; Common stores only
      * semantic fixup identities and SymbolExpr. */
     MINIAS_FIXUP_LARCH_PCALA_HI20,

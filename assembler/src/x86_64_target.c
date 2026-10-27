@@ -8,7 +8,7 @@
 
 /* A first, fail-closed GNU AT&T SysV x86-64 target. All common expression,
  * symbol, section, fragment, and ELF handling lives outside this file. */
-enum { X64_ZERO = 1, X64_REG_BINARY, X64_STACK, X64_MOV_IMM32, X64_ENDBR64, X64_ALU_IMM, X64_REG_MEMORY };
+enum { X64_ZERO = 1, X64_REG_BINARY, X64_STACK, X64_MOV_IMM32, X64_ENDBR64, X64_ALU_IMM, X64_REG_MEMORY, X64_BRANCH };
 
 static bool x64_register(const char *text, unsigned *reg, bool *wide) {
     static const char *const names64[16] = {
@@ -183,6 +183,34 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
         m->operands[0].register_64=binary[i].wide;
         goto done;
     }
+    /* Fixed rel32 transfer of control. Short-branch relaxation is not
+     * advertised: keeping exact fragment sizes prevents layout corruption.
+     * External symbols use ELF PC32 / PLT32 fixups with the x86 P+4 bias. */
+    {
+        static const struct {const char *op;unsigned encoding;} branches[]={
+            {"call",0xe8U},{"callq",0xe8U},
+            {"jmp",0xe9U},{"jmpq",0xe9U},
+            {"je",0x184U},{"jz",0x184U},{"jne",0x185U},{"jnz",0x185U},
+            {"ja",0x187U},{"jae",0x183U},{"jb",0x182U},{"jbe",0x186U},
+            {"jg",0x18fU},{"jge",0x18dU},{"jl",0x18cU},{"jle",0x18eU}
+        };
+        for(i=0U;i<sizeof(branches)/sizeof(branches[0]);++i) {
+            MiniAsSymbolExpr expr;
+            if(strcmp(s->op,branches[i].op)!=0)continue;
+            if(!minias_parse_symbol_addend(s->args,&expr) ||
+               expr.addend<INT64_MIN+4)goto invalid;
+            m->operands[0].symbol=malloc(sizeof(expr));
+            if(!m->operands[0].symbol) {
+                minias_set_error(as,"out-of-memory:x86-branch-symbol");
+                free(m);return false;
+            }
+            *m->operands[0].symbol=expr;
+            m->operands[0].kind=MINIAS_MC_SYMBOL;
+            m->opcode=X64_BRANCH;m->count=1U;
+            m->encoding=branches[i].encoding;
+            goto done;
+        }
+    }
     if ((!strcmp(s->op,"pushq") || !strcmp(s->op,"popq")) &&
         x64_register(s->args,&rs,&ws) && ws) {
         m->opcode=X64_STACK;m->count=1U;m->operands[0].reg=rs;
@@ -276,10 +304,12 @@ static bool x64_measure(MiniAs *as,const MiniAsStmt *s,uint32_t *size) {
     switch(m->opcode) {
         case X64_ZERO: *size=(uint32_t)m->operands[0].immediate;return true;
         case X64_ENDBR64: *size=4U;return true;
+        case X64_BRANCH: *size=m->encoding>=0x100U?6U:5U;return true;
         case X64_REG_MEMORY: {
             const MiniAsMCMemory *mem=m->operands[1].memory;
             *size=(m->operands[0].register_64 ||
-                   m->operands[0].reg>=8U || mem->base>=8U?1U:0U) +
+                   m->operands[0].reg>=8U || mem->base>=8U ||
+                   (mem->has_index && mem->index>=8U)?1U:0U) +
                   2U + ((mem->has_index || (mem->base&7U)==4U)?1U:0U) +
                   x64_disp_bytes(mem);
             return true;
@@ -314,6 +344,41 @@ static bool x64_encode(MiniAs *as,const MiniAsStmt *s) {
             unsigned i;
             for(i=0U;i<4U;++i)code[n++]=(unsigned char)(m->encoding>>(8U*i));
             break;
+        }
+        case X64_BRANCH: {
+            const MiniAsSymbolExpr *expr=m->operands[0].symbol;
+            MiniAsSymbol *sym=minias_get_symbol(as,expr->name,false);
+            MiniAsFixupKind kind=m->encoding==0xe8U || m->encoding==0xe9U ?
+                                 MINIAS_FIXUP_X64_PLT32 : MINIAS_FIXUP_X64_PC32;
+            size_t width=m->encoding>=0x100U?6U:5U;
+            int64_t displacement=0;
+            bool local=sym!=NULL && sym->defined && sym->section==s->section;
+            unsigned i;
+            if(m->encoding>=0x100U)code[n++]=0x0fU;
+            code[n++]=(unsigned char)m->encoding;
+            if(local) {
+                int64_t distance;
+                if(sym->value>INT64_MAX || s->offset>INT64_MAX ||
+                   s->offset>INT64_MAX-width) {
+                    minias_set_error(as,"x86-branch-address-overflow");return false;
+                }
+                distance=(int64_t)sym->value-((int64_t)s->offset+(int64_t)width);
+                if((expr->addend>0 && distance>INT64_MAX-expr->addend) ||
+                   (expr->addend<0 && distance<INT64_MIN-expr->addend)) {
+                    minias_set_error(as,"x86-branch-addend-overflow");return false;
+                }
+                distance+=expr->addend;
+                if(distance<INT32_MIN || distance>INT32_MAX) {
+                    minias_set_error(as,"x86-branch-rel32-range:line=%zu",s->line);
+                    return false;
+                }
+                displacement=distance;
+            }
+            for(i=0U;i<4U;++i) code[n++]=(unsigned char)((uint32_t)displacement>>(8U*i));
+            if(!minias_section_append(as,s->section,code,n))return false;
+            if(local)return true;
+            return minias_add_fixup(as,s->section,s->offset+width-4U,kind,
+                                    4U,expr->name,expr->addend-4);
         }
         case X64_REG_MEMORY: {
             const MiniAsMCMemory *mem=m->operands[1].memory;
@@ -403,7 +468,10 @@ static bool x64_profile(const char *march,const char *mabi,
 
 static bool x64_validate(MiniAs *as) {(void)as;return true;}
 static uint32_t x64_reloc(MiniAsFixupKind kind,unsigned width) {
-    (void)kind;(void)width;return 0U; /* Unimplemented, never fake a relocation. */
+    if(width!=4U)return 0U;
+    if(kind==MINIAS_FIXUP_X64_PC32)return 2U;  /* R_X86_64_PC32 */
+    if(kind==MINIAS_FIXUP_X64_PLT32)return 4U; /* R_X86_64_PLT32 */
+    return 0U;
 }
 static const MiniAsTargetOps ops={
     .name="x86_64",.comment_prefix='#',.elf_machine=62U,

@@ -226,6 +226,25 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
         m->operands[0].reg=rj;
         m->encoding=UINT32_C(0x4c000000)|(rj<<5U);goto done;
     }
+    /* JIRL is a signed 16-bit displacement in 4-byte units. The JR alias
+     * above is a canonical zero-link JIRL, not a second instruction family. */
+    if(!strcmp(s->op,"jirl") && n==3U &&
+       la_reg(t[0],&rd) && la_reg(t[1],&rj)) {
+        long long delta;
+        errno=0;delta=strtoll(t[2],&end,0);
+        if(!errno && end!=t[2] && !*end &&
+           delta>=-131072LL && delta<=131068LL && delta%4LL==0LL) {
+            m->count=3U;
+            m->operands[0].kind=MINIAS_MC_REGISTER;m->operands[0].reg=rd;
+            m->operands[1].kind=MINIAS_MC_REGISTER;m->operands[1].reg=rj;
+            m->operands[2].kind=MINIAS_MC_IMMEDIATE;
+            m->operands[2].immediate=(uint64_t)delta;
+            m->encoding=UINT32_C(0x4c000000) |
+                (((uint32_t)(delta/4LL)&UINT32_C(0xffff))<<10U) |
+                (rj<<5U)|rd;
+            goto done;
+        }
+    }
     if (n==2U && la_reg(t[0],&rd)) {
         MiniAsSymbolExpr expr;
         if(strcmp(s->op,"pcalau12i")==0 &&

@@ -58,6 +58,17 @@ entry_x:
     popq %rbp
     ret
 .size entry_x, .-entry_x
+.globl unresolved_x86
+unresolved_x86:
+    call ext_target
+    callq ext_target
+    jmp ext_target
+    je ext_target
+    jne ext_target
+    ja ext_target
+    jl ext_target
+    movl %eax, 8(%rbx,%r8,2)
+    movl 8(%rbx,%r9,4), %eax
 ASM_X
 "$MINIAS" --target=x86_64 -march=x86-64 -mabi=sysv -o "$work/x86-mini.o" "$work/x86.s"
 as --64 -o "$work/x86-gnu.o" "$work/x86.s"
@@ -65,6 +76,18 @@ objcopy -j .text -O binary "$work/x86-gnu.o" "$work/x86-gnu.bin"
 objcopy -j .text -O binary "$work/x86-mini.o" "$work/x86-mini.bin"
 cmp "$work/x86-mini.bin" "$work/x86-gnu.bin"
 readelf -h "$work/x86-mini.o" | grep -q 'Advanced Micro Devices X86-64'
+readelf -Wr "$work/x86-mini.o" >"$work/x86-rel.txt"
+grep -q R_X86_64_PLT32 "$work/x86-rel.txt"
+grep -q R_X86_64_PC32 "$work/x86-rel.txt"
+readelf -Wr "$work/x86-gnu.o" >"$work/x86-gnu-rel.txt"
+grep -q R_X86_64_PLT32 "$work/x86-gnu-rel.txt"
+grep -q R_X86_64_PC32 "$work/x86-gnu-rel.txt"
+# GNU and MiniAS must agree on every relocation type, offset, addend.
+readelf -Wr "$work/x86-mini.o" | grep R_X86_64_ |
+    sed -E 's/^[[:space:]]*[0-9a-f]+[[:space:]]+[0-9a-f]+[[:space:]]+//' >"$work/x86-mini-kinds.txt"
+readelf -Wr "$work/x86-gnu.o" | grep R_X86_64_ |
+    sed -E 's/^[[:space:]]*[0-9a-f]+[[:space:]]+[0-9a-f]+[[:space:]]+//' >"$work/x86-gnu-kinds.txt"
+cmp "$work/x86-mini-kinds.txt" "$work/x86-gnu-kinds.txt"
 
 cat > "$work/la.s" <<'ASM_LA'
 .text
@@ -113,6 +136,9 @@ entry_la:
     xor $a0, $a0, $a1
     move $a0, $a1
     jr $r12
+    jirl $a0, $a1, 4
+    jirl $zero, $ra, -131072
+    jirl $ra, $a0, 131068
     ret
 .size entry_la, .-entry_la
 ASM_LA
@@ -188,7 +214,10 @@ for bad in 'ldptr.d $a0, $sp, 3' \
            'slli.w $a0, $a1, 32' \
            'srli.d $a0, $a1, 64' \
            'lu12i.w $a0, 524288' \
-           'pcalau12i $a0, -524289'; do
+           'pcalau12i $a0, -524289' \
+           'jirl $a0, $a1, 3' \
+           'jirl $a0, $a1, 131072' \
+           'jirl $a0, $a1, -131076'; do
     printf '.text\n%s\n' "$bad" >"$work/invalid-la-ptr.s"
     if "$MINIAS" --target=loongarch64 -o "$work/bad-ptr.o" \
          "$work/invalid-la-ptr.s" >/dev/null 2>"$work/invalid.err"; then
