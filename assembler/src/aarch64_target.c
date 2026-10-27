@@ -152,6 +152,7 @@ enum {
     A64_MC_STRB,
     A64_MC_LDRH,
     A64_MC_STRH,
+    A64_MC_LDST_UNSCALED,
     A64_MC_STP,
     A64_MC_LDP,
     A64_MC_BITMASK_IMM,
@@ -496,15 +497,39 @@ static bool parse_integer_family(MiniAsMCInst *inst,
 
     if ((strcmp(op, "ldr") == 0 || strcmp(op, "str") == 0 ||
          strcmp(op, "ldrb") == 0 || strcmp(op, "strb") == 0 ||
-         strcmp(op, "ldrh") == 0 || strcmp(op, "strh") == 0) && n == 2U) {
+         strcmp(op, "ldrh") == 0 || strcmp(op, "strh") == 0 ||
+         strcmp(op, "ldur") == 0 || strcmp(op, "stur") == 0 ||
+         strcmp(op, "ldurb") == 0 || strcmp(op, "sturb") == 0 ||
+         strcmp(op, "ldurh") == 0 || strcmp(op, "sturh") == 0) &&
+         n == 2U) {
         unsigned unit;
+        bool explicitly_unscaled=strstr(op,"dur")!=NULL ||
+                                 strstr(op,"tur")!=NULL;
+        bool byte=!strcmp(op,"ldrb") || !strcmp(op,"strb") ||
+                  !strcmp(op,"ldurb") || !strcmp(op,"sturb");
+        bool half=!strcmp(op,"ldrh") || !strcmp(op,"strh") ||
+                  !strcmp(op,"ldurh") || !strcmp(op,"sturh");
+        bool load=op[0]=='l';
         if (!parse_a64_reg(t[0], &rd, &wd, &spd) || spd ||
             !parse_a64_mem(t[1], &base, &imm, &mode) || mode != 0U)
             return false;
-        unit = op[3] == 'b' ? 1U : op[3] == 'h' ? 2U : wd ? 8U : 4U;
-        if ((unit == 1U || unit == 2U) && wd) return false;
-        if (imm < 0 || imm % (int64_t)unit != 0 || imm / (int64_t)unit > 4095)
-            return false;
+        unit = byte?1U:half?2U:wd?8U:4U;
+        if ((byte || half) && wd) return false;
+        if(explicitly_unscaled || imm<0 || imm%(int64_t)unit!=0) {
+            if(imm < -256 || imm > 255)return false;
+            inst->opcode=A64_MC_LDST_UNSCALED;
+            inst->encoding=byte?
+                (load?UINT32_C(0x38400000):UINT32_C(0x38000000)):
+                half?(load?UINT32_C(0x78400000):UINT32_C(0x78000000)):
+                wd?(load?UINT32_C(0xf8400000):UINT32_C(0xf8000000)):
+                    (load?UINT32_C(0xb8400000):UINT32_C(0xb8000000));
+            inst->count=3U;
+            put_reg(&inst->operands[0],rd,wd);
+            put_reg(&inst->operands[1],base,true);
+            put_immediate(&inst->operands[2],imm);
+            return true;
+        }
+        if (imm / (int64_t)unit > 4095)return false;
         inst->opcode = strcmp(op, "ldr") == 0 ? A64_MC_LDR :
                        strcmp(op, "str") == 0 ? A64_MC_STR :
                        strcmp(op, "ldrb") == 0 ? A64_MC_LDRB :
@@ -1319,6 +1344,11 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
                    (inst->operands[0].reg << 5U);
             break;
         }
+        case A64_MC_LDST_UNSCALED:
+            code=inst->encoding |
+                (((uint32_t)inst->operands[2].immediate&511U)<<12U) |
+                (inst->operands[1].reg<<5U)|inst->operands[0].reg;
+            break;
         case A64_MC_LDR:
         case A64_MC_STR:
         case A64_MC_LDRB:

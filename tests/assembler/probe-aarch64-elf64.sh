@@ -263,6 +263,17 @@ integer_matrix:
     strb w1, [x0, #1]
     ldrh w1, [x0, #2]
     strh w1, [x0, #4]
+    // ARM signed byte-granular simm9 uses LDUR/STUR even if LDR mnemonic
+    // chooses the unscaled addressing encoding in GNU GAS.
+    ldur x0, [x1, #-8]
+    stur w2, [sp, #-1]
+    ldurb w3, [x4, #-3]
+    sturb w5, [x6, #7]
+    ldurh w7, [x8, #-2]
+    sturh w9, [x10, #3]
+    ldr x11, [x12, #-8]
+    str w13, [sp, #-4]
+    ldr w14, [x15, #3]
     stp x29, x30, [sp, -16]!
     ldp x29, x30, [sp], 16
     ret
@@ -272,7 +283,7 @@ A64_INT
 "$AARCH64_OBJCOPY" -j .text -O binary "$work/int-mini.o" "$work/int-mini.bin"
 "$AARCH64_OBJCOPY" -j .text -O binary "$work/int-gnu.o" "$work/int-gnu.bin"
 cmp "$work/int-mini.bin" "$work/int-gnu.bin"
-for bad in 'add x0, w0, x1' 'cmp x0, #4097' 'ldr x0, [x1, -8]' \
+for bad in 'add x0, w0, x1' 'cmp x0, #4097' 'ldr x0, [x1, -257]' \
            'stp x29, x30, [sp, -520]!' 'mov x0, #65536'; do
     printf '.arch armv8-a\n.text\n%s\n' "$bad" >"$work/bad-integer.s"
     if "$MINIAS" --target=aarch64 -o "$work/bad-integer.o" \
@@ -329,6 +340,8 @@ for bad_source in 'ldxr x0, [x1,#4]' 'stxr x0, x1, [x2]' \
                   'and x0, w0, #255' 'sxtw w0, w0' \
                   'uxtw x0, x0' 'rev w1, x2' \
                   'ldar w0, [x0, #4]' 'stlr x0, [w0]' \
+                  'ldur x0, [x1, #-257]' 'stur w2, [sp, #256]' \
+                  'ldurh x0, [x1, #-2]' \
                   'cmp x0, #16777216' \
                   'hint #-1' 'hint #128' 'hint #18446744073709551616' \
                   'hint bad' 'ret x31' 'mov x2, #65536' 'b external_function + 2' \

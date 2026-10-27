@@ -165,6 +165,14 @@ entry_x:
     invd
     mull %eax
     imull %edx, %eax
+    # Immediate signed IMUL: 6B imm8 vs 69 imm32, 16/32/64-bit forms.
+    imulq $1000, %rax, %rax
+    imulq $-9, %r8, %r9
+    imulq $274877907, %rdx, %rdx
+    imull $255, %ecx, %edx
+    imull $7, %r10d
+    imulw $7, %cx, %dx
+    imulw $1000, %r9w, %r10w
     movzbl %ah, %eax
     movzbl %ch, %ecx
     movzbl %dh, %edx
@@ -618,6 +626,13 @@ entry_la:
     ctz.d $a1, $a0
     bitrev.d $a0, $a1
     div.du $a0, $a1, $a2
+    xvreplve0.q $xr22, $xr22
+    xvreplve0.w $xr3, $xr4
+    xvreplve0.b $xr5, $xr6
+    vinsgr2vr.d $vr0, $r13, 1
+    vinsgr2vr.w $vr1, $r14, 3
+    vinsgr2vr.h $vr2, $r15, 7
+    vinsgr2vr.b $vr3, $r16, 15
     xvslti.b $xr6, $xr2, 0
     xvslli.b $xr8, $xr2, 1
     xvslli.h $xr3, $xr4, 15
@@ -702,6 +717,9 @@ for bad in 'movq __per_cpu_offset(%rdi),%rax' \
            'mulq %eax' \
            'imull %rax,%eax' \
            'imulq %edx,%rax' \
+           'imulq $2147483648,%rax,%rax' \
+           'imulq $8,%eax,%rax' \
+           'imull $8,%rax,%edx' \
            'movzbl %ah,%r8d' \
            'movzbq %ch,%rax' \
            'divl %rax' \
@@ -966,6 +984,9 @@ for bad in 'li.w $r4, -2049' \
            'addu16i.d $a0, $a1, -32769' \
            'xvslti.b $xr0, $xr1, 16' \
            'xvslli.b $xr0, $xr1, 8' \
+           'xvreplve0.q $xr0, $vr1' \
+           'vinsgr2vr.d $vr0, $r2, 2' \
+           'vinsgr2vr.h $vr0, $r2, 8' \
            'xvsrli.d $xr0, $xr1, 64' \
            'xvslti.d $xr0, $xr1, -17' \
            'vpickve2gr.d $r1, $vr0, 2' \

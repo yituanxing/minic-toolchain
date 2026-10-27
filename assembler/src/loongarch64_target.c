@@ -688,6 +688,44 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
                     goto done;
                 }
     }
+    /* GNU LoongArch LASX replicate lane-zero group (XR0/XR5) and LSX
+     * GPR-to-lane injection (V0/R5/u10). No second vector encoder: both
+     * flow through existing target-owned 32-bit typed MCInst words. */
+    if(n==2U && la_special_reg(t[0],"$xr",31U,&rd) &&
+       la_special_reg(t[1],"$xr",31U,&rj)) {
+        static const struct {const char *op;uint32_t code;} repl[]={
+            {"xvreplve0.b",UINT32_C(0x77070000)},
+            {"xvreplve0.h",UINT32_C(0x77078000)},
+            {"xvreplve0.w",UINT32_C(0x7707c000)},
+            {"xvreplve0.d",UINT32_C(0x7707e000)},
+            {"xvreplve0.q",UINT32_C(0x7707f000)}
+        };
+        for(i=0U;i<sizeof(repl)/sizeof(repl[0]);++i)
+            if(!strcmp(s->op,repl[i].op)) {
+                m->count=2U;
+                m->encoding=repl[i].code|(rj<<5U)|rd;
+                goto done;
+            }
+    }
+    if(n==3U && la_special_reg(t[0],"$vr",31U,&rd) &&
+       la_reg(t[1],&rj)) {
+        static const struct {const char *op;uint32_t code;unsigned max;} lanes[]={
+            {"vinsgr2vr.b",UINT32_C(0x72eb8000),15U},
+            {"vinsgr2vr.h",UINT32_C(0x72ebc000),7U},
+            {"vinsgr2vr.w",UINT32_C(0x72ebe000),3U},
+            {"vinsgr2vr.d",UINT32_C(0x72ebf000),1U}
+        };
+        uint64_t lane;
+        if(minias_eval_u64_expression(t[2],&lane))
+            for(i=0U;i<sizeof(lanes)/sizeof(lanes[0]);++i)
+                if(!strcmp(s->op,lanes[i].op) &&
+                   lane<=lanes[i].max) {
+                    m->count=3U;
+                    m->encoding=lanes[i].code|
+                        ((uint32_t)lane<<10U)|(rj<<5U)|rd;
+                    goto done;
+                }
+    }
     /* FCC-to-GPR: condition register is u3 in r5, GPR is r0. */
     if(n==2U && !strcmp(s->op,"movcf2gr") &&
        la_reg(t[0],&rd) &&

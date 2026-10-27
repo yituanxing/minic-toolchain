@@ -8,7 +8,7 @@
 
 /* A first, fail-closed GNU AT&T SysV x86-64 target. All common expression,
  * symbol, section, fragment, and ELF handling lives outside this file. */
-enum { X64_ZERO = 1, X64_REG_BINARY, X64_STACK, X64_MOV_IMM32, X64_ENDBR64, X64_ALU_IMM, X64_REG_MEMORY, X64_BRANCH, X64_IMM_MEMORY, X64_MOVQ_IMMREG, X64_MOVABS_IMMREG, X64_SETCC, X64_BINARY8, X64_MOVSLQ, X64_MOVZX_REG, X64_SHIFT_IMM, X64_TEST8_IMM, X64_PUSH_IMM, X64_CMOV_REG, X64_SHIFT_CL, X64_UNARY, X64_INDIRECT_REG, X64_BSWAP, X64_TEST_IMM_REG };
+enum { X64_ZERO = 1, X64_REG_BINARY, X64_STACK, X64_MOV_IMM32, X64_ENDBR64, X64_ALU_IMM, X64_REG_MEMORY, X64_BRANCH, X64_IMM_MEMORY, X64_MOVQ_IMMREG, X64_MOVABS_IMMREG, X64_SETCC, X64_BINARY8, X64_MOVSLQ, X64_MOVZX_REG, X64_SHIFT_IMM, X64_TEST8_IMM, X64_PUSH_IMM, X64_CMOV_REG, X64_SHIFT_CL, X64_UNARY, X64_INDIRECT_REG, X64_BSWAP, X64_TEST_IMM_REG, X64_IMUL_IMM };
 
 static bool x64_register(const char *text, unsigned *reg, bool *wide) {
     static const char *const names64[16] = {
@@ -397,6 +397,59 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
                 (unsigned)zeros[i].bytes[2]<<16U;
             m->operands[0].immediate=zeros[i].size;goto done;
         }
+    }
+    /* GNU IMUL $imm,reg[,reg] : use 6B sign-extended imm8 or 69 imm16/32.
+     * Decode into typed operands; F7 /5 and 0F AF use their existing
+     * unary and binary target encoders without duplicating ALU machinery. */
+    if(s->args[0]=='$' &&
+       (!strcmp(s->op,"imulq") || !strcmp(s->op,"imull") ||
+        !strcmp(s->op,"imulw") || !strcmp(s->op,"imul"))) {
+        const char *comma=strchr(s->args,',');
+        char immtext[48],from[48],to[48];
+        size_t length;
+        unsigned src,dst;
+        bool ws=false,wd=false;
+        bool word=!strcmp(s->op,"imulw");
+        uint64_t bits;
+        if(!comma)goto invalid;
+        length=(size_t)(comma-s->args);
+        while(length && isspace((unsigned char)s->args[length-1U]))
+            --length;
+        if(length<2U || length>=sizeof(immtext))goto invalid;
+        memcpy(immtext,s->args,length);
+        immtext[length]='\0';
+        if(strchr(comma+1,',')!=NULL) {
+            if(!x64_args2(comma+1,from,to))goto invalid;
+        }else {
+            char tmp[48];
+            if(!x64_args2(s->args,tmp,to))goto invalid;
+            memcpy(from,to,strlen(to)+1U);
+        }
+        if(!minias_eval_u64_expression(immtext+1,&bits) ||
+           (int64_t)bits<INT32_MIN ||
+           (int64_t)bits>(word?65535:
+               !strcmp(s->op,"imulq")?INT32_MAX:UINT32_MAX))
+            goto invalid;
+        if(word) {
+            if(!x64_register16(from,&src) ||
+               !x64_register16(to,&dst))goto invalid;
+        }else {
+            if(!x64_register(from,&src,&ws) ||
+               !x64_register(to,&dst,&wd) || ws!=wd ||
+               (!strcmp(s->op,"imulq") && !ws) ||
+               (!strcmp(s->op,"imull") && ws))goto invalid;
+        }
+        m->opcode=X64_IMUL_IMM;m->count=3U;
+        m->encoding=word?UINT32_C(0x400):0U;
+        m->operands[0].kind=MINIAS_MC_REGISTER;
+        m->operands[0].reg=src;
+        m->operands[0].register_64=!word && ws;
+        m->operands[1].kind=MINIAS_MC_REGISTER;
+        m->operands[1].reg=dst;
+        m->operands[1].register_64=!word && wd;
+        m->operands[2].kind=MINIAS_MC_IMMEDIATE;
+        m->operands[2].immediate=bits;
+        goto done;
     }
     /* Group-3 NOT/NEG and Group-5 INC/DEC, shared typed ModR/M
      * between register and memory forms. No duplicated memory encoder. */
@@ -1189,6 +1242,15 @@ static bool x64_measure(MiniAs *as,const MiniAsStmt *s,uint32_t *size) {
             *size=m->operands[0].reg==0U?2U:
                   (3U+(m->operands[0].reg>=4U &&
                        !(m->encoding&0x800U)?1U:0U));return true;
+        case X64_IMUL_IMM: {
+            int64_t val=(int64_t)m->operands[2].immediate;
+            bool word=(m->encoding&0x400U)!=0U;
+            bool rex=m->operands[0].register_64 ||
+                     m->operands[0].reg>=8U || m->operands[1].reg>=8U;
+            unsigned bytes=val>=-128 && val<=127?1U:word?2U:4U;
+            *size=(word?1U:0U)+(rex?1U:0U)+2U+bytes;
+            return true;
+        }
         case X64_PUSH_IMM: {
             int32_t imm=(int32_t)(uint32_t)m->operands[0].immediate;
             *size=imm>=-128 && imm<=127?2U:5U;return true;
@@ -1400,6 +1462,22 @@ static bool x64_encode(MiniAs *as,const MiniAsStmt *s) {
             }
             code[n++]=(unsigned char)m->operands[1].immediate;
             break;
+        case X64_IMUL_IMM: {
+            int64_t val=(int64_t)m->operands[2].immediate;
+            bool word=(m->encoding&0x400U)!=0U;
+            unsigned j,bytes=val>=-128 && val<=127?1U:word?2U:4U;
+            r=m->operands[0].reg;d=m->operands[1].reg;
+            if(word)code[n++]=0x66U;
+            if(m->operands[0].register_64 || r>=8U || d>=8U)
+                code[n++]=(unsigned char)(0x40U |
+                    (m->operands[0].register_64?8U:0U) |
+                    ((d>>3U)<<2U)|(r>>3U));
+            code[n++]=bytes==1U?0x6bU:0x69U;
+            code[n++]=(unsigned char)(0xc0U|((d&7U)<<3U)|(r&7U));
+            for(j=0U;j<bytes;++j)
+                code[n++]=(unsigned char)(m->operands[2].immediate>>(8U*j));
+            break;
+        }
         case X64_PUSH_IMM: {
             int32_t imm=(int32_t)(uint32_t)m->operands[0].immediate;
             unsigned i;
