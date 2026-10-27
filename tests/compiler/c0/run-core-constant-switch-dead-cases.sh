@@ -90,7 +90,7 @@ int main(void) {
 }
 SRC
 for target in riscv32-linux riscv64-linux x86_64-linux aarch64-linux loongarch64-linux; do
-    MINIC_SWITCH_TRACE=1 "$MINIC_CC" --target="$target" -S "$work/constant-switch.i" \
+    "$MINIC_CC" --target="$target" -S "$work/constant-switch.i" \
         -o "$work/$target.s"
     test -s "$work/$target.s"
     if grep -Fq 'minic_unsupported_dead_hw' "$work/$target.s"; then
