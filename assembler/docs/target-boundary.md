@@ -462,3 +462,21 @@ separate target-local no-REX classification, while unimplemented high-byte
 forms remain explicitly rejected. GNU exact bytes test both positive and
 negative forms. Common, RV, A64, LoongArch and ELF serialization do not
 change. These additions do not claim complete GNU Linux object parity.
+
+
+## x86 system / Group-3 / bit operations, architecture audit
+
+Previously separate first-failure roots (MUL/DIV/IDIV, BSF/BSR,
+BSWAP, BT/BTS/BTR/BTC, CMPXCHG, RDMSR) now reuse retained target MCInst
+and existing ModR/M/REX/SIB, PC-relative fixups and Common ELF path.
+Unary Group-3 /4..7 uses the existing register/unary-memory pathway,
+with no new memory encoder. Register-register two-byte instructions have
+Target-local 0F escape and operand-direction flags; BSF/BSR swap REG and
+RM fields while bit operations keep the ordinary AT&T reg->r/m layout.
+Exact GNU AS machine-byte comparison and invalid width contracts gate the
+entire ISA family. No ISA-specific handling enters Common.
+
+Architectural debt explicitly tracked: target opcodes, mnemonic aliases,
+and width flags still live inside x86_64_target.c. A later Target-internal
+format descriptor can replace that representation without touching
+MiniAsTargetOps, MCInst, layout or the shared ELF writer.

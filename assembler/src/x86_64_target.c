@@ -8,7 +8,7 @@
 
 /* A first, fail-closed GNU AT&T SysV x86-64 target. All common expression,
  * symbol, section, fragment, and ELF handling lives outside this file. */
-enum { X64_ZERO = 1, X64_REG_BINARY, X64_STACK, X64_MOV_IMM32, X64_ENDBR64, X64_ALU_IMM, X64_REG_MEMORY, X64_BRANCH, X64_IMM_MEMORY, X64_MOVQ_IMMREG, X64_MOVABS_IMMREG, X64_SETCC, X64_BINARY8, X64_MOVSLQ, X64_MOVZX_REG, X64_SHIFT_IMM, X64_TEST8_IMM, X64_PUSH_IMM, X64_CMOV_REG, X64_SHIFT_CL, X64_UNARY, X64_INDIRECT_REG };
+enum { X64_ZERO = 1, X64_REG_BINARY, X64_STACK, X64_MOV_IMM32, X64_ENDBR64, X64_ALU_IMM, X64_REG_MEMORY, X64_BRANCH, X64_IMM_MEMORY, X64_MOVQ_IMMREG, X64_MOVABS_IMMREG, X64_SETCC, X64_BINARY8, X64_MOVSLQ, X64_MOVZX_REG, X64_SHIFT_IMM, X64_TEST8_IMM, X64_PUSH_IMM, X64_CMOV_REG, X64_SHIFT_CL, X64_UNARY, X64_INDIRECT_REG, X64_BSWAP };
 
 static bool x64_register(const char *text, unsigned *reg, bool *wide) {
     static const char *const names64[16] = {
@@ -269,6 +269,9 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
         {"clac",{0x0f,0x01,0xca},3},
         {"cpuid",{0x0f,0xa2},2},
         {"rdtsc",{0x0f,0x31},2},{"rdtscp",{0x0f,0x01,0xf9},3},
+        {"rdmsr",{0x0f,0x32},2},{"wrmsr",{0x0f,0x30},2},
+        {"swapgs",{0x0f,0x01,0xf8},3},
+        {"wbinvd",{0x0f,0x09},2},{"invd",{0x0f,0x08},2},
         {"pause",{0xf3,0x90},2},
         {"cltq",{0x48,0x98},2},{"cqto",{0x48,0x99},2},
         {"lock",{0xf0},1},
@@ -299,7 +302,15 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
         {"subw",0x29,false},{"sbbw",0x19,false},
         {"xorw",0x31,false},{"andw",0x21,false},
         {"orw",0x09,false},{"cmpw",0x39,false},
-        {"testw",0x85,false}
+        {"testw",0x85,false},
+        /* Retain x86 ISA format in the same typed register/ModR/M path.
+         * 0x100 marks 0F prefix; operand widths remain x86 Target-only. */
+        {"btl",0x1a3U,false},{"btq",0x1a3U,true},
+        {"btsl",0x1abU,false},{"btsq",0x1abU,true},
+        {"btrl",0x1b3U,false},{"btrq",0x1b3U,true},
+        {"btcl",0x1bbU,false},{"btcq",0x1bbU,true},
+        {"xaddl",0x1c1U,false},{"xaddq",0x1c1U,true},
+        {"cmpxchgl",0x1b1U,false},{"cmpxchgq",0x1b1U,true}
     };
     /* reg/memory opcodes: source register to dest memory and vice versa.
      * TEST uses a commutative encoding; memory location is always r/m. */
@@ -322,6 +333,7 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
         {"btrq",0xb3,0,true},{"btrl",0xb3,0,false},
         {"btcq",0xbb,0,true},{"btcl",0xbb,0,false},
         {"xaddq",0xc1,0,true},{"xaddl",0xc1,0,false},
+        {"cmpxchgq",0xb1,0,true},{"cmpxchgl",0xb1,0,false},
         /* Existing typed memory ModR/M encoder owns REX/SIB/PC32 for
          * 0F B6/B7 zero-extension and 63 sign-extension. */
         {"movzbl",0,0x1b6U,false},{"movzbq",0,0x1b6U,true},
@@ -379,7 +391,13 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
             {"notl",0xf7U,2U,false},{"notq",0xf7U,2U,true},
             {"negl",0xf7U,3U,false},{"negq",0xf7U,3U,true},
             {"incl",0xffU,0U,false},{"incq",0xffU,0U,true},
-            {"decl",0xffU,1U,false},{"decq",0xffU,1U,true}
+            {"decl",0xffU,1U,false},{"decq",0xffU,1U,true},
+            /* GNU Group-3 /4=/MUL, /5=IMUL, /6=DIV, /7=IDIV;
+             * both reg and memory forms use the established unary path. */
+            {"mull",0xf7U,4U,false},{"mulq",0xf7U,4U,true},
+            {"imull",0xf7U,5U,false},{"imulq",0xf7U,5U,true},
+            {"divl",0xf7U,6U,false},{"divq",0xf7U,6U,true},
+            {"idivl",0xf7U,7U,false},{"idivq",0xf7U,7U,true}
         };
         for(i=0U;i<sizeof(unary)/sizeof(unary[0]);++i) {
             if(strcmp(s->op,unary[i].op)!=0)continue;
@@ -411,6 +429,18 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
             }
             goto invalid;
         }
+    }
+    /* GNU Linux unsuffixed BSWAP chooses width from register spelling.
+     * Keep the 0F C8+r opcode in x86 Target, never special-case Core. */
+    if((!strcmp(s->op,"bswap") || !strcmp(s->op,"bswapl") ||
+        !strcmp(s->op,"bswapq")) && x64_register(s->args,&rd,&wd) &&
+       (!strcmp(s->op,"bswap") ||
+        wd==(!strcmp(s->op,"bswapq")))) {
+        m->opcode=X64_BSWAP;m->count=1U;
+        m->operands[0].kind=MINIAS_MC_REGISTER;
+        m->operands[0].reg=rd;
+        m->operands[0].register_64=wd;
+        goto done;
     }
     /* GNU implicit-count-one shift/rotate now resolves through the SAME
      * descriptor and machine-length paths as explicit immediate/CL. */
@@ -515,6 +545,23 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
                 m->operands[1].immediate=bits;
                 goto done;
             }
+        }
+        if((!strcmp(s->op,"bsf") || !strcmp(s->op,"bsfl") ||
+            !strcmp(s->op,"bsfq") || !strcmp(s->op,"bsr") ||
+            !strcmp(s->op,"bsrl") || !strcmp(s->op,"bsrq")) &&
+           x64_register(src,&first,&ws) &&
+           x64_register(dst,&second,&wd) && ws==wd &&
+           (strlen(s->op)==3U ||
+            wd==(s->op[strlen(s->op)-1U]=='q'))) {
+            m->opcode=X64_REG_BINARY;m->count=2U;
+            /* 0x800: reverse 0F BC/BD ModR/M REG/RM direction. */
+            m->encoding=0x900U|(s->op[2]=='f'?0xbcU:0xbdU);
+            m->operands[0].kind=MINIAS_MC_REGISTER;
+            m->operands[0].reg=first;
+            m->operands[0].register_64=wd;
+            m->operands[1].kind=MINIAS_MC_REGISTER;
+            m->operands[1].reg=second;
+            goto done;
         }
         if(x64_register8(src,&first) && x64_register8(dst,&second)) {
             for(i=0U;i<sizeof(byteop)/sizeof(byteop[0]);++i)
@@ -893,8 +940,8 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
         /* Target-local encoding flags: 0x100=two-byte opcode,
          * 0x200=low-byte REX mode, 0x400=66 word-size override. */
         m->encoding=*chosen |
-            ((!strncmp(s->op,"bt",2U) || !strncmp(s->op,"xadd",4U)) ?
-             0x100U : 0U) |
+            ((!strncmp(s->op,"bt",2U) || !strncmp(s->op,"xadd",4U) ||
+              !strncmp(s->op,"cmpxchg",7U)) ? 0x100U : 0U) |
             (reg_bits==8U?0x200U:reg_bits==16U?0x400U:0U);
         m->operands[0].kind=MINIAS_MC_REGISTER;
         m->operands[0].reg=r;
@@ -927,6 +974,9 @@ static bool x64_measure(MiniAs *as,const MiniAsStmt *s,uint32_t *size) {
                        m->operands[0].reg>=8U || m->operands[1].reg>=8U?
                        1U:0U);return true;
         case X64_UNARY:
+            *size=2U+(m->operands[0].register_64 ||
+                       m->operands[0].reg>=8U?1U:0U);return true;
+        case X64_BSWAP:
             *size=2U+(m->operands[0].register_64 ||
                        m->operands[0].reg>=8U?1U:0U);return true;
         case X64_SHIFT_CL:
@@ -998,6 +1048,7 @@ static bool x64_measure(MiniAs *as,const MiniAsStmt *s,uint32_t *size) {
         case X64_MOV_IMM32: *size=(m->operands[0].reg>=8U)?6U:5U;return true;
         case X64_REG_BINARY:
             *size=((m->encoding&0x400U)?1U:0U)+
+                  ((m->encoding&0x100U)?1U:0U)+
                   ((m->operands[0].register_64 ||
                    m->operands[0].reg>=8U || m->operands[1].reg>=8U)?3U:2U);
             return true;
@@ -1086,6 +1137,14 @@ static bool x64_encode(MiniAs *as,const MiniAsStmt *s) {
             code[n++]=(unsigned char)m->encoding;
             code[n++]=(unsigned char)(0xc0U|
                 (((m->encoding>>8U)&7U)<<3U)|(r&7U));
+            break;
+        case X64_BSWAP:
+            r=m->operands[0].reg;
+            if(m->operands[0].register_64 || r>=8U)
+                code[n++]=(unsigned char)(0x40U |
+                    (m->operands[0].register_64?8U:0U)|(r>>3U));
+            code[n++]=0x0fU;
+            code[n++]=(unsigned char)(0xc8U+(r&7U));
             break;
         case X64_SHIFT_CL:
             r=m->operands[0].reg;
@@ -1387,9 +1446,13 @@ static bool x64_encode(MiniAs *as,const MiniAsStmt *s) {
             if (m->operands[0].register_64 || r>=8U || d>=8U)
                 code[n++]=(unsigned char)(0x40U |
                     (m->operands[0].register_64?8U:0U) |
-                    ((r>>3U)<<2U) | (d>>3U));
+                    (((m->encoding&0x800U)?d:r)>>3U)<<2U |
+                    (((m->encoding&0x800U)?r:d)>>3U));
+            if(m->encoding&0x100U)code[n++]=0x0fU;
             code[n++]=(unsigned char)m->encoding;
-            code[n++]=(unsigned char)(0xc0U | ((r&7U)<<3U) | (d&7U));
+            code[n++]=(unsigned char)(0xc0U |
+                ((((m->encoding&0x800U)?d:r)&7U)<<3U) |
+                (((m->encoding&0x800U)?r:d)&7U));
             break;
         default: minias_set_error(as,"bad-x86_64-mcinst");return false;
     }

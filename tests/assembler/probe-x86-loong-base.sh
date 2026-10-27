@@ -132,6 +132,36 @@ entry_x:
     cpuid
     rdtsc
     rdtscp
+    rdmsr
+    wrmsr
+    swapgs
+    wbinvd
+    invd
+    mull %eax
+    mulq %r14
+    imulq %rax
+    divl %edx
+    divq %rcx
+    idivq %r11
+    idivl %ebx
+    notq (%rax)
+    mulq 8(%r12)
+    divq ext_global(%rip)
+    btq %rax, %rdx
+    btsq %r8, %r9
+    btrl %ecx, %edx
+    btcq %r10, %r11
+    xaddl %ecx, %edx
+    xaddq %r12, %r13
+    cmpxchgl %ecx, (%rdi)
+    cmpxchgq %r9, 8(%r10)
+    bsf %rax,%rax
+    bsfq %r8, %r9
+    bsrl %ecx, %edx
+    bsr %r11, %r12
+    bswap %edx
+    bswapl %r10d
+    bswapq %r13
     .value 0x1234
     movzbl %al, %eax
     movzbl %r8b, %r10d
@@ -562,7 +592,12 @@ cmp "$work/la-gnu.bin" "$work/la-mini.bin"
 grep -q 'LoongArch' "$work/la-header.txt"
 grep -q '0x43' "$work/la-header.txt"
 
-for bad in 'shrb $256, %al' \
+for bad in 'mulq %eax' \
+           'divl %rax' \
+           'cmpxchgq %eax, (%rdi)' \
+           'bsfq %rax, %eax' \
+           'bswapw %ax' \
+           'shrb $256, %al' \
            'shrw $256, %ax' \
            'shrb %cl, %ax' \
            'rolw %ah' \
