@@ -643,6 +643,16 @@ static bool core_switch_dead_prefix_has_reentry(
     if (stmt->kind == MINIC_STATEMENT_LABEL &&
         core_switch_label_has_function_reentry(context, id))
         return true;
+    /* The AST only owns statement child blocks for actual control-flow
+     * statements. RETURN, BREAK, LABEL and inline ASM have no such children;
+     * consulting their otherwise-unused block fields can walk an unrelated
+     * function block and falsely detect goto re-entry (particularly after a
+     * constant switch case that returns). Keep the global label-reference
+     * check above for genuine user LABEL nodes. */
+    if (stmt->kind != MINIC_STATEMENT_IF &&
+        stmt->kind != MINIC_STATEMENT_WHILE &&
+        stmt->kind != MINIC_STATEMENT_SWITCH)
+        return false;
     children[0] = stmt->then_block;
     children[1] = stmt->else_block;
     for (child = 0U; child < 2U; ++child) {
@@ -930,12 +940,6 @@ minic_core_lower_switch(MinicCoreLowerContext *context, const MinicStatement *st
         return status;
     }
 
-    if (getenv("MINIC_SWITCH_TRACE") &&
-        context->source_function &&
-        strcmp(context->source_function->name, "suffix_after_return") == 0)
-        fprintf(stderr, "MINIC_SWITCH_TRACE stage=entry selected=%zu labels=%zu pre=%zu\n",
-                constant_entry_label, label_count, pre_case_label_count);
-
     /* A constant switch has one real source entry. Prior case segments
      * cannot be reached by ordinary forward fallthrough. Skip their C
      * lowering only if NO named label anywhere in the dead prefix has an
@@ -1143,13 +1147,6 @@ minic_core_lower_switch(MinicCoreLowerContext *context, const MinicStatement *st
                 return status;
             }
         }
-        if (getenv("MINIC_SWITCH_TRACE") &&
-            context->source_function &&
-            strcmp(context->source_function->name, "suffix_after_return") == 0)
-            fprintf(stderr, "MINIC_SWITCH_TRACE stage=case index=%zu selected=%zu term=%d break=%zu reentry=%zu pre=%zu prune=%d\n",
-                    source_index, constant_entry_label,
-                    segment_terminated, break_index, reentry_index,
-                    pre_case_label_count, prune_constant_suffix);
         segment_terminates[source_index] = segment_terminated;
         segment_breaks[source_index] =
             break_index != SIZE_MAX ||
@@ -1181,18 +1178,6 @@ minic_core_lower_switch(MinicCoreLowerContext *context, const MinicStatement *st
                 for (k = first; k < limit; ++k) {
                     if (core_switch_dead_prefix_has_reentry(
                             context, body->statements[k], 0U)) {
-                        if (getenv("MINIC_SWITCH_TRACE") &&
-                            context->source_function &&
-                            strcmp(context->source_function->name,
-                                   "suffix_after_return") == 0) {
-                            const MinicStatement *blocked =
-                                minic_c0_program_statement(
-                                    context->body->program, body->statements[k]);
-                            fprintf(stderr,
-                                    "MINIC_SWITCH_TRACE stage=suffix-block later=%zu k=%zu kind=%d id=%u\n",
-                                    later, k, blocked ? (int)blocked->kind : -1,
-                                    (unsigned)body->statements[k]);
-                        }
                         safe = false;
                         break;
                     }
