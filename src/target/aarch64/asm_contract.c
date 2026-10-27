@@ -155,6 +155,53 @@ static unsigned int aarch64_llsc_op(const char *text, size_t len) {
 /* Real AArch64 privileged DAIF interrupt-mask MRS/MSR pair from the
  * exact Linux sysreg/irqflags.h macros. Do not execute under user QEMU.
  * Only GNU GAS/objdump may inspect the encoded privileged instruction. */
+/* The actual Linux 6.6 atomic{,64}_fetch_or{,_relaxed,_acquire,_release}
+ * contract has five GNU operands: old, new, store-status, +Q memory and
+ * Kr/Lr value. The AArch64 ISA adapter owns the exact LL/SC opcode, acquire
+ * and release suffixes and full-barrier ordering, not Common Core. */
+static unsigned int aarch64_fetch_or_form(const char *text, size_t len) {
+    static const char *const suffix[4] = {
+        "", "_relaxed", "_acquire", "_release"
+    };
+    static const char *const ld[4] = {
+        "ldxr", "ldxr", "ldaxr", "ldxr"
+    };
+    static const char *const st[4] = {
+        "stlxr", "stxr", "stxr", "stlxr"
+    };
+    char compact[240], expected[240];
+    size_t i, n = 0U, bitness, mode;
+    if (!text || !len || len >= sizeof(compact)) return 0U;
+    for (i = 0U; i < len; ++i) {
+        const char c = text[i];
+        if (c == ' ' || c == '\t' || c == '\r' || c == '\n') continue;
+        if (n + 1U >= sizeof(compact)) return 0U;
+        compact[n++] = c;
+    }
+    compact[n] = '\0';
+    for (bitness = 0U; bitness < 2U; ++bitness) {
+        const char *old = bitness ? "%0" : "%w0";
+        const char *new_value = bitness ? "%1" : "%w1";
+        const char *arg = bitness ? "%4" : "%w4";
+        for (mode = 0U; mode < 4U; ++mode) {
+            const int written = snprintf(
+                expected, sizeof(expected),
+                "//atomic%s_fetch_or%s"
+                "prfmpstl1strm,%%3"
+                "1:%s%s,%%3"
+                "orr%s,%s,%s"
+                "%s%%w2,%s,%%3"
+                "cbnz%%w2,1b%s",
+                bitness ? "64" : "", suffix[mode],
+                ld[mode], old, new_value, old, arg,
+                st[mode], new_value, mode == 0U ? "dmbish" : "");
+            if (written > 0 && (size_t)written < sizeof(expected) &&
+                strcmp(compact, expected) == 0)
+                return (unsigned int)(bitness * 4U + mode + 1U);
+        }
+    }
+    return 0U;
+}
 static bool aarch64_daif_msr_template(const char *text, size_t len) {
     static const char expected[] = "msrdaif,%x0";
     char compact[64]; size_t i, n = 0U;
@@ -261,6 +308,44 @@ bool minic_aarch64_qualify_inline_asm(
             contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
             contract->kinds[2] = MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE;
             contract->kinds[3] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+            return true;
+        }
+    }
+    if (program && src && contract && src->is_volatile && !src->is_goto &&
+        src->outputs && src->inputs && src->output_count == 4U &&
+        src->input_count == 1U && src->label_count == 0U &&
+        src->register_clobber_count == 0U &&
+        constraint(&src->outputs[0], "=&r") &&
+        constraint(&src->outputs[1], "=&r") &&
+        constraint(&src->outputs[2], "=&r") &&
+        constraint(&src->outputs[3], "+Q")) {
+        const unsigned int form = aarch64_fetch_or_form(
+            src->template_text, src->template_length);
+        const size_t width = form > 4U ? 8U : 4U;
+        const unsigned int mode = form ? (form - 1U) % 4U : 0U;
+        bool eligible = form != 0U &&
+            src->clobber_count == (mode == 1U ? 0U : 1U) &&
+            src->has_memory_clobber == (mode != 1U) &&
+            constraint(&src->inputs[0], width == 8U ? "Lr" : "Kr");
+        for (i = 0U; i < 5U && eligible; ++i) {
+            const MinicInlineAsmOperand *operand = i < 4U ?
+                &src->outputs[i] : &src->inputs[0];
+            const MinicExpression *value = minic_c0_program_expression(
+                program, operand->expression);
+            if (!value ||
+                (i < 4U && (value->value_category != MINIC_VALUE_LVALUE ||
+                            minic_type_is_const(value->type))) ||
+                !aarch64_stlr_type(
+                    value->type, i == 2U ? 8U : width))
+                eligible = false;
+        }
+        if (eligible) {
+            contract->operand_count = 5U;
+            contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
+            contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
+            contract->kinds[2] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
+            contract->kinds[3] = MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE;
+            contract->kinds[4] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
             return true;
         }
     }
@@ -467,6 +552,72 @@ bool minic_aarch64_emit_qualified_structured_asm(
                             "  %s\n",
                        (size_t)b[0].value * 8U,
                        (size_t)b[1].value * 8U, op[width]) >= 0;
+    }
+    if (ins->value.structured_inline_asm.operand_count == 5U) {
+        const unsigned int form = aarch64_fetch_or_form(
+            info->template_text, info->template_length);
+        const size_t width = form > 4U ? 8U : 4U;
+        const unsigned int mode = form ? (form - 1U) % 4U : 0U;
+        static const char *const ld[] = {"ldxr", "ldxr", "ldaxr", "ldxr"};
+        static const char *const st[] = {"stlxr", "stxr", "stxr", "stlxr"};
+        const MinicCoreStructuredInlineAsmOperand *ops =
+            ins->value.structured_inline_asm.operands;
+        MinicType pointee;
+        if (!form || !info->is_volatile || info->is_goto ||
+            info->register_clobber_count ||
+            info->has_memory_clobber != (mode != 1U))
+            return false;
+        for (i = 0U; i < 5U; ++i) {
+            const MinicCoreStructuredInlineAsmOperand *op = &ops[i];
+            if (op->operand_index != i || op->early_clobber ||
+                op->has_fixed_register_binding ||
+                op->value >= fn->value_count ||
+                op->value > 4095U / 8U ||
+                op->kind != (i == 4U ?
+                    MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT :
+                    i == 3U ? MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE :
+                    MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT))
+                return false;
+            if (i < 4U) {
+                if (!minic_type_pointee(fn->values[op->value].type, &pointee) ||
+                    !aarch64_stlr_type(pointee, i == 2U ? 8U : width))
+                    return false;
+            } else if (!aarch64_stlr_type(
+                fn->values[op->value].type, width)) {
+                return false;
+            }
+        }
+        /* Five checked Core SSA operands, one atomic read-modify-write.
+         * Preserve LDXR old value in x9, compute new in x13, publish through
+         * STXR and write C result/temporary locals after successful retry.
+         * Acquire/release use hardware LDAXR/STLXR, full uses DMB ISH. */
+        return fprintf(out,
+            "  ldr x10, [sp, #%zu]\n"
+            "  ldr x11, [sp, #%zu]\n"
+            "  prfm pstl1strm, [x10]\n"
+            "1:\n"
+            "  %s %s9, [x10]\n"
+            "  orr %s13, %s9, %s11\n"
+            "  %s w12, %s13, [x10]\n"
+            "  cbnz w12, 1b\n"
+            "%s"
+            "  ldr x14, [sp, #%zu]\n"
+            "  str %s9, [x14]\n"
+            "  ldr x14, [sp, #%zu]\n"
+            "  str %s13, [x14]\n"
+            "  ldr x14, [sp, #%zu]\n"
+            "  str x12, [x14]\n",
+            (size_t)ops[3].value * 8U,
+            (size_t)ops[4].value * 8U,
+            ld[mode], width == 8U ? "x" : "w",
+            width == 8U ? "x" : "w",
+            width == 8U ? "x" : "w",
+            width == 8U ? "x" : "w",
+            st[mode], width == 8U ? "x" : "w",
+            mode == 0U ? "  dmb ish\n" : "",
+            (size_t)ops[0].value * 8U, width == 8U ? "x" : "w",
+            (size_t)ops[1].value * 8U, width == 8U ? "x" : "w",
+            (size_t)ops[2].value * 8U) >= 0;
     }
     if (ins->value.structured_inline_asm.operand_count == 4U) {
         static const char *const alu[] = {"and", "orr", "eor"};
