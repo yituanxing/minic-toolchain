@@ -534,6 +534,10 @@ bool minic_parser_replace_zero_bounded_string_literal_initializer(MinicParser *p
                                                                   size_t first_slot,
                                                                   size_t element_capacity);
 bool minic_parser_parse_string_literal(MinicParser *parser, MinicExpressionId *expression_id);
+/* The existing C string concatenation/escape decoder also owns GNU
+ * function-symbol and register name strings. Target ABI validation follows. */
+bool minic_parser_parse_gnu_asm_name(
+    MinicParser *, char *, size_t, size_t *);
 bool minic_parser_parse_string_text(MinicParser *parser,
                                     char **text,
                                     size_t *length,

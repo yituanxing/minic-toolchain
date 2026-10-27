@@ -621,42 +621,8 @@ static bool parse_gnu_function_asm_label(
         !minic_parser_expect(parser, MINIC_TOKEN_LPAREN, "expected '(' after __asm__")) {
         return false;
     }
-    if (parser->current.kind != MINIC_TOKEN_STRING_LITERAL) {
-        minic_parser_error(parser, "GNU function asm label requires a string literal");
+    if (!minic_parser_parse_gnu_asm_name(parser, buffer, capacity, length))
         return false;
-    }
-    while (parser->current.kind == MINIC_TOKEN_STRING_LITERAL) {
-        size_t cursor;
-        size_t end;
-
-        if (parser->current.span.end.offset <= parser->current.span.begin.offset + 1U) {
-            minic_parser_error(parser, "invalid GNU function asm label string");
-            return false;
-        }
-        cursor = parser->current.span.begin.offset + 1U;
-        end = parser->current.span.end.offset - 1U;
-        while (cursor < end) {
-            if (parser->source[cursor] == '\\') {
-                minic_parser_error(parser, "escaped GNU function asm labels are not supported yet");
-                return false;
-            }
-            if (*length + 1U >= capacity) {
-                minic_parser_error(parser, "GNU function asm label is too long");
-                return false;
-            }
-            buffer[*length] = parser->source[cursor];
-            *length += 1U;
-            cursor += 1U;
-        }
-        if (!minic_parser_advance(parser)) {
-            return false;
-        }
-    }
-    if (*length == 0U) {
-        minic_parser_error(parser, "GNU function asm label cannot be empty");
-        return false;
-    }
-    buffer[*length] = '\0';
     *has_label = true;
     return minic_parser_expect(parser, MINIC_TOKEN_RPAREN, "expected ')' after GNU asm label");
 }

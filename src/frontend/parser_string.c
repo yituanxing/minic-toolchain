@@ -753,6 +753,30 @@ bool minic_parser_parse_string_text(MinicParser *parser,
     return true;
 }
 
+bool minic_parser_parse_gnu_asm_name(
+    MinicParser *parser, char *buffer, size_t capacity, size_t *length) {
+    char *decoded = NULL;
+    size_t size = 0U;
+    MinicSourceSpan span;
+    if (!parser || !buffer || !length || !capacity)
+        return false;
+    *length = 0U;
+    if (!minic_parser_parse_string_text(parser, &decoded, &size, &span)) {
+        free(decoded);
+        return false;
+    }
+    (void)span;
+    if (!size || size >= capacity) {
+        free(decoded);
+        minic_parser_error(parser, "GNU asm name must fit in target name buffer");
+        return false;
+    }
+    (void)memcpy(buffer, decoded, size + 1U);
+    *length = size;
+    free(decoded);
+    return true;
+}
+
 bool minic_parser_parse_string_literal(MinicParser *parser, MinicExpressionId *expression_id) {
     MinicSourceSpan span;
     MinicType array_type;

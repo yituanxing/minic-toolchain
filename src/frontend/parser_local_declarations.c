@@ -208,9 +208,6 @@ static bool local_identifier_is(const MinicParser *parser, const char *name) {
 
 static bool parse_local_fixed_register_name(
     MinicParser *parser, char *buffer, size_t capacity, size_t *length, bool *has_binding) {
-    size_t cursor;
-    size_t end;
-
     if (parser == NULL || buffer == NULL || capacity == 0U || length == NULL ||
         has_binding == NULL) {
         return false;
@@ -229,29 +226,10 @@ static bool parse_local_fixed_register_name(
         }
         return false;
     }
-    cursor = parser->current.span.begin.offset + 1U;
-    end = parser->current.span.end.offset - 1U;
-    while (cursor < end) {
-        if (parser->source[cursor] == '\\') {
-            minic_parser_error(parser, "escaped local fixed register names are not supported yet");
-            return false;
-        }
-        if (*length + 1U >= capacity) {
-            minic_parser_error(parser, "local fixed register name is too long");
-            return false;
-        }
-        buffer[*length] = parser->source[cursor];
-        *length += 1U;
-        cursor += 1U;
-    }
-    if (*length == 0U) {
-        minic_parser_error(parser, "local fixed register name cannot be empty");
+    if (!minic_parser_parse_gnu_asm_name(parser, buffer, capacity, length))
         return false;
-    }
-    buffer[*length] = '\0';
     *has_binding = true;
-    return minic_parser_advance(parser) &&
-           minic_parser_expect(parser, MINIC_TOKEN_RPAREN, "expected ')' after local asm name");
+    return minic_parser_expect(parser, MINIC_TOKEN_RPAREN, "expected ')' after local asm name");
 }
 
 static bool local_declarator_starts_function_pointer(const MinicParser *parser) {
