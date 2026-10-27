@@ -1003,8 +1003,9 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
     } else if(!strcmp(op,"msr") &&
               split_two(args,first,sizeof(first),second,sizeof(second)) &&
               (!strcmp(first,"daifset") || !strcmp(first,"daifclr"))) {
-        int64_t imm;
-        if(!parse_signed_number(second,&imm) || imm<0 || imm>15) {
+        int64_t daif_immediate;
+        if(!parse_signed_number(second,&daif_immediate) ||
+           daif_immediate<0 || daif_immediate>15) {
             minias_set_error(as,"bad-aarch64-daif-immediate:%s:line=%zu",
                              args,stmt->line);
             free(inst);return false;
@@ -1012,7 +1013,7 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
         inst->opcode=A64_MC_SYSTEM_IMM;inst->count=1U;
         inst->encoding=!strcmp(first,"daifset")?
                        UINT32_C(0xd50340df):UINT32_C(0xd50340ff);
-        put_immediate(&inst->operands[0],imm);
+        put_immediate(&inst->operands[0],daif_immediate);
     } else if((!strcmp(op,"mrs") || !strcmp(op,"msr")) &&
        split_two(args, first, sizeof(first), second, sizeof(second))) {
         unsigned rt;
