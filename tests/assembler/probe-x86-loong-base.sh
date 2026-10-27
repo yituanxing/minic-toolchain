@@ -165,7 +165,14 @@ LA_RELOC
 "$LOONGAS" -mabi=lp64d -o "$work/rel-gnu.o" "$work/la-reloc.s"
 "$LOONGCOPY" -j .text -O binary "$work/rel-mini.o" "$work/rel-mini.bin"
 "$LOONGCOPY" -j .text -O binary "$work/rel-gnu.o" "$work/rel-gnu.bin"
-cmp "$work/rel-mini.bin" "$work/rel-gnu.bin"
+if ! cmp -s "$work/rel-mini.bin" "$work/rel-gnu.bin"; then
+    echo 'MINIAS_LARCH_BYTES_MISMATCH: exact per-word GNU and MiniAS output'
+    echo 'GNU bytes:'; od -An -tx4 -w4 "$work/rel-gnu.bin"
+    echo 'MiniAS bytes:'; od -An -tx4 -w4 "$work/rel-mini.bin"
+    echo 'GNU relocations:'; "$LOONGREADELF" -Wr "$work/rel-gnu.o"
+    echo 'MiniAS relocations:'; "$LOONGREADELF" -Wr "$work/rel-mini.o"
+    exit 1
+fi
 "$LOONGREADELF" -Wr "$work/rel-mini.o" >"$work/rel-mini.txt"
 "$LOONGREADELF" -Wr "$work/rel-gnu.o" >"$work/rel-gnu.txt"
 for kind in R_LARCH_PCALA_HI20 R_LARCH_PCALA_LO12 R_LARCH_B16 R_LARCH_B21 R_LARCH_B26; do
