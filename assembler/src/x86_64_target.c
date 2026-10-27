@@ -551,8 +551,7 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
                     X64_SHIFT_CL:X64_SHIFT_IMM;
                 m->count=2U;
                 m->encoding=group|(bits==8U?0x200U:
-                                   bits==16U?0x400U:0U)|
-                            (legacy_high8?0x800U:0U);
+                                   bits==16U?0x400U:0U);
                 m->operands[0].kind=MINIAS_MC_REGISTER;
                 m->operands[0].reg=second;
                 m->operands[0].register_64=bits==64U;
@@ -947,7 +946,8 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
             if(matched) {
                 m->opcode=X64_ALU_IMM;m->count=2U;
                 m->encoding=group|(bits==8U?0x200U:
-                                   bits==16U?0x400U:0U);
+                                   bits==16U?0x400U:0U)|
+                            (legacy_high8?0x800U:0U);
                 m->operands[0].kind=MINIAS_MC_REGISTER;
                 m->operands[0].register_64=bits==64U;
                 m->operands[0].reg=reg;
