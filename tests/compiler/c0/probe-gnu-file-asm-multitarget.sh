@@ -64,6 +64,56 @@ SRC
     echo "MINIC_ELF_ALIAS_ABI_OTHER_TARGET_REJECT=PASS target=$target"
 fi
 
+# Original Linux get_current() GNU percpu_stable_op(8): nonvolatile p
+# relocation and real x86 GS segment read. Explicit GS base=0 supplies a
+# safe native process oracle without faking a privileged kernel segment.
+if [ "$target" = x86_64 ]; then
+    cat > "$work/x86-gs-pcpu.i" <<'SRC'
+extern long syscall(long, ...);
+unsigned long long fake_pcpu = 42;
+unsigned long long gs_read_stable(void) {
+    unsigned long long result;
+    __asm__("movq %%gs:%P[var], %[val]"
+            : [val] "=r"(result) : [var] "p"(&fake_pcpu));
+    return result;
+}
+int main(void) {
+    if (syscall(158, 0x1001, 0L) != 0) return 2;
+    return gs_read_stable() == 42 ? 0 : 1;
+}
+SRC
+    "$cross_cc" -fno-pie -no-pie -x c "$work/x86-gs-pcpu.i" \
+        -o "$work/x86-gs-pcpu.gnu.elf"
+    "$MINIC_CC" --target=x86_64-linux -S "$work/x86-gs-pcpu.i" \
+        -o "$work/x86-gs-pcpu.minic.s"
+    grep -Fq 'movq %gs:(%r10), %rax' "$work/x86-gs-pcpu.minic.s"
+    "$cross_cc" -fno-pie -no-pie -x assembler "$work/x86-gs-pcpu.minic.s" \
+        -o "$work/x86-gs-pcpu.minic.elf"
+    for flavor in gnu minic; do
+        "$work/x86-gs-pcpu.$flavor.elf"
+        objdump -d "$work/x86-gs-pcpu.$flavor.elf" |
+            grep -Fq '%gs:'
+    done
+    for invalid in constraint suffix output-type; do
+        case "$invalid" in
+            constraint) asm='__asm__("movq %%gs:%P[var], %[val]" : [val] "=r"(v) : [var] "r"(&fake_pcpu));';;
+            suffix) asm='__asm__("movq %%gs:%P[var], %[val]; syscall" : [val] "=r"(v) : [var] "p"(&fake_pcpu));';;
+            output-type) asm='__asm__("movq %%gs:%P[var], %[val]" : [val] "=r"(v) : [var] "p"(&fake_pcpu));';;
+        esac
+        if [ "$invalid" = output-type ]; then vtype='unsigned int'; else vtype='unsigned long long'; fi
+        printf 'unsigned long long fake_pcpu=42; int main(void){ %s v=0; %s return (int)v; }\n' \
+            "$vtype" "$asm" >"$work/x86-gs-invalid-$invalid.i"
+        if "$MINIC_CC" --target=x86_64-linux -S "$work/x86-gs-invalid-$invalid.i" \
+            -o "$work/x86-gs-invalid-$invalid.s" \
+            >"$work/x86-gs-invalid-$invalid.out" \
+            2>"$work/x86-gs-invalid-$invalid.err"; then
+            echo "FAIL unsafe x86 GS percpu accepted: $invalid" >&2
+            exit 1
+        fi
+    done
+    echo 'MINIC_X86_LINUX_PERCPU_GS_GNU_NATIVE=PASS stable64=1 negative=3'
+fi
+
 if [ "$target" = aarch64 ]; then
     cat > "$work/aarch64-fence.i" <<'SRC'
 static void full_barrier(void) {
