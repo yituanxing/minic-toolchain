@@ -1099,14 +1099,21 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
         put_immediate(&inst->operands[0],hint);
     } else if (!strcmp(op,"hint")) {
         int64_t hint;
-        if(!parse_signed_number(args,&hint) || hint<0 || hint>127) {
+        MiniAsSymbolExpr expr;
+        const char *arg=(*args=='#')?args+1U:args;
+        inst->opcode=A64_MC_HINT;inst->count=1U;
+        if(parse_signed_number(args,&hint) && hint>=0 && hint<=127) {
+            put_immediate(&inst->operands[0],hint);
+        }else if(minias_parse_symbol_addend(arg,&expr) &&
+                 a64_attach_expr(inst,0U,&expr)) {
+            /* GNU Linux BTI macros use hint #.L__bti_targets_c.
+             * Keep the exact symbol in MCInst until layout/encode instead
+             * of treating an ABS .equ alias as an unsupported opcode. */
+        }else {
             minias_set_error(as,"bad-aarch64-hint:%s:line=%zu",
                              args,stmt->line);
             free(inst);return false;
         }
-        inst->opcode=A64_MC_HINT;
-        inst->count=1U;
-        put_immediate(&inst->operands[0],hint);
     } else if (strcmp(op, "nop") == 0 && *args == '\0') {
         inst->opcode = A64_MC_NOP;
     } else if (strcmp(op, "ret") == 0 && *args == '\0') {
@@ -1329,12 +1336,34 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
         case A64_MC_BARRIER:
             code=inst->encoding;
             break;
-        case A64_MC_HINT:
-            /* A64 HINT imm7, including the architectural HINT #25
-             * instruction used throughout Linux entry code. */
-            code=UINT32_C(0xd503201f) |
-                 ((uint32_t)inst->operands[0].immediate<<5U);
+        case A64_MC_HINT: {
+            uint32_t hint;
+            if(inst->operands[0].kind==MINIAS_MC_SYMBOL) {
+                const MiniAsSymbolExpr *expr=inst->operands[0].symbol;
+                MiniAsSymbol *symbol=expr?
+                    minias_get_symbol(as,expr->name,false):NULL;
+                int64_t addend=expr?expr->addend:0;
+                if(!symbol || !symbol->defined ||
+                   symbol->section!=MINIAS_SECTION_ABS ||
+                   symbol->value>127U ||
+                   addend<-(int64_t)symbol->value ||
+                   addend>127-(int64_t)symbol->value) {
+                    minias_set_error(as,
+                        "invalid-aarch64-absolute-hint:%s:line=%zu",
+                        s->args,s->line);
+                    return false;
+                }
+                hint=(uint32_t)((int64_t)symbol->value+addend);
+            }else {
+                hint=(uint32_t)inst->operands[0].immediate;
+                if(hint>127U) {
+                    minias_set_error(as,"aarch64-hint-imm7-out-of-range");
+                    return false;
+                }
+            }
+            code=UINT32_C(0xd503201f)|(hint<<5U);
             break;
+        }
         case A64_MC_NOP:
             code = UINT32_C(0xd503201f);
             break;

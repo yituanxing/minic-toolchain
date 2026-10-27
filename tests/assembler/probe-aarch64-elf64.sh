@@ -27,6 +27,16 @@ _start:
     hint 25
     hint #0
     hint #127
+    # Linux BTI macro expands HINT with an absolute .equ symbol.
+    .equ .L__bti_targets_c, 34
+    .equ .L__bti_targets_j, 36
+    .equ .L__bti_targets_jc, 38
+    hint #.L__bti_targets_c
+    hint #.L__bti_targets_j+1
+    .macro bti targets
+        hint #.L__bti_targets_\targets
+    .endm
+    bti targets=jc
     bl after_call
     b exit_code
 after_call:
@@ -401,6 +411,9 @@ for bad_source in 'ldxr x0, [x1,#4]' 'stxr x0, x1, [x2]' \
                   'ldarb x1, [x2]' 'stlrh x3, [x4]' \
                   'mvn x0, w1' \
                   'yield #1' \
+                  'hint #.Lnever_defined' \
+                  '.equ .Lbad_hint,128; hint #.Lbad_hint' \
+                  'bad_label: nop; hint #bad_label' \
                   'dsb #16' 'dsb bogus' 'isb ish' 'isb #16' \
                   'prfm pstl4strm, [x2]' 'prfm pstl1strm, [w2]' \
                   '.inst 0x100000000' \
