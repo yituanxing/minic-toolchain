@@ -277,6 +277,23 @@ entry_la:
     bytepick.d $r20, $r15, $r20, 1
     iocsrwr.w $r12, $r13
     iocsrrd.w $r12, $r13
+    iocsrrd.d $r13, $r12
+    iocsrrd.b $r14, $r13
+    iocsrrd.h $r12, $r15
+    iocsrwr.d $r15, $r12
+    iocsrwr.b $r16, $r13
+    iocsrwr.h $r17, $r14
+    movgr2fr.d $f30, $r13
+    movgr2fr.w $f19, $r15
+    rotr.w $r13, $r13, $r18
+    rotr.d $r14, $r15, $r16
+    cacop 13, $r12, 0
+    cacop 31, $r15, -2048
+    tlbrd
+    tlbwr
+    tlbsrch
+    tlbfill
+    li.w $r12, 16384
     movgr2fcsr $fcsr0, $r12
     movfr2gr.d $r5, $f30
     add.d $a0, $a0, $a1
@@ -539,6 +556,12 @@ done
 echo 'MINIAS_LARCH_SYMBOL_DIFF=PASS ELF_ADD_SUB_32_64'
 
 for bad in 'li.w $r4, -2049' \
+           'cacop 32, $r12, 0' \
+           'cacop 0, $r12, -2049' \
+           'iocsrrd.d $r13, $f30' \
+           'movgr2fr.d $f32, $r13' \
+           'rotr.w $r1, $r2, 6' \
+           'tlbrd $r1' \
            'bytepick.w $r1,$r2,$r3,4' \
            'bytepick.d $r1,$r2,$r3,8' \
            'movgr2fcsr $fcsr4,$r12' \

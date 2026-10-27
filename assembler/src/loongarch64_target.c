@@ -188,6 +188,8 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
         {"sll.d",UINT32_C(0x00188000)},
         {"srl.d",UINT32_C(0x00190000)},
         {"sra.d",UINT32_C(0x00198000)},
+        {"rotr.w",UINT32_C(0x001b0000)},
+        {"rotr.d",UINT32_C(0x001b8000)},
         {"mul.w",UINT32_C(0x001c0000)},
         {"mul.d",UINT32_C(0x001d8000)},
         {"mulh.w",UINT32_C(0x001c8000)},
@@ -291,8 +293,14 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
         {"rdtimeh.w",UINT32_C(0x00006400)},
         {"rdtime.d",UINT32_C(0x00006800)},
         {"cpucfg",UINT32_C(0x00006c00)},
+        {"iocsrrd.b",UINT32_C(0x06480000)},
+        {"iocsrrd.h",UINT32_C(0x06480400)},
         {"iocsrrd.w",UINT32_C(0x06480800)},
-        {"iocsrwr.w",UINT32_C(0x06481800)}
+        {"iocsrrd.d",UINT32_C(0x06480c00)},
+        {"iocsrwr.b",UINT32_C(0x06481000)},
+        {"iocsrwr.h",UINT32_C(0x06481400)},
+        {"iocsrwr.w",UINT32_C(0x06481800)},
+        {"iocsrwr.d",UINT32_C(0x06481c00)}
     };
     /* GNU atomic opcodes r0:5,r10:5,r5:5: the second assembly
      * operand occupies rk/bit10; the third is the memory base rj/bit5.
@@ -332,11 +340,37 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
     long val;
     if(!m){minias_set_error(as,"out-of-memory:loongarch64-mcinst");return false;}
     if(!*s->args) {
+        static const struct {const char *name;uint32_t bits;} privileged[]={
+            {"tlbclr",UINT32_C(0x06482000)},
+            {"tlbflush",UINT32_C(0x06482400)},
+            {"tlbsrch",UINT32_C(0x06482800)},
+            {"tlbrd",UINT32_C(0x06482c00)},
+            {"tlbwr",UINT32_C(0x06483000)},
+            {"tlbfill",UINT32_C(0x06483400)},
+            {"ertn",UINT32_C(0x06483800)}
+        };
+        for(i=0U;i<sizeof(privileged)/sizeof(privileged[0]);++i)
+            if(!strcmp(s->op,privileged[i].name)) {
+                m->encoding=privileged[i].bits;goto done;
+            }
         if(!strcmp(s->op,"nop")){m->encoding=UINT32_C(0x03400000);goto done;}
         if(!strcmp(s->op,"ret")){m->encoding=UINT32_C(0x4c000020);goto done;}
     }
     if(!la_split(s->args,t,&n))goto fail;
     if(la_branch_instruction(as,m,s->op,t,n)) goto done;
+    if(n==2U && la_special_reg(t[0],"$f",31U,&rd) &&
+       la_reg(t[1],&rj) &&
+       (!strcmp(s->op,"movgr2fr.d") || !strcmp(s->op,"movgr2fr.w"))) {
+        m->count=2U;
+        m->encoding=(!strcmp(s->op,"movgr2fr.d") ?
+                    UINT32_C(0x0114a800):UINT32_C(0x0114a000)) |
+                    (rj<<5U)|rd;
+        m->operands[0].kind=MINIAS_MC_REGISTER;
+        m->operands[0].reg=rd;
+        m->operands[1].kind=MINIAS_MC_REGISTER;
+        m->operands[1].reg=rj;
+        goto done;
+    }
     if(n==2U && !strcmp(s->op,"movgr2fcsr") &&
        la_special_reg(t[0],"$fcsr",3U,&rd) && la_reg(t[1],&rj)) {
         m->count=2U;m->encoding=UINT32_C(0x0114c000)|(rj<<5U)|rd;
@@ -359,6 +393,43 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
             m->operands[0].reg=rd;
             m->operands[1].kind=MINIAS_MC_IMMEDIATE;
             m->operands[1].immediate=(uint64_t)value;
+            goto done;
+        }
+        /* Single-word GNU LI.W for exact 4K multiples: LU12I.W.
+         * Other large constants may require a two-instruction sequence;
+         * continue to reject those until variable-size pseudos exist. */
+        if(minias_eval_i64_expression(t[1],&value) &&
+           value%4096==0 && value>=INT32_MIN && value<=INT32_MAX) {
+            int64_t hi=value/4096;
+            m->count=2U;
+            m->encoding=UINT32_C(0x14000000)|
+                (((uint32_t)hi&UINT32_C(0xfffff))<<5U)|rd;
+            m->operands[0].kind=MINIAS_MC_REGISTER;
+            m->operands[0].reg=rd;
+            m->operands[1].kind=MINIAS_MC_IMMEDIATE;
+            m->operands[1].immediate=(uint64_t)value;
+            goto done;
+        }
+    }
+    /* CACOP is a u5 operation plus GPR base and signed si12 offset.
+     * The system opcode is described entirely by target-specific bits,
+     * leaving ELF/data/fragment ownership in Common. */
+    if(n==3U && !strcmp(s->op,"cacop") && la_reg(t[1],&rj)) {
+        uint64_t operation;int64_t offset;
+        if(minias_eval_u64_expression(t[0],&operation) &&
+           operation<=31U &&
+           minias_eval_i64_expression(t[2],&offset) &&
+           offset>=-2048 && offset<=2047) {
+            m->count=3U;
+            m->encoding=UINT32_C(0x06000000)|
+                (((uint32_t)offset&UINT32_C(0xfff))<<10U)|
+                (rj<<5U)|(uint32_t)operation;
+            m->operands[0].kind=MINIAS_MC_IMMEDIATE;
+            m->operands[0].immediate=operation;
+            m->operands[1].kind=MINIAS_MC_REGISTER;
+            m->operands[1].reg=rj;
+            m->operands[2].kind=MINIAS_MC_IMMEDIATE;
+            m->operands[2].immediate=(uint64_t)offset;
             goto done;
         }
     }
