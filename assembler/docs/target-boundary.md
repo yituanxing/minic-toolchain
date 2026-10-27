@@ -55,9 +55,15 @@ Explicit -march=rv32i/rv64i retains existing fail-closed machine-code checks.
    The typed encoder retains PIC/NOPIC GOT versus PCREL decisions and
    emits CALL_PLT, GOT_HI20, PCREL_HI20 and LO12_I fixups. RV32 LI width
    is determined by the actual target XLEN on every profile, including
-   RV32IM—not merely by enabling the strict-I validator. Raw `.insn` is
-   now the only remaining non-MCInst RISC-V instruction emission escape.
-   RV32 shift widths are validated at the typed parser.
+   RV32IM—not merely by enabling the strict-I validator. Even the raw
+   R/I `.insn` escape now parses exactly once into a target-owned typed
+   MCInst machine word. The obsolete conditional fallback decoder is
+   removed entirely: **all remaining RISC-V instruction emission consumes
+   MCInst**. Multiword LI/CALL/TAIL/LA and symbolic loads/stores still use
+   target-owned legacy *measurement* to determine their total fragment size;
+   replacing those duplicate size parsers with deferred fragment sizing is
+   the next architectural task. RV32 shift widths are validated at the
+   typed parser.
    Vector register classes are distinguished from integer/FP registers.
    Comment stripping is target-configurable and .option
    dispatch belongs to the RISC-V target; common parser still owns GNU-style

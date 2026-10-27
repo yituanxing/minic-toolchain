@@ -817,17 +817,6 @@ bool minias_riscv_measure(unsigned strict_i_xlen,
     char operands[8][128];
     size_t count = split_operands(args, operands, 8U);
 
-    if (strcmp(op, ".insn") == 0) {
-        uint32_t word;
-        if (!parse_raw_insn_directive(args, &word)) {
-            (void)snprintf(reason, reason_size, "bad-operands:.insn:%s", args);
-            return false;
-        }
-        (void)word;
-        *size = 4U;
-        return true;
-    }
-
     if (strcmp(op, "lb") == 0 || strcmp(op, "lbu") == 0 ||
         strcmp(op, "lh") == 0 || strcmp(op, "lhu") == 0 ||
         strcmp(op, "lw") == 0 || strcmp(op, "lwu") == 0 ||
@@ -1091,6 +1080,17 @@ static bool rv_parse_simple_mc(MiniAs *as, MiniAsStmt *stmt,
     char base[128];
     *handled = true;
 
+    if (strcmp(op, ".insn") == 0) {
+        MiniAsMCInst *m;
+        uint32_t word;
+        if (!parse_raw_insn_directive(stmt->args, &word)) goto invalid;
+        m = calloc(1U, sizeof(*m));
+        if (m == NULL) goto oom;
+        m->opcode = RV_MC_RAW;
+        m->encoding = word;
+        stmt->mcinst = m;
+        return true;
+    }
     if (strcmp(op,"c.li")==0) {
         MiniAsMCInst *m;
         if(n!=2U || (rd=reg_number(ops[0]))<=0 ||
@@ -1901,6 +1901,8 @@ static bool rv_encode_multi_mc(MiniAs *as, const MiniAsStmt *stmt) {
 
 static bool rv_encode_mcinst(MiniAs *as, const MiniAsStmt *stmt) {
     const MiniAsMCInst *m=stmt->mcinst;
+    if (m->opcode == RV_MC_RAW)
+        return append_u32(as, stmt->section, m->encoding);
     if (m->opcode == RV_MC_LI || m->opcode == RV_MC_CALL ||
         m->opcode == RV_MC_TAIL || m->opcode == RV_MC_LA)
         return rv_encode_multi_mc(as, stmt);
@@ -2035,19 +2037,10 @@ static bool rv_encode_mcinst(MiniAs *as, const MiniAsStmt *stmt) {
 }
 
 bool minias_riscv_encode(MiniAs *as, const MiniAsStmt *stmt) {
-    if (stmt->mcinst != NULL) return rv_encode_mcinst(as, stmt);
-    /* Raw ISA escape is deliberately target-owned, not a generic opcode.
-     * The selected strict-I profile still verifies the final machine word. */
-    if (strcmp(stmt->op, ".insn") == 0) {
-        uint32_t word;
-        if (!parse_raw_insn_directive(stmt->args, &word)) {
-            minias_set_error(as, "bad-operands:.insn:%s:line=%zu",
-                             stmt->args, stmt->line);
-            return false;
-        }
-        return append_u32(as, stmt->section, word);
+    if (stmt->mcinst == NULL) {
+        minias_set_error(as, "internal:riscv-missing-typed-instruction:%s:line=%zu",
+                         stmt->op, stmt->line);
+        return false;
     }
-    minias_set_error(as, "unsupported-instruction:%s:line=%zu",
-                     stmt->op, stmt->line);
-    return false;
+    return rv_encode_mcinst(as, stmt);
 }

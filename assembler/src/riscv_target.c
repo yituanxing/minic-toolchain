@@ -307,6 +307,12 @@ static bool riscv_measure(const MiniAs *as, const char *op, const char *args,
         *size = 2U;
         return true;
     }
+    if (strcmp(op, ".insn") == 0) {
+        /* ISA-specific raw format validation happens once in parse_mcinst,
+         * not again when measuring and emitting the machine word. */
+        *size = 4U;
+        return true;
+    }
     if (minias_riscv_is_typed_fixed(op)) {
         /* The MCInst parser validates operands once. Strict-I additionally
          * runs its exhaustive post-encoding machine word verifier, so no

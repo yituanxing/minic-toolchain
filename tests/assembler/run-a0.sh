@@ -2177,4 +2177,39 @@ if "$MINIAS" -march=rv32im -mabi=ilp32 \
 fi
 echo 'MINIAS_RV_MULTI_MCINST_NEGATIVE=PASS invalid_operands=7 rv32_overflow=1'
 
+
+# The last raw R/I escape is also target-parsed MCInst: no text-dependent
+# RISC-V encoder fallback may survive migration. Compare both GNU forms.
+cat >"$work/riscv-raw-mcinst.s" <<'EOF_RV_RAW'
+.text
+.globl rv_raw
+rv_raw:
+    .insn r 0x33, 0, 0, a0, a1, a2
+    .insn i 0x13, 0, a3, a4, -13
+EOF_RV_RAW
+"$MINIAS" -o "$work/riscv-raw-mcinst.o" "$work/riscv-raw-mcinst.s"
+if command -v riscv64-linux-gnu-as >/dev/null 2>&1 &&
+   command -v riscv64-linux-gnu-objcopy >/dev/null 2>&1; then
+    riscv64-linux-gnu-as -march=rv64i -mabi=lp64 \
+        -o "$work/riscv-raw-mcinst.gnu.o" "$work/riscv-raw-mcinst.s"
+    riscv64-linux-gnu-objcopy -j .text -O binary \
+        "$work/riscv-raw-mcinst.o" "$work/riscv-raw-mcinst.bin"
+    riscv64-linux-gnu-objcopy -j .text -O binary \
+        "$work/riscv-raw-mcinst.gnu.o" "$work/riscv-raw-mcinst.gnu.bin"
+    cmp "$work/riscv-raw-mcinst.bin" "$work/riscv-raw-mcinst.gnu.bin"
+    echo 'MINIAS_RV_RAW_MCINST=PASS GNU_R_I_bytes_equal=1'
+else
+    echo 'MINIAS_RV_RAW_MCINST=PASS GNU_AS=SKIP(toolchain-unavailable)'
+fi
+for invalid in '.insn r 0x33, 0, 0, x32, a1, a2' \
+               '.insn i 0x13, 0, a0, a1, 4096'; do
+    printf '.text\n%s\n' "$invalid" >"$work/riscv-raw-invalid.s"
+    if "$MINIAS" -o "$work/riscv-raw-invalid.o" \
+        "$work/riscv-raw-invalid.s" >/dev/null 2>&1; then
+        echo "MiniAS accepted invalid typed .insn: $invalid" >&2
+        exit 1
+    fi
+done
+echo 'MINIAS_RV_RAW_MCINST_NEGATIVE=PASS invalid_raw=2'
+
 echo "MINIAS_A0=PASS objects=30 abi_flags=3 format=ELF64-RISCV-ET_REL relocations=23 strings=2 pseudos=17 previous=3 subsection=2 numeric_labels=18 ecall=1 isa_next=13 csr_amo=8 sfence_vma=3 fence_i=1 vsetvl=1 vsetvli=1 vmv_v_i=4 rept=2 nested_rept=1 irp=4 section_stack=1 org=3 local_difference=1 lr_sc=2 inline_labels=2 branch_pseudos=8 extern=1 symbol_minus_dot=4 symbol_difference=1 absolute32=1 jal=2 jal_subsection=1 high_numeric_labels=2 u64_data=3 raw_insn=4 set_alias=3 move=1 numeric_zero=1 immediate_product=2 shift_immediate=1 incbin=1 align_expr=1 native_expr=6 native_zbb_tail_memexpr=1 native_jalr_symbol_load=1 native_forward_short=1 native_mixed_macro=1 native_divided_difference=1 native_symbol_addend_expr=1 native_add_sub_immediate=1 native_cfi_boundary=1 native_gas_forms=1 native_set_size=1 native_macro_comma=1 native_macro_quotes=1 pic_la_got=1 sext_w=1 macro=4 conditional=1"
