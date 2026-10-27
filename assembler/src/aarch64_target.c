@@ -764,7 +764,7 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
             unsigned rn=inst->operands[1].reg;
             bool sf=inst->operands[0].register_64;
             code=((inst->encoding&0x100U)?
-                    UINT32_C(0x1a800000):UINT32_C(0x1a800400)) |
+                    UINT32_C(0x5a800000):UINT32_C(0x1a800400)) |
                  (sf?UINT32_C(0x80000000):0U) |
                  (rn<<16U) | ((inst->encoding&15U)<<12U) |
                  (rn<<5U) | rd;
