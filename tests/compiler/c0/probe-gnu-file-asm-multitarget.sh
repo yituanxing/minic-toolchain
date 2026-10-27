@@ -134,6 +134,50 @@ SRC
         test ! -e "$work/aarch64-brk-invalid-$invalid.s"
     done
     echo 'MINIC_AARCH64_LINUX_BRK_GNU_AS_QEMU=PASS imm=0x401 negative=4'
+
+    # Original Linux 6.6 arm64 __smp_store_release, all four hardware widths.
+    cat > "$work/aarch64-stlr.i" <<'SRC'
+typedef unsigned char u8; typedef unsigned short u16;
+typedef unsigned int u32; typedef unsigned long u64;
+void release1(u8 *p,u8 v){ __asm__ __volatile__("stlrb %w1, %0" : "=Q"(*p) : "rZ"(v) : "memory"); }
+void release2(u16 *p,u16 v){ __asm__ __volatile__("stlrh %w1, %0" : "=Q"(*p) : "rZ"(v) : "memory"); }
+void release4(u32 *p,u32 v){ __asm__ __volatile__("stlr %w1, %0" : "=Q"(*p) : "rZ"(v) : "memory"); }
+void release8(u64 *p,u64 v){ __asm__ __volatile__("stlr %x1, %0" : "=Q"(*p) : "rZ"(v) : "memory"); }
+int main(void){
+ u8 a=0;u16 b=0;u32 c=0;u64 d=0;
+ release1(&a,42);release2(&b,4242);release4(&c,424242);release8(&d,42424242);
+ return a==42&&b==4242&&c==424242&&d==42424242?0:1;
+}
+SRC
+    "$cross_cc" -x c "$work/aarch64-stlr.i" -o "$work/aarch64-stlr.gnu.elf"
+    "$MINIC_CC" --target=aarch64-linux -S "$work/aarch64-stlr.i" \
+        -o "$work/aarch64-stlr.minic.s"
+    for opcode in 'stlrb w9, [x10]' 'stlrh w9, [x10]' 'stlr w9, [x10]' 'stlr x9, [x10]'; do
+        grep -Fq "$opcode" "$work/aarch64-stlr.minic.s"
+    done
+    "$cross_cc" -x assembler "$work/aarch64-stlr.minic.s" \
+        -o "$work/aarch64-stlr.minic.elf"
+    for flavor in gnu minic; do
+        qemu-aarch64 -L /usr/aarch64-linux-gnu "$work/aarch64-stlr.$flavor.elf"
+    done
+    for invalid in constraint suffix width output_count; do
+        case "$invalid" in
+            constraint) asm='__asm__ __volatile__("stlrb %w1, %0" : "=Q"(*p) : "r"(v) : "memory");';;
+            suffix) asm='__asm__ __volatile__("stlrb %w1, %0; svc #0" : "=Q"(*p) : "rZ"(v) : "memory");';;
+            width) asm='__asm__ __volatile__("stlrh %w1, %0" : "=Q"(*p) : "rZ"(v) : "memory");';;
+            output_count) asm='__asm__ __volatile__("stlrb %w2, %0" : "=Q"(*p), "=r"(v) : "rZ"(v) : "memory");';;
+        esac
+        printf 'void bad(unsigned char *p,unsigned char v) { %s }\n' "$asm" \
+            >"$work/aarch64-stlr-neg-$invalid.i"
+        if "$MINIC_CC" --target=aarch64-linux -S "$work/aarch64-stlr-neg-$invalid.i" \
+            -o "$work/aarch64-stlr-neg-$invalid.s" \
+            >"$work/aarch64-stlr-neg-$invalid.out" \
+            2>"$work/aarch64-stlr-neg-$invalid.err"; then
+            echo "FAIL unsafe AArch64 STLR admitted: $invalid" >&2
+            exit 1
+        fi
+    done
+    echo 'MINIC_AARCH64_LINUX_STLR_GNU_AS_QEMU=PASS widths=4 negative=4'
 fi
 
 # Original Linux syscall wrappers have deliberately different argument C
