@@ -106,6 +106,9 @@ static bool append_word(MiniAs *as, int section, uint32_t word) {
 enum {
     A64_MC_NOP = 1,
     A64_MC_HINT,
+    A64_MC_MRS,
+    A64_MC_MSR,
+    A64_MC_DMB,
     A64_MC_RET,
     A64_MC_MOVZ,
     A64_MC_SVC,
@@ -132,6 +135,8 @@ enum {
     A64_MC_SUB_IMM,
     A64_MC_CMP_REG,
     A64_MC_CMP_IMM,
+    A64_MC_CMN_REG,
+    A64_MC_CMN_IMM,
     A64_MC_LDR,
     A64_MC_STR,
     A64_MC_LDRB,
@@ -304,15 +309,16 @@ static bool parse_integer_family(MiniAsMCInst *inst,
         put_reg(&inst->operands[1], rn, wn);
         return true;
     }
-    if (strcmp(op, "cmp") == 0 && n == 2U) {
+    if ((strcmp(op, "cmp") == 0 || strcmp(op, "cmn") == 0) && n == 2U) {
         if (!parse_a64_reg(t[0], &rn, &wn, &spn)) return false;
         if (parse_a64_reg(t[1], &rm, &wm, &spm)) {
             if (wn != wm || spn || spm) return false;
-            kind = A64_MC_CMP_REG;
+            kind = strcmp(op,"cmp")==0 ? A64_MC_CMP_REG : A64_MC_CMN_REG;
             put_reg(&inst->operands[1], rm, wm);
         } else if (parse_signed_number(t[1], &imm) &&
-                   imm >= 0 && imm <= 4095) {
-            kind = A64_MC_CMP_IMM;
+                   imm >= 0 && (imm <= 4095 ||
+                   (imm%4096==0 && imm/4096<=4095))) {
+            kind = strcmp(op,"cmp")==0 ? A64_MC_CMP_IMM : A64_MC_CMN_IMM;
             put_immediate(&inst->operands[1], imm);
         } else return false;
         inst->opcode = kind;
@@ -475,6 +481,42 @@ static bool a64_parse_relocated(MiniAsMCInst *inst,
     return true;
 }
 
+/* Architecturally defined base EL0 system registers; no permissive
+ * arbitrary sysreg numeric escape. Named register policy stays target-only. */
+static bool a64_system_register(const char *name,uint32_t *mrs,uint32_t *msr) {
+    static const struct {const char *name;uint32_t read,write;} table[]={
+        {"sp_el0",UINT32_C(0xd5384100),UINT32_C(0xd5184100)},
+        {"tpidr_el0",UINT32_C(0xd53bd040),UINT32_C(0xd51bd040)},
+        {"tpidrro_el0",UINT32_C(0xd53bd060),0U}
+    };
+    size_t i;
+    for(i=0U;i<sizeof(table)/sizeof(table[0]);++i)
+        if(!strcmp(name,table[i].name)) {
+            *mrs=table[i].read;*msr=table[i].write;return true;
+        }
+    return false;
+}
+
+static bool a64_barrier_option(const char *name,unsigned *imm) {
+    static const struct {const char *name;unsigned code;} table[]={
+        {"oshld",1U},{"oshst",2U},{"osh",3U},
+        {"nshld",5U},{"nshst",6U},{"nsh",7U},
+        {"ishld",9U},{"ishst",10U},{"ish",11U},
+        {"ld",13U},{"st",14U},{"sy",15U}
+    };
+    int64_t val;
+    size_t i;
+    if(parse_signed_number(name,&val)) {
+        if(val<0 || val>15)return false;
+        *imm=(unsigned)val;return true;
+    }
+    for(i=0U;i<sizeof(table)/sizeof(table[0]);++i)
+        if(!strcmp(name,table[i].name)) {
+            *imm=table[i].code;return true;
+        }
+    return false;
+}
+
 static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
     MiniAsMCInst *inst = calloc(1U, sizeof(*inst) +
                                 4U * sizeof(MiniAsMCOperand));
@@ -488,7 +530,37 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
         minias_set_error(as, "out-of-memory:aarch64-mcinst");
         return false;
     }
-    if((!strcmp(op,"br")||!strcmp(op,"blr")) &&
+    if((!strcmp(op,"mrs") || !strcmp(op,"msr")) &&
+       split_two(args, first, sizeof(first), second, sizeof(second))) {
+        unsigned rt;
+        bool wide;
+        uint32_t mrscode=0U,msrcode=0U;
+        bool read=!strcmp(op,"mrs");
+        if(read ?
+           (!parse_register(first,&rt,&wide) || !wide ||
+            !a64_system_register(second,&mrscode,&msrcode) ||
+            mrscode==0U) :
+           (!parse_register(second,&rt,&wide) || !wide ||
+            !a64_system_register(first,&mrscode,&msrcode) ||
+            msrcode==0U)) {
+            minias_set_error(as,"bad-aarch64-sysreg:%s:line=%zu",
+                             args,stmt->line);
+            free(inst);return false;
+        }
+        inst->opcode=read?A64_MC_MRS:A64_MC_MSR;
+        inst->count=1U;
+        inst->encoding=read?mrscode:msrcode;
+        put_reg(&inst->operands[0],rt,true);
+    } else if(!strcmp(op,"dmb")) {
+        unsigned barrier;
+        if(!a64_barrier_option(args,&barrier)) {
+            minias_set_error(as,"bad-aarch64-barrier:%s:line=%zu",
+                             args,stmt->line);
+            free(inst);return false;
+        }
+        inst->opcode=A64_MC_DMB;
+        inst->encoding=UINT32_C(0xd50330bf)|(barrier<<8U);
+    } else if((!strcmp(op,"br")||!strcmp(op,"blr")) &&
        parse_register(args,&reg,&reg64) && reg64) {
         inst->opcode=!strcmp(op,"br")?A64_MC_BR:A64_MC_BLR;
         inst->count=1U;
@@ -664,6 +736,13 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
         return false;
     }
     switch (inst->opcode) {
+        case A64_MC_MRS:
+        case A64_MC_MSR:
+            code=inst->encoding|inst->operands[0].reg;
+            break;
+        case A64_MC_DMB:
+            code=inst->encoding;
+            break;
         case A64_MC_HINT:
             /* A64 HINT imm7, including the architectural HINT #25
              * instruction used throughout Linux entry code. */
@@ -776,19 +855,27 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
                    (imm << 10U) | (rn << 5U) | rd;
             break;
         }
-        case A64_MC_CMP_REG: {
+        case A64_MC_CMP_REG:
+        case A64_MC_CMN_REG: {
             bool sf = inst->operands[0].register_64;
-            code = UINT32_C(0x6b00001f) |
+            code = (inst->opcode==A64_MC_CMP_REG ?
+                    UINT32_C(0x6b00001f):UINT32_C(0x2b00001f)) |
                    (sf ? UINT32_C(0x80000000) : 0U) |
                    (inst->operands[1].reg << 16U) |
                    (inst->operands[0].reg << 5U);
             break;
         }
-        case A64_MC_CMP_IMM: {
+        case A64_MC_CMP_IMM:
+        case A64_MC_CMN_IMM: {
             bool sf = inst->operands[0].register_64;
-            code = UINT32_C(0x7100001f) |
+            uint64_t imm=inst->operands[1].immediate;
+            bool shift12=imm>4095U;
+            if(shift12)imm>>=12U;
+            code = (inst->opcode==A64_MC_CMP_IMM ?
+                    UINT32_C(0x7100001f):UINT32_C(0x3100001f)) |
                    (sf ? UINT32_C(0x80000000) : 0U) |
-                   ((uint32_t)inst->operands[1].immediate << 10U) |
+                   (shift12?UINT32_C(0x00400000):0U) |
+                   ((uint32_t)imm << 10U) |
                    (inst->operands[0].reg << 5U);
             break;
         }

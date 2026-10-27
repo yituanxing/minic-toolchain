@@ -25,6 +25,18 @@ _start:
     mov x0, #0
     hint #25
     hint 25
+    mrs x0, sp_el0
+    mrs x2, sp_el0
+    mrs x7, tpidr_el0
+    mrs x11, tpidrro_el0
+    msr sp_el0, x2
+    dmb oshst
+    dmb ish
+    dmb sy
+    cmn x0, #4096
+    cmn w1, #4096
+    cmn x0, x1
+    cmp x1, #8192
     hint #0
     hint #127
     bl after_call
@@ -195,7 +207,10 @@ if "$MINIAS" --target=aarch64 -o "$work/unsupported.o" \
     exit 1
 fi
 # MCInst must be validated while parsing, independent of later emit/ELF.
-for bad_source in 'hint #-1' 'hint #128' 'hint #18446744073709551616' \
+for bad_source in 'mrs w0, sp_el0' 'msr tpidrro_el0, x0' \
+                  'mrs x0, fake_el0' 'dmb #16' 'dmb invalid' \
+                  'cmn x0, #-1' 'cmn w0, #4097' 'cmp x0, #16777216' \
+                  'hint #-1' 'hint #128' 'hint #18446744073709551616' \
                   'hint bad' 'ret x31' 'mov x2, #65536' 'b external_function + 2' \
                   'cbz sp, external_function' 'cbnz x0, external_function+2' \
                   'tbz w0, #32, external_function' \
