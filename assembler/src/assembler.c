@@ -2160,6 +2160,36 @@ static bool emit_common_space(MiniAs *as,int section,size_t total,uint8_t fill) 
     return true;
 }
 
+/* Variable length GNU integer directives are DATA fragments, never
+ * target opcodes. Parse only resolved absolute values; deferred symbolic
+ * LEB widths require layout-aware fragments and must fail closed here. */
+static bool minias_leb_bytes(MiniAs *as,const char *op,const char *text,
+                             unsigned char output[10],size_t *length) {
+    int64_t number;
+    uint64_t bits;
+    bool signed_leb=strcmp(op,".sleb128")==0;
+    size_t n=0U;
+    if(!evaluate_absolute_expression(as,text,&number) ||
+       (!signed_leb && number<0))return false;
+    bits=(uint64_t)number;
+    for(;;) {
+        uint8_t byte=(uint8_t)(bits&0x7fU);
+        bool done;
+        if(signed_leb) {
+            number>>=7U;
+            bits=(uint64_t)number;
+            done=(number==0 && (byte&0x40U)==0U) ||
+                 (number==-1 && (byte&0x40U)!=0U);
+        }else {
+            bits>>=7U;
+            done=bits==0U;
+        }
+        if(n>=10U)return false;
+        output[n++]=(unsigned char)(byte | (done?0U:0x80U));
+        if(done){*length=n;return true;}
+    }
+}
+
 static bool add_data_stmt(MiniAs *as, const char *op, char *args, size_t line) {
     uint64_t count = 0U;
     uint64_t bytes;
@@ -2167,7 +2197,17 @@ static bool add_data_stmt(MiniAs *as, const char *op, char *args, size_t line) {
     char *copy = NULL;
     char *cursor;
 
-    if (strcmp(op, ".incbin") == 0) {
+    if (strcmp(op,".uleb128")==0 || strcmp(op,".sleb128")==0) {
+        unsigned char coded[10];
+        size_t len=0U;
+        if(!minias_leb_bytes(as,op,args,coded,&len)) {
+            minias_set_error(as,"unsupported-leb-expression:%s:line=%zu",args,line);
+            return false;
+        }
+        bytes=len;
+    } else if (strcmp(op, ".incbin") == 0 ||
+            strcmp(op, ".uleb128") == 0 ||
+            strcmp(op, ".sleb128") == 0) {
         if (!measure_incbin(as, args, line, &bytes)) {
             return false;
         }
@@ -2411,6 +2451,17 @@ static bool emit_data_stmt(MiniAs *as, const MiniAsStmt *stmt) {
     char *copy;
     char *cursor;
 
+    if(strcmp(stmt->op,".uleb128")==0 ||
+       strcmp(stmt->op,".sleb128")==0) {
+        unsigned char coded[10];
+        size_t len=0U;
+        if(!minias_leb_bytes(as,stmt->op,stmt->args,coded,&len) ||
+           len!=stmt->size) {
+            minias_set_error(as,"leb-layout-changed:line=%zu",stmt->line);
+            return false;
+        }
+        return minias_section_append(as,stmt->section,coded,len);
+    }
     if (strcmp(stmt->op, ".incbin") == 0) {
         char *path = decode_incbin_path(as, stmt->args, stmt->line);
         FILE *file;
