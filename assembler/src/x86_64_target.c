@@ -432,7 +432,7 @@ static bool x64_encode(MiniAs *as,const MiniAsStmt *s) {
                 if(local) {
                     int64_t distance;
                     if(sym->value>INT64_MAX || s->offset>INT64_MAX ||
-                       s->offset>INT64_MAX-s->size) {
+                       s->offset>(uint64_t)INT64_MAX-(uint64_t)s->size) {
                         minias_set_error(as,"x86-rip-address-overflow");return false;
                     }
                     distance=(int64_t)sym->value-(int64_t)(s->offset+s->size);
