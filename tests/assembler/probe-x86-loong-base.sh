@@ -155,6 +155,15 @@ entry_x:
     cmp %rax, ext_global(%rip)
     bt %rax, %rdx
     cmpxchg %ecx, (%rdi)
+    # 0F 40+cc/BC/BD share the existing typed memory+REX/PC32 path.
+    cmove overflowuid(%rip), %edx
+    cmovgq ext_global(%rip), %r8
+    cmovl 8(%rsp,%r12,4), %r9d
+    cmovw -8(%rbp), %r11w
+    bsf ext_global(%rip), %rax
+    bsfl 8(%rdi,%r8,2), %eax
+    bsrq 8(%r12), %r13
+    bsfw (%rsp), %dx
     # TEST uses F7 /0 or A9 accumulator, not Group-1 immediate.
     testl $65536, %eax
     testq $-1, %r8
@@ -606,7 +615,10 @@ cmp "$work/la-gnu.bin" "$work/la-mini.bin"
 grep -q 'LoongArch' "$work/la-header.txt"
 grep -q '0x43' "$work/la-header.txt"
 
-for bad in 'testq $4294967296, %rax' \
+for bad in 'cmove %rax, (%rdi)' \
+           'bsfq %rax, (%rdi)' \
+           'cmovb %al, %al' \
+           'testq $4294967296, %rax' \
            'testw $65536, %ax' \
            'testl %rax, %eax' \
            'add %gs:this_cpu_off(%rip), (%rax)' \

@@ -493,3 +493,15 @@ with A9 for accumulator and F7/0 elsewhere, complete with the original
 MCInst layout and GNU exact bytes. The x86 Target retains responsibility
 for REX.W, 66, register width and numeric range rejection. No duplicate
 ModR/M encoder, ELF writer or ISA leakage into Core.
+
+
+## GNU x86 conditional move / bit scan from memory
+
+CMOVcc and BSF/BSR memory-source instructions now reuse the *same* typed
+MCMemory operand, address-space/REX/SIB form and GNU PC32 symbol fixup as
+ordinary MOV/ALU memory operands. The x86 Target resolves its own condition
+code or bit-scan mnemonic and supplies a two-byte opcode; Common performs
+no condition decoding and no architecture-specific relocation rewrite.
+Both suffix-free GNU AT&T widths and explicit w/l/q are guarded by the
+register's actual class. GNU byte and relocation comparison rejects wrong
+operand direction. This is an ISA expansion, not a new backend pipeline.

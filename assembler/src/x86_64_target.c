@@ -932,6 +932,7 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
         unsigned r, reg_bits=0U;
         bool wide=false, memory_source;
         const unsigned *chosen = NULL;
+        unsigned target_opcode=0U;
         if (x64_register(src,&r,&wide) &&
             x64_parse_base_memory(dst,&parsed)) {
             memory_source=false;reg_bits=wide?64U:32U;
@@ -951,7 +952,45 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
                    x64_parse_base_memory(src,&parsed)) {
             memory_source=true;reg_bits=16U;
         } else goto invalid;
-        for (i=0U;i<sizeof(regmem)/sizeof(regmem[0]);++i) {
+        /* Two-byte CMOVcc/BSF/BSR r/m -> register share the same retained
+         * memory operand, SIB/REX/PC32 fixup and GNU AT&T register width.
+         * The condition code and opcode stay ISA-owned. */
+        if(memory_source && reg_bits>=16U) {
+            unsigned op=0U,cc=0U;
+            const char *cond=NULL;
+            bool is_cmov=!strncmp(s->op,"cmov",4U);
+            bool valid=false;
+            if(is_cmov) {
+                cond=s->op+4U;
+                if(x64_cond_code(cond,&cc))valid=true;
+                else {
+                    size_t len=strlen(cond);
+                    if(len>1U && len<30U) {
+                        char bare[32];
+                        char suffix=cond[len-1U];
+                        memcpy(bare,cond,len-1U);
+                        bare[len-1U]='\0';
+                        valid=((suffix=='w' && reg_bits==16U) ||
+                               (suffix=='l' && reg_bits==32U) ||
+                               (suffix=='q' && reg_bits==64U)) &&
+                              x64_cond_code(bare,&cc);
+                    }
+                }
+                if(valid)op=0x140U+cc;
+            } else if(!strncmp(s->op,"bsf",3U) ||
+                      !strncmp(s->op,"bsr",3U)) {
+                size_t len=strlen(s->op);
+                bool inferred=len==3U;
+                bool explicit_width=len==4U &&
+                    ((s->op[3]=='w' && reg_bits==16U) ||
+                     (s->op[3]=='l' && reg_bits==32U) ||
+                     (s->op[3]=='q' && reg_bits==64U));
+                if(inferred || explicit_width)
+                    op=s->op[2]=='f'?0x1bcU:0x1bdU;
+            }
+            if(op!=0U){target_opcode=op;chosen=&target_opcode;}
+        }
+        if(!chosen)for (i=0U;i<sizeof(regmem)/sizeof(regmem[0]);++i) {
             /* GAS accepts unsuffixed mem/reg forms if the register
              * establishes the width. Keep the inference in this x86 ISA
              * decoder, never in the Common assembly lexer. */
