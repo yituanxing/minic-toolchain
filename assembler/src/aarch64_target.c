@@ -113,6 +113,7 @@ enum {
     A64_MC_RET,
     A64_MC_MOVZ,
     A64_MC_SVC,
+    A64_MC_BRK,
     A64_MC_B,
     A64_MC_BL,
     A64_MC_CBZ,
@@ -129,11 +130,15 @@ enum {
     A64_MC_MOV_REG,
     A64_MC_ADD_REG,
     A64_MC_SUB_REG,
+    A64_MC_ADDS_REG,
+    A64_MC_SUBS_REG,
     A64_MC_AND_REG,
     A64_MC_ORR_REG,
     A64_MC_EOR_REG,
     A64_MC_ADD_IMM,
     A64_MC_SUB_IMM,
+    A64_MC_ADDS_IMM,
+    A64_MC_SUBS_IMM,
     A64_MC_CMP_REG,
     A64_MC_CMP_IMM,
     A64_MC_CMN_REG,
@@ -284,6 +289,7 @@ static bool parse_integer_family(MiniAsMCInst *inst,
         return true;
     }
     if ((strcmp(op, "add") == 0 || strcmp(op, "sub") == 0 ||
+         strcmp(op, "adds") == 0 || strcmp(op, "subs") == 0 ||
          strcmp(op, "and") == 0 || strcmp(op, "orr") == 0 ||
          strcmp(op, "eor") == 0) && n == 3U) {
         if (!parse_a64_reg(t[0], &rd, &wd, &spd) ||
@@ -293,15 +299,21 @@ static bool parse_integer_family(MiniAsMCInst *inst,
             if (wd != wm || spd || spn || spm) return false;
             kind = strcmp(op, "add") == 0 ? A64_MC_ADD_REG :
                    strcmp(op, "sub") == 0 ? A64_MC_SUB_REG :
+                   strcmp(op, "adds") == 0 ? A64_MC_ADDS_REG :
+                   strcmp(op, "subs") == 0 ? A64_MC_SUBS_REG :
                    strcmp(op, "and") == 0 ? A64_MC_AND_REG :
                    strcmp(op, "orr") == 0 ? A64_MC_ORR_REG : A64_MC_EOR_REG;
             put_reg(&inst->operands[2], rm, wm);
-        } else if ((strcmp(op, "add") == 0 || strcmp(op, "sub") == 0) &&
+        } else if ((strcmp(op, "add") == 0 || strcmp(op, "sub") == 0 ||
+                    strcmp(op, "adds") == 0 || strcmp(op, "subs") == 0) &&
                    parse_signed_number(t[2], &imm) &&
-                   imm >= 0 && imm <= 4095) {
+                   imm >= 0 && (imm<=4095 ||
+                   (imm%4096==0 && imm/4096<=4095))) {
             if ((rd == 31U && !spd) || (rn == 31U && !spn))
                 return false;
-            kind = strcmp(op, "add") == 0 ? A64_MC_ADD_IMM : A64_MC_SUB_IMM;
+            kind = strcmp(op, "add") == 0 ? A64_MC_ADD_IMM :
+                   strcmp(op, "sub") == 0 ? A64_MC_SUB_IMM :
+                   strcmp(op, "adds") == 0 ? A64_MC_ADDS_IMM : A64_MC_SUBS_IMM;
             put_immediate(&inst->operands[2], imm);
         } else return false;
         inst->opcode = kind;
@@ -651,6 +663,24 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
         inst->operands[0].register_64 = reg64;
         inst->operands[1].kind = MINIAS_MC_IMMEDIATE;
         inst->operands[1].immediate = imm;
+    } else if (!strcmp(op,"mov") &&
+               split_two(args,first,sizeof(first),second,sizeof(second)) &&
+               parse_register(first,&reg,&reg64)) {
+        int64_t value;
+        if(!parse_signed_number(second,&value) ||
+           value>=0 || value<INT64_C(-65536)) {
+            minias_set_error(as,"bad-aarch64-mov-negative:%s:line=%zu",
+                             args,stmt->line);
+            free(inst);return false;
+        }
+        inst->opcode=A64_MC_WIDE_IMM;
+        inst->count=2U;
+        inst->encoding=2U; /* MOVN: NOT(imm16) */
+        put_reg(&inst->operands[0],reg,reg64);
+        put_immediate(&inst->operands[1],(~(uint64_t)value)&UINT64_C(0xffff));
+    } else if (strcmp(op, "brk") == 0 && parse_imm16(args,&imm)) {
+        inst->opcode=A64_MC_BRK;inst->count=1U;
+        put_immediate(&inst->operands[0],(int64_t)imm);
     } else if (strcmp(op, "svc") == 0 && parse_imm16(args, &imm)) {
         inst->opcode = A64_MC_SVC;
         inst->count = 1U;
@@ -847,6 +877,10 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
                 ((uint32_t)inst->operands[1].immediate << 5U) |
                 inst->operands[0].reg;
             break;
+        case A64_MC_BRK:
+            code = UINT32_C(0xd4200000) |
+                ((uint32_t)inst->operands[0].immediate<<5U);
+            break;
         case A64_MC_SVC:
             code = UINT32_C(0xd4000001) |
                 ((uint32_t)inst->operands[0].immediate << 5U);
@@ -865,6 +899,8 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
         }
         case A64_MC_ADD_REG:
         case A64_MC_SUB_REG:
+        case A64_MC_ADDS_REG:
+        case A64_MC_SUBS_REG:
         case A64_MC_AND_REG:
         case A64_MC_ORR_REG:
         case A64_MC_EOR_REG: {
@@ -875,6 +911,8 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
             uint32_t base =
                 inst->opcode == A64_MC_ADD_REG ? UINT32_C(0x0b000000) :
                 inst->opcode == A64_MC_SUB_REG ? UINT32_C(0x4b000000) :
+                inst->opcode == A64_MC_ADDS_REG ? UINT32_C(0x2b000000) :
+                inst->opcode == A64_MC_SUBS_REG ? UINT32_C(0x6b000000) :
                 inst->opcode == A64_MC_AND_REG ? UINT32_C(0x0a000000) :
                 inst->opcode == A64_MC_ORR_REG ? UINT32_C(0x2a000000) :
                                                  UINT32_C(0x4a000000);
@@ -883,14 +921,21 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
             break;
         }
         case A64_MC_ADD_IMM:
-        case A64_MC_SUB_IMM: {
+        case A64_MC_SUB_IMM:
+        case A64_MC_ADDS_IMM:
+        case A64_MC_SUBS_IMM: {
             bool sf = inst->operands[0].register_64;
             unsigned rd = inst->operands[0].reg;
             unsigned rn = inst->operands[1].reg;
             unsigned imm = (unsigned)inst->operands[2].immediate;
-            code = (inst->opcode == A64_MC_ADD_IMM ?
-                    UINT32_C(0x11000000) : UINT32_C(0x51000000)) |
+            bool shift12=imm>4095U;
+            if(shift12)imm>>=12U;
+            code = (inst->opcode == A64_MC_ADD_IMM ? UINT32_C(0x11000000):
+                    inst->opcode == A64_MC_SUB_IMM ? UINT32_C(0x51000000):
+                    inst->opcode == A64_MC_ADDS_IMM ? UINT32_C(0x31000000):
+                                                    UINT32_C(0x71000000)) |
                    (sf ? UINT32_C(0x80000000) : 0U) |
+                   (shift12?UINT32_C(0x00400000):0U) |
                    (imm << 10U) | (rn << 5U) | rd;
             break;
         }

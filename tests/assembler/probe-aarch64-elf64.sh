@@ -49,6 +49,17 @@ external_probe:
     cmn w1, #4096
     cmn x0, x1
     cmp x1, #8192
+    brk #0x800
+    brk #65535
+    mov w0, -22
+    mov x1, -95
+    mov w7, -65536
+    subs x2, x2, x1
+    subs x3, x3, x2
+    subs w0, w0, #4096
+    adds x8, x8, #8192
+    adds w2, w1, w0
+    add x4, x4, #4096
     beq after_call
     bne after_call
     bhi after_call
@@ -218,7 +229,9 @@ if "$MINIAS" --target=aarch64 -o "$work/unsupported.o" \
     exit 1
 fi
 # MCInst must be validated while parsing, independent of later emit/ELF.
-for bad_source in 'cset sp, eq' 'cinc w0, x1, eq' \
+for bad_source in 'brk #65536' 'mov w0, -65537' \
+                  'subs x0, w0, x1' 'adds x0, x1, #4097' \
+                  'cset sp, eq' 'cinc w0, x1, eq' \
                   'cset x0, bogus' \
                   'mrs w0, sp_el0' 'msr tpidrro_el0, x0' \
                   'mrs x0, fake_el0' 'dmb #16' 'dmb invalid' \
