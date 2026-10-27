@@ -601,6 +601,62 @@ SRC
         fi
     done
     echo 'MINIC_AARCH64_LINUX_FETCH_LOGIC_GNU_QEMU=PASS variants=24 operations=and,xor,andnot ordering=4 negative=5'
+
+    # Original Linux uaccess.h __uaccess_mask_ptr: bit55 tag BIC immediate.
+    # Not a plain AND lowering: require exact GNU i constant and hardware BIC.
+    cat > "$work/aarch64-uaccess-bic.i" <<'SRC'
+typedef unsigned long u64;
+void *linux_uaccess_mask_ptr(const void *p) {
+    void *safe;
+    __asm__ __volatile__("bic %0, %1, %2"
+                         : "=r"(safe) : "r"(p), "i"(((1UL) << (55))));
+    return safe;
+}
+int main(void) {
+    u64 p = (1UL << 55) | 0x1234UL;
+    return (u64)linux_uaccess_mask_ptr((void *)p) == 0x1234UL ? 0 : 1;
+}
+SRC
+    "$cross_cc" -O0 -x c "$work/aarch64-uaccess-bic.i" \
+        -o "$work/aarch64-uaccess-bic.gnu.elf"
+    "$MINIC_CC" --target=aarch64-linux -S "$work/aarch64-uaccess-bic.i" \
+        -o "$work/aarch64-uaccess-bic.minic.s"
+    grep -Fq 'bic x9, x10, #0x80000000000000' \
+        "$work/aarch64-uaccess-bic.minic.s"
+    "$cross_cc" -x assembler "$work/aarch64-uaccess-bic.minic.s" \
+        -o "$work/aarch64-uaccess-bic.minic.elf"
+    for flavor in gnu minic; do
+        qemu-aarch64 -L /usr/aarch64-linux-gnu \
+            "$work/aarch64-uaccess-bic.$flavor.elf"
+        aarch64-linux-gnu-objdump -d "$work/aarch64-uaccess-bic.$flavor.elf" |
+            grep -Eq '(bic|and)[[:space:]]+x[0-9]+'
+    done
+    for invalid in wrong_mask register_constraint hidden_svc memory_clobber; do
+        case "$invalid" in
+            wrong_mask) mask='((1UL) << 54)'; input=i; instruction='bic %0, %1, %2'; clobber='' ;;
+            register_constraint) mask='((1UL) << 55)'; input=r; instruction='bic %0, %1, %2'; clobber='' ;;
+            hidden_svc) mask='((1UL) << 55)'; input=i; instruction='bic %0, %1, %2; svc #0'; clobber='' ;;
+            memory_clobber) mask='((1UL) << 55)'; input=i; instruction='bic %0, %1, %2'; clobber=': "memory"' ;;
+        esac
+        cat > "$work/aarch64-uaccess-bic-bad-$invalid.i" <<SRC
+void *bad(const void *p) {
+    void *result;
+    __asm__ __volatile__("$instruction" : "=r"(result) :
+                          "r"(p), "$input"($mask) $clobber);
+    return result;
+}
+SRC
+        if "$MINIC_CC" --target=aarch64-linux -S \
+            "$work/aarch64-uaccess-bic-bad-$invalid.i" \
+            -o "$work/aarch64-uaccess-bic-bad-$invalid.s" \
+            >"$work/aarch64-uaccess-bic-bad-$invalid.out" \
+            2>"$work/aarch64-uaccess-bic-bad-$invalid.err"; then
+            echo "FAIL AArch64 unsafe uaccess BIC accepted: $invalid" >&2
+            exit 1
+        fi
+    done
+    echo 'MINIC_AARCH64_LINUX_UACCESS_BIC_GNU_QEMU=PASS tag_bit=55 negative=4'
+
 fi
 
 # Original Linux syscall wrappers have deliberately different argument C
