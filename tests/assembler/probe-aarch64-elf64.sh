@@ -25,6 +25,10 @@ after_call:
 exit_code:
     mov x8, #93
     svc #0
+.globl external_probe
+external_probe:
+    bl external_function
+    b external_branch
 .data
 .globl function_pointer
 function_pointer:
@@ -41,7 +45,17 @@ cmp "$work/mini-text.bin" "$work/gnu-text.bin"
 "$AARCH64_READELF" -Wr "$work/mini.o" | grep -q 'R_AARCH64_CALL26'
 "$AARCH64_READELF" -Wr "$work/mini.o" | grep -q 'R_AARCH64_JUMP26'
 "$AARCH64_READELF" -Wr "$work/mini.o" | grep -q 'R_AARCH64_ABS64'
-"$AARCH64_LD" -static -e _start -o "$work/mini.elf" "$work/mini.o"
+cat >"$work/external.s" <<'EXTERNAL'
+.text
+.globl external_function
+external_function:
+    ret
+.globl external_branch
+external_branch:
+    ret
+EXTERNAL
+"$AARCH64_AS" -o "$work/external.o" "$work/external.s"
+"$AARCH64_LD" -static -e _start -o "$work/mini.elf" "$work/mini.o" "$work/external.o"
 "$QEMU_AARCH64" "$work/mini.elf"
 # Invalid ISA/ABI and unsupported instructions must fail, not silently be
 # assembled as RISC-V bytes or advertise a false ELF machine.

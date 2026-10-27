@@ -127,6 +127,37 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
                              args, stmt->line);
             return false;
         }
+        {
+            /* GAS resolves same-section PC-relative branches at assembly
+             * time. External/cross-section references stay relocation
+             * placeholders. Do not emit both a resolved displacement and
+             * an ELF relocation for the same machine field. */
+            const MiniAsSymbol *target = minias_get_symbol(as, expr.name, false);
+            if (target != NULL && target->defined &&
+                target->section == stmt->section) {
+                int64_t distance;
+                if (target->value > INT64_MAX || stmt->offset > INT64_MAX) {
+                    minias_set_error(as, "aarch64-branch-address-overflow");
+                    return false;
+                }
+                distance = (int64_t)target->value - (int64_t)stmt->offset;
+                if ((expr.addend > 0 && distance > INT64_MAX - expr.addend) ||
+                    (expr.addend < 0 && distance < INT64_MIN - expr.addend)) {
+                    minias_set_error(as, "aarch64-branch-addend-overflow");
+                    return false;
+                }
+                distance += expr.addend;
+                if ((distance & 3) != 0 ||
+                    distance < -INT64_C(134217728) ||
+                    distance > INT64_C(134217724)) {
+                    minias_set_error(as, "aarch64-branch-out-of-range:%s:line=%zu",
+                                     args, stmt->line);
+                    return false;
+                }
+                code |= (uint32_t)(distance / 4) & UINT32_C(0x03ffffff);
+                reloc = 0U;
+            }
+        }
     } else {
         minias_set_error(as, "bad-aarch64-operands:%s:%s:line=%zu",
                          op, args, stmt->line);
