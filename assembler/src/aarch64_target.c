@@ -33,6 +33,59 @@ enum {
     AARCH64_R_CALL26 = 283U
 };
 
+/* GNU AArch64 NAME .req REGISTER aliases belong exclusively to the target.
+ * State is per MiniAs instance, never a static/global register table.
+ * Common owns only the opaque backend state lifecycle and hook routing. */
+typedef struct A64AliasState {
+    unsigned count;
+    struct {char alias[40];char canonical[16];} entries[128];
+} A64AliasState;
+
+static void a64_destroy_aliases(MiniAs *as) {
+    free(as->target_state);
+    as->target_state=NULL;
+}
+
+static char *a64_expand_register_aliases(MiniAs *as,const char *input) {
+    const A64AliasState *st=(const A64AliasState *)as->target_state;
+    size_t len=strlen(input),pos=0U,out=0U,limit;
+    char *expanded;
+    if(!st || !st->count)return minias_strdup(input);
+    if(len>SIZE_MAX/8U-1U)return NULL;
+    limit=8U*(len+1U);
+    expanded=malloc(limit);
+    if(!expanded)return NULL;
+    while(pos<len) {
+        unsigned k;
+        size_t begin=pos;
+        const char *replacement=NULL;
+        if(isalpha((unsigned char)input[pos]) || input[pos]=='_') {
+            ++pos;
+            while(pos<len && (isalnum((unsigned char)input[pos]) ||
+                              input[pos]=='_'))++pos;
+            for(k=0U;k<st->count;++k) {
+                size_t n=strlen(st->entries[k].alias);
+                if(pos-begin==n &&
+                   !memcmp(input+begin,st->entries[k].alias,n)) {
+                    replacement=st->entries[k].canonical;
+                    break;
+                }
+            }
+        }else ++pos;
+        if(replacement) {
+            size_t n=strlen(replacement);
+            if(n>=limit-out){free(expanded);return NULL;}
+            memcpy(expanded+out,replacement,n);out+=n;
+        }else {
+            size_t n=pos-begin;
+            if(n>=limit-out){free(expanded);return NULL;}
+            memcpy(expanded+out,input+begin,n);out+=n;
+        }
+    }
+    expanded[out]='\0';
+    return expanded;
+}
+
 static bool parse_register(const char *text, unsigned *reg, bool *is_64) {
     char *end;
     unsigned long value;
@@ -780,6 +833,16 @@ static bool a64_parse_lse(MiniAs *as,MiniAsMCInst *inst,
 }
 
 static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
+    /* Bind aliases at this precise instruction site; subsequent .unreq
+     * or redefining an alias cannot retroactively change prior MCInsts. */
+    if(as->target_state) {
+        char *expanded=a64_expand_register_aliases(as,stmt->args);
+        if(!expanded) {
+            minias_set_error(as,"out-of-memory:aarch64-req-expansion");
+            return false;
+        }
+        free(stmt->args);stmt->args=expanded;
+    }
     MiniAsMCInst *inst = calloc(1U, sizeof(*inst) +
                                 4U * sizeof(MiniAsMCOperand));
     unsigned reg, imm;
@@ -1595,6 +1658,61 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
 static bool directive(MiniAs *as, const char *op, const char *args,
                       size_t line, bool *handled) {
     *handled = false;
+    if(strcmp(op,".unreq")==0) {
+        A64AliasState *st=(A64AliasState *)as->target_state;
+        unsigned i;
+        *handled=true;
+        if(!st)return true;
+        for(i=0U;i<st->count;++i)
+            if(!strcmp(st->entries[i].alias,args)) {
+                memmove(&st->entries[i],&st->entries[i+1U],
+                        (st->count-i-1U)*sizeof(st->entries[0]));
+                --st->count;
+                return true;
+            }
+        return true;
+    }
+    if(op[0]!='.' && !strncmp(args,".req",4U) &&
+       isspace((unsigned char)args[4])) {
+        const char *canonical=args+4U;
+        A64AliasState *st;
+        unsigned n;bool wide,sp;size_t i;
+        *handled=true;
+        while(isspace((unsigned char)*canonical))++canonical;
+        if(!parse_a64_reg(canonical,&n,&wide,&sp) ||
+           !isalpha((unsigned char)op[0]) ||
+           strlen(op)>=sizeof(((A64AliasState *)0)->entries[0].alias)) {
+            minias_set_error(as,"bad-aarch64-register-alias:%s:%s:line=%zu",
+                             op,canonical,line);
+            return false;
+        }
+        for(i=1U;op[i];++i)
+            if(!isalnum((unsigned char)op[i]) && op[i]!='_') {
+                minias_set_error(as,"bad-aarch64-alias-name:%s:line=%zu",
+                                 op,line);
+                return false;
+            }
+        st=(A64AliasState *)as->target_state;
+        if(!st) {
+            st=calloc(1U,sizeof(*st));
+            if(!st){minias_set_error(as,"out-of-memory:aarch64-aliases");return false;}
+            as->target_state=st;
+        }
+        for(i=0U;i<st->count;++i)
+            if(!strcmp(st->entries[i].alias,op)) {
+                minias_set_error(as,"duplicate-aarch64-alias:%s:line=%zu",
+                                 op,line);
+                return false;
+            }
+        if(st->count>=128U) {
+            minias_set_error(as,"too-many-aarch64-aliases:line=%zu",line);
+            return false;
+        }
+        strcpy(st->entries[st->count].alias,op);
+        strcpy(st->entries[st->count].canonical,canonical);
+        ++st->count;
+        return true;
+    }
     /* GCC emits .arch armv8-a before its first A64 instruction. Verify the
      * exact declared ISA here; never silently accept a richer architecture. */
     if (strcmp(op, ".arch") == 0) {
@@ -1728,6 +1846,7 @@ static const MiniAsTargetOps ops = {
     .comment_prefix = '/', /* //, not #; AArch64 #42 is an immediate. */
     .elf_machine = 183U, /* EM_AARCH64 */
     .parse_target_directive = directive,
+    .destroy_target_state = a64_destroy_aliases,
     .object_attributes = attributes,
     .name = "aarch64",
     .resolve_profile = aarch64_resolve_profile,

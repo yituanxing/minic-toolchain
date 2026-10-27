@@ -293,6 +293,8 @@ typedef struct MiniAs {
     bool c_comment_active;
     bool layout_sensitive; /* conservative full-reparse fallback */
     uint32_t target_options;
+    /* Opaque per-assembly backend parser state, owned and freed by Target. */
+    void *target_state;
     uint32_t target_option_stack[64];
     size_t target_option_depth;
     bool cfi_active;
@@ -379,6 +381,8 @@ typedef struct MiniAsTargetOps {
     uint16_t elf_machine;
     /* Optional: NULL means all directives go to the common grammar. */
     bool (*parse_target_directive)(MiniAs *, const char *, const char *, size_t, bool *);
+    /* Per-target operand/alias registry lifecycle; Common never inspects it. */
+    void (*destroy_target_state)(MiniAs *);
     bool (*validate_common_directive)(MiniAs *, const char *, size_t);
     /* Optional: NULL emits no target-specific attributes section. */
     void (*object_attributes)(const MiniAs *, unsigned char, MiniAsObjectAttribute *);

@@ -599,6 +599,8 @@ void minias_destroy(MiniAs *as) {
         free(as->sections[i].data);
     }
     free(as->sections);
+    if(as->target && as->target->destroy_target_state)
+        as->target->destroy_target_state(as);
     for (i = 0U; i < as->symbol_count; ++i) {
         free(as->symbols[i].name);
     }
@@ -3576,6 +3578,17 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
          strcmp(op, ".skip") == 0 || strcmp(op, ".zero") == 0) &&
         strchr(args, '.') != NULL) {
         as->layout_sensitive = true;
+    }
+    /* GNU .req aliases are written as NAME .req REGISTER. Route this
+     * generic target-directive spelling through the existing backend hook;
+     * Common knows nothing about A64 alias names or register classes. */
+    if(op[0]!='.' && !strncmp(args,".req",4U) &&
+       (args[4]=='\0' || isspace((unsigned char)args[4])) &&
+       as->target->parse_target_directive) {
+        bool handled=false;
+        if(!as->target->parse_target_directive(as,op,args,line,&handled))
+            return false;
+        if(handled)return true;
     }
     if (op[0] == '.') {
         bool handled = false;

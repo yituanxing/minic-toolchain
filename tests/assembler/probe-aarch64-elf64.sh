@@ -37,6 +37,18 @@ exit_code:
 .globl external_probe
 external_probe:
     // GNU-byte ISA test only: privileged MRS/MSR must not execute at EL0.
+    // GNU A64 target-owned register aliases: exact-site alias binding,
+    // memory operands, alias withdrawal and subsequent safe name reuse.
+    wx0 .req w0
+    xx1 .req x1
+    add wx0, wx0, #1
+    mov xx1, xx1
+    ldr x2, [xx1]
+    .unreq wx0
+    .unreq xx1
+    wx0 .req w3
+    add wx0, wx0, #2
+    .unreq wx0
     mrs x0, sp_el0
     mrs x2, sp_el0
     mrs x7, tpidr_el0
@@ -367,6 +379,7 @@ for bad_source in 'ldxr x0, [x1,#4]' 'stxr x0, x1, [x2]' \
                   'lsr w0, w1, #-1' \
                   'lsl x0, w1, #1' \
                   'lsr w0, w1, x2' \
+                  'wx0 .req bogus' \
                   'ccmp x0, w1, #1, eq' \
                   'ccmp x0, #32, #1, eq' \
                   'ccmp x0, #-1, #1, eq' \
