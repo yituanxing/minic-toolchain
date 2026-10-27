@@ -275,7 +275,7 @@ for bad in 'movq %rax, (%eax)' \
            'movq %rax, ext_global(%rbp)' \
            'movq %gs:4294967296, %rax' \
            'movq %fs:pcpu_hot(%rax), %rax' \
-           'movq $4294967296, %r8' \
+           'movq $18446744073709551616, %r8' \
            'cmpq $4294967296, (%rax)' \
            'leaq %rax, (%rsp)' \
            'setne %ah' \
