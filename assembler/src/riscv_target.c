@@ -453,6 +453,27 @@ static bool riscv_relax_instruction(MiniAs *as, const MiniAsStmt *stmt,
     return true;
 }
 
+static bool riscv_resolve_profile(const char *march, const char *mabi,
+                                  MiniAsAssemblyConfig *config,
+                                  char *error, size_t capacity) {
+    MiniAsRiscvProfile profile;
+    if (!minias_riscv_resolve_profile(march, mabi, &profile,
+                                     error, capacity)) {
+        return false;
+    }
+    memset(config, 0, sizeof(*config));
+    config->target = minias_target_riscv();
+    config->elf32 = profile.elf32;
+    config->elf_flags = profile.elf_flags;
+    config->strict_i_xlen = profile.strict_i_xlen;
+    config->isa_explicit = profile.explicit_isa;
+    config->isa_features = profile.features;
+    config->target_attributes_size = profile.arch_attribute_size;
+    memcpy(config->target_attributes, profile.arch_attribute,
+           profile.arch_attribute_size);
+    return true;
+}
+
 static const MiniAsTargetOps riscv_ops = {
     .comment_prefix = '#',
     .elf_machine = 243U, /* EM_RISCV */
@@ -460,6 +481,7 @@ static const MiniAsTargetOps riscv_ops = {
     .validate_common_directive = riscv_validate_common_directive,
     .object_attributes = riscv_object_attributes,
     .name = "riscv",
+    .resolve_profile = riscv_resolve_profile,
     .validate_instruction = riscv_validate_instruction,
     .parse_mcinst = minias_riscv_parse_mcinst,
     .measure_mcinst = minias_riscv_measure_mcinst,

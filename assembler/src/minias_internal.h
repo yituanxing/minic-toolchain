@@ -274,6 +274,7 @@ typedef struct MiniAsObjectAttribute {
     size_t size;
 } MiniAsObjectAttribute;
 
+struct MiniAsAssemblyConfig;
 typedef struct MiniAsTargetOps {
     char comment_prefix;
     uint16_t elf_machine;
@@ -281,6 +282,9 @@ typedef struct MiniAsTargetOps {
     bool (*validate_common_directive)(MiniAs *, const char *, size_t);
     void (*object_attributes)(const MiniAs *, unsigned char, MiniAsObjectAttribute *);
     const char *name;
+    /* Each target owns ISA/ABI/ELF profile validation; the CLI is target-neutral. */
+    bool (*resolve_profile)(const char *, const char *,
+                            struct MiniAsAssemblyConfig *, char *, size_t);
     /* Optional ISA/ABI gate runs before operand parsing and does not
      * independently decode source instruction operands. */
     bool (*validate_instruction)(const MiniAs *, const char *, const char *,
@@ -301,6 +305,7 @@ typedef struct MiniAsTargetOps {
 
 const MiniAsTargetOps *minias_target_riscv(void);
 const MiniAsTargetOps *minias_target_aarch64(void);
+const MiniAsTargetOps *minias_find_target(const char *name);
 
 typedef struct MiniAsAssemblyConfig {
     const MiniAsTargetOps *target;

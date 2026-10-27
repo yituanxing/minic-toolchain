@@ -309,12 +309,28 @@ static void attributes(const MiniAs *as, unsigned char elf_class,
     memset(out, 0, sizeof(*out));
 }
 
+static bool aarch64_resolve_profile(const char *march, const char *mabi,
+                                    MiniAsAssemblyConfig *config,
+                                    char *error, size_t capacity) {
+    if ((march != NULL && strcmp(march, "armv8-a") != 0) ||
+        (mabi != NULL && strcmp(mabi, "lp64") != 0)) {
+        if (capacity != 0U) {
+            (void)snprintf(error, capacity, "unsupported-aarch64-isa-abi");
+        }
+        return false;
+    }
+    memset(config, 0, sizeof(*config));
+    config->target = minias_target_aarch64();
+    return true;
+}
+
 static const MiniAsTargetOps ops = {
     .comment_prefix = '/', /* //, not #; AArch64 #42 is an immediate. */
     .elf_machine = 183U, /* EM_AARCH64 */
     .parse_target_directive = directive,
     .object_attributes = attributes,
     .name = "aarch64",
+    .resolve_profile = aarch64_resolve_profile,
     .parse_mcinst = parse_mcinst,
     .measure_mcinst = aarch64_measure_mcinst,
     .encode = encode,

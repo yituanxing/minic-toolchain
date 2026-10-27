@@ -122,3 +122,28 @@ MiniAS assembly and frozen semantic oracles. Do not waive failed windows,
 and do not rerun expensive full corpus for each MiniAS-only fix. A separate
 MiniC owner should resolve the upstream C-to-S blocker before the next
 consolidated exact-head acceptance.
+
+## Multi-target profile ownership checkpoint (2026-10-27)
+
+The previous CLI selected both backends **and** encoded RISC-V-only profile
+resolution and AArch64-only option validation in `tools/minic-as/main.c`.
+That leaked ISA/ABI policy into the driver and forced driver modification
+whenever a new backend was added.
+
+The driver now resolves a backend through one target registry, asks that
+backend's `resolve_profile` hook for a validated `MiniAsAssemblyConfig`,
+checks that the profile returns the requested target, and calls the existing
+common `minias_assemble_config` entry. RISC-V still owns its full
+`-march/-mabi` validation, ELF32 selection, ISA bitset and Tag_RISCV_arch;
+AArch64 still rejects all unsupported `-march/-mabi` combinations. The
+default target and the historical public assembler API are unchanged.
+
+Architecture review after this batch: adding a backend requires registering
+its target constructor and adding its implementation to the build, **not**
+adding ISA/ABI branches to the CLI or modifying common instruction algorithms.
+This is a boundary improvement, not proof of x86-64 or LoongArch64 support.
+The target-specific fields still resident in `MiniAs`, the shared
+`MiniAsFixupKind` enum, full deferred expressions, full relax/fixup bitfield
+rules and CFI remain separate architecture work. Follow-up multi-target
+corpus discovery must keep failure cohorts target-specific and only elevate
+reproducibly common mechanisms to the shared architecture.
