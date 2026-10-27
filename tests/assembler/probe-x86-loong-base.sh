@@ -57,6 +57,20 @@ entry_x:
     xorl %r9d, 8(%r12)
     andq -16(%rbp), %rax
     orq %r8, 16(%rsp)
+    movzbl %al, %eax
+    movzbl %r8b, %r10d
+    sbbl %eax, %r10d
+    sbbq %r8, %r9
+    sbbl $-1, %eax
+    shrl $1, %ecx
+    shrq $3, %r8
+    salq $4, %rax
+    sarl $2, %r9d
+    testb $1, %al
+    testb $255, %r8b
+    pushq $0
+    pushq $4096
+    movb $0, 7(%rsp)
     popq %rbp
     ret
 .size entry_x, .-entry_x
@@ -68,6 +82,7 @@ unresolved_x86:
     je ext_target
     jne ext_target
     ja ext_target
+    jnb ext_target
     jl ext_target
     movl %eax, 8(%rbx,%r8,2)
     movl 8(%rbx,%r9,4), %eax
@@ -281,7 +296,12 @@ for bad in 'movq %rax, (%eax)' \
            'setne %ah' \
            'movslq %rdi, %r8' \
            'testb %ah, %r8b' \
-           'movabsq $ext_global, (%rax)'; do
+           'movabsq $ext_global, (%rax)' \
+           'movzbl %rax, %eax' \
+           'shrq $256, %rax' \
+           'pushq $4294967296' \
+           'testb $256, %al' \
+           'movb $256, (%rax)'; do
     printf '.text\n%s\n' "$bad" >"$work/invalid-mem.s"
     if "$MINIAS" --target=x86_64 -o "$work/bad-mem.o" \
          "$work/invalid-mem.s" >/dev/null 2>"$work/invalid.err"; then

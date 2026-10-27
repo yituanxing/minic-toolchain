@@ -8,7 +8,7 @@
 
 /* A first, fail-closed GNU AT&T SysV x86-64 target. All common expression,
  * symbol, section, fragment, and ELF handling lives outside this file. */
-enum { X64_ZERO = 1, X64_REG_BINARY, X64_STACK, X64_MOV_IMM32, X64_ENDBR64, X64_ALU_IMM, X64_REG_MEMORY, X64_BRANCH, X64_IMM_MEMORY, X64_MOVQ_IMMREG, X64_MOVABS_IMMREG, X64_SETCC, X64_BINARY8, X64_MOVSLQ };
+enum { X64_ZERO = 1, X64_REG_BINARY, X64_STACK, X64_MOV_IMM32, X64_ENDBR64, X64_ALU_IMM, X64_REG_MEMORY, X64_BRANCH, X64_IMM_MEMORY, X64_MOVQ_IMMREG, X64_MOVABS_IMMREG, X64_SETCC, X64_BINARY8, X64_MOVSLQ, X64_MOVZX8, X64_SHIFT_IMM, X64_TEST8_IMM, X64_PUSH_IMM };
 
 static bool x64_register(const char *text, unsigned *reg, bool *wide) {
     static const char *const names64[16] = {
@@ -199,6 +199,7 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
         {"movq",0x89,true}, {"movl",0x89,false},
         {"addq",0x01,true}, {"addl",0x01,false},
         {"subq",0x29,true}, {"subl",0x29,false},
+        {"sbbq",0x19,true}, {"sbbl",0x19,false},
         {"xorq",0x31,true}, {"xorl",0x31,false},
         {"andq",0x21,true}, {"andl",0x21,false},
         {"orq",0x09,true},  {"orl",0x09,false},
@@ -215,6 +216,7 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
         {"testq",0x85,0x85,true},{"testl",0x85,0x85,false},
         {"addq",0x01,0x03,true},{"addl",0x01,0x03,false},
         {"subq",0x29,0x2b,true},{"subl",0x29,0x2b,false},
+        {"sbbq",0x19,0x1b,true},{"sbbl",0x19,0x1b,false},
         {"andq",0x21,0x23,true},{"andl",0x21,0x23,false},
         {"orq",0x09,0x0b,true},{"orl",0x09,0x0b,false},
         {"xorq",0x31,0x33,true},{"xorl",0x31,0x33,false},
@@ -263,6 +265,51 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
             {"cmpb",0x38U},{"testb",0x84U}
         };
         unsigned first,second;
+        /* 0F B6 /r: byte source, 32-bit zero-extended destination. */
+        if(!strcmp(s->op,"movzbl") &&
+           x64_register8(src,&first) &&
+           x64_register(dst,&second,&wd) && !wd) {
+            m->opcode=X64_MOVZX8;m->count=2U;
+            m->operands[0].kind=MINIAS_MC_REGISTER;
+            m->operands[0].reg=first;
+            m->operands[1].kind=MINIAS_MC_REGISTER;
+            m->operands[1].reg=second;
+            goto done;
+        }
+        if(src[0]=='$' && x64_register(dst,&second,&wd)) {
+            static const struct {const char *op;unsigned group;bool wide;} shifts[]={
+                {"sall",4U,false},{"salq",4U,true},
+                {"shll",4U,false},{"shlq",4U,true},
+                {"shrl",5U,false},{"shrq",5U,true},
+                {"sarl",7U,false},{"sarq",7U,true}
+            };
+            uint64_t count=0U;
+            if(minias_eval_u64_expression(src+1,&count) && count<=255U)
+                for(i=0U;i<sizeof(shifts)/sizeof(shifts[0]);++i)
+                    if(!strcmp(s->op,shifts[i].op) && wd==shifts[i].wide) {
+                        m->opcode=X64_SHIFT_IMM;m->count=2U;
+                        m->encoding=shifts[i].group;
+                        m->operands[0].kind=MINIAS_MC_REGISTER;
+                        m->operands[0].reg=second;
+                        m->operands[0].register_64=wd;
+                        m->operands[1].kind=MINIAS_MC_IMMEDIATE;
+                        m->operands[1].immediate=count;
+                        goto done;
+                    }
+        }
+        if(!strcmp(s->op,"testb") && src[0]=='$' &&
+           x64_register8(dst,&second)) {
+            uint64_t bits;
+            if(minias_eval_u64_expression(src+1,&bits) &&
+               (bits<=255U || bits>=UINT64_MAX-127U)) {
+                m->opcode=X64_TEST8_IMM;m->count=2U;
+                m->operands[0].kind=MINIAS_MC_REGISTER;
+                m->operands[0].reg=second;
+                m->operands[1].kind=MINIAS_MC_IMMEDIATE;
+                m->operands[1].immediate=bits;
+                goto done;
+            }
+        }
         if(x64_register8(src,&first) && x64_register8(dst,&second)) {
             for(i=0U;i<sizeof(byteop)/sizeof(byteop[0]);++i)
                 if(strcmp(s->op,byteop[i].op)==0) {
@@ -328,7 +375,8 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
             {"call",0xe8U},{"callq",0xe8U},
             {"jmp",0xe9U},{"jmpq",0xe9U},
             {"je",0x184U},{"jz",0x184U},{"jne",0x185U},{"jnz",0x185U},
-            {"ja",0x187U},{"jae",0x183U},{"jb",0x182U},{"jbe",0x186U},
+            {"ja",0x187U},{"jae",0x183U},{"jnb",0x183U},
+            {"jb",0x182U},{"jbe",0x186U},
             {"jg",0x18fU},{"jge",0x18dU},{"jl",0x18cU},{"jle",0x18eU}
         };
         for(i=0U;i<sizeof(branches)/sizeof(branches[0]);++i) {
@@ -345,6 +393,16 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
             m->operands[0].kind=MINIAS_MC_SYMBOL;
             m->opcode=X64_BRANCH;m->count=1U;
             m->encoding=branches[i].encoding;
+            goto done;
+        }
+    }
+    if(!strcmp(s->op,"pushq") && s->args[0]=='$') {
+        uint64_t bits;
+        if(minias_eval_u64_expression(s->args+1,&bits) &&
+           (int64_t)bits>=INT32_MIN && (int64_t)bits<=INT32_MAX) {
+            m->opcode=X64_PUSH_IMM;m->count=1U;
+            m->operands[0].kind=MINIAS_MC_IMMEDIATE;
+            m->operands[0].immediate=bits;
             goto done;
         }
     }
@@ -401,6 +459,7 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
         static const struct {const char *op;unsigned group;} groups[]={
             {"addq",0U},{"addl",0U},{"orq",1U},{"orl",1U},
             {"andq",4U},{"andl",4U},{"subq",5U},{"subl",5U},
+            {"sbbq",3U},{"sbbl",3U},
             {"xorq",6U},{"xorl",6U},{"cmpq",7U},{"cmpl",7U}
         };
         uint64_t bits=0U;
@@ -440,9 +499,11 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
             }
             if(!is_sym && x64_is_mem_candidate(dst) &&
                (has_group || !strcmp(s->op,"movq") ||
-                !strcmp(s->op,"movl") || !strcmp(s->op,"testq") ||
+                !strcmp(s->op,"movl") || !strcmp(s->op,"movb") ||
+                !strcmp(s->op,"testq") ||
                 !strcmp(s->op,"testl"))) {
                 MiniAsMCMemory parsed;
+                if(!strcmp(s->op,"movb") && (val < -128 || val > 255))goto invalid;
                 if(!x64_parse_base_memory(dst,&parsed))goto invalid;
                 m->operands[1].memory=malloc(sizeof(parsed));
                 if(!m->operands[1].memory){
@@ -460,8 +521,9 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
                 m->operands[2].immediate=bits;
                 m->encoding=has_group ?
                     (val>=-128 && val<=127?0x83U:0x81U):
+                    (!strcmp(s->op,"movb")?0xc6U:
                     (!strcmp(s->op,"testq")||!strcmp(s->op,"testl")?
-                     0xf7U:0xc7U);
+                     0xf7U:0xc7U));
                 goto done;
             }
         }
@@ -471,6 +533,7 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
      * otherwise imm32; full memory ModR/M remains a separate target task. */
     if ((!strcmp(s->op,"addq") || !strcmp(s->op,"addl") ||
          !strcmp(s->op,"subq") || !strcmp(s->op,"subl") ||
+         !strcmp(s->op,"sbbq") || !strcmp(s->op,"sbbl") ||
          !strcmp(s->op,"andq") || !strcmp(s->op,"andl") ||
          !strcmp(s->op,"orq") || !strcmp(s->op,"orl") ||
          !strcmp(s->op,"xorq") || !strcmp(s->op,"xorl") ||
@@ -485,7 +548,8 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
         if (!errno && end!=src+1 && !*end &&
             num>=INT32_MIN && num<=INT32_MAX) {
             m->opcode=X64_ALU_IMM;m->count=2U;
-            m->encoding=s->op[0]=='s'?5U:
+            m->encoding=!strncmp(s->op,"sbb",3U)?3U:
+                s->op[0]=='s'?5U:
                 s->op[0]=='a' ? (!strncmp(s->op,"and",3U)?4U:0U):
                 s->op[0]=='o'?1U:s->op[0]=='x'?6U:7U;
             m->operands[0].kind=MINIAS_MC_REGISTER;
@@ -555,12 +619,26 @@ static bool x64_measure(MiniAs *as,const MiniAsStmt *s,uint32_t *size) {
             *size=2U+(m->operands[0].reg>=4U||
                        m->operands[1].reg>=4U?1U:0U);return true;
         case X64_MOVSLQ: *size=3U;return true;
+        case X64_MOVZX8:
+            *size=3U+(m->operands[0].reg>=4U ||
+                       m->operands[1].reg>=8U?1U:0U);return true;
+        case X64_SHIFT_IMM:
+            *size=(m->operands[0].register_64 ||
+                   m->operands[0].reg>=8U?1U:0U)+
+                  (m->operands[1].immediate==1U?2U:3U);return true;
+        case X64_TEST8_IMM:
+            *size=m->operands[0].reg==0U?2U:
+                  (3U+(m->operands[0].reg>=4U?1U:0U));return true;
+        case X64_PUSH_IMM: {
+            int32_t imm=(int32_t)(uint32_t)m->operands[0].immediate;
+            *size=imm>=-128 && imm<=127?2U:5U;return true;
+        }
         case X64_BRANCH: *size=m->encoding>=0x100U?6U:5U;return true;
         case X64_IMM_MEMORY:
         case X64_REG_MEMORY: {
             const MiniAsMCMemory *mem=m->operands[1].memory;
             unsigned extra=m->opcode==X64_IMM_MEMORY?
-                (m->encoding==0x83U?1U:4U):0U;
+                (m->encoding==0x83U || m->encoding==0xc6U?1U:4U):0U;
             *size=extra+(mem->address_space?1U:0U) + (m->operands[0].register_64 ||
                    m->operands[0].reg>=8U || mem->base>=8U ||
                    (mem->has_index && mem->index>=8U)?1U:0U) +
@@ -615,6 +693,42 @@ static bool x64_encode(MiniAs *as,const MiniAsStmt *s) {
             code[n++]=(unsigned char)m->encoding;
             code[n++]=(unsigned char)(0xc0U|((r&7U)<<3U)|(d&7U));
             break;
+        case X64_MOVZX8:
+            r=m->operands[0].reg;d=m->operands[1].reg;
+            if(r>=4U || d>=8U)
+                code[n++]=(unsigned char)(0x40U|((d>>3U)<<2U)|(r>>3U));
+            code[n++]=0x0fU;code[n++]=0xb6U;
+            code[n++]=(unsigned char)(0xc0U|((d&7U)<<3U)|(r&7U));
+            break;
+        case X64_SHIFT_IMM:
+            r=m->operands[0].reg;
+            if(m->operands[0].register_64 || r>=8U)
+                code[n++]=(unsigned char)(0x40U|
+                    (m->operands[0].register_64?8U:0U)|(r>>3U));
+            code[n++]=m->operands[1].immediate==1U?0xd1U:0xc1U;
+            code[n++]=(unsigned char)(0xc0U|((m->encoding&7U)<<3U)|(r&7U));
+            if(m->operands[1].immediate!=1U)
+                code[n++]=(unsigned char)m->operands[1].immediate;
+            break;
+        case X64_TEST8_IMM:
+            r=m->operands[0].reg;
+            if(r==0U) code[n++]=0xa8U;
+            else {
+                if(r>=4U)code[n++]=(unsigned char)(0x40U|(r>>3U));
+                code[n++]=0xf6U;
+                code[n++]=(unsigned char)(0xc0U|(r&7U));
+            }
+            code[n++]=(unsigned char)m->operands[1].immediate;
+            break;
+        case X64_PUSH_IMM: {
+            int32_t imm=(int32_t)(uint32_t)m->operands[0].immediate;
+            unsigned i;
+            bool short_imm=imm>=-128 && imm<=127;
+            code[n++]=short_imm?0x6aU:0x68U;
+            for(i=0U;i<(short_imm?1U:4U);++i)
+                code[n++]=(unsigned char)((uint32_t)imm>>(8U*i));
+            break;
+        }
         case X64_MOVSLQ:
             r=m->operands[0].reg;d=m->operands[1].reg;
             code[n++]=(unsigned char)(0x48U|((d>>3U)<<2U)|(r>>3U));
@@ -662,7 +776,7 @@ static bool x64_encode(MiniAs *as,const MiniAsStmt *s) {
         case X64_REG_MEMORY: {
             const MiniAsMCMemory *mem=m->operands[1].memory;
             unsigned extra=m->opcode==X64_IMM_MEMORY?
-                (m->encoding==0x83U?1U:4U):0U;
+                (m->encoding==0x83U || m->encoding==0xc6U?1U:4U):0U;
             uint32_t immediate=extra?
                 (uint32_t)m->operands[2].immediate:0U;
             unsigned low_base=mem->base&7U;
