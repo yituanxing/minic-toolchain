@@ -1263,7 +1263,11 @@ static bool parse_absolute_primary(MiniAsAbsoluteExpressionParser *parser,
         memcpy(name, start, length);
         name[length] = '\0';
         symbol = minias_get_symbol(parser->as, name, false);
-        if (symbol == NULL || !symbol->defined || symbol->value > (uint64_t)INT64_MAX) {
+        if (symbol == NULL || !symbol->defined ||
+            symbol->section == MINIAS_SECTION_COMMON ||
+            symbol->value > (uint64_t)INT64_MAX) {
+            /* ELF COMMON st_value is alignment, not an arithmetic address.
+             * GNU rejects its use in a pre-layout absolute expression. */
             return false;
         }
         if (symbol->section != MINIAS_SECTION_ABS) {

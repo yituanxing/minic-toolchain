@@ -328,6 +328,24 @@ for symbols in x86-mini x86-gnu; do
     grep -Eq '0000000000000000 +4 OBJECT +LOCAL +DEFAULT +[0-9]+ local_comm_symbol' "$work/$symbols-symbols.txt"
 done
 echo 'MINIAS_COMMON_ELF=PASS SHN_COMMON_size_align_repeat_local_BSS'
+cat > "$work/common-not-absolute.s" <<'COMMON_NOT_ABS'
+.comm symbol_in_common,8,8
+.if symbol_in_common
+    nop
+.endif
+COMMON_NOT_ABS
+if "$MINIAS" --target=x86_64 -o "$work/common-invalid.o" \
+        "$work/common-not-absolute.s" >"$work/common-invalid.out" \
+        2>"$work/common-invalid.err"; then
+    echo 'ELF SHN_COMMON alignment misused as absolute expression' >&2
+    exit 1
+fi
+if as --64 -o "$work/common-gnu-invalid.o" \
+        "$work/common-not-absolute.s" >/dev/null 2>&1; then
+    echo 'Unexpected GNU GAS acceptance of COMMON absolute expression' >&2
+    exit 1
+fi
+echo 'MINIAS_COMMON_NONABS=PASS fail_closed_GNU_GAS_agrees'
 readelf -Wr "$work/x86-mini.o" >"$work/x86-rel.txt"
 grep -q R_X86_64_PLT32 "$work/x86-rel.txt"
 grep -q R_X86_64_PC32 "$work/x86-rel.txt"
