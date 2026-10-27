@@ -89,85 +89,105 @@ bool minic_x86_64_asm_bit_scan_template(
  * No hidden target machine registers, jumps, labels, function calls or
  * directives. Every template instruction is made of a conservative x86
  * scalar carry/move mnemonic and references only %0..%{outputs-1}. */
-/* Parser + x86 machine emitter share this strict no-side-channel grammar:
- * each item is cmc or a supported 64-bit two-register mnemonic with exactly
- * two %0..%3 operands. The previous implementation checked only the mnemonic
- * prefix and counted %N occurrences, but silently skipped ANY other bytes
- * (such as '; syscall' or 'call foo') before newline. Since the downstream
- * machine emitter copies the original template, that bypassed ISA ownership.
- * Whitespace, newline and semicolon are explicit item separators here. */
+/* An explicitly bounded grammar for the BusyBox/TLS P-256 register +
+ * pointer-memory inline ASM. No source bytes may reach GNU AS except:
+ *   %N, (%N), K*8(%N) for K=1..3, $0 and $1.
+ * Core/machine independently verify operand roles and physical registers.
+ * We retain the already-supported pointer forms; rejecting them as
+ * register-only would cause a regression, and ignoring unchecked suffixes
+ * permitted an injected second instruction. */
 static bool x86_matched_space(char c) {
     return c == ' ' || c == '\t' || c == '\r';
 }
-
-bool minic_x86_64_asm_matched_template(const char *template_text,
-                                        size_t template_length, size_t outputs) {
+static bool x86_matched_ref(const char *text, size_t len, size_t *cursor,
+                            size_t outputs, size_t *references) {
+    size_t i = *cursor;
+    if (i >= len || text[i] != '%' || i + 1U >= len ||
+        text[i + 1U] < '0' ||
+        (size_t)(text[i + 1U] - '0') >= outputs)
+        return false;
+    *cursor = i + 2U;
+    ++*references;
+    return true;
+}
+static bool x86_matched_operand(const char *text, size_t len, size_t *cursor,
+                                size_t outputs, size_t *refs) {
+    size_t i = *cursor;
+    if (i >= len) return false;
+    if (text[i] == '$') {
+        ++i;
+        if (i >= len || (text[i] != '0' && text[i] != '1'))
+            return false;
+        ++i;
+    } else {
+        bool memory = false;
+        if (i + 4U < len &&
+            text[i] >= '1' && text[i] <= '3' &&
+            text[i + 1U] == '*' && text[i + 2U] == '8' &&
+            text[i + 3U] == '(') {
+            i += 4U;
+            memory = true;
+        } else if (text[i] == '(') {
+            ++i;
+            memory = true;
+        }
+        if (!x86_matched_ref(text, len, &i, outputs, refs))
+            return false;
+        if (memory) {
+            if (i >= len || text[i] != ')')
+                return false;
+            ++i;
+        }
+    }
+    *cursor = i;
+    return true;
+}
+bool minic_x86_64_asm_matched_template(const char *text,
+                                        size_t length, size_t outputs) {
     static const char *const binary_ops[] = {
         "movq", "addq", "adcq", "subq", "sbbq"
     };
     size_t i = 0U, lines = 0U, refs = 0U, k;
-    if (template_text == NULL || template_length == 0U ||
-        template_length > 1024U || outputs == 0U || outputs > 4U)
+    if (text == NULL || length == 0U || length > 1024U ||
+        outputs == 0U || outputs > 4U)
         return false;
-    while (i < template_length) {
-        bool carry_only = false, matched = false;
-        while (i < template_length &&
-               (x86_matched_space(template_text[i]) ||
-                template_text[i] == '\n' || template_text[i] == ';'))
+    while (i < length) {
+        bool matched = false;
+        while (i < length &&
+               (x86_matched_space(text[i]) || text[i] == '\n' ||
+                text[i] == ';'))
             ++i;
-        if (i == template_length) break;
-        if (i + 3U <= template_length &&
-            memcmp(template_text + i, "cmc", 3U) == 0) {
-            carry_only = true;
+        if (i == length) break;
+        if (i + 3U <= length && memcmp(text + i, "cmc", 3U) == 0) {
             i += 3U;
         } else {
             for (k = 0U; k < sizeof(binary_ops) / sizeof(binary_ops[0]); ++k) {
-                if (i + 4U <= template_length &&
-                    memcmp(template_text + i, binary_ops[k], 4U) == 0) {
+                if (i + 4U <= length &&
+                    memcmp(text + i, binary_ops[k], 4U) == 0) {
                     matched = true;
                     i += 4U;
                     break;
                 }
             }
-            if (!matched) return false;
-            /* Require a real separator after the mnemonic, not e.g.
-             * movq_suffix masquerading as movq. */
-            if (i >= template_length || !x86_matched_space(template_text[i]))
+            if (!matched || i >= length || !x86_matched_space(text[i]))
                 return false;
-            while (i < template_length && x86_matched_space(template_text[i]))
-                ++i;
-            for (k = 0U; k < 2U; ++k) {
-                if (i + 2U > template_length ||
-                    template_text[i] != '%' ||
-                    template_text[i + 1U] < '0' ||
-                    (size_t)(template_text[i + 1U] - '0') >= outputs)
-                    return false;
-                i += 2U;
-                ++refs;
-                while (i < template_length && x86_matched_space(template_text[i]))
-                    ++i;
-                if (k == 0U) {
-                    if (i >= template_length || template_text[i] != ',')
-                        return false;
-                    ++i;
-                    while (i < template_length && x86_matched_space(template_text[i]))
-                        ++i;
-                }
-            }
-        }
-        while (i < template_length && x86_matched_space(template_text[i]))
+            while (i < length && x86_matched_space(text[i])) ++i;
+            if (!x86_matched_operand(text, length, &i, outputs, &refs))
+                return false;
+            while (i < length && x86_matched_space(text[i])) ++i;
+            if (i == length || text[i] != ',') return false;
             ++i;
-        /* Never allow an ignored instruction suffix, address decoration,
-         * extra operand, literal register or comment to reach GNU AS. */
-        if (i < template_length && template_text[i] != '\n' &&
-            template_text[i] != ';')
+            while (i < length && x86_matched_space(text[i])) ++i;
+            if (!x86_matched_operand(text, length, &i, outputs, &refs))
+                return false;
+        }
+        while (i < length && x86_matched_space(text[i])) ++i;
+        if (i < length && text[i] != '\n' && text[i] != ';')
             return false;
-        if (carry_only && refs == 0U && i == template_length)
-            return false; /* cmc alone cannot qualify a matched group */
         ++lines;
-        if (i < template_length) ++i;
+        if (i < length) ++i;
     }
-    return lines > 0U && refs >= 2U;
+    return lines != 0U && refs != 0U;
 }
 
 static bool qualified(const MinicC0Program *program,

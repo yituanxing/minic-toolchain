@@ -14,6 +14,15 @@ static int probe(const char *s, size_t outputs, bool expected) {
 int main(void) {
     int failed = 0;
     failed += probe("movq %0, %1\n\tadcq %2,%3", 4, true);
+    failed += probe("movq (%0), %3\n\tadcq 1*8(%1), %3", 4, true);
+    failed += probe("movq %3, 3*8(%2)", 4, true);
+    failed += probe("addq $1, (%0)\n\tsbbq $0, 2*8(%0)", 1, true);
+    failed += probe("subq $1, (%0)", 1, true);
+    failed += probe("movq (%0), %3; syscall", 4, false);
+    failed += probe("movq 4*8(%0), %3", 4, false);
+    failed += probe("movq 1*16(%0), %3", 4, false);
+    failed += probe("movq $2, (%0)", 1, false);
+    failed += probe("movq $1, %gs:(%0)", 1, false);
     failed += probe("cmc\n\tsbbq %0,%1", 2, true);
     failed += probe("addq %0,%1;movq %1,%0", 2, true);
     failed += probe("cmc", 4, false);
@@ -29,6 +38,6 @@ int main(void) {
     failed += probe("movq %0,%1\n\tud2", 2, false);
     failed += probe("movq %0,%1\n\taddq %1,%0", 1, false);
     if (failed != 0) return 1;
-    puts("MINIC_X86_MATCHED_GNU_TEMPLATE_SECURITY=PASS cases=16");
+    puts("MINIC_X86_MATCHED_GNU_TEMPLATE_SECURITY=PASS cases=25");
     return 0;
 }
