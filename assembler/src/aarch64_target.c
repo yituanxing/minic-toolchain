@@ -784,7 +784,7 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
         char tok[4][96];
         unsigned n,rn,rm,cc;
         bool wide,otherwide,sp;
-        int64_t imm,nzcv;
+        int64_t ccmp_immediate,nzcv;
         bool literal;
         if(!split_operands(args,tok,&n) || n!=4U ||
            !parse_a64_reg(tok[0],&rn,&wide,&sp) || sp ||
@@ -794,8 +794,8 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
                              args,stmt->line);
             free(inst);return false;
         }
-        literal=parse_signed_number(tok[1],&imm);
-        if(literal && (imm<0 || imm>31)) {
+        literal=parse_signed_number(tok[1],&ccmp_immediate);
+        if(literal && (ccmp_immediate<0 || ccmp_immediate>31)) {
             minias_set_error(as,"bad-aarch64-ccmp-immediate:%s:line=%zu",
                              tok[1],stmt->line);
             free(inst);return false;
@@ -812,7 +812,7 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
                        (wide?UINT32_C(0x80000000):0U)|
                        (literal?UINT32_C(0x800):0U);
         put_reg(&inst->operands[0],rn,wide);
-        if(literal)put_immediate(&inst->operands[1],imm);
+        if(literal)put_immediate(&inst->operands[1],ccmp_immediate);
         else put_reg(&inst->operands[1],rm,wide);
         put_immediate(&inst->operands[2],nzcv);
         put_immediate(&inst->operands[3],cc);
