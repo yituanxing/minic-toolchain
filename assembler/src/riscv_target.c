@@ -418,11 +418,16 @@ static bool riscv_relax_instruction(MiniAs *as, const MiniAsStmt *stmt,
     *expanded = stmt->size;
     if (stmt->size != 4U || !is_conditional_branch_op(stmt->op))
         return true;
-    comma = strrchr(stmt->args, ',');
-    if (comma == NULL) return true;
-    target_text = comma + 1;
-    while (*target_text == ' ' || *target_text == '\t') ++target_text;
-    if (!minias_parse_symbol_addend(target_text, &expr)) return true;
+    if (stmt->mcinst != NULL && stmt->mcinst->opcode == RV_MC_BRANCH) {
+        expr = stmt->mcinst->operands[2].symbol;
+    } else {
+        /* Legacy relaxation path for opcode families not yet migrated. */
+        comma = strrchr(stmt->args, ',');
+        if (comma == NULL) return true;
+        target_text = comma + 1;
+        while (*target_text == ' ' || *target_text == '\t') ++target_text;
+        if (!minias_parse_symbol_addend(target_text, &expr)) return true;
+    }
     symbol = minias_get_symbol(as, expr.name, false);
     if (symbol == NULL || !symbol->defined ||
         symbol->section != stmt->section ||
@@ -453,6 +458,7 @@ static const MiniAsTargetOps riscv_ops = {
     .object_attributes = riscv_object_attributes,
     .name = "riscv",
     .measure = riscv_measure,
+    .parse_mcinst = minias_riscv_parse_mcinst,
     .encode = minias_riscv_encode,
     .relax_instruction = riscv_relax_instruction,
     .expanded_instruction_size = riscv_expanded_size,

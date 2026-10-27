@@ -3,6 +3,13 @@
 
 #define MINIAS_RISCV_OPTION_PIC 1U
 
+/* Shared target-owned MC opcode families: used by parser, encoder and
+ * relaxation without any mnemonic parsing in the common assembler. */
+enum MiniAsRiscvMCFamily {
+    RV_MC_R = 1, RV_MC_I, RV_MC_LOAD, RV_MC_STORE, RV_MC_U,
+    RV_MC_BRANCH, RV_MC_JAL
+};
+
 /* RISC-V-only psABI relocation constants. */
 #define MINIAS_R_RISCV_32 1U
 #define MINIAS_R_RISCV_64 2U

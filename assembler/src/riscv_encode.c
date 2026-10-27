@@ -1185,7 +1185,351 @@ bool minias_riscv_measure(unsigned strict_i_xlen,
     return false;
 }
 
+
+/* RISC-V's first production MCInst family: fixed-width integer ALU,
+ * memory, control transfer and selected ISA extensions. The descriptors
+ * contain machine encoding templates but no source operands. */
+typedef struct RvMCDesc {
+    const char *name;
+    unsigned family;
+    uint32_t base;
+} RvMCDesc;
+#define RVD(name, group, base) {name, RV_MC_##group, base}
+static const RvMCDesc rv_mc_table[] = {
+    RVD("add",R,0x00000033U), RVD("sub",R,0x40000033U),
+    RVD("sll",R,0x00001033U), RVD("slt",R,0x00002033U),
+    RVD("sltu",R,0x00003033U), RVD("xor",R,0x00004033U),
+    RVD("srl",R,0x00005033U), RVD("sra",R,0x40005033U),
+    RVD("or",R,0x00006033U), RVD("and",R,0x00007033U),
+    RVD("mul",R,0x02000033U), RVD("mulh",R,0x02001033U),
+    RVD("mulhu",R,0x02003033U), RVD("div",R,0x02004033U),
+    RVD("divu",R,0x02005033U), RVD("rem",R,0x02006033U),
+    RVD("remu",R,0x02007033U),
+    RVD("addw",R,0x0000003bU), RVD("subw",R,0x4000003bU),
+    RVD("sllw",R,0x0000103bU), RVD("srlw",R,0x0000503bU),
+    RVD("sraw",R,0x4000503bU),
+    RVD("mulw",R,0x0200003bU), RVD("divw",R,0x0200403bU),
+    RVD("divuw",R,0x0200503bU), RVD("remw",R,0x0200603bU),
+    RVD("remuw",R,0x0200703bU),
+    RVD("sgt",R,0x00002033U), RVD("sgtu",R,0x00003033U),
+    RVD("addi",I,0x00000013U), RVD("addiw",I,0x0000001bU),
+    RVD("slti",I,0x00002013U), RVD("sltiu",I,0x00003013U),
+    RVD("xori",I,0x00004013U), RVD("ori",I,0x00006013U),
+    RVD("andi",I,0x00007013U),
+    RVD("slli",I,0x00001013U), RVD("srli",I,0x00005013U),
+    RVD("srai",I,0x40005013U),
+    RVD("slliw",I,0x0000101bU), RVD("srliw",I,0x0000501bU),
+    RVD("sraiw",I,0x4000501bU),
+    RVD("sext.w",I,0x0000001bU),
+    RVD("orc.b",I,0x28705013U), RVD("rev8",I,0x6b805013U),
+    RVD("ctz",I,0x60101013U),
+    RVD("lb",LOAD,0x00000003U), RVD("lh",LOAD,0x00001003U),
+    RVD("lw",LOAD,0x00002003U), RVD("ld",LOAD,0x00003003U),
+    RVD("lbu",LOAD,0x00004003U), RVD("lhu",LOAD,0x00005003U),
+    RVD("lwu",LOAD,0x00006003U),
+    RVD("sb",STORE,0x00000023U), RVD("sh",STORE,0x00001023U),
+    RVD("sw",STORE,0x00002023U), RVD("sd",STORE,0x00003023U),
+    RVD("lui",U,0x00000037U), RVD("auipc",U,0x00000017U),
+    RVD("beq",BRANCH,0x00000063U), RVD("bne",BRANCH,0x00001063U),
+    RVD("blt",BRANCH,0x00004063U), RVD("bge",BRANCH,0x00005063U),
+    RVD("bltu",BRANCH,0x00006063U), RVD("bgeu",BRANCH,0x00007063U),
+    RVD("beqz",BRANCH,0x00000063U), RVD("bnez",BRANCH,0x00001063U),
+    RVD("bltz",BRANCH,0x00004063U), RVD("bgez",BRANCH,0x00005063U),
+    RVD("bgtz",BRANCH,0x00004063U), RVD("blez",BRANCH,0x00005063U),
+    RVD("bgt",BRANCH,0x00004063U), RVD("ble",BRANCH,0x00005063U),
+    RVD("bgtu",BRANCH,0x00006063U), RVD("bleu",BRANCH,0x00007063U),
+    RVD("j",JAL,0x0000006fU), RVD("jal",JAL,0x0000006fU)
+};
+#undef RVD
+
+static void rv_set_reg(MiniAsMCOperand *op, int num) {
+    op->kind = MINIAS_MC_REGISTER;
+    op->reg = (unsigned)num;
+}
+static void rv_set_imm(MiniAsMCOperand *op, int64_t num) {
+    op->kind = MINIAS_MC_IMMEDIATE;
+    op->immediate = (uint64_t)num;
+}
+
+/* Only this target knows operand shape; all GNU aliases stay in the
+ * front-end parser, while encoder uses canonical rd/rs1/rs2/symbol fields.
+ * Other opcode families intentionally remain on the legacy proven path. */
+bool minias_riscv_parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
+    const RvMCDesc *desc = NULL;
+    char operands[8][128];
+    size_t count, i;
+    int rd = -1, rs1 = -1, rs2 = -1;
+    int64_t imm = 0;
+    bool is_imm = false;
+    MiniAsMCInst *inst;
+    unsigned family, slots;
+    uint32_t encoding;
+    char base[128];
+    const char *op = stmt->op;
+
+    for (i = 0U; i < sizeof(rv_mc_table) / sizeof(rv_mc_table[0]); ++i) {
+        if (strcmp(op, rv_mc_table[i].name) == 0) {
+            desc = &rv_mc_table[i];
+            break;
+        }
+    }
+    if (desc == NULL) return true;
+    family = desc->family;
+    encoding = desc->base;
+    count = split_operands(stmt->args, operands, 8U);
+
+    if (family == RV_MC_R || family == RV_MC_I) {
+        bool two = strcmp(op,"sext.w") == 0 ||
+                   strcmp(op,"orc.b") == 0 ||
+                   strcmp(op,"rev8") == 0 || strcmp(op,"ctz") == 0;
+        if (count != (two ? 2U : 3U)) goto invalid;
+        if (two) {
+            rd = reg_number(operands[0]);
+            rs1 = reg_number(operands[1]);
+            imm = strcmp(op,"orc.b") == 0 ? 0x287 :
+                  strcmp(op,"rev8") == 0 ? 0x6b8 :
+                  strcmp(op,"ctz") == 0 ? 0x601 : 0;
+            family = RV_MC_I;
+        } else if (count == 3U) {
+            rd = reg_number(operands[0]);
+            rs1 = reg_number(operands[1]);
+            if (family == RV_MC_R) {
+                rs2 = reg_number(operands[2]);
+                if (rs2 < 0 &&
+                    (strcmp(op, "add") == 0 || strcmp(op, "sub") == 0 ||
+                     strcmp(op, "and") == 0 || strcmp(op, "or") == 0 ||
+                     strcmp(op, "xor") == 0 || strcmp(op, "sll") == 0 ||
+                     strcmp(op, "srl") == 0 || strcmp(op, "sra") == 0) &&
+                    parse_i64(operands[2], &imm)) {
+                    family = RV_MC_I;
+                    is_imm = true;
+                    encoding = 0x13U | (encoding & 0x7000U);
+                    if (strcmp(op,"sub") == 0) {
+                        if (imm == INT64_MIN) goto invalid;
+                        imm = -imm;
+                    } else if (strcmp(op,"sra") == 0) {
+                        encoding |= 0x40000000U;
+                    }
+                }
+            } else {
+                is_imm = parse_i64(operands[2], &imm);
+            }
+        }
+        if (rd < 0 || rs1 < 0 || (family == RV_MC_R && rs2 < 0) ||
+            (family == RV_MC_I && !is_imm && count != 2U &&
+             !parse_i64(operands[2], &imm))) goto invalid;
+        if (family == RV_MC_I) {
+            bool shift = ((encoding & 0x7000U) == 0x1000U ||
+                          (encoding & 0x7000U) == 0x5000U) &&
+                         (strcmp(op,"slli")==0 || strcmp(op,"srli")==0 ||
+                          strcmp(op,"srai")==0 || strcmp(op,"slliw")==0 ||
+                          strcmp(op,"srliw")==0 || strcmp(op,"sraiw")==0 ||
+                          strcmp(op,"sll")==0 || strcmp(op,"srl")==0 ||
+                          strcmp(op,"sra")==0);
+            if (shift) {
+                int max = ((encoding & 0x7fU) == 0x1bU) ? 31 : 63;
+                if (imm < 0 || imm > max) goto invalid;
+            } else if ((strcmp(op, "orc.b") != 0) &&
+                       (strcmp(op, "rev8") != 0) &&
+                       (strcmp(op, "ctz") != 0) &&
+                       (imm < -2048 || imm > 2047)) goto invalid;
+        }
+        if (strcmp(op, "sgt")==0 || strcmp(op,"sgtu")==0) {
+            int tmp = rs1; rs1 = rs2; rs2 = tmp;
+        }
+        slots = 3U;
+    } else if (family == RV_MC_LOAD || family == RV_MC_STORE) {
+        if (count != 2U) goto fallback; /* symbolic load/store expansion */
+        rd = reg_number(operands[0]);
+        if (rd < 0) goto invalid;
+        if (!parse_mem(operands[1], &imm, base)) goto fallback;
+        rs1 = reg_number(base);
+        if (rs1 < 0) goto invalid;
+        slots = 3U;
+    } else if (family == RV_MC_U) {
+        if (count != 2U) goto invalid;
+        rd = reg_number(operands[0]);
+        if (rd < 0 || !parse_i64(operands[1], &imm)) goto invalid;
+        slots = 2U;
+    } else if (family == RV_MC_BRANCH) {
+        bool two = strcmp(op, "beqz") == 0 || strcmp(op, "bnez") == 0 ||
+                   strcmp(op, "bltz") == 0 || strcmp(op, "bgez") == 0 ||
+                   strcmp(op, "bgtz") == 0 || strcmp(op, "blez") == 0;
+        bool reverse = strcmp(op, "bgt") == 0 || strcmp(op, "ble") == 0 ||
+                       strcmp(op, "bgtu") == 0 || strcmp(op, "bleu") == 0;
+        const char *symbol_text;
+        if (count != (two ? 2U : 3U)) goto invalid;
+        rs1 = reg_number(operands[0]);
+        if (rs1 < 0) goto invalid;
+        if (two) {
+            rs2 = 0;
+            symbol_text = operands[1];
+            if (strcmp(op,"bgtz") == 0 || strcmp(op,"blez") == 0) {
+                rs2 = rs1; rs1 = 0;
+            }
+        } else {
+            rs2 = reg_number(operands[1]);
+            if (rs2 < 0) goto invalid;
+            if (reverse) {int tmp=rs1;rs1=rs2;rs2=tmp;}
+            symbol_text = operands[2];
+        }
+        slots = 3U;
+        inst = calloc(1U, sizeof(*inst) + slots * sizeof(*inst->operands));
+        if (inst == NULL) goto oom;
+        inst->opcode=family; inst->encoding=encoding; inst->count=slots;
+        rv_set_reg(&inst->operands[0],rs1);
+        rv_set_reg(&inst->operands[1],rs2);
+        inst->operands[2].kind = MINIAS_MC_SYMBOL;
+        if (!minias_parse_symbol_addend(symbol_text,
+                                        &inst->operands[2].symbol)) {
+            free(inst);
+            goto invalid;
+        }
+        stmt->mcinst=inst;
+        return true;
+    } else if (family == RV_MC_JAL) {
+        const char *sym;
+        rd = strcmp(op, "j") == 0 ? 0 : 1;
+        if (strcmp(op, "j") == 0 && count != 1U) goto invalid;
+        if (count == 1U) sym = operands[0];
+        else if (count == 2U && strcmp(op,"jal")==0) {
+            rd=reg_number(operands[0]);
+            sym=operands[1];
+        } else goto invalid;
+        if (rd < 0) goto invalid;
+        slots=2U;
+        inst=calloc(1U,sizeof(*inst)+slots*sizeof(*inst->operands));
+        if (inst==NULL) goto oom;
+        inst->opcode=family; inst->encoding=encoding; inst->count=slots;
+        rv_set_reg(&inst->operands[0],rd);
+        inst->operands[1].kind=MINIAS_MC_SYMBOL;
+        if (!minias_parse_symbol_addend(sym,&inst->operands[1].symbol)){
+            free(inst);goto invalid;
+        }
+        stmt->mcinst=inst;
+        return true;
+    } else return true;
+
+    inst=calloc(1U,sizeof(*inst)+slots*sizeof(*inst->operands));
+    if(inst==NULL)goto oom;
+    inst->opcode=family;inst->encoding=encoding;inst->count=slots;
+    rv_set_reg(&inst->operands[0],rd);
+    if(family==RV_MC_R) {
+        rv_set_reg(&inst->operands[1],rs1);
+        rv_set_reg(&inst->operands[2],rs2);
+    } else if(family==RV_MC_I) {
+        rv_set_reg(&inst->operands[1],rs1);
+        rv_set_imm(&inst->operands[2],imm);
+    } else if(family==RV_MC_LOAD || family==RV_MC_STORE){
+        rv_set_reg(&inst->operands[1],rs1);
+        rv_set_imm(&inst->operands[2],imm);
+    } else rv_set_imm(&inst->operands[1],imm);
+    stmt->mcinst=inst;
+    return true;
+fallback:
+    return true;
+invalid:
+    minias_set_error(as,"invalid-riscv-mcinst:%s:%s:line=%zu",
+                     op,stmt->args,stmt->line);
+    return false;
+oom:
+    minias_set_error(as,"out-of-memory:riscv-mcinst");
+    return false;
+}
+
+static bool rv_encode_mcinst(MiniAs *as, const MiniAsStmt *stmt) {
+    const MiniAsMCInst *m=stmt->mcinst;
+    int rd=(int)m->operands[0].reg,rs1=0,rs2=0;
+    int64_t imm=0,distance;
+    uint32_t base=m->encoding,code=0U;
+    MiniAsSymbolExpr const *expr=NULL;
+    MiniAsSymbol const *symbol=NULL;
+    if (m->count > 1U && m->operands[1].kind==MINIAS_MC_REGISTER)
+        rs1=(int)m->operands[1].reg;
+    if (m->count > 2U && m->operands[2].kind==MINIAS_MC_REGISTER)
+        rs2=(int)m->operands[2].reg;
+    if (m->count > 2U && m->operands[2].kind==MINIAS_MC_IMMEDIATE)
+        imm=(int64_t)m->operands[2].immediate;
+    if (m->opcode==RV_MC_R)
+        code=enc_r(base&0x7fU,rd,(base>>12U)&7U,rs1,rs2,base>>25U);
+    else if(m->opcode==RV_MC_I || m->opcode==RV_MC_LOAD) {
+        if(m->opcode==RV_MC_I && m->count==2U)
+            imm=(int64_t)m->operands[1].immediate;
+        code=base | ((uint32_t)rd<<7U) |
+             ((uint32_t)rs1<<15U) |
+             (((uint32_t)imm&0xfffU)<<20U);
+    } else if(m->opcode==RV_MC_STORE) {
+        uint32_t bits=(uint32_t)imm&0xfffU;
+        code=base | ((uint32_t)rd<<20U) |
+             ((uint32_t)rs1<<15U) |
+             ((bits&31U)<<7U) | (((bits>>5U)&127U)<<25U);
+    } else if(m->opcode==RV_MC_U)
+        code=base | ((uint32_t)rd<<7U) |
+             (((uint32_t)m->operands[1].immediate&0xfffffU)<<12U);
+    else if(m->opcode==RV_MC_BRANCH || m->opcode==RV_MC_JAL) {
+        expr=&m->operands[m->opcode==RV_MC_BRANCH ? 2U : 1U].symbol;
+        symbol=minias_get_symbol(as,expr->name,false);
+        if(m->opcode==RV_MC_BRANCH &&
+           (symbol==NULL || !symbol->defined ||
+            symbol->section!=stmt->section)){
+            minias_set_error(as,"unsupported-relocation:%s:line=%zu",
+                             stmt->op,stmt->line);
+            return false;
+        }
+        if(symbol!=NULL && symbol->defined &&
+           symbol->section==stmt->section &&
+           (m->opcode==RV_MC_BRANCH ||
+            symbol->subsection==stmt->subsection)){
+            if(symbol->value>INT64_MAX||stmt->offset>INT64_MAX){
+                minias_set_error(as,"riscv-branch-offset-overflow");
+                return false;
+            }
+            distance=(int64_t)symbol->value-(int64_t)stmt->offset;
+            if((expr->addend>0 && distance>INT64_MAX-expr->addend)||
+               (expr->addend<0 && distance<INT64_MIN-expr->addend)){
+                minias_set_error(as,"riscv-branch-addend-overflow");
+                return false;
+            }
+            distance+=expr->addend;
+            if(m->opcode==RV_MC_JAL){
+                if((distance&1)!=0||distance<-(1LL<<20)||
+                   distance>(1LL<<20)-2){
+                    minias_set_error(as,"jal-range:line=%zu",stmt->line);
+                    return false;
+                }
+                return append_u32(as,stmt->section,enc_j(rd,distance));
+            }
+            if(stmt->size==8U){
+                int64_t jdiff=distance-4;
+                if((jdiff&1)!=0||jdiff<-(1LL<<20)||jdiff>(1LL<<20)-2){
+                    minias_set_error(as,"branch-long-jal-range:%s:line=%zu",
+                                     stmt->op,stmt->line);
+                    return false;
+                }
+                return append_u32(as,stmt->section,
+                           enc_b((base>>12U &7U)^1U,rd,rs1,8)) &&
+                       append_u32(as,stmt->section,enc_j(0,jdiff));
+            }
+            if((distance&1)!=0||distance< -4096||distance>4094){
+                minias_set_error(as,"branch-range:%s:line=%zu",
+                                 stmt->op,stmt->line);
+                return false;
+            }
+            return append_u32(as,stmt->section,
+                              enc_b((base>>12U)&7U,rd,rs1,distance));
+        }
+        return append_u32(as,stmt->section,enc_j(rd,0)) &&
+               minias_add_fixup(as,stmt->section,stmt->offset,
+                                MINIAS_FIXUP_RV_JAL,4U,expr->name,expr->addend);
+    } else {
+        minias_set_error(as,"unknown-riscv-mcinst");
+        return false;
+    }
+    return append_u32(as,stmt->section,code);
+}
+
 bool minias_riscv_encode(MiniAs *as, const MiniAsStmt *stmt) {
+    if (stmt->mcinst != NULL) return rv_encode_mcinst(as,stmt);
     char operands[8][128];
     size_t count = split_operands(stmt->args, operands, 8U);
     if (strcmp(stmt->op, "orc.b") == 0 ||

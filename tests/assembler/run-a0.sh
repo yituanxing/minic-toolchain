@@ -1772,4 +1772,92 @@ printf '%s\n' "$typed_relocs" | grep -q 'R_RISCV_64'
 printf '%s\n' "$typed_relocs" | grep -q 'external_data[[:space:]]*+[[:space:]]*8'
 echo 'MINIAS_TYPED_FIXUP=PASS call_plt=1 pcrel_hi20=1 pcrel_lo12_i=1 abs64_addend8=1'
 
+
+# The RV64 production integer/branch/memory instructions now travel
+# through typed MCInst. Test all opcode-format families against genuine
+# GNU GAS bytes, including symbolic JAL, short conditional branches,
+# immediate variants, RV64 word ops, and M-extension arithmetic.
+cat >"$work/riscv-mcinst.s" <<'EOF_RV_MC'
+.text
+.globl riscv_mcinst
+riscv_mcinst:
+    add a0, a1, a2
+    sub a3, a4, a5
+    sll t0, t1, t2
+    srl s0, s1, s2
+    and a0, a1, a2
+    or a0, a1, a2
+    xor a0, a1, a2
+    slt a0, a1, a2
+    sltu a0, a1, a2
+    mul a0, a1, a2
+    mulh a0, a1, a2
+    mulhu a0, a1, a2
+    div a0, a1, a2
+    remu a0, a1, a2
+    addw a0, a1, a2
+    subw a0, a1, a2
+    mulw a0, a1, a2
+    divuw a0, a1, a2
+    addi a0, a1, -101
+    addiw a0, a1, 101
+    xori a0, a1, 1023
+    sltiu a0, a1, 200
+    slli a0, a1, 12
+    srli a0, a1, 33
+    srai a0, a1, 3
+    slliw a0, a1, 6
+    sraiw a0, a1, 7
+    sext.w a0, a1
+    lui a0, 0x123
+    auipc a1, 0x456
+    lb a0, 2(a1)
+    lh a0, 4(a1)
+    lw a0, 8(a1)
+    lwu a0, 16(a1)
+    ld a0, 24(a1)
+    sb a0, 2(a1)
+    sh a0, 4(a1)
+    sw a0, 8(a1)
+    sd a0, 16(a1)
+    beq a0, a1, branch_target
+    bne a0, a1, branch_target
+    bgeu a0, a1, branch_target
+    beqz a0, branch_target
+    bgt a0, a1, branch_target
+    jal ra, branch_target
+    j branch_target
+branch_target:
+    ret
+EOF_RV_MC
+"$MINIAS" -march=rv64im -mabi=lp64 -o "$work/riscv-mcinst.o" \
+    "$work/riscv-mcinst.s"
+# GNU GAS requires explicit -i mnemonics for immediate instructions, but
+# preserve legacy MiniAS arithmetic-with-immediate compatibility separately.
+cat >"$work/riscv-mcinst-alias.s" <<'EOF_RV_ALIAS'
+.text
+.globl rv_mc_alias
+rv_mc_alias:
+    add a0, a1, 4
+    sub a0, a1, 4
+    and a0, a1, 3
+    srl a0, a1, 4
+    ret
+EOF_RV_ALIAS
+"$MINIAS" -march=rv64im -mabi=lp64 \
+    -o "$work/riscv-mcinst-alias.o" "$work/riscv-mcinst-alias.s"
+if command -v riscv64-linux-gnu-as >/dev/null 2>&1 &&
+   command -v riscv64-linux-gnu-objcopy >/dev/null 2>&1; then
+    riscv64-linux-gnu-as -march=rv64im -mabi=lp64 \
+        -o "$work/riscv-mcinst.gnu.o" "$work/riscv-mcinst.s"
+    riscv64-linux-gnu-objcopy -j .text -O binary \
+        "$work/riscv-mcinst.o" "$work/riscv-mcinst.bin"
+    riscv64-linux-gnu-objcopy -j .text -O binary \
+        "$work/riscv-mcinst.gnu.o" "$work/riscv-mcinst.gnu.bin"
+    cmp "$work/riscv-mcinst.bin" "$work/riscv-mcinst.gnu.bin"
+    echo 'MINIAS_RV_MCINST=PASS GNU_AS_bytes_equal=1 typed_R_I_U_load_store_branch_jal=1'
+else
+    echo 'MINIAS_RV_MCINST=PASS GNU_AS_bytes_equal=SKIP(toolchain-unavailable)'
+fi
+
 echo "MINIAS_A0=PASS objects=30 abi_flags=3 format=ELF64-RISCV-ET_REL relocations=23 strings=2 pseudos=17 previous=3 subsection=2 numeric_labels=18 ecall=1 isa_next=13 csr_amo=8 sfence_vma=3 fence_i=1 vsetvl=1 vsetvli=1 vmv_v_i=4 rept=2 nested_rept=1 irp=4 section_stack=1 org=3 local_difference=1 lr_sc=2 inline_labels=2 branch_pseudos=8 extern=1 symbol_minus_dot=4 symbol_difference=1 absolute32=1 jal=2 jal_subsection=1 high_numeric_labels=2 u64_data=3 raw_insn=4 set_alias=3 move=1 numeric_zero=1 immediate_product=2 shift_immediate=1 incbin=1 align_expr=1 native_expr=6 native_zbb_tail_memexpr=1 native_jalr_symbol_load=1 native_forward_short=1 native_mixed_macro=1 native_divided_difference=1 native_symbol_addend_expr=1 native_add_sub_immediate=1 native_cfi_boundary=1 native_gas_forms=1 native_set_size=1 native_macro_comma=1 native_macro_quotes=1 pic_la_got=1 sext_w=1 macro=4 conditional=1"

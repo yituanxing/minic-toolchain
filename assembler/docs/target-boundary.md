@@ -19,9 +19,14 @@ Explicit -march=rv32i/rv64i retains existing fail-closed machine-code checks.
    MCInst exactly once at fragment creation; encode consumes MCInst instead
    of re-splitting source text. MCInst owns a flexible operand array, without
    a hard-coded two-operand limit. Common core owns MCInst lifecycle, and the
-   target supplies parse_mcinst. The larger RISC-V encoder still uses legacy
-   operand strings and must be migrated in grouped opcode families before
-   retiring that path. Comment stripping is target-configurable and .option
+   target supplies parse_mcinst. The RISC-V production encoder now uses
+   typed MCInst operands for the R/I/U arithmetic families, byte/half/word/
+   dword memory operands, B-type local and long branches and symbolic JAL.
+   ISA M and RV64 word arithmetic share the same tables; GNU compatibility
+   aliases (such as add/sub immediate forms) remain supported.
+   Remaining FP/vector/CSR/atomics and multiword pseudos use the legacy
+   string-based decoder until their separate oracle-covered migration.
+   Comment stripping is target-configurable and .option
    dispatch belongs to the RISC-V target; common parser still owns GNU-style
    statement grammar. Raw executable data/.org ISA guards are now target-owned,
    allowing the AArch64 backend to assemble raw executable .word where legal.

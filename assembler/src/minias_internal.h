@@ -128,6 +128,7 @@ typedef struct MiniAsMCOperand {
 } MiniAsMCOperand;
 typedef struct MiniAsMCInst {
     unsigned opcode;
+    uint32_t encoding; /* target-owned base machine-bit template */
     unsigned count;
     /* Allocate exactly the number of operands required by the target.
      * RV64 vector ops may have six; future targets need not resize MCInst. */
@@ -311,6 +312,7 @@ bool minias_riscv_measure(unsigned strict_i_xlen,
                           uint32_t *size,
                           char *reason,
                           size_t reason_size);
+bool minias_riscv_parse_mcinst(MiniAs *as, MiniAsStmt *stmt);
 bool minias_riscv_encode(MiniAs *as, const MiniAsStmt *stmt);
 
 #endif
