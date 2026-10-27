@@ -288,7 +288,7 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
         {"rep movsq",{0xf3,0x48,0xa5},3},
         {"rep stosb",{0xf3,0xaa},2}
     };
-    static const struct {const char *op; unsigned char opcode; bool wide;} binary[]={
+    static const struct {const char *op; unsigned opcode; bool wide;} binary[]={
         {"movq",0x89,true}, {"movl",0x89,false},
         {"addq",0x01,true}, {"addl",0x01,false},
         {"subq",0x29,true}, {"subl",0x29,false},
