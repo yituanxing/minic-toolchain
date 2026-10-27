@@ -166,6 +166,25 @@ set +e
 rc=$?
 set -e
 test "$rc" -eq 42 || { echo "LoongArch return-PC GNU/QEMU failed: $rc" >&2; exit 1; }
+# Valid LoongArch physical clobbers must pass SOURCE grammar but may not
+# turn the currently unqualified vDSO syscall into arbitrary machine code.
+cat > "$work/clobber-only.i" <<'EOF'
+void unqualified(void) {
+    __asm__ volatile("syscall 0" ::: "$t0", "$t1", "$t2",
+                     "$t3", "$t4", "$t5", "$t6", "$t7", "$t8", "memory");
+}
+EOF
+if "$cc" --target=loongarch64-linux -S "$work/clobber-only.i" \
+    -o "$work/clobber-only.s" >"$work/clobber-only.log" 2>&1; then
+    echo 'Unqualified GNU syscall accepted without machine contract' >&2
+    exit 1
+fi
+if grep -F 'unsupported GNU asm register clobber for target' \
+    "$work/clobber-only.log" >/dev/null; then
+    echo 'Valid GNU $t0..$t8 clobber syntax rejected by parser' >&2
+    exit 1
+fi
+echo 'LOONGARCH_GNU_CLOBBER_GRAMMAR=PASS aliases=9 unqualified_syscall=REJECTED'
 # The backend MUST reject frames beyond depth zero. The nonzero level is
 # deliberately not supported by our ABI descriptor, even if GCC accepts it.
 cat > "$work/invalid-return-pc.i" <<'EOF'
