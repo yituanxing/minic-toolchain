@@ -532,6 +532,85 @@ SRC
         test ! -e "$work/atomic-invalid-$invalid.s"
     done
     echo 'MINIC_LOONGARCH64_ATOMIC_GNU_QEMU=PASS variants=8 negative=5 hardware=1'
+
+    # Original Linux 6.6 atomic{,64}_fetch_{and,or,xor,add}_relaxed:
+    # the AMO result is the OLD in-memory value; software load/store is invalid.
+    cat > "$work/atomic-fetch-kernel.i" <<'SRC'
+struct atomic32 { int counter; };
+struct atomic64 { long long counter; };
+static int fetch_and32(int n,struct atomic32 *p){
+  int old; __asm__ __volatile__("amand_db.w %1, %2, %0\n"
+          : "+ZB"(p->counter), "=&r"(old) : "r"(n) : "memory"); return old;
+}
+static int fetch_or32(int n,struct atomic32 *p){
+  int old; __asm__ __volatile__("amor_db.w %1, %2, %0\n"
+          : "+ZB"(p->counter), "=&r"(old) : "r"(n) : "memory"); return old;
+}
+static int fetch_xor32(int n,struct atomic32 *p){
+  int old; __asm__ __volatile__("amxor_db.w %1, %2, %0\n"
+          : "+ZB"(p->counter), "=&r"(old) : "r"(n) : "memory"); return old;
+}
+static int fetch_add32(int n,struct atomic32 *p){
+  int old; __asm__ __volatile__("amadd_db.w %1, %2, %0\n"
+          : "+ZB"(p->counter), "=&r"(old) : "r"(n) : "memory"); return old;
+}
+static long long fetch_and64(long long n,struct atomic64 *p){
+  long long old; __asm__ __volatile__("amand_db.d %1, %2, %0\n"
+          : "+ZB"(p->counter), "=&r"(old) : "r"(n) : "memory"); return old;
+}
+static long long fetch_or64(long long n,struct atomic64 *p){
+  long long old; __asm__ __volatile__("amor_db.d %1, %2, %0\n"
+          : "+ZB"(p->counter), "=&r"(old) : "r"(n) : "memory"); return old;
+}
+static long long fetch_xor64(long long n,struct atomic64 *p){
+  long long old; __asm__ __volatile__("amxor_db.d %1, %2, %0\n"
+          : "+ZB"(p->counter), "=&r"(old) : "r"(n) : "memory"); return old;
+}
+static long long fetch_add64(long long n,struct atomic64 *p){
+  long long old; __asm__ __volatile__("amadd_db.d %1, %2, %0\n"
+          : "+ZB"(p->counter), "=&r"(old) : "r"(n) : "memory"); return old;
+}
+int main(void){
+  struct atomic32 a={0x31}; struct atomic64 b={0x31};
+  int x=fetch_and32(0x30,&a),y=fetch_or32(6,&a);
+  int z=fetch_xor32(5,&a),w=fetch_add32(10,&a);
+  long long q=fetch_and64(0x30,&b),r=fetch_or64(6,&b);
+  long long t=fetch_xor64(5,&b),u=fetch_add64(10,&b);
+  return x==0x31&&y==0x30&&z==0x36&&w==0x33&&a.counter==0x3d
+      &&q==0x31&&r==0x30&&t==0x36&&u==0x33&&b.counter==0x3d ? 0 : 1;
+}
+SRC
+    "$cross_cc" -O0 -x c "$work/atomic-fetch-kernel.i" -o "$work/atomic-fetch-kernel.gnu.elf"
+    "$MINIC_CC" --target=loongarch64-linux -S "$work/atomic-fetch-kernel.i" \
+        -o "$work/atomic-fetch-kernel.minic.s"
+    for mnemonic in amand_db.w amor_db.w amxor_db.w amadd_db.w \
+                    amand_db.d amor_db.d amxor_db.d amadd_db.d; do
+        grep -Fq "$mnemonic \$t2, \$t0, \$t1" "$work/atomic-fetch-kernel.minic.s"
+    done
+    "$cross_cc" -x assembler "$work/atomic-fetch-kernel.minic.s" \
+        -o "$work/atomic-fetch-kernel.minic.elf"
+    qemu-loongarch64 -L /usr/loongarch64-linux-gnu "$work/atomic-fetch-kernel.gnu.elf"
+    qemu-loongarch64 -L /usr/loongarch64-linux-gnu "$work/atomic-fetch-kernel.minic.elf"
+    for invalid in suffix constraint oldval_input no_memory wrong_width; do
+        case "$invalid" in
+          suffix) asm='__asm__ __volatile__("amand_db.d %1, %2, %0; syscall" : "+ZB"(v), "=&r"(old) : "r"(n) : "memory");' ;;
+          constraint) asm='__asm__ __volatile__("amand_db.d %1, %2, %0" : "+m"(v), "=&r"(old) : "r"(n) : "memory");' ;;
+          oldval_input) asm='__asm__ __volatile__("amand_db.d %1, %2, %0" : "+ZB"(v), "=m"(old) : "r"(n) : "memory");' ;;
+          no_memory) asm='__asm__ __volatile__("amand_db.d %1, %2, %0" : "+ZB"(v), "=&r"(old) : "r"(n));' ;;
+          wrong_width) asm='__asm__ __volatile__("amand_db.d %1, %2, %0" : "+ZB"(v32), "=&r"(old) : "r"(n) : "memory");' ;;
+        esac
+        printf 'int main(void){ long v=7,n=1,old=0; int v32=7; %s return 0; }\n' \
+            "$asm" > "$work/atomic-fetch-invalid-$invalid.i"
+        if "$MINIC_CC" --target=loongarch64-linux -S \
+            "$work/atomic-fetch-invalid-$invalid.i" \
+            -o "$work/atomic-fetch-invalid-$invalid.s" \
+            >"$work/atomic-fetch-invalid-$invalid.out" \
+            2>"$work/atomic-fetch-invalid-$invalid.err"; then
+            echo "FAIL unqualified fetch-AMO accepted: $invalid" >&2
+            exit 1
+        fi
+    done
+    echo 'MINIC_LOONGARCH64_LINUX_FETCH_AMO_GNU_QEMU=PASS variants=8 negative=5 old_value=1'
 fi
 
 # Architecture-specific machine syntax is still owned by real GNU AS.
