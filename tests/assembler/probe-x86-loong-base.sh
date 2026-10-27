@@ -236,7 +236,9 @@ cat > "$work/la.s" <<'ASM_LA'
 .globl entry_la
 .type entry_la, @function
 entry_la:
+.Lgcc_anchor_start:
     nop
+.Lgcc_anchor_after_nop = .
     add.d $a0, $a0, $a1
     addi.d $sp, $sp, -16
     st.d $ra, $sp, 8
