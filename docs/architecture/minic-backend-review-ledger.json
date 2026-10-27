@@ -10,7 +10,7 @@
     672,
     673
   ],
-  "audit_in_progress": "GNU x86/AArch64/LoongArch file-scope ASM QUALIFIED on 632f9de; common ELF alias implementation on d94b228 with original GNU AS differential pending. Distinguish unreviewed changed blobs from true completed source reviews. RV64 Linux 2064 Image/P1 and current-source self-host remain open.",
+  "audit_in_progress": "New LoongArch64 DBAR ISA-owned qualified GNU structured ASM only; GNU AS and QEMU acceptance pending. Exact-head native strict + four-arch runtime must pass, and GNU source ownership ledger tracks new blobs. Do not claim Linux .i→.s progression before an explicit current-head census or whole Image/P1.",
   "next_deep_review": [
     "src/target/aarch64/asm_legalize.c",
     "src/target/loongarch64/frame_emit.c",
@@ -506,6 +506,16 @@
       "ci_touched_in": [
         665
       ]
+    },
+    "src/target/loongarch64/asm_contract.c": {
+      "blob": "0ce1755666ee9162659f869fb8c02b47af301d1c",
+      "review_depth": "targeted",
+      "ci_touched_in": []
+    },
+    "src/target/loongarch64/asm_contract.h": {
+      "blob": "7fb73c185c090dc691d0ee40530f3273e2beb699",
+      "review_depth": "targeted",
+      "ci_touched_in": []
     },
     "src/target/loongarch64/block_emit.c": {
       "blob": "2e25e9ceb5581dcf2a65ad077cd9b5cab090f99b",

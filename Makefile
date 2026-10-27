@@ -228,6 +228,7 @@ MINIC_SOURCES := \
 	src/target/aarch64/fp_emit.c \
 	src/target/aarch64/asm_legalize.c \
 	src/target/loongarch64/codegen.c \
+	src/target/loongarch64/asm_contract.c \
 	src/target/loongarch64/block_emit.c \
 	src/target/loongarch64/residual_emit.c \
 	src/target/loongarch64/scalar_normalize.c \
