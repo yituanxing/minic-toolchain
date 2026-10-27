@@ -256,7 +256,13 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
         {"andq",0x21,0x23,true},{"andl",0x21,0x23,false},
         {"orq",0x09,0x0b,true},{"orl",0x09,0x0b,false},
         {"xorq",0x31,0x33,true},{"xorl",0x31,0x33,false},
-        {"leaq",0,0x8d,true},{"leal",0,0x8d,false}
+        {"leaq",0,0x8d,true},{"leal",0,0x8d,false},
+        /* 0F xx /r: same typed memory ModR/M machinery. */
+        {"btq",0xa3,0,true},{"btl",0xa3,0,false},
+        {"btsq",0xab,0,true},{"btsl",0xab,0,false},
+        {"btrq",0xb3,0,true},{"btrl",0xb3,0,false},
+        {"btcq",0xbb,0,true},{"btcl",0xbb,0,false},
+        {"xaddq",0xc1,0,true},{"xaddl",0xc1,0,false}
     };
     MiniAsMCInst *m=calloc(1U,sizeof(*m)+3U*sizeof(MiniAsMCOperand));
     unsigned i, rs, rd;
@@ -751,7 +757,9 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
         }
         *m->operands[1].memory=parsed;
         m->opcode=X64_REG_MEMORY; m->count=2U;
-        m->encoding=*chosen;
+        m->encoding=*chosen |
+            ((!strncmp(s->op,"bt",2U) || !strncmp(s->op,"xadd",4U)) ?
+             0x100U : 0U);
         m->operands[0].kind=MINIAS_MC_REGISTER;
         m->operands[0].reg=r;
         m->operands[0].register_64=wide;
@@ -811,7 +819,8 @@ static bool x64_measure(MiniAs *as,const MiniAsStmt *s,uint32_t *size) {
             const MiniAsMCMemory *mem=m->operands[1].memory;
             unsigned extra=m->opcode==X64_IMM_MEMORY?
                 (m->encoding==0x83U || m->encoding==0xc6U || m->encoding==0x80U || m->encoding==0xf6U?1U:4U):0U;
-            *size=extra+(mem->address_space?1U:0U) + (m->operands[0].register_64 ||
+            *size=extra+(m->encoding>=0x100U?1U:0U) +
+                  (mem->address_space?1U:0U) + (m->operands[0].register_64 ||
                    m->operands[0].reg>=8U || mem->base>=8U ||
                    (mem->has_index && mem->index>=8U)?1U:0U) +
                   2U + (((mem->address_space && !mem->pc_relative) ||
@@ -1045,6 +1054,7 @@ static bool x64_encode(MiniAs *as,const MiniAsStmt *s) {
                     ((r>>3U)<<2U) |
                     ((mem->has_index?mem->index>>3U:0U)<<1U) |
                     (mem->base>>3U));
+            if(m->encoding>=0x100U)code[n++]=0x0fU;
             code[n++]=(unsigned char)m->encoding;
             code[n++]=(unsigned char)((((mem->pc_relative || mem->address_space)?0U:mod)<<6U)|
                 ((r&7U)<<3U)|

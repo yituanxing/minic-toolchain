@@ -64,6 +64,12 @@ entry_x:
     cmpq %rax, 8(%r12)
     cmpq 8(%r12), %rax
     cmpl %r9d, -8(%rbp)
+    btq %rax, __cpu_online_mask(%rip)
+    btsq %r9, __cpu_online_mask(%rip)
+    btrl %r10d, 8(%rsp)
+    btcq %r11, 16(%r12)
+    xaddl %eax, (%rdi)
+    xaddq %r13, 8(%rsp)
     testq %r8, 16(%rsp)
     testl 8(%r12), %eax
     movq %r8, 16(%r10,%r11,8)
@@ -422,6 +428,8 @@ for bad in 'movq %rax, (%eax)' \
            'jmp *%ecx' \
            'shrq %dl, %rax' \
            'shrl %rax' \
+           'btq %eax, (%rdi)' \
+           'xaddl %rax, (%rdi)' \
            'movl %ds:pcpu_hot(%rip), %eax' \
            'movq %gs:bogus(%r8,%r9,5), %rax'; do
     printf '.text\n%s\n' "$bad" >"$work/invalid-mem.s"
