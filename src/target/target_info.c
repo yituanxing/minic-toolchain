@@ -254,8 +254,12 @@ const MinicTargetInfo *minic_target_info_for_architecture(
             x86_64_target.variadic_scalar_read_kind = MINIC_VARIADIC_SCALAR_READ_ABI_CURSOR;
             x86_64_target.variadic_linear_slot_bytes = 0U;
             x86_64_target.variadic_copy_kind = MINIC_VARIADIC_COPY_ABI_STATE;
-            /* Machine-level frame address and return address support awaits
-             * the x86-64 backend.  Do not accept these builtins prematurely. */
+            /* Every SysV x86 function begins with push rbp/mov rsp,rbp.
+             * Hence true entry return-PC is 8(rbp), and frame level0 is
+             * rbp even after nested CALL, stack alignment or alloca.
+             * No cross-function unwind or nonzero level is admitted. */
+            x86_64_target.call_frame_return_address_level0 = true;
+            x86_64_target.call_frame_frame_address_level0 = true;
         }
         return &x86_64_target;
     }

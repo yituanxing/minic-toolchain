@@ -35,6 +35,24 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
         return minic_x86_64_emit_call_instruction(out, program, target, fn,
                                                   frame, ins, instruction_id);
     switch (ins->kind) {
+    case MINIC_CORE_INSTRUCTION_CALL_FRAME_ADDRESS: {
+        const MinicCoreCallFrameAddressKind kind =
+            ins->value.call_frame_address.kind;
+        const MinicCallFrameAddressKind source_kind =
+            kind == MINIC_CORE_CALL_FRAME_ADDRESS_RETURN
+                ? MINIC_CALL_FRAME_ADDRESS_RETURN
+                : MINIC_CALL_FRAME_ADDRESS_FRAME;
+        /* SysV prologue retains caller-PC at 8(rbp) and an invariant RBP
+         * frame anchor. No fabricated code pointer or chain unwinding. */
+        if (!minic_multi_direct_call_frame_level0_shape(fn, ins, kind) ||
+            !minic_target_info_call_frame_address_supported(
+                target, source_kind, ins->value.call_frame_address.level) ||
+            fprintf(out, kind == MINIC_CORE_CALL_FRAME_ADDRESS_RETURN
+                             ? "  movq 8(%%rbp), %%rax\n"
+                             : "  movq %%rbp, %%rax\n") < 0)
+            return false;
+        return x86_value_store(out, frame, ins->result);
+    }
     case MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT:
         if (minic_type_is_int128_integer(ins->type)) {
             if (fprintf(out, "  movabsq $%" PRId64 ", %%rax\n",

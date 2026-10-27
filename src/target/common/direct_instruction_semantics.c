@@ -6,18 +6,26 @@
 
 #include <stdint.h>
 
-bool minic_multi_direct_call_frame_return_level0_shape(
-    const MinicCoreFunction *fn, const MinicCoreInstruction *ins) {
+bool minic_multi_direct_call_frame_level0_shape(
+    const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
+    MinicCoreCallFrameAddressKind kind) {
     MinicType pointee;
     return fn != NULL && ins != NULL &&
+           (kind == MINIC_CORE_CALL_FRAME_ADDRESS_RETURN ||
+            kind == MINIC_CORE_CALL_FRAME_ADDRESS_FRAME) &&
            ins->kind == MINIC_CORE_INSTRUCTION_CALL_FRAME_ADDRESS &&
            ins->result < fn->value_count &&
            ins->value.call_frame_address.level == 0U &&
-           ins->value.call_frame_address.kind ==
-               MINIC_CORE_CALL_FRAME_ADDRESS_RETURN &&
+           ins->value.call_frame_address.kind == kind &&
            minic_type_pointee(ins->type, &pointee) &&
            minic_type_is_void(pointee) &&
            minic_type_equal(fn->values[ins->result].type, ins->type);
+}
+
+bool minic_multi_direct_call_frame_return_level0_shape(
+    const MinicCoreFunction *fn, const MinicCoreInstruction *ins) {
+    return minic_multi_direct_call_frame_level0_shape(
+        fn, ins, MINIC_CORE_CALL_FRAME_ADDRESS_RETURN);
 }
 
 bool minic_multi_direct_fixed_register_write_shape(
