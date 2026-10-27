@@ -8,7 +8,7 @@
 
 /* A first, fail-closed GNU AT&T SysV x86-64 target. All common expression,
  * symbol, section, fragment, and ELF handling lives outside this file. */
-enum { X64_ZERO = 1, X64_REG_BINARY, X64_STACK, X64_MOV_IMM32, X64_ENDBR64, X64_ALU_IMM, X64_REG_MEMORY, X64_BRANCH, X64_IMM_MEMORY, X64_MOVQ_IMMREG, X64_MOVABS_IMMREG, X64_SETCC, X64_BINARY8, X64_MOVSLQ, X64_MOVZX8, X64_SHIFT_IMM, X64_TEST8_IMM, X64_PUSH_IMM };
+enum { X64_ZERO = 1, X64_REG_BINARY, X64_STACK, X64_MOV_IMM32, X64_ENDBR64, X64_ALU_IMM, X64_REG_MEMORY, X64_BRANCH, X64_IMM_MEMORY, X64_MOVQ_IMMREG, X64_MOVABS_IMMREG, X64_SETCC, X64_BINARY8, X64_MOVSLQ, X64_MOVZX8, X64_SHIFT_IMM, X64_TEST8_IMM, X64_PUSH_IMM, X64_CMOV_REG, X64_SHIFT_CL };
 
 static bool x64_register(const char *text, unsigned *reg, bool *wide) {
     static const char *const names64[16] = {
@@ -40,6 +40,23 @@ static bool x64_register8(const char *text,unsigned *reg) {
     if(*text!='%')return false;
     for(i=0U;i<16U;++i)
         if(strcmp(text+1,low8[i])==0){*reg=i;return true;}
+    return false;
+}
+
+/* One ISA-owned condition-code table shared by CMOV and Jcc aliases. */
+static bool x64_cond_code(const char *suffix, unsigned *cc) {
+    static const struct {const char *name;unsigned cc;} names[]={
+        {"o",0U},{"no",1U},{"b",2U},{"c",2U},{"nae",2U},
+        {"ae",3U},{"nb",3U},{"nc",3U},{"e",4U},{"z",4U},
+        {"ne",5U},{"nz",5U},{"be",6U},{"na",6U},
+        {"a",7U},{"nbe",7U},{"s",8U},{"ns",9U},
+        {"p",10U},{"pe",10U},{"np",11U},{"po",11U},
+        {"l",12U},{"nge",12U},{"ge",13U},{"nl",13U},
+        {"le",14U},{"ng",14U},{"g",15U},{"nle",15U}
+    };
+    size_t i;
+    for(i=0U;i<sizeof(names)/sizeof(names[0]);++i)
+        if(!strcmp(suffix,names[i].name)){*cc=names[i].cc;return true;}
     return false;
 }
 
@@ -265,6 +282,34 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
             {"cmpb",0x38U},{"testb",0x84U}
         };
         unsigned first,second;
+        if(!strncmp(s->op,"cmov",4U) &&
+           x64_register(src,&first,&ws) &&
+           x64_register(dst,&second,&wd) && wd==ws) {
+            const char *name=s->op+4U;
+            char cond[20];
+            size_t clen=strlen(name);
+            unsigned cc;
+            if(clen!=0U && clen<sizeof(cond)) {
+                memcpy(cond,name,clen+1U);
+                /* AT&T suffix l/q and GNU unsuffixed size inference. */
+                if((cond[clen-1U]=='q' || cond[clen-1U]=='l') &&
+                    clen>1U && x64_cond_code(cond,&cc)==false) {
+                    bool width=cond[clen-1U]=='q';
+                    cond[clen-1U]='\0';
+                    if(width!=wd)goto invalid;
+                }
+                if(x64_cond_code(cond,&cc)) {
+                    m->opcode=X64_CMOV_REG;m->count=2U;
+                    m->encoding=cc;
+                    m->operands[0].kind=MINIAS_MC_REGISTER;
+                    m->operands[0].reg=first;
+                    m->operands[0].register_64=ws;
+                    m->operands[1].kind=MINIAS_MC_REGISTER;
+                    m->operands[1].reg=second;
+                    goto done;
+                }
+            }
+        }
         /* 0F B6 /r: byte source, 32-bit zero-extended destination. */
         if(!strcmp(s->op,"movzbl") &&
            x64_register8(src,&first) &&
@@ -276,7 +321,7 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
             m->operands[1].reg=second;
             goto done;
         }
-        if(src[0]=='$' && x64_register(dst,&second,&wd)) {
+        if((src[0]=='$' || !strcmp(src,"%cl")) && x64_register(dst,&second,&wd)) {
             static const struct {const char *op;unsigned group;bool wide;} shifts[]={
                 {"sall",4U,false},{"salq",4U,true},
                 {"shll",4U,false},{"shlq",4U,true},
@@ -284,10 +329,13 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
                 {"sarl",7U,false},{"sarq",7U,true}
             };
             uint64_t count=0U;
-            if(minias_eval_u64_expression(src+1,&count) && count<=255U)
+            if((!strcmp(src,"%cl") ||
+                (minias_eval_u64_expression(src+1,&count) && count<=255U)))
                 for(i=0U;i<sizeof(shifts)/sizeof(shifts[0]);++i)
                     if(!strcmp(s->op,shifts[i].op) && wd==shifts[i].wide) {
-                        m->opcode=X64_SHIFT_IMM;m->count=2U;
+                        m->opcode=!strcmp(src,"%cl")?
+                            X64_SHIFT_CL:X64_SHIFT_IMM;
+                        m->count=2U;
                         m->encoding=shifts[i].group;
                         m->operands[0].kind=MINIAS_MC_REGISTER;
                         m->operands[0].reg=second;
@@ -377,7 +425,11 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
             {"je",0x184U},{"jz",0x184U},{"jne",0x185U},{"jnz",0x185U},
             {"ja",0x187U},{"jae",0x183U},{"jnb",0x183U},
             {"jb",0x182U},{"jbe",0x186U},
-            {"jg",0x18fU},{"jge",0x18dU},{"jl",0x18cU},{"jle",0x18eU}
+            {"jg",0x18fU},{"jge",0x18dU},{"jl",0x18cU},{"jle",0x18eU},
+            {"js",0x188U},{"jns",0x189U},{"jo",0x180U},{"jno",0x181U},
+            {"jp",0x18aU},{"jnp",0x18bU},{"jc",0x182U},{"jnc",0x183U},
+            {"jna",0x186U},{"jnbe",0x187U},{"jnae",0x182U},
+            {"jnge",0x18cU},{"jnl",0x18dU},{"jng",0x18eU},{"jnle",0x18fU}
         };
         for(i=0U;i<sizeof(branches)/sizeof(branches[0]);++i) {
             MiniAsSymbolExpr expr;
@@ -619,6 +671,13 @@ static bool x64_measure(MiniAs *as,const MiniAsStmt *s,uint32_t *size) {
             *size=2U+(m->operands[0].reg>=4U||
                        m->operands[1].reg>=4U?1U:0U);return true;
         case X64_MOVSLQ: *size=3U;return true;
+        case X64_CMOV_REG:
+            *size=3U+(m->operands[0].register_64 ||
+                       m->operands[0].reg>=8U || m->operands[1].reg>=8U?
+                       1U:0U);return true;
+        case X64_SHIFT_CL:
+            *size=2U+(m->operands[0].register_64 ||
+                       m->operands[0].reg>=8U?1U:0U);return true;
         case X64_MOVZX8:
             *size=3U+(m->operands[0].reg>=4U ||
                        m->operands[1].reg>=8U?1U:0U);return true;
@@ -731,6 +790,23 @@ static bool x64_encode(MiniAs *as,const MiniAsStmt *s) {
                 code[n++]=(unsigned char)(0x40U|((r>>3U)<<2U)|(d>>3U));
             code[n++]=(unsigned char)m->encoding;
             code[n++]=(unsigned char)(0xc0U|((r&7U)<<3U)|(d&7U));
+            break;
+        case X64_CMOV_REG:
+            r=m->operands[0].reg;d=m->operands[1].reg;
+            if(m->operands[0].register_64 || r>=8U || d>=8U)
+                code[n++]=(unsigned char)(0x40U |
+                    (m->operands[0].register_64?8U:0U) |
+                    ((d>>3U)<<2U)|(r>>3U));
+            code[n++]=0x0fU;code[n++]=(unsigned char)(0x40U+(m->encoding&15U));
+            code[n++]=(unsigned char)(0xc0U|((d&7U)<<3U)|(r&7U));
+            break;
+        case X64_SHIFT_CL:
+            r=m->operands[0].reg;
+            if(m->operands[0].register_64 || r>=8U)
+                code[n++]=(unsigned char)(0x40U|
+                    (m->operands[0].register_64?8U:0U)|(r>>3U));
+            code[n++]=0xd3U;
+            code[n++]=(unsigned char)(0xc0U|((m->encoding&7U)<<3U)|(r&7U));
             break;
         case X64_MOVZX8:
             r=m->operands[0].reg;d=m->operands[1].reg;

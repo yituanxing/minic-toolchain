@@ -57,6 +57,14 @@ entry_x:
     xorl %r9d, 8(%r12)
     andq -16(%rbp), %rax
     orq %r8, 16(%rsp)
+    cmove %edx, %eax
+    cmovne %r9d, %r10d
+    cmovgq %r8, %r9
+    js .Lshort_x86
+    jns .Lshort_x86
+    shlq %cl, %rax
+    sarq %cl, %r9
+    .value 0x1234
     movzbl %al, %eax
     movzbl %r8b, %r10d
     sbbl %eax, %r10d
@@ -317,7 +325,9 @@ for bad in 'movq %rax, (%eax)' \
            'shrq $256, %rax' \
            'pushq $4294967296' \
            'testb $256, %al' \
-           'movb $256, (%rax)'; do
+           'movb $256, (%rax)' \
+           'cmove %r8, %eax' \
+           'shrq %dl, %rax'; do
     printf '.text\n%s\n' "$bad" >"$work/invalid-mem.s"
     if "$MINIAS" --target=x86_64 -o "$work/bad-mem.o" \
          "$work/invalid-mem.s" >/dev/null 2>"$work/invalid.err"; then

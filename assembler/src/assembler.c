@@ -1766,6 +1766,7 @@ static unsigned int data_width(const char *op) {
         return 1U;
     }
     if (strcmp(op, ".half") == 0 || strcmp(op, ".short") == 0 ||
+        strcmp(op, ".value") == 0 ||
         strcmp(op, ".2byte") == 0) {
         return 2U;
     }
