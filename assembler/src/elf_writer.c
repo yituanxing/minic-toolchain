@@ -68,7 +68,10 @@ static bool minias_write_elf(MiniAs *as,
     bool ok = false;
 
     expected_symbol_count = emitted_symbol_count(as);
-    as->target->object_attributes(as, elf_class, &attribute);
+    memset(&attribute, 0, sizeof(attribute));
+    if (as->target->object_attributes != NULL) {
+        as->target->object_attributes(as, elf_class, &attribute);
+    }
     emit_attribute = attribute.name != NULL;
     if (emit_attribute && minias_find_section(as, attribute.name) >= 0) {
         minias_set_error(as, "duplicate-target-attribute-section:%s", attribute.name);

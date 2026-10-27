@@ -200,3 +200,18 @@ plus ABI-v1 version bits (0x40), not generic ELF assumptions.
 Unknown ISA, ABI, encodings or relocations fail closed. No general x86
 ModR/M memory operand grammar or LoongArch relocations have been
 invented in Common; those are explicit remaining per-target obligations.
+
+## Multi-target optional callbacks (after real x86-64 crash, 2026-10-27)
+
+The first actual x86-64 ELF smoke crashed at the **first directive** because
+Common unconditionally dereferenced `parse_target_directive`, even though
+the Target table deliberately left that hook absent. The ELF writer would
+likewise dereference absent `object_attributes`. Both hooks are genuinely
+optional by architecture contract: Common now checks these pointers, and
+the ELF writer initializes its object-attributes result to none before a
+conditional call. The mandatory instruction parse/measure/encode and required
+relocation, validation, code-alignment hooks remain mandatory.
+
+This is a **single shared API correction** rather than copied per-target
+dummy methods or an architecture-specific `if (x86)` workaround. The
+regression gate checks GNU machine-code/ELF parity for BOTH new targets.

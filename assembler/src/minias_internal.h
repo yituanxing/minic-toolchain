@@ -278,8 +278,10 @@ struct MiniAsAssemblyConfig;
 typedef struct MiniAsTargetOps {
     char comment_prefix;
     uint16_t elf_machine;
+    /* Optional: NULL means all directives go to the common grammar. */
     bool (*parse_target_directive)(MiniAs *, const char *, const char *, size_t, bool *);
     bool (*validate_common_directive)(MiniAs *, const char *, size_t);
+    /* Optional: NULL emits no target-specific attributes section. */
     void (*object_attributes)(const MiniAs *, unsigned char, MiniAsObjectAttribute *);
     const char *name;
     /* Each target owns ISA/ABI/ELF profile validation; the CLI is target-neutral. */

@@ -3103,7 +3103,11 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
     }
     if (op[0] == '.') {
         bool handled = false;
-        if (!as->target->parse_target_directive(as, op, args, line, &handled)) {
+        /* Target-specific directives are optional, unlike the mandatory
+         * MCInst hooks. No-backend-specific-directive is a valid target. */
+        if (as->target->parse_target_directive != NULL &&
+            !as->target->parse_target_directive(as, op, args,
+                                                 line, &handled)) {
             return false;
         }
         if (handled) return true;
