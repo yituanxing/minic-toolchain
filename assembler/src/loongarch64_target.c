@@ -484,6 +484,60 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
     }
     /* GNU privileged INVTLB u5, rj, rk, with r0/i0 as operation code.
      * Existing Common MCInst emission and architecture ELF ownership. */
+
+    if(n==3U && la_special_reg(t[0],"$vr",31U,&rd) &&
+       la_special_reg(t[1],"$vr",31U,&rj)) {
+        static const struct {const char *name;uint32_t op;} logical[]={
+            {"vand.v",UINT32_C(0x71260000)},
+            {"vor.v",UINT32_C(0x71268000)},
+            {"vxor.v",UINT32_C(0x71270000)},
+            {"vnor.v",UINT32_C(0x71278000)},
+            {"vandn.v",UINT32_C(0x71280000)},
+            {"vorn.v",UINT32_C(0x71288000)}
+        };
+        static const struct {const char *name;uint32_t op;} masks[]={
+            {"vandi.b",UINT32_C(0x73d00000)},
+            {"vori.b",UINT32_C(0x73d40000)},
+            {"vxori.b",UINT32_C(0x73d80000)},
+            {"vnori.b",UINT32_C(0x73dc0000)}
+        };
+        uint64_t imm;
+        if(la_special_reg(t[2],"$vr",31U,&rk))
+            for(i=0U;i<sizeof(logical)/sizeof(logical[0]);++i)
+                if(!strcmp(s->op,logical[i].name)){
+                    m->count=3U;
+                    m->encoding=logical[i].op|(rk<<10U)|(rj<<5U)|rd;
+                    goto done;
+                }
+        if(minias_eval_u64_expression(t[2],&imm) && imm<=255U)
+            for(i=0U;i<sizeof(masks)/sizeof(masks[0]);++i)
+                if(!strcmp(s->op,masks[i].name)){
+                    m->count=3U;
+                    m->encoding=masks[i].op|((uint32_t)imm<<10U)|
+                        (rj<<5U)|rd;
+                    goto done;
+                }
+    }
+    if(n==3U && la_special_reg(t[0],"$f",31U,&rd) &&
+       la_reg(t[1],&rj)) {
+        static const struct {const char *name;uint32_t op;} fp[]={
+            {"fld.s",UINT32_C(0x2b000000)},
+            {"fst.s",UINT32_C(0x2b400000)},
+            {"fld.d",UINT32_C(0x2b800000)},
+            {"fst.d",UINT32_C(0x2bc00000)}
+        };
+        int64_t offset;
+        if(minias_eval_i64_expression(t[2],&offset) &&
+           offset>=-2048 && offset<=2047)
+            for(i=0U;i<sizeof(fp)/sizeof(fp[0]);++i)
+                if(!strcmp(s->op,fp[i].name)){
+                    m->count=3U;
+                    m->encoding=fp[i].op|
+                        (((uint32_t)offset&UINT32_C(0xfff))<<10U)|
+                        (rj<<5U)|rd;
+                    goto done;
+                }
+    }
     if(n==3U && !strcmp(s->op,"invtlb") &&
        la_reg(t[1],&rj) && la_reg(t[2],&rk)) {
         uint64_t operation;

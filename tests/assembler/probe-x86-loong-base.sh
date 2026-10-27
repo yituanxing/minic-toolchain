@@ -295,6 +295,13 @@ entry_la:
     tlbfill
     li.w $r12, 16384
     li.w $r28, (1 << 14) / 8
+    vxor.v $vr4, $vr4, $vr8
+    vxor.v $vr0, $vr0, $vr4
+    vori.b $vr4, $vr0, 0
+    vandi.b $vr1, $vr2, 255
+    fst.d $f0, $r13, 16 - 16
+    fld.d $f1, $r13, 8
+    fst.s $f2, $r15, -2048
     la.pcrel $r12, example_percpu
     la.pcrel $r13, sample_kernel_sp
     movfcsr2gr $r13, $fcsr0
@@ -633,6 +640,10 @@ for bad in 'li.w $r4, -2049' \
            'movgr2fr.d $f32, $r13' \
            'rotr.w $r1, $r2, 6' \
            'tlbrd $r1' \
+           'vori.b $vr1, $vr2, 256' \
+           'vxor.v $vr1, $vr2, $r3' \
+           'fst.d $f32, $r1, 0' \
+           'fst.d $f0, $r1, -2049' \
            'la.pcrel $f1, invalid_sym' \
            'la.pcrel $r12' \
            'invtlb 32, $r0, $r0' \
