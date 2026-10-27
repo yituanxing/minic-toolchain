@@ -1,47 +1,110 @@
 #!/usr/bin/env python3
-"""Merge all 21 original GNU .i -> MiniC -S shard receipts by ROOT CAUSE."""
-import argparse,collections,json
+"""Attest 21 frozen-GNU MiniC discovery receipts before grouping diagnostics.
+
+Same-error text is only a diagnostic signature, not proof of a common Core
+root cause.  GNU assembler/link/QEMU certification remains a separate gate.
+"""
+import argparse
+import collections
+import json
+import re
 from pathlib import Path
 
+TARGETS = ("x86_64", "aarch64", "loongarch64")
+SHA256 = re.compile(r"[0-9a-f]{64}\Z")
+
 def main():
-    p=argparse.ArgumentParser()
-    p.add_argument("--root",type=Path,required=True)
-    p.add_argument("--output",type=Path,required=True)
-    a=p.parse_args()
-    inputs=sorted(a.root.glob("*/report.json"))
-    if len(inputs)!=21:
-        raise SystemExit(f"THREE_LINUX_CENSUS=INCOMPLETE shards={len(inputs)}/21")
-    groups=collections.defaultdict(lambda:collections.defaultdict(list))
-    totals=collections.defaultdict(lambda:dict(total=0,pass_count=0))
-    seen=set()
-    for f in inputs:
-        j=json.loads(f.read_text())
-        if j.get("verdict")!="MINIC_S_DISCOVERY_ONLY_AS_LINK_QEMU_NOT_TESTED":
-            raise SystemExit("THREE_LINUX_CENSUS=FAIL dishonest verdict")
-        target,shard=j["target"],j["shard"]
-        key=(target,shard)
-        if key in seen:raise SystemExit("THREE_LINUX_CENSUS=FAIL duplicate shard")
-        seen.add(key)
-        for row in j["rows"]:
-            totals[target]["total"]+=1
-            if row["status"]=="MINIC_S_PASS":
-                totals[target]["pass_count"]+=1
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--root", type=Path, required=True)
+    parser.add_argument("--output", type=Path, required=True)
+    args = parser.parse_args()
+    reports = sorted(args.root.glob("*/report.json"))
+    if len(reports) != 21:
+        raise SystemExit(f"THREE_LINUX_CENSUS=INCOMPLETE shards={len(reports)}/21")
+    seen = set()
+    compilers = set()
+    groups = collections.defaultdict(lambda: collections.defaultdict(list))
+    totals = collections.defaultdict(lambda: dict(total=0, pass_count=0))
+    source_state = {}
+    for file in reports:
+        receipt = json.loads(file.read_text())
+        if receipt.get("verdict") != "MINIC_S_DISCOVERY_ONLY_AS_LINK_QEMU_NOT_TESTED":
+            raise SystemExit("THREE_LINUX_CENSUS=FAIL not an execution-only source receipt")
+        target, shard = receipt.get("target"), receipt.get("shard")
+        if target not in TARGETS or type(shard) is not int or not 0 <= shard < 7:
+            raise SystemExit("THREE_LINUX_CENSUS=FAIL wrong target/shard")
+        if (target, shard) in seen:
+            raise SystemExit("THREE_LINUX_CENSUS=FAIL duplicate target/shard")
+        seen.add((target, shard))
+        full = receipt.get("frozen_total")
+        manifest = receipt.get("frozen_manifest_sha256")
+        binary = receipt.get("compiler_sha256")
+        identity = receipt.get("frozen_identity")
+        if (type(full) is not int or full < 1000
+                or not isinstance(identity, dict) or identity.get("target") != target
+                or not isinstance(manifest, str) or not SHA256.fullmatch(manifest)
+                or not isinstance(binary, str) or not SHA256.fullmatch(binary)):
+            raise SystemExit("THREE_LINUX_CENSUS=FAIL invalid frozen/compiler identity")
+        compilers.add(binary)
+        profile = (full, manifest, json.dumps(identity, sort_keys=True))
+        if target in source_state and source_state[target]["profile"] != profile:
+            raise SystemExit("THREE_LINUX_CENSUS=FAIL mixed frozen GNU profiles")
+        if target not in source_state:
+            source_state[target] = dict(profile=profile, indices=set(), objects=set())
+        state = source_state[target]
+        rows = receipt.get("rows")
+        if not isinstance(rows, list) or len(rows) != (full + 6 - shard) // 7:
+            raise SystemExit(f"THREE_LINUX_CENSUS=FAIL incomplete {target} shard={shard}")
+        for row in rows:
+            index = row.get("index")
+            obj = row.get("object")
+            input_sha = row.get("input_sha256")
+            if (type(index) is not int or index < 0 or index >= full
+                    or index % 7 != shard
+                    or not isinstance(obj, str) or not obj.endswith(".o")
+                    or not isinstance(input_sha, str) or not SHA256.fullmatch(input_sha)):
+                raise SystemExit("THREE_LINUX_CENSUS=FAIL corrupted owner/index/input SHA")
+            if index in state["indices"] or obj in state["objects"]:
+                raise SystemExit("THREE_LINUX_CENSUS=FAIL duplicate C owner")
+            state["indices"].add(index)
+            state["objects"].add(obj)
+            totals[target]["total"] += 1
+            if row.get("status") == "MINIC_S_PASS":
+                output_sha = row.get("asm_sha256")
+                if not isinstance(output_sha, str) or not SHA256.fullmatch(output_sha):
+                    raise SystemExit("THREE_LINUX_CENSUS=FAIL output without valid SHA")
+                totals[target]["pass_count"] += 1
             else:
-                groups[row["status"]+" | "+row["diagnostic"]][target].append(row["object"])
-    if seen!={(target,i) for target in ("x86_64","aarch64","loongarch64") for i in range(7)}:
-        raise SystemExit("THREE_LINUX_CENSUS=FAIL missing architecture or shard")
-    errors=[dict(root_cause=issue,total=sum(map(len,arch.values())),
-                 targets={k:sorted(v) for k,v in arch.items()})
-            for issue,arch in groups.items()]
-    errors.sort(key=lambda e:-e["total"])
-    a.output.parent.mkdir(parents=True,exist_ok=True)
-    a.output.write_text(json.dumps(dict(
-        schema="minic-linux-cross-target-error-census-v1",
-        verdict="FRONTEND_AND_CODEGEN_DISCOVERY_ONLY_NOT_GNU_LINK_OR_QEMU",
-        targets=totals,root_cause_groups=errors),indent=2)+"\n")
-    for arch,num in sorted(totals.items()):
-        print(f"THREE_LINUX_MINIC_S target={arch} compiled={num['pass_count']}/{num['total']}")
-    for e in errors[:25]:
-        print(f"THREE_LINUX_ROOT_CAUSE total={e['total']} targets={','.join(sorted(e['targets']))} diagnostic={e['root_cause'][:175]}")
-    print(f"THREE_LINUX_CENSUS=COMPLETE shards=21 shared_root_causes={len(errors)} full_GNU_AS_link_QEMU=NOT_RUN")
-if __name__=="__main__":main()
+                signature = str(row.get("status", "UNKNOWN")) + " | " + str(row.get("diagnostic", ""))
+                groups[signature][target].append(obj)
+    if seen != {(arch, i) for arch in TARGETS for i in range(7)}:
+        raise SystemExit("THREE_LINUX_CENSUS=FAIL missing shard")
+    if len(compilers) != 1:
+        raise SystemExit("THREE_LINUX_CENSUS=FAIL mixed MiniC binaries across 21 shards")
+    for target in TARGETS:
+        full = source_state[target]["profile"][0]
+        if (source_state[target]["indices"] != set(range(full))
+                or len(source_state[target]["objects"]) != full):
+            raise SystemExit("THREE_LINUX_CENSUS=FAIL missing or duplicate owner")
+    diagnostics = [
+        dict(diagnostic_signature=signature,
+             total=sum(len(v) for v in targets.values()),
+             targets={k: sorted(v) for k, v in targets.items()})
+        for signature, targets in groups.items()
+    ]
+    diagnostics.sort(key=lambda e: -e["total"])
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    args.output.write_text(json.dumps(dict(
+        schema="minic-linux-cross-target-diagnostic-census-v2",
+        verdict="MINIC_S_DISCOVERY_ONLY_NOT_GNU_AS_LINK_OR_QEMU",
+        compiler_sha256=next(iter(compilers)),
+        targets=totals, diagnostic_groups=diagnostics), indent=2) + "\n")
+    for arch, count in sorted(totals.items()):
+        print(f"THREE_LINUX_MINIC_S target={arch} compiled={count['pass_count']}/{count['total']}")
+    for item in diagnostics[:25]:
+        targets = ",".join(sorted(item["targets"]))
+        print(f"THREE_LINUX_DIAGNOSTIC total={item['total']} targets={targets} signature={item['diagnostic_signature'][:175]}")
+    print(f"THREE_LINUX_CENSUS=COMPLETE shards=21 diagnostic_signatures={len(diagnostics)} ROOT_CAUSE_REVIEW_REQUIRED=1 GNU_AS_link_QEMU=NOT_RUN")
+
+if __name__ == "__main__":
+    main()

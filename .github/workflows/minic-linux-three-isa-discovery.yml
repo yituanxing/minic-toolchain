@@ -147,8 +147,9 @@ jobs:
           if-no-files-found: warn
   seven-way-minic:
     needs: [original-gnu, minic-producer]
-    # A failing GNU baseline for one ISA must not block already frozen others.
-    if: always() && needs.minic-producer.result == 'success'
+    # Do not allocate 21 runners against missing GNU .i artifacts.
+    # Failed GNU stages retain their own bounded diagnostic artifacts.
+    if: needs.original-gnu.result == 'success' && needs.minic-producer.result == 'success'
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     strategy:
@@ -189,7 +190,7 @@ jobs:
           if-no-files-found: warn
   census-summary:
     needs: seven-way-minic
-    if: always() && needs.seven-way-minic.result == 'success'
+    if: needs.seven-way-minic.result == 'success'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:

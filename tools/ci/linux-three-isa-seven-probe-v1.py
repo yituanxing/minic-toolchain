@@ -18,6 +18,11 @@ def probe(a):
     if not selected or a.shard not in range(7):raise ValueError("empty or invalid shard")
     a.output.mkdir(parents=True,exist_ok=True)
     compiler=a.minic.resolve(strict=True)
+    frozen_manifest_sha256=sha(a.frozen/"manifest.json")
+    if any(not isinstance(row.get("index"),int)
+           or not isinstance(row.get("minic_flags"),list)
+           for row in frozen["rows"]):
+        raise ValueError("missing original Kbuild ABI flags or index")
     def process(row):
         obj=row["object"]
         from pathlib import PurePosixPath
@@ -30,20 +35,28 @@ def probe(a):
         asm=a.output/PurePosixPath(obj).with_suffix(".s")
         asm.parent.mkdir(parents=True,exist_ok=True)
         try:
+            allowed={"-fshort-wchar","-fno-short-wchar",
+                     "-fsigned-char","-funsigned-char",
+                     "-fno-signed-char","-fno-unsigned-char",
+                     "-ffunction-sections","-fno-function-sections",
+                     "-fPIE","-fpie","-fPIC","-fpic",
+                     "-fno-pie","-fno-PIE","-fno-pic","-fno-PIC"}
+            if any(x not in allowed for x in row["minic_flags"]):
+                raise ValueError("invalid MiniC replay flags for "+obj)
             p=subprocess.run([str(compiler),"--target="+a.target+"-linux",
-                              "-S",str(file),"-o",str(asm)],
+                              *row["minic_flags"],"-S",str(file),"-o",str(asm)],
                              capture_output=True,timeout=a.timeout)
             ok=p.returncode==0 and asm.is_file() and asm.stat().st_size>0
             if not ok:asm.unlink(missing_ok=True)
             lines=p.stderr.decode(errors="replace").splitlines()
             diag=next((v for v in lines if "error:" in v.lower()),lines[0] if lines else "")
             diag=re.sub(r"[^ :]+\.(?:i|c|h):\d+(?::\d+)?:","<source>:",diag)[:240]
-            return dict(object=obj,status="MINIC_S_PASS" if ok else "MINIC_FAIL",
+            return dict(index=row["index"],object=obj,status="MINIC_S_PASS" if ok else "MINIC_FAIL",
                         diagnostic=diag,input_sha256=row["sha256"],
                         asm_sha256=sha(asm) if ok else None)
         except subprocess.TimeoutExpired:
             asm.unlink(missing_ok=True)
-            return dict(object=obj,status="MINIC_TIMEOUT",diagnostic="timeout",
+            return dict(index=row["index"],object=obj,status="MINIC_TIMEOUT",diagnostic="timeout",
                         input_sha256=row["sha256"])
     with concurrent.futures.ThreadPoolExecutor(max_workers=a.workers) as executor:
         data=list(executor.map(process,selected))
@@ -54,8 +67,11 @@ def probe(a):
     report=dict(schema="minic-linux-three-isa-shard-v1",
                 verdict="MINIC_S_DISCOVERY_ONLY_AS_LINK_QEMU_NOT_TESTED",
                 target=a.target,shard=a.shard,total_shards=7,
-                frozen_identity=frozen["identity"],compiler_sha256=sha(compiler),
-                rows=data,groups=buckets)
+                frozen_identity=frozen["identity"],
+                frozen_manifest_sha256=frozen_manifest_sha256,
+                frozen_total=len(frozen["rows"]),
+                compiler_sha256=sha(compiler),
+                rows=data,diagnostic_signatures=buckets)
     (a.output/"report.json").write_text(json.dumps(report,indent=2)+"\n")
     n=sum(x["status"]=="MINIC_S_PASS" for x in data)
     print(f"MINIC_SEVEN_DISCOVERY target={a.target} shard={a.shard}/7 compiled={n}/{len(data)} errors={len(data)-n} groups={len(buckets)}")

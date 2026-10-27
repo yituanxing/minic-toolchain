@@ -40,8 +40,16 @@ def target_object(path: Path, expected_machine: int) -> bool:
         hdr = stream.read(64)
     if hdr[:4] != b"\x7fELF":
         return False
-    if len(hdr) < 64 or hdr[4:6] != b"\x02\x01":
-        raise ValueError("GNU golden produced non-ELF64-LE object: " + str(path))
+    if len(hdr) < 52:
+        raise ValueError("truncated GNU ELF object: " + str(path))
+    # x86 bzImage legitimately contains a separate 32-bit early-boot domain.
+    # Do not classify its .o as a 64-bit MiniC target C owner.
+    if hdr[4:6] != b"\x02\x01":
+        if (expected_machine == MACHINES["x86_64"]
+                and hdr[4:6] == b"\x01\x01"
+                and "/arch/x86/boot/" in path.as_posix()):
+            return False
+        raise ValueError("unexpected target ELF class/data: " + str(path))
     machine = struct.unpack_from("<H", hdr, 18)[0]
     kind = struct.unpack_from("<H", hdr, 16)[0]
     return kind == 1 and machine == expected_machine
@@ -62,7 +70,19 @@ def census(out: Path, target: str, image: str, evidence: Path, minimum: int) -> 
     )
     if not objects:
         raise ValueError("no matching GNU Linux target ELF relocatables")
+    # Preserve excluded ELF32 boot objects as a separate explicit scope.
+    boot32 = []
+    if target == "x86_64":
+        for o in sorted((out / "arch/x86/boot").rglob("*.o")):
+            if o.is_file() and not o.is_symlink():
+                with o.open("rb") as stream:
+                    magic = stream.read(6)
+                if magic == b"\x7fELF\x01\x01":
+                    boot32.append(o.relative_to(out).as_posix())
     evidence.mkdir(parents=True, exist_ok=True)
+    (evidence / "separate-x86-elf32-boot-domain.txt").write_text(
+        "# x86 early boot ELF32; not x86_64 MiniC certified C owners\n"
+        + "".join(name + "\n" for name in boot32))
     golden = evidence / "gnu-target-objects.sha256"
     golden.write_text("".join(
         f"{sha(obj)}  {obj.relative_to(out).as_posix()}\n" for obj in objects
@@ -92,6 +112,8 @@ def census(out: Path, target: str, image: str, evidence: Path, minimum: int) -> 
         "config_sha256": sha(config),
         "gnu_target_objects": len(objects), "gnu_c_owners": len(owners),
         "excluded_non_c_objects": len(excluded),
+        "separate_x86_early_boot_elf32_objects": len(boot32),
+        "scope": "ELF64_MAIN_TARGET_C_ONLY_NOT_X86_EARLY_BOOT_ELF32",
         "owner_manifest_sha256": sha(evidence / "full-c-owners.txt"),
     }
     (evidence / "discovery.json").write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
@@ -126,8 +148,14 @@ def self_test() -> None:
             struct.pack_into("<H", hdr, 16, 1)
             struct.pack_into("<H", hdr, 18, 183 if machine != 183 else 62)
             host.write_bytes(hdr)
+            if target == "x86_64":
+                boot = out / "arch/x86/boot/regs.o"
+                boot.parent.mkdir(parents=True)
+                boot.write_bytes(b"\x7fELF\x01\x01" + bytes(64))
             ev = base / target / "evidence"
             result = census(out, target, "vmlinux", ev, minimum=2)
+            assert result["separate_x86_early_boot_elf32_objects"] == (
+                1 if target == "x86_64" else 0)
             assert result["gnu_c_owners"] == 2
             assert result["gnu_target_objects"] == 2
             assert result["verdict"] == "GNU_BUILD_ONLY_NOT_QEMU_CERTIFIED_NOT_MINIC"

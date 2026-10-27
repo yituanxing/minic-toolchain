@@ -23,28 +23,59 @@ def identity(e,target,gcc):
                 source=(e/"linux-source.sha256").read_text().split()[0],
                 objects=digest(e/"full-c-owners.txt"),gnu=trip,
                 version=subprocess.check_output([gcc,"-dumpfullversion"],text=True).strip())
+# Existing GNU .o.cmd is the provenance authority.  The native Kbuild
+# command may compile through a temporary output name before copying to .o.
+# Preserve its original -o separately; never change the compiler's C input.
+MINIC_CFLAGS = {
+    "-fshort-wchar", "-fno-short-wchar",
+    "-fsigned-char", "-funsigned-char", "-fno-signed-char", "-fno-unsigned-char",
+    "-ffunction-sections", "-fno-function-sections",
+    "-fPIE", "-fpie", "-fPIC", "-fpic",
+    "-fno-pie", "-fno-PIE", "-fno-pic", "-fno-PIC",
+}
 def gnu_argv(text,gcc,obj,out):
     m=re.search(r"^(?:savedcmd|cmd)_[^\n]*\s*:=\s*(.+)$",text,re.M)
     if not m:raise ValueError("no GNU Kbuild command")
     lex=shlex.shlex(m.group(1),posix=True,punctuation_chars=";&|")
-    lex.whitespace_split=True;t=list(lex)
+    lex.whitespace_split=True
+    t=list(lex)
     t=t[:next((i for i,v in enumerate(t) if v in (";","&&","||","|")),len(t))]
-    if not t or Path(t[0]).name!=Path(gcc).name or "-c" not in t:raise ValueError("not GNU C compile")
-    if "-o" not in t or t.index("-o")+1>=len(t) or t[t.index("-o")+1]!=obj:raise ValueError("output differs")
-    if sum(v.endswith(".c") and not v.startswith("-") for v in t)!=1:raise ValueError("C source mismatch")
-    a=[t[0],"-E","-P"];i=1
+    if not t or Path(t[0]).name!=Path(gcc).name or "-c" not in t:
+        raise ValueError("not a direct GNU C compile")
+    outputs=[t[i+1] for i,v in enumerate(t[:-1]) if v=="-o"]
+    if len(outputs)!=1:
+        raise ValueError("missing/ambiguous GNU output: "+str(outputs)[:150])
+    # The full C-owner inventory is already derived from authentic GNU Kbuild
+    # source metadata; a noncanonical temporary -o is not an extra C owner.
+    sources=[x for x in t if x.endswith((".c",".i")) and not x.startswith("-")]
+    source=re.search(r"^source_[^\n]*\s*:=\s*(\S+\.c)\s*$",text,re.M)
+    if len(sources)!=1 and (source is None or source.group(1) not in sources):
+        raise ValueError("ambiguous GNU C source: "+str(sources)[:180])
+    flags=[v for v in t if v in MINIC_CFLAGS]
+    a=[t[0],"-E","-P"]
+    i=1
     while i<len(t):
         v=t[i]
-        if v in ("-o","-MF","-MT","-MQ"):i+=2;continue
-        if v in ("-c","-MD","-MMD","-MP","-MG") or v.startswith(("-Wp,-MD,","-Wp,-MMD,")):i+=1;continue
-        a.append(v);i+=1
-    return a+["-o",str(out)]
+        if v in ("-o","-MF","-MT","-MQ"):
+            i+=2
+            continue
+        if v in ("-c","-MD","-MMD","-MP","-MG") or v.startswith(("-Wp,-MD,","-Wp,-MMD,")):
+            i+=1
+            continue
+        a.append(v)
+        i+=1
+    return a+["-o",str(out)],flags,outputs[0]
+
 def verify(e,f,target,gcc):
     j=json.loads((f/"manifest.json").read_text());a=owners(e)
     if j["identity"]!=identity(e,target,gcc) or len(j["rows"])!=len(a):raise ValueError("stale/incomplete .i cache")
     for i,(name,row) in enumerate(zip(a,j["rows"])):
         p=PurePosixPath(row["input"])
-        if name!=row["object"] or row["shard"]!=i%7 or p.is_absolute() or ".." in p.parts or p.parts[0]!="i":raise ValueError("bad .i membership")
+        if (name!=row["object"] or row.get("index")!=i or row["shard"]!=i%7
+                or p.is_absolute() or ".." in p.parts or p.parts[0]!="i"
+                or not isinstance(row.get("minic_flags"),list)
+                or any(x not in MINIC_CFLAGS for x in row["minic_flags"])):
+            raise ValueError("bad .i membership or unsupported C ABI flags")
         file=f/p
         if file.is_symlink() or digest(file)!=row["sha256"]:raise ValueError("wrong cached .i SHA "+name)
     print(f"GNU_FROZEN_I_CACHE=PASS target={target} owners={len(a)} shards=7 GCC_reruns=0")
@@ -57,12 +88,14 @@ def freeze(a):
         cmd=(a.out/p.parent/("."+p.name+".cmd")).read_text()
         relative="i/"+str(p.with_suffix(".i"));out=a.frozen/relative
         out.parent.mkdir(parents=True,exist_ok=True)
-        args=gnu_argv(cmd,a.gcc,name,out)
+        args,mini_flags,gnu_output=gnu_argv(cmd,a.gcc,name,out)
         v=subprocess.run(args,cwd=a.out,capture_output=True,timeout=a.timeout)
         if v.returncode or not out.is_file() or out.stat().st_size==0:
             out.unlink(missing_ok=True)
             raise ValueError(v.stderr.decode(errors="replace")[-450:])
-        return dict(object=name,input=relative,sha256=digest(out),shard=i%7,cmd_sha256=hashlib.sha256(cmd.encode()).hexdigest())
+        return dict(index=i,object=name,input=relative,sha256=digest(out),
+                    shard=i%7,cmd_sha256=hashlib.sha256(cmd.encode()).hexdigest(),
+                    minic_flags=mini_flags,gnu_output=gnu_output)
     results={};errors=[]
     with concurrent.futures.ThreadPoolExecutor(max_workers=a.workers) as pool:
         work={pool.submit(one,pair):pair[1] for pair in enumerate(items)}
@@ -87,8 +120,15 @@ def main():
     try:
         if a.mode=="selftest":
             cmd="savedcmd_lib/a.o := gcc -Wp,-MMD,lib/.a.o.d -c -o lib/a.o lib/a.c ; tools/objtool a.o"
-            v=gnu_argv(cmd,"gcc","lib/a.o",Path("lib/a.i"))
+            v,flags,gnu_output=gnu_argv(cmd,"gcc","lib/a.o",Path("lib/a.i"))
             assert v[:3]==["gcc","-E","-P"] and "-c" not in v and v[-2:]==["-o","lib/a.i"]
+            assert flags==[] and gnu_output=="lib/a.o"
+            v,flags,gnu_output=gnu_argv(
+                cmd.replace(" -c ", " -fshort-wchar -funsigned-char -c ")
+                   .replace("-o lib/a.o","-o lib/.temporary-a.o"),
+                "gcc","lib/a.o",Path("lib/a.i"))
+            assert flags==["-fshort-wchar","-funsigned-char"]
+            assert gnu_output=="lib/.temporary-a.o"
             assert sum(len(list(range(i,99,7))) for i in range(7))==99
             print("GNU_FROZEN_I_SELFTEST=PASS shards=7 replay_flags=1");return 0
         if a.evidence is None or a.frozen is None or a.target is None:p.error("missing required paths/target")
