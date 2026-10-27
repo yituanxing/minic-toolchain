@@ -608,7 +608,7 @@ SRC
 typedef unsigned long u64;
 void *linux_uaccess_mask_ptr(const void *p) {
     void *safe;
-    __asm__ __volatile__("\tbic\t%0, %1, %2\\n"
+    __asm__ __volatile__("\tbic\t%0, %1, %2\n"
                          : "=r"(safe) : "r"(p), "i"(((1UL) << (55))));
     return safe;
 }
