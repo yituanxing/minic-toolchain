@@ -1734,7 +1734,8 @@ static bool handle_align(MiniAs *as, const char *op, char *args, size_t line) {
         return false;
     }
     value = (uint64_t)evaluated;
-    if (strcmp(op, ".p2align") == 0 || strcmp(op, ".align") == 0) {
+    if (strcmp(op, ".p2align") == 0 ||
+        (strcmp(op, ".align") == 0 && !as->target->align_directive_bytes)) {
         if (value >= 63U) {
             minias_set_error(as, "unsupported-alignment:%s:line=%zu", args, line);
             return false;
@@ -1763,7 +1764,7 @@ static bool handle_align(MiniAs *as, const char *op, char *args, size_t line) {
     return true;
 }
 
-static unsigned int data_width(const char *op) {
+static unsigned int data_width(const MiniAs *as, const char *op) {
     if (strcmp(op, ".byte") == 0) {
         return 1U;
     }
@@ -1772,8 +1773,10 @@ static unsigned int data_width(const char *op) {
         strcmp(op, ".2byte") == 0) {
         return 2U;
     }
-    if (strcmp(op, ".word") == 0 || strcmp(op, ".long") == 0 ||
-        strcmp(op, ".4byte") == 0) {
+    if (strcmp(op, ".word") == 0)
+        return as->target->word_directive_width == 0U ?
+            4U : as->target->word_directive_width;
+    if (strcmp(op, ".long") == 0 || strcmp(op, ".4byte") == 0) {
         return 4U;
     }
     if (strcmp(op, ".dword") == 0 || strcmp(op, ".quad") == 0 ||
@@ -2193,7 +2196,7 @@ static bool minias_leb_bytes(MiniAs *as,const char *op,const char *text,
 static bool add_data_stmt(MiniAs *as, const char *op, char *args, size_t line) {
     uint64_t count = 0U;
     uint64_t bytes;
-    unsigned int width = data_width(op);
+    unsigned int width = data_width(as, op);
     char *copy = NULL;
     char *cursor;
 
@@ -2308,6 +2311,16 @@ static bool emit_symbol_minus_dot(MiniAs *as,
         }
         return minias_section_append(as, stmt->section, bytes, width);
     }
+
+    /* ELF64 x86 has a direct signed PC32 relocation for S + A - P.
+     * Unlike LoongArch ADD/SUB pairs, one semantic fixup is sufficient.
+     * A target describes this choice, Common never tests its name. */
+    if (width == 4U &&
+        as->target->dot_relative_fixup != MINIAS_FIXUP_NONE)
+        return minias_section_append_zero(as, stmt->section, width) &&
+               minias_add_fixup(as, stmt->section, relocation_offset,
+                                as->target->dot_relative_fixup, width,
+                                expr->name, expr->addend);
 
     if (add_type == 0U || sub_type == 0U) {
         minias_set_error(as,
@@ -2447,7 +2460,7 @@ static bool emit_symbol_difference(MiniAs *as,
 }
 
 static bool emit_data_stmt(MiniAs *as, const MiniAsStmt *stmt) {
-    unsigned int width = data_width(stmt->op);
+    unsigned int width = data_width(as, stmt->op);
     char *copy;
     char *cursor;
 
@@ -3393,7 +3406,7 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
             free(rewritten_args);
             return ok;
         }
-        if (data_width(op) != 0U || strcmp(op, ".zero") == 0 ||
+        if (data_width(as, op) != 0U || strcmp(op, ".zero") == 0 ||
             strcmp(op, ".space") == 0 || strcmp(op, ".skip") == 0 ||
             strcmp(op, ".asciz") == 0 ||
             strcmp(op, ".string") == 0 || strcmp(op, ".ascii") == 0 ||

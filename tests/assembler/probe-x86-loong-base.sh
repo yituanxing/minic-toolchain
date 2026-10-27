@@ -110,6 +110,15 @@ unresolved_x86:
     jl ext_target
     movl %eax, 8(%rbx,%r8,2)
     movl 8(%rbx,%r9,4), %eax
+    .pushsection __minias_bug_table,"aw"
+2:
+    .long external_function - .
+    .long ext_global - .
+    .word 25
+    .word 0
+    .org 2b+12
+    .align 16
+    .popsection
     movq ext_global(%rip), %rax
     movl %r8d, ext_global+8(%rip)
     cmpq ext_global(%rip), %r9
@@ -156,6 +165,9 @@ common_space_test:
     .skip 8, 0x5a
     .space 5, 0x33
     .zero 3
+    /* GNU x86 SysV: .word is TWO bytes, unlike A64/RISC-V .word. */
+    .align 16
+    .word 0x1234
 ASM_X
 if ! "$MINIAS" --target=x86_64 -march=x86-64 -mabi=sysv -o "$work/x86-mini.o" "$work/x86.s" >"$work/x86.stdout" 2>"$work/x86.stderr"; then
     echo 'MINIAS_X86_PARSE_OR_ENCODE_FAIL' >&2
@@ -169,6 +181,9 @@ cmp "$work/x86-mini.bin" "$work/x86-gnu.bin"
 objcopy -j .data -O binary "$work/x86-mini.o" "$work/x86-mini-data.bin"
 objcopy -j .data -O binary "$work/x86-gnu.o" "$work/x86-gnu-data.bin"
 cmp "$work/x86-mini-data.bin" "$work/x86-gnu-data.bin"
+objcopy -j __minias_bug_table -O binary "$work/x86-mini.o" "$work/x86-mini-bug.bin"
+objcopy -j __minias_bug_table -O binary "$work/x86-gnu.o" "$work/x86-gnu-bug.bin"
+cmp "$work/x86-mini-bug.bin" "$work/x86-gnu-bug.bin"
 readelf -h "$work/x86-mini.o" | grep -q 'Advanced Micro Devices X86-64'
 readelf -Wr "$work/x86-mini.o" >"$work/x86-rel.txt"
 grep -q R_X86_64_PLT32 "$work/x86-rel.txt"

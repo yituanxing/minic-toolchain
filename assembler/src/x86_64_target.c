@@ -1091,6 +1091,8 @@ static const MiniAsTargetOps ops={
     .relax_instruction=x64_relax_instruction,
     .expanded_instruction_size=x64_expanded_instruction_size,
     .append_code_alignment=x64_code_align,
-    .fixup_relocation_type=x64_reloc,.validate_output=x64_validate
+    .fixup_relocation_type=x64_reloc,.validate_output=x64_validate,
+    .word_directive_width=2U,.align_directive_bytes=true,
+    .dot_relative_fixup=MINIAS_FIXUP_X64_PC32
 };
 const MiniAsTargetOps *minias_target_x86_64(void){return &ops;}
