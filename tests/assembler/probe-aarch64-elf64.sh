@@ -105,6 +105,24 @@ external_probe:
     lsl x1, x2, x3
     lsr w1, w2, w3
     lsr x1, x2, x3
+    // GNU signed ALU/carry and multiply alias families, typed MCInst.
+    neg w0, w0
+    neg x1, x2
+    negs w3, w4
+    ngc x5, x6
+    ngcs w7, w8
+    adc w0, w1, w2
+    adc x3, x4, x5
+    adcs x6, x7, x8
+    sbc x0, xzr, xzr
+    sbcs w9, w10, w11
+    mul w12, w13, w14
+    mul x15, x16, x17
+    mneg x18, x19, x20
+    umull x1, w19, w1
+    smull x2, w3, w4
+    umulh x5, x6, x7
+    smulh x8, x9, x10
     ccmp x0, xzr, #15, eq
     ccmp x1, #0, #4, ne
     ccmp w2, w3, #7, eq
@@ -410,6 +428,13 @@ for bad_source in 'ldxr x0, [x1,#4]' 'stxr x0, x1, [x2]' \
                   'msr daifset, #16' 'msr daifclr, #-1' \
                   'ldarb x1, [x2]' 'stlrh x3, [x4]' \
                   'mvn x0, w1' \
+                  'neg x0, w1' \
+                  'adc x0, w1, x2' \
+                  'sbc w0, x1, w2' \
+                  'umull x0, x1, w2' \
+                  'smull w0, w1, w2' \
+                  'umulh x0, w1, x2' \
+                  'mul w0, w1, x2' \
                   'yield #1' \
                   'hint #.Lnever_defined' \
                   '.equ .Lbad_hint,128; hint #.Lbad_hint' \

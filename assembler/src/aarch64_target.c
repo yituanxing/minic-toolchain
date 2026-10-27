@@ -165,6 +165,7 @@ enum {
     A64_MC_COND_SELECT,
     A64_MC_COND_COMPARE,
     A64_MC_SHIFT,
+    A64_MC_ARITH_ALIAS,
     A64_MC_MRS,
     A64_MC_MSR,
     A64_MC_BARRIER,
@@ -866,6 +867,70 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
     }
     if(a64_parse_lse(as,inst,op,args)) {
         /* LSE grammar is owned by one target decoder. */
+    } else if(!strcmp(op,"neg") || !strcmp(op,"negs") ||
+              !strcmp(op,"ngc") || !strcmp(op,"ngcs") ||
+              !strcmp(op,"adc") || !strcmp(op,"adcs") ||
+              !strcmp(op,"sbc") || !strcmp(op,"sbcs") ||
+              !strcmp(op,"mul") || !strcmp(op,"mneg") ||
+              !strcmp(op,"umull") || !strcmp(op,"smull") ||
+              !strcmp(op,"umulh") || !strcmp(op,"smulh")) {
+        /* GNU A64 three-operand data-processing family. NEG/NGC are
+         * SUB/SBC with Rn=ZR; MUL/MNEG/MULL are multiply-add aliases
+         * with Ra=ZR. Shared typed operands and one target encoder. */
+        static const struct {const char *name;uint32_t base;
+                             bool unary;bool long_wide;bool high_wide;} ops[]={
+            {"neg",UINT32_C(0x4b000000),true,false,false},
+            {"negs",UINT32_C(0x6b000000),true,false,false},
+            {"ngc",UINT32_C(0x5a000000),true,false,false},
+            {"ngcs",UINT32_C(0x7a000000),true,false,false},
+            {"adc",UINT32_C(0x1a000000),false,false,false},
+            {"adcs",UINT32_C(0x3a000000),false,false,false},
+            {"sbc",UINT32_C(0x5a000000),false,false,false},
+            {"sbcs",UINT32_C(0x7a000000),false,false,false},
+            {"mul",UINT32_C(0x1b007c00),false,false,false},
+            {"mneg",UINT32_C(0x1b00fc00),false,false,false},
+            {"umull",UINT32_C(0x9ba07c00),false,true,false},
+            {"smull",UINT32_C(0x9b207c00),false,true,false},
+            {"umulh",UINT32_C(0x9bc07c00),false,false,true},
+            {"smulh",UINT32_C(0x9b407c00),false,false,true}
+        };
+        char alu_tok[4][96];unsigned alu_n,alu_rd,alu_rn=31U,alu_rm,alu_k;
+        bool alu_wide,alu_nwide=false,alu_mwide,alu_sp;
+        for(alu_k=0U;alu_k<sizeof(ops)/sizeof(ops[0]);++alu_k)
+            if(!strcmp(op,ops[alu_k].name))break;
+        if(alu_k==sizeof(ops)/sizeof(ops[0]) ||
+           !split_operands(args,alu_tok,&alu_n) ||
+           alu_n!=(ops[alu_k].unary?2U:3U) ||
+           !parse_a64_reg(alu_tok[0],&alu_rd,&alu_wide,&alu_sp) ||
+           alu_sp) {
+            minias_set_error(as,"bad-aarch64-arith-alias:%s:line=%zu",
+                             args,stmt->line);
+            free(inst);return false;
+        }
+        if(!ops[alu_k].unary &&
+           (!parse_a64_reg(alu_tok[1],&alu_rn,&alu_nwide,&alu_sp) ||
+            alu_sp)) {
+            minias_set_error(as,"bad-aarch64-arith-source:%s:line=%zu",
+                             args,stmt->line);
+            free(inst);return false;
+        }
+        if(!parse_a64_reg(alu_tok[ops[alu_k].unary?1U:2U],
+                          &alu_rm,&alu_mwide,&alu_sp) || alu_sp ||
+           (ops[alu_k].long_wide?
+              (!alu_wide || alu_nwide || alu_mwide):
+              ops[alu_k].high_wide?
+              (!alu_wide || !alu_nwide || !alu_mwide):
+              (alu_mwide!=alu_wide ||
+               (!ops[alu_k].unary && alu_nwide!=alu_wide)))) {
+            minias_set_error(as,"bad-aarch64-arith-width:%s:line=%zu",
+                             args,stmt->line);
+            free(inst);return false;
+        }
+        inst->opcode=A64_MC_ARITH_ALIAS;inst->count=3U;
+        inst->encoding=ops[alu_k].base;
+        put_reg(&inst->operands[0],alu_rd,alu_wide);
+        put_reg(&inst->operands[1],alu_rn,alu_wide);
+        put_reg(&inst->operands[2],alu_rm,alu_mwide);
     } else if(!strcmp(op,"lsl") || !strcmp(op,"lsr")) {
         char tok[4][96];
         unsigned n,rd,rn,rm;
@@ -1278,6 +1343,15 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
         return false;
     }
     switch (inst->opcode) {
+        case A64_MC_ARITH_ALIAS: {
+            unsigned alu_rd=inst->operands[0].reg;
+            unsigned alu_rn=inst->operands[1].reg;
+            unsigned alu_rm=inst->operands[2].reg;
+            code=inst->encoding|
+                (inst->operands[0].register_64?UINT32_C(0x80000000):0U)|
+                (alu_rm<<16U)|(alu_rn<<5U)|alu_rd;
+            break;
+        }
         case A64_MC_SHIFT: {
             unsigned rd=inst->operands[0].reg;
             unsigned rn=inst->operands[1].reg;
