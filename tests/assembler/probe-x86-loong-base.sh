@@ -155,6 +155,34 @@ entry_la:
     sra.w $a1, $a0, $a2
     mul.d $a0, $a1, $a2
     sub.d $a0, $a0, $a1
+    ldx.d $a0, $a1, $a2
+    ldx.w $a1, $a0, $a2
+    ldx.bu $a2, $a1, $a0
+    ldx.hu $a2, $a0, $a1
+    stx.d $a1, $a2, $a0
+    stx.b $a0, $a1, $a2
+    stx.w $a2, $a1, $a0
+    amadd_db.w $a0, $a1, $a2
+    amadd_db.d $a2, $a0, $a1
+    amand_db.d $a1, $a2, $a0
+    amor_db.d $a0, $a2, $a1
+    amxor_db.d $a0, $a1, $a2
+    amswap_db.w $a1, $a2, $a0
+    revb.2h $a0, $a1
+    revb.4h $a1, $a0
+    clz.d $a0, $a1
+    ctz.d $a1, $a0
+    bitrev.d $a0, $a1
+    div.du $a0, $a1, $a2
+    div.wu $a0, $a1, $a2
+    mulh.du $a0, $a1, $a2
+    ll.w $a0, $sp, -4
+    sc.w $a1, $sp, 4
+    ll.d $a2, $sp, -8
+    sc.d $a1, $sp, 8
+    csrrd $a0, 0x100
+    csrwr $a1, 0x20
+    csrxchg $a2, $a1, 0x123
     and $a0, $a0, $a1
     or $a0, $a0, $a1
     xor $a0, $a0, $a1
@@ -294,7 +322,11 @@ for bad in 'ldptr.d $a0, $sp, 3' \
            'bstrpick.w $a0, $a1, 32, 1' \
            'bstrpick.d $a0, $a1, 2, 3' \
            'alsl.d $a0, $a1, $a2, 0' \
-           'alsl.w $a0, $a1, $a2, 5'; do
+           'alsl.w $a0, $a1, $a2, 5' \
+           'csrrd $a0, 16384' \
+           'csrwr $a0, -1' \
+           'csrxchg $a0, $zero, 1' \
+           'csrxchg $a0, $ra, 1'; do
     printf '.text\n%s\n' "$bad" >"$work/invalid-la-ptr.s"
     if "$MINIAS" --target=loongarch64 -o "$work/bad-ptr.o" \
          "$work/invalid-la-ptr.s" >/dev/null 2>"$work/invalid.err"; then

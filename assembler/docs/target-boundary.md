@@ -379,3 +379,17 @@ LoongArch relational GNU aliases lower to existing B16+symbol fixups, and
 The Target is responsible for encoding; Common remains responsible only for
 expression semantics, layout and ELF RELA. The exact-source GNU oracle now
 checks positive and rejected boundary cases. No Linux compiler rerun.
+
+## Complete GNU base integer / indexed LS / atomics-first-blocker batch
+
+After previous grouped real Linux replay, the exact 7-shard Pareto was
+`LDX.D 491`, `AMADD_DB.W 194`, `LDX.BU 147`,
+`REV B.2H 98`, plus other same-shape indexed LD/ST, bit-twiddling,
+LL/SC, CSR and MULH/DIV forms. The *same* Target register-register encoder
+has been extended from verified GNU binutils opcode tables (0x380x/381x
+for LDX/STX, 0x3869..386d for DB atomics, 0x0000x fixed unary,
+0x002x for mul/div, 0x040x for privilege), with the atomic register
+field permutation explicitly Target-owned. The pre-existing signed-14
+scaled-offset family is reused for LL.W/D and SC.W/D. The GNU exact-byte
+oracle now includes these instruction families and fail-closed CSR ranges.
+No x86/A64/RV backend copies and no new ELF serialization.

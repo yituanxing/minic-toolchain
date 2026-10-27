@@ -166,7 +166,30 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
         {"srl.d",UINT32_C(0x00190000)},
         {"sra.d",UINT32_C(0x00198000)},
         {"mul.w",UINT32_C(0x001c0000)},
-        {"mul.d",UINT32_C(0x001d8000)}
+        {"mul.d",UINT32_C(0x001d8000)},
+        {"mulh.w",UINT32_C(0x001c8000)},
+        {"mulh.wu",UINT32_C(0x001d0000)},
+        {"mulh.d",UINT32_C(0x001e0000)},
+        {"mulh.du",UINT32_C(0x001e8000)},
+        {"div.w",UINT32_C(0x00200000)},
+        {"mod.w",UINT32_C(0x00208000)},
+        {"div.wu",UINT32_C(0x00210000)},
+        {"mod.wu",UINT32_C(0x00218000)},
+        {"div.d",UINT32_C(0x00220000)},
+        {"mod.d",UINT32_C(0x00228000)},
+        {"div.du",UINT32_C(0x00230000)},
+        {"mod.du",UINT32_C(0x00238000)},
+        {"ldx.b",UINT32_C(0x38000000)},
+        {"ldx.h",UINT32_C(0x38040000)},
+        {"ldx.w",UINT32_C(0x38080000)},
+        {"ldx.d",UINT32_C(0x380c0000)},
+        {"stx.b",UINT32_C(0x38100000)},
+        {"stx.h",UINT32_C(0x38140000)},
+        {"stx.w",UINT32_C(0x38180000)},
+        {"stx.d",UINT32_C(0x381c0000)},
+        {"ldx.bu",UINT32_C(0x38200000)},
+        {"ldx.hu",UINT32_C(0x38240000)},
+        {"ldx.wu",UINT32_C(0x38280000)}
     };
     static const struct {const char *name;uint32_t code;} imm12[]={
         {"addi.d",UINT32_C(0x02c00000)},
@@ -189,6 +212,10 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
     /* GNU LA64 so10:14<<2; require byte offset aligned to four,
      * encode the signed scaled si14 without inventing relocations. */
     static const struct {const char *name;uint32_t code;} ptr14[]={
+        {"ll.w",UINT32_C(0x20000000)},
+        {"sc.w",UINT32_C(0x21000000)},
+        {"ll.d",UINT32_C(0x22000000)},
+        {"sc.d",UINT32_C(0x23000000)},
         {"ldptr.w",UINT32_C(0x24000000)},
         {"stptr.w",UINT32_C(0x25000000)},
         {"ldptr.d",UINT32_C(0x26000000)},
@@ -218,6 +245,40 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
         {"pcalau12i",UINT32_C(0x1a000000)},
         {"pcaddu12i",UINT32_C(0x1c000000)},
         {"pcaddu18i",UINT32_C(0x1e000000)}
+    };
+    /* GNU binutils: r0:5,r5:5 fixed unary integer transforms. */
+    static const struct {const char *name;uint32_t code;} unary[]={
+        {"clo.w",UINT32_C(0x00001000)},{"clz.w",UINT32_C(0x00001400)},
+        {"cto.w",UINT32_C(0x00001800)},{"ctz.w",UINT32_C(0x00001c00)},
+        {"clo.d",UINT32_C(0x00002000)},{"clz.d",UINT32_C(0x00002400)},
+        {"cto.d",UINT32_C(0x00002800)},{"ctz.d",UINT32_C(0x00002c00)},
+        {"revb.2h",UINT32_C(0x00003000)},
+        {"revb.4h",UINT32_C(0x00003400)},
+        {"revb.2w",UINT32_C(0x00003800)},
+        {"revb.d",UINT32_C(0x00003c00)},
+        {"revh.2w",UINT32_C(0x00004000)},
+        {"revh.d",UINT32_C(0x00004400)},
+        {"bitrev.4b",UINT32_C(0x00004800)},
+        {"bitrev.8b",UINT32_C(0x00004c00)},
+        {"bitrev.w",UINT32_C(0x00005000)},
+        {"bitrev.d",UINT32_C(0x00005400)},
+        {"ext.w.h",UINT32_C(0x00005800)},
+        {"ext.w.b",UINT32_C(0x00005c00)}
+    };
+    /* GNU atomic opcodes r0:5,r10:5,r5:5: the second assembly
+     * operand occupies rk/bit10; the third is the memory base rj/bit5.
+     * Never mix the register field order into ordinary gpr3. */
+    static const struct {const char *name;uint32_t code;} atomics[]={
+        {"amswap_db.w",UINT32_C(0x38690000)},
+        {"amswap_db.d",UINT32_C(0x38698000)},
+        {"amadd_db.w",UINT32_C(0x386a0000)},
+        {"amadd_db.d",UINT32_C(0x386a8000)},
+        {"amand_db.w",UINT32_C(0x386b0000)},
+        {"amand_db.d",UINT32_C(0x386b8000)},
+        {"amor_db.w",UINT32_C(0x386c0000)},
+        {"amor_db.d",UINT32_C(0x386c8000)},
+        {"amxor_db.w",UINT32_C(0x386d0000)},
+        {"amxor_db.d",UINT32_C(0x386d8000)}
     };
     MiniAsMCInst *m=calloc(1U,sizeof(*m)+4U*sizeof(MiniAsMCOperand));
     char t[4][192],*end;unsigned n,i,rd,rj,rk;
@@ -362,6 +423,52 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
                 }
         }
     }
+    /* Privileged CSR opcodes, validated exact 14-bit immediate.
+     * CSRWR and CSRXCHG are not regular GPR instruction families. */
+    if(n==2U && la_reg(t[0],&rd) &&
+       (!strcmp(s->op,"csrrd") || !strcmp(s->op,"csrwr"))) {
+        uint64_t csr;
+        if(minias_eval_u64_expression(t[1],&csr) && csr<=16383U) {
+            m->count=2U;
+            m->encoding=(!strcmp(s->op,"csrrd")?
+                         UINT32_C(0x04000000):UINT32_C(0x04000020))|
+                        ((uint32_t)csr<<10U)|rd;
+            m->operands[0].kind=MINIAS_MC_REGISTER;
+            m->operands[0].reg=rd;
+            m->operands[1].kind=MINIAS_MC_IMMEDIATE;
+            m->operands[1].immediate=csr;
+            goto done;
+        }
+    }
+    if(n==3U && !strcmp(s->op,"csrxchg") &&
+       la_reg(t[0],&rd) && la_reg(t[1],&rj) && rj>=2U) {
+        uint64_t csr;
+        if(minias_eval_u64_expression(t[2],&csr) && csr<=16383U) {
+            m->count=3U;
+            m->encoding=UINT32_C(0x04000000)|
+                ((uint32_t)csr<<10U)|(rj<<5U)|rd;
+            m->operands[0].kind=MINIAS_MC_REGISTER;
+            m->operands[0].reg=rd;
+            m->operands[1].kind=MINIAS_MC_REGISTER;
+            m->operands[1].reg=rj;
+            m->operands[2].kind=MINIAS_MC_IMMEDIATE;
+            m->operands[2].immediate=csr;
+            goto done;
+        }
+    }
+    if(n==2U && la_reg(t[0],&rd) && la_reg(t[1],&rj)) {
+        for(i=0U;i<sizeof(unary)/sizeof(unary[0]);++i) {
+            if(strcmp(s->op,unary[i].name)==0) {
+                m->count=2U;
+                m->encoding=unary[i].code|(rj<<5U)|rd;
+                m->operands[0].kind=MINIAS_MC_REGISTER;
+                m->operands[0].reg=rd;
+                m->operands[1].kind=MINIAS_MC_REGISTER;
+                m->operands[1].reg=rj;
+                goto done;
+            }
+        }
+    }
     if(!strcmp(s->op,"move") && n==2U &&
         la_reg(t[0],&rd) && la_reg(t[1],&rj)) {
         m->count=2U;m->encoding=UINT32_C(0x00150000) |
@@ -369,6 +476,18 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
     }
     if(n!=3U || !la_reg(t[0],&rd) || !la_reg(t[1],&rj))goto fail;
     if(la_reg(t[2],&rk)) {
+        for(i=0U;i<sizeof(atomics)/sizeof(atomics[0]);++i)
+            if(!strcmp(s->op,atomics[i].name)) {
+                m->count=3U;
+                m->encoding=atomics[i].code|(rj<<10U)|(rk<<5U)|rd;
+                m->operands[0].kind=MINIAS_MC_REGISTER;
+                m->operands[0].reg=rd;
+                m->operands[1].kind=MINIAS_MC_REGISTER;
+                m->operands[1].reg=rj;
+                m->operands[2].kind=MINIAS_MC_REGISTER;
+                m->operands[2].reg=rk;
+                goto done;
+            }
         for(i=0U;i<sizeof(gpr3)/sizeof(gpr3[0]);++i)
             if(!strcmp(s->op,gpr3[i].name)) {
                 m->count=3U;m->encoding=gpr3[i].code |
