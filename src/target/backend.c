@@ -36,8 +36,9 @@ static const char *const aarch64_qualified_inputs[] = {
      * opening signature so a rejected operand/hidden instruction can never
      * fall through to unqualified generic Core ASM. Other source comments
      * and all zero-input raw GAS remain unaffected. */
-    "// atomic_and", "// atomic_or", "// atomic_xor",
-    "// atomic64_and", "// atomic64_or", "// atomic64_xor"
+    "// atomic_and", "// atomic_or", "// atomic_xor", "// atomic_andnot",
+    "// atomic64_and", "// atomic64_or", "// atomic64_xor",
+    "// atomic64_andnot", "// atomic_fetch_or", "// atomic64_fetch_or"
 };
 static const char *const loongarch64_qualified_inputs[] = {
     "dbar", "amand_db.w", "amor_db.w", "amxor_db.w", "amadd_db.w",
