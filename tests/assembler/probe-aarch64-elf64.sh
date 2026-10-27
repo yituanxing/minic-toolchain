@@ -45,6 +45,12 @@ external_probe:
     dmb oshst
     dmb ish
     dmb sy
+    dsb sy
+    dsb ish
+    dsb oshst
+    isb
+    isb sy
+    isb #15
     cmn x0, #4096
     cmn w1, #4096
     cmn x0, x1
@@ -289,6 +295,7 @@ for bad_source in 'ldxr x0, [x1,#4]' 'stxr x0, x1, [x2]' \
                   'cset x0, bogus' \
                   'mrs w0, sp_el0' 'msr tpidrro_el0, x0' \
                   'mrs x0, fake_el0' 'dmb #16' 'dmb invalid' \
+                  'dsb #16' 'dsb bogus' 'isb ish' 'isb #16' \
                   'prfm pstl4strm, [x2]' 'prfm pstl1strm, [w2]' \
                   '.inst 0x100000000' \
                   'cmn x0, #-1' 'cmn w0, #4097' \

@@ -78,6 +78,13 @@ entry_x:
     movq %rax, 128(%rsp)
     movl 0(%rbp), %eax
     addq %r8,%r9
+    # Carry-dependent 8/16-bit operations share typed ModR/M.
+    sbbb %sil,%dil
+    sbbb %cl,8(%r12)
+    sbbb 8(%r12),%r9b
+    sbbw %cx,4(%r13)
+    sbbb $7,%r8b
+    sbbb $1,8(%r12)
     subq %rax,%rcx
     cmpq %rbp,%rsp
     testq %r8,%r9
@@ -529,6 +536,10 @@ entry_la:
     movgr2fcsr $fcsr0, $r12
     movfr2gr.d $r5, $f30
     add.d $a0, $a0, $a1
+    addu16i.d $a0, $a1, 0
+    addu16i.d $a2, $sp, 32767
+    addu16i.d $a3, $tp, -32768
+    addu16i.d $r31, $r0, -1
     addi.d $sp, $sp, -16
     st.d $ra, $sp, 8
     ld.d $ra, $sp, 8
@@ -652,6 +663,8 @@ grep -q '0x43' "$work/la-header.txt"
 
 for bad in 'movq __per_cpu_offset(%rdi),%rax' \
            'adcl %rax,%eax' \
+           'sbbb %rax,%r8b' \
+           'sbbb $256,%r8b' \
            'pushq %eax' \
            'cmove %rax, (%rdi)' \
            'bsfq %rax, (%rdi)' \
@@ -919,6 +932,8 @@ for bad in 'li.w $r4, -2049' \
            'andi $a0, $a1, -1' \
            'ori $a0, $a1, 4096' \
            'slli.w $a0, $a1, 32' \
+           'addu16i.d $a0, $a1, 32768' \
+           'addu16i.d $a0, $a1, -32769' \
            'srli.d $a0, $a1, 64' \
            'lu12i.w $a0, 524288' \
            'pcalau12i $a0, -524289' \

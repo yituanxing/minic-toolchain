@@ -111,7 +111,7 @@ enum {
     A64_MC_CSEL_ALIAS,
     A64_MC_MRS,
     A64_MC_MSR,
-    A64_MC_DMB,
+    A64_MC_BARRIER,
     A64_MC_RET,
     A64_MC_MOVZ,
     A64_MC_SVC,
@@ -742,15 +742,28 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
         inst->count=1U;
         inst->encoding=read?mrscode:msrcode;
         put_reg(&inst->operands[0],rt,true);
-    } else if(!strcmp(op,"dmb")) {
-        unsigned barrier;
-        if(!a64_barrier_option(args,&barrier)) {
+    } else if(!strcmp(op,"dmb") || !strcmp(op,"dsb") ||
+              !strcmp(op,"isb")) {
+        unsigned barrier=15U;
+        bool is_isb=!strcmp(op,"isb");
+        /* Three barrier opcodes share typed MCInst; ISB supports SY. */
+        if(is_isb) {
+            if(*args && strcmp(args,"sy")!=0 && strcmp(args,"#15")!=0 &&
+               strcmp(args,"15")!=0) {
+                minias_set_error(as,"bad-aarch64-isb:%s:line=%zu",
+                                 args,stmt->line);
+                free(inst);return false;
+            }
+        } else if(!a64_barrier_option(args,&barrier)) {
             minias_set_error(as,"bad-aarch64-barrier:%s:line=%zu",
                              args,stmt->line);
             free(inst);return false;
         }
-        inst->opcode=A64_MC_DMB;
-        inst->encoding=UINT32_C(0xd50330bf)|(barrier<<8U);
+        inst->opcode=A64_MC_BARRIER;
+        inst->encoding=(is_isb?UINT32_C(0xd50330df):
+                        !strcmp(op,"dsb")?UINT32_C(0xd503309f):
+                                          UINT32_C(0xd50330bf)) |
+                       (barrier<<8U);
     } else if((!strcmp(op,"br")||!strcmp(op,"blr")) &&
        parse_register(args,&reg,&reg64) && reg64) {
         inst->opcode=!strcmp(op,"br")?A64_MC_BR:A64_MC_BLR;
@@ -971,7 +984,7 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
         case A64_MC_MSR:
             code=inst->encoding|inst->operands[0].reg;
             break;
-        case A64_MC_DMB:
+        case A64_MC_BARRIER:
             code=inst->encoding;
             break;
         case A64_MC_HINT:

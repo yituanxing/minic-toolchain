@@ -353,12 +353,12 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
         {"movb",0x88U,0x8aU,false},{"cmpb",0x38U,0x3aU,false},
         {"testb",0x84U,0x84U,false},{"addb",0x00U,0x02U,false},
         {"subb",0x28U,0x2aU,false},{"andb",0x20U,0x22U,false},
-        {"adcb",0x10U,0x12U,false},
+        {"adcb",0x10U,0x12U,false},{"sbbb",0x18U,0x1aU,false},
         {"orb",0x08U,0x0aU,false},{"xorb",0x30U,0x32U,false},
         {"movw",0x89U,0x8bU,false},{"cmpw",0x39U,0x3bU,false},
         {"testw",0x85U,0x85U,false},{"addw",0x01U,0x03U,false},
         {"subw",0x29U,0x2bU,false},{"andw",0x21U,0x23U,false},
-        {"adcw",0x11U,0x13U,false},
+        {"adcw",0x11U,0x13U,false},{"sbbw",0x19U,0x1bU,false},
         {"orw",0x09U,0x0bU,false},{"xorw",0x31U,0x33U,false}
     };
     MiniAsMCInst *m=calloc(1U,sizeof(*m)+3U*sizeof(MiniAsMCOperand));
@@ -494,7 +494,7 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
     /* Byte ALU variants and sign-extending MOV all remain target local. */
     if(x64_args2(s->args,src,dst)) {
         static const struct {const char *op;uint32_t opcode;} byteop[]={
-            {"movb",0x88U},{"addb",0x00U},{"adcb",0x10U},{"orb",0x08U},
+            {"movb",0x88U},{"addb",0x00U},{"adcb",0x10U},{"sbbb",0x18U},{"orb",0x08U},
             {"andb",0x20U},{"subb",0x28U},{"xorb",0x30U},
             {"cmpb",0x38U},{"testb",0x84U}
         };
@@ -808,7 +808,7 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
             {"andq",4U},{"andl",4U},{"subq",5U},{"subl",5U},
             {"sbbq",3U},{"sbbl",3U},
             {"xorq",6U},{"xorl",6U},{"cmpq",7U},{"cmpl",7U},
-            {"addb",0U},{"adcb",2U},{"orb",1U},{"andb",4U},{"subb",5U},
+            {"addb",0U},{"adcb",2U},{"sbbb",3U},{"orb",1U},{"andb",4U},{"subb",5U},
             {"xorb",6U},{"cmpb",7U},
             {"addw",0U},{"adcw",2U},{"orw",1U},{"sbbw",3U},{"andw",4U},
             {"subw",5U},{"xorw",6U},{"cmpw",7U}

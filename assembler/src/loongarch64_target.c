@@ -954,6 +954,24 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
         m->operands[1].reg=rj;
         goto done;
     }
+    /* Signed si16 GOT/LDptr address arithmetic, no guessed relocations. */
+    if(n==3U && !strcmp(s->op,"addu16i.d")) {
+        int64_t imm;
+        if(!la_reg(t[0],&rd) || !la_reg(t[1],&rj) ||
+           !minias_eval_i64_expression(t[2],&imm) ||
+           imm<-32768 || imm>32767)goto fail;
+        m->count=3U;
+        m->encoding=UINT32_C(0x10000000) |
+            (((uint32_t)imm&UINT32_C(0xffff))<<10U) |
+            (rj<<5U)|rd;
+        m->operands[0].kind=MINIAS_MC_REGISTER;
+        m->operands[0].reg=rd;
+        m->operands[1].kind=MINIAS_MC_REGISTER;
+        m->operands[1].reg=rj;
+        m->operands[2].kind=MINIAS_MC_IMMEDIATE;
+        m->operands[2].immediate=(uint64_t)imm;
+        goto done;
+    }
     if((n!=3U && n!=4U) ||
        !la_reg(t[0],&rd) || !la_reg(t[1],&rj)) goto fail;
     if(n==4U) {
