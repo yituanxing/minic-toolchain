@@ -74,9 +74,15 @@ static bool parse_file(MiniAs *as,const char *args,size_t line) {
         name[len1]='/';memcpy(name+len1+1U,second,len2);
         name[len1+len2+1U]='\0';
     }else name[len1]='\0';
-    if(!debug_grow((void **)&as->debug_files,&as->debug_file_capacity,
-                   (size_t)index+1U,sizeof(*as->debug_files))) {
-        free(name);return false;
+    {
+        size_t old_capacity=as->debug_file_capacity;
+        if(!debug_grow((void **)&as->debug_files,&as->debug_file_capacity,
+                       (size_t)index+1U,sizeof(*as->debug_files))) {
+            free(name);return false;
+        }
+        if(as->debug_file_capacity>old_capacity)
+            memset(as->debug_files+old_capacity,0,
+                (as->debug_file_capacity-old_capacity)*sizeof(*as->debug_files));
     }
     /* Newly allocated pointer slots must be initialized. */
     if(as->debug_file_max<(size_t)index) {
