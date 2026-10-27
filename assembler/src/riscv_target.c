@@ -51,19 +51,34 @@ static bool minias_section_append_code_alignment(MiniAs *as,
 }
 
 
-static uint32_t riscv_reloc(unsigned width, MiniAsRelocKind kind) {
-    if (kind == MINIAS_RELOC_ABS)
-        return width == 4U ? MINIAS_R_RISCV_32 :
-               width == 8U ? MINIAS_R_RISCV_64 : 0U;
-    if (kind == MINIAS_RELOC_ADD)
-        return width == 2U ? MINIAS_R_RISCV_ADD16 :
-               width == 4U ? MINIAS_R_RISCV_ADD32 :
-               width == 8U ? MINIAS_R_RISCV_ADD64 : 0U;
-    if (kind == MINIAS_RELOC_SUB)
-        return width == 2U ? MINIAS_R_RISCV_SUB16 :
-               width == 4U ? MINIAS_R_RISCV_SUB32 :
-               width == 8U ? MINIAS_R_RISCV_SUB64 : 0U;
-    return 0U;
+static uint32_t riscv_fixup_relocation_type(MiniAsFixupKind kind,
+                                              unsigned width) {
+    switch (kind) {
+        case MINIAS_FIXUP_ABS:
+            return width == 4U ? MINIAS_R_RISCV_32 :
+                   width == 8U ? MINIAS_R_RISCV_64 : 0U;
+        case MINIAS_FIXUP_ADD:
+            return width == 2U ? MINIAS_R_RISCV_ADD16 :
+                   width == 4U ? MINIAS_R_RISCV_ADD32 :
+                   width == 8U ? MINIAS_R_RISCV_ADD64 : 0U;
+        case MINIAS_FIXUP_SUB:
+            return width == 2U ? MINIAS_R_RISCV_SUB16 :
+                   width == 4U ? MINIAS_R_RISCV_SUB32 :
+                   width == 8U ? MINIAS_R_RISCV_SUB64 : 0U;
+        case MINIAS_FIXUP_RV_CALL_PLT:
+            return width == 4U ? MINIAS_R_RISCV_CALL_PLT : 0U;
+        case MINIAS_FIXUP_RV_PCREL_HI20:
+            return width == 4U ? MINIAS_R_RISCV_PCREL_HI20 : 0U;
+        case MINIAS_FIXUP_RV_GOT_HI20:
+            return width == 4U ? MINIAS_R_RISCV_GOT_HI20 : 0U;
+        case MINIAS_FIXUP_RV_PCREL_LO12_I:
+            return width == 4U ? MINIAS_R_RISCV_PCREL_LO12_I : 0U;
+        case MINIAS_FIXUP_RV_PCREL_LO12_S:
+            return width == 4U ? MINIAS_R_RISCV_PCREL_LO12_S : 0U;
+        case MINIAS_FIXUP_RV_JAL:
+            return width == 4U ? MINIAS_R_RISCV_JAL : 0U;
+        default: return 0U;
+    }
 }
 
 /* Validate raw 32-bit encodings AFTER macro/ISA pseudo expansion, section
@@ -411,7 +426,7 @@ static const MiniAsTargetOps riscv_ops = {
     .relax_instruction = riscv_relax_instruction,
     .expanded_instruction_size = riscv_expanded_size,
     .append_code_alignment = minias_section_append_code_alignment,
-    .relocation_type = riscv_reloc,
+    .fixup_relocation_type = riscv_fixup_relocation_type,
     .validate_output = strict_base_i_check_sections,
 };
 

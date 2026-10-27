@@ -1772,10 +1772,11 @@ bool minias_riscv_encode(MiniAs *as, const MiniAsStmt *stmt) {
             !append_u32(as, stmt->section, enc_i(0x67U, 1, 0U, 1, 0))) {
             return false;
         }
-        return minias_add_relocation(as,
+        return minias_add_fixup(as,
                                      stmt->section,
                                      stmt->offset,
-                                     MINIAS_R_RISCV_CALL_PLT,
+                                     MINIAS_FIXUP_RV_CALL_PLT,
+                                     4U,
                                      expr.name,
                                      expr.addend);
     }
@@ -1793,10 +1794,11 @@ bool minias_riscv_encode(MiniAs *as, const MiniAsStmt *stmt) {
             !append_u32(as, stmt->section, enc_i(0x67U, 0, 0U, 6, 0))) {
             return false;
         }
-        return minias_add_relocation(as,
+        return minias_add_fixup(as,
                                      stmt->section,
                                      stmt->offset,
-                                     MINIAS_R_RISCV_CALL_PLT,
+                                     MINIAS_FIXUP_RV_CALL_PLT,
+                                     4U,
                                      expr.name,
                                      expr.addend);
     }
@@ -1848,17 +1850,19 @@ bool minias_riscv_encode(MiniAs *as, const MiniAsStmt *stmt) {
             return false;
         }
 
-        return minias_add_relocation(as,
+        return minias_add_fixup(as,
                                      stmt->section,
                                      stmt->offset,
-                                     use_got ? MINIAS_R_RISCV_GOT_HI20
-                                             : MINIAS_R_RISCV_PCREL_HI20,
+                                     use_got ? MINIAS_FIXUP_RV_GOT_HI20
+                                             : MINIAS_FIXUP_RV_PCREL_HI20,
+                                     4U,
                                      expr.name,
                                      expr.addend) &&
-               minias_add_relocation(as,
+               minias_add_fixup(as,
                                      stmt->section,
                                      stmt->offset + 4U,
-                                     MINIAS_R_RISCV_PCREL_LO12_I,
+                                     MINIAS_FIXUP_RV_PCREL_LO12_I,
+                                     4U,
                                      anchor_name,
                                      0);
     }
@@ -2486,16 +2490,18 @@ bool minias_riscv_encode(MiniAs *as, const MiniAsStmt *stmt) {
                             enc_i(0x03U, rd, funct3, rd, 0))) {
                 return false;
             }
-            return minias_add_relocation(as,
+            return minias_add_fixup(as,
                                          stmt->section,
                                          stmt->offset,
-                                         MINIAS_R_RISCV_PCREL_HI20,
+                                         MINIAS_FIXUP_RV_PCREL_HI20,
+                                         4U,
                                          expr.name,
                                          expr.addend) &&
-                   minias_add_relocation(as,
+                   minias_add_fixup(as,
                                          stmt->section,
                                          stmt->offset + 4U,
-                                         MINIAS_R_RISCV_PCREL_LO12_I,
+                                         MINIAS_FIXUP_RV_PCREL_LO12_I,
+                                         4U,
                                          anchor_name,
                                          0);
         }
@@ -2555,16 +2561,18 @@ bool minias_riscv_encode(MiniAs *as, const MiniAsStmt *stmt) {
                             enc_s(funct3, rs1, rs2, 0))) {
                 return false;
             }
-            return minias_add_relocation(as,
+            return minias_add_fixup(as,
                                          stmt->section,
                                          stmt->offset,
-                                         MINIAS_R_RISCV_PCREL_HI20,
+                                         MINIAS_FIXUP_RV_PCREL_HI20,
+                                         4U,
                                          expr.name,
                                          expr.addend) &&
-                   minias_add_relocation(as,
+                   minias_add_fixup(as,
                                          stmt->section,
                                          stmt->offset + 4U,
-                                         MINIAS_R_RISCV_PCREL_LO12_S,
+                                         MINIAS_FIXUP_RV_PCREL_LO12_S,
+                                         4U,
                                          anchor_name,
                                          0);
         }
@@ -2650,10 +2658,11 @@ bool minias_riscv_encode(MiniAs *as, const MiniAsStmt *stmt) {
         }
 
         return append_u32(as, stmt->section, enc_j(rd, 0)) &&
-               minias_add_relocation(as,
+               minias_add_fixup(as,
                                      stmt->section,
                                      stmt->offset,
-                                     MINIAS_R_RISCV_JAL,
+                                     MINIAS_FIXUP_RV_JAL,
+                                     4U,
                                      expr.name,
                                      expr.addend);
     }

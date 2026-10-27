@@ -100,7 +100,7 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
     bool is_64;
     char operand1[80], operand2[80];
     MiniAsSymbolExpr expr;
-    uint32_t reloc = 0U;
+    MiniAsFixupKind fixup = MINIAS_FIXUP_NONE;
     if (strcmp(op, "nop") == 0 && *args == '\0') {
         code = UINT32_C(0xd503201f);
     } else if (strcmp(op, "ret") == 0 && *args == '\0') {
@@ -121,7 +121,8 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
                minias_parse_symbol_addend(args, &expr)) {
         code = strcmp(op, "bl") == 0 ?
                UINT32_C(0x94000000) : UINT32_C(0x14000000);
-        reloc = strcmp(op, "bl") == 0 ? AARCH64_R_CALL26 : AARCH64_R_JUMP26;
+        fixup = strcmp(op, "bl") == 0 ?
+                MINIAS_FIXUP_A64_CALL26 : MINIAS_FIXUP_A64_JUMP26;
         if ((expr.addend & 3) != 0) {
             minias_set_error(as, "bad-aarch64-branch-addend:%s:line=%zu",
                              args, stmt->line);
@@ -155,7 +156,7 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
                     return false;
                 }
                 code |= (uint32_t)(distance / 4) & UINT32_C(0x03ffffff);
-                reloc = 0U;
+                fixup = MINIAS_FIXUP_NONE;
             }
         }
     } else {
@@ -164,9 +165,9 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
         return false;
     }
     if (!append_word(as, stmt->section, code)) return false;
-    if (reloc != 0U &&
-        !minias_add_relocation(as, stmt->section, stmt->offset, reloc,
-                              expr.name, expr.addend)) return false;
+    if (fixup != MINIAS_FIXUP_NONE &&
+        !minias_add_fixup(as, stmt->section, stmt->offset, fixup, 4U,
+                          expr.name, expr.addend)) return false;
     return true;
 }
 
@@ -196,10 +197,18 @@ static bool code_alignment(MiniAs *as, int section, size_t amount) {
     return true;
 }
 
-static uint32_t relocation_type(unsigned width, MiniAsRelocKind kind) {
-    if (kind != MINIAS_RELOC_ABS) return 0U;
-    return width == 4U ? AARCH64_R_ABS32 :
-           width == 8U ? AARCH64_R_ABS64 : 0U;
+static uint32_t aarch64_fixup_relocation_type(MiniAsFixupKind kind,
+                                               unsigned width) {
+    switch (kind) {
+        case MINIAS_FIXUP_ABS:
+            return width == 4U ? AARCH64_R_ABS32 :
+                   width == 8U ? AARCH64_R_ABS64 : 0U;
+        case MINIAS_FIXUP_A64_CALL26:
+            return width == 4U ? AARCH64_R_CALL26 : 0U;
+        case MINIAS_FIXUP_A64_JUMP26:
+            return width == 4U ? AARCH64_R_JUMP26 : 0U;
+        default: return 0U;
+    }
 }
 
 static bool validate(MiniAs *as) {
@@ -231,7 +240,7 @@ static const MiniAsTargetOps ops = {
     .measure = measure,
     .encode = encode,
     .append_code_alignment = code_alignment,
-    .relocation_type = relocation_type,
+    .fixup_relocation_type = aarch64_fixup_relocation_type,
     .validate_output = validate,
 };
 const MiniAsTargetOps *minias_target_aarch64(void) {

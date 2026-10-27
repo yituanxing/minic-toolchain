@@ -1748,4 +1748,28 @@ if grep -q 'minias-fragment-relayout:inplace-passes=' \
 fi
 echo 'MINIAS_FRAGMENT_REPARSE_GUARD=PASS position_dependent_org=1'
 
+
+# One typed-fixup object exercises semantic RISC-V CALL_PLT, PCREL_HI20,
+# PCREL_LO12_I and ABS64 through the same late ELF relocation mapper.
+cat >"$work/typed-fixup.s" <<'EOF_TYPED_FIXUP'
+.text
+.globl typed_fixup
+typed_fixup:
+    call external_function
+    lla a0, external_data
+    ret
+.data
+.globl typed_pointer
+typed_pointer:
+    .quad external_data + 8
+EOF_TYPED_FIXUP
+"$MINIAS" -o "$work/typed-fixup.o" "$work/typed-fixup.s"
+typed_relocs="$(readelf -Wr "$work/typed-fixup.o")"
+printf '%s\n' "$typed_relocs" | grep -q 'R_RISCV_CALL_PLT'
+printf '%s\n' "$typed_relocs" | grep -q 'R_RISCV_PCREL_HI20'
+printf '%s\n' "$typed_relocs" | grep -q 'R_RISCV_PCREL_LO12_I'
+printf '%s\n' "$typed_relocs" | grep -q 'R_RISCV_64'
+printf '%s\n' "$typed_relocs" | grep -q 'external_data[[:space:]]*+[[:space:]]*8'
+echo 'MINIAS_TYPED_FIXUP=PASS call_plt=1 pcrel_hi20=1 pcrel_lo12_i=1 abs64_addend8=1'
+
 echo "MINIAS_A0=PASS objects=30 abi_flags=3 format=ELF64-RISCV-ET_REL relocations=23 strings=2 pseudos=17 previous=3 subsection=2 numeric_labels=18 ecall=1 isa_next=13 csr_amo=8 sfence_vma=3 fence_i=1 vsetvl=1 vsetvli=1 vmv_v_i=4 rept=2 nested_rept=1 irp=4 section_stack=1 org=3 local_difference=1 lr_sc=2 inline_labels=2 branch_pseudos=8 extern=1 symbol_minus_dot=4 symbol_difference=1 absolute32=1 jal=2 jal_subsection=1 high_numeric_labels=2 u64_data=3 raw_insn=4 set_alias=3 move=1 numeric_zero=1 immediate_product=2 shift_immediate=1 incbin=1 align_expr=1 native_expr=6 native_zbb_tail_memexpr=1 native_jalr_symbol_load=1 native_forward_short=1 native_mixed_macro=1 native_divided_difference=1 native_symbol_addend_expr=1 native_add_sub_immediate=1 native_cfi_boundary=1 native_gas_forms=1 native_set_size=1 native_macro_comma=1 native_macro_quotes=1 pic_la_got=1 sext_w=1 macro=4 conditional=1"

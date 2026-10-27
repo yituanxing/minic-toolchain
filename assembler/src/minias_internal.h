@@ -80,13 +80,31 @@ typedef enum MiniAsStmtKind {
     MINIAS_STMT_DATA
 } MiniAsStmtKind;
 
-typedef struct MiniAsReloc {
+typedef enum MiniAsFixupKind {
+    MINIAS_FIXUP_NONE = 0,
+    MINIAS_FIXUP_ABS,
+    MINIAS_FIXUP_ADD,
+    MINIAS_FIXUP_SUB,
+    MINIAS_FIXUP_RV_CALL_PLT,
+    MINIAS_FIXUP_RV_PCREL_HI20,
+    MINIAS_FIXUP_RV_GOT_HI20,
+    MINIAS_FIXUP_RV_PCREL_LO12_I,
+    MINIAS_FIXUP_RV_PCREL_LO12_S,
+    MINIAS_FIXUP_RV_JAL,
+    MINIAS_FIXUP_A64_CALL26,
+    MINIAS_FIXUP_A64_JUMP26
+} MiniAsFixupKind;
+
+/* A symbolic machine field adjustment, still independent of ELF's numeric
+ * relocation encoding until final object materialization. */
+typedef struct MiniAsFixup {
     int section;
     uint64_t offset;
-    uint32_t type;
+    MiniAsFixupKind kind;
+    unsigned width;
     size_t symbol_index;
     int64_t addend;
-} MiniAsReloc;
+} MiniAsFixup;
 
 typedef struct MiniAsSymbolExpr {
     char name[256];
@@ -142,9 +160,9 @@ typedef struct MiniAs {
     MiniAsStmt *stmts;
     size_t stmt_count;
     size_t stmt_capacity;
-    MiniAsReloc *relocs;
-    size_t reloc_count;
-    size_t reloc_capacity;
+    MiniAsFixup *fixups;
+    size_t fixup_count;
+    size_t fixup_capacity;
     MiniAsSubsection *subsections;
     size_t subsection_count;
     size_t subsection_capacity;
@@ -197,12 +215,13 @@ bool minias_write_elf32(MiniAs *as, const char *path);
 int minias_find_section(const MiniAs *as, const char *name);
 int minias_ensure_section(MiniAs *as, const char *name, uint32_t type, uint64_t flags, uint64_t align);
 MiniAsSymbol *minias_get_symbol(MiniAs *as, const char *name, bool create);
-bool minias_add_relocation(MiniAs *as,
-                           int section,
-                           uint64_t offset,
-                           uint32_t type,
-                           const char *symbol_name,
-                           int64_t addend);
+bool minias_add_fixup(MiniAs *as,
+                      int section,
+                      uint64_t offset,
+                      MiniAsFixupKind kind,
+                      unsigned width,
+                      const char *symbol_name,
+                      int64_t addend);
 bool minias_eval_u64_expression(const char *text, uint64_t *value);
 bool minias_parse_symbol_addend(const char *text, MiniAsSymbolExpr *expr);
 bool minias_decode_string_literals(const char *text,
@@ -214,10 +233,6 @@ bool minias_section_append_zero(MiniAs *as, int section_index, size_t size);
 void minias_set_error(MiniAs *as, const char *format, ...);
 char *minias_strdup(const char *text);
 char *minias_trim(char *text);
-
-typedef enum MiniAsRelocKind {
-    MINIAS_RELOC_ABS, MINIAS_RELOC_ADD, MINIAS_RELOC_SUB
-} MiniAsRelocKind;
 
 typedef struct MiniAsObjectAttribute {
     const char *name;
@@ -239,7 +254,7 @@ typedef struct MiniAsTargetOps {
     bool (*relax_instruction)(MiniAs *, const MiniAsStmt *, uint32_t *);
     bool (*expanded_instruction_size)(const char *, uint32_t, uint32_t *);
     bool (*append_code_alignment)(MiniAs *, int, size_t);
-    uint32_t (*relocation_type)(unsigned, MiniAsRelocKind);
+    uint32_t (*fixup_relocation_type)(MiniAsFixupKind, unsigned);
     bool (*validate_output)(MiniAs *);
 } MiniAsTargetOps;
 

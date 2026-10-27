@@ -4,8 +4,9 @@
 
 Common assembler owns sections, symbols, subsection layout, source traversal,
 macros and ELF object creation. The target now owns instruction measurement,
-encoding, branch classification, executable alignment bytes, relocation
-number mapping, and strict post-encoding ISA verification via MiniAsTargetOps.
+encoding, branch relaxation, executable alignment bytes, fixup-to-ELF
+relocation mapping, and strict post-encoding ISA verification via
+MiniAsTargetOps.
 
 Command line options are resolved as a **combined** -march/-mabi profile.
 XLEN and ELFCLASS cannot conflict; hard-float ABI requires the matching ISA
@@ -24,8 +25,13 @@ Explicit -march=rv32i/rv64i retains existing fail-closed machine-code checks.
    Position-dependent .set/.equ/.org/.if conservatively use the historical
    reparsing fallback. The remaining work is a general typed deferred
    expression/fixup system that removes this fallback altogether.
-3. Unify symbol-aware absolute expression grammar with the now-shared
-   constant/addend evaluator and properly separate Fixup from ELF Relocation.
+3. A typed semantic MiniAsFixup now represents machine and data field
+   adjustments (ABS/ADD/SUB, RV PCREL/GOT/CALL/JAL, A64 CALL/JUMP). Each
+   backend translates fixup kinds to ELF relocation numbers **only at ELF
+   serialization**, after field-boundary validation. The old common
+   MiniAsReloc array and eager R_* encoding are removed. Remaining:
+   symbol-aware deferred expression evaluation, field bit-layout callbacks,
+   and linker/assembler relaxation at arbitrary instruction sites.
 4. Explicit -march now checks M/A/F/D/C/V/Zicsr/Zifencei/Zbb opcode
    families and emits canonical Tag_RISCV_arch. Finish machine-word-wide
    validation, full ISA version/dependency grammar and target option-region
@@ -42,3 +48,15 @@ Explicit -march=rv32i/rv64i retains existing fail-closed machine-code checks.
 The feature parser recognizes common basic single-letter ISA spellings and
 named _z*/_s*/_x* suffixes but does not fully validate ISA versions, extension
 dependencies or instruction-by-instruction features for non-I profiles.
+
+## Exact-head acceptance caveat (2026-10-27)
+
+The opt-in 3536 Linux build gate on `d0d66136` showed successful native35,
+C149 and several frozen C windows, but other windows failed during **MiniC
+C-to-assembly generation**, reporting `indirect call argument type does not
+match declaration` in unrelated translation units. This cannot be called
+a MiniAS success or failure without separating compiler generation from
+MiniAS assembly and frozen semantic oracles. Do not waive failed windows,
+and do not rerun expensive full corpus for each MiniAS-only fix. A separate
+MiniC owner should resolve the upstream C-to-S blocker before the next
+consolidated exact-head acceptance.

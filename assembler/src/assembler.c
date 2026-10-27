@@ -459,44 +459,51 @@ MiniAsSymbol *minias_get_symbol(MiniAs *as, const char *name, bool create) {
     return sym;
 }
 
-bool minias_add_relocation(MiniAs *as,
-                           int section,
-                           uint64_t offset,
-                           uint32_t type,
-                           const char *symbol_name,
-                           int64_t addend) {
+bool minias_add_fixup(MiniAs *as,
+                      int section,
+                      uint64_t offset,
+                      MiniAsFixupKind kind,
+                      unsigned width,
+                      const char *symbol_name,
+                      int64_t addend) {
     MiniAsSymbol *symbol;
-    MiniAsReloc *reloc;
+    MiniAsFixup *fixup;
     size_t symbol_index;
-
-    /* R_*_NONE (0) is not a valid encoding for a requested symbolic
-     * fixup. Reject unsupported target/width pairs before writing ELF. */
-    if (type == 0U) {
-        minias_set_error(as, "unsupported-target-relocation:%s", symbol_name);
+    /* Verify this semantic fixup can be represented by the selected target.
+     * ELF relocation numbers are chosen later by the object writer. */
+    if (as->target->fixup_relocation_type(kind, width) == 0U) {
+        minias_set_error(as,
+                         "unsupported-target-fixup:kind=%u:width=%u:symbol=%s",
+                         (unsigned)kind, width, symbol_name);
+        return false;
+    }
+    if (section < 0 || (size_t)section >= as->section_count ||
+        (width != 2U && width != 4U && width != 8U) ||
+        offset > UINT64_MAX - width) {
+        minias_set_error(as, "invalid-fixup-range:%s", symbol_name);
         return false;
     }
     symbol = minias_get_symbol(as, symbol_name, true);
-    if (symbol == NULL) {
-        return false;
-    }
+    if (symbol == NULL) return false;
     symbol_index = (size_t)(symbol - as->symbols);
     if (!symbol->defined && symbol->bind == MINIAS_STB_LOCAL &&
-        strncmp(symbol->name, ".L", 2U) != 0) {
+        strncmp(symbol->name, ".L", 2U) != 0)
         symbol->bind = MINIAS_STB_GLOBAL;
-    }
-    if (!grow_array((void **)&as->relocs,
-                    &as->reloc_capacity,
-                    sizeof(*as->relocs),
-                    as->reloc_count + 1U)) {
-        minias_set_error(as, "out-of-memory:relocation");
+
+    if (!grow_array((void **)&as->fixups,
+                    &as->fixup_capacity,
+                    sizeof(*as->fixups),
+                    as->fixup_count + 1U)) {
+        minias_set_error(as, "out-of-memory:fixup");
         return false;
     }
-    reloc = &as->relocs[as->reloc_count++];
-    reloc->section = section;
-    reloc->offset = offset;
-    reloc->type = type;
-    reloc->symbol_index = symbol_index;
-    reloc->addend = addend;
+    fixup = &as->fixups[as->fixup_count++];
+    fixup->section = section;
+    fixup->offset = offset;
+    fixup->kind = kind;
+    fixup->width = width;
+    fixup->symbol_index = symbol_index;
+    fixup->addend = addend;
     return true;
 }
 
@@ -600,7 +607,7 @@ void minias_destroy(MiniAs *as) {
         free(as->stmts[i].args);
     }
     free(as->stmts);
-    free(as->relocs);
+    free(as->fixups);
     free(as->subsections);
     free(as->section_stack);
     free(as->numeric_label_counts);
@@ -2188,8 +2195,8 @@ static bool emit_symbol_minus_dot(MiniAs *as,
                                   uint64_t relocation_offset,
                                   const MiniAsSymbolExpr *expr) {
     MiniAsSymbol *target = minias_get_symbol(as, expr->name, false);
-    uint32_t add_type = as->target->relocation_type(width, MINIAS_RELOC_ADD);
-    uint32_t sub_type = as->target->relocation_type(width, MINIAS_RELOC_SUB);
+    uint32_t add_type = as->target->fixup_relocation_type(MINIAS_FIXUP_ADD, width);
+    uint32_t sub_type = as->target->fixup_relocation_type(MINIAS_FIXUP_SUB, width);
 
     if (target != NULL && target->defined && target->section == stmt->section) {
         int64_t difference =
@@ -2235,16 +2242,18 @@ static bool emit_symbol_minus_dot(MiniAs *as,
         anchor->bind = MINIAS_STB_LOCAL;
 
         return minias_section_append_zero(as, stmt->section, width) &&
-               minias_add_relocation(as,
+               minias_add_fixup(as,
                                      stmt->section,
                                      relocation_offset,
-                                     add_type,
+                                     MINIAS_FIXUP_ADD,
+                                     width,
                                      expr->name,
                                      expr->addend) &&
-               minias_add_relocation(as,
+               minias_add_fixup(as,
                                      stmt->section,
                                      relocation_offset,
-                                     sub_type,
+                                     MINIAS_FIXUP_SUB,
+                                     width,
                                      anchor_name,
                                      0);
     }
@@ -2295,8 +2304,8 @@ static bool emit_symbol_difference(MiniAs *as,
                                    const MiniAsSymbolExpr *rhs_expr) {
     MiniAsSymbol *lhs = minias_get_symbol(as, lhs_expr->name, false);
     MiniAsSymbol *rhs = minias_get_symbol(as, rhs_expr->name, false);
-    uint32_t add_type = as->target->relocation_type(width, MINIAS_RELOC_ADD);
-    uint32_t sub_type = as->target->relocation_type(width, MINIAS_RELOC_SUB);
+    uint32_t add_type = as->target->fixup_relocation_type(MINIAS_FIXUP_ADD, width);
+    uint32_t sub_type = as->target->fixup_relocation_type(MINIAS_FIXUP_SUB, width);
 
     if (lhs != NULL && rhs != NULL && lhs->defined && rhs->defined &&
         lhs->section == rhs->section && lhs->section == stmt->section &&
@@ -2323,16 +2332,18 @@ static bool emit_symbol_difference(MiniAs *as,
         return false;
     }
     return minias_section_append_zero(as, stmt->section, width) &&
-           minias_add_relocation(as,
+           minias_add_fixup(as,
                                  stmt->section,
                                  relocation_offset,
-                                 add_type,
+                                 MINIAS_FIXUP_ADD,
+                                 width,
                                  lhs_expr->name,
                                  lhs_expr->addend) &&
-           minias_add_relocation(as,
+           minias_add_fixup(as,
                                  stmt->section,
                                  relocation_offset,
-                                 sub_type,
+                                 MINIAS_FIXUP_SUB,
+                                 width,
                                  rhs_expr->name,
                                  rhs_expr->addend);
 }
@@ -2484,12 +2495,13 @@ static bool emit_data_stmt(MiniAs *as, const MiniAsStmt *stmt) {
                         return false;
                     }
                     relocation_type =
-                        as->target->relocation_type(width, MINIAS_RELOC_ABS);
+                        as->target->fixup_relocation_type(MINIAS_FIXUP_ABS, width);
                     if (!minias_section_append_zero(as, stmt->section, width) ||
-                        !minias_add_relocation(as,
+                        !minias_add_fixup(as,
                                               stmt->section,
                                               relocation_offset,
-                                              relocation_type,
+                                              MINIAS_FIXUP_ABS,
+                                              width,
                                               expr.name,
                                               expr.addend)) {
                         free(copy);

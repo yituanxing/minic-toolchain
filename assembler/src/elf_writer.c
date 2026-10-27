@@ -9,8 +9,8 @@ static bool symbol_referenced_by_relocation(const MiniAs *as,
                                              size_t symbol_index) {
     size_t i;
 
-    for (i = 0U; i < as->reloc_count; ++i) {
-        if (as->relocs[i].symbol_index == symbol_index) {
+    for (i = 0U; i < as->fixup_count; ++i) {
+        if (as->fixups[i].symbol_index == symbol_index) {
             return true;
         }
     }
@@ -83,7 +83,7 @@ static bool minias_write_elf(MiniAs *as,
                       sizeof(*sections));
     symbols = calloc(expected_symbol_count == 0U ? 1U : expected_symbol_count,
                      sizeof(*symbols));
-    relocations = calloc(as->reloc_count == 0U ? 1U : as->reloc_count,
+    relocations = calloc(as->fixup_count == 0U ? 1U : as->fixup_count,
                          sizeof(*relocations));
     symbol_map = malloc((as->symbol_count == 0U ? 1U : as->symbol_count) *
                         sizeof(*symbol_map));
@@ -166,8 +166,8 @@ static bool minias_write_elf(MiniAs *as,
         goto done;
     }
 
-    for (i = 0U; i < as->reloc_count; ++i) {
-        MiniAsReloc *input = &as->relocs[i];
+    for (i = 0U; i < as->fixup_count; ++i) {
+        MiniAsFixup *input = &as->fixups[i];
         MiniElfWriteRela *output = &relocations[i];
 
         if (input->section < 0 ||
@@ -177,10 +177,26 @@ static bool minias_write_elf(MiniAs *as,
             minias_set_error(as, "internal:bad-relocation-symbol");
             goto done;
         }
+        /* Finalization of the target-owned, typed fixup.
+         * Check the actual emitted section extent before exposing an ELF
+         * relocation; do not allow an out-of-bounds machine-field patch. */
+        if (input->width > as->sections[(size_t)input->section].size ||
+            input->offset >
+            as->sections[(size_t)input->section].size - input->width) {
+            minias_set_error(as, "fixup-field-out-of-bounds:kind=%u",
+                             (unsigned)input->kind);
+            goto done;
+        }
         output->target_section = (size_t)input->section;
         output->offset = input->offset;
         output->symbol_index = symbol_map[input->symbol_index];
-        output->type = input->type;
+        output->type =
+            as->target->fixup_relocation_type(input->kind, input->width);
+        if (output->type == 0U) {
+            minias_set_error(as, "unsupported-elf-fixup:kind=%u",
+                             (unsigned)input->kind);
+            goto done;
+        }
         output->addend = input->addend;
     }
 
@@ -194,7 +210,7 @@ static bool minias_write_elf(MiniAs *as,
     spec.symbols = symbols;
     spec.symbol_count = output_symbol_count;
     spec.relocations = relocations;
-    spec.relocation_count = as->reloc_count;
+    spec.relocation_count = as->fixup_count;
     spec.emit_section_symbols = true;
 
     if (!minielf_build_relocatable(&spec,
