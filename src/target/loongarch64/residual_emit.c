@@ -59,9 +59,9 @@ bool minic_loongarch64_emit_residual_instruction(
     *needs_writeback = true;
         switch (ins->kind) {
         case MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM:
-            if (!minic_loongarch64_emit_dbar(out, ctx, ins))
+            if (!minic_loongarch64_emit_qualified_structured_asm(out, ctx, ins))
                 return minic_multi_direct_machine_reject(
-                    fn, "loongarch64", name, "qualified_dbar",
+                    fn, "loongarch64", name, "qualified_hardware_asm",
                     reject_block, reject_ins, __LINE__);
             *needs_writeback = false;
             return true;

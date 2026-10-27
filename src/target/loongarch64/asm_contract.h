@@ -7,6 +7,9 @@
 bool minic_loongarch64_qualify_inline_asm(
     const MinicC0Program *program, const MinicInlineAsm *src,
     MinicTargetInlineAsmContract *contract);
+bool minic_loongarch64_emit_qualified_structured_asm(
+    FILE *out, const MinicDirectLP64BlockContext *ctx,
+    const MinicCoreInstruction *ins);
 bool minic_loongarch64_emit_dbar(
     FILE *out, const MinicDirectLP64BlockContext *ctx,
     const MinicCoreInstruction *ins);

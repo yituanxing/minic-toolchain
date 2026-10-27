@@ -28,7 +28,10 @@ static bool emit_riscv64(const char *output_path, const MinicC0Program *program,
  * target callback declines, Core must not let a generic scalar-input
  * lowering silently admit a different constraint or dangerous suffix. */
 static const char *const aarch64_qualified_inputs[] = {"brk"};
-static const char *const loongarch64_qualified_inputs[] = {"dbar"};
+static const char *const loongarch64_qualified_inputs[] = {
+    "dbar", "amand_db.w", "amor_db.w", "amxor_db.w", "amadd_db.w",
+    "amand_db.d", "amor_db.d", "amxor_db.d", "amadd_db.d"
+};
 static const MinicBackend riscv64_backend = {
     MINIC_TARGET_ARCH_RISCV64, "riscv64", emit_riscv64, NULL, true, NULL, 0U
 };

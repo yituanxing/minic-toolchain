@@ -213,6 +213,92 @@ SRC
     "$cross_cc" -x assembler "$work/dbar-max.s" -o "$work/dbar-max.elf"
     qemu-loongarch64 -L /usr/loongarch64-linux-gnu "$work/dbar-max.elf"
     echo 'MINIC_LOONGARCH64_DBAR_GNU_QEMU=PASS tested=2 rejected=3'
+
+    # Exact original upstream Linux atomic.h +ZB/r store-only hardware AMO
+    # family. One Common Core structured memory-RMW+scalar-input pipeline,
+    # target-owned LP64D machine emission and independent GNU/QEMU oracle.
+    cat > "$work/atomic-kernel.i" <<'SRC'
+struct atomic32 { int counter; };
+struct atomic64 { long counter; };
+static void aand32(int n, struct atomic32 *p) {
+    __asm__ __volatile__("amand_db.w $zero, %1, %0\n"
+                         : "+ZB"(p->counter) : "r"(n) : "memory");
+}
+static void aor32(int n, struct atomic32 *p) {
+    __asm__ __volatile__("amor_db.w $zero, %1, %0\n"
+                         : "+ZB"(p->counter) : "r"(n) : "memory");
+}
+static void axor32(int n, struct atomic32 *p) {
+    __asm__ __volatile__("amxor_db.w $zero, %1, %0\n"
+                         : "+ZB"(p->counter) : "r"(n) : "memory");
+}
+static void aadd32(int n, struct atomic32 *p) {
+    __asm__ __volatile__("amadd_db.w $zero, %1, %0\n"
+                         : "+ZB"(p->counter) : "r"(n) : "memory");
+}
+static void aand64(long n, struct atomic64 *p) {
+    __asm__ __volatile__("amand_db.d $zero, %1, %0\n"
+                         : "+ZB"(p->counter) : "r"(n) : "memory");
+}
+static void aor64(long n, struct atomic64 *p) {
+    __asm__ __volatile__("amor_db.d $zero, %1, %0\n"
+                         : "+ZB"(p->counter) : "r"(n) : "memory");
+}
+static void axor64(long n, struct atomic64 *p) {
+    __asm__ __volatile__("amxor_db.d $zero, %1, %0\n"
+                         : "+ZB"(p->counter) : "r"(n) : "memory");
+}
+static void aadd64(long n, struct atomic64 *p) {
+    __asm__ __volatile__("amadd_db.d $zero, %1, %0\n"
+                         : "+ZB"(p->counter) : "r"(n) : "memory");
+}
+int main(void) {
+    struct atomic32 a = {0x31};
+    struct atomic64 b = {0x31};
+    aand32(0x30, &a);
+    aor32(0x06, &a);
+    axor32(0x05, &a);
+    aadd32(10, &a);
+    aand64(0x30, &b);
+    aor64(0x06, &b);
+    axor64(0x05, &b);
+    aadd64(10, &b);
+    return a.counter == 0x39 && b.counter == 0x39 ? 0 : 1;
+}
+SRC
+    "$cross_cc" -O0 -x c "$work/atomic-kernel.i" -o "$work/atomic-kernel.gnu.elf"
+    "$MINIC_CC" --target=loongarch64-linux -S "$work/atomic-kernel.i" \
+        -o "$work/atomic-kernel.minic.s"
+    for mnemonic in amand_db.w amor_db.w amxor_db.w amadd_db.w \
+                    amand_db.d amor_db.d amxor_db.d amadd_db.d; do
+        grep -Fq "$mnemonic \\$zero, \\$t0, \\$t1" "$work/atomic-kernel.minic.s"
+    done
+    "$cross_cc" -x assembler "$work/atomic-kernel.minic.s" \
+        -o "$work/atomic-kernel.minic.elf"
+    qemu-loongarch64 -L /usr/loongarch64-linux-gnu "$work/atomic-kernel.gnu.elf"
+    qemu-loongarch64 -L /usr/loongarch64-linux-gnu "$work/atomic-kernel.minic.elf"
+    for invalid in suffix constraint reg_arg no_memory wrong_width; do
+        case "$invalid" in
+          suffix) asm='__asm__ __volatile__("amand_db.d $zero, %1, %0; syscall" : "+ZB"(v) : "r"(n) : "memory");' ;;
+          constraint) asm='__asm__ __volatile__("amand_db.d $zero, %1, %0" : "+m"(v) : "r"(n) : "memory");' ;;
+          reg_arg) asm='__asm__ __volatile__("amand_db.d $zero, %1, %0" : "+ZB"(v) : "I"(1) : "memory");' ;;
+          no_memory) asm='__asm__ __volatile__("amand_db.d $zero, %1, %0" : "+ZB"(v) : "r"(n));' ;;
+          wrong_width) asm='__asm__ __volatile__("amand_db.d $zero, %1, %0" : "+ZB"(v32) : "r"(n) : "memory");' ;;
+        esac
+        printf 'int main(void) { long v = 7, n = 1; int v32 = 7; %s return 0; }\n' \
+            "$asm" > "$work/atomic-invalid-$invalid.i"
+        if "$MINIC_CC" --target=loongarch64-linux -S \
+            "$work/atomic-invalid-$invalid.i" \
+            -o "$work/atomic-invalid-$invalid.s" \
+            >"$work/atomic-invalid-$invalid.out" \
+            2>"$work/atomic-invalid-$invalid.err"; then
+            echo "FAIL LoongArch unsafe hardware atomic admitted: $invalid" >&2
+            sed -n '1,100p' "$work/atomic-invalid-$invalid.s" >&2 || true
+            exit 1
+        fi
+        test ! -e "$work/atomic-invalid-$invalid.s"
+    done
+    echo 'MINIC_LOONGARCH64_ATOMIC_GNU_QEMU=PASS variants=8 negative=5 hardware=1'
 fi
 
 # Architecture-specific machine syntax is still owned by real GNU AS.
