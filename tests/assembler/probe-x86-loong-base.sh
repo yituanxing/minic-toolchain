@@ -235,6 +235,9 @@ unresolved_x86:
     xorq $255, (%rax)
     testq $2, 8(%rdi)
     movq $ext_global, %rsi
+    # Same typed ABS32S fixup as movq $sym,%r64 with a ModR/M memory operand.
+    movq $abs_mem_immediate, 8(%rsp)
+    movq $abs_mem_immediate+8, (%r12)
     movq $4294967296, %rax
     movabsq $0x1122334455667788, %r8
     movabsq $ext_global, %r9
@@ -294,6 +297,8 @@ grep -q R_X86_64_PLT32 "$work/x86-gnu-rel.txt"
 grep -q R_X86_64_PC32 "$work/x86-gnu-rel.txt"
 grep -q R_X86_64_32S "$work/x86-rel.txt"
 grep -q R_X86_64_32S "$work/x86-gnu-rel.txt"
+test "$(grep -c 'R_X86_64_32S.*abs_mem_immediate' "$work/x86-rel.txt")" -eq 2
+test "$(grep -c 'R_X86_64_32S.*abs_mem_immediate' "$work/x86-gnu-rel.txt")" -eq 2
 grep -q R_X86_64_64 "$work/x86-rel.txt"
 grep -q R_X86_64_64 "$work/x86-gnu-rel.txt"
 grep -q R_X86_64_32 "$work/x86-rel.txt"
@@ -500,7 +505,8 @@ cmp "$work/la-gnu.bin" "$work/la-mini.bin"
 grep -q 'LoongArch' "$work/la-header.txt"
 grep -q '0x43' "$work/la-header.txt"
 
-for bad in 'movw $65536, (%rax)' \
+for bad in 'movq $abs_mem_immediate, abs_mem_addr(%rip)' \
+           'movw $65536, (%rax)' \
            'andw $-32769, (%rax)' \
            'cmpb $256, %al' \
            'andw $65536, %ax' \

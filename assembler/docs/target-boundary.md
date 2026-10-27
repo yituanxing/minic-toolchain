@@ -415,3 +415,21 @@ makes this existing Common facility reusable without a second Loong fixup
 implementation. A genuine GNU `.long/.quad external-.` oracle checks
 the four specific relocations. Only affected seven frozen Loong shards
 run after the grouped fixes, never new GNU C compilation.
+
+
+## Target/Common architecture audit: symbolic x86 memory immediates
+
+The x86 GNU target now retains symbolic `movq $imm32, disp(%base)` with
+`MiniAsMCInst`'s typed symbol operand. Its existing ModR/M/REX/SIB path
+produces machine bytes; the existing `MINIAS_FIXUP_X64_ABS32S` and Common
+ELF writer produce relocation. This does **not** introduce an ISA switch in
+Common or a duplicate ELF implementation. A symbolic immediate **and**
+symbolic memory displacement within one instruction remains fail-closed
+until an exact GNU two-fixup contract exists.
+
+Structural audit debt (not silently declared solved): x86 target encoding
+still carries target-private operand-width flags; refactoring these into an
+x86-only descriptor must not change MCInst/ELF/layout ownership. Common
+`.comm`/SHN_COMMON and forward-dependent `.skip` need a symbol/layout
+solution shared by every ISA, not x86-specific exceptions. Frozen Linux
+assembly discovery cannot establish GNU object parity or a linked Linux P1.

@@ -710,7 +710,7 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
                 }
                 goto done;
             }
-            if(!is_sym && x64_is_mem_candidate(dst) &&
+            if(x64_is_mem_candidate(dst) &&
                (has_group || !strcmp(s->op,"movq") ||
                 !strcmp(s->op,"movl") || !strcmp(s->op,"movw") ||
                 !strcmp(s->op,"movb") || !strcmp(s->op,"testq") ||
@@ -720,6 +720,12 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
                 if(s->op[strlen(s->op)-1U]=='b' &&
                    (val < -128 || val > 255))goto invalid;
                 if(!x64_parse_base_memory(dst,&parsed))goto invalid;
+                /* Two separate symbol expressions in this one instruction
+                 * have not yet passed the GNU dual-relocation oracle. */
+                if(is_sym && parsed.symbol!=NULL) {
+                    free(parsed.symbol);
+                    goto invalid;
+                }
                 m->operands[1].memory=malloc(sizeof(parsed));
                 if(!m->operands[1].memory){
                     free(parsed.symbol);
@@ -732,8 +738,20 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
                 m->operands[0].reg=has_group?group:0U;
                 m->operands[0].register_64=wide;
                 m->operands[1].kind=MINIAS_MC_MEMORY;
-                m->operands[2].kind=MINIAS_MC_IMMEDIATE;
-                m->operands[2].immediate=bits;
+                if(is_sym) {
+                    m->operands[2].symbol=malloc(sizeof(sym));
+                    if(!m->operands[2].symbol) {
+                        minias_set_error(as,"out-of-memory:x86-imm-memory-symbol");
+                        free(m->operands[1].memory);
+                        free(m);
+                        return false;
+                    }
+                    *m->operands[2].symbol=sym;
+                    m->operands[2].kind=MINIAS_MC_SYMBOL;
+                } else {
+                    m->operands[2].kind=MINIAS_MC_IMMEDIATE;
+                    m->operands[2].immediate=bits;
+                }
                 m->encoding=(has_group ?
                     (suffix=='b'?0x80U:
                      val>=-128 && val<=127?0x83U:0x81U):
@@ -1228,6 +1246,17 @@ static bool x64_encode(MiniAs *as,const MiniAsStmt *s) {
                 code[n++]=(unsigned char)(disp>>(8U*i));
             for(i=0U;i<extra;++i)
                 code[n++]=(unsigned char)(immediate>>(8U*i));
+            if(m->opcode==X64_IMM_MEMORY &&
+               m->operands[2].kind==MINIAS_MC_SYMBOL) {
+                const MiniAsSymbolExpr *imm=m->operands[2].symbol;
+                if(extra!=4U || !imm || n!=s->size) {
+                    minias_set_error(as,"invalid-x86-abs32s-memory-layout");
+                    return false;
+                }
+                if(!minias_section_append(as,s->section,code,n))return false;
+                return minias_add_fixup(as,s->section,s->offset+n-4U,
+                    MINIAS_FIXUP_X64_ABS32S,4U,imm->name,imm->addend);
+            }
             break;
         }
         case X64_MOVABS_IMMREG: {
