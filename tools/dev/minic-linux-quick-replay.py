@@ -21,7 +21,7 @@ import zipfile
 
 ARCHES = ("x86_64", "aarch64", "loongarch64")
 FLAGS = set("-fshort-wchar -fno-short-wchar -fsigned-char -funsigned-char -fno-signed-char -fno-unsigned-char -ffunction-sections -fno-function-sections -fPIE -fpie -fPIC -fpic -fno-PIE -fno-pie -fno-PIC -fno-pic".split())
-ERR = re.compile(r"[^ :]+\\.(?:i|c|h|s):\\d+(?::\\d+)?:")
+ERR = re.compile(r"[^ :]+\.(?:i|c|h|s):\d+(?::\d+)?:")
 NAME = re.compile(r"FRONTEND_LOOKUP_DETAIL name=([^ ]+)")
 
 def sha(data):
