@@ -69,8 +69,10 @@ Explicit -march=rv32i/rv64i retains existing fail-closed machine-code checks.
    vertical slice now uses the same **parse-then-measure MCInst hook**,
    removing its duplicate mnemonic allowlist. It measures fixed 4B
    instructions from parsed MCInst, checked against GNU AS and ELF .size.
-   The common measurement hook is now optional for targets supporting
-   parse-then-measure; RISC-V ISA checks still precede parsing, and
+   Both targets now share the mandatory parse-first/measure-from-MCInst
+   contract. The obsolete optional mnemonic-based `measure` dispatch and
+   its core fallback have been deleted. ISA/ABI feature checks use a
+   separate optional `validate_instruction` hook before the single parse;
    branch relaxation still follows fragment measurement.
    RV32 shift widths are validated at the typed parser.
    Vector register classes are distinguished from integer/FP registers.

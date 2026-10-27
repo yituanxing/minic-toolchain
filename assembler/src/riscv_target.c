@@ -289,8 +289,9 @@ static bool riscv_validate_selected_isa(const MiniAs *as, const char *op,
     }
     return true;
 }
-static bool riscv_measure(const MiniAs *as, const char *op, const char *args,
-                          uint32_t *size, char *reason, size_t cap) {
+static bool riscv_validate_instruction(const MiniAs *as,
+                                       const char *op, const char *args,
+                                       char *reason, size_t cap) {
     /* Machine feature checks must precede MCInst parsing, but operand
      * decoding and sizing are exclusively the target MCInst hooks. */
     if (!riscv_validate_selected_isa(as, op, reason, cap)) return false;
@@ -304,7 +305,6 @@ static bool riscv_measure(const MiniAs *as, const char *op, const char *args,
         (void)snprintf(reason, cap, "riscv32e-invalid-register:%s", op);
         return false;
     }
-    *size = 0U; /* Measured from the persisted parsed fragment. */
     return true;
 }
 
@@ -460,7 +460,7 @@ static const MiniAsTargetOps riscv_ops = {
     .validate_common_directive = riscv_validate_common_directive,
     .object_attributes = riscv_object_attributes,
     .name = "riscv",
-    .measure = riscv_measure,
+    .validate_instruction = riscv_validate_instruction,
     .parse_mcinst = minias_riscv_parse_mcinst,
     .measure_mcinst = minias_riscv_measure_mcinst,
     .encode = minias_riscv_encode,

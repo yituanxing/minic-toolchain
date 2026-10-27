@@ -281,11 +281,13 @@ typedef struct MiniAsTargetOps {
     bool (*validate_common_directive)(MiniAs *, const char *, size_t);
     void (*object_attributes)(const MiniAs *, unsigned char, MiniAsObjectAttribute *);
     const char *name;
-    bool (*measure)(const MiniAs *, const char *, const char *, uint32_t *, char *, size_t);
+    /* Optional ISA/ABI gate runs before operand parsing and does not
+     * independently decode source instruction operands. */
+    bool (*validate_instruction)(const MiniAs *, const char *, const char *,
+                                 char *, size_t);
+    /* Mandatory target instruction path: parse once, measure its retained
+     * typed operands, then encode. Core owns fragment address and growth. */
     bool (*parse_mcinst)(MiniAs *, MiniAsStmt *);
-    /* If present, the core parses operands once before asking the target
-     * to measure its persisted instruction. The caller owns relaxation and
-     * fragment placement; no target is allowed to update section offsets. */
     bool (*measure_mcinst)(MiniAs *, const MiniAsStmt *, uint32_t *);
     bool (*encode)(MiniAs *, const MiniAsStmt *);
     /* Layout owns iteration; each target owns encoding alternatives and
