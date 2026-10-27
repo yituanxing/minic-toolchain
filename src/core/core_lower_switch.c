@@ -681,6 +681,7 @@ minic_core_lower_switch(MinicCoreLowerContext *context, const MinicStatement *st
     size_t source_index;
     size_t constant_entry_label;
     bool prune_constant_prefix;
+    bool prune_constant_suffix;
     bool all_segments_terminate;
     bool segment_breaks[MINIC_CORE_SWITCH_LABEL_LIMIT];
     bool segment_terminates[MINIC_CORE_SWITCH_LABEL_LIMIT];
@@ -747,6 +748,7 @@ minic_core_lower_switch(MinicCoreLowerContext *context, const MinicStatement *st
 
     constant_entry_label = SIZE_MAX;
     prune_constant_prefix = false;
+    prune_constant_suffix = false;
     case_count = 0U;
     default_label = SIZE_MAX;
     first_case_label = SIZE_MAX;
@@ -1051,7 +1053,8 @@ minic_core_lower_switch(MinicCoreLowerContext *context, const MinicStatement *st
         MinicCoreBlockId saved_break_target;
         bool segment_terminated;
 
-        if (prune_constant_prefix && source_index < constant_entry_label) {
+        if ((prune_constant_prefix && source_index < constant_entry_label) ||
+            (prune_constant_suffix && source_index > constant_entry_label)) {
             MinicCoreTerminator unreachable;
             (void)memset(&unreachable, 0, sizeof(unreachable));
             unreachable.kind = MINIC_CORE_TERMINATOR_UNREACHABLE;
@@ -1138,6 +1141,40 @@ minic_core_lower_switch(MinicCoreLowerContext *context, const MinicStatement *st
         segment_breaks[source_index] =
             break_index != SIZE_MAX ||
             core_switch_block_has_outer_break(context, &segment, true);
+
+        /* Constant entry + proven direct source break/return ends EVERY
+         * ordinary C fallthrough edge to later case bodies. Those later
+         * cases are semantically unreachable even when they contain
+         * target-specific ISA templates (Linux __smp_store_release has
+         * three such cases for a byte-sized spinlock). A nested conditional
+         * break is NOT sufficient: only the explicit top-level break
+         * recorded by this case walker or a terminated source segment is.
+         * Function-level goto/asm-goto/label-address into any later body
+         * defeats the entire suffix prune. Keep all ISA knowledge in Target. */
+        if (constant_entry_label != SIZE_MAX &&
+            pre_case_label_count == 0U &&
+            source_index >= constant_entry_label &&
+            !prune_constant_suffix &&
+            reentry_index == SIZE_MAX &&
+            (break_index != SIZE_MAX || segment_terminated)) {
+            size_t later;
+            bool safe = true;
+            for (later = source_index + 1U; later < label_count && safe; ++later) {
+                const size_t first = labels[later].source_index + 1U;
+                const size_t limit = later + 1U < label_count
+                    ? labels[later + 1U].source_index
+                    : body->statement_count;
+                size_t k;
+                for (k = first; k < limit; ++k) {
+                    if (core_switch_dead_prefix_has_reentry(
+                            context, body->statements[k], 0U)) {
+                        safe = false;
+                        break;
+                    }
+                }
+            }
+            prune_constant_suffix = safe;
+        }
         if (segment_terminated) {
             continue;
         }
