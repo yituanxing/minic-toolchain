@@ -866,7 +866,9 @@ native_gas_forms_hex="$(
     readelf -x .text "$work/native-gas-forms.o" |
     awk '/0x[0-9a-f]+/ {for (i=2; i<=NF; ++i) if ($i ~ /^[0-9a-f]+$/ && length($i) % 2 == 0) printf "%s", $i}'
 )"
-test "$native_gas_forms_hex" = "4d5a073005002334150007a1c50023a835007390320073002010"
+# Floating-point stores are opcode 0x27 (STORE-FP), not integer STORE
+# 0x23. The old golden accidentally preserved a MiniAS fsd/fsw codegen bug.
+test "$native_gas_forms_hex" = "4d5a073005002734150007a1c50027a835007390320073002010"
 readelf -Ws "$work/native-gas-forms.o" | grep -Eq 'FUNC[[:space:]]+GLOBAL.* native_gas_forms$'
 
 cat >"$work/scalar-fp.s" <<'EOF'
