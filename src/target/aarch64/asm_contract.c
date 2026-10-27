@@ -662,7 +662,14 @@ bool minic_aarch64_emit_qualified_structured_asm(
         const MinicCoreStructuredInlineAsmOperand *operands =
             ins->value.structured_inline_asm.operands;
         MinicType out_type, dependency;
-        if (info->is_volatile || info->is_goto ||
+        /* The Core target-ASM admission intentionally promotes ALL
+         * observable structured output ASM to a conservative side effect,
+         * even if original GNU source asm() lacks volatile. Hence Core
+         * info->is_volatile records the effect, not source GNU spelling.
+         * Source qualification above independently checked !src->is_volatile
+         * and its entire .altinstructions template. Requiring !info here
+         * previously rejected every genuine __kern_my_cpu_offset(). */
+        if (!info->is_volatile || info->is_goto ||
             info->has_memory_clobber || info->register_clobber_count)
             return false;
         for (i = 0U; i < 2U; ++i)
