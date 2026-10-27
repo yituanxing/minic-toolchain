@@ -27,9 +27,10 @@ marker=$(grep -n -F 'minic_original_source_asm_marker:' "$work/original.minic.s"
 entry=$(grep -n -F 'minic_source_asm_entry:' "$work/original.minic.s" | head -1 | cut -d: -f1)
 test "$marker" -lt "$entry"
 "$cross_cc" -c -x assembler "$work/original.minic.s" -o "$work/original.minic.o"
+# -W matters: default readelf truncates long ELF symbol names.
 for name in original.gnu original.minic; do
-    readelf -s "$work/$name.o" | grep -Fq 'minic_original_source_asm_marker'
-    readelf -s "$work/$name.o" | grep -Fq 'minic_source_asm_entry'
+    readelf -Ws "$work/$name.o" | grep -Fq 'minic_original_source_asm_marker'
+    readelf -Ws "$work/$name.o" | grep -Fq 'minic_source_asm_entry'
 done
 # Architecture-specific machine syntax is still owned by real GNU AS.
 echo "MINIC_FILE_ASM_GNU_AS=PASS target=$target original_gnu=1 original_bytes=1 sections=1 symbols=2"
