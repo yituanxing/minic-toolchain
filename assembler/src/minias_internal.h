@@ -212,6 +212,11 @@ typedef struct MiniAsStmt {
     uint64_t offset;
     uint32_t size;
     uint64_t align;
+    /* GNU alignment fragment semantics, shared by all backends. */
+    bool align_has_fill;
+    unsigned char align_fill;
+    bool align_has_max_skip;
+    uint64_t align_max_skip;
     /* Effective .option pic/nopic at the precise instruction site. */
     /* Opaque target state captured at the exact instruction site. */
     uint32_t target_options;

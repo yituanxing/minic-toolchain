@@ -351,4 +351,31 @@ done
 "$AARCH64_READELF" -Wr "$work/line-mini.o" | grep -q R_AARCH64_ABS64
 echo 'MINIAS_COMMON_DWARF_DEBUG_LINE=PASS real_address_fixup=1 file_line_rows=2'
 
+
+# GNU optional fill/max-skip common fragment semantics. Unlike a parse-only
+# gate, the two object sections must match the GNU bytes after layout.
+cat >"$work/align-meta.s" <<'GNU_ALIGN'
+.arch armv8-a
+.text
+    nop
+    .p2align 4,,7
+    nop
+    .p2align 4
+    nop
+.data
+    .byte 0x55
+    .p2align 3,0xa5,2
+    .byte 0xaa
+    .p2align 3,0xb6
+    .byte 0x33
+GNU_ALIGN
+"$MINIAS" --target=aarch64 -o "$work/align-mini.o" "$work/align-meta.s"
+"$AARCH64_AS" -o "$work/align-gnu.o" "$work/align-meta.s"
+for sect in .text .data; do
+    "$AARCH64_OBJCOPY" -j "$sect" -O binary "$work/align-mini.o" "$work/am.bin"
+    "$AARCH64_OBJCOPY" -j "$sect" -O binary "$work/align-gnu.o" "$work/ag.bin"
+    cmp "$work/am.bin" "$work/ag.bin"
+done
+echo 'MINIAS_COMMON_GNU_ALIGN=PASS optional_fill_maxskip=gnu_byte_equal'
+
 echo 'MINIAS_AARCH64_VSLICE=PASS ELF64=1 gnu_bytes=equal relocation_call26_jump26_abs64=1 ld=pass qemu=exit0'

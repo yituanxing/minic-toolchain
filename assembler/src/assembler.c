@@ -1726,46 +1726,70 @@ static bool handle_org(MiniAs *as, const char *args, size_t line) {
     return advance_current_location(as, pad);
 }
 
-static bool handle_align(MiniAs *as, const char *op, char *args, size_t line) {
-    int64_t evaluated;
-    uint64_t value;
-    uint64_t pad;
-    uint64_t current;
-    uint64_t alignment;
+/* GNU .p2align/.balign/.align alignment[,fill[,max_skip]].
+ * Target owns NOP encoding, Common owns fragment length and optional fill. */
+static bool parse_align_args(MiniAs *as,const char *op,const char *args,
+                             uint64_t *align,bool *has_fill,uint8_t *fill,
+                             bool *has_max,uint64_t *max_skip){
+    char *copy=minias_strdup(args),*cursor,*comma,*parts[3];
+    unsigned n=0U;
+    int64_t value;
+    if(!copy)return false;
+    cursor=copy;
+    for(;;) {
+        if(n>=3U){free(copy);return false;}
+        parts[n++]=minias_trim(cursor);
+        comma=strchr(cursor,',');
+        if(!comma)break;
+        *comma='\0';cursor=comma+1U;
+    }
+    if(!*parts[0] ||
+       !evaluate_absolute_expression(as,parts[0],&value) ||
+       value<0){free(copy);return false;}
+    if(!strcmp(op,".p2align") ||
+       (!strcmp(op,".align") && !as->target->align_directive_bytes)){
+        if(value>=63){free(copy);return false;}
+        *align=UINT64_C(1)<<(unsigned)value;
+    }else *align=(uint64_t)value;
+    if(!*align || (*align&(*align-1U)) || *align>UINT32_MAX){
+        free(copy);return false;
+    }
+    *has_fill=false;*fill=0U;*has_max=false;*max_skip=0U;
+    if(n>=2U && *parts[1]){
+        if(!evaluate_absolute_expression(as,parts[1],&value) ||
+           value<-128 || value>255){free(copy);return false;}
+        *has_fill=true;*fill=(uint8_t)value;
+    }
+    if(n>=3U && *parts[2]){
+        if(!evaluate_absolute_expression(as,parts[2],&value) ||
+           value<0){free(copy);return false;}
+        *has_max=true;*max_skip=(uint64_t)value;
+    }
+    free(copy);return true;
+}
 
-    if (!evaluate_absolute_expression(as, minias_trim(args), &evaluated) ||
-        evaluated < 0) {
-        minias_set_error(as, "unsupported-expression:%s:line=%zu", op, line);
+static bool handle_align(MiniAs *as,const char *op,char *args,size_t line){
+    uint64_t alignment,current,pad,max_skip;
+    bool has_fill,has_max;
+    uint8_t fill;
+    MiniAsStmt *stmt;
+    if(!parse_align_args(as,op,args,&alignment,&has_fill,&fill,
+                         &has_max,&max_skip)){
+        minias_set_error(as,"unsupported-alignment:%s:line=%zu",op,line);
         return false;
     }
-    value = (uint64_t)evaluated;
-    if (strcmp(op, ".p2align") == 0 ||
-        (strcmp(op, ".align") == 0 && !as->target->align_directive_bytes)) {
-        if (value >= 63U) {
-            minias_set_error(as, "unsupported-alignment:%s:line=%zu", args, line);
-            return false;
-        }
-        alignment = 1ULL << value;
-    } else {
-        alignment = value;
-    }
-    if (alignment == 0U || (alignment & (alignment - 1U)) != 0U) {
-        minias_set_error(as, "unsupported-alignment:%s:line=%zu", args, line);
+    if(!current_location(as,&current))return false;
+    pad=(alignment-(current&(alignment-1U)))&(alignment-1U);
+    if(has_max && pad>max_skip)pad=0U;
+    if(pad>UINT32_MAX)return false;
+    if(!add_stmt(as,MINIAS_STMT_ALIGN,op,"",line,(uint32_t)pad,alignment))
         return false;
-    }
-    if (!current_location(as, &current)) {
-        return false;
-    }
-    pad = (alignment - (current & (alignment - 1U))) & (alignment - 1U);
-    if (!add_stmt(as, MINIAS_STMT_ALIGN, op, "", line, (uint32_t)pad, alignment)) {
-        return false;
-    }
-    if (!advance_current_location(as, pad)) {
-        return false;
-    }
-    if (alignment > as->sections[(size_t)as->current_section].align) {
-        as->sections[(size_t)as->current_section].align = alignment;
-    }
+    stmt=&as->stmts[as->stmt_count-1U];
+    stmt->align_has_fill=has_fill;stmt->align_fill=fill;
+    stmt->align_has_max_skip=has_max;stmt->align_max_skip=max_skip;
+    if(!advance_current_location(as,pad))return false;
+    if(alignment>as->sections[(size_t)as->current_section].align)
+        as->sections[(size_t)as->current_section].align=alignment;
     return true;
 }
 
@@ -3062,6 +3086,8 @@ static bool minias_relayout_fragments(MiniAs *as) {
                     goto done;
                 }
                 pad = (align - (sub->size & (align - 1U))) & (align - 1U);
+                if (stmt->align_has_max_skip && pad > stmt->align_max_skip)
+                    pad = 0U;
                 if (pad > UINT32_MAX) {
                     minias_set_error(as, "fragment-alignment-overflow");
                     goto done;
@@ -4882,7 +4908,9 @@ bool minias_emit_sections(MiniAs *as) {
         if (stmt->kind == MINIAS_STMT_ALIGN) {
             bool exec_align = (section->flags & MINIAS_SHF_EXECINSTR) != 0U &&
                               strcmp(stmt->op, ".org") != 0;
-            if (!(exec_align
+            if (!(stmt->align_has_fill
+                      ? emit_common_space(as,stmt->section,stmt->size,stmt->align_fill)
+                      : exec_align
                       ? as->target->append_code_alignment(as, stmt->section,
                                                               stmt->size)
                       : minias_section_append_zero(as, stmt->section, stmt->size))) {
