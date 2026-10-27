@@ -104,6 +104,45 @@ static bool emit_bit_scan_u64(
            fputs("  movq %rax, (%r11)\n", out) != EOF;
 }
 
+/* A GNU p argument holds the address of the per-cpu field, not the
+ * field's contents. GS base is added by x86 hardware on the actual load.
+ * The caller's normal C result lvalue is written only after the GS read;
+ * neither a plain Core LOAD nor generic textual inline asm is equivalent. */
+static bool emit_percpu_stable_u64(
+    FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicCoreFunction *fn, const MinicX86Frame *frame,
+    const MinicCoreInstruction *ins, const MinicCoreInlineAsm *info) {
+    const MinicCoreStructuredInlineAsmOperand *b =
+        ins->value.structured_inline_asm.operands;
+    MinicType type;
+    size_t width;
+    bool sign;
+    if (!out || !program || !target || !fn || !frame || !ins || !info ||
+        info->is_goto || info->has_memory_clobber ||
+        info->register_clobber_count != 0U ||
+        ins->value.structured_inline_asm.operand_count != 2U ||
+        !minic_x86_64_asm_percpu_stable_template(
+            info->template_text, info->template_length) ||
+        b[0].operand_index != 0U || b[1].operand_index != 1U ||
+        b[0].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT ||
+        b[1].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT ||
+        b[0].has_fixed_register_binding || b[1].has_fixed_register_binding ||
+        b[0].early_clobber || b[1].early_clobber ||
+        b[0].value >= fn->value_count || b[1].value >= fn->value_count ||
+        !minic_type_pointee(fn->values[b[0].value].type, &type) ||
+        !minic_x86_64_scalar_width(
+            program, target, type, &width, &sign) || width != 8U ||
+        !minic_type_is_integer(type) ||
+        !minic_type_is_pointer(fn->values[b[1].value].type))
+        return false;
+    /* x86-64 SysV RAX/R10/R11 are caller-saved and Core SSA is spilled.
+     * The original GNU %P operand can be materialized as an address in R10;
+     * %gs:(R10) gives exactly GS-base + per-cpu symbol/field displacement. */
+    return x86_value_load(out, frame, b[1].value, "%r10") &&
+           fputs("  movq %gs:(%r10), %rax\n", out) != EOF &&
+           x86_value_load(out, frame, b[0].value, "%r11") &&
+           fputs("  movq %rax, (%r11)\n", out) != EOF;
+}
 static bool emit_muldiv_u64(
     FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicX86Frame *frame,
@@ -218,8 +257,13 @@ bool minic_x86_64_emit_structured_asm(
                emit_memory_clobber_matched(
                    out, program, target, fn, frame, ins, info);
     if (ins->value.structured_inline_asm.operand_count == 2U &&
-        info->register_clobber_count == 0U)
+        info->register_clobber_count == 0U) {
+        if (minic_x86_64_asm_percpu_stable_template(
+                info->template_text, info->template_length))
+            return emit_percpu_stable_u64(
+                out, program, target, fn, frame, ins, info);
         return emit_bit_scan_u64(out, program, target, fn, frame, ins, info);
+    }
     if (!info->is_volatile)
         return false;
     if (ins->value.structured_inline_asm.operand_count == 4U)
