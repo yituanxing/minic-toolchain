@@ -641,17 +641,6 @@ static bool require_reg(MiniAs *as, const MiniAsStmt *stmt, const char *text, in
     return true;
 }
 
-static bool require_imm(MiniAs *as,
-                        const MiniAsStmt *stmt,
-                        const char *text,
-                        int64_t *out) {
-    if (!parse_i64(text, out)) {
-        minias_set_error(as, "unsupported-expression:%s:line=%zu", text, stmt->line);
-        return false;
-    }
-    return true;
-}
-
 static bool parse_vsetvli_vtype(char operands[][128],
                                   size_t count,
                                   uint32_t *vtypei) {
