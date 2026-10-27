@@ -339,6 +339,38 @@ jobs:
             exit 1
           fi
           echo 'AARCH64_NZCV_ASM_UNQUALIFIED=REJECTED'
+          # Genuine AArch64 Linux get_current: EL1 MRS sp_el0. Compile
+          # target code and GNU assembler, but do NOT execute privileged
+          # MRS in user-mode QEMU.
+          cat > build/aarch64-nzcv/sysreg.i <<'EOF'
+          unsigned long read_sp_el0(void) {
+            unsigned long x; asm("mrs %0, sp_el0" : "=r"(x)); return x;
+          }
+          unsigned long read_tpidr_el1(void) {
+            unsigned long x; asm("mrs %0, tpidr_el1" : "=r"(x)); return x;
+          }
+          unsigned long read_tpidr_el2(void) {
+            unsigned long x; asm("mrs %0, tpidr_el2" : "=r"(x)); return x;
+          }
+          EOF
+          "$cc" --target=aarch64-linux -S build/aarch64-nzcv/sysreg.i \
+            -o build/aarch64-nzcv/sysreg.s
+          for reg in sp_el0 tpidr_el1 tpidr_el2; do
+            grep -F "  mrs x9, $reg" build/aarch64-nzcv/sysreg.s
+          done
+          aarch64-linux-gnu-gcc -c -x assembler build/aarch64-nzcv/sysreg.s \
+            -o build/aarch64-nzcv/sysreg.mini.o
+          aarch64-linux-gnu-gcc -c -x c build/aarch64-nzcv/sysreg.i \
+            -o build/aarch64-nzcv/sysreg.gnu.o
+          sed 's/tpidr_el2/daif/' build/aarch64-nzcv/sysreg.i \
+            > build/aarch64-nzcv/unknown-reg.i
+          if "$cc" --target=aarch64-linux -S build/aarch64-nzcv/unknown-reg.i \
+            -o build/aarch64-nzcv/unknown-reg.s \
+            >build/aarch64-nzcv/unknown-reg.log 2>&1; then
+            echo 'FAIL: unrelated AArch64 privileged MRS admitted' >&2
+            exit 1
+          fi
+          echo 'AARCH64_LINUX_MRS_GNU_AS=PASS system_regs=3 privileged_execution=not_run negative_unqualified=rejected'
 
       - name: LoongArch original GNU CPUCFG builtin vs MiniC physical instruction
         if: matrix.target == 'loongarch64'
