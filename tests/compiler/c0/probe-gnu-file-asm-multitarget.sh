@@ -452,7 +452,8 @@ SRC
     # target-owned LP64D machine emission and independent GNU/QEMU oracle.
     cat > "$work/atomic-kernel.i" <<'SRC'
 struct atomic32 { int counter; };
-struct atomic64 { long counter; };
+/* Original atomic64_t uses typedef __s64 = signed long long. */
+struct atomic64 { long long counter; };
 static void aand32(int n, struct atomic32 *p) {
     __asm__ __volatile__("amand_db.w $zero, %1, %0\n"
                          : "+ZB"(p->counter) : "r"(n) : "memory");
@@ -469,19 +470,19 @@ static void aadd32(int n, struct atomic32 *p) {
     __asm__ __volatile__("amadd_db.w $zero, %1, %0\n"
                          : "+ZB"(p->counter) : "r"(n) : "memory");
 }
-static void aand64(long n, struct atomic64 *p) {
+static void aand64(long long n, struct atomic64 *p) {
     __asm__ __volatile__("amand_db.d $zero, %1, %0\n"
                          : "+ZB"(p->counter) : "r"(n) : "memory");
 }
-static void aor64(long n, struct atomic64 *p) {
+static void aor64(long long n, struct atomic64 *p) {
     __asm__ __volatile__("amor_db.d $zero, %1, %0\n"
                          : "+ZB"(p->counter) : "r"(n) : "memory");
 }
-static void axor64(long n, struct atomic64 *p) {
+static void axor64(long long n, struct atomic64 *p) {
     __asm__ __volatile__("amxor_db.d $zero, %1, %0\n"
                          : "+ZB"(p->counter) : "r"(n) : "memory");
 }
-static void aadd64(long n, struct atomic64 *p) {
+static void aadd64(long long n, struct atomic64 *p) {
     __asm__ __volatile__("amadd_db.d $zero, %1, %0\n"
                          : "+ZB"(p->counter) : "r"(n) : "memory");
 }
