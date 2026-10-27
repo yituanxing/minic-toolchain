@@ -366,6 +366,111 @@ SRC
         fi
     done
     echo 'MINIC_AARCH64_LINUX_LLSC_GNU_AS_QEMU=PASS operations=8 negatives=5 bic=2'
+
+    # Frozen upstream atomic_ll_sc.h atomic{,64}_fetch_or variants.
+    # Verify real old-value return, memory update, and release/acquire/full
+    # hardware ordering. Five-role shared Core contract, no ASM passthrough.
+    : > "$work/aarch64-fetch-or.i"
+    for width in 32 64; do
+        if [ "$width" = 32 ]; then
+            typename='int'; prefix=''; old='%w0'; newval='%w1'
+            rhs='%w4'; ic=Kr
+        else
+            typename='long long'; prefix='64'; old='%0'; newval='%1'
+            rhs='%4'; ic=Lr
+        fi
+        for mode in full relaxed acquire release; do
+            case "$mode" in
+                full) suffix=''; load=ldxr; store=stlxr
+                      barrier=' dmb ish\\n'; clobber=': "memory"' ;;
+                relaxed) suffix='_relaxed'; load=ldxr; store=stxr
+                         barrier=''; clobber='' ;;
+                acquire) suffix='_acquire'; load=ldaxr; store=stxr
+                         barrier=''; clobber=': "memory"' ;;
+                release) suffix='_release'; load=ldxr; store=stlxr
+                         barrier=''; clobber=': "memory"' ;;
+            esac
+            cat >> "$work/aarch64-fetch-or.i" <<SRC
+$typename atomic_${width}_fetch_or_$mode($typename *p, $typename value) {
+    $typename result, next;
+    unsigned long retry;
+    __asm__ __volatile__("// atomic${prefix}_fetch_or${suffix}\\n"
+                         " prfm pstl1strm, %3\\n"
+                         "1: $load $old, %3\\n"
+                         " orr $newval, $old, $rhs\\n"
+                         " $store %w2, $newval, %3\\n"
+                         " cbnz %w2, 1b\\n"
+                         "$barrier"
+                         : "=&r"(result), "=&r"(next), "=&r"(retry),
+                           "+Q"(*p) : "$ic"(value) $clobber);
+    return result;
+}
+SRC
+        done
+    done
+    cat >> "$work/aarch64-fetch-or.i" <<'SRC'
+int main(void) {
+    int a = 1;
+    long long b = 1;
+    int av0 = atomic_32_fetch_or_full(&a, 2);
+    int av1 = atomic_32_fetch_or_relaxed(&a, 4);
+    int av2 = atomic_32_fetch_or_acquire(&a, 8);
+    int av3 = atomic_32_fetch_or_release(&a, 16);
+    long long bv0 = atomic_64_fetch_or_full(&b, 2);
+    long long bv1 = atomic_64_fetch_or_relaxed(&b, 4);
+    long long bv2 = atomic_64_fetch_or_acquire(&b, 8);
+    long long bv3 = atomic_64_fetch_or_release(&b, 16);
+    return a == 31 && b == 31 &&
+           av0 == 1 && av1 == 3 && av2 == 7 && av3 == 15 &&
+           bv0 == 1 && bv1 == 3 && bv2 == 7 && bv3 == 15 ? 0 : 1;
+}
+SRC
+    "$cross_cc" -O0 -x c "$work/aarch64-fetch-or.i" \
+        -o "$work/aarch64-fetch-or.gnu.elf"
+    "$MINIC_CC" --target=aarch64-linux -S "$work/aarch64-fetch-or.i" \
+        -o "$work/aarch64-fetch-or.minic.s"
+    for mnemonic in 'ldxr x9' 'ldaxr x9' 'stxr w12' 'stlxr w12' 'orr x13, x9, x11' 'orr w13, w9, w11' 'dmb ish'; do
+        grep -Fq "$mnemonic" "$work/aarch64-fetch-or.minic.s"
+    done
+    "$cross_cc" -x assembler "$work/aarch64-fetch-or.minic.s" \
+        -o "$work/aarch64-fetch-or.minic.elf"
+    for flavor in gnu minic; do
+        qemu-aarch64 -L /usr/aarch64-linux-gnu \
+            "$work/aarch64-fetch-or.$flavor.elf"
+    done
+    for invalid in wrong_input hidden_svc changed_opcode wrong_memory wrong_clobber; do
+        ic=Lr; extra=''; opcode=orr; mem='+Q'; clobber=''
+        case "$invalid" in
+            wrong_input) ic=r ;;
+            hidden_svc) extra='; svc #0' ;;
+            changed_opcode) opcode=eor ;;
+            wrong_memory) mem='=Q' ;;
+            wrong_clobber) clobber=': "memory"' ;;
+        esac
+        cat > "$work/aarch64-fetch-or-invalid-$invalid.i" <<SRC
+void bad(long long *p,long long i) {
+  long long old, next;
+  unsigned long retry;
+  __asm__ __volatile__("// atomic64_fetch_or_relaxed\\n"
+    " prfm pstl1strm, %3\\n"
+    "1: ldxr %0, %3\\n"
+    " $opcode %1, %0, %4\\n"
+    " stxr %w2, %1, %3\\n"
+    " cbnz %w2, 1b$extra"
+    : "=&r"(old), "=&r"(next), "=&r"(retry), "$mem"(*p)
+    : "$ic"(i) $clobber);
+}
+SRC
+        if "$MINIC_CC" --target=aarch64-linux -S \
+            "$work/aarch64-fetch-or-invalid-$invalid.i" \
+            -o "$work/aarch64-fetch-or-invalid-$invalid.s" \
+            >"$work/aarch64-fetch-or-invalid-$invalid.out" \
+            2>"$work/aarch64-fetch-or-invalid-$invalid.err"; then
+            echo "FAIL invalid AArch64 GNU fetch-OR admitted: $invalid" >&2
+            exit 1
+        fi
+    done
+    echo 'MINIC_AARCH64_LINUX_FETCH_OR_GNU_QEMU=PASS variants=8 negative=5 old_value=1 ordering=full,relaxed,acquire,release'
 fi
 
 # Original Linux syscall wrappers have deliberately different argument C
