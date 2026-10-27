@@ -1,5 +1,8 @@
 name: MiniAS Affected Target Seven-Way Linux ISA Frontier
 
+# Targeted LoongArch-only replay after grouped BYTEPICK/IOCSR/FCSR/LI.W
+# ISA support, using the identical SHA-pinned original GNU .s shard input.
+# Not an ELF semantic parity or Linux P1 acceptance.
 # Exact GNU original Kbuild shard corpus replay after grouped support for GCC's
 # location-assignment '.L2 = .' through the Common fragment-anchor path.
 # After a batch of target-local encoding changes, rerun only affected
