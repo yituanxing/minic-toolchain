@@ -228,6 +228,7 @@ bool minic_parser_gnu_inline_asm_statement(MinicParser *parser) {
     size_t template_length;
     bool is_volatile;
     bool is_goto;
+    bool has_inline_qualifier;
     bool has_memory_clobber;
 
     if (!minic_parser_gnu_inline_asm_starts(parser)) {
@@ -238,12 +239,31 @@ bool minic_parser_gnu_inline_asm_statement(MinicParser *parser) {
     template_length = 0U;
     is_volatile = false;
     is_goto = false;
+    has_inline_qualifier = false;
     has_memory_clobber = false;
 
     if (!minic_parser_advance(parser)) {
         return false;
     }
     for (;;) {
+        /* Original x86 Linux 6.6.143 uses
+         *   asm __inline volatile("...": ...);
+         * GCC's asm inline modifier adjusts the optimizer's size estimate,
+         * not the instruction/operand/clobber semantics. MiniC does not
+         * size-estimate an asm block, so it remains parse-only. The lexer
+         * already canonicalizes inline/__inline/__inline__ into KW_INLINE.
+         * Leave backend qualification and machine clobbers unchanged. */
+        if (parser->current.kind == MINIC_TOKEN_KW_INLINE) {
+            if (has_inline_qualifier) {
+                minic_parser_error(parser, "duplicate inline qualifier on GNU asm");
+                return false;
+            }
+            has_inline_qualifier = true;
+            if (!minic_parser_advance(parser)) {
+                return false;
+            }
+            continue;
+        }
         if (current_is_gnu_volatile(parser)) {
             if (is_volatile) {
                 minic_parser_error(parser, "duplicate volatile qualifier on GNU asm");

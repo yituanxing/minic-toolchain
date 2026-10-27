@@ -116,6 +116,27 @@ jobs:
           fi
           grep -F 'unsupported GNU asm register clobber for target: s1' \
             "$RUNNER_TEMP/one-unsupported-clobber.stderr"
+          # One shared GNU parser, all five targets. This is the exact
+          # original Linux 'asm __inline volatile' syntax that previously
+          # stopped 757 x86 C translation units before machine validation.
+          # Empty template + memory clobber is a legitimate compiler barrier,
+          # so each backend must preserve it without inventing ISA opcodes.
+          cat > "$RUNNER_TEMP/gnu-asm-inline-qualifier.i" <<'SRC'
+          int f(void) {
+              asm __inline volatile("" ::: "memory");
+              asm __inline__ volatile("" ::: "memory");
+              asm inline volatile("" ::: "memory");
+              return 42;
+          }
+          SRC
+          for target in riscv32-linux riscv64-linux x86_64-linux aarch64-linux loongarch64-linux; do
+              build/minic-native-backend/bin/minic-cc --target="$target" \
+                -S "$RUNNER_TEMP/gnu-asm-inline-qualifier.i" \
+                -o "$RUNNER_TEMP/gnu-asm-inline-$target.s"
+              test -s "$RUNNER_TEMP/gnu-asm-inline-$target.s"
+          done
+          echo "MINIC_GNU_ASM_INLINE_FIVE_TARGET=PASS grammar=shared barrier=memory"
+
 
       - name: Canonical target DataLayout record/global layout regression
         shell: bash
