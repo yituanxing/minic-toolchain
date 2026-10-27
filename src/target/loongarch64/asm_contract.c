@@ -66,9 +66,15 @@ static const struct MinicLoongAtomicTemplate *loong_atomic_template(
 }
 static bool loong_atomic_scalar_type(MinicType type, size_t width) {
     MinicType plain;
-    return minic_type_unqualified(type, &plain) &&
-           minic_type_equal(plain, width == 8U ?
-               minic_type_long() : minic_type_int());
+    if (!minic_type_unqualified(type, &plain)) return false;
+    /* Original Linux atomic64_t.counter is __s64, i.e. signed LONG LONG,
+     * even under LoongArch LP64D where long and long long have equal
+     * register/storage width but distinct C type identities. Both are
+     * single 64-bit integer GPR operands; never admit FP or int128. */
+    return width == 8U
+        ? (minic_type_equal(plain, minic_type_long()) ||
+           minic_type_equal(plain, minic_type_long_long()))
+        : minic_type_equal(plain, minic_type_int());
 }
 static bool loong_atomic_qualified_source(
     const MinicC0Program *program, const MinicInlineAsm *src,
