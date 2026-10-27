@@ -71,6 +71,9 @@ unresolved_x86:
     jl ext_target
     movl %eax, 8(%rbx,%r8,2)
     movl 8(%rbx,%r9,4), %eax
+    movq ext_global(%rip), %rax
+    movl %r8d, ext_global+8(%rip)
+    cmpq ext_global(%rip), %r9
 ASM_X
 if ! "$MINIAS" --target=x86_64 -march=x86-64 -mabi=sysv -o "$work/x86-mini.o" "$work/x86.s" >"$work/x86.stdout" 2>"$work/x86.stderr"; then
     echo 'MINIAS_X86_PARSE_OR_ENCODE_FAIL' >&2
@@ -163,7 +166,10 @@ for bad in 'movq %rax, (%eax)' \
            'movq %rax, (%rax,%eax,4)' \
            'movq %rax, (%rax,%rcx,3)' \
            'movq %rax, (%rax,%rcx,16)' \
-           'movq %rax, (%rax,%rcx,2,7)'; do
+           'movq %rax, (%rax,%rcx,2,7)' \
+           'movq ext_global(%rax), %r9' \
+           'movq ext_global(%rip,%rax,2), %r9' \
+           'movq %rax, ext_global(%rbp)'; do
     printf '.text\n%s\n' "$bad" >"$work/invalid-mem.s"
     if "$MINIAS" --target=x86_64 -o "$work/bad-mem.o" \
          "$work/invalid-mem.s" >/dev/null 2>"$work/invalid.err"; then

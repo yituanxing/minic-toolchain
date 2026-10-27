@@ -140,6 +140,7 @@ typedef enum MiniAsMCRegisterClass {
  * Store a pointer only for memory operands, not in every integer operand. */
 typedef struct MiniAsMCMemory {
     bool has_base;
+    bool pc_relative; /* target-specific PC-relative encoding, not implicit ABS */
     unsigned base;
     bool has_index;
     unsigned index;
