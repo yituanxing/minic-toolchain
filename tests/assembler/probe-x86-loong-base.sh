@@ -147,6 +147,20 @@ entry_x:
     notq (%rax)
     mulq 8(%r12)
     divq ext_global(%rip)
+    # Unsuffixed operations infer width from the register (GNU AT&T).
+    add %gs:this_cpu_off(%rip), %rbx
+    add %gs:this_cpu_off(%rip), %r13
+    sub (%r12), %eax
+    or %r8w, (%r9)
+    cmp %rax, ext_global(%rip)
+    bt %rax, %rdx
+    cmpxchg %ecx, (%rdi)
+    # TEST uses F7 /0 or A9 accumulator, not Group-1 immediate.
+    testl $65536, %eax
+    testq $-1, %r8
+    testq $65536, %rax
+    testw $65535, %ax
+    testw $1, %r9w
     btq %rax, %rdx
     btsq %r8, %r9
     btrl %ecx, %edx
@@ -592,7 +606,11 @@ cmp "$work/la-gnu.bin" "$work/la-mini.bin"
 grep -q 'LoongArch' "$work/la-header.txt"
 grep -q '0x43' "$work/la-header.txt"
 
-for bad in 'mulq %eax' \
+for bad in 'testq $4294967296, %rax' \
+           'testw $65536, %ax' \
+           'testl %rax, %eax' \
+           'add %gs:this_cpu_off(%rip), %ax' \
+           'mulq %eax' \
            'divl %rax' \
            'cmpxchgq %eax, (%rdi)' \
            'bsfq %rax, %eax' \

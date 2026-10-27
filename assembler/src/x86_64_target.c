@@ -8,7 +8,7 @@
 
 /* A first, fail-closed GNU AT&T SysV x86-64 target. All common expression,
  * symbol, section, fragment, and ELF handling lives outside this file. */
-enum { X64_ZERO = 1, X64_REG_BINARY, X64_STACK, X64_MOV_IMM32, X64_ENDBR64, X64_ALU_IMM, X64_REG_MEMORY, X64_BRANCH, X64_IMM_MEMORY, X64_MOVQ_IMMREG, X64_MOVABS_IMMREG, X64_SETCC, X64_BINARY8, X64_MOVSLQ, X64_MOVZX_REG, X64_SHIFT_IMM, X64_TEST8_IMM, X64_PUSH_IMM, X64_CMOV_REG, X64_SHIFT_CL, X64_UNARY, X64_INDIRECT_REG, X64_BSWAP };
+enum { X64_ZERO = 1, X64_REG_BINARY, X64_STACK, X64_MOV_IMM32, X64_ENDBR64, X64_ALU_IMM, X64_REG_MEMORY, X64_BRANCH, X64_IMM_MEMORY, X64_MOVQ_IMMREG, X64_MOVABS_IMMREG, X64_SETCC, X64_BINARY8, X64_MOVSLQ, X64_MOVZX_REG, X64_SHIFT_IMM, X64_TEST8_IMM, X64_PUSH_IMM, X64_CMOV_REG, X64_SHIFT_CL, X64_UNARY, X64_INDIRECT_REG, X64_BSWAP, X64_TEST_IMM_REG };
 
 static bool x64_register(const char *text, unsigned *reg, bool *wide) {
     static const char *const names64[16] = {
@@ -844,6 +844,34 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
         }
         }
     }
+    /* GNU TEST is Group-3 /0, NOT Group-1 ALU; byte TEST already has
+     * a separate 8-bit form. Retain non-byte operand size in MCInst
+     * so parse, measure and encode agree on 66/REX and imm width. */
+    if((!strcmp(s->op,"testw") || !strcmp(s->op,"testl") ||
+        !strcmp(s->op,"testq")) && x64_args2(s->args,src,dst) &&
+       src[0]=='$') {
+        unsigned bits=!strcmp(s->op,"testw")?16U:
+                      !strcmp(s->op,"testl")?32U:64U;
+        uint64_t imm;
+        bool wd=false;
+        bool matched=bits==16U?x64_register16(dst,&rd):
+                     x64_register(dst,&rd,&wd) && wd==(bits==64U);
+        if(matched && minias_eval_u64_expression(src+1,&imm) &&
+           (bits==16U?
+            ((int64_t)imm>=-32768 && (int64_t)imm<=65535):
+            bits==32U?
+            (imm<=UINT32_MAX || (int64_t)imm>=INT32_MIN && (int64_t)imm<0):
+            (int64_t)imm>=INT32_MIN && (int64_t)imm<=INT32_MAX)) {
+            m->opcode=X64_TEST_IMM_REG;m->count=2U;
+            m->encoding=bits==16U?0x400U:0U;
+            m->operands[0].kind=MINIAS_MC_REGISTER;
+            m->operands[0].reg=rd;
+            m->operands[0].register_64=bits==64U;
+            m->operands[1].kind=MINIAS_MC_IMMEDIATE;
+            m->operands[1].immediate=imm;
+            goto done;
+        }
+    }
     /* One typed Group-1 ALU register-immediate path across 8/16/32/64.
      * Encoded target width flags are disjoint from the three-bit ALU group;
      * the existing MCInst length/emit phases own the real byte count. */
@@ -915,9 +943,20 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
             memory_source=true;reg_bits=16U;
         } else goto invalid;
         for (i=0U;i<sizeof(regmem)/sizeof(regmem[0]);++i) {
-            char suffix=s->op[strlen(s->op)-1U];
-            if(strcmp(s->op,regmem[i].op)==0 &&
-               wide==regmem[i].wide &&
+            /* GAS accepts unsuffixed mem/reg forms if the register
+             * establishes the width. Keep the inference in this x86 ISA
+             * decoder, never in the Common assembly lexer. */
+            size_t opname_len=strlen(s->op);
+            size_t form_len=strlen(regmem[i].op);
+            bool exact=!strcmp(s->op,regmem[i].op);
+            bool inferred=form_len==opname_len+1U &&
+                !strncmp(s->op,regmem[i].op,opname_len) &&
+                (regmem[i].op[form_len-1U]=='b'?reg_bits==8U:
+                 regmem[i].op[form_len-1U]=='w'?reg_bits==16U:
+                 regmem[i].op[form_len-1U]=='q'?reg_bits==64U:
+                 regmem[i].op[form_len-1U]=='l' && reg_bits==32U);
+            char suffix=regmem[i].op[form_len-1U];
+            if((exact || inferred) && wide==regmem[i].wide &&
                (suffix=='b'?reg_bits==8U:
                 suffix=='w'?reg_bits==16U:
                 suffix=='q'?reg_bits==64U:reg_bits==32U)) {
@@ -979,6 +1018,13 @@ static bool x64_measure(MiniAs *as,const MiniAsStmt *s,uint32_t *size) {
         case X64_BSWAP:
             *size=2U+(m->operands[0].register_64 ||
                        m->operands[0].reg>=8U?1U:0U);return true;
+        case X64_TEST_IMM_REG:
+            *size=((m->encoding&0x400U)?1U:0U)+
+                  (m->operands[0].register_64 ||
+                   m->operands[0].reg>=8U?1U:0U)+
+                  (m->operands[0].reg==0U?1U:2U)+
+                  ((m->encoding&0x400U)?2U:4U);
+            return true;
         case X64_SHIFT_CL:
             *size=2U+((m->encoding&0x400U)?1U:0U)+
                   (m->operands[0].register_64 ||
@@ -1146,6 +1192,22 @@ static bool x64_encode(MiniAs *as,const MiniAsStmt *s) {
             code[n++]=0x0fU;
             code[n++]=(unsigned char)(0xc8U+(r&7U));
             break;
+        case X64_TEST_IMM_REG: {
+            unsigned j,bytes=(m->encoding&0x400U)?2U:4U;
+            r=m->operands[0].reg;
+            if(m->encoding&0x400U)code[n++]=0x66U;
+            if(m->operands[0].register_64 || r>=8U)
+                code[n++]=(unsigned char)(0x40U |
+                    (m->operands[0].register_64?8U:0U)|(r>>3U));
+            if(r==0U)code[n++]=0xa9U;
+            else {
+                code[n++]=0xf7U;
+                code[n++]=(unsigned char)(0xc0U|(r&7U));
+            }
+            for(j=0U;j<bytes;++j)
+                code[n++]=(unsigned char)(m->operands[1].immediate>>(8U*j));
+            break;
+        }
         case X64_SHIFT_CL:
             r=m->operands[0].reg;
             if(m->encoding&0x400U)code[n++]=0x66U;

@@ -480,3 +480,16 @@ Architectural debt explicitly tracked: target opcodes, mnemonic aliases,
 and width flags still live inside x86_64_target.c. A later Target-internal
 format descriptor can replace that representation without touching
 MiniAsTargetOps, MCInst, layout or the shared ELF writer.
+
+
+## x86 GNU suffix-inference and TEST regression, 2026-10-27
+
+GNU AT&T source permits e.g. `add %gs:symbol(%rip), %rbx`, whose
+register operand unambiguously specifies x86 word size. The existing
+ISA-owned reg/memory opcode table is reused with a target-local mnemonic
+suffix inference rule; the Common grammar remains architecture-neutral.
+Group-3 TEST register immediates are now handled by one typed target opcode
+with A9 for accumulator and F7/0 elsewhere, complete with the original
+MCInst layout and GNU exact bytes. The x86 Target retains responsibility
+for REX.W, 66, register width and numeric range rejection. No duplicate
+ModR/M encoder, ELF writer or ISA leakage into Core.
