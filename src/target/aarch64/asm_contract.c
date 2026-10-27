@@ -210,6 +210,26 @@ static unsigned int aarch64_fetch_logic_form(const char *text, size_t len) {
     }
     return 0U;
 }
+/* Original Linux arch/arm64/include/asm/uaccess.h:
+ * __uaccess_mask_ptr() removes bit 55 using a true AArch64 BIC logical
+ * immediate. It is not a compiler-only barrier, pointer cast or C AND.
+ * GNU source I is a *value* immediate, never a GPR input. */
+static bool aarch64_linux_uaccess_bic_template(
+    const char *text, size_t length) {
+    static const char expected[] = "bic%0,%1,%2";
+    char normalized[64];
+    size_t i, n = 0U;
+    if (!text || length == 0U || length >= sizeof(normalized)) return false;
+    for (i = 0U; i < length; ++i) {
+        const char c = text[i];
+        if (c == '\r' || c == '\n' || c == ';') return false;
+        if (c == ' ' || c == '\t') continue;
+        if (n + 1U >= sizeof(normalized)) return false;
+        normalized[n++] = c;
+    }
+    normalized[n] = '\0';
+    return strcmp(normalized, expected) == 0;
+}
 static bool aarch64_daif_msr_template(const char *text, size_t len) {
     static const char expected[] = "msrdaif,%x0";
     char compact[64]; size_t i, n = 0U;
@@ -415,6 +435,35 @@ bool minic_aarch64_qualify_inline_asm(
             !minic_type_is_const(expr->type)) {
             contract->operand_count = 1U;
             contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
+            return true;
+        }
+    }
+    if (program && src && contract && src->is_volatile && !src->is_goto &&
+        src->outputs && src->inputs && src->output_count == 1U &&
+        src->input_count == 2U && src->clobber_count == 0U &&
+        src->register_clobber_count == 0U && !src->has_memory_clobber &&
+        src->label_count == 0U &&
+        aarch64_linux_uaccess_bic_template(
+            src->template_text, src->template_length) &&
+        constraint(&src->outputs[0], "=r") &&
+        constraint(&src->inputs[0], "r") &&
+        constraint(&src->inputs[1], "i")) {
+        const MinicExpression *out = minic_c0_program_expression(
+            program, src->outputs[0].expression);
+        const MinicExpression *arg = minic_c0_program_expression(
+            program, src->inputs[0].expression);
+        const MinicExpression *mask = minic_c0_program_expression(
+            program, src->inputs[1].expression);
+        if (out && arg && mask &&
+            out->value_category == MINIC_VALUE_LVALUE &&
+            !minic_type_is_const(out->type) &&
+            minic_type_is_pointer(out->type) &&
+            minic_type_is_pointer(arg->type) &&
+            minic_type_is_integer(mask->type)) {
+            contract->operand_count = 3U;
+            contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
+            contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+            contract->kinds[2] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
             return true;
         }
     }
@@ -698,6 +747,48 @@ bool minic_aarch64_emit_qualified_structured_asm(
             (size_t)b[0].value * 8U,
             width == 8U ? "x" : "w",
             (size_t)b[1].value * 8U) >= 0;
+    }
+    if (ins->value.structured_inline_asm.operand_count == 3U &&
+        aarch64_linux_uaccess_bic_template(
+            info->template_text, info->template_length)) {
+        const MinicCoreStructuredInlineAsmOperand *ops =
+            ins->value.structured_inline_asm.operands;
+        const MinicCoreInstruction *imm;
+        MinicCoreInstructionId def;
+        MinicType pointee;
+        if (!info->is_volatile || info->is_goto ||
+            info->has_memory_clobber || info->register_clobber_count)
+            return false;
+        for (i = 0U; i < 3U; ++i) {
+            if (ops[i].operand_index != i ||
+                ops[i].kind != (i == 0U ?
+                    MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT :
+                    MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT) ||
+                ops[i].has_fixed_register_binding || ops[i].early_clobber ||
+                ops[i].value >= fn->value_count ||
+                ops[i].value > 4095U / 8U)
+                return false;
+        }
+        if (!minic_type_pointee(fn->values[ops[0].value].type, &pointee) ||
+            !minic_type_is_pointer(pointee) ||
+            !minic_type_is_pointer(fn->values[ops[1].value].type))
+            return false;
+        def = fn->values[ops[2].value].definition;
+        if (def >= fn->instruction_count) return false;
+        imm = &fn->instructions[def];
+        if (imm->kind != MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT ||
+            imm->result != ops[2].value ||
+            (uint64_t)imm->value.integer_value != (UINT64_C(1) << 55))
+            return false;
+        /* Hardware BIC clears the single TBI/sign-extension tag bit 55
+         * as GNU specifies. Stack SSA output is a C pointer object. */
+        return fprintf(out,
+            "  ldr x10, [sp, #%zu]\n"
+            "  bic x9, x10, #0x80000000000000\n"
+            "  ldr x11, [sp, #%zu]\n"
+            "  str x9, [x11]\n",
+            (size_t)ops[1].value * 8U,
+            (size_t)ops[0].value * 8U) >= 0;
     }
     if (ins->value.structured_inline_asm.operand_count != 3U)
         return false;
