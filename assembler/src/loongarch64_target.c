@@ -693,15 +693,14 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
      * No Common ISA knowledge or private fixups required. */
     if(n==3U && la_reg(t[0],&rd) &&
        la_special_reg(t[1],"$xr",31U,&rj)) {
+        /* From upstream GNU binutils loongarch-opc.c. LASX XVPICK
+         * exposes W/D lanes only, not the LSX B/H variants; do not infer
+         * opcodes or pseudo-mnemonics from unrelated SIMD encodings. */
         static const struct {const char *name;uint32_t opcode;unsigned max;} pick[]={
-            {"xvpickve2gr.b", UINT32_C(0x76ef8000),15U},
-            {"xvpickve2gr.h", UINT32_C(0x76efc000),7U},
-            {"xvpickve2gr.w", UINT32_C(0x76efe000),7U},
-            {"xvpickve2gr.d", UINT32_C(0x76eff000),3U},
-            {"xvpickve2gr.bu",UINT32_C(0x76f38000),15U},
-            {"xvpickve2gr.hu",UINT32_C(0x76f3c000),7U},
-            {"xvpickve2gr.wu",UINT32_C(0x76f3e000),7U},
-            {"xvpickve2gr.du",UINT32_C(0x76f3f000),3U}
+            {"xvpickve2gr.w", UINT32_C(0x76efc000),7U},
+            {"xvpickve2gr.d", UINT32_C(0x76efe000),3U},
+            {"xvpickve2gr.wu",UINT32_C(0x76f3c000),7U},
+            {"xvpickve2gr.du",UINT32_C(0x76f3e000),3U}
         };
         uint64_t lane;
         if(minias_eval_u64_expression(t[2],&lane))

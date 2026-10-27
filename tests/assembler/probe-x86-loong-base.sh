@@ -660,8 +660,7 @@ entry_la:
     xvpickve2gr.d $r17, $xr31, 0
     xvpickve2gr.d $a0, $xr3, 3
     xvpickve2gr.w $a1, $xr4, 7
-    xvpickve2gr.b $a2, $xr5, 15
-    xvpickve2gr.hu $a3, $xr6, 7
+    xvpickve2gr.wu $a3, $xr6, 7
     xvpickve2gr.du $a4, $xr7, 3
     vpickve2gr.d $r13, $vr0, 1
     vpickve2gr.b $a0, $vr31, 15
@@ -1004,8 +1003,9 @@ for bad in 'li.w $r4, -2049' \
            'addu16i.d $a0, $a1, -32769' \
            'xvslti.b $xr0, $xr1, 16' \
            'xvpickve2gr.d $r1, $xr0, 4' \
-           'xvpickve2gr.b $r1, $xr0, 16' \
-           'xvpickve2gr.hu $r1, $xr0, 8' \
+           'xvpickve2gr.w $r1, $xr0, 8' \
+           'xvpickve2gr.b $r1, $xr0, 1' \
+           'xvpickve2gr.hu $r1, $xr0, 1' \
            'xvslli.b $xr0, $xr1, 8' \
            'xvreplve0.q $xr0, $vr1' \
            'vinsgr2vr.d $vr0, $r2, 2' \
