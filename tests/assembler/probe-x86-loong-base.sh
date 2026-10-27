@@ -584,6 +584,16 @@ entry_la:
     li.w $r13, 0x1020
     li.d $r15, 16384
     li.d $r2, ~16383
+    # GNU GAS full sign-extension-aware 64-bit LI.D pseudo.
+    li.d $r12, (((0x8000) << 48) | (1 << 0))
+    li.d $r12, ((0x9000) << 48)
+    li.d $r14, 0x123456789abcdef0
+    li.d $r11, 0x7fffffffffffffff
+    li.d $r10, 0x8000000000000000
+    li.d $r9, 0xffff000000000000
+    ori $r12, $r12, 0b1100
+    lddir $r12, $r12, 3
+    lddir $r15, $r17, 255
     vxor.v $vr4, $vr4, $vr8
     vxor.v $vr0, $vr0, $vr4
     vori.b $vr4, $vr0, 0
@@ -1087,6 +1097,10 @@ for bad in 'li.w $r4, -2049' \
            'jirl $a0, $a1, 3' \
            'jirl $a0, $a1, 131072' \
            'jirl $a0, $a1, -131076' \
+           'lddir $r12, $r12, 256' \
+           'lddir $r12, $r12, -1' \
+           'ori $r12, $r12, 0b1000000000000' \
+           'li.d $r12, 0b2' \
            'break -1' \
            'dbar 32768' \
            'bstrpick.w $a0, $a1, 32, 1' \
@@ -1142,6 +1156,9 @@ cat > "$work/gnu-fill.s" <<'GNU_FILL'
 .Lbool_end:
     .fill -(((.Lbool_after-.Lbool_begin)-(.Lbool_end-.Lbool_after))>0),1,0x5a
     .fill -((3>=2)==-1),1,0x6c
+    # Binary GAS constants must be lexed identically on x86 and Loong.
+    .byte 0b1100
+    .fill 0b10,1,0b10101010
     # Real Linux ALTERNATIVE: forward subsection labels and stable size.
     .subsection 0
 .Loldstart:

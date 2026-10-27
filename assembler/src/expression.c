@@ -10,6 +10,46 @@ typedef struct MiniAsAddendParser {
     bool signed_shift;
 } MiniAsAddendParser;
 
+/* One canonical integer literal owner for Target ISA immediates and
+ * Common layout expressions. C17 strtoull(base=0) is not required to
+ * recognize GNU/GCC 0b... binary literals on older CI libc versions. */
+bool minias_parse_number_literal(const char *text,char **end,
+                                 uint64_t *value) {
+    const char *cursor=text;
+    uint64_t result;
+    char *parsed_end=NULL;
+    unsigned suffix_u=0U,suffix_l=0U;
+    if(!text || !end || !value)return false;
+    if(cursor[0]=='0' && (cursor[1]=='b' || cursor[1]=='B')) {
+        cursor+=2U;
+        if(*cursor!='0' && *cursor!='1')return false;
+        result=0U;
+        while(*cursor=='0' || *cursor=='1') {
+            unsigned bit=(unsigned)(*cursor-'0');
+            if(result>(UINT64_MAX-bit)/2U)return false;
+            result=result*2U+bit;
+            ++cursor;
+        }
+    } else {
+        unsigned long long parsed;
+        errno=0;
+        parsed=strtoull(text,&parsed_end,0);
+        if(errno || parsed_end==text)return false;
+        result=(uint64_t)parsed;
+        cursor=parsed_end;
+    }
+    while(*cursor=='U' || *cursor=='u' ||
+          *cursor=='L' || *cursor=='l') {
+        if(*cursor=='u' || *cursor=='U')++suffix_u;
+        else ++suffix_l;
+        ++cursor;
+    }
+    if(suffix_u>1U || suffix_l>2U)return false;
+    *end=(char *)cursor;
+    *value=result;
+    return true;
+}
+
 static void skip_addend_space(MiniAsAddendParser *parser) {
     while (*parser->cursor == ' ' || *parser->cursor == '\t') {
         ++parser->cursor;
@@ -20,8 +60,6 @@ static bool parse_addend_or(MiniAsAddendParser *parser, uint64_t *value);
 
 static bool parse_addend_primary(MiniAsAddendParser *parser, uint64_t *value) {
     char *end = NULL;
-    unsigned long long parsed;
-
     skip_addend_space(parser);
     if (*parser->cursor == '(') {
         ++parser->cursor;
@@ -35,28 +73,9 @@ static bool parse_addend_primary(MiniAsAddendParser *parser, uint64_t *value) {
         ++parser->cursor;
         return true;
     }
-    errno = 0;
-    parsed = strtoull(parser->cursor, &end, 0);
-    if (errno != 0 || end == parser->cursor) {
+    if(!minias_parse_number_literal(parser->cursor,&end,value))
         return false;
-    }
-    /* GNU GAS accepts C-style U/L/ULL on numeric literals emitted from
-     * preprocessed kernel assembly. Do not interpret arbitrary identifier
-     * suffixes as numbers, and never lose the full uint64_t value. */
-    {
-        unsigned unsigned_count=0U,long_count=0U;
-        const char *suffix=end;
-        while(*suffix=='u' || *suffix=='U' ||
-              *suffix=='l' || *suffix=='L') {
-            if(*suffix=='u' || *suffix=='U')++unsigned_count;
-            else ++long_count;
-            ++suffix;
-        }
-        if(unsigned_count>1U || long_count>2U)return false;
-        end=(char *)suffix;
-    }
-    parser->cursor = end;
-    *value = (uint64_t)parsed;
+    parser->cursor=end;
     return true;
 }
 

@@ -16,6 +16,7 @@ typedef enum {
     LA_MC_PCALA_LO12,
     LA_MC_PCREL_PSEUDO,
     LA_MC_LI32_PAIR,
+    LA_MC_LI64_SEQUENCE,
     LA_MC_BRANCH16,
     LA_MC_BRANCH21,
     LA_MC_BRANCH26
@@ -170,6 +171,75 @@ static bool la_branch_instruction(MiniAs *as, MiniAsMCInst *m,
         return true;
     }
     return false;
+}
+
+/* GNU binutils gas/config/tc-loongarch.c assember_macro_helper:
+ * exact sign-extension reduction for LI.D.  The macro is a semantic
+ * Target pseudo containing only a 64-bit immediate; Common only measures
+ * and places a typed instruction fragment.  This is not an arbitrary
+ * fixed four-word guess: GNU emits from one to four words depending on
+ * the sign-extension relationships of its 12/20/20/12-bit groups. */
+static unsigned la_li_d_words(uint64_t bits,unsigned rd,uint32_t out[4]) {
+    const uint32_t lo=(uint32_t)bits,hi=(uint32_t)(bits>>32U);
+    const unsigned top=(unsigned)(hi>>20U)&4095U;
+    const unsigned mid=(unsigned)(hi&UINT32_C(0xfffff));
+    const unsigned lowhi=(unsigned)(lo>>12U)&UINT32_C(0xfffff);
+    const unsigned lowlo=(unsigned)(lo&4095U);
+    const unsigned zeros=
+        (((hi&UINT32_C(0xfff00000))==0U)?8U:0U)|
+        (((hi&UINT32_C(0x000fffff))==0U)?4U:0U)|
+        (((lo&UINT32_C(0xfffff000))==0U)?2U:0U)|
+        (((lo&UINT32_C(0x00000fff))==0U)?1U:0U);
+    const unsigned ones=
+        (((hi&UINT32_C(0xfff00000))==UINT32_C(0xfff00000))?8U:0U)|
+        (((hi&UINT32_C(0x000fffff))==UINT32_C(0x000fffff))?4U:0U)|
+        (((lo&UINT32_C(0xfffff000))==UINT32_C(0xfffff000))?2U:0U)|
+        (((lo&UINT32_C(0x00000fff))==UINT32_C(0x00000fff))?1U:0U);
+    const unsigned signs=
+        ((hi&UINT32_C(0x80000000))?8U:0U)|
+        ((hi&UINT32_C(0x00080000))?4U:0U)|
+        ((lo&UINT32_C(0x80000000))?2U:0U)|
+        ((lo&UINT32_C(0x00000800))?1U:0U);
+    const unsigned part=(zeros^ones)&(zeros^(signs<<1U));
+    unsigned n=0U;
+    if(part==7U) {
+        out[n++]=UINT32_C(0x03000000)|(top<<10U)|rd;
+        return n;
+    }
+    if((zeros&3U)==2U) {
+        out[n++]=UINT32_C(0x03800000)|(lowlo<<10U)|rd;
+    } else {
+        switch(part&3U) {
+            case 0U:
+                out[n++]=UINT32_C(0x14000000)|(lowhi<<5U)|rd;
+                out[n++]=UINT32_C(0x03800000)|
+                         (lowlo<<10U)|(rd<<5U)|rd;
+                break;
+            case 1U:
+                out[n++]=UINT32_C(0x14000000)|(lowhi<<5U)|rd;
+                break;
+            case 2U:
+                out[n++]=UINT32_C(0x02800000)|(lowlo<<10U)|rd;
+                break;
+            default:
+                out[n++]=UINT32_C(0x00150000)|rd;
+                break;
+        }
+    }
+    switch(part>>2U) {
+        case 0U:
+            out[n++]=UINT32_C(0x16000000)|(mid<<5U)|rd;
+            out[n++]=UINT32_C(0x03000000)|(top<<10U)|(rd<<5U)|rd;
+            break;
+        case 1U:
+            out[n++]=UINT32_C(0x03000000)|(top<<10U)|(rd<<5U)|rd;
+            break;
+        case 2U:
+            out[n++]=UINT32_C(0x16000000)|(mid<<5U)|rd;
+            break;
+        default:break;
+    }
+    return n;
 }
 
 static bool la_parse(MiniAs *as,MiniAsStmt *s) {
@@ -461,6 +531,21 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
             m->operands[0].reg=rd;
             m->operands[1].kind=MINIAS_MC_IMMEDIATE;
             m->operands[1].immediate=(uint64_t)v;
+            goto done;
+        }
+    }
+    /* Full signed/unsigned 64-bit LI.D macro expansion uses the exact
+     * GNU GAS 12/20/20/12 sign-extension reduction, not merely a
+     * hard-coded fix for Linux's 0x8000/0x9000 upper bits. */
+    if(n==2U && !strcmp(s->op,"li.d") && la_reg(t[0],&rd)) {
+        uint64_t bits;uint32_t words[4];
+        if(minias_eval_u64_expression(t[1],&bits)) {
+            m->opcode=LA_MC_LI64_SEQUENCE;m->count=2U;
+            m->operands[0].kind=MINIAS_MC_REGISTER;
+            m->operands[0].reg=rd;
+            m->operands[1].kind=MINIAS_MC_IMMEDIATE;
+            m->operands[1].immediate=bits;
+            (void)la_li_d_words(bits,rd,words);
             goto done;
         }
     }
@@ -789,6 +874,18 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
                         ((uint32_t)lane<<10U)|(rj<<5U)|rd;
                     goto done;
                 }
+    }
+    /* GNU privileged LDDIR page-table walk uses target u10:8.
+     * Malformed levels are rejected before MCInst emission. */
+    if(n==3U && !strcmp(s->op,"lddir") &&
+       la_reg(t[0],&rd) && la_reg(t[1],&rj)) {
+        uint64_t level;
+        if(minias_eval_u64_expression(t[2],&level) && level<=255U) {
+            m->count=3U;
+            m->encoding=UINT32_C(0x06400000)|
+                ((uint32_t)level<<10U)|(rj<<5U)|rd;
+            goto done;
+        }
     }
     /* FCC-to-GPR: condition register is u3 in r5, GPR is r0. */
     if(n==2U && !strcmp(s->op,"movcf2gr") &&
@@ -1245,6 +1342,13 @@ done:
 }
 static bool la_measure(MiniAs *as,const MiniAsStmt *s,uint32_t *size) {
     if(!s->mcinst){minias_set_error(as,"missing-la-mcinst");return false;}
+    if(s->mcinst->opcode==LA_MC_LI64_SEQUENCE) {
+        uint32_t words[4];
+        unsigned count=la_li_d_words(s->mcinst->operands[1].immediate,
+                        s->mcinst->operands[0].reg,words);
+        *size=count*4U;
+        return true;
+    }
     *size=(s->mcinst->opcode==LA_MC_PCREL_PSEUDO ||
            s->mcinst->opcode==LA_MC_LI32_PAIR)?8U:4U;
     return true;
@@ -1258,6 +1362,20 @@ static bool la_encode(MiniAs *as,const MiniAsStmt *s) {
     const MiniAsSymbolExpr *expr=NULL;
     if(!m){minias_set_error(as,"missing-la-mcinst");return false;}
     code=m->encoding;
+    if(m->opcode==LA_MC_LI64_SEQUENCE) {
+        uint32_t words[4];unsigned count,j;
+        unsigned char body[16];
+        count=la_li_d_words(m->operands[1].immediate,
+                            m->operands[0].reg,words);
+        if(count==0U || count>4U || s->size!=4U*count) {
+            minias_set_error(as,"invalid-la-li64-layout:line=%zu",s->line);
+            return false;
+        }
+        for(j=0U;j<count;++j)
+            for(i=0U;i<4U;++i)
+                body[4U*j+i]=(unsigned char)(words[j]>>(8U*i));
+        return minias_section_append(as,s->section,body,4U*count);
+    }
     if(m->opcode==LA_MC_LI32_PAIR) {
         const uint32_t v=(uint32_t)m->operands[1].immediate;
         const unsigned rd=m->operands[0].reg;

@@ -1231,7 +1231,7 @@ static bool parse_absolute_primary(MiniAsAbsoluteExpressionParser *parser,
     size_t length;
     MiniAsSymbol *symbol;
     char *end = NULL;
-    long long number;
+    uint64_t number;
 
     skip_absolute_expression_space(parser);
     if (*parser->cursor == '(') {
@@ -1279,13 +1279,10 @@ static bool parse_absolute_primary(MiniAsAbsoluteExpressionParser *parser,
         return true;
     }
 
-    errno = 0;
-    number = strtoll(parser->cursor, &end, 0);
-    if (errno != 0 || end == parser->cursor) {
-        return false;
-    }
-    parser->cursor = end;
-    *value = (int64_t)number;
+    if(!minias_parse_number_literal(parser->cursor,&end,&number) ||
+       number>(uint64_t)INT64_MAX)return false;
+    parser->cursor=end;
+    *value=(int64_t)number;
     return true;
 }
 
@@ -2405,11 +2402,10 @@ static bool common_data_has_symbolic_token(const char *p) {
     while(*p) {
         if(isdigit((unsigned char)*p)) {
             char *end;
-            errno=0;
-            (void)strtoull(p,&end,0);
-            if(end!=p) {
+            uint64_t bits;
+            if(minias_parse_number_literal(p,&end,&bits)) {
+                (void)bits;
                 p=end;
-                while(*p=='u' || *p=='U' || *p=='l' || *p=='L')++p;
                 continue;
             }
         }
