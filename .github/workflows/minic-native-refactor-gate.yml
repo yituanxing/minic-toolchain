@@ -21,6 +21,7 @@ on:
       - 'tests/compiler/c0/gnu_fixed_register_bindings.c'
       - 'tests/compiler/c0/run-gnu-fixed-register-bindings.sh'
       - 'tests/compiler/c0/run-block-extern-incomplete.sh'
+      - 'tests/compiler/c0/run-linux-empty-inline-asm.sh'
       - 'tests/compiler/c0/block-extern-incomplete.c'
       - 'tests/compiler/c0/probe-rv32-frame-access.c'
       - 'tests/compiler/c0/probe-core-semantic-family.c'
@@ -143,6 +144,9 @@ jobs:
               test -s "$RUNNER_TEMP/gnu-asm-inline-$target.s"
           done
           echo "MINIC_GNU_ASM_INLINE_FIVE_TARGET=PASS grammar=shared barrier=memory"
+          MINIC_CC="$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc" \
+          BUILD_DIR=build/minic-native-backend \
+            sh tests/compiler/c0/run-linux-empty-inline-asm.sh
 
 
       - name: Canonical target DataLayout record/global layout regression

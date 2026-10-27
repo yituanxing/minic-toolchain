@@ -1378,6 +1378,10 @@ MinicCoreLowerStatus core_asm_try_empty_barrier_scalar_forms(
         }
     }
 
+    /* Original BPF fentry +r(arg) is a zero-byte read/write asm. Since no
+     * target instruction executes, a nonvolatile scalar local is unchanged;
+     * only ordinary local C lvalues without physical hardreg bindings can
+     * use this target-neutral no-op. Reuse the established +rm rule. */
     if (!source->is_volatile && !source->is_goto && source->template_text != NULL &&
         source->template_length == 0U && source->outputs != NULL && source->output_count == 1U &&
         source->input_count == 0U && source->label_count == 0U && source->clobber_count == 0U &&
@@ -1389,8 +1393,12 @@ MinicCoreLowerStatus core_asm_try_empty_barrier_scalar_forms(
         output = &source->outputs[0];
         output_expression = minic_c0_program_expression(context->body->program, output->expression);
         if (output->access == MINIC_INLINE_ASM_OPERAND_READ_WRITE &&
-            output->constraint_text != NULL && output->constraint_length == 3U &&
-            memcmp(output->constraint_text, "+rm", 3U) == 0 && output_expression != NULL &&
+            output->constraint_text != NULL &&
+            ((output->constraint_length == 3U &&
+              memcmp(output->constraint_text, "+rm", 3U) == 0) ||
+             (output->constraint_length == 2U &&
+              memcmp(output->constraint_text, "+r", 2U) == 0)) &&
+            output_expression != NULL &&
             output_expression->kind == MINIC_EXPRESSION_LOCAL &&
             output_expression->value_category == MINIC_VALUE_LVALUE &&
             core_memory_scalar_type(output_expression->type) &&
