@@ -53,3 +53,28 @@ assembler.c, generic Expression/ELF/Fragment and all target sources remain
 unchanged. Per-ISA errors are distinct; shared mechanisms may be repaired
 only after reviewing their full callers across each target. No legacy
 implementation is duplicated in this producer.
+
+## Batch 2: diagnosed real producer and introduced ISA census
+
+- First producer x86-64: 2,605 frozen target C/.S assembly owners
+  (2,572 C + 33 native .S), SHA-pinned config
+  `5a50dea34d0a1793c6a8320c15f11b695f1c71fe7b4fbb89bc514f2660ddad65`,
+  **build_exit=2**; original source/ABI unchanged.
+- The full Kbuild log proved 2,046 errors, dominated by GCC 13
+  `-Werror=address` diagnostics in DRM/i915 and related files. Next producer
+  retries only x86-64 with `-Wno-error=address` (no ISA/ABI relaxation);
+  the producer records this in the Kbuild `.cmd` SHA. It is not presented
+  as a GNU reference from the *old* unmodified command.
+- The seven frozen S shards now independently measure mnemonic and directive
+  frequencies; the receiver publishes a separate frequency histogram for each
+  ISA alongside first-blocker frequencies. This is a lexical input census,
+  not a semantic encoder or GNU object-comparison oracle.
+- A new GCC real C→S `rv64i/lp64` contract independently demonstrates the
+  desired base-ISA split: GCC-generated C machine instructions stay in I,
+  software multiplication calls a runtime helper, and handwritten M inline
+  asm remains M and is rejected under strict RV64I.
+- Review after change: all work stays in scripts/workflow/tests. Common
+  MiniAS ISA dispatch, Section/Symbol, Fragment, Fixup and target encoder
+  sources have not changed. Existing per-target code and legacy code remain
+  byte-identical. GCC/Kbuild reference and MiniAS are always compared using
+  their shared immutable assembly source.

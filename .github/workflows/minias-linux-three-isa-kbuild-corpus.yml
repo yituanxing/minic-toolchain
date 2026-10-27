@@ -62,8 +62,17 @@ jobs:
           # and captures .s from the EXACT C and native .S Kbuild commands.
           # This is ORIGINAL-config generation, not the restricted-ISA lane.
           set +e
+          # Original Linux 6.6.143 x86 defconfig under GCC13 produces
+          # thousands of -Werror=address diagnostics (i915/DRM): a compiler
+          # diagnostic mismatch, not a failed MiniAS instruction. Suppress
+          # only this diagnostic's fatality; retain ALL ISA/ABI/config and
+          # save-temps flags. GNU and MiniAS consume the same frozen .s.
+          extra_cflags=''
+          if test "${{ matrix.target }}" = x86_64; then
+            extra_cflags='-Wno-error=address'
+          fi
           make -k -C "$src" O="$output" CC="$compiler" -j4 \
-            KCFLAGS='-save-temps=obj' KAFLAGS='-save-temps=obj' vmlinux \
+            KCFLAGS="-save-temps=obj $extra_cflags" KAFLAGS='-save-temps=obj' vmlinux \
             >"$work/kbuild.log" 2>&1
           rc=$?
           set -e

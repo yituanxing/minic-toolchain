@@ -194,6 +194,32 @@ def checked_shard(path: pathlib.Path, target: str, shard: int):
         return manifest, hashlib.sha256(manifest_bytes).hexdigest(), selected
 
 
+def assembly_census(text: str) -> tuple[Counter, Counter]:
+    """Read GNU -S/.S surface without asking any target backend to parse it.
+
+    Lexical inventory only: actual Target parser + GNU semantic oracle remain
+    mandatory. Counts are per architecture, not a bogus cross-ISA opcode pool.
+    """
+    instructions = Counter()
+    directives = Counter()
+    for line in text.splitlines():
+        code = line.strip()
+        if not code or code.startswith(("#", "//", "/*", "*", ";")):
+            continue
+        if code.startswith("."):
+            name = code.split(None, 1)[0]
+            # Labels such as .Lxx: are not directives.
+            if not name.endswith(":") and re.fullmatch(r"\.[a-z][a-z0-9_]*", name):
+                directives[name] += 1
+            continue
+        token = code.split(None, 1)[0]
+        if token.endswith(":"):
+            continue
+        if re.fullmatch(r"[a-zA-Z][a-zA-Z0-9._]*", token):
+            instructions[token.lower()] += 1
+    return instructions, directives
+
+
 def scan(a: argparse.Namespace) -> None:
     p = pathlib.Path(a.archive)
     manifest, manifest_sha, selected = checked_shard(p, a.target, a.shard)
@@ -202,6 +228,8 @@ def scan(a: argparse.Namespace) -> None:
         raise ValueError("refusing previous scan results")
     destination.mkdir(parents=True)
     rows = []
+    instructions = Counter()
+    directives = Counter()
     # Download/extract only one seven-way shard. Kbuild and GCC are NOT rerun.
     with tarfile.open(p) as tar:
         members = safe_tar_members(tar)
@@ -209,7 +237,11 @@ def scan(a: argparse.Namespace) -> None:
             if index % SHARDS != a.shard: continue
             inp = destination / "inputs" / r["s"]
             inp.parent.mkdir(parents=True, exist_ok=True)
-            inp.write_bytes(tar.extractfile(members["asm/" + r["s"]]).read())
+            assembly_bytes = tar.extractfile(members["asm/" + r["s"]]).read()
+            inp.write_bytes(assembly_bytes)
+            inst, dirs = assembly_census(assembly_bytes.decode("utf-8", errors="replace"))
+            instructions.update(inst)
+            directives.update(dirs)
             output = destination / "objects" / r["owner"]
             output.parent.mkdir(parents=True, exist_ok=True)
             try:
@@ -240,7 +272,8 @@ def scan(a: argparse.Namespace) -> None:
         "shard": a.shard, "manifest_sha256": manifest_sha,
         "config_sha256": manifest["config_sha256"],
         "full_kbuild": manifest["full_kbuild"],
-        "expected_total": manifest["total"], "records": rows
+        "expected_total": manifest["total"], "records": rows,
+        "mnemonics": dict(instructions), "directives": dict(directives)
     }
     (destination / "results.json").write_text(json.dumps(result, indent=2) + "\n")
     print(f"MINIAS_LINUX_S_SHARD target={a.target} shard={a.shard} "
@@ -285,6 +318,11 @@ def aggregate(a: argparse.Namespace) -> None:
                for r in seven[n]["records"]):
             raise ValueError("wrong shard owner membership")
         statuses = Counter(r["status"] for r in rows)
+        mnemonic_counts = Counter()
+        directive_counts = Counter()
+        for d in seven.values():
+            mnemonic_counts.update(d.get("mnemonics", {}))
+            directive_counts.update(d.get("directives", {}))
         causes = Counter(r["first_blocker"] for r in rows
                          if r["status"] == "CANDIDATE_FAIL")
         if statuses["INFRA_ERROR"]:
@@ -293,13 +331,19 @@ def aggregate(a: argparse.Namespace) -> None:
                            "manifest_sha256": ids.pop(),
                            "full_kbuild": fulls.pop(), "total": total,
                            "status": dict(statuses),
-                           "first_blockers": dict(causes.most_common())}
+                           "first_blockers": dict(causes.most_common()),
+                           "mnemonics": dict(mnemonic_counts.most_common()),
+                           "directives": dict(directive_counts.most_common())}
         print(f"MINIAS_LINUX_S_ARCH target={target} total={total} "
               f"assembled_unverified={statuses['ASSEMBLED_UNVERIFIED']} "
               f"candidate_fail={statuses['CANDIDATE_FAIL']} "
               f"full_kbuild={summary[target]['full_kbuild']}")
         for cause, count in causes.most_common(15):
             print(f"MINIAS_LINUX_S_BLOCKER target={target} n={count} cause={cause}")
+        for name, count in mnemonic_counts.most_common(30):
+            print(f"MINIAS_LINUX_S_ISA target={target} mnemonic={name} uses={count}")
+        for name, count in directive_counts.most_common(15):
+            print(f"MINIAS_LINUX_S_DIRECTIVE target={target} directive={name} uses={count}")
     dest = pathlib.Path(a.dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_text(json.dumps({"schema": "minias-linux-3x7-kbuild-v1",
