@@ -133,7 +133,11 @@ static unsigned int aarch64_llsc_op(const char *text, size_t len) {
         "//atomic_xorprfmpstl1strm,%21:ldxr%w0,%2eor%w0,%w0,%w3stxr%w1,%w0,%2cbnz%w1,1b",
         "//atomic64_andprfmpstl1strm,%21:ldxr%0,%2and%0,%0,%3stxr%w1,%0,%2cbnz%w1,1b",
         "//atomic64_orprfmpstl1strm,%21:ldxr%0,%2orr%0,%0,%3stxr%w1,%0,%2cbnz%w1,1b",
-        "//atomic64_xorprfmpstl1strm,%21:ldxr%0,%2eor%0,%0,%3stxr%w1,%0,%2cbnz%w1,1b"
+        "//atomic64_xorprfmpstl1strm,%21:ldxr%0,%2eor%0,%0,%3stxr%w1,%0,%2cbnz%w1,1b",
+        /* GNU atomic{,64}_andnot: BIC(register) needs ordinary r input,
+         * NOT the AArch64 L-immediate-or-register alternative. */
+        "//atomic_andnotprfmpstl1strm,%21:ldxr%w0,%2bic%w0,%w0,%w3stxr%w1,%w0,%2cbnz%w1,1b",
+        "//atomic64_andnotprfmpstl1strm,%21:ldxr%0,%2bic%0,%0,%3stxr%w1,%0,%2cbnz%w1,1b"
     };
     char compact[192]; size_t i, n = 0U;
     if (!text || !len || len >= sizeof(compact)) return 0U;
@@ -232,11 +236,14 @@ bool minic_aarch64_qualify_inline_asm(
         constraint(&src->outputs[0], "=&r") &&
         constraint(&src->outputs[1], "=&r") &&
         constraint(&src->outputs[2], "+Q") &&
-        constraint(&src->inputs[0], "Lr")) {
+        (constraint(&src->inputs[0], "Lr") ||
+         constraint(&src->inputs[0], "r"))) {
         const unsigned int op = aarch64_llsc_op(
             src->template_text, src->template_length);
-        const size_t width = op > 3U ? 8U : 4U;
-        bool accepted = op != 0U;
+        const size_t width = (op >= 4U && op <= 6U) || op == 8U ? 8U : 4U;
+        bool accepted = op != 0U &&
+            ((op >= 7U && constraint(&src->inputs[0], "r")) ||
+             (op < 7U && constraint(&src->inputs[0], "Lr")));
         for (i = 0U; i < 4U && accepted; ++i) {
             const MinicInlineAsmOperand *operand = i < 3U ?
                 &src->outputs[i] : &src->inputs[0];
@@ -465,7 +472,7 @@ bool minic_aarch64_emit_qualified_structured_asm(
         static const char *const alu[] = {"and", "orr", "eor"};
         const unsigned int form = aarch64_llsc_op(
             info->template_text, info->template_length);
-        const size_t width = form > 3U ? 8U : 4U;
+        const size_t width = (form >= 4U && form <= 6U) || form == 8U ? 8U : 4U;
         MinicType pointee;
         if (!form || !info->is_volatile || info->is_goto ||
             !info->has_memory_clobber || info->register_clobber_count)
@@ -510,7 +517,7 @@ bool minic_aarch64_emit_qualified_structured_asm(
             (size_t)b[2].value * 8U,
             (size_t)b[3].value * 8U,
             width == 8U ? "x" : "w",
-            alu[(form - 1U) % 3U],
+            form >= 7U ? "bic" : alu[(form - 1U) % 3U],
             width == 8U ? "x" : "w",
             width == 8U ? "x" : "w",
             width == 8U ? "x" : "w",
