@@ -475,6 +475,132 @@ SRC
         fi
     done
     echo 'MINIC_AARCH64_LINUX_FETCH_OR_GNU_QEMU=PASS variants=8 negative=5 old_value=1 ordering=full,relaxed,acquire,release'
+
+    # Shared five-role LL/SC ISA, 24 more actual Linux fetch forms.
+    : > "$work/aarch64-fetch-logic.i"
+    for width in 32 64; do
+        if [ "$width" = 32 ]; then
+            ctype=int; prefix=''; old='%w0'; next='%w1'; rhs='%w4'; constraint=Kr
+        else
+            ctype='long long'; prefix=64; old='%0'; next='%1'; rhs='%4'; constraint=Lr
+        fi
+        for operation in and xor andnot; do
+            case "$operation" in
+                and) alu=and; operand_constraint=$constraint ;;
+                xor) alu=eor; operand_constraint=$constraint ;;
+                andnot) alu=bic; operand_constraint=r ;;
+            esac
+            for mode in full relaxed acquire release; do
+                case "$mode" in
+                    full) suff=''; load=ldxr; store=stlxr
+                          barrier=' dmb ish\n'; clobber=': "memory"' ;;
+                    relaxed) suff=_relaxed; load=ldxr; store=stxr
+                             barrier=''; clobber='' ;;
+                    acquire) suff=_acquire; load=ldaxr; store=stxr
+                             barrier=''; clobber=': "memory"' ;;
+                    release) suff=_release; load=ldxr; store=stlxr
+                             barrier=''; clobber=': "memory"' ;;
+                esac
+                name=$(printf 'fetch_%s_%s_%s' "$width" "$operation" "$mode")
+                tag=$(printf 'atomic%s_fetch_%s%s' "$prefix" "$operation" "$suff")
+                cat >> "$work/aarch64-fetch-logic.i" <<SRC
+$ctype $name($ctype *p, $ctype v) {
+    $ctype old_value, new_value;
+    unsigned long retry;
+    __asm__ __volatile__("// $tag\\n"
+                         " prfm pstl1strm, %3\\n"
+                         "1: $load $old, %3\\n"
+                         " $alu $next, $old, $rhs\\n"
+                         " $store %w2, $next, %3\\n"
+                         " cbnz %w2, 1b\\n"
+                         "$barrier"
+                         : "=&r"(old_value), "=&r"(new_value), "=&r"(retry),
+                           "+Q"(*p) : "$operand_constraint"(v) $clobber);
+    return old_value;
+}
+SRC
+            done
+            if [ "$operation" = and ]; then
+                init=63; a=62; b=61; c=59; d=55
+                x=63; y=62; z=60; w=56; endval=48
+            elif [ "$operation" = xor ]; then
+                init=0; a=1; b=2; c=4; d=8
+                x=0; y=1; z=3; w=7; endval=15
+            else
+                init=63; a=1; b=2; c=4; d=8
+                x=63; y=62; z=60; w=56; endval=48
+            fi
+            testname=$(printf 'test_%s_%s' "$width" "$operation")
+            name0=$(printf 'fetch_%s_%s_full' "$width" "$operation")
+            name1=$(printf 'fetch_%s_%s_relaxed' "$width" "$operation")
+            name2=$(printf 'fetch_%s_%s_acquire' "$width" "$operation")
+            name3=$(printf 'fetch_%s_%s_release' "$width" "$operation")
+            cat >> "$work/aarch64-fetch-logic.i" <<SRC
+int $testname(void) {
+    $ctype v = $init;
+    $ctype x0 = $name0(&v,$a);
+    $ctype x1 = $name1(&v,$b);
+    $ctype x2 = $name2(&v,$c);
+    $ctype x3 = $name3(&v,$d);
+    return v == $endval && x0 == $x && x1 == $y && x2 == $z && x3 == $w;
+}
+SRC
+        done
+    done
+    cat >> "$work/aarch64-fetch-logic.i" <<'SRC'
+int main(void) {
+    return test_32_and() && test_32_xor() && test_32_andnot() &&
+           test_64_and() && test_64_xor() && test_64_andnot() ? 0 : 1;
+}
+SRC
+    "$cross_cc" -O0 -x c "$work/aarch64-fetch-logic.i" \
+        -o "$work/aarch64-fetch-logic.gnu.elf"
+    "$MINIC_CC" --target=aarch64-linux -S "$work/aarch64-fetch-logic.i" \
+        -o "$work/aarch64-fetch-logic.minic.s"
+    for opcode in 'and w13, w9, w11' 'and x13, x9, x11' \
+                  'eor w13, w9, w11' 'eor x13, x9, x11' \
+                  'bic w13, w9, w11' 'bic x13, x9, x11'; do
+        grep -Fq "$opcode" "$work/aarch64-fetch-logic.minic.s"
+    done
+    "$cross_cc" -x assembler "$work/aarch64-fetch-logic.minic.s" \
+        -o "$work/aarch64-fetch-logic.minic.elf"
+    for flavor in gnu minic; do
+        qemu-aarch64 -L /usr/aarch64-linux-gnu \
+            "$work/aarch64-fetch-logic.$flavor.elf"
+    done
+    for invalid in bad_constraint opcode_injection hidden_svc wrong_memory extra_clobber; do
+        c=r; opcode=bic; suffix=''; mem='+Q'; clobber=''
+        case "$invalid" in
+            bad_constraint) c=Lr ;;
+            opcode_injection) opcode=eor ;;
+            hidden_svc) suffix='; svc #0' ;;
+            wrong_memory) mem='=Q' ;;
+            extra_clobber) clobber=': "memory"' ;;
+        esac
+        cat > "$work/aarch64-fetch-logic-bad-$invalid.i" <<SRC
+void bad(long long *p, long long i) {
+    long long old, next;
+    unsigned long retry;
+    __asm__ __volatile__("// atomic64_fetch_andnot_relaxed\\n"
+        " prfm pstl1strm, %3\\n"
+        "1: ldxr %0, %3\\n"
+        " $opcode %1, %0, %4\\n"
+        " stxr %w2, %1, %3\\n"
+        " cbnz %w2, 1b$suffix"
+        : "=&r"(old), "=&r"(next), "=&r"(retry), "$mem"(*p)
+        : "$c"(i) $clobber);
+}
+SRC
+        if "$MINIC_CC" --target=aarch64-linux -S \
+            "$work/aarch64-fetch-logic-bad-$invalid.i" \
+            -o "$work/aarch64-fetch-logic-bad-$invalid.s" \
+            >"$work/aarch64-fetch-logic-bad-$invalid.out" \
+            2>"$work/aarch64-fetch-logic-bad-$invalid.err"; then
+            echo "FAIL unqualified AArch64 fetch logical ASM: $invalid" >&2
+            exit 1
+        fi
+    done
+    echo 'MINIC_AARCH64_LINUX_FETCH_LOGIC_GNU_QEMU=PASS variants=24 operations=and,xor,andnot ordering=4 negative=5'
 fi
 
 # Original Linux syscall wrappers have deliberately different argument C
