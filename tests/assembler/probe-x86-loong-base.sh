@@ -594,6 +594,9 @@ entry_la:
     ori $r12, $r12, 0b1100
     lddir $r12, $r12, 3
     lddir $r15, $r17, 255
+    ldpte $r12, 0
+    ldpte $r17, 1
+    ldpte $r12, 255
     vxor.v $vr4, $vr4, $vr8
     vxor.v $vr0, $vr0, $vr4
     vori.b $vr4, $vr0, 0
@@ -1099,6 +1102,8 @@ for bad in 'li.w $r4, -2049' \
            'jirl $a0, $a1, -131076' \
            'lddir $r12, $r12, 256' \
            'lddir $r12, $r12, -1' \
+           'ldpte $r12, 256' \
+           'ldpte $r12, -1' \
            'ori $r12, $r12, 0b1000000000000' \
            'li.d $r12, 0b2' \
            'break -1' \

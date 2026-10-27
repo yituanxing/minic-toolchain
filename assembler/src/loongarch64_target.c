@@ -887,6 +887,18 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
             goto done;
         }
     }
+    /* GNU privileged software-walk LDPTE (r5, u10:8) is the paired
+     * page-table instruction to LDDIR. Both use target-owned exact
+     * instruction encoding and share the existing raw MC emitter. */
+    if(n==2U && !strcmp(s->op,"ldpte") && la_reg(t[0],&rj)) {
+        uint64_t level;
+        if(minias_eval_u64_expression(t[1],&level) && level<=255U) {
+            m->count=2U;
+            m->encoding=UINT32_C(0x06440000)|
+                        ((uint32_t)level<<10U)|(rj<<5U);
+            goto done;
+        }
+    }
     /* FCC-to-GPR: condition register is u3 in r5, GPR is r0. */
     if(n==2U && !strcmp(s->op,"movcf2gr") &&
        la_reg(t[0],&rd) &&
