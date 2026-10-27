@@ -534,9 +534,15 @@ $(MINIAS_BINARY): $(MINIAS_OBJECTS)
 	$(CC) $(MINIAS_OBJECTS) $(MINIC_LDFLAGS) -o "$@"
 
 check-minias-a0: $(MINIAS_BINARY)
-	MINIAS="$(abspath $(MINIAS_BINARY))" \
+	@MINIAS="$(abspath $(MINIAS_BINARY))" \
 	BUILD_DIR="$(abspath $(BUILD_DIR))" \
-	sh tests/assembler/run-a0.sh
+	sh tests/assembler/run-a0.sh || { \
+	  echo 'MiniAS A0 failed; replaying focused A0 with shell trace for exact failing command' >&2; \
+	  MINIAS="$(abspath $(MINIAS_BINARY))" \
+	  BUILD_DIR="$(abspath $(BUILD_DIR))" \
+	  sh -x tests/assembler/run-a0.sh; \
+	  exit 1; \
+	}
 
 $(BUILD_DIR)/obj/preprocessor/%.o: preprocessor/%.c
 	@mkdir -p "$(dir $@)"
