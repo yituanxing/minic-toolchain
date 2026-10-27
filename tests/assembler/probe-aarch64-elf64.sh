@@ -307,7 +307,7 @@ echo 'MINIAS_COMMON_LEB_GNU=PASS uleb_sleb=byte_exact hword_xword=byte_exact app
 # rather than dropping .loc directives while succeeding on machine bytes.
 cat >"$work/debug-line.s" <<'DBG_LINE'
 .arch armv8-a
-.file 1 "/tmp" "source.c"
+.file 1 "/tmp/source.c"
 .text
 .globl debug_line_entry
 debug_line_entry:
