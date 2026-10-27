@@ -81,26 +81,8 @@ static int original = 42;
 static int *global_pointer = &original;
 int main(void) { return *global_pointer; }
 EOF
-# Linux 6.6 AArch64 array_index_mask_nospec: 3 roles, NZCV clobber.
-cat > "$w/aarch_nospec.i" <<'EOF'
-unsigned long array_index_mask_nospec(unsigned long idx, unsigned long sz) {
-    unsigned long mask;
-    asm volatile("cmp %1, %2\n\tsbc %0, xzr, xzr\n"
-                 : "=r"(mask) : "r"(idx), "Ir"(sz) : "cc");
-    return mask;
-}
-EOF
-cat > "$w/driver_aarch_nospec.c" <<'EOF'
-extern unsigned long array_index_mask_nospec(unsigned long, unsigned long);
-int main(void) {
-    if (array_index_mask_nospec(3UL, 4UL) != ~0UL) return 1;
-    if (array_index_mask_nospec(4UL, 4UL) != 0UL) return 2;
-    if (array_index_mask_nospec(5UL, 4UL) != 0UL) return 3;
-    if (array_index_mask_nospec(0UL, 0UL) != 0UL) return 4;
-    if (array_index_mask_nospec(0UL, 1UL) != ~0UL) return 5;
-    return 42;
-}
-EOF
+# Exactly the same pinned C TU used by the focused ARM64 CI QEMU oracle.
+cp tests/compiler/c0/aarch64-nzcv-nospec.i "$w/aarch_nospec.i"
 # Preserve fail-closed coverage for an actually unsupported weak definition.
 cat > "$w/unsupported.i" <<'EOF'
 __attribute__((weak)) int unsupported_weak_global = 42;
@@ -1723,15 +1705,14 @@ for target in aarch64 loongarch64; do
     echo "FOUR_BACKEND_M1_GLOBAL_POINTER=PASS target=$target original_source=1 GNU_QEMU_oracle=42 MiniC_GNU_QEMU=42"
 
     if [ "$target" = "aarch64" ]; then
-        "$gcc" -static -x c "$w/aarch_nospec.i" \
-            "$w/driver_aarch_nospec.c" -o "$w/aarch_nospec.gnu.elf"
+        "$gcc" -static -x c "$w/aarch_nospec.i" -o "$w/aarch_nospec.gnu.elf"
         check_qemu_exit "$qemu" "$w/aarch_nospec.gnu.elf" 42
         "$MINIC_CC" --target=aarch64-linux -S "$w/aarch_nospec.i" \
             -o "$w/aarch_nospec.mini.s"
         grep -F '  cmp x10, x11' "$w/aarch_nospec.mini.s" >/dev/null
         grep -F '  sbc x9, xzr, xzr' "$w/aarch_nospec.mini.s" >/dev/null
         "$gcc" -static -x assembler "$w/aarch_nospec.mini.s" \
-            -x c "$w/driver_aarch_nospec.c" -o "$w/aarch_nospec.mini.elf"
+            -o "$w/aarch_nospec.mini.elf"
         check_qemu_exit "$qemu" "$w/aarch_nospec.mini.elf" 42
         echo "FOUR_BACKEND_AARCH_NOSPEC=PASS GNU_and_MiniC_QEMU=42 NZCV_cc=true"
     fi

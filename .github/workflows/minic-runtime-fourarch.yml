@@ -298,6 +298,32 @@ jobs:
           set -Eeuo pipefail
           sh tests/compiler/c0/probe-four-backend-dynamic-stack.sh \
             aarch64 aarch64-linux-gnu-gcc qemu-aarch64 /usr/aarch64-linux-gnu
+      - name: AArch64 Linux NZCV GNU-ASM contract, independent GNU/QEMU oracle
+        if: matrix.target == 'aarch64'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          source=tests/compiler/c0/aarch64-nzcv-nospec.i
+          cc=build/runtime-ci/bin/minic-cc
+          mkdir -p build/aarch64-nzcv
+          aarch64-linux-gnu-gcc -static -x c "$source" -o build/aarch64-nzcv/gnu.elf
+          set +e
+          qemu-aarch64 build/aarch64-nzcv/gnu.elf
+          gnu_actual=$?
+          set -e
+          test "$gnu_actual" -eq 42 || { echo 'FAIL GNU NZCV oracle'; exit 1; }
+          "$cc" --target=aarch64-linux -S "$source" -o build/aarch64-nzcv/minic.s
+          grep -F '  cmp x10, x11' build/aarch64-nzcv/minic.s
+          grep -F '  sbc x9, xzr, xzr' build/aarch64-nzcv/minic.s
+          aarch64-linux-gnu-gcc -static -x assembler build/aarch64-nzcv/minic.s \
+            -o build/aarch64-nzcv/minic.elf
+          set +e
+          qemu-aarch64 build/aarch64-nzcv/minic.elf
+          actual=$?
+          set -e
+          test "$actual" -eq 42
+          echo 'AARCH64_NZCV_ASM_GNU_QEMU=PASS original_C=1 compiler_abi=1 exit=42'
+
       - name: QEMU execute upstream runtime with native ABI on new LP64 targets
         if: matrix.target == 'aarch64' || matrix.target == 'loongarch64'
         shell: bash
