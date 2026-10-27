@@ -223,7 +223,9 @@ static bool parse_addend_or(MiniAsAddendParser *parser, uint64_t *value) {
     return true;
 }
 
-static bool parse_addend_expression(const char *text, uint64_t *value) {
+/* Shared wrapping 64-bit integer-expression grammar for symbolic addends,
+ * ISA immediates and machine-specific operands. */
+bool minias_eval_u64_expression(const char *text, uint64_t *value) {
     MiniAsAddendParser parser;
 
     parser.cursor = text;
@@ -281,7 +283,7 @@ bool minias_parse_symbol_addend(const char *text, MiniAsSymbolExpr *expr) {
         while (*p == ' ' || *p == '\t') {
             ++p;
         }
-        if (!parse_addend_expression(p, &addend_bits)) {
+        if (!minias_eval_u64_expression(p, &addend_bits)) {
             return false;
         }
         p += strlen(p);

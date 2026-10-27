@@ -19,7 +19,8 @@ Explicit -march=rv32i/rv64i retains existing fail-closed machine-code checks.
    RISC-V target; the common parser still owns GNU-style statement grammar.
 2. Replace statement-size reparsing with stable MCFragments and layout
    relaxation/fixup callbacks; statement ordinal fixes macro identity today.
-3. Unify expression grammars and properly separate Fixup from ELF Relocation.
+3. Unify symbol-aware absolute expression grammar with the now-shared
+   constant/addend evaluator and properly separate Fixup from ELF Relocation.
 4. Extend target-owned ELF attributes to truthful non-I profiles, including
    ISA changes inside .option regions (currently strict I only).
 5. Complete .option arch/rvc/relax semantics instead of ignored legacy modes.

@@ -1536,4 +1536,29 @@ test "$after_value" = '000000000000000c' || {
 }
 echo 'MINIAS_RELAX_STATEMENT_ID=PASS macro_instructions=2 expanded=1'
 
+
+# Shared integer grammar: RISC-V immediates and symbolic ELF relocation
+# addends must use the same parentheses, precedence and unsigned semantics.
+cat >"$work/shared-expression.s" <<'EOF_SHARED_EXPR'
+.text
+.globl shared_expression
+shared_expression:
+    li a0, ((1 << 10) | (3 * 7))
+    ret
+.data
+.globl shared_expression_ptr
+shared_expression_ptr:
+    .quad shared_expression + ((1 << 3) | 1)
+EOF_SHARED_EXPR
+"$MINIAS" -march=rv64i -mabi=lp64 -o "$work/shared-expression.o" "$work/shared-expression.s"
+readelf -Wr "$work/shared-expression.o" |
+    grep -Eq 'R_RISCV_64[[:space:]]+.*shared_expression[[:space:]]+\+[[:space:]]+9'
+riscv64-linux-gnu-as -march=rv64i -mabi=lp64 -o "$work/shared-expression.gnu.o" "$work/shared-expression.s"
+riscv64-linux-gnu-objcopy -j .text -O binary \
+    "$work/shared-expression.gnu.o" "$work/shared-expression.gnu.bin"
+riscv64-linux-gnu-objcopy -j .text -O binary \
+    "$work/shared-expression.o" "$work/shared-expression.bin"
+cmp "$work/shared-expression.gnu.bin" "$work/shared-expression.bin"
+echo 'MINIAS_SHARED_INT_EXPRESSION=PASS addend=9 GNU_AS_text_equal=true'
+
 echo "MINIAS_A0=PASS objects=30 abi_flags=3 format=ELF64-RISCV-ET_REL relocations=23 strings=2 pseudos=17 previous=3 subsection=2 numeric_labels=18 ecall=1 isa_next=13 csr_amo=8 sfence_vma=3 fence_i=1 vsetvl=1 vsetvli=1 vmv_v_i=4 rept=2 nested_rept=1 irp=4 section_stack=1 org=3 local_difference=1 lr_sc=2 inline_labels=2 branch_pseudos=8 extern=1 symbol_minus_dot=4 symbol_difference=1 absolute32=1 jal=2 jal_subsection=1 high_numeric_labels=2 u64_data=3 raw_insn=4 set_alias=3 move=1 numeric_zero=1 immediate_product=2 shift_immediate=1 incbin=1 align_expr=1 native_expr=6 native_zbb_tail_memexpr=1 native_jalr_symbol_load=1 native_forward_short=1 native_mixed_macro=1 native_divided_difference=1 native_symbol_addend_expr=1 native_add_sub_immediate=1 native_cfi_boundary=1 native_gas_forms=1 native_set_size=1 native_macro_comma=1 native_macro_quotes=1 pic_la_got=1 sext_w=1 macro=4 conditional=1"
