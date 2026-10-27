@@ -286,6 +286,7 @@ bool minias_add_fixup(MiniAs *as,
                       const char *symbol_name,
                       int64_t addend);
 bool minias_eval_u64_expression(const char *text, uint64_t *value);
+bool minias_eval_i64_expression(const char *text, int64_t *value);
 bool minias_parse_symbol_addend(const char *text, MiniAsSymbolExpr *expr);
 bool minias_decode_string_literals(const char *text,
                                    bool nul_terminate,

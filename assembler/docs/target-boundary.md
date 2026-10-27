@@ -365,3 +365,17 @@ shards** via [minias-replay-loong-7], not three GNU Linux recompiles nor 21
 full scans. The workflow watches its GNU oracle test script so this requested
 batch actually runs. Remaining major blocker families must be measured from
 the new exact-head aggregate, not inferred from earlier counts.
+
+## Grouped GNU LoongArch64 blocker fixes: expression/alias/ALSL
+
+The original Linux 6.6.143 seven-way Pareto (run 40473773342) showed
+`lu12i.w` 791, `bgtu` 332, `bleu` 209, `ble` 149 and
+`alsl.d` 137 FIRST blockers. This batch implements these shared root
+causes **before** the next frozen-corpus scan: one Common signed constant
+expression evaluator reuses the RV-established grammar but selects arithmetic
+negative right-shift semantics (unsigned callers unchanged), the four
+LoongArch relational GNU aliases lower to existing B16+symbol fixups, and
+`alsl.w/wu/d` uses the GNU LA instruction-table sa2=(shift-1) bitfield.
+The Target is responsible for encoding; Common remains responsible only for
+expression semantics, layout and ELF RELA. The exact-source GNU oracle now
+checks positive and rejected boundary cases. No Linux compiler rerun.

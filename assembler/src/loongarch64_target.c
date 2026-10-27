@@ -2,6 +2,7 @@
 
 #include <ctype.h>
 #include <errno.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -107,16 +108,25 @@ static bool la_branch_instruction(MiniAs *as, MiniAsMCInst *m,
         {"bgeu",3U,UINT32_C(0x6c000000),LA_MC_BRANCH16}
     };
     unsigned i, rj, rd, slot;
+    const char *base_op=op;
+    bool swap=false;
     MiniAsSymbolExpr expr;
+    /* GAS pseudo comparisons reuse the existing B16 encoding and its
+     * Common RV-style SymbolExpr/ELF fixup. Do not duplicate a branch ISA. */
+    if(!strcmp(op,"bgtu")) {base_op="bltu";swap=true;}
+    else if(!strcmp(op,"bleu")) {base_op="bgeu";swap=true;}
+    else if(!strcmp(op,"bgt")) {base_op="blt";swap=true;}
+    else if(!strcmp(op,"ble")) {base_op="bge";swap=true;}
     for(i=0;i<sizeof(branches)/sizeof(branches[0]);++i) {
         const struct BranchKind *b=&branches[i];
-        if(strcmp(op,b->name)!=0 || count!=b->operands)continue;
+        if(strcmp(base_op,b->name)!=0 || count!=b->operands)continue;
         if (!minias_parse_symbol_addend(t[count-1U],&expr) ||
             (expr.addend&3)!=0)
             return false;
         rj=0U;rd=0U;
         if(count>=2U && !la_reg(t[0],&rj))return false;
         if(count==3U && !la_reg(t[1],&rd))return false;
+        if(swap && count==3U) {unsigned tmp=rj;rj=rd;rd=tmp;}
         slot=count-1U;
         if (!la_symbol_operand(as,m,slot,&expr))return false;
         m->opcode=(unsigned)b->opcode;
@@ -268,6 +278,37 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
                 }
         }
     }
+    /* GNU LA opcode tables: sa2 lives in bits 16:15 and the source
+     * syntax specifies sa2+1 (one through four), not the encoded 0..3.
+     * Index/shift-add is a single target-local MCInst, not Common logic. */
+    if(n==4U && la_reg(t[0],&rd) && la_reg(t[1],&rj) &&
+       la_reg(t[2],&rk)) {
+        static const struct {const char *name;uint32_t base;} alsls[]={
+            {"alsl.w",UINT32_C(0x00040000)},
+            {"alsl.wu",UINT32_C(0x00060000)},
+            {"alsl.d",UINT32_C(0x002c0000)}
+        };
+        uint64_t shift;
+        if(minias_eval_u64_expression(t[3],&shift) &&
+           shift>=1U && shift<=4U) {
+            for(i=0U;i<sizeof(alsls)/sizeof(alsls[0]);++i) {
+                if(strcmp(s->op,alsls[i].name)!=0)continue;
+                m->count=4U;
+                m->encoding=alsls[i].base |
+                    (((uint32_t)shift-1U)<<15U)|
+                    (rk<<10U)|(rj<<5U)|rd;
+                m->operands[0].kind=MINIAS_MC_REGISTER;
+                m->operands[0].reg=rd;
+                m->operands[1].kind=MINIAS_MC_REGISTER;
+                m->operands[1].reg=rj;
+                m->operands[2].kind=MINIAS_MC_REGISTER;
+                m->operands[2].reg=rk;
+                m->operands[3].kind=MINIAS_MC_IMMEDIATE;
+                m->operands[3].immediate=shift;
+                goto done;
+            }
+        }
+    }
     /* LoongArch jr register == jirl $zero,$reg,0.  No relocation. */
     if(!strcmp(s->op,"jr") && n==1U && la_reg(t[0],&rj)) {
         m->count=1U;
@@ -305,10 +346,9 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
             m->operands[0].reg=rd;
             goto done;
         }
-        long upper;
-        errno=0;upper=strtol(t[1],&end,0);
-        if (!errno && end!=t[1] && !*end &&
-            upper>=-524288L && upper<=524287L) {
+        int64_t upper;
+        if (minias_eval_i64_expression(t[1],&upper) &&
+            upper>=-524288 && upper<=524287) {
             for(i=0U;i<sizeof(upper20)/sizeof(upper20[0]);++i)
                 if(!strcmp(s->op,upper20[i].name)) {
                     m->count=2U;
@@ -350,8 +390,11 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
                     goto done;
                 }
         }
-        errno=0;val=strtol(t[2],&end,0);
-        if(!errno && end!=t[2] && !*end) {
+        {
+        int64_t signed_value;
+        if(minias_eval_i64_expression(t[2],&signed_value) &&
+           signed_value>=LONG_MIN && signed_value<=LONG_MAX) {
+            val=(long)signed_value;
             if (val>=-2048L && val<=2047L) {
                 for(i=0U;i<sizeof(imm12)/sizeof(imm12[0]);++i)
                     if(!strcmp(s->op,imm12[i].name)) {
@@ -387,6 +430,7 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
                             (rj<<5U)|rd;goto done;
                     }
             }
+        }
         }
     }
 fail:

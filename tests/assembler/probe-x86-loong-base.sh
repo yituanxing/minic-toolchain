@@ -138,6 +138,13 @@ entry_la:
     srai.d $a0, $a1, 63
     rotri.w $a0, $a1, 13
     rotri.d $a0, $a1, 35
+    lu12i.w $r12, -4096>>12
+    lu12i.w $r13, 4096>>12
+    lu32i.d $r13, 0x800000000000>>32
+    addi.d $r12, $r13, 16>>2
+    alsl.w $a0, $a1, $a2, 1
+    alsl.wu $a1, $a0, $a2, 4
+    alsl.d $a0, $a1, $a2, 2
     lu12i.w $a0, -524288
     lu32i.d $a0, 524287
     pcalau12i $a1, 1
@@ -215,6 +222,10 @@ reloc_entry:
     bge $a0, $a1, _external_branch
     bltu $a0, $a1, _external_branch
     bgeu $a0, $a1, _external_branch
+    bgtu $a0, $a1, _external_branch
+    bleu $a0, $a1, _external_branch
+    bgt $a0, $a1, _external_branch
+    ble $a0, $a1, _external_branch
 .size reloc_entry, .-reloc_entry
 LA_RELOC
 "$MINIAS" --target=loongarch64 -march=loongarch64 -mabi=lp64d \
@@ -250,6 +261,7 @@ local_entry:
     beqz $a0, .Lforward
     b .Lforward
     beq $a0, $a1, .Lback
+    bgtu $a0, $a1, .Lforward
 .Lforward:
     bnez $a1, .Lback
     ret
@@ -280,7 +292,9 @@ for bad in 'ldptr.d $a0, $sp, 3' \
            'break -1' \
            'dbar 32768' \
            'bstrpick.w $a0, $a1, 32, 1' \
-           'bstrpick.d $a0, $a1, 2, 3'; do
+           'bstrpick.d $a0, $a1, 2, 3' \
+           'alsl.d $a0, $a1, $a2, 0' \
+           'alsl.w $a0, $a1, $a2, 5'; do
     printf '.text\n%s\n' "$bad" >"$work/invalid-la-ptr.s"
     if "$MINIAS" --target=loongarch64 -o "$work/bad-ptr.o" \
          "$work/invalid-la-ptr.s" >/dev/null 2>"$work/invalid.err"; then

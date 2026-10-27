@@ -7,6 +7,7 @@
 
 typedef struct MiniAsAddendParser {
     const char *cursor;
+    bool signed_shift;
 } MiniAsAddendParser;
 
 static void skip_addend_space(MiniAsAddendParser *parser) {
@@ -150,8 +151,17 @@ static bool parse_addend_shift(MiniAsAddendParser *parser, uint64_t *value) {
         if (!parse_addend_sum(parser, &rhs) || rhs >= 64U) {
             return false;
         }
-        result = left ? result << (unsigned int)rhs
-                      : result >> (unsigned int)rhs;
+        if (left) {
+            result <<= (unsigned int)rhs;
+        } else if (parser->signed_shift && rhs != 0U &&
+                   (result & (UINT64_C(1) << 63U)) != 0U) {
+            /* GNU signed assembler immediates use arithmetic >>.
+             * Make sign extension explicit: signed C >> is not portable. */
+            result = (result >> (unsigned int)rhs) |
+                     (~UINT64_C(0) << (unsigned int)(64U-rhs));
+        } else {
+            result >>= (unsigned int)rhs;
+        }
     }
     *value = result;
     return true;
@@ -229,11 +239,28 @@ bool minias_eval_u64_expression(const char *text, uint64_t *value) {
     MiniAsAddendParser parser;
 
     parser.cursor = text;
+    parser.signed_shift = false;
     if (!parse_addend_or(&parser, value)) {
         return false;
     }
     skip_addend_space(&parser);
     return *parser.cursor == '\0';
+}
+
+/* Same grammar and precedence as the RV-proven unsigned expression path.
+ * Only the interpretation of a negative right-shift is target-selectable.
+ * This must NOT replace minias_eval_u64_expression's old semantics. */
+bool minias_eval_i64_expression(const char *text, int64_t *value) {
+    MiniAsAddendParser parser;
+    uint64_t bits;
+    if (!text || !value) return false;
+    parser.cursor=text;
+    parser.signed_shift=true;
+    if (!parse_addend_or(&parser,&bits)) return false;
+    skip_addend_space(&parser);
+    if (*parser.cursor!='\0') return false;
+    *value=(int64_t)bits;
+    return true;
 }
 
 static bool is_symbol_start(char ch) {
