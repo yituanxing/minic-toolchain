@@ -296,6 +296,10 @@ bool minic_aarch64_qualify_inline_asm(
         src->input_count == 0U && src->clobber_count == 0U &&
         src->register_clobber_count == 0U && !src->has_memory_clobber &&
         aarch64_linux_mrs_register(src->template_text, src->template_length) &&
+        /* DAIF IRQ mask read is a volatile Linux sysreg operation; do not
+         * expand the historical nonvolatile EL1 CPU-offset MRS allowlist. */
+        strcmp(aarch64_linux_mrs_register(
+                   src->template_text, src->template_length), "daif") != 0 &&
         constraint(&src->outputs[0], "=r")) {
         expr = minic_c0_program_expression(program, src->outputs[0].expression);
         if (expr && minic_type_unqualified(expr->type, &plain) &&
