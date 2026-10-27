@@ -235,6 +235,17 @@ typedef struct MiniAsCfiProc {
     unsigned state_depth;
 } MiniAsCfiProc;
 
+typedef struct MiniAsDebugLoc {
+    size_t symbol_index;
+    unsigned file;
+    unsigned line;
+    unsigned column;
+    unsigned flags;
+    unsigned discriminator;
+    unsigned isa;
+    bool is_stmt;
+} MiniAsDebugLoc;
+
 typedef struct MiniAs {
     const struct MiniAsTargetOps *target;
     MiniAsSection *sections;
@@ -284,6 +295,13 @@ typedef struct MiniAs {
     size_t cfi_op_count;
     size_t cfi_op_capacity;
     size_t cfi_anchor_counter;
+    char **debug_files;
+    size_t debug_file_capacity;
+    size_t debug_file_max;
+    MiniAsDebugLoc *debug_locs;
+    size_t debug_loc_count;
+    size_t debug_loc_capacity;
+    bool debug_is_stmt;
     uint32_t elf_flags;
     bool isa_explicit;
     unsigned target_xlen;
@@ -309,6 +327,10 @@ bool minias_write_elf64(MiniAs *as, const char *path);
 bool minias_cfi_directive(MiniAs *as, const char *op,
                           const char *args, size_t line);
 bool minias_cfi_emit(MiniAs *as);
+bool minias_anchor_here(MiniAs *as, size_t *symbol_index);
+bool minias_debug_directive(MiniAs *as,const char *op,
+                            const char *args,size_t line);
+bool minias_debug_emit(MiniAs *as);
 bool minias_write_elf32(MiniAs *as, const char *path);
 
 int minias_find_section(const MiniAs *as, const char *name);

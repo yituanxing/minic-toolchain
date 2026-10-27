@@ -302,4 +302,32 @@ for section in .text .data; do
 done
 echo 'MINIAS_COMMON_LEB_GNU=PASS uleb_sleb=byte_exact hword_xword=byte_exact app_no_app=correct'
 
+
+# Real DWARF line program must retain source locations and one PC relocation,
+# rather than dropping .loc directives while succeeding on machine bytes.
+cat >"$work/debug-line.s" <<'DBG_LINE'
+.arch armv8-a
+.file 1 "/tmp" "source.c"
+.text
+.globl debug_line_entry
+debug_line_entry:
+    .loc 1 10 3 is_stmt 1
+    nop
+    .loc 1 12 1 is_stmt 0
+    ret
+DBG_LINE
+"$MINIAS" --target=aarch64 -o "$work/line-mini.o" "$work/debug-line.s"
+"$AARCH64_AS" -o "$work/line-gnu.o" "$work/debug-line.s"
+"$AARCH64_OBJCOPY" -j .text -O binary "$work/line-mini.o" "$work/line-mini.bin"
+"$AARCH64_OBJCOPY" -j .text -O binary "$work/line-gnu.o" "$work/line-gnu.bin"
+cmp "$work/line-mini.bin" "$work/line-gnu.bin"
+"$AARCH64_READELF" --debug-dump=decodedline "$work/line-mini.o" >"$work/line-mini.txt"
+"$AARCH64_READELF" --debug-dump=decodedline "$work/line-gnu.o" >"$work/line-gnu.txt"
+for needle in 'source.c' ' 10 ' ' 12 '; do
+    grep -q "$needle" "$work/line-mini.txt"
+    grep -q "$needle" "$work/line-gnu.txt"
+done
+"$AARCH64_READELF" -Wr "$work/line-mini.o" | grep -q R_AARCH64_ABS64
+echo 'MINIAS_COMMON_DWARF_DEBUG_LINE=PASS real_address_fixup=1 file_line_rows=2'
+
 echo 'MINIAS_AARCH64_VSLICE=PASS ELF64=1 gnu_bytes=equal relocation_call26_jump26_abs64=1 ld=pass qemu=exit0'

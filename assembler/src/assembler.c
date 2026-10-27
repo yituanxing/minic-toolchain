@@ -586,6 +586,7 @@ void minias_init(MiniAs *as) {
     as->previous_section = as->current_section;
     as->previous_subsection = 0U;
     as->conditional_active = true;
+    as->debug_is_stmt = true;
     (void)ensure_subsection(as, as->current_section, 0U);
 }
 
@@ -644,6 +645,10 @@ void minias_destroy(MiniAs *as) {
     free(as->macros);
     free(as->cfi_procs);
     free(as->cfi_ops);
+    for (i = 0U; i < as->debug_file_capacity; ++i)
+        free(as->debug_files[i]);
+    free(as->debug_files);
+    free(as->debug_locs);
     memset(as, 0, sizeof(*as));
 }
 
@@ -3258,6 +3263,8 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
         if (strcmp(op, ".cfi_sections") == 0 ||
             (as->cfi_debug_frame && strncmp(op, ".cfi_", 5U) == 0))
             return minias_cfi_directive(as, op, args, line);
+        if (!strcmp(op,".file") || !strcmp(op,".loc"))
+            return minias_debug_directive(as,op,args,line);
         /*
          * Native Linux VDSO sources use only the procedure-boundary CFI
          * surface at this stage.  Track and validate its state now; actual
@@ -4934,7 +4941,7 @@ bool minias_emit_sections(MiniAs *as) {
             }
         }
     }
-    return minias_cfi_emit(as);
+    return minias_cfi_emit(as) && minias_debug_emit(as);
 }
 
 

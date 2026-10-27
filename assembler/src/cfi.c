@@ -80,7 +80,7 @@ static bool cfi_two(const char *text, unsigned *reg, int64_t *value) {
 }
 
 /* Define a hidden source-location anchor at the current fragment boundary. */
-static bool cfi_anchor(MiniAs *as, size_t *index) {
+bool minias_anchor_here(MiniAs *as, size_t *index) {
     char name[72];
     MiniAsSymbol *sym;
     size_t i;
@@ -112,7 +112,7 @@ static bool cfi_append(MiniAs *as,unsigned kind,unsigned reg,int64_t value) {
     size_t anchor;
     if (!cfi_grow((void **)&as->cfi_ops,&as->cfi_op_capacity,
                   as->cfi_op_count+1U,sizeof(*as->cfi_ops))) return false;
-    if (!cfi_anchor(as,&anchor)) return false;
+    if (!minias_anchor_here(as,&anchor)) return false;
     op=&as->cfi_ops[as->cfi_op_count++];
     op->symbol_index=anchor;op->kind=kind;op->reg=reg;op->value=value;
     proc=&as->cfi_procs[as->cfi_proc_count-1U];
@@ -149,7 +149,7 @@ bool minias_cfi_directive(MiniAs *as,const char *op,
         if (as->cfi_active || *args!='\0' || as->current_section<0 ||
             !cfi_grow((void **)&as->cfi_procs,&as->cfi_proc_capacity,
                       as->cfi_proc_count+1U,sizeof(*as->cfi_procs)) ||
-            !cfi_anchor(as,&anchor)) {
+            !minias_anchor_here(as,&anchor)) {
             minias_set_error(as,"bad-cfi-startproc:line=%zu",line);
             return false;
         }
@@ -169,7 +169,7 @@ bool minias_cfi_directive(MiniAs *as,const char *op,
     if (!strcmp(op,".cfi_endproc")) {
         size_t anchor;
         if (*args!='\0' || proc->state_depth!=0U ||
-            !cfi_anchor(as,&anchor)) {
+            !minias_anchor_here(as,&anchor)) {
             minias_set_error(as,"bad-cfi-endproc:line=%zu",line);
             return false;
         }
