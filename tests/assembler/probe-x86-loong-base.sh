@@ -14,6 +14,29 @@ cat > "$work/x86.s" <<'ASM_X'
 .globl entry_x
 .type entry_x,@function
 entry_x:
+    # Common GNU string-conditional machinery, including .else nesting.
+    .ifc "gnu", "gnu"
+       nop
+    .else
+       int3
+    .endif
+    .ifnc alpha,beta
+       nop
+    .else
+       int3
+    .endif
+    .ifc foo,bar
+       int3
+    .else
+       nop
+    .endif
+    .ifc x,x
+       .ifnc red,blue
+          nop
+       .else
+          int3
+       .endif
+    .endif
     nop
     /* GCC inline asm condition code comments are no instructions. */
     /* A real multi-line GAS comment:
@@ -130,6 +153,25 @@ entry_x:
     xorl %r9d, 8(%r12)
     andq -16(%rbp), %rax
     orq %r8, 16(%rsp)
+    notb %al
+    notb %ah
+    notb %r8b
+    notw %ax
+    negb %al
+    negb %r9b
+    negb 4(%rbx)
+    negw %cx
+    negw 8(%r12)
+    incb %r10b
+    incw %r11w
+    decb %bl
+    decw %bx
+    mulb %cl
+    mulw %dx
+    divb %al
+    divw %cx
+    idivb %r10b
+    idivw %r11w
     notl %eax
     notq %r9
     negl %r10d
@@ -728,6 +770,10 @@ grep -q '0x43' "$work/la-header.txt"
 
 for bad in 'movq __per_cpu_offset(%rdi),%rax' \
            'adcl %rax,%eax' \
+           'negb %eax' \
+           'negw %eax' \
+           'divw %rax' \
+           'imulb %r8w' \
            'inb %eax,%al' \
            'outw %al,%dx' \
            'sbbb %rax,%r8b' \
@@ -1083,5 +1129,24 @@ GNU_FILL
 "$LOONGCOPY" -j .data -O binary "$work/la-fill-gnu.o" "$work/la-fill-gnu.bin"
 cmp "$work/la-fill-mini.bin" "$work/la-fill-gnu.bin"
 echo 'MINIAS_COMMON_FILL=PASS GNU_LA64_data_bytes=equal'
+# GNU-preprocessed C unsigned suffixes and full-uint64 .quad expressions:
+# compare data bytes produced by the same source for BOTH target ELF writers.
+cat > "$work/gnu-u64.s" <<'GNU_U64'
+.data
+    .quad (((0x9000000000200000)) & ((1ULL << 48) - 1))
+    .quad ((0x8000000000000000ULL >> 48) | (255UL << 8))
+    .quad (0xffffffffffffffffULL & 0x1122334455667788ULL)
+GNU_U64
+"$MINIAS" --target=x86_64 -o "$work/x86-u64-mini.o" "$work/gnu-u64.s"
+as --64 -o "$work/x86-u64-gnu.o" "$work/gnu-u64.s"
+objcopy -j .data -O binary "$work/x86-u64-mini.o" "$work/x86-u64-mini.bin"
+objcopy -j .data -O binary "$work/x86-u64-gnu.o" "$work/x86-u64-gnu.bin"
+cmp "$work/x86-u64-mini.bin" "$work/x86-u64-gnu.bin"
+"$MINIAS" --target=loongarch64 -march=loongarch64 -mabi=lp64d -o "$work/la-u64-mini.o" "$work/gnu-u64.s"
+"$LOONGAS" -mabi=lp64d -o "$work/la-u64-gnu.o" "$work/gnu-u64.s"
+"$LOONGCOPY" -j .data -O binary "$work/la-u64-mini.o" "$work/la-u64-mini.bin"
+"$LOONGCOPY" -j .data -O binary "$work/la-u64-gnu.o" "$work/la-u64-gnu.bin"
+cmp "$work/la-u64-mini.bin" "$work/la-u64-gnu.bin"
+echo 'MINIAS_COMMON_NUMERIC_U64=PASS GNU_GAS_x86_LA64_exact_data_bytes'
 echo 'MINIAS_X86_SEGMENTED_INDIRECT=PASS GNU_AS_text_and_relocations segment_base_index_abs_rip=true indirect_memory_call_jmp=true absolute_symbol32S=true'
 echo 'MINIAS_TWO_TARGET_ORACLE=PASS x86_GNU_bytes=equal loong_GNU_bytes=equal ELF_machine=correct lp64d_v1=0x43 CET_endbr64=1 ALU_imm8_imm32=1 x86_ModRM_SIB_disp=1 x86_test_cmp_alu_memory=1 x86_scaled_index_SIB=1 LA_jr=1 LA_scaled_ptr14=1 LA_imm12_shift_upper20=1 invalid=reject'

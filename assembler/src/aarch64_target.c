@@ -402,9 +402,17 @@ static bool parse_integer_family(MiniAsMCInst *inst,
             put_reg(&inst->operands[1],rm,wn);
             return true;
         }
-        if(!minias_eval_u64_expression(t[1][0]=='#'?t[1]+1:t[1],
-                                        &bits) ||
-           !a64_mask_bits(bits,wn,&fields))return false;
+        {
+            const char *literal=t[1][0]=='#'?t[1]+1:t[1];
+            if(!minias_eval_u64_expression(literal,&bits))return false;
+            /* GNU GAS accepts negative W-register logical immediates.
+             * Mask only a syntactically negative literal to the 32-bit
+             * destination width: do not truncate oversized positive 64-bit
+             * constants into valid but incorrect W-register operands. */
+            while(isspace((unsigned char)*literal))++literal;
+            if(!wn && *literal=='-')bits=(uint32_t)bits;
+            if(!a64_mask_bits(bits,wn,&fields))return false;
+        }
         inst->opcode=A64_MC_BITMASK_IMM;inst->count=3U;
         inst->encoding=UINT32_C(0x72000000);
         put_reg(&inst->operands[0],31U,wn);
@@ -463,9 +471,13 @@ static bool parse_integer_family(MiniAsMCInst *inst,
                    !strcmp(op,"eor") || !strcmp(op,"ands")) &&
                   !spd && !spn) {
             uint64_t bits;uint32_t fields;
-            if(!minias_eval_u64_expression(t[2][0]=='#'?t[2]+1:t[2],
-                                            &bits) ||
-               !a64_mask_bits(bits,wd,&fields))return false;
+            {
+                const char *literal=t[2][0]=='#'?t[2]+1:t[2];
+                if(!minias_eval_u64_expression(literal,&bits))return false;
+                while(isspace((unsigned char)*literal))++literal;
+                if(!wd && *literal=='-')bits=(uint32_t)bits;
+                if(!a64_mask_bits(bits,wd,&fields))return false;
+            }
             kind=A64_MC_BITMASK_IMM;
             inst->encoding=!strcmp(op,"and")?UINT32_C(0x12000000):
                            !strcmp(op,"orr")?UINT32_C(0x32000000):

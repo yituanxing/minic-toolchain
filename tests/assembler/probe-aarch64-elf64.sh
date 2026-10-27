@@ -91,6 +91,12 @@ external_probe:
     cmp x1, #8192
     and w1, w1, #255
     and w3, w3, #65535
+    // Negative W logical masks are 32-bit sign truncations, unlike
+    // oversized positive values which must remain rejected.
+    and w0, w0, -2
+    and w1, w1, -4
+    orr w2, w2, -8
+    tst w3, -2
     and w0, w1, #0xaaaaaaaa
     and x1, x2, #0x00ff00ff00ff00ff
     orr w3, w4, #4
@@ -373,6 +379,8 @@ for bad_source in 'ldxr x0, [x1,#4]' 'stxr x0, x1, [x2]' \
                   '.inst 0x100000000' \
                   'cmn x0, #-1' 'cmn w0, #4097' \
                   'and w0, w0, #0xffffffff' 'and w0, w0, #0' \
+                  'and w0, w1, #0x100000001' \
+                  'and w0, w1, -4294967297' \
                   'orr w0, w1, #0' 'eor x0, x1, #0xffffffffffffffff' \
                   'tst w0, #0' 'tst w0, x1' \
                   'bic w0, x1, w2' \

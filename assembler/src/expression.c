@@ -40,6 +40,21 @@ static bool parse_addend_primary(MiniAsAddendParser *parser, uint64_t *value) {
     if (errno != 0 || end == parser->cursor) {
         return false;
     }
+    /* GNU GAS accepts C-style U/L/ULL on numeric literals emitted from
+     * preprocessed kernel assembly. Do not interpret arbitrary identifier
+     * suffixes as numbers, and never lose the full uint64_t value. */
+    {
+        unsigned unsigned_count=0U,long_count=0U;
+        const char *suffix=end;
+        while(*suffix=='u' || *suffix=='U' ||
+              *suffix=='l' || *suffix=='L') {
+            if(*suffix=='u' || *suffix=='U')++unsigned_count;
+            else ++long_count;
+            ++suffix;
+        }
+        if(unsigned_count>1U || long_count>2U)return false;
+        end=(char *)suffix;
+    }
     parser->cursor = end;
     *value = (uint64_t)parsed;
     return true;

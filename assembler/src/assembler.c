@@ -1549,6 +1549,11 @@ static bool parse_absolute_data_bits(MiniAs *as,
     if (parse_data_integer_bits(text, value)) {
         return true;
     }
+    /* Common unsigned expression grammar supports GNU C-preprocessed
+     * 64-bit constants including 0x9000...ULL, shifts, masks and brackets.
+     * This numeric-only fast path cannot resolve unknown symbols and thus
+     * cannot fabricate relocations or pre-layout symbol differences. */
+    if(minias_eval_u64_expression(text,value))return true;
     if (!current_location(as, &dot) || dot > (uint64_t)INT64_MAX) {
         return false;
     }
@@ -1960,14 +1965,8 @@ static bool evaluate_if_expression(MiniAs *as,const char *text,bool *result) {
     free(copy);return true;
 }
 
-static bool push_conditional(MiniAs *as, const char *args, size_t line) {
+static bool push_conditional_value(MiniAs *as,bool condition_true) {
     MiniAsConditional *conditional;
-    bool condition_true;
-
-    if (!evaluate_if_expression(as, args, &condition_true)) {
-        minias_set_error(as, "unsupported-expression:.if:%s:line=%zu", args, line);
-        return false;
-    }
     if (!grow_array((void **)&as->conditionals,
                     &as->conditional_capacity,
                     sizeof(*as->conditionals),
@@ -1981,6 +1980,60 @@ static bool push_conditional(MiniAs *as, const char *args, size_t line) {
     conditional->else_seen = false;
     as->conditional_active = conditional->parent_active && condition_true;
     return true;
+}
+
+static bool push_conditional(MiniAs *as, const char *args, size_t line) {
+    bool condition_true;
+    if (!evaluate_if_expression(as, args, &condition_true)) {
+        minias_set_error(as, "unsupported-expression:.if:%s:line=%zu", args, line);
+        return false;
+    }
+    return push_conditional_value(as,condition_true);
+}
+
+/* Shared GAS .ifc/.ifnc conditional text: split on a comma outside
+ * quotes, strip paired quote delimiters, then compare exact byte strings.
+ * Expansion of macro arguments already happens upstream.  No target
+ * ISA-specific conditional parser or new conditional stack is needed. */
+static bool push_conditional_strings(MiniAs *as,const char *args,
+                                     bool unequal,size_t line) {
+    char *copy=minias_strdup(args),*lhs,*rhs,*p;
+    char quote='\0';
+    bool equal;
+    if(!copy){minias_set_error(as,"out-of-memory:.ifc");return false;}
+    for(p=copy;*p;++p) {
+        if(quote) {
+            if(*p==quote)quote='\0';
+        } else if(*p=='\'' || *p=='"') {
+            quote=*p;
+        } else if(*p==',')break;
+    }
+    if(quote || !*p)goto invalid;
+    *p++='\0';
+    lhs=minias_trim(copy);
+    rhs=minias_trim(p);
+    if(*lhs=='\0' || *rhs=='\0' || strchr(rhs,','))goto invalid;
+    {
+        char *v[2]={lhs,rhs};
+        unsigned i;
+        for(i=0U;i<2U;++i) {
+            size_t len=strlen(v[i]);
+            if(len>=2U && (v[i][0]=='"' || v[i][0]=='\'') &&
+               v[i][len-1U]==v[i][0]) {
+                v[i][len-1U]='\0';
+                v[i]++;
+            } else if((v[i][0]=='"' || v[i][0]=='\'') ||
+                      (len>0U && (v[i][len-1U]=='"' ||
+                                  v[i][len-1U]=='\'')))goto invalid;
+        }
+        equal=strcmp(v[0],v[1])==0;
+    }
+    free(copy);
+    return push_conditional_value(as,unequal?!equal:equal);
+invalid:
+    minias_set_error(as,"bad-directive:.ifc:line=%zu",line);
+    free(copy);
+    return false;
 }
 
 static bool else_conditional(MiniAs *as, size_t line) {
@@ -3401,6 +3454,17 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
         }
     }
 
+    if ((strncmp(text,".ifc",4U)==0 ||
+         strncmp(text,".ifnc",5U)==0) &&
+        ((text[3]=='c' && (text[4]=='\0' ||
+                          isspace((unsigned char)text[4]))) ||
+         (text[3]=='n' && text[4]=='c' &&
+          (text[5]=='\0' || isspace((unsigned char)text[5]))))) {
+        bool unequal=text[3]=='n';
+        as->layout_sensitive=true;
+        return push_conditional_strings(as,
+                 minias_trim(text+(unequal?5:4)),unequal,line);
+    }
     if (strncmp(text, ".if", 3U) == 0 &&
         (text[3] == '\0' || isspace((unsigned char)text[3]))) {
         /* .if may inspect '.', local symbol values and derived absolute

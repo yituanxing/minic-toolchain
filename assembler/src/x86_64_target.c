@@ -502,15 +502,23 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
      * between register and memory forms. No duplicated memory encoder. */
     {
         static const struct {const char *op;unsigned opcode,group;bool wide;} unary[]={
+            {"notb",0xf6U,2U,false},{"notw",0xf7U,2U,false},
             {"notl",0xf7U,2U,false},{"notq",0xf7U,2U,true},
+            {"negb",0xf6U,3U,false},{"negw",0xf7U,3U,false},
             {"negl",0xf7U,3U,false},{"negq",0xf7U,3U,true},
+            {"incb",0xfeU,0U,false},{"incw",0xffU,0U,false},
             {"incl",0xffU,0U,false},{"incq",0xffU,0U,true},
+            {"decb",0xfeU,1U,false},{"decw",0xffU,1U,false},
             {"decl",0xffU,1U,false},{"decq",0xffU,1U,true},
             /* GNU Group-3 /4=/MUL, /5=IMUL, /6=DIV, /7=IDIV;
              * both reg and memory forms use the established unary path. */
+            {"mulb",0xf6U,4U,false},{"mulw",0xf7U,4U,false},
             {"mull",0xf7U,4U,false},{"mulq",0xf7U,4U,true},
+            {"imulb",0xf6U,5U,false},{"imulw",0xf7U,5U,false},
             {"imull",0xf7U,5U,false},{"imulq",0xf7U,5U,true},
+            {"divb",0xf6U,6U,false},{"divw",0xf7U,6U,false},
             {"divl",0xf7U,6U,false},{"divq",0xf7U,6U,true},
+            {"idivb",0xf6U,7U,false},{"idivw",0xf7U,7U,false},
             {"idivl",0xf7U,7U,false},{"idivq",0xf7U,7U,true}
         };
         for(i=0U;i<sizeof(unary)/sizeof(unary[0]);++i) {
@@ -518,15 +526,31 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
             /* IMUL has unary F7 /5 and binary 0F AF /r forms.
              * Dispatch based on operand arity before consuming its token;
              * otherwise unary matching erroneously rejects valid GNU IMUL. */
-            if((!strcmp(s->op,"imull") || !strcmp(s->op,"imulq")) &&
+            if((!strcmp(s->op,"imulw") || !strcmp(s->op,"imull") ||
+                !strcmp(s->op,"imulq")) &&
                strchr(s->args,',')!=NULL)continue;
-            if(x64_register(s->args,&rd,&wd) && wd==unary[i].wide) {
-                m->opcode=X64_UNARY;m->count=1U;
-                m->encoding=unary[i].opcode | (unary[i].group<<8U);
-                m->operands[0].kind=MINIAS_MC_REGISTER;
-                m->operands[0].register_64=wd;
-                m->operands[0].reg=rd;
-                goto done;
+            {
+                size_t len=strlen(s->op);
+                bool byte=s->op[len-1U]=='b';
+                bool word=s->op[len-1U]=='w';
+                bool high=false;
+                bool valid;
+                if(byte) {
+                    valid=x64_register8(s->args,&rd);
+                    if(!valid)high=valid=x64_high_register8(s->args,&rd);
+                }else if(word)valid=x64_register16(s->args,&rd);
+                else valid=x64_register(s->args,&rd,&wd) &&
+                           wd==unary[i].wide;
+                if(valid) {
+                    m->opcode=X64_UNARY;m->count=1U;
+                    m->encoding=unary[i].opcode|(unary[i].group<<8U)|
+                         (byte?UINT32_C(0x1000):word?UINT32_C(0x2000):0U)|
+                         (high?UINT32_C(0x4000):0U);
+                    m->operands[0].kind=MINIAS_MC_REGISTER;
+                    m->operands[0].register_64=!byte&&!word&&wd;
+                    m->operands[0].reg=rd;
+                    goto done;
+                }
             }
             if(x64_is_mem_candidate(s->args)) {
                 MiniAsMCMemory parsed;
@@ -539,7 +563,8 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
                 }
                 *m->operands[1].memory=parsed;
                 m->opcode=X64_REG_MEMORY;m->count=2U;
-                m->encoding=unary[i].opcode;
+                m->encoding=unary[i].opcode|
+                    (s->op[strlen(s->op)-1U]=='w'?UINT32_C(0x400):0U);
                 m->operands[0].kind=MINIAS_MC_REGISTER;
                 m->operands[0].reg=unary[i].group;
                 m->operands[0].register_64=unary[i].wide;
@@ -1255,9 +1280,15 @@ static bool x64_measure(MiniAs *as,const MiniAsStmt *s,uint32_t *size) {
             *size=3U+(m->operands[0].register_64 ||
                        m->operands[0].reg>=8U || m->operands[1].reg>=8U?
                        1U:0U);return true;
-        case X64_UNARY:
-            *size=2U+(m->operands[0].register_64 ||
-                       m->operands[0].reg>=8U?1U:0U);return true;
+        case X64_UNARY: {
+            bool byte=(m->encoding&UINT32_C(0x1000))!=0U;
+            bool word=(m->encoding&UINT32_C(0x2000))!=0U;
+            bool high=(m->encoding&UINT32_C(0x4000))!=0U;
+            unsigned r=m->operands[0].reg;
+            bool rex=m->operands[0].register_64 || r>=8U ||
+                     (byte && r>=4U && !high);
+            *size=2U+(word?1U:0U)+(rex?1U:0U);return true;
+        }
         case X64_BSWAP:
             *size=2U+(m->operands[0].register_64 ||
                        m->operands[0].reg>=8U?1U:0U);return true;
@@ -1432,10 +1463,13 @@ static bool x64_encode(MiniAs *as,const MiniAsStmt *s) {
             break;
         case X64_UNARY:
             r=m->operands[0].reg;
-            if(m->operands[0].register_64 || r>=8U)
+            if(m->encoding&UINT32_C(0x2000))code[n++]=0x66U;
+            if(m->operands[0].register_64 || r>=8U ||
+               ((m->encoding&UINT32_C(0x1000)) && r>=4U &&
+                !(m->encoding&UINT32_C(0x4000))))
                 code[n++]=(unsigned char)(0x40U |
                     (m->operands[0].register_64?8U:0U)|(r>>3U));
-            code[n++]=(unsigned char)m->encoding;
+            code[n++]=(unsigned char)(m->encoding&0xffU);
             code[n++]=(unsigned char)(0xc0U|
                 (((m->encoding>>8U)&7U)<<3U)|(r&7U));
             break;
