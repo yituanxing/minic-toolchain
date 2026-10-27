@@ -27,6 +27,9 @@ static bool emit_riscv64(const char *output_path, const MinicC0Program *program,
  * consume GNU operands with machine-specific encodings/constraints. When the
  * target callback declines, Core must not let a generic scalar-input
  * lowering silently admit a different constraint or dangerous suffix. */
+/* The GS per-cpu source prefix must fail closed, without reserving generic
+ * x86 MOV templates that are independently admitted by other contracts. */
+static const char *const x86_64_qualified_inputs[] = {"movq %%gs:"};
 static const char *const aarch64_qualified_inputs[] = {
     "brk", "stlrb", "stlrh", "stlr",
     /* Linux LL/SC macros begin with a source comment: reserve their exact
@@ -51,7 +54,9 @@ static const MinicBackend riscv32_backend = {
 static const MinicBackend x86_64_backend = {
     MINIC_TARGET_ARCH_X86_64, "x86_64",
     minic_x86_64_write_c0_program_with_core_functions,
-    minic_x86_64_qualify_inline_asm, false, NULL, 0U
+    minic_x86_64_qualify_inline_asm, false,
+    x86_64_qualified_inputs,
+    sizeof(x86_64_qualified_inputs) / sizeof(x86_64_qualified_inputs[0])
 };
 static const MinicBackend aarch64_backend = {
     MINIC_TARGET_ARCH_AARCH64, "aarch64",
