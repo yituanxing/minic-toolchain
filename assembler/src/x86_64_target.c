@@ -8,7 +8,7 @@
 
 /* A first, fail-closed GNU AT&T SysV x86-64 target. All common expression,
  * symbol, section, fragment, and ELF handling lives outside this file. */
-enum { X64_ZERO = 1, X64_REG_BINARY, X64_STACK, X64_MOV_IMM32, X64_ENDBR64, X64_ALU_IMM, X64_MOV_MEMORY };
+enum { X64_ZERO = 1, X64_REG_BINARY, X64_STACK, X64_MOV_IMM32, X64_ENDBR64, X64_ALU_IMM, X64_REG_MEMORY };
 
 static bool x64_register(const char *text, unsigned *reg, bool *wide) {
     static const char *const names64[16] = {
@@ -105,7 +105,22 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
         {"xorq",0x31,true}, {"xorl",0x31,false},
         {"andq",0x21,true}, {"andl",0x21,false},
         {"orq",0x09,true},  {"orl",0x09,false},
-        {"cmpq",0x39,true},{"cmpl",0x39,false}
+        {"cmpq",0x39,true},{"cmpl",0x39,false},
+        {"testq",0x85,true},{"testl",0x85,false}
+    };
+    /* reg/memory opcodes: source register to dest memory and vice versa.
+     * TEST uses a commutative encoding; memory location is always r/m. */
+    static const struct {
+        const char *op; unsigned char rm_dest, rm_src; bool wide;
+    } regmem[] = {
+        {"movq",0x89,0x8b,true},{"movl",0x89,0x8b,false},
+        {"cmpq",0x39,0x3b,true},{"cmpl",0x39,0x3b,false},
+        {"testq",0x85,0x85,true},{"testl",0x85,0x85,false},
+        {"addq",0x01,0x03,true},{"addl",0x01,0x03,false},
+        {"subq",0x29,0x2b,true},{"subl",0x29,0x2b,false},
+        {"andq",0x21,0x23,true},{"andl",0x21,0x23,false},
+        {"orq",0x09,0x0b,true},{"orl",0x09,0x0b,false},
+        {"xorq",0x31,0x33,true},{"xorl",0x31,0x33,false}
     };
     MiniAsMCInst *m=calloc(1U,sizeof(*m)+2U*sizeof(MiniAsMCOperand));
     unsigned i, rs, rd;
@@ -178,12 +193,12 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
     }
     /* Retain memory addressing as one typed operand through layout,
      * encoding, and eventual ELF fixup. No source-string re-splitting. */
-    if ((!strcmp(s->op,"movq") || !strcmp(s->op,"movl")) &&
-        x64_args2(s->args,src,dst) &&
+    if (x64_args2(s->args,src,dst) &&
         (x64_is_mem_candidate(src) || x64_is_mem_candidate(dst))) {
         MiniAsMCMemory parsed;
         unsigned r;
         bool wide, memory_source;
+        const unsigned char *chosen = NULL;
         if (x64_register(src,&r,&wide) &&
             x64_parse_base_memory(dst,&parsed)) {
             memory_source=false;
@@ -191,15 +206,22 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
                    x64_register(dst,&r,&wide)) {
             memory_source=true;
         } else goto invalid;
-        if (wide != (s->op[3]=='q')) goto invalid;
+        for (i=0U;i<sizeof(regmem)/sizeof(regmem[0]);++i) {
+            if (strcmp(s->op,regmem[i].op)==0 &&
+                wide==regmem[i].wide) {
+                chosen=memory_source?&regmem[i].rm_src:&regmem[i].rm_dest;
+                break;
+            }
+        }
+        if (!chosen) goto invalid;
         m->operands[1].memory=malloc(sizeof(parsed));
         if (!m->operands[1].memory) {
             minias_set_error(as,"out-of-memory:x86_64-mc-memory");
             free(m);return false;
         }
         *m->operands[1].memory=parsed;
-        m->opcode=X64_MOV_MEMORY; m->count=2U;
-        m->encoding=memory_source?0x8bU:0x89U;
+        m->opcode=X64_REG_MEMORY; m->count=2U;
+        m->encoding=*chosen;
         m->operands[0].kind=MINIAS_MC_REGISTER;
         m->operands[0].reg=r;
         m->operands[0].register_64=wide;
@@ -220,7 +242,7 @@ static bool x64_measure(MiniAs *as,const MiniAsStmt *s,uint32_t *size) {
     switch(m->opcode) {
         case X64_ZERO: *size=(uint32_t)m->operands[0].immediate;return true;
         case X64_ENDBR64: *size=4U;return true;
-        case X64_MOV_MEMORY: {
+        case X64_REG_MEMORY: {
             const MiniAsMCMemory *mem=m->operands[1].memory;
             *size=(m->operands[0].register_64 ||
                    m->operands[0].reg>=8U || mem->base>=8U?1U:0U) +
@@ -259,7 +281,7 @@ static bool x64_encode(MiniAs *as,const MiniAsStmt *s) {
             for(i=0U;i<4U;++i)code[n++]=(unsigned char)(m->encoding>>(8U*i));
             break;
         }
-        case X64_MOV_MEMORY: {
+        case X64_REG_MEMORY: {
             const MiniAsMCMemory *mem=m->operands[1].memory;
             unsigned low_base=mem->base&7U;
             unsigned bytes=x64_disp_bytes(mem);

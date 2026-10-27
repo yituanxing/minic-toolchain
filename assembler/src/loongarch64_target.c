@@ -61,7 +61,22 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
         {"ld.d",UINT32_C(0x28c00000)},
         {"st.d",UINT32_C(0x29c00000)},
         {"ld.w",UINT32_C(0x28800000)},
-        {"st.w",UINT32_C(0x29800000)}
+        {"st.w",UINT32_C(0x29800000)},
+        {"ld.b",UINT32_C(0x28000000)},
+        {"ld.h",UINT32_C(0x28400000)},
+        {"st.b",UINT32_C(0x29000000)},
+        {"st.h",UINT32_C(0x29400000)},
+        {"ld.bu",UINT32_C(0x2a000000)},
+        {"ld.hu",UINT32_C(0x2a400000)},
+        {"ld.wu",UINT32_C(0x2a800000)}
+    };
+    /* GNU LA64 so10:14<<2; require byte offset aligned to four,
+     * encode the signed scaled si14 without inventing relocations. */
+    static const struct {const char *name;uint32_t code;} ptr14[]={
+        {"ldptr.w",UINT32_C(0x24000000)},
+        {"stptr.w",UINT32_C(0x25000000)},
+        {"ldptr.d",UINT32_C(0x26000000)},
+        {"stptr.d",UINT32_C(0x27000000)}
     };
     MiniAsMCInst *m=calloc(1U,sizeof(*m)+3U*sizeof(MiniAsMCOperand));
     char t[3][48],*end;unsigned n,i,rd,rj,rk;
@@ -93,14 +108,23 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
             }
     } else {
         errno=0;val=strtol(t[2],&end,0);
-        if(!errno && end!=t[2] && !*end &&
-            val>=-2048L && val<=2047L) {
-            for(i=0U;i<sizeof(imm12)/sizeof(imm12[0]);++i)
-                if(!strcmp(s->op,imm12[i].name)) {
-                    m->count=3U;m->encoding=imm12[i].code |
-                        (((uint32_t)val & UINT32_C(0xfff))<<10U) |
-                        (rj<<5U)|rd;goto done;
-                }
+        if(!errno && end!=t[2] && !*end) {
+            if (val>=-2048L && val<=2047L) {
+                for(i=0U;i<sizeof(imm12)/sizeof(imm12[0]);++i)
+                    if(!strcmp(s->op,imm12[i].name)) {
+                        m->count=3U;m->encoding=imm12[i].code |
+                            (((uint32_t)val & UINT32_C(0xfff))<<10U) |
+                            (rj<<5U)|rd;goto done;
+                    }
+            }
+            if (val>=-32768L && val<=32764L && val%4L==0L) {
+                for(i=0U;i<sizeof(ptr14)/sizeof(ptr14[0]);++i)
+                    if(!strcmp(s->op,ptr14[i].name)) {
+                        m->count=3U;m->encoding=ptr14[i].code |
+                            ((((uint32_t)(val/4L)) & UINT32_C(0x3fff))<<10U) |
+                            (rj<<5U)|rd;goto done;
+                    }
+            }
         }
     }
 fail:

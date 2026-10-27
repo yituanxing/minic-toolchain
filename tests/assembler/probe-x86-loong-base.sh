@@ -34,6 +34,20 @@ entry_x:
     addq %r8,%r9
     subq %rax,%rcx
     cmpq %rbp,%rsp
+    testq %r8,%r9
+    testl %ecx,%eax
+    movq %rax, 32(%r14)
+    cmpq %rax, 8(%r12)
+    cmpq 8(%r12), %rax
+    cmpl %r9d, -8(%rbp)
+    testq %r8, 16(%rsp)
+    testl 8(%r12), %eax
+    addq %r9, 16(%r12)
+    addl 8(%r12), %eax
+    subq (%rdi), %r9
+    xorl %r9d, 8(%r12)
+    andq -16(%rbp), %rax
+    orq %r8, 16(%rsp)
     popq %rbp
     ret
 .size entry_x, .-entry_x
@@ -55,6 +69,15 @@ entry_la:
     addi.d $sp, $sp, -16
     st.d $ra, $sp, 8
     ld.d $ra, $sp, 8
+    stptr.d $ra, $sp, -32768
+    ldptr.d $a0, $sp, 32764
+    stptr.w $a0, $sp, -4
+    ldptr.w $a1, $sp, 12
+    st.b $a0, $sp, 7
+    ld.bu $a1, $sp, 7
+    st.h $a2, $sp, 14
+    ld.hu $a3, $sp, 14
+    ld.wu $a4, $sp, 8
     sub.d $a0, $a0, $a1
     and $a0, $a0, $a1
     or $a0, $a0, $a1
@@ -83,6 +106,16 @@ for bad in 'movq %rax, (%eax)' \
         exit 1
     fi
 done
+for bad in 'ldptr.d $a0, $sp, 3' \
+           'stptr.w $a0, $sp, 32768' \
+           'ldptr.d $a1, $sp, -32772'; do
+    printf '.text\n%s\n' "$bad" >"$work/invalid-la-ptr.s"
+    if "$MINIAS" --target=loongarch64 -o "$work/bad-ptr.o" \
+         "$work/invalid-la-ptr.s" >/dev/null 2>"$work/invalid.err"; then
+        echo "MiniAS accepted invalid LoongArch pointer displacement: $bad" >&2
+        exit 1
+    fi
+done
 for target in x86_64 loongarch64; do
     if [ "$target" = x86_64 ]; then invalid='movq %rax, %eax'
     else invalid='addi.d $a0, $a0, 4096'; fi
@@ -100,4 +133,4 @@ if "$MINIAS" --target=loongarch64 -o "$work/invalid.o" "$work/unimplemented.s" \
     echo 'Unimplemented branch/fixup silently accepted' >&2
     exit 1
 fi
-echo 'MINIAS_TWO_TARGET_ORACLE=PASS x86_GNU_bytes=equal loong_GNU_bytes=equal ELF_machine=correct lp64d_v1=0x43 CET_endbr64=1 ALU_imm8_imm32=1 x86_ModRM_SIB_disp=1 LA_jr=1 invalid=reject'
+echo 'MINIAS_TWO_TARGET_ORACLE=PASS x86_GNU_bytes=equal loong_GNU_bytes=equal ELF_machine=correct lp64d_v1=0x43 CET_endbr64=1 ALU_imm8_imm32=1 x86_ModRM_SIB_disp=1 x86_test_cmp_alu_memory=1 LA_jr=1 LA_scaled_ptr14=1 invalid=reject'

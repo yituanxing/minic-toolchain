@@ -253,3 +253,23 @@ positive and negative addressing cases including high registers.
 Symbolic relocation and index/scale remain explicitly unsupported; no
 silently ignored expression is accepted. The LoongArch and AArch64
 backends need no modifications to reuse the generic operand schema.
+
+## Batch: GNU Linux error Pareto to grouped encoders (2026-10-27)
+
+The x86 backend's existing **one typed register–memory instruction** now
+covers CMP/TEST/ADD/SUB/AND/OR/XOR as well as MOV for numeric
+`disp(%base)` with the target-specific ModRM/SIB/REX encoder. The shared
+MCInst and ELF paths do not change; direction-specific AT&T opcode pairs
+are declared once in the x86 target. Register-register TEST uses opcode 0x85.
+
+The LoongArch64 target extends its existing memory opcode table with
+byte/halfword signed/unsigned loads and stores, and a distinct sign-scaled
+14-bit byte-offset family for `LDPTR/STPTR.W/D` (si14<<2). Signed range,
+alignment, and machine encoding are checked at the target parser boundary;
+symbolic PC-relative and PLT relocations remain unsupported. GNU AS/objcopy
+byte-for-byte oracle now verifies positive and negative boundary cases
+for both architectures on the same S source.
+
+This batch intentionally avoids fake `pcalau12i` relocs, skipping CFI, and
+independently cloned ELF algorithms. The existing 2x7 **frozen** GNU Linux
+corpora are the next affected-only error census; no new Linux C compilation.
