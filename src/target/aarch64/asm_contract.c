@@ -563,9 +563,12 @@ bool minic_aarch64_emit_qualified_structured_asm(
         const MinicCoreStructuredInlineAsmOperand *ops =
             ins->value.structured_inline_asm.operands;
         MinicType pointee;
+        /* Core adds the memory effect to *every* checked +Q RMW role,
+         * including GNU's syntactically unclobbered _relaxed variant.
+         * Exact source clobber shape was validated by the target callback,
+         * whereas the normalized Core effect must remain conservative. */
         if (!form || !info->is_volatile || info->is_goto ||
-            info->register_clobber_count ||
-            info->has_memory_clobber != (mode != 1U))
+            info->register_clobber_count || !info->has_memory_clobber)
             return false;
         for (i = 0U; i < 5U; ++i) {
             const MinicCoreStructuredInlineAsmOperand *op = &ops[i];
