@@ -69,6 +69,8 @@ external_probe:
     csinv x8, x9, x10, lt
     csneg x11, x12, x13, mi
     // CCMP/CCMN register and immediate forms (NZCV + condition bits).
+    // Immediate CCMP/NZCV and GNU EL1 MRS encodings on real target.
+    ccmp x0, xzr, #15, eq
     ccmp x1, #0, #4, ne
     ccmp w2, w3, #7, eq
     ccmn x4, #31, #15, mi
@@ -347,6 +349,7 @@ for bad_source in 'ldxr x0, [x1,#4]' 'stxr x0, x1, [x2]' \
                   'mrs x0, fake_el0' 'dmb #16' 'dmb invalid' \
                   'ccmp x0, w1, #1, eq' \
                   'ccmp x0, #32, #1, eq' \
+                  'ccmp x0, #-1, #1, eq' \
                   'ccmp x0, #1, #16, eq' \
                   'ccmn x0, #1, #1, bogus' \
                   'mrs w0, tpidr_el1' 'msr daif, w0' \

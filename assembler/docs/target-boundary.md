@@ -523,3 +523,40 @@ No new public target interface, Common ISA switch or duplicate ELF writer.
 GNU forward-dependent `.skip` and cross-section symbol differences remain
 blocked pending correct deferred expression/ELF relocation contracts; we
 must not make unresolved expressions "work" by fabricating a zero size.
+
+## GNU Linux ISA delta + architecture boundary (2026-10-27)
+
+The x86-64, AArch64, and LoongArch64 Linux-first additions remain three
+parallel **Target ISA** extensions on the unchanged Common assembler pipeline:
+
+- **x86-64**: GNU XCHG 8/16/32/64 memory/register forms reuse the retained
+  typed register/memory ModR/M, SIB, segment-prefix and PC32/ABS32S
+  relocation logic. IN/OUT with DX and the implicit accumulator is validated
+  against the *actual* mnemonic suffix; the emitted 1- or 2-byte target
+  instruction remains an MCInst, not an assembler-global prefix state.
+- **AArch64**: CCMP/CCMN share the existing condition-code grammar and a
+  single typed four-operand conditional-compare format. EL1 TPIDR/DAIF
+  MRS/MSR encodings extend the target-only *named* system-register table,
+  not a permissive arbitrary register escape; YIELD/WFE/WFI/SEV/SEVL reuse
+  the existing typed HINT immediate implementation.
+- **LoongArch64**: LASX XVPICKVE2GR supports **only W/D/WU/DU**; upstream
+  GNU binutils loongarch-opc.c confirms 0x76efc000 / 0x76efe000 /
+  0x76f3c000 / 0x76f3e000 with unsigned lane ranges u10:3/u10:2.
+  The tempting LSX-derived B/H analogues are not real LASX mnemonics and
+  must fail closed. Table data are ISA-owned, machine instruction layout
+  and ELF emission still use the shared implementation.
+
+Exact GNU AS instruction bytes and relocation identity are required for
+the x86/Loong oracle; A64 instruction bytes, GNU LD and QEMU have their
+own independent contract. A successful 3x7 frozen original GNU Linux
+6.6.143 *S* scan is only ASSEMBLED_UNVERIFIED and cannot establish GNU
+object semantic parity or a working Linux Image/P1. Neither branch marker
+nor a passing discovery-workflow shell is a substitute for its aggregate
+count and recorded exact source HEAD. RISC-V mature acceptance remains a
+regression control, not a reason to clone Common logic into a target.
+
+Outstanding architectural debt: deferred/relocatable GAS expressions,
+full symbol difference semantics, .eh_frame, and relaxation/target option
+profiles. Correct implementation belongs at their existing Common owners
+with ISA-specific syntax and fixups solely in Target. Never fake .incbin
+inputs to manufacture an assembly success.

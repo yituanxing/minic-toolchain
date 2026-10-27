@@ -101,6 +101,7 @@ entry_x:
     xaddq %r13, 8(%rsp)
     # All x86 width variants use the existing 0x86/0x87 typed memory encoder.
     xchgl %eax, 24(%rbx)
+    xchgl %eax, ext_global(%rip)
     xchgl 32(%r12), %r10d
     xchgq %r13, 8(%rsp)
     xchgw %dx, 6(%rbp)
