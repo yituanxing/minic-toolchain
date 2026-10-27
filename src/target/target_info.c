@@ -775,11 +775,18 @@ bool minic_target_info_inline_asm_immediate_constraint_supported(const MinicTarg
                                                                  const char *constraint,
                                                                  size_t constraint_length,
                                                                  int64_t value) {
-    if (target == NULL || target->architecture != MINIC_TARGET_ARCH_RISCV64 || constraint == NULL) {
+    if (target == NULL || constraint == NULL || constraint_length != 1U ||
+        constraint[0] != 'I' || value < -2048 || value > 2047) {
         return false;
     }
-    /* RISC-V GCC constraint I is a signed 12-bit integer immediate. */
-    return constraint_length == 1U && constraint[0] == 'I' && value >= -2048 && value <= 2047;
+    /* GCC defines constraint I as signed 12-bit arithmetic immediate for
+     * BOTH RISC-V XLENs and LoongArch. Keep one range validator while the
+     * TargetInfo describes which ISAs actually own this spelling.
+     * AArch64/x86 use different I semantics; do not admit them accidentally.
+     * Parsing is NOT permission for unqualified Backend asm emission. */
+    return target->architecture == MINIC_TARGET_ARCH_RISCV64 ||
+           target->architecture == MINIC_TARGET_ARCH_RISCV32 ||
+           target->architecture == MINIC_TARGET_ARCH_LOONGARCH64;
 }
 
 /* The ABI owns the state-cursor representation; Core never tests an ISA.

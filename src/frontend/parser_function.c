@@ -609,7 +609,12 @@ static bool parse_gnu_function_asm_label(
     }
     *length = 0U;
     *has_label = false;
-    if (!function_identifier_is(parser, "__asm__") && !function_identifier_is(parser, "__asm")) {
+    /* GNU accepts asm, __asm and __asm__ in declarations. Linux x86
+     * current_stack_pointer uses asm("rsp"). Source grammar belongs here;
+     * register admission is still a separate TargetInfo/backend decision. */
+    if (!function_identifier_is(parser, "__asm__") &&
+        !function_identifier_is(parser, "__asm") &&
+        !function_identifier_is(parser, "asm")) {
         return true;
     }
     if (!minic_parser_advance(parser) ||

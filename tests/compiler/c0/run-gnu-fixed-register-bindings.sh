@@ -17,8 +17,9 @@ mkdir -p "$work"
 test -s "$work/gnu_fixed_register_bindings.s"
 grep -F 'read_current_like:' "$work/gnu_fixed_register_bindings.s" >/dev/null
 grep -F 'read_stack_pointer_like:' "$work/gnu_fixed_register_bindings.s" >/dev/null
+grep -F 'read_stack_pointer_plain_asm:' "$work/gnu_fixed_register_bindings.s" >/dev/null
 grep -F '  mv a0, tp' "$work/gnu_fixed_register_bindings.s" >/dev/null
-grep -F '  mv a0, sp' "$work/gnu_fixed_register_bindings.s" >/dev/null
+test "$(grep -Fc '  mv a0, sp' "$work/gnu_fixed_register_bindings.s")" -ge 2
 ! grep -F 'la a0, riscv_current_is_tp' "$work/gnu_fixed_register_bindings.s" >/dev/null
 ! grep -F 'la a0, current_stack_pointer' "$work/gnu_fixed_register_bindings.s" >/dev/null
 
@@ -33,4 +34,17 @@ set -e
 test "$status" -ne 0
 grep -F 'fixed register binding is not supported by this target' "$work/reject.stderr" >/dev/null
 
-printf '%s\n' 'PASS compiler/c0/gnu_fixed_register_bindings storage=fixed-register-binding target=RV64 names=tp,sp read=direct-register memory-symbol=none unsupported=s1-reject'
+cat > "$work/x86-gcc-fixed-register.i" <<'SRC'
+register unsigned long current_stack_pointer asm("rsp");
+unsigned long get_current_stack_pointer(void) { return current_stack_pointer; }
+SRC
+# Parsing GNU asm("rsp") is not machine qualification. Existing x86
+# backend does not own this fixed-register binding yet: fail safely.
+if "$minic" --target=x86_64-linux -S "$work/x86-gcc-fixed-register.i" \
+    -o "$work/x86-gcc-fixed-register.s" \
+    >"$work/x86.stdout" 2>"$work/x86.stderr"; then
+    printf '%s\n' 'FAIL compiler/c0/gnu_fixed_register_bindings: unqualified x86 rsp binding emitted' >&2
+    exit 1
+fi
+grep -F 'fixed register binding is not supported by this target' "$work/x86.stderr" >/dev/null
+printf '%s\n' 'PASS compiler/c0/gnu_fixed_register_bindings source_asm_aliases=3 RV64=sp,tp x86_rsp=fail_closed'

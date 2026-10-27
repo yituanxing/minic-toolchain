@@ -283,6 +283,35 @@ static int verify_riscv_integer_strategy(void) {
     return puts("RISCV_BASE_I_STRATEGY=PASS rv32_rv64 M_optional C_ignored runtime_fallback") == EOF;
 }
 
+/* GCC RISC-V and LoongArch share signed-12 immediate I. An ISA's
+ * argument parser must not invent a machine-independent I meaning:
+ * x86-64 and AArch64 retain their own not-yet-qualified alternatives. */
+static int verify_gnu_asm_immediate_target_contract(void) {
+    static const char *names[] = {
+        "riscv32-linux", "riscv64-linux", "x86_64-linux",
+        "aarch64-linux", "loongarch64-linux"
+    };
+    size_t i;
+    for (i = 0U; i < sizeof(names) / sizeof(names[0]); ++i) {
+        const MinicTargetInfo *target = minic_target_info_from_name(names[i]);
+        const bool supported = (i == 0U || i == 1U || i == 4U);
+        if (target == NULL ||
+            minic_target_info_inline_asm_immediate_constraint_supported(target, "I", 1U, -2048) != supported ||
+            minic_target_info_inline_asm_immediate_constraint_supported(target, "I", 1U, 0) != supported ||
+            minic_target_info_inline_asm_immediate_constraint_supported(target, "I", 1U, 18) != supported ||
+            minic_target_info_inline_asm_immediate_constraint_supported(target, "I", 1U, 2047) != supported ||
+            minic_target_info_inline_asm_immediate_constraint_supported(target, "I", 1U, -2049) ||
+            minic_target_info_inline_asm_immediate_constraint_supported(target, "I", 1U, 2048) ||
+            minic_target_info_inline_asm_immediate_constraint_supported(target, "K", 1U, 18) ||
+            minic_target_info_inline_asm_immediate_constraint_supported(target, "II", 2U, 18)) {
+            (void)fprintf(stderr, "GNU_ASM_IMMEDIATE_TARGET=FAIL target=%s\n", names[i]);
+            return 1;
+        }
+    }
+    (void)puts("GNU_ASM_IMMEDIATE_TARGET=PASS rv32_rv64_loongarch signed12 boundaries x86_arm_fail_closed");
+    return 0;
+}
+
 int main(void) {
     const MinicTargetInfo *rv = minic_default_target_info();
     const MinicTargetInfo *x86 = minic_target_info_from_name("x86_64-linux");
@@ -309,7 +338,8 @@ int main(void) {
         (void)fprintf(stderr, "FAIL AAPCS64 va_copy must fail closed, x86 ABI-state independent\n");
         return 1;
     }
-    if (verify_riscv_integer_strategy() != 0 || verify_registered_target_catalog() != 0 || verify_riscv_profile_catalog() != 0 ||
+    if (verify_gnu_asm_immediate_target_contract() != 0 ||
+        verify_riscv_integer_strategy() != 0 || verify_registered_target_catalog() != 0 || verify_riscv_profile_catalog() != 0 ||
         verify_lp64("riscv64-linux", MINIC_TARGET_ARCH_RISCV64,
                     MINIC_INTEGER_SIGN_UNSIGNED, MINIC_INTEGER_RANK_INT,
                     MINIC_INTEGER_SIGN_SIGNED) != 0 ||

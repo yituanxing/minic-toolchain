@@ -61,7 +61,6 @@ int shared_artificial_under(int value) { return value - 2; }
 int shared_metadata_use(int value) {
     return shared_artificial(value) + shared_artificial_under(value);
 }
-/* Real original GNU Linux ABI prototypes and C qualifier aliases. */
 extern void *memcpy(void *__to, __const__ void *__from, unsigned long __n);
 int shared_const_qualified(__const__ int *p) { return *p; }
 int shared_const_plain(__const int *p) { return *p; }
