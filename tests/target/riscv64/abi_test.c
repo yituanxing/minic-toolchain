@@ -72,6 +72,10 @@ static bool test_value_classification(void) {
     CHECK(expect_value(&program, pointer_type, MINIC_RISCV64_ABI_VALUE_INTEGER, 8U, 1U));
     CHECK(expect_value(&program, minic_type_double(), MINIC_RISCV64_ABI_VALUE_FLOAT, 8U, 1U));
     CHECK(expect_value(&program, minic_type_void(), MINIC_RISCV64_ABI_VALUE_VOID, 0U, 0U));
+    CHECK(expect_value(&program, minic_type_int128(),
+                       MINIC_RISCV64_ABI_VALUE_WIDE_SCALAR, 16U, 2U));
+    CHECK(expect_value(&program, minic_type_unsigned_int128(),
+                       MINIC_RISCV64_ABI_VALUE_WIDE_SCALAR, 16U, 2U));
     CHECK(expect_value(&program, record16, MINIC_RISCV64_ABI_VALUE_AGGREGATE, 16U, 2U));
 
     CHECK(expect_value(&program, record4, MINIC_RISCV64_ABI_VALUE_AGGREGATE, 4U, 1U));
@@ -109,6 +113,16 @@ static bool test_return_argument_cursor(void) {
     CHECK(minic_riscv64_abi_place_argument(&program, minic_type_long(), true, &cursor, &location));
     CHECK(location.integer_register_begin == 1U);
     CHECK(location.integer_register_count == 1U);
+
+    CHECK(minic_riscv64_abi_cursor_initialize_for_return(
+        &program, minic_type_unsigned_int128(), &cursor, &return_value));
+    CHECK(return_value.kind == MINIC_RISCV64_ABI_VALUE_WIDE_SCALAR);
+    CHECK(return_value.storage_size == 16U && return_value.slot_count == 2U);
+    CHECK(cursor.integer_register_count == 0U);
+    CHECK(minic_riscv64_abi_cursor_initialize_for_return_profile(
+        &program, minic_type_unsigned_int128(), true, &cursor, &return_value));
+    CHECK(return_value.kind == MINIC_RISCV64_ABI_VALUE_WIDE_SCALAR);
+    CHECK(return_value.slot_count == 2U);
 
     minic_riscv64_abi_cursor_initialize(&cursor);
     CHECK(!minic_riscv64_abi_cursor_initialize_for_return(
@@ -171,6 +185,27 @@ static bool test_argument_placement(void) {
     CHECK(location.integer_register_count == 0U);
     CHECK(location.stack_slot_begin == 2U);
     CHECK(location.stack_slot_count == 1U);
+
+    /* LP64D/hard-float int128 is still a two-XLEN integer. At a7,
+     * one half must spill to stack slot zero; soft-float is identical. */
+    minic_riscv64_abi_cursor_initialize(&cursor);
+    for (index = 0U; index < 7U; ++index)
+        CHECK(minic_riscv64_abi_place_argument(
+            &program, minic_type_long(), true, &cursor, &location));
+    CHECK(minic_riscv64_abi_place_argument(
+        &program, minic_type_unsigned_int128(), true, &cursor, &location));
+    CHECK(location.value.kind == MINIC_RISCV64_ABI_VALUE_WIDE_SCALAR);
+    CHECK(location.integer_register_begin == 7U &&
+          location.integer_register_count == 1U);
+    CHECK(location.stack_slot_begin == 0U &&
+          location.stack_slot_count == 1U);
+    minic_riscv64_abi_cursor_initialize(&cursor);
+    cursor.lp64_soft_float = true;
+    CHECK(minic_riscv64_abi_place_argument(
+        &program, minic_type_int128(), true, &cursor, &location));
+    CHECK(location.value.kind == MINIC_RISCV64_ABI_VALUE_WIDE_SCALAR);
+    CHECK(location.integer_register_count == 2U &&
+          location.stack_slot_count == 0U);
 
     minic_riscv64_abi_cursor_initialize(&cursor);
     for (index = 0U; index < 8U; ++index) {

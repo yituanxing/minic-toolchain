@@ -317,6 +317,25 @@ bool minic_riscv64_core_integer_overflow_supported(const MinicC0Program *program
 }
 
 
+/* The ABI cursor owns the placement; CALL admission checks the *same*
+ * two-XLEN machine shape for direct and indirect signed/unsigned int128
+ * and IEEE binary128 long double. Keep it in one location so widening
+ * indirect CALL support cannot silently diverge from direct CALLs. */
+static bool rv64_wide_call_argument_supported(
+    MinicType type, const MinicRiscv64AbiArgumentLocation *location) {
+    return location != NULL &&
+        (minic_type_is_long_double(type) ||
+         minic_type_is_int128_integer(type)) &&
+        location->value.kind == MINIC_RISCV64_ABI_VALUE_WIDE_SCALAR &&
+        location->value.storage_size == 16U &&
+        location->value.slot_count == 2U &&
+        location->floating_register_count == 0U &&
+        location->integer_register_count + location->stack_slot_count == 2U &&
+        location->integer_register_begin <= 8U &&
+        location->integer_register_count <=
+            8U - location->integer_register_begin;
+}
+
 bool minic_riscv64_core_direct_call_supported(const MinicC0Program *program,
                                        const MinicCoreFunction *function,
                                        const MinicCoreInstruction *instruction,
@@ -385,7 +404,8 @@ bool minic_riscv64_core_direct_call_supported(const MinicC0Program *program,
             return false;
         }
     } else if (return_value.kind == MINIC_RISCV64_ABI_VALUE_WIDE_SCALAR) {
-        if (!minic_type_is_long_double(callee->return_type) ||
+        if ((!minic_type_is_long_double(callee->return_type) &&
+             !minic_type_is_int128_integer(callee->return_type)) ||
             return_value.storage_size != 16U || return_value.slot_count != 2U ||
             instruction->value.call.result_object != MINIC_CORE_OBJECT_INVALID) {
             return false;
@@ -453,11 +473,8 @@ bool minic_riscv64_core_direct_call_supported(const MinicC0Program *program,
                     return false;
                 }
             } else if (location.value.kind == MINIC_RISCV64_ABI_VALUE_WIDE_SCALAR) {
-                if (!minic_type_is_long_double(argument_type) ||
-                    location.value.storage_size != 16U || location.value.slot_count != 2U ||
-                    location.floating_register_count != 0U ||
-                    location.integer_register_count + location.stack_slot_count != 2U ||
-                    location.integer_register_begin + location.integer_register_count > 8U) {
+                if (!rv64_wide_call_argument_supported(
+                        argument_type, &location)) {
                     return false;
                 }
             } else {
@@ -563,7 +580,12 @@ bool minic_riscv64_core_indirect_call_supported(const MinicC0Program *program,
          return_value.kind != MINIC_RISCV64_ABI_VALUE_INTEGER &&
          !(return_value.kind == MINIC_RISCV64_ABI_VALUE_FLOAT &&
            (minic_type_is_float(signature->return_type) ||
-            minic_type_is_double(signature->return_type))))) {
+            minic_type_is_double(signature->return_type))) &&
+         !(return_value.kind == MINIC_RISCV64_ABI_VALUE_WIDE_SCALAR &&
+           (minic_type_is_long_double(signature->return_type) ||
+            minic_type_is_int128_integer(signature->return_type)) &&
+           return_value.storage_size == 16U &&
+           return_value.slot_count == 2U))) {
         return false;
     }
     for (argument_index = 0U;
@@ -608,6 +630,11 @@ bool minic_riscv64_core_indirect_call_supported(const MinicC0Program *program,
                     location.stack_slot_count != 0U) {
                     return false;
                 }
+            } else if (location.value.kind ==
+                       MINIC_RISCV64_ABI_VALUE_WIDE_SCALAR) {
+                if (!rv64_wide_call_argument_supported(
+                        argument_type, &location))
+                    return false;
             } else {
                 if ((location.value.kind != MINIC_RISCV64_ABI_VALUE_INTEGER &&
                      !(location.value.kind == MINIC_RISCV64_ABI_VALUE_FLOAT &&

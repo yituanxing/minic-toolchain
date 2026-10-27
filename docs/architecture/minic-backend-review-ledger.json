@@ -1,14 +1,15 @@
 {
   "schema": 1,
-  "baseline_commit": "a2c88e134cc438eb1c1ccf0c480cee283b32a2bc",
+  "baseline_commit": "5fea20f9f96450ff025041e1a2ba8c0203ff7012",
   "policy": "blob fingerprint tracks unchanged source. CI coverage means tested changes only, not full source inspection; changed blobs automatically reopen.",
   "audit_merged": [
     665,
     666,
     668,
-    669
+    669,
+    672
   ],
-  "audit_in_progress": "RV32 ABI fixed prototype type/checked ILP32 frame access and previously untouched RV64 frame code reviewed on main a2c88e134cc4. Code fix pending exact-head validation.",
+  "audit_in_progress": "PR #673 current batch (GNU/QEMU smoke first rejected wider CALL in RV64 capability gate); extended target ABI classifier and shared direct/indirect wide argument/return admission; exact-head CI pending.",
   "next_deep_review": [
     "src/target/aarch64/call_emit.c",
     "src/target/loongarch64/call_emit.c",
@@ -737,9 +738,10 @@
       "ci_touched_in": []
     },
     "src/target/riscv64/abi.c": {
-      "blob": "0ab9a52ab9920d625b9ca93e9b6bd15755eba8fa",
-      "review_depth": "inventory",
-      "ci_touched_in": []
+      "blob": "3b35b7161cf4d6433c3a3bcde0a532c811094764",
+      "review_depth": "targeted",
+      "ci_touched_in": [],
+      "audit_note": "RISC-V hard/soft-float ABI 128-bit integer classification was incorrectly conditional on soft float; expanded to 2*XLEN on both."
     },
     "src/target/riscv64/abi.h": {
       "blob": "d30333b32d3aa9ef18ce1c24fea7ec6b65f77793",
@@ -757,11 +759,12 @@
       "ci_touched_in": []
     },
     "src/target/riscv64/call_emit.c": {
-      "blob": "7a9780b7b1a9cf3acbcb3dbb7c207a8e083fe68f",
+      "blob": "9cb464124897f2beb53b4664c2c01747205802c1",
       "review_depth": "targeted",
       "ci_touched_in": [
         665
-      ]
+      ],
+      "audit_note": "Verified direct/indirect control paths and return ABI. New wide return helper shared for both; full CALL marshalling review remains pending."
     },
     "src/target/riscv64/call_emit.h": {
       "blob": "de1fa4065b4f7542363a942b37a9b86b8411521e",
@@ -924,11 +927,12 @@
       ]
     },
     "src/target/riscv64/legalize.c": {
-      "blob": "cb5835a2f98057ca52af5d477af80ef67200e3e3",
-      "review_depth": "inventory",
+      "blob": "6a85f6bac948efac8c714898b8017270330e8617",
+      "review_depth": "targeted",
       "ci_touched_in": [
         665
-      ]
+      ],
+      "audit_note": "Direct/indirect CALL admission previously denied wide returns and indirect wide arguments; both use one checked target ABI shape helper."
     },
     "src/target/riscv64/legalize.h": {
       "blob": "21d6c0ab9a73f8af80caa116fa8390b0e7dea433",

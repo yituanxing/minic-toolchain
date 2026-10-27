@@ -8,11 +8,13 @@ on:
       - '.github/workflows/minic-rv64i-origin-audit-seven.yml'
       - 'src/target/riscv/**'
       - 'src/target/riscv64/**'
+      - 'tests/target/riscv64/abi_test.c'
       # Changes in five-target semantic facts alter RV64 admission too.
       - 'src/target/common/core_function_facts.c'
       - 'src/target/common/core_function_facts.h'
       - 'src/target/common/core_function_plan.c'
       - 'tests/compiler/c0/probe-rv64i-asm-origin.sh'
+      - 'tests/compiler/c0/run-rv64-core-call-transfer.sh'
       - 'tests/external/linux/corpus_replay.py'
       - 'tools/ci/audit-rv64i-asm-origin.py'
   push:
@@ -22,6 +24,7 @@ on:
       - 'tools/ci/audit-rv64i-asm-origin.py'
       - 'tools/ci/summarize-rv64i-seven-v1.py'
       - 'tests/compiler/c0/probe-rv64i-asm-origin.sh'
+      - 'tests/compiler/c0/run-rv64-core-call-transfer.sh'
       - 'tests/external/linux/corpus_replay.py'
       - 'tests/compiler/c0/probe-rv64i-int128-libcalls.sh'
       - 'tests/compiler/c0/probe-rv64i-int128-pairs.sh'
@@ -80,6 +83,27 @@ jobs:
             exit 1
           fi
           echo "RV64I_ICE_PROBE=PASS builtin_constant_p=0 in ICE, direct_dynamic_choose=rejected"
+
+      # Small L2 ABI differential must run before the expensive 7-shard
+      # Linux tier. Uses the *exact PR head* and compares static GNU/MiniC
+      # callers against GNU implementations in real RV64 QEMU.
+      - name: Validate hard-float and soft-float two-XLEN ABI classification
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/rv64i-origin-smoke check-rv64-abi
+
+      - name: RV64 direct and indirect wide CALL returns versus GNU in QEMU
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get -o Acquire::Retries=3 update -qq
+          sudo apt-get -o Acquire::Retries=3 install -y -qq --no-install-recommends \
+            gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu qemu-user
+          CORE_FAST_TRACE=1 MINIC_BOOTSTRAP_TRACE=1 \
+          MINIC="$GITHUB_WORKSPACE/build/rv64i-origin-smoke/bin/minic" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/rv64i-origin-call-transfer" \
+            bash tests/compiler/c0/run-rv64-core-call-transfer.sh
 
   linux-shard:
     # Seven full shards run only by explicit dispatch or tagged push.
