@@ -305,6 +305,36 @@ static bool riscv_measure(const MiniAs *as, const char *op, const char *args,
     return minias_riscv_measure(as->strict_i_xlen, op, args, size, reason, cap);
 }
 
+
+/* The common parser must never encode RISC-V ISA escape policy. This
+ * backend owns forbidden raw-code directives on an explicit ISA contract.
+ * Data outside executable sections remains valid for ELF constants. */
+static bool riscv_validate_common_directive(MiniAs *as, const char *op,
+                                             size_t line) {
+    static const char *const raw_data[] = {
+        ".byte", ".half", ".short", ".2byte", ".word", ".long",
+        ".4byte", ".dword", ".quad", ".8byte",
+        ".zero", ".space", ".asciz", ".string", ".ascii", ".incbin"
+    };
+    size_t i;
+    if (!as->strict_rv64i ||
+        (as->sections[(size_t)as->current_section].flags &
+         MINIAS_SHF_EXECINSTR) == 0U) return true;
+    if (strcmp(op, ".org") == 0) {
+        minias_set_error(as, "unsupported-isa-escape:.org:line=%zu", line);
+        return false;
+    }
+    for (i = 0U; i < sizeof(raw_data) / sizeof(raw_data[0]); ++i) {
+        if (strcmp(op, raw_data[i]) == 0) {
+            minias_set_error(as,
+                             "unsupported-isa-escape:%s-in-exec:line=%zu",
+                             op, line);
+            return false;
+        }
+    }
+    return true;
+}
+
 static bool riscv_target_directive(MiniAs *as, const char *op,
                                    const char *args, size_t line, bool *handled) {
     *handled = false;
@@ -419,6 +449,7 @@ static const MiniAsTargetOps riscv_ops = {
     .comment_prefix = '#',
     .elf_machine = 243U, /* EM_RISCV */
     .parse_target_directive = riscv_target_directive,
+    .validate_common_directive = riscv_validate_common_directive,
     .object_attributes = riscv_object_attributes,
     .name = "riscv",
     .measure = riscv_measure,

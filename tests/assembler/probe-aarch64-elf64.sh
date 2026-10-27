@@ -85,6 +85,18 @@ for bad_source in 'ret x31' 'mov x2, #65536' 'b external_function + 2'; do
         exit 1
     fi
 done
-echo 'MINIAS_AARCH64_MCINST=PASS typed_reg64_reg32_imm16_symbol=1 invalid_operands=3'
+# Only RISC-V's selected ISA gate forbids raw .word in executable
+# sections. Keep this acceptance target-owned, not an accidental common
+# assembler restriction on AArch64.
+printf '.text\n.globl raw_a64\nraw_a64:\n.word 0xd503201f\n' \
+    >"$work/aarch64-raw.s"
+"$MINIAS" --target=aarch64 -o "$work/aarch64-raw.o" "$work/aarch64-raw.s"
+"$AARCH64_AS" -o "$work/aarch64-raw-gnu.o" "$work/aarch64-raw.s"
+"$AARCH64_OBJCOPY" -j .text -O binary "$work/aarch64-raw.o" \
+    "$work/aarch64-raw.bin"
+"$AARCH64_OBJCOPY" -j .text -O binary "$work/aarch64-raw-gnu.o" \
+    "$work/aarch64-raw-gnu.bin"
+cmp "$work/aarch64-raw.bin" "$work/aarch64-raw-gnu.bin"
+echo 'MINIAS_AARCH64_MCINST=PASS typed_reg64_reg32_imm16_symbol=1 invalid_operands=3 target_raw_data=1'
 
 echo 'MINIAS_AARCH64_VSLICE=PASS ELF64=1 gnu_bytes=equal relocation_call26_jump26_abs64=1 ld=pass qemu=exit0'

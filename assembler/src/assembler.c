@@ -3101,6 +3101,9 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
             return false;
         }
         if (handled) return true;
+        if (as->target->validate_common_directive != NULL &&
+            !as->target->validate_common_directive(as, op, line))
+            return false;
     }
     if (op[0] == '.' && strcmp(op, ".insn") != 0) {
         /*
@@ -3236,12 +3239,6 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
             return handle_align(as, op, args, line);
         }
         if (strcmp(op, ".org") == 0) {
-            if (as->strict_rv64i &&
-                (as->sections[(size_t)as->current_section].flags &
-                 MINIAS_SHF_EXECINSTR) != 0U) {
-                minias_set_error(as, "unsupported-isa-escape:.org:line=%zu", line);
-                return false;
-            }
             char *rewritten_args = NULL;
             bool ok;
 
@@ -3259,14 +3256,6 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
             strcmp(op, ".space") == 0 || strcmp(op, ".asciz") == 0 ||
             strcmp(op, ".string") == 0 || strcmp(op, ".ascii") == 0 ||
             strcmp(op, ".incbin") == 0) {
-            if (as->strict_rv64i &&
-                (as->sections[(size_t)as->current_section].flags &
-                 MINIAS_SHF_EXECINSTR) != 0U) {
-                minias_set_error(as,
-                                 "unsupported-isa-escape:%s-in-exec:line=%zu",
-                                 op, line);
-                return false;
-            }
             char *rewritten_args = NULL;
             bool ok;
 

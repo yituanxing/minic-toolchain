@@ -105,7 +105,8 @@ enum {
 };
 
 static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
-    MiniAsMCInst *inst = calloc(1U, sizeof(*inst));
+    MiniAsMCInst *inst = calloc(1U, sizeof(*inst) +
+                                2U * sizeof(MiniAsMCOperand));
     unsigned reg, imm;
     bool reg64;
     char first[80], second[80];

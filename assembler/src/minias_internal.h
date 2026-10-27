@@ -129,7 +129,9 @@ typedef struct MiniAsMCOperand {
 typedef struct MiniAsMCInst {
     unsigned opcode;
     unsigned count;
-    MiniAsMCOperand operands[2];
+    /* Allocate exactly the number of operands required by the target.
+     * RV64 vector ops may have six; future targets need not resize MCInst. */
+    MiniAsMCOperand operands[];
 } MiniAsMCInst;
 
 typedef struct MiniAsConditional {
@@ -267,6 +269,7 @@ typedef struct MiniAsTargetOps {
     char comment_prefix;
     uint16_t elf_machine;
     bool (*parse_target_directive)(MiniAs *, const char *, const char *, size_t, bool *);
+    bool (*validate_common_directive)(MiniAs *, const char *, size_t);
     void (*object_attributes)(const MiniAs *, unsigned char, MiniAsObjectAttribute *);
     const char *name;
     bool (*measure)(const MiniAs *, const char *, const char *, uint32_t *, char *, size_t);
