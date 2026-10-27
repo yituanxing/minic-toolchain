@@ -47,6 +47,11 @@ typedef struct MinicBackend {
     /* True only when the machine emitter omits unreachable Core blocks.
      * Core call-graph pruning must use exactly the same emitted CFG roots. */
     bool emit_reachable_core_blocks_only;
+    /* Target-owned GNU-asm opcode families whose operand constraints must
+     * be qualified by the real machine backend BEFORE generic Core lowering.
+     * Raw no-operand GNU source asm remains a separate assembly contract. */
+    const char *const *qualified_input_mnemonics;
+    size_t qualified_input_mnemonic_count;
 } MinicBackend;
 
 /* Fail closed on unknown architecture. No default or host fallback. */
@@ -56,6 +61,12 @@ const MinicBackend *minic_backend_for_target(const MinicTargetInfo *target);
 bool minic_backend_qualify_inline_asm(
     const MinicBackend *, const MinicC0Program *, const MinicInlineAsm *,
     MinicTargetInlineAsmContract *);
+
+/* A negative target qualification is authoritative for input-bearing
+ * reserved ISA templates: generic Core scalar/opaque lowering must not
+ * reinterpret a register operand as an immediate or lose machine effects. */
+bool minic_backend_requires_qualified_input_asm(
+    const MinicBackend *, const MinicInlineAsm *);
 
 /* Stable driver-facing emission seam. Machine IR can be inserted here. */
 bool minic_backend_emit_assembly(

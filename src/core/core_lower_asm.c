@@ -3,6 +3,7 @@
 #include "frontend/const_eval.h"
 #include "frontend/expression_semantics.h"
 #include "target/data_layout.h"
+#include "target/backend.h"
 
 #include <inttypes.h>
 #include <stdio.h>
@@ -184,6 +185,14 @@ MinicCoreLowerStatus minic_core_lower_inline_asm(MinicCoreLowerContext *context,
     handled = false;
     status = core_asm_try_target_register_contract(context, statement, source, &handled);
     if (handled) return status;
+    /* A target-qualified instruction with GNU input operands must never
+     * fall back to Core's general scalar/opaque inline-asm machinery after
+     * its target rejects the specific constraints or instruction suffix.
+     * This is one shared ownership gate, with ISA mnemonics supplied solely
+     * by each backend descriptor (not Frontend/Core arch conditionals). */
+    if (minic_backend_requires_qualified_input_asm(
+            minic_backend_for_target(context->target), source))
+        return MINIC_CORE_LOWER_UNSUPPORTED;
 
     handled = false;
     status = core_asm_try_immediate_output_csr(context, statement, source, &handled);
