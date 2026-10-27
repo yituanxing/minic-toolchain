@@ -216,6 +216,8 @@ enum {
     A64_MC_EXTEND_W,
     A64_MC_REV,
     A64_MC_ACQUIRE_RELEASE,
+    A64_MC_MVN_REG,
+    A64_MC_SYSTEM_IMM,
     A64_MC_LSE,
     A64_MC_PRFM,
     A64_MC_EXCLUSIVE
@@ -435,12 +437,19 @@ static bool parse_integer_family(MiniAsMCInst *inst,
         put_reg(&inst->operands[1],rn,wn);
         return true;
     }
-    if((!strcmp(op,"ldar") || !strcmp(op,"stlr")) && n==2U) {
+    if((!strcmp(op,"ldar") || !strcmp(op,"stlr") ||
+        !strcmp(op,"ldarb") || !strcmp(op,"stlrb") ||
+        !strcmp(op,"ldarh") || !strcmp(op,"stlrh")) && n==2U) {
+        bool load=op[0]=='l';
+        bool byte=op[4]=='b';
+        bool half=op[4]=='h';
         if(!parse_a64_reg(t[0],&rd,&wd,&spd) || spd ||
+           ((byte || half) && wd) ||
            !parse_a64_mem(t[1],&base,&imm,&mode) ||
            imm!=0 || mode!=0U)return false;
         inst->opcode=A64_MC_ACQUIRE_RELEASE;inst->count=2U;
-        inst->encoding=!strcmp(op,"ldar")?1U:0U;
+        inst->encoding=byte?(load?2U:4U):
+                       half?(load?3U:5U):(load?1U:0U);
         put_reg(&inst->operands[0],rd,wd);
         put_reg(&inst->operands[1],base,true);
         return true;
@@ -978,6 +987,32 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
            (!strcmp(op,"csetm")?0x100U:0U);
         put_reg(&inst->operands[0],rd,wd);
         put_reg(&inst->operands[1],rn,wd);
+    } else if(!strcmp(op,"mvn") &&
+              split_two(args,first,sizeof(first),second,sizeof(second))) {
+        unsigned rd,rm;bool wide,otherwide,sp;
+        if(!parse_a64_reg(first,&rd,&wide,&sp) || sp ||
+           !parse_a64_reg(second,&rm,&otherwide,&sp) || sp ||
+           wide!=otherwide) {
+            minias_set_error(as,"bad-aarch64-mvn:%s:line=%zu",
+                             args,stmt->line);
+            free(inst);return false;
+        }
+        inst->opcode=A64_MC_MVN_REG;inst->count=2U;
+        put_reg(&inst->operands[0],rd,wide);
+        put_reg(&inst->operands[1],rm,wide);
+    } else if(!strcmp(op,"msr") &&
+              split_two(args,first,sizeof(first),second,sizeof(second)) &&
+              (!strcmp(first,"daifset") || !strcmp(first,"daifclr"))) {
+        int64_t imm;
+        if(!parse_signed_number(second,&imm) || imm<0 || imm>15) {
+            minias_set_error(as,"bad-aarch64-daif-immediate:%s:line=%zu",
+                             args,stmt->line);
+            free(inst);return false;
+        }
+        inst->opcode=A64_MC_SYSTEM_IMM;inst->count=1U;
+        inst->encoding=!strcmp(first,"daifset")?
+                       UINT32_C(0xd50340df):UINT32_C(0xd50340ff);
+        put_immediate(&inst->operands[0],imm);
     } else if((!strcmp(op,"mrs") || !strcmp(op,"msr")) &&
        split_two(args, first, sizeof(first), second, sizeof(second))) {
         unsigned rt;
@@ -1451,13 +1486,29 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
         }
         case A64_MC_ACQUIRE_RELEASE: {
             bool wide=inst->operands[0].register_64;
-            uint32_t opcode=inst->encoding?
-                (wide?UINT32_C(0xc8dffc00):UINT32_C(0x88dffc00)):
-                (wide?UINT32_C(0xc89ffc00):UINT32_C(0x889ffc00));
+            uint32_t opcode;
+            switch(inst->encoding) {
+                case 0U:opcode=wide?UINT32_C(0xc89ffc00):UINT32_C(0x889ffc00);break;
+                case 1U:opcode=wide?UINT32_C(0xc8dffc00):UINT32_C(0x88dffc00);break;
+                case 2U:opcode=UINT32_C(0x08dffc00);break;
+                case 3U:opcode=UINT32_C(0x48dffc00);break;
+                case 4U:opcode=UINT32_C(0x089ffc00);break;
+                case 5U:opcode=UINT32_C(0x489ffc00);break;
+                default:minias_set_error(as,"bad-aarch64-acquire-size");return false;
+            }
             code=opcode | (inst->operands[1].reg<<5U) |
                  inst->operands[0].reg;
             break;
         }
+        case A64_MC_MVN_REG:
+            code=(inst->operands[0].register_64?
+                   UINT32_C(0xaa2003e0):UINT32_C(0x2a2003e0)) |
+                 (inst->operands[1].reg<<16U)|inst->operands[0].reg;
+            break;
+        case A64_MC_SYSTEM_IMM:
+            code=inst->encoding |
+                 ((uint32_t)inst->operands[0].immediate<<8U);
+            break;
         case A64_MC_MOV_REG: {
             unsigned rd = inst->operands[0].reg;
             unsigned rm = inst->operands[1].reg;

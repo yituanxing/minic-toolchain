@@ -58,6 +58,9 @@ external_probe:
     msr tpidr_el1, x1
     mrs x2, daif
     msr daif, x3
+    msr daifset, #3
+    msr daifclr, #12
+    msr daifset, #15
     yield
     wfe
     wfi
@@ -157,6 +160,11 @@ external_probe:
     stlxr w16, x17, [x18]
     ldar w0, [x0]
     ldar x1, [x2]
+    ldarb w0, [x1]
+    ldarb w2, [sp]
+    ldarh w3, [x4]
+    stlrb w5, [x6]
+    stlrh w7, [x8]
     stlr w7, [x8]
     stlr x9, [x10]
     brk #0x800
@@ -164,6 +172,9 @@ external_probe:
     mov w0, -22
     mov x1, -95
     mov w7, -65536
+    mvn w0, w1
+    mvn x2, x3
+    mvn xzr, x4
     subs x2, x2, x1
     subs x3, x3, x2
     subs w0, w0, #4096
@@ -386,6 +397,9 @@ for bad_source in 'ldxr x0, [x1,#4]' 'stxr x0, x1, [x2]' \
                   'ccmp x0, #1, #16, eq' \
                   'ccmn x0, #1, #1, bogus' \
                   'mrs w0, tpidr_el1' 'msr daif, w0' \
+                  'msr daifset, #16' 'msr daifclr, #-1' \
+                  'ldarb x1, [x2]' 'stlrh x3, [x4]' \
+                  'mvn x0, w1' \
                   'yield #1' \
                   'dsb #16' 'dsb bogus' 'isb ish' 'isb #16' \
                   'prfm pstl4strm, [x2]' 'prfm pstl1strm, [w2]' \

@@ -125,6 +125,11 @@ entry_x:
     # All x86 width variants use the existing 0x86/0x87 typed memory encoder.
     xchgl %eax, 24(%rbx)
     xchgl %eax, ext_global(%rip)
+    # GNU base+symbol disp32S; no RIP-relative alias or dummy addend.
+    movq kmalloc_caches+48(%rax), %rdi
+    movq pcpu_hot+32(%r12), %r10
+    addq %r8, glob_index+8(%r13,%r10,4)
+    movl %gs:this_cpu_off+12(%rbx), %eax
     setne 4(%rsp)
     sete ext_global(%rip)
     setg %fs:8(%r13)

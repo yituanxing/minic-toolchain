@@ -216,8 +216,8 @@ static bool x64_parse_base_memory(const char *text, MiniAsMCMemory *out) {
         /* GNU disp(,%index,scale): no base, mandatory SIB disp32. */
         base=5U;
     } else {
-        if(count<1U || !x64_register(regs[0],&base,&wide) || !wide ||
-           symbolic)return false;
+        if(count<1U || !x64_register(regs[0],&base,&wide) || !wide)
+            return false;
     }
     if (count>=2U) {
         if (!x64_register(regs[1],&index,&wide) || !wide ||
@@ -239,10 +239,9 @@ static bool x64_parse_base_memory(const char *text, MiniAsMCMemory *out) {
     out->index=index;out->scale=(unsigned)scale;
     out->displacement=(int64_t)displacement;
     if(symbolic) {
-        /* GNU absolute indexed disp32 uses R_X86_64_32S, not PC32.
-         * Plain sym(%base) remains unsupported without a valid ABI form. */
-        if(!pc_relative &&
-           !(count>=2U && regs[0][0]=='\0' && !segment_space))return false;
+        /* GNU sym+addend(%base,%index,scale) uses an ELF ABS32S relocation
+         * in a forced disp32 slot. This is distinct from RIP+PC32; target
+         * uses existing typed memory and the same reloc/fixup producer. */
         out->symbol=malloc(sizeof(symbolic_expr));
         if(!out->symbol)return false;
         *out->symbol=symbolic_expr;
@@ -251,6 +250,9 @@ static bool x64_parse_base_memory(const char *text, MiniAsMCMemory *out) {
 }
 
 static unsigned x64_disp_bytes(const MiniAsMCMemory *mem) {
+    /* A symbol forces a 4-byte relocation slot even at a zero addend.
+     * Otherwise a base register might choose a zero/disp8 ModR/M mode. */
+    if(mem->symbol)return 4U;
     /* Segment overrides prefix an address, not its ModR/M/SIB mode. */
     if (mem->pc_relative || !mem->has_base)return 4U;
     if (mem->displacement==0 && (mem->base & 7U)!=5U) return 0U;
@@ -1670,26 +1672,13 @@ static bool x64_encode(MiniAs *as,const MiniAsStmt *s) {
                     ((mem->has_index?mem->index&7U:4U)<<3U) |
                     (mem->has_base?low_base:5U));
             }
-            if(!mem->has_base && !mem->pc_relative &&
-               mem->symbol!=NULL) {
-                size_t relocation_at=n;
-                for(i=0U;i<4U;++i)code[n++]=0U;
-                for(i=0U;i<extra;++i)
-                    code[n++]=(unsigned char)(immediate>>(8U*i));
-                if(!minias_section_append(as,s->section,code,n))return false;
-                return minias_add_fixup(as,s->section,s->offset+relocation_at,
-                            MINIAS_FIXUP_X64_ABS32S,4U,
-                            mem->symbol->name,mem->symbol->addend);
-            }
-            if(!mem->pc_relative && !mem->has_base &&
-               !mem->address_space && mem->has_index &&
-               mem->symbol!=NULL) {
+            if(!mem->pc_relative && mem->symbol!=NULL) {
                 size_t relocation_at=n;
                 for(i=0U;i<4U;++i)code[n++]=0U;
                 for(i=0U;i<extra;++i)
                     code[n++]=(unsigned char)(immediate>>(8U*i));
                 if(n!=s->size) {
-                    minias_set_error(as,"invalid-x86-abs-indexed-layout");
+                    minias_set_error(as,"invalid-x86-symbolic-disp32-layout");
                     return false;
                 }
                 if(!minias_section_append(as,s->section,code,n))return false;
