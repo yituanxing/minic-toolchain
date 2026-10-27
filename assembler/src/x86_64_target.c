@@ -415,6 +415,11 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
         };
         for(i=0U;i<sizeof(unary)/sizeof(unary[0]);++i) {
             if(strcmp(s->op,unary[i].op)!=0)continue;
+            /* IMUL has unary F7 /5 and binary 0F AF /r forms.
+             * Dispatch based on operand arity before consuming its token;
+             * otherwise unary matching erroneously rejects valid GNU IMUL. */
+            if((!strcmp(s->op,"imull") || !strcmp(s->op,"imulq")) &&
+               strchr(s->args,',')!=NULL)continue;
             if(x64_register(s->args,&rd,&wd) && wd==unary[i].wide) {
                 m->opcode=X64_UNARY;m->count=1U;
                 m->encoding=unary[i].opcode | (unary[i].group<<8U);
