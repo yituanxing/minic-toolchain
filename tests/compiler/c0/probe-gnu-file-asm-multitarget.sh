@@ -178,6 +178,83 @@ SRC
         fi
     done
     echo 'MINIC_AARCH64_LINUX_STLR_GNU_AS_QEMU=PASS widths=4 negative=4'
+
+    # Exact original arm64 6.6 atomic_ll_sc.h AND/OR/XOR, 32 and 64-bit.
+    # LLVM/AS-style raw passthrough is forbidden: target must consume the
+    # canonical existing 4 Core register/memory/scalar roles.
+    : > "$work/aarch64-llsc.i"
+    for width in 32 64; do
+        if [ "$width" = 32 ]; then
+            typename='unsigned int'; prefix=''; word0='%w0'; word3='%w3'
+        else
+            typename='unsigned long'; prefix='64'; word0='%0'; word3='%3'
+        fi
+        for operation in and or xor; do
+            case "$operation" in and) opcode=and;; or) opcode=orr;; xor) opcode=eor;; esac
+            cat >> "$work/aarch64-llsc.i" <<SRC
+void atomic_${width}_${operation}($typename *p, $typename i) {
+    $typename result;
+    unsigned long tmp;
+    __asm__ __volatile__("// atomic${prefix}_${operation}\\n"
+                         " prfm pstl1strm, %2\\n"
+                         "1: ldxr $word0, %2\\n"
+                         " $opcode $word0, $word0, $word3\\n"
+                         " stxr %w1, $word0, %2\\n"
+                         " cbnz %w1, 1b"
+                       : "=&r"(result), "=&r"(tmp), "+Q"(*p) : "Lr"(i));
+}
+SRC
+        done
+    done
+    cat >> "$work/aarch64-llsc.i" <<'SRC'
+int main(void) {
+    unsigned int a = 0x31;
+    unsigned long b = 0x31;
+    atomic_32_or(&a, 6); atomic_32_and(&a, 0x30); atomic_32_xor(&a, 5);
+    atomic_64_or(&b, 6); atomic_64_and(&b, 0x30); atomic_64_xor(&b, 5);
+    return a == 0x35 && b == 0x35 ? 0 : 1;
+}
+SRC
+    "$cross_cc" -x c "$work/aarch64-llsc.i" -o "$work/aarch64-llsc.gnu.elf"
+    "$MINIC_CC" --target=aarch64-linux -S "$work/aarch64-llsc.i" \
+        -o "$work/aarch64-llsc.minic.s"
+    for op in and orr eor; do
+        grep -Fq "  $op w9, w9, w11" "$work/aarch64-llsc.minic.s"
+        grep -Fq "  $op x9, x9, x11" "$work/aarch64-llsc.minic.s"
+    done
+    "$cross_cc" -x assembler "$work/aarch64-llsc.minic.s" \
+        -o "$work/aarch64-llsc.minic.elf"
+    for flavor in gnu minic; do
+        qemu-aarch64 -L /usr/aarch64-linux-gnu "$work/aarch64-llsc.$flavor.elf"
+    done
+    for invalid in wrong_constraint hidden_svc wrong_label wrong_output; do
+        case "$invalid" in
+            wrong_constraint) ic='r'; suffix=''; label='1b'; out='=&r' ;;
+            hidden_svc) ic='Lr'; suffix='; svc #0'; label='1b'; out='=&r' ;;
+            wrong_label) ic='Lr'; suffix=''; label='2b'; out='=&r' ;;
+            wrong_output) ic='Lr'; suffix=''; label='1b'; out='=r' ;;
+        esac
+        cat > "$work/aarch64-llsc-invalid-$invalid.i" <<SRC
+void bad(unsigned long *p, unsigned long i) {
+  unsigned long result, tmp;
+  __asm__ __volatile__("// atomic64_or\\n"
+    " prfm pstl1strm, %2\\n"
+    "1: ldxr %0, %2\\n"
+    " orr %0, %0, %3\\n"
+    " stxr %w1, %0, %2\\n"
+    " cbnz %w1, $label$suffix"
+    : "$out"(result), "=&r"(tmp), "+Q"(*p) : "$ic"(i));
+}
+SRC
+        if "$MINIC_CC" --target=aarch64-linux -S "$work/aarch64-llsc-invalid-$invalid.i" \
+            -o "$work/aarch64-llsc-invalid-$invalid.s" \
+            >"$work/aarch64-llsc-invalid-$invalid.out" \
+            2>"$work/aarch64-llsc-invalid-$invalid.err"; then
+            echo "FAIL unsafe arm64 LL/SC accepted: $invalid" >&2
+            exit 1
+        fi
+    done
+    echo 'MINIC_AARCH64_LINUX_LLSC_GNU_AS_QEMU=PASS operations=6 negatives=4'
 fi
 
 # Original Linux syscall wrappers have deliberately different argument C
