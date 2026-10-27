@@ -8,7 +8,7 @@
 
 /* A first, fail-closed GNU AT&T SysV x86-64 target. All common expression,
  * symbol, section, fragment, and ELF handling lives outside this file. */
-enum { X64_ZERO = 1, X64_REG_BINARY, X64_STACK, X64_MOV_IMM32, X64_ENDBR64, X64_ALU_IMM, X64_REG_MEMORY, X64_BRANCH, X64_IMM_MEMORY, X64_MOVQ_IMMREG, X64_MOVABS_IMMREG, X64_SETCC, X64_BINARY8, X64_MOVSLQ, X64_MOVZX8, X64_SHIFT_IMM, X64_TEST8_IMM, X64_PUSH_IMM, X64_CMOV_REG, X64_SHIFT_CL };
+enum { X64_ZERO = 1, X64_REG_BINARY, X64_STACK, X64_MOV_IMM32, X64_ENDBR64, X64_ALU_IMM, X64_REG_MEMORY, X64_BRANCH, X64_IMM_MEMORY, X64_MOVQ_IMMREG, X64_MOVABS_IMMREG, X64_SETCC, X64_BINARY8, X64_MOVSLQ, X64_MOVZX8, X64_SHIFT_IMM, X64_TEST8_IMM, X64_PUSH_IMM, X64_CMOV_REG, X64_SHIFT_CL, X64_UNARY };
 
 static bool x64_register(const char *text, unsigned *reg, bool *wide) {
     static const char *const names64[16] = {
@@ -151,13 +151,17 @@ static bool x64_parse_base_memory(const char *text, MiniAsMCMemory *out) {
         n=(size_t)(p-start);
         while (n && isspace((unsigned char)*start)) {++start;--n;}
         while (n && isspace((unsigned char)start[n-1U])) --n;
-        if (!n || n>=sizeof(regs[0]) || count==3U) return false;
+        if ((n==0U && count!=0U) || n>=sizeof(regs[0]) ||
+            count==3U) return false;
         memcpy(regs[count],start,n);regs[count][n]='\0';
         ++count;
         if (p<close) ++p;
     }
     if(count==1U && strcmp(regs[0],"%rip")==0) {
         pc_relative=true;
+    } else if(count>=2U && regs[0][0]=='\0') {
+        /* GNU disp(,%index,scale): no base, mandatory SIB disp32. */
+        base=5U;
     } else {
         if(count<1U || !x64_register(regs[0],&base,&wide) || !wide ||
            symbolic)return false;
@@ -175,7 +179,8 @@ static bool x64_parse_base_memory(const char *text, MiniAsMCMemory *out) {
             return false;
     }
     memset(out,0,sizeof(*out));
-    out->has_base=!pc_relative;out->pc_relative=pc_relative;
+    out->has_base=!pc_relative && regs[0][0]!='\0';
+    out->pc_relative=pc_relative;
     out->base=base;out->has_index=(count>=2U);
     out->index=index;out->scale=(unsigned)scale;
     out->displacement=(int64_t)displacement;
@@ -189,7 +194,7 @@ static bool x64_parse_base_memory(const char *text, MiniAsMCMemory *out) {
 }
 
 static unsigned x64_disp_bytes(const MiniAsMCMemory *mem) {
-    if (mem->pc_relative || mem->address_space)return 4U;
+    if (mem->pc_relative || mem->address_space || !mem->has_base)return 4U;
     if (mem->displacement==0 && (mem->base & 7U)!=5U) return 0U;
     return mem->displacement>=-128 && mem->displacement<=127 ? 1U : 4U;
 }
@@ -208,6 +213,8 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
         {"pause",{0xf3,0x90},2},
         {"cltq",{0x48,0x98},2},{"cqto",{0x48,0x99},2},
         {"lock",{0xf0},1},
+        {"pushf",{0x9c},1},{"pushfq",{0x9c},1},
+        {"popf",{0x9d},1},{"popfq",{0x9d},1},
         {"rep stosq",{0xf3,0x48,0xab},3},
         {"rep movsq",{0xf3,0x48,0xa5},3},
         {"rep stosb",{0xf3,0xaa},2}
@@ -272,6 +279,46 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
                 (unsigned)zeros[i].bytes[1]<<8U |
                 (unsigned)zeros[i].bytes[2]<<16U;
             m->operands[0].immediate=zeros[i].size;goto done;
+        }
+    }
+    /* Group-3 NOT/NEG and Group-5 INC/DEC, shared typed ModR/M
+     * between register and memory forms. No duplicated memory encoder. */
+    {
+        static const struct {const char *op;unsigned opcode,group;bool wide;} unary[]={
+            {"notl",0xf7U,2U,false},{"notq",0xf7U,2U,true},
+            {"negl",0xf7U,3U,false},{"negq",0xf7U,3U,true},
+            {"incl",0xffU,0U,false},{"incq",0xffU,0U,true},
+            {"decl",0xffU,1U,false},{"decq",0xffU,1U,true}
+        };
+        for(i=0U;i<sizeof(unary)/sizeof(unary[0]);++i) {
+            if(strcmp(s->op,unary[i].op)!=0)continue;
+            if(x64_register(s->args,&rd,&wd) && wd==unary[i].wide) {
+                m->opcode=X64_UNARY;m->count=1U;
+                m->encoding=unary[i].opcode | (unary[i].group<<8U);
+                m->operands[0].kind=MINIAS_MC_REGISTER;
+                m->operands[0].register_64=wd;
+                m->operands[0].reg=rd;
+                goto done;
+            }
+            if(x64_is_mem_candidate(s->args)) {
+                MiniAsMCMemory parsed;
+                if(!x64_parse_base_memory(s->args,&parsed))goto invalid;
+                m->operands[1].memory=malloc(sizeof(parsed));
+                if(!m->operands[1].memory) {
+                    free(parsed.symbol);free(m);
+                    minias_set_error(as,"out-of-memory:x86-unary-memory");
+                    return false;
+                }
+                *m->operands[1].memory=parsed;
+                m->opcode=X64_REG_MEMORY;m->count=2U;
+                m->encoding=unary[i].opcode;
+                m->operands[0].kind=MINIAS_MC_REGISTER;
+                m->operands[0].reg=unary[i].group;
+                m->operands[0].register_64=unary[i].wide;
+                m->operands[1].kind=MINIAS_MC_MEMORY;
+                goto done;
+            }
+            goto invalid;
         }
     }
     /* Byte ALU variants and sign-extending MOV all remain target local. */
@@ -512,7 +559,9 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
             {"addq",0U},{"addl",0U},{"orq",1U},{"orl",1U},
             {"andq",4U},{"andl",4U},{"subq",5U},{"subl",5U},
             {"sbbq",3U},{"sbbl",3U},
-            {"xorq",6U},{"xorl",6U},{"cmpq",7U},{"cmpl",7U}
+            {"xorq",6U},{"xorl",6U},{"cmpq",7U},{"cmpl",7U},
+            {"addb",0U},{"orb",1U},{"andb",4U},{"subb",5U},
+            {"xorb",6U},{"cmpb",7U}
         };
         uint64_t bits=0U;
         int64_t val;
@@ -553,9 +602,10 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
                (has_group || !strcmp(s->op,"movq") ||
                 !strcmp(s->op,"movl") || !strcmp(s->op,"movb") ||
                 !strcmp(s->op,"testq") ||
-                !strcmp(s->op,"testl"))) {
+                !strcmp(s->op,"testl") || !strcmp(s->op,"testb"))) {
                 MiniAsMCMemory parsed;
-                if(!strcmp(s->op,"movb") && (val < -128 || val > 255))goto invalid;
+                if(s->op[strlen(s->op)-1U]=='b' &&
+                   (val < -128 || val > 255))goto invalid;
                 if(!x64_parse_base_memory(dst,&parsed))goto invalid;
                 m->operands[1].memory=malloc(sizeof(parsed));
                 if(!m->operands[1].memory){
@@ -572,10 +622,12 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
                 m->operands[2].kind=MINIAS_MC_IMMEDIATE;
                 m->operands[2].immediate=bits;
                 m->encoding=has_group ?
-                    (val>=-128 && val<=127?0x83U:0x81U):
+                    (s->op[strlen(s->op)-1U]=='b'?0x80U:
+                     val>=-128 && val<=127?0x83U:0x81U):
                     (!strcmp(s->op,"movb")?0xc6U:
+                    (!strcmp(s->op,"testb")?0xf6U:
                     (!strcmp(s->op,"testq")||!strcmp(s->op,"testl")?
-                     0xf7U:0xc7U));
+                     0xf7U:0xc7U)));
                 goto done;
             }
         }
@@ -675,6 +727,9 @@ static bool x64_measure(MiniAs *as,const MiniAsStmt *s,uint32_t *size) {
             *size=3U+(m->operands[0].register_64 ||
                        m->operands[0].reg>=8U || m->operands[1].reg>=8U?
                        1U:0U);return true;
+        case X64_UNARY:
+            *size=2U+(m->operands[0].register_64 ||
+                       m->operands[0].reg>=8U?1U:0U);return true;
         case X64_SHIFT_CL:
             *size=2U+(m->operands[0].register_64 ||
                        m->operands[0].reg>=8U?1U:0U);return true;
@@ -700,7 +755,7 @@ static bool x64_measure(MiniAs *as,const MiniAsStmt *s,uint32_t *size) {
         case X64_REG_MEMORY: {
             const MiniAsMCMemory *mem=m->operands[1].memory;
             unsigned extra=m->opcode==X64_IMM_MEMORY?
-                (m->encoding==0x83U || m->encoding==0xc6U?1U:4U):0U;
+                (m->encoding==0x83U || m->encoding==0xc6U || m->encoding==0x80U || m->encoding==0xf6U?1U:4U):0U;
             *size=extra+(mem->address_space?1U:0U) + (m->operands[0].register_64 ||
                    m->operands[0].reg>=8U || mem->base>=8U ||
                    (mem->has_index && mem->index>=8U)?1U:0U) +
@@ -799,6 +854,15 @@ static bool x64_encode(MiniAs *as,const MiniAsStmt *s) {
                     ((d>>3U)<<2U)|(r>>3U));
             code[n++]=0x0fU;code[n++]=(unsigned char)(0x40U+(m->encoding&15U));
             code[n++]=(unsigned char)(0xc0U|((d&7U)<<3U)|(r&7U));
+            break;
+        case X64_UNARY:
+            r=m->operands[0].reg;
+            if(m->operands[0].register_64 || r>=8U)
+                code[n++]=(unsigned char)(0x40U |
+                    (m->operands[0].register_64?8U:0U)|(r>>3U));
+            code[n++]=(unsigned char)m->encoding;
+            code[n++]=(unsigned char)(0xc0U|
+                (((m->encoding>>8U)&7U)<<3U)|(r&7U));
             break;
         case X64_SHIFT_CL:
             r=m->operands[0].reg;
@@ -905,12 +969,13 @@ static bool x64_encode(MiniAs *as,const MiniAsStmt *s) {
         case X64_REG_MEMORY: {
             const MiniAsMCMemory *mem=m->operands[1].memory;
             unsigned extra=m->opcode==X64_IMM_MEMORY?
-                (m->encoding==0x83U || m->encoding==0xc6U?1U:4U):0U;
+                (m->encoding==0x83U || m->encoding==0xc6U || m->encoding==0x80U || m->encoding==0xf6U?1U:4U):0U;
             uint32_t immediate=extra?
                 (uint32_t)m->operands[2].immediate:0U;
             unsigned low_base=mem->base&7U;
             unsigned bytes=x64_disp_bytes(mem);
-            unsigned mod=bytes==0U?0U:bytes==1U?1U:2U;
+            unsigned mod=!mem->has_base?0U:
+                         bytes==0U?0U:bytes==1U?1U:2U;
             unsigned i;
             uint32_t disp=(uint32_t)mem->displacement;
             if(mem->address_space)
@@ -935,7 +1000,8 @@ static bool x64_encode(MiniAs *as,const MiniAsStmt *s) {
                                    mem->scale==4U?2U:
                                    mem->scale==2U?1U:0U;
                 code[n++]=(unsigned char)((sib_scale<<6U) |
-                    ((mem->has_index?mem->index&7U:4U)<<3U) | low_base);
+                    ((mem->has_index?mem->index&7U:4U)<<3U) |
+                    (mem->has_base?low_base:5U));
             }
             if(mem->address_space && mem->symbol!=NULL) {
                 size_t relocation_at=n;

@@ -57,6 +57,21 @@ entry_x:
     xorl %r9d, 8(%r12)
     andq -16(%rbp), %rax
     orq %r8, 16(%rsp)
+    notl %eax
+    notq %r9
+    negl %r10d
+    negq %r11
+    incl %eax
+    incq %r8
+    decl %r9d
+    decq %r10
+    pushf
+    popf
+    cmpb $0, __already_done.0(%rip)
+    testb $1, (%rax)
+    addb $2, 8(%rsp)
+    movq 0(,%rdx,8), %rax
+    leaq 0(,%rdx,8), %rax
     cmove %edx, %eax
     cmovne %r9d, %r10d
     cmovgq %r8, %r9
@@ -345,6 +360,8 @@ for bad in 'movq %rax, (%eax)' \
            'pushq $4294967296' \
            'testb $256, %al' \
            'movb $256, (%rax)' \
+           'cmpb $256, (%rax)' \
+           'movq %rax, (,%rsp,8)' \
            'cmove %r8, %eax' \
            'shrq %dl, %rax'; do
     printf '.text\n%s\n' "$bad" >"$work/invalid-mem.s"
