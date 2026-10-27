@@ -8,6 +8,10 @@ on:
       - '.github/workflows/minic-rv64i-origin-audit-seven.yml'
       - 'src/target/riscv/**'
       - 'src/target/riscv64/**'
+      # Changes in five-target semantic facts alter RV64 admission too.
+      - 'src/target/common/core_function_facts.c'
+      - 'src/target/common/core_function_facts.h'
+      - 'src/target/common/core_function_plan.c'
       - 'tests/compiler/c0/probe-rv64i-asm-origin.sh'
       - 'tests/external/linux/corpus_replay.py'
       - 'tools/ci/audit-rv64i-asm-origin.py'

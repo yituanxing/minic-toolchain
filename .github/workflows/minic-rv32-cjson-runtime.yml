@@ -5,6 +5,10 @@ on:
     paths:
       - "src/target/riscv/**"
       - "src/target/riscv32/**"
+      # Re-qualify shared Core admission for RV32 psABI frames.
+      - 'src/target/common/core_function_facts.c'
+      - 'src/target/common/core_function_facts.h'
+      - 'src/target/common/core_function_plan.c'
       - "src/target/riscv64/isa.c"
       - "src/target/riscv64/isa.h"
       - "tests/compiler/c0/probe-riscv-shared-word-operations.sh"
