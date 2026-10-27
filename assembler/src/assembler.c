@@ -3031,6 +3031,22 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
         return true;
     }
 
+    /* GNU's preprocessed native .S contains CPP source line markers.
+     * This form is common to all architectures; AArch64 also uses '#'
+     * in real instruction immediates, so only strict # N "file" is metadata. */
+    if (text[0] == '#' && isspace((unsigned char)text[1])) {
+        const char *marker = text + 2;
+        while (isspace((unsigned char)*marker)) ++marker;
+        if (isdigit((unsigned char)*marker)) {
+            while (isdigit((unsigned char)*marker)) ++marker;
+            if (isspace((unsigned char)*marker)) {
+                while (isspace((unsigned char)*marker)) ++marker;
+                if (*marker == '"' && strchr(marker + 1, '"') != NULL)
+                    return true;
+            }
+        }
+    }
+
     if (strncmp(text, ".if", 3U) == 0 &&
         (text[3] == '\0' || isspace((unsigned char)text[3]))) {
         /* .if may inspect '.', local symbol values and derived absolute

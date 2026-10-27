@@ -1,0 +1,90 @@
+name: MiniAS Immutable Linux 3x7 GNU Kbuild S Replay
+
+# Frozen original Linux 6.6.143 inputs. Discovery, NOT P1/parity.
+on:
+  workflow_dispatch:
+  push:
+    branches: [refactor/minias-target-isa-abi-core]
+    paths: ['.github/workflows/minias-linux-pinned-3x7-replay.yml']
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  shard:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [x86_64, aarch64, loongarch64]
+        shard: [0, 1, 2, 3, 4, 5, 6]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          repository: ${{ github.repository }}
+          run-id: '40461070882'
+          github-token: ${{ github.token }}
+          name: minias-linux-kbuild-${{ matrix.target }}-shard${{ matrix.shard }}
+          path: build/minias-frozen
+      - name: Prove original GNU Kbuild target and per-shard S/CMD hashes
+        run: |
+          python3 - '${{ matrix.target }}' '${{ matrix.shard }}' <<'PY_PIN'
+          import importlib.util, pathlib, sys
+          target, n = sys.argv[1], int(sys.argv[2])
+          hashes = {
+              "x86_64": "9065a6925d9e5081336894e42f7544f9d671efcb5d70eb499a24884988d00ac1",
+              "aarch64": "e2d034013185b214763c9fa42aef3f3eb4e9d96e276f8678717c1f9d675969cf",
+              "loongarch64": "203ed9df2cb4408cd8d0ee48b5de9f2a6444d115e8cdca649cf70995d6fc7017",
+          }
+          spec = importlib.util.spec_from_file_location(
+              "kbuild_s", "tools/ci/minias-linux-kbuild-seven-v1.py")
+          tool = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(tool)
+          path = pathlib.Path(f"build/minias-frozen/shard-{n}.tar.gz")
+          manifest, digest, selected = tool.checked_shard(path, target, n)
+          assert digest == hashes[target], (target, n, digest)
+          assert manifest["full_kbuild"] and manifest["build_exit"] == 0
+          assert len(selected) > 0
+          print(f"MINIAS_GNU_SOURCE_PIN=PASS target={target} shard={n} "
+                f"files={len(selected)} manifest={digest} GCC_rebuilt=NO")
+          PY_PIN
+      - name: Build MiniAS only on this exact source HEAD
+        run: make -j2 MODE=release CFLAGS=-Werror build/release/bin/minic-as
+      - name: Scan all frozen input and record each first blocker
+        run: |
+          python3 tools/ci/minias-linux-kbuild-seven-v1.py scan \
+            --target '${{ matrix.target }}' --shard '${{ matrix.shard }}' \
+            --archive 'build/minias-frozen/shard-${{ matrix.shard }}.tar.gz' \
+            --minias "$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            --dest 'build/minias-linux-replay/${{ matrix.target }}-${{ matrix.shard }}'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: minias-linux-replay-${{ matrix.target }}-${{ matrix.shard }}
+          path: build/minias-linux-replay/${{ matrix.target }}-${{ matrix.shard }}/results.json
+          if-no-files-found: error
+          retention-days: 14
+
+  aggregate:
+    needs: shard
+    if: always() && needs.shard.result == 'success'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: minias-linux-replay-*
+          path: build/minias-linux-replay-collected
+      - name: Require exactly 21 owned shards and disjoint architecture pools
+        run: |
+          python3 tools/ci/minias-linux-kbuild-seven-v1.py aggregate \
+            --results build/minias-linux-replay-collected \
+            --dest build/minias-linux-replay-summary.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: minias-linux-replay-three-target-summary
+          path: build/minias-linux-replay-summary.json
+          if-no-files-found: error
+          retention-days: 14

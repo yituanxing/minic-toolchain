@@ -12,6 +12,8 @@ trap 'rm -rf "$work"' EXIT
 # One real AArch64 instruction stream, ISA-specific immediate syntax,
 # an external call relocation, a local jump and generic data relocations.
 cat >"$work/vertical.s" <<'SRC'
+# 0 "linux/arch/arm64/kernel/example.S"
+# 18 "linux/arch/arm64/kernel/example.S" 2
 .arch armv8-a
 .text
 .globl _start

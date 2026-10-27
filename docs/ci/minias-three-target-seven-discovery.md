@@ -34,3 +34,19 @@
 - All outputs are discovery failures; workflow success means complete evidence, NOT supported assembly or GNU equivalence.
 - Fast-lane follow-up: add validated AArch64 .arch armv8-a (reject armv9), then use pinned run 40453774777 artifact to replay only seven AArch64 shards. No regeneration of any C or frozen assembly, no redundant 21-job rerun.
 - Source architecture after this batch remains target-bound: the .arch directive is implemented only in AArch64 target, and the generic shard aggregator adds optional target filtering without encoding architecture semantics.
+
+## Original Linux 3x7 SHA-pinned replay (2026-10-27)
+
+An opt-in runner reuses the frozen full Linux GNU Kbuild C/.S corpus
+from immutable run `40461070882`, without re-running GCC. It verifies
+the saved source and all .s/.cmd SHA per file, and pins manifests:
+x86-64 `9065a6925d9e5081336894e42f7544f9d671efcb5d70eb499a24884988d00ac1`,
+AArch64 `e2d034013185b214763c9fa42aef3f3eb4e9d96e276f8678717c1f9d675969cf`,
+LoongArch64 `203ed9df2cb4408cd8d0ee48b5de9f2a6444d115e8cdca649cf70995d6fc7017`.
+21 independent MiniAS jobs classify genuine first blockers after target
+registration. This is NOT GNU assembled object parity, Image, or P1.
+
+The Common parser now recognizes strict `# N "file"` provenance markers
+from GNU-preprocessed native .S, without weakening AArch64 immediate
+syntax or suppressing actual ISA errors. CFI/.eh_frame remains a semantic
+implementation obligation, not a directive to ignore.
