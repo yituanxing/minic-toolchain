@@ -5,7 +5,12 @@ on:
   workflow_dispatch:
   push:
     branches: [refactor/minias-target-isa-abi-core]
-    paths: ['.github/workflows/minias-linux-pinned-3x7-replay.yml']
+    paths:
+      - '.github/workflows/minias-linux-pinned-3x7-replay.yml'
+      - 'assembler/src/cfi.c'
+      - 'assembler/src/aarch64_target.c'
+      - 'assembler/src/assembler.c'
+      - 'tests/assembler/probe-aarch64-elf64.sh'
 
 permissions:
   contents: read
@@ -13,6 +18,9 @@ permissions:
 
 jobs:
   shard:
+    # Opt-in large grouped corpus only. Target fixes normally run unit GNU
+    # parity; explicit batch marker or workflow_dispatch scans all 21 shards.
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[minias-replay-3x7]')
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     strategy:
