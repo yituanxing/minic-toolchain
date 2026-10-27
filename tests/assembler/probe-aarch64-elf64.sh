@@ -105,6 +105,7 @@ external_function:
 external_branch:
     ret
 .data
+.p2align 3
 .globl external_data
 external_data:
     .quad 0
