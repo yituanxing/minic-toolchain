@@ -27,7 +27,7 @@ static bool emit_riscv64(const char *output_path, const MinicC0Program *program,
  * consume GNU operands with machine-specific encodings/constraints. When the
  * target callback declines, Core must not let a generic scalar-input
  * lowering silently admit a different constraint or dangerous suffix. */
-static const char *const aarch64_qualified_inputs[] = {"brk"};
+static const char *const aarch64_qualified_inputs[] = {"brk", "stlrb", "stlrh", "stlr"};
 static const char *const loongarch64_qualified_inputs[] = {
     "dbar", "amand_db.w", "amor_db.w", "amxor_db.w", "amadd_db.w",
     "amand_db.d", "amor_db.d", "amxor_db.d", "amadd_db.d"
