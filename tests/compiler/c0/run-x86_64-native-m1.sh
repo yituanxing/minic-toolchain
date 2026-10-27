@@ -71,6 +71,59 @@ fi
 grep -F 'fixed register binding is not supported by this target' \
     "$tempdir/x86_rsp_unqualified.err" >/dev/null
 
+# The unchanged x86 Linux asm helper mul_u64_u64_div_u64() is
+# NONvolatile GNU output ASM: mulq %2; divq %3 with =a/a/rm/rm and
+# physical rdx clobber. Reuse the current Core Structured ASM and x86
+# Backend Contract. GNU and MiniC must both materialize the same quotient
+# including a nonzero high half in RDX; never silently skip the asm.
+cat > "$tempdir/x86_gnu_muldiv.i" <<'EOF'
+static unsigned long long muldiv_u64(unsigned long long a,
+                                     unsigned long long mul,
+                                     unsigned long long div) {
+    unsigned long long q;
+    asm ("mulq %2; divq %3" : "=a" (q)
+        : "a" (a), "rm" (mul), "rm" (div) : "rdx");
+    return q;
+}
+int main(void) {
+    if (muldiv_u64(0x8000000000000000ULL, 2ULL, 3ULL) !=
+        6148914691236517205ULL)
+        return 1;
+    return (int)muldiv_u64(21ULL, 4ULL, 2ULL);
+}
+EOF
+check_exit x86_gnu_muldiv 42
+grep -F '  mulq %r10' "$tempdir/x86_gnu_muldiv.s" >/dev/null
+grep -F '  divq %r11' "$tempdir/x86_gnu_muldiv.s" >/dev/null
+"$HOST_CC" -std=gnu11 -no-pie -x c "$tempdir/x86_gnu_muldiv.i" \
+    -o "$tempdir/x86_gnu_muldiv.gnu"
+set +e
+"$tempdir/x86_gnu_muldiv.gnu"
+muldiv_gcc_result=$?
+set -e
+test "$muldiv_gcc_result" -eq 42
+echo 'PASS: x86 GNU 64x64/128-div asm MiniC/GCC differential, RDX clobber and true Core output'
+
+# Nearby operand templates must remain rejected unless their full machine
+# dataflow and physical-register constraints are separately qualified.
+cat > "$tempdir/x86_gnu_muldiv_unknown.i" <<'EOF'
+unsigned long long bad(unsigned long long x,
+                       unsigned long long m,
+                       unsigned long long d) {
+    unsigned long long q;
+    asm ("mulq %2; divq %3; nop" : "=a" (q)
+         : "a" (x), "rm" (m), "rm" (d) : "rdx");
+    return q;
+}
+EOF
+if "$MINIC_CC" --target=x86_64-linux -S "$tempdir/x86_gnu_muldiv_unknown.i" \
+    -o "$tempdir/x86_gnu_muldiv_unknown.s" \
+    >"$tempdir/x86_gnu_muldiv_unknown.out" \
+    2>"$tempdir/x86_gnu_muldiv_unknown.err"; then
+    echo 'FAIL: unqualified x86 muldiv ASM template accepted' >&2
+    exit 1
+fi
+
 # BusyBox allyesconfig + libselinux: a GNU deprecated typedef is an
 # informational type attribute, not a different object/argument layout.
 # Check both x86 runtime and RV64 parsing; retain diagnostic-only behavior.

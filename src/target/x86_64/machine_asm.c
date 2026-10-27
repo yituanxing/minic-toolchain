@@ -60,6 +60,47 @@ static bool emit_matched_register_template(
     return fputc('\n', out) != EOF;
 }
 
+/* 64x64 unsigned multiply into RDX:RAX, then 128/64 unsigned divide.
+ * Exact GNU "=a"/"a"/"rm"/"rm"/"rdx" operand ownership is checked again
+ * against Core binding roles. No hidden register allocator policy escapes
+ * the x86 machine emitter and the output still lands in its SSA lvalue. */
+static bool emit_muldiv_u64(
+    FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicCoreFunction *fn, const MinicX86Frame *frame,
+    const MinicCoreInstruction *ins, const MinicCoreInlineAsm *info) {
+    const MinicCoreStructuredInlineAsmOperand *b =
+        ins->value.structured_inline_asm.operands;
+    size_t i, bytes;
+    bool sign;
+    if (ins->value.structured_inline_asm.operand_count != 4U ||
+        info->register_clobber_count != 1U || !info->register_clobbers ||
+        !clobber_is(&info->register_clobbers[0], "rdx") ||
+        info->has_memory_clobber ||
+        !minic_x86_64_asm_muldiv_template(info->template_text, info->template_length))
+        return false;
+    for (i = 0U; i < 4U; ++i) {
+        MinicType type;
+        if (b[i].operand_index != i || b[i].value >= fn->value_count ||
+            b[i].has_fixed_register_binding || b[i].early_clobber ||
+            b[i].kind != (i == 0U ? MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT
+                                   : MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT))
+            return false;
+        type = fn->values[b[i].value].type;
+        if (i == 0U && !minic_type_pointee(type, &type)) return false;
+        if (!minic_x86_64_scalar_width(program, target, type, &bytes, &sign) ||
+            bytes != 8U || !minic_type_is_integer(type)) return false;
+    }
+    /* Select register alternatives for GNU rm, never RDX. */
+    if (!x86_value_load(out, frame, b[2].value, "%r10") ||
+        !x86_value_load(out, frame, b[3].value, "%r11") ||
+        !x86_value_load(out, frame, b[1].value, "%rax") ||
+        fputs("  mulq %r10\n  divq %r11\n", out) == EOF ||
+        !x86_value_load(out, frame, b[0].value, "%r10") ||
+        fprintf(out, "  movq %%rax, (%%r10)\n") < 0)
+        return false;
+    return true;
+}
+
 static bool emit_memory_clobber_matched(
     FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicX86Frame *frame,
@@ -131,6 +172,8 @@ bool minic_x86_64_emit_structured_asm(
     if (info->has_memory_clobber)
         return emit_memory_clobber_matched(
             out, program, target, fn, frame, ins, info);
+    if (ins->value.structured_inline_asm.operand_count == 4U)
+        return emit_muldiv_u64(out, program, target, fn, frame, ins, info);
     if (ins->value.structured_inline_asm.operand_count != 8U)
         return false;
     cpuid = info->template_length == 5U &&

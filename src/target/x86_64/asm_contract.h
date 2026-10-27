@@ -7,5 +7,6 @@
 bool minic_x86_64_qualify_inline_asm(
     const MinicC0Program *, const MinicInlineAsm *, MinicTargetInlineAsmContract *);
 bool minic_x86_64_asm_mulacc_template(const char *, size_t);
+bool minic_x86_64_asm_muldiv_template(const char *, size_t);
 bool minic_x86_64_asm_matched_template(const char *, size_t, size_t);
 #endif

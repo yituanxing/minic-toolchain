@@ -34,6 +34,27 @@ bool minic_x86_64_asm_mulacc_template(const char *template_text,
     return strcmp(text, expected) == 0;
 }
 
+/* Original Linux mul_u64_u64_div_u64:
+ *   asm("mulq %2; divq %3" : "=a"(q)
+ *       : "a"(a), "rm"(mul), "rm"(div) : "rdx");
+ * Admit one exact machine sequence, never generic executable template
+ * passthrough with unchecked physical clobbers. The machine emitter chooses
+ * the register alternative for both rm inputs and keeps RDX out of inputs. */
+bool minic_x86_64_asm_muldiv_template(const char *text, size_t length) {
+    static const char expected[] = "mulq%2;divq%3";
+    char normalized[64];
+    size_t i, j = 0U;
+    if (!text || length >= sizeof(normalized)) return false;
+    for (i = 0U; i < length; ++i) {
+        const char c = text[i];
+        if (c == ' ' || c == '\t' || c == '\r' || c == '\n') continue;
+        if (j + 1U >= sizeof(normalized)) return false;
+        normalized[j++] = c;
+    }
+    normalized[j] = '\0';
+    return strcmp(normalized, expected) == 0;
+}
+
 /* The GNU =r + matched-digit family owns only explicit register operands.
  * No hidden target machine registers, jumps, labels, function calls or
  * directives. Every template instruction is made of a conservative x86
@@ -79,7 +100,7 @@ bool minic_x86_64_asm_matched_template(const char *template_text,
 }
 
 static bool qualified(const MinicC0Program *program,
-                      const MinicInlineAsm *src, bool *is_mulacc) {
+                      const MinicInlineAsm *src, bool *is_mulacc, bool *is_muldiv) {
     static const char *const cpuid_out[4] = {"=a","=b","=c","=d"};
     static const char *const cpuid_in[4] = {"0","1","2","3"};
     static const char *const mul_in[5] = {"0","1","2","a","m"};
@@ -88,7 +109,9 @@ static bool qualified(const MinicC0Program *program,
     MinicType normalized;
     if (!program || !src || !src->template_text || !src->outputs ||
         !src->inputs || src->is_goto || src->label_count != 0U ||
-        !is_mulacc) return false;
+        !is_mulacc || !is_muldiv) return false;
+    *is_mulacc = false;
+    *is_muldiv = false;
     if (src->output_count == 4U && src->input_count == 4U &&
         src->clobber_count == 0U && src->register_clobber_count == 0U &&
         !src->has_memory_clobber && src->template_length == 5U &&
@@ -114,6 +137,16 @@ static bool qualified(const MinicC0Program *program,
                 !c_is(&src->inputs[i], mul_in[i])) return false;
         if (!c_is(&src->inputs[3], "a") ||
             !c_is(&src->inputs[4], "m")) return false;
+    } else if (src->output_count == 1U && src->input_count == 3U &&
+               src->clobber_count == 1U && src->register_clobber_count == 1U &&
+               !src->has_memory_clobber && src->register_clobbers &&
+               clobber_is(&src->register_clobbers[0], "rdx") &&
+               minic_x86_64_asm_muldiv_template(src->template_text, src->template_length) &&
+               c_is(&src->outputs[0], "=a") &&
+               c_is(&src->inputs[0], "a") &&
+               c_is(&src->inputs[1], "rm") &&
+               c_is(&src->inputs[2], "rm")) {
+        *is_muldiv = true;
     } else if (src->is_volatile && src->has_memory_clobber &&
                src->clobber_count == 1U &&
                src->register_clobber_count == 0U &&
@@ -143,9 +176,12 @@ static bool qualified(const MinicC0Program *program,
         const MinicType target_type =
             *is_mulacc ? minic_type_unsigned_long() : minic_type_unsigned_int();
         if (!expr || !minic_type_unqualified(expr->type, &normalized) ||
-            (generic ? (!minic_type_is_integer(normalized) &&
-                        !minic_type_is_pointer(normalized))
-                     : !minic_type_equal(normalized, target_type)) ||
+            (*is_muldiv
+                ? (!minic_type_equal(normalized, minic_type_unsigned_long()) &&
+                   !minic_type_equal(normalized, minic_type_unsigned_long_long()))
+                : generic ? (!minic_type_is_integer(normalized) &&
+                             !minic_type_is_pointer(normalized))
+                          : !minic_type_equal(normalized, target_type)) ||
             (is_output && (expr->value_category != MINIC_VALUE_LVALUE ||
                            minic_type_is_const(expr->type))) ||
             (*is_mulacc && i == 7U &&
@@ -158,9 +194,10 @@ static bool qualified(const MinicC0Program *program,
 bool minic_x86_64_qualify_inline_asm(
     const MinicC0Program *program, const MinicInlineAsm *source,
     MinicTargetInlineAsmContract *contract) {
-    bool is_mulacc = false;
+    bool is_mulacc = false, is_muldiv = false;
     size_t i, count;
-    if (!contract || !qualified(program, source, &is_mulacc)) return false;
+    if (!contract || !qualified(program, source, &is_mulacc, &is_muldiv)) return false;
+    (void)is_muldiv; /* all four mul/div operand roles are scalar/register */
     count = source->output_count + source->input_count;
     if (count > MINIC_CORE_STRUCTURED_INLINE_ASM_OPERAND_LIMIT) return false;
     contract->operand_count = count;

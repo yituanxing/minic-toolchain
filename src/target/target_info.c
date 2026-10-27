@@ -755,8 +755,12 @@ bool minic_target_info_inline_asm_register_clobber_supported(const MinicTargetIn
     /* x86 only: the core and machine backends independently check that
      * flags and RDX are genuinely clobbered, and preserve SysV RBX. */
     if (target->architecture == MINIC_TARGET_ARCH_X86_64)
-        return name_length == 2U &&
-               (memcmp(name, "cc", 2U) == 0 || memcmp(name, "dx", 2U) == 0);
+        return (name_length == 2U &&
+                (memcmp(name, "cc", 2U) == 0 || memcmp(name, "dx", 2U) == 0)) ||
+               (name_length == 3U && memcmp(name, "rdx", 3U) == 0);
+    /* rdx is the same physical register as dx, but permitting the GNU
+     * spelling is not sufficient: the x86 backend requalifies the entire
+     * mulq/divq output/input/clobber contract before emitting it. */
     if (target->architecture == MINIC_TARGET_ARCH_RISCV32) {
         /* Admission is separate from allocation: an explicit t-register
          * clobber must be respected by the RV32 source-asm register planner.
