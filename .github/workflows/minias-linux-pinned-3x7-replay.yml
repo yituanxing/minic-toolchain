@@ -3,6 +3,7 @@ name: MiniAS Immutable Linux 3x7 GNU Kbuild S Replay
 # Frozen original Linux 6.6.143 inputs. Discovery, NOT P1/parity.
 # LoongArch focused exact-head seven shards after GNU IOCSR/TLB/CFI/conditional batch.
 # One grouped LoongArch exact-head replay after LSX/LASX vector, FCSR, INVTLB, LI.W and dual-relocation LA.PCREL.
+# Final same-config LoongArch seven-shard census after verified LSX logic/FPR and variable-length GNU LI.W/LI.D ISA families.
 # Discovery is assembly generation only, not GNU ELF object parity nor Linux P1.
 # Re-measure AArch64 target post-LSE + cross-section PREL32 + PRFM/.inst
 # against all 4140 frozen original GNU Kbuild .s, seven shards one head.
