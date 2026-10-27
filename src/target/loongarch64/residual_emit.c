@@ -57,6 +57,33 @@ bool minic_loongarch64_emit_residual_instruction(
     dynamic_frame = ctx->dynamic_frame;
     *needs_writeback = true;
         switch (ins->kind) {
+        case MINIC_CORE_INSTRUCTION_FIXED_REGISTER_READ: {
+            const MinicCoreFixedRegisterBinding *binding;
+            const char *physical;
+            /* Same common typed Core instruction already used by x86,
+             * AArch64 and RV, with target-owned LoongArch register spelling
+             * and LP64D SSA writeback. Read LIVE TP or SP, never emit an ELF
+             * global or silently virtualize the thread pointer. Dynamic
+             * stack frames are not qualified for a live-SP read yet. */
+            if (dynamic_frame ||
+                !minic_multi_direct_fixed_register_read_shape(
+                    program, target, fn, ins, &binding) ||
+                binding->register_name_length != 3U)
+                return minic_multi_direct_machine_reject(
+                    fn, "loongarch64", name, "fixed_register_read",
+                    reject_block, reject_ins, __LINE__);
+            if (memcmp(binding->register_name, "$tp", 3U) == 0)
+                physical = "$tp";
+            else if (memcmp(binding->register_name, "$sp", 3U) == 0)
+                physical = "$sp";
+            else
+                return minic_multi_direct_machine_reject(
+                    fn, "loongarch64", name, "fixed_register_read",
+                    reject_block, reject_ins, __LINE__);
+            if (fprintf(out, "  move $t0, %s\n", physical) < 0)
+                return false;
+            break;
+        }
         case MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT: {
             size_t width = 0U;
             bool sign = false;
