@@ -145,7 +145,8 @@ SRC
           constraint) asm='__asm__ __volatile__("dbar %0" : : "r"(18) : "memory");' ;;
           nonconstant) asm='__asm__ __volatile__("dbar %0" : : "I"(v) : "memory");' ;;
         esac
-        printf 'void invalid(int v) { %s }\n' "$asm" > "$work/dbar-$invalid.i"
+        printf 'void invalid(int v) { %s }\nint main(void) { invalid(18); return 0; }\n' \
+            "$asm" > "$work/dbar-$invalid.i"
         if "$MINIC_CC" --target=loongarch64-linux -S "$work/dbar-$invalid.i" \
             -o "$work/dbar-$invalid.s" >"$work/dbar-$invalid.out" \
             2>"$work/dbar-$invalid.err"; then
@@ -153,7 +154,18 @@ SRC
             exit 1
         fi
     done
-    echo 'MINIC_LOONGARCH64_DBAR_GNU_QEMU=PASS tested=1 rejected=3'
+    cat > "$work/dbar-max.i" <<'SRC'
+static void barrier(void) {
+    __asm__ __volatile__("dbar %0" : : "I"(0x700) : "memory");
+}
+int main(void) { barrier(); return 0; }
+SRC
+    "$MINIC_CC" --target=loongarch64-linux -S "$work/dbar-max.i" \
+        -o "$work/dbar-max.s"
+    grep -Fq 'dbar 1792' "$work/dbar-max.s"
+    "$cross_cc" -x assembler "$work/dbar-max.s" -o "$work/dbar-max.elf"
+    qemu-loongarch64 -L /usr/loongarch64-linux-gnu "$work/dbar-max.elf"
+    echo 'MINIC_LOONGARCH64_DBAR_GNU_QEMU=PASS tested=2 rejected=3'
 fi
 
 # Architecture-specific machine syntax is still owned by real GNU AS.

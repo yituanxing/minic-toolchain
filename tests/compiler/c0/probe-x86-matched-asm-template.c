@@ -38,6 +38,6 @@ int main(void) {
     failed += probe("movq %0,%1\n\tud2", 2, false);
     failed += probe("movq %0,%1\n\taddq %1,%0", 1, false);
     if (failed != 0) return 1;
-    puts("MINIC_X86_MATCHED_GNU_TEMPLATE_SECURITY=PASS cases=25");
+    puts("MINIC_X86_MATCHED_GNU_TEMPLATE_SECURITY=PASS cases=24");
     return 0;
 }

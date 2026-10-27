@@ -9,7 +9,7 @@
  * Only one exact operand/template family is admitted, never arbitrary GNU
  * instruction-string passthrough. */
 static bool loongarch64_dbar_hint(int64_t hint) {
-    return hint >= 0 && hint <= 4095;
+    return hint >= 0 && hint <= 2047;
 }
 static bool loongarch64_dbar_template(const char *text, size_t length) {
     static const char prefix[] = "dbar %0";

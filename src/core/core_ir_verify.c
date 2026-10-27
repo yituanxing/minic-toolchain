@@ -652,16 +652,23 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
         if (instruction->result != MINIC_CORE_VALUE_INVALID ||
             !minic_type_is_void(instruction->type) ||
             instruction->value.structured_inline_asm.inline_asm_id >= function->inline_asm_count ||
-            instruction->value.structured_inline_asm.operand_count == 0U ||
             instruction->value.structured_inline_asm.operand_count >
                 MINIC_CORE_STRUCTURED_INLINE_ASM_OPERAND_LIMIT) {
             return false;
         }
         inline_asm = &function->inline_asms[
             instruction->value.structured_inline_asm.inline_asm_id];
-        if (inline_asm->template_text == NULL || !inline_asm->is_volatile) {
+        if (inline_asm->template_text == NULL ||
+            inline_asm->template_length == 0U || !inline_asm->is_volatile) {
             return false;
         }
+        /* Zero-operand structured ASM represents an effect only, never an
+         * SSA value. Its one required memory-clobber effect does not itself
+         * qualify the machine instruction: the target must still re-check
+         * the full exact hardware fence template before emission. */
+        if (instruction->value.structured_inline_asm.operand_count == 0U)
+            return inline_asm->has_memory_clobber &&
+                   inline_asm->register_clobber_count == 0U;
         for (operand_index = 0U;
              operand_index < instruction->value.structured_inline_asm.operand_count;
              ++operand_index) {
