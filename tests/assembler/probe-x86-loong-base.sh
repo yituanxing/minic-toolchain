@@ -159,7 +159,7 @@ entry_x:
     cmove overflowuid(%rip), %edx
     cmovgq ext_global(%rip), %r8
     cmovl 8(%rsp,%r12,4), %r9d
-    cmovw -8(%rbp), %r11w
+    cmovew -8(%rbp), %r11w
     bsf ext_global(%rip), %rax
     bsfl 8(%rdi,%r8,2), %eax
     bsrq 8(%r12), %r13
