@@ -552,6 +552,84 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
                     goto done;
                 }
     }
+    /* LSX and LASX share the r0/r5/r10 register encoding but have
+     * distinct architecture opcodes and register classes. The assembler
+     * accepts ISA extensions independently of MiniC's emission subset. */
+    if(n==3U && la_special_reg(t[0],"$xr",31U,&rd) &&
+       la_special_reg(t[1],"$xr",31U,&rj) &&
+       la_special_reg(t[2],"$xr",31U,&rk)) {
+        static const struct {const char *name;uint32_t opcode;} lasx[]={
+            {"xvand.v",UINT32_C(0x75260000)},
+            {"xvor.v",UINT32_C(0x75268000)},
+            {"xvxor.v",UINT32_C(0x75270000)},
+            {"xvnor.v",UINT32_C(0x75278000)},
+            {"xvandn.v",UINT32_C(0x75280000)},
+            {"xvorn.v",UINT32_C(0x75288000)}
+        };
+        for(i=0U;i<sizeof(lasx)/sizeof(lasx[0]);++i)
+            if(!strcmp(s->op,lasx[i].name)) {
+                m->count=3U;
+                m->encoding=lasx[i].opcode|(rk<<10U)|(rj<<5U)|rd;
+                goto done;
+            }
+    }
+    /* Signed LSX compare-immediate u/s5 family, not a GPR comparison. */
+    if(n==3U && la_special_reg(t[0],"$vr",31U,&rd) &&
+       la_special_reg(t[1],"$vr",31U,&rj)) {
+        static const struct {const char *name;uint32_t opcode;} cmp[]={
+            {"vslti.b",UINT32_C(0x72860000)},
+            {"vslti.h",UINT32_C(0x72868000)},
+            {"vslti.w",UINT32_C(0x72870000)},
+            {"vslti.d",UINT32_C(0x72878000)}
+        };
+        static const struct {const char *name;uint32_t opcode;
+                             unsigned max_shift;} shifts[]={
+            {"vslli.b",UINT32_C(0x732c2000),7U},
+            {"vslli.h",UINT32_C(0x732c4000),15U},
+            {"vslli.w",UINT32_C(0x732c8000),31U},
+            {"vslli.d",UINT32_C(0x732d0000),63U},
+            {"vsrli.b",UINT32_C(0x73302000),7U},
+            {"vsrli.h",UINT32_C(0x73304000),15U},
+            {"vsrli.w",UINT32_C(0x73308000),31U},
+            {"vsrli.d",UINT32_C(0x73310000),63U},
+            {"vsrai.b",UINT32_C(0x73342000),7U},
+            {"vsrai.h",UINT32_C(0x73344000),15U},
+            {"vsrai.w",UINT32_C(0x73348000),31U},
+            {"vsrai.d",UINT32_C(0x73350000),63U}
+        };
+        int64_t imm;
+        if(minias_eval_i64_expression(t[2],&imm)) {
+            if(imm>=-16 && imm<=15)
+                for(i=0U;i<sizeof(cmp)/sizeof(cmp[0]);++i)
+                    if(!strcmp(s->op,cmp[i].name)) {
+                        m->count=3U;
+                        m->encoding=cmp[i].opcode|
+                            (((uint32_t)imm&31U)<<10U)|(rj<<5U)|rd;
+                        goto done;
+                    }
+            if(imm>=0)
+                for(i=0U;i<sizeof(shifts)/sizeof(shifts[0]);++i)
+                    if(!strcmp(s->op,shifts[i].name) &&
+                       (uint64_t)imm<=shifts[i].max_shift) {
+                        m->count=3U;
+                        m->encoding=shifts[i].opcode|
+                            ((uint32_t)imm<<10U)|(rj<<5U)|rd;
+                        goto done;
+                    }
+        }
+    }
+    /* FCC-to-GPR: condition register is u3 in r5, GPR is r0. */
+    if(n==2U && !strcmp(s->op,"movcf2gr") &&
+       la_reg(t[0],&rd) &&
+       la_special_reg(t[1],"$fcc",7U,&rj)) {
+        m->count=2U;
+        m->encoding=UINT32_C(0x0114dc00)|(rj<<5U)|rd;
+        m->operands[0].kind=MINIAS_MC_REGISTER;
+        m->operands[0].reg=rd;
+        m->operands[1].kind=MINIAS_MC_REGISTER;
+        m->operands[1].reg=rj;
+        goto done;
+    }
     if(n==3U && !strcmp(s->op,"invtlb") &&
        la_reg(t[1],&rj) && la_reg(t[2],&rk)) {
         uint64_t operation;
