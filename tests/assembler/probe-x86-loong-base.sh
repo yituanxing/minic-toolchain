@@ -126,6 +126,7 @@ entry_x:
     xchgl %eax, 24(%rbx)
     xchgl %eax, ext_global(%rip)
     # GNU base+symbol disp32S; no RIP-relative alias or dummy addend.
+    movq __per_cpu_offset(%rdi), %rax
     movq kmalloc_caches+48(%rax), %rdi
     movq pcpu_hot+32(%r12), %r10
     addq %r8, glob_index+8(%r13,%r10,4)
@@ -773,8 +774,7 @@ cmp "$work/la-gnu.bin" "$work/la-mini.bin"
 grep -q 'LoongArch' "$work/la-header.txt"
 grep -q '0x43' "$work/la-header.txt"
 
-for bad in 'movq __per_cpu_offset(%rdi),%rax' \
-           'adcl %rax,%eax' \
+for bad in 'adcl %rax,%eax' \
            'negb %eax' \
            'negw %eax' \
            'divw %rax' \
