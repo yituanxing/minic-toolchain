@@ -297,6 +297,8 @@ local_probe:
     .comm common_implicit,3
     .comm common_symbol,24,8
     .comm common_symbol,32,16
+    # GNU retains GLOBAL COMMON even if a late .local appears.
+    .local common_symbol
     .local local_comm_symbol
     .comm local_comm_symbol,4,4
     .data

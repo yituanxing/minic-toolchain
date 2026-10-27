@@ -1048,8 +1048,13 @@ static bool handle_symbol_list(MiniAs *as,
                 return false;
             }
             if (binding) {
-                symbol->bind = bind;
-                symbol->explicit_local_binding = bind == MINIAS_STB_LOCAL;
+                /* GNU GAS: a late .local never turns an already-declared
+                 * SHN_COMMON global into a local COMMON ELF symbol. */
+                if (!(bind == MINIAS_STB_LOCAL && symbol->defined &&
+                      symbol->section == MINIAS_SECTION_COMMON)) {
+                    symbol->bind = bind;
+                    symbol->explicit_local_binding = bind == MINIAS_STB_LOCAL;
+                }
             }
             if (set_visibility) {
                 symbol->visibility = visibility;
@@ -3110,7 +3115,7 @@ static bool parse_comm(MiniAs *as, const char *args, size_t line) {
     }
     if((alignment&(alignment-1U))!=0U)goto invalid;
     symbol=minias_get_symbol(as,name,true);
-    if(!symbol)return false;
+    if(!symbol){free(copy);return false;}
     if(symbol->alias_pending || symbol->type==MINIAS_STT_FUNC ||
        symbol->bind==MINIAS_STB_WEAK)goto invalid;
     if(symbol->defined) {
