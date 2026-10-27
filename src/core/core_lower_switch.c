@@ -930,6 +930,12 @@ minic_core_lower_switch(MinicCoreLowerContext *context, const MinicStatement *st
         return status;
     }
 
+    if (getenv("MINIC_SWITCH_TRACE") &&
+        context->source_function &&
+        strcmp(context->source_function->name, "suffix_after_return") == 0)
+        fprintf(stderr, "MINIC_SWITCH_TRACE stage=entry selected=%zu labels=%zu pre=%zu\n",
+                constant_entry_label, label_count, pre_case_label_count);
+
     /* A constant switch has one real source entry. Prior case segments
      * cannot be reached by ordinary forward fallthrough. Skip their C
      * lowering only if NO named label anywhere in the dead prefix has an
@@ -1137,6 +1143,13 @@ minic_core_lower_switch(MinicCoreLowerContext *context, const MinicStatement *st
                 return status;
             }
         }
+        if (getenv("MINIC_SWITCH_TRACE") &&
+            context->source_function &&
+            strcmp(context->source_function->name, "suffix_after_return") == 0)
+            fprintf(stderr, "MINIC_SWITCH_TRACE stage=case index=%zu selected=%zu term=%d break=%zu reentry=%zu pre=%zu prune=%d\n",
+                    source_index, constant_entry_label,
+                    segment_terminated, break_index, reentry_index,
+                    pre_case_label_count, prune_constant_suffix);
         segment_terminates[source_index] = segment_terminated;
         segment_breaks[source_index] =
             break_index != SIZE_MAX ||
