@@ -280,7 +280,16 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
          * 0F B6/B7 zero-extension and 63 sign-extension. */
         {"movzbl",0,0x1b6U,false},{"movzbq",0,0x1b6U,true},
         {"movzwl",0,0x1b7U,false},{"movzwq",0,0x1b7U,true},
-        {"movslq",0,0x63U,true}
+        {"movslq",0,0x63U,true},
+        /* Explicit scalar widths, all reuse typed ModR/M, SIB and Fixup. */
+        {"movb",0x88U,0x8aU,false},{"cmpb",0x38U,0x3aU,false},
+        {"testb",0x84U,0x84U,false},{"addb",0x00U,0x02U,false},
+        {"subb",0x28U,0x2aU,false},{"andb",0x20U,0x22U,false},
+        {"orb",0x08U,0x0aU,false},{"xorb",0x30U,0x32U,false},
+        {"movw",0x89U,0x8bU,false},{"cmpw",0x39U,0x3bU,false},
+        {"testw",0x85U,0x85U,false},{"addw",0x01U,0x03U,false},
+        {"subw",0x29U,0x2bU,false},{"andw",0x21U,0x23U,false},
+        {"orw",0x09U,0x0bU,false},{"xorw",0x31U,0x33U,false}
     };
     MiniAsMCInst *m=calloc(1U,sizeof(*m)+3U*sizeof(MiniAsMCOperand));
     unsigned i, rs, rd;
@@ -752,19 +761,35 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
     if (x64_args2(s->args,src,dst) &&
         (x64_is_mem_candidate(src) || x64_is_mem_candidate(dst))) {
         MiniAsMCMemory parsed;
-        unsigned r;
-        bool wide, memory_source;
+        unsigned r, reg_bits=0U;
+        bool wide=false, memory_source;
         const unsigned *chosen = NULL;
         if (x64_register(src,&r,&wide) &&
             x64_parse_base_memory(dst,&parsed)) {
-            memory_source=false;
+            memory_source=false;reg_bits=wide?64U:32U;
+        } else if (x64_register8(src,&r) &&
+                   x64_parse_base_memory(dst,&parsed)) {
+            memory_source=false;reg_bits=8U;
+        } else if (x64_register16(src,&r) &&
+                   x64_parse_base_memory(dst,&parsed)) {
+            memory_source=false;reg_bits=16U;
         } else if (x64_register(dst,&r,&wide) &&
                    x64_parse_base_memory(src,&parsed)) {
-            memory_source=true;
+            memory_source=true;reg_bits=wide?64U:32U;
+        } else if (x64_register8(dst,&r) &&
+                   x64_parse_base_memory(src,&parsed)) {
+            memory_source=true;reg_bits=8U;
+        } else if (x64_register16(dst,&r) &&
+                   x64_parse_base_memory(src,&parsed)) {
+            memory_source=true;reg_bits=16U;
         } else goto invalid;
         for (i=0U;i<sizeof(regmem)/sizeof(regmem[0]);++i) {
-            if (strcmp(s->op,regmem[i].op)==0 &&
-                wide==regmem[i].wide) {
+            char suffix=s->op[strlen(s->op)-1U];
+            if(strcmp(s->op,regmem[i].op)==0 &&
+               wide==regmem[i].wide &&
+               (suffix=='b'?reg_bits==8U:
+                suffix=='w'?reg_bits==16U:
+                suffix=='q'?reg_bits==64U:reg_bits==32U)) {
                 if((!strcmp(s->op,"leaq")||!strcmp(s->op,"leal") ||
                     !strcmp(s->op,"movzbl") || !strcmp(s->op,"movzbq") ||
                     !strcmp(s->op,"movzwl") || !strcmp(s->op,"movzwq") ||
@@ -773,7 +798,7 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
                 break;
             }
         }
-        if (!chosen) {free(parsed.symbol);goto invalid;}
+        if (!chosen || *chosen==0U) {free(parsed.symbol);goto invalid;}
         m->operands[1].memory=malloc(sizeof(parsed));
         if (!m->operands[1].memory) {
             minias_set_error(as,"out-of-memory:x86_64-mc-memory");
@@ -781,9 +806,12 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
         }
         *m->operands[1].memory=parsed;
         m->opcode=X64_REG_MEMORY; m->count=2U;
+        /* Target-local encoding flags: 0x100=two-byte opcode,
+         * 0x200=low-byte REX mode, 0x400=66 word-size override. */
         m->encoding=*chosen |
             ((!strncmp(s->op,"bt",2U) || !strncmp(s->op,"xadd",4U)) ?
-             0x100U : 0U);
+             0x100U : 0U) |
+            (reg_bits==8U?0x200U:reg_bits==16U?0x400U:0U);
         m->operands[0].kind=MINIAS_MC_REGISTER;
         m->operands[0].reg=r;
         m->operands[0].register_64=wide;
@@ -844,9 +872,12 @@ static bool x64_measure(MiniAs *as,const MiniAsStmt *s,uint32_t *size) {
             const MiniAsMCMemory *mem=m->operands[1].memory;
             unsigned extra=m->opcode==X64_IMM_MEMORY?
                 (m->encoding==0x83U || m->encoding==0xc6U || m->encoding==0x80U || m->encoding==0xf6U?1U:4U):0U;
-            *size=extra+(m->encoding>=0x100U?1U:0U) +
+            *size=extra+((m->encoding&0x100U)?1U:0U) +
+                  ((m->encoding&0x400U)?1U:0U) +
                   (mem->address_space?1U:0U) + (m->operands[0].register_64 ||
-                   m->operands[0].reg>=8U || mem->base>=8U ||
+                   m->operands[0].reg>=8U ||
+                   ((m->encoding&0x200U) && m->operands[0].reg>=4U) ||
+                   mem->base>=8U ||
                    (mem->has_index && mem->index>=8U)?1U:0U) +
                   2U + (((mem->address_space && !mem->pc_relative) ||
                           mem->has_index || (mem->base&7U)==4U)?1U:0U) +
@@ -1028,7 +1059,7 @@ static bool x64_encode(MiniAs *as,const MiniAsStmt *s) {
                 code[n++]=(unsigned char)(m->encoding>=0x100U?
                     0x70U|(m->encoding&15U):0xebU);
             }else {
-                if(m->encoding>=0x100U)code[n++]=0x0fU;
+                if(m->encoding&0x100U)code[n++]=0x0fU;
                 code[n++]=(unsigned char)m->encoding;
             }
             if(local) {
@@ -1074,8 +1105,11 @@ static bool x64_encode(MiniAs *as,const MiniAsStmt *s) {
             uint32_t disp=(uint32_t)mem->displacement;
             if(mem->address_space)
                 code[n++]=(unsigned char)(mem->address_space==1U?0x64U:0x65U);
+            if(m->encoding&0x400U)code[n++]=0x66U;
             r=m->operands[0].reg;
-            if (m->operands[0].register_64 || r>=8U || mem->base>=8U ||
+            if (m->operands[0].register_64 || r>=8U ||
+                ((m->encoding&0x200U) && r>=4U) ||
+                mem->base>=8U ||
                 (mem->has_index && mem->index>=8U))
                 code[n++]=(unsigned char)(0x40U |
                     (m->operands[0].register_64?8U:0U) |
