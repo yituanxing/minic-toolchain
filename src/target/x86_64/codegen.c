@@ -204,11 +204,6 @@ static bool x86_visit_function(
     const MinicCoreObjectStoragePlan *storage, size_t index,
     bool function_sections, void *opaque) {
     const MinicX86VisitContext *ctx = opaque;
-    if (decl->alias_target != MINIC_FUNCTION_INVALID) {
-        x86_error(ctx->diagnostic, ctx->path,
-                  "x86-64 function alias not implemented yet");
-        return false;
-    }
     return x86_emit_function(out, program, target, decl, fn, facts, storage, index,
                              function_sections, ctx->diagnostic, ctx->path);
 }

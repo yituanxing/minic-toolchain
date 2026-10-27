@@ -78,6 +78,7 @@ bool minic_aarch64_write_c0_program_with_core_functions(
     static const MinicMultiDirectProgramConfig config = {
         MINIC_TARGET_ARCH_AARCH64, "aarch64", "AArch64",
         ".section .note.GNU-stack,\"\",%progbits\n",
+        "%function", "%object",
         aarch64_emit_function, minic_aarch64_legalize_large_sp_memory
     };
     return minic_multi_direct_write_program(

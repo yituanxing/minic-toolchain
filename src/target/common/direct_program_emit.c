@@ -63,8 +63,7 @@ static bool direct_visit_global(
     else if (obj->alias_target != MINIC_GLOBAL_OBJECT_INVALID)
         success = minic_multi_elf_emit_object_alias(
             out, program, obj,
-            ctx->config->architecture == MINIC_TARGET_ARCH_AARCH64
-                ? "%object" : "@object");
+            ctx->config->elf_object_type);
     if (!success && getenv("MINIC_M1_TRACE") != NULL) {
         const MinicArrayType *array = minic_type_is_array(obj->type)
             ? minic_c0_program_array_type(program, obj->type.array_type_id) : NULL;
@@ -115,15 +114,13 @@ static bool direct_between(
     const MinicCoreFunction *functions, size_t function_count,
     bool function_sections, void *opaque) {
     const MinicDirectVisitContext *ctx = opaque;
-    const char *type_name;
     if (ctx == NULL || ctx->config == NULL)
         return false;
-    type_name = ctx->config->architecture == MINIC_TARGET_ARCH_AARCH64
-        ? "%function" : "@function";
     return minic_program_emit_source_file_asm_stage(
                out, program, target, functions, function_count,
                function_sections, opaque) &&
-           minic_multi_elf_emit_function_aliases(out, program, type_name);
+           minic_multi_elf_emit_function_aliases(
+               out, program, ctx->config->elf_function_type);
 }
 
 static bool direct_finalize(const char *path, const MinicTargetInfo *target,
@@ -146,6 +143,7 @@ bool minic_multi_direct_write_program(
 
     if (config == NULL || config->architecture_name == NULL ||
         config->display_name == NULL || config->gnu_stack_note == NULL ||
+        config->elf_function_type == NULL || config->elf_object_type == NULL ||
         config->emit_function == NULL)
         return false;
     if (path == NULL || program == NULL || target == NULL ||

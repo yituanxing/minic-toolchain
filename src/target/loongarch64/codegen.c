@@ -74,6 +74,7 @@ bool minic_loongarch64_write_c0_program_with_core_functions(
     static const MinicMultiDirectProgramConfig config = {
         MINIC_TARGET_ARCH_LOONGARCH64, "loongarch64", "LoongArch64",
         ".section .note.GNU-stack,\"\",@progbits\n",
+        "@function", "@object",
         loongarch64_emit_function, NULL
     };
     return minic_multi_direct_write_program(
