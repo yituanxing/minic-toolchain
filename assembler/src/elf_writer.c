@@ -150,6 +150,8 @@ static bool minias_write_elf(MiniAs *as,
             output->section_index = SHN_UNDEF;
         } else if (input->section == MINIAS_SECTION_ABS) {
             output->section_index = SHN_ABS;
+        } else if (input->section == MINIAS_SECTION_COMMON) {
+            output->section_index = SHN_COMMON;
         } else if (input->section < 0 ||
                    (size_t)input->section >= as->section_count ||
                    (size_t)input->section + 1U > UINT16_MAX) {

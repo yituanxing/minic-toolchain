@@ -26,6 +26,7 @@
 
 #define MINIAS_SECTION_UNDEF (-1)
 #define MINIAS_SECTION_ABS (-2)
+#define MINIAS_SECTION_COMMON (-3) /* semantic ELF SHN_COMMON */
 #define MINIAS_MAX_ERROR 256U
 
 typedef struct MiniAsSection {
@@ -62,6 +63,7 @@ typedef struct MiniAsSymbol {
     uint32_t subsection;
     bool defined;
     bool alias_pending;
+    bool explicit_local_binding; /* .local before .comm denotes real BSS */
     size_t alias_target_index;
     int64_t alias_addend;
     size_t alias_line;
@@ -411,6 +413,7 @@ typedef struct MiniAsTargetOps {
     unsigned word_directive_width; /* zero: 4, x86 GNU .word: 2 */
     unsigned inst_directive_width; /* optional raw target ISA .inst datum */
     bool align_directive_bytes;   /* x86 GNU .align: bytes, RISC-V/A64: power 2 */
+    unsigned common_default_alignment_cap; /* 0: require explicit .comm alignment */
     MiniAsFixupKind dot_relative_fixup; /* zero or target PC-relative fixup */
 } MiniAsTargetOps;
 

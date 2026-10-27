@@ -433,3 +433,18 @@ x86-only descriptor must not change MCInst/ELF/layout ownership. Common
 `.comm`/SHN_COMMON and forward-dependent `.skip` need a symbol/layout
 solution shared by every ISA, not x86-specific exceptions. Frozen Linux
 assembly discovery cannot establish GNU object parity or a linked Linux P1.
+
+
+## Common .comm ELF architecture contract
+
+A GNU `.comm` is a semantic `SHN_COMMON` symbol, with `st_value` equal
+to alignment and `st_size` equal to the tentative size, not a fake BSS
+section allocation. Explicit `.local` before `.comm` creates real BSS via
+Common alignment/data fragments while preserving the caller's current
+section. Duplicate global COMMON declarations retain first size and maximum
+alignment (GNU GAS behavior). x86 GNU's implicit alignment is recorded in
+the TargetInfo extension rather than hard-coded in the Common parser;
+other targets reject unverified default alignment rules. GNU `readelf -Ws`
+parity checks guard section index, binding, size, alignment and local BSS.
+No new ELF backend or target-specific symbol table. The forward-dependent
+`.skip` issue still requires a separate correct layout solution.

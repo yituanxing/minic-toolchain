@@ -272,6 +272,13 @@ local_probe:
     # GNU x86 SysV: .word is TWO bytes, unlike A64/RISC-V .word.
     .align 16
     .word 0x1234
+    .comm common_implicit,3
+    .comm common_symbol,24,8
+    .comm common_symbol,32,16
+    .local local_comm_symbol
+    .comm local_comm_symbol,4,4
+    .data
+    .quad common_symbol
 ASM_X
 if ! "$MINIAS" --target=x86_64 -march=x86-64 -mabi=sysv -o "$work/x86-mini.o" "$work/x86.s" >"$work/x86.stdout" 2>"$work/x86.stderr"; then
     echo 'MINIAS_X86_PARSE_OR_ENCODE_FAIL' >&2
@@ -289,6 +296,14 @@ objcopy -j __minias_bug_table -O binary "$work/x86-mini.o" "$work/x86-mini-bug.b
 objcopy -j __minias_bug_table -O binary "$work/x86-gnu.o" "$work/x86-gnu-bug.bin"
 cmp "$work/x86-mini-bug.bin" "$work/x86-gnu-bug.bin"
 readelf -h "$work/x86-mini.o" | grep -q 'Advanced Micro Devices X86-64'
+readelf -Ws "$work/x86-mini.o" > "$work/x86-mini-symbols.txt"
+readelf -Ws "$work/x86-gnu.o" > "$work/x86-gnu-symbols.txt"
+for symbols in x86-mini x86-gnu; do
+    grep -Eq '0000000000000004 +3 OBJECT +GLOBAL +DEFAULT +COM common_implicit' "$work/$symbols-symbols.txt"
+    grep -Eq '0000000000000010 +24 OBJECT +GLOBAL +DEFAULT +COM common_symbol' "$work/$symbols-symbols.txt"
+    grep -Eq '0000000000000000 +4 OBJECT +LOCAL +DEFAULT +[0-9]+ local_comm_symbol' "$work/$symbols-symbols.txt"
+done
+echo 'MINIAS_COMMON_ELF=PASS SHN_COMMON_size_align_repeat_local_BSS'
 readelf -Wr "$work/x86-mini.o" >"$work/x86-rel.txt"
 grep -q R_X86_64_PLT32 "$work/x86-rel.txt"
 grep -q R_X86_64_PC32 "$work/x86-rel.txt"

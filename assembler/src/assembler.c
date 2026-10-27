@@ -487,6 +487,7 @@ bool minias_add_fixup(MiniAs *as,
     if (symbol == NULL) return false;
     symbol_index = (size_t)(symbol - as->symbols);
     if (!symbol->defined && symbol->bind == MINIAS_STB_LOCAL &&
+        !symbol->explicit_local_binding &&
         strncmp(symbol->name, ".L", 2U) != 0)
         symbol->bind = MINIAS_STB_GLOBAL;
 
@@ -1048,6 +1049,7 @@ static bool handle_symbol_list(MiniAs *as,
             }
             if (binding) {
                 symbol->bind = bind;
+                symbol->explicit_local_binding = bind == MINIAS_STB_LOCAL;
             }
             if (set_visibility) {
                 symbol->visibility = visibility;
@@ -3067,6 +3069,97 @@ static bool define_label(MiniAs *as, char *label, size_t line) {
     return true;
 }
 
+/* Tentative COMMON definitions have ELF st_value=alignment, st_size=length.
+ * Explicit .local symbols instead acquire real .bss space through the
+ * existing Common fragment/section layout and symbol-anchor pipeline. */
+static bool parse_comm(MiniAs *as, const char *args, size_t line) {
+    char *copy=minias_strdup(args);
+    char *name,*size_text,*align_text=NULL,*first,*second;
+    MiniAsSymbol *symbol;
+    uint64_t alignment=1U;
+    int64_t size,alignment_value;
+    size_t k;
+    if(!copy)return false;
+    first=strchr(copy,',');
+    if(!first)goto invalid;
+    *first++='\0';
+    second=strchr(first,',');
+    if(second) {
+        *second++='\0';
+        if(strchr(second,','))goto invalid;
+        align_text=minias_trim(second);
+        if(!*align_text)goto invalid;
+    }
+    name=minias_trim(copy);size_text=minias_trim(first);
+    if(!absolute_symbol_start(*name) || !*size_text)goto invalid;
+    for(k=1U;name[k];++k)
+        if(!absolute_symbol_continue(name[k]))goto invalid;
+    if(!evaluate_absolute_expression(as,size_text,&size) || size<0)
+        goto invalid;
+    if(align_text) {
+        if(!evaluate_absolute_expression(as,align_text,&alignment_value) ||
+           alignment_value<=0)goto invalid;
+        alignment=(uint64_t)alignment_value;
+    } else {
+        /* GNU x86 uses min(nextpow2(size),16). This default is a target
+         * descriptor; unverified target dialects must fail closed. */
+        unsigned cap=as->target->common_default_alignment_cap;
+        if(cap==0U || (cap&(cap-1U))!=0U)goto invalid;
+        while(alignment<(uint64_t)size && alignment<(uint64_t)cap)
+            alignment*=2U;
+    }
+    if((alignment&(alignment-1U))!=0U)goto invalid;
+    symbol=minias_get_symbol(as,name,true);
+    if(!symbol)return false;
+    if(symbol->alias_pending || symbol->type==MINIAS_STT_FUNC ||
+       symbol->bind==MINIAS_STB_WEAK)goto invalid;
+    if(symbol->defined) {
+        /* GNU GAS retains first tentative size, maxes alignment. */
+        if(symbol->section!=MINIAS_SECTION_COMMON)goto invalid;
+        if(alignment>symbol->value)symbol->value=alignment;
+        free(copy);return true;
+    }
+    if(symbol->explicit_local_binding) {
+        int saved_section=as->current_section;
+        uint32_t saved_subsection=as->current_subsection;
+        int bss;
+        char align_buf[32],size_buf[32];
+        bool ok;
+        if((uint64_t)size>UINT32_MAX)goto invalid;
+        bss=minias_ensure_section(as,".bss",MINIAS_SHT_NOBITS,
+                                  MINIAS_SHF_ALLOC|MINIAS_SHF_WRITE,1U);
+        if(bss<0){free(copy);return false;}
+        as->current_section=bss;as->current_subsection=0U;
+        (void)snprintf(align_buf,sizeof(align_buf),"%llu",
+                       (unsigned long long)alignment);
+        (void)snprintf(size_buf,sizeof(size_buf),"%llu",
+                       (unsigned long long)size);
+        ok=ensure_subsection(as,bss,0U)!=NULL &&
+           handle_align(as,".balign",align_buf,line) &&
+           define_label(as,name,line) &&
+           add_data_stmt(as,".zero",size_buf,line);
+        as->current_section=saved_section;
+        as->current_subsection=saved_subsection;
+        if(!ok){free(copy);return false;}
+        symbol=minias_get_symbol(as,name,false);
+        if(!symbol){free(copy);return false;}
+        symbol->type=MINIAS_STT_OBJECT;
+        symbol->size=(uint64_t)size;
+        free(copy);return true;
+    }
+    symbol->defined=true;
+    symbol->bind=MINIAS_STB_GLOBAL;
+    symbol->type=MINIAS_STT_OBJECT;
+    symbol->section=MINIAS_SECTION_COMMON;
+    symbol->subsection=0U;
+    symbol->size=(uint64_t)size;
+    symbol->value=alignment;
+    free(copy);return true;
+invalid:
+    minias_set_error(as,"unsupported-common:%s:line=%zu",args,line);
+    free(copy);return false;
+}
+
 /* Statement ordinal is stable across re-layout; macro source lines are not. */
 static bool force_long_branch_for_stmt(const MiniAs *as, size_t statement_id) {
     size_t i;
@@ -3510,6 +3603,9 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
         }
         if (strcmp(op, ".type") == 0) {
             return parse_type(as, args, line);
+        }
+        if (strcmp(op, ".comm") == 0) {
+            return parse_comm(as, args, line);
         }
         if (strcmp(op, ".size") == 0) {
             return parse_size(as, args, line);
