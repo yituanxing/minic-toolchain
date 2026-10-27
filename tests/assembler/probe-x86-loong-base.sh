@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Real GNU GAS -> same .s -> MiniAS. An error collector is never a success.
 set -Eeuo pipefail
+# Show exact failing command in strict GNU object oracle.
+trap 'echo "MINIAS_GNU_ORACLE_FAIL line=$LINENO command=$BASH_COMMAND" >&2' ERR
 : "$MINIAS"
 : "$LOONGAS"
 : "$LOONGCOPY"
@@ -70,7 +72,11 @@ unresolved_x86:
     movl %eax, 8(%rbx,%r8,2)
     movl 8(%rbx,%r9,4), %eax
 ASM_X
-"$MINIAS" --target=x86_64 -march=x86-64 -mabi=sysv -o "$work/x86-mini.o" "$work/x86.s"
+if ! "$MINIAS" --target=x86_64 -march=x86-64 -mabi=sysv -o "$work/x86-mini.o" "$work/x86.s" >"$work/x86.stdout" 2>"$work/x86.stderr"; then
+    echo 'MINIAS_X86_PARSE_OR_ENCODE_FAIL' >&2
+    cat "$work/x86.stdout" "$work/x86.stderr" >&2
+    exit 1
+fi
 as --64 -o "$work/x86-gnu.o" "$work/x86.s"
 objcopy -j .text -O binary "$work/x86-gnu.o" "$work/x86-gnu.bin"
 objcopy -j .text -O binary "$work/x86-mini.o" "$work/x86-mini.bin"
