@@ -22,6 +22,7 @@ on:
       - 'tests/compiler/c0/run-gnu-fixed-register-bindings.sh'
       - 'tests/compiler/c0/run-block-extern-incomplete.sh'
       - 'tests/compiler/c0/run-linux-empty-inline-asm.sh'
+      - 'tests/compiler/c0/run-core-constant-switch-dead-cases.sh'
       - 'tests/compiler/c0/block-extern-incomplete.c'
       - 'tests/compiler/c0/probe-rv32-frame-access.c'
       - 'tests/compiler/c0/probe-core-semantic-family.c'
@@ -147,6 +148,9 @@ jobs:
           MINIC_CC="$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc" \
           BUILD_DIR=build/minic-native-backend \
             sh tests/compiler/c0/run-linux-empty-inline-asm.sh
+          MINIC_CC="$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc" \
+          BUILD_DIR=build/minic-native-backend \
+            sh tests/compiler/c0/run-core-constant-switch-dead-cases.sh
 
 
       - name: Canonical target DataLayout record/global layout regression
