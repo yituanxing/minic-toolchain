@@ -36,7 +36,7 @@ exit_code:
     svc #0
 .globl external_probe
 external_probe:
-    # GNU-byte ISA test only: privileged MRS/MSR must not execute at EL0.
+    // GNU-byte ISA test only: privileged MRS/MSR must not execute at EL0.
     mrs x0, sp_el0
     mrs x2, sp_el0
     mrs x7, tpidr_el0
@@ -49,6 +49,10 @@ external_probe:
     cmn w1, #4096
     cmn x0, x1
     cmp x1, #8192
+    cset w0, eq
+    cset x11, gt
+    csetm x10, ne
+    cinc w7, w8, lt
     bl external_function
     b external_branch
     cbz x0, external_branch
@@ -208,7 +212,9 @@ if "$MINIAS" --target=aarch64 -o "$work/unsupported.o" \
     exit 1
 fi
 # MCInst must be validated while parsing, independent of later emit/ELF.
-for bad_source in 'mrs w0, sp_el0' 'msr tpidrro_el0, x0' \
+for bad_source in 'cset sp, eq' 'cinc w0, x1, eq' \
+                  'cset x0, bogus' \
+                  'mrs w0, sp_el0' 'msr tpidrro_el0, x0' \
                   'mrs x0, fake_el0' 'dmb #16' 'dmb invalid' \
                   'cmn x0, #-1' 'cmn w0, #4097' 'cmp x0, #16777216' \
                   'hint #-1' 'hint #128' 'hint #18446744073709551616' \

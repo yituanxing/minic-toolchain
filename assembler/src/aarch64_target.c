@@ -106,6 +106,7 @@ static bool append_word(MiniAs *as, int section, uint32_t word) {
 enum {
     A64_MC_NOP = 1,
     A64_MC_HINT,
+    A64_MC_CSEL_ALIAS,
     A64_MC_MRS,
     A64_MC_MSR,
     A64_MC_DMB,
@@ -378,20 +379,21 @@ static bool parse_integer_family(MiniAsMCInst *inst,
 
 
 /* GNU AArch64 branch condition codes are an ISA-owned decoding table. */
-static bool a64_branch_condition(const char *op,unsigned *condition) {
+static bool a64_condition_code(const char *suffix,unsigned *condition) {
     static const char *const names[]={
         "eq","ne","cs","cc","mi","pl","vs","vc",
         "hi","ls","ge","lt","gt","le"
     };
-    const char *suffix;
     unsigned i;
-    if(strncmp(op,"b.",2U)!=0)return false;
-    suffix=op+2U;
     if(!strcmp(suffix,"hs"))suffix="cs";
     else if(!strcmp(suffix,"lo"))suffix="cc";
     for(i=0U;i<sizeof(names)/sizeof(names[0]);++i)
         if(!strcmp(suffix,names[i])){*condition=i;return true;}
     return false;
+}
+static bool a64_branch_condition(const char *op,unsigned *condition) {
+    return strncmp(op,"b.",2U)==0 &&
+           a64_condition_code(op+2U,condition);
 }
 
 static bool a64_attach_expr(MiniAsMCInst *inst,unsigned slot,
@@ -530,7 +532,28 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
         minias_set_error(as, "out-of-memory:aarch64-mcinst");
         return false;
     }
-    if((!strcmp(op,"mrs") || !strcmp(op,"msr")) &&
+    if(!strcmp(op,"cset") || !strcmp(op,"csetm") ||
+       !strcmp(op,"cinc")) {
+        char parts[4][96];
+        unsigned n,rd,rn=31U,cond;
+        bool wd,wn=false,sp;
+        if(!split_operands(args,parts,&n) ||
+           n!=(!strcmp(op,"cinc")?3U:2U) ||
+           !parse_a64_reg(parts[0],&rd,&wd,&sp) || sp ||
+           (!strcmp(op,"cinc") &&
+            (!parse_a64_reg(parts[1],&rn,&wn,&sp) || sp || wn!=wd)) ||
+           !a64_condition_code(parts[n-1U],&cond)) {
+            minias_set_error(as,"bad-aarch64-csel-alias:%s:line=%zu",
+                             args,stmt->line);
+            free(inst);return false;
+        }
+        inst->opcode=A64_MC_CSEL_ALIAS;
+        inst->count=2U;
+        inst->encoding=(cond^1U) |
+           (!strcmp(op,"csetm")?0x100U:0U);
+        put_reg(&inst->operands[0],rd,wd);
+        put_reg(&inst->operands[1],rn,wd);
+    } else if((!strcmp(op,"mrs") || !strcmp(op,"msr")) &&
        split_two(args, first, sizeof(first), second, sizeof(second))) {
         unsigned rt;
         bool wide;
@@ -736,6 +759,17 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
         return false;
     }
     switch (inst->opcode) {
+        case A64_MC_CSEL_ALIAS: {
+            unsigned rd=inst->operands[0].reg;
+            unsigned rn=inst->operands[1].reg;
+            bool sf=inst->operands[0].register_64;
+            code=((inst->encoding&0x100U)?
+                    UINT32_C(0x1a800000):UINT32_C(0x1a800400)) |
+                 (sf?UINT32_C(0x80000000):0U) |
+                 (rn<<16U) | ((inst->encoding&15U)<<12U) |
+                 (rn<<5U) | rd;
+            break;
+        }
         case A64_MC_MRS:
         case A64_MC_MSR:
             code=inst->encoding|inst->operands[0].reg;
