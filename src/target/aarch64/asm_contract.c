@@ -43,6 +43,34 @@ static const char *aarch64_linux_mrs_register(const char *text, size_t len) {
             return allowed[i].reg;
     return NULL;
 }
+/* The architectural DMB/DSB/ISB operations are hardware fences; they
+ * cannot be silently downgraded into a compiler-only memory clobber.
+ * The source and machine both use this target-owned exact template table. */
+static const char *aarch64_barrier_template(const char *text, size_t len) {
+    static const char *const allowed[] = {
+        "dmb ish", "dmb ishld", "dmb ishst", "dmb sy",
+        "dmb osh", "dmb oshld", "dmb oshst",
+        "dsb sy", "dsb ish", "isb"
+    };
+    char normalized[64];
+    size_t i, n = 0U;
+    if (text == NULL || len == 0U || len >= sizeof(normalized))
+        return NULL;
+    for (i = 0U; i < len; ++i) {
+        const char c = text[i];
+        if (c == '\t' || c == '\r' || c == '\n')
+            return NULL; /* no hidden second hardware instruction */
+        if (n + 1U >= sizeof(normalized))
+            return NULL;
+        normalized[n++] = c;
+    }
+    while (n != 0U && normalized[n - 1U] == ' ') --n;
+    normalized[n] = '\0';
+    for (i = 0U; i < sizeof(allowed) / sizeof(allowed[0]); ++i)
+        if (strcmp(normalized, allowed[i]) == 0)
+            return allowed[i];
+    return NULL;
+}
 static bool constraint(const MinicInlineAsmOperand *op, const char *word) {
     size_t n = strlen(word);
     return op && op->constraint_text && op->constraint_length == n &&
@@ -54,6 +82,14 @@ bool minic_aarch64_qualify_inline_asm(
     const MinicExpression *expr;
     MinicType plain;
     size_t i;
+    if (program && src && contract && src->is_volatile &&
+        !src->is_goto && src->output_count == 0U && src->input_count == 0U &&
+        src->clobber_count == 1U && src->register_clobber_count == 0U &&
+        src->has_memory_clobber && src->label_count == 0U &&
+        aarch64_barrier_template(src->template_text, src->template_length)) {
+        contract->operand_count = 0U;
+        return true;
+    }
     if (program && src && contract &&
         !src->is_goto && !src->is_volatile &&
         src->outputs && src->output_count == 1U &&
@@ -116,6 +152,14 @@ bool minic_aarch64_emit_qualified_structured_asm(
     if (ins->value.structured_inline_asm.inline_asm_id >= fn->inline_asm_count)
         return false;
     info = &fn->inline_asms[ins->value.structured_inline_asm.inline_asm_id];
+    if (ins->value.structured_inline_asm.operand_count == 0U) {
+        const char *barrier = aarch64_barrier_template(
+            info->template_text, info->template_length);
+        if (!barrier || !info->is_volatile || info->is_goto ||
+            !info->has_memory_clobber || info->register_clobber_count != 0U)
+            return false;
+        return fprintf(out, "  %s\n", barrier) >= 0;
+    }
     if (ins->value.structured_inline_asm.operand_count == 1U) {
         const MinicCoreStructuredInlineAsmOperand *operand =
             ins->value.structured_inline_asm.operands;

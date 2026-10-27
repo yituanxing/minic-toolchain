@@ -64,6 +64,36 @@ SRC
     echo "MINIC_ELF_ALIAS_ABI_OTHER_TARGET_REJECT=PASS target=$target"
 fi
 
+if [ "$target" = aarch64 ]; then
+    cat > "$work/aarch64-fence.i" <<'SRC'
+static void full_barrier(void) {
+    __asm__ __volatile__("dmb ish" : : : "memory");
+    __asm__ __volatile__("dsb sy" : : : "memory");
+    __asm__ __volatile__("isb" : : : "memory");
+}
+int main(void) { full_barrier(); return 0; }
+SRC
+    "$cross_cc" -x c "$work/aarch64-fence.i" -o "$work/aarch64-fence.gnu.elf"
+    "$MINIC_CC" --target=aarch64-linux -S "$work/aarch64-fence.i" -o "$work/aarch64-fence.minic.s"
+    grep -Fq 'dmb ish' "$work/aarch64-fence.minic.s"
+    grep -Fq 'dsb sy' "$work/aarch64-fence.minic.s"
+    grep -Fq 'isb' "$work/aarch64-fence.minic.s"
+    "$cross_cc" -x assembler "$work/aarch64-fence.minic.s" -o "$work/aarch64-fence.minic.elf"
+    qemu-aarch64 -L /usr/aarch64-linux-gnu "$work/aarch64-fence.gnu.elf"
+    qemu-aarch64 -L /usr/aarch64-linux-gnu "$work/aarch64-fence.minic.elf"
+    for unsafe in 'dmb ish; svc #0' 'dmb ishld\nsvc #0' 'dmb foo'; do
+        printf 'void invalid(void){ __asm__ __volatile__("%s" : : : "memory"); }\n' \
+            "$unsafe" > "$work/unsafe-barrier.i"
+        if "$MINIC_CC" --target=aarch64-linux -S "$work/unsafe-barrier.i" \
+            -o "$work/unsafe-barrier.s" >"$work/unsafe-barrier.out" \
+            2>"$work/unsafe-barrier.err"; then
+            echo 'FAIL AArch64 unqualified hardware fence accepted' >&2
+            exit 1
+        fi
+    done
+    echo 'MINIC_AARCH64_HARDWARE_FENCES_GNU_QEMU=PASS'
+fi
+
 # Original Linux syscall wrappers have deliberately different argument C
 # types, but LoongArch64 passes each via a 64-bit integer argument register.
 # Verify a forward symbol alias and a genuinely executed ABI boundary.
