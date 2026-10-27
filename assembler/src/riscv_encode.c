@@ -1578,13 +1578,45 @@ bool minias_riscv_parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
         }
         slots = 3U;
     } else if (family == RV_MC_LOAD || family == RV_MC_STORE) {
-        if (count != 2U) goto fallback; /* symbolic load/store expansion */
-        rd = reg_number(operands[0]);
+        bool symbolic = false;
+        MiniAsSymbolExpr expr;
+        rd = count != 0U ? reg_number(operands[0]) : -1;
         if (rd < 0) goto invalid;
-        if (!parse_mem(operands[1], &imm, base)) goto fallback;
-        rs1 = reg_number(base);
-        if (rs1 < 0) goto invalid;
+        if (count == 2U && parse_mem(operands[1], &imm, base)) {
+            rs1 = reg_number(base);
+            if (rs1 < 0 || imm < -2048 || imm > 2047) goto invalid;
+        } else if (family == RV_MC_LOAD && count == 2U &&
+                   minias_parse_symbol_addend(operands[1], &expr)) {
+            /* GNU symbolic load: AUIPC rd + LOAD rd,0(rd). */
+            rs1 = rd;
+            symbolic = true;
+        } else if (family == RV_MC_STORE && count == 3U &&
+                   minias_parse_symbol_addend(operands[1], &expr)) {
+            /* GNU symbolic store: AUIPC temp + STORE data,0(temp). */
+            rs1 = reg_number(operands[2]);
+            if (rs1 < 0) goto invalid;
+            symbolic = true;
+        } else goto invalid;
         slots = 3U;
+        if (symbolic) {
+            inst = calloc(1U, sizeof(*inst) + slots * sizeof(*inst->operands));
+            if (inst == NULL) goto oom;
+            inst->opcode = family == RV_MC_LOAD ?
+                           RV_MC_SYMBOL_LOAD : RV_MC_SYMBOL_STORE;
+            inst->encoding = encoding;
+            inst->count = slots;
+            rv_set_reg(&inst->operands[0], rd);
+            rv_set_reg(&inst->operands[1], rs1);
+            inst->operands[2].symbol = malloc(sizeof(expr));
+            if (inst->operands[2].symbol == NULL) {
+                free(inst);
+                goto oom;
+            }
+            *inst->operands[2].symbol = expr;
+            inst->operands[2].kind = MINIAS_MC_SYMBOL;
+            stmt->mcinst = inst;
+            return true;
+        }
     } else if (family == RV_MC_U) {
         if (count != 2U) goto invalid;
         rd = reg_number(operands[0]);
@@ -1671,8 +1703,6 @@ bool minias_riscv_parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
     } else rv_set_imm(&inst->operands[1],imm);
     stmt->mcinst=inst;
     return true;
-fallback:
-    return true;
 invalid:
     minias_set_error(as,"invalid-riscv-mcinst:%s:%s:line=%zu",
                      op,stmt->args,stmt->line);
@@ -1697,6 +1727,42 @@ static bool rv_encode_mcinst(MiniAs *as, const MiniAsStmt *stmt) {
         imm=(int64_t)m->operands[2].immediate;
     if (m->opcode == RV_MC_C16)
         return append_u16(as,stmt->section,(uint16_t)base);
+    if (m->opcode == RV_MC_SYMBOL_LOAD ||
+        m->opcode == RV_MC_SYMBOL_STORE) {
+        const bool load = m->opcode == RV_MC_SYMBOL_LOAD;
+        const MiniAsSymbolExpr *ref = m->operands[2].symbol;
+        char label[96];
+        MiniAsSymbol *anchor;
+        uint32_t second;
+        if (ref == NULL) {
+            minias_set_error(as, "internal:missing-riscv-symbol-fragment");
+            return false;
+        }
+        (void)snprintf(label, sizeof(label),
+                       load ? ".Lminias_load_%zu" : ".Lminias_store_%zu",
+                       ++as->pcrel_anchor_counter);
+        anchor = minias_get_symbol(as, label, true);
+        if (anchor == NULL) return false;
+        anchor->defined = true;
+        anchor->section = stmt->section;
+        anchor->subsection = stmt->subsection;
+        anchor->value = stmt->offset;
+        anchor->bind = MINIAS_STB_LOCAL;
+        second = base |
+                 ((uint32_t)rs1 << 15U) |
+                 ((uint32_t)rd << (load ? 7U : 20U));
+        if (!append_u32(as, stmt->section,
+                        0x17U | ((uint32_t)rs1 << 7U)) ||
+            !append_u32(as, stmt->section, second))
+            return false;
+        return minias_add_fixup(as, stmt->section, stmt->offset,
+                                MINIAS_FIXUP_RV_PCREL_HI20, 4U,
+                                ref->name, ref->addend) &&
+               minias_add_fixup(as, stmt->section, stmt->offset + 4U,
+                                load ? MINIAS_FIXUP_RV_PCREL_LO12_I :
+                                       MINIAS_FIXUP_RV_PCREL_LO12_S,
+                                4U, label, 0);
+    }
     if (m->opcode == RV_MC_WORD)
         code = base | ((uint32_t)rd << 7U) |
                ((uint32_t)rs1 << 15U) | ((uint32_t)rs2 << 20U);
@@ -1793,10 +1859,6 @@ bool minias_riscv_encode(MiniAs *as, const MiniAsStmt *stmt) {
         return append_u32(as, stmt->section, raw_word);
     }
     int rd;
-    int rs1;
-    int rs2;
-    int64_t immediate;
-    uint32_t funct3;
 
     if (strcmp(stmt->op, "li") == 0) {
         uint64_t bits;
@@ -1993,157 +2055,6 @@ bool minias_riscv_encode(MiniAs *as, const MiniAsStmt *stmt) {
                                      0);
     }
 
-    if (strcmp(stmt->op, "lb") == 0 || strcmp(stmt->op, "lbu") == 0 ||
-        strcmp(stmt->op, "lh") == 0 || strcmp(stmt->op, "lhu") == 0 ||
-        strcmp(stmt->op, "lw") == 0 || strcmp(stmt->op, "lwu") == 0 ||
-        strcmp(stmt->op, "ld") == 0) {
-        char base[128];
-
-        if (count != 2U || !require_reg(as, stmt, operands[0], &rd)) {
-            return false;
-        }
-        funct3 = strcmp(stmt->op, "lb") == 0    ? 0U
-                 : strcmp(stmt->op, "lh") == 0  ? 1U
-                 : strcmp(stmt->op, "lw") == 0  ? 2U
-                 : strcmp(stmt->op, "ld") == 0  ? 3U
-                 : strcmp(stmt->op, "lbu") == 0 ? 4U
-                 : strcmp(stmt->op, "lhu") == 0 ? 5U
-                                                 : 6U;
-        if (parse_mem(operands[1], &immediate, base)) {
-            if (!require_reg(as, stmt, base, &rs1)) {
-                return false;
-            }
-            return append_u32(as,
-                              stmt->section,
-                              enc_i(0x03U, rd, funct3, rs1, immediate));
-        }
-        {
-            MiniAsSymbolExpr expr;
-            MiniAsSymbol *anchor;
-            char anchor_name[96];
-
-            if (!minias_parse_symbol_addend(operands[1], &expr)) {
-                minias_set_error(as,
-                                 "unsupported-expression:%s:%s:line=%zu",
-                                 stmt->op,
-                                 operands[1],
-                                 stmt->line);
-                return false;
-            }
-            (void)snprintf(anchor_name,
-                           sizeof(anchor_name),
-                           ".Lminias_load_%zu",
-                           ++as->pcrel_anchor_counter);
-            anchor = minias_get_symbol(as, anchor_name, true);
-            if (anchor == NULL) {
-                return false;
-            }
-            anchor->defined = true;
-            anchor->section = stmt->section;
-            anchor->subsection = stmt->subsection;
-            anchor->value = stmt->offset;
-            anchor->bind = MINIAS_STB_LOCAL;
-
-            if (!append_u32(as,
-                            stmt->section,
-                            0x17U | ((uint32_t)rd << 7U)) ||
-                !append_u32(as,
-                            stmt->section,
-                            enc_i(0x03U, rd, funct3, rd, 0))) {
-                return false;
-            }
-            return minias_add_fixup(as,
-                                         stmt->section,
-                                         stmt->offset,
-                                         MINIAS_FIXUP_RV_PCREL_HI20,
-                                         4U,
-                                         expr.name,
-                                         expr.addend) &&
-                   minias_add_fixup(as,
-                                         stmt->section,
-                                         stmt->offset + 4U,
-                                         MINIAS_FIXUP_RV_PCREL_LO12_I,
-                                         4U,
-                                         anchor_name,
-                                         0);
-        }
-    }
-    if (strcmp(stmt->op, "sb") == 0 || strcmp(stmt->op, "sh") == 0 ||
-        strcmp(stmt->op, "sw") == 0 || strcmp(stmt->op, "sd") == 0) {
-        char base[128];
-
-        funct3 = strcmp(stmt->op, "sb") == 0   ? 0U
-                 : strcmp(stmt->op, "sh") == 0 ? 1U
-                 : strcmp(stmt->op, "sw") == 0 ? 2U
-                                                : 3U;
-        if (count == 2U) {
-            if (!require_reg(as, stmt, operands[0], &rs2) ||
-                !parse_mem(operands[1], &immediate, base) ||
-                !require_reg(as, stmt, base, &rs1)) {
-                return false;
-            }
-            return append_u32(as,
-                              stmt->section,
-                              enc_s(funct3, rs1, rs2, immediate));
-        }
-        if (count == 3U) {
-            MiniAsSymbolExpr expr;
-            MiniAsSymbol *anchor;
-            char anchor_name[96];
-
-            if (!require_reg(as, stmt, operands[0], &rs2) ||
-                !minias_parse_symbol_addend(operands[1], &expr) ||
-                !require_reg(as, stmt, operands[2], &rs1)) {
-                minias_set_error(as,
-                                 "bad-symbol-store:%s:%s:line=%zu",
-                                 stmt->op,
-                                 stmt->args,
-                                 stmt->line);
-                return false;
-            }
-            (void)snprintf(anchor_name,
-                           sizeof(anchor_name),
-                           ".Lminias_store_%zu",
-                           ++as->pcrel_anchor_counter);
-            anchor = minias_get_symbol(as, anchor_name, true);
-            if (anchor == NULL) {
-                return false;
-            }
-            anchor->defined = true;
-            anchor->section = stmt->section;
-            anchor->subsection = stmt->subsection;
-            anchor->value = stmt->offset;
-            anchor->bind = MINIAS_STB_LOCAL;
-
-            if (!append_u32(as,
-                            stmt->section,
-                            0x17U | ((uint32_t)rs1 << 7U)) ||
-                !append_u32(as,
-                            stmt->section,
-                            enc_s(funct3, rs1, rs2, 0))) {
-                return false;
-            }
-            return minias_add_fixup(as,
-                                         stmt->section,
-                                         stmt->offset,
-                                         MINIAS_FIXUP_RV_PCREL_HI20,
-                                         4U,
-                                         expr.name,
-                                         expr.addend) &&
-                   minias_add_fixup(as,
-                                         stmt->section,
-                                         stmt->offset + 4U,
-                                         MINIAS_FIXUP_RV_PCREL_LO12_S,
-                                         4U,
-                                         anchor_name,
-                                         0);
-        }
-        minias_set_error(as,
-                         "operand-count:%s:line=%zu",
-                         stmt->op,
-                         stmt->line);
-        return false;
-    }
     minias_set_error(as, "unsupported-instruction:%s:line=%zu", stmt->op, stmt->line);
     return false;
 }

@@ -41,10 +41,16 @@ Explicit -march=rv32i/rv64i retains existing fail-closed machine-code checks.
    Almost all redundant legacy fixed-opcode measurement branches are removed;
    target measurement defers fixed-size operand validation to MCInst on both
    strict-I and default profiles. Strict RV32I/RV64I *still* executes its
-   exhaustive post-encoding machine-word check. Multiword li/call/tail/la,
-   relocatable symbolic GPR load/store and .insn retain their legacy
-   measurement/encoding until represented as typed fragments. RV32 shift
-   widths are validated at the typed parser.
+   exhaustive post-encoding machine-word check. Symbolic GPR load/store
+   are now *typed two-instruction* MCInst fragments, carrying the symbolic
+   expression and both data and address registers. Their target emitter
+   creates AUIPC plus signed load/store and PCREL_HI20/PCREL_LO12_I/S typed
+   fixups without reparsing operand text. The old ~6 KB duplicate GPR
+   memory emitter is deleted. Ordinary signed memory offsets now get
+   12-bit range checking at the target operand boundary.
+   Multiword li/call/tail/la and raw .insn retain their legacy measurement
+   and encoding until their deferred target fragments are completed. RV32
+   shift widths are validated at the typed parser.
    Vector register classes are distinguished from integer/FP registers.
    Comment stripping is target-configurable and .option
    dispatch belongs to the RISC-V target; common parser still owns GNU-style

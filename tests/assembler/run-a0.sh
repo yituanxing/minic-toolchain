@@ -2037,4 +2037,63 @@ for invalid in 'c.li x0, 1' 'c.li a0, 32' 'jalr ra, 4096(a1)' \
 done
 echo 'MINIAS_RV_MCINST_ALIASES_NEGATIVE=PASS bad_operands=8'
 
+
+# Symbolic GPR loads/stores are now two-word typed MCInst fragments,
+# not a second string parser inside the old byte emitter. Compare
+# exact GNU instructions AND relocation kinds for AUIPC+LOAD/STORE.
+cat >"$work/riscv-symbol-memory-mcinst.s" <<'EOF_SYMMEM'
+.option norvc
+.option norelax
+.text
+.globl riscv_symbol_memory_mcinst
+riscv_symbol_memory_mcinst:
+    lb a0, ext_symbol
+    lhu a1, ext_symbol+4
+    lw a2, ext_symbol
+    ld a3, ext_symbol+8
+    sb a0, ext_symbol, t0
+    sw a1, ext_symbol+4, t1
+    sd a2, ext_symbol+8, t2
+    ret
+EOF_SYMMEM
+"$MINIAS" -o "$work/riscv-symbol-memory-mcinst.o" \
+    "$work/riscv-symbol-memory-mcinst.s"
+readelf -Wr "$work/riscv-symbol-memory-mcinst.o" \
+    >"$work/riscv-symbol-memory-mcinst.reloc"
+test "$(grep -c 'R_RISCV_PCREL_HI20' \
+    "$work/riscv-symbol-memory-mcinst.reloc")" -eq 7
+test "$(grep -c 'R_RISCV_PCREL_LO12_I' \
+    "$work/riscv-symbol-memory-mcinst.reloc")" -eq 4
+test "$(grep -c 'R_RISCV_PCREL_LO12_S' \
+    "$work/riscv-symbol-memory-mcinst.reloc")" -eq 3
+if command -v riscv64-linux-gnu-as >/dev/null 2>&1 &&
+   command -v riscv64-linux-gnu-objcopy >/dev/null 2>&1; then
+    riscv64-linux-gnu-as -march=rv64gc -mabi=lp64d \
+        -o "$work/riscv-symbol-memory-mcinst.gnu.o" \
+        "$work/riscv-symbol-memory-mcinst.s"
+    riscv64-linux-gnu-objcopy -j .text -O binary \
+        "$work/riscv-symbol-memory-mcinst.o" \
+        "$work/riscv-symbol-memory-mcinst.bin"
+    riscv64-linux-gnu-objcopy -j .text -O binary \
+        "$work/riscv-symbol-memory-mcinst.gnu.o" \
+        "$work/riscv-symbol-memory-mcinst.gnu.bin"
+    cmp "$work/riscv-symbol-memory-mcinst.bin" \
+        "$work/riscv-symbol-memory-mcinst.gnu.bin"
+    echo 'MINIAS_RV_MCINST_SYMBOL_MEMORY=PASS AUIPC_LOAD_STORE_GNU_bytes_equal=1 fixups=14'
+else
+    echo 'MINIAS_RV_MCINST_SYMBOL_MEMORY=PASS GNU_AS=SKIP(toolchain-unavailable) fixups=14'
+fi
+for invalid in 'ld a0, 2048(a1)' 'sd a0, -2049(a1)' \
+               'lb a0, 4096(a1)' 'sw a0, bad.symbol, x32'; do
+    printf '.text\n%s\n' "$invalid" >"$work/riscv-symbol-memory-bad.s"
+    if "$MINIAS" -o "$work/riscv-symbol-memory-bad.o" \
+        "$work/riscv-symbol-memory-bad.s" \
+        >"$work/riscv-symbol-memory-bad.out" \
+        2>"$work/riscv-symbol-memory-bad.err"; then
+        echo "MiniAS accepted invalid memory MCInst: $invalid" >&2
+        exit 1
+    fi
+done
+echo 'MINIAS_RV_MCINST_MEMORY_RANGE=PASS GPR_offset_and_register=4'
+
 echo "MINIAS_A0=PASS objects=30 abi_flags=3 format=ELF64-RISCV-ET_REL relocations=23 strings=2 pseudos=17 previous=3 subsection=2 numeric_labels=18 ecall=1 isa_next=13 csr_amo=8 sfence_vma=3 fence_i=1 vsetvl=1 vsetvli=1 vmv_v_i=4 rept=2 nested_rept=1 irp=4 section_stack=1 org=3 local_difference=1 lr_sc=2 inline_labels=2 branch_pseudos=8 extern=1 symbol_minus_dot=4 symbol_difference=1 absolute32=1 jal=2 jal_subsection=1 high_numeric_labels=2 u64_data=3 raw_insn=4 set_alias=3 move=1 numeric_zero=1 immediate_product=2 shift_immediate=1 incbin=1 align_expr=1 native_expr=6 native_zbb_tail_memexpr=1 native_jalr_symbol_load=1 native_forward_short=1 native_mixed_macro=1 native_divided_difference=1 native_symbol_addend_expr=1 native_add_sub_immediate=1 native_cfi_boundary=1 native_gas_forms=1 native_set_size=1 native_macro_comma=1 native_macro_quotes=1 pic_la_got=1 sext_w=1 macro=4 conditional=1"

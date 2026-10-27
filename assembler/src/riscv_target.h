@@ -13,7 +13,8 @@ bool minias_riscv_is_typed_fixed(const char *op);
  * relaxation without any mnemonic parsing in the common assembler. */
 enum MiniAsRiscvMCFamily {
     RV_MC_R = 1, RV_MC_I, RV_MC_LOAD, RV_MC_STORE, RV_MC_U,
-    RV_MC_BRANCH, RV_MC_JAL, RV_MC_WORD, RV_MC_C16
+    RV_MC_BRANCH, RV_MC_JAL, RV_MC_WORD, RV_MC_C16,
+    RV_MC_SYMBOL_LOAD, RV_MC_SYMBOL_STORE
 };
 
 /* RISC-V-only psABI relocation constants. */
