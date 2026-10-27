@@ -393,3 +393,25 @@ field permutation explicitly Target-owned. The pre-existing signed-14
 scaled-offset family is reused for LL.W/D and SC.W/D. The GNU exact-byte
 oracle now includes these instruction families and fail-closed CSR ranges.
 No x86/A64/RV backend copies and no new ELF serialization.
+
+## Second Loong family data recovery: GNU pseudo-atomic 4th zero + ELF ADD/SUB
+
+The next complete GNU Linux 2742-file census (run 40475374482) reached
+953 assembled-unverified objects. Its leading **new** first blockers were
+AMADD_DB.W 397 and AMOR_DB.D 221, all genuine GCC/GAS 4-operand forms
+`amadd_db.w $rd,$rj,$rk,0` rather than a new hardware encoding.
+The earlier target accepted the 3-register hardware mnemonic but incorrectly
+rejected the GNU macro fourth `u0:0`. Both forms now map to **one target
+opcode table** and fail closed unless the macro's reserved fourth operand
+is exactly zero. Expanded DB and non-DB atomic families reuse the same
+permutation (assembler operand2 in bits10, operand3 in bits5), verified
+against GNU real bytes.
+
+A separate 430 blocked objects reported `unsupported-symbol-difference-width`
+4/8 because Loong Target never described `R_LARCH_ADD/SUB32/64` despite
+Common already having mature RV-style symbol-minus-dot relocation plumbing.
+Mapping ADD32=50 SUB32=55 ADD64=51 SUB64=56 at the Target ABI boundary
+makes this existing Common facility reusable without a second Loong fixup
+implementation. A genuine GNU `.long/.quad external-.` oracle checks
+the four specific relocations. Only affected seven frozen Loong shards
+run after the grouped fixes, never new GNU C compilation.

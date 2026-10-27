@@ -163,6 +163,13 @@ entry_la:
     stx.b $a0, $a1, $a2
     stx.w $a2, $a1, $a0
     amadd_db.w $a0, $a1, $a2
+    amadd_db.w $a0, $a1, $a2, 0
+    amadd.w $a0, $a1, $a2, 0
+    amadd.d $a2, $a1, $a0, 0
+    amand.d $a0, $a2, $a1, 0
+    amor.d $a0, $a1, $a2, 0
+    amxor_db.d $a0, $a1, $a2, 0
+    ammin.du $a2, $a0, $a1, 0
     amadd_db.d $a2, $a0, $a1
     amand_db.d $a1, $a2, $a0
     amor_db.d $a0, $a2, $a1
@@ -305,6 +312,27 @@ cmp "$work/la-local-mini.bin" "$work/la-local-gnu.bin"
 # machine-level code and defined local labels must still be identical.
 echo 'MINIAS_LARCH_LOCAL_BRANCH_ORACLE=PASS same_section_forward_backward_bytes=equal'
 
+# The exact same original Linux GNU source uses cross-section symbol
+# difference in data tables. Support ADD32/SUB32 and ADD64/SUB64 in the
+# RV-proven common SymbolExpr -> Fixup -> ELF writer (Loong type only).
+cat >"$work/la-diff.s" <<'LA_DIFF'
+.data
+.globl la_difference
+la_difference:
+    .long external_item - .
+    .quad external_item - .
+LA_DIFF
+"$MINIAS" --target=loongarch64 -march=loongarch64 -mabi=lp64d \
+   -o "$work/la-diff-mini.o" "$work/la-diff.s"
+"$LOONGAS" -mabi=lp64d -o "$work/la-diff-gnu.o" "$work/la-diff.s"
+"$LOONGREADELF" -Wr "$work/la-diff-mini.o" > "$work/la-diff-mini-rel.txt"
+"$LOONGREADELF" -Wr "$work/la-diff-gnu.o" > "$work/la-diff-gnu-rel.txt"
+for reloc in R_LARCH_ADD32 R_LARCH_SUB32 R_LARCH_ADD64 R_LARCH_SUB64; do
+    grep -q "$reloc" "$work/la-diff-mini-rel.txt"
+    grep -q "$reloc" "$work/la-diff-gnu-rel.txt"
+done
+echo 'MINIAS_LARCH_SYMBOL_DIFF=PASS ELF_ADD_SUB_32_64'
+
 for bad in 'ldptr.d $a0, $sp, 3' \
            'stptr.w $a0, $sp, 32768' \
            'ldptr.d $a1, $sp, -32772' \
@@ -326,7 +354,8 @@ for bad in 'ldptr.d $a0, $sp, 3' \
            'csrrd $a0, 16384' \
            'csrwr $a0, -1' \
            'csrxchg $a0, $zero, 1' \
-           'csrxchg $a0, $ra, 1'; do
+           'csrxchg $a0, $ra, 1' \
+           'amadd_db.w $a0, $a1, $a2, 1'; do
     printf '.text\n%s\n' "$bad" >"$work/invalid-la-ptr.s"
     if "$MINIAS" --target=loongarch64 -o "$work/bad-ptr.o" \
          "$work/invalid-la-ptr.s" >/dev/null 2>"$work/invalid.err"; then

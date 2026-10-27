@@ -269,6 +269,24 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
      * operand occupies rk/bit10; the third is the memory base rj/bit5.
      * Never mix the register field order into ordinary gpr3. */
     static const struct {const char *name;uint32_t code;} atomics[]={
+        {"amswap.w",UINT32_C(0x38600000)},
+        {"amswap.d",UINT32_C(0x38608000)},
+        {"amadd.w",UINT32_C(0x38610000)},
+        {"amadd.d",UINT32_C(0x38618000)},
+        {"amand.w",UINT32_C(0x38620000)},
+        {"amand.d",UINT32_C(0x38628000)},
+        {"amor.w",UINT32_C(0x38630000)},
+        {"amor.d",UINT32_C(0x38638000)},
+        {"amxor.w",UINT32_C(0x38640000)},
+        {"amxor.d",UINT32_C(0x38648000)},
+        {"ammax.w",UINT32_C(0x38650000)},
+        {"ammax.d",UINT32_C(0x38658000)},
+        {"ammin.w",UINT32_C(0x38660000)},
+        {"ammin.d",UINT32_C(0x38668000)},
+        {"ammax.wu",UINT32_C(0x38670000)},
+        {"ammax.du",UINT32_C(0x38678000)},
+        {"ammin.wu",UINT32_C(0x38680000)},
+        {"ammin.du",UINT32_C(0x38688000)},
         {"amswap_db.w",UINT32_C(0x38690000)},
         {"amswap_db.d",UINT32_C(0x38698000)},
         {"amadd_db.w",UINT32_C(0x386a0000)},
@@ -474,11 +492,19 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
         m->count=2U;m->encoding=UINT32_C(0x00150000) |
             (rj<<5U)|rd;goto done;
     }
-    if(n!=3U || !la_reg(t[0],&rd) || !la_reg(t[1],&rj))goto fail;
+    if((n!=3U && n!=4U) ||
+       !la_reg(t[0],&rd) || !la_reg(t[1],&rj)) goto fail;
+    if(n==4U) {
+        uint64_t reserved;
+        /* Real GCC LoongArch .S uses GAS's atomic pseudo fourth operand
+         * u0:0. The fourth operand is mandatory zero, not an ISA field. */
+        if(!minias_eval_u64_expression(t[3],&reserved) || reserved!=0U)
+            goto fail;
+    }
     if(la_reg(t[2],&rk)) {
         for(i=0U;i<sizeof(atomics)/sizeof(atomics[0]);++i)
             if(!strcmp(s->op,atomics[i].name)) {
-                m->count=3U;
+                m->count=n;
                 m->encoding=atomics[i].code|(rj<<10U)|(rk<<5U)|rd;
                 m->operands[0].kind=MINIAS_MC_REGISTER;
                 m->operands[0].reg=rd;
@@ -486,8 +512,13 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
                 m->operands[1].reg=rj;
                 m->operands[2].kind=MINIAS_MC_REGISTER;
                 m->operands[2].reg=rk;
+                if(n==4U) {
+                    m->operands[3].kind=MINIAS_MC_IMMEDIATE;
+                    m->operands[3].immediate=0U;
+                }
                 goto done;
             }
+        if(n==4U)goto fail;
         for(i=0U;i<sizeof(gpr3)/sizeof(gpr3[0]);++i)
             if(!strcmp(s->op,gpr3[i].name)) {
                 m->count=3U;m->encoding=gpr3[i].code |
@@ -495,6 +526,7 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
             }
     } else {
         MiniAsSymbolExpr expr;
+        if(n==4U)goto fail;
         if(la_reloc_expr(t[2],"%pc_lo12",&expr)) {
             for(i=0U;i<sizeof(imm12)/sizeof(imm12[0]);++i)
                 if(strcmp(s->op,imm12[i].name)==0) {
@@ -675,6 +707,10 @@ static uint32_t la_reloc(MiniAsFixupKind kind,unsigned width) {
     switch(kind) {
         case MINIAS_FIXUP_ABS:
             return width==8U?2U:1U; /* R_LARCH_64 / R_LARCH_32 */
+        case MINIAS_FIXUP_ADD:
+            return width==8U?51U:50U; /* ADD64 / ADD32 */
+        case MINIAS_FIXUP_SUB:
+            return width==8U?56U:55U; /* SUB64 / SUB32 */
         case MINIAS_FIXUP_LARCH_PCALA_HI20:
             return width==4U?71U:0U;
         case MINIAS_FIXUP_LARCH_PCALA_LO12:
