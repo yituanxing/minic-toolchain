@@ -814,15 +814,27 @@ bool minic_target_info_inline_asm_register_clobber_supported(const MinicTargetIn
                                                              const char *name,
                                                              size_t name_length) {
     if (target == NULL || name == NULL) return false;
-    /* x86 only: the core and machine backends independently check that
-     * flags and RDX are genuinely clobbered, and preserve SysV RBX. */
-    if (target->architecture == MINIC_TARGET_ARCH_X86_64)
-        return (name_length == 2U &&
-                (memcmp(name, "cc", 2U) == 0 || memcmp(name, "dx", 2U) == 0)) ||
-               (name_length == 3U && memcmp(name, "rdx", 3U) == 0);
-    /* rdx is the same physical register as dx, but permitting the GNU
-     * spelling is not sufficient: the x86 backend requalifies the entire
-     * mulq/divq output/input/clobber contract before emitting it. */
+    /* Syntax-only GNU x86-64 SysV caller-clobber catalog, shared by every
+     * x86 Linux asm statement. Naming a physical register does NOT imply
+     * that the backend may emit the enclosing template: complete operand,
+     * register allocation, clobber and stack-state ABI qualification still
+     * happens in the x86 machine owner. In particular RBX, RBP, RSP,
+     * R12..R15 and the callee-saved vector registers are NOT admitted.
+     * Preserve the old GNU "dx" spelling of physical RDX. */
+    if (target->architecture == MINIC_TARGET_ARCH_X86_64) {
+        static const char *const caller_scratch[] = {
+            "cc", "dx", "rdx", "edx",
+            "rax", "eax", "rcx", "ecx",
+            "rsi", "esi", "rdi", "edi",
+            "r8", "r9", "r10", "r11"
+        };
+        size_t j;
+        for (j = 0U; j < sizeof(caller_scratch) / sizeof(caller_scratch[0]); ++j)
+            if (strlen(caller_scratch[j]) == name_length &&
+                memcmp(name, caller_scratch[j], name_length) == 0)
+                return true;
+        return false;
+    }
     if (target->architecture == MINIC_TARGET_ARCH_AARCH64)
         return name_length == 2U && memcmp(name, "cc", 2U) == 0;
     /* NZCV flags are only consumed by a fully qualified AArch64 asm shape;
