@@ -223,6 +223,8 @@ typedef struct MiniAsStmt {
     /* Effective .option pic/nopic at the precise instruction site. */
     /* Opaque target state captured at the exact instruction site. */
     uint32_t target_options;
+    /* Common variable-size data fragment resolved after symbol layout. */
+    bool deferred_data_size;
     MiniAsMCInst *mcinst; /* allocated by target parser, freed by core */
 } MiniAsStmt;
 
@@ -292,6 +294,9 @@ typedef struct MiniAs {
     /* GNU GAS's quoted-string-aware, multi-line C comment lexical state. */
     bool c_comment_active;
     bool layout_sensitive; /* conservative full-reparse fallback */
+    bool has_deferred_data; /* forward-symbol data-size fragments */
+    bool expr_dot_override; /* explicit fragment-local dot while evaluating */
+    uint64_t expr_dot_value;
     uint32_t target_options;
     /* Opaque per-assembly backend parser state, owned and freed by Target. */
     void *target_state;

@@ -1570,9 +1570,9 @@ static bool evaluate_absolute_expression(MiniAs *as,
     MiniAsAbsoluteExpressionParser parser;
     uint64_t dot;
 
-    if (!current_location(as, &dot) || dot > (uint64_t)INT64_MAX) {
-        return false;
-    }
+    if(as->expr_dot_override)dot=as->expr_dot_value;
+    else if(!current_location(as,&dot))return false;
+    if(dot>(uint64_t)INT64_MAX)return false;
     parser.as = as;
     parser.cursor = text;
     parser.dot = (int64_t)dot;
@@ -2402,16 +2402,20 @@ static bool add_data_stmt(MiniAs *as, const char *op, char *args, size_t line) {
     unsigned int width = data_width(as, op);
     char *copy = NULL;
     char *cursor;
+    bool delayed=false;
 
     if (!strcmp(op,".fill")) {
-        unsigned elem;
-        uint64_t repeats,value;
+        unsigned elem=0U;
+        uint64_t repeats=0U,value=0U;
+        delayed=true;
         if(!parse_common_fill(as,args,&repeats,&elem,&value) ||
            (elem!=0U && repeats>UINT32_MAX/elem)) {
-            minias_set_error(as,"unsupported-fill-expression:%s:line=%zu",
-                             args,line);return false;
-        }
-        bytes=repeats*elem;
+            /* Forward labels and subsection values have not received
+             * their final layout yet. Keep this as a real data fragment
+             * with provisional size 0, never as an ignored directive.
+             * Invalid syntax/unresolved symbols are rejected at fixpoint. */
+            bytes=0U;
+        }else bytes=repeats*elem;
     } else if (strcmp(op,".uleb128")==0 || strcmp(op,".sleb128")==0) {
         unsigned char coded[10];
         size_t len=0U;
@@ -2438,10 +2442,13 @@ static bool add_data_stmt(MiniAs *as, const char *op, char *args, size_t line) {
         bytes = (uint64_t)decoded_size;
     } else if (strcmp(op, ".zero") == 0 || strcmp(op, ".space") == 0 ||
                strcmp(op, ".skip") == 0) {
-        uint8_t fill;
+        uint8_t fill=0U;
+        delayed=true;
         if (!parse_common_space(as,args,&count,&fill)) {
-            minias_set_error(as, "unsupported-expression:%s:line=%zu", op, line);
-            return false;
+            /* .skip/.space also permits forward absolute label differences.
+             * A zero-length provisional fragment is resolved and verified
+             * after all symbols have been placed. */
+            count=0U;
         }
         bytes = count;
     } else {
@@ -2497,6 +2504,11 @@ static bool add_data_stmt(MiniAs *as, const char *op, char *args, size_t line) {
     }
     if (!add_stmt(as, MINIAS_STMT_DATA, op, args, line, (uint32_t)bytes, 1U)) {
         return false;
+    }
+    if(delayed) {
+        as->stmts[as->stmt_count-1U].deferred_data_size=true;
+        as->has_deferred_data=true;
+        as->layout_sensitive=true;
     }
     return advance_current_location(as, bytes);
 }
@@ -2685,11 +2697,17 @@ static bool emit_data_stmt(MiniAs *as, const MiniAsStmt *stmt) {
         uint64_t repeat,value,i,j;
         unsigned width_bytes;
         unsigned char element[8];
-        if(!parse_common_fill(as,stmt->args,&repeat,&width_bytes,&value) ||
-           (width_bytes!=0U && repeat>UINT32_MAX/width_bytes) ||
-           repeat*width_bytes!=stmt->size) {
-            minias_set_error(as,"fill-layout-changed:line=%zu",stmt->line);
-            return false;
+        as->expr_dot_override=true;
+        as->expr_dot_value=stmt->offset;
+        {
+            bool valid=parse_common_fill(as,stmt->args,
+                                         &repeat,&width_bytes,&value);
+            as->expr_dot_override=false;
+            if(!valid || (width_bytes!=0U && repeat>UINT32_MAX/width_bytes) ||
+               repeat*width_bytes!=stmt->size) {
+                minias_set_error(as,"fill-layout-changed:line=%zu",stmt->line);
+                return false;
+            }
         }
         for(j=0U;j<width_bytes;++j)
             element[j]=(unsigned char)(value>>(8U*j));
@@ -2780,8 +2798,12 @@ static bool emit_data_stmt(MiniAs *as, const MiniAsStmt *stmt) {
         strcmp(stmt->op, ".skip") == 0) {
         uint64_t count;
         uint8_t fill;
-        if(!parse_common_space(as,stmt->args,&count,&fill) ||
-           count!=stmt->size) {
+        bool valid;
+        as->expr_dot_override=true;
+        as->expr_dot_value=stmt->offset;
+        valid=parse_common_space(as,stmt->args,&count,&fill);
+        as->expr_dot_override=false;
+        if(!valid || count!=stmt->size) {
             minias_set_error(as,"invalid-space-emit:line=%zu",stmt->line);
             return false;
         }
@@ -3420,6 +3442,77 @@ done:
     free(start_next);
     free(end_next);
     return ok;
+}
+
+/* Resolve Common variable-size fragments with the exact post-subsection
+ * symbol addresses.  Re-run shared Fragment/Layout ownership until the
+ * sizes stop changing.  This handles GNU forward numeric labels and
+ * expressions referencing later subsections without backend-specific
+ * preprocessor passes, speculative dummy symbols, or unknown-opcode skips.
+ *
+ * The parser already has every source symbol at this point.  A reference
+ * to a truly undefined label must remain an error, never a zero fill. */
+static bool minias_resolve_deferred_data(MiniAs *as) {
+    size_t pass;
+    int previous_section=as->current_section;
+    uint32_t previous_subsection=as->current_subsection;
+    if(!as->has_deferred_data)return true;
+    /* The original first-pass layout is also provisional: .fill may have
+     * been measured before a forward symbol's section was known. */
+    if(!minias_relayout_fragments(as))return false;
+    for(pass=0U;pass<=as->stmt_count;++pass) {
+        size_t i;
+        bool changed=false;
+        for(i=0U;i<as->stmt_count;++i) {
+            MiniAsStmt *stmt=&as->stmts[i];
+            uint64_t n=0U;
+            if(!stmt->deferred_data_size)continue;
+            as->current_section=stmt->section;
+            as->current_subsection=stmt->subsection;
+            as->expr_dot_override=true;
+            as->expr_dot_value=stmt->offset;
+            if(!strcmp(stmt->op,".fill")) {
+                unsigned width=0U;
+                uint64_t repeat=0U,bits=0U;
+                if(!parse_common_fill(as,stmt->args,&repeat,&width,&bits) ||
+                   (width!=0U && repeat>UINT32_MAX/width)) {
+                    minias_set_error(as,
+                        "unresolved-deferred-fill:%s:line=%zu",
+                        stmt->args,stmt->line);
+                    goto invalid;
+                }
+                n=repeat*width;
+            }else {
+                uint64_t amount=0U;
+                uint8_t fill=0U;
+                if(!parse_common_space(as,stmt->args,&amount,&fill) ||
+                   amount>UINT32_MAX) {
+                    minias_set_error(as,
+                        "unresolved-deferred-space:%s:line=%zu",
+                        stmt->args,stmt->line);
+                    goto invalid;
+                }
+                n=amount;
+            }
+            as->expr_dot_override=false;
+            if(n!=(uint64_t)stmt->size) {
+                stmt->size=(uint32_t)n;
+                changed=true;
+            }
+        }
+        if(!changed) {
+            as->current_section=previous_section;
+            as->current_subsection=previous_subsection;
+            return true;
+        }
+        if(!minias_relayout_fragments(as))goto invalid;
+    }
+    minias_set_error(as,"deferred-fragment-layout-nonconvergent");
+invalid:
+    as->expr_dot_override=false;
+    as->current_section=previous_section;
+    as->current_subsection=previous_subsection;
+    return false;
 }
 
 static bool collect_out_of_range_branches(MiniAs *as,
@@ -5384,6 +5477,7 @@ int minias_assemble_config(const char *input_path,
         as.forced_long_branch_ids = long_branch_ids;
         as.forced_long_branch_count = long_branch_count;
         parsed = as.error[0] == '\0' && minias_parse_file(&as, input_path);
+        if (parsed && !minias_resolve_deferred_data(&as))parsed=false;
         if (parsed &&
             !collect_out_of_range_branches(&as,
                                            &long_branch_ids,

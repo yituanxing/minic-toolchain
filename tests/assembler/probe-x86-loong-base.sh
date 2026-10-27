@@ -1136,12 +1136,45 @@ cat > "$work/gnu-fill.s" <<'GNU_FILL'
 .Lbool_end:
     .fill -(((.Lbool_after-.Lbool_begin)-(.Lbool_end-.Lbool_after))>0),1,0x5a
     .fill -((3>=2)==-1),1,0x6c
+    # Real Linux ALTERNATIVE: forward subsection labels and stable size.
+    .subsection 0
+.Loldstart:
+    .byte 1,2,3,4
+.Loldend:
+    .fill - (((.Lnewend-.Lnewstart)-(.Loldend-.Loldstart)) > 0) * ((.Lnewend-.Lnewstart)-(.Loldend-.Loldstart)) / 4,4,0x03400000
+    .skip .Loldend-.Loldstart,0x7a
+    .subsection 1
+.Lnewstart:
+    .byte 0x81,0x82,0x83,0x84,0x85,0x86,0x87,0x88
+.Lnewend:
+    .subsection 0
+    .byte 0x99
 GNU_FILL
 "$MINIAS" --target=loongarch64 -o "$work/la-fill-mini.o" "$work/gnu-fill.s"
 "$LOONGAS" -mabi=lp64d -o "$work/la-fill-gnu.o" "$work/gnu-fill.s"
 "$LOONGCOPY" -j .data -O binary "$work/la-fill-mini.o" "$work/la-fill-mini.bin"
 "$LOONGCOPY" -j .data -O binary "$work/la-fill-gnu.o" "$work/la-fill-gnu.bin"
 cmp "$work/la-fill-mini.bin" "$work/la-fill-gnu.bin"
+"$MINIAS" --target=x86_64 -o "$work/x86-fill-mini.o" "$work/gnu-fill.s"
+as --64 -o "$work/x86-fill-gnu.o" "$work/gnu-fill.s"
+objcopy -j .data -O binary "$work/x86-fill-mini.o" "$work/x86-fill-mini.bin"
+objcopy -j .data -O binary "$work/x86-fill-gnu.o" "$work/x86-fill-gnu.bin"
+cmp "$work/x86-fill-mini.bin" "$work/x86-fill-gnu.bin"
+# Undefined forward labels must remain errors, never fabricated as zero.
+cat > "$work/invalid-forward-fill.s" <<'BAD_FILL'
+.data
+.fill .Lnever_defined-.Lstart,4,0
+.Lstart:
+.byte 1
+BAD_FILL
+for target in x86_64 loongarch64; do
+    if "$MINIAS" --target="$target" -o "$work/invalid-fill.o" \
+       "$work/invalid-forward-fill.s" >/dev/null 2>"$work/invalid-forward-fill.err"; then
+        echo "unresolved deferred GAS expression incorrectly accepted target=$target" >&2
+        exit 1
+    fi
+done
+echo 'MINIAS_COMMON_DEFERRED=PASS x86_LA64_GNU_bytes=equal forward_subsection_fill_skip=true unresolved=reject'
 echo 'MINIAS_COMMON_FILL=PASS GNU_LA64_data_bytes=equal'
 # GNU-preprocessed C unsigned suffixes and full-uint64 .quad expressions:
 # compare data bytes produced by the same source for BOTH target ELF writers.
