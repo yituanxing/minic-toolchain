@@ -326,3 +326,28 @@ Linux machine/relocation parity: GNU may emit additional relaxation
 relocations and not all LoongArch forms are parsed. The next campaign should
 first pass this exact-source GNU unit oracle, then rerun only the existing
 seven LoongArch frozen shards, with no kernel/producer rebuild.
+
+## RV architecture cross-audit and corrective convergence (2026-10-27)
+
+The **historically verified RISC-V** backend separates instruction meaning
+(`RV_MC_*`) from semantic fixup identity
+(`MINIAS_FIXUP_RV_*`) and uses the shared SymbolExpr, common
+`minias_add_fixup`, section-offset layout, target relocation lookup,
+and common ELF RELA serialization. The first LoongArch symbolic batch
+reused the latter pipeline but incorrectly reused FixupKind enum values as
+MC opcode numbers. That concealed a *real architecture violation* and
+could introduce opcode collisions when adding more families.
+
+This audit repairs LoongArch to use its own Target-only `LA_MC_*`
+opcode family and converts to separate `MINIAS_FIXUP_LARCH_*` exactly
+at encode/fixup placement. No duplicated symbol table/ELF fixup engine
+and no RV code modifications. LoongArch branch register bit layout was
+also corrected from the GNU word oracle
+(`beqz $a0` = `0x40000080`; `beq $a0,$a1` = `0x58000085`).
+
+RV ISA/ABI configuration, PIC/GOT semantics, .option architecture state,
+RVC relaxation, A0 corpus and kernel P1 are **not equivalent** to the
+new targets yet: those stronger RV capabilities remain target-specific
+requirements, and GNU AArch64/x86/LoongArch Linux acceptance is not
+asserted. New architectures must continue adding capabilities to a
+stable shared pipeline instead of copying RV's implementation blindly.

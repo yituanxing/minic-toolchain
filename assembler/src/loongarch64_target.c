@@ -6,6 +6,18 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* Match RV's proven invariant: MC opcode describes the instruction family;
+ * FixupKind describes an independently attached semantic relocation.
+ * Never cast relocation identities to an instruction opcode. */
+typedef enum {
+    LA_MC_RAW = 0,
+    LA_MC_PCALA_HI20,
+    LA_MC_PCALA_LO12,
+    LA_MC_BRANCH16,
+    LA_MC_BRANCH21,
+    LA_MC_BRANCH26
+} LaMCOpcode;
+
 /* LoongArch64 LA64 basic integer target. GNU binutils tables own the reference
  * encodings; extensions and fixup relocation families are not guessed. */
 static bool la_reg(const char *s,unsigned *r) {
@@ -81,18 +93,18 @@ static bool la_branch_instruction(MiniAs *as, MiniAsMCInst *m,
                                   const char *op, char t[3][192],
                                   unsigned count) {
     struct BranchKind {const char *name;unsigned operands;uint32_t base;
-                       MiniAsFixupKind fixup;};
+                       LaMCOpcode opcode;};
     static const struct BranchKind branches[]={
-        {"b",1U,UINT32_C(0x50000000),MINIAS_FIXUP_LARCH_B26},
-        {"bl",1U,UINT32_C(0x54000000),MINIAS_FIXUP_LARCH_B26},
-        {"beqz",2U,UINT32_C(0x40000000),MINIAS_FIXUP_LARCH_B21},
-        {"bnez",2U,UINT32_C(0x44000000),MINIAS_FIXUP_LARCH_B21},
-        {"beq",3U,UINT32_C(0x58000000),MINIAS_FIXUP_LARCH_B16},
-        {"bne",3U,UINT32_C(0x5c000000),MINIAS_FIXUP_LARCH_B16},
-        {"blt",3U,UINT32_C(0x60000000),MINIAS_FIXUP_LARCH_B16},
-        {"bge",3U,UINT32_C(0x64000000),MINIAS_FIXUP_LARCH_B16},
-        {"bltu",3U,UINT32_C(0x68000000),MINIAS_FIXUP_LARCH_B16},
-        {"bgeu",3U,UINT32_C(0x6c000000),MINIAS_FIXUP_LARCH_B16}
+        {"b",1U,UINT32_C(0x50000000),LA_MC_BRANCH26},
+        {"bl",1U,UINT32_C(0x54000000),LA_MC_BRANCH26},
+        {"beqz",2U,UINT32_C(0x40000000),LA_MC_BRANCH21},
+        {"bnez",2U,UINT32_C(0x44000000),LA_MC_BRANCH21},
+        {"beq",3U,UINT32_C(0x58000000),LA_MC_BRANCH16},
+        {"bne",3U,UINT32_C(0x5c000000),LA_MC_BRANCH16},
+        {"blt",3U,UINT32_C(0x60000000),LA_MC_BRANCH16},
+        {"bge",3U,UINT32_C(0x64000000),LA_MC_BRANCH16},
+        {"bltu",3U,UINT32_C(0x68000000),LA_MC_BRANCH16},
+        {"bgeu",3U,UINT32_C(0x6c000000),LA_MC_BRANCH16}
     };
     unsigned i, rj, rd, slot;
     MiniAsSymbolExpr expr;
@@ -107,7 +119,7 @@ static bool la_branch_instruction(MiniAs *as, MiniAsMCInst *m,
         if(count==3U && !la_reg(t[1],&rd))return false;
         slot=count-1U;
         if (!la_symbol_operand(as,m,slot,&expr))return false;
-        m->opcode=(unsigned)b->fixup;
+        m->opcode=(unsigned)b->opcode;
         m->count=count;
         if(count>=2U) {m->operands[0].kind=MINIAS_MC_REGISTER;
                        m->operands[0].reg=rj;}
@@ -219,7 +231,7 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
         if(strcmp(s->op,"pcalau12i")==0 &&
            la_reloc_expr(t[1],"%pc_hi20",&expr)) {
             if(!la_symbol_operand(as,m,1U,&expr))goto fail;
-            m->opcode=MINIAS_FIXUP_LARCH_PCALA_HI20;
+            m->opcode=LA_MC_PCALA_HI20;
             m->count=2U;m->encoding=UINT32_C(0x1a000000)|rd;
             m->operands[0].kind=MINIAS_MC_REGISTER;
             m->operands[0].reg=rd;
@@ -260,7 +272,7 @@ static bool la_parse(MiniAs *as,MiniAsStmt *s) {
             for(i=0U;i<sizeof(imm12)/sizeof(imm12[0]);++i)
                 if(strcmp(s->op,imm12[i].name)==0) {
                     if(!la_symbol_operand(as,m,2U,&expr))goto fail;
-                    m->opcode=MINIAS_FIXUP_LARCH_PCALA_LO12;
+                    m->opcode=LA_MC_PCALA_LO12;
                     m->count=3U;
                     m->encoding=imm12[i].code|(rj<<5U)|rd;
                     m->operands[0].kind=MINIAS_MC_REGISTER;
@@ -330,17 +342,22 @@ static bool la_encode(MiniAs *as,const MiniAsStmt *s) {
     if(!m){minias_set_error(as,"missing-la-mcinst");return false;}
     code=m->encoding;
     switch(m->opcode) {
-        case MINIAS_FIXUP_LARCH_PCALA_HI20:
-        case MINIAS_FIXUP_LARCH_PCALA_LO12:
-            kind=(MiniAsFixupKind)m->opcode;
+        case LA_MC_PCALA_HI20:
+        case LA_MC_PCALA_LO12:
+            kind=m->opcode==LA_MC_PCALA_HI20 ?
+                 MINIAS_FIXUP_LARCH_PCALA_HI20 :
+                 MINIAS_FIXUP_LARCH_PCALA_LO12;
             slot=m->count-1U;
             break;
-        case MINIAS_FIXUP_LARCH_B16:
-        case MINIAS_FIXUP_LARCH_B21:
-        case MINIAS_FIXUP_LARCH_B26: {
+        case LA_MC_BRANCH16:
+        case LA_MC_BRANCH21:
+        case LA_MC_BRANCH26: {
             MiniAsSymbol *target;
             int64_t diff;
-            kind=(MiniAsFixupKind)m->opcode;
+            kind=m->opcode==LA_MC_BRANCH16 ?
+                 MINIAS_FIXUP_LARCH_B16 :
+                 m->opcode==LA_MC_BRANCH21 ?
+                 MINIAS_FIXUP_LARCH_B21 : MINIAS_FIXUP_LARCH_B26;
             slot=m->count-1U;
             expr=m->operands[slot].symbol;
             target=minias_get_symbol(as,expr->name,false);
