@@ -8,6 +8,7 @@ on:
     paths:
       - '.github/workflows/minias-linux-pinned-3x7-replay.yml'
       - 'assembler/src/cfi.c'
+      - 'assembler/src/debug_line.c'
       - 'assembler/src/aarch64_target.c'
       - 'assembler/src/assembler.c'
       - 'tests/assembler/probe-aarch64-elf64.sh'
