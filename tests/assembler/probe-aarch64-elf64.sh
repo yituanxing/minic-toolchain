@@ -25,6 +25,18 @@ _start:
     mov x0, #0
     hint #25
     hint 25
+    hint #0
+    hint #127
+    bl after_call
+    b exit_code
+after_call:
+    ret
+exit_code:
+    mov x8, #93
+    svc #0
+.globl external_probe
+external_probe:
+    # GNU-byte ISA test only: privileged MRS/MSR must not execute at EL0.
     mrs x0, sp_el0
     mrs x2, sp_el0
     mrs x7, tpidr_el0
@@ -37,17 +49,6 @@ _start:
     cmn w1, #4096
     cmn x0, x1
     cmp x1, #8192
-    hint #0
-    hint #127
-    bl after_call
-    b exit_code
-after_call:
-    ret
-exit_code:
-    mov x8, #93
-    svc #0
-.globl external_probe
-external_probe:
     bl external_function
     b external_branch
     cbz x0, external_branch
