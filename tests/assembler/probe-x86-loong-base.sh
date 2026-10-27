@@ -81,7 +81,7 @@ entry_x:
     .space 200, 0x90
 .Lafter_x86:
     jnb .Lback_x86
-    /* This .org would be backwards if an in-range JMP were forced rel32. */
+    # This .org would be backwards if an in-range JMP were forced rel32.
 .Lorg_x86:
     jmp .Lend_org_x86
     .org .Lorg_x86+12
