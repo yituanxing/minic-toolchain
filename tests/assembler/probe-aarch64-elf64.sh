@@ -183,7 +183,7 @@ A64_INT
 "$AARCH64_OBJCOPY" -j .text -O binary "$work/int-mini.o" "$work/int-mini.bin"
 "$AARCH64_OBJCOPY" -j .text -O binary "$work/int-gnu.o" "$work/int-gnu.bin"
 cmp "$work/int-mini.bin" "$work/int-gnu.bin"
-for bad in 'add x0, w0, x1' 'cmp x0, #4096' 'ldr x0, [x1, -8]' \
+for bad in 'add x0, w0, x1' 'cmp x0, #4097' 'ldr x0, [x1, -8]' \
            'stp x29, x30, [sp, -520]!' 'mov x0, #65536'; do
     printf '.arch armv8-a\n.text\n%s\n' "$bad" >"$work/bad-integer.s"
     if "$MINIAS" --target=aarch64 -o "$work/bad-integer.o" \

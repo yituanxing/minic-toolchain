@@ -2455,6 +2455,10 @@ static bool emit_symbol_difference(MiniAs *as,
         /* Same-section local differences remain absolute even when
          * the DATA fragment containing the field is in another section. */
         lhs->section == rhs->section &&
+        /* Keep native RISC-V ADD/SUB relocations when the target supports
+         * them: local symbol differences in .alternative are linker-relaxed
+         * entities. Fold only on ABIs with no pair relocation contract. */
+        (add_type == 0U || sub_type == 0U) &&
         lhs->bind == MINIAS_STB_LOCAL && rhs->bind == MINIAS_STB_LOCAL &&
         strncmp(lhs->name, ".L", 2U) == 0 && strncmp(rhs->name, ".L", 2U) == 0) {
         int64_t difference =
