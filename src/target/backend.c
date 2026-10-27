@@ -38,10 +38,13 @@ static const char *const aarch64_qualified_inputs[] = {
      * and all zero-input raw GAS remain unaffected. */
     "// atomic_and", "// atomic_or", "// atomic_xor", "// atomic_andnot",
     "// atomic64_and", "// atomic64_or", "// atomic64_xor",
-    "// atomic64_andnot",
+    "// atomic64_andnot", "// atomic_add", "// atomic64_add",
+    "// atomic_sub", "// atomic64_sub",
     "// atomic_fetch_and", "// atomic_fetch_or", "// atomic_fetch_xor",
     "// atomic_fetch_andnot", "// atomic64_fetch_and", "// atomic64_fetch_or",
-    "// atomic64_fetch_xor", "// atomic64_fetch_andnot"
+    "// atomic64_fetch_xor", "// atomic64_fetch_andnot",
+    "// atomic_fetch_add", "// atomic64_fetch_add",
+    "// atomic_fetch_sub", "// atomic64_fetch_sub"
 };
 static const char *const loongarch64_qualified_inputs[] = {
     "dbar", "amand_db.w", "amor_db.w", "amxor_db.w", "amadd_db.w",

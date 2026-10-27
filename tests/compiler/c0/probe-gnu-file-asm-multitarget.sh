@@ -289,12 +289,14 @@ SRC
         else
             typename='unsigned long'; prefix='64'; word0='%0'; word3='%3'
         fi
-        for operation in and or xor andnot; do
+        for operation in and or xor andnot add sub; do
             case "$operation" in
                 and) opcode=and; input_constraint=Lr ;;
                 or) opcode=orr; input_constraint=Lr ;;
                 xor) opcode=eor; input_constraint=Lr ;;
                 andnot) opcode=bic; input_constraint=r ;;
+                add) opcode=add; input_constraint=Ir ;;
+                sub) opcode=sub; input_constraint=Jr ;;
             esac
             cat >> "$work/aarch64-llsc.i" <<SRC
 void atomic_${width}_${operation}($typename *p, $typename i) {
@@ -317,15 +319,17 @@ int main(void) {
     unsigned long b = 0x31;
     atomic_32_or(&a, 6); atomic_32_and(&a, 0x30); atomic_32_xor(&a, 5);
     atomic_32_andnot(&a, 0x10);
+    atomic_32_add(&a, 5); atomic_32_sub(&a, 5);
     atomic_64_or(&b, 6); atomic_64_and(&b, 0x30); atomic_64_xor(&b, 5);
     atomic_64_andnot(&b, 0x10);
+    atomic_64_add(&b, 5); atomic_64_sub(&b, 5);
     return a == 0x25 && b == 0x25 ? 0 : 1;
 }
 SRC
     "$cross_cc" -x c "$work/aarch64-llsc.i" -o "$work/aarch64-llsc.gnu.elf"
     "$MINIC_CC" --target=aarch64-linux -S "$work/aarch64-llsc.i" \
         -o "$work/aarch64-llsc.minic.s"
-    for op in and orr eor bic; do
+    for op in and orr eor bic add sub; do
         grep -Fq "  $op w9, w9, w11" "$work/aarch64-llsc.minic.s"
         grep -Fq "  $op x9, x9, x11" "$work/aarch64-llsc.minic.s"
     done
@@ -369,7 +373,7 @@ SRC
             exit 1
         fi
     done
-    echo 'MINIC_AARCH64_LINUX_LLSC_GNU_AS_QEMU=PASS operations=8 negatives=5 bic=2'
+    echo 'MINIC_AARCH64_LINUX_LLSC_GNU_AS_QEMU=PASS operations=12 negatives=5 bic=2 add_sub=4'
 
     # Frozen upstream atomic_ll_sc.h atomic{,64}_fetch_or variants.
     # Verify real old-value return, memory update, and release/acquire/full
@@ -484,11 +488,13 @@ SRC
         else
             ctype='long long'; prefix=64; old='%0'; next='%1'; rhs='%4'; constraint=Lr
         fi
-        for operation in and xor andnot; do
+        for operation in and xor andnot add sub; do
             case "$operation" in
                 and) alu=and; operand_constraint=$constraint ;;
                 xor) alu=eor; operand_constraint=$constraint ;;
                 andnot) alu=bic; operand_constraint=r ;;
+                add) alu=add; operand_constraint=Ir ;;
+                sub) alu=sub; operand_constraint=Jr ;;
             esac
             for mode in full relaxed acquire release; do
                 case "$mode" in
@@ -526,6 +532,12 @@ SRC
             elif [ "$operation" = xor ]; then
                 init=0; a=1; b=2; c=4; d=8
                 x=0; y=1; z=3; w=7; endval=15
+            elif [ "$operation" = add ]; then
+                init=1; a=2; b=3; c=4; d=5
+                x=1; y=3; z=6; w=10; endval=15
+            elif [ "$operation" = sub ]; then
+                init=32; a=1; b=2; c=4; d=8
+                x=32; y=31; z=29; w=25; endval=17
             else
                 init=63; a=1; b=2; c=4; d=8
                 x=63; y=62; z=60; w=56; endval=48
@@ -550,7 +562,9 @@ SRC
     cat >> "$work/aarch64-fetch-logic.i" <<'SRC'
 int main(void) {
     return test_32_and() && test_32_xor() && test_32_andnot() &&
-           test_64_and() && test_64_xor() && test_64_andnot() ? 0 : 1;
+           test_32_add() && test_32_sub() &&
+           test_64_and() && test_64_xor() && test_64_andnot() &&
+           test_64_add() && test_64_sub() ? 0 : 1;
 }
 SRC
     "$cross_cc" -O0 -x c "$work/aarch64-fetch-logic.i" \
@@ -559,7 +573,9 @@ SRC
         -o "$work/aarch64-fetch-logic.minic.s"
     for opcode in 'and w13, w9, w11' 'and x13, x9, x11' \
                   'eor w13, w9, w11' 'eor x13, x9, x11' \
-                  'bic w13, w9, w11' 'bic x13, x9, x11'; do
+                  'bic w13, w9, w11' 'bic x13, x9, x11' \
+                  'add w13, w9, w11' 'add x13, x9, x11' \
+                  'sub w13, w9, w11' 'sub x13, x9, x11'; do
         grep -Fq "$opcode" "$work/aarch64-fetch-logic.minic.s"
     done
     "$cross_cc" -x assembler "$work/aarch64-fetch-logic.minic.s" \
@@ -600,7 +616,7 @@ SRC
             exit 1
         fi
     done
-    echo 'MINIC_AARCH64_LINUX_FETCH_LOGIC_GNU_QEMU=PASS variants=24 operations=and,xor,andnot ordering=4 negative=5'
+    echo 'MINIC_AARCH64_LINUX_FETCH_LOGIC_GNU_QEMU=PASS variants=40 operations=and,xor,andnot,add,sub ordering=4 negative=5'
 
     # Original Linux uaccess.h __uaccess_mask_ptr: bit55 tag BIC immediate.
     # Not a plain AND lowering: require exact GNU i constant and hardware BIC.
