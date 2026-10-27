@@ -75,6 +75,23 @@ has src/target/common/direct_machine_dispatch.h 'minic_core_block_walk_next('
 has src/target/common/direct_machine_dispatch.h 'minic_core_block_instruction_at('
 has src/target/common/direct_machine_dispatch.h 'minic_multi_direct_machine_instruction_shape('
 has src/target/common/direct_machine_dispatch.h 'shape.family != MINIC_DIRECT_MACHINE_INTEGER'
+# Common direct-LP64 ELF/FunctionPlan/orchestration now has ONE owner;
+# AArch64 and LoongArch64 supply only target-specific prologue/ISA hooks.
+exists src/target/common/direct_function_emit.h
+has src/target/common/direct_function_emit.h 'minic_multi_direct_lp64_function_plan_prepare('
+has src/target/common/direct_function_emit.h 'minic_multi_emit_elf_symbol_visibility('
+has src/target/common/direct_function_emit.h 'config->emit_prologue(emission, &ctx)'
+has src/target/common/direct_function_emit.h 'config->emit_core_blocks(emission, &ctx)'
+has src/target/common/direct_function_emit.h 'config->rewrite_dynamic_asm(out, staged)'
+for arch in aarch64 loongarch64; do
+  file="src/target/$arch/codegen.c"
+  has "$file" 'minic_multi_direct_lp64_emit_function('
+  lacks "$file" 'minic_multi_direct_lp64_function_plan_prepare('
+  lacks "$file" 'minic_multi_emit_elf_symbol_visibility('
+done
+# Persistent source fingerprints: reviewed code never silently falls back to
+# "already scanned" after a source change. New source owners must be indexed.
+python3 tools/ci/minic-backend-review-ledger.py --check
 for arch in aarch64 loongarch64; do
   block="src/target/$arch/block_emit.c"
   has "$block" 'minic_multi_direct_machine_dispatch('
@@ -431,8 +448,8 @@ has src/target/common/core_function_plan.c 'minic_core_object_storage_plan_destr
 has src/target/x86_64/codegen.c 'minic_x86_64_frame_init_with_storage('
 has src/target/riscv32/rv32_emit.c 'rv32_frame_init_with_storage('
 has src/target/riscv64/codegen_function.c 'minic_riscv64_emit_core_function_for_program_with_symbol_with_storage('
-has src/target/aarch64/codegen.c 'fn, facts, storage, "aarch64"'
-has src/target/loongarch64/codegen.c 'fn, facts, storage, "loongarch64"'
+has src/target/aarch64/codegen.c 'minic_multi_direct_lp64_emit_function('
+has src/target/loongarch64/codegen.c 'minic_multi_direct_lp64_emit_function('
 # All four physical frame owners use the single Common borrowing contract.
 # Borrowed immutable entries must never be destroyed by target-local code.
 has src/target/common/core_object_storage.c '*result = *shared;'
@@ -614,8 +631,8 @@ lacks src/target/common/direct_call_plan.c 'while (id < fn->instruction_count'
 # SysV VA cursors must match the prepared Common fact count exactly.
 has src/target/x86_64/frame.c 'if (count != frame->varargs_count) return false;'
 has src/target/common/direct_function_plan.c 'program, target, decl, fn, facts, abi, indirect_record,'
-has src/target/aarch64/codegen.c 'minic_multi_direct_lp64_function_plan_prepare('
-has src/target/loongarch64/codegen.c 'minic_multi_direct_lp64_function_plan_prepare('
+has src/target/common/direct_function_emit.h 'minic_multi_direct_lp64_function_plan_prepare('
+lacks src/target/loongarch64/codegen.c 'minic_multi_direct_lp64_function_plan_prepare('
 # All five targets must own only target callbacks. File lifetime,
 # global/Core visit order and partial-output removal are ONE common transaction.
 exists src/target/common/program_emit.h

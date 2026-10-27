@@ -488,3 +488,48 @@ visitor owns any lazily grown result array and destroys it with the function
 plan. Standalone `minic_core_function_facts_analyze` remains allocation-free;
 no target-owned Core rescan or ABI-specific site assumptions are introduced.
 The standalone probe covers multi-site order, calls and ownership.
+
+
+## Direct LP64 function emission: single orchestration owner
+
+`target/common/direct_function_emit.h` now owns the complete function
+lifecycle, downstream ABI planning, ELF section/symbol/visibility directives,
+constructor registration, construction of the immutable Core block context,
+staged dynamic-stack rewrite and all cleanup. AArch64 and LoongArch64 expose
+small native entry points for the prologue, instruction blocks and optional
+target-only rewrite. All actual register saves, native instruction sequences,
+ELF stack adjustment and target-specific ABI classifier policies remain
+inside the targets. The common function envelope does **not** imply a shared
+psABI or require code generation to emit the same physical instructions.
+
+This follows the previous shared `direct_machine_dispatch.h` consolidation:
+one common algorithm for semantic machine-family routing and one common
+function envelope, but independently qualified native emitters. The resulting
+backend shape is an **enhancement boundary**, not two parallel orchestration
+implementations that diverge whenever a feature is added.
+
+## Incremental source review ledger (no repeated scanning)
+
+`docs/architecture/minic-backend-review-ledger.json` records every checked-in
+`src/target/*.{c,h}` file with its Git *blob* fingerprint, module owner and
+source-inspection depth. This prevents conflating **present in a directory**
+with **read and reviewed** or **executed by a passing CI**:
+
+- `inventory`: enumerated and fingerprinted, not deeply read.
+- `targeted`: relevant procedures/boundaries inspected; remainder pending.
+- `full`: complete source was read and assessed in this architectural pass.
+- `ci_touched_in`: prior PRs changing the file; these indicate historical
+  tested changes, **not** that every code path has been reviewed.
+
+`python3 tools/ci/minic-backend-review-ledger.py --summary` summarizes review
+depth by target. `--changed` reports the prioritized unreviewed owners and
+**stale** source fingerprints, so unchanged already-reviewed files are not
+reopened on every iteration. `--check` is an automated CI inventory gate:
+new or deleted target files cannot silently bypass the ledger. The baseline
+commit identifies the starting source snapshot; a passing build is separately
+recorded by the actual CI run, never inferred from review depth.
+
+**Next unreviewed boundaries** are explicit in the ledger's
+`next_deep_review`: RV32/RV64/x86 physical frame and register handling, and
+cross-ISA CALL marshaling. Inspect those owners rather than reviewing the
+already-completed Core CFG or shared Direct LP64 dispatchers again.
