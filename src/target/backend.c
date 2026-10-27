@@ -5,6 +5,7 @@
 #include "target/x86_64/codegen.h"
 #include "target/x86_64/asm_contract.h"
 #include "target/aarch64/codegen.h"
+#include "target/aarch64/asm_contract.h"
 #include "target/loongarch64/codegen.h"
 #include <string.h>
 
@@ -34,7 +35,8 @@ static const MinicBackend x86_64_backend = {
 };
 static const MinicBackend aarch64_backend = {
     MINIC_TARGET_ARCH_AARCH64, "aarch64",
-    minic_aarch64_write_c0_program_with_core_functions, NULL, false
+    minic_aarch64_write_c0_program_with_core_functions,
+    minic_aarch64_qualify_inline_asm, false
 };
 static const MinicBackend loongarch64_backend = {
     MINIC_TARGET_ARCH_LOONGARCH64, "loongarch64",

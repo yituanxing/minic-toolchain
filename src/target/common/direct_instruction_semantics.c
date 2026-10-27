@@ -647,6 +647,16 @@ bool minic_multi_direct_machine_instruction_shape(
         shape->family = MINIC_DIRECT_MACHINE_COMPILER_BARRIER;
         return true;
     }
+    /* Structured GNU asm is already a Core effect, never an SSA value.
+     * Native target emission remains independently qualified and fail-closed. */
+    if (ins->kind == MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM) {
+        if (ins->result != MINIC_CORE_VALUE_INVALID ||
+            !minic_type_is_void(ins->type) ||
+            ins->value.structured_inline_asm.inline_asm_id >= fn->inline_asm_count)
+            return false;
+        shape->family = MINIC_DIRECT_MACHINE_RESIDUAL;
+        return true;
+    }
     if (ins->kind == MINIC_CORE_INSTRUCTION_RECORD_COPY) {
         shape->family = MINIC_DIRECT_MACHINE_RECORD_COPY;
         return true;

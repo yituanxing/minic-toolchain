@@ -1,4 +1,5 @@
 #include "target/aarch64/residual_emit.h"
+#include "target/aarch64/asm_contract.h"
 #include "target/aarch64/scalar_normalize.h"
 #include "target/common/direct_residual_plan.h"
 #include "target/common/direct_instruction_semantics.h"
@@ -84,6 +85,9 @@ bool minic_aarch64_emit_residual_instruction(
     dynamic_frame = ctx->dynamic_frame;
     *needs_writeback = true;
         switch (ins->kind) {
+        case MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM:
+            *needs_writeback = false;
+            return minic_aarch64_emit_qualified_structured_asm(out, ctx, ins);
         case MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT: {
             size_t width = 0U;
             bool sign = false;
