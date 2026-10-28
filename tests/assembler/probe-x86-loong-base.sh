@@ -3158,3 +3158,56 @@ objcopy -j .text -O binary "$work/x86-alu-complement-mini.o" "$work/x86-alu-comp
 objcopy -j .text -O binary "$work/x86-alu-complement-gnu.o" "$work/x86-alu-complement-gnu.bin"
 cmp "$work/x86-alu-complement-mini.bin" "$work/x86-alu-complement-gnu.bin"
 echo 'MINIAS_X86_GROUP1_COMPLEMENT=PASS GNU_32bit_explicit_bitwise_not'
+
+# Native Linux VDSO requires default GNU .eh_frame, not the old
+# declaration-only CFI shim. Compare actual CIE/FDE bytes, PC-relative ELF
+# relocation type, and decoded DWARF instructions with system GNU GAS.
+cat > "$work/x86-real-eh-cfi.s" <<'X86_REAL_EH_CFI'
+.text
+.globl x86_eh_cfi_entry
+x86_eh_cfi_entry:
+.cfi_startproc
+pushq %rbp
+.cfi_def_cfa_offset 16
+.cfi_offset 6,-16
+movq %rsp,%rbp
+.cfi_def_cfa_register 6
+popq %rbp
+.cfi_def_cfa 7,8
+.cfi_restore 6
+ret
+.cfi_endproc
+X86_REAL_EH_CFI
+"$MINIAS" --target=x86_64 -o "$work/x86-eh-mini.o" "$work/x86-real-eh-cfi.s"
+as --64 -o "$work/x86-eh-gnu.o" "$work/x86-real-eh-cfi.s"
+for flavor in mini gnu; do
+ objcopy -j .eh_frame -O binary "$work/x86-eh-$flavor.o" "$work/x86-eh-$flavor.bin"
+ readelf -Wr "$work/x86-eh-$flavor.o" |
+   awk '$3=="R_X86_64_PC32" {print $1,$3,$5,$6,$7}' |
+   LC_ALL=C sort > "$work/x86-eh-$flavor.reloc"
+ readelf --debug-dump=frames "$work/x86-eh-$flavor.o" > "$work/x86-eh-$flavor.frames"
+ grep -q 'CIE' "$work/x86-eh-$flavor.frames"
+ grep -q 'FDE' "$work/x86-eh-$flavor.frames"
+done
+cmp "$work/x86-eh-mini.bin" "$work/x86-eh-gnu.bin"
+cmp "$work/x86-eh-mini.reloc" "$work/x86-eh-gnu.reloc"
+[ "$(wc -l < "$work/x86-eh-mini.reloc")" -eq 1 ]
+echo 'MINIAS_X86_REAL_EH_FRAME=PASS GNU_CIE_FDE_bytes_and_PC32_RELA'
+
+# .cfi_startproc simple must omit implicit CFA initial instructions,
+# unlike the normal prologue. The Signal variant gets its own CIE.
+cat > "$work/x86-eh-simple.s" <<'X86_EH_SIMPLE'
+.text
+.globl eh_simple_probe
+eh_simple_probe:
+.cfi_startproc simple
+.cfi_def_cfa 7,8
+ret
+.cfi_endproc
+X86_EH_SIMPLE
+"$MINIAS" --target=x86_64 -o "$work/x86-eh-simple-mini.o" "$work/x86-eh-simple.s"
+as --64 -o "$work/x86-eh-simple-gnu.o" "$work/x86-eh-simple.s"
+objcopy -j .eh_frame -O binary "$work/x86-eh-simple-mini.o" "$work/x86-eh-simple-mini.bin"
+objcopy -j .eh_frame -O binary "$work/x86-eh-simple-gnu.o" "$work/x86-eh-simple-gnu.bin"
+cmp "$work/x86-eh-simple-mini.bin" "$work/x86-eh-simple-gnu.bin"
+echo 'MINIAS_X86_EH_SIMPLE=PASS GNU_CIE_suppress_implicit_CFA'
