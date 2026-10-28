@@ -7,7 +7,6 @@ trap 'rm -rf "$work"' EXIT
 cat >"$work/mask.i" <<'EOF'
 unsigned long mini64(unsigned long index,unsigned long size) {
     unsigned long mask;
-    /* Exact Linux 6.6.143 barrier.h trailing statement delimiter. */
     asm volatile("cmp %1,%2; sbb %0,%0;" : "=r"(mask) : "g"(size), "r"(index) : "cc");
     return mask;
 }
