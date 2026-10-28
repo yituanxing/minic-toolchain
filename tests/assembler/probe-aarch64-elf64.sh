@@ -73,6 +73,11 @@ external_probe:
     .endm
     nops (32 - 16) / 4
     nops 2 + 1
+    // Real kernel nops arithmetic: numeric local backward expressions
+661:
+    nop
+662:
+    nops (662b - 661b) / 4
     // AArch64 Linux EL0/EL1/EL2 sysreg matrix; exact GNU bytes and
     // read-only permission guards, including case-insensitive spelling.
     mrs x1, ID_AA64MMFR1_EL1
