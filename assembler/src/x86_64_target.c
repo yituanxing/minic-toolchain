@@ -258,7 +258,7 @@ static bool x64_symbolic_displacement(const char *raw,
             if(!depth)return false;
             --depth;continue;
         }
-        if(*p!='+' || depth==0U && p==operand || depth)continue;
+        if(*p!='+' || depth!=0U || p==operand)continue;
         *p='\0';
         if(!minias_eval_i64_expression(operand,&leading) ||
            !minias_parse_symbol_addend(x64_unwrap_disp(p+1U),&tail))
