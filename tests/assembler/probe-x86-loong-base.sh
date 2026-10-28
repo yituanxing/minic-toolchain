@@ -143,6 +143,12 @@ entry_x:
     orb %ch, %bl
     subb %ah, %dl
     xorb %bh, %ah
+    # Real GCC/GNU-accepted whitespace in target memory addressing.
+    testb $1, boot_cpu_data+114 (% rip)
+    testb $8, boot_cpu_data+77 (% rip)
+    movq ext_global+8 (% rip), %r9
+    movq %rax, ext_global + 16 (% rip)
+    cmpq $7, ext_global+24 (% rip)
     popcntq %rax, %r8
     popcntl %eax, %ecx
     popcntq 8(%rsp), %r9
@@ -835,6 +841,7 @@ for bad in            'popcntq %eax,%rax' \
            'movb %r9b,%ch' \
            'addb %spl,%ah' \
            'subb %ah,%sil' \
+           'movq 1 bad(%rip),%rax' \
            'adcl %rax,%eax' \
            'negb %eax' \
            'negw %eax' \

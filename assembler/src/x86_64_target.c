@@ -142,6 +142,30 @@ static bool x64_args2(const char *args, char a[48], char b[48]) {
  * SymbolExpr remains typed all the way into the existing common ELF fixup.
  * The PC-relative addressing mode is target-owned (ModR/M rm=101). */
 static bool x64_parse_base_memory(const char *text, MiniAsMCMemory *out) {
+    /* GNU Kbuild emits horizontal space around AT&T displacement operators,
+     * parentheses and even register prefix punctuation ("(% rip)").
+     * Normalize these within this x86 target addressing grammar; reject
+     * whitespace *inside* identifiers so invalid input cannot become
+     * an accidentally legal symbol/register. Shared expressions remain
+     * owned by the Common symbol/fixup engine. */
+    char compact[128];
+    size_t used=0U;
+    const char *scan;
+    for(scan=text;*scan;++scan) {
+        if(isspace((unsigned char)*scan)) {
+            const char *next=scan+1U;
+            unsigned char prior=used?(unsigned char)compact[used-1U]:0U;
+            while(isspace((unsigned char)*next))++next;
+            if((isalnum(prior) || prior=='_' || prior=='.') &&
+               (isalnum((unsigned char)*next) || *next=='_' || *next=='.'))
+                return false;
+            continue;
+        }
+        if(used+1U>=sizeof(compact))return false;
+        compact[used++]=*scan;
+    }
+    compact[used]='\0';
+    text=compact;
     const char *open,*close,*p;
     unsigned segment_space=0U;
     char regs[3][48], dispbuf[48], *end;
