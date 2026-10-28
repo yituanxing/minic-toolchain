@@ -114,6 +114,10 @@ jobs:
         run: |
           set -Eeuo pipefail
           MINIC_SYSREG_NATIVE_ONLY=1 bash tests/compiler/c0/probe-aarch64-linux-sysreg64.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
+      - name: LoongArch original Linux mask_nospec exact hardware and fail-closed source
+        run: |
+          set -Eeuo pipefail
+          MINIC_LOONG_NOSPEC_NATIVE_ONLY=1 bash tests/compiler/c0/probe-loongarch-linux-nospec.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
       - name: Common GNU function metadata and inline-asm fail-closed regressions
         shell: bash
         run: |

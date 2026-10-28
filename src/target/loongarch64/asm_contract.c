@@ -38,7 +38,7 @@ bool minic_loongarch64_requires_qualified_input_asm(const MinicInlineAsm *src) {
     static const char *const reserved[] = {
         "dbar", "amand_db.w", "amor_db.w", "amxor_db.w", "amadd_db.w",
         "amand_db.d", "amor_db.d", "amxor_db.d", "amadd_db.d",
-        "csrrd", "csrxchg", "1:ll.d"
+        "csrrd", "csrxchg", "1:ll.d", "sltu"
     };
     return minic_backend_inline_asm_prefix_matches(
         src, reserved, sizeof(reserved) / sizeof(reserved[0]));
@@ -368,6 +368,109 @@ static bool loong_atomic_fetch_qualified_source(
     return true;
 }
 
+/* Linux 6.6.143 arch/loongarch/include/asm/barrier.h:
+ * array_index_mask_nospec has exactly these two physical instructions.
+ * GCC GNU constraints =r, r, r are transported as Core operand roles.
+ * The compare computes the unsigned flag; sub.d produces the 0/~0 mask.
+ * No invented portable instruction or open-ended inline ASM passthrough. */
+static bool loong_mask_nospec_form(const char *text, size_t length) {
+    static const char exact[] = "sltu%0,%1,%2sub.d%0,$zero,%0";
+    char compact[128];
+    size_t i, used = 0U;
+    if (text == NULL || length == 0U || length >= sizeof(compact))
+        return false;
+    for (i = 0U; i < length; ++i) {
+        const char c = text[i];
+        if (c == ' ' || c == '\t' || c == '\n' || c == '\r')
+            continue;
+        if (c == ';' || c == '\0' || used + 1U >= sizeof(compact))
+            return false;
+        compact[used++] = c;
+    }
+    compact[used] = '\0';
+    return strcmp(compact, exact) == 0;
+}
+
+static bool loong_mask_nospec_source(
+    const MinicC0Program *program, const MinicInlineAsm *src,
+    MinicTargetInlineAsmContract *contract) {
+    MinicType plain;
+    size_t i;
+    if (program == NULL || src == NULL || contract == NULL ||
+        !src->is_volatile || src->is_goto ||
+        src->output_count != 1U || src->input_count != 2U ||
+        src->outputs == NULL || src->inputs == NULL ||
+        src->clobber_count != 0U || src->register_clobber_count != 0U ||
+        src->has_memory_clobber || src->label_count != 0U ||
+        !loong_mask_nospec_form(src->template_text, src->template_length) ||
+        !loong_csr_constraint(&src->outputs[0], "=r") ||
+        !loong_csr_constraint(&src->inputs[0], "r") ||
+        !loong_csr_constraint(&src->inputs[1], "r"))
+        return false;
+    for (i = 0U; i < 3U; ++i) {
+        const MinicInlineAsmOperand *o = i == 0U
+            ? &src->outputs[0] : &src->inputs[i - 1U];
+        const MinicExpression *e =
+            minic_c0_program_expression(program, o->expression);
+        if (e == NULL ||
+            (i == 0U &&
+             (e->value_category != MINIC_VALUE_LVALUE ||
+              minic_type_is_const(e->type))) ||
+            !minic_type_unqualified(e->type, &plain) ||
+            !minic_type_equal(plain, minic_type_unsigned_long()))
+            return false;
+    }
+    contract->operand_count = 3U;
+    contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
+    contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    contract->kinds[2] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    return true;
+}
+
+static bool loong_mask_nospec_emit(
+    FILE *out, const MinicDirectLP64BlockContext *ctx,
+    const MinicCoreInstruction *ins, const MinicCoreInlineAsm *info) {
+    const MinicCoreStructuredInlineAsmOperand *b =
+        ins->value.structured_inline_asm.operands;
+    const MinicCoreFunction *fn = ctx->fn;
+    MinicType plain;
+    size_t i;
+    if (!info->is_volatile || info->is_goto ||
+        info->has_memory_clobber || info->register_clobber_count != 0U ||
+        ins->value.structured_inline_asm.operand_count != 3U ||
+        !loong_mask_nospec_form(info->template_text, info->template_length))
+        return false;
+    for (i = 0U; i < 3U; ++i) {
+        MinicType type;
+        if (b[i].operand_index != i || b[i].value >= fn->value_count ||
+            b[i].early_clobber || b[i].has_fixed_register_binding ||
+            b[i].kind != (i == 0U
+                ? MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT
+                : MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT))
+            return false;
+        type = fn->values[b[i].value].type;
+        if (i == 0U && !minic_type_pointee(type, &type))
+            return false;
+        if (!minic_type_unqualified(type, &plain) ||
+            !minic_type_equal(plain, minic_type_unsigned_long()))
+            return false;
+    }
+    /* Frame helper owns large/static/dynamic offsets; $t3 is reserved for
+     * address materialization. No temporary overlap with $t0/$t1/$t2. */
+    return minic_loongarch64_emit_frame_mem(
+               out, "ld.d", "$t0", (size_t)b[1].value * 8U,
+               ctx->dynamic_frame) &&
+           minic_loongarch64_emit_frame_mem(
+               out, "ld.d", "$t1", (size_t)b[2].value * 8U,
+               ctx->dynamic_frame) &&
+           fputs("  sltu $t2, $t0, $t1\n"
+                 "  sub.d $t2, $zero, $t2\n", out) != EOF &&
+           minic_loongarch64_emit_frame_mem(
+               out, "ld.d", "$t1", (size_t)b[0].value * 8U,
+               ctx->dynamic_frame) &&
+           fputs("  st.d $t2, $t1, 0\n", out) != EOF;
+}
+
 bool minic_loongarch64_qualify_inline_asm(
     const MinicC0Program *program, const MinicInlineAsm *src,
     MinicTargetInlineAsmContract *contract) {
@@ -381,6 +484,8 @@ bool minic_loongarch64_qualify_inline_asm(
         contract->operand_count=0U;
         return true;
     }
+    if (loong_mask_nospec_source(program, src, contract))
+        return true;
     if(loong_pte_source(program,src,contract))
         return true;
     if (loong_atomic_qualified_source(program, src, contract) ||
@@ -616,6 +721,8 @@ bool minic_loongarch64_emit_qualified_structured_asm(
             return false;
         return fprintf(out,"  %s\n",barrier)>=0;
     }
+    if (loong_mask_nospec_form(info->template_text, info->template_length))
+        return loong_mask_nospec_emit(out, ctx, ins, info);
     if(loong_pte_form(info->template_text,info->template_length))
         return loong_pte_emit(out,ctx,ins,info);
     if (loong_csr_template(info->template_text, info->template_length))

@@ -61,6 +61,13 @@ has src/target/aarch64/asm_contract.c 'aarch64_linux_sysreg_u64_type('
 has src/target/aarch64/asm_contract.c '!aarch64_linux_sysreg_u64_type(pointee)'
 lacks src/core/core_lower_asm_target.c 'mrs x9, daif'
 
+# Original LoongArch64 Linux array_index_mask_nospec is exact target-owned
+# SLTU + SUB.D with output/register contract, not a cloned Core algorithm.
+has src/target/loongarch64/asm_contract.c 'loong_mask_nospec_form('
+has src/target/loongarch64/asm_contract.c 'loong_mask_nospec_source('
+has src/target/loongarch64/asm_contract.c 'loong_mask_nospec_emit('
+lacks src/core/core_lower_asm_target.c 'sltu'
+
 # Four ISA families, five target profiles: one storage-shape owner, distinct
 # physical ABIs. RV32 must never inherit the 8-byte LP64 word policy.
 exists src/target/common/aggregate_shape.h
