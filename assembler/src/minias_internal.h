@@ -305,6 +305,11 @@ typedef struct MiniAsStmt {
     uint64_t variable_repeat;
     uint64_t variable_value;
     unsigned variable_element_width;
+    /* Immutable parse-time machine-independent DATA byte payloads.
+     * Owns .ascii/.asciz/.string and .uleb128/.sleb128 encoding once.
+     * Unlike a source pointer, this cannot change after Symbol/Layout. */
+    unsigned char *static_data;
+    size_t static_data_size;
     MiniAsMCData *mcdata; /* fixed-width DATA: retained typed expressions */
     MiniAsMCInst *mcinst; /* allocated by target parser, freed by core */
 } MiniAsStmt;

@@ -685,6 +685,7 @@ void minias_destroy(MiniAs *as) {
     for (i = 0U; i < as->stmt_count; ++i) {
         free(as->stmts[i].op);
         free(as->stmts[i].args);
+        free(as->stmts[i].static_data);
         minias_mcdata_destroy(as->stmts[i].mcdata);
         if (as->stmts[i].mcinst != NULL) {
             MiniAsMCInst *mc = as->stmts[i].mcinst;
@@ -2204,6 +2205,11 @@ static bool add_data_stmt(MiniAs *as, const char *op, char *args, size_t line) {
     bool variable_parsed=false;
     uint64_t variable_repeat=0U,variable_value=0U;
     unsigned variable_width=0U;
+    unsigned char leb_snapshot[10]={0};
+    size_t leb_snapshot_size=0U;
+    bool has_leb_snapshot=false;
+    unsigned char *string_snapshot=NULL;
+    size_t string_snapshot_size=0U;
 
     if (!strcmp(op,".fill")) {
         unsigned elem=0U;
@@ -2232,6 +2238,9 @@ static bool add_data_stmt(MiniAs *as, const char *op, char *args, size_t line) {
             return false;
         }
         bytes=len;
+        memcpy(leb_snapshot,coded,len);
+        leb_snapshot_size=len;
+        has_leb_snapshot=true;
     } else if (strcmp(op, ".incbin") == 0) {
         if (!measure_incbin(as, args, line, &bytes)) {
             return false;
@@ -2246,7 +2255,10 @@ static bool add_data_stmt(MiniAs *as, const char *op, char *args, size_t line) {
             minias_set_error(as, "unsupported-string:%s:line=%zu", op, line);
             return false;
         }
-        free(decoded);
+        /* Retain decoded literal bytes: output must never re-decode a
+         * source string after Fragment layout has changed. */
+        string_snapshot=decoded;
+        string_snapshot_size=decoded_size;
         bytes = (uint64_t)decoded_size;
     } else if (strcmp(op, ".zero") == 0 || strcmp(op, ".space") == 0 ||
                strcmp(op, ".skip") == 0) {
@@ -2287,6 +2299,7 @@ static bool add_data_stmt(MiniAs *as, const char *op, char *args, size_t line) {
     }
 
     if (bytes > UINT32_MAX) {
+        free(string_snapshot);
         minias_set_error(as, "data-too-large:%s:line=%zu", op, line);
         return false;
     }
@@ -2376,9 +2389,27 @@ static bool add_data_stmt(MiniAs *as, const char *op, char *args, size_t line) {
        !snapshot_mutable_data_tokens(as,args,&snapshot))return false;
     if (!add_stmt(as, MINIAS_STMT_DATA, op,
                   snapshot?snapshot:args, line, (uint32_t)bytes, 1U)) {
-        free(snapshot);return false;
+        free(snapshot);
+        free(string_snapshot);
+        return false;
     }
     free(snapshot);
+    if(has_leb_snapshot || string_snapshot!=NULL) {
+        MiniAsStmt *stmt=&as->stmts[as->stmt_count-1U];
+        if(has_leb_snapshot) {
+            stmt->static_data=malloc(leb_snapshot_size);
+            if(!stmt->static_data) {
+                minias_set_error(as,"out-of-memory:leb-snapshot:line=%zu",line);
+                return false;
+            }
+            memcpy(stmt->static_data,leb_snapshot,leb_snapshot_size);
+            stmt->static_data_size=leb_snapshot_size;
+        }else {
+            stmt->static_data=string_snapshot;
+            stmt->static_data_size=string_snapshot_size;
+            string_snapshot=NULL;
+        }
+    }
     if(variable_parsed) {
         MiniAsStmt *fragment=&as->stmts[as->stmt_count-1U];
         fragment->variable_data_resolved=true;
@@ -2425,15 +2456,20 @@ static bool emit_data_stmt(MiniAs *as, const MiniAsStmt *stmt) {
         return true;
     }
     if(strcmp(stmt->op,".uleb128")==0 ||
-       strcmp(stmt->op,".sleb128")==0) {
-        unsigned char coded[10];
-        size_t len=0U;
-        if(!minias_leb_bytes(as,stmt->op,stmt->args,coded,&len) ||
-           len!=stmt->size) {
-            minias_set_error(as,"leb-layout-changed:line=%zu",stmt->line);
+       strcmp(stmt->op,".sleb128")==0 ||
+       strcmp(stmt->op,".ascii")==0 ||
+       strcmp(stmt->op,".asciz")==0 ||
+       strcmp(stmt->op,".string")==0) {
+        if(stmt->static_data_size!=stmt->size ||
+           (stmt->size!=0U && !stmt->static_data)) {
+            minias_set_error(as,"immutable-data-fragment-size:line=%zu",
+                             stmt->line);
             return false;
         }
-        return minias_section_append(as,stmt->section,coded,len);
+        /* DATA emission uses exactly the byte snapshot created at the
+         * lexical source site; no second lexer or absolute-evaluator pass. */
+        return minias_section_append(as,stmt->section,
+                                     stmt->static_data,stmt->static_data_size);
     }
     if (strcmp(stmt->op, ".incbin") == 0) {
         char *path = decode_incbin_path(as, stmt->args, stmt->line);
@@ -2487,21 +2523,6 @@ static bool emit_data_stmt(MiniAs *as, const MiniAsStmt *stmt) {
         return true;
     }
 
-    if (strcmp(stmt->op, ".asciz") == 0 || strcmp(stmt->op, ".string") == 0 ||
-        strcmp(stmt->op, ".ascii") == 0) {
-        unsigned char *decoded = NULL;
-        size_t decoded_size = 0U;
-        bool terminate = strcmp(stmt->op, ".ascii") != 0;
-        bool ok;
-
-        if (!minias_decode_string_literals(stmt->args, terminate, &decoded, &decoded_size)) {
-            minias_set_error(as, "unsupported-string:%s:line=%zu", stmt->op, stmt->line);
-            return false;
-        }
-        ok = minias_section_append(as, stmt->section, decoded, decoded_size);
-        free(decoded);
-        return ok;
-    }
     if (strcmp(stmt->op, ".zero") == 0 ||
         strcmp(stmt->op, ".space") == 0 ||
         strcmp(stmt->op, ".skip") == 0) {

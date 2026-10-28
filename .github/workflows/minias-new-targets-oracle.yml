@@ -32,6 +32,12 @@ jobs:
             bash tests/assembler/probe-common-mcexpr-four-arch.sh
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=loongarch64 \
             bash tests/assembler/probe-common-mcexpr-four-arch.sh
+      - name: GNU x86-64 and LoongArch64 immutable LEB and string DATA
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=x86_64 \
+            bash tests/assembler/probe-mc-immutable-literal-data.sh
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=loongarch64 \
+            bash tests/assembler/probe-mc-immutable-literal-data.sh
       - name: GNU x86-64 and LoongArch64 immutable lexical MCExpr
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=x86_64 \

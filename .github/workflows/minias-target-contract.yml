@@ -79,6 +79,10 @@ jobs:
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=riscv \
             bash tests/assembler/probe-common-mcexpr-four-arch.sh
+      - name: GNU RV64I immutable signed LEB, unsigned LEB and string DATA
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=riscv \
+            bash tests/assembler/probe-mc-immutable-literal-data.sh
       - name: GNU RV64I lexical .set expressions retain immutable MC fields
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=riscv \
@@ -110,6 +114,10 @@ jobs:
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=aarch64 \
             bash tests/assembler/probe-common-mcexpr-four-arch.sh
+      - name: GNU AArch64 immutable LEB and string DATA
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=aarch64 \
+            bash tests/assembler/probe-mc-immutable-literal-data.sh
       - name: GNU AArch64 immutable parse-site MCExpr
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=aarch64 \
