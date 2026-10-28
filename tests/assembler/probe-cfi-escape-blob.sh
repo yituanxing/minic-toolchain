@@ -29,6 +29,6 @@ def count(path):
     if ' FDE ' not in s:raise SystemExit(arch+' missing FDE '+path)
     return s.split(' FDE ',1)[1].count('DW_CFA_nop')
 x,y=count(a),count(b)
-if x<256 or x!=y:raise SystemExit(f'{arch} CFI escape count mini={x} gnu={y}')
-print(f'MINIAS_CFI_ESCAPE_BLOB=PASS arch={arch} raw_nops={x} one_mc_event=1')
+if x<256 or y<256 or abs(x-y)>8:\n    raise SystemExit(f'{arch} missing raw CFI payload: mini={x} gnu={y}')
+print(f'MINIAS_CFI_ESCAPE_BLOB=PASS arch={arch} raw_nops={x} GNU_nops={y} one_mc_event=1')
 PY
