@@ -240,7 +240,7 @@ bool minias_debug_emit(MiniAs *as) {
         {0U,1U,1U,1U,1U,0U,0U,0U,1U,0U,0U,1U};
     size_t *order=NULL,i,j,begin,header_len_at,header_start;
     int sec;
-    unsigned address_width=as->target_xlen==32U?4U:8U;
+    unsigned address_width=as->output_elf32?4U:8U;
     if(as->debug_loc_count==0U)return true;
     for(i=1U;i<=as->debug_file_max;++i)
         if(as->debug_files[i]==NULL) {
