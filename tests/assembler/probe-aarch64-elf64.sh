@@ -128,6 +128,35 @@ external_probe:
     udiv x3, x4, x5
     sdiv w6, w7, w8
     sdiv x9, x10, x11
+    // GNU shifted ALU and compare, exact data encoding for W/X.
+    add x1, x1, x1, lsl #1
+    add w0, w1, w2, asr #3
+    sub x0, x1, x2, lsr #4
+    adds x3, x4, x5, lsl #6
+    subs w6, w7, w8, asr #7
+    orr x0, x1, x2, ror #5
+    and x0, x1, x2, lsl #6
+    eor w9, w10, w11, lsr #12
+    bic x12, x13, x14, ror #15
+    ands w15, w16, w17, asr #1
+    cmp x0, x1, asr #2
+    cmn w0, w2, lsl #2
+    tst x0, x1, ror #2
+    // Indexed LDR/STR (X/W), sign-extension, register-extension and scale.
+    ldr x0, [x1, x2]
+    ldr x0, [x1, x2, lsl #3]
+    ldr x0, [x1, w2, uxtw 3]
+    ldr x0, [x1, w2, sxtw #3]
+    ldr x0, [x1, x2, sxtx #3]
+    str w0, [sp, x2, lsl #2]
+    ldrb w0, [x1, w2, uxtw]
+    ldrh w0, [x1, x2, lsl #1]
+    ldrsw x0, [x1, x2, lsl #2]
+    ldrsb w0, [x1, x2]
+    ldrsb x0, [x1, x2]
+    ldrsh w0, [x1, x2]
+    ldrsh x0, [x1, x2]
+    strh w0, [x1, w2, uxtw #1]
     // One typed UBFM/SBFM/BFM field model, tested W/X + GNU alias semantics.
     ubfx w0, w1, #2, #8
     ubfx x2, x3, #23, #32
@@ -464,6 +493,21 @@ for bad_source in 'ldxr x0, [x1,#4]' 'stxr x0, x1, [x2]' \
                   'bfi w0, sp, #1, #2' \
                   'bfxil x0, x1, #1, #64' \
                   'sbfiz x0, x1, #-1, #8' \
+                  'add x0, x1, x2, ror #1' \
+                  'add w0, w1, w2, lsl #32' \
+                  'and x0, x1, x2, ror #64' \
+                  'cmp x0, x1, asr #-1' \
+                  'sub x0, w1, x2, lsl #1' \
+                  'tst w1, w2, ror #32' \
+                  'ldr x0, [x1, w2]' \
+                  'ldr x0, [x1, w2, lsl #3]' \
+                  'ldr x0, [x1, x2, uxtw #3]' \
+                  'ldr x0, [x1, x2, lsl #2]' \
+                  'ldr w0, [x1, x2, lsl #3]' \
+                  'ldrb x0, [x1, x2]' \
+                  'ldrsw w0, [x1, x2]' \
+                  'str x0, [x1, sp]' \
+                  'ldr x0, [w1, x2]' \
                   'yield #1' \
                   'hint #.Lnever_defined' \
                   '.equ .Lbad_hint,128; hint #.Lbad_hint' \

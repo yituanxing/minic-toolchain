@@ -209,6 +209,7 @@ enum {
     A64_MC_LDRH,
     A64_MC_STRH,
     A64_MC_LDST_UNSCALED,
+    A64_MC_LDST_INDEX,
     A64_MC_STP,
     A64_MC_LDP,
     A64_MC_BITMASK_IMM,
@@ -333,6 +334,73 @@ static bool parse_a64_mem(const char *text, unsigned *base, int64_t *offset,
     return true;
 }
 
+/* A64 register-indexed memory with typed base/index, extension and scale.
+ * This does not change shared Section, MCInst, Fixup or ELF ownership. */
+static bool a64_indexed_memory(const char *text,unsigned *base,
+                                unsigned *index,unsigned *option,
+                                bool *scaled,unsigned amount_shift) {
+    char inside[96],tokens[4][96];
+    unsigned n;
+    size_t length=strlen(text),k;
+    bool wide,sp;
+    const char *mode;
+    int64_t amount=0;
+    if(length<5U || text[0]!='[' || text[length-1U]!=']' ||
+       length-2U>=sizeof(inside))return false;
+    memcpy(inside,text+1U,length-2U);
+    inside[length-2U]='\0';
+    if(!split_operands(inside,tokens,&n) || (n!=2U && n!=3U) ||
+       !parse_a64_reg(tokens[0],base,&wide,&sp) || !wide ||
+       !parse_a64_reg(tokens[1],index,&wide,&sp) || sp)return false;
+    *option=3U;*scaled=false;
+    if(n==2U)return wide;
+    mode=tokens[2];
+    if(!strncmp(mode,"uxtw",4U) &&
+       (!mode[4] || isspace((unsigned char)mode[4]))) {
+        if(wide)return false;
+        *option=2U;k=4U;
+    }else if(!strncmp(mode,"sxtw",4U) &&
+             (!mode[4] || isspace((unsigned char)mode[4]))) {
+        if(wide)return false;
+        *option=6U;k=4U;
+    }else if(!strncmp(mode,"lsl",3U) &&
+             (!mode[3] || isspace((unsigned char)mode[3]))) {
+        if(!wide)return false;
+        *option=3U;k=3U;
+    }else if(!strncmp(mode,"sxtx",4U) &&
+             (!mode[4] || isspace((unsigned char)mode[4]))) {
+        if(!wide)return false;
+        *option=7U;k=4U;
+    }else return false;
+    mode+=k;
+    while(isspace((unsigned char)*mode))++mode;
+    if(*mode && !parse_signed_number(mode,&amount))return false;
+    if(amount!=0 && amount!=(int64_t)amount_shift)return false;
+    *scaled=amount!=0;
+    return true;
+}
+
+/* Typed A64 shifted register operand bits; no Common grammar fork. */
+static bool a64_shift_fields(const char *text,bool wide,bool allow_ror,
+                             uint32_t *result) {
+    static const char *const ops[]={"lsl","lsr","asr","ror"};
+    unsigned i;
+    int64_t value;
+    const char *arg;
+    for(i=0U;i<4U;++i) {
+        size_t n=strlen(ops[i]);
+        if(strncmp(text,ops[i],n) || !isspace((unsigned char)text[n]))
+            continue;
+        if(i==3U && !allow_ror)return false;
+        arg=text+n;
+        while(isspace((unsigned char)*arg))++arg;
+        if(!parse_signed_number(arg,&value) || value<0 ||
+           value>=(wide?64:32))return false;
+        *result=(i<<22U)|((uint32_t)value<<10U);
+        return true;
+    }
+    return false;
+}
 /* Enumerate exact A64 rotated/replicated logical-immediate bitfields:
  * one Target grammar supports AND/ORR/EOR/ANDS/TST, not Core patches. */
 static bool a64_mask_bits(uint64_t value,bool wide,uint32_t *enc) {
@@ -367,6 +435,54 @@ static bool parse_integer_family(MiniAsMCInst *inst,
     unsigned kind = 0U;
 
     if (!split_operands(args, t, &n)) return false;
+    /* GNU shifted register arithmetic (4 operands) and compares (3).
+     * This extends existing typed instruction families; no new encoder. */
+    if(n==4U || n==3U) {
+        bool compare=n==3U &&
+            (!strcmp(op,"cmp") || !strcmp(op,"cmn") || !strcmp(op,"tst"));
+        bool alu=n==4U &&
+            (!strcmp(op,"add") || !strcmp(op,"sub") ||
+             !strcmp(op,"adds") || !strcmp(op,"subs") ||
+             !strcmp(op,"and") || !strcmp(op,"orr") ||
+             !strcmp(op,"eor") || !strcmp(op,"ands") || !strcmp(op,"bic"));
+        if(compare || alu) {
+            uint32_t shift;
+            unsigned index=compare?1U:2U;
+            bool logical=!strcmp(op,"and") || !strcmp(op,"orr") ||
+                         !strcmp(op,"eor") || !strcmp(op,"ands") ||
+                         !strcmp(op,"bic") || !strcmp(op,"tst");
+            if(!parse_a64_reg(t[0],&rd,&wd,&spd) || spd ||
+               (!compare && (!parse_a64_reg(t[1],&rn,&wn,&spn) ||
+                             spn || wn!=wd)) ||
+               !parse_a64_reg(t[index],&rm,&wm,&spm) || spm ||
+               wm!=wd ||
+               !a64_shift_fields(t[compare?2U:3U],wd,logical,&shift))
+                return false;
+            inst->encoding=shift;
+            if(compare) {
+                inst->opcode=!strcmp(op,"cmp")?A64_MC_CMP_REG:
+                             !strcmp(op,"cmn")?A64_MC_CMN_REG:
+                                               A64_MC_TST_REG;
+                inst->count=2U;
+                put_reg(&inst->operands[0],rd,wd);
+                put_reg(&inst->operands[1],rm,wd);
+            }else {
+                inst->opcode=!strcmp(op,"add")?A64_MC_ADD_REG:
+                             !strcmp(op,"sub")?A64_MC_SUB_REG:
+                             !strcmp(op,"adds")?A64_MC_ADDS_REG:
+                             !strcmp(op,"subs")?A64_MC_SUBS_REG:
+                             !strcmp(op,"and")?A64_MC_AND_REG:
+                             !strcmp(op,"orr")?A64_MC_ORR_REG:
+                             !strcmp(op,"eor")?A64_MC_EOR_REG:
+                             !strcmp(op,"ands")?A64_MC_TST_REG:A64_MC_BIC_REG;
+                inst->count=3U;
+                put_reg(&inst->operands[0],rd,wd);
+                put_reg(&inst->operands[1],rn,wd);
+                put_reg(&inst->operands[2],rm,wd);
+            }
+            return true;
+        }
+    }
     /* Common GNU Linux bit/byte-swap and acquire/release families.
      * All operands are typed once; no instruction-name checks in encode. */
     if ((!strcmp(op,"ldxr") || !strcmp(op,"ldaxr")) && n==2U) {
@@ -573,6 +689,47 @@ static bool parse_integer_family(MiniAsMCInst *inst,
         return true;
     }
 
+    if ((!strcmp(op,"ldr") || !strcmp(op,"str") ||
+         !strcmp(op,"ldrb") || !strcmp(op,"strb") ||
+         !strcmp(op,"ldrh") || !strcmp(op,"strh") ||
+         !strcmp(op,"ldrsw") || !strcmp(op,"ldrsb") ||
+         !strcmp(op,"ldrsh")) && n==2U) {
+        unsigned regbase,index,option,unitshift;
+        bool scaled;
+        bool byte=!strcmp(op,"ldrb") || !strcmp(op,"strb") ||
+                  !strcmp(op,"ldrsb");
+        bool half=!strcmp(op,"ldrh") || !strcmp(op,"strh") ||
+                  !strcmp(op,"ldrsh");
+        bool ldrsw=!strcmp(op,"ldrsw");
+        uint32_t encoding;
+        if(!parse_a64_reg(t[0],&rd,&wd,&spd) || spd ||
+           ((byte || half) && op[3]!='s' && wd) ||
+           (ldrsw && !wd))return false;
+        unitshift=byte?0U:half?1U:(ldrsw || !wd)?2U:3U;
+        if(a64_indexed_memory(t[1],&regbase,&index,&option,&scaled,
+                              unitshift)) {
+            encoding=!strcmp(op,"ldr")?(wd?UINT32_C(0xf8600800):
+                                             UINT32_C(0xb8600800)):
+                     !strcmp(op,"str")?(wd?UINT32_C(0xf8200800):
+                                             UINT32_C(0xb8200800)):
+                     !strcmp(op,"ldrb")?UINT32_C(0x38600800):
+                     !strcmp(op,"strb")?UINT32_C(0x38200800):
+                     !strcmp(op,"ldrh")?UINT32_C(0x78600800):
+                     !strcmp(op,"strh")?UINT32_C(0x78200800):
+                     ldrsw?UINT32_C(0xb8a00800):
+                     !strcmp(op,"ldrsb")?(wd?UINT32_C(0x38a00800):
+                                             UINT32_C(0x38e00800)):
+                                          (wd?UINT32_C(0x78a00800):
+                                             UINT32_C(0x78e00800));
+            inst->opcode=A64_MC_LDST_INDEX;inst->count=3U;
+            inst->encoding=encoding | (option<<13U) |
+                            (scaled?UINT32_C(0x1000):0U);
+            put_reg(&inst->operands[0],rd,wd);
+            put_reg(&inst->operands[1],regbase,true);
+            put_reg(&inst->operands[2],index,option==3U || option==7U);
+            return true;
+        }
+    }
     if ((strcmp(op, "ldr") == 0 || strcmp(op, "str") == 0 ||
          strcmp(op, "ldrb") == 0 || strcmp(op, "strb") == 0 ||
          strcmp(op, "ldrh") == 0 || strcmp(op, "strh") == 0 ||
@@ -1624,7 +1781,7 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
             unsigned rn=alias?inst->operands[0].reg:inst->operands[1].reg;
             unsigned rm=alias?inst->operands[1].reg:inst->operands[2].reg;
             code=(test?UINT32_C(0x6a000000):UINT32_C(0x0a200000))|
-                 (wide?UINT32_C(0x80000000):0U)|
+                 (wide?UINT32_C(0x80000000):0U)|inst->encoding|
                  (rm<<16U)|(rn<<5U)|rd;
             break;
         }
@@ -1700,7 +1857,7 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
                 inst->opcode == A64_MC_ORR_REG ? UINT32_C(0x2a000000) :
                                                  UINT32_C(0x4a000000);
             code = base | (sf ? UINT32_C(0x80000000) : 0U) |
-                   (rm << 16U) | (rn << 5U) | rd;
+                   inst->encoding | (rm << 16U) | (rn << 5U) | rd;
             break;
         }
         case A64_MC_ADD_IMM:
@@ -1728,7 +1885,7 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
             code = (inst->opcode==A64_MC_CMP_REG ?
                     UINT32_C(0x6b00001f):UINT32_C(0x2b00001f)) |
                    (sf ? UINT32_C(0x80000000) : 0U) |
-                   (inst->operands[1].reg << 16U) |
+                   inst->encoding | (inst->operands[1].reg << 16U) |
                    (inst->operands[0].reg << 5U);
             break;
         }
@@ -1746,6 +1903,10 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
                    (inst->operands[0].reg << 5U);
             break;
         }
+        case A64_MC_LDST_INDEX:
+            code=inst->encoding|(inst->operands[2].reg<<16U)|
+                 (inst->operands[1].reg<<5U)|inst->operands[0].reg;
+            break;
         case A64_MC_LDST_UNSCALED:
             code=inst->encoding |
                 (((uint32_t)inst->operands[2].immediate&511U)<<12U) |
