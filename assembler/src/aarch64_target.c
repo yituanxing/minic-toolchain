@@ -2479,12 +2479,14 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
     } else if(!strcmp(op,"ldg")) {
         /* Genuine Linux AArch64 MTE LDG: signed scaled imm9 and ordinary
          * Xn/SP base. Share the typed MTE encoding and ELF code writer. */
-        unsigned rt,rn,mode;bool wide,sp;
+        char tok[4][384];unsigned n,rt,rn,mode;bool wide,sp;
         int64_t off;
+        /* GNU [Xn,#offset] contains a nested comma, so split on A64's
+         * top-level operand grammar, NOT the old single-comma split_two. */
         if((as->target_options&A64_FEATURE_MTE)==0U ||
-           !split_two(args,first,sizeof(first),second,sizeof(second)) ||
-           !parse_a64_reg(first,&rt,&wide,&sp) || sp || !wide ||
-           !parse_a64_mem(second,&rn,&off,&mode) ||
+           !split_operands(args,tok,&n) || n!=2U ||
+           !parse_a64_reg(tok[0],&rt,&wide,&sp) || sp || !wide ||
+           !parse_a64_mem(tok[1],&rn,&off,&mode) ||
            mode!=0U || off%16!=0 || off<-4096 || off>4080) {
             minias_set_error(as,"bad-aarch64-ldg:%s:line=%zu",
                              args,stmt->line);
@@ -2498,13 +2500,13 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
     } else if(!strcmp(op,"stgm") || !strcmp(op,"ldgm")) {
         /* One typed MTE2 register+base family, no second instruction or
          * ELF emitter. GNU/Arm encode LDGM with 0xd9e00000. */
-        unsigned rt,rn,mode;
+        char tok[4][384];unsigned n,rt,rn,mode;
         bool wide,sp;
         int64_t offset;
         if((as->target_options&A64_FEATURE_MTE)==0U ||
-           !split_two(args,first,sizeof(first),second,sizeof(second)) ||
-           !parse_a64_reg(first,&rt,&wide,&sp) || sp || !wide ||
-           !parse_a64_mem(second,&rn,&offset,&mode) ||
+           !split_operands(args,tok,&n) || n!=2U ||
+           !parse_a64_reg(tok[0],&rt,&wide,&sp) || sp || !wide ||
+           !parse_a64_mem(tok[1],&rn,&offset,&mode) ||
            offset!=0 || mode!=0U) {
             minias_set_error(as,"bad-aarch64-mte-tags:%s:line=%zu",
                              args,stmt->line);
