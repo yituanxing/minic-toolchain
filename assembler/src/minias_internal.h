@@ -441,6 +441,9 @@ typedef struct MiniAsTargetOps {
     bool (*expanded_instruction_size)(const char *, uint32_t, uint32_t *);
     bool (*append_code_alignment)(MiniAs *, int, size_t);
     uint32_t (*fixup_relocation_type)(MiniAsFixupKind, unsigned);
+    /* GNU named relocation spelling is ISA-owned; Common only places the
+     * semantic fixup at the explicit section offset. */
+    bool (*parse_named_relocation)(const char *, MiniAsFixupKind *, unsigned *);
     bool (*validate_output)(MiniAs *);
     /* Target-owned DWARF CFI ABI (zero => not yet available). */
     unsigned cfi_code_align;

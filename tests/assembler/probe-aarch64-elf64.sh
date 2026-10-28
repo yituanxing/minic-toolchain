@@ -2032,3 +2032,68 @@ A64_COMMON_ALT
 "$AARCH64_OBJCOPY" -j .text -O binary "$work/a64-common-alt-gnu.o" "$work/a64-common-alt-gnu.bin"
 cmp "$work/a64-common-alt-mini.bin" "$work/a64-common-alt-gnu.bin"
 echo 'MINIAS_COMMON_ALT_MACRO_A64=PASS GNU_recursive_numeric_label_inline_ifc_comment'
+
+# Actual Linux hyp-reloc uses .reloc absolute offsets with explicit named
+# R_AARCH64_PREL32. Compare ELF RELA offsets, types, symbols AND addends.
+cat > "$work/a64-linux-named-reloc.s" <<'A64_NAMED_RELOC'
+.section .hyp.reloc,"a"
+.globl sample_reloc
+sample_reloc:
+.word 0
+.reloc 0, R_AARCH64_PREL32, __hyp_section_.hyp.idmap.text + 0xe80
+.word 0
+.reloc 4, R_AARCH64_PREL32, __hyp_section_.hyp.idmap.text + 0xe88
+A64_NAMED_RELOC
+"$MINIAS" --target=aarch64 -o "$work/a64-reloc-mini.o" "$work/a64-linux-named-reloc.s"
+"$AARCH64_AS" -o "$work/a64-reloc-gnu.o" "$work/a64-linux-named-reloc.s"
+for owner in mini gnu; do
+    "$AARCH64_READELF" -Wr "$work/a64-reloc-$owner.o" |
+        awk '$3=="R_AARCH64_PREL32" {print $1,$3,$5,$6,$7}' |
+        sort > "$work/a64-reloc-$owner.txt"
+done
+[ "$(wc -l < "$work/a64-reloc-mini.txt")" -eq 2 ]
+cmp "$work/a64-reloc-mini.txt" "$work/a64-reloc-gnu.txt"
+for bad in '.reloc' '.reloc 0,R_AARCH64_WRONG,sym' \
+           '.reloc -1,R_AARCH64_PREL32,sym' \
+           '.reloc 0,R_AARCH64_PREL32,' \
+           '.reloc 0,R_AARCH64_PREL32,sym,sym2'; do
+    printf '.text\n.word 0\n%s\n' "$bad" > "$work/a64-named-reloc-bad.s"
+    if "$MINIAS" --target=aarch64 -o "$work/a64-named-reloc-bad.o" "$work/a64-named-reloc-bad.s" >/dev/null 2>&1; then
+        echo "invalid explicit relocation accepted: $bad" >&2;exit 1
+    fi
+done
+echo 'MINIAS_COMMON_NAMED_A64_RELOC=PASS GNU_RELA_offsets_type_symbol_addend'
+
+# GNU Linux recursive .macro defines a nested helper inside _for and
+# purges it while the parent expansion remains active. Bound macro
+# source was already snapshotted; registry mutation must be safe.
+cat > "$work/a64-common-macro-purge.s" <<'A64_MACRO_PURGE'
+.text
+.macro __for from:req,to:req
+.if (\from) == (\to)
+_for__body %\from
+.else
+__for %\from, %((\from) + ((\to) - (\from)) / 2)
+__for %((\from) + ((\to) - (\from)) / 2 + 1), %\to
+.endif
+.endm
+.macro _for var:req,from:req,to:req,insn:vararg
+.macro _for__body \var:req
+.noaltmacro
+\insn
+.altmacro
+.endm
+.altmacro
+__for \from,\to
+.noaltmacro
+.purgem _for__body
+.endm
+_for n,0,7,nop
+_for n,8,9,nop
+A64_MACRO_PURGE
+"$MINIAS" --target=aarch64 -o "$work/a64-purge-mini.o" "$work/a64-common-macro-purge.s"
+"$AARCH64_AS" -o "$work/a64-purge-gnu.o" "$work/a64-common-macro-purge.s"
+"$AARCH64_OBJCOPY" -j .text -O binary "$work/a64-purge-mini.o" "$work/a64-purge-mini.bin"
+"$AARCH64_OBJCOPY" -j .text -O binary "$work/a64-purge-gnu.o" "$work/a64-purge-gnu.bin"
+cmp "$work/a64-purge-mini.bin" "$work/a64-purge-gnu.bin"
+echo 'MINIAS_COMMON_MACRO_PURGE_ACTIVE=PASS GNU_nested_expansion_10_instructions'

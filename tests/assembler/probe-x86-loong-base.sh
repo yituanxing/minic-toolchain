@@ -2779,3 +2779,23 @@ for target in x86_64 loongarch64; do
     cmp "$work/$target-altinline-mini.bin" "$work/$target-altinline-gnu.bin"
 done
 echo 'MINIAS_COMMON_ALT_MACRO_INLINE_IFC=PASS GNU_recursive_evaluated_and_lexical_labels'
+
+# Named GNU relocation spelling belongs to x86 Target, but its section
+# offset and RELA fixup lifecycle remain the same Common code as A64.
+cat > "$work/x86-explicit-reloc.s" <<'X64_EXPLICIT'
+.text
+.word 0
+.word 0
+.reloc 0, R_X86_64_PC32, ext_rel+16
+.reloc 2, R_X86_64_PC32, ext_rel+32
+X64_EXPLICIT
+"$MINIAS" --target=x86_64 -o "$work/x86-explicit-reloc-mini.o" "$work/x86-explicit-reloc.s"
+as --64 -o "$work/x86-explicit-reloc-gnu.o" "$work/x86-explicit-reloc.s"
+for owner in mini gnu; do
+    readelf -Wr "$work/x86-explicit-reloc-$owner.o" |
+        awk '$3=="R_X86_64_PC32" {print $1,$3,$5,$6,$7}' |
+        sort > "$work/x86-explicit-reloc-$owner.txt"
+done
+[ "$(wc -l < "$work/x86-explicit-reloc-mini.txt")" -eq 2 ]
+cmp "$work/x86-explicit-reloc-mini.txt" "$work/x86-explicit-reloc-gnu.txt"
+echo 'MINIAS_COMMON_NAMED_X86_RELOC=PASS GNU_RELA_offsets_type_symbol_addend'

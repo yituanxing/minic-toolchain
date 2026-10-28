@@ -3742,6 +3742,42 @@ invalid:
     free(copy);return false;
 }
 
+/* GNU .reloc uses a section-relative OFFSET and symbolic relocation
+ * name; no object bytes are emitted by this directive. The Target owns
+ * the relocation name->semantic fixup mapping, and the existing Common
+ * Fixup/ELF path serializes the entry. Never invent a numeric ELF type. */
+static bool handle_named_reloc(MiniAs *as,const char *args,size_t line) {
+    char *copy=minias_strdup(args),*comma1,*comma2,*offset_text,*name,*symbol;
+    MiniAsFixupKind kind=MINIAS_FIXUP_NONE;
+    MiniAsSymbolExpr expression;
+    unsigned width=0U;
+    int64_t offset;
+    bool ok;
+    if(!copy){minias_set_error(as,"out-of-memory:.reloc");return false;}
+    comma1=strchr(copy,',');
+    if(!comma1){free(copy);goto invalid;}
+    *comma1++='\0';
+    comma2=strchr(comma1,',');
+    if(!comma2){free(copy);goto invalid;}
+    *comma2++='\0';
+    offset_text=minias_trim(copy);
+    name=minias_trim(comma1);
+    symbol=minias_trim(comma2);
+    ok=as->current_section>=0 && as->current_subsection==0U &&
+       as->target->parse_named_relocation &&
+       as->target->parse_named_relocation(name,&kind,&width) &&
+       *symbol!='\0' && !strchr(symbol,',') &&
+       evaluate_absolute_expression(as,offset_text,&offset) && offset>=0 &&
+       minias_parse_symbol_addend(symbol,&expression);
+    if(ok)ok=minias_add_fixup(as,as->current_section,(uint64_t)offset,
+                              kind,width,expression.name,expression.addend);
+    free(copy);
+    if(ok)return true;
+invalid:
+    minias_set_error(as,"bad-directive:.reloc:%s:line=%zu",args,line);
+    return false;
+}
+
 /* Statement ordinal is stable across re-layout; macro source lines are not. */
 static bool force_long_branch_for_stmt(const MiniAs *as, size_t statement_id) {
     size_t i;
@@ -4250,8 +4286,7 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
     if(!strcmp(op,".purgem")) {
         char *name=minias_trim(args);
         size_t i;
-        if(!*name || strpbrk(name,", \t\r")!=NULL ||
-           as->macro_expansion_depth!=0U) {
+        if(!*name || strpbrk(name,", \t\r")!=NULL) {
             minias_set_error(as,"bad-directive:.purgem:%s:line=%zu",name,line);
             return false;
         }
@@ -4408,6 +4443,9 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
         }
         if (strcmp(op, ".set") == 0) {
             return parse_set(as, args, line);
+        }
+        if (strcmp(op, ".reloc") == 0) {
+            return handle_named_reloc(as,args,line);
         }
         if (strcmp(op, ".previous") == 0) {
             int swap_section = as->current_section;
@@ -5088,6 +5126,10 @@ static bool expand_macro_invocation(MiniAs *as,
     MiniAsSourceLine *expanded = NULL;
     size_t i;
     size_t counter;
+    /* .purgem or nested .macro can mutate the registry while executing
+     * an already-expanded immutable source snapshot. Never dereference
+     * the borrowed macro pointer after process_source_range returns. */
+    size_t body_count=macro->body_count;
     bool ok = false;
 
     if (copy == NULL) {
@@ -5206,8 +5248,8 @@ static bool expand_macro_invocation(MiniAs *as,
         free(copy);
         return false;
     }
-    if (macro->body_count != 0U) {
-        expanded = calloc(macro->body_count, sizeof(*expanded));
+    if (body_count != 0U) {
+        expanded = calloc(body_count, sizeof(*expanded));
         if (expanded == NULL) {
             minias_set_error(as, "out-of-memory:macro-expanded-lines");
             free(copy);
@@ -5215,7 +5257,7 @@ static bool expand_macro_invocation(MiniAs *as,
         }
     }
     counter = as->macro_expansion_counter++;
-    for (i = 0U; i < macro->body_count; ++i) {
+    for (i = 0U; i < body_count; ++i) {
         char *current = substitute_macro_counter(as, macro->body[i], counter);
         size_t p;
 
@@ -5237,11 +5279,11 @@ static bool expand_macro_invocation(MiniAs *as,
         expanded[i].line = macro->body_lines[i];
     }
     ++as->macro_expansion_depth;
-    ok = process_source_range(as, expanded, 0U, macro->body_count);
+    ok = process_source_range(as, expanded, 0U, body_count);
     --as->macro_expansion_depth;
 
 done:
-    destroy_source_lines(expanded, macro->body_count);
+    destroy_source_lines(expanded, body_count);
     free(vararg_buffer);
     free(copy);
     return ok;

@@ -4165,6 +4165,28 @@ static bool aarch64_resolve_profile(const char *march, const char *mabi,
     return true;
 }
 
+static bool a64_named_relocation(const char *name,
+                                  MiniAsFixupKind *kind,unsigned *width) {
+    static const struct {
+        const char *name;
+        MiniAsFixupKind kind;
+        unsigned width;
+    } forms[]={
+        {"R_AARCH64_PREL32",MINIAS_FIXUP_PREL32,4U},
+        {"R_AARCH64_PREL64",MINIAS_FIXUP_PREL64,8U},
+        {"R_AARCH64_ABS32",MINIAS_FIXUP_ABS,4U},
+        {"R_AARCH64_ABS64",MINIAS_FIXUP_ABS,8U}
+    };
+    unsigned i;
+    for(i=0U;i<sizeof(forms)/sizeof(forms[0]);++i) {
+        if(!strcmp(name,forms[i].name)) {
+            *kind=forms[i].kind;*width=forms[i].width;
+            return true;
+        }
+    }
+    return false;
+}
+
 static const MiniAsTargetOps ops = {
     .comment_prefix = '/', /* //, not #; AArch64 #42 is an immediate. */
     .elf_machine = 183U, /* EM_AARCH64 */
@@ -4178,6 +4200,7 @@ static const MiniAsTargetOps ops = {
     .encode = encode,
     .append_code_alignment = code_alignment,
     .fixup_relocation_type = aarch64_fixup_relocation_type,
+    .parse_named_relocation = a64_named_relocation,
     .validate_output = validate,
     .dot_relative_fixup = MINIAS_FIXUP_PREL32,
     .inst_directive_width = 4U,

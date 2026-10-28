@@ -3333,6 +3333,28 @@ static bool x64_evaluate_target_if(const char *expression, bool *result) {
     *result=(strcmp(left,right)==0)!=unequal;
     return true;
 }
+static bool x64_named_relocation(const char *name,
+                                  MiniAsFixupKind *kind,unsigned *width) {
+    static const struct {
+        const char *name;
+        MiniAsFixupKind kind;
+        unsigned width;
+    } forms[]={
+        {"R_X86_64_PC32",MINIAS_FIXUP_X64_PC32,4U},
+        {"R_X86_64_PLT32",MINIAS_FIXUP_X64_PLT32,4U},
+        {"R_X86_64_32",MINIAS_FIXUP_ABS,4U},
+        {"R_X86_64_32S",MINIAS_FIXUP_X64_ABS32S,4U},
+        {"R_X86_64_64",MINIAS_FIXUP_ABS,8U}
+    };
+    unsigned i;
+    for(i=0U;i<sizeof(forms)/sizeof(forms[0]);++i) {
+        if(!strcmp(name,forms[i].name)) {
+            *kind=forms[i].kind;*width=forms[i].width;
+            return true;
+        }
+    }
+    return false;
+}
 static const MiniAsTargetOps ops={
     .name="x86_64",.comment_prefix='#',.elf_machine=62U,
     .resolve_profile=x64_profile,.parse_mcinst=x64_parse,
@@ -3342,7 +3364,9 @@ static const MiniAsTargetOps ops={
     .relax_instruction=x64_relax_instruction,
     .expanded_instruction_size=x64_expanded_instruction_size,
     .append_code_alignment=x64_code_align,
-    .fixup_relocation_type=x64_reloc,.validate_output=x64_validate,
+    .fixup_relocation_type=x64_reloc,
+    .parse_named_relocation=x64_named_relocation,
+    .validate_output=x64_validate,
     .word_directive_width=2U,.align_directive_bytes=true,
     .dot_relative_fixup=MINIAS_FIXUP_PREL32,
     .common_default_alignment_cap=16U
