@@ -1151,7 +1151,7 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
             m->operands[0].reg=first;
             m->operands[1].kind=MINIAS_MC_REGISTER;
             m->operands[1].reg=second;
-            m->operands[1].register_64=wd;
+            m->operands[1].register_64=(s->op[5]=='w')?false:wd;
             goto done;
         }
         if(src[0]=='$' || !strcmp(src,"%cl")) {
