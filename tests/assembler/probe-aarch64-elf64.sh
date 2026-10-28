@@ -181,6 +181,20 @@ external_probe:
     cmn x0, w1, sxtw
     add x0, sp, x1, lsl #3
     add sp, sp, x2, lsl #1
+    // GNU signed loads and pre/post-index base writeback, imm9/imm12.
+    ldr x2, [x1, #16]!
+    ldr x2, [x1], #16
+    str w3, [x4, #-8]!
+    strb w5, [x6], #1
+    ldrh w0, [x1, #2]!
+    ldrsw x0, [x1, #16]
+    ldrsw x0, [x1, #-4]
+    ldrsw x0, [x1, #12]!
+    ldrsw x0, [x1], #4
+    ldrsb w0, [x1, #3]
+    ldrsb x0, [x1, #3]
+    ldrsh w0, [x1, #2]
+    ldrsh x0, [x1, #2]
     // One typed UBFM/SBFM/BFM field model, tested W/X + GNU alias semantics.
     ubfx w0, w1, #2, #8
     ubfx x2, x3, #23, #32
@@ -543,6 +557,13 @@ for bad_source in 'ldxr x0, [x1,#4]' 'stxr x0, x1, [x2]' \
                   'cmp x0, w2, sxtw #5' \
                   'adds sp, x1, w2, uxtw' \
                   'sub x0, w1, w2, uxtw' \
+                  'ldr x0, [x1, #256]!' \
+                  'ldr x0, [x1, #16]!, #1' \
+                  'ldrsw w0, [x1]' \
+                  'ldrsb x0, [x1, #256]!' \
+                  'ldursw x0, [x1], #4' \
+                  'str w0, [sp], #-257' \
+                  'ldr x0, [x1], #256' \
                   'yield #1' \
                   'hint #.Lnever_defined' \
                   '.equ .Lbad_hint,128; hint #.Lbad_hint' \

@@ -210,6 +210,7 @@ enum {
     A64_MC_LDRH,
     A64_MC_STRH,
     A64_MC_LDST_UNSCALED,
+    A64_MC_LDST_SCALED,
     A64_MC_LDST_INDEX,
     A64_MC_STP,
     A64_MC_LDP,
@@ -799,13 +800,61 @@ static bool parse_integer_family(MiniAsMCInst *inst,
             return true;
         }
     }
+    /* Signed LDRSW/LDRSB/LDRSH, including signed imm9 writeback and
+     * scaled unsigned imm12. Reuse machine-word and section emitters. */
+    if((!strcmp(op,"ldrsw") || !strcmp(op,"ldrsb") ||
+        !strcmp(op,"ldrsh") || !strcmp(op,"ldursw") ||
+        !strcmp(op,"ldursb") || !strcmp(op,"ldursh")) &&
+       (n==2U || n==3U)) {
+        bool byte=!strcmp(op,"ldrsb") || !strcmp(op,"ldursb");
+        bool half=!strcmp(op,"ldrsh") || !strcmp(op,"ldursh");
+        bool forced=!strncmp(op,"ldur",4U);
+        unsigned unit=byte?1U:half?2U:4U;
+        uint32_t opcodebits;
+        if(!parse_a64_reg(t[0],&rd,&wd,&spd) || spd ||
+           (!byte && !half && !wd) ||
+           !parse_a64_mem(t[1],&base,&imm,&mode))return false;
+        if(n==3U) {
+            if(forced || mode!=0U || imm!=0 ||
+               !parse_signed_number(t[2],&imm))return false;
+            mode=2U;
+        }
+        if(forced || mode!=0U || imm<0 ||
+           imm%(int64_t)unit!=0) {
+            if(imm<-256 || imm>255)return false;
+            inst->opcode=A64_MC_LDST_UNSCALED;
+            opcodebits=byte?(wd?UINT32_C(0x38800000):
+                                UINT32_C(0x38c00000)):
+                       half?(wd?UINT32_C(0x78800000):
+                                UINT32_C(0x78c00000)):
+                            UINT32_C(0xb8800000);
+            inst->encoding=opcodebits|
+                           (mode==1U?UINT32_C(0xc00):
+                            mode==2U?UINT32_C(0x400):0U);
+            put_immediate(&inst->operands[2],imm);
+        }else {
+            if(imm/(int64_t)unit>4095)return false;
+            inst->opcode=A64_MC_LDST_SCALED;
+            opcodebits=byte?(wd?UINT32_C(0x39800000):
+                                UINT32_C(0x39c00000)):
+                       half?(wd?UINT32_C(0x79800000):
+                                UINT32_C(0x79c00000)):
+                            UINT32_C(0xb9800000);
+            inst->encoding=opcodebits;
+            put_immediate(&inst->operands[2],imm/(int64_t)unit);
+        }
+        inst->count=3U;
+        put_reg(&inst->operands[0],rd,wd);
+        put_reg(&inst->operands[1],base,true);
+        return true;
+    }
     if ((strcmp(op, "ldr") == 0 || strcmp(op, "str") == 0 ||
          strcmp(op, "ldrb") == 0 || strcmp(op, "strb") == 0 ||
          strcmp(op, "ldrh") == 0 || strcmp(op, "strh") == 0 ||
          strcmp(op, "ldur") == 0 || strcmp(op, "stur") == 0 ||
          strcmp(op, "ldurb") == 0 || strcmp(op, "sturb") == 0 ||
          strcmp(op, "ldurh") == 0 || strcmp(op, "sturh") == 0) &&
-         n == 2U) {
+         (n == 2U || n == 3U)) {
         unsigned unit;
         bool explicitly_unscaled=strstr(op,"dur")!=NULL ||
                                  strstr(op,"tur")!=NULL;
@@ -815,11 +864,17 @@ static bool parse_integer_family(MiniAsMCInst *inst,
                   !strcmp(op,"ldurh") || !strcmp(op,"sturh");
         bool load=op[0]=='l';
         if (!parse_a64_reg(t[0], &rd, &wd, &spd) || spd ||
-            !parse_a64_mem(t[1], &base, &imm, &mode) || mode != 0U)
+            !parse_a64_mem(t[1], &base, &imm, &mode))
             return false;
+        if(n==3U) {
+            if(explicitly_unscaled || mode!=0U || imm!=0 ||
+               !parse_signed_number(t[2],&imm))return false;
+            mode=2U;
+        }
         unit = byte?1U:half?2U:wd?8U:4U;
         if ((byte || half) && wd) return false;
-        if(explicitly_unscaled || imm<0 || imm%(int64_t)unit!=0) {
+        if(explicitly_unscaled || mode!=0U || imm<0 ||
+           imm%(int64_t)unit!=0) {
             if(imm < -256 || imm > 255)return false;
             inst->opcode=A64_MC_LDST_UNSCALED;
             inst->encoding=byte?
@@ -827,6 +882,8 @@ static bool parse_integer_family(MiniAsMCInst *inst,
                 half?(load?UINT32_C(0x78400000):UINT32_C(0x78000000)):
                 wd?(load?UINT32_C(0xf8400000):UINT32_C(0xf8000000)):
                     (load?UINT32_C(0xb8400000):UINT32_C(0xb8000000));
+            inst->encoding|=mode==1U?UINT32_C(0xc00):
+                            mode==2U?UINT32_C(0x400):0U;
             inst->count=3U;
             put_reg(&inst->operands[0],rd,wd);
             put_reg(&inst->operands[1],base,true);
@@ -2027,6 +2084,11 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
                    (inst->operands[0].reg << 5U);
             break;
         }
+        case A64_MC_LDST_SCALED:
+            code=inst->encoding|
+                 ((uint32_t)inst->operands[2].immediate<<10U)|
+                 (inst->operands[1].reg<<5U)|inst->operands[0].reg;
+            break;
         case A64_MC_LDST_INDEX:
             code=inst->encoding|(inst->operands[2].reg<<16U)|
                  (inst->operands[1].reg<<5U)|inst->operands[0].reg;
