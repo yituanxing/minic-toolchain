@@ -55,7 +55,7 @@ driver += ["int main(void){","  union { unsigned long long u64; unsigned char by
 for suf,ty,sz in types:
  for op in ops:
   name=f"{op}_{suf}";value=("'"+"42"+"'" if False else "0x35")
-  driver += ["  memory.u64=0x123456789abcdef0ULL;"]
+  driver += ["  /* CASE_START */", "  memory.u64=0x123456789abcdef0ULL;"]
   ptr=f"(volatile {ty} *)(uintptr_t)0"
   if op=="read":
    driver += [f"  {ty} mini_read={''}mini_{name}({ptr});",
@@ -80,9 +80,9 @@ while i<len(lines) and lines[i].startswith("  union"):scoped.append(lines[i]);i+
 while i<len(lines) and ("syscall" in lines[i]):scoped.append(lines[i]);i+=1
 body=lines[i:-3];cases=[];cur=[]
 for line in body:
- if line=="  memory.u64=0x123456789abcdef0ULL;":
+ if line=="  /* CASE_START */":
   if cur:cases.append(cur)
-  cur=[line]
+  cur=[]
  else:cur.append(line)
 if cur:cases.append(cur)
 driver=hdr+scoped+["\n".join(["  {"]+case+["  }"]) for case in cases]+[

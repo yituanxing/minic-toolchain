@@ -255,7 +255,13 @@ static bool apply_record_field_declaration_attributes(MinicParser *parser,
             record_field_function_attribute_is_parse_only(descriptor)) {
             continue;
         }
-        minic_parser_error(parser, "unsupported GNU declaration-head attribute on record field");
+        minic_parser_error(parser,
+            "unsupported GNU declaration-head attribute on record field: %.*s",
+            (int)(descriptor != NULL ? descriptor->name_length : 0U),
+            descriptor != NULL ? descriptor->name : "");
+        /* The source attribute stays unsupported: this is a diagnostic
+         * enhancement for the full original Linux 3-ISA owner census,
+         * not a parse-only bypass of layout or ABI contracts. */
         return false;
     }
     *explicit_alignment = context.explicit_alignment;
