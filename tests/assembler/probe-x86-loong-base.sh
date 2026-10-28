@@ -159,6 +159,20 @@ entry_x:
     btcl $1, ext_global(%rip)
     btsq $15, __cpu_online_mask(%rip)
     # Mandatory F3 register and memory POPCNT must equal GNU byte stream.
+    # GNU byte memory and full unsigned 32-bit immediate oracle.
+    movb %dh, 17(%rcx)
+    movb 9(%rbx), %ah
+    movb %ah, -2(%rdi)
+    movb hex_asc(%rdx), %bh
+    andb %ah, 7(%rbp)
+    xorb (%rax), %ch
+    testb %bh, 3(%rcx)
+    andb $-129, 57(%rbx)
+    andb $-129, %al
+    andl $4294967295, %ebp
+    andl $4294967295, %eax
+    andl $4294963200, %eax
+    andl $4286906367, %edx
     # High 8-bit legacy register IDs, including MOV and ALU; no REX.
     movb %al, %dh
     movb %cl, %ah
@@ -915,6 +929,10 @@ for bad in            'popcntq %eax,%rax' \
            'imull $100, 8(%rax), %rax' \
            'imulw $100, 8(%rax), %r8d' \
            'rep movsq %rax' \
+           'movb %dh, (%r8)' \
+           'movb %ah, 1(%r12)' \
+           'movb (%r9), %bh' \
+           'addb %ah, (%r8)' \
            'adcl %rax,%eax' \
            'negb %eax' \
            'negw %eax' \

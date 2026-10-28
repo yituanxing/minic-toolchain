@@ -1162,7 +1162,7 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
         {
             char suffix=s->op[strlen(s->op)-1U];
             bool in_range=numeric &&
-                (suffix=='b'?(val>=-128 && val<=255):
+                (suffix=='b'?(val>=-256 && val<=255):
                  suffix=='w'?(val>=-32768 && val<=65535):
                  val>=INT32_MIN && val<=INT32_MAX);
         if(in_range || is_sym) {
@@ -1193,7 +1193,7 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
                 !strcmp(s->op,"testb"))) {
                 MiniAsMCMemory parsed;
                 if(s->op[strlen(s->op)-1U]=='b' &&
-                   (val < -128 || val > 255))goto invalid;
+                   (val < -256 || val > 255))goto invalid;
                 if(!x64_parse_base_memory(dst,&parsed))goto invalid;
                 /* Keep both expressions typed, for independent GNU PC32
                  * displacement and 32S immediate ELF relocations. */
@@ -1317,9 +1317,11 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
         bool matched=false,wide=false,legacy_high8=false;
         uint64_t imm;
         if(bits && minias_eval_u64_expression(src+1,&imm) &&
-           ((bits==8U && (int64_t)imm>=-128 && (int64_t)imm<=255) ||
+           ((bits==8U && (int64_t)imm>=-256 && (int64_t)imm<=255) ||
             (bits==16U && (int64_t)imm>=-32768 && (int64_t)imm<=65535) ||
-            (bits>=32U && (int64_t)imm>=INT32_MIN &&
+            (bits==32U && (imm<=UINT32_MAX ||
+                 ((int64_t)imm>=INT32_MIN && (int64_t)imm<0))) ||
+            (bits==64U && (int64_t)imm>=INT32_MIN &&
                            (int64_t)imm<=INT32_MAX)) &&
            ((bits==8U &&
              ((legacy_high8=x64_high_register8(dst,&reg)) ||
@@ -1353,12 +1355,15 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
         (x64_is_mem_candidate(src) || x64_is_mem_candidate(dst))) {
         MiniAsMCMemory parsed;
         unsigned r, reg_bits=0U;
-        bool wide=false, memory_source;
+        bool wide=false, memory_source, legacy_high8=false;
         const unsigned *chosen = NULL;
         unsigned target_opcode=0U;
         if (x64_register(src,&r,&wide) &&
             x64_parse_base_memory(dst,&parsed)) {
             memory_source=false;reg_bits=wide?64U:32U;
+        } else if (x64_high_register8(src,&r) &&
+                   x64_parse_base_memory(dst,&parsed)) {
+            memory_source=false;reg_bits=8U;legacy_high8=true;
         } else if (x64_register8(src,&r) &&
                    x64_parse_base_memory(dst,&parsed)) {
             memory_source=false;reg_bits=8U;
@@ -1368,6 +1373,9 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
         } else if (x64_register(dst,&r,&wide) &&
                    x64_parse_base_memory(src,&parsed)) {
             memory_source=true;reg_bits=wide?64U:32U;
+        } else if (x64_high_register8(dst,&r) &&
+                   x64_parse_base_memory(src,&parsed)) {
+            memory_source=true;reg_bits=8U;legacy_high8=true;
         } else if (x64_register8(dst,&r) &&
                    x64_parse_base_memory(src,&parsed)) {
             memory_source=true;reg_bits=8U;
@@ -1375,6 +1383,10 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
                    x64_parse_base_memory(src,&parsed)) {
             memory_source=true;reg_bits=16U;
         } else goto invalid;
+        if(legacy_high8 && (parsed.base>=8U ||
+           (parsed.has_index && parsed.index>=8U))) {
+            free(parsed.symbol);goto invalid;
+        }
         /* Two-byte CMOVcc/BSF/BSR r/m -> register share the same retained
          * memory operand, SIB/REX/PC32 fixup and GNU AT&T register width.
          * The condition code and opcode stay ISA-owned. */
@@ -1455,7 +1467,8 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
             ((!strncmp(s->op,"bt",2U) || !strncmp(s->op,"xadd",4U) ||
               !strncmp(s->op,"cmpxchg",7U)) ? 0x100U : 0U) |
             (!strncmp(s->op,"popcnt",6U)?UINT32_C(0x2000):0U) |
-            (reg_bits==8U?0x200U:reg_bits==16U?0x400U:0U);
+            (reg_bits==8U?0x200U:reg_bits==16U?0x400U:0U)|
+            (legacy_high8?0x800U:0U);
         m->operands[0].kind=MINIAS_MC_REGISTER;
         m->operands[0].reg=r;
         m->operands[0].register_64=wide;
@@ -1569,7 +1582,8 @@ static bool x64_measure(MiniAs *as,const MiniAsStmt *s,uint32_t *size) {
                   ((m->encoding&0x400U)?1U:0U) +
                   (mem->address_space?1U:0U) + (m->operands[0].register_64 ||
                    m->operands[0].reg>=8U ||
-                   ((m->encoding&0x200U) && m->operands[0].reg>=4U) ||
+                   ((m->encoding&0x200U) && m->operands[0].reg>=4U &&
+                    !(m->encoding&0x800U)) ||
                    mem->base>=8U ||
                    (mem->has_index && mem->index>=8U)?1U:0U) +
                   2U + ((!mem->pc_relative &&
@@ -1582,9 +1596,12 @@ static bool x64_measure(MiniAs *as,const MiniAsStmt *s,uint32_t *size) {
         case X64_MOVABS_IMMREG: *size=10U;return true;
         case X64_ALU_IMM: {
             bool symbol=m->operands[1].kind==MINIAS_MC_SYMBOL;
-            int64_t imm=symbol?0:(int64_t)m->operands[1].immediate;
             bool byte=(m->encoding&0x200U)!=0U;
             bool word=(m->encoding&0x400U)!=0U;
+            int64_t imm=symbol?0:
+                (!byte && !word && !m->operands[0].register_64)?
+                (int32_t)(uint32_t)m->operands[1].immediate:
+                (int64_t)m->operands[1].immediate;
             bool short_imm=!symbol && imm>=-128 && imm<=127;
             bool acc=m->operands[0].reg==0U;
             unsigned base=byte?(acc?2U:3U):
@@ -1891,7 +1908,8 @@ static bool x64_encode(MiniAs *as,const MiniAsStmt *s) {
             if(m->encoding&0x2000U)code[n++]=0xf3U;
             r=m->operands[0].reg;
             if (m->operands[0].register_64 || r>=8U ||
-                ((m->encoding&0x200U) && r>=4U) ||
+                ((m->encoding&0x200U) && r>=4U &&
+                 !(m->encoding&0x800U)) ||
                 mem->base>=8U ||
                 (mem->has_index && mem->index>=8U))
                 code[n++]=(unsigned char)(0x40U |
@@ -2035,10 +2053,12 @@ static bool x64_encode(MiniAs *as,const MiniAsStmt *s) {
             unsigned i,group=m->encoding&7U;
             bool symbol=m->operands[1].kind==MINIAS_MC_SYMBOL;
             uint64_t imm=symbol?0U:m->operands[1].immediate;
-            int64_t signed_imm=(int64_t)imm;
-            bool short_imm=!symbol && signed_imm>=-128 && signed_imm<=127;
             bool byte=(m->encoding&0x200U)!=0U;
             bool word=(m->encoding&0x400U)!=0U;
+            int64_t signed_imm=(!byte && !word &&
+                !m->operands[0].register_64)?
+                (int32_t)(uint32_t)imm:(int64_t)imm;
+            bool short_imm=!symbol && signed_imm>=-128 && signed_imm<=127;
             bool accumulator;
             unsigned nbytes;
             r=m->operands[0].reg;
