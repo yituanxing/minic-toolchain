@@ -12,14 +12,8 @@ bool minic_loongarch64_requires_qualified_input_asm(const MinicInlineAsm *src) {
         "amand_db.d", "amor_db.d", "amxor_db.d", "amadd_db.d",
         "csrrd", "csrxchg", "1:ll.d"
     };
-    /* An unqualified LL/SC sequence may never fall through the generic
-     * scalar-asm substitute path. Original Linux prefixes this one with 1:,
-     * so ordinary first-mnemonic reservation alone is insufficient. */
     return minic_backend_inline_asm_prefix_matches(
-               src, reserved, sizeof(reserved) / sizeof(reserved[0])) ||
-           (src != NULL && src->template_text != NULL &&
-            (strstr(src->template_text, "ll.d") != NULL ||
-             strstr(src->template_text, "sc.d") != NULL));
+        src, reserved, sizeof(reserved) / sizeof(reserved[0]));
 }
 
 /* A legal LoongArch DBAR barrier is a hardware ordering operation, NOT a
@@ -325,81 +319,6 @@ static bool loong_atomic_fetch_qualified_source(
     return true;
 }
 
-
-/* Original Linux 6.6.143 arch/loongarch/include/asm/pgtable.h set_pte():
- * preserve an actual LL/SC retry loop around the buddy PTE, including the
- * conditional no-store branch and the post-loop dbar. A compiler barrier or
- * non-atomic load/store would be incorrect under concurrent page-table users.
- * GNU named source operands and Core's numeric template have ONE semantic
- * owner here. Reject inserted instructions and changed ordering hints. */
-static bool loong_set_pte_template(const char *text, size_t length) {
-    static const char original[] =
-        "1:ll.d%[tmp],%[buddy]bnez%[tmp],2f"
-        "or%[tmp],%[tmp],%[global]sc.d%[tmp],%[buddy]"
-        "beqz%[tmp],1bnop2:dbar0x700";
-    static const char numeric[] =
-        "1:ll.d%1,%0bnez%1,2f"
-        "or%1,%1,%2sc.d%1,%0"
-        "beqz%1,1bnop2:dbar0x700";
-    char compact[512];
-    size_t i, used = 0U;
-    if (text == NULL || length == 0U || length >= sizeof(compact))
-        return false;
-    for (i = 0U; i < length; ++i) {
-        const char ch = text[i];
-        if (ch == ' ' || ch == '\\t' || ch == '\\n' || ch == '\\r')
-            continue;
-        if (used + 1U >= sizeof(compact))
-            return false;
-        compact[used++] = ch;
-    }
-    compact[used] = '\\0';
-    return strcmp(compact, original) == 0 || strcmp(compact, numeric) == 0;
-}
-
-static bool loong_set_pte_word(MinicType type) {
-    MinicType plain;
-    return minic_type_unqualified(type, &plain) &&
-           minic_type_equal(plain, minic_type_unsigned_long());
-}
-
-static bool loong_set_pte_qualified_source(
-    const MinicC0Program *program, const MinicInlineAsm *src,
-    MinicTargetInlineAsmContract *contract) {
-    const MinicExpression *memory, *temporary, *mask;
-    if (program == NULL || src == NULL || contract == NULL ||
-        !src->is_volatile || src->is_goto ||
-        src->output_count != 2U || src->input_count != 1U ||
-        src->outputs == NULL || src->inputs == NULL ||
-        src->label_count != 0U || src->clobber_count != 0U ||
-        src->has_memory_clobber || src->register_clobber_count != 0U ||
-        !loong_set_pte_template(src->template_text, src->template_length) ||
-        src->outputs[0].access != MINIC_INLINE_ASM_OPERAND_READ_WRITE ||
-        !loong_csr_constraint(&src->outputs[0], "+m") ||
-        src->outputs[1].access != MINIC_INLINE_ASM_OPERAND_WRITE_ONLY ||
-        !loong_csr_constraint(&src->outputs[1], "=&r") ||
-        src->inputs[0].access != MINIC_INLINE_ASM_OPERAND_READ_ONLY ||
-        !loong_csr_constraint(&src->inputs[0], "r"))
-        return false;
-    memory = minic_c0_program_expression(program, src->outputs[0].expression);
-    temporary = minic_c0_program_expression(program, src->outputs[1].expression);
-    mask = minic_c0_program_expression(program, src->inputs[0].expression);
-    if (!memory || !temporary || !mask ||
-        memory->value_category != MINIC_VALUE_LVALUE ||
-        temporary->value_category != MINIC_VALUE_LVALUE ||
-        minic_type_is_const(memory->type) ||
-        minic_type_is_const(temporary->type) ||
-        !loong_set_pte_word(memory->type) ||
-        !loong_set_pte_word(temporary->type) ||
-        !loong_set_pte_word(mask->type))
-        return false;
-    contract->operand_count = 3U;
-    contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE;
-    contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
-    contract->kinds[2] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
-    return true;
-}
-
 bool minic_loongarch64_qualify_inline_asm(
     const MinicC0Program *program, const MinicInlineAsm *src,
     MinicTargetInlineAsmContract *contract) {
@@ -407,8 +326,7 @@ bool minic_loongarch64_qualify_inline_asm(
     const MinicExpression *expr;
     if(loong_pte_source(program,src,contract))
         return true;
-    if (loong_set_pte_qualified_source(program, src, contract) ||
-        loong_atomic_qualified_source(program, src, contract) ||
+    if (loong_atomic_qualified_source(program, src, contract) ||
         loong_atomic_fetch_qualified_source(program, src, contract) ||
         loong_csr_qualified_source(program, src, contract))
         return true;
@@ -622,69 +540,6 @@ static bool loong_pte_emit(
                  "  dbar 0x700\n"
                  "  st.d $t4, $t2, 0\n",out)!=EOF;
 }
-
-/* Linux page-table buddy global-bit update: preserve LL/SC, branch-on-old,
- * failed-store retry, and DBAR. The existing Core roles carry the three
- * independent GNU operands. $t3 remains reserved for large frame offsets;
- * $t0/$t1/$t2 are target scratch registers and never escape the ABI. */
-static bool minic_loongarch64_emit_set_pte(
-    FILE *out, const MinicDirectLP64BlockContext *ctx,
-    const MinicCoreInstruction *ins, const MinicCoreInlineAsm *info) {
-    const MinicCoreFunction *fn = ctx->fn;
-    const MinicCoreStructuredInlineAsmOperand *b =
-        ins->value.structured_inline_asm.operands;
-    MinicType memory_type, output_type;
-    size_t instruction_index;
-    if (!loong_set_pte_template(info->template_text, info->template_length) ||
-        !info->is_volatile || info->is_goto || info->has_memory_clobber ||
-        info->register_clobber_count != 0U ||
-        ins->value.structured_inline_asm.operand_count != 3U ||
-        b[0].operand_index != 0U || b[1].operand_index != 1U ||
-        b[2].operand_index != 2U ||
-        b[0].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE ||
-        b[1].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT ||
-        b[2].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT ||
-        b[0].has_fixed_register_binding || b[1].has_fixed_register_binding ||
-        b[2].has_fixed_register_binding ||
-        b[0].value >= fn->value_count || b[1].value >= fn->value_count ||
-        b[2].value >= fn->value_count ||
-        !minic_type_pointee(fn->values[b[0].value].type, &memory_type) ||
-        !minic_type_pointee(fn->values[b[1].value].type, &output_type) ||
-        !loong_set_pte_word(memory_type) ||
-        !loong_set_pte_word(output_type) ||
-        !loong_set_pte_word(fn->values[b[2].value].type))
-        return false;
-    instruction_index = (size_t)(ins - fn->instructions);
-    if (instruction_index >= fn->instruction_count)
-        return false;
-    if (!minic_loongarch64_emit_frame_mem(
-            out, "ld.d", "$t1", (size_t)b[0].value * 8U,
-            ctx->dynamic_frame) ||
-        !minic_loongarch64_emit_frame_mem(
-            out, "ld.d", "$t2", (size_t)b[2].value * 8U,
-            ctx->dynamic_frame) ||
-        fprintf(out,
-            ".Lmini_loong_pte_retry_%zu_%zu:\\n"
-            "  ll.d $t0, $t1, 0\\n"
-            "  bnez $t0, .Lmini_loong_pte_done_%zu_%zu\\n"
-            "  or $t0, $t0, $t2\\n"
-            "  sc.d $t0, $t1, 0\\n"
-            "  beqz $t0, .Lmini_loong_pte_retry_%zu_%zu\\n"
-            "  nop\\n"
-            ".Lmini_loong_pte_done_%zu_%zu:\\n"
-            "  dbar 0x700\\n",
-            ctx->id, instruction_index,
-            ctx->id, instruction_index,
-            ctx->id, instruction_index,
-            ctx->id, instruction_index) < 0 ||
-        !minic_loongarch64_emit_frame_mem(
-            out, "ld.d", "$t1", (size_t)b[1].value * 8U,
-            ctx->dynamic_frame) ||
-        fputs("  st.d $t0, $t1, 0\\n", out) == EOF)
-        return false;
-    return true;
-}
-
 bool minic_loongarch64_emit_qualified_structured_asm(
     FILE *out, const MinicDirectLP64BlockContext *ctx,
     const MinicCoreInstruction *ins) {
@@ -698,8 +553,6 @@ bool minic_loongarch64_emit_qualified_structured_asm(
     info = &ctx->fn->inline_asms[ins->value.structured_inline_asm.inline_asm_id];
     if(loong_pte_form(info->template_text,info->template_length))
         return loong_pte_emit(out,ctx,ins,info);
-    if (loong_set_pte_template(info->template_text, info->template_length))
-        return minic_loongarch64_emit_set_pte(out, ctx, ins, info);
     if (loong_csr_template(info->template_text, info->template_length))
         return minic_loongarch64_emit_csr(out, ctx, ins, info);
     if (ins->value.structured_inline_asm.operand_count == 3U)
