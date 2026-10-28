@@ -38,6 +38,20 @@ entry_x:
        .endif
     .endif
     nop
+    /* Strict GNU quoted conditional strings (including internal commas). */
+    .ifeqs "A,B","A,B"
+       nop
+    .else
+       int3
+    .endif
+    .ifnes "left","right"
+       nop
+    .endif
+    .ifeqs "left","right"
+       int3
+    .else
+       nop
+    .endif
     /* GNU numeric conditionals are Common, not target syntax. */
     .set __minias_condition_value, 2
     .ifeq 0

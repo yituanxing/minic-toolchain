@@ -1790,6 +1790,14 @@ echo 'MINIAS_AARCH64_VSLICE=PASS ELF64=1 gnu_bytes=equal relocation_call26_jump2
 cat > "$work/a64-linux-eor-ldgm.s" <<'A64_LINUX_EOR_LDGM'
 .arch armv8.5-a+memtag
 .text
+.ifeqs "A,B","A,B"
+    nop
+.else
+    brk #0
+.endif
+.ifnes "left","right"
+    nop
+.endif
 ldgm x4,[x3]
 ldgm xzr,[sp]
 stgm x1,[x2]

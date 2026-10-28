@@ -2209,21 +2209,46 @@ static bool push_conditional_defined(MiniAs *as,const char *args,
  * comma in the second operand belongs to that operand. Macro expansion
  * happens before this common conditional stack is evaluated. */
 static bool push_conditional_strings(MiniAs *as,const char *args,
-                                     bool unequal,size_t line) {
+                                     bool unequal,bool double_quoted,
+                                     size_t line) {
     char *copy=minias_strdup(args),*lhs,*rhs,*comma;
     bool equal;
     if(!copy){minias_set_error(as,"out-of-memory:.ifc");return false;}
-    comma=strchr(copy,',');
-    if(!comma) {
-        minias_set_error(as,"bad-directive:.ifc:line=%zu",line);
-        free(copy);return false;
+    if(double_quoted) {
+        /* GAS .ifeqs/.ifnes require exactly two double-quoted strings.
+         * A comma inside a quoted operand is data, not the delimiter.
+         * Keep this on the same Common conditional stack as .ifc/.ifnc. */
+        char *end;
+        lhs=minias_trim(copy);
+        if(*lhs!='"')goto malformed;
+        ++lhs;
+        end=strchr(lhs,'"');
+        if(!end)goto malformed;
+        *end++='\0';
+        end=minias_trim(end);
+        if(*end!=',')goto malformed;
+        rhs=minias_trim(end+1);
+        if(*rhs!='"')goto malformed;
+        ++rhs;
+        end=strchr(rhs,'"');
+        if(!end)goto malformed;
+        *end++='\0';
+        if(*minias_trim(end)!='\0')goto malformed;
+    }else {
+        /* Existing .ifc/.ifnc first-comma semantics are intentional. */
+        comma=strchr(copy,',');
+        if(!comma)goto malformed;
+        *comma='\0';
+        lhs=minias_trim(copy);
+        rhs=minias_trim(comma+1);
     }
-    *comma='\0';
-    lhs=minias_trim(copy);
-    rhs=minias_trim(comma+1);
     equal=strcmp(lhs,rhs)==0;
     free(copy);
     return push_conditional_value(as,unequal?!equal:equal);
+malformed:
+    minias_set_error(as,"bad-directive:%s:line=%zu",
+                     double_quoted?".ifeqs":".ifc",line);
+    free(copy);return false;
 }
 
 /* GAS .elseif shares the same frame as .if/.else. Once an
@@ -4034,6 +4059,14 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
         as->layout_sensitive=true;
         return push_conditional_value(as,nonblank?*arg!='\0':*arg=='\0');
     }
+    if ((strncmp(text,".ifeqs",6U)==0 ||
+         strncmp(text,".ifnes",6U)==0) &&
+        (text[6]=='\0' || isspace((unsigned char)text[6]))) {
+        bool unequal=text[3]=='n';
+        as->layout_sensitive=true;
+        return push_conditional_strings(as,minias_trim(text+6U),
+                                        unequal,true,line);
+    }
     if ((strncmp(text,".ifc",4U)==0 ||
          strncmp(text,".ifnc",5U)==0) &&
         ((text[3]=='c' && (text[4]=='\0' ||
@@ -4043,7 +4076,7 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
         bool unequal=text[3]=='n';
         as->layout_sensitive=true;
         return push_conditional_strings(as,
-                 minias_trim(text+(unequal?5:4)),unequal,line);
+                 minias_trim(text+(unequal?5:4)),unequal,false,line);
     }
     /* GNU .ifnotdef and .ifndef are aliases. */
     if ((strncmp(text,".ifdef",6U)==0 &&
