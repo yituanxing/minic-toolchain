@@ -48,15 +48,9 @@ def find(path):
             for line in lines
             if (m:=re.search(
               r'^\s*([0-9a-fA-F]+)\s+[0-9a-fA-F]+\s+(R_[A-Z0-9_]+)'
-              r'\s+[0-9a-fA-F]+\s+external_data\s+\+\s+([0-9a-fA-F]+)\s*]
+              r'\s+[0-9a-fA-F]+\s+external_data\s+\+\s+([0-9a-fA-F]+)\s*$',line))]
 x,y=map(find,(a,b))
 if len(x)!=1 or len(y)!=1 or x!=y:
     raise SystemExit(f'{arch} MCExpr relocation mismatch: {x} vs {y}\nMiniAS: '+open(a).read()+'\nGNU: '+open(b).read())
-print(f'MINIAS_MCEXPR_FOUR_ARCH=PASS arch={arch} GNU_bytes=exact GNU_reloc=exact')
-PY
-,line))]
-x,y=map(find,(a,b))
-if len(x)!=1 or len(y)!=1 or x!=y:
-    raise SystemExit(f'{arch} MCExpr relocation mismatch: {x} vs {y}')
 print(f'MINIAS_MCEXPR_FOUR_ARCH=PASS arch={arch} GNU_bytes=exact GNU_reloc=exact')
 PY
