@@ -624,7 +624,8 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
             {"lldt",0x00U,2U},{"ltr",0x00U,3U},
             {"verr",0x00U,4U},{"verw",0x00U,5U},
             {"fxsave",0xaeU,0U},{"fxsaveq",0xaeU,0U},
-            {"fxrstor",0xaeU,1U},{"fxrstorq",0xaeU,1U}
+            {"fxrstor",0xaeU,1U},{"fxrstorq",0xaeU,1U},
+            {"ldmxcsr",0xaeU,2U},{"stmxcsr",0xaeU,3U}
         };
         for(i=0U;i<sizeof(sysmem)/sizeof(sysmem[0]);++i) {
             MiniAsMCMemory mem;
