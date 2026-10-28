@@ -2273,6 +2273,41 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
             }
         }
     }
+    /* Genuine Linux x86 forward subtractive immediate:
+     * addq $(identity_mapped - relocate_kernel), %r8.
+     * GNU preserves imm32 for forward deltas even when final size fits imm8. */
+    if(x64_args2(s->args,src,dst) && src[0]=='$') {
+        static const struct {const char *name;unsigned group;} alu[]={
+            {"add",0U},{"or",1U},{"adc",2U},{"sbb",3U},
+            {"and",4U},{"sub",5U},{"xor",6U},{"cmp",7U}
+        };
+        size_t len=strlen(s->op);char suffix=len?s->op[len-1U]:'\0';
+        unsigned reg,k;bool wide;
+        MiniAsSymbolDifference diff;
+        if((suffix=='q' || suffix=='l') &&
+           minias_parse_symbol_difference(src+1U,&diff) &&
+           x64_register(dst,&reg,&wide) && wide==(suffix=='q')) {
+            for(k=0U;k<sizeof(alu)/sizeof(alu[0]);++k) {
+                size_t width=strlen(alu[k].name);
+                if(len!=width+1U ||
+                   strncmp(s->op,alu[k].name,width)!=0)continue;
+                m->opcode=X64_ALU_IMM;m->count=2U;
+                m->encoding=alu[k].group;
+                m->operands[0].kind=MINIAS_MC_REGISTER;
+                m->operands[0].reg=reg;
+                m->operands[0].register_64=wide;
+                m->operands[1].kind=MINIAS_MC_SYMBOL_DIFFERENCE;
+                m->operands[1].difference=malloc(sizeof(diff));
+                if(!m->operands[1].difference) {
+                    minias_set_error(as,"out-of-memory:x86-alu-difference");
+                    free(m);return false;
+                }
+                *m->operands[1].difference=diff;
+                as->layout_sensitive=true;
+                goto done;
+            }
+        }
+    }
     /* GNU TEST is Group-3 /0, NOT Group-1 ALU; byte TEST already has
      * a separate 8-bit form. Retain non-byte operand size in MCInst
      * so parse, measure and encode agree on 66/REX and imm width. */
@@ -2641,7 +2676,8 @@ static bool x64_measure(MiniAs *as,const MiniAsStmt *s,uint32_t *size) {
         case X64_MOVQ_IMMREG: *size=7U;return true;
         case X64_MOVABS_IMMREG: *size=10U;return true;
         case X64_ALU_IMM: {
-            bool symbol=m->operands[1].kind==MINIAS_MC_SYMBOL;
+            bool symbol=m->operands[1].kind==MINIAS_MC_SYMBOL ||
+                        m->operands[1].kind==MINIAS_MC_SYMBOL_DIFFERENCE;
             bool byte=(m->encoding&0x200U)!=0U;
             bool word=(m->encoding&0x400U)!=0U;
             int64_t imm=symbol?0:
@@ -3166,8 +3202,20 @@ static bool x64_encode(MiniAs *as,const MiniAsStmt *s) {
         }
         case X64_ALU_IMM: {
             unsigned i,group=m->encoding&7U;
-            bool symbol=m->operands[1].kind==MINIAS_MC_SYMBOL;
+            bool difference=m->operands[1].kind==MINIAS_MC_SYMBOL_DIFFERENCE;
+            bool symbol=m->operands[1].kind==MINIAS_MC_SYMBOL || difference;
             uint64_t imm=symbol?0U:m->operands[1].immediate;
+            int64_t resolved_diff=0;
+            if(difference) {
+                if(!minias_resolve_symbol_difference(
+                     as,m->operands[1].difference,&resolved_diff) ||
+                   resolved_diff<INT32_MIN || resolved_diff>INT32_MAX) {
+                    minias_set_error(as,"invalid-x86-same-section-difference:%s",
+                                     s->args);
+                    return false;
+                }
+                imm=(uint32_t)(int32_t)resolved_diff;
+            }
             bool byte=(m->encoding&0x200U)!=0U;
             bool word=(m->encoding&0x400U)!=0U;
             int64_t signed_imm=(!byte && !word &&
@@ -3193,7 +3241,7 @@ static bool x64_encode(MiniAs *as,const MiniAsStmt *s) {
             }
             for(i=0U;i<nbytes;++i)
                 code[n++]=(unsigned char)(imm>>(8U*i));
-            if(symbol) {
+            if(symbol && !difference) {
                 const MiniAsSymbolExpr *expr=m->operands[1].symbol;
                 if(nbytes!=4U) {
                     minias_set_error(as,"invalid-x86-alu-symbol-width");
