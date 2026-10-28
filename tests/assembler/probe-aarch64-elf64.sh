@@ -2558,3 +2558,24 @@ for bad in 'movz x0,:abs_g2:0x8000000000000000' \
  fi
 done
 echo 'MINIAS_A64_UNSIGNED_MOVW=PASS GNU_full_uint64_bytes_and_strict_negatives'
+
+# Original arch/arm64/crypto/ghash-ce-core.S writes ".irp key,K4 K5".
+# Both virtual registers must reach the AES Target individually, via the
+# ONE Common .irp expansion owner, not a GHASH-specific source workaround.
+cat > "$work/a64-ghash-irp-mixed.s" <<'GHASH_IRP_MIXED'
+.arch armv8-a+crypto
+.text
+.macro enc_round state, key
+aese \state\().16b, \key\().16b
+aesmc \state\().16b, \state\().16b
+.endm
+.irp key, v12 v13
+enc_round v8, \key
+.endr
+GHASH_IRP_MIXED
+"$MINIAS" --target=aarch64 -o "$work/a64-ghash-irp-mini.o" "$work/a64-ghash-irp-mixed.s"
+"$AARCH64_AS" -o "$work/a64-ghash-irp-gnu.o" "$work/a64-ghash-irp-mixed.s"
+"$AARCH64_OBJCOPY" -j .text -O binary "$work/a64-ghash-irp-mini.o" "$work/a64-ghash-irp-mini.bin"
+"$AARCH64_OBJCOPY" -j .text -O binary "$work/a64-ghash-irp-gnu.o" "$work/a64-ghash-irp-gnu.bin"
+cmp "$work/a64-ghash-irp-mini.bin" "$work/a64-ghash-irp-gnu.bin"
+echo 'MINIAS_A64_GHASH_IRP_MIXED=PASS GNU_4_AES_words'
