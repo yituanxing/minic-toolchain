@@ -261,8 +261,8 @@ external_adr_target:
     sub x12, x13, #4, lsl 12
     adds x14, x15, #0, lsl 12
     // GNU :lo12: LDRSW is LDST32 relocation, not generic LDR X.
-    ldrsw x0, [x1, #:lo12:fg_console]
-    ldrsw x3, [x4, #:lo12:fg_console+8]
+    ldrsw x0, [x1, #:lo12:external_data]
+    ldrsw x3, [x4, #:lo12:external_data+8]
     // GNU genuine multiply-accumulate register Ra and ASR/ROR forms.
     madd x0, x1, x2, x3
     madd w4, w5, w6, w7
