@@ -387,6 +387,11 @@ external_adr_target:
     stclrl w0, [x2]
     prfm pstl1strm, [x2]
     prfm pldl1keep, [x3, #16]
+    prfm pldl1keep, [x0, x7]
+    prfm pstl1keep, [x20, x0]
+    prfm PLDL2KEEP, [x2, x0]
+    prfm pldl1keep, [x0, x7, lsl #3]
+    prfm pldl1keep, [x0, w7, uxtw #3]
     prfm plil2strm, [x4, #24]
     .inst 0xd503201f, 0xd65f03c0
     // GNU target raw-word list is not limited to four MC operands.
@@ -761,6 +766,10 @@ for bad_source in 'ldxr x0, [x1,#4]' 'stxr x0, x1, [x2]' \
                   'tlbi rvae1is, x9' \
                   'tlbi rvale1is, x18' \
                   'ic ialluis, x0' \
+                  'prfm pldl1keep,[w0,x1]' \
+                  'prfm pldl1keep,[x0,w1]' \
+                  'prfm pldl1keep,[x0,x1,lsl #2]' \
+                  'prfm junk,[x0,x1]' \
                   'yield #1' \
                   'hint #.Lnever_defined' \
                   '.equ .Lbad_hint,128; hint #.Lbad_hint' \

@@ -233,6 +233,7 @@ enum {
     A64_MC_SYSTEM_IMM,
     A64_MC_LSE,
     A64_MC_PRFM,
+    A64_MC_PRFM_REG,
     A64_MC_EXCLUSIVE
 };
 
@@ -629,7 +630,12 @@ static bool parse_integer_family(MiniAsMCInst *inst,
         return true;
     }
     if(!strcmp(op,"prfm") && n==2U) {
-        unsigned hint=0U,unit=0U;
+        unsigned hint=0U,unit=0U,index,option;
+        bool scaled;
+        unsigned j;
+        /* GNU accepts uppercase/lowercase PRFM op names, but the target
+         * policy remains strictly enumerated, not fuzzy matching. */
+        for(j=0U;t[0][j];++j)t[0][j]=(char)tolower((unsigned char)t[0][j]);
         if(t[0][0]=='#' || (t[0][0]>='0'&&t[0][0]<='9')) {
             if(!parse_signed_number(t[0],&imm) || imm<0 || imm>31)
                 return false;
@@ -648,6 +654,18 @@ static bool parse_integer_family(MiniAsMCInst *inst,
             hint=unit*8U+2U*(unsigned)(t[0][4]-'1');
             if(!strcmp(suffix,"strm"))++hint;
             else if(strcmp(suffix,"keep"))return false;
+        }
+        if(a64_indexed_memory(t[1],&base,&index,&option,&scaled,3U)) {
+            /* 0xF8A0_0800 shares the indexed LDST encoder's option and
+             * scaled bit fields; hint Rt is an immediate 0..31 rather
+             * than a GPR. */
+            inst->opcode=A64_MC_PRFM_REG;inst->count=3U;
+            inst->encoding=UINT32_C(0xf8a00800)|(option<<13U)|
+                          (scaled?UINT32_C(0x1000):0U);
+            put_immediate(&inst->operands[0],(int64_t)hint);
+            put_reg(&inst->operands[1],base,true);
+            put_reg(&inst->operands[2],index,option==3U || option==7U);
+            return true;
         }
         if(!parse_a64_mem(t[1],&base,&imm,&mode) ||
            mode!=0U || imm<0 || imm%8!=0 || imm/8>4095)
@@ -2440,9 +2458,12 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
                  ((uint32_t)inst->operands[2].immediate<<10U)|
                  (inst->operands[1].reg<<5U)|inst->operands[0].reg;
             break;
+        case A64_MC_PRFM_REG:
         case A64_MC_LDST_INDEX:
             code=inst->encoding|(inst->operands[2].reg<<16U)|
-                 (inst->operands[1].reg<<5U)|inst->operands[0].reg;
+                 (inst->operands[1].reg<<5U)|
+                 (inst->opcode==A64_MC_PRFM_REG?
+                  (uint32_t)inst->operands[0].immediate:inst->operands[0].reg);
             break;
         case A64_MC_LDST_UNSCALED:
             code=inst->encoding |
