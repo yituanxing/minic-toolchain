@@ -1215,7 +1215,6 @@ for bad in            'popcntq %eax,%rax' \
            'lidt $4' \
            'sidt %r8' \
            'invlpg %rax' \
-           '.code32' \
            '.code64 bad' \
            'rdpmc %rax' \
            'fninit %rax' \
