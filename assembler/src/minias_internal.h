@@ -505,6 +505,18 @@ typedef struct MiniAsObjectAttribute {
 } MiniAsObjectAttribute;
 
 struct MiniAsAssemblyConfig;
+/* Effective CFI ABI of a TargetSpec. Target can override only the fields
+ * affected by its ISA/ABI profile (e.g. RV32 vs RV64), while Common owns
+ * the CFI stream, stable location anchors and ELF object fields. */
+typedef struct MiniAsCfiABI {
+    unsigned code_align;
+    int data_align;
+    unsigned return_reg;
+    unsigned stack_reg;
+    unsigned address_size;
+    unsigned negate_ra_opcode;
+} MiniAsCfiABI;
+
 typedef struct MiniAsTargetOps {
     char comment_prefix;
     uint16_t elf_machine;
@@ -559,6 +571,7 @@ typedef struct MiniAsTargetOps {
     unsigned cfi_stack_reg;
     unsigned cfi_address_size;
     unsigned cfi_negate_ra_opcode;
+    void (*resolve_cfi_abi)(const MiniAs *, MiniAsCfiABI *);
     /* GNU assembler directive dialect belongs to TargetInfo, not Common. */
     unsigned default_exec_alignment; /* zero: 4; x86 GNU .text has alignment 1 */
     unsigned word_directive_width; /* zero: 4, x86 GNU .word: 2 */

@@ -17,6 +17,19 @@
  * Deliberately fail closed on unimplemented .eh_frame, expressions and CFI
  * opcodes; treating source unwind metadata as no-ops is not valid assembly.
  */
+static MiniAsCfiABI minias_cfi_abi(const MiniAs *as) {
+    MiniAsCfiABI abi;
+    abi.code_align=as->target->cfi_code_align;
+    abi.data_align=as->target->cfi_data_align;
+    abi.return_reg=as->target->cfi_return_reg;
+    abi.stack_reg=as->target->cfi_stack_reg;
+    abi.address_size=as->target->cfi_address_size;
+    abi.negate_ra_opcode=as->target->cfi_negate_ra_opcode;
+    if(as->target->resolve_cfi_abi!=NULL)
+        as->target->resolve_cfi_abi(as,&abi);
+    return abi;
+}
+
 enum {
     CFI_DEF_CFA = 1, CFI_DEF_CFA_OFFSET, CFI_OFFSET, CFI_RESTORE,
     CFI_REMEMBER, CFI_RESTORE_STATE, CFI_NEGATE_RA,
@@ -134,10 +147,10 @@ bool minias_cfi_directive(MiniAs *as,const char *op,
             minias_set_error(as,"unsupported-cfi-sections:%s:line=%zu",args,line);
             return false;
         }
-        if (as->target->cfi_code_align == 0U ||
-            as->target->cfi_data_align == 0 ||
-            as->output_elf32 ||
-            as->target->cfi_address_size != 8U ||
+        if (minias_cfi_abi(as).code_align == 0U ||
+            minias_cfi_abi(as).data_align == 0 ||
+            minias_cfi_abi(as).address_size !=
+                (as->output_elf32 ? 4U : 8U) ||
             (eh && !as->target->cfi_implicit_eh_frame)) {
             minias_set_error(as,"unsupported-target-dwarf-cfi:line=%zu",line);
             return false;
@@ -193,7 +206,7 @@ bool minias_cfi_directive(MiniAs *as,const char *op,
         if (!cfi_two(args,&reg,&value) ||
             (!strcmp(op,".cfi_def_cfa") && value<0) ||
             (!strcmp(op,".cfi_offset") &&
-             (value>0 || value%as->target->cfi_data_align != 0))) goto bad;
+             (value>0 || value%minias_cfi_abi(as).data_align != 0))) goto bad;
         kind=!strcmp(op,".cfi_def_cfa")?CFI_DEF_CFA:CFI_OFFSET;
     } else if (!strcmp(op,".cfi_def_cfa_offset") ||
                !strcmp(op,".cfi_def_cfa_register") ||
@@ -218,7 +231,7 @@ bool minias_cfi_directive(MiniAs *as,const char *op,
         kind=CFI_RESTORE_STATE;
         --proc->state_depth;
     } else if (!strcmp(op,".cfi_window_save") && !*args &&
-               as->target->cfi_negate_ra_opcode!=0U) {
+               minias_cfi_abi(as).negate_ra_opcode!=0U) {
         kind=CFI_NEGATE_RA;
     } else goto bad;
     if (cfi_append(as,kind,reg,value)) return true;
@@ -243,6 +256,18 @@ static bool put64(MiniAs *as,int sec,uint64_t value) {
     unsigned i;
     for (i=0U;i<8U;++i)b[i]=(unsigned char)(value>>(i*8U));
     return minias_section_append(as,sec,b,8U);
+}
+/* Debug FDE initial location and address-range fields follow the effective
+ * Target ABI pointer width, not the host size_t or an invented ELF64 rule. */
+static bool put_cfi_address(MiniAs *as,int sec,uint64_t value) {
+    unsigned size=minias_cfi_abi(as).address_size;
+    if(size==4U) {
+        if(value>UINT32_MAX)return false;
+        return put32(as,sec,(uint32_t)value);
+    }
+    if(size==8U)return put64(as,sec,value);
+    minias_set_error(as,"unsupported-cfi-address-width:%u",size);
+    return false;
 }
 static bool uleb(MiniAs *as,int sec,uint64_t value) {
     do {
@@ -280,7 +305,7 @@ static bool finish_length(MiniAs *as,int sec,size_t begin) {
 }
 static bool advance_cfi(MiniAs *as,int sec,uint64_t from,uint64_t to) {
     uint64_t delta;
-    unsigned align=as->target->cfi_code_align;
+    unsigned align=minias_cfi_abi(as).code_align;
     if(to<from || (to-from)%align!=0U)return false;
     delta=(to-from)/align;
     if(delta==0U)return true;
@@ -301,7 +326,7 @@ static bool encode_cfi(MiniAs *as,int sec,const MiniAsCfiOp *op) {
         case CFI_DEF_CFA_OFFSET:
             return put8(as,sec,0x0eU) && uleb(as,sec,(uint64_t)op->value);
         case CFI_OFFSET:
-            magnitude=(uint64_t)(op->value/as->target->cfi_data_align);
+            magnitude=(uint64_t)(op->value/minias_cfi_abi(as).data_align);
             if(op->reg<64U)
                 return put8(as,sec,(uint8_t)(0x80U|op->reg)) &&
                        uleb(as,sec,magnitude);
@@ -314,7 +339,7 @@ static bool encode_cfi(MiniAs *as,int sec,const MiniAsCfiOp *op) {
         case CFI_REMEMBER: return put8(as,sec,0x0aU);
         case CFI_RESTORE_STATE: return put8(as,sec,0x0bU);
         case CFI_NEGATE_RA:
-            return put8(as,sec,(uint8_t)as->target->cfi_negate_ra_opcode);
+            return put8(as,sec,(uint8_t)minias_cfi_abi(as).negate_ra_opcode);
         case CFI_DEF_CFA_REGISTER:
             return put8(as,sec,0x0dU) && uleb(as,sec,op->reg);
         case CFI_UNDEFINED:
@@ -338,16 +363,16 @@ static bool emit_eh_cie(MiniAs *as,int section,bool simple,bool signal,
        !put8(as,section,'z') || !put8(as,section,'R') ||
        (signal && !put8(as,section,'S')) ||
        !put8(as,section,0U) ||
-       !uleb(as,section,as->target->cfi_code_align) ||
-       !sleb(as,section,as->target->cfi_data_align) ||
-       !put8(as,section,(uint8_t)as->target->cfi_return_reg) ||
+       !uleb(as,section,minias_cfi_abi(as).code_align) ||
+       !sleb(as,section,minias_cfi_abi(as).data_align) ||
+       !put8(as,section,(uint8_t)minias_cfi_abi(as).return_reg) ||
        !uleb(as,section,1U) || !put8(as,section,0x1bU))return false;
     if(!simple) {
-        unsigned reg=as->target->cfi_return_reg;
-        if(reg>=64U || as->target->cfi_stack_reg!=7U ||
-           as->target->cfi_data_align!=-8 ||
+        unsigned reg=minias_cfi_abi(as).return_reg;
+        if(reg>=64U || minias_cfi_abi(as).stack_reg!=7U ||
+           minias_cfi_abi(as).data_align!=-8 ||
            !put8(as,section,0x0cU) ||
-           !uleb(as,section,as->target->cfi_stack_reg) ||
+           !uleb(as,section,minias_cfi_abi(as).stack_reg) ||
            !uleb(as,section,8U) ||
            !put8(as,section,(uint8_t)(0x80U|reg)) ||
            !uleb(as,section,1U))return false;
@@ -379,11 +404,11 @@ bool minias_cfi_emit(MiniAs *as) {
            !put32(as,section,UINT32_MAX) ||
            !put8(as,section,3U) ||
            !put8(as,section,0U) ||
-           !uleb(as,section,as->target->cfi_code_align) ||
-           !sleb(as,section,as->target->cfi_data_align) ||
-           !uleb(as,section,as->target->cfi_return_reg) ||
+           !uleb(as,section,minias_cfi_abi(as).code_align) ||
+           !sleb(as,section,minias_cfi_abi(as).data_align) ||
+           !uleb(as,section,minias_cfi_abi(as).return_reg) ||
            !put8(as,section,0x0cU) ||
-           !uleb(as,section,as->target->cfi_stack_reg) ||
+           !uleb(as,section,minias_cfi_abi(as).stack_reg) ||
            !uleb(as,section,0U) ||
            !finish_length(as,section,0U))return false;
     }
@@ -432,10 +457,11 @@ bool minias_cfi_emit(MiniAs *as) {
             if(!put32(as,section,0U) ||
                !put32(as,section,0U))return false;
             ptr=as->sections[(size_t)section].size;
-            if(!put64(as,section,0U) ||
-               !put64(as,section,end->value-begin->value) ||
+            if(!put_cfi_address(as,section,0U) ||
+               !put_cfi_address(as,section,end->value-begin->value) ||
                !minias_add_section_fixup(as,
-               MINIAS_FIXUP_ORIGIN_SYNTHETIC_SECTION,section,ptr,MINIAS_FIXUP_ABS,8U,
+               MINIAS_FIXUP_ORIGIN_SYNTHETIC_SECTION,section,ptr,MINIAS_FIXUP_ABS,
+                                 minias_cfi_abi(as).address_size,
                                  begin->name,0))return false;
         }
         loc=begin->value;

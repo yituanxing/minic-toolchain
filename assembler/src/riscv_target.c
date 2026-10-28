@@ -673,6 +673,14 @@ static void riscv_capture_site_state(const MiniAs *as,
     site->profile_features = MINIAS_RV_STATE(as)->isa_features;
 }
 
+static void riscv_resolve_cfi_abi(const MiniAs *as, MiniAsCfiABI *abi) {
+    const MiniAsRiscvState *state=MINIAS_RV_STATE(as);
+    if(state!=NULL && state->target_xlen==32U) {
+        abi->address_size=4U;
+        abi->data_align=-4; /* RV32 psABI 32-bit saved slots */
+    }
+}
+
 static const MiniAsTargetOps riscv_ops = {
     .comment_prefix = '#',
     .init_target_state = riscv_init_target_state,
@@ -703,6 +711,7 @@ static const MiniAsTargetOps riscv_ops = {
     .cfi_return_reg = 1U,
     .cfi_stack_reg = 2U,
     .cfi_address_size = 8U,
+    .resolve_cfi_abi = riscv_resolve_cfi_abi,
 };
 
 const MiniAsTargetOps *minias_target_riscv(void) { return &riscv_ops; }

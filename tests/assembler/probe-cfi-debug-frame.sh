@@ -18,6 +18,11 @@ case "$ARCH" in
     gnu=(riscv64-linux-gnu-as -march=rv64i -mabi=lp64)
     cfa=2; ra=1; code='addi x0,x0,0'
     ;;
+  riscv32)
+    mini_opts=(-march=rv32i -mabi=ilp32)
+    gnu=(riscv64-linux-gnu-as -march=rv32i -mabi=ilp32)
+    cfa=2; ra=1; code='addi x0,x0,0'
+    ;;
   aarch64)
     mini_opts=(--target=aarch64)
     gnu=(aarch64-linux-gnu-as)
@@ -69,16 +74,14 @@ if a['CIE']!=1 or a['FDE']!=1 or not all(a[x] for x in needed) or not all(b[x] f
     raise SystemExit(f'{arch}: incomplete .debug_frame MiniAS={a} GNU={b}')
 print(f'MINIAS_CFI_DEBUG_FRAME=PASS arch={arch} CIE=1 FDE=1 cfa_offset_restore=3')
 PY
-if ! grep -Eq 'R_(X86_64_64|RISCV_64|AARCH64_ABS64|LARCH_64)' "$work/mini.reloc"; then
+if ! grep -Eq 'R_(X86_64_64|RISCV_64|RISCV_32|AARCH64_ABS64|LARCH_64)' "$work/mini.reloc"; then
     echo "$ARCH: missing real FDE address relocation" >&2
     cat "$work/mini.reloc" >&2
     exit 1
 fi
-# ELF32 must not silently emit an ELF64-address-width FDE.
-if test "$ARCH" = riscv; then
-    if "$MINIAS" -march=rv32i -mabi=ilp32 \
-        -o "$work/invalid-rv32.o" "$work/unwind.s" >/dev/null 2>&1; then
-        echo 'accepted unsupported ELF32 DWARF64 frame' >&2
-        exit 1
-    fi
+# ELF32 FDE addresses and ranges must be four bytes, encoded in
+# an ELFCLASS32 debug-frame object, not merely accepted as ELF64 bytes.
+if test "$ARCH" = riscv32; then
+    readelf -h "$work/mini.o" | grep -q 'Class:.*ELF32'
+    grep -q 'R_RISCV_32' "$work/mini.reloc"
 fi
