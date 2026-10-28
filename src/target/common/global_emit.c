@@ -44,26 +44,36 @@ bool minic_multi_emit_relocatable_scalar_array(FILE *out, const MinicC0Program *
                                 &element_bytes, &alignment) ||
         element_bytes == 0U || arr->element_count > SIZE_MAX / element_bytes ||
         arr->element_count * element_bytes != storage_size ||
-        arr->element_count != obj->initializer_count)
+        obj->initializer_count > arr->element_count ||
+        (obj->initializer_count != 0U && obj->initializer_values == NULL) ||
+        (obj->relocation_count != 0U && obj->relocations == NULL))
         return false;
     (void)alignment;
+    /* C permits trailing implicit-zero array elements.  The number of
+     * explicit initializer slots is not the array's storage extent, and
+     * target ELF relocation slots may be interleaved with those values.
+     * Serialize the full DataLayout extent without reading past the source
+     * initializer vector.  Never invent a relocation for a zero slot. */
     for (i = 0U; i < arr->element_count; ++i) {
         const MinicGlobalRelocation *reloc =
             relocation_index < obj->relocation_count ?
                 &obj->relocations[relocation_index] : NULL;
+        const uint64_t bits = i < obj->initializer_count ?
+            obj->initializer_values[i] : UINT64_C(0);
         if (reloc != NULL &&
             (reloc->location_kind == MINIC_GLOBAL_RELOCATION_LOCATION_ARRAY_ELEMENT ||
              reloc->location_kind == MINIC_GLOBAL_RELOCATION_LOCATION_AGGREGATE_SCALAR) &&
             reloc->location_index == i) {
-            if (obj->initializer_values[i] != 0U ||
+            if (bits != 0U ||
                 !emit_relocation(out, program, target, reloc, element_bytes))
                 return false;
             ++relocation_index;
+        } else if (i >= obj->initializer_count) {
+            if (fprintf(out, "  .zero %zu\\n", element_bytes) < 0)
+                return false;
         } else if (!(emit_bits != NULL
-                        ? emit_bits(out, program, target, arr->element_type,
-                                    obj->initializer_values[i])
-                        : minic_multi_emit_data_bits(
-                              out, element_bytes, obj->initializer_values[i])))
+                        ? emit_bits(out, program, target, arr->element_type, bits)
+                        : minic_multi_emit_data_bits(out, element_bytes, bits)))
             return false;
     }
     return relocation_index == obj->relocation_count;
