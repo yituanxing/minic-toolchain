@@ -68,6 +68,11 @@ has src/target/loongarch64/asm_contract.c 'loong_mask_nospec_source('
 has src/target/loongarch64/asm_contract.c 'loong_mask_nospec_emit('
 lacks src/core/core_lower_asm_target.c 'sltu'
 
+# All targets reuse one ELF custom section and binding owner.
+has src/target/common/global_emit.c 'minic_multi_emit_elf_global_section('
+has src/target/common/global_emit.c 'minic_multi_emit_elf_global_binding('
+has src/target/common/global_emit.c 'minic_multi_elf_safe_section_name('
+
 # Four ISA families, five target profiles: one storage-shape owner, distinct
 # physical ABIs. RV32 must never inherit the 8-byte LP64 word policy.
 exists src/target/common/aggregate_shape.h

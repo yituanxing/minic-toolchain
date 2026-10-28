@@ -541,6 +541,11 @@ jobs:
         run: |
           set -Eeuo pipefail
           bash tests/compiler/c0/probe-loongarch-linux-nospec.sh "$GITHUB_WORKSPACE/build/runtime-ci/bin/minic-cc"
+      - name: Original Linux ELF named/percpu/weak and RELA data cross-GNU differential
+        if: matrix.target == 'x86_64' || matrix.target == 'aarch64' || matrix.target == 'loongarch64' || matrix.target == 'riscv64'
+        run: |
+          set -Eeuo pipefail
+          bash tests/compiler/c0/probe-linux-global-section-reloc.sh "$GITHUB_WORKSPACE/build/runtime-ci/bin/minic-cc" "${{ matrix.target }}"
       - name: Original Linux LoongArch no-operand DBAR real GNU QEMU
         if: matrix.target == 'loongarch64'
         shell: bash

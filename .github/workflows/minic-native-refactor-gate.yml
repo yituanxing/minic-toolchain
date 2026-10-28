@@ -118,6 +118,12 @@ jobs:
         run: |
           set -Eeuo pipefail
           MINIC_LOONG_NOSPEC_NATIVE_ONLY=1 bash tests/compiler/c0/probe-loongarch-linux-nospec.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
+      - name: Original GNU Linux ELF named globals across all five targets
+        run: |
+          set -Eeuo pipefail
+          for target in x86_64 aarch64 loongarch64 riscv64 riscv32; do
+            MINIC_SECTION_ONLY=1 bash tests/compiler/c0/probe-linux-global-section-reloc.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc" "$target"
+          done
       - name: Common GNU function metadata and inline-asm fail-closed regressions
         shell: bash
         run: |
