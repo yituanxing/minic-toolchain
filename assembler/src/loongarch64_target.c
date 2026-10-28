@@ -1,4 +1,5 @@
 #include "minias_internal.h"
+#include "loongarch64_fixup_kinds.h"
 
 #include <ctype.h>
 #include <errno.h>
@@ -1386,7 +1387,7 @@ static bool la_encode(MiniAs *as,const MiniAsStmt *s) {
         for(j=0U;j<count;++j)
             for(i=0U;i<4U;++i)
                 body[4U*j+i]=(unsigned char)(words[j]>>(8U*i));
-        return minias_section_append(as,s->section,body,4U*count);
+        return minias_emit_instruction_bytes(as,s->section,body,4U*count);
     }
     if(m->opcode==LA_MC_LI32_PAIR) {
         const uint32_t v=(uint32_t)m->operands[1].immediate;
@@ -1400,7 +1401,7 @@ static bool la_encode(MiniAs *as,const MiniAsStmt *s) {
             pair[i]=(unsigned char)(hi>>(i*8U));
             pair[i+4U]=(unsigned char)(lo>>(i*8U));
         }
-        return minias_section_append(as,s->section,pair,sizeof(pair));
+        return minias_emit_instruction_bytes(as,s->section,pair,sizeof(pair));
     }
     if(m->opcode==LA_MC_PCREL_PSEUDO) {
         const MiniAsSymbolExpr *symbol=m->operands[1].symbol;
@@ -1416,7 +1417,7 @@ static bool la_encode(MiniAs *as,const MiniAsStmt *s) {
             pair[i]=(unsigned char)(first>>(8U*i));
             pair[4U+i]=(unsigned char)(second>>(8U*i));
         }
-        return minias_section_append(as,s->section,pair,sizeof(pair)) &&
+        return minias_emit_instruction_bytes(as,s->section,pair,sizeof(pair)) &&
             minias_add_fixup(as,s->section,s->offset,
                              MINIAS_FIXUP_LARCH_PCALA_HI20,4U,
                              symbol->name,symbol->addend) &&
@@ -1483,7 +1484,7 @@ static bool la_encode(MiniAs *as,const MiniAsStmt *s) {
         default: break;
     }
     for(i=0U;i<4U;++i)bytes[i]=(unsigned char)(code>>(8U*i));
-    if(!minias_section_append(as,s->section,bytes,sizeof(bytes)))
+    if(!minias_emit_instruction_bytes(as,s->section,bytes,sizeof(bytes)))
         return false;
     if(kind==MINIAS_FIXUP_NONE)return true;
     expr=m->operands[slot].symbol;
@@ -1493,7 +1494,7 @@ static bool la_encode(MiniAs *as,const MiniAsStmt *s) {
 static bool la_align(MiniAs *as,int section,size_t size) {
     static const unsigned char nop[4]={0x00,0x00,0x40,0x03};
     if(size%4U){minias_set_error(as,"unalignable-loongarch-code-gap");return false;}
-    while(size){if(!minias_section_append(as,section,nop,4U))return false;size-=4U;}
+    while(size){if(!minias_emit_instruction_bytes(as,section,nop,4U))return false;size-=4U;}
     return true;
 }
 static bool la_profile(const char *march,const char *mabi,

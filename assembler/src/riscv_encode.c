@@ -1,4 +1,5 @@
 #include "minias_internal.h"
+#include "riscv_fixup_kinds.h"
 #include "riscv_target.h"
 
 #include <ctype.h>
@@ -609,7 +610,7 @@ static bool append_u16(MiniAs *as, int section, uint16_t value) {
 
     bytes[0] = (unsigned char)(value & 0xffU);
     bytes[1] = (unsigned char)((value >> 8U) & 0xffU);
-    return minias_section_append(as, section, bytes, sizeof(bytes));
+    return minias_emit_instruction_bytes(as, section, bytes, sizeof(bytes));
 }
 
 static bool append_u32(MiniAs *as, int section, uint32_t value) {
@@ -619,7 +620,7 @@ static bool append_u32(MiniAs *as, int section, uint32_t value) {
     bytes[1] = (unsigned char)((value >> 8U) & 0xffU);
     bytes[2] = (unsigned char)((value >> 16U) & 0xffU);
     bytes[3] = (unsigned char)((value >> 24U) & 0xffU);
-    return minias_section_append(as, section, bytes, sizeof(bytes));
+    return minias_emit_instruction_bytes(as, section, bytes, sizeof(bytes));
 }
 
 static bool parse_vsetvli_vtype(char operands[][128],
@@ -1764,7 +1765,7 @@ static bool rv_encode_multi_mc(MiniAs *as, const MiniAsStmt *stmt) {
         target = minias_get_symbol(as, expr->name, false);
         /* Linux early boot: NOPIC is default; PIC external la may use a
          * GOT reference only if the source did not request an addend. */
-        use_got = (stmt->target_options & MINIAS_RISCV_OPTION_PIC) != 0U &&
+        use_got = (stmt->site.mode_bits & MINIAS_RISCV_OPTION_PIC) != 0U &&
                   m->encoding != 0U && expr->addend == 0 &&
                   (target == NULL || !target->defined);
         (void)snprintf(name, sizeof(name), ".Lminias_pcrel_%zu",

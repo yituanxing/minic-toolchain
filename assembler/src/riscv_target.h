@@ -1,6 +1,8 @@
 #ifndef MINIAS_RISCV_TARGET_H
 #define MINIAS_RISCV_TARGET_H
 
+#include "riscv_fixup_kinds.h"
+
 #include <stdbool.h>
 
 #define MINIAS_RISCV_OPTION_PIC 1U

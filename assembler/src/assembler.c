@@ -526,14 +526,8 @@ static bool minias_record_fixup(MiniAs *as,
         minias_set_error(as, "invalid-section-fixup-owner");
         return false;
     }
-    /* Verify this semantic fixup can be represented by the selected target.
-     * ELF relocation numbers are chosen later by the object writer. */
-    if (as->target->fixup_relocation_type(kind, width) == 0U) {
-        minias_set_error(as,
-                         "unsupported-target-fixup:kind=%u:width=%u:symbol=%s",
-                         (unsigned)kind, width, symbol_name);
-        return false;
-    }
+    /* Keep semantic fixups typed until finalization. The object builder
+     * must decide whether this field needs an ELF relocation at all. */
     if (section < 0 || (size_t)section >= as->section_count ||
         as->sections[(size_t)section].type==MINIAS_SHT_NOBITS ||
         (width != 2U && width != 4U && width != 8U) ||
@@ -586,6 +580,50 @@ bool minias_add_section_fixup(MiniAs *as, MiniAsFixupOrigin origin,
                                symbol_name, addend, origin);
 }
 
+bool minias_emit_instruction_bytes(MiniAs *as, int section_index,
+                                   const void *data, size_t size) {
+    MiniAsSection *sec;
+    if (section_index < 0 || (size_t)section_index >= as->section_count) {
+        minias_set_error(as, "invalid-target-emission-section");
+        return false;
+    }
+    sec = &as->sections[(size_t)section_index];
+    if (!as->capture_instruction_bytes) {
+        minias_set_error(as, "target-emission-outside-instruction");
+        return false;
+    }
+    const MiniAsStmt *owner;
+    size_t needed;
+    if (!as->emitting_fragment ||
+        as->emitting_fragment_id >= as->stmt_count) {
+        minias_set_error(as, "instruction-bytes-without-fragment");
+        return false;
+    }
+    owner = &as->stmts[as->emitting_fragment_id];
+    if (owner->kind != MINIAS_STMT_INSN ||
+        owner->section != section_index ||
+        sec->type == MINIAS_SHT_NOBITS ||
+        size > SIZE_MAX - sec->size ||
+        size > SIZE_MAX - as->encoded_instruction_size) {
+        minias_set_error(as, "instruction-emission-section-or-size");
+        return false;
+    }
+    needed = as->encoded_instruction_size + size;
+    if (!grow_array((void **)&as->encoded_instruction_bytes,
+                    &as->encoded_instruction_capacity,
+                    sizeof(unsigned char), needed)) {
+        minias_set_error(as, "out-of-memory:encoded-instruction");
+        return false;
+    }
+    if (size != 0U)
+        memcpy(as->encoded_instruction_bytes +
+                   as->encoded_instruction_size, data, size);
+    as->encoded_instruction_size = needed;
+    sec->size += size; /* Virtual cursor for existing target emitters. */
+    return true;
+
+}
+
 bool minias_section_append(MiniAs *as, int section_index, const void *data, size_t size) {
     MiniAsSection *sec;
     size_t need;
@@ -598,35 +636,8 @@ bool minias_section_append(MiniAs *as, int section_index, const void *data, size
     }
     sec = &as->sections[(size_t)section_index];
     if (as->capture_instruction_bytes) {
-        const MiniAsStmt *owner;
-        size_t needed;
-        if (!as->emitting_fragment ||
-            as->emitting_fragment_id >= as->stmt_count) {
-            minias_set_error(as, "instruction-bytes-without-fragment");
-            return false;
-        }
-        owner = &as->stmts[as->emitting_fragment_id];
-        if (owner->kind != MINIAS_STMT_INSN ||
-            owner->section != section_index ||
-            sec->type == MINIAS_SHT_NOBITS ||
-            size > SIZE_MAX - sec->size ||
-            size > SIZE_MAX - as->encoded_instruction_size) {
-            minias_set_error(as, "instruction-emission-section-or-size");
-            return false;
-        }
-        needed = as->encoded_instruction_size + size;
-        if (!grow_array((void **)&as->encoded_instruction_bytes,
-                        &as->encoded_instruction_capacity,
-                        sizeof(unsigned char), needed)) {
-            minias_set_error(as, "out-of-memory:encoded-instruction");
-            return false;
-        }
-        if (size != 0U)
-            memcpy(as->encoded_instruction_bytes +
-                       as->encoded_instruction_size, data, size);
-        as->encoded_instruction_size = needed;
-        sec->size += size; /* Virtual cursor for existing target emitters. */
-        return true;
+        minias_set_error(as, "target-bypassed-mc-code-emitter");
+        return false;
     }
     if (sec->type == MINIAS_SHT_NOBITS) {
         const unsigned char *bytes=(const unsigned char *)data;
@@ -844,7 +855,8 @@ static bool add_stmt(MiniAs *as,
     }
     st->size = size;
     st->align = align;
-    st->target_options = as->target_options;
+    st->site.mode_bits = as->target_options;
+    st->site.profile_features = as->isa_features;
     if (st->op == NULL || st->args == NULL) {
         minias_set_error(as, "out-of-memory:stmt-text");
         return false;

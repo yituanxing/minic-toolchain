@@ -29,6 +29,8 @@ jobs:
         run: |
           make -j2 MODE=release CFLAGS=-Werror build/release/bin/minic-as
           test -x build/release/bin/minic-as
+      - name: Enforce ISA-private fixup and MC emission ownership
+        run: bash tests/assembler/probe-mc-target-boundary.sh
       - name: Run complete A0 including ISA/ABI and macro relaxation regressions
         run: make MODE=release check-minias-a0
       - name: Run strict RV32I GNU byte oracle and real ELF32/QEMU smoke

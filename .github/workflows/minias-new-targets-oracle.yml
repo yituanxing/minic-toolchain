@@ -3,10 +3,7 @@ name: MiniAS x86-64 and LoongArch64 Integer GNU Oracle
 on:
   pull_request:
     paths:
-      - 'assembler/src/x86_64_target.c'
-      - 'assembler/src/loongarch64_target.c'
-      - 'assembler/src/target_registry.c'
-      - 'assembler/src/minias_internal.h'
+      - 'assembler/src/**'
       - 'tests/assembler/probe-x86-loong-base.sh'
       - '.github/workflows/minias-new-targets-oracle.yml'
       - 'Makefile'

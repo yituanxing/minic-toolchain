@@ -1,4 +1,5 @@
 #include "minias_internal.h"
+#include "x86_64_fixup_kinds.h"
 
 #include <ctype.h>
 #include <errno.h>
@@ -588,7 +589,7 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
     if (!m) {minias_set_error(as,"out-of-memory:x86_64-mcinst");return false;}
     /* IA-32 mixed-mode within ELF64. Unvalidated code32 encodings fail
      * closed; these are the actual GNU EFI thunk PUSH/LRET instructions. */
-    if((s->target_options&X64_CODE32)!=0U &&
+    if((s->site.mode_bits&X64_CODE32)!=0U &&
        strcmp(s->op,"pushl") && strcmp(s->op,"lret")) {
         minias_set_error(as,"unsupported-x86-code32-operand:%s:line=%zu",
                          s->op,s->line);
@@ -1936,7 +1937,7 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
      * operand size. Linux head_64.S emits `push $0` in its return path;
      * reuse the single typed PUSH imm8/imm32 encoding and ABS32S fixup. */
     if((!strcmp(s->op,"pushq") || !strcmp(s->op,"push") ||
-       ((s->target_options&X64_CODE32)!=0U &&
+       ((s->site.mode_bits&X64_CODE32)!=0U &&
         !strcmp(s->op,"pushl"))) && s->args[0]=='$') {
         uint64_t bits;
         MiniAsSymbolExpr expr;
@@ -2002,10 +2003,10 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
     }
     if ((!strcmp(s->op,"pushq") || !strcmp(s->op,"popq") ||
          !strcmp(s->op,"push") || !strcmp(s->op,"pop") ||
-         ((s->target_options&X64_CODE32)!=0U &&
+         ((s->site.mode_bits&X64_CODE32)!=0U &&
           !strcmp(s->op,"pushl"))) &&
         x64_register(s->args,&rs,&ws) &&
-        (ws || ((s->target_options&X64_CODE32)!=0U &&
+        (ws || ((s->site.mode_bits&X64_CODE32)!=0U &&
                 !strcmp(s->op,"pushl") && !ws && rs<8U))) {
         m->opcode=X64_STACK;m->count=1U;m->operands[0].reg=rs;
         m->encoding=(!strcmp(s->op,"pushq") ||
@@ -2976,7 +2977,7 @@ static bool x64_encode(MiniAs *as,const MiniAsStmt *s) {
                 code[n++]=(unsigned char)((uint32_t)imm>>(8U*i));
             if(symbol) {
                 const MiniAsSymbolExpr *expr=m->operands[0].symbol;
-                if(!minias_section_append(as,s->section,code,n))return false;
+                if(!minias_emit_instruction_bytes(as,s->section,code,n))return false;
                 return minias_add_fixup(as,s->section,s->offset+1U,
                     MINIAS_FIXUP_X64_ABS32S,4U,expr->name,expr->addend);
             }
@@ -3034,7 +3035,7 @@ static bool x64_encode(MiniAs *as,const MiniAsStmt *s) {
             }
             for(i=0U;i<(width==2U?1U:4U);++i)
                 code[n++]=(unsigned char)((uint32_t)displacement>>(8U*i));
-            if(!minias_section_append(as,s->section,code,n))return false;
+            if(!minias_emit_instruction_bytes(as,s->section,code,n))return false;
             if(local)return true;
             return minias_add_fixup(as,s->section,s->offset+width-4U,kind,
                                     4U,expr->name,expr->addend-4);
@@ -3110,7 +3111,7 @@ static bool x64_encode(MiniAs *as,const MiniAsStmt *s) {
                     minias_set_error(as,"invalid-x86-symbolic-disp32-layout");
                     return false;
                 }
-                if(!minias_section_append(as,s->section,code,n))return false;
+                if(!minias_emit_instruction_bytes(as,s->section,code,n))return false;
                 if(!minias_add_fixup(as,s->section,
                     s->offset+relocation_at,MINIAS_FIXUP_X64_ABS32S,4U,
                     mem->symbol->name,mem->symbol->addend))return false;
@@ -3152,7 +3153,7 @@ static bool x64_encode(MiniAs *as,const MiniAsStmt *s) {
                     for(i=0U;i<4U;++i)code[n++]=(unsigned char)(disp>>(8U*i));
                     for(i=0U;i<extra;++i)
                         code[n++]=(unsigned char)(immediate>>(8U*i));
-                    if(!minias_section_append(as,s->section,code,n))return false;
+                    if(!minias_emit_instruction_bytes(as,s->section,code,n))return false;
                     if(!local &&
                        !minias_add_fixup(as,s->section,s->offset+relocation_at,
                            MINIAS_FIXUP_X64_PC32,4U,mem->symbol->name,
@@ -3180,7 +3181,7 @@ static bool x64_encode(MiniAs *as,const MiniAsStmt *s) {
                     minias_set_error(as,"invalid-x86-abs32s-memory-layout");
                     return false;
                 }
-                if(!minias_section_append(as,s->section,code,n))return false;
+                if(!minias_emit_instruction_bytes(as,s->section,code,n))return false;
                 return minias_add_fixup(as,s->section,s->offset+n-4U,
                     MINIAS_FIXUP_X64_ABS32S,4U,imm->name,imm->addend);
             }
@@ -3195,7 +3196,7 @@ static bool x64_encode(MiniAs *as,const MiniAsStmt *s) {
             for(i=0U;i<8U;++i)
                 code[n++]=(unsigned char)((value->kind==MINIAS_MC_SYMBOL?
                     UINT64_C(0):value->immediate)>>(8U*i));
-            if(!minias_section_append(as,s->section,code,n))return false;
+            if(!minias_emit_instruction_bytes(as,s->section,code,n))return false;
             if(value->kind!=MINIAS_MC_SYMBOL)return true;
             return minias_add_fixup(as,s->section,s->offset+2U,
                 MINIAS_FIXUP_X64_ABS64,8U,
@@ -3211,7 +3212,7 @@ static bool x64_encode(MiniAs *as,const MiniAsStmt *s) {
             for(i=0U;i<4U;++i)
                 code[n++]=(unsigned char)(((uint32_t)
                     (src->kind==MINIAS_MC_SYMBOL?0U:src->immediate))>>(8U*i));
-            if(!minias_section_append(as,s->section,code,n))return false;
+            if(!minias_emit_instruction_bytes(as,s->section,code,n))return false;
             if(src->kind!=MINIAS_MC_SYMBOL)return true;
             return minias_add_fixup(as,s->section,s->offset+3U,
                 MINIAS_FIXUP_X64_ABS32S,4U,src->symbol->name,src->symbol->addend);
@@ -3263,7 +3264,7 @@ static bool x64_encode(MiniAs *as,const MiniAsStmt *s) {
                     minias_set_error(as,"invalid-x86-alu-symbol-width");
                     return false;
                 }
-                if(!minias_section_append(as,s->section,code,n))return false;
+                if(!minias_emit_instruction_bytes(as,s->section,code,n))return false;
                 return minias_add_fixup(as,s->section,s->offset+n-4U,
                     m->operands[0].register_64?
                         MINIAS_FIXUP_X64_ABS32S:MINIAS_FIXUP_ABS,
@@ -3316,12 +3317,12 @@ static bool x64_encode(MiniAs *as,const MiniAsStmt *s) {
             break;
         default: minias_set_error(as,"bad-x86_64-mcinst");return false;
     }
-    return minias_section_append(as,s->section,code,n);
+    return minias_emit_instruction_bytes(as,s->section,code,n);
 }
 
 static bool x64_code_align(MiniAs *as,int section,size_t n) {
     static const unsigned char nop=0x90;
-    while(n-- != 0U) if (!minias_section_append(as,section,&nop,1U))return false;
+    while(n-- != 0U) if (!minias_emit_instruction_bytes(as,section,&nop,1U))return false;
     return true;
 }
 
@@ -3368,7 +3369,7 @@ static bool x64_parse_directive(MiniAs *as,const char *op,const char *args,
                          args,line);
         return false;
     }
-    as->target_options=code32?X64_CODE32:0U;
+    as->site.mode_bits=code32?X64_CODE32:0U;
     return true;
 }
 /* GNU GAS treats native register tokens in .if as distinct symbolic

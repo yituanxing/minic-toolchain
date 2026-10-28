@@ -96,56 +96,18 @@ typedef enum MiniAsStmtKind {
     MINIAS_STMT_DATA
 } MiniAsStmtKind;
 
-typedef enum MiniAsFixupKind {
+/* Common fixup kinds describe generic byte-addressed data semantics.
+ * Machine-specific kinds are opaque uint32_t values owned by the Target.
+ * ELF relocation ID selection happens only after fragment layout. */
+typedef uint32_t MiniAsFixupKind;
+enum {
     MINIAS_FIXUP_NONE = 0,
     MINIAS_FIXUP_ABS,
-    MINIAS_FIXUP_PREL32, /* common S+A-P .long data expression */
-    MINIAS_FIXUP_PREL64, /* common S+A-P .quad ELF64 PC-relative expression */
+    MINIAS_FIXUP_PREL32,
+    MINIAS_FIXUP_PREL64,
     MINIAS_FIXUP_ADD,
-    MINIAS_FIXUP_SUB,
-    MINIAS_FIXUP_RV_CALL_PLT,
-    MINIAS_FIXUP_RV_PCREL_HI20,
-    MINIAS_FIXUP_RV_GOT_HI20,
-    MINIAS_FIXUP_RV_PCREL_LO12_I,
-    MINIAS_FIXUP_RV_PCREL_LO12_S,
-    MINIAS_FIXUP_RV_JAL,
-    MINIAS_FIXUP_A64_CALL26,
-    MINIAS_FIXUP_A64_JUMP26,
-    MINIAS_FIXUP_A64_CONDBR19,
-    MINIAS_FIXUP_A64_LD_PREL_LO19,
-    MINIAS_FIXUP_A64_TSTBR14,
-    MINIAS_FIXUP_A64_ADR_LO21,
-    MINIAS_FIXUP_A64_ADRP_HI21,
-    MINIAS_FIXUP_A64_ADR_GOT_PAGE,
-    MINIAS_FIXUP_A64_LD64_GOT_LO12,
-    MINIAS_FIXUP_A64_ADD_LO12,
-    MINIAS_FIXUP_A64_LDST8_LO12,
-    MINIAS_FIXUP_A64_LDST16_LO12,
-    MINIAS_FIXUP_A64_LDST32_LO12,
-    MINIAS_FIXUP_A64_LDST64_LO12,
-    /* Semantic MOVW UABS relocations. Target owns numeric ELF IDs. */
-    MINIAS_FIXUP_A64_MOVW_G0,
-    MINIAS_FIXUP_A64_MOVW_G0_NC,
-    MINIAS_FIXUP_A64_MOVW_G1,
-    MINIAS_FIXUP_A64_MOVW_G1_NC,
-    MINIAS_FIXUP_A64_MOVW_G2,
-    MINIAS_FIXUP_A64_MOVW_G2_NC,
-    MINIAS_FIXUP_A64_MOVW_G3,
-    MINIAS_FIXUP_A64_MOVW_SG0,
-    MINIAS_FIXUP_A64_MOVW_SG1,
-    MINIAS_FIXUP_A64_MOVW_SG2,
-    MINIAS_FIXUP_X64_PC32,
-    MINIAS_FIXUP_X64_PLT32,
-    MINIAS_FIXUP_X64_ABS32S,
-    MINIAS_FIXUP_X64_ABS64,
-    /* ELF numeric relocation types are target-owned; Common stores only
-     * semantic fixup identities and SymbolExpr. */
-    MINIAS_FIXUP_LARCH_PCALA_HI20,
-    MINIAS_FIXUP_LARCH_PCALA_LO12,
-    MINIAS_FIXUP_LARCH_B16,
-    MINIAS_FIXUP_LARCH_B21,
-    MINIAS_FIXUP_LARCH_B26
-} MiniAsFixupKind;
+    MINIAS_FIXUP_SUB
+};
 
 /* A symbolic machine field adjustment, still independent of ELF's numeric
  * relocation encoding until final object materialization. */
@@ -272,6 +234,14 @@ typedef struct MiniAsMacro {
     size_t body_count;
 } MiniAsMacro;
 
+/* Common never interprets these bits: only the emitting Target knows their
+ * meaning. Preserve the exact directive-selected mode at the parse site,
+ * rather than reading mutable TargetContext during later relaxation. */
+typedef struct MiniAsTargetSiteState {
+    uint32_t mode_bits;
+    uint64_t profile_features;
+} MiniAsTargetSiteState;
+
 typedef struct MiniAsStmt {
     MiniAsStmtKind kind;
     char *op;
@@ -287,9 +257,8 @@ typedef struct MiniAsStmt {
     unsigned char align_fill;
     bool align_has_max_skip;
     uint64_t align_max_skip;
-    /* Effective .option pic/nopic at the precise instruction site. */
-    /* Opaque target state captured at the exact instruction site. */
-    uint32_t target_options;
+    /* Immutable parse-site state: meaningful bits are defined by Target. */
+    struct MiniAsTargetSiteState site;
     /* Common variable-size data fragment resolved after symbol layout. */
     bool deferred_data_size;
     MiniAsMCInst *mcinst; /* allocated by target parser, freed by core */
@@ -485,6 +454,11 @@ bool minias_decode_string_literals(const char *text,
                                    bool nul_terminate,
                                    unsigned char **data,
                                    size_t *size);
+/* All instruction bytes are produced through the target CodeEmitter interface.
+ * The emitter returns a fragment-owned buffer; Common alone commits sections.
+ * Target NOP alignment may still use the separate section append API. */
+bool minias_emit_instruction_bytes(MiniAs *as, int section_index,
+                                   const void *data, size_t size);
 bool minias_section_append(MiniAs *as, int section_index, const void *data, size_t size);
 bool minias_section_append_zero(MiniAs *as, int section_index, size_t size);
 void minias_set_error(MiniAs *as, const char *format, ...);
