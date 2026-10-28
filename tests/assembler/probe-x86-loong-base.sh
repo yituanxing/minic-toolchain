@@ -130,6 +130,7 @@ entry_x:
     rep stosl
     repz cmpsb
     repne scasb
+    movq $abs_mem_immediate, abs_mem_addr(%rip)
     # Real GCC imm-to-memory symbolic and dual-relocation instructions.
     cmpq $apic_physflat, apic(%rip)
     cmpq $truncate_bdev_range, 72(%rdi)
@@ -948,7 +949,6 @@ for bad in            'popcntq %eax,%rax' \
            'shrb %cl, %ax' \
            'rolw %ah' \
            'testb $256, %ah' \
-           'movq $abs_mem_immediate, abs_mem_addr(%rip)' \
            'movw $65536, (%rax)' \
            'andw $-32769, (%rax)' \
            'cmpb $256, %al' \
