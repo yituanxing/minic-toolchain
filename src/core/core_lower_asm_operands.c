@@ -754,6 +754,52 @@ static bool core_inline_asm_named_input_index(const MinicInlineAsm *source,
     return false;
 }
 
+/* Parse one GNU compile-time input reference for BOTH sizing and output.
+ * The c modifier is the unadorned immediate/address spelling required by
+ * original Linux BUG/WARN tables; no architecture-specific text belongs in
+ * this Core normalizer. Unsupported modifiers fail closed. */
+static bool core_inline_asm_immediate_reference(
+    const MinicInlineAsm *source, size_t cursor,
+    size_t *index, size_t *consumed) {
+    size_t position;
+    size_t begin, end;
+    if (source == NULL || source->template_text == NULL ||
+        index == NULL || consumed == NULL ||
+        cursor >= source->template_length ||
+        source->template_text[cursor] != '%')
+        return false;
+    position = cursor + 1U;
+    if (position >= source->template_length)
+        return false;
+    if (source->template_text[position] == 'c') {
+        ++position;
+        if (position >= source->template_length) return false;
+    }
+    if (source->template_text[position] >= '0' &&
+        source->template_text[position] <= '9') {
+        *index = (size_t)(source->template_text[position] - '0');
+        ++position;
+    } else if (source->template_text[position] == '[') {
+        begin = ++position;
+        end = begin;
+        while (end < source->template_length &&
+               source->template_text[end] != ']')
+            ++end;
+        if (end == source->template_length || end == begin ||
+            !core_inline_asm_named_input_index(
+                source, source->template_text + begin,
+                end - begin, index))
+            return false;
+        position = end + 1U;
+    } else {
+        return false;
+    }
+    if (*index >= source->input_count)
+        return false;
+    *consumed = position - cursor;
+    return true;
+}
+
 static bool core_inline_asm_specialized_length(const MinicInlineAsm *source,
                                                const size_t *replacement_lengths,
                                                size_t *specialized_length) {
@@ -789,36 +835,10 @@ static bool core_inline_asm_specialized_length(const MinicInlineAsm *source,
             cursor += 2U;
             continue;
         }
-        replacement_index = SIZE_MAX;
-        consumed = 0U;
-        if (source->template_text[cursor + 1U] >= '0' &&
-            source->template_text[cursor + 1U] <= '9') {
-            replacement_index = (size_t)(source->template_text[cursor + 1U] - '0');
-            consumed = 2U;
-        } else if (source->template_text[cursor + 1U] == '[') {
-            size_t name_begin;
-            size_t name_end;
-
-            name_begin = cursor + 2U;
-            name_end = name_begin;
-            while (name_end < source->template_length && source->template_text[name_end] != ']') {
-                name_end += 1U;
-            }
-            if (name_end >= source->template_length || name_end == name_begin ||
-                !core_inline_asm_named_input_index(source,
-                                                   source->template_text + name_begin,
-                                                   name_end - name_begin,
-                                                   &replacement_index)) {
-                return false;
-            }
-            consumed = name_end - cursor + 1U;
-        } else {
+        if (!core_inline_asm_immediate_reference(
+                source, cursor, &replacement_index, &consumed) ||
+            output_length > SIZE_MAX - replacement_lengths[replacement_index])
             return false;
-        }
-        if (replacement_index >= source->input_count ||
-            output_length > SIZE_MAX - replacement_lengths[replacement_index]) {
-            return false;
-        }
         output_length += replacement_lengths[replacement_index];
         cursor += consumed;
     }
@@ -877,29 +897,10 @@ bool core_inline_asm_specialize_immediates(const MinicCoreLowerContext *context,
             cursor += 2U;
             continue;
         }
-        replacement_index = SIZE_MAX;
-        consumed = 0U;
-        if (source->template_text[cursor + 1U] >= '0' &&
-            source->template_text[cursor + 1U] <= '9') {
-            replacement_index = (size_t)(source->template_text[cursor + 1U] - '0');
-            consumed = 2U;
-        } else {
-            size_t name_begin;
-            size_t name_end;
-
-            name_begin = cursor + 2U;
-            name_end = name_begin;
-            while (source->template_text[name_end] != ']') {
-                name_end += 1U;
-            }
-            if (!core_inline_asm_named_input_index(source,
-                                                   source->template_text + name_begin,
-                                                   name_end - name_begin,
-                                                   &replacement_index)) {
-                free(specialized);
-                return false;
-            }
-            consumed = name_end - cursor + 1U;
+        if (!core_inline_asm_immediate_reference(
+                source, cursor, &replacement_index, &consumed)) {
+            free(specialized);
+            return false;
         }
         (void)memcpy(specialized + output_cursor,
                      replacements[replacement_index],

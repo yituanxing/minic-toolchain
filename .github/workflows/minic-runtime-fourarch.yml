@@ -221,6 +221,14 @@ jobs:
             --backend minic --targets "${{ matrix.target }}" \
             --minic "$GITHUB_WORKSPACE/build/runtime-ci/bin/minic-cc" \
             --build-dir build/runtime-verdict --jobs 4
+      - name: GNU Linux %c immediate and symbolic BUG table assembly oracle
+        if: matrix.target == 'x86_64'
+        shell: bash
+        env:
+          MINIC_CC: ${{ github.workspace }}/build/runtime-ci/bin/minic-cc
+        run: |
+          set -Eeuo pipefail
+          sh tests/compiler/c0/probe-gnu-immediate-c-modifier-linux.sh
       - name: Exercise all typed overflow builtins across four targets
         if: always() && matrix.target == 'x86_64'
         shell: bash
