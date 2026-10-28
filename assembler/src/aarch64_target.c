@@ -2848,7 +2848,9 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
               !strcmp(op,"bsl") || !strcmp(op,"bit") ||
               !strcmp(op,"bif") ||
               (!strcmp(op,"add") && args[0]=='v') ||
-              !strcmp(op,"trn1") || !strcmp(op,"trn2")) {
+              !strcmp(op,"trn1") || !strcmp(op,"trn2") ||
+              !strcmp(op,"uzp1") || !strcmp(op,"uzp2") ||
+              !strcmp(op,"zip1") || !strcmp(op,"zip2")) {
         char tok[4][384];unsigned n,rd,rn,rm,i;
         uint32_t da,sa,ta;
         static const struct {const char *name;uint32_t base;} table[]={
@@ -2861,15 +2863,23 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
             {"bif",UINT32_C(0x2ee01c00)},
             {"add",UINT32_C(0x0e208400)},
             {"trn1",UINT32_C(0x0e002800)},
-            {"trn2",UINT32_C(0x0e006800)}
+            {"trn2",UINT32_C(0x0e006800)},
+            {"uzp1",UINT32_C(0x0e001800)},
+            {"uzp2",UINT32_C(0x0e005800)},
+            {"zip1",UINT32_C(0x0e003800)},
+            {"zip2",UINT32_C(0x0e007800)}
         };
         if(split_operands(args,tok,&n) && n==3U &&
            tok[0][0]=='v') {
+            bool permute=!strcmp(op,"trn1") || !strcmp(op,"trn2") ||
+                         !strcmp(op,"uzp1") || !strcmp(op,"uzp2") ||
+                         !strcmp(op,"zip1") || !strcmp(op,"zip2");
+            bool sized=permute || !strcmp(op,"add");
             if(!a64_vector_view(tok[0],&rd,&da) ||
                !a64_vector_view(tok[1],&rn,&sa) ||
                !a64_vector_view(tok[2],&rm,&ta) ||
                da!=sa || da!=ta ||
-               ((!strcmp(op,"trn1") || !strcmp(op,"trn2") || !strcmp(op,"add"))?
+               (sized?
                  ((da&UINT32_C(0xc00))==UINT32_C(0xc00) &&
                   (da&UINT32_C(0x40000000))==0U):
                  (da&UINT32_C(0xc00))!=0U)) {
@@ -2882,7 +2892,7 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
             inst->opcode=A64_MC_SIMD_LOGIC;inst->count=3U;
             inst->encoding=table[i].base|
                           (da&UINT32_C(0x40000000))|
-                          ((!strcmp(op,"trn1") || !strcmp(op,"trn2") || !strcmp(op,"add"))?
+                          (sized?
                           ((da&UINT32_C(0xc00))<<12U):0U);
             put_reg(&inst->operands[0],rd,true);
             put_reg(&inst->operands[1],rn,true);

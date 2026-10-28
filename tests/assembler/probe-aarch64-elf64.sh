@@ -2412,3 +2412,37 @@ for bad in 'cmp w1,#-999999' 'cmn w1,#-999999' \
  fi
 done
 echo 'MINIAS_A64_AES_GHASH_NEGCMP_PMULL8=PASS GNU_9_words_and_6_negatives'
+
+
+# Linux AES/GHASH UZP1/2 plus all TRN/ZIP arrangements are one MC family.
+cat > "$work/a64-uzp-zip-family.s" <<'A64_UZP_ZIP'
+.text
+uzp1 v16.4s,v16.4s,v8.4s
+uzp1 v11.2d,v10.2d,v12.2d
+uzp2 v3.2d,v3.2d,v5.2d
+uzp1 v1.8b,v2.8b,v3.8b
+uzp2 v4.16b,v5.16b,v6.16b
+zip1 v7.8h,v8.8h,v9.8h
+zip2 v10.4h,v11.4h,v12.4h
+zip1 v13.2s,v14.2s,v15.2s
+zip2 v16.2d,v17.2d,v18.2d
+trn1 v19.16b,v20.16b,v21.16b
+trn2 v22.4s,v23.4s,v24.4s
+A64_UZP_ZIP
+"$MINIAS" --target=aarch64 -o "$work/a64-uzpzip-mini.o" "$work/a64-uzp-zip-family.s"
+"$AARCH64_AS" -o "$work/a64-uzpzip-gnu.o" "$work/a64-uzp-zip-family.s"
+"$AARCH64_OBJCOPY" -j .text -O binary "$work/a64-uzpzip-mini.o" "$work/a64-uzpzip-mini.bin"
+"$AARCH64_OBJCOPY" -j .text -O binary "$work/a64-uzpzip-gnu.o" "$work/a64-uzpzip-gnu.bin"
+cmp "$work/a64-uzpzip-mini.bin" "$work/a64-uzpzip-gnu.bin"
+for invalid in 'uzp1 v0.1d,v1.1d,v2.1d' \
+               'uzp2 v0.2d,v1.1d,v2.1d' \
+               'zip1 v0.4s,v1.8h,v2.4s' \
+               'zip2 v0.2d,v1.2d,v2.4s' \
+               'trn1 v0.4s,v1.2s,v2.4s' \
+               'uzp1 v32.4s,v1.4s,v2.4s'; do
+    printf '.text\n%s\n' "$invalid" > "$work/a64-uzpzip-invalid.s"
+    if "$MINIAS" --target=aarch64 -o "$work/a64-uzpzip-invalid.o" "$work/a64-uzpzip-invalid.s" >/dev/null 2>&1; then
+        echo "invalid SIMD UZP/ZIP/TRN accepted: $invalid" >&2; exit 1
+    fi
+done
+echo 'MINIAS_A64_UZP_ZIP_TRN=PASS GNU_11_words_and_6_invalid'
