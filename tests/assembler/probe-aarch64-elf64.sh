@@ -1697,4 +1697,53 @@ for disabled in 'stgm xzr,[x0]' 'casp x0,x1,x2,x3,[x4]'; do
     fi
 done
 echo 'MINIAS_A64_CASP_STGM_INS=PASS GNU_12_words_MTE_LSE_scalar_REV32'
+
+# AArch64 GNU Linux crypto/atomic source root families: SIMD ADD/TRN1,
+# EXT, MOVI constant splats, and LDXP/STXP paired exclusive accesses.
+cat > "$work/a64-kernel-simd-atomic.s" <<'GNU_SIMD_ATOMIC'
+.arch armv8.5-a+memtag
+.text
+add v4.4s,v4.4s,v0.4s
+add v22.4s,v16.4s,v0.4s
+add v0.8b,v1.8b,v2.8b
+trn1 v1.2d,v0.2d,v16.2d
+trn1 v1.4s,v2.4s,v3.4s
+ext v1.16b,v1.16b,v1.16b,#1
+ext v2.8b,v3.8b,v4.8b,#7
+movi v0.16b,#0
+movi v1.8b,#255
+movi v2.4s,#0
+movi v3.4s,#255
+movi v4.2d,#0
+ldxp x22,x21,[x4]
+ldaxp x0,x1,[x2]
+ldxp w0,w1,[x2]
+stxp w12,x0,x1,[x2]
+stlxp w9,x10,x11,[x12]
+stxp w4,w5,w6,[x7]
+dc gzva,x0
+mrs x1,pmintenset_el1
+msr pmintenset_el1,x2
+GNU_SIMD_ATOMIC
+"$MINIAS" --target=aarch64 -o "$work/a64-simd-atomic-mini.o" "$work/a64-kernel-simd-atomic.s"
+"$AARCH64_AS" -o "$work/a64-simd-atomic-gnu.o" "$work/a64-kernel-simd-atomic.s"
+"$AARCH64_OBJCOPY" -j .text -O binary "$work/a64-simd-atomic-mini.o" "$work/a64-simd-atomic-mini.bin"
+"$AARCH64_OBJCOPY" -j .text -O binary "$work/a64-simd-atomic-gnu.o" "$work/a64-simd-atomic-gnu.bin"
+cmp "$work/a64-simd-atomic-mini.bin" "$work/a64-simd-atomic-gnu.bin"
+for bad in 'add v0.1d,v1.1d,v2.1d' 'trn1 v0.1d,v1.1d,v2.1d' \
+           'add v0.8b,v1.16b,v2.8b' 'ext v0.16b,v1.16b,v2.16b,#16' \
+           'ext v0.8b,v1.8b,v2.8b,#8' 'movi v0.8h,#1' \
+           'ldxp x0,w1,[x2]' 'ldxp x0,x1,[x2,#8]' \
+           'stxp x0,x1,x2,[x3]' 'dc gzva,w0' \
+           'msr pmintenset_el1,w1'; do
+    printf '.arch armv8.5-a+memtag\n.text\n%s\n' "$bad" > "$work/a64-simd-atomic-invalid.s"
+    if "$MINIAS" --target=aarch64 -o "$work/a64-simd-atomic-invalid.o" "$work/a64-simd-atomic-invalid.s" >/dev/null 2>&1; then
+        echo "invalid GNU SIMD/atomic/sysreg operands accepted: $bad" >&2;exit 1
+    fi
+done
+printf '.arch armv8-a\n.text\ndc gzva,x0\n' > "$work/a64-no-mte-dc.s"
+if "$MINIAS" --target=aarch64 -o "$work/a64-no-mte-dc.o" "$work/a64-no-mte-dc.s" >/dev/null 2>&1; then
+  echo 'MTE DC GZVA accepted without MTE ISA feature' >&2;exit 1
+fi
+echo 'MINIAS_A64_SIMD_ATOMIC_FAMILY=PASS native_GNU_21_instructions'
 echo 'MINIAS_AARCH64_VSLICE=PASS ELF64=1 gnu_bytes=equal relocation_call26_jump26_abs64=1 ld=pass qemu=exit0'

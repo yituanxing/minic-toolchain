@@ -318,7 +318,10 @@ enum {
     A64_MC_SIMD_DUP,
     A64_MC_SIMD_REV32,
     A64_MC_LSE_PAIR,
-    A64_MC_MTE_STGM
+    A64_MC_MTE_STGM,
+    A64_MC_SIMD_EXT,
+    A64_MC_SIMD_IMM,
+    A64_MC_EXCLUSIVE_PAIR
 };
 
 /* GNU AArch64 operands split on TOP-LEVEL commas, not commas within
@@ -1671,6 +1674,7 @@ static bool a64_system_register(const char *name,uint32_t *mrs,uint32_t *msr) {
         {"pmovsclr_el0",UINT32_C(0xd53b9c60),UINT32_C(0xd51b9c60)},
         {"pmcntenset_el0",UINT32_C(0xd53b9c20),UINT32_C(0xd51b9c20)},
         {"pmintenclr_el1",UINT32_C(0xd5389e40),UINT32_C(0xd5189e40)},
+        {"pmintenset_el1",UINT32_C(0xd5389e20),UINT32_C(0xd5189e20)},
         {"pmcr_el0",UINT32_C(0xd53b9c00),UINT32_C(0xd51b9c00)},
         {"pmcntenclr_el0",UINT32_C(0xd53b9c40),UINT32_C(0xd51b9c40)},
         /* S3/S0 sysreg encodings independently assembled with LLVM
@@ -2265,6 +2269,7 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
             {"dc","cvau",UINT32_C(0xd50b7b20),true},
             {"dc","civac",UINT32_C(0xd50b7e20),true},
             {"dc","zva",UINT32_C(0xd50b7420),true},
+            {"dc","gzva",UINT32_C(0xd50b7480),true},
             /* Architectural AT SYS opcodes use the existing Rt/ELF model. */
             {"at","s1e1r",UINT32_C(0xd5087800),true},
             {"at","s1e1w",UINT32_C(0xd5087820),true},
@@ -2326,6 +2331,8 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
             if(strcmp(op,sysops[i].family) ||
                strcmp(requested,sysops[i].name))continue;
             if(sysops[i].needs_rt!=paired)break;
+            if(!strcmp(sysops[i].name,"gzva") &&
+               (as->target_options&A64_FEATURE_MTE)==0U)break;
             /* ARMv8.4 range TLBI requires an explicit architectural
              * profile opt-in. It is not available under baseline v8-a. */
             if((!strncmp(sysops[i].name,"rv",2U) ||
@@ -2570,7 +2577,8 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
     } else if(!strcmp(op,"eor") || !strcmp(op,"orr") ||
               !strcmp(op,"and") || !strcmp(op,"bic") ||
               !strcmp(op,"bsl") || !strcmp(op,"bit") ||
-              !strcmp(op,"bif")) {
+              !strcmp(op,"bif") || !strcmp(op,"add") ||
+              !strcmp(op,"trn1")) {
         char tok[4][96];unsigned n,rd,rn,rm,i;
         uint32_t da,sa,ta;
         static const struct {const char *name;uint32_t base;} table[]={
@@ -2580,7 +2588,9 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
             {"bic",UINT32_C(0x0e601c00)},
             {"bsl",UINT32_C(0x2e601c00)},
             {"bit",UINT32_C(0x2ea01c00)},
-            {"bif",UINT32_C(0x2ee01c00)}
+            {"bif",UINT32_C(0x2ee01c00)},
+            {"add",UINT32_C(0x0e208400)},
+            {"trn1",UINT32_C(0x0e002800)}
         };
         if(split_operands(args,tok,&n) && n==3U &&
            tok[0][0]=='v') {
@@ -2588,7 +2598,10 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
                !a64_vector_view(tok[1],&rn,&sa) ||
                !a64_vector_view(tok[2],&rm,&ta) ||
                da!=sa || da!=ta ||
-               (da&UINT32_C(0xc00))!=0U) {
+               ((!strcmp(op,"trn1") || !strcmp(op,"add"))?
+                 ((da&UINT32_C(0xc00))==UINT32_C(0xc00) &&
+                  (da&UINT32_C(0x40000000))==0U):
+                 (da&UINT32_C(0xc00))!=0U)) {
                 minias_set_error(as,"bad-aarch64-simd-logic:%s:line=%zu",
                                  args,stmt->line);
                 free(inst);return false;
@@ -2597,7 +2610,9 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
                 if(!strcmp(op,table[i].name))break;
             inst->opcode=A64_MC_SIMD_LOGIC;inst->count=3U;
             inst->encoding=table[i].base|
-                          (da&UINT32_C(0x40000000));
+                          (da&UINT32_C(0x40000000))|
+                          ((!strcmp(op,"trn1") || !strcmp(op,"add"))?
+                          ((da&UINT32_C(0xc00))<<12U):0U);
             put_reg(&inst->operands[0],rd,true);
             put_reg(&inst->operands[1],rn,true);
             put_reg(&inst->operands[2],rm,true);
@@ -2608,6 +2623,93 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
                              op,args,stmt->line);
             free(inst);return false;
         }
+    } else if(!strcmp(op,"ext")) {
+        char tok[4][96];unsigned n,rd,rn,rm;
+        uint32_t da,sa,ta;
+        int64_t index;
+        if(!split_operands(args,tok,&n) || n!=4U ||
+           !a64_vector_view(tok[0],&rd,&da) ||
+           !a64_vector_view(tok[1],&rn,&sa) ||
+           !a64_vector_view(tok[2],&rm,&ta) ||
+           da!=sa || da!=ta || (da&UINT32_C(0xc00))!=0U ||
+           !parse_signed_number(tok[3],&index) || index<0 ||
+           index>=((da&UINT32_C(0x40000000))?16:8)) {
+            minias_set_error(as,"bad-aarch64-ext:%s:line=%zu",
+                             args,stmt->line);
+            free(inst);return false;
+        }
+        inst->opcode=A64_MC_SIMD_EXT;inst->count=4U;
+        inst->encoding=UINT32_C(0x2e000000)|
+                      (da&UINT32_C(0x40000000))|
+                      ((uint32_t)index<<11U);
+        put_reg(&inst->operands[0],rd,true);
+        put_reg(&inst->operands[1],rn,true);
+        put_reg(&inst->operands[2],rm,true);
+    } else if(!strcmp(op,"movi")) {
+        char vreg[96],text[96];unsigned rd;
+        uint32_t ar,base;
+        int64_t number;
+        unsigned imm;
+        if(!split_two(args,vreg,sizeof(vreg),text,sizeof(text)) ||
+           !a64_vector_view(vreg,&rd,&ar) ||
+           !parse_signed_number(text,&number) ||
+           number<0 || number>255) {
+            minias_set_error(as,"bad-aarch64-movi:%s:line=%zu",
+                             args,stmt->line);
+            free(inst);return false;
+        }
+        /* Legal MOVI splat #imm8 forms share exactly the same 8-bit
+         * bit split: imm8[7:5] -> [18:16], imm8[4:0]->[9:5].
+         * Constant-only; no ARM symbolic relocation is inferred. */
+        if((ar&UINT32_C(0xc00))==0U)
+            base=UINT32_C(0x0f00e400);
+        else if((ar&UINT32_C(0xc00))==UINT32_C(0x800))
+            base=UINT32_C(0x0f000400);
+        else if(ar==UINT32_C(0x40000c00) && number==0)
+            base=UINT32_C(0x6f00e400);
+        else {
+            minias_set_error(as,"bad-aarch64-movi-size:%s:line=%zu",
+                             args,stmt->line);
+            free(inst);return false;
+        }
+        imm=(unsigned)number;
+        inst->opcode=A64_MC_SIMD_IMM;inst->count=1U;
+        inst->encoding=base|
+                      (ar&UINT32_C(0x40000000))|
+                      ((imm>>5U)<<16U)|((imm&31U)<<5U);
+        put_reg(&inst->operands[0],rd,true);
+    } else if(!strcmp(op,"ldxp") || !strcmp(op,"ldaxp") ||
+              !strcmp(op,"stxp") || !strcmp(op,"stlxp")) {
+        char tok[4][96];unsigned n,k,rt,rt2,rn,rs=31U;
+        bool wt,wt2,ws,sp,store=op[0]=='s';
+        int64_t off;unsigned mode;
+        if(!split_operands(args,tok,&n) ||
+           n!=(store?4U:3U)) {
+            minias_set_error(as,"bad-aarch64-exclusive-pair:%s:line=%zu",
+                             args,stmt->line);
+            free(inst);return false;
+        }
+        k=store?1U:0U;
+        if((store && (!parse_a64_reg(tok[0],&rs,&ws,&sp) || sp || ws)) ||
+           !parse_a64_reg(tok[k],&rt,&wt,&sp) || sp ||
+           !parse_a64_reg(tok[k+1U],&rt2,&wt2,&sp) || sp ||
+           wt!=wt2 ||
+           !parse_a64_mem(tok[k+2U],&rn,&off,&mode) ||
+           off!=0 || mode!=0U) {
+            minias_set_error(as,"bad-aarch64-exclusive-pair:%s:line=%zu",
+                             args,stmt->line);
+            free(inst);return false;
+        }
+        inst->opcode=A64_MC_EXCLUSIVE_PAIR;inst->count=4U;
+        inst->encoding=(wt?UINT32_C(0xc8200000):
+                            UINT32_C(0x88200000))|
+                       (store?0U:UINT32_C(0x005f0000))|
+                       ((!strcmp(op,"ldaxp") || !strcmp(op,"stlxp"))?
+                         UINT32_C(0x8000):0U);
+        put_reg(&inst->operands[0],rt,wt);
+        put_reg(&inst->operands[1],rt2,wt);
+        put_reg(&inst->operands[2],rn,true);
+        put_reg(&inst->operands[3],rs,false);
     } else if((!strcmp(op,"br")||!strcmp(op,"blr")) &&
        parse_register(args,&reg,&reg64) && reg64) {
         inst->opcode=!strcmp(op,"br")?A64_MC_BR:A64_MC_BLR;
@@ -3183,6 +3285,22 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
         case A64_MC_SIMD_REV32:
             code=inst->encoding|
                  (inst->operands[1].reg<<5U)|
+                 inst->operands[0].reg;
+            break;
+        case A64_MC_SIMD_IMM:
+            code=inst->encoding|inst->operands[0].reg;
+            break;
+        case A64_MC_SIMD_EXT:
+            code=inst->encoding|
+                 (inst->operands[2].reg<<16U)|
+                 (inst->operands[1].reg<<5U)|
+                 inst->operands[0].reg;
+            break;
+        case A64_MC_EXCLUSIVE_PAIR:
+            code=inst->encoding|
+                 (inst->operands[3].reg<<16U)|
+                 (inst->operands[1].reg<<10U)|
+                 (inst->operands[2].reg<<5U)|
                  inst->operands[0].reg;
             break;
         case A64_MC_SIMD_LOGIC:
