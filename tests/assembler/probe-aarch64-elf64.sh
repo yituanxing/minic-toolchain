@@ -397,8 +397,8 @@ external_adr_target:
     // created by .set; validate the symbolic word against real GNU bytes.
     .set .L__gpr_num_x17, 17
     .set .L__gpr_num_x23, 23
-    .inst (0xd5200000|((((3) << 19)|((0) << 16)|((0) << 12)|((0) << 8)|((5) << 5)))|(.L__gpr_num_x17)
-    .inst (0xd5200000|((((3) << 19)|((5) << 16)|((1) << 12)|((0) << 8)|((0) << 5)))|(.L__gpr_num_x23)
+    .inst (0xd5200000|((((3) << 19)|((0) << 16)|((0) << 12)|((0) << 8)|((5) << 5)))|(.L__gpr_num_x17))
+    .inst (0xd5200000|((((3) << 19)|((5) << 16)|((1) << 12)|((0) << 8)|((0) << 5)))|(.L__gpr_num_x23))
 
     .arch_extension nolse
     ldxr w0, [x2]
