@@ -16,6 +16,8 @@ typedef struct MinicDirectLP64FunctionEmitter {
     const char *architecture;
     MinicLP64DirectABI abi;
     MinicDirectLP64IndirectRecord indirect_record;
+    /* ABI-owned return classifier. NULL preserves the old fail-closed path. */
+    MinicDirectLP64IndirectRecord indirect_return;
     const char *text_section_type;  /* @progbits or %progbits */
     const char *elf_function_type;  /* @function or %function */
     const char *init_array_type;    /* @init_array or %init_array */
@@ -51,7 +53,8 @@ static inline bool minic_multi_direct_lp64_emit_function(
     name = minic_c0_function_symbol_name(decl);
     if (!minic_multi_direct_lp64_function_plan_prepare(
             program, target, decl, fn, facts, storage, config->architecture,
-            config->abi, config->indirect_record, config->qualify_opaque_asm,
+            config->abi, config->indirect_record, config->indirect_return,
+            config->qualify_opaque_asm,
             &plan)) {
         (void)minic_multi_direct_machine_reject(fn, config->architecture,
             name, plan.failed_stage, plan.failed_block,
@@ -91,11 +94,13 @@ static inline bool minic_multi_direct_lp64_emit_function(
         .outgoing_calls = &plan.outgoing_calls,
         .name = name, .id = id, .frame = plan.frame_size,
         .save_offset = plan.save_offset,
+        .indirect_return_offset = plan.indirect_return_offset,
         .va_base = plan.variadic_save_base,
         .va_gp = plan.variadic_gp_count,
         .va_fp = plan.variadic_fp_count,
         .va_count = plan.variadic_count,
         .has_direct_calls = plan.has_calls,
+        .has_indirect_return = plan.has_indirect_return,
         .dynamic_frame = plan.has_dynamic_stack
     };
     if (!config->emit_prologue(emission, &ctx)) goto cleanup;

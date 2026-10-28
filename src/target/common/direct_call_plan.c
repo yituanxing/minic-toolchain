@@ -198,6 +198,7 @@ static bool minic_lp64_admit_call(
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
     const MinicCoreCallView *semantic_view,
     MinicDirectLP64IndirectRecord indirect_record,
+    MinicDirectLP64IndirectRecord indirect_return,
     const char *arch, const char *name, size_t i,
     MinicType types[MINIC_DIRECT_LP64_MAX_CALL_ARGUMENTS]) {
     MinicCoreCallView call;
@@ -210,11 +211,11 @@ static bool minic_lp64_admit_call(
         name == NULL || types == NULL)
         return false;
     call = *semantic_view;
-        /* GNU div_t/ldiv_t and similar small integer-only aggregate
-         * results travel in one or two GP registers. Core represents their
-         * destination as a result_object, NOT a scalar SSA result value.
-         * Keep large/FP-class/indirect aggregate returns unsupported. */
-        bool small_record_result = false;
+        /* Core record results always use a result_object, not scalar SSA.
+         * Small integer and FP forms use the established ABI registers;
+         * larger indirect results require the separately supplied target
+         * return callback. NULL keeps the old fail-closed behavior. */
+        bool record_result = false;
         size_t return_record_bytes = 0U, return_record_slots = 0U;
         size_t fp_elements = 0U, fp_width = 0U;
         if (ins->kind == MINIC_CORE_INSTRUCTION_CALL &&
@@ -229,15 +230,19 @@ static bool minic_lp64_admit_call(
               return_record_bytes > 0U && return_record_bytes <= 16U &&
               return_record_slots >= 1U && return_record_slots <= 2U) ||
              minic_multi_fp_return_record(program, target, ins->type,
-                                           &fp_elements, &fp_width)))
-            small_record_result = true;
-        if (!small_record_result &&
+                                           &fp_elements, &fp_width) ||
+             (indirect_return != NULL &&
+              indirect_return(program, target, ins->type,
+                              &return_record_bytes) && return_record_bytes > 16U)))
+            record_result = true;
+        if (!record_result &&
             ((minic_type_is_void(ins->type)
              ? ins->result != MINIC_CORE_VALUE_INVALID
              : ins->result == MINIC_CORE_VALUE_INVALID ||
                ins->result >= fn->value_count ||
                !minic_type_equal(fn->values[ins->result].type, ins->type)) ||
-            !minic_lp64_valid_return_type(program, target, ins->type))) {
+            !minic_lp64_valid_return_with_indirect(
+                program, target, ins->type, indirect_return))) {
             if (getenv("MINIC_BACKEND_CENSUS") != NULL)
                 (void)fprintf(stderr,
                     "MINIC_CALL_RESULT_REJECT arch=%s function=%s "
@@ -245,18 +250,19 @@ static bool minic_lp64_admit_call(
                     "return_valid=%d value_match=%d\n",
                     arch, name, i, (int)ins->type.base_kind,
                     minic_type_is_float128(ins->type) ? 1 : 0,
-                    minic_lp64_valid_return_type(program, target, ins->type) ? 1 : 0,
+                    minic_lp64_valid_return_with_indirect(
+                        program, target, ins->type, indirect_return) ? 1 : 0,
                     ins->result < fn->value_count &&
                     minic_type_equal(fn->values[ins->result].type, ins->type) ? 1 : 0);
             return false;
         }
         /* Core/ABI-neutral return shape was already checked by the view. */
-        if (small_record_result &&
+        if (record_result &&
             call.return_form != MINIC_CORE_CALL_RETURN_OBJECT)
             return false;
         if (call.callee != NULL &&
             ((ins->value.call.result_object != MINIC_CORE_OBJECT_INVALID &&
-              !small_record_result) ||
+              !record_result) ||
              call.callee->name == NULL || call.callee->name[0] == '\0'))
             return false;
         begin = call.argument_begin;
@@ -275,12 +281,14 @@ static bool minic_lp64_admit_call(
                           arch, name, i, count, parameter_count,
                           is_variadic ? 1 : 0,
                           ins->kind == MINIC_CORE_INSTRUCTION_INDIRECT_CALL ? 1 : 0,
-                          minic_lp64_valid_return_type(program, target, return_type) ? 1 : 0);
+                          minic_lp64_valid_return_with_indirect(
+                              program, target, return_type, indirect_return) ? 1 : 0);
         if (!minic_type_equal(return_type, ins->type) ||
             /* Fixed binary64 call results are transferred from the target FP
              * ABI result register; aggregate and other types still fail closed. */
-            (!small_record_result &&
-             !minic_lp64_valid_return_type(program, target, return_type)) ||
+            (!record_result &&
+             !minic_lp64_valid_return_with_indirect(
+                 program, target, return_type, indirect_return)) ||
             /* Original BusyBox ascii has a 24-argument printf. The existing
              * AAPCS64/LP64D call emitter already classifies outgoing GP/FP
              * and spill arguments by cursor, without fixed 16-element
@@ -366,6 +374,7 @@ bool minic_lp64_plan_function_calls(
     const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicCoreCallIndex *semantic_calls,
     MinicLP64DirectABI abi, MinicDirectLP64IndirectRecord indirect_record,
+    MinicDirectLP64IndirectRecord indirect_return,
     const char *arch, const char *name, size_t *failed_instruction,
     bool *failed_preflight, bool *has_calls, MinicLP64CallPlanCache *cache) {
     const MinicCoreCallIndex *calls;
@@ -407,7 +416,8 @@ bool minic_lp64_plan_function_calls(
             !minic_core_instruction_is_call(fn->instructions[id].kind) ||
             !minic_lp64_admit_call(
                 program, target, fn, &fn->instructions[id],
-                &calls->sites[ordinal].view, indirect_record, arch, name,
+                &calls->sites[ordinal].view, indirect_record, indirect_return,
+                arch, name,
                 id, types))
             goto failed;
         *failed_preflight = false;

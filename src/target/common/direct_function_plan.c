@@ -18,6 +18,7 @@ bool minic_multi_direct_lp64_function_plan_prepare(
     const MinicCoreObjectStoragePlan *storage,
     const char *architecture_name, MinicLP64DirectABI abi,
     MinicDirectLP64IndirectRecord indirect_record,
+    MinicDirectLP64IndirectRecord indirect_return,
     MinicDirectLP64OpaqueAsmQualifier qualify_opaque_asm,
     MinicDirectLP64FunctionPlan *plan) {
     MinicDirectLP64FunctionProfile profile;
@@ -36,7 +37,7 @@ bool minic_multi_direct_lp64_function_plan_prepare(
     name = minic_c0_function_symbol_name(decl);
     if (!minic_multi_direct_lp64_function_preflight(
             program, target, decl, fn, facts, architecture_name, name,
-            qualify_opaque_asm))
+            qualify_opaque_asm, indirect_return))
         return false;
     profile_result = minic_multi_direct_lp64_profile_function(
         program, target, decl, fn, facts, abi, indirect_record,
@@ -56,7 +57,7 @@ bool minic_multi_direct_lp64_function_plan_prepare(
 
     plan->failed_stage = "cfg_preflight";
     if (!minic_multi_direct_lp64_cfg_preflight(
-            program, target, fn, &plan->failed_block))
+            program, target, fn, &plan->failed_block, indirect_return))
         return false;
 
     plan->failed_stage = "frame_layout";
@@ -77,6 +78,21 @@ bool minic_multi_direct_lp64_function_plan_prepare(
         return false;
     object_end = plan->frame_plan.wide_end;
 
+    /* Preserve the target's hidden result pointer across nested calls.
+     * The target supplies the ABI return classifier, not Core or Common. */
+    if (indirect_return != NULL &&
+        minic_type_is_record(fn->return_type)) {
+        size_t result_bytes = 0U;
+        if (indirect_return(program, target, fn->return_type,
+                            &result_bytes) && result_bytes > 16U) {
+            if (!minic_core_frame_reserve(&object_end, 8U, 8U,
+                                          MINIC_LARGE_FRAME_MAX,
+                                          &plan->indirect_return_offset))
+                return false;
+            plan->has_indirect_return = true;
+        }
+    }
+
     /* One checked CALL traversal performs admission and ABI placement.
      * Preserve exact failing-instruction and original diagnostic stages. */
     {
@@ -84,7 +100,7 @@ bool minic_multi_direct_lp64_function_plan_prepare(
         plan->failed_stage = "call_preflight";
         if (!minic_lp64_plan_function_calls(
                 program, target, fn, facts->call_index, abi,
-                indirect_record, architecture_name, name,
+                indirect_record, indirect_return, architecture_name, name,
                 &plan->failed_instruction, &failed_preflight,
                 &plan->has_calls, &plan->outgoing_calls)) {
             plan->failed_stage =

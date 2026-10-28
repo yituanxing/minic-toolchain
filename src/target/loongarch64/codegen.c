@@ -57,7 +57,7 @@ static bool loongarch64_emit_function(
     bool function_sections) {
     static const MinicDirectLP64FunctionEmitter emitter = {
         "loongarch64", MINIC_LP64_ABI_LOONGARCH64_LP64D,
-        minic_multi_indirect_record,
+        minic_multi_indirect_record, NULL,
         "@progbits", "@function", "@init_array", "quad",
         loongarch64_emit_prologue, minic_loongarch64_emit_core_blocks,
         NULL, minic_loongarch64_qualified_opaque_asm

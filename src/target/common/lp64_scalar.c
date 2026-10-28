@@ -76,3 +76,12 @@ bool minic_lp64_valid_return_type(const MinicC0Program *program,
              minic_multi_fp_return_record(program, target, type,
                                            &fp_elements, &fp_width)));
 }
+
+bool minic_lp64_valid_return_with_indirect(
+    const MinicC0Program *program, const MinicTargetInfo *target,
+    MinicType type, MinicDirectLP64IndirectRecord policy) {
+    size_t bytes;
+    return minic_lp64_valid_return_type(program, target, type) ||
+           (policy != NULL && minic_type_is_record(type) &&
+            policy(program, target, type, &bytes) && bytes > 16U);
+}

@@ -99,7 +99,8 @@ bool minic_multi_direct_lp64_function_preflight(
     const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicFunction *decl, const MinicCoreFunction *fn,
     const MinicCoreFunctionFacts *facts, const char *arch, const char *name,
-    MinicDirectLP64OpaqueAsmQualifier qualify_opaque_asm) {
+    MinicDirectLP64OpaqueAsmQualifier qualify_opaque_asm,
+    MinicDirectLP64IndirectRecord indirect_return) {
     bool verified;
     if (program == NULL || target == NULL || decl == NULL || fn == NULL ||
         arch == NULL) return false;
@@ -118,7 +119,8 @@ bool minic_multi_direct_lp64_function_preflight(
             reason="elf_visibility";
         else if(decl->alias_target!=MINIC_FUNCTION_INVALID)
             reason="function_alias";
-        else if(!minic_lp64_valid_return_type(program,target,fn->return_type))
+        else if(!minic_lp64_valid_return_with_indirect(
+                    program,target,fn->return_type,indirect_return))
             reason="return_abi";
         else if(fn->block_count>2048U)reason="block_cap";
         else if(!direct_lp64_only_structured_asm(fn, qualify_opaque_asm))
@@ -140,7 +142,8 @@ bool minic_multi_direct_lp64_function_preflight(
         (decl->visibility != MINIC_SYMBOL_VISIBILITY_DEFAULT &&
          minic_multi_elf_visibility_directive(decl->visibility) == NULL) ||
         decl->alias_target != MINIC_FUNCTION_INVALID ||
-        !minic_lp64_valid_return_type(program, target, fn->return_type) ||
+        !minic_lp64_valid_return_with_indirect(
+            program, target, fn->return_type, indirect_return) ||
         fn->block_count > 2048U ||
         !direct_lp64_only_structured_asm(fn, qualify_opaque_asm) ||
         fn->parameter_count > 16U ||
@@ -156,7 +159,8 @@ bool minic_multi_direct_lp64_function_preflight(
                               fn->block_count, fn->value_count, fn->object_count,
                               fn->parameter_count, (unsigned int)fn->entry_block,
                               fn->inline_asm_count,
-                              minic_lp64_valid_return_type(program, target, fn->return_type) ? 1 : 0,
+                              minic_lp64_valid_return_with_indirect(
+                                  program, target, fn->return_type, indirect_return) ? 1 : 0,
                               verified ? 1 : 0,
                               decl->is_constructor ? 1 : 0, decl->is_weak ? 1 : 0,
                               (int)decl->visibility,
@@ -168,7 +172,8 @@ bool minic_multi_direct_lp64_function_preflight(
 
 bool minic_multi_direct_lp64_cfg_preflight(
     const MinicC0Program *program, const MinicTargetInfo *target,
-    const MinicCoreFunction *fn, size_t *failed_block) {
+    const MinicCoreFunction *fn, size_t *failed_block,
+    MinicDirectLP64IndirectRecord indirect_return) {
     size_t i;
     if (program == NULL || target == NULL || fn == NULL ||
         failed_block == NULL) return false;
@@ -188,10 +193,14 @@ bool minic_multi_direct_lp64_cfg_preflight(
             if (minic_type_is_record(fn->return_type)) {
                 size_t bytes, slots, fp_elements, fp_width;
                 MinicType object_type;
+                size_t indirect_bytes = 0U;
                 if ((!minic_multi_gp_record(program, target, fn->return_type,
                                              &bytes, &slots) &&
                      !minic_multi_fp_return_record(program, target,
-                         fn->return_type, &fp_elements, &fp_width)) ||
+                         fn->return_type, &fp_elements, &fp_width) &&
+                     !(indirect_return != NULL &&
+                       indirect_return(program, target, fn->return_type,
+                                       &indirect_bytes) && indirect_bytes > 16U)) ||
                     term->return_value != MINIC_CORE_VALUE_INVALID ||
                     term->return_object >= fn->object_count ||
                     fn->objects[term->return_object].element_count != 1U ||

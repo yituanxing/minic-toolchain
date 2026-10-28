@@ -167,12 +167,47 @@ static bool aarch64_return_gp_record(
     return true;
 }
 
+/* AAPCS64 returns non-HFA records over 16 bytes into the caller-owned
+ * address originally passed in x8. The function may have called another
+ * routine (which freely clobbers x8), so load the preserved pointer from
+ * our own frame. A single counted copy avoids emitting thousands of
+ * machine instructions for a Linux-size record and copies exactly the
+ * DataLayout size, including padding bytes. */
+static bool aarch64_emit_indirect_record_return(
+    FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicCoreFunction *fn, const MinicLP64FramePlan *frame_plan,
+    MinicCoreObjectId object_id, size_t pointer_offset, bool dynamic_frame) {
+    size_t src, bytes;
+    const char *base = dynamic_frame ? "x19" : "sp";
+    if (!minic_aarch64_indirect_record(program, target, fn->return_type, &bytes) ||
+        bytes <= 16U || bytes > 2048U ||
+        !minic_lp64_frame_plan_object(frame_plan, object_id, &src) ||
+        fprintf(out, "  movz x11, #%zu\n", src & 65535U) < 0 ||
+        (src > 65535U &&
+         fprintf(out, "  movk x11, #%zu, lsl #16\n", src >> 16U) < 0) ||
+        fprintf(out, "  add x11, %s, x11\n", base) < 0 ||
+        fprintf(out, "  movz x10, #%zu\n", pointer_offset & 65535U) < 0 ||
+        (pointer_offset > 65535U &&
+         fprintf(out, "  movk x10, #%zu, lsl #16\n",
+                 pointer_offset >> 16U) < 0) ||
+        fprintf(out, "  add x10, %s, x10\n", base) < 0 ||
+        fprintf(out, "  ldr x10, [x10]\n  movz x12, #%zu\n", bytes) < 0 ||
+        fputs("1:\n"
+              "  ldrb w9, [x11], #1\n"
+              "  strb w9, [x10], #1\n"
+              "  subs x12, x12, #1\n"
+              "  b.ne 1b\n", out) == EOF)
+        return false;
+    return true;
+}
+
 bool minic_aarch64_emit_terminator(FILE *out,
     const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicCoreBlock *block,
     size_t id, size_t block_id, const MinicLP64FramePlan *frame_plan,
     size_t frame, size_t save_offset, bool has_direct_calls,
-    bool dynamic_frame) {
+    bool dynamic_frame, bool has_indirect_return,
+    size_t indirect_return_offset) {
         switch (block->terminator.kind) {
         case MINIC_CORE_TERMINATOR_RETURN:
             if (minic_type_is_record(fn->return_type)) {
@@ -196,6 +231,11 @@ bool minic_aarch64_emit_terminator(FILE *out,
                                     fp_width == 4U ? 's' : 'd', fp) < 0)
                             return false;
                     }
+                } else if (has_indirect_return) {
+                    if (!aarch64_emit_indirect_record_return(
+                            out, program, target, fn, frame_plan,
+                            object_id, indirect_return_offset, dynamic_frame))
+                        return false;
                 } else if (!minic_multi_gp_record(
                                program, target, fn->return_type,
                                &bytes, &slots) ||
@@ -364,7 +404,8 @@ static bool aarch64_machine_emit_terminator(
     const MinicCoreBlock *block, size_t block_id) {
     return minic_aarch64_emit_terminator(out, ctx->program, ctx->target, ctx->fn,
         block, ctx->id, block_id, ctx->frame_plan, ctx->frame,
-        ctx->save_offset, ctx->has_direct_calls, ctx->dynamic_frame);
+        ctx->save_offset, ctx->has_direct_calls, ctx->dynamic_frame,
+        ctx->has_indirect_return, ctx->indirect_return_offset);
 }
 
 bool minic_aarch64_emit_core_blocks(

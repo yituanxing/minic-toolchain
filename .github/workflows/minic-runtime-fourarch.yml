@@ -49,6 +49,9 @@ on:
       - "tests/compiler/c0/probe-aarch64-linux-volatile-mrs.sh"
       - "tests/compiler/c0/probe-direct-lp64-weak-section-qemu.sh"
       - "tests/compiler/c0/probe-lp64-indirect-record-abi-qemu.sh"
+      - "tests/compiler/c0/probe-aarch64-indirect-record-return-qemu.sh"
+      - "tests/compiler/c0/aarch64_indirect_record_return_minic.c"
+      - "tests/compiler/c0/aarch64_indirect_record_return_gnu.c"
       - "tests/compiler/c0/probe-lp64-core-record-snapshot-qemu.sh"
       - "tests/compiler/c0/probe-lp64-packed-integer-record-qemu.sh"
       - "tests/compiler/c0/probe-aarch64-linux-zero-operand-hints.sh"
@@ -699,6 +702,15 @@ jobs:
         run: |
           set -Eeuo pipefail
           bash tests/compiler/c0/probe-lp64-indirect-record-abi-qemu.sh "${{ matrix.target }}" "$GITHUB_WORKSPACE/build/runtime-ci/bin/minic-cc"
+      - name: AAPCS64 x8 large-record result ABI GNU caller/callee QEMU differential
+        if: matrix.target == 'aarch64'
+        shell: bash
+        env:
+          MINIC_REQUIRE_AARCH64_SRET: '1'
+          MINIC_CC: ${{ github.workspace }}/build/runtime-ci/bin/minic-cc
+        run: |
+          set -Eeuo pipefail
+          bash tests/compiler/c0/probe-aarch64-indirect-record-return-qemu.sh
       - name: Original GNU weak and section ELF symbol parity under real LP64 QEMU
         if: matrix.target == 'aarch64' || matrix.target == 'loongarch64'
         shell: bash

@@ -52,7 +52,7 @@ typedef struct MinicLP64CallPlanCache {
 bool minic_lp64_plan_function_calls(
     const MinicC0Program *, const MinicTargetInfo *,
     const MinicCoreFunction *, const MinicCoreCallIndex *, MinicLP64DirectABI,
-    MinicDirectLP64IndirectRecord,
+    MinicDirectLP64IndirectRecord, MinicDirectLP64IndirectRecord,
     const char *architecture_name, const char *function_name,
     size_t *failed_instruction, bool *failed_preflight, bool *has_calls,
     MinicLP64CallPlanCache *);

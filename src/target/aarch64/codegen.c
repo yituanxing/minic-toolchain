@@ -47,6 +47,16 @@ static bool aarch64_emit_prologue(
                     SIZE_MAX, __LINE__);
         }
     }
+    if (ctx->has_indirect_return) {
+        const size_t slot = ctx->indirect_return_offset;
+        /* AAPCS64 x8 carries the caller-owned result buffer. It is not
+         * call-preserved: save it in our own frame before any nested BL. */
+        if (fprintf(out, "  movz x11, #%zu\n", slot & 65535U) < 0 ||
+            (slot > 65535U &&
+             fprintf(out, "  movk x11, #%zu, lsl #16\n", slot >> 16U) < 0) ||
+            fputs("  add x11, sp, x11\n  str x8, [x11]\n", out) == EOF)
+            goto fail;
+    }
     return true;
 fail:
     return minic_multi_direct_machine_reject(
@@ -61,7 +71,8 @@ static bool aarch64_emit_function(
     const MinicCoreObjectStoragePlan *storage, size_t id,
     bool function_sections) {
     static const MinicDirectLP64FunctionEmitter emitter = {
-        "aarch64", MINIC_LP64_ABI_AAPCS64, minic_aarch64_indirect_record,
+        "aarch64", MINIC_LP64_ABI_AAPCS64,
+        minic_aarch64_indirect_record, minic_aarch64_indirect_record,
         "%progbits", "%function", "%init_array", "xword",
         aarch64_emit_prologue, minic_aarch64_emit_core_blocks,
         minic_aarch64_copy_dynamic_frame_asm,

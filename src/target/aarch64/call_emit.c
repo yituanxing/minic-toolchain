@@ -188,6 +188,36 @@ bool minic_aarch64_emit_abi_instruction(
                         return false;
                 }
             }
+            if (minic_type_is_record(ins->type)) {
+                size_t bytes = 0U, dst;
+                /* AAPCS64 keeps x8 independent of x0..x7, so setup after
+                 * all normal arguments (including stack spills). A nested
+                 * callee writes directly to the caller's Core record object.
+                 * Indirect calls remain fail-closed until their record
+                 * result Core operand form is separately verified. */
+                if (minic_aarch64_indirect_record(
+                        program, target, ins->type, &bytes) && bytes > 16U) {
+                    MinicCoreObjectId object_id;
+                    size_t result_offset;
+                    if (indirect) return false;
+                    object_id = ins->value.call.result_object;
+                    if (object_id >= fn->object_count ||
+                        !minic_lp64_frame_plan_object(
+                            frame_plan, object_id, &dst) ||
+                        dst > SIZE_MAX - (ctx->dynamic_frame ? 0U : stack_bytes))
+                        return false;
+                    result_offset = dst +
+                        (ctx->dynamic_frame ? 0U : stack_bytes);
+                    if (fprintf(out, "  movz x8, #%zu\n",
+                                result_offset & 65535U) < 0 ||
+                        (result_offset > 65535U &&
+                         fprintf(out, "  movk x8, #%zu, lsl #16\n",
+                                 result_offset >> 16U) < 0) ||
+                        fprintf(out, "  add x8, %s, x8\n",
+                                ctx->dynamic_frame ? "x19" : "sp") < 0)
+                        return false;
+                }
+            }
             if (indirect) {
                 if (fprintf(out, "  ldr x16, [sp, #%zu]\n"
                                  "  blr x16\n",
@@ -211,6 +241,9 @@ bool minic_aarch64_emit_abi_instruction(
                 if (indirect || object_id >= fn->object_count ||
                     !minic_lp64_frame_plan_object(frame_plan, object_id, &dst))
                     return false;
+                if (minic_aarch64_indirect_record(
+                        program, target, ins->type, &bytes) && bytes > 16U)
+                    return true; /* callee already filled result_object via x8 */
                 if (minic_multi_fp_return_record(
                         program, target, ins->type, &fp_elements, &fp_width)) {
                     for (chunk = 0U; chunk < fp_elements; ++chunk) {

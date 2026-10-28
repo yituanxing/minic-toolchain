@@ -17,6 +17,8 @@ typedef struct MinicDirectLP64FunctionPlan {
     MinicLP64CallPlanCache outgoing_calls;
     size_t frame_size;
     size_t save_offset;
+    size_t indirect_return_offset;
+    bool has_indirect_return;
     size_t variadic_save_base;
     size_t variadic_count;
     size_t variadic_gp_count;
@@ -34,6 +36,7 @@ bool minic_multi_direct_lp64_function_plan_prepare(
     const MinicFunction *, const MinicCoreFunction *,
     const MinicCoreFunctionFacts *,
     const MinicCoreObjectStoragePlan *, const char *architecture_name, MinicLP64DirectABI,
+    MinicDirectLP64IndirectRecord,
     MinicDirectLP64IndirectRecord,
     MinicDirectLP64OpaqueAsmQualifier,
     MinicDirectLP64FunctionPlan *);
