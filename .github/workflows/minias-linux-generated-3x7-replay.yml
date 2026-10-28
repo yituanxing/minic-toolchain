@@ -1,5 +1,6 @@
 name: MiniAS Genuine Kbuild-Generated Linux 3x7 Replay
 
+# Exact-head grouped replay after Common forward GNU subtraction, typed IA32 EFI, AArch64 SMOV, and trampoline section-base aliases. Source coverage only, GNU ELF parity to follow.
 # Immutable GNU Linux 6.6.143 producer outputs from SUCCESS run 40658346252.
 # Includes real GNU-created binary .incbin dependencies. No refetching,
 # placeholder data, compiler changes, or cross-target config drift.
