@@ -800,13 +800,13 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
      * and memory sources reuse typed binary/memory MC emitters and
      * ELF PC32 fixups. REX.W is never emitted for GPR64 aliases. */
     if(!strcmp(s->op,"lar") || !strcmp(s->op,"lsl")) {
-        unsigned rs=0U,rd=0U;
+        unsigned sys_source=0U,sys_destination=0U;
         bool srcword=false,dstword=false,srcwide=false,dstwide=false;
         if(!x64_args2(s->args,src,dst))goto invalid;
-        dstword=x64_register16(dst,&rd);
-        if(!dstword && !x64_register(dst,&rd,&dstwide))goto invalid;
-        srcword=x64_register16(src,&rs);
-        if(!srcword && x64_register(src,&rs,&srcwide)) {
+        dstword=x64_register16(dst,&sys_destination);
+        if(!dstword && !x64_register(dst,&sys_destination,&dstwide))goto invalid;
+        srcword=x64_register16(src,&sys_source);
+        if(!srcword && x64_register(src,&sys_source,&srcwide)) {
             if(dstword)goto invalid;
         } else if(srcword) {
             /* A 16-bit selector in 32/64-bit destination form is GNU
@@ -826,7 +826,7 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
                         (dstword?UINT32_C(0x400):0U)|
                         (!strcmp(s->op,"lar")?2U:3U);
             m->operands[0].kind=MINIAS_MC_REGISTER;
-            m->operands[0].reg=rd;
+            m->operands[0].reg=sys_destination;
             m->operands[1].kind=MINIAS_MC_MEMORY;
             goto done;
         } else goto invalid;
@@ -835,9 +835,9 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
                     (dstword?UINT32_C(0x400):0U)|
                     (!strcmp(s->op,"lar")?2U:3U);
         m->operands[0].kind=MINIAS_MC_REGISTER;
-        m->operands[0].reg=rs;
+        m->operands[0].reg=sys_source;
         m->operands[1].kind=MINIAS_MC_REGISTER;
-        m->operands[1].reg=rd;
+        m->operands[1].reg=sys_destination;
         goto done;
     }
     /* GCC x86 CPU-local descriptor table and invalidation instructions
