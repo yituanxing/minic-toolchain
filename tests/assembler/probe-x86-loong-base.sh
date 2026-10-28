@@ -1715,7 +1715,7 @@ readelf -Wr "$work/x86-sys-gnu.o" > "$work/x86-sys-gnu-rel.txt"
 grep -q 'R_X86_64_PC32.*saved_fx - 4' "$work/x86-sys-mini-rel.txt"
 grep -q 'R_X86_64_PC32.*saved_fx - 4' "$work/x86-sys-gnu-rel.txt"
 for bad in 'dec %ax,%dx' 'rdfsbase %ax' 'wrgsbase %r9w' \
-           'fxsaveq %rax' 'ltr %rax' 'movsw %eax' \
+           'fxsaveq %rax' 'ltr %xmm0' 'movsw %eax' \
            'cmpxchgb %rax,(%rdi)' 'xaddw %rax,(%rdi)'; do
     printf '.text\n%s\n' "$bad" > "$work/x86-sys-invalid.s"
     if "$MINIAS" --target=x86_64 -o "$work/x86-sys-invalid.o" \

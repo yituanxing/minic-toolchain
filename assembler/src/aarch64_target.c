@@ -1384,7 +1384,7 @@ static bool a64_system_register(const char *name,uint32_t *mrs,uint32_t *msr) {
         {"ctr_el0",UINT32_C(0xd53b0020),0U},
         {"par_el1",UINT32_C(0xd5387400),UINT32_C(0xd5187400)},
         {"hcr_el2",UINT32_C(0xd53c1100),UINT32_C(0xd51c1100)},
-        {"hstr_el2",UINT32_C(0xd53c1180),UINT32_C(0xd51c1180)},
+        {"hstr_el2",UINT32_C(0xd53c1160),UINT32_C(0xd51c1160)},
         {"fpsr",UINT32_C(0xd53b4420),UINT32_C(0xd51b4420)},
         {"fpcr",UINT32_C(0xd53b4400),UINT32_C(0xd51b4400)},
         {"mdcr_el2",UINT32_C(0xd53c1120),UINT32_C(0xd51c1120)},
