@@ -677,15 +677,27 @@ static bool qualified(const MinicC0Program *program,
         !is_mulacc || !is_muldiv) return false;
     *is_mulacc = false;
     *is_muldiv = false;
-    if (src->output_count == 4U && src->input_count == 4U &&
-        src->clobber_count == 0U && src->register_clobber_count == 0U &&
-        !src->has_memory_clobber && src->template_length == 5U &&
-        memcmp(src->template_text, "cpuid", 5U) == 0) {
+    /* Original Linux native_cpuid has six operands: four register outputs
+     * and only two tied inputs (EAX/ECX), plus a memory compiler barrier.
+     * Preserve the legacy eight-operand CPUID contract in the same target
+     * implementation. RBX save/restore is always owned by x86 machine code. */
+    if (src->output_count == 4U &&
+        (src->input_count == 4U || src->input_count == 2U) &&
+        src->register_clobber_count == 0U &&
+        src->template_length == 5U &&
+        memcmp(src->template_text, "cpuid", 5U) == 0 &&
+        (src->input_count == 4U ?
+         (!src->has_memory_clobber && src->clobber_count == 0U) :
+         (src->is_volatile && src->has_memory_clobber &&
+          src->clobber_count == 1U))) {
         *is_mulacc = false;
         n = 4U;
         for (i = 0U; i < n; ++i)
-            if (!c_is(&src->outputs[i], cpuid_out[i]) ||
-                !c_is(&src->inputs[i], cpuid_in[i])) return false;
+            if (!c_is(&src->outputs[i], cpuid_out[i])) return false;
+        for (i = 0U; i < src->input_count; ++i)
+            if (!c_is(&src->inputs[i],
+                      cpuid_in[src->input_count == 2U && i == 1U ? 2U : i]))
+                return false;
     } else if (src->is_volatile && src->output_count == 3U &&
                src->input_count == 5U && src->clobber_count == 2U &&
                src->register_clobber_count == 2U &&

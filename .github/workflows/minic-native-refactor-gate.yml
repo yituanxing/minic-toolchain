@@ -63,6 +63,7 @@ on:
       - 'tests/compiler/c0/probe-x86-linux-bitops.sh'
       - 'tests/compiler/c0/probe-x86-linux-atomic-cc.sh'
       - 'tests/compiler/c0/probe-x86-linux-trycas.sh'
+      - 'tests/compiler/c0/probe-x86-linux-native-cpuid.sh'
       - 'tests/compiler/c0/probe-x86-linux-atomic-binary-cc.sh'
       - 'tests/compiler/c0/probe-x86-linux-tied-bit-scan.sh'
       - 'tests/compiler/c0/probe-rv64-extended-float-native.sh'
@@ -253,5 +254,6 @@ jobs:
           bash tests/compiler/c0/probe-x86-linux-bitops.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
           bash tests/compiler/c0/probe-x86-linux-atomic-cc.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
           bash tests/compiler/c0/probe-x86-linux-trycas.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
+          bash tests/compiler/c0/probe-x86-linux-native-cpuid.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
           bash tests/compiler/c0/probe-x86-linux-atomic-binary-cc.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
           bash tests/compiler/c0/probe-x86-linux-tied-bit-scan.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"

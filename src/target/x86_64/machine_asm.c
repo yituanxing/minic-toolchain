@@ -588,12 +588,16 @@ bool minic_x86_64_emit_structured_asm(
         return false;
     if (ins->value.structured_inline_asm.operand_count == 4U)
         return emit_muldiv_u64(out, program, target, fn, frame, ins, info);
-    if (ins->value.structured_inline_asm.operand_count != 8U)
+    if (ins->value.structured_inline_asm.operand_count != 8U &&
+        ins->value.structured_inline_asm.operand_count != 6U)
         return false;
     cpuid = info->template_length == 5U &&
         memcmp(info->template_text, "cpuid", 5U) == 0 &&
-        info->register_clobber_count == 0U;
-    mulacc = info->register_clobber_count == 2U &&
+        info->register_clobber_count == 0U &&
+        (ins->value.structured_inline_asm.operand_count == 6U ?
+         info->has_memory_clobber : !info->has_memory_clobber);
+    mulacc = ins->value.structured_inline_asm.operand_count == 8U &&
+        info->register_clobber_count == 2U &&
         info->register_clobbers != NULL &&
         ((clobber_is(&info->register_clobbers[0], "cc") &&
           clobber_is(&info->register_clobbers[1], "dx")) ||
@@ -605,7 +609,8 @@ bool minic_x86_64_emit_structured_asm(
 
     /* Revalidate the target frame layout and register/value kinds. A future
      * generic structured Core producer cannot bypass this machine contract. */
-    for (i = 0U; i < 8U; ++i) {
+    for (i = 0U;
+         i < ins->value.structured_inline_asm.operand_count; ++i) {
         MinicType pointee;
         const MinicCoreValueId id = bindings[i].value;
         if (id >= fn->value_count || bindings[i].operand_index != i ||
@@ -634,9 +639,14 @@ bool minic_x86_64_emit_structured_asm(
         /* RBX is callee-preserved even though CPUID overwrites EBX.
          * Keep it on the stack until all four output stores complete. */
         if (fputs("  pushq %rbx\n", out) == EOF) return false;
-        for (i = 0U; i < 4U; ++i)
-            if (!x86_value_load(out, frame, bindings[i+4U].value,
-                                cpuid_input_regs[i])) return false;
+        for (i = 0U;
+             i < ins->value.structured_inline_asm.operand_count - 4U; ++i)
+            if (!x86_value_load(
+                    out, frame, bindings[i+4U].value,
+                    cpuid_input_regs[
+                        ins->value.structured_inline_asm.operand_count == 6U &&
+                        i == 1U ? 2U : i]))
+                return false;
         if (fputs("  cpuid\n", out) == EOF) return false;
         for (i = 0U; i < 4U; ++i)
             if (!x86_value_load(out, frame, bindings[i].value, "%r10") ||
