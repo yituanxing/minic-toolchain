@@ -3002,6 +3002,7 @@ echo 'MINIAS_COMMON_DEFAULT_AND_SPACED_EXPRESSION=PASS GNU_x86_Loong_nested_opti
 # fragment anchor meaning.
 cat > "$work/gnu-compact-assign.s" <<'GNU_COMPACT_ASSIGN'
 .data
+.Lbase:
 vector=0x20
 .byte vector
 .rept 3
@@ -3011,7 +3012,7 @@ vector=vector+1
 vector =0x40
 .byte vector
 .Lcompact=.
-.byte .Lcompact - .
+.long .Lcompact - .Lbase
 GNU_COMPACT_ASSIGN
 for target in x86_64 loongarch64; do
  "$MINIAS" --target="$target" -o "$work/$target-compact-mini.o" "$work/gnu-compact-assign.s"
