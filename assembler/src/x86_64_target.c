@@ -1383,7 +1383,13 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
         uint64_t bits;
         if(minias_eval_u64_expression(src+1U,&bits) &&
            (bits<=UINT32_MAX ||
-            ((int64_t)bits>=INT32_MIN && (int64_t)bits<0))) {
+            ((int64_t)bits>=INT32_MIN && (int64_t)bits<0) ||
+            /* GNU `$~0xfa1e0ff3` carries the mathematically negative
+             * 64-bit complement, then encodes its low imm32. Permit only
+             * explicitly bitwise complemented high-all-ones values, not
+             * unrelated out-of-range literals such as $0x100000000. */
+            (strchr(src+1U,'~')!=NULL &&
+             (bits>>32U)==UINT32_MAX))) {
             m->opcode=X64_MOV_IMM32;m->count=1U;
             m->operands[0].reg=rd;
             m->operands[0].immediate=(uint32_t)bits;
