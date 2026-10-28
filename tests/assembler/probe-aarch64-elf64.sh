@@ -2738,3 +2738,38 @@ if "$MINIAS" --target=aarch64 -o "$work/a64-cross-section-set-bad.o" "$work/a64-
  echo 'wrong-section set subtraction folded without validating section' >&2; exit 1
 fi
 echo 'MINIAS_A64_TRAMP_SECTION_SET=PASS GNU_real_section_base_ALIAS_and_strict_cross_section'
+
+
+# GNU LDR Xt/Wt,LABEL does NOT queue a literal-pool entry. Intra-section
+# targets fold to signed PCREL imm19, while cross-section targets retain
+# R_AARCH64_LD_PREL_LO19 (273) with real symbol/section and addend.
+cat > "$work/a64-direct-literal.s" <<'A64_DIRECT_LITERAL'
+.text
+.globl direct_literal_entry
+direct_literal_entry:
+ldr x30,.Ldirect_data
+ldr w0,.Llocal_word
+ret
+.Llocal_word:
+.word 0x11223344
+.section .rodata,"a",%progbits
+.Ldirect_data:
+.quad 0x123456789abcdef
+A64_DIRECT_LITERAL
+"$MINIAS" --target=aarch64 -o "$work/a64-direct-literal-mini.o" "$work/a64-direct-literal.s"
+"$AARCH64_AS" -o "$work/a64-direct-literal-gnu.o" "$work/a64-direct-literal.s"
+"$AARCH64_OBJCOPY" -j .text -O binary "$work/a64-direct-literal-mini.o" "$work/a64-direct-literal-mini.bin"
+"$AARCH64_OBJCOPY" -j .text -O binary "$work/a64-direct-literal-gnu.o" "$work/a64-direct-literal-gnu.bin"
+cmp "$work/a64-direct-literal-mini.bin" "$work/a64-direct-literal-gnu.bin"
+for flavor in mini gnu; do
+ readelf -Wr "$work/a64-direct-literal-$flavor.o" |
+   awk '$3 == "R_AARCH64_LD_PREL_LO19" {print $1,$3,$5,$6,$7}' |
+   LC_ALL=C sort > "$work/a64-direct-literal-$flavor.rel"
+ test "$(wc -l < "$work/a64-direct-literal-$flavor.rel")" -eq 1
+done
+diff -u "$work/a64-direct-literal-gnu.rel" "$work/a64-direct-literal-mini.rel"
+printf '.text\nldr x0,.Lfar\n.space 1048580\n.Lfar:\n.word 0\n' > "$work/a64-direct-literal-far.s"
+if "$MINIAS" --target=aarch64 -o "$work/a64-direct-literal-far.o" "$work/a64-direct-literal-far.s" >/dev/null 2>&1; then
+ echo 'A64 out-of-range local literal PCREL19 accepted' >&2; exit 1
+fi
+echo 'MINIAS_A64_DIRECT_LITERAL=PASS GNU_text_and_cross_section_RELA_plus_far_reject'
