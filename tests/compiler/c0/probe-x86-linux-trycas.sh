@@ -85,6 +85,7 @@ _Bool mini_try_64_local(unsigned long long *p, unsigned long long *expected, uns
 EOF
 sed 's/mini_/gcc_/g' "$w/try.i" > "$w/gcc.c"
 cat >"$w/main.c" <<'EOF'
+#include <stdio.h>
 typedef unsigned char u8;typedef unsigned short u16;
 typedef unsigned int u32;typedef unsigned long long u64;
 #define FUN(bits,type) \
@@ -97,7 +98,11 @@ FUN(8,u8) FUN(16,u16) FUN(32,u32) FUN(64,u64)
  type a=(type)(x),b=a,e1=(type)(y),e2=e1; \
  _Bool i=mini_try_##bits##_##mode(&a,&e1,(type)(z)); \
  _Bool j=gcc_try_##bits##_##mode(&b,&e2,(type)(z)); \
- if (i!=j||a!=b||e1!=e2) return 1; \
+ if (i!=j||a!=b||e1!=e2) { \
+  fprintf(stderr,"CAS_DIFF bits=%s mode=%s memory=%llu expected=%llu new=%llu mini_success=%d gnu_success=%d mini_mem=%llu gnu_mem=%llu mini_old=%llu gnu_old=%llu\\n", \
+  #bits,#mode,(unsigned long long)(x),(unsigned long long)(y),(unsigned long long)(z), \
+  (int)i,(int)j,(unsigned long long)a,(unsigned long long)b, \
+  (unsigned long long)e1,(unsigned long long)e2); return 1; } \
 }while(0)
 int main(void) {
  static const int values[]={0,1,2,3,8,42,127,255,-1};
