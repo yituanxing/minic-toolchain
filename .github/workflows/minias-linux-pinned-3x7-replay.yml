@@ -1,6 +1,10 @@
 name: MiniAS Immutable Linux 3x7 GNU Kbuild S Replay
 
 # Frozen original Linux 6.6.143 inputs. Discovery, NOT P1/parity.
+# Grouped original Linux re-evaluation after Common GNU parenthesized
+# expressions and macro calls, x86 real CFI, A64 comparison/MVN, and the
+# sized shared A64 operand splitter. No synthetic .incbin inputs in this
+# pinned v1 corpus; genuine generated blobs are produced separately.
 # LoongArch focused exact-head seven shards after GNU IOCSR/TLB/CFI/conditional batch.
 # One grouped LoongArch exact-head replay after LSX/LASX vector, FCSR, INVTLB, LI.W and dual-relocation LA.PCREL.
 # Final same-config LoongArch seven-shard census after verified LSX logic/FPR and variable-length GNU LI.W/LI.D ISA families.
