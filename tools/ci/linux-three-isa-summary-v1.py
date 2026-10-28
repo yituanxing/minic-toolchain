@@ -37,6 +37,7 @@ def main():
     backend_stages = collections.defaultdict(lambda: collections.defaultdict(list))
     preflight_classes = collections.defaultdict(lambda: collections.defaultdict(list))
     asm_form_classes = collections.defaultdict(lambda: collections.defaultdict(list))
+    core_asm_classes = collections.defaultdict(lambda: collections.defaultdict(set))
     totals = collections.defaultdict(lambda: dict(total=0, pass_count=0))
     source_state = {}
     for file in reports:
@@ -161,6 +162,30 @@ def main():
                 key=(target,entry["hash"],entry["preview"],
                      entry["template_length"])
                 asm_form_classes[key][entry["function"]].append(obj)
+            for entry in row.get("asm_frontiers", []):
+                if (not isinstance(entry, dict)
+                        or entry.get("reason") not in (
+                            "target_required", "target_lower", "immediate_output",
+                            "structured_roles", "fixed_register", "atomic_immediate",
+                            "mixed_memory", "readwrite_output", "empty_barrier", "no_handler")
+                        or not isinstance(entry.get("function"), str)
+                        or not re.fullmatch(r"[A-Za-z_][A-Za-z_0-9]*", entry["function"])
+                        or not isinstance(entry.get("preview"), str)
+                        or not re.fullmatch(r"[A-Za-z_0-9]+", entry["preview"])
+                        or not isinstance(entry.get("template_hash"), str)
+                        or not re.fullmatch(r"[0-9a-f]{16}", entry["template_hash"])
+                        or not isinstance(entry.get("signature_hash"), str)
+                        or not re.fullmatch(r"[0-9a-f]{16}", entry["signature_hash"])
+                        or any(type(entry.get(field)) is not int or entry[field] < 0
+                               for field in ("template_length", "outputs", "inputs",
+                                             "labels", "reg_clobbers", "clobbers"))
+                        or entry.get("memory") not in (0, 1)
+                        or entry.get("goto") not in (0, 1)
+                        or entry.get("volatile") not in (0, 1)):
+                    raise SystemExit("THREE_LINUX_CENSUS=FAIL invalid Core ASM frontier form")
+                key = (target, entry["reason"], entry["signature_hash"],
+                       entry["template_hash"], entry["preview"])
+                core_asm_classes[key][entry["function"]].add(obj)
             totals[target]["total"] += 1
             if row.get("status") == "MINIC_S_PASS":
                 if frontiers:
@@ -236,6 +261,16 @@ def main():
         for (arch,h,preview,length),funcs in asm_form_classes.items()
     ]
     asm_form_frontiers.sort(key=lambda x:(-x["instances"],x["target"],x["hash"]))
+    core_asm_frontiers = [
+        dict(target=target, reason=reason, signature_hash=signature,
+             template_hash=template, preview=preview,
+             functions=len(functions),
+             owners=sorted({owner for names in functions.values() for owner in names}))
+        for (target, reason, signature, template, preview), functions
+        in core_asm_classes.items()
+    ]
+    core_asm_frontiers.sort(
+        key=lambda x:(-len(x["owners"]), -x["functions"], x["target"], x["signature_hash"]))
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(dict(
         schema="minic-linux-cross-target-diagnostic-census-v2",
@@ -247,7 +282,8 @@ def main():
         machine_kind_frontiers=machine_kind_frontiers,
         backend_reject_frontiers=backend_reject_frontiers,
         preflight_root_frontiers=preflight_root_frontiers,
-        asm_form_frontiers=asm_form_frontiers), indent=2) + "\n")
+        asm_form_frontiers=asm_form_frontiers,
+        core_asm_frontiers=core_asm_frontiers), indent=2) + "\n")
     for arch, count in sorted(totals.items()):
         print(f"THREE_LINUX_MINIC_S target={arch} compiled={count['pass_count']}/{count['total']}")
     for item in diagnostics[:25]:
@@ -279,9 +315,15 @@ def main():
               f"hash={entry['hash']} prefix={entry['preview'][:48]} "
               f"length={entry['template_length']} "
               f"instances={entry['instances']} owners={len(entry['owners'])}")
+    for entry in core_asm_frontiers[:40]:
+        print(f"THREE_LINUX_ASM_FRONTIER target={entry['target']} "
+              f"reason={entry['reason']} signature={entry['signature_hash']} "
+              f"template={entry['template_hash']} preview={entry['preview'][:32]} "
+              f"functions={entry['functions']} owners={len(entry['owners'])}")
     print(f"THREE_LINUX_CENSUS=COMPLETE shards=21 diagnostic_signatures={len(diagnostics)} "
           f"all_core_function_groups={len(core_frontiers)} "
           f"core_trace_groups={len(core_trace_frontiers)} "
+          f"core_asm_groups={len(core_asm_frontiers)} "
           "ROOT_CAUSE_REVIEW_REQUIRED=1 GNU_AS_link_QEMU=NOT_RUN")
 
 if __name__ == "__main__":

@@ -77,6 +77,8 @@ jobs:
           set -Eeuo pipefail
           make -j4 MODE=release CFLAGS=-Werror BUILD_DIR=build/three-linux-compiler all
           test -x build/three-linux-compiler/bin/minic-cc
+          bash tests/compiler/c0/probe-linux-core-asm-unclaimed-census.sh \
+            "$GITHUB_WORKSPACE/build/three-linux-compiler/bin/minic-cc"
           sha256sum build/three-linux-compiler/bin/minic-cc
       - uses: actions/upload-artifact@v4
         with:

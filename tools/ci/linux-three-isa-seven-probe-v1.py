@@ -70,6 +70,36 @@ def all_core_function_frontiers(stderr):
 CORE_LOWER_TRACE = re.compile(r"^CORE_FAST_TRACE ([^\r\n]+)$", re.MULTILINE)
 CORE_TRACE_FIELD = re.compile(r"([a-z_]+)=([A-Za-z0-9_.:-]+)")
 
+# Common Core emits this for rejected qualified operands or when no machine
+# contract admits the source.  Stable signatures retain target-owned syntax
+# differences instead of treating all INLINE_ASM (kind=5) as one fixable root.
+CORE_ASM_FRONTIER = re.compile(
+    r"^CORE_ASM_FRONTIER function=([A-Za-z_][A-Za-z_0-9]*) "
+    r"reason=(target_required|target_lower|immediate_output|structured_roles|"
+    r"fixed_register|atomic_immediate|mixed_memory|readwrite_output|"
+    r"empty_barrier|no_handler) template_length=(\d+) "
+    r"template_hash=([0-9a-f]{16}) signature_hash=([0-9a-f]{16}) "
+    r"preview=([A-Za-z_0-9]+) outputs=(\d+) inputs=(\d+) "
+    r"labels=(\d+) reg_clobbers=(\d+) clobbers=(\d+) "
+    r"memory=([01]) goto=([01]) volatile=([01])$", re.MULTILINE)
+
+def all_core_asm_frontiers(stderr):
+    seen, records = set(), []
+    for m in CORE_ASM_FRONTIER.finditer(stderr):
+        fields = m.groups()
+        key = fields
+        if key in seen:
+            continue
+        seen.add(key)
+        records.append(dict(
+            function=fields[0], reason=fields[1], template_length=int(fields[2]),
+            template_hash=fields[3], signature_hash=fields[4], preview=fields[5],
+            outputs=int(fields[6]), inputs=int(fields[7]), labels=int(fields[8]),
+            reg_clobbers=int(fields[9]), clobbers=int(fields[10]),
+            memory=int(fields[11]), goto=int(fields[12]),
+            volatile=int(fields[13])))
+    return records
+
 def all_core_lower_trace_frontiers(stderr):
     seen, records = set(), []
     for match in CORE_LOWER_TRACE.finditer(stderr):
@@ -135,6 +165,7 @@ def probe(a):
             env["MINIC_CORE_FAILURE_CENSUS"]="1"
             env["MINIC_M1_TRACE"]="1"
             env["MINIC_BACKEND_CENSUS"]="1"
+            env["MINIC_ASM_FRONTIER_TRACE"]="1"
             p=subprocess.run([str(compiler),"--target="+a.target+"-linux",
                               *row["minic_flags"],"-S",str(file),"-o",str(asm)],
                              capture_output=True,timeout=a.timeout,env=env)
@@ -144,6 +175,7 @@ def probe(a):
             lines=error_text.splitlines()
             core_frontiers=all_core_function_frontiers(error_text)
             core_lower_traces=all_core_lower_trace_frontiers(error_text)
+            asm_frontiers=all_core_asm_frontiers(error_text)
             machine_frontiers=all_machine_opcode_frontiers(error_text,a.target)
             backend_frontiers=all_backend_reject_frontiers(error_text,a.target)
             preflight_roots=all_preflight_roots(error_text,a.target)
@@ -158,6 +190,7 @@ def probe(a):
                         diagnostic=diag,input_sha256=row["sha256"],
                         core_frontiers=core_frontiers,
                         core_lower_traces=core_lower_traces,
+                        asm_frontiers=asm_frontiers,
                         machine_frontiers=machine_frontiers,
                         backend_frontiers=backend_frontiers,
                         preflight_roots=preflight_roots,asm_forms=asm_forms,
@@ -166,7 +199,7 @@ def probe(a):
             asm.unlink(missing_ok=True)
             return dict(index=row["index"],object=obj,status="MINIC_TIMEOUT",diagnostic="timeout",
                         core_frontiers=[],core_lower_traces=[],machine_frontiers=[],
-                        backend_frontiers=[],preflight_roots=[],asm_forms=[],
+                        backend_frontiers=[],preflight_roots=[],asm_forms=[],asm_frontiers=[],
                         input_sha256=row["sha256"])
     with concurrent.futures.ThreadPoolExecutor(max_workers=a.workers) as executor:
         data=list(executor.map(process,selected))

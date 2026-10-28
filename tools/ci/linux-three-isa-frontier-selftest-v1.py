@@ -68,4 +68,32 @@ assert mod.all_core_lower_trace_frontiers(source_trace)==[
     dict(function="tty_ioctl",stage="statement",reason="unsupported-kind",kind="17",status="na")
 ]
 assert mod.all_core_lower_trace_frontiers("no trace")==[]
+asm_frontier=(
+    "CORE_ASM_FRONTIER function=ns_ioctl reason=target_required "
+    "template_length=7 template_hash=0123456789abcdef "
+    "signature_hash=1111111111111111 preview=msr_x0 outputs=0 "
+    "inputs=1 labels=0 reg_clobbers=0 clobbers=1 memory=1 goto=0 volatile=1\n"
+    "CORE_ASM_FRONTIER function=ns_ioctl reason=target_required "
+    "template_length=7 template_hash=0123456789abcdef "
+    "signature_hash=1111111111111111 preview=msr_x0 outputs=0 "
+    "inputs=1 labels=0 reg_clobbers=0 clobbers=1 memory=1 goto=0 volatile=1\n"
+    "CORE_ASM_FRONTIER function=ns_ioctl reason=target_lower "
+    "template_length=7 template_hash=0123456789abcdef "
+    "signature_hash=2222222222222222 preview=msr_x0 outputs=1 "
+    "inputs=1 labels=0 reg_clobbers=0 clobbers=1 memory=1 goto=0 volatile=1\n"
+)
+assert mod.all_core_asm_frontiers(asm_frontier)==[
+    dict(function="ns_ioctl",reason="target_required",template_length=7,
+         template_hash="0123456789abcdef",signature_hash="1111111111111111",
+         preview="msr_x0",outputs=0,inputs=1,labels=0,reg_clobbers=0,
+         clobbers=1,memory=1,goto=0,volatile=1),
+    dict(function="ns_ioctl",reason="target_lower",template_length=7,
+         template_hash="0123456789abcdef",signature_hash="2222222222222222",
+         preview="msr_x0",outputs=1,inputs=1,labels=0,reg_clobbers=0,
+         clobbers=1,memory=1,goto=0,volatile=1)]
+assert mod.all_core_asm_frontiers("no trace") == []
+assert mod.all_core_asm_frontiers(
+    asm_frontier.replace("signature_hash=1111111111111111",
+                         "signature_hash=INVALID_HASH")) == [
+          mod.all_core_asm_frontiers(asm_frontier)[1]]
 print("THREE_LINUX_ALL_FRONTIERS_SELFTEST=PASS three_independent_failures=1 normal_unchanged=1 machine_trace=3")
