@@ -142,6 +142,18 @@ external_probe:
     mrs x0, cptr_el2
     msr cptr_el2, x1
     mrs x0, dbgauthstatus_el1
+    mrs x0, vmpidr_el2
+    msr vmpidr_el2, x2
+    mrs x0, aidr_el1
+    mrs x0, pmceid0_el0
+    mrs x0, pmccfiltr_el0
+    msr pmccfiltr_el0, x0
+    mrs x0, cntp_cval_el0
+    msr cntp_cval_el0, x0
+    mrs x0, mair_el2
+    msr mair_el2, x1
+    mrs x0, nzcv
+    msr nzcv, x1
     // Cross-check privileged system register permissions and the
     // indexed PMU family with native GNU AS exact instruction words.
     mrs x1, dbgvcr32_el2
@@ -851,6 +863,7 @@ for bad in 'add x0, w0, x1' 'cmp x0, #4097' 'ldr x0, [x1, -257]' \
            'mrs x0,s0_3_c1_c0_1oops' \
            'mrs x0,oslar_el1' 'msr oslsr_el1,x0' \
            'msr revidr_el1,x0' 'msr pmceid1_el0,x0' \
+           'msr aidr_el1,x0' 'msr pmceid0_el0,x0' \
            'mrs x0,pmevtyper31_el0' 'mrs x0,pmevcntr31_el0' \
            'msr dbgauthstatus_el1,x0' \
            'neg x0,x1,ror 2' 'neg x0,x1,lsl 64' \

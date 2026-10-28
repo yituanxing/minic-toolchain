@@ -2460,6 +2460,39 @@ for bad in 'invpcid %rax,%rdi' 'invpcid (%rsp),%eax' \
     fi
 done
 echo 'MINIAS_X86_KERNEL_MEMORY=PASS GNU_INVPCID_0F38_x87_bytes_PCREL'
+
+# Linux BMI1/BMI2 three-register VEX reg forms and MOVW imm16 must
+# exactly equal GNU GAS machine code. Cover W, R, B and complemented
+# VEX.vvvv fields, not merely candidate assembly status.
+cat > "$work/x86-bmi-movw.s" <<'X86_BMI_MOVW'
+.text
+andn %rdi,%rax,%rax
+andn %r11,%r13,%r13
+andnl %edi,%eax,%eax
+andnq %r9,%r12,%r10
+bzhi %r11,%r13,%r13
+bzhi %rdi,%rax,%rax
+bzhil %edi,%eax,%eax
+bzhiq %r9,%r12,%r10
+movw $(3*8),%ax
+movw $0x5658,%dx
+movw $-1,%r8w
+movw $65535,%r15w
+X86_BMI_MOVW
+"$MINIAS" --target=x86_64 -o "$work/x86-bmi-movw-mini.o" "$work/x86-bmi-movw.s"
+as --64 -o "$work/x86-bmi-movw-gnu.o" "$work/x86-bmi-movw.s"
+objcopy -j .text -O binary "$work/x86-bmi-movw-mini.o" "$work/x86-bmi-movw-mini.bin"
+objcopy -j .text -O binary "$work/x86-bmi-movw-gnu.o" "$work/x86-bmi-movw-gnu.bin"
+cmp "$work/x86-bmi-movw-mini.bin" "$work/x86-bmi-movw-gnu.bin"
+for bad in 'andn %rdi,%eax,%rax' 'bzhi %rdi,%eax,%r9' \
+           'movw $65536,%ax' 'movw $4,%eax' \
+           'andn %rax,%rbx' 'bzhi %rax,%rbx'; do
+    printf '.text\n%s\n' "$bad" > "$work/x86-bmi-movw-bad.s"
+    if "$MINIAS" --target=x86_64 -o "$work/x86-bmi-movw-bad.o" "$work/x86-bmi-movw-bad.s" >/dev/null 2>&1; then
+        echo "illegal x86 BMI/MOVW width accepted: $bad" >&2;exit 1
+    fi
+done
+echo 'MINIAS_X86_BMI_MOVW=PASS GNU_BMI_VEX_reg_all_widths MOVW_IMM16'
 echo 'MINIAS_COMMON_NUMERIC_U64=PASS GNU_GAS_x86_LA64_exact_data_bytes'
 echo 'MINIAS_X86_SEGMENTED_INDIRECT=PASS GNU_AS_text_and_relocations segment_base_index_abs_rip=true indirect_memory_call_jmp=true absolute_symbol32S=true'
 echo 'MINIAS_TWO_TARGET_ORACLE=PASS x86_GNU_bytes=equal loong_GNU_bytes=equal ELF_machine=correct lp64d_v1=0x43 CET_endbr64=1 ALU_imm8_imm32=1 x86_ModRM_SIB_disp=1 x86_test_cmp_alu_memory=1 x86_scaled_index_SIB=1 LA_jr=1 LA_scaled_ptr14=1 LA_imm12_shift_upper20=1 invalid=reject'

@@ -817,6 +817,40 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
         }
         goto done;
     }
+
+    /* ANDN and BZHI are BMI1/BMI2 VEX.0F38 three-register families.
+     * GNU AT&T order is input, input, destination. ANDN's VEX.vvvv
+     * encodes input #2, while BZHI's VEX.vvvv encodes input #1.
+     * Reuse the established BMI2 VEX typed register MCInst; the
+     * 0x10000 target encoding marker selects F2/F5 instead of F7. */
+    if(!strcmp(s->op,"andn") || !strcmp(s->op,"andnl") ||
+       !strcmp(s->op,"andnq") || !strcmp(s->op,"bzhi") ||
+       !strcmp(s->op,"bzhil") || !strcmp(s->op,"bzhiq")) {
+        char first[X64_OPERAND_CAP],source[X64_OPERAND_CAP];
+        char dest[X64_OPERAND_CAP];
+        unsigned r0=0U,r1=0U,rd=0U;
+        bool w0=false,w1=false,wd=false;
+        bool andn=!strncmp(s->op,"andn",4U);
+        size_t name_len=strlen(s->op);
+        if(!x64_args3(s->args,first,source,dest) ||
+           !x64_register(first,&r0,&w0) ||
+           !x64_register(source,&r1,&w1) ||
+           !x64_register(dest,&rd,&wd) ||
+           w0!=wd || w1!=wd ||
+           !(name_len==(andn?4U:4U) ||
+             (name_len==5U && s->op[4]==(wd?'q':'l'))))goto invalid;
+        m->opcode=X64_BMI2_SHIFT;m->count=3U;
+        m->encoding=UINT32_C(0x10000)|
+                    ((andn?UINT32_C(0xf2):UINT32_C(0xf5))<<8U);
+        m->operands[0].kind=MINIAS_MC_REGISTER;
+        m->operands[0].reg=andn?r1:r0;
+        m->operands[1].kind=MINIAS_MC_REGISTER;
+        m->operands[1].reg=andn?r0:r1;
+        m->operands[2].kind=MINIAS_MC_REGISTER;
+        m->operands[2].reg=rd;
+        m->operands[2].register_64=wd;
+        goto done;
+    }
     /*
      * GNU prefetch/cache-maintenance family is memory-only. Encode it via
      * the existing target MC memory ModR/M, SIB, segment and ELF PC32 path.
@@ -1898,6 +1932,22 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
         }
         /* MOVB imm8-to-memory stays in the generic C6 /0 path. */
     }
+
+    /* MOVW imm16-to-register is B8+r with 66 prefix, not Group-1
+     * arithmetic. Keep it in the existing MOV immediate typed opcode;
+     * 0x400 selects imm16 in both size and emit phases. */
+    if(!strcmp(s->op,"movw") && x64_args2(s->args,src,dst) &&
+       src[0]=='$' && x64_register16(dst,&rd)) {
+        uint64_t imm16;
+        if(!minias_eval_u64_expression(src+1U,&imm16) ||
+           (int64_t)imm16<-32768 || (int64_t)imm16>65535)
+            goto invalid;
+        m->opcode=X64_MOV_IMM32;m->count=1U;
+        m->encoding=UINT32_C(0x400);
+        m->operands[0].reg=rd;
+        m->operands[0].immediate=(uint16_t)imm16;
+        goto done;
+    }
     if (!strcmp(s->op,"movl") && x64_args2(s->args,src,dst) &&
         src[0]=='$' && x64_register(dst,&rd,&wd) && !wd) {
         uint64_t bits;
@@ -2529,7 +2579,9 @@ static bool x64_measure(MiniAs *as,const MiniAsStmt *s,uint32_t *size) {
                 unsigned reg=m->operands[0].reg;
                 *size=2U+(reg>=8U ||
                     (reg>=4U && !(m->encoding&0x800U))?1U:0U);
-            }else *size=m->operands[0].reg>=8U?6U:5U;
+            }else if(m->encoding&UINT32_C(0x400))
+                *size=4U+(m->operands[0].reg>=8U?1U:0U);
+            else *size=m->operands[0].reg>=8U?6U:5U;
             return true;
         case X64_REG_BINARY:
             *size=((m->encoding&0x2000U)?1U:0U)+
@@ -2593,7 +2645,8 @@ static bool x64_encode(MiniAs *as,const MiniAsStmt *s) {
                           0x40U|(base>=8U?0U:0x20U)|2U);
             code[n++]=(unsigned char)((wide?0x80U:0U)|
                           (((~count)&15U)<<3U)|(m->encoding&3U));
-            code[n++]=0xf7U;
+            code[n++]=(unsigned char)((m->encoding&UINT32_C(0x10000))?
+                       (m->encoding>>8U)&UINT32_C(0xff):UINT32_C(0xf7));
             code[n++]=(unsigned char)(0xc0U|((dst&7U)<<3U)|(base&7U));
             break;
         }
@@ -3085,9 +3138,10 @@ static bool x64_encode(MiniAs *as,const MiniAsStmt *s) {
                 code[n++]=(unsigned char)(0xb0U+(r&7U));
                 code[n++]=(unsigned char)m->operands[0].immediate;
             }else {
+                if(m->encoding&UINT32_C(0x400))code[n++]=0x66U;
                 if(r>=8U)code[n++]=0x41U;
                 code[n++]=(unsigned char)(0xb8U+(r&7U));
-                for(i=0U;i<4U;++i)
+                for(i=0U;i<((m->encoding&UINT32_C(0x400))?2U:4U);++i)
                     code[n++]=(unsigned char)
                         (m->operands[0].immediate>>(8U*i));
             }

@@ -1405,6 +1405,16 @@ static bool a64_system_register(const char *name,uint32_t *mrs,uint32_t *msr) {
         {"par_el1",UINT32_C(0xd5387400),UINT32_C(0xd5187400)},
         {"hcr_el2",UINT32_C(0xd53c1100),UINT32_C(0xd51c1100)},
         {"hstr_el2",UINT32_C(0xd53c1160),UINT32_C(0xd51c1160)},
+        /* S3/S0 sysreg encodings independently assembled with LLVM
+         * AArch64 IAS; read-only status is explicitly rejected by MSR. */
+        {"vmpidr_el2",UINT32_C(0xd53c00a0),UINT32_C(0xd51c00a0)},
+        {"aidr_el1",UINT32_C(0xd53900e0),0U},
+        {"pmceid0_el0",UINT32_C(0xd53b9cc0),0U},
+        {"pmccfiltr_el0",UINT32_C(0xd53befe0),UINT32_C(0xd51befe0)},
+        {"cntp_cval_el0",UINT32_C(0xd53be240),UINT32_C(0xd51be240)},
+        {"mair_el2",UINT32_C(0xd53ca200),UINT32_C(0xd51ca200)},
+        {"nzcv",UINT32_C(0xd53b4200),UINT32_C(0xd51b4200)},
+
         /* Architectural AArch64 GNU/LLVM system register oracles.
          * Exact operand access class is retained; read-only debug
          * authentication status deliberately has no MSR encoding. */
@@ -3029,9 +3039,11 @@ static bool directive(MiniAs *as, const char *op, const char *args,
         /* These are recognized GNU assembler ISA profiles, not a claim
          * that every v8.5/crypto instruction is implemented. Unsupported
          * machine encodings still fail in the typed Target MC parser. */
-        bool v85=!strcmp(args,"armv8.5-a");
+        bool v85=!strcmp(args,"armv8.5-a") ||
+                 !strcmp(args,"armv8.5-a+memtag");
         if(strcmp(args,"armv8-a")!=0 && !v85 &&
-           strcmp(args,"armv8-a+crypto")!=0) {
+           strcmp(args,"armv8-a+crypto")!=0 &&
+           strcmp(args,"armv8-a+crc")!=0) {
             minias_set_error(as, "unsupported-aarch64-architecture:%s:line=%zu",
                              args, line);
             return false;
