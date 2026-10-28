@@ -731,12 +731,90 @@ static bool constraint(const MinicInlineAsmOperand *op, const char *word) {
     return op && op->constraint_text && op->constraint_length == n &&
            memcmp(op->constraint_text, word, n) == 0;
 }
+/* Original Linux arm64 io.h __io_par is a physical data dependency
+ * (EOR + CBNZ), NOT an ordinary compiler barrier or a C assignment. */
+static bool aarch64_linux_io_dependency_form(const char *text,size_t length){
+    static const char exact[]="eor%0,%1,%1cbnz%0,.";
+    char compact[80];size_t i,n=0U;
+    if(!text||length==0U||length>=sizeof(compact))return false;
+    for(i=0U;i<length;++i){
+        const char c=text[i];
+        if(c==' '||c=='\t'||c=='\n'||c=='\r')continue;
+        if(c==';'||c=='\0'||n+1U>=sizeof(compact))return false;
+        compact[n++]=c;
+    }
+    compact[n]='\0';
+    return strcmp(compact,exact)==0;
+}
+static bool aarch64_linux_io_dependency_source(
+    const MinicC0Program *program,const MinicInlineAsm *src,
+    MinicTargetInlineAsmContract *contract){
+    const MinicExpression *dst,*arg;
+    MinicType plain;
+    if(!program||!src||!contract||!src->is_volatile||src->is_goto||
+       !src->outputs||!src->inputs||src->output_count!=1U||
+       src->input_count!=1U||src->label_count!=0U||
+       !src->has_memory_clobber||src->clobber_count!=1U||
+       src->register_clobber_count!=0U||
+       !aarch64_linux_io_dependency_form(
+           src->template_text,src->template_length)||
+       !constraint(&src->outputs[0],"=r")||
+       !constraint(&src->inputs[0],"r"))return false;
+    dst=minic_c0_program_expression(program,src->outputs[0].expression);
+    arg=minic_c0_program_expression(program,src->inputs[0].expression);
+    if(!dst||!arg||dst->value_category!=MINIC_VALUE_LVALUE||
+       minic_type_is_const(dst->type)||
+       !minic_type_unqualified(dst->type,&plain)||
+       !minic_type_equal(plain,minic_type_unsigned_long())||
+       !minic_type_unqualified(arg->type,&plain)||
+       !minic_type_equal(plain,minic_type_unsigned_long()))return false;
+    contract->operand_count=2U;
+    contract->kinds[0]=MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
+    contract->kinds[1]=MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    return true;
+}
+static bool aarch64_linux_io_dependency_emit(
+    FILE *out,const MinicDirectLP64BlockContext *ctx,
+    const MinicCoreInstruction *ins,const MinicCoreInlineAsm *info){
+    const MinicCoreFunction *fn=ctx->fn;
+    const MinicCoreStructuredInlineAsmOperand *b=
+        ins->value.structured_inline_asm.operands;
+    MinicType type;
+    size_t i;
+    if(!out||!ctx||!fn||!b||!info||ctx->dynamic_frame||
+       !info->is_volatile||info->is_goto||
+       !info->has_memory_clobber||info->register_clobber_count!=0U||
+       !aarch64_linux_io_dependency_form(
+           info->template_text,info->template_length)||
+       ins->value.structured_inline_asm.operand_count!=2U)return false;
+    for(i=0U;i<2U;++i)
+        if(b[i].operand_index!=i||b[i].value>=fn->value_count||
+           b[i].value>4095U/8U||b[i].early_clobber||
+           b[i].has_fixed_register_binding||
+           b[i].kind!=(i==0U?
+            MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT:
+            MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT))return false;
+    if(!minic_type_pointee(fn->values[b[0].value].type,&type)||
+       !minic_type_equal(type,minic_type_unsigned_long())||
+       !minic_type_equal(fn->values[b[1].value].type,
+                         minic_type_unsigned_long()))return false;
+    return fprintf(out,
+        "  ldr x10, [sp, #%zu]\n"
+        "  eor x9, x10, x10\n"
+        "  cbnz x9, .\n"
+        "  ldr x11, [sp, #%zu]\n"
+        "  str x9, [x11]\n",
+        (size_t)b[1].value*8U,(size_t)b[0].value*8U)>=0;
+}
+
 bool minic_aarch64_qualify_inline_asm(
     const MinicC0Program *program, const MinicInlineAsm *src,
     MinicTargetInlineAsmContract *contract) {
     const MinicExpression *expr;
     MinicType plain;
     size_t i;
+    if(aarch64_linux_io_dependency_source(program,src,contract))
+        return true;
     /* The exact native AArch64 zero-input ISA list is shared by source
      * qualification and emission. The original Linux DAIF helpers use
      * implicit volatile ASM with no explicit memory clobber. Both that
@@ -1379,6 +1457,10 @@ bool minic_aarch64_emit_qualified_structured_asm(
                             "  str x9, [x10]\n",
                        reg, (size_t)operand[0].value * 8U) >= 0;
     }
+    if (ins->value.structured_inline_asm.operand_count == 2U &&
+        aarch64_linux_io_dependency_form(
+            info->template_text,info->template_length))
+        return aarch64_linux_io_dependency_emit(out,ctx,ins,info);
     if (ins->value.structured_inline_asm.operand_count == 2U &&
         aarch64_raw_io_read(info->template_text, info->template_length)) {
         const Aarch64RawIoRead *d = aarch64_raw_io_read(

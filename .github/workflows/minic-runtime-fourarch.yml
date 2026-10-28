@@ -561,6 +561,11 @@ jobs:
         run: |
           set -Eeuo pipefail
           bash tests/compiler/c0/probe-loongarch-linux-percpu-fpu.sh "$GITHUB_WORKSPACE/build/runtime-ci/bin/minic-cc"
+      - name: Original Linux arm64 readl hardware dependency GNU QEMU differential
+        if: matrix.target == 'aarch64'
+        run: |
+          set -Eeuo pipefail
+          bash tests/compiler/c0/probe-aarch64-linux-io-dependency.sh "$GITHUB_WORKSPACE/build/runtime-ci/bin/minic-cc"
       - name: Original Linux LoongArch no-operand DBAR real GNU QEMU
         if: matrix.target == 'loongarch64'
         shell: bash

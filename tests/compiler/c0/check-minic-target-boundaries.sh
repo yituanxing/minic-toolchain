@@ -112,6 +112,12 @@ has src/target/loongarch64/asm_contract.c 'loong_percpu_amo_source('
 has src/target/loongarch64/asm_contract.c 'loong_fcsr0_write_source('
 lacks src/core/core_lower_asm_target.c 'movgr2fcsr'
 
+# AArch64 Linux __io_par is a real two-ISA-instruction dependency:
+# keep eor/cbnz out of the target-neutral Core machine vocabulary.
+has src/target/aarch64/asm_contract.c 'aarch64_linux_io_dependency_source('
+has src/target/aarch64/asm_contract.c 'aarch64_linux_io_dependency_emit('
+lacks src/core/core_lower_asm_target.c 'cbnz'
+
 # Four ISA families, five target profiles: one storage-shape owner, distinct
 # physical ABIs. RV32 must never inherit the 8-byte LP64 word policy.
 exists src/target/common/aggregate_shape.h
