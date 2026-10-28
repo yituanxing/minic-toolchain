@@ -1016,6 +1016,31 @@ A64_ARCH_PROFILES
 "$AARCH64_OBJCOPY" -j .text -O binary "$work/profile-gnu.o" "$work/profile-gnu.bin"
 cmp "$work/profile-mini.bin" "$work/profile-gnu.bin"
 echo 'MINIAS_AARCH64_PROFILE=PASS GNU_armv8_5_lse_crypto_profile_and_inst_lists'
+# Shared GNU macro vararg and blank tests (also used by Linux arm64).
+cat >"$work/a64-vararg.s" <<'A64_VARARG'
+.arch armv8-a
+.text
+.macro emit first, rest:vararg
+    .byte \first
+    .ifnb \rest
+       .byte \rest
+    .endif
+.endm
+emit 1,2,3,4
+emit 5
+.ifb
+    .byte 6
+.endif
+.ifnb xyz
+    .byte 7
+.endif
+A64_VARARG
+"$MINIAS" --target=aarch64 -o "$work/vararg-mini.o" "$work/a64-vararg.s"
+"$AARCH64_AS" -o "$work/vararg-gnu.o" "$work/a64-vararg.s"
+"$AARCH64_OBJCOPY" -j .text -O binary "$work/vararg-mini.o" "$work/vararg-mini.bin"
+"$AARCH64_OBJCOPY" -j .text -O binary "$work/vararg-gnu.o" "$work/vararg-gnu.bin"
+cmp "$work/vararg-mini.bin" "$work/vararg-gnu.bin"
+echo 'MINIAS_COMMON_MACRO_VARARG_IFB=PASS GNU_BYTES'
 # Local symbol differences are absolute even in a different output
 # section. GNU's .byte/.long/.quad are checked from the same source.
 cat >"$work/local-diff.s" <<'A64_DIFF'

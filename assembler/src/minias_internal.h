@@ -197,6 +197,7 @@ typedef struct MiniAsMacroParam {
     char *name;
     char *default_value;
     bool required;
+    bool variadic; /* GNU final :vararg captures remaining arguments */
 } MiniAsMacroParam;
 
 typedef struct MiniAsMacro {

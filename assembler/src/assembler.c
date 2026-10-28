@@ -3808,6 +3808,20 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
         }
     }
 
+    /* GNU .ifb/.ifnb compare the *expanded* argument against blank,
+     * without any target ISA grammar; shared conditional stack owns them. */
+    if((strncmp(text,".ifb",4U)==0 ||
+        strncmp(text,".ifnb",5U)==0) &&
+       ((text[3]=='b' && (text[4]=='\0' ||
+                         isspace((unsigned char)text[4]))) ||
+        (text[3]=='n' && text[4]=='b' &&
+         (text[5]=='\0' || isspace((unsigned char)text[5]))))) {
+        bool nonblank=text[3]=='n';
+        const char *arg=text+(nonblank?5U:4U);
+        while(isspace((unsigned char)*arg))++arg;
+        as->layout_sensitive=true;
+        return push_conditional_value(as,nonblank?*arg!='\0':*arg=='\0');
+    }
     if ((strncmp(text,".ifc",4U)==0 ||
          strncmp(text,".ifnc",5U)==0) &&
         ((text[3]=='c' && (text[4]=='\0' ||
@@ -4611,13 +4625,17 @@ static bool define_macro(MiniAs *as,
             return false;
         }
         if (qualifier != NULL) {
-            if (strcmp(qualifier, "req") != 0) {
-                minias_set_error(as, "unsupported-macro-qualifier:%s:line=%zu",
-                                 qualifier, line);
+            if(!strcmp(qualifier,"vararg") &&
+               i+1U==token_count && equal==NULL) {
+                macro->params[i-1U].variadic=true;
+            }else if(!strcmp(qualifier,"req")) {
+                macro->params[i-1U].required=true;
+            }else {
+                minias_set_error(as,"unsupported-macro-qualifier:%s:line=%zu",
+                                 qualifier,line);
                 free(copy);
                 return false;
             }
-            macro->params[i - 1U].required = true;
         }
         if (equal != NULL) {
             macro->params[i - 1U].default_value = minias_strdup(equal);
@@ -4728,6 +4746,10 @@ static bool expand_macro_invocation(MiniAs *as,
     char *tokens[64];
     const char *values[64];
     bool assigned[64]={false};
+    char *vararg_buffer=NULL;
+    size_t vararg_length=0U;
+    bool has_vararg=macro->param_count>0U &&
+           macro->params[macro->param_count-1U].variadic;
     size_t positional=0U;
     size_t supplied;
     MiniAsSourceLine *expanded = NULL;
@@ -4743,11 +4765,20 @@ static bool expand_macro_invocation(MiniAs *as,
                                      tokens,
                                      64U,
                                      macro->param_count);
-    if (supplied == SIZE_MAX || supplied > macro->param_count) {
+    if(supplied==SIZE_MAX || (!has_vararg && supplied>macro->param_count)) {
         minias_set_error(as, "bad-macro-arguments:%s:line=%zu",
                          macro->name, line);
+        free(vararg_buffer);
         free(copy);
         return false;
+    }
+    if(has_vararg) {
+        vararg_buffer=malloc(strlen(args)+1U);
+        if(!vararg_buffer) {
+            minias_set_error(as,"out-of-memory:macro-vararg");
+            free(vararg_buffer);free(copy);return false;
+        }
+        vararg_buffer[0]='\0';
     }
     /* GNU GAS named macro arguments can appear in any order:
      * .macro SAVE_ALL reg=0 docfi=0 / SAVE_ALL docfi=1,reg=7.
@@ -4770,16 +4801,36 @@ static bool expand_macro_invocation(MiniAs *as,
             if(!matched || assigned[index]) {
                 minias_set_error(as,"bad-macro-keyword:%s:%s:line=%zu",
                                  macro->name,token,line);
-                free(copy);return false;
+                free(vararg_buffer);free(copy);return false;
             }
             values[index]=strip_macro_argument_quotes(equal+1U);
+        }else if(has_vararg &&
+                 positional>=macro->param_count-1U) {
+            const char *item=strip_macro_argument_quotes(token);
+            size_t len=strlen(item),max=strlen(args);
+            index=macro->param_count-1U;
+            if(assigned[index] && values[index]!=vararg_buffer) {
+                minias_set_error(as,"duplicate-macro-vararg:%s:line=%zu",
+                                 macro->name,line);
+                free(vararg_buffer);free(copy);return false;
+            }
+            if(len>max-vararg_length-
+                   (vararg_length!=0U?1U:0U)) {
+                minias_set_error(as,"macro-vararg-too-long:line=%zu",line);
+                free(vararg_buffer);free(copy);return false;
+            }
+            if(vararg_length)vararg_buffer[vararg_length++]=',';
+            memcpy(vararg_buffer+vararg_length,item,len+1U);
+            vararg_length+=len;
+            values[index]=vararg_buffer;
+            positional=macro->param_count;
         }else {
             while(positional<macro->param_count && assigned[positional])
                 ++positional;
             if(positional>=macro->param_count) {
                 minias_set_error(as,"too-many-macro-arguments:%s:line=%zu",
                                  macro->name,line);
-                free(copy);return false;
+                free(vararg_buffer);free(copy);return false;
             }
             index=positional++;
             values[index]=strip_macro_argument_quotes(token);
@@ -4790,11 +4841,12 @@ static bool expand_macro_invocation(MiniAs *as,
         if(!assigned[i] && macro->params[i].required) {
             minias_set_error(as,"missing-macro-argument:%s:%s:line=%zu",
                              macro->name,macro->params[i].name,line);
-            free(copy);return false;
+            free(vararg_buffer);free(copy);return false;
         }
     if (as->macro_expansion_depth >= 64U) {
         minias_set_error(as, "macro-expansion-depth:%s:line=%zu",
                          macro->name, line);
+        free(vararg_buffer);
         free(copy);
         return false;
     }
@@ -4834,6 +4886,7 @@ static bool expand_macro_invocation(MiniAs *as,
 
 done:
     destroy_source_lines(expanded, macro->body_count);
+    free(vararg_buffer);
     free(copy);
     return ok;
 }
