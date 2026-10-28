@@ -222,6 +222,25 @@ entry_x:
     salq (%r11)
     rorl $4, 24(%rsp)
     sarw %cl, (%rdx)
+    # GNU x86 strict .code64 + descriptor-table ModR/M/system ISA.
+    .code64
+    lgdt 32(%rdi)
+    lidt -16(%rbx)
+    sgdt 8(%r8)
+    sidt ext_global(%rip)
+    invlpg (%rax)
+    verw 16(%rsi)
+    verr 20(%rdx)
+    lldt (%rbp)
+    ltr (%r9)
+    rdpmc
+    fninit
+    stosw
+    movsb
+    movsl
+    movsq
+    outsw
+    insw
     # GNU Linux >48-character symbol displacements and SHLD/SHRD group.
     movq __tracepoint_x86_fpu_xstate_check_failed+72(%rip), %rbx
     movq __tracepoint_intel_frontbuffer_invalidate+72(%rip), %r8
@@ -1121,6 +1140,14 @@ for bad in            'popcntq %eax,%rax' \
            'salq $1,%eax' \
            'sarl %eax,(%rbx)' \
            'shrw %r8b,(%rcx)' \
+           'lgdt %rax' \
+           'lidt $4' \
+           'sidt %r8' \
+           'invlpg %rax' \
+           '.code32' \
+           '.code64 bad' \
+           'rdpmc %rax' \
+           'fninit %rax' \
            'adcl %rax,%eax' \
            'negb %eax' \
            'negw %eax' \

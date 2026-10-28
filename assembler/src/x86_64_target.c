@@ -332,8 +332,15 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
         {"cpuid",{0x0f,0xa2},2},
         {"rdtsc",{0x0f,0x31},2},{"rdtscp",{0x0f,0x01,0xf9},3},
         {"rdmsr",{0x0f,0x32},2},{"wrmsr",{0x0f,0x30},2},
+        {"rdpmc",{0x0f,0x33},2},{"fninit",{0xdb,0xe3},2},
+        {"fwait",{0x9b},1},{"wait",{0x9b},1},
         {"cltd",{0x99},1},{"cwtl",{0x98},1},
-        {"stosl",{0xab},1},{"stosq",{0x48,0xab},2},{"sfence",{0x0f,0xae,0xf8},3},
+        {"stosl",{0xab},1},{"stosq",{0x48,0xab},2},
+        {"stosw",{0x66,0xab},2},{"movsb",{0xa4},1},
+        {"movsl",{0xa5},1},{"movsq",{0x48,0xa5},2},
+        {"outsb",{0x6e},1},{"outsw",{0x66,0x6f},2},
+        {"outsl",{0x6f},1},{"insb",{0x6c},1},
+        {"insw",{0x66,0x6d},2},{"insl",{0x6d},1},{"sfence",{0x0f,0xae,0xf8},3},
         {"lfence",{0x0f,0xae,0xe8},3},{"mfence",{0x0f,0xae,0xf0},3},
         {"swapgs",{0x0f,0x01,0xf8},3},
         {"wbinvd",{0x0f,0x09},2},{"invd",{0x0f,0x08},2},
@@ -521,6 +528,40 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
                         (hints[i].prefix66?UINT32_C(0x400):0U);
             m->operands[0].kind=MINIAS_MC_REGISTER;
             m->operands[0].reg=hints[i].extension;
+            m->operands[0].register_64=false;
+            m->operands[1].kind=MINIAS_MC_MEMORY;
+            goto done;
+        }
+    }
+    /* GCC x86 CPU-local descriptor table and invalidation instructions
+     * use 0F00/0F01 with a constant /digit ModR/M extension. Reuse the
+     * existing relocation-capable memory encoder for all families. */
+    {
+        static const struct {const char *name;uint8_t opcode;uint8_t group;} sysmem[]={
+            {"sgdt",0x01U,0U},{"sidt",0x01U,1U},
+            {"lgdt",0x01U,2U},{"lidt",0x01U,3U},
+            {"smsw",0x01U,4U},{"lmsw",0x01U,6U},
+            {"invlpg",0x01U,7U},
+            {"sldt",0x00U,0U},{"str",0x00U,1U},
+            {"lldt",0x00U,2U},{"ltr",0x00U,3U},
+            {"verr",0x00U,4U},{"verw",0x00U,5U}
+        };
+        for(i=0U;i<sizeof(sysmem)/sizeof(sysmem[0]);++i) {
+            MiniAsMCMemory mem;
+            if(strcmp(s->op,sysmem[i].name)!=0)continue;
+            if(!x64_is_mem_candidate(s->args) ||
+               !x64_parse_base_memory(s->args,&mem))goto invalid;
+            m->operands[1].memory=malloc(sizeof(mem));
+            if(!m->operands[1].memory) {
+                free(mem.symbol);free(m);
+                minias_set_error(as,"out-of-memory:x86-system-memory");
+                return false;
+            }
+            *m->operands[1].memory=mem;
+            m->opcode=X64_REG_MEMORY;m->count=2U;
+            m->encoding=UINT32_C(0x100)|sysmem[i].opcode;
+            m->operands[0].kind=MINIAS_MC_REGISTER;
+            m->operands[0].reg=sysmem[i].group;
             m->operands[0].register_64=false;
             m->operands[1].kind=MINIAS_MC_MEMORY;
             goto done;
@@ -2499,9 +2540,24 @@ static uint32_t x64_reloc(MiniAsFixupKind kind,unsigned width) {
     if(kind==MINIAS_FIXUP_X64_ABS32S)return 11U; /* R_X86_64_32S */
     return 0U;
 }
+/* x86-64 Target has fixed long-mode encoding. GNU .code64 is a valid
+ * explicit restatement; .code16/.code32 require different target ABI and
+ * must remain rejected rather than silently changing mode. */
+static bool x64_parse_directive(MiniAs *as,const char *op,const char *args,
+                                size_t line,bool *handled) {
+    *handled=!strcmp(op,".code64");
+    if(!*handled)return true;
+    if(*args) {
+        minias_set_error(as,"unsupported-x86_64-code-mode:%s:line=%zu",
+                         args,line);
+        return false;
+    }
+    return true;
+}
 static const MiniAsTargetOps ops={
     .name="x86_64",.comment_prefix='#',.elf_machine=62U,
     .resolve_profile=x64_profile,.parse_mcinst=x64_parse,
+    .parse_target_directive=x64_parse_directive,
     .measure_mcinst=x64_measure,.encode=x64_encode,
     .relax_instruction=x64_relax_instruction,
     .expanded_instruction_size=x64_expanded_instruction_size,
