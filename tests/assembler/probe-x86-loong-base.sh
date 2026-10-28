@@ -1924,6 +1924,29 @@ for target in x86_64 loongarch64; do
     cmp "$work/$target-pair-mini.bin" "$work/$target-pair-gnu.bin"
 done
 echo 'MINIAS_COMMON_PAIR_DIV=PASS GNU_forward_symbol_difference_div4_8_16_32_64'
+
+# Boolean grammar must match GNU GAS: logical ||/&&/! produce 1 or 0,
+# unlike integer comparisons (GNU encodes their true value as -1).
+cat > "$work/common-bool.s" <<'COMMON_BOOL'
+.data
+.long 0||3, 1&&3, 3||4, 0&&1, !0, !9, 1==1
+.if ((1==2) || (3==3))
+.byte 0x77
+.else
+.byte 0x55
+.endif
+.if (!0 && (2!=3))
+.byte 0x44
+.else
+.byte 0x55
+.endif
+COMMON_BOOL
+"$MINIAS" --target=x86_64 -o "$work/common-bool-mini.o" "$work/common-bool.s"
+as --64 -o "$work/common-bool-gnu.o" "$work/common-bool.s"
+objcopy -j .data -O binary "$work/common-bool-mini.o" "$work/common-bool-mini.bin"
+objcopy -j .data -O binary "$work/common-bool-gnu.o" "$work/common-bool-gnu.bin"
+cmp "$work/common-bool-mini.bin" "$work/common-bool-gnu.bin"
+echo 'MINIAS_COMMON_LOGICAL=PASS GNU_GAS_boolean_precedence_AND_OR_NOT_true_is_1'
 echo 'MINIAS_COMMON_NUMERIC_U64=PASS GNU_GAS_x86_LA64_exact_data_bytes'
 echo 'MINIAS_X86_SEGMENTED_INDIRECT=PASS GNU_AS_text_and_relocations segment_base_index_abs_rip=true indirect_memory_call_jmp=true absolute_symbol32S=true'
 echo 'MINIAS_TWO_TARGET_ORACLE=PASS x86_GNU_bytes=equal loong_GNU_bytes=equal ELF_machine=correct lp64d_v1=0x43 CET_endbr64=1 ALU_imm8_imm32=1 x86_ModRM_SIB_disp=1 x86_test_cmp_alu_memory=1 x86_scaled_index_SIB=1 LA_jr=1 LA_scaled_ptr14=1 LA_imm12_shift_upper20=1 invalid=reject'

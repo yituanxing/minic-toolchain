@@ -1228,7 +1228,8 @@ static bool checked_sub_i64(int64_t lhs, int64_t rhs, int64_t *out) {
     return true;
 }
 
-static bool parse_absolute_or(MiniAsAbsoluteExpressionParser *parser, int64_t *value);
+static bool parse_absolute_logical_or(MiniAsAbsoluteExpressionParser *parser,
+                                      int64_t *value);
 
 static bool parse_absolute_primary(MiniAsAbsoluteExpressionParser *parser,
                                    int64_t *value) {
@@ -1242,7 +1243,7 @@ static bool parse_absolute_primary(MiniAsAbsoluteExpressionParser *parser,
     skip_absolute_expression_space(parser);
     if (*parser->cursor == '(') {
         ++parser->cursor;
-        if (!parse_absolute_or(parser, value)) {
+        if (!parse_absolute_logical_or(parser, value)) {
             return false;
         }
         skip_absolute_expression_space(parser);
@@ -1308,13 +1309,14 @@ static bool parse_absolute_unary(MiniAsAbsoluteExpressionParser *parser,
         *value = -operand;
         return true;
     }
-    if (*parser->cursor == '~') {
+    if (*parser->cursor == '~' || *parser->cursor == '!') {
         int64_t operand;
+        bool logical=*parser->cursor=='!';
         ++parser->cursor;
         if (!parse_absolute_unary(parser, &operand)) {
             return false;
         }
-        *value = ~operand;
+        *value = logical ? (operand==0?1:0) : ~operand;
         return true;
     }
     return parse_absolute_primary(parser, value);
@@ -1578,6 +1580,41 @@ static bool parse_absolute_or(MiniAsAbsoluteExpressionParser *parser,
     return true;
 }
 
+/* GNU GAS boolean operators are a separate, lower-precedence layer
+ * after bitwise |/^. Unlike comparisons (-1 for true), GNU '||',
+ * '&&' and unary '!' produce 1/0. Parse both operands and retain the
+ * existing checked absolute arithmetic; never silently accept an
+ * unresolvable symbol just because the LHS is true. */
+static bool parse_absolute_logical_and(MiniAsAbsoluteExpressionParser *parser,
+                                      int64_t *value) {
+    int64_t lhs;
+    if(!parse_absolute_or(parser,&lhs))return false;
+    for(;;) {
+        int64_t rhs;
+        skip_absolute_expression_space(parser);
+        if(strncmp(parser->cursor,"&&",2U))break;
+        parser->cursor+=2U;
+        if(!parse_absolute_or(parser,&rhs))return false;
+        lhs=(lhs!=0 && rhs!=0)?1:0;
+    }
+    *value=lhs;return true;
+}
+
+static bool parse_absolute_logical_or(MiniAsAbsoluteExpressionParser *parser,
+                                     int64_t *value) {
+    int64_t lhs;
+    if(!parse_absolute_logical_and(parser,&lhs))return false;
+    for(;;) {
+        int64_t rhs;
+        skip_absolute_expression_space(parser);
+        if(strncmp(parser->cursor,"||",2U))break;
+        parser->cursor+=2U;
+        if(!parse_absolute_logical_and(parser,&rhs))return false;
+        lhs=(lhs!=0 || rhs!=0)?1:0;
+    }
+    *value=lhs;return true;
+}
+
 static bool evaluate_absolute_expression(MiniAs *as,
                                          const char *text,
                                          int64_t *value) {
@@ -1591,7 +1628,7 @@ static bool evaluate_absolute_expression(MiniAs *as,
     parser.cursor = text;
     parser.dot = (int64_t)dot;
     parser.only_absolute_symbols = true;
-    if (!parse_absolute_or(&parser, value)) {
+    if (!parse_absolute_logical_or(&parser, value)) {
         return false;
     }
     skip_absolute_expression_space(&parser);
@@ -1620,7 +1657,7 @@ bool minias_parse_absolute_data_bits(MiniAs *as,
     parser.cursor = text;
     parser.dot = (int64_t)dot;
     parser.only_absolute_symbols = true;
-    if (!parse_absolute_or(&parser, &signed_value)) {
+    if (!parse_absolute_logical_or(&parser, &signed_value)) {
         return false;
     }
     skip_absolute_expression_space(&parser);
@@ -2002,6 +2039,14 @@ static bool evaluate_if_expression(MiniAs *as,const char *text,bool *result) {
     copy=minias_strdup(text);
     if(!copy)return false;
     lhs=minias_trim(copy);
+    /* Delegate logical expressions to the one Common precedence parser
+     * rather than splitting an inner '==' away from its '||' RHS. */
+    if(strstr(lhs,"||") || strstr(lhs,"&&")) {
+        bool ok=evaluate_absolute_expression(as,lhs,&left);
+        free(copy);
+        if(ok)*result=left!=0;
+        return ok;
+    }
     for(p=lhs;*p;++p) {
         if(*p=='('){++depth;continue;}
         if(*p==')') {

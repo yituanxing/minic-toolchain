@@ -73,6 +73,15 @@ external_probe:
     .endm
     nops (32 - 16) / 4
     nops 2 + 1
+    // Linux AArch64 conditional arithmetic with nested GNU ||/&&.
+    .if (((0xbadca11) >> 31) == 0 || ((0xbadca11) >> 31) == 0x1ffffffff)
+        nop
+    .else
+        brk #1
+    .endif
+    .if !0 && (1 != 2)
+        nop
+    .endif
     // Real kernel nops arithmetic: numeric local backward expressions
 661:
     nop
