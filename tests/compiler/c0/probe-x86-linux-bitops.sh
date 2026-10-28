@@ -48,13 +48,13 @@ bool mini_lock_test_clear(unsigned long *p,long n) {
   :[var] "+m"(*p),"=@ccc"(old):[val] "Ir"(n):"memory");return old;
 }
 void mini_lock_or_byte(volatile char *p,int mask) {
- asm volatile(".pushsection .smp_locks,\"a\"\\n" ".balign 4\\n"
-  ".long 671f - .\\n" ".popsection\\n" "671:" "\\n\\tlock; "
+ asm volatile(".pushsection .smp_locks,\"a\"\n" ".balign 4\n"
+  ".long 671f - .\n" ".popsection\n" "671:" "\n\tlock; "
   "orb %b1,%0" : "+m"(*p) : "iq"(mask) : "memory");
 }
 void mini_lock_and_byte(volatile char *p,int mask) {
- asm volatile(".pushsection .smp_locks,\"a\"\\n" ".balign 4\\n"
-  ".long 671f - .\\n" ".popsection\\n" "671:" "\\n\\tlock; "
+ asm volatile(".pushsection .smp_locks,\"a\"\n" ".balign 4\n"
+  ".long 671f - .\n" ".popsection\n" "671:" "\n\tlock; "
   "andb %b1,%0" : "+m"(*p) : "iq"(mask));
 }
 EOF
