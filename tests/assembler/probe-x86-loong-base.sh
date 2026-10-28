@@ -3190,7 +3190,13 @@ for flavor in mini gnu; do
  grep -q 'FDE' "$work/x86-eh-$flavor.frames"
 done
 cmp "$work/x86-eh-mini.bin" "$work/x86-eh-gnu.bin"
-cmp "$work/x86-eh-mini.reloc" "$work/x86-eh-gnu.reloc"
+if ! cmp "$work/x86-eh-mini.reloc" "$work/x86-eh-gnu.reloc"; then
+ echo "GNU EH reloc structured differential:" >&2
+ diff -u "$work/x86-eh-gnu.reloc" "$work/x86-eh-mini.reloc" >&2 || true
+ readelf -Ws "$work/x86-eh-mini.o" >&2
+ readelf -Wr "$work/x86-eh-mini.o" >&2
+ exit 1
+fi
 [ "$(wc -l < "$work/x86-eh-mini.reloc")" -eq 1 ]
 echo 'MINIAS_X86_REAL_EH_FRAME=PASS GNU_CIE_FDE_bytes_and_PC32_RELA'
 
