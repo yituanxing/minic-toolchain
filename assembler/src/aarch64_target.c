@@ -1200,7 +1200,7 @@ static bool a64_system_register(const char *name,uint32_t *mrs,uint32_t *msr) {
     static const struct {const char *name;uint32_t read,write;} table[]={
         {"sp_el0",UINT32_C(0xd5384100),UINT32_C(0xd5184100)},
         {"tpidr_el0",UINT32_C(0xd53bd040),UINT32_C(0xd51bd040)},
-        {"tpidrro_el0",UINT32_C(0xd53bd060),0U},
+        {"tpidrro_el0",UINT32_C(0xd53bd060),UINT32_C(0xd51bd060)},
         /* Kernel EL1 registers, GNU ARM system-register encodings. */
         {"tpidr_el1",UINT32_C(0xd538d080),UINT32_C(0xd518d080)},
         {"tpidr_el2",UINT32_C(0xd53cd040),UINT32_C(0xd51cd040)},
@@ -1209,13 +1209,15 @@ static bool a64_system_register(const char *name,uint32_t *mrs,uint32_t *msr) {
          * system-register encodings. A zero field means no legal access,
          * not a fallback to arbitrary sysreg bit patterns. */
         {"currentel",UINT32_C(0xd5384240),0U},
-        {"CurrentEL",UINT32_C(0xd5384240),0U},
         {"sctlr_el1",UINT32_C(0xd5381000),UINT32_C(0xd5181000)},
         {"sctlr_el2",UINT32_C(0xd53c1000),UINT32_C(0xd51c1000)},
         {"sctlr_el3",UINT32_C(0xd53e1000),UINT32_C(0xd51e1000)},
         {"ttbr0_el1",UINT32_C(0xd5382000),UINT32_C(0xd5182000)},
         {"ttbr1_el1",UINT32_C(0xd5382020),UINT32_C(0xd5182020)},
         {"ttbr0_el2",UINT32_C(0xd53c2000),UINT32_C(0xd51c2000)},
+        {"vttbr_el2",UINT32_C(0xd53c2100),UINT32_C(0xd51c2100)},
+        {"hpfar_el2",UINT32_C(0xd53c6080),UINT32_C(0xd51c6080)},
+        {"cnthctl_el2",UINT32_C(0xd53ce100),UINT32_C(0xd51ce100)},
         {"tcr_el1",UINT32_C(0xd5382040),UINT32_C(0xd5182040)},
         {"tcr_el2",UINT32_C(0xd53c2040),UINT32_C(0xd51c2040)},
         {"vbar_el1",UINT32_C(0xd538c000),UINT32_C(0xd518c000)},
@@ -1239,6 +1241,10 @@ static bool a64_system_register(const char *name,uint32_t *mrs,uint32_t *msr) {
         {"dczid_el0",UINT32_C(0xd53b00e0),0U},
         {"id_aa64dfr0_el1",UINT32_C(0xd5380500),0U},
         {"id_aa64mmfr0_el1",UINT32_C(0xd5380700),0U},
+        {"id_aa64mmfr1_el1",UINT32_C(0xd5380720),0U},
+        {"clidr_el1",UINT32_C(0xd5390020),0U},
+        {"ctr_el0",UINT32_C(0xd53b0020),0U},
+        {"dbgbcr0_el1",UINT32_C(0xd53000a0),UINT32_C(0xd51000a0)},
         {"id_aa64pfr0_el1",UINT32_C(0xd5380400),0U},
         {"id_aa64isar0_el1",UINT32_C(0xd5380600),0U},
         {"osdlr_el1",UINT32_C(0xd5301380),UINT32_C(0xd5101380)},
@@ -1254,10 +1260,17 @@ static bool a64_system_register(const char *name,uint32_t *mrs,uint32_t *msr) {
         {"mpidr_el1",UINT32_C(0xd53800a0),0U}
     };
     size_t i;
-    for(i=0U;i<sizeof(table)/sizeof(table[0]);++i)
-        if(!strcmp(name,table[i].name)) {
+    /* GNU GAS case-folds system-register *names*. Keep one target-owned
+     * table and preserve explicit read/write permission masks; never
+     * parse an unknown arbitrary sysreg into guessed bits. */
+    for(i=0U;i<sizeof(table)/sizeof(table[0]);++i) {
+        const unsigned char *a=(const unsigned char *)name;
+        const unsigned char *b=(const unsigned char *)table[i].name;
+        while(*a && *b && tolower(*a)==tolower(*b)){++a;++b;}
+        if(*a==0U && *b==0U) {
             *mrs=table[i].read;*msr=table[i].write;return true;
         }
+    }
     return false;
 }
 

@@ -65,6 +65,23 @@ external_probe:
     mrs x0, tpidr_el1
     // GNU privileged ARMv8 sysregs: read/write permission encoded by ISA.
     mrs x0, CurrentEL
+    // AArch64 Linux EL0/EL1/EL2 sysreg matrix; exact GNU bytes and
+    // read-only permission guards, including case-insensitive spelling.
+    mrs x1, ID_AA64MMFR1_EL1
+    mrs x3, HPFAR_EL2
+    msr hpfar_el2, x0
+    mrs x2, dbgbcr0_el1
+    msr dbgbcr0_el1, x2
+    mrs x3, vttbr_el2
+    msr vttbr_el2, x0
+    mrs x1, cnthctl_el2
+    msr cnthctl_el2, x1
+    mrs x3, clidr_el1
+    mrs x1, ctr_el0
+    mrs x0, CNTVCT_EL0
+    mrs x0, SCTLR_EL1
+    msr tpidrro_el0, x0
+    msr daif, xzr
     // Privileged system maintenance, GNU/LLVM verified; not executed.
     ic ialluis
     ic iallu
@@ -653,6 +670,8 @@ for bad_source in 'ldxr x0, [x1,#4]' 'stxr x0, x1, [x2]' \
                   'ccmp x0, #1, #16, eq' \
                   'ccmn x0, #1, #1, bogus' \
                   'mrs w0, tpidr_el1' 'msr daif, w0' \
+                  'msr clidr_el1, x0' 'msr ctr_el0, x1' \
+                  'mrs x0, made_up_el2' \
                   'msr daifset, #16' 'msr daifclr, #-1' \
                   'ldarb x1, [x2]' 'stlrh x3, [x4]' \
                   'mvn x0, w1' \
