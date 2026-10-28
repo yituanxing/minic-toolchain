@@ -321,7 +321,8 @@ enum {
     A64_MC_MTE_STGM,
     A64_MC_SIMD_EXT,
     A64_MC_SIMD_IMM,
-    A64_MC_EXCLUSIVE_PAIR
+    A64_MC_EXCLUSIVE_PAIR,
+    A64_MC_MTE_STZ2G
 };
 
 /* GNU AArch64 operands split on TOP-LEVEL commas, not commas within
@@ -647,6 +648,13 @@ static bool a64_ins_lane(const char *text,unsigned *vd,uint32_t *imm5,
     return true;
 }
 
+static bool a64_scalar_fp_d(const char *text,unsigned *out) {
+    char *end;unsigned long v;
+    if(text[0]!='d' || !isdigit((unsigned char)text[1]))return false;
+    errno=0;v=strtoul(text+1U,&end,10);
+    if(errno || *end!='\0' || v>31UL)return false;
+    *out=(unsigned)v;return true;
+}
 /* A64 register-indexed memory with typed base/index, extension and scale.
  * This does not change shared Section, MCInst, Fixup or ELF ownership. */
 static bool a64_indexed_memory(const char *text,unsigned *base,
@@ -2579,7 +2587,7 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
               !strcmp(op,"bsl") || !strcmp(op,"bit") ||
               !strcmp(op,"bif") ||
               (!strcmp(op,"add") && args[0]=='v') ||
-              !strcmp(op,"trn1")) {
+              !strcmp(op,"trn1") || !strcmp(op,"trn2")) {
         char tok[4][96];unsigned n,rd,rn,rm,i;
         uint32_t da,sa,ta;
         static const struct {const char *name;uint32_t base;} table[]={
@@ -2591,7 +2599,8 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
             {"bit",UINT32_C(0x2ea01c00)},
             {"bif",UINT32_C(0x2ee01c00)},
             {"add",UINT32_C(0x0e208400)},
-            {"trn1",UINT32_C(0x0e002800)}
+            {"trn1",UINT32_C(0x0e002800)},
+            {"trn2",UINT32_C(0x0e006800)}
         };
         if(split_operands(args,tok,&n) && n==3U &&
            tok[0][0]=='v') {
@@ -2599,7 +2608,7 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
                !a64_vector_view(tok[1],&rn,&sa) ||
                !a64_vector_view(tok[2],&rm,&ta) ||
                da!=sa || da!=ta ||
-               ((!strcmp(op,"trn1") || !strcmp(op,"add"))?
+               ((!strcmp(op,"trn1") || !strcmp(op,"trn2") || !strcmp(op,"add"))?
                  ((da&UINT32_C(0xc00))==UINT32_C(0xc00) &&
                   (da&UINT32_C(0x40000000))==0U):
                  (da&UINT32_C(0xc00))!=0U)) {
@@ -2612,7 +2621,7 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
             inst->opcode=A64_MC_SIMD_LOGIC;inst->count=3U;
             inst->encoding=table[i].base|
                           (da&UINT32_C(0x40000000))|
-                          ((!strcmp(op,"trn1") || !strcmp(op,"add"))?
+                          ((!strcmp(op,"trn1") || !strcmp(op,"trn2") || !strcmp(op,"add"))?
                           ((da&UINT32_C(0xc00))<<12U):0U);
             put_reg(&inst->operands[0],rd,true);
             put_reg(&inst->operands[1],rn,true);
@@ -2711,6 +2720,71 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
         put_reg(&inst->operands[1],rt2,wt);
         put_reg(&inst->operands[2],rn,true);
         put_reg(&inst->operands[3],rs,false);
+    } else if(!strcmp(op,"sha256su0") || !strcmp(op,"sha256su1")) {
+        char tok[4][96];unsigned n,rd,rn,rm=0U;uint32_t da,sa,ta=0U;
+        bool tri=!strcmp(op,"sha256su1");
+        if((as->target_options&A64_FEATURE_CRYPTO)==0U ||
+           !split_operands(args,tok,&n) || n!=(tri?3U:2U) ||
+           !a64_vector_view(tok[0],&rd,&da) ||
+           !a64_vector_view(tok[1],&rn,&sa) ||
+           da!=UINT32_C(0x40000800) || sa!=da ||
+           (tri && (!a64_vector_view(tok[2],&rm,&ta) || ta!=da))) {
+            minias_set_error(as,"bad-aarch64-sha256:%s:line=%zu",
+                             args,stmt->line);free(inst);return false;
+        }
+        inst->opcode=tri?A64_MC_SIMD_LOGIC:A64_MC_SIMD_CRYPTO;
+        inst->count=tri?3U:2U;
+        inst->encoding=tri?UINT32_C(0x5e006000):UINT32_C(0x5e282800);
+        put_reg(&inst->operands[0],rd,true);
+        put_reg(&inst->operands[1],rn,true);
+        if(tri)put_reg(&inst->operands[2],rm,true);
+    } else if(!strcmp(op,"umov") ||
+              (!strcmp(op,"mov") && args[0]=='d')) {
+        char dst[96],source[96];unsigned rd,rn;
+        uint32_t lane;bool is_x,wide=false,sp,is_fp=!strcmp(op,"mov");
+        if(!split_two(args,dst,sizeof(dst),source,sizeof(source)) ||
+           !a64_ins_lane(source,&rn,&lane,&is_x) ||
+           (is_fp?(!a64_scalar_fp_d(dst,&rd) || !is_x):
+                  (!parse_a64_reg(dst,&rd,&wide,&sp) ||
+                   sp || wide!=is_x))) {
+            minias_set_error(as,"bad-aarch64-umov-lane:%s:line=%zu",
+                             args,stmt->line);free(inst);return false;
+        }
+        inst->opcode=A64_MC_SIMD_DUP;inst->count=2U;
+        inst->encoding=(is_fp?UINT32_C(0x5e000400):
+                         is_x?UINT32_C(0x4e003c00):
+                              UINT32_C(0x0e003c00))|(lane<<16U);
+        put_reg(&inst->operands[0],rd,is_x);
+        put_reg(&inst->operands[1],rn,true);
+    } else if(!strcmp(op,"stz2g")) {
+        char tok[4][96];unsigned n,rt,rn,mode;
+        bool wide,sp;int64_t off;
+        if((as->target_options&A64_FEATURE_MTE)==0U ||
+           !split_operands(args,tok,&n) || (n!=2U && n!=3U) ||
+           !parse_a64_reg(tok[0],&rt,&wide,&sp) || sp || !wide ||
+           !parse_a64_mem(tok[1],&rn,&off,&mode)) {
+            minias_set_error(as,"bad-aarch64-stz2g:%s:line=%zu",
+                             args,stmt->line);free(inst);return false;
+        }
+        if(n==3U) {
+            if(mode!=0U || off!=0 ||
+               !parse_signed_number(tok[2],&off)) {
+                minias_set_error(as,"bad-aarch64-stz2g-post:%s:line=%zu",
+                                 args,stmt->line);free(inst);return false;
+            }
+            mode=2U;
+        }
+        if(off%16!=0 || off<-4096 || off>4080){
+            minias_set_error(as,"bad-aarch64-stz2g-offset:%s:line=%zu",
+                             args,stmt->line);free(inst);return false;
+        }
+        inst->opcode=A64_MC_MTE_STZ2G;inst->count=2U;
+        inst->encoding=(mode==0U?UINT32_C(0xd9e00800):
+                        mode==1U?UINT32_C(0xd9e00c00):
+                                 UINT32_C(0xd9e00400))|
+                       (((uint32_t)(off/16)&511U)<<12U);
+        put_reg(&inst->operands[0],rt,true);
+        put_reg(&inst->operands[1],rn,true);
     } else if((!strcmp(op,"br")||!strcmp(op,"blr")) &&
        parse_register(args,&reg,&reg64) && reg64) {
         inst->opcode=!strcmp(op,"br")?A64_MC_BR:A64_MC_BLR;
@@ -3277,6 +3351,7 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
                  (inst->operands[2].reg<<5U)|
                  inst->operands[1].reg;
             break;
+        case A64_MC_MTE_STZ2G:
         case A64_MC_MTE_STGM:
             code=inst->encoding|
                  (inst->operands[1].reg<<5U)|

@@ -1746,4 +1746,41 @@ if "$MINIAS" --target=aarch64 -o "$work/a64-no-mte-dc.o" "$work/a64-no-mte-dc.s"
   echo 'MTE DC GZVA accepted without MTE ISA feature' >&2;exit 1
 fi
 echo 'MINIAS_A64_SIMD_ATOMIC_FAMILY=PASS native_GNU_21_instructions'
+# GNU A64 SHA2+TRN2+UMOV+FP D-lane+MTE STZ2G exact bytes.
+cat > "$work/a64-sha2-lane-mte.s" <<'ISA_BATCH_GNU'
+.arch armv8-a+crypto
+.text
+sha256su0 v16.4s,v17.4s
+sha256su0 v0.4s,v1.4s
+sha256su1 v0.4s,v1.4s,v2.4s
+trn2 v2.2d,v0.2d,v16.2d
+trn2 v0.16b,v1.16b,v2.16b
+umov w6,v0.b[0]
+umov w0,v0.s[0]
+umov x5,v7.d[1]
+mov d19,v3.d[1]
+mov d0,v1.d[0]
+.arch armv8.5-a+memtag
+stz2g x0,[x1]
+stz2g x2,[x3,#32]!
+stz2g x4,[x5,#-16]!
+stz2g x6,[x7],#0
+stz2g x6,[x7],#16
+stz2g x0,[x1,#16]
+ISA_BATCH_GNU
+"$MINIAS" --target=aarch64 -o "$work/a64-sha2-lane-mini.o" "$work/a64-sha2-lane-mte.s"
+"$AARCH64_AS" -o "$work/a64-sha2-lane-gnu.o" "$work/a64-sha2-lane-mte.s"
+"$AARCH64_OBJCOPY" -j .text -O binary "$work/a64-sha2-lane-mini.o" "$work/a64-sha2-lane-mini.bin"
+"$AARCH64_OBJCOPY" -j .text -O binary "$work/a64-sha2-lane-gnu.o" "$work/a64-sha2-lane-gnu.bin"
+cmp "$work/a64-sha2-lane-mini.bin" "$work/a64-sha2-lane-gnu.bin"
+for bad in 'sha256su0 v0.8b,v1.8b' 'sha256su1 v0.4s,v1.2d,v2.4s' \
+           'umov x0,v0.s[0]' 'umov w0,v0.d[0]' \
+           'mov d0,v1.s[0]' 'stz2g w0,[x1]' \
+           'stz2g x0,[x1],#17' 'stz2g x0,[x1,#4081]!'; do
+    printf '.arch armv8.5-a+memtag\n.arch_extension crypto\n.text\n%s\n' "$bad" > "$work/a64-sha2-lane-invalid.s"
+    if "$MINIAS" --target=aarch64 -o "$work/a64-sha2-lane-invalid.o" "$work/a64-sha2-lane-invalid.s" >/dev/null 2>&1; then
+        echo "bad SHA2/UMOV/MTE operands accepted: $bad" >&2;exit 1
+    fi
+done
+echo 'MINIAS_A64_SHA2_LANE_MTE=PASS real_GNU_16_instructions'
 echo 'MINIAS_AARCH64_VSLICE=PASS ELF64=1 gnu_bytes=equal relocation_call26_jump26_abs64=1 ld=pass qemu=exit0'
