@@ -1,6 +1,7 @@
 #include "target/loongarch64/codegen.h"
 #include "target/loongarch64/block_emit.h"
 #include "target/loongarch64/frame_emit.h"
+#include "target/loongarch64/asm_contract.h"
 #include "target/common/direct_function_emit.h"
 #include "target/common/lp64_aggregate.h"
 #include "target/common/direct_program_emit.h"
@@ -59,7 +60,7 @@ static bool loongarch64_emit_function(
         minic_multi_indirect_record,
         "@progbits", "@function", "@init_array", "quad",
         loongarch64_emit_prologue, minic_loongarch64_emit_core_blocks,
-        NULL
+        NULL, minic_loongarch64_qualified_linux_bug_asm
     };
     return minic_multi_direct_lp64_emit_function(
         out, program, target, decl, fn, facts, storage,

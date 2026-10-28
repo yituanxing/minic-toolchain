@@ -347,6 +347,15 @@ jobs:
           set -Eeuo pipefail
           bash tests/compiler/c0/probe-x86-compiler-rt-native.sh \
             "$GITHUB_WORKSPACE/build/runtime-verdict/minic/x86_64/libminic-rt.a"
+      - name: Linux GNU BUG/WARN section relocations for direct LP64 machines
+        if: matrix.target == 'aarch64' || matrix.target == 'loongarch64'
+        shell: bash
+        env:
+          MINIC_CC: ${{ github.workspace }}/build/runtime-ci/bin/minic-cc
+          MINIC_LINUX_BUG_TARGET: ${{ matrix.target }}
+        run: |
+          set -Eeuo pipefail
+          sh tests/compiler/c0/probe-direct-lp64-linux-bug-table.sh
       - name: Original GNU computed-goto Core BLOCK_ADDRESS and static label differential
         if: matrix.target == 'aarch64' || matrix.target == 'loongarch64'
         shell: bash

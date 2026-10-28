@@ -2,6 +2,7 @@
 #include "target/aarch64/block_emit.h"
 #include "target/aarch64/abi.h"
 #include "target/aarch64/asm_legalize.h"
+#include "target/aarch64/asm_contract.h"
 #include "target/common/direct_function_emit.h"
 #include "target/common/direct_program_emit.h"
 #include <stdint.h>
@@ -63,7 +64,8 @@ static bool aarch64_emit_function(
         "aarch64", MINIC_LP64_ABI_AAPCS64, minic_aarch64_indirect_record,
         "%progbits", "%function", "%init_array", "xword",
         aarch64_emit_prologue, minic_aarch64_emit_core_blocks,
-        minic_aarch64_copy_dynamic_frame_asm
+        minic_aarch64_copy_dynamic_frame_asm,
+        minic_aarch64_qualified_linux_bug_asm
     };
     return minic_multi_direct_lp64_emit_function(
         out, program, target, decl, fn, facts, storage,

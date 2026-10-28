@@ -2,6 +2,7 @@
 #define MINIC_TARGET_COMMON_DIRECT_FUNCTION_PLAN_H
 
 #include "target/common/direct_function_profile.h"
+#include "target/common/direct_preflight.h"
 #include "target/common/lp64_frame.h"
 
 /* The downstream physical ABI preparation dataflow for AAPCS64 and LP64D.
@@ -34,6 +35,7 @@ bool minic_multi_direct_lp64_function_plan_prepare(
     const MinicCoreFunctionFacts *,
     const MinicCoreObjectStoragePlan *, const char *architecture_name, MinicLP64DirectABI,
     MinicDirectLP64IndirectRecord,
+    MinicDirectLP64OpaqueAsmQualifier,
     MinicDirectLP64FunctionPlan *);
 void minic_multi_direct_lp64_function_plan_destroy(
     MinicDirectLP64FunctionPlan *);

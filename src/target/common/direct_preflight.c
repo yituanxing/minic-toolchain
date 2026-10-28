@@ -7,12 +7,12 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* Both LP64 direct machines may now consume independently qualified Core
- * structured ASM effects. This common preflight gate rejects legacy opaque,
- * asm-goto and partially lowered forms; the selected machine *still* proves
- * the exact instruction template, physical clobbers and output ABI.
- * Keep a bounded one-to-one map so an unreferenced ASM source cannot vanish. */
-static bool direct_lp64_only_structured_asm(const MinicCoreFunction *fn) {
+/* Only typed structured asm and target-whitelisted, zero-operand opaque
+ * hardware instructions are admitted. Source-to-Core one-to-one ownership
+ * stays mandatory. Neither target may silently drop a hardware operation. */
+static bool direct_lp64_only_structured_asm(
+    const MinicCoreFunction *fn,
+    MinicDirectLP64OpaqueAsmQualifier qualify_opaque_asm) {
     bool used[256] = {false};
     size_t i, count = 0U;
     if (!fn) return false;
@@ -31,8 +31,17 @@ static bool direct_lp64_only_structured_asm(const MinicCoreFunction *fn) {
                 return false;
             used[id] = true;
             ++count;
-        } else if (ins->kind == MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM ||
-                   ins->kind == MINIC_CORE_INSTRUCTION_REGISTER_OUTPUT_INLINE_ASM ||
+        } else if (ins->kind == MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM) {
+            const size_t id = ins->value.inline_asm_id;
+            if (qualify_opaque_asm == NULL ||
+                id >= fn->inline_asm_count || used[id] ||
+                ins->result != MINIC_CORE_VALUE_INVALID ||
+                !minic_type_is_void(ins->type) ||
+                !qualify_opaque_asm(&fn->inline_asms[id]))
+                return false;
+            used[id] = true;
+            ++count;
+        } else if (ins->kind == MINIC_CORE_INSTRUCTION_REGISTER_OUTPUT_INLINE_ASM ||
                    ins->kind == MINIC_CORE_INSTRUCTION_REGISTER_OUTPUT_INPUT_INLINE_ASM ||
                    ins->kind == MINIC_CORE_INSTRUCTION_MEMORY_READWRITE_SCALAR_INPUT_INLINE_ASM ||
                    ins->kind == MINIC_CORE_INSTRUCTION_SCALAR_INPUT_INLINE_ASM) {
@@ -88,7 +97,8 @@ static void direct_lp64_trace_asm_owners(
 bool minic_multi_direct_lp64_function_preflight(
     const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicFunction *decl, const MinicCoreFunction *fn,
-    const MinicCoreFunctionFacts *facts, const char *arch, const char *name) {
+    const MinicCoreFunctionFacts *facts, const char *arch, const char *name,
+    MinicDirectLP64OpaqueAsmQualifier qualify_opaque_asm) {
     bool verified;
     if (program == NULL || target == NULL || decl == NULL || fn == NULL ||
         arch == NULL) return false;
@@ -110,7 +120,7 @@ bool minic_multi_direct_lp64_function_preflight(
         else if(!minic_lp64_valid_return_type(program,target,fn->return_type))
             reason="return_abi";
         else if(fn->block_count>2048U)reason="block_cap";
-        else if(!direct_lp64_only_structured_asm(fn))
+        else if(!direct_lp64_only_structured_asm(fn, qualify_opaque_asm))
             reason="gnu_asm_qualification";
         else if(fn->parameter_count>16U)reason="parameter_cap";
         else if(fn->value_count>32768U)reason="value_cap";
@@ -131,7 +141,7 @@ bool minic_multi_direct_lp64_function_preflight(
         decl->alias_target != MINIC_FUNCTION_INVALID ||
         !minic_lp64_valid_return_type(program, target, fn->return_type) ||
         fn->block_count > 2048U ||
-        !direct_lp64_only_structured_asm(fn) ||
+        !direct_lp64_only_structured_asm(fn, qualify_opaque_asm) ||
         fn->parameter_count > 16U ||
         fn->value_count > 32768U || fn->object_count > 8192U)
         {

@@ -85,6 +85,20 @@ bool minic_aarch64_emit_residual_instruction(
     dynamic_frame = ctx->dynamic_frame;
     *needs_writeback = true;
         switch (ins->kind) {
+        case MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM: {
+            const size_t asm_id = ins->value.inline_asm_id;
+            const MinicCoreInlineAsm *source = asm_id < fn->inline_asm_count
+                ? &fn->inline_asms[asm_id] : NULL;
+            if (!minic_aarch64_qualified_linux_bug_asm(source) ||
+                fwrite(source->template_text, 1U, source->template_length, out) !=
+                    source->template_length ||
+                fputc('\n', out) == EOF)
+                return minic_multi_direct_machine_reject(
+                    fn, "aarch64", name, "linux_metadata_asm",
+                    reject_block, reject_ins, __LINE__);
+            *needs_writeback = false;
+            return true;
+        }
         case MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM:
             *needs_writeback = false;
             return minic_aarch64_emit_qualified_structured_asm(out, ctx, ins);

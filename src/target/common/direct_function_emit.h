@@ -24,6 +24,9 @@ typedef struct MinicDirectLP64FunctionEmitter {
     bool (*emit_core_blocks)(FILE *, const MinicDirectLP64BlockContext *);
     /* NULL unless the ISA requires a text rewrite after dynamic alloca. */
     bool (*rewrite_dynamic_asm)(FILE *dest, FILE *source);
+    /* The ISA itself decides which operand-free hardware ASM is safe to
+     * admit. Common merely validates one-to-one Core effect ownership. */
+    MinicDirectLP64OpaqueAsmQualifier qualify_opaque_asm;
 } MinicDirectLP64FunctionEmitter;
 
 static inline bool minic_multi_direct_lp64_emit_function(
@@ -48,7 +51,8 @@ static inline bool minic_multi_direct_lp64_emit_function(
     name = minic_c0_function_symbol_name(decl);
     if (!minic_multi_direct_lp64_function_plan_prepare(
             program, target, decl, fn, facts, storage, config->architecture,
-            config->abi, config->indirect_record, &plan)) {
+            config->abi, config->indirect_record, config->qualify_opaque_asm,
+            &plan)) {
         (void)minic_multi_direct_machine_reject(fn, config->architecture,
             name, plan.failed_stage, plan.failed_block,
             plan.failed_instruction, __LINE__);

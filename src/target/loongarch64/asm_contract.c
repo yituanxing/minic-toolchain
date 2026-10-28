@@ -1,8 +1,13 @@
 #include "target/loongarch64/asm_contract.h"
+#include "target/common/direct_linux_bug_asm.h"
 #include "target/loongarch64/frame_emit.h"
 
 #include <stdio.h>
 #include <string.h>
+bool minic_loongarch64_qualified_linux_bug_asm(const MinicCoreInlineAsm *a) {
+    return minic_multi_direct_linux_bug_asm(
+        a, "10000", "10001", "10002", "break1", false);
+}
 
 /* Native ISA reservation; rejected CSR/AMO shapes cannot bypass through
  * generic scalar Core inline assembly. */

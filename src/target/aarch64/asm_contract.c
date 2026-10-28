@@ -1,6 +1,11 @@
 #include "target/aarch64/asm_contract.h"
+#include "target/common/direct_linux_bug_asm.h"
 #include "frontend/const_eval.h"
 #include <string.h>
+bool minic_aarch64_qualified_linux_bug_asm(const MinicCoreInlineAsm *a) {
+    return minic_multi_direct_linux_bug_asm(
+        a, "14470", "14471", "14472", "brk0x800", true);
+}
 /* Linux 6.6 array_index_mask_nospec: compare two unsigned LP64 words,
  * consume NZCV immediately with SBC, store the all-zero/all-one mask. */
 static bool mask_template(const char *text, size_t len) {

@@ -733,6 +733,16 @@ bool minic_multi_direct_machine_instruction_shape(
         shape->family = MINIC_DIRECT_MACHINE_RESIDUAL;
         return true;
     }
+    /* A zero-operand opaque hardware effect has no SSA result; the target
+     * must independently requalify the full exact template at emission. */
+    if (ins->kind == MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM) {
+        if (ins->result != MINIC_CORE_VALUE_INVALID ||
+            !minic_type_is_void(ins->type) ||
+            ins->value.inline_asm_id >= fn->inline_asm_count)
+            return false;
+        shape->family = MINIC_DIRECT_MACHINE_RESIDUAL;
+        return true;
+    }
     if (ins->kind == MINIC_CORE_INSTRUCTION_FIXED_REGISTER_WRITE) {
         if (ins->result != MINIC_CORE_VALUE_INVALID ||
             !minic_type_is_void(ins->type) ||

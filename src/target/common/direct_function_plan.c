@@ -18,6 +18,7 @@ bool minic_multi_direct_lp64_function_plan_prepare(
     const MinicCoreObjectStoragePlan *storage,
     const char *architecture_name, MinicLP64DirectABI abi,
     MinicDirectLP64IndirectRecord indirect_record,
+    MinicDirectLP64OpaqueAsmQualifier qualify_opaque_asm,
     MinicDirectLP64FunctionPlan *plan) {
     MinicDirectLP64FunctionProfile profile;
     MinicDirectLP64ProfileResult profile_result;
@@ -34,7 +35,8 @@ bool minic_multi_direct_lp64_function_plan_prepare(
         return false;
     name = minic_c0_function_symbol_name(decl);
     if (!minic_multi_direct_lp64_function_preflight(
-            program, target, decl, fn, facts, architecture_name, name))
+            program, target, decl, fn, facts, architecture_name, name,
+            qualify_opaque_asm))
         return false;
     profile_result = minic_multi_direct_lp64_profile_function(
         program, target, decl, fn, facts, abi, indirect_record,
