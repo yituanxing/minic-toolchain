@@ -217,6 +217,28 @@ external_probe:
     mov x2, -281474976710656
     mov x3, -1
     mov w4, -1
+    // GNU ADR/SXTB/SXTH/EXTR and unprivileged LDTR/STTR families.
+    adr x0, integer_matrix
+    adr x3, external_adr_target
+    adr x4, external_adr_reference
+    sxtb x0, w1
+    sxtb w0, w1
+    sxth x2, w3
+    sxth w2, w3
+    uxtb w6, w7
+    uxth w8, w9
+    uxtb x10, w11
+    uxth x12, w13
+    ldtr x0, [x1]
+    sttr x2, [sp, #8]
+    ldtrb w3, [x4, #1]
+    sttrb w5, [x6, #-1]
+    ldtrh w7, [x8, #2]
+    sttrh w9, [x10, #-2]
+    ldtrsw x11, [x12, #4]
+    extr x0, x1, x2, #3
+    extr w3, w4, w5, #7
+external_adr_target:
     // GNU genuine multiply-accumulate register Ra and ASR/ROR forms.
     madd x0, x1, x2, x3
     madd w4, w5, w6, w7
@@ -618,6 +640,18 @@ for bad_source in 'ldxr x0, [x1,#4]' 'stxr x0, x1, [x2]' \
                   'bic x0, x1, #0' \
                   'bics x0, x1, #0xffffffffffffffff' \
                   'bics w11, w12, #255' \
+                  'sxtb x0, x1' \
+                  'sxth w0, x1' \
+                  'uxtb w0, x1' \
+                  'ldtr x0, [x1, #256]' \
+                  'ldtr w0, [x1, #-257]' \
+                  'sttrh x0, [x1]' \
+                  'ldtrsw w0, [x1]' \
+                  'sttr x0, [x1], #4' \
+                  'extr x0, x1, x2, #64' \
+                  'extr w0, w1, w2, #-1' \
+                  'extr w0, x1, w2, #1' \
+                  'adr w0, integer_matrix' \
                   'yield #1' \
                   'hint #.Lnever_defined' \
                   '.equ .Lbad_hint,128; hint #.Lbad_hint' \

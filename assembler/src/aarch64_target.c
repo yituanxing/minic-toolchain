@@ -21,6 +21,7 @@ enum {
     AARCH64_R_ABS64 = 257U,
     AARCH64_R_ABS32 = 258U,
     AARCH64_R_PREL32 = 261U,
+    AARCH64_R_ADR_PREL_LO21 = 274U,
     AARCH64_R_ADR_PREL_PG_HI21 = 275U,
     AARCH64_R_ADD_ABS_LO12_NC = 277U,
     AARCH64_R_LDST8_ABS_LO12_NC = 278U,
@@ -165,6 +166,7 @@ enum {
     A64_MC_COND_SELECT,
     A64_MC_COND_COMPARE,
     A64_MC_SHIFT,
+    A64_MC_EXTR,
     A64_MC_ARITH_ALIAS,
     A64_MC_MRS,
     A64_MC_MSR,
@@ -183,6 +185,7 @@ enum {
     A64_MC_WIDE_IMM,
     A64_MC_BR,
     A64_MC_BLR,
+    A64_MC_ADR,
     A64_MC_ADRP,
     A64_MC_ADD_LO12,
     A64_MC_LDST_LO12,
@@ -211,6 +214,7 @@ enum {
     A64_MC_STRH,
     A64_MC_LDST_UNSCALED,
     A64_MC_LDST_SCALED,
+    A64_MC_LDST_UNPRIV,
     A64_MC_LDST_INDEX,
     A64_MC_STP,
     A64_MC_LDP,
@@ -609,6 +613,24 @@ static bool parse_integer_family(MiniAsMCInst *inst,
         put_immediate(&inst->operands[2],imm/8);
         return true;
     }
+    /* Short sign/zero extensions lower to the existing typed SBFM/UBFM
+     * encoder; GNU's UXT{B,H} always writes Wd (zeroing upper X bits). */
+    if((!strcmp(op,"sxtb") || !strcmp(op,"sxth") ||
+        !strcmp(op,"uxtb") || !strcmp(op,"uxth")) && n==2U) {
+        bool signed_alias=op[0]=='s';
+        bool byte_alias=op[3]=='b';
+        if(!parse_a64_reg(t[0],&rd,&wd,&spd) || spd ||
+           !parse_a64_reg(t[1],&rn,&wn,&spn) || spn || wn ||
+           (!signed_alias && wn))return false;
+        inst->opcode=A64_MC_BITFIELD;inst->count=4U;
+        inst->encoding=signed_alias?UINT32_C(0x13000000):
+                                    UINT32_C(0x53000000);
+        put_reg(&inst->operands[0],rd,signed_alias?wd:false);
+        put_reg(&inst->operands[1],rn,signed_alias?wd:false);
+        put_immediate(&inst->operands[2],0);
+        put_immediate(&inst->operands[3],byte_alias?7:15);
+        return true;
+    }
     if ((!strcmp(op,"sxtw") || !strcmp(op,"uxtw")) && n==2U) {
         if(!parse_a64_reg(t[0],&rd,&wd,&spd) || !wd || spd ||
            !parse_a64_reg(t[1],&rn,&wn,&spn) || wn || spn)return false;
@@ -922,6 +944,33 @@ static bool parse_integer_family(MiniAsMCInst *inst,
         put_immediate(&inst->operands[2], imm / (int64_t)unit);
         return true;
     }
+    /* Unprivileged signed imm9 load/store family. LDTR/STTR do not share
+     * the pre/postindex LDUR writeback bit even for identical imm9 ranges. */
+    if((!strcmp(op,"ldtr") || !strcmp(op,"sttr") ||
+        !strcmp(op,"ldtrb") || !strcmp(op,"sttrb") ||
+        !strcmp(op,"ldtrh") || !strcmp(op,"sttrh") ||
+        !strcmp(op,"ldtrsw")) && n==2U) {
+        bool load=op[0]=='l';
+        bool byte=op[4]=='b';
+        bool half=op[4]=='h';
+        bool signedword=!strcmp(op,"ldtrsw");
+        uint32_t opbits;
+        if(!parse_a64_reg(t[0],&rd,&wd,&spd) || spd ||
+           ((byte || half) && wd) || (signedword && !wd) ||
+           !parse_a64_mem(t[1],&base,&imm,&mode) || mode!=0U ||
+           imm<-256 || imm>255)return false;
+        opbits=signedword?UINT32_C(0xb8800800):
+               byte?(load?UINT32_C(0x38400800):UINT32_C(0x38000800)):
+               half?(load?UINT32_C(0x78400800):UINT32_C(0x78000800)):
+               wd?(load?UINT32_C(0xf8400800):UINT32_C(0xf8000800)):
+                  (load?UINT32_C(0xb8400800):UINT32_C(0xb8000800));
+        inst->opcode=A64_MC_LDST_UNPRIV;inst->count=3U;
+        inst->encoding=opbits;
+        put_reg(&inst->operands[0],rd,wd);
+        put_reg(&inst->operands[1],base,true);
+        put_immediate(&inst->operands[2],imm);
+        return true;
+    }
     if ((strcmp(op, "stp") == 0 || strcmp(op, "ldp") == 0) &&
         (n == 3U || n == 4U)) {
         if (!parse_a64_reg(t[0], &rd, &wd, &spd) || spd ||
@@ -999,6 +1048,14 @@ static bool a64_parse_relocated(MiniAsMCInst *inst,
     bool wd,wn,spd,spn;
     MiniAsSymbolExpr expr;
     if(!split_operands(args,tok,&n))return false;
+    if(!strcmp(op,"adr") && n==2U &&
+       parse_a64_reg(tok[0],&rd,&wd,&spd) && wd && !spd &&
+       minias_parse_symbol_addend(tok[1],&expr) &&
+       a64_attach_expr(inst,1U,&expr)) {
+        inst->opcode=A64_MC_ADR;inst->count=2U;
+        put_reg(&inst->operands[0],rd,true);
+        return true;
+    }
     if(!strcmp(op,"adrp") && n==2U &&
        parse_a64_reg(tok[0],&rd,&wd,&spd) && wd && !spd &&
        minias_parse_symbol_addend(tok[1],&expr) &&
@@ -1352,6 +1409,25 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
             }
             put_immediate(&inst->operands[2],amount);
         }
+    } else if(!strcmp(op,"extr")) {
+        char extra[4][96];unsigned n,rd,rn,rm;
+        bool wd,wn,wm,sp;
+        int64_t lsb;
+        if(!split_operands(args,extra,&n) || n!=4U ||
+           !parse_a64_reg(extra[0],&rd,&wd,&sp) || sp ||
+           !parse_a64_reg(extra[1],&rn,&wn,&sp) || sp ||
+           !parse_a64_reg(extra[2],&rm,&wm,&sp) || sp ||
+           wd!=wn || wd!=wm || !parse_signed_number(extra[3],&lsb) ||
+           lsb<0 || lsb>=(wd?64:32)) {
+            minias_set_error(as,"bad-aarch64-extr:%s:line=%zu",
+                             args,stmt->line);
+            free(inst);return false;
+        }
+        inst->opcode=A64_MC_EXTR;inst->count=4U;
+        put_reg(&inst->operands[0],rd,wd);
+        put_reg(&inst->operands[1],rn,wn);
+        put_reg(&inst->operands[2],rm,wm);
+        put_immediate(&inst->operands[3],lsb);
     } else if(!strcmp(op,"ccmp") || !strcmp(op,"ccmn")) {
         char tok[4][96];
         unsigned n,rn,rm,cc;
@@ -1784,6 +1860,13 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
                 (inst->count==4U?(inst->operands[3].reg<<10U):0U);
             break;
         }
+        case A64_MC_EXTR:
+            code=(inst->operands[0].register_64?
+                   UINT32_C(0x93c00000):UINT32_C(0x13800000))|
+                 (inst->operands[2].reg<<16U)|
+                 ((uint32_t)inst->operands[3].immediate<<10U)|
+                 (inst->operands[1].reg<<5U)|inst->operands[0].reg;
+            break;
         case A64_MC_SHIFT: {
             unsigned rd=inst->operands[0].reg;
             unsigned rn=inst->operands[1].reg;
@@ -1882,6 +1965,32 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
             code = inst->count == 0U ? UINT32_C(0xd65f03c0) :
                 UINT32_C(0xd65f0000) | (inst->operands[0].reg << 5U);
             break;
+        case A64_MC_ADR: {
+            const MiniAsSymbol *target;
+            int64_t displacement;
+            expr=inst->operands[1].symbol;
+            code=UINT32_C(0x10000000)|inst->operands[0].reg;
+            fixup=MINIAS_FIXUP_A64_ADR_LO21;
+            target=minias_get_symbol(as,expr->name,false);
+            if(!target || !target->defined ||
+               target->section!=stmt->section)break;
+            if(target->value>INT64_MAX || stmt->offset>INT64_MAX ||
+               (expr->addend>0 &&
+                (int64_t)target->value>INT64_MAX-expr->addend) ||
+               (expr->addend<0 &&
+                (int64_t)target->value<INT64_MIN-expr->addend)) {
+                minias_set_error(as,"aarch64-adr-overflow");return false;
+            }
+            displacement=(int64_t)target->value+expr->addend-
+                         (int64_t)stmt->offset;
+            if(displacement<-(INT64_C(1)<<20U) ||
+               displacement>=(INT64_C(1)<<20U)) {
+                minias_set_error(as,"aarch64-adr-range");return false;
+            }
+            code|=(((uint32_t)displacement&3U)<<29U)|
+                  ((((uint32_t)displacement>>2U)&UINT32_C(0x7ffff))<<5U);
+            fixup=MINIAS_FIXUP_NONE;break;
+        }
         case A64_MC_ADRP:
             code=UINT32_C(0x90000000)|inst->operands[0].reg;
             expr=inst->operands[1].symbol;
@@ -2133,6 +2242,11 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
                    (inst->operands[0].reg << 5U);
             break;
         }
+        case A64_MC_LDST_UNPRIV:
+            code=inst->encoding|
+                 (((uint32_t)inst->operands[2].immediate&511U)<<12U)|
+                 (inst->operands[1].reg<<5U)|inst->operands[0].reg;
+            break;
         case A64_MC_LDST_SCALED:
             code=inst->encoding|
                  ((uint32_t)inst->operands[2].immediate<<10U)|
@@ -2398,6 +2512,8 @@ static uint32_t aarch64_fixup_relocation_type(MiniAsFixupKind kind,
             return width == 4U ? AARCH64_R_CONDBR19 : 0U;
         case MINIAS_FIXUP_A64_TSTBR14:
             return width == 4U ? AARCH64_R_TSTBR14 : 0U;
+        case MINIAS_FIXUP_A64_ADR_LO21:
+            return width == 4U ? AARCH64_R_ADR_PREL_LO21 : 0U;
         case MINIAS_FIXUP_A64_ADRP_HI21:
             return width == 4U ? AARCH64_R_ADR_PREL_PG_HI21 : 0U;
         case MINIAS_FIXUP_A64_ADD_LO12:
