@@ -607,23 +607,34 @@ static bool parse_integer_family(MiniAsMCInst *inst,
     }
     /* Common GNU Linux bit/byte-swap and acquire/release families.
      * All operands are typed once; no instruction-name checks in encode. */
-    if ((!strcmp(op,"ldxr") || !strcmp(op,"ldaxr")) && n==2U) {
+    if ((!strcmp(op,"ldxr") || !strcmp(op,"ldaxr") ||
+         !strcmp(op,"ldxrb") || !strcmp(op,"ldaxrb") ||
+         !strcmp(op,"ldxrh") || !strcmp(op,"ldaxrh")) && n==2U) {
         if(!parse_a64_reg(t[0],&rd,&wd,&spd) || spd ||
            !parse_a64_mem(t[1],&base,&imm,&mode) ||
            imm!=0 || mode!=0U)return false;
+        if((strchr(op,'b') || strchr(op,'h')) && wd)return false;
         inst->opcode=A64_MC_EXCLUSIVE;inst->count=2U;
-        inst->encoding=!strcmp(op,"ldaxr")?1U:0U;
+        inst->encoding=(strncmp(op,"ldax",4U)==0?1U:0U)|
+                        (op[strlen(op)-1U]=='b'?0x10U:
+                         op[strlen(op)-1U]=='h'?0x20U:0U);
         put_reg(&inst->operands[0],rd,wd);
         put_reg(&inst->operands[1],base,true);
         return true;
     }
-    if ((!strcmp(op,"stxr") || !strcmp(op,"stlxr")) && n==3U) {
+    if ((!strcmp(op,"stxr") || !strcmp(op,"stlxr") ||
+         !strcmp(op,"stxrb") || !strcmp(op,"stlxrb") ||
+         !strcmp(op,"stxrh") || !strcmp(op,"stlxrh")) && n==3U) {
         if(!parse_a64_reg(t[0],&rd,&wd,&spd) || wd || spd ||
            !parse_a64_reg(t[1],&rn,&wn,&spn) || spn ||
            !parse_a64_mem(t[2],&base,&imm,&mode) ||
            imm!=0 || mode!=0U)return false;
+        if((op[strlen(op)-1U]=='b' || op[strlen(op)-1U]=='h') && wn)
+            return false;
         inst->opcode=A64_MC_EXCLUSIVE;inst->count=3U;
-        inst->encoding=!strcmp(op,"stlxr")?3U:2U;
+        inst->encoding=(strncmp(op,"stlx",4U)==0?3U:2U)|
+                        (op[strlen(op)-1U]=='b'?0x10U:
+                         op[strlen(op)-1U]=='h'?0x20U:0U);
         put_reg(&inst->operands[0],rd,false);
         put_reg(&inst->operands[1],rn,wn);
         put_reg(&inst->operands[2],base,true);
@@ -1038,14 +1049,19 @@ static bool parse_integer_family(MiniAsMCInst *inst,
         put_immediate(&inst->operands[2],imm);
         return true;
     }
-    if ((strcmp(op, "stp") == 0 || strcmp(op, "ldp") == 0 ||
-         strcmp(op,"ldpsw")==0) && (n == 3U || n == 4U)) {
+    if ((!strcmp(op, "stp") || !strcmp(op, "ldp") ||
+         !strcmp(op,"ldpsw") || !strcmp(op,"stnp") ||
+         !strcmp(op,"ldnp")) && (n == 3U || n == 4U)) {
         bool signed_pair=!strcmp(op,"ldpsw");
+        bool nontemporal=!strcmp(op,"stnp") || !strcmp(op,"ldnp");
         if (!parse_a64_reg(t[0], &rd, &wd, &spd) || spd ||
             !parse_a64_reg(t[1], &rn, &wn, &spn) || spn || wd != wn ||
             !parse_a64_mem(t[2], &base, &imm, &mode))
             return false;
         if(signed_pair && !wd)return false;
+        /* LDNP/STNP have ONLY signed scaled imm7 offset addressing;
+         * pre/post writeback encodings belong to LDP/STP. */
+        if(nontemporal && (n!=3U || mode!=0U))return false;
         if (n == 4U) {
             if (mode != 0U || imm != 0 ||
                 !parse_signed_number(t[3], &imm)) return false;
@@ -1056,8 +1072,11 @@ static bool parse_integer_family(MiniAsMCInst *inst,
             imm > (int64_t)(signed_pair?252:(wd?504:252)))
             return false;
         inst->opcode = signed_pair?A64_MC_LDPSW:
-                       strcmp(op, "stp") == 0 ? A64_MC_STP : A64_MC_LDP;
-        inst->encoding = mode;
+                       (!strcmp(op, "stp") || !strcmp(op,"stnp")) ?
+                          A64_MC_STP : A64_MC_LDP;
+        /* 3 is Target-only non-temporal pair variant; existing typed
+         * pair MCInst and Common ELF/section machinery are reused. */
+        inst->encoding = nontemporal?3U:mode;
         inst->count = 4U;
         put_reg(&inst->operands[0], rd, wd);
         put_reg(&inst->operands[1], rn, wn);
@@ -1251,6 +1270,10 @@ static bool a64_system_register(const char *name,uint32_t *mrs,uint32_t *msr) {
         {"isr_el1",UINT32_C(0xd538c100),0U},
         {"spsr_el2",UINT32_C(0xd53c4000),UINT32_C(0xd51c4000)},
         {"dbgwcr0_el1",UINT32_C(0xd53000e0),UINT32_C(0xd51000e0)},
+        {"dbgwcr14_el1",UINT32_C(0xd5300ee0),UINT32_C(0xd5100ee0)},
+        {"dbgwvr0_el1",UINT32_C(0xd53000c0),UINT32_C(0xd51000c0)},
+        {"elr_el2",UINT32_C(0xd53c4020),UINT32_C(0xd51c4020)},
+        {"spsr_abt",UINT32_C(0xd53c4320),UINT32_C(0xd51c4320)},
         {"id_aa64pfr0_el1",UINT32_C(0xd5380400),0U},
         {"id_aa64isar0_el1",UINT32_C(0xd5380600),0U},
         {"osdlr_el1",UINT32_C(0xd5301380),UINT32_C(0xd5101380)},
@@ -2287,15 +2310,21 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
             break;
 
         case A64_MC_EXCLUSIVE: {
-            unsigned kind=inst->encoding;
+            unsigned kind=inst->encoding&3U;
+            bool byte=(inst->encoding&0x10U)!=0U;
+            bool half=(inst->encoding&0x20U)!=0U;
             if(kind<2U) {
                 bool wide=inst->operands[0].register_64;
-                code=(wide?UINT32_C(0xc85f7c00):UINT32_C(0x885f7c00)) |
+                code=(byte?UINT32_C(0x085f7c00):
+                      half?UINT32_C(0x485f7c00):
+                      wide?UINT32_C(0xc85f7c00):UINT32_C(0x885f7c00)) |
                      ((kind&1U)?UINT32_C(0x8000):0U) |
                      (inst->operands[1].reg<<5U) | inst->operands[0].reg;
             }else {
                 bool wide=inst->operands[1].register_64;
-                code=(wide?UINT32_C(0xc8007c00):UINT32_C(0x88007c00)) |
+                code=(byte?UINT32_C(0x08007c00):
+                      half?UINT32_C(0x48007c00):
+                      wide?UINT32_C(0xc8007c00):UINT32_C(0x88007c00)) |
                      ((kind&1U)?UINT32_C(0x8000):0U) |
                      (inst->operands[0].reg<<16U) |
                      (inst->operands[2].reg<<5U) | inst->operands[1].reg;
@@ -2527,9 +2556,11 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
                                     UINT32_C(0x69400000)):
                 inst->opcode == A64_MC_STP ?
                 (inst->encoding == 1U ? UINT32_C(0x29800000) :
-                 inst->encoding == 2U ? UINT32_C(0x28800000) : UINT32_C(0x29000000)) :
+                 inst->encoding == 2U ? UINT32_C(0x28800000) :
+                 inst->encoding == 3U ? UINT32_C(0x28000000) : UINT32_C(0x29000000)) :
                 (inst->encoding == 1U ? UINT32_C(0x29c00000) :
-                 inst->encoding == 2U ? UINT32_C(0x28c00000) : UINT32_C(0x29400000));
+                 inst->encoding == 2U ? UINT32_C(0x28c00000) :
+                 inst->encoding == 3U ? UINT32_C(0x28400000) : UINT32_C(0x29400000));
             if (sf && inst->opcode!=A64_MC_LDPSW)
                 base |= UINT32_C(0x80000000);
             code = base |

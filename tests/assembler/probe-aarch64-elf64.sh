@@ -104,6 +104,29 @@ external_probe:
     mrs x1, ctr_el0
     mrs x0, CNTVCT_EL0
     mrs x0, SCTLR_EL1
+    // Native GNU/LLVM checked A64 W-exclusive subword variants.
+    ldxrb w2, [x3]
+    ldaxrb w2, [x3]
+    ldxrh w2, [x3]
+    ldaxrh w2, [x3]
+    stxrb w4, w2, [x3]
+    stlxrb w4, w2, [x3]
+    stxrh w4, w2, [x3]
+    stlxrh w4, w2, [x3]
+    // Non-temporal signed imm7 pair encodings, no writeback allowed.
+    stnp x2, x3, [x0, #-256]
+    ldnp xzr, xzr, [x0]
+    stnp w2, w3, [x0, #252]
+    ldnp w4, w5, [sp, #-256]
+    // EL2 and ARM debug system registers, independently byte-checked.
+    mrs x5, elr_el2
+    msr elr_el2, x5
+    mrs x2, dbgwvr0_el1
+    msr dbgwvr0_el1, x2
+    mrs x2, dbgwcr14_el1
+    msr dbgwcr14_el1, x2
+    mrs x0, spsr_abt
+    msr spsr_abt, x0
     eret
     msr tpidrro_el0, x0
     msr daif, xzr
@@ -646,7 +669,11 @@ A64_INT
 "$AARCH64_OBJCOPY" -j .text -O binary "$work/int-gnu.o" "$work/int-gnu.bin"
 cmp "$work/int-mini.bin" "$work/int-gnu.bin"
 for bad in 'add x0, w0, x1' 'cmp x0, #4097' 'ldr x0, [x1, -257]' \
-           'stp x29, x30, [sp, -520]!' 'mov x0, #0x123456789abcdef0'; do
+           'stp x29, x30, [sp, -520]!' 'mov x0, #0x123456789abcdef0' \
+           'ldaxrh x2,[x3]' 'ldxrb x2,[x3]' \
+           'stlxrh w4,x2,[x3]' 'stxrb x4,w2,[x3]' \
+           'stnp x2,x3,[x0,#-520]' 'ldnp x2,x3,[x0],8' \
+           'ldnp x2,w3,[x0]' 'stnp w2,w3,[x0,#254]'; do
     printf '.arch armv8-a\n.text\n%s\n' "$bad" >"$work/bad-integer.s"
     if "$MINIAS" --target=aarch64 -o "$work/bad-integer.o" \
          "$work/bad-integer.s" >/dev/null 2>"$work/bad-integer.err"; then
