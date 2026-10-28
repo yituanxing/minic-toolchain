@@ -346,6 +346,7 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
         {"rdtsc",{0x0f,0x31},2},{"rdtscp",{0x0f,0x01,0xf9},3},
         {"rdmsr",{0x0f,0x32},2},{"wrmsr",{0x0f,0x30},2},
         {"rdpmc",{0x0f,0x33},2},{"fninit",{0xdb,0xe3},2},
+        {"fnclex",{0xdb,0xe2},2},
         {"xsetbv",{0x0f,0x01,0xd1},3},
         {"xgetbv",{0x0f,0x01,0xd0},3},
         {"vmcall",{0x0f,0x01,0xc1},3},
@@ -475,6 +476,34 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
     MiniAsStmt normalized, *const original=s;
     char suffixed_op[24];
     if (!m) {minias_set_error(as,"out-of-memory:x86_64-mcinst");return false;}
+    /* GNU REP BSF/BSR spell the F3-prefixed BMI bit-scan instructions.
+     * Lower the alias via the SAME target-only TZCNT/LZCNT parser and
+     * retained MCInst/REX/ModR/M/ELF fixup paths, without another
+     * machine-code special case or mutable source-wide prefix state. */
+    if(!strcmp(s->op,"rep") || !strcmp(s->op,"repz") ||
+       !strcmp(s->op,"repe")) {
+        const char *p=s->args,*suffix=NULL,*canonical=NULL;
+        MiniAsStmt alias;
+        while(*p==' ' || *p=='\t')++p;
+        if(!strncmp(p,"bsfq",4U) && isspace((unsigned char)p[4]))
+            {canonical="tzcntq";suffix=p+4U;}
+        else if(!strncmp(p,"bsfl",4U) && isspace((unsigned char)p[4]))
+            {canonical="tzcntl";suffix=p+4U;}
+        else if(!strncmp(p,"bsrq",4U) && isspace((unsigned char)p[4]))
+            {canonical="lzcntq";suffix=p+4U;}
+        else if(!strncmp(p,"bsrl",4U) && isspace((unsigned char)p[4]))
+            {canonical="lzcntl";suffix=p+4U;}
+        if(canonical) {
+            while(*suffix==' ' || *suffix=='\t')++suffix;
+            if(!*suffix)goto invalid;
+            alias=*s;alias.op=(char *)canonical;
+            alias.args=(char *)suffix;alias.mcinst=NULL;
+            free(m);
+            if(!x64_parse(as,&alias))return false;
+            original->mcinst=alias.mcinst;
+            return true;
+        }
+    }
     /*
      * GNU AT&T instruction suffix inference is a target-only grammar rule.
      * Resolve the W/L/Q/B width from an explicit register operand, then
@@ -667,7 +696,10 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
             {"verr",0x00U,4U},{"verw",0x00U,5U},
             {"fxsave",0xaeU,0U},{"fxsaveq",0xaeU,0U},
             {"fxrstor",0xaeU,1U},{"fxrstorq",0xaeU,1U},
-            {"ldmxcsr",0xaeU,2U},{"stmxcsr",0xaeU,3U}
+            {"ldmxcsr",0xaeU,2U},{"stmxcsr",0xaeU,3U},
+            {"cmpxchg8b",0xc7U,1U},{"cmpxchg16b",0xc7U,1U},
+            {"fldcw",0xd9U,5U},{"fnstcw",0xd9U,7U},
+            {"fnstsw",0xddU,7U}
         };
         for(i=0U;i<sizeof(sysmem)/sizeof(sysmem[0]);++i) {
             MiniAsMCMemory mem;
@@ -698,11 +730,14 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
             }
             *m->operands[1].memory=mem;
             m->opcode=X64_REG_MEMORY;m->count=2U;
-            m->encoding=UINT32_C(0x100)|sysmem[i].opcode;
+            m->encoding=(sysmem[i].opcode==0xd9U ||
+                         sysmem[i].opcode==0xddU?0U:UINT32_C(0x100))|
+                        sysmem[i].opcode;
             m->operands[0].kind=MINIAS_MC_REGISTER;
             m->operands[0].reg=sysmem[i].group;
             m->operands[0].register_64=
-                !strcmp(s->op,"fxsaveq") || !strcmp(s->op,"fxrstorq");
+                !strcmp(s->op,"fxsaveq") || !strcmp(s->op,"fxrstorq") ||
+                !strcmp(s->op,"cmpxchg16b");
             m->operands[1].kind=MINIAS_MC_MEMORY;
             goto done;
         }
