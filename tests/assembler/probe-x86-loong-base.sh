@@ -3329,3 +3329,26 @@ if "$MINIAS" --target=x86_64 -o "$work/x86-symbol-mutable-bad.o" "$work/x86-symb
  echo "MiniAS accepted unresolved mutable relocation expression" >&2;exit 1
 fi
 echo 'MINIAS_COMMON_SYMBOL_MUTABLE_QUAD=PASS GNU_bytes_RELA_two_mutable_counters_overflow_and_negative'
+
+
+# Real arch/x86/kernel/head_64.S uses forward/position-relative .fill with
+# a lexically mutable .set loop counter. Every iteration must keep its own
+# counter value even though Common later recomputes fragment offsets.
+cat > "$work/x86-mutable-fill.s" <<'X86_MUTABLE_FILL'
+.text
+.globl early_idt_handler_array
+early_idt_handler_array:
+i = 0
+.rept 3
+.byte 0x90
+i = i + 1
+.fill early_idt_handler_array + i*(9 + (4*1)) - ., 1, 0xcc
+.endr
+X86_MUTABLE_FILL
+"$MINIAS" --target=x86_64 -o "$work/x86-mutable-fill-mini.o" "$work/x86-mutable-fill.s"
+as --64 -o "$work/x86-mutable-fill-gnu.o" "$work/x86-mutable-fill.s"
+objcopy -j .text -O binary "$work/x86-mutable-fill-mini.o" "$work/x86-mutable-fill-mini.bin"
+objcopy -j .text -O binary "$work/x86-mutable-fill-gnu.o" "$work/x86-mutable-fill-gnu.bin"
+cmp "$work/x86-mutable-fill-mini.bin" "$work/x86-mutable-fill-gnu.bin"
+test "$(wc -c < "$work/x86-mutable-fill-mini.bin")" -eq 39
+echo 'MINIAS_COMMON_MUTABLE_FILL=PASS GNU_3_lexical_set_positions_39_machine_bytes'
