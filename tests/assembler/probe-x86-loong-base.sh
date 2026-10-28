@@ -117,6 +117,17 @@ entry_x:
     cmpq 8(%r12), %rax
     cmpl %r9d, -8(%rbp)
     # GNU bit-imm with ModR/M register, SIB memory, RIP-relative relocation.
+    # ELF ABS32/ABS32S typed symbol immediates and GNU accumulator.
+    cmpq $ip6_output, %rax
+    cmpq $init_net, %rbx
+    cmpq $ip6_mtu, %r9
+    addq $ext_global, %rax
+    subq $ext_global+4, %r12
+    andl $ext_global, %eax
+    xorl $ext_global, %r10d
+    pushq $ext_global
+    cmpq $1000, %rax
+    addl $1000, %eax
     btq $43, %rax
     btsq $0, (%rbx)
     btrl $127, 8(%r12)
