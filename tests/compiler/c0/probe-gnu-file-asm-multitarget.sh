@@ -789,7 +789,7 @@ SRC
                 full) ld=ld; st=stl; fence=' dmb ish'; clobber=': "memory"' ;;
             esac
             cat >> "$work/aarch64-xchg-kernel.i" <<SRC
-$typ xchg_$bits\_$mode($typ *p, $typ value) {
+$typ $(printf "xchg_%s_%s" "$bits" "$mode")($typ *p, $typ value) {
     $typ old_value;
     unsigned long retry;
     __asm__ __volatile__(" prfm pstl1strm, %2\n"
@@ -806,10 +806,10 @@ SRC
         cat >> "$work/aarch64-xchg-kernel.i" <<SRC
 int test_xchg_$bits(void) {
     $typ v=1;
-    $typ a=xchg_$bits\_relaxed(&v,2);
-    $typ b=xchg_$bits\_acquire(&v,3);
-    $typ c=xchg_$bits\_release(&v,4);
-    $typ d=xchg_$bits\_full(&v,5);
+    $typ a=$(printf "xchg_%s_relaxed" "$bits")(&v,2);
+    $typ b=$(printf "xchg_%s_acquire" "$bits")(&v,3);
+    $typ c=$(printf "xchg_%s_release" "$bits")(&v,4);
+    $typ d=$(printf "xchg_%s_full" "$bits")(&v,5);
     return v==5 && a==1 && b==2 && c==3 && d==4;
 }
 SRC
