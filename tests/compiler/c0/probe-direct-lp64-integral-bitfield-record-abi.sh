@@ -78,11 +78,14 @@ for name in original.gnu gnu-caller.mini-api mini-caller.gnu-api all.mini;do
     cmp -s "$d/original.gnu.err" "$d/$name.err"
 done
 cat >"$d/unsupported.i" <<'SRC'
-typedef struct __attribute__((packed)) { unsigned int a:3,b:9,c:20; } Unsafe;
-Unsafe unsupported(int a) { Unsafe r; r.a=(unsigned)a;return r; }
+/* Packed integer bit-fields now use the ordinary raw INTEGER GP class.
+ * A packed *unaligned* 64-bit scalar is different: the target direct
+ * emitter must not manufacture an aligned ld.d/ldr memory access. */
+typedef struct __attribute__((packed)) { unsigned char tag; unsigned long unaligned; } Unsafe;
+Unsafe unsupported(int a) { Unsafe r; r.tag=(unsigned char)a;return r; }
 SRC
 if "$MINIC_CC" --target="$MINIC_BITFIELD_RECORD_TARGET-linux" -S "$d/unsupported.i" -o "$d/unsupported.s" 2>"$d/unsupported.err"; then
-    echo "LP64_BITFIELD_RECORD=FAIL packed_bitfield_incorrectly_admitted" >&2;exit 1
+    echo "LP64_BITFIELD_RECORD=FAIL packed_unaligned_word_incorrectly_admitted" >&2;exit 1
 fi
 test ! -e "$d/unsupported.s"
-echo "LP64_BITFIELD_RECORD=PASS target=$MINIC_BITFIELD_RECORD_TARGET 4_8_16byte=1 native_QEMU=1 mixed_ABI=4 packed_rejected=1"
+echo "LP64_BITFIELD_RECORD=PASS target=$MINIC_BITFIELD_RECORD_TARGET 4_8_16byte=1 native_QEMU=1 mixed_ABI=4 packed_integer_bitfield_supported=1 packed_unaligned_word_rejected=1"
