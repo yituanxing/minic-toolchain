@@ -20,6 +20,9 @@ typedef bool (*MinicMultiScalarBitsEmitter)(FILE *, const MinicC0Program *,
                                             const MinicTargetInfo *, MinicType,
                                             uint64_t);
 
+/* Common source-section sanitizer shared by the x86/RV32/RV64 and direct
+ * ELF emission paths: no architecture may interpolate raw GAS directives. */
+bool minic_multi_elf_safe_section_name(const char *);
 bool minic_multi_emit_relocatable_scalar_array(
     FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicGlobalObject *object, size_t storage_size,

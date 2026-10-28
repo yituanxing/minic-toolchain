@@ -899,9 +899,9 @@ bool minic_multi_emit_elf_symbol_visibility(FILE *out, MinicSymbolVisibility vis
 
 /* GNU original Linux named object sections are ELF metadata, not ISA ABI.
  * Disallow arbitrary GAS directives/flags supplied by C attributes. */
-static bool minic_multi_elf_safe_section_name(const char *name) {
+bool minic_multi_elf_safe_section_name(const char *name) {
     size_t i;
-    if (name == NULL || name[0] != '.' || name[1] == '\0') return false;
+    if (name == NULL || name[0] == '\0') return false;
     for (i = 0U; name[i] != '\0'; ++i) {
         const char c = name[i];
         if (i >= 255U ||

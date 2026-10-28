@@ -40,7 +40,8 @@ static bool rv32_reloc(FILE *out, const MinicC0Program *program,
 static bool rv32_data_symbol(FILE *out, const MinicGlobalObject *obj,
                              size_t alignment) {
     if (obj->section_name != NULL) {
-        if (fprintf(out, ".section %s,\"%s\",@progbits\n",
+        if (!minic_multi_elf_safe_section_name(obj->section_name) ||
+            fprintf(out, ".section %s,\"%s\",@progbits\n",
                     obj->section_name, obj->is_read_only ? "a" : "aw") < 0)
             return false;
     } else if (fprintf(out, "%s\n",

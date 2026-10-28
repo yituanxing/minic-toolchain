@@ -427,6 +427,8 @@ bool minic_riscv64_emit_global_object(FILE *file,
     }
 
     if (object->section_name != NULL) {
+        if (!minic_multi_elf_safe_section_name(object->section_name))
+            return false;
         if (fprintf(file,
                     ".section %s,\"%s\",@progbits\n",
                     object->section_name,
