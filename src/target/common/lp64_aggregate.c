@@ -1,4 +1,5 @@
 #include "target/common/lp64_aggregate.h"
+#include <stdint.h>
 
 /* The two target ABIs currently share these specifically tested predicates,
  * but register numbering, stack assignment and argument emission do not. */
@@ -27,14 +28,25 @@ static bool minic_multi_integer_record_members(
     for (i = 0U; i < record->field_count; ++i) {
         const MinicRecordField *field = minic_c0_record_field(record, i);
         size_t offset, field_size, field_align;
+        /* A fixed C array of integer/pointer elements remains an INTEGER
+         * class aggregate on both AAPCS64 and LoongArch LP64D. A literal
+         * struct { unsigned char bytes[12]; } has twelve value bytes, not
+         * twelve ABI registers; classify by the enclosing 1-2 eightbytes.
+         * Reuse DataLayout's element size and natural member alignment.
+         * Reject flexible/zero length arrays, floats/HFAs, packed members,
+         * bitfields, and storage overflow instead of guessing ABI classes. */
         if (field == NULL || field->is_packed || field->is_bit_field ||
-            field->is_flexible_array || field->is_array ||
-            field->element_count != 1U ||
+            field->is_flexible_array || field->is_zero_length_array ||
+            field->element_count == 0U ||
+            (!field->is_array && field->element_count != 1U) ||
             !minic_multi_integer_record_members(
                  program, target, field->type, depth + 1U) ||
             !minic_data_layout_type(target->data_layout, program, field->type,
                                     &field_size, &field_align) ||
-            !minic_data_layout_record_field_offset(
+            field_size > SIZE_MAX / field->element_count)
+            return false;
+        field_size *= field->element_count;
+        if (!minic_data_layout_record_field_offset(
                  target->data_layout, program, record, i, &offset) ||
             (field_align != 0U && offset % field_align != 0U) ||
             offset > total || field_size > total - offset)

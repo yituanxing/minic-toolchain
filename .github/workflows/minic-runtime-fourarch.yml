@@ -379,6 +379,15 @@ jobs:
           set -Eeuo pipefail
           bash tests/compiler/c0/probe-x86-compiler-rt-native.sh \
             "$GITHUB_WORKSPACE/build/runtime-verdict/minic/x86_64/libminic-rt.a"
+      - name: GNU LP64 natural integral fixed-array and nested-record ABI in both directions
+        if: matrix.target == 'aarch64' || matrix.target == 'loongarch64'
+        shell: bash
+        env:
+          MINIC_CC: ${{ github.workspace }}/build/runtime-ci/bin/minic-cc
+          MINIC_ARRAY_RECORD_TARGET: ${{ matrix.target }}
+        run: |
+          set -Eeuo pipefail
+          bash tests/compiler/c0/probe-direct-lp64-integral-array-aggregate-abi.sh
       - name: Two native FP-register HFA return fields with inverse GNU ABI oracles
         if: matrix.target == 'aarch64' || matrix.target == 'loongarch64'
         shell: bash
