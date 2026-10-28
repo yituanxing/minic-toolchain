@@ -24,6 +24,9 @@ def main():
     seen = set()
     compilers = set()
     groups = collections.defaultdict(lambda: collections.defaultdict(list))
+    # These are genuine post-prune Core failure functions, not an inference
+    # from the single first-error diagnostic of the translation unit.
+    core_groups = collections.defaultdict(lambda: collections.defaultdict(list))
     totals = collections.defaultdict(lambda: dict(total=0, pass_count=0))
     source_state = {}
     for file in reports:
@@ -70,8 +73,25 @@ def main():
                 raise SystemExit("THREE_LINUX_CENSUS=FAIL duplicate C owner")
             state["indices"].add(index)
             state["objects"].add(obj)
+            frontiers = row.get("core_frontiers")
+            if not isinstance(frontiers, list):
+                raise SystemExit("THREE_LINUX_CENSUS=FAIL missing Core frontier census")
+            core_indices = set()
+            for item in frontiers:
+                if (not isinstance(item, dict)
+                        or item.get("kind") not in ("UNSUPPORTED", "ERROR")
+                        or type(item.get("index")) is not int
+                        or item["index"] < 0
+                        or not isinstance(item.get("function"), str)
+                        or not re.fullmatch(r"[A-Za-z_][A-Za-z_0-9]*", item["function"])
+                        or item["index"] in core_indices):
+                    raise SystemExit("THREE_LINUX_CENSUS=FAIL invalid Core frontier identity")
+                core_indices.add(item["index"])
+                core_groups[(item["kind"], item["function"])][target].append(obj)
             totals[target]["total"] += 1
             if row.get("status") == "MINIC_S_PASS":
+                if frontiers:
+                    raise SystemExit("THREE_LINUX_CENSUS=FAIL successful TU with failed Core functions")
                 output_sha = row.get("asm_sha256")
                 if not isinstance(output_sha, str) or not SHA256.fullmatch(output_sha):
                     raise SystemExit("THREE_LINUX_CENSUS=FAIL output without valid SHA")
@@ -95,18 +115,32 @@ def main():
         for signature, targets in groups.items()
     ]
     diagnostics.sort(key=lambda e: -e["total"])
+    core_frontiers = [
+        dict(kind=kind, function=function,
+             total=sum(len(v) for v in owners.values()),
+             targets={k: sorted(v) for k, v in owners.items()})
+        for (kind, function), owners in core_groups.items()
+    ]
+    core_frontiers.sort(key=lambda e: (-e["total"], e["kind"], e["function"]))
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(dict(
         schema="minic-linux-cross-target-diagnostic-census-v2",
         verdict="MINIC_S_DISCOVERY_ONLY_NOT_GNU_AS_LINK_OR_QEMU",
         compiler_sha256=next(iter(compilers)),
-        targets=totals, diagnostic_groups=diagnostics), indent=2) + "\n")
+        targets=totals, diagnostic_groups=diagnostics,
+        all_core_function_frontiers=core_frontiers), indent=2) + "\n")
     for arch, count in sorted(totals.items()):
         print(f"THREE_LINUX_MINIC_S target={arch} compiled={count['pass_count']}/{count['total']}")
     for item in diagnostics[:25]:
         targets = ",".join(sorted(item["targets"]))
         print(f"THREE_LINUX_DIAGNOSTIC total={item['total']} targets={targets} signature={item['diagnostic_signature'][:175]}")
-    print(f"THREE_LINUX_CENSUS=COMPLETE shards=21 diagnostic_signatures={len(diagnostics)} ROOT_CAUSE_REVIEW_REQUIRED=1 GNU_AS_link_QEMU=NOT_RUN")
+    for arch in TARGETS:
+        count = sum(len(item["targets"].get(arch, [])) for item in core_frontiers)
+        functions = sum(arch in item["targets"] for item in core_frontiers)
+        print(f"THREE_LINUX_ALL_CORE_FRONTIERS target={arch} failures={count} distinct_functions={functions}")
+    print(f"THREE_LINUX_CENSUS=COMPLETE shards=21 diagnostic_signatures={len(diagnostics)} "
+          f"all_core_function_groups={len(core_frontiers)} "
+          "ROOT_CAUSE_REVIEW_REQUIRED=1 GNU_AS_link_QEMU=NOT_RUN")
 
 if __name__ == "__main__":
     main()

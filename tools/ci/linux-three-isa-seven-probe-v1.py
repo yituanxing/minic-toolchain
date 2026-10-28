@@ -3,7 +3,17 @@
 
 Discovery only: a successful .s is NOT GNU assembly/link/QEMU proof.
 """
-import argparse,concurrent.futures,hashlib,json,re,subprocess,sys
+import argparse,concurrent.futures,hashlib,json,os,re,subprocess,sys
+CORE_FUNCTION_FAILURE = re.compile(
+    r"^MINIC_CORE_FUNCTION_FAILURE kind=(UNSUPPORTED|ERROR) index=(\\d+) "
+    r"function=([A-Za-z_][A-Za-z_0-9]*)$", re.MULTILINE)
+
+def all_core_function_frontiers(stderr):
+    # The compiler's post-prune validation has already lowered all reachable
+    # functions; preserve every result, not only the first error per TU.
+    return [dict(kind=m.group(1), index=int(m.group(2)), function=m.group(3))
+            for m in CORE_FUNCTION_FAILURE.finditer(stderr)]
+
 from pathlib import Path
 def sha(p):
     h=hashlib.sha256()
@@ -43,21 +53,30 @@ def probe(a):
                      "-fno-pie","-fno-PIE","-fno-pic","-fno-PIC"}
             if any(x not in allowed for x in row["minic_flags"]):
                 raise ValueError("invalid MiniC replay flags for "+obj)
+            env=os.environ.copy()
+            env["MINIC_CORE_FAILURE_CENSUS"]="1"
             p=subprocess.run([str(compiler),"--target="+a.target+"-linux",
                               *row["minic_flags"],"-S",str(file),"-o",str(asm)],
-                             capture_output=True,timeout=a.timeout)
+                             capture_output=True,timeout=a.timeout,env=env)
             ok=p.returncode==0 and asm.is_file() and asm.stat().st_size>0
             if not ok:asm.unlink(missing_ok=True)
-            lines=p.stderr.decode(errors="replace").splitlines()
+            error_text=p.stderr.decode(errors="replace")
+            lines=error_text.splitlines()
+            core_frontiers=all_core_function_frontiers(error_text)
+            if core_frontiers and ok:
+                raise ValueError("MiniC succeeded despite failed Core functions: "+obj)
+            if len({f["index"] for f in core_frontiers}) != len(core_frontiers):
+                raise ValueError("duplicate Core frontier identity for "+obj)
             diag=next((v for v in lines if "error:" in v.lower()),lines[0] if lines else "")
             diag=re.sub(r"[^ :]+\.(?:i|c|h):\d+(?::\d+)?:","<source>:",diag)[:240]
             return dict(index=row["index"],object=obj,status="MINIC_S_PASS" if ok else "MINIC_FAIL",
                         diagnostic=diag,input_sha256=row["sha256"],
+                        core_frontiers=core_frontiers,
                         asm_sha256=sha(asm) if ok else None)
         except subprocess.TimeoutExpired:
             asm.unlink(missing_ok=True)
             return dict(index=row["index"],object=obj,status="MINIC_TIMEOUT",diagnostic="timeout",
-                        input_sha256=row["sha256"])
+                        core_frontiers=[],input_sha256=row["sha256"])
     with concurrent.futures.ThreadPoolExecutor(max_workers=a.workers) as executor:
         data=list(executor.map(process,selected))
     buckets={}
