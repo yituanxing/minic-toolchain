@@ -455,7 +455,6 @@ void minias_destroy(MiniAs *as);
 bool minias_parse_file(MiniAs *as, const char *path);
 bool minias_emit_sections(MiniAs *as);
 bool minias_write_elf64(MiniAs *as, const char *path);
-MiniAsCfiABI minias_cfi_abi(const MiniAs *);
 bool minias_cfi_directive(MiniAs *as, const char *op,
                           const char *args, size_t line);
 bool minias_cfi_emit(MiniAs *as);
@@ -571,6 +570,8 @@ typedef struct MiniAsCfiABI {
     unsigned initial_cfa_offset;
     bool initial_ra_saved;
 } MiniAsCfiABI;
+
+MiniAsCfiABI minias_cfi_abi(const MiniAs *);
 
 typedef struct MiniAsTargetOps {
     char comment_prefix;
