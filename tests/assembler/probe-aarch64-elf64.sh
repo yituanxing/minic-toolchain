@@ -1019,7 +1019,7 @@ echo 'MINIAS_AARCH64_PROFILE=PASS GNU_armv8_5_lse_crypto_profile_and_inst_lists'
 # Shared GNU macro vararg and blank tests (also used by Linux arm64).
 cat >"$work/a64-vararg.s" <<'A64_VARARG'
 .arch armv8-a
-.text
+.data
 .macro emit first, rest:vararg
     .byte \first
     .ifnb \rest
@@ -1037,8 +1037,8 @@ emit 5
 A64_VARARG
 "$MINIAS" --target=aarch64 -o "$work/vararg-mini.o" "$work/a64-vararg.s"
 "$AARCH64_AS" -o "$work/vararg-gnu.o" "$work/a64-vararg.s"
-"$AARCH64_OBJCOPY" -j .text -O binary "$work/vararg-mini.o" "$work/vararg-mini.bin"
-"$AARCH64_OBJCOPY" -j .text -O binary "$work/vararg-gnu.o" "$work/vararg-gnu.bin"
+"$AARCH64_OBJCOPY" -j .data -O binary "$work/vararg-mini.o" "$work/vararg-mini.bin"
+"$AARCH64_OBJCOPY" -j .data -O binary "$work/vararg-gnu.o" "$work/vararg-gnu.bin"
 cmp "$work/vararg-mini.bin" "$work/vararg-gnu.bin"
 echo 'MINIAS_COMMON_MACRO_VARARG_IFB=PASS GNU_BYTES'
 # Local symbol differences are absolute even in a different output
