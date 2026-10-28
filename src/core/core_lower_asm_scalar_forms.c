@@ -1301,6 +1301,29 @@ MinicCoreLowerStatus core_asm_try_empty_barrier_scalar_forms(
     *handled = false;
     MinicCoreInlineAsmId inline_asm_id;
     MinicCoreInstruction instruction;
+    /* Linux BUG/BUG_ON uses asm volatile("") immediately before
+     * __builtin_unreachable(). An empty volatile template has no ISA
+     * instruction or operand effect, but unlike its nonvolatile counterpart
+     * it remains an ordered compiler effect. Preserve it as the canonical
+     * target-neutral compiler barrier rather than inventing an opaque
+     * hardware instruction or dropping the volatile statement. */
+    if (source->is_volatile && !source->is_goto &&
+        source->template_text != NULL && source->template_length == 0U &&
+        source->output_count == 0U && source->input_count == 0U &&
+        source->label_count == 0U && source->clobber_count == 0U &&
+        source->register_clobber_count == 0U &&
+        !source->has_memory_clobber) {
+        (void)memset(&instruction, 0, sizeof(instruction));
+        instruction.kind = MINIC_CORE_INSTRUCTION_COMPILER_BARRIER;
+        instruction.span = statement->span;
+        instruction.type = minic_type_void();
+        instruction.result = MINIC_CORE_VALUE_INVALID;
+        *handled = true;
+        return minic_core_function_append_effect_instruction(
+            context->function, context->block_id, &instruction)
+            ? MINIC_CORE_LOWER_OK : MINIC_CORE_LOWER_ERROR;
+    }
+
     /* GNU's nonvolatile asm("") with no operands, labels or clobbers
      * contains no instructions, output values, or compiler barriers.
      * The original upstream Zstd uses this exact ordering-only source

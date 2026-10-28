@@ -221,6 +221,14 @@ jobs:
             --backend minic --targets "${{ matrix.target }}" \
             --minic "$GITHUB_WORKSPACE/build/runtime-ci/bin/minic-cc" \
             --build-dir build/runtime-verdict --jobs 4
+      - name: GNU Linux empty volatile ASM Core effect on four native ISAs
+        shell: bash
+        env:
+          MINIC_CC: ${{ github.workspace }}/build/runtime-ci/bin/minic-cc
+          MINIC_EMPTY_TARGET: ${{ matrix.target }}
+        run: |
+          set -Eeuo pipefail
+          bash tests/compiler/c0/probe-gnu-empty-volatile-core-family.sh
       - name: GNU Linux %c immediate and symbolic BUG table assembly oracle
         if: matrix.target == 'x86_64'
         shell: bash
