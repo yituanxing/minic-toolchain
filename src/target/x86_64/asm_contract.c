@@ -266,12 +266,7 @@ static bool x86_trycas_source(
  * GNU extends a C signed/unsigned integer carrier over the same 4- or
  * 8-byte raw machine bit pattern. All 10 forms share ONE target ISA table;
  * optional lock/smp-latch is a policy bit, not a second emitter. */
-typedef struct X86LinuxAtomicRmw {
-    const char *opcode;
-    size_t width;
-    bool locked;
-} X86LinuxAtomicRmw;
-static const X86LinuxAtomicRmw x86_linux_atomic_rmw[] = {
+static const MinicX86AtomicRmwDesc x86_linux_atomic_rmw[] = {
     {"addl",4U,false}, {"subl",4U,false}, {"andl",4U,false},
     {"orl",4U,false}, {"xorl",4U,false},
     {"addq",8U,false}, {"subq",8U,false}, {"andq",8U,false},
@@ -286,7 +281,7 @@ const MinicX86AtomicRmwDesc *minic_x86_64_atomic_rmw_description(
     const size_t index=(size_t)form;
     return (index>0U && index<=sizeof(x86_linux_atomic_rmw)/
                               sizeof(x86_linux_atomic_rmw[0])) ?
-        (const MinicX86AtomicRmwDesc *)&x86_linux_atomic_rmw[index-1U] : NULL;
+        &x86_linux_atomic_rmw[index-1U] : NULL;
 }
 MinicX86AtomicRmw minic_x86_64_atomic_rmw_form(const char *text,size_t len) {
     static const char smp[]=
@@ -303,7 +298,7 @@ MinicX86AtomicRmw minic_x86_64_atomic_rmw_form(const char *text,size_t len) {
     compact[j]='\\0';
     for(k=0U;k<sizeof(x86_linux_atomic_rmw)/
                     sizeof(x86_linux_atomic_rmw[0]);++k) {
-        const X86LinuxAtomicRmw *d=&x86_linux_atomic_rmw[k];
+        const MinicX86AtomicRmwDesc *d=&x86_linux_atomic_rmw[k];
         for(variant=0U;variant<2U;++variant) {
             const int n=snprintf(expected,sizeof(expected),"%s%s%s,%s",
                 d->locked?smp:"",d->opcode,
