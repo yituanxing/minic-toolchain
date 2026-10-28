@@ -880,12 +880,20 @@ cat >"$work/local-diff.s" <<'A64_DIFF'
     nop
 .Ldelta_end:
     nop
+.globl global_delta_start
+global_delta_start:
+    nop
+.weak weak_delta_end
+weak_delta_end:
+    nop
 .data
 .local delta_fields
 delta_fields:
     .byte .Ldelta_end-.Ldelta_start
     .long .Ldelta_end-.Ldelta_start
     .quad .Ldelta_end-.Ldelta_start
+    .quad weak_delta_end-global_delta_start
+    .long weak_delta_end-global_delta_start
 A64_DIFF
 "$MINIAS" --target=aarch64 -o "$work/diff-mini.o" "$work/local-diff.s"
 "$AARCH64_AS" -o "$work/diff-gnu.o" "$work/local-diff.s"

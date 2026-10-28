@@ -599,6 +599,33 @@ readelf -Wr "$work/x86-gnu.o" | awk '$3 ~ /^R_X86_64_/ {print $1,$3,$5,$6,$7}' |
     LC_ALL=C sort >"$work/x86-gnu-kinds.txt"
 diff -u "$work/x86-gnu-kinds.txt" "$work/x86-mini-kinds.txt"
 
+# Same-section symbol differences are absolute even for externally
+# visible GLOBAL/WEAK bindings; no x86 ELF64 ADD/SUB relocation exists.
+cat >"$work/x86-defined-diff.s" <<'X86_DEFINED_DIFF'
+.text
+.globl defined_delta_start
+defined_delta_start:
+    nop
+.weak defined_delta_weak
+defined_delta_weak:
+    nop
+.globl defined_delta_end
+defined_delta_end:
+    nop
+.data
+    .quad defined_delta_end-defined_delta_start
+    .quad defined_delta_weak-defined_delta_start
+    .quad defined_delta_start-defined_delta_end
+    .long defined_delta_end-defined_delta_weak
+    .byte defined_delta_end-defined_delta_start
+X86_DEFINED_DIFF
+"$MINIAS" --target=x86_64 -o "$work/x86-defined-mini.o" "$work/x86-defined-diff.s"
+as --64 -o "$work/x86-defined-gnu.o" "$work/x86-defined-diff.s"
+objcopy -j .data -O binary "$work/x86-defined-mini.o" "$work/x86-defined-mini.bin"
+objcopy -j .data -O binary "$work/x86-defined-gnu.o" "$work/x86-defined-gnu.bin"
+cmp "$work/x86-defined-mini.bin" "$work/x86-defined-gnu.bin"
+readelf -Wr "$work/x86-defined-mini.o" | grep -q 'There are no relocations'
+echo 'MINIAS_COMMON_SAME_SECTION_BINDINGS=PASS GNU_BYTE_EQUAL GLOBAL_WEAK_LOCAL'
 cat > "$work/la.s" <<'ASM_LA'
 .text
 .globl entry_la

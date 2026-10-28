@@ -2664,19 +2664,20 @@ static bool emit_symbol_difference(MiniAs *as,
     uint32_t sub_type = as->target->fixup_relocation_type(MINIAS_FIXUP_SUB, width);
 
     if (lhs != NULL && rhs != NULL && lhs->defined && rhs->defined &&
-        /* Same-section local differences remain absolute even when
-         * the DATA fragment containing the field is in another section. */
+        /* If both names resolve to the same real section, its load
+         * address cancels. GNU GAS resolves GLOBAL, WEAK and local names
+         * alike, including when the data value belongs to a different
+         * output section. Never fold SHN_COMMON/UNDEF or cross-section
+         * operands: they are not absolute without linker semantics.
+         * Keep target ADD/SUB pairs on RISC-V/LoongArch, where relocation
+         * contracts are required by kernel .alternative patching. */
         lhs->section == rhs->section &&
-        /* Keep native RISC-V ADD/SUB relocations when the target supports
-         * them: local symbol differences in .alternative are linker-relaxed
-         * entities. Fold only on ABIs with no pair relocation contract. */
-        (add_type == 0U || sub_type == 0U) &&
-        lhs->bind == MINIAS_STB_LOCAL && rhs->bind == MINIAS_STB_LOCAL &&
-        strncmp(lhs->name, ".L", 2U) == 0 && strncmp(rhs->name, ".L", 2U) == 0) {
-        int64_t difference =
-            (int64_t)lhs->value + lhs_expr->addend -
-            ((int64_t)rhs->value + rhs_expr->addend);
-        uint64_t value = (uint64_t)difference;
+        (lhs->section >= 0 || lhs->section == MINIAS_SECTION_ABS) &&
+        (add_type == 0U || sub_type == 0U)) {
+        /* Modular arithmetic gives correct low 8/16/32/64 bits and avoids
+         * undefined signed overflow for large absolute/forward symbols. */
+        uint64_t value=(lhs->value+(uint64_t)lhs_expr->addend)-
+                       (rhs->value+(uint64_t)rhs_expr->addend);
         unsigned char bytes[8];
         unsigned int i;
 
