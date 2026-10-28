@@ -3996,33 +3996,38 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
         }
     }
 
-    space = text;
-    while (*space != '\0' && !isspace((unsigned char)*space)) {
-        ++space;
-    }
-    if (*space != '\0') {
-        *space = '\0';
-        args = minias_trim(space + 1);
-    } else {
-        args = space;
-        /* GNU GAS accepts function-like data directive spelling,
-         * including .inst(EXPR), .long(EXPR), .byte(EXPR), with no
-         * intervening space. Recognize it by the existing Common
-         * width/TargetInfo hook, NOT an AArch64 string special case.
-         * Limit to one fully enclosing pair; malformed directives
-         * remain errors rather than swallowing text. */
+    {
+        char *glued=NULL;
+        /* GNU's .inst(EXPR) and .long(EXPR) syntax permits interior
+         * whitespace and nested C-preprocessed arithmetic. It must be
+         * recognized BEFORE normal token splitting, which would otherwise
+         * treat the first space inside EXPR as the end of the directive.
+         * The width hook is shared and TargetInfo-owned: no A64-specific
+         * lexer path and no accepting arbitrary unknown .directives. */
         if(text[0]=='.') {
             char *open=strchr(text,'(');
-            if(open!=NULL) {
-                char *last=text+strlen(text)-1U;
-                if(last>open && *last==')') {
+            char *space_first=strpbrk(text," \t");
+            if(open && (!space_first || open<space_first)) {
+                char *end=text+strlen(text);
+                while(end>open+1U && isspace((unsigned char)end[-1]))--end;
+                if(end>open+1U && end[-1]==')') {
                     *open='\0';
                     if(data_width(as,text)!=0U) {
-                        *last='\0';
-                        args=open+1U;
-                    } else *open='(';
+                        end[-1]='\0';
+                        glued=minias_trim(open+1U);
+                    }else *open='(';
                 }
             }
+        }
+        if(glued)args=glued;
+        else {
+            space=text;
+            while(*space!='\0' && !isspace((unsigned char)*space))
+                ++space;
+            if(*space) {
+                *space='\0';
+                args=minias_trim(space+1U);
+            }else args=space;
         }
     }
     op = text;

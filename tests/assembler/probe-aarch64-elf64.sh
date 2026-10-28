@@ -128,6 +128,8 @@ external_probe:
     // GNU Linux macros emit .inst(<logical expression>) without space.
     .inst(0xd5200000|((((3)<<19))))
     .inst((0xd503201f))
+    // Real GNU CPP style: spaces INSIDE a glued function-like .inst.
+    .inst(0xd5200000|((((3) << 19) | ((0) << 16) | ((1) << 12) | ((0) << 8) | ((3) << 5) | (2))))
     // Native GNU/LLVM checked A64 W-exclusive subword variants.
     ldxrb w2, [x3]
     ldaxrb w2, [x3]

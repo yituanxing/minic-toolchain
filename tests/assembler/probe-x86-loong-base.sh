@@ -1987,7 +1987,7 @@ echo 'MINIAS_X86_REP=PASS GNU_GAS_BYTES rep_repz_repe_repne_repnz canonical_66_R
 # not independent target assembler implementations.
 cat > "$work/common-glued.s" <<'COMMON_GLUED'
 .data
-.long(3+4)
+.long(3 + 4)
 .byte(2)
 .quad(0x11223344)
 COMMON_GLUED
