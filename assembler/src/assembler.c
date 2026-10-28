@@ -2324,6 +2324,53 @@ static bool parse_data_symbol_absolute_tail(MiniAs *as,const char *text,
     return true;
 }
 
+/* A relocation-free constant from two earlier labels in the SAME
+ * subsection, plus an absolute arithmetic tail. No source-specific labels,
+ * guessed addresses, Target grammar, or cross-section cancellation. */
+bool minias_evaluate_same_subsection_difference(MiniAs *as,
+                                                 const char *expression,
+                                                 int64_t *value) {
+    char *copy,*body,*p,*suffix=NULL;
+    MiniAsSymbolDifference pair;
+    MiniAsSymbol *lhs,*rhs;
+    unsigned depth=0U;
+    int64_t delta,extra=0;
+    bool ok=false;
+    if(!as || !expression || !value)return false;
+    copy=minias_strdup(expression);
+    if(!copy)return false;
+    body=strip_outer_parens(copy);
+    for(p=body;*p;++p) {
+        if(*p=='('){++depth;continue;}
+        if(*p==')'){
+            if(depth==0U)goto done;
+            --depth;continue;
+        }
+        /* Split only the final absolute addition AFTER the label delta.
+         * Inner (2*4) additions remain part of the Common expression. */
+        if(depth==0U && *p=='+' && strchr(body,'-') &&
+           (size_t)(p-body)>(size_t)(strchr(body,'-')-body))suffix=p;
+    }
+    if(depth!=0U)goto done;
+    if(suffix) {
+        *suffix++='\0';
+        if(!evaluate_absolute_expression(as,minias_trim(suffix),&extra))
+            goto done;
+    }
+    if(!minias_parse_symbol_difference(body,&pair))goto done;
+    lhs=minias_get_symbol(as,pair.positive.name,false);
+    rhs=minias_get_symbol(as,pair.negative.name,false);
+    if(!lhs || !rhs || !lhs->defined || !rhs->defined ||
+       lhs->section<0 || lhs->section!=rhs->section ||
+       lhs->subsection!=rhs->subsection ||
+       !minias_resolve_symbol_difference(as,&pair,&delta) ||
+       !checked_add_i64(delta,extra,value))goto done;
+    ok=true;
+done:
+    free(copy);
+    return ok;
+}
+
 static bool parse_data_symbol_addend(const char *text,
                                      MiniAsSymbolExpr *expr) {
     char *copy;
