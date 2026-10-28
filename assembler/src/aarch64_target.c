@@ -479,11 +479,11 @@ static bool parse_integer_family(MiniAsMCInst *inst,
        parse_a64_reg(t[0],&rd,&wd,&spd) &&
        parse_a64_reg(t[1],&rn,&wn,&spn) && wd==wn &&
        !(rd==31U&&!spd) && !(rn==31U&&!spn) &&
+       parse_signed_number(t[2],&imm) &&
        strncmp(t[3],"lsl",3U)==0 &&
        isspace((unsigned char)t[3][3])) {
         int64_t shift;
-        if(!parse_signed_number(t[2],&imm) ||
-           !parse_signed_number(minias_trim(t[3]+3U),&shift) ||
+        if(!parse_signed_number(minias_trim(t[3]+3U),&shift) ||
            shift!=12 || imm<0 || imm>4095 ||
            ((!strcmp(op,"adds") || !strcmp(op,"subs")) && spd))
             return false;
