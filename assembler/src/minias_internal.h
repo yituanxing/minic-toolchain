@@ -421,6 +421,10 @@ typedef struct MiniAs {
     bool output_elf32; /* Common object layout, not target ISA XLEN. */
     const size_t *forced_long_branch_ids;
     size_t forced_long_branch_count;
+    /* Common-owned cache for stable symbol anchors and forced branch IDs. */
+    void *layout_anchor_graph;
+    unsigned char *forced_long_branch_bitmap;
+    size_t forced_long_branch_bitmap_size;
     int current_section;
     uint32_t current_subsection;
     int previous_section;
@@ -456,6 +460,7 @@ MiniAsSubsection *minias_find_subsection(MiniAs *, int, uint32_t);
 MiniAsSubsection *minias_ensure_subsection(MiniAs *, int, uint32_t);
 bool minias_finalize_subsection_layout(MiniAs *);
 bool minias_force_long_branch_for_stmt(const MiniAs *, size_t);
+void minias_layout_destroy(MiniAs *);
 bool minias_solve_fragment_layout(MiniAs *, size_t **, size_t *, size_t *,
                                   bool *, FILE *);
 bool minias_parse_common_space(MiniAs *, const char *, uint64_t *, uint8_t *);

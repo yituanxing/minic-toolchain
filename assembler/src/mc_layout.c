@@ -116,15 +116,35 @@ bool minias_finalize_subsection_layout(MiniAs *as) {
 }
 
 
+/* Stable Common Fragment graph retained throughout the parse and all layout
+ * iterations. Neither the Target nor the output writer owns symbol anchors.
+ * Four anchor arrays are allocated once, reused across every fixed point. */
+typedef struct MiniAsAnchorGraph {
+    size_t *start_head,*end_head,*start_next,*end_next;
+    size_t stmt_count,symbol_count,relayout_count;
+} MiniAsAnchorGraph;
+
+void minias_layout_destroy(MiniAs *as) {
+    MiniAsAnchorGraph *g=(MiniAsAnchorGraph *)as->layout_anchor_graph;
+    if(g) {
+        free(g->start_head);free(g->end_head);
+        free(g->start_next);free(g->end_next);
+        free(g);
+        as->layout_anchor_graph=NULL;
+    }
+    free(as->forced_long_branch_bitmap);
+    as->forced_long_branch_bitmap=NULL;
+    as->forced_long_branch_bitmap_size=0U;
+}
+
 /* Statement ordinal is stable across re-layout; macro source lines are not. */
 bool minias_force_long_branch_for_stmt(const MiniAs *as, size_t statement_id) {
     size_t i;
-
-    for (i = 0U; i < as->forced_long_branch_count; ++i) {
-        if (as->forced_long_branch_ids[i] == statement_id) {
-            return true;
-        }
-    }
+    if(as->forced_long_branch_bitmap!=NULL &&
+       statement_id<as->forced_long_branch_bitmap_size)
+        return as->forced_long_branch_bitmap[statement_id]!=0U;
+    for(i=0U;i<as->forced_long_branch_count;++i)
+        if(as->forced_long_branch_ids[i]==statement_id)return true;
     return false;
 }
 
@@ -140,10 +160,27 @@ bool minias_force_long_branch_for_stmt(const MiniAs *as, size_t statement_id) {
  * typed deferred-expression fragments. */
 static bool minias_relayout_fragments(MiniAs *as) {
     size_t n = as->stmt_count, nsym = as->symbol_count;
+    MiniAsAnchorGraph *graph=(MiniAsAnchorGraph *)as->layout_anchor_graph;
     size_t *start_head = NULL, *end_head = NULL;
     size_t *start_next = NULL, *end_next = NULL;
     size_t i;
     bool ok = false;
+    bool new_index=graph==NULL;
+    if(new_index) {
+        graph=calloc(1U,sizeof(*graph));
+        if(!graph) {
+            minias_set_error(as,"out-of-memory:anchor-graph");
+            return false;
+        }
+        graph->stmt_count=n;
+        graph->symbol_count=nsym;
+        as->layout_anchor_graph=graph;
+    }else if(graph->stmt_count!=n || graph->symbol_count!=nsym) {
+        minias_set_error(as,"anchor-graph-cardinality-mutated");
+        return false;
+    }
+    ++graph->relayout_count;
+    if(new_index) {
 
     if (n == SIZE_MAX || n + 1U > SIZE_MAX / sizeof(size_t) ||
         (nsym != 0U && nsym > SIZE_MAX / sizeof(size_t))) {
@@ -154,6 +191,10 @@ static bool minias_relayout_fragments(MiniAs *as) {
     end_head = malloc((n + 1U) * sizeof(size_t));
     start_next = malloc((nsym == 0U ? 1U : nsym) * sizeof(size_t));
     end_next = malloc((nsym == 0U ? 1U : nsym) * sizeof(size_t));
+    graph->start_head=start_head;
+    graph->end_head=end_head;
+    graph->start_next=start_next;
+    graph->end_next=end_next;
     if (start_head == NULL || end_head == NULL ||
         start_next == NULL || end_next == NULL) {
         minias_set_error(as, "out-of-memory:fragment-anchors");
@@ -163,9 +204,6 @@ static bool minias_relayout_fragments(MiniAs *as) {
         start_head[i] = SIZE_MAX;
         end_head[i] = SIZE_MAX;
     }
-    for (i = 0U; i < as->subsection_count; ++i)
-        as->subsections[i].size = 0U;
-
     for (i = 0U; i < nsym; ++i) {
         MiniAsSymbol *sym = &as->symbols[i];
         if (sym->has_fragment_anchor && sym->defined && sym->section >= 0) {
@@ -190,6 +228,14 @@ static bool minias_relayout_fragments(MiniAs *as) {
         }
     }
 
+    } else {
+        start_head=graph->start_head;
+        end_head=graph->end_head;
+        start_next=graph->start_next;
+        end_next=graph->end_next;
+    }
+    for(i=0U;i<as->subsection_count;++i)
+        as->subsections[i].size=0U;
     for (i = 0U; i <= n; ++i) {
         size_t index;
         for (index = start_head[i]; index != SIZE_MAX;
@@ -264,10 +310,6 @@ static bool minias_relayout_fragments(MiniAs *as) {
     }
     ok = minias_finalize_subsection_layout(as);
 done:
-    free(start_head);
-    free(end_head);
-    free(start_next);
-    free(end_next);
     return ok;
 }
 
@@ -355,14 +397,33 @@ static bool collect_out_of_range_branches(MiniAs *as,
                                           size_t *count,
                                           size_t *capacity,
                                           bool *added) {
-    size_t i;
-    *added = false;
+    size_t i,j;
+    *added=false;
+    if(as->forced_long_branch_bitmap==NULL) {
+        as->forced_long_branch_bitmap=
+            calloc(as->stmt_count?as->stmt_count:1U,1U);
+        if(!as->forced_long_branch_bitmap) {
+            minias_set_error(as,"out-of-memory:branch-membership");
+            return false;
+        }
+        as->forced_long_branch_bitmap_size=as->stmt_count;
+        for(j=0U;j<*count;++j) {
+            size_t id=(*ids)[j];
+            if(id>=as->stmt_count ||
+               as->stmts[id].kind!=MINIAS_STMT_INSN ||
+               as->forced_long_branch_bitmap[id]) {
+                minias_set_error(as,"invalid-forced-fragment-id:%zu",id);
+                return false;
+            }
+            as->forced_long_branch_bitmap[id]=1U;
+        }
+    }
+    as->forced_long_branch_ids=*ids;
+    as->forced_long_branch_count=*count;
     if (as->target->relax_instruction == NULL) return true;
     for (i = 0U; i < as->stmt_count; ++i) {
         const MiniAsStmt *stmt = &as->stmts[i];
         uint32_t expanded = stmt->size;
-        size_t j;
-        bool known = false;
         if (stmt->kind != MINIAS_STMT_INSN ||
             !as->target->relax_instruction(as, stmt, &expanded)) {
             if (as->error[0] != '\0') return false;
@@ -374,16 +435,16 @@ static bool collect_out_of_range_branches(MiniAs *as,
                              stmt->op);
             return false;
         }
-        for (j = 0U; j < *count; ++j) {
-            if ((*ids)[j] == i) { known = true; break; }
-        }
-        if (known) continue;
+        if(as->forced_long_branch_bitmap[i])continue;
         if (!minias_grow_array((void **)ids, capacity, sizeof(**ids), *count + 1U)) {
             minias_set_error(as, "out-of-memory:branch-relaxation");
             return false;
         }
         (*ids)[(*count)++] = i;
-        *added = true;
+        as->forced_long_branch_bitmap[i]=1U;
+        as->forced_long_branch_ids=*ids;
+        as->forced_long_branch_count=*count;
+        *added=true;
     }
     return true;
 }
@@ -455,9 +516,15 @@ bool minias_solve_fragment_layout(MiniAs *as,
             return false;
         }
     }
-    if(passes!=0U && diagnostic!=NULL &&
-       getenv("MINIAS_TRACE_RELAYOUT")!=NULL)
-        fprintf(diagnostic,"minias-fragment-relayout:inplace-passes=%zu\n",
-                passes);
+    if(diagnostic!=NULL && getenv("MINIAS_TRACE_RELAYOUT")!=NULL) {
+        const MiniAsAnchorGraph *g=
+            (const MiniAsAnchorGraph *)as->layout_anchor_graph;
+        if(passes!=0U)
+            fprintf(diagnostic,"minias-fragment-relayout:inplace-passes=%zu\n",
+                    passes);
+        fprintf(diagnostic,
+                "minias-fragment-graph:anchors_built=%u relayouts=%zu branches=%zu reparse=0\n",
+                (unsigned)(g!=NULL),g?g->relayout_count:0U,*forced_count);
+    }
     return true;
 }

@@ -666,6 +666,7 @@ static void release_macro(MiniAsMacro *macro) {
 
 void minias_destroy(MiniAs *as) {
     size_t i;
+    minias_layout_destroy(as);
 
     for (i = 0U; i < as->section_count; ++i) {
         free(as->sections[i].name);
