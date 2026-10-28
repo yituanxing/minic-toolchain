@@ -6404,6 +6404,52 @@ static bool read_repeat_block(MiniAs *as,
     return false;
 }
 
+/* GNU GAS permits semicolon-separated assignments and complete .rept/.irp
+ * blocks on ONE physical source line (Linux head_64.S page tables).  Route
+ * logical statements back through the existing Common repeat/macro engine;
+ * do not recognize repeat syntax a second time in Target parsers. */
+static bool process_inline_repeat_line(MiniAs *as,const char *source,
+                                       size_t line,bool *handled) {
+    MiniAsSourceLine *pieces=NULL;
+    size_t count=0U,capacity=0U,i;
+    char *copy,*cursor;
+    bool opener=false,closer=false,ok=true;
+    *handled=false;
+    if(strchr(source,';')==NULL)return true;
+    copy=minias_strdup(source);
+    if(copy==NULL) {
+        minias_set_error(as,"out-of-memory:inline-repeat");return false;
+    }
+    strip_comment(copy,as->target);
+    cursor=copy;
+    while(cursor!=NULL) {
+        char *end=find_statement_separator(cursor);
+        char argument[256];
+        int kind;
+        if(end!=NULL)*end='\0';
+        kind=classify_repeat_line(as,cursor,argument,sizeof(argument),NULL);
+        if(kind<0 || !grow_array((void **)&pieces,&capacity,
+                                   sizeof(*pieces),count+1U)) {
+            minias_set_error(as,"out-of-memory:inline-repeat-segments");
+            ok=false;break;
+        }
+        pieces[count].text=cursor;
+        pieces[count].line=line;
+        ++count;
+        if(kind==MINIAS_REPEAT_REPT || kind==MINIAS_REPEAT_IRP)opener=true;
+        if(kind==MINIAS_REPEAT_ENDR)closer=true;
+        cursor=end==NULL?NULL:end+1U;
+    }
+    if(ok && opener && closer) {
+        *handled=true;
+        ok=process_source_range(as,pieces,0U,count);
+    }
+    for(i=0U;i<count;++i)pieces[i].text=NULL; /* owned by copy */
+    free(pieces);
+    free(copy);
+    return ok;
+}
+
 bool minias_parse_file(MiniAs *as, const char *path) {
     FILE *file = fopen(path, "r");
     char linebuf[65536];
@@ -6427,6 +6473,16 @@ bool minias_parse_file(MiniAs *as, const char *path) {
             minias_set_error(as, "line-too-long:line=%zu", line_no);
             fclose(file);
             return false;
+        }
+
+        /* A complete inline repetition is lexed as logical statements
+         * before physical-line .macro/.rept classification. */
+        {
+            bool consumed=false;
+            if(!process_inline_repeat_line(as,linebuf,line_no,&consumed)) {
+                fclose(file);return false;
+            }
+            if(consumed)continue;
         }
 
         {
