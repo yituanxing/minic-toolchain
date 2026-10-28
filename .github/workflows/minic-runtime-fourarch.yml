@@ -43,6 +43,7 @@ on:
       - "tests/compiler/c0/probe-aarch64-linux-pointer-release-acquire.sh"
       - "tests/compiler/c0/probe-aarch64-linux-acquire-load.sh"
       - "tests/compiler/c0/probe-aarch64-linux-sysreg-writes.sh"
+      - "tests/compiler/c0/probe-aarch64-large-structured-asm-spills.sh"
       - "tests/compiler/c0/probe-direct-lp64-weak-section-qemu.sh"
       - "tests/compiler/c0/probe-lp64-core-record-snapshot-qemu.sh"
       - "tests/compiler/c0/probe-aarch64-linux-zero-operand-hints.sh"
@@ -562,6 +563,12 @@ jobs:
           set -Eeuo pipefail
           bash tests/compiler/c0/probe-x86-linux-ordered-tsc.sh "$GITHUB_WORKSPACE/build/runtime-ci/bin/minic-cc"
           bash tests/compiler/c0/probe-x86-linux-static-record-zero.sh "$GITHUB_WORKSPACE/build/runtime-ci/bin/minic-cc"
+      - name: Real AArch64 GNU/QEMU large structured-ASM spill boundaries
+        if: matrix.target == 'aarch64'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          bash tests/compiler/c0/probe-aarch64-large-structured-asm-spills.sh "$GITHUB_WORKSPACE/build/runtime-ci/bin/minic-cc"
       - name: GNU 6.6.143 privileged AArch64 write_sysreg ISA-only compile oracle
         if: matrix.target == 'aarch64'
         shell: bash

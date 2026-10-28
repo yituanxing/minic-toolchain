@@ -1,4 +1,5 @@
 #include "target/aarch64/asm_contract.h"
+#include "target/common/lp64_frame.h"
 #include "target/common/direct_linux_bug_asm.h"
 #include "frontend/const_eval.h"
 #include <string.h>
@@ -826,7 +827,7 @@ static bool aarch64_linux_io_dependency_emit(
        ins->value.structured_inline_asm.operand_count!=2U)return false;
     for(i=0U;i<2U;++i)
         if(b[i].operand_index!=i||b[i].value>=fn->value_count||
-           b[i].value>4095U/8U||b[i].early_clobber||
+           !aarch64_linux_structured_spill_slot_valid(b[i].value)||b[i].early_clobber||
            b[i].has_fixed_register_binding||
            b[i].kind!=(i==0U?
             MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT:
@@ -936,7 +937,7 @@ static bool aarch64_linux_encoded_sysreg_emit(
        info->register_clobber_count||
        ins->value.structured_inline_asm.operand_count!=1U||
        op[0].operand_index!=0U||op[0].value>=fn->value_count||
-       op[0].value>4095U/8U||op[0].early_clobber||
+       !aarch64_linux_structured_spill_slot_valid(op[0].value)||op[0].early_clobber||
        op[0].has_fixed_register_binding||
        op[0].kind!=MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT||
        !minic_type_pointee(fn->values[op[0].value].type,&type)||
@@ -1043,7 +1044,7 @@ static bool aarch64_linux_tlbi_emit(
     if(form>8U)
         return fprintf(out,"  .arch armv8.5-a\n  tlbi %s\n",mnemonic)>=0;
     if(!b||b[0].operand_index!=0U||b[0].value>=fn->value_count||
-       b[0].value>4095U/8U||b[0].early_clobber||
+       !aarch64_linux_structured_spill_slot_valid(b[0].value)||b[0].early_clobber||
        b[0].has_fixed_register_binding||
        b[0].kind!=MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT||
        !minic_type_is_integer(fn->values[b[0].value].type))return false;
@@ -1660,6 +1661,17 @@ bool minic_aarch64_qualify_inline_asm(
     contract->kinds[2] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     return true;
 }
+/* Transport contract for every structured GNU asm Core SSA operand.
+ * Every register input and lvalue address lives in an eight-byte Core
+ * frame slot.  The shared LP64 plan already permits 1 MiB frames and
+ * our target-owned large-SP legalizer expands unencodable LDR Xt slots.
+ * The old 4095/8 bound confused the raw byte imm12 with scaled AArch64
+ * unsigned-imm12 and rejected original Linux on slot #512 and above.
+ * Frame validity, not encoded ISA immediates, is the sole Core gate. */
+static bool aarch64_linux_structured_spill_slot_valid(size_t slot) {
+    return slot <= MINIC_LARGE_FRAME_MAX / 8U;
+}
+
 bool minic_aarch64_emit_qualified_structured_asm(
     FILE *out, const MinicDirectLP64BlockContext *ctx,
     const MinicCoreInstruction *ins) {
@@ -1696,7 +1708,7 @@ bool minic_aarch64_emit_qualified_structured_asm(
             if (ops[k].operand_index!=k ||
                 ops[k].has_fixed_register_binding ||
                 ops[k].value>=fn->value_count ||
-                ops[k].value>4095U/8U ||
+                !aarch64_linux_structured_spill_slot_valid(ops[k].value) ||
                 ops[k].kind!=(k==0U?
                     MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT:
                     k==1U?MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE:
@@ -1756,7 +1768,7 @@ bool minic_aarch64_emit_qualified_structured_asm(
                 operand[0].operand_index != 0U ||
                 operand[0].has_fixed_register_binding || operand[0].early_clobber ||
                 operand[0].value >= fn->value_count ||
-                operand[0].value > 4095U / 8U ||
+                !aarch64_linux_structured_spill_slot_valid(operand[0].value) ||
                 !minic_type_is_pointer(fn->values[operand[0].value].type))
                 return false;
             return fprintf(out,
@@ -1772,7 +1784,7 @@ bool minic_aarch64_emit_qualified_structured_asm(
                 operand[0].operand_index != 0U ||
                 operand[0].has_fixed_register_binding || operand[0].early_clobber ||
                 operand[0].value >= fn->value_count ||
-                operand[0].value > 4095U / 8U ||
+                !aarch64_linux_structured_spill_slot_valid(operand[0].value) ||
                 (!minic_type_equal(fn->values[operand[0].value].type,
                                    minic_type_unsigned_long()) &&
                  !minic_type_equal(fn->values[operand[0].value].type,
@@ -1819,7 +1831,7 @@ bool minic_aarch64_emit_qualified_structured_asm(
             operand[0].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT ||
             operand[0].early_clobber || operand[0].has_fixed_register_binding ||
             operand[0].value >= fn->value_count ||
-            operand[0].value > (size_t)4095U / 8U ||
+            !aarch64_linux_structured_spill_slot_valid(operand[0].value) ||
             !minic_type_pointee(fn->values[operand[0].value].type, &pointee) ||
             !aarch64_linux_sysreg_u64_type(pointee))
             return false;
@@ -1851,7 +1863,7 @@ bool minic_aarch64_emit_qualified_structured_asm(
             ops[0].early_clobber || ops[1].early_clobber ||
             ops[0].has_fixed_register_binding || ops[1].has_fixed_register_binding ||
             ops[0].value >= fn->value_count || ops[1].value >= fn->value_count ||
-            ops[0].value > 4095U / 8U || ops[1].value > 4095U / 8U ||
+            !aarch64_linux_structured_spill_slot_valid(ops[0].value) || !aarch64_linux_structured_spill_slot_valid(ops[1].value) ||
             !minic_type_pointee(fn->values[ops[0].value].type, &output_type) ||
             !aarch64_stlr_type(output_type, d->width) ||
             !minic_type_is_pointer(fn->values[ops[1].value].type))
@@ -1907,7 +1919,7 @@ bool minic_aarch64_emit_qualified_structured_asm(
                 operands[i].has_fixed_register_binding ||
                 operands[i].early_clobber ||
                 operands[i].value >= fn->value_count ||
-                operands[i].value > 4095U / 8U)
+                !aarch64_linux_structured_spill_slot_valid(operands[i].value))
                 return false;
         if (!minic_type_pointee(fn->values[operands[0].value].type,
                                 &out_type) ||
@@ -1964,7 +1976,7 @@ bool minic_aarch64_emit_qualified_structured_asm(
             ops[0].early_clobber || ops[1].early_clobber ||
             ops[0].value >= fn->value_count ||
             ops[1].value >= fn->value_count ||
-            ops[0].value > 4095U / 8U || ops[1].value > 4095U / 8U ||
+            !aarch64_linux_structured_spill_slot_valid(ops[0].value) || !aarch64_linux_structured_spill_slot_valid(ops[1].value) ||
             !minic_type_is_pointer(fn->values[ops[1].value].type) ||
             !aarch64_stlr_type(fn->values[ops[0].value].type, store->width))
             return false;
@@ -2001,7 +2013,7 @@ bool minic_aarch64_emit_qualified_structured_asm(
            ops[0].has_fixed_register_binding||ops[1].has_fixed_register_binding||
            ops[0].early_clobber||ops[1].early_clobber||
            ops[0].value>=fn->value_count||ops[1].value>=fn->value_count||
-           ops[0].value>4095U/8U||ops[1].value>4095U/8U||
+           !aarch64_linux_structured_spill_slot_valid(ops[0].value)||!aarch64_linux_structured_spill_slot_valid(ops[1].value)||
            !minic_type_pointee(fn->values[ops[0].value].type,&dst_ty)||
            !minic_type_pointee(fn->values[ops[1].value].type,&mem_ty)||
            !aarch64_stlr_type(dst_ty,w)||!aarch64_stlr_memory_type(mem_ty,w))
@@ -2033,7 +2045,7 @@ bool minic_aarch64_emit_qualified_structured_asm(
             b[1].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT ||
             b[1].has_fixed_register_binding || b[1].early_clobber ||
             b[0].value >= fn->value_count || b[1].value >= fn->value_count ||
-            b[0].value > 4095U / 8U || b[1].value > 4095U / 8U ||
+            !aarch64_linux_structured_spill_slot_valid(b[0].value) || !aarch64_linux_structured_spill_slot_valid(b[1].value) ||
             !minic_type_pointee(fn->values[b[0].value].type, &pointee) ||
             !aarch64_stlr_memory_type(pointee, width) ||
             !aarch64_stlr_type(fn->values[b[1].value].type, width))
@@ -2069,7 +2081,7 @@ bool minic_aarch64_emit_qualified_structured_asm(
                 const MinicCoreStructuredInlineAsmOperand *op=&ops[i];
                 if(op->operand_index!=i||op->early_clobber||
                    op->has_fixed_register_binding||op->value>=fn->value_count||
-                   op->value>4095U/8U||
+                   !aarch64_linux_structured_spill_slot_valid(op->value)||
                    op->kind!=(i==3U?
                        MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT:
                        i==2U?
@@ -2123,7 +2135,7 @@ bool minic_aarch64_emit_qualified_structured_asm(
                 if (op->operand_index != i || op->early_clobber ||
                     op->has_fixed_register_binding ||
                     op->value >= fn->value_count ||
-                    op->value > 4095U / 8U ||
+                    !aarch64_linux_structured_spill_slot_valid(op->value) ||
                     op->kind != (i == 3U ?
                         MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT :
                         i == 2U ? MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE :
@@ -2186,7 +2198,7 @@ bool minic_aarch64_emit_qualified_structured_asm(
                 const MinicCoreStructuredInlineAsmOperand *op = &ops[i];
                 if (op->operand_index != i || op->early_clobber ||
                     op->has_fixed_register_binding || op->value >= fn->value_count ||
-                    op->value > 4095U / 8U ||
+                    !aarch64_linux_structured_spill_slot_valid(op->value) ||
                     op->kind != (i == 3U ?
                         MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT :
                         i == 2U ? MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE :
@@ -2242,7 +2254,7 @@ bool minic_aarch64_emit_qualified_structured_asm(
             if (ops[i].operand_index != i || ops[i].early_clobber ||
                 ops[i].has_fixed_register_binding ||
                 ops[i].value >= fn->value_count ||
-                ops[i].value > 4095U / 8U ||
+                !aarch64_linux_structured_spill_slot_valid(ops[i].value) ||
                 ops[i].kind != (i < 2U ?
                     MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT :
                     i == 2U ? MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE :
@@ -2313,7 +2325,7 @@ bool minic_aarch64_emit_qualified_structured_asm(
             if (op->operand_index != i || op->early_clobber ||
                 op->has_fixed_register_binding ||
                 op->value >= fn->value_count ||
-                op->value > 4095U / 8U ||
+                !aarch64_linux_structured_spill_slot_valid(op->value) ||
                 op->kind != (i == 4U ?
                     MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT :
                     i == 3U ? MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE :
@@ -2374,7 +2386,7 @@ bool minic_aarch64_emit_qualified_structured_asm(
             if (b[i].operand_index != i || b[i].early_clobber ||
                 b[i].has_fixed_register_binding ||
                 b[i].value >= fn->value_count ||
-                b[i].value > 4095U / 8U ||
+                !aarch64_linux_structured_spill_slot_valid(b[i].value) ||
                 b[i].kind != (i == 3U ?
                     MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT :
                     i == 2U ? MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE :
@@ -2436,7 +2448,7 @@ bool minic_aarch64_emit_qualified_structured_asm(
                     MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT) ||
                 ops[i].has_fixed_register_binding || ops[i].early_clobber ||
                 ops[i].value >= fn->value_count ||
-                ops[i].value > 4095U / 8U)
+                !aarch64_linux_structured_spill_slot_valid(ops[i].value))
                 return false;
         }
         if (!minic_type_pointee(fn->values[ops[0].value].type, &pointee) ||
@@ -2477,7 +2489,7 @@ bool minic_aarch64_emit_qualified_structured_asm(
             b[i].kind != (i == 0U ?
                 MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT :
                 MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT) ||
-            b[i].value > (size_t)4095U / 8U)
+            !aarch64_linux_structured_spill_slot_valid(b[i].value))
             return false;
         ty = fn->values[b[i].value].type;
         if (i == 0U && !minic_type_pointee(ty, &ty)) return false;

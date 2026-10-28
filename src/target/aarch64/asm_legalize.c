@@ -6,7 +6,12 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* Original AArch64 large SP access and dynamic stack-base text passes. */
+/* AAPCS64 IP1 (x17) is reserved for large stack spill addressing.
+ * The earlier x12 scratch silently clobbered LIVE target atomic LL/SC
+ * status/compare registers during synthetic [sp,#large] rewriting.
+ * x17 is not a live operand in the target structured-ASM machine
+ * templates; source Core operand slots are stack materialized. */
+ /* Original AArch64 large SP access and dynamic stack-base text passes. */
 bool minic_aarch64_legalize_large_sp_memory(const char *path) {
     FILE *input = fopen(path, "rb"), *output, *rewritten;
     char line[512], copy[8192];
@@ -29,22 +34,22 @@ bool minic_aarch64_legalize_large_sp_memory(const char *path) {
              strncmp(op, "str", 3U) == 0) && offset > 4095U) {
             const uint64_t imm = (uint64_t)offset;
             unsigned int shift;
-            if (fprintf(output, "  movz x12, #%" PRIu64 "\n",
+            if (fprintf(output, "  movz x17, #%" PRIu64 "\n",
                         imm & UINT64_C(0xffff)) < 0) {
                 success = false; break;
             }
             for (shift = 16U; shift <= 48U; shift += 16U) {
                 if (((imm >> shift) & UINT64_C(0xffff)) != 0U &&
-                    fprintf(output, "  movk x12, #%" PRIu64
+                    fprintf(output, "  movk x17, #%" PRIu64
                             ", lsl #%u\n",
                             (imm >> shift) & UINT64_C(0xffff), shift) < 0) {
                     success = false; break;
                 }
             }
             if (!success ||
-                fputs(fixed_x19 ? "  add x12, x19, x12\n" :
-                                   "  add x12, sp, x12\n", output) == EOF ||
-                fprintf(output, "  %s %s, [x12]\n", op, reg) < 0) {
+                fputs(fixed_x19 ? "  add x17, x19, x17\n" :
+                                   "  add x17, sp, x17\n", output) == EOF ||
+                fprintf(output, "  %s %s, [x17]\n", op, reg) < 0) {
                 success = false; break;
             }
         } else if (fputs(line, output) == EOF) {
