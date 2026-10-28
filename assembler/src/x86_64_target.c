@@ -3458,7 +3458,6 @@ static const MiniAsTargetOps ops={
     .cfi_stack_reg=7U,
     .cfi_initial_cfa_offset=8U,
     .cfi_address_size=8U,
-    .cfi_initial_cfa_offset=8U,
     .cfi_initial_ra_saved=true
 };
 const MiniAsTargetOps *minias_target_x86_64(void){return &ops;}
