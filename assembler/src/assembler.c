@@ -633,6 +633,8 @@ void minias_destroy(MiniAs *as) {
             for (k = 0U; k < mc->count; ++k) {
                 if (mc->operands[k].kind == MINIAS_MC_SYMBOL)
                     free(mc->operands[k].symbol);
+                else if(mc->operands[k].kind == MINIAS_MC_SYMBOL_DIFFERENCE)
+                    free(mc->operands[k].difference);
                 else if (mc->operands[k].kind == MINIAS_MC_MEMORY) {
                     if (mc->operands[k].memory != NULL) {
                         free(mc->operands[k].memory->symbol);
@@ -1659,6 +1661,72 @@ bool minias_evaluate_absolute_operand(MiniAs *as,const char *text,
  * addend, not an inferred displacement or a parallel Target evaluator.
  * Both labels must ALREADY be defined in the SAME subsection, where
  * their difference is invariant under later section layout. */
+/* A GNU expression such as (identity_mapped - relocate_kernel) is
+ * absolute only AFTER both label anchors exist and subsection layout is
+ * finalized. Preserve the two typed symbols throughout parse and measure:
+ * parsing a forward symbol as zero or inventing a relocation is wrong.
+ * Common owns syntax and final same-section semantics for all targets. */
+bool minias_parse_symbol_difference(const char *expression,
+                                    MiniAsSymbolDifference *out) {
+    char *copy,*value,*minus;
+    size_t n,i;
+    unsigned level;
+    bool wrapping;
+    bool ok=false;
+    if(!expression || !out)return false;
+    copy=minias_strdup(expression);
+    if(!copy)return false;
+    value=minias_trim(copy);
+    /* Strip whole-expression parentheses, never partial subexpressions. */
+    for(;;) {
+        n=strlen(value);
+        if(n<3U || value[0]!='(' || value[n-1U]!=')')break;
+        level=0U;wrapping=true;
+        for(i=0U;i<n;++i) {
+            if(value[i]=='(')++level;
+            else if(value[i]==')') {
+                if(level==0U){wrapping=false;break;}
+                --level;
+                if(level==0U && i!=n-1U){wrapping=false;break;}
+            }
+        }
+        if(!wrapping || level!=0U)break;
+        value[n-1U]='\0';
+        value=minias_trim(value+1U);
+    }
+    minus=strchr(value,'-');
+    if(minus && minus!=value) {
+        *minus++='\0';
+        if(minias_parse_symbol_addend(minias_trim(value),&out->positive) &&
+           minias_parse_symbol_addend(minias_trim(minus),&out->negative))
+            ok=true;
+    }
+    free(copy);
+    return ok;
+}
+
+bool minias_resolve_symbol_difference(MiniAs *as,
+                                      const MiniAsSymbolDifference *pair,
+                                      int64_t *value) {
+    const MiniAsSymbol *positive,*negative;
+    int64_t first,second,delta;
+    if(!as || !pair || !value)return false;
+    positive=minias_get_symbol(as,pair->positive.name,false);
+    negative=minias_get_symbol(as,pair->negative.name,false);
+    if(!positive || !negative ||
+       !positive->defined || !negative->defined ||
+       positive->section<0 || positive->section!=negative->section ||
+       positive->value>INT64_MAX || negative->value>INT64_MAX)
+        return false;
+    first=(int64_t)positive->value;
+    second=(int64_t)negative->value;
+    if(!checked_add_i64(first,pair->positive.addend,&first) ||
+       !checked_add_i64(second,pair->negative.addend,&second) ||
+       !checked_sub_i64(first,second,&delta))return false;
+    *value=delta;
+    return true;
+}
+
 bool minias_fold_local_difference_addend(MiniAs *as,const char *expression,
                                          MiniAsSymbolExpr *out) {
     char *copy=minias_strdup(expression),*plus,*group,*minus,*local_extra;
