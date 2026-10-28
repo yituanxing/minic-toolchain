@@ -2115,6 +2115,7 @@ static bool parse_symbol_minus_dot(const char *text, MiniAsSymbolExpr *expr) {
     char *suffix;
     char *lhs;
     bool ok;
+    uint64_t trailing_addend = 0U;
 
     if (text == NULL || expr == NULL) {
         return false;
@@ -2132,11 +2133,30 @@ static bool parse_symbol_minus_dot(const char *text, MiniAsSymbolExpr *expr) {
     *minus = '\0';
     suffix = strip_outer_parens(minias_trim(minus + 1));
     if (strcmp(suffix, ".") != 0) {
-        free(copy);
-        return false;
+        /* GNU accepts `symbol - . + addend` as a single PC-relative
+         * relocation. Keep the semantic symbol expression typed;
+         * do not have ELF targets parse or rewrite source strings. */
+        char *suffix_tail=suffix;
+        if(*suffix_tail++!='.') {
+            free(copy);return false;
+        }
+        while(isspace((unsigned char)*suffix_tail))++suffix_tail;
+        if(*suffix_tail++!='+') {
+            free(copy);return false;
+        }
+        suffix_tail=minias_trim(suffix_tail);
+        if(!parse_u64(suffix_tail,&trailing_addend) ||
+           trailing_addend>INT64_MAX) {
+            free(copy);return false;
+        }
     }
     lhs = strip_outer_parens(minias_trim(normalized));
     ok = minias_parse_symbol_addend(lhs, expr);
+    if(ok && trailing_addend!=0U) {
+        if(expr->addend>INT64_MAX-(int64_t)trailing_addend)
+            ok=false;
+        else expr->addend+=(int64_t)trailing_addend;
+    }
     free(copy);
     return ok;
 }
