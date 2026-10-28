@@ -210,6 +210,26 @@ static const Aarch64RawIoStore *aarch64_raw_io_store(
     return NULL;
 }
 
+
+/* Original arm64 barrier.h four-width hardware acquire load. */
+static size_t aarch64_load_acquire_width(const char *s,size_t len) {
+    static const char *const kinds[]={
+        "ldarb%w0,%1","ldarh%w0,%1","ldar%w0,%1","ldar%0,%1"
+    };
+    char norm[64];size_t i,n=0U;
+    if(!s||!len||len>=sizeof(norm))return 0U;
+    for(i=0U;i<len;++i) {
+        const char c=s[i];
+        if(c==' '||c==9)continue;
+        if(c==10||c==13||c==';'||n+1U>=sizeof(norm))return 0U;
+        norm[n++]=c;
+    }
+    norm[n]=0;
+    for(i=0U;i<4U;++i)
+        if(strcmp(norm,kinds[i])==0)return (size_t)1U<<i;
+    return 0U;
+}
+
 /* Real Linux arm64 store-release GNU ASM: release ordering is hardware. */
 static size_t aarch64_stlr_width(const char *s, size_t len) {
     static const char *const form[] = {
@@ -735,6 +755,34 @@ bool minic_aarch64_qualify_inline_asm(
             return true;
         }
     }
+
+    /* Full Linux load-acquire C source pattern: =r output, Q memory
+     * dependency, and GNU memory barrier. Not a plain Core LOAD. */
+    if(program&&src&&contract&&src->is_volatile&&!src->is_goto&&
+       src->output_count==1U&&src->input_count==1U&&
+       src->outputs&&src->inputs&&!src->label_count&&
+       src->clobber_count==1U&&src->has_memory_clobber&&
+       !src->register_clobber_count&&
+       constraint(&src->outputs[0],"=r")&&
+       constraint(&src->inputs[0],"Q")) {
+        const size_t width=aarch64_load_acquire_width(
+            src->template_text,src->template_length);
+        const MinicExpression *dst=minic_c0_program_expression(
+            program,src->outputs[0].expression);
+        const MinicExpression *mem=minic_c0_program_expression(
+            program,src->inputs[0].expression);
+        if(width&&dst&&mem&&dst->value_category==MINIC_VALUE_LVALUE&&
+           mem->value_category==MINIC_VALUE_LVALUE&&
+           !minic_type_is_const(dst->type)&&
+           aarch64_stlr_type(dst->type,width)&&
+           aarch64_stlr_type(mem->type,width)) {
+            contract->operand_count=2U;
+            contract->kinds[0]=MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
+            contract->kinds[1]=MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT;
+            return true;
+        }
+    }
+
     /* Linux arm64 hardware prefetch is an explicit volatile ISA hint,
      * transported as a generic Core pointer scalar. No generic PRFM
      * passthrough or hardcoded function names in Frontend/Core. */
@@ -1407,6 +1455,43 @@ bool minic_aarch64_emit_qualified_structured_asm(
             (size_t)ops[1].value * 8U,
             store->instruction) >= 0;
     }
+
+    /* Original GNU barrier.h acquire load: exact byte/half/word/64-bit
+     * LDAR hardware and matching-width C output writes. */
+    if(ins->value.structured_inline_asm.operand_count==2U &&
+       aarch64_load_acquire_width(info->template_text,info->template_length)){
+        const size_t w=aarch64_load_acquire_width(
+            info->template_text,info->template_length);
+        static const char *const rd[]={
+            "ldarb w9, [x10]","ldarh w9, [x10]",
+            "ldar w9, [x10]","ldar x9, [x10]"};
+        static const char *const wr[]={"strb w9","strh w9","str w9","str x9"};
+        const size_t n=w==1U?0U:w==2U?1U:w==4U?2U:3U;
+        const MinicCoreStructuredInlineAsmOperand *ops=
+            ins->value.structured_inline_asm.operands;
+        MinicType dst_ty,mem_ty;
+        if(!ops||!info->is_volatile||info->is_goto||
+           !info->has_memory_clobber||info->register_clobber_count||
+           ops[0].operand_index!=0U||ops[1].operand_index!=1U||
+           ops[0].kind!=MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT||
+           ops[1].kind!=MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT||
+           ops[0].has_fixed_register_binding||ops[1].has_fixed_register_binding||
+           ops[0].early_clobber||ops[1].early_clobber||
+           ops[0].value>=fn->value_count||ops[1].value>=fn->value_count||
+           ops[0].value>4095U/8U||ops[1].value>4095U/8U||
+           !minic_type_pointee(fn->values[ops[0].value].type,&dst_ty)||
+           !minic_type_pointee(fn->values[ops[1].value].type,&mem_ty)||
+           !aarch64_stlr_type(dst_ty,w)||!aarch64_stlr_type(mem_ty,w))
+            return false;
+        return fprintf(out,
+            "  ldr x10, [sp, #%zu]\n"
+            "  %s\n"
+            "  ldr x11, [sp, #%zu]\n"
+            "  %s, [x11]\n",
+            (size_t)ops[1].value*8U,rd[n],
+            (size_t)ops[0].value*8U,wr[n])>=0;
+    }
+
     if (ins->value.structured_inline_asm.operand_count == 2U) {
         b = ins->value.structured_inline_asm.operands;
         static const char *const op[] = {

@@ -236,6 +236,54 @@ static bool emit_linux_bitops(
 
 
 
+
+/* One target-owned EDX:EAX clock/PMC emitter. Read hardware first,
+ * then store exact GNU typed output widths to address-backed Core slots. */
+static bool emit_x86_counter(FILE *out,const MinicC0Program *p,
+    const MinicTargetInfo *t,const MinicCoreFunction *fn,
+    const MinicX86Frame *frame,const MinicCoreInstruction *ins,
+    const MinicCoreInlineAsm *info) {
+    const unsigned int f=minic_x86_64_linux_counter_form(
+        info->template_text,info->template_length);
+    const MinicCoreStructuredInlineAsmOperand *b=
+        ins->value.structured_inline_asm.operands;
+    const size_t count=ins->value.structured_inline_asm.operand_count;
+    static const char *const r32[]={"%eax","%edx"};
+    static const char *const r64[]={"%rax","%rdx"};
+    MinicType ty;size_t w,i;bool sign;
+    if(!out||!p||!t||!fn||!frame||!info||!ins||!b||!f||
+       !info->is_volatile||info->is_goto||
+       info->has_memory_clobber||
+       info->register_clobber_count!=(f==3U?1U:0U)||
+       (f==3U&&(!info->register_clobbers||
+         !clobber_is(&info->register_clobbers[0],"ecx")))||
+       count!=(f==2U?3U:2U))return false;
+    for(i=0U;i<count;++i) {
+        if(b[i].value>=fn->value_count||b[i].operand_index!=i||
+           b[i].has_fixed_register_binding||b[i].early_clobber||
+           b[i].kind!=(i<2U?
+             MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT:
+             MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT))return false;
+        if(i<2U){
+            if(!minic_type_pointee(fn->values[b[i].value].type,&ty)||
+               !minic_x86_64_scalar_width(p,t,ty,&w,&sign)||
+               (w!=4U&&w!=8U))return false;
+        }else if(!minic_x86_64_scalar_width(
+                 p,t,fn->values[b[i].value].type,&w,&sign)||w!=4U)return false;
+    }
+    if(f==2U&&!x86_value_load(out,frame,b[2].value,"%rcx"))return false;
+    if(fputs(f==1U?"  rdtsc\n":f==2U?"  rdpmc\n":"  rdtscp\n",out)==EOF)
+        return false;
+    for(i=0U;i<2U;++i){
+        if(!minic_type_pointee(fn->values[b[i].value].type,&ty)||
+           !minic_x86_64_scalar_width(p,t,ty,&w,&sign)||
+           !x86_value_load(out,frame,b[i].value,"%r11")||
+           fprintf(out,"  %s %s, (%%r11)\n",
+              w==4U?"movl":"movq",w==4U?r32[i]:r64[i])<0)return false;
+    }
+    return true;
+}
+
 /* The only 6-way Linux port-I/O emitter: native privileged in/out.
  * No fake C memory effects and no arbitrary-template passthrough. */
 static bool emit_linux_port_io(FILE *out,const MinicC0Program *program,
@@ -652,6 +700,9 @@ bool minic_x86_64_emit_structured_asm(
     bindings = ins->value.structured_inline_asm.operands;
     if (!info->template_text)
         return false;
+    if (minic_x86_64_linux_counter_form(
+            info->template_text,info->template_length))
+        return emit_x86_counter(out,program,target,fn,frame,ins,info);
     if (minic_x86_64_port_io_form(
             info->template_text,info->template_length)!=MINIC_X86_PORT_IO_NONE)
         return emit_linux_port_io(out,program,target,fn,frame,ins,info);

@@ -93,6 +93,64 @@ static bool clobber_is(const MinicInlineAsmRegisterClobber *op, const char *s) {
  * operand constraints and exact instruction sequence are checked together. */
 /* Only integer operands of the same real x86 width; never silently
  * convert a user-supplied operand or drop the hardware condition flags. */
+
+/* Complete x86 EDX:EAX counter family, GNU 32/64-bit output carriers. */
+unsigned int minic_x86_64_linux_counter_form(const char *s,size_t len) {
+    static const char *const names[]={"rdtsc","rdpmc","rdtscp"};
+    char buf[32];size_t i,n=0U;
+    if(!s||!len||len>=sizeof(buf))return 0U;
+    for(i=0U;i<len;++i) {
+        const char c=s[i];
+        if(c==' '||c==9||c==10||c==13)continue;
+        if(n+1U>=sizeof(buf))return 0U;
+        buf[n++]=c;
+    }
+    buf[n]=0;
+    for(i=0U;i<3U;++i)if(strcmp(buf,names[i])==0)return (unsigned int)i+1U;
+    return 0U;
+}
+static bool x86_counter_source(const MinicC0Program *p,const MinicInlineAsm *s,
+                               MinicTargetInlineAsmContract *ct) {
+    const unsigned int f=s?minic_x86_64_linux_counter_form(
+        s->template_text,s->template_length):0U;
+    const MinicExpression *e0,*e1,*v;
+    MinicType t0,t1,ti;
+    if(!p||!s||!ct||!f||!s->is_volatile||s->is_goto||
+       !s->outputs||s->output_count!=2U||
+       s->input_count!=(f==2U?1U:0U)||(f==2U&&!s->inputs)||
+       s->label_count||s->has_memory_clobber||
+       s->clobber_count!=(f==3U?1U:0U)||
+       s->register_clobber_count!=(f==3U?1U:0U)||
+       (f==3U&&(!s->register_clobbers||
+        !clobber_is(&s->register_clobbers[0],"ecx")))||
+       !c_is(&s->outputs[0],"=a")||!c_is(&s->outputs[1],"=d")||
+       (f==2U&&!c_is(&s->inputs[0],"c")))return false;
+    e0=minic_c0_program_expression(p,s->outputs[0].expression);
+    e1=minic_c0_program_expression(p,s->outputs[1].expression);
+    if(!e0||!e1||e0->value_category!=MINIC_VALUE_LVALUE||
+       e1->value_category!=MINIC_VALUE_LVALUE||
+       minic_type_is_const(e0->type)||minic_type_is_const(e1->type)||
+       !minic_type_unqualified(e0->type,&t0)||
+       !minic_type_unqualified(e1->type,&t1)||
+       !minic_type_equal(t0,t1)||t0.base_kind!=MINIC_TYPE_BASE_INT||
+       !minic_type_is_integer(t0)||t0.pointer_depth||
+       (t0.integer_rank!=MINIC_INTEGER_RANK_INT&&
+        t0.integer_rank!=MINIC_INTEGER_RANK_LONG&&
+        t0.integer_rank!=MINIC_INTEGER_RANK_LONG_LONG))return false;
+    if(f==2U){
+        v=minic_c0_program_expression(p,s->inputs[0].expression);
+        if(!v||!minic_type_unqualified(v->type,&ti)||
+           ti.base_kind!=MINIC_TYPE_BASE_INT||
+           !minic_type_is_integer(ti)||ti.pointer_depth||
+           ti.integer_rank!=MINIC_INTEGER_RANK_INT)return false;
+    }
+    ct->operand_count=f==2U?3U:2U;
+    ct->kinds[0]=MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
+    ct->kinds[1]=MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
+    if(f==2U)ct->kinds[2]=MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    return true;
+}
+
 static bool x86_nospec_source(const MinicC0Program *program,
                               const MinicInlineAsm *src) {
     const MinicExpression *out, *size, *index;
@@ -1009,6 +1067,8 @@ bool minic_x86_64_qualify_inline_asm(
     bool is_mulacc = false, is_muldiv = false;
     size_t i, count;
     if (!contract) return false;
+    if (x86_counter_source(program, source, contract))
+        return true;
     if (x86_port_io_source(program, source, contract))
         return true;
     if (x86_linux_atomic_rmw_source(program, source, contract))

@@ -61,6 +61,7 @@ on:
       - 'tests/compiler/c0/probe-linux-declaration-gates.sh'
       - 'tests/compiler/c0/probe-linux-global-prefix-attributes.sh'
       - 'tests/compiler/c0/probe-x86-linux-bitops.sh'
+      - 'tests/compiler/c0/probe-x86-linux-clock-msr.sh'
       - 'tests/compiler/c0/probe-x86-linux-port-io.sh'
       - 'tests/compiler/c0/probe-x86-linux-atomic-rmw.sh'
       - 'tests/compiler/c0/probe-x86-linux-atomic-cc.sh'
@@ -254,6 +255,7 @@ jobs:
           bash tests/compiler/c0/probe-linux-declaration-gates.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
           bash tests/compiler/c0/probe-linux-global-prefix-attributes.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
           bash tests/compiler/c0/probe-x86-linux-bitops.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
+          bash tests/compiler/c0/probe-x86-linux-clock-msr.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
           bash tests/compiler/c0/probe-x86-linux-port-io.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
           bash tests/compiler/c0/probe-x86-linux-atomic-rmw.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
           bash tests/compiler/c0/probe-x86-linux-atomic-cc.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
