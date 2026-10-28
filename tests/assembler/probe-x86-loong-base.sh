@@ -3055,3 +3055,39 @@ for target in x86_64 loongarch64; do
  cmp "$work/$target-irpmixed-mini.bin" "$work/$target-irpmixed-gnu.bin"
 done
 echo 'MINIAS_COMMON_IRP_MIXED_DELIMITERS=PASS GNU_5_values_x86_Loong'
+
+# Linux arch/x86/lib/retpoline.S opts into .debug_frame. Use the existing
+# Common real CFI encoder with SysV x86_64 Target CFA metadata; do not
+# discard or pretend that these directives are ELF-neutral.
+cat > "$work/x86-debug-cfi.s" <<'X86_DEBUG_CFI'
+.cfi_sections .debug_frame
+.text
+.globl x86_cfi_entry
+x86_cfi_entry:
+.cfi_startproc
+pushq %rbp
+.cfi_def_cfa_offset 16
+.cfi_offset 6,-16
+movq %rsp,%rbp
+.cfi_def_cfa_register 6
+.cfi_remember_state
+popq %rbp
+.cfi_def_cfa 7,8
+.cfi_restore 6
+.cfi_restore_state
+ret
+.cfi_endproc
+X86_DEBUG_CFI
+"$MINIAS" --target=x86_64 -o "$work/x86-cfi-mini.o" "$work/x86-debug-cfi.s"
+as --64 -o "$work/x86-cfi-gnu.o" "$work/x86-debug-cfi.s"
+objcopy -j .text -O binary "$work/x86-cfi-mini.o" "$work/x86-cfi-mini.bin"
+objcopy -j .text -O binary "$work/x86-cfi-gnu.o" "$work/x86-cfi-gnu.bin"
+cmp "$work/x86-cfi-mini.bin" "$work/x86-cfi-gnu.bin"
+readelf --debug-dump=frames "$work/x86-cfi-mini.o" >"$work/x86-cfi-mini.frames"
+readelf --debug-dump=frames "$work/x86-cfi-gnu.o" >"$work/x86-cfi-gnu.frames"
+for marker in 'CIE' 'FDE' 'DW_CFA_def_cfa_offset: 16' 'DW_CFA_offset: r6'; do
+ grep -q "$marker" "$work/x86-cfi-mini.frames"
+ grep -q "$marker" "$work/x86-cfi-gnu.frames"
+done
+readelf -Wr "$work/x86-cfi-mini.o" | grep -q 'R_X86_64_64'
+echo 'MINIAS_X86_DWARF_CFI=PASS GNU_text_real_debug_frame_CIE_FDE_and_reloc'
