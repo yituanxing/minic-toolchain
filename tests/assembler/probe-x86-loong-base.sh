@@ -1867,6 +1867,35 @@ for bad in 'shlx %edx,%rax,%rsi' 'sarx %ax,%rax,%rsi' \
     fi
 done
 echo 'MINIAS_X86_BMI2_GNU=PASS VEX_3REG_32_64_ALL_EXTENDED strict_invalid'
+
+# F3 0F BC/BD typed bit-scan counts, GNU register and memory bytes,
+# REX.W/high registers, RIP-relative relocation and strict invalid width.
+cat > "$work/x86-cnt.s" <<'CNT_GNU'
+.text
+lzcntl %eax,%ecx
+lzcntq %r12,%r9
+tzcntl %esi,%r10d
+tzcntq 16(%rsp),%r8
+lzcntl ext_lz(%rip),%eax
+CNT_GNU
+"$MINIAS" --target=x86_64 -o "$work/cnt-mini.o" "$work/x86-cnt.s"
+as --64 -o "$work/cnt-gnu.o" "$work/x86-cnt.s"
+objcopy -j .text -O binary "$work/cnt-mini.o" "$work/cnt-mini.bin"
+objcopy -j .text -O binary "$work/cnt-gnu.o" "$work/cnt-gnu.bin"
+cmp "$work/cnt-mini.bin" "$work/cnt-gnu.bin"
+readelf -Wr "$work/cnt-mini.o" > "$work/cnt-mini-rel.txt"
+readelf -Wr "$work/cnt-gnu.o" > "$work/cnt-gnu-rel.txt"
+grep -q 'R_X86_64_PC32.*ext_lz - 4' "$work/cnt-mini-rel.txt"
+grep -q 'R_X86_64_PC32.*ext_lz - 4' "$work/cnt-gnu-rel.txt"
+for bad in 'lzcntl %rax,%eax' 'tzcntq %eax,%rdi' 'lzcntq %eax,(%rsp)'; do
+    printf '.text\n%s\n' "$bad" > "$work/cnt-invalid.s"
+    if "$MINIAS" --target=x86_64 -o "$work/cnt-invalid.o" \
+       "$work/cnt-invalid.s" >/dev/null 2>"$work/cnt-invalid.err"; then
+       echo "GNU-invalid LZCNT/TZCNT accepted: $bad" >&2
+       exit 1
+    fi
+done
+echo 'MINIAS_X86_CNT=PASS GNU_BYTES_PCREL LZCNT_TZCNT_32_64'
 echo 'MINIAS_COMMON_NUMERIC_U64=PASS GNU_GAS_x86_LA64_exact_data_bytes'
 echo 'MINIAS_X86_SEGMENTED_INDIRECT=PASS GNU_AS_text_and_relocations segment_base_index_abs_rip=true indirect_memory_call_jmp=true absolute_symbol32S=true'
 echo 'MINIAS_TWO_TARGET_ORACLE=PASS x86_GNU_bytes=equal loong_GNU_bytes=equal ELF_machine=correct lp64d_v1=0x43 CET_endbr64=1 ALU_imm8_imm32=1 x86_ModRM_SIB_disp=1 x86_test_cmp_alu_memory=1 x86_scaled_index_SIB=1 LA_jr=1 LA_scaled_ptr14=1 LA_imm12_shift_upper20=1 invalid=reject'
