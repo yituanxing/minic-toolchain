@@ -88,6 +88,8 @@ static const char *aarch64_linux_mrs_register(const char *text, size_t len) {
         {"mrs%0,cntp_ctl_el0", "cntp_ctl_el0"},
         {"mrs%0,cntv_ctl_el0", "cntv_ctl_el0"},
         {"mrs%0,cntfrq_el0", "cntfrq_el0"},
+        {"mrs%0,cntvct_el0", "cntvct_el0"},
+        {"mrs%0,CurrentEL", "CurrentEL"},
         {"mrs%0,tcr_el1", "tcr_el1"},
         {"mrs%0,esr_el1", "esr_el1"},
         {"mrs%0,sctlr_el1", "sctlr_el1"},
@@ -1574,8 +1576,9 @@ bool minic_aarch64_qualify_inline_asm(
         src->register_clobber_count == 0U && !src->has_memory_clobber &&
         src->label_count == 0U &&
         aarch64_linux_mrs_register(src->template_text, src->template_length) &&
-        strcmp(aarch64_linux_mrs_register(
-                   src->template_text, src->template_length), "daif") == 0 &&
+        /* Original GNU Linux read_sysreg() uses asm volatile for all
+         * whitelisted hardware status registers, not only DAIF.
+         * Keep the exact register allowlist and typed output contract. */
         constraint(&src->outputs[0], "=r")) {
         expr = minic_c0_program_expression(program, src->outputs[0].expression);
         if (expr && expr->value_category == MINIC_VALUE_LVALUE &&
