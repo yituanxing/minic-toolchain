@@ -2879,14 +2879,14 @@ done
 echo 'MINIAS_COMMON_SIGNED_ABSOLUTE=PASS GNU_x86_Loong_signed_equ_mutable_set'
 
 # Identical 64-bit GNU GAS shifted same-section symbol differences
-# across x86 and Loong, including negative non-multiple floor rounding.
+# across x86 and Loong, with unsigned logical shift of negative diffs.
 cat > "$work/gnu-forward-shifted-diff.s" <<'GNU_SHIFT_DIFF'
 .data
 start:
 .byte 1
 .space 32
 .long ((end - start) >> 5)
-.long ((start - end) >> 5)
+.quad ((start - end) >> 5)
 end:
 .long ((forward_end-forward_start) >> 5)
 forward_start:

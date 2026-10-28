@@ -2640,8 +2640,9 @@ static bool parse_symbol_difference_divisor(const char *text,
     *operator_at='\0';
     if(!parse_u64(minias_trim(operator_at+(shift?2U:1U)),&n))
         goto done;
-    /* Signed >>5 is arithmetic floor division by 32; unlike /32,
-     * negative non-multiples round toward minus infinity. */
+    /* GAS section-symbol differences use unsigned 64-bit logical >>5:
+     * -33 >> 5 = 0x07fffffffffffffe, not signed -2 and not -1.
+     * Reject values that cannot fit in the destination .word/.long. */
     if(shift) {
         if(n>=63U)goto done;
         *divisor=UINT64_C(1)<<n;
@@ -3273,9 +3274,17 @@ static bool emit_symbol_difference_divided(MiniAs *as,
                          stmt->line);
         return false;
     }
-    quotient=diff/(int64_t)divisor;
-    if(arithmetic_shift && diff<0 && diff%(int64_t)divisor!=0)
-        --quotient;
+    if(arithmetic_shift) {
+        uint64_t shifted=(uint64_t)diff/divisor;
+        if(width<8U &&
+           shifted>((UINT64_C(1)<<(width*8U))-1U)) {
+            minias_set_error(as,
+                             "shifted-symbol-pair-field-overflow:line=%zu",
+                             stmt->line);
+            return false;
+        }
+        quotient=(int64_t)shifted;
+    }else quotient=diff/(int64_t)divisor;
     for(i=0U;i<width;++i)
         bytes[i]=(unsigned char)((uint64_t)quotient>>(8U*i));
     return minias_section_append(as,stmt->section,bytes,width);

@@ -2358,15 +2358,16 @@ cmp "$work/a64-signed-mini.bin" "$work/a64-signed-gnu.bin"
 echo 'MINIAS_COMMON_SIGNED_ABSOLUTE_A64=PASS GNU_mutable_set_equ_bytes'
 
 # GNU kernel kuser32 emits ((__kuser_helper_end - __kuser_helper_start)
-# >> 5). Preserve signed arithmetic right-shift for NEGATIVE differences,
-# not a truncating /32 approximation; symbols may be forward references.
+# >> 5). GNU section-difference shifts are unsigned LOGICAL shifts:
+# negative -33 >>5 exceeds .word, but fits .quad. Original forward
+# references are resolved at final Common fragment emission.
 cat > "$work/a64-forward-shifted-diff.s" <<'A64_SHIFTED_DIFF'
 .data
 __kuser_helper_start:
 .byte 1
 .space 32
 .word ((__kuser_helper_end - __kuser_helper_start) >> 5)
-.word ((__kuser_helper_start - __kuser_helper_end) >> 5)
+.quad ((__kuser_helper_start - __kuser_helper_end) >> 5)
 __kuser_helper_end:
 .word ((forward_end - forward_start) >> 5)
 forward_start:
