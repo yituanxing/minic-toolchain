@@ -377,6 +377,9 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
          * 0F B6/B7 zero-extension and 63 sign-extension. */
         {"movzbl",0,0x1b6U,false},{"movzbq",0,0x1b6U,true},
         {"movzwl",0,0x1b7U,false},{"movzwq",0,0x1b7U,true},
+        /* MOVSX is identical ModR/M ownership; only 0F BE/BF differs. */
+        {"movsbl",0,0x1beU,false},{"movsbq",0,0x1beU,true},
+        {"movswl",0,0x1bfU,false},{"movswq",0,0x1bfU,true},
         {"movslq",0,0x63U,true},
         /* Explicit scalar widths, all reuse typed ModR/M, SIB and Fixup. */
         {"movb",0x88U,0x8aU,false},{"cmpb",0x38U,0x3aU,false},
@@ -686,9 +689,12 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
                 }
             }
         }
-        /* MOVZX source byte/word and independent destination width. */
+        /* MOVZX/MOVSX source byte/word with independently typed W/L/Q
+         * destination. One target MCInst implements both ISA opcode groups. */
         if((!strcmp(s->op,"movzbl") || !strcmp(s->op,"movzbq") ||
-            !strcmp(s->op,"movzwl") || !strcmp(s->op,"movzwq")) &&
+            !strcmp(s->op,"movzwl") || !strcmp(s->op,"movzwq") ||
+            !strcmp(s->op,"movsbl") || !strcmp(s->op,"movsbq") ||
+            !strcmp(s->op,"movswl") || !strcmp(s->op,"movswq")) &&
            ((s->op[4]=='b' && (x64_register8(src,&first) ||
                                x64_high_register8(src,&first))) ||
             (s->op[4]=='w' && x64_register16(src,&first))) &&
@@ -699,7 +705,9 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
             /* GNU AH/CH/DH/BH require no REX, even on a WIDE destination. */
             if(legacy_high && (second>=8U || wd))goto invalid;
             m->opcode=X64_MOVZX_REG;m->count=2U;
-            m->encoding=(s->op[4]=='b'?0xb6U:0xb7U)|
+            m->encoding=(s->op[4]=='b'?
+                         (s->op[3]=='z'?0xb6U:0xbeU):
+                         (s->op[3]=='z'?0xb7U:0xbfU))|
                         (legacy_high?0x800U:0U);
             m->operands[0].kind=MINIAS_MC_REGISTER;
             m->operands[0].reg=first;
@@ -1465,7 +1473,9 @@ static bool x64_measure(MiniAs *as,const MiniAsStmt *s,uint32_t *size) {
             return true;
         case X64_MOVZX_REG:
             *size=3U+((!(m->encoding&0x800U) &&
-                         (m->encoding==0xb6U && m->operands[0].reg>=4U)) ||
+                         (((m->encoding&0xffU)==0xb6U ||
+                           (m->encoding&0xffU)==0xbeU) &&
+                          m->operands[0].reg>=4U)) ||
                        m->operands[0].reg>=8U || m->operands[1].reg>=8U ||
                        m->operands[1].register_64?1U:0U);return true;
         case X64_SHIFT_IMM:
@@ -1678,8 +1688,10 @@ static bool x64_encode(MiniAs *as,const MiniAsStmt *s) {
             break;
         case X64_MOVZX_REG:
             r=m->operands[0].reg;d=m->operands[1].reg;
-            if((!(m->encoding&0x800U) && (m->encoding&0xffU)==0xb6U &&
-                r>=4U) || r>=8U || d>=8U ||
+            if((!(m->encoding&0x800U) &&
+                ((m->encoding&0xffU)==0xb6U ||
+                 (m->encoding&0xffU)==0xbeU) && r>=4U) ||
+               r>=8U || d>=8U ||
                m->operands[1].register_64)
                 code[n++]=(unsigned char)(0x40U|
                     (m->operands[1].register_64?8U:0U)|

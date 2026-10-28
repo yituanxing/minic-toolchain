@@ -149,6 +149,18 @@ entry_x:
     movq ext_global+8 (% rip), %r9
     movq %rax, ext_global + 16 (% rip)
     cmpq $7, ext_global+24 (% rip)
+    # Signed byte/word extension shares MCInst+0F machinery with MOVZX.
+    movsbl %al, %eax
+    movsbl %ah, %edx
+    movsbl %r8b, %r9d
+    movsbq %al, %r10
+    movswl %ax, %ecx
+    movswq %ax, %rax
+    movswq %r8w, %r15
+    movsbl 8(%rax), %r9d
+    movswl ext_global(%rip), %ecx
+    movsbq -1(%r12), %r13
+    movswq 12(%r8,%r9,2), %r10
     popcntq %rax, %r8
     popcntl %eax, %ecx
     popcntq 8(%rsp), %r9
@@ -842,6 +854,10 @@ for bad in            'popcntq %eax,%rax' \
            'addb %spl,%ah' \
            'subb %ah,%sil' \
            'movq 1 bad(%rip),%rax' \
+           'movsbl %rax,%eax' \
+           'movsbq %ah,%rax' \
+           'movswq %eax,%r9' \
+           'movsbl %spl,%ah' \
            'adcl %rax,%eax' \
            'negb %eax' \
            'negw %eax' \
