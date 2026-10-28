@@ -270,7 +270,7 @@ static bool emit_linux_atomic_rmw(
        !x86_value_load(out,frame,b[0].value,"%r11"))
         return false;
     if(d->locked&&
-       fputs("  .pushsection .smp_locks,\\"a\\"\n"
+       fputs("  .pushsection .smp_locks,\"a\"\n"
              "  .balign 4\n"
              "  .long 671f - .\n"
              "  .popsection\n"
