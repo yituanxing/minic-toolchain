@@ -260,6 +260,57 @@ static bool aarch64_atomic_form(const char *text, size_t len, bool fetch,
  * .altinstructions metadata is consumed by Linux at boot to patch MRS
  * TPIDR_EL1 to TPIDR_EL2 when feature 47 is available. Preserve the exact
  * section, relocations, relative label offsets and instruction sizes. */
+/* Genuine original arm64 Linux atomic_{add,sub}_return and atomic64_
+ * variants: four memory orders × two sizes × two operations (16).
+ * Reuse the AArch64 target ISA operation and memory-order catalogs:
+ * Common Core only carries typed source ASM operand roles. */
+static bool aarch64_atomic_return_form(
+    const char *text, size_t length, Aarch64AtomicForm *result) {
+    char compact[240], expected[240];
+    size_t i, n = 0U, width, op_index, mode;
+    if (!text || !length || !result || length >= sizeof(compact)) return false;
+    for (i = 0U; i < length; ++i) {
+        const char ch = text[i];
+        if (ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n') continue;
+        if (n + 1U >= sizeof(compact)) return false;
+        compact[n++] = ch;
+    }
+    compact[n] = '\0';
+    for (width = 0U; width < 2U; ++width) {
+        const char *word = width ? "%0" : "%w0";
+        const char *value = width ? "%3" : "%w3";
+        for (op_index = 0U;
+             op_index < sizeof(aarch64_atomic_operations) /
+                            sizeof(aarch64_atomic_operations[0]); ++op_index) {
+            const Aarch64AtomicOperation *op = &aarch64_atomic_operations[op_index];
+            if (strcmp(op->name, "add") != 0 && strcmp(op->name, "sub") != 0)
+                continue;
+            for (mode = 0U; mode < 4U; ++mode) {
+                const int written = snprintf(expected, sizeof(expected),
+                    "//atomic%s_%s_return%s"
+                    "prfmpstl1strm,%%2"
+                    "1:%s%s,%%2"
+                    "%s%s,%s,%s"
+                    "%s%%w1,%s,%%2"
+                    "cbnz%%w1,1b%s",
+                    width ? "64" : "", op->name,
+                    aarch64_atomic_mode_suffix[mode],
+                    aarch64_atomic_load[mode], word,
+                    op->alu, word, word, value,
+                    aarch64_atomic_store[mode], word,
+                    mode == 0U ? "dmbish" : "");
+                if (written > 0 && (size_t)written < sizeof(expected) &&
+                    strcmp(compact, expected) == 0) {
+                    result->op = op;
+                    result->width = width ? 8U : 4U;
+                    result->mode = (unsigned int)mode;
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
+}
 /* Frozen original GNU Linux 6.6.143 arm64 cmpxchg.h __xchg_case
  * 8/16/32/64 × relaxed/acquire/release/full: ONE strict decoder reused
  * by C source admission and native AArch64 LL/SC instruction emission.
@@ -535,6 +586,40 @@ bool minic_aarch64_qualify_inline_asm(
             contract->kinds[2] = MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE;
             contract->kinds[3] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
             contract->kinds[4] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+            return true;
+        }
+    }
+    if (program && src && contract && src->is_volatile && !src->is_goto &&
+        src->outputs && src->inputs && src->output_count == 3U &&
+        src->input_count == 1U && src->label_count == 0U &&
+        src->register_clobber_count == 0U &&
+        constraint(&src->outputs[0], "=&r") &&
+        constraint(&src->outputs[1], "=&r") &&
+        constraint(&src->outputs[2], "+Q")) {
+        Aarch64AtomicForm ret;
+        bool accepted = aarch64_atomic_return_form(
+            src->template_text, src->template_length, &ret);
+        accepted = accepted &&
+            src->clobber_count == (ret.mode == 1U ? 0U : 1U) &&
+            src->has_memory_clobber == (ret.mode != 1U) &&
+            constraint(&src->inputs[0], ret.op->rmw_constraint);
+        for (i = 0U; i < 4U && accepted; ++i) {
+            const MinicInlineAsmOperand *op = i < 3U ?
+                &src->outputs[i] : &src->inputs[0];
+            const MinicExpression *arg =
+                minic_c0_program_expression(program, op->expression);
+            if (!arg ||
+                (i < 3U && (arg->value_category != MINIC_VALUE_LVALUE ||
+                            minic_type_is_const(arg->type))) ||
+                !aarch64_stlr_type(arg->type, i == 1U ? 8U : ret.width))
+                accepted = false;
+        }
+        if (accepted) {
+            contract->operand_count = 4U;
+            contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
+            contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
+            contract->kinds[2] = MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE;
+            contract->kinds[3] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
             return true;
         }
     }
@@ -960,6 +1045,63 @@ bool minic_aarch64_emit_qualified_structured_asm(
                             "  %s\n",
                        (size_t)b[0].value * 8U,
                        (size_t)b[1].value * 8U, op[width]) >= 0;
+    }
+    if (ins->value.structured_inline_asm.operand_count == 4U) {
+        Aarch64AtomicForm ret;
+        if (aarch64_atomic_return_form(
+                info->template_text, info->template_length, &ret)) {
+            const MinicCoreStructuredInlineAsmOperand *ops =
+                ins->value.structured_inline_asm.operands;
+            MinicType pointee;
+            const char *reg = ret.width == 8U ? "x" : "w";
+            if (!info->is_volatile || info->is_goto ||
+                info->register_clobber_count || !info->has_memory_clobber)
+                return false;
+            for (i = 0U; i < 4U; ++i) {
+                const MinicCoreStructuredInlineAsmOperand *op = &ops[i];
+                if (op->operand_index != i || op->early_clobber ||
+                    op->has_fixed_register_binding ||
+                    op->value >= fn->value_count ||
+                    op->value > 4095U / 8U ||
+                    op->kind != (i == 3U ?
+                        MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT :
+                        i == 2U ? MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE :
+                                  MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT))
+                    return false;
+                if (i < 3U) {
+                    if (!minic_type_pointee(fn->values[op->value].type, &pointee) ||
+                        !aarch64_stlr_type(
+                            pointee, i == 1U ? 8U : ret.width))
+                        return false;
+                } else if (!aarch64_stlr_type(
+                    fn->values[op->value].type, ret.width)) return false;
+            }
+            /* Register x9 becomes the new, post-RMW value. The memory
+             * update is a real exclusive STXR retry, and source memory
+             * ordering maps to hardware LDAXR/STLXR plus full DMB ISH. */
+            return fprintf(out,
+                "  ldr x10, [sp, #%zu]\n"
+                "  ldr x11, [sp, #%zu]\n"
+                "  prfm pstl1strm, [x10]\n"
+                "1:\n"
+                "  %s %s9, [x10]\n"
+                "  %s %s9, %s9, %s11\n"
+                "  %s w12, %s9, [x10]\n"
+                "  cbnz w12, 1b\n"
+                "%s"
+                "  ldr x13, [sp, #%zu]\n"
+                "  str %s9, [x13]\n"
+                "  ldr x13, [sp, #%zu]\n"
+                "  str x12, [x13]\n",
+                (size_t)ops[2].value * 8U,
+                (size_t)ops[3].value * 8U,
+                aarch64_atomic_load[ret.mode], reg,
+                ret.op->alu, reg, reg, reg,
+                aarch64_atomic_store[ret.mode], reg,
+                ret.mode == 0U ? "  dmb ish\n" : "",
+                (size_t)ops[0].value * 8U, reg,
+                (size_t)ops[1].value * 8U) >= 0;
+        }
     }
     /* Genuine 1/2/4/8-byte AArch64 XCHG: preserve the exclusive retry
      * and its acquire/release ordering, returning the old value. */

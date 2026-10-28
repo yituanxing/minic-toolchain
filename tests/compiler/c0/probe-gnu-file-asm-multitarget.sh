@@ -771,6 +771,94 @@ SRC
     echo 'MINIC_AARCH64_LINUX_PERCPU_ALTERNATIVE_GNU_AS=PASS real_frozen=1 patchtable=12B relocations=2 feature=47 negative=6 privileged_only=1'
 
 
+
+    # Frozen 6.6.143 atomic_ll_sc.h ADD/SUB return: both widths × four
+    # memory-order variants. Prove the *new* value is returned, not old.
+    : > "$work/aarch64-atomic-return.i"
+    for bits in 32 64; do
+        if [ "$bits" = 32 ]; then
+            ctype='int'; word='%w0'; rhs='%w3'; prefix=''
+        else
+            ctype='long long'; word='%0'; rhs='%3'; prefix=64
+        fi
+        for op in add sub; do
+            if [ "$op" = add ]; then
+                constraint=Ir; initial=10
+                values='11 13 16 20'
+            else
+                constraint=Jr; initial=40
+                values='39 37 34 30'
+            fi
+            for mode in full relaxed acquire release; do
+                case "$mode" in
+                    full) suffix=''; ld=ldxr; st=stlxr
+                          barrier=' dmb ish'; clobber=': "memory"' ;;
+                    relaxed) suffix=_relaxed; ld=ldxr; st=stxr
+                             barrier=''; clobber='' ;;
+                    acquire) suffix=_acquire; ld=ldaxr; st=stxr
+                             barrier=''; clobber=': "memory"' ;;
+                    release) suffix=_release; ld=ldxr; st=stlxr
+                             barrier=''; clobber=': "memory"' ;;
+                esac
+                name=$(printf 'atomic_ret_%s_%s_%s' "$bits" "$op" "$mode")
+                tag=$(printf 'atomic%s_%s_return%s' "$prefix" "$op" "$suffix")
+                cat >> "$work/aarch64-atomic-return.i" <<SRC
+$ctype $name($ctype *p, $ctype n) {
+    $ctype result;
+    unsigned long retry;
+    __asm__ __volatile__("// $tag\n"
+        " prfm pstl1strm, %2\n"
+        "1: $ld $word, %2\n"
+        " $op $word, $word, $rhs\n"
+        " $st %w1, $word, %2\n"
+        " cbnz %w1, 1b\n"
+        "$barrier"
+        : "=&r"(result), "=&r"(retry), "+Q"(*p)
+        : "$constraint"(n) $clobber);
+    return result;
+}
+SRC
+            done
+            name=$(printf 'test_return_%s_%s' "$bits" "$op")
+            cat >> "$work/aarch64-atomic-return.i" <<SRC
+int $name(void) {
+    $ctype v=$initial;
+    $ctype r0=$(printf 'atomic_ret_%s_%s_full' "$bits" "$op")(&v,1);
+    $ctype r1=$(printf 'atomic_ret_%s_%s_relaxed' "$bits" "$op")(&v,2);
+    $ctype r2=$(printf 'atomic_ret_%s_%s_acquire' "$bits" "$op")(&v,3);
+    $ctype r3=$(printf 'atomic_ret_%s_%s_release' "$bits" "$op")(&v,4);
+    return v==$(echo "$values" | awk '{print $4}') &&
+           r0==$(echo "$values" | awk '{print $1}') &&
+           r1==$(echo "$values" | awk '{print $2}') &&
+           r2==$(echo "$values" | awk '{print $3}') &&
+           r3==$(echo "$values" | awk '{print $4}');
+}
+SRC
+        done
+    done
+    cat >> "$work/aarch64-atomic-return.i" <<'SRC'
+int main(void) {
+    return test_return_32_add() && test_return_32_sub() &&
+           test_return_64_add() && test_return_64_sub() ? 0 : 1;
+}
+SRC
+    "$cross_cc" -O0 -x c "$work/aarch64-atomic-return.i" \
+        -o "$work/aarch64-atomic-return.gnu.elf"
+    "$MINIC_CC" --target=aarch64-linux -S "$work/aarch64-atomic-return.i" \
+        -o "$work/aarch64-atomic-return.minic.s"
+    for opcode in 'add w9, w9, w11' 'sub w9, w9, w11' \
+                  'add x9, x9, x11' 'sub x9, x9, x11' \
+                  'ldaxr w9' 'ldaxr x9' 'stlxr w12' 'str w9' 'str x9'; do
+        grep -Fq "$opcode" "$work/aarch64-atomic-return.minic.s"
+    done
+    "$cross_cc" -x assembler "$work/aarch64-atomic-return.minic.s" \
+        -o "$work/aarch64-atomic-return.minic.elf"
+    for flavor in gnu minic; do
+        qemu-aarch64 -L /usr/aarch64-linux-gnu \
+            "$work/aarch64-atomic-return.$flavor.elf"
+    done
+    echo 'MINIC_AARCH64_LINUX_ATOMIC_RETURN_GNU_QEMU=PASS variants=16 widths=2 operations=2 orderings=4'
+
     # Original Linux 6.6.143 cmpxchg.h XCHG; 4 widths × 4 memory
     # orderings, old-value semantics and true GNU/GAS/QEMU differential.
     : > "$work/aarch64-xchg-kernel.i"
