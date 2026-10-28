@@ -216,6 +216,63 @@ static bool x64_args3(const char *args,
 /* GNU AT&T disp(%base[, %index[, scale]]) plus symbol(%rip).
  * SymbolExpr remains typed all the way into the existing common ELF fixup.
  * The PC-relative addressing mode is target-owned (ModR/M rm=101). */
+/* Target-only GNU AT&T address expression normalization. Core already
+ * evaluates integer expressions and owns semantic ELF Fixups; x86 only
+ * separates a displacement's optional one-symbol affine operand.
+ * A number+symbol is equivalent to symbol+number in GNU GAS, and
+ * parentheses around that expression do not change relocation kind. */
+static char *x64_unwrap_disp(char *text) {
+    for(;;) {
+        size_t length=strlen(text),i;
+        unsigned depth=0U;
+        bool wraps=true;
+        if(length<2U || text[0]!='(' || text[length-1U]!=')')
+            return text;
+        for(i=0U;i<length;++i) {
+            if(text[i]=='(')++depth;
+            else if(text[i]==')') {
+                if(depth==0U)return text;
+                --depth;
+                if(depth==0U && i+1U!=length) {wraps=false;break;}
+            }
+        }
+        if(!wraps || depth)return text;
+        text[length-1U]='\0';
+        ++text;
+    }
+}
+static bool x64_symbolic_displacement(const char *raw,
+                                      MiniAsSymbolExpr *expr) {
+    char buf[X64_OPERAND_CAP],*operand,*p;
+    size_t len=strlen(raw);
+    unsigned depth=0U;
+    if(!len || len>=sizeof(buf))return false;
+    memcpy(buf,raw,len+1U);
+    operand=x64_unwrap_disp(buf);
+    if(minias_parse_symbol_addend(operand,expr))return true;
+    for(p=operand;*p;++p) {
+        int64_t leading;
+        MiniAsSymbolExpr tail;
+        if(*p=='(') {++depth;continue;}
+        if(*p==')') {
+            if(!depth)return false;
+            --depth;continue;
+        }
+        if(*p!='+' || depth==0U && p==operand || depth)continue;
+        *p='\0';
+        if(!minias_eval_i64_expression(operand,&leading) ||
+           !minias_parse_symbol_addend(x64_unwrap_disp(p+1U),&tail))
+            return false;
+        if((leading>0 && tail.addend>INT64_MAX-leading) ||
+           (leading<0 && tail.addend<INT64_MIN-leading))
+            return false;
+        tail.addend+=leading;
+        *expr=tail;
+        return true;
+    }
+    return false;
+}
+
 static bool x64_parse_base_memory(const char *text, MiniAsMCMemory *out) {
     /* GNU Kbuild emits horizontal space around AT&T displacement operators,
      * parentheses and even register prefix punctuation ("(% rip)").
@@ -253,7 +310,9 @@ static bool x64_parse_base_memory(const char *text, MiniAsMCMemory *out) {
     if(strncmp(text,"%fs:",4U)==0)segment_space=1U;
     else if(strncmp(text,"%gs:",4U)==0)segment_space=2U;
     if(segment_space)text+=4U;
-    open=strchr(text,'(');
+    /* Last '(' begins the actual AT&T base/index tuple; preceding pairs
+     * may belong to a symbolic or numeric displacement expression. */
+    open=strrchr(text,'(');
     if (!open) {
         unsigned space=0U;
         const char *operand;
@@ -271,7 +330,7 @@ static bool x64_parse_base_memory(const char *text, MiniAsMCMemory *out) {
                arithmetic>=INT32_MIN && arithmetic<=INT32_MAX)
                 displacement=(long long)arithmetic;
             else {
-                if(!minias_parse_symbol_addend(operand,&expr))return false;
+                if(!x64_symbolic_displacement(operand,&expr))return false;
                 symbolic=true;displacement=0;
             }
         }
@@ -299,7 +358,7 @@ static bool x64_parse_base_memory(const char *text, MiniAsMCMemory *out) {
                arithmetic>=INT32_MIN && arithmetic<=INT32_MAX)
                 displacement=(long long)arithmetic;
             else {
-                if(!minias_parse_symbol_addend(dispbuf,&symbolic_expr) ||
+                if(!x64_symbolic_displacement(dispbuf,&symbolic_expr) ||
                    symbolic_expr.addend<INT64_MIN+4)
                     return false;
                 symbolic=true;

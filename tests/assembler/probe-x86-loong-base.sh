@@ -2255,6 +2255,44 @@ for bad in '.if %bogus == %bogus' '.if %rax < %rbx' '.if %rax == fake'; do
 done
 echo 'MINIAS_X86_REG_IF=PASS GNU_GAS_register_identity_and_invalid_reject'
 
+# x86 GNU Kbuild displacement grammar: arithmetic before an
+# addressing tuple, constant-first symbolic addends, and parenthesized
+# symbol subtraction all share one target memory decoder. The normal
+# semantic 32S/PC32 ELF Fixup route must remain authoritative.
+cat > "$work/x86-expression-memory.s" <<'X86_EXPRESSION_MEM'
+.text
+testb $1, 29+pvclock_page(%rip)
+cmpb $0, 16+steal_time(%rax)
+movq (1 << 3)(%rsi), %r11
+leaq (__end_init_task - 168)(%rip), %rsp
+movq (2+6)(%rsi), %rax
+movl 29+pvclock_page(%rip), %eax
+movq -168+__end_init_task(%rip), %rax
+movq __end_init_task-168(%rip), %rax
+X86_EXPRESSION_MEM
+"$MINIAS" --target=x86_64 -o "$work/x86-expression-memory-mini.o" "$work/x86-expression-memory.s"
+as --64 -o "$work/x86-expression-memory-gnu.o" "$work/x86-expression-memory.s"
+objcopy -j .text -O binary "$work/x86-expression-memory-mini.o" "$work/x86-expression-memory-mini.bin"
+objcopy -j .text -O binary "$work/x86-expression-memory-gnu.o" "$work/x86-expression-memory-gnu.bin"
+cmp "$work/x86-expression-memory-mini.bin" "$work/x86-expression-memory-gnu.bin"
+readelf -Wr "$work/x86-expression-memory-mini.o" > "$work/x86-expression-memory-mini-rel.txt"
+readelf -Wr "$work/x86-expression-memory-gnu.o" > "$work/x86-expression-memory-gnu-rel.txt"
+for family in mini gnu; do
+    test "$(grep -c 'R_X86_64_PC32.*pvclock_page' "$work/x86-expression-memory-$family-rel.txt")" -eq 2
+    test "$(grep -c 'R_X86_64_32S.*steal_time' "$work/x86-expression-memory-$family-rel.txt")" -eq 1
+    test "$(grep -c 'R_X86_64_PC32.*__end_init_task' "$work/x86-expression-memory-$family-rel.txt")" -eq 3
+    grep -q 'R_X86_64_32S.*steal_time + 10' "$work/x86-expression-memory-$family-rel.txt"
+    grep -q 'R_X86_64_PC32.*__end_init_task - ac' "$work/x86-expression-memory-$family-rel.txt"
+done
+for bad in 'movq (1+2)(%unknown),%rax' 'movq (foo+bar)(%rax),%rcx' \
+           'movq 999999999999999999999+sym(%rip),%rax'; do
+    printf '.text\n%s\n' "$bad" > "$work/x86-expression-memory-invalid.s"
+    if "$MINIAS" --target=x86_64 -o "$work/x86-expression-memory-invalid.o" "$work/x86-expression-memory-invalid.s" >/dev/null 2>&1; then
+        echo "invalid symbolic displacement accepted: $bad" >&2;exit 1
+    fi
+done
+echo 'MINIAS_X86_EXPRESSION_MEMORY=PASS GNU_GAS_bytes_PCREL32_ABS32S_nested_expression'
+
 echo 'MINIAS_COMMON_NUMERIC_U64=PASS GNU_GAS_x86_LA64_exact_data_bytes'
 echo 'MINIAS_X86_SEGMENTED_INDIRECT=PASS GNU_AS_text_and_relocations segment_base_index_abs_rip=true indirect_memory_call_jmp=true absolute_symbol32S=true'
 echo 'MINIAS_TWO_TARGET_ORACLE=PASS x86_GNU_bytes=equal loong_GNU_bytes=equal ELF_machine=correct lp64d_v1=0x43 CET_endbr64=1 ALU_imm8_imm32=1 x86_ModRM_SIB_disp=1 x86_test_cmp_alu_memory=1 x86_scaled_index_SIB=1 LA_jr=1 LA_scaled_ptr14=1 LA_imm12_shift_upper20=1 invalid=reject'
