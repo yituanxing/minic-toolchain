@@ -308,6 +308,22 @@ bool minic_x86_64_asm_matched_template(const char *text,
     return lines != 0U && refs != 0U;
 }
 
+/* Qualifiers are stripped once by caller. This is target-owned C
+ * operand/ISA width matching, not a second generic Core type system. */
+static bool x86_bit_scan_operand_type(
+    MinicX86BitScanForm form, size_t operand_index, MinicType type) {
+    if (form == MINIC_X86_BIT_SCAN_BSF64 ||
+        form == MINIC_X86_BIT_SCAN_BSR64)
+        return minic_type_equal(type, minic_type_unsigned_long());
+    if (operand_index == 0U || operand_index == 2U)
+        return minic_type_equal(type, minic_type_int());
+    if (form == MINIC_X86_BIT_SCAN_BSR64_READWRITE)
+        return minic_type_equal(type, minic_type_unsigned_long()) ||
+               minic_type_equal(type, minic_type_unsigned_long_long());
+    return minic_type_equal(type, minic_type_int()) ||
+           minic_type_equal(type, minic_type_unsigned_int());
+}
+
 static bool qualified(const MinicC0Program *program,
                       const MinicInlineAsm *src, bool *is_mulacc, bool *is_muldiv) {
     static const char *const cpuid_out[4] = {"=a","=b","=c","=d"};
@@ -366,18 +382,18 @@ static bool qualified(const MinicC0Program *program,
                    src->template_text, src->template_length)) !=
                    MINIC_X86_BIT_SCAN_NONE &&
                (c_is(&src->inputs[0], "r") || c_is(&src->inputs[0], "rm")) &&
-               ((bit_form == MINIC_X86_BIT_SCAN_BSF64 ||
-                 bit_form == MINIC_X86_BIT_SCAN_BSR64) &&
-                    src->input_count == 1U &&
-                    c_is(&src->outputs[0], "=r") ||
-                (bit_form == MINIC_X86_BIT_SCAN_BSF32_TIED ||
-                 bit_form == MINIC_X86_BIT_SCAN_BSR32_TIED) &&
-                    src->input_count == 2U &&
-                    c_is(&src->outputs[0], "=r") &&
-                    c_is(&src->inputs[1], "0") ||
-                bit_form == MINIC_X86_BIT_SCAN_BSR64_READWRITE &&
-                    src->input_count == 1U &&
-                    c_is(&src->outputs[0], "+r"))) {
+               (((bit_form == MINIC_X86_BIT_SCAN_BSF64 ||
+                  bit_form == MINIC_X86_BIT_SCAN_BSR64) &&
+                 src->input_count == 1U &&
+                 c_is(&src->outputs[0], "=r")) ||
+                ((bit_form == MINIC_X86_BIT_SCAN_BSF32_TIED ||
+                  bit_form == MINIC_X86_BIT_SCAN_BSR32_TIED) &&
+                 src->input_count == 2U &&
+                 c_is(&src->outputs[0], "=r") &&
+                 c_is(&src->inputs[1], "0")) ||
+                (bit_form == MINIC_X86_BIT_SCAN_BSR64_READWRITE &&
+                 src->input_count == 1U &&
+                 c_is(&src->outputs[0], "+r")))) {
         bit_scan = true;
     } else if (src->is_volatile && src->has_memory_clobber &&
                src->clobber_count == 1U &&
@@ -409,24 +425,14 @@ static bool qualified(const MinicC0Program *program,
             (*is_mulacc || bit_scan)
                 ? minic_type_unsigned_long() : minic_type_unsigned_int();
         if (!expr || !minic_type_unqualified(expr->type, &normalized) ||
-            (bit_scan &&
-             ((bit_form == MINIC_X86_BIT_SCAN_BSF64 ||
-               bit_form == MINIC_X86_BIT_SCAN_BSR64)
-                 ? !minic_type_equal(normalized, minic_type_unsigned_long())
-                 : (i == 0U ||
-                    (i == 2U && src->input_count == 2U))
-                       ? !minic_type_equal(normalized, minic_type_int())
-                       : (bit_form == MINIC_X86_BIT_SCAN_BSR64_READWRITE)
+            (bit_scan ? !x86_bit_scan_operand_type(bit_form, i, normalized)
+                      : (*is_muldiv
                            ? (!minic_type_equal(normalized, minic_type_unsigned_long()) &&
                               !minic_type_equal(normalized, minic_type_unsigned_long_long()))
-                           : (!minic_type_equal(normalized, minic_type_int()) &&
-                              !minic_type_equal(normalized, minic_type_unsigned_int()))) ||
-            (!bit_scan && (*is_muldiv
-                ? (!minic_type_equal(normalized, minic_type_unsigned_long()) &&
-                   !minic_type_equal(normalized, minic_type_unsigned_long_long()))
-                : generic ? (!minic_type_is_integer(normalized) &&
-                             !minic_type_is_pointer(normalized))
-                          : !minic_type_equal(normalized, target_type))) ||
+                           : generic
+                               ? (!minic_type_is_integer(normalized) &&
+                                  !minic_type_is_pointer(normalized))
+                               : !minic_type_equal(normalized, target_type))) ||
             (is_output && (expr->value_category != MINIC_VALUE_LVALUE ||
                            minic_type_is_const(expr->type))) ||
             (*is_mulacc && i == 7U &&
