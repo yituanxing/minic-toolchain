@@ -5176,7 +5176,8 @@ static void destroy_source_lines(MiniAsSourceLine *lines, size_t count) {
 
 static int classify_repeat_line(const MiniAs *as, const char *text,
                                 char *argument,
-                                size_t argument_size) {
+                                size_t argument_size,
+                                size_t *label_prefix_length) {
     char *copy;
     char *trimmed;
     const char *rest = NULL;
@@ -5191,6 +5192,26 @@ static int classify_repeat_line(const MiniAs *as, const char *text,
     }
     strip_comment(copy, as->target);
     trimmed = minias_trim(copy);
+    if(label_prefix_length)*label_prefix_length=0U;
+    /* GNU allows LABEL: .irp/.rept ...; classify the opener after
+     * its lexical labels, while preserving their source offset so
+     * the shared label handler binds them once, BEFORE expansion. */
+    {
+        char *cursor=trimmed;
+        for(;;) {
+            char *end=cursor;
+            while(*end && !isspace((unsigned char)*end) && *end!=':')
+                ++end;
+            if(*end!=':' || end==cursor)break;
+            cursor=end+1U;
+            while(isspace((unsigned char)*cursor))++cursor;
+        }
+        if(cursor!=trimmed) {
+            if(label_prefix_length)
+                *label_prefix_length=(size_t)(cursor-copy);
+            trimmed=cursor;
+        }
+    }
 
     if (strncmp(trimmed, ".rept", 5U) == 0 &&
         (trimmed[5] == '\0' || isspace((unsigned char)trimmed[5]))) {
@@ -5225,6 +5246,9 @@ static int classify_repeat_line(const MiniAs *as, const char *text,
         }
     }
 
+    if(label_prefix_length &&
+       kind!=MINIAS_REPEAT_REPT && kind!=MINIAS_REPEAT_IRP)
+        *label_prefix_length=0U;
     free(copy);
     return kind;
 }
@@ -5281,6 +5305,20 @@ static bool process_source_line(MiniAs *as, const char *source, size_t line) {
     }
     free(copy);
     return true;
+}
+
+/* A .irp/.rept opener's leading label binds once at the
+ * pre-expansion location, through Common's ordinary label parser. */
+static bool emit_repeat_leading_label(MiniAs *as,const char *line,
+                                      size_t prefix,size_t source_line) {
+    char *copy;bool ok;
+    if(prefix==0U)return true;
+    if(prefix>strlen(line))return false;
+    copy=malloc(prefix+1U);
+    if(!copy){minias_set_error(as,"out-of-memory:repeat-leading-label");return false;}
+    memcpy(copy,line,prefix);copy[prefix]='\0';
+    ok=process_source_line(as,copy,source_line);
+    free(copy);return ok;
 }
 
 static bool repeat_count_value(MiniAs *as,
@@ -5509,6 +5547,7 @@ static bool process_source_range(MiniAs *as,
                                 macro_argument,
                                 sizeof(macro_argument));
         char argument[256];
+        size_t repeat_label_prefix=0U;
         int kind;
 
         if (macro_kind < 0) {
@@ -5563,7 +5602,8 @@ static bool process_source_range(MiniAs *as,
 
         kind = classify_repeat_line(as, lines[i].text,
                                         argument,
-                                        sizeof(argument));
+                                        sizeof(argument),
+                                        &repeat_label_prefix);
         if (kind < 0) {
             minias_set_error(as, "out-of-memory:repeat-classify");
             return false;
@@ -5577,13 +5617,16 @@ static bool process_source_range(MiniAs *as,
         if (kind == MINIAS_REPEAT_REPT || kind == MINIAS_REPEAT_IRP) {
             size_t j = i + 1U;
             size_t depth = 1U;
+            if(!emit_repeat_leading_label(as,lines[i].text,
+                                          repeat_label_prefix,
+                                          lines[i].line))return false;
 
             while (j < end && depth != 0U) {
                 char nested_argument[256];
                 int nested_kind =
                     classify_repeat_line(as, lines[j].text,
                                          nested_argument,
-                                         sizeof(nested_argument));
+                                         sizeof(nested_argument),NULL);
                 if (nested_kind < 0) {
                     minias_set_error(as, "out-of-memory:repeat-classify");
                     return false;
@@ -5663,7 +5706,8 @@ static bool read_repeat_block(MiniAs *as,
             destroy_source_lines(lines, count);
             return false;
         }
-        kind = classify_repeat_line(as, linebuf, argument, sizeof(argument));
+        kind = classify_repeat_line(as, linebuf, argument,
+                                    sizeof(argument),NULL);
         if (kind < 0) {
             minias_set_error(as, "out-of-memory:repeat-classify");
             destroy_source_lines(lines, count);
@@ -5721,6 +5765,7 @@ bool minias_parse_file(MiniAs *as, const char *path) {
     while (fgets(linebuf, sizeof(linebuf), file) != NULL) {
         size_t len;
         char argument[256];
+        size_t repeat_label_prefix=0U;
         int kind;
 
         ++line_no;
@@ -5777,7 +5822,8 @@ bool minias_parse_file(MiniAs *as, const char *path) {
             }
         }
 
-        kind = classify_repeat_line(as, linebuf, argument, sizeof(argument));
+        kind = classify_repeat_line(as, linebuf, argument,
+                                    sizeof(argument),&repeat_label_prefix);
         if (kind < 0) {
             minias_set_error(as, "out-of-memory:repeat-classify");
             fclose(file);
@@ -5794,6 +5840,10 @@ bool minias_parse_file(MiniAs *as, const char *path) {
             MiniAsSourceLine *lines = NULL;
             size_t count = 0U;
             size_t opener_line = line_no;
+            if(!emit_repeat_leading_label(as,linebuf,repeat_label_prefix,
+                                          opener_line)){
+                fclose(file);return false;
+            }
 
             if (!read_repeat_block(as,
                                    file,

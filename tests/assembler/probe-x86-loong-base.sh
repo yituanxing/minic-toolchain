@@ -2590,6 +2590,44 @@ for bad in 'inl (%ax),%eax' 'outl %ecx,(%dx)' 'fsubp %st,%st(8)' \
     fi
 done
 echo 'MINIAS_X86_PORT_X87=PASS GNU_bytes DX_port_aliases_x87_stack_pop'
+# GNU allows both named and numeric labels on the SAME LINE as
+# .irp/.rept, including macro expansions. Common must bind labels once.
+cat > "$work/gnu-labeled-irp.s" <<'GNU_LABELED_IRP'
+.data
+first_repeat: .irp val,1,2,3
+.byte \val
+.endr
+4: .rept 2
+.byte 4
+.endr
+middle_repeat: .irp val,5,6
+.byte \val
+.endr
+.macro LOOP_LABELED
+body_start: .irp key,7,8
+.byte \key
+.endr
+.endm
+LOOP_LABELED
+GNU_LABELED_IRP
+for target in x86_64 loongarch64; do
+    "$MINIAS" --target="$target" -o "$work/$target-labeled-mini.o" "$work/gnu-labeled-irp.s"
+    if [ "$target" = x86_64 ]; then
+        as --64 -o "$work/$target-labeled-gnu.o" "$work/gnu-labeled-irp.s"
+        objcopy -j .data -O binary "$work/$target-labeled-mini.o" "$work/$target-labeled-mini.bin"
+        objcopy -j .data -O binary "$work/$target-labeled-gnu.o" "$work/$target-labeled-gnu.bin"
+    else
+        "$LOONGAS" -mabi=lp64d -o "$work/$target-labeled-gnu.o" "$work/gnu-labeled-irp.s"
+        "$LOONGCOPY" -j .data -O binary "$work/$target-labeled-mini.o" "$work/$target-labeled-mini.bin"
+        "$LOONGCOPY" -j .data -O binary "$work/$target-labeled-gnu.o" "$work/$target-labeled-gnu.bin"
+    fi
+    cmp "$work/$target-labeled-mini.bin" "$work/$target-labeled-gnu.bin"
+    for sym in first_repeat middle_repeat body_start; do
+        readelf -Ws "$work/$target-labeled-mini.o" | grep -q " $sym$"
+        readelf -Ws "$work/$target-labeled-gnu.o" | grep -q " $sym$"
+    done
+done
+echo 'MINIAS_COMMON_GNU_LABELED_IRP=PASS GNU_x86_Loong_bytes_and_labels'
 echo 'MINIAS_COMMON_NUMERIC_U64=PASS GNU_GAS_x86_LA64_exact_data_bytes'
 echo 'MINIAS_X86_SEGMENTED_INDIRECT=PASS GNU_AS_text_and_relocations segment_base_index_abs_rip=true indirect_memory_call_jmp=true absolute_symbol32S=true'
 echo 'MINIAS_TWO_TARGET_ORACLE=PASS x86_GNU_bytes=equal loong_GNU_bytes=equal ELF_machine=correct lp64d_v1=0x43 CET_endbr64=1 ALU_imm8_imm32=1 x86_ModRM_SIB_disp=1 x86_test_cmp_alu_memory=1 x86_scaled_index_SIB=1 LA_jr=1 LA_scaled_ptr14=1 LA_imm12_shift_upper20=1 invalid=reject'
