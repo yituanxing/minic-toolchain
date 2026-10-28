@@ -2417,6 +2417,48 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
                        (da&UINT32_C(0x40000000));
         put_reg(&inst->operands[0],rd,true);
         put_reg(&inst->operands[1],rn,true);
+    } else if(!strcmp(op,"sminv") || !strcmp(op,"smaxv") ||
+              !strcmp(op,"uminv") || !strcmp(op,"umaxv") ||
+              !strcmp(op,"addv")) {
+        /* All horizontal integer vector reductions share one typed
+         * 2-register AdvSIMD emitter, with actual B/H/S destination bank
+         * and source Q/element legality. GNU GHASH uses SMINV B0,V6.16B. */
+        static const struct {const char *name;uint32_t base;} reductions[]={
+            {"sminv",UINT32_C(0x0e31a800)},
+            {"smaxv",UINT32_C(0x0e30a800)},
+            {"uminv",UINT32_C(0x2e31a800)},
+            {"umaxv",UINT32_C(0x2e30a800)},
+            {"addv", UINT32_C(0x0e31b800)}
+        };
+        char tok[4][384],*end;unsigned n,rd,rn,k;
+        unsigned long dst_number;
+        uint32_t arrange;
+        unsigned elem;
+        if(!split_operands(args,tok,&n) || n!=2U ||
+           (tok[0][0]!='b' && tok[0][0]!='h' && tok[0][0]!='s') ||
+           !isdigit((unsigned char)tok[0][1]) ||
+           !a64_vector_view(tok[1],&rn,&arrange))goto bad_reduction;
+        errno=0;dst_number=strtoul(tok[0]+1U,&end,10);
+        if(errno || *end!='\0' || dst_number>31UL)goto bad_reduction;
+        elem=tok[0][0]=='b'?0U:tok[0][0]=='h'?1U:2U;
+        if(((arrange&UINT32_C(0xc00))>>10U)!=elem ||
+           (elem==2U && !(arrange&UINT32_C(0x40000000))))
+            goto bad_reduction;
+        rd=(unsigned)dst_number;
+        for(k=0U;k<sizeof(reductions)/sizeof(reductions[0]);++k)
+            if(!strcmp(op,reductions[k].name))break;
+        inst->opcode=A64_MC_SIMD_CRYPTO;inst->count=2U;
+        inst->encoding=reductions[k].base|
+                       (arrange&UINT32_C(0x40000000))|
+                       ((arrange&UINT32_C(0xc00))<<12U);
+        put_reg(&inst->operands[0],rd,false);
+        put_reg(&inst->operands[1],rn,true);
+        goto reduction_done;
+bad_reduction:
+        minias_set_error(as,"bad-aarch64-simd-reduce:%s:line=%zu",
+                         args,stmt->line);
+        free(inst);return false;
+reduction_done:;
     } else if(!strcmp(op,"mvn") &&
               split_two(args,first,sizeof(first),second,sizeof(second))) {
         unsigned rd,rm;bool wide,otherwide,sp;
