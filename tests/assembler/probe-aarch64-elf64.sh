@@ -195,6 +195,21 @@ external_probe:
     ldrsb x0, [x1, #3]
     ldrsh w0, [x1, #2]
     ldrsh x0, [x1, #2]
+    // GNU A64 single-source and BIC/BICS, all W/X forms.
+    clz x0, x1
+    clz w2, w3
+    cls x4, x5
+    cls w6, w7
+    rbit x8, x9
+    rbit w10, w11
+    rev16 x12, x13
+    rev16 w14, w15
+    rev32 x16, x17
+    bics x0, x1, x2
+    bics w3, w4, w5, lsr #7
+    bics x6, x7, x8, ror #9
+    bic x9, x10, #255
+    bics w11, w12, #255
     // GNU genuine multiply-accumulate register Ra and ASR/ROR forms.
     madd x0, x1, x2, x3
     madd w4, w5, w6, w7
@@ -586,6 +601,14 @@ for bad_source in 'ldxr x0, [x1,#4]' 'stxr x0, x1, [x2]' \
                   'asr x0, x1, #64' \
                   'ror w0, w1, #32' \
                   'ror x0, w1, x2' \
+                  'clz x0, w1' \
+                  'rbit w0, x1' \
+                  'cls sp, x0' \
+                  'rev32 w0, w1' \
+                  'bics x0, w1, x2' \
+                  'bics x0, x1, x2, lsl #64' \
+                  'bic x0, x1, #0' \
+                  'bics x0, x1, #0xffffffffffffffff' \
                   'yield #1' \
                   'hint #.Lnever_defined' \
                   '.equ .Lbad_hint,128; hint #.Lbad_hint' \
