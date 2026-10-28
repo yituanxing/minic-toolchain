@@ -3774,6 +3774,26 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
                             expr->name, expr->addend);
 }
 
+/* GNU AArch64 profiles compose ISA extensions; do not enumerate each
+ * combination as a hard-coded architecture name. Both .arch +feature
+ * and .arch_extension reuse this one target-owned feature selector. */
+static bool a64_set_isa_feature(uint32_t *bits,const char *name) {
+    bool disable=false;
+    uint32_t feature;
+    if(!strncmp(name,"no",2U)) {
+        name+=2U;
+        disable=true;
+    }
+    if(!strcmp(name,"lse"))feature=A64_FEATURE_LSE;
+    else if(!strcmp(name,"crc"))feature=A64_FEATURE_CRC;
+    else if(!strcmp(name,"crypto"))feature=A64_FEATURE_CRYPTO;
+    else if(!strcmp(name,"memtag"))feature=A64_FEATURE_MTE;
+    else return false;
+    if(disable)*bits&=~feature;
+    else *bits|=feature;
+    return true;
+}
+
 static bool directive(MiniAs *as, const char *op, const char *args,
                       size_t line, bool *handled) {
     *handled = false;
@@ -3833,26 +3853,6 @@ static bool directive(MiniAs *as, const char *op, const char *args,
         ++st->count;
         return true;
     }
-/* GNU AArch64 profiles compose ISA extensions; do not enumerate each
- * combination as a hard-coded architecture name. Both .arch +feature
- * and .arch_extension reuse this one target-owned feature selector. */
-static bool a64_set_isa_feature(uint32_t *bits,const char *name) {
-    bool disable=false;
-    uint32_t feature;
-    if(!strncmp(name,"no",2U)) {
-        name+=2U;
-        disable=true;
-    }
-    if(!strcmp(name,"lse"))feature=A64_FEATURE_LSE;
-    else if(!strcmp(name,"crc"))feature=A64_FEATURE_CRC;
-    else if(!strcmp(name,"crypto"))feature=A64_FEATURE_CRYPTO;
-    else if(!strcmp(name,"memtag"))feature=A64_FEATURE_MTE;
-    else return false;
-    if(disable)*bits&=~feature;
-    else *bits|=feature;
-    return true;
-}
-
     /* GCC emits .arch armv8-a before its first A64 instruction. Verify the
      * exact declared ISA here; never silently accept a richer architecture. */
     if (strcmp(op, ".arch") == 0) {
