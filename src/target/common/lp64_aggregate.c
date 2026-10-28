@@ -91,9 +91,10 @@ bool minic_multi_gp_record(const MinicC0Program *program,
     return true;
 }
 
-/* Both LP64 ABIs pass >32-byte aggregate arguments by a pointer to a
- * caller-owned copy. This range excludes all 1-4 element FP/HFA classes;
- * no guessed classification for exotic or over-aligned structures. */
+/* LP64D and AAPCS64 pass non-HFA aggregates > 2*GRLEN (16 bytes)
+ * by reference. The previous >32 threshold wrongly rejected Linux
+ * 17..32-byte call arguments and parameters. AArch64 separately filters
+ * all FP/HFA/vector members through its target-owned ABI classifier. */
 bool minic_multi_indirect_record(const MinicC0Program *program,
                                         const MinicTargetInfo *target,
                                         MinicType type, size_t *bytes) {
@@ -102,7 +103,7 @@ bool minic_multi_indirect_record(const MinicC0Program *program,
         !minic_type_is_record(type) ||
         !minic_common_aggregate_storage_shape(
             program, target->data_layout, type, 8U, &shape) ||
-        shape.bytes <= 32U || shape.bytes > 2048U ||
+        shape.bytes <= 16U || shape.bytes > 2048U ||
         shape.alignment > 16U)
         return false;
     *bytes = shape.bytes;
