@@ -3,6 +3,17 @@
 #include "target/common/direct_linux_bug_asm.h"
 #include "frontend/const_eval.h"
 #include <string.h>
+/* Transport contract for every structured GNU asm Core SSA operand.
+ * Every register input and lvalue address lives in an eight-byte Core
+ * frame slot.  The shared LP64 plan already permits 1 MiB frames and
+ * our target-owned large-SP legalizer expands unencodable LDR Xt slots.
+ * The old 4095/8 bound confused the raw byte imm12 with scaled AArch64
+ * unsigned-imm12 and rejected original Linux on slot #512 and above.
+ * Frame validity, not encoded ISA immediates, is the sole Core gate. */
+static bool aarch64_linux_structured_spill_slot_valid(size_t slot) {
+    return slot <= MINIC_LARGE_FRAME_MAX / 8U;
+}
+
 /* Real Linux GNU AArch64 has two distinct zero-operand effects:
  * __bug_table ELF metadata with BRK, and exactly enumerated one-instruction
  * privileged/ordering ISA. Source/preflight and machine emission use the
@@ -1661,17 +1672,6 @@ bool minic_aarch64_qualify_inline_asm(
     contract->kinds[2] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     return true;
 }
-/* Transport contract for every structured GNU asm Core SSA operand.
- * Every register input and lvalue address lives in an eight-byte Core
- * frame slot.  The shared LP64 plan already permits 1 MiB frames and
- * our target-owned large-SP legalizer expands unencodable LDR Xt slots.
- * The old 4095/8 bound confused the raw byte imm12 with scaled AArch64
- * unsigned-imm12 and rejected original Linux on slot #512 and above.
- * Frame validity, not encoded ISA immediates, is the sole Core gate. */
-static bool aarch64_linux_structured_spill_slot_valid(size_t slot) {
-    return slot <= MINIC_LARGE_FRAME_MAX / 8U;
-}
-
 bool minic_aarch64_emit_qualified_structured_asm(
     FILE *out, const MinicDirectLP64BlockContext *ctx,
     const MinicCoreInstruction *ins) {
