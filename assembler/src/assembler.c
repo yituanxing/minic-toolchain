@@ -1062,6 +1062,12 @@ static bool parse_section_directive(MiniAs *as, char *args, size_t line) {
     } else if(gnu_section_family(name,".note") &&
               strcmp(name,".note.GNU-stack")!=0) {
         type=MINIAS_SHT_NOTE;
+    } else if(gnu_section_family(name,".init_array")) {
+        type=MINIAS_SHT_INIT_ARRAY;
+    } else if(gnu_section_family(name,".fini_array")) {
+        type=MINIAS_SHT_FINI_ARRAY;
+    } else if(gnu_section_family(name,".preinit_array")) {
+        type=MINIAS_SHT_PREINIT_ARRAY;
     }
 
     if (comma != NULL) {
@@ -1117,6 +1123,12 @@ static bool parse_section_directive(MiniAs *as, char *args, size_t line) {
                 type = MINIAS_SHT_NOBITS;
             } else if (strcmp(kind, "progbits") == 0) {
                 type = MINIAS_SHT_PROGBITS;
+            } else if (strcmp(kind, "init_array") == 0) {
+                type = MINIAS_SHT_INIT_ARRAY;
+            } else if (strcmp(kind, "fini_array") == 0) {
+                type = MINIAS_SHT_FINI_ARRAY;
+            } else if (strcmp(kind, "preinit_array") == 0) {
+                type = MINIAS_SHT_PREINIT_ARRAY;
             }
         }
     }
@@ -1132,10 +1144,18 @@ static bool parse_section_directive(MiniAs *as, char *args, size_t line) {
         } else if(gnu_section_family(name,".tdata") ||
                   gnu_section_family(name,".tbss")) {
             flags=MINIAS_SHF_ALLOC | MINIAS_SHF_WRITE | MINIAS_SHF_TLS;
+        } else if(type==MINIAS_SHT_INIT_ARRAY ||
+                  type==MINIAS_SHT_FINI_ARRAY ||
+                  type==MINIAS_SHT_PREINIT_ARRAY) {
+            flags=MINIAS_SHF_ALLOC | MINIAS_SHF_WRITE;
         }
         /* GNU note sections are NOT implicitly SHF_ALLOC; only an
          * explicit 'a' allocates .note.* payloads. */
     }
+    if(entry_size==0U &&
+       (type==MINIAS_SHT_INIT_ARRAY || type==MINIAS_SHT_FINI_ARRAY ||
+        type==MINIAS_SHT_PREINIT_ARRAY))
+        entry_size=as->target_xlen==32U?4U:8U;
     if ((flags & MINIAS_SHF_MERGE)!=0U && entry_size==0U) {
         minias_set_error(as,"missing-merge-entry-size:%s:line=%zu",name,line);
         return false;

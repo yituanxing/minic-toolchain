@@ -3559,3 +3559,40 @@ if "$MINIAS" --target=x86_64 -o "$work/x86-type-invalid.o" "$work/x86-type-inval
  echo 'MiniAS silently converted unknown GNU ELF symbol type to NOTYPE' >&2;exit 1
 fi
 echo 'MINIAS_SELF_AUDIT_TLS_IFUNC=PASS GNU_TLS_sections_and_symbol_type_identity'
+
+
+# SELF-AUDIT: GNU constructor/destructor arrays are SHT_INIT_ARRAY,
+# SHT_FINI_ARRAY and SHT_PREINIT_ARRAY, NOT SHT_PROGBITS.
+# Type and pointer-width sh_entsize are link-time semantics.
+cat > "$work/x86-array-sections.s" <<'X86_ARRAYS'
+.section .init_array
+.quad ctor
+.section .fini_array
+.quad dtor
+.section .preinit_array.101,"aw",@preinit_array
+.quad ctor
+.section .init_array.101,"aw",@init_array
+.quad ctor
+.section .fini_array.101,"aw",@fini_array
+.quad dtor
+.text
+ctor: ret
+dtor: ret
+X86_ARRAYS
+"$MINIAS" --target=x86_64 -o "$work/x86-array-mini.o" "$work/x86-array-sections.s"
+as --64 -o "$work/x86-array-gnu.o" "$work/x86-array-sections.s"
+for section in .init_array .fini_array .preinit_array.101 .init_array.101 .fini_array.101; do
+  readelf -SW "$work/x86-array-mini.o" |
+    awk -v n="$section" '$3==n {print $4,$7,$9} $2==n {print $3,$6,$8}' > "$work/x86-array-mini-$section.meta"
+  readelf -SW "$work/x86-array-gnu.o" |
+    awk -v n="$section" '$3==n {print $4,$7,$9} $2==n {print $3,$6,$8}' > "$work/x86-array-gnu-$section.meta"
+  test -s "$work/x86-array-mini-$section.meta"
+  diff -u "$work/x86-array-gnu-$section.meta" "$work/x86-array-mini-$section.meta"
+done
+for flavor in mini gnu; do
+  readelf -Wr "$work/x86-array-$flavor.o" |
+   grep 'R_X86_64_64' | awk '{print $3,$5,$6,$7}' |
+   LC_ALL=C sort > "$work/x86-array-$flavor.rela"
+done
+diff -u "$work/x86-array-gnu.rela" "$work/x86-array-mini.rela"
+echo 'MINIAS_SELF_AUDIT_CTOR_ARRAYS=PASS GNU_3_init_fini_preinit_metadata_and_relocations'
