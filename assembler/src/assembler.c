@@ -4449,13 +4449,21 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
     }
     op = text;
 
-    /* GNU assembly allows `.L2 = .` as an anchored local location label.
-     * The location form MUST reuse Common's fragment-backed define_label,
-     * not a static first-pass offset. All other values use Common .set. */
-    if (args[0] == '=' &&
-        (args[1] == '\0' || isspace((unsigned char)args[1]))) {
-        char *rhs = minias_trim(args + 1U);
+    /* GNU GAS also accepts assignments without surrounding spaces:
+     * vector=0x20 and vector=vector+1 inside .rept. Both spellings must
+     * reach the SAME mutable Common .set owner, not Target ISA parsing.
+     * Keep `.L2=.` anchored at the current fragment boundary. */
+    if ((args[0] == '=' && args[1] != '=') ||
+        (strchr(op, '=') != NULL && args[0] == '\0')) {
+        char *attached = strchr(op, '=');
+        char *rhs;
         char *set_args;
+        if (attached != NULL) {
+            *attached++ = '\0';
+            rhs = minias_trim(attached);
+        } else {
+            rhs = minias_trim(args + 1U);
+        }
         size_t name_len = strlen(op), rhs_len = strlen(rhs), k;
         bool ok;
         if (!rhs_len || !name_len ||
