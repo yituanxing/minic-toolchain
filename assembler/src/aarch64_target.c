@@ -3882,17 +3882,59 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
             unsigned variant=inst->encoding&3U;
             unsigned shift=(inst->encoding>>2U)&3U;
             bool wide=inst->operands[0].register_64;
-            uint32_t base=variant==0U?UINT32_C(0x52800000):
-                          variant==1U?UINT32_C(0x72800000):
-                                      UINT32_C(0x12800000);
-            code=base|(wide?UINT32_C(0x80000000):0U)|
-                (shift<<21U)|
-                (inst->operands[1].kind==MINIAS_MC_SYMBOL?0U:
-                 ((uint32_t)inst->operands[1].immediate<<5U))|
-                inst->operands[0].reg;
+            uint32_t imm16=(uint32_t)inst->operands[1].immediate;
             if(inst->operands[1].kind==MINIAS_MC_SYMBOL) {
+                const MiniAsSymbol *symbol;
+                MiniAsFixupKind kind=(MiniAsFixupKind)(inst->encoding>>4U);
                 expr=inst->operands[1].symbol;
-                fixup=(MiniAsFixupKind)(inst->encoding>>4U);
+                symbol=minias_get_symbol(as,expr->name,false);
+                if(symbol && symbol->defined &&
+                   symbol->section==MINIAS_SECTION_ABS) {
+                    uint64_t bits=symbol->value+(uint64_t)expr->addend;
+                    bool checked_signed=kind==MINIAS_FIXUP_A64_MOVW_SG0 ||
+                                        kind==MINIAS_FIXUP_A64_MOVW_SG1 ||
+                                        kind==MINIAS_FIXUP_A64_MOVW_SG2;
+                    bool checked_unsigned=kind==MINIAS_FIXUP_A64_MOVW_G0 ||
+                                          kind==MINIAS_FIXUP_A64_MOVW_G1 ||
+                                          kind==MINIAS_FIXUP_A64_MOVW_G2 ||
+                                          kind==MINIAS_FIXUP_A64_MOVW_G3;
+                    unsigned width=(shift+1U)*16U;
+                    int64_t signed_bits=(int64_t)bits;
+                    if(checked_signed && width<64U) {
+                        int64_t bound=INT64_C(1)<<(width-1U);
+                        if(signed_bits< -bound || signed_bits>=bound) {
+                            minias_set_error(as,
+                                "aarch64-movw-absolute-range:%s:line=%zu",
+                                expr->name,stmt->line);
+                            return false;
+                        }
+                    }else if(checked_unsigned && width<64U &&
+                             bits>=(UINT64_C(1)<<width)) {
+                        minias_set_error(as,
+                            "aarch64-movw-absolute-overflow:%s:line=%zu",
+                            expr->name,stmt->line);
+                        return false;
+                    }
+                    /* GNU SABS_Gn encodes negative absolute values with
+                     * MOVN, complementing its immediate 16-bit lane. A
+                     * parsed symbol may become ABS only after deferred .set
+                     * resolution. It MUST NOT leave a fake ELF relocation. */
+                    if(checked_signed && signed_bits<0 && variant==0U)
+                        variant=2U;
+                    imm16=(uint32_t)(((checked_signed &&
+                         signed_bits<0)?~bits:bits)>>(shift*16U))&UINT32_C(0xffff);
+                    fixup=MINIAS_FIXUP_NONE;
+                }else {
+                    imm16=0U;
+                    fixup=kind;
+                }
+            }
+            {
+                uint32_t base=variant==0U?UINT32_C(0x52800000):
+                              variant==1U?UINT32_C(0x72800000):
+                                          UINT32_C(0x12800000);
+                code=base|(wide?UINT32_C(0x80000000):0U)|
+                     (shift<<21U)|(imm16<<5U)|inst->operands[0].reg;
             }
             break;
         }
