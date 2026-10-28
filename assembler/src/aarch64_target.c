@@ -735,7 +735,7 @@ static bool parse_integer_family(MiniAsMCInst *inst,
             put_immediate(&inst->operands[2], imm);
         } else if((!strcmp(op,"and") || !strcmp(op,"orr") ||
                    !strcmp(op,"eor") || !strcmp(op,"ands") ||
-                   !strcmp(op,"bic") || !strcmp(op,"bics")) &&
+                   !strcmp(op,"bic")) &&
                   !spd && !spn) {
             uint64_t bits;uint32_t fields;
             {

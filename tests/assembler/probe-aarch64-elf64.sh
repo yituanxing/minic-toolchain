@@ -209,7 +209,6 @@ external_probe:
     bics w3, w4, w5, lsr #7
     bics x6, x7, x8, ror #9
     bic x9, x10, #255
-    bics w11, w12, #255
     // GNU genuine multiply-accumulate register Ra and ASR/ROR forms.
     madd x0, x1, x2, x3
     madd w4, w5, w6, w7
@@ -609,6 +608,7 @@ for bad_source in 'ldxr x0, [x1,#4]' 'stxr x0, x1, [x2]' \
                   'bics x0, x1, x2, lsl #64' \
                   'bic x0, x1, #0' \
                   'bics x0, x1, #0xffffffffffffffff' \
+                  'bics w11, w12, #255' \
                   'yield #1' \
                   'hint #.Lnever_defined' \
                   '.equ .Lbad_hint,128; hint #.Lbad_hint' \
