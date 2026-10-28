@@ -159,6 +159,20 @@ static bool a64_movw_relocation(const char *text,MiniAsSymbolExpr *expr,
         if(minias_parse_symbol_addend(value,expr)) {
             *constant=false;*signed_negative=false;
         }else if(minias_eval_i64_expression(value,&immediate)) {
+            /* GNU's checked signed SABS_Gn modifier rejects constants
+             * outside its (16*n+16)-bit SIGNED range. UABS_Gn (without
+             * NC) similarly rejects overflow above its chunk's
+             * unsigned range. Do not silently truncate checked relocs. */
+            unsigned width=(forms[i].hw+1U)*16U;
+            bool checked_signed=forms[i].name[strlen(forms[i].name)-1U]=='s';
+            bool unchecked=strstr(forms[i].name,"_nc")!=NULL;
+            uint64_t value_bits=(uint64_t)immediate;
+            if(checked_signed) {
+                uint64_t bound=UINT64_C(1)<<(width-1U);
+                if(immediate<-(int64_t)bound ||
+                   immediate>=(int64_t)bound)return false;
+            }else if(!unchecked && width<64U &&
+                     value_bits>=(UINT64_C(1)<<width))return false;
             /* GNU mov_q expands to :abs_gN_s:CONSTANT as well as a
              * symbolic relocation.  Numeric modifiers must extract
              * the 16-bit HW lane, not be treated as unresolved symbols.

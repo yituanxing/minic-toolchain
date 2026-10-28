@@ -1578,6 +1578,9 @@ for flavor in mini gnu; do
 done
 diff -u "$work/a64-movw-gnu.rels" "$work/a64-movw-mini.rels"
 for bad in 'movz w0, #:abs_g3:foo' \
+           'movz x0, :abs_g1_s:(1 << 32)' \
+           'movz x0, :abs_g2_s:(1 << 48)' \
+           'movz x0, :abs_g0:(1 << 16)' \
            'movk x0, #:abs_g1_nc:foo, lsl #16' \
            'movz x0, #:abs_g4:foo' \
            'movz x0, #:abs_g0_nc:'; do
@@ -1600,7 +1603,7 @@ movk x2,:abs_g1_nc:0x12345678
 movz x3,:abs_g0_nc:0x12345678
 movz x4,:abs_g1_s:(0xffffffffffffffff)
 movz x5,:abs_g1_s:(-0x80000000)
-movz x6,:abs_g2_s:(1 << 48)
+movz x6,:abs_g2_s:(1 << 46)
 movk x7,:abs_g0_nc:(0x8000 | 0xffff)
 GNU_MOVQ_NUMBER
 "$MINIAS" --target=aarch64 -o "$work/a64-movw-number-mini.o" "$work/a64-movw-constant.s"
