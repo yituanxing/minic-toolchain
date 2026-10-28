@@ -2597,6 +2597,8 @@ cmhi v0.16b,v1.16b,v2.16b
 cmhs v0.16b,v1.16b,v2.16b
 cmtst v0.16b,v1.16b,v2.16b
 cmeq v1.4h,v2.4h,v3.4h
+cmtst v1.8h,v2.8h,v3.8h
+cmhi v1.4s,v2.4s,v3.4s
 cmgt v3.4s,v4.4s,v5.4s
 cmge v3.2d,v4.2d,v5.2d
 A64_VEC_CMP
@@ -2613,4 +2615,4 @@ for bad in 'cmeq v0.16b,v1.8b,v2.16b' \
   echo "invalid A64 vector compare accepted: $bad" >&2; exit 1
  fi
 done
-echo 'MINIAS_A64_VECTOR_COMPARE=PASS GNU_10_words_six_families_and_3_rejects'
+echo 'MINIAS_A64_VECTOR_COMPARE=PASS GNU_12_words_six_families_and_3_rejects'
