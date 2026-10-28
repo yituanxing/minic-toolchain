@@ -68,6 +68,9 @@ typedef struct MiniAsSymbol {
     size_t alias_target_index;
     int64_t alias_addend;
     size_t alias_line;
+    /* GNU .set CONST + symbol - .section: deferred absolute offset
+     * relative to the *named* target section, never a PC-relative RELA. */
+    char *alias_section_base;
     /* Location anchors in the parsed fragment stream. Repeated labels and
      * macro expansions must not use source-line numbers as identities. */
     bool has_fragment_anchor;
