@@ -476,6 +476,31 @@ static bool a64_structure_vlist(const char *text,unsigned *first,
  * Unlike ordinary A64 operands this form has FIVE fields; parse here
  * rather than raising Common's global 4-operand limit or duplicating
  * the entire instruction tokenizer. */
+static bool parse_a64_reg(const char *text, unsigned *number, bool *is64,
+                          bool *is_sp) {
+    *is_sp = false;
+    if (strcmp(text, "sp") == 0 || strcmp(text, "wsp") == 0) {
+        *number = 31U;
+        *is64 = text[0] == 's';
+        *is_sp = true;
+        return true;
+    }
+    if (strcmp(text, "xzr") == 0 || strcmp(text, "wzr") == 0) {
+        *number = 31U;
+        *is64 = text[0] == 'x';
+        return true;
+    }
+    return parse_register(text, number, is64);
+}
+
+static bool parse_signed_number(const char *text, int64_t *out) {
+    /* The existing Common constant-expression parser already implements
+     * GNU nested arithmetic, shifts and bitwise operators. Do not create
+     * a second numeric parser for AArch64 immediates and memory offsets. */
+    if(*text=='#')++text;
+    return *text!='\0' && minias_eval_i64_expression(text,out);
+}
+
 static bool a64_sys_fields(const char *args,uint32_t *word,unsigned *rt) {
     char text[256],tok[5][80];char *start,*end;
     int64_t numbers[4];unsigned i;
@@ -511,31 +536,6 @@ static bool a64_sys_fields(const char *args,uint32_t *word,unsigned *rt) {
           ((uint32_t)numbers[2]<<8U)|
           ((uint32_t)numbers[3]<<5U);
     return true;
-}
-
-static bool parse_a64_reg(const char *text, unsigned *number, bool *is64,
-                          bool *is_sp) {
-    *is_sp = false;
-    if (strcmp(text, "sp") == 0 || strcmp(text, "wsp") == 0) {
-        *number = 31U;
-        *is64 = text[0] == 's';
-        *is_sp = true;
-        return true;
-    }
-    if (strcmp(text, "xzr") == 0 || strcmp(text, "wzr") == 0) {
-        *number = 31U;
-        *is64 = text[0] == 'x';
-        return true;
-    }
-    return parse_register(text, number, is64);
-}
-
-static bool parse_signed_number(const char *text, int64_t *out) {
-    /* The existing Common constant-expression parser already implements
-     * GNU nested arithmetic, shifts and bitwise operators. Do not create
-     * a second numeric parser for AArch64 immediates and memory offsets. */
-    if(*text=='#')++text;
-    return *text!='\0' && minias_eval_i64_expression(text,out);
 }
 
 static void put_reg(MiniAsMCOperand *dst, unsigned number, bool reg64) {
