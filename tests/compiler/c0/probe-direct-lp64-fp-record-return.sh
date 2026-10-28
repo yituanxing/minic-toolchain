@@ -73,8 +73,41 @@ cat >"$d/hfa-guard.i" <<'SRC'
 struct Huge { long double a[4]; };
 struct Huge unsupported(struct Huge a) { return a; }
 SRC
-if "$MINIC_CC" --target="$MINIC_FP_RETURN_TARGET-linux" -S "$d/hfa-guard.i" -o "$d/hfa-guard.s" 2>"$d/hfa-guard.err";then
-  echo "LP64_FP_RECORD_RETURN=FAIL target=$MINIC_FP_RETURN_TARGET long-double HFA admitted as scalar" >&2;exit 1
+if [[ "$MINIC_FP_RETURN_TARGET" == aarch64 ]]; then
+    # AAPCS64 has a separate x8 indirect-result rule; this target does not
+    # implement it yet. It must still refuse the binary128 aggregate.
+    if "$MINIC_CC" --target="$MINIC_FP_RETURN_TARGET-linux" -S "$d/hfa-guard.i" -o "$d/hfa-guard.s" 2>"$d/hfa-guard.err";then
+        echo "LP64_FP_RECORD_RETURN=FAIL target=$MINIC_FP_RETURN_TARGET unsupported binary128 aggregate accepted" >&2
+        exit 1
+    fi
+    test ! -e "$d/hfa-guard.s"
+else
+    # LP64D returns aggregates >16 bytes via a caller-owned buffer in $a0.
+    # The former negative test is now a POSITIVE mixed GNU ABI oracle: a
+    # binary128 array is not an HFA in $fa0/$fa1, despite its element type.
+    "$MINIC_CC" --target=loongarch64-linux -S "$d/hfa-guard.i" \
+        -o "$d/hfa-guard.s"
+    grep -Eq '^  st\.d \$a0, \$(sp|s0|t3),' "$d/hfa-guard.s"
+    grep -Eq '^  ld\.d \$a0, \$(sp|s0|t3),' "$d/hfa-guard.s"
+    cat >"$d/hfa-gnu-caller.c" <<'SRC'
+struct Huge { long double a[4]; };
+extern struct Huge unsupported(struct Huge a);
+int main(void) {
+    struct Huge in={{1.0L,2.0L,3.0L,4.0L}};
+    struct Huge out=unsupported(in);
+    return out.a[0]==1.0L && out.a[1]==2.0L &&
+           out.a[2]==3.0L && out.a[3]==4.0L ? 42 : 1;
+}
+SRC
+    "$cc" -c -x assembler "$d/hfa-guard.s" -o "$d/hfa-guard.o"
+    "$cc" -static "$d/hfa-gnu-caller.c" "$d/hfa-guard.o" -o "$d/hfa-mixed"
+    set +e
+    timeout 45s "$qemu" "$d/hfa-mixed"
+    hfa_status=$?
+    set -e
+    if (( hfa_status != 42 )); then
+        echo "LP64_FP_RECORD_RETURN=FAIL target=loongarch64 long-double indirect ABI exit=$hfa_status" >&2
+        exit 1
+    fi
 fi
-test ! -e "$d/hfa-guard.s"
-echo "LP64_FP_RECORD_RETURN=PASS target=$MINIC_FP_RETURN_TARGET 1_and_2_FPR_fields=1 GNU_caller_and_GNU_callee=1 QEMU=1 binary128_HFA_rejected=1"
+echo "LP64_FP_RECORD_RETURN=PASS target=$MINIC_FP_RETURN_TARGET 1_and_2_FPR_fields=1 GNU_caller_and_GNU_callee=1 QEMU=1 binary128_indirect_or_rejected=1"

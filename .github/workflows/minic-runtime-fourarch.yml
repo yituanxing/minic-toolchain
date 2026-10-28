@@ -639,6 +639,27 @@ jobs:
         run: |
           set -Eeuo pipefail
           bash tests/compiler/c0/probe-aarch64-linux-io-dependency.sh "$GITHUB_WORKSPACE/build/runtime-ci/bin/minic-cc"
+      - name: Original Linux arm64 unaligned zero-pad fault-fixup __ex_table GNU GAS/QEMU
+        if: matrix.target == 'aarch64'
+        env:
+          MINIC_REQUIRE_AARCH64_ZEROPAD: '1'
+        run: |
+          set -Eeuo pipefail
+          bash tests/compiler/c0/probe-aarch64-linux-zeropad-extable.sh "$GITHUB_WORKSPACE/build/runtime-ci/bin/minic-cc"
+      - name: Original Linux AArch64 privileged D-cache/I-cache GNU GAS hardware oracle
+        if: matrix.target == 'aarch64'
+        env:
+          MINIC_REQUIRE_AARCH64_CACHE: '1'
+        run: |
+          set -Eeuo pipefail
+          bash tests/compiler/c0/probe-aarch64-linux-cache-maintenance.sh "$GITHUB_WORKSPACE/build/runtime-ci/bin/minic-cc"
+      - name: Original Linux arm64 GIC ICC_SRE_EL1 encoded MRS/MSR GNU GAS oracle
+        if: matrix.target == 'aarch64'
+        env:
+          MINIC_REQUIRE_AARCH64_GIC_SRE: '1'
+        run: |
+          set -Eeuo pipefail
+          bash tests/compiler/c0/probe-aarch64-linux-gic-sre-sysreg.sh "$GITHUB_WORKSPACE/build/runtime-ci/bin/minic-cc"
       - name: Original GNU Linux arm64 SYSREG encoded MRS cross assembler
         if: matrix.target == 'aarch64'
         run: |

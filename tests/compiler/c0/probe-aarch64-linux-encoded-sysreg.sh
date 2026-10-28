@@ -49,4 +49,4 @@ for bad in invalid-register injected wrong-output no-volatile;do
  fi
  test ! -e "$d/bad.s"
 done
-echo 'MINIC_AARCH64_SYSREG_S=PASS original_macro=1 whitelisted_registers=10 GNU_cross=1 negative=4 privileged_exec=not_run'
+echo 'MINIC_AARCH64_SYSREG_S=PASS original_macro=1 whitelisted_registers=11 GNU_cross=1 negative=4 privileged_exec=not_run'

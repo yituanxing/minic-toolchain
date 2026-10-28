@@ -191,6 +191,7 @@ bool minic_aarch64_qualified_opaque_asm(const MinicCoreInlineAsm *a) {
         "yield", "hint#20", "sev", "sevl", "wfe", "wfi", "nop",
         "dsbsy", "dsbish", "dsbishst", "dsbld",
         "dmbish", "dmbishld", "dmbishst", "dmbsy",
+        "icialluis",
         "dmbosh", "dmboshld", "dmboshst", "isb"
     };
     char compact[64];
@@ -295,12 +296,19 @@ static const char *aarch64_barrier_template(const char *text, size_t len) {
         "dsb sy", "dsb ish", "dsb ishst", "dsb ld",
         "dsb nsh", "dsb nshst", "isb",
         "msr daifset, #3", "msr daifclr, #3",
-        "yield", "hint #20", "sev", "sevl", "wfe", "wfi", "nop"
+        "yield", "hint #20", "sev", "sevl", "wfe", "wfi", "nop",
+        "ic ialluis"
     };
     char normalized[64];
     size_t i, n = 0U;
     if (text == NULL || len == 0U || len >= sizeof(normalized))
         return NULL;
+    /* Original Linux cache.h writes the real IC operand with a tab. The
+     * opcode is unique and privilege-sensitive; keep only this exact tabbed
+     * spelling, without admitting tabs/newlines in other hardware ASM. */
+    if (len == sizeof("ic\tialluis") - 1U &&
+        memcmp(text, "ic\tialluis", len) == 0)
+        return "ic ialluis";
     for (i = 0U; i < len; ++i) {
         const char c = text[i];
         if (c == '\t' || c == '\r' || c == '\n')
@@ -545,7 +553,9 @@ static const Aarch64AtomicOperation aarch64_atomic_operations[] = {
 bool minic_aarch64_requires_qualified_input_asm(const MinicInlineAsm *src) {
     static const char *const fixed[] = {
         "brk", "stlrb", "stlrh", "stlr", "ldarb", "ldarh", "ldar",
-        "msr", "bic", ".if",
+        "msr", "bic", ".if", ".irp", "dc", "ic",
+        /* GNU .irp SYSREG metadata and D/I-cache operations are ISA-owned.
+         * A rejected constraint must not reach the generic Core ASM path. */
         "strb", "strh", "str",
         /* Original Linux CMPXCHG begins with PRFM and named operands;
          * rejected constraints/modes must not escape into generic Core. */
@@ -1047,6 +1057,7 @@ static unsigned int aarch64_linux_encoded_sysreg_form(
     static const struct { unsigned int a,b,c,d,e; } regs[]={
         {3U,0U,0U,0U,0U},
         {3U,0U,0U,0U,5U},
+        {3U,0U,12U,12U,5U}, /* ICC_SRE_EL1, original gic_read_sre */
         {3U,0U,0U,4U,0U},
         {3U,0U,0U,6U,2U},
         {3U,0U,0U,7U,0U},
@@ -1080,6 +1091,7 @@ static unsigned int aarch64_linux_encoded_sysreg_instruction(unsigned int form){
     static const struct { unsigned int a,b,c,d,e; } regs[]={
         {3U,0U,0U,0U,0U},
         {3U,0U,0U,0U,5U},
+        {3U,0U,12U,12U,5U},
         {3U,0U,0U,4U,0U},
         {3U,0U,0U,6U,2U},
         {3U,0U,0U,7U,0U},
@@ -1139,6 +1151,102 @@ static bool aarch64_linux_encoded_sysreg_emit(
                        "  str x9, [x10]\n",
            aarch64_linux_encoded_sysreg_instruction(form),
            (size_t)op[0].value*8U)>=0;
+}
+
+/* Linux 6.6 arm64 sysreg.h write_sysreg_s() is the WRITE companion to
+ * read_sysreg_s() above. Its real source uses .irp, .equ and a GNU macro
+ * to assemble a privileged MSR system-register opcode. Unlike a direct
+ * `msr foo, xN`, the named sreg is a constant expression encoded inside
+ * .inst; preserving the complete verified expression is mandatory.
+ * The kernel GICv3 SRE register is S3_0_C12_C12_5. Other arbitrary
+ * opcodes and unknown SYS_* values remain outside this exact catalog. */
+static unsigned int aarch64_linux_encoded_sysreg_write_form(
+    const char *text, size_t length) {
+    static const char prefix[] =
+        ".irpnum,0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30"
+        ".equ.L__gpr_num_x\\num,\\num"
+        ".equ.L__gpr_num_w\\num,\\num"
+        ".endr"
+        ".equ.L__gpr_num_xzr,31"
+        ".equ.L__gpr_num_wzr,31"
+        ".macromsr_s,sreg,rt"
+        ".inst(0xd5000000|(\\sreg)|(.L__gpr_num_\\rt))"
+        ".endm";
+    static const struct { unsigned int op0,op1,crn,crm,op2; } regs[] = {
+        {3U,0U,12U,12U,5U}
+    };
+    char compact[768], expected[768];
+    size_t i, used = 0U;
+    if (!text || !length || length >= sizeof(compact)) return 0U;
+    for (i = 0U; i < length; ++i) {
+        const char c = text[i];
+        if (c == ' ' || c == '\t' || c == '\r' || c == '\n') continue;
+        if (c == '\0' || used + 1U >= sizeof(compact)) return 0U;
+        compact[used++] = c;
+    }
+    compact[used] = '\0';
+    for (i = 0U; i < sizeof(regs)/sizeof(regs[0]); ++i) {
+        const int n = snprintf(expected, sizeof(expected),
+            "%smsr_s(((%u)<<19)|((%u)<<16)|((%u)<<12)|"
+            "((%u)<<8)|((%u)<<5)),%%x0.purgemmsr_s",
+            prefix, regs[i].op0, regs[i].op1, regs[i].crn,
+            regs[i].crm, regs[i].op2);
+        if (n > 0 && (size_t)n < sizeof(expected) &&
+            strcmp(compact, expected) == 0)
+            return (unsigned int)i + 1U;
+    }
+    return 0U;
+}
+
+static bool aarch64_linux_encoded_sysreg_write_source(
+    const MinicC0Program *program, const MinicInlineAsm *src,
+    MinicTargetInlineAsmContract *contract) {
+    const MinicExpression *value;
+    MinicType plain;
+    if (!program || !src || !contract || !src->is_volatile ||
+        src->is_goto || src->output_count != 0U || src->input_count != 1U ||
+        !src->inputs || src->clobber_count != 0U ||
+        src->register_clobber_count || src->has_memory_clobber ||
+        src->label_count != 0U || !constraint(&src->inputs[0], "rZ") ||
+        !aarch64_linux_encoded_sysreg_write_form(
+            src->template_text, src->template_length)) return false;
+    value = minic_c0_program_expression(program, src->inputs[0].expression);
+    if (!value || !minic_type_unqualified(value->type, &plain) ||
+        (!minic_type_equal(plain, minic_type_unsigned_long()) &&
+         !minic_type_equal(plain, minic_type_unsigned_long_long())))
+        return false;
+    contract->operand_count = 1U;
+    contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    return true;
+}
+
+static bool aarch64_linux_encoded_sysreg_write_emit(
+    FILE *out, const MinicDirectLP64BlockContext *ctx,
+    const MinicCoreInstruction *ins, const MinicCoreInlineAsm *info) {
+    const MinicCoreFunction *fn = ctx->fn;
+    const MinicCoreStructuredInlineAsmOperand *op =
+        ins->value.structured_inline_asm.operands;
+    const unsigned int form = aarch64_linux_encoded_sysreg_write_form(
+        info->template_text, info->template_length);
+    const unsigned int encoded_sre = (3U << 19) | (12U << 12) |
+                                     (12U << 8) | (5U << 5);
+    MinicType plain;
+    if (!form || form != 1U || !info->is_volatile || info->is_goto ||
+        info->has_memory_clobber || info->register_clobber_count ||
+        ctx->dynamic_frame ||
+        ins->value.structured_inline_asm.operand_count != 1U || !op ||
+        op->operand_index != 0U ||
+        op->kind != MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT ||
+        op->has_fixed_register_binding || op->early_clobber ||
+        op->value >= fn->value_count ||
+        !aarch64_linux_structured_spill_slot_valid(op->value) ||
+        !minic_type_unqualified(fn->values[op->value].type, &plain) ||
+        (!minic_type_equal(plain, minic_type_unsigned_long()) &&
+         !minic_type_equal(plain, minic_type_unsigned_long_long())))
+        return false;
+    return fprintf(out, "  ldr x9, [sp, #%zu]\n  .inst 0x%08x\n",
+        (size_t)op->value * 8U,
+        0xd5000000U | encoded_sre | 9U) >= 0;
 }
 
 /* Entire original Linux 6.6.143 arm64 TLBI v8.5 control family.
@@ -1277,6 +1385,219 @@ static unsigned int aarch64_linux_cmpwait_form(const char *s, size_t length) {
            strcmp(compact,forms[i].numeric)==0) return forms[i].width;
     return 0U;
 }
+
+/* Linux 6.6.143 arm64 word-at-a-time.h, load_unaligned_zeropad(). The
+ * instruction's faulting PC and recovery PC MUST remain in __ex_table; the
+ * 4-byte fixup plus the two exact register indices tell the arm64 kernel
+ * fixup handler how to reconstruct the zero-padded result. Replacing the
+ * whole template by `ldr` silently breaks page-boundary reads in the kernel.
+ *
+ * Normalize only insignificant ASCII whitespace. Everything else, including
+ * .irp/.equ definitions and the .short register expression, is exact and
+ * target-owned. Unknown variants fail closed; no generic inline-asm escape. */
+static bool aarch64_linux_zeropad_form(const char *s, size_t length) {
+    static const char expected[] =
+        "1:ldr%0,%22:"
+        ".irpnum,0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30"
+        ".equ.L__gpr_num_x\\num,\\num"
+        ".equ.L__gpr_num_w\\num,\\num"
+        ".endr"
+        ".equ.L__gpr_num_xzr,31"
+        ".equ.L__gpr_num_wzr,31"
+        ".pushsection__ex_table,\"a\""
+        ".align2"
+        ".long((1b)-.)"
+        ".long((2b)-.)"
+        ".short(4)"
+        ".short((((.L__gpr_num_%0)<<0)|((.L__gpr_num_%1)<<5)))"
+        ".popsection";
+    char compact[1100];
+    size_t i, n = 0U;
+    if (!s || !length || length >= sizeof(compact)) return false;
+    for (i = 0U; i < length; ++i) {
+        const char ch = s[i];
+        if (ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r') continue;
+        if (ch == '\0' || n + 1U >= sizeof(compact)) return false;
+        compact[n++] = ch;
+    }
+    compact[n] = '\0';
+    return strcmp(compact, expected) == 0;
+}
+
+static bool aarch64_linux_zeropad_source(
+    const MinicC0Program *program, const MinicInlineAsm *src,
+    MinicTargetInlineAsmContract *contract) {
+    const MinicExpression *result, *base, *memory;
+    MinicType result_type, memory_type;
+    if (!program || !src || !contract || src->is_volatile || src->is_goto ||
+        src->output_count != 1U || src->input_count != 2U ||
+        !src->outputs || !src->inputs || src->clobber_count != 0U ||
+        src->register_clobber_count != 0U || src->has_memory_clobber ||
+        src->label_count != 0U ||
+        !constraint(&src->outputs[0], "=&r") ||
+        !constraint(&src->inputs[0], "r") ||
+        !constraint(&src->inputs[1], "Q") ||
+        !aarch64_linux_zeropad_form(
+            src->template_text, src->template_length)) return false;
+    result = minic_c0_program_expression(
+        program, src->outputs[0].expression);
+    base = minic_c0_program_expression(
+        program, src->inputs[0].expression);
+    memory = minic_c0_program_expression(
+        program, src->inputs[1].expression);
+    if (!result || !base || !memory ||
+        result->value_category != MINIC_VALUE_LVALUE ||
+        memory->value_category != MINIC_VALUE_LVALUE ||
+        minic_type_is_const(result->type) ||
+        !minic_type_unqualified(result->type, &result_type) ||
+        !minic_type_unqualified(memory->type, &memory_type) ||
+        !minic_type_equal(result_type, minic_type_unsigned_long()) ||
+        !minic_type_equal(memory_type, minic_type_unsigned_long()) ||
+        !minic_type_is_pointer(base->type)) return false;
+    contract->operand_count = 3U;
+    contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
+    contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    contract->kinds[2] = MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT;
+    /* A faulting load is a hardware memory read even without an explicit
+     * GNU "memory" clobber. Keep ordering conservative in Core. */
+    contract->implicit_memory_effect = true;
+    return true;
+}
+
+static bool aarch64_linux_zeropad_emit(
+    FILE *out, const MinicDirectLP64BlockContext *ctx,
+    const MinicCoreInstruction *ins, const MinicCoreInlineAsm *info) {
+    const MinicCoreFunction *fn = ctx->fn;
+    const MinicCoreStructuredInlineAsmOperand *ops =
+        ins->value.structured_inline_asm.operands;
+    MinicType result, memory;
+    size_t i;
+    if (!info || !ops || ctx->dynamic_frame || !info->is_volatile ||
+        info->is_goto || info->register_clobber_count != 0U ||
+        !aarch64_linux_zeropad_form(
+            info->template_text, info->template_length) ||
+        ins->value.structured_inline_asm.operand_count != 3U) return false;
+    for (i = 0U; i < 3U; ++i)
+        if (ops[i].operand_index != i || ops[i].value >= fn->value_count ||
+            ops[i].has_fixed_register_binding ||
+            !aarch64_linux_structured_spill_slot_valid(ops[i].value) ||
+            (i != 0U && ops[i].early_clobber) ||
+            ops[i].kind != (i == 0U
+                ? MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT
+                : i == 1U ? MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT
+                           : MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT))
+            return false;
+    /* Target-qualified Core contracts carry typed operand roles, while
+     * the source-side =&r early-clobber is already checked above. */
+    if (!minic_type_pointee(fn->values[ops[0].value].type, &result) ||
+        !minic_type_pointee(fn->values[ops[2].value].type, &memory) ||
+        !minic_type_equal(result, minic_type_unsigned_long()) ||
+        !minic_type_equal(memory, minic_type_unsigned_long()) ||
+        !minic_type_is_pointer(fn->values[ops[1].value].type)) return false;
+    /* Operand %0 -> x9, %1 -> x10, %2 -> [x11]. The kernel exception
+     * fixup's .short indexes remain EXACTLY (9,10); they are not a guessed
+     * GNU allocator binding. Section-relative .long offsets are evaluated
+     * by the independent target assembler at the actual instruction PC. */
+    return fprintf(out,
+        "  ldr x10, [sp, #%zu]\n"
+        "  ldr x11, [sp, #%zu]\n"
+        "1: ldr x9, [x11]\n"
+        "2:\n"
+        "  .pushsection __ex_table, \"a\"\n"
+        "  .align 2\n"
+        "  .long (1b - .)\n"
+        "  .long (2b - .)\n"
+        "  .short 4\n"
+        "  .short ((9 << 0) | (10 << 5))\n"
+        "  .popsection\n"
+        "  ldr x12, [sp, #%zu]\n"
+        "  str x9, [x12]\n",
+        (size_t)ops[1].value * 8U, (size_t)ops[2].value * 8U,
+        (size_t)ops[0].value * 8U) >= 0;
+}
+
+/* Linux arm64 cache-maintenance operations are architectural side effects:
+ * instruction/data cache to PoU/PoC, not a mere compiler "memory" fence.
+ * These opcodes execute at the requested address in the target ISA. Accept
+ * only this exact one-register GNU spelling and a typed 64-bit address; in
+ * particular, a semicolon, register suffix or second instruction cannot
+ * sneak through an open-ended GNU ASM passthrough. */
+static const char *aarch64_linux_cache_op_form(
+    const char *text, size_t length) {
+    static const struct { const char *compact; const char *asm_text; } forms[] = {
+        {"dcivac,%0", "dc ivac"},
+        {"dccvac,%0", "dc cvac"},
+        {"dccvau,%0", "dc cvau"},
+        {"dccivac,%0", "dc civac"},
+        {"icivau,%0", "ic ivau"}
+    };
+    char normalized[80];
+    size_t i, n = 0U;
+    if (!text || length == 0U || length >= sizeof(normalized)) return NULL;
+    for (i = 0U; i < length; ++i) {
+        const char ch = text[i];
+        if (ch == ' ' || ch == '\t') continue;
+        if (ch == '\0' || ch == '\n' || ch == '\r' || ch == ';' ||
+            n + 1U >= sizeof(normalized)) return NULL;
+        normalized[n++] = ch;
+    }
+    normalized[n] = '\0';
+    for (i = 0U; i < sizeof(forms)/sizeof(forms[0]); ++i)
+        if (strcmp(normalized, forms[i].compact) == 0)
+            return forms[i].asm_text;
+    return NULL;
+}
+
+static bool aarch64_linux_cache_op_source(
+    const MinicC0Program *program, const MinicInlineAsm *src,
+    MinicTargetInlineAsmContract *contract) {
+    const MinicExpression *address;
+    MinicType plain;
+    if (!program || !src || !contract || !src->is_volatile ||
+        src->is_goto || src->output_count != 0U || src->input_count != 1U ||
+        !src->inputs || src->clobber_count != 1U ||
+        !src->has_memory_clobber || src->register_clobber_count != 0U ||
+        src->label_count != 0U || !constraint(&src->inputs[0], "r") ||
+        !aarch64_linux_cache_op_form(
+            src->template_text, src->template_length)) return false;
+    address = minic_c0_program_expression(program, src->inputs[0].expression);
+    if (!address || !minic_type_unqualified(address->type, &plain) ||
+        (!minic_type_is_pointer(plain) &&
+         !minic_type_equal(plain, minic_type_unsigned_long()) &&
+         !minic_type_equal(plain, minic_type_unsigned_long_long())))
+        return false;
+    contract->operand_count = 1U;
+    contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    contract->implicit_memory_effect = true;
+    return true;
+}
+
+static bool aarch64_linux_cache_op_emit(
+    FILE *out, const MinicDirectLP64BlockContext *ctx,
+    const MinicCoreInstruction *ins, const MinicCoreInlineAsm *info) {
+    const MinicCoreFunction *fn = ctx->fn;
+    const MinicCoreStructuredInlineAsmOperand *op =
+        ins->value.structured_inline_asm.operands;
+    const char *mnemonic = aarch64_linux_cache_op_form(
+        info->template_text, info->template_length);
+    MinicType type;
+    if (!mnemonic || !info->is_volatile || info->is_goto ||
+        !info->has_memory_clobber || info->register_clobber_count ||
+        ctx->dynamic_frame ||
+        ins->value.structured_inline_asm.operand_count != 1U || !op ||
+        op->operand_index != 0U ||
+        op->kind != MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT ||
+        op->has_fixed_register_binding || op->early_clobber ||
+        op->value >= fn->value_count ||
+        !aarch64_linux_structured_spill_slot_valid(op->value) ||
+        !minic_type_unqualified(fn->values[op->value].type, &type) ||
+        (!minic_type_is_pointer(type) &&
+         !minic_type_equal(type, minic_type_unsigned_long()) &&
+         !minic_type_equal(type, minic_type_unsigned_long_long())))
+        return false;
+    return fprintf(out, "  ldr x9, [sp, #%zu]\n  %s, x9\n",
+                   (size_t)op->value * 8U, mnemonic) >= 0;
+}
 bool minic_aarch64_qualify_inline_asm(
     const MinicC0Program *program, const MinicInlineAsm *src,
     MinicTargetInlineAsmContract *contract) {
@@ -1317,6 +1638,10 @@ bool minic_aarch64_qualify_inline_asm(
             }
         }
     }
+    if(aarch64_linux_zeropad_source(program,src,contract))return true;
+    if(aarch64_linux_cache_op_source(program,src,contract))return true;
+    if(aarch64_linux_encoded_sysreg_write_source(program,src,contract))
+        return true;
     if(aarch64_linux_io_dependency_source(program,src,contract))
         return true;
     if(aarch64_linux_encoded_sysreg_source(program,src,contract))
@@ -1327,12 +1652,17 @@ bool minic_aarch64_qualify_inline_asm(
      * implicit volatile ASM with no explicit memory clobber. Both that
      * source and explicit clobber variants emit the SAME physical hardware
      * instruction; rejecting the former loses original kernel semantics. */
-    if (program && src && contract && src->is_volatile &&
+    if (program && src && contract &&
         !src->is_goto && src->output_count == 0U && src->input_count == 0U &&
         src->register_clobber_count == 0U && src->label_count == 0U) {
         const char *form=aarch64_barrier_template(
             src->template_text,src->template_length);
-        if(form && src->clobber_count <= 1U &&
+        /* GNU extended/basic asm without outputs is implicitly volatile.
+         * The original Linux `asm("ic ialluis")` omits the keyword, but
+         * still executes a privileged I-cache invalidate. Admit this
+         * exact ISA opcode without weakening other nonvolatile forms. */
+        if(form && (src->is_volatile || strcmp(form,"ic ialluis")==0) &&
+           src->clobber_count <= 1U &&
            src->has_memory_clobber==(src->clobber_count==1U)) {
             contract->operand_count=0U;
             return true;
@@ -1870,6 +2200,15 @@ bool minic_aarch64_emit_qualified_structured_asm(
     if (ins->value.structured_inline_asm.inline_asm_id >= fn->inline_asm_count)
         return false;
     info = &fn->inline_asms[ins->value.structured_inline_asm.inline_asm_id];
+    if (aarch64_linux_zeropad_form(info->template_text,
+                                  info->template_length))
+        return aarch64_linux_zeropad_emit(out, ctx, ins, info);
+    if (aarch64_linux_cache_op_form(info->template_text,
+                                   info->template_length))
+        return aarch64_linux_cache_op_emit(out, ctx, ins, info);
+    if (aarch64_linux_encoded_sysreg_write_form(info->template_text,
+                                               info->template_length))
+        return aarch64_linux_encoded_sysreg_write_emit(out, ctx, ins, info);
     if (aarch64_linux_tlbi_form(
             info->template_text,info->template_length))
         return aarch64_linux_tlbi_emit(out,ctx,ins,info);
