@@ -472,12 +472,38 @@ static bool parse_integer_family(MiniAsMCInst *inst,
     unsigned kind = 0U;
 
     if (!split_operands(args, t, &n)) return false;
+    /* Explicit add/sub 12-bit LSL #12 is a *distinct* instruction form
+     * even for #0: keep shift bit for GNU exact-byte comparison. */
+    if(n==4U && (!strcmp(op,"add") || !strcmp(op,"sub") ||
+                 !strcmp(op,"adds") || !strcmp(op,"subs")) &&
+       parse_a64_reg(t[0],&rd,&wd,&spd) &&
+       parse_a64_reg(t[1],&rn,&wn,&spn) && wd==wn &&
+       !(rd==31U&&!spd) && !(rn==31U&&!spn) &&
+       strncmp(t[3],"lsl",3U)==0 &&
+       isspace((unsigned char)t[3][3])) {
+        int64_t shift;
+        if(!parse_signed_number(t[2],&imm) ||
+           !parse_signed_number(minias_trim(t[3]+3U),&shift) ||
+           shift!=12 || imm<0 || imm>4095 ||
+           ((!strcmp(op,"adds") || !strcmp(op,"subs")) && spd))
+            return false;
+        inst->opcode=!strcmp(op,"add")?A64_MC_ADD_IMM:
+                     !strcmp(op,"sub")?A64_MC_SUB_IMM:
+                     !strcmp(op,"adds")?A64_MC_ADDS_IMM:A64_MC_SUBS_IMM;
+        inst->count=3U;inst->encoding=UINT32_C(0x00400000);
+        put_reg(&inst->operands[0],rd,wd);
+        put_reg(&inst->operands[1],rn,wn);
+        put_immediate(&inst->operands[2],imm);
+        return true;
+    }
     /* GNU extended ADD/SUB/ADDS/SUBS/CMP/CMN register forms.
      * This is an AArch64 Target ISA variant, not an alternate Common IR. */
     if(n==4U || n==3U) {
         bool cmp=n==3U && (!strcmp(op,"cmp") || !strcmp(op,"cmn"));
-        bool alu=n==4U && (!strcmp(op,"add") || !strcmp(op,"sub") ||
-                            !strcmp(op,"adds") || !strcmp(op,"subs"));
+        bool stack_alu=n==3U && (!strcmp(op,"add") || !strcmp(op,"sub"));
+        bool alu=(n==4U && (!strcmp(op,"add") || !strcmp(op,"sub") ||
+                            !strcmp(op,"adds") || !strcmp(op,"subs"))) ||
+                 stack_alu;
         if(cmp || alu) {
             unsigned erd,ern,erm;
             bool dwide,nwide,mwide,dsp,nsp,msp;
@@ -491,10 +517,12 @@ static bool parse_integer_family(MiniAsMCInst *inst,
                     ern=erd;nwide=dwide;nsp=dsp;erd=31U;dsp=false;
                 }
                 sp_sensitive=dsp||nsp;
-                if((dwide || !mwide) &&
+                if((!stack_alu || sp_sensitive) &&
+                   (dwide || !mwide) &&
                    ((!strcmp(op,"add") || !strcmp(op,"sub")) || !dsp) &&
-                   a64_extended_fields(t[cmp?2U:3U],mwide,
-                                       sp_sensitive,&ext)) {
+                   a64_extended_fields(cmp?t[2]:
+                       stack_alu?(mwide?"lsl":"uxtw"):t[3],
+                       mwide,sp_sensitive,&ext)) {
                     uint32_t ext_base=!strcmp(op,"add")?UINT32_C(0x0b200000):
                                   !strcmp(op,"sub")?UINT32_C(0x4b200000):
                                   !strcmp(op,"adds") || !strcmp(op,"cmn")?
@@ -1104,7 +1132,8 @@ static bool a64_parse_relocated(MiniAsMCInst *inst,
         return false;
     if(strcmp(op,"ldr")!=0 && strcmp(op,"str")!=0 &&
        strcmp(op,"ldrb")!=0 && strcmp(op,"strb")!=0 &&
-       strcmp(op,"ldrh")!=0 && strcmp(op,"strh")!=0)
+       strcmp(op,"ldrh")!=0 && strcmp(op,"strh")!=0 &&
+       strcmp(op,"ldrsw")!=0)
         return false;
     {
         size_t sz=strlen(tok[1]);
@@ -1123,7 +1152,7 @@ static bool a64_parse_relocated(MiniAsMCInst *inst,
            !a64_attach_expr(inst,2U,&expr))return false;
         rn=regnum;
     }
-    unit=op[3]=='b'?1U:op[3]=='h'?2U:wd?8U:4U;
+    unit=!strcmp(op,"ldrsw")?4U:op[3]=='b'?1U:op[3]=='h'?2U:wd?8U:4U;
     if((unit==1U||unit==2U) && wd) {
         free(inst->operands[2].symbol);
         inst->operands[2].symbol=NULL;
@@ -1133,7 +1162,8 @@ static bool a64_parse_relocated(MiniAsMCInst *inst,
     inst->count=3U;
     put_reg(&inst->operands[0],rd,wd);
     put_reg(&inst->operands[1],rn,true);
-    inst->encoding=strcmp(op,"ldr")==0 ?
+    inst->encoding=!strcmp(op,"ldrsw")?UINT32_C(0xb9800000):
+        strcmp(op,"ldr")==0 ?
         (wd?UINT32_C(0xf9400000):UINT32_C(0xb9400000)):
         strcmp(op,"str")==0 ?
         (wd?UINT32_C(0xf9000000):UINT32_C(0xb9000000)):
@@ -2238,8 +2268,9 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
             unsigned rd = inst->operands[0].reg;
             unsigned rn = inst->operands[1].reg;
             unsigned imm = (unsigned)inst->operands[2].immediate;
-            bool shift12=imm>4095U;
-            if(shift12)imm>>=12U;
+            bool shift12=imm>4095U ||
+                           (inst->encoding&UINT32_C(0x00400000))!=0U;
+            if(imm>4095U)imm>>=12U;
             code = (inst->opcode == A64_MC_ADD_IMM ? UINT32_C(0x11000000):
                     inst->opcode == A64_MC_SUB_IMM ? UINT32_C(0x51000000):
                     inst->opcode == A64_MC_ADDS_IMM ? UINT32_C(0x31000000):

@@ -251,6 +251,18 @@ external_adr_target:
     ldpsw x6, x7, [x8], #12
     hvc #3
     smc #7
+    // GNU GCC stack-relative ADD and explicit zero/positive shift12.
+    add x0, sp, x2
+    add x3, sp, x4
+    sub x5, sp, x6
+    add x7, x8, #0, lsl 12
+    add x9, sp, #0, lsl 12
+    add x10, x11, #1, lsl 12
+    sub x12, x13, #4, lsl 12
+    adds x14, x15, #0, lsl 12
+    // GNU :lo12: LDRSW is LDST32 relocation, not generic LDR X.
+    ldrsw x0, [x1, #:lo12:fg_console]
+    ldrsw x3, [x4, #:lo12:fg_console+8]
     // GNU genuine multiply-accumulate register Ra and ASR/ROR forms.
     madd x0, x1, x2, x3
     madd w4, w5, w6, w7
@@ -673,6 +685,11 @@ for bad_source in 'ldxr x0, [x1,#4]' 'stxr x0, x1, [x2]' \
                   'ldpsw x0, x1, [x2],#256' \
                   'hvc #65536' \
                   'smc #-1' \
+                  'add x0,sp,#4096,lsl 12' \
+                  'add x0,sp,#1,lsl 11' \
+                  'ldrsw w0,[x1,#:lo12:fg_console]' \
+                  'ldrsw x0,[w1,#:lo12:fg_console]' \
+                  'adds sp,x1,#0,lsl 12' \
                   'yield #1' \
                   'hint #.Lnever_defined' \
                   '.equ .Lbad_hint,128; hint #.Lbad_hint' \
