@@ -546,7 +546,7 @@ static bool parse_integer_family(MiniAsMCInst *inst,
                              !strcmp(op,"orr")?A64_MC_ORR_REG:
                              !strcmp(op,"eor")?A64_MC_EOR_REG:
                              !strcmp(op,"ands")?A64_MC_TST_REG:A64_MC_BIC_REG;
-                if(!strcmp(op,"bics"))inst->encoding|=UINT32_C(0x40000000);
+                if(!strcmp(op,"bics"))inst->encoding|=UINT32_C(0x60000000);
                 inst->count=3U;
                 put_reg(&inst->operands[0],rd,wd);
                 put_reg(&inst->operands[1],rn,wd);
@@ -721,7 +721,7 @@ static bool parse_integer_family(MiniAsMCInst *inst,
                    (!strcmp(op,"bic") || !strcmp(op,"bics")) ? A64_MC_BIC_REG :
                                              A64_MC_EOR_REG;
             put_reg(&inst->operands[2], rm, wm);
-            if(!strcmp(op,"bics"))inst->encoding=UINT32_C(0x40000000);
+            if(!strcmp(op,"bics"))inst->encoding=UINT32_C(0x60000000);
         } else if ((strcmp(op, "add") == 0 || strcmp(op, "sub") == 0 ||
                     strcmp(op, "adds") == 0 || strcmp(op, "subs") == 0) &&
                    parse_signed_number(t[2], &imm) &&
