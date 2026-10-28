@@ -1,4 +1,5 @@
 name: MiniAS Genuine Kbuild-Generated Linux 3x7 Replay
+# 2026-10-28 rerun: inspect GNU KVM fragment mismatch with original saved .s and exact previous instruction source.
 
 # Exact-head grouped replay after Common forward GNU subtraction, typed IA32 EFI, AArch64 SMOV, and trampoline section-base aliases. Source coverage only, GNU ELF parity to follow.
 # Immutable GNU Linux 6.6.143 producer outputs from SUCCESS run 40658346252.
