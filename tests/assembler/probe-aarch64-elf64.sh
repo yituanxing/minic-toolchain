@@ -1545,4 +1545,42 @@ for bad in 'eor v1.16b,v1.8b,v3.16b' 'bic v0.4s,v1.4s,v2.4s' \
     fi
 done
 echo 'MINIAS_A64_SIMD_PMU_SHIFT=PASS GNU_exact_words SIMD7_nospace_LSL_PMU'
+
+# GNU AArch64 MOVZ/MOVK/MOVN absolute symbol relocations. Each G0..G3
+# modifier carries an ELF relocation on the INSTRUCTION, with HW
+# placement dictated by the group, independent of explicit LSL syntax.
+cat >"$work/a64-movw-reloc.s" <<'A64_MOVW_RELOC'
+.arch armv8-a
+.text
+movz x0, #:abs_g0:foo
+movz x1, #:abs_g0_nc:foo+8
+movk x2, #:abs_g1_nc:foo
+movk x3, #:abs_g2_nc:foo
+movz x4, #:abs_g3:foo
+movk x5, #:abs_g1:foo
+movz w6, #:abs_g0_nc:foo
+movn x7, #:abs_g0:foo
+A64_MOVW_RELOC
+"$MINIAS" --target=aarch64 -o "$work/a64-movw-mini.o" "$work/a64-movw-reloc.s"
+"$AARCH64_AS" -o "$work/a64-movw-gnu.o" "$work/a64-movw-reloc.s"
+"$AARCH64_OBJCOPY" -j .text -O binary "$work/a64-movw-mini.o" "$work/a64-movw-mini.bin"
+"$AARCH64_OBJCOPY" -j .text -O binary "$work/a64-movw-gnu.o" "$work/a64-movw-gnu.bin"
+cmp "$work/a64-movw-mini.bin" "$work/a64-movw-gnu.bin"
+for flavor in mini gnu; do
+    "$AARCH64_READELF" -Wr "$work/a64-movw-$flavor.o" |
+      awk '$3 ~ /^R_AARCH64_MOVW_UABS_G/ {print $1,$3,$5,$6,$7}' |
+      LC_ALL=C sort > "$work/a64-movw-$flavor.rels"
+    test "$(wc -l < "$work/a64-movw-$flavor.rels")" -eq 8
+done
+diff -u "$work/a64-movw-gnu.rels" "$work/a64-movw-mini.rels"
+for bad in 'movz w0, #:abs_g3:foo' \
+           'movk x0, #:abs_g1_nc:foo, lsl #16' \
+           'movz x0, #:abs_g4:foo' \
+           'movz x0, #:abs_g0_nc:'; do
+    printf '.text\n%s\n' "$bad" > "$work/a64-movw-bad.s"
+    if "$MINIAS" --target=aarch64 -o "$work/a64-movw-bad.o" "$work/a64-movw-bad.s" >/dev/null 2>&1; then
+        echo "bad MOVW symbolic ISA operand accepted: $bad" >&2;exit 1
+    fi
+done
+echo 'MINIAS_A64_MOVW_RELOC=PASS GNU_bytes_G0_G1_G2_G3_RELA_addends'
 echo 'MINIAS_AARCH64_VSLICE=PASS ELF64=1 gnu_bytes=equal relocation_call26_jump26_abs64=1 ld=pass qemu=exit0'

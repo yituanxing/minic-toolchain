@@ -37,7 +37,14 @@ enum {
     AARCH64_R_TSTBR14 = 279U,
     AARCH64_R_CONDBR19 = 280U,
     AARCH64_R_JUMP26 = 282U,
-    AARCH64_R_CALL26 = 283U
+    AARCH64_R_CALL26 = 283U,
+    AARCH64_R_MOVW_UABS_G0 = 263U,
+    AARCH64_R_MOVW_UABS_G0_NC = 264U,
+    AARCH64_R_MOVW_UABS_G1 = 265U,
+    AARCH64_R_MOVW_UABS_G1_NC = 266U,
+    AARCH64_R_MOVW_UABS_G2 = 267U,
+    AARCH64_R_MOVW_UABS_G2_NC = 268U,
+    AARCH64_R_MOVW_UABS_G3 = 269U
 };
 
 /* GNU AArch64 NAME .req REGISTER aliases belong exclusively to the target.
@@ -116,6 +123,34 @@ static bool parse_imm16(const char *text, unsigned *result) {
         return false;
     *result=(unsigned)value;
     return true;
+}
+
+/* Seven GNU MOVZ/MOVK/MOVN ELF MOVW groups. The relocation
+ * determines HW=0..3. Never fold a symbolic address to numeric imm16
+ * or delegate AArch64 field placement to Common ELF serialization. */
+static bool a64_movw_relocation(const char *text,MiniAsSymbolExpr *expr,
+                               MiniAsFixupKind *kind,unsigned *group) {
+    static const struct {const char *name;MiniAsFixupKind fixup;
+                         unsigned hw;} forms[]={
+        {"abs_g0",MINIAS_FIXUP_A64_MOVW_G0,0U},
+        {"abs_g0_nc",MINIAS_FIXUP_A64_MOVW_G0_NC,0U},
+        {"abs_g1",MINIAS_FIXUP_A64_MOVW_G1,1U},
+        {"abs_g1_nc",MINIAS_FIXUP_A64_MOVW_G1_NC,1U},
+        {"abs_g2",MINIAS_FIXUP_A64_MOVW_G2,2U},
+        {"abs_g2_nc",MINIAS_FIXUP_A64_MOVW_G2_NC,2U},
+        {"abs_g3",MINIAS_FIXUP_A64_MOVW_G3,3U}
+    };
+    unsigned i;
+    if(*text=='#')++text;
+    if(*text++!=':')return false;
+    for(i=0U;i<sizeof(forms)/sizeof(forms[0]);++i) {
+        size_t n=strlen(forms[i].name);
+        if(strncmp(text,forms[i].name,n)!=0 || text[n]!=':')continue;
+        if(!minias_parse_symbol_addend(text+n+1U,expr))return false;
+        *kind=forms[i].fixup;*group=forms[i].hw;
+        return true;
+    }
+    return false;
 }
 
 static bool split_two(const char *args, char *first, size_t cap1,
@@ -2282,11 +2317,19 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
         put_reg(&inst->operands[0],reg,true);
     } else if((!strcmp(op,"movz") || !strcmp(op,"movk") ||
                !strcmp(op,"movn"))) {
-        char parts[4][96];unsigned n,rd,imm16,shift=0U;
+        char parts[4][96];unsigned n,rd,imm16=0U,shift=0U;
         bool wide,sp;
+        MiniAsSymbolExpr movw_expr;
+        MiniAsFixupKind movw_fixup=MINIAS_FIXUP_NONE;
+        bool reloc;
         if(!split_operands(args,parts,&n) || (n!=2U && n!=3U) ||
-           !parse_a64_reg(parts[0],&rd,&wide,&sp) || sp ||
-           !parse_imm16(parts[1],&imm16)) {
+           !parse_a64_reg(parts[0],&rd,&wide,&sp) || sp) {
+            minias_set_error(as,"bad-aarch64-wide-immediate:line=%zu",stmt->line);
+            free(inst);return false;
+        }
+        reloc=a64_movw_relocation(parts[1],&movw_expr,&movw_fixup,&shift);
+        if((reloc && (n!=2U || (!wide && shift>=2U))) ||
+           (!reloc && !parse_imm16(parts[1],&imm16))) {
             minias_set_error(as,"bad-aarch64-wide-immediate:line=%zu",stmt->line);
             free(inst);return false;
         }
@@ -2303,9 +2346,15 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
         }
         inst->opcode=A64_MC_WIDE_IMM;inst->count=2U;
         inst->encoding=(!strcmp(op,"movz")?0U:!strcmp(op,"movk")?1U:2U)
-                      |(shift<<2U);
+                      |(shift<<2U)|
+                      (reloc?((uint32_t)movw_fixup<<4U):0U);
         put_reg(&inst->operands[0],rd,wide);
-        put_immediate(&inst->operands[1],(int64_t)imm16);
+        if(reloc) {
+            if(!a64_attach_expr(inst,1U,&movw_expr)) {
+                minias_set_error(as,"out-of-memory:a64-movw-reloc");
+                free(inst);return false;
+            }
+        }else put_immediate(&inst->operands[1],(int64_t)imm16);
     } else if((!strcmp(op,"yield") || !strcmp(op,"wfe") ||
                !strcmp(op,"wfi") || !strcmp(op,"sev") ||
                !strcmp(op,"sevl")) && !*args) {
@@ -2758,15 +2807,20 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
             break;
         case A64_MC_WIDE_IMM: {
             unsigned variant=inst->encoding&3U;
-            unsigned shift=inst->encoding>>2U;
+            unsigned shift=(inst->encoding>>2U)&3U;
             bool wide=inst->operands[0].register_64;
             uint32_t base=variant==0U?UINT32_C(0x52800000):
                           variant==1U?UINT32_C(0x72800000):
                                       UINT32_C(0x12800000);
             code=base|(wide?UINT32_C(0x80000000):0U)|
                 (shift<<21U)|
-                ((uint32_t)inst->operands[1].immediate<<5U)|
+                (inst->operands[1].kind==MINIAS_MC_SYMBOL?0U:
+                 ((uint32_t)inst->operands[1].immediate<<5U))|
                 inst->operands[0].reg;
+            if(inst->operands[1].kind==MINIAS_MC_SYMBOL) {
+                expr=inst->operands[1].symbol;
+                fixup=(MiniAsFixupKind)(inst->encoding>>4U);
+            }
             break;
         }
         case A64_MC_MOVZ:
@@ -3359,6 +3413,20 @@ static uint32_t aarch64_fixup_relocation_type(MiniAsFixupKind kind,
             return width == 4U ? AARCH64_R_LDST32_ABS_LO12_NC : 0U;
         case MINIAS_FIXUP_A64_LDST64_LO12:
             return width == 4U ? AARCH64_R_LDST64_ABS_LO12_NC : 0U;
+        case MINIAS_FIXUP_A64_MOVW_G0:
+            return width == 4U ? AARCH64_R_MOVW_UABS_G0 : 0U;
+        case MINIAS_FIXUP_A64_MOVW_G0_NC:
+            return width == 4U ? AARCH64_R_MOVW_UABS_G0_NC : 0U;
+        case MINIAS_FIXUP_A64_MOVW_G1:
+            return width == 4U ? AARCH64_R_MOVW_UABS_G1 : 0U;
+        case MINIAS_FIXUP_A64_MOVW_G1_NC:
+            return width == 4U ? AARCH64_R_MOVW_UABS_G1_NC : 0U;
+        case MINIAS_FIXUP_A64_MOVW_G2:
+            return width == 4U ? AARCH64_R_MOVW_UABS_G2 : 0U;
+        case MINIAS_FIXUP_A64_MOVW_G2_NC:
+            return width == 4U ? AARCH64_R_MOVW_UABS_G2_NC : 0U;
+        case MINIAS_FIXUP_A64_MOVW_G3:
+            return width == 4U ? AARCH64_R_MOVW_UABS_G3 : 0U;
         default: return 0U;
     }
 }
