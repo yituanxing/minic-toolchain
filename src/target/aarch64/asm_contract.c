@@ -95,6 +95,59 @@ static bool aarch64_linux_brk_template(const char *text, size_t length) {
 static bool aarch64_linux_brk_value(int64_t value) {
     return value >= 0 && value <= 4095;
 }
+/* The original Linux 6.6.143 arm64 io.h __raw_read{b,w,l,q}
+ * carries a Linux feature-91 .altinstructions patch table. Neither a
+ * plain LDR nor a compiler barrier can replace the complete contract.
+ * Exact source admission and machine emission share this target catalog.
+ * 91 is ARM64_WORKAROUND_DEVICE_LOAD_ACQUIRE from v6.6.143 cpucaps. */
+typedef struct {
+    const char *old_source, *new_source;
+    const char *old_asm, *new_asm, *store_asm;
+    size_t width;
+} Aarch64RawIoRead;
+static const Aarch64RawIoRead aarch64_raw_io_reads[] = {
+    {"ldrb%w0,[%1]", "ldarb%w0,[%1]", "ldrb w9, [x10]",
+     "ldarb w9, [x10]", "strb w9, [x11]", 1U},
+    {"ldrh%w0,[%1]", "ldarh%w0,[%1]", "ldrh w9, [x10]",
+     "ldarh w9, [x10]", "strh w9, [x11]", 2U},
+    {"ldr%w0,[%1]", "ldar%w0,[%1]", "ldr w9, [x10]",
+     "ldar w9, [x10]", "str w9, [x11]", 4U},
+    {"ldr%0,[%1]", "ldar%0,[%1]", "ldr x9, [x10]",
+     "ldar x9, [x10]", "str x9, [x11]", 8U}
+};
+static const Aarch64RawIoRead *aarch64_raw_io_read(
+    const char *text, size_t length) {
+    static const char middle[] =
+        "662:.pushsection.altinstructions,\\\"a\\\""
+        ".word661b-..word663f-..hword91"
+        ".byte662b-661b.byte664f-663f"
+        ".popsection.subsection1663:";
+    static const char tail[] =
+        "664:.org.-(664b-663b)+(662b-661b)"
+        ".org.-(662b-661b)+(664b-663b).previous.endif";
+    char compact[512], expected[512];
+    size_t i, n = 0U;
+    if (!text || !length || length >= sizeof(compact)) return NULL;
+    for (i = 0U; i < length; ++i) {
+        const char ch = text[i];
+        if (ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n')
+            continue;
+        if (n + 1U >= sizeof(compact)) return NULL;
+        compact[n++] = ch;
+    }
+    compact[n] = '\0';
+    for (i = 0U; i < sizeof(aarch64_raw_io_reads) /
+                          sizeof(aarch64_raw_io_reads[0]); ++i) {
+        const Aarch64RawIoRead *d = &aarch64_raw_io_reads[i];
+        const int written = snprintf(expected, sizeof(expected),
+            ".if1==1661:%s%s%s%s", d->old_source, middle,
+            d->new_source, tail);
+        if (written > 0 && (size_t)written < sizeof(expected) &&
+            strcmp(compact, expected) == 0) return d;
+    }
+    return NULL;
+}
+
 /* Both real 6.6.143 arm64 prefetch() and prefetchw() in
  * processor.h use GNU p and %a0. A trailing newline is source whitespace;
  * the only safe hardware opcodes are exact PRFM PLDL1KEEP/PSTL1KEEP. */
@@ -654,7 +707,34 @@ bool minic_aarch64_qualify_inline_asm(
             return true;
         }
     }
-     /* Linux arm64 hardware prefetch is an explicit volatile ISA hint,
+     /* Preserve the whole original Linux MMIO load alternative and its
+     * replaceable acquire variant. Source uses =r and a pointer input.
+     * This is NOT a Core-native portable volatile-load instruction. */
+    if (program && src && contract && src->is_volatile && !src->is_goto &&
+        src->output_count == 1U && src->input_count == 1U &&
+        src->outputs && src->inputs && src->label_count == 0U &&
+        src->clobber_count == 0U && src->register_clobber_count == 0U &&
+        !src->has_memory_clobber &&
+        constraint(&src->outputs[0], "=r") &&
+        constraint(&src->inputs[0], "r")) {
+        const Aarch64RawIoRead *d = aarch64_raw_io_read(
+            src->template_text, src->template_length);
+        const MinicExpression *dst = minic_c0_program_expression(
+            program, src->outputs[0].expression);
+        const MinicExpression *ptr = minic_c0_program_expression(
+            program, src->inputs[0].expression);
+        if (d && dst && ptr &&
+            dst->value_category == MINIC_VALUE_LVALUE &&
+            !minic_type_is_const(dst->type) &&
+            aarch64_stlr_type(dst->type, d->width) &&
+            minic_type_is_pointer(ptr->type)) {
+            contract->operand_count = 2U;
+            contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
+            contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+            return true;
+        }
+    }
+    /* Linux arm64 hardware prefetch is an explicit volatile ISA hint,
      * transported as a generic Core pointer scalar. No generic PRFM
      * passthrough or hardcoded function names in Frontend/Core. */
     if (program && src && contract && src->is_volatile && !src->is_goto &&
@@ -1183,6 +1263,54 @@ bool minic_aarch64_emit_qualified_structured_asm(
                             "  ldr x10, [sp, #%zu]\n"
                             "  str x9, [x10]\n",
                        reg, (size_t)operand[0].value * 8U) >= 0;
+    }
+    if (ins->value.structured_inline_asm.operand_count == 2U &&
+        aarch64_raw_io_read(info->template_text, info->template_length)) {
+        const Aarch64RawIoRead *d = aarch64_raw_io_read(
+            info->template_text, info->template_length);
+        const MinicCoreStructuredInlineAsmOperand *ops =
+            ins->value.structured_inline_asm.operands;
+        MinicType output_type;
+        if (!d || !info->is_volatile || info->is_goto ||
+            info->has_memory_clobber || info->register_clobber_count ||
+            ops[0].operand_index != 0U ||
+            ops[0].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT ||
+            ops[1].operand_index != 1U ||
+            ops[1].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT ||
+            ops[0].early_clobber || ops[1].early_clobber ||
+            ops[0].has_fixed_register_binding || ops[1].has_fixed_register_binding ||
+            ops[0].value >= fn->value_count || ops[1].value >= fn->value_count ||
+            ops[0].value > 4095U / 8U || ops[1].value > 4095U / 8U ||
+            !minic_type_pointee(fn->values[ops[0].value].type, &output_type) ||
+            !aarch64_stlr_type(output_type, d->width) ||
+            !minic_type_is_pointer(fn->values[ops[1].value].type))
+            return false;
+        /* x9/x10/x11 are AAPCS64 caller-scratch. GNU linker consumes the
+         * preserved 2×PREL32, 12-byte .altinstructions feature-91 record.
+         * User QEMU runs LDR; Linux runtime can replace it with LDAR. */
+        return fprintf(out,
+            "  ldr x10, [sp, #%zu]\n"
+            "  .if 1 == 1\n"
+            "661:\n  %s\n"
+            "662:\n"
+            "  .pushsection .altinstructions,\\\"a\\\"\n"
+            "  .word 661b - .\n"
+            "  .word 663f - .\n"
+            "  .hword 91\n"
+            "  .byte 662b - 661b\n"
+            "  .byte 664f - 663f\n"
+            "  .popsection\n"
+            "  .subsection 1\n"
+            "663:\n  %s\n"
+            "664:\n"
+            "  .org . - (664b-663b) + (662b-661b)\n"
+            "  .org . - (662b-661b) + (664b-663b)\n"
+            "  .previous\n"
+            "  .endif\n"
+            "  ldr x11, [sp, #%zu]\n"
+            "  %s\n",
+            (size_t)ops[1].value * 8U, d->old_asm, d->new_asm,
+            (size_t)ops[0].value * 8U, d->store_asm) >= 0;
     }
     if (ins->value.structured_inline_asm.operand_count == 2U &&
         aarch64_linux_percpu_alternative_template(
