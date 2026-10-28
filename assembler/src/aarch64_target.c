@@ -44,7 +44,10 @@ enum {
     AARCH64_R_MOVW_UABS_G1_NC = 266U,
     AARCH64_R_MOVW_UABS_G2 = 267U,
     AARCH64_R_MOVW_UABS_G2_NC = 268U,
-    AARCH64_R_MOVW_UABS_G3 = 269U
+    AARCH64_R_MOVW_UABS_G3 = 269U,
+    AARCH64_R_MOVW_SABS_G0 = 270U,
+    AARCH64_R_MOVW_SABS_G1 = 271U,
+    AARCH64_R_MOVW_SABS_G2 = 272U
 };
 
 /* GNU AArch64 NAME .req REGISTER aliases belong exclusively to the target.
@@ -138,7 +141,10 @@ static bool a64_movw_relocation(const char *text,MiniAsSymbolExpr *expr,
         {"abs_g1_nc",MINIAS_FIXUP_A64_MOVW_G1_NC,1U},
         {"abs_g2",MINIAS_FIXUP_A64_MOVW_G2,2U},
         {"abs_g2_nc",MINIAS_FIXUP_A64_MOVW_G2_NC,2U},
-        {"abs_g3",MINIAS_FIXUP_A64_MOVW_G3,3U}
+        {"abs_g3",MINIAS_FIXUP_A64_MOVW_G3,3U},
+        {"abs_g0_s",MINIAS_FIXUP_A64_MOVW_SG0,0U},
+        {"abs_g1_s",MINIAS_FIXUP_A64_MOVW_SG1,1U},
+        {"abs_g2_s",MINIAS_FIXUP_A64_MOVW_SG2,2U}
     };
     unsigned i;
     if(*text=='#')++text;
@@ -3427,6 +3433,12 @@ static uint32_t aarch64_fixup_relocation_type(MiniAsFixupKind kind,
             return width == 4U ? AARCH64_R_MOVW_UABS_G2_NC : 0U;
         case MINIAS_FIXUP_A64_MOVW_G3:
             return width == 4U ? AARCH64_R_MOVW_UABS_G3 : 0U;
+        case MINIAS_FIXUP_A64_MOVW_SG0:
+            return width == 4U ? AARCH64_R_MOVW_SABS_G0 : 0U;
+        case MINIAS_FIXUP_A64_MOVW_SG1:
+            return width == 4U ? AARCH64_R_MOVW_SABS_G1 : 0U;
+        case MINIAS_FIXUP_A64_MOVW_SG2:
+            return width == 4U ? AARCH64_R_MOVW_SABS_G2 : 0U;
         default: return 0U;
     }
 }
