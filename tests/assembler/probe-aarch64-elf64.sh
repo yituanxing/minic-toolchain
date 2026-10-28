@@ -1587,4 +1587,27 @@ for bad in 'movz w0, #:abs_g3:foo' \
     fi
 done
 echo 'MINIAS_A64_MOVW_RELOC=PASS GNU_bytes_signed_unsigned_G0_G1_G2_G3_RELA_addends'
+
+# GNU architecture's mov_q macro uses signed/unsigned MOVW groups with
+# numeric CONSTANT arguments as well as ELF SYMBOL arguments. Signed
+# negative values select MOVN, all others use the HW lane extractor.
+cat > "$work/a64-movw-constant.s" <<'GNU_MOVQ_NUMBER'
+.arch armv8-a
+.text
+movz x0,:abs_g1_s:0x12345678
+movz x1,:abs_g2_s:(0x123456789abc)
+movk x2,:abs_g1_nc:0x12345678
+movz x3,:abs_g0_nc:0x12345678
+movz x4,:abs_g1_s:(0xffffffffffffffff)
+movz x5,:abs_g1_s:(-0x80000000)
+movz x6,:abs_g2_s:(1 << 48)
+movk x7,:abs_g0_nc:(0x8000 | 0xffff)
+GNU_MOVQ_NUMBER
+"$MINIAS" --target=aarch64 -o "$work/a64-movw-number-mini.o" "$work/a64-movw-constant.s"
+"$AARCH64_AS" -o "$work/a64-movw-number-gnu.o" "$work/a64-movw-constant.s"
+"$AARCH64_OBJCOPY" -j .text -O binary "$work/a64-movw-number-mini.o" "$work/a64-movw-number-mini.bin"
+"$AARCH64_OBJCOPY" -j .text -O binary "$work/a64-movw-number-gnu.o" "$work/a64-movw-number-gnu.bin"
+cmp "$work/a64-movw-number-mini.bin" "$work/a64-movw-number-gnu.bin"
+"$AARCH64_READELF" -Wr "$work/a64-movw-number-mini.o" | grep -q 'There are no relocations'
+echo 'MINIAS_A64_MOVW_NUMERIC=PASS GNU_numeric_signed_MOVN_lane_extraction'
 echo 'MINIAS_AARCH64_VSLICE=PASS ELF64=1 gnu_bytes=equal relocation_call26_jump26_abs64=1 ld=pass qemu=exit0'

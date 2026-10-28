@@ -132,7 +132,9 @@ static bool parse_imm16(const char *text, unsigned *result) {
  * determines HW=0..3. Never fold a symbolic address to numeric imm16
  * or delegate AArch64 field placement to Common ELF serialization. */
 static bool a64_movw_relocation(const char *text,MiniAsSymbolExpr *expr,
-                               MiniAsFixupKind *kind,unsigned *group) {
+                               MiniAsFixupKind *kind,unsigned *group,
+                               bool *constant,uint64_t *bits,
+                               bool *signed_negative) {
     static const struct {const char *name;MiniAsFixupKind fixup;
                          unsigned hw;} forms[]={
         {"abs_g0",MINIAS_FIXUP_A64_MOVW_G0,0U},
@@ -152,7 +154,21 @@ static bool a64_movw_relocation(const char *text,MiniAsSymbolExpr *expr,
     for(i=0U;i<sizeof(forms)/sizeof(forms[0]);++i) {
         size_t n=strlen(forms[i].name);
         if(strncmp(text,forms[i].name,n)!=0 || text[n]!=':')continue;
-        if(!minias_parse_symbol_addend(text+n+1U,expr))return false;
+        const char *value=text+n+1U;
+        int64_t immediate;
+        if(minias_parse_symbol_addend(value,expr)) {
+            *constant=false;*signed_negative=false;
+        }else if(minias_eval_i64_expression(value,&immediate)) {
+            /* GNU mov_q expands to :abs_gN_s:CONSTANT as well as a
+             * symbolic relocation.  Numeric modifiers must extract
+             * the 16-bit HW lane, not be treated as unresolved symbols.
+             * For signed negatives GNU selects MOVN and complements the
+             * numeric lane before encoding. */
+            *constant=true;
+            *bits=(uint64_t)immediate;
+            *signed_negative=immediate<0 &&
+                             forms[i].name[strlen(forms[i].name)-1U]=='s';
+        }else return false;
         *kind=forms[i].fixup;*group=forms[i].hw;
         return true;
     }
@@ -2327,18 +2343,25 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
         bool wide,sp;
         MiniAsSymbolExpr movw_expr;
         MiniAsFixupKind movw_fixup=MINIAS_FIXUP_NONE;
-        bool reloc;
+        bool modifier,constant=false,signed_negative=false;
+        uint64_t bits=0U;
+        unsigned variant;
         if(!split_operands(args,parts,&n) || (n!=2U && n!=3U) ||
            !parse_a64_reg(parts[0],&rd,&wide,&sp) || sp) {
             minias_set_error(as,"bad-aarch64-wide-immediate:line=%zu",stmt->line);
             free(inst);return false;
         }
-        reloc=a64_movw_relocation(parts[1],&movw_expr,&movw_fixup,&shift);
-        if((reloc && (n!=2U || (!wide && shift>=2U))) ||
-           (!reloc && !parse_imm16(parts[1],&imm16))) {
-            minias_set_error(as,"bad-aarch64-wide-immediate:line=%zu",stmt->line);
+        modifier=a64_movw_relocation(parts[1],&movw_expr,&movw_fixup,
+                                      &shift,&constant,&bits,&signed_negative);
+        if((modifier && (n!=2U || (!wide && shift>=2U))) ||
+           (!modifier && !parse_imm16(parts[1],&imm16))) {
+            minias_set_error(as,"bad-aarch64-wide-immediate:%s:line=%zu",
+                             args,stmt->line);
             free(inst);return false;
         }
+        if(modifier && constant)
+            imm16=(unsigned)((signed_negative?~bits:bits)>>(16U*shift))&
+                  UINT32_C(0xffff);
         if(n==3U) {
             int64_t raw_shift;
             if(strncmp(parts[2],"lsl ",4U)!=0 ||
@@ -2350,12 +2373,15 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
             }
             shift=(unsigned)raw_shift/16U;
         }
+        variant=!strcmp(op,"movz")?0U:!strcmp(op,"movk")?1U:2U;
+        if(modifier && constant && signed_negative && variant==0U)
+            variant=2U;
         inst->opcode=A64_MC_WIDE_IMM;inst->count=2U;
-        inst->encoding=(!strcmp(op,"movz")?0U:!strcmp(op,"movk")?1U:2U)
-                      |(shift<<2U)|
-                      (reloc?((uint32_t)movw_fixup<<4U):0U);
+        inst->encoding=variant|(shift<<2U)|
+                      (modifier && !constant?
+                        ((uint32_t)movw_fixup<<4U):0U);
         put_reg(&inst->operands[0],rd,wide);
-        if(reloc) {
+        if(modifier && !constant) {
             if(!a64_attach_expr(inst,1U,&movw_expr)) {
                 minias_set_error(as,"out-of-memory:a64-movw-reloc");
                 free(inst);return false;
