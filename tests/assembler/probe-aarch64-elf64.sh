@@ -534,6 +534,13 @@ function_pointer:
     .hword 0x1234
     .xword 0x1122334455667788
     .xword after_call
+    // GNU Linux exception tables encode forward label differences /4.
+    .byte (.Ldiv_after - .Ldiv_start) / 4
+    .2byte (.Ldiv_after - .Ldiv_start) / 4
+.Ldiv_start:
+    .byte 0x10,0x20,0x30,0x40,0x50,0x60,0x70,0x80
+.Ldiv_after:
+    .byte (.Ldiv_after - .Ldiv_start) / 4
 .section ".initcall6.init", "a"
 .global initcall_slot
 initcall_slot:
