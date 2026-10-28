@@ -2995,3 +2995,39 @@ for target in x86_64 loongarch64; do
  cmp "$work/$target-defexpr-mini.bin" "$work/$target-defexpr-gnu.bin"
 done
 echo 'MINIAS_COMMON_DEFAULT_AND_SPACED_EXPRESSION=PASS GNU_x86_Loong_nested_optional_and_symbolic_args'
+
+# GNU original x86 entry_64.S uses vector=0x20 with no spaces. The
+# assignment must be Common .set (mutable in .rept), never an ISA opcode.
+# Test both targets byte-for-byte and preserve the existing .L=.
+# fragment anchor meaning.
+cat > "$work/gnu-compact-assign.s" <<'GNU_COMPACT_ASSIGN'
+.data
+vector=0x20
+.byte vector
+.rept 3
+vector=vector+1
+.byte vector
+.endr
+vector =0x40
+.byte vector
+.Lcompact=.
+.byte .Lcompact - .
+GNU_COMPACT_ASSIGN
+for target in x86_64 loongarch64; do
+ "$MINIAS" --target="$target" -o "$work/$target-compact-mini.o" "$work/gnu-compact-assign.s"
+ if [ "$target" = x86_64 ]; then
+  as --64 -o "$work/$target-compact-gnu.o" "$work/gnu-compact-assign.s"
+  objcopy -j .data -O binary "$work/$target-compact-mini.o" "$work/$target-compact-mini.bin"
+  objcopy -j .data -O binary "$work/$target-compact-gnu.o" "$work/$target-compact-gnu.bin"
+ else
+  "$LOONGAS" -mabi=lp64d -o "$work/$target-compact-gnu.o" "$work/gnu-compact-assign.s"
+  "$LOONGCOPY" -j .data -O binary "$work/$target-compact-mini.o" "$work/$target-compact-mini.bin"
+  "$LOONGCOPY" -j .data -O binary "$work/$target-compact-gnu.o" "$work/$target-compact-gnu.bin"
+ fi
+ cmp "$work/$target-compact-mini.bin" "$work/$target-compact-gnu.bin"
+ printf '.data\nvector=1/0\n.byte vector\n' > "$work/gnu-compact-invalid.s"
+ if "$MINIAS" --target="$target" -o "$work/$target-compact-bad.o" "$work/gnu-compact-invalid.s" >/dev/null 2>&1; then
+  echo "invalid GNU compact assignment accepted on $target" >&2; exit 1
+ fi
+done
+echo 'MINIAS_COMMON_COMPACT_ASSIGN=PASS GNU_x86_Loong_rept_mutable_and_fragment_anchor'
