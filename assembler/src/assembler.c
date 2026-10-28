@@ -5953,14 +5953,26 @@ static bool process_irp_block(MiniAs *as,
 
     cursor = comma + 1;
     for (;;) {
-        char *next = strchr(cursor, ',');
+        char *next_comma;
+        char *next_space;
+        char *next;
         char *value;
+        bool comma_delimited;
         MiniAsSourceLine *expanded = NULL;
         size_t i;
 
-        if (next != NULL) {
-            *next = '\0';
-        }
+        /* GNU GAS .irp accepts BOTH commas and unquoted whitespace
+         * between values, even in the same list. Original Linux GHASH:
+         *   .irp key, K0, K1, K2, K3, K4 K5
+         * must expand K4 and K5 separately. Reuse the shared macro
+         * whitespace lexer (which respects quotes and brackets). */
+        while (*cursor == ' ' || *cursor == '\t') ++cursor;
+        next_comma = strchr(cursor, ',');
+        next_space = find_macro_argument_space(cursor);
+        comma_delimited = next_comma != NULL &&
+                          (next_space == NULL || next_comma < next_space);
+        next = comma_delimited ? next_comma : next_space;
+        if (next != NULL) *next = '\0';
         value = minias_trim(cursor);
         if (count != 0U) {
             expanded = calloc(count, sizeof(*expanded));
@@ -5990,6 +6002,13 @@ static bool process_irp_block(MiniAs *as,
             break;
         }
         cursor = next + 1;
+        /* Do not manufacture a blank final argument from trailing
+         * whitespace. A genuine trailing comma still carries an empty
+         * GNU positional value, as it did before this change. */
+        if (!comma_delimited) {
+            while (*cursor == ' ' || *cursor == '\t') ++cursor;
+            if (*cursor == '\0') break;
+        }
     }
 
     free(copy);
