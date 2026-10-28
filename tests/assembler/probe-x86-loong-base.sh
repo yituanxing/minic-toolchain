@@ -2428,6 +2428,38 @@ for bad in 'sysretq %rax' 'sysretl $1'; do
     fi
 done
 echo 'MINIAS_X86_SYSRET=PASS GNU_bytes long_mode_32_64_aliases'
+# GNU kernel INVPCID 66/0F38 and x87 scalar loads/stores:
+# identical target ModRM/SIB/ELF fixup semantics, with full bytes and
+# PC32 relocation addend independently compared to real GNU GAS.
+cat > "$work/x86-kernel-memory-isa.s" <<'KERNEL_MEM_GNU'
+.text
+invpcid (%rsp), %rax
+invpcid 8(%r12), %r13
+invpcid ext_inv(%rip), %r9
+fldl x(%rip)
+fildl y(%rip)
+fstpl 16(%rsp)
+fistpl 24(%rsp)
+KERNEL_MEM_GNU
+"$MINIAS" --target=x86_64 -o "$work/x86-kernel-memory-mini.o" "$work/x86-kernel-memory-isa.s"
+as --64 -o "$work/x86-kernel-memory-gnu.o" "$work/x86-kernel-memory-isa.s"
+objcopy -j .text -O binary "$work/x86-kernel-memory-mini.o" "$work/x86-kernel-memory-mini.bin"
+objcopy -j .text -O binary "$work/x86-kernel-memory-gnu.o" "$work/x86-kernel-memory-gnu.bin"
+cmp "$work/x86-kernel-memory-mini.bin" "$work/x86-kernel-memory-gnu.bin"
+for mode in mini gnu; do
+    readelf -Wr "$work/x86-kernel-memory-$mode.o" > "$work/x86-kernel-memory-$mode-rel.txt"
+    for symbol in ext_inv x y; do
+       grep -q "R_X86_64_PC32.*$symbol - 4" "$work/x86-kernel-memory-$mode-rel.txt"
+    done
+done
+for bad in 'invpcid %rax,%rdi' 'invpcid (%rsp),%eax' \
+           'fldl %rax' 'fildl $1' 'fstpl %rsp' 'fistpl %rax'; do
+    printf '.text\n%s\n' "$bad" > "$work/x86-kernel-memory-invalid.s"
+    if "$MINIAS" --target=x86_64 -o "$work/x86-kernel-memory-invalid.o" "$work/x86-kernel-memory-invalid.s" >/dev/null 2>&1; then
+        echo "bad x86 kernel memory ISA accepted: $bad" >&2;exit 1
+    fi
+done
+echo 'MINIAS_X86_KERNEL_MEMORY=PASS GNU_INVPCID_0F38_x87_bytes_PCREL'
 echo 'MINIAS_COMMON_NUMERIC_U64=PASS GNU_GAS_x86_LA64_exact_data_bytes'
 echo 'MINIAS_X86_SEGMENTED_INDIRECT=PASS GNU_AS_text_and_relocations segment_base_index_abs_rip=true indirect_memory_call_jmp=true absolute_symbol32S=true'
 echo 'MINIAS_TWO_TARGET_ORACLE=PASS x86_GNU_bytes=equal loong_GNU_bytes=equal ELF_machine=correct lp64d_v1=0x43 CET_endbr64=1 ALU_imm8_imm32=1 x86_ModRM_SIB_disp=1 x86_test_cmp_alu_memory=1 x86_scaled_index_SIB=1 LA_jr=1 LA_scaled_ptr14=1 LA_imm12_shift_upper20=1 invalid=reject'

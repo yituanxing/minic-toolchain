@@ -857,6 +857,67 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
             goto done;
         }
     }
+    /* INVPCID's address is an M128 memory source, destination an
+     * encoded GPR64 (REX.R without REX.W). Use the existing x86
+     * 66/0F38 ModR/M/SIB target path and semantic PC32 relocation.
+     * Do not copy the ELF writer or pretend it is a unary opcode. */
+    if(!strcmp(s->op,"invpcid")) {
+        MiniAsMCMemory mem;
+        unsigned destreg;
+        bool wide;
+        if(!x64_args2(s->args,src,dst) ||
+           !x64_is_mem_candidate(src) ||
+           !x64_register(dst,&destreg,&wide) || !wide ||
+           !x64_parse_base_memory(src,&mem))goto invalid;
+        m->operands[1].memory=malloc(sizeof(mem));
+        if(!m->operands[1].memory) {
+            free(mem.symbol);free(m);
+            minias_set_error(as,"out-of-memory:x86-invpcid");
+            return false;
+        }
+        *m->operands[1].memory=mem;
+        m->opcode=X64_REG_MEMORY;m->count=2U;
+        m->encoding=UINT32_C(0x10000)|UINT32_C(0x100)|
+                    UINT32_C(0x400)|UINT32_C(0x82);
+        m->operands[0].kind=MINIAS_MC_REGISTER;
+        m->operands[0].reg=destreg;
+        m->operands[0].register_64=false;
+        m->operands[1].kind=MINIAS_MC_MEMORY;
+        goto done;
+    }
+    /* Real kernel x87 scalar memory operations reuse the *same*
+     * typed ModR/M + PC32 fixup producer as integer memory operations.
+     * The opcode-extension digit is not an FP register. */
+    {
+        static const struct {const char *name;uint32_t opcode;
+                             unsigned group;} fpmem[]={
+            {"fldl",UINT32_C(0xdd),0U},
+            {"fildl",UINT32_C(0xdb),0U},
+            {"fstpl",UINT32_C(0xdd),3U},
+            {"fistpl",UINT32_C(0xdb),3U}
+        };
+        unsigned k;
+        for(k=0U;k<sizeof(fpmem)/sizeof(fpmem[0]);++k) {
+            MiniAsMCMemory mem;
+            if(strcmp(s->op,fpmem[k].name))continue;
+            if(!x64_is_mem_candidate(s->args) ||
+               !x64_parse_base_memory(s->args,&mem))goto invalid;
+            m->operands[1].memory=malloc(sizeof(mem));
+            if(!m->operands[1].memory) {
+                free(mem.symbol);free(m);
+                minias_set_error(as,"out-of-memory:x86-x87-memory");
+                return false;
+            }
+            *m->operands[1].memory=mem;
+            m->opcode=X64_REG_MEMORY;m->count=2U;
+            m->encoding=fpmem[k].opcode;
+            m->operands[0].kind=MINIAS_MC_REGISTER;
+            m->operands[0].reg=fpmem[k].group;
+            m->operands[0].register_64=false;
+            m->operands[1].kind=MINIAS_MC_MEMORY;
+            goto done;
+        }
+    }
     /* GNU LAR/LSL descriptor access: 0F02/0F03, target-owned 16-bit
      * selector source and destination operand-size rule. Both register
      * and memory sources reuse typed binary/memory MC emitters and
