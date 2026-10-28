@@ -1052,6 +1052,20 @@ static bool parse_symbol_difference(const char *text,
     return ok;
 }
 
+/* GNU .size NAME, .-NAME+N expresses a moving end Fragment anchor plus a
+ * lexical constant. The Common expression grammar handles right-hand
+ * parentheses and `A-B+N` precedence; .size must retain the resulting
+ * signed offset, not freeze the initial function byte count. */
+bool minias_parse_size_end_addend(const char *text,const char *name,
+                                  int64_t *addend) {
+    MiniAsSymbolExpr lhs={0},rhs={0};
+    if(!text || !name || !addend ||
+       !parse_symbol_difference(text,&lhs,&rhs) ||
+       strcmp(lhs.name,".")!=0 || strcmp(rhs.name,name)!=0)
+        return false;
+    return checked_sub_i64(lhs.addend,rhs.addend,addend);
+}
+
 /* GNU code-relative data tables use (S1-S2)/4 in .byte/.2byte,
  * including forward local labels from ARM64 exception tables. This is
  * Common section arithmetic, not an ISA-specific relocation opcode. */

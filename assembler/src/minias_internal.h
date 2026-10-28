@@ -92,6 +92,7 @@ typedef struct MiniAsSymbol {
     int64_t fragment_anchor_addend;
     bool has_size_end_anchor;
     size_t size_end_anchor;
+    int64_t size_end_addend; /* .size sym, .-sym+N is a retained end MCExpr */
     uint64_t size_end_value;
 } MiniAsSymbol;
 
@@ -528,6 +529,7 @@ bool minias_fold_local_difference_addend(MiniAs *,const char *,
 /* Parsed syntax may name forward symbols; resolve only after final
  * same-section layout and fail closed on missing/cross-section anchors. */
 bool minias_parse_symbol_difference(const char *,MiniAsSymbolDifference *);
+bool minias_parse_size_end_addend(const char *,const char *,int64_t *);
 bool minias_resolve_symbol_difference(MiniAs *,const MiniAsSymbolDifference *,
                                       int64_t *);
 bool minias_queue_literal(MiniAs *as,const MiniAsSymbolExpr *expression,

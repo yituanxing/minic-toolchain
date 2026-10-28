@@ -402,8 +402,13 @@ static bool minias_relayout_fragments(MiniAs *as, bool *org_changed) {
                 minias_set_error(as, "internal:fragment-end-subsection");
                 return false;
             }
-            as->symbols[symbol].size_end_value =
-                as->subsections[subsection].size;
+            if(!add_signed_u64(as->subsections[subsection].size,
+                               as->symbols[symbol].size_end_addend,
+                               &as->symbols[symbol].size_end_value)) {
+                minias_set_error(as,"fragment-size-addend-overflow:%s",
+                                 as->symbols[symbol].name);
+                return false;
+            }
         }
         if (i < graph->stmt_count) {
             MiniAsStmt *stmt = &as->stmts[i];
@@ -723,6 +728,12 @@ static bool minias_validate_fragment_layout(MiniAs *as) {
                     goto done;
                 }
                 expected=as->subsections[sub_index].base+cursor[sub_index];
+                if(!add_signed_u64(expected,sym->size_end_addend,
+                                   &expected)) {
+                    minias_set_error(as,"fragment-size-addend-overflow:%s",
+                                     sym->name);
+                    goto done;
+                }
                 if(sym->size_end_value!=expected ||
                    sym->value>expected ||
                    sym->size!=expected-sym->value) {

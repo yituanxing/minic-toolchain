@@ -1207,10 +1207,7 @@ static bool parse_size(MiniAs *as, char *args, size_t line) {
     char *comma = strchr(args, ',');
     MiniAsSymbol *symbol;
     char *expr;
-    char expected[512];
-    char compact[512];
-    size_t compact_size = 0U;
-    const char *p;
+    int64_t size_addend;
 
     if (comma == NULL) {
         minias_set_error(as, "bad-directive:.size:line=%zu", line);
@@ -1251,19 +1248,7 @@ static bool parse_size(MiniAs *as, char *args, size_t line) {
         minias_set_error(as, "bad-size-symbol:%s:line=%zu", symbol->name, line);
         return false;
     }
-    for (p = expr; *p != '\0'; ++p) {
-        if (*p == ' ' || *p == '\t') {
-            continue;
-        }
-        if (compact_size + 1U >= sizeof(compact)) {
-            minias_set_error(as, "unsupported-expression:.size:%s:line=%zu", expr, line);
-            return false;
-        }
-        compact[compact_size++] = *p;
-    }
-    compact[compact_size] = '\0';
-    (void)snprintf(expected, sizeof(expected), ".-%s", symbol->name);
-    if (strcmp(compact, expected) != 0) {
+    if (!minias_parse_size_end_addend(expr,symbol->name,&size_addend)) {
         minias_set_error(as, "unsupported-expression:.size:%s:line=%zu", expr, line);
         return false;
     }
@@ -1274,13 +1259,18 @@ static bool parse_size(MiniAs *as, char *args, size_t line) {
     }
     {
         uint64_t here;
-        if (!minias_current_location(as, &here) || here < symbol->value) {
+        int64_t end;
+        if (!minias_current_location(as, &here) ||
+            here>(uint64_t)INT64_MAX ||
+            !minias_checked_add_i64((int64_t)here,size_addend,&end) ||
+            end<0 || (uint64_t)end < symbol->value) {
             minias_set_error(as, "size-location-mismatch:%s:line=%zu", symbol->name, line);
             return false;
         }
-        symbol->size = here - symbol->value;
+        symbol->size = (uint64_t)end - symbol->value;
         symbol->has_size_end_anchor = true;
         symbol->size_end_anchor = as->stmt_count;
+        symbol->size_end_addend = size_addend;
     }
     return true;
 }
