@@ -541,6 +541,19 @@ jobs:
         run: |
           set -Eeuo pipefail
           bash tests/compiler/c0/probe-loongarch-linux-nospec.sh "$GITHUB_WORKSPACE/build/runtime-ci/bin/minic-cc"
+      - name: Original GNU x86 Linux ordered TSC and ELF zero-initialized aggregates
+        if: matrix.target == 'x86_64'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          bash tests/compiler/c0/probe-x86-linux-ordered-tsc.sh "$GITHUB_WORKSPACE/build/runtime-ci/bin/minic-cc"
+          bash tests/compiler/c0/probe-x86-linux-static-record-zero.sh "$GITHUB_WORKSPACE/build/runtime-ci/bin/minic-cc"
+      - name: Original GNU AArch64 exclusive CMPWAIT memory hardware path
+        if: matrix.target == 'aarch64'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          bash tests/compiler/c0/probe-aarch64-linux-cmpwait.sh "$GITHUB_WORKSPACE/build/runtime-ci/bin/minic-cc"
       - name: Original Linux ELF named/percpu/weak and RELA data cross-GNU differential
         if: matrix.target == 'x86_64' || matrix.target == 'aarch64' || matrix.target == 'loongarch64' || matrix.target == 'riscv64'
         run: |

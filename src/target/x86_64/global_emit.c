@@ -99,13 +99,18 @@ bool minic_x86_64_emit_global(FILE *out, const MinicC0Program *program,
     /* A fully zero aggregate is bytewise zero for this x86 target even
      * when its type contains nested records, bit-fields and padding.
      * Never take this shortcut for relocations or a nonzero slot. */
-    if (minic_type_is_record(obj->type) && obj->relocation_count == 0U &&
-        obj->initializer_count != 0U) {
-        all_zero_aggregate = true;
-        for (i = 0U; i < obj->initializer_count; ++i) {
-            if (obj->initializer_values[i] != 0U) {
-                all_zero_aggregate = false;
-                break;
+    /* C static-storage records have an implicit all-zero initializer
+     * even when no aggregate initializer token exists. Model that through
+     * the same byte-exact DataLayout path as explicit zeros. */
+    if (minic_type_is_record(obj->type) && obj->relocation_count == 0U) {
+        all_zero_aggregate = obj->initializer_count == 0U;
+        if (obj->initializer_count != 0U) {
+            all_zero_aggregate = true;
+            for (i = 0U; i < obj->initializer_count; ++i) {
+                if (obj->initializer_values[i] != 0U) {
+                    all_zero_aggregate = false;
+                    break;
+                }
             }
         }
     }

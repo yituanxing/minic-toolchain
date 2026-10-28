@@ -1018,12 +1018,76 @@ static bool aarch64_linux_tlbi_emit(
             (size_t)b[0].value*8U,mnemonic)>=0;
 }
 
+/* Linux __cmpwait_case_{8,16,32,64}: typed three-operand GNU ASM
+ * uses exclusive loads of the actual memory width, not an ordinary load. */
+static unsigned int aarch64_linux_cmpwait_form(const char *s, size_t length) {
+    static const struct {
+        const char *named; const char *numeric; unsigned int width;
+    } forms[] = {
+        {"sevlwfeldxrb%w[tmp],%[v]eor%w[tmp],%w[tmp],%w[val]cbnz%w[tmp],1fwfe1:",
+         "sevlwfeldxrb%w0,%1eor%w0,%w0,%w2cbnz%w0,1fwfe1:",1U},
+        {"sevlwfeldxrh%w[tmp],%[v]eor%w[tmp],%w[tmp],%w[val]cbnz%w[tmp],1fwfe1:",
+         "sevlwfeldxrh%w0,%1eor%w0,%w0,%w2cbnz%w0,1fwfe1:",2U},
+        {"sevlwfeldxr%w[tmp],%[v]eor%w[tmp],%w[tmp],%w[val]cbnz%w[tmp],1fwfe1:",
+         "sevlwfeldxr%w0,%1eor%w0,%w0,%w2cbnz%w0,1fwfe1:",4U},
+        {"sevlwfeldxr%[tmp],%[v]eor%[tmp],%[tmp],%[val]cbnz%[tmp],1fwfe1:",
+         "sevlwfeldxr%0,%1eor%0,%0,%2cbnz%0,1fwfe1:",8U}
+    };
+    char compact[160];
+    size_t i,n=0U;
+    if (!s || !length || length>=sizeof(compact)) return 0U;
+    for (i=0U;i<length;++i) {
+        const char c=s[i];
+        if (c==' '||c=='\t'||c=='\r'||c=='\n') continue;
+        if (c=='\0'||n+1U>=sizeof(compact))return 0U;
+        compact[n++]=c;
+    }
+    compact[n]='\0';
+    for(i=0U;i<sizeof(forms)/sizeof(forms[0]);++i)
+        if(strcmp(compact,forms[i].named)==0 ||
+           strcmp(compact,forms[i].numeric)==0) return forms[i].width;
+    return 0U;
+}
 bool minic_aarch64_qualify_inline_asm(
     const MinicC0Program *program, const MinicInlineAsm *src,
     MinicTargetInlineAsmContract *contract) {
     const MinicExpression *expr;
     MinicType plain;
     size_t i;
+    /* AArch64 admits the GNU source roles only with exact types and
+     * the original exclusive-load control-flow template. */
+    if (program && src && contract && src->is_volatile && !src->is_goto &&
+        src->outputs && src->inputs && src->output_count==2U &&
+        src->input_count==1U && src->clobber_count==0U &&
+        src->register_clobber_count==0U && !src->has_memory_clobber &&
+        src->label_count==0U) {
+        const unsigned int width=aarch64_linux_cmpwait_form(
+            src->template_text,src->template_length);
+        if (width!=0U && constraint(&src->outputs[0],"=&r") &&
+            constraint(&src->outputs[1],"+Q") &&
+            constraint(&src->inputs[0],"r")) {
+            const MinicExpression *tmp=minic_c0_program_expression(
+                program,src->outputs[0].expression);
+            const MinicExpression *memory=minic_c0_program_expression(
+                program,src->outputs[1].expression);
+            const MinicExpression *value=minic_c0_program_expression(
+                program,src->inputs[0].expression);
+            if (tmp && memory && value &&
+                tmp->value_category==MINIC_VALUE_LVALUE &&
+                memory->value_category==MINIC_VALUE_LVALUE &&
+                !minic_type_is_const(tmp->type) &&
+                !minic_type_is_const(memory->type) &&
+                aarch64_linux_sysreg_u64_type(tmp->type) &&
+                aarch64_linux_sysreg_u64_type(value->type) &&
+                aarch64_stlr_type(memory->type,width)) {
+                contract->operand_count=3U;
+                contract->kinds[0]=MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
+                contract->kinds[1]=MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE;
+                contract->kinds[2]=MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+                return true;
+            }
+        }
+    }
     if(aarch64_linux_io_dependency_source(program,src,contract))
         return true;
     if(aarch64_linux_encoded_sysreg_source(program,src,contract))
@@ -1579,6 +1643,54 @@ bool minic_aarch64_emit_qualified_structured_asm(
     if (aarch64_linux_tlbi_form(
             info->template_text,info->template_length))
         return aarch64_linux_tlbi_emit(out,ctx,ins,info);
+    if (ins->value.structured_inline_asm.operand_count==3U &&
+        aarch64_linux_cmpwait_form(info->template_text,info->template_length)) {
+        const unsigned int width=aarch64_linux_cmpwait_form(
+            info->template_text,info->template_length);
+        const MinicCoreStructuredInlineAsmOperand *ops=
+            ins->value.structured_inline_asm.operands;
+        MinicType pointee;
+        size_t k;
+        /* The Core effect conservatively includes +Q RMW memory ordering. */
+        if (!ops || !info->is_volatile || info->is_goto ||
+            ctx->dynamic_frame || info->register_clobber_count ||
+            ins->result != MINIC_CORE_VALUE_INVALID)
+            return false;
+        for (k=0U;k<3U;++k)
+            if (ops[k].operand_index!=k ||
+                ops[k].has_fixed_register_binding ||
+                ops[k].value>=fn->value_count ||
+                ops[k].value>4095U/8U ||
+                ops[k].kind!=(k==0U?
+                    MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT:
+                    k==1U?MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE:
+                    MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT) ||
+                (k!=0U && ops[k].early_clobber)) return false;
+        if (!minic_type_pointee(fn->values[ops[0].value].type,&pointee)||
+            !aarch64_linux_sysreg_u64_type(pointee) ||
+            !minic_type_pointee(fn->values[ops[1].value].type,&pointee)||
+            !aarch64_stlr_type(pointee,width) ||
+            !aarch64_linux_sysreg_u64_type(fn->values[ops[2].value].type))
+            return false;
+        return fprintf(out,
+            "  ldr x10, [sp, #%zu]\n"
+            "  ldr x11, [sp, #%zu]\n"
+            "  sevl\n"
+            "  wfe\n"
+            "  ldxr%s %s9, [x10]\n"
+            "  eor %s9, %s9, %s11\n"
+            "  cbnz %s9, 1f\n"
+            "  wfe\n"
+            "1:\n"
+            "  ldr x12, [sp, #%zu]\n"
+            "  str x9, [x12]\n",
+            (size_t)ops[1].value*8U,
+            (size_t)ops[2].value*8U,
+            width==1U?"b":width==2U?"h":"",
+            width==8U?"x":"w",width==8U?"x":"w",
+            width==8U?"x":"w",width==8U?"x":"w",
+            width==8U?"x":"w",(size_t)ops[0].value*8U)>=0;
+    }
     if (ins->value.structured_inline_asm.operand_count == 0U) {
         const char *barrier = aarch64_barrier_template(
             info->template_text, info->template_length);

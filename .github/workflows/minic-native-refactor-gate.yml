@@ -74,6 +74,9 @@ on:
       - 'tests/compiler/c0/probe-x86-linux-native-cpuid.sh'
       - 'tests/compiler/c0/probe-x86-linux-atomic-binary-cc.sh'
       - 'tests/compiler/c0/probe-x86-linux-tied-bit-scan.sh'
+      - 'tests/compiler/c0/probe-x86-linux-ordered-tsc.sh'
+      - 'tests/compiler/c0/probe-x86-linux-static-record-zero.sh'
+      - 'tests/compiler/c0/probe-aarch64-linux-cmpwait.sh'
       - 'tests/compiler/c0/probe-rv64-extended-float-native.sh'
       - 'tests/compiler/c0/probe-rv64-pic-glibc-got.sh'
       - 'tests/compiler/c0/probe-rv64i-strict-isa.sh'
@@ -329,19 +332,8 @@ jobs:
           bash tests/compiler/c0/probe-x86-linux-native-cpuid.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
           bash tests/compiler/c0/probe-x86-linux-atomic-binary-cc.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
           bash tests/compiler/c0/probe-x86-linux-tied-bit-scan.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
+          # Original Linux ISA family and GNU ABI static object boundary.
+          bash tests/compiler/c0/probe-x86-linux-ordered-tsc.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
+          bash tests/compiler/c0/probe-x86-linux-static-record-zero.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
+          MINIC_SOURCE_ONLY=1 bash tests/compiler/c0/probe-aarch64-linux-cmpwait.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
 
-      # One-shot source snapshot for offline full-repository Core/ABI auditing.
-      # Remove this bootstrap block in the next implementation batch.
-      - name: Snapshot exact HEAD source for broad local changes
-        if: always()
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          git archive --format=tar HEAD > "$RUNNER_TEMP/minic-exact-head.tar"
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: minic-source-${{ github.event.pull_request.head.sha || github.sha }}
-          path: ${{ runner.temp }}/minic-exact-head.tar
-          retention-days: 2
-          if-no-files-found: error

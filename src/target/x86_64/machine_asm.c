@@ -602,8 +602,8 @@ static bool emit_x86_counter(FILE *out,const MinicC0Program *p,
     if(!out||!p||!t||!fn||!frame||!info||!ins||!b||!f||
        !info->is_volatile||info->is_goto||
        info->has_memory_clobber||
-       info->register_clobber_count!=(f==3U?1U:0U)||
-       (f==3U&&(!info->register_clobbers||
+       info->register_clobber_count!=((f==3U||f==4U)?1U:0U)||
+       ((f==3U||f==4U)&&(!info->register_clobbers||
          !clobber_is(&info->register_clobbers[0],"ecx")))||
        count!=(f==2U?3U:2U))return false;
     for(i=0U;i<count;++i) {
@@ -620,8 +620,14 @@ static bool emit_x86_counter(FILE *out,const MinicC0Program *p,
                  p,t,fn->values[b[i].value].type,&w,&sign)||w!=4U)return false;
     }
     if(f==2U&&!x86_value_load(out,frame,b[2].value,"%rcx"))return false;
-    if(fputs(f==1U?"  rdtsc\n":f==2U?"  rdpmc\n":"  rdtscp\n",out)==EOF)
-        return false;
+    if (f==4U) {
+        /* The source contract is an exact-byte template, whose Linux
+         * .altinstructions metadata and original numeric labels must be
+         * preserved in the GNU assembler stream. */
+        if (fwrite(info->template_text,1U,info->template_length,out) !=
+                info->template_length || fputc('\n',out)==EOF) return false;
+    } else if (fputs(f==1U?"  rdtsc\n":f==2U?"  rdpmc\n":
+                   "  rdtscp\n",out)==EOF) return false;
     for(i=0U;i<2U;++i){
         if(!minic_type_pointee(fn->values[b[i].value].type,&ty)||
            !minic_x86_64_scalar_width(p,t,ty,&w,&sign)||

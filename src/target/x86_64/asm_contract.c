@@ -275,10 +275,31 @@ static bool x86_linux_zero_barrier_source(
     return true;
 }
 
+/* Exact original GNU Linux 6.6.143 rdtsc_ordered() hardware clock:
+ * the baseline instruction and two alternative patch records are integral
+ * to the Linux ELF object. Qualify only the entire original 652-byte
+ * source template, never general-purpose GNU ASM passthrough. */
+static bool x86_ordered_clock_form(const char *s, size_t len) {
+    static const char expected[] =
+        "# ALT: oldinstr2\n661:\n\trdtsc\n662:\n# ALT: padding2\n.skip -((((6651"
+        "f-6641f) ^ (((6651f-6641f) ^ (6652f-6642f)) & -(-((6651f-6641f) <"
+        " (6652f-6642f))))) - (662b-661b)) > 0) * (((6651f-6641f) ^ (((665"
+        "1f-6641f) ^ (6652f-6642f)) & -(-((6651f-6641f) < (6652f-6642f))))"
+        ") - (662b-661b)), 0x90\n663:\n.pushsection .altinstructions,\"a\"\n .l"
+        "ong 661b - .\n .long 6641f - .\n .4byte (20*32+ 2)\n .byte 663b-661b"
+        "\n .byte 6651f-6641f\n .long 661b - .\n .long 6642f - .\n .4byte ( 1*"
+        "32+27)\n .byte 663b-661b\n .byte 6652f-6642f\n.popsection\n.pushsecti"
+        "on .altinstr_replacement, \"ax\"\n# ALT: replacement 1\n6641:\n\tlfence"
+        "; rdtsc\n6651:\n# ALT: replacement 2\n6642:\n\trdtscp\n6652:\n.popsectio"
+        "n\n";
+    return s != NULL && len == sizeof(expected) - 1U &&
+           memcmp(s, expected, sizeof(expected) - 1U) == 0;
+}
 /* Complete x86 EDX:EAX counter family, GNU 32/64-bit output carriers. */
 unsigned int minic_x86_64_linux_counter_form(const char *s,size_t len) {
     static const char *const names[]={"rdtsc","rdpmc","rdtscp"};
     char buf[32];size_t i,n=0U;
+    if (x86_ordered_clock_form(s,len)) return 4U;
     if(!s||!len||len>=sizeof(buf))return 0U;
     for(i=0U;i<len;++i) {
         const char c=s[i];
@@ -300,9 +321,9 @@ static bool x86_counter_source(const MinicC0Program *p,const MinicInlineAsm *s,
        !s->outputs||s->output_count!=2U||
        s->input_count!=(f==2U?1U:0U)||(f==2U&&!s->inputs)||
        s->label_count||s->has_memory_clobber||
-       s->clobber_count!=(f==3U?1U:0U)||
-       s->register_clobber_count!=(f==3U?1U:0U)||
-       (f==3U&&(!s->register_clobbers||
+       s->clobber_count!=((f==3U||f==4U)?1U:0U)||
+       s->register_clobber_count!=((f==3U||f==4U)?1U:0U)||
+       ((f==3U||f==4U)&&(!s->register_clobbers||
         !clobber_is(&s->register_clobbers[0],"ecx")))||
        !c_is(&s->outputs[0],"=a")||!c_is(&s->outputs[1],"=d")||
        (f==2U&&!c_is(&s->inputs[0],"c")))return false;
