@@ -461,6 +461,18 @@ external_adr_target:
     staddl w0, [x2]
     stset x1, [x2]
     stclrl w0, [x2]
+    // All LSE byte/halfword variants on existing typed MCInst and
+    // profile-gated ISA, independently compared with GNU AS below.
+    staddlh w1, [x2]
+    staddlb w1, [x2]
+    staddh w1, [x2]
+    staddb w1, [x2]
+    ldaddalh w1, w3, [x2]
+    ldaddab w1, w3, [x2]
+    casalh w1, w3, [x2]
+    casab w1, w3, [x2]
+    caslb w1, w3, [x2]
+    swplh w1, w3, [x2]
     prfm pstl1strm, [x2]
     prfm pldl1keep, [x3, #16]
     prfm pldl1keep, [x0, x7]
@@ -1053,6 +1065,18 @@ LSE_ENABLED
 "$AARCH64_OBJCOPY" -j .text -O binary "$work/lse-mini.o" "$work/lse-mini.bin"
 "$AARCH64_OBJCOPY" -j .text -O binary "$work/lse-gnu.o" "$work/lse-gnu.bin"
 cmp "$work/lse-mini.bin" "$work/lse-gnu.bin"
+
+# Subword LSE always takes W data registers, regardless of base width;
+# invalid suffix and size must not silently encode a 64-bit RMW.
+for bad in 'staddlh x1,[x2]' 'casalh x1,x3,[x2]' \
+           'ldaddlb w1,x3,[x2]' 'staddalh w1,[x2]'; do
+    printf '.arch armv8-a\n.arch_extension lse\n.text\n%s\n' "$bad" > "$work/lse-subword-invalid.s"
+    if "$MINIAS" --target=aarch64 -o "$work/lse-subword-invalid.o" \
+         "$work/lse-subword-invalid.s" >/dev/null 2>"$work/lse-subword-invalid.err"; then
+        echo "invalid AArch64 subword LSE accepted: $bad" >&2
+        exit 1
+    fi
+done
 echo 'MINIAS_AARCH64_LSE=PASS GNU_BYTES=equal enabled_gate=1 disabled_gate=1'
 
 

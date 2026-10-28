@@ -1361,23 +1361,37 @@ static bool a64_parse_lse(MiniAs *as,MiniAsMCInst *inst,
     };
     char tok[4][96];
     unsigned i,n,rs,rt=31U,rn,mode,group=0U;
+    unsigned subword=0U;
     bool wide,wr,sp;
     int64_t off;
     const char *suffix=NULL;
+    char modifiers[4];
     for(i=0U;i<sizeof(ops)/sizeof(ops[0]);++i) {
         size_t plen=strlen(ops[i].name);
         if(strncmp(op,ops[i].name,plen)==0) {
             group=i;suffix=op+plen;break;
         }
     }
-    if(suffix==NULL || !(*suffix=='\0' ||
-       !strcmp(suffix,"a") || !strcmp(suffix,"l") ||
-       !strcmp(suffix,"al")) ||
-       (ops[group].store && *suffix && strcmp(suffix,"l")) ||
+    if(suffix==NULL ||
        (as->target_options&A64_FEATURE_LSE)==0U)return false;
+    {
+        size_t nmod=strlen(suffix);
+        /* A64 LSE size is encoded in bits [31:30], separately from
+         * acquire/release semantics. GNU spells CASALH, STADDLB etc.
+         * Preserve existing unsuffixed W/X inference. */
+        if(nmod && suffix[nmod-1U]=='b'){subword=1U;--nmod;}
+        else if(nmod && suffix[nmod-1U]=='h'){subword=2U;--nmod;}
+        if(nmod>=sizeof(modifiers))return false;
+        memcpy(modifiers,suffix,nmod);modifiers[nmod]='\0';
+        if(*modifiers && strcmp(modifiers,"a") &&
+           strcmp(modifiers,"l") && strcmp(modifiers,"al"))return false;
+        if(ops[group].store && *modifiers && strcmp(modifiers,"l"))
+            return false;
+    }
     if(!split_operands(args,tok,&n) ||
        n!=(ops[group].store?2U:3U) ||
        !parse_a64_reg(tok[0],&rs,&wide,&sp) || sp ||
+       (subword!=0U && wide) ||
        (!ops[group].store &&
         (!parse_a64_reg(tok[1],&rt,&wr,&sp) || sp || wr!=wide)) ||
        !parse_a64_mem(tok[n-1U],&rn,&off,&mode) ||
@@ -1385,8 +1399,9 @@ static bool a64_parse_lse(MiniAs *as,MiniAsMCInst *inst,
     inst->opcode=A64_MC_LSE;inst->count=3U;
     inst->encoding=ops[group].kind |
       (ops[group].store?0x10U:0U) |
-      ((strchr(suffix,'a')!=NULL)?0x20U:0U) |
-      ((strchr(suffix,'l')!=NULL)?0x40U:0U);
+      ((strchr(modifiers,'a')!=NULL)?0x20U:0U) |
+      ((strchr(modifiers,'l')!=NULL)?0x40U:0U) |
+      (subword==1U?0x80U:subword==2U?0x100U:0U);
     put_reg(&inst->operands[0],rs,wide);
     put_reg(&inst->operands[1],rt,wide);
     put_reg(&inst->operands[2],rn,true);
@@ -2368,13 +2383,19 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
             bool acquire=(inst->encoding&0x20U)!=0U;
             bool release=(inst->encoding&0x40U)!=0U;
             bool wide=inst->operands[0].register_64;
+            bool byte=(inst->encoding&0x80U)!=0U;
+            bool half=(inst->encoding&0x100U)!=0U;
             uint32_t base;
             if(kind==0U) {
-                base=wide?UINT32_C(0xc8a07c00):UINT32_C(0x88a07c00);
+                base=byte?UINT32_C(0x08a07c00):
+                     half?UINT32_C(0x48a07c00):
+                     wide?UINT32_C(0xc8a07c00):UINT32_C(0x88a07c00);
                 if(acquire)base|=UINT32_C(0x00400000);
                 if(release)base|=UINT32_C(0x00008000);
             }else {
-                base=wide?UINT32_C(0xf8200000):UINT32_C(0xb8200000);
+                base=byte?UINT32_C(0x38200000):
+                     half?UINT32_C(0x78200000):
+                     wide?UINT32_C(0xf8200000):UINT32_C(0xb8200000);
                 if(acquire)base|=UINT32_C(0x00800000);
                 if(release)base|=UINT32_C(0x00400000);
                 base|=kind==2U?UINT32_C(0x1000):
