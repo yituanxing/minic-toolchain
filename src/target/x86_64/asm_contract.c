@@ -261,6 +261,102 @@ static bool x86_trycas_source(
     return true;
 }
 
+
+/* Linux's complete width-checked atomic add/sub/and/or/xor family.
+ * GNU extends a C signed/unsigned integer carrier over the same 4- or
+ * 8-byte raw machine bit pattern. All 10 forms share ONE target ISA table;
+ * optional lock/smp-latch is a policy bit, not a second emitter. */
+typedef struct X86LinuxAtomicRmw {
+    const char *opcode;
+    size_t width;
+    bool locked;
+} X86LinuxAtomicRmw;
+static const X86LinuxAtomicRmw x86_linux_atomic_rmw[] = {
+    {"addl",4U,false}, {"subl",4U,false}, {"andl",4U,false},
+    {"orl",4U,false}, {"xorl",4U,false},
+    {"addq",8U,false}, {"subq",8U,false}, {"andq",8U,false},
+    {"orq",8U,false}, {"xorq",8U,false},
+    {"addl",4U,true}, {"subl",4U,true}, {"andl",4U,true},
+    {"orl",4U,true}, {"xorl",4U,true},
+    {"addq",8U,true}, {"subq",8U,true}, {"andq",8U,true},
+    {"orq",8U,true}, {"xorq",8U,true}
+};
+const MinicX86AtomicRmwDesc *minic_x86_64_atomic_rmw_description(
+    MinicX86AtomicRmw form) {
+    const size_t index=(size_t)form;
+    return (index>0U && index<=sizeof(x86_linux_atomic_rmw)/
+                              sizeof(x86_linux_atomic_rmw[0])) ?
+        (const MinicX86AtomicRmwDesc *)&x86_linux_atomic_rmw[index-1U] : NULL;
+}
+MinicX86AtomicRmw minic_x86_64_atomic_rmw_form(const char *text,size_t len) {
+    static const char smp[]=
+        ".pushsection.smp_locks,\"a\".balign4.long671f-..popsection671:lock;";
+    char compact[256], expected[256];
+    size_t i,j=0U,k,variant;
+    if(!text||!len||len>=sizeof(compact))return MINIC_X86_ATOMIC_RMW_NONE;
+    for(i=0U;i<len;++i){
+        const char c=text[i];
+        if(c==' '||c=='\\t'||c=='\\r'||c=='\\n')continue;
+        if(j+1U>=sizeof(compact))return MINIC_X86_ATOMIC_RMW_NONE;
+        compact[j++]=c;
+    }
+    compact[j]='\\0';
+    for(k=0U;k<sizeof(x86_linux_atomic_rmw)/
+                    sizeof(x86_linux_atomic_rmw[0]);++k) {
+        const X86LinuxAtomicRmw *d=&x86_linux_atomic_rmw[k];
+        for(variant=0U;variant<2U;++variant) {
+            const int n=snprintf(expected,sizeof(expected),"%s%s%s,%s",
+                d->locked?smp:"",d->opcode,
+                variant?"%[val]":"%1",variant?"%[var]":"%0");
+            if(n>0&&(size_t)n<sizeof(expected)&&
+               strcmp(compact,expected)==0)
+                return (MinicX86AtomicRmw)(k+1U);
+        }
+    }
+    return MINIC_X86_ATOMIC_RMW_NONE;
+}
+static bool x86_linux_atomic_rmw_source(
+    const MinicC0Program *program,const MinicInlineAsm *src,
+    MinicTargetInlineAsmContract *contract) {
+    const MinicX86AtomicRmw form=src ?
+        minic_x86_64_atomic_rmw_form(src->template_text,src->template_length):
+        MINIC_X86_ATOMIC_RMW_NONE;
+    const MinicX86AtomicRmwDesc *d=
+        minic_x86_64_atomic_rmw_description(form);
+    const MinicExpression *mem,*val;
+    MinicType mt,vt;
+    size_t width;
+    if(!program||!src||!contract||!d||!src->is_volatile||src->is_goto||
+       src->output_count!=1U||src->input_count!=1U||
+       !src->outputs||!src->inputs||src->label_count!=0U||
+       !src->has_memory_clobber||src->clobber_count!=1U||
+       src->register_clobber_count!=0U||
+       !target_constraint_is(&src->outputs[0],"+m")||
+       !(target_constraint_is(&src->inputs[0],"ir")||
+         target_constraint_is(&src->inputs[0],"er")||
+         target_constraint_is(&src->inputs[0],"r")))
+        return false;
+    mem=minic_c0_program_expression(program,src->outputs[0].expression);
+    val=minic_c0_program_expression(program,src->inputs[0].expression);
+    if(!mem||!val||mem->value_category!=MINIC_VALUE_LVALUE||
+       minic_type_is_const(mem->type)||
+       !minic_type_unqualified(mem->type,&mt)||
+       !minic_type_unqualified(val->type,&vt)||
+       mt.base_kind!=MINIC_TYPE_BASE_INT||vt.base_kind!=MINIC_TYPE_BASE_INT||
+       !minic_type_is_integer(mt)||!minic_type_is_integer(vt)||
+       mt.pointer_depth!=0U||vt.pointer_depth!=0U||
+       mt.integer_rank!=vt.integer_rank)
+        return false;
+    width=(mt.integer_rank==MINIC_INTEGER_RANK_INT)?4U:
+          ((mt.integer_rank==MINIC_INTEGER_RANK_LONG||
+            mt.integer_rank==MINIC_INTEGER_RANK_LONG_LONG)?8U:0U);
+    if(width!=d->width)return false;
+    contract->operand_count=2U;
+    contract->kinds[0]=MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE;
+    contract->kinds[1]=MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    return true;
+}
+
 /* Target-only descriptor for all 8 GNU Linux atomic RMWcc forms.
  * This is the only source/machine ALU and flag-sign table. */
 static const struct {
@@ -809,6 +905,8 @@ bool minic_x86_64_qualify_inline_asm(
     bool is_mulacc = false, is_muldiv = false;
     size_t i, count;
     if (!contract) return false;
+    if (x86_linux_atomic_rmw_source(program, source, contract))
+        return true;
     if (x86_trycas_source(program, source, contract))
         return true;
     if (x86_linux_bitops_source(program, source, contract))

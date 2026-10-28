@@ -58,6 +58,41 @@ typedef struct MinicX86TryCasDesc {
 } MinicX86TryCasDesc;
 MinicX86TryCas minic_x86_64_trycas_form(const char *,size_t);
 const MinicX86TryCasDesc *minic_x86_64_trycas_desc(MinicX86TryCas);
+
+/* Full Linux atomic RMW: hardware add/sub/and/or/xor x 32/64 x SMP/local.
+ * Descriptor owns ISA selection, memory effect and stable machine width. */
+typedef enum MinicX86AtomicRmw {
+    MINIC_X86_ATOMIC_RMW_NONE = 0,
+    MINIC_X86_ATOMIC_RMW_ADD32,
+    MINIC_X86_ATOMIC_RMW_SUB32,
+    MINIC_X86_ATOMIC_RMW_AND32,
+    MINIC_X86_ATOMIC_RMW_OR32,
+    MINIC_X86_ATOMIC_RMW_XOR32,
+    MINIC_X86_ATOMIC_RMW_ADD64,
+    MINIC_X86_ATOMIC_RMW_SUB64,
+    MINIC_X86_ATOMIC_RMW_AND64,
+    MINIC_X86_ATOMIC_RMW_OR64,
+    MINIC_X86_ATOMIC_RMW_XOR64,
+    MINIC_X86_ATOMIC_RMW_LOCK_ADD32,
+    MINIC_X86_ATOMIC_RMW_LOCK_SUB32,
+    MINIC_X86_ATOMIC_RMW_LOCK_AND32,
+    MINIC_X86_ATOMIC_RMW_LOCK_OR32,
+    MINIC_X86_ATOMIC_RMW_LOCK_XOR32,
+    MINIC_X86_ATOMIC_RMW_LOCK_ADD64,
+    MINIC_X86_ATOMIC_RMW_LOCK_SUB64,
+    MINIC_X86_ATOMIC_RMW_LOCK_AND64,
+    MINIC_X86_ATOMIC_RMW_LOCK_OR64,
+    MINIC_X86_ATOMIC_RMW_LOCK_XOR64
+} MinicX86AtomicRmw;
+typedef struct MinicX86AtomicRmwDesc {
+    const char *opcode;
+    size_t width;
+    bool locked;
+} MinicX86AtomicRmwDesc;
+MinicX86AtomicRmw minic_x86_64_atomic_rmw_form(const char *,size_t);
+const MinicX86AtomicRmwDesc *minic_x86_64_atomic_rmw_description(
+    MinicX86AtomicRmw);
+
 /* Original Linux 6.6.143 x86 LOCK INC/DEC + =@cce output.
  * SOURCE admission and physical emission use the same exact form enum. */
 typedef enum MinicX86AtomicCC {

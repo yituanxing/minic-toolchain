@@ -234,6 +234,53 @@ static bool emit_linux_bitops(
            fputs("  movb %al, (%r10)\n",out)!=EOF;
 }
 
+
+/* Single native hardware RMW implementation for all 20 qualified x86 forms.
+ * No C-assignment proxy, no raw ASM passthrough, no source-derived opcode
+ * escapes target ownership; memory clobber and SMP patch section are real. */
+static bool emit_linux_atomic_rmw(
+    FILE *out,const MinicC0Program *program,const MinicTargetInfo *target,
+    const MinicCoreFunction *fn,const MinicX86Frame *frame,
+    const MinicCoreInstruction *ins,const MinicCoreInlineAsm *info) {
+    const MinicX86AtomicRmwDesc *d=minic_x86_64_atomic_rmw_description(
+        minic_x86_64_atomic_rmw_form(info->template_text,info->template_length));
+    const MinicCoreStructuredInlineAsmOperand *b=
+        ins->value.structured_inline_asm.operands;
+    MinicType mt;
+    size_t bytes;
+    bool sign;
+    if(!out||!program||!target||!fn||!frame||!b||!d||!info||
+       !info->is_volatile||info->is_goto||
+       !info->has_memory_clobber||info->register_clobber_count!=0U||
+       ins->value.structured_inline_asm.operand_count!=2U||
+       b[0].operand_index!=0U||b[1].operand_index!=1U||
+       b[0].value>=fn->value_count||b[1].value>=fn->value_count||
+       b[0].has_fixed_register_binding||b[1].has_fixed_register_binding||
+       b[0].early_clobber||b[1].early_clobber||
+       b[0].kind!=MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE||
+       b[1].kind!=MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT||
+       !minic_type_pointee(fn->values[b[0].value].type,&mt)||
+       !minic_x86_64_scalar_width(program,target,mt,&bytes,&sign)||
+       bytes!=d->width||
+       !minic_x86_64_scalar_width(
+           program,target,fn->values[b[1].value].type,&bytes,&sign)||
+       bytes!=d->width)
+        return false;
+    if(!x86_value_load(out,frame,b[1].value,"%r10")||
+       !x86_value_load(out,frame,b[0].value,"%r11"))
+        return false;
+    if(d->locked&&
+       fputs("  .pushsection .smp_locks,\\\"a\\\"\\n"
+             "  .balign 4\\n"
+             "  .long 671f - .\\n"
+             "  .popsection\\n"
+             "671:\\n",out)==EOF)
+        return false;
+    return fprintf(out,"  %s%s %s, (%%r11)\\n",
+                   d->locked?"lock; ":"",d->opcode,
+                   d->width==4U?"%r10d":"%r10")>=0;
+}
+
 /* Genuine x86 CMPXCHG: use AL/AX/EAX/RAX comparator, return ZF,
  * update old on failure, and emit SMP patch metadata when locked. */
 static bool emit_linux_trycas(
@@ -540,6 +587,9 @@ bool minic_x86_64_emit_structured_asm(
     bindings = ins->value.structured_inline_asm.operands;
     if (!info->template_text)
         return false;
+    if (minic_x86_64_atomic_rmw_form(
+            info->template_text,info->template_length)!=MINIC_X86_ATOMIC_RMW_NONE)
+        return emit_linux_atomic_rmw(out,program,target,fn,frame,ins,info);
     if (minic_x86_64_trycas_form(
             info->template_text,info->template_length)!=MINIC_X86_TRYCAS_NONE)
         return emit_linux_trycas(out,program,target,fn,frame,ins,info);
