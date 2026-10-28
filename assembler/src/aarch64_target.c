@@ -1135,6 +1135,9 @@ static bool a64_parse_relocated(MiniAsMCInst *inst,
        strcmp(op,"ldrh")!=0 && strcmp(op,"strh")!=0 &&
        strcmp(op,"ldrsw")!=0)
         return false;
+    /* LDRSW is an X-only destination, despite its 32-bit source
+     * relocation scale. Never permit GNU-invalid Wd here. */
+    if(!strcmp(op,"ldrsw") && !wd)return false;
     {
         size_t sz=strlen(tok[1]);
         char inner[96],*comma,*b;
