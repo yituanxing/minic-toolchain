@@ -866,7 +866,7 @@ for bad in 'add x0, w0, x1' 'cmp x0, #4097' 'ldr x0, [x1, -257]' \
            'stlxrh w4,x2,[x3]' 'stxrb x4,w2,[x3]' \
            'stnp x2,x3,[x0,#-520]' 'stp q0,x1,[x0]' 'ldp q0,q1,[x0,#-1040]' \
            'ldnp q0,q1,[x0],16' 'ld1 {v0.16b}, [x2,#16]' \
-           'ld1 {v0.16b,v1.16b},[x2]' \
+           'ld1 {v0.16b,v2.16b},[x2]' \
            'ldnp x2,x3,[x0],8' \
            'ldnp x2,w3,[x0]' 'ubfm w2,w3,#32,#0' 'sbfm x2,x3,#0,#64' \
            'bfm x2,w3,#1,#2' 'movk x0,#65536' \
