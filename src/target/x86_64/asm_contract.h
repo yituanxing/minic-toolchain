@@ -26,7 +26,11 @@ typedef enum MinicX86BitopsForm {
     MINIC_X86_BITOPS_LOCK_SET,
     MINIC_X86_BITOPS_LOCK_CLEAR,
     MINIC_X86_BITOPS_LOCK_TEST_SET,
-    MINIC_X86_BITOPS_LOCK_TEST_CLEAR
+    MINIC_X86_BITOPS_LOCK_TEST_CLEAR,
+    /* Constant-bit original Linux arch_set_bit/arch_clear_bit: 8-bit
+     * RMW cannot be widened without corrupting neighboring bytes. */
+    MINIC_X86_BITOPS_LOCK_OR_BYTE,
+    MINIC_X86_BITOPS_LOCK_AND_BYTE
 } MinicX86BitopsForm;
 typedef struct MinicX86BitopsDesc {
     const char *opcode;

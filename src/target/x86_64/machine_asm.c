@@ -180,8 +180,11 @@ static bool emit_linux_bitops(
     const MinicCoreStructuredInlineAsmOperand *b=
         ins->value.structured_inline_asm.operands;
     const size_t count=ins->value.structured_inline_asm.operand_count;
+    const bool byte_rmw=form==MINIC_X86_BITOPS_LOCK_OR_BYTE||
+                        form==MINIC_X86_BITOPS_LOCK_AND_BYTE;
     const size_t memindex=d&&d->memory_output?0U:d&&d->has_flag?1U:0U;
-    const size_t bitindex=d&&d->memory_output?2U:d&&d->has_flag?2U:1U;
+    const size_t bitindex=d&&d->memory_output&&d->has_flag?2U:
+                         d&&d->memory_output?1U:d&&d->has_flag?2U:1U;
     const size_t flagindex=d&&d->has_flag?(d->memory_output?1U:0U):SIZE_MAX;
     MinicType mem,flag;
     size_t width,i;
@@ -203,9 +206,10 @@ static bool emit_linux_bitops(
             return false;
     if(!minic_type_pointee(fn->values[b[memindex].value].type,&mem)||
        !minic_x86_64_scalar_width(program,target,mem,&width,&sign)||
-       width!=8U||
+       width!=(byte_rmw?1U:8U)||
        !minic_x86_64_scalar_width(program,target,
-           fn->values[b[bitindex].value].type,&width,&sign)||width!=8U||
+           fn->values[b[bitindex].value].type,&width,&sign)||
+       width!=(byte_rmw?4U:8U)||
        (d->has_flag&&
         (!minic_type_pointee(fn->values[b[flagindex].value].type,&flag)||
          !minic_type_equal(flag,minic_type_bool()))))
@@ -220,8 +224,9 @@ static bool emit_linux_bitops(
              "  .popsection\n"
              "671:\n",out)==EOF)
         return false;
-    if(fprintf(out,"  %s%s %%r10, (%%r11)\n",
-               d->is_locked?"lock; ":"",d->opcode)<0)
+    if(fprintf(out,"  %s%s %s, (%%r11)\n",
+               d->is_locked?"lock; ":"",d->opcode,
+               byte_rmw?"%r10b":"%r10")<0)
         return false;
     if(!d->has_flag)return true;
     return fputs("  setc %al\n",out)!=EOF&&

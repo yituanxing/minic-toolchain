@@ -263,7 +263,13 @@ static const struct {
      {"btsq",1,1,1,1}},
     {".pushsection.smp_locks,\"a\".balign4.long671f-..popsection671:lock;btrq%[val],%[var]/*outputconditioncodec*/",
      ".pushsection.smp_locks,\"a\".balign4.long671f-..popsection671:lock;btrq%2,%0/*outputconditioncodec*/",
-     {"btrq",1,1,1,1}}
+     {"btrq",1,1,1,1}},
+    {".pushsection.smp_locks,\"a\".balign4.long671f-..popsection671:lock;orb%b1,%0",
+     ".pushsection.smp_locks,\"a\".balign4.long671f-..popsection671:lock;orb%b1,%0",
+     {"orb",1,0,1,1}},
+    {".pushsection.smp_locks,\"a\".balign4.long671f-..popsection671:lock;andb%b1,%0",
+     ".pushsection.smp_locks,\"a\".balign4.long671f-..popsection671:lock;andb%b1,%0",
+     {"andb",1,0,1,1}}
 };
 MinicX86BitopsForm minic_x86_64_linux_bitops_form(
     const char *text,size_t length) {
@@ -298,13 +304,19 @@ static bool x86_linux_bitops_source(
         minic_x86_64_linux_bitops_form(
             src->template_text,src->template_length):MINIC_X86_BITOPS_NONE;
     const MinicX86BitopsDesc *desc=minic_x86_64_bitops_description(form);
+    const bool byte_rmw = form==MINIC_X86_BITOPS_LOCK_OR_BYTE ||
+                          form==MINIC_X86_BITOPS_LOCK_AND_BYTE;
+    const bool needs_memory_clobber = !byte_rmw ||
+                                      form==MINIC_X86_BITOPS_LOCK_OR_BYTE;
     const MinicInlineAsmOperand *mem,*bit,*flag;
     const MinicExpression *m,*b,*f;
     MinicType mem_type,bit_type,flag_type;
     if(!program||!src||!contract||!desc||src->is_goto||
        src->label_count||src->register_clobber_count||
-       !src->has_memory_clobber||src->clobber_count!=1U||
-       src->output_count!=(desc->has_flag?(desc->memory_output?2U:1U):0U)||
+       src->has_memory_clobber!=needs_memory_clobber||
+       src->clobber_count!=(needs_memory_clobber?1U:0U)||
+       src->output_count!=(desc->has_flag?(desc->memory_output?2U:1U):
+                           (desc->memory_output?1U:0U))||
        src->input_count!=(desc->memory_output?1U:2U)||
        (src->output_count&&!src->outputs)||!src->inputs||
        (desc->is_locked&&!src->is_volatile))
@@ -314,7 +326,7 @@ static bool x86_linux_bitops_source(
     mem=desc->memory_output?&src->outputs[0]:&src->inputs[0];
     bit=desc->memory_output?&src->inputs[0]:&src->inputs[1];
     if(!target_constraint_is(mem,desc->memory_output?"+m":"m")||
-       !target_constraint_is(bit,"Ir")||
+       !target_constraint_is(bit,byte_rmw?"iq":"Ir")||
        (flag&&!target_constraint_is(flag,"=@ccc")))
         return false;
     m=minic_c0_program_expression(program,mem->expression);
@@ -324,10 +336,17 @@ static bool x86_linux_bitops_source(
        (desc->writes_memory&&minic_type_is_const(m->type))||
        !minic_type_unqualified(m->type,&mem_type)||
        !minic_type_unqualified(b->type,&bit_type)||
-       (!minic_type_equal(mem_type,minic_type_long())&&
-        !minic_type_equal(mem_type,minic_type_unsigned_long()))||
-       (!minic_type_equal(bit_type,minic_type_long())&&
-        !minic_type_equal(bit_type,minic_type_unsigned_long()))||
+       (byte_rmw?
+         (!minic_type_equal(mem_type,minic_type_char())&&
+          !minic_type_equal(mem_type,minic_type_signed_char())&&
+          !minic_type_equal(mem_type,minic_type_unsigned_char())):
+         (!minic_type_equal(mem_type,minic_type_long())&&
+          !minic_type_equal(mem_type,minic_type_unsigned_long())))||
+       (byte_rmw?
+         (!minic_type_equal(bit_type,minic_type_int())&&
+          !minic_type_equal(bit_type,minic_type_unsigned_int())):
+         (!minic_type_equal(bit_type,minic_type_long())&&
+          !minic_type_equal(bit_type,minic_type_unsigned_long())))||
        (flag&&(!f||f->value_category!=MINIC_VALUE_LVALUE||
           minic_type_is_const(f->type)||
           !minic_type_unqualified(f->type,&flag_type)||
@@ -336,8 +355,12 @@ static bool x86_linux_bitops_source(
     contract->operand_count=src->output_count+src->input_count;
     if(desc->memory_output) {
         contract->kinds[0]=MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE;
-        contract->kinds[1]=MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
-        contract->kinds[2]=MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+        if(desc->has_flag) {
+            contract->kinds[1]=MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
+            contract->kinds[2]=MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+        } else {
+            contract->kinds[1]=MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+        }
     } else if(desc->has_flag) {
         contract->kinds[0]=MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
         contract->kinds[1]=desc->writes_memory ?
