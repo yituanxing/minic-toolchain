@@ -30,6 +30,9 @@ jobs:
       - name: Record immutable GNU source provenance
         run: |
           set -Eeuo pipefail
+          # Source coverage checkpoint: four remaining candidates at the
+          # former 86ffe77b HEAD. Reevaluate all 21 against this exact HEAD
+          # after Common inline .rept and A64 cross-section LDR19 updates.
           echo "MINIAS_REPLAY_SOURCE_RUN=40658346252"
           echo "MINIAS_REPLAY_SOURCE_HEAD=6a725a15e0b7b6c611f73de10e4c95a03f8637f0"
           echo "MINIAS_REPLAY_ASSEMBLER_HEAD=$GITHUB_SHA"
