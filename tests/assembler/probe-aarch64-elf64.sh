@@ -2388,9 +2388,9 @@ cat > "$work/a64-aes-ghash-comparisons.s" <<'A64_AES_GHASH'
 .text
 cmp w4,#64 - (5 << 4)
 cmp w4,#48 - (5 << 4)
-cmn x5,#-4096
+cmn x5,#4096
 cmp x5,#-4096
-cmn w1,#-1
+cmn w1,#1
 pmull v10.8h,v10.8b,v0.8b
 pmull2 v11.8h,v12.16b,v13.16b
 pmull v14.1q,v15.1d,v16.1d

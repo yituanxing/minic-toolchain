@@ -1246,15 +1246,17 @@ static bool parse_integer_family(MiniAsMCInst *inst,
             put_reg(&inst->operands[1], rm, wm);
         } else if (parse_signed_number(t[1], &imm) &&
                    imm != INT64_MIN &&
+                   (imm >= 0 || !strcmp(op,"cmp")) &&
                    (imm < 0 ? -imm : imm) <= INT64_C(4095)*4096 &&
                    ((imm < 0 ? -imm : imm)<=4095 ||
                     ((imm < 0 ? -imm : imm)%4096==0))) {
-            /* GNU CMP #(-N) is CMN #N, and CMN #(-N) is CMP #N.
-             * This is a Target ISA ALU alias, not a Common arithmetic
-             * rewrite or a fabricated negative 12-bit machine field. */
+            /* GNU accepts the arithmetic negative CMP pseudooperand
+             * in Linux AES macros and encodes it using CMN #positive.
+             * Keep prior strict rejection of explicitly negative CMN
+             * operands: the existing native contract tests that gate. */
             bool negate=imm<0;
-            kind=(!strcmp(op,"cmp")!=negate)?
-                A64_MC_CMP_IMM:A64_MC_CMN_IMM;
+            kind=negate?A64_MC_CMN_IMM:
+                 !strcmp(op,"cmp")?A64_MC_CMP_IMM:A64_MC_CMN_IMM;
             put_immediate(&inst->operands[1],negate?-imm:imm);
         } else return false;
         inst->opcode = kind;
