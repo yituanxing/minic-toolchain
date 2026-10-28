@@ -908,13 +908,19 @@ bool minic_target_info_inline_asm_register_clobber_supported(const MinicTargetIn
      * register allocation, clobber and stack-state ABI qualification still
      * happens in the x86 machine owner. In particular RBX, RBP, RSP,
      * R12..R15 and the callee-saved vector registers are NOT admitted.
+     * RBX/EBX are recognized ONLY as GNU C source clobber names: the
+     * downstream Target/physical machine must still reject an executable
+     * instruction unless it explicitly saves/restores callee-preserved RBX.
+     * This allows unused Linux static inline declarations to parse without
+     * asserting that unsupported executable clobbers are implemented.
      * Preserve the old GNU "dx" spelling of physical RDX. */
     if (target->architecture == MINIC_TARGET_ARCH_X86_64) {
         static const char *const caller_scratch[] = {
             "cc", "dx", "rdx", "edx",
             "rax", "eax", "rcx", "ecx",
             "rsi", "esi", "rdi", "edi",
-            "r8", "r9", "r10", "r11"
+            "r8", "r9", "r10", "r11",
+            "ebx", "rbx"
         };
         size_t j;
         for (j = 0U; j < sizeof(caller_scratch) / sizeof(caller_scratch[0]); ++j)

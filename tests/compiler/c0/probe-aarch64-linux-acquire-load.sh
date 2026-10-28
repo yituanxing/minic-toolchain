@@ -54,7 +54,7 @@ rc=0;qemu-aarch64 "$w/run.elf" || rc=$?
 test "$rc" -eq 42
 sed 's/ldarb %w0, %1/ldarb %w0, %1; brk #1/' "$w/load.i" >"$w/extra.i"
 sed 's/"Q"(\*p)/"r"(*p)/' "$w/load.i" >"$w/constraint.i"
-sed 's/u8 mini_read8(const volatile u8 \*p)/u16 mini_read8(const volatile u8 *p)/' "$w/load.i" >"$w/width.i"
+sed 's/u8 v;asm volatile("ldarb/u16 v;asm volatile("ldarb/' "$w/load.i" >"$w/width.i"
 sed 's/ : "memory");return v;/ );return v;/' "$w/load.i" >"$w/nomemory.i"
 for bad in extra constraint width nomemory;do
  if "$minic" --target=aarch64-linux -S "$w/$bad.i" -o "$w/$bad.s" >/dev/null 2>&1;then
