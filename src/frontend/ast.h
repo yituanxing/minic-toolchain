@@ -460,11 +460,21 @@ typedef struct MinicArrayType {
     bool is_query_materialized;
 } MinicArrayType;
 
+/* A calling convention changes function POINTER type identity, not the
+ * containing record's size or the general-purpose Core call semantics.
+ * Target backends must explicitly admit every non-default ABI before any
+ * machine call; a type-only declaration can be represented safely. */
+typedef enum MinicFunctionCallingConvention {
+    MINIC_CALLING_CONVENTION_DEFAULT = 0,
+    MINIC_CALLING_CONVENTION_MS_X64
+} MinicFunctionCallingConvention;
+
 typedef struct MinicFunctionType {
     MinicType return_type;
     MinicType parameter_types[MINIC_MAX_FUNCTION_PARAMETERS];
     size_t parameter_count;
     bool is_variadic;
+    MinicFunctionCallingConvention calling_convention;
 } MinicFunctionType;
 
 typedef struct MinicTypeAlias {
@@ -802,6 +812,12 @@ bool minic_c0_program_add_variadic_function_type(MinicC0Program *program,
                                                  size_t parameter_count,
                                                  bool is_variadic,
                                                  MinicType *function_type);
+/* Clone/intern a function pointer signature with an explicit target ABI.
+ * Existing default-ABI aliases keep their type identity unchanged. */
+bool minic_c0_program_function_pointer_with_calling_convention(
+    MinicC0Program *program, MinicType pointer_type,
+    MinicFunctionCallingConvention calling_convention,
+    MinicType *result);
 bool minic_c0_program_add_function_type(MinicC0Program *program,
                                         MinicType return_type,
                                         const MinicType *parameter_types,

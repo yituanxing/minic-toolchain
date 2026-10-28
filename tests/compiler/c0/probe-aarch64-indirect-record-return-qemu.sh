@@ -79,9 +79,14 @@ require_contains '^  movz x12, #2048$' "$work/aarch64.s"
 require_contains '^  add x11, x19, x11$' "$work/aarch64.s"
 require_contains '^  add x10, x19, x10$' "$work/aarch64.s"
 
-# The assembler contract remains fail-closed for other ABIs. In particular
-# LoongArch LP64D hidden result placement is NOT AAPCS64 x8 by another name.
-require_rejected loongarch64-linux "$work/mini.i" loong-unsafe-sret
+# LoongArch now has its OWN independently qualified LP64D return policy.
+# The same source is legal there, but its hidden result MUST use $a0, never
+# copy the AAPCS64 x8 machine sequence. Runtime evidence belongs to the
+# separate LoongArch GNU/GAS/QEMU differential probe.
+"$minic_cc" --target=loongarch64-linux -S "$work/mini.i" \
+    -o "$work/loong.s" || fail 'LoongArch independent LP64D result ABI'
+require_contains '^  st\.d \$a0, ' "$work/loong.s"
+require_contains '^  move \$t2, \$a0$' "$work/loong.s"
 
 # A 24-byte homogeneous floating-point aggregate is AAPCS64 HFA, not the
 # x8 memory-result class. This feature must never turn an unimplemented
@@ -141,7 +146,7 @@ SRC
 "$host_cc" -E -P -x c "$work/indirect.c" -o "$work/indirect.i"
 require_rejected aarch64-linux "$work/indirect.i" aarch64-indirect-callee
 
-printf '%s\n' 'AAPCS64_SRET_SOURCE=PASS direct_return=19 nested_call=4 independent_x8=1 return_blocks=2 ABI_negative=5'
+printf '%s\n' 'AAPCS64_SRET_SOURCE=PASS direct_return=19 nested_call=4 independent_x8=1 LP64D_a0=1 return_blocks=2 ABI_negative=4'
 
 if ! command -v "$target_cc" >/dev/null 2>&1 ||
    ! command -v "$target_qemu" >/dev/null 2>&1; then

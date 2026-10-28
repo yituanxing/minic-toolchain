@@ -1065,7 +1065,10 @@ static bool verify_statement(const MinicC0Program *program,
             (inline_asm->input_count != 0U && inline_asm->inputs == NULL) ||
             (inline_asm->label_count != 0U && inline_asm->labels == NULL) ||
             (inline_asm->register_clobber_count != 0U && inline_asm->register_clobbers == NULL) ||
-            (inline_asm->is_goto ? (inline_asm->label_count == 0U || inline_asm->output_count != 0U)
+            /* GNU asm goto with outputs is a valid SOURCE contract. Core
+             * remains separately responsible for declining unsupported
+             * fault-path output+label semantics before machine emission. */
+            (inline_asm->is_goto ? inline_asm->label_count == 0U
                                  : inline_asm->label_count != 0U) ||
             (inline_asm->has_memory_clobber && inline_asm->register_clobber_count == SIZE_MAX) ||
             inline_asm->clobber_count !=

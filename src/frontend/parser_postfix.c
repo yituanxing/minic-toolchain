@@ -183,6 +183,17 @@ static bool parse_indirect_arguments(MinicParser *parser,
                                      const MinicFunctionType *function_type) {
     size_t argument_index;
 
+    /* Preserve the declared EFI/MS ABI in the function POINTER type.
+     * No target backend currently owns the Win64 register/stack marshaling,
+     * so a call through that type is forbidden BEFORE Core can lower it as
+     * a SysV call. Merely declaring or copying the typed pointer is safe. */
+    if (function_type != NULL &&
+        function_type->calling_convention == MINIC_CALLING_CONVENTION_MS_X64) {
+        minic_parser_error(parser,
+            "ms_abi indirect call requires Microsoft x64 ABI lowering");
+        return false;
+    }
+
     if (function_type == NULL || function_type->parameter_count > MINIC_MAX_FUNCTION_PARAMETERS ||
         !minic_parser_advance(parser)) {
         return false;

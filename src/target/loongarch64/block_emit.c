@@ -163,12 +163,46 @@ static bool loongarch64_return_gp_record(
     return true;
 }
 
+/* LoongArch ELF psABI LP64D: objects larger than 2*GRLEN return through
+ * the caller-allocated buffer in the HIDDEN FIRST GAR ($a0); the callee
+ * must also return that same pointer in $a0. This is NOT AAPCS64 x8.
+ * The saved incoming pointer survives nested calls and dynamic alloca.
+ * Emit a counted, exact-byte copy instead of O(size) textual instructions. */
+static bool loongarch64_return_indirect_record(
+    FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicCoreFunction *fn, const MinicLP64FramePlan *frame_plan,
+    MinicCoreObjectId object_id, size_t return_slot, bool dynamic_frame) {
+    size_t src, bytes;
+    if (out == NULL ||
+        !minic_multi_indirect_record(program, target, fn->return_type,
+                                     &bytes) ||
+        bytes <= 16U || bytes > 2048U ||
+        !minic_lp64_frame_plan_object(frame_plan, object_id, &src) ||
+        fprintf(out, "  li.d $t1, %zu\n"
+                     "  add.d $t1, %s, $t1\n",
+                src, dynamic_frame ? "$s0" : "$sp") < 0 ||
+        !minic_loongarch64_emit_frame_mem(
+            out, "ld.d", "$a0", return_slot, dynamic_frame) ||
+        fprintf(out, "  move $t2, $a0\n"
+                     "  li.d $t0, %zu\n"
+                     "1:\n"
+                     "  ld.bu $t4, $t1, 0\n"
+                     "  st.b $t4, $t2, 0\n"
+                     "  addi.d $t1, $t1, 1\n"
+                     "  addi.d $t2, $t2, 1\n"
+                     "  addi.d $t0, $t0, -1\n"
+                     "  bnez $t0, 1b\n", bytes) < 0)
+        return false;
+    return true;
+}
+
 bool minic_loongarch64_emit_terminator(FILE *out,
     const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicCoreBlock *block,
     size_t id, size_t block_id, const MinicLP64FramePlan *frame_plan,
     size_t frame, size_t save_offset, bool has_direct_calls,
-    bool dynamic_frame) {
+    bool dynamic_frame, bool has_indirect_return,
+    size_t indirect_return_offset) {
         switch (block->terminator.kind) {
         case MINIC_CORE_TERMINATOR_RETURN:
             if (minic_type_is_record(fn->return_type)) {
@@ -185,6 +219,11 @@ bool minic_loongarch64_emit_terminator(FILE *out,
                                 fp == 0U ? "$fa0" : "$fa1",
                                 src + fp * fp_width, dynamic_frame))
                             return false;
+                } else if (has_indirect_return) {
+                    if (!loongarch64_return_indirect_record(
+                            out, program, target, fn, frame_plan, object_id,
+                            indirect_return_offset, dynamic_frame))
+                        return false;
                 } else if (!minic_multi_gp_record(
                                program, target, fn->return_type,
                                &bytes, &slots) ||
@@ -346,7 +385,8 @@ static bool loongarch64_machine_emit_terminator(
     return minic_loongarch64_emit_terminator(
         out, ctx->program, ctx->target, ctx->fn,
         block, ctx->id, block_id, ctx->frame_plan, ctx->frame,
-        ctx->save_offset, ctx->has_direct_calls, ctx->dynamic_frame);
+        ctx->save_offset, ctx->has_direct_calls, ctx->dynamic_frame,
+        ctx->has_indirect_return, ctx->indirect_return_offset);
 }
 
 bool minic_loongarch64_emit_core_blocks(

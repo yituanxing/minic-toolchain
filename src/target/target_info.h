@@ -44,7 +44,9 @@ typedef struct MinicTargetIntegerModel {
 typedef enum MinicTargetLanguageCapability {
     MINIC_TARGET_LANG_EXTENDED_FLOAT_DECLARATIONS = 1U << 0,
     MINIC_TARGET_LANG_OPAQUE_VECTOR_HEADER_DECLARATIONS = 1U << 1,
-    MINIC_TARGET_LANG_ABI_STATE_VA_LIST_CURSOR = 1U << 2
+    MINIC_TARGET_LANG_ABI_STATE_VA_LIST_CURSOR = 1U << 2,
+    /* Type-only EFI callback ABI marker; does NOT admit actual MS x64 CALL. */
+    MINIC_TARGET_LANG_MS_X64_FUNCTION_POINTER_DECLARATIONS = 1U << 3
 } MinicTargetLanguageCapability;
 
 typedef struct MinicTargetInfo {
@@ -117,6 +119,8 @@ bool minic_target_info_machine_builtin_signature(
 bool minic_target_info_header_attribute_supported(const MinicTargetInfo *target,
                                                   const char *spelling,
                                                   size_t length);
+bool minic_target_info_function_pointer_calling_convention_declaration_supported(
+    const MinicTargetInfo *target, MinicFunctionCallingConvention convention);
 bool minic_target_info_builtin_va_list_type(const MinicTargetInfo *target,
                                             MinicType *type);
 bool minic_target_info_variadic_state_copy_type_supported(

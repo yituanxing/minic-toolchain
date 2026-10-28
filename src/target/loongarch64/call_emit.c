@@ -212,6 +212,27 @@ bool minic_loongarch64_emit_abi_instruction(
                         return false;
                 }
             }
+            if (!indirect && minic_type_is_record(ins->type)) {
+                size_t result_bytes, dst;
+                const MinicCoreObjectId result_object =
+                    ins->value.call.result_object;
+                if (minic_multi_indirect_record(program, target,
+                        ins->type, &result_bytes) && result_bytes > 16U) {
+                    /* The ABI planner reserved $a0 BEFORE placing explicit
+                     * parameters in $a1..$a7. Write the hidden destination
+                     * after marshaling (which may clobber scratch GARs).
+                     * Dynamic alloca addresses use the stable $s0 base. */
+                    if (result_object >= fn->object_count ||
+                        !minic_lp64_frame_plan_object(
+                            frame_plan, result_object, &dst) ||
+                        dst > SIZE_MAX - (dynamic_frame ? 0U : stack_bytes) ||
+                        fprintf(out, "  li.d $a0, %zu\n"
+                                     "  add.d $a0, %s, $a0\n",
+                                dst + (dynamic_frame ? 0U : stack_bytes),
+                                dynamic_frame ? "$s0" : "$sp") < 0)
+                        return false;
+                }
+            }
             if (indirect) {
                 if (!emit_sp_mem(out, "ld.d", "$t2",
                                  (size_t)ins->value.indirect_call.callee * 8U +
@@ -327,6 +348,9 @@ bool minic_loongarch64_emit_abi_instruction(
                 if (indirect || object_id >= fn->object_count ||
                     !minic_lp64_frame_plan_object(frame_plan, object_id, &dst))
                     return false;
+                if (minic_multi_indirect_record(program, target,
+                        ins->type, &bytes) && bytes > 16U)
+                    return true; /* GNU LP64D callee filled caller's buffer. */
                 if (minic_multi_fp_return_record(
                         program, target, ins->type, &fp_elements, &fp_width)) {
                     for (chunk = 0U; chunk < fp_elements; ++chunk) {

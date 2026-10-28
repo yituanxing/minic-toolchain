@@ -53,6 +53,8 @@ typedef enum MinicAttributeKind {
     MINIC_ATTRIBUTE_ALIGNED,
     MINIC_ATTRIBUTE_TRANSPARENT_UNION,
     MINIC_ATTRIBUTE_CLEANUP,
+    /* GNU EFI callback conventions are real function-pointer type semantics. */
+    MINIC_ATTRIBUTE_MS_ABI,
     MINIC_ATTRIBUTE_FALLTHROUGH
 } MinicAttributeKind;
 

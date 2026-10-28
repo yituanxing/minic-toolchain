@@ -281,6 +281,12 @@ bool minic_parser_parse_parenthesized_function_declarator(
             parser, MINIC_TOKEN_LPAREN, "expected '(' before function declarator")) {
         return false;
     }
+    /* GNU EFI prototypes place the calling convention between the opening
+     * parenthesis and pointer star: `R (__attribute__((ms_abi)) *fn)(A)`.
+     * Collect, preserve and validate it like post-star attributes, rather
+     * than interpreting `__attribute__` as a declarator identifier. */
+    if (!minic_parser_collect_gnu_attribute_lists(parser, &declarator->attributes))
+        return false;
     while (parser->current.kind == MINIC_TOKEN_STAR) {
         declarator->pointer_depth += 1U;
         if (!minic_parser_advance(parser) || !minic_parser_parse_pointer_qualifier_sequence(

@@ -425,11 +425,17 @@ bool minic_parser_gnu_inline_asm_statement(MinicParser *parser) {
         const MinicInlineAsm *inline_asm;
 
         inline_asm = minic_c0_program_inline_asm(parser->program, inline_asm_id);
-        if (inline_asm == NULL || inline_asm->output_count != 0U || inline_asm->label_count == 0U) {
+        if (inline_asm == NULL || inline_asm->label_count == 0U) {
             minic_parser_error(parser,
-                               "GNU asm goto currently requires no outputs and at least one label");
+                               "GNU asm goto requires at least one label");
             return false;
         }
+        /* GCC 11+ GNU asm goto MAY contain output operands. Preserve
+         * their lvalue, constraints, input operands and branch labels in
+         * the AST. Core's narrow zero-output static-key implementation
+         * still declines this form: x86 user-access exception tables need
+         * a dedicated output+label+fault-path lowering before any machine
+         * bytes may be emitted. Do not discard outputs to fake success. */
     }
     if (!minic_c0_program_set_inline_asm_memory_clobber(
             parser->program, inline_asm_id, has_memory_clobber)) {

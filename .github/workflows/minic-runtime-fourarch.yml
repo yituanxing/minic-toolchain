@@ -50,6 +50,9 @@ on:
       - "tests/compiler/c0/probe-direct-lp64-weak-section-qemu.sh"
       - "tests/compiler/c0/probe-lp64-indirect-record-abi-qemu.sh"
       - "tests/compiler/c0/probe-aarch64-indirect-record-return-qemu.sh"
+      - "tests/compiler/c0/probe-loongarch-indirect-record-return-qemu.sh"
+      - "tests/compiler/c0/probe-x86-msabi-record-abi.sh"
+      - "tests/compiler/c0/probe-x86-asm-goto-output-frontier.sh"
       - "tests/compiler/c0/aarch64_indirect_record_return_minic.c"
       - "tests/compiler/c0/aarch64_indirect_record_return_gnu.c"
       - "tests/compiler/c0/probe-lp64-core-record-snapshot-qemu.sh"
@@ -711,6 +714,31 @@ jobs:
         run: |
           set -Eeuo pipefail
           bash tests/compiler/c0/probe-aarch64-indirect-record-return-qemu.sh
+      - name: LoongArch LP64D hidden a0 result ABI GNU caller/callee QEMU differential
+        if: matrix.target == 'loongarch64'
+        shell: bash
+        env:
+          MINIC_REQUIRE_LOONG_SRET: '1'
+          MINIC_CC: ${{ github.workspace }}/build/runtime-ci/bin/minic-cc
+        run: |
+          set -Eeuo pipefail
+          bash tests/compiler/c0/probe-loongarch-indirect-record-return-qemu.sh
+      - name: x86 EFI ms_abi typed declarations preserve ABI and reject unimplemented calls
+        if: matrix.target == 'x86_64'
+        shell: bash
+        env:
+          MINIC_CC: ${{ github.workspace }}/build/runtime-ci/bin/minic-cc
+        run: |
+          set -Eeuo pipefail
+          bash tests/compiler/c0/probe-x86-msabi-record-abi.sh
+      - name: x86 usercopy asm goto with outputs is typed but not emitted unsafely
+        if: matrix.target == 'x86_64'
+        shell: bash
+        env:
+          MINIC_CC: ${{ github.workspace }}/build/runtime-ci/bin/minic-cc
+        run: |
+          set -Eeuo pipefail
+          bash tests/compiler/c0/probe-x86-asm-goto-output-frontier.sh
       - name: Original GNU weak and section ELF symbol parity under real LP64 QEMU
         if: matrix.target == 'aarch64' || matrix.target == 'loongarch64'
         shell: bash

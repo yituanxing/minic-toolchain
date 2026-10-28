@@ -1292,11 +1292,13 @@ static bool minic_function_type_matches(const MinicFunctionType *descriptor,
                                         MinicType return_type,
                                         const MinicType *parameter_types,
                                         size_t parameter_count,
-                                        bool is_variadic) {
+                                        bool is_variadic,
+                                        MinicFunctionCallingConvention convention) {
     size_t parameter_index;
 
     if (descriptor == NULL || descriptor->parameter_count != parameter_count ||
         descriptor->is_variadic != is_variadic ||
+        descriptor->calling_convention != convention ||
         !minic_type_equal(descriptor->return_type, return_type)) {
         return false;
     }
@@ -1309,11 +1311,12 @@ static bool minic_function_type_matches(const MinicFunctionType *descriptor,
     return true;
 }
 
-bool minic_c0_program_add_variadic_function_type(MinicC0Program *program,
+static bool minic_c0_program_add_variadic_function_type_with_convention(MinicC0Program *program,
                                                  MinicType return_type,
                                                  const MinicType *parameter_types,
                                                  size_t parameter_count,
                                                  bool is_variadic,
+                                                 MinicFunctionCallingConvention convention,
                                                  MinicType *function_type) {
     MinicFunctionType descriptor;
     MinicType normalized_parameter_types[MINIC_MAX_FUNCTION_PARAMETERS];
@@ -1323,7 +1326,9 @@ bool minic_c0_program_add_variadic_function_type(MinicC0Program *program,
     if (program == NULL || function_type == NULL ||
         parameter_count > MINIC_MAX_FUNCTION_PARAMETERS ||
         (parameter_count != 0U && parameter_types == NULL) || minic_type_is_array(return_type) ||
-        minic_type_is_function(return_type)) {
+        minic_type_is_function(return_type) ||
+        (convention != MINIC_CALLING_CONVENTION_DEFAULT &&
+         convention != MINIC_CALLING_CONVENTION_MS_X64)) {
         return false;
     }
     for (parameter_index = 0U; parameter_index < parameter_count; ++parameter_index) {
@@ -1340,7 +1345,7 @@ bool minic_c0_program_add_variadic_function_type(MinicC0Program *program,
                                         return_type,
                                         normalized_parameter_types,
                                         parameter_count,
-                                        is_variadic)) {
+                                        is_variadic, convention)) {
             *function_type = minic_type_function(function_type_index);
             return true;
         }
@@ -1356,6 +1361,7 @@ bool minic_c0_program_add_variadic_function_type(MinicC0Program *program,
     descriptor.return_type = return_type;
     descriptor.parameter_count = parameter_count;
     descriptor.is_variadic = is_variadic;
+    descriptor.calling_convention = convention;
     for (parameter_index = 0U; parameter_index < MINIC_MAX_FUNCTION_PARAMETERS; ++parameter_index) {
         if (parameter_index < parameter_count) {
             descriptor.parameter_types[parameter_index] =
@@ -1368,6 +1374,41 @@ bool minic_c0_program_add_variadic_function_type(MinicC0Program *program,
     program->function_types[program->function_type_count] = descriptor;
     program->function_type_count += 1U;
     *function_type = minic_type_function(function_type_index);
+    return true;
+}
+
+bool minic_c0_program_add_variadic_function_type(MinicC0Program *program,
+                                                 MinicType return_type,
+                                                 const MinicType *parameter_types,
+                                                 size_t parameter_count,
+                                                 bool is_variadic,
+                                                 MinicType *function_type) {
+    return minic_c0_program_add_variadic_function_type_with_convention(
+        program, return_type, parameter_types, parameter_count, is_variadic,
+        MINIC_CALLING_CONVENTION_DEFAULT, function_type);
+}
+
+bool minic_c0_program_function_pointer_with_calling_convention(
+    MinicC0Program *program, MinicType pointer_type,
+    MinicFunctionCallingConvention convention, MinicType *result) {
+    MinicFunctionType original;
+    MinicType function_type;
+    if (program == NULL || result == NULL ||
+        pointer_type.base_kind != MINIC_TYPE_BASE_FUNCTION ||
+        pointer_type.pointer_depth != 1U ||
+        pointer_type.function_type_id >= program->function_type_count ||
+        (convention != MINIC_CALLING_CONVENTION_DEFAULT &&
+         convention != MINIC_CALLING_CONVENTION_MS_X64))
+        return false;
+    /* Save the signature by VALUE: interning may realloc its owner array. */
+    original = program->function_types[pointer_type.function_type_id];
+    if (!minic_c0_program_add_variadic_function_type_with_convention(
+            program, original.return_type, original.parameter_types,
+            original.parameter_count, original.is_variadic, convention,
+            &function_type))
+        return false;
+    *result = pointer_type;
+    result->function_type_id = function_type.function_type_id;
     return true;
 }
 

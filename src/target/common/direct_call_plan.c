@@ -13,8 +13,14 @@ static bool minic_lp64_plan_types(
     const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicType *types, size_t count, size_t fixed, bool variadic,
     MinicLP64DirectABI abi, MinicDirectLP64IndirectRecord indirect_record,
+    bool hidden_indirect_result,
     MinicLP64ArgumentPlan *plan) {
-    size_t gp = 0U, fp = 0U, stack = 0U, j;
+    /* AAPCS64 reserves x8 for the result buffer, outside the argument
+     * register stream. LoongArch LP64D instead consumes the FIRST named
+     * GAR ($a0). This is ABI placement, never a Core-level parameter. */
+    size_t gp = hidden_indirect_result &&
+        abi == MINIC_LP64_ABI_LOONGARCH64_LP64D ? 1U : 0U;
+    size_t fp = 0U, stack = 0U, j;
     if (program == NULL || target == NULL || plan == NULL ||
         indirect_record == NULL || count > MINIC_DIRECT_LP64_MAX_CALL_ARGUMENTS ||
         (count != 0U && types == NULL) || fixed > count ||
@@ -186,10 +192,17 @@ bool minic_lp64_plan_incoming_parameters(
     const MinicCoreFunction *fn, MinicLP64DirectABI abi,
     MinicDirectLP64IndirectRecord indirect_record,
     MinicLP64ArgumentPlan *plan) {
+    size_t return_bytes = 0U;
+    bool hidden_indirect_result;
     if (fn == NULL) return false;
+    hidden_indirect_result =
+        abi == MINIC_LP64_ABI_LOONGARCH64_LP64D &&
+        minic_type_is_record(fn->return_type) &&
+        indirect_record(program, target, fn->return_type, &return_bytes) &&
+        return_bytes > 16U;
     return minic_lp64_plan_types(program, target, fn->parameter_types,
         fn->parameter_count, fn->parameter_count, false, abi,
-        indirect_record, plan);
+        indirect_record, hidden_indirect_result, plan);
 }
 
 /* Shared CALL ABI admission and placement are one function-site pass. */
@@ -409,6 +422,8 @@ bool minic_lp64_plan_function_calls(
         MinicLP64ArgumentPlan scratch;
         MinicLP64PreparedCall *site;
         size_t bytes;
+        size_t return_bytes = 0U;
+        bool hidden_indirect_result;
         *failed_instruction = id;
         *failed_preflight = true;
         if (id >= fn->instruction_count ||
@@ -421,11 +436,19 @@ bool minic_lp64_plan_function_calls(
                 id, types))
             goto failed;
         *failed_preflight = false;
+        hidden_indirect_result =
+            abi == MINIC_LP64_ABI_LOONGARCH64_LP64D &&
+            indirect_return != NULL &&
+            minic_type_is_record(calls->sites[ordinal].view.return_type) &&
+            indirect_return(program, target,
+                calls->sites[ordinal].view.return_type, &return_bytes) &&
+            return_bytes > 16U;
         if (!minic_lp64_plan_types(program, target, types,
                                   calls->sites[ordinal].view.argument_count,
                                   calls->sites[ordinal].view.parameter_count,
                                   calls->sites[ordinal].view.is_variadic,
-                                  abi, indirect_record, &scratch) ||
+                                  abi, indirect_record,
+                                  hidden_indirect_result, &scratch) ||
             scratch.argument_count >
                 (SIZE_MAX - sizeof(*site)) / sizeof(*site->arguments))
             goto failed;

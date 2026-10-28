@@ -6,6 +6,12 @@
     { name_value, sizeof(name_value) - 1U, kind_value, class_value, targets_value, 0U, 0U, false }
 
 static const MinicAttributeDescriptor minic_attribute_descriptors[] = {
+    MINIC_ATTRIBUTE_ENTRY("ms_abi", MINIC_ATTRIBUTE_MS_ABI,
+                          MINIC_ATTRIBUTE_CLASS_LANGUAGE_SEMANTIC,
+                          MINIC_ATTRIBUTE_TARGET_FUNCTION),
+    MINIC_ATTRIBUTE_ENTRY("__ms_abi__", MINIC_ATTRIBUTE_MS_ABI,
+                          MINIC_ATTRIBUTE_CLASS_LANGUAGE_SEMANTIC,
+                          MINIC_ATTRIBUTE_TARGET_FUNCTION),
     MINIC_ATTRIBUTE_ENTRY("__nothrow__",
                           MINIC_ATTRIBUTE_NOTHROW,
                           MINIC_ATTRIBUTE_CLASS_INFORMATIONAL,
