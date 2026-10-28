@@ -2,6 +2,8 @@
 #define MINIC_TARGET_X86_64_ASM_CONTRACT_H
 #include "target/backend.h"
 bool minic_x86_64_requires_qualified_input_asm(const MinicInlineAsm *);
+/* x86 original Linux _THIS_IP_ RIP-relative register-result hardware ABI */
+bool minic_x86_64_linux_ip_here_template(const char *, size_t);
 unsigned int minic_x86_64_linux_counter_form(const char *,size_t);
 unsigned int minic_x86_64_hweight_alternative_form(const char *,size_t);
 unsigned int minic_x86_64_linux_msr_form(const char *,size_t);

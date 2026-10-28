@@ -114,6 +114,56 @@ static bool target_constraint_is(const MinicInlineAsmOperand *op, const char *s)
            memcmp(op->constraint_text, s, n) == 0;
 }
 
+/* Linux _THIS_IP_: one precise RIP-relative LEA with a 64-bit register
+ * result, never an arbitrary target inline ASM escape hatch. This reaches
+ * Core as an address-backed REGISTER_OUTPUT structured effect, not a new
+ * frontend IR opcode or a Core-architecture conditional. */
+bool minic_x86_64_linux_ip_here_template(const char *text, size_t length) {
+    static const char exact[] = "lea0(%%rip),%0";
+    char compact[48];
+    size_t i, n = 0U;
+    if (text == NULL || length == 0U || length >= sizeof(compact))
+        return false;
+    for (i = 0U; i < length; ++i) {
+        const char c = text[i];
+        if (c == ' ' || c == '\t') continue;
+        if (c == '\n' || c == '\r' || c == ';' || c == '\0')
+            return false;
+        compact[n++] = c;
+    }
+    compact[n] = '\0';
+    return strcmp(compact, exact) == 0;
+}
+
+static bool x86_linux_ip_here_source(
+    const MinicC0Program *program, const MinicInlineAsm *src,
+    MinicTargetInlineAsmContract *contract) {
+    const MinicExpression *dst;
+    MinicType plain;
+    if (program == NULL || src == NULL || contract == NULL ||
+        src->is_goto || src->output_count != 1U ||
+        src->input_count != 0U || src->outputs == NULL ||
+        src->clobber_count != 0U || src->register_clobber_count != 0U ||
+        src->has_memory_clobber || src->label_count != 0U ||
+        src->outputs[0].access != MINIC_INLINE_ASM_OPERAND_WRITE_ONLY ||
+        !target_constraint_is(&src->outputs[0], "=r") ||
+        !minic_x86_64_linux_ip_here_template(
+            src->template_text, src->template_length))
+        return false;
+    dst = minic_c0_program_expression(program, src->outputs[0].expression);
+    if (dst == NULL || dst->value_category != MINIC_VALUE_LVALUE ||
+        minic_type_is_const(dst->type) ||
+        !minic_type_unqualified(dst->type, &plain) ||
+        (!minic_type_equal(plain, minic_type_unsigned_long()) &&
+         !minic_type_equal(plain, minic_type_long()) &&
+         !minic_type_equal(plain, minic_type_unsigned_long_long()) &&
+         !minic_type_equal(plain, minic_type_long_long())))
+        return false;
+    contract->operand_count = 1U;
+    contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
+    return true;
+}
+
 /* Original x86 Linux this_cpu_read_stable_8 is a nonvolatile GNU p
  * address computation followed by a REAL GS-segment hardware read.
  * Only the literal 64-bit instruction / two exact operands are admitted.
@@ -1496,6 +1546,8 @@ bool minic_x86_64_qualify_inline_asm(
     bool is_mulacc = false, is_muldiv = false;
     size_t i, count;
     if (!contract) return false;
+    if (x86_linux_ip_here_source(program, source, contract))
+        return true;
     if (x86_add32_carry_source(program, source, contract))
         return true;
     if (x86_percpu_gs_source(program, source, contract))

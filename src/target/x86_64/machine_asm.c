@@ -947,6 +947,28 @@ bool minic_x86_64_emit_structured_asm(
     bindings = ins->value.structured_inline_asm.operands;
     if (!info->template_text)
         return false;
+    if (minic_x86_64_linux_ip_here_template(
+            info->template_text, info->template_length)) {
+        MinicType pointee;
+        if (info->is_goto || info->register_clobber_count != 0U ||
+            info->has_memory_clobber ||
+            ins->value.structured_inline_asm.operand_count != 1U ||
+            bindings[0].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT ||
+            bindings[0].operand_index != 0U ||
+            bindings[0].value >= fn->value_count ||
+            !minic_type_pointee(fn->values[bindings[0].value].type, &pointee) ||
+            (!minic_type_equal(pointee, minic_type_unsigned_long()) &&
+             !minic_type_equal(pointee, minic_type_long()) &&
+             !minic_type_equal(pointee, minic_type_unsigned_long_long()) &&
+             !minic_type_equal(pointee, minic_type_long_long())))
+            return false;
+        /* GNU LEA obtains the address of its own following instruction.
+         * Emit the same PC-relative machine semantics, then write the
+         * result into the Core address-backed C output local. */
+        return fputs("  leaq 0(%rip), %rax\n", out) != EOF &&
+            x86_value_load(out, frame, bindings[0].value, "%r11") &&
+            fputs("  movq %rax, (%r11)\n", out) != EOF;
+    }
     {
         unsigned int percpu_op=0U;size_t percpu_width=0U;
         if (minic_x86_64_linux_percpu_form(info->template_text,
