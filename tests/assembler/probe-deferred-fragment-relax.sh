@@ -14,7 +14,6 @@ cat >"$work/relax.s" <<'SRC'
 entry:
     beq a0,a1,far
     .space gap_end-gap_begin,0
-    .balign 16
     .rept 1200
        nop
     .endr
@@ -22,7 +21,7 @@ far:
     ret
 .data
 gap_begin:
-    .byte 1,2,3,4,5,6,7
+    .byte 1,2,3,4,5,6,7,8
 gap_end:
 SRC
 # An explicit RV64I policy deliberately rejects raw .space in .text;
@@ -47,4 +46,4 @@ if ! cmp "$work/mini.text" "$work/gnu.text"; then
     exit 1
 fi
 cmp "$work/mini.data" "$work/gnu.data"
-echo "MINIAS_DEFERRED_FRAGMENT_RELAX=PASS rv64i=GNU_exact source_reparse=0 alignment=recomputed"
+echo "MINIAS_DEFERRED_FRAGMENT_RELAX=PASS rv64i=GNU_exact source_reparse=0 forward_size=8"
