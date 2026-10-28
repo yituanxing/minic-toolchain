@@ -178,6 +178,20 @@ bool minic_loongarch64_emit_residual_instruction(
                                     reject_block, reject_ins, __LINE__);
             { *needs_writeback = false; return true; }
         }
+        case MINIC_CORE_INSTRUCTION_BLOCK_ADDRESS: {
+            MinicCoreBlockId destination;
+            /* Local label is a function-private PC-relative address, never
+             * a global/GOT symbol. Share only Core shape with AArch64. */
+            if (!minic_multi_direct_block_address_shape(
+                    fn, ins, &destination) ||
+                fprintf(out, "  la.local $t0, .Lmini_loong_f%zu_b%u\n",
+                        id, (unsigned int)destination) < 0 ||
+                !emit_sp_mem(out, "st.d", "$t0", offset))
+                return minic_multi_direct_machine_reject(
+                    fn, "loongarch64", name, reject_stage,
+                    reject_block, reject_ins, __LINE__);
+            { *needs_writeback = false; return true; }
+        }
         case MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS: {
             size_t object_offset;
             if (!minic_multi_direct_object_address_location(
