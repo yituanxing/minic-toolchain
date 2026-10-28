@@ -137,7 +137,7 @@ bool minias_cfi_directive(MiniAs *as,const char *op,
         if (as->target->cfi_code_align == 0U ||
             as->target->cfi_data_align == 0 ||
             as->target->cfi_address_size != 8U ||
-            (eh && as->target->elf_machine!=62U)) {
+            (eh && !as->target->cfi_implicit_eh_frame)) {
             minias_set_error(as,"unsupported-target-dwarf-cfi:line=%zu",line);
             return false;
         }
@@ -363,7 +363,7 @@ bool minias_cfi_emit(MiniAs *as) {
     size_t cie_offset[2][2]={{0U,0U},{0U,0U}};
     if((!as->cfi_debug_frame && !eh) || as->cfi_proc_count==0U)
         return true;
-    if(eh && as->target->elf_machine!=62U) {
+    if(eh && !as->target->cfi_implicit_eh_frame) {
         minias_set_error(as,"unsupported-target-eh-frame");
         return false;
     }

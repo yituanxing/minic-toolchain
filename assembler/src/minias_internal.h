@@ -498,6 +498,9 @@ typedef struct MiniAsTargetOps {
     bool (*parse_named_relocation)(const char *, MiniAsFixupKind *, unsigned *);
     bool supports_literal_pools; /* .ltorg/.pool only for a checked target */
     bool (*validate_output)(MiniAs *);
+    /* Target-advertised GNU implicit .eh_frame: never infer ISA from
+     * numeric ELF e_machine inside Common CFI/layout dispatch. */
+    bool cfi_implicit_eh_frame;
     /* Target-owned DWARF CFI ABI (zero => not yet available). */
     unsigned cfi_code_align;
     int cfi_data_align;

@@ -3449,6 +3449,7 @@ static const MiniAsTargetOps ops={
     /* System V AMD64 DWARF: code slots are bytes, saved GPRs occupy
      * eight-byte stack slots, return address=RIP(16), CFA base=RSP(7).
      * The Common CFI encoder already owns the real .debug_frame FDE. */
+    .cfi_implicit_eh_frame=true,
     .cfi_code_align=1U,
     .cfi_data_align=-8,
     .cfi_return_reg=16U,
