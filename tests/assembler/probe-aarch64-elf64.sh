@@ -1656,4 +1656,45 @@ for bad in 'ld1 {v0.4s-v4.4s},[x8]' \
     fi
 done
 echo 'MINIAS_A64_SIMD_STRUCTURE_DUP_REV32_SYS=PASS GNU_18_words_N_vector_list_and_arch_fields'
+
+# GNU ARMv8.5+memtag STGM, ARMv8 LSE paired CASP and lane-indexed INS.
+# Compare the ENTIRE real GNU text, not just accepted status; reject
+# extension-gate bypass, pair misalignment and out-of-range SIMD lanes.
+cat >"$work/a64-mte-casp-ins.s" <<'GNU_CASP_MTE_INS'
+.arch armv8.5-a+memtag
+.arch_extension lse
+.text
+stgm xzr,[x0]
+stgm x1,[x2]
+casp x0,x1,x2,x3,[x4]
+caspa x4,x5,x6,x7,[x8]
+caspl x8,x9,x10,x11,[x12]
+caspal x12,x13,x14,x15,[x16]
+ins v1.b[0],w7
+ins v1.b[15],w7
+ins v2.h[3],w3
+ins v3.s[2],w4
+ins v3.d[1],x4
+rev32 x16,x17
+GNU_CASP_MTE_INS
+"$MINIAS" --target=aarch64 -o "$work/a64-mte-casp-mini.o" "$work/a64-mte-casp-ins.s"
+"$AARCH64_AS" -o "$work/a64-mte-casp-gnu.o" "$work/a64-mte-casp-ins.s"
+"$AARCH64_OBJCOPY" -j .text -O binary "$work/a64-mte-casp-mini.o" "$work/a64-mte-casp-mini.bin"
+"$AARCH64_OBJCOPY" -j .text -O binary "$work/a64-mte-casp-gnu.o" "$work/a64-mte-casp-gnu.bin"
+cmp "$work/a64-mte-casp-mini.bin" "$work/a64-mte-casp-gnu.bin"
+for bad in 'casp x1,x2,x4,x5,[x0]' 'casp x0,x2,x4,x5,[x0]' \
+           'casp x0,x1,w2,w3,[x4]' 'ins v0.b[16],w1' \
+           'ins v0.h[8],w1' 'ins v1.d[1],w1' 'stgm w0,[x1]'; do
+    printf '.arch armv8.5-a+memtag\n.arch_extension lse\n.text\n%s\n' "$bad" > "$work/a64-mte-casp-invalid.s"
+    if "$MINIAS" --target=aarch64 -o "$work/a64-mte-casp-invalid.o" "$work/a64-mte-casp-invalid.s" >/dev/null 2>&1; then
+        echo "invalid CASP/MTE/INS operand accepted: $bad" >&2;exit 1
+    fi
+done
+for disabled in 'stgm xzr,[x0]' 'casp x0,x1,x2,x3,[x4]'; do
+    printf '.arch armv8-a\n.text\n%s\n' "$disabled" > "$work/a64-mte-casp-feature.s"
+    if "$MINIAS" --target=aarch64 -o "$work/a64-mte-casp-feature.o" "$work/a64-mte-casp-feature.s" >/dev/null 2>&1; then
+        echo "unsupported extension was silently enabled: $disabled" >&2;exit 1
+    fi
+done
+echo 'MINIAS_A64_CASP_STGM_INS=PASS GNU_12_words_MTE_LSE_scalar_REV32'
 echo 'MINIAS_AARCH64_VSLICE=PASS ELF64=1 gnu_bytes=equal relocation_call26_jump26_abs64=1 ld=pass qemu=exit0'

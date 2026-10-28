@@ -10,6 +10,7 @@
 #define A64_FEATURE_TLBI_RANGE UINT32_C(0x20000000) /* ARMv8.4 range */
 #define A64_FEATURE_CRC UINT32_C(0x40000000) /* ARM CRC extension */
 #define A64_FEATURE_CRYPTO UINT32_C(0x80000000) /* ARM AES/crypto extension */
+#define A64_FEATURE_MTE UINT32_C(0x08000000) /* ARM memtag extension */
 
 /*
  * First non-RISC-V MiniAS vertical slice.
@@ -315,7 +316,9 @@ enum {
     A64_MC_SIMD_CRYPTO,
     A64_MC_SIMD_LOGIC,
     A64_MC_SIMD_DUP,
-    A64_MC_SIMD_REV32
+    A64_MC_SIMD_REV32,
+    A64_MC_LSE_PAIR,
+    A64_MC_MTE_STGM
 };
 
 /* GNU AArch64 operands split on TOP-LEVEL commas, not commas within
@@ -582,6 +585,62 @@ static bool parse_a64_mem(const char *text, unsigned *base, int64_t *offset,
             comma[--size] = '\0';
         if (!parse_signed_number(comma, offset)) return false;
     }
+    return true;
+}
+
+/* Atomic 128-bit CASP{A,L,AL} GNU operand sequence has 4 GPRs
+ * plus one memory register. The typed MCInst encodes only the leading
+ * register of each consecutive even pair; validate both members here.
+ * Reuse the EXISTING four-operand A64 tokenizer after isolating [Rn].
+ */
+static bool a64_casp_fields(const char *args,unsigned *rs,unsigned *rt,
+                             unsigned *rn,bool *wide) {
+    char buffer[384],tokens[4][96],*last;
+    unsigned n,r1,r3;
+    bool w0,w1,w2,w3,sp;
+    int64_t offset;unsigned mode;
+    size_t len=strlen(args);
+    if(len>=sizeof(buffer))return false;
+    memcpy(buffer,args,len+1U);
+    last=strrchr(buffer,',');
+    if(!last)return false;
+    *last++='\0';last=minias_trim(last);
+    if(!split_operands(buffer,tokens,&n) || n!=4U ||
+       !parse_a64_reg(tokens[0],rs,&w0,&sp) || sp ||
+       !parse_a64_reg(tokens[1],&r1,&w1,&sp) || sp ||
+       !parse_a64_reg(tokens[2],rt,&w2,&sp) || sp ||
+       !parse_a64_reg(tokens[3],&r3,&w3,&sp) || sp ||
+       !(w0==w1 && w0==w2 && w0==w3) ||
+       (*rs&1U) || (*rt&1U) ||
+       *rs>=30U || *rt>=30U ||
+       r1!=*rs+1U || r3!=*rt+1U ||
+       !parse_a64_mem(last,rn,&offset,&mode) ||
+       offset!=0 || mode!=0U)return false;
+    *wide=w0;return true;
+}
+
+/* Element-indexed INS Vd.T[index], Rn.
+ * The lane index is the architectural imm5 encoded in bits[20:16].
+ * No independent FP register representation is needed in Common IR. */
+static bool a64_ins_lane(const char *text,unsigned *vd,uint32_t *imm5,
+                          bool *x_source) {
+    char *end;unsigned long num,index;
+    char elem;
+    unsigned bits;
+    if(text[0]!='v' || !isdigit((unsigned char)text[1]))return false;
+    errno=0;num=strtoul(text+1U,&end,10);
+    if(errno || num>31UL || *end!='.' || !end[1] ||
+       end[2]!='[')return false;
+    elem=end[1];
+    bits=elem=='b'?0U:elem=='h'?1U:elem=='s'?2U:
+         elem=='d'?3U:4U;
+    if(bits==4U || !isdigit((unsigned char)end[3]))return false;
+    errno=0;index=strtoul(end+3U,&end,10);
+    if(errno || *end!='['+(']'-'[') || end[1]!='\0' ||
+       index>=(16UL>>bits))return false;
+    *vd=(unsigned)num;
+    *imm5=((uint32_t)index<<(bits+1U))|(1U<<bits);
+    *x_source=bits==3U;
     return true;
 }
 
@@ -2321,7 +2380,8 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
         inst->count=1U;
         inst->encoding=read?mrscode:msrcode;
         put_reg(&inst->operands[0],rt,true);
-    } else if(!strcmp(op,"dup") || !strcmp(op,"rev32")) {
+    } else if(!strcmp(op,"dup") ||
+              (!strcmp(op,"rev32") && args[0]=='v')) {
         char dst[96],source[96];unsigned vd,rn;
         uint32_t ar;
         bool wide,sp;
@@ -2370,6 +2430,59 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
         inst->opcode=A64_MC_SYS_OP;inst->count=1U;
         inst->encoding=bits;
         put_reg(&inst->operands[0],rt,true);
+    } else if(!strcmp(op,"casp") || !strcmp(op,"caspa") ||
+              !strcmp(op,"caspl") || !strcmp(op,"caspal")) {
+        unsigned rs,rt,rn;
+        bool wide;
+        if((as->target_options&A64_FEATURE_LSE)==0U ||
+           !a64_casp_fields(args,&rs,&rt,&rn,&wide)){
+            minias_set_error(as,"bad-aarch64-casp:%s:line=%zu",
+                             args,stmt->line);
+            free(inst);return false;
+        }
+        inst->opcode=A64_MC_LSE_PAIR;inst->count=3U;
+        inst->encoding=(wide?UINT32_C(0x48207c00):
+                             UINT32_C(0x08207c00))|
+                       (strchr(op,'a') && !strcmp(op,"caspa") ||
+                        !strcmp(op,"caspal")?UINT32_C(0x00400000):0U)|
+                       (!strcmp(op,"caspl") || !strcmp(op,"caspal")?
+                        UINT32_C(0x00008000):0U);
+        put_reg(&inst->operands[0],rs,wide);
+        put_reg(&inst->operands[1],rt,wide);
+        put_reg(&inst->operands[2],rn,true);
+    } else if(!strcmp(op,"stgm")) {
+        unsigned rt,rn,mode;
+        bool wide,sp;
+        int64_t offset;
+        if((as->target_options&A64_FEATURE_MTE)==0U ||
+           !split_two(args,first,sizeof(first),second,sizeof(second)) ||
+           !parse_a64_reg(first,&rt,&wide,&sp) || sp || !wide ||
+           !parse_a64_mem(second,&rn,&offset,&mode) ||
+           offset!=0 || mode!=0U) {
+            minias_set_error(as,"bad-aarch64-stgm:%s:line=%zu",
+                             args,stmt->line);
+            free(inst);return false;
+        }
+        inst->opcode=A64_MC_MTE_STGM;inst->count=2U;
+        inst->encoding=UINT32_C(0xd9a00000);
+        put_reg(&inst->operands[0],rt,true);
+        put_reg(&inst->operands[1],rn,true);
+    } else if(!strcmp(op,"ins")) {
+        unsigned vd,rn;
+        uint32_t imm5;
+        bool source_x,wide,sp;
+        if(!split_two(args,first,sizeof(first),second,sizeof(second)) ||
+           !a64_ins_lane(first,&vd,&imm5,&source_x) ||
+           !parse_a64_reg(second,&rn,&wide,&sp) || sp ||
+           wide!=source_x) {
+            minias_set_error(as,"bad-aarch64-ins-lane:%s:line=%zu",
+                             args,stmt->line);
+            free(inst);return false;
+        }
+        inst->opcode=A64_MC_SIMD_DUP;inst->count=2U;
+        inst->encoding=UINT32_C(0x4e001c00)|(imm5<<16U);
+        put_reg(&inst->operands[0],vd,true);
+        put_reg(&inst->operands[1],rn,wide);
     } else if(!strcmp(op,"dmb") || !strcmp(op,"dsb") ||
               !strcmp(op,"isb")) {
         unsigned barrier=15U;
@@ -3054,6 +3167,17 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
             }
             break;
         }
+        case A64_MC_LSE_PAIR:
+            code=inst->encoding|
+                 (inst->operands[0].reg<<16U)|
+                 (inst->operands[2].reg<<5U)|
+                 inst->operands[1].reg;
+            break;
+        case A64_MC_MTE_STGM:
+            code=inst->encoding|
+                 (inst->operands[1].reg<<5U)|
+                 inst->operands[0].reg;
+            break;
         case A64_MC_SIMD_DUP:
         case A64_MC_SIMD_REV32:
             code=inst->encoding|
@@ -3500,12 +3624,15 @@ static bool directive(MiniAs *as, const char *op, const char *args,
         }
         as->target_options&=~(A64_FEATURE_LSE|
                               A64_FEATURE_TLBI_RANGE|
-                              A64_FEATURE_CRC|A64_FEATURE_CRYPTO);
+                              A64_FEATURE_CRC|A64_FEATURE_CRYPTO|
+                              A64_FEATURE_MTE);
         if(v85)as->target_options|=(A64_FEATURE_LSE|
                                     A64_FEATURE_TLBI_RANGE|
                                     A64_FEATURE_CRC);
         if(!strcmp(args,"armv8-a+crc"))
             as->target_options|=A64_FEATURE_CRC;
+        if(!strcmp(args,"armv8.5-a+memtag"))
+            as->target_options|=A64_FEATURE_MTE;
         if(!strcmp(args,"armv8-a+crypto"))
             as->target_options|=A64_FEATURE_CRYPTO;
         return true;
@@ -3518,6 +3645,8 @@ static bool directive(MiniAs *as, const char *op, const char *args,
         else if(!strcmp(args,"nocrc"))as->target_options &= ~A64_FEATURE_CRC;
         else if(!strcmp(args,"crypto"))as->target_options |= A64_FEATURE_CRYPTO;
         else if(!strcmp(args,"nocrypto"))as->target_options &= ~A64_FEATURE_CRYPTO;
+        else if(!strcmp(args,"memtag"))as->target_options |= A64_FEATURE_MTE;
+        else if(!strcmp(args,"nomemtag"))as->target_options &= ~A64_FEATURE_MTE;
         else {
             minias_set_error(as,"unsupported-aarch64-extension:%s:line=%zu",
                              args,line);
