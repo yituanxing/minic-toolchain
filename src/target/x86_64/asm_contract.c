@@ -1,5 +1,6 @@
 #include "target/x86_64/asm_contract.h"
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 /* Target-owned GNU register/constraint admission: no Core lowering state,
@@ -341,6 +342,25 @@ static bool x86_linux_bitops_source(
                           form==MINIC_X86_BITOPS_LOCK_AND_BYTE;
     const bool needs_memory_clobber = !byte_rmw ||
                                       form==MINIC_X86_BITOPS_LOCK_OR_BYTE;
+    /* Explicitly opt-in frontier evidence; no speculative acceptance or
+     * additional source/machine contract. Reusable for original frozen GNU
+     * Linux bitops first-barrier replay without global debug noise. */
+    if (src && getenv("MINIC_X86_BITOPS_TRACE"))
+        (void)fprintf(stderr,
+            "X86_BITOPS_SOURCE form=%d outputs=%zu inputs=%zu "
+            "volatile=%d memory=%d clobbers=%zu register_clobbers=%zu "
+            "out=%.*s in=%.*s template=%.*s\n",
+            (int)form, src->output_count, src->input_count,
+            src->is_volatile ? 1 : 0, src->has_memory_clobber ? 1 : 0,
+            src->clobber_count, src->register_clobber_count,
+            src->outputs ? (int)src->outputs[0].constraint_length : 0,
+            src->outputs && src->outputs[0].constraint_text ?
+                src->outputs[0].constraint_text : "",
+            src->inputs ? (int)src->inputs[0].constraint_length : 0,
+            src->inputs && src->inputs[0].constraint_text ?
+                src->inputs[0].constraint_text : "",
+            src->template_text ? (int)src->template_length : 0,
+            src->template_text ? src->template_text : "");
     const MinicInlineAsmOperand *mem,*bit,*flag;
     const MinicExpression *m,*b,*f;
     MinicType mem_type,bit_type,flag_type;
