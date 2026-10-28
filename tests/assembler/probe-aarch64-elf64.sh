@@ -1969,3 +1969,31 @@ for bad in 'shl v0.4s,v1.4s,#32' 'shl v0.2d,v1.2d,#64' \
     fi
 done
 echo 'MINIAS_A64_SHIFT_LANE_FAMILY=PASS GNU_16_words_and_11_invalid'
+
+# Original Linux vector-to-vector INS/MOV lanes share ISA-owned typed
+# destination imm5 and source imm4. Both source classes must agree in width.
+cat > "$work/a64-linux-vector-lane.s" <<'GNU_LINUX_A64_VEC_LANE'
+.text
+ins v17.d[1],v19.d[0]
+ins v3.d[0],v4.d[1]
+ins v17.s[3],v19.s[2]
+ins v17.h[3],v19.h[5]
+ins v2.b[15],v4.b[1]
+mov v0.d[1],v1.d[0]
+mov v2.s[0],v3.s[2]
+mov v19.d[0],xzr
+GNU_LINUX_A64_VEC_LANE
+"$MINIAS" --target=aarch64 -o "$work/a64-linux-vec-lane-mini.o" "$work/a64-linux-vector-lane.s"
+"$AARCH64_AS" -o "$work/a64-linux-vec-lane-gnu.o" "$work/a64-linux-vector-lane.s"
+"$AARCH64_OBJCOPY" -j .text -O binary "$work/a64-linux-vec-lane-mini.o" "$work/a64-linux-vec-lane-mini.bin"
+"$AARCH64_OBJCOPY" -j .text -O binary "$work/a64-linux-vec-lane-gnu.o" "$work/a64-linux-vec-lane-gnu.bin"
+cmp "$work/a64-linux-vec-lane-mini.bin" "$work/a64-linux-vec-lane-gnu.bin"
+for bad in 'ins v0.s[0],v1.d[0]' 'ins v0.b[0],v1.h[0]' \
+           'ins v0.d[2],v1.d[0]' 'ins v0.h[0],v1.h[8]' \
+           'mov v0.s[1],v1.d[0]' 'ins v0.d[0],w1'; do
+    printf '.text\n%s\n' "$bad" > "$work/a64-vec-lane-bad.s"
+    if "$MINIAS" --target=aarch64 -o "$work/a64-vec-lane-bad.o" "$work/a64-vec-lane-bad.s" >/dev/null 2>&1; then
+        echo "invalid vector lane source/size accepted: $bad" >&2;exit 1
+    fi
+done
+echo 'MINIAS_A64_INS_VECTOR_TO_VECTOR=PASS GNU_8_words_and_6_invalid'

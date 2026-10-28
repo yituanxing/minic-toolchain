@@ -2523,20 +2523,36 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
         /* GNU MOV Vd.element[lane],Wn/Xn is INS's exact lane encoding,
          * not the earlier whole-register MOV/ORR alias. */
         unsigned vd,rn;
-        uint32_t imm5;
-        bool source_x,wide,sp;
+        uint32_t imm5,source_imm5=0U,source_marker=0U,source_imm4=0U;
+        bool source_x,wide,sp,vector_source;
         if(!split_two(args,first,sizeof(first),second,sizeof(second)) ||
-           !a64_ins_lane(first,&vd,&imm5,&source_x) ||
-           !parse_a64_reg(second,&rn,&wide,&sp) || sp ||
-           wide!=source_x) {
+           !a64_ins_lane(first,&vd,&imm5,&source_x)) {
             minias_set_error(as,"bad-aarch64-ins-lane:%s:line=%zu",
                              args,stmt->line);
             free(inst);return false;
         }
+        vector_source=a64_ins_lane(second,&rn,&source_imm5,&wide);
+        if(vector_source) {
+            /* GNU INS/MOV Vd.element[i],Vn.element[j]: same element
+             * width but independent lane indices. Destination imm5
+             * and source imm4 live in separate architectural fields. */
+            source_marker=source_imm5&(~source_imm5+1U);
+            if(source_marker!=(imm5&(~imm5+1U))) {
+                minias_set_error(as,"bad-aarch64-ins-source-width:%s:line=%zu",
+                                 args,stmt->line);free(inst);return false;
+            }
+            source_imm4=(source_imm5&~source_marker)>>1U;
+        }else if(!parse_a64_reg(second,&rn,&wide,&sp) || sp ||
+                 wide!=source_x) {
+            minias_set_error(as,"bad-aarch64-ins-source:%s:line=%zu",
+                             args,stmt->line);free(inst);return false;
+        }
         inst->opcode=A64_MC_SIMD_DUP;inst->count=2U;
-        inst->encoding=UINT32_C(0x4e001c00)|(imm5<<16U);
+        inst->encoding=(vector_source?UINT32_C(0x6e000400):
+                                     UINT32_C(0x4e001c00))|
+                       (imm5<<16U)|(source_imm4<<11U);
         put_reg(&inst->operands[0],vd,true);
-        put_reg(&inst->operands[1],rn,wide);
+        put_reg(&inst->operands[1],rn,true);
     } else if(!strcmp(op,"fmov")) {
         /* Raw bitwise FMOV between GPR and FP S/D banks (both directions).
          * No software float conversion, and never accept mixed X/S W/D. */
