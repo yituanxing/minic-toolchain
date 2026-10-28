@@ -95,14 +95,16 @@ extern _Bool gcc_try_##bits##_lock(type*,type*,type); \
 extern _Bool gcc_try_##bits##_local(type*,type*,type);
 FUN(8,u8) FUN(16,u16) FUN(32,u32) FUN(64,u64)
 #define CHECK(bits,type,mode,x,y,z) do{ \
- type a=(type)(x),b=a,e1=(type)(y),e2=e1; \
- _Bool i=mini_try_##bits##_##mode(&a,&e1,(type)(z)); \
- _Bool j=gcc_try_##bits##_##mode(&b,&e2,(type)(z)); \
- if (i!=j||a!=b||e1!=e2) { \
-  fprintf(stderr,"CAS_DIFF bits=%s mode=%s memory=%llu expected=%llu new=%llu mini_success=%d gnu_success=%d mini_mem=%llu gnu_mem=%llu mini_old=%llu gnu_old=%llu\\n", \
-  #bits,#mode,(unsigned long long)(x),(unsigned long long)(y),(unsigned long long)(z), \
-  (int)i,(int)j,(unsigned long long)a,(unsigned long long)b, \
-  (unsigned long long)e1,(unsigned long long)e2); return 1; } \
+ type lhs_value=(type)(x),rhs_value=lhs_value; \
+ type old_mini=(type)(y),old_gcc=old_mini; \
+ _Bool m_result=mini_try_##bits##_##mode(&lhs_value,&old_mini,(type)(z)); \
+ _Bool g_result=gcc_try_##bits##_##mode(&rhs_value,&old_gcc,(type)(z)); \
+ if (m_result!=g_result||lhs_value!=rhs_value||old_mini!=old_gcc){ \
+ fprintf(stderr,"CAS_DIFF bits=%s mode=%s src_mem=%llu src_old=%llu src_new=%llu mini_success=%d gnu_success=%d mini_mem=%llu gnu_mem=%llu mini_old=%llu gnu_old=%llu\\n", \
+ #bits,#mode,(unsigned long long)(x),(unsigned long long)(y),(unsigned long long)(z), \
+ (int)m_result,(int)g_result,(unsigned long long)lhs_value, \
+ (unsigned long long)rhs_value,(unsigned long long)old_mini, \
+ (unsigned long long)old_gcc);return 1;} \
 }while(0)
 int main(void) {
  static const int values[]={0,1,2,3,8,42,127,255,-1};
