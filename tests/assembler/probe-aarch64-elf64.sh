@@ -1859,3 +1859,32 @@ for disabled in 'sha256h q0,q1,v2.4s' 'stg x0,[x1]'; do
     fi
 done
 echo 'MINIAS_A64_SHA256H_MTE_TAGSTORE_VPIDR=PASS GNU_byte_parity_feature_and_bank'
+
+# GNU ISA profile composition must be generic, not a growing list of
+# hard-coded `.arch armv8.5-a+feature1+feature2` spellings.
+cat > "$work/a64-arch-composition.s" <<'A64_ARCH_COMPOSITION'
+.arch armv8-a+crypto+crc
+.text
+aesd v0.16b,v1.16b
+crc32b w0,w1,w2
+.arch armv8.5-a+memtag+crypto
+ldgm x1,[x2]
+sha256h q1,q2,v3.4s
+.arch_extension nocrypto
+stg x1,[x2]
+.arch_extension crypto
+sha256h2 q1,q2,v3.4s
+A64_ARCH_COMPOSITION
+"$MINIAS" --target=aarch64 -o "$work/a64-arch-compose-mini.o" "$work/a64-arch-composition.s"
+"$AARCH64_AS" -o "$work/a64-arch-compose-gnu.o" "$work/a64-arch-composition.s"
+"$AARCH64_OBJCOPY" -j .text -O binary "$work/a64-arch-compose-mini.o" "$work/a64-arch-compose-mini.bin"
+"$AARCH64_OBJCOPY" -j .text -O binary "$work/a64-arch-compose-gnu.o" "$work/a64-arch-compose-gnu.bin"
+cmp "$work/a64-arch-compose-mini.bin" "$work/a64-arch-compose-gnu.bin"
+for bad in 'armv8.5-a+memtag+' 'armv8.5-a+crypto+imaginary' \
+           'armv8.5-a++crypto' 'armv8.6-a+madeup'; do
+    printf '.arch %s\n.text\nnop\n' "$bad" > "$work/a64-arch-compose-bad.s"
+    if "$MINIAS" --target=aarch64 -o "$work/a64-arch-compose-bad.o" "$work/a64-arch-compose-bad.s" >/dev/null 2>&1; then
+        echo "invalid A64 composed ISA accepted: $bad" >&2;exit 1
+    fi
+done
+echo 'MINIAS_A64_ARCH_EXTENSION_COMPOSITION=PASS GNU_bytes_feature_composition_fail_closed'

@@ -3833,48 +3833,73 @@ static bool directive(MiniAs *as, const char *op, const char *args,
         ++st->count;
         return true;
     }
+/* GNU AArch64 profiles compose ISA extensions; do not enumerate each
+ * combination as a hard-coded architecture name. Both .arch +feature
+ * and .arch_extension reuse this one target-owned feature selector. */
+static bool a64_set_isa_feature(uint32_t *bits,const char *name) {
+    bool disable=false;
+    uint32_t feature;
+    if(!strncmp(name,"no",2U)) {
+        name+=2U;
+        disable=true;
+    }
+    if(!strcmp(name,"lse"))feature=A64_FEATURE_LSE;
+    else if(!strcmp(name,"crc"))feature=A64_FEATURE_CRC;
+    else if(!strcmp(name,"crypto"))feature=A64_FEATURE_CRYPTO;
+    else if(!strcmp(name,"memtag"))feature=A64_FEATURE_MTE;
+    else return false;
+    if(disable)*bits&=~feature;
+    else *bits|=feature;
+    return true;
+}
+
     /* GCC emits .arch armv8-a before its first A64 instruction. Verify the
      * exact declared ISA here; never silently accept a richer architecture. */
     if (strcmp(op, ".arch") == 0) {
-        *handled = true;
-        /* These are recognized GNU assembler ISA profiles, not a claim
-         * that every v8.5/crypto instruction is implemented. Unsupported
-         * machine encodings still fail in the typed Target MC parser. */
-        bool v85=!strcmp(args,"armv8.5-a") ||
-                 !strcmp(args,"armv8.5-a+memtag");
-        if(strcmp(args,"armv8-a")!=0 && !v85 &&
-           strcmp(args,"armv8-a+crypto")!=0 &&
-           strcmp(args,"armv8-a+crc")!=0) {
-            minias_set_error(as, "unsupported-aarch64-architecture:%s:line=%zu",
-                             args, line);
+        const char *plus=strchr(args,'+');
+        size_t base_len=plus?(size_t)(plus-args):strlen(args);
+        uint32_t bits=as->target_options&
+                      ~(A64_FEATURE_LSE|A64_FEATURE_TLBI_RANGE|
+                        A64_FEATURE_CRC|A64_FEATURE_CRYPTO|A64_FEATURE_MTE);
+        bool v85=base_len==strlen("armv8.5-a") &&
+                 strncmp(args,"armv8.5-a",base_len)==0;
+        bool v8=base_len==strlen("armv8-a") &&
+                strncmp(args,"armv8-a",base_len)==0;
+        *handled=true;
+        if(!v85 && !v8) {
+            minias_set_error(as,"unsupported-aarch64-architecture:%s:line=%zu",
+                             args,line);
             return false;
         }
-        as->target_options&=~(A64_FEATURE_LSE|
-                              A64_FEATURE_TLBI_RANGE|
-                              A64_FEATURE_CRC|A64_FEATURE_CRYPTO|
-                              A64_FEATURE_MTE);
-        if(v85)as->target_options|=(A64_FEATURE_LSE|
-                                    A64_FEATURE_TLBI_RANGE|
-                                    A64_FEATURE_CRC);
-        if(!strcmp(args,"armv8-a+crc"))
-            as->target_options|=A64_FEATURE_CRC;
-        if(!strcmp(args,"armv8.5-a+memtag"))
-            as->target_options|=A64_FEATURE_MTE;
-        if(!strcmp(args,"armv8-a+crypto"))
-            as->target_options|=A64_FEATURE_CRYPTO;
+        if(v85)bits|=A64_FEATURE_LSE|A64_FEATURE_TLBI_RANGE|
+                     A64_FEATURE_CRC;
+        while(plus) {
+            char name[32];
+            const char *start=plus+1U,*next=strchr(start,'+');
+            size_t width=next?(size_t)(next-start):strlen(start);
+            if(width==0U || width>=sizeof(name)) {
+                minias_set_error(as,
+                                 "unsupported-aarch64-architecture:%s:line=%zu",
+                                 args,line);
+                return false;
+            }
+            memcpy(name,start,width);name[width]='\0';
+            if(!a64_set_isa_feature(&bits,name)) {
+                minias_set_error(as,
+                                 "unsupported-aarch64-architecture:%s:line=%zu",
+                                 args,line);
+                return false;
+            }
+            plus=next;
+        }
+        /* Commit atomically only after ALL feature names were checked:
+         * malformed trailing + and unknown extensions never widen ISA. */
+        as->target_options=bits;
         return true;
     }
     if(!strcmp(op,".arch_extension")) {
         *handled=true;
-        if(!strcmp(args,"lse"))as->target_options |= A64_FEATURE_LSE;
-        else if(!strcmp(args,"nolse"))as->target_options &= ~A64_FEATURE_LSE;
-        else if(!strcmp(args,"crc"))as->target_options |= A64_FEATURE_CRC;
-        else if(!strcmp(args,"nocrc"))as->target_options &= ~A64_FEATURE_CRC;
-        else if(!strcmp(args,"crypto"))as->target_options |= A64_FEATURE_CRYPTO;
-        else if(!strcmp(args,"nocrypto"))as->target_options &= ~A64_FEATURE_CRYPTO;
-        else if(!strcmp(args,"memtag"))as->target_options |= A64_FEATURE_MTE;
-        else if(!strcmp(args,"nomemtag"))as->target_options &= ~A64_FEATURE_MTE;
-        else {
+        if(!a64_set_isa_feature(&as->target_options,args)) {
             minias_set_error(as,"unsupported-aarch64-extension:%s:line=%zu",
                              args,line);
             return false;
