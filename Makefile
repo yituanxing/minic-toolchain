@@ -255,6 +255,7 @@ MINIAS_INCLUDES := -Iassembler/src $(MINIELF_INCLUDES)
 MINIAS_SOURCES := \
 	assembler/src/assembler.c \
 	assembler/src/cfi.c \
+	assembler/src/cfi_writer.c \
 	assembler/src/debug_line.c \
 	assembler/src/riscv_target.c \
 	assembler/src/aarch64_target.c \

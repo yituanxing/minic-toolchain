@@ -316,11 +316,22 @@ typedef struct MiniAsStmt {
 
 /* Common deferred DWARF .debug_frame CFI fragments. Target psABI owns register
  * identities and alignment; Common owns symbolic anchors and serialization. */
+enum {
+    CFI_DEF_CFA = 1, CFI_DEF_CFA_OFFSET, CFI_OFFSET, CFI_RESTORE,
+    CFI_REMEMBER, CFI_RESTORE_STATE, CFI_NEGATE_RA,
+    CFI_DEF_CFA_REGISTER, CFI_UNDEFINED, CFI_SAME_VALUE,
+    CFI_VAL_OFFSET, CFI_REGISTER, CFI_ESCAPE
+};
+
+/* One owned CFI event at a stable MCFragment anchor. Raw escape payloads
+ * are retained bytecode, never reparsed source strings. */
 typedef struct MiniAsCfiOp {
     size_t symbol_index;
     unsigned kind;
     unsigned reg;
     int64_t value;
+    uint8_t *bytes;
+    size_t byte_count;
 } MiniAsCfiOp;
 
 typedef struct MiniAsCfiProc {
@@ -444,6 +455,7 @@ void minias_destroy(MiniAs *as);
 bool minias_parse_file(MiniAs *as, const char *path);
 bool minias_emit_sections(MiniAs *as);
 bool minias_write_elf64(MiniAs *as, const char *path);
+MiniAsCfiABI minias_cfi_abi(const MiniAs *);
 bool minias_cfi_directive(MiniAs *as, const char *op,
                           const char *args, size_t line);
 bool minias_cfi_emit(MiniAs *as);

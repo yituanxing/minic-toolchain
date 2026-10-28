@@ -717,6 +717,8 @@ void minias_destroy(MiniAs *as) {
         release_macro(&as->macros[i]);
     free(as->macros);
     free(as->cfi_procs);
+    for(i=0U;i<as->cfi_op_count;++i)
+        free(as->cfi_ops[i].bytes);
     free(as->cfi_ops);
     for (i = 0U; i < as->debug_file_capacity; ++i)
         free(as->debug_files[i]);
