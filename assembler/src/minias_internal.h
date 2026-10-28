@@ -369,6 +369,11 @@ bool minias_add_fixup(MiniAs *as,
 bool minias_parse_number_literal(const char *text, char **end, uint64_t *value);
 bool minias_eval_u64_expression(const char *text, uint64_t *value);
 bool minias_eval_i64_expression(const char *text, int64_t *value);
+/* Shared absolute expression resolver with Common-defined .set/.equ and
+ * location-counter semantics. Targets use it only for ISA field constraints;
+ * section/layout/fixup emission stays in Common. */
+bool minias_parse_absolute_data_bits(MiniAs *as,const char *text,
+                                     uint64_t *value);
 bool minias_parse_symbol_addend(const char *text, MiniAsSymbolExpr *expr);
 bool minias_decode_string_literals(const char *text,
                                    bool nul_terminate,

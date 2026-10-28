@@ -2664,7 +2664,7 @@ static bool directive(MiniAs *as, const char *op, const char *args,
             uint64_t bits;
             if(comma)*comma='\0';
             word=minias_trim(cursor);
-            if(!*word || !minias_eval_u64_expression(word,&bits) ||
+            if(!*word || !minias_parse_absolute_data_bits(as,word,&bits) ||
                (bits>UINT32_MAX &&
                 ((int64_t)bits>=0 || (int64_t)bits<INT32_MIN))) {
                 minias_set_error(as,"invalid-aarch64-inst-word:%s:line=%zu",

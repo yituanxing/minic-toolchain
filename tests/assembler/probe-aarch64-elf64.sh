@@ -393,6 +393,13 @@ external_adr_target:
     .inst 0xd503201f, 0xd503201f, 0xd503201f, 0xd503201f, 0xd503201f, 0xd503201f
     .inst (0xd500401f | ((0) << 16 | (4) << 5) | ((!!(0)) << 8))
     .inst (0xd500401f | ((0) << 16 | (4) << 5) | ((!!(9)) << 8))
+    // Linux arch/arm64 sysreg macros assemble .inst with .L__gpr_num_X
+    // created by .set; validate the symbolic word against real GNU bytes.
+    .set .L__gpr_num_x17, 17
+    .set .L__gpr_num_x23, 23
+    .inst (0xd5200000|((((3) << 19)|((0) << 16)|((0) << 12)|((0) << 8)|((5) << 5)))|(.L__gpr_num_x17)
+    .inst (0xd5200000|((((3) << 19)|((5) << 16)|((1) << 12)|((0) << 8)|((0) << 5)))|(.L__gpr_num_x23)
+
     .arch_extension nolse
     ldxr w0, [x2]
     ldxr x1, [x2]
@@ -761,6 +768,7 @@ for bad_source in 'ldxr x0, [x1,#4]' 'stxr x0, x1, [x2]' \
                   '.inst 0x100000000' \
                   '.inst 0xd503201f, ' \
                   '.inst 0xd503201f, 0x100000000' \
+                  '.inst .Lnonexistent_sysreg' \
                   'cmn x0, #-1' 'cmn w0, #4097' \
                   'and w0, w0, #0xffffffff' 'and w0, w0, #0' \
                   'and w0, w1, #0x100000001' \

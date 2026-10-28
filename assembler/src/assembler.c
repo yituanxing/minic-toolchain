@@ -1598,7 +1598,7 @@ static bool evaluate_absolute_expression(MiniAs *as,
     return *parser.cursor == '\0';
 }
 
-static bool parse_absolute_data_bits(MiniAs *as,
+bool minias_parse_absolute_data_bits(MiniAs *as,
                                      const char *text,
                                      uint64_t *value) {
     MiniAsAbsoluteExpressionParser parser;
@@ -2590,7 +2590,7 @@ static bool add_data_stmt(MiniAs *as, const char *op, char *args, size_t line) {
             if (comma != NULL) {
                 *comma = '\0';
             }
-            if (!parse_absolute_data_bits(as, minias_trim(cursor), &value)) {
+            if (!minias_parse_absolute_data_bits(as, minias_trim(cursor), &value)) {
                 MiniAsSymbolExpr expr;
                 const char *trimmed = minias_trim(cursor);
                 MiniAsSymbolExpr rhs_expr;
@@ -2660,7 +2660,7 @@ static bool add_data_stmt(MiniAs *as, const char *op, char *args, size_t line) {
             token=minias_trim(walk);
             selected=token;
             if(data_references_mutable_set(as,token) &&
-               parse_absolute_data_bits(as,token,&value)) {
+               minias_parse_absolute_data_bits(as,token,&value)) {
                 (void)snprintf(numeric,sizeof(numeric),"%llu",
                                (unsigned long long)value);
                 selected=numeric;
@@ -3041,7 +3041,7 @@ static bool emit_data_stmt(MiniAs *as, const MiniAsStmt *stmt) {
         if (comma != NULL) {
             *comma = '\0';
         }
-        if (!parse_absolute_data_bits(as, minias_trim(cursor), &value)) {
+        if (!minias_parse_absolute_data_bits(as, minias_trim(cursor), &value)) {
             MiniAsSymbolExpr expr;
             const char *trimmed = minias_trim(cursor);
             uint64_t relocation_offset =
