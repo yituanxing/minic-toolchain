@@ -272,6 +272,8 @@ typedef struct MiniAsCfiProc {
     size_t first_op;
     size_t op_count;
     unsigned state_depth;
+    bool simple;        /* GNU .cfi_startproc simple suppresses initial CFA */
+    bool signal_frame;  /* GNU .cfi_signal_frame changes CIE augmentation */
 } MiniAsCfiProc;
 
 typedef struct MiniAsDebugLoc {
@@ -339,6 +341,7 @@ typedef struct MiniAs {
     bool cfi_active;
     bool cfi_signal_frame;
     bool cfi_debug_frame;
+    bool cfi_eh_frame;
     MiniAsCfiProc *cfi_procs;
     size_t cfi_proc_count;
     size_t cfi_proc_capacity;
