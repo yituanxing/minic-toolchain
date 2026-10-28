@@ -1245,10 +1245,17 @@ static bool parse_integer_family(MiniAsMCInst *inst,
             kind = strcmp(op,"cmp")==0 ? A64_MC_CMP_REG : A64_MC_CMN_REG;
             put_reg(&inst->operands[1], rm, wm);
         } else if (parse_signed_number(t[1], &imm) &&
-                   imm >= 0 && (imm <= 4095 ||
-                   (imm%4096==0 && imm/4096<=4095))) {
-            kind = strcmp(op,"cmp")==0 ? A64_MC_CMP_IMM : A64_MC_CMN_IMM;
-            put_immediate(&inst->operands[1], imm);
+                   imm != INT64_MIN &&
+                   (imm < 0 ? -imm : imm) <= INT64_C(4095)*4096 &&
+                   ((imm < 0 ? -imm : imm)<=4095 ||
+                    ((imm < 0 ? -imm : imm)%4096==0))) {
+            /* GNU CMP #(-N) is CMN #N, and CMN #(-N) is CMP #N.
+             * This is a Target ISA ALU alias, not a Common arithmetic
+             * rewrite or a fabricated negative 12-bit machine field. */
+            bool negate=imm<0;
+            kind=(!strcmp(op,"cmp")!=negate)?
+                A64_MC_CMP_IMM:A64_MC_CMN_IMM;
+            put_immediate(&inst->operands[1],negate?-imm:imm);
         } else return false;
         inst->opcode = kind;
         inst->count = 2U;
@@ -3025,11 +3032,24 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
         bool valid=(as->target_options&A64_FEATURE_CRYPTO)!=0U &&
             split_operands(args,tok,&n) && n==(tri?3U:2U);
         if(valid && polynomial) {
-            valid=a64_vector_1q(tok[0],&rd) &&
-                  a64_vector_view(tok[1],&rn,&sa) &&
-                  a64_vector_view(tok[2],&rm,&ta) &&
-                  sa==(pair?UINT32_C(0x40000c00):UINT32_C(0x00000c00)) &&
-                  ta==sa;
+            /* PMULL/PMULL2 have TWO independently checked element
+             * widths: polynomial bytes -> Vd.8H and polynomial 64-bit
+             * halves -> Vd.1Q. Both reuse the same three-register
+             * emitter; Vn/Vm shapes must match low/high selection. */
+            bool bytes=a64_vector_view(tok[0],&rd,&da) &&
+                       da==UINT32_C(0x40000400);
+            if(!bytes)valid=a64_vector_1q(tok[0],&rd);
+            if(valid) {
+                uint32_t source=bytes?
+                    (pair?UINT32_C(0x40000000):UINT32_C(0)):
+                    (pair?UINT32_C(0x40000c00):UINT32_C(0x00000c00));
+                valid=a64_vector_view(tok[1],&rn,&sa) &&
+                      a64_vector_view(tok[2],&rm,&ta) &&
+                      sa==source && ta==source;
+            }
+            if(valid && bytes)
+                inst->encoding=pair?UINT32_C(0x4e20e000):
+                                     UINT32_C(0x0e20e000);
         }else if(valid) {
             valid=a64_vector_view(tok[0],&rd,&da) &&
                   a64_vector_view(tok[1],&rn,&sa) &&
@@ -3042,10 +3062,12 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
         }
         inst->opcode=tri?A64_MC_SIMD_LOGIC:A64_MC_SIMD_CRYPTO;
         inst->count=tri?3U:2U;
-        inst->encoding=polynomial?
-              (pair?UINT32_C(0x4ee0e000):UINT32_C(0x0ee0e000)):
-              !strcmp(op,"sha1su0")?UINT32_C(0x5e003000):
-                                    UINT32_C(0x5e281800);
+        if(!polynomial ||
+           inst->encoding==0U)
+            inst->encoding=polynomial?
+                  (pair?UINT32_C(0x4ee0e000):UINT32_C(0x0ee0e000)):
+                  !strcmp(op,"sha1su0")?UINT32_C(0x5e003000):
+                                        UINT32_C(0x5e281800);
         put_reg(&inst->operands[0],rd,true);
         put_reg(&inst->operands[1],rn,true);
         if(tri)put_reg(&inst->operands[2],rm,true);

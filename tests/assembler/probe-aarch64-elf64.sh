@@ -2380,3 +2380,35 @@ A64_SHIFTED_DIFF
 "$AARCH64_OBJCOPY" -j .data -O binary "$work/a64-diffshift-gnu.o" "$work/a64-diffshift-gnu.bin"
 cmp "$work/a64-diffshift-mini.bin" "$work/a64-diffshift-gnu.bin"
 echo 'MINIAS_COMMON_FORWARD_SYMBOL_SHIFT_A64=PASS GNU_32b_forward_negative_floor'
+
+# Linux AES/GHASH original macro expressions require negative CMP -> CMN
+# ISA alias and byte-polynomial PMULL/PMULL2, not only the .1Q long form.
+cat > "$work/a64-aes-ghash-comparisons.s" <<'A64_AES_GHASH'
+.arch armv8-a+crypto
+.text
+cmp w4,#64 - (5 << 4)
+cmp w4,#48 - (5 << 4)
+cmn x5,#-4096
+cmp x5,#-4096
+cmn w1,#-1
+pmull v10.8h,v10.8b,v0.8b
+pmull2 v11.8h,v12.16b,v13.16b
+pmull v14.1q,v15.1d,v16.1d
+pmull2 v17.1q,v18.2d,v19.2d
+A64_AES_GHASH
+"$MINIAS" --target=aarch64 -o "$work/a64-aesghash-mini.o" "$work/a64-aes-ghash-comparisons.s"
+"$AARCH64_AS" -o "$work/a64-aesghash-gnu.o" "$work/a64-aes-ghash-comparisons.s"
+"$AARCH64_OBJCOPY" -j .text -O binary "$work/a64-aesghash-mini.o" "$work/a64-aesghash-mini.bin"
+"$AARCH64_OBJCOPY" -j .text -O binary "$work/a64-aesghash-gnu.o" "$work/a64-aes-ghash-mini.bin.gnu"
+cmp "$work/a64-aesghash-mini.bin" "$work/a64-aes-ghash-mini.bin.gnu"
+for bad in 'cmp w1,#-999999' 'cmn w1,#-999999' \
+           'pmull v0.8h,v1.16b,v2.16b' \
+           'pmull2 v0.8h,v1.8b,v2.8b' \
+           'pmull v0.1q,v1.8b,v2.8b' \
+           'pmull2 v0.1q,v1.2d,v2.8b'; do
+ printf '.arch armv8-a+crypto\n.text\n%s\n' "$bad" > "$work/a64-aesghash-bad.s"
+ if "$MINIAS" --target=aarch64 -o "$work/a64-aesghash-bad.o" "$work/a64-aesghash-bad.s" >/dev/null 2>&1; then
+  echo "invalid AArch64 CMP/PMULL operand accepted: $bad" >&2;exit 1
+ fi
+done
+echo 'MINIAS_A64_AES_GHASH_NEGCMP_PMULL8=PASS GNU_9_words_and_6_negatives'
