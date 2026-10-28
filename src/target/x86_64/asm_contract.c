@@ -738,6 +738,56 @@ static bool x86_gs_tied_alu_source(
     return true;
 }
 
+/* GNU Linux PREFETCHW ALTERNATIVE: preserve the original 6.6.143
+ * .altinstructions plus .altinstr_replacement ELF patching contract,
+ * including both fallback and replacement native machine opcodes. */
+bool minic_x86_64_linux_prefetchw_alt_form(const char *s,size_t length) {
+    static const char expected[]=
+        "661:prefetcht0%P1662:"
+        ".skip-(((6651f-6641f)-(662b-661b))>0)*"
+        "((6651f-6641f)-(662b-661b)),0x90"
+        "663:.pushsection.altinstructions,\"a\""
+        ".long661b-..long6641f-."
+        ".4byte(6*32+8)"
+        ".byte663b-661b.byte6651f-6641f.popsection"
+        ".pushsection.altinstr_replacement,\"ax\""
+        "6641:prefetchw%P16651:.popsection";
+    char text[1024];size_t i,n=0U;
+    if(!s||!length||length>=sizeof(text))return false;
+    for(i=0U;i<length;++i) {
+        const char c=s[i];
+        if(c=='#'){while(i<length&&s[i]!='\n')++i;continue;}
+        if(c==' '||c=='\t'||c=='\r'||c=='\n')continue;
+        if(c=='\0'||n+1U>=sizeof(text))return false;
+        text[n++]=c;
+    }
+    text[n]='\0';
+    return strcmp(text,expected)==0;
+}
+static bool x86_prefetchw_alt_source(
+    const MinicC0Program *program,const MinicInlineAsm *src,
+    MinicTargetInlineAsmContract *contract) {
+    const MinicExpression *imm,*memory;
+    if(!program||!src||!contract||!src->is_volatile||src->is_goto||
+       src->output_count!=0U||src->input_count!=2U||src->inputs==NULL||
+       src->label_count||src->clobber_count||src->register_clobber_count||
+       src->has_memory_clobber||
+       !minic_x86_64_linux_prefetchw_alt_form(
+           src->template_text,src->template_length)||
+       !c_is(&src->inputs[0],"i")||!c_is(&src->inputs[1],"m"))
+        return false;
+    imm=minic_c0_program_expression(program,src->inputs[0].expression);
+    memory=minic_c0_program_expression(program,src->inputs[1].expression);
+    if(!imm||imm->kind!=MINIC_EXPRESSION_INTEGER||
+       imm->value.integer_value!=0||
+       !memory||memory->value_category!=MINIC_VALUE_LVALUE)
+        return false;
+    contract->operand_count=2U;
+    contract->kinds[0]=MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    contract->kinds[1]=MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT;
+    return true;
+}
+
 /* Original Linux checksum_64.h add32_with_carry GNU tied "0" input
  * and second register-or-memory operand. Same shared arithmetic effect
  * family as csum_fold, but a DIFFERENT exact GNU constraint contract:
@@ -1703,6 +1753,8 @@ bool minic_x86_64_qualify_inline_asm(
     bool is_mulacc = false, is_muldiv = false;
     size_t i, count;
     if (!contract) return false;
+    if (x86_prefetchw_alt_source(program, source, contract))
+        return true;
     if (x86_gs_tied_alu_source(program, source, contract))
         return true;
     if (x86_linux_zero_barrier_source(source, contract))

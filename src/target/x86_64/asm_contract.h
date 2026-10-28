@@ -12,6 +12,7 @@ bool minic_x86_64_checksum_fold_template(const char *,size_t);
 bool minic_x86_64_add32_carry_template(const char *,size_t);
 bool minic_x86_64_linux_percpu_form(const char *,size_t,unsigned int *,size_t *);
 unsigned int minic_x86_64_gs_tied_alu_form(const char *,size_t,size_t *);
+bool minic_x86_64_linux_prefetchw_alt_form(const char *,size_t);
 
 /* Post-Core immediate-specialized GNU Linux BUG/WARN metadata format.
  * Accept directive-only side-table source, never arbitrary opaque machine ASM. */

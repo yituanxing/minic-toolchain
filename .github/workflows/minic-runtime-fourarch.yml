@@ -229,6 +229,14 @@ jobs:
         run: |
           set -Eeuo pipefail
           bash tests/compiler/c0/probe-gnu-empty-volatile-core-family.sh
+      - name: GNU original x86 Linux PREFETCHW CPU ALTERNATIVE native patch-table ELF verification
+        if: matrix.target == 'x86_64'
+        shell: bash
+        env:
+          MINIC_CC: ${{ github.workspace }}/build/runtime-ci/bin/minic-cc
+        run: |
+          set -Eeuo pipefail
+          bash tests/compiler/c0/probe-x86-linux-prefetchw-alt-gcc-native.sh
       - name: Original Linux x86 GS per-CPU tied-seed ALU ten native GNU hardware variants
         if: matrix.target == 'x86_64'
         shell: bash

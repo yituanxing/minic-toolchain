@@ -388,6 +388,55 @@ static bool emit_linux_gs_tied_alu(
                             "  movq %rax, (%r11)\n",out)!=EOF;
 }
 
+/* Exact Linux GNU PREFETCHW CPU ALTERNATIVE: retain patch records in ELF.
+ * The one real memory lvalue is held in Core SSA and materialized in r10. */
+static bool emit_linux_prefetchw_alt(
+    FILE *out,const MinicCoreFunction *fn,const MinicX86Frame *frame,
+    const MinicCoreInstruction *ins,const MinicCoreInlineAsm *info) {
+    const MinicCoreStructuredInlineAsmOperand *b=
+        ins->value.structured_inline_asm.operands;
+    const MinicCoreInstruction *constant;
+    if(!out||!fn||!frame||!ins||!info||!b||info->is_goto||
+       info->has_memory_clobber||info->register_clobber_count||
+       !minic_x86_64_linux_prefetchw_alt_form(
+           info->template_text,info->template_length)||
+       ins->value.structured_inline_asm.operand_count!=2U||
+       b[0].operand_index!=0U||
+       b[0].kind!=MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT||
+       b[0].value>=fn->value_count||
+       b[1].operand_index!=1U||
+       b[1].kind!=MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT||
+       b[1].value>=fn->value_count||
+       fn->values[b[0].value].definition>=fn->instruction_count||
+       !minic_type_is_pointer(fn->values[b[1].value].type))
+        return false;
+    constant=&fn->instructions[fn->values[b[0].value].definition];
+    if(constant->kind!=MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT||
+       constant->value.integer_value!=0)
+        return false;
+    if(!x86_value_load(out,frame,b[1].value,"%r10"))
+        return false;
+    return fputs(
+       "661:\n"
+       "  prefetcht0 (%r10)\n"
+       "662:\n"
+       "  .skip -(((6651f-6641f)-(662b-661b))>0)*"
+               "((6651f-6641f)-(662b-661b)),0x90\n"
+       "663:\n"
+       "  .pushsection .altinstructions,\"a\"\n"
+       "  .long 661b - .\n"
+       "  .long 6641f - .\n"
+       "  .4byte (6*32+8)\n"
+       "  .byte 663b-661b\n"
+       "  .byte 6651f-6641f\n"
+       "  .popsection\n"
+       "  .pushsection .altinstr_replacement,\"ax\"\n"
+       "6641:\n"
+       "  prefetchw (%r10)\n"
+       "6651:\n"
+       "  .popsection\n",out)!=EOF;
+}
+
 /* The third GNU input "0" initializes %eax, while ADD and ADC must be
  * adjacent because CF is live. Both operands are real Core scalars. */
 static bool emit_checksum_fold(FILE *out,const MinicC0Program *p,
@@ -1048,6 +1097,9 @@ bool minic_x86_64_emit_structured_asm(
               info->template_length,&percpu_op,&percpu_width))
             return emit_linux_percpu_gs(out,program,target,fn,frame,ins,info);
     }
+    if(minic_x86_64_linux_prefetchw_alt_form(
+          info->template_text,info->template_length))
+        return emit_linux_prefetchw_alt(out,fn,frame,ins,info);
     { size_t gs_tied_width=0U;
       if(minic_x86_64_gs_tied_alu_form(
              info->template_text,info->template_length,&gs_tied_width))
