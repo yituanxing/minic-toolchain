@@ -2,6 +2,7 @@
 
 #include <ctype.h>
 #include <stdlib.h>
+#include <stdint.h>
 
 static bool append_byte(unsigned char **data,
                         size_t *size,
@@ -11,6 +12,7 @@ static bool append_byte(unsigned char **data,
     size_t next_capacity;
 
     if (*size == *capacity) {
+        if (*capacity > SIZE_MAX / 2U) return false;
         next_capacity = *capacity == 0U ? 32U : *capacity * 2U;
         next = realloc(*data, next_capacity);
         if (next == NULL) {
@@ -137,6 +139,15 @@ bool minias_decode_string_literals(const char *text,
             return false;
         }
         ++p;
+        /* GAS .asciz/.string terminate EACH quoted argument, not just
+         * the final token. For example, "a","b" emits 61 00 62 00.
+         * .ascii and .incbin path parsing pass nul_terminate=false. */
+        if(nul_terminate && !append_byte(data,size,&capacity,0U)) {
+            free(*data);
+            *data=NULL;
+            *size=0U;
+            return false;
+        }
         while (*p == ' ' || *p == '\t') {
             ++p;
         }
@@ -147,15 +158,7 @@ bool minias_decode_string_literals(const char *text,
         if (*p == '"') {
             continue;
         }
-        if (*p == '\0') {
-            if (nul_terminate && !append_byte(data, size, &capacity, 0U)) {
-                free(*data);
-                *data = NULL;
-                *size = 0U;
-                return false;
-            }
-            return true;
-        }
+        if (*p == '\0') return true;
         free(*data);
         *data = NULL;
         *size = 0U;
