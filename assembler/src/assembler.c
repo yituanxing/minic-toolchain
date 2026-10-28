@@ -1011,31 +1011,56 @@ static bool switch_section(MiniAs *as,
     return ensure_subsection(as, as->current_section, as->current_subsection) != NULL;
 }
 
+/* GAS's implicit section names are family members only at the exact
+ * name or a dot boundary: .bss.hot is NOBITS, .bssification is not.
+ * .note.GNU-stack is intentionally PROGBITS without SHF_ALLOC. */
+static bool gnu_section_family(const char *name,const char *root) {
+    size_t n=strlen(root);
+    return strncmp(name,root,n)==0 && (name[n]=='\0' || name[n]=='.');
+}
+
 static bool parse_section_directive(MiniAs *as, char *args, size_t line) {
-    char *comma = strchr(args, ',');
+    char *comma = NULL,*scan=args;
     char *name;
+    bool quoted=false,escaped=false;
     uint64_t flags = 0U;
     uint32_t type = MINIAS_SHT_PROGBITS;
     uint64_t entry_size=0U;
 
+    /* A quoted GNU section name may contain literal commas. Only a
+     * top-level comma separates its name from flags/type metadata. */
+    for(;*scan;++scan) {
+        if(quoted && *scan=='\\' && !escaped) {escaped=true;continue;}
+        if(*scan=='"' && !escaped)quoted=!quoted;
+        if(*scan==',' && !quoted) {comma=scan;break;}
+        escaped=false;
+    }
+    if(quoted) {
+        minias_set_error(as,"unterminated-section-name:line=%zu",line);
+        return false;
+    }
     if (comma != NULL) {
         *comma = '\0';
     }
     name = minias_trim(args);
     if (*name == '"') {
         size_t n = strlen(name);
-        if (n >= 2U && name[n - 1U] == '"') {
-            name[n - 1U] = '\0';
-            ++name;
+        if(n<2U || name[n-1U]!='"') {
+            minias_set_error(as,"bad-quoted-section-name:line=%zu",line);
+            return false;
         }
+        name[n-1U]='\0';++name;
     }
     if (*name == '\0') {
         minias_set_error(as, "bad-directive:.section:line=%zu", line);
         return false;
     }
 
-    if (strncmp(name, ".bss", 4U) == 0) {
-        type = MINIAS_SHT_NOBITS;
+    if (gnu_section_family(name,".bss")) {
+        type=MINIAS_SHT_NOBITS;
+    } else if(gnu_section_family(name,".note") &&
+              strcmp(name,".note.GNU-stack")!=0) {
+        type=MINIAS_SHT_NOTE;
     }
 
     if (comma != NULL) {
@@ -1094,15 +1119,16 @@ static bool parse_section_directive(MiniAs *as, char *args, size_t line) {
     }
 
     if (flags == 0U) {
-        if (strncmp(name, ".text", 5U) == 0) {
-            flags = MINIAS_SHF_ALLOC | MINIAS_SHF_EXECINSTR;
-        } else if (strncmp(name, ".rodata", 7U) == 0 ||
-                   strncmp(name, ".note", 5U) == 0) {
-            flags = MINIAS_SHF_ALLOC;
-        } else if (strncmp(name, ".data", 5U) == 0 ||
-                   strncmp(name, ".bss", 4U) == 0) {
-            flags = MINIAS_SHF_ALLOC | MINIAS_SHF_WRITE;
+        if(gnu_section_family(name,".text")) {
+            flags=MINIAS_SHF_ALLOC | MINIAS_SHF_EXECINSTR;
+        } else if(gnu_section_family(name,".rodata")) {
+            flags=MINIAS_SHF_ALLOC;
+        } else if(gnu_section_family(name,".data") ||
+                  gnu_section_family(name,".bss")) {
+            flags=MINIAS_SHF_ALLOC | MINIAS_SHF_WRITE;
         }
+        /* GNU note sections are NOT implicitly SHF_ALLOC; only an
+         * explicit 'a' allocates .note.* payloads. */
     }
     if ((flags & MINIAS_SHF_MERGE)!=0U && entry_size==0U) {
         minias_set_error(as,"missing-merge-entry-size:%s:line=%zu",name,line);
