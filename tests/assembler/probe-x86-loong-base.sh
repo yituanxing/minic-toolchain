@@ -1759,6 +1759,38 @@ for bad in 'pushq $9b' 'xgetbv %rax' 'shrd $32,%eax,%rax'; do
     fi
 done
 echo 'MINIAS_X86_NUMERIC_IMM=PASS GNU_32S_RELOCS local_forward_backward pushq_arithmetic shrd_xgetbv_vmcall'
+
+# GNU GAS single-param arithmetic macro binding without a comma.
+# The same Common binder must accept spaces inside an expression,
+# but reject multiple separate positional arguments.
+cat > "$work/gnu-one-param-expr.s" <<'GNU_ONE_MACRO'
+.data
+.macro one value
+.rept \value
+.byte 0x5a
+.endr
+.endm
+one (32 - 16) / 4
+one 2 + 1
+GNU_ONE_MACRO
+"$MINIAS" --target=x86_64 -o "$work/x86-one-mini.o" "$work/gnu-one-param-expr.s"
+as --64 -o "$work/x86-one-gnu.o" "$work/gnu-one-param-expr.s"
+objcopy -j .data -O binary "$work/x86-one-mini.o" "$work/x86-one-mini.bin"
+objcopy -j .data -O binary "$work/x86-one-gnu.o" "$work/x86-one-gnu.bin"
+cmp "$work/x86-one-mini.bin" "$work/x86-one-gnu.bin"
+cat > "$work/gnu-one-invalid.s" <<'GNU_ONE_INVALID'
+.data
+.macro one value
+.byte \value
+.endm
+one 1 2
+GNU_ONE_INVALID
+if "$MINIAS" --target=x86_64 -o "$work/x86-one-invalid.o" \
+  "$work/gnu-one-invalid.s" >/dev/null 2>"$work/x86-one-invalid.err"; then
+    echo 'GNU-invalid two positional arguments accepted for one-param macro' >&2
+    exit 1
+fi
+echo 'MINIAS_COMMON_ONE_MACRO_EXPR=PASS GNU_GAS_BYTES arithmetic_whitespace_and_strict_arity'
 echo 'MINIAS_COMMON_NUMERIC_U64=PASS GNU_GAS_x86_LA64_exact_data_bytes'
 echo 'MINIAS_X86_SEGMENTED_INDIRECT=PASS GNU_AS_text_and_relocations segment_base_index_abs_rip=true indirect_memory_call_jmp=true absolute_symbol32S=true'
 echo 'MINIAS_TWO_TARGET_ORACLE=PASS x86_GNU_bytes=equal loong_GNU_bytes=equal ELF_machine=correct lp64d_v1=0x43 CET_endbr64=1 ALU_imm8_imm32=1 x86_ModRM_SIB_disp=1 x86_test_cmp_alu_memory=1 x86_scaled_index_SIB=1 LA_jr=1 LA_scaled_ptr14=1 LA_imm12_shift_upper20=1 invalid=reject'

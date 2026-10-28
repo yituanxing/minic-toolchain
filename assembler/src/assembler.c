@@ -4420,6 +4420,18 @@ static size_t split_macro_arguments(char *text,
     size_t needed;
 
     if (!macro_has_top_level_comma(text)) {
+        /* GNU GAS treats a one-parameter arithmetic macro invocation
+         * such as 'nops (32 - 16) / 4' as ONE argument, not the 3
+         * whitespace tokens of the generic .macro parameter lexer.
+         * Preserve strict rejection of 'single 1 2' (no expression
+         * operator) and keep comma-separated multi-arg GNU binding. */
+        if(expected_count==1U && capacity!=0U) {
+            char *whole=minias_trim(text);
+            if(*whole && strpbrk(whole,"+-*/%&|^")!=NULL) {
+                tokens[0]=whole;
+                return 1U;
+            }
+        }
         return split_macro_tokens(text, tokens, capacity);
     }
 

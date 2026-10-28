@@ -65,6 +65,14 @@ external_probe:
     mrs x0, tpidr_el1
     // GNU privileged ARMv8 sysregs: read/write permission encoded by ISA.
     mrs x0, CurrentEL
+    // GNU one-parameter arithmetic macro (Linux arm64 nops convention).
+    .macro nops num
+        .rept \num
+        nop
+        .endr
+    .endm
+    nops (32 - 16) / 4
+    nops 2 + 1
     // AArch64 Linux EL0/EL1/EL2 sysreg matrix; exact GNU bytes and
     // read-only permission guards, including case-insensitive spelling.
     mrs x1, ID_AA64MMFR1_EL1
