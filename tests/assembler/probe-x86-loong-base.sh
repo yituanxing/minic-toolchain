@@ -3279,3 +3279,20 @@ if "$MINIAS" --target=x86_64 -o "$work/x86-efi-code32-invalid.o" "$work/x86-efi-
  echo 'unsupported IA32 long-mode-only encoding accepted' >&2; exit 1
 fi
 echo 'MINIAS_X86_EFI_CODE32=PASS GNU_ELF64_mixed_mode_bytes_and_strict_unsupported'
+
+
+# Actual Linux head_64.S emits a page-table repetition and mutable GAS
+# assignment on ONE semicolon-delimited physical line. Reuse Common .rept,
+# expression evaluation and mutable symbol snapshot, with GNU byte parity.
+cat > "$work/x86-inline-rept.s" <<'X86_INLINE_REPT'
+.text
+i = 0 ; .rept ((1024 * 1024 * 1024)/(1 << 21)) ; .quad (0) + (i << 21) + ((1 << 0)|(1 << 1)|(1 << 5)|(1 << 6)|(1 << 7)|(1 << 8)) ; i = i + 1 ; .endr
+j = 0 ; .rept 2 ; .rept 3 ; .byte j ; j = j + 1 ; .endr ; .endr
+X86_INLINE_REPT
+"$MINIAS" --target=x86_64 -o "$work/x86-inline-rept-mini.o" "$work/x86-inline-rept.s"
+as --64 -o "$work/x86-inline-rept-gnu.o" "$work/x86-inline-rept.s"
+objcopy -j .text -O binary "$work/x86-inline-rept-mini.o" "$work/x86-inline-rept-mini.bin"
+objcopy -j .text -O binary "$work/x86-inline-rept-gnu.o" "$work/x86-inline-rept-gnu.bin"
+cmp "$work/x86-inline-rept-mini.bin" "$work/x86-inline-rept-gnu.bin"
+test "$(wc -c < "$work/x86-inline-rept-mini.bin")" -eq 4102
+echo 'MINIAS_X86_INLINE_REPT=PASS GNU_512_page_entries_nested_repeat_mutable_set'
