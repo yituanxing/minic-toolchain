@@ -473,7 +473,6 @@ static bool minias_validate_fragment_layout(MiniAs *as) {
         return false;
     }
     for(i=0U;i<=as->stmt_count;++i) {
-        size_t k;
         /* Symbol anchors must be checked before the next Fragment advances
          * its subsection cursor; this also covers trailing section labels. */
         if(graph!=NULL) {
