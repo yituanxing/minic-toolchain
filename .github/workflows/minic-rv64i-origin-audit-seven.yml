@@ -62,8 +62,12 @@ permissions:
   contents: read
 
 concurrency:
-  group: rv64i-origin-audit-${{ github.ref }}
-  cancel-in-progress: true
+  # This is an explicitly opt-in 3352-owner *long* Linux audit. Other MiniC
+  # commits may land while its seven frozen shards are compiling. Such commits
+  # must not retrospectively cancel an exact-head evidence run; use a
+  # commit-specific group while retaining the PR-title cost gate below.
+  group: rv64i-origin-audit-${{ github.ref }}-${{ github.event.pull_request.head.sha || github.sha }}
+  cancel-in-progress: false
 
 jobs:
   smoke:
@@ -86,6 +90,7 @@ jobs:
           # changing MiniC's default wchar_t would regress other C programs.
           grep -Fq -- '--minic-cflag=-fshort-wchar' .github/workflows/minic-rv64i-origin-audit-seven.yml
           grep -Fq -- '--minic-cflag=-funsigned-char' .github/workflows/minic-rv64i-origin-audit-seven.yml
+          grep -Fq -- 'cancel-in-progress: false' .github/workflows/minic-rv64i-origin-audit-seven.yml
       - name: Compile MiniC and prove source-ASM provenance
         shell: bash
         run: |
