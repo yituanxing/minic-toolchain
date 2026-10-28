@@ -722,6 +722,28 @@ objcopy -j .text -O binary "$work/x86-set-mini.o" "$work/x86-set-mini.bin"
 objcopy -j .text -O binary "$work/x86-set-gnu.o" "$work/x86-set-gnu.bin"
 cmp "$work/x86-set-mini.bin" "$work/x86-set-gnu.bin"
 echo 'MINIAS_COMMON_MUTABLE_SET=PASS GNU_EARLY_DATA_SNAPSHOT'
+# GNU .purgem removes a named macro so the same name can be defined
+# again (Linux extable_type_reg frequently defines/purges it per file).
+cat >"$work/x86-purgem.s" <<'X86_PURGEM'
+.text
+.macro extable_type_reg
+    nop
+.endm
+extable_type_reg
+.purgem extable_type_reg
+.macro extable_type_reg
+    int3
+.endm
+extable_type_reg
+.purgem extable_type_reg
+.purgem undefined_extable_macro
+X86_PURGEM
+"$MINIAS" --target=x86_64 -o "$work/x86-purgem-mini.o" "$work/x86-purgem.s"
+as --64 -o "$work/x86-purgem-gnu.o" "$work/x86-purgem.s"
+objcopy -j .text -O binary "$work/x86-purgem-mini.o" "$work/x86-purgem-mini.bin"
+objcopy -j .text -O binary "$work/x86-purgem-gnu.o" "$work/x86-purgem-gnu.bin"
+cmp "$work/x86-purgem-mini.bin" "$work/x86-purgem-gnu.bin"
+echo 'MINIAS_COMMON_PURGEM=PASS GNU_MACRO_RELEASE_AND_REDEFINE'
 # Same-section symbol differences are absolute even for externally
 # visible GLOBAL/WEAK bindings; no x86 ELF64 ADD/SUB relocation exists.
 cat >"$work/x86-defined-diff.s" <<'X86_DEFINED_DIFF'

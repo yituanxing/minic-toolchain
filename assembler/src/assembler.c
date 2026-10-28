@@ -591,6 +591,24 @@ void minias_init(MiniAs *as) {
     (void)ensure_subsection(as, as->current_section, 0U);
 }
 
+/* A purged GNU macro owns exactly the resources freed by assembler exit.
+ * Keep a single lifetime owner so later redefinitions never retain stale
+ * macro parameter/body pointers in the symbol-independent Common layer. */
+static void release_macro(MiniAsMacro *macro) {
+    size_t i;
+    free(macro->name);
+    for(i=0U;i<macro->param_count;++i) {
+        free(macro->params[i].name);
+        free(macro->params[i].default_value);
+    }
+    free(macro->params);
+    for(i=0U;i<macro->body_count;++i)
+        free(macro->body[i]);
+    free(macro->body);
+    free(macro->body_lines);
+    memset(macro,0,sizeof(*macro));
+}
+
 void minias_destroy(MiniAs *as) {
     size_t i;
 
@@ -631,20 +649,8 @@ void minias_destroy(MiniAs *as) {
     free(as->section_stack);
     free(as->numeric_label_counts);
     free(as->conditionals);
-    for (i = 0U; i < as->macro_count; ++i) {
-        size_t j;
-        free(as->macros[i].name);
-        for (j = 0U; j < as->macros[i].param_count; ++j) {
-            free(as->macros[i].params[j].name);
-            free(as->macros[i].params[j].default_value);
-        }
-        free(as->macros[i].params);
-        for (j = 0U; j < as->macros[i].body_count; ++j) {
-            free(as->macros[i].body[j]);
-        }
-        free(as->macros[i].body);
-        free(as->macros[i].body_lines);
-    }
+    for(i=0U;i<as->macro_count;++i)
+        release_macro(&as->macros[i]);
     free(as->macros);
     free(as->cfi_procs);
     free(as->cfi_ops);
@@ -3897,6 +3903,35 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
         return ok;
     }
 
+    /*
+     * Linux arch/x86/include/asm/asm.h declares extable_type_reg with
+     * .macro and releases it via .purgem. Without the purge, the next
+     * definition is rejected or stale parameters leak into a new expansion.
+     * GNU permits purging a non-existing name (with a warning), so keep it
+     * idempotent. Don't invalidate an active expansion's borrowed body.
+     */
+    if(!strcmp(op,".purgem")) {
+        char *name=minias_trim(args);
+        size_t i;
+        if(!*name || strpbrk(name,", \t\r")!=NULL ||
+           as->macro_expansion_depth!=0U) {
+            minias_set_error(as,"bad-directive:.purgem:%s:line=%zu",name,line);
+            return false;
+        }
+        as->layout_sensitive=true;
+        for(i=0U;i<as->macro_count;++i)
+            if(!strcmp(as->macros[i].name,name)) {
+                release_macro(&as->macros[i]);
+                if(i+1U<as->macro_count)
+                    memmove(&as->macros[i],&as->macros[i+1U],
+                            (as->macro_count-i-1U)*sizeof(*as->macros));
+                --as->macro_count;
+                memset(&as->macros[as->macro_count],0,
+                       sizeof(*as->macros));
+                break;
+            }
+        return true;
+    }
     {
         MiniAsMacro *macro = find_macro(as, op);
         if (macro != NULL) {
