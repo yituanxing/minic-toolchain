@@ -2714,10 +2714,10 @@ echo 'MINIAS_A64_SMOV_GHASH=PASS GNU_signed_lane_5_words_and_2_rejects'
 cat > "$work/a64-trampoline-section-set.s" <<'A64_TRAMP_SET'
 .text
 .macro tramp_alias dst,sym
-.set .Ltrampalias\@, -4398082211840 + \sym - .entry.tramp.text
-movz \dst, :abs_g2_s:.Ltrampalias\@
-movk \dst, :abs_g1_nc:.Ltrampalias\@
-movk \dst, :abs_g0_nc:.Ltrampalias\@
+.set trampalias\@, -4398082211840 + \sym - .entry.tramp.text
+movz \dst, :abs_g2_s:trampalias\@
+movk \dst, :abs_g1_nc:trampalias\@
+movk \dst, :abs_g0_nc:trampalias\@
 .endm
 tramp_alias x29,tramp_exit
 .pushsection ".entry.tramp.text","ax"
@@ -2728,7 +2728,10 @@ ret
 A64_TRAMP_SET
 "$MINIAS" --target=aarch64 -o "$work/a64-tramp-set-mini.o" "$work/a64-trampoline-section-set.s"
 "$AARCH64_AS" -o "$work/a64-tramp-set-gnu.o" "$work/a64-trampoline-section-set.s"
-"$AARCH64_READELF" -Ws "$work/a64-tramp-set-mini.o" | grep -Eq 'ABS.*Ltrampalias'
+"$AARCH64_OBJCOPY" -j .text -O binary "$work/a64-tramp-set-mini.o" "$work/a64-tramp-set-mini.bin"
+"$AARCH64_OBJCOPY" -j .text -O binary "$work/a64-tramp-set-gnu.o" "$work/a64-tramp-set-gnu.bin"
+cmp "$work/a64-tramp-set-mini.bin" "$work/a64-tramp-set-gnu.bin"
+"$AARCH64_READELF" -Ws "$work/a64-tramp-set-mini.o" | grep -Eq 'ABS.*trampalias'
 "$AARCH64_READELF" -Ws "$work/a64-tramp-set-gnu.o" | grep -Eq 'ABS.*Ltrampalias'
 printf '.text\n.set invalid, -4398082211840 + local - .other.section\nlocal: ret\n' >"$work/a64-cross-section-set-bad.s"
 if "$MINIAS" --target=aarch64 -o "$work/a64-cross-section-set-bad.o" "$work/a64-cross-section-set-bad.s" >/dev/null 2>&1; then
