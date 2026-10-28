@@ -1757,8 +1757,8 @@ test "$org_far_value" = '00000000000013a8' || {
     exit 1
 }
 
-# Conversely, an expression depending on the current dot must be evaluated
-# again after branch growth; freezing its initial absolute value is wrong.
+# A location-relative .org is a typed MC position constraint: the dot moves
+# when the branch grows, and its relative padding stays exactly 28 bytes.
 cat >"$work/fragment-org-dot.s" <<'EOF_FRAG_ORG_DOT'
 .text
 .globl fragment_org_dot
@@ -1771,12 +1771,14 @@ far_org_dot:
 EOF_FRAG_ORG_DOT
 MINIAS_TRACE_RELAYOUT=1 "$MINIAS" -o "$work/fragment-org-dot.o" \
     "$work/fragment-org-dot.s" 2>"$work/fragment-org-dot.trace"
-if grep -q 'minias-fragment-relayout:inplace-passes=' \
-    "$work/fragment-org-dot.trace"; then
-    echo 'MiniAS incorrectly froze position-dependent .org' >&2
+grep -q 'minias-fragment-relayout:inplace-passes=' \
+    "$work/fragment-org-dot.trace" || {
+    echo 'MiniAS failed to retain typed dot-relative .org' >&2
     exit 1
-fi
-echo 'MINIAS_FRAGMENT_ORG_POLICY=PASS fixed_inplace=1 dot_reparse=1'
+}
+grep -q 'minias-fragment-graph:anchors_built=1.*reparse=0' \
+    "$work/fragment-org-dot.trace"
+echo 'MINIAS_FRAGMENT_ORG_POLICY=PASS fixed_inplace=1 dot_inplace=1'
 
 
 # One typed-fixup object exercises semantic RISC-V CALL_PLT, PCREL_HI20,

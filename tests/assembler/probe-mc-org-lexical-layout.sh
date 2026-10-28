@@ -48,7 +48,7 @@ entry:
 .endif
 .purgem emit_nop
   $branch
-  .org 5000
+  .org 5000, 0xa5
 far:
   $nop
 .data
@@ -63,6 +63,60 @@ for sec in .text .data; do
   "${copy[@]}" -j "$sec" -O binary "$work/mini.o" "$work/mini.${sec##.}"
   "${copy[@]}" -j "$sec" -O binary "$work/gnu.o" "$work/gnu.${sec##.}"
   cmp "$work/mini.${sec##.}" "$work/gnu.${sec##.}"
+done
+
+# A dot-relative constraint tracks its own moving Fragment location. GAS
+# expands the branch, while the .org padding remains the relative addend.
+cat >"$work/dot.s" <<SRC
+.text
+.globl entry
+entry:
+  $branch
+  .org . + 28, 0x5a
+  .rept $repeats
+    $nop
+  .endr
+far:
+  $nop
+SRC
+MINIAS_TRACE_RELAYOUT=1 "$MINIAS" "${mini[@]}" \
+  -o "$work/dot-mini.o" "$work/dot.s" 2>"$work/trace"
+"${gas[@]}" -o "$work/dot-gnu.o" "$work/dot.s"
+grep -q 'minias-fragment-relayout:inplace-passes=' "$work/trace"
+grep -q 'minias-fragment-graph:anchors_built=1.*reparse=0' "$work/trace"
+"${copy[@]}" -j .text -O binary "$work/dot-mini.o" "$work/dot-mini.bin"
+"${copy[@]}" -j .text -O binary "$work/dot-gnu.o" "$work/dot-gnu.bin"
+cmp "$work/dot-mini.bin" "$work/dot-gnu.bin"
+
+# GCC-style .set anchors and GNU bare assignment anchors are attached to
+# source-site Fragment identities, so branch growth moves both symbols.
+cat >"$work/anchor.s" <<SRC
+.text
+.globl entry
+entry:
+  $branch
+  .set .LANCHOR0, . + 4
+  assigned_anchor = . + 8
+  .org .LANCHOR0 + 64, 0x7e
+  $nop
+  .rept $repeats
+    $nop
+  .endr
+far:
+  $nop
+SRC
+MINIAS_TRACE_RELAYOUT=1 "$MINIAS" "${mini[@]}" \
+  -o "$work/anchor-mini.o" "$work/anchor.s" 2>"$work/trace"
+"${gas[@]}" -o "$work/anchor-gnu.o" "$work/anchor.s"
+grep -q 'minias-fragment-relayout:inplace-passes=' "$work/trace"
+grep -q 'minias-fragment-graph:anchors_built=1.*reparse=0' "$work/trace"
+"${copy[@]}" -j .text -O binary "$work/anchor-mini.o" "$work/anchor-mini.bin"
+"${copy[@]}" -j .text -O binary "$work/anchor-gnu.o" "$work/anchor-gnu.bin"
+cmp "$work/anchor-mini.bin" "$work/anchor-gnu.bin"
+for anchor in .LANCHOR0 assigned_anchor; do
+  mini_value=$(readelf -sW "$work/anchor-mini.o" | awk -v n="$anchor" '$NF == n { print $2 }')
+  gnu_value=$(readelf -sW "$work/anchor-gnu.o" | awk -v n="$anchor" '$NF == n { print $2 }')
+  test -n "$mini_value" && test "$mini_value" = "$gnu_value"
 done
 
 # When expansion would cross a frozen .org target, reject it.  Silently
@@ -86,4 +140,4 @@ fi
 grep -q 'org-backwards-after-layout' "$work/backwards.err"
 test ! -e "$work/backwards.o"
 
-echo "MINIAS_MC_ORG_LEXICAL_LAYOUT=PASS arch=$ARCH persistent_org=1 lexical_parse=1 GNU_exact=1 backwards_rejected=1"
+echo "MINIAS_MC_ORG_LEXICAL_LAYOUT=PASS arch=$ARCH persistent_org=1 dot_org=1 anchored_set=1 bare_assignment=1 fill=3 lexical_parse=1 GNU_exact=1 backwards_rejected=1"

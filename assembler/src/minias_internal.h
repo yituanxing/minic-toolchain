@@ -88,6 +88,8 @@ typedef struct MiniAsSymbol {
      * macro expansions must not use source-line numbers as identities. */
     bool has_fragment_anchor;
     size_t fragment_anchor;
+    /* GNU .set name, .+N is a location symbol, not a frozen integer. */
+    int64_t fragment_anchor_addend;
     bool has_size_end_anchor;
     size_t size_end_anchor;
     uint64_t size_end_value;
@@ -98,6 +100,14 @@ typedef enum MiniAsStmtKind {
     MINIAS_STMT_ALIGN,
     MINIAS_STMT_DATA
 } MiniAsStmtKind;
+
+/* A typed position constraint, comparable to LLVM MCOrgFragment. */
+typedef enum MiniAsOrgMode {
+    MINIAS_ORG_SOURCE = 0,
+    MINIAS_ORG_ABSOLUTE,
+    MINIAS_ORG_DOT_ADDEND,
+    MINIAS_ORG_SYMBOL_ADDEND
+} MiniAsOrgMode;
 
 /* Common fixup kinds describe generic byte-addressed data semantics.
  * Machine-specific kinds are opaque uint32_t values owned by the Target.
@@ -295,12 +305,11 @@ typedef struct MiniAsStmt {
     unsigned char align_fill;
     bool align_has_max_skip;
     uint64_t align_max_skip;
-    /* Parse-site absolute .org is a persistent position constraint, not a
-     * fixed byte count.  MCLayout recomputes its padding after any prior
-     * instruction or DATA Fragment changes size.  Symbol/dot-dependent
-     * .org retains the conservative parser-control fallback. */
-    bool org_target_fixed;
+    /* Common MCLayout owns every captured .org expression, never Target. */
+    MiniAsOrgMode org_mode;
     uint64_t org_target;
+    size_t org_symbol_index;
+    int64_t org_addend;
     /* Immutable parse-site state: meaningful bits are defined by Target. */
     struct MiniAsTargetSiteState site;
     /* Common variable-size data fragment resolved after symbol layout. */
@@ -417,6 +426,7 @@ typedef struct MiniAs {
     bool c_comment_active;
     bool layout_sensitive; /* position-dependent parser-control fallback */
     bool has_deferred_data; /* forward-symbol data-size fragments */
+    bool has_org_constraints; /* typed position-dependent .org fragments */
     bool has_mutable_absolute_sets; /* snapshot mutable .set in data */
     bool expr_dot_override; /* explicit fragment-local dot while evaluating */
     uint64_t expr_dot_value;

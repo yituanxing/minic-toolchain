@@ -282,15 +282,98 @@ bool minias_force_long_branch_for_stmt(const MiniAs *as, size_t statement_id) {
 
 
 
+/* Keep signed MCExpr addends in their semantic domain.  Converting a
+ * negative displacement to uint64_t before checking is not a range check. */
+static bool add_signed_u64(uint64_t base, int64_t addend, uint64_t *result) {
+    if (addend >= 0) {
+        uint64_t delta = (uint64_t)addend;
+        if (delta > UINT64_MAX - base) return false;
+        *result = base + delta;
+    } else {
+        uint64_t delta = (uint64_t)(-(addend + 1)) + 1U;
+        if (delta > base) return false;
+        *result = base - delta;
+    }
+    return true;
+}
+
+/* GNU .org is relative to the output Section start, even inside a
+ * numbered .subsection.  Like LLVM MCOrgFragment, the final size is a
+ * function of the Fragment's location and retained expression.  During
+ * relayout an earlier Symbol anchor is subsection-local; after final
+ * layout it is section-relative.  Neither case re-reads source text. */
+static bool org_fragment_padding(MiniAs *as, const MiniAsStmt *stmt,
+                                 uint64_t location, bool final_symbols,
+                                 uint32_t *padding) {
+    uint64_t target = 0U;
+    uint64_t gap;
+    if (stmt->org_mode == MINIAS_ORG_ABSOLUTE) {
+        target = stmt->org_target;
+    } else if (stmt->org_mode == MINIAS_ORG_DOT_ADDEND) {
+        if (stmt->org_target > UINT64_MAX - location) {
+            minias_set_error(as,"org-dot-overflow:line=%zu",stmt->line);
+            return false;
+        }
+        target = location + stmt->org_target;
+    } else if (stmt->org_mode == MINIAS_ORG_SYMBOL_ADDEND) {
+        const MiniAsSymbol *symbol;
+        const MiniAsSubsection *sub;
+        uint64_t value;
+        if (stmt->org_symbol_index >= as->symbol_count) {
+            minias_set_error(as,"org-symbol-index-invalid:line=%zu",stmt->line);
+            return false;
+        }
+        symbol = &as->symbols[stmt->org_symbol_index];
+        sub = minias_find_subsection(as,symbol->section,symbol->subsection);
+        if (sub == NULL || !symbol->defined ||
+            !symbol->has_fragment_anchor ||
+            symbol->section != stmt->section ||
+            symbol->subsection > stmt->subsection) {
+            minias_set_error(as,"org-symbol-owner-invalid:line=%zu",stmt->line);
+            return false;
+        }
+        value = symbol->value;
+        if (!final_symbols) {
+            if (sub->base > UINT64_MAX - value) {
+                minias_set_error(as,"org-symbol-base-overflow:line=%zu",stmt->line);
+                return false;
+            }
+            value += sub->base;
+        }
+        if (!add_signed_u64(value,stmt->org_addend,&target)) {
+            minias_set_error(as,"org-symbol-addend-overflow:line=%zu",stmt->line);
+            return false;
+        }
+    } else {
+        minias_set_error(as,"internal:org-untyped:line=%zu",stmt->line);
+        return false;
+    }
+    if (target < location) {
+        minias_set_error(as,
+            "org-backwards-after-layout:line=%zu:current=%llu:target=%llu",
+            stmt->line,(unsigned long long)location,
+            (unsigned long long)target);
+        return false;
+    }
+    gap = target - location;
+    if (gap > UINT32_MAX) {
+        minias_set_error(as,"org-gap-too-large-after-layout:line=%zu",stmt->line);
+        return false;
+    }
+    *padding = (uint32_t)gap;
+    return true;
+}
+
 /* Persistent Fragment fixed-point: the Target owns alternative instruction
  * widths but cannot mutate Section placement.  Symbol-start, symbol-size
  * end and the statement itself all use the SAME prevalidated subsection
  * index.  This prevents source-order .subsection switches from binding an
  * anchor to a different output Section after a branch expands. */
-static bool minias_relayout_fragments(MiniAs *as) {
+static bool minias_relayout_fragments(MiniAs *as, bool *org_changed) {
     MiniAsAnchorGraph *graph = build_anchor_graph(as);
     size_t i;
     if (graph == NULL) return false;
+    if (org_changed != NULL) *org_changed = false;
     ++graph->relayout_count;
     for (i = 0U; i < graph->subsection_count; ++i)
         as->subsections[i].size = 0U;
@@ -304,7 +387,13 @@ static bool minias_relayout_fragments(MiniAs *as) {
                 minias_set_error(as, "internal:fragment-start-subsection");
                 return false;
             }
-            as->symbols[symbol].value = as->subsections[subsection].size;
+            if (!add_signed_u64(as->subsections[subsection].size,
+                                as->symbols[symbol].fragment_anchor_addend,
+                                &as->symbols[symbol].value)) {
+                minias_set_error(as,"fragment-anchor-addend-overflow:%s",
+                                 as->symbols[symbol].name);
+                return false;
+            }
         }
         for (symbol = graph->end_head[i]; symbol != SIZE_MAX;
              symbol = graph->end_next[symbol]) {
@@ -332,22 +421,14 @@ static bool minias_relayout_fragments(MiniAs *as) {
             }
             stmt->offset = sub->size;
             if (stmt->kind == MINIAS_STMT_ALIGN &&
-                stmt->org_target_fixed) {
-                uint64_t pad;
-                if (stmt->org_target < sub->size) {
-                    minias_set_error(as,
-                        "org-backwards-after-layout:line=%zu:current=%llu:target=%llu",
-                        stmt->line, (unsigned long long)sub->size,
-                        (unsigned long long)stmt->org_target);
-                    return false;
-                }
-                pad = stmt->org_target - sub->size;
-                if (pad > UINT32_MAX) {
-                    minias_set_error(as,"org-gap-too-large-after-layout:line=%zu",
-                                     stmt->line);
-                    return false;
-                }
-                stmt->size = (uint32_t)pad;
+                stmt->org_mode != MINIAS_ORG_SOURCE) {
+                uint32_t pad;
+                if (sub->size > UINT64_MAX - sub->base ||
+                    !org_fragment_padding(as,stmt,sub->base+sub->size,
+                                          false,&pad)) return false;
+                if (org_changed != NULL && stmt->size != pad)
+                    *org_changed = true;
+                stmt->size = pad;
             } else if (stmt->kind == MINIAS_STMT_ALIGN &&
                        strcmp(stmt->op, ".org") != 0) {
                 const uint64_t alignment = stmt->align;
@@ -385,6 +466,27 @@ static bool minias_relayout_fragments(MiniAs *as) {
         }
         symbol->size = symbol->size_end_value - symbol->value;
     }
+    /* This pass used the PREVIOUS subsection bases to solve .org. If an
+     * earlier subsection's DATA grew, the freshly computed base must itself
+     * trigger another pass even when no .org padding changed YET. Otherwise
+     * an apparently stable pass can validate against a different address. */
+    if(org_changed != NULL) {
+        int active_section=-1;
+        uint64_t base=0U;
+        for(i=0U;i<as->subsection_count;++i) {
+            const MiniAsSubsection *sub=&as->subsections[i];
+            if(sub->section!=active_section) {
+                active_section=sub->section;
+                base=0U;
+            }
+            if(sub->base!=base)*org_changed=true;
+            if(sub->size>UINT64_MAX-base) {
+                minias_set_error(as,"section-layout-overflow");
+                return false;
+            }
+            base+=sub->size;
+        }
+    }
     return minias_finalize_subsection_layout(as);
 }
 
@@ -401,13 +503,15 @@ static bool minias_resolve_deferred_data(MiniAs *as) {
     size_t pass;
     int previous_section=as->current_section;
     uint32_t previous_subsection=as->current_subsection;
-    if(!as->has_deferred_data)return true;
-    /* The original first-pass layout is also provisional: .fill may have
-     * been measured before a forward symbol's section was known. */
-    if(!minias_relayout_fragments(as))return false;
+    if(!as->has_deferred_data && !as->has_org_constraints)return true;
+    /* .org, .fill and .space share a single fixed point.  A subsection
+     * base may change as another numbered subsection grows, so resolving
+     * .org only once would produce wrong final section-relative offsets. */
     for(pass=0U;pass<=as->stmt_count;++pass) {
         size_t i;
         bool changed=false;
+        bool org_changed=false;
+        if(!minias_relayout_fragments(as,&org_changed))goto invalid;
         for(i=0U;i<as->stmt_count;++i) {
             MiniAsStmt *stmt=&as->stmts[i];
             uint64_t n=0U;
@@ -453,14 +557,13 @@ static bool minias_resolve_deferred_data(MiniAs *as) {
                 changed=true;
             }
         }
-        if(!changed) {
+        if(!changed && !org_changed) {
             as->current_section=previous_section;
             as->current_subsection=previous_subsection;
             return true;
         }
-        if(!minias_relayout_fragments(as))goto invalid;
     }
-    minias_set_error(as,"deferred-fragment-layout-nonconvergent");
+    minias_set_error(as,"mc-fragment-layout-nonconvergent");
 invalid:
     as->expr_dot_override=false;
     as->current_section=previous_section;
@@ -574,6 +677,12 @@ static bool minias_validate_fragment_layout(MiniAs *as) {
                     goto done;
                 }
                 expected=sub->base+cursor[sub_index];
+                if (!add_signed_u64(expected,sym->fragment_anchor_addend,
+                                    &expected)) {
+                    minias_set_error(as,"fragment-symbol-addend-overflow:%s",
+                                     sym->name);
+                    goto done;
+                }
                 if(sym->value!=expected) {
                     minias_set_error(as,
                                      "fragment-symbol-anchor-drift:%s:expected=%llu:actual=%llu",
@@ -637,11 +746,16 @@ static bool minias_validate_fragment_layout(MiniAs *as) {
                                  (unsigned long long)stmt->offset);
                 goto done;
             }
-            if(stmt->kind==MINIAS_STMT_ALIGN && stmt->org_target_fixed) {
-                if(stmt->org_target<cursor[sub_index] ||
-                   stmt->org_target-cursor[sub_index]!=stmt->size) {
-                    minias_set_error(as,"fragment-org-target-drift:line=%zu",
-                                     stmt->line);
+            if(stmt->kind==MINIAS_STMT_ALIGN &&
+               stmt->org_mode!=MINIAS_ORG_SOURCE) {
+                uint32_t padding;
+                if (!org_fragment_padding(as,stmt,expected,true,&padding))
+                    goto done;
+                if(padding!=stmt->size) {
+                    minias_set_error(as,
+                        "fragment-org-target-drift:line=%zu:expected-pad=%u:actual-pad=%u:location=%llu",
+                        stmt->line,(unsigned)padding,(unsigned)stmt->size,
+                        (unsigned long long)expected);
                     goto done;
                 }
             } else if(stmt->kind==MINIAS_STMT_ALIGN &&
@@ -731,10 +845,9 @@ done:
 
 /* One persistent MCFragment fixed point; Target only owns the branch
  * range predicate and its expansion size. Common owns every label anchor,
- * subsection, deferred DATA fragment and alignment adjustment.
- * Parse-site fixed .org and lexical conditionals can be re-laid out without
- * reopening source. Location-dependent .if/.org/.set may change Fragment
- * cardinality or symbol semantics and retain the conservative fallback.
+ * subsection, deferred DATA fragment, typed .org and alignment adjustment.
+ * Lexical conditionals and dot-anchored .set preserve the Fragment graph;
+ * unsupported location-dependent parser control retains source fallback.
  */
 bool minias_solve_fragment_layout(MiniAs *as,
                                   size_t **forced_ids, size_t *forced_count,
@@ -787,7 +900,7 @@ bool minias_solve_fragment_layout(MiniAs *as,
                 }
             }
         }
-        if(!minias_relayout_fragments(as) ||
+        if(!minias_relayout_fragments(as,NULL) ||
            !minias_resolve_deferred_data(as) ||
            !collect_out_of_range_branches(as,forced_ids,forced_count,
                                            forced_capacity,&added))

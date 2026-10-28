@@ -25,7 +25,7 @@ cat >"$work/layout.s" <<'SRC'
 .globl data_start
 data_start:
     .space span_end-span_begin,0x5a
-    .org 128
+    .org 128, 0xc3
     .byte 0xee
 .section .rodata,"a"
 span_begin:
@@ -42,4 +42,69 @@ for sec in .data .rodata; do
   cmp "$work/mini.${sec##.}" "$work/gnu.${sec##.}"
 done
 test "$(wc -c <"$work/mini.data")" -eq 129
-echo "MINIAS_MC_ORG_DATA_FIXEDPOINT=PASS arch=$ARCH forward_size=8 fixed_target=128 GNU_exact=1 source_reparse=0"
+
+# GNU .org targets the entire section, not the active numbered subsection.
+# A preceding subsection may grow in a deferred forward-symbol data pass;
+# MCLayout must then shrink the later subsection's .org in the SAME fixed
+# point.  The two subsection fragments concatenate in numeric order.
+cat >"$work/subsection.s" <<'SRC'
+.data
+.subsection 1
+.globl subsection_origin
+.org 32, 0x76
+subsection_origin:
+  .byte 0xbb
+.subsection 0
+  .space span_end-span_begin,0x5a
+  .byte 0xaa
+.section .rodata,"a"
+span_begin:
+  .byte 1,2,3,4,5,6,7,8
+span_end:
+SRC
+MINIAS_TRACE_RELAYOUT=1 "$MINIAS" "${mini[@]}" \
+  -o "$work/sub-mini.o" "$work/subsection.s" 2>"$work/trace"
+"${gas[@]}" -o "$work/sub-gnu.o" "$work/subsection.s"
+grep -q 'minias-fragment-graph:anchors_built=1.*reparse=0' "$work/trace"
+for sec in .data .rodata; do
+  "${copy[@]}" -j "$sec" -O binary "$work/sub-mini.o" "$work/sub-mini.${sec##.}"
+  "${copy[@]}" -j "$sec" -O binary "$work/sub-gnu.o" "$work/sub-gnu.${sec##.}"
+  cmp "$work/sub-mini.${sec##.}" "$work/sub-gnu.${sec##.}"
+done
+test "$(wc -c <"$work/sub-mini.data")" -eq 33
+mini_origin=$(readelf -sW "$work/sub-mini.o" | awk '$NF == "subsection_origin" {print $2}')
+gnu_origin=$(readelf -sW "$work/sub-gnu.o" | awk '$NF == "subsection_origin" {print $2}')
+test "$mini_origin" = "$gnu_origin" && test "$mini_origin" = '0000000000000020'
+
+# The target of a .org in subsection 1 may itself be a GCC .set anchor
+# from subsection 0, with a late DATA fragment changing both addresses.
+cat >"$work/cross-subsection.s" <<'SRC'
+.data
+.subsection 0
+.set subsection_anchor, . + 4
+  .space span_end-span_begin,0x5a
+  .byte 0xaa
+.subsection 1
+.org subsection_anchor + 28, 0x93
+.globl cross_origin
+cross_origin:
+  .byte 0xbb
+.section .rodata,"a"
+span_begin:
+  .byte 1,2,3,4,5,6,7,8
+span_end:
+SRC
+MINIAS_TRACE_RELAYOUT=1 "$MINIAS" "${mini[@]}" \
+  -o "$work/cross-mini.o" "$work/cross-subsection.s" 2>"$work/trace"
+"${gas[@]}" -o "$work/cross-gnu.o" "$work/cross-subsection.s"
+grep -q 'minias-fragment-graph:anchors_built=1.*reparse=0' "$work/trace"
+for sec in .data .rodata; do
+  "${copy[@]}" -j "$sec" -O binary "$work/cross-mini.o" "$work/cross-mini.${sec##.}"
+  "${copy[@]}" -j "$sec" -O binary "$work/cross-gnu.o" "$work/cross-gnu.${sec##.}"
+  cmp "$work/cross-mini.${sec##.}" "$work/cross-gnu.${sec##.}"
+done
+mini_origin=$(readelf -sW "$work/cross-mini.o" | awk '$NF == "cross_origin" {print $2}')
+gnu_origin=$(readelf -sW "$work/cross-gnu.o" | awk '$NF == "cross_origin" {print $2}')
+test "$mini_origin" = "$gnu_origin" && test "$mini_origin" = '0000000000000020'
+
+echo "MINIAS_MC_ORG_DATA_FIXEDPOINT=PASS arch=$ARCH forward_size=8 fixed_target=128 subsection_origin=32 anchored_cross_subsection=1 fill=3 GNU_exact=1 source_reparse=0"

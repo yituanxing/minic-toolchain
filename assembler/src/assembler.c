@@ -1404,6 +1404,18 @@ static bool parse_set(MiniAs *as, char *args, size_t line) {
             alias->section = as->current_section;
             alias->subsection = as->current_subsection;
             alias->value = (uint64_t)value;
+            {
+                MiniAsSymbolExpr location = {0};
+                if (minias_parse_symbol_addend(expression, &location) &&
+                    strcmp(location.name, ".") == 0) {
+                    /* Capture the source-site symbol as an immutable
+                     * Fragment anchor. Relaxation moves the anchor, not
+                     * the already-parsed GNU assignment statement. */
+                    alias->has_fragment_anchor = true;
+                    alias->fragment_anchor = as->stmt_count;
+                    alias->fragment_anchor_addend = location.addend;
+                }
+            }
             return true;
         }
     }
@@ -1523,9 +1535,25 @@ static bool parse_set(MiniAs *as, char *args, size_t line) {
     }
 }
 
-static bool handle_org(MiniAs *as, const char *args, size_t line) {
+/* A source-site dot assignment is an MC symbol anchor, not an instruction
+ * stream control decision. Both .set and GNU NAME = .+N use this predicate;
+ * all other expressions retain the conservative source-reparse policy. */
+static bool is_dot_anchor_expression(const char *expression) {
+    MiniAsSymbolExpr parsed = {0};
+    return minias_parse_symbol_addend(expression, &parsed) &&
+           strcmp(parsed.name, ".") == 0;
+}
+
+/* Parse and retain the position constraint separately from its GNU optional
+ * fill operand. The fill byte belongs to the Common Fragment emitter, not
+ * to the instruction target or the symbol-layout solver. */
+static bool handle_org_position(MiniAs *as, const char *args,
+                                const char *source_args, size_t line,
+                                bool has_fill, uint8_t fill) {
     int64_t evaluated;
     int64_t lexical_target;
+    MiniAsSymbolExpr symbolic = {0};
+    MiniAsSymbol *symbol = NULL;
     uint64_t desired;
     uint64_t current;
     uint64_t pad;
@@ -1555,24 +1583,84 @@ static bool handle_org(MiniAs *as, const char *args, size_t line) {
     if (!add_stmt(as,
                   MINIAS_STMT_ALIGN,
                   ".org",
-                  args,
+                  source_args,
                   line,
                   (uint32_t)pad,
                   1U)) {
         return false;
     }
-    /* Only a pure integer expression is independent of later layout.
-     * A .org based on '.', a label or a mutable .set is intentionally not
-     * frozen: those still require re-evaluating parser control flow. */
+    as->stmts[as->stmt_count - 1U].align_has_fill = has_fill;
+    as->stmts[as->stmt_count - 1U].align_fill = fill;
+    /* Preserve the GNU expression as a typed position constraint. A source
+     * string is kept only for diagnostics or unsupported control grammar. */
     if (minias_eval_i64_expression(args, &lexical_target) &&
         lexical_target == evaluated) {
         MiniAsStmt *fragment = &as->stmts[as->stmt_count - 1U];
-        fragment->org_target_fixed = true;
+        fragment->org_mode = MINIAS_ORG_ABSOLUTE;
         fragment->org_target = desired;
+        as->has_org_constraints = true;
+    } else if (minias_parse_symbol_addend(args, &symbolic) &&
+               strcmp(symbolic.name, ".") == 0 &&
+               symbolic.addend >= 0) {
+        MiniAsStmt *fragment = &as->stmts[as->stmt_count - 1U];
+        fragment->org_mode = MINIAS_ORG_DOT_ADDEND;
+        fragment->org_target = (uint64_t)symbolic.addend;
+        as->has_org_constraints = true;
+    } else if (minias_parse_symbol_addend(args, &symbolic) &&
+               (symbol = minias_get_symbol(as, symbolic.name, false)) != NULL &&
+               symbol->defined && symbol->section == MINIAS_SECTION_ABS) {
+        /* Lexically resolved .set/.equ values are frozen at this site. */
+        MiniAsStmt *fragment = &as->stmts[as->stmt_count - 1U];
+        fragment->org_mode = MINIAS_ORG_ABSOLUTE;
+        fragment->org_target = desired;
+        as->has_org_constraints = true;
+    } else if (symbol != NULL && symbol->defined &&
+               symbol->has_fragment_anchor &&
+               symbol->section == as->current_section &&
+               /* Lower-numbered subsections precede this output location;
+                * a later subsection would create a circular .org dependency. */
+               symbol->subsection <= as->current_subsection &&
+               symbol->fragment_anchor < as->stmt_count) {
+        MiniAsStmt *fragment = &as->stmts[as->stmt_count - 1U];
+        fragment->org_mode = MINIAS_ORG_SYMBOL_ADDEND;
+        fragment->org_symbol_index = (size_t)(symbol - as->symbols);
+        fragment->org_addend = symbolic.addend;
+        as->has_org_constraints = true;
     } else {
         as->layout_sensitive = true;
     }
     return advance_current_location(as, pad);
+}
+
+static bool handle_org(MiniAs *as, const char *args, size_t line) {
+    char *copy = minias_strdup(args);
+    char *position, *comma;
+    uint8_t fill = 0U;
+    bool has_fill = false;
+    bool ok;
+    if(copy == NULL) {
+        minias_set_error(as,"out-of-memory:org-expression");
+        return false;
+    }
+    comma = strchr(copy, ',');
+    if(comma != NULL) {
+        int64_t value;
+        char *fill_expr;
+        *comma++ = '\0';
+        fill_expr = minias_trim(comma);
+        if(*fill_expr == '\0' || strchr(fill_expr, ',') != NULL ||
+           !minias_evaluate_absolute_expression(as,fill_expr,&value)) {
+            minias_set_error(as,"bad-directive:.org-fill:line=%zu",line);
+            free(copy);
+            return false;
+        }
+        has_fill = true;
+        fill = (uint8_t)value;
+    }
+    position = minias_trim(copy);
+    ok = handle_org_position(as,position,args,line,has_fill,fill);
+    free(copy);
+    return ok;
 }
 
 /* A new ISA may request a pool address without teaching Core the ISA
@@ -3240,7 +3328,8 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
         set_args[name_len]=',';
         memcpy(set_args+name_len+1U,rhs,rhs_len+1U);
         int64_t lexical_value;
-        if (!minias_eval_i64_expression(rhs, &lexical_value))
+        if (!minias_eval_i64_expression(rhs, &lexical_value) &&
+            !is_dot_anchor_expression(rhs))
             as->layout_sensitive=true;
         ok=parse_set(as,set_args,line);
         free(set_args);
@@ -3303,8 +3392,10 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
     if (strcmp(op, ".set") == 0 || strcmp(op, ".equ") == 0) {
         const char *comma = strchr(args, ',');
         int64_t literal;
-        if (comma == NULL || !minias_eval_i64_expression(comma + 1U,
-                                                          &literal))
+        if (comma == NULL ||
+            (!minias_eval_i64_expression(comma + 1U, &literal) &&
+             !(strcmp(op, ".set") == 0 &&
+               is_dot_anchor_expression(comma + 1U))))
             as->layout_sensitive = true;
     }
     /* Space/skip/zero depend on Fragment layout, not parser control flow:
