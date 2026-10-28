@@ -241,6 +241,17 @@ entry_x:
     movsq
     outsw
     insw
+    # GNU Linux preprocessor arithmetic in memory displacements and
+    # MOVL $immediate expressions: reuse Common evaluator across x86 ISA.
+    addb %al, 850(%rbx)
+    addb %r15b, 8(%rbp)
+    addb %dl, 41(%r14)
+    movq 0*8(%rsi), %r11
+    movq %rbx, 0*8(%rsp)
+    movq 3*8(%rdi), %r10
+    movl $4096/8, %ecx
+    movl $~0xfa1e0ff3, %eax
+    movl $(5 << 8) | 7, %edx
     # GNU Linux >48-character symbol displacements and SHLD/SHRD group.
     movq __tracepoint_x86_fpu_xstate_check_failed+72(%rip), %rbx
     movq __tracepoint_intel_frontbuffer_invalidate+72(%rip), %r8
@@ -1148,6 +1159,9 @@ for bad in            'popcntq %eax,%rax' \
            '.code64 bad' \
            'rdpmc %rax' \
            'fninit %rax' \
+           'movq 0/0(%rax), %rdx' \
+           'addb %rax, 8(%rbx)' \
+           'movl $0x100000000, %eax' \
            'adcl %rax,%eax' \
            'negb %eax' \
            'negw %eax' \

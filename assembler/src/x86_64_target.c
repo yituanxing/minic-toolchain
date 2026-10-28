@@ -221,8 +221,14 @@ static bool x64_parse_base_memory(const char *text, MiniAsMCMemory *out) {
         errno=0;displacement=strtoll(operand,&end,0);
         if(errno || end==operand || *end ||
            displacement<INT32_MIN || displacement>INT32_MAX) {
-            if(!minias_parse_symbol_addend(operand,&expr))return false;
-            symbolic=true;displacement=0;
+            int64_t arithmetic;
+            if(minias_eval_i64_expression(operand,&arithmetic) &&
+               arithmetic>=INT32_MIN && arithmetic<=INT32_MAX)
+                displacement=(long long)arithmetic;
+            else {
+                if(!minias_parse_symbol_addend(operand,&expr))return false;
+                symbolic=true;displacement=0;
+            }
         }
         memset(out,0,sizeof(*out));
         out->scale=1U;out->address_space=space;
@@ -243,11 +249,17 @@ static bool x64_parse_base_memory(const char *text, MiniAsMCMemory *out) {
         errno=0;displacement=strtoll(dispbuf,&end,0);
         if (errno || end==dispbuf || *end ||
             displacement<INT32_MIN || displacement>INT32_MAX) {
-            if(!minias_parse_symbol_addend(dispbuf,&symbolic_expr) ||
-               symbolic_expr.addend<INT64_MIN+4)
-                return false;
-            symbolic=true;
-            displacement=0;
+            int64_t arithmetic;
+            if(minias_eval_i64_expression(dispbuf,&arithmetic) &&
+               arithmetic>=INT32_MIN && arithmetic<=INT32_MAX)
+                displacement=(long long)arithmetic;
+            else {
+                if(!minias_parse_symbol_addend(dispbuf,&symbolic_expr) ||
+                   symbolic_expr.addend<INT64_MIN+4)
+                    return false;
+                symbolic=true;
+                displacement=0;
+            }
         }
     }
     p=open+1;
@@ -1368,14 +1380,13 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
     }
     if (!strcmp(s->op,"movl") && x64_args2(s->args,src,dst) &&
         src[0]=='$' && x64_register(dst,&rd,&wd) && !wd) {
-        char *end;
-        long long num;
-        errno=0;
-        num=strtoll(src+1,&end,0);
-        if (!errno && end!=src+1 && !*end &&
-            num>=INT32_MIN && num<=UINT32_MAX) {
+        uint64_t bits;
+        if(minias_eval_u64_expression(src+1U,&bits) &&
+           (bits<=UINT32_MAX ||
+            ((int64_t)bits>=INT32_MIN && (int64_t)bits<0))) {
             m->opcode=X64_MOV_IMM32;m->count=1U;
-            m->operands[0].reg=rd;m->operands[0].immediate=(uint32_t)num;
+            m->operands[0].reg=rd;
+            m->operands[0].immediate=(uint32_t)bits;
             goto done;
         }
     }
@@ -1685,6 +1696,7 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
         MiniAsMCMemory parsed;
         unsigned r, reg_bits=0U;
         bool wide=false, memory_source, legacy_high8=false;
+        bool byte_add_memory_opcode_zero=false;
         const unsigned *chosen = NULL;
         unsigned target_opcode=0U;
         if (x64_register(src,&r,&wide) &&
@@ -1779,10 +1791,17 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
                     !strcmp(s->op,"imulq") || !strcmp(s->op,"imull") ||
                     !strcmp(s->op,"imulw")) && !memory_source)continue;
                 chosen=memory_source?&regmem[i].rm_src:&regmem[i].rm_dest;
+                /* x86 ADD r8,r/m8 opcode 00 is real. A zero descriptor
+                 * normally denotes an unsupported operand direction, but
+                 * must not suppress this genuinely valid instruction. */
+                byte_add_memory_opcode_zero=!memory_source &&
+                    !strcmp(regmem[i].op,"addb");
                 break;
             }
         }
-        if (!chosen || *chosen==0U) {free(parsed.symbol);goto invalid;}
+        if (!chosen || (*chosen==0U && !byte_add_memory_opcode_zero)) {
+            free(parsed.symbol);goto invalid;
+        }
         m->operands[1].memory=malloc(sizeof(parsed));
         if (!m->operands[1].memory) {
             minias_set_error(as,"out-of-memory:x86_64-mc-memory");
