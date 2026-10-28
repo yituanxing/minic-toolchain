@@ -2118,7 +2118,17 @@ A64_LIT
 "$AARCH64_AS" -o "$work/a64-lit-gnu.o" "$work/a64-linux-literal-pool.s"
 "$AARCH64_OBJCOPY" -j .text -O binary "$work/a64-lit-mini.o" "$work/a64-lit-mini.bin"
 "$AARCH64_OBJCOPY" -j .text -O binary "$work/a64-lit-gnu.o" "$work/a64-lit-gnu.bin"
-cmp "$work/a64-lit-mini.bin" "$work/a64-lit-gnu.bin"
+if ! cmp "$work/a64-lit-mini.bin" "$work/a64-lit-gnu.bin"; then
+    echo 'MINIAS_A64_LITERAL_MISMATCH mini GNU machine words:' >&2
+    od -An -tx4 -w4 "$work/a64-lit-mini.bin" >&2
+    echo 'MINIAS_A64_LITERAL_MISMATCH original GNU words:' >&2
+    od -An -tx4 -w4 "$work/a64-lit-gnu.bin" >&2
+    for owner in mini gnu; do
+        echo "MINIAS_A64_LITERAL_RELA owner=$owner" >&2
+        "$AARCH64_READELF" -Wr "$work/a64-lit-$owner.o" >&2
+    done
+    exit 1
+fi
 for owner in mini gnu; do
     "$AARCH64_READELF" -Wr "$work/a64-lit-$owner.o" |
         awk '$3 ~ /^R_AARCH64_ABS(32|64)$/ {print $1,$3,$5,$6,$7}' |
