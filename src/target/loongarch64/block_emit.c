@@ -70,14 +70,14 @@ const MinicCoreValueId dst = ins->value.record_copy.destination_address;
 
 /* Native LoongArch64 byte transport for the Common typed record
  * snapshot; +Q/volatile reads are never collapsed to a scalar load. */
-bool minic_loongarch64_emit_record_load(FILE *out,
+static bool minic_loongarch64_emit_record_load(FILE *out,
     const MinicDirectLP64BlockContext *ctx,
     const MinicCoreInstruction *ins) {
     MinicCoreValueId source;
     size_t dest, bytes, byte;
     if (!minic_multi_direct_record_load_extent(
             ctx->program, ctx->target, ctx->fn, ins, ctx->frame_plan,
-            &source, &dest, &bytes) || source > SIZE_MAX / 8U ||
+            &source, &dest, &bytes) ||
         !minic_loongarch64_emit_frame_mem(out, "ld.d", "$t2",
             (size_t)source * 8U, ctx->dynamic_frame) ||
         fprintf(out, "  li.d $t1, %zu\n  add.d $t1, %s, $t1\n",

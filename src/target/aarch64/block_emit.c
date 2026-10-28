@@ -68,7 +68,7 @@ const MinicCoreValueId dst = ins->value.record_copy.destination_address;
 /* Source lvalue -> owned local record snapshot, retaining each byte
  * read (including volatile) in source order. The destination is a Core
  * DataLayout object, not a synthetic pointer SSA value. */
-bool minic_aarch64_emit_record_load(FILE *out,
+static bool minic_aarch64_emit_record_load(FILE *out,
     const MinicDirectLP64BlockContext *ctx,
     const MinicCoreInstruction *ins) {
     MinicCoreValueId source;
@@ -76,7 +76,7 @@ bool minic_aarch64_emit_record_load(FILE *out,
     const char *base = ctx->dynamic_frame ? "x19" : "sp";
     if (!minic_multi_direct_record_load_extent(
             ctx->program, ctx->target, ctx->fn, ins, ctx->frame_plan,
-            &source, &dest, &bytes) || source > SIZE_MAX / 8U ||
+            &source, &dest, &bytes) ||
         fprintf(out, "  ldr x10, [sp, #%zu]\n", (size_t)source * 8U) < 0 ||
         fprintf(out, "  movz x11, #%zu\n", dest & 65535U) < 0 ||
         (dest > 65535U &&
