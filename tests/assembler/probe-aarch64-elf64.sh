@@ -1507,4 +1507,42 @@ for invalid in 'aese v0.16b,v1.16b' 'crc32x w0,w1,x2'; do
     fi
 done
 echo 'MINIAS_A64_CRC_AES=PASS GNU_all_8_CRC_plus_AES_words feature_gates'
+
+# Genuine GNU 6.6 crypto EOR, SIMD boolean family, whitespace-free
+# shift spelling in ARM kernel ASM, and PMU EL0/EL1 MRS/MSR ABI.
+cat >"$work/a64-simd-pmu-shift.s" <<'GNU_SIMD_PMU'
+.arch armv8-a+crypto
+.text
+eor v0.16b,v0.16b,v3.16b
+eor v1.16b,v1.16b,v1.16b
+eor v2.8b,v3.8b,v4.8b
+orr v5.16b,v6.16b,v7.16b
+and v8.16b,v9.16b,v10.16b
+bic v11.16b,v12.16b,v13.16b
+bsl v14.16b,v15.16b,v16.16b
+bit v17.16b,v18.16b,v19.16b
+bif v20.16b,v21.16b,v22.16b
+add x2,x1,x2,lsl#6
+sub w9,w10,w11,asr#3
+mrs x0,actlr_el1
+msr actlr_el1,x1
+mrs x0,pmcntenset_el0
+msr pmcntenset_el0,x0
+mrs x0,pmintenclr_el1
+msr pmintenclr_el1,x0
+GNU_SIMD_PMU
+"$MINIAS" --target=aarch64 -o "$work/a64-simd-pmu-mini.o" "$work/a64-simd-pmu-shift.s"
+"$AARCH64_AS" -o "$work/a64-simd-pmu-gnu.o" "$work/a64-simd-pmu-shift.s"
+"$AARCH64_OBJCOPY" -j .text -O binary "$work/a64-simd-pmu-mini.o" "$work/a64-simd-pmu-mini.bin"
+"$AARCH64_OBJCOPY" -j .text -O binary "$work/a64-simd-pmu-gnu.o" "$work/a64-simd-pmu-gnu.bin"
+cmp "$work/a64-simd-pmu-mini.bin" "$work/a64-simd-pmu-gnu.bin"
+for bad in 'eor v1.16b,v1.8b,v3.16b' 'bic v0.4s,v1.4s,v2.4s' \
+           'orr v0.8b,v1.16b,v2.8b' 'mrs w0,actlr_el1' \
+           'msr pmintenclr_el1,w1' 'add x0,x1,x2,lsl#64'; do
+    printf '.arch armv8-a+crypto\n.text\n%s\n' "$bad" >"$work/a64-simd-pmu-invalid.s"
+    if "$MINIAS" --target=aarch64 -o "$work/a64-simd-pmu-invalid.o" "$work/a64-simd-pmu-invalid.s" >/dev/null 2>&1; then
+        echo "bad ARM SIMD/shift/PMU operand accepted: $bad" >&2;exit 1
+    fi
+done
+echo 'MINIAS_A64_SIMD_PMU_SHIFT=PASS GNU_exact_words SIMD7_nospace_LSL_PMU'
 echo 'MINIAS_AARCH64_VSLICE=PASS ELF64=1 gnu_bytes=equal relocation_call26_jump26_abs64=1 ld=pass qemu=exit0'

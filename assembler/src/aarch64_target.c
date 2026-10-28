@@ -241,7 +241,8 @@ enum {
     A64_MC_EXCLUSIVE,
     A64_MC_SIMD_SINGLE,
     A64_MC_SIMD_MOVE,
-    A64_MC_SIMD_CRYPTO
+    A64_MC_SIMD_CRYPTO,
+    A64_MC_SIMD_LOGIC
 };
 
 /* GNU AArch64 operands split on TOP-LEVEL commas, not commas within
@@ -477,7 +478,8 @@ static bool a64_shift_fields(const char *text,bool wide,bool allow_ror,
     const char *arg;
     for(i=0U;i<4U;++i) {
         size_t n=strlen(ops[i]);
-        if(strncmp(text,ops[i],n) || !isspace((unsigned char)text[n]))
+        if(strncmp(text,ops[i],n) ||
+           (text[n]!='#' && !isspace((unsigned char)text[n])))
             continue;
         if(i==3U && !allow_ror)return false;
         arg=text+n;
@@ -1437,6 +1439,9 @@ static bool a64_system_register(const char *name,uint32_t *mrs,uint32_t *msr) {
         {"par_el1",UINT32_C(0xd5387400),UINT32_C(0xd5187400)},
         {"hcr_el2",UINT32_C(0xd53c1100),UINT32_C(0xd51c1100)},
         {"hstr_el2",UINT32_C(0xd53c1160),UINT32_C(0xd51c1160)},
+        {"actlr_el1",UINT32_C(0xd5381020),UINT32_C(0xd5181020)},
+        {"pmcntenset_el0",UINT32_C(0xd53b9c20),UINT32_C(0xd51b9c20)},
+        {"pmintenclr_el1",UINT32_C(0xd5389e40),UINT32_C(0xd5189e40)},
         {"pmcr_el0",UINT32_C(0xd53b9c00),UINT32_C(0xd51b9c00)},
         {"pmcntenclr_el0",UINT32_C(0xd53b9c40),UINT32_C(0xd51b9c40)},
         /* S3/S0 sysreg encodings independently assembled with LLVM
@@ -2229,6 +2234,47 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
         inst->encoding=aes[k].base;
         put_reg(&inst->operands[0],rd,true);
         put_reg(&inst->operands[1],rn,true);
+    } else if(!strcmp(op,"eor") || !strcmp(op,"orr") ||
+              !strcmp(op,"and") || !strcmp(op,"bic") ||
+              !strcmp(op,"bsl") || !strcmp(op,"bit") ||
+              !strcmp(op,"bif")) {
+        char tok[4][96];unsigned n,rd,rn,rm,i;
+        uint32_t da,sa,ta;
+        static const struct {const char *name;uint32_t base;} table[]={
+            {"eor",UINT32_C(0x2e201c00)},
+            {"orr",UINT32_C(0x0ea01c00)},
+            {"and",UINT32_C(0x0e201c00)},
+            {"bic",UINT32_C(0x0e601c00)},
+            {"bsl",UINT32_C(0x2e601c00)},
+            {"bit",UINT32_C(0x2ea01c00)},
+            {"bif",UINT32_C(0x2ee01c00)}
+        };
+        if(split_operands(args,tok,&n) && n==3U &&
+           tok[0][0]=='v') {
+            if(!a64_vector_view(tok[0],&rd,&da) ||
+               !a64_vector_view(tok[1],&rn,&sa) ||
+               !a64_vector_view(tok[2],&rm,&ta) ||
+               da!=sa || da!=ta ||
+               (da&UINT32_C(0xc00))!=0U) {
+                minias_set_error(as,"bad-aarch64-simd-logic:%s:line=%zu",
+                                 args,stmt->line);
+                free(inst);return false;
+            }
+            for(i=0U;i<sizeof(table)/sizeof(table[0]);++i)
+                if(!strcmp(op,table[i].name))break;
+            inst->opcode=A64_MC_SIMD_LOGIC;inst->count=3U;
+            inst->encoding=table[i].base|
+                          (da&UINT32_C(0x40000000));
+            put_reg(&inst->operands[0],rd,true);
+            put_reg(&inst->operands[1],rn,true);
+            put_reg(&inst->operands[2],rm,true);
+        }else if(parse_integer_family(inst,op,args)) {
+            /* Scalar ALU uses the same already proven Target machinery. */
+        }else {
+            minias_set_error(as,"bad-aarch64-operands:%s:%s:line=%zu",
+                             op,args,stmt->line);
+            free(inst);return false;
+        }
     } else if((!strcmp(op,"br")||!strcmp(op,"blr")) &&
        parse_register(args,&reg,&reg64) && reg64) {
         inst->opcode=!strcmp(op,"br")?A64_MC_BR:A64_MC_BLR;
@@ -2760,6 +2806,12 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
             }
             break;
         }
+        case A64_MC_SIMD_LOGIC:
+            code=inst->encoding|
+                 (inst->operands[2].reg<<16U)|
+                 (inst->operands[1].reg<<5U)|
+                 inst->operands[0].reg;
+            break;
         case A64_MC_SIMD_CRYPTO:
             code=inst->encoding|(inst->operands[1].reg<<5U)|
                  inst->operands[0].reg;
