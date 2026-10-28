@@ -76,6 +76,7 @@ on:
       - 'tests/compiler/c0/probe-x86-linux-tied-bit-scan.sh'
       - 'tests/compiler/c0/probe-x86-linux-abi-carry-xadd.sh'
       - 'tests/compiler/c0/probe-lp64-core-record-snapshot-qemu.sh'
+      - 'tests/compiler/c0/probe-loong-linux-cmpxchg-qemu.sh'
       - 'tests/compiler/c0/probe-lp64-indirect-record-abi-qemu.sh'
       - 'tests/compiler/c0/probe-lp64-packed-integer-record-qemu.sh'
       - 'tests/compiler/c0/probe-x86-linux-msr-safe-gs-pointer.sh'
@@ -342,6 +343,7 @@ jobs:
           bash tests/compiler/c0/probe-x86-linux-tied-bit-scan.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
           bash tests/compiler/c0/probe-x86-linux-abi-carry-xadd.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
           bash tests/compiler/c0/probe-x86-linux-msr-safe-gs-pointer.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
+          MINIC_SOURCE_ONLY=1 bash tests/compiler/c0/probe-loong-linux-cmpxchg-qemu.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
           for target in aarch64 loongarch64; do
             MINIC_SOURCE_ONLY=1 bash tests/compiler/c0/probe-lp64-core-record-snapshot-qemu.sh "$target" "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
             MINIC_SOURCE_ONLY=1 bash tests/compiler/c0/probe-lp64-indirect-record-abi-qemu.sh "$target" "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"

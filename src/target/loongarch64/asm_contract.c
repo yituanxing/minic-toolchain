@@ -369,6 +369,84 @@ static bool loong_atomic_fetch_qualified_source(
     return true;
 }
 
+
+/* GNU Linux 6.6.143 cmpxchg.h: exact LL/SC hardware shapes. Keep
+ * target-only constraint/type qualification separate from Common Core
+ * operand address lowering; no C load/store emulation of atomics. */
+static unsigned loong_linux_cmpxchg_form(const char *text,size_t length) {
+    static const char *const exact[]={
+        "1:ll.w%0,%2#__cmpxchg_asmbne%0,%z3,2fmove$t0,%z4sc.w$t0,%1beqz$t0,1b2:dbar0x700",
+        "1:ll.d%0,%2#__cmpxchg_asmbne%0,%z3,2fmove$t0,%z4sc.d$t0,%1beqz$t0,1b2:dbar0x700",
+        "1:ll.w%0,%3and%1,%0,%z4bne%1,%z5,2fandn%1,%0,%z4or%1,%1,%z6sc.w%1,%2beqz%1,1bb3f2:dbar0x7003:"
+    };
+    char compact[256];size_t i,n=0U;
+    if(!text||!length||length>=sizeof(compact))return 0U;
+    for(i=0U;i<length;++i){
+        const char c=text[i];
+        if(c==' '||c=='\t'||c=='\r'||c=='\n')continue;
+        if(c=='\0'||c==';'||n+1U>=sizeof(compact))return 0U;
+        compact[n++]=c;
+    }
+    compact[n]='\0';
+    for(i=0U;i<3U;++i)if(strcmp(compact,exact[i])==0)return (unsigned)i+1U;
+    return 0U;
+}
+static bool loong_linux_cmpxchg_word(MinicType type,size_t width) {
+    MinicType plain;
+    if(!minic_type_unqualified(type,&plain)||
+       !minic_type_is_integer(plain)||plain.pointer_depth||
+       plain.base_kind!=MINIC_TYPE_BASE_INT)return false;
+    return width==4U?plain.integer_rank==MINIC_INTEGER_RANK_INT:
+        (plain.integer_rank==MINIC_INTEGER_RANK_LONG||
+         plain.integer_rank==MINIC_INTEGER_RANK_LONG_LONG);
+}
+static bool loong_linux_cmpxchg_source(
+    const MinicC0Program *p,const MinicInlineAsm *s,
+    MinicTargetInlineAsmContract *contract){
+    const unsigned form=s?loong_linux_cmpxchg_form(
+        s->template_text,s->template_length):0U;
+    const size_t width=form==2U?8U:4U;
+    const size_t outputs=form==3U?3U:2U,inputs=form==3U?4U:3U;
+    size_t i;
+    if(!p||!s||!contract||!form||!s->is_volatile||s->is_goto||
+       s->label_count||!s->outputs||!s->inputs||
+       s->output_count!=outputs||s->input_count!=inputs||
+       !s->has_memory_clobber||s->clobber_count!=(form==3U?1U:2U)||
+       s->register_clobber_count!=(form==3U?0U:1U))return false;
+    if(form!=3U&&(!s->register_clobbers||
+       s->register_clobbers[0].name_length!=2U||
+       memcmp(s->register_clobbers[0].name,"t0",2U)))return false;
+    for(i=0U;i<outputs+inputs;++i){
+        const bool output=i<outputs;
+        const MinicInlineAsmOperand *o=output?
+            &s->outputs[i]:&s->inputs[i-outputs];
+        const MinicExpression *e=minic_c0_program_expression(p,o->expression);
+        const bool memory=form==3U?(i==2U||i==3U):(i==1U||i==2U);
+        const char *constraint;
+        size_t length;
+        if(form==3U){
+            static const char *const out[]={"=&r","=&r","=ZC"};
+            static const char *const in[]={"ZC","Jr","Jr","Jr"};
+            constraint=output?out[i]:in[i-outputs];
+        }else constraint=output?(i==0U?"=&r":"=ZB"):
+            (i==2U?"ZB":"Jr");
+        length=strlen(constraint);
+        if(!o->constraint_text||o->constraint_length!=length||
+           memcmp(o->constraint_text,constraint,length)||!e||
+           (output&&(e->value_category!=MINIC_VALUE_LVALUE||
+                     minic_type_is_const(e->type)))||
+           (memory&&e->value_category!=MINIC_VALUE_LVALUE)||
+           !loong_linux_cmpxchg_word(e->type,width))return false;
+        contract->kinds[i]=memory?
+            (output?MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT:
+                    MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT):
+            (output?MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT:
+                    MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT);
+    }
+    contract->operand_count=outputs+inputs;
+    return true;
+}
+
 /* Linux 6.6.143 arch/loongarch/include/asm/barrier.h:
  * array_index_mask_nospec has exactly these two physical instructions.
  * GCC GNU constraints =r, r, r are transported as Core operand roles.
@@ -805,6 +883,7 @@ bool minic_loongarch64_qualify_inline_asm(
         loong_percpu_indexed_source(program, src, contract) ||
         loong_percpu_amo_source(program, src, contract))
         return true;
+    if (loong_linux_cmpxchg_source(program,src,contract)) return true;
     if (loong_mask_nospec_source(program, src, contract))
         return true;
     if(loong_pte_source(program,src,contract))
@@ -1023,6 +1102,93 @@ static bool loong_pte_emit(
                  "  dbar 0x700\n"
                  "  st.d $t4, $t2, 0\n",out)!=EOF;
 }
+
+/* The exact Linux LL/SC compare-and-swap register choreography.
+ * Frame helper may clobber $t3; keep live physical state in $t0-$t2,
+ * $t4-$t8. Return both early-clobbered register outputs and the
+ * memory output without converting volatile reads into scalar C stores. */
+static bool loong_linux_cmpxchg_emit(FILE *out,
+    const MinicDirectLP64BlockContext *ctx,const MinicCoreInstruction *ins,
+    const MinicCoreInlineAsm *info) {
+    const MinicCoreFunction *fn=ctx->fn;
+    const MinicCoreStructuredInlineAsmOperand *b=
+        ins->value.structured_inline_asm.operands;
+    const unsigned form=loong_linux_cmpxchg_form(
+        info->template_text,info->template_length);
+    const size_t n=form==3U?7U:5U,width=form==2U?8U:4U;
+    const char *load=width==8U?"ld.d":"ld.w";
+    const char *store=width==8U?"st.d":"st.w";
+    size_t k;
+    if(!out||!ctx||!fn||!info||!form||!info->is_volatile||
+       info->is_goto||!info->has_memory_clobber||
+       info->register_clobber_count!=(form==3U?0U:1U)||
+       ins->value.structured_inline_asm.operand_count!=n)return false;
+    for(k=0U;k<n;++k){
+        const bool mem=form==3U?(k==2U||k==3U):(k==1U||k==2U);
+        const bool output=form==3U?k<3U:k<2U;
+        MinicType type;
+        if(b[k].operand_index!=k||b[k].value>=fn->value_count||
+           b[k].has_fixed_register_binding||
+           b[k].kind!=(mem?(output?
+                 MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT:
+                 MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT):
+                 output?MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT:
+                        MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT))
+            return false;
+        type=fn->values[b[k].value].type;
+        if((output||mem)&&!minic_type_pointee(type,&type))return false;
+        if(!loong_linux_cmpxchg_word(type,width))return false;
+    }
+    if(form==3U){
+        /* out0 old32, out1 temp, out2 destination; input3 source,
+         * input4 mask, input5 expected and input6 replacement. */
+        if(!minic_loongarch64_emit_frame_mem(out,"ld.d","$t4",
+              (size_t)b[3].value*8U,ctx->dynamic_frame)||
+           !minic_loongarch64_emit_frame_mem(out,"ld.d","$t7",
+              (size_t)b[2].value*8U,ctx->dynamic_frame)||
+           !minic_loongarch64_emit_frame_mem(out,load,"$t0",
+              (size_t)b[4].value*8U,ctx->dynamic_frame)||
+           !minic_loongarch64_emit_frame_mem(out,load,"$t1",
+              (size_t)b[5].value*8U,ctx->dynamic_frame)||
+           !minic_loongarch64_emit_frame_mem(out,load,"$t2",
+              (size_t)b[6].value*8U,ctx->dynamic_frame)||
+           fputs("1:\n  ll.w $t5, $t4, 0\n"
+                 "  and $t6, $t5, $t0\n"
+                 "  bne $t6, $t1, 2f\n"
+                 "  andn $t6, $t5, $t0\n"
+                 "  or $t6, $t6, $t2\n"
+                 "  sc.w $t6, $t7, 0\n"
+                 "  beqz $t6, 1b\n"
+                 "  b 3f\n"
+                 "2:\n  dbar 0x700\n3:\n",out)==EOF)return false;
+        for(k=0U;k<2U;++k)
+            if(!minic_loongarch64_emit_frame_mem(out,"ld.d","$t7",
+                  (size_t)b[k].value*8U,ctx->dynamic_frame)||
+               fprintf(out,"  st.w %s, $t7, 0\n",
+                       k==0U?"$t5":"$t6")<0)return false;
+        return true;
+    }
+    if(!minic_loongarch64_emit_frame_mem(out,"ld.d","$t4",
+          (size_t)b[2].value*8U,ctx->dynamic_frame)||
+       !minic_loongarch64_emit_frame_mem(out,"ld.d","$t7",
+          (size_t)b[1].value*8U,ctx->dynamic_frame)||
+       !minic_loongarch64_emit_frame_mem(out,load,"$t1",
+          (size_t)b[3].value*8U,ctx->dynamic_frame)||
+       !minic_loongarch64_emit_frame_mem(out,load,"$t2",
+          (size_t)b[4].value*8U,ctx->dynamic_frame)||
+       fprintf(out,"1:\n  ll.%c $t5, $t4, 0\n"
+                   "  bne $t5, $t1, 2f\n"
+                   "  or $t0, $t2, $zero\n"
+                   "  sc.%c $t0, $t7, 0\n"
+                   "  beqz $t0, 1b\n"
+                   "2:\n  dbar 0x700\n",
+                   width==8U?'d':'w',width==8U?'d':'w')<0||
+       !minic_loongarch64_emit_frame_mem(out,"ld.d","$t7",
+          (size_t)b[0].value*8U,ctx->dynamic_frame)||
+       fprintf(out,"  %s $t5, $t7, 0\n",store)<0)return false;
+    return true;
+}
+
 bool minic_loongarch64_emit_qualified_structured_asm(
     FILE *out, const MinicDirectLP64BlockContext *ctx,
     const MinicCoreInstruction *ins) {
@@ -1048,6 +1214,8 @@ bool minic_loongarch64_emit_qualified_structured_asm(
         return loong_percpu_indexed_emit(out, ctx, ins, info);
     if (loong_percpu_amo_form(info->template_text, info->template_length) != SIZE_MAX)
         return loong_percpu_amo_emit(out, ctx, ins, info);
+    if (loong_linux_cmpxchg_form(info->template_text,info->template_length))
+        return loong_linux_cmpxchg_emit(out,ctx,ins,info);
     if (loong_mask_nospec_form(info->template_text, info->template_length))
         return loong_mask_nospec_emit(out, ctx, ins, info);
     if(loong_pte_form(info->template_text,info->template_length))

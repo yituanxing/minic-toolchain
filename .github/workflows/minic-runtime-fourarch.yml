@@ -51,6 +51,7 @@ on:
       - "tests/compiler/c0/probe-lp64-packed-integer-record-qemu.sh"
       - "tests/compiler/c0/probe-aarch64-linux-zero-operand-hints.sh"
       - "tests/compiler/c0/probe-loong-linux-zero-operand-dbar.sh"
+      - "tests/compiler/c0/probe-loong-linux-cmpxchg-qemu.sh"
       - "src/target/aarch64/call_emit.c"
       - "src/target/aarch64/integer_emit.c"
       - "src/target/aarch64/residual_emit.c"
@@ -636,6 +637,12 @@ jobs:
         run: |
           set -Eeuo pipefail
           bash tests/compiler/c0/probe-loong-linux-zero-operand-dbar.sh "$GITHUB_WORKSPACE/build/runtime-ci/bin/minic-cc"
+      - name: GNU 6.6.143 LoongArch LL-SC cmpxchg three exact hardware contracts
+        if: matrix.target == 'loongarch64'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          bash tests/compiler/c0/probe-loong-linux-cmpxchg-qemu.sh "$GITHUB_WORKSPACE/build/runtime-ci/bin/minic-cc"
       - name: LoongArch original GNU CPUCFG builtin vs MiniC physical instruction
         if: matrix.target == 'loongarch64'
         shell: bash
