@@ -1688,6 +1688,8 @@ static bool a64_system_register(const char *name,uint32_t *mrs,uint32_t *msr) {
         /* S3/S0 sysreg encodings independently assembled with LLVM
          * AArch64 IAS; read-only status is explicitly rejected by MSR. */
         {"vmpidr_el2",UINT32_C(0xd53c00a0),UINT32_C(0xd51c00a0)},
+        /* Exact GNU/LLVM MRS/MSR EL2 virtual processor ID register. */
+        {"vpidr_el2",UINT32_C(0xd53c0000),UINT32_C(0xd51c0000)},
         {"aidr_el1",UINT32_C(0xd53900e0),0U},
         {"pmceid0_el0",UINT32_C(0xd53b9cc0),0U},
         {"pmccfiltr_el0",UINT32_C(0xd53befe0),UINT32_C(0xd51befe0)},
@@ -2723,21 +2725,38 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
         put_reg(&inst->operands[1],rt2,wt);
         put_reg(&inst->operands[2],rn,true);
         put_reg(&inst->operands[3],rs,false);
-    } else if(!strcmp(op,"sha256su0") || !strcmp(op,"sha256su1")) {
-        char tok[4][384];unsigned n,rd,rn,rm=0U;uint32_t da,sa,ta=0U;
-        bool tri=!strcmp(op,"sha256su1");
-        if((as->target_options&A64_FEATURE_CRYPTO)==0U ||
-           !split_operands(args,tok,&n) || n!=(tri?3U:2U) ||
-           !a64_vector_view(tok[0],&rd,&da) ||
-           !a64_vector_view(tok[1],&rn,&sa) ||
-           da!=UINT32_C(0x40000800) || sa!=da ||
-           (tri && (!a64_vector_view(tok[2],&rm,&ta) || ta!=da))) {
+    } else if(!strcmp(op,"sha256su0") || !strcmp(op,"sha256su1") ||
+              !strcmp(op,"sha256h") || !strcmp(op,"sha256h2")) {
+        /* One typed ARM SHA256 instruction family: H/H2 use scalar Qd,Qn
+         * and vector Vm.4S; SU1 uses three vector .4S operands, while
+         * SU0 uses two. No target-independent register-bank guessing. */
+        char tok[4][384];unsigned n,rd,rn,rm=0U;uint32_t da=0U,sa=0U,ta=0U;
+        bool pair=!strcmp(op,"sha256h") || !strcmp(op,"sha256h2");
+        bool tri=strcmp(op,"sha256su0")!=0;
+        bool valid=(as->target_options&A64_FEATURE_CRYPTO)!=0U &&
+                   split_operands(args,tok,&n) && n==(tri?3U:2U);
+        if(valid && pair) {
+            valid=parse_a64_q_reg(tok[0],&rd) &&
+                  parse_a64_q_reg(tok[1],&rn);
+        }else if(valid) {
+            valid=a64_vector_view(tok[0],&rd,&da) &&
+                  a64_vector_view(tok[1],&rn,&sa) &&
+                  da==UINT32_C(0x40000800) && sa==da;
+        }
+        if(valid && tri) {
+            valid=a64_vector_view(tok[2],&rm,&ta) &&
+                  ta==UINT32_C(0x40000800);
+        }
+        if(!valid) {
             minias_set_error(as,"bad-aarch64-sha256:%s:line=%zu",
                              args,stmt->line);free(inst);return false;
         }
         inst->opcode=tri?A64_MC_SIMD_LOGIC:A64_MC_SIMD_CRYPTO;
         inst->count=tri?3U:2U;
-        inst->encoding=tri?UINT32_C(0x5e006000):UINT32_C(0x5e282800);
+        inst->encoding=!strcmp(op,"sha256h")?UINT32_C(0x5e004000):
+                       !strcmp(op,"sha256h2")?UINT32_C(0x5e005000):
+                       !strcmp(op,"sha256su1")?UINT32_C(0x5e006000):
+                                                UINT32_C(0x5e282800);
         put_reg(&inst->operands[0],rd,true);
         put_reg(&inst->operands[1],rn,true);
         if(tri)put_reg(&inst->operands[2],rm,true);
@@ -2759,7 +2778,10 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
                               UINT32_C(0x0e003c00))|(lane<<16U);
         put_reg(&inst->operands[0],rd,is_x);
         put_reg(&inst->operands[1],rn,true);
-    } else if(!strcmp(op,"stz2g")) {
+    } else if(!strcmp(op,"stg") || !strcmp(op,"stzg") ||
+              !strcmp(op,"st2g") || !strcmp(op,"stz2g")) {
+        /* All four ARM MTE tag-store forms share the same checked
+         * 16-byte signed-scaled addressing and one typed store emitter. */
         char tok[4][384];unsigned n,rt,rn,mode;
         bool wide,sp;int64_t off;
         if((as->target_options&A64_FEATURE_MTE)==0U ||
@@ -2781,11 +2803,18 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
             minias_set_error(as,"bad-aarch64-stz2g-offset:%s:line=%zu",
                              args,stmt->line);free(inst);return false;
         }
-        inst->opcode=A64_MC_MTE_STZ2G;inst->count=2U;
-        inst->encoding=(mode==0U?UINT32_C(0xd9e00800):
-                        mode==1U?UINT32_C(0xd9e00c00):
-                                 UINT32_C(0xd9e00400))|
-                       (((uint32_t)(off/16)&511U)<<12U);
+        {
+            uint32_t base=!strcmp(op,"stg")?UINT32_C(0xd9200000):
+                          !strcmp(op,"stzg")?UINT32_C(0xd9600000):
+                          !strcmp(op,"st2g")?UINT32_C(0xd9a00000):
+                                                UINT32_C(0xd9e00000);
+            inst->opcode=A64_MC_MTE_STZ2G;inst->count=2U;
+            inst->encoding=base|
+                           (mode==0U?UINT32_C(0x800):
+                            mode==1U?UINT32_C(0xc00):
+                                     UINT32_C(0x400))|
+                           (((uint32_t)(off/16)&511U)<<12U);
+        }
         put_reg(&inst->operands[0],rt,true);
         put_reg(&inst->operands[1],rn,true);
     } else if((!strcmp(op,"br")||!strcmp(op,"blr")) &&

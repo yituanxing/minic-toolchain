@@ -1820,3 +1820,42 @@ if "$MINIAS" --target=aarch64 -o "$work/a64-ldgm-disabled.o" "$work/a64-ldgm-dis
     echo "disabled MTE2 accepted" >&2;exit 1
 fi
 echo 'MINIAS_A64_LONG_LOGICAL_LDGM=PASS GNU_byte_parity_and_negative_feature_checks'
+
+# ARM SHA256 H/H2 scalar-Q vs vector-S lane class, all four MTE tag
+# stores, and EL2 VPIDR are grouped by existing Target ISA families.
+# Independent GNU AS machine bytes, plus invalid bank/feature/range gates.
+cat > "$work/a64-linux-sha-mte-vpidr.s" <<'A64_KERNEL_SHA_MTE'
+.arch armv8.5-a+memtag+crypto
+.text
+mrs x0,vpidr_el2
+msr vpidr_el2,x1
+sha256h q24,q25,v22.4s
+sha256h2 q28,q29,v30.4s
+sha256su1 v0.4s,v1.4s,v2.4s
+stg x4,[x0],#((16))
+stg x1,[x2]
+stzg x1,[x2]
+st2g x3,[x4,#32]!
+stz2g x5,[x6,#-16]!
+A64_KERNEL_SHA_MTE
+"$MINIAS" --target=aarch64 -o "$work/a64-linux-sha-mte-mini.o" "$work/a64-linux-sha-mte-vpidr.s"
+"$AARCH64_AS" -o "$work/a64-linux-sha-mte-gnu.o" "$work/a64-linux-sha-mte-vpidr.s"
+"$AARCH64_OBJCOPY" -j .text -O binary "$work/a64-linux-sha-mte-mini.o" "$work/a64-linux-sha-mte-mini.bin"
+"$AARCH64_OBJCOPY" -j .text -O binary "$work/a64-linux-sha-mte-gnu.o" "$work/a64-linux-sha-mte-gnu.bin"
+cmp "$work/a64-linux-sha-mte-mini.bin" "$work/a64-linux-sha-mte-gnu.bin"
+for bad in 'sha256h v0.4s,v1.4s,v2.4s' \
+           'sha256h q0,q1,v2.2d' 'sha256h2 q0,q1,v2.2d' \
+           'stg w0,[x1]' 'st2g x0,[x1],#17' \
+           'stg x0,[x1,#4081]!'; do
+    printf '.arch armv8.5-a+memtag+crypto\n.text\n%s\n' "$bad" > "$work/a64-kernel-sha-mte-bad.s"
+    if "$MINIAS" --target=aarch64 -o "$work/a64-kernel-sha-mte-bad.o" "$work/a64-kernel-sha-mte-bad.s" >/dev/null 2>&1; then
+        echo "invalid SHA/MTE operand accepted: $bad" >&2;exit 1
+    fi
+done
+for disabled in 'sha256h q0,q1,v2.4s' 'stg x0,[x1]'; do
+    printf '.arch armv8-a\n.text\n%s\n' "$disabled" > "$work/a64-kernel-feature-bad.s"
+    if "$MINIAS" --target=aarch64 -o "$work/a64-kernel-feature-bad.o" "$work/a64-kernel-feature-bad.s" >/dev/null 2>&1; then
+        echo "disabled SHA/MTE feature accepted: $disabled" >&2;exit 1
+    fi
+done
+echo 'MINIAS_A64_SHA256H_MTE_TAGSTORE_VPIDR=PASS GNU_byte_parity_feature_and_bank'
