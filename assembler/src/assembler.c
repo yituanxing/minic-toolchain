@@ -1319,10 +1319,13 @@ static bool parse_absolute_primary(MiniAsAbsoluteExpressionParser *parser,
         return true;
     }
 
-    if(!minias_parse_number_literal(parser->cursor,&end,&number) ||
-       number>(uint64_t)INT64_MAX)return false;
+    if(!minias_parse_number_literal(parser->cursor,&end,&number))return false;
     parser->cursor=end;
-    *value=(int64_t)number;
+    /* GAS interprets a 64-bit hex mask in arithmetic as a two's-complement
+     * value (e.g. subtracting 0xffffffff80000000 adds 0x80000000).
+     * Avoid implementation-defined uint64->int64 casts. */
+    *value=number>(uint64_t)INT64_MAX?
+           -(int64_t)(UINT64_MAX-number)-1:(int64_t)number;
     return true;
 }
 
@@ -2297,6 +2300,30 @@ static char *strip_outer_parens(char *text) {
  * nested (symbol+addend) groups. Normalize a private copy only for data
  * relocation parsing: never mutate the stored statement or bypass the
  * Common typed Fixup path. The dominant plain-symbol path stays alloc-free. */
+/* One relocatable symbol plus an otherwise absolute GNU arithmetic tail.
+ * Resolve .set counters at their lexical DATA statement, not at final
+ * emit, and retain an ordinary typed SymbolExpr/ELF addend. */
+static bool parse_data_symbol_absolute_tail(MiniAs *as,const char *text,
+                                             MiniAsSymbolExpr *expr) {
+    const char *p=text,*begin;
+    char name[256];
+    size_t len;
+    int64_t addend;
+    while(isspace((unsigned char)*p))++p;
+    if(!absolute_symbol_start(*p))return false;
+    begin=p++;
+    while(absolute_symbol_continue(*p))++p;
+    len=(size_t)(p-begin);
+    if(len==0U || len>=sizeof(name))return false;
+    memcpy(name,begin,len);name[len]='\0';
+    while(isspace((unsigned char)*p))++p;
+    if((*p!='+' && *p!='-') ||
+       !minias_parse_symbol_addend(name,expr) ||
+       !evaluate_absolute_expression(as,p,&addend))return false;
+    expr->addend=addend;
+    return true;
+}
+
 static bool parse_data_symbol_addend(const char *text,
                                      MiniAsSymbolExpr *expr) {
     char *copy;
@@ -3080,7 +3107,8 @@ static bool add_data_stmt(MiniAs *as, const char *op, char *args, size_t line) {
                 bool arithmetic_shift=false;
                 bool supported =
                     ((width == 2U || width == 4U || width == 8U) &&
-                     parse_data_symbol_addend(trimmed, &expr)) ||
+                     (parse_data_symbol_addend(trimmed, &expr) ||
+                      parse_data_symbol_absolute_tail(as,trimmed,&expr))) ||
                     ((width == 2U || width == 4U || width == 8U) &&
                      (parse_symbol_minus_dot(trimmed, &expr) ||
                       parse_symbol_minus_dot_divisor(trimmed,
@@ -3144,12 +3172,39 @@ static bool add_data_stmt(MiniAs *as, const char *op, char *args, size_t line) {
             if(comma)*comma='\0';
             token=minias_trim(walk);
             selected=token;
-            if(data_references_mutable_set(as,token) &&
-               minias_parse_absolute_data_bits(as,token,&value)) {
-                (void)snprintf(numeric,sizeof(numeric),"%llu",
-                               (unsigned long long)value);
-                selected=numeric;
-                changed=true;
+            if(data_references_mutable_set(as,token)) {
+                MiniAsSymbolExpr reloc;
+                if(minias_parse_absolute_data_bits(as,token,&value)) {
+                    (void)snprintf(numeric,sizeof(numeric),"%llu",
+                                   (unsigned long long)value);
+                    selected=numeric;
+                    changed=true;
+                }else if(parse_data_symbol_absolute_tail(as,token,&reloc)) {
+                    char *reloc_snapshot=malloc(strlen(reloc.name)+32U);
+                    size_t needed;
+                    if(!reloc_snapshot) {
+                        free(copy);free(snapshot);
+                        minias_set_error(as,"out-of-memory:set-reloc-snapshot");
+                        return false;
+                    }
+                    needed=(size_t)snprintf(reloc_snapshot,
+                                           strlen(reloc.name)+32U,
+                                           "%s%+lld",reloc.name,
+                                           (long long)reloc.addend);
+                    if(needed>capacity-used-1U) {
+                        free(reloc_snapshot);free(copy);free(snapshot);
+                        minias_set_error(as,"set-reloc-snapshot-overflow");
+                        return false;
+                    }
+                    memcpy(out+used,reloc_snapshot,needed);
+                    used+=needed;
+                    free(reloc_snapshot);
+                    changed=true;
+                    if(!comma)break;
+                    out[used++]=',';
+                    walk=comma+1U;
+                    continue;
+                }
             }
             part=strlen(selected);
             if(part>capacity-used-1U) {
@@ -3622,7 +3677,8 @@ static bool emit_data_stmt(MiniAs *as, const MiniAsStmt *stmt) {
                     }
                 } else {
                     if ((width != 4U && width != 8U) ||
-                        !parse_data_symbol_addend(trimmed, &expr)) {
+                        !(parse_data_symbol_addend(trimmed,&expr) ||
+                          parse_data_symbol_absolute_tail(as,trimmed,&expr))) {
                         minias_set_error(as,
                                          "unsupported-expression:%s:%s:line=%zu",
                                          stmt->op,
