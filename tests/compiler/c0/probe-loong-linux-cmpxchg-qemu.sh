@@ -10,7 +10,7 @@ typedef unsigned long long u64;
 static volatile u32 value32=5;
 static volatile u64 value64=7;
 static volatile u32 valueSmall=0x12345678;
-u32 linux_cmpxchg32(u32 old,u32 newval) {
+u32 linux_cmpxchg32(u32 old,unsigned long newval) {
     u32 ret;
     volatile u32 *ptr=&value32;
     __asm__ __volatile__(
@@ -62,6 +62,39 @@ u32 linux_cmpxchg_small(u32 old, u32 replacement) {
       : "memory");
     return old32 & mask;
 }
+/* The original Linux __cmpxchg() is a GNU statement expression,
+ * not an isolated ASM statement. Both Core effects and its scalar
+ * result must survive a switch successor. */
+unsigned long linux_cmpxchg_switch(volatile void *ptr,unsigned long old,
+                                    unsigned long replacement,unsigned int size) {
+    switch(size) {
+    case 4:
+        return ({ __typeof((u32)old) __ret; __asm__ __volatile__(
+            "1:\t" "ll.w" "\t%0, %2\t\t# __cmpxchg_asm \n"
+            "\tbne\t%0, %z3, 2f\t\t\t\n"
+            "\tmove\t$t0, %z4\t\t\t\n"
+            "\t" "sc.w" "\t$t0, %1\t\t\t\t\n"
+            "\tbeqz\t$t0, 1b\t\t\t\t\n"
+            "2:\t\t\t\t\t\t\n"
+            "\tdbar 0x700\t\n"
+            : "=&r" (__ret), "=ZB" (*(volatile u32 *)ptr)
+            : "ZB" (*(volatile u32 *)ptr), "Jr" ((u32)old), "Jr" (replacement)
+            : "t0", "memory"); __ret; });
+    case 8:
+        return ({ __typeof((u64)old) __ret; __asm__ __volatile__(
+            "1:\t" "ll.d" "\t%0, %2\t\t# __cmpxchg_asm \n"
+            "\tbne\t%0, %z3, 2f\t\t\t\n"
+            "\tmove\t$t0, %z4\t\t\t\n"
+            "\t" "sc.d" "\t$t0, %1\t\t\t\t\n"
+            "\tbeqz\t$t0, 1b\t\t\t\t\n"
+            "2:\t\t\t\t\t\t\n"
+            "\tdbar 0x700\t\n"
+            : "=&r" (__ret), "=ZB" (*(volatile u64 *)ptr)
+            : "ZB" (*(volatile u64 *)ptr), "Jr" ((u64)old), "Jr" (replacement)
+            : "t0", "memory"); __ret; });
+    default: return 0;
+    }
+}
 int main(void) {
     if (linux_cmpxchg32(4,8)!=5||value32!=5) return 1;
     if (linux_cmpxchg32(5,8)!=5||value32!=8) return 2;
@@ -69,6 +102,8 @@ int main(void) {
     if (linux_cmpxchg64(7,9)!=7||value64!=9) return 4;
     if (linux_cmpxchg_small(0x77,0x9a)!=0x78||valueSmall!=0x12345678) return 5;
     if (linux_cmpxchg_small(0x78,0x9a)!=0x78||valueSmall!=0x1234569a) return 6;
+    if(linux_cmpxchg_switch(&value32,8,11,4)!=8||value32!=11)return 7;
+    if(linux_cmpxchg_switch(&value64,9,13,8)!=9||value64!=13)return 8;
     return 42;
 }
 SRC

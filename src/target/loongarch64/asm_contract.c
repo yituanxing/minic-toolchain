@@ -436,7 +436,12 @@ static bool loong_linux_cmpxchg_source(
            (output&&(e->value_category!=MINIC_VALUE_LVALUE||
                      minic_type_is_const(e->type)))||
            (memory&&e->value_category!=MINIC_VALUE_LVALUE)||
-           !loong_linux_cmpxchg_word(e->type,width))return false;
+           /* GNU Linux __cmpxchg(size=4) supplies unsigned long "new"
+            * with %z4, i.e. low 32 GPR bits. This is a width-qualified
+            * input, not an int-to-long ABI mismatch. */
+           (!loong_linux_cmpxchg_word(e->type,width) &&
+            !(form==1U && i==4U &&
+              loong_linux_cmpxchg_word(e->type,8U))))return false;
         contract->kinds[i]=memory?
             (output?MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT:
                     MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT):
@@ -1137,7 +1142,9 @@ static bool loong_linux_cmpxchg_emit(FILE *out,
             return false;
         type=fn->values[b[k].value].type;
         if((output||mem)&&!minic_type_pointee(type,&type))return false;
-        if(!loong_linux_cmpxchg_word(type,width))return false;
+        if(!loong_linux_cmpxchg_word(type,width) &&
+           !(form==1U && k==4U &&
+             loong_linux_cmpxchg_word(type,8U)))return false;
     }
     if(form==3U){
         /* out0 old32, out1 temp, out2 destination; input3 source,
