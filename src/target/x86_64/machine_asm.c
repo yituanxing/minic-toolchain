@@ -347,7 +347,7 @@ static bool emit_linux_gs_tied_alu(
     const MinicCoreStructuredInlineAsmOperand *b=
         ins->value.structured_inline_asm.operands;
     MinicType v;
-    size_t form_width, width, checked;
+    size_t form_width, width = 0U, checked;
     unsigned int form;
     bool sign;
     if(!out||!p||!t||!fn||!frame||!ins||!info||!b||
