@@ -4531,6 +4531,23 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
         if (macro != NULL) {
             return expand_macro_invocation(as, macro, args, line);
         }
+        /* GAS accepts a single macro argument next to the mnemonic as
+         * MACRO(symbol), where the parentheses are LITERAL argument text.
+         * Linux x86 STACK_FRAME_NON_STANDARD(clear_bhb_loop) uses exactly
+         * this spelling. Do not strip the parentheses (GNU does not), or
+         * turn an unknown ISA opcode with brackets into a macro. */
+        if(args[0]=='\0' && op[0]!='.') {
+            char *open=strchr(op,'(');
+            size_t length=strlen(op);
+            if(open!=NULL && open>op && length>1U &&
+               op[length-1U]==')') {
+                *open='\0';
+                macro=find_macro(as,op);
+                if(macro!=NULL)
+                    return expand_macro_invocation(as,macro,open,line);
+                *open='(';
+            }
+        }
     }
 
     if (strcmp(op, ".set") == 0 || strcmp(op, ".equ") == 0 ||
