@@ -2907,3 +2907,46 @@ for target in x86_64 loongarch64; do
  cmp "$work/$target-diffshift-mini.bin" "$work/$target-diffshift-gnu.bin"
 done
 echo 'MINIAS_COMMON_FORWARD_SYMBOL_SHIFT=PASS GNU_x86_Loong_data_bytes'
+
+# Empty GNU positional comma slots must be retained; GHASH uses the
+# empty 't' PMULL suffix in the middle of nine parameters, while other
+# calls set t=2. Applying whitespace tokenization must not swallow it.
+cat > "$work/gnu-empty-macro-slots.s" <<'GNU_EMPTY_SLOTS'
+.data
+.macro slots a:req,b,c:req
+.byte \a
+.ifb \b
+.byte 0x5a
+.else
+.byte \b
+.endif
+.byte \c
+.endm
+slots 1,,3
+slots 4, 9,6
+slots 7, ,8
+.macro list a,b,c
+.byte \a
+.ifb \b
+.byte 0x44
+.endif
+.ifb \c
+.byte 0x55
+.endif
+.endm
+list 1,,
+GNU_EMPTY_SLOTS
+for target in x86_64 loongarch64; do
+ "$MINIAS" --target="$target" -o "$work/$target-empty-mini.o" "$work/gnu-empty-macro-slots.s"
+ if [ "$target" = x86_64 ]; then
+  as --64 -o "$work/$target-empty-gnu.o" "$work/gnu-empty-macro-slots.s"
+  objcopy -j .data -O binary "$work/$target-empty-mini.o" "$work/$target-empty-mini.bin"
+  objcopy -j .data -O binary "$work/$target-empty-gnu.o" "$work/$target-empty-gnu.bin"
+ else
+  "$LOONGAS" -mabi=lp64d -o "$work/$target-empty-gnu.o" "$work/gnu-empty-macro-slots.s"
+  "$LOONGCOPY" -j .data -O binary "$work/$target-empty-mini.o" "$work/$target-empty-mini.bin"
+  "$LOONGCOPY" -j .data -O binary "$work/$target-empty-gnu.o" "$work/$target-empty-gnu.bin"
+ fi
+ cmp "$work/$target-empty-mini.bin" "$work/$target-empty-gnu.bin"
+done
+echo 'MINIAS_COMMON_EMPTY_MACRO_SLOT=PASS GNU_two_targets_middle_trailing_required'

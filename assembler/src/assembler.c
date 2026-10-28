@@ -4995,6 +4995,7 @@ static size_t split_macro_arguments(char *text,
     size_t count = 0U;
     char *cursor = text;
     size_t needed;
+    bool last_was_comma = false;
 
     if (!macro_has_top_level_comma(text)) {
         /* GNU GAS treats a one-parameter arithmetic macro invocation
@@ -5012,7 +5013,7 @@ static size_t split_macro_arguments(char *text,
         return split_macro_tokens(text, tokens, capacity);
     }
 
-    while (*cursor != '\0') {
+    for (;;) {
         char *start;
         char *p;
         int depth = 0;
@@ -5022,6 +5023,13 @@ static size_t split_macro_arguments(char *text,
             ++cursor;
         }
         if (*cursor == '\0') {
+            /* Explicit trailing comma is one more EMPTY positional
+             * argument. Do not synthesize it without a delimiter. */
+            if(last_was_comma) {
+                if(segment_count==sizeof(segments)/sizeof(segments[0]))
+                    return SIZE_MAX;
+                segments[segment_count++]=cursor;
+            }
             break;
         }
         if (segment_count == sizeof(segments) / sizeof(segments[0])) {
@@ -5062,11 +5070,11 @@ static size_t split_macro_arguments(char *text,
             }
             ++p;
         }
-        if (*p == ',') {
-            *p++ = '\0';
-        }
+        last_was_comma=*p==',';
+        if(last_was_comma)*p++ = '\0';
         segments[segment_count++] = minias_trim(start);
         cursor = p;
+        if(!last_was_comma)break;
     }
 
     needed = expected_count > segment_count
@@ -5098,12 +5106,12 @@ static size_t split_macro_arguments(char *text,
             segment = rest;
             --needed;
         }
-        if (*segment != '\0') {
-            if (count == capacity) {
-                return SIZE_MAX;
-            }
-            tokens[count++] = minias_trim(segment);
-        }
+        /* Blank comma-delimited arguments occupy a slot. Critical for
+         * real Linux GHASH __pmull_p8_tail ...,8b,,sh1,... where the
+         * deliberately empty 't' suffix must NOT consume sh1 and turn
+         * the ISA mnemonic into invalid 'pmullsh1'. */
+        if (count == capacity) return SIZE_MAX;
+        tokens[count++] = minias_trim(segment);
     }
     return count;
 }
@@ -5462,7 +5470,8 @@ static bool expand_macro_invocation(MiniAs *as,
         assigned[index]=true;
     }
     for(i=0U;i<macro->param_count;++i)
-        if(!assigned[i] && macro->params[i].required) {
+        if((!assigned[i] || !*values[i]) &&
+           macro->params[i].required) {
             minias_set_error(as,"missing-macro-argument:%s:%s:line=%zu",
                              macro->name,macro->params[i].name,line);
             free(vararg_buffer);free(copy);return false;

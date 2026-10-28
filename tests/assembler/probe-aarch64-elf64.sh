@@ -2446,3 +2446,21 @@ for invalid in 'uzp1 v0.1d,v1.1d,v2.1d' \
     fi
 done
 echo 'MINIAS_A64_UZP_ZIP_TRN=PASS GNU_11_words_and_6_invalid'
+
+# Linux GHASH's pmull\t macro suffix is optionally blank or '2'.
+# This catches loss of the fifth position in 9-argument macro invocations.
+cat > "$work/a64-ghash-pmull-suffix.s" <<'GHASH_SUFFIX'
+.arch armv8-a+crypto
+.text
+.macro ghash_tail rq,ad,bd,nb,t,b1,b2,b3,b4
+pmull\t v10.8h,v11.\nb,\bd
+.endm
+ghash_tail v8.8h,v11.8b,v12.8b,8b,,sh1,sh2,sh3,sh4
+ghash_tail v8.8h,v11.16b,v12.16b,16b,2,sh1,sh2,sh3,sh4
+GHASH_SUFFIX
+"$MINIAS" --target=aarch64 -o "$work/a64-ghash-suffix-mini.o" "$work/a64-ghash-pmull-suffix.s"
+"$AARCH64_AS" -o "$work/a64-ghash-suffix-gnu.o" "$work/a64-ghash-pmull-suffix.s"
+"$AARCH64_OBJCOPY" -j .text -O binary "$work/a64-ghash-suffix-mini.o" "$work/a64-ghash-suffix-mini.bin"
+"$AARCH64_OBJCOPY" -j .text -O binary "$work/a64-ghash-suffix-gnu.o" "$work/a64-ghash-suffix-gnu.bin"
+cmp "$work/a64-ghash-suffix-mini.bin" "$work/a64-ghash-suffix-gnu.bin"
+echo 'MINIAS_A64_GHASH_EMPTY_SUFFIX=PASS GNU_PMULL_and_PMULL2_native_bytes'
