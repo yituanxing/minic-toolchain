@@ -429,6 +429,7 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
         {"movzwl",0,0x1b7U,false},{"movzwq",0,0x1b7U,true},
         /* MOVSX is identical ModR/M ownership; only 0F BE/BF differs. */
         {"movsbl",0,0x1beU,false},{"movsbq",0,0x1beU,true},
+        {"movsbw",0,0x1beU,false},{"movzbw",0,0x1b6U,false},
         {"movswl",0,0x1bfU,false},{"movswq",0,0x1bfU,true},
         {"movslq",0,0x63U,true},
         /* Explicit scalar widths, all reuse typed ModR/M, SIB and Fixup. */
@@ -504,6 +505,53 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
                 normalized=*s;normalized.op=suffixed_op;s=&normalized;
             }
         }
+    }
+    /* Typed group-9 entropy generators, 0F C7 /6 or /7.  GNU permits
+     * implicit destination width from the GPR, or explicit w/l/q. */
+    if(!strncmp(s->op,"rdrand",6U) || !strncmp(s->op,"rdseed",6U)) {
+        size_t len=strlen(s->op);
+        unsigned reg;
+        bool word=false,wide=false;
+        if(len!=6U && len!=7U)goto invalid;
+        if(x64_register16(s->args,&reg))word=true;
+        else if(!x64_register(s->args,&reg,&wide))goto invalid;
+        if(len==7U && s->op[6]!=(word?'w':wide?'q':'l'))goto invalid;
+        m->opcode=X64_UNARY;m->count=1U;
+        m->encoding=UINT32_C(0xc7)|
+            ((!strncmp(s->op,"rdrand",6U)?6U:7U)<<8U)|
+            UINT32_C(0x8000)|(word?UINT32_C(0x2000):0U);
+        m->operands[0].kind=MINIAS_MC_REGISTER;
+        m->operands[0].reg=reg;
+        m->operands[0].register_64=wide;
+        goto done;
+    }
+    /* 0F C3 /r non-temporal integer store: the existing memory encoder
+     * owns REX/SIB/segment and common semantic ELF fixups. */
+    if(!strcmp(s->op,"movnti") || !strcmp(s->op,"movntil") ||
+       !strcmp(s->op,"movntiq")) {
+        MiniAsMCMemory mem;
+        unsigned reg;
+        bool wide;
+        if(!x64_args2(s->args,src,dst) ||
+           !x64_register(src,&reg,&wide) ||
+           (!strcmp(s->op,"movntil") && wide) ||
+           (!strcmp(s->op,"movntiq") && !wide) ||
+           !x64_is_mem_candidate(dst) ||
+           !x64_parse_base_memory(dst,&mem))goto invalid;
+        m->operands[1].memory=malloc(sizeof(mem));
+        if(!m->operands[1].memory) {
+            free(mem.symbol);free(m);
+            minias_set_error(as,"out-of-memory:x86-movnti");
+            return false;
+        }
+        *m->operands[1].memory=mem;
+        m->opcode=X64_REG_MEMORY;m->count=2U;
+        m->encoding=UINT32_C(0x100)|UINT32_C(0xc3);
+        m->operands[0].kind=MINIAS_MC_REGISTER;
+        m->operands[0].reg=reg;
+        m->operands[0].register_64=wide;
+        m->operands[1].kind=MINIAS_MC_MEMORY;
+        goto done;
     }
     /*
      * GNU prefetch/cache-maintenance family is memory-only. Encode it via
@@ -1079,11 +1127,14 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
         if((!strcmp(s->op,"movzbl") || !strcmp(s->op,"movzbq") ||
             !strcmp(s->op,"movzwl") || !strcmp(s->op,"movzwq") ||
             !strcmp(s->op,"movsbl") || !strcmp(s->op,"movsbq") ||
+             !strcmp(s->op,"movsbw") || !strcmp(s->op,"movzbw") ||
             !strcmp(s->op,"movswl") || !strcmp(s->op,"movswq")) &&
            ((s->op[4]=='b' && (x64_register8(src,&first) ||
                                x64_high_register8(src,&first))) ||
             (s->op[4]=='w' && x64_register16(src,&first))) &&
-           x64_register(dst,&second,&wd) && wd==(s->op[5]=='q')) {
+           ((s->op[5]=='w' && x64_register16(dst,&second)) ||
+             (s->op[5]!='w' && x64_register(dst,&second,&wd) &&
+              wd==(s->op[5]=='q')))) {
             bool legacy_high=s->op[4]=='b' &&
                 (!strcmp(src,"%ah") || !strcmp(src,"%ch") ||
                  !strcmp(src,"%dh") || !strcmp(src,"%bh"));
@@ -1093,7 +1144,8 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
             m->encoding=(s->op[4]=='b'?
                          (s->op[3]=='z'?0xb6U:0xbeU):
                          (s->op[3]=='z'?0xb7U:0xbfU))|
-                        (legacy_high?0x800U:0U);
+                        (legacy_high?0x800U:0U)|
+                         (s->op[5]=='w'?0x400U:0U);
             m->operands[0].kind=MINIAS_MC_REGISTER;
             m->operands[0].reg=first;
             m->operands[1].kind=MINIAS_MC_REGISTER;
@@ -1878,7 +1930,8 @@ static bool x64_measure(MiniAs *as,const MiniAsStmt *s,uint32_t *size) {
             unsigned r=m->operands[0].reg;
             bool rex=m->operands[0].register_64 || r>=8U ||
                      (byte && r>=4U && !high);
-            *size=2U+(word?1U:0U)+(rex?1U:0U);return true;
+            *size=2U+(word?1U:0U)+(rex?1U:0U)+
+                  ((m->encoding&UINT32_C(0x8000))?1U:0U);return true;
         }
         case X64_BSWAP:
             *size=2U+(m->operands[0].register_64 ||
@@ -1897,7 +1950,7 @@ static bool x64_measure(MiniAs *as,const MiniAsStmt *s,uint32_t *size) {
                    ((m->encoding&0x200U) && m->operands[0].reg>=4U)?1U:0U);
             return true;
         case X64_MOVZX_REG:
-            *size=3U+((!(m->encoding&0x800U) &&
+            *size=3U+((m->encoding&0x400U)?1U:0U)+((!(m->encoding&0x800U) &&
                          (((m->encoding&0xffU)==0xb6U ||
                            (m->encoding&0xffU)==0xbeU) &&
                           m->operands[0].reg>=4U)) ||
@@ -2107,6 +2160,7 @@ static bool x64_encode(MiniAs *as,const MiniAsStmt *s) {
                 !(m->encoding&UINT32_C(0x4000))))
                 code[n++]=(unsigned char)(0x40U |
                     (m->operands[0].register_64?8U:0U)|(r>>3U));
+            if(m->encoding&UINT32_C(0x8000))code[n++]=0x0fU;
             code[n++]=(unsigned char)(m->encoding&0xffU);
             code[n++]=(unsigned char)(0xc0U|
                 (((m->encoding>>8U)&7U)<<3U)|(r&7U));
@@ -2147,6 +2201,7 @@ static bool x64_encode(MiniAs *as,const MiniAsStmt *s) {
             break;
         case X64_MOVZX_REG:
             r=m->operands[0].reg;d=m->operands[1].reg;
+            if(m->encoding&0x400U)code[n++]=0x66U;
             if((!(m->encoding&0x800U) &&
                 ((m->encoding&0xffU)==0xb6U ||
                  (m->encoding&0xffU)==0xbeU) && r>=4U) ||

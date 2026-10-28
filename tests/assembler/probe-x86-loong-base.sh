@@ -1625,6 +1625,44 @@ cmp "$work/x86-u64-mini.bin" "$work/x86-u64-gnu.bin"
 "$LOONGCOPY" -j .data -O binary "$work/la-u64-mini.o" "$work/la-u64-mini.bin"
 "$LOONGCOPY" -j .data -O binary "$work/la-u64-gnu.o" "$work/la-u64-gnu.bin"
 cmp "$work/la-u64-mini.bin" "$work/la-u64-gnu.bin"
+
+# Independent GNU byte and relocation oracle for typed x86 GPR instructions.
+cat >"$work/x86-extra-isa.s" <<'X86_EXTRA_ISA'
+.text
+    rdrand %eax
+    rdrand %r8
+    rdrandw %ax
+    rdseed %r11d
+    rdseedq %r9
+    rdseedw %cx
+    movntil %eax,(%rdi)
+    movntiq %r8,16(%rbp)
+    movnti %r9d,ext_global(%rip)
+    movsbw %al,%dx
+    movsbw %ah,%cx
+    movsbw (%rax),%dx
+    movzbw %al,%bx
+    movzbw (%rdi),%cx
+X86_EXTRA_ISA
+"$MINIAS" --target=x86_64 -o "$work/x86-extra-mini.o" "$work/x86-extra-isa.s"
+as --64 -o "$work/x86-extra-gnu.o" "$work/x86-extra-isa.s"
+objcopy -j .text -O binary "$work/x86-extra-mini.o" "$work/x86-extra-mini.bin"
+objcopy -j .text -O binary "$work/x86-extra-gnu.o" "$work/x86-extra-gnu.bin"
+cmp "$work/x86-extra-mini.bin" "$work/x86-extra-gnu.bin"
+readelf -Wr "$work/x86-extra-mini.o" > "$work/x86-extra-mini-rel.txt"
+readelf -Wr "$work/x86-extra-gnu.o" > "$work/x86-extra-gnu-rel.txt"
+grep -q 'R_X86_64_PC32.*ext_global - 4' "$work/x86-extra-mini-rel.txt"
+grep -q 'R_X86_64_PC32.*ext_global - 4' "$work/x86-extra-gnu-rel.txt"
+for bad in 'rdrand %al' 'rdseedq %eax' 'movntiq %eax,(%rdi)' \
+           'movnti %rax,%rbx' 'movsbw %al,%rax' 'movzbw %ah,%r8w'; do
+    printf '.text\\n%s\\n' "$bad" > "$work/x86-extra-invalid.s"
+    if "$MINIAS" --target=x86_64 -o "$work/x86-extra-invalid.o" \
+        "$work/x86-extra-invalid.s" >/dev/null 2>"$work/x86-extra-invalid.err"; then
+        echo "invalid x86 instruction accepted: $bad" >&2
+        exit 1
+    fi
+done
+echo 'MINIAS_X86_EXTRA_ISA=PASS GNU_bytes_and_PC32 RDRAND_RDSEED_MOVNTI_MOVSX_MOVZX'
 echo 'MINIAS_COMMON_NUMERIC_U64=PASS GNU_GAS_x86_LA64_exact_data_bytes'
 echo 'MINIAS_X86_SEGMENTED_INDIRECT=PASS GNU_AS_text_and_relocations segment_base_index_abs_rip=true indirect_memory_call_jmp=true absolute_symbol32S=true'
 echo 'MINIAS_TWO_TARGET_ORACLE=PASS x86_GNU_bytes=equal loong_GNU_bytes=equal ELF_machine=correct lp64d_v1=0x43 CET_endbr64=1 ALU_imm8_imm32=1 x86_ModRM_SIB_disp=1 x86_test_cmp_alu_memory=1 x86_scaled_index_SIB=1 LA_jr=1 LA_scaled_ptr14=1 LA_imm12_shift_upper20=1 invalid=reject'
