@@ -37,7 +37,17 @@ jobs:
           SRC_DOT
           build/release/bin/minic-as --target=x86_64 -o /tmp/mc-dot-mini.o /tmp/mc-dot.s
           as --64 -o /tmp/mc-dot-gnu.o /tmp/mc-dot.s
-          cmp <(objcopy -j .text -O binary /tmp/mc-dot-mini.o /dev/stdout) <(objcopy -j .text -O binary /tmp/mc-dot-gnu.o /dev/stdout)
+          objcopy -j .text -O binary /tmp/mc-dot-mini.o /tmp/mc-mini.bin
+          objcopy -j .text -O binary /tmp/mc-dot-gnu.o /tmp/mc-gnu.bin
+          if ! cmp /tmp/mc-mini.bin /tmp/mc-gnu.bin; then
+            echo 'MiniAS MCExpr .-base bytes:' >&2
+            od -An -tx1 /tmp/mc-mini.bin >&2
+            echo 'GNU GAS .-base bytes:' >&2
+            od -An -tx1 /tmp/mc-gnu.bin >&2
+            readelf -rW /tmp/mc-dot-mini.o >&2
+            readelf -rW /tmp/mc-dot-gnu.o >&2
+            exit 1
+          fi
       - name: GNU AS byte equality, ELF ABI, and ISA error gates
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
