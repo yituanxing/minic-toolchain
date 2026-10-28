@@ -63,6 +63,30 @@ external_probe:
     mrs x2, sp_el0
     mrs x7, tpidr_el0
     mrs x0, tpidr_el1
+    // GNU privileged ARMv8 sysregs: read/write permission encoded by ISA.
+    mrs x0, CurrentEL
+    mrs x0, sctlr_el1
+    msr sctlr_el1, x2
+    mrs x3, dczid_el0
+    mrs x4, cntfrq_el0
+    mrs x5, ttbr0_el1
+    msr ttbr0_el1, x6
+    mrs x7, vbar_el2
+    msr vbar_el2, x8
+    mrs x9, id_aa64dfr0_el1
+    mrs x10, esr_el2
+    mrs x11, far_el1
+    msr cntvoff_el2, x12
+    msr vtcr_el2, x13
+    mrs x14, tcr_el1
+    msr tcr_el1, x15
+    mrs x16, mair_el1
+    msr mair_el1, x17
+    mrs x18, cntvct_el0
+    mrs x19, spsr_el1
+    msr spsr_el1, x20
+    mrs x21, osdlr_el1
+    msr osdlr_el1, x22
     mrs x5, tpidr_el2
     msr tpidr_el2, x6
     msr tpidr_el1, x1
@@ -690,6 +714,12 @@ for bad_source in 'ldxr x0, [x1,#4]' 'stxr x0, x1, [x2]' \
                   'ldrsw w0,[x1,#:lo12:fg_console]' \
                   'ldrsw x0,[w1,#:lo12:fg_console]' \
                   'adds sp,x1,#0,lsl 12' \
+                  'msr CurrentEL, x0' \
+                  'msr dczid_el0, x1' \
+                  'msr id_aa64dfr0_el1, x2' \
+                  'msr cntvct_el0, x3' \
+                  'mrs w0, sctlr_el1' \
+                  'mrs x0, made_up_el3' \
                   'yield #1' \
                   'hint #.Lnever_defined' \
                   '.equ .Lbad_hint,128; hint #.Lbad_hint' \
