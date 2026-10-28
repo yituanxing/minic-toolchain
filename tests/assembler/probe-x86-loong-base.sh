@@ -134,6 +134,15 @@ entry_x:
     btcl $1, ext_global(%rip)
     btsq $15, __cpu_online_mask(%rip)
     # Mandatory F3 register and memory POPCNT must equal GNU byte stream.
+    # High 8-bit legacy register IDs, including MOV and ALU; no REX.
+    movb %al, %dh
+    movb %cl, %ah
+    movb %dh, %cl
+    movb %ah, %bh
+    addb %dh, %al
+    orb %ch, %bl
+    subb %ah, %dl
+    xorb %bh, %ah
     popcntq %rax, %r8
     popcntl %eax, %ecx
     popcntq 8(%rsp), %r9
@@ -822,6 +831,10 @@ for bad in            'popcntq %eax,%rax' \
            'btsq $256,%rax' \
            'btq $-1,%rax' \
            'btrq $256,(%rax)' \
+           'movb %ah,%r8b' \
+           'movb %r9b,%ch' \
+           'addb %spl,%ah' \
+           'subb %ah,%sil' \
            'adcl %rax,%eax' \
            'negb %eax' \
            'negw %eax' \

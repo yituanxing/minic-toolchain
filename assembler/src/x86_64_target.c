@@ -29,8 +29,8 @@ static bool x64_register(const char *text, unsigned *reg, bool *wide) {
     return false;
 }
 
-/* GNU low-byte registers; high AH/CH/DH/BH require no-REX grammar and
- * are deliberately excluded until that separate legacy encoding is added. */
+/* Low-byte registers are separate from legacy AH/CH/DH/BH. The latter
+ * cannot coexist with any REX-required byte register. */
 /* Source-width-specific registers belong to x86, not Common MCInst. */
 static bool x64_register16(const char *text,unsigned *reg) {
     static const char *const names[16]={
@@ -771,17 +771,32 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
             m->operands[1].reg=second;
             goto done;
         }
-        if(x64_register8(src,&first) && x64_register8(dst,&second)) {
-            for(i=0U;i<sizeof(byteop)/sizeof(byteop[0]);++i)
-                if(strcmp(s->op,byteop[i].op)==0) {
+        /* Legacy 8-bit high registers share ModR/M IDs 4..7 with SPL,
+         * BPL, SIL, DIL; any REX byte makes them mean the low registers.
+         * Keep the high flags Target-owned and enforce this ISA constraint. */
+        {
+            bool highsrc=x64_high_register8(src,&first);
+            bool highdst=x64_high_register8(dst,&second);
+            bool srcreg=highsrc||x64_register8(src,&first);
+            bool dstreg=highdst||x64_register8(dst,&second);
+            if(srcreg && dstreg) {
+                bool rexneeded=first>=8U || second>=8U ||
+                               (first>=4U && !highsrc) ||
+                               (second>=4U && !highdst);
+                for(i=0U;i<sizeof(byteop)/sizeof(byteop[0]);++i) {
+                    if(strcmp(s->op,byteop[i].op)!=0)continue;
+                    if((highsrc || highdst) && rexneeded)goto invalid;
                     m->opcode=X64_BINARY8;m->count=2U;
-                    m->encoding=byteop[i].opcode;
+                    m->encoding=byteop[i].opcode|
+                                (highsrc?UINT32_C(0x1000):0U)|
+                                (highdst?UINT32_C(0x2000):0U);
                     m->operands[0].kind=MINIAS_MC_REGISTER;
                     m->operands[0].reg=first;
                     m->operands[1].kind=MINIAS_MC_REGISTER;
                     m->operands[1].reg=second;
                     goto done;
                 }
+            }
         }
         if(!strcmp(s->op,"movslq") &&
            x64_register(src,&first,&ws) && !ws &&
@@ -1387,8 +1402,13 @@ static bool x64_measure(MiniAs *as,const MiniAsStmt *s,uint32_t *size) {
         case X64_SETCC:
             *size=3U+(m->operands[0].reg>=4U?1U:0U);return true;
         case X64_BINARY8:
-            *size=2U+(m->operands[0].reg>=4U||
-                       m->operands[1].reg>=4U?1U:0U);return true;
+            *size=2U+((m->operands[0].reg>=8U ||
+                        m->operands[1].reg>=8U ||
+                        (m->operands[0].reg>=4U &&
+                         !(m->encoding&UINT32_C(0x1000))) ||
+                        (m->operands[1].reg>=4U &&
+                         !(m->encoding&UINT32_C(0x2000))))?1U:0U);
+            return true;
         case X64_MOVSLQ: *size=3U;return true;
         case X64_CMOV_REG:
             *size=3U+(m->operands[0].register_64 ||
@@ -1570,7 +1590,9 @@ static bool x64_encode(MiniAs *as,const MiniAsStmt *s) {
             break;
         case X64_BINARY8:
             r=m->operands[0].reg;d=m->operands[1].reg;
-            if(r>=4U||d>=4U)
+            if(r>=8U||d>=8U||
+               (r>=4U && !(m->encoding&UINT32_C(0x1000))) ||
+               (d>=4U && !(m->encoding&UINT32_C(0x2000))))
                 code[n++]=(unsigned char)(0x40U|((r>>3U)<<2U)|(d>>3U));
             code[n++]=(unsigned char)m->encoding;
             code[n++]=(unsigned char)(0xc0U|((r&7U)<<3U)|(d&7U));
