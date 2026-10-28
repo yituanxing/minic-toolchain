@@ -2,6 +2,7 @@
 # GNU cross-check: long conditional branch forces relayout of forward DATA
 # fragment with a dot-relative symbolic size; output uses frozen final
 # typed .space / .fill values with no emission-time source parse.
+# Keep the GNU RV64 branch target 2-byte aligned: .data size is 12 bytes.
 set -Eeuo pipefail
 : "${MINIAS:?MiniAS required}"
 : "${ARCH:?Architecture missing}"
@@ -33,7 +34,7 @@ far:
 .data
 gap_start:
     .fill 3,2,0x1234
-    .skip 5,0x67
+    .skip 6,0x67
 gap_end:
 SRC
 MINIAS_TRACE_RELAYOUT=1 "$MINIAS" "${mini[@]}" -o "$work/mini.o" "$work/mc.s" 2>"$work/trace"
