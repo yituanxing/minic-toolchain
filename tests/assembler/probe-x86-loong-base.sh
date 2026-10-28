@@ -3190,12 +3190,22 @@ for flavor in mini gnu; do
  grep -q 'FDE' "$work/x86-eh-$flavor.frames"
 done
 cmp "$work/x86-eh-mini.bin" "$work/x86-eh-gnu.bin"
-if ! cmp "$work/x86-eh-mini.reloc" "$work/x86-eh-gnu.reloc"; then
- echo "GNU EH reloc structured differential:" >&2
- diff -u "$work/x86-eh-gnu.reloc" "$work/x86-eh-mini.reloc" >&2 || true
- readelf -Ws "$work/x86-eh-mini.o" >&2
- readelf -Wr "$work/x86-eh-mini.o" >&2
- exit 1
+# ELF may relocate against its exact local CFI anchor instead of
+# GNU's canonical section symbol. These differ in symbol table identity,
+# not in runtime S+A-P, only when the local anchor has .text shndx=1 and
+# zero value. Require those independent ELF facts before normalization.
+if ! cmp -s "$work/x86-eh-mini.reloc" "$work/x86-eh-gnu.reloc"; then
+ readelf -Ws "$work/x86-eh-mini.o" |
+   awk '$8==".Lminias_cfi_0" && $2=="0000000000000000" &&
+        $5=="LOCAL" && $7=="1" { found=1 } END { exit !found }'
+ readelf -SW "$work/x86-eh-mini.o" |
+   grep -Eq '^  \\[ *1\\] \\.text[[:space:]]'
+ sed 's/\.Lminias_cfi_0/.text/' "$work/x86-eh-mini.reloc" >
+   "$work/x86-eh-mini-canonical.reloc"
+ cmp "$work/x86-eh-mini-canonical.reloc" "$work/x86-eh-gnu.reloc" || {
+  diff -u "$work/x86-eh-gnu.reloc" "$work/x86-eh-mini.reloc" >&2 || true
+  exit 1
+ }
 fi
 [ "$(wc -l < "$work/x86-eh-mini.reloc")" -eq 1 ]
 echo 'MINIAS_X86_REAL_EH_FRAME=PASS GNU_CIE_FDE_bytes_and_PC32_RELA'
