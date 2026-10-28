@@ -190,6 +190,23 @@ entry_x:
     sal $3, %rax
     shl %cl, %r10
     ror $3, %r8
+    # GNU Linux >48-character symbol displacements and SHLD/SHRD group.
+    movq __tracepoint_x86_fpu_xstate_check_failed+72(%rip), %rbx
+    movq __tracepoint_intel_frontbuffer_invalidate+72(%rip), %r8
+    movq ext_global+48(%rdi,%r8,4), %r11
+    shrdq %rdx, %rax
+    shrdq $32, %rdx, %rax
+    shrdl %eax, %edx
+    shrdw $7, %cx, %dx
+    shldq %r8, %r9
+    shldq $63, %r14, %r15
+    shldl $17, %esi, %edi
+    shldw %ax, %dx
+    cwtl
+    stosl
+    stosq
+    prefetchw (%r12)
+    prefetchwt1 ext_global(%rip)
     # GNU 0F18 /0..3 and 0FAE /6..7 memory-cache hint family.
     prefetchnta (%rax)
     prefetcht0 boot_cpu_data(%rip)
@@ -1008,6 +1025,12 @@ for bad in            'popcntq %eax,%rax' \
            'clflush %r8' \
            'clflushopt $4' \
            'clwb %rcx' \
+           'shrdq %eax,%rdx' \
+           'shldq $4,%eax,%rdx' \
+           'shrdw $256,%cx,%dx' \
+           'shrdq $3,%r12' \
+           'prefetchw %rax' \
+           'prefetchwt1 $12' \
            'adcl %rax,%eax' \
            'negb %eax' \
            'negw %eax' \

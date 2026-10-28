@@ -8,7 +8,7 @@
 
 /* A first, fail-closed GNU AT&T SysV x86-64 target. All common expression,
  * symbol, section, fragment, and ELF handling lives outside this file. */
-enum { X64_ZERO = 1, X64_REG_BINARY, X64_STACK, X64_MOV_IMM32, X64_ENDBR64, X64_ALU_IMM, X64_REG_MEMORY, X64_BRANCH, X64_IMM_MEMORY, X64_MOVQ_IMMREG, X64_MOVABS_IMMREG, X64_SETCC, X64_BINARY8, X64_MOVSLQ, X64_MOVZX_REG, X64_SHIFT_IMM, X64_TEST8_IMM, X64_PUSH_IMM, X64_CMOV_REG, X64_SHIFT_CL, X64_UNARY, X64_INDIRECT_REG, X64_BSWAP, X64_TEST_IMM_REG, X64_IMUL_IMM, X64_BIT_IMMREG };
+enum { X64_ZERO = 1, X64_REG_BINARY, X64_STACK, X64_MOV_IMM32, X64_ENDBR64, X64_ALU_IMM, X64_REG_MEMORY, X64_BRANCH, X64_IMM_MEMORY, X64_MOVQ_IMMREG, X64_MOVABS_IMMREG, X64_SETCC, X64_BINARY8, X64_MOVSLQ, X64_MOVZX_REG, X64_SHIFT_IMM, X64_TEST8_IMM, X64_PUSH_IMM, X64_CMOV_REG, X64_SHIFT_CL, X64_UNARY, X64_INDIRECT_REG, X64_BSWAP, X64_TEST_IMM_REG, X64_IMUL_IMM, X64_BIT_IMMREG, X64_DOUBLE_SHIFT };
 
 static bool x64_register(const char *text, unsigned *reg, bool *wide) {
     static const char *const names64[16] = {
@@ -108,7 +108,11 @@ static bool x64_cond_code(const char *suffix, unsigned *cc) {
     return false;
 }
 
-static bool x64_args2(const char *args, char a[48], char b[48]) {
+/* x86 GCC tracepoint references exceed 48 characters; this is an operand
+ * token capacity, not the GNU symbol-name limit. Preserve fail-closed caps. */
+#define X64_OPERAND_CAP 320U
+static bool x64_args2(const char *args, char a[X64_OPERAND_CAP],
+                      char b[X64_OPERAND_CAP]) {
     /* AT&T memory forms can contain commas inside SIB parentheses.
      * Split operands once at top-level, not once per comma token. */
     const char *p, *comma = NULL, *right;
@@ -132,7 +136,7 @@ static bool x64_args2(const char *args, char a[48], char b[48]) {
     while (isspace((unsigned char)*right)) ++right;
     m=strlen(right);
     while (m && isspace((unsigned char)right[m-1U])) --m;
-    if (!n || !m || n>=48U || m>=48U) return false;
+    if (!n || !m || n>=X64_OPERAND_CAP || m>=X64_OPERAND_CAP) return false;
     memcpy(a,args,n);a[n]='\0';
     memcpy(b,right,m);b[m]='\0';
     return true;
@@ -148,7 +152,7 @@ static bool x64_parse_base_memory(const char *text, MiniAsMCMemory *out) {
      * whitespace *inside* identifiers so invalid input cannot become
      * an accidentally legal symbol/register. Shared expressions remain
      * owned by the Common symbol/fixup engine. */
-    char compact[128];
+    char compact[X64_OPERAND_CAP];
     size_t used=0U;
     const char *scan;
     for(scan=text;*scan;++scan) {
@@ -168,7 +172,7 @@ static bool x64_parse_base_memory(const char *text, MiniAsMCMemory *out) {
     text=compact;
     const char *open,*close,*p;
     unsigned segment_space=0U;
-    char regs[3][48], dispbuf[48], *end;
+    char regs[3][48], dispbuf[X64_OPERAND_CAP], *end;
     size_t dlen;
     unsigned count=0U, base=0U, index=0U;
     unsigned long scale=1UL;
@@ -302,7 +306,8 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
         {"cpuid",{0x0f,0xa2},2},
         {"rdtsc",{0x0f,0x31},2},{"rdtscp",{0x0f,0x01,0xf9},3},
         {"rdmsr",{0x0f,0x32},2},{"wrmsr",{0x0f,0x30},2},
-        {"cltd",{0x99},1},{"sfence",{0x0f,0xae,0xf8},3},
+        {"cltd",{0x99},1},{"cwtl",{0x98},1},
+        {"stosl",{0xab},1},{"stosq",{0x48,0xab},2},{"sfence",{0x0f,0xae,0xf8},3},
         {"lfence",{0x0f,0xae,0xe8},3},{"mfence",{0x0f,0xae,0xf0},3},
         {"swapgs",{0x0f,0x01,0xf8},3},
         {"wbinvd",{0x0f,0x09},2},{"invd",{0x0f,0x08},2},
@@ -399,7 +404,7 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
     MiniAsMCInst *m=calloc(1U,sizeof(*m)+3U*sizeof(MiniAsMCOperand));
     unsigned i, rs, rd;
     bool ws, wd;
-    char src[48],dst[48];
+    char src[X64_OPERAND_CAP],dst[X64_OPERAND_CAP];
     MiniAsStmt normalized, *const original=s;
     char suffixed_op[24];
     if (!m) {minias_set_error(as,"out-of-memory:x86_64-mcinst");return false;}
@@ -467,6 +472,8 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
             {"prefetcht0",0x18U,1U,false},
             {"prefetcht1",0x18U,2U,false},
             {"prefetcht2",0x18U,3U,false},
+            {"prefetchw",0x0dU,1U,false},
+            {"prefetchwt1",0x0dU,2U,false},
             {"clflush",0xaeU,7U,false},
             {"clflushopt",0xaeU,7U,true},
             {"clwb",0xaeU,6U,true}
@@ -492,6 +499,52 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
             m->operands[1].kind=MINIAS_MC_MEMORY;
             goto done;
         }
+    }
+    /* SHRD/SHLD reg-reg signed imm8 or implicit CL are the same typed
+     * ModR/M 0F AC/AD and 0F A4/A5 ISA group. This shares ordinary
+     * GPR register identification and does not fork Common ELF handling. */
+    if(!strcmp(s->op,"shrdq") || !strcmp(s->op,"shrdl") ||
+       !strcmp(s->op,"shrdw") || !strcmp(s->op,"shldq") ||
+       !strcmp(s->op,"shldl") || !strcmp(s->op,"shldw")) {
+        const char *comma;
+        bool use_imm=false,src_wide=false,dst_wide=false;
+        unsigned src_reg,dst_reg;
+        uint64_t imm=0U;
+        const bool word=s->op[4]=='w',qword=s->op[4]=='q';
+        const bool shrd=s->op[2]=='r';
+        if(s->args[0]=='$') {
+            char literal[48];
+            size_t length;
+            comma=strchr(s->args,',');
+            if(!comma)goto invalid;
+            length=(size_t)(comma-s->args);
+            if(length<2U || length>=sizeof(literal))goto invalid;
+            memcpy(literal,s->args,length);literal[length]='\0';
+            if(!minias_eval_u64_expression(literal+1U,&imm) ||
+               (int64_t)imm < -256 || (int64_t)imm > 255)
+                goto invalid;
+            if(!x64_args2(comma+1U,src,dst))goto invalid;
+            use_imm=true;
+        }else if(!x64_args2(s->args,src,dst))goto invalid;
+        if(word) {
+            if(!x64_register16(src,&src_reg) ||
+               !x64_register16(dst,&dst_reg))goto invalid;
+        }else if(!x64_register(src,&src_reg,&src_wide) ||
+                 !x64_register(dst,&dst_reg,&dst_wide) ||
+                 src_wide!=dst_wide || src_wide!=qword)goto invalid;
+        m->opcode=X64_DOUBLE_SHIFT;m->count=3U;
+        m->encoding=(shrd?(use_imm?0xacU:0xadU):
+                            (use_imm?0xa4U:0xa5U))|
+                    (word?0x400U:0U)|(use_imm?0x200U:0U);
+        m->operands[0].kind=MINIAS_MC_REGISTER;
+        m->operands[0].reg=src_reg;
+        m->operands[0].register_64=qword;
+        m->operands[1].kind=MINIAS_MC_REGISTER;
+        m->operands[1].reg=dst_reg;
+        m->operands[1].register_64=qword;
+        m->operands[2].kind=MINIAS_MC_IMMEDIATE;
+        m->operands[2].immediate=imm;
+        goto done;
     }
     if (!strcmp(s->op,"endbr64") && !*s->args) {
         m->opcode=X64_ENDBR64;m->encoding=UINT32_C(0xfa1e0ff3);
@@ -545,7 +598,7 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
        (!strcmp(s->op,"imulq") || !strcmp(s->op,"imull") ||
         !strcmp(s->op,"imulw") || !strcmp(s->op,"imul"))) {
         const char *comma=strchr(s->args,',');
-        char immtext[48],from[48],to[48];
+        char immtext[48],from[X64_OPERAND_CAP],to[X64_OPERAND_CAP];
         size_t length;
         unsigned imul_src,imul_dst;
         bool imul_ws=false,imul_wd=false;
@@ -561,7 +614,7 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
         if(strchr(comma+1,',')!=NULL) {
             if(!x64_args2(comma+1,from,to))goto invalid;
         }else {
-            char tmp[48];
+            char tmp[X64_OPERAND_CAP];
             if(!x64_args2(s->args,tmp,to))goto invalid;
             memcpy(from,to,strlen(to)+1U);
         }
@@ -648,7 +701,7 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
     if(!strcmp(s->op,"inb") || !strcmp(s->op,"inw") ||
        !strcmp(s->op,"inl") || !strcmp(s->op,"outb") ||
        !strcmp(s->op,"outw") || !strcmp(s->op,"outl")) {
-        char from[48],to[48];
+        char from[X64_OPERAND_CAP],to[X64_OPERAND_CAP];
         bool input=s->op[0]=='i';
         /* INB/INW/INL and OUTB/OUTW/OUTL differ in mnemonic length. */
         char width=s->op[strlen(s->op)-1U];
@@ -1580,6 +1633,13 @@ static bool x64_measure(MiniAs *as,const MiniAsStmt *s,uint32_t *size) {
     if (!m) {minias_set_error(as,"missing-x86_64-mcinst");return false;}
     switch(m->opcode) {
         case X64_ZERO: *size=(uint32_t)m->operands[0].immediate;return true;
+        case X64_DOUBLE_SHIFT:
+            *size=3U+((m->encoding&0x400U)?1U:0U)+
+                  ((m->encoding&0x200U)?1U:0U)+
+                  (m->operands[0].register_64 ||
+                   m->operands[0].reg>=8U ||
+                   m->operands[1].reg>=8U?1U:0U);
+            return true;
         case X64_ENDBR64: *size=4U;return true;
         case X64_SETCC:
             *size=3U+(m->operands[0].reg>=4U?1U:0U);return true;
@@ -1761,6 +1821,22 @@ static bool x64_encode(MiniAs *as,const MiniAsStmt *s) {
     unsigned char code[16];size_t n=0;unsigned r,d;
     if (!m) {minias_set_error(as,"missing-x86_64-mcinst");return false;}
     switch(m->opcode) {
+        case X64_DOUBLE_SHIFT: {
+            unsigned src_reg=m->operands[0].reg;
+            unsigned dst_reg=m->operands[1].reg;
+            if(m->encoding&0x400U)code[n++]=0x66U;
+            if(m->operands[0].register_64 || src_reg>=8U || dst_reg>=8U)
+                code[n++]=(unsigned char)(0x40U|
+                    (m->operands[0].register_64?8U:0U)|
+                    ((src_reg>>3U)<<2U)|(dst_reg>>3U));
+            code[n++]=0x0fU;
+            code[n++]=(unsigned char)(m->encoding&0xffU);
+            code[n++]=(unsigned char)(0xc0U|
+                    ((src_reg&7U)<<3U)|(dst_reg&7U));
+            if(m->encoding&0x200U)
+                code[n++]=(unsigned char)m->operands[2].immediate;
+            break;
+        }
         case X64_ZERO: {
             unsigned i;for(i=0U;i<(unsigned)m->operands[0].immediate;++i)
                 code[n++]=(unsigned char)(m->encoding>>(8U*i));
