@@ -1,13 +1,12 @@
 #!/usr/bin/env bash
-# 160 independent conditional branches to a late subsection. This forces
-# multiple realloc() steps for the long-branch owner array and triggers the
-# legacy O(N^2) membership scan. Verify exact GNU bytes and persistent
-# symbol anchors; no test-specific assembler behavior is allowed.
+# Stress 160 x86-64 far branches. Stable symbols and force-expanded branches
+# exercise Common MCLayout's persistent anchor graph and O(1) membership.
 set -Eeuo pipefail
 : "${MINIAS:?MiniAS executable required}"
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 trap 'echo "RELAX_STRESS_FAIL command=$BASH_COMMAND" >&2; test ! -f "$work/trace" || cat "$work/trace" >&2' ERR
+
 {
     echo '.text'
     echo '.globl branch_entry'
@@ -21,52 +20,36 @@ trap 'echo "RELAX_STRESS_FAIL command=$BASH_COMMAND" >&2; test ! -f "$work/trace
     echo 'branch_exit:'
     echo 'nop'
 } >"$work/stress.s"
+
 MINIAS_TRACE_RELAYOUT=1 "$MINIAS" --target=x86_64 \
     -o "$work/mini.o" "$work/stress.s" 2>"$work/trace"
 as --64 -o "$work/gnu.o" "$work/stress.s"
 objcopy -j .text -O binary "$work/mini.o" "$work/mini.bin"
 objcopy -j .text -O binary "$work/gnu.o" "$work/gnu.bin"
 cmp "$work/mini.bin" "$work/gnu.bin"
-readelf -Ws "$work/mini.o" | grep ' branch_entry
-python3 - "$work/trace" <<'PY'
-import pathlib,re,sys
-s=pathlib.Path(sys.argv[1]).read_text()
-if 'minias-fragment-relayout:inplace-passes=' not in s:
-    raise SystemExit('Expected in-place branch relaxation: '+s)
-m=re.search(r'minias-fragment-graph:anchors_built=1 relayouts=(\d+) branches=(\d+) reparse=0',s)
-if not m or int(m.group(2))<100:
-    raise SystemExit('Expected cached graph and 100+ branch expansions: '+s)
-print('MINIAS_MCLAYOUT_STRESS=PASS branches='+m.group(2)+' relayouts='+m.group(1))
-PY
- >"$work/mini.symbol"
-readelf -Ws "$work/gnu.o" | grep ' branch_entry
-python3 - "$work/trace" <<'PY'
-import pathlib,re,sys
-s=pathlib.Path(sys.argv[1]).read_text()
-if 'minias-fragment-relayout:inplace-passes=' not in s:
-    raise SystemExit('Expected in-place branch relaxation: '+s)
-m=re.search(r'minias-fragment-graph:anchors_built=1 relayouts=(\d+) branches=(\d+) reparse=0',s)
-if not m or int(m.group(2))<100:
-    raise SystemExit('Expected cached graph and 100+ branch expansions: '+s)
-print('MINIAS_MCLAYOUT_STRESS=PASS branches='+m.group(2)+' relayouts='+m.group(1))
-PY
- >"$work/gnu.symbol"
-python3 - "$work/mini.symbol" "$work/gnu.symbol" <<'PY_SYMBOL'
-import sys
-def size(path):
-    columns=open(path,encoding="utf-8").read().split()
-    return (int(columns[1],16),int(columns[2]))
-if size(sys.argv[1])!=size(sys.argv[2]):
-    raise SystemExit("MCLayout symbol value/size disagree with GNU")
-print("MINIAS_MCLAYOUT_SYMBOL_SIZE=PASS exact_GNU_value_and_size")
-PY_SYMBOL
-python3 - "$work/trace" <<'PY'
-import pathlib,re,sys
-s=pathlib.Path(sys.argv[1]).read_text()
-if 'minias-fragment-relayout:inplace-passes=' not in s:
-    raise SystemExit('Expected in-place branch relaxation: '+s)
-m=re.search(r'minias-fragment-graph:anchors_built=1 relayouts=(\d+) branches=(\d+) reparse=0',s)
-if not m or int(m.group(2))<100:
-    raise SystemExit('Expected cached graph and 100+ branch expansions: '+s)
-print('MINIAS_MCLAYOUT_STRESS=PASS branches='+m.group(2)+' relayouts='+m.group(1))
+
+readelf -Ws "$work/mini.o" >"$work/mini.sym"
+readelf -Ws "$work/gnu.o" >"$work/gnu.sym"
+python3 - "$work/mini.sym" "$work/gnu.sym" "$work/trace" <<'PY'
+from pathlib import Path
+import re,sys
+
+def symbol(path):
+    for line in Path(path).read_text().splitlines():
+        columns=line.split()
+        if len(columns)>=8 and columns[-1]=='branch_entry' and columns[1].endswith(':') is False:
+            return int(columns[1],16),int(columns[2])
+    raise SystemExit('No exported symbol branch_entry in '+path)
+actual=symbol(sys.argv[1])
+gnu=symbol(sys.argv[2])
+if actual!=gnu:
+    raise SystemExit(f'MCLayout symbol value/size mismatch MiniAS={actual} GNU={gnu}')
+trace=Path(sys.argv[3]).read_text()
+if 'minias-fragment-relayout:inplace-passes=' not in trace:
+    raise SystemExit('Missing in-place relaxation trace '+trace)
+match=re.search(r'minias-fragment-graph:anchors_built=1 relayouts=(\d+) branches=(\d+) reparse=0',trace)
+if not match or int(match.group(2))<100:
+    raise SystemExit('Expected 100+ expanded conditional branches: '+trace)
+print('MINIAS_MCLAYOUT_STRESS=PASS branches='+match.group(2)+' relayouts='+match.group(1))
+print('MINIAS_MCLAYOUT_SYMBOL_SIZE=PASS GNU_exact')
 PY
