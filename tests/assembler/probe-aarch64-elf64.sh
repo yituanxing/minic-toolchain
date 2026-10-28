@@ -2782,3 +2782,37 @@ if "$MINIAS" --target=aarch64 -o "$work/a64-direct-literal-far.o" "$work/a64-dir
  echo 'A64 out-of-range local literal PCREL19 accepted' >&2; exit 1
 fi
 echo 'MINIAS_A64_DIRECT_LITERAL=PASS GNU_text_and_cross_section_RELA_plus_far_reject'
+
+
+# Original Linux 6.6.143 entry.S trampoline uses ADD Xt,Xt,#(1b-start+4).
+# Common only folds two defined anchors from one subsection; the Target
+# still validates the 12-bit ADD/SUB/CMP immediate and encodes typed MCInst.
+cat > "$work/a64-trampoline-diff.s" <<'A64_TRAMP_DIFF'
+.text
+.Lvector_start:
+nop
+.Llast_instruction:
+add x30,x30,#(.Llast_instruction - .Lvector_start + 4)
+sub x0,x0,#(.Llast_instruction - .Lvector_start + 4)
+cmp x30,#(.Llast_instruction - .Lvector_start + 4)
+ret
+A64_TRAMP_DIFF
+"$MINIAS" --target=aarch64 -o "$work/a64-trampoline-mini.o" "$work/a64-trampoline-diff.s"
+"$AARCH64_AS" -o "$work/a64-trampoline-gnu.o" "$work/a64-trampoline-diff.s"
+"$AARCH64_OBJCOPY" -j .text -O binary "$work/a64-trampoline-mini.o" "$work/a64-trampoline-mini.bin"
+"$AARCH64_OBJCOPY" -j .text -O binary "$work/a64-trampoline-gnu.o" "$work/a64-trampoline-gnu.bin"
+cmp "$work/a64-trampoline-mini.bin" "$work/a64-trampoline-gnu.bin"
+cat > "$work/a64-trampoline-invalid.s" <<'A64_TRAMP_INVALID'
+.text
+.Ltext:
+nop
+.data
+.Lother:
+.quad 0
+.text
+add x0,x0,#(.Ltext - .Lother + 4)
+A64_TRAMP_INVALID
+if "$MINIAS" --target=aarch64 -o "$work/a64-trampoline-invalid.o" "$work/a64-trampoline-invalid.s" >/dev/null 2>&1; then
+ echo 'cross-section ADD immediate incorrectly folded' >&2;exit 1
+fi
+echo 'MINIAS_A64_COMMON_TRAMPOLINE_DIFF=PASS GNU_3_ALU_label_delta_and_cross_section_fail_closed'
