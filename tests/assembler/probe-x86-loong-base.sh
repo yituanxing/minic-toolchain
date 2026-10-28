@@ -3352,3 +3352,25 @@ objcopy -j .text -O binary "$work/x86-mutable-fill-gnu.o" "$work/x86-mutable-fil
 cmp "$work/x86-mutable-fill-mini.bin" "$work/x86-mutable-fill-gnu.bin"
 test "$(wc -c < "$work/x86-mutable-fill-mini.bin")" -eq 39
 echo 'MINIAS_COMMON_MUTABLE_FILL=PASS GNU_3_lexical_set_positions_39_machine_bytes'
+
+
+# Regression for GNU subsection output ordering with equal final offsets.
+# A source-earlier subsection-1 fragment must NOT overtake the subsection-0
+# zero-width .org after subsection base relocation.
+cat > "$work/x86-subsection-origin.s" <<'X86_SUBSECTION_ORIGIN'
+.text
+.subsection 1
+.byte 0xcc
+.subsection 0
+.Lbegin:
+.space 4
+1: .org .Lbegin + 4
+.org 1b
+X86_SUBSECTION_ORIGIN
+"$MINIAS" --target=x86_64 -o "$work/x86-subsection-origin-mini.o" "$work/x86-subsection-origin.s"
+as --64 -o "$work/x86-subsection-origin-gnu.o" "$work/x86-subsection-origin.s"
+objcopy -j .text -O binary "$work/x86-subsection-origin-mini.o" "$work/x86-subsection-origin-mini.bin"
+objcopy -j .text -O binary "$work/x86-subsection-origin-gnu.o" "$work/x86-subsection-origin-gnu.bin"
+cmp "$work/x86-subsection-origin-mini.bin" "$work/x86-subsection-origin-gnu.bin"
+test "$(wc -c < "$work/x86-subsection-origin-mini.bin")" -eq 5
+echo 'MINIAS_COMMON_SUBSECTION_BOUNDARY_X86=PASS GNU_section0_org_precedes_source_earlier_section1_data'
