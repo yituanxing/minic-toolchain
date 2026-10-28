@@ -713,19 +713,40 @@ static bool aarch64_linux_uaccess_bic_template(
     normalized[n] = '\0';
     return strcmp(normalized, expected) == 0;
 }
-static bool aarch64_daif_msr_template(const char *text, size_t len) {
-    static const char expected[] = "msrdaif,%x0";
-    char compact[64]; size_t i, n = 0U;
-    if (!text || !len || len >= sizeof(compact)) return false;
+/* Original Linux arm64 sysreg.h write_sysreg(): a privileged hardware
+ * effect with one 64-bit rZ input. Keep the exact named EL0/EL1/EL2
+ * register allowlist and reject arbitrary substituted GNU ASM. Source and
+ * machine emission consult this one target ISA contract. */
+static const char *aarch64_linux_msr_register(const char *text, size_t len) {
+    static const char *const registers[] = {
+        "daif", "ttbr0_el1", "ttbr1_el1", "tcr_el1", "sctlr_el1",
+        "contextidr_el1", "cpacr_el1", "vbar_el1", "mdscr_el1",
+        "osdlr_el1", "oslar_el1", "cntkctl_el1",
+        "cntp_ctl_el0", "cntp_cval_el0", "cntv_ctl_el0",
+        "cntv_cval_el0", "tpidr_el0", "tpidrro_el0",
+        "tpidr_el2", "hcr_el2", "cptr_el2", "vtcr_el2",
+        "vttbr_el2"
+    };
+    char compact[96];
+    size_t i, n = 0U;
+    if (!text || !len || len >= sizeof(compact)) return NULL;
     for (i = 0U; i < len; ++i) {
         const char c = text[i];
-        if (c == '\r' || c == '\n' || c == ';') return false;
+        if (c == '\r' || c == '\n' || c == ';' || c == '\0') return NULL;
         if (c == ' ' || c == '\t') continue;
-        if (n + 1U >= sizeof(compact)) return false;
+        if (n + 1U >= sizeof(compact)) return NULL;
         compact[n++] = c;
     }
     compact[n] = '\0';
-    return strcmp(compact, expected) == 0;
+    for (i = 0U; i < sizeof(registers) / sizeof(registers[0]); ++i) {
+        const size_t rlen = strlen(registers[i]);
+        if (n == rlen + sizeof("msr,%x0") - 1U &&
+            memcmp(compact, "msr", 3U) == 0 &&
+            memcmp(compact + 3U, registers[i], rlen) == 0 &&
+            memcmp(compact + 3U + rlen, ",%x0", 4U) == 0)
+            return registers[i];
+    }
+    return NULL;
 }
 static bool constraint(const MinicInlineAsmOperand *op, const char *word) {
     size_t n = strlen(word);
@@ -1505,7 +1526,7 @@ bool minic_aarch64_qualify_inline_asm(
         src->output_count == 0U && src->input_count == 1U && src->inputs &&
         src->clobber_count == 0U && src->register_clobber_count == 0U &&
         !src->has_memory_clobber && src->label_count == 0U &&
-        aarch64_daif_msr_template(src->template_text, src->template_length) &&
+        aarch64_linux_msr_register(src->template_text, src->template_length) != NULL &&
         constraint(&src->inputs[0], "rZ")) {
         expr = minic_c0_program_expression(program, src->inputs[0].expression);
         if (expr && minic_type_unqualified(expr->type, &plain) &&
@@ -1730,7 +1751,7 @@ bool minic_aarch64_emit_qualified_structured_asm(
         }
         if (operand != NULL &&
             operand[0].kind == MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT &&
-            aarch64_daif_msr_template(info->template_text, info->template_length)) {
+            aarch64_linux_msr_register(info->template_text, info->template_length)) {
             if (!info->is_volatile || info->is_goto ||
                 info->has_memory_clobber || info->register_clobber_count ||
                 operand[0].operand_index != 0U ||
@@ -1742,9 +1763,14 @@ bool minic_aarch64_emit_qualified_structured_asm(
                  !minic_type_equal(fn->values[operand[0].value].type,
                                    minic_type_unsigned_long_long())))
                 return false;
+            /* ABI scratch x9 holds the original rZ operand. These
+             * privileged instructions are GNU-AS-only verified, never
+             * executed under unprivileged QEMU user mode. */
             return fprintf(out, "  ldr x9, [sp, #%zu]\n"
-                                "  msr daif, x9\n",
-                           (size_t)operand[0].value * 8U) >= 0;
+                                "  msr %s, x9\n",
+                           (size_t)operand[0].value * 8U,
+                           aarch64_linux_msr_register(
+                               info->template_text, info->template_length)) >= 0;
         }
         if (operand != NULL &&
             operand[0].kind == MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT) {

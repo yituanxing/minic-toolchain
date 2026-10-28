@@ -80,6 +80,7 @@ on:
       - 'tests/compiler/c0/probe-x86-linux-ordered-tsc.sh'
       - 'tests/compiler/c0/probe-x86-linux-static-record-zero.sh'
       - 'tests/compiler/c0/probe-aarch64-linux-cmpwait.sh'
+      - 'tests/compiler/c0/probe-aarch64-linux-sysreg-writes.sh'
       - 'tests/compiler/c0/probe-rv64-extended-float-native.sh'
       - 'tests/compiler/c0/probe-rv64-pic-glibc-got.sh'
       - 'tests/compiler/c0/probe-rv64i-strict-isa.sh'
@@ -344,4 +345,5 @@ jobs:
           bash tests/compiler/c0/probe-x86-linux-ordered-tsc.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
           bash tests/compiler/c0/probe-x86-linux-static-record-zero.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
           MINIC_SOURCE_ONLY=1 bash tests/compiler/c0/probe-aarch64-linux-cmpwait.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
+          MINIC_SOURCE_ONLY=1 bash tests/compiler/c0/probe-aarch64-linux-sysreg-writes.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
 

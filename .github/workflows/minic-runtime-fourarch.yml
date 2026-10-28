@@ -42,6 +42,7 @@ on:
       - "src/target/common/direct_call_plan.c"
       - "tests/compiler/c0/probe-aarch64-linux-pointer-release-acquire.sh"
       - "tests/compiler/c0/probe-aarch64-linux-acquire-load.sh"
+      - "tests/compiler/c0/probe-aarch64-linux-sysreg-writes.sh"
       - "tests/compiler/c0/probe-direct-lp64-weak-section-qemu.sh"
       - "tests/compiler/c0/probe-lp64-core-record-snapshot-qemu.sh"
       - "tests/compiler/c0/probe-aarch64-linux-zero-operand-hints.sh"
@@ -561,6 +562,12 @@ jobs:
           set -Eeuo pipefail
           bash tests/compiler/c0/probe-x86-linux-ordered-tsc.sh "$GITHUB_WORKSPACE/build/runtime-ci/bin/minic-cc"
           bash tests/compiler/c0/probe-x86-linux-static-record-zero.sh "$GITHUB_WORKSPACE/build/runtime-ci/bin/minic-cc"
+      - name: GNU 6.6.143 privileged AArch64 write_sysreg ISA-only compile oracle
+        if: matrix.target == 'aarch64'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          bash tests/compiler/c0/probe-aarch64-linux-sysreg-writes.sh "$GITHUB_WORKSPACE/build/runtime-ci/bin/minic-cc"
       - name: Original GNU AArch64 exclusive CMPWAIT memory hardware path
         if: matrix.target == 'aarch64'
         shell: bash
