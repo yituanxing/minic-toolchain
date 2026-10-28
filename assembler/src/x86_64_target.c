@@ -8,7 +8,7 @@
 
 /* A first, fail-closed GNU AT&T SysV x86-64 target. All common expression,
  * symbol, section, fragment, and ELF handling lives outside this file. */
-enum { X64_ZERO = 1, X64_REG_BINARY, X64_STACK, X64_MOV_IMM32, X64_ENDBR64, X64_ALU_IMM, X64_REG_MEMORY, X64_BRANCH, X64_IMM_MEMORY, X64_MOVQ_IMMREG, X64_MOVABS_IMMREG, X64_SETCC, X64_BINARY8, X64_MOVSLQ, X64_MOVZX_REG, X64_SHIFT_IMM, X64_TEST8_IMM, X64_PUSH_IMM, X64_CMOV_REG, X64_SHIFT_CL, X64_UNARY, X64_INDIRECT_REG, X64_BSWAP, X64_TEST_IMM_REG, X64_IMUL_IMM, X64_BIT_IMMREG, X64_DOUBLE_SHIFT };
+enum { X64_ZERO = 1, X64_REG_BINARY, X64_STACK, X64_MOV_IMM32, X64_ENDBR64, X64_ALU_IMM, X64_REG_MEMORY, X64_BRANCH, X64_IMM_MEMORY, X64_MOVQ_IMMREG, X64_MOVABS_IMMREG, X64_SETCC, X64_BINARY8, X64_MOVSLQ, X64_MOVZX_REG, X64_SHIFT_IMM, X64_TEST8_IMM, X64_PUSH_IMM, X64_CMOV_REG, X64_SHIFT_CL, X64_UNARY, X64_INDIRECT_REG, X64_BSWAP, X64_TEST_IMM_REG, X64_IMUL_IMM, X64_BIT_IMMREG, X64_DOUBLE_SHIFT, X64_SYSTEM_MOVE };
 
 static bool x64_register(const char *text, unsigned *reg, bool *wide) {
     static const char *const names64[16] = {
@@ -111,6 +111,32 @@ static bool x64_cond_code(const char *suffix, unsigned *cc) {
 /* x86 GCC tracepoint references exceed 48 characters; this is an operand
  * token capacity, not the GNU symbol-name limit. Preserve fail-closed caps. */
 #define X64_OPERAND_CAP 320U
+static bool x64_system_register(const char *s,unsigned *number,unsigned *kind) {
+    static const struct {const char *name;unsigned reg;} segments[]={
+        {"es",0U},{"cs",1U},{"ss",2U},{"ds",3U},{"fs",4U},{"gs",5U}
+    };
+    size_t i;
+    if(!s || *s++!='%')return false;
+    for(i=0U;i<sizeof(segments)/sizeof(segments[0]);++i)
+        if(!strcmp(s,segments[i].name)) {
+            *number=segments[i].reg;*kind=0U;return true;
+        }
+    if((s[0]=='c'&&s[1]=='r') || (s[0]=='d'&&s[1]=='b')) {
+        bool control=s[0]=='c';
+        unsigned reg=0U;
+        const char *p=s+2U;
+        if(!*p)return false;
+        for(;*p;++p) {
+            if(*p<'0' || *p>'9')return false;
+            reg=reg*10U+(unsigned)(*p-'0');
+            if(reg>15U)return false;
+        }
+        if(control?!(reg==0U||reg==2U||reg==3U||reg==4U||reg==8U):
+                   reg>7U)return false;
+        *kind=control?1U:2U;*number=reg;return true;
+    }
+    return false;
+}
 static bool x64_args2(const char *args, char a[X64_OPERAND_CAP],
                       char b[X64_OPERAND_CAP]) {
     /* AT&T memory forms can contain commas inside SIB parentheses.
@@ -546,6 +572,49 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
         m->operands[2].immediate=imm;
         goto done;
     }
+    /* GNU .code64 stack-memory aliases reuse existing Group-5 /6 and
+     * Group-1A /0 ModR/M pipeline. */
+    if((!strcmp(s->op,"push") || !strcmp(s->op,"pop")) &&
+       x64_is_mem_candidate(s->args) && s->args[0]!='$') {
+        normalized=*s;
+        normalized.op=!strcmp(s->op,"push")?"pushq":"popq";
+        s=&normalized;
+    }
+    /* Linux entry and KVM control/debug/segment GPR transfers use one
+     * retained ISA-typed ModR/M instruction. No Common encoder changes. */
+    if((!strcmp(s->op,"mov") || !strcmp(s->op,"movq") ||
+        !strcmp(s->op,"movl") || !strcmp(s->op,"movw")) &&
+       x64_args2(s->args,src,dst)) {
+        unsigned sys=0U,kind=0U,gpr=0U;
+        bool sys_source=x64_system_register(src,&sys,&kind);
+        bool sys_dest=false,gpr64=false,gpr16=false;
+        if(!sys_source)sys_dest=x64_system_register(dst,&sys,&kind);
+        if(sys_source || sys_dest) {
+            const char *gp=sys_source?dst:src;
+            bool gpr_ok=x64_register(gp,&gpr,&gpr64);
+            if(!gpr_ok) {
+                gpr_ok=x64_register16(gp,&gpr);
+                gpr16=gpr_ok;
+            }
+            if(!gpr_ok || (kind!=0U && (gpr16 || !gpr64)) ||
+               (kind==0U && !sys_source && sys==1U) ||
+               (!strcmp(s->op,"movw") && !gpr16) ||
+               (!strcmp(s->op,"movl") && (gpr16 || gpr64)) ||
+               (!strcmp(s->op,"movq") && (gpr16 || (!gpr64 && kind!=0U))))
+                goto invalid;
+            m->opcode=X64_SYSTEM_MOVE;m->count=2U;
+            m->encoding=(kind==0U?(sys_source?0x8cU:0x8eU):
+                         kind==1U?(sys_source?0x20U:0x22U):
+                                   (sys_source?0x21U:0x23U))|
+                        (kind==0U?0U:0x100U)|
+                        (kind==0U && gpr16 && sys_source?0x400U:0U);
+            m->operands[0].kind=MINIAS_MC_REGISTER;
+            m->operands[0].reg=sys;
+            m->operands[1].kind=MINIAS_MC_REGISTER;
+            m->operands[1].reg=gpr;
+            goto done;
+        }
+    }
     if (!strcmp(s->op,"endbr64") && !*s->args) {
         m->opcode=X64_ENDBR64;m->encoding=UINT32_C(0xfa1e0ff3);
         m->count=0U;goto done;
@@ -706,8 +775,23 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
         /* INB/INW/INL and OUTB/OUTW/OUTL differ in mnemonic length. */
         char width=s->op[strlen(s->op)-1U];
         const char *acc=width=='b'?"%al":width=='w'?"%ax":"%eax";
-        if(!x64_args2(s->args,from,to) ||
-           strcmp(input?from:to,"%dx") ||
+        if(!x64_args2(s->args,from,to))goto invalid;
+        if((input?from:to)[0]=='$' &&
+           !strcmp(input?to:from,acc)) {
+            uint64_t port;
+            if(!minias_eval_u64_expression((input?from:to)+1U,&port)
+               || port>255U)goto invalid;
+            m->opcode=X64_ZERO;
+            m->encoding=width=='w'?UINT32_C(0x66):0U;
+            m->encoding|=(input?(width=='b'?UINT32_C(0xe4):
+                                          UINT32_C(0xe5)):
+                                  (width=='b'?UINT32_C(0xe6):
+                                          UINT32_C(0xe7)))<<(width=='w'?8U:0U);
+            m->encoding|=(uint32_t)port<<(width=='w'?16U:8U);
+            m->operands[0].immediate=width=='w'?3U:2U;
+            goto done;
+        }
+        if(strcmp(input?from:to,"%dx") ||
            strcmp(input?to:from,acc))goto invalid;
         m->opcode=X64_ZERO;
         m->encoding=width=='w'?UINT32_C(0x66):0U;
@@ -1633,6 +1717,12 @@ static bool x64_measure(MiniAs *as,const MiniAsStmt *s,uint32_t *size) {
     if (!m) {minias_set_error(as,"missing-x86_64-mcinst");return false;}
     switch(m->opcode) {
         case X64_ZERO: *size=(uint32_t)m->operands[0].immediate;return true;
+        case X64_SYSTEM_MOVE:
+            *size=2U+((m->encoding&0x100U)?1U:0U)+
+                  ((m->encoding&0x400U)?1U:0U)+
+                  (m->operands[0].reg>=8U ||
+                   m->operands[1].reg>=8U?1U:0U);
+            return true;
         case X64_DOUBLE_SHIFT:
             *size=3U+((m->encoding&0x400U)?1U:0U)+
                   ((m->encoding&0x200U)?1U:0U)+
@@ -1821,6 +1911,18 @@ static bool x64_encode(MiniAs *as,const MiniAsStmt *s) {
     unsigned char code[16];size_t n=0;unsigned r,d;
     if (!m) {minias_set_error(as,"missing-x86_64-mcinst");return false;}
     switch(m->opcode) {
+        case X64_SYSTEM_MOVE: {
+            unsigned sys=m->operands[0].reg,gpr=m->operands[1].reg;
+            if(m->encoding&0x400U)code[n++]=0x66U;
+            if(sys>=8U || gpr>=8U)
+                code[n++]=(unsigned char)(0x40U|
+                    ((sys>>3U)<<2U)|(gpr>>3U));
+            if(m->encoding&0x100U)code[n++]=0x0fU;
+            code[n++]=(unsigned char)m->encoding;
+            code[n++]=(unsigned char)(0xc0U|
+                ((sys&7U)<<3U)|(gpr&7U));
+            break;
+        }
         case X64_DOUBLE_SHIFT: {
             unsigned src_reg=m->operands[0].reg;
             unsigned dst_reg=m->operands[1].reg;

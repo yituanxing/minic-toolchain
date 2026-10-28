@@ -190,6 +190,27 @@ entry_x:
     sal $3, %rax
     shl %cl, %r10
     ror $3, %r8
+    # Linux kernel CR/DR/segment register transfer and PIO forms.
+    mov %cr2,%r13
+    mov %cr3,%rax
+    mov %rax,%cr3
+    mov %rax,%db7
+    movq %cr0,%r15
+    mov %r10,%cr8
+    mov %cr8,%r9
+    mov %ss,%eax
+    mov %ds,%ax
+    mov %rax,%ss
+    mov %eax,%fs
+    mov %ds,%bx
+    mov %fs,%r8
+    inb $0x3f, %al
+    outb %al, $0x80
+    outw %ax, $0x81
+    inl $0x70, %eax
+    pop (%rsp)
+    pop 32(%rsp)
+    push 8(%rbx)
     # GNU Linux >48-character symbol displacements and SHLD/SHRD group.
     movq __tracepoint_x86_fpu_xstate_check_failed+72(%rip), %rbx
     movq __tracepoint_intel_frontbuffer_invalidate+72(%rip), %r8
@@ -1031,6 +1052,14 @@ for bad in            'popcntq %eax,%rax' \
            'shrdq $3,%r12' \
            'prefetchw %rax' \
            'prefetchwt1 $12' \
+           'mov %cr3,%eax' \
+           'mov %eax,%cr3' \
+           'mov %eax,%cs' \
+           'mov %cr17,%rax' \
+           'mov %db8,%rax' \
+           'inb $256,%al' \
+           'outb %al,$256' \
+           'outw %eax,$15' \
            'adcl %rax,%eax' \
            'negb %eax' \
            'negw %eax' \
