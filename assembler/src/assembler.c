@@ -337,15 +337,13 @@ int minias_ensure_section(MiniAs *as,
 
     if (found >= 0) {
         sec = &as->sections[(size_t)found];
-        if (flags != 0U) {
-            sec->flags |= flags;
-        }
-        if (align > sec->align) {
-            sec->align = align;
-        }
-        if (type != MINIAS_SHT_PROGBITS) {
-            sec->type = type;
-        }
+        /* The first section declaration fixes ELF type and flags.
+         * GAS ignores later conflicting .section metadata (with a
+         * warning); OR-ing flags and changing PROGBITS to NOBITS can
+         * silently discard real code and break all relocation offsets. */
+        (void)type;
+        (void)flags;
+        if (align > sec->align) sec->align = align;
         return found;
     }
     if (!grow_array((void **)&as->sections,
@@ -505,6 +503,7 @@ bool minias_add_fixup(MiniAs *as,
         return false;
     }
     if (section < 0 || (size_t)section >= as->section_count ||
+        as->sections[(size_t)section].type==MINIAS_SHT_NOBITS ||
         (width != 2U && width != 4U && width != 8U) ||
         offset > UINT64_MAX - width) {
         minias_set_error(as, "invalid-fixup-range:%s", symbol_name);
@@ -548,7 +547,21 @@ bool minias_section_append(MiniAs *as, int section_index, const void *data, size
     }
     sec = &as->sections[(size_t)section_index];
     if (sec->type == MINIAS_SHT_NOBITS) {
-        sec->size += size;
+        const unsigned char *bytes=(const unsigned char *)data;
+        size_t i;
+        if(size>SIZE_MAX-sec->size) {
+            minias_set_error(as,"section-size-overflow:%s",sec->name);
+            return false;
+        }
+        /* GNU rejects real nonzero data in SHT_NOBITS. Previously this
+         * branch silently threw it away and produced a success ELF. */
+        for(i=0U;i<size;++i) {
+            if(bytes[i]!=0U) {
+                minias_set_error(as,"nobits-nonzero-data:%s",sec->name);
+                return false;
+            }
+        }
+        sec->size+=size;
         return true;
     }
     if (size > SIZE_MAX - sec->size) {
@@ -582,6 +595,20 @@ bool minias_section_append(MiniAs *as, int section_index, const void *data, size
 bool minias_section_append_zero(MiniAs *as, int section_index, size_t size) {
     static const unsigned char zeros[64] = {0};
 
+    /* SHT_NOBITS has no payload: a zero-fill is just a checked size
+     * increment, NOT millions of 64-byte copy/validation iterations. */
+    if(section_index<0 || (size_t)section_index>=as->section_count) {
+        minias_set_error(as,"internal:bad-section");return false;
+    }
+    if(as->sections[(size_t)section_index].type==MINIAS_SHT_NOBITS) {
+        MiniAsSection *sec=&as->sections[(size_t)section_index];
+        if(size>SIZE_MAX-sec->size) {
+            minias_set_error(as,"section-size-overflow:%s",sec->name);
+            return false;
+        }
+        sec->size+=size;
+        return true;
+    }
     while (size > 0U) {
         size_t chunk = size > sizeof(zeros) ? sizeof(zeros) : size;
         if (!minias_section_append(as, section_index, zeros, chunk)) {
@@ -592,14 +619,16 @@ bool minias_section_append_zero(MiniAs *as, int section_index, size_t size) {
     return true;
 }
 
-void minias_init(MiniAs *as) {
+static void minias_init_for_target(MiniAs *as,
+                                   const MiniAsTargetOps *target) {
     memset(as, 0, sizeof(*as));
-    as->target = minias_target_riscv();
+    as->target = target;
     (void)minias_ensure_section(as,
                                 ".text",
                                 MINIAS_SHT_PROGBITS,
                                 MINIAS_SHF_ALLOC | MINIAS_SHF_EXECINSTR,
-                                4U);
+                                target->default_exec_alignment != 0U ?
+                                    target->default_exec_alignment : 4U);
     (void)minias_ensure_section(as,
                                 ".data",
                                 MINIAS_SHT_PROGBITS,
@@ -617,6 +646,12 @@ void minias_init(MiniAs *as) {
     as->conditional_active = true;
     as->debug_is_stmt = true;
     (void)ensure_subsection(as, as->current_section, 0U);
+}
+
+/* Preserve the historical RISC-V API while the multi-target driver
+ * initializes directly against its selected TargetInfo. */
+void minias_init(MiniAs *as) {
+    minias_init_for_target(as,minias_target_riscv());
 }
 
 /* A purged GNU macro owns exactly the resources freed by assembler exit.
@@ -1063,7 +1098,9 @@ static bool parse_section_directive(MiniAs *as, char *args, size_t line) {
                           name,
                           type,
                           flags,
-                          (flags & MINIAS_SHF_EXECINSTR) != 0U ? 4U : 1U);
+                          (flags & MINIAS_SHF_EXECINSTR) != 0U ?
+                              (as->target->default_exec_alignment != 0U ?
+                                   as->target->default_exec_alignment : 4U) : 1U);
 }
 
 static bool handle_symbol_list(MiniAs *as,
@@ -2956,7 +2993,10 @@ static bool parse_common_space(MiniAs *as,const char *args,uint64_t *count,
 
 static bool emit_common_space(MiniAs *as,int section,size_t total,uint8_t fill) {
     unsigned char bytes[256];
-    if(fill==0U)return minias_section_append_zero(as,section,total);
+    /* GNU ignores .space/.skip/.zero and alignment fill values in NOBITS,
+     * whereas .byte/.fill/.incbin real nonzero bytes must be rejected. */
+    if(as->sections[(size_t)section].type==MINIAS_SHT_NOBITS ||
+       fill==0U)return minias_section_append_zero(as,section,total);
     memset(bytes,(int)fill,sizeof(bytes));
     while(total!=0U) {
         size_t chunk=total<sizeof(bytes)?total:sizeof(bytes);
@@ -6972,8 +7012,7 @@ int minias_assemble_config(const char *input_path,
         bool parsed;
         bool added_long_branches = false;
 
-        minias_init(&as);
-        as.target = config->target;
+        minias_init_for_target(&as,config->target);
         as.elf_flags = config->elf_flags;
         as.strict_rv64i = config->strict_i_xlen != 0U ||
                           config->isa_explicit;

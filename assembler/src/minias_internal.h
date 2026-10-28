@@ -503,6 +503,7 @@ typedef struct MiniAsTargetOps {
     unsigned cfi_address_size;
     unsigned cfi_negate_ra_opcode;
     /* GNU assembler directive dialect belongs to TargetInfo, not Common. */
+    unsigned default_exec_alignment; /* zero: 4; x86 GNU .text has alignment 1 */
     unsigned word_directive_width; /* zero: 4, x86 GNU .word: 2 */
     unsigned inst_directive_width; /* optional raw target ISA .inst datum */
     bool align_directive_bytes;   /* x86 GNU .align: bytes, RISC-V/A64: power 2 */

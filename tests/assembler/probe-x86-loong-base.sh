@@ -3387,3 +3387,52 @@ objcopy -j .text -O binary "$work/x86-signed-negative-fill-gnu.o" "$work/x86-sig
 cmp "$work/x86-signed-negative-fill-mini.bin" "$work/x86-signed-negative-fill-gnu.bin"
 test "$(wc -c < "$work/x86-signed-negative-fill-mini.bin")" -eq 2
 echo 'MINIAS_COMMON_SIGNED_NEGATIVE_FILL=PASS GNU_equivalent_no_emission'
+
+
+# SELF-AUDIT: x86 GNU .text and executable COMDAT-like sections default
+# to 1-byte alignment, unlike RV/A64/Loong (4-byte ISA instructions).
+cat > "$work/x86-default-section-align.s" <<'X86_DEFAULT_ALIGN'
+.text
+ret
+.section .text.independent,"ax",@progbits
+nop
+X86_DEFAULT_ALIGN
+"$MINIAS" --target=x86_64 -o "$work/x86-default-align-mini.o" "$work/x86-default-section-align.s"
+as --64 -o "$work/x86-default-align-gnu.o" "$work/x86-default-section-align.s"
+for section in .text .text.independent; do
+  mini_align=$(readelf -SW "$work/x86-default-align-mini.o" | awk -v n="$section" '$3 == n {print $NF}')
+  gnu_align=$(readelf -SW "$work/x86-default-align-gnu.o" | awk -v n="$section" '$3 == n {print $NF}')
+  test "$mini_align" = "$gnu_align"
+  test "$mini_align" = 1
+done
+echo 'MINIAS_SELF_AUDIT_X86_SECTION_ALIGNMENT=PASS GNU_x86_default_1_not_RV_4'
+
+# First section declaration controls type/flags. GNU ignores later
+# conflicting declarations rather than converting PROGBITS to NOBITS.
+cat > "$work/x86-redeclare-section.s" <<'X86_REDECLARE'
+.section .text.immutable,"ax",@progbits
+.byte 0x90
+.section .text.immutable,"aw",@nobits
+.byte 0xc3
+X86_REDECLARE
+"$MINIAS" --target=x86_64 -o "$work/x86-redeclare-mini.o" "$work/x86-redeclare-section.s"
+as --64 -o "$work/x86-redeclare-gnu.o" "$work/x86-redeclare-section.s" 2>"$work/x86-redeclare-gnu.warn"
+readelf -SW "$work/x86-redeclare-mini.o" | grep '.text.immutable' | grep 'PROGBITS' | grep 'AX'
+objcopy -j .text.immutable -O binary "$work/x86-redeclare-mini.o" "$work/x86-redeclare-mini.bin"
+objcopy -j .text.immutable -O binary "$work/x86-redeclare-gnu.o" "$work/x86-redeclare-gnu.bin"
+cmp "$work/x86-redeclare-mini.bin" "$work/x86-redeclare-gnu.bin"
+echo 'MINIAS_SELF_AUDIT_SECTION_IDENTITY=PASS first_definition_preserves_type_and_flags'
+
+# NOBITS must not silently drop .byte/.fill/nonzero relocation contents.
+# Ordinary .space fill is ignored (warning, GNU succeeds).
+for data in '.byte 0x7f' '.fill 2,1,0x7f' '.quad external_reference'; do
+  printf '.bss\n%s\n' "$data" > "$work/x86-nobits-invalid.s"
+  if "$MINIAS" --target=x86_64 -o "$work/x86-nobits-invalid.o" "$work/x86-nobits-invalid.s" >/dev/null 2>&1; then
+    echo "MiniAS silently accepted NOBITS nonzero data: $data" >&2; exit 1
+  fi
+done
+printf '.bss\n.space 17, 0x7f\n.zero 3, 0x11\n.byte 0\n' > "$work/x86-nobits-space.s"
+"$MINIAS" --target=x86_64 -o "$work/x86-nobits-space-mini.o" "$work/x86-nobits-space.s"
+as --64 -o "$work/x86-nobits-space-gnu.o" "$work/x86-nobits-space.s" 2>"$work/x86-nobits-space-gnu.warn"
+readelf -SW "$work/x86-nobits-space-mini.o" | grep '.bss' | grep 'NOBITS' | grep '000015'
+echo 'MINIAS_SELF_AUDIT_NOBITS=PASS reject_nonzero_and_relocation_ignore_space_fill'

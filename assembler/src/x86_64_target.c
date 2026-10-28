@@ -3442,6 +3442,7 @@ static const MiniAsTargetOps ops={
     .fixup_relocation_type=x64_reloc,
     .parse_named_relocation=x64_named_relocation,
     .validate_output=x64_validate,
+    .default_exec_alignment=1U,
     .word_directive_width=2U,.align_directive_bytes=true,
     .dot_relative_fixup=MINIAS_FIXUP_PREL32,
     .common_default_alignment_cap=16U,
