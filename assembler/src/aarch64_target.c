@@ -489,13 +489,13 @@ static bool parse_integer_family(MiniAsMCInst *inst,
                    ((!strcmp(op,"add") || !strcmp(op,"sub")) || !dsp) &&
                    a64_extended_fields(t[cmp?2U:3U],mwide,
                                        sp_sensitive,&ext)) {
-                    uint32_t base=!strcmp(op,"add")?UINT32_C(0x0b200000):
+                    uint32_t ext_base=!strcmp(op,"add")?UINT32_C(0x0b200000):
                                   !strcmp(op,"sub")?UINT32_C(0x4b200000):
                                   !strcmp(op,"adds") || !strcmp(op,"cmn")?
                                                     UINT32_C(0x2b200000):
                                                     UINT32_C(0x6b200000);
                     inst->opcode=A64_MC_EXT_ALU;inst->count=3U;
-                    inst->encoding=base|ext;
+                    inst->encoding=ext_base|ext;
                     put_reg(&inst->operands[0],erd,dwide);
                     put_reg(&inst->operands[1],ern,nwide);
                     put_reg(&inst->operands[2],erm,mwide);
