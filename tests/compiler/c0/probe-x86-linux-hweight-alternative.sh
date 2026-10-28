@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # GNU Linux 6.6 alternative.h macro fully expanded, exact ISA and ELF.
 set -Eeuo pipefail
+trap 'echo "MINIC_HWEIGHT_CHECK_FAIL line=$LINENO command=$BASH_COMMAND" >&2' ERR
 minic=$1;test -x "$minic"
 w=$(mktemp -d);trap 'rm -rf "$w"' EXIT
 python3 - "$w" <<'PY'
@@ -54,8 +55,8 @@ SRC
 "$minic" --target=x86_64-linux -S "$w/mini.i" -o "$w/mini.s"
 cc -O0 -c -x c "$w/gnu.c" -o "$w/gnu.o"
 cc -c -x assembler "$w/mini.s" -o "$w/mini.o"
-readelf -S "$w/mini.o" | grep -Fq '.altinstructions'
-readelf -S "$w/mini.o" | grep -Fq '.altinstr_replacement'
+readelf -SW "$w/mini.o" | grep -Fq '.altinstructions'
+readelf -SW "$w/mini.o" | grep -Fq '.altinstr_replacement'
 grep -Fq '.4byte 151' "$w/mini.s"
 cc -O0 -no-pie "$w/driver.c" "$w/helper.c" "$w/gnu.o" "$w/mini.o" -o "$w/run"
 rc=0;"$w/run" || rc=$?
