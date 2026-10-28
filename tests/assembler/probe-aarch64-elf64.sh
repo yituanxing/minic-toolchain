@@ -125,6 +125,16 @@ external_probe:
     mrs x1, ctr_el0
     mrs x0, CNTVCT_EL0
     mrs x0, SCTLR_EL1
+    // Raw ARMv8 bitfield family (not only UBFx aliases): GNU exact bytes.
+    ubfm x3, x3, #16, #19
+    sbfm x4, x5, #31, #32
+    bfm x6, x7, #63, #0
+    ubfm w3, w3, #16, #19
+    sbfm w4, w5, #31, #0
+    bfm w6, w7, #0, #31
+    movz x1, #(((1 << 15) | 0x1234))
+    movk w2, #((0xf000 | 0xf))
+    movn x4, #((1 << 5) + 3)
     // GNU Linux macros emit .inst(<logical expression>) without space.
     .inst(0xd5200000|((((3)<<19))))
     .inst((0xd503201f))
@@ -722,7 +732,9 @@ for bad in 'add x0, w0, x1' 'cmp x0, #4097' 'ldr x0, [x1, -257]' \
            'ldaxrh x2,[x3]' 'ldxrb x2,[x3]' \
            'stlxrh w4,x2,[x3]' 'stxrb x4,w2,[x3]' \
            'stnp x2,x3,[x0,#-520]' 'ldnp x2,x3,[x0],8' \
-           'ldnp x2,w3,[x0]' 'stnp w2,w3,[x0,#254]' \
+           'ldnp x2,w3,[x0]' 'ubfm w2,w3,#32,#0' 'sbfm x2,x3,#0,#64' \
+           'bfm x2,w3,#1,#2' 'movk x0,#65536' \
+           'stnp w2,w3,[x0,#254]' \
            'mrs x2,dbgwcr16_el1' 'msr dbgbcr99_el1,x1' \
            'at s1e1r,w2' 'at s1e1r' 'at unknown,x2' \
            'mrs x0,unknown_el1'; do

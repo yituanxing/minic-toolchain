@@ -103,15 +103,14 @@ static bool parse_register(const char *text, unsigned *reg, bool *is_64) {
 }
 
 static bool parse_imm16(const char *text, unsigned *result) {
-    char *end;
-    unsigned long value;
-    /* GCC's AArch64 -S commonly omits '#' on MOVZ integer immediates. */
+    uint64_t value;
+    /* A64 GNU preprocessed MOVZ/MOVK literals may be arithmetic, e.g.
+     * (((1)<<15)|0x1234). Use Common's symbol-free unsigned expression
+     * evaluator; reject >16-bit, unknown symbols and negative values. */
     if (*text == '#') ++text;
-    errno = 0;
-    value = strtoul(text, &end, 0);
-    if (errno != 0 || end == text || *end != '\0' || value > 65535U)
+    if(!minias_eval_u64_expression(text,&value) || value>65535U)
         return false;
-    *result = (unsigned)value;
+    *result=(unsigned)value;
     return true;
 }
 
@@ -1536,7 +1535,9 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
         put_reg(&inst->operands[0],alu_rd,alu_wide);
         put_reg(&inst->operands[1],alu_rn,alu_wide);
         put_reg(&inst->operands[2],alu_rm,alu_mwide);
-    } else if(!strcmp(op,"ubfx") || !strcmp(op,"ubfiz") ||
+    } else if(!strcmp(op,"ubfm") || !strcmp(op,"sbfm") ||
+              !strcmp(op,"bfm") ||
+              !strcmp(op,"ubfx") || !strcmp(op,"ubfiz") ||
               !strcmp(op,"sbfx") || !strcmp(op,"sbfiz") ||
               !strcmp(op,"bfi")  || !strcmp(op,"bfxil")) {
         /* One ISA-owned UBFM/SBFM/BFM bitfield selector for GNU aliases:
@@ -1546,9 +1547,15 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
         unsigned bit_n,bit_rd,bit_rn,reg_bits;
         bool bit_wide,bit_source_wide,bit_sp;
         int64_t lsb,width;
+        bool raw_form=!strcmp(op,"ubfm") || !strcmp(op,"sbfm") ||
+                      !strcmp(op,"bfm");
         bool insertion=!strcmp(op,"ubfiz") || !strcmp(op,"sbfiz") ||
                        !strcmp(op,"bfi");
-        uint32_t base=!strcmp(op,"ubfx") || !strcmp(op,"ubfiz")?
+        uint32_t base=raw_form?
+                      (!strcmp(op,"ubfm")?UINT32_C(0x53000000):
+                       !strcmp(op,"sbfm")?UINT32_C(0x13000000):
+                                             UINT32_C(0x33000000)):
+                      !strcmp(op,"ubfx") || !strcmp(op,"ubfiz")?
                       UINT32_C(0x53000000):
                       !strcmp(op,"sbfx") || !strcmp(op,"sbfiz")?
                       UINT32_C(0x13000000):UINT32_C(0x33000000);
@@ -1565,7 +1572,9 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
         }
         reg_bits=bit_wide?64U:32U;
         if(lsb<0 || lsb>=(int64_t)reg_bits ||
-           width<1 || width>(int64_t)reg_bits-lsb) {
+           (raw_form ?
+             (width<0 || width>=(int64_t)reg_bits) :
+             (width<1 || width>(int64_t)reg_bits-lsb))) {
             minias_set_error(as,"bad-aarch64-bitfield-range:%s:line=%zu",
                              args,stmt->line);
             free(inst);return false;
@@ -1575,8 +1584,10 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
         put_reg(&inst->operands[0],bit_rd,bit_wide);
         put_reg(&inst->operands[1],bit_rn,bit_source_wide);
         put_immediate(&inst->operands[2],
+                      raw_form?lsb:
                       insertion?((int64_t)reg_bits-lsb)%(int64_t)reg_bits:lsb);
         put_immediate(&inst->operands[3],
+                      raw_form?width:
                       insertion?width-1:lsb+width-1);
     } else if(!strcmp(op,"lsl") || !strcmp(op,"lsr") ||
               !strcmp(op,"asr") || !strcmp(op,"ror")) {
