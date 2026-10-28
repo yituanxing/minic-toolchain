@@ -133,6 +133,10 @@ external_probe:
     msr fpcr, x2
     mrs x0, hstr_el2
     msr hstr_el2, x0
+    mrs x2, pmselr_el0
+    msr pmselr_el0, x2
+    mrs x0, dacr32_el2
+    msr dacr32_el2, x1
     mrs x21, s0_3_c1_c0_1
     msr s0_3_c1_c0_1, x21
     mrs x22, s3_3_c4_c4_1
@@ -158,6 +162,15 @@ external_probe:
     st1 {v1.16b}, [x2]
     st1 {v1.8b}, [x2]
     st1 {v1.2d}, [x2]
+    // Real Kbuild LD1 post-index and matching ST1 forms (Q-dependent
+    // increment and register Rm). Compare exact GNU .text words.
+    ld1 {v1.4s}, [x0], #16
+    ld1 {v2.16b}, [x4], #16
+    ld1 {v3.2d}, [x4], #16
+    st1 {v5.8b}, [x7], #8
+    st1 {v5.2d}, [x7], #16
+    ld1 {v5.8b}, [x7], x12
+    st1 {v5.16b}, [x7], x11
     // Raw ARMv8 bitfield family (not only UBFx aliases): GNU exact bytes.
     ubfm x3, x3, #16, #19
     sbfm x4, x5, #31, #32
@@ -227,6 +240,8 @@ external_probe:
     dc zva, x8
     tlbi vmalle1
     tlbi vmalle1is
+    tlbi alle1
+    tlbi alle1is
     tlbi vae1, x5
     tlbi vae1is, x6
     tlbi aside1, x7
@@ -793,6 +808,9 @@ for bad in 'add x0, w0, x1' 'cmp x0, #4097' 'ldr x0, [x1, -257]' \
            'mrs x0,s4_3_c1_c0_1' 'msr s0_8_c1_c0_1,x0' \
            'mrs x0,s0_3_c16_c0_1' 'mrs x0,s0_3_c1_c0_8' \
            'mrs x0,s0_3_c1_c0_1oops' \
+           'mrs w0,pmselr_el0' 'msr dacr32_el2,w0' \
+           'tlbi alle1is,x1' 'ld1 {v1.4s},[x0],#8' \
+           'st1 {v5.8b},[x0],#16' 'ld1 {v1.4s},[x0],sp' \
            'at s1e1r,w2' 'at s1e1r' 'at unknown,x2' \
            'mrs x0,unknown_el1'; do
     printf '.arch armv8-a\n.text\n%s\n' "$bad" >"$work/bad-integer.s"

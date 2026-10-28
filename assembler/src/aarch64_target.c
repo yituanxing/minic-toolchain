@@ -657,17 +657,37 @@ static bool parse_integer_family(MiniAsMCInst *inst,
     /* GNU ARMv8 single-vector structure LD1/ST1. The A64 bank and
      * arrangement are ISA-owned, but base register and memory policy
      * use the same shared typed operands as integer loads/stores. */
-    if((!strcmp(op,"ld1") || !strcmp(op,"st1")) && n==2U) {
+    if((!strcmp(op,"ld1") || !strcmp(op,"st1")) &&
+       (n==2U || n==3U)) {
         uint32_t arrangement;
         if(!parse_a64_single_v(t[0],&rd,&arrangement) ||
            !parse_a64_mem(t[1],&base,&imm,&mode) ||
            mode!=0U || imm!=0)return false;
-        inst->opcode=A64_MC_SIMD_SINGLE;inst->count=2U;
+        inst->opcode=A64_MC_SIMD_SINGLE;inst->count=n;
         inst->encoding=arrangement|
                        (!strcmp(op,"ld1")?UINT32_C(0x0c407000):
                                           UINT32_C(0x0c007000));
         put_reg(&inst->operands[0],rd,true);
         put_reg(&inst->operands[1],base,true);
+        if(n==3U) {
+            unsigned offset_reg=31U;
+            int64_t increment;
+            bool wide=false,sp=false;
+            /* GNU Q=1 writes back 16 bytes, Q=0 writes back eight.
+             * Keep immediate post-increment and register post-index
+             * inside this existing typed SIMD MCInst; no duplicated
+             * machine encoder or memory-parser guesswork. */
+            if(parse_signed_number(t[2],&increment)) {
+                if(increment!=((arrangement&UINT32_C(0x40000000))?16:8))
+                    return false;
+                put_immediate(&inst->operands[2],31);
+            } else {
+                if(!parse_a64_reg(t[2],&offset_reg,&wide,&sp) ||
+                   !wide || sp)return false;
+                put_reg(&inst->operands[2],offset_reg,true);
+            }
+            inst->encoding|=UINT32_C(0x00800000);
+        }
         return true;
     }
     /* Common GNU Linux bit/byte-swap and acquire/release families.
@@ -1385,6 +1405,8 @@ static bool a64_system_register(const char *name,uint32_t *mrs,uint32_t *msr) {
         {"par_el1",UINT32_C(0xd5387400),UINT32_C(0xd5187400)},
         {"hcr_el2",UINT32_C(0xd53c1100),UINT32_C(0xd51c1100)},
         {"hstr_el2",UINT32_C(0xd53c1160),UINT32_C(0xd51c1160)},
+        {"pmselr_el0",UINT32_C(0xd53b9ca0),UINT32_C(0xd51b9ca0)},
+        {"dacr32_el2",UINT32_C(0xd53c3000),UINT32_C(0xd51c3000)},
         {"fpsr",UINT32_C(0xd53b4420),UINT32_C(0xd51b4420)},
         {"fpcr",UINT32_C(0xd53b4400),UINT32_C(0xd51b4400)},
         {"mdcr_el2",UINT32_C(0xd53c1120),UINT32_C(0xd51c1120)},
@@ -1901,6 +1923,8 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
             {"at","s1e3w",UINT32_C(0xd50e7820),true},
             {"tlbi","vmalle1",UINT32_C(0xd508871f),false},
             {"tlbi","vmalle1is",UINT32_C(0xd508831f),false},
+            {"tlbi","alle1",UINT32_C(0xd50c879f),false},
+            {"tlbi","alle1is",UINT32_C(0xd50c839f),false},
             {"tlbi","vae1",UINT32_C(0xd5088720),true},
             {"tlbi","vae1is",UINT32_C(0xd5088320),true},
             {"tlbi","vale1",UINT32_C(0xd50887a0),true},
@@ -2533,6 +2557,10 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
         }
         case A64_MC_SIMD_SINGLE:
             code=inst->encoding|
+                 (inst->count==3U?
+                    ((inst->operands[2].kind==MINIAS_MC_REGISTER?
+                       inst->operands[2].reg:
+                       (unsigned)inst->operands[2].immediate)<<16U):0U)|
                  (inst->operands[1].reg<<5U)|inst->operands[0].reg;
             break;
         case A64_MC_PRFM:
