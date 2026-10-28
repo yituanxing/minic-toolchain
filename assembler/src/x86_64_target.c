@@ -927,6 +927,14 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
                              unsigned group;} fpmem[]={
             {"fldl",UINT32_C(0xdd),0U},
             {"fildl",UINT32_C(0xdb),0U},
+            /* x87 m64real DD and DC arithmetic families use the same
+             * typed ModR/M group opcode and PC32 ELF relocation. */
+            {"faddl",UINT32_C(0xdc),0U},
+            {"fmull",UINT32_C(0xdc),1U},
+            {"fsubrl",UINT32_C(0xdc),4U},
+            {"fsubl",UINT32_C(0xdc),5U},
+            {"fdivl",UINT32_C(0xdc),6U},
+            {"fdivrl",UINT32_C(0xdc),7U},
             {"fstpl",UINT32_C(0xdd),3U},
             {"fistpl",UINT32_C(0xdb),3U}
         };
@@ -1154,6 +1162,31 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
             if(!gpr_ok) {
                 gpr_ok=x64_register16(gp,&gpr);
                 gpr16=gpr_ok;
+            }
+            if(!gpr_ok && kind==0U &&
+               (!strcmp(s->op,"movw") || !strcmp(s->op,"mov")) &&
+               x64_is_mem_candidate(gp)) {
+                /* GNU segment MOV 8C /r (seg -> memory) and 8E /r
+                 * (memory -> seg) share target ModR/M and Common
+                 * symbolic relocation machinery with other operands.
+                 * Loading CS is architecturally invalid. */
+                MiniAsMCMemory mem;
+                if((!sys_source && sys==1U) ||
+                   !x64_parse_base_memory(gp,&mem))goto invalid;
+                m->operands[1].memory=malloc(sizeof(mem));
+                if(!m->operands[1].memory){
+                    free(mem.symbol);free(m);
+                    minias_set_error(as,"out-of-memory:x86-seg-memory");
+                    return false;
+                }
+                *m->operands[1].memory=mem;
+                m->opcode=X64_REG_MEMORY;m->count=2U;
+                m->encoding=sys_source?UINT32_C(0x8c):UINT32_C(0x8e);
+                m->operands[0].kind=MINIAS_MC_REGISTER;
+                m->operands[0].reg=sys;
+                m->operands[0].register_64=false;
+                m->operands[1].kind=MINIAS_MC_MEMORY;
+                goto done;
             }
             if(!gpr_ok || (kind!=0U && (gpr16 || !gpr64)) ||
                (kind==0U && !sys_source && sys==1U) ||

@@ -237,7 +237,8 @@ enum {
     A64_MC_PRFM,
     A64_MC_PRFM_REG,
     A64_MC_EXCLUSIVE,
-    A64_MC_SIMD_SINGLE
+    A64_MC_SIMD_SINGLE,
+    A64_MC_SIMD_MOVE
 };
 
 /* GNU AArch64 operands split on TOP-LEVEL commas, not commas within
@@ -316,6 +317,33 @@ static bool parse_a64_single_v(const char *text,unsigned *reg,
         }
     }
     return false;
+}
+
+/* GNU vector MOV aliases ORR of the same vector register.
+ * Reuse the existing vector arrangement recognizer without loosening
+ * LD1/ST1's brace-only register-list grammar. */
+static bool a64_vector_view(const char *text,unsigned *reg,
+                            uint32_t *arrange) {
+    char wrapped[96];
+    size_t n=strlen(text);
+    if(n<4U || n+3U>sizeof(wrapped))return false;
+    wrapped[0]='{';
+    memcpy(wrapped+1U,text,n);
+    wrapped[n+1U]='}';wrapped[n+2U]='\0';
+    return parse_a64_single_v(wrapped,reg,arrange);
+}
+
+/* GNU .req may bind scalar or vector bank registers, not only GPRs.
+ * Keep the alias state per assembler target instance and resolve at
+ * statement parse; unknown register classes remain rejected. */
+static bool a64_req_vector_bank(const char *text,unsigned *reg) {
+    char *end;
+    unsigned long num;
+    if(!strchr("vqdsbh",text[0]) || !isdigit((unsigned char)text[1]))
+        return false;
+    errno=0;num=strtoul(text+1U,&end,10);
+    if(errno || *end!='\0' || num>31UL)return false;
+    *reg=(unsigned)num;return true;
 }
 
 static bool parse_a64_reg(const char *text, unsigned *number, bool *is64,
@@ -2189,6 +2217,22 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
         inst->operands[0].kind = MINIAS_MC_REGISTER;
         inst->operands[0].reg = reg;
         inst->operands[0].register_64 = true;
+    } else if(!strcmp(op,"mov") &&
+               split_two(args,first,sizeof(first),second,sizeof(second)) &&
+               first[0]=='v' && second[0]=='v') {
+        unsigned vd,vn;
+        uint32_t da,sa;
+        if(!a64_vector_view(first,&vd,&da) ||
+           !a64_vector_view(second,&vn,&sa) || da!=sa) {
+            minias_set_error(as,"bad-aarch64-mov-vector:%s:line=%zu",
+                             args,stmt->line);
+            free(inst);return false;
+        }
+        inst->opcode=A64_MC_SIMD_MOVE;inst->count=2U;
+        inst->encoding=(da&UINT32_C(0x40000000))?
+                 UINT32_C(0x4ea01c00):UINT32_C(0x0ea01c00);
+        put_reg(&inst->operands[0],vd,true);
+        put_reg(&inst->operands[1],vn,true);
     } else if (strcmp(op, "mov") == 0 &&
                split_two(args, first, sizeof(first), second, sizeof(second)) &&
                parse_register(first, &reg, &reg64) &&
@@ -2627,6 +2671,12 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
             }
             break;
         }
+        case A64_MC_SIMD_MOVE: {
+            unsigned src=inst->operands[1].reg;
+            code=inst->encoding|(src<<16U)|(src<<5U)|
+                 inst->operands[0].reg;
+            break;
+        }
         case A64_MC_SIMD_SINGLE:
             code=inst->encoding|
                  (inst->count==3U?
@@ -2998,7 +3048,8 @@ static bool directive(MiniAs *as, const char *op, const char *args,
         unsigned n;bool wide,sp;size_t i;
         *handled=true;
         while(isspace((unsigned char)*canonical))++canonical;
-        if(!parse_a64_reg(canonical,&n,&wide,&sp) ||
+        if((!parse_a64_reg(canonical,&n,&wide,&sp) &&
+            !a64_req_vector_bank(canonical,&n)) ||
            !isalpha((unsigned char)op[0]) ||
            strlen(op)>=sizeof(((A64AliasState *)0)->entries[0].alias)) {
             minias_set_error(as,"bad-aarch64-register-alias:%s:%s:line=%zu",

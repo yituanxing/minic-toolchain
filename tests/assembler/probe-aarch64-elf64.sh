@@ -59,6 +59,17 @@ external_probe:
     wx0 .req w3
     add wx0, wx0, #2
     .unreq wx0
+    // GNU SIMD .req alias lifecycle + ORR-based MOV vector widths.
+    SHASH .req v0
+    dga .req q20
+    mov SHASH.16b, v1.16b
+    mov v3.16b, v1.16b
+    mov v2.8b, v5.8b
+    mov v2.4s, v4.4s
+    mov v12.2d, v1.2d
+    stp dga, q21, [x2]
+    .unreq SHASH
+    .unreq dga
     mrs x0, sp_el0
     mrs x2, sp_el0
     mrs x7, tpidr_el0
@@ -922,6 +933,8 @@ for bad_source in 'ldxr x0, [x1,#4]' 'stxr x0, x1, [x2]' \
                   'lsl x0, w1, #1' \
                   'lsr w0, w1, x2' \
                   'wx0 .req bogus' \
+                  'SHASH .req z32' 'dga .req q33' \
+                  'mov v0.16b,v1.8b' 'mov v0.4s,v1.2s' \
                   'ccmp x0, w1, #1, eq' \
                   'ccmp x0, #32, #1, eq' \
                   'ccmp x0, #-1, #1, eq' \

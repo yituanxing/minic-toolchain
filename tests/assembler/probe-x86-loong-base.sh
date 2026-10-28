@@ -2493,6 +2493,41 @@ for bad in 'andn %rdi,%eax,%rax' 'bzhi %rdi,%eax,%r9' \
     fi
 done
 echo 'MINIAS_X86_BMI_MOVW=PASS GNU_BMI_VEX_reg_all_widths MOVW_IMM16'
+
+# Segment MOV and x87 m64real arithmetic share the existing x86
+# ModR/M, SIB and true semantic PC32, not new instruction emitters.
+cat > "$work/x86-seg-x87.s" <<'GNU_SEG_X87'
+.text
+movw saved_context+172(%rip), %fs
+movw %gs, saved_context+16(%rip)
+movw %fs, 4(%r12)
+movw 4(%r13), %gs
+faddl 8(%rax)
+fmull 8(%rax)
+fsubrl 8(%rax)
+fsubl 8(%rax)
+fdivl y(%rip)
+fdivrl 8(%rax)
+GNU_SEG_X87
+"$MINIAS" --target=x86_64 -o "$work/x86-seg-x87-mini.o" "$work/x86-seg-x87.s"
+as --64 -o "$work/x86-seg-x87-gnu.o" "$work/x86-seg-x87.s"
+objcopy -j .text -O binary "$work/x86-seg-x87-mini.o" "$work/x86-seg-x87-mini.bin"
+objcopy -j .text -O binary "$work/x86-seg-x87-gnu.o" "$work/x86-seg-x87-gnu.bin"
+cmp "$work/x86-seg-x87-mini.bin" "$work/x86-seg-x87-gnu.bin"
+for variant in mini gnu; do
+    readelf -Wr "$work/x86-seg-x87-$variant.o" > "$work/x86-seg-x87-$variant.rel"
+    grep -q 'R_X86_64_PC32.*saved_context + a8' "$work/x86-seg-x87-$variant.rel"
+    grep -q 'R_X86_64_PC32.*saved_context + c' "$work/x86-seg-x87-$variant.rel"
+    grep -q 'R_X86_64_PC32.*y - 4' "$work/x86-seg-x87-$variant.rel"
+done
+for bad in 'movw 8(%rax),%cs' 'movw %cs, %eax' 'movw %cr3, 8(%rax)' \
+           'fdivl %rax' 'faddl $1' 'fdivrl %rax'; do
+    printf '.text\n%s\n' "$bad" > "$work/x86-seg-x87-invalid.s"
+    if "$MINIAS" --target=x86_64 -o "$work/x86-seg-x87-invalid.o" "$work/x86-seg-x87-invalid.s" >/dev/null 2>&1; then
+        echo "bad segment / x87 operands accepted: $bad" >&2;exit 1
+    fi
+done
+echo 'MINIAS_X86_SEG_X87=PASS GNU_bytes PC32_reloc_addend x87_DC_family'
 echo 'MINIAS_COMMON_NUMERIC_U64=PASS GNU_GAS_x86_LA64_exact_data_bytes'
 echo 'MINIAS_X86_SEGMENTED_INDIRECT=PASS GNU_AS_text_and_relocations segment_base_index_abs_rip=true indirect_memory_call_jmp=true absolute_symbol32S=true'
 echo 'MINIAS_TWO_TARGET_ORACLE=PASS x86_GNU_bytes=equal loong_GNU_bytes=equal ELF_machine=correct lp64d_v1=0x43 CET_endbr64=1 ALU_imm8_imm32=1 x86_ModRM_SIB_disp=1 x86_test_cmp_alu_memory=1 x86_scaled_index_SIB=1 LA_jr=1 LA_scaled_ptr14=1 LA_imm12_shift_upper20=1 invalid=reject'
