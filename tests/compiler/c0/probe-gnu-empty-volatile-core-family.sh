@@ -25,7 +25,20 @@ __attribute__((noinline)) int valid_linux_path(int x) {
     __asm__("");
     return x + 40;
 }
-int main(void) { return valid_linux_path(2); }
+volatile int observed = 0;
+__attribute__((noinline)) int observe(int n) {
+    observed += n;
+    return observed;
+}
+__attribute__((noinline)) int multi_input(void) {
+    __asm__ __volatile__("" : : "r"(observe(1)), "r"(observe(2)) : "memory");
+    __asm__ __volatile__("" : : "r"(observe(3)), "r"(observe(4)));
+    return observed;
+}
+int main(void) {
+    if (valid_linux_path(2) != 42) return 2;
+    return multi_input() == 10 ? 42 : 3;
+}
 SRC
 "$cc" -static -x c "$d/original.i" -o "$d/gnu"
 "$MINIC_CC" --target="$MINIC_EMPTY_TARGET-linux" -S "$d/original.i" -o "$d/mini.s"
