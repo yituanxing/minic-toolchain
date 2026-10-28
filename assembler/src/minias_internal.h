@@ -245,6 +245,37 @@ typedef struct MiniAsTargetSiteState {
     uint64_t profile_features;
 } MiniAsTargetSiteState;
 
+/* MCExpr owns semantic operands, not source spelling. Compile each fixed-
+ * width data operand once at its lexical site; the output pass resolves
+ * relocatable references using the final Fragment/Symbol layout. */
+typedef enum MiniAsMCExprKind {
+    MINIAS_MC_EXPR_CONSTANT,
+    MINIAS_MC_EXPR_DEFERRED_ABSOLUTE,
+    MINIAS_MC_EXPR_SYMBOL,
+    MINIAS_MC_EXPR_SYMBOL_MINUS_DOT,
+    MINIAS_MC_EXPR_SYMBOL_MINUS_DOT_DIV,
+    MINIAS_MC_EXPR_DIFFERENCE,
+    MINIAS_MC_EXPR_DIFFERENCE_DIV
+} MiniAsMCExprKind;
+
+typedef struct MiniAsMCExpr {
+    MiniAsMCExprKind kind;
+    uint64_t constant;
+    uint64_t divisor;
+    int64_t lhs_addend;
+    int64_t rhs_addend;
+    char *lhs_name;
+    char *rhs_name;
+    char *deferred_text; /* only for absolute grammar needing final layout */
+    bool logical_shift;
+} MiniAsMCExpr;
+
+typedef struct MiniAsMCData {
+    unsigned width;
+    size_t count;
+    MiniAsMCExpr *fields;
+} MiniAsMCData;
+
 typedef struct MiniAsStmt {
     MiniAsStmtKind kind;
     char *op;
@@ -264,6 +295,7 @@ typedef struct MiniAsStmt {
     struct MiniAsTargetSiteState site;
     /* Common variable-size data fragment resolved after symbol layout. */
     bool deferred_data_size;
+    MiniAsMCData *mcdata; /* fixed-width DATA: retained typed expressions */
     MiniAsMCInst *mcinst; /* allocated by target parser, freed by core */
 } MiniAsStmt;
 

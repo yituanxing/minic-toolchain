@@ -792,6 +792,17 @@ void minias_destroy(MiniAs *as) {
     for (i = 0U; i < as->stmt_count; ++i) {
         free(as->stmts[i].op);
         free(as->stmts[i].args);
+        if(as->stmts[i].mcdata!=NULL) {
+            MiniAsMCData *data=as->stmts[i].mcdata;
+            size_t k;
+            for(k=0U;k<data->count;++k) {
+                free(data->fields[k].lhs_name);
+                free(data->fields[k].rhs_name);
+                free(data->fields[k].deferred_text);
+            }
+            free(data->fields);
+            free(data);
+        }
         if (as->stmts[i].mcinst != NULL) {
             MiniAsMCInst *mc = as->stmts[i].mcinst;
             size_t k;
@@ -3442,6 +3453,118 @@ static bool snapshot_mutable_data_tokens(MiniAs *as,const char *input,
     result[used]='\0';*out=result;return true;
 }
 
+/* One Common semantic expression compiler for every target's
+ * .byte/.short/.long/.quad/.inst data fields. The earlier syntax checker
+ * and the final materializer no longer tokenize the same source again.
+ * A deferred-absolute node is necessary for .set and local-dot arithmetic:
+ * it is not a fabricated relocation or prematurely frozen section address.
+ */
+static bool minias_compile_data_mc(MiniAs *as, MiniAsStmt *stmt) {
+    MiniAsMCData *data;
+    char *copy,*walk;
+    size_t count=0U,i=0U;
+    unsigned width=data_width(as,stmt->op);
+    if(width==0U)return true;
+    copy=minias_strdup(stmt->args);
+    if(!copy){minias_set_error(as,"out-of-memory:mc-data-copy");return false;}
+    count=1U;
+    for(walk=copy;*walk;++walk)if(*walk==',')++count;
+    if(count>SIZE_MAX/sizeof(MiniAsMCExpr) || count>UINT32_MAX/width) {
+        minias_set_error(as,"mc-data-count-overflow:line=%zu",stmt->line);
+        free(copy);return false;
+    }
+    data=calloc(1U,sizeof(*data));
+    if(!data) {
+        free(copy);minias_set_error(as,"out-of-memory:mc-data");return false;
+    }
+    stmt->mcdata=data; /* destructor owns partial parse on failure */
+    data->fields=calloc(count,sizeof(*data->fields));
+    if(!data->fields) {
+        free(copy);minias_set_error(as,"out-of-memory:mc-data-fields");
+        return false;
+    }
+    data->width=width;
+    data->count=count;
+    walk=copy;
+    while(walk && i<count) {
+        char *comma=strchr(walk,',');
+        char *token;
+        uint64_t value=0U,divisor=0U;
+        bool shift=false,matched=false;
+        MiniAsSymbolExpr lhs={0},rhs={0};
+        MiniAsMCExpr *out=&data->fields[i];
+        if(comma)*comma='\0';
+        token=minias_trim(walk);
+        /* Symbolic absolute expressions are intentionally recomputed after
+         * layout. Numeric-only constants are frozen as immediates now. */
+        if(minias_eval_u64_expression(token,&value)) {
+            out->kind=MINIAS_MC_EXPR_CONSTANT;
+            out->constant=value;
+            matched=true;
+        } else if(minias_parse_absolute_data_bits(as,token,&value)) {
+            out->kind=MINIAS_MC_EXPR_DEFERRED_ABSOLUTE;
+            out->deferred_text=minias_strdup(token);
+            matched=out->deferred_text!=NULL;
+        } else if((width==2U || width==4U || width==8U) &&
+                  parse_symbol_minus_dot(token,&lhs)) {
+            out->kind=MINIAS_MC_EXPR_SYMBOL_MINUS_DOT;
+            matched=true;
+        } else if((width==2U || width==4U || width==8U) &&
+                  parse_symbol_minus_dot_divisor(token,&lhs,&divisor)) {
+            out->kind=MINIAS_MC_EXPR_SYMBOL_MINUS_DOT_DIV;
+            out->divisor=divisor;
+            matched=true;
+        } else if((width==1U || width==2U || width==4U || width==8U) &&
+                  parse_symbol_difference_divisor(token,&lhs,&rhs,&divisor,&shift)) {
+            out->kind=MINIAS_MC_EXPR_DIFFERENCE_DIV;
+            out->divisor=divisor;
+            out->logical_shift=shift;
+            matched=true;
+        } else if((width==1U || width==2U || width==4U || width==8U) &&
+                  parse_symbol_difference(token,&lhs,&rhs)) {
+            out->kind=MINIAS_MC_EXPR_DIFFERENCE;
+            matched=true;
+        } else if((width==4U || width==8U) &&
+                  (parse_data_symbol_addend(token,&lhs) ||
+                   parse_data_symbol_absolute_tail(as,token,&lhs))) {
+            out->kind=MINIAS_MC_EXPR_SYMBOL;
+            matched=true;
+        } else {
+            minias_set_error(as,"unsupported-mc-expression:%s:line=%zu",
+                             token,stmt->line);
+        }
+        if(matched && out->kind!=MINIAS_MC_EXPR_CONSTANT &&
+           out->kind!=MINIAS_MC_EXPR_DEFERRED_ABSOLUTE) {
+            out->lhs_name=minias_strdup(lhs.name);
+            out->lhs_addend=lhs.addend;
+            if(out->kind==MINIAS_MC_EXPR_DIFFERENCE ||
+               out->kind==MINIAS_MC_EXPR_DIFFERENCE_DIV) {
+                out->rhs_name=minias_strdup(rhs.name);
+                out->rhs_addend=rhs.addend;
+            }
+            matched=out->lhs_name!=NULL &&
+                    ((out->kind!=MINIAS_MC_EXPR_DIFFERENCE &&
+                      out->kind!=MINIAS_MC_EXPR_DIFFERENCE_DIV) ||
+                     out->rhs_name!=NULL);
+        }
+        if(!matched) {
+            if(as->error[0]=='\0')
+                minias_set_error(as,"out-of-memory:mc-expression:line=%zu",
+                                 stmt->line);
+            free(copy);return false;
+        }
+        ++i;
+        walk=comma?comma+1U:NULL;
+    }
+    free(copy);
+    if(i!=count || data->count*(size_t)width!=stmt->size) {
+        minias_set_error(as,"mc-expression-layout-mismatch:line=%zu",
+                         stmt->line);
+        return false;
+    }
+    return true;
+}
+
 static bool add_data_stmt(MiniAs *as, const char *op, char *args, size_t line) {
     uint64_t count = 0U;
     uint64_t bytes;
@@ -3644,6 +3767,9 @@ static bool add_data_stmt(MiniAs *as, const char *op, char *args, size_t line) {
         free(snapshot);return false;
     }
     free(snapshot);
+    if(width!=0U &&
+       !minias_compile_data_mc(as,&as->stmts[as->stmt_count-1U]))
+        return false;
     if(delayed) {
         as->stmts[as->stmt_count-1U].deferred_data_size=true;
         as->has_deferred_data=true;
@@ -3907,10 +4033,102 @@ static bool emit_symbol_difference_divided(MiniAs *as,
     return minias_section_append(as,stmt->section,bytes,width);
 }
 
+/* Shared MCExpr evaluator/materializer: parse-site symbol identities and
+ * addends are immutable, while section-dependent values are resolved from
+ * the final layout. No Target owns this section/data semantics. */
+static bool minias_emit_mc_data(MiniAs *as,const MiniAsStmt *stmt) {
+    const MiniAsMCData *data=stmt->mcdata;
+    size_t i;
+    if(!data || data->width==0U ||
+       data->count>(size_t)UINT32_MAX/data->width ||
+       data->count*data->width!=stmt->size) {
+        minias_set_error(as,"invalid-mc-data-layout:line=%zu",stmt->line);
+        return false;
+    }
+    for(i=0U;i<data->count;++i) {
+        const MiniAsMCExpr *x=&data->fields[i];
+        MiniAsSymbolExpr lhs={0},rhs={0};
+        uint64_t value=x->constant;
+        uint64_t at=(uint64_t)as->sections[(size_t)stmt->section].size;
+        bool literal=x->kind==MINIAS_MC_EXPR_CONSTANT;
+        unsigned j;
+        unsigned char bytes[8];
+        if(x->kind==MINIAS_MC_EXPR_DEFERRED_ABSOLUTE) {
+            literal=x->deferred_text!=NULL &&
+                    minias_parse_absolute_data_bits(as,x->deferred_text,&value);
+            if(!literal) {
+                minias_set_error(as,"unresolved-mc-absolute:line=%zu",
+                                 stmt->line);
+                return false;
+            }
+        }
+        if(x->lhs_name!=NULL) {
+            size_t len=strlen(x->lhs_name);
+            if(len>=sizeof(lhs.name))return false;
+            memcpy(lhs.name,x->lhs_name,len+1U);
+            lhs.addend=x->lhs_addend;
+        }
+        if(x->rhs_name!=NULL) {
+            size_t len=strlen(x->rhs_name);
+            if(len>=sizeof(rhs.name))return false;
+            memcpy(rhs.name,x->rhs_name,len+1U);
+            rhs.addend=x->rhs_addend;
+        }
+        if(x->kind==MINIAS_MC_EXPR_SYMBOL) {
+            MiniAsSymbol *sym=minias_get_symbol(as,lhs.name,false);
+            if(sym && sym->defined && sym->section==MINIAS_SECTION_ABS) {
+                literal=true;
+                value=sym->value+(uint64_t)lhs.addend;
+            } else {
+                if(!minias_section_append_zero(as,stmt->section,data->width) ||
+                   !minias_add_fixup(as,stmt->section,at,
+                          MINIAS_FIXUP_ABS,data->width,lhs.name,lhs.addend))
+                    return false;
+                continue;
+            }
+        } else if(x->kind==MINIAS_MC_EXPR_SYMBOL_MINUS_DOT) {
+            if(!emit_symbol_minus_dot(as,stmt,data->width,at,&lhs))return false;
+            continue;
+        } else if(x->kind==MINIAS_MC_EXPR_SYMBOL_MINUS_DOT_DIV) {
+            if(!emit_symbol_minus_dot_divided(as,stmt,data->width,at,
+                                              &lhs,x->divisor))return false;
+            continue;
+        } else if(x->kind==MINIAS_MC_EXPR_DIFFERENCE ||
+                  x->kind==MINIAS_MC_EXPR_DIFFERENCE_DIV) {
+            MiniAsSymbol *left=minias_get_symbol(as,lhs.name,false);
+            MiniAsSymbol *right=minias_get_symbol(as,rhs.name,false);
+            if(x->kind==MINIAS_MC_EXPR_DIFFERENCE &&
+               left && right && left->defined && right->defined &&
+               left->section==right->section &&
+               (left->section==MINIAS_SECTION_ABS ||
+                (left->section>=0 && left->subsection==right->subsection))) {
+                literal=true;
+                value=(left->value+(uint64_t)lhs.addend)-
+                      (right->value+(uint64_t)rhs.addend);
+            }else if(x->kind==MINIAS_MC_EXPR_DIFFERENCE_DIV) {
+                if(!emit_symbol_difference_divided(as,stmt,data->width,
+                           &lhs,&rhs,x->divisor,x->logical_shift))return false;
+                continue;
+            }else {
+                if(!emit_symbol_difference(as,stmt,data->width,at,
+                                           &lhs,&rhs))return false;
+                continue;
+            }
+        }
+        if(!literal) {
+            minias_set_error(as,"unknown-mc-expression-kind:%u:line=%zu",
+                             (unsigned)x->kind,stmt->line);
+            return false;
+        }
+        for(j=0U;j<data->width;++j)
+            bytes[j]=(unsigned char)(value>>(j*8U));
+        if(!minias_section_append(as,stmt->section,bytes,data->width))
+            return false;
+    }
+    return true;
+}
+
 static bool emit_data_stmt(MiniAs *as, const MiniAsStmt *stmt) {
-    unsigned int width = data_width(as, stmt->op);
-    char *copy;
-    char *cursor;
 
     if(!strcmp(stmt->op,".fill")) {
         uint64_t repeat,value,i,j;
@@ -4029,112 +4247,7 @@ static bool emit_data_stmt(MiniAs *as, const MiniAsStmt *stmt) {
         return emit_common_space(as,stmt->section,stmt->size,fill);
     }
 
-    copy = minias_strdup(stmt->args);
-    if (copy == NULL) {
-        minias_set_error(as, "out-of-memory:data");
-        return false;
-    }
-    cursor = copy;
-    while (cursor != NULL) {
-        char *comma = strchr(cursor, ',');
-        uint64_t value;
-        unsigned char bytes[8];
-        unsigned int i;
-
-        if (comma != NULL) {
-            *comma = '\0';
-        }
-        if (!minias_parse_absolute_data_bits(as, minias_trim(cursor), &value)) {
-            MiniAsSymbolExpr expr;
-            const char *trimmed = minias_trim(cursor);
-            uint64_t relocation_offset =
-                (uint64_t)as->sections[(size_t)stmt->section].size;
-
-            {
-                MiniAsSymbolExpr rhs_expr;
-                uint64_t divisor;
-                bool arithmetic_shift=false;
-                if ((width == 2U || width == 4U || width == 8U) &&
-                    parse_symbol_minus_dot(trimmed, &expr)) {
-                    if (!emit_symbol_minus_dot(as,
-                                               stmt,
-                                               width,
-                                               relocation_offset,
-                                               &expr)) {
-                        free(copy);
-                        return false;
-                    }
-                } else if ((width == 2U || width == 4U || width == 8U) &&
-                           parse_symbol_minus_dot_divisor(trimmed,
-                                                          &expr,
-                                                          &divisor)) {
-                    if (!emit_symbol_minus_dot_divided(as,
-                                                       stmt,
-                                                       width,
-                                                       relocation_offset,
-                                                       &expr,
-                                                       divisor)) {
-                        free(copy);
-                        return false;
-                    }
-                } else if ((width == 1U || width == 2U || width == 4U ||
-                            width == 8U) &&
-                           parse_symbol_difference_divisor(trimmed,&expr,
-                                  &rhs_expr,&divisor,&arithmetic_shift)) {
-                    if(!emit_symbol_difference_divided(as,stmt,width,
-                              &expr,&rhs_expr,divisor,arithmetic_shift)) {
-                        free(copy);return false;
-                    }
-                } else if ((width == 1U || width == 2U || width == 4U ||
-                            width == 8U) &&
-                           parse_symbol_difference(trimmed, &expr, &rhs_expr)) {
-                    if (!emit_symbol_difference(as,
-                                                stmt,
-                                                width,
-                                                relocation_offset,
-                                                &expr,
-                                                &rhs_expr)) {
-                        free(copy);
-                        return false;
-                    }
-                } else {
-                    if ((width != 4U && width != 8U) ||
-                        !(parse_data_symbol_addend(trimmed,&expr) ||
-                          parse_data_symbol_absolute_tail(as,trimmed,&expr))) {
-                        minias_set_error(as,
-                                         "unsupported-expression:%s:%s:line=%zu",
-                                         stmt->op,
-                                         trimmed,
-                                         stmt->line);
-                        free(copy);
-                        return false;
-                    }
-                    if (!minias_section_append_zero(as, stmt->section, width) ||
-                        !minias_add_fixup(as,
-                                              stmt->section,
-                                              relocation_offset,
-                                              MINIAS_FIXUP_ABS,
-                                              width,
-                                              expr.name,
-                                              expr.addend)) {
-                        free(copy);
-                        return false;
-                    }
-                }
-            }
-        } else {
-            for (i = 0U; i < width; ++i) {
-                bytes[i] = (unsigned char)((value >> (i * 8U)) & 0xffU);
-            }
-            if (!minias_section_append(as, stmt->section, bytes, width)) {
-                free(copy);
-                return false;
-            }
-        }
-        cursor = comma == NULL ? NULL : comma + 1;
-    }
-    free(copy);
-    return true;
+    return minias_emit_mc_data(as,stmt);
 }
 
 static bool parse_numeric_label_id(const char *text, size_t *id) {
