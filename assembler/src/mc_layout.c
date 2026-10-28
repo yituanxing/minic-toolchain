@@ -116,202 +116,248 @@ bool minias_finalize_subsection_layout(MiniAs *as) {
 }
 
 
-/* Stable Common Fragment graph retained throughout the parse and all layout
- * iterations. Neither the Target nor the output writer owns symbol anchors.
- * Four anchor arrays are allocated once, reused across every fixed point. */
+
+/* Stable indexed MCFragment graph. GNU subsections are sorted by number at
+ * parse completion. Cache their identity ONCE, never redo a linear search for
+ * every symbol and statement in every relaxation pass. Source ordinals and
+ * symbol indices remain immutable even when macros expand. */
 typedef struct MiniAsAnchorGraph {
-    size_t *start_head,*end_head,*start_next,*end_next;
-    size_t stmt_count,symbol_count,relayout_count;
+    size_t *start_head, *end_head;
+    size_t *start_next, *end_next;
+    size_t *statement_subsection, *symbol_subsection;
+    size_t stmt_count, symbol_count, subsection_count, relayout_count;
 } MiniAsAnchorGraph;
 
-void minias_layout_destroy(MiniAs *as) {
-    MiniAsAnchorGraph *g=(MiniAsAnchorGraph *)as->layout_anchor_graph;
-    if(g) {
-        free(g->start_head);free(g->end_head);
-        free(g->start_next);free(g->end_next);
-        free(g);
-        as->layout_anchor_graph=NULL;
-    }
-    free(as->forced_long_branch_bitmap);
-    as->forced_long_branch_bitmap=NULL;
-    as->forced_long_branch_bitmap_size=0U;
+static void free_anchor_graph(MiniAsAnchorGraph *graph) {
+    if (graph == NULL) return;
+    free(graph->start_head);
+    free(graph->end_head);
+    free(graph->start_next);
+    free(graph->end_next);
+    free(graph->statement_subsection);
+    free(graph->symbol_subsection);
+    free(graph);
 }
 
-/* Statement ordinal is stable across re-layout; macro source lines are not. */
+void minias_layout_destroy(MiniAs *as) {
+    free_anchor_graph((MiniAsAnchorGraph *)as->layout_anchor_graph);
+    as->layout_anchor_graph = NULL;
+    free(as->forced_long_branch_bitmap);
+    as->forced_long_branch_bitmap = NULL;
+    as->forced_long_branch_bitmap_size = 0U;
+}
+
+/* MCLayout is the only owner of symbol anchors and Section identity.
+ * Every allocation/validation failure abandons the graph atomically. */
+static MiniAsAnchorGraph *build_anchor_graph(MiniAs *as) {
+    MiniAsAnchorGraph *graph = (MiniAsAnchorGraph *)as->layout_anchor_graph;
+    const size_t n = as->stmt_count;
+    const size_t symbols = as->symbol_count;
+    const size_t subsections = as->subsection_count;
+    size_t i;
+
+    if (graph != NULL) {
+        if (graph->stmt_count != n || graph->symbol_count != symbols ||
+            graph->subsection_count != subsections) {
+            minias_set_error(as, "fragment-index-cardinality-mutated");
+            return NULL;
+        }
+        return graph;
+    }
+    if (n == SIZE_MAX || n + 1U > SIZE_MAX / sizeof(size_t) ||
+        symbols > SIZE_MAX / sizeof(size_t) ||
+        subsections > SIZE_MAX / sizeof(size_t)) {
+        minias_set_error(as, "fragment-index-capacity-overflow");
+        return NULL;
+    }
+    graph = calloc(1U, sizeof(*graph));
+    if (graph == NULL) {
+        minias_set_error(as, "out-of-memory:anchor-graph");
+        return NULL;
+    }
+    graph->stmt_count = n;
+    graph->symbol_count = symbols;
+    graph->subsection_count = subsections;
+    graph->start_head = malloc((n + 1U) * sizeof(size_t));
+    graph->end_head = malloc((n + 1U) * sizeof(size_t));
+    graph->start_next = malloc((symbols ? symbols : 1U) * sizeof(size_t));
+    graph->end_next = malloc((symbols ? symbols : 1U) * sizeof(size_t));
+    graph->statement_subsection = malloc((n ? n : 1U) * sizeof(size_t));
+    graph->symbol_subsection =
+        malloc((symbols ? symbols : 1U) * sizeof(size_t));
+    if (graph->start_head == NULL || graph->end_head == NULL ||
+        graph->start_next == NULL || graph->end_next == NULL ||
+        graph->statement_subsection == NULL ||
+        graph->symbol_subsection == NULL) {
+        minias_set_error(as, "out-of-memory:fragment-index-storage");
+        goto fail;
+    }
+
+    /* Subsection indexes are stable iff the parser already canonicalized
+     * them. Reject duplicates, invalid Sections and accidental reorder. */
+    for (i = 0U; i < subsections; ++i) {
+        const MiniAsSubsection *sub = &as->subsections[i];
+        if (sub->section < 0 || (size_t)sub->section >= as->section_count ||
+            (i != 0U &&
+             compare_subsections(&as->subsections[i-1U], sub) >= 0)) {
+            minias_set_error(as, "fragment-index-noncanonical-subsection");
+            goto fail;
+        }
+    }
+    for (i = 0U; i <= n; ++i) {
+        graph->start_head[i] = SIZE_MAX;
+        graph->end_head[i] = SIZE_MAX;
+    }
+    for (i = 0U; i < n; ++i) {
+        const MiniAsStmt *stmt = &as->stmts[i];
+        MiniAsSubsection *sub =
+            minias_find_subsection(as, stmt->section, stmt->subsection);
+        if (sub == NULL) {
+            minias_set_error(as, "fragment-index-missing-stmt-subsection:%zu",
+                             stmt->line);
+            goto fail;
+        }
+        graph->statement_subsection[i] = (size_t)(sub - as->subsections);
+    }
+    for (i = 0U; i < symbols; ++i) {
+        const MiniAsSymbol *sym = &as->symbols[i];
+        MiniAsSubsection *sub = NULL;
+        graph->start_next[i] = SIZE_MAX;
+        graph->end_next[i] = SIZE_MAX;
+        graph->symbol_subsection[i] = SIZE_MAX;
+        if (sym->defined && sym->section >= 0)
+            sub = minias_find_subsection(as, sym->section, sym->subsection);
+        if (sub != NULL)
+            graph->symbol_subsection[i] = (size_t)(sub - as->subsections);
+        if (sym->has_fragment_anchor && sym->defined && sym->section >= 0) {
+            if (sym->fragment_anchor > n || sub == NULL) {
+                minias_set_error(as, "fragment-index-invalid-start:%s",
+                                 sym->name);
+                goto fail;
+            }
+            graph->start_next[i] = graph->start_head[sym->fragment_anchor];
+            graph->start_head[sym->fragment_anchor] = i;
+        }
+        if (sym->has_size_end_anchor) {
+            if (sym->size_end_anchor > n || sub == NULL ||
+                !sym->has_fragment_anchor) {
+                minias_set_error(as, "fragment-index-invalid-end:%s",
+                                 sym->name);
+                goto fail;
+            }
+            graph->end_next[i] = graph->end_head[sym->size_end_anchor];
+            graph->end_head[sym->size_end_anchor] = i;
+        }
+    }
+    as->layout_anchor_graph = graph;
+    return graph;
+fail:
+    free_anchor_graph(graph);
+    return NULL;
+}
+
+/* A source-level statement ordinal survives macro expansion and re-layout. */
 bool minias_force_long_branch_for_stmt(const MiniAs *as, size_t statement_id) {
     size_t i;
-    if(as->forced_long_branch_bitmap!=NULL &&
-       statement_id<as->forced_long_branch_bitmap_size)
-        return as->forced_long_branch_bitmap[statement_id]!=0U;
-    for(i=0U;i<as->forced_long_branch_count;++i)
-        if(as->forced_long_branch_ids[i]==statement_id)return true;
+    if (as->forced_long_branch_bitmap != NULL &&
+        statement_id < as->forced_long_branch_bitmap_size)
+        return as->forced_long_branch_bitmap[statement_id] != 0U;
+    for (i = 0U; i < as->forced_long_branch_count; ++i)
+        if (as->forced_long_branch_ids[i] == statement_id) return true;
     return false;
 }
 
-/* Layout iteration owns fragment identity and growth bookkeeping. Only
- * target backends know the instruction's displacement range and expansion. */
 
-/* Persistent fragment layout: parsed statements are the fragments. Re-layout
- * only their offsets and sizes, preserve expanded macro identities, and
- * relocate label/.size anchors without reopening or reparsing the source.
- *
- * Sources containing position-dependent conditionals, .org, .set or .equ
- * retain the conservative reparsing path until these directives acquire
- * typed deferred-expression fragments. */
+
+/* Persistent Fragment fixed-point: the Target owns alternative instruction
+ * widths but cannot mutate Section placement.  Symbol-start, symbol-size
+ * end and the statement itself all use the SAME prevalidated subsection
+ * index.  This prevents source-order .subsection switches from binding an
+ * anchor to a different output Section after a branch expands. */
 static bool minias_relayout_fragments(MiniAs *as) {
-    size_t n = as->stmt_count, nsym = as->symbol_count;
-    MiniAsAnchorGraph *graph=(MiniAsAnchorGraph *)as->layout_anchor_graph;
-    size_t *start_head = NULL, *end_head = NULL;
-    size_t *start_next = NULL, *end_next = NULL;
+    MiniAsAnchorGraph *graph = build_anchor_graph(as);
     size_t i;
-    bool ok = false;
-    bool new_index=graph==NULL;
-    if(new_index) {
-        graph=calloc(1U,sizeof(*graph));
-        if(!graph) {
-            minias_set_error(as,"out-of-memory:anchor-graph");
-            return false;
-        }
-        graph->stmt_count=n;
-        graph->symbol_count=nsym;
-        as->layout_anchor_graph=graph;
-    }else if(graph->stmt_count!=n || graph->symbol_count!=nsym) {
-        minias_set_error(as,"anchor-graph-cardinality-mutated");
-        return false;
-    }
+    if (graph == NULL) return false;
     ++graph->relayout_count;
-    if(new_index) {
+    for (i = 0U; i < graph->subsection_count; ++i)
+        as->subsections[i].size = 0U;
 
-    if (n == SIZE_MAX || n + 1U > SIZE_MAX / sizeof(size_t) ||
-        (nsym != 0U && nsym > SIZE_MAX / sizeof(size_t))) {
-        minias_set_error(as, "fragment-anchor-overflow");
-        return false;
-    }
-    start_head = malloc((n + 1U) * sizeof(size_t));
-    end_head = malloc((n + 1U) * sizeof(size_t));
-    start_next = malloc((nsym == 0U ? 1U : nsym) * sizeof(size_t));
-    end_next = malloc((nsym == 0U ? 1U : nsym) * sizeof(size_t));
-    graph->start_head=start_head;
-    graph->end_head=end_head;
-    graph->start_next=start_next;
-    graph->end_next=end_next;
-    if (start_head == NULL || end_head == NULL ||
-        start_next == NULL || end_next == NULL) {
-        minias_set_error(as, "out-of-memory:fragment-anchors");
-        goto done;
-    }
-    for (i = 0U; i <= n; ++i) {
-        start_head[i] = SIZE_MAX;
-        end_head[i] = SIZE_MAX;
-    }
-    for (i = 0U; i < nsym; ++i) {
-        MiniAsSymbol *sym = &as->symbols[i];
-        if (sym->has_fragment_anchor && sym->defined && sym->section >= 0) {
-            size_t anchor = sym->fragment_anchor;
-            if (anchor > n) {
-                minias_set_error(as, "internal:fragment-symbol-anchor:%s",
-                                 sym->name);
-                goto done;
+    for (i = 0U; i <= graph->stmt_count; ++i) {
+        size_t symbol;
+        for (symbol = graph->start_head[i]; symbol != SIZE_MAX;
+             symbol = graph->start_next[symbol]) {
+            const size_t subsection = graph->symbol_subsection[symbol];
+            if (subsection >= graph->subsection_count) {
+                minias_set_error(as, "internal:fragment-start-subsection");
+                return false;
             }
-            start_next[i] = start_head[anchor];
-            start_head[anchor] = i;
+            as->symbols[symbol].value = as->subsections[subsection].size;
         }
-        if (sym->has_size_end_anchor) {
-            size_t anchor = sym->size_end_anchor;
-            if (anchor > n) {
-                minias_set_error(as, "internal:fragment-size-anchor:%s",
-                                 sym->name);
-                goto done;
+        for (symbol = graph->end_head[i]; symbol != SIZE_MAX;
+             symbol = graph->end_next[symbol]) {
+            const size_t subsection = graph->symbol_subsection[symbol];
+            if (subsection >= graph->subsection_count) {
+                minias_set_error(as, "internal:fragment-end-subsection");
+                return false;
             }
-            end_next[i] = end_head[anchor];
-            end_head[anchor] = i;
+            as->symbols[symbol].size_end_value =
+                as->subsections[subsection].size;
         }
-    }
-
-    } else {
-        start_head=graph->start_head;
-        end_head=graph->end_head;
-        start_next=graph->start_next;
-        end_next=graph->end_next;
-    }
-    for(i=0U;i<as->subsection_count;++i)
-        as->subsections[i].size=0U;
-    for (i = 0U; i <= n; ++i) {
-        size_t index;
-        for (index = start_head[i]; index != SIZE_MAX;
-             index = start_next[index]) {
-            MiniAsSymbol *sym = &as->symbols[index];
-            MiniAsSubsection *sub =
-                minias_find_subsection(as, sym->section, sym->subsection);
-            if (sub == NULL) {
-                minias_set_error(as, "internal:fragment-symbol-subsection:%s",
-                                 sym->name);
-                goto done;
-            }
-            sym->value = sub->size;
-        }
-        for (index = end_head[i]; index != SIZE_MAX;
-             index = end_next[index]) {
-            MiniAsSymbol *sym = &as->symbols[index];
-            MiniAsSubsection *sub =
-                minias_find_subsection(as, sym->section, sym->subsection);
-            if (sub == NULL) {
-                minias_set_error(as, "internal:fragment-size-subsection:%s",
-                                 sym->name);
-                goto done;
-            }
-            sym->size_end_value = sub->size;
-        }
-        if (i < n) {
+        if (i < graph->stmt_count) {
             MiniAsStmt *stmt = &as->stmts[i];
-            MiniAsSubsection *sub =
-                minias_find_subsection(as, stmt->section, stmt->subsection);
-            if (sub == NULL) {
-                minias_set_error(as, "internal:fragment-subsection");
-                goto done;
+            const size_t subsection = graph->statement_subsection[i];
+            MiniAsSubsection *sub;
+            if (subsection >= graph->subsection_count) {
+                minias_set_error(as, "internal:fragment-stmt-subsection");
+                return false;
+            }
+            sub = &as->subsections[subsection];
+            if (sub->section != stmt->section ||
+                sub->number != stmt->subsection) {
+                minias_set_error(as, "fragment-subsection-identity-mutated");
+                return false;
             }
             stmt->offset = sub->size;
             if (stmt->kind == MINIAS_STMT_ALIGN &&
                 strcmp(stmt->op, ".org") != 0) {
-                uint64_t align = stmt->align;
+                const uint64_t alignment = stmt->align;
                 uint64_t pad;
-                if (align == 0U || (align & (align - 1U)) != 0U) {
+                if (alignment == 0U ||
+                    (alignment & (alignment - 1U)) != 0U) {
                     minias_set_error(as, "bad-fragment-alignment");
-                    goto done;
+                    return false;
                 }
-                pad = (align - (sub->size & (align - 1U))) & (align - 1U);
-                if (stmt->align_has_max_skip && pad > stmt->align_max_skip)
-                    pad = 0U;
+                pad = (alignment - (sub->size & (alignment - 1U))) &
+                      (alignment - 1U);
+                if (stmt->align_has_max_skip &&
+                    pad > stmt->align_max_skip) pad = 0U;
                 if (pad > UINT32_MAX) {
                     minias_set_error(as, "fragment-alignment-overflow");
-                    goto done;
+                    return false;
                 }
                 stmt->size = (uint32_t)pad;
             }
             if ((uint64_t)stmt->size > UINT64_MAX - sub->size) {
                 minias_set_error(as, "fragment-size-overflow");
-                goto done;
+                return false;
             }
             sub->size += stmt->size;
         }
     }
-
-    for (i = 0U; i < nsym; ++i) {
-        MiniAsSymbol *sym = &as->symbols[i];
-        if (sym->has_size_end_anchor) {
-            if (!sym->has_fragment_anchor ||
-                sym->size_end_value < sym->value) {
-                minias_set_error(as, "fragment-size-location-mismatch:%s",
-                                 sym->name);
-                goto done;
-            }
-            sym->size = sym->size_end_value - sym->value;
+    for (i = 0U; i < graph->symbol_count; ++i) {
+        MiniAsSymbol *symbol = &as->symbols[i];
+        if (!symbol->has_size_end_anchor) continue;
+        if (!symbol->has_fragment_anchor ||
+            symbol->size_end_value < symbol->value) {
+            minias_set_error(as, "fragment-size-location-mismatch:%s",
+                             symbol->name);
+            return false;
         }
+        symbol->size = symbol->size_end_value - symbol->value;
     }
-    ok = minias_finalize_subsection_layout(as);
-done:
-    return ok;
+    return minias_finalize_subsection_layout(as);
 }
+
 
 /* Resolve Common variable-size fragments with the exact post-subsection
  * symbol addresses.  Re-run shared Fragment/Layout ownership until the
@@ -458,10 +504,11 @@ static bool collect_out_of_range_branches(MiniAs *as,
  * proof, not a copy of an ISA-specific padding/offset validator.
  */
 static bool minias_validate_fragment_layout(MiniAs *as) {
-    MiniAsAnchorGraph *graph=(MiniAsAnchorGraph *)as->layout_anchor_graph;
+    MiniAsAnchorGraph *graph=build_anchor_graph(as);
     uint64_t *cursor=NULL;
     size_t i;
     bool ok=false;
+    if(graph==NULL)return false;
     if(as->subsection_count>SIZE_MAX/sizeof(uint64_t)) {
         minias_set_error(as,"fragment-validate-capacity-overflow");
         return false;
@@ -475,22 +522,23 @@ static bool minias_validate_fragment_layout(MiniAs *as) {
     for(i=0U;i<=as->stmt_count;++i) {
         /* Symbol anchors must be checked before the next Fragment advances
          * its subsection cursor; this also covers trailing section labels. */
-        if(graph!=NULL) {
+        {
             size_t symbol;
             for(symbol=graph->start_head[i];symbol!=SIZE_MAX;
                 symbol=graph->start_next[symbol]) {
                 const MiniAsSymbol *sym=&as->symbols[symbol];
-                MiniAsSubsection *sub=minias_find_subsection(
-                    as,sym->section,sym->subsection);
-                size_t sub_index;
+                size_t sub_index=graph->symbol_subsection[symbol];
+                MiniAsSubsection *sub;
                 uint64_t expected;
-                if(!sub) {
+                if(sub_index>=as->subsection_count) {
                     minias_set_error(as,"fragment-symbol-subsection-missing:%s",
                                      sym->name);
                     goto done;
                 }
-                sub_index=(size_t)(sub-as->subsections);
-                if(cursor[sub_index]>UINT64_MAX-sub->base) {
+                sub=&as->subsections[sub_index];
+                if(sub->section!=sym->section ||
+                   sub->number!=sym->subsection ||
+                   cursor[sub_index]>UINT64_MAX-sub->base) {
                     minias_set_error(as,"fragment-symbol-offset-overflow:%s",
                                      sym->name);
                     goto done;
@@ -506,20 +554,46 @@ static bool minias_validate_fragment_layout(MiniAs *as) {
                 }
             }
         }
+        /* .size symbol,.-symbol is an anchored range, not merely a
+         * recomputed scalar. Detect drifting end points after relaxation. */
+        {
+            size_t symbol;
+            for(symbol=graph->end_head[i];symbol!=SIZE_MAX;
+                symbol=graph->end_next[symbol]) {
+                const MiniAsSymbol *sym=&as->symbols[symbol];
+                const size_t sub_index=graph->symbol_subsection[symbol];
+                uint64_t expected;
+                if(sub_index>=as->subsection_count ||
+                   cursor[sub_index]>UINT64_MAX-as->subsections[sub_index].base) {
+                    minias_set_error(as,"fragment-size-end-overflow:%s",
+                                     sym->name);
+                    goto done;
+                }
+                expected=as->subsections[sub_index].base+cursor[sub_index];
+                if(sym->size_end_value!=expected ||
+                   sym->value>expected ||
+                   sym->size!=expected-sym->value) {
+                    minias_set_error(as,"fragment-size-end-anchor-drift:%s",
+                                     sym->name);
+                    goto done;
+                }
+            }
+        }
         if(i==as->stmt_count)break;
         {
             const MiniAsStmt *stmt=&as->stmts[i];
-            MiniAsSubsection *sub=minias_find_subsection(
-                as,stmt->section,stmt->subsection);
-            size_t sub_index;
+            size_t sub_index=graph->statement_subsection[i];
+            MiniAsSubsection *sub;
             uint64_t expected;
-            if(!sub) {
+            if(sub_index>=as->subsection_count) {
                 minias_set_error(as,"fragment-subsection-missing:line=%zu",
                                  stmt->line);
                 goto done;
             }
-            sub_index=(size_t)(sub-as->subsections);
-            if(cursor[sub_index]>UINT64_MAX-sub->base) {
+            sub=&as->subsections[sub_index];
+            if(sub->section!=stmt->section ||
+               sub->number!=stmt->subsection ||
+               cursor[sub_index]>UINT64_MAX-sub->base) {
                 minias_set_error(as,"fragment-offset-overflow:line=%zu",
                                  stmt->line);
                 goto done;
@@ -594,8 +668,8 @@ static bool minias_validate_fragment_layout(MiniAs *as) {
         for(k=0U;k<as->subsection_count;++k) {
             const MiniAsSubsection *sub=&as->subsections[k];
             if(sub->section!=(int)i)continue;
-            if(sub->base>end) {
-                minias_set_error(as,"fragment-section-hole:%s",
+            if(sub->base!=end) {
+                minias_set_error(as,"fragment-section-gap-or-overlap:%s",
                                  as->sections[i].name);
                 goto done;
             }
@@ -604,7 +678,7 @@ static bool minias_validate_fragment_layout(MiniAs *as) {
                                  as->sections[i].name);
                 goto done;
             }
-            if(sub->base+sub->size>end)end=sub->base+sub->size;
+            end=sub->base+sub->size;
         }
         if(end!=as->sections[i].layout_size) {
             minias_set_error(as,"fragment-section-layout-drift:%s",
