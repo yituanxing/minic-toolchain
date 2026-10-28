@@ -2616,3 +2616,25 @@ for bad in 'cmeq v0.16b,v1.8b,v2.16b' \
  fi
 done
 echo 'MINIAS_A64_VECTOR_COMPARE=PASS GNU_12_words_six_families_and_3_rejects'
+
+# Linux GHASH uses vector MVN after CMEQ. This differs from scalar MVN;
+# GNU MOV to the separate AdvSIMD register bank has Q-bit and fixed B lanes.
+cat > "$work/a64-simd-mvn.s" <<'A64_SIMD_MVN'
+.text
+mvn v6.16b,v6.16b
+mvn v0.8b,v1.8b
+not v3.16b,v2.16b
+not v4.8b,v5.8b
+A64_SIMD_MVN
+"$MINIAS" --target=aarch64 -o "$work/a64-simd-mvn-mini.o" "$work/a64-simd-mvn.s"
+"$AARCH64_AS" -o "$work/a64-simd-mvn-gnu.o" "$work/a64-simd-mvn.s"
+"$AARCH64_OBJCOPY" -j .text -O binary "$work/a64-simd-mvn-mini.o" "$work/a64-simd-mvn-mini.bin"
+"$AARCH64_OBJCOPY" -j .text -O binary "$work/a64-simd-mvn-gnu.o" "$work/a64-simd-mvn-gnu.bin"
+cmp "$work/a64-simd-mvn-mini.bin" "$work/a64-simd-mvn-gnu.bin"
+for bad in 'mvn v0.4s,v1.4s' 'not v0.8b,v1.16b'; do
+ printf '.text\n%s\n' "$bad" > "$work/a64-simd-mvn-bad.s"
+ if "$MINIAS" --target=aarch64 -o "$work/a64-simd-mvn-bad.o" "$work/a64-simd-mvn-bad.s" >/dev/null 2>&1; then
+  echo "invalid SIMD MVN/NOT accepted: $bad" >&2; exit 1
+ fi
+done
+echo 'MINIAS_A64_VECTOR_MVN=PASS GNU_4_bytes_family_2_rejects'
