@@ -4111,15 +4111,16 @@ static bool minias_emit_mc_data(MiniAs *as,const MiniAsStmt *stmt) {
                                               &lhs,x->divisor))return false;
             continue;
         } else if(x->kind==MINIAS_MC_EXPR_DOT_MINUS_SYMBOL) {
-            MiniAsSymbol *rhs=minias_get_symbol(as,x->rhs_name,false);
-            if(rhs==NULL || !rhs->defined || rhs->section!=stmt->section) {
+            MiniAsSymbol *origin=minias_get_symbol(as,x->rhs_name,false);
+            if(origin==NULL || !origin->defined ||
+               origin->section!=stmt->section) {
                 minias_set_error(as,"unresolved-mc-dot-difference:line=%zu",
                                  stmt->line);
                 return false;
             }
             literal=true;
             value=at+(uint64_t)lhs.addend-
-                  (rhs->value+(uint64_t)rhs.addend);
+                  (origin->value+(uint64_t)rhs.addend);
         } else if(x->kind==MINIAS_MC_EXPR_DIFFERENCE ||
                   x->kind==MINIAS_MC_EXPR_DIFFERENCE_DIV) {
             MiniAsSymbol *left=minias_get_symbol(as,lhs.name,false);
