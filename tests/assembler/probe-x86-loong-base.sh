@@ -3031,3 +3031,26 @@ for target in x86_64 loongarch64; do
  fi
 done
 echo 'MINIAS_COMMON_COMPACT_ASSIGN=PASS GNU_x86_Loong_rept_mutable_and_fragment_anchor'
+
+# Linux GHASH mixes commas and whitespace in a single .irp list.
+# This is GNU Common macro iteration; target instruction syntax is not involved.
+cat > "$work/gnu-irp-mixed.s" <<'GNU_IRP_MIXED'
+.data
+.irp val, 1, 2 3, 4 5
+.byte \val
+.endr
+GNU_IRP_MIXED
+for target in x86_64 loongarch64; do
+ "$MINIAS" --target="$target" -o "$work/$target-irpmixed-mini.o" "$work/gnu-irp-mixed.s"
+ if [ "$target" = x86_64 ]; then
+  as --64 -o "$work/$target-irpmixed-gnu.o" "$work/gnu-irp-mixed.s"
+  objcopy -j .data -O binary "$work/$target-irpmixed-mini.o" "$work/$target-irpmixed-mini.bin"
+  objcopy -j .data -O binary "$work/$target-irpmixed-gnu.o" "$work/$target-irpmixed-gnu.bin"
+ else
+  "$LOONGAS" -mabi=lp64d -o "$work/$target-irpmixed-gnu.o" "$work/gnu-irp-mixed.s"
+  "$LOONGCOPY" -j .data -O binary "$work/$target-irpmixed-mini.o" "$work/$target-irpmixed-mini.bin"
+  "$LOONGCOPY" -j .data -O binary "$work/$target-irpmixed-gnu.o" "$work/$target-irpmixed-gnu.bin"
+ fi
+ cmp "$work/$target-irpmixed-mini.bin" "$work/$target-irpmixed-gnu.bin"
+done
+echo 'MINIAS_COMMON_IRP_MIXED_DELIMITERS=PASS GNU_5_values_x86_Loong'
