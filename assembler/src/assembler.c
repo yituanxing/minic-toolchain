@@ -3074,6 +3074,69 @@ static bool data_references_mutable_set(MiniAs *as,const char *expr) {
     return false;
 }
 
+/* GAS snapshots mutable absolute .set operands at each lexical DATA site,
+ * including symbolic .fill/.space sizes. A later .set reassignment cannot
+ * retroactively change the earlier fragment during iterative layout. */
+static bool snapshot_mutable_data_tokens(MiniAs *as,const char *input,
+                                         char **out) {
+    size_t original=strlen(input),capacity,used=0U;
+    const char *p=input;
+    char *result;
+    if(original>(SIZE_MAX-1U)/24U) {
+        minias_set_error(as,"mutable-data-expression-overflow");return false;
+    }
+    capacity=original*24U+1U;
+    result=malloc(capacity);
+    if(!result) {
+        minias_set_error(as,"out-of-memory:mutable-data-snapshot");return false;
+    }
+    while(*p) {
+        const char *start=p;
+        char representation[48];
+        const char *chosen=NULL;
+        size_t part;
+        if(isdigit((unsigned char)*p)) {
+            char *end=NULL;uint64_t number;
+            if(minias_parse_number_literal(p,&end,&number) && end>p) {
+                p=end;
+            }else ++p;
+        }else if(*p=='.' || *p=='_' || *p=='$' ||
+                 isalpha((unsigned char)*p)) {
+            char name[256];MiniAsSymbol *sym;
+            while(isalnum((unsigned char)*p) || *p=='.' ||
+                  *p=='_' || *p=='$')++p;
+            part=(size_t)(p-start);
+            if(part<sizeof(name)) {
+                int n;
+                memcpy(name,start,part);name[part]='\\0';
+                sym=minias_get_symbol(as,name,false);
+                if(sym && sym->defined && sym->mutable_absolute_set &&
+                   sym->section==MINIAS_SECTION_ABS) {
+                    if(sym->value<=INT64_MAX)
+                        n=snprintf(representation,sizeof(representation),
+                                   "%llu",(unsigned long long)sym->value);
+                    else
+                        n=snprintf(representation,sizeof(representation),
+                                   "-%llu",(unsigned long long)
+                                   (UINT64_MAX-sym->value+UINT64_C(1)));
+                    if(n<0 || (size_t)n>=sizeof(representation)) {
+                        free(result);return false;
+                    }
+                    chosen=representation;
+                }
+            }
+        }else ++p;
+        part=chosen?strlen(chosen):(size_t)(p-start);
+        if(part>=capacity-used) {
+            minias_set_error(as,"mutable-data-snapshot-overflow");
+            free(result);return false;
+        }
+        memcpy(result+used,chosen?chosen:start,part);
+        used+=part;
+    }
+    result[used]='\\0';*out=result;return true;
+}
+
 static bool add_data_stmt(MiniAs *as, const char *op, char *args, size_t line) {
     uint64_t count = 0U;
     uint64_t bytes;
@@ -3267,6 +3330,10 @@ static bool add_data_stmt(MiniAs *as, const char *op, char *args, size_t line) {
         free(copy);copy=NULL;
         if(!changed){free(snapshot);snapshot=NULL;}
     }
+    if(!snapshot && as->has_mutable_absolute_sets &&
+       (!strcmp(op,".fill") || !strcmp(op,".space") ||
+        !strcmp(op,".skip") || !strcmp(op,".zero")) &&
+       !snapshot_mutable_data_tokens(as,args,&snapshot))return false;
     if (!add_stmt(as, MINIAS_STMT_DATA, op,
                   snapshot?snapshot:args, line, (uint32_t)bytes, 1U)) {
         free(snapshot);return false;
