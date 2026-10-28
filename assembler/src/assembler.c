@@ -2613,12 +2613,17 @@ static bool parse_symbol_difference(const char *text,
 static bool parse_symbol_difference_divisor(const char *text,
         MiniAsSymbolExpr *lhs,MiniAsSymbolExpr *rhs,uint64_t *divisor,
         bool *arithmetic_shift) {
-    char *copy=minias_strdup(text),*p,*operator_at=NULL;
+    char *copy=minias_strdup(text),*p,*operator_at=NULL,*normalized;
     unsigned depth=0U;
     bool ok=false,shift=false;
     uint64_t n;
     if(!copy)return false;
-    for(p=copy;*p;++p) {
+    /* GNU parenthesizes the ENTIRE shifted expression:
+     * ((end-start) >> 5). Remove only whole-expression wrapping
+     * parentheses BEFORE locating top-level >> or division; otherwise
+     * depth never reaches zero and the operator is incorrectly hidden. */
+    normalized=strip_outer_parens(copy);
+    for(p=normalized;*p;++p) {
         if(*p=='(')++depth;
         else if(*p==')') {
             if(!depth)goto done;
@@ -2644,7 +2649,7 @@ static bool parse_symbol_difference_divisor(const char *text,
         if(n==0U || n>(uint64_t)INT64_MAX)goto done;
         *divisor=n;
     }
-    if(parse_symbol_difference(strip_outer_parens(minias_trim(copy)),
+    if(parse_symbol_difference(strip_outer_parens(minias_trim(normalized)),
                                lhs,rhs)) {
         *arithmetic_shift=shift;ok=true;
     }
