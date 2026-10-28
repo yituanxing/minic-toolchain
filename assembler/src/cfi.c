@@ -126,27 +126,34 @@ bool minias_cfi_directive(MiniAs *as,const char *op,
     int64_t value=0;
     unsigned reg=0U, kind=0U;
     if (!strcmp(op,".cfi_sections")) {
+        bool debug=!strcmp(args,".debug_frame");
+        bool eh=!strcmp(args,".eh_frame");
         if (as->cfi_active || as->cfi_proc_count != 0U ||
-            strcmp(args,".debug_frame") != 0) {
+            (as->cfi_debug_frame || as->cfi_eh_frame) ||
+            (!debug && !eh)) {
             minias_set_error(as,"unsupported-cfi-sections:%s:line=%zu",args,line);
             return false;
         }
         if (as->target->cfi_code_align == 0U ||
             as->target->cfi_data_align == 0 ||
-            as->target->cfi_address_size != 8U) {
+            as->target->cfi_address_size != 8U ||
+            (eh && as->target->elf_machine!=62U)) {
             minias_set_error(as,"unsupported-target-dwarf-cfi:line=%zu",line);
             return false;
         }
-        as->cfi_debug_frame=true;
+        as->cfi_debug_frame=debug;
+        as->cfi_eh_frame=eh;
         return true;
     }
-    if (!as->cfi_debug_frame) {
+    if (!as->cfi_debug_frame && !as->cfi_eh_frame) {
         minias_set_error(as,"cfi-debug-frame-not-selected:line=%zu",line);
         return false;
     }
     if (!strcmp(op,".cfi_startproc")) {
         size_t anchor;
-        if (as->cfi_active || *args!='\0' || as->current_section<0 ||
+        if (as->cfi_active ||
+            (*args!='\0' && strcmp(args,"simple")!=0) ||
+            as->current_section<0 ||
             !cfi_grow((void **)&as->cfi_procs,&as->cfi_proc_capacity,
                       as->cfi_proc_count+1U,sizeof(*as->cfi_procs)) ||
             !minias_anchor_here(as,&anchor)) {
@@ -158,6 +165,7 @@ bool minias_cfi_directive(MiniAs *as,const char *op,
         proc->begin_symbol=anchor;
         proc->end_symbol=SIZE_MAX;
         proc->first_op=as->cfi_op_count;
+        proc->simple=strcmp(args,"simple")==0;
         as->cfi_active=true;
         return true;
     }
@@ -166,6 +174,10 @@ bool minias_cfi_directive(MiniAs *as,const char *op,
         return false;
     }
     proc=&as->cfi_procs[as->cfi_proc_count-1U];
+    if (!strcmp(op,".cfi_signal_frame") && !*args) {
+        proc->signal_frame=true;
+        return true;
+    }
     if (!strcmp(op,".cfi_endproc")) {
         size_t anchor;
         if (*args!='\0' || proc->state_depth!=0U ||
@@ -312,27 +324,68 @@ static bool encode_cfi(MiniAs *as,int sec,const MiniAsCfiOp *op) {
     }
 }
 
+
+/* One Common x86 SysV .eh_frame CIE. Other targets continue to require
+ * independently validated ABI/encoding profiles instead of fake no-ops.
+ * GNU GAS's zR CIE uses pcrel/sdata4 (0x1b) FDE initial locations. */
+static bool emit_eh_cie(MiniAs *as,int section,bool simple,bool signal,
+                        size_t *cie_begin) {
+    size_t base=as->sections[(size_t)section].size;
+    *cie_begin=base;
+    if(!put32(as,section,0U) || !put32(as,section,0U) ||
+       !put8(as,section,1U) ||
+       !put8(as,section,'z') || !put8(as,section,'R') ||
+       (signal && !put8(as,section,'S')) ||
+       !put8(as,section,0U) ||
+       !uleb(as,section,as->target->cfi_code_align) ||
+       !sleb(as,section,as->target->cfi_data_align) ||
+       !put8(as,section,(uint8_t)as->target->cfi_return_reg) ||
+       !uleb(as,section,1U) || !put8(as,section,0x1bU))return false;
+    if(!simple) {
+        unsigned reg=as->target->cfi_return_reg;
+        if(reg>=64U || as->target->cfi_stack_reg!=7U ||
+           as->target->cfi_data_align!=-8 ||
+           !put8(as,section,0x0cU) ||
+           !uleb(as,section,as->target->cfi_stack_reg) ||
+           !uleb(as,section,8U) ||
+           !put8(as,section,(uint8_t)(0x80U|reg)) ||
+           !uleb(as,section,1U))return false;
+    }
+    return finish_length(as,section,base);
+}
+
 bool minias_cfi_emit(MiniAs *as) {
     size_t i;
     int section;
     MiniAsSection *data;
-    if(!as->cfi_debug_frame || as->cfi_proc_count==0U)return true;
-    section=minias_ensure_section(as,".debug_frame",MINIAS_SHT_PROGBITS,0U,8U);
+    bool eh=as->cfi_eh_frame;
+    bool cie_known[2][2]={{false,false},{false,false}};
+    size_t cie_offset[2][2]={{0U,0U},{0U,0U}};
+    if((!as->cfi_debug_frame && !eh) || as->cfi_proc_count==0U)
+        return true;
+    if(eh && as->target->elf_machine!=62U) {
+        minias_set_error(as,"unsupported-target-eh-frame");
+        return false;
+    }
+    section=minias_ensure_section(as,eh?".eh_frame":".debug_frame",
+        MINIAS_SHT_PROGBITS,eh?MINIAS_SHF_ALLOC:0U,8U);
     if(section<0)return false;
     data=&as->sections[(size_t)section];
-    /* DWARF32 CIE v3; absolute CIE offsets for .debug_frame (NOT the
-     * relative .eh_frame pointer). Target ABI provides its CFA defaults. */
-    if(!put32(as,section,0U) ||
-       !put32(as,section,UINT32_MAX) ||
-       !put8(as,section,3U) ||
-       !put8(as,section,0U) ||
-       !uleb(as,section,as->target->cfi_code_align) ||
-       !sleb(as,section,as->target->cfi_data_align) ||
-       !uleb(as,section,as->target->cfi_return_reg) ||
-       !put8(as,section,0x0cU) ||
-       !uleb(as,section,as->target->cfi_stack_reg) ||
-       !uleb(as,section,0U) ||
-       !finish_length(as,section,0U))return false;
+    if(!eh) {
+        /* DWARF32 CIE v3, absolute CIE pointer for .debug_frame.
+         * Original Common ownership and byte format remain unchanged. */
+        if(!put32(as,section,0U) ||
+           !put32(as,section,UINT32_MAX) ||
+           !put8(as,section,3U) ||
+           !put8(as,section,0U) ||
+           !uleb(as,section,as->target->cfi_code_align) ||
+           !sleb(as,section,as->target->cfi_data_align) ||
+           !uleb(as,section,as->target->cfi_return_reg) ||
+           !put8(as,section,0x0cU) ||
+           !uleb(as,section,as->target->cfi_stack_reg) ||
+           !uleb(as,section,0U) ||
+           !finish_length(as,section,0U))return false;
+    }
     for(i=0U;i<as->cfi_proc_count;++i) {
         const MiniAsCfiProc *proc=&as->cfi_procs[i];
         const MiniAsSymbol *begin,*end;
@@ -349,13 +402,39 @@ bool minias_cfi_emit(MiniAs *as) {
             minias_set_error(as,"invalid-cfi-procedure-layout");
             return false;
         }
+        if(eh) {
+            unsigned simple=proc->simple?1U:0U;
+            unsigned signal=proc->signal_frame?1U:0U;
+            if(!cie_known[simple][signal]) {
+                if(!emit_eh_cie(as,section,proc->simple,
+                                proc->signal_frame,
+                                &cie_offset[simple][signal]))return false;
+                cie_known[simple][signal]=true;
+            }
+        }
+        data=&as->sections[(size_t)section];
         base=data->size;
-        if(!put32(as,section,0U) || !put32(as,section,0U))return false;
-        ptr=data->size;
-        if(!put64(as,section,0U) ||
-           !put64(as,section,end->value-begin->value))return false;
-        if(!minias_add_fixup(as,section,ptr,MINIAS_FIXUP_ABS,8U,
-                            begin->name,0))return false;
+        if(eh) {
+            size_t cie=cie_offset[proc->simple?1U:0U]
+                                   [proc->signal_frame?1U:0U];
+            if(base+4U<cie || base+4U-cie>UINT32_MAX)return false;
+            if(!put32(as,section,0U) ||
+               !put32(as,section,(uint32_t)(base+4U-cie)))return false;
+            ptr=as->sections[(size_t)section].size;
+            if(!put32(as,section,0U) ||
+               !put32(as,section,(uint32_t)(end->value-begin->value)) ||
+               !uleb(as,section,0U) ||
+               !minias_add_fixup(as,section,ptr,MINIAS_FIXUP_PREL32,4U,
+                                 begin->name,0))return false;
+        } else {
+            if(!put32(as,section,0U) ||
+               !put32(as,section,0U))return false;
+            ptr=as->sections[(size_t)section].size;
+            if(!put64(as,section,0U) ||
+               !put64(as,section,end->value-begin->value) ||
+               !minias_add_fixup(as,section,ptr,MINIAS_FIXUP_ABS,8U,
+                                 begin->name,0))return false;
+        }
         loc=begin->value;
         for(j=0U;j<proc->op_count;++j) {
             const MiniAsCfiOp *op=&as->cfi_ops[proc->first_op+j];
