@@ -12,7 +12,7 @@ cat > "$work/owners.s" <<'SRC'
 owner_probe:
     nop
     call external_call
-    .balign 16
+    .balign 16, 0
     .long external_data
     .reloc 0, R_X86_64_32, explicit_symbol
 .size owner_probe, .-owner_probe
