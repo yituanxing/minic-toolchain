@@ -31,6 +31,10 @@ jobs:
           test -x build/release/bin/minic-as
       - name: Enforce ISA-private fixup and MC emission ownership
         run: bash tests/assembler/probe-mc-target-boundary.sh
+      - name: Stress persistent MCLayout with 160 x86 long-branch expansions
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-relax-plan-stress.sh
       - name: Enforce one Common MCFragment layout engine and shared variable DATA
         run: bash tests/assembler/probe-mc-layout-ownership.sh
       - name: Enforce unique Common MCExpr grammar and emission ownership

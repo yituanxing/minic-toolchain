@@ -24,6 +24,8 @@ if 'minias_parse_common_fill(' in emitter or 'minias_parse_common_space(' in emi
 if 'variable_data_resolved' not in emitter:
     raise SystemExit('not emitting cached typed variable DATA')
 if 'assembler/src/mc_layout.c' not in mk:raise SystemExit('missing MCLayout build')
+if 'forced_long_branch_bitmap' not in layout or 'layout_anchor_graph' not in layout:
+    raise SystemExit('Common layout still recomputes/linearly scans symbol anchors or forced branches')
 if 'minias_solve_fragment_layout(' not in driver:
     raise SystemExit('missing Common layout fixed-point call')
 print('MINIAS_MCLAYOUT_OWNER=PASS persistent=1 branch_size=target_callback')

@@ -7,6 +7,7 @@ set -Eeuo pipefail
 : "${ARCH:?Architecture missing}"
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
+trap 'echo "VARIABLE_RELAX_FAIL arch=$ARCH command=$BASH_COMMAND" >&2; test ! -f "$work/trace" || cat "$work/trace" >&2' ERR
 case "$ARCH" in
 x86_64)
   mini=(--target=x86_64); gas=(as --64); copy=(objcopy)
@@ -23,7 +24,7 @@ cat >"$work/mc.s" <<SRC
 .globl entry
 entry:
     $branch
-    .space (gap_end-gap_start)+(. - entry)*0,0
+    .space gap_end-gap_start,0
     .rept 1200
       $nop
     .endr
@@ -38,6 +39,7 @@ SRC
 MINIAS_TRACE_RELAYOUT=1 "$MINIAS" "${mini[@]}" -o "$work/mini.o" "$work/mc.s" 2>"$work/trace"
 "${gas[@]}" -o "$work/gnu.o" "$work/mc.s"
 grep -q 'minias-fragment-relayout:inplace-passes=' "$work/trace"
+grep -q 'minias-fragment-graph:anchors_built=1' "$work/trace"
 for sec in .text .data; do
     "${copy[@]}" -j "$sec" -O binary "$work/mini.o" "$work/mini.${sec##.}"
     "${copy[@]}" -j "$sec" -O binary "$work/gnu.o" "$work/gnu.${sec##.}"
