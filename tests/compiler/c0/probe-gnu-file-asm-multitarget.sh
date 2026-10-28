@@ -1594,6 +1594,83 @@ SRC
         fi
     done
     echo 'MINIC_LOONGARCH64_LINUX_FETCH_AMO_GNU_QEMU=PASS variants=8 negative=5 old_value=1'
+
+    # Real original Linux 6.6.143 set_pte() buddy LL/SC: exact GNU named
+    # operand instructions, no invented memory clobber, two observable paths.
+    # The source also appears in ten frozen LoongArch C owners.
+    cat > "$work/loong-set-pte.i" <<'SRC'
+typedef struct { unsigned long pte; } pte_t;
+void set_pte(pte_t *ptep, pte_t pteval)
+{
+    *ptep = pteval;
+    if (((pteval).pte) & ((unsigned long)(1) << 6)) {
+        pte_t *buddy = ((pte_t *)((unsigned long)(ptep) ^ sizeof(pte_t)));
+        unsigned long page_global = ((unsigned long)(1) << 6);
+        unsigned long tmp;
+        __asm__ __volatile__ (
+        "1:" "ll.d\\t" "%[tmp], %[buddy]\\t\\t\\n"
+        "\\tbnez\\t%[tmp], 2f\\t\\t\\t\\n"
+        "\\t or\\t%[tmp], %[tmp], %[global]\\t\\n"
+        "sc.d\\t" "%[tmp], %[buddy]\\t\\t\\n"
+        "\\tbeqz\\t%[tmp], 1b\\t\\t\\t\\n"
+        "\\tnop\\t\\t\\t\\t\\t\\n"
+        "2:\\t\\t\\t\\t\\t\\t\\n"
+        "\\tdbar 0x700\\t\\n"
+        : [buddy] "+m" (buddy->pte), [tmp] "=&r" (tmp)
+        : [global] "r" (page_global));
+    }
+}
+int main(void) {
+    pte_t v[2] = {{0}, {0}};
+    set_pte(&v[0], (pte_t){ 1UL << 6 });
+    if (v[0].pte != (1UL << 6) || v[1].pte != (1UL << 6))
+        return 1;
+    v[1].pte = 8UL;
+    set_pte(&v[0], (pte_t){ 1UL << 6 });
+    if (v[1].pte != 8UL) return 2;
+    v[1].pte = 2UL;
+    set_pte(&v[0], (pte_t){ 0UL });
+    return (v[0].pte == 0UL && v[1].pte == 2UL) ? 0 : 3;
+}
+SRC
+    "$cross_cc" -O0 -x c "$work/loong-set-pte.i" -o "$work/loong-set-pte.gnu.elf"
+    "$MINIC_CC" --target=loongarch64-linux -S "$work/loong-set-pte.i"         -o "$work/loong-set-pte.minic.s"
+    grep -Fq '  ll.d $t0, $t1, 0' "$work/loong-set-pte.minic.s"
+    grep -Fq '  sc.d $t0, $t1, 0' "$work/loong-set-pte.minic.s"
+    grep -Fq '  dbar 0x700' "$work/loong-set-pte.minic.s"
+    "$cross_cc" -x assembler "$work/loong-set-pte.minic.s"         -o "$work/loong-set-pte.minic.elf"
+    qemu-loongarch64 -L /usr/loongarch64-linux-gnu "$work/loong-set-pte.gnu.elf"
+    qemu-loongarch64 -L /usr/loongarch64-linux-gnu "$work/loong-set-pte.minic.elf"
+    # A target LL/SC classifier must reject unsafe alterations. The mutated
+    # real upstream C is the oracle, not an unrelated synthetic inline asm.
+    python3 - "$work/loong-set-pte.i" "$work" <<'PY'
+import pathlib
+import sys
+source = pathlib.Path(sys.argv[1]).read_text()
+root = pathlib.Path(sys.argv[2])
+mutations = {
+    "nonvolatile": ('__asm__ __volatile__', '__asm__'),
+    "memory-role": ('[buddy] "+m"', '[buddy] "+r"'),
+    "output-role": ('[tmp] "=&r"', '[tmp] "=m"'),
+    "input-role": ('[global] "r"', '[global] "i"'),
+    "ordering": ('dbar 0x700', 'dbar 0x701'),
+    "extra-opcode": ('"\\tnop\\t', '"\\tsyscall 0\\t'),
+    "missing-retry": ('beqz\\t%[tmp], 1b', 'bnez\\t%[tmp], 1b'),
+}
+for name, (old, new) in mutations.items():
+    if old not in source:
+        raise SystemExit("missing original Linux set_pte mutation anchor " + name)
+    (root / ("loong-set-pte-bad-" + name + ".i")).write_text(
+        source.replace(old, new, 1))
+PY
+    for invalid in nonvolatile memory-role output-role input-role ordering                    extra-opcode missing-retry; do
+        if "$MINIC_CC" --target=loongarch64-linux -S             "$work/loong-set-pte-bad-$invalid.i"             -o "$work/loong-set-pte-bad-$invalid.s"             >"$work/loong-set-pte-bad-$invalid.out"             2>"$work/loong-set-pte-bad-$invalid.err"; then
+            echo "FAIL unsafe LoongArch Linux set_pte LL/SC accepted: $invalid" >&2
+            exit 1
+        fi
+        test ! -e "$work/loong-set-pte-bad-$invalid.s"
+    done
+    echo 'MINIC_LOONGARCH64_LINUX_SET_PTE_GNU_QEMU=PASS exact_source=1 llsc=1 retry=1 dbar=1 negative=7'
 fi
 
 # Architecture-specific machine syntax is still owned by real GNU AS.
