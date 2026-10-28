@@ -1463,4 +1463,48 @@ for flavor in mini gnu; do
 done
 diff -u "$work/a64-pcrel-gnu.normalized" "$work/a64-pcrel-mini.normalized"
 echo 'MINIAS_COMMON_A64_PCREL64=PASS GNU_DATA_RELOC_TYPE_ADDEND_AND_BINDING'
+
+# ARMv8 ISA profiles, CRC32/CRC32C eight width forms and all AES
+# pair-register instructions are target-owned, typed, feature-gated.
+# GNU native AS supplies exact bytes, not guessed opcodes or success only.
+cat > "$work/a64-crc-aes.s" <<'A64_CRC_AES'
+.arch armv8-a+crypto
+.text
+aese v0.16b,v1.16b
+aesd v2.16b,v3.16b
+aesmc v4.16b,v5.16b
+aesimc v6.16b,v7.16b
+.arch armv8-a+crc
+crc32b w0,w1,w2
+crc32h w3,w4,w5
+crc32w w6,w7,w8
+crc32x w9,w10,x11
+crc32cb w12,w13,w14
+crc32ch w15,w16,w17
+crc32cw w18,w19,w20
+crc32cx w21,w22,x23
+mrs x0,pmcr_el0
+msr pmcr_el0,x0
+mrs x1,pmcntenclr_el0
+msr pmcntenclr_el0,x1
+A64_CRC_AES
+"$MINIAS" --target=aarch64 -o "$work/a64-crc-aes-mini.o" "$work/a64-crc-aes.s"
+"$AARCH64_AS" -o "$work/a64-crc-aes-gnu.o" "$work/a64-crc-aes.s"
+"$AARCH64_OBJCOPY" -j .text -O binary "$work/a64-crc-aes-mini.o" "$work/a64-crc-aes-mini.bin"
+"$AARCH64_OBJCOPY" -j .text -O binary "$work/a64-crc-aes-gnu.o" "$work/a64-crc-aes-gnu.bin"
+cmp "$work/a64-crc-aes-mini.bin" "$work/a64-crc-aes-gnu.bin"
+for invalid in 'aese v0.8b,v1.8b' 'crc32x x0,w1,x2' \
+               'crc32x w0,w1,w2' 'crc32w w0,w1,x2'; do
+    printf '.arch armv8-a+crypto\n.arch_extension crc\n.text\n%s\n' "$invalid" > "$work/a64-crc-aes-bad.s"
+    if "$MINIAS" --target=aarch64 -o "$work/a64-crc-aes-bad.o" "$work/a64-crc-aes-bad.s" >/dev/null 2>&1; then
+        echo "invalid ARM crypto/CRC operand accepted: $invalid" >&2;exit 1
+    fi
+done
+for invalid in 'aese v0.16b,v1.16b' 'crc32x w0,w1,x2'; do
+    printf '.arch armv8-a\n.text\n%s\n' "$invalid" > "$work/a64-crc-aes-bad.s"
+    if "$MINIAS" --target=aarch64 -o "$work/a64-crc-aes-bad.o" "$work/a64-crc-aes-bad.s" >/dev/null 2>&1; then
+        echo "ISA extension gate bypassed: $invalid" >&2;exit 1
+    fi
+done
+echo 'MINIAS_A64_CRC_AES=PASS GNU_all_8_CRC_plus_AES_words feature_gates'
 echo 'MINIAS_AARCH64_VSLICE=PASS ELF64=1 gnu_bytes=equal relocation_call26_jump26_abs64=1 ld=pass qemu=exit0'

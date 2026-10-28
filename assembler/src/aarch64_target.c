@@ -8,6 +8,8 @@
 #include <string.h>
 #define A64_FEATURE_LSE UINT32_C(0x10000000) /* target_options feature bit */
 #define A64_FEATURE_TLBI_RANGE UINT32_C(0x20000000) /* ARMv8.4 range */
+#define A64_FEATURE_CRC UINT32_C(0x40000000) /* ARM CRC extension */
+#define A64_FEATURE_CRYPTO UINT32_C(0x80000000) /* ARM AES/crypto extension */
 
 /*
  * First non-RISC-V MiniAS vertical slice.
@@ -238,7 +240,8 @@ enum {
     A64_MC_PRFM_REG,
     A64_MC_EXCLUSIVE,
     A64_MC_SIMD_SINGLE,
-    A64_MC_SIMD_MOVE
+    A64_MC_SIMD_MOVE,
+    A64_MC_SIMD_CRYPTO
 };
 
 /* GNU AArch64 operands split on TOP-LEVEL commas, not commas within
@@ -1434,6 +1437,8 @@ static bool a64_system_register(const char *name,uint32_t *mrs,uint32_t *msr) {
         {"par_el1",UINT32_C(0xd5387400),UINT32_C(0xd5187400)},
         {"hcr_el2",UINT32_C(0xd53c1100),UINT32_C(0xd51c1100)},
         {"hstr_el2",UINT32_C(0xd53c1160),UINT32_C(0xd51c1160)},
+        {"pmcr_el0",UINT32_C(0xd53b9c00),UINT32_C(0xd51b9c00)},
+        {"pmcntenclr_el0",UINT32_C(0xd53b9c40),UINT32_C(0xd51b9c40)},
         /* S3/S0 sysreg encodings independently assembled with LLVM
          * AArch64 IAS; read-only status is explicitly rejected by MSR. */
         {"vmpidr_el2",UINT32_C(0xd53c00a0),UINT32_C(0xd51c00a0)},
@@ -2163,6 +2168,67 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
                         !strcmp(op,"dsb")?UINT32_C(0xd503309f):
                                           UINT32_C(0xd50330bf)) |
                        (barrier<<8U);
+
+    } else if(!strncmp(op,"crc32",5U)) {
+        /* Eight architectural CRC32/CRC32C width forms use one ALU
+         * machine word with indexed Rm/Rn/Rd; CRC32X and CRC32CX
+         * require X source, but W accumulator and W destination. */
+        static const struct {const char *name;uint32_t base;bool xsrc;} crc[]={
+            {"crc32b",UINT32_C(0x1ac04000),false},
+            {"crc32h",UINT32_C(0x1ac04400),false},
+            {"crc32w",UINT32_C(0x1ac04800),false},
+            {"crc32x",UINT32_C(0x9ac04c00),true},
+            {"crc32cb",UINT32_C(0x1ac05000),false},
+            {"crc32ch",UINT32_C(0x1ac05400),false},
+            {"crc32cw",UINT32_C(0x1ac05800),false},
+            {"crc32cx",UINT32_C(0x9ac05c00),true}
+        };
+        char tok[4][96];unsigned n,rd,rn,rm,k;
+        bool wd,wn,wm,sp;
+        if((as->target_options&A64_FEATURE_CRC)==0U ||
+           !split_operands(args,tok,&n) || n!=3U ||
+           !parse_a64_reg(tok[0],&rd,&wd,&sp) || sp || wd ||
+           !parse_a64_reg(tok[1],&rn,&wn,&sp) || sp || wn ||
+           !parse_a64_reg(tok[2],&rm,&wm,&sp) || sp) {
+            minias_set_error(as,"bad-aarch64-crc32:%s:line=%zu",args,stmt->line);
+            free(inst);return false;
+        }
+        for(k=0U;k<sizeof(crc)/sizeof(crc[0]);++k)
+            if(!strcmp(op,crc[k].name))break;
+        if(k==sizeof(crc)/sizeof(crc[0]) ||
+           wm!=crc[k].xsrc) {
+            minias_set_error(as,"bad-aarch64-crc-width:%s:line=%zu",args,stmt->line);
+            free(inst);return false;
+        }
+        inst->opcode=A64_MC_ARITH_ALIAS;inst->count=3U;
+        inst->encoding=crc[k].base;
+        put_reg(&inst->operands[0],rd,false);
+        put_reg(&inst->operands[1],rn,false);
+        put_reg(&inst->operands[2],rm,wm);
+    } else if(!strcmp(op,"aese") || !strcmp(op,"aesd") ||
+              !strcmp(op,"aesmc") || !strcmp(op,"aesimc")) {
+        static const struct {const char *name;uint32_t base;} aes[]={
+            {"aese",UINT32_C(0x4e284800)},
+            {"aesd",UINT32_C(0x4e285800)},
+            {"aesmc",UINT32_C(0x4e286800)},
+            {"aesimc",UINT32_C(0x4e287800)}
+        };
+        char tok[4][96];unsigned n,rd,rn,k;
+        uint32_t da,sa;
+        if((as->target_options&A64_FEATURE_CRYPTO)==0U ||
+           !split_operands(args,tok,&n) || n!=2U ||
+           !a64_vector_view(tok[0],&rd,&da) ||
+           !a64_vector_view(tok[1],&rn,&sa) ||
+           da!=UINT32_C(0x40000000) || sa!=da) {
+            minias_set_error(as,"bad-aarch64-aes:%s:line=%zu",args,stmt->line);
+            free(inst);return false;
+        }
+        for(k=0U;k<sizeof(aes)/sizeof(aes[0]);++k)
+            if(!strcmp(op,aes[k].name))break;
+        inst->opcode=A64_MC_SIMD_CRYPTO;inst->count=2U;
+        inst->encoding=aes[k].base;
+        put_reg(&inst->operands[0],rd,true);
+        put_reg(&inst->operands[1],rn,true);
     } else if((!strcmp(op,"br")||!strcmp(op,"blr")) &&
        parse_register(args,&reg,&reg64) && reg64) {
         inst->opcode=!strcmp(op,"br")?A64_MC_BR:A64_MC_BLR;
@@ -2694,6 +2760,10 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
             }
             break;
         }
+        case A64_MC_SIMD_CRYPTO:
+            code=inst->encoding|(inst->operands[1].reg<<5U)|
+                 inst->operands[0].reg;
+            break;
         case A64_MC_SIMD_MOVE: {
             unsigned src=inst->operands[1].reg;
             code=inst->encoding|(src<<16U)|(src<<5U)|
@@ -3122,16 +3192,26 @@ static bool directive(MiniAs *as, const char *op, const char *args,
                              args, line);
             return false;
         }
+        as->target_options&=~(A64_FEATURE_LSE|
+                              A64_FEATURE_TLBI_RANGE|
+                              A64_FEATURE_CRC|A64_FEATURE_CRYPTO);
         if(v85)as->target_options|=(A64_FEATURE_LSE|
-                                     A64_FEATURE_TLBI_RANGE);
-        else as->target_options&=~(A64_FEATURE_LSE|
-                                    A64_FEATURE_TLBI_RANGE);
+                                    A64_FEATURE_TLBI_RANGE|
+                                    A64_FEATURE_CRC);
+        if(!strcmp(args,"armv8-a+crc"))
+            as->target_options|=A64_FEATURE_CRC;
+        if(!strcmp(args,"armv8-a+crypto"))
+            as->target_options|=A64_FEATURE_CRYPTO;
         return true;
     }
     if(!strcmp(op,".arch_extension")) {
         *handled=true;
         if(!strcmp(args,"lse"))as->target_options |= A64_FEATURE_LSE;
         else if(!strcmp(args,"nolse"))as->target_options &= ~A64_FEATURE_LSE;
+        else if(!strcmp(args,"crc"))as->target_options |= A64_FEATURE_CRC;
+        else if(!strcmp(args,"nocrc"))as->target_options &= ~A64_FEATURE_CRC;
+        else if(!strcmp(args,"crypto"))as->target_options |= A64_FEATURE_CRYPTO;
+        else if(!strcmp(args,"nocrypto"))as->target_options &= ~A64_FEATURE_CRYPTO;
         else {
             minias_set_error(as,"unsupported-aarch64-extension:%s:line=%zu",
                              args,line);
