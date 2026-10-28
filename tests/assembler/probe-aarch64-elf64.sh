@@ -65,6 +65,27 @@ external_probe:
     mrs x0, tpidr_el1
     // GNU privileged ARMv8 sysregs: read/write permission encoded by ISA.
     mrs x0, CurrentEL
+    // Privileged system maintenance, GNU/LLVM verified; not executed.
+    ic ialluis
+    ic iallu
+    ic ivau, x4
+    dc civac, x0
+    dc cvac, x1
+    dc cvau, x2
+    dc ivac, x3
+    dc zva, x8
+    tlbi vmalle1
+    tlbi vmalle1is
+    tlbi vae1, x5
+    tlbi vae1is, x6
+    tlbi aside1, x7
+    tlbi aside1is, x8
+    tlbi vale1, x9
+    tlbi vaale1, x10
+    tlbi ipas2e1is, x11
+    tlbi alle2
+    tlbi alle3
+    tlbi vmalls12e1is
     mrs x0, sctlr_el1
     msr sctlr_el1, x2
     mrs x3, dczid_el0
@@ -724,6 +745,13 @@ for bad_source in 'ldxr x0, [x1,#4]' 'stxr x0, x1, [x2]' \
                   'msr cntvct_el0, x3' \
                   'mrs w0, sctlr_el1' \
                   'mrs x0, made_up_el3' \
+                  'tlbi vae1, w0' \
+                  'tlbi vmalle1, x0' \
+                  'dc civac, w0' \
+                  'ic ivau, w1' \
+                  'dc unknown, x0' \
+                  'tlbi bogus, x0' \
+                  'ic ialluis, x0' \
                   'yield #1' \
                   'hint #.Lnever_defined' \
                   '.equ .Lbad_hint,128; hint #.Lbad_hint' \

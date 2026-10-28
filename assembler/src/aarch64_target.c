@@ -171,6 +171,7 @@ enum {
     A64_MC_ARITH_ALIAS,
     A64_MC_MRS,
     A64_MC_MSR,
+    A64_MC_SYS_OP,
     A64_MC_BARRIER,
     A64_MC_RET,
     A64_MC_MOVZ,
@@ -1630,6 +1631,71 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
         inst->opcode=A64_MC_MVN_REG;inst->count=2U;
         put_reg(&inst->operands[0],rd,wide);
         put_reg(&inst->operands[1],rm,wide);
+    } else if(!strcmp(op,"ic") || !strcmp(op,"dc") ||
+              !strcmp(op,"tlbi")) {
+        /* System cache/TLB maintenance is one typed SYS instruction
+         * family (op0/op1/CRn/CRm/op2 and optional Xt). Only GNU-verified
+         * architectural names are accepted; no permissive SYS escape.
+         * Encoding and operand policy remain AArch64 Target-owned. */
+        static const struct {const char *family,*name;
+                              uint32_t word;bool needs_rt;} sysops[]={
+            {"ic","ialluis",UINT32_C(0xd508711f),false},
+            {"ic","iallu",UINT32_C(0xd508751f),false},
+            {"ic","ivau",UINT32_C(0xd50b7520),true},
+            {"dc","ivac",UINT32_C(0xd5087620),true},
+            {"dc","cvac",UINT32_C(0xd50b7a20),true},
+            {"dc","cvau",UINT32_C(0xd50b7b20),true},
+            {"dc","civac",UINT32_C(0xd50b7e20),true},
+            {"dc","zva",UINT32_C(0xd50b7420),true},
+            {"tlbi","vmalle1",UINT32_C(0xd508871f),false},
+            {"tlbi","vmalle1is",UINT32_C(0xd508831f),false},
+            {"tlbi","vae1",UINT32_C(0xd5088720),true},
+            {"tlbi","vae1is",UINT32_C(0xd5088320),true},
+            {"tlbi","vale1",UINT32_C(0xd50887a0),true},
+            {"tlbi","vale1is",UINT32_C(0xd50883a0),true},
+            {"tlbi","vaae1",UINT32_C(0xd5088760),true},
+            {"tlbi","vaae1is",UINT32_C(0xd5088360),true},
+            {"tlbi","aside1",UINT32_C(0xd5088740),true},
+            {"tlbi","aside1is",UINT32_C(0xd5088340),true},
+            {"tlbi","alle2",UINT32_C(0xd50c871f),false},
+            {"tlbi","alle2is",UINT32_C(0xd50c831f),false},
+            {"tlbi","ipas2e1",UINT32_C(0xd50c8420),true},
+            {"tlbi","ipas2e1is",UINT32_C(0xd50c8020),true},
+            {"tlbi","vmalls12e1",UINT32_C(0xd50c87df),false},
+            {"tlbi","vmalls12e1is",UINT32_C(0xd50c83df),false},
+            {"tlbi","vae2",UINT32_C(0xd50c8720),true},
+            {"tlbi","vae2is",UINT32_C(0xd50c8320),true},
+            {"tlbi","alle3",UINT32_C(0xd50e871f),false},
+            {"tlbi","alle3is",UINT32_C(0xd50e831f),false},
+            {"tlbi","vae3",UINT32_C(0xd50e8720),true},
+            {"tlbi","vae3is",UINT32_C(0xd50e8320),true}
+        };
+        char operation[48],operand[48];
+        unsigned rt=31U;
+        bool rt64=false,rtsp=false,paired=false,found=false;
+        uint32_t word=0U;
+        const char *requested=args;
+        unsigned i;
+        if(split_two(args,operation,sizeof(operation),
+                     operand,sizeof(operand))) {
+            paired=true;requested=operation;
+        }
+        for(i=0U;i<sizeof(sysops)/sizeof(sysops[0]);++i) {
+            if(strcmp(op,sysops[i].family) ||
+               strcmp(requested,sysops[i].name))continue;
+            if(sysops[i].needs_rt!=paired)break;
+            if(paired && (!parse_a64_reg(operand,&rt,&rt64,&rtsp) ||
+                          !rt64 || rtsp))break;
+            word=sysops[i].word;found=true;break;
+        }
+        if(!found) {
+            minias_set_error(as,"bad-aarch64-operands:%s:%s:line=%zu",
+                             op,args,stmt->line);
+            free(inst);return false;
+        }
+        inst->opcode=A64_MC_SYS_OP;inst->count=1U;
+        inst->encoding=word&~UINT32_C(31);
+        put_reg(&inst->operands[0],rt,true);
     } else if(!strcmp(op,"msr") &&
               split_two(args,first,sizeof(first),second,sizeof(second)) &&
               (!strcmp(first,"daifset") || !strcmp(first,"daifclr"))) {
@@ -2029,6 +2095,7 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
         }
         case A64_MC_MRS:
         case A64_MC_MSR:
+        case A64_MC_SYS_OP:
             code=inst->encoding|inst->operands[0].reg;
             break;
         case A64_MC_BARRIER:
