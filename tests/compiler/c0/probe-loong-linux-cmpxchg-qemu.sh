@@ -62,9 +62,6 @@ u32 linux_cmpxchg_small(u32 old, u32 replacement) {
       : "memory");
     return old32 & mask;
 }
-/* The original Linux __cmpxchg() is a GNU statement expression,
- * not an isolated ASM statement. Both Core effects and its scalar
- * result must survive a switch successor. */
 unsigned long linux_cmpxchg_switch(volatile void *ptr,unsigned long old,
                                     unsigned long replacement,unsigned int size) {
     switch(size) {
