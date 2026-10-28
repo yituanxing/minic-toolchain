@@ -758,6 +758,8 @@ for bad_source in 'ldxr x0, [x1,#4]' 'stxr x0, x1, [x2]' \
                   'ic ivau, w1' \
                   'dc unknown, x0' \
                   'tlbi bogus, x0' \
+                  'tlbi rvae1is, x9' \
+                  'tlbi rvale1is, x18' \
                   'ic ialluis, x0' \
                   'yield #1' \
                   'hint #.Lnever_defined' \
@@ -990,6 +992,11 @@ cat >"$work/arch-profiles.s" <<'A64_ARCH_PROFILES'
 profile_entry:
     cas x0, x1, [x2]
     swp x3, x4, [x5]
+    tlbi rvae1is, x9
+    tlbi rvale1is, x18
+    tlbi rvae1, x9
+    tlbi rvale1, x18
+    tlbi vale2is, x0
 .arch armv8-a+crypto
     nop
     .inst 0xd503201f, 0xd503201f, 0xd503201f, 0xd503201f, 0xd503201f

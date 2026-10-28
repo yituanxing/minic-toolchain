@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 #define A64_FEATURE_LSE UINT32_C(0x10000000) /* target_options feature bit */
+#define A64_FEATURE_TLBI_RANGE UINT32_C(0x20000000) /* ARMv8.4 range */
 
 /*
  * First non-RISC-V MiniAS vertical slice.
@@ -1653,6 +1654,11 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
             {"tlbi","vae1is",UINT32_C(0xd5088320),true},
             {"tlbi","vale1",UINT32_C(0xd50887a0),true},
             {"tlbi","vale1is",UINT32_C(0xd50883a0),true},
+            {"tlbi","vale2is",UINT32_C(0xd50c83a0),true},
+            {"tlbi","rvae1is",UINT32_C(0xd5088220),true},
+            {"tlbi","rvale1is",UINT32_C(0xd50882a0),true},
+            {"tlbi","rvae1",UINT32_C(0xd5088620),true},
+            {"tlbi","rvale1",UINT32_C(0xd50886a0),true},
             {"tlbi","vaae1",UINT32_C(0xd5088760),true},
             {"tlbi","vaae1is",UINT32_C(0xd5088360),true},
             {"tlbi","vaale1",UINT32_C(0xd50887e0),true},
@@ -1686,6 +1692,10 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
             if(strcmp(op,sysops[i].family) ||
                strcmp(requested,sysops[i].name))continue;
             if(sysops[i].needs_rt!=paired)break;
+            /* ARMv8.4 range TLBI requires an explicit architectural
+             * profile opt-in. It is not available under baseline v8-a. */
+            if(!strncmp(sysops[i].name,"rv",2U) &&
+               (as->target_options&A64_FEATURE_TLBI_RANGE)==0U)break;
             if(paired && (!parse_a64_reg(operand,&rt,&rt64,&rtsp) ||
                           !rt64 || rtsp))break;
             word=sysops[i].word;found=true;break;
@@ -2632,8 +2642,10 @@ static bool directive(MiniAs *as, const char *op, const char *args,
                              args, line);
             return false;
         }
-        if(v85)as->target_options|=A64_FEATURE_LSE;
-        else as->target_options&=~A64_FEATURE_LSE;
+        if(v85)as->target_options|=(A64_FEATURE_LSE|
+                                     A64_FEATURE_TLBI_RANGE);
+        else as->target_options&=~(A64_FEATURE_LSE|
+                                    A64_FEATURE_TLBI_RANGE);
         return true;
     }
     if(!strcmp(op,".arch_extension")) {
