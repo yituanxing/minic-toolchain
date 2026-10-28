@@ -2464,3 +2464,43 @@ GHASH_SUFFIX
 "$AARCH64_OBJCOPY" -j .text -O binary "$work/a64-ghash-suffix-gnu.o" "$work/a64-ghash-suffix-gnu.bin"
 cmp "$work/a64-ghash-suffix-mini.bin" "$work/a64-ghash-suffix-gnu.bin"
 echo 'MINIAS_A64_GHASH_EMPTY_SUFFIX=PASS GNU_PMULL_and_PMULL2_native_bytes'
+
+# ARM64 Linux asm/assembler.h: LDR_L xN,symbol + 24 has two arguments,
+# NOT a synthetic 3rd scratch register '+ 24'. Compare GNU reloc as well
+# as machine words; an accepted ADRP instruction alone cannot pass.
+cat > "$work/a64-gnu-ldr-l-spaced-addend.s" <<'A64_LDR_SPACED'
+.text
+.macro ldr_l dst:req,sym:req,tmp=
+.ifb \tmp
+adrp \dst,\sym
+.else
+adrp \tmp,\sym
+.endif
+.endm
+ldr_l x2, arm64_ftr_reg_ctrel0 + 24
+ldr_l x3, arm64_ftr_reg_ctrel0 + 40, x9
+.macro inner extra=0
+.if ((\extra) % 16) != 0
+.error "macro optional extra not a multiple of 16"
+.endif
+nop
+.endm
+.macro outer extra
+inner \extra
+.endm
+outer
+outer 16
+A64_LDR_SPACED
+"$MINIAS" --target=aarch64 -o "$work/a64-ldrsp-mini.o" "$work/a64-gnu-ldr-l-spaced-addend.s"
+"$AARCH64_AS" -o "$work/a64-ldrsp-gnu.o" "$work/a64-gnu-ldr-l-spaced-addend.s"
+"$AARCH64_OBJCOPY" -j .text -O binary "$work/a64-ldrsp-mini.o" "$work/a64-ldrsp-mini.bin"
+"$AARCH64_OBJCOPY" -j .text -O binary "$work/a64-ldrsp-gnu.o" "$work/a64-ldrsp-gnu.bin"
+cmp "$work/a64-ldrsp-mini.bin" "$work/a64-ldrsp-gnu.bin"
+for which in mini gnu; do
+ "$AARCH64_READELF" -Wr "$work/a64-ldrsp-$which.o" |
+   awk '$3=="R_AARCH64_ADR_PREL_PG_HI21" {print $1,$3,$5,$6,$7}' |
+   sort > "$work/a64-ldrsp-$which.rela"
+done
+[ "$(wc -l < "$work/a64-ldrsp-mini.rela")" -eq 2 ]
+cmp "$work/a64-ldrsp-mini.rela" "$work/a64-ldrsp-gnu.rela"
+echo 'MINIAS_A64_SPACED_RELOC_MACRO=PASS GNU_ADRP_machine_2x_RELA_addend_and_optional_defaults'

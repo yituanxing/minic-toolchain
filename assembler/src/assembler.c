@@ -5090,6 +5090,20 @@ static size_t split_macro_arguments(char *text,
             if (space == NULL) {
                 break;
             }
+            /* A GNU comma-delimited argument like
+             *   ldr_l x0, symbol + 24
+             * is ONE symbolic expression (the third 'tmp' is omitted),
+             * not 'symbol' plus an invented tmp='+ 24'. Keep one Common
+             * expression-aware lexical rule without ISA knowledge. */
+            {
+                char *rhs=space+1U,*lhs=space;
+                while(*rhs==' ' || *rhs=='\t')++rhs;
+                while(lhs>segment && (lhs[-1]==' ' || lhs[-1]=='\t'))
+                    --lhs;
+                if((*rhs && strchr("+-*/%&|^<>",*rhs)) ||
+                   (lhs>segment && strchr("+-*/%&|^<>",lhs[-1])))
+                    break;
+            }
             *space = '\0';
             rest = space + 1U;
             while (*rest == ' ' || *rest == '\t') {
@@ -5435,7 +5449,15 @@ static bool expand_macro_invocation(MiniAs *as,
                                  macro->name,key,line);
                 free(vararg_buffer);free(copy);return false;
             }
-            values[index]=strip_macro_argument_quotes(minias_trim(equal+1U));
+            {
+                const char *item=strip_macro_argument_quotes(
+                                      minias_trim(equal+1U));
+                /* Empty GNU named/positional arguments retain their
+                 * declaration defaults. ARM64 __frame extra=0 is invoked
+                 * through an omitted optional outer parameter. */
+                if(*item || !macro->params[index].default_value)
+                    values[index]=item;
+            }
         }else if(has_vararg &&
                  positional>=macro->param_count-1U) {
             const char *item=strip_macro_argument_quotes(token);
@@ -5465,7 +5487,11 @@ static bool expand_macro_invocation(MiniAs *as,
                 free(vararg_buffer);free(copy);return false;
             }
             index=positional++;
-            values[index]=strip_macro_argument_quotes(token);
+            {
+                const char *item=strip_macro_argument_quotes(token);
+                if(*item || !macro->params[index].default_value)
+                    values[index]=item;
+            }
         }
         assigned[index]=true;
     }

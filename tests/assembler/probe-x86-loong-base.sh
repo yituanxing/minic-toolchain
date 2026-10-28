@@ -2950,3 +2950,48 @@ for target in x86_64 loongarch64; do
  cmp "$work/$target-empty-mini.bin" "$work/$target-empty-gnu.bin"
 done
 echo 'MINIAS_COMMON_EMPTY_MACRO_SLOT=PASS GNU_two_targets_middle_trailing_required'
+
+# GNU comma-delimited expressions contain spaces around arithmetic ops;
+# do not split 'symbol + 24' into a phantom optional third parameter.
+# Empty explicit arguments with a declared default keep that default.
+cat > "$work/gnu-macro-default-expression.s" <<'MACRO_EXPR'
+.data
+.macro inside a:req,extra=0
+.if ((\extra) % 16) != 0
+.error "incorrect default macro argument"
+.endif
+.byte \a
+.byte \extra
+.endm
+.macro outside a:req,extra
+inside \a,\extra
+.endm
+outside 3
+outside 4,16
+inside 5,
+inside 6,extra=
+.macro expr dst:req,sym:req,tmp=
+.ifb \tmp
+.byte \dst
+.byte \sym
+.else
+.byte 0xff
+.endif
+.endm
+expr 7, 1 + 24
+expr 8, 2 + 40
+MACRO_EXPR
+for target in x86_64 loongarch64; do
+ "$MINIAS" --target="$target" -o "$work/$target-defexpr-mini.o" "$work/gnu-macro-default-expression.s"
+ if [ "$target" = x86_64 ]; then
+  as --64 -o "$work/$target-defexpr-gnu.o" "$work/gnu-macro-default-expression.s"
+  objcopy -j .data -O binary "$work/$target-defexpr-mini.o" "$work/$target-defexpr-mini.bin"
+  objcopy -j .data -O binary "$work/$target-defexpr-gnu.o" "$work/$target-defexpr-gnu.bin"
+ else
+  "$LOONGAS" -mabi=lp64d -o "$work/$target-defexpr-gnu.o" "$work/gnu-macro-default-expression.s"
+  "$LOONGCOPY" -j .data -O binary "$work/$target-defexpr-mini.o" "$work/$target-defexpr-mini.bin"
+  "$LOONGCOPY" -j .data -O binary "$work/$target-defexpr-gnu.o" "$work/$target-defexpr-gnu.bin"
+ fi
+ cmp "$work/$target-defexpr-mini.bin" "$work/$target-defexpr-gnu.bin"
+done
+echo 'MINIAS_COMMON_DEFAULT_AND_SPACED_EXPRESSION=PASS GNU_x86_Loong_nested_optional_and_symbolic_args'
