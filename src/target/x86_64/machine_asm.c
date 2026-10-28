@@ -677,6 +677,54 @@ static bool emit_linux_port_io(FILE *out,const MinicC0Program *program,
         d->width==1U?"%al":d->width==2U?"%ax":"%eax")>=0;
 }
 
+/* Linux local_add_return +r,+m XADD machine hardware. The source
+ * register is initialized from the C lvalue and written back with the old
+ * memory value. The memory gets the sum: neither operand may be dropped. */
+static bool emit_linux_local_xadd(
+    FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicCoreFunction *fn, const MinicX86Frame *frame,
+    const MinicCoreInstruction *ins, const MinicCoreInlineAsm *info) {
+    const size_t width = minic_x86_64_linux_local_xadd_width(
+        info->template_text, info->template_length);
+    const MinicCoreStructuredInlineAsmOperand *b =
+        ins->value.structured_inline_asm.operands;
+    MinicType type;
+    size_t size, i;
+    bool sign;
+    if (!out || !program || !target || !fn || !frame || !b || !width ||
+        !info->is_volatile || info->is_goto ||
+        !info->has_memory_clobber || info->register_clobber_count ||
+        ins->value.structured_inline_asm.operand_count != 2U)
+        return false;
+    for (i = 0U; i < 2U; ++i) {
+        if (b[i].operand_index != i || b[i].value >= fn->value_count ||
+            b[i].has_fixed_register_binding || b[i].early_clobber ||
+            b[i].kind != (i == 0U
+                ? MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE
+                : MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE) ||
+            !minic_type_pointee(fn->values[b[i].value].type, &type) ||
+            !minic_x86_64_scalar_width(program, target, type, &size, &sign) ||
+            size != width || !minic_type_is_integer(type))
+            return false;
+    }
+    /* r8 keeps the register C-lvalue address and r11 the memory address.
+     * r10 receives the original register value, then XADD writes OLD memory
+     * to r10 and NEW sum to memory; write the OLD value to the C register
+     * operand before the surrounding C expression uses it. */
+    if (!x86_value_load(out, frame, b[0].value, "%r8") ||
+        fprintf(out, "  %s (%%r8), %s\n",
+            width == 8U ? "movq" : "movl",
+            width == 8U ? "%r10" : "%r10d") < 0 ||
+        !x86_value_load(out, frame, b[1].value, "%r11") ||
+        fprintf(out, "  %s %s, (%%r11)\n",
+            width == 8U ? "xaddq" : "xaddl",
+            width == 8U ? "%r10" : "%r10d") < 0)
+        return false;
+    return fprintf(out, "  %s %s, (%%r8)\n",
+            width == 8U ? "movq" : "movl",
+            width == 8U ? "%r10" : "%r10d") >= 0;
+}
+
 /* Target-owned atomic RMW hardware effect, including original 64-bit
  * GNU =m + extra m-input alias form and 32/64 unary INC/DEC.
  * The target admits complete typed C constraints; Core carries only generic
@@ -1124,6 +1172,9 @@ bool minic_x86_64_emit_structured_asm(
     if (minic_x86_64_port_io_form(
             info->template_text,info->template_length)!=MINIC_X86_PORT_IO_NONE)
         return emit_linux_port_io(out,program,target,fn,frame,ins,info);
+    if (minic_x86_64_linux_local_xadd_width(
+            info->template_text, info->template_length))
+        return emit_linux_local_xadd(out, program, target, fn, frame, ins, info);
     if (minic_x86_64_atomic_rmw_form(
             info->template_text,info->template_length)!=MINIC_X86_ATOMIC_RMW_NONE)
         return emit_linux_atomic_rmw(out,program,target,fn,frame,ins,info);

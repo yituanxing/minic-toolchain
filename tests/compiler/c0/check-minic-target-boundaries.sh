@@ -83,6 +83,12 @@ lacks src/core/core_lower_asm_target.c 'local_inc'
 has src/target/aarch64/residual_emit.c 'MINIC_CORE_CALL_FRAME_ADDRESS_FRAME'
 has src/target/loongarch64/residual_emit.c 'MINIC_CORE_CALL_FRAME_ADDRESS_FRAME'
 
+# Linux local_add_return uses ONE x86 target ISA XADD contract and existing
+# Core REGISTER_READWRITE+MEMORY_READWRITE effects, never a new Core opcode.
+has src/target/x86_64/asm_contract.c 'x86_linux_local_xadd_source('
+has src/target/x86_64/machine_asm.c 'emit_linux_local_xadd('
+lacks src/core/core_lower_asm_target.c 'local_add_return'
+
 # Four ISA families, five target profiles: one storage-shape owner, distinct
 # physical ABIs. RV32 must never inherit the 8-byte LP64 word policy.
 exists src/target/common/aggregate_shape.h

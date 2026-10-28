@@ -284,7 +284,8 @@ static int verify_riscv_integer_strategy(void) {
 }
 
 /* One typed Core CALL_FRAME_ADDRESS invariant under separate machine ABIs.
- * AArch64 and LoongArch own return-PC only, SysV x86 owns saved PC and RBP.
+ * AArch64 and LoongArch own return-PC and a current fixed-frame SP;
+ * SysV x86 owns saved PC and RBP.
  * Unwinding levels>0 remain prohibited for all. */
 static int verify_lp64_return_address_level_zero(void) {
     const MinicTargetInfo *aarch =
@@ -298,8 +299,10 @@ static int verify_lp64_return_address_level_zero(void) {
             aarch, MINIC_CALL_FRAME_ADDRESS_RETURN, 0U) ||
         minic_target_info_call_frame_address_supported(
             aarch, MINIC_CALL_FRAME_ADDRESS_RETURN, 1U) ||
-        minic_target_info_call_frame_address_supported(
+        !minic_target_info_call_frame_address_supported(
             aarch, MINIC_CALL_FRAME_ADDRESS_FRAME, 0U) ||
+        minic_target_info_call_frame_address_supported(
+            aarch, MINIC_CALL_FRAME_ADDRESS_FRAME, 1U) ||
         !minic_target_info_call_frame_address_supported(
             x86, MINIC_CALL_FRAME_ADDRESS_RETURN, 0U) ||
         !minic_target_info_call_frame_address_supported(
@@ -312,12 +315,14 @@ static int verify_lp64_return_address_level_zero(void) {
             loong, MINIC_CALL_FRAME_ADDRESS_RETURN, 0U) ||
         minic_target_info_call_frame_address_supported(
             loong, MINIC_CALL_FRAME_ADDRESS_RETURN, 1U) ||
+        !minic_target_info_call_frame_address_supported(
+            loong, MINIC_CALL_FRAME_ADDRESS_FRAME, 0U) ||
         minic_target_info_call_frame_address_supported(
-            loong, MINIC_CALL_FRAME_ADDRESS_FRAME, 0U)) {
+            loong, MINIC_CALL_FRAME_ADDRESS_FRAME, 1U)) {
         (void)fprintf(stderr, "LP64_CALL_FRAME=FAIL\n");
         return 1;
     }
-    (void)puts("LP64_CALL_FRAME=PASS aarch64_x30 loongarch64_ra x86_saved_pc_and_rbp level0_only");
+    (void)puts("LP64_CALL_FRAME=PASS aarch64_x30_sp loongarch64_ra_sp x86_saved_pc_and_rbp level0_only");
     return 0;
 }
 

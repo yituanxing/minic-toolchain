@@ -128,6 +128,8 @@ typedef struct MinicX86AtomicRmwDesc {
     bool unary;
 } MinicX86AtomicRmwDesc;
 MinicX86AtomicRmw minic_x86_64_atomic_rmw_form(const char *,size_t);
+/* Original Linux local_add_return: bare XADD, not LOCK-serialized SMP. */
+size_t minic_x86_64_linux_local_xadd_width(const char *, size_t);
 const MinicX86AtomicRmwDesc *minic_x86_64_atomic_rmw_description(
     MinicX86AtomicRmw);
 

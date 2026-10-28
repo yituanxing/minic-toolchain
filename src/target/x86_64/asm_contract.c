@@ -1208,6 +1208,64 @@ static bool x86_linux_atomic_rmw_source(
     return true;
 }
 
+/* Linux 6.6.143 arch/x86/include/asm/local.h local_add_return:
+ * register +r receives the PREVIOUS memory value after bare xaddq; +m
+ * is the true hardware RMW lvalue. Core uses existing typed operand roles.
+ * This target-owned ISA contract must never widen into generic ASM text. */
+size_t minic_x86_64_linux_local_xadd_width(const char *text, size_t len) {
+    char compact[64];
+    size_t i, n = 0U;
+    if (text == NULL || len == 0U || len >= sizeof(compact)) return 0U;
+    for (i = 0U; i < len; ++i) {
+        const char c = text[i];
+        if (c == ' ' || c == '\t' || c == '\r' || c == '\n') continue;
+        if (n + 1U >= sizeof(compact)) return 0U;
+        compact[n++] = c;
+    }
+    compact[n] = '\0';
+    if (strcmp(compact, "xaddq%0,%1;") == 0) return 8U;
+    if (strcmp(compact, "xaddl%0,%1;") == 0) return 4U;
+    return 0U;
+}
+static bool x86_linux_local_xadd_source(
+    const MinicC0Program *program, const MinicInlineAsm *src,
+    MinicTargetInlineAsmContract *contract) {
+    const MinicExpression *reg, *mem;
+    MinicType reg_type, mem_type;
+    const size_t width = src ? minic_x86_64_linux_local_xadd_width(
+        src->template_text, src->template_length) : 0U;
+    if (!program || !src || !contract || !width ||
+        !src->is_volatile || src->is_goto ||
+        !src->outputs || src->output_count != 2U ||
+        src->input_count != 0U || src->label_count != 0U ||
+        !src->has_memory_clobber || src->clobber_count != 1U ||
+        src->register_clobber_count != 0U ||
+        !target_constraint_is(&src->outputs[0], "+r") ||
+        !target_constraint_is(&src->outputs[1], "+m")) return false;
+    reg = minic_c0_program_expression(program, src->outputs[0].expression);
+    mem = minic_c0_program_expression(program, src->outputs[1].expression);
+    if (!reg || !mem ||
+        reg->value_category != MINIC_VALUE_LVALUE ||
+        mem->value_category != MINIC_VALUE_LVALUE ||
+        minic_type_is_const(reg->type) || minic_type_is_const(mem->type) ||
+        !minic_type_unqualified(reg->type, &reg_type) ||
+        !minic_type_unqualified(mem->type, &mem_type) ||
+        reg_type.base_kind != MINIC_TYPE_BASE_INT ||
+        mem_type.base_kind != MINIC_TYPE_BASE_INT ||
+        !minic_type_is_integer(reg_type) || !minic_type_is_integer(mem_type) ||
+        reg_type.pointer_depth || mem_type.pointer_depth ||
+        reg_type.integer_rank != mem_type.integer_rank ||
+        (width == 8U
+         ? (reg_type.integer_rank != MINIC_INTEGER_RANK_LONG &&
+            reg_type.integer_rank != MINIC_INTEGER_RANK_LONG_LONG)
+         : reg_type.integer_rank != MINIC_INTEGER_RANK_INT))
+        return false;
+    contract->operand_count = 2U;
+    contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE;
+    contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE;
+    return true;
+}
+
 /* Target-only descriptor for all 8 GNU Linux atomic RMWcc forms.
  * This is the only source/machine ALU and flag-sign table. */
 static const struct {
@@ -1777,6 +1835,8 @@ bool minic_x86_64_qualify_inline_asm(
     if (x86_counter_source(program, source, contract))
         return true;
     if (x86_port_io_source(program, source, contract))
+        return true;
+    if (x86_linux_local_xadd_source(program, source, contract))
         return true;
     if (x86_linux_atomic_rmw_source(program, source, contract))
         return true;
