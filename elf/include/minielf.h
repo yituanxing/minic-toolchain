@@ -136,6 +136,8 @@ typedef struct MiniElfWriteRela {
     size_t symbol_index;
     uint32_t type;
     int64_t addend;
+    bool use_section_symbol; /* generated STT_SECTION entry, not user symbol */
+    size_t section_symbol_index;
 } MiniElfWriteRela;
 
 typedef struct MiniElfRelocatableSpec {

@@ -387,7 +387,10 @@ bool minielf_build_relocatable(const MiniElfRelocatableSpec *spec,
         const MiniElfWriteRela *rela = &spec->relocations[i];
 
         if (rela->target_section >= spec->section_count ||
-            (rela->symbol_index != SIZE_MAX &&
+            (rela->use_section_symbol &&
+             (!spec->emit_section_symbols ||
+              rela->section_symbol_index>=spec->section_count)) ||
+            (!rela->use_section_symbol && rela->symbol_index != SIZE_MAX &&
              rela->symbol_index >= spec->symbol_count)) {
             set_error(error_out, MINIELF_WRITE_INVALID_RELOCATION);
             goto done;
@@ -762,7 +765,9 @@ bool minielf_build_relocatable(const MiniElfRelocatableSpec *spec,
             set_error(error_out, MINIELF_WRITE_INVALID_RELOCATION);
             goto done;
         }
-        if (rela->symbol_index != SIZE_MAX) {
+        if(rela->use_section_symbol) {
+            symbol_index=1U+rela->section_symbol_index;
+        } else if (rela->symbol_index != SIZE_MAX) {
             symbol_index = symbol_output_indices[rela->symbol_index];
             if (symbol_index == 0U) {
                 set_error(error_out, MINIELF_WRITE_INVALID_RELOCATION);

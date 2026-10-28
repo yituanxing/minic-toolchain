@@ -532,6 +532,7 @@ bool minias_add_fixup(MiniAs *as,
     fixup->width = width;
     fixup->symbol_index = symbol_index;
     fixup->addend = addend;
+    fixup->prefer_section_symbol = false;
     return true;
 }
 

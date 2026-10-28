@@ -146,6 +146,7 @@ typedef struct MiniAsFixup {
     unsigned width;
     size_t symbol_index;
     int64_t addend;
+    bool prefer_section_symbol; /* target opts in to GNU section binding */
 } MiniAsFixup;
 
 typedef struct MiniAsSymbolExpr {

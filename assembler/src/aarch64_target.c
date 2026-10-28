@@ -4414,9 +4414,14 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
             return false;
     }
     if (!append_word(as, stmt->section, code)) return false;
-    return fixup == MINIAS_FIXUP_NONE ||
-           minias_add_fixup(as, stmt->section, stmt->offset, fixup, 4U,
-                            expr->name, expr->addend);
+    if(fixup==MINIAS_FIXUP_NONE)return true;
+    if(!minias_add_fixup(as,stmt->section,stmt->offset,fixup,4U,
+                         expr->name,expr->addend))return false;
+    /* GNU cross-section LDR19 relocates against the SECTION symbol plus
+     * the local label value. Common owns the actual ELF symbol mapping. */
+    if(fixup==MINIAS_FIXUP_A64_LD_PREL_LO19)
+        as->fixups[as->fixup_count-1U].prefer_section_symbol=true;
+    return true;
 }
 
 /* GNU AArch64 profiles compose ISA extensions; do not enumerate each

@@ -5,12 +5,25 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* Generic ELF STT_SECTION relocation for a target-selected, defined local
+ * cross-section reference. No machine-specific ELF logic lives here. */
+static bool section_symbol_fixup(const MiniAs *as,const MiniAsFixup *fixup) {
+    const MiniAsSymbol *sym;
+    if(!fixup->prefer_section_symbol || fixup->symbol_index>=as->symbol_count)
+        return false;
+    sym=&as->symbols[fixup->symbol_index];
+    return sym->defined && sym->bind==MINIAS_STB_LOCAL &&
+           sym->section>=0 && (size_t)sym->section<as->section_count &&
+           sym->section!=fixup->section;
+}
+
 static bool symbol_referenced_by_relocation(const MiniAs *as,
                                              size_t symbol_index) {
     size_t i;
 
     for (i = 0U; i < as->fixup_count; ++i) {
-        if (as->fixups[i].symbol_index == symbol_index) {
+        if (as->fixups[i].symbol_index == symbol_index &&
+            !section_symbol_fixup(as,&as->fixups[i])) {
             return true;
         }
     }
@@ -175,10 +188,11 @@ static bool minias_write_elf(MiniAs *as,
         MiniAsFixup *input = &as->fixups[i];
         MiniElfWriteRela *output = &relocations[i];
 
+        bool section_reloc=section_symbol_fixup(as,input);
         if (input->section < 0 ||
             (size_t)input->section >= as->section_count ||
             input->symbol_index >= as->symbol_count ||
-            symbol_map[input->symbol_index] == SIZE_MAX) {
+            (!section_reloc && symbol_map[input->symbol_index] == SIZE_MAX)) {
             minias_set_error(as, "internal:bad-relocation-symbol");
             goto done;
         }
@@ -203,6 +217,19 @@ static bool minias_write_elf(MiniAs *as,
             goto done;
         }
         output->addend = input->addend;
+        if(section_reloc) {
+            const MiniAsSymbol *local=&as->symbols[input->symbol_index];
+            if(local->value>(uint64_t)INT64_MAX ||
+               (input->addend>0 &&
+                (uint64_t)input->addend>(uint64_t)INT64_MAX-local->value)) {
+                minias_set_error(as,"section-fixup-addend-overflow:%s",
+                                 local->name);
+                goto done;
+            }
+            output->use_section_symbol=true;
+            output->section_symbol_index=(size_t)local->section;
+            output->addend=(int64_t)local->value+input->addend;
+        }
     }
 
     memset(&spec, 0, sizeof(spec));
