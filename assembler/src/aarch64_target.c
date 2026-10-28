@@ -233,7 +233,8 @@ enum {
     A64_MC_LSE,
     A64_MC_PRFM,
     A64_MC_PRFM_REG,
-    A64_MC_EXCLUSIVE
+    A64_MC_EXCLUSIVE,
+    A64_MC_SIMD_SINGLE
 };
 
 /* GNU AArch64 operands split on TOP-LEVEL commas, not commas within
@@ -266,6 +267,52 @@ static bool split_operands(const char *args, char out[4][96], unsigned *n) {
     }
     *n = count;
     return true;
+}
+
+/* SIMD/FP registers are a distinct target ISA register bank. Avoid
+ * pretending Q/V operands are GPRs or changing the common MC register
+ * representation: bank selection is kept in a target encoding flag. */
+static bool parse_a64_q_reg(const char *text,unsigned *number) {
+    char *end;
+    unsigned long n;
+    if(text[0]!='q' || !isdigit((unsigned char)text[1]))return false;
+    errno=0;n=strtoul(text+1U,&end,10);
+    if(errno || *end!='\0' || n>31UL)return false;
+    *number=(unsigned)n;return true;
+}
+
+/* One vector register arrangement for LD1/ST1, no multi-vector lists
+ * or lane load pseudo-expansions accepted until independently proven. */
+static bool parse_a64_single_v(const char *text,unsigned *reg,
+                               uint32_t *arrange) {
+    char copy[96],*p,*end;
+    unsigned long n;
+    size_t len=strlen(text);
+    static const struct {const char *s;uint32_t flags;} forms[]={
+        {".16b",UINT32_C(0x40000000)},
+        {".8b",UINT32_C(0x00000000)},
+        {".8h",UINT32_C(0x40000400)},
+        {".4h",UINT32_C(0x00000400)},
+        {".4s",UINT32_C(0x40000800)},
+        {".2s",UINT32_C(0x00000800)},
+        {".2d",UINT32_C(0x40000c00)},
+        {".1d",UINT32_C(0x00000c00)}
+    };
+    unsigned i;
+    if(len<6U || len>=sizeof(copy) ||
+       text[0]!='{' || text[len-1U]!='}')return false;
+    memcpy(copy,text+1U,len-2U);copy[len-2U]='\0';
+    p=minias_trim(copy);
+    if(*p!='v' || !isdigit((unsigned char)p[1]))return false;
+    errno=0;n=strtoul(p+1U,&end,10);
+    if(errno || n>31UL)return false;
+    for(i=0U;i<sizeof(forms)/sizeof(forms[0]);++i) {
+        if(!strcmp(end,forms[i].s)) {
+            *reg=(unsigned)n;*arrange=forms[i].flags;
+            return true;
+        }
+    }
+    return false;
 }
 
 static bool parse_a64_reg(const char *text, unsigned *number, bool *is64,
@@ -603,6 +650,22 @@ static bool parse_integer_family(MiniAsMCInst *inst,
             }
             return true;
         }
+    }
+    /* GNU ARMv8 single-vector structure LD1/ST1. The A64 bank and
+     * arrangement are ISA-owned, but base register and memory policy
+     * use the same shared typed operands as integer loads/stores. */
+    if((!strcmp(op,"ld1") || !strcmp(op,"st1")) && n==2U) {
+        uint32_t arrangement;
+        if(!parse_a64_single_v(t[0],&rd,&arrangement) ||
+           !parse_a64_mem(t[1],&base,&imm,&mode) ||
+           mode!=0U || imm!=0)return false;
+        inst->opcode=A64_MC_SIMD_SINGLE;inst->count=2U;
+        inst->encoding=arrangement|
+                       (!strcmp(op,"ld1")?UINT32_C(0x0c407000):
+                                          UINT32_C(0x0c007000));
+        put_reg(&inst->operands[0],rd,true);
+        put_reg(&inst->operands[1],base,true);
+        return true;
     }
     /* Common GNU Linux bit/byte-swap and acquire/release families.
      * All operands are typed once; no instruction-name checks in encode. */
@@ -1053,10 +1116,14 @@ static bool parse_integer_family(MiniAsMCInst *inst,
          !strcmp(op,"ldnp")) && (n == 3U || n == 4U)) {
         bool signed_pair=!strcmp(op,"ldpsw");
         bool nontemporal=!strcmp(op,"stnp") || !strcmp(op,"ldnp");
-        if (!parse_a64_reg(t[0], &rd, &wd, &spd) || spd ||
-            !parse_a64_reg(t[1], &rn, &wn, &spn) || spn || wd != wn ||
-            !parse_a64_mem(t[2], &base, &imm, &mode))
-            return false;
+        bool qpair=parse_a64_q_reg(t[0],&rd);
+        if(qpair) {
+            if(signed_pair || !parse_a64_q_reg(t[1],&rn))return false;
+            wd=true;wn=true;spd=false;spn=false;
+        } else if(!parse_a64_reg(t[0], &rd, &wd, &spd) || spd ||
+                  !parse_a64_reg(t[1], &rn, &wn, &spn) ||
+                  spn || wd!=wn)return false;
+        if(!parse_a64_mem(t[2], &base, &imm, &mode))return false;
         if(signed_pair && !wd)return false;
         /* LDNP/STNP have ONLY signed scaled imm7 offset addressing;
          * pre/post writeback encodings belong to LDP/STP. */
@@ -1066,21 +1133,23 @@ static bool parse_integer_family(MiniAsMCInst *inst,
                 !parse_signed_number(t[3], &imm)) return false;
             mode = 2U;
         }
-        if (imm % (signed_pair?4:(wd?8:4)) != 0 ||
-            imm < -(int64_t)(signed_pair?256:(wd?512:256)) ||
-            imm > (int64_t)(signed_pair?252:(wd?504:252)))
+        if (imm % (qpair?16:(signed_pair?4:(wd?8:4))) != 0 ||
+            imm < -(int64_t)(qpair?1024:(signed_pair?256:(wd?512:256))) ||
+            imm > (int64_t)(qpair?1008:(signed_pair?252:(wd?504:252))))
             return false;
         inst->opcode = signed_pair?A64_MC_LDPSW:
                        (!strcmp(op, "stp") || !strcmp(op,"stnp")) ?
                           A64_MC_STP : A64_MC_LDP;
         /* 3 is Target-only non-temporal pair variant; existing typed
          * pair MCInst and Common ELF/section machinery are reused. */
-        inst->encoding = nontemporal?3U:mode;
+        inst->encoding = (nontemporal?3U:mode) |
+                         (qpair?UINT32_C(0x100):0U);
         inst->count = 4U;
         put_reg(&inst->operands[0], rd, wd);
         put_reg(&inst->operands[1], rn, wn);
         put_reg(&inst->operands[2], base, true);
-        put_immediate(&inst->operands[3], imm / (signed_pair?4:(wd?8:4)));
+        put_immediate(&inst->operands[3],
+                      imm / (qpair?16:(signed_pair?4:(wd?8:4))));
         return true;
     }
     return false;
@@ -2395,6 +2464,10 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
             }
             break;
         }
+        case A64_MC_SIMD_SINGLE:
+            code=inst->encoding|
+                 (inst->operands[1].reg<<5U)|inst->operands[0].reg;
+            break;
         case A64_MC_PRFM:
             code=UINT32_C(0xf9800000) |
                  ((uint32_t)inst->operands[2].immediate<<10U) |
@@ -2620,6 +2693,8 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
         case A64_MC_LDP:
         case A64_MC_LDPSW: {
             bool sf = inst->operands[0].register_64;
+            bool qpair=(inst->encoding&UINT32_C(0x100))!=0U;
+            unsigned mode=inst->encoding&3U;
             uint32_t base = inst->opcode==A64_MC_LDPSW?
                 (inst->encoding==1U?UINT32_C(0x69c00000):
                  inst->encoding==2U?UINT32_C(0x68c00000):
@@ -2631,7 +2706,17 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
                 (inst->encoding == 1U ? UINT32_C(0x29c00000) :
                  inst->encoding == 2U ? UINT32_C(0x28c00000) :
                  inst->encoding == 3U ? UINT32_C(0x28400000) : UINT32_C(0x29400000));
-            if (sf && inst->opcode!=A64_MC_LDPSW)
+            if(qpair) {
+                /* FP/SIMD 128-bit pair: exact A64 V+opc fields; reuse
+                 * the GPR signed imm7/pair and memory operand emitter. */
+                base=(inst->opcode==A64_MC_STP?
+                      (mode==1U?UINT32_C(0xad800000):
+                       mode==2U?UINT32_C(0xac800000):
+                       mode==3U?UINT32_C(0xac000000):UINT32_C(0xad000000)):
+                      (mode==1U?UINT32_C(0xadc00000):
+                       mode==2U?UINT32_C(0xacc00000):
+                       mode==3U?UINT32_C(0xac400000):UINT32_C(0xad400000)));
+            } else if(sf && inst->opcode!=A64_MC_LDPSW)
                 base |= UINT32_C(0x80000000);
             code = base |
                    (((uint32_t)inst->operands[3].immediate & 127U) << 15U) |

@@ -125,6 +125,27 @@ external_probe:
     mrs x1, ctr_el0
     mrs x0, CNTVCT_EL0
     mrs x0, SCTLR_EL1
+    // SIMD register-bank pair and structure LD1/ST1: all exact GNU
+    // words tested, using existing typed memory and pair encoders.
+    stp q0, q1, [x0]
+    stp q5, q7, [x1, #-32]!
+    stp q29, q30, [sp], #32
+    ldp q0, q1, [x0]
+    ldp q2, q3, [x5, #16]
+    ldnp q2, q3, [x5, #16]
+    stnp q2, q3, [x5, #16]
+    stp q0, q1, [x0, #16 * 0]
+    ld1 {v0.16b}, [x2]
+    ld1 {v1.8b}, [x2]
+    ld1 {v1.8h}, [x2]
+    ld1 {v1.4h}, [x2]
+    ld1 {v1.4s}, [x2]
+    ld1 {v1.2s}, [x2]
+    ld1 {v1.2d}, [x2]
+    ld1 {v1.1d}, [x2]
+    st1 {v1.16b}, [x2]
+    st1 {v1.8b}, [x2]
+    st1 {v1.2d}, [x2]
     // Raw ARMv8 bitfield family (not only UBFx aliases): GNU exact bytes.
     ubfm x3, x3, #16, #19
     sbfm x4, x5, #31, #32
@@ -731,7 +752,10 @@ for bad in 'add x0, w0, x1' 'cmp x0, #4097' 'ldr x0, [x1, -257]' \
            'stp x29, x30, [sp, -520]!' 'mov x0, #0x123456789abcdef0' \
            'ldaxrh x2,[x3]' 'ldxrb x2,[x3]' \
            'stlxrh w4,x2,[x3]' 'stxrb x4,w2,[x3]' \
-           'stnp x2,x3,[x0,#-520]' 'ldnp x2,x3,[x0],8' \
+           'stnp x2,x3,[x0,#-520]' 'stp q0,x1,[x0]' 'ldp q0,q1,[x0,#-1040]' \
+           'ldnp q0,q1,[x0],16' 'ld1 {v0.16b}, [x2,#16]' \
+           'ld1 {v0.16b,v1.16b},[x2]' \
+           'ldnp x2,x3,[x0],8' \
            'ldnp x2,w3,[x0]' 'ubfm w2,w3,#32,#0' 'sbfm x2,x3,#0,#64' \
            'bfm x2,w3,#1,#2' 'movk x0,#65536' \
            'stnp w2,w3,[x0,#254]' \
