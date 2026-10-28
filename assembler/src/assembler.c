@@ -2134,9 +2134,9 @@ bool minias_parse_absolute_data_bits(MiniAs *as,
      * This numeric-only fast path cannot resolve unknown symbols and thus
      * cannot fabricate relocations or pre-layout symbol differences. */
     if(minias_eval_u64_expression(text,value))return true;
-    if (!current_location(as, &dot) || dot > (uint64_t)INT64_MAX) {
-        return false;
-    }
+    if(as->expr_dot_override)dot=as->expr_dot_value;
+    else if(!current_location(as,&dot))return false;
+    if(dot>(uint64_t)INT64_MAX)return false;
     parser.as = as;
     parser.cursor = text;
     parser.dot = (int64_t)dot;
@@ -4054,8 +4054,11 @@ static bool minias_emit_mc_data(MiniAs *as,const MiniAsStmt *stmt) {
         unsigned j;
         unsigned char bytes[8];
         if(x->kind==MINIAS_MC_EXPR_DEFERRED_ABSOLUTE) {
+            as->expr_dot_override=true;
+            as->expr_dot_value=at;
             literal=x->deferred_text!=NULL &&
                     minias_parse_absolute_data_bits(as,x->deferred_text,&value);
+            as->expr_dot_override=false;
             if(!literal) {
                 minias_set_error(as,"unresolved-mc-absolute:line=%zu",
                                  stmt->line);
