@@ -16,7 +16,6 @@ shared:
 .section .rodata.shared,"aG",@progbits,shared,comdat
 .long shared
 .text
-.globl plain
 plain:
     ret
 SRC
