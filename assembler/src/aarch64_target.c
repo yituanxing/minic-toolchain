@@ -1915,6 +1915,48 @@ static bool a64_parse_lse(MiniAs *as,MiniAsMCInst *inst,
     return true;
 }
 
+/* Pair-address immediates may contain absolute GNU .set expressions,
+ * e.g. kernel AES stp [sp,#-.Lframe_local_offset-.Lframe_extra]!.
+ * Fold ONLY known absolute values through the shared Core expression
+ * grammar; then the existing typed pair-memory decoder still owns
+ * signed-imm7 scaling, writeback mode, bounds and register validation. */
+static bool a64_fold_absolute_pair_address(MiniAs *as,MiniAsStmt *stmt) {
+    const char *op=stmt->op;
+    char *original=stmt->args,*open,*comma,*hash,*end,*out;
+    char expression[256],number[32];
+    size_t pre,n,tail;
+    int64_t value;
+    int written;
+    if(strcmp(op,"stp") && strcmp(op,"ldp") &&
+       strcmp(op,"stnp") && strcmp(op,"ldnp") &&
+       strcmp(op,"ldpsw"))return true;
+    open=strchr(original,'[');
+    if(!open || !(comma=strchr(open,',')) ||
+       !(end=strchr(comma,']')))return true;
+    hash=comma+1U;
+    while(hash<end && isspace((unsigned char)*hash))++hash;
+    if(hash>=end || *hash!='#')return true;
+    ++hash;
+    n=(size_t)(end-hash);
+    if(n==0U || n>=sizeof(expression))return true;
+    memcpy(expression,hash,n);
+    expression[n]='\0';
+    if(!minias_evaluate_absolute_operand(as,minias_trim(expression),&value))
+        return true; /* Preserve fail-closed unresolved source. */
+    written=snprintf(number,sizeof(number),"%lld",(long long)value);
+    if(written<0 || (size_t)written>=sizeof(number))return false;
+    pre=(size_t)(hash-original);
+    tail=strlen(end);
+    if(pre>SIZE_MAX-(size_t)written-tail-1U)return false;
+    out=malloc(pre+(size_t)written+tail+1U);
+    if(!out){minias_set_error(as,"out-of-memory:a64-pair-operand");return false;}
+    memcpy(out,original,pre);
+    memcpy(out+pre,number,(size_t)written);
+    memcpy(out+pre+(size_t)written,end,tail+1U);
+    free(stmt->args);stmt->args=out;
+    return true;
+}
+
 static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
     /* Bind aliases at this precise instruction site; subsequent .unreq
      * or redefining an alias cannot retroactively change prior MCInsts. */
@@ -1926,6 +1968,7 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
         }
         free(stmt->args);stmt->args=expanded;
     }
+    if(!a64_fold_absolute_pair_address(as,stmt))return false;
     MiniAsMCInst *inst = calloc(1U, sizeof(*inst) +
                                 4U * sizeof(MiniAsMCOperand));
     unsigned reg, imm;
@@ -2857,27 +2900,42 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
         unsigned simd_imm;
         if(!split_two(args,vreg,sizeof(vreg),text,sizeof(text)) ||
            !a64_vector_view(vreg,&rd,&ar) ||
-           !parse_signed_number(text,&number) ||
-           number<0 || number>255) {
+           !parse_signed_number(text,&number)) {
             minias_set_error(as,"bad-aarch64-movi:%s:line=%zu",
                              args,stmt->line);
             free(inst);return false;
         }
-        /* Legal MOVI splat #imm8 forms share exactly the same 8-bit
-         * bit split: imm8[7:5] -> [18:16], imm8[4:0]->[9:5].
-         * Constant-only; no ARM symbolic relocation is inferred. */
-        if((ar&UINT32_C(0xc00))==0U)
-            base=UINT32_C(0x0f00e400);
-        else if((ar&UINT32_C(0xc00))==UINT32_C(0x800))
-            base=UINT32_C(0x0f000400);
-        else if(ar==UINT32_C(0x40000c00) && number==0)
+        /* GNU MOVI Vd.2D, #bitmask64 forms encode one bit per repeated
+         * 64-bit byte: each byte MUST be 0x00 or 0xff. Reuse existing
+         * MOVI imm8 field emitter for all legal patterns, not a single
+         * hard-coded kernel #0xffffffff special case. */
+        if(ar==UINT32_C(0x40000c00)) {
+            uint64_t bits=(uint64_t)number;
+            unsigned k;
+            simd_imm=0U;
+            for(k=0U;k<8U;++k) {
+                uint8_t octet=(uint8_t)(bits>>(8U*k));
+                if(octet!=0U && octet!=UINT8_MAX) {
+                    minias_set_error(as,"bad-aarch64-movi-2d-mask:%s:line=%zu",
+                                     args,stmt->line);
+                    free(inst);return false;
+                }
+                if(octet==UINT8_MAX)simd_imm|=1U<<k;
+            }
             base=UINT32_C(0x6f00e400);
-        else {
+        }else if(number>=0 && number<=255 &&
+                 (ar&UINT32_C(0xc00))==0U) {
+            base=UINT32_C(0x0f00e400);
+            simd_imm=(unsigned)number;
+        }else if(number>=0 && number<=255 &&
+                 (ar&UINT32_C(0xc00))==UINT32_C(0x800)) {
+            base=UINT32_C(0x0f000400);
+            simd_imm=(unsigned)number;
+        }else {
             minias_set_error(as,"bad-aarch64-movi-size:%s:line=%zu",
                              args,stmt->line);
             free(inst);return false;
         }
-        simd_imm=(unsigned)number;
         inst->opcode=A64_MC_SIMD_IMM;inst->count=1U;
         inst->encoding=base|
                       (ar&UINT32_C(0x40000000))|
@@ -2951,6 +3009,21 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
         put_reg(&inst->operands[0],rd,true);
         put_reg(&inst->operands[1],rn,true);
         if(tri)put_reg(&inst->operands[2],rm,true);
+    } else if(!strcmp(op,"sha1h")) {
+        unsigned rd,rn;
+        bool dw,nw;
+        char dst[96],src[96];
+        if((as->target_options&A64_FEATURE_CRYPTO)==0U ||
+           !split_two(args,dst,sizeof(dst),src,sizeof(src)) ||
+           !a64_scalar_fp_reg(dst,&rd,&dw) || dw ||
+           !a64_scalar_fp_reg(src,&rn,&nw) || nw) {
+            minias_set_error(as,"bad-aarch64-sha1h:%s:line=%zu",
+                             args,stmt->line);free(inst);return false;
+        }
+        inst->opcode=A64_MC_SIMD_CRYPTO;inst->count=2U;
+        inst->encoding=UINT32_C(0x5e280800);
+        put_reg(&inst->operands[0],rd,false);
+        put_reg(&inst->operands[1],rn,false);
     } else if(!strcmp(op,"sha256su0") || !strcmp(op,"sha256su1") ||
               !strcmp(op,"sha256h") || !strcmp(op,"sha256h2")) {
         /* One typed ARM SHA256 instruction family: H/H2 use scalar Qd,Qn

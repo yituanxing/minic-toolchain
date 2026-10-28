@@ -2253,3 +2253,41 @@ A64_KEYWORD_SPACES
 "$AARCH64_OBJCOPY" -j .data -O binary "$work/a64-keyword-gnu.o" "$work/a64-keyword-gnu.bin"
 cmp "$work/a64-keyword-mini.bin" "$work/a64-keyword-gnu.bin"
 echo 'MINIAS_COMMON_KEYWORD_WHITESPACE_A64=PASS GNU_named_positional_binding'
+
+# Actual GNU Linux crypto SHA1H and MOVI 2D repeated-byte immediate
+# family; the .2D constant must have each source byte either 0 or 0xff.
+cat > "$work/a64-linux-sha1h-movi-pair.s" <<'A64_EXTRA_CRYPTO'
+.arch armv8-a+crypto
+.text
+sha1h s14,s12
+sha1h s0,s1
+movi v9.2d,#0xffffffff
+movi v0.2d,#0
+movi v1.2d,#0xff000000ff
+movi v2.2d,#0xff00ff00
+movi v3.2d,#0x000000ff000000ff
+movi v4.2d,#0xff00000000000000
+.set .Lframe_local_offset, ((7 + 3) / 2) * 16
+.set .Lframe_extra, 16
+stp x29,x30,[sp,#-.Lframe_local_offset - .Lframe_extra]!
+ldp x29,x30,[sp,#.Lframe_local_offset + .Lframe_extra]
+A64_EXTRA_CRYPTO
+"$MINIAS" --target=aarch64 -o "$work/a64-extra-mini.o" "$work/a64-linux-sha1h-movi-pair.s"
+"$AARCH64_AS" -o "$work/a64-extra-gnu.o" "$work/a64-linux-sha1h-movi-pair.s"
+"$AARCH64_OBJCOPY" -j .text -O binary "$work/a64-extra-mini.o" "$work/a64-extra-mini.bin"
+"$AARCH64_OBJCOPY" -j .text -O binary "$work/a64-extra-gnu.o" "$work/a64-extra-gnu.bin"
+cmp "$work/a64-extra-mini.bin" "$work/a64-extra-gnu.bin"
+for bad in 'sha1h d0,s1' 'sha1h s0,d1' 'sha1h s0,s1,s2' \
+           'movi v1.2d,#0x1234' 'movi v1.2d,#0x01' \
+           'movi v0.2d,#0x00010000' \
+           'stp x29,x30,[sp,#-.Lframe_local_offset - .Lframe_extra - 4096]!'; do
+    printf '.arch armv8-a+crypto\n.text\n.set .Lframe_local_offset,80\n.set .Lframe_extra,16\n%s\n' "$bad" > "$work/a64-crypto-pair-invalid.s"
+    if "$MINIAS" --target=aarch64 -o "$work/a64-crypto-pair-invalid.o" "$work/a64-crypto-pair-invalid.s" >/dev/null 2>&1; then
+        echo "invalid A64 SHA1H/MOVI/STP accepted: $bad" >&2;exit 1
+    fi
+done
+printf '.arch armv8-a\n.text\nsha1h s0,s1\n' > "$work/a64-sha1h-no-crypto.s"
+if "$MINIAS" --target=aarch64 -o "$work/a64-sha1h-no-crypto.o" "$work/a64-sha1h-no-crypto.s" >/dev/null 2>&1; then
+    echo 'SHA1H without crypto extension accepted' >&2;exit 1
+fi
+echo 'MINIAS_A64_SHA1H_MOVI2D_STP_EXPR=PASS GNU_10_words_strict_feature_and_range'

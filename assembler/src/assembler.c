@@ -1646,6 +1646,11 @@ static bool evaluate_absolute_expression(MiniAs *as,
     return *parser.cursor == '\0';
 }
 
+bool minias_evaluate_absolute_operand(MiniAs *as,const char *text,
+                                      int64_t *value) {
+    return text && value && evaluate_absolute_expression(as,text,value);
+}
+
 bool minias_parse_absolute_data_bits(MiniAs *as,
                                      const char *text,
                                      uint64_t *value) {

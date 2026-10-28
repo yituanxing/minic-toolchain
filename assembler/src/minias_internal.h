@@ -387,6 +387,10 @@ bool minias_write_elf32(MiniAs *as, const char *path);
 int minias_find_section(const MiniAs *as, const char *name);
 int minias_ensure_section(MiniAs *as, const char *name, uint32_t type, uint64_t flags, uint64_t align);
 MiniAsSymbol *minias_get_symbol(MiniAs *as, const char *name, bool create);
+/* Shared absolute expression evaluator for target-specific operand syntax.
+ * Only already-resolved numeric/.set expressions succeed: no guessing
+ * relocatable values or mirroring Core symbol algorithms per backend. */
+bool minias_evaluate_absolute_operand(MiniAs *,const char *,int64_t *);
 bool minias_queue_literal(MiniAs *as,const MiniAsSymbolExpr *expression,
                           unsigned width,MiniAsSymbolExpr *pool_label);
 bool minias_add_fixup(MiniAs *as,
