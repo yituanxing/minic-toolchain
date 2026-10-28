@@ -151,6 +151,73 @@ static bool x86_counter_source(const MinicC0Program *p,const MinicInlineAsm *s,
     return true;
 }
 
+
+/* Original Linux 6.6 ALTERNATIVE(call __sw_hweight{32,64}, POPCNT).
+ * This source parser checks the COMPLETE GNU alternative assembly,
+ * including patch metadata/feature=151, not a prefix/suffix substring.
+ * Real kernel software fallback and ALT ELF records must be preserved. */
+unsigned int minic_x86_64_hweight_alternative_form(const char *s,size_t len) {
+    static const char *const begin="661:call__sw_hweight";
+    static const char *const middle=
+        "662:.skip-(((6651f-6641f)-(662b-661b))>0)*"
+        "((6651f-6641f)-(662b-661b)),0x90"
+        "663:.pushsection.altinstructions,\"a\""
+        ".long661b-..long6641f-."
+        ".4byte(4*32+23)"
+        ".byte663b-661b.byte6651f-6641f.popsection"
+        ".pushsection.altinstr_replacement,\"ax\""
+        "6641:popcnt";
+    char compact[1024],expect[1024];size_t i,n=0U,w;
+    if(!s||!len||len>=sizeof(compact))return 0U;
+    for(i=0U;i<len;++i){
+        if(s[i]=='#'){while(i<len&&s[i]!=10)++i;continue;}
+        if(s[i]==' '||s[i]==9||s[i]==10||s[i]==13)continue;
+        if(n+1U>=sizeof(compact))return 0U;
+        compact[n++]=s[i];
+    }
+    compact[n]=0;
+    for(w=4U;w<=8U;w+=4U) {
+        const int written=snprintf(expect,sizeof(expect),
+           "%s%s%s%s%%1,%%0""6651:.popsection",
+           begin,w==4U?"32":"64",middle,w==4U?"l":"q");
+        if(written>0&&(size_t)written<sizeof(expect)&&
+           strcmp(compact,expect)==0)return (unsigned int)w;
+    }
+    return 0U;
+}
+static bool x86_hweight_source(const MinicC0Program *program,
+    const MinicInlineAsm *s,MinicTargetInlineAsmContract *ct){
+    const unsigned int w=s?minic_x86_64_hweight_alternative_form(
+       s->template_text,s->template_length):0U;
+    const MinicExpression *out,*arg;MinicType to,ti;
+    if(!program||!s||!ct||!w||s->is_volatile||s->is_goto||
+       s->has_memory_clobber||s->label_count||s->clobber_count||
+       s->register_clobber_count||s->output_count!=1U||
+       s->input_count!=1U||!s->outputs||!s->inputs||
+       !c_is(&s->outputs[0],"=a")||!c_is(&s->inputs[0],"D"))return false;
+    out=minic_c0_program_expression(program,s->outputs[0].expression);
+    arg=minic_c0_program_expression(program,s->inputs[0].expression);
+    if(!out||!arg||out->value_category!=MINIC_VALUE_LVALUE||
+       minic_type_is_const(out->type)||
+       !minic_type_unqualified(out->type,&to)||
+       !minic_type_unqualified(arg->type,&ti)||
+       to.base_kind!=MINIC_TYPE_BASE_INT||
+       ti.base_kind!=MINIC_TYPE_BASE_INT||
+       !minic_type_is_integer(to)||!minic_type_is_integer(ti)||
+       to.pointer_depth||ti.pointer_depth)return false;
+    if(w==4U?
+       (to.integer_rank!=MINIC_INTEGER_RANK_INT||
+        ti.integer_rank!=MINIC_INTEGER_RANK_INT):
+       ((to.integer_rank!=MINIC_INTEGER_RANK_LONG&&
+         to.integer_rank!=MINIC_INTEGER_RANK_LONG_LONG)||
+        (ti.integer_rank!=MINIC_INTEGER_RANK_LONG&&
+         ti.integer_rank!=MINIC_INTEGER_RANK_LONG_LONG)))return false;
+    ct->operand_count=2U;
+    ct->kinds[0]=MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
+    ct->kinds[1]=MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    return true;
+}
+
 static bool x86_nospec_source(const MinicC0Program *program,
                               const MinicInlineAsm *src) {
     const MinicExpression *out, *size, *index;
@@ -1067,6 +1134,8 @@ bool minic_x86_64_qualify_inline_asm(
     bool is_mulacc = false, is_muldiv = false;
     size_t i, count;
     if (!contract) return false;
+    if (x86_hweight_source(program, source, contract))
+        return true;
     if (x86_counter_source(program, source, contract))
         return true;
     if (x86_port_io_source(program, source, contract))

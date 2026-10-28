@@ -237,6 +237,56 @@ static bool emit_linux_bitops(
 
 
 
+
+/* Linux's software fallback is executable before kernel runtime patches the
+ * original CALL with the POPCNT replacement. ELF ALT section stores the
+ * correct feature 151 and the two relative relocation expressions. */
+static bool emit_hweight_alternative(FILE *out,const MinicC0Program *p,
+    const MinicTargetInfo *t,const MinicCoreFunction *fn,
+    const MinicX86Frame *frame,const MinicCoreInstruction *ins,
+    const MinicCoreInlineAsm *info){
+    const unsigned int w=minic_x86_64_hweight_alternative_form(
+        info->template_text,info->template_length);
+    const MinicCoreStructuredInlineAsmOperand *b=
+        ins->value.structured_inline_asm.operands;
+    MinicType ty;size_t bytes;bool sign;
+    if(!out||!p||!t||!fn||!frame||!ins||!info||!b||
+       (w!=4U&&w!=8U)||info->is_volatile||info->is_goto||
+       info->register_clobber_count||info->has_memory_clobber||
+       ins->value.structured_inline_asm.operand_count!=2U||
+       b[0].operand_index!=0U||b[1].operand_index!=1U||
+       b[0].value>=fn->value_count||b[1].value>=fn->value_count||
+       b[0].has_fixed_register_binding||b[1].has_fixed_register_binding||
+       b[0].early_clobber||b[1].early_clobber||
+       b[0].kind!=MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT||
+       b[1].kind!=MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT||
+       !minic_type_pointee(fn->values[b[0].value].type,&ty)||
+       !minic_x86_64_scalar_width(p,t,ty,&bytes,&sign)||bytes!=w||
+       !minic_x86_64_scalar_width(p,t,fn->values[b[1].value].type,
+          &bytes,&sign)||bytes!=w)return false;
+    if(!x86_value_load(out,frame,b[1].value,"%rdi"))return false;
+    if(fprintf(out,
+        "661:\n"
+        "  call __sw_hweight%s\n"
+        "662:\n663:\n"
+        "  .pushsection .altinstructions,\"a\"\n"
+        "  .long 661b - .\n"
+        "  .long 6641f - .\n"
+        "  .4byte 151\n"
+        "  .byte 663b - 661b\n"
+        "  .byte 6651f - 6641f\n"
+        "  .popsection\n"
+        "  .pushsection .altinstr_replacement,\"ax\"\n"
+        "6641:\n"
+        "  popcnt%s %%rdi, %%rax\n"
+        "6651:\n"
+        "  .popsection\n",
+        w==4U?"32":"64",w==4U?"l":"q")<0)return false;
+    return x86_value_load(out,frame,b[0].value,"%r11")&&
+           fprintf(out,"  %s %s, (%%r11)\n",
+              w==4U?"movl":"movq",w==4U?"%eax":"%rax")>=0;
+}
+
 /* One target-owned EDX:EAX clock/PMC emitter. Read hardware first,
  * then store exact GNU typed output widths to address-backed Core slots. */
 static bool emit_x86_counter(FILE *out,const MinicC0Program *p,
@@ -700,6 +750,9 @@ bool minic_x86_64_emit_structured_asm(
     bindings = ins->value.structured_inline_asm.operands;
     if (!info->template_text)
         return false;
+    if (minic_x86_64_hweight_alternative_form(
+            info->template_text,info->template_length))
+        return emit_hweight_alternative(out,program,target,fn,frame,ins,info);
     if (minic_x86_64_linux_counter_form(
             info->template_text,info->template_length))
         return emit_x86_counter(out,program,target,fn,frame,ins,info);
