@@ -797,8 +797,6 @@ void minias_destroy(MiniAs *as) {
             MiniAsMCData *data=as->stmts[i].mcdata;
             size_t k;
             for(k=0U;k<data->count;++k) {
-                free(data->fields[k].lhs_name);
-                free(data->fields[k].rhs_name);
                 free(data->fields[k].deferred_text);
             }
             free(data->fields);
@@ -3541,19 +3539,28 @@ static bool minias_compile_data_mc(MiniAs *as, MiniAsStmt *stmt) {
         }
         if(matched && out->kind!=MINIAS_MC_EXPR_CONSTANT &&
            out->kind!=MINIAS_MC_EXPR_DEFERRED_ABSOLUTE) {
-            out->lhs_name=minias_strdup(lhs.name);
+            MiniAsSymbol *symbol;
             out->lhs_addend=lhs.addend;
-            if(out->kind==MINIAS_MC_EXPR_DIFFERENCE ||
-               out->kind==MINIAS_MC_EXPR_DIFFERENCE_DIV ||
-               out->kind==MINIAS_MC_EXPR_DOT_MINUS_SYMBOL) {
-                out->rhs_name=minias_strdup(rhs.name);
-                out->rhs_addend=rhs.addend;
+            if(out->kind!=MINIAS_MC_EXPR_DOT_MINUS_SYMBOL) {
+                symbol=minias_get_symbol(as,lhs.name,true);
+                if(symbol==NULL)matched=false;
+                else {
+                    out->has_lhs=true;
+                    out->lhs_symbol_index=(size_t)(symbol-as->symbols);
+                }
             }
-            matched=out->lhs_name!=NULL &&
-                    ((out->kind!=MINIAS_MC_EXPR_DIFFERENCE &&
-                      out->kind!=MINIAS_MC_EXPR_DIFFERENCE_DIV &&
-                      out->kind!=MINIAS_MC_EXPR_DOT_MINUS_SYMBOL) ||
-                     out->rhs_name!=NULL);
+            if(matched &&
+               (out->kind==MINIAS_MC_EXPR_DIFFERENCE ||
+                out->kind==MINIAS_MC_EXPR_DIFFERENCE_DIV ||
+                out->kind==MINIAS_MC_EXPR_DOT_MINUS_SYMBOL)) {
+                symbol=minias_get_symbol(as,rhs.name,true);
+                if(symbol==NULL)matched=false;
+                else {
+                    out->has_rhs=true;
+                    out->rhs_symbol_index=(size_t)(symbol-as->symbols);
+                    out->rhs_addend=rhs.addend;
+                }
+            }
         }
         if(!matched) {
             if(as->error[0]=='\0')
@@ -4040,20 +4047,43 @@ static bool minias_emit_mc_data(MiniAs *as,const MiniAsStmt *stmt) {
                 return false;
             }
         }
-        if(x->lhs_name!=NULL) {
-            size_t len=strlen(x->lhs_name);
-            if(len>=sizeof(lhs.name))return false;
-            memcpy(lhs.name,x->lhs_name,len+1U);
+        if(x->has_lhs) {
+            const MiniAsSymbol *symbol;
+            size_t len;
+            if(x->lhs_symbol_index>=as->symbol_count) {
+                minias_set_error(as,"mc-lhs-symbol-out-of-range:line=%zu",
+                                 stmt->line);
+                return false;
+            }
+            symbol=&as->symbols[x->lhs_symbol_index];
+            len=strlen(symbol->name);
+            if(len>=sizeof(lhs.name)) {
+                minias_set_error(as,"mc-lhs-symbol-name-too-long");
+                return false;
+            }
+            memcpy(lhs.name,symbol->name,len+1U);
             lhs.addend=x->lhs_addend;
         }
-        if(x->rhs_name!=NULL) {
-            size_t len=strlen(x->rhs_name);
-            if(len>=sizeof(rhs.name))return false;
-            memcpy(rhs.name,x->rhs_name,len+1U);
+        if(x->has_rhs) {
+            const MiniAsSymbol *symbol;
+            size_t len;
+            if(x->rhs_symbol_index>=as->symbol_count) {
+                minias_set_error(as,"mc-rhs-symbol-out-of-range:line=%zu",
+                                 stmt->line);
+                return false;
+            }
+            symbol=&as->symbols[x->rhs_symbol_index];
+            len=strlen(symbol->name);
+            if(len>=sizeof(rhs.name)) {
+                minias_set_error(as,"mc-rhs-symbol-name-too-long");
+                return false;
+            }
+            memcpy(rhs.name,symbol->name,len+1U);
             rhs.addend=x->rhs_addend;
         }
         if(x->kind==MINIAS_MC_EXPR_SYMBOL) {
-            MiniAsSymbol *sym=minias_get_symbol(as,lhs.name,false);
+            MiniAsSymbol *sym=x->has_lhs ?
+                &as->symbols[x->lhs_symbol_index] : NULL;
             if(sym && sym->defined && sym->section==MINIAS_SECTION_ABS) {
                 literal=true;
                 value=sym->value+(uint64_t)lhs.addend;
@@ -4079,7 +4109,8 @@ static bool minias_emit_mc_data(MiniAs *as,const MiniAsStmt *stmt) {
                                               &lhs,x->divisor))return false;
             continue;
         } else if(x->kind==MINIAS_MC_EXPR_DOT_MINUS_SYMBOL) {
-            MiniAsSymbol *origin=minias_get_symbol(as,x->rhs_name,false);
+            MiniAsSymbol *origin=x->has_rhs ?
+                &as->symbols[x->rhs_symbol_index] : NULL;
             if(origin==NULL || !origin->defined ||
                origin->section!=stmt->section) {
                 minias_set_error(as,"unresolved-mc-dot-difference:line=%zu",
@@ -4091,8 +4122,10 @@ static bool minias_emit_mc_data(MiniAs *as,const MiniAsStmt *stmt) {
                   (origin->value+(uint64_t)rhs.addend);
         } else if(x->kind==MINIAS_MC_EXPR_DIFFERENCE ||
                   x->kind==MINIAS_MC_EXPR_DIFFERENCE_DIV) {
-            MiniAsSymbol *left=minias_get_symbol(as,lhs.name,false);
-            MiniAsSymbol *right=minias_get_symbol(as,rhs.name,false);
+            MiniAsSymbol *left=x->has_lhs ?
+                &as->symbols[x->lhs_symbol_index] : NULL;
+            MiniAsSymbol *right=x->has_rhs ?
+                &as->symbols[x->rhs_symbol_index] : NULL;
             if(x->kind==MINIAS_MC_EXPR_DIFFERENCE &&
                (as->target->fixup_relocation_type(MINIAS_FIXUP_ADD,
                                                   data->width)==0U ||

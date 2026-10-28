@@ -265,8 +265,13 @@ typedef struct MiniAsMCExpr {
     uint64_t divisor;
     int64_t lhs_addend;
     int64_t rhs_addend;
-    char *lhs_name;
-    char *rhs_name;
+    /* Stable symbol table indices, never heap copies of symbol names.
+     * Symbols may move during parsing, but ordinals are immutable. '.'
+     * is a Fragment anchor, not an interned ELF symbol. */
+    bool has_lhs;
+    bool has_rhs;
+    size_t lhs_symbol_index;
+    size_t rhs_symbol_index;
     char *deferred_text; /* only for absolute grammar needing final layout */
     bool logical_shift;
 } MiniAsMCExpr;

@@ -53,6 +53,10 @@ jobs:
         run: grep -q "MINIAS_MC_EXPR_DIFFERENCE" assembler/src/minias_internal.h
       - name: Verify atomic MCFragment transactions across four CodeEmitters
         run: bash tests/assembler/probe-mc-fragment-transaction.sh
+      - name: Validate MCExpr stable interned Symbol IDs and 1024-relocation GNU oracle
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-mcexpr-symbol-ids.sh
       - name: GCC C-to-S RV64I base ISA versus inline-asm extension gate
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
