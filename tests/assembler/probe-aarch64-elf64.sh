@@ -2535,3 +2535,26 @@ for invalid in 'ldr x0,[sp,#.Lframe_local_offset*1000]' \
  fi
 done
 echo 'MINIAS_A64_COMMON_SET_MEMORY=PASS GNU_7_words_4_strict_negative'
+
+# Linux MOVW macro values can occupy the unsigned top half of 64 bits.
+# Compare the actual GNU A64 machine words, not merely assembler success.
+cat > "$work/a64-unsigned-movw.s" <<'A64_UNSIGNED_MOVW'
+.text
+movz x1,:abs_g3:0xffffff8000000000
+movz x2,:abs_g3:0x8000000000000000
+movz x3,:abs_g2_s:-4398082211840
+A64_UNSIGNED_MOVW
+"$MINIAS" --target=aarch64 -o "$work/a64-unsigned-movw-mini.o" "$work/a64-unsigned-movw.s"
+"$AARCH64_AS" -o "$work/a64-unsigned-movw-gnu.o" "$work/a64-unsigned-movw.s"
+"$AARCH64_OBJCOPY" -j .text -O binary "$work/a64-unsigned-movw-mini.o" "$work/a64-unsigned-movw-mini.bin"
+"$AARCH64_OBJCOPY" -j .text -O binary "$work/a64-unsigned-movw-gnu.o" "$work/a64-unsigned-movw-gnu.bin"
+cmp "$work/a64-unsigned-movw-mini.bin" "$work/a64-unsigned-movw-gnu.bin"
+"$AARCH64_READELF" -Wr "$work/a64-unsigned-movw-mini.o" | grep -q 'There are no relocations'
+for bad in 'movz x0,:abs_g2:0x8000000000000000' \
+           'movz w0,:abs_g3:0x8000000000000000'; do
+ printf '.text\n%s\n' "$bad" > "$work/a64-unsigned-movw-bad.s"
+ if "$MINIAS" --target=aarch64 -o "$work/a64-unsigned-movw-bad.o" "$work/a64-unsigned-movw-bad.s" >/dev/null 2>&1; then
+  echo "invalid unsigned MOVW range/width accepted: $bad" >&2; exit 1
+ fi
+done
+echo 'MINIAS_A64_UNSIGNED_MOVW=PASS GNU_full_uint64_bytes_and_strict_negatives'
