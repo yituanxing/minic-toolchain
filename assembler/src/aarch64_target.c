@@ -3691,9 +3691,9 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
                 minias_get_symbol(as,literal->name,false):NULL;
             int64_t displacement;
             bool direct=inst->encoding==1U;
-            if(!literal || !direct &&
+            if(!literal || (!direct &&
                (!target || !target->defined ||
-                target->section!=stmt->section)) {
+                target->section!=stmt->section))) {
                 minias_set_error(as,"bad-aarch64-literal-pool-target:%s",
                                  stmt->args);return false;
             }
@@ -3715,8 +3715,15 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
                 minias_set_error(as,"aarch64-literal-address-overflow");
                 return false;
             }
-            displacement=(int64_t)target->value+literal->addend-
-                         (int64_t)stmt->offset;
+            {
+                int64_t target_address=(int64_t)target->value+
+                                       literal->addend;
+                if(target_address<INT64_MIN+(int64_t)stmt->offset) {
+                    minias_set_error(as,"aarch64-literal-pcrel-overflow");
+                    return false;
+                }
+                displacement=target_address-(int64_t)stmt->offset;
+            }
             if((displacement&3)!=0 || displacement<-1048576 ||
                displacement>1048572) {
                 minias_set_error(as,"aarch64-literal-load-out-of-range:%s",
