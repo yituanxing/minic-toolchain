@@ -2756,11 +2756,15 @@ ret
 .Ldirect_data:
 .quad 0x123456789abcdef
 A64_DIRECT_LITERAL
+echo 'MINIAS_A64_DIRECT_LITERAL_START'
 "$MINIAS" --target=aarch64 -o "$work/a64-direct-literal-mini.o" "$work/a64-direct-literal.s"
+echo 'MINIAS_A64_DIRECT_LITERAL_MINIAS_DONE'
 "$AARCH64_AS" -o "$work/a64-direct-literal-gnu.o" "$work/a64-direct-literal.s"
+echo 'MINIAS_A64_DIRECT_LITERAL_GNU_DONE'
 "$AARCH64_OBJCOPY" -j .text -O binary "$work/a64-direct-literal-mini.o" "$work/a64-direct-literal-mini.bin"
 "$AARCH64_OBJCOPY" -j .text -O binary "$work/a64-direct-literal-gnu.o" "$work/a64-direct-literal-gnu.bin"
 cmp "$work/a64-direct-literal-mini.bin" "$work/a64-direct-literal-gnu.bin"
+echo 'MINIAS_A64_DIRECT_LITERAL_TEXT_DONE'
 for flavor in mini gnu; do
  readelf -Wr "$work/a64-direct-literal-$flavor.o" |
    awk '$3 == "R_AARCH64_LD_PREL_LO19" {print $1,$3,$5,$6,$7}' |
@@ -2772,6 +2776,7 @@ for flavor in mini gnu; do
  fi
 done
 diff -u "$work/a64-direct-literal-gnu.rel" "$work/a64-direct-literal-mini.rel"
+echo 'MINIAS_A64_DIRECT_LITERAL_RELA_DONE'
 printf '.text\nldr x0,.Lfar\n.space 1048580\n.Lfar:\n.word 0\n' > "$work/a64-direct-literal-far.s"
 if "$MINIAS" --target=aarch64 -o "$work/a64-direct-literal-far.o" "$work/a64-direct-literal-far.s" >/dev/null 2>&1; then
  echo 'A64 out-of-range local literal PCREL19 accepted' >&2; exit 1
