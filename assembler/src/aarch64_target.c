@@ -156,34 +156,36 @@ static bool a64_movw_relocation(const char *text,MiniAsSymbolExpr *expr,
         size_t n=strlen(forms[i].name);
         if(strncmp(text,forms[i].name,n)!=0 || text[n]!=':')continue;
         const char *value=text+n+1U;
-        int64_t immediate;
+        int64_t immediate=0;
         if(minias_parse_symbol_addend(value,expr)) {
             *constant=false;*signed_negative=false;
-        }else if(minias_eval_i64_expression(value,&immediate)) {
-            /* GNU's checked signed SABS_Gn modifier rejects constants
-             * outside its (16*n+16)-bit SIGNED range. UABS_Gn (without
-             * NC) similarly rejects overflow above its chunk's
-             * unsigned range. Do not silently truncate checked relocs. */
+        }else {
+            /* GNU accepts the full unsigned 64-bit range in :abs_g3:.
+             * The signed-only evaluator rejected 0x8000... and Linux
+             * MOVW macro constants despite their valid 16-bit HW lanes. */
+            bool signed_constant=minias_eval_i64_expression(value,&immediate);
+            uint64_t value_bits=(uint64_t)immediate;
             unsigned width=(forms[i].hw+1U)*16U;
             bool checked_signed=forms[i].name[strlen(forms[i].name)-1U]=='s';
             bool unchecked=strstr(forms[i].name,"_nc")!=NULL;
-            uint64_t value_bits=(uint64_t)immediate;
+            if(!signed_constant &&
+               !minias_eval_u64_expression(value,&value_bits))return false;
             if(checked_signed) {
-                uint64_t bound=UINT64_C(1)<<(width-1U);
-                if(immediate<-(int64_t)bound ||
-                   immediate>=(int64_t)bound)return false;
+                /* A signed relocation needs a true signed value. Avoid
+                 * signed INT64_MIN negation when HW=3 (full 64 bits). */
+                if(!signed_constant)return false;
+                if(width<64U) {
+                    int64_t bound=INT64_C(1)<<(width-1U);
+                    if(immediate< -bound || immediate>=bound)return false;
+                }
             }else if(!unchecked && width<64U &&
                      value_bits>=(UINT64_C(1)<<width))return false;
-            /* GNU mov_q expands to :abs_gN_s:CONSTANT as well as a
-             * symbolic relocation.  Numeric modifiers must extract
-             * the 16-bit HW lane, not be treated as unresolved symbols.
-             * For signed negatives GNU selects MOVN and complements the
-             * numeric lane before encoding. */
+            /* Keep GNU MOVN signed negatives distinct from the upper
+             * unsigned half: both have the same 64-bit storage bits. */
             *constant=true;
-            *bits=(uint64_t)immediate;
-            *signed_negative=immediate<0 &&
-                             forms[i].name[strlen(forms[i].name)-1U]=='s';
-        }else return false;
+            *bits=value_bits;
+            *signed_negative=signed_constant && immediate<0 && checked_signed;
+        }
         *kind=forms[i].fixup;*group=forms[i].hw;
         return true;
     }
