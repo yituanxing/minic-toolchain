@@ -119,6 +119,10 @@ typedef struct MiniElfWriteSection {
     uint64_t entry_size;
     const unsigned char *data;
     size_t size;
+    /* ObjectModel grouping: logical signature symbol index in spec.symbols.
+     * The writer resolves final symbol-table order and SHT_GROUP members. */
+    bool has_group;
+    size_t group_signature_symbol;
 } MiniElfWriteSection;
 
 typedef struct MiniElfWriteSymbol {

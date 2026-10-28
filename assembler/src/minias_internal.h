@@ -12,6 +12,7 @@
 #define MINIAS_SHF_MERGE 16ULL
 #define MINIAS_SHF_STRINGS 32ULL
 #define MINIAS_SHF_TLS 1024ULL
+#define MINIAS_SHF_GROUP 512ULL
 #define MINIAS_SHT_PROGBITS 1U
 #define MINIAS_SHT_NOTE 7U
 #define MINIAS_SHT_INIT_ARRAY 14U
@@ -40,6 +41,8 @@
 
 typedef struct MiniAsSection {
     char *name;
+    /* GNU ELF SHT_GROUP signature; absent for ordinary Sections. */
+    char *group_signature;
     uint32_t type;
     uint64_t flags;
     uint64_t align;

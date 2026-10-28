@@ -42,6 +42,15 @@ static bool should_emit_symbol(const MiniAs *as, size_t symbol_index) {
      * still needs them. Keep undefined locals visible so invalid input is not
      * silently accepted.
      */
+    /* Group signatures participate in SHT_GROUP sh_info even when their
+     * name looks like an ordinary GNU temporary local label. */
+    {
+        size_t k;
+        for (k=0U;k<as->section_count;++k)
+            if(as->sections[k].group_signature!=NULL &&
+               strcmp(as->sections[k].group_signature,symbol->name)==0)
+                return true;
+    }
     if (symbol->bind == MINIAS_STB_LOCAL &&
         symbol->defined &&
         strncmp(symbol->name, ".L", 2U) == 0 &&
@@ -121,6 +130,7 @@ static bool minias_write_elf(MiniAs *as,
 
         output->name = input->name;
         output->type = input->type;
+        output->has_group = input->group_signature != NULL;
         output->flags = input->flags;
         output->alignment = input->align == 0U ? 1U : input->align;
         output->entry_size = input->entry_size;
@@ -185,6 +195,23 @@ static bool minias_write_elf(MiniAs *as,
     if (output_symbol_count != expected_symbol_count) {
         minias_set_error(as, "internal:symbol-count");
         goto done;
+    }
+    for(i=0U;i<as->section_count;++i) {
+        const MiniAsSection *sec=&as->sections[i];
+        if(sec->group_signature!=NULL) {
+            const MiniAsSymbol *sig=minias_get_symbol(as,sec->group_signature,false);
+            size_t idx;
+            if(sig==NULL) {
+                minias_set_error(as,"missing-group-signature:%s",sec->name);
+                goto done;
+            }
+            idx=(size_t)(sig-as->symbols);
+            if(idx>=as->symbol_count || symbol_map[idx]==SIZE_MAX) {
+                minias_set_error(as,"invalid-group-signature:%s",sec->name);
+                goto done;
+            }
+            sections[i].group_signature_symbol=symbol_map[idx];
+        }
     }
 
     for (i = 0U; i < as->fixup_count; ++i) {

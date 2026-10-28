@@ -4,6 +4,8 @@ on:
   pull_request:
     paths:
       - 'assembler/src/**'
+      - 'elf/**'
+      - 'tests/assembler/probe-comdat-groups.sh'
       - 'tests/assembler/probe-x86-loong-base.sh'
       - '.github/workflows/minias-new-targets-oracle.yml'
       - 'Makefile'

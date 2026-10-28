@@ -296,6 +296,10 @@ bool minielf_build_relocatable(const MiniElfRelocatableSpec *spec,
     size_t *relocation_counts = NULL;
     size_t *relocation_section_indices = NULL;
     size_t *relocation_write_counts = NULL;
+    size_t *section_group_indices = NULL;
+    size_t *group_signature_symbols = NULL;
+    size_t *group_header_indices = NULL;
+    uint32_t *group_name_offsets = NULL;
     size_t *symbol_output_indices = NULL;
     uint32_t *section_name_offsets = NULL;
     uint32_t *relocation_name_offsets = NULL;
@@ -305,6 +309,7 @@ bool minielf_build_relocatable(const MiniElfRelocatableSpec *spec,
     MiniElfBuffer shstrtab = {NULL, 0U, 0U};
     unsigned char *image = NULL;
     size_t relocation_section_count = 0U;
+    size_t group_count = 0U;
     size_t symbol_count;
     size_t output_section_count;
     size_t symtab_index;
@@ -351,6 +356,18 @@ bool minielf_build_relocatable(const MiniElfRelocatableSpec *spec,
         goto done;
     }
 
+    section_group_indices =
+        malloc((spec->section_count == 0U ? 1U : spec->section_count) *
+               sizeof(*section_group_indices));
+    group_signature_symbols =
+        malloc((spec->section_count == 0U ? 1U : spec->section_count) *
+               sizeof(*group_signature_symbols));
+    group_header_indices =
+        malloc((spec->section_count == 0U ? 1U : spec->section_count) *
+               sizeof(*group_header_indices));
+    group_name_offsets =
+        calloc(spec->section_count == 0U ? 1U : spec->section_count,
+               sizeof(*group_name_offsets));
     relocation_counts =
         calloc(spec->section_count == 0U ? 1U : spec->section_count,
                sizeof(*relocation_counts));
@@ -372,7 +389,9 @@ bool minielf_build_relocatable(const MiniElfRelocatableSpec *spec,
     symbol_name_offsets =
         calloc(spec->symbol_count == 0U ? 1U : spec->symbol_count,
                sizeof(*symbol_name_offsets));
-    if (relocation_counts == NULL || relocation_section_indices == NULL ||
+    if (section_group_indices == NULL || group_signature_symbols == NULL ||
+        group_header_indices == NULL || group_name_offsets == NULL ||
+        relocation_counts == NULL || relocation_section_indices == NULL ||
         relocation_write_counts == NULL || section_name_offsets == NULL ||
         relocation_name_offsets == NULL || symbol_output_indices == NULL ||
         symbol_name_offsets == NULL) {
@@ -380,7 +399,20 @@ bool minielf_build_relocatable(const MiniElfRelocatableSpec *spec,
         goto done;
     }
     for (i = 0U; i < spec->section_count; ++i) {
+        size_t j;
+        const MiniElfWriteSection *s=&spec->sections[i];
         relocation_section_indices[i] = SIZE_MAX;
+        section_group_indices[i] = SIZE_MAX;
+        if(!s->has_group)continue;
+        if(s->group_signature_symbol>=spec->symbol_count ||
+           (s->flags & SHF_GROUP)==0U) {
+            set_error(error_out, MINIELF_WRITE_INVALID_SECTION);
+            goto done;
+        }
+        for(j=0U;j<group_count;++j)
+            if(group_signature_symbols[j]==s->group_signature_symbol)break;
+        if(j==group_count)group_signature_symbols[group_count++]=s->group_signature_symbol;
+        section_group_indices[i]=j;
     }
 
     for (i = 0U; i < spec->relocation_count; ++i) {
@@ -408,12 +440,13 @@ bool minielf_build_relocatable(const MiniElfRelocatableSpec *spec,
     }
 
     if (spec->section_count >
-            SIZE_MAX - relocation_section_count - 3U) {
+            SIZE_MAX - relocation_section_count - 3U ||
+        group_count > SIZE_MAX - spec->section_count - relocation_section_count - 3U) {
         set_error(error_out, MINIELF_WRITE_LIMIT);
         goto done;
     }
     output_section_count =
-        spec->section_count + relocation_section_count + 3U;
+        spec->section_count + relocation_section_count + group_count + 3U;
     if (output_section_count + 1U > UINT16_MAX) {
         set_error(error_out, MINIELF_WRITE_LIMIT);
         goto done;
@@ -475,6 +508,15 @@ bool minielf_build_relocatable(const MiniElfRelocatableSpec *spec,
         }
     }
 
+    for(i=0U;i<group_count;++i) {
+        if (!buffer_append_string(&shstrtab,".group",&group_name_offsets[i])) {
+            set_error(error_out, MINIELF_WRITE_OUT_OF_MEMORY);
+            goto done;
+        }
+        group_header_indices[i]=1U+spec->section_count+
+                                    relocation_section_count+i;
+    }
+
     for (i = 0U; i < spec->symbol_count; ++i) {
         const MiniElfWriteSymbol *symbol = &spec->symbols[i];
 
@@ -491,7 +533,7 @@ bool minielf_build_relocatable(const MiniElfRelocatableSpec *spec,
         }
     }
 
-    symtab_index = 1U + spec->section_count + relocation_section_count;
+    symtab_index = 1U + spec->section_count + relocation_section_count + group_count;
     strtab_index = symtab_index + 1U;
     shstrtab_index = symtab_index + 2U;
     {
@@ -588,7 +630,8 @@ bool minielf_build_relocatable(const MiniElfRelocatableSpec *spec,
         cursor = aligned;
         headers[index].name = relocation_name_offsets[i];
         headers[index].type = SHT_RELA;
-        headers[index].flags = SHF_INFO_LINK;
+        headers[index].flags = SHF_INFO_LINK |
+                               (section_group_indices[i]==SIZE_MAX ? 0U : SHF_GROUP);
         headers[index].offset = cursor;
         headers[index].size = count * rela_size;
         headers[index].link = (uint32_t)symtab_index;
@@ -596,6 +639,40 @@ bool minielf_build_relocatable(const MiniElfRelocatableSpec *spec,
         headers[index].alignment = word_align;
         headers[index].entry_size = rela_size;
         if (!add_size(cursor, count * rela_size, &cursor)) {
+            set_error(error_out, MINIELF_WRITE_LIMIT);
+            goto done;
+        }
+    }
+
+    /* SHT_GROUP payload lists the member Section and any grouped
+     * relocation Section. SHT_GROUP sh_info references the *reordered*
+     * final signature symbol, not the parser's symbol-table ordinal. */
+    for(i=0U;i<group_count;++i) {
+        size_t j,count=1U,aligned;
+        size_t index=group_header_indices[i];
+        size_t signature=group_signature_symbols[i];
+        for(j=0U;j<spec->section_count;++j)
+            if(section_group_indices[j]==i) {
+                ++count;
+                if(relocation_section_indices[j]!=SIZE_MAX)++count;
+            }
+        if(count>SIZE_MAX/4U ||
+           !align_up(cursor,4U,&aligned) ||
+           signature>=spec->symbol_count ||
+           symbol_output_indices[signature]==0U) {
+            set_error(error_out, MINIELF_WRITE_LIMIT);
+            goto done;
+        }
+        cursor=aligned;
+        headers[index].name=group_name_offsets[i];
+        headers[index].type=SHT_GROUP;
+        headers[index].offset=cursor;
+        headers[index].size=count*4U;
+        headers[index].link=(uint32_t)symtab_index;
+        headers[index].info=(uint32_t)symbol_output_indices[signature];
+        headers[index].alignment=4U;
+        headers[index].entry_size=4U;
+        if(!add_size(cursor,count*4U,&cursor)) {
             set_error(error_out, MINIELF_WRITE_LIMIT);
             goto done;
         }
@@ -711,6 +788,28 @@ bool minielf_build_relocatable(const MiniElfRelocatableSpec *spec,
         }
     }
 
+    for(i=0U;i<group_count;++i) {
+        size_t j,offset=0U;
+        const size_t hdr=group_header_indices[i];
+        unsigned char *data=image+(size_t)headers[hdr].offset;
+        store_u32(data+offset,spec->data_encoding,GRP_COMDAT);
+        offset+=4U;
+        for(j=0U;j<spec->section_count;++j)
+            if(section_group_indices[j]==i) {
+                store_u32(data+offset,spec->data_encoding,(uint32_t)(j+1U));
+                offset+=4U;
+                if(relocation_section_indices[j]!=SIZE_MAX) {
+                    store_u32(data+offset,spec->data_encoding,
+                              (uint32_t)relocation_section_indices[j]);
+                    offset+=4U;
+                }
+            }
+        if(offset!=headers[hdr].size) {
+            set_error(error_out, MINIELF_WRITE_INVALID_SECTION);
+            goto done;
+        }
+    }
+
     if (spec->emit_section_symbols) {
         for (i = 0U; i < spec->section_count; ++i) {
             size_t offset = (size_t)headers[symtab_index].offset +
@@ -818,6 +917,10 @@ done:
     free(relocation_write_counts);
     free(relocation_section_indices);
     free(relocation_counts);
+    free(section_group_indices);
+    free(group_signature_symbols);
+    free(group_header_indices);
+    free(group_name_offsets);
     free(strtab.data);
     free(shstrtab.data);
     return ok;

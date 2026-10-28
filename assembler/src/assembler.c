@@ -777,6 +777,7 @@ void minias_destroy(MiniAs *as) {
 
     for (i = 0U; i < as->section_count; ++i) {
         free(as->sections[i].name);
+        free(as->sections[i].group_signature);
         free(as->sections[i].data);
     }
     free(as->sections);
@@ -1130,6 +1131,7 @@ static bool parse_section_directive(MiniAs *as, char *args, size_t line) {
     uint64_t flags = 0U;
     uint32_t type = MINIAS_SHT_PROGBITS;
     uint64_t entry_size=0U;
+    const char *group_signature=NULL;
 
     /* A quoted GNU section name may contain literal commas. Only a
      * top-level comma separates its name from flags/type metadata. */
@@ -1196,6 +1198,8 @@ static bool parse_section_directive(MiniAs *as, char *args, size_t line) {
                     flags |= MINIAS_SHF_STRINGS;
                 } else if (*q == 'T') {
                     flags |= MINIAS_SHF_TLS;
+                } else if (*q == 'G') {
+                    flags |= MINIAS_SHF_GROUP;
                 }
                 ++q;
             }
@@ -1210,7 +1214,27 @@ static bool parse_section_directive(MiniAs *as, char *args, size_t line) {
             char *tail=strchr(kind,',');
             if(tail) {
                 *tail++='\0';
-                if((flags & MINIAS_SHF_MERGE)!=0U &&
+                if((flags & MINIAS_SHF_GROUP)!=0U) {
+                    char *mode;
+                    char *sig=minias_trim(tail);
+                    mode=strchr(sig,',');
+                    if(mode == NULL) {
+                        minias_set_error(as,"missing-group-comdat:%s:line=%zu",
+                                         name,line);
+                        return false;
+                    }
+                    *mode++='\0';
+                    sig=minias_trim(sig);
+                    mode=minias_trim(mode);
+                    if(*sig=='\0' || strcmp(mode,"comdat")!=0 ||
+                       strlen(sig)>=256U ||
+                       strpbrk(sig," \t,\r\n\"")!=NULL) {
+                        minias_set_error(as,"bad-section-comdat:%s:line=%zu",
+                                         name,line);
+                        return false;
+                    }
+                    group_signature=sig;
+                } else if((flags & MINIAS_SHF_MERGE)!=0U &&
                    (!parse_u64(minias_trim(tail),&entry_size) ||
                     entry_size==0U)) {
                     minias_set_error(as,"bad-merge-entry-size:%s:line=%zu",
@@ -1237,6 +1261,11 @@ static bool parse_section_directive(MiniAs *as, char *args, size_t line) {
         }
     }
 
+    if ((flags & MINIAS_SHF_GROUP)!=0U &&
+        ((flags & MINIAS_SHF_MERGE)!=0U || group_signature==NULL)) {
+        minias_set_error(as,"unsupported-comdat-flags:%s:line=%zu",name,line);
+        return false;
+    }
     if (flags == 0U) {
         if(gnu_section_family(name,".text")) {
             flags=MINIAS_SHF_ALLOC | MINIAS_SHF_EXECINSTR;
@@ -1280,6 +1309,33 @@ static bool parse_section_directive(MiniAs *as, char *args, size_t line) {
          * Later incompatible .section definitions are ignored by GAS. */
         if(ok && prior<0 && entry_size!=0U)
             as->sections[(size_t)as->current_section].entry_size=entry_size;
+        if (ok) {
+            MiniAsSection *sec=&as->sections[(size_t)as->current_section];
+            if (prior>=0 &&
+                ((sec->group_signature==NULL)!=(group_signature==NULL) ||
+                 (group_signature!=NULL &&
+                  strcmp(sec->group_signature,group_signature)!=0))) {
+                minias_set_error(as,"conflicting-section-comdat:%s:line=%zu",
+                                 name,line);
+                return false;
+            }
+            if (group_signature!=NULL && prior<0) {
+                MiniAsSymbol *signature;
+                sec->group_signature=minias_strdup(group_signature);
+                if(sec->group_signature==NULL) {
+                    minias_set_error(as,"out-of-memory:group-signature");
+                    return false;
+                }
+                signature=minias_get_symbol(as,group_signature,true);
+                if(signature==NULL)return false;
+                /* An undefined signature is an ordinary global reference,
+                 * not an unresolved local symbol injected by the assembler. */
+                if(!signature->defined &&
+                   !signature->explicit_local_binding &&
+                   signature->bind==MINIAS_STB_LOCAL)
+                    signature->bind=MINIAS_STB_GLOBAL;
+            }
+        }
         return ok;
     }
 }

@@ -41,6 +41,10 @@ jobs:
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
             bash tests/assembler/probe-fragment-fixup-ownership.sh
+      - name: Validate ELF SHT_GROUP and GNU COMDAT real linker semantics
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-comdat-groups.sh
       - name: GCC C-to-S RV64I base ISA versus inline-asm extension gate
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
