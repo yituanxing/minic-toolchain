@@ -3647,7 +3647,10 @@ static bool add_data_stmt(MiniAs *as, const char *op, char *args, size_t line) {
     if(delayed) {
         as->stmts[as->stmt_count-1U].deferred_data_size=true;
         as->has_deferred_data=true;
-        as->layout_sensitive=true;
+        /* A deferred size is a persistent Fragment property. It need not
+         * trigger a second source parse: the shared layout solver can
+         * recompute it after branch growth using final symbol anchors.
+         * Position-dependent .if/.org/.set still require the guard. */
     }
     return advance_current_location(as, bytes);
 }
@@ -7378,6 +7381,7 @@ int minias_assemble_config(const char *input_path,
                     }
                 }
                 if (!parsed || !minias_relayout_fragments(&as) ||
+                    !minias_resolve_deferred_data(&as) ||
                     !collect_out_of_range_branches(&as, &long_branch_ids,
                                                     &long_branch_count,
                                                     &long_branch_capacity,

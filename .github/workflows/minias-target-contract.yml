@@ -45,6 +45,10 @@ jobs:
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
             bash tests/assembler/probe-comdat-groups.sh
+      - name: Same-pass branch relaxation and forward-data fragment fixed point
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
+            bash tests/assembler/probe-deferred-fragment-relax.sh
       - name: GCC C-to-S RV64I base ISA versus inline-asm extension gate
         run: |
           MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" \
