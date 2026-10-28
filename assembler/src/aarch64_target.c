@@ -1265,6 +1265,7 @@ static bool a64_system_register(const char *name,uint32_t *mrs,uint32_t *msr) {
         {"ctr_el0",UINT32_C(0xd53b0020),0U},
         {"par_el1",UINT32_C(0xd5387400),UINT32_C(0xd5187400)},
         {"hcr_el2",UINT32_C(0xd53c1100),UINT32_C(0xd51c1100)},
+        {"mdcr_el2",UINT32_C(0xd53c1120),UINT32_C(0xd51c1120)},
         {"isr_el1",UINT32_C(0xd538c100),0U},
         {"spsr_el2",UINT32_C(0xd53c4000),UINT32_C(0xd51c4000)},
         {"elr_el2",UINT32_C(0xd53c4020),UINT32_C(0xd51c4020)},
@@ -1734,7 +1735,7 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
         put_reg(&inst->operands[0],rd,wide);
         put_reg(&inst->operands[1],rm,wide);
     } else if(!strcmp(op,"ic") || !strcmp(op,"dc") ||
-              !strcmp(op,"tlbi")) {
+              !strcmp(op,"tlbi") || !strcmp(op,"at")) {
         /* System cache/TLB maintenance is one typed SYS instruction
          * family (op0/op1/CRn/CRm/op2 and optional Xt). Only GNU-verified
          * architectural names are accepted; no permissive SYS escape.
@@ -1749,6 +1750,17 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
             {"dc","cvau",UINT32_C(0xd50b7b20),true},
             {"dc","civac",UINT32_C(0xd50b7e20),true},
             {"dc","zva",UINT32_C(0xd50b7420),true},
+            /* Architectural AT SYS opcodes use the existing Rt/ELF model. */
+            {"at","s1e1r",UINT32_C(0xd5087800),true},
+            {"at","s1e1w",UINT32_C(0xd5087820),true},
+            {"at","s1e0r",UINT32_C(0xd5087840),true},
+            {"at","s1e0w",UINT32_C(0xd5087860),true},
+            {"at","s1e2r",UINT32_C(0xd50c7800),true},
+            {"at","s1e2w",UINT32_C(0xd50c7820),true},
+            {"at","s12e1r",UINT32_C(0xd50c7880),true},
+            {"at","s12e1w",UINT32_C(0xd50c78a0),true},
+            {"at","s1e3r",UINT32_C(0xd50e7800),true},
+            {"at","s1e3w",UINT32_C(0xd50e7820),true},
             {"tlbi","vmalle1",UINT32_C(0xd508871f),false},
             {"tlbi","vmalle1is",UINT32_C(0xd508831f),false},
             {"tlbi","vae1",UINT32_C(0xd5088720),true},

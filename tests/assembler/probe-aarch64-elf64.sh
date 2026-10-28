@@ -100,6 +100,18 @@ external_probe:
     msr par_el1, x5
     mrs x1, hcr_el2
     msr hcr_el2, x7
+    mrs x0, mdcr_el2
+    msr mdcr_el2, x0
+    at s1e1r, x2
+    at s1e1w, x3
+    at s1e0r, x4
+    at s1e0w, x5
+    at s1e2r, x6
+    at s1e2w, x7
+    at s12e1r, x3
+    at s12e1w, x4
+    at s1e3r, x1
+    at s1e3w, x2
     mrs x1, isr_el1
     mrs x3, spsr_el2
     msr spsr_el2, x4
@@ -710,6 +722,7 @@ for bad in 'add x0, w0, x1' 'cmp x0, #4097' 'ldr x0, [x1, -257]' \
            'stnp x2,x3,[x0,#-520]' 'ldnp x2,x3,[x0],8' \
            'ldnp x2,w3,[x0]' 'stnp w2,w3,[x0,#254]' \
            'mrs x2,dbgwcr16_el1' 'msr dbgbcr99_el1,x1' \
+           'at s1e1r,w2' 'at s1e1r' 'at unknown,x2' \
            'mrs x0,unknown_el1'; do
     printf '.arch armv8-a\n.text\n%s\n' "$bad" >"$work/bad-integer.s"
     if "$MINIAS" --target=aarch64 -o "$work/bad-integer.o" \
