@@ -791,6 +791,57 @@ static bool emit_linux_atomic_rmw(
           d->width==4U?"%r10d":"%r10")>=0;
 }
 
+/* Linux original arch_cmpxchg returns previous memory through RAX.
+ * Unlike trycas it has NO CC output; the fourth Core operand is the
+ * tied "0" scalar expected value and the first is a write-only C lvalue. */
+static bool emit_linux_raw_cmpxchg(
+    FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
+    const MinicCoreFunction *fn, const MinicX86Frame *frame,
+    const MinicCoreInstruction *ins, const MinicCoreInlineAsm *info) {
+    const MinicX86TryCasDesc *d = minic_x86_64_trycas_desc(
+        minic_x86_64_raw_cmpxchg_form(info->template_text, info->template_length));
+    const MinicCoreStructuredInlineAsmOperand *b =
+        ins->value.structured_inline_asm.operands;
+    size_t i, width;
+    bool sign;
+    MinicType type;
+    if (!out || !program || !target || !fn || !frame || !info || !b || !d ||
+        !info->is_volatile || info->is_goto || !info->has_memory_clobber ||
+        info->register_clobber_count != 0U ||
+        ins->value.structured_inline_asm.operand_count != 4U)
+        return false;
+    for (i = 0U; i < 4U; ++i) {
+        if (b[i].operand_index != i || b[i].value >= fn->value_count ||
+            b[i].early_clobber || b[i].has_fixed_register_binding ||
+            b[i].kind != (i == 0U ?
+                MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT :
+                i == 1U ? MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE :
+                           MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT))
+            return false;
+        type = fn->values[b[i].value].type;
+        if (i < 2U && !minic_type_pointee(type, &type)) return false;
+        if (!minic_x86_64_scalar_width(program, target, type, &width, &sign) ||
+            width != d->width || !minic_type_is_integer(type))
+            return false;
+    }
+    if (!x86_value_load(out, frame, b[3].value, "%rax") ||
+        !x86_value_load(out, frame, b[2].value, "%r10") ||
+        !x86_value_load(out, frame, b[1].value, "%r11"))
+        return false;
+    if (d->locked &&
+        fputs("  .pushsection .smp_locks,\"a\"\n"
+              "  .balign 4\n"
+              "  .long 671f - .\n"
+              "  .popsection\n"
+              "671:\n", out) == EOF)
+        return false;
+    if (fprintf(out, "  %s%s %s, (%%r11)\n",
+                d->locked ? "lock; " : "", d->op, d->new_reg) < 0 ||
+        !x86_value_load(out, frame, b[0].value, "%r11"))
+        return false;
+    return fprintf(out, "  %s\n", d->store_old) >= 0;
+}
+
 /* Genuine x86 CMPXCHG: use AL/AX/EAX/RAX comparator, return ZF,
  * update old on failure, and emit SMP patch metadata when locked. */
 static bool emit_linux_trycas(
@@ -1178,6 +1229,10 @@ bool minic_x86_64_emit_structured_asm(
     if (minic_x86_64_atomic_rmw_form(
             info->template_text,info->template_length)!=MINIC_X86_ATOMIC_RMW_NONE)
         return emit_linux_atomic_rmw(out,program,target,fn,frame,ins,info);
+    if (minic_x86_64_raw_cmpxchg_form(
+            info->template_text,info->template_length)!=MINIC_X86_TRYCAS_NONE)
+        return emit_linux_raw_cmpxchg(
+            out,program,target,fn,frame,ins,info);
     if (minic_x86_64_trycas_form(
             info->template_text,info->template_length)!=MINIC_X86_TRYCAS_NONE)
         return emit_linux_trycas(out,program,target,fn,frame,ins,info);

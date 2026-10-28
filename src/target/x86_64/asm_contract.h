@@ -71,6 +71,8 @@ typedef struct MinicX86TryCasDesc {
     bool locked;
 } MinicX86TryCasDesc;
 MinicX86TryCas minic_x86_64_trycas_form(const char *,size_t);
+/* Linux original cmpxchg returning OLD memory, not CC_SET trycmpxchg. */
+MinicX86TryCas minic_x86_64_raw_cmpxchg_form(const char *, size_t);
 const MinicX86TryCasDesc *minic_x86_64_trycas_desc(MinicX86TryCas);
 
 

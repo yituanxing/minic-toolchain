@@ -92,6 +92,12 @@ has src/target/x86_64/asm_contract.c 'x86_linux_local_xadd_source('
 has src/target/x86_64/machine_asm.c 'emit_linux_local_xadd('
 lacks src/core/core_lower_asm_target.c 'local_add_return'
 
+# The original x86 cmpxchg and trycmpxchg share one target descriptor
+# but DIFFER in Core operand roles and semantics (old value vs hardware ZF).
+has src/target/x86_64/asm_contract.c 'x86_linux_raw_cmpxchg_source('
+has src/target/x86_64/machine_asm.c 'emit_linux_raw_cmpxchg('
+lacks src/core/core_lower_asm_target.c 'cmpxchgb'
+
 # Four ISA families, five target profiles: one storage-shape owner, distinct
 # physical ABIs. RV32 must never inherit the 8-byte LP64 word policy.
 exists src/target/common/aggregate_shape.h

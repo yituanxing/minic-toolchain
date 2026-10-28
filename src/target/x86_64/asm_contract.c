@@ -950,6 +950,82 @@ MinicX86TryCas minic_x86_64_trycas_form(const char *text,size_t len) {
     return MINIC_X86_TRYCAS_NONE;
 }
 
+/* Genuine Linux 6.6.143 arch_cmpxchg (not try_cmpxchg):
+ * .smp_locks metadata; lock cmpxchgb/w/l/q %2,%1;
+ * outputs =a and +m, input new q/r, tied old "0". One physical ISA
+ * descriptor shared with the pre-existing flag-return trycas family. */
+MinicX86TryCas minic_x86_64_raw_cmpxchg_form(
+    const char *text, size_t length) {
+    static const char smp[] =
+        ".pushsection.smp_locks,\"a\".balign4.long671f-..popsection671:lock;";
+    char compact[256], expected[256];
+    size_t i, n = 0U, form;
+    if (text == NULL || length == 0U || length >= sizeof(compact))
+        return MINIC_X86_TRYCAS_NONE;
+    for (i = 0U; i < length; ++i) {
+        const char c = text[i];
+        if (c == ' ' || c == '\t' || c == '\r' || c == '\n') continue;
+        if (n + 1U >= sizeof(compact)) return MINIC_X86_TRYCAS_NONE;
+        compact[n++] = c;
+    }
+    compact[n] = '\0';
+    for (form = 0U; form < sizeof(x86_trycas_forms) /
+                            sizeof(x86_trycas_forms[0]); ++form) {
+        const MinicX86TryCasDesc *d = &x86_trycas_forms[form];
+        int written = snprintf(expected, sizeof(expected), "%s%s%%2,%%1",
+                               d->locked ? smp : "", d->op);
+        if (written > 0 && (size_t)written < sizeof(expected) &&
+            strcmp(expected, compact) == 0)
+            return (MinicX86TryCas)(form + 1U);
+    }
+    return MINIC_X86_TRYCAS_NONE;
+}
+static bool x86_linux_raw_cmpxchg_source(
+    const MinicC0Program *program, const MinicInlineAsm *src,
+    MinicTargetInlineAsmContract *contract) {
+    const MinicX86TryCas form = src ? minic_x86_64_raw_cmpxchg_form(
+        src->template_text, src->template_length) : MINIC_X86_TRYCAS_NONE;
+    const MinicX86TryCasDesc *d = minic_x86_64_trycas_desc(form);
+    size_t i;
+    if (!program || !src || !contract || !d || !src->is_volatile ||
+        src->is_goto || !src->outputs || !src->inputs ||
+        src->output_count != 2U || src->input_count != 2U ||
+        !src->has_memory_clobber || src->clobber_count != 1U ||
+        src->register_clobber_count != 0U || src->label_count != 0U ||
+        !target_constraint_is(&src->outputs[0], "=a") ||
+        !target_constraint_is(&src->outputs[1], "+m") ||
+        !target_constraint_is(&src->inputs[0], d->width == 1U ? "q" : "r") ||
+        !target_constraint_is(&src->inputs[1], "0"))
+        return false;
+    for (i = 0U; i < 4U; ++i) {
+        const MinicInlineAsmOperand *op = i < 2U
+            ? &src->outputs[i] : &src->inputs[i - 2U];
+        const MinicExpression *e = minic_c0_program_expression(
+            program, op->expression);
+        MinicType type;
+        const unsigned int rank = d->width == 1U ? MINIC_INTEGER_RANK_CHAR :
+            d->width == 2U ? MINIC_INTEGER_RANK_SHORT :
+            d->width == 4U ? MINIC_INTEGER_RANK_INT : MINIC_INTEGER_RANK_NONE;
+        if (e == NULL || (i < 2U &&
+            (e->value_category != MINIC_VALUE_LVALUE ||
+             minic_type_is_const(e->type))) ||
+            !minic_type_unqualified(e->type, &type) ||
+            type.base_kind != MINIC_TYPE_BASE_INT ||
+            !minic_type_is_integer(type) || type.pointer_depth != 0U ||
+            (d->width == 8U
+                ? (type.integer_rank != MINIC_INTEGER_RANK_LONG &&
+                   type.integer_rank != MINIC_INTEGER_RANK_LONG_LONG)
+                : (unsigned int)type.integer_rank != rank))
+            return false;
+    }
+    contract->operand_count = 4U;
+    contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
+    contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE;
+    contract->kinds[2] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    contract->kinds[3] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    return true;
+}
+
 /* Original Linux asm/shared/io.h: target-owned 1/2/4 byte privileged port
  * input and output. Unknown suffixes never flow into the GNU assembler. */
 static const MinicX86PortIoDesc x86_port_io[]={
@@ -1849,6 +1925,8 @@ bool minic_x86_64_qualify_inline_asm(
     if (x86_linux_local_xadd_source(program, source, contract))
         return true;
     if (x86_linux_atomic_rmw_source(program, source, contract))
+        return true;
+    if (x86_linux_raw_cmpxchg_source(program, source, contract))
         return true;
     if (x86_trycas_source(program, source, contract))
         return true;
