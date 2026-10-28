@@ -1056,7 +1056,8 @@ static bool parse_section_directive(MiniAs *as, char *args, size_t line) {
         return false;
     }
 
-    if (gnu_section_family(name,".bss")) {
+    if (gnu_section_family(name,".bss") ||
+        gnu_section_family(name,".tbss")) {
         type=MINIAS_SHT_NOBITS;
     } else if(gnu_section_family(name,".note") &&
               strcmp(name,".note.GNU-stack")!=0) {
@@ -1083,6 +1084,8 @@ static bool parse_section_directive(MiniAs *as, char *args, size_t line) {
                     flags |= MINIAS_SHF_MERGE;
                 } else if (*q == 'S') {
                     flags |= MINIAS_SHF_STRINGS;
+                } else if (*q == 'T') {
+                    flags |= MINIAS_SHF_TLS;
                 }
                 ++q;
             }
@@ -1126,6 +1129,9 @@ static bool parse_section_directive(MiniAs *as, char *args, size_t line) {
         } else if(gnu_section_family(name,".data") ||
                   gnu_section_family(name,".bss")) {
             flags=MINIAS_SHF_ALLOC | MINIAS_SHF_WRITE;
+        } else if(gnu_section_family(name,".tdata") ||
+                  gnu_section_family(name,".tbss")) {
+            flags=MINIAS_SHF_ALLOC | MINIAS_SHF_WRITE | MINIAS_SHF_TLS;
         }
         /* GNU note sections are NOT implicitly SHF_ALLOC; only an
          * explicit 'a' allocates .note.* payloads. */
@@ -1221,8 +1227,23 @@ static bool parse_type(MiniAs *as, char *args, size_t line) {
     } else if (strcmp(kind, "@object") == 0 || strcmp(kind, "%object") == 0 ||
                strcmp(kind, "STT_OBJECT") == 0) {
         symbol->type = MINIAS_STT_OBJECT;
+    } else if(strcmp(kind,"@notype")==0 || strcmp(kind,"%notype")==0 ||
+              strcmp(kind,"STT_NOTYPE")==0) {
+        symbol->type=MINIAS_STT_NOTYPE;
+    } else if(strcmp(kind,"@tls_object")==0 || strcmp(kind,"%tls_object")==0 ||
+              strcmp(kind,"STT_TLS")==0) {
+        symbol->type=MINIAS_STT_TLS;
+    } else if(strcmp(kind,"@common")==0 || strcmp(kind,"%common")==0 ||
+              strcmp(kind,"STT_COMMON")==0) {
+        symbol->type=MINIAS_STT_COMMON;
+    } else if(strcmp(kind,"@gnu_indirect_function")==0 ||
+              strcmp(kind,"%gnu_indirect_function")==0 ||
+              strcmp(kind,"STT_GNU_IFUNC")==0) {
+        symbol->type=MINIAS_STT_GNU_IFUNC;
     } else {
-        symbol->type = MINIAS_STT_NOTYPE;
+        minias_set_error(as,"unsupported-elf-symbol-type:%s:line=%zu",
+                         kind,line);
+        return false;
     }
     return true;
 }

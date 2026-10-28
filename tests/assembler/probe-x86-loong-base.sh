@@ -3505,3 +3505,50 @@ if "$MINIAS" --target=x86_64 -o "$work/x86-section-invalid-quote.o" "$work/x86-s
   echo 'MiniAS accepted unterminated section name' >&2;exit 1
 fi
 echo 'MINIAS_SELF_AUDIT_GNU_SECTION_FAMILY=PASS note_stack_nobits_family_and_quoted_comma'
+
+
+# SELF-AUDIT: ELF TLS and IFUNC are ABI-visible, not optional annotations.
+# GNU .type @tls_object is STT_TLS; .type @gnu_indirect_function is STT_GNU_IFUNC.
+# Both explicit and implicit .tdata/.tbss families must preserve SHF_TLS.
+cat > "$work/x86-tls-ifunc-selfaudit.s" <<'X86_TLS_IFUNC'
+.section .tdata
+.type tls_implicit,@tls_object
+tls_implicit: .quad 42
+.section .tbss
+.type tls_bss,@tls_object
+tls_bss: .zero 8
+.section .tdata.explicit,"awT",@progbits
+.type tls_explicit,@tls_object
+tls_explicit: .quad 21
+.section .tbss.explicit,"awT",@nobits
+.type tls_bss_explicit,@tls_object
+tls_bss_explicit: .zero 8
+.text
+.type ifunc_impl,@gnu_indirect_function
+ifunc_impl: ret
+.type regular_func,@function
+regular_func: ret
+.type common_typed,@common
+common_typed: ret
+X86_TLS_IFUNC
+"$MINIAS" --target=x86_64 -o "$work/x86-tls-ifunc-mini.o" "$work/x86-tls-ifunc-selfaudit.s"
+as --64 -o "$work/x86-tls-ifunc-gnu.o" "$work/x86-tls-ifunc-selfaudit.s"
+for section in .tdata .tbss .tdata.explicit .tbss.explicit; do
+  readelf -SW "$work/x86-tls-ifunc-mini.o" |
+    awk -v n="$section" '$3==n {print $4,$9} $2==n {print $3,$8}' > "$work/x86-tls-mini-$section.meta"
+  readelf -SW "$work/x86-tls-ifunc-gnu.o" |
+    awk -v n="$section" '$3==n {print $4,$9} $2==n {print $3,$8}' > "$work/x86-tls-gnu-$section.meta"
+  test -s "$work/x86-tls-mini-$section.meta"
+  diff -u "$work/x86-tls-gnu-$section.meta" "$work/x86-tls-mini-$section.meta"
+done
+for flavor in mini gnu; do
+  readelf -Ws "$work/x86-tls-ifunc-$flavor.o" |
+   awk '/tls_implicit|tls_bss|tls_explicit|ifunc_impl|regular_func|common_typed/ {print $4,$5,$8}' |
+   LC_ALL=C sort > "$work/x86-symbol-types-$flavor.txt"
+done
+diff -u "$work/x86-symbol-types-gnu.txt" "$work/x86-symbol-types-mini.txt"
+printf '.type invented_symbol,@invented_type\n' > "$work/x86-type-invalid.s"
+if "$MINIAS" --target=x86_64 -o "$work/x86-type-invalid.o" "$work/x86-type-invalid.s" >/dev/null 2>&1; then
+ echo 'MiniAS silently converted unknown GNU ELF symbol type to NOTYPE' >&2;exit 1
+fi
+echo 'MINIAS_SELF_AUDIT_TLS_IFUNC=PASS GNU_TLS_sections_and_symbol_type_identity'
