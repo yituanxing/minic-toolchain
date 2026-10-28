@@ -213,6 +213,18 @@ typedef struct MiniAsMacroParam {
     bool variadic; /* GNU final :vararg captures remaining arguments */
 } MiniAsMacroParam;
 
+/* Target-requested GNU literal pool entry. Common owns Section/Layout
+ * fragments and ABS32/ABS64 ELF relocations; Target owns LDR encoding.
+ * Queued references are deduplicated only inside the same pending pool. */
+typedef struct MiniAsLiteral {
+    MiniAsSymbolExpr expression;
+    char label[64];
+    int section;
+    uint32_t subsection;
+    unsigned width;
+    bool emitted;
+} MiniAsLiteral;
+
 typedef struct MiniAsMacro {
     char *name;
     MiniAsMacroParam *params;
@@ -289,6 +301,9 @@ typedef struct MiniAs {
     MiniAsFixup *fixups;
     size_t fixup_count;
     size_t fixup_capacity;
+    MiniAsLiteral *literals;
+    size_t literal_count;
+    size_t literal_capacity;
     MiniAsSubsection *subsections;
     size_t subsection_count;
     size_t subsection_capacity;
@@ -372,6 +387,8 @@ bool minias_write_elf32(MiniAs *as, const char *path);
 int minias_find_section(const MiniAs *as, const char *name);
 int minias_ensure_section(MiniAs *as, const char *name, uint32_t type, uint64_t flags, uint64_t align);
 MiniAsSymbol *minias_get_symbol(MiniAs *as, const char *name, bool create);
+bool minias_queue_literal(MiniAs *as,const MiniAsSymbolExpr *expression,
+                          unsigned width,MiniAsSymbolExpr *pool_label);
 bool minias_add_fixup(MiniAs *as,
                       int section,
                       uint64_t offset,
@@ -444,6 +461,7 @@ typedef struct MiniAsTargetOps {
     /* GNU named relocation spelling is ISA-owned; Common only places the
      * semantic fixup at the explicit section offset. */
     bool (*parse_named_relocation)(const char *, MiniAsFixupKind *, unsigned *);
+    bool supports_literal_pools; /* .ltorg/.pool only for a checked target */
     bool (*validate_output)(MiniAs *);
     /* Target-owned DWARF CFI ABI (zero => not yet available). */
     unsigned cfi_code_align;

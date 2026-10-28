@@ -286,6 +286,7 @@ enum {
     A64_MC_CMN_REG,
     A64_MC_CMN_IMM,
     A64_MC_LDR,
+    A64_MC_LDR_LITERAL,
     A64_MC_STR,
     A64_MC_LDRB,
     A64_MC_STRB,
@@ -1925,7 +1926,28 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
         minias_set_error(as, "out-of-memory:aarch64-mcinst");
         return false;
     }
-    if(a64_parse_lse(as,inst,op,args)) {
+    if(!strcmp(op,"ldr") && strchr(args,'=')!=NULL) {
+        /* GNU LDR Xt/Wt,=symbol: the Target chooses the literal-load
+         * encoding; the queued data/ABS relocation remains Common-owned.
+         * Numeric pseudo-immediates are deliberately unsupported until
+         * independently proved against GNU MOV/LDR constant selection. */
+        char operands[4][384];
+        unsigned n,rd;
+        bool wide,sp;
+        MiniAsSymbolExpr source,pool;
+        if(!split_operands(args,operands,&n) || n!=2U ||
+           !parse_a64_reg(operands[0],&rd,&wide,&sp) || sp ||
+           operands[1][0]!='=' ||
+           !minias_parse_symbol_addend(operands[1]+1U,&source) ||
+           !minias_queue_literal(as,&source,wide?8U:4U,&pool) ||
+           !a64_attach_expr(inst,1U,&pool)) {
+            minias_set_error(as,"bad-aarch64-literal-load:%s:line=%zu",
+                             args,stmt->line);
+            free(inst);return false;
+        }
+        inst->opcode=A64_MC_LDR_LITERAL;inst->count=2U;
+        put_reg(&inst->operands[0],rd,wide);
+    } else if(a64_parse_lse(as,inst,op,args)) {
         /* LSE grammar is owned by one target decoder. */
     } else if(!strcmp(op,"madd") || !strcmp(op,"msub") ||
               !strcmp(op,"umaddl") || !strcmp(op,"smaddl") ||
@@ -3241,6 +3263,28 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
         return false;
     }
     switch (inst->opcode) {
+        case A64_MC_LDR_LITERAL: {
+            const MiniAsSymbolExpr *pool=inst->operands[1].symbol;
+            MiniAsSymbol *target=pool?
+                minias_get_symbol(as,pool->name,false):NULL;
+            int64_t displacement;
+            if(!target || !target->defined || target->section!=stmt->section ||
+               target->value>INT64_MAX || stmt->offset>INT64_MAX) {
+                minias_set_error(as,"bad-aarch64-literal-pool-target:%s",
+                                 stmt->args);return false;
+            }
+            displacement=(int64_t)target->value-(int64_t)stmt->offset;
+            if((displacement&3)!=0 || displacement<-1048576 ||
+               displacement>1048572) {
+                minias_set_error(as,"aarch64-literal-load-out-of-range:%s",
+                                 stmt->args);return false;
+            }
+            code=(inst->operands[0].register_64?
+                  UINT32_C(0x58000000):UINT32_C(0x18000000))|
+                 (((uint32_t)(displacement/4)&UINT32_C(0x7ffff))<<5U)|
+                 inst->operands[0].reg;
+            break;
+        }
         case A64_MC_BITFIELD: {
             unsigned bit_rd=inst->operands[0].reg;
             unsigned bit_rn=inst->operands[1].reg;
@@ -4204,6 +4248,7 @@ static const MiniAsTargetOps ops = {
     .validate_output = validate,
     .dot_relative_fixup = MINIAS_FIXUP_PREL32,
     .inst_directive_width = 4U,
+    .supports_literal_pools = true,
     .cfi_code_align = 4U,
     .cfi_data_align = -8,
     .cfi_return_reg = 30U,

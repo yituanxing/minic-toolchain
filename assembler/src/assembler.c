@@ -645,6 +645,7 @@ void minias_destroy(MiniAs *as) {
     }
     free(as->stmts);
     free(as->fixups);
+    free(as->literals);
     free(as->subsections);
     free(as->section_stack);
     free(as->numeric_label_counts);
@@ -1909,6 +1910,55 @@ static bool handle_org(MiniAs *as, const char *args, size_t line) {
         return false;
     }
     return advance_current_location(as, pad);
+}
+
+/* A new ISA may request a pool address without teaching Core the ISA
+ * encoding or introducing a parallel ELF writer.  Records are grouped by
+ * SECTION+SUBSECTION and deduped only until the next .ltorg flush. */
+bool minias_queue_literal(MiniAs *as,const MiniAsSymbolExpr *expression,
+                          unsigned width,MiniAsSymbolExpr *pool_label) {
+    MiniAsLiteral *entry;
+    size_t i;
+    int written;
+    if(!as->target->supports_literal_pools || as->current_section<0 ||
+       !expression || !pool_label || (width!=4U && width!=8U)) {
+        minias_set_error(as,"unsupported-target-literal-pool");return false;
+    }
+    for(i=0U;i<as->literal_count;++i) {
+        entry=&as->literals[i];
+        if(!entry->emitted && entry->section==as->current_section &&
+           entry->subsection==as->current_subsection &&
+           entry->width==width &&
+           entry->expression.addend==expression->addend &&
+           !strcmp(entry->expression.name,expression->name)) {
+            written=snprintf(pool_label->name,sizeof(pool_label->name),
+                             "%s",entry->label);
+            if(written<0 || (size_t)written>=sizeof(pool_label->name))
+                return false;
+            pool_label->addend=0;return true;
+        }
+    }
+    if(as->literal_count==SIZE_MAX ||
+       !grow_array((void **)&as->literals,&as->literal_capacity,
+                   sizeof(*as->literals),as->literal_count+1U)) {
+        minias_set_error(as,"out-of-memory:literal-pool");return false;
+    }
+    entry=&as->literals[as->literal_count];
+    memset(entry,0,sizeof(*entry));
+    entry->section=as->current_section;
+    entry->subsection=as->current_subsection;
+    entry->width=width;entry->expression=*expression;
+    written=snprintf(entry->label,sizeof(entry->label),
+                     ".Lminias_literal_%zu",as->literal_count);
+    if(written<0 || (size_t)written>=sizeof(entry->label)) {
+        minias_set_error(as,"literal-label-overflow");return false;
+    }
+    ++as->literal_count;
+    written=snprintf(pool_label->name,sizeof(pool_label->name),
+                     "%s",entry->label);
+    if(written<0 || (size_t)written>=sizeof(pool_label->name))return false;
+    pool_label->addend=0;
+    return true;
 }
 
 /* GNU .p2align/.balign/.align alignment[,fill[,max_skip]].
@@ -3651,6 +3701,50 @@ static bool define_label(MiniAs *as, char *label, size_t line) {
     return true;
 }
 
+/* Materialize real GNU literal pools at the requested location, NOT by
+ * ignoring .ltorg: each retained request gets an aligned DATA fragment,
+ * a fragment-anchored local label and a normal ABS32/ABS64 relocation.
+ * Zero-fill inside executable sections matches GNU GAS, not NOP padding. */
+static bool flush_literal_pools(MiniAs *as,size_t line,bool all) {
+    int original_section=as->current_section;
+    uint32_t original_subsection=as->current_subsection;
+    size_t i;
+    for(i=0U;i<as->literal_count;++i) {
+        MiniAsLiteral *entry=&as->literals[i];
+        char alignment[16],value[384],label[64];
+        int written;
+        if(entry->emitted ||
+           (!all && (entry->section!=as->current_section ||
+                     entry->subsection!=as->current_subsection)))continue;
+        if(all) {
+            as->current_section=entry->section;
+            as->current_subsection=entry->subsection;
+            if(!ensure_subsection(as,as->current_section,as->current_subsection))
+                goto failure;
+        }
+        written=snprintf(alignment,sizeof(alignment),"%u,0",entry->width);
+        if(written<0 || (size_t)written>=sizeof(alignment))goto failure;
+        if(!handle_align(as,".balign",alignment,line))goto failure;
+        written=snprintf(label,sizeof(label),"%s",entry->label);
+        if(written<0 || (size_t)written>=sizeof(label))goto failure;
+        if(!define_label(as,label,line))goto failure;
+        written=snprintf(value,sizeof(value),"%s%+lld",
+                         entry->expression.name,
+                         (long long)entry->expression.addend);
+        if(written<0 || (size_t)written>=sizeof(value))goto failure;
+        if(!add_data_stmt(as,entry->width==8U?".quad":".long",value,line))
+            goto failure;
+        entry->emitted=true;
+    }
+    as->current_section=original_section;
+    as->current_subsection=original_subsection;
+    return true;
+failure:
+    as->current_section=original_section;
+    as->current_subsection=original_subsection;
+    return false;
+}
+
 /* Tentative COMMON definitions have ELF st_value=alignment, st_size=length.
  * Explicit .local symbols instead acquire real .bss space through the
  * existing Common fragment/section layout and symbol-anchor pipeline. */
@@ -4446,6 +4540,15 @@ static bool process_statement(MiniAs *as, char *text, size_t line) {
         }
         if (strcmp(op, ".reloc") == 0) {
             return handle_named_reloc(as,args,line);
+        }
+        if (strcmp(op,".ltorg")==0 || strcmp(op,".pool")==0) {
+            if(!as->target->supports_literal_pools || *args) {
+                minias_set_error(as,"unsupported-directive:%s:line=%zu",
+                                 op,line);
+                return false;
+            }
+            as->layout_sensitive=true;
+            return flush_literal_pools(as,line,false);
         }
         if (strcmp(op, ".previous") == 0) {
             int swap_section = as->current_section;
@@ -6107,6 +6210,8 @@ bool minias_parse_file(MiniAs *as, const char *path) {
         return false;
     }
     fclose(file);
+    if(as->target->supports_literal_pools &&
+       !flush_literal_pools(as,line_no,true))return false;
     if (!finalize_subsection_layout(as)) {
         return false;
     }

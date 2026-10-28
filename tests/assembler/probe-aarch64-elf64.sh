@@ -2097,3 +2097,44 @@ A64_MACRO_PURGE
 "$AARCH64_OBJCOPY" -j .text -O binary "$work/a64-purge-gnu.o" "$work/a64-purge-gnu.bin"
 cmp "$work/a64-purge-mini.bin" "$work/a64-purge-gnu.bin"
 echo 'MINIAS_COMMON_MACRO_PURGE_ACTIVE=PASS GNU_nested_expansion_10_instructions'
+
+# True GNU AArch64 literal-pool semantics: LDR=SYMBOL emits a PC-relative
+# instruction, aligned .long/.quad pool data and native ELF ABS32/ABS64
+# relocation. Identical symbol+width entries deduplicate within a pool,
+# .ltorg flushes once, and section EOF flushes the final outstanding pool.
+cat > "$work/a64-linux-literal-pool.s" <<'A64_LIT'
+.text
+.globl literal_entry
+literal_entry:
+ldr x8, =external_symbol
+ldr x9, =external_symbol
+ldr w3, =external_symbol
+nop
+.ltorg
+ldr x0, =another_symbol
+ret
+A64_LIT
+"$MINIAS" --target=aarch64 -o "$work/a64-lit-mini.o" "$work/a64-linux-literal-pool.s"
+"$AARCH64_AS" -o "$work/a64-lit-gnu.o" "$work/a64-linux-literal-pool.s"
+"$AARCH64_OBJCOPY" -j .text -O binary "$work/a64-lit-mini.o" "$work/a64-lit-mini.bin"
+"$AARCH64_OBJCOPY" -j .text -O binary "$work/a64-lit-gnu.o" "$work/a64-lit-gnu.bin"
+cmp "$work/a64-lit-mini.bin" "$work/a64-lit-gnu.bin"
+for owner in mini gnu; do
+    "$AARCH64_READELF" -Wr "$work/a64-lit-$owner.o" |
+        awk '$3 ~ /^R_AARCH64_ABS(32|64)$/ {print $1,$3,$5,$6,$7}' |
+        sort > "$work/a64-lit-$owner.txt"
+done
+[ "$(wc -l < "$work/a64-lit-mini.txt")" -eq 3 ]
+cmp "$work/a64-lit-mini.txt" "$work/a64-lit-gnu.txt"
+for bad in 'ldr sp,=external_symbol' 'ldr x0,=123456' \
+           'ldr x0,=sym1+sym2' 'ldr x0,=not-a-symbol*2'; do
+    printf '.text\n%s\n.ltorg\n' "$bad" > "$work/a64-lit-bad.s"
+    if "$MINIAS" --target=aarch64 -o "$work/a64-lit-bad.o" "$work/a64-lit-bad.s" >/dev/null 2>&1; then
+        echo "invalid A64 literal operand accepted: $bad" >&2;exit 1
+    fi
+done
+printf '.text\n.ltorg unexpected\n' > "$work/a64-ltorg-bad.s"
+if "$MINIAS" --target=aarch64 -o "$work/a64-ltorg-bad.o" "$work/a64-ltorg-bad.s" >/dev/null 2>&1; then
+    echo "invalid .ltorg argument accepted" >&2;exit 1
+fi
+echo 'MINIAS_A64_GNU_LITERAL_POOL=PASS exact_GNU_text_ABS32_ABS64_reloc_dedup_ltorg_and_eof'
