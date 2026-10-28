@@ -3369,6 +3369,14 @@ static const MiniAsTargetOps ops={
     .validate_output=x64_validate,
     .word_directive_width=2U,.align_directive_bytes=true,
     .dot_relative_fixup=MINIAS_FIXUP_PREL32,
-    .common_default_alignment_cap=16U
+    .common_default_alignment_cap=16U,
+    /* System V AMD64 DWARF: code slots are bytes, saved GPRs occupy
+     * eight-byte stack slots, return address=RIP(16), CFA base=RSP(7).
+     * The Common CFI encoder already owns the real .debug_frame FDE. */
+    .cfi_code_align=1U,
+    .cfi_data_align=-8,
+    .cfi_return_reg=16U,
+    .cfi_stack_reg=7U,
+    .cfi_address_size=8U
 };
 const MiniAsTargetOps *minias_target_x86_64(void){return &ops;}
