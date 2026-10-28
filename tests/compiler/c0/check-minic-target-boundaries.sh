@@ -118,6 +118,12 @@ has src/target/aarch64/asm_contract.c 'aarch64_linux_io_dependency_source('
 has src/target/aarch64/asm_contract.c 'aarch64_linux_io_dependency_emit('
 lacks src/core/core_lower_asm_target.c 'cbnz'
 
+# Original arm64 sysreg.h whole GNU macro is lowered only by target
+# using whitelist machine SYS_* encodings, not Core ASM string passthrough.
+has src/target/aarch64/asm_contract.c 'aarch64_linux_encoded_sysreg_form('
+has src/target/aarch64/asm_contract.c 'aarch64_linux_encoded_sysreg_emit('
+lacks src/core/core_lower_asm_target.c 'mrs_s'
+
 # Four ISA families, five target profiles: one storage-shape owner, distinct
 # physical ABIs. RV32 must never inherit the 8-byte LP64 word policy.
 exists src/target/common/aggregate_shape.h

@@ -154,6 +154,10 @@ jobs:
         run: |
           set -Eeuo pipefail
           MINIC_ARM_IO_DEPENDENCY_SOURCE_ONLY=1 bash tests/compiler/c0/probe-aarch64-linux-io-dependency.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
+      - name: Original GNU Linux arm64 SYSREG macro ten exact encoded MRS forms
+        run: |
+          set -Eeuo pipefail
+          MINIC_SYSREG_SOURCE_ONLY=1 bash tests/compiler/c0/probe-aarch64-linux-encoded-sysreg.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
       - name: Common GNU function metadata and inline-asm fail-closed regressions
         shell: bash
         run: |

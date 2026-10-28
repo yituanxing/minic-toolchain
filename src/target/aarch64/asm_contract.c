@@ -807,6 +807,110 @@ static bool aarch64_linux_io_dependency_emit(
         (size_t)b[1].value*8U,(size_t)b[0].value*8U)>=0;
 }
 
+/* Exact original Linux 6.6.143 arm64 sysreg.h read_sysreg_s SYS_*:
+ * a full GNU .irp/.equ/.macro/.inst/.purgem expansion, NOT a simple MRS.
+ * Keep all source directives and SYS_* hardware encodings on target side.
+ * Never pass privileged GNU macro statements through unqualified. */
+static unsigned int aarch64_linux_encoded_sysreg_form(
+    const char *text, size_t length) {
+    static const char prefix[] = ".irpnum,0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30.equ.L__gpr_num_x\\num,\\num.equ.L__gpr_num_w\\num,\\num.endr.equ.L__gpr_num_xzr,31.equ.L__gpr_num_wzr,31.macromrs_s,rt,sreg.inst(0xd5200000|(\\sreg)|(.L__gpr_num_\\rt)).endm";
+    static const struct { unsigned int a,b,c,d,e; } regs[]={
+        {3U,0U,0U,0U,0U},
+        {3U,0U,0U,0U,5U},
+        {3U,0U,0U,4U,0U},
+        {3U,0U,0U,6U,2U},
+        {3U,0U,0U,7U,0U},
+        {3U,0U,0U,7U,1U},
+        {3U,0U,4U,6U,0U},
+        {3U,3U,0U,0U,1U},
+        {3U,3U,14U,0U,5U},
+        {3U,3U,14U,0U,6U}
+    };
+    char normalized[768],expected[768];
+    size_t i,n=0U;
+    if(!text||!length||length>=sizeof(normalized))return 0U;
+    for(i=0U;i<length;++i){
+        const char ch=text[i];
+        if(ch==' '||ch=='\t'||ch=='\r'||ch=='\n')continue;
+        if(ch=='\0'||n+1U>=sizeof(normalized))return 0U;
+        normalized[n++]=ch;
+    }
+    normalized[n]='\0';
+    for(i=0U;i<sizeof(regs)/sizeof(regs[0]);++i){
+        int count=snprintf(expected,sizeof(expected),
+          "%smrs_s%%0,(((%u)<<19)|((%u)<<16)|((%u)<<12)|"
+          "((%u)<<8)|((%u)<<5)).purgemmrs_s",
+          prefix,regs[i].a,regs[i].b,regs[i].c,regs[i].d,regs[i].e);
+        if(count>0&&(size_t)count<sizeof(expected)&&
+            strcmp(normalized,expected)==0)return (unsigned int)i+1U;
+    }
+    return 0U;
+}
+static unsigned int aarch64_linux_encoded_sysreg_instruction(unsigned int form){
+    static const struct { unsigned int a,b,c,d,e; } regs[]={
+        {3U,0U,0U,0U,0U},
+        {3U,0U,0U,0U,5U},
+        {3U,0U,0U,4U,0U},
+        {3U,0U,0U,6U,2U},
+        {3U,0U,0U,7U,0U},
+        {3U,0U,0U,7U,1U},
+        {3U,0U,4U,6U,0U},
+        {3U,3U,0U,0U,1U},
+        {3U,3U,14U,0U,5U},
+        {3U,3U,14U,0U,6U}
+    };
+    const size_t index=(size_t)form-1U;
+    if(!form||index>=sizeof(regs)/sizeof(regs[0]))return 0U;
+    return 0xd5200000U | (regs[index].a<<19) | (regs[index].b<<16) |
+           (regs[index].c<<12) | (regs[index].d<<8) | (regs[index].e<<5) |
+           9U; /* x9 is the known emitted scratch register */
+}
+static bool aarch64_linux_encoded_sysreg_source(
+    const MinicC0Program *program,const MinicInlineAsm *src,
+    MinicTargetInlineAsmContract *contract) {
+    const MinicExpression *dst;
+    MinicType plain;
+    if(!program||!src||!contract||!src->is_volatile||src->is_goto||
+       !src->outputs||src->output_count!=1U||src->input_count!=0U||
+       src->label_count||src->clobber_count||src->register_clobber_count||
+       src->has_memory_clobber||!constraint(&src->outputs[0],"=r")||
+       !aarch64_linux_encoded_sysreg_form(
+           src->template_text,src->template_length))return false;
+    dst=minic_c0_program_expression(program,src->outputs[0].expression);
+    if(!dst||dst->value_category!=MINIC_VALUE_LVALUE||
+       minic_type_is_const(dst->type)||
+       !minic_type_unqualified(dst->type,&plain)||
+       !aarch64_linux_sysreg_u64_type(plain))return false;
+    contract->operand_count=1U;
+    contract->kinds[0]=MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
+    return true;
+}
+static bool aarch64_linux_encoded_sysreg_emit(
+    FILE *out,const MinicDirectLP64BlockContext *ctx,
+    const MinicCoreInstruction *ins,const MinicCoreInlineAsm *info) {
+    const unsigned int form=aarch64_linux_encoded_sysreg_form(
+        info->template_text,info->template_length);
+    const MinicCoreFunction *fn=ctx->fn;
+    const MinicCoreStructuredInlineAsmOperand *op=
+        ins->value.structured_inline_asm.operands;
+    MinicType type;
+    if(!out||!ctx||!fn||!info||!op||!form||ctx->dynamic_frame||
+       !info->is_volatile||info->is_goto||info->has_memory_clobber||
+       info->register_clobber_count||
+       ins->value.structured_inline_asm.operand_count!=1U||
+       op[0].operand_index!=0U||op[0].value>=fn->value_count||
+       op[0].value>4095U/8U||op[0].early_clobber||
+       op[0].has_fixed_register_binding||
+       op[0].kind!=MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT||
+       !minic_type_pointee(fn->values[op[0].value].type,&type)||
+       !aarch64_linux_sysreg_u64_type(type))return false;
+    return fprintf(out,"  .inst 0x%08x\n"
+                       "  ldr x10, [sp, #%zu]\n"
+                       "  str x9, [x10]\n",
+           aarch64_linux_encoded_sysreg_instruction(form),
+           (size_t)op[0].value*8U)>=0;
+}
+
 bool minic_aarch64_qualify_inline_asm(
     const MinicC0Program *program, const MinicInlineAsm *src,
     MinicTargetInlineAsmContract *contract) {
@@ -814,6 +918,8 @@ bool minic_aarch64_qualify_inline_asm(
     MinicType plain;
     size_t i;
     if(aarch64_linux_io_dependency_source(program,src,contract))
+        return true;
+    if(aarch64_linux_encoded_sysreg_source(program,src,contract))
         return true;
     /* The exact native AArch64 zero-input ISA list is shared by source
      * qualification and emission. The original Linux DAIF helpers use
@@ -1370,6 +1476,10 @@ bool minic_aarch64_emit_qualified_structured_asm(
             return false;
         return fprintf(out, "  %s\n", barrier) >= 0;
     }
+    if (ins->value.structured_inline_asm.operand_count == 1U &&
+        aarch64_linux_encoded_sysreg_form(
+            info->template_text,info->template_length))
+        return aarch64_linux_encoded_sysreg_emit(out,ctx,ins,info);
     if (ins->value.structured_inline_asm.operand_count == 1U) {
         const MinicCoreStructuredInlineAsmOperand *operand =
             ins->value.structured_inline_asm.operands;
