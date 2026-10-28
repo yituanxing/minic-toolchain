@@ -770,6 +770,104 @@ SRC
     done
     echo 'MINIC_AARCH64_LINUX_PERCPU_ALTERNATIVE_GNU_AS=PASS real_frozen=1 patchtable=12B relocations=2 feature=47 negative=6 privileged_only=1'
 
+
+    # Original Linux 6.6.143 cmpxchg.h XCHG; 4 widths × 4 memory
+    # orderings, old-value semantics and true GNU/GAS/QEMU differential.
+    : > "$work/aarch64-xchg-kernel.i"
+    for bits in 8 16 32 64; do
+        case "$bits" in
+            8) typ='unsigned char'; suffix=b; old='%w0'; new='%w3' ;;
+            16) typ='unsigned short'; suffix=h; old='%w0'; new='%w3' ;;
+            32) typ='unsigned int'; suffix=''; old='%w0'; new='%w3' ;;
+            64) typ='unsigned long'; suffix=''; old='%0'; new='%3' ;;
+        esac
+        for mode in relaxed acquire release full; do
+            case "$mode" in
+                relaxed) ld=ld; st=st; fence=''; clobber='' ;;
+                acquire) ld=lda; st=st; fence=''; clobber=': "memory"' ;;
+                release) ld=ld; st=stl; fence=''; clobber=': "memory"' ;;
+                full) ld=ld; st=stl; fence=' dmb ish'; clobber=': "memory"' ;;
+            esac
+            cat >> "$work/aarch64-xchg-kernel.i" <<SRC
+$typ xchg_$bits\_$mode($typ *p, $typ value) {
+    $typ old_value;
+    unsigned long retry;
+    __asm__ __volatile__(" prfm pstl1strm, %2\n"
+        "1: $(printf '%s' "$ld")xr$suffix $old, %2\n"
+        " $(printf '%s' "$st")xr$suffix %w1, $new, %2\n"
+        " cbnz %w1, 1b\n"
+        "$fence"
+        : "=&r"(old_value), "=&r"(retry), "+Q"(*p)
+        : "r"(value) $clobber);
+    return old_value;
+}
+SRC
+        done
+        cat >> "$work/aarch64-xchg-kernel.i" <<SRC
+int test_xchg_$bits(void) {
+    $typ v=1;
+    $typ a=xchg_$bits\_relaxed(&v,2);
+    $typ b=xchg_$bits\_acquire(&v,3);
+    $typ c=xchg_$bits\_release(&v,4);
+    $typ d=xchg_$bits\_full(&v,5);
+    return v==5 && a==1 && b==2 && c==3 && d==4;
+}
+SRC
+    done
+    cat >> "$work/aarch64-xchg-kernel.i" <<'SRC'
+int main(void) {
+    return test_xchg_8() && test_xchg_16() &&
+           test_xchg_32() && test_xchg_64() ? 0 : 1;
+}
+SRC
+    "$cross_cc" -O0 -x c "$work/aarch64-xchg-kernel.i" \
+        -o "$work/aarch64-xchg-kernel.gnu.elf"
+    "$MINIC_CC" --target=aarch64-linux -S \
+        "$work/aarch64-xchg-kernel.i" -o "$work/aarch64-xchg-kernel.minic.s"
+    for mnemonic in 'ldxrb w9' 'ldxrh w9' 'ldxr w9' 'ldxr x9' \
+                    'ldaxrb w9' 'ldaxrh w9' 'ldaxr w9' 'ldaxr x9' \
+                    'stlxrb w12' 'stlxrh w12' 'stlxr w12' \
+                    'strb w9' 'strh w9' 'str w9' 'str x9' 'dmb ish'; do
+        grep -Fq "$mnemonic" "$work/aarch64-xchg-kernel.minic.s"
+    done
+    "$cross_cc" -x assembler "$work/aarch64-xchg-kernel.minic.s" \
+        -o "$work/aarch64-xchg-kernel.minic.elf"
+    for flavor in gnu minic; do
+        qemu-aarch64 -L /usr/aarch64-linux-gnu \
+            "$work/aarch64-xchg-kernel.$flavor.elf"
+    done
+    for invalid in injection wrong_constraint missing_clobber wrong_memory extra_clobber; do
+        suffix=''; constraint=r; clobber=': "memory"'; mem='+Q'
+        case "$invalid" in
+            injection) suffix='; svc #0' ;;
+            wrong_constraint) constraint=Ir ;;
+            missing_clobber) clobber='' ;;
+            wrong_memory) mem='=Q' ;;
+            extra_clobber) clobber=': "memory", "cc"' ;;
+        esac
+        cat > "$work/aarch64-xchg-invalid-$invalid.i" <<SRC
+void bad(unsigned long *p, unsigned long value) {
+    unsigned long old, retry;
+    __asm__ __volatile__("prfm pstl1strm, %2\n"
+        "1: ldxr %0, %2\n"
+        " stlxr %w1, %3, %2\n"
+        " cbnz %w1, 1b\n"
+        " dmb ish$suffix"
+        : "=&r"(old), "=&r"(retry), "$mem"(*p)
+        : "$constraint"(value) $clobber);
+}
+SRC
+        if "$MINIC_CC" --target=aarch64-linux -S \
+            "$work/aarch64-xchg-invalid-$invalid.i" \
+            -o "$work/aarch64-xchg-invalid-$invalid.s" \
+            >"$work/aarch64-xchg-invalid-$invalid.out" \
+            2>"$work/aarch64-xchg-invalid-$invalid.err"; then
+            echo "FAIL unsafe AArch64 Linux XCHG accepted: $invalid" >&2
+            exit 1
+        fi
+    done
+    echo 'MINIC_AARCH64_LINUX_XCHG_GNU_QEMU=PASS variants=16 widths=4 orderings=4 negative=5'
+
     # Exact Linux cmpxchg 32/64 × relaxed/acquire/release/full, both
     # success and mismatch old-value behavior. Actual GNU+MiniC GAS/QEMU.
     : > "$work/aarch64-cmpxchg.i"
