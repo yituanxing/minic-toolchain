@@ -71,6 +71,21 @@ static const char *aarch64_linux_mrs_register(const char *text, size_t len) {
         {"mrs%0,sp_el0", "sp_el0"},
         {"mrs%0,tpidr_el1", "tpidr_el1"},
         {"mrs%0,tpidr_el2", "tpidr_el2"},
+        {"mrs%0,clidr_el1", "clidr_el1"},
+        {"mrs%0,cntkctl_el1", "cntkctl_el1"},
+        {"mrs%0,cntp_ctl_el0", "cntp_ctl_el0"},
+        {"mrs%0,cntv_ctl_el0", "cntv_ctl_el0"},
+        {"mrs%0,cntfrq_el0", "cntfrq_el0"},
+        {"mrs%0,tcr_el1", "tcr_el1"},
+        {"mrs%0,esr_el1", "esr_el1"},
+        {"mrs%0,sctlr_el1", "sctlr_el1"},
+        {"mrs%0,far_el1", "far_el1"},
+        {"mrs%0,par_el1", "par_el1"},
+        {"mrs%0,id_aa64mmfr1_el1", "id_aa64mmfr1_el1"},
+        {"mrs%0,hcr_el2", "hcr_el2"},
+        {"mrs%0,tpidr_el0", "tpidr_el0"},
+        {"mrs%0,mdscr_el1", "mdscr_el1"},
+        {"mrs%0,ttbr1_el1", "ttbr1_el1"},
         {"mrs%0,daif", "daif"}
     };
     if (text == NULL || len >= sizeof(normalized))

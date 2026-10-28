@@ -96,11 +96,104 @@ void write_sysreg_vtcr_el2(unsigned long long input) {
 void write_sysreg_vttbr_el2(unsigned long long input) {
   unsigned long long value=input;
   asm volatile("msr vttbr_el2, %x0" : : "rZ" (value));
-}SRC
+}unsigned long long read_sysreg_sp_el0(void) {
+    unsigned long long value;
+    asm("mrs %0, sp_el0" : "=r" (value));
+    return value;
+}
+unsigned long long read_sysreg_tpidr_el1(void) {
+    unsigned long long value;
+    asm("mrs %0, tpidr_el1" : "=r" (value));
+    return value;
+}
+unsigned long long read_sysreg_tpidr_el2(void) {
+    unsigned long long value;
+    asm("mrs %0, tpidr_el2" : "=r" (value));
+    return value;
+}
+unsigned long long read_sysreg_clidr_el1(void) {
+    unsigned long long value;
+    asm("mrs %0, clidr_el1" : "=r" (value));
+    return value;
+}
+unsigned long long read_sysreg_cntkctl_el1(void) {
+    unsigned long long value;
+    asm("mrs %0, cntkctl_el1" : "=r" (value));
+    return value;
+}
+unsigned long long read_sysreg_cntp_ctl_el0(void) {
+    unsigned long long value;
+    asm("mrs %0, cntp_ctl_el0" : "=r" (value));
+    return value;
+}
+unsigned long long read_sysreg_cntv_ctl_el0(void) {
+    unsigned long long value;
+    asm("mrs %0, cntv_ctl_el0" : "=r" (value));
+    return value;
+}
+unsigned long long read_sysreg_cntfrq_el0(void) {
+    unsigned long long value;
+    asm("mrs %0, cntfrq_el0" : "=r" (value));
+    return value;
+}
+unsigned long long read_sysreg_tcr_el1(void) {
+    unsigned long long value;
+    asm("mrs %0, tcr_el1" : "=r" (value));
+    return value;
+}
+unsigned long long read_sysreg_esr_el1(void) {
+    unsigned long long value;
+    asm("mrs %0, esr_el1" : "=r" (value));
+    return value;
+}
+unsigned long long read_sysreg_sctlr_el1(void) {
+    unsigned long long value;
+    asm("mrs %0, sctlr_el1" : "=r" (value));
+    return value;
+}
+unsigned long long read_sysreg_far_el1(void) {
+    unsigned long long value;
+    asm("mrs %0, far_el1" : "=r" (value));
+    return value;
+}
+unsigned long long read_sysreg_par_el1(void) {
+    unsigned long long value;
+    asm("mrs %0, par_el1" : "=r" (value));
+    return value;
+}
+unsigned long long read_sysreg_id_aa64mmfr1_el1(void) {
+    unsigned long long value;
+    asm("mrs %0, id_aa64mmfr1_el1" : "=r" (value));
+    return value;
+}
+unsigned long long read_sysreg_hcr_el2(void) {
+    unsigned long long value;
+    asm("mrs %0, hcr_el2" : "=r" (value));
+    return value;
+}
+unsigned long long read_sysreg_tpidr_el0(void) {
+    unsigned long long value;
+    asm("mrs %0, tpidr_el0" : "=r" (value));
+    return value;
+}
+unsigned long long read_sysreg_mdscr_el1(void) {
+    unsigned long long value;
+    asm("mrs %0, mdscr_el1" : "=r" (value));
+    return value;
+}
+unsigned long long read_sysreg_ttbr1_el1(void) {
+    unsigned long long value;
+    asm("mrs %0, ttbr1_el1" : "=r" (value));
+    return value;
+}
+SRC
 "$minic" --target=aarch64-linux -S "$d/sysreg.i" -o "$d/mini.s"
 test -s "$d/mini.s"
 for reg in daif ttbr0_el1 ttbr1_el1 tcr_el1 sctlr_el1 contextidr_el1 cpacr_el1 vbar_el1 mdscr_el1 osdlr_el1 oslar_el1 cntkctl_el1 cntp_ctl_el0 cntp_cval_el0 cntv_ctl_el0 cntv_cval_el0 tpidr_el0 tpidrro_el0 tpidr_el2 hcr_el2 cptr_el2 vtcr_el2 vttbr_el2;do
     grep -Fq "msr $reg, x9" "$d/mini.s"
+done
+for reg in sp_el0 tpidr_el1 tpidr_el2 clidr_el1 cntkctl_el1 cntp_ctl_el0 cntv_ctl_el0 cntfrq_el0 tcr_el1 esr_el1 sctlr_el1 far_el1 par_el1 id_aa64mmfr1_el1 hcr_el2 tpidr_el0 mdscr_el1 ttbr1_el1;do
+    grep -Fq "mrs x9, $reg" "$d/mini.s"
 done
 if [[ "${MINIC_SOURCE_ONLY:-0}" != 1 ]];then
     aarch64-linux-gnu-gcc -c -O0 -x c "$d/sysreg.i" -o "$d/gnu.o"
@@ -111,10 +204,12 @@ fi
 sed 's/msr ttbr0_el1, %x0/msr ttbr0_el3, %x0/' "$d/sysreg.i" > "$d/unsafe-reg.i"
 sed 's/msr ttbr0_el1, %x0/msr ttbr0_el1, %x0; brk #1/' "$d/sysreg.i" > "$d/unsafe-inject.i"
 sed 's/"rZ" (value)/"m" (value)/' "$d/sysreg.i" > "$d/unsafe-constraint.i"
-for bad in unsafe-reg unsafe-inject unsafe-constraint;do
+sed 's/mrs %0, clidr_el1/mrs %0, fake_el1/' "$d/sysreg.i" > "$d/unsafe-mrs-reg.i"
+sed 's/mrs %0, clidr_el1/mrs %0, clidr_el1; brk #1/' "$d/sysreg.i" > "$d/unsafe-mrs-inject.i"
+for bad in unsafe-reg unsafe-inject unsafe-constraint unsafe-mrs-reg unsafe-mrs-inject;do
     if "$minic" --target=aarch64-linux -S "$d/$bad.i" -o "$d/$bad.s" >/dev/null 2>&1;then
         echo "AArch64 unqualified sysreg $bad was emitted" >&2;exit 1
     fi
     test ! -e "$d/$bad.s"
 done
-echo 'AARCH64_LINUX_SYSREG_WRITES=PASS register_forms=23 GNU_AS=1 privileged_not_executed=1 negatives=3'
+echo 'AARCH64_LINUX_SYSREG_WRITES=PASS write_forms=23 read_forms=18 GNU_AS=1 privileged_not_executed=1 negatives=5'
