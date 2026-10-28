@@ -26,6 +26,7 @@ enum {
     AARCH64_R_ABS32 = 258U,
     AARCH64_R_PREL64 = 260U,
     AARCH64_R_PREL32 = 261U,
+    AARCH64_R_LD_PREL_LO19 = 273U,
     AARCH64_R_ADR_PREL_LO21 = 274U,
     AARCH64_R_ADR_PREL_PG_HI21 = 275U,
     AARCH64_R_ADR_GOT_PAGE = 311U,
@@ -2064,6 +2065,27 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
         }
         inst->opcode=A64_MC_LDR_LITERAL;inst->count=2U;
         put_reg(&inst->operands[0],rd,wide);
+    } else if(!strcmp(op,"ldr") && strchr(args,'[')==NULL &&
+              strchr(args,'=')==NULL) {
+        /* Real GNU LDR Xt/Wt, LABEL directly addresses a literal via
+         * signed PC-relative imm19; unlike =SYMBOL it emits NO pool.
+         * Same-section references resolve locally; cross-section and
+         * undefined references retain the target-owned ELF LD_PREL_LO19. */
+        char operands[4][384];
+        unsigned n,rd;
+        bool wide,sp;
+        MiniAsSymbolExpr source;
+        if(!split_operands(args,operands,&n) || n!=2U ||
+           !parse_a64_reg(operands[0],&rd,&wide,&sp) || sp ||
+           !minias_parse_symbol_addend(operands[1],&source) ||
+           !a64_attach_expr(inst,1U,&source)) {
+            minias_set_error(as,"bad-aarch64-direct-literal:%s:line=%zu",
+                             args,stmt->line);
+            free(inst);return false;
+        }
+        inst->opcode=A64_MC_LDR_LITERAL;inst->count=2U;
+        inst->encoding=1U; /* target-local direct vs queued =literal */
+        put_reg(&inst->operands[0],rd,wide);
     } else if(a64_parse_lse(as,inst,op,args)) {
         /* LSE grammar is owned by one target decoder. */
     } else if(!strcmp(op,"madd") || !strcmp(op,"msub") ||
@@ -3664,25 +3686,43 @@ static bool encode(MiniAs *as, const MiniAsStmt *stmt) {
     }
     switch (inst->opcode) {
         case A64_MC_LDR_LITERAL: {
-            const MiniAsSymbolExpr *pool=inst->operands[1].symbol;
-            MiniAsSymbol *target=pool?
-                minias_get_symbol(as,pool->name,false):NULL;
+            const MiniAsSymbolExpr *literal=inst->operands[1].symbol;
+            MiniAsSymbol *target=literal?
+                minias_get_symbol(as,literal->name,false):NULL;
             int64_t displacement;
-            if(!target || !target->defined || target->section!=stmt->section ||
-               target->value>INT64_MAX || stmt->offset>INT64_MAX) {
+            bool direct=inst->encoding==1U;
+            if(!literal || !direct &&
+               (!target || !target->defined ||
+                target->section!=stmt->section)) {
                 minias_set_error(as,"bad-aarch64-literal-pool-target:%s",
                                  stmt->args);return false;
             }
-            displacement=(int64_t)target->value-(int64_t)stmt->offset;
+            code=(inst->operands[0].register_64?
+                  UINT32_C(0x58000000):UINT32_C(0x18000000))|
+                 inst->operands[0].reg;
+            if(!target || !target->defined || target->section!=stmt->section) {
+                /* A link-time PC-relative load requires the genuine AArch64
+                 * instruction fixup, not a data PREL32 relocation. */
+                fixup=MINIAS_FIXUP_A64_LD_PREL_LO19;
+                expr=literal;
+                break;
+            }
+            if(target->value>INT64_MAX || stmt->offset>INT64_MAX ||
+               (literal->addend>0 &&
+                (int64_t)target->value>INT64_MAX-literal->addend) ||
+               (literal->addend<0 &&
+                (int64_t)target->value<INT64_MIN-literal->addend)) {
+                minias_set_error(as,"aarch64-literal-address-overflow");
+                return false;
+            }
+            displacement=(int64_t)target->value+literal->addend-
+                         (int64_t)stmt->offset;
             if((displacement&3)!=0 || displacement<-1048576 ||
                displacement>1048572) {
                 minias_set_error(as,"aarch64-literal-load-out-of-range:%s",
                                  stmt->args);return false;
             }
-            code=(inst->operands[0].register_64?
-                  UINT32_C(0x58000000):UINT32_C(0x18000000))|
-                 (((uint32_t)(displacement/4)&UINT32_C(0x7ffff))<<5U)|
-                 inst->operands[0].reg;
+            code|=((uint32_t)(displacement/4)&UINT32_C(0x7ffff))<<5U;
             break;
         }
         case A64_MC_BITFIELD: {
@@ -4572,6 +4612,8 @@ static uint32_t aarch64_fixup_relocation_type(MiniAsFixupKind kind,
             return width == 4U ? AARCH64_R_JUMP26 : 0U;
         case MINIAS_FIXUP_A64_CONDBR19:
             return width == 4U ? AARCH64_R_CONDBR19 : 0U;
+        case MINIAS_FIXUP_A64_LD_PREL_LO19:
+            return width == 4U ? AARCH64_R_LD_PREL_LO19 : 0U;
         case MINIAS_FIXUP_A64_TSTBR14:
             return width == 4U ? AARCH64_R_TSTBR14 : 0U;
         case MINIAS_FIXUP_A64_ADR_LO21:
