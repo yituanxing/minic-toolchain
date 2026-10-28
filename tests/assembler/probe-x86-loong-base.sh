@@ -3142,3 +3142,19 @@ done
 [ "$(wc -l < "$work/x86-parensym-mini.reloc")" -eq 2 ]
 cmp "$work/x86-parensym-mini.reloc" "$work/x86-parensym-gnu.reloc"
 echo 'MINIAS_COMMON_PARENT_SYMBOL=PASS GNU_x86_bytes_reloc_and_full_addend'
+
+# Genuine Linux head_64.S Group-1 32-bit complement: GNU assembles
+# $(~0xFF000000) as an explicitly width-truncated ALU-l imm32, while
+# plain oversized constants remain rejected by MiniAS.
+cat > "$work/x86-alu-complement.s" <<'X86_ALU_COMPLEMENT'
+.text
+andl $(~0xFF000000), %ecx
+orl $(~0xFA1E0FF3), %edx
+xorl $(~0x00000000), %eax
+X86_ALU_COMPLEMENT
+"$MINIAS" --target=x86_64 -o "$work/x86-alu-complement-mini.o" "$work/x86-alu-complement.s"
+as --64 -o "$work/x86-alu-complement-gnu.o" "$work/x86-alu-complement.s"
+objcopy -j .text -O binary "$work/x86-alu-complement-mini.o" "$work/x86-alu-complement-mini.bin"
+objcopy -j .text -O binary "$work/x86-alu-complement-gnu.o" "$work/x86-alu-complement-gnu.bin"
+cmp "$work/x86-alu-complement-mini.bin" "$work/x86-alu-complement-gnu.bin"
+echo 'MINIAS_X86_GROUP1_COMPLEMENT=PASS GNU_32bit_explicit_bitwise_not'
