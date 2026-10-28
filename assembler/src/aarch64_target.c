@@ -1298,6 +1298,42 @@ static bool a64_parse_relocated(MiniAsMCInst *inst,
 
 /* Architecturally defined base EL0 system registers; no permissive
  * arbitrary sysreg numeric escape. Named register policy stays target-only. */
+/* ARM64 architecture defines the syntactic system-register escape:
+ * S<op0>_<op1>_C<CRn>_C<CRm>_<op2>. Each field has a fixed binary
+ * width. Validate every token and range in Target ISA rather than
+ * adding hundreds of one-off system register aliases or accepting
+ * unbounded integers into the instruction word. */
+static bool a64_numbered_system_register(const char *name,
+                                         uint32_t *mrs,uint32_t *msr) {
+    const char *p=name;
+    uint32_t field[5],bits;
+    unsigned i;
+    if(tolower((unsigned char)*p)!='s')return false;
+    ++p;
+    for(i=0U;i<5U;++i) {
+        char *end;unsigned long value;
+        static const unsigned maxval[5]={3U,7U,15U,15U,7U};
+        if(i==2U || i==3U) {
+            if(tolower((unsigned char)*p)!='c')return false;
+            ++p;
+        }
+        if(!isdigit((unsigned char)*p))return false;
+        errno=0;
+        value=strtoul(p,&end,10);
+        if(errno || value>maxval[i])return false;
+        field[i]=(uint32_t)value;
+        if(i<4U) {
+            if(*end!='_')return false;
+            p=end+1U;
+        } else if(*end!='\0')return false;
+    }
+    bits=(field[0]<<19U)|(field[1]<<16U)|
+         (field[2]<<12U)|(field[3]<<8U)|(field[4]<<5U);
+    *mrs=UINT32_C(0xd5200000)|bits;
+    *msr=UINT32_C(0xd5000000)|bits;
+    return true;
+}
+
 static bool a64_system_register(const char *name,uint32_t *mrs,uint32_t *msr) {
     static const struct {const char *name;uint32_t read,write;} table[]={
         {"sp_el0",UINT32_C(0xd5384100),UINT32_C(0xd5184100)},
@@ -1348,6 +1384,9 @@ static bool a64_system_register(const char *name,uint32_t *mrs,uint32_t *msr) {
         {"ctr_el0",UINT32_C(0xd53b0020),0U},
         {"par_el1",UINT32_C(0xd5387400),UINT32_C(0xd5187400)},
         {"hcr_el2",UINT32_C(0xd53c1100),UINT32_C(0xd51c1100)},
+        {"hstr_el2",UINT32_C(0xd53c1180),UINT32_C(0xd51c1180)},
+        {"fpsr",UINT32_C(0xd53b4420),UINT32_C(0xd51b4420)},
+        {"fpcr",UINT32_C(0xd53b4400),UINT32_C(0xd51b4400)},
         {"mdcr_el2",UINT32_C(0xd53c1120),UINT32_C(0xd51c1120)},
         {"isr_el1",UINT32_C(0xd538c100),0U},
         {"spsr_el2",UINT32_C(0xd53c4000),UINT32_C(0xd51c4000)},
@@ -1413,7 +1452,7 @@ static bool a64_system_register(const char *name,uint32_t *mrs,uint32_t *msr) {
             return true;
         }
     }
-    return false;
+    return a64_numbered_system_register(name,mrs,msr);
 }
 
 static bool a64_barrier_option(const char *name,unsigned *imm) {

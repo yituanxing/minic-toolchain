@@ -125,6 +125,18 @@ external_probe:
     mrs x1, ctr_el0
     mrs x0, CNTVCT_EL0
     mrs x0, SCTLR_EL1
+    // Architectural generic-numbered sysregs plus named FP/EL2 aliases:
+    // GNU native oracle validates *both* exact words and strict grammar.
+    mrs x1, fpsr
+    msr fpsr, x1
+    mrs x2, fpcr
+    msr fpcr, x2
+    mrs x0, hstr_el2
+    msr hstr_el2, x0
+    mrs x21, s0_3_c1_c0_1
+    msr s0_3_c1_c0_1, x21
+    mrs x22, s3_3_c4_c4_1
+    msr s3_3_c4_c4_1, x22
     // SIMD register-bank pair and structure LD1/ST1: all exact GNU
     // words tested, using existing typed memory and pair encoders.
     stp q0, q1, [x0]
@@ -778,6 +790,9 @@ for bad in 'add x0, w0, x1' 'cmp x0, #4097' 'ldr x0, [x1, -257]' \
            'bfm x2,w3,#1,#2' 'movk x0,#65536' \
            'stnp w2,w3,[x0,#254]' \
            'mrs x2,dbgwcr16_el1' 'msr dbgbcr99_el1,x1' \
+           'mrs x0,s4_3_c1_c0_1' 'msr s0_8_c1_c0_1,x0' \
+           'mrs x0,s0_3_c16_c0_1' 'mrs x0,s0_3_c1_c0_8' \
+           'mrs x0,s0_3_c1_c0_1oops' \
            'at s1e1r,w2' 'at s1e1r' 'at unknown,x2' \
            'mrs x0,unknown_el1'; do
     printf '.arch armv8-a\n.text\n%s\n' "$bad" >"$work/bad-integer.s"
