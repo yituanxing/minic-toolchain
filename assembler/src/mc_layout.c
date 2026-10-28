@@ -111,6 +111,19 @@ bool minias_finalize_subsection_layout(MiniAs *as) {
             return false;
         }
         symbol->value += sub->base;
+        /* Parse-site .size records the span, not an already normalized
+         * absolute end offset. Reconstitute the exact end anchor after
+         * subsection concatenation, including sources that never needed a
+         * relaxation pass. A relayout iteration also reaches this path,
+         * so the end is normalized only once per layout application. */
+        if (symbol->has_size_end_anchor) {
+            if (symbol->size > UINT64_MAX - symbol->value) {
+                minias_set_error(as, "fragment-size-end-overflow:%s",
+                                 symbol->name);
+                return false;
+            }
+            symbol->size_end_value = symbol->value + symbol->size;
+        }
     }
     return true;
 }
