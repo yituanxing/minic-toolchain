@@ -1370,6 +1370,65 @@ static bool x86_linux_atomic_rmw_source(
     return true;
 }
 
+/* Original GNU Linux SMP xadd (1/2/4/8): 671 patch section plus LOCK.
+ * This ABI/ISA contract is separate from non-LOCK local_add_return. */
+size_t minic_x86_64_linux_smp_xadd_width(const char *text,size_t len) {
+    static const char *const forms[] = {
+        ".pushsection.smp_locks,\"a\".balign4.long671f-..popsection671:"
+        "lock;xaddb%b0,%1",
+        ".pushsection.smp_locks,\"a\".balign4.long671f-..popsection671:"
+        "lock;xaddw%w0,%1",
+        ".pushsection.smp_locks,\"a\".balign4.long671f-..popsection671:"
+        "lock;xaddl%0,%1",
+        ".pushsection.smp_locks,\"a\".balign4.long671f-..popsection671:"
+        "lock;xaddq%q0,%1"
+    };
+    char compact[256]; size_t i,n=0U;
+    if(!text||!len||len>=sizeof(compact))return 0U;
+    for(i=0U;i<len;++i) {
+        const char c=text[i];
+        if(c==' '||c=='\n'||c=='\t'||c=='\r')continue;
+        if(n+1U>=sizeof(compact))return 0U;
+        compact[n++]=c;
+    }
+    compact[n]='\0';
+    for(i=0U;i<4U;++i)
+        if(strcmp(compact,forms[i])==0)return (size_t)1U<<i;
+    return 0U;
+}
+static bool x86_linux_smp_xadd_source(const MinicC0Program *program,
+    const MinicInlineAsm *src,MinicTargetInlineAsmContract *contract) {
+    const size_t width=src?minic_x86_64_linux_smp_xadd_width(
+        src->template_text,src->template_length):0U;
+    const MinicExpression *reg,*mem;
+    MinicType rt,mt;
+    const MinicIntegerRank rank=width==1U?MINIC_INTEGER_RANK_CHAR:
+        width==2U?MINIC_INTEGER_RANK_SHORT:
+        width==4U?MINIC_INTEGER_RANK_INT:MINIC_INTEGER_RANK_LONG;
+    if(!program||!src||!contract||!width||!src->is_volatile||src->is_goto||
+        !src->outputs||src->output_count!=2U||src->input_count||
+        src->label_count||!src->has_memory_clobber||src->clobber_count!=2U||
+        src->register_clobber_count!=1U||!src->register_clobbers||
+        !clobber_is(&src->register_clobbers[0],"cc")||
+        !c_is(&src->outputs[0],width==1U?"+q":"+r")||
+        !c_is(&src->outputs[1],"+m"))return false;
+    reg=minic_c0_program_expression(program,src->outputs[0].expression);
+    mem=minic_c0_program_expression(program,src->outputs[1].expression);
+    if(!reg||!mem||reg->value_category!=MINIC_VALUE_LVALUE||
+        mem->value_category!=MINIC_VALUE_LVALUE||
+        minic_type_is_const(reg->type)||minic_type_is_const(mem->type)||
+        !minic_type_unqualified(reg->type,&rt)||
+        !minic_type_unqualified(mem->type,&mt)||
+        !minic_type_is_integer(rt)||!minic_type_is_integer(mt)||
+        rt.base_kind!=MINIC_TYPE_BASE_INT||mt.base_kind!=MINIC_TYPE_BASE_INT||
+        rt.pointer_depth||mt.pointer_depth||
+        rt.integer_rank!=rank||mt.integer_rank!=rank)return false;
+    contract->operand_count=2U;
+    contract->kinds[0]=MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE;
+    contract->kinds[1]=MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE;
+    return true;
+}
+
 /* Linux 6.6.143 arch/x86/include/asm/local.h local_add_return:
  * register +r receives the PREVIOUS memory value after bare xaddq; +m
  * is the true hardware RMW lvalue. Core uses existing typed operand roles.
@@ -1999,6 +2058,8 @@ bool minic_x86_64_qualify_inline_asm(
     if (x86_counter_source(program, source, contract))
         return true;
     if (x86_port_io_source(program, source, contract))
+        return true;
+    if (x86_linux_smp_xadd_source(program, source, contract))
         return true;
     if (x86_linux_local_xadd_source(program, source, contract))
         return true;

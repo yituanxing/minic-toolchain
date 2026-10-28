@@ -745,8 +745,13 @@ static bool emit_linux_local_xadd(
     FILE *out, const MinicC0Program *program, const MinicTargetInfo *target,
     const MinicCoreFunction *fn, const MinicX86Frame *frame,
     const MinicCoreInstruction *ins, const MinicCoreInlineAsm *info) {
-    const size_t width = minic_x86_64_linux_local_xadd_width(
-        info->template_text, info->template_length);
+    const size_t smp_width = minic_x86_64_linux_smp_xadd_width(
+        info->template_text,info->template_length);
+    const size_t width = smp_width ? smp_width :
+        minic_x86_64_linux_local_xadd_width(
+            info->template_text, info->template_length);
+    static const char *const names[] = {"b","w","l","q"};
+    const char *suffix, *source_reg;
     const MinicCoreStructuredInlineAsmOperand *b =
         ins->value.structured_inline_asm.operands;
     MinicType type;
@@ -754,7 +759,10 @@ static bool emit_linux_local_xadd(
     bool sign;
     if (!out || !program || !target || !fn || !frame || !b || !width ||
         !info->is_volatile || info->is_goto ||
-        !info->has_memory_clobber || info->register_clobber_count ||
+        !info->has_memory_clobber ||
+        info->register_clobber_count!=(smp_width?1U:0U) ||
+        (smp_width && (!info->register_clobbers ||
+         !clobber_is(&info->register_clobbers[0],"cc"))) ||
         ins->value.structured_inline_asm.operand_count != 2U)
         return false;
     for (i = 0U; i < 2U; ++i) {
@@ -772,18 +780,19 @@ static bool emit_linux_local_xadd(
      * r10 receives the original register value, then XADD writes OLD memory
      * to r10 and NEW sum to memory; write the OLD value to the C register
      * operand before the surrounding C expression uses it. */
-    if (!x86_value_load(out, frame, b[0].value, "%r8") ||
-        fprintf(out, "  %s (%%r8), %s\n",
-            width == 8U ? "movq" : "movl",
-            width == 8U ? "%r10" : "%r10d") < 0 ||
-        !x86_value_load(out, frame, b[1].value, "%r11") ||
-        fprintf(out, "  %s %s, (%%r11)\n",
-            width == 8U ? "xaddq" : "xaddl",
-            width == 8U ? "%r10" : "%r10d") < 0)
+    if(width!=1U && width!=2U && width!=4U && width!=8U)return false;
+    suffix=names[width==1U?0U:width==2U?1U:width==4U?2U:3U];
+    source_reg=width==1U?"%r10b":width==2U?"%r10w":
+        width==4U?"%r10d":"%r10";
+    if(!x86_value_load(out,frame,b[0].value,"%r8") ||
+       fprintf(out,"  mov%s (%%r8), %s\n",suffix,source_reg)<0 ||
+       !x86_value_load(out,frame,b[1].value,"%r11"))return false;
+    if(smp_width && fputs("  .pushsection .smp_locks,\"a\"\n"
+        "  .balign 4\n  .long 671f - .\n  .popsection\n671:\n",out)==EOF)
         return false;
-    return fprintf(out, "  %s %s, (%%r8)\n",
-            width == 8U ? "movq" : "movl",
-            width == 8U ? "%r10" : "%r10d") >= 0;
+    if(fprintf(out,"  %sxadd%s %s, (%%r11)\n",
+          smp_width?"lock; ":"",suffix,source_reg)<0)return false;
+    return fprintf(out,"  mov%s %s, (%%r8)\n",suffix,source_reg)>=0;
 }
 
 /* Target-owned atomic RMW hardware effect, including original 64-bit
@@ -1287,6 +1296,9 @@ bool minic_x86_64_emit_structured_asm(
     if (minic_x86_64_port_io_form(
             info->template_text,info->template_length)!=MINIC_X86_PORT_IO_NONE)
         return emit_linux_port_io(out,program,target,fn,frame,ins,info);
+    if (minic_x86_64_linux_smp_xadd_width(
+            info->template_text, info->template_length))
+        return emit_linux_local_xadd(out, program, target, fn, frame, ins, info);
     if (minic_x86_64_linux_local_xadd_width(
             info->template_text, info->template_length))
         return emit_linux_local_xadd(out, program, target, fn, frame, ins, info);
