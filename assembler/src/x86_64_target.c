@@ -1048,7 +1048,7 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
     /* Native long-mode PUSH/POP memory forms reuse typed ModR/M/SIB.
      * FF /6 and 8F /0 imply 64-bit width: emitting REX.W is incorrect. */
     if((!strcmp(s->op,"pushq") || !strcmp(s->op,"popq")) &&
-       x64_is_mem_candidate(s->args)) {
+       s->args[0]!='$' && x64_is_mem_candidate(s->args)) {
         MiniAsMCMemory parsed;
         if(!x64_parse_base_memory(s->args,&parsed))goto invalid;
         m->operands[1].memory=malloc(sizeof(parsed));
