@@ -2317,7 +2317,13 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
            ((bits==8U && (int64_t)imm>=-256 && (int64_t)imm<=255) ||
             (bits==16U && (int64_t)imm>=-32768 && (int64_t)imm<=65535) ||
             (bits==32U && (imm<=UINT32_MAX ||
-                 ((int64_t)imm>=INT32_MIN && (int64_t)imm<0))) ||
+                 ((int64_t)imm>=INT32_MIN && (int64_t)imm<0) ||
+                 /* GNU Linux's (~0xFF000000) has an explicitly unary
+                  * complemented 64-bit bit pattern but ALU-l uses only
+                  * the low 32 bits. Do not generalize silent truncation
+                  * to unrelated overflowing positive constants. */
+                 (strchr(src+1U,'~')!=NULL &&
+                  (imm>>32U)==UINT32_MAX))) ||
             (bits==64U && (int64_t)imm>=INT32_MIN &&
                            (int64_t)imm<=INT32_MAX)) &&
            ((bits==8U &&
