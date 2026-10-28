@@ -3491,9 +3491,9 @@ X86_SECTION_FAMILY
 as --64 -o "$work/x86-section-family-gnu.o" "$work/x86-section-family-selfaudit.s"
 for section in .bss.hot .bssification .rodata_extra .textodd .note.selfaudit .note.GNU-stack .selfaudit,with,commas; do
   readelf -SW "$work/x86-section-family-mini.o" |
-    awk -v name="$section" '$3==name {print $4,$9}' > "$work/x86-section-family-mini-$section.meta"
+    awk -v name="$section" '$3==name {print $4,$9} $2==name {print $3,$8}' > "$work/x86-section-family-mini-$section.meta"
   readelf -SW "$work/x86-section-family-gnu.o" |
-    awk -v name="$section" '$3==name {print $4,$9}' > "$work/x86-section-family-gnu-$section.meta"
+    awk -v name="$section" '$3==name {print $4,$9} $2==name {print $3,$8}' > "$work/x86-section-family-gnu-$section.meta"
   test -s "$work/x86-section-family-mini-$section.meta"
   diff -u "$work/x86-section-family-gnu-$section.meta" "$work/x86-section-family-mini-$section.meta"
 done
