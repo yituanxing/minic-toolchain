@@ -3709,8 +3709,15 @@ static bool flush_literal_pools(MiniAs *as,size_t line,bool all) {
     int original_section=as->current_section;
     uint32_t original_subsection=as->current_subsection;
     size_t i;
+    unsigned width;
+    /* GNU GAS groups the pending A64 literal pool by DATA WIDTH before
+     * first-use order: 32-bit entries precede 64-bit entries.  FIFO
+     * insertion alone shifts the PC-relative LDR imm19 and relocations
+     * for mixed W/X =symbol requests; source byte oracle proves this. */
+    for(width=4U;width<=8U;width*=2U) {
     for(i=0U;i<as->literal_count;++i) {
         MiniAsLiteral *entry=&as->literals[i];
+        if(entry->width!=width)continue;
         char alignment[16],value[384],label[64];
         int written;
         if(entry->emitted ||
@@ -3735,6 +3742,7 @@ static bool flush_literal_pools(MiniAs *as,size_t line,bool all) {
         if(!add_data_stmt(as,entry->width==8U?".quad":".long",value,line))
             goto failure;
         entry->emitted=true;
+    }
     }
     as->current_section=original_section;
     as->current_subsection=original_subsection;
