@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
-# Original Linux 6.6.143 arch/x86/include/asm/local.h exact local_t forms.
+# Original Linux 6.6.143 atomic_long_t=atomic64_t uses s64 LONG LONG
+# counter, but local_add(long i) passes a LONG 64-bit machine operand.
+# Both C integer ranks must round-trip identically under x86-64 SysV.
 set -Eeuo pipefail
 cc=${1:?MiniC compiler}
 test -x "$cc"
 d=$(mktemp -d); trap 'rm -rf "$d"' EXIT
 cat > "$d/local.i" <<'SRC'
-typedef struct { long counter; } local_t;
+typedef struct { long long counter; } local_t;
 void mini_inc(local_t *l) { asm volatile(" incq %0" : "+m"(l->counter)); }
 void mini_dec(local_t *l) { asm volatile(" decq %0" : "+m"(l->counter)); }
 void mini_add(long v, local_t *l) { asm volatile(" addq %1,%0" : "+m"(l->counter) : "ir"(v)); }
@@ -24,7 +26,7 @@ sed 's/mini_/gnu_/g' "$d/local.i" > "$d/gnu.c"
 gcc -c -O0 "$d/gnu.c" -o "$d/gnu.o"
 gcc -c -x assembler "$d/mini.s" -o "$d/mini.o"
 cat > "$d/main.c" <<'SRC'
-typedef struct { long counter; } local_t;
+typedef struct { long long counter; } local_t;
 extern void mini_inc(local_t*),mini_dec(local_t*);
 extern void mini_add(long,local_t*),mini_sub(long,local_t*);
 extern void gnu_inc(local_t*),gnu_dec(local_t*);

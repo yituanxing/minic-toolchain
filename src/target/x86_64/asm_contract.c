@@ -1189,16 +1189,26 @@ static bool x86_linux_atomic_rmw_source(
           (mt.integer_rank==MINIC_INTEGER_RANK_LONG ||
            mt.integer_rank==MINIC_INTEGER_RANK_LONG_LONG?8U:0U);
     if(width!=d->width)return false;
+    /* Original x86 Linux local.h: local_add(long i) uses LONG input into
+     * atomic_long_t=atomic64_t with LONG_LONG counter. Distinct C ranks
+     * are the same 64-bit x86 hardware register/memory operand, and the
+     * machine emitter already checks exact physical width. */
     if(value &&
        (!minic_type_unqualified(value->type,&vt)||
         vt.base_kind!=MINIC_TYPE_BASE_INT||
         !minic_type_is_integer(vt)||vt.pointer_depth||
-        vt.integer_rank!=mt.integer_rank))return false;
+        (d->width==8U
+           ? (vt.integer_rank!=MINIC_INTEGER_RANK_LONG &&
+              vt.integer_rank!=MINIC_INTEGER_RANK_LONG_LONG)
+           : vt.integer_rank!=MINIC_INTEGER_RANK_INT)))return false;
     if(legacy &&
        (dependency_type.base_kind!=MINIC_TYPE_BASE_INT||
         !minic_type_is_integer(dependency_type)||
         dependency_type.pointer_depth||
-        dependency_type.integer_rank!=mt.integer_rank))
+        (d->width==8U
+           ? (dependency_type.integer_rank!=MINIC_INTEGER_RANK_LONG &&
+              dependency_type.integer_rank!=MINIC_INTEGER_RANK_LONG_LONG)
+           : dependency_type.integer_rank!=MINIC_INTEGER_RANK_INT)))
         return false;
     contract->operand_count=1U+(unary?0U:1U)+(legacy?1U:0U);
     contract->kinds[0]=MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE;

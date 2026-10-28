@@ -73,6 +73,9 @@ has src/target/common/global_emit.c 'minic_multi_emit_elf_global_section('
 has src/target/common/global_emit.c 'minic_multi_emit_elf_global_binding('
 has src/target/common/global_emit.c 'minic_multi_elf_safe_section_name('
 
+# GNU Linux local_add(long) + atomic64_t.counter(long long) is a
+# cross-C-rank 8-byte machine operand, not a fake ABI identity.
+has src/target/x86_64/asm_contract.c 'vt.integer_rank!=MINIC_INTEGER_RANK_LONG_LONG'
 # Linux local_t plain INC/DEC uses the same x86 target RMW descriptor as SMP.
 has src/target/x86_64/asm_contract.c '{"incq",8U,false,true}'
 has src/target/x86_64/asm_contract.h 'MINIC_X86_ATOMIC_RMW_LOCAL_DEC64'
