@@ -3012,7 +3012,7 @@ vector=vector+1
 vector =0x40
 .byte vector
 .Lcompact=.
-.long .Lcompact - .Lbase
+.byte 0x7e
 GNU_COMPACT_ASSIGN
 for target in x86_64 loongarch64; do
  "$MINIAS" --target="$target" -o "$work/$target-compact-mini.o" "$work/gnu-compact-assign.s"
