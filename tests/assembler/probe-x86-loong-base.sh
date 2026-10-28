@@ -1791,6 +1791,37 @@ if "$MINIAS" --target=x86_64 -o "$work/x86-one-invalid.o" \
     exit 1
 fi
 echo 'MINIAS_COMMON_ONE_MACRO_EXPR=PASS GNU_GAS_BYTES arithmetic_whitespace_and_strict_arity'
+
+# Kernel architectural control and MXCSR: real GNU GAS text bytes and
+# PC32 relocation parity, including strict invalid operand rejection.
+cat > "$work/x86-control.s" <<'X86_CONTROL'
+.text
+    iretq
+    iretw
+    lretq
+    lret
+    vmmcall
+    ldmxcsr 4(%rax)
+    stmxcsr ext_mxcsr(%rip)
+X86_CONTROL
+"$MINIAS" --target=x86_64 -o "$work/x86-control-mini.o" "$work/x86-control.s"
+as --64 -o "$work/x86-control-gnu.o" "$work/x86-control.s"
+objcopy -j .text -O binary "$work/x86-control-mini.o" "$work/x86-control-mini.bin"
+objcopy -j .text -O binary "$work/x86-control-gnu.o" "$work/x86-control-gnu.bin"
+cmp "$work/x86-control-mini.bin" "$work/x86-control-gnu.bin"
+readelf -Wr "$work/x86-control-mini.o" > "$work/x86-control-mini-rel.txt"
+readelf -Wr "$work/x86-control-gnu.o" > "$work/x86-control-gnu-rel.txt"
+grep -q 'R_X86_64_PC32.*ext_mxcsr - 4' "$work/x86-control-mini-rel.txt"
+grep -q 'R_X86_64_PC32.*ext_mxcsr - 4' "$work/x86-control-gnu-rel.txt"
+for bad in 'iretq %rax' 'vmmcall %ecx' 'ldmxcsr %eax' 'stmxcsr %rdx'; do
+    printf '.text\n%s\n' "$bad" > "$work/x86-control-invalid.s"
+    if "$MINIAS" --target=x86_64 -o "$work/x86-control-invalid.o" \
+      "$work/x86-control-invalid.s" >/dev/null 2>"$work/x86-control-invalid.err"; then
+      echo "invalid kernel x86 opcode accepted: $bad" >&2
+      exit 1
+    fi
+done
+echo 'MINIAS_X86_CONTROL_ORACLE=PASS GNU_BYTES_RELOC IRET_LRET_VMMCALL_MXCSR'
 echo 'MINIAS_COMMON_NUMERIC_U64=PASS GNU_GAS_x86_LA64_exact_data_bytes'
 echo 'MINIAS_X86_SEGMENTED_INDIRECT=PASS GNU_AS_text_and_relocations segment_base_index_abs_rip=true indirect_memory_call_jmp=true absolute_symbol32S=true'
 echo 'MINIAS_TWO_TARGET_ORACLE=PASS x86_GNU_bytes=equal loong_GNU_bytes=equal ELF_machine=correct lp64d_v1=0x43 CET_endbr64=1 ALU_imm8_imm32=1 x86_ModRM_SIB_disp=1 x86_test_cmp_alu_memory=1 x86_scaled_index_SIB=1 LA_jr=1 LA_scaled_ptr14=1 LA_imm12_shift_upper20=1 invalid=reject'
