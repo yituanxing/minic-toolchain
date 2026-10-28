@@ -13,8 +13,8 @@ test -s "$work/mini.s"
 grep -Fq 'amswap_db.w $t2, $t0, $t1' "$work/mini.s"
 grep -Fq 'amswap_db.d $t2, $t0, $t1' "$work/mini.s"
 grep -Fq 'st.d $t2, $t1, 0' "$work/mini.s"
-if [[ "$(grep -Fc 'amswap_db.' "$work/mini.s")" != 2 ]];then
-    echo 'LoongArch Linux store-mb must emit exactly two hardware AMDB stores' >&2
+if [[ "$(grep -Fc 'amswap_db.' "$work/mini.s")" != 3 ]];then
+    echo 'LoongArch Linux store-mb must emit exactly three hardware AMDB stores' >&2
     exit 1
 fi
 

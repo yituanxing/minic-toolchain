@@ -11,6 +11,8 @@ on:
       - 'tools/ci/linux-three-isa-freeze-i-v1.py'
       - 'tools/ci/linux-three-isa-seven-probe-v1.py'
       - 'tools/ci/linux-three-isa-summary-v1.py'
+      - 'tools/ci/linux-three-isa-owner-delta-v1.py'
+      - 'tools/ci/linux-three-isa-owner-delta-selftest-v1.py'
       - 'tools/ci/linux-three-isa-trigger.txt'
   workflow_dispatch:
 permissions:
@@ -60,8 +62,9 @@ jobs:
         run: |
           set -Eeuo pipefail
           bash -n tools/ci/linux-three-isa-golden-v1.sh
-          python3 -m py_compile tools/ci/linux-three-isa-golden-v1.py tools/ci/linux-three-isa-freeze-i-v1.py tools/ci/linux-three-isa-seven-probe-v1.py tools/ci/linux-three-isa-summary-v1.py
+          python3 -m py_compile tools/ci/linux-three-isa-golden-v1.py tools/ci/linux-three-isa-freeze-i-v1.py tools/ci/linux-three-isa-seven-probe-v1.py tools/ci/linux-three-isa-summary-v1.py tools/ci/linux-three-isa-owner-delta-v1.py tools/ci/linux-three-isa-owner-delta-selftest-v1.py
           python3 tools/ci/linux-three-isa-frontier-selftest-v1.py
+          python3 tools/ci/linux-three-isa-owner-delta-selftest-v1.py
           python3 tools/ci/linux-three-isa-golden-v1.py --self-test
           python3 tools/ci/linux-three-isa-freeze-i-v1.py selftest
   minic-producer:
