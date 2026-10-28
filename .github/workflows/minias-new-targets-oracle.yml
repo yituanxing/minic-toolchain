@@ -26,6 +26,12 @@ jobs:
           sudo apt-get install -y --no-install-recommends binutils-loongarch64-linux-gnu
       - name: Build exact-head MiniAS and all four target backends
         run: make -j2 MODE=release CFLAGS=-Werror build/release/bin/minic-as
+      - name: GNU x86-64 and LoongArch64 MCExpr byte+relocation parity
+        run: |
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=x86_64 \
+            bash tests/assembler/probe-common-mcexpr-four-arch.sh
+          MINIAS="$GITHUB_WORKSPACE/build/release/bin/minic-as" ARCH=loongarch64 \
+            bash tests/assembler/probe-common-mcexpr-four-arch.sh
       - name: Verify parsed MCExpr final-dot and local symbol offset
         run: |
           cat > /tmp/mc-dot.s <<'SRC_DOT'

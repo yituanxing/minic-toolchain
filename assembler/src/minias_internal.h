@@ -444,6 +444,20 @@ MiniAsSymbol *minias_get_symbol(MiniAs *as, const char *name, bool create);
 /* Shared absolute expression evaluator for target-specific operand syntax.
  * Only already-resolved numeric/.set expressions succeed: no guessing
  * relocatable values or mirroring Core symbol algorithms per backend. */
+/* Unique, target-independent GNU MCExpr grammar and symbolic object
+ * evaluation. CFI, directives, and all four Targets use these APIs. */
+bool minias_current_location(MiniAs *, uint64_t *);
+bool minias_parse_u64(const char *, uint64_t *);
+bool minias_checked_add_i64(int64_t, int64_t, int64_t *);
+bool minias_expr_symbol_start(char);
+bool minias_expr_symbol_continue(char);
+char *minias_expr_strip_outer_parens(char *);
+bool minias_expr_parse_symbol_absolute_tail(MiniAs *, const char *,
+                                            MiniAsSymbolExpr *);
+bool minias_evaluate_absolute_expression(MiniAs *, const char *, int64_t *);
+bool minias_compile_data_mc(MiniAs *, MiniAsStmt *, unsigned);
+bool minias_emit_mc_data(MiniAs *, const MiniAsStmt *);
+void minias_mcdata_destroy(MiniAsMCData *);
 bool minias_evaluate_absolute_operand(MiniAs *,const char *,int64_t *);
 bool minias_evaluate_same_subsection_difference(MiniAs *,const char *,int64_t *);
 /* Relocatable base + (defined same-subsection label difference + absolute
