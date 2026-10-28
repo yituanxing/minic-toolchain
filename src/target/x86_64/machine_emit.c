@@ -4,6 +4,7 @@
 #include "target/common/core_numeric_shape.h"
 #include "target/common/direct_instruction_semantics.h"
 #include "target/x86_64/abi.h"
+#include "target/x86_64/asm_contract.h"
 #include "target/data_layout.h"
 #include <inttypes.h>
 #include <limits.h>
@@ -30,6 +31,21 @@ bool minic_x86_64_emit_core_instruction(FILE *out, const MinicC0Program *program
                                                 frame, ins);
     if (ins->kind == MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM)
         return minic_x86_64_emit_structured_asm(out, program, target, fn, frame, ins);
+    if (ins->kind == MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM) {
+        const size_t asm_id = ins->value.inline_asm_id;
+        const MinicCoreInlineAsm *a = fn != NULL &&
+            asm_id < fn->inline_asm_count ? &fn->inline_asms[asm_id] : NULL;
+        if (a == NULL || a->is_goto || a->register_clobber_count != 0U ||
+            !minic_x86_64_linux_bug_table_opaque(
+                a->template_text, a->template_length))
+            return false;
+        return fputs("  ", out) != EOF &&
+               fwrite(a->template_text, 1U, a->template_length, out) ==
+                   a->template_length &&
+               (a->template_length == 0U ||
+                a->template_text[a->template_length - 1U] == '\n' ||
+                fputc('\n', out) != EOF);
+    }
     if (minic_core_instruction_semantic_family(ins->kind) ==
         MINIC_CORE_FAMILY_CALL)
         return minic_x86_64_emit_call_instruction(out, program, target, fn,

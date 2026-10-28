@@ -6,27 +6,37 @@ set -eu
 d=$(mktemp -d)
 trap 'rm -rf "$d"' EXIT HUP INT TERM
 cat >"$d/numeric.i" <<'SRC'
-int asm_c_immediate(void) {
-  asm volatile("1:\t.byte 0x90\n"
-               ".pushsection .mini_c_rel,\"a\"\n"
+void linux_bug_reloc(void) {
+  asm volatile("1:\t.byte 0x0f, 0x0b\n"
+               ".pushsection __bug_table,\"aw\"\n"
+               "2:\t.long 1b - .\n"
                ".long %c0 - .\n"
                ".word %c1\n"
+               ".word %c2\n"
+               ".org 2b+%c3\n"
                ".popsection\n"
-               : : "i"("frozen-linux.c"), "i"(519));
-  return 42;
+               "998:\n"
+               ".pushsection .discard.reachable\n"
+               ".long 998b\n"
+               ".popsection\n"
+               : : "i"("frozen-linux.c"), "i"(519), "i"(0), "i"(12));
 }
-int main(void) { return asm_c_immediate(); }
+int main(void) { return 42; }
 SRC
 cat >"$d/named.i" <<'SRC'
-int main(void) {
-  asm volatile("1:\t.byte 0x90\n"
-               ".pushsection .mini_c_named,\"a\"\n"
+void linux_bug_named(void) {
+  asm volatile("1:\t.byte 0x0f, 0x0b\n"
+               ".pushsection __bug_table,\"aw\"\n"
+               "2:\t.long 1b - .\n"
                ".long %c[path] - .\n"
                ".word %c[ln]\n"
+               ".word %c[fl]\n"
+               ".org 2b+%c[sz]\n"
                ".popsection\n"
-               : : [path] "i"("real-linux.c"), [ln] "i"(519));
-  return 42;
+               : : [path] "i"("real-linux.c"), [ln] "i"(519),
+                   [fl] "i"(0), [sz] "i"(12));
 }
+int main(void) { return 42; }
 SRC
 for kind in numeric named; do
     gcc -static -x c "$d/$kind.i" -o "$d/$kind.gnu"
@@ -36,10 +46,7 @@ for kind in numeric named; do
     gcc -c -x c "$d/$kind.i" -o "$d/$kind.gnu.o"
     readelf -r "$d/$kind.mini.o" | grep -Eq 'R_X86_64_PC32|R_X86_64_32'
     readelf -r "$d/$kind.gnu.o" | grep -Eq 'R_X86_64_PC32|R_X86_64_32'
-    case "$kind" in
-        numeric) section=.mini_c_rel ;;
-        named) section=.mini_c_named ;;
-    esac
+    section=__bug_table
     readelf -SW "$d/$kind.mini.o" | grep -F "$section" >/dev/null
     grep -F '.word 519' "$d/$kind.mini.s" >/dev/null
     set +e

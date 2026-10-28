@@ -9,6 +9,9 @@ bool minic_x86_64_checksum_fold_template(const char *,size_t);
 bool minic_x86_64_add32_carry_template(const char *,size_t);
 bool minic_x86_64_linux_percpu_form(const char *,size_t,unsigned int *,size_t *);
 
+/* Post-Core immediate-specialized GNU Linux BUG/WARN metadata format.
+ * Accept directive-only side-table source, never arbitrary opaque machine ASM. */
+bool minic_x86_64_linux_bug_table_opaque(const char *, size_t);
 /* Register allocation, GNU constraints and native instruction templates
  * belong to x86. The shared compiler sees only Core operand roles. */
 bool minic_x86_64_qualify_inline_asm(

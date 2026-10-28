@@ -1,6 +1,83 @@
 #include "target/x86_64/asm_contract.h"
 #include <stdio.h>
 #include <string.h>
+/* All GNU %c inputs have already been resolved into owned symbols/numbers
+ * by the shared Core operand normalizer. Preserve the Linux BUG/WARN metadata
+ * in its original section, including the actual x86 UD2 instruction, numeric
+ * local labels, and PC32 relocations. This is a deliberately narrow grammar:
+ * arbitrary opaque inline ASM and additional instructions remain rejected. */
+bool minic_x86_64_linux_bug_table_opaque(const char *text, size_t length) {
+    size_t cursor = 0U;
+    bool ud2 = false, bug_section = false, address = false;
+    bool padding = false, section_end = false;
+    if (text == NULL || length < 70U || length > 2048U ||
+        strlen(text) != length)
+        return false;
+    while (cursor < length) {
+        char line[256];
+        size_t begin = cursor, n, i;
+        char *p, *comment, *end;
+        while (cursor < length && text[cursor] != '\n') ++cursor;
+        n = cursor - begin;
+        if (cursor < length) ++cursor;
+        if (n >= sizeof(line)) return false;
+        (void)memcpy(line, text + begin, n);
+        line[n] = '\0';
+        p = line;
+        while (*p == ' ' || *p == '\t' || *p == '\r') ++p;
+        comment = strchr(p, '#');
+        if (comment != NULL) *comment = '\0';
+        end = p + strlen(p);
+        while (end > p && (end[-1] == ' ' || end[-1] == '\t' ||
+                           end[-1] == '\r')) --end;
+        *end = '\0';
+        if (*p == '\0') continue;
+        if (p[0] == '1' && p[1] == ':') {
+            p += 2;
+            while (*p == ' ' || *p == '\t') ++p;
+        } else if (p[0] == '2' && p[1] == ':') {
+            p += 2;
+            while (*p == ' ' || *p == '\t') ++p;
+        } else if (strcmp(p, "998:") == 0) {
+            continue;
+        }
+        if (strncmp(p, ".byte", 5U) == 0) {
+            char compact[64]; size_t m = 0U;
+            for (i = 5U; p[i] != '\0'; ++i) {
+                if (p[i] == ' ' || p[i] == '\t') continue;
+                if (m + 1U >= sizeof(compact)) return false;
+                compact[m++] = p[i];
+            }
+            compact[m] = '\0';
+            if (strcmp(compact, "0x0f,0x0b") != 0 || ud2) return false;
+            ud2 = true;
+        } else if (strcmp(p, ".pushsection __bug_table,\"aw\"") == 0) {
+            if (bug_section) return false;
+            bug_section = true;
+        } else if (strcmp(p, ".pushsection .discard.reachable") == 0) {
+            if (!section_end) return false;
+        } else if (strncmp(p, ".long ", 6U) == 0) {
+            if (!bug_section || strchr(p, '%') != NULL ||
+                strchr(p, ';') != NULL) return false;
+            if (strstr(p, "1b") != NULL) address = true;
+        } else if (strncmp(p, ".word ", 6U) == 0) {
+            if (!bug_section || strchr(p, '%') != NULL ||
+                strchr(p, ';') != NULL) return false;
+        } else if (strncmp(p, ".org 2b+", 8U) == 0) {
+            if (!bug_section || padding) return false;
+            for (i = 8U; p[i] != '\0'; ++i)
+                if (p[i] < '0' || p[i] > '9') return false;
+            if (i == 8U) return false;
+            padding = true;
+        } else if (strcmp(p, ".popsection") == 0) {
+            section_end = true;
+        } else {
+            return false;
+        }
+    }
+    return ud2 && bug_section && address && padding && section_end;
+}
+
 
 /* Target-owned GNU register/constraint admission: no Core lowering state,
  * no SSA mutation. Additional x86 forms extend this owner, not core_lower. */
