@@ -3201,7 +3201,9 @@ cat > "$work/x86-eh-simple.s" <<'X86_EH_SIMPLE'
 .globl eh_simple_probe
 eh_simple_probe:
 .cfi_startproc simple
-.cfi_def_cfa 7,8
+pushq %rbp
+.cfi_def_cfa_offset 16
+.cfi_offset 6,-16
 ret
 .cfi_endproc
 X86_EH_SIMPLE
