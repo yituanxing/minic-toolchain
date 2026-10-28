@@ -32,6 +32,8 @@ jobs:
           base:
           nop
           .long .-base
+          .long .-base+7
+          .long .-(base+1)
           SRC_DOT
           build/release/bin/minic-as --target=x86_64 -o /tmp/mc-dot-mini.o /tmp/mc-dot.s
           as --64 -o /tmp/mc-dot-gnu.o /tmp/mc-dot.s

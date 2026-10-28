@@ -3522,7 +3522,12 @@ static bool minias_compile_data_mc(MiniAs *as, MiniAsStmt *stmt) {
             matched=true;
         } else if((width==1U || width==2U || width==4U || width==8U) &&
                   parse_symbol_difference(token,&lhs,&rhs)) {
-            out->kind=MINIAS_MC_EXPR_DIFFERENCE;
+            /* '.' is an MCFragment location anchor, NOT an ELF symbol.
+             * Handle P-S from the final fragment-relative location rather
+             * than serializing a fabricated undefined symbol named ".". */
+            out->kind=(strcmp(lhs.name,".")==0) ?
+                MINIAS_MC_EXPR_DOT_MINUS_SYMBOL :
+                MINIAS_MC_EXPR_DIFFERENCE;
             matched=true;
         } else if((width==2U || width==4U || width==8U) &&
                   (parse_data_symbol_addend(token,&lhs) ||
@@ -3538,13 +3543,15 @@ static bool minias_compile_data_mc(MiniAs *as, MiniAsStmt *stmt) {
             out->lhs_name=minias_strdup(lhs.name);
             out->lhs_addend=lhs.addend;
             if(out->kind==MINIAS_MC_EXPR_DIFFERENCE ||
-               out->kind==MINIAS_MC_EXPR_DIFFERENCE_DIV) {
+               out->kind==MINIAS_MC_EXPR_DIFFERENCE_DIV ||
+               out->kind==MINIAS_MC_EXPR_DOT_MINUS_SYMBOL) {
                 out->rhs_name=minias_strdup(rhs.name);
                 out->rhs_addend=rhs.addend;
             }
             matched=out->lhs_name!=NULL &&
                     ((out->kind!=MINIAS_MC_EXPR_DIFFERENCE &&
-                      out->kind!=MINIAS_MC_EXPR_DIFFERENCE_DIV) ||
+                      out->kind!=MINIAS_MC_EXPR_DIFFERENCE_DIV &&
+                      out->kind!=MINIAS_MC_EXPR_DOT_MINUS_SYMBOL) ||
                      out->rhs_name!=NULL);
         }
         if(!matched) {
@@ -4103,6 +4110,16 @@ static bool minias_emit_mc_data(MiniAs *as,const MiniAsStmt *stmt) {
             if(!emit_symbol_minus_dot_divided(as,stmt,data->width,at,
                                               &lhs,x->divisor))return false;
             continue;
+        } else if(x->kind==MINIAS_MC_EXPR_DOT_MINUS_SYMBOL) {
+            MiniAsSymbol *rhs=minias_get_symbol(as,x->rhs_name,false);
+            if(rhs==NULL || !rhs->defined || rhs->section!=stmt->section) {
+                minias_set_error(as,"unresolved-mc-dot-difference:line=%zu",
+                                 stmt->line);
+                return false;
+            }
+            literal=true;
+            value=at+(uint64_t)lhs.addend-
+                  (rhs->value+(uint64_t)rhs.addend);
         } else if(x->kind==MINIAS_MC_EXPR_DIFFERENCE ||
                   x->kind==MINIAS_MC_EXPR_DIFFERENCE_DIV) {
             MiniAsSymbol *left=minias_get_symbol(as,lhs.name,false);
