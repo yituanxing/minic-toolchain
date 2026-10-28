@@ -260,7 +260,7 @@ static bool emit_linux_percpu_gs(FILE *out,const MinicC0Program *p,
     if(!out||!p||!t||!fn||!frame||!ins||!info||!b||
        !minic_x86_64_linux_percpu_form(info->template_text,
            info->template_length,&op,&bytes)||
-       info->is_goto||info->has_memory_clobber||
+       info->is_goto||info->has_memory_clobber!=(op!=0U)||
        info->register_clobber_count||
        ins->value.structured_inline_asm.operand_count!=
           ((op==2U||op==3U)?1U:2U))return false;
