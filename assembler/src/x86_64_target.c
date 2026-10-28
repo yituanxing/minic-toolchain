@@ -1921,7 +1921,9 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
      * ISA semantics. The latter uses the existing typed memory, PC32
      * fixup, segment override and SIB encoder; no new Core path. */
     if ((!strcmp(s->op,"call") || !strcmp(s->op,"callq") ||
-         !strcmp(s->op,"jmp") || !strcmp(s->op,"jmpq")) &&
+         !strcmp(s->op,"jmp") || !strcmp(s->op,"jmpq") ||
+         !strcmp(s->op,"ljmp") || !strcmp(s->op,"ljmpl") ||
+         !strcmp(s->op,"lcall") || !strcmp(s->op,"lcalll")) &&
         s->args[0]=='*' && x64_is_mem_candidate(s->args+1)) {
         MiniAsMCMemory parsed;
         if (!x64_parse_base_memory(s->args+1,&parsed))goto invalid;
@@ -1936,7 +1938,11 @@ static bool x64_parse(MiniAs *as, MiniAsStmt *s) {
         m->encoding=0xffU;
         m->operands[0].kind=MINIAS_MC_REGISTER;
         m->operands[0].reg=(!strcmp(s->op,"call") ||
-                            !strcmp(s->op,"callq"))?2U:4U;
+                            !strcmp(s->op,"callq"))?2U:
+                           (!strcmp(s->op,"lcall") ||
+                            !strcmp(s->op,"lcalll"))?3U:
+                           (!strcmp(s->op,"ljmp") ||
+                            !strcmp(s->op,"ljmpl"))?5U:4U;
         m->operands[1].kind=MINIAS_MC_MEMORY;
         goto done;
     }

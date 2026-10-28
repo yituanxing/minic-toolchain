@@ -1955,6 +1955,27 @@ static bool parse_mcinst(MiniAs *as, MiniAsStmt *stmt) {
         put_reg(&inst->operands[0],rd,wd);
         put_reg(&inst->operands[1],rn,wd);
         put_reg(&inst->operands[2],rm,wd);
+    } else if(!strcmp(op,"cneg") || !strcmp(op,"cinv")) {
+        char tok[4][96];unsigned n,rd,rn,cc;
+        bool wd,wn,sp;
+        if(!split_operands(args,tok,&n) || n!=3U ||
+           !parse_a64_reg(tok[0],&rd,&wd,&sp) || sp ||
+           !parse_a64_reg(tok[1],&rn,&wn,&sp) || sp ||
+           wd!=wn || !a64_condition_code(tok[2],&cc)) {
+            minias_set_error(as,"bad-aarch64-conditional-alias:%s:line=%zu",
+                             args,stmt->line);
+            free(inst);return false;
+        }
+        /* GNU CNEG/CINV invert their condition and duplicate Rn in
+         * CSNEG/CSINV. Reuse the identical typed conditional selector
+         * rather than adding another ISA/MC output path. */
+        inst->opcode=A64_MC_COND_SELECT;inst->count=3U;
+        inst->encoding=(!strcmp(op,"cneg")?UINT32_C(0x5a800400):
+                                             UINT32_C(0x5a800000))|
+                       ((cc^1U)<<12U);
+        put_reg(&inst->operands[0],rd,wd);
+        put_reg(&inst->operands[1],rn,wd);
+        put_reg(&inst->operands[2],rn,wd);
     } else if(!strcmp(op,"cset") || !strcmp(op,"csetm") ||
        !strcmp(op,"cinc")) {
         char parts[4][96];
