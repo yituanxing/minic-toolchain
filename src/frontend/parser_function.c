@@ -796,6 +796,10 @@ typedef struct MinicParsedDeclarationPrefix {
     bool is_thread_local;
     bool is_inline;
     bool is_noreturn;
+    /* GNU Linux interleaves const/volatile and declaration-head attributes.
+     * Preserve both qualifiers and route each attribute to its real entity. */
+    bool has_const_qualifier;
+    bool has_volatile_qualifier;
 } MinicParsedDeclarationPrefix;
 
 static bool parse_declaration_prefix(MinicParser *parser,
@@ -810,6 +814,15 @@ static bool parse_declaration_prefix(MinicParser *parser,
     saw_storage_class = false;
 
     for (;;) {
+        if (parser->current.kind == MINIC_TOKEN_KW_CONST ||
+            parser->current.kind == MINIC_TOKEN_KW_VOLATILE) {
+            if (parser->current.kind == MINIC_TOKEN_KW_CONST)
+                prefix->has_const_qualifier = true;
+            else
+                prefix->has_volatile_qualifier = true;
+            if (!minic_parser_advance(parser)) return false;
+            continue;
+        }
         if (function_identifier_is(parser, "register")) {
             if (saw_storage_class) {
                 minic_parser_error(parser, "conflicting or duplicate declaration storage class");
@@ -1213,6 +1226,10 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
     }
     deferred_attributes = declaration_prefix.attributes;
     if (!minic_parser_parse_type_specifiers(parser, &base_type) ||
+        (declaration_prefix.has_const_qualifier &&
+         !minic_type_add_const(base_type, &base_type)) ||
+        (declaration_prefix.has_volatile_qualifier &&
+         !minic_type_add_volatile(base_type, &base_type)) ||
         !parse_post_type_declaration_specifiers(parser, &declaration_prefix) ||
         !minic_parser_collect_gnu_attribute_lists(parser, &deferred_attributes)) {
         return false;
