@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Original Linux 6.6.143 AArch64 io.h raw 8/16/32/64 device stores.
+# Original Linux 6.6.143 AArch64 io.h genuine "rZ" value + "r" pointer
+# register raw writes, 8/16/32/64 device loads and alternatives.
 # GNU ELF + actual user-mode QEMU verifies hardware semantics and exact widths.
 set -Eeuo pipefail
 cc=${1:?MiniC compiler required}
@@ -14,16 +15,16 @@ typedef unsigned short u16;
 typedef unsigned int u32;
 typedef unsigned long long u64;
 void raw8(u8 val, volatile u8 *ptr) {
-    asm volatile("strb %w0, %1" : : "rZ"(val), "Qo"(*ptr));
+    asm volatile("strb %w0, [%1]" : : "rZ"(val), "r"(ptr));
 }
 void raw16(u16 val, volatile u16 *ptr) {
-    asm volatile("strh %w0, %1" : : "rZ"(val), "Qo"(*ptr));
+    asm volatile("strh %w0, [%1]" : : "rZ"(val), "r"(ptr));
 }
 void raw32(u32 val, volatile u32 *ptr) {
-    asm volatile("str %w0, %1" : : "rZ"(val), "Qo"(*ptr));
+    asm volatile("str %w0, [%1]" : : "rZ"(val), "r"(ptr));
 }
 void raw64(u64 val, volatile u64 *ptr) {
-    asm volatile("str %x0, %1" : : "rZ"(val), "Qo"(*ptr));
+    asm volatile("str %x0, [%1]" : : "rZ"(val), "r"(ptr));
 }
 u8 raw_read8(const volatile u8 *addr) {
     u8 val;
@@ -174,12 +175,12 @@ import pathlib,sys
 src=pathlib.Path(sys.argv[1]).read_text()
 dest=pathlib.Path(sys.argv[2])
 samples={
-  "extra-instruction": ('"str %w0, %1"', '"str %w0, %1; nop"'),
-  "wrong-constraint": ('"Qo"(*ptr)', '"r"(*ptr)'),
-  "wrong-width": ('"strh %w0, %1"', '"str %w0, %1"'),
+  "extra-instruction": ('"str %w0, [%1]"', '"str %w0, [%1]; nop"'),
+  "wrong-constraint": ('"r"(ptr)', '"Qo"(*ptr)'),
+  "wrong-width": ('"strh %w0, [%1]"', '"str %w0, [%1]"'),
   "wrong-input": ('"rZ"(val)', '"i"(val)'),
   "no-volatile": ('asm volatile("strb', 'asm("strb'),
-  "added-clobber": ('"Qo"(*ptr));', '"Qo"(*ptr) : "memory");'),
+  "added-clobber": ('"r"(ptr));', '"r"(ptr) : "memory");'),
   "prefetch-extra": ('"prfm pldl1keep, %a0\\n"', '"prfm pldl1keep, %a0; nop\\n"'),
   "prefetch-constraint": ('"p"(ptr));', '"i"(ptr));'),
   "prefetch-nonvolatile": ('asm volatile("prfm', 'asm("prfm'),

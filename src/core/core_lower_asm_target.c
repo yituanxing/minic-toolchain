@@ -89,7 +89,8 @@ MinicCoreLowerStatus core_asm_try_target_register_contract(
      * derive that property from the TARGET-QUALIFIED operand role, not from
      * an architecture-specific template string or new Core opcode. */
     {
-        bool memory_effect = source->has_memory_clobber;
+        bool memory_effect =
+            source->has_memory_clobber || contract.implicit_memory_effect;
         for (i = 0U; i < contract.operand_count; ++i)
             if (contract.kinds[i] ==
                 MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE)

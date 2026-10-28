@@ -171,21 +171,22 @@ static const char *aarch64_linux_prefetch_template(const char *text, size_t leng
     return NULL;
 }
 
-/* Original arm64 Linux 6.6.143 io.h __raw_write{b,w,l,q}: Qo memory
- * INPUT carries an observable device-store side effect. Match all four
- * widths with one ISA owner; never turn an unsigned MMIO store into a
- * compiler barrier, plain C assignment or arbitrary GNU text passthrough.
- * The Core scalar/memory operand roles are target-independent. */
+/* ORIGINAL Linux 6.6.143 arch/arm64/include/asm/io.h, all four
+ * __raw_write{b,w,l,q} operations:
+ * asm volatile("str{b,h} %w0, [%1]" : : "rZ"(val), "r"(addr));
+ * This is a hardware store through a pointer register, NOT a GNU "Qo"
+ * memory operand. Core carries two true scalar inputs and preserves its
+ * implicit write effect via a single target-neutral contract flag. */
 typedef struct Aarch64RawIoStore {
     const char *source;
     const char *instruction;
     size_t width;
 } Aarch64RawIoStore;
 static const Aarch64RawIoStore aarch64_raw_io_stores[] = {
-    {"strb%w0,%1", "strb w9, [x10]", 1U},
-    {"strh%w0,%1", "strh w9, [x10]", 2U},
-    {"str%w0,%1",  "str w9, [x10]", 4U},
-    {"str%x0,%1",  "str x9, [x10]", 8U}
+    {"strb%w0,[%1]", "strb w9, [x10]", 1U},
+    {"strh%w0,[%1]", "strh w9, [x10]", 2U},
+    {"str%w0,[%1]",  "str w9, [x10]", 4U},
+    {"str%x0,[%1]",  "str x9, [x10]", 8U}
 };
 static const Aarch64RawIoStore *aarch64_raw_io_store(
     const char *text, size_t length) {
@@ -753,30 +754,29 @@ bool minic_aarch64_qualify_inline_asm(
             return true;
         }
     }
-    /* Real Linux raw MMIO stores: input 0 is rZ integer, input 1 is
-     * volatile Qo memory. Even though GNU declares it as an input, the
-     * physical STR writes memory; the Core role MUST record that effect. */
+    /* Linux's real GNU memory-address input is an r pointer, not Qo.
+     * Keep original two scalar constraints and explicitly record the
+     * hardware memory effect for Common Core. */
     if (program && src && contract && src->is_volatile && !src->is_goto &&
         src->output_count == 0U && src->input_count == 2U &&
         src->inputs != NULL && src->clobber_count == 0U &&
         src->register_clobber_count == 0U && !src->has_memory_clobber &&
         src->label_count == 0U &&
         constraint(&src->inputs[0], "rZ") &&
-        constraint(&src->inputs[1], "Qo")) {
+        constraint(&src->inputs[1], "r")) {
         const Aarch64RawIoStore *store = aarch64_raw_io_store(
             src->template_text, src->template_length);
         const MinicExpression *value = minic_c0_program_expression(
             program, src->inputs[0].expression);
-        const MinicExpression *memory = minic_c0_program_expression(
+        const MinicExpression *pointer = minic_c0_program_expression(
             program, src->inputs[1].expression);
-        if (store != NULL && value != NULL && memory != NULL &&
-            memory->value_category == MINIC_VALUE_LVALUE &&
-            !minic_type_is_const(memory->type) &&
-            aarch64_stlr_type(memory->type, store->width) &&
+        if (store && value && pointer &&
+            minic_type_is_pointer(pointer->type) &&
             aarch64_stlr_type(value->type, store->width)) {
             contract->operand_count = 2U;
             contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
-            contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE;
+            contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+            contract->implicit_memory_effect = true;
             return true;
         }
     }
@@ -1380,23 +1380,21 @@ bool minic_aarch64_emit_qualified_structured_asm(
             info->template_text, info->template_length);
         const MinicCoreStructuredInlineAsmOperand *ops =
             ins->value.structured_inline_asm.operands;
-        MinicType memory_type;
         if (!store || !info->is_volatile || info->is_goto ||
             info->register_clobber_count != 0U ||
-            /* Common Core correctly marks a qualified MMIO store's memory
-             * effect, even without a GNU source-level memory clobber. */
+            /* The target contract marks the physical MMIO store as an
+             * implicit effect even though GNU has no "memory" clobber. */
             !info->has_memory_clobber ||
             ops[0].operand_index != 0U ||
             ops[0].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT ||
             ops[1].operand_index != 1U ||
-            ops[1].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE ||
+            ops[1].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT ||
             ops[0].has_fixed_register_binding || ops[1].has_fixed_register_binding ||
             ops[0].early_clobber || ops[1].early_clobber ||
             ops[0].value >= fn->value_count ||
             ops[1].value >= fn->value_count ||
             ops[0].value > 4095U / 8U || ops[1].value > 4095U / 8U ||
-            !minic_type_pointee(fn->values[ops[1].value].type, &memory_type) ||
-            !aarch64_stlr_type(memory_type, store->width) ||
+            !minic_type_is_pointer(fn->values[ops[1].value].type) ||
             !aarch64_stlr_type(fn->values[ops[0].value].type, store->width))
             return false;
         /* x9/x10 are AAPCS64 caller-saved. Preserve the actual

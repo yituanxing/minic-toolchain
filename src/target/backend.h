@@ -31,6 +31,11 @@ typedef bool (*MinicBackendEmitProgram)(
 typedef struct MinicTargetInlineAsmContract {
     size_t operand_count;
     MinicCoreStructuredInlineAsmOperandKind kinds[MINIC_CORE_STRUCTURED_INLINE_ASM_OPERAND_LIMIT];
+    /* Some GNU hardware writes address a scalar pointer register, rather
+     * than exposing a GNU +m or +Q operand (Linux arm64 __raw_write*).
+     * Preserve the real hardware memory effect in target-neutral Core
+     * without misclassifying the pointer as a C memory lvalue. */
+    bool implicit_memory_effect;
 } MinicTargetInlineAsmContract;
 
 typedef bool (*MinicBackendQualifyInlineAsm)(
