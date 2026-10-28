@@ -5092,10 +5092,21 @@ static bool repeat_count_value(MiniAs *as,
                                size_t line,
                                uint64_t *count) {
     int64_t value;
+    char *rewritten = NULL;
+    bool ok;
 
-    if (*argument == '\0' ||
-        !evaluate_absolute_expression(as, argument, &value) ||
-        value < 0) {
+    /* GNU GAS permits 661b/662b local numeric labels in .rept counts,
+     * including the kernel NOPS pattern (662b-661b)/4. Rewrite through
+     * the same Common local-label owner as instructions and .byte; do
+     * not clone target-specific numeric-label parsing. */
+    if (!rewrite_numeric_local_refs(as, argument, &rewritten, line)) {
+        return false;
+    }
+    ok = *rewritten != '\0' &&
+         evaluate_absolute_expression(as, rewritten, &value) &&
+         value >= 0;
+    free(rewritten);
+    if (!ok) {
         minias_set_error(as,
                          "unsupported-expression:.rept:%s:line=%zu",
                          argument,
