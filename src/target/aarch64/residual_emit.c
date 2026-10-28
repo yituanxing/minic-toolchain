@@ -227,6 +227,23 @@ bool minic_aarch64_emit_residual_instruction(
                                            reject_ins, __LINE__);
             { *needs_writeback = false; return true; }
         }
+        case MINIC_CORE_INSTRUCTION_BLOCK_ADDRESS: {
+            MinicCoreBlockId destination;
+            /* Verified Core CFG label, materialized PC-relatively. ADRP+ADD
+             * avoids ADR's reach limit in large original Linux functions. */
+            if (!minic_multi_direct_block_address_shape(
+                    fn, ins, &destination) ||
+                fprintf(out,
+                        "  adrp x9, .Lmini_arm_f%zu_b%u\n"
+                        "  add x9, x9, :lo12:.Lmini_arm_f%zu_b%u\n"
+                        "  str x9, [sp, #%zu]\n",
+                        id, (unsigned int)destination,
+                        id, (unsigned int)destination, offset) < 0)
+                return minic_multi_direct_machine_reject(
+                    fn, "aarch64", name, reject_stage,
+                    reject_block, reject_ins, __LINE__);
+            { *needs_writeback = false; return true; }
+        }
         case MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS: {
             size_t object_offset;
             if (!minic_multi_direct_object_address_location(
