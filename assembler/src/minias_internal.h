@@ -404,6 +404,10 @@ typedef struct MiniAsTargetOps {
     /* Per-target operand/alias registry lifecycle; Common never inspects it. */
     void (*destroy_target_state)(MiniAs *);
     bool (*validate_common_directive)(MiniAs *, const char *, size_t);
+    /* Optional GNU .if target operand dialect. Common owns the
+     * conditional stack and arithmetic, Target only interprets native
+     * register-token comparisons that are not integer expressions. */
+    bool (*evaluate_target_if)(const char *, bool *);
     /* Optional: NULL emits no target-specific attributes section. */
     void (*object_attributes)(const MiniAs *, unsigned char, MiniAsObjectAttribute *);
     const char *name;

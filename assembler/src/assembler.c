@@ -2139,7 +2139,9 @@ static bool push_conditional_value(MiniAs *as,bool condition_true) {
 
 static bool push_conditional(MiniAs *as, const char *args, size_t line) {
     bool condition_true;
-    if (!evaluate_if_expression(as, args, &condition_true)) {
+    if (!evaluate_if_expression(as, args, &condition_true) &&
+        (!as->target->evaluate_target_if ||
+         !as->target->evaluate_target_if(args, &condition_true))) {
         minias_set_error(as, "unsupported-expression:.if:%s:line=%zu", args, line);
         return false;
     }

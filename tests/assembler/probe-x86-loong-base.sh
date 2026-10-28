@@ -2207,6 +2207,54 @@ for bad in 'lsl %eax,%r9w' 'lar %eax,%r9w' \
   fi
 done
 echo 'MINIAS_X86_DESCRIPTOR=PASS GNU_0F00_0F02_0F03_and_PC32'
+# GNU GAS .if compares register *identities* including width,
+# while Common must preserve its target-neutral symbolic arithmetic.
+cat > "$work/x86-register-if.s" <<'X86_REGISTER_IF'
+.text
+.if %rsp == %rsp
+.byte 0x11
+.else
+.byte 0xff
+.endif
+.if %rax != %eax
+.byte 0x22
+.else
+.byte 0xff
+.endif
+.if %rax == %r8
+.byte 0xff
+.else
+.byte 0x33
+.endif
+.if %ah == %al
+.byte 0xff
+.else
+.byte 0x44
+.endif
+.if %r8 == %r8d
+.byte 0xff
+.else
+.byte 0x55
+.endif
+.if %xmm8 == %xmm8
+.byte 0x66
+.else
+.byte 0xff
+.endif
+X86_REGISTER_IF
+"$MINIAS" --target=x86_64 -o "$work/x86-register-if-mini.o" "$work/x86-register-if.s"
+as --64 -o "$work/x86-register-if-gnu.o" "$work/x86-register-if.s"
+objcopy -j .text -O binary "$work/x86-register-if-mini.o" "$work/x86-register-if-mini.bin"
+objcopy -j .text -O binary "$work/x86-register-if-gnu.o" "$work/x86-register-if-gnu.bin"
+cmp "$work/x86-register-if-mini.bin" "$work/x86-register-if-gnu.bin"
+for bad in '.if %bogus == %bogus' '.if %rax < %rbx' '.if %rax == fake'; do
+    printf '.text\n%s\n.byte 1\n.endif\n' "$bad" > "$work/x86-register-if-invalid.s"
+    if "$MINIAS" --target=x86_64 -o "$work/x86-register-if-invalid.o" "$work/x86-register-if-invalid.s" >/dev/null 2>&1; then
+        echo "invalid GNU x86 register conditional accepted: $bad" >&2; exit 1
+    fi
+done
+echo 'MINIAS_X86_REG_IF=PASS GNU_GAS_register_identity_and_invalid_reject'
+
 echo 'MINIAS_COMMON_NUMERIC_U64=PASS GNU_GAS_x86_LA64_exact_data_bytes'
 echo 'MINIAS_X86_SEGMENTED_INDIRECT=PASS GNU_AS_text_and_relocations segment_base_index_abs_rip=true indirect_memory_call_jmp=true absolute_symbol32S=true'
 echo 'MINIAS_TWO_TARGET_ORACLE=PASS x86_GNU_bytes=equal loong_GNU_bytes=equal ELF_machine=correct lp64d_v1=0x43 CET_endbr64=1 ALU_imm8_imm32=1 x86_ModRM_SIB_disp=1 x86_test_cmp_alu_memory=1 x86_scaled_index_SIB=1 LA_jr=1 LA_scaled_ptr14=1 LA_imm12_shift_upper20=1 invalid=reject'

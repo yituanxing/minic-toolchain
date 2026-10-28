@@ -3014,10 +3014,48 @@ static bool x64_parse_directive(MiniAs *as,const char *op,const char *args,
     }
     return true;
 }
+/* GNU GAS treats native register tokens in .if as distinct symbolic
+ * identities, not integer zero or Common absolute symbols. This ISA
+ * dialect callback handles equality/inequality of known registers only;
+ * unsupported arithmetic and non-register names remain fail-closed.
+ * GNU considers %rax != %eax, even when both encode physical GPR 0. */
+static bool x64_gnu_register_token(const char *token) {
+    unsigned reg;
+    bool wide;
+    return x64_register(token,&reg,&wide) ||
+           x64_register16(token,&reg) ||
+           x64_register8(token,&reg) ||
+           x64_high_register8(token,&reg) ||
+           x64_xmm_register(token,&reg);
+}
+static bool x64_evaluate_target_if(const char *expression, bool *result) {
+    char buffer[256],*left,*right,*delimiter;
+    bool unequal=false;
+    size_t length;
+    if(!expression || !result)return false;
+    length=strlen(expression);
+    if(length==0U || length>=sizeof(buffer))return false;
+    memcpy(buffer,expression,length+1U);
+    left=minias_trim(buffer);
+    delimiter=strstr(left,"==");
+    if(!delimiter) {
+        delimiter=strstr(left,"!=");
+        unequal=true;
+    }
+    if(!delimiter)return false;
+    *delimiter='\0';
+    right=minias_trim(delimiter+2);
+    left=minias_trim(left);
+    if(!x64_gnu_register_token(left) ||
+       !x64_gnu_register_token(right))return false;
+    *result=(strcmp(left,right)==0)!=unequal;
+    return true;
+}
 static const MiniAsTargetOps ops={
     .name="x86_64",.comment_prefix='#',.elf_machine=62U,
     .resolve_profile=x64_profile,.parse_mcinst=x64_parse,
     .parse_target_directive=x64_parse_directive,
+    .evaluate_target_if=x64_evaluate_target_if,
     .measure_mcinst=x64_measure,.encode=x64_encode,
     .relax_instruction=x64_relax_instruction,
     .expanded_instruction_size=x64_expanded_instruction_size,
