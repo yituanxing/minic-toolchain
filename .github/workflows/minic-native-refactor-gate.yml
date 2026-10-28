@@ -158,6 +158,10 @@ jobs:
         run: |
           set -Eeuo pipefail
           MINIC_SYSREG_SOURCE_ONLY=1 bash tests/compiler/c0/probe-aarch64-linux-encoded-sysreg.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
+      - name: Original Linux x86 target-owned PIC and GNU dynamic ELF/GOT/PLT/PIE evidence
+        run: |
+          set -Eeuo pipefail
+          bash tests/compiler/c0/probe-x86-linux-pic.sh "$GITHUB_WORKSPACE/build/minic-native-backend/bin/minic-cc"
       - name: Common GNU function metadata and inline-asm fail-closed regressions
         shell: bash
         run: |

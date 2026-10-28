@@ -124,6 +124,12 @@ has src/target/aarch64/asm_contract.c 'aarch64_linux_encoded_sysreg_form('
 has src/target/aarch64/asm_contract.c 'aarch64_linux_encoded_sysreg_emit('
 lacks src/core/core_lower_asm_target.c 'mrs_s'
 
+# GNU PIC policy is declared in TargetInfo, never a Driver target switch.
+has src/target/target_info.h 'pic_lowering_supported;'
+has src/target/target_info.c 'x86_64_target.pic_lowering_supported = true;'
+has src/target/target_info.c 'rv64_target.pic_lowering_supported = true;'
+has tools/minic-cc/main.c '!target_info->pic_lowering_supported'
+
 # Four ISA families, five target profiles: one storage-shape owner, distinct
 # physical ABIs. RV32 must never inherit the 8-byte LP64 word policy.
 exists src/target/common/aggregate_shape.h

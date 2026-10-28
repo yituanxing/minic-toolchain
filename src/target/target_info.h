@@ -63,7 +63,12 @@ typedef struct MinicTargetInfo {
     MinicVariadicScalarReadKind variadic_scalar_read_kind;
     size_t variadic_linear_slot_bytes;
     MinicVariadicCopyKind variadic_copy_kind;
-    /* Per-translation-unit RV64 GNU PIC/PIE lowering selection.
+    /* A pure target-owned capability: x86 SysV already uses GOTPCREL
+     * for data/function addresses and PLT for external calls; RV64 has
+     * its own qualified RISC-V PIC path. Do not leak target enumeration
+     * into Frontend/Driver or pretend AArch/Loong/RV32 are qualified. */
+    bool pic_lowering_supported;
+    /* Per-translation-unit target-qualified GNU PIC/PIE lowering selection.
      * The canonical target descriptors default to static PC-relative.
      * A CLI invocation copies the descriptor before setting this bit. */
     bool position_independent;

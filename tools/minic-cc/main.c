@@ -131,7 +131,7 @@ int main(int argc, char **argv) {
         (void)fprintf(stderr, "%s: unsupported target: %s\n", argv[0], target_name);
         return 2;
     }
-    if (position_independent && target_info->architecture != MINIC_TARGET_ARCH_RISCV64) {
+    if (position_independent && !target_info->pic_lowering_supported) {
         (void)fprintf(stderr, "%s: PIC lowering is not yet qualified for this target\n", argv[0]);
         return 2;
     }

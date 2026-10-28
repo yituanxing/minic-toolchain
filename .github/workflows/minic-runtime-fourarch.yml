@@ -571,6 +571,11 @@ jobs:
         run: |
           set -Eeuo pipefail
           MINIC_SYSREG_SOURCE_ONLY=0 bash tests/compiler/c0/probe-aarch64-linux-encoded-sysreg.sh "$GITHUB_WORKSPACE/build/runtime-ci/bin/minic-cc"
+      - name: Original Linux x86 compiler PIC GNU dynamic loader and PIE verification
+        if: matrix.target == 'x86_64'
+        run: |
+          set -Eeuo pipefail
+          bash tests/compiler/c0/probe-x86-linux-pic.sh "$GITHUB_WORKSPACE/build/runtime-ci/bin/minic-cc"
       - name: Original Linux LoongArch no-operand DBAR real GNU QEMU
         if: matrix.target == 'loongarch64'
         shell: bash

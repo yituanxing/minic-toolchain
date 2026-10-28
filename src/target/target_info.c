@@ -219,6 +219,7 @@ const MinicTargetInfo *minic_target_info_for_architecture(
     if (architecture == MINIC_TARGET_ARCH_RISCV64) {
         if (rv64_target.data_layout == NULL) {
             rv64_target.architecture = MINIC_TARGET_ARCH_RISCV64;
+            rv64_target.pic_lowering_supported = true;
             rv64_target.riscv_isa.xlen = 64U;
             rv64_target.riscv_isa.abi = MINIC_RISCV_ABI_LP64D;
             rv64_target.riscv_isa.strict_isa = false;
@@ -243,6 +244,7 @@ const MinicTargetInfo *minic_target_info_for_architecture(
     if (architecture == MINIC_TARGET_ARCH_X86_64) {
         if (x86_64_target.data_layout == NULL) {
             x86_64_target.architecture = MINIC_TARGET_ARCH_X86_64;
+            x86_64_target.pic_lowering_supported = true;
             x86_64_target.data_layout = minic_x86_64_linux_data_layout();
             x86_64_target.integer_model = &minic_x86_64_linux_integer_model;
             x86_64_target.wide_character_type = minic_type_int();
