@@ -432,6 +432,21 @@ unsigned int minic_x86_64_linux_msr_form(const char *text,size_t len) {
       "1:wrmsr2:.pushsection\"__ex_table\",\"a\".balign4"
       ".long(1b)-..long(2b)-..long8.popsection"
     };
+    /* Source named operands are canonicalized to numeric %0 by Core.
+     * Exact matching of both representations preserves the hardware and
+     * full GNU exception-register fixup contract. */
+    static const char safe_read[] = "1: rdmsr ; xor %[err],%[err]\n2:\n\t .pushsection \"__ex_table\",\"a\"\n .balign 4\n .long (1b) - .\n .long (2b) - .\n.macro extable_type_reg type:req reg:req\n.set .Lfound, 0\n.set .Lregnr, 0\n.irp rs,rax,rcx,rdx,rbx,rsp,rbp,rsi,rdi,r8,r9,r10,r11,r12,r13,r14,r15\n.ifc \\reg, %%\\rs\n.set .Lfound, .Lfound+1\n.long \\type + (.Lregnr << 8)\n.endif\n.set .Lregnr, .Lregnr+1\n.endr\n.set .Lregnr, 0\n.irp rs,eax,ecx,edx,ebx,esp,ebp,esi,edi,r8d,r9d,r10d,r11d,r12d,r13d,r14d,r15d\n.ifc \\reg, %%\\rs\n.set .Lfound, .Lfound+1\n.long \\type + (.Lregnr << 8)\n.endif\n.set .Lregnr, .Lregnr+1\n.endr\n.if (.Lfound != 1)\n.error \"extable_type_reg: bad register argument\"\n.endif\n.endm\nextable_type_reg reg=%[err], type=11 \n.purgem extable_type_reg\n .popsection\n";
+    static const char safe_write[] = "1: wrmsr ; xor %[err],%[err]\n2:\n\t .pushsection \"__ex_table\",\"a\"\n .balign 4\n .long (1b) - .\n .long (2b) - .\n.macro extable_type_reg type:req reg:req\n.set .Lfound, 0\n.set .Lregnr, 0\n.irp rs,rax,rcx,rdx,rbx,rsp,rbp,rsi,rdi,r8,r9,r10,r11,r12,r13,r14,r15\n.ifc \\reg, %%\\rs\n.set .Lfound, .Lfound+1\n.long \\type + (.Lregnr << 8)\n.endif\n.set .Lregnr, .Lregnr+1\n.endr\n.set .Lregnr, 0\n.irp rs,eax,ecx,edx,ebx,esp,ebp,esi,edi,r8d,r9d,r10d,r11d,r12d,r13d,r14d,r15d\n.ifc \\reg, %%\\rs\n.set .Lfound, .Lfound+1\n.long \\type + (.Lregnr << 8)\n.endif\n.set .Lregnr, .Lregnr+1\n.endr\n.if (.Lfound != 1)\n.error \"extable_type_reg: bad register argument\"\n.endif\n.endm\nextable_type_reg reg=%[err], type=10 \n.purgem extable_type_reg\n .popsection\n";
+    static const char canonical_read[] = "1: rdmsr ; xor %0,%0\n2:\n\t .pushsection \"__ex_table\",\"a\"\n .balign 4\n .long (1b) - .\n .long (2b) - .\n.macro extable_type_reg type:req reg:req\n.set .Lfound, 0\n.set .Lregnr, 0\n.irp rs,rax,rcx,rdx,rbx,rsp,rbp,rsi,rdi,r8,r9,r10,r11,r12,r13,r14,r15\n.ifc \\reg, %%\\rs\n.set .Lfound, .Lfound+1\n.long \\type + (.Lregnr << 8)\n.endif\n.set .Lregnr, .Lregnr+1\n.endr\n.set .Lregnr, 0\n.irp rs,eax,ecx,edx,ebx,esp,ebp,esi,edi,r8d,r9d,r10d,r11d,r12d,r13d,r14d,r15d\n.ifc \\reg, %%\\rs\n.set .Lfound, .Lfound+1\n.long \\type + (.Lregnr << 8)\n.endif\n.set .Lregnr, .Lregnr+1\n.endr\n.if (.Lfound != 1)\n.error \"extable_type_reg: bad register argument\"\n.endif\n.endm\nextable_type_reg reg=%0, type=11 \n.purgem extable_type_reg\n .popsection\n";
+    static const char canonical_write[] = "1: wrmsr ; xor %0,%0\n2:\n\t .pushsection \"__ex_table\",\"a\"\n .balign 4\n .long (1b) - .\n .long (2b) - .\n.macro extable_type_reg type:req reg:req\n.set .Lfound, 0\n.set .Lregnr, 0\n.irp rs,rax,rcx,rdx,rbx,rsp,rbp,rsi,rdi,r8,r9,r10,r11,r12,r13,r14,r15\n.ifc \\reg, %%\\rs\n.set .Lfound, .Lfound+1\n.long \\type + (.Lregnr << 8)\n.endif\n.set .Lregnr, .Lregnr+1\n.endr\n.set .Lregnr, 0\n.irp rs,eax,ecx,edx,ebx,esp,ebp,esi,edi,r8d,r9d,r10d,r11d,r12d,r13d,r14d,r15d\n.ifc \\reg, %%\\rs\n.set .Lfound, .Lfound+1\n.long \\type + (.Lregnr << 8)\n.endif\n.set .Lregnr, .Lregnr+1\n.endr\n.if (.Lfound != 1)\n.error \"extable_type_reg: bad register argument\"\n.endif\n.endm\nextable_type_reg reg=%0, type=10 \n.purgem extable_type_reg\n .popsection\n";
+    if(text && len==sizeof(safe_read)-1U &&
+       memcmp(text,safe_read,sizeof(safe_read)-1U)==0)return 3U;
+    if(text && len==sizeof(safe_write)-1U &&
+       memcmp(text,safe_write,sizeof(safe_write)-1U)==0)return 4U;
+    if(text && len==sizeof(canonical_read)-1U &&
+       memcmp(text,canonical_read,sizeof(canonical_read)-1U)==0)return 3U;
+    if(text && len==sizeof(canonical_write)-1U &&
+       memcmp(text,canonical_write,sizeof(canonical_write)-1U)==0)return 4U;
     char norm[256];size_t i,n=0U;
     if(!text||!len||len>=sizeof(norm))return 0U;
     for(i=0U;i<len;++i){
@@ -451,6 +466,43 @@ static bool x86_linux_msr_source(const MinicC0Program *program,
         src->template_text,src->template_length):0U;
     const MinicExpression *e;MinicType type;
     size_t i;
+    if(!program||!src||!contract||!form)return false;
+    if(form==3U || form==4U) {
+        const size_t outputs=form==3U?3U:1U;
+        const size_t inputs=form==3U?1U:3U;
+        if(!src->is_volatile || src->is_goto || src->label_count ||
+           !src->outputs || !src->inputs ||
+           src->output_count!=outputs || src->input_count!=inputs ||
+           src->clobber_count!=(form==4U?1U:0U) ||
+           src->has_memory_clobber!=(form==4U) ||
+           src->register_clobber_count ||
+           !c_is(&src->outputs[0],form==3U?"=r":"=a") ||
+           (form==3U && (!c_is(&src->outputs[1],"=a") ||
+                          !c_is(&src->outputs[2],"=d"))) ||
+           !c_is(&src->inputs[0],"c") ||
+           (form==4U && (!c_is(&src->inputs[1],"0") ||
+                          !c_is(&src->inputs[2],"d"))))return false;
+        for(i=0U;i<outputs+inputs;++i) {
+            const bool output=i<outputs;
+            const MinicInlineAsmOperand *op=output ? &src->outputs[i] :
+                &src->inputs[i-outputs];
+            const MinicExpression *v=minic_c0_program_expression(program,op->expression);
+            MinicType vt;
+            const bool wide=form==3U && output && i!=0U;
+            if(!v || !minic_type_unqualified(v->type,&vt) ||
+               !minic_type_is_integer(vt) || vt.pointer_depth ||
+               vt.base_kind!=MINIC_TYPE_BASE_INT ||
+               vt.integer_rank!=(wide?MINIC_INTEGER_RANK_LONG:MINIC_INTEGER_RANK_INT) ||
+               (output && (v->value_category!=MINIC_VALUE_LVALUE ||
+                           minic_type_is_const(v->type))))return false;
+        }
+        contract->operand_count=outputs+inputs;
+        for(i=0U;i<contract->operand_count;++i)
+            contract->kinds[i]=i<outputs?
+                MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT:
+                MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+        return true;
+    }
     if(!program||!src||!contract||!form||!src->is_volatile||
        src->is_goto||src->label_count||
        src->output_count!=(form==1U?2U:0U)||
@@ -689,12 +741,16 @@ static bool x86_percpu_gs_source(const MinicC0Program *program,
         MinicType ty;
         e=minic_c0_program_expression(program,a->expression);
         if(!e||!minic_type_unqualified(e->type,&ty)||
-           ty.base_kind!=MINIC_TYPE_BASE_INT||
-           (width==1U?ty.integer_rank!=MINIC_INTEGER_RANK_CHAR:
-            width==2U?ty.integer_rank!=MINIC_INTEGER_RANK_SHORT:
-            width==4U?ty.integer_rank!=MINIC_INTEGER_RANK_INT:
-                       (ty.integer_rank!=MINIC_INTEGER_RANK_LONG&&
-                        ty.integer_rank!=MINIC_INTEGER_RANK_LONG_LONG))||
+           /* A GNU per-CPU pointer slot is eight bytes, despite its
+            * declared lvalue type not being integer. Other widths
+            * and operations retain strict original type qualification. */
+           (!(op==0U && i==1U && width==8U && minic_type_is_pointer(ty)) &&
+            (ty.base_kind!=MINIC_TYPE_BASE_INT||
+             (width==1U?ty.integer_rank!=MINIC_INTEGER_RANK_CHAR:
+              width==2U?ty.integer_rank!=MINIC_INTEGER_RANK_SHORT:
+              width==4U?ty.integer_rank!=MINIC_INTEGER_RANK_INT:
+                 (ty.integer_rank!=MINIC_INTEGER_RANK_LONG &&
+                  ty.integer_rank!=MINIC_INTEGER_RANK_LONG_LONG))))||
            (i==0U&&(e->value_category!=MINIC_VALUE_LVALUE||
                      (op==0U&&minic_type_is_const(e->type)))))
             return false;

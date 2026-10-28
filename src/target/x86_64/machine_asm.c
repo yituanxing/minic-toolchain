@@ -540,7 +540,8 @@ static bool emit_linux_msr(FILE *out,const MinicC0Program *program,
         info->template_text,info->template_length);
     const MinicCoreStructuredInlineAsmOperand *ops=
         ins->value.structured_inline_asm.operands;
-    const size_t outputs=form==1U?2U:0U, count=form==1U?3U:3U;
+    const size_t outputs=form==1U?2U:form==3U?3U:form==4U?1U:0U;
+    const size_t count=(form==3U||form==4U)?4U:3U;
     static const char *const input_registers[]={"%rcx","%rax","%rdx"};
     static const char *const output_registers32[]={"%eax","%edx"};
     static const char *const output_registers64[]={"%rax","%rdx"};
@@ -548,8 +549,53 @@ static bool emit_linux_msr(FILE *out,const MinicC0Program *program,
     if(!out||!program||!target||!fn||!frame||!ins||!info||!ops||
        !form||!info->is_volatile||info->is_goto||
        info->register_clobber_count||
-       info->has_memory_clobber!=(form==2U)||
+       info->has_memory_clobber!=(form==2U||form==4U)||
        ins->value.structured_inline_asm.operand_count!=count)return false;
+    if(form==3U || form==4U) {
+        static const char *const in_regs_read[]={"%rcx"};
+        static const char *const in_regs_write[]={"%rcx","%rax","%rdx"};
+        const char *const *regs=form==3U?in_regs_read:in_regs_write;
+        if(!info->is_volatile || info->is_goto ||
+           info->has_memory_clobber!=(form==4U) ||
+           info->register_clobber_count ||
+           ins->value.structured_inline_asm.operand_count!=4U)return false;
+        for(i=0U;i<4U;++i){
+            const bool output=i<outputs;
+            if(ops[i].value>=fn->value_count || ops[i].operand_index!=i ||
+               ops[i].has_fixed_register_binding || ops[i].early_clobber ||
+               ops[i].kind!=(output?
+                 MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT:
+                 MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT))return false;
+            ty=fn->values[ops[i].value].type;
+            if(output && !minic_type_pointee(ty,&ty))return false;
+            if(!minic_x86_64_scalar_width(program,target,ty,&width,&sign) ||
+               width!=(form==3U && output && i!=0U?8U:4U))return false;
+        }
+        for(i=0U;i<4U-outputs;++i)
+            if(!x86_value_load(out,frame,ops[outputs+i].value,regs[i]))
+                return false;
+        if(form==3U){
+            /* Type 11 exception fixup patches R11; the physical register
+             * number 11 belongs in the GNU __ex_table type word. */
+            if(fputs("1: rdmsr\n  xorl %r11d, %r11d\n2:\n"
+                     "  .pushsection \"__ex_table\",\"a\"\n"
+                     "  .balign 4\n  .long (1b)-.\n  .long (2b)-.\n"
+                     "  .long (11 + (11 << 8))\n  .popsection\n",out)==EOF)
+                return false;
+        } else if(fputs("1: wrmsr\n  xorl %eax, %eax\n2:\n"
+                       "  .pushsection \"__ex_table\",\"a\"\n"
+                       "  .balign 4\n  .long (1b)-.\n  .long (2b)-.\n"
+                       "  .long 10\n  .popsection\n",out)==EOF)
+            return false;
+        for(i=0U;i<outputs;++i){
+            const char *reg=form==4U?"%eax":i==0U?"%r11d":
+                i==1U?"%rax":"%rdx";
+            const char *op=form==3U&&i!=0U?"movq":"movl";
+            if(!x86_value_load(out,frame,ops[i].value,"%r10")||
+               fprintf(out,"  %s %s, (%%r10)\n",op,reg)<0)return false;
+        }
+        return true;
+    }
     for(i=0U;i<count;++i){
         const bool output=i<outputs;
         if(ops[i].value>=fn->value_count||ops[i].operand_index!=i||
