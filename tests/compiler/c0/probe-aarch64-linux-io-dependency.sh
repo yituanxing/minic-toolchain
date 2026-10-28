@@ -26,14 +26,14 @@ for bad in second-instruction extra-instruction wrong-constraint missing-clobber
   second-instruction) sed 's/cbnz/cbz/g' "$d/io.i" > "$d/bad.i" ;;
   extra-instruction) sed 's/cbnz/cbnz/g;s/%0, \./%0, .; nop/' "$d/io.i" > "$d/bad.i" ;;
   wrong-constraint) sed 's/=r/=m/g' "$d/io.i" > "$d/bad.i" ;;
-  missing-clobber) sed 's/: "memory"/: /g' "$d/io.i" > "$d/bad.i" ;;
+  missing-clobber) sed 's/ : "memory");/ );/g' "$d/io.i" > "$d/bad.i" ;;
  esac
  if "$mini" --target=aarch64-linux -S "$d/bad.i" -o "$d/bad.s" >"$d/err" 2>&1;then
   echo "BAD_AARCH64_IO_DEPENDENCY_ADMITTED=$bad" >&2;exit 1
  fi
  test ! -e "$d/bad.s"
 done
-if [[ "$MINIC_ARM_IO_DEPENDENCY_SOURCE_ONLY" != 1 ]]; then
+if [[ "${MINIC_ARM_IO_DEPENDENCY_SOURCE_ONLY:-0}" != 1 ]]; then
  aarch64-linux-gnu-gcc -c -x assembler "$d/mini.s" -o "$d/mini.o"
  sed 's/mini_/gnu_/g' "$d/io.i" > "$d/gnu.c"
  aarch64-linux-gnu-gcc -c -O0 "$d/gnu.c" -o "$d/gnu.o"
